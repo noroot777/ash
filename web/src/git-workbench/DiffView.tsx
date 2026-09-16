@@ -4,23 +4,28 @@ import type { GitDiff } from "@ash/shared/git-workbench";
 
 export const discardLineGuidance =
   "丢弃时，所选＋行会从文件中删除，所选−行会恢复。修改只选＋行时，被替换的原始行不会恢复；只选−行时，新增内容会保留。完整还原修改需同时勾选对应的 − / + 行。";
+const unstageLineGuidance =
+  "按行取消暂存时，所选 + 行会从暂存区删除，所选 - 行会恢复到暂存区。修改只选 + 行时，原始行不会恢复到暂存区，该删除会留待提交；只选 - 行时，新增内容仍留在暂存区。完整取消这处修改的暂存需同时勾选对应的 - / + 行。工作区文件保持不变。";
 
 export function DiffView({
   value,
   loading,
   error,
   select,
-  disabled = false,
+  actionsDisabled = false,
+  refreshing = false,
 }: {
   value: GitDiff | null;
   loading?: boolean;
   error?: string | null;
   select?: {
+    source: "staged" | "unstaged";
     label: string;
     onApply: (lines: number[]) => void;
     onDiscard?: (lines: number[], scope: "hunk" | "selection") => void;
   };
-  disabled?: boolean;
+  actionsDisabled?: boolean;
+  refreshing?: boolean;
 }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   if (loading)
@@ -53,6 +58,9 @@ export function DiffView({
     !/^(rename|copy|new file mode|deleted file mode|old mode|new mode)/m.test(
       value.diff,
     );
+  const lineGuidance = select?.source === "staged"
+    ? unstageLineGuidance
+    : select?.onDiscard ? discardLineGuidance : undefined;
   const toggle = (indices: number[]) =>
     setSelected((current) => {
       const next = new Set(current);
@@ -147,7 +155,6 @@ export function DiffView({
                   {canSelect ? (
                     <button
                       className="gwb-diff-line is-hunk diff-hunk-header"
-                      disabled={disabled}
                       aria-label={`选择改动块 ${part.header}`}
                       aria-pressed={
                         indices.length > 0 &&
@@ -164,7 +171,7 @@ export function DiffView({
                     <div className="diff-hunk-actions">
                       <button
                         className="mini-btn"
-                        disabled={disabled || !indices.length}
+                        disabled={actionsDisabled || !indices.length}
                         onClick={() => {
                           select.onApply(indices);
                           setSelected(new Set());
@@ -178,7 +185,7 @@ export function DiffView({
                       {select.onDiscard && (
                         <button
                           className="mini-btn tone-danger"
-                          disabled={disabled || !indices.length || selected.size > 0}
+                          disabled={actionsDisabled || !indices.length || selected.size > 0}
                           onClick={() => select.onDiscard?.(indices, "hunk")}
                         >
                           <Trash size={12} />
@@ -213,7 +220,6 @@ export function DiffView({
                         className={cls}
                         aria-pressed={selected.has(row.index)}
                         aria-label={`选择第 ${row.index + 1} 行 ${row.text}`}
-                        disabled={disabled}
                         onClick={() => toggle([row.index])}
                       >
                         {contents}
@@ -241,7 +247,7 @@ export function DiffView({
           </span>
           <button
             className="mini-btn tone-accent"
-            disabled={disabled || !selected.size}
+            disabled={actionsDisabled || !selected.size}
             onClick={() => {
               select.onApply([...selected]);
               setSelected(new Set());
@@ -252,7 +258,7 @@ export function DiffView({
           {select.onDiscard && (
             <button
               className="mini-btn tone-danger"
-              disabled={disabled || !selected.size}
+              disabled={actionsDisabled || !selected.size}
               onClick={() => select.onDiscard?.([...selected], "selection")}
             >
               <Trash size={12} />
@@ -260,15 +266,16 @@ export function DiffView({
             </button>
           )}
           {!!selected.size && (
-            <button className="mini-btn" disabled={disabled} onClick={() => setSelected(new Set())}>
+            <button className="mini-btn" onClick={() => setSelected(new Set())}>
               清除选择
             </button>
           )}
+          {refreshing && <span role="status">正在刷新差异，可继续勾选。</span>}
         </div>
       )}
-      {canSelect && select.onDiscard && selected.size > 0 && (
+      {canSelect && lineGuidance && selected.size > 0 && (
         <p className="gwb-diff-discard-hint" role="note">
-          {discardLineGuidance}
+          {lineGuidance}
         </p>
       )}
     </div>

@@ -416,10 +416,12 @@ export function Changes({
           value={diff}
           loading={loading && !diff}
           error={diffError}
-          disabled={w.blocked || loading || !diffReady}
+          actionsDisabled={w.blocked || loading || !diffReady}
+          refreshing={!!diff && (loading || !diffReady)}
           select={
             selection && currentFile && selection.source !== "untracked" && diff
               ? {
+                  source: selection.source,
                   label:
                     selection.source === "staged"
                       ? "取消所选暂存"

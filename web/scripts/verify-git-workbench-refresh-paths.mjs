@@ -62,6 +62,42 @@ const withTimeout = (promise, ms, label) => Promise.race([
   promise,
   new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timeout`)), ms)),
 ]);
+const box = locator => locator.evaluate(element => {
+  const rect = element.getBoundingClientRect();
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  };
+});
+const assertInsideViewport = async (locator, width, height, label) => {
+  const rect = await box(locator);
+  assert(rect.left >= 0 && rect.right <= width, `${label} must fit viewport width: ${JSON.stringify(rect)}`);
+  assert(rect.top >= 0 && rect.bottom <= height, `${label} must fit viewport height: ${JSON.stringify(rect)}`);
+  return rect;
+};
+const diffIndex = async locator => {
+  const label = await locator.getAttribute("aria-label");
+  const index = Number(/选择第 (\d+) 行/.exec(label || "")?.[1]) - 1;
+  assert(Number.isInteger(index) && index >= 0, `diff row must expose its index: ${label}`);
+  return index;
+};
+const unstageGuidance = [
+  "所选 + 行会从暂存区删除",
+  "所选 - 行会恢复到暂存区",
+  "修改只选 + 行时，原始行不会恢复到暂存区",
+  "该删除会留待提交",
+  "只选 - 行时，新增内容仍留在暂存区",
+  "完整取消这处修改的暂存需同时勾选对应的 - / + 行",
+  "工作区文件保持不变",
+];
+const assertUnstageGuidance = async locator => {
+  const text = await locator.innerText();
+  for (const phrase of unstageGuidance) assert(text.includes(phrase), `missing guidance: ${phrase}`);
+};
 
 const backend = startBackend();
 let browser;
@@ -85,6 +121,16 @@ try {
   const lines = prefix => Array.from({ length: 30 }, (_, index) => `${prefix} ${index + 1}`);
   const pickBase = lines("pick");
   const bothBase = lines("both");
+  const stagedCases = [
+    { path: "unstage-plus.txt", prefix: "plus", mode: "plus" },
+    { path: "unstage-minus.txt", prefix: "minus", mode: "minus" },
+    { path: "unstage-both.txt", prefix: "both sides", mode: "both" },
+  ].map(entry => {
+    const base = lines(entry.prefix);
+    const changed = [...base];
+    changed[11] = `${entry.prefix} 12 EDITED`;
+    return { ...entry, base, changed };
+  });
   write("pick.txt", `${pickBase.join("\n")}\n`);
   write("other.txt", "other base\n");
   write("noise.txt", "noise base\n");
@@ -92,9 +138,12 @@ try {
   write("gone-a.txt", "gone a\n");
   write("gone-b.txt", "gone b\n");
   write("kept.txt", "kept base\n");
+  write("staged-sentinel.txt", "sentinel base\n");
+  stagedCases.forEach(entry => write(entry.path, `${entry.base.join("\n")}\n`));
   git(
     "add", "--", "pick.txt", "other.txt", "noise.txt", "both.txt",
-    "gone-a.txt", "gone-b.txt", "kept.txt",
+    "gone-a.txt", "gone-b.txt", "kept.txt", "staged-sentinel.txt",
+    ...stagedCases.map(entry => entry.path),
   );
   git("commit", "-qm", "add refresh and path fixtures");
   git("rm", "-q", "--", "gone-a.txt", "gone-b.txt");
@@ -115,6 +164,10 @@ try {
   const bothChanged = [...bothStaged];
   bothChanged[19] = "BOTH-WORKTREE";
   write("both.txt", `${bothChanged.join("\n")}\n`);
+  write("staged-sentinel.txt", "sentinel changed\n");
+  stagedCases.forEach(entry => write(entry.path, `${entry.changed.join("\n")}\n`));
+  git("add", "--", "staged-sentinel.txt", ...stagedCases.map(entry => entry.path));
+  const sentinelCached = git("diff", "--cached", "--", "staged-sentinel.txt");
   const preservedHead = git("rev-parse", "HEAD");
 
   vite = await createServer({
@@ -133,6 +186,12 @@ try {
   await mkdir(output, { recursive: true });
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1200, height: 760 } });
+  let actionPosts = 0;
+  page.on("request", request => {
+    if (request.method() === "POST" && /\/git\/workbench\/actions$/.test(request.url())) {
+      actionPosts += 1;
+    }
+  });
 
   let diffControl = null;
   const armDelay = () => {
@@ -212,6 +271,17 @@ try {
       && value.searchParams.get("path") === "pick.txt";
   });
   const selectedCount = () => page.getByText(/已选 \d+ 行/).textContent();
+  const waitForButtonEnabled = async name => {
+    await page.getByRole("button", { name, exact: true }).waitFor();
+    await page.waitForFunction(label => [...document.querySelectorAll("button")].some(
+      button => button.textContent?.trim() === label && !button.disabled,
+    ), name);
+  };
+  const assertAllDisabled = async (locator, label) => {
+    const buttons = await locator.all();
+    assert(buttons.length > 0, `${label} buttons must exist`);
+    for (const button of buttons) assert.equal(await button.isDisabled(), true, `${label} must be disabled`);
+  };
 
   await rowFor("pick.txt", "未暂存").getByLabel("pick.txt", { exact: true }).click();
   let selectedA = page.getByRole("button", { name: /选择第 .* 行 \+PICK-A$/ });
@@ -227,25 +297,55 @@ try {
   assert.equal(await selectedA.getAttribute("aria-pressed"), "true");
   assert.match(await selectedCount(), /已选 1 行/);
 
-  // An unrelated external change refreshes the same diff. Old content stays readable but disabled.
+  // An unrelated external change refreshes the same diff. Local selection stays interactive,
+  // while every write action waits for a fresh diff.
   const delayedNoise = armDelay();
+  const postsBeforeRefreshSelection = actionPosts;
   write("noise.txt", "noise external one\n");
   await withTimeout(delayedNoise.started, 8_000, "delayed noise diff");
   assert.equal(await selectedA.isVisible(), true, "old diff must remain visible while refreshing");
-  assert.equal(await selectedA.isDisabled(), true, "old selected row must be read-only while refreshing");
+  assert.equal(await selectedA.isEnabled(), true, "local row selection must remain interactive");
+  const refreshStatus = page.getByRole("status").filter({ hasText: "正在刷新差异，可继续勾选" });
+  await refreshStatus.waitFor();
+  const selectedStage = page.getByRole("button", { name: "暂存所选改动", exact: true });
+  const selectedDiscard = page.getByRole("button", { name: "丢弃所选改动", exact: true });
+  assert.equal(await selectedStage.isDisabled(), true);
+  assert.equal(await selectedDiscard.isDisabled(), true);
+  await assertAllDisabled(page.getByRole("button", { name: "暂存此块", exact: true }), "stage hunk");
+  await assertAllDisabled(page.getByRole("button", { name: "丢弃此块", exact: true }), "discard hunk");
+  assert.equal(await page.getByText("正在读取差异…").count(), 0);
+  await selectedA.click();
+  assert.equal(await selectedA.getAttribute("aria-pressed"), "false");
+  const firstHunk = selectedA.locator("xpath=ancestor::section[contains(@class, 'diff-hunk')]");
+  const firstHunkToggle = firstHunk.getByRole("button", { name: /^选择改动块 / });
+  await firstHunkToggle.click();
+  assert.equal(await firstHunkToggle.getAttribute("aria-pressed"), "true");
+  await page.getByRole("button", { name: "清除选择", exact: true }).click();
+  assert.match(await selectedCount(), /已选 0 行/);
+  const selectedB = page.getByRole("button", { name: /选择第 .* 行 \+PICK-B$/ });
+  await selectedB.click();
+  assert.equal(await selectedB.getAttribute("aria-pressed"), "true");
+  assert.equal(actionPosts, postsBeforeRefreshSelection, "local refresh-time selection must not POST");
+  await page.screenshot({ path: join(output, "same-diff-refresh-selection-live.png") });
+  const refreshedPickResponse = waitForPickDiff();
+  delayedNoise.release();
+  await (await refreshedPickResponse).finished();
+  await refreshStatus.waitFor({ state: "detached" });
+  await waitForButtonEnabled("暂存所选改动");
+  assert.equal(await selectedDiscard.isEnabled(), true);
+  const secondHunk = selectedB.locator("xpath=ancestor::section[contains(@class, 'diff-hunk')]");
   assert.equal(
-    await page.getByRole("button", { name: "暂存所选改动", exact: true }).isDisabled(),
+    await secondHunk.getByRole("button", { name: "暂存此块", exact: true }).isEnabled(),
     true,
   );
-  assert.equal(await page.getByText("正在读取差异…").count(), 0);
-  await page.screenshot({ path: join(output, "same-diff-refresh-disabled.png") });
-  delayedNoise.release();
-  await page.waitForFunction(() => {
-    const selected = document.querySelector('button[aria-pressed="true"].gwb-diff-line');
-    return selected && !selected.disabled;
-  });
-  assert.equal(await selectedA.getAttribute("aria-pressed"), "true");
+  assert.equal(await selectedB.getAttribute("aria-pressed"), "true");
   assert.match(await selectedCount(), /已选 1 行/);
+  await page.getByRole("button", { name: "清除选择", exact: true }).click();
+  assert.equal(
+    await secondHunk.getByRole("button", { name: "丢弃此块", exact: true }).isEnabled(),
+    true,
+  );
+  await selectedB.click();
 
   // Staging another file through the UI keeps pick.txt active and selected.
   const pickAfterOther = waitForPickDiff();
@@ -257,13 +357,11 @@ try {
   await otherRow.getByLabel("暂存 other.txt", { exact: true }).click();
   assert.equal((await actionAfterOther).ok(), true);
   await pickAfterOther;
-  await page.waitForFunction(() => {
-    const selected = document.querySelector('button[aria-pressed="true"].gwb-diff-line');
-    return selected && !selected.disabled;
-  });
+  await waitForButtonEnabled("暂存所选改动");
+  await page.getByRole("status").filter({ hasText: "正在刷新差异" }).waitFor({ state: "detached" });
   await rowFor("other.txt", "已暂存").waitFor();
   assert.equal(await page.locator(".diff-path").textContent(), "pick.txt");
-  assert.equal(await selectedA.getAttribute("aria-pressed"), "true");
+  assert.equal(await selectedB.getAttribute("aria-pressed"), "true");
   await page.screenshot({ path: join(output, "selection-after-staging-other.png") });
 
   // A real change to pick.txt produces a new key and clears the previous line selection.
@@ -273,6 +371,7 @@ try {
   const pickC = page.getByRole("button", { name: /选择第 .* 行 \+PICK-C$/ });
   await pickC.waitFor();
   selectedA = page.getByRole("button", { name: /选择第 .* 行 \+PICK-A$/ });
+  assert.equal(await selectedB.getAttribute("aria-pressed"), "false");
   assert.equal(await selectedA.getAttribute("aria-pressed"), "false");
   assert.match(await selectedCount(), /已选 0 行/);
   await page.screenshot({ path: join(output, "selection-cleared-after-pick-change.png") });
@@ -297,6 +396,85 @@ try {
     await page.getByRole("button", { name: "取消所选暂存", exact: true }).isDisabled(),
     true,
   );
+
+  // Staged modification rows document and preserve the exact reverse-apply semantics.
+  const stagedResults = [];
+  for (const entry of stagedCases) {
+    await rowFor(entry.path, "已暂存").getByLabel(entry.path, { exact: true }).click();
+    const oldRow = page.getByRole("button", {
+      name: new RegExp(`选择第 .* 行 -${entry.prefix} 12$`),
+    });
+    const newRow = page.getByRole("button", {
+      name: new RegExp(`选择第 .* 行 \\+${entry.prefix} 12 EDITED$`),
+    });
+    await Promise.all([oldRow.waitFor(), newRow.waitFor()]);
+    const oldIndex = await diffIndex(oldRow);
+    const newIndex = await diffIndex(newRow);
+    const chosenRows = entry.mode === "plus"
+      ? [newRow]
+      : entry.mode === "minus" ? [oldRow] : [oldRow, newRow];
+    const expectedLines = entry.mode === "plus"
+      ? [newIndex]
+      : entry.mode === "minus" ? [oldIndex] : [oldIndex, newIndex];
+    for (const row of chosenRows) await row.click();
+    const note = page.getByRole("note");
+    await note.waitFor();
+    await assertUnstageGuidance(note);
+    const apply = page.getByRole("button", { name: "取消所选暂存", exact: true });
+    await waitForButtonEnabled("取消所选暂存");
+    assert.equal(await apply.isEnabled(), true);
+    if (entry.mode === "plus") {
+      await note.scrollIntoViewIfNeeded();
+      await assertInsideViewport(apply, 1200, 760, "desktop staged selection button");
+      await assertInsideViewport(note, 1200, 760, "desktop staged selection guidance");
+      await page.screenshot({ path: join(output, "unstage-plus-guidance-desktop.png") });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await note.scrollIntoViewIfNeeded();
+      await assertInsideViewport(apply, 390, 844, "mobile staged selection button");
+      await assertInsideViewport(note, 390, 844, "mobile staged selection guidance");
+      await page.screenshot({ path: join(output, "unstage-plus-guidance-mobile.png") });
+      await page.setViewportSize({ width: 1200, height: 760 });
+      await note.scrollIntoViewIfNeeded();
+    }
+    const actionRequest = page.waitForRequest(request =>
+      request.method() === "POST" && /\/git\/workbench\/actions$/.test(request.url()),
+    );
+    const actionResponse = page.waitForResponse(response =>
+      response.request().method() === "POST" && /\/git\/workbench\/actions$/.test(response.url()),
+    );
+    await apply.click();
+    const body = (await actionRequest).postDataJSON();
+    assert.equal(body.action.kind, "patch");
+    assert.equal(body.action.path, entry.path);
+    assert.equal(body.action.source, "staged");
+    assert.deepEqual(body.action.lines, expectedLines);
+    const response = await actionResponse;
+    assert.equal(response.ok(), true);
+    await response.finished();
+
+    const expectedIndex = entry.mode === "plus"
+      ? entry.base.filter((_, index) => index !== 11)
+      : entry.mode === "minus"
+        ? [...entry.changed.slice(0, 11), entry.base[11], ...entry.changed.slice(11)]
+        : entry.base;
+    assert.equal(git("show", `:${entry.path}`), expectedIndex.join("\n"));
+    assert.equal(git("show", `HEAD:${entry.path}`), entry.base.join("\n"));
+    assert.equal(readFileSync(join(info.root, entry.path), "utf8"), `${entry.changed.join("\n")}\n`);
+    assert.equal(git("rev-parse", "HEAD"), preservedHead);
+    assert.equal(git("diff", "--cached", "--", "staged-sentinel.txt"), sentinelCached);
+    const cached = git("diff", "--cached", "--", entry.path);
+    if (entry.mode === "plus") {
+      assert(cached.includes(`-${entry.base[11]}`));
+      assert(!cached.includes(`+${entry.changed[11]}`));
+    } else if (entry.mode === "minus") {
+      assert(!cached.includes(`-${entry.base[11]}`));
+      assert(cached.includes(`+${entry.changed[11]}`));
+    } else {
+      assert.equal(cached, "");
+    }
+    stagedResults.push({ path: entry.path, mode: entry.mode, lines: expectedLines });
+  }
+  await rowFor("staged-sentinel.txt", "已暂存").waitFor();
 
   // A delayed response for pick.txt cannot overwrite a newer file selection.
   await rowFor("pick.txt", "未暂存").getByLabel("pick.txt", { exact: true }).click();
@@ -348,10 +526,14 @@ try {
     url: url.href,
     pollingElapsedMs,
     sameDiffSelectionPreserved: true,
+    refreshSelectionStayedInteractive: true,
+    refreshWriteActionsStayedDisabled: true,
+    refreshSelectionSentNoActions: true,
     stagingOtherSelectionPreserved: true,
     changedDiffSelectionCleared: true,
     fileSwitchCleared: true,
     sourceSwitchCleared: true,
+    stagedPartialUnstage: stagedResults,
     staleResponseIgnored: true,
     failedRefreshHidOldDiff: true,
     historyHeadings: headingTexts,
@@ -375,7 +557,9 @@ if (passed) {
     join(output, "browser-run.txt"),
     [
       "Browser mode: isolated temporary-profile headless Chromium",
-      "R4-1 diff refresh selection and stale-response regression: passed",
+      "R5-2 refresh-time local selection and write-action freshness regression: passed",
+      "R5-1 staged partial-unstage guidance and exact Git semantics: passed",
+      "R4-1 selection preservation and stale-response regression: passed",
       "R4-2 multi-file history path regression: passed",
       "Cleanup: browser, Vite server, fixture backend, and temporary repositories completed",
       "",
