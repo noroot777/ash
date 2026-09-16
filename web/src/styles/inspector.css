@@ -252,6 +252,20 @@
   white-space: nowrap;
 }
 
+/* 当前面板 portal 进来的自有入口（inspector/headActions.tsx）。面板不必再横一条工具栏，
+   这条头带本来就常驻，中段空着。空的时候彻底不占位，头带跟原来一模一样。 */
+.inspector-host__panel-actions {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.inspector-host__panel-actions:empty {
+  display: none;
+}
+
 .inspector-host__panel-close {
   display: grid;
   width: 22px;

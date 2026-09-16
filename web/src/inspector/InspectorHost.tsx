@@ -11,6 +11,7 @@ import {
 } from "react";
 import { Sidebar, SidebarSimple, X } from "@phosphor-icons/react";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
+import { InspectorHeadSlotProvider } from "./headActions.tsx";
 import { InspectorRail } from "./InspectorRail.tsx";
 import { registerInspectorShortcutTarget } from "./shortcuts.ts";
 import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
@@ -180,6 +181,8 @@ function InspectorHostState<Context>({
   const storageKey = storageKeyFor(contextKey);
   const [state, setState] = useState(() => readState(storageKey, descriptors, defaultVisible, tabPolicy));
   const [resizing, setResizing] = useState(false);
+  /** 头带中段那块动作位的真实节点，交给当前面板 portal 用（见 headActions.tsx）。 */
+  const [headSlot, setHeadSlot] = useState<HTMLDivElement | null>(null);
   const descriptorById = useMemo(
     () => new Map(descriptors.map((descriptor) => [descriptor.id, descriptor])),
     [descriptors],
@@ -378,6 +381,8 @@ function InspectorHostState<Context>({
           <div className="inspector-host__panel">
             <div className="inspector-host__panel-head">
               <span className="inspector-host__panel-title">{activeDescriptor.title}</span>
+              {/* 当前面板自己的入口挂这里（InspectorHeadActions），省掉面板内部那条常驻工具栏。 */}
+              <div className="inspector-host__panel-actions" ref={setHeadSlot} />
               <button
                 type="button"
                 className="inspector-host__panel-close"
@@ -393,7 +398,9 @@ function InspectorHostState<Context>({
               role="tabpanel"
               aria-labelledby={tabIdFor(activeDescriptor.id)}
             >
-              {activeDescriptor.render(context)}
+              <InspectorHeadSlotProvider value={headSlot}>
+                {activeDescriptor.render(context)}
+              </InspectorHeadSlotProvider>
             </div>
           </div>
         </aside>

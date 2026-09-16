@@ -3,10 +3,19 @@
 .side-chat-pane button { cursor: pointer; }
 .side-chat-pane button:disabled { opacity: .45; cursor: default; }
 .side-chat-pane button:focus-visible, .side-chat-pane select:focus-visible, .side-chat-pane summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.side-chat-toolbar { display: flex; align-items: center; gap: 5px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-.side-chat-toolbar select { flex: 1; min-width: 0; color: var(--ink); background: transparent; border: 0; padding: 5px 0; }
-.side-chat-toolbar button { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; }
-.side-chat-toolbar button:hover { background: var(--hover-bg); color: var(--ink); }
+/* 切换侧聊 / 新建 / ⓘ 说明挂在 inspector 面板头带里（inspector/headActions.tsx），
+   所以这一组不在 .side-chat-pane 之下——字号、光标、焦点圈都得自己写一份。 */
+.side-chat-head { position: relative; display: flex; min-width: 0; align-items: center; gap: 2px; font-size: 11px; }
+.side-chat-head select, .side-chat-head button { font: inherit; cursor: pointer; color: var(--muted); background: transparent; border: 0; border-radius: 5px; }
+.side-chat-head select { min-width: 0; max-width: 150px; flex: 0 1 auto; height: 22px; padding: 0 2px; }
+.side-chat-head button { display: grid; flex: 0 0 auto; place-items: center; width: 22px; height: 22px; }
+.side-chat-head select:hover:not(:disabled), .side-chat-head button:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
+.side-chat-head button[aria-expanded="true"] { background: var(--sel-bg); color: var(--ink); }
+.side-chat-head select:disabled, .side-chat-head button:disabled { opacity: .45; cursor: default; }
+.side-chat-head select:focus-visible, .side-chat-head button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.side-chat-help { position: absolute; z-index: 30; top: 26px; right: 0; width: min(280px, calc(100vw - 28px)); padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); box-shadow: var(--menu-shadow); color: var(--muted); line-height: 1.7; }
+.side-chat-help p { margin: 0 0 7px; }
+.side-chat-help p:last-child { margin-bottom: 0; }
 .side-chat-scroll-wrap { flex: 1; min-height: 0; position: relative; }
 .side-chat-scroll { height: 100%; overflow: auto; overscroll-behavior: contain; padding: 18px 14px; }
 .side-chat-message { padding: 14px 0; overflow-wrap: anywhere; border-top: 1px solid var(--line); }
@@ -36,19 +45,17 @@
 .side-chat-quote blockquote { margin: 7px 0 0; max-height: 72px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
 .side-chat-quote.is-expanded blockquote { max-height: 160px; }
 .side-chat-quote .side-chat-quote-expand { margin: 6px 0 0; padding: 2px 0; font-size: 11px; color: var(--accent); }
-.side-chat-model { min-width: 0; margin-top: 10px; }
-.side-chat-model .run-target-picker { width: 100%; max-width: 100%; }
-.side-chat-help { margin-top: 8px; color: var(--muted); font-size: 11px; }
-.side-chat-help summary { width: fit-content; cursor: pointer; }
-.side-chat-help p { margin: 6px 0 0; line-height: 1.6; }
 .side-chat-limit { margin: 8px 0 0; font-size: 11px; color: var(--muted); line-height: 1.6; }
 .side-chat-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; margin-bottom: 6px; font-size: 11px; color: var(--muted); }
 .side-chat-status button { display: flex; align-items: center; gap: 4px; color: var(--ink); background: transparent; border: 0; padding: 4px 0; font-size: 11px; }
 .side-chat-input { border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
 .side-chat-input:focus-within { border-color: var(--accent); }
 .side-chat-input textarea { display: block; width: 100%; min-height: 64px; max-height: 180px; resize: vertical; border: 0; outline: none; padding: 2px; color: var(--ink); background: transparent; font: inherit; line-height: 1.6; }
-.side-chat-input footer { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 6px; }
-.side-chat-input footer > span { font-size: 10px; color: var(--muted); }
+.side-chat-input footer { display: flex; gap: 6px; align-items: center; justify-content: space-between; margin-top: 6px; }
+/* 胶囊在这条里吃掉除发送键之外的宽度，三段各自省略号（run-target-picker.css）。
+   智能体那段是 codex/claude 这类短词，侧栏窄下来时先保住它——要省略也该省略长模型名。 */
+.side-chat-input footer > .run-target-picker { min-width: 0; flex: 1 1 auto; }
+.side-chat-input footer .run-target-seg--agent { flex: 0 0 auto; }
 .side-chat-primary { display: inline-flex; justify-content: center; align-items: center; min-height: 30px; padding: 6px 10px; background: var(--accent); color: white; border: 0; border-radius: 7px; }
 .side-chat-note { color: var(--muted); font-size: 12px; }
 .side-chat-error { padding: 10px 12px; line-height: 1.6; overflow-wrap: anywhere; color: var(--ink); background: color-mix(in srgb, var(--accent) 6%, transparent); }

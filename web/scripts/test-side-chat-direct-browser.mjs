@@ -87,8 +87,17 @@ try {
   assert.equal(await page.getByRole("log", { name: "侧聊消息" }).innerText(), "");
   assert.equal(await page.getByRole("button", { name: "开始侧聊", exact: true }).count(), 0);
   assert.equal(await page.getByText("这里聊，不打断思路", { exact: true }).count(), 0);
-  await page.getByText("侧聊说明", { exact: true }).waitFor();
+  const helpButton = page.getByRole("button", { name: "侧聊说明", exact: true });
+  const helpPopover = page.getByRole("dialog", { name: "侧聊说明", exact: true });
+  assert.equal(await helpPopover.count(), 0, "说明默认不占地方");
+  await helpButton.click();
+  await helpPopover.waitFor();
+  assert.match(await helpPopover.innerText(), /Enter 发送/, "发送快捷键的说明并进 ⓘ");
+  await page.screenshot({ path: join(artifacts, "side-chat-help-popover.png") });
+  await page.getByTestId("outside-target").click();
+  await helpPopover.waitFor({ state: "detached" });
   await picker.waitFor();
+  assert.equal(await picker.evaluate((element) => !!element.closest(".side-chat-input")), true, "执行器胶囊在输入框里");
   const agentTrigger = picker.getByRole("button", { name: /智能体：/ });
   const modelTrigger = picker.getByRole("button", { name: /模型：/ });
   const effortTrigger = picker.getByRole("button", { name: /智能水平：/ });
@@ -152,6 +161,7 @@ try {
   });
   assert.equal((await rooms()).length, 1, "建房成功、消息失败时保留房间");
   assert.notEqual(await roomPicker.inputValue(), "");
+  assert.equal(await roomPicker.evaluate((element) => !!element.closest(".inspector-host__panel-head")), true, "切换侧聊挂在面板头带上，不再单占一条工具栏");
   assert.equal(await input.inputValue(), draft);
   assert.equal(messagePayloads.length, 1);
   await page.unroute("**/api/chats/*/messages");

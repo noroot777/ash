@@ -44,7 +44,15 @@ try {
   assert.equal((await roomsFor("parent")).length, 0, "只打开侧聊不创建房间");
   assert.equal(await page.getByRole("button", { name: "开始侧聊", exact: true }).count(), 0);
   assert.equal(await page.getByText("这里聊，不打断思路", { exact: true }).count(), 0);
-  await page.getByText("侧聊说明", { exact: true }).waitFor();
+  // 侧聊说明不再常驻底部：点头带上的 ⓘ 才展开，Esc 收起。
+  const helpButton = page.getByRole("button", { name: "侧聊说明", exact: true });
+  const helpPopover = page.getByRole("dialog", { name: "侧聊说明", exact: true });
+  assert.equal(await helpPopover.count(), 0, "说明默认不占地方");
+  assert.equal(await helpButton.evaluate((element) => !!element.closest(".inspector-host__panel-head")), true, "说明入口在面板头带上");
+  await helpButton.click();
+  await helpPopover.waitFor();
+  await page.keyboard.press("Escape");
+  await helpPopover.waitFor({ state: "detached" });
   assert.equal(await page.getByRole("log", { name: "侧聊消息" }).innerText(), "");
   const sendForReply = async (body) => {
     const position = await page.locator(".side-chat-message.is-agent").count();

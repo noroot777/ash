@@ -1,12 +1,13 @@
 import { useRef } from "react";
 import type { Task } from "@ash/shared";
 import type { ChatMessage } from "@ash/shared/chat";
-import { ArrowDown, ArrowBendUpLeft, Plus } from "@phosphor-icons/react";
+import { ArrowDown, ArrowBendUpLeft } from "@phosphor-icons/react";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 import { SideChatComposer } from "./SideChatComposer.tsx";
+import { SideChatHeadControls } from "./SideChatHeadControls.tsx";
 import { useSideChat } from "./useSideChat.ts";
 import "./side-chat.css";
 
@@ -38,13 +39,7 @@ export function SideChatPane({ task }: { task: Task }) {
   const { resume } = useStickToBottom(scroll, chat.room?.id ?? task.id);
   const { atBottom } = useScrollEdges(scroll, chat.room?.id ?? task.id);
   return <section className="side-chat-pane" aria-label="任务侧聊">
-    {!!chat.rooms.length && <header className="side-chat-toolbar">
-      <select aria-label="切换侧聊" value={chat.room?.id ?? ""} disabled={chat.sending || chat.savingMember} onChange={(event) => chat.select(event.target.value || null)}>
-        <option value="">新侧聊</option>
-        {chat.rooms.map((room, index, rooms) => <option key={room.id} value={room.id}>侧聊 {rooms.length - index} · {new Date(room.createdAt).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</option>)}
-      </select>
-      <button type="button" aria-label="新建侧聊" disabled={chat.sending || chat.savingMember || !chat.room} onClick={() => chat.select(null)}><Plus size={16} /></button>
-    </header>}
+    <SideChatHeadControls chat={chat} />
     <div className="side-chat-scroll-wrap">
       <div className="side-chat-scroll" ref={scroll}>
         {!chat.ready && <p className="side-chat-note" role="status">正在读取侧聊…</p>}

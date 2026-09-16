@@ -239,7 +239,7 @@ try {
   await page.getByRole("button", { name: "移除主会话引用", exact: true }).click();
   assert.equal(await reference.count(), 0);
 
-  await selectContents(page.getByText("侧聊说明", { exact: true }));
+  await selectContents(page.locator(".side-chat-message.is-agent .task-markdown p").first());
   assert.equal(await ask.isVisible().catch(() => false), false, "侧聊正文选区不能出现主会话选文入口");
   await selectContents(primary);
   await ask.waitFor();

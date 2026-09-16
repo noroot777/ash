@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Task } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
-import { SIDE_CHAT_HISTORY_MAX_BYTES, type ChatMember } from "@ash/shared/chat";
+import { type ChatMember } from "@ash/shared/chat";
 import { ArrowUp, Quotes, Stop, X } from "@phosphor-icons/react";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { ChatContextNotice } from "../chat/ChatContextNotice.tsx";
@@ -46,20 +46,21 @@ export function SideChatComposer({ task, chat }: { task: Task; chat: SideChatSta
       <textarea ref={input} aria-label="侧聊消息输入" placeholder={chat.quote ? "想问这段内容什么？" : "围绕主会话问个问题…"} disabled={!chat.ready} maxLength={SIDE_CHAT_MESSAGE_LIMIT} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} onKeyDown={(event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); }
       }} />
-      <footer><span>Enter 发送 · Shift Enter 换行</span><button type="button" className="side-chat-primary" aria-label="发送侧聊消息" disabled={!chat.canSend || !valid} onClick={send}><ArrowUp size={17} weight="bold" /></button></footer>
+      <footer>
+        {/* 「选谁干活」那颗三段胶囊就放在输入框里：它是每次发送前都可能要看一眼的东西，
+            单开一条横栏在侧栏这点宽度里太贵。Enter/Shift Enter 的提示挪进头带的 ⓘ。 */}
+        <RunTargetPicker label="侧聊执行器" variant="chip" types={types} profiles={connection.profiles} knownProfiles={connection.profiles} selection={member ?? null}
+          fallbackType={task.agentType} model={run?.model ?? null} effort={member?.reasoningEffort ?? ""}
+          disabled={!connection.ready || !chat.loaded || chat.busy || chat.sending || (!!chat.room && !chat.snapshot)} emptyText={connection.ready ? "暂无可用执行器" : "正在读取执行器…"}
+          onCommit={(next) => {
+            if (!member) return;
+            changeMember({ ...member, agentType: next.agent, executorId: next.executorId ?? null, model: next.model || null,
+              reasoningEffort: sameExecutor(member, { agentType: next.agent, executorId: next.executorId ?? null }) ? member.reasoningEffort : null });
+          }} onEffortChange={(effort) => { if (member) changeMember({ ...member, reasoningEffort: effort || null }); }} />
+        <button type="button" className="side-chat-primary" aria-label="发送侧聊消息" disabled={!chat.canSend || !valid} onClick={send}><ArrowUp size={17} weight="bold" /></button>
+      </footer>
     </div>
     {chat.overLimit && <p className="side-chat-limit" role="alert">引用与问题合计 {chat.messageLength} 字，超过 {SIDE_CHAT_MESSAGE_LIMIT} 字上限。请缩短问题，或移除引用后重新选择较短的内容。</p>}
-    <div className="side-chat-model">
-      <RunTargetPicker label="侧聊执行器" variant="chip" types={types} profiles={connection.profiles} knownProfiles={connection.profiles} selection={member ?? null}
-        fallbackType={task.agentType} model={run?.model ?? null} effort={member?.reasoningEffort ?? ""}
-        disabled={!connection.ready || !chat.loaded || chat.busy || chat.sending || (!!chat.room && !chat.snapshot)} emptyText={connection.ready ? "暂无可用执行器" : "正在读取执行器…"}
-        onCommit={(next) => {
-          if (!member) return;
-          changeMember({ ...member, agentType: next.agent, executorId: next.executorId ?? null, model: next.model || null,
-            reasoningEffort: sameExecutor(member, { agentType: next.agent, executorId: next.executorId ?? null }) ? member.reasoningEffort : null });
-        }} onEffortChange={(effort) => { if (member) changeMember({ ...member, reasoningEffort: effort || null }); }} />
-    </div>
     {connection.ready && !connection.error && !valid && <p className="side-chat-note">{connection.profiles.length ? "当前执行器不可用，请重新选择。" : "请先在设置中添加执行器。"}</p>}
-    <details className="side-chat-help"><summary>侧聊说明</summary><p>围绕主会话独立提问，不打断主任务。需要回传时，直接说：<code>把结论告诉主任务</code>。</p><p>首次发送时带入主会话快照，最多 {SIDE_CHAT_HISTORY_MAX_BYTES / 1024} KiB；较长历史的整理可能增加等待时间和用量。关闭面板保留对话与草稿。</p></details>
   </div>;
 }
