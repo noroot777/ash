@@ -11,6 +11,7 @@ export function selectedPatch(
   const reverse = operation !== "stage";
   const label = { stage: "暂存", unstage: "取消暂存", discard: "丢弃" }[operation];
   const lines = diff.split("\n");
+  const first = lines.findIndex((line) => line.startsWith("@@ "));
   const selectedSet = new Set(selected);
   if (
     !selected.length ||
@@ -18,9 +19,9 @@ export function selectedPatch(
       (i) =>
         !Number.isInteger(i) ||
         i < 0 ||
+        i <= first ||
         i >= lines.length ||
-        !/^[+-]/.test(lines[i]) ||
-        /^---|^\+\+\+/.test(lines[i]),
+        !/^[+-]/.test(lines[i]),
     )
   )
     fail("请选择改动行", 400);
@@ -30,7 +31,6 @@ export function selectedPatch(
     )
   )
     fail(`新增、删除、重命名或二进制文件请按整个文件${label}`);
-  const first = lines.findIndex((line) => line.startsWith("@@ "));
   if (first < 0) fail(`没有可${label}的改动块`);
   const result = lines.slice(0, first);
   let delta = 0;

@@ -44,8 +44,7 @@ export function DiffView({
     );
   const lines = value.diff.split("\n");
   const noFinalNewline = lines.some((line) => line.startsWith("\\"));
-  const eligible = (line: string) =>
-    /^[+-]/.test(line) && !/^---|^\+\+\+/.test(line);
+  const eligible = (line: string) => /^[+-]/.test(line);
   const canSelect =
     select &&
     !value.truncated &&
@@ -82,7 +81,7 @@ export function DiffView({
     if (line.startsWith("diff --git ")) {
       hunk = undefined;
       path = "";
-    } else if (line.startsWith("+++ "))
+    } else if (!hunk && line.startsWith("+++ "))
       path = line.slice(4).replace(/^b\//, "");
     else if (line.startsWith("@@ ")) {
       const range = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);

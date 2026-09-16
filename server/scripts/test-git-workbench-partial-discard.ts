@@ -34,6 +34,7 @@ try {
     "../src/git-workbench/operations.js"
   );
   const { parseAction } = await import("../src/git-workbench/input.js");
+  const { selectedPatch } = await import("../src/git-workbench/patch.js");
   git("init", "-b", "main");
   const lines = Array.from({ length: 22 }, (_, index) => `line ${index + 1}`);
   const path = "file[1].txt";
@@ -43,6 +44,21 @@ try {
   const noEolBase = "a\nb\nc\nlast-no-eol";
   const noEolModified = "a\nB\nc\nlast-no-eol";
   writeFileSync(join(root, noEolPath), noEolBase);
+  const prefixCases = [
+    { path: "separator.md", before: "---", after: [], rows: ["----"] },
+    { path: "comment.sql", before: "-- SQL comment", after: [], rows: ["--- SQL comment"] },
+    { path: "increment.js", before: "counter();", after: ["++counter;", "counter();"], rows: ["+++counter;"] },
+    { path: "headers.txt", before: "-- a/example.txt", after: ["++ b/example.txt"], rows: ["--- a/example.txt", "+++ b/example.txt"] },
+  ].map((entry) => {
+    const base = Array.from({ length: 24 }, (_, i) => `prefix line ${i + 1}`);
+    base[9] = entry.before;
+    const modified = [...base];
+    modified.splice(9, 1, ...entry.after);
+    modified[modified.indexOf("prefix line 12")] = "prefix line 12 EDITED";
+    const original = base.join("\n") + "\n";
+    writeFileSync(join(root, entry.path), original);
+    return { ...entry, original, modified: modified.join("\n") + "\n" };
+  });
   git("add", ".");
   git("commit", "-m", "base");
   lines[10] = "staged change";
@@ -185,6 +201,53 @@ try {
   assert.equal(git("diff", "--cached"), stagedBefore);
   assert.equal(git("rev-parse", "HEAD"), head);
   console.log("ok · no-final-newline rejections use the requested action, preserve state and journal the reason; whole-file stage/unstage/discard remain valid");
+
+  const allChangeLines = (diff: string) => {
+    const rows = diff.split("\n");
+    const firstHunk = rows.findIndex((row) => row.startsWith("@@ "));
+    assert(firstHunk >= 0);
+    return rows.flatMap((row, i) => i > firstHunk && /^[+-]/.test(row) ? [i] : []);
+  };
+  for (const entry of prefixCases) {
+    writeFileSync(join(root, entry.path), entry.modified);
+    const diff = (await readDetail(root, { path: entry.path, source: "unstaged" })).diff;
+    const rows = diff.split("\n");
+    const selected = allChangeLines(diff);
+    for (const row of entry.rows) {
+      assert(selected.includes(rows.indexOf(row)), `${entry.path}: ${row} must be selected`);
+    }
+    const fileHeaders = rows.flatMap((row, i) =>
+      i < rows.findIndex((line) => line.startsWith("@@ ")) && /^[+-]/.test(row) ? [i] : [],
+    );
+    assert.equal(fileHeaders.length, 2);
+    for (const operation of ["stage", "unstage", "discard"] as const) {
+      for (const fileHeader of fileHeaders) {
+        assert.throws(() => selectedPatch(diff, [fileHeader], operation), /请选择改动行/);
+      }
+    }
+
+    await run({ kind: "patch", path: entry.path, source: "unstaged", diff, lines: selected });
+    assert.equal(git("show", `:${entry.path}`), entry.modified);
+    assert.equal(git("diff", "--", entry.path), "", "the entire hunk must be staged");
+    assert.equal(readFileSync(join(root, entry.path), "utf8"), entry.modified);
+    assert.equal(git("show", `:${path}`), index, "other staged content must survive");
+
+    const stagedDiff = (await readDetail(root, { path: entry.path, source: "staged" })).diff;
+    await run({ kind: "patch", path: entry.path, source: "staged", diff: stagedDiff, lines: allChangeLines(stagedDiff) });
+    assert.equal(git("show", `:${entry.path}`), entry.original);
+    assert.equal(git("diff", "--cached"), stagedBefore, "unstaging must preserve the original index");
+    assert.equal(readFileSync(join(root, entry.path), "utf8"), entry.modified);
+
+    const discardDiff = (await readDetail(root, { path: entry.path, source: "unstaged" })).diff;
+    await run({ kind: "discard-patch", path: entry.path, diff: discardDiff, lines: allChangeLines(discardDiff) }, "丢弃");
+    assert.equal(readFileSync(join(root, entry.path), "utf8"), entry.original);
+    assert.equal(git("diff", "--", entry.path), "", "hunk discard must leave no hidden prefix edit");
+    assert.equal(git("diff", "--cached"), stagedBefore);
+    assert.equal(git("rev-parse", "HEAD"), head);
+    assert.equal(readFileSync(join(root, path), "utf8"), lines.join("\n") + "\n");
+    assert.equal(readFileSync(join(root, "untracked.txt"), "utf8"), "preserve untracked\n");
+  }
+  console.log("ok · hunk stage/unstage/discard include separator, comment, increment and header-like content; actual file headers remain unselectable");
 } finally {
   const { dbClient } = await import("../src/db/index.js");
   dbClient.close();
