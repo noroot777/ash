@@ -58,6 +58,11 @@
 .file-viewer__placeholder b { color:var(--ink); font-size:12px; }
 .file-viewer__placeholder p { margin:6px 0 0; color:var(--faint); font-size:10.5px; line-height:1.6; }
 
+/* 放大层里的文件全文 / 单文件 diff：补一圈边框当面板，代码区从固定高度改成撑满这一屏。
+   层本身的定位、层高见 `zoom-layer.css`。 */
+.zoom-layer--file > .file-viewer { min-height:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; }
+.zoom-layer--file .single-review-code { max-height:none; flex:1; }
+
 .file-openwith { position:relative; flex:0 0 auto; }
 .file-openwith__menu { position:absolute; z-index:40; top:calc(100% + 5px); right:0; width:250px; max-height:340px; overflow-y:auto; }
 .file-openwith__hint { margin:0; padding:8px 10px; color:var(--faint); font-size:10px; }

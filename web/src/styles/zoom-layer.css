@@ -1,0 +1,8 @@
+/* 放大层：portal 到 body，铺满窗口只让开右边的 inspector。三处共用（分支 diff、文件全文、
+   单文件 diff），层里内容怎么撑满各自在 review.css / files.css 里写。
+
+   右缘和层高都由组件内联写在 style 上：右缘按 inspector 的左缘算（铺开的是「除 inspector
+   外的整块窗口」，没有 inspector 时是 0，退化成整屏），层高从这里的 92 起——压过页面内容
+   （≤90），低于抽屉/确认框/大图这些后开的浮层——长在更高的层里时再抬一档。整张 z 序和
+   让位的理由见 `src/lib/zoomLayer.tsx`。 */
+.zoom-layer { position:fixed; z-index:92; top:0; right:0; bottom:0; left:0; display:flex; border-right:.5px solid var(--line); background:var(--canvas); padding:12px; }

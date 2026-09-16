@@ -81,16 +81,11 @@
 .single-review-zoom { display:inline-flex; height:24px; flex:0 0 auto; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }
 .single-review-zoom:hover { background:var(--raised); color:var(--ink); }
 .single-review-zoom[aria-pressed="true"] { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); color:var(--accent); }
-/* diff 放大层：portal 到 body，层高 92 —— 压过页面内容，低于抽屉/确认框/大图这些后开的
-   浮层（理由与整张 z 序见 ReviewDiffViewer.tsx）。里面从固定高度改成撑满这一屏。 */
-/* 右缘和层高都由组件内联写在 style 上：右缘按 inspector 的左缘算（铺开的是「除 inspector
-   外的整块窗口」，没有 inspector 时是 0，退化成整屏），层高从这里的 92 起、长在更高的层
-   里时再抬一档。 */
-.review-zoom-layer { position:fixed; z-index:92; top:0; right:0; bottom:0; left:0; display:flex; border-right:.5px solid var(--line); background:var(--canvas); padding:12px; }
-.review-zoom-layer > .single-review-diff-layout { min-height:0; flex:1; }
-.review-zoom-layer .single-review-files,.review-zoom-layer .single-review-diff { display:flex; min-height:0; flex-direction:column; }
-.review-zoom-layer .single-review-files > div { max-height:none; flex:1; }
-.review-zoom-layer .single-review-code { max-height:none; flex:1; }
+/* 放大层里的分支 diff：从固定高度改成撑满这一屏。层本身的定位、层高见 `zoom-layer.css`。 */
+.zoom-layer--review > .single-review-diff-layout { min-height:0; flex:1; }
+.zoom-layer--review .single-review-files,.zoom-layer--review .single-review-diff { display:flex; min-height:0; flex-direction:column; }
+.zoom-layer--review .single-review-files > div { max-height:none; flex:1; }
+.zoom-layer--review .single-review-code { max-height:none; flex:1; }
 .single-review-warning { display:flex; align-items:center; gap:6px; border-bottom:.5px solid color-mix(in lch,var(--amber) 25%,var(--line)); background:color-mix(in lch,var(--amber) 7%,var(--panel)); padding:7px 10px; color:var(--amber); font-size:9.5px; }
 .single-review-empty { display:grid; min-height:140px; place-items:center; border:1px dashed var(--line2); border-radius:8px; background:var(--panel); padding:18px; color:var(--faint); font-size:10.5px; text-align:center; }
 .single-review-diff .single-review-empty { border:0; border-radius:0; }

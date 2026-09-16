@@ -21,7 +21,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/review-diff-zoom.html`);
 
-  const zoomLayer = page.locator(".review-zoom-layer");
+  const zoomLayer = page.locator(".zoom-layer");
   const zoomButton = page.locator("#fixture-main .single-review-zoom");
   const inspector = page.locator("#fixture-inspector");
   await zoomButton.waitFor();
@@ -50,7 +50,7 @@ try {
   // 所以这一条钉住「portal 到 body」这个实现前提。
   const rail = await page.locator("#fixture-rail").boundingBox();
   const overRail = await page.evaluate(
-    ([x, y]) => !!document.elementFromPoint(x, y)?.closest(".review-zoom-layer"),
+    ([x, y]) => !!document.elementFromPoint(x, y)?.closest(".zoom-layer"),
     [rail.x + rail.width / 2, rail.y + rail.height / 2],
   );
   assert.ok(overRail, "放大层该压住左边的任务栏，而不是被主区的堆叠上下文困住");
@@ -67,7 +67,7 @@ try {
   const widened = Math.round(inspectorBox.x + inspectorBox.width - 420);
   await inspector.evaluate((node) => node.style.setProperty("--inspector-width", "420px"));
   await page.waitForFunction(
-    (expected) => Math.round(document.querySelector(".review-zoom-layer").getBoundingClientRect().width) === expected,
+    (expected) => Math.round(document.querySelector(".zoom-layer").getBoundingClientRect().width) === expected,
     widened,
     { timeout: 2000 },
   );
@@ -81,7 +81,7 @@ try {
   assert.equal(await zoomLayer.count(), 1, "点 inspector 不该把放大层关掉");
   const dialogBox = await dialog.boundingBox();
   const topmost = await page.evaluate(
-    ([x, y]) => document.elementFromPoint(x, y)?.closest(".task-confirm-dialog, .review-zoom-layer")?.className ?? "",
+    ([x, y]) => document.elementFromPoint(x, y)?.closest(".task-confirm-dialog, .zoom-layer")?.className ?? "",
     [dialogBox.x + dialogBox.width / 2, dialogBox.y + 12],
   );
   assert.ok(topmost.includes("task-confirm-dialog"), `后开的确认框该在放大层上面，实测 ${topmost}`);
@@ -122,7 +122,7 @@ try {
   assert.ok(drawerZoom.z > 95, `抽屉里放大该抬到抽屉之上，实测 z-index ${drawerZoom.z}`);
   assert.equal(drawerZoom.width, inspectorBox.x, "抽屉里放大让开的仍该是窗口右缘那条 inspector");
   const overDrawer = await page.evaluate(
-    ([x, y]) => !!document.elementFromPoint(x, y)?.closest(".review-zoom-layer"),
+    ([x, y]) => !!document.elementFromPoint(x, y)?.closest(".zoom-layer"),
     [200, 400],
   );
   assert.ok(overDrawer, "放大层该压住抽屉本身");

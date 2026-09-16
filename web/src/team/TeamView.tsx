@@ -577,6 +577,9 @@ export function TeamView({
         <FileViewer
           taskId={task.id}
           path={fileView.filePath}
+          zoomed={fileView.zoomed}
+          onToggleZoom={fileView.toggleZoom}
+          onExitZoom={fileView.exitZoom}
           onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
           onClose={fileView.close}
           notify={notify}
@@ -588,6 +591,9 @@ export function TeamView({
           source={fileView.diff.source}
           origPath={fileView.diff.origPath}
           kind={fileView.diff.kind}
+          zoomed={fileView.zoomed}
+          onToggleZoom={fileView.toggleZoom}
+          onExitZoom={fileView.exitZoom}
           onOpenFile={fileView.showFile}
           onClose={fileView.close}
         />

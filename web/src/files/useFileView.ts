@@ -17,9 +17,15 @@ type FileViewState = {
    * 工作树侧是两份不同的 diff，光有路径切不回原来那一份。
    */
   behind: ScmDiffTarget | null;
+  /**
+   * 放大：铺满窗口、只让开右边的 inspector。挂在这儿而不是各自组件里，因为全文和 diff 是
+   * 同一块内容的两种读法，互切时组件会换一个，状态留在组件里就会掉。放大态下右边的文件树
+   * 照样点得到，所以换一个文件也接着放大；关掉这一块内容才退出。
+   */
+  zoomed: boolean;
 };
 
-const CLOSED: FileViewState = { filePath: null, diff: null, behind: null };
+const CLOSED: FileViewState = { filePath: null, diff: null, behind: null, zoomed: false };
 
 export function useFileView(taskId: string) {
   const [state, setState] = useState<FileViewState>(CLOSED);
@@ -28,16 +34,22 @@ export function useFileView(taskId: string) {
 
   // 全部走函数式更新，回调才能一直是同一个引用 —— 调用方会把它们塞进 effect 依赖和
   // inspector 的 context 里。
-  const openFile = useCallback((path: string) => setState({ filePath: path, diff: null, behind: null }), []);
-  const openDiff = useCallback((target: ScmDiffTarget) => setState({ filePath: null, diff: target, behind: null }), []);
+  const openFile = useCallback((path: string) => setState((current) => (
+    { filePath: path, diff: null, behind: null, zoomed: current.zoomed }
+  )), []);
+  const openDiff = useCallback((target: ScmDiffTarget) => setState((current) => (
+    { filePath: null, diff: target, behind: null, zoomed: current.zoomed }
+  )), []);
   /** diff 视图里的「查看文件全文」。 */
   const showFile = useCallback(() => setState((current) => (
-    current.diff ? { filePath: current.diff.path, diff: null, behind: current.diff } : current
+    current.diff ? { filePath: current.diff.path, diff: null, behind: current.diff, zoomed: current.zoomed } : current
   )), []);
   /** 全文视图里的「查看改动」，回到刚才那份 diff。 */
   const showDiff = useCallback(() => setState((current) => (
-    current.behind ? { filePath: null, diff: current.behind, behind: null } : current
+    current.behind ? { filePath: null, diff: current.behind, behind: null, zoomed: current.zoomed } : current
   )), []);
+  const toggleZoom = useCallback(() => setState((current) => ({ ...current, zoomed: !current.zoomed })), []);
+  const exitZoom = useCallback(() => setState((current) => (current.zoomed ? { ...current, zoomed: false } : current)), []);
   const close = useCallback(() => setState(CLOSED), []);
 
   return {
@@ -47,10 +59,13 @@ export function useFileView(taskId: string) {
     activePath: state.filePath ?? state.diff?.path ?? null,
     /** 全文视图能不能切回 diff：只有「从 diff 切过来的」那次才有回头路。 */
     canShowDiff: state.behind !== null,
+    zoomed: state.zoomed,
     openFile,
     openDiff,
     showFile,
     showDiff,
+    toggleZoom,
+    exitZoom,
     close,
   };
 }

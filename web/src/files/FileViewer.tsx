@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Copy, FolderOpen, GitDiff, SpinnerGap, Warning, X } from "@phosphor-icons/react";
 import { api, type FileContent } from "../lib/api.ts";
+import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { formatSize } from "./fileModel.ts";
 import { OpenWithMenu } from "./OpenWithMenu.tsx";
 
@@ -49,12 +50,19 @@ function Body({ taskId, file }: { taskId: string; file: FileContent }) {
 export function FileViewer({
   taskId,
   path,
+  zoomed = false,
+  onToggleZoom,
+  onExitZoom,
   onOpenDiff,
   onClose,
   notify,
 }: {
   taskId: string;
   path: string;
+  /** 放大态。由 `useFileView` 持有，全文与 diff 互切时才不会掉。 */
+  zoomed?: boolean;
+  onToggleZoom?: () => void;
+  onExitZoom?: () => void;
   /** 「查看改动」：从 diff 切过来的那次才有，点回去还是刚才那一份 diff。 */
   onOpenDiff?: () => void;
   onClose: () => void;
@@ -64,6 +72,12 @@ export function FileViewer({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revealing, setRevealing] = useState(false);
+  const zoom = useZoomLayer({
+    zoomed,
+    onExit: () => onExitZoom?.(),
+    label: `放大查看文件：${path}`,
+    className: "zoom-layer--file",
+  });
 
   useEffect(() => {
     let alive = true;
@@ -92,7 +106,7 @@ export function FileViewer({
     }
   };
 
-  return (
+  return zoom.render(
     <div className="file-viewer" aria-label="文件查看">
       <header className="file-viewer__bar">
         <div className="file-viewer__title">
@@ -132,6 +146,7 @@ export function FileViewer({
         >
           <Copy size={13} aria-hidden="true" />
         </button>
+        {onToggleZoom && <ZoomToggle zoomed={zoomed} onToggle={onToggleZoom} className="file-viewer__action" />}
         <button type="button" className="file-viewer__action" aria-label="关闭文件，回到会话" onClick={onClose}>
           <X size={13} aria-hidden="true" />
         </button>
@@ -149,6 +164,6 @@ export function FileViewer({
         {error && <p className="file-viewer__state is-error"><Warning size={14} aria-hidden="true" />{error}</p>}
         {!loading && !error && file && <Body taskId={taskId} file={file} />}
       </div>
-    </div>
+    </div>,
   );
 }

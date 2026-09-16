@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { FileText, GitDiff, SpinnerGap, Warning, X } from "@phosphor-icons/react";
 import { api, type ScmChangeKind } from "../lib/api.ts";
+import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { countDiffLines, parseDiffLines } from "../review/diffModel.ts";
 import { DiffBody, DiffLayoutToggle } from "../review/DiffBody.tsx";
 import { useDiffLayout } from "../review/diffLayout.ts";
@@ -40,6 +41,9 @@ export function ScmDiffViewer({
   source,
   origPath,
   kind,
+  zoomed = false,
+  onToggleZoom,
+  onExitZoom,
   onOpenFile,
   onClose,
 }: {
@@ -48,6 +52,10 @@ export function ScmDiffViewer({
   source: ScmDiffKind;
   origPath: string | null;
   kind?: ScmChangeKind;
+  /** 放大态。由 `useFileView` 持有，diff 与全文互切时才不会掉。 */
+  zoomed?: boolean;
+  onToggleZoom?: () => void;
+  onExitZoom?: () => void;
   /** 「查看文件全文」。文件树把有改动的文件直接摊成 diff，全文的入口就落在这里。 */
   onOpenFile?: () => void;
   onClose: () => void;
@@ -56,6 +64,12 @@ export function ScmDiffViewer({
   const [error, setError] = useState<string | null>(null);
   const [visible, setVisible] = useState(INITIAL_LINES);
   const [layout, setLayout] = useDiffLayout();
+  const zoom = useZoomLayer({
+    zoomed,
+    onExit: () => onExitZoom?.(),
+    label: `放大查看改动：${path}`,
+    className: "zoom-layer--file",
+  });
 
   useEffect(() => {
     let alive = true;
@@ -89,7 +103,7 @@ export function ScmDiffViewer({
   const counts = useMemo(() => countDiffLines(lines), [lines]);
   const empty = diff && !diff.unavailable && (diff.binary || !diff.diff.trim());
 
-  return (
+  return zoom.render(
     <div className="file-viewer" aria-label={source === "branch" ? "已提交的改动" : "工作区改动"}>
       <header className="file-viewer__bar">
         <div className="file-viewer__title">
@@ -107,6 +121,7 @@ export function ScmDiffViewer({
             查看文件全文
           </button>
         )}
+        {onToggleZoom && <ZoomToggle zoomed={zoomed} onToggle={onToggleZoom} className="file-viewer__action" />}
         <button type="button" className="file-viewer__action" aria-label="关闭 diff，回到会话" onClick={onClose}>
           <X size={13} aria-hidden="true" />
         </button>
@@ -141,6 +156,6 @@ export function ScmDiffViewer({
           />
         )}
       </div>
-    </div>
+    </div>,
   );
 }

@@ -28,7 +28,7 @@ const diff: TaskDiffResult = {
     "+++ b/web/src/styles/review.css",
     "@@ -1,2 +1,3 @@",
     " .single-review-diff { min-width: 0; }",
-    "+.review-zoom-layer { position: fixed; inset: 0; }",
+    "+.zoom-layer { position: fixed; inset: 0; }",
   ].join("\n"),
   truncated: false,
   limitBytes: 1024 * 1024,
