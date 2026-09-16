@@ -118,6 +118,22 @@ function conversationItemTime(item: ConversationItem): number {
 }
 
 /**
+ * 推断出来的收口时刻不能早于回合起点 —— 一条回合不可能在开始之前就结束了。
+ *
+ * `markerEndedAt` 是服务端记下的事实，不受这一条约束；下面那几档（下一次插话、下一颗气泡、
+ * 会话边界）全是**推断**，一旦时间线的排布出了岔子就会推出个负的用时。症状很响：气泡显示
+ * 「0s 用时」、当场折叠、还挂出「派生新任务」，而它根本不是一条完整回复（用户 2026-09-14、
+ * 2026-09-15 各报过一次，根因各不相同）。宁可让它继续显示成「还在飞」——真结束自有
+ * markerEndedAt / 回合边界事件来报。
+ */
+function endsAfterStart(at: string | null | undefined, endedAt: string | null): boolean {
+  if (!endedAt) return false;
+  const start = at ? Date.parse(at) : Number.NaN;
+  const end = Date.parse(endedAt);
+  return !Number.isFinite(start) || !Number.isFinite(end) || end >= start;
+}
+
+/**
  * 这条旁注落在了会话的什么位置 —— 判据是 trace 的回合分组。
  *
  * - `inside`：某一组的 `turnStartedAt` **严格早于**它、组里又还有它之后的事件 —— 砸进了
@@ -188,29 +204,14 @@ function appendPersistedSession(
   const segments = parseSessionOutput(output);
   const traceGroups = groupedTrace(normalizedPersistedTrace(trace, session));
   const consumedTrace = new Set<string>();
-  // 先按 .md 里的 sentinel 把 trace 切成段，再逐段发放。切分必须整体跑在任何 agent 段
-  // 认领之前：原生引导那一路插话前常常一个字都没吐（agent 正连着跑工具），既没有 .md
-  // 正文能顺手触发切分，等上一段领走整组之后也已经晚了。
+  // ── 一遍过认三件事：谁是旁注、哪条旁注要把上下两截并回一颗气泡、trace 从哪儿切开 ──
   //
-  // 插话一律是切点。**系统旁注只在它后面还有 agent 正文时才是切点**：那种情形下
-  // parseSessionOutput 已经在 sentinel 处把正文切成了两段 agent，trace 不跟着切，前面
-  // 那截（「预约审查」这类旁注常常正好落在 agent 刚吐出一两个字的时候）就会把整组
-  // trace 连同几百次工具调用一起领走，真正写正文的那一段一个事件都拿不到。
+  // 必须整个跑在切分**之前**：notePlacement 读的正是即将被改写的那份分组。
   //
-  // 旁注后面没有正文时**不能**切：那一组 trace 会没人认领，落进「无正文兜底气泡」凭空
-  // 多出一颗，而直播那边旁注根本不拆气泡（见 appendAgent 跨旁注回捞当前回合），刷新
-  // 前后就长得不一样了。
-  const splitPoints = new Set<string>();
-  segments.forEach((segment, index) => {
-    if (segment.kind === "agent" || !segment.at) return;
-    if (segment.kind === "system" && !segments.slice(index + 1).some((later) => later.kind === "agent")) return;
-    splitPoints.add(segment.at);
-  });
-  // 谁是「任务时间线旁注」要在切分**之前**认完：notePlacement 读的正是即将被改写的那份
-  // 分组。两套判据各管一头 —— 服务端的 aside 标覆盖全部 appendTaskTimeline 旁注（含落在
-  // 两个回合之间的，比如「第 N 轮验证开始」），它只决定「不拿它定回合起止」；而要不要把
-  // 上下两截并回一颗气泡，看的是它落在哪：
+  // 【谁是旁注】服务端的 aside 标覆盖全部 appendTaskTimeline 旁注（含落在两个回合之间的，
+  // 比如「第 N 轮验证开始」），它只决定「不拿它定回合起止」。
   //
+  // 【并不并】看它落在哪：
   // - inside  → 并。那一刻回合确实还在飞，是同一段话被劈成了两半。
   // - boundary→ 不并。trace 摆明了下一轮从这儿起头，并了就是把实现者和审查者的发言粘成
   //   一条（或把同一个人的两轮粘成一条）。
@@ -227,18 +228,68 @@ function appendPersistedSession(
   //   transcript.ts 的 writeTurnEnd），后面的话是新一轮。
   // - 这条旁注自己就是「第 N 轮验证/审查开始」那一类 → 它开的是**另一个人**的一轮
   //   （白名单在 conversationNotes，applyVerifySpans 拿同一份划审查区间）。
+  //
+  // agentEnd 那条证据只在**本回合起点之后 .md 里确实落过正文**时才算数：没落过的话它讲的
+  // 是上一轮的事，对这一条旁注什么都没说。「回合开跑先连着跑几十分钟工具、一个字没吐」是
+  // 常态，这时整份 .md 是空的，旁注会被当成「回合还没开始」，两截再也并不回去。
+  //
+  // 【切不切】先按 .md 里的 sentinel 把 trace 切成段，再逐段发放。切分必须整体跑在任何
+  // agent 段认领之前：原生引导那一路插话前常常一个字都没吐（agent 正连着跑工具），既没有
+  // .md 正文能顺手触发切分，等上一段领走整组之后也已经晚了。
+  //
+  // 插话一律是切点。**旁注只在它前后都有本回合正文时才是切点**：
+  // - 后面有正文：那种情形下 parseSessionOutput 已经在 sentinel 处把正文切成了两段 agent，
+  //   trace 不跟着切，前面那截（旁注常常正好落在 agent 刚吐出一两个字的时候）就会把整组
+  //   trace 连同几百次工具调用一起领走，真正写正文的那一段一个事件都拿不到。
+  // - 后面没正文就不能切：那一组 trace 会没人认领，落进「无正文兜底气泡」凭空多出一颗，
+  //   而直播那边旁注根本不拆气泡（见 appendAgent 跨旁注回捞当前回合），刷新前后就长得
+  //   不一样了。
+  // - **前面**没有本回合正文同样不能切（用户 2026-09-16 报的）：切了一样凭空多出一颗兜底
+  //   气泡，而且这回连 mergeTurnChunk 都救不回来 —— 上半截压根不是一颗气泡，没有并的对象。
+  //   这正是「先连着跑几十分钟工具」那种回合的形状：旁注占了 .md 的第一行，等 agent 终于
+  //   吐字，那段正文就被劈到了旁注下面 —— 用户看到的是「预约审查打断了正在跑的回合」，而且
+  //   同一条会话会在吐字的那一瞬当场变形。不切则整组 trace 完整留给后面那段正文，旁注照旧
+  //   排成这一回合的尾注，吐字前后长得一样。
+  //
+  // 真回合边界（真人插话、「继续（从中断处）」这类说给 agent 听的系统注记）不受这条约束：
+  // 它们**就是**新一轮的开头，前面没正文时那组 trace 本来就该单独成一颗气泡。
   const asideAt = new Set<string>();
   const midTurnAt = new Set<string>();
+  const splitPoints = new Set<string>();
   let closedTurn = true;
-  for (const segment of segments) {
-    if (segment.kind === "agent") { closedTurn = !!segment.endedAt; continue; }
-    if (segment.kind === "user") { closedTurn = true; continue; }
-    if (!segment.at) continue;
+  let proseSinceTurnStart = false;
+  segments.forEach((segment, index) => {
+    if (segment.kind === "agent") {
+      closedTurn = !!segment.endedAt;
+      proseSinceTurnStart = true;
+      return;
+    }
+    if (segment.kind !== "system") {
+      // 真人插话：一律是切点，也一律是新一轮的开头。
+      if (segment.at) splitPoints.add(segment.at);
+      closedTurn = true;
+      proseSinceTurnStart = false;
+      return;
+    }
     const placement = notePlacement(traceGroups, segment.at);
-    if (placement === "inside" || segment.aside) asideAt.add(segment.at);
-    if (closedTurn || verifyNoteOf(normalizeSessionNoteText(segment.text))?.phase === "start") continue;
-    if (placement === "inside" || (placement === "unknown" && segment.aside)) midTurnAt.add(segment.at);
-  }
+    const aside = placement === "inside" || segment.aside === true;
+    if (segment.at) {
+      if (aside) asideAt.add(segment.at);
+      if (!(closedTurn && proseSinceTurnStart)
+        && verifyNoteOf(normalizeSessionNoteText(segment.text))?.phase !== "start"
+        && (placement === "inside" || (placement === "unknown" && segment.aside))) {
+        midTurnAt.add(segment.at);
+      }
+      if (segments.slice(index + 1).some((later) => later.kind === "agent") && (!aside || proseSinceTurnStart)) {
+        splitPoints.add(segment.at);
+      }
+    }
+    // 说给 agent 听的系统注记是回合边界，重置这两样；旁注不是边界，一样都不动。
+    if (!aside) {
+      closedTurn = true;
+      proseSinceTurnStart = false;
+    }
+  });
   let splitFrom = session.startedAt;
   for (const segment of segments) {
     if (segment.kind === "agent" || !segment.at || !splitPoints.has(segment.at)) continue;
@@ -283,9 +334,11 @@ function appendPersistedSession(
         verify: isVerifyNote(text),
         aside: asideAt.has(segment.at ?? ""),
       });
-      // 回合起点仍然跟着旁注走：trace 已经在这一刻切成了独立一组，下半截要靠它认领
+      // 回合起点跟着**切点**走：切过的地方 trace 已经另成一组，下半截要靠这个起点认领
       // 自己那几条事件。合并发生在气泡层面（见下面的 mergeTurnChunk），两者不冲突。
-      turnStartedAt = segment.at ?? turnStartedAt;
+      // 没切的旁注一步都不能动它：那一组 trace 还是完整的一份，起点一挪，后面那段正文就
+      // 拿着一个根本不存在的键去领，整组当场变成没人认领的兜底气泡。
+      if (splitPoints.has(segment.at ?? "")) turnStartedAt = segment.at ?? turnStartedAt;
       if (midTurnAt.has(segment.at ?? "")) acrossAside = !!openTurn;
       else { openTurn = null; acrossAside = false; }
     } else {
@@ -457,10 +510,15 @@ export function buildConversationItems(
       nextAgentAt = null;
       rightSessionId = item.sessionId;
     }
-    item.endedAt = item.markerEndedAt
-      ?? nextInterjectionAt
-      ?? nextAgentAt
-      ?? inferredRunEnd(item.at, runBounds.get(item.sessionId));
+    // 推断分三档，**挨个试**，谁先满足「不早于回合起点」就用谁：一条回合不可能在开始之前
+    // 就结束了。直接把不合格的那档判成 null 会把本来还有的后两档也一起丢掉（真实数据里有
+    // 会话复用造成的乱序气泡，第一档比起点早了十一分钟，后面的会话边界其实是对的）。
+    const inferred = [
+      nextInterjectionAt,
+      nextAgentAt,
+      inferredRunEnd(item.at, runBounds.get(item.sessionId)),
+    ].find((candidate) => endsAfterStart(item.at, candidate)) ?? null;
+    item.endedAt = item.markerEndedAt ?? inferred;
     nextAgentAt = item.at ?? nextAgentAt;
   }
 
