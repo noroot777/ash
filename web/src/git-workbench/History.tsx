@@ -5,7 +5,9 @@ import type { Workbench } from "./useWorkbench.ts";
 import { workbenchApi } from "./api.ts";
 import { DiffView } from "./DiffView.tsx";
 import { CommitGraphRow, useCommitGraph } from "./CommitGraph.tsx";
+import { WorkbenchMenu } from "./WorkbenchMenu.tsx";
 import { RebaseDialog } from "./RebaseDialog.tsx";
+import { HistorySplit } from "./HistorySplit.tsx";
 
 export function History({
   projectId,
@@ -23,6 +25,7 @@ export function History({
   useEffect(() => {
     setRef(initialRef || "");
   }, [initialRef]);
+  const [search, setSearch] = useState("");
   const [path, setPath] = useState("");
   const [pathDraft, setPathDraft] = useState("");
   const [commits, setCommits] = useState<GitHistoryCommit[]>([]);
@@ -37,6 +40,15 @@ export function History({
   const [rebase, setRebase] = useState<GitHistoryCommit | null>(null);
   const historyRequest = useRef(0);
   const refsVersion = data.refs.map((r) => r.sha + r.name).join(":");
+  const refClass = (name: string) => {
+    if (name.startsWith("HEAD")) return " is-head";
+    if (name.startsWith("tag:")) return " is-tag";
+    if (data.refs.some((ref) => ref.kind === "remote" && ref.name === name))
+      return " is-remote";
+    if (data.worktrees.some((tree) => tree.managed && tree.branch === name))
+      return " is-task";
+    return "";
+  };
   useEffect(() => {
     let alive = true;
     historyRequest.current++;
@@ -53,6 +65,7 @@ export function History({
       .then((next) => {
         if (alive) {
           setCommits(next.commits);
+          setSelected(next.commits[0] || null);
           setMore(next.more);
         }
       })
@@ -100,7 +113,8 @@ export function History({
     };
   }, [projectId, data.root, selected, path, blame]);
   const graph = useCommitGraph(commits);
-  const action = (kind: string) => {
+  const action = (kind: string, selectedCommit = selected) => {
+    const selected = selectedCommit;
     if (!selected || w.blocked) return;
     const target = selected.sha;
     if (kind === "rebase-plan") {
@@ -190,143 +204,215 @@ export function History({
         }),
       });
   };
+  const menuItems = (commit: GitHistoryCommit) =>
+    [
+      ["cherry-pick", "拣选（cherry-pick）"],
+      ["revert", "反做（revert）"],
+      ["branch", "从这里建分支"],
+      ["tag", "打标签"],
+      ["reset", "重置到这里…"],
+      ["rebase-plan", "编辑此提交之后的历史…"],
+    ].map(([kind, label]) => ({
+      label,
+      disabled: w.blocked,
+      danger: kind === "reset",
+      onClick: () => action(kind, commit),
+    }));
   return (
     <>
-      <div className="gwb-history-filters">
-        <label>
-          历史范围
-          <select
-            aria-label="历史范围"
-            value={ref}
-            onChange={(event) => setRef(event.target.value)}
-          >
-            <option value="">全部分支</option>
-            <option value="HEAD">当前分支</option>
-            {data.refs
-              .filter((r) => r.kind !== "tag")
-              .map((r) => (
-                <option
-                  key={`${r.kind}:${r.name}`}
-                  value={`refs/${r.kind === "branch" ? "heads" : "remotes"}/${r.name}`}
-                >
-                  {r.name}
-                </option>
-              ))}
-          </select>
-        </label>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            setPath(pathDraft);
-            setBlame(false);
-          }}
+      <HistorySplit>
+        <section
+          className="gwb-history-list history-list"
+          aria-label="提交历史"
         >
-          <input
-            aria-label="文件历史路径"
-            placeholder="按文件路径查看历史…"
-            value={pathDraft}
-            onChange={(event) => setPathDraft(event.target.value)}
-          />
-          <button>查看文件历史</button>
-          {path && (
-            <button
-              type="button"
-              onClick={() => {
-                setPath("");
-                setPathDraft("");
-              }}
-            >
-              清除
-            </button>
-          )}
-        </form>
-      </div>
-      <div className="gwb-split gwb-history-split">
-        <section className="gwb-history-list" aria-label="提交历史">
-          {error && (
-            <p className="gwb-error" role="alert">
-              {error}
-            </p>
-          )}
-          {loading && <div className="gwb-empty">正在读取提交图…</div>}
-          {commits.map((commit, index) => (
-            <button
-              key={commit.sha}
-              className={`gwb-commit-row${selected?.sha === commit.sha ? " is-active" : ""}`}
-              onClick={() => setSelected(commit)}
-            >
-              <CommitGraphRow row={graph.rows[index]} width={graph.width} />
-              <span className="gwb-commit-copy">
-                <strong>{commit.subject}</strong>
-                <small>
-                  {commit.refs && <em>{commit.refs}</em>}
-                  <code>{commit.sha.slice(0, 8)}</code> · {commit.author} ·{" "}
-                  {new Date(commit.at).toLocaleDateString()}
-                </small>
-              </span>
-            </button>
-          ))}
-          {!commits.length && !loading && !error && (
-            <div className="gwb-empty">没有符合条件的提交</div>
-          )}
-          {more && (
-            <button
-              className="gwb-load-more"
-              disabled={loading}
-              onClick={() => {
-                const request = historyRequest.current;
-                setLoading(true);
-                void workbenchApi
-                  .history(projectId, data.root, {
-                    ref: ref || undefined,
-                    path: path || undefined,
-                    skip: commits.length,
-                  })
-                  .then((next) => {
-                    if (request !== historyRequest.current) return;
-                    setCommits((old) => [...old, ...next.commits]);
-                    setMore(next.more);
-                  })
-                  .catch((reason: Error) => {
-                    if (request === historyRequest.current)
-                      setError(reason.message);
-                  })
-                  .finally(() => {
-                    if (request === historyRequest.current) setLoading(false);
-                  });
-              }}
-            >
-              加载更早提交
-            </button>
-          )}
-        </section>
-        <section className="gwb-detail-pane">
-          <div className="gwb-pane-title">
-            <strong>{selected ? selected.sha.slice(0, 8) : "提交详情"}</strong>
-            {selected && (
-              <div className="gwb-inline-actions">
+          <div className="history-bar">
+            <div>
+              <input
+                className="ui-input history-search"
+                aria-label="搜索提交"
+                placeholder="搜索提交 / 作者 / SHA…"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              <select
+                className="ui-input"
+                aria-label="历史范围"
+                value={ref}
+                onChange={(event) => setRef(event.target.value)}
+              >
+                <option value="">全部分支</option>
+                <option value="HEAD">当前分支</option>
+                {data.refs
+                  .filter((r) => r.kind !== "tag")
+                  .map((r) => (
+                    <option
+                      key={`${r.kind}:${r.name}`}
+                      value={`refs/${r.kind === "branch" ? "heads" : "remotes"}/${r.name}`}
+                    >
+                      {r.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <details>
+              <summary>文件历史与逐行归属</summary>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  setPath(pathDraft);
+                  setBlame(false);
+                }}
+              >
+                <input
+                  className="ui-input"
+                  aria-label="文件历史路径"
+                  placeholder="按文件路径查看历史…"
+                  value={pathDraft}
+                  onChange={(event) => setPathDraft(event.target.value)}
+                />
+                <button className="mini-btn">查看文件历史</button>
                 {path && (
-                  <button onClick={() => setBlame((value) => !value)}>
-                    {blame ? "查看差异" : "逐行归属（blame）"}
+                  <button
+                    className="mini-btn"
+                    type="button"
+                    onClick={() => {
+                      setPath("");
+                      setPathDraft("");
+                    }}
+                  >
+                    清除
                   </button>
                 )}
-                <select
-                  aria-label="提交操作"
-                  value=""
-                  disabled={w.blocked}
-                  onChange={(event) => action(event.target.value)}
+              </form>
+            </details>
+          </div>
+          <div className="history-rows">
+            {error && (
+              <p className="gwb-error" role="alert">
+                {error}
+              </p>
+            )}
+            {loading && <div className="gwb-empty">正在读取提交图…</div>}
+            {commits.map((commit, index) => {
+              if (
+                search &&
+                !`${commit.subject} ${commit.author} ${commit.sha} ${commit.refs}`
+                  .toLocaleLowerCase()
+                  .includes(search.toLocaleLowerCase())
+              )
+                return null;
+              return (
+                <div
+                  key={commit.sha}
+                  className={`gwb-commit-row commit-row ui-selectable${selected?.sha === commit.sha ? " is-active is-selected" : ""}`}
                 >
-                  <option value="">提交操作…</option>
-                  <option value="cherry-pick">拣选（cherry-pick）</option>
-                  <option value="revert">反做（revert）</option>
-                  <option value="branch">从这里建分支</option>
-                  <option value="tag">打标签</option>
-                  <option value="reset">重置到这里…</option>
-                  <option value="rebase-plan">编辑此提交之后的历史…</option>
-                </select>
-              </div>
+                  <button
+                    className="gwb-commit-select"
+                    onClick={() => setSelected(commit)}
+                    aria-label={`${commit.subject} ${commit.sha.slice(0, 8)}`}
+                  >
+                    <CommitGraphRow
+                      row={graph.rows[index]}
+                      width={graph.width}
+                    />
+                    <code className="commit-sha">{commit.sha.slice(0, 7)}</code>
+                    <span className="commit-main">
+                      <span className="commit-refs">
+                        {commit.refs
+                          .split(", ")
+                          .filter(Boolean)
+                          .map((name) => (
+                            <em
+                              key={name}
+                              className={`ref-chip${refClass(name)}`}
+                            >
+                              {name
+                                .replace(/^HEAD -> /, "")
+                                .replace(/^tag: /, "")}
+                            </em>
+                          ))}
+                      </span>
+                      <span className="commit-msg">{commit.subject}</span>
+                    </span>
+                    <span className="commit-author">{commit.author}</span>
+                    <time className="commit-time">
+                      {new Date(commit.at).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </time>
+                  </button>
+                  <WorkbenchMenu
+                    className="icon-btn row-menu"
+                    label={`${commit.sha.slice(0, 8)} 提交操作`}
+                    disabled={w.blocked}
+                    items={menuItems(commit)}
+                  />
+                </div>
+              );
+            })}
+            {!commits.length && !loading && !error && (
+              <div className="gwb-empty">没有符合条件的提交</div>
+            )}
+            {more && (
+              <button
+                className="gwb-load-more"
+                disabled={loading}
+                onClick={() => {
+                  const request = historyRequest.current;
+                  setLoading(true);
+                  void workbenchApi
+                    .history(projectId, data.root, {
+                      ref: ref || undefined,
+                      path: path || undefined,
+                      skip: commits.length,
+                    })
+                    .then((next) => {
+                      if (request !== historyRequest.current) return;
+                      setCommits((old) => [...old, ...next.commits]);
+                      setMore(next.more);
+                    })
+                    .catch((reason: Error) => {
+                      if (request === historyRequest.current)
+                        setError(reason.message);
+                    })
+                    .finally(() => {
+                      if (request === historyRequest.current) setLoading(false);
+                    });
+                }}
+              >
+                加载更早提交
+              </button>
             )}
           </div>
+        </section>
+        <section className="gwb-detail-pane detail-pane">
+          <header className="gwb-pane-title detail-head">
+            {selected ? (
+              <>
+                <code className="sha-chip">{selected.sha.slice(0, 12)}</code>
+                <strong className="detail-msg">{selected.subject}</strong>
+                <div className="detail-meta">
+                  <span>{selected.author}</span>
+                  <time>{new Date(selected.at).toLocaleString()}</time>
+                  <span>{selected.parents.length} 个父提交</span>
+                </div>
+                <div className="detail-menu">
+                  <WorkbenchMenu label="提交操作" disabled={w.blocked} items={menuItems(selected)} />
+                </div>
+              </>
+            ) : (
+              <strong>提交详情</strong>
+            )}
+            {selected && path && (
+              <button
+                className="mini-btn"
+                onClick={() => setBlame((value) => !value)}
+              >
+                {blame ? "查看差异" : "逐行归属（blame）"}
+              </button>
+            )}
+          </header>
           <DiffView
             key={`${selected?.sha}:${blame}`}
             value={detail}
@@ -334,7 +420,7 @@ export function History({
             error={detailError}
           />
         </section>
-      </div>
+      </HistorySplit>
       {rebase && (
         <RebaseDialog
           projectId={projectId}

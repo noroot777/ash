@@ -1,17 +1,6 @@
 import { useState } from "react";
-import {
-  ArrowClockwise,
-  ArrowDown,
-  ArrowLeft,
-  ArrowUp,
-  GitBranch,
-  GitCommit,
-  ClockCounterClockwise,
-  Stack,
-  Tag,
-  TreeStructure,
-  Warning,
-} from "@phosphor-icons/react";
+import { Warning } from "@phosphor-icons/react";
+import type { ProjectView } from "@ash/shared";
 import type { GitActionRequest, GitView } from "@ash/shared/git-workbench";
 import { emptyCommitGuidance, gitChangeCount } from "@ash/shared/git-workbench";
 import {
@@ -27,20 +16,23 @@ import { References } from "./References.tsx";
 import { OperationLog } from "./OperationLog.tsx";
 import { ConflictDialog } from "./ConflictDialog.tsx";
 import { openGitWorkbench } from "./navigation.ts";
+import { WorkbenchHeader } from "./WorkbenchHeader.tsx";
+import { WorkbenchNavIcon } from "./WorkbenchNavIcon.tsx";
 import "../styles/git-workbench.css";
 
 const views = [
-  ["changes", "变更", GitCommit],
-  ["history", "历史", ClockCounterClockwise],
-  ["branches", "分支", GitBranch],
-  ["stash", "贮藏", Stack],
-  ["tags", "标签", Tag],
-  ["worktrees", "工作树", TreeStructure],
-  ["log", "操作日志", ClockCounterClockwise],
+  ["changes", "变更"],
+  ["history", "历史"],
+  ["branches", "分支"],
+  ["stash", "贮藏"],
+  ["tags", "标签"],
+  ["worktrees", "工作树"],
+  ["log", "操作日志"],
 ] as const;
 export function GitWorkbench({
   projectId,
   projectName,
+  projects,
   root,
   taskId,
   view = "changes",
@@ -52,6 +44,7 @@ export function GitWorkbench({
 }: {
   projectId: string;
   projectName: string;
+  projects?: readonly ProjectView[];
   root?: string;
   taskId?: string;
   view?: GitView;
@@ -69,9 +62,6 @@ export function GitWorkbench({
   const [conflict, setConflict] = useState<string | null>(null);
   const data = w.data;
   const emptyGuidance = data ? emptyCommitGuidance(data.status) : null;
-  const managed = data?.worktrees.some(
-    (tree) => tree.path === data.root && tree.managed,
-  );
   const assist =
     onAssist && data
       ? () =>
@@ -97,30 +87,6 @@ export function GitWorkbench({
       root: data?.root || root,
       taskId,
       view: next,
-    });
-  const pull = () =>
-    ask({
-      title: "拉取上游更新",
-      message: `获取 ${data?.status.branch.upstream || "上游分支"} 的新提交并整合进当前分支。若遇冲突，状态会保留在工作台中，供你解决或中止。`,
-      fields: [
-        {
-          key: "strategy",
-          label: "整合方式",
-          type: "select",
-          initial: "ff-only",
-          options: [
-            { value: "ff-only", label: "仅快进 · 分叉时停止" },
-            { value: "merge", label: "合并 · 保留两侧历史" },
-            ...(!managed
-              ? [{ value: "rebase", label: "变基 · 重放本地提交" }]
-              : []),
-          ],
-        },
-      ],
-      action: (v) => ({
-        kind: "pull",
-        strategy: v.strategy as "ff-only" | "merge" | "rebase",
-      }),
     });
   const push = (force = false) => {
     if (!data) return;
@@ -166,136 +132,25 @@ export function GitWorkbench({
       ? undefined
       : id === "changes"
         ? gitChangeCount(data.status)
-        : id === "branches"
-          ? data.refs.filter((r) => r.kind === "branch").length
-          : id === "stash"
-            ? data.stashes.length
-            : id === "tags"
-              ? data.refs.filter((r) => r.kind === "tag").length
-              : id === "worktrees"
-                ? data.worktrees.length
-                : undefined;
+        : id === "stash"
+          ? data.stashes.length
+          : id === "worktrees"
+            ? data.worktrees.length
+            : undefined;
   const latest = data?.journal[0];
   return (
-    <section className="gwb" aria-label="Git 工作台">
-      <header className="gwb-header">
-        <div className="gwb-heading">
-          <button
-            aria-label="退出 Git 工作台"
-            className="gwb-back"
-            onClick={onExit}
-          >
-            <ArrowLeft size={17} />
-          </button>
-          <GitBranch size={23} className="gwb-accent" />
-          <div>
-            <h1>
-              Git 工作台 <span>{projectName}</span>
-            </h1>
-            <p>{data?.root || "正在定位工作目录…"}</p>
-          </div>
-        </div>
-        <div className="gwb-sync">
-          {assist && (
-            <button onClick={assist} disabled={w.busy}>
-              AI 协助…
-            </button>
-          )}
-          <button
-            disabled={w.blocked || !data?.remotes.length}
-            onClick={() => void w.run({ kind: "fetch", remote: "" })}
-          >
-            <ArrowClockwise size={14} />
-            获取
-          </button>
-          <button
-            disabled={w.blocked || !data?.status.branch.upstream}
-            onClick={pull}
-          >
-            <ArrowDown size={14} />
-            拉取
-          </button>
-          <button
-            disabled={
-              w.blocked || !data?.remotes.length || !data?.status.branch.oid
-            }
-            onClick={() => push()}
-          >
-            <ArrowUp size={14} />
-            {data?.status.branch.upstream ? "推送" : "发布"}
-          </button>
-          <button
-            className="gwb-icon-button"
-            aria-label="刷新 Git 工作台"
-            onClick={() => void w.refresh()}
-            disabled={w.loading || w.busy}
-          >
-            <ArrowClockwise
-              size={15}
-              className={w.loading ? "is-spinning" : undefined}
-            />
-          </button>
-        </div>
-      </header>
-      {data && (
-        <div className="gwb-context">
-          <label>
-            <GitBranch size={14} />
-            <select
-              aria-label="选择工作树"
-              value={data.root}
-              disabled={w.busy}
-              onChange={(event) =>
-                openGitWorkbench({ projectId, root: event.target.value, view })
-              }
-            >
-              {data.worktrees.map((tree) => (
-                <option key={tree.path} value={tree.path}>
-                  {tree.branch || "游离 HEAD"} ·{" "}
-                  {tree.taskTitle ||
-                    (tree.path === data.repo ? "项目主仓" : "手动工作树")}
-                </option>
-              ))}
-            </select>
-          </label>
-          <code>{data.status.branch.oid?.slice(0, 8) || "尚无提交"}</code>
-          <span>{data.status.branch.upstream || "未设置上游"}</span>
-          {data.status.branch.ahead !== null && (
-            <span>
-              ↑ {data.status.branch.ahead} ↓ {data.status.branch.behind}
-            </span>
-          )}
-          {data.status.branch.upstream && (
-            <button
-              disabled={
-                w.blocked ||
-                !data.refs.some(
-                  (r) =>
-                    r.kind === "remote" &&
-                    r.name === data.status.branch.upstream,
-                )
-              }
-              onClick={() => push(true)}
-            >
-              保护强推…
-            </button>
-          )}
-        </div>
-      )}
-      <nav className="gwb-tabs" aria-label="Git 工作台视图">
-        {views.map(([id, label, Icon]) => (
-          <button
-            key={id}
-            aria-current={view === id ? "page" : undefined}
-            className={view === id ? "is-active" : ""}
-            onClick={() => navigate(id)}
-          >
-            <Icon size={15} />
-            {label}
-            {count(id) !== undefined && <small>{count(id)}</small>}
-          </button>
-        ))}
-      </nav>
+    <section className="gwb gwb-design" aria-label="Git 工作台">
+      <WorkbenchHeader
+        projectId={projectId}
+        projectName={projectName}
+        projects={projects}
+        view={view}
+        workbench={w}
+        ask={ask}
+        push={push}
+        assist={assist}
+        onExit={onExit}
+      />
       {w.error && (
         <p className="gwb-banner is-error" role="alert">
           {w.error}
@@ -334,7 +189,7 @@ export function GitWorkbench({
             <Warning size={17} />
             <strong>
               {data.status.operation
-                ? `${data.status.operation} 尚未完成`
+                ? `${{ merge: "合并", rebase: "变基", "cherry-pick": "拣选", revert: "反做" }[data.status.operation]}尚未完成`
                 : "还有未解决的冲突"}
             </strong>
             <span>
@@ -342,6 +197,15 @@ export function GitWorkbench({
                 ? "没有可提交的改动"
                 : `${data.status.merge.length} 个文件待解决`}
             </span>
+            {!!data.status.merge.length && (
+              <button
+                className="gwb-conflict-file mini-btn tone-danger"
+                disabled={w.isBlocked("resolve")}
+                onClick={() => setConflict(data.status.merge[0].path)}
+              >
+                打开冲突解决器
+              </button>
+            )}
             <div className="gwb-inline-actions">
               {!emptyGuidance && (
                 <button
@@ -357,7 +221,9 @@ export function GitWorkbench({
               )}
               {data.status.operation && data.status.operation !== "merge" && (
                 <button
-                  className={emptyGuidance ? "gwb-primary" : undefined}
+                  className={
+                    emptyGuidance ? "gwb-primary ui-btn primary" : "mini-btn"
+                  }
                   disabled={w.isBlocked("skip")}
                   onClick={() =>
                     ask({
@@ -374,7 +240,7 @@ export function GitWorkbench({
               )}
               {data.status.operation && (
                 <button
-                  className="gwb-danger"
+                  className="gwb-danger mini-btn tone-danger"
                   disabled={w.isBlocked("abort")}
                   onClick={() =>
                     ask({
@@ -391,7 +257,7 @@ export function GitWorkbench({
               )}
               {!data.status.operation && (
                 <button
-                  className="gwb-danger"
+                  className="gwb-danger mini-btn tone-danger"
                   disabled={w.isBlocked("discard-conflicts")}
                   onClick={() =>
                     ask({
@@ -410,17 +276,6 @@ export function GitWorkbench({
             </div>
           </header>
           {emptyGuidance && <p>{emptyGuidance}</p>}
-          {data.status.merge.map((file) => (
-            <button
-              key={file.path}
-              className="gwb-conflict-file"
-              disabled={w.isBlocked("resolve")}
-              onClick={() => setConflict(file.path)}
-            >
-              <code>{file.path}</code>
-              <span>{file.conflict} · 打开解决器 →</span>
-            </button>
-          ))}
           {!data.status.operation && (
             <p>
               解决并暂存所有冲突后，可到变更视图提交结果；也可放弃当前冲突及暂存改动。
@@ -428,38 +283,60 @@ export function GitWorkbench({
           )}
         </section>
       )}
-      <div className="gwb-body">
-        {w.loading && !data ? (
-          <div className="gwb-empty">正在读取真实 Git 状态…</div>
-        ) : data ? (
-          view === "changes" ? (
-            <Changes projectId={projectId} workbench={w} ask={ask} />
-          ) : view === "history" ? (
-            <History
-              projectId={projectId}
-              workbench={w}
-              ask={ask}
-              initialRef={initialRef}
-            />
-          ) : view === "branches" ? (
-            <Branches
-              projectId={projectId}
-              workbench={w}
-              ask={ask}
-              openTask={openTask}
-            />
-          ) : view === "log" ? (
-            <OperationLog workbench={w} ask={ask} />
-          ) : (
-            <References
-              view={view}
-              projectId={projectId}
-              workbench={w}
-              ask={ask}
-              openTask={openTask}
-            />
-          )
-        ) : null}
+      <div className="gwb-shell shell">
+        <nav className="gwb-tabs sidenav" aria-label="Git 工作台视图">
+          {views.map(([id, label]) => (
+            <button
+              key={id}
+              aria-current={view === id ? "page" : undefined}
+              className={`nav-item ui-selectable${view === id ? " is-active is-selected" : ""}`}
+              onClick={() => navigate(id)}
+            >
+              <WorkbenchNavIcon view={id} />
+              {label}
+              {!!count(id) && <small className="nav-badge">{count(id)}</small>}
+            </button>
+          ))}
+        </nav>
+        <main className="gwb-body view">
+          {w.loading && !data ? (
+            <div className="gwb-empty">正在读取真实 Git 状态…</div>
+          ) : data ? (
+            view === "changes" ? (
+              <Changes
+                projectId={projectId}
+                workbench={w}
+                ask={ask}
+                assist={assist}
+                resolve={setConflict}
+              />
+            ) : view === "history" ? (
+              <History
+                projectId={projectId}
+                workbench={w}
+                ask={ask}
+                initialRef={initialRef}
+              />
+            ) : view === "branches" ? (
+              <Branches
+                projectId={projectId}
+                workbench={w}
+                ask={ask}
+                openTask={openTask}
+              />
+            ) : view === "log" ? (
+              <OperationLog workbench={w} ask={ask} />
+            ) : (
+              <References
+                view={view}
+                projectId={projectId}
+                workbench={w}
+                ask={ask}
+                openTask={openTask}
+              />
+            )
+          ) : null}
+        </main>
       </div>
       {prompt && (
         <ActionDialog
@@ -474,6 +351,8 @@ export function GitWorkbench({
         <ConflictDialog
           projectId={projectId}
           path={conflict}
+          ask={ask}
+          assist={assist}
           workbench={w}
           close={() => setConflict(null)}
         />

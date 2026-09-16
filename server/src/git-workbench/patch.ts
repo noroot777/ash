@@ -6,9 +6,12 @@ import { fail } from "./core.js";
 export function selectedPatch(
   diff: string,
   selected: number[],
-  reverse = false,
+  operation: "stage" | "unstage" | "discard",
 ): string {
+  const reverse = operation !== "stage";
+  const label = { stage: "暂存", unstage: "取消暂存", discard: "丢弃" }[operation];
   const lines = diff.split("\n");
+  const first = lines.findIndex((line) => line.startsWith("@@ "));
   const selectedSet = new Set(selected);
   if (
     !selected.length ||
@@ -16,9 +19,9 @@ export function selectedPatch(
       (i) =>
         !Number.isInteger(i) ||
         i < 0 ||
+        i <= first ||
         i >= lines.length ||
-        !/^[+-]/.test(lines[i]) ||
-        /^---|^\+\+\+/.test(lines[i]),
+        !/^[+-]/.test(lines[i]),
     )
   )
     fail("请选择改动行", 400);
@@ -27,9 +30,8 @@ export function selectedPatch(
       diff,
     )
   )
-    fail("新增、删除、重命名或二进制文件请按整个文件暂存");
-  const first = lines.findIndex((line) => line.startsWith("@@ "));
-  if (first < 0) fail("没有可暂存的改动块");
+    fail(`新增、删除、重命名或二进制文件请按整个文件${label}`);
+  if (first < 0) fail(`没有可${label}的改动块`);
   const result = lines.slice(0, first);
   let delta = 0;
   for (let start = first; start < lines.length; ) {
@@ -45,7 +47,7 @@ export function selectedPatch(
     for (let i = start + 1; i < end; i++) {
       const line = lines[i];
       if (!line && i === lines.length - 1) continue;
-      if (line.startsWith("\\")) fail("无末尾换行的改动请按整个文件暂存");
+      if (line.startsWith("\\")) fail(`无末尾换行的改动请按整个文件${label}`);
       const sign = reverse
         ? line[0] === "+"
           ? "-"
@@ -85,7 +87,11 @@ export function selectedPatch(
   }
   return result.join("\n") + "\n";
 }
-async function applyIndex(root: string, patch: string): Promise<void> {
+async function applyPatch(
+  root: string,
+  patch: string,
+  cached: boolean,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
       "git",
@@ -93,7 +99,7 @@ async function applyIndex(root: string, patch: string): Promise<void> {
         "-C",
         root,
         "apply",
-        "--cached",
+        ...(cached ? ["--cached"] : []),
         "--recount",
         "--whitespace=nowarn",
         "-",
@@ -128,5 +134,19 @@ export async function stageSelected(
   const current = await readScmFileDiff(root, path, source);
   if (current.truncated || current.binary || current.diff !== diff)
     fail("差异已变化或不能部分暂存，请重新打开文件");
-  await applyIndex(root, selectedPatch(diff, lines, source === "staged"));
+  await applyPatch(root, selectedPatch(diff, lines, source === "staged" ? "unstage" : "stage"), true);
+}
+
+export async function discardSelected(
+  root: string,
+  path: string,
+  diff: string,
+  lines: number[],
+): Promise<void> {
+  assertPathShape([path]);
+  await gateScmPaths(root, { paths: [path], rejectConflicted: true });
+  const current = await readScmFileDiff(root, path, "unstaged");
+  if (current.truncated || current.binary || current.diff !== diff)
+    fail("差异已变化或不能部分丢弃，请重新打开文件");
+  await applyPatch(root, selectedPatch(diff, lines, "discard"), false);
 }

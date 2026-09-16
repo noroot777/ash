@@ -4,6 +4,7 @@ import type { GitRef } from "@ash/shared/git-workbench";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import { openGitWorkbench } from "./navigation.ts";
+import { WorkbenchMenu, type MenuItem } from "./WorkbenchMenu.tsx";
 import { RemoteSettings } from "./RemoteSettings.tsx";
 
 export function Branches({
@@ -172,15 +173,27 @@ export function Branches({
         }),
       });
   };
+  const groupOf = (row: GitRef) =>
+    row.kind === "remote"
+      ? "remote"
+      : data.worktrees.some((tree) => tree.branch === row.name && tree.managed)
+        ? "task"
+        : "local";
   return (
-    <section className="gwb-page">
-      <div className="gwb-section-head">
+    <section className="gwb-page scroll-col">
+      <div className="gwb-section-head view-head">
         <div>
           <h2>分支</h2>
-          <p>明确来源与目标，再改变历史。</p>
         </div>
+        <input
+          className="ui-input"
+          aria-label="搜索分支"
+          placeholder="搜索分支…"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
         <button
-          className="gwb-primary"
+          className="gwb-primary ui-btn primary"
           disabled={w.blocked || !data.status.branch.oid}
           onClick={newBranch}
         >
@@ -188,49 +201,85 @@ export function Branches({
           新建分支
         </button>
       </div>
-      <input
-        className="gwb-search"
-        aria-label="搜索工作台分支"
-        placeholder="搜索本地和远端分支…"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-      />
-      {(["branch", "remote"] as const).map((kind) => (
-        <section className="gwb-ref-section" key={kind}>
+      {(["local", "task", "remote"] as const).map((group) => (
+        <section className="gwb-ref-section branch-group" key={group}>
           <h3>
-            {kind === "branch" ? "本地分支" : "远端跟踪分支"}
-            <span>{rows.filter((r) => r.kind === kind).length}</span>
+            {group === "local"
+              ? "本地分支"
+              : group === "task"
+                ? "任务分支"
+                : "远端跟踪分支"}
+            <span className="group-count">
+              {rows.filter((row) => groupOf(row) === group).length}
+            </span>
           </h3>
           {rows
-            .filter((r) => r.kind === kind)
+            .filter((row) => groupOf(row) === group)
             .map((row) => {
               const worktree = data.worktrees.find(
                 (tree) => tree.branch === row.name,
               );
-              const active = kind === "branch" && current === row.name;
+              const active = row.kind === "branch" && current === row.name;
+              const items: MenuItem[] = [];
+              const add = (kind: string, label: string, danger = false) =>
+                items.push({
+                  label,
+                  danger,
+                  disabled: w.blocked,
+                  onClick: () => act(row, kind),
+                });
+              if (!active) {
+                add(
+                  "merge",
+                  worktree?.taskId ? "打开任务验收" : "合入当前分支",
+                );
+                add("rebase", "当前分支变基到这里");
+              }
+              if (row.kind === "branch") {
+                add("upstream", "设置上游");
+                if (!worktree?.managed) add("rename", "重命名");
+                if (!worktree) {
+                  add("delete", "删除已合并分支", true);
+                  add("force-delete", "强制删除…", true);
+                }
+              } else if (!row.name.endsWith("/HEAD")) {
+                add("track", "检出为本地分支");
+                add("remote-delete", "删除远端分支…", true);
+              }
               return (
                 <div
-                  className={`gwb-ref-row${active ? " is-current" : ""}`}
+                  className={`gwb-ref-row branch-row ui-selectable${active ? " is-current is-selected" : ""}${row.kind === "remote" ? " is-remote" : ""}`}
                   key={row.name}
                 >
-                  <GitBranch size={17} />
-                  <div className="gwb-ref-info">
-                    <strong>
-                      {row.name}
-                      {active && <em>当前</em>}
-                      {worktree?.taskId && <em>任务分支</em>}
-                    </strong>
-                    <span>
-                      <code>{row.sha.slice(0, 8)}</code> {row.subject}
+                  <span className="branch-name">
+                    <GitBranch size={15} />
+                    <b>{row.name}</b>
+                    {active && <em className="cur-tag">当前</em>}
+                  </span>
+                  {worktree?.taskId && (
+                    <button
+                      className="task-chip"
+                      onClick={() => openTask(worktree.taskId!)}
+                    >
+                      {worktree.taskTitle || "任务分支"}
+                    </button>
+                  )}
+                  {active && (
+                    <span className="sync-chip">
+                      <i className="up">↑{data.status.branch.ahead || 0}</i>
+                      <i className="dn">↓{data.status.branch.behind || 0}</i>
                     </span>
-                    {row.upstream && <small>跟踪 {row.upstream}</small>}
-                    {worktree && (
-                      <small>{worktree.taskTitle || worktree.path}</small>
-                    )}
-                  </div>
-                  <div className="gwb-row-actions">
-                    {kind === "branch" && !active && !worktree && (
+                  )}
+                  <span className="branch-last">
+                    <code>{row.sha.slice(0, 7)}</code> {row.subject}
+                  </span>
+                  {row.upstream && (
+                    <span className="push-state is-pushed">{row.upstream}</span>
+                  )}
+                  <div className="gwb-row-actions file-actions">
+                    {row.kind === "branch" && !active && !worktree && (
                       <button
+                        className="mini-btn"
                         disabled={w.blocked}
                         onClick={() =>
                           ask({
@@ -248,6 +297,7 @@ export function Branches({
                     )}
                     {worktree && !active && (
                       <button
+                        className="mini-btn"
                         onClick={() =>
                           openGitWorkbench({ projectId, root: worktree.path })
                         }
@@ -256,64 +306,36 @@ export function Branches({
                       </button>
                     )}
                     <button
+                      className="mini-btn"
                       onClick={() =>
                         openGitWorkbench({
                           projectId,
                           root: data.root,
                           view: "history",
-                          ref: `refs/${kind === "branch" ? "heads" : "remotes"}/${row.name}`,
+                          ref: `refs/${row.kind === "branch" ? "heads" : "remotes"}/${row.name}`,
                         })
                       }
                     >
                       历史
                     </button>
-                    <select
-                      aria-label={`${row.name} 分支操作`}
-                      value=""
+                    <WorkbenchMenu
+                      label={`${row.name} 分支操作`}
                       disabled={w.blocked}
-                      onChange={(event) => act(row, event.target.value)}
-                    >
-                      <option value="">操作…</option>
-                      {!active && (
-                        <>
-                          <option value="merge">
-                            {worktree?.taskId ? "打开任务验收" : "合入当前分支"}
-                          </option>
-                          <option value="rebase">当前分支变基到这里</option>
-                        </>
-                      )}
-                      {kind === "branch" ? (
-                        <>
-                          <option value="upstream">设置上游</option>
-                          {!worktree?.managed && (
-                            <option value="rename">重命名</option>
-                          )}
-                          {!worktree && (
-                            <>
-                              <option value="delete">删除已合并分支</option>
-                              <option value="force-delete">强制删除…</option>
-                            </>
-                          )}
-                        </>
-                      ) : (
-                        !row.name.endsWith("/HEAD") && (
-                          <>
-                            <option value="track">检出为本地分支</option>
-                            <option value="remote-delete">删除远端分支…</option>
-                          </>
-                        )
-                      )}
-                    </select>
+                      items={items}
+                    />
                   </div>
                 </div>
               );
             })}
-          {!rows.some((r) => r.kind === kind) && (
+          {!rows.some((row) => groupOf(row) === group) && (
             <p className="gwb-muted-empty">没有符合条件的分支</p>
           )}
         </section>
       ))}
-      <RemoteSettings workbench={w} ask={ask} />
+      <details className="gwb-remotes">
+        <summary>远端配置</summary>
+        <RemoteSettings workbench={w} ask={ask} />
+      </details>
     </section>
   );
 }

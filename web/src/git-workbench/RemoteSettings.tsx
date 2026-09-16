@@ -93,7 +93,7 @@ export function RemoteSettings({
               修改地址
             </button>
             <button
-              className="gwb-danger"
+              className="gwb-danger mini-btn tone-danger"
               disabled={w.blocked}
               onClick={() =>
                 ask({

@@ -49,31 +49,31 @@ export function CommitGraphRow({
 }) {
   const x = (column: number) => 12 + column * 15;
   return (
-    <svg className="gwb-graph" width={width} height={64} aria-hidden="true">
+    <svg className="gwb-graph" width={width} height={34} aria-hidden="true">
       {row.before.map((sha, column) =>
         sha && column !== row.column ? (
           <path
             key={sha}
-            d={`M ${x(column)} 0 V 64`}
+            d={`M ${x(column)} 0 V 34`}
             stroke={colors[column % colors.length]}
           />
         ) : null,
       )}
       <path
-        d={`M ${x(row.column)} 0 V 30`}
+        d={`M ${x(row.column)} 0 V 17`}
         stroke={colors[row.column % colors.length]}
       />
       {row.parents.map((target) => (
         <path
           key={target}
-          d={`M ${x(row.column)} 30 C ${x(row.column)} 50 ${x(target)} 45 ${x(target)} 64`}
+          d={`M ${x(row.column)} 17 C ${x(row.column)} 27 ${x(target)} 24 ${x(target)} 34`}
           stroke={colors[target % colors.length]}
         />
       ))}
       <circle
         cx={x(row.column)}
-        cy={30}
-        r={4}
+        cy={17}
+        r={3}
         fill={colors[row.column % colors.length]}
         stroke="var(--canvas)"
         strokeWidth={2}

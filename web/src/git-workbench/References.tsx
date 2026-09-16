@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
-import { Stack, Tag, TreeStructure, Plus } from "@phosphor-icons/react";
-import type { GitDiff, GitView } from "@ash/shared/git-workbench";
+import { Tag, TreeStructure, Plus } from "@phosphor-icons/react";
+import type { GitView } from "@ash/shared/git-workbench";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import { openGitWorkbench } from "./navigation.ts";
-import { DiffView } from "./DiffView.tsx";
-import { workbenchApi } from "./api.ts";
+import { WorkbenchMenu } from "./WorkbenchMenu.tsx";
+import { Stashes } from "./Stashes.tsx";
 
 export function References({
   view,
@@ -21,26 +20,6 @@ export function References({
   openTask: (taskId: string) => void;
 }) {
   const data = w.data!;
-  const [stash, setStash] = useState<string | null>(null);
-  const [diff, setDiff] = useState<GitDiff | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let alive = true;
-    setDiff(null);
-    setError(null);
-    if (!stash) return;
-    workbenchApi
-      .diff(projectId, data.root, { stash })
-      .then((next) => {
-        if (alive) setDiff(next);
-      })
-      .catch((reason: Error) => {
-        if (alive) setError(reason.message);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [projectId, data.root, stash]);
   const title = view === "stash" ? "贮藏" : view === "tags" ? "标签" : "工作树";
   const create = () => {
     if (view === "stash")
@@ -109,7 +88,7 @@ export function References({
       });
   };
   return (
-    <section className="gwb-page">
+    <section className="gwb-page scroll-col">
       <div className="gwb-section-head">
         <div>
           <h2>{title}</h2>
@@ -122,7 +101,7 @@ export function References({
           </p>
         </div>
         <button
-          className="gwb-primary"
+          className="gwb-primary ui-btn primary"
           disabled={w.blocked || (view !== "stash" && !data.status.branch.oid)}
           onClick={create}
         >
@@ -131,100 +110,19 @@ export function References({
         </button>
       </div>
       {view === "stash" && (
-        <>
-          <div className="gwb-ref-section">
-            {data.stashes.map((row) => (
-              <div className="gwb-ref-row" key={row.sha}>
-                <Stack size={18} />
-                <div className="gwb-ref-info">
-                  <strong>
-                    {row.ref}
-                    <em>{row.owned ? "我的贮藏" : "共享 · 仅应用"}</em>
-                  </strong>
-                  <span>{row.subject}</span>
-                  <small>
-                    <code>{row.sha.slice(0, 8)}</code> ·{" "}
-                    {new Date(row.at).toLocaleString()}
-                  </small>
-                </div>
-                <div className="gwb-row-actions">
-                  <button onClick={() => setStash(row.sha)}>查看差异</button>
-                  <button
-                    disabled={w.blocked}
-                    onClick={() =>
-                      ask({
-                        title: "应用贮藏",
-                        message: `将 ${row.ref} 的改动应用到 ${data.status.branch.head || "HEAD"}，保留原记录。工作区需要干净。若有冲突，可在工作台解决。`,
-                        action: () => ({ kind: "stash-apply", sha: row.sha }),
-                      })
-                    }
-                  >
-                    应用
-                  </button>
-                  {row.owned && (
-                    <>
-                      <button
-                        disabled={w.blocked}
-                        onClick={() =>
-                          ask({
-                            title: "弹出贮藏",
-                            message:
-                              "应用成功后删除这份贮藏；发生冲突时 Git 会保留原记录。",
-                            action: () => ({ kind: "stash-pop", sha: row.sha }),
-                          })
-                        }
-                      >
-                        弹出
-                      </button>
-                      <button
-                        className="gwb-danger"
-                        disabled={w.blocked}
-                        onClick={() =>
-                          ask({
-                            title: "删除贮藏",
-                            message:
-                              "删除这份保存的未提交改动。此操作不能从工作台直接撤销。",
-                            danger: true,
-                            typed: row.sha.slice(0, 8),
-                            action: () => ({
-                              kind: "stash-drop",
-                              sha: row.sha,
-                            }),
-                          })
-                        }
-                      >
-                        删除
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
-            {!data.stashes.length && (
-              <div className="gwb-empty">
-                还没有贮藏记录 · 可先把当前改动保存起来
-              </div>
-            )}
-          </div>
-          {stash && (
-            <div className="gwb-stash-diff">
-              <div className="gwb-pane-title">
-                <strong>贮藏差异 · {stash.slice(0, 8)}</strong>
-                <button onClick={() => setStash(null)}>收起</button>
-              </div>
-              <DiffView value={diff} loading={!diff && !error} error={error} />
-            </div>
-          )}
-        </>
+        <Stashes projectId={projectId} workbench={w} ask={ask} />
       )}
       {view === "tags" && (
         <div className="gwb-ref-section">
           {data.refs
             .filter((r) => r.kind === "tag")
             .map((row) => (
-              <div className="gwb-ref-row" key={row.name}>
+              <div
+                className="gwb-ref-row branch-row ui-selectable"
+                key={row.name}
+              >
                 <Tag size={18} />
-                <div className="gwb-ref-info">
+                <div className="gwb-ref-info gwb-tag-info">
                   <strong>{row.name}</strong>
                   <span>{row.subject}</span>
                   <code>{row.sha.slice(0, 8)}</code>
@@ -272,7 +170,7 @@ export function References({
                     推送
                   </button>
                   <button
-                    className="gwb-danger"
+                    className="gwb-danger mini-btn tone-danger"
                     disabled={w.blocked}
                     onClick={() =>
                       ask({
@@ -290,13 +188,13 @@ export function References({
                   >
                     删除
                   </button>
-                  <select
-                    aria-label={`删除远端标签 ${row.name}`}
-                    value=""
+                  <WorkbenchMenu
+                    label={`删除远端标签 ${row.name}`}
                     disabled={w.blocked || !data.remotes.length}
-                    onChange={(event) => {
-                      const remote = event.target.value;
-                      if (remote)
+                    items={data.remotes.map((remote) => ({
+                      label: `从 ${remote} 删除远端标签…`,
+                      danger: true,
+                      onClick: () =>
                         ask({
                           title: "删除远端标签",
                           danger: true,
@@ -309,16 +207,9 @@ export function References({
                             refKind: "tag",
                             sha: row.sha,
                           }),
-                        });
-                    }}
-                  >
-                    <option value="">删除远端标签…</option>
-                    {data.remotes.map((remote) => (
-                      <option key={remote} value={remote}>
-                        {remote}
-                      </option>
-                    ))}
-                  </select>
+                        }),
+                    }))}
+                  />
                 </div>
               </div>
             ))}
@@ -330,11 +221,14 @@ export function References({
       {view === "worktrees" && (
         <div className="gwb-worktree-grid">
           {data.worktrees.map((row) => (
-            <article className="gwb-worktree-card" key={row.path}>
-              <header>
+            <article
+              className={`gwb-worktree-card wt-card${row.path === data.repo ? " is-main" : ""}`}
+              key={row.path}
+            >
+              <header className="wt-head">
                 <TreeStructure size={18} />
-                <strong>{row.branch || "游离 HEAD"}</strong>
-                <em>
+                <strong className="wt-path">{row.path}</strong>
+                <em className="task-chip">
                   {row.managed
                     ? "任务"
                     : row.path === data.repo
@@ -342,8 +236,12 @@ export function References({
                       : "手动"}
                 </em>
               </header>
-              <code>{row.path}</code>
-              <p>{row.taskTitle || "独立工作目录"}</p>
+              <div className="wt-meta">
+                <code className="ref-chip">{row.branch || "游离 HEAD"}</code>
+                {row.taskTitle && (
+                  <span className="task-chip">{row.taskTitle}</span>
+                )}
+              </div>
               <div className="gwb-worktree-meta">
                 <span>HEAD {row.head?.slice(0, 8) || "暂无提交"}</span>
                 {row.locked && <b>已锁定</b>}
@@ -379,7 +277,7 @@ export function References({
                         {row.locked ? "解锁" : "锁定"}
                       </button>
                       <button
-                        className="gwb-danger"
+                        className="gwb-danger mini-btn tone-danger"
                         disabled={
                           w.blocked ||
                           row.locked ||

@@ -84,6 +84,16 @@ const tab = (name) =>
     .getByRole("navigation", { name: "Git 工作台视图" })
     .getByRole("button", { name: new RegExp(`^${name}`) });
 const dialog = (name) => page.getByRole("dialog", { name });
+const chooseMenuItem = async (trigger, item) => {
+  const label = await trigger.getAttribute("aria-label");
+  assert(label, "Workbench menu trigger must have an accessible label");
+  await trigger.click();
+  await page.getByRole("menu", { name: label }).getByRole("menuitem", { name: item, exact: true }).click();
+};
+const expandJournal = async (entry) => {
+  const details = entry.locator("details");
+  if ((await details.getAttribute("open")) === null) await details.locator("summary").click();
+};
 const performAction = async (trigger, expectedOk = true) => {
   let received = false;
   const action = page.waitForResponse((response) =>
@@ -118,7 +128,7 @@ const refresh = async () => {
     response.request().method() === "GET" &&
     /\/git\/workbench$/.test(new URL(response.url()).pathname));
   void pending.catch(() => undefined);
-  await page.getByLabel("刷新 Git 工作台").click();
+  await chooseMenuItem(page.getByLabel("工作台选项"), "刷新 Git 工作台");
   assert.equal((await pending).ok(), true);
 };
 const assertConflictDiagnostic = (message, label) => {
@@ -218,11 +228,11 @@ try {
   url.searchParams.set("gitView", "branches");
   url.searchParams.set("gitRoot", info.root);
   await page.goto(url.href);
-  await page.getByRole("heading", { name: /Git 工作台/ }).waitFor();
+  await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
 
   // 真实 UI rebase 冲突保留 stdout 的文件诊断，隐藏命令行 hint，并原样写入日志。
   const conflictBranch = page.locator(".gwb-ref-row", { hasText: "feature/conflict" });
-  await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("rebase");
+  await chooseMenuItem(conflictBranch.getByLabel("feature/conflict 分支操作"), "当前分支变基到这里");
   const rebaseDialog = dialog("变基到 feature/conflict");
   const rebaseFailure = await performAction(
     () => rebaseDialog.getByRole("button", { name: "变基到 feature/conflict", exact: true }).click(),
@@ -241,6 +251,7 @@ try {
   await tab("操作日志").click();
   const rebaseLog = page.locator(".gwb-journal-entry.is-conflict").first();
   await rebaseLog.waitFor();
+  await expandJournal(rebaseLog);
   assertConflictDiagnostic(await rebaseLog.innerText(), "rebase journal");
   await page.getByRole("button", { name: "中止操作", exact: true }).click();
   await submitDialog("中止 Git 操作");
@@ -251,7 +262,7 @@ try {
   const triggerEmptyCherryPick = async () => {
     await tab("历史").click();
     await page.getByRole("button", { name: /历史提交 3/ }).click();
-    await page.getByLabel("提交操作").selectOption("cherry-pick");
+    await chooseMenuItem(page.getByLabel("提交操作", { exact: true }), "拣选（cherry-pick）");
     const pickDialog = dialog("拣选提交到当前分支");
     const failure = await performAction(
       () => pickDialog.getByRole("button", { name: "拣选提交到当前分支", exact: true }).click(),
@@ -267,12 +278,12 @@ try {
     assert.equal(git(info.root, "rev-parse", "--verify", "CHERRY_PICK_HEAD"), cherryPickHead);
     assert.equal(git(info.root, "status", "--porcelain"), "");
     const operation = page.locator(".gwb-operation");
-    assert.match(await operation.innerText(), /cherry-pick 尚未完成[\s\S]*没有可提交的改动/);
+    assert.match(await operation.innerText(), /拣选尚未完成[\s\S]*没有可提交的改动/);
     assert.match(await operation.innerText(), new RegExp(emptyCherryPickMessage));
     const continueButton = operation.getByRole("button", { name: "继续操作", exact: true });
     if (await continueButton.count())
       assert.equal(await continueButton.isDisabled(), true, "empty cherry-pick continue must be disabled");
-    const skipButton = operation.getByRole("button", { name: "跳过", exact: true });
+    const skipButton = operation.getByRole("button", { name: /^跳过/ });
     assert.equal(await skipButton.isEnabled(), true, "empty cherry-pick skip must be enabled");
     assert.equal(
       await skipButton.evaluate((button) => button.classList.contains("gwb-primary")),
@@ -292,6 +303,7 @@ try {
   await tab("操作日志").click();
   const emptyPickLog = page.locator(".gwb-journal-entry.is-conflict", { hasText: "拣选" }).first();
   await emptyPickLog.waitFor();
+  await expandJournal(emptyPickLog);
   assertEmptyCherryPickGuidance(await emptyPickLog.innerText(), "empty cherry-pick journal");
   await emptyPick.skipButton.click();
   await submitDialog("跳过当前提交");
@@ -312,8 +324,8 @@ try {
 
   const triggerEmptyRevert = async () => {
     await tab("历史").click();
-    await page.locator(".gwb-commit-row", { hasText: "browser revert target" }).click();
-    await page.getByLabel("提交操作").selectOption("revert");
+    await page.locator(".gwb-commit-row", { hasText: "browser revert target" }).locator(".gwb-commit-select").click();
+    await chooseMenuItem(page.getByLabel("提交操作", { exact: true }), "反做（revert）");
     const revertDialog = dialog("反做此提交");
     const failure = await performAction(
       () => revertDialog.getByRole("button", { name: "反做此提交", exact: true }).click(),
@@ -321,23 +333,25 @@ try {
     );
     assertConflictDiagnostic(String(failure?.error || ""), "revert conflict response");
     await revertDialog.getByRole("button", { name: "关闭反做此提交" }).click();
-    await page.getByRole("button", { name: /conflict\.txt/ }).click();
+    await page.getByRole("button", { name: "打开冲突解决器", exact: true }).click();
     const conflictDialog = dialog(/解决冲突/);
     await conflictDialog.getByRole("button", { name: "整份采用我方", exact: true }).click();
     await performAction(() =>
       conflictDialog.getByRole("button", { name: "保存结果并暂存", exact: true }).click());
+    await conflictDialog.locator("strong", { hasText: "所有冲突文件已解决" }).waitFor();
+    await conflictDialog.getByRole("button", { name: "返回工作台", exact: true }).click();
     await conflictDialog.waitFor({ state: "detached" });
     assert.equal(git(info.root, "rev-parse", "--verify", "REVERT_HEAD"), revertTarget);
     assert.equal(git(info.root, "status", "--porcelain"), "");
     const operation = page.locator(".gwb-operation");
-    assert.match(await operation.innerText(), /revert 尚未完成[\s\S]*没有可提交的改动/);
+    assert.match(await operation.innerText(), /反做尚未完成[\s\S]*没有可提交的改动/);
     assert.match(await operation.innerText(), new RegExp(emptyRevertMessage));
     assert.equal(
       await operation.getByRole("button", { name: "继续操作", exact: true }).count(),
       0,
       "empty revert must hide continue",
     );
-    const skipButton = operation.getByRole("button", { name: "跳过", exact: true });
+    const skipButton = operation.getByRole("button", { name: /^跳过/ });
     assert.equal(await skipButton.isEnabled(), true, "empty revert skip must be enabled");
     assert.equal(
       await skipButton.evaluate((button) => button.classList.contains("gwb-primary")),
@@ -378,8 +392,8 @@ try {
   const directRevertHead = git(info.root, "rev-parse", "HEAD");
   await refresh();
   await tab("历史").click();
-  await page.locator(".gwb-commit-row", { hasText: "browser direct empty revert target" }).click();
-  await page.getByLabel("提交操作").selectOption("revert");
+  await page.locator(".gwb-commit-row", { hasText: "browser direct empty revert target" }).locator(".gwb-commit-select").click();
+  await chooseMenuItem(page.getByLabel("提交操作", { exact: true }), "反做（revert）");
   const directRevertDialog = dialog("反做此提交");
   const directRevertFailure = await performAction(
     () => directRevertDialog.getByRole("button", { name: "反做此提交", exact: true }).click(),
@@ -399,6 +413,7 @@ try {
   await tab("操作日志").click();
   const directRevertLog = page.locator(".gwb-journal-entry.is-failed", { hasText: "反做" }).first();
   await directRevertLog.waitFor();
+  await expandJournal(directRevertLog);
   assertDirectEmptyRevertGuidance(await directRevertLog.innerText(), "direct empty revert journal");
   assert.equal(git(info.root, "cat-file", "-e", `${directRevertTarget}^{commit}`), "");
 
@@ -424,7 +439,7 @@ try {
   await refresh();
   await tab("分支").click();
   const squashBranch = page.locator(".gwb-ref-row", { hasText: "browser/squash-am" });
-  await squashBranch.getByLabel("browser/squash-am 分支操作").selectOption("merge");
+  await chooseMenuItem(squashBranch.getByLabel("browser/squash-am 分支操作"), "合入当前分支");
   const squashDialog = dialog("合并 browser/squash-am");
   await squashDialog.locator("select").selectOption("squash");
   const squashFailure = await performAction(
@@ -472,11 +487,15 @@ try {
   await tab("操作日志").click();
   const discardLog = page.locator(".gwb-journal-entry.is-failed").first();
   await discardLog.waitFor();
+  await expandJournal(discardLog);
   assertDiscardGuidance(await discardLog.innerText(), "discard journal");
 
   // 按失败指引在变更视图暂存拦截文件，再从冲突面板重试安全放弃。
   await tab("变更").click();
-  const stageIncoming = page.getByRole("button", { name: "暂存 incoming.txt", exact: true });
+  const unstagedGroup = page.locator(".gwb-file-group", { has: page.locator("header", { hasText: "未暂存" }) });
+  const incomingRow = unstagedGroup.locator(".gwb-file-row", { has: page.getByLabel("incoming.txt", { exact: true }) });
+  await incomingRow.hover();
+  const stageIncoming = incomingRow.getByRole("button", { name: "暂存 incoming.txt", exact: true });
   await stageIncoming.waitFor();
   await performAction(() => stageIncoming.click());
   assert.equal(
@@ -522,6 +541,7 @@ try {
   await tab("操作日志").click();
   const applyLog = page.locator(".gwb-journal-entry.is-conflict", { hasText: "应用贮藏" }).first();
   await applyLog.waitFor();
+  await expandJournal(applyLog);
   assertNoStatusCliGuidance(await applyLog.innerText(), "stash apply journal");
   await page.getByRole("button", { name: "放弃冲突改动", exact: true }).click();
   discardDialog = dialog("放弃冲突改动");

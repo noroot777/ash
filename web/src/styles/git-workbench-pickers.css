@@ -1,0 +1,61 @@
+.gwb-menu-portal .menu.gwb-picker-menu {
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100vw - 16px));
+  min-width: 0;
+  max-height: min(440px, calc(100dvh - 16px));
+  padding: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px -8px #1b244022, 0 2px 6px #1b24400a, 0 0 0 1px var(--line);
+}
+.gwb-picker-menu .gwb-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.gwb-picker-heading strong { font-size: 11px; font-weight: 600; color: var(--muted); }
+.gwb-picker-heading > span {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--raised);
+  color: var(--muted);
+  font: 10px/16px var(--font-mono);
+}
+.gwb-picker-menu .gwb-picker-list { padding: 6px; overflow-y: auto; overscroll-behavior: contain; }
+.gwb-picker-menu .gwb-picker-list > div + div { margin-top: 3px; }
+.gwb-picker-menu .menu-item {
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 60px;
+  padding: 10px;
+  border-radius: 8px;
+}
+.gwb-picker-menu .menu-item:hover:not(:disabled) { background: var(--canvas); }
+.gwb-picker-menu .menu-item:focus-visible { background: var(--canvas); outline: 1px solid var(--accent); outline-offset: -1px; }
+.gwb-picker-menu .menu-item.is-current { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+.gwb-picker-menu .menu-item.is-current:disabled { opacity: 1; cursor: default; }
+.gwb-picker-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  height: 28px;
+  margin-top: 2px;
+  border-radius: 7px;
+  background: var(--raised);
+  color: var(--muted);
+}
+.gwb-picker-menu .is-current .gwb-picker-icon { background: var(--accent-soft); color: var(--accent); }
+.gwb-picker-icon svg { flex-shrink: 0; }
+.gwb-picker-copy { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 4px; }
+.gwb-picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; line-height: 17px; }
+.gwb-picker-description { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: 11px; line-height: 16px; color: var(--muted); }
+.gwb-picker-copy .is-mono { font-family: var(--font-mono); }
+.gwb-picker-name.is-mono { font-size: 11.5px; }
+.gwb-picker-description.is-mono { font-size: 10.5px; }
+.gwb-picker-current { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; margin-top: 1px; color: var(--accent); font-size: 10px; line-height: 17px; }

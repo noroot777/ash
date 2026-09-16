@@ -130,7 +130,8 @@ const refresh = async () => {
     /\/git\/workbench$/.test(new URL(response.url()).pathname),
   );
   void pending.catch(() => undefined);
-  await page.getByLabel("刷新 Git 工作台").click();
+  await page.getByLabel("工作台选项").click();
+  await page.getByRole("menu", { name: "工作台选项" }).getByRole("menuitem", { name: "刷新 Git 工作台" }).click();
   const response = await pending;
   assert.equal(response.ok(), true, `refresh failed with HTTP ${response.status()}`);
   await page.getByLabel("选择工作树").waitFor({ state: "visible" });
@@ -154,6 +155,8 @@ const saveConflict = async (box, path, expected) => {
   const response = await pending;
   const body = await response.json().catch(() => null);
   assert.equal(response.ok(), true, `resolve failed: ${JSON.stringify(body)}`);
+  await box.locator("strong", { hasText: "所有冲突文件已解决" }).waitFor();
+  await box.getByRole("button", { name: "返回工作台", exact: true }).click();
   await box.waitFor({ state: "detached" });
   assert.equal(readFileSync(join((await backend.ready).root, path), "utf8"), expected);
   assert.equal(gitRaw((await backend.ready).root, "show", `:${path}`), expected);
@@ -206,8 +209,20 @@ try {
   url.searchParams.set("gitView", "changes");
   url.searchParams.set("gitRoot", info.root);
   await page.goto(url.href);
-  await page.getByRole("heading", { name: /Git 工作台/ }).waitFor();
+  await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
   await page.getByLabel("选择工作树").waitFor();
+  const mutateRepository = async (mutation) => {
+    await page.goto("about:blank");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    for (let attempt = 0; existsSync(join(info.root, ".git/index.lock")); attempt += 1) {
+      assert(attempt < 100, "workbench Git read did not release index.lock");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    mutation();
+    await page.goto(url.href);
+    await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
+    await page.getByLabel("选择工作树").waitFor();
+  };
 
   const tokens = "$$ | $& | $` | $' | $1 | $12";
   const cases = [
@@ -242,15 +257,14 @@ try {
     const ours = `header\n${scenario.oursLine}footer\n`;
     const theirs = `header\n${scenario.theirsLine}footer\n`;
     const expected = `header\n${scenario.expectedLine}footer\n`;
-    createConflict(info.root, scenario.name, scenario.path, base, ours, theirs);
-    const box = await openConflict(scenario.path);
+    await mutateRepository(() => createConflict(info.root, scenario.name, scenario.path, base, ours, theirs));
 
     if (index === 0) {
+      await refresh();
       const syncButtons = [
         page.getByRole("button", { name: "获取", exact: true }),
         page.getByRole("button", { name: "拉取", exact: true }),
-        page.getByRole("button", { name: "推送", exact: true }),
-        page.getByRole("button", { name: "保护强推…", exact: true }),
+        page.getByRole("button", { name: /^推送/ }),
       ];
       const before = actionPosts.length;
       for (const button of syncButtons) {
@@ -258,10 +272,17 @@ try {
         assert.equal(await button.isDisabled(), true, `${await button.innerText()} should be disabled during conflict`);
         await button.evaluate((element) => element.click());
       }
+      await page.getByLabel("工作台选项").evaluate((element) => element.click());
+      const forcePush = page.getByRole("menu", { name: "工作台选项" }).getByRole("menuitem", { name: "保护强推…" });
+      await forcePush.waitFor();
+      assert.equal(await forcePush.isDisabled(), true, "force push should be disabled during conflict");
+      await forcePush.evaluate((element) => element.click());
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
       assert.equal(actionPosts.length, before, "disabled sync buttons must not POST actions");
+      await page.keyboard.press("Escape");
     }
 
+    const box = await openConflict(scenario.path);
     const block = box.locator(".gwb-conflict-block").first();
     await block.getByRole("button", { name: scenario.choice, exact: true }).click();
     assert.equal(await box.getByLabel("冲突解决结果").inputValue(), expected);
@@ -272,14 +293,14 @@ try {
   const duplicateBase = `top\nbase\n${separator}\nbase\nbottom\n`;
   const duplicateOurs = `top\nours ${tokens}\n${separator}\nours ${tokens}\nbottom\n`;
   const duplicateTheirs = `top\ntheirs ${tokens}\n${separator}\ntheirs ${tokens}\nbottom\n`;
-  createConflict(
+  await mutateRepository(() => createConflict(
     info.root,
     "duplicate-blocks",
     "duplicate.txt",
     duplicateBase,
     duplicateOurs,
     duplicateTheirs,
-  );
+  ));
   const duplicateDialog = await openConflict("duplicate.txt");
   const editor = duplicateDialog.getByLabel("冲突解决结果");
   const initial = await editor.inputValue();
@@ -301,12 +322,14 @@ try {
   assert.equal((await editor.inputValue()).match(/^<<<<<<</gm)?.length, 1);
 
   await duplicateDialog
-    .getByRole("button", { name: /关闭解决冲突/ })
+    .getByRole("button", { name: "关闭冲突解决器", exact: true })
     .click();
-  abortMerge(info.root);
-  git(info.root, "checkout", "-q", "main");
-  git(info.root, "reset", "--hard", "HEAD");
-  git(info.root, "clean", "-fd");
+  await mutateRepository(() => {
+    abortMerge(info.root);
+    git(info.root, "checkout", "-q", "main");
+    git(info.root, "reset", "--hard", "HEAD");
+    git(info.root, "clean", "-fd");
+  });
 
   const backupRef = "refs/ash-backup/browser-review";
   const backupSha = git(info.root, "rev-parse", "HEAD");
@@ -325,6 +348,7 @@ try {
     .getByRole("navigation", { name: "Git 工作台视图" })
     .getByRole("button", { name: /^操作日志/ })
     .click();
+  await page.getByText("历史备份与维护", { exact: true }).click();
   const backups = page.getByRole("region", { name: "历史备份" });
   const backupRow = backups.locator(".gwb-ref-row", { hasText: backupRef });
   await backupRow.waitFor();

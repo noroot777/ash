@@ -16,6 +16,7 @@ const fields: Record<string, Record<string, string>> = {
   stage: { paths: "paths" },
   unstage: { paths: "paths" },
   discard: { paths: "paths", deleteUntracked: "paths" },
+  "discard-patch": { path: "string", diff: "text", lines: "numbers" },
   patch: {
     path: "string",
     source: "staged|unstaged",

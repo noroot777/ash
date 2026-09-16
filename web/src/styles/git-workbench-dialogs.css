@@ -1,153 +1,120 @@
-.gwb-form {
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-  margin: 20px 0;
-}
-.gwb-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.gwb-form label input[type="checkbox"] {
-  align-self: flex-start;
-  width: 15px;
-  height: 15px;
-  accent-color: var(--accent);
-}
-.gwb-form label code {
-  overflow-wrap: anywhere;
-}
-.gwb-form textarea {
-  resize: vertical;
-}
-.gwb-rebase-dialog {
-  width: min(950px, 94vw);
-  max-width: 950px;
-}
-.gwb-rebase-steps {
-  max-height: 50vh;
-  overflow: auto;
-  margin: 18px 0;
-}
-.gwb-rebase-step {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border-bottom: 1px solid var(--line);
-  padding: 9px 0;
-  font-size: 11px;
-}
-.gwb-rebase-step > code {
-  color: var(--faint);
-  font-size: 10px;
-}
-.gwb-rebase-step > span,
-.gwb-rebase-step > input {
-  flex: 1;
-  min-width: 0;
-}
-.gwb-rebase-step.is-dropped > span {
-  opacity: 0.45;
-  text-decoration: line-through;
-}
-.gwb-rebase-step select {
-  font-size: 10px;
-}
-.gwb-hint {
-  font-size: 11px;
-  color: var(--muted);
-}
-.gwb-conflict-dialog {
-  width: min(1280px, 96vw);
-  max-width: 1280px;
-}
-.gwb-conflict-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: 17px 0 12px;
-  flex-wrap: wrap;
-}
-.gwb-conflict-toolbar button,
-.gwb-conflict-block button,
-.gwb-rebase-step button {
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--raised);
-  color: var(--ink);
-  min-height: 25px;
-  padding: 3px 7px;
-  font-size: 10px;
-  cursor: pointer;
-}
-.gwb-conflict-layout {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  height: 56vh;
-  min-height: 260px;
-}
-.gwb-conflict-context {
-  min-width: 0;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-}
-.gwb-conflict-context section {
-  padding: 12px;
-  border-bottom: 1px solid var(--line);
-}
-.gwb-conflict-context h3 {
-  margin: 0 0 10px;
-  font-size: 11px;
-  font-weight: 600;
-}
-.gwb-conflict-context pre {
-  overflow: auto;
-  font-size: 11px;
-  line-height: 1.7;
-  margin: 0;
-  white-space: pre;
-}
-.gwb-conflict-block > header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  font-size: 10px;
-}
-.gwb-conflict-block pre {
-  padding: 9px;
-}
-.gwb-conflict-block .is-ours {
-  background: color-mix(in srgb, #2d9685 10%, var(--canvas));
-}
-.gwb-conflict-block .is-theirs {
-  background: color-mix(in srgb, var(--accent) 10%, var(--canvas));
-}
-.gwb-conflict-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  min-width: 0;
-  font-size: 11px;
-}
-.gwb-conflict-editor textarea {
-  flex: 1;
-  resize: none;
-  min-height: 0;
+/* Git 工作台 demo · 覆盖层:冲突解决器、交互式变基、设计说明。 */
+
+/* ================= 冲突解决器 ================= */
+.gwb-design .conflict-overlay {
+  position: fixed; inset: 0; z-index: 120;
+  display: flex; flex-direction: column;
   background: var(--canvas);
-  border: 1px solid var(--line);
-  color: var(--ink);
-  border-radius: 5px;
-  padding: 12px;
-  font-size: 11px;
-  line-height: 1.7;
-  white-space: pre;
-  overflow: auto;
+}
+.gwb-design .cf-head {
+  display: flex; align-items: center; gap: 10px;
+  height: 50px; flex: 0 0 auto; padding: 0 16px;
+  border-bottom: .5px solid var(--line);
+  background: color-mix(in lch, var(--red) 5%, var(--canvas));
+}
+.gwb-design .cf-title { display: flex; align-items: center; gap: 8px; color: var(--red); }
+.gwb-design .cf-title b { font-size: 13.5px; font-weight: 650; }
+.gwb-design .cf-title code { font-size: 11px; color: var(--muted); }
+.gwb-design .cf-progress { font-size: 11.5px; color: var(--muted); font-weight: 550; }
+.gwb-design .cf-body { flex: 1; min-height: 0; display: flex; }
+.gwb-design .cf-files {
+  width: 300px; flex: 0 0 auto;
+  padding: 12px 10px;
+  border-right: .5px solid var(--line);
+  overflow-y: auto;
+}
+.gwb-design .cf-file {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; height: 30px; padding: 0 8px;
+  font-size: 11.5px; text-align: left;
+}
+.gwb-design .cf-file .file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gwb-design .cf-main { flex: 1; min-width: 0; overflow-y: auto; padding: 14px 20px 40px; }
+.gwb-design .cf-file-title { margin: 0 0 12px; font-size: 13px; font-family: var(--font-mono); font-weight: 600; }
+.gwb-design .cf-block {
+  margin-bottom: 16px; border-radius: 11px;
+  background: var(--panel);
+  box-shadow: var(--surface-shadow), 0 0 0 .5px var(--line);
+  overflow: hidden;
+}
+.gwb-design .cf-block.is-solved { box-shadow: var(--surface-shadow), 0 0 0 1px color-mix(in lch, var(--green) 40%, transparent); }
+.gwb-design .cf-block-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 12px; border-bottom: .5px solid var(--line);
+}
+.gwb-design .cf-block-head b { font-size: 11.5px; font-weight: 650; }
+.gwb-design .cf-context { font-size: 10.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gwb-design .cf-sides { display: grid; grid-template-columns: 1fr 1fr; }
+.gwb-design .cf-side.is-ours { border-right: .5px solid var(--line); }
+.gwb-design .cf-side-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 12px; font-size: 10.5px;
+}
+.gwb-design .cf-side-head b { font-weight: 650; display: inline-flex; align-items: center; gap: 5px; }
+.gwb-design .cf-side-head i { font-style: normal; color: var(--faint); }
+.gwb-design .cf-side.is-ours .cf-side-head b { color: var(--accent); }
+.gwb-design .cf-side.is-theirs .cf-side-head b { color: var(--cyan); }
+.gwb-design .cf-code {
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 1.65;
+  padding: 4px 12px 8px; white-space: pre; overflow-x: auto;
+}
+.gwb-design .cf-side.is-ours .cf-code { background: color-mix(in lch, var(--accent) 5%, var(--panel)); }
+.gwb-design .cf-side.is-theirs .cf-code { background: color-mix(in lch, var(--cyan) 5%, var(--panel)); }
+.gwb-design .cf-code.is-result { background: var(--green-bg); }
+.gwb-design .cf-code.is-ai { background: color-mix(in lch, var(--accent) 6%, var(--panel)); }
+.gwb-design .cf-code-line { min-height: 1.1em; }
+.gwb-design .cf-actions {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 9px 12px; border-top: .5px solid var(--line);
+}
+.gwb-design .cf-result .cf-side-head { padding-top: 8px; }
+.gwb-design .cf-result .cf-side-head b { color: var(--green); }
+.gwb-design .cf-ai, .gwb-design .cf-editor { border-top: .5px solid var(--line); }
+.gwb-design .cf-editor { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.gwb-design .cf-textarea {
+  width: 100%; resize: vertical;
+  border: 1px solid var(--line2); border-radius: 8px;
+  padding: 8px 10px;
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.6;
+  background: var(--panel);
+}
+
+/* ================= 交互式变基 ================= */
+.gwb-design .rebase-body { padding: 2px 16px 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.gwb-design .rebase-tip {
+  display: flex; gap: 7px; margin: 0;
+  font-size: 11.5px; color: var(--muted); line-height: 1.55;
+}
+.gwb-design .rebase-list { display: flex; flex-direction: column; gap: 5px; }
+.gwb-design .rebase-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 8px; border-radius: 8px;
+  background: var(--raised);
+}
+.gwb-design .rebase-row.is-drop { opacity: .5; }
+.gwb-design .rebase-row.is-drop .commit-msg { text-decoration: line-through; }
+.gwb-design .rebase-action {
+  flex: 0 0 auto; height: 24px;
+  border: 1px solid var(--line2); border-radius: 6px;
+  background: var(--panel); font-size: 11px; padding: 0 4px;
+}
+.gwb-design .rebase-row .commit-msg { flex: 1; min-width: 0; font-size: 12px; }
+.gwb-design .rebase-msg { flex: 1; height: 24px; font-size: 11.5px; }
+.gwb-design .rebase-moves { display: inline-flex; gap: 2px; flex: 0 0 auto; }
+.gwb-design .rebase-summary { margin: 0; font-size: 11px; color: var(--faint); }
+
+/* ================= 设计说明 ================= */
+.gwb-design .about-body {
+  padding: 0 18px 8px; overflow-y: auto;
+  font-size: 12.5px; line-height: 1.7; color: var(--muted);
+}
+.gwb-design .about-body h3 {
+  margin: 16px 0 6px; font-size: 12.5px; font-weight: 650; color: var(--ink);
+}
+.gwb-design .about-body p, .gwb-design .about-body li { margin: 0 0 8px; }
+.gwb-design .about-body ol, .gwb-design .about-body ul { margin: 0 0 8px; padding-left: 20px; }
+.gwb-design .about-body b { color: var(--ink); font-weight: 600; }
+.gwb-design .about-body code {
+  font-size: 11px; padding: 1px 5px; border-radius: 4px;
+  background: var(--raised);
 }

@@ -90,7 +90,7 @@ export function RebaseDialog({
         w.blocked
       }
       onClose={close}
-      className="gwb-rebase-dialog"
+      className="gwb-rebase-dialog gwb-design"
       onConfirm={() => {
         if (invalid || busy || error) return;
         setBusy(true);

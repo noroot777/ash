@@ -1,4 +1,4 @@
-import { ClockCounterClockwise } from "@phosphor-icons/react";
+import { Lock } from "@phosphor-icons/react";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
 import { Backups } from "./Backups.tsx";
@@ -21,6 +21,7 @@ export const actionLabels: Record<string, string> = {
   stage: "暂存",
   unstage: "取消暂存",
   discard: "丢弃改动",
+  "discard-patch": "丢弃改动块",
   patch: "部分暂存",
   commit: "提交",
   checkout: "切换分支",
@@ -64,8 +65,18 @@ export function OperationLog({
 }) {
   const data = w.data!;
   return (
-    <section className="gwb-page">
-      <Backups workbench={w} ask={ask} />
+    <section className="gwb-page scroll-col">
+      <div className={`lock-card${data.busy || w.busy ? " is-held" : ""}`}>
+        <header className="lock-head">
+          <Lock size={15} />
+          <b>仓库锁</b>
+        </header>
+        <p className="lock-line">
+          {data.busy || w.busy
+            ? "仓库正在操作；排队中的动作将在锁释放后继续。"
+            : "空闲 · 页面操作与 agent 的 Git 操作在同一条队列上执行。"}
+        </p>
+      </div>
       <div className="gwb-section-head">
         <div>
           <h2>操作日志</h2>
@@ -86,88 +97,92 @@ export function OperationLog({
             entry.branch === data.status.branch.head;
           return (
             <article
-              className={`gwb-journal-entry is-${entry.state}`}
+              className={`gwb-journal-entry oplog-row is-${entry.state}`}
               key={entry.id}
             >
-              <div className="gwb-journal-dot">
-                <ClockCounterClockwise size={17} />
-              </div>
+              <time className="oplog-time">
+                {new Date(entry.at).toLocaleTimeString()}
+              </time>
+              <span className="actor-chip actor-user">{entry.actor}</span>
               <div className="gwb-journal-body">
                 <header>
                   <strong>{actionLabels[entry.action] || entry.action}</strong>
                   <em>{states[entry.state]}</em>
-                  <time>{new Date(entry.at).toLocaleString()}</time>
                 </header>
-                <p>{entry.message}</p>
                 {entry.command && (
                   <small>
                     <code>{entry.command}</code>
                   </small>
                 )}
-                <small>
-                  {entry.actor} · {entry.branch || "HEAD"} ·{" "}
-                  <code>{entry.root}</code>
-                </small>
-                {entry.before && (
+                <details>
+                  <summary>查看结果与备份</summary>
+                  <p>{entry.message}</p>
+
                   <small>
-                    <code>
-                      {entry.before.slice(0, 8)} →{" "}
-                      {entry.after?.slice(0, 8) || "待核对"}
-                    </code>
+                    {entry.actor} · {entry.branch || "HEAD"} ·{" "}
+                    <code>{entry.root}</code>
                   </small>
-                )}
-                {entry.backup && !backupAvailable && (
-                  <small>历史备份已删除</small>
-                )}
-                {entry.backup && backupAvailable && (
-                  <div className="gwb-backup">
-                    <span>
-                      历史备份 <code>{entry.backup}</code>
-                    </span>
-                    <div className="gwb-inline-actions">
-                      <button
-                        disabled={w.blocked}
-                        onClick={() =>
-                          ask({
-                            title: "从备份找回分支",
-                            message: `从保留的${entry.targetName ? `「${entry.targetName}」引用` : "原 HEAD"}建立新分支，不修改当前工作区。`,
-                            fields: [
-                              {
-                                key: "name",
-                                label: "恢复分支名",
-                                initial: `recovery/${entry.id.slice(0, 8)}`,
-                                required: true,
-                              },
-                            ],
-                            action: (v) => ({
-                              kind: "branch-create",
-                              name: v.name,
-                              target: entry.backup!,
-                              checkout: false,
-                            }),
-                          })
-                        }
-                      >
-                        恢复为新分支
-                      </button>
-                      {undoable && (
+                  {entry.before && (
+                    <small>
+                      <code>
+                        {entry.before.slice(0, 8)} →{" "}
+                        {entry.after?.slice(0, 8) || "待核对"}
+                      </code>
+                    </small>
+                  )}
+                  {entry.backup && !backupAvailable && (
+                    <small>历史备份已删除</small>
+                  )}
+                  {entry.backup && backupAvailable && (
+                    <div className="gwb-backup">
+                      <span>
+                        历史备份 <code>{entry.backup}</code>
+                      </span>
+                      <div className="gwb-inline-actions">
                         <button
                           disabled={w.blocked}
                           onClick={() =>
                             ask({
-                              title: "撤销这次历史操作",
-                              danger: true,
-                              message: `将当前分支恢复到 ${entry.before?.slice(0, 8)}。要求工作区干净，且 HEAD 与这次操作的结果一致。当前 HEAD 也会再次备份。`,
-                              action: () => ({ kind: "undo", id: entry.id }),
+                              title: "从备份找回分支",
+                              message: `从保留的${entry.targetName ? `「${entry.targetName}」引用` : "原 HEAD"}建立新分支，不修改当前工作区。`,
+                              fields: [
+                                {
+                                  key: "name",
+                                  label: "恢复分支名",
+                                  initial: `recovery/${entry.id.slice(0, 8)}`,
+                                  required: true,
+                                },
+                              ],
+                              action: (v) => ({
+                                kind: "branch-create",
+                                name: v.name,
+                                target: entry.backup!,
+                                checkout: false,
+                              }),
                             })
                           }
                         >
-                          撤销
+                          恢复为新分支
                         </button>
-                      )}
+                        {undoable && (
+                          <button
+                            disabled={w.blocked}
+                            onClick={() =>
+                              ask({
+                                title: "撤销这次历史操作",
+                                danger: true,
+                                message: `将当前分支恢复到 ${entry.before?.slice(0, 8)}。要求工作区干净，且 HEAD 与这次操作的结果一致。当前 HEAD 也会再次备份。`,
+                                action: () => ({ kind: "undo", id: entry.id }),
+                              })
+                            }
+                          >
+                            撤销
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </details>
               </div>
             </article>
           );
@@ -176,6 +191,10 @@ export function OperationLog({
           <div className="gwb-empty">还没有通过工作台执行过 Git 操作</div>
         )}
       </div>
+      <details className="gwb-backup-section">
+        <summary>历史备份与维护</summary>
+        <Backups workbench={w} ask={ask} />
+      </details>
     </section>
   );
 }

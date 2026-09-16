@@ -19,6 +19,7 @@ export interface ActionPrompt {
   typed?: string;
   fields?: ActionField[];
   action: (values: Record<string, string>) => GitAction;
+  onSuccess?: () => void;
 }
 export type AskAction = (prompt: ActionPrompt) => void;
 export const initialActionValues = (prompt: ActionPrompt) =>
@@ -64,8 +65,10 @@ export function ActionDialog({
       snapshot,
     );
     setBusy(false);
-    if (ok) close();
-    else setFailed(true);
+    if (ok) {
+      prompt.onSuccess?.();
+      close();
+    } else setFailed(true);
   };
   return (
     <ConfirmDialog
@@ -77,7 +80,7 @@ export function ActionDialog({
       confirmDisabled={!valid}
       onConfirm={() => void submitAction()}
       onClose={close}
-      className="git-action-dialog"
+      className="git-action-dialog gwb-design"
     >
       <div className="gwb-form">
         {prompt.fields?.map((field) => (

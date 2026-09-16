@@ -188,6 +188,7 @@ export function confirmationFor(
     case "push":
       return action.lease !== undefined ? status.branch.head || "HEAD" : null;
     case "discard":
+    case "discard-patch":
       return "丢弃";
     default:
       return null;

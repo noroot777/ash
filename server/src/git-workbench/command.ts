@@ -32,6 +32,8 @@ export function displayCommand(action: GitAction): string {
       return `git restore --worktree -- ${paths}${action.deleteUntracked.length ? `; git clean -f -- ${action.deleteUntracked.slice(0, 20).map(quote).join(" ")}` : ""}`;
     case "patch":
       return `git apply --cached (${action.lines.length} selected lines)`;
+    case "discard-patch":
+      return `git apply (reverse patch, ${action.lines.length} selected lines in ${path})`;
     case "commit":
       return `git commit ${action.amend ? "--amend " : ""}-F -`;
     case "checkout":

@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -53,6 +59,28 @@ write(
   "alpha\nBETA\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\nIOTA\nkappa\n",
 );
 write("新增文件.txt", "new file\n");
+const secondRoot = join(directory, "repo-alt");
+const secondRemote = join(directory, "origin-alt.git");
+const secondGit = (...args: string[]) =>
+  execFileSync("git", ["-C", secondRoot, ...args], {
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  }).trim();
+const secondWrite = (path: string, value: string) =>
+  writeFileSync(join(secondRoot, path), value);
+execFileSync("git", ["init", "-q", "-b", "main", secondRoot]);
+execFileSync("git", ["init", "--bare", "-q", "-b", "main", secondRemote]);
+secondWrite("alternate.txt", "alternate repository\n");
+secondGit("add", ".");
+secondGit("commit", "-qm", "备用仓库初始提交");
+secondWrite("alternate.txt", "alternate repository\nsecond revision\n");
+secondGit("commit", "-qam", "备用仓库独有历史");
+secondGit("remote", "add", "origin", secondRemote);
+secondGit("push", "-qu", "origin", "main");
+secondWrite("alternate.txt", "alternate repository\nsecond revision\nuncommitted\n");
+const nonGitRoot = join(directory, "plain-directory");
+mkdirSync(nonGitRoot);
+writeFileSync(join(nonGitRoot, "README.txt"), "This directory is intentionally not a Git repository.\n");
 const { Hono } = await import("hono");
 const { serve } = await import("@hono/node-server");
 const { db, dbClient, ensureSchema } = await import("../../src/db/index.js");
@@ -65,14 +93,30 @@ const { mountProjectGitRoutes } = await import(
 );
 await ensureSchema();
 const projectId = "workbench-browser";
+const secondProjectId = "workbench-browser-alt";
+const nonGitProjectId = "workbench-browser-plain";
 await db
   .insert(projects)
-  .values({
-    id: projectId,
-    name: "Git 工作台验证",
-    repoPath: root,
-    createdAt: new Date().toISOString(),
-  });
+  .values([
+    {
+      id: projectId,
+      name: "Git 工作台验证",
+      repoPath: root,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: secondProjectId,
+      name: "备用 Git 项目",
+      repoPath: secondRoot,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: nonGitProjectId,
+      name: "普通目录项目",
+      repoPath: nonGitRoot,
+      createdAt: new Date().toISOString(),
+    },
+  ]);
 const app = new Hono();
 const api = new Hono();
 mountGitWorkbenchRoutes(api);
@@ -82,7 +126,17 @@ const server = serve(
   { fetch: app.fetch, hostname: "127.0.0.1", port: 0 },
   (info) => {
     console.log(
-      JSON.stringify({ port: info.port, projectId, root, base, directory }),
+      JSON.stringify({
+        port: info.port,
+        projectId,
+        root,
+        base,
+        secondProjectId,
+        secondRoot,
+        nonGitProjectId,
+        nonGitRoot,
+        directory,
+      }),
     );
   },
 );
