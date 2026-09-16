@@ -80,6 +80,8 @@ try {
   await control("forward-mode", {});
   await input.fill("比较方案 A 和 B"); await send.click();
   await page.locator(".side-chat-message.is-agent").last().getByText("建议选择方案 B。", { exact: true }).waitFor();
+  // 说完之后过程折起来待在正文上方，条上按主会话那套词报数。
+  assert.match(await page.locator(".side-chat-message.is-agent").last().innerText(), /执行过程 · 1 分析 · 1 工具/);
   assert.equal((await state()).delivered.length, 0);
   const firstRoom = await roomPicker.inputValue();
   await page.getByRole("button", { name: "切换主任务状态" }).click();
@@ -103,12 +105,25 @@ try {
   await page.waitForFunction((roomId) => document.querySelector('[aria-label="切换侧聊"]')?.value === roomId, firstRoom);
   assert.equal(await input.inputValue(), "草稿也保留");
   assert.equal(await roomPicker.inputValue(), firstRoom);
+  const analyzingPosition = await page.locator(".side-chat-message.is-agent").count();
   await input.fill("等待一下，做长分析"); await send.click();
+  // 执行过程跟主会话一样：跑的中途就露在外面，展开能看见跑了什么命令。
+  const analyzing = page.locator(".side-chat-message.is-agent").nth(analyzingPosition);
+  await analyzing.locator(".task-execution-block").waitFor();
+  await analyzing.locator(".task-execution-block > summary").click();
+  await analyzing.getByText("git log --oneline | head", { exact: true }).waitFor();
+  await analyzing.getByText("先确认主任务改了哪些文件", { exact: true }).waitFor();
+  await page.screenshot({ path: join(artifacts, "side-chat-execution-live.png") });
   await page.getByRole("button", { name: "停止侧聊", exact: true }).waitFor();
   await page.getByRole("button", { name: "停止侧聊", exact: true }).click();
   await page.getByText(/你已停止侧聊回复/).waitFor();
   await page.reload();
   await page.getByText(/你已停止侧聊回复/).waitFor();
+  // 停下、刷新之后那段过程还在原地：刷新后仍看得出它停之前做了什么。
+  const stopped = page.locator(".side-chat-message.is-agent").nth(analyzingPosition);
+  await stopped.locator(".task-execution-block").waitFor();
+  await stopped.locator(".task-execution-block > summary").click();
+  await stopped.getByText("git log --oneline | head", { exact: true }).waitFor();
   assert.equal((await state()).kills, 0);
   await control("native", { enabled: false });
   await input.fill("「把结论告诉主任务」"); await send.click();
@@ -228,7 +243,7 @@ try {
   assert.equal(await input.inputValue(), "长历史首次发送仍保留草稿");
   assert.equal((await roomsFor("parent")).length, roomsBeforeLargeHistory, "首次发送建房失败不能留下空房间");
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log(`✓ 真实侧聊 API + headless Chrome：连续对话、自然回传、回执、排队取消、停止/刷新、草稿/任务隔离、390px 通过\n截图：${artifacts}`);
+  console.log(`✓ 真实侧聊 API + headless Chrome：连续对话、执行过程实时/停止后留存、自然回传、回执、排队取消、停止/刷新、草稿/任务隔离、390px 通过\n截图：${artifacts}`);
 } finally {
   await browser?.close(); await server?.close();
   if (fixture.exitCode === null) { fixture.kill("SIGTERM"); await once(fixture, "exit"); }

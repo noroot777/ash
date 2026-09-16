@@ -32,6 +32,24 @@ export interface ChatRoom {
 
 export type ChatMessageStatus = "queued" | "running" | "done" | "failed" | "stopped";
 
+/**
+ * 一条聊天回复的「执行过程」里的一行(工具 / 思考 / 异常)。形状跟主会话那份
+ * (web 的 `lib/executionTrace.ts` `ExecutionEvent`)对齐，两边共用同一个折叠块组件，
+ * 标签也用同一套词(思考 → 「思考过程」，异常 → 直接拿报错当标签)。
+ */
+export interface ChatTraceEvent {
+  kind: "tool" | "thinking" | "error";
+  label: string;
+  detail?: string;
+}
+
+/**
+ * 一条回复能记多少执行过程。上限存在的理由是这份记录跟着**每一次**房间快照走
+ * (SSE 每秒一整份)，不封顶时一次跑飞的咨询就能把快照撑成几 MB。
+ * 撞上限不静默：`ChatTraceLog` 会补一行说明，别让用户以为它只干了这么点事。
+ */
+export const CHAT_TRACE_LIMITS = { events: 120, detail: 800, total: 24_000 } as const;
+
 export interface ChatMessage {
   id: string;
   roomId: string;
@@ -44,6 +62,8 @@ export interface ChatMessage {
   taskId: string | null;
   createdAt: string;
   assistant?: AssistantResult;
+  /** 这条回复跑过的工具/思考/异常，跑的中途就随快照流出来，跑完仍留在原地。 */
+  trace?: ChatTraceEvent[];
   forwardError?: string | null;
   forward?: {
     messageId: string;

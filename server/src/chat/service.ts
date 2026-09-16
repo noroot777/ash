@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
-import type { ChatMember, ChatMessage, ChatRoom } from "@ash/shared/chat";
+import type { ChatMember, ChatMessage, ChatRoom, ChatTraceEvent } from "@ash/shared/chat";
 import { isChatClearCommand, mentionedMembers } from "@ash/shared/chat";
 import { db } from "../db/index.js";
 import { chatRooms, chatMessages } from "../db/schema.js";
@@ -11,6 +11,7 @@ import { parseChatReply } from "./prompt.js";
 import { ChatBoundaryError } from "./boundary.js";
 import { ChatContextManager } from "./context.js";
 import { limitedChatInvoke } from "./invocation-queue.js";
+import { ChatTraceLog } from "./trace.js";
 import type { ChatContextPolicy } from "./context-format.js";
 import { assistantFormatter, invokeAssistant } from "./assistant.js";
 import { parseSideChatReply, sideChatPrompt } from "./side-prompt.js";
@@ -20,7 +21,7 @@ import { sideChatParent, settleSideChat, dispatchSideMessage, sideMessageReceipt
 export type RoomRow = typeof chatRooms.$inferSelect;
 type MessageRow = typeof chatMessages.$inferSelect;
 export const toRoom = (row: RoomRow): ChatRoom => ({ id: row.id, projectId: row.projectId, name: row.name, members: JSON.parse(row.members), createdAt: row.createdAt, kind: row.kind === "side" ? "side" : row.kind === "assistant" ? "assistant" : "chat", parentTaskId: row.parentTaskId });
-export const toMessage = ({ context: _context, modelReply: _modelReply, notice: _notice, forwardMessageId: _forwardMessageId, assistant, ...row }: MessageRow): ChatMessage => ({ ...row, role: row.role as ChatMessage["role"], status: row.status as ChatMessage["status"], mentions: JSON.parse(row.mentions), ...(assistant ? { assistant: JSON.parse(assistant) } : {}) });
+export const toMessage = ({ context: _context, modelReply: _modelReply, notice: _notice, forwardMessageId: _forwardMessageId, assistant, trace, ...row }: MessageRow): ChatMessage => ({ ...row, role: row.role as ChatMessage["role"], status: row.status as ChatMessage["status"], mentions: JSON.parse(row.mentions), ...(assistant ? { assistant: JSON.parse(assistant) } : {}), ...(trace ? { trace: JSON.parse(trace) as ChatTraceEvent[] } : {}) });
 
 // stop()/recover() 用固定文案覆盖 body 时，把已持久化的目录附注（chat_messages.notice，
 // invoke 一返回就落库）拼回正文。附注是「项目可能被并发改动/观察失效」的安全信息，不能随
@@ -179,6 +180,9 @@ export class ChatService {
     // 被智能体当对话内容复读）。
     let notice: string | undefined;
     let sideResult: ReturnType<typeof parseSideChatReply> | undefined;
+    // 侧聊的执行过程（见 trace.ts）：边跑边落库，收尾时（含停止/失败）再 flush 一次，
+    // 最后几步不能只活在内存里。
+    let trace: ChatTraceLog | undefined;
     const withNotice = (text: string) => notice ? `${text}\n\n${notice}` : text;
     // 停止竞态的残余窗口：stop() 在 notice 落列之前就把本消息覆盖成停止文案（此时列还是
     // NULL，withStoredNotice 拼不到），随后本轮的终态更新命中 0 行。已取得的附注不能跟着
@@ -204,8 +208,9 @@ export class ChatService {
       if (room.kind === "side") await sideChatParent(room);
       const format = room.kind === "side" ? sideChatPrompt : isAssistant ? await assistantFormatter(room) : undefined;
       const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail, format, isAssistant ? 9000 : 0);
+      if (room.kind === "side") trace = new ChatTraceLog(message.id);
       const assistantReply = isAssistant ? await invokeAssistant(member, room, prompt, abort.signal, this.invoke) : undefined;
-      const invoked = assistantReply ? { text: "", notice: undefined } : await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId, room.kind === "side" ? { purpose: "side", taskId: room.parentTaskId! } : undefined);
+      const invoked = assistantReply ? { text: "", notice: undefined } : await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId, room.kind === "side" ? { purpose: "side", taskId: room.parentTaskId!, onTrace: trace!.push } : undefined);
       notice = invoked.notice;
       // 落列必须和「补 stopped 正文」是同一条 UPDATE：stop() 可能已在 notice 落列之前把本消息
       // 覆盖成不带附注的停止文案（那时列还是 NULL，withStoredNotice 拼不到）。若分两步写、
@@ -276,6 +281,7 @@ export class ChatService {
       if (!updated.length) await preserveNotice();
     } finally {
       clearTimeout(timer);
+      await trace?.flush();
     }
   }
 }

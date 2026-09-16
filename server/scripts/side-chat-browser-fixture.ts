@@ -46,6 +46,10 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
     const allowed = acceptedSideRequests.includes(source) || source === "方案 B 更省事。把结论告诉主任务，谢谢";
     return { text: JSON.stringify({ decision: judgeMode === "unclear" ? "unclear" : allowed ? "send_now" : "do_not_send", reason: "模拟独立核验结果" }) };
   }
+  // 模拟执行过程：真实 CLI 的工具/思考事件由 invokeChat 转成 onTrace，这里直接给两步，
+  // 好让浏览器用例验「跑的中途看得见、停下/刷新之后还在」。
+  options?.onTrace?.({ kind: "tool", label: "Bash", detail: "git log --oneline | head" });
+  options?.onTrace?.({ kind: "thinking", label: "思考过程", detail: "先确认主任务改了哪些文件" });
   await delay(source.includes("等待") ? 30000 : 350, undefined, { signal });
   return { text: JSON.stringify({ reply: source.includes("告诉主任务") ? "回传结论：选择方案 B，复用现有消息队列，并补上投递回执。" : "**建议选择方案 B。**\n\n主任务继续实现，这里可以单独讨论。\n\n- 复用已持久化的消息队列\n- 支持实时追加时立即送达\n- 回执显示实际投递状态",
     forward: source.includes("告诉主任务") || forceForward ? { text: "选择方案 B，复用现有消息队列，补上投递回执。", authorization: excerptAuthorization ? (source.includes("把结论告诉主任务") ? "把结论告诉主任务" : "告诉主任务") : source } : null }) };

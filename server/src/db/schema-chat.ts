@@ -31,6 +31,10 @@ export const chatMessages = sqliteTable("chat_messages", {
   // 「项目可能被并发改动/观察失效」的安全信息，不能只活在 reply() 的闭包里——进程
   // 崩溃/重启后 stop()/recover() 的固定文案覆盖要靠它把附注拼回正文（service.ts）。
   notice: text("notice"),
+  // 这一条回复的执行过程（ChatTraceEvent[] 的 JSON）。边跑边写：页面每秒拉一次房间
+  // 快照，写进列它就流出来了；跑完、被停、进程崩掉重启之后这份记录仍在原地——这是
+  // 它落列而不是只攒在内存里的理由。
+  trace: text("trace"),
   createdAt: text("created_at").notNull(),
 }, (table) => [index("chat_messages_room").on(table.roomId, table.createdAt)]);
 
@@ -118,6 +122,9 @@ export async function ensureChatSchema(client: Pick<Client, "executeMultiple" | 
   }
   if (!messageColumns.rows.some((column) => column.name === "notice")) {
     await client.execute("ALTER TABLE chat_messages ADD COLUMN notice TEXT");
+  }
+  if (!messageColumns.rows.some((column) => column.name === "trace")) {
+    await client.execute("ALTER TABLE chat_messages ADD COLUMN trace TEXT");
   }
   await client.execute("UPDATE chat_messages SET model_reply=body WHERE role='agent' AND status='done' AND model_reply IS NULL");
   const columns = await client.execute("PRAGMA table_info(chat_context_states)");

@@ -18,6 +18,10 @@
 .side-chat-message .task-markdown { font-size: 13px; line-height: 1.7; }
 .side-chat-message .task-markdown pre { max-width: 100%; font-size: 11px; }
 .side-chat-message.is-failed, .side-chat-message.is-stopped { color: var(--muted); }
+/* 执行过程沿用主会话那套折叠块(.task-execution-block,见 task-conversation.css)，
+   侧栏窄、正文 13px，这里只放开最大宽度并把那身 9.5px 小字抬到侧栏的尺度。 */
+.side-chat-message .task-execution-block { max-width: 100%; margin-bottom: 6px; font-size: 10.5px; }
+.side-chat-message .task-tool-line, .side-chat-message .task-tool-summary { font-size: 10.5px; }
 .side-chat-thinking { margin: 0; color: var(--muted); }
 .side-chat-receipt { margin-top: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 11px; }
 .side-chat-receipt > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); }

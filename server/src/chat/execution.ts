@@ -2,7 +2,8 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { ChatMember } from "@ash/shared/chat";
+import type { ChatMember, ChatTraceEvent } from "@ash/shared/chat";
+import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { expandHome } from "../git.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import { dispatchRejection, executorOwnerScope } from "../auth/dispatch-gate.js";
@@ -21,6 +22,19 @@ export interface ChatInvocation {
   notice?: string;
 }
 
+/** 执行过程的去处：调用方给一个接收器，invoke 按事件发生顺序逐步回调。 */
+type ChatTraceSink = { onTrace?: (event: ChatTraceEvent) => void };
+
+/**
+ * 这次调用是**给谁跑的**。缺省（不带 purpose）就是群聊里被 @ 的那次回复。
+ * purpose 与它的附属字段是一组的（side 必须带 taskId），所以写成可判别联合而不是
+ * 一堆可选字段——写错组合直接编译不过。
+ */
+export type ChatInvokeOptions =
+  | (ChatTraceSink & { purpose?: undefined })
+  | (ChatTraceSink & { purpose: "summary" | "assistant" | "side-authorization" })
+  | (ChatTraceSink & { purpose: "side"; taskId: string });
+
 export class AssistantToolError extends Error {
   constructor(tool: string) {
     super(`助手调用了未开放的工具（${JSON.stringify(tool.slice(0, 80))}）。查询和配置由 ash 内置能力处理；请重新发送消息重试。`);
@@ -38,15 +52,17 @@ function changeNotice({ paths, more, degraded }: { paths: string[]; more: boolea
   return `⚠️ 咨询期间项目目录出现并发变更（${shown}${suffix}）。变更无法归因：可能来自其他任务、验收合并、你自己的操作，也可能是本次咨询越过了只读约定。群聊未代为撤销；如非预期请检查项目。${tail}`;
 }
 
-export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" | "assistant" | "side-authorization" } | { purpose: "side"; taskId: string }): Promise<ChatInvocation> {
+export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: ChatInvokeOptions): Promise<ChatInvocation> {
   signal.throwIfAborted();
+  const purpose = options?.purpose;
+  const onTrace = options?.onTrace;
   const scope = await executorOwnerScope(owner);
   const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
   const user = owner ? (await db.select().from(users).where(eq(users.id, owner))).at(0) : undefined;
   const actor: Actor = scope.owner === undefined ? SINGLE_ACTOR : user
     ? { kind: "user", userId: user.id, role: user.role as Actor["role"], name: user.name }
     : ANONYMOUS_ACTOR;
-  if ((!project || !await canSeeProject(actor, projectId)) && !(options && !projectId && actor.kind !== "anonymous")) throw new Error("聊天项目不存在或你已失去访问权限。");
+  if ((!project || !await canSeeProject(actor, projectId)) && !(purpose !== undefined && !projectId && actor.kind !== "anonymous")) throw new Error("聊天项目不存在或你已失去访问权限。");
   if (member.executorId) {
     const profile = (await db.select().from(agents).where(eq(agents.id, member.executorId))).at(0);
     if (!profile || profile.type !== member.agentType || (scope.owner !== undefined && profile.ownerUserId !== scope.owner)) {
@@ -64,7 +80,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
     if (!parent || parent.projectId !== projectId) throw new Error("侧聊的主任务已不可访问。");
     sideCwd = (await taskFileRoot(parent.id))?.path;
   }
-  const temporary = (options && options.purpose !== "side") || (!sideCwd && !project?.repoPath.trim());
+  const temporary = (purpose !== undefined && purpose !== "side") || (!sideCwd && !project?.repoPath.trim());
   // repoPath 按用户写的原样存（`~/code/x` 保持可读、可搬机器），所以每个消费点都得自己
   // 展开——少这一步，watchChatWorkspace 的 realpath 会直接 ENOENT，被 @ 的成员一个不剩
   // 全报同一条错，而且错在 CLI 起来之前，看着像「智能体坏了」。
@@ -78,12 +94,12 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   try {
     // 观察者只记录变更、不中止（原因见 boundary.ts 顶部）；可归因的只读约束由下面
     // consume 里的工具事件闸门执行。临时目录一次一清，没有可观察的项目。
-    if (!temporary && options?.purpose !== "side") guard = await watchChatWorkspace(cwd);
+    if (!temporary && purpose !== "side") guard = await watchChatWorkspace(cwd);
     signal.throwIfAborted();
     handle = executor.run({
       cwd,
       prompt: withGlobalBrowserPolicy(prompt, "full"),
-      extraArgs: (options?.purpose === "assistant" || options?.purpose === "side-authorization") && executor.type === "claude"
+      extraArgs: (purpose === "assistant" || purpose === "side-authorization") && executor.type === "claude"
         ? ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-chrome"] : undefined,
       env: { ...env, ASH_TASK_ID: undefined, ASH_TURN_TOKEN: undefined, ASH_DIRECTION_TOKEN: undefined },
     });
@@ -93,16 +109,22 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
       let text = "";
       let exitStatus: number | undefined;
       for await (const event of handle!.events) {
-        if (event.kind === "tool" && options?.purpose === "side-authorization") throw new ChatBoundaryError("回传授权核验调用使用了工具，核验未采用");
-        if (event.kind === "tool" && options?.purpose === "summary") throw new ChatBoundaryError("后台摘要调用使用了工具，摘要未采用");
-        if (event.kind === "tool" && options?.purpose === "assistant") throw new AssistantToolError(event.name);
+        // 执行过程按发生顺序记一行，位置在各道闸**之前**：被闸拦下的那一步也要留在记录里，
+        // 否则用户只看到「回复被中止」，看不出是撞在哪一步上。子智能体的内部事件不记
+        // （isVisibleExecutionEvent），跟主会话同一把尺子。
+        if (event.kind === "tool" && isVisibleExecutionEvent(event)) onTrace?.({ kind: "tool", label: event.name, detail: event.detail });
+        else if (event.kind === "thinking") onTrace?.({ kind: "thinking", label: "思考过程", detail: event.text });
+        else if (event.kind === "error" && event.level !== "notice") onTrace?.({ kind: "error", label: event.message });
+        if (event.kind === "tool" && purpose === "side-authorization") throw new ChatBoundaryError("回传授权核验调用使用了工具，核验未采用");
+        if (event.kind === "tool" && purpose === "summary") throw new ChatBoundaryError("后台摘要调用使用了工具，摘要未采用");
+        if (event.kind === "tool" && purpose === "assistant") throw new AssistantToolError(event.name);
         // 侧聊不走只读闸门（用户 2026-09-15 指定）：它跑在主任务自己的工作目录里，用户在侧栏
         // 让它「去核查一下」时就是要它跑命令、必要时动手改。闸门的分类器只认白名单里的裸命令，
         // 一个 `git log --oneline | head` 就被判成「无法确认只读」，把整次咨询连回复一起中止。
         // 群聊/助手/摘要仍受闸门约束——那些跑在项目主仓或临时目录里，和任务无绑定关系。
         // 任务结算类写入不靠这条闸门挡：侧聊的 env 不带 ASH_TURN_TOKEN，complete_task 一类
         // MCP 写入在服务端就会被拒。
-        if (event.kind === "tool" && options?.purpose !== "side" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
+        if (event.kind === "tool" && purpose !== "side" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
         signal.throwIfAborted();
         if (event.kind === "text") text += event.text;
         if (text.length > 32000) throw new Error("聊天回复过长，已中止。请把复杂工作交给任务。");

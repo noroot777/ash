@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
-import type { ChatMember, ChatSnapshot } from "@ash/shared/chat";
+import type { ChatMember, ChatSnapshot, ChatTraceEvent } from "@ash/shared/chat";
+import { CHAT_TRACE_LIMITS } from "@ash/shared/chat";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-side-chat-test-"));
 process.env.ASH_DB = join(stage, "test.db");
@@ -14,6 +15,7 @@ process.env.ASH_RUNS_DIR = join(stage, "runs");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects, tasks, sessions, chatRooms, chatMessages, scheduledMessages, chatContextEntries, users, projectMembers } = await import("../src/db/schema.js");
 const { ChatService, roomMessages } = await import("../src/chat/service.js");
+const { ChatTraceLog } = await import("../src/chat/trace.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { sideChatHistory } = await import("../src/chat/side-routes.js");
 const { settleSideChat } = await import("../src/chat/side-delivery.js");
@@ -52,6 +54,8 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
     return { text: JSON.stringify({ decision: judgeFailure === "unclear" ? "unclear" : acceptedSideRequests.includes(source) ? "send_now" : "do_not_send", reason: "模拟独立语义核验结果" }) };
   }
   prompts.push(prompt);
+  options?.onTrace?.({ kind: "tool", label: "Bash", detail: "git log --oneline | head" });
+  options?.onTrace?.({ kind: "thinking", label: "思考过程", detail: "先确认主任务改了哪些文件" });
   if (held) await delay(10000, undefined, { signal });
   const source = JSON.parse(prompt.split("【当前用户消息】\n").at(-1)!) as string;
   await delay(5);
@@ -87,6 +91,19 @@ try {
   await send("分析方案", "user-first");
   assert.match(prompts[0]!, /方案 A.*方案 B/s);
   assert.doesNotMatch(prompts[0]!, /后续主任务新内容/);
+  const traced = (await snapshot("side-room")).messages.at(-1)!;
+  assert.deepEqual(traced.trace, [
+    { kind: "tool", label: "Bash", detail: "git log --oneline | head" },
+    { kind: "thinking", label: "思考过程", detail: "先确认主任务改了哪些文件" },
+  ], "回复带上这一轮的执行过程");
+  assert.ok((await db.select().from(chatMessages).where(eq(chatMessages.id, traced.id)))[0]!.trace, "执行过程落库，刷新/重启后仍在");
+  await db.insert(chatMessages).values({ id: "trace-cap", roomId: "side-room", role: "agent", author: "侧聊助手", status: "done", body: "上限", createdAt: timestamp });
+  const capped = new ChatTraceLog("trace-cap", 0);
+  for (let step = 0; step < CHAT_TRACE_LIMITS.events * 3; step++) capped.push({ kind: "tool", label: "Bash", detail: `第 ${step} 步`.repeat(20) });
+  await capped.flush();
+  const cappedTrace = JSON.parse((await db.select().from(chatMessages).where(eq(chatMessages.id, "trace-cap")))[0]!.trace!) as ChatTraceEvent[];
+  assert.ok(cappedTrace.length <= CHAT_TRACE_LIMITS.events, "执行过程有封顶，不会把快照撑爆");
+  assert.match(cappedTrace.at(-1)!.label, /上限/, "截断要说出来，不能静默停记");
   fakeReply = "继续分析的详细结论。";
   await send("接着说", "user-second");
   assert.equal(judgedSources.length, 0, "普通侧聊不额外调用授权核验");
@@ -184,10 +201,12 @@ try {
   held = true;
   await req("/chats/side-room/messages", { body: "等待长回复", id: "user-stop" });
   await until(async () => (await snapshot("side-room")).messages.at(-1)?.status === "running");
+  await until(async () => !!(await snapshot("side-room")).messages.at(-1)?.trace?.length);
   assert.equal((await req("/chats/side-room/messages", { body: "竞争消息", id: "user-concurrent" })).status, 409);
   await req("/chats/side-room/stop", {});
   await delay(20);
   assert.equal((await snapshot("side-room")).messages.at(-1)?.status, "stopped");
+  assert.equal((await snapshot("side-room")).messages.at(-1)?.trace?.[0]?.label, "Bash", "停止之后仍看得见它停之前做了什么");
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, "parent")))[0]!.status, "running");
   assert.equal(kills, 0);
   held = false;

@@ -2,6 +2,7 @@ import { useRef } from "react";
 import type { Task } from "@ash/shared";
 import type { ChatMessage } from "@ash/shared/chat";
 import { ArrowDown, ArrowBendUpLeft, Plus } from "@phosphor-icons/react";
+import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
@@ -13,9 +14,15 @@ const receiptLabels = { queued: "已排队 · 主任务空闲后发送", deliver
 
 function SideMessage({ message }: { message: ChatMessage }) {
   const busy = message.status === "queued" || message.status === "running";
+  // 执行过程跟主会话同一个折叠块：跑的中途露在外面（服务端边跑边写，见 chat/trace.ts），
+  // 跑完/被停之后仍留在回复上方折着。有过程可看时就不再说「正在思考…」——那句话此刻
+  // 反而比真实进度少。
+  const trace = message.trace ?? [];
   return <article className={`side-chat-message is-${message.role} is-${message.status}`}>
     <header><strong>{message.role === "user" ? "你" : message.role === "system" ? "ash" : "侧聊助手"}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>
-    {busy ? <p className="side-chat-thinking" role="status">{message.status === "queued" ? "等待回复…" : "正在思考…"}</p> : <MarkdownBody text={message.body} />}
+    {!!trace.length && <ExecutionDetails events={trace} running={busy} />}
+    {busy && !trace.length && <p className="side-chat-thinking" role="status">{message.status === "queued" ? "等待回复…" : "正在思考…"}</p>}
+    {!busy && <MarkdownBody text={message.body} />}
     {message.forwardError && <p className="side-chat-error" role="status">未发送到主任务：{message.forwardError}</p>}
     {message.forward && <details className={`side-chat-receipt is-${message.forward.status}`}>
       <summary><ArrowBendUpLeft size={14} /><span>{receiptLabels[message.forward.status]}</span></summary>
