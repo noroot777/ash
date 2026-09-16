@@ -39,6 +39,29 @@ assert.throws(() => snapshotConversationFork(task, [{ ...target, session: { ...s
 assert.equal(canForkReply({ ...target, endedAt: null }), false);
 assert.equal(canForkReply({ ...target, markdown: "" }), false);
 assert.throws(() => snapshotConversationFork(task, [{ ...target, endedAt: null }], target.id));
+
+// 引导打断的半截不给派生：真人的话直接投进正在跑的会话（原生引导不结束回合，所以没有
+// agentEnd），.md 却已经被那条 sentinel 切成两段。上半截白得一个「结束时刻」，看着像说完
+// 的一条回复 —— 派生带走的是截至它的整份上下文，拿半截当落点就是把没说完的话当结论。
+const steerSession = { ...session, id: "s2", endedAt: "2026-09-16T08:36:00Z" } as Session;
+const steered = buildConversationItems([{
+  session: steerSession,
+  output: "官方能力边界已确认，我接着核对本地这一段\n"
+    + marker("user", "我的意思是在 ash 的输入框里 / 怎么没有 image-gen 这个 skill", "2026-09-16T08:24:50.564Z")
+    + "明白了：你问的是斜杠菜单\n" + marker("agentEnd", "", "2026-09-16T08:27:09.253Z")
+    + marker("user", "可以，加上吧", "2026-09-16T08:30:15.783Z")
+    + "已加上。\n" + marker("agentEnd", "", "2026-09-16T08:35:53.943Z"),
+}], [steerSession], []);
+const steeredReplies = steered.filter((item) => item.kind === "agent");
+assert.equal(steeredReplies.length, 3);
+assert.equal(steeredReplies[0]!.interrupted, true, "被引导打断的半截要认出来");
+assert.equal(canForkReply(steeredReplies[0]!), false, "半截回复不给派生入口");
+assert.throws(() => snapshotConversationFork(task, steered, steeredReplies[0]!.id), /引导打断/);
+// 自己收过口（agentEnd）的那两轮照常可派生 —— 后面同样跟着真人发言，不能一起误伤。
+assert.equal(steeredReplies[1]!.interrupted, false, "落过 agentEnd 的一轮是自己说完的");
+assert.ok(canForkReply(steeredReplies[1]!));
+assert.ok(canForkReply(steeredReplies[2]!));
+assert.ok(snapshotConversationFork(task, steered, steeredReplies[1]!.id).fork.context.includes("明白了"));
 const longReply = { ...target, markdown: "长文本".repeat(50_000) };
 assert.ok(snapshotConversationFork(task, [longReply], target.id).fork.context.includes(longReply.markdown));
 const oversized = snapshotConversationFork(task, [longReply], target.id).fork;

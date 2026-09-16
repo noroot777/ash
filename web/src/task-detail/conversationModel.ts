@@ -40,6 +40,17 @@ export type ConversationItem =
       at?: string | null;
       endedAt?: string | null;
       markerEndedAt?: string | null;
+      /**
+       * 这一轮**没有自己收口**：收口时刻是拿下一条真人插话推出来的（引导打断）。
+       *
+       * 原生引导不结束回合 —— 真人的话直接投进正在跑的会话，agent 接着说，.md 上却已经
+       * 被那条 sentinel 切成了两段。上半截于是白得一个「结束时刻」，看着像一条说完的回复，
+       * 还挂出「派生新任务」。派生要拿**整条回复**当上下文，半截不算（用户 2026-09-16 报的）。
+       *
+       * 判据是「自己收过口没有」：服务端记的 agentEnd（markerEndedAt）、或直播那一路的回合
+       * 边界事件。两样都没有、收口纯靠下一条真人插话推断的，就是这里说的半截。
+       */
+      interrupted?: boolean;
       showSessionMeta?: boolean;
       /** 上一条说话的还是同一个会话、中间只隔着旁注：接着上一段说，不再重报头像和执行器名。 */
       continuation?: boolean;
@@ -519,17 +530,31 @@ export function buildConversationItems(
   // 的那些回合就没有)拿它当上界:再往下兜底的是整条会话的 endedAt,一串气泡就会同时以
   // 会话结束时刻收尾,用时排成一列越往下越短、末条 0s 的假数据。
   let nextAgentAt: string | null = null;
+  // 下面那条插话是**真人**说的（引导），还是回合边界事件。两者都能给上一颗气泡收口，但
+  // 只有后者证明那一轮是自己说完的 —— 前者只说明「说到一半被打断了」。
+  let interjectedByUser = false;
+  // 这颗气泡下面已经落过回合边界事件（直播那一路的「本回合结束」/「本轮执行结束」）。
+  // 它们不带 at（收口时刻另有来源），所以得单独记一笔，不能靠 nextInterjectionAt 认。
+  let closedBelow = false;
   let rightSessionId: string | undefined;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
     // 旁注不收回合：一条还在飞的回合被它按上结束时刻，就会当场折叠、还挂出「派生新任务」
     //（用户 2026-09-14 反馈）。真回合结束自有 markerEndedAt / 回合边界事件来报。
     if (item.kind === "event" && item.aside) continue;
-    if (item.kind === "user" || item.kind === "event") nextInterjectionAt = item.at ?? nextInterjectionAt;
+    if (item.kind === "event" && item.variant === "boundary") closedBelow = true;
+    if (item.kind === "user" || item.kind === "event") {
+      if (item.at) {
+        nextInterjectionAt = item.at;
+        interjectedByUser = item.kind === "user";
+      }
+    }
     if (item.kind !== "agent") continue;
     if (item.sessionId !== rightSessionId) {
       nextInterjectionAt = null;
       nextAgentAt = null;
+      interjectedByUser = false;
+      closedBelow = false;
       rightSessionId = item.sessionId;
     }
     // 推断分三档，**挨个试**，谁先满足「不早于回合起点」就用谁：一条回合不可能在开始之前
@@ -541,7 +566,12 @@ export function buildConversationItems(
       inferredRunEnd(item.at, runBounds.get(item.sessionId)),
     ].find((candidate) => endsAfterStart(item.at, candidate)) ?? null;
     item.endedAt = item.markerEndedAt ?? inferred;
+    // 收口全靠下一条真人插话推出来 = 这一轮是被引导打断的半截（见 interrupted）。
+    item.interrupted = !item.markerEndedAt && !closedBelow && interjectedByUser
+      && !!nextInterjectionAt && inferred === nextInterjectionAt;
     nextAgentAt = item.at ?? nextAgentAt;
+    // 边界事件只给它正上方那一颗作数，再往上就是别的回合了。
+    closedBelow = false;
   }
 
   // 会话累计有两个来源：sessions 行是服务端账本（权威、跨刷新），但它要等下一次

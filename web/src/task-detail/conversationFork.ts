@@ -28,15 +28,24 @@ export type ConversationFork = {
   attachmentPaths: string[];
 };
 
+/**
+ * 这条回复能不能当派生的落点。
+ *
+ * 除了「说完了、且确实说了话」，还要求这一轮是**自己收的口**：被下一条引导打断的半截
+ * （`interrupted`）看着有结束时刻，其实话没说完 —— 派生带走的是截至这条回复的整份上下文，
+ * 半截回复当落点就是把一句没说完的话当结论（用户 2026-09-16 报的）。
+ */
 export function canForkReply(item: ConversationItem): boolean {
-  return item.kind === "agent" && !!item.endedAt && !!item.markdown.trim();
+  return item.kind === "agent" && !!item.endedAt && !item.interrupted && !!item.markdown.trim();
 }
 
 export function snapshotConversationFork(task: Task, items: ConversationItem[], replyId: string) {
   const cutoff = items.findIndex((item) => item.id === replyId);
   const reply = items[cutoff];
   if (!reply || reply.kind !== "agent" || !canForkReply(reply)) {
-    throw new Error("这条回复尚未完成，请等回复结束后再派生。");
+    throw new Error(reply?.kind === "agent" && reply.interrupted
+      ? "这条回复被后面的引导打断了，不是完整的一轮，请挑一条说完的回复再派生。"
+      : "这条回复尚未完成，请等回复结束后再派生。");
   }
   const history = items.slice(0, cutoff + 1);
   if (history.some((item) => item.kind === "agent" && item.session && item.session.taskId !== task.id)) {
