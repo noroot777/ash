@@ -15,9 +15,10 @@ delete process.env.ASH_LAX_DONE;
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, freeReviewRounds, freeReviewRuns, projects, reviewerProfiles, sessions, tasks } = await import("../src/db/schema.js");
+  const { agents, freeReviewRounds, freeReviewRuns, projects, reviewerProfiles, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { consumeSingleRun } = await import("../src/single-run.js");
+  const { pendingMessageRow } = await import("../src/pending-messages.js");
   const { freeWorkflowState, handleFreeWorkflowSettlement, reportFreeReviewConclusion, reserveFreeReview } = await import("../src/free-workflow.js");
   const { freeReviewReportPath } = await import("../src/free-review-files.js");
   const { claimTurn, confirmDone, markStopped } = await import("../src/runs.js");
@@ -42,6 +43,8 @@ try {
     truncated?: boolean;
     role?: "single" | "reviewer";
     reserve?: boolean;
+    /** 托盘里排着的待发送消息（结算时要给它让路）。 */
+    pending?: { mode: "queued" | "timed"; sendAt?: string };
     reviewConclusion?: "verified" | "verify_failed" | null;
   } = {}) {
     const role = options.role ?? "single";
@@ -61,6 +64,12 @@ try {
       cwd: root, startedAt: at, turnStartedAt: at,
     });
     assert.equal(claimTurn(id, role), true);
+    if (options.pending) {
+      await db.insert(scheduledMessages).values(pendingMessageRow({
+        taskId: id, text: "再补一句", mode: options.pending.mode,
+        ...(options.pending.sendAt ? { sendAt: new Date(options.pending.sendAt) } : {}),
+      }));
+    }
     if (options.reserve !== false) {
       await reserveFreeReview(id, { reviewerId: "reviewer", checkMode: "logic", retryLimit: 1 });
     }
@@ -174,6 +183,30 @@ try {
     if (options.stopped || options.exitStatus) assert.match(result.transcript, /预约审查仍在等待/);
   }
 
+  // ── 排队消息优先于预约审查 ──
+  // 用户排在托盘里的那几句是给实现会话的后续指令，审查该看的是它们都说完之后的工作区。
+  const queued = await runTurn("pending-queued", { followUp: true, pending: { mode: "queued" } });
+  assert.equal(queued.state.reviewReservation.armed, true, "有排队消息时预约必须原样留在槽里");
+  assert.equal(queued.state.reviews.length, 0, "排队消息还没发完就不能开审");
+  assert.match(queued.transcript, /预约审查仍在等待：还有排队消息/);
+  // 消息真进了会话之后的那一轮结算：托盘空了，预约照常兑现 —— 让过一次不等于丢掉。
+  await db.update(scheduledMessages).set({ status: "sent", sentAt: at })
+    .where(eq(scheduledMessages.taskId, "pending-queued"));
+  await handleFreeWorkflowSettlement("pending-queued", queued.task.status, false, true);
+  const afterSent = await freeWorkflowState("pending-queued");
+  assert.equal(afterSent.reviewReservation.armed, false, "消息发完后预约必须被消费");
+  assert.equal(afterSent.reviews.length, 1, "消息发完后审查照常开跑");
+
+  // 定时消息只有到点了才算「该发的」：定在一小时后的那条不能把审查挡一小时。
+  const future = await runTurn("pending-timed-future", {
+    followUp: true, pending: { mode: "timed", sendAt: new Date(Date.now() + 3_600_000).toISOString() },
+  });
+  assert.equal(future.state.reviews.length, 1, "没到钟点的定时消息不挡审查");
+  assert.equal(future.state.reviewReservation.armed, false);
+  const due = await runTurn("pending-timed-due", { followUp: true, pending: { mode: "timed", sendAt: at } });
+  assert.equal(due.state.reviews.length, 0, "已经到点的定时消息同样要先发完");
+  assert.equal(due.state.reviewReservation.armed, true);
+
   const noReservation = await runTurn("no-reservation", { followUp: true, reserve: false });
   assert.equal(noReservation.state.reviews.length, 0, "没有用户预约不自动开审");
   const confirmed = await runTurn("confirmed", { confirmed: true });
@@ -182,7 +215,7 @@ try {
   const prompt = FOLLOW_UP_REMINDER("free", "done", false, false, "", true);
   assert.match(prompt, /已预约的审查会在执行回合正常结束后独立触发/);
   assert.doesNotMatch(prompt, /不确认它们就一直停在原地/);
-  console.log("✓ 真实单任务收流：漏确认仍派预约审查，完成协议不变；中断、等待、原生命令与审查回合不消费预约");
+  console.log("✓ 真实单任务收流：漏确认仍派预约审查，完成协议不变；排队消息先发完再开审；中断、等待、原生命令与审查回合不消费预约");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

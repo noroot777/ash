@@ -92,6 +92,13 @@ export type DeliveryVerdict =
   | { action: "wait" }
   | { action: "cancel"; reason: string };
 
+// 「这条消息到点了没」的单点判据:定时消息看钟点,排队消息压根不看(它要的就是
+// 「一空闲就发」)。抽出来是因为结算那边也要问同一句话(hasDeliverablePendingMessages),
+// 各写一份迟早漂移——真漂了的后果是一条定在明天的消息把预约审查挡一整天。
+export function isDueForDelivery(message: DeliveryMessageView, at: Date): boolean {
+  return message.mode === "queued" || new Date(message.sendAt) <= at;
+}
+
 // 投递判定的纯函数核心(单测 server/scripts/test-pending-messages.ts)。
 // 三档:发、等、取消。取消只给「永远等不到了」的情形——任务没了/归档/类型不支持
 // 回复;「任务在忙」永远是等,不是取消。
@@ -104,8 +111,7 @@ export function deliveryVerdict(
   if (task.archived) return { action: "cancel", reason: "任务已归档" };
   if (task.mode !== "single" && task.mode !== "team")
     return { action: "cancel", reason: `任务类型 ${task.mode} 不支持回复` };
-  // 定时消息先看钟点;排队消息压根不看(它要的就是「一空闲就发」)。
-  if (message.mode !== "queued" && new Date(message.sendAt) > at) return { action: "wait" };
+  if (!isDueForDelivery(message, at)) return { action: "wait" };
   // 常驻调度台(team)正在说话时也接得住,所以只有单任务需要等它闲下来。
   if (task.mode === "single" && (task.status === "running" || task.status === "queued"))
     return { action: "wait" };
@@ -331,4 +337,29 @@ export function flushPendingForTask(taskId: string): void {
   void deliverPendingMessages(taskId).catch((err) =>
     console.error(`[ash] deliverPendingMessages(${taskId}) failed:`, err),
   );
+}
+
+/**
+ * 托盘里还有没有「此刻就该送进会话」的消息。给结算那边让路用(见 free-workflow.ts
+ * `handleFreeWorkflowSettlement` 的让路一节)。
+ *
+ * 不算数的三类,判据与投递路径同源,免得两边对「还有消息等着」的理解分家:
+ * - 还没到钟点的定时消息(`isDueForDelivery`):它不是「这一轮的追问」,让它挡住审查等于
+ *   把一条定在明天的消息变成审查的开关;
+ * - 归档任务 / 不支持回复的任务类型:这些消息下一次投递就会被 `deliveryVerdict` 取消掉,
+ *   挡不住谁,却会让预约永远等一个不会发生的回合;
+ * - 已被别的路径抢走租约(`deliveringSince` 非空)的除外——它仍在送,仍然算数。
+ */
+export async function hasDeliverablePendingMessages(taskId: string, at = new Date()): Promise<boolean> {
+  const task = (await db
+    .select({ mode: tasks.mode, archived: tasks.archived })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))).at(0);
+  if (!task || task.archived) return false;
+  if (task.mode !== "single" && task.mode !== "team") return false;
+  const rows = await db
+    .select({ mode: scheduledMessages.mode, sendAt: scheduledMessages.sendAt })
+    .from(scheduledMessages)
+    .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
+  return rows.some((m) => isDueForDelivery(m, at));
 }
