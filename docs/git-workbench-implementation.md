@@ -171,7 +171,7 @@ Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 S
 
 ## 按原设计稿重做（2026-09-15）
 
-本轮以 `docs/ui-demo-git-workbench/` 的页面结构和样式为依据重写工作台；原稿文件没有改动。Git 路由在 `WorkspaceShell` 中独立渲染，铺满视口。左侧仅保留原稿的七项 Git 导航；点击左上角图标或选项中的返回入口恢复 ash 工作区，任务模式快捷键也能退出 Git 页。
+本轮以 `docs/ui-demo-git-workbench/` 的页面结构和样式为依据重写工作台；原稿文件没有改动。Git 路由在 `WorkspaceShell` 中独立渲染，铺满视口。左侧仅保留原稿的七项 Git 导航；点击左上角或选项中的返回入口恢复 ash 工作区，任务模式快捷键也能退出 Git 页。
 
 复用原稿的浅色配色、字体、细分隔线、小型控件、菜单与留白：顶部 46px、Git 导航 150px、变更文件栏 340px，提交框固定在文件栏底部；历史采用紧凑提交图与右侧详情，分支/标签采用列表，贮藏原地展开，工作树采用卡片，日志先展示仓库锁。冲突解决器独占视口，保留文件导航、双方版本、逐块选择和最终结果编辑；变基与危险操作使用原稿的紧凑弹窗。
 
@@ -208,3 +208,9 @@ Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 S
 新增浏览器专项已接入 `web test:git-workbench`，完整五套串行回归均退出码 0，日志为 `full-web-git-workbench.log`；最新版专项另行通过，日志为 `post-fix.log`。真实页面验证无尾换行差异的整文件暂存/取消暂存/丢弃可执行，正常双块差异仍能只丢弃一个块；66 条提交的历史列表、分支列表和标签列表实际滚动后菜单关闭，菜单内部滚动、鼠标点击和方向键选择仍指向原目标。已人工核对无尾换行两种状态的指引及历史菜单滚动前后截图。
 
 本轮测试的后端、Vite、无头 Chrome 及临时 profile 已关闭或清理，默认临时截图目录已删除，保留任务证据目录。修改的代码文件均少于 700 行，`git diff --check` 通过。
+
+## 显式返回按钮（2026-09-16）
+
+左上角返回入口改为可见的左箭头和「返回」文字，沿用退出工作台、恢复 ash 工作区及原任务上下文的现有逻辑。`web build` 与现有 `test:git-workbench-design` 均通过；真实 `WorkspaceShell` 验证点击按钮后侧栏恢复，截图已核对。
+
+本轮具名后台扩展重试返回 `unsupported Codex auth method: apikey`，因此采用独立临时 profile 的无头 Chromium。截图、日志与扩展错误原文保存在 `/Users/fjh/code/harness/data/runs/Y_sgd0mNlRXp/back-button-20260916/`；测试后端、Vite 和 Chromium 已清理。

@@ -42,8 +42,9 @@ export function WorkbenchHeader({
   return (
     <header className="gwb-header topbar">
       <div className="top-left">
-        <button className="logo" aria-label="退出 Git 工作台" onClick={onExit}>
-          <GitBranch size={16} />
+        <button type="button" className="top-btn" aria-label="返回 ash 工作区" onClick={onExit}>
+          <ArrowLeft size={14} />
+          <span>返回</span>
         </button>
         <WorkbenchMenu
           className="repo-name"
