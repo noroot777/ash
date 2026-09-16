@@ -84,6 +84,25 @@ function appendAgentAttachment(agent: AgentItem, path: string): void {
   if (!segment.attachments.includes(path)) segment.attachments.push(path);
 }
 
+/**
+ * 这颗气泡属不属于「此刻还在飞的那一轮」。
+ *
+ * 判据是**不早于本回合起点**，不是「恰好等于」。等于曾经够用，是因为落盘气泡的 `at` 一般
+ * 就取会话行上的 `turnStartedAt`；但真人在回合中途插一句话时（消息直接投进正在跑的会话，
+ * 服务端**不开新回合**、`turnStartedAt` 原地不动），落盘那一路会把插话之后的发言另起一颗
+ * 气泡、并按插话时刻给它编号 —— 于是 `at` 比 `turnStartedAt` 晚了一截，等号当场落空。
+ *
+ * 落空的后果正是这个函数要防的那件事：后续工具事件认不回那颗气泡，被旁注一劈就另开一颗
+ * （用户 2026-09-15 反馈的「预约审查打断了正在执行的工具」）。而换成新一轮时，会话行上的
+ * `turnStartedAt` 会推到更晚，旧气泡自然落在它前面，照旧挡得住。
+ */
+function withinCurrentTurn(at: string | null | undefined, turnStartedAt: string): boolean {
+  if (at === turnStartedAt) return true;
+  const start = Date.parse(turnStartedAt);
+  const itemTime = at ? Date.parse(at) : Number.NaN;
+  return Number.isFinite(start) && Number.isFinite(itemTime) && itemTime >= start;
+}
+
 function appendAgent(items: ConversationItem[], event: LiveAgentEvent, sessions: Session[]): AgentItem {
   const session = sessions.find((candidate) => candidate.id === event.sessionId);
   const last = items[items.length - 1];
@@ -97,13 +116,20 @@ function appendAgent(items: ConversationItem[], event: LiveAgentEvent, sessions:
   );
   let current = last && sameSpeaker(last) ? last : undefined;
   const turnStartedAt = session ? latestTurnStart(session) ?? session.startedAt : null;
-  // 旁注可能在当前回合仍流式输出时插进来；只跨过同会话旁注找“本回合起点一致”的气泡。
-  // 这样工具、用量和后续正文仍写回当前回合，而新一轮的系统起始提示不会吞掉上一回合。
+  // 旁注可能在当前回合仍流式输出时插进来；跨过它找「还在飞的那一轮」的气泡，这样工具、
+  // 用量和后续正文仍写回当前回合，而新一轮的系统起始提示不会吞掉上一回合。
+  //
+  // 任务时间线旁注（`aside`）跨过去不看是谁家的：服务端把它挂在**最新**那条会话上，而正在
+  // 跑的可能是更早那条（用户 @ 过别人就会多一条会话），按会话号认就跨不过去了。非 aside
+  // 的系统注记仍只跨同会话的 —— 那种是真说给 agent 听的话，可能正是新一轮的起点。
   if (!current && turnStartedAt) {
     for (let index = items.length - 1; index >= 0; index -= 1) {
       const candidate = items[index]!;
-      if (candidate.kind === "event" && candidate.variant === "note" && candidate.sessionId === event.sessionId) continue;
-      if (sameSpeaker(candidate) && candidate.at === turnStartedAt && !candidate.markerEndedAt) current = candidate;
+      if (candidate.kind === "event" && candidate.variant === "note"
+        && (candidate.aside === true || candidate.sessionId === event.sessionId)) continue;
+      if (sameSpeaker(candidate) && withinCurrentTurn(candidate.at, turnStartedAt) && !candidate.markerEndedAt) {
+        current = candidate;
+      }
       break;
     }
   }

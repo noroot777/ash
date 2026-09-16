@@ -63,6 +63,37 @@ function traceGroupKey(
 }
 
 /**
+ * 一条 sentinel 之后，这一回合的 trace 实际从哪一刻起头。
+ *
+ * .md 里 sentinel 的时刻只是个**下界**：服务端先写时间线旁注，再去等会话空闲、动态
+ * import、查冻结、解析执行器、prepareResume，最后才生成 `turnStart` 落进 trace —— 中间
+ * 隔上几秒是正常路径。一超出 `traceGroupKey` 那点兜底窗口，这一回合的正文就领不到自己
+ * 那一组事件：正文一颗气泡、工具掉进另一颗「无正文兜底气泡」，看着又是「旁注把回合劈成
+ * 两半」（第 2 轮审查报的）。
+ *
+ * 取 `[sentinelAt, until)` 里**最早**的那一组：`until` 是 .md 给出的下一个切点，越过它就
+ * 是别人的回合了。常规情形下 splitTraceGroupAt 已经在 sentinel 处建好组，找到的就是
+ * sentinel 自己那一刻，行为不变；一组都够不着就返回 null，仍按 sentinel 的时刻走。
+ */
+export function traceTurnStartAt(
+  groups: Map<string, SessionTraceEntry[]>,
+  consumed: Set<string>,
+  sentinelAt: string,
+  until?: string,
+): string | null {
+  const start = Date.parse(sentinelAt);
+  if (!Number.isFinite(start)) return null;
+  const boundary = until ? Date.parse(until) : Number.NaN;
+  const limit = Number.isFinite(boundary) ? boundary : Number.POSITIVE_INFINITY;
+  return [...groups.keys()]
+    .filter((key) => !consumed.has(key))
+    .map((key) => ({ key, at: Date.parse(key) }))
+    .filter(({ at }) => Number.isFinite(at) && at >= start && at < limit)
+    .sort((left, right) => left.at - right.at)
+    .at(0)?.key ?? null;
+}
+
+/**
  * 在一次真人插话处切开仍在飞的那一组 trace：插话之后的事件重新挂到插话时间上，
  * 好让插话后那一段发言（或没有正文时的兜底气泡）领得到。
  *
