@@ -50,6 +50,7 @@ export function Changes({
   const [diffResult, setDiffResult] = useState<{
     selectionKey: string;
     version: string;
+    revision: number;
     value: GitDiff;
   } | null>(null);
   const selectionKey = JSON.stringify([projectId, data.root, selection?.source, selection?.path]);
@@ -88,10 +89,11 @@ export function Changes({
       return;
     }
     setLoading(true);
+    if (w.busy) return;
     workbenchApi
       .diff(projectId, data.root, selection)
       .then((value) => {
-        if (alive) setDiffResult({ selectionKey, version: data.version, value });
+        if (alive) setDiffResult({ selectionKey, version: data.version, revision: w.revision, value });
       })
       .catch((error: Error) => {
         if (alive) setDiffError(error.message);
@@ -102,7 +104,7 @@ export function Changes({
     return () => {
       alive = false;
     };
-  }, [projectId, data.root, data.version, selection, selectionKey]);
+  }, [projectId, data.root, data.version, selection, selectionKey, w.busy, w.revision]);
   const discard = (files: GitFile[], source: Source) =>
     ask({
       title: source === "untracked" ? "删除未跟踪文件" : "丢弃未暂存改动",
@@ -412,11 +414,12 @@ export function Changes({
           )}
         </div>
         <DiffView
-          key={`${selectionKey}:${diff?.diff}`}
+          key={selectionKey}
           value={diff}
           loading={loading && !diff}
           error={diffError}
           actionsDisabled={w.blocked || loading || !diffReady}
+          selectionDisabled={w.blocked || diffResult?.revision !== w.revision}
           refreshing={!!diff && (loading || !diffReady)}
           select={
             selection && currentFile && selection.source !== "untracked" && diff

@@ -30,8 +30,12 @@
 .gwb-design .commit-input { box-sizing: border-box; font-family: inherit; color: var(--ink); }
 .gwb-design .gwb-worktree-summary { font-size: 11px; color: var(--faint); margin: 4px 4px 14px; overflow-wrap: anywhere; }
 .gwb-design .gwb-empty { color: var(--faint); font-size: 12px; text-align: center; padding: 30px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.gwb-design .gwb-detail-pane { min-height: 0; }
-.gwb-design .gwb-diff-shell { min-height: 0; }
+.gwb-design .changes-view, .gwb-design .gwb-detail-pane { min-height: 0; }
+.gwb-design .gwb-diff-shell { min-height: 0; display: flex; flex: 1; flex-direction: column; }
+.gwb-design .gwb-diff-shell > .diff-scroll { min-height: 0; }
+.gwb-design .gwb-diff-footer { flex-shrink: 0; padding: 10px 16px; border-top: .5px solid var(--line); background: var(--panel); }
+.gwb-design .gwb-diff-footer .diff-tip { margin: 0; }
+.gwb-design .gwb-diff-feedback { margin: 0 0 8px; font-size: 11px; color: var(--muted); }
 .gwb-design .gwb-diff-line { border: none; border-radius: 0; box-shadow: none; width: 100%; padding: 0; text-align: left; min-height: 16px; font: inherit; }
 .gwb-design button.gwb-diff-line.is-hunk { width: auto; font: 10px var(--font-mono); min-height: 18px; color: #4f58a8; }
 .gwb-design .diff-lines { overflow-x: auto; }
@@ -39,7 +43,7 @@
 .gwb-design .gwb-diff-number { user-select: none; }
 .gwb-design .gwb-raw-diff { font: 10.5px/1.6 var(--font-mono); white-space: pre; overflow: auto; margin: 0; padding: 10px; border: .5px solid var(--line); border-radius: 8px; }
 .gwb-design .diff-tip { flex-wrap: wrap; }
-.gwb-design .gwb-diff-discard-hint { margin: 8px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; }
+.gwb-design .gwb-diff-discard-hint { margin: 0 0 8px; color: var(--muted); font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; }
 .gwb-design .gwb-history-split { display: flex; flex: 1; min-height: 0; position: relative; }
 .gwb-design .gwb-history-list { overflow: hidden; flex: 0 0 var(--gwb-history-width); }
 .gwb-design .gwb-history-resize { position: absolute; z-index: 2; top: 0; bottom: 0; left: var(--gwb-history-width); width: 8px; transform: translateX(-50%); cursor: col-resize; touch-action: none; }

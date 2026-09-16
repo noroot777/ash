@@ -11,10 +11,9 @@
       .fixture-project-card { width: min(520px, calc(100vw - 64px)); padding: 24px; }
       .fixture-workbench { min-height: 100vh; }
       [data-testid="fixture-notice"], [data-testid="fixture-opened-task"] {
-        position: fixed; left: 8px; bottom: 8px; z-index: 100; max-width: 50vw;
-        font: 11px/1.4 ui-monospace, monospace; opacity: .65;
+        position: fixed; width: 1px; height: 1px; overflow: hidden;
+        clip-path: inset(50%); pointer-events: none;
       }
-      [data-testid="fixture-opened-task"] { bottom: 26px; }
     </style>
   </head>
   <body>

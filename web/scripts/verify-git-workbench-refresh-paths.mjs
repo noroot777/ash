@@ -121,6 +121,8 @@ try {
   const lines = prefix => Array.from({ length: 30 }, (_, index) => `${prefix} ${index + 1}`);
   const pickBase = lines("pick");
   const bothBase = lines("both");
+  const longBase = Array.from({ length: 60 }, (_, index) => `long ${index + 1}`);
+  const longChanged = longBase.map((line, index) => index < 40 ? `${line} EDITED` : line);
   const stagedCases = [
     { path: "unstage-plus.txt", prefix: "plus", mode: "plus" },
     { path: "unstage-minus.txt", prefix: "minus", mode: "minus" },
@@ -132,6 +134,7 @@ try {
     return { ...entry, base, changed };
   });
   write("pick.txt", `${pickBase.join("\n")}\n`);
+  write("long-unstage.txt", `${longBase.join("\n")}\n`);
   write("other.txt", "other base\n");
   write("noise.txt", "noise base\n");
   write("both.txt", `${bothBase.join("\n")}\n`);
@@ -142,7 +145,7 @@ try {
   stagedCases.forEach(entry => write(entry.path, `${entry.base.join("\n")}\n`));
   git(
     "add", "--", "pick.txt", "other.txt", "noise.txt", "both.txt",
-    "gone-a.txt", "gone-b.txt", "kept.txt", "staged-sentinel.txt",
+    "gone-a.txt", "gone-b.txt", "kept.txt", "staged-sentinel.txt", "long-unstage.txt",
     ...stagedCases.map(entry => entry.path),
   );
   git("commit", "-qm", "add refresh and path fixtures");
@@ -166,7 +169,8 @@ try {
   write("both.txt", `${bothChanged.join("\n")}\n`);
   write("staged-sentinel.txt", "sentinel changed\n");
   stagedCases.forEach(entry => write(entry.path, `${entry.changed.join("\n")}\n`));
-  git("add", "--", "staged-sentinel.txt", ...stagedCases.map(entry => entry.path));
+  write("long-unstage.txt", `${longChanged.join("\n")}\n`);
+  git("add", "--", "staged-sentinel.txt", "long-unstage.txt", ...stagedCases.map(entry => entry.path));
   const sentinelCached = git("diff", "--cached", "--", "staged-sentinel.txt");
   const preservedHead = git("rev-parse", "HEAD");
 
@@ -305,7 +309,7 @@ try {
   await withTimeout(delayedNoise.started, 8_000, "delayed noise diff");
   assert.equal(await selectedA.isVisible(), true, "old diff must remain visible while refreshing");
   assert.equal(await selectedA.isEnabled(), true, "local row selection must remain interactive");
-  const refreshStatus = page.getByRole("status").filter({ hasText: "正在刷新差异，可继续勾选" });
+  const refreshStatus = page.getByRole("status").filter({ hasText: "正在刷新差异；内容变化时需重新勾选" });
   await refreshStatus.waitFor();
   const selectedStage = page.getByRole("button", { name: "暂存所选改动", exact: true });
   const selectedDiscard = page.getByRole("button", { name: "丢弃所选改动", exact: true });
@@ -348,6 +352,7 @@ try {
   await selectedB.click();
 
   // Staging another file through the UI keeps pick.txt active and selected.
+  const delayedAfterWrite = armDelay();
   const pickAfterOther = waitForPickDiff();
   const actionAfterOther = page.waitForResponse(response =>
     response.request().method() === "POST" && /\/git\/workbench\/actions$/.test(response.url()),
@@ -356,6 +361,14 @@ try {
   await otherRow.hover();
   await otherRow.getByLabel("暂存 other.txt", { exact: true }).click();
   assert.equal((await actionAfterOther).ok(), true);
+  await withTimeout(delayedAfterWrite.started, 8_000, "post-write diff refresh");
+  await assertAllDisabled(page.getByRole("button", { name: /^选择(第|改动块)/ }), "post-write selection");
+  assert.equal(await page.getByRole("button", { name: "清除选择", exact: true }).isDisabled(), true);
+  assert.equal(await selectedStage.isDisabled(), true);
+  assert.equal(await selectedB.getAttribute("aria-pressed"), "true");
+  await refreshStatus.waitFor();
+  await page.screenshot({ path: join(output, "post-write-refresh-selection-locked.png") });
+  delayedAfterWrite.release();
   await pickAfterOther;
   await waitForButtonEnabled("暂存所选改动");
   await page.getByRole("status").filter({ hasText: "正在刷新差异" }).waitFor({ state: "detached" });
@@ -364,20 +377,38 @@ try {
   assert.equal(await selectedB.getAttribute("aria-pressed"), "true");
   await page.screenshot({ path: join(output, "selection-after-staging-other.png") });
 
-  // A real change to pick.txt produces a new key and clears the previous line selection.
-  const changedPickResponse = waitForPickDiff();
+  // An old row selected during an external refresh disappears in the new diff.
+  await page.getByRole("button", { name: "清除选择", exact: true }).click();
+  const delayedChange = armDelay();
+  const postsBeforeChangedSelection = actionPosts;
+  pickChanged[9] = "PICK-A-UPDATED";
   write("pick.txt", `${pickChanged.join("\n")}\nPICK-C\n`);
-  await changedPickResponse;
-  const pickC = page.getByRole("button", { name: /选择第 .* 行 \+PICK-C$/ });
-  await pickC.waitFor();
-  selectedA = page.getByRole("button", { name: /选择第 .* 行 \+PICK-A$/ });
+  await withTimeout(delayedChange.started, 8_000, "changed pick diff");
+  await refreshStatus.waitFor();
+  await selectedA.click();
+  assert.equal(await selectedA.getAttribute("aria-pressed"), "true");
+  assert.equal(await selectedStage.isDisabled(), true);
+  await page.screenshot({ path: join(output, "changed-diff-refresh-selection.png") });
+  const changedPickResponse = waitForPickDiff();
+  delayedChange.release();
+  await (await changedPickResponse).finished();
+  await refreshStatus.waitFor({ state: "detached" });
+  await page.getByRole("button", { name: /选择第 .* 行 \+PICK-C$/ }).waitFor();
+  assert.equal(await selectedA.count(), 0, "the selected stale row is gone");
+  selectedA = page.getByRole("button", { name: /选择第 .* 行 \+PICK-A-UPDATED$/ });
   assert.equal(await selectedB.getAttribute("aria-pressed"), "false");
   assert.equal(await selectedA.getAttribute("aria-pressed"), "false");
   assert.match(await selectedCount(), /已选 0 行/);
+  assert.equal(await selectedStage.isDisabled(), true);
+  assert.equal(actionPosts, postsBeforeChangedSelection);
+  const clearedStatus = page.getByRole("status").filter({ hasText: "差异内容已更新，原有勾选已清除，请重新选择" });
+  await clearedStatus.waitFor();
+  await assertInsideViewport(clearedStatus, 1200, 760, "selection invalidation notice");
   await page.screenshot({ path: join(output, "selection-cleared-after-pick-change.png") });
 
   // Switching files and switching source for the same path never carries old line indices.
   await selectedA.click();
+  await clearedStatus.waitFor({ state: "detached" });
   await rowFor("other.txt", "已暂存").getByLabel("other.txt", { exact: true }).click();
   await page.getByRole("button", { name: /选择第 .* 行 \+other changed$/ }).waitFor();
   assert.match(await selectedCount(), /已选 0 行/);
@@ -424,17 +455,14 @@ try {
     await waitForButtonEnabled("取消所选暂存");
     assert.equal(await apply.isEnabled(), true);
     if (entry.mode === "plus") {
-      await note.scrollIntoViewIfNeeded();
       await assertInsideViewport(apply, 1200, 760, "desktop staged selection button");
       await assertInsideViewport(note, 1200, 760, "desktop staged selection guidance");
       await page.screenshot({ path: join(output, "unstage-plus-guidance-desktop.png") });
       await page.setViewportSize({ width: 390, height: 844 });
-      await note.scrollIntoViewIfNeeded();
       await assertInsideViewport(apply, 390, 844, "mobile staged selection button");
       await assertInsideViewport(note, 390, 844, "mobile staged selection guidance");
       await page.screenshot({ path: join(output, "unstage-plus-guidance-mobile.png") });
       await page.setViewportSize({ width: 1200, height: 760 });
-      await note.scrollIntoViewIfNeeded();
     }
     const actionRequest = page.waitForRequest(request =>
       request.method() === "POST" && /\/git\/workbench\/actions$/.test(request.url()),
@@ -476,9 +504,35 @@ try {
   }
   await rowFor("staged-sentinel.txt", "已暂存").waitFor();
 
+  // Long staged diffs keep the explanation and action visible without scrolling to the note.
+  const longGuidance = [];
+  for (const viewport of [{ width: 1200, height: 760 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await rowFor("other.txt", "已暂存").getByLabel("other.txt", { exact: true }).click();
+    await rowFor("long-unstage.txt", "已暂存").getByLabel("long-unstage.txt", { exact: true }).click();
+    const lastAdded = page.getByRole("button", { name: /选择第 .* 行 \+long 40 EDITED$/ });
+    await lastAdded.waitFor();
+    assert.equal(await page.getByRole("note").count(), 0);
+    const scroll = page.locator(".gwb-diff-shell > .diff-scroll");
+    assert(await scroll.evaluate(element => element.scrollHeight > element.clientHeight));
+    await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await lastAdded.click();
+    const note = page.getByRole("note");
+    await assertUnstageGuidance(note);
+    const apply = page.getByRole("button", { name: "取消所选暂存", exact: true });
+    const noteBox = await assertInsideViewport(note, viewport.width, viewport.height, "long diff guidance");
+    const actionBox = await assertInsideViewport(apply, viewport.width, viewport.height, "long diff unstage button");
+    assert(noteBox.bottom <= actionBox.top, "guidance appears above the action");
+    longGuidance.push({ viewport, noteBox, actionBox });
+    await page.screenshot({ path: join(output, `long-diff-guidance-${viewport.width}.png`) });
+  }
+  await page.setViewportSize({ width: 1200, height: 760 });
+  assert.equal(git("show", ":long-unstage.txt"), longChanged.join("\n"));
+  assert.equal(readFileSync(join(info.root, "long-unstage.txt"), "utf8"), `${longChanged.join("\n")}\n`);
+
   // A delayed response for pick.txt cannot overwrite a newer file selection.
   await rowFor("pick.txt", "未暂存").getByLabel("pick.txt", { exact: true }).click();
-  selectedA = page.getByRole("button", { name: /选择第 .* 行 \+PICK-A$/ });
+  selectedA = page.getByRole("button", { name: /选择第 .* 行 \+PICK-A-UPDATED$/ });
   await selectedA.waitFor();
   await selectedA.click();
   const stalePick = armDelay();
@@ -493,11 +547,11 @@ try {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
   }));
   assert.equal(await page.locator(".diff-path").textContent(), "other.txt");
-  assert.equal(await page.getByRole("button", { name: /\+PICK-A$/ }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: /\+PICK-A-UPDATED$/ }).count(), 0);
 
   // A failed refresh must not expose actionable controls for the cached old diff.
   await rowFor("pick.txt", "未暂存").getByLabel("pick.txt", { exact: true }).click();
-  await page.getByRole("button", { name: /选择第 .* 行 \+PICK-A$/ }).waitFor();
+  await page.getByRole("button", { name: /选择第 .* 行 \+PICK-A-UPDATED$/ }).waitFor();
   const failedPick = armFailure();
   write("noise.txt", "noise external three\n");
   await withTimeout(failedPick, 8_000, "failed pick diff");
@@ -530,7 +584,10 @@ try {
     refreshWriteActionsStayedDisabled: true,
     refreshSelectionSentNoActions: true,
     stagingOtherSelectionPreserved: true,
+    postWriteRefreshSelectionLocked: true,
     changedDiffSelectionCleared: true,
+    changedDiffSelectionExplained: true,
+    longGuidance,
     fileSwitchCleared: true,
     sourceSwitchCleared: true,
     stagedPartialUnstage: stagedResults,
@@ -557,6 +614,7 @@ if (passed) {
     join(output, "browser-run.txt"),
     [
       "Browser mode: isolated temporary-profile headless Chromium",
+      "R6 stale-selection feedback and long-diff mobile guidance: passed",
       "R5-2 refresh-time local selection and write-action freshness regression: passed",
       "R5-1 staged partial-unstage guidance and exact Git semantics: passed",
       "R4-1 selection preservation and stale-response regression: passed",
