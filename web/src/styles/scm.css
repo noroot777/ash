@@ -23,6 +23,9 @@
 .scm-branch__refresh:hover:not([aria-disabled="true"]) { background:var(--raised); color:var(--ink); }
 .scm-branch__refresh[aria-disabled="true"] { opacity:.5; cursor:default; }
 .scm-branch__root { width:100%; overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+/* 平铺/目录树切换。跟刷新同尺寸并排，另一处入口在「已提交的改动」那一节的标题栏。 */
+.scm-layout-toggle { display:grid; width:22px; height:22px; place-items:center; border:1px solid var(--line2); border-radius:6px; background:var(--panel); color:var(--muted); }
+.scm-layout-toggle:hover { background:var(--raised); color:var(--ink); }
 /* 推送/发布跟刷新同尺寸并排,只用底色区分「这颗会写远端」——说明归指上去的提示。 */
 .scm-branch__push { display:grid; width:22px; height:22px; place-items:center; border:1px solid color-mix(in lch,var(--accent) 35%,var(--line2)); border-radius:6px; background:color-mix(in lch,var(--accent) 10%,var(--panel)); color:var(--accent); }
 .scm-branch__push:hover:not([aria-disabled="true"]) { background:color-mix(in lch,var(--accent) 18%,var(--panel)); }
@@ -53,11 +56,14 @@
 .scm-committed header { display:flex; align-items:center; gap:5px; color:var(--faint); font-size:9.5px; }
 .scm-committed__count { border-radius:8px; background:var(--overlay); padding:0 5px; font-size:9px; }
 .scm-committed header .scm-diff__counts { margin-left:auto; font-size:9.5px; }
+/* 标题栏里那颗切换：比分支栏那颗小一圈、不描边——它是这一节的附属控件，不该跟标题抢。
+   它和右侧那组加减行数同进同退（都只在有文件时出现），所以只要挨着摆，不用再抢 auto。 */
+.scm-committed__layout { width:18px; height:18px; margin-left:4px; border:0; background:transparent; color:var(--faint); }
 .scm-committed__state { display:flex; align-items:center; gap:5px; margin:6px 0 0; color:var(--faint); font-size:10px; line-height:1.55; }
 .scm-committed ul { margin:6px 0 0; padding:0; list-style:none; }
 /* 这一节自带 9px 内边距，行里不用再让出上半截那种「组标题缩进」，把 .scm-row__open
    的左缩进收回来，否则条目会比这一节的标题多缩一截。 */
-.scm-committed .scm-row__open { min-height:22px; gap:6px; padding:0 4px; }
+.scm-committed .scm-row__open { min-height:22px; gap:6px; padding:0 4px 0 calc(4px + var(--scm-indent,0px)); }
 .scm-committed .scm-diff__counts { flex:0 0 auto; font-size:9px; }
 .scm-committed__open { display:flex; width:100%; align-items:center; justify-content:space-between; gap:6px; margin-top:8px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:5px 8px; color:var(--muted); font-size:10.5px; }
 .scm-committed__open span { display:inline-flex; align-items:center; gap:5px; }
@@ -78,7 +84,7 @@
 .scm-row { display:flex; align-items:center; border-radius:5px; padding-right:4px; }
 .scm-row:hover { background:var(--raised); }
 .scm-row.is-active { background:color-mix(in lch,var(--accent) 12%,var(--panel)); box-shadow:inset 2px 0 var(--accent); }
-.scm-row__open { display:flex; min-width:0; min-height:24px; flex:1; align-items:center; gap:6px; border:0; background:transparent; padding:0 4px 0 9px; text-align:left; }
+.scm-row__open { display:flex; min-width:0; min-height:24px; flex:1; align-items:center; gap:6px; border:0; background:transparent; padding:0 4px 0 calc(9px + var(--scm-indent,0px)); text-align:left; }
 .scm-row__name { flex:0 1 auto; overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .scm-row.is-active .scm-row__name { color:var(--ink); font-weight:600; }
 .scm-row__from { color:var(--faint); font-size:9px; font-style:normal; }
@@ -93,6 +99,12 @@
 .scm-row:hover .scm-row__actions, .scm-row__actions:focus-within { opacity:1; }
 /* 嵌套仓那一行：没有按钮，那句「去哪操作」是常驻的，不跟着 hover 出现。 */
 .scm-row__nested { flex:0 0 auto; color:var(--faint); font-size:9px; white-space:nowrap; }
+
+/* 目录树里的目录行。缩进走 --scm-indent（由行内样式给），每一节各自的基准内边距不变。 */
+.scm-row--dir .scm-row__open { min-height:21px; gap:3px; }
+.scm-row--dir .scm-row__open > svg { flex:0 0 auto; color:var(--faint); }
+.scm-row__folder { min-width:0; flex:0 1 auto; overflow:hidden; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.scm-row__folder-count { flex:0 0 auto; color:var(--faint); font-size:9px; }
 
 .scm-commits { border-top:.5px solid var(--line); padding:8px 9px 16px; }
 .scm-commits header { display:flex; align-items:center; gap:5px; color:var(--faint); font-size:9.5px; }

@@ -1,9 +1,15 @@
 import { ArrowCounterClockwise, Minus, Plus, Trash } from "@phosphor-icons/react";
 import type { ScmChange, ScmGroupId } from "../lib/api.ts";
 import { CONFLICT_LABEL, KIND_BADGE, KIND_LABEL, dirName, fileName, pathsOf } from "./scmModel.ts";
+import { useScmTree, type ScmFileLayout } from "./scmFileTree.ts";
+import { ScmDirRow, indentStyle } from "./ScmTreeParts.tsx";
 
 // 一个改动分组（冲突 / 已暂存 / 更改 / 未跟踪）。条目本身是按钮——点它开 diff，跟
 // 文件树点文件开查看器是同一套手势；逐条的操作按钮浮在右侧，不抢主点击区。
+//
+// 两种摆法（平铺 / 目录树）由 `layout` 决定，见 `scmFileTree.ts`。树里的目录行拿到的是
+// 同一套批量操作，只是作用域从「整个分组」缩到「这个目录」——摆着一排能点的文件却要用户
+// 逐个点，或者只能整组一起来，正是目录树最该解决的那件事。
 
 export interface ScmGroupActions {
   onOpen: (change: ScmChange) => void;
@@ -11,6 +17,8 @@ export interface ScmGroupActions {
   onUnstage?: (paths: string[]) => void;
   onDiscard?: (changes: ScmChange[]) => void;
 }
+
+const changePath = (change: ScmChange) => change.path;
 
 function RowActions({
   change,
@@ -58,6 +66,103 @@ function RowActions({
   );
 }
 
+/** 目录行右侧的批量操作：作用域是这个目录下（递归）的全部条目。 */
+function DirActions({
+  label,
+  changes,
+  group,
+  actions,
+}: {
+  label: string;
+  changes: ScmChange[];
+  group: ScmGroupId;
+  actions: ScmGroupActions;
+}) {
+  const scope = `${label} 下的 ${changes.length} 个文件`;
+  return (
+    <span className="scm-row__actions">
+      {actions.onDiscard && (
+        <button
+          type="button"
+          aria-label={group === "untracked" ? `删除 ${scope}` : `丢弃 ${scope}的改动`}
+          onClick={() => actions.onDiscard?.(changes)}
+        >
+          {group === "untracked" ? <Trash size={13} /> : <ArrowCounterClockwise size={13} />}
+        </button>
+      )}
+      {actions.onUnstage && (
+        <button type="button" aria-label={`取消暂存 ${scope}`} onClick={() => actions.onUnstage?.(pathsOf(changes))}>
+          <Minus size={13} />
+        </button>
+      )}
+      {actions.onStage && (
+        <button
+          type="button"
+          aria-label={group === "merge" ? `把${scope}标记为已解决并暂存` : `暂存 ${scope}`}
+          onClick={() => actions.onStage?.(pathsOf(changes))}
+        >
+          <Plus size={13} />
+        </button>
+      )}
+    </span>
+  );
+}
+
+function ChangeRow({
+  change,
+  group,
+  actions,
+  active,
+  depth,
+  showDir,
+}: {
+  change: ScmChange;
+  group: ScmGroupId;
+  actions: ScmGroupActions;
+  active: boolean;
+  /** 树里的缩进层级；平铺恒为 0。 */
+  depth: number;
+  /** 所在目录那一截。树里由目录行说明，行内再写一遍就是重复。 */
+  showDir: boolean;
+}) {
+  const dir = dirName(change.path);
+  const body = (
+    <>
+      <span className="scm-row__name">
+        {fileName(change.path)}
+        {change.origPath && <i className="scm-row__from">← {change.origPath}</i>}
+      </span>
+      {showDir && dir && <span className="scm-row__dir">{dir}</span>}
+      <span className="scm-row__meta">
+        {change.conflict && (
+          <em className="scm-row__conflict">{CONFLICT_LABEL[change.conflict] ?? "冲突"}</em>
+        )}
+        <span className={`scm-row__badge is-${change.kind}`} aria-label={KIND_LABEL[change.kind]}>
+          {KIND_BADGE[change.kind]}
+        </span>
+      </span>
+    </>
+  );
+  return (
+    <li>
+      {/* 操作按钮是主按钮的**兄弟**而不是子元素：按钮套按钮是非法 HTML，
+          浏览器会把里层拎出去，点「丢弃」就变成点了整行。 */}
+      <div className={`scm-row${active ? " is-active" : ""}`} style={indentStyle(depth)}>
+        {/* 嵌套仓那一行不是按钮：它没有 diff 可开（后端明确拒绝预览），
+            做成能点的只会换来一句报错。 */}
+        {change.nested ? (
+          <span className="scm-row__open is-static">{body}</span>
+        ) : (
+          <button type="button" className="scm-row__open" onClick={() => actions.onOpen(change)}>
+            {body}
+          </button>
+        )}
+        <RowActions change={change} group={group} actions={actions} />
+      </div>
+    </li>
+  );
+}
+
 export function ScmChangeGroup({
   group,
   title,
@@ -66,6 +171,7 @@ export function ScmChangeGroup({
   activeGroup,
   actions,
   hint,
+  layout,
 }: {
   group: ScmGroupId;
   title: string;
@@ -74,8 +180,11 @@ export function ScmChangeGroup({
   activeGroup: ScmGroupId | null;
   actions: ScmGroupActions;
   hint?: string;
+  layout: ScmFileLayout;
 }) {
+  const tree = useScmTree(changes, changePath, layout === "tree");
   if (!changes.length) return null;
+  const isActive = (change: ScmChange) => activeGroup === group && activePath === change.path;
   return (
     <section className={`scm-group is-${group}`}>
       <header>
@@ -113,45 +222,42 @@ export function ScmChangeGroup({
       </header>
       {hint && <p className="scm-group__hint">{hint}</p>}
       <ul>
-        {changes.map((change, index) => {
-          const dir = dirName(change.path);
-          const active = activeGroup === group && activePath === change.path;
-          const body = (
-            <>
-              <span className="scm-row__name">
-                {fileName(change.path)}
-                {change.origPath && <i className="scm-row__from">← {change.origPath}</i>}
-              </span>
-              {dir && <span className="scm-row__dir">{dir}</span>}
-              <span className="scm-row__meta">
-                {change.conflict && (
-                  <em className="scm-row__conflict">{CONFLICT_LABEL[change.conflict] ?? "冲突"}</em>
-                )}
-                <span className={`scm-row__badge is-${change.kind}`} aria-label={KIND_LABEL[change.kind]}>
-                  {KIND_BADGE[change.kind]}
-                </span>
-              </span>
-            </>
-          );
-          return (
-            <li key={`${change.path}-${index}`}>
-              {/* 操作按钮是主按钮的**兄弟**而不是子元素：按钮套按钮是非法 HTML，
-                  浏览器会把里层拎出去，点「丢弃」就变成点了整行。 */}
-              <div className={`scm-row${active ? " is-active" : ""}`}>
-                {/* 嵌套仓那一行不是按钮：它没有 diff 可开（后端明确拒绝预览），
-                    做成能点的只会换来一句报错。 */}
-                {change.nested ? (
-                  <span className="scm-row__open is-static">{body}</span>
-                ) : (
-                  <button type="button" className="scm-row__open" onClick={() => actions.onOpen(change)}>
-                    {body}
-                  </button>
-                )}
-                <RowActions change={change} group={group} actions={actions} />
-              </div>
-            </li>
-          );
-        })}
+        {layout === "tree"
+          ? tree.rows.map((row) => (
+            row.kind === "dir" ? (
+              <ScmDirRow
+                key={row.key}
+                label={row.label}
+                count={row.items.length}
+                depth={row.depth}
+                collapsed={row.collapsed}
+                onToggle={() => tree.toggle(row.path)}
+              >
+                <DirActions label={row.label} changes={row.items} group={group} actions={actions} />
+              </ScmDirRow>
+            ) : (
+              <ChangeRow
+                key={row.key}
+                change={row.item}
+                group={group}
+                actions={actions}
+                active={isActive(row.item)}
+                depth={row.depth}
+                showDir={false}
+              />
+            )
+          ))
+          : changes.map((change, index) => (
+            <ChangeRow
+              key={`${change.path}-${index}`}
+              change={change}
+              group={group}
+              actions={actions}
+              active={isActive(change)}
+              depth={0}
+              showDir
+            />
+          ))}
       </ul>
     </section>
   );

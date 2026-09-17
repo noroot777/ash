@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CaretRight, GitDiff, SpinnerGap } from "@phosphor-icons/react";
 import { api, type TaskDiffResult } from "../lib/api.ts";
 import { branchDiffReason, dirName, fileName, type ScmDiffTarget } from "./scmModel.ts";
+import { useScmFileLayout, useScmTree } from "./scmFileTree.ts";
+import { ScmDirRow, ScmFileLayoutToggle, indentStyle } from "./ScmTreeParts.tsx";
 
 // 「本任务已提交的改动」——面板上半截问的是「此刻还没提交的东西」，仓库约定「改完立即
 // 提交」，所以上半截绝大多数时候是空的。只留一句「工作区干净」会把人按到错误的结论上：
@@ -16,6 +18,51 @@ import { branchDiffReason, dirName, fileName, type ScmDiffTarget } from "./scmMo
 // 提交区间——清单给 A、点进去按 B 比，用户看到的会是一份对不上的 diff。
 
 const MAX_ROWS = 60;
+
+type DiffFile = TaskDiffResult["files"][number];
+
+const diffFilePath = (file: DiffFile) => file.path;
+
+const sumOf = (files: readonly DiffFile[], side: "additions" | "deletions") =>
+  files.reduce((sum, file) => sum + (file[side] ?? 0), 0);
+
+function DiffCounts({ files }: { files: readonly DiffFile[] }) {
+  return (
+    <span className="scm-diff__counts">
+      <i>+{sumOf(files, "additions")}</i>
+      <em>−{sumOf(files, "deletions")}</em>
+    </span>
+  );
+}
+
+function CommittedFileRow({
+  file,
+  active,
+  depth,
+  showDir,
+  onOpen,
+}: {
+  file: DiffFile;
+  active: boolean;
+  /** 树里的缩进层级；平铺恒为 0。 */
+  depth: number;
+  /** 所在目录那一截。树里由目录行说明，行内再写一遍就是重复。 */
+  showDir: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <li className={`scm-row${active ? " is-active" : ""}`} style={indentStyle(depth)}>
+      <button type="button" className="scm-row__open" onClick={onOpen}>
+        <span className="scm-row__name">{fileName(file.path)}</span>
+        {/* 改名的来源路径要摆出来：只显示新名字的话，清单上会凭空多一个「新文件」，
+            而它的 diff 里满是删除行。 */}
+        {file.origPath && <i className="scm-row__from">← {fileName(file.origPath)}</i>}
+        {showDir && <span className="scm-row__dir">{dirName(file.path)}</span>}
+      </button>
+      <DiffCounts files={[file]} />
+    </li>
+  );
+}
 
 export function ScmCommittedChanges({
   taskId,
@@ -46,8 +93,9 @@ export function ScmCommittedChanges({
   }, [taskId, revision]);
 
   const files = diff?.files ?? [];
-  const additions = files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
-  const deletions = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
+  const shown = useMemo(() => files.slice(0, MAX_ROWS), [files]);
+  const [layout] = useScmFileLayout();
+  const tree = useScmTree(shown, diffFilePath, layout === "tree");
 
   return (
     <section className="scm-committed">
@@ -55,9 +103,10 @@ export function ScmCommittedChanges({
         <GitDiff size={13} />
         本任务已提交的改动
         {diff?.available && files.length > 0 && <span className="scm-committed__count">{files.length}</span>}
-        {diff?.available && files.length > 0 && (
-          <span className="scm-diff__counts"><i>+{additions}</i><em>−{deletions}</em></span>
-        )}
+        {diff?.available && files.length > 0 && <DiffCounts files={files} />}
+        {/* 这一节常常在滚动面板的下半截，顶上分支栏那颗切换按钮此时已经滚出视野——
+            清单在哪儿，切换就得在哪儿够得着。两处共用同一份偏好。 */}
+        {diff?.available && files.length > 0 && <ScmFileLayoutToggle className="scm-committed__layout" />}
       </header>
 
       {loading && !diff && <p className="scm-committed__state"><SpinnerGap size={12} className="is-spinning" />正在读取分支改动…</p>}
@@ -72,28 +121,40 @@ export function ScmCommittedChanges({
       {diff?.available && files.length > 0 && (
         <>
           <ul>
-            {files.slice(0, MAX_ROWS).map((file) => {
-              const active = activeDiff?.source === "branch" && activeDiff.path === file.path;
-              return (
-                <li key={file.path} className={`scm-row${active ? " is-active" : ""}`}>
-                  <button
-                    type="button"
-                    className="scm-row__open"
-                    onClick={() => onOpenDiff({ path: file.path, source: "branch", origPath: file.origPath })}
+            {layout === "tree"
+              ? tree.rows.map((row) => (
+                row.kind === "dir" ? (
+                  <ScmDirRow
+                    key={row.key}
+                    label={row.label}
+                    count={row.items.length}
+                    depth={row.depth}
+                    collapsed={row.collapsed}
+                    onToggle={() => tree.toggle(row.path)}
                   >
-                    <span className="scm-row__name">{fileName(file.path)}</span>
-                    {/* 改名的来源路径要摆出来：只显示新名字的话，清单上会凭空多一个「新文件」，
-                        而它的 diff 里满是删除行。 */}
-                    {file.origPath && <i className="scm-row__from">← {fileName(file.origPath)}</i>}
-                    <span className="scm-row__dir">{dirName(file.path)}</span>
-                  </button>
-                  <span className="scm-diff__counts">
-                    <i>+{file.additions ?? 0}</i>
-                    <em>−{file.deletions ?? 0}</em>
-                  </span>
-                </li>
-              );
-            })}
+                    <DiffCounts files={row.items} />
+                  </ScmDirRow>
+                ) : (
+                  <CommittedFileRow
+                    key={row.key}
+                    file={row.item}
+                    active={activeDiff?.source === "branch" && activeDiff.path === row.item.path}
+                    depth={row.depth}
+                    showDir={false}
+                    onOpen={() => onOpenDiff({ path: row.item.path, source: "branch", origPath: row.item.origPath })}
+                  />
+                )
+              ))
+              : shown.map((file) => (
+                <CommittedFileRow
+                  key={file.path}
+                  file={file}
+                  active={activeDiff?.source === "branch" && activeDiff.path === file.path}
+                  depth={0}
+                  showDir
+                  onOpen={() => onOpenDiff({ path: file.path, source: "branch", origPath: file.origPath })}
+                />
+              ))}
           </ul>
           {files.length > MAX_ROWS && (
             <p className="scm-committed__state">另有 {files.length - MAX_ROWS} 个文件没有列出。</p>

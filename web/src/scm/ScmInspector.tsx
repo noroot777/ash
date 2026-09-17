@@ -17,6 +17,8 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ROOT_SOURCE_LABEL } from "../files/fileModel.ts";
 import { ScmChangeGroup } from "./ScmChangeGroup.tsx";
 import { ScmCommittedChanges } from "./ScmCommittedChanges.tsx";
+import { useScmFileLayout } from "./scmFileTree.ts";
+import { ScmFileLayoutToggle } from "./ScmTreeParts.tsx";
 import {
   OPERATION_LABEL,
   diffSourceOf,
@@ -104,7 +106,7 @@ function forceConfirm(action: ScmAction, reason: string): PendingConfirm {
 }
 
 /**
- * 分支栏右上角那两颗图标：推送/发布 + 刷新。
+ * 分支栏右上角那几颗图标：平铺/树切换 + 推送/发布 + 刷新。
  *
  * 推送原先是一颗独占一整行的带字宽按钮。这一栏本来就窄（分支名 + 上游 + 一行工作目录
  * 路径），那颗按钮把「这是干什么用的」放大成了整个面板最显眼的东西——而它其实是偶尔才
@@ -165,6 +167,7 @@ function BranchTools({
 
   return (
     <span className="scm-branch__tools">
+      <ScmFileLayoutToggle />
       {showPush && (
         <button
           ref={pushButton}
@@ -279,6 +282,8 @@ export function ScmInspector({
   const [message, setMessage] = useState("");
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  // 平铺还是目录树。全局一份偏好，面板里两处切换入口共用（见 `scmFileTree.ts`）。
+  const [fileLayout] = useScmFileLayout();
 
   const status = scm.overview?.status ?? null;
   const running = scm.overview?.taskRunning ?? false;
@@ -458,6 +463,7 @@ export function ScmInspector({
             changes={status.merge}
             activePath={activeDiff?.path ?? null}
             activeGroup={activeGroup}
+            layout={fileLayout}
             hint="解决冲突后暂存，即等于标记为已解决。冲突文件不提供丢弃。"
             actions={{
               onOpen: (change) => onOpenDiff({ path: change.path, source: diffSourceOf("merge"), origPath: null, kind: change.kind }),
@@ -470,6 +476,7 @@ export function ScmInspector({
             changes={status.staged}
             activePath={activeDiff?.path ?? null}
             activeGroup={activeGroup}
+            layout={fileLayout}
             actions={{
               onOpen: (change) => onOpenDiff({ path: change.path, source: "staged", origPath: change.origPath, kind: change.kind }),
               onUnstage: writable((paths: string[]) => void perform({ kind: "unstage", paths })),
@@ -481,6 +488,7 @@ export function ScmInspector({
             changes={status.unstaged}
             activePath={activeDiff?.path ?? null}
             activeGroup={activeGroup}
+            layout={fileLayout}
             actions={{
               onOpen: (change) => onOpenDiff({ path: change.path, source: "unstaged", origPath: null, kind: change.kind }),
               onStage: writable((paths: string[]) => void perform({ kind: "stage", paths })),
@@ -493,6 +501,7 @@ export function ScmInspector({
             changes={status.untracked}
             activePath={activeDiff?.path ?? null}
             activeGroup={activeGroup}
+            layout={fileLayout}
             actions={{
               onOpen: (change) => onOpenDiff({ path: change.path, source: "untracked", origPath: null, kind: change.kind }),
               onStage: writable((paths: string[]) => void perform({ kind: "stage", paths })),

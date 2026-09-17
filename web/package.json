@@ -99,6 +99,8 @@
     "test:scm-stale": "node scripts/test-scm-stale.mjs",
     "test:scm-race": "node scripts/test-scm-race.mjs",
     "test:scm-nested-ui": "node scripts/test-scm-nested-ui.mjs",
+    "//test:scm-file-layout": "SCM 面板文件清单的平铺/目录树两种摆法：默认平铺、单链目录压行、两处切换共用一份偏好并持久化、目录行的批量操作只作用于该目录。",
+    "test:scm-file-layout": "node scripts/test-scm-file-layout.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview",
     "test:agent-plate": "node scripts/test-agent-plate.mjs",
