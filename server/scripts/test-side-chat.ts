@@ -197,6 +197,31 @@ try {
   assert.equal(malformed.reply, fakeReply);
   assert.equal(malformed.forward, null);
   assert.match(malformed.forwardError!, /8000/);
+  // 拿不到 JSON 不再作废整轮：十几次工具调用换来的结论直接当正文展示，同时挂上格式提示、
+  // 并且一定不回传（回传要动主任务，必须是结构完整的 JSON）。
+  const degraded = parseSideChatReply("查完了，结论是排序没生效。\n原因在 search.py 的融合那一段。", "解释一下");
+  assert.match(degraded.reply, /排序没生效/);
+  assert.equal(degraded.forward, null);
+  assert.match(degraded.formatWarning!, /原始输出/);
+  const degradedFence = parseSideChatReply("```json\n{\"reply\": \"半截", "解释一下");
+  assert.match(degradedFence.reply, /半截/);
+  assert.ok(degradedFence.formatWarning);
+  // 带着回传意图但 JSON 坏掉时，宁可不发：授权原话无从校验。
+  const brokenForward = parseSideChatReply('{"reply":"结论","forward":{"text":"发给主任务"', "把结论告诉主任务");
+  assert.equal(brokenForward.forward, null);
+  assert.ok(brokenForward.formatWarning);
+  // 完全没有输出才是真失败——没有任何可展示的内容，兜底也无从兜起。
+  assert.throws(() => parseSideChatReply("   ", "解释一下"), /没有返回任何内容/);
+  // 尾随说明里带对象示例时不能误判成「没有合法 JSON」：那会把本来可用的回复降级成原始输出，
+  // 连同这一轮的 forward 回传能力一起丢掉。
+  const tailExample = parseSideChatReply('{"reply":"结论","forward":null} 备注：格式形如 {"foo":"bar"}', "不用回传");
+  assert.equal(tailExample.reply, "结论");
+  assert.equal(tailExample.formatWarning, undefined);
+  const tailWithForward = parseSideChatReply(
+    '{"reply":"结论","forward":{"text":"给主任务的结论","authorization":"把结论告诉主任务"}} 示例 {"foo":"bar"}',
+    "把结论告诉主任务");
+  assert.equal(tailWithForward.forward?.text, "给主任务的结论", "尾随示例不该吃掉回传");
+  assert.equal(tailWithForward.formatWarning, undefined);
   invalidForward = false;
   held = true;
   await req("/chats/side-room/messages", { body: "等待长回复", id: "user-stop" });

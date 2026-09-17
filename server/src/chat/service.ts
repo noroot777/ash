@@ -227,6 +227,10 @@ export class ChatService {
       }).where(eq(chatMessages.id, message.id));
       if (room.kind === "side") {
         sideResult = parseSideChatReply(invoked.text, context.source);
+        // 收尾降级说明（超长截断/中途报错/非零退出）和格式降级说明走同一条展示通道：两者
+        // 都是「正文照给，但这一轮有瑕疵」，可能同时发生（半截输出往往既不是合法 JSON、
+        // 又伴着非零退出）。
+        if (invoked.degraded) sideResult = { ...sideResult, formatWarning: [invoked.degraded, sideResult.formatWarning].filter(Boolean).join("\n\n") };
         const verified = await verifySideChatReply(sideResult, context.source,
           (prompt, signal) => this.invoke(member, room.ownerUserId, prompt, signal, room.projectId, { purpose: "side-authorization" }), abort.signal);
         const pending = await settleSideChat(room, message.id, verified, notice, abort.signal);
@@ -276,7 +280,9 @@ export class ChatService {
       if (!abort.signal.aborted) return member;
     } catch (error) {
       const boundary = error instanceof ChatBoundaryError;
-      const reason = error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
+      // 留够位置给解析失败时附带的原始输出摘要（rawOutputExcerpt），否则它刚拼进错误正文
+      // 就被这里截掉，等于没带。别的错误本来就远短于此，放宽对它们没有影响。
+      const reason = (error instanceof Error ? error.message : String(error)).slice(0, 1200);
       const preserved = !boundary && !abort.signal.aborted ? sideResult : undefined;
       const updated = await db.update(chatMessages).set({ status: preserved ? "done" : boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: withNotice(preserved ? preserved.reply : reason),
         ...(preserved ? { modelReply: `${preserved.reply}\n[未发送到主任务：${reason}]`, forwardError: reason } : {}),

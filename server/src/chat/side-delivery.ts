@@ -38,11 +38,15 @@ export async function settleSideChat(room: Room, messageId: string, result: Veri
   }
   const text = result.forward && !forwardError ? `【来自侧聊 · ${room.name}】\n${result.forward.text}` : null;
   const pending = text && parent ? { ...pendingMessageRow({ taskId: parent.id, text, ownerUserId: room.ownerUserId }), id: `side-${messageId}` } : null;
+  // 格式降级的提示跟并发变更附注一样，只挂在展示正文后面；modelReply 另外标一句，让下一轮
+  // 上下文里能看出「上一条是原始输出、不是按格式给的回答」。
+  const displayed = [result.reply, result.formatWarning, notice].filter(Boolean).join("\n\n");
   const settled = await db.transaction(async (tx) => {
     signal.throwIfAborted();
     const updated = await tx.update(chatMessages).set({
-      status: "done", context: null, body: notice ? `${result.reply}\n\n${notice}` : result.reply,
-      modelReply: result.reply + (forwardError ? `\n[未发送到主任务：${forwardError}]`
+      status: "done", context: null, body: displayed,
+      modelReply: result.reply + (result.formatWarning ? "\n[上一轮未按约定 JSON 格式输出，以上为原始输出]" : "")
+        + (forwardError ? `\n[未发送到主任务：${forwardError}]`
         : pending ? `\n[本轮已请求回传主任务，正文：${result.forward!.text}；实际投递状态以 ash 回执为准]` : ""),
       forwardMessageId: pending?.id ?? null,
       forwardError,

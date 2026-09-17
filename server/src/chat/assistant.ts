@@ -11,8 +11,8 @@ import { executorScope } from "../auth/owned-executors.js";
 import { filterOwned } from "../auth/owned.js";
 import { searchAll } from "../search.js";
 import { AssistantToolError, type invokeChat, type ChatInvocation } from "./execution.js";
-import { chatPrompt, parseChatReply } from "./prompt.js";
-import { parseLastJsonObject } from "./json-object.js";
+import { chatPrompt, hasReply, parseChatReply } from "./prompt.js";
+import { parseLastJsonObject, rawOutputExcerpt } from "./json-object.js";
 import { estimateChatTokens } from "./context-format.js";
 import { ASSISTANT_GUIDE, ASSISTANT_REPLY_STYLE, ASSISTANT_WORKFLOW_EXAMPLE } from "./assistant-guide.js";
 
@@ -83,6 +83,19 @@ export async function validateAssistantWorkflow(value: unknown, actor: Actor): P
   return { name: raw.name.trim(), description: raw.description.trim(), def: parsed.def };
 }
 
+/**
+ * 取出一个候选对象里的合法检索词，不合法返回 undefined。**候选判据和下面检索分支的校验
+ * 共用这一份**，两处各写一份迟早漂移。
+ */
+function searchQueries(value: Record<string, unknown>): string[] | undefined {
+  const search = value.search;
+  if (!search || typeof search !== "object" || Array.isArray(search)) return undefined;
+  const queries = (search as Record<string, unknown>).queries;
+  if (!Array.isArray(queries) || !queries.length || queries.length > 3) return undefined;
+  if (queries.some((query) => typeof query !== "string" || !query.trim() || query.length > 120)) return undefined;
+  return queries as string[];
+}
+
 export async function invokeAssistant(member: ChatMember, room: Room, prompt: string, signal: AbortSignal, invoke: typeof invokeChat) {
   const queries: string[] = [];
   const hits = new Map<string, Extract<SearchHit, { kind: "task" }>>();
@@ -100,21 +113,34 @@ export async function invokeAssistant(member: ChatMember, room: Room, prompt: st
       retried = true;
       response = await invoke(member, room.ownerUserId, prompt + evidence + "\n【工具调用重试】\n上一轮因调用工具已作废。所有需要的信息都在本消息中，本轮没有任何可用工具。直接输出最终 JSON 或 search JSON，不尝试调用工具。", signal, room.projectId, { purpose: "assistant" });
     }
-    let raw = parseLastJsonObject(response.text);
+    // 助手一轮要么给最终回答（reply），要么请求检索（search）。两种形状都是有效候选，
+    // **按位置取最后一个**——模型的惯例是说明在前、最终 JSON 在后。
+    //
+    // 两种误判方向是对称的，纯靠文本结构分不开（`{有效对象} 说明文字 {有效对象}` 两边长得
+    // 一模一样），所以按**后果轻重**定规则，而不是按方向：
+    //   前置 reply 示例 + 真 search → 取前面就等于用户要查任务、却拿到一句示例文本，本轮
+    //                                 直接结束，不检索，没有补救（硬失败）
+    //   真 reply + 尾随 search 示例 → 取后面只是白跑一轮检索，下一轮模型照样给出最终回答
+    // 后者有补救、前者没有，所以取最后一个。
+    //
+    // 付那一轮代价的前提是尾随示例得是**完整形状**；提示词里复述得最多的 {"search":{}}
+    // 一类空壳压根不算有效候选（searchQueries 挡掉），常见情形不受影响。
+    const pick = (text: string) => parseLastJsonObject(text,
+      (value) => hasReply(value) || searchQueries(value) !== undefined);
+    let raw = pick(response.text);
     if (!raw && !retried) {
       signal.throwIfAborted();
       retried = true;
       response = await invoke(member, room.ownerUserId, prompt + evidence + "\n【JSON 格式重试】\n上一轮输出无法按 JSON 解析，本轮请只输出合法 JSON。reply 等字符串值里的换行用转义序列，正文引号使用「」，不要在字符串内部放未转义的双引号。不要调用任何工具。", signal, room.projectId, { purpose: "assistant" });
-      raw = parseLastJsonObject(response.text);
+      raw = pick(response.text);
     }
-    if (!raw) throw new Error("助手未返回有效回复，请重试。");
+    if (!raw) throw new Error(`助手未返回有效回复，请重试。${rawOutputExcerpt(response.text)}`);
     if (raw.search != null) {
       if (round === 2) throw new Error("本轮检索已达上限，请补充任务的项目或关键词后继续。");
       const search = raw.search as Record<string, unknown>;
-      if (!Array.isArray(search.queries) || !search.queries.length || search.queries.length > 3
-        || search.queries.some((query) => typeof query !== "string" || !query.trim() || query.length > 120)) throw new Error("助手返回的检索条件无效，请重试。");
+      const searched = searchQueries(raw);
+      if (!searched) throw new Error("助手返回的检索条件无效，请重试。");
       const projectId = typeof search.projectId === "string" && search.projectId ? search.projectId : undefined;
-      const searched = search.queries as string[];
       const combined = searched.map((query) => query.trim()).join(" | ");
       queries.push(...searched);
       const rows = await searchAll(combined, actor, { projectId, type: "tasks", signal });

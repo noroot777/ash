@@ -1,6 +1,6 @@
 import type { ChatMember, ChatMessage } from "@ash/shared/chat";
 import { contextMessage } from "./context-format.js";
-import { parseLastJsonObject } from "./json-object.js";
+import { parseLastJsonObject, rawOutputExcerpt, textField } from "./json-object.js";
 
 export function chatPrompt(member: ChatMember, history: (Pick<ChatMessage, "author" | "body" | "role"> | string)[], request: string, summary = ""): string {
   const transcript = history.map((message) => typeof message === "string" ? message : contextMessage(message)).join("\n");
@@ -23,10 +23,19 @@ ${transcript}
 ${JSON.stringify(request)}`;
 }
 
+/** 群聊/侧聊/助手的最终回复都以 reply 为准，候选筛选共用这一份判据。 */
+export const hasReply = textField("reply");
+
+/**
+ * 群聊不做侧聊那种「拿原始输出当正文」的降级：这里的同一个 JSON 还带着 task，解析不出来
+ * 时无法区分「它只是想说句话」和「它想派一个任务」，兜底成纯文本会让用户以为任务已经派出
+ * 去了。所以仍然失败，但把原始输出带进错误正文供排查。
+ */
 export function parseChatReply(text: string, maxReply = 300): { reply: string; task: { title: string; body: string } | null } {
-  const value = parseLastJsonObject(text);
-  if (!value) throw new Error("智能体未返回有效的简短回复，请重新 @ 重试。");
-  if (typeof value.reply !== "string" || !value.reply.trim()) throw new Error("智能体未返回有效的简短回复，请重新 @ 重试。");
+  const value = parseLastJsonObject(text, hasReply);
+  if (!value || typeof value.reply !== "string" || !value.reply.trim()) {
+    throw new Error(`智能体未返回有效的简短回复，请重新 @ 重试。${rawOutputExcerpt(text)}`);
+  }
   let task: { title: string; body: string } | null = null;
   if (value.task != null) {
     const raw = value.task as Record<string, unknown>;

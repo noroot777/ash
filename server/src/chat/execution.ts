@@ -20,6 +20,8 @@ export interface ChatInvocation {
   text: string;
   /** 咨询期间观察到项目目录并发变更时的附注；无法归因，只随回复展示，不进模型上下文。 */
   notice?: string;
+  /** 侧聊在「已有正文、但这一轮没能干净收尾」时的说明（超长截断、中途报错、非零退出）。 */
+  degraded?: string;
 }
 
 /** 执行过程的去处：调用方给一个接收器，invoke 按事件发生顺序逐步回调。 */
@@ -108,6 +110,16 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
     const consume = async () => {
       let text = "";
       let exitStatus: number | undefined;
+      let degraded: string | undefined;
+      // 侧聊按主会话的标准收尾：**已经拿到的正文一律不丢**。它跑在主任务的工作目录里，一轮
+      // 往往是十几次工具调用换来的调研结论，而下面这三种情况（输出超长、中途报错、非零退出）
+      // 都发生在正文已经产出之后——抛错等于把结论连同十几次工具调用一起扔掉，用户只剩一句
+      // 「请重试」。所以有正文就返回正文，把发生了什么写进 degraded 随正文展示；确实一个字
+      // 都没拿到时才照旧抛错（那时没有任何可展示的东西，报错反而是唯一有信息量的结果）。
+      // 群聊/助手/摘要/核验不走这条：群聊回复限 300 字、摘要要么整份可用要么作废、核验是
+      // 安全判定，半截结果对它们没有意义。
+      const lenient = purpose === "side";
+      const limit = lenient ? 200000 : 32000;
       for await (const event of handle!.events) {
         // 执行过程按发生顺序记一行，位置在各道闸**之前**：被闸拦下的那一步也要留在记录里，
         // 否则用户只看到「回复被中止」，看不出是撞在哪一步上。子智能体的内部事件不记
@@ -127,15 +139,30 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
         if (event.kind === "tool" && purpose !== "side" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
         signal.throwIfAborted();
         if (event.kind === "text") text += event.text;
-        if (text.length > 32000) throw new Error("聊天回复过长，已中止。请把复杂工作交给任务。");
-        if (event.kind === "error" && event.level !== "notice") throw new Error(event.message);
+        if (text.length > limit) {
+          if (!lenient) throw new Error("聊天回复过长，已中止。请把复杂工作交给任务。");
+          // 到顶就地收工：截断后跳出，finally 里的 kill 停掉进程。继续接收只会让它一直写下去，
+          // 而超出上限的部分本来也不会展示。
+          text = text.slice(0, limit);
+          degraded = `⚠️ 输出超过 ${limit} 字，已截断，后面的内容没有保留。`;
+          break;
+        }
+        if (event.kind === "error" && event.level !== "notice") {
+          if (!lenient || !text.trim()) throw new Error(event.message);
+          degraded = `⚠️ 智能体中途报错：${event.message.slice(0, 200)}。上面是报错前已经产出的内容。`;
+          break;
+        }
         if (event.kind === "done") exitStatus = event.exitStatus;
       }
-      if (exitStatus !== 0) throw new Error(`智能体未正常结束（${exitStatus ?? "无退出状态"}），请重新 @ 重试。`);
-      return text;
+      if (exitStatus !== 0 && !degraded) {
+        const reason = `智能体未正常结束（${exitStatus ?? "无退出状态"}），请重新 @ 重试。`;
+        if (!lenient || !text.trim()) throw new Error(reason);
+        degraded = `⚠️ 智能体未正常结束（${exitStatus ?? "无退出状态"}）。上面是它退出前已经产出的内容。`;
+      }
+      return { text, degraded };
     };
-    const text = await consume();
-    return { text, notice: guard ? changeNotice(await guard.settle()) : undefined };
+    const { text, degraded } = await consume();
+    return { text, degraded, notice: guard ? changeNotice(await guard.settle()) : undefined };
   } finally {
     signal.removeEventListener("abort", abort);
     process.removeListener("exit", abort);
