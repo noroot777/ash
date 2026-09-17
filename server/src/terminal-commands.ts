@@ -2,10 +2,11 @@
 // 命令会话(commandId 非空的那类 pty):
 //
 //   启动   = 起一个 `shell -lc <command>` 的会话,进程退出即会话结束(exitCode 落会话上)
-//   停止   = 杀掉活会话(pty.kill → shell 整棵收 SIGHUP)
-//   重启   = 杀掉活会话后,用 restartCommand || command 起**新**会话。重启永远先杀 ——
-//            restartCommand 替换的是「重新启动用什么命令」(例如 `expo start -c`),
-//            不是「不杀进程的原地重载」。
+//   停止   = terminate 活会话:进程组 SIGTERM → 超时 SIGKILL → 仍不退如实报 502。
+//            会话**保留**(日志可回看、状态显示「已停止」),不是删除 —— 见 terminate 注释。
+//   重启   = 先 terminate 活会话,**确认旧进程退了**再用 restartCommand || command 起新会话
+//            (否则新旧抢端口,新的挂、旧的失控)。重启永远先杀 —— restartCommand 替换的是
+//            「重新启动用什么命令」(例如 `expo start -c`),不是「不杀进程的原地重载」。
 //
 // 权限与终端同一道门(实例管理员/自用):这些命令是任意 shell,门禁理由见
 // terminal.ts mountTerminalRoutes 顶部。
@@ -58,12 +59,15 @@ export function mountProjectCommandRoutes(api: Hono): void {
     }
   });
 
-  // 停止。幂等:本来就没在跑也回 200 —— 调用方要的是「停着」这个终态,不是这次调用杀没杀到。
+  // 停止。本来就没在跑也回 200(调用方要的是「停着」这个终态);但杀不死绝不谎报 ——
+  // 那会让会话被当成已了结,进程却还在外面跑。
   api.post("/projects/:projectId/commands/:commandId/stop", async (c) => {
     const projectId = c.req.param("projectId");
     const live = terminalSessions.liveCommandSession(projectId, c.req.param("commandId"));
-    if (live) terminalSessions.close(live.id, projectId);
-    return c.json({ stopped: live !== null });
+    if (!live) return c.json({ stopped: false });
+    const result = await terminalSessions.terminate(live.id, projectId);
+    if (!result.ok) return c.json({ error: `停止失败：${result.reason}` }, 502);
+    return c.json({ stopped: true });
   });
 
   api.post("/projects/:projectId/commands/:commandId/restart", async (c) => {
@@ -71,7 +75,10 @@ export function mountProjectCommandRoutes(api: Hono): void {
     const target = await commandTarget(projectId, c.req.param("commandId"));
     if (!target.ok) return c.json({ error: target.error }, target.status);
     const live = terminalSessions.liveCommandSession(projectId, target.command.id);
-    if (live) terminalSessions.close(live.id, projectId);
+    if (live) {
+      const result = await terminalSessions.terminate(live.id, projectId);
+      if (!result.ok) return c.json({ error: `重启失败：旧进程停不下来（${result.reason}）` }, 502);
+    }
     try {
       const script = target.command.restartCommand ?? target.command.command;
       return c.json({ session: startSession(projectId, target.cwd, target.command, script) }, 201);

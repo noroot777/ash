@@ -35,6 +35,8 @@ export type TerminalSessionInfo = {
   startedAt: number;
   /** null = 进程还活着。命令会话靠它区分「运行中」和「退了但日志还能回看」。 */
   exitCode: number | null;
+  /** 用户主动停的（区别于自己崩了）：UI 显示「已停止」，不算异常退出、不亮红点。 */
+  stoppedByUser: boolean;
 };
 
 type TerminalSession = TerminalSessionInfo & {
@@ -107,6 +109,16 @@ export class TerminalSessionManager {
   }
 
   create(projectId: string, cwd: string, options: CreateOptions = {}): TerminalSessionInfo {
+    // 同一条命令的退出记录只为回看而留,新会话一起就没意义了 —— 顺手清掉没人盯着的
+    // 那些(还开着日志 tab 的留给 idle 回收),免得反复启停把会话名额吃光。
+    if (options.command) {
+      for (const stale of [...this.sessions.values()]) {
+        if (stale.projectId === projectId && stale.commandId === options.command.id
+          && stale.exitCode !== null && stale.listeners.size === 0) {
+          this.sessions.delete(stale.id);
+        }
+      }
+    }
     if (this.sessions.size >= MAX_SESSIONS) throw new Error("终端会话数量已达上限");
     const fallback = shellCommand();
     const shell = options.shell ?? fallback.shell;
@@ -130,6 +142,7 @@ export class TerminalSessionManager {
       commandId: options.command?.id ?? null,
       startedAt: Date.now(),
       exitCode: null,
+      stoppedByUser: false,
     };
     const session: TerminalSession = {
       ...info,
@@ -199,6 +212,57 @@ export class TerminalSessionManager {
     return true;
   }
 
+  /**
+   * 停止一个会话但**保留现场**:会话不删、缓冲日志不丢,退出码照常经 onExit 落在会话上
+   * —— 停止是用户动作,刷新页面后要看得出「我停过」(根 AGENTS.md 的硬要求),所以它和
+   * close(关掉 tab、连日志一起丢)是两个动词。
+   *
+   * 杀的是**整个进程组**(pty 子进程 fork 后 setsid,组长就是它自己,dev server 派生的
+   * 子进程都在组里):SIGTERM 给进程收尾的机会,等不到退出再 SIGKILL 兜底;两轮都压不住
+   * (基本只剩 D 状态)就如实返回失败,绝不把「没杀死」报成「已停」—— 会话还在,UI 可重试。
+   * 自己再 setsid 逃出进程组的守护进程超出本方法能力,属已知边界。
+   */
+  async terminate(
+    sessionId: string,
+    projectId?: string,
+    timeouts?: { termMs?: number; killMs?: number },
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const session = this.session(sessionId, projectId);
+    if (!session || session.exitCode !== null) return { ok: true };
+    session.stoppedByUser = true;
+    this.signalTree(session, "SIGTERM");
+    if (await this.waitForExit(session, timeouts?.termMs ?? 3000)) return { ok: true };
+    this.signalTree(session, "SIGKILL");
+    if (await this.waitForExit(session, timeouts?.killMs ?? 2000)) return { ok: true };
+    return { ok: false, reason: "进程连 SIGKILL 都没响应，可能卡在不可中断的系统调用里" };
+  }
+
+  private signalTree(session: TerminalSession, signal: "SIGTERM" | "SIGKILL"): void {
+    try {
+      // Windows 没有进程组信号这一说,交给 node-pty 收 ConPTY;命令会话在 create 时
+      // 已拒绝 win32,这里只是让普通会话也调用得动。
+      if (IS_WINDOWS) session.process.kill();
+      else process.kill(-session.process.pid, signal);
+    } catch {
+      // 组长已死(ESRCH)但组里可能还有人?此时 -pid 发不出去,退回单发 pty 进程,
+      // 剩下的等 waitForExit 用 onExit 结果说话。
+      try { session.process.kill(signal); } catch { /* already gone */ }
+    }
+  }
+
+  /** 等 onExit 把 exitCode 落到会话上;超时返回 false,由调用方决定升级还是报失败。 */
+  private waitForExit(session: TerminalSession, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const deadline = Date.now() + timeoutMs;
+      const check = () => {
+        if (session.exitCode !== null) return resolve(true);
+        if (Date.now() >= deadline) return resolve(false);
+        setTimeout(check, 50);
+      };
+      check();
+    });
+  }
+
   shutdown(): void {
     clearInterval(this.sweeper);
     for (const sessionId of [...this.sessions.keys()]) this.close(sessionId);
@@ -249,8 +313,8 @@ export class TerminalSessionManager {
   }
 
   private info(session: TerminalSession): TerminalSessionInfo {
-    const { id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode } = session;
-    return { id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode };
+    const { id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode, stoppedByUser } = session;
+    return { id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode, stoppedByUser };
   }
 
   private publish(session: TerminalSession, event: TerminalEventInput): void {
