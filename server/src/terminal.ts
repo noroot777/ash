@@ -173,7 +173,10 @@ export class TerminalSessionManager {
     const session = this.session(sessionId, projectId);
     if (!session) return false;
     session.lastAccessedAt = Date.now();
-    session.process.write(data);
+    // 已退出的会话(常用命令跑完/被停,日志还挂着给人看)吞掉输入:进程都没了,写下去
+    // 只会让 node-pty 抛错、前端弹「连接失败」——而用户只是在死 tab 里碰了下键盘。
+    if (session.exitCode !== null) return true;
+    try { session.process.write(data); } catch { /* pty died between checks */ }
     return true;
   }
 
@@ -181,7 +184,9 @@ export class TerminalSessionManager {
     const session = this.session(sessionId, projectId);
     if (!session) return false;
     session.lastAccessedAt = Date.now();
-    session.process.resize(terminalSize(cols, 100, 20, 400), terminalSize(rows, 24, 5, 200));
+    // 同上:对死 pty 调 resize 是 ioctl ENOTTY,不是调用方的错,静默成功。
+    if (session.exitCode !== null) return true;
+    try { session.process.resize(terminalSize(cols, 100, 20, 400), terminalSize(rows, 24, 5, 200)); } catch { /* pty died between checks */ }
     return true;
   }
 
