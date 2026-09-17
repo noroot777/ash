@@ -297,16 +297,19 @@ export function ProjectTerminal({
   const firstTabId = useRef(clientTabId()).current;
   const nextOrdinal = useRef(2);
   const [height, setHeight] = useState(initialHeight);
-  const [tabs, setTabs] = useState<ProjectTerminalTab[]>(() => [
-    createTerminalTab(firstTabId, 1, project.name, project.repoPath),
-  ]);
-  const [activeId, setActiveId] = useState(firstTabId);
+  // tabs 和 activeId 是同一份状态:容量决策、victim 顶替和激活必须在同一个函数式
+  // updater 里原子完成。拆成两个 state 时,「先读快照定分支、再对可能已变的 cur 插入」
+  // 会在首次挂载与 focusRequest 并发时插出第 9 个 tab(第 3 轮审查实锤:抽屉关着
+  // 直接从状态栏点日志,自动挂载和聚焦两个请求一起完成,React 批处理后超限)。
+  const [pane, setPane] = useState<{ tabs: ProjectTerminalTab[]; activeId: string }>(() => ({
+    tabs: [createTerminalTab(firstTabId, 1, project.name, project.repoPath)],
+    activeId: firstTabId,
+  }));
+  const { tabs, activeId } = pane;
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null;
-  // focusRequest 的容量决策要读最新值,但它的 effect 不能依赖 tabs/activeId(会重复触发)
+  // focusRequest 拒绝提示的预判快照(effect 不能依赖 tabs,会重复触发);超限保证不靠它
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
-  const activeIdRef = useRef(activeId);
-  activeIdRef.current = activeId;
 
   // 打开抽屉时把常驻命令会话(含刚退出还没回收的)挂成 attach tab,排在交互 shell 前面。
   // 同一条命令可能留着多条历史会话(重启一次多一条),tab 只挂最新那条 —— 全挂会出现
@@ -322,13 +325,13 @@ export function ProjectTerminal({
         const known = newestPerCommand.get(session.commandId);
         if (!known || session.startedAt > known.startedAt) newestPerCommand.set(session.commandId, session);
       }
-      setTabs((current) => {
-        const knownIds = new Set(current.map((tab) => tab.attachSessionId).filter(Boolean));
+      setPane((prev) => {
+        const knownIds = new Set(prev.tabs.map((tab) => tab.attachSessionId).filter(Boolean));
         const added = [...newestPerCommand.values()]
           .filter((session) => !knownIds.has(session.id))
-          .slice(0, Math.max(0, MAX_TABS - current.length))
+          .slice(0, Math.max(0, MAX_TABS - prev.tabs.length))
           .map((session) => createAttachTab(session));
-        return added.length ? [...added, ...current] : current;
+        return added.length ? { ...prev, tabs: [...added, ...prev.tabs] } : prev;
       });
     }).catch(() => undefined); // 列表拿不到就只有普通 shell,不值得打断人
     return () => { alive = false; };
@@ -343,31 +346,34 @@ export function ProjectTerminal({
       if (!alive) return;
       const session = sessions.find((item) => item.id === focusRequest.sessionId);
       if (!session) return; // 会话已经没了(状态栏的日志按钮只出现在会话还在时,竞态兜底)
-      // 「日志」入口和「新建 CLI」对 MAX_TABS 必须一致 —— 这里曾无条件插入,满 8 个后
-      // 还能塞到 12 个(第 2 轮审查实锤)。满员时顶掉一个可让位的:非激活的 attach tab
-      // (收起无副作用,会话照跑),先挑已退出的;全让不出位(都是交互 shell/激活中)才
-      // 拒绝,且此时不动 activeId —— active 不能指向没插入的 tab。
-      const current = tabsRef.current;
-      if (!current.some((tab) => tab.id === tabId) && current.length >= MAX_TABS) {
-        const yieldable = (tab: ProjectTerminalTab) => tab.attachSessionId && tab.id !== activeIdRef.current;
-        const victim = [...current].reverse().find((tab) => yieldable(tab) && tab.status === "ended")
-          ?? [...current].reverse().find(yieldable);
-        if (!victim) {
-          notify(`一个抽屉最多打开 ${MAX_TABS} 个 CLI，先收起一个再看日志`);
-          return;
+      // 「日志」入口和「新建 CLI」对 MAX_TABS 必须一致(第 2 轮审查),且判断-顶替-激活
+      // 全部在同一个 updater 里对同一份 tabs 完成(第 3 轮审查:快照分支 + 延后插入会
+      // 在首挂并发时超限)。满员时顶掉一个可让位的:非激活的 attach tab(收起无副作用,
+      // 会话照跑),先挑已退出的;全让不出位(都是交互 shell/激活中)才拒绝 —— 拒绝时
+      // tabs 和 activeId 都不动,active 不能指向没插入的 tab。
+      const pickVictim = (list: ProjectTerminalTab[], active: string) => {
+        const yieldable = (tab: ProjectTerminalTab) => tab.attachSessionId && tab.id !== active;
+        return [...list].reverse().find((tab) => yieldable(tab) && tab.status === "ended")
+          ?? [...list].reverse().find(yieldable);
+      };
+      setPane((prev) => {
+        if (prev.tabs.some((tab) => tab.id === tabId)) return { ...prev, activeId: tabId };
+        if (prev.tabs.length < MAX_TABS) {
+          return { tabs: [createAttachTab(session), ...prev.tabs], activeId: tabId };
         }
-        setTabs((cur) => cur.some((tab) => tab.id === tabId)
-          ? cur
-          : [createAttachTab(session), ...cur.filter((tab) => tab.id !== victim.id)]);
-      } else {
-        setTabs((cur) => cur.some((tab) => tab.id === tabId)
-          ? cur
-          : [createAttachTab(session), ...cur]);
+        const victim = pickVictim(prev.tabs, prev.activeId);
+        if (!victim) return prev;
+        return { tabs: [createAttachTab(session), ...prev.tabs.filter((tab) => tab.id !== victim.id)], activeId: tabId };
+      });
+      // 提示走渲染快照的预判:拒绝只发生在「满员且全是 shell/激活」的稳定态,快照准确;
+      // 首挂并发的竞态态挂的全是可让位的 attach tab,不会走到拒绝。
+      const snapshot = tabsRef.current;
+      if (!snapshot.some((tab) => tab.id === tabId) && snapshot.length >= MAX_TABS && !pickVictim(snapshot, activeId)) {
+        notify(`一个抽屉最多打开 ${MAX_TABS} 个 CLI，先收起一个再看日志`);
       }
-      setActiveId(tabId);
     }).catch(() => undefined);
     return () => { alive = false; };
-  }, [focusRequest, project.id, notify]);
+  }, [focusRequest, project.id, notify, activeId]);
 
   // 所有 attach tab 的状态点由这**一条**集中轮询驱动(会话事实:跑着/脚本退了服务在/
   // 死透),代替曾经的每 tab 各一个探测循环 —— N 个日志 tab 只发一路状态请求,长连接
@@ -390,7 +396,7 @@ export function ProjectTerminal({
       const timeout = window.setTimeout(() => controller.abort(), 4000);
       api.listTerminalSessions(project.id, controller.signal).then(({ sessions }) => {
         if (!alive) return;
-        setTabs((current) => current.map((tab) => {
+        setPane((prev) => ({ ...prev, tabs: prev.tabs.map((tab) => {
           if (!tab.attachSessionId || tab.status === "ended") return tab; // ended 是终态
           const info = sessions.find((item) => item.id === tab.attachSessionId);
           // 会话在服务端已不存在 = 被同命令新会话顶替或闲置回收,对这个 tab 就是结束
@@ -399,7 +405,7 @@ export function ProjectTerminal({
           const stoppedByUser = info?.stoppedByUser ?? tab.stoppedByUser;
           if (status === tab.status && exitCode === tab.exitCode && stoppedByUser === tab.stoppedByUser) return tab;
           return { ...tab, status, exitCode, stoppedByUser };
-        }));
+        }) }));
       }).catch(() => undefined) // 拿不到事实就不动,下一轮再试
         .finally(() => {
           window.clearTimeout(timeout);
@@ -421,7 +427,7 @@ export function ProjectTerminal({
   }, [height]);
 
   const updateTabMeta = useCallback((id: string, patch: Partial<Pick<ProjectTerminalTab, "cwd" | "status">>) => {
-    setTabs((current) => current.map((tab) => tab.id === id ? { ...tab, ...patch } : tab));
+    setPane((prev) => ({ ...prev, tabs: prev.tabs.map((tab) => tab.id === id ? { ...tab, ...patch } : tab) }));
   }, []);
 
   const addTab = () => {
@@ -431,8 +437,8 @@ export function ProjectTerminal({
     }
     const ordinal = nextOrdinal.current++;
     const tab = createTerminalTab(clientTabId(), ordinal, project.name, project.repoPath);
-    setTabs((current) => [...current, tab]);
-    setActiveId(tab.id);
+    // 原子兜底:即使渲染值过期,updater 里也绝不越过上限
+    setPane((prev) => prev.tabs.length >= MAX_TABS ? prev : { tabs: [...prev.tabs, tab], activeId: tab.id });
   };
 
   const closeTab = (id: string) => {
@@ -441,8 +447,7 @@ export function ProjectTerminal({
       onClose();
       return;
     }
-    setTabs(next.tabs);
-    setActiveId(next.activeId);
+    setPane({ tabs: next.tabs, activeId: next.activeId });
   };
 
   const beginResize = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -485,7 +490,7 @@ export function ProjectTerminal({
                 id={`terminal-tab-${tab.id}`}
                 aria-controls={`terminal-panel-${tab.id}`}
                 aria-selected={tab.id === activeId}
-                onClick={() => setActiveId(tab.id)}
+                onClick={() => setPane((prev) => ({ ...prev, activeId: tab.id }))}
               >
                 <TerminalWindow size={14} weight={tab.id === activeId ? "fill" : "regular"} />
                 <b>{tab.label}</b>
