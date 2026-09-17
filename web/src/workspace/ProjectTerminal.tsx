@@ -83,6 +83,7 @@ function TerminalPane({
     let resizeTimer: number | null = null;
     let pendingSize: { cols: number; rows: number } | null = null;
     let groupPollTimer: number | null = null;
+    let probeAbort: AbortController | null = null;
     const terminal = new Terminal({
       cursorBlink: true,
       cursorStyle: "bar",
@@ -194,7 +195,13 @@ function TerminalPane({
             const probe = () => {
               if (probing || settledEnded) return;
               probing = true;
-              api.listTerminalSessions(project.id).then(({ sessions }) => {
+              // 半开连接下 fetch 可能永不 settle,finally 永远不跑,门闩就此卡死、轮询
+              // 全部停摆(第 9 轮审查实锤)。每轮给独立超时:abort 强制 Promise settle,
+              // 超时视作未知(不下结论),门闩释放后下一轮照常探测;卸载时一并 abort。
+              const controller = new AbortController();
+              probeAbort = controller;
+              const timeout = window.setTimeout(() => controller.abort(), 4000);
+              api.listTerminalSessions(project.id, controller.signal).then(({ sessions }) => {
                 if (!alive || settledEnded) return;
                 const info = sessions.find((item) => item.id === sessionId);
                 if (info?.groupAlive) {
@@ -212,7 +219,11 @@ function TerminalPane({
                   ? `\r\n\x1b[90m${info?.stoppedByUser ? "服务已停止" : "服务已退出"}\x1b[0m\r\n`
                   : `\r\n\x1b[90m进程已退出（${event.exitCode}）\x1b[0m\r\n`);
               }).catch(() => undefined) // 拿不到事实就不动,下一轮再试
-                .finally(() => { probing = false; });
+                .finally(() => {
+                  window.clearTimeout(timeout);
+                  if (probeAbort === controller) probeAbort = null;
+                  probing = false;
+                });
             };
             groupPollTimer = window.setInterval(probe, 5000);
             probe();
@@ -242,6 +253,7 @@ function TerminalPane({
       if (inputTimer !== null) window.clearTimeout(inputTimer);
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       if (groupPollTimer !== null) window.clearInterval(groupPollTimer);
+      probeAbort?.abort();
       // attach 的会话不归这个 tab 管:关抽屉/收起 tab 只是不看了,服务照跑(停止走状态栏)。
       if (sessionId && !tab.attachSessionId) void api.closeTerminalSession(project.id, sessionId).catch(() => undefined);
     };
