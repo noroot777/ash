@@ -47,6 +47,7 @@ import { mountTaskDiffRoutes } from "./task-diff-routes.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
 import { mountProviderTestRoutes } from "./provider-test.js";
 import { mountTerminalRoutes } from "./terminal.js";
+import { mountProjectCommandRoutes } from "./terminal-commands.js";
 import { mountFreeWorkflowRoutes } from "./free-workflow-routes.js";
 import { mountReviewerProfileRoutes } from "./reviewer-profiles.js";
 import { mountLocalOpenRoutes } from "./local-open-routes.js";
@@ -593,6 +594,7 @@ mountOpenAiConverterRoutes(api);
 mountAnthropicContext1mRoutes(api);
 mountProviderTestRoutes(api);
 mountTerminalRoutes(api);
+mountProjectCommandRoutes(api);
 
 // ── queues (顺序依赖原语) ────────────────────────────────────────────────────
 // 端点实现与 helper 都在 ./queues.ts(routes.ts 已经很长,队列语义集中一处更好改)。

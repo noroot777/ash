@@ -30,6 +30,11 @@ export type TerminalSessionInfo = {
   cwd: string;
   shell: string;
   name: string;
+  /** 非空 = 这是「常用命令」的常驻会话（shared/src/project-commands.ts），不是交互 shell。 */
+  commandId: string | null;
+  startedAt: number;
+  /** null = 进程还活着。命令会话靠它区分「运行中」和「退了但日志还能回看」。 */
+  exitCode: number | null;
 };
 
 type TerminalSession = TerminalSessionInfo & {
@@ -46,6 +51,11 @@ type CreateOptions = {
   rows?: number;
   shell?: string;
   shellArgs?: string[];
+  /**
+   * 常用命令模式：不开交互 shell，直接 `shell -lc <script>` 跑这条命令，进程退出
+   * 会话就结束（exitCode 落在会话上）。`-l` 保留 —— dev 命令的 PATH/nvm 全靠登录 shell。
+   */
+  command?: { id: string; name: string; script: string };
 };
 
 function terminalSize(value: unknown, fallback: number, min: number, max: number): number {
@@ -100,7 +110,10 @@ export class TerminalSessionManager {
     if (this.sessions.size >= MAX_SESSIONS) throw new Error("终端会话数量已达上限");
     const fallback = shellCommand();
     const shell = options.shell ?? fallback.shell;
-    const args = options.shellArgs ?? fallback.args;
+    // 常用命令在 Windows 上没有对应的「-lc」语义，且 win32 分支未经真机验证 —— 与其留
+    // 一段没跑过的 cmd/pwsh 参数拼接，不如明确拒绝（AGENTS.md「Windows 真机」一节）。
+    if (options.command && IS_WINDOWS) throw new Error("常用命令暂不支持 Windows 上的 ash 实例");
+    const args = options.command ? ["-lc", options.command.script] : options.shellArgs ?? fallback.args;
     const processHandle = pty.spawn(shell, args, {
       name: "xterm-256color",
       cols: terminalSize(options.cols, 100, 20, 400),
@@ -113,7 +126,10 @@ export class TerminalSessionManager {
       projectId,
       cwd,
       shell,
-      name: basename(cwd) || cwd,
+      name: options.command ? options.command.name : basename(cwd) || cwd,
+      commandId: options.command?.id ?? null,
+      startedAt: Date.now(),
+      exitCode: null,
     };
     const session: TerminalSession = {
       ...info,
@@ -127,9 +143,10 @@ export class TerminalSessionManager {
     this.sessions.set(info.id, session);
     processHandle.onData((data) => this.publish(session, { type: "data", data }));
     processHandle.onExit(({ exitCode, signal }) => {
+      session.exitCode = exitCode;
       this.publish(session, { type: "exit", exitCode, signal });
     });
-    return info;
+    return this.info(session);
   }
 
   get(sessionId: string, projectId?: string): TerminalSessionInfo | null {
@@ -188,9 +205,36 @@ export class TerminalSessionManager {
     for (const session of this.sessions.values()) {
       // A subscriber means the CLI is still open, even when the shell is silent.
       if (session.listeners.size > 0 || session.lastAccessedAt >= cutoff) continue;
+      // 活着的常用命令会话是「常驻服务」，没人盯着看不是退出的理由 —— 只有它自己退了
+      // （exitCode 非 null）才回到普通回收轨道，让退出日志保留半小时可回看。
+      if (session.commandId !== null && session.exitCode === null) continue;
       if (this.close(session.id)) closed += 1;
     }
     return closed;
+  }
+
+  /** 一个项目的全部会话（交互 shell + 常用命令），给终端抽屉 attach 和状态栏用。 */
+  listForProject(projectId: string): TerminalSessionInfo[] {
+    return [...this.sessions.values()]
+      .filter((session) => session.projectId === projectId)
+      .map((session) => this.info(session));
+  }
+
+  /** 所有项目的常用命令会话（含刚退出还没被回收的），给全局状态栏汇总用。 */
+  listCommandSessions(): TerminalSessionInfo[] {
+    return [...this.sessions.values()]
+      .filter((session) => session.commandId !== null)
+      .map((session) => this.info(session));
+  }
+
+  /** 某条常用命令当前活着的会话；退了的不算（重启/再启动要在旁边起新会话）。 */
+  liveCommandSession(projectId: string, commandId: string): TerminalSessionInfo | null {
+    for (const session of this.sessions.values()) {
+      if (session.projectId === projectId && session.commandId === commandId && session.exitCode === null) {
+        return this.info(session);
+      }
+    }
+    return null;
   }
 
   private session(sessionId: string, projectId?: string): TerminalSession | null {
@@ -200,8 +244,8 @@ export class TerminalSessionManager {
   }
 
   private info(session: TerminalSession): TerminalSessionInfo {
-    const { id: sessionId, projectId, cwd, shell, name } = session;
-    return { id: sessionId, projectId, cwd, shell, name };
+    const { id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode } = session;
+    return { id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode };
   }
 
   private publish(session: TerminalSession, event: TerminalEventInput): void {
@@ -249,6 +293,12 @@ export function mountTerminalRoutes(api: Hono): void {
     } catch (error) {
       return c.json({ error: `终端启动失败：${error instanceof Error ? error.message : String(error)}` }, 500);
     }
+  });
+
+  // 终端抽屉打开时先问一遍「这个项目已经有哪些会话」：常用命令的常驻会话要 attach
+  // 而不是新建，普通 shell 则永远新建（它的生命周期跟着前端 tab 走）。
+  api.get("/projects/:projectId/terminal/sessions", (c) => {
+    return c.json({ sessions: terminalSessions.listForProject(c.req.param("projectId")) });
   });
 
   api.get("/projects/:projectId/terminal/sessions/:sessionId/events", (c) => {

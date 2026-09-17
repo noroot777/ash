@@ -1,5 +1,6 @@
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { ProjectPreviewConfig } from "@ash/shared/preview";
+import type { ProjectCommandConfig } from "@ash/shared/project-commands";
 
 // JSON columns are stored as text and parsed in the repository layer.
 // Schema mirrors shared/src/index.ts.
@@ -19,6 +20,8 @@ export const projects = sqliteTable("projects", {
   // 认出恰好一个才自动用；命令本身在任务工作区根目录用用户自己的 shell 执行。
   previewCommand: text("preview_command"),
   previewConfig: text("preview_config", { mode: "json" }).$type<ProjectPreviewConfig>(),
+  // 常用命令（全局状态栏启停的常驻服务）。跟预览的分界见 shared/src/project-commands.ts。
+  commandsConfig: text("commands_config", { mode: "json" }).$type<ProjectCommandConfig[]>(),
   // 验收合并完要不要落提交。true（默认，也是老行为）= 合并产生提交；false = 只把改动
   // 合进目标分支的工作区并暂存，目标分支的 ref 一个字节都不动，由人自己提交或丢弃。
   // 单次验收可以覆盖它（POST /tasks/:id/accept 的 commit 参数），这里只是默认值。

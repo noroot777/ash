@@ -440,6 +440,8 @@ export async function ensureSchema() {
     // 项目级预览命令。空 = 按各语言惯例自动识别（preview-command.ts）。
     "ALTER TABLE projects ADD COLUMN preview_command TEXT",
     "ALTER TABLE projects ADD COLUMN preview_config TEXT",
+    // 常用命令（状态栏启停的常驻服务），JSON 数组。见 shared/src/project-commands.ts。
+    "ALTER TABLE projects ADD COLUMN commands_config TEXT",
     // 验收合并完落不落提交（1 = 老行为，落提交）。见 db/schema.ts 同名列。
     "ALTER TABLE projects ADD COLUMN accept_commit INTEGER NOT NULL DEFAULT 1",
     // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────

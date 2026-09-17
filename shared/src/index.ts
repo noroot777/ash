@@ -220,6 +220,7 @@ export type {
   TaskWorkspaceDiscardResult,
   TaskWorkspaceLeftover,
 } from "./project.ts";
+export type { ProjectCommandConfig } from "./project-commands.ts";
 
 export interface NoteTaskLink {
   taskId: string;

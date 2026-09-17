@@ -1,6 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { MAX_PREVIEW_SCRIPT_LENGTH, parsePreviewConfig } from "@ash/shared/preview";
+import { parseProjectCommands } from "@ash/shared/project-commands";
 import { detectPreviewCandidates } from "./preview-command.js";
 import { rmSync } from "node:fs";
 import { join, basename } from "node:path";
@@ -120,6 +121,7 @@ export function mountProjectRoutes(api: Hono): void {
       useWorktreeDefault: true,
       previewCommand: null,
       previewConfig: null,
+      commandsConfig: null,
       acceptCommit: true,
       createdAt: now(),
       ownerUserId: ownerIdOf(actor),
@@ -191,6 +193,7 @@ export function mountProjectRoutes(api: Hono): void {
       useWorktreeDefault: true,
       previewCommand: null,
       previewConfig: null,
+      commandsConfig: null,
       acceptCommit: true,
       createdAt: now(),
       ownerUserId: ownerIdOf(actor),
@@ -271,6 +274,10 @@ export function mountProjectRoutes(api: Hono): void {
     if (b.previewConfig !== undefined) {
       try { patch.previewConfig = parsePreviewConfig(b.previewConfig); }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : "预览配置无效" }, 400); }
+    }
+    if (b.commandsConfig !== undefined) {
+      try { patch.commandsConfig = parseProjectCommands(b.commandsConfig); }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : "常用命令配置无效" }, 400); }
     }
     // 验收合并完落不落提交。只收布尔:这一项决定的是「会不会在用户的目标分支上产生提交」,
     // 一个含糊的真值转换(空串/0/"false")在这儿就是替他改 git 历史,宁可 400。
