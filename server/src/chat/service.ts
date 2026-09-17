@@ -276,7 +276,9 @@ export class ChatService {
       if (!abort.signal.aborted) return member;
     } catch (error) {
       const boundary = error instanceof ChatBoundaryError;
-      const reason = error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
+      // 留够位置给解析失败时附带的原始输出摘要（rawOutputExcerpt），否则它刚拼进错误正文
+      // 就被这里截掉，等于没带。别的错误本来就远短于此，放宽对它们没有影响。
+      const reason = (error instanceof Error ? error.message : String(error)).slice(0, 1200);
       const preserved = !boundary && !abort.signal.aborted ? sideResult : undefined;
       const updated = await db.update(chatMessages).set({ status: preserved ? "done" : boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: withNotice(preserved ? preserved.reply : reason),
         ...(preserved ? { modelReply: `${preserved.reply}\n[未发送到主任务：${reason}]`, forwardError: reason } : {}),

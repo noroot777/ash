@@ -91,7 +91,13 @@ const summaries = () => calls.filter((call) => call.summary);
 
 try {
   assert.ok(estimateChatTokens("汉".repeat(100)) > estimateChatTokens("x".repeat(100)));
-  for (const text of ["oops", "null", "[]", '{"summary":12}', '{"summary":{}}', '{"summary":""}', '{"summary":"ok"} 结语', '[{"summary":"ok"}]', JSON.stringify({ summary: "汉".repeat(1000) })]) assert.throws(() => parseChatSummary(text, 500));
+  for (const text of ["oops", "null", "[]", '{"summary":12}', '{"summary":{}}', '{"summary":""}', JSON.stringify({ summary: "汉".repeat(1000) })]) assert.throws(() => parseChatSummary(text, 500));
+  // 下面两条过去都会整轮作废（摘要还要赔上五分钟失败冷却），共同点是「内容本身有效、只是
+  // 包装不标准」：一个多了句尾随废话，一个被数组包了一层。旧实现把最后一个 `{` 切到文本
+  // 结尾再 parse，这两种都会多出字符而解析失败——但同样被忽略的前置说明却一直放行。现在
+  // 按内容判断，不按包装判断；真正无效的（上面那一排）仍然抛。
+  assert.equal(parseChatSummary('{"summary":"ok"} 结语', 500), "ok");
+  assert.equal(parseChatSummary('[{"summary":"ok"}]', 500), "ok");
   for (const [prefix, suffix] of [["", ""], ["整理好了。\n", ""], ["```json\n", "\n```"], ["整理好了。\n```json\n", "\n```"], ['{"旧输出":"忽略"}\n', ""]]) {
     assert.equal(parseChatSummary(`${prefix}${JSON.stringify({ summary: ' 保留决定 {A} 与 "B" ', metadata: { extra: true }, task: { title: "忽略" } })}${suffix}`, 500), '保留决定 {A} 与 "B"');
     assert.deepEqual(parseChatReply(`${prefix}{"reply":"已处理","task":null,"extra":true}${suffix}`), { reply: "已处理", task: null });

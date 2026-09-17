@@ -21,15 +21,33 @@ ${history.map((entry) => typeof entry === "string" ? entry : JSON.stringify(entr
 ${JSON.stringify(request)}`;
 }
 
-export type SideChatReply = { reply: string; forward: { text: string; authorization: string } | null; forwardError?: string; task: null };
+export type SideChatReply = { reply: string; forward: { text: string; authorization: string } | null; forwardError?: string; formatWarning?: string; task: null };
 
+/** 降级正文的上限：比提示里写的 12000 字回复留些余量，够放下中间叙述又不至于撑爆气泡。 */
+const FALLBACK_REPLY_LIMIT = 16000;
+
+/**
+ * 解析侧聊的最终 JSON。**拿不到 JSON 不再作废整轮**：这一轮通常是十几次工具调用换来的
+ * 调研结论，而 reply 正文没有任何安全语义——把模型的原始输出直接当正文展示，比丢掉强
+ * 得多（丢掉之后用户只剩「请重试」，十几次工具白跑，原文也无处可查）。
+ *
+ * 严格的只有 forward：回传要动主任务，必须是结构完整、授权原话对得上的 JSON 才放行。
+ * 降级路径一律 forward=null，也就是「只回答、不回传」，这是安全方向上的保守选择。
+ */
 export function parseSideChatReply(text: string, source: string): SideChatReply {
   const raw = parseLastJsonObject(text);
-  if (!raw || typeof raw.reply !== "string" || !raw.reply.trim()) throw new Error("侧聊回复格式无效，请重试。");
+  if (!raw || typeof raw.reply !== "string" || !raw.reply.trim()) return fallbackReply(text);
   if (raw.forward == null) return { reply: raw.reply, forward: null, task: null };
   const action = raw.forward as Record<string, unknown>;
   const rejected = (forwardError: string) => ({ reply: raw.reply as string, forward: null, forwardError, task: null });
   if (typeof action.text !== "string" || !action.text.trim() || action.text.length > 8000 || typeof action.authorization !== "string") return rejected("回传内容格式无效或超过 8000 字。");
   if (!authorizationIsFromSource(source, action.authorization)) return rejected("回传授权原话不在当前用户消息中，未发送到主任务。");
   return { reply: raw.reply, forward: { text: action.text.trim(), authorization: action.authorization }, task: null };
+}
+
+function fallbackReply(text: string): SideChatReply {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "").trim();
+  if (!trimmed) throw new Error("侧聊没有返回任何内容，请重试。");
+  const reply = trimmed.length > FALLBACK_REPLY_LIMIT ? `${trimmed.slice(0, FALLBACK_REPLY_LIMIT)}…` : trimmed;
+  return { reply, forward: null, formatWarning: "⚠️ 本轮输出不是约定的 JSON 格式，上面是智能体的原始输出。回传功能本轮不可用（需要合法 JSON 才会发给主任务）。", task: null };
 }

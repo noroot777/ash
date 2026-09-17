@@ -49,8 +49,18 @@ assert.equal(isAllMention("All"), true);
 assert.equal(isAllMention("所有人"), true);
 assert.equal(isAllMention("codex"), false);
 assert.throws(() => parseChatReply('{"reply":"ok","task":{}}'));
-assert.throws(() => parseChatReply('{"reply":"ok","task":null} unexpected tail'));
+// 尾随文字曾经让整轮作废（旧实现把最后一个 `{` 切到文本结尾再 parse，多一个字符就全盘失
+// 败），而同样被忽略的前置说明却一直放行——同一段废话换个位置待遇不同，纯属实现副产品。
+// 现在两边一致：说明被丢弃，最终 JSON 照常采用。
+assert.deepEqual(parseChatReply('{"reply":"ok","task":null} 如果还需要我继续，告诉我。'), { reply: "ok", task: null });
+assert.deepEqual(parseChatReply('```json\n{"reply":"ok","task":null}\n```\n\n以上。'), { reply: "ok", task: null });
 assert.deepEqual(parseChatReply('我先查看项目文件。{"reply":"建议简化导航","task":null}'), { reply: "建议简化导航", task: null });
+// 嵌套对象不能被单独取走：最后一个 `{` 是 task 的，取到它就得到一个没有 reply 的半截结果。
+assert.equal(parseChatReply('{"reply":"好","task":{"title":"A","body":"B"}} 完毕').task?.title, "A");
+// 正文里举例的 JSON 不干扰最终 JSON；完全没有最终 JSON 时仍然失败，并带出原始输出供排查。
+assert.deepEqual(parseChatReply('比如 {"a":1} 这种。{"reply":"结论","task":null}'), { reply: "结论", task: null });
+assert.throws(() => parseChatReply('排序写在 {"order":"desc"} 这里，以上就是结论。'), /智能体原始输出/);
+assert.throws(() => parseChatReply("完全没有 JSON 的一段回答。"), /智能体原始输出/);
 assert.equal(parseChatReply('读取完成。```json\n{"reply":"已整理目标","task":{"title":"改登录页","body":"实现指定布局"}}\n```').task?.title, "改登录页");
 assert.equal(parseChatReply(JSON.stringify({ reply: "好".repeat(500), task: null })).reply.length, 300);
 

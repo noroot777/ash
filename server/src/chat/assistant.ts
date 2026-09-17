@@ -12,7 +12,7 @@ import { filterOwned } from "../auth/owned.js";
 import { searchAll } from "../search.js";
 import { AssistantToolError, type invokeChat, type ChatInvocation } from "./execution.js";
 import { chatPrompt, parseChatReply } from "./prompt.js";
-import { parseLastJsonObject } from "./json-object.js";
+import { parseLastJsonObject, rawOutputExcerpt } from "./json-object.js";
 import { estimateChatTokens } from "./context-format.js";
 import { ASSISTANT_GUIDE, ASSISTANT_REPLY_STYLE, ASSISTANT_WORKFLOW_EXAMPLE } from "./assistant-guide.js";
 
@@ -107,7 +107,7 @@ export async function invokeAssistant(member: ChatMember, room: Room, prompt: st
       response = await invoke(member, room.ownerUserId, prompt + evidence + "\n【JSON 格式重试】\n上一轮输出无法按 JSON 解析，本轮请只输出合法 JSON。reply 等字符串值里的换行用转义序列，正文引号使用「」，不要在字符串内部放未转义的双引号。不要调用任何工具。", signal, room.projectId, { purpose: "assistant" });
       raw = parseLastJsonObject(response.text);
     }
-    if (!raw) throw new Error("助手未返回有效回复，请重试。");
+    if (!raw) throw new Error(`助手未返回有效回复，请重试。${rawOutputExcerpt(response.text)}`);
     if (raw.search != null) {
       if (round === 2) throw new Error("本轮检索已达上限，请补充任务的项目或关键词后继续。");
       const search = raw.search as Record<string, unknown>;
