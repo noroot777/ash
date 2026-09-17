@@ -14,6 +14,9 @@ export type ProjectTerminalTab = {
    * 这类 tab 的生命周期跟前端无关：关 tab 只是不看了，会话照跑；停止走状态栏。
    */
   attachSessionId?: string;
+  /** attach tab:会话事实的镜像,由集中轮询维护,驱动状态点与正文说明的措辞。 */
+  stoppedByUser?: boolean;
+  exitCode?: number | null;
 };
 
 export function createTerminalTab(
@@ -31,8 +34,30 @@ export function createTerminalTab(
   };
 }
 
-export function createAttachTab(sessionId: string, label: string, cwd: string): ProjectTerminalTab {
-  return { id: `attach:${sessionId}`, ordinal: 0, label, status: "starting", cwd, attachSessionId: sessionId };
+/** attach tab 的状态点表达**会话/服务的事实**(跑着/脚本退了服务在/死透),不是连接状态。 */
+export function attachStatusOf(session: { exitCode: number | null; groupAlive: boolean }): TerminalStatus {
+  return session.exitCode === null ? "ready" : session.groupAlive ? "detached" : "ended";
+}
+
+export function createAttachTab(session: {
+  id: string;
+  name: string;
+  cwd: string;
+  exitCode: number | null;
+  groupAlive: boolean;
+  stoppedByUser: boolean;
+}): ProjectTerminalTab {
+  return {
+    id: `attach:${session.id}`,
+    ordinal: 0,
+    label: session.name,
+    // 初始状态直接由会话事实算出:从未点开过的 tab 也要显示真实状态,不能挂在「正在启动」
+    status: attachStatusOf(session),
+    cwd: session.cwd,
+    attachSessionId: session.id,
+    stoppedByUser: session.stoppedByUser,
+    exitCode: session.exitCode,
+  };
 }
 
 export function withoutTerminalTab(

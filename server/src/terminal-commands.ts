@@ -81,6 +81,11 @@ export function stopCommand(projectId: string, commandId: string): Promise<Comma
 
 export function restartCommand(projectId: string, cwd: string, command: ProjectCommandConfig): Promise<CommandActionResult> {
   return withCommandLock(projectId, command.id, async () => {
+    // 先确认建得出替代会话再动手杀旧的:create 若注定因会话上限失败,「重启失败」
+    // 会落成「服务被停了」。同命令会话不占这个判断(它们都会让位)。
+    if (!terminalSessions.hasSlotForCommand(projectId, command.id)) {
+      return { status: 500 as const, body: { error: "重启失败：终端会话数量已达上限" } };
+    }
     const live = terminalSessions.liveCommandSession(projectId, command.id);
     if (live) {
       const result = await terminalSessions.terminate(live.id, projectId);

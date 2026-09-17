@@ -8,6 +8,7 @@ import { api, type TerminalEvent } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import {
+  attachStatusOf,
   createAttachTab,
   createTerminalTab,
   type ProjectTerminalTab,
@@ -62,6 +63,41 @@ function TerminalPane({
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const sessionIdRef = useRef<string | null>(tab.attachSessionId ?? null);
+  // shell tab 的会话要 create 完才有 id;attach tab 一开始就有。流 effect 等这个。
+  const [establishedId, setEstablishedId] = useState<string | null>(tab.attachSessionId ?? null);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  // 每条 SSE 连接生命周期内,每种说明只写一次(重连 reset 后重置,replay 末尾补写)。
+  const announcedRef = useRef({ detached: false, ended: false });
+  const prevStatusRef = useRef(tab.status);
+
+  // attach tab 的正文说明:按当前会话事实追加一行灰字。触发点有二 —— 状态转变
+  // (集中轮询推进 detached/ended)和 SSE replay 到 exit(重连后补写,否则 reset 把
+  // 上一条连接写的说明冲掉了)。
+  const announce = useCallback(() => {
+    const terminal = terminalRef.current;
+    const current = tabRef.current;
+    if (!terminal || !current.attachSessionId) return;
+    const flags = announcedRef.current;
+    if (current.status === "detached" && !flags.detached) {
+      flags.detached = true;
+      terminal.write(`\r\n\x1b[90m启动脚本已退出（${current.exitCode ?? 0}），服务仍在运行 —— 停止/重启在状态栏\x1b[0m\r\n`);
+    } else if (current.status === "ended" && !flags.ended) {
+      flags.ended = true;
+      terminal.write(current.stoppedByUser
+        ? "\r\n\x1b[90m服务已停止\x1b[0m\r\n"
+        : flags.detached
+          ? "\r\n\x1b[90m服务已退出\x1b[0m\r\n"
+          : `\r\n\x1b[90m进程已退出（${current.exitCode ?? 0}）\x1b[0m\r\n`);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (prevStatusRef.current === tab.status) return;
+    prevStatusRef.current = tab.status;
+    announce();
+  }, [tab.status, announce]);
 
   useEffect(() => {
     if (!active) return;
@@ -70,20 +106,17 @@ function TerminalPane({
     });
   }, [active]);
 
+  // 基座:xterm 实例、输入/резize 通道、shell 会话的创建与关闭。日志流不在这里 ——
+  // 它跟随 active(见下一个 effect),隐藏 tab 不占长连接。
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     let alive = true;
-    let ended = false;
-    let sessionId: string | null = null;
-    let source: EventSource | null = null;
     let inputBuffer = "";
     let inputTimer: number | null = null;
     let inputChain = Promise.resolve();
     let resizeTimer: number | null = null;
     let pendingSize: { cols: number; rows: number } | null = null;
-    let groupPollTimer: number | null = null;
-    let probeAbort: AbortController | null = null;
     const terminal = new Terminal({
       cursorBlink: true,
       cursorStyle: "bar",
@@ -115,21 +148,21 @@ function TerminalPane({
     terminal.loadAddon(fit);
     terminal.open(host);
 
-    const setStatus = (status: TerminalStatus) => onMeta(tab.id, { status });
     const showConnectionError = (reason: unknown) => {
       if (!alive) return;
-      setStatus("error");
+      onMeta(tab.id, { status: "error" });
       const message = reason instanceof Error ? reason.message : String(reason);
       terminal.write(`\r\n\x1b[31mCLI 连接失败：${message}\x1b[0m\r\n`);
       notify(`CLI 连接失败：${message}`);
     };
     const flushInput = () => {
       inputTimer = null;
+      const sessionId = sessionIdRef.current;
       if (!sessionId || !inputBuffer) return;
       const data = inputBuffer;
       inputBuffer = "";
       inputChain = inputChain
-        .then(() => api.writeTerminalSession(project.id, sessionId!, data))
+        .then(() => api.writeTerminalSession(project.id, sessionId, data))
         .catch(showConnectionError);
     };
     const queueInput = (data: string) => {
@@ -138,6 +171,7 @@ function TerminalPane({
     };
     const flushResize = () => {
       resizeTimer = null;
+      const sessionId = sessionIdRef.current;
       if (!sessionId || !pendingSize) return;
       const size = pendingSize;
       pendingSize = null;
@@ -160,90 +194,24 @@ function TerminalPane({
       try { fit.fit(); terminal.focus(); } catch { /* component was removed */ }
     });
 
-    // attach 模式(常用命令的常驻会话):不新建 shell,直接挂上已有会话收发。SSE 从 seq 0
-    // 回放服务端缓冲,所以启动早于打开抽屉的输出也能看到。
-    const establish: Promise<{ id: string; cwd: string }> = tab.attachSessionId
-      ? Promise.resolve({ id: tab.attachSessionId, cwd: tab.cwd })
-      : api.createTerminalSession(project.id, { cols: terminal.cols, rows: terminal.rows });
-    void establish
-      .then((session) => {
-        if (!alive) {
-          if (!tab.attachSessionId) void api.closeTerminalSession(project.id, session.id).catch(() => undefined);
-          return;
-        }
-        sessionId = session.id;
-        onMeta(tab.id, { cwd: session.cwd });
-        source = new EventSource(api.terminalEventsUrl(project.id, session.id));
-        source.onopen = () => { if (alive && !ended) setStatus("ready"); };
-        source.onmessage = (message) => {
-          if (!alive) return;
-          const event = JSON.parse(message.data) as TerminalEvent;
-          if (event.type === "data") {
-            terminal.write(event.data);
+    if (!tab.attachSessionId) {
+      void api.createTerminalSession(project.id, { cols: terminal.cols, rows: terminal.rows })
+        .then((session) => {
+          if (!alive) {
+            void api.closeTerminalSession(project.id, session.id).catch(() => undefined);
             return;
           }
-          ended = true;
-          if (tab.attachSessionId) {
-            // 组长退了 ≠ 命令死了(daemonize)。探测循环:立即一次 + 每 5s 一次,**只有
-            // 成功拿到事实才下结论**(失败只等下一轮);in-flight 门闩串行化请求 ——
-            // 没有它,一次超过 5s 的慢响应会和下一轮并发,停止后旧的「还活着」响应
-            // 迟到抵达,把已 ended 的 tab 复活成绿色且 interval 已清、永不自愈
-            // (第 6/7/8 轮审查各实锤一角)。ended 是终态,settledEnded 再兜一层。
-            let announcedDetached = false;
-            let probing = false;
-            let settledEnded = false;
-            const probe = () => {
-              if (probing || settledEnded) return;
-              probing = true;
-              // 半开连接下 fetch 可能永不 settle,finally 永远不跑,门闩就此卡死、轮询
-              // 全部停摆(第 9 轮审查实锤)。每轮给独立超时:abort 强制 Promise settle,
-              // 超时视作未知(不下结论),门闩释放后下一轮照常探测;卸载时一并 abort。
-              const controller = new AbortController();
-              probeAbort = controller;
-              const timeout = window.setTimeout(() => controller.abort(), 4000);
-              api.listTerminalSessions(project.id, controller.signal).then(({ sessions }) => {
-                if (!alive || settledEnded) return;
-                const info = sessions.find((item) => item.id === sessionId);
-                if (info?.groupAlive) {
-                  if (!announcedDetached) {
-                    announcedDetached = true;
-                    setStatus("detached");
-                    terminal.write(`\r\n\x1b[90m启动脚本已退出（${event.exitCode}），服务仍在运行 —— 停止/重启在状态栏\x1b[0m\r\n`);
-                  }
-                  return;
-                }
-                settledEnded = true;
-                if (groupPollTimer !== null) { window.clearInterval(groupPollTimer); groupPollTimer = null; }
-                setStatus("ended");
-                terminal.write(announcedDetached
-                  ? `\r\n\x1b[90m${info?.stoppedByUser ? "服务已停止" : "服务已退出"}\x1b[0m\r\n`
-                  : `\r\n\x1b[90m进程已退出（${event.exitCode}）\x1b[0m\r\n`);
-              }).catch(() => undefined) // 拿不到事实就不动,下一轮再试
-                .finally(() => {
-                  window.clearTimeout(timeout);
-                  if (probeAbort === controller) probeAbort = null;
-                  probing = false;
-                });
-            };
-            groupPollTimer = window.setInterval(probe, 5000);
-            probe();
-          } else {
-            setStatus("ended");
-            terminal.write(`\r\n\x1b[90m进程已退出（${event.exitCode}）\x1b[0m\r\n`);
-          }
-        };
-        source.onerror = () => {
-          if (!alive || ended) return;
-          onMeta(tab.id, { status: "reconnecting" });
-        };
-        flushInput();
-        queueResize(terminal.cols, terminal.rows);
-      })
-      .catch(showConnectionError);
+          sessionIdRef.current = session.id;
+          onMeta(tab.id, { cwd: session.cwd });
+          setEstablishedId(session.id);
+          flushInput();
+          queueResize(terminal.cols, terminal.rows);
+        })
+        .catch(showConnectionError);
+    }
 
     return () => {
       alive = false;
-      source?.close();
       observer.disconnect();
       input.dispose();
       resize.dispose();
@@ -252,12 +220,54 @@ function TerminalPane({
       fitRef.current = null;
       if (inputTimer !== null) window.clearTimeout(inputTimer);
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
-      if (groupPollTimer !== null) window.clearInterval(groupPollTimer);
-      probeAbort?.abort();
       // attach 的会话不归这个 tab 管:关抽屉/收起 tab 只是不看了,服务照跑(停止走状态栏)。
-      if (sessionId && !tab.attachSessionId) void api.closeTerminalSession(project.id, sessionId).catch(() => undefined);
+      if (sessionIdRef.current && !tab.attachSessionId) {
+        void api.closeTerminalSession(project.id, sessionIdRef.current).catch(() => undefined);
+      }
     };
-  }, [notify, onMeta, project.id, tab.id, tab.attachSessionId, tab.cwd]);
+  }, [notify, onMeta, project.id, tab.id, tab.attachSessionId]);
+
+  // 日志流:只有激活 tab 保持 SSE。每个隐藏 tab 一条常驻长连接会把 Chrome 的同源
+  // 连接池(HTTP/1.1 同主机 6 条)占满,停止/重启和一切状态轮询全部 pending,控制面
+  // 冻结(第 1 轮审查实锤:6 条活命令即可复现)。切走即断,切回 reset 后从 seq 0
+  // 重放服务端缓冲 —— 日志不丢,连接数恒为 1。
+  useEffect(() => {
+    if (!active || !establishedId) return;
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    let alive = true;
+    let ended = false;
+    terminal.reset();
+    announcedRef.current = { detached: false, ended: false };
+    const source = new EventSource(api.terminalEventsUrl(project.id, establishedId));
+    // attach tab 的状态点表达会话/服务事实,由集中轮询驱动,连接事件不碰它。
+    source.onopen = () => { if (alive && !ended && !tab.attachSessionId) onMeta(tab.id, { status: "ready" }); };
+    source.onmessage = (message) => {
+      if (!alive) return;
+      const event = JSON.parse(message.data) as TerminalEvent;
+      if (event.type === "data") {
+        terminal.write(event.data);
+        return;
+      }
+      ended = true;
+      if (tab.attachSessionId) {
+        // 组长退了 ≠ 命令死了(daemonize),结论归集中轮询;这里只按已知事实补写说明
+        // (重放场景:上一条连接写过的说明被 reset 冲掉了,exit 是重放的收尾信号)。
+        announce();
+      } else {
+        onMeta(tab.id, { status: "ended" });
+        terminal.write(`\r\n\x1b[90m进程已退出（${event.exitCode}）\x1b[0m\r\n`);
+      }
+    };
+    source.onerror = () => {
+      if (!alive || ended || tab.attachSessionId) return;
+      onMeta(tab.id, { status: "reconnecting" });
+    };
+    return () => {
+      alive = false;
+      source.close();
+    };
+  }, [active, establishedId, project.id, tab.id, tab.attachSessionId, onMeta, announce]);
 
   return (
     <div
@@ -295,7 +305,8 @@ export function ProjectTerminal({
 
   // 打开抽屉时把常驻命令会话(含刚退出还没回收的)挂成 attach tab,排在交互 shell 前面。
   // 同一条命令可能留着多条历史会话(重启一次多一条),tab 只挂最新那条 —— 全挂会出现
-  // 一排重名 tab。不自动激活:用户开抽屉多半是要敲命令,聚焦命令日志走 focusRequest。
+  // 一排重名 tab。自动挂载受 MAX_TABS 约束,挂不下的从状态栏「日志」点开。不自动激活:
+  // 用户开抽屉多半是要敲命令,聚焦命令日志走 focusRequest。
   useEffect(() => {
     let alive = true;
     api.listTerminalSessions(project.id).then(({ sessions }) => {
@@ -310,7 +321,8 @@ export function ProjectTerminal({
         const knownIds = new Set(current.map((tab) => tab.attachSessionId).filter(Boolean));
         const added = [...newestPerCommand.values()]
           .filter((session) => !knownIds.has(session.id))
-          .map((session) => createAttachTab(session.id, session.name, session.cwd));
+          .slice(0, Math.max(0, MAX_TABS - current.length))
+          .map((session) => createAttachTab(session));
         return added.length ? [...added, ...current] : current;
       });
     }).catch(() => undefined); // 列表拿不到就只有普通 shell,不值得打断人
@@ -328,11 +340,58 @@ export function ProjectTerminal({
       if (!session) return; // 会话已经没了(状态栏的日志按钮只出现在会话还在时,竞态兜底)
       setTabs((current) => current.some((tab) => tab.id === tabId)
         ? current
-        : [createAttachTab(session.id, session.name, session.cwd), ...current]);
+        : [createAttachTab(session), ...current]);
       setActiveId(tabId);
     }).catch(() => undefined);
     return () => { alive = false; };
   }, [focusRequest, project.id]);
+
+  // 所有 attach tab 的状态点由这**一条**集中轮询驱动(会话事实:跑着/脚本退了服务在/
+  // 死透),代替曾经的每 tab 各一个探测循环 —— N 个日志 tab 只发一路状态请求,长连接
+  // 也只有激活 tab 一条(见 TerminalPane 的流 effect)。门闩/超时/终态语义沿用单 tab
+  // 时代(第 8/9 轮审查打磨):in-flight 未归不发下一轮(乱序防护)、每轮 4s 超时
+  // abort(半开连接防护)、ended 终态不回退(旧响应防护)。全部 tab 到终态即停。
+  const pollKey = tabs
+    .filter((tab) => tab.attachSessionId && tab.status !== "ended")
+    .map((tab) => tab.id).sort().join(",");
+  useEffect(() => {
+    if (!pollKey) return;
+    let alive = true;
+    let probing = false;
+    let inFlight: AbortController | null = null;
+    const probe = () => {
+      if (!alive || probing) return;
+      probing = true;
+      const controller = new AbortController();
+      inFlight = controller;
+      const timeout = window.setTimeout(() => controller.abort(), 4000);
+      api.listTerminalSessions(project.id, controller.signal).then(({ sessions }) => {
+        if (!alive) return;
+        setTabs((current) => current.map((tab) => {
+          if (!tab.attachSessionId || tab.status === "ended") return tab; // ended 是终态
+          const info = sessions.find((item) => item.id === tab.attachSessionId);
+          // 会话在服务端已不存在 = 被同命令新会话顶替或闲置回收,对这个 tab 就是结束
+          const status = info ? attachStatusOf(info) : "ended";
+          const exitCode = info ? info.exitCode : tab.exitCode;
+          const stoppedByUser = info?.stoppedByUser ?? tab.stoppedByUser;
+          if (status === tab.status && exitCode === tab.exitCode && stoppedByUser === tab.stoppedByUser) return tab;
+          return { ...tab, status, exitCode, stoppedByUser };
+        }));
+      }).catch(() => undefined) // 拿不到事实就不动,下一轮再试
+        .finally(() => {
+          window.clearTimeout(timeout);
+          if (inFlight === controller) inFlight = null;
+          probing = false;
+        });
+    };
+    const timer = window.setInterval(probe, 5000);
+    probe();
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      inFlight?.abort();
+    };
+  }, [pollKey, project.id]);
 
   useEffect(() => {
     window.localStorage.setItem(TERMINAL_HEIGHT_KEY, String(height));

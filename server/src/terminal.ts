@@ -121,13 +121,16 @@ export class TerminalSessionManager {
   }
 
   create(projectId: string, cwd: string, options: CreateOptions = {}): TerminalSessionInfo {
-    // 同一条命令的退出记录只为回看而留,新会话一起就没意义了 —— 顺手清掉没人盯着、
-    // **整组也确实死透**的那些(组里还有活人的会话是唯一能停到那些进程的把手,不能删;
-    // 还开着日志 tab 的留给 idle 回收),免得反复启停把会话名额吃光。
+    // 同一条命令的退出记录只为回看而留,新会话一起就没意义了 —— **无条件**清掉整组
+    // 已死透的那些(组里还有活人的会话是唯一能停到那些进程的把手,不能删)。开着日志
+    // tab(有订阅)也照清:订阅钉住退出记录会把 16 个会话槽慢慢吃光,反复重启后 create
+    // 失败、restart 变成服务中断(第 1 轮审查实锤)。前端本来就只挂同命令最新会话的
+    // tab,旧记录被替换是预期行为。
     if (options.command) {
       for (const stale of [...this.sessions.values()]) {
         if (stale.projectId === projectId && stale.commandId === options.command.id
-          && !this.sessionAlive(stale) && stale.listeners.size === 0) {
+          && !this.sessionAlive(stale)) {
+          stale.listeners.clear();
           this.sessions.delete(stale.id);
         }
       }
@@ -349,6 +352,20 @@ export class TerminalSessionManager {
       }
     }
     return null;
+  }
+
+  /**
+   * restart 的容量预检:排除同命令会话(活的会被 terminate、死的会被 create 清掉,
+   * 都会让位)后还有没有槽。restart 的顺序是先杀旧再建新,若 create 注定因上限失败,
+   * 必须在动手前拒绝 —— 「重启失败」绝不能落成「服务被停了」(第 1 轮审查实锤)。
+   */
+  hasSlotForCommand(projectId: string, commandId: string): boolean {
+    let occupied = 0;
+    for (const session of this.sessions.values()) {
+      if (session.projectId === projectId && session.commandId === commandId) continue;
+      occupied++;
+    }
+    return occupied < MAX_SESSIONS;
   }
 
   private session(sessionId: string, projectId?: string): TerminalSession | null {

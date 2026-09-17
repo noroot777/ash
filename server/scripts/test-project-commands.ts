@@ -187,6 +187,28 @@ try {
   assert.equal(manager.liveCommandSession("p1", "daemon"), null);
   assert.equal(manager.get(daemon.id, "p1")?.groupAlive, false);
 
+  // 日志订阅不钉住退出记录:create 同命令新会话时,被订阅的死记录也照清 —— 否则反复
+  // 「重启 + 开日志」把 16 个会话槽吃光后,restart 先杀旧再建新,建新失败落成服务中断
+  // (第 1 轮审查实锤:第 16 次 restart 后 live null)。
+  const pinned = manager.create("p1", cwd, { command: { id: "pin", name: "pin", script: "exit 0" } });
+  await waitExit(pinned.id, "p1");
+  manager.subscribe(pinned.id, "p1", () => {}); // 一直开着的日志 tab,不退订
+  const replacing = manager.create("p1", cwd, { command: { id: "pin", name: "pin", script: "sleep 60" } });
+  assert.equal(manager.get(pinned.id, "p1"), null, "被订阅的同命令退出记录也必须被新会话替换清掉");
+  assert.deepEqual(await manager.terminate(replacing.id, "p1"), { ok: true });
+
+  // audit 的完整场景:连环 restart、每次都订阅新会话的日志,槽不再被吃光,每次都成功。
+  const churn: ProjectCommandConfig = { id: "churn", name: "churn", command: "sleep 60", restartCommand: null };
+  for (let i = 0; i < 18; i++) {
+    const result = await restartCommand("pc2", cwd, churn);
+    assert.equal(result.status, 201, `第 ${i + 1} 次 restart 必须成功(退出记录不被订阅钉住)`);
+    terminalSessions.subscribe((result.body as { session: { id: string } }).session.id, "pc2", () => {});
+  }
+  const churnLive = terminalSessions.listCommandSessions()
+    .filter((session) => session.projectId === "pc2" && session.commandId === "churn" && session.groupAlive);
+  assert.equal(churnLive.length, 1, "连环重启后同一条命令只有一条活会话");
+  assert.deepEqual((await stopCommand("pc2", "churn")).body, { stopped: true });
+
   // server 退出路径:shutdown() 必须整组收割,忽略信号的孤儿也不能漏 —— 否则 ash 重启后
   // 会话表清零(内存态),旧进程却被 PID 1 收养继续占端口。两种形状都要盖:组长还活着的
   // (orphan2,& wait)和组长已自然退出的(daemon2,exitCode 已落 —— 只筛 exitCode===null
