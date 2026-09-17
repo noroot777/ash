@@ -40,7 +40,18 @@ export function useFileListLayout(): [FileListLayout, (next: FileListLayout) => 
   const [layout, setLayout] = useState<FileListLayout>(stored);
 
   useEffect(() => {
-    const sync = () => setLayout(stored());
+    const sync = (event: Event) => {
+      // 本页那次广播**自带目标值**，直接用它，不回头再读一次存储。
+      //
+      // 读回来才是对的——除非存储根本写不进去（隐私模式、被策略禁掉、配额满）。那时
+      // `stored()` 只会给出默认的 `flat`，于是刚切到树的这一下当场被自己同步回平铺：
+      // 按钮按下去什么都不发生，功能在这类环境里整个失效（第 1 轮审查复现）。
+      // 存储是「记住下次」的手段，不该是「这一次切不切得动」的前提。
+      //
+      // `storage` 事件来自别的标签页，没有 detail，那才是该读存储的一档。
+      const detail = (event as CustomEvent<unknown>).detail;
+      setLayout(detail === "tree" || detail === "flat" ? detail : stored());
+    };
     window.addEventListener("storage", sync);
     window.addEventListener(SYNC_EVENT, sync);
     return () => {
@@ -54,9 +65,10 @@ export function useFileListLayout(): [FileListLayout, (next: FileListLayout) => 
     try {
       window.localStorage.setItem(STORAGE_KEY, next);
     } catch {
-      // 存不下也不该影响这一次切换。
+      // 存不下也不该影响这一次切换：下面那次广播带着目标值，本页照样整体翻过去，
+      // 只是下次打开还是默认的那种。
     }
-    window.dispatchEvent(new Event(SYNC_EVENT));
+    window.dispatchEvent(new CustomEvent(SYNC_EVENT, { detail: next }));
   }, []);
 
   return [layout, change];

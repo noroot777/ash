@@ -13,7 +13,8 @@ import { createServer } from "vite";
 // 各自要守的点：
 //   ① 工作台：目录行的批量操作只作用于这个目录下的文件，且**嵌套仓不算在内**（后端下不了
 //      手，算进去就是承诺 N 个、实际动 N-1 个）；点文件仍然选中它去看 diff；
-//   ② 审查页：选中态是按 sections 下标记的，摆成树之后下标不能错位——错了就是「点 A 开 B」。
+//   ② 审查页：选中态是按 sections 下标记的，摆成树之后下标不能错位——错了就是「点 A 开 B」；
+//   ③ localStorage 用不了时，切换仍然当场生效（只是记不住），见文件末尾那一节。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
@@ -113,6 +114,29 @@ try {
   await gwb.reload();
   await gwb.locator(".gwb-file-tools .file-layout-toggle").waitFor();
   assert.equal(await gwb.locator(".gwb-dir-row").count(), 0, "偏好是共用的一份，谁改了另一处都得认");
+
+  // ── ③ localStorage 用不了的环境（隐私模式、被策略禁掉、配额满）────────────────
+  //
+  // 存储是「记住下次」的手段，不该变成「这一次切不切得动」的前提。第 1 轮审查复现过：
+  // 写失败时仍广播一个「去重新读存储」的同步事件，本页监听器立刻把刚切的树读回平铺，
+  // 按钮按下去什么都不发生。
+  const blocked = await browser.newContext({ viewport: { width: 520, height: 700 } });
+  await blocked.addInitScript(() => {
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      get() { throw new Error("localStorage is blocked"); },
+    });
+  });
+  const offline = await blocked.newPage();
+  await offline.goto(`${base}/change-file-list.html`);
+  const offlineToggle = offline.locator(".gwb-file-tools .file-layout-toggle");
+  await offlineToggle.waitFor();
+  assert.equal(await offlineToggle.getAttribute("aria-label"), "按目录树展示文件", "读不到存储就用默认的平铺");
+  await offlineToggle.click();
+  await offline.locator(".gwb-dir-row").first().waitFor();
+  assert.equal(await offlineToggle.getAttribute("aria-label"), "按平铺列表展示文件",
+    "存不下只意味着「下次打开还是默认那种」，不该让这一次切换按不动");
+  await blocked.close();
 
   await context.close();
   console.log("file layout surfaces test passed");
