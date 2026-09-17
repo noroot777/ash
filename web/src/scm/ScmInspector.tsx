@@ -17,8 +17,8 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ROOT_SOURCE_LABEL } from "../files/fileModel.ts";
 import { ScmChangeGroup } from "./ScmChangeGroup.tsx";
 import { ScmCommittedChanges } from "./ScmCommittedChanges.tsx";
-import { useScmFileLayout } from "./scmFileTree.ts";
-import { ScmFileLayoutToggle } from "./ScmTreeParts.tsx";
+import { useFileListLayout } from "../lib/fileLayout.ts";
+import { FileLayoutToggle } from "../components/FileLayoutToggle.tsx";
 import {
   OPERATION_LABEL,
   diffSourceOf,
@@ -167,7 +167,7 @@ function BranchTools({
 
   return (
     <span className="scm-branch__tools">
-      <ScmFileLayoutToggle />
+      <FileLayoutToggle className="scm-layout-toggle" />
       {showPush && (
         <button
           ref={pushButton}
@@ -282,8 +282,8 @@ export function ScmInspector({
   const [message, setMessage] = useState("");
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
-  // 平铺还是目录树。全局一份偏好，面板里两处切换入口共用（见 `scmFileTree.ts`）。
-  const [fileLayout] = useScmFileLayout();
+  // 平铺还是目录树。全局一份偏好，几处文件清单共用（见 `lib/fileLayout.ts`）。
+  const [fileLayout] = useFileListLayout();
 
   const status = scm.overview?.status ?? null;
   const running = scm.overview?.taskRunning ?? false;

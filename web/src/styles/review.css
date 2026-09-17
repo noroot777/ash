@@ -63,7 +63,12 @@
 .single-review-files > header b { color:var(--faint); font-size:9.5px; }
 .single-review-diff-layout { display:grid; min-width:0; grid-template-columns:240px minmax(0,1fr); gap:10px; }
 .single-review-files > div { max-height:620px; overflow-y:auto; }
-.single-review-files > div > button { display:flex; width:100%; min-height:34px; align-items:center; gap:7px; border:0; border-top:.5px solid var(--line); background:transparent; padding:6px 8px; text-align:left; }
+.single-review-files > div > button { display:flex; width:100%; min-height:34px; align-items:center; gap:7px; border:0; border-top:.5px solid var(--line); background:transparent; padding:6px 8px 6px calc(8px + var(--file-indent,0px)); text-align:left; }
+/* 目录行：角标 + 目录名 + 这个目录下的加减合计。它不是可选中的条目，所以不给 is-selected 那道边。 */
+.single-review-files > div > button.single-review-dir > svg { flex:0 0 auto; color:var(--faint); }
+.single-review-files > div > button.single-review-dir > code { color:var(--faint); }
+.single-review-layout { display:grid; width:20px; height:20px; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--faint); }
+.single-review-layout:hover { background:var(--raised); color:var(--ink); }
 .single-review-files > div > button:first-child { border-top:0; }
 .single-review-files > div > button:hover,.single-review-files > div > button.is-selected { background:var(--raised); }
 .single-review-files > div > button.is-selected { box-shadow:inset 2px 0 var(--accent); }

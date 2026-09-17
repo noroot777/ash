@@ -18,8 +18,15 @@
 .gwb-design .gwb-tabs { overflow-y: auto; }
 .gwb-design .gwb-tabs .nav-item { flex-shrink: 0; }
 .gwb-design .nav-item small:empty { display: none; }
-.gwb-design .gwb-file-select { display: flex; flex: 1; min-width: 0; gap: 7px; align-items: center; height: 100%; text-align: left; }
+.gwb-design .gwb-file-select { display: flex; flex: 1; min-width: 0; gap: 7px; align-items: center; height: 100%; padding-left: var(--file-indent, 0px); text-align: left; }
 .gwb-design .gwb-file-row:focus-within .file-actions { display: inline-flex; }
+/* 平铺/目录树切换摆在清单正上方（三个分组各摆一颗就成了三颗一模一样的按钮）。 */
+.gwb-design .gwb-file-tools { display: flex; justify-content: flex-end; padding: 0 4px 2px; }
+/* 目录行：缩进走 --file-indent（行内样式给），角标和「N 个文件」都压低一档，
+   免得目录比文件本身还抢眼。 */
+.gwb-design .gwb-dir-row .file-name { color: var(--muted); }
+.gwb-design .gwb-dir-row svg { flex: 0 0 auto; color: var(--faint); }
+.gwb-design .group-conflict .file-row { padding-left: calc(8px + var(--file-indent, 0px)); }
 .gwb-design .gwb-file-pane { min-height: 0; }
 .gwb-design .gwb-file-groups { flex-shrink: 0; }
 .gwb-design .gwb-file-group .group-actions { gap: 5px; }

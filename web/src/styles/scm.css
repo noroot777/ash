@@ -63,7 +63,7 @@
 .scm-committed ul { margin:6px 0 0; padding:0; list-style:none; }
 /* 这一节自带 9px 内边距，行里不用再让出上半截那种「组标题缩进」，把 .scm-row__open
    的左缩进收回来，否则条目会比这一节的标题多缩一截。 */
-.scm-committed .scm-row__open { min-height:22px; gap:6px; padding:0 4px 0 calc(4px + var(--scm-indent,0px)); }
+.scm-committed .scm-row__open { min-height:22px; gap:6px; padding:0 4px 0 calc(4px + var(--file-indent,0px)); }
 .scm-committed .scm-diff__counts { flex:0 0 auto; font-size:9px; }
 .scm-committed__open { display:flex; width:100%; align-items:center; justify-content:space-between; gap:6px; margin-top:8px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:5px 8px; color:var(--muted); font-size:10.5px; }
 .scm-committed__open span { display:inline-flex; align-items:center; gap:5px; }
@@ -84,7 +84,7 @@
 .scm-row { display:flex; align-items:center; border-radius:5px; padding-right:4px; }
 .scm-row:hover { background:var(--raised); }
 .scm-row.is-active { background:color-mix(in lch,var(--accent) 12%,var(--panel)); box-shadow:inset 2px 0 var(--accent); }
-.scm-row__open { display:flex; min-width:0; min-height:24px; flex:1; align-items:center; gap:6px; border:0; background:transparent; padding:0 4px 0 calc(9px + var(--scm-indent,0px)); text-align:left; }
+.scm-row__open { display:flex; min-width:0; min-height:24px; flex:1; align-items:center; gap:6px; border:0; background:transparent; padding:0 4px 0 calc(9px + var(--file-indent,0px)); text-align:left; }
 .scm-row__name { flex:0 1 auto; overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .scm-row.is-active .scm-row__name { color:var(--ink); font-weight:600; }
 .scm-row__from { color:var(--faint); font-size:9px; font-style:normal; }
@@ -100,7 +100,7 @@
 /* 嵌套仓那一行：没有按钮，那句「去哪操作」是常驻的，不跟着 hover 出现。 */
 .scm-row__nested { flex:0 0 auto; color:var(--faint); font-size:9px; white-space:nowrap; }
 
-/* 目录树里的目录行。缩进走 --scm-indent（由行内样式给），每一节各自的基准内边距不变。 */
+/* 目录树里的目录行。缩进走 --file-indent（由行内样式给），每一节各自的基准内边距不变。 */
 .scm-row--dir .scm-row__open { min-height:21px; gap:3px; }
 .scm-row--dir .scm-row__open > svg { flex:0 0 auto; color:var(--faint); }
 .scm-row__folder { min-width:0; flex:0 1 auto; overflow:hidden; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }

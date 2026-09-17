@@ -1,31 +1,33 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
+import type { CSSProperties } from "react";
+import { readRenamedStorage } from "./renamedStorage.ts";
 
-// SCM 面板里那几份文件清单**怎么摆**。
+// 界面上几份**文件清单**怎么摆：平铺，还是按目录树。
 //
-// 平铺（`flat`）是原来的样子：一行一个文件，文件名后面跟一截所在目录。改动只有几个、又
-// 散在各处时它最快——一眼扫完，不用展开任何东西。但同一个目录下改了十几个文件时，那一
-// 截目录就在每一行上重复十几遍，真正要读的文件名反而被挤到左边一小条里。
+// 平铺是一行一个文件，文件名后面跟一截所在目录。改动只有几个、又散在各处时它最快——一眼
+// 扫完，不用展开任何东西。但同一个目录下改了十几个文件时，那一截目录就在每一行上重复
+// 十几遍，真正要读的文件名反而被挤到左边一小条里。
 //
-// 目录树（`tree`）按文件夹分层，公共前缀只写一次，还能整个折叠起来。代价是多一层结构，
-// 改动很少时纯属绕路。两种各有各的场合，所以给用户自己选，而不是替他定死。
+// 目录树按文件夹分层，公共前缀只写一次，还能整个折叠起来。代价是多一层结构，改动很少时
+// 纯属绕路。两种各有各的场合，所以给用户自己选，而不是替他定死。
 //
-// 选择是**全局一份**（跟 `diffLayout` 同一个思路）：这是「我习惯怎么看文件清单」，不是
-// 某个任务、某个分组的属性。面板上有两处切换入口（分支栏、「已提交的改动」那一节的标题
-// 栏）——那一栏会滚出视野，只留一处等于让人先滚回去再切——切哪一处另一处都跟着变。
+// 偏好**全局一份**（跟 `diffLayout` 同一个思路）：这是「我习惯怎么看文件清单」，不是某个
+// 面板、某个任务的属性。目前三处清单共用它——任务 inspector 的改动面板、Git 工作台的
+// 「更改」、审查页的「改动文件」轨——在哪儿切，另外两处都跟着变。
 
-export type ScmFileLayout = "flat" | "tree";
+export type FileListLayout = "flat" | "tree";
 
-const STORAGE_KEY = "ash:scm-file-layout";
-/** 同一个页面里的多个清单靠它同步；`storage` 事件只跨标签页，本页要自己广播。 */
-const SYNC_EVENT = "ash:scm-file-layout";
+const STORAGE_KEY = "ash:file-list-layout";
+/** 同一个页面里的多份清单靠它同步；`storage` 事件只跨标签页，本页要自己广播。 */
+const SYNC_EVENT = "ash:file-list-layout";
 
-export const SCM_FILE_LAYOUT_ACTION: Record<ScmFileLayout, string> = {
+/** 按钮上说的是「按下去会变成什么」，不是「现在是什么」——跟 VSCode 的 View as Tree/List 同约定。 */
+export const FILE_LAYOUT_ACTION: Record<FileListLayout, string> = {
   flat: "按平铺列表展示文件",
   tree: "按目录树展示文件",
 };
 
-function stored(): ScmFileLayout {
+function stored(): FileListLayout {
   try {
     return readRenamedStorage(STORAGE_KEY) === "tree" ? "tree" : "flat";
   } catch {
@@ -34,8 +36,8 @@ function stored(): ScmFileLayout {
   }
 }
 
-export function useScmFileLayout(): [ScmFileLayout, (next: ScmFileLayout) => void] {
-  const [layout, setLayout] = useState<ScmFileLayout>(stored);
+export function useFileListLayout(): [FileListLayout, (next: FileListLayout) => void] {
+  const [layout, setLayout] = useState<FileListLayout>(stored);
 
   useEffect(() => {
     const sync = () => setLayout(stored());
@@ -47,7 +49,7 @@ export function useScmFileLayout(): [ScmFileLayout, (next: ScmFileLayout) => voi
     };
   }, []);
 
-  const change = useCallback((next: ScmFileLayout) => {
+  const change = useCallback((next: FileListLayout) => {
     setLayout(next);
     try {
       window.localStorage.setItem(STORAGE_KEY, next);
@@ -60,14 +62,19 @@ export function useScmFileLayout(): [ScmFileLayout, (next: ScmFileLayout) => voi
   return [layout, change];
 }
 
+/** 缩进走 CSS 变量而不是内联 padding：每一处清单的基准内边距都不一样。 */
+export function indentStyle(depth: number, step = 11): CSSProperties {
+  return { "--file-indent": `${depth * step}px` } as CSSProperties;
+}
+
 /**
  * 树摊平之后的一行。目录行和文件行混在同一个数组里，按显示顺序排好——渲染方只管挨个画，
- * 不用自己递归，也就不会在四个分组里各写一遍递归。
+ * 不用自己递归，也就不会在每一处清单里各写一遍递归。
  *
- * `items` 是这个目录**递归包含**的全部条目：目录行右侧那些批量操作（整个目录一起暂存/
- * 丢弃）和「已提交的改动」里的加减行数合计都要用它。
+ * `items` 是这个目录**递归包含**的全部条目：目录行上的批量操作（整个目录一起暂存/丢弃）
+ * 和加减行数合计都要用它。
  */
-export type ScmTreeRow<T> =
+export type FileTreeRow<T> =
   | { kind: "dir"; key: string; path: string; label: string; depth: number; collapsed: boolean; items: T[] }
   | { kind: "file"; key: string; depth: number; item: T };
 
@@ -97,17 +104,17 @@ function collect<T>(dir: DirNode<T>): T[] {
  * 把一批路径摆成树，再摊平成行。
  *
  * **单链目录会压成一行**（`server/src/chat` 而不是三行各缩进一格）：中间那两层既没有别的
- * 文件也没有别的兄弟目录，摊开来只是在浪费三行高度和三级缩进——面板本来就窄，缩进越深
- * 文件名被切得越狠。VSCode 的 compact folders 是同一个道理。
+ * 文件也没有别的兄弟目录，摊开来只是在浪费三行高度和三级缩进——清单那一栏本来就窄，缩进
+ * 越深文件名被切得越狠。VSCode 的 compact folders 是同一个道理。
  *
  * 折叠状态按**压缩之后**的那个路径记（也就是行上真正代表的那个目录），不然折叠一次之后
  * 标签变了、键对不上。
  */
-export function buildScmTreeRows<T>(
+export function buildFileTreeRows<T>(
   items: readonly T[],
   pathOf: (item: T) => string,
   collapsed: ReadonlySet<string>,
-): ScmTreeRow<T>[] {
+): FileTreeRow<T>[] {
   const root = emptyDir<T>("", "");
   for (const item of items) {
     const segments = pathOf(item).split("/").filter(Boolean);
@@ -126,7 +133,7 @@ export function buildScmTreeRows<T>(
     current.files.push({ name, item });
   }
 
-  const rows: ScmTreeRow<T>[] = [];
+  const rows: FileTreeRow<T>[] = [];
   let seq = 0;
   const walk = (dir: DirNode<T>, depth: number) => {
     for (const child of [...dir.dirs.values()].sort(byName)) {
@@ -160,7 +167,7 @@ export function buildScmTreeRows<T>(
 }
 
 /** 摊平后的行 + 折叠开关。`enabled` 为 false 时不建树，平铺模式下一点活都不干。 */
-export function useScmTree<T>(items: readonly T[], pathOf: (item: T) => string, enabled: boolean) {
+export function useFileTreeRows<T>(items: readonly T[], pathOf: (item: T) => string, enabled: boolean) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set<string>());
   const toggle = useCallback((path: string) => {
     setCollapsed((current) => {
@@ -170,7 +177,7 @@ export function useScmTree<T>(items: readonly T[], pathOf: (item: T) => string, 
     });
   }, []);
   const rows = useMemo(
-    () => (enabled ? buildScmTreeRows(items, pathOf, collapsed) : []),
+    () => (enabled ? buildFileTreeRows(items, pathOf, collapsed) : []),
     [items, pathOf, collapsed, enabled],
   );
   return { rows, toggle };

@@ -101,6 +101,8 @@
     "test:scm-nested-ui": "node scripts/test-scm-nested-ui.mjs",
     "//test:scm-file-layout": "SCM 面板文件清单的平铺/目录树两种摆法：默认平铺、单链目录压行、两处切换共用一份偏好并持久化、目录行的批量操作只作用于该目录。",
     "test:scm-file-layout": "node scripts/test-scm-file-layout.mjs",
+    "//test:file-layout-surfaces": "平铺/目录树在另外两处清单上（Git 工作台「更改」、审查页「改动文件」轨），以及三处共用同一份偏好。",
+    "test:file-layout-surfaces": "node scripts/test-file-layout-surfaces.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview",
     "test:agent-plate": "node scripts/test-agent-plate.mjs",

@@ -1,25 +1,19 @@
 import { useEffect, useState } from "react";
 import {
-  Minus,
-  Plus,
-  Trash,
   GitCommit,
+  Plus,
   Sparkle,
-  Stack,
+  Trash,
 } from "@phosphor-icons/react";
 import type { GitDiff, GitFile } from "@ash/shared/git-workbench";
 import { gitChangeCount, emptyCommitGuidance } from "@ash/shared/git-workbench";
 import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
 import { workbenchApi } from "./api.ts";
+import { ChangeFileList, type ChangeSource } from "./ChangeFileList.tsx";
 import { DiffView, discardLineGuidance } from "./DiffView.tsx";
 
-type Source = "staged" | "unstaged" | "untracked";
-const labels: Record<Source, string> = {
-  staged: "已暂存",
-  unstaged: "未暂存",
-  untracked: "未跟踪",
-};
+type Source = ChangeSource;
 const pathsOf = (files: GitFile[]) => [
   ...new Set(
     files.flatMap((file) =>
@@ -168,162 +162,16 @@ export function Changes({
   return (
     <div className="gwb-split changes-view">
       <section className="gwb-file-pane changes-list" aria-label="工作区变更">
-        {!!data.status.merge.length && (
-          <section className="change-group group-conflict">
-            <header className="group-head">
-              <b>合并冲突</b>
-              <span className="group-count">{data.status.merge.length}</span>
-            </header>
-            {data.status.merge.map((file) => (
-              <button
-                className="file-row ui-selectable"
-                key={file.path}
-                onClick={() => resolve(file.path)}
-              >
-                <span className="kind-badge kind-!">!</span>
-                <span className="file-name">{file.path}</span>
-                <span className="conflict-state">待解决</span>
-              </button>
-            ))}
-          </section>
-        )}
-        <div className="gwb-file-groups">
-          {(["staged", "unstaged", "untracked"] as const).map((source) => {
-            const files = data.status[source];
-            const actionable = files.filter((file) => !file.nested);
-            return (
-              <section key={source} className="gwb-file-group change-group">
-                <header className="group-head">
-                  <b>{labels[source]}</b>
-                  <span className="group-count">{files.length}</span>
-                  <i className="group-hint">
-                    {source === "staged"
-                      ? "将进入下一次提交"
-                      : source === "unstaged"
-                        ? "工作树里的改动"
-                        : "新文件"}
-                  </i>
-                  <div className="group-actions">
-                    {!!actionable.length && (
-                      <button
-                        className="mini-btn"
-                        disabled={w.isBlocked(
-                          source === "staged" ? "unstage" : "stage",
-                        )}
-                        onClick={() => stage(actionable, source)}
-                      >
-                        {source === "staged" ? (
-                          <Minus size={12} />
-                        ) : (
-                          <Plus size={12} />
-                        )}
-                        {source === "staged" ? "全部取消暂存" : "全部暂存"}
-                      </button>
-                    )}
-                    {source === "unstaged" && !!actionable.length && (
-                      <button
-                        className="mini-btn"
-                        disabled={w.blocked}
-                        onClick={stash}
-                      >
-                        <Stack size={12} />
-                        贮藏…
-                      </button>
-                    )}
-                  </div>
-                </header>
-                {!files.length && (
-                  <p className="empty-line">
-                    {source === "staged" ? "暂无已暂存文件" : "没有改动"}
-                  </p>
-                )}
-                {files.map((file) => {
-                  const kind =
-                    source === "untracked"
-                      ? "U"
-                      : {
-                          modified: "M",
-                          added: "A",
-                          deleted: "D",
-                          renamed: "R",
-                          copied: "C",
-                          untracked: "U",
-                        }[file.kind] || "M";
-                  const slash = file.path.lastIndexOf("/");
-                  const active =
-                    selection?.path === file.path &&
-                    selection.source === source;
-                  return (
-                    <div
-                      key={file.path}
-                      className={`gwb-file-row file-row ui-selectable${active ? " is-active is-selected" : ""}`}
-                    >
-                      <button
-                        className="gwb-file-select"
-                        aria-label={file.path}
-                        disabled={file.nested}
-                        onClick={() =>
-                          setSelection({ path: file.path, source })
-                        }
-                      >
-                        <span className={`kind-badge kind-${kind}`}>
-                          {kind}
-                        </span>
-                        <span className="file-name">
-                          {file.path.slice(slash + 1)}
-                          <i className="file-dir">
-                            {file.nested
-                              ? "嵌套仓库"
-                              : file.path.slice(0, slash + 1)}
-                          </i>
-                        </span>
-                      </button>
-                      {(file.additions !== undefined ||
-                        file.deletions !== undefined) && (
-                        <span className="stat">
-                          {!!file.additions && (
-                            <i className="stat-add">+{file.additions}</i>
-                          )}
-                          {!!file.deletions && (
-                            <i className="stat-del">−{file.deletions}</i>
-                          )}
-                        </span>
-                      )}
-                      {!file.nested && (
-                        <div className="file-actions">
-                          <button
-                            className="icon-btn"
-                            disabled={w.isBlocked(
-                              source === "staged" ? "unstage" : "stage",
-                            )}
-                            aria-label={`${source === "staged" ? "取消暂存" : "暂存"} ${file.path}`}
-                            onClick={() => stage([file], source)}
-                          >
-                            {source === "staged" ? (
-                              <Minus size={13} />
-                            ) : (
-                              <Plus size={13} />
-                            )}
-                          </button>
-                          {source !== "staged" && (
-                            <button
-                              className="icon-btn tone-danger"
-                              disabled={w.blocked}
-                              aria-label={`丢弃 ${file.path}`}
-                              onClick={() => discard([file], source)}
-                            >
-                              <Trash size={13} />
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </section>
-            );
-          })}
-        </div>
+        <ChangeFileList
+          status={data.status}
+          workbench={w}
+          selection={selection}
+          onSelect={setSelection}
+          onStage={stage}
+          onDiscard={discard}
+          onStash={stash}
+          onResolve={resolve}
+        />
         {(clean || data.status.merge.length > 0 || data.status.operation) && (
           <p className="gwb-pane-title gwb-worktree-summary">{summary}</p>
         )}

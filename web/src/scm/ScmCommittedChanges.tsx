@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { CaretRight, GitDiff, SpinnerGap } from "@phosphor-icons/react";
 import { api, type TaskDiffResult } from "../lib/api.ts";
 import { branchDiffReason, dirName, fileName, type ScmDiffTarget } from "./scmModel.ts";
-import { useScmFileLayout, useScmTree } from "./scmFileTree.ts";
-import { ScmDirRow, ScmFileLayoutToggle, indentStyle } from "./ScmTreeParts.tsx";
+import { indentStyle, useFileListLayout, useFileTreeRows } from "../lib/fileLayout.ts";
+import { FileLayoutToggle } from "../components/FileLayoutToggle.tsx";
+import { ScmDirRow } from "./ScmTreeParts.tsx";
 
 // 「本任务已提交的改动」——面板上半截问的是「此刻还没提交的东西」，仓库约定「改完立即
 // 提交」，所以上半截绝大多数时候是空的。只留一句「工作区干净」会把人按到错误的结论上：
@@ -94,8 +95,8 @@ export function ScmCommittedChanges({
 
   const files = diff?.files ?? [];
   const shown = useMemo(() => files.slice(0, MAX_ROWS), [files]);
-  const [layout] = useScmFileLayout();
-  const tree = useScmTree(shown, diffFilePath, layout === "tree");
+  const [layout] = useFileListLayout();
+  const tree = useFileTreeRows(shown, diffFilePath, layout === "tree");
 
   return (
     <section className="scm-committed">
@@ -106,7 +107,7 @@ export function ScmCommittedChanges({
         {diff?.available && files.length > 0 && <DiffCounts files={files} />}
         {/* 这一节常常在滚动面板的下半截，顶上分支栏那颗切换按钮此时已经滚出视野——
             清单在哪儿，切换就得在哪儿够得着。两处共用同一份偏好。 */}
-        {diff?.available && files.length > 0 && <ScmFileLayoutToggle className="scm-committed__layout" />}
+        {diff?.available && files.length > 0 && <FileLayoutToggle className="scm-committed__layout" size={12} />}
       </header>
 
       {loading && !diff && <p className="scm-committed__state"><SpinnerGap size={12} className="is-spinning" />正在读取分支改动…</p>}

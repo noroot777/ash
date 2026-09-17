@@ -1,13 +1,13 @@
 import { ArrowCounterClockwise, Minus, Plus, Trash } from "@phosphor-icons/react";
 import type { ScmChange, ScmGroupId } from "../lib/api.ts";
 import { CONFLICT_LABEL, KIND_BADGE, KIND_LABEL, dirName, fileName, pathsOf } from "./scmModel.ts";
-import { useScmTree, type ScmFileLayout } from "./scmFileTree.ts";
-import { ScmDirRow, indentStyle } from "./ScmTreeParts.tsx";
+import { indentStyle, useFileTreeRows, type FileListLayout } from "../lib/fileLayout.ts";
+import { ScmDirRow } from "./ScmTreeParts.tsx";
 
 // 一个改动分组（冲突 / 已暂存 / 更改 / 未跟踪）。条目本身是按钮——点它开 diff，跟
 // 文件树点文件开查看器是同一套手势；逐条的操作按钮浮在右侧，不抢主点击区。
 //
-// 两种摆法（平铺 / 目录树）由 `layout` 决定，见 `scmFileTree.ts`。树里的目录行拿到的是
+// 两种摆法（平铺 / 目录树）由 `layout` 决定，见 `lib/fileLayout.ts`。树里的目录行拿到的是
 // 同一套批量操作，只是作用域从「整个分组」缩到「这个目录」——摆着一排能点的文件却要用户
 // 逐个点，或者只能整组一起来，正是目录树最该解决的那件事。
 
@@ -180,9 +180,9 @@ export function ScmChangeGroup({
   activeGroup: ScmGroupId | null;
   actions: ScmGroupActions;
   hint?: string;
-  layout: ScmFileLayout;
+  layout: FileListLayout;
 }) {
-  const tree = useScmTree(changes, changePath, layout === "tree");
+  const tree = useFileTreeRows(changes, changePath, layout === "tree");
   if (!changes.length) return null;
   const isActive = (change: ScmChange) => activeGroup === group && activePath === change.path;
   return (
