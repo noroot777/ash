@@ -83,6 +83,19 @@ export async function validateAssistantWorkflow(value: unknown, actor: Actor): P
   return { name: raw.name.trim(), description: raw.description.trim(), def: parsed.def };
 }
 
+/**
+ * 取出一个候选对象里的合法检索词，不合法返回 undefined。**候选判据和下面检索分支的校验
+ * 共用这一份**，两处各写一份迟早漂移。
+ */
+function searchQueries(value: Record<string, unknown>): string[] | undefined {
+  const search = value.search;
+  if (!search || typeof search !== "object" || Array.isArray(search)) return undefined;
+  const queries = (search as Record<string, unknown>).queries;
+  if (!Array.isArray(queries) || !queries.length || queries.length > 3) return undefined;
+  if (queries.some((query) => typeof query !== "string" || !query.trim() || query.length > 120)) return undefined;
+  return queries as string[];
+}
+
 export async function invokeAssistant(member: ChatMember, room: Room, prompt: string, signal: AbortSignal, invoke: typeof invokeChat) {
   const queries: string[] = [];
   const hits = new Map<string, Extract<SearchHit, { kind: "task" }>>();
@@ -100,24 +113,27 @@ export async function invokeAssistant(member: ChatMember, room: Room, prompt: st
       retried = true;
       response = await invoke(member, room.ownerUserId, prompt + evidence + "\n【工具调用重试】\n上一轮因调用工具已作废。所有需要的信息都在本消息中，本轮没有任何可用工具。直接输出最终 JSON 或 search JSON，不尝试调用工具。", signal, room.projectId, { purpose: "assistant" });
     }
-    // 助手这一轮要么给最终回答（reply），要么请求检索（search），两种形状都算有效候选——
-    // 判据必须覆盖两者，否则 search 轮会被尾随示例带偏，或者干脆选不到候选。
-    const acceptable = (value: Record<string, unknown>) => value.search != null || hasReply(value);
-    let raw = parseLastJsonObject(response.text, acceptable);
+    // 助手一轮要么给最终回答（reply），要么请求检索（search）。两种形状都是有效候选，但
+    // **reply 优先**：上面的提示词里就带着 {"search":{"queries":["关键词"],"projectId":null}}
+    // 这个格式示例，模型在最终回答后面复述一遍是常事——那个示例本身就是完整形状，光把
+    // search 判据收窄拦不住它。所以先找最终回答，没有才去找检索请求；检索候选再按真实形状
+    // 筛一道，顺手挡掉 {"search":{}} 这类空壳示例。
+    const pick = (text: string) => parseLastJsonObject(text, hasReply)
+      ?? parseLastJsonObject(text, (value) => searchQueries(value) !== undefined);
+    let raw = pick(response.text);
     if (!raw && !retried) {
       signal.throwIfAborted();
       retried = true;
       response = await invoke(member, room.ownerUserId, prompt + evidence + "\n【JSON 格式重试】\n上一轮输出无法按 JSON 解析，本轮请只输出合法 JSON。reply 等字符串值里的换行用转义序列，正文引号使用「」，不要在字符串内部放未转义的双引号。不要调用任何工具。", signal, room.projectId, { purpose: "assistant" });
-      raw = parseLastJsonObject(response.text, acceptable);
+      raw = pick(response.text);
     }
     if (!raw) throw new Error(`助手未返回有效回复，请重试。${rawOutputExcerpt(response.text)}`);
     if (raw.search != null) {
       if (round === 2) throw new Error("本轮检索已达上限，请补充任务的项目或关键词后继续。");
       const search = raw.search as Record<string, unknown>;
-      if (!Array.isArray(search.queries) || !search.queries.length || search.queries.length > 3
-        || search.queries.some((query) => typeof query !== "string" || !query.trim() || query.length > 120)) throw new Error("助手返回的检索条件无效，请重试。");
+      const searched = searchQueries(raw);
+      if (!searched) throw new Error("助手返回的检索条件无效，请重试。");
       const projectId = typeof search.projectId === "string" && search.projectId ? search.projectId : undefined;
-      const searched = search.queries as string[];
       const combined = searched.map((query) => query.trim()).join(" | ");
       queries.push(...searched);
       const rows = await searchAll(combined, actor, { projectId, type: "tasks", signal });
