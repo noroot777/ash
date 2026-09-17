@@ -108,21 +108,33 @@
 .single-review-line.is-meta > code { color:#a1a1aa; }
 /* 并排（左右分栏）：每一行是「旧的一格 + 新的一格」，两格各自带行号；一侧没有对应行时
    那一格是 is-empty，用斜纹底表示「这里本来就没东西」，而不是留一块白让人以为是空行。
-   两栏各自 minmax 定宽 + 整行 min-width:max-content，长行横向滚动时两侧同步移动。 */
-.single-review-code.is-split .single-review-line.is-pair { grid-template-columns:repeat(2,minmax(340px,1fr)); }
-.single-review-code.is-split .single-review-side { display:grid; min-width:0; grid-template-columns:46px minmax(294px,1fr); }
+   四列（两侧各「行号 + 正文」）由 .single-review-split-grid 统一持有，每行 subgrid 接过
+   去——列宽是整块算一次的，所以中缝和行号上下永远是一条直线。反过来（每行自己 grid +
+   min-width:max-content）会让长行把自己那一行的两栏一起顶宽，整块看着参差。
+   宽度就是容器宽、两栏对半分，长行在格子里折行（下面的 pre-wrap）而不是把整块顶宽：
+   一条 300 字符的行足以让两栏都撑到一屏宽，右栏整个被挤出可视区，得横着滚才看得见新
+   代码——并排的意义正是「左右对着看」，滚没了就不如单栏。 */
+.single-review-split-grid { display:grid; grid-template-columns:46px minmax(200px,1fr) 46px minmax(200px,1fr); min-width:0; }
+.single-review-code.is-split .single-review-line.is-pair { grid-column:1/-1; grid-template-columns:subgrid; min-width:0; }
+.single-review-code.is-split .single-review-side { display:grid; min-width:0; grid-template-columns:subgrid; }
+.single-review-code.is-split .single-review-side:first-child { grid-column:1/3; }
+.single-review-code.is-split .single-review-side:last-child { grid-column:3/5; }
+/* 行号跟着自己那一格顶端走：折行后格子会变高，行号垂直居中反而对不上正文第一行。
+   折出来的续行往里缩一截（悬挂缩进），否则它顶格排在下一行位置上，看着像另起了一行代码。 */
+.single-review-code.is-split .single-review-side > code { align-self:start; padding-left:calc(10px + 2ch); overflow-wrap:anywhere; text-indent:-2ch; white-space:pre-wrap; }
 .single-review-code.is-split .single-review-side + .single-review-side { border-left:1px solid var(--line); }
 .single-review-code.is-split .single-review-side.is-add { background:#eaf7f1; }
 .single-review-code.is-split .single-review-side.is-add > code { color:#17634f; }
 .single-review-code.is-split .single-review-side.is-delete { background:#fcecef; }
 .single-review-code.is-split .single-review-side.is-delete > code { color:#8f2733; }
 .single-review-code.is-split .single-review-side.is-empty { background:repeating-linear-gradient(135deg,#fafafb,#fafafb 4px,#f2f2f4 4px,#f2f2f4 8px); }
-.single-review-code.is-split .single-review-line.is-span { grid-template-columns:1fr; }
+.single-review-code.is-split .single-review-line.is-span { grid-column:1/-1; grid-template-columns:1fr; min-width:0; }
+.single-review-code.is-split .single-review-line.is-span > code { overflow-wrap:anywhere; white-space:pre-wrap; }
 .single-review-code.is-split .single-review-line.is-span.is-hunk { background:#eef0fb; }
 .single-review-code.is-split .single-review-line.is-span.is-hunk > code { color:#4f58a8; }
 .single-review-code.is-split .single-review-line.is-span.is-meta > code { color:#a1a1aa; }
-/* 行号跟着自己那一侧走：并排时两栏各自横向滚动，单栏那种 sticky 到最左会让右栏的行号
-   贴到左栏上去。底色继承所在格，一眼能看出这一行属于删还是增。 */
+/* 行号不跟着整块横向滚（并排根本不横向滚），也不能用单栏那种 sticky 到最左——那会让右栏
+   的行号贴到左栏上去。底色继承所在格，一眼能看出这一行属于删还是增。 */
 .single-review-code.is-split .single-review-side > span { position:static; border-right:1px solid var(--line); padding:0 7px; color:#a1a1aa; text-align:right; user-select:none; }
 /* 「这一行后面没有换行符」。并排里它是正文的尾巴而不是单独一行，所以做成一枚淡标签。 */
 .single-review-code.is-split .single-review-nonl { margin-left:8px; border-radius:4px; background:#ecedf1; padding:0 4px; color:#8b8f9a; font-size:8.5px; font-style:normal; user-select:none; }

@@ -73,18 +73,26 @@ export function DiffBody({
   return (
     <div className={`single-review-code${layout === "split" ? " is-split" : ""}`} role="table" aria-label={label}>
       {layout === "split"
-        ? rows.slice(0, visible).map((row, index) => (
-          row.kind === "pair" ? (
-            <div className="single-review-line is-pair" role="row" key={index}>
-              <div className={`single-review-side is-${row.left.kind}`}><Cell cell={row.left} side="old" /></div>
-              <div className={`single-review-side is-${row.right.kind}`}><Cell cell={row.right} side="new" /></div>
-            </div>
-          ) : (
-            <div className={`single-review-line is-span is-${row.kind}`} role="row" key={index}>
-              <code role="cell">{row.text || " "}</code>
-            </div>
-          )
-        ))
+        ? (
+          // 并排的列宽要由**整块 diff 一起**定，不能每行各算各的：行宽按内容撑开时，一行
+          // 里最长的那条会把同一行的两栏一起顶宽（两栏是等分的 fr），于是长行那一行的中缝
+          // 和行号都比别的行靠右——整块看着像错位。这层 grid 持有四列（两侧各「行号 + 正
+          // 文」），每行再 subgrid 接过去，所有行就共用同一组列。
+          <div className="single-review-split-grid" role="rowgroup">
+            {rows.slice(0, visible).map((row, index) => (
+              row.kind === "pair" ? (
+                <div className="single-review-line is-pair" role="row" key={index}>
+                  <div className={`single-review-side is-${row.left.kind}`}><Cell cell={row.left} side="old" /></div>
+                  <div className={`single-review-side is-${row.right.kind}`}><Cell cell={row.right} side="new" /></div>
+                </div>
+              ) : (
+                <div className={`single-review-line is-span is-${row.kind}`} role="row" key={index}>
+                  <code role="cell">{row.text || " "}</code>
+                </div>
+              )
+            ))}
+          </div>
+        )
         : lines.slice(0, visible).map((line, index) => (
           <div className={`single-review-line is-${line.kind}`} role="row" key={index}>
             <span className="single-review-old" role="cell">{line.oldLine ?? ""}</span>
