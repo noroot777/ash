@@ -143,6 +143,30 @@ try {
   assert.deepEqual(stopKeep.body, { stopped: true });
   assert.equal(liveKeep().length, 0);
 
+  // server 退出路径:shutdown() 必须整组收割,忽略信号的孤儿也不能漏 —— 否则 ash 重启后
+  // 会话表清零(内存态),旧进程却被 PID 1 收养继续占端口。
+  const orphan2 = manager.create("p1", cwd, {
+    command: { id: "orphan2", name: "orphan2", script: orphanScript.replace("CHILD:", "CHILD2:") },
+  });
+  let child2 = 0;
+  const orphan2Ready = Date.now() + 8000;
+  while (child2 === 0) {
+    for (const event of manager.eventsAfter(orphan2.id, "p1", 0) ?? []) {
+      const match = event.type === "data" ? /CHILD2:(\d+)/.exec(event.data) : null;
+      if (match) child2 = Number(match[1]);
+    }
+    if (child2 === 0 && Date.now() > orphan2Ready) throw new Error("orphan2 child not ready");
+    if (child2 === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  manager.shutdown();
+  const child2Gone = Date.now() + 3000;
+  for (;;) {
+    try { process.kill(child2, 0); } catch { break; }
+    if (Date.now() > child2Gone) throw new Error("shutdown left the signal-ignoring child alive");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(manager.listCommandSessions().length, 0);
+
   console.log("project commands test passed");
 } finally {
   manager.shutdown();

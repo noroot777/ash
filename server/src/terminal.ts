@@ -281,9 +281,23 @@ export class TerminalSessionManager {
     });
   }
 
+  /**
+   * server 退出前的清场:对每个还活着的会话**整组** SIGTERM+SIGKILL 连发。必须是同步的
+   * ('exit' 钩子里没有 await),所以没有优雅等待窗口 —— 命令会话跑的是 dev server/watch
+   * 这类可随时重启的进程,强杀可接受;不杀的代价是它们被 PID 1 收养成孤儿,ash 重启后
+   * UI/API 失忆显示「未启动」,旧进程却还占着端口。不能走 close():那只对组长单发一次
+   * SIGHUP,`cmd & wait` 里忽略信号的子进程杀不掉。
+   */
   shutdown(): void {
     clearInterval(this.sweeper);
-    for (const sessionId of [...this.sessions.keys()]) this.close(sessionId);
+    for (const session of [...this.sessions.values()]) {
+      session.listeners.clear();
+      if (session.exitCode === null) {
+        this.signalTree(session, "SIGTERM");
+        this.signalTree(session, "SIGKILL");
+      }
+      this.sessions.delete(session.id);
+    }
   }
 
   sweepIdleSessions(now = Date.now()): number {
@@ -350,6 +364,14 @@ export class TerminalSessionManager {
 }
 
 export const terminalSessions = new TerminalSessionManager();
+
+// server 无论怎么退,'exit' 都会同步触发:SIGINT/SIGTERM 处理器(singleton.ts
+// installCleanup)和 `npm run restart` 的杀法最终都走 process.exit(),uncaught 的默认
+// 行为也是 exit。在这里收掉所有活着的会话进程,否则常用命令的 dev server 被 PID 1
+// 收养成孤儿 —— ash 重启后会话表(内存态)清零,UI 显示「未启动」,旧进程却继续占端口,
+// 再点启动只会得到端口冲突(第 3 轮审查实锤)。kill -9 / 崩溃 / 断电没有钩子能接,
+// 属已知边界。
+process.once("exit", () => terminalSessions.shutdown());
 
 async function projectDirectory(projectId: string): Promise<string | null> {
   const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
