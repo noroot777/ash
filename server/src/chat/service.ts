@@ -227,6 +227,10 @@ export class ChatService {
       }).where(eq(chatMessages.id, message.id));
       if (room.kind === "side") {
         sideResult = parseSideChatReply(invoked.text, context.source);
+        // 收尾降级说明（超长截断/中途报错/非零退出）和格式降级说明走同一条展示通道：两者
+        // 都是「正文照给，但这一轮有瑕疵」，可能同时发生（半截输出往往既不是合法 JSON、
+        // 又伴着非零退出）。
+        if (invoked.degraded) sideResult = { ...sideResult, formatWarning: [invoked.degraded, sideResult.formatWarning].filter(Boolean).join("\n\n") };
         const verified = await verifySideChatReply(sideResult, context.source,
           (prompt, signal) => this.invoke(member, room.ownerUserId, prompt, signal, room.projectId, { purpose: "side-authorization" }), abort.signal);
         const pending = await settleSideChat(room, message.id, verified, notice, abort.signal);

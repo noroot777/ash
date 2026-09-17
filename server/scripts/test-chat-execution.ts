@@ -40,6 +40,10 @@ let lastCwd = "";
 let fail = false;
 let writeFromMain = false;
 let sideWriteTool = false;
+/** 侧聊收尾降级用：分别模拟「中途报错」「非零退出」「输出超长」，三种都发生在正文已产出之后。 */
+let emitError = false;
+let badExit = false;
+let overlongOutput = false;
 try {
   for (const type of AGENT_TYPES) {
     CLI_SPEC_BY_KEY[type].factory = (built) => ({
@@ -76,7 +80,9 @@ try {
             const evidence = existsSync(file) ? readFileSync(file, "utf8") : "未配置目录";
             yield { kind: "tool", name: "Read", detail: file };
             yield { kind: "text", text: JSON.stringify({ reply: evidence, task: null }) };
-            yield { kind: "done", exitStatus: 0 };
+            if (overlongOutput) yield { kind: "text", text: "长".repeat(220000) };
+            if (emitError) yield { kind: "error", message: "fixture 中途报错" };
+            yield { kind: "done", exitStatus: badExit ? 3 : 0 };
           })(),
         };
       },
@@ -149,6 +155,29 @@ try {
   const sideWrite = parseChatReply((await invokeChat(member, null, "侧聊可以动手", signal, "project", { purpose: "side", taskId: "side-parent" })).text);
   assert.equal(sideWrite.reply, "主任务工作区的代码，而非项目主仓", "侧聊的写入类工具事件不再中止咨询");
   sideWriteTool = false;
+  // 侧聊按主会话的标准收尾：正文已经产出之后才发生的三种意外，一律保正文 + 说明，不作废整轮。
+  // 同样三种意外落在群聊上仍然抛错——那边回复限 300 字，半截结果没有价值。
+  const side = (prompt: string) => invokeChat(member, null, prompt, signal, "project", { purpose: "side", taskId: "side-parent" });
+  const group = (prompt: string) => invokeChat(member, null, prompt, signal, "project");
+  emitError = true;
+  const sideErrored = await side("侧聊中途报错");
+  assert.match(parseChatReply(sideErrored.text).reply, /主任务工作区的代码/, "报错前已产出的正文保留");
+  assert.match(sideErrored.degraded!, /中途报错/);
+  await assert.rejects(group("群聊中途报错"), /fixture 中途报错/);
+  emitError = false;
+  badExit = true;
+  const sideExited = await side("侧聊非零退出");
+  assert.match(parseChatReply(sideExited.text).reply, /主任务工作区的代码/, "非零退出前已产出的正文保留");
+  assert.match(sideExited.degraded!, /未正常结束/);
+  await assert.rejects(group("群聊非零退出"), /未正常结束/);
+  badExit = false;
+  overlongOutput = true;
+  const sideOverlong = await side("侧聊输出超长");
+  assert.equal(sideOverlong.text.length, 200000, "超长截断到上限而不是抛错");
+  assert.match(sideOverlong.degraded!, /截断/);
+  await assert.rejects(group("群聊输出超长"), /回复过长/);
+  overlongOutput = false;
+  console.log("side degradation: 中途报错/非零退出/输出超长均保留已产出正文并附说明；群聊仍照旧失败");
   console.log("side execution: 解析主任务会话 cwd，工具不受只读闸门限制，不继承 CLI 身份，不创建或删除工作区，跨项目绑定拒绝");
   fail = true;
   await assert.rejects(invokeChat(member, null, "咨询", signal, "project"), /fixture read failed/);
