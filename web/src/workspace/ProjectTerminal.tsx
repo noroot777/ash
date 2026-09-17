@@ -292,8 +292,8 @@ export function ProjectTerminal({
   project: ProjectView;
   /** 状态栏「日志」点过来:打开/切到这条命令会话的 tab。seq 保证同一会话点两次也生效。 */
   focusRequest?: { sessionId: string; seq: number } | null;
-  /** 一次性命令消费完的回执:父层据此清空 focusRequest,防止重挂后重放。 */
-  onFocusHandled?: () => void;
+  /** 一次性命令消费完的回执(带 seq,父层只清对应请求),防止重挂后重放。 */
+  onFocusHandled?: (seq: number) => void;
   onClose: () => void;
   notify: (message: string) => void;
 }) {
@@ -343,19 +343,21 @@ export function ProjectTerminal({
   }, [project.id]);
 
   // focusRequest 是**一次性命令**:同一个 seq 只消费一次(fetch 前就标记,任何 deps
-  // 变化引起的重跑都被开头拦住),处理完成回执父层清空。deps 里绝不能有 activeId ——
-  // 依赖自己会修改的状态,用户切 tab/收起目标日志都会让 effect 重跑、把焦点抢回目标,
-  // 抽屉从此被最后一次日志请求锁死(第 4 轮审查实锤)。
+  // 变化引起的重跑都被开头拦住),且**无论成功、失败、还是消费中被卸载,结局都是回执
+  // 终结** —— 失败只吞不清会让旧请求潜伏在父层,靠卸载重置本地 ref 在下一次「打开
+  // 终端」时突然重放(第 5 轮审查实锤);失败的那次给出提示,用户重点一次即可。deps
+  // 里绝不能有 activeId —— 依赖自己会修改的状态,用户切 tab/收起目标日志都会让
+  // effect 重跑、把焦点抢回目标,抽屉从此被最后一次日志请求锁死(第 4 轮审查实锤)。
   useEffect(() => {
     if (!focusRequest || consumedFocusSeq.current === focusRequest.seq) return;
     consumedFocusSeq.current = focusRequest.seq;
-    const tabId = `attach:${focusRequest.sessionId}`;
+    const { sessionId, seq } = focusRequest;
+    const tabId = `attach:${sessionId}`;
     let alive = true;
     // tab 可能还不存在(刚从状态栏启动的会话),先查一次列表补上再激活。
     api.listTerminalSessions(project.id).then(({ sessions }) => {
-      if (!alive) return;
-      const session = sessions.find((item) => item.id === focusRequest.sessionId);
-      if (session) {
+      const session = sessions.find((item) => item.id === sessionId);
+      if (alive && session) {
         // 「日志」入口和「新建 CLI」对 MAX_TABS 必须一致(第 2 轮审查),且判断-顶替-激活
         // 全部在同一个 updater 里对同一份 tabs 完成(第 3 轮审查:快照分支 + 延后插入会
         // 在首挂并发时超限)。满员时顶掉一个可让位的:非激活的 attach tab(收起无副作用,
@@ -384,8 +386,11 @@ export function ProjectTerminal({
         }
       }
       // 会话已经没了(状态栏的日志按钮只出现在会话还在时,竞态兜底)也算命令终结
-      onFocusHandled?.();
-    }).catch(() => undefined);
+      onFocusHandled?.(seq);
+    }).catch(() => {
+      notify("打开命令日志失败，请再点一次");
+      onFocusHandled?.(seq);
+    });
     return () => { alive = false; };
   }, [focusRequest, project.id, notify, onFocusHandled]);
 

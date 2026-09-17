@@ -110,9 +110,12 @@ export function WorkspaceShell() {
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
-  // 日志聚焦是一次性命令:ProjectTerminal 消费完就清空,否则关抽屉再开会重放最后一次
-  // 请求,把用户按回同一条日志(第 4 轮审查实锤)。
-  const clearTerminalFocus = useCallback(() => setTerminalFocus(null), []);
+  // 日志聚焦是一次性命令:ProjectTerminal 消费完(成功、失败、还是消费中被卸载)都会
+  // 回执终结,否则关抽屉再开会重放最后一次请求,把用户按回同一条日志(第 4/5 轮审查
+  // 实锤)。回执带 seq,只清对应请求 —— 回执可能和用户刚点的下一次请求并发。
+  const clearTerminalFocus = useCallback((seq: number) => {
+    setTerminalFocus((prev) => prev && prev.seq === seq ? null : prev);
+  }, []);
   const isMultiUser = useIsMultiUser();
   const isInstanceAdmin = useIsInstanceAdmin();
   const canUseTerminal = !isMultiUser || isInstanceAdmin;
