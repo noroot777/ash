@@ -285,12 +285,15 @@ function TerminalPane({
 export function ProjectTerminal({
   project,
   focusRequest,
+  onFocusHandled,
   onClose,
   notify,
 }: {
   project: ProjectView;
   /** 状态栏「日志」点过来:打开/切到这条命令会话的 tab。seq 保证同一会话点两次也生效。 */
   focusRequest?: { sessionId: string; seq: number } | null;
+  /** 一次性命令消费完的回执:父层据此清空 focusRequest,防止重挂后重放。 */
+  onFocusHandled?: () => void;
   onClose: () => void;
   notify: (message: string) => void;
 }) {
@@ -307,9 +310,11 @@ export function ProjectTerminal({
   }));
   const { tabs, activeId } = pane;
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null;
-  // focusRequest 拒绝提示的预判快照(effect 不能依赖 tabs,会重复触发);超限保证不靠它
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
+  // focusRequest 拒绝提示的预判快照 —— 那个 effect 是一次性命令,不能依赖 tabs/activeId
+  // (依赖自己会改的状态就会在用户切 tab/收起时重跑、把焦点抢回去);超限保证不靠它
+  const paneRef = useRef(pane);
+  paneRef.current = pane;
+  const consumedFocusSeq = useRef<number | null>(null);
 
   // 打开抽屉时把常驻命令会话(含刚退出还没回收的)挂成 attach tab,排在交互 shell 前面。
   // 同一条命令可能留着多条历史会话(重启一次多一条),tab 只挂最新那条 —— 全挂会出现
@@ -337,43 +342,52 @@ export function ProjectTerminal({
     return () => { alive = false; };
   }, [project.id]);
 
+  // focusRequest 是**一次性命令**:同一个 seq 只消费一次(fetch 前就标记,任何 deps
+  // 变化引起的重跑都被开头拦住),处理完成回执父层清空。deps 里绝不能有 activeId ——
+  // 依赖自己会修改的状态,用户切 tab/收起目标日志都会让 effect 重跑、把焦点抢回目标,
+  // 抽屉从此被最后一次日志请求锁死(第 4 轮审查实锤)。
   useEffect(() => {
-    if (!focusRequest) return;
+    if (!focusRequest || consumedFocusSeq.current === focusRequest.seq) return;
+    consumedFocusSeq.current = focusRequest.seq;
     const tabId = `attach:${focusRequest.sessionId}`;
     let alive = true;
     // tab 可能还不存在(刚从状态栏启动的会话),先查一次列表补上再激活。
     api.listTerminalSessions(project.id).then(({ sessions }) => {
       if (!alive) return;
       const session = sessions.find((item) => item.id === focusRequest.sessionId);
-      if (!session) return; // 会话已经没了(状态栏的日志按钮只出现在会话还在时,竞态兜底)
-      // 「日志」入口和「新建 CLI」对 MAX_TABS 必须一致(第 2 轮审查),且判断-顶替-激活
-      // 全部在同一个 updater 里对同一份 tabs 完成(第 3 轮审查:快照分支 + 延后插入会
-      // 在首挂并发时超限)。满员时顶掉一个可让位的:非激活的 attach tab(收起无副作用,
-      // 会话照跑),先挑已退出的;全让不出位(都是交互 shell/激活中)才拒绝 —— 拒绝时
-      // tabs 和 activeId 都不动,active 不能指向没插入的 tab。
-      const pickVictim = (list: ProjectTerminalTab[], active: string) => {
-        const yieldable = (tab: ProjectTerminalTab) => tab.attachSessionId && tab.id !== active;
-        return [...list].reverse().find((tab) => yieldable(tab) && tab.status === "ended")
-          ?? [...list].reverse().find(yieldable);
-      };
-      setPane((prev) => {
-        if (prev.tabs.some((tab) => tab.id === tabId)) return { ...prev, activeId: tabId };
-        if (prev.tabs.length < MAX_TABS) {
-          return { tabs: [createAttachTab(session), ...prev.tabs], activeId: tabId };
+      if (session) {
+        // 「日志」入口和「新建 CLI」对 MAX_TABS 必须一致(第 2 轮审查),且判断-顶替-激活
+        // 全部在同一个 updater 里对同一份 tabs 完成(第 3 轮审查:快照分支 + 延后插入会
+        // 在首挂并发时超限)。满员时顶掉一个可让位的:非激活的 attach tab(收起无副作用,
+        // 会话照跑),先挑已退出的;全让不出位(都是交互 shell/激活中)才拒绝 —— 拒绝时
+        // tabs 和 activeId 都不动,active 不能指向没插入的 tab。
+        const pickVictim = (list: ProjectTerminalTab[], active: string) => {
+          const yieldable = (tab: ProjectTerminalTab) => tab.attachSessionId && tab.id !== active;
+          return [...list].reverse().find((tab) => yieldable(tab) && tab.status === "ended")
+            ?? [...list].reverse().find(yieldable);
+        };
+        setPane((prev) => {
+          if (prev.tabs.some((tab) => tab.id === tabId)) return { ...prev, activeId: tabId };
+          if (prev.tabs.length < MAX_TABS) {
+            return { tabs: [createAttachTab(session), ...prev.tabs], activeId: tabId };
+          }
+          const victim = pickVictim(prev.tabs, prev.activeId);
+          if (!victim) return prev;
+          return { tabs: [createAttachTab(session), ...prev.tabs.filter((tab) => tab.id !== victim.id)], activeId: tabId };
+        });
+        // 提示走渲染快照的预判:拒绝只发生在「满员且全是 shell/激活」的稳定态,快照准确;
+        // 首挂并发的竞态态挂的全是可让位的 attach tab,不会走到拒绝。
+        const snapshot = paneRef.current;
+        if (!snapshot.tabs.some((tab) => tab.id === tabId) && snapshot.tabs.length >= MAX_TABS
+          && !pickVictim(snapshot.tabs, snapshot.activeId)) {
+          notify(`一个抽屉最多打开 ${MAX_TABS} 个 CLI，先收起一个再看日志`);
         }
-        const victim = pickVictim(prev.tabs, prev.activeId);
-        if (!victim) return prev;
-        return { tabs: [createAttachTab(session), ...prev.tabs.filter((tab) => tab.id !== victim.id)], activeId: tabId };
-      });
-      // 提示走渲染快照的预判:拒绝只发生在「满员且全是 shell/激活」的稳定态,快照准确;
-      // 首挂并发的竞态态挂的全是可让位的 attach tab,不会走到拒绝。
-      const snapshot = tabsRef.current;
-      if (!snapshot.some((tab) => tab.id === tabId) && snapshot.length >= MAX_TABS && !pickVictim(snapshot, activeId)) {
-        notify(`一个抽屉最多打开 ${MAX_TABS} 个 CLI，先收起一个再看日志`);
       }
+      // 会话已经没了(状态栏的日志按钮只出现在会话还在时,竞态兜底)也算命令终结
+      onFocusHandled?.();
     }).catch(() => undefined);
     return () => { alive = false; };
-  }, [focusRequest, project.id, notify, activeId]);
+  }, [focusRequest, project.id, notify, onFocusHandled]);
 
   // 所有 attach tab 的状态点由这**一条**集中轮询驱动(会话事实:跑着/脚本退了服务在/
   // 死透),代替曾经的每 tab 各一个探测循环 —— N 个日志 tab 只发一路状态请求,长连接

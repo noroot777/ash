@@ -110,6 +110,9 @@ export function WorkspaceShell() {
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
+  // 日志聚焦是一次性命令:ProjectTerminal 消费完就清空,否则关抽屉再开会重放最后一次
+  // 请求,把用户按回同一条日志(第 4 轮审查实锤)。
+  const clearTerminalFocus = useCallback(() => setTerminalFocus(null), []);
   const isMultiUser = useIsMultiUser();
   const isInstanceAdmin = useIsInstanceAdmin();
   const canUseTerminal = !isMultiUser || isInstanceAdmin;
@@ -577,7 +580,7 @@ export function WorkspaceShell() {
         ) : selectedFullTask ? (
           <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer("single", draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
         ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "tasks" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "tasks" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项{scopeKind === "tasks" ? "还没落地" : "任务"}</span>}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
-        {terminalOpen && currentProject && <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} focusRequest={terminalFocus} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>}
+        {terminalOpen && currentProject && <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} focusRequest={terminalFocus} onFocusHandled={clearTerminalFocus} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>}
       </main>
     </div>{statusBar}</div>{overlays}</>
   );
