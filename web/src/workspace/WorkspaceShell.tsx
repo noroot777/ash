@@ -9,6 +9,7 @@ import { handedOut, useOutboundState } from "./useOutboundState.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
+import { StatusBar } from "./StatusBar.tsx";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
@@ -43,7 +44,6 @@ import {
   WORKSPACE_SIDEBAR_STORAGE_KEY,
 } from "./WorkspaceResizeHandle.tsx";
 import { pushTaskHistoryEntry, selectedTaskProjectId } from "./workspaceHistory.ts";
-import { TerminalToggle } from "./TerminalToggle.tsx";
 import { HandoffApprovalAlert } from "../handoff/HandoffApprovalAlert.tsx";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
 import { HandoffDialog } from "../task-detail/HandoffDialog.tsx";
@@ -109,6 +109,7 @@ export function WorkspaceShell() {
   const [collapsed, setCollapsed] = useState(() => readRenamedStorage("ash:sidebar-collapsed") === "1");
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
   const isMultiUser = useIsMultiUser();
   const isInstanceAdmin = useIsInstanceAdmin();
   const canUseTerminal = !isMultiUser || isInstanceAdmin;
@@ -493,11 +494,25 @@ export function WorkspaceShell() {
   const dropSettingsAnchor = useCallback(() => setSettingsAnchor(null), []);
   const notesProject = notes ? projects.find((project) => project.id === notes.projectId) ?? null : null;
   // 终端开的是**宿主机上的一个真 shell**,项目目录只是起始 cwd(一条 `cd /` 就出去了),
-  // 所以多人模式下它是实例管理员专属(§四)。后端已经 403,这里连入口一起收掉 ——
-  // 留一颗按不动的按钮只会让人以为功能坏了。
-  const terminalToggle = currentProject && canUseTerminal ? (
-    <TerminalToggle open={terminalOpen} onToggle={() => setTerminalOpen((open) => !open)} />
-  ) : null;
+  // 所以多人模式下它是实例管理员专属(§四)。后端已经 403,状态栏连入口一起收掉 ——
+  // 留一颗按不动的按钮只会让人以为功能坏了。入口在全局状态栏(StatusBar),不再挤任务顶栏。
+  const statusBar = (
+    <StatusBar
+      projects={projects}
+      currentProject={currentProject}
+      taskMode={scopeKind === "tasks"}
+      canUseTerminal={canUseTerminal}
+      connected={connected}
+      terminalOpen={terminalOpen}
+      onToggleTerminal={() => setTerminalOpen((open) => !open)}
+      onOpenCommandLog={(sessionId) => {
+        setTerminalFocus({ sessionId, seq: Date.now() });
+        setTerminalOpen(true);
+      }}
+      onManageCommands={() => openSettings("project", "commands")}
+      notify={notify}
+    />
+  );
   const handoffAlert = (
     <div className="handoff-approval-slot">
       <HandoffApprovalAlert notify={notify} onOpenSettings={() => openSettings("defaults")} />
@@ -544,14 +559,14 @@ export function WorkspaceShell() {
             onLocalOwnership={openLocalOwnership}
           />
         ) : selectedFullTask?.mode === "team" ? (
-          <TeamView task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
+          <TeamView task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
         ) : selectedFullTask?.mode === "duet" ? (
-          <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} terminalToggle={terminalToggle} notify={notify} />
+          <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
         ) : selectedFullTask ? (
-          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer("single", draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
-        ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "tasks" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "tasks" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项{scopeKind === "tasks" ? "还没落地" : "任务"}</span>}{terminalToggle}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
-        {terminalOpen && currentProject && <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>}
+          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer("single", draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
+        ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "tasks" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "tasks" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项{scopeKind === "tasks" ? "还没落地" : "任务"}</span>}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
+        {terminalOpen && currentProject && <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} focusRequest={terminalFocus} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>}
       </main>
-    </div></div>{overlays}</>
+    </div>{statusBar}</div>{overlays}</>
   );
 }

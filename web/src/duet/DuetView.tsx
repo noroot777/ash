@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { normalizeDuetConfig } from "@ash/shared/duet";
 import type { GateAction, Session, Task, TaskListItem } from "@ash/shared";
 import { runActivityPhase } from "@ash/shared/run-activity";
@@ -121,7 +121,6 @@ export function DuetView({
   onTaskCreated,
   onTaskDeleted,
   onSelectTask,
-  terminalToggle,
   notify,
 }: {
   task: Task;
@@ -130,7 +129,6 @@ export function DuetView({
   onTaskCreated: (task: Task) => void;
   onTaskDeleted: (taskId: string) => void;
   onSelectTask: (task: TaskListItem) => void;
-  terminalToggle?: ReactNode;
   notify: (message: string) => void;
 }) {
   const config = normalizeDuetConfig(task.duet);
@@ -295,8 +293,7 @@ export function DuetView({
         {!task.archived && canArchive(task.status) && <button type="button" title="归档讨论" onClick={() => void archive()}><Archive size={13} /></button>}
         {task.archived && <button type="button" onClick={() => void archive()}>取消归档</button>}
         <button type="button" title="删除讨论" onClick={() => setDeleteOpen(true)}><Trash size={13} /></button>
-        {terminalToggle}
-      </header>
+        </header>
 
       <ImagePreviewGroup isolated>
         <details className="duet-context">

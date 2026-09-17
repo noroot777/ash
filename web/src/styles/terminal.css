@@ -1,23 +1,4 @@
-.terminal-toggle {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  place-items: center;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  padding: 0;
-  color: var(--muted);
-  box-shadow: none;
-}
-
-.terminal-toggle:hover,
-.terminal-toggle.is-active { background: var(--overlay); color: var(--ink); }
-.terminal-toggle.is-active { color: var(--accent); }
-.team-header-actions > .terminal-toggle { width: 28px; padding: 0; border-color: transparent; background: transparent; box-shadow: none; }
-.team-header-actions > .terminal-toggle:hover,
-.team-header-actions > .terminal-toggle.is-active { background: var(--overlay); color: var(--accent); }
+/* 终端开关已从任务顶栏移到全局状态栏(status-bar.css),.terminal-toggle 随组件一起退役。 */
 .workspace-app-bar > .terminal-toggle { margin-left: auto; }
 
 .project-terminal {

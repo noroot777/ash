@@ -8,6 +8,7 @@ import { api, type TerminalEvent } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import {
+  createAttachTab,
   createTerminalTab,
   type ProjectTerminalTab,
   type TerminalStatus,
@@ -156,16 +157,21 @@ function TerminalPane({
       try { fit.fit(); terminal.focus(); } catch { /* component was removed */ }
     });
 
-    void api.createTerminalSession(project.id, { cols: terminal.cols, rows: terminal.rows })
+    // attach 模式(常用命令的常驻会话):不新建 shell,直接挂上已有会话收发。SSE 从 seq 0
+    // 回放服务端缓冲,所以启动早于打开抽屉的输出也能看到。
+    const establish: Promise<{ id: string; cwd: string }> = tab.attachSessionId
+      ? Promise.resolve({ id: tab.attachSessionId, cwd: tab.cwd })
+      : api.createTerminalSession(project.id, { cols: terminal.cols, rows: terminal.rows });
+    void establish
       .then((session) => {
         if (!alive) {
-          void api.closeTerminalSession(project.id, session.id).catch(() => undefined);
+          if (!tab.attachSessionId) void api.closeTerminalSession(project.id, session.id).catch(() => undefined);
           return;
         }
         sessionId = session.id;
         onMeta(tab.id, { cwd: session.cwd });
         source = new EventSource(api.terminalEventsUrl(project.id, session.id));
-        source.onopen = () => { if (alive) setStatus("ready"); };
+        source.onopen = () => { if (alive && !ended) setStatus("ready"); };
         source.onmessage = (message) => {
           if (!alive) return;
           const event = JSON.parse(message.data) as TerminalEvent;
@@ -196,9 +202,10 @@ function TerminalPane({
       fitRef.current = null;
       if (inputTimer !== null) window.clearTimeout(inputTimer);
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
-      if (sessionId) void api.closeTerminalSession(project.id, sessionId).catch(() => undefined);
+      // attach 的会话不归这个 tab 管:关抽屉/收起 tab 只是不看了,服务照跑(停止走状态栏)。
+      if (sessionId && !tab.attachSessionId) void api.closeTerminalSession(project.id, sessionId).catch(() => undefined);
     };
-  }, [notify, onMeta, project.id, tab.id]);
+  }, [notify, onMeta, project.id, tab.id, tab.attachSessionId, tab.cwd]);
 
   return (
     <div
@@ -215,10 +222,13 @@ function TerminalPane({
 
 export function ProjectTerminal({
   project,
+  focusRequest,
   onClose,
   notify,
 }: {
   project: ProjectView;
+  /** 状态栏「日志」点过来:打开/切到这条命令会话的 tab。seq 保证同一会话点两次也生效。 */
+  focusRequest?: { sessionId: string; seq: number } | null;
   onClose: () => void;
   notify: (message: string) => void;
 }) {
@@ -230,6 +240,47 @@ export function ProjectTerminal({
   ]);
   const [activeId, setActiveId] = useState(firstTabId);
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null;
+
+  // 打开抽屉时把常驻命令会话(含刚退出还没回收的)挂成 attach tab,排在交互 shell 前面。
+  // 同一条命令可能留着多条历史会话(重启一次多一条),tab 只挂最新那条 —— 全挂会出现
+  // 一排重名 tab。不自动激活:用户开抽屉多半是要敲命令,聚焦命令日志走 focusRequest。
+  useEffect(() => {
+    let alive = true;
+    api.listTerminalSessions(project.id).then(({ sessions }) => {
+      if (!alive) return;
+      const newestPerCommand = new Map<string, (typeof sessions)[number]>();
+      for (const session of sessions) {
+        if (session.commandId === null) continue;
+        const known = newestPerCommand.get(session.commandId);
+        if (!known || session.startedAt > known.startedAt) newestPerCommand.set(session.commandId, session);
+      }
+      setTabs((current) => {
+        const knownIds = new Set(current.map((tab) => tab.attachSessionId).filter(Boolean));
+        const added = [...newestPerCommand.values()]
+          .filter((session) => !knownIds.has(session.id))
+          .map((session) => createAttachTab(session.id, session.name, session.cwd));
+        return added.length ? [...added, ...current] : current;
+      });
+    }).catch(() => undefined); // 列表拿不到就只有普通 shell,不值得打断人
+    return () => { alive = false; };
+  }, [project.id]);
+
+  useEffect(() => {
+    if (!focusRequest) return;
+    const tabId = `attach:${focusRequest.sessionId}`;
+    let alive = true;
+    // tab 可能还不存在(刚从状态栏启动的会话),先查一次列表补上再激活。
+    api.listTerminalSessions(project.id).then(({ sessions }) => {
+      if (!alive) return;
+      const session = sessions.find((item) => item.id === focusRequest.sessionId);
+      if (!session) return; // 会话已经没了(状态栏的日志按钮只出现在会话还在时,竞态兜底)
+      setTabs((current) => current.some((tab) => tab.id === tabId)
+        ? current
+        : [createAttachTab(session.id, session.name, session.cwd), ...current]);
+      setActiveId(tabId);
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [focusRequest, project.id]);
 
   useEffect(() => {
     window.localStorage.setItem(TERMINAL_HEIGHT_KEY, String(height));
@@ -309,7 +360,7 @@ export function ProjectTerminal({
               <button
                 type="button"
                 className="project-terminal__tab-close"
-                aria-label={`关闭 ${tab.label}`}
+                aria-label={tab.attachSessionId ? `收起 ${tab.label}（服务继续跑）` : `关闭 ${tab.label}`}
                 onClick={() => closeTab(tab.id)}
               ><X size={12} /></button>
             </div>

@@ -1,0 +1,86 @@
+/* 项目设置「常用命令」节(ProjectCommandsSettings.tsx)。 */
+
+.project-commands__intro {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+.project-commands__intro small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.project-commands__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.project-commands__row input {
+  border: none;
+  border-radius: 7px;
+  background: var(--panel);
+  box-shadow: var(--control-shadow);
+  padding: 6px 9px;
+  font-size: 12.5px;
+  color: var(--ink);
+  width: 100%;
+}
+.project-commands__row input:disabled { opacity: 0.6; }
+
+.project-commands__name { flex: 0 0 160px; }
+
+.project-commands__scripts {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.project-commands__scripts input {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 12px;
+}
+
+.project-commands__remove {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+.project-commands__remove:hover { background: var(--raised); color: var(--red); }
+.project-commands__remove:disabled { opacity: 0.5; cursor: default; }
+
+.project-commands__empty {
+  margin: 4px 0 10px;
+  color: var(--faint);
+  font-size: 12.5px;
+}
+
+.project-commands__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.project-commands__count {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.project-commands__error {
+  margin: 8px 0 0;
+  color: var(--red);
+  font-size: 12.5px;
+}

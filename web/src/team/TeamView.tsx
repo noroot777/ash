@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@ash/shared/team";
 import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
@@ -336,7 +336,6 @@ export function TeamView({
   onSelectTask,
   initialReviewOpen = false,
   onReviewOpenChange,
-  terminalToggle,
   notify,
 }: {
   task: Task;
@@ -346,7 +345,6 @@ export function TeamView({
   onSelectTask: (task: TaskListItem) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
-  terminalToggle?: ReactNode;
   notify: Notify;
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
@@ -567,7 +565,6 @@ export function TeamView({
         onArchive={() => void perform("archive")}
         onDelete={() => setDeleteOpen(true)}
         indicatorForTask={indicatorForTask}
-        terminalToggle={terminalToggle}
         inspectorToggle={toggleButton}
         notify={notify}
       />

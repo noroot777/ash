@@ -6,6 +6,11 @@ export type ProjectTerminalTab = {
   label: string;
   status: TerminalStatus;
   cwd: string;
+  /**
+   * 非空 = attach 到 server 上已有的会话（常用命令的常驻会话）而不是新建 shell。
+   * 这类 tab 的生命周期跟前端无关：关 tab 只是不看了，会话照跑；停止走状态栏。
+   */
+  attachSessionId?: string;
 };
 
 export function createTerminalTab(
@@ -21,6 +26,10 @@ export function createTerminalTab(
     status: "starting",
     cwd,
   };
+}
+
+export function createAttachTab(sessionId: string, label: string, cwd: string): ProjectTerminalTab {
+  return { id: `attach:${sessionId}`, ordinal: 0, label, status: "starting", cwd, attachSessionId: sessionId };
 }
 
 export function withoutTerminalTab(

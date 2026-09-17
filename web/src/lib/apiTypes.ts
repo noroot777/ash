@@ -520,6 +520,11 @@ export type TerminalSessionInfo = {
   cwd: string;
   shell: string;
   name: string;
+  /** 非空 = 常用命令的常驻会话（server/src/terminal-commands.ts），不是交互 shell。 */
+  commandId: string | null;
+  startedAt: number;
+  /** null = 进程还活着；命令会话靠它区分「运行中」和「退了但日志可回看」。 */
+  exitCode: number | null;
 };
 
 export type TerminalEvent =
