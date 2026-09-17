@@ -302,6 +302,11 @@ export function ProjectTerminal({
   ]);
   const [activeId, setActiveId] = useState(firstTabId);
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null;
+  // focusRequest 的容量决策要读最新值,但它的 effect 不能依赖 tabs/activeId(会重复触发)
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
 
   // 打开抽屉时把常驻命令会话(含刚退出还没回收的)挂成 attach tab,排在交互 shell 前面。
   // 同一条命令可能留着多条历史会话(重启一次多一条),tab 只挂最新那条 —— 全挂会出现
@@ -338,13 +343,31 @@ export function ProjectTerminal({
       if (!alive) return;
       const session = sessions.find((item) => item.id === focusRequest.sessionId);
       if (!session) return; // 会话已经没了(状态栏的日志按钮只出现在会话还在时,竞态兜底)
-      setTabs((current) => current.some((tab) => tab.id === tabId)
-        ? current
-        : [createAttachTab(session), ...current]);
+      // 「日志」入口和「新建 CLI」对 MAX_TABS 必须一致 —— 这里曾无条件插入,满 8 个后
+      // 还能塞到 12 个(第 2 轮审查实锤)。满员时顶掉一个可让位的:非激活的 attach tab
+      // (收起无副作用,会话照跑),先挑已退出的;全让不出位(都是交互 shell/激活中)才
+      // 拒绝,且此时不动 activeId —— active 不能指向没插入的 tab。
+      const current = tabsRef.current;
+      if (!current.some((tab) => tab.id === tabId) && current.length >= MAX_TABS) {
+        const yieldable = (tab: ProjectTerminalTab) => tab.attachSessionId && tab.id !== activeIdRef.current;
+        const victim = [...current].reverse().find((tab) => yieldable(tab) && tab.status === "ended")
+          ?? [...current].reverse().find(yieldable);
+        if (!victim) {
+          notify(`一个抽屉最多打开 ${MAX_TABS} 个 CLI，先收起一个再看日志`);
+          return;
+        }
+        setTabs((cur) => cur.some((tab) => tab.id === tabId)
+          ? cur
+          : [createAttachTab(session), ...cur.filter((tab) => tab.id !== victim.id)]);
+      } else {
+        setTabs((cur) => cur.some((tab) => tab.id === tabId)
+          ? cur
+          : [createAttachTab(session), ...cur]);
+      }
       setActiveId(tabId);
     }).catch(() => undefined);
     return () => { alive = false; };
-  }, [focusRequest, project.id]);
+  }, [focusRequest, project.id, notify]);
 
   // 所有 attach tab 的状态点由这**一条**集中轮询驱动(会话事实:跑着/脚本退了服务在/
   // 死透),代替曾经的每 tab 各一个探测循环 —— N 个日志 tab 只发一路状态请求,长连接
