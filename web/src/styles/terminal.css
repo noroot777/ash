@@ -111,7 +111,8 @@
 
 .project-terminal__tab b { overflow: hidden; color: inherit; font-size: 11.5px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
 .project-terminal__status { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: var(--faint); }
-.project-terminal__status.is-ready { background: var(--green); }
+.project-terminal__status.is-ready,
+.project-terminal__status.is-detached { background: var(--green); }
 .project-terminal__status.is-reconnecting,
 .project-terminal__status.is-starting { background: var(--amber); }
 .project-terminal__status.is-error,

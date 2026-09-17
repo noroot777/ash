@@ -1,4 +1,7 @@
-export type TerminalStatus = "starting" | "ready" | "reconnecting" | "ended" | "error";
+// "detached":attach 的命令会话里启动脚本(PTY 组长)退了、它派生的服务还在进程组里跑
+// (daemonize 形状)。不能标成 ended —— 同屏状态栏正显示「运行中」,日志抽屉说「已退出」
+// 就是自相矛盾;整组死透才是 ended。
+export type TerminalStatus = "starting" | "ready" | "reconnecting" | "detached" | "ended" | "error";
 
 export type ProjectTerminalTab = {
   id: string;

@@ -41,8 +41,9 @@ function statusLabel(status: TerminalStatus): string {
   return status === "starting" ? "正在启动"
     : status === "ready" ? "已连接"
       : status === "reconnecting" ? "正在重连"
-        : status === "ended" ? "已退出"
-          : "连接失败";
+        : status === "detached" ? "服务运行中（启动脚本已退出）"
+          : status === "ended" ? "已退出"
+            : "连接失败";
 }
 
 function TerminalPane({
@@ -175,11 +176,30 @@ function TerminalPane({
         source.onmessage = (message) => {
           if (!alive) return;
           const event = JSON.parse(message.data) as TerminalEvent;
-          if (event.type === "data") terminal.write(event.data);
-          else {
-            ended = true;
-            setStatus("ended");
-            terminal.write(`\r\n\x1b[90m进程已退出（${event.exitCode}）\x1b[0m\r\n`);
+          if (event.type === "data") {
+            terminal.write(event.data);
+            return;
+          }
+          ended = true;
+          // exit 事件说的是 PTY 组长(启动脚本)退了,不等于命令死了:daemonize 形状下
+          // 服务还在进程组里跑,状态栏正显示「运行中」—— 这里跟着说「已退出」就是同屏
+          // 自相矛盾。attach 的命令会话查一次 groupAlive 再定语气;整组死透才是 ended。
+          const settle = (groupStillAlive: boolean) => {
+            if (!alive) return;
+            if (groupStillAlive) {
+              setStatus("detached");
+              terminal.write(`\r\n\x1b[90m启动脚本已退出（${event.exitCode}），服务仍在运行 —— 停止/重启在状态栏\x1b[0m\r\n`);
+            } else {
+              setStatus("ended");
+              terminal.write(`\r\n\x1b[90m进程已退出（${event.exitCode}）\x1b[0m\r\n`);
+            }
+          };
+          if (tab.attachSessionId) {
+            api.listTerminalSessions(project.id)
+              .then(({ sessions }) => settle(sessions.find((item) => item.id === sessionId)?.groupAlive === true))
+              .catch(() => settle(false));
+          } else {
+            settle(false);
           }
         };
         source.onerror = () => {
