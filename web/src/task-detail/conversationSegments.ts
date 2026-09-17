@@ -7,7 +7,7 @@
 // 从 conversationModel 拆出来的一族:那边管「会话 → 气泡」,这里管「事件 → 段落」。
 import type { AgentEvent } from "@ash/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
-import type { ExecutionEvent } from "../lib/executionTrace.ts";
+import { appendExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 
 // 「执行过程」块里的一行(工具 / 思考 / 异常)。形状与渲染都归 lib/executionTrace,
 // 普通任务、团队、辩论共用同一份 —— 这里只保留旧名字的别名。
@@ -34,6 +34,14 @@ export function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
   return { kind: "error", label: event.message };
 }
 
+// 相邻的思考过程合并成一行(见 appendExecutionEvent) —— 整块 trace 一次算完。
+function auxEvents(entries: SessionTraceEntry[]): AgentAuxEvent[] {
+  return entries.reduce<AgentAuxEvent[]>(
+    (events, entry) => appendExecutionEvent(events, auxEvent(entry.event as AgentTraceEvent, entry.at)),
+    [],
+  );
+}
+
 export function contentSegments(
   traced: SessionTraceEntry[],
   fallbackMarkdown: string,
@@ -52,7 +60,7 @@ export function contentSegments(
     return [{
       id: `${idPrefix}:0`,
       markdown: fallbackMarkdown,
-      events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent, entry.at)),
+      events: auxEvents(auxEntries),
       attachments: attachmentEntries.map((entry) => entry.event.path),
     }];
   }
@@ -75,7 +83,7 @@ export function contentSegments(
       continue;
     }
     if (current.markdown) pushCurrent();
-    current.events.push(auxEvent(entry.event, entry.at));
+    current.events = appendExecutionEvent(current.events, auxEvent(entry.event, entry.at));
   }
   pushCurrent();
 
@@ -89,7 +97,7 @@ export function contentSegments(
   return [{
     id: `${idPrefix}:fallback`,
     markdown: fallbackMarkdown || structuredMarkdown,
-    events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent, entry.at)),
+    events: auxEvents(auxEntries),
     attachments: attachmentEntries.map((entry) => entry.event.path),
   }];
 }

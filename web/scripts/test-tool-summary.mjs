@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { hasMoreThanSummary, shortenPath, traceSummary } from "../src/lib/executionTrace.ts";
+import { appendExecutionEvent, hasMoreThanSummary, shortenPath, traceSummary } from "../src/lib/executionTrace.ts";
 
 const tool = (label, detail) => ({ kind: "tool", label, detail });
 
@@ -63,5 +63,27 @@ assert.equal(hasMoreThanSummary(tool("Wat", undefined), ""), false);
 
 assert.equal(shortenPath("index.ts"), "index.ts");
 assert.equal(shortenPath("/a/b"), "/a/b");
+
+// 思考是流式小块：相邻的合并成一行，否则 DeepSeek 那种一词一块的 reasoning 会把
+// 「执行过程」刷成几百行「思考过程 The」「思考过程 output」（用户 2026-09-17 反馈）。
+const think = (detail) => ({ kind: "thinking", label: "思考过程", detail });
+const merged = ["The", " output", " was", " truncated"]
+  .reduce((events, word) => appendExecutionEvent(events, think(word)), []);
+assert.equal(merged.length, 1, "相邻思考只占一行");
+assert.deepEqual(merged[0], think("The output was truncated"));
+// 中间隔了工具就不是「相邻」了：思考分属两次，合并会把两段不同的思考粘成一句。
+const split = [think("先看看"), tool("exec", "ls -la"), think("再改"), think("这里")]
+  .reduce((events, event) => appendExecutionEvent(events, event), []);
+assert.deepEqual(split.map((event) => event.detail), ["先看看", "ls -la", "再改这里"]);
+// 子智能体的活动事件渲染在别处（isVisibleExecutionEvent 过滤掉），不能拿它当分隔：
+// 不跳过的话主会话一段思考会被一串看不见的事件劈成几十行。
+const hidden = { kind: "tool", label: "Agent", detail: "子智能体", nativeWork: { type: "activity", id: "child", event: { kind: "text", text: "x" } } };
+const acrossHidden = [think("主会话在想"), hidden, think("接着想")]
+  .reduce((events, event) => appendExecutionEvent(events, event), []);
+assert.deepEqual(acrossHidden.map((event) => event.detail), ["主会话在想接着想", "子智能体"]);
+// 原数组不被就地改写：duet 那路把它当 React state 用，就地改不会触发重渲染。
+const before = [think("A")];
+assert.notEqual(appendExecutionEvent(before, think("B")), before);
+assert.deepEqual(before, [think("A")]);
 
 console.log("tool-summary ok");

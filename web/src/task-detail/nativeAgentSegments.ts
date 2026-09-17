@@ -1,4 +1,5 @@
 import type { NativeAgentActivity } from "@ash/shared";
+import { appendExecutionEvent } from "../lib/executionTrace.ts";
 import type { AgentContentSegment } from "./conversationModel.ts";
 
 export function nativeAgentSegments(activity: NativeAgentActivity[]): AgentContentSegment[] {
@@ -15,13 +16,12 @@ export function nativeAgentSegments(activity: NativeAgentActivity[]): AgentConte
       if (!current.attachments.includes(event.path)) current.attachments.push(event.path);
     } else {
       if (current.markdown) current = next();
-      if (event.kind === "tool") current.events.push({ kind: "tool", label: event.name, detail: event.detail });
-      else if (event.kind === "error") current.events.push({ kind: "error", label: event.message });
-      else {
-        const previous = current.events.at(-1);
-        if (previous?.kind === "thinking") previous.detail = (previous.detail ?? "") + event.text;
-        else current.events.push({ kind: "thinking", label: "思考过程", detail: event.text });
-      }
+      // 相邻思考由 appendExecutionEvent 合并成一行,与主会话那两路同一份规则。
+      current.events = appendExecutionEvent(current.events, event.kind === "tool"
+        ? { kind: "tool", label: event.name, detail: event.detail }
+        : event.kind === "error"
+          ? { kind: "error", label: event.message }
+          : { kind: "thinking", label: "思考过程", detail: event.text });
     }
   }
   return segments.filter((segment) => segment.markdown || segment.events.length || segment.attachments.length);

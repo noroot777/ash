@@ -42,10 +42,22 @@ async function* qwenEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
   // 用一个标志即可:完整消息处理完就清掉,下一条消息重新判定。
   let streamedText = false;
   let textBuf = "";
+  // 思考同样按 token 增量到达,逐条发布会把一次思考画成几百行「思考过程」(grok 那份
+  // 解析器的同一条经验)。正文与思考各自攒着,谁要出场就先把对方收口,顺序照旧。
+  let thinkBuf = "";
   const flushText = () => {
     if (!textBuf) return;
     push({ kind: "text", text: textBuf });
     textBuf = "";
+  };
+  const flushThinking = () => {
+    if (!thinkBuf) return;
+    push({ kind: "thinking", text: thinkBuf });
+    thinkBuf = "";
+  };
+  const flushStream = () => {
+    flushThinking();
+    flushText();
   };
   const sendSession = (id: unknown) => {
     if (sessionSent || typeof id !== "string" || !id) return;
@@ -59,12 +71,15 @@ async function* qwenEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
     if (se?.type !== "content_block_delta") return;
     const d = se.delta;
     if (d?.type === "text_delta" && typeof d.text === "string" && d.text) {
+      flushThinking();
       textBuf += d.text;
       streamedText = true;
       // 攒到一行或 ~40 字再发,免得每个 token 触发一次前端重渲染。
       if (textBuf.length >= 40 || textBuf.includes("\n")) flushText();
     } else if (d?.type === "thinking_delta" && typeof d.thinking === "string" && d.thinking) {
-      push({ kind: "thinking", text: d.thinking });
+      flushText();
+      thinkBuf += d.thinking;
+      if (thinkBuf.length >= 240 || thinkBuf.includes("\n")) flushThinking();
     }
   };
 
@@ -90,7 +105,7 @@ async function* qwenEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
       return;
     }
     if (ev.type === "assistant" && Array.isArray(ev.message?.content)) {
-      flushText();
+      flushStream();
       let hadText = false;
       for (const block of ev.message.content) {
         if (block?.type === "text") {
@@ -108,7 +123,7 @@ async function* qwenEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
       return;
     }
     if (ev.type === "result") {
-      flushText();
+      flushStream();
       // 手停时 CLI 也可能补一条失败的 result,那不是故障。
       const failed = ev.is_error === true || (ev.subtype && ev.subtype !== "success");
       if (failed && !lifecycle.stopRequested) {
@@ -128,7 +143,7 @@ async function* qwenEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
   const finish = (opts: { exitStatus: number; spawnError?: string; flushTimeout?: boolean }) => {
     if (finished) return;
     finished = true;
-    flushText();
+    flushStream();
     trace.close();
     const tail = stderrTail.trim();
     if (opts.spawnError) push({ kind: "error", message: opts.spawnError });

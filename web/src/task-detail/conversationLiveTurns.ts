@@ -5,6 +5,7 @@ import type { ContextUsage, Session } from "@ash/shared";
 import { addUsage } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import { isVerifyNote, noteTone } from "./conversationNotes.ts";
+import { appendExecutionEvent } from "../lib/executionTrace.ts";
 import { reviewerKey, reviewerKeyOf, reviewerOf } from "./conversationReviewer.ts";
 import type { AgentContentSegment, AgentTraceEvent } from "./conversationSegments.ts";
 import { auxEvent } from "./conversationSegments.ts";
@@ -72,7 +73,9 @@ function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
     segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [] };
     agent.segments.push(segment);
   }
-  segment.events.push(auxEvent(event));
+  // 相邻思考合并成一行(见 appendExecutionEvent)：直播这一路一条 thinking 事件就是一小块
+  // 增量，逐条成行的话长思考会刷出成百上千行。
+  segment.events = appendExecutionEvent(segment.events, auxEvent(event));
 }
 
 function appendAgentAttachment(agent: AgentItem, path: string): void {
