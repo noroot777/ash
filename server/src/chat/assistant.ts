@@ -113,13 +113,20 @@ export async function invokeAssistant(member: ChatMember, room: Room, prompt: st
       retried = true;
       response = await invoke(member, room.ownerUserId, prompt + evidence + "\n【工具调用重试】\n上一轮因调用工具已作废。所有需要的信息都在本消息中，本轮没有任何可用工具。直接输出最终 JSON 或 search JSON，不尝试调用工具。", signal, room.projectId, { purpose: "assistant" });
     }
-    // 助手一轮要么给最终回答（reply），要么请求检索（search）。两种形状都是有效候选，但
-    // **reply 优先**：上面的提示词里就带着 {"search":{"queries":["关键词"],"projectId":null}}
-    // 这个格式示例，模型在最终回答后面复述一遍是常事——那个示例本身就是完整形状，光把
-    // search 判据收窄拦不住它。所以先找最终回答，没有才去找检索请求；检索候选再按真实形状
-    // 筛一道，顺手挡掉 {"search":{}} 这类空壳示例。
-    const pick = (text: string) => parseLastJsonObject(text, hasReply)
-      ?? parseLastJsonObject(text, (value) => searchQueries(value) !== undefined);
+    // 助手一轮要么给最终回答（reply），要么请求检索（search）。两种形状都是有效候选，
+    // **按位置取最后一个**——模型的惯例是说明在前、最终 JSON 在后。
+    //
+    // 两种误判方向是对称的，纯靠文本结构分不开（`{有效对象} 说明文字 {有效对象}` 两边长得
+    // 一模一样），所以按**后果轻重**定规则，而不是按方向：
+    //   前置 reply 示例 + 真 search → 取前面就等于用户要查任务、却拿到一句示例文本，本轮
+    //                                 直接结束，不检索，没有补救（硬失败）
+    //   真 reply + 尾随 search 示例 → 取后面只是白跑一轮检索，下一轮模型照样给出最终回答
+    // 后者有补救、前者没有，所以取最后一个。
+    //
+    // 付那一轮代价的前提是尾随示例得是**完整形状**；提示词里复述得最多的 {"search":{}}
+    // 一类空壳压根不算有效候选（searchQueries 挡掉），常见情形不受影响。
+    const pick = (text: string) => parseLastJsonObject(text,
+      (value) => hasReply(value) || searchQueries(value) !== undefined);
     let raw = pick(response.text);
     if (!raw && !retried) {
       signal.throwIfAborted();

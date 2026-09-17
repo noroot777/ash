@@ -125,20 +125,26 @@ try {
   await send(global, "格式重试");
   assert.equal((await settled(global)).messages.at(-1)!.status, "done");
   assert.equal(prompts.length - beforeRetry, 2);
-  // 提示词里自带 {"search":{"queries":[...]}} 格式示例，模型在最终回答后面复述一遍是常事。
-  // 候选必须 reply 优先：光把 search 判据收窄拦不住它——那个示例本身就是完整形状。
-  for (const tail of ['备注：示例 {"search":{}}', '格式形如 {"search":{"queries":["关键词"],"projectId":null}}']) {
-    const answered = await invokeAssistant(member, { ownerUserId: null, projectId: "" }, "尾随检索示例", new AbortController().signal,
-      async () => ({ text: `{"reply":"最终回答","matches":[],"workflow":null,"task":null} ${tail}` }));
-    assert.equal(answered.reply, "最终回答", `尾随「${tail}」不该顶掉最终回答`);
-  }
-  // 只有检索请求时照常进检索分支；空壳 search 示例不算有效候选。
-  let searchRounds = 0;
-  const searchOnly = await invokeAssistant(member, { ownerUserId: null, projectId: "" }, "只请求检索", new AbortController().signal,
-    async () => ({ text: ++searchRounds === 1 ? '说明 {"search":{}}。{"search":{"queries":["登录"],"projectId":null}}' : '{"reply":"检索后的回答","matches":[],"workflow":null,"task":null}' }));
-  assert.equal(searchOnly.reply, "检索后的回答");
-  assert.equal(searchRounds, 2, "空壳示例被挡掉，真正的检索请求照常触发一轮检索");
-  console.log("✓ 工具事件自动重试一次；持续调用工具有上限且显示工具名；用户停止不触发重试；尾随 search 示例不顶掉最终回答");
+  // 候选按位置取最后一个有效对象。下面四条钉住这条规则的两个方向、以及它的代价：
+  const rounds = async (first: string) => {
+    let calls = 0;
+    const result = await invokeAssistant(member, { ownerUserId: null, projectId: "" }, "候选顺序", new AbortController().signal,
+      async () => ({ text: ++calls === 1 ? first : '{"reply":"检索后的回答","matches":[],"workflow":null,"task":null}' }));
+    return { calls, reply: result.reply };
+  };
+  const answer = '{"reply":"最终回答","matches":[],"workflow":null,"task":null}';
+  // (1) 空壳 search 示例不是有效候选，最终回答照常一轮收尾——提示词里被复述得最多的就是这种。
+  assert.deepEqual(await rounds(`${answer} 备注：示例 {"search":{}}`), { calls: 1, reply: "最终回答" });
+  // (2) 尾随的是完整形状示例时按规则取它，代价是白跑一轮检索；下一轮照样拿到最终回答，不失败。
+  assert.deepEqual(await rounds(`${answer} 格式形如 {"search":{"queries":["关键词"],"projectId":null}}`),
+    { calls: 2, reply: "检索后的回答" });
+  // (3) 反方向：前置 reply 示例不能吞掉后面真正的检索请求——那会让「查找任务」直接结束且无补救。
+  assert.deepEqual(await rounds('示例 {"reply":"最终回答格式","task":null}。{"search":{"queries":["登录"],"projectId":null}}'),
+    { calls: 2, reply: "检索后的回答" });
+  // (4) 空壳示例 + 真检索请求：空壳被跳过，检索照常触发。
+  assert.deepEqual(await rounds('说明 {"search":{}}。{"search":{"queries":["登录"],"projectId":null}}'),
+    { calls: 2, reply: "检索后的回答" });
+  console.log("✓ 工具事件自动重试一次；持续调用工具有上限且显示工具名；用户停止不触发重试；候选取最后一个有效对象，两个方向的示例都不误选");
 
   await send(local, "找任务，记得做过登录");
   value = await settled(local);
