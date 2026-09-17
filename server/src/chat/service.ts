@@ -171,7 +171,11 @@ export class ChatService {
   }
 
   private async reply(message: MessageRow, abort: AbortController) {
-    const timer = setTimeout(() => abort.abort(new Error("回复超过五分钟，已停止。请重新 @ 重试。")), 300000);
+    // 前台回复不设时钟：一轮里装着上下文整理、并发排队、agent 把工具跑完（读代码类的问题
+    // 动辄几十次工具调用）、侧聊还要加一次回传核验，墙钟长短跟回答有没有进展无关，按时长
+    // 一刀切砍掉的多是正常干活的回合，而且已产出的内容全丢。中断只由用户的停止触发。
+    // 代价是挂死的回合不会自己退出，会一直占着 pump 的 4 个并发位之一，得用户去点停止。
+    // 后台预热另有兜底（见 context.ts 的 prewarm），那条路没有能点停止的人。
     // 目录观察附注与结算结果正交：只要 invoke 已经返回（观察结果已取得），无论后面是
     // 解析失败、任务创建/启动失败、停止还是进程崩溃后重启，终态正文都必须带上附注——
     // 这些失败回合恰恰是用户最需要知道项目可能被改动/观察失效的时候。所以 notice 一
@@ -280,7 +284,6 @@ export class ChatService {
         .where(and(eq(chatMessages.id, message.id), inArray(chatMessages.status, boundary ? ["running", "stopped"] : ["running"]))).returning({ id: chatMessages.id });
       if (!updated.length) await preserveNotice();
     } finally {
-      clearTimeout(timer);
       await trace?.flush();
     }
   }

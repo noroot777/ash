@@ -44,7 +44,7 @@ export class ChatContextManager {
     }
     signal.throwIfAborted();
     const abort = new AbortController();
-    const combined = AbortSignal.any([signal, abort.signal, AbortSignal.timeout(300000)]);
+    const combined = AbortSignal.any([signal, abort.signal]);
     const job: Job = { abort, promise: Promise.resolve(), compacting: false };
     job.promise = Promise.resolve().then(() => operation(combined)).finally(() => {
       if (this.jobs.get(roomId) === job) this.jobs.delete(roomId);
@@ -78,7 +78,10 @@ export class ChatContextManager {
     if (!currentMember) return;
     const state = await contextState(roomId);
     if (state?.status === "stopped" || (state?.failedAt && Date.now() - Date.parse(state.failedAt) < 300000)) return;
-    await this.locked(roomId, new AbortController().signal, async (signal) => {
+    // 兜底时钟只留给后台预热：它没有发起人，界面上也没有能点停止的地方，整理挂住就会一直
+    // 占着 jobs[roomId]，把这个房间后续所有 prepare 卡在上面的 while 里。前台整理走 prepare
+    // 传进来的回复信号，由用户停止，不再另设时限。
+    await this.locked(roomId, AbortSignal.timeout(300000), async (signal) => {
       if (this.prewarmStopped.has(roomId) || (this.generations.get(roomId) ?? 0) !== generation) return;
       if (await chatHasPending(roomId)) return;
       const cutoff = await this.capture(roomId);

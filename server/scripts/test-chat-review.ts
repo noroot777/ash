@@ -86,7 +86,7 @@ try {
     assert.equal((await roomMessages(row.id)).at(-1)!.body, stoppedBody);
   });
 
-  await check("D2: 后台预压缩硬超时持久保留中文原因与原文，前台不透传 DOMException", async () => {
+  await check("D2: 后台预压缩硬超时持久保留中文原因与原文，前台接手不透传 DOMException", async () => {
     const row = await room("timeout-compaction", 20);
     const cutoff = await captureChatHistory(row.id);
     const before = await readChatHistory(row.id, cutoff);
@@ -109,14 +109,14 @@ try {
       assert.ok(started);
       assert.deepEqual(await chatContextStatus(row.id), { status: "stopped", error: timeoutBody, hasSummary: false, clearedAt: null });
       assert.deepEqual(await readChatHistory(row.id, cutoff), before);
-      await Promise.all([
-        assert.rejects(manager.prepare(row, members[0]!, cutoff, "超时验证", new AbortController().signal), { message: timeoutBody }),
-        delay(100),
-      ]);
+      // 前台没有时钟：后台留下的 stopped 不会让它直接失败，而是归位 idle 重新整理，一直跑到
+      // 用户停止为止。这里同时钉住「前台拿到的是中文停止文案，不是后台 timeout 的 DOMException」。
       const abort = new AbortController();
       const prepare = manager.prepare(row, members[0]!, cutoff, "默认取消验证", abort.signal);
       const rejected = assert.rejects(prepare, { message: "历史整理已停止；摘要和原文已保留，下次点名时按需继续。" });
       await eventually(async () => (await chatContextStatus(row.id)).status === "compacting", "前台整理开始");
+      await delay(100);
+      assert.equal((await chatContextStatus(row.id)).status, "compacting", "超过后台超时时长仍在整理，前台不受时钟中断");
       abort.abort();
       await rejected;
       assert.equal((await chatContextStatus(row.id)).error, "历史整理已停止；摘要和原文已保留，下次点名时按需继续。");
