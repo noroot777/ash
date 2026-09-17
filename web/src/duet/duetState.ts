@@ -1,6 +1,6 @@
 import type { DuetConsensusBy, DuetSpeaker, GateName, ServerEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
-import type { ExecutionEvent } from "../lib/executionTrace.ts";
+import { appendExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 
 export type DuetTurn = {
   round: number;
@@ -131,7 +131,8 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
       const turn = { ...turns[index]! };
       if (event.event.kind === "text") turn.text += event.event.text;
       if (event.event.kind === "tool" && isVisibleExecutionEvent(event.event)) turn.events = [...turn.events, { kind: "tool", label: event.event.name, detail: event.event.detail }];
-      if (event.event.kind === "thinking") turn.events = [...turn.events, { kind: "thinking", label: "思考过程", detail: event.event.text }];
+      // 思考是流式小块,相邻的合并成一行(见 appendExecutionEvent)。
+      if (event.event.kind === "thinking") turn.events = appendExecutionEvent(turn.events, { kind: "thinking", label: "思考过程", detail: event.event.text });
       // error / notice 都累积:服务端 runTurn 落 transcript 时就是拼接的,实时这边要是
       // 覆盖,同一个回合出多条时实时只剩最后一条、刷新后又变成全部,两个面读不一样。
       if (event.event.kind === "error") turn.error = `${turn.error ?? ""}\n${event.event.message}`.trim();

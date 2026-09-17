@@ -99,4 +99,33 @@ assert.equal(body(appEvents), text + "\n\n");
 assert.equal(activity(appEvents).filter((event) => event.kind === "text").length, 201, "production App Server batches before exposing events to consumers");
 assert.ok(traceBytes(appEvents) < 80 * 1024);
 
-console.log(`child stream batching: pure=${pure.length} events/${traceBytes(pure)} bytes; mixed=${mixed.length} events/${traceBytes(mixed)} bytes; text/thinking/order/exit tails preserved`);
+// 主会话的思考同样按 token 到达(DeepSeek 一类把完整 reasoning 正文流回来的模型,实测
+// 一轮 10 万条、平均 3.6 字符)。逐条转成 thinking 事件的话,SSE、trace 落盘和「执行过程」
+// 的行数一起放大一百倍 —— 界面上就是一行一个单词的「思考过程 The」。
+const reasoningApp = openCodexAppServer({ bin: "fixture", args: [], cwd: process.cwd(), prompt: "fixture", startProcess: () => spawn(process.execPath, ["-e", `
+const rl = require('node:readline').createInterface({ input: process.stdin });
+const send = (event) => process.stdout.write(JSON.stringify(event) + '\\n');
+rl.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') send({ id: message.id, result: {} });
+  if (message.method === 'thread/start') send({ id: message.id, result: { thread: { id: 'main' } } });
+  if (message.method === 'thread/archive') send({ id: message.id, result: {} });
+  if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn' } } });
+    for (let index = 0; index < 2000; index++) send({ method: 'item/reasoning/textDelta', params: { threadId: 'main', itemId: 'rs', delta: 'word' } });
+    send({ method: 'item/started', params: { threadId: 'main', item: { type: 'commandExecution', id: 'cmd', command: 'ls -la' } } });
+    send({ method: 'turn/completed', params: { threadId: 'main', turn: { status: 'completed' } } });
+  }
+});
+`], { stdio: ["pipe", "pipe", "pipe"] }) });
+const reasoningEvents: AgentEvent[] = [];
+for await (const event of reasoningApp.events) reasoningEvents.push(event);
+const thoughts = reasoningEvents.filter((event) => event.kind === "thinking");
+assert.equal(thoughts.map((event) => (event as { text: string }).text).join(""), text, "合并只动颗粒度,思考原文一个字都不能少");
+assert.ok(thoughts.length <= 40, `主会话思考发了 ${thoughts.length} 条事件`);
+// 攒着的思考必须排在它引出的工具之前,否则「执行过程」里先看到命令、后看到为什么跑它。
+const order = reasoningEvents.filter((event) => event.kind === "thinking" || event.kind === "tool").map((event) => event.kind);
+assert.deepEqual([...new Set(order)], ["thinking", "tool"], "思考尾巴先于后到的工具收口");
+assert.ok(traceBytes(reasoningEvents) < 16 * 1024, `思考 trace 涨到 ${traceBytes(reasoningEvents)} 字节`);
+
+console.log(`child stream batching: pure=${pure.length} events/${traceBytes(pure)} bytes; mixed=${mixed.length} events/${traceBytes(mixed)} bytes; main reasoning=${thoughts.length} events; text/thinking/order/exit tails preserved`);

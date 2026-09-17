@@ -155,6 +155,34 @@ export function hasMoreThanSummary(event: ExecutionEvent, summary: string): bool
   return collapse(detail) !== summary;
 }
 
+/**
+ * 往执行过程列表里追加一条 —— **相邻的思考过程合并成一行**。
+ *
+ * 思考是流式增量:执行器按小块发(codex app-server 的 reasoning delta、claude 的
+ * thinking_delta),一段完整的思考因此是连着到的好几条事件。一条渲染一行的话,
+ * DeepSeek 这种把完整 reasoning 正文流回来的模型就会刷出成百上千行「思考过程 The」
+ * 「思考过程 output」(用户 2026-09-17 反馈)。合并只动展示:拼接不加分隔符,拼回去
+ * 就是模型原文。
+ *
+ * 「相邻」按**渲染出来的样子**算,不按数组下标:子智能体的活动事件混在同一串里,
+ * 但它们渲染在别处(isVisibleExecutionEvent 会把它们过滤掉)。不跳过的话,主会话
+ * 的一段思考会被一串看不见的事件劈成几十行,治了一半等于没治。
+ *
+ * 返回新数组而不是就地改:调用方里既有可变的段落对象,也有 duet 那种 React state。
+ */
+export function appendExecutionEvent(events: ExecutionEvent[], event: ExecutionEvent): ExecutionEvent[] {
+  if (event.kind !== "thinking") return [...events, event];
+  let index = events.length - 1;
+  while (index >= 0 && !isVisibleExecutionEvent(events[index]!)) index -= 1;
+  const previous = events[index];
+  if (previous?.kind !== "thinking") return [...events, event];
+  return [
+    ...events.slice(0, index),
+    { ...previous, detail: `${previous.detail ?? ""}${event.detail ?? ""}` },
+    ...events.slice(index + 1),
+  ];
+}
+
 // ash 强加给 agent 的回合结算协议。它们跟任务内容无关 —— agent 是被系统要求调的,
 // 不是为了把活干完才调的。
 const TURN_PROTOCOL = new Set(["complete_task", "pause_task", "report_stage", "ask_question", "accept_task"]);
