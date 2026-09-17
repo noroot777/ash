@@ -1,6 +1,7 @@
 // 常用命令回归:命令会话的生命周期(活着豁免闲置回收 / 退出落 exitCode / 退出后回到
 // 普通回收轨道)+ parseProjectCommands 的校验。路由层只是这些原语的薄壳,不在这里起 HTTP。
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +37,24 @@ if (IS_WINDOWS) {
 
 const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ash-cmd-")));
 const manager = new TerminalSessionManager();
+
+// SIGKILL 已生效、PID 1 还没 reap 的窗口里,kill(pid, 0) 对僵尸仍然成功 —— 只用它
+// 立即断言「进程被收掉」会偶发误报(第 8 轮审查实测 4 跑 2 挂)。这里轮询判死,
+// 且僵尸(ps stat 为 Z)也算死:它只剩进程表项,不跑代码不占端口,对「停止」语义就是死了。
+async function assertProcessGone(pid: number, label: string): Promise<void> {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    let alive = true;
+    try { process.kill(pid, 0); } catch { alive = false; }
+    if (alive) {
+      const stat = spawnSync("ps", ["-o", "stat=", "-p", String(pid)]).stdout?.toString().trim() ?? "";
+      if (stat === "" || stat.startsWith("Z")) alive = false;
+    }
+    if (!alive) return;
+    if (Date.now() > deadline) throw new Error(`${label}: PID ${pid} 仍然存活`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 
 function waitExit(sessionId: string, projectId: string): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -118,7 +137,7 @@ try {
     if (childPid === 0) await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.deepEqual(await manager.terminate(orphan.id, "p1", { termMs: 800, killMs: 4000 }), { ok: true });
-  assert.throws(() => process.kill(childPid, 0), "忽略 SIGTERM 的同组子进程也必须被收掉");
+  await assertProcessGone(childPid, "忽略 SIGTERM 的同组子进程也必须被收掉");
 
   // 并发 restart / start 按 (projectId, commandId) 串行化:同一条命令绝不出现两个活会话。
   // 服务函数用的是全局单例 terminalSessions,不是上面的 manager。
@@ -164,7 +183,7 @@ try {
   assert.equal(manager.get(daemon.id, "p1")?.groupAlive, true, "组长退了但组里还有活人,groupAlive 必须为 true");
   assert.equal(manager.liveCommandSession("p1", "daemon")?.id, daemon.id, "daemonize 会话必须仍算活,否则 stop/restart 找不到它");
   assert.deepEqual(await manager.terminate(daemon.id, "p1", { termMs: 600, killMs: 4000 }), { ok: true });
-  assert.throws(() => process.kill(dchild, 0), "daemonize 的子进程也必须被停掉");
+  await assertProcessGone(dchild, "daemonize 的子进程也必须被停掉");
   assert.equal(manager.liveCommandSession("p1", "daemon"), null);
   assert.equal(manager.get(daemon.id, "p1")?.groupAlive, false);
 
@@ -186,15 +205,8 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   manager.shutdown();
-  const childrenGone = Date.now() + 3000;
-  for (;;) {
-    const alive = [child2, dchild2].filter((pid) => {
-      try { process.kill(pid, 0); return true; } catch { return false; }
-    });
-    if (alive.length === 0) break;
-    if (Date.now() > childrenGone) throw new Error(`shutdown left children alive: ${alive.join(", ")}`);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+  await assertProcessGone(child2, "shutdown 必须收掉组长还活着的孤儿");
+  await assertProcessGone(dchild2, "shutdown 必须收掉组长已退出的 daemonize 子进程");
   assert.equal(manager.listCommandSessions().length, 0);
 
   console.log("project commands test passed");
