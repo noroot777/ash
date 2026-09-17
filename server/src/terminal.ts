@@ -66,6 +66,12 @@ function terminalSize(value: unknown, fallback: number, min: number, max: number
     : fallback;
 }
 
+/** 进程组里还有没有活人:信号 0 只探测不打扰,整组已空时抛 ESRCH。Windows 没有进程组。 */
+function groupAlive(groupId: number): boolean {
+  if (IS_WINDOWS) return false;
+  try { process.kill(-groupId, 0); return true; } catch { return false; }
+}
+
 /**
  * 起一个交互 shell 用什么命令。
  *
@@ -218,8 +224,10 @@ export class TerminalSessionManager {
    * close(关掉 tab、连日志一起丢)是两个动词。
    *
    * 杀的是**整个进程组**(pty 子进程 fork 后 setsid,组长就是它自己,dev server 派生的
-   * 子进程都在组里):SIGTERM 给进程收尾的机会,等不到退出再 SIGKILL 兜底;两轮都压不住
-   * (基本只剩 D 状态)就如实返回失败,绝不把「没杀死」报成「已停」—— 会话还在,UI 可重试。
+   * 子进程都在组里):SIGTERM 给进程收尾的机会,等不到**整组清空**再 SIGKILL 兜底;两轮
+   * 都压不住(基本只剩 D 状态)就如实返回失败,绝不把「没杀死」报成「已停」—— 会话还在,
+   * UI 可重试。判定必须是「组长退了 **且** 组里没人」:`cmd & wait` 这种形状下组长(shell)
+   * 收 TERM 先死,忽略信号的后台子进程还占着端口,只看组长就会漏杀(第 2 轮审查实锤)。
    * 自己再 setsid 逃出进程组的守护进程超出本方法能力,属已知边界。
    */
   async terminate(
@@ -228,13 +236,20 @@ export class TerminalSessionManager {
     timeouts?: { termMs?: number; killMs?: number },
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     const session = this.session(sessionId, projectId);
-    if (!session || session.exitCode !== null) return { ok: true };
+    if (!session) return { ok: true };
+    const groupId = session.process.pid;
+    if (session.exitCode !== null && !groupAlive(groupId)) return { ok: true };
     session.stoppedByUser = true;
     this.signalTree(session, "SIGTERM");
-    if (await this.waitForExit(session, timeouts?.termMs ?? 3000)) return { ok: true };
+    if (await this.waitForGroupExit(session, timeouts?.termMs ?? 3000)) return { ok: true };
     this.signalTree(session, "SIGKILL");
-    if (await this.waitForExit(session, timeouts?.killMs ?? 2000)) return { ok: true };
-    return { ok: false, reason: "进程连 SIGKILL 都没响应，可能卡在不可中断的系统调用里" };
+    if (await this.waitForGroupExit(session, timeouts?.killMs ?? 2000)) return { ok: true };
+    return {
+      ok: false,
+      reason: session.exitCode === null
+        ? "进程连 SIGKILL 都没响应，可能卡在不可中断的系统调用里"
+        : "主进程已退出，但它派生的子进程杀不掉，可能卡在不可中断的系统调用里",
+    };
   }
 
   private signalTree(session: TerminalSession, signal: "SIGTERM" | "SIGKILL"): void {
@@ -244,18 +259,21 @@ export class TerminalSessionManager {
       if (IS_WINDOWS) session.process.kill();
       else process.kill(-session.process.pid, signal);
     } catch {
-      // 组长已死(ESRCH)但组里可能还有人?此时 -pid 发不出去,退回单发 pty 进程,
-      // 剩下的等 waitForExit 用 onExit 结果说话。
+      // 整组已空(ESRCH):没人可杀,waitForGroupExit 会立刻确认。
       try { session.process.kill(signal); } catch { /* already gone */ }
     }
   }
 
-  /** 等 onExit 把 exitCode 落到会话上;超时返回 false,由调用方决定升级还是报失败。 */
-  private waitForExit(session: TerminalSession, timeoutMs: number): Promise<boolean> {
+  /**
+   * 等「组长的 exitCode 落了 **且** 进程组里没有任何存活成员」;超时返回 false,由调用方
+   * 决定升级还是报失败。组长先死不算完 —— 组号还被子进程占着(kill(-pgid, 0) 探测)。
+   */
+  private waitForGroupExit(session: TerminalSession, timeoutMs: number): Promise<boolean> {
+    const groupId = session.process.pid;
     return new Promise((resolve) => {
       const deadline = Date.now() + timeoutMs;
       const check = () => {
-        if (session.exitCode !== null) return resolve(true);
+        if (session.exitCode !== null && !groupAlive(groupId)) return resolve(true);
         if (Date.now() >= deadline) return resolve(false);
         setTimeout(check, 50);
       };

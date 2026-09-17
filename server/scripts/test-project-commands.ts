@@ -5,8 +5,10 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseProjectCommands } from "@ash/shared/project-commands";
+import type { ProjectCommandConfig } from "@ash/shared/project-commands";
 import { IS_WINDOWS } from "../src/platform.js";
-import { TerminalSessionManager } from "../src/terminal.js";
+import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
+import { restartCommand, startCommand, stopCommand } from "../src/terminal-commands.js";
 
 // ── parse ──────────────────────────────────────────────────────────────────
 assert.equal(parseProjectCommands(null), null);
@@ -100,6 +102,46 @@ try {
   assert.equal(manager.get(stopped.id, "p1"), null);
   assert.ok(manager.get(fresh.id, "p1"));
   assert.deepEqual(await manager.terminate(fresh.id, "p1"), { ok: true });
+
+  // 组长先死、同组子进程还活着(`cmd & wait` 形状,子进程忽略 TERM):停止判定必须看
+  // 「整组清空」,否则孤儿继续占端口、SIGKILL 永远不发(第 2 轮审查实锤)。
+  const orphanScript = `node -e 'process.on("SIGTERM",()=>{});process.on("SIGHUP",()=>{});console.log("CHILD:"+process.pid);setInterval(()=>{},1000)' & wait`;
+  const orphan = manager.create("p1", cwd, { command: { id: "orphan", name: "orphan", script: orphanScript } });
+  let childPid = 0;
+  const orphanReady = Date.now() + 8000;
+  while (childPid === 0) {
+    for (const event of manager.eventsAfter(orphan.id, "p1", 0) ?? []) {
+      const match = event.type === "data" ? /CHILD:(\d+)/.exec(event.data) : null;
+      if (match) childPid = Number(match[1]);
+    }
+    if (childPid === 0 && Date.now() > orphanReady) throw new Error("orphan child not ready");
+    if (childPid === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.deepEqual(await manager.terminate(orphan.id, "p1", { termMs: 800, killMs: 4000 }), { ok: true });
+  assert.throws(() => process.kill(childPid, 0), "忽略 SIGTERM 的同组子进程也必须被收掉");
+
+  // 并发 restart / start 按 (projectId, commandId) 串行化:同一条命令绝不出现两个活会话。
+  // 服务函数用的是全局单例 terminalSessions,不是上面的 manager。
+  const keep: ProjectCommandConfig = { id: "keep", name: "keep alive", command: "sleep 60", restartCommand: null };
+  const [restart1, restart2] = await Promise.all([
+    restartCommand("pc", cwd, keep),
+    restartCommand("pc", cwd, keep),
+  ]);
+  assert.equal(restart1.status, 201);
+  assert.equal(restart2.status, 201);
+  const liveKeep = () => terminalSessions.listCommandSessions()
+    .filter((session) => session.projectId === "pc" && session.commandId === "keep" && session.exitCode === null);
+  assert.equal(liveKeep().length, 1, "并发重启后同一条命令只能有一个活会话");
+
+  const [start1, start2] = await Promise.all([
+    startCommand("pc", cwd, keep),
+    startCommand("pc", cwd, keep),
+  ]);
+  // 已在跑:两边都拿到同一条会话(幂等),谁都不另起一份。
+  assert.ok([start1, start2].every((result) => (result.body as { session: { id: string } }).session.id === liveKeep()[0].id));
+  const stopKeep = await stopCommand("pc", "keep");
+  assert.deepEqual(stopKeep.body, { stopped: true });
+  assert.equal(liveKeep().length, 0);
 
   console.log("project commands test passed");
 } finally {
