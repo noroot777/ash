@@ -207,13 +207,13 @@ export function StatusBar({
                         <div className="status-bar__row-actions">
                           {busy === key ? <CircleNotch size={13} className="is-spinning" aria-label="执行中" /> : running ? (
                             <>
-                              <button type="button" onClick={() => onOpenCommandLog(running.id)} aria-label={`查看 ${row.name} 日志`}><Scroll size={13} />日志</button>
+                              <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(running.id); }} aria-label={`查看 ${row.name} 日志`}><Scroll size={13} />日志</button>
                               <button type="button" onClick={() => act(row, "restart")} aria-label={`重启 ${row.name}`}><ArrowsClockwise size={13} />重启</button>
                               <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>
                             </>
                           ) : (
                             <>
-                              {row.session && <button type="button" onClick={() => onOpenCommandLog(row.session!.id)} aria-label={`查看 ${row.name} 退出日志`}><Scroll size={13} />日志</button>}
+                              {row.session && <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(row.session!.id); }} aria-label={`查看 ${row.name} 退出日志`}><Scroll size={13} />日志</button>}
                               <button type="button" className="is-primary" onClick={() => act(row, "start")} aria-label={`启动 ${row.name}`}><Play size={12} weight="fill" />启动</button>
                             </>
                           )}

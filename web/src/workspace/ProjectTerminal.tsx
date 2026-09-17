@@ -82,6 +82,7 @@ function TerminalPane({
     let inputChain = Promise.resolve();
     let resizeTimer: number | null = null;
     let pendingSize: { cols: number; rows: number } | null = null;
+    let groupPollTimer: number | null = null;
     const terminal = new Terminal({
       cursorBlink: true,
       cursorStyle: "bar",
@@ -189,6 +190,18 @@ function TerminalPane({
             if (groupStillAlive) {
               setStatus("detached");
               terminal.write(`\r\n\x1b[90m启动脚本已退出（${event.exitCode}），服务仍在运行 —— 停止/重启在状态栏\x1b[0m\r\n`);
+              // 这个判断是快照,会过期:服务之后被停止或自己死了都**不会再有 PTY 事件**
+              // (组长早就退了),轮询到组死为止,否则 tab 绿着说「运行中」而服务早没了。
+              groupPollTimer = window.setInterval(() => {
+                api.listTerminalSessions(project.id).then(({ sessions }) => {
+                  if (!alive) return;
+                  const info = sessions.find((item) => item.id === sessionId);
+                  if (info?.groupAlive) return;
+                  if (groupPollTimer !== null) { window.clearInterval(groupPollTimer); groupPollTimer = null; }
+                  setStatus("ended");
+                  terminal.write(`\r\n\x1b[90m${info?.stoppedByUser ? "服务已停止" : "服务已退出"}\x1b[0m\r\n`);
+                }).catch(() => undefined); // 网络抖动不改状态,下一轮再看
+              }, 5000);
             } else {
               setStatus("ended");
               terminal.write(`\r\n\x1b[90m进程已退出（${event.exitCode}）\x1b[0m\r\n`);
@@ -222,6 +235,7 @@ function TerminalPane({
       fitRef.current = null;
       if (inputTimer !== null) window.clearTimeout(inputTimer);
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      if (groupPollTimer !== null) window.clearInterval(groupPollTimer);
       // attach 的会话不归这个 tab 管:关抽屉/收起 tab 只是不看了,服务照跑(停止走状态栏)。
       if (sessionId && !tab.attachSessionId) void api.closeTerminalSession(project.id, sessionId).catch(() => undefined);
     };
