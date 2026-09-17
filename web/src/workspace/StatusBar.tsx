@@ -52,7 +52,9 @@ function rowsOf(current: ProjectView | null, sessions: TerminalSessionInfo[], pr
     });
   }
   for (const session of sessions) {
-    if (session.commandId === null || seen.has(`${session.projectId}:${session.commandId}`)) continue;
+    // 其他项目只列**还活着**的:这一段的全部意义是「别的项目有服务在跑、给你一个停止按钮」,
+    // 已退出的会话在没有锚定项目上下文时既没法重启也没必要展示。
+    if (session.commandId === null || session.exitCode !== null || seen.has(`${session.projectId}:${session.commandId}`)) continue;
     seen.add(`${session.projectId}:${session.commandId}`);
     rows.push({
       projectId: session.projectId,
@@ -114,18 +116,24 @@ export function StatusBar({
   useEffect(() => { if (open) refresh(); }, [open, refresh]);
 
   const live = sessions.filter((session) => session.exitCode === null);
-  // 红点口径与弹层行一致:每条命令只看最新一条会话(重启会留下旧会话的退出码,那不是
-  // 「现在有问题」)。最新一条非零退出才亮。
-  const newestPerCommand = new Map<string, TerminalSessionInfo>();
-  for (const session of sessions) {
-    const key = `${session.projectId}:${session.commandId}`;
-    const known = newestPerCommand.get(key);
-    if (!known || session.startedAt > known.startedAt) newestPerCommand.set(key, session);
-  }
-  const crashed = [...newestPerCommand.values()].some((session) => session.exitCode !== null && session.exitCode !== 0);
   const rows = rowsOf(currentProject, sessions, projects);
   const anchorRows = rows.filter((row) => row.startable);
   const otherRows = rows.filter((row) => !row.startable);
+
+  const rowState = (row: CommandRow): { tone: string; text: string } => {
+    if (row.session && row.session.exitCode === null) return { tone: "on", text: "运行中" };
+    if (row.session) {
+      // 用户自己点的停止不是异常 —— 哪怕进程死于信号带回非零退出码。
+      if (row.session.stoppedByUser) return { tone: "off", text: "已停止" };
+      return row.session.exitCode === 0
+        ? { tone: "off", text: "已退出" }
+        : { tone: "err", text: `已退出（${row.session.exitCode}）` };
+    }
+    return { tone: "off", text: "未启动" };
+  };
+  // 红点口径 = 弹层里实际显示的行:锚定项目的某条命令处于异常退出态才亮。跟弹层同一个
+  // rowState 算出来,天然不会出现「点亮了却找不到哪行红」。
+  const crashed = anchorRows.some((row) => rowState(row).tone === "err");
 
   const act = (row: CommandRow, action: "start" | "stop" | "restart") => {
     const key = `${row.projectId}:${row.commandId}`;
@@ -139,16 +147,6 @@ export function StatusBar({
       .then(() => refresh())
       .catch((error) => notify(error instanceof Error ? error.message : `${row.name} 操作失败`))
       .finally(() => setBusy((value) => value === key ? null : value));
-  };
-
-  const rowState = (row: CommandRow): { tone: string; text: string } => {
-    if (row.session && row.session.exitCode === null) return { tone: "on", text: "运行中" };
-    if (row.session) {
-      return row.session.exitCode === 0
-        ? { tone: "off", text: "已退出" }
-        : { tone: "err", text: `已退出（${row.session.exitCode}）` };
-    }
-    return { tone: "off", text: "未启动" };
   };
 
   return (

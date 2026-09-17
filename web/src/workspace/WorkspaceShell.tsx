@@ -496,6 +496,15 @@ export function WorkspaceShell() {
   // 终端开的是**宿主机上的一个真 shell**,项目目录只是起始 cwd(一条 `cd /` 就出去了),
   // 所以多人模式下它是实例管理员专属(§四)。后端已经 403,状态栏连入口一起收掉 ——
   // 留一颗按不动的按钮只会让人以为功能坏了。入口在全局状态栏(StatusBar),不再挤任务顶栏。
+  //
+  // 状态栏是 app 级的,设置页和 Git 工作台也挂(三个早退分支都得带上它,少一处就是
+  // 「进设置底栏就消失」);但终端抽屉只在工作区视图里渲染,所以从设置/Git 里点「终端」
+  // 或「日志」要先退回工作区,不然只是改了个没人消费的 state。
+  const revealTerminal = () => {
+    setSettingsSection(null);
+    setGitOpen(false);
+    setTerminalOpen(true);
+  };
   const statusBar = (
     <StatusBar
       projects={projects}
@@ -504,10 +513,13 @@ export function WorkspaceShell() {
       canUseTerminal={canUseTerminal}
       connected={connected}
       terminalOpen={terminalOpen}
-      onToggleTerminal={() => setTerminalOpen((open) => !open)}
+      onToggleTerminal={() => {
+        if (settingsSection || gitOpen) revealTerminal();
+        else setTerminalOpen((open) => !open);
+      }}
       onOpenCommandLog={(sessionId) => {
         setTerminalFocus({ sessionId, seq: Date.now() });
-        setTerminalOpen(true);
+        revealTerminal();
       }}
       onManageCommands={() => openSettings("project", "commands")}
       notify={notify}
@@ -528,7 +540,7 @@ export function WorkspaceShell() {
     {createDialog?.kind === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
     <WorkspaceToast toasts={toasts} onDismiss={dismissToast} onOpenSettings={openSettings} />
   </>;
-  if (gitOpen && !settingsSection) return <><div className="workspace-git-page">{currentProject ? <Suspense fallback={<div className="workspace-load-error">正在打开 Git 工作台…</div>}><GitWorkbench key={`${currentProject.id}:${gitLocation.root || ""}:${gitLocation.taskId || ""}`} projectId={currentProject.id} projectName={currentProject.name} projects={projects} root={gitLocation.root} taskId={gitLocation.taskId} view={gitLocation.view} initialRef={gitLocation.ref} onAssist={(body) => openComposer("single", { body, attachments: [] })} notify={notify} onExit={() => { setGitOpen(false); if (gitLocation.taskId) void selectTaskById(gitLocation.taskId); }} openTask={(id) => { setGitOpen(false); void selectTaskById(id); }} /></Suspense> : <div className="workspace-load-error">{loadError?.message || (projectsReady ? "项目不存在或不可访问" : "正在读取项目…")}<button onClick={() => setGitOpen(false)}>返回 ash</button></div>}</div>{overlays}</>;
+  if (gitOpen && !settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><div className="workspace-git-page">{currentProject ? <Suspense fallback={<div className="workspace-load-error">正在打开 Git 工作台…</div>}><GitWorkbench key={`${currentProject.id}:${gitLocation.root || ""}:${gitLocation.taskId || ""}`} projectId={currentProject.id} projectName={currentProject.name} projects={projects} root={gitLocation.root} taskId={gitLocation.taskId} view={gitLocation.view} initialRef={gitLocation.ref} onAssist={(body) => openComposer("single", { body, attachments: [] })} notify={notify} onExit={() => { setGitOpen(false); if (gitLocation.taskId) void selectTaskById(gitLocation.taskId); }} openTask={(id) => { setGitOpen(false); void selectTaskById(id); }} /></Suspense> : <div className="workspace-load-error">{loadError?.message || (projectsReady ? "项目不存在或不可访问" : "正在读取项目…")}<button onClick={() => setGitOpen(false)}>返回 ash</button></div>}</div>{statusBar}</div>{overlays}</>;
   if (settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><SettingsPage
     section={settingsSection}
     anchor={settingsAnchor}
@@ -543,7 +555,7 @@ export function WorkspaceShell() {
     onTaskUpdated={updateTask}
     onGroupsChanged={refreshGroups}
     notify={notify}
-  /></div>{overlays}</>;
+  />{statusBar}</div>{overlays}</>;
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}${chatOpen ? " is-chat" : ""}${assistantOpen ? " is-assistant" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>

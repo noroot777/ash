@@ -525,6 +525,8 @@ export type TerminalSessionInfo = {
   startedAt: number;
   /** null = 进程还活着；命令会话靠它区分「运行中」和「退了但日志可回看」。 */
   exitCode: number | null;
+  /** 用户主动停的（区别于自己崩了）：显示「已停止」，不算异常、不亮红点。 */
+  stoppedByUser: boolean;
 };
 
 export type TerminalEvent =
