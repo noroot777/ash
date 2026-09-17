@@ -182,37 +182,36 @@ function TerminalPane({
             return;
           }
           ended = true;
-          // exit 事件说的是 PTY 组长(启动脚本)退了,不等于命令死了:daemonize 形状下
-          // 服务还在进程组里跑,状态栏正显示「运行中」—— 这里跟着说「已退出」就是同屏
-          // 自相矛盾。attach 的命令会话查一次 groupAlive 再定语气;整组死透才是 ended。
-          const settle = (groupStillAlive: boolean) => {
-            if (!alive) return;
-            if (groupStillAlive) {
-              setStatus("detached");
-              terminal.write(`\r\n\x1b[90m启动脚本已退出（${event.exitCode}），服务仍在运行 —— 停止/重启在状态栏\x1b[0m\r\n`);
-              // 这个判断是快照,会过期:服务之后被停止或自己死了都**不会再有 PTY 事件**
-              // (组长早就退了),轮询到组死为止,否则 tab 绿着说「运行中」而服务早没了。
-              groupPollTimer = window.setInterval(() => {
-                api.listTerminalSessions(project.id).then(({ sessions }) => {
-                  if (!alive) return;
-                  const info = sessions.find((item) => item.id === sessionId);
-                  if (info?.groupAlive) return;
-                  if (groupPollTimer !== null) { window.clearInterval(groupPollTimer); groupPollTimer = null; }
-                  setStatus("ended");
-                  terminal.write(`\r\n\x1b[90m${info?.stoppedByUser ? "服务已停止" : "服务已退出"}\x1b[0m\r\n`);
-                }).catch(() => undefined); // 网络抖动不改状态,下一轮再看
-              }, 5000);
-            } else {
-              setStatus("ended");
-              terminal.write(`\r\n\x1b[90m进程已退出（${event.exitCode}）\x1b[0m\r\n`);
-            }
-          };
           if (tab.attachSessionId) {
-            api.listTerminalSessions(project.id)
-              .then(({ sessions }) => settle(sessions.find((item) => item.id === sessionId)?.groupAlive === true))
-              .catch(() => settle(false));
+            // exit 事件说的是 PTY 组长(启动脚本)退了,不等于命令死了:daemonize 形状下
+            // 服务还在进程组里跑。从这里进入探测循环,每 5s 查一次组存活,**只有成功拿到
+            // 事实才下结论** —— 一次网络抖动不能把还在跑的服务定格成「已退出」(且从此
+            // 不再纠正),也不能把已死的服务一直标成运行中(第 6/7 轮审查各实锤一边)。
+            let announcedDetached = false;
+            const probe = () => {
+              api.listTerminalSessions(project.id).then(({ sessions }) => {
+                if (!alive) return;
+                const info = sessions.find((item) => item.id === sessionId);
+                if (info?.groupAlive) {
+                  if (!announcedDetached) {
+                    announcedDetached = true;
+                    setStatus("detached");
+                    terminal.write(`\r\n\x1b[90m启动脚本已退出（${event.exitCode}），服务仍在运行 —— 停止/重启在状态栏\x1b[0m\r\n`);
+                  }
+                  return;
+                }
+                if (groupPollTimer !== null) { window.clearInterval(groupPollTimer); groupPollTimer = null; }
+                setStatus("ended");
+                terminal.write(announcedDetached
+                  ? `\r\n\x1b[90m${info?.stoppedByUser ? "服务已停止" : "服务已退出"}\x1b[0m\r\n`
+                  : `\r\n\x1b[90m进程已退出（${event.exitCode}）\x1b[0m\r\n`);
+              }).catch(() => undefined); // 拿不到事实就不动,下一轮再试
+            };
+            groupPollTimer = window.setInterval(probe, 5000);
+            probe();
           } else {
-            settle(false);
+            setStatus("ended");
+            terminal.write(`\r\n\x1b[90m进程已退出（${event.exitCode}）\x1b[0m\r\n`);
           }
         };
         source.onerror = () => {
