@@ -35,9 +35,10 @@ function rowsOf(current: ProjectView | null, sessions: TerminalSessionInfo[], pr
   const rows: CommandRow[] = [];
   const seen = new Set<string>();
   // 同一条命令可能挂着「一条活会话」或「一条刚退出的」——弹层一行只说一件事,活的优先。
+  // 判「活」用 groupAlive:组长退了但后台子进程还在(daemonize)也算活,那正是要能停的现场。
   const bestSession = (projectId: string, commandId: string) => {
     const mine = sessions.filter((s) => s.projectId === projectId && s.commandId === commandId);
-    return mine.find((s) => s.exitCode === null) ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
+    return mine.find((s) => s.groupAlive) ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
   };
   for (const command of current?.commandsConfig ?? []) {
     seen.add(`${current!.id}:${command.id}`);
@@ -54,7 +55,7 @@ function rowsOf(current: ProjectView | null, sessions: TerminalSessionInfo[], pr
   for (const session of sessions) {
     // 其他项目只列**还活着**的:这一段的全部意义是「别的项目有服务在跑、给你一个停止按钮」,
     // 已退出的会话在没有锚定项目上下文时既没法重启也没必要展示。
-    if (session.commandId === null || session.exitCode !== null || seen.has(`${session.projectId}:${session.commandId}`)) continue;
+    if (session.commandId === null || !session.groupAlive || seen.has(`${session.projectId}:${session.commandId}`)) continue;
     seen.add(`${session.projectId}:${session.commandId}`);
     rows.push({
       projectId: session.projectId,
@@ -115,13 +116,19 @@ export function StatusBar({
   }, [canUseTerminal, refresh]);
   useEffect(() => { if (open) refresh(); }, [open, refresh]);
 
-  const live = sessions.filter((session) => session.exitCode === null);
+  // 「运行中 N」和每行的「活/死」都看 groupAlive,不看 exitCode:daemonize 形状
+  // (启动脚本把服务放后台后自己退出)下组长退了、服务还在跑,那也是在跑。
+  const live = sessions.filter((session) => session.groupAlive);
   const rows = rowsOf(currentProject, sessions, projects);
   const anchorRows = rows.filter((row) => row.startable);
   const otherRows = rows.filter((row) => !row.startable);
 
   const rowState = (row: CommandRow): { tone: string; text: string } => {
-    if (row.session && row.session.exitCode === null) return { tone: "on", text: "运行中" };
+    if (row.session?.groupAlive) {
+      return row.session.exitCode === null
+        ? { tone: "on", text: "运行中" }
+        : { tone: "on", text: "运行中（启动脚本已退出）" };
+    }
     if (row.session) {
       // 用户自己点的停止不是异常 —— 哪怕进程死于信号带回非零退出码。
       if (row.session.stoppedByUser) return { tone: "off", text: "已停止" };
@@ -188,7 +195,7 @@ export function StatusBar({
                   {anchorRows.map((row) => {
                     const state = rowState(row);
                     const key = `${row.projectId}:${row.commandId}`;
-                    const running = row.session?.exitCode === null && row.session;
+                    const running = row.session?.groupAlive ? row.session : null;
                     return (
                       <div className="status-bar__row" key={key}>
                         <span className={`status-bar__row-dot is-${state.tone}`} aria-hidden="true" />

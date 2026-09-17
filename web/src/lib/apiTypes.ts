@@ -527,6 +527,8 @@ export type TerminalSessionInfo = {
   exitCode: number | null;
   /** 用户主动停的（区别于自己崩了）：显示「已停止」，不算异常、不亮红点。 */
   stoppedByUser: boolean;
+  /** 进程组里是否还有活进程。组长退了组不一定空（daemonize），判「还在跑」看它，别看 exitCode。 */
+  groupAlive: boolean;
 };
 
 export type TerminalEvent =

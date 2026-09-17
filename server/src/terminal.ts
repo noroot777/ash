@@ -37,6 +37,12 @@ export type TerminalSessionInfo = {
   exitCode: number | null;
   /** 用户主动停的（区别于自己崩了）：UI 显示「已停止」，不算异常退出、不亮红点。 */
   stoppedByUser: boolean;
+  /**
+   * 进程组里是否还有活着的进程(info() 时即时探测)。组长退了组不一定空:启动脚本
+   * `cmd & …; exit 0` 这种 daemonize 形状下 exitCode 已落、后台子进程还在跑 ——
+   * 「这条命令还活着吗」一律看这个字段,别看 exitCode(第 4 轮审查实锤)。
+   */
+  groupAlive: boolean;
 };
 
 type TerminalSession = TerminalSessionInfo & {
@@ -115,12 +121,13 @@ export class TerminalSessionManager {
   }
 
   create(projectId: string, cwd: string, options: CreateOptions = {}): TerminalSessionInfo {
-    // 同一条命令的退出记录只为回看而留,新会话一起就没意义了 —— 顺手清掉没人盯着的
-    // 那些(还开着日志 tab 的留给 idle 回收),免得反复启停把会话名额吃光。
+    // 同一条命令的退出记录只为回看而留,新会话一起就没意义了 —— 顺手清掉没人盯着、
+    // **整组也确实死透**的那些(组里还有活人的会话是唯一能停到那些进程的把手,不能删;
+    // 还开着日志 tab 的留给 idle 回收),免得反复启停把会话名额吃光。
     if (options.command) {
       for (const stale of [...this.sessions.values()]) {
         if (stale.projectId === projectId && stale.commandId === options.command.id
-          && stale.exitCode !== null && stale.listeners.size === 0) {
+          && !this.sessionAlive(stale) && stale.listeners.size === 0) {
           this.sessions.delete(stale.id);
         }
       }
@@ -149,6 +156,7 @@ export class TerminalSessionManager {
       startedAt: Date.now(),
       exitCode: null,
       stoppedByUser: false,
+      groupAlive: true,
     };
     const session: TerminalSession = {
       ...info,
@@ -292,10 +300,10 @@ export class TerminalSessionManager {
     clearInterval(this.sweeper);
     for (const session of [...this.sessions.values()]) {
       session.listeners.clear();
-      if (session.exitCode === null) {
-        this.signalTree(session, "SIGTERM");
-        this.signalTree(session, "SIGKILL");
-      }
+      // 无条件连发,不按 exitCode 筛:组长退了组不一定空(daemonize 形状),而对已空的组
+      // 发信号只是 ESRCH,signalTree 兜得住 —— 少一个条件就少一类漏杀。
+      this.signalTree(session, "SIGTERM");
+      this.signalTree(session, "SIGKILL");
       this.sessions.delete(session.id);
     }
   }
@@ -306,9 +314,10 @@ export class TerminalSessionManager {
     for (const session of this.sessions.values()) {
       // A subscriber means the CLI is still open, even when the shell is silent.
       if (session.listeners.size > 0 || session.lastAccessedAt >= cutoff) continue;
-      // 活着的常用命令会话是「常驻服务」，没人盯着看不是退出的理由 —— 只有它自己退了
-      // （exitCode 非 null）才回到普通回收轨道，让退出日志保留半小时可回看。
-      if (session.commandId !== null && session.exitCode === null) continue;
+      // 活着的常用命令会话是「常驻服务」，没人盯着看不是退出的理由 —— 判「活」含
+      // daemonize 形状(组长退了、子进程还在):回收会话就没人能停那些进程了。只有整组
+      // 都退了才回到普通回收轨道，让退出日志保留半小时可回看。
+      if (session.commandId !== null && this.sessionAlive(session)) continue;
       if (this.close(session.id)) closed += 1;
     }
     return closed;
@@ -328,10 +337,14 @@ export class TerminalSessionManager {
       .map((session) => this.info(session));
   }
 
-  /** 某条常用命令当前活着的会话；退了的不算（重启/再启动要在旁边起新会话）。 */
+  /**
+   * 某条常用命令当前活着的会话;判「活」用 sessionAlive 而不是 exitCode ——
+   * daemonize 形状(组长退了、后台子进程还在)也算活:stop/restart 得能找到它交给
+   * terminate,start 得知道「其实还在跑」而不是在旁边再起一份抢端口。
+   */
   liveCommandSession(projectId: string, commandId: string): TerminalSessionInfo | null {
     for (const session of this.sessions.values()) {
-      if (session.projectId === projectId && session.commandId === commandId && session.exitCode === null) {
+      if (session.projectId === projectId && session.commandId === commandId && this.sessionAlive(session)) {
         return this.info(session);
       }
     }
@@ -346,7 +359,16 @@ export class TerminalSessionManager {
 
   private info(session: TerminalSession): TerminalSessionInfo {
     const { id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode, stoppedByUser } = session;
-    return { id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode, stoppedByUser };
+    return {
+      id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode, stoppedByUser,
+      // 即时探测,不是缓存值:组长退没退(exitCode)和组里有没有活人是两件事。
+      groupAlive: this.sessionAlive(session),
+    };
+  }
+
+  /** 这条会话是否还有活着的进程:组长没退,或组长退了但同组子进程还在(daemonize 形状)。 */
+  private sessionAlive(session: TerminalSession): boolean {
+    return session.exitCode === null || groupAlive(session.process.pid);
   }
 
   private publish(session: TerminalSession, event: TerminalEventInput): void {

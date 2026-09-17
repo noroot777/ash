@@ -143,26 +143,56 @@ try {
   assert.deepEqual(stopKeep.body, { stopped: true });
   assert.equal(liveKeep().length, 0);
 
+  // daemonize 形状:组长自然退出(exit 0),忽略信号的子进程留在原进程组 —— 判「活」必须
+  // 看整组而不是 exitCode:liveCommandSession 要找得到它、stop 要能停(第 4 轮审查实锤)。
+  const daemonScript = (flag: string, tag: string) =>
+    `node -e 'process.on("SIGTERM",()=>{});process.on("SIGHUP",()=>{});console.log("${tag}:"+process.pid);require("fs").writeFileSync("${flag}","1");setInterval(()=>{},1000)' & while [ ! -f ${flag} ]; do sleep 0.05; done; exit 0`;
+  const readChild = (sessionId: string, tag: string): number => {
+    for (const event of manager.eventsAfter(sessionId, "p1", 0) ?? []) {
+      const match = event.type === "data" ? new RegExp(`${tag}:(\\d+)`).exec(event.data) : null;
+      if (match) return Number(match[1]);
+    }
+    return 0;
+  };
+  const daemon = manager.create("p1", cwd, { command: { id: "daemon", name: "daemon", script: daemonScript("readyA", "DCHILD") } });
+  let dchild = 0;
+  const daemonReady = Date.now() + 8000;
+  while (manager.get(daemon.id, "p1")?.exitCode === null || (dchild = readChild(daemon.id, "DCHILD")) === 0) {
+    if (Date.now() > daemonReady) throw new Error("daemon leader did not exit in time");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(manager.get(daemon.id, "p1")?.groupAlive, true, "组长退了但组里还有活人,groupAlive 必须为 true");
+  assert.equal(manager.liveCommandSession("p1", "daemon")?.id, daemon.id, "daemonize 会话必须仍算活,否则 stop/restart 找不到它");
+  assert.deepEqual(await manager.terminate(daemon.id, "p1", { termMs: 600, killMs: 4000 }), { ok: true });
+  assert.throws(() => process.kill(dchild, 0), "daemonize 的子进程也必须被停掉");
+  assert.equal(manager.liveCommandSession("p1", "daemon"), null);
+  assert.equal(manager.get(daemon.id, "p1")?.groupAlive, false);
+
   // server 退出路径:shutdown() 必须整组收割,忽略信号的孤儿也不能漏 —— 否则 ash 重启后
-  // 会话表清零(内存态),旧进程却被 PID 1 收养继续占端口。
+  // 会话表清零(内存态),旧进程却被 PID 1 收养继续占端口。两种形状都要盖:组长还活着的
+  // (orphan2,& wait)和组长已自然退出的(daemon2,exitCode 已落 —— 只筛 exitCode===null
+  // 就会跳过它,正是第 4 轮审查的漏杀)。
   const orphan2 = manager.create("p1", cwd, {
     command: { id: "orphan2", name: "orphan2", script: orphanScript.replace("CHILD:", "CHILD2:") },
   });
+  const daemon2 = manager.create("p1", cwd, { command: { id: "daemon2", name: "daemon2", script: daemonScript("readyB", "DCHILD2") } });
   let child2 = 0;
-  const orphan2Ready = Date.now() + 8000;
-  while (child2 === 0) {
-    for (const event of manager.eventsAfter(orphan2.id, "p1", 0) ?? []) {
-      const match = event.type === "data" ? /CHILD2:(\d+)/.exec(event.data) : null;
-      if (match) child2 = Number(match[1]);
-    }
-    if (child2 === 0 && Date.now() > orphan2Ready) throw new Error("orphan2 child not ready");
-    if (child2 === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+  let dchild2 = 0;
+  const shutdownReady = Date.now() + 8000;
+  while ((child2 = readChild(orphan2.id, "CHILD2")) === 0
+    || manager.get(daemon2.id, "p1")?.exitCode === null
+    || (dchild2 = readChild(daemon2.id, "DCHILD2")) === 0) {
+    if (Date.now() > shutdownReady) throw new Error("shutdown fixtures not ready");
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   manager.shutdown();
-  const child2Gone = Date.now() + 3000;
+  const childrenGone = Date.now() + 3000;
   for (;;) {
-    try { process.kill(child2, 0); } catch { break; }
-    if (Date.now() > child2Gone) throw new Error("shutdown left the signal-ignoring child alive");
+    const alive = [child2, dchild2].filter((pid) => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    });
+    if (alive.length === 0) break;
+    if (Date.now() > childrenGone) throw new Error(`shutdown left children alive: ${alive.join(", ")}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.equal(manager.listCommandSessions().length, 0);
