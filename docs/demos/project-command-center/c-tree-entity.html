@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>方案 C · 树里的第二实体</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .svc-scene { display: flex; flex-direction: column; height: 100%; }
+  .svc-title { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .svc-title h1 { margin: 0; font-size: 16px; }
+  .svc-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .svc-scene .term { flex: 1; min-height: 0; }
+  .restart-cfg { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin: 12px 0 0; }
+  .restart-cfg input {
+    flex: 1; max-width: 420px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 11.5px;
+    padding: 5px 9px; border: none; border-radius: 7px;
+    background: var(--panel); box-shadow: var(--ctl); color: var(--ink);
+  }
+  .placeholder { display: grid; place-items: center; height: 100%; color: var(--faint); font-size: 13px; }
+  .sb-add { color: var(--faint); font-size: 12px; }
+</style>
+</head>
+<body>
+<nav class="demo-nav">
+  <strong>运行现场 demo</strong>
+  <a href="a-project-home.html">A · 项目主页</a>
+  <a href="b-status-bar.html">B · 全局状态栏</a>
+  <a class="on" href="c-tree-entity.html">C · 树里的第二实体</a>
+  <a href="d-run-center.html">D · 跨项目运行中心</a>
+  <span class="demo-hint">服务和任务并列长在树里：左边「运行」小节点着切，主区就是它的现场</span>
+</nav>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sb-head">
+      <div class="sb-avatar">A</div><span class="sb-name">ash</span>
+      <span class="sb-branch">⑂ main</span>
+    </div>
+    <div class="sb-section">运行</div>
+    <div id="svc-rows"></div>
+    <div class="row sb-add"><span style="width:8px"></span><span class="t">＋ 常用命令</span></div>
+    <div class="sb-section">进行中</div>
+    <div class="row" onclick="pickTask()"><span class="dot blue"></span><span class="t">修复预览端口漂移误报</span><span class="sub">跑着</span></div>
+    <div class="row" onclick="pickTask()"><span class="dot amber"></span><span class="t">终端会话闲置回收豁免</span><span class="sub">提问</span></div>
+    <div class="row" onclick="pickTask()"><span class="dot gray"></span><span class="t">移动端会话下拉刷新</span><span class="sub">排队</span></div>
+    <div class="sb-section">已完成</div>
+    <div class="row" onclick="pickTask()"><span class="dot green"></span><span class="t">思考增量成块发</span></div>
+  </aside>
+
+  <main class="main" id="main"></main>
+</div>
+
+<script>
+const services = [
+  { id: "web", name: "web dev", cmd: "npm -w web run dev", restartCmd: "", port: 5173, state: "running",
+    log: ["$ npm -w web run dev", "<span class='ok'>VITE v6.0.3</span>  ready in <span class='ok'>412 ms</span>", "", "  ➜  Local:   <span class='ok'>http://localhost:5173/</span>", "  ➜  Network: use --host to expose", "<span class='dim'>12:03:11 [vite] hmr update /src/workspace/WorkspaceShell.tsx</span>", "<span class='dim'>12:07:40 [vite] hmr update /src/styles/workspace.css</span>"] },
+  { id: "metro", name: "mobile metro", cmd: "cd mobile && npx expo start", restartCmd: "cd mobile && npx expo start -c", port: 8081, state: "stopped",
+    log: ["<span class='dim'>（还没启动过）</span>"] },
+];
+let selected = "web";
+
+function svcRows() {
+  document.getElementById("svc-rows").innerHTML = services.map((s) => `
+    <div class="row ${selected === s.id ? "sel" : ""}" onclick="pick('${s.id}')">
+      <span class="dot ${s.state === "running" ? "green" : s.state === "restarting" ? "amber" : "gray"}"></span>
+      <span class="t">${s.name}</span>
+      <span class="sub mono">${s.state === "running" ? ":" + s.port : s.state === "restarting" ? "重启中" : "停着"}</span>
+    </div>`).join("");
+}
+
+function scene() {
+  const main = document.getElementById("main");
+  if (!selected) {
+    main.innerHTML = `<header class="appbar"><span class="kind">任务</span><span class="title">修复预览端口漂移误报</span></header>
+      <div class="placeholder">任务详情（demo 从略）—— 点左边「运行」小节里的服务行回去</div>`;
+    return;
+  }
+  const s = services.find((x) => x.id === selected);
+  const running = s.state !== "stopped";
+  main.innerHTML = `
+    <header class="appbar">
+      <span class="kind">运行</span><span class="title">${s.name}</span>
+      <span class="chip ${s.state === "running" ? "green" : s.state === "restarting" ? "amber" : ""}">${s.state === "running" ? "运行中 · :" + s.port : s.state === "restarting" ? "重启中…" : "未启动"}</span>
+      <span class="spacer"></span>
+      ${running
+        ? `<button class="btn sm" onclick="restart()" ${s.state === "restarting" ? "disabled" : ""}>重启</button>
+           <button class="btn sm danger" onclick="stop()">停止</button>`
+        : `<button class="btn sm primary" onclick="start()">启动</button>`}
+    </header>
+    <div class="columns">
+      <section class="primary svc-scene">
+        <div class="svc-meta">
+          <span class="chip mono">${s.cmd}</span>
+          <span class="chip mono">~/code/harness</span>
+          <span class="hint">项目自己的端口，不借 $PORT —— 跟预览是两回事</span>
+        </div>
+        <div class="term"><pre class="term-body">${s.log.join("\n")}</pre></div>
+        <div class="restart-cfg">
+          <span>重启命令</span>
+          <input class="mono" value="${s.restartCmd}" placeholder="留空 = 杀掉进程，再跑一遍启动命令">
+        </div>
+      </section>
+      <aside class="inspector">
+        <h4>这条命令</h4>
+        <div class="kv"><span>启动</span><span class="mono">${s.cmd.length > 18 ? s.cmd.slice(0, 18) + "…" : s.cmd}</span></div>
+        <div class="kv"><span>端口</span><span class="mono">:${s.port}</span></div>
+        <div class="kv"><span>跟随分支</span><span>主仓当前检出</span></div>
+        <div class="kv"><span>开机自启</span><span>关</span></div>
+        <h4>说明</h4>
+        <p style="margin:0;font-size:12px;color:var(--muted);line-height:1.6">
+          它不是任务：没有完成/验收语义，不进队列不进统计。只是和任务并列，同为「这个项目下会跑的东西」。
+        </p>
+      </aside>
+    </div>`;
+}
+
+function pick(id) { selected = id; svcRows(); scene(); }
+function pickTask() { selected = null; svcRows(); scene(); }
+function start() {
+  const s = services.find((x) => x.id === selected);
+  s.state = "running"; s.log.push("<span class='ok'>[demo] 已启动</span>"); pick(s.id);
+}
+function stop() {
+  const s = services.find((x) => x.id === selected);
+  s.state = "stopped"; s.log.push("<span class='err'>[demo] 进程已终止，日志保留</span>"); pick(s.id);
+}
+function restart() {
+  const s = services.find((x) => x.id === selected);
+  s.state = "restarting";
+  s.log.push(`<span class='warn'>[demo] 重启：${s.restartCmd ? "跑配置的重启命令 " + s.restartCmd : "杀掉进程，再跑一遍启动命令"}</span>`);
+  pick(s.id);
+  setTimeout(() => { s.state = "running"; s.log.push("<span class='ok'>[demo] 重启完成</span>"); pick(s.id); }, 900);
+}
+pick("web");
+</script>
+</body>
+</html>

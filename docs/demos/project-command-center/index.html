@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>项目级运行现场 · 方案 demo</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  body { align-items: center; justify-content: center; }
+  .wrap { max-width: 760px; padding: 40px 24px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .lead { color: var(--muted); font-size: 13px; line-height: 1.7; margin: 0 0 26px; }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  a.card { display: block; text-decoration: none; color: inherit; transition: transform 0.1s; }
+  a.card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+  .card .tag { font-size: 11px; font-weight: 700; color: var(--accent); }
+  .card h2 { margin: 4px 0 6px; font-size: 15px; }
+  .card p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.65; }
+  .note { margin-top: 22px; font-size: 12px; color: var(--faint); line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>常用命令 / 项目级运行现场放哪儿 —— 四个方案</h1>
+  <p class="lead">
+    背景：启动 / 停止 / 重启常驻命令是<b>项目级</b>的事，塞进任务 inspector 或压在任务下面的终端抽屉都不对。
+    四个 demo 全部可点：启动会变停止、徽标会联动、面板会弹。视觉按现有 web 风格仿制，交互是假的、纯前端。
+  </p>
+  <div class="cards">
+    <a class="card" href="a-project-home.html">
+      <span class="tag">方案 A · 传统 · 推荐起点</span>
+      <h2>项目主页</h2>
+      <p>没选任务时，主区就是项目自己的屏幕：服务卡片、git 概览、全尺寸终端。服务跑在终端 tab 里，日志白捡。</p>
+    </a>
+    <a class="card" href="b-status-bar.html">
+      <span class="tag">方案 B · 传统+</span>
+      <h2>全局状态栏</h2>
+      <p>VS Code 式一条 app 级状态栏横贯底部：分支、运行中 N、终端入口。任务区一点不动，任何时候一眼可见。</p>
+    </a>
+    <a class="card" href="c-tree-entity.html">
+      <span class="tag">方案 C · 大胆</span>
+      <h2>树里的第二实体</h2>
+      <p>服务长进任务树：项目下固定一节「运行」，点服务行主区就是它的现场（全屏日志 + 启停重启 + 就地配置）。</p>
+    </a>
+    <a class="card" href="d-run-center.html">
+      <span class="tag">方案 D · 远期</span>
+      <h2>跨项目运行中心</h2>
+      <p>「现在到底有什么在跑」的一张总图：所有项目的常驻服务、预览、终端、agent，外加 ash 管不到的旁路会话上报。</p>
+    </a>
+  </div>
+  <p class="note">
+    A 与 C 互补（主页做现场、树做入口），B 可叠加在任何方案上当常显徽标，D 可以以后长在 A/C 之上。
+  </p>
+</div>
+</body>
+</html>

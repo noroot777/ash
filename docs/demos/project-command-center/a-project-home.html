@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>方案 A · 项目主页</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .home-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .home-head .avatar { width: 34px; height: 34px; border-radius: 9px; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 16px; }
+  .home-head h1 { margin: 0; font-size: 17px; }
+  .home-head .path { font-size: 11.5px; color: var(--faint); }
+  .git-rows { display: flex; flex-direction: column; gap: 6px; }
+  .git-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+  .git-row .h { font-family: ui-monospace, Consolas, monospace; color: var(--faint); font-size: 11px; }
+  #term { height: 240px; }
+</style>
+</head>
+<body>
+<nav class="demo-nav">
+  <strong>运行现场 demo</strong>
+  <a class="on" href="a-project-home.html">A · 项目主页</a>
+  <a href="b-status-bar.html">B · 全局状态栏</a>
+  <a href="c-tree-entity.html">C · 树里的第二实体</a>
+  <a href="d-run-center.html">D · 跨项目运行中心</a>
+  <span class="demo-hint">没选任务时，主区就是项目自己的屏幕 —— 点服务卡上的按钮试试，注意终端 tab 和右上角徽标的联动</span>
+</nav>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sb-head">
+      <div class="sb-avatar">A</div><span class="sb-name">ash</span>
+      <span class="sb-branch">⑂ main</span>
+    </div>
+    <div class="sb-section">进行中</div>
+    <div class="row"><span class="dot blue"></span><span class="t">修复预览端口漂移误报</span><span class="sub">跑着</span></div>
+    <div class="row"><span class="dot amber"></span><span class="t">终端会话闲置回收豁免</span><span class="sub">提问</span></div>
+    <div class="row"><span class="dot gray"></span><span class="t">移动端会话下拉刷新</span><span class="sub">排队</span></div>
+    <div class="sb-section">已完成</div>
+    <div class="row"><span class="dot green"></span><span class="t">思考增量成块发</span></div>
+    <div class="row"><span class="dot green"></span><span class="t">文件 diff 支持放大</span></div>
+    <div class="sb-section">其他项目</div>
+    <div class="row"><span class="dot gray"></span><span class="t">aweb</span><span class="sub">2 项</span></div>
+  </aside>
+
+  <main class="main">
+    <header class="appbar">
+      <span class="kind">项目</span><span class="title">ash</span>
+      <span class="spacer"></span>
+      <button class="run-badge" id="badge"><span class="dot green"></span>运行中 2</button>
+    </header>
+    <div class="columns">
+      <section class="primary">
+        <div class="home-head">
+          <div class="avatar">A</div>
+          <div><h1>ash</h1><div class="path mono">~/code/harness</div></div>
+        </div>
+
+        <div class="sect"><h2>常驻服务</h2><span class="hint">配置在 项目设置 · 常用命令</span>
+          <span style="flex:1"></span><button class="btn sm ghost">管理</button></div>
+        <div class="svc-grid" id="svc-grid"></div>
+
+        <div class="sect"><h2>Git</h2><span class="hint">主仓，所有任务共用</span></div>
+        <div class="card">
+          <div class="git-rows">
+            <div class="git-row"><span class="chip">⑂ main</span><span>工作区干净 · 领先 origin/main 2 个提交</span>
+              <span style="flex:1"></span>
+              <button class="btn sm">拉取</button><button class="btn sm">推送</button><button class="btn sm ghost">打开工作台</button></div>
+            <div class="git-row"><span class="h">7e33c82</span><span>Merge branch 'ash/kn1oH7Kq'</span></div>
+            <div class="git-row"><span class="h">a30eedd</span><span>fix(trace): 思考增量成块发、相邻思考合并成一行</span></div>
+          </div>
+        </div>
+
+        <div class="sect"><h2>终端</h2><span class="hint">常驻服务各占一个 tab，日志就在这儿看</span></div>
+        <div class="term" id="term">
+          <div class="term-tabs" id="term-tabs"></div>
+          <pre class="term-body" id="term-body"></pre>
+        </div>
+      </section>
+
+      <aside class="inspector">
+        <h4>项目概览</h4>
+        <div class="kv"><span>预览方式</span><span>服务列表 · 3 项</span></div>
+        <div class="kv"><span>常用命令</span><span>3 条</span></div>
+        <div class="kv"><span>成员</span><span>fjh（管理员）</span></div>
+        <div class="kv"><span>默认执行器</span><span>claude</span></div>
+        <h4>说明</h4>
+        <p style="margin:0;font-size:12px;color:var(--muted);line-height:1.6">
+          点侧栏任务后主区回到任务详情；顶栏的「运行中 N」徽标仍在，点它可拉出终端快捷抽屉（demo 从略）。
+        </p>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<script>
+const services = [
+  { id: "web", name: "web dev", cmd: "npm -w web run dev", port: 5173, state: "running",
+    log: ["$ npm -w web run dev", "<span class='ok'>VITE v6.0.3</span>  ready in <span class='ok'>412 ms</span>", "", "  ➜  Local:   <span class='ok'>http://localhost:5173/</span>", "  ➜  Network: use --host to expose", "<span class='dim'>12:03:11 [vite] hmr update /src/workspace/WorkspaceShell.tsx</span>"] },
+  { id: "server", name: "server watch", cmd: "npm -w server run dev", port: 4317, state: "running",
+    log: ["$ npm -w server run dev", "<span class='dim'>[tsc] watching for file changes…</span>", "<span class='ok'>[ash] listening on :4317</span>", "<span class='dim'>[ash] sse client connected (2 active)</span>"] },
+  { id: "metro", name: "mobile metro", cmd: "cd mobile && npx expo start", port: 8081, state: "stopped",
+    log: ["$ cd mobile && npx expo start", "<span class='dim'>Starting Metro Bundler…</span>"] },
+];
+const zshLog = ["<span class='dim'>Last login: Wed Sep 17 11:58:03</span>", "<span class='ok'>~/code/harness</span> $ git status", "On branch main", "nothing to commit, working tree clean", "<span class='ok'>~/code/harness</span> $ "];
+let activeTab = "web";
+
+function render() {
+  const grid = document.getElementById("svc-grid");
+  grid.innerHTML = services.map((s) => `
+    <div class="card svc-card">
+      <div class="svc-head"><span class="dot ${s.state === "running" ? "green" : s.state === "restarting" ? "amber" : "gray"}"></span>
+        <span class="name">${s.name}</span><span class="chip" style="margin-left:auto">:${s.port}</span></div>
+      <div class="svc-cmd mono">${s.cmd}</div>
+      <div class="svc-foot">
+        <span class="state ${s.state === "running" ? "on" : ""}">${s.state === "running" ? "运行中" : s.state === "restarting" ? "重启中…" : "未启动"}</span>
+        ${s.state === "stopped"
+          ? `<button class="btn sm primary" onclick="start('${s.id}')">启动</button>`
+          : `<button class="btn sm" onclick="restart('${s.id}')" ${s.state === "restarting" ? "disabled" : ""}>重启</button>
+             <button class="btn sm danger" onclick="stop('${s.id}')">停止</button>`}
+      </div>
+    </div>`).join("");
+
+  const n = services.filter((s) => s.state !== "stopped").length;
+  document.getElementById("badge").innerHTML = n
+    ? `<span class="dot green"></span>运行中 ${n}` : "没有在跑的服务";
+  document.getElementById("badge").className = "run-badge" + (n ? "" : " none");
+
+  const tabs = [{ id: "zsh", label: "zsh ~/code/harness", state: null },
+    ...services.filter((s) => s.state !== "stopped" || s.exited).map((s) => ({ id: s.id, label: s.name, state: s.state }))];
+  if (!tabs.some((t) => t.id === activeTab)) activeTab = tabs[tabs.length - 1].id;
+  document.getElementById("term-tabs").innerHTML = tabs.map((t) => `
+    <button class="term-tab ${t.id === activeTab ? "on" : ""}" onclick="focusTab('${t.id}')">
+      ${t.state ? `<span class="dot ${t.state === "running" ? "green" : t.state === "restarting" ? "amber" : "gray"}"></span>` : ""}${t.label}${t.state === "stopped" ? "（已退出）" : ""}
+    </button>`).join("") + `<button class="term-tab">＋</button>`;
+  const cur = services.find((s) => s.id === activeTab);
+  document.getElementById("term-body").innerHTML = (cur ? cur.log : zshLog).join("\n");
+}
+function focusTab(id) { activeTab = id; render(); }
+function start(id) {
+  const s = services.find((x) => x.id === id);
+  s.state = "running"; s.exited = false;
+  s.log.push("<span class='ok'>[demo] 服务已启动，日志落在这个 tab</span>");
+  activeTab = id; render();
+}
+function stop(id) {
+  const s = services.find((x) => x.id === id);
+  s.state = "stopped"; s.exited = true;
+  s.log.push("<span class='err'>[demo] 进程已终止（tab 保留，退出输出可回看）</span>");
+  render();
+}
+function restart(id) {
+  const s = services.find((x) => x.id === id);
+  s.state = "restarting";
+  s.log.push("<span class='warn'>[demo] 正在重启：杀掉进程，再跑一遍启动命令…</span>");
+  activeTab = id; render();
+  setTimeout(() => { s.state = "running"; s.log.push("<span class='ok'>[demo] 重启完成</span>"); render(); }, 900);
+}
+render();
+</script>
+</body>
+</html>

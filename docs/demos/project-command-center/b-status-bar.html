@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>方案 B · 全局状态栏</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .frame { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+  .frame > .shell { flex: 1; min-height: 0; }
+  /* VS Code 式:一条横贯整个窗口底部的状态栏 */
+  .statusbar {
+    flex: 0 0 26px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 10px;
+    background: #2b2d36;
+    color: #c3c5d1;
+    font-size: 11.5px;
+    z-index: 40;
+  }
+  .sb-item { display: inline-flex; align-items: center; gap: 6px; padding: 0 9px; height: 100%; border: none; background: transparent; color: inherit; font-size: 11.5px; }
+  button.sb-item:hover { background: #3d3f4b; }
+  .sb-item .dot { width: 7px; height: 7px; min-width: 7px; box-shadow: none; }
+  .sb-item.green { color: #6fd0a8; }
+  .sb-right { margin-left: auto; display: flex; height: 100%; }
+  /* 对话 mockup */
+  .bubble { max-width: 620px; border-radius: 12px; padding: 10px 14px; margin: 10px 0; font-size: 12.5px; line-height: 1.65; }
+  .bubble.user { background: var(--accent-soft); margin-left: auto; }
+  .bubble.agent { background: var(--panel); box-shadow: var(--ctl); }
+  .bubble code { background: var(--raised); border-radius: 4px; padding: 1px 5px; font-size: 11px; }
+  .replybox { border-radius: 12px; background: var(--panel); box-shadow: var(--ctl); padding: 12px 14px; color: var(--faint); font-size: 12.5px; margin-top: 18px; }
+  /* 状态栏向上弹出的两块面板 */
+  #run-pop { position: absolute; left: 10px; bottom: 34px; display: none; }
+  #run-pop.open { display: block; }
+  .pop-row { display: flex; align-items: center; gap: 9px; padding: 7px 6px; border-radius: 8px; }
+  .pop-row:hover { background: var(--raised); }
+  .pop-row .name { font-weight: 600; font-size: 12.5px; }
+  .pop-row .meta { font-size: 11px; color: var(--faint); }
+  .pop-row .acts { margin-left: auto; display: flex; gap: 6px; }
+  #term-panel { position: absolute; left: 0; right: 0; bottom: 26px; height: 250px; display: none; flex-direction: column; border-radius: 0; box-shadow: 0 -8px 30px rgba(0,0,0,.18); }
+  #term-panel.open { display: flex; }
+</style>
+</head>
+<body>
+<nav class="demo-nav">
+  <strong>运行现场 demo</strong>
+  <a href="a-project-home.html">A · 项目主页</a>
+  <a class="on" href="b-status-bar.html">B · 全局状态栏</a>
+  <a href="c-tree-entity.html">C · 树里的第二实体</a>
+  <a href="d-run-center.html">D · 跨项目运行中心</a>
+  <span class="demo-hint">任务区一点不动，运行状态住在底部一条 app 级状态栏上 —— 点「运行中 2」和「终端」</span>
+</nav>
+
+<div class="frame">
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="sb-head">
+        <div class="sb-avatar">A</div><span class="sb-name">ash</span>
+        <span class="sb-branch">⑂ main</span>
+      </div>
+      <div class="sb-section">进行中</div>
+      <div class="row sel"><span class="dot blue"></span><span class="t">修复预览端口漂移误报</span><span class="sub">跑着</span></div>
+      <div class="row"><span class="dot amber"></span><span class="t">终端会话闲置回收豁免</span><span class="sub">提问</span></div>
+      <div class="row"><span class="dot gray"></span><span class="t">移动端会话下拉刷新</span><span class="sub">排队</span></div>
+      <div class="sb-section">已完成</div>
+      <div class="row"><span class="dot green"></span><span class="t">思考增量成块发</span></div>
+      <div class="row"><span class="dot green"></span><span class="t">文件 diff 支持放大</span></div>
+    </aside>
+
+    <main class="main">
+      <header class="appbar">
+        <span class="kind">任务</span><span class="title">修复预览端口漂移误报</span>
+        <span class="chip accent">agent 跑着</span>
+        <span class="spacer"></span>
+      </header>
+      <div class="columns">
+        <section class="primary">
+          <div class="bubble user">lentPort 缺失的老记录会渲染出「不是 ash 借的 undefined」，看一下。</div>
+          <div class="bubble agent">已定位：<code>previewPortDrift</code> 里用 <code>=== null</code> 判断拦不住 undefined。改成真值判断（端口不可能是 0，无代价），补了回归用例，正在跑 <code>test-preview</code>…</div>
+          <div class="replybox">回复 agent …（demo 静态占位）</div>
+        </section>
+        <aside class="inspector">
+          <h4>任务</h4>
+          <div class="kv"><span>状态</span><span>running</span></div>
+          <div class="kv"><span>执行器</span><span>claude · opus</span></div>
+          <div class="kv"><span>分支</span><span class="mono">ash/pR2x</span></div>
+          <div class="kv"><span>工作目录</span><span>worktree</span></div>
+          <h4>说明</h4>
+          <p style="margin:0;font-size:12px;color:var(--muted);line-height:1.6">
+            inspector 保持纯任务尺度。项目级的运行状态全部下沉到底部状态栏，在任何任务里都一眼可见。
+          </p>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <div class="pop" id="run-pop">
+    <h3>常驻服务 · ash</h3>
+    <div id="pop-rows"></div>
+  </div>
+
+  <div class="term" id="term-panel">
+    <div class="term-tabs">
+      <button class="term-tab on"><span class="dot green"></span>web dev</button>
+      <button class="term-tab"><span class="dot green"></span>server watch</button>
+      <button class="term-tab">zsh ~/code/harness</button>
+      <button class="term-tab">＋</button>
+    </div>
+    <pre class="term-body">$ npm -w web run dev
+<span class="ok">VITE v6.0.3</span>  ready in <span class="ok">412 ms</span>
+
+  ➜  Local:   <span class="ok">http://localhost:5173/</span>
+<span class="dim">12:03:11 [vite] hmr update /src/workspace/WorkspaceShell.tsx</span></pre>
+  </div>
+
+  <footer class="statusbar">
+    <span class="sb-item">⌂ ash</span>
+    <span class="sb-item">⑂ main</span>
+    <button class="sb-item green" id="sb-run" onclick="toggleRun()"><span class="dot green"></span>运行中 2</button>
+    <button class="sb-item" onclick="toggleTerm()">▣ 终端</button>
+    <div class="sb-right">
+      <span class="sb-item"><span class="dot green"></span>已连接</span>
+      <span class="sb-item">agent ×1</span>
+    </div>
+  </footer>
+</div>
+
+<script>
+const services = [
+  { id: "web", name: "web dev", port: 5173, state: "running" },
+  { id: "server", name: "server watch", port: 4317, state: "running" },
+  { id: "metro", name: "mobile metro", port: 8081, state: "stopped" },
+];
+function render() {
+  document.getElementById("pop-rows").innerHTML = services.map((s) => `
+    <div class="pop-row">
+      <span class="dot ${s.state === "running" ? "green" : s.state === "restarting" ? "amber" : "gray"}"></span>
+      <div><div class="name">${s.name}</div><div class="meta mono">:${s.port} · ${s.state === "running" ? "运行中" : s.state === "restarting" ? "重启中…" : "未启动"}</div></div>
+      <div class="acts">${s.state === "stopped"
+        ? `<button class="btn sm primary" onclick="setState('${s.id}','running')">启动</button>`
+        : `<button class="btn sm" onclick="restart('${s.id}')" ${s.state === "restarting" ? "disabled" : ""}>重启</button>
+           <button class="btn sm danger" onclick="setState('${s.id}','stopped')">停止</button>`}</div>
+    </div>`).join("");
+  const n = services.filter((s) => s.state !== "stopped").length;
+  document.getElementById("sb-run").innerHTML = n
+    ? `<span class="dot green"></span>运行中 ${n}`
+    : `<span class="dot gray"></span>没有在跑的服务`;
+  document.getElementById("sb-run").className = "sb-item" + (n ? " green" : "");
+}
+function setState(id, state) { services.find((s) => s.id === id).state = state; render(); }
+function restart(id) {
+  setState(id, "restarting");
+  setTimeout(() => setState(id, "running"), 900);
+}
+function toggleRun() { document.getElementById("run-pop").classList.toggle("open"); }
+function toggleTerm() { document.getElementById("term-panel").classList.toggle("open"); }
+render();
+</script>
+</body>
+</html>
