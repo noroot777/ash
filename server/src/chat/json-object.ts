@@ -8,10 +8,18 @@
  *
  * 扫描从左往右、只认**顶层**对象：配平成功就把游标跳过整个对象，所以 forward 这类嵌套
  * 内层对象不会被单独取走（取最后一个内层对象会得到没有 reply 字段的半截结果——旧实现
- * 是靠「切到结尾必然多一个 `}`」隐式排除它的，换成配平后必须显式跳过）。取最后一个顶层
- * 对象，保留「先输出说明、再输出最终 JSON」的既有行为。
+ * 是靠「切到结尾必然多一个 `}`」隐式排除它的，换成配平后必须显式跳过）。
+ *
+ * 候选由 `accept` 挑，不是无脑取最后一个：尾随说明里再出现一个对象示例（「备注：格式形如
+ * {"foo":"bar"}」）时，最后一个对象是那个示例，真正的最终回复排在它前面。不按目标形状筛
+ * 就会拿示例覆盖回复——群聊照样报「未返回有效回复」，侧聊更糟：明明有合法 JSON 却降级成
+ * 展示原文，连本轮的 forward 回传能力一起丢掉。所以调用方传入自己那份形状判据，取**最后
+ * 一个满足判据**的顶层对象；不传则保持「最后一个对象」的旧行为。
  */
-export function parseLastJsonObject(text: string): Record<string, unknown> | undefined {
+export function parseLastJsonObject(
+  text: string,
+  accept: (value: Record<string, unknown>) => boolean = () => true,
+): Record<string, unknown> | undefined {
   const cleaned = text.trim().replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "");
   let found: Record<string, unknown> | undefined;
   for (let index = 0; index < cleaned.length; index++) {
@@ -23,13 +31,18 @@ export function parseLastJsonObject(text: string): Record<string, unknown> | und
     try {
       const value: unknown = JSON.parse(cleaned.slice(index, end + 1));
       if (value && typeof value === "object" && !Array.isArray(value)) {
-        found = value as Record<string, unknown>;
+        // 跳过整个对象要无条件做：即便它不满足 accept，它的内层也不该被当成顶层候选。
         index = end;
+        if (accept(value as Record<string, unknown>)) found = value as Record<string, unknown>;
       }
     } catch { /* 正文里的伪 JSON 片段（举例、代码块）解析不出来，继续往后找。 */ }
   }
   return found;
 }
+
+/** 常用判据：某个字段是非空字符串。 */
+export const textField = (key: string) => (value: Record<string, unknown>): boolean =>
+  typeof value[key] === "string" && value[key].trim().length > 0;
 
 /** `text[start]` 这个 `{` 配平到的 `}` 的下标；字符串字面量里的括号不计数。 */
 function objectEnd(text: string, start: number): number | undefined {

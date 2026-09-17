@@ -59,6 +59,12 @@ assert.deepEqual(parseChatReply('我先查看项目文件。{"reply":"建议简�
 assert.equal(parseChatReply('{"reply":"好","task":{"title":"A","body":"B"}} 完毕').task?.title, "A");
 // 正文里举例的 JSON 不干扰最终 JSON；完全没有最终 JSON 时仍然失败，并带出原始输出供排查。
 assert.deepEqual(parseChatReply('比如 {"a":1} 这种。{"reply":"结论","task":null}'), { reply: "结论", task: null });
+// 尾随说明里**也带对象示例**时，最后一个对象是那个示例——候选要按形状挑，不能无脑取最后一个。
+assert.deepEqual(parseChatReply('{"reply":"ok","task":null} 备注：格式形如 {"foo":"bar"}'), { reply: "ok", task: null });
+assert.equal(parseChatReply('{"reply":"ok","task":{"title":"A","body":"B"}} 例如 {"foo":{"bar":1}}').task?.title, "A");
+// 前后都有示例时仍取真正的最终回复；两个合法回复并存时取后一个（模型改口的场景）。
+assert.deepEqual(parseChatReply('示例 {"x":1}。{"reply":"最终","task":null} 补充 {"y":2}'), { reply: "最终", task: null });
+assert.deepEqual(parseChatReply('{"reply":"初稿","task":null} 更正：{"reply":"改稿","task":null}'), { reply: "改稿", task: null });
 assert.throws(() => parseChatReply('排序写在 {"order":"desc"} 这里，以上就是结论。'), /智能体原始输出/);
 assert.throws(() => parseChatReply("完全没有 JSON 的一段回答。"), /智能体原始输出/);
 assert.equal(parseChatReply('读取完成。```json\n{"reply":"已整理目标","task":{"title":"改登录页","body":"实现指定布局"}}\n```').task?.title, "改登录页");

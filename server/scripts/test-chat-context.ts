@@ -98,6 +98,8 @@ try {
   // 按内容判断，不按包装判断；真正无效的（上面那一排）仍然抛。
   assert.equal(parseChatSummary('{"summary":"ok"} 结语', 500), "ok");
   assert.equal(parseChatSummary('[{"summary":"ok"}]', 500), "ok");
+  // 尾随说明里带对象示例时按形状挑候选，不能取到那个示例。
+  assert.equal(parseChatSummary('{"summary":"ok"} 备注：形如 {"foo":"bar"}', 500), "ok");
   for (const [prefix, suffix] of [["", ""], ["整理好了。\n", ""], ["```json\n", "\n```"], ["整理好了。\n```json\n", "\n```"], ['{"旧输出":"忽略"}\n', ""]]) {
     assert.equal(parseChatSummary(`${prefix}${JSON.stringify({ summary: ' 保留决定 {A} 与 "B" ', metadata: { extra: true }, task: { title: "忽略" } })}${suffix}`, 500), '保留决定 {A} 与 "B"');
     assert.deepEqual(parseChatReply(`${prefix}{"reply":"已处理","task":null,"extra":true}${suffix}`), { reply: "已处理", task: null });

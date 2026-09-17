@@ -1,5 +1,6 @@
 import type { ChatMember } from "@ash/shared/chat";
 import type { chatPrompt } from "./prompt.js";
+import { hasReply } from "./prompt.js";
 import { authorizationIsFromSource } from "./side-authorization.js";
 import { parseLastJsonObject } from "./json-object.js";
 
@@ -35,7 +36,7 @@ const FALLBACK_REPLY_LIMIT = 16000;
  * 降级路径一律 forward=null，也就是「只回答、不回传」，这是安全方向上的保守选择。
  */
 export function parseSideChatReply(text: string, source: string): SideChatReply {
-  const raw = parseLastJsonObject(text);
+  const raw = parseLastJsonObject(text, hasReply);
   if (!raw || typeof raw.reply !== "string" || !raw.reply.trim()) return fallbackReply(text);
   if (raw.forward == null) return { reply: raw.reply, forward: null, task: null };
   const action = raw.forward as Record<string, unknown>;

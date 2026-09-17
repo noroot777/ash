@@ -40,7 +40,8 @@ ${entries.join("\n")}`;
 }
 
 export function parseChatSummary(text: string, maxTokens: number): string {
-  const value = parseLastJsonObject(text);
+  // 判据只查类型不查非空，好让 `{"summary":""}` 仍然落到下面那句更准确的「摘要为空」上。
+  const value = parseLastJsonObject(text, (candidate) => typeof candidate.summary === "string");
   if (!value || typeof value.summary !== "string") throw new Error("摘要格式无效，原始消息已保留。");
   const summary = value.summary.trim();
   if (!summary || estimateChatTokens(JSON.stringify(summary)) > maxTokens) throw new Error("摘要为空或超出预算，原始消息已保留。");

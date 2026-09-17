@@ -212,6 +212,16 @@ try {
   assert.ok(brokenForward.formatWarning);
   // 完全没有输出才是真失败——没有任何可展示的内容，兜底也无从兜起。
   assert.throws(() => parseSideChatReply("   ", "解释一下"), /没有返回任何内容/);
+  // 尾随说明里带对象示例时不能误判成「没有合法 JSON」：那会把本来可用的回复降级成原始输出，
+  // 连同这一轮的 forward 回传能力一起丢掉。
+  const tailExample = parseSideChatReply('{"reply":"结论","forward":null} 备注：格式形如 {"foo":"bar"}', "不用回传");
+  assert.equal(tailExample.reply, "结论");
+  assert.equal(tailExample.formatWarning, undefined);
+  const tailWithForward = parseSideChatReply(
+    '{"reply":"结论","forward":{"text":"给主任务的结论","authorization":"把结论告诉主任务"}} 示例 {"foo":"bar"}',
+    "把结论告诉主任务");
+  assert.equal(tailWithForward.forward?.text, "给主任务的结论", "尾随示例不该吃掉回传");
+  assert.equal(tailWithForward.formatWarning, undefined);
   invalidForward = false;
   held = true;
   await req("/chats/side-room/messages", { body: "等待长回复", id: "user-stop" });

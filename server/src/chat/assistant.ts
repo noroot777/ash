@@ -11,7 +11,7 @@ import { executorScope } from "../auth/owned-executors.js";
 import { filterOwned } from "../auth/owned.js";
 import { searchAll } from "../search.js";
 import { AssistantToolError, type invokeChat, type ChatInvocation } from "./execution.js";
-import { chatPrompt, parseChatReply } from "./prompt.js";
+import { chatPrompt, hasReply, parseChatReply } from "./prompt.js";
 import { parseLastJsonObject, rawOutputExcerpt } from "./json-object.js";
 import { estimateChatTokens } from "./context-format.js";
 import { ASSISTANT_GUIDE, ASSISTANT_REPLY_STYLE, ASSISTANT_WORKFLOW_EXAMPLE } from "./assistant-guide.js";
@@ -100,12 +100,15 @@ export async function invokeAssistant(member: ChatMember, room: Room, prompt: st
       retried = true;
       response = await invoke(member, room.ownerUserId, prompt + evidence + "\n【工具调用重试】\n上一轮因调用工具已作废。所有需要的信息都在本消息中，本轮没有任何可用工具。直接输出最终 JSON 或 search JSON，不尝试调用工具。", signal, room.projectId, { purpose: "assistant" });
     }
-    let raw = parseLastJsonObject(response.text);
+    // 助手这一轮要么给最终回答（reply），要么请求检索（search），两种形状都算有效候选——
+    // 判据必须覆盖两者，否则 search 轮会被尾随示例带偏，或者干脆选不到候选。
+    const acceptable = (value: Record<string, unknown>) => value.search != null || hasReply(value);
+    let raw = parseLastJsonObject(response.text, acceptable);
     if (!raw && !retried) {
       signal.throwIfAborted();
       retried = true;
       response = await invoke(member, room.ownerUserId, prompt + evidence + "\n【JSON 格式重试】\n上一轮输出无法按 JSON 解析，本轮请只输出合法 JSON。reply 等字符串值里的换行用转义序列，正文引号使用「」，不要在字符串内部放未转义的双引号。不要调用任何工具。", signal, room.projectId, { purpose: "assistant" });
-      raw = parseLastJsonObject(response.text);
+      raw = parseLastJsonObject(response.text, acceptable);
     }
     if (!raw) throw new Error(`助手未返回有效回复，请重试。${rawOutputExcerpt(response.text)}`);
     if (raw.search != null) {
