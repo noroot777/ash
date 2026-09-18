@@ -22,7 +22,7 @@ import { COMMANDS_SHORTCUT_LABEL, TERMINAL_SHORTCUT_LABEL } from "./goChord.ts";
 // currentProject —— 它在任务模式下的语义是「终端/git/新建任务落在哪」,跟着选中任务走
 // (WorkspaceShell 的既有定义),这里不另发明规则。
 //
-// 命令正文里可以带 `{{占位符}}`:点启动/重启时先弹 CommandArgsDialog 收值,再把**取值**
+// 命令正文里可以带 `{{占位符}}`:点执行/重启时先弹 CommandArgsDialog 收值,再把**取值**
 // 送给后端替换(服务端才是真相,见 server/src/terminal-commands.ts)。没有占位符的命令
 // 一如既往点了就跑,不多一次点击。
 //
@@ -60,8 +60,12 @@ function commandSummary(script: string): string {
   return `${lines[0]} … 共 ${lines.length} 行`;
 }
 
-/** 会话事实 → 状态点/文案。service 头部和普通命令行共用,口径才不会劈叉。 */
-function sessionState(session: TerminalSessionInfo | null): { tone: string; text: string } {
+/**
+ * 会话事实 → 状态点/文案。service 头部和普通命令行共用,口径才不会劈叉。
+ * text 为 null = **没什么可说**:从没跑过的命令旁边就摆着「执行」按钮、点也是灰的,
+ * 再写一句「未启动」是把默认态当事件播报(用户 2026-09-18 点名删掉)。
+ */
+function sessionState(session: TerminalSessionInfo | null): { tone: string; text: string | null } {
   if (session?.groupAlive) {
     return session.exitCode === null
       ? { tone: "on", text: "运行中" }
@@ -74,7 +78,7 @@ function sessionState(session: TerminalSessionInfo | null): { tone: string; text
       ? { tone: "off", text: "已退出" }
       : { tone: "err", text: `已退出（${session.exitCode}）` };
   }
-  return { tone: "off", text: "未启动" };
+  return { tone: "off", text: null };
 }
 
 function rowsOf(current: ProjectView | null, sessions: TerminalSessionInfo[], projects: ProjectView[]): CommandRow[] {
@@ -266,8 +270,8 @@ export function StatusBar({
                 <header className="status-bar__pop-head">
                   <ProjectAvatar project={currentProject} size="dot" />
                   <h3>{currentProject.name}</h3>
-                  {serviceState
-                    ? <span className={`status-bar__svc-state is-${serviceState.tone}`}>{serviceState.text}</span>
+                  {serviceConfig || serviceSession
+                    ? serviceState?.text && <span className={`status-bar__svc-state is-${serviceState.tone}`}>{serviceState.text}</span>
                     : <span className="status-bar__svc-state is-unset">未配置启动命令</span>}
                   <div className="status-bar__svc" role="group" aria-label="启动 / 重启">
                     {busy === serviceKey ? <CircleNotch size={14} className="is-spinning" aria-label="执行中" /> : (
@@ -328,7 +332,7 @@ export function StatusBar({
                             <b>{row.name}</b>
                             <code>{commandSummary(row.command)}</code>
                           </div>
-                          <span className={`status-bar__row-state is-${state.tone}`}>{state.text}</span>
+                          {state.text && <span className={`status-bar__row-state is-${state.tone}`}>{state.text}</span>}
                           <div className="status-bar__row-actions">
                             {busy === key ? <CircleNotch size={13} className="is-spinning" aria-label="执行中" /> : running ? (
                               <>
@@ -339,7 +343,7 @@ export function StatusBar({
                             ) : (
                               <>
                                 {row.session && <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(row.session!.id); }} aria-label={`查看 ${row.name} 退出日志`}><Scroll size={13} />日志</button>}
-                                <button type="button" className="is-primary" onClick={() => requestRun(row, "start", row.command)} aria-label={`启动 ${row.name}`}><Play size={12} weight="fill" />启动</button>
+                                <button type="button" className="is-primary" onClick={() => requestRun(row, "start", row.command)} aria-label={`执行 ${row.name}`}><Play size={12} weight="fill" />执行</button>
                               </>
                             )}
                           </div>
@@ -408,7 +412,8 @@ export function StatusBar({
       {pendingRun && (
         <CommandArgsDialog
           commandName={pendingRun.target.name}
-          actionLabel={pendingRun.action === "start" ? "启动" : "重启"}
+          actionLabel={pendingRun.action === "restart" ? "重启"
+            : pendingRun.target.commandId === SERVICE_COMMAND_ID ? "启动" : "执行"}
           script={pendingRun.script}
           rememberKey={`${pendingRun.target.projectId}:${pendingRun.target.commandId}`}
           busy={busy === `${pendingRun.target.projectId}:${pendingRun.target.commandId}`}

@@ -125,6 +125,9 @@
 }
 .status-bar__pop-head h3 {
   margin: 0;
+  /* 状态文案可能整条不显示(未跑过的服务无话可说),靠 h3 占位把 ▶/⟳ 顶到右边 ——
+     别把右贴依赖挂在那个会消失的 span 上。 */
+  flex: 1;
   font-size: 13px;
   font-weight: 650;
   overflow: hidden;
@@ -133,7 +136,6 @@
 }
 
 .status-bar__svc-state {
-  margin-left: auto;
   flex: 0 0 auto;
   font-size: 11px;
   color: var(--faint);
