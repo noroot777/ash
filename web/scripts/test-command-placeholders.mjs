@@ -1,7 +1,7 @@
 // 常用命令的两件新能力,各自钉住:
 //   ① 命令正文是 Shell 编辑器(多行):默认一行高、跟着内容长、到上限就在框里滚、
 //      拖底边能定高且记得住、双击恢复自适应;
-//   ② 命令里带 `{{占位符}}` 时,点启动先弹框收值,取值随请求发出去;没占位符的照旧直接跑。
+//   ② 命令里带 `{{占位符}}` 时,点执行先弹框收值,取值随请求发出去;没占位符的照旧直接跑。
 //
 // 跑法：npm -w web run test:command-placeholders
 import assert from "node:assert/strict";
@@ -98,11 +98,16 @@ try {
   const checkoutRow = pop.locator(".status-bar__row").filter({ hasText: "切分支" });
   assert.equal(await checkoutRow.locator("code").innerText(), "git checkout {{分支}} … 共 2 行");
 
+  // 没跑过的命令不写「未启动」:默认态不是事件,旁边就摆着「执行」按钮(fixture 的
+  // sessions 为空,弹层里每一条都是这个态,连头部 service 也是)。
+  assert.equal(await pop.locator(".status-bar__row-state").count(), 0, "没跑过的命令不该显示状态文案");
+  assert.doesNotMatch(await pop.innerText(), /未启动/, "弹层里不该再出现「未启动」");
+
   // ⑤ 带占位符 → 先弹框收值。必填没填不让执行。
-  await checkoutRow.getByRole("button", { name: "启动 切分支" }).click();
-  const dialog = page.getByRole("dialog", { name: /启动「切分支」/ });
+  await checkoutRow.getByRole("button", { name: "执行 切分支" }).click();
+  const dialog = page.getByRole("dialog", { name: /执行「切分支」/ });
   await dialog.waitFor();
-  const confirm = dialog.getByRole("button", { name: "启动", exact: true });
+  const confirm = dialog.getByRole("button", { name: "执行", exact: true });
   assert.equal(await confirm.isDisabled(), true, "必填占位符没填时不能执行");
   await dialog.locator("input").first().fill("release/1.2");
   assert.equal(
@@ -114,19 +119,19 @@ try {
   await page.waitForFunction(() => JSON.parse(document.getElementById("calls").textContent).length === 1);
   assert.deepEqual(JSON.parse(await page.getByTestId("calls").innerText()), [
     { path: "/api/projects/p-one/commands/checkout/start", body: { values: { 分支: "release/1.2" } } },
-  ], "取值应当随启动请求发给服务端");
+  ], "取值应当随执行请求发给服务端");
 
   // ⑥ 没占位符的命令不多问一句,点了就跑。
   await openPop();
-  await pop.locator(".status-bar__row").filter({ hasText: "构建" }).getByRole("button", { name: "启动 构建" }).click();
+  await pop.locator(".status-bar__row").filter({ hasText: "构建" }).getByRole("button", { name: "执行 构建" }).click();
   await page.waitForFunction(() => JSON.parse(document.getElementById("calls").textContent).length === 2);
   const calls = JSON.parse(await page.getByTestId("calls").innerText());
   assert.deepEqual(calls[1], { path: "/api/projects/p-one/commands/plain/start", body: { values: {} } });
-  assert.equal(await page.getByRole("dialog", { name: /启动「构建」/ }).count(), 0, "没有占位符就不该弹收值框");
+  assert.equal(await page.getByRole("dialog", { name: /执行「构建」/ }).count(), 0, "没有占位符就不该弹收值框");
 
   // ⑦ 上次填过的值下次预填 —— 改端口/换分支这类命令,多数时候值是同一个。
   await openPop();
-  await pop.locator(".status-bar__row").filter({ hasText: "切分支" }).getByRole("button", { name: "启动 切分支" }).click();
+  await pop.locator(".status-bar__row").filter({ hasText: "切分支" }).getByRole("button", { name: "执行 切分支" }).click();
   await dialog.waitFor();
   assert.equal(await dialog.locator("input").first().inputValue(), "release/1.2", "应当预填上次用过的取值");
   await page.keyboard.press("Escape");
