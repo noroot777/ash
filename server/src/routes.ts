@@ -46,7 +46,7 @@ import { mountScmRoutes } from "./scm-routes.js";
 import { mountTaskDiffRoutes } from "./task-diff-routes.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
 import { mountProviderTestRoutes } from "./provider-test.js";
-import { mountTerminalRoutes } from "./terminal.js";
+import { mountTerminalRoutes } from "./terminal-routes.js";
 import { mountProjectCommandRoutes } from "./terminal-commands.js";
 import { mountFreeWorkflowRoutes } from "./free-workflow-routes.js";
 import { mountReviewerProfileRoutes } from "./reviewer-profiles.js";

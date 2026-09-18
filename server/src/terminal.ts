@@ -1,32 +1,32 @@
 import { existsSync, statSync } from "node:fs";
 import { basename } from "node:path";
-import { streamSSE } from "hono/streaming";
-import type { Hono } from "hono";
-import { eq } from "drizzle-orm";
 import * as pty from "node-pty";
-import { db } from "./db/index.js";
-import { projects } from "./db/schema.js";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { expandHome } from "./git.js";
 import { IS_WINDOWS } from "./platform.js";
 import { id } from "./util.js";
-import { instanceAdminOnly } from "./auth/context.js";
 import {
   descendantsFromTable,
   groupAlive,
   processAlive,
   readProcessTable,
+  readProcessTableSync,
   snapshotDescendants,
+  snapshotDescendantsSync,
   type DescendantSnapshot,
 } from "./terminal-process-tree.js";
 
 const MAX_BUFFER_BYTES = 512 * 1024;
 const MAX_SESSIONS = 16;
 const IDLE_TTL_MS = 30 * 60 * 1000;
-// 后代累积扫描的间隔:一次 ps 覆盖全部活会话,把 job-control 后台作业的独立 pgid 记进
-// 会话(shell 死后树断了就只剩这份内存快照能杀它们)。2s 是窗口与开销的折衷 —— 用户
-// 起后台作业**又**在同一个 2s 窗口内关掉 shell 才可能漏记,极窄,注释见 trackDescendants。
-const DESCENDANT_SCAN_MS = 2_000;
+// 后代累积扫描的默认间隔。它**不是正确性的唯一来源**:结束/退出会话时会先抓一次**实时**
+// 后代快照(shell 还活着就能抓全,这是点 ✕ 关活 shell 的常见路径);累积只兜底「shell 已经
+// 自己退出、树断了」的场景。除周期扫外,shell 每次产出输出(onData)也会触发一次限流扫描,
+// 让刚起的后台作业在毫秒级被记下,而不必等满一个周期。构造可注入间隔,回归用小间隔 + 真实
+// sleep 按真实定时器验证(第 3 轮审查:测试不得手动调 trackDescendants)。
+const DESCENDANT_SCAN_MS = 1_500;
+// onData 触发扫描的限流:shell 输出很密,别每帧都 ps。
+const DESCENDANT_DATA_THROTTLE_MS = 250;
 
 export type TerminalEvent =
   | { seq: number; type: "data"; data: string }
@@ -128,24 +128,38 @@ export class TerminalSessionManager {
   private readonly sweeper: ReturnType<typeof setInterval>;
   private readonly descendantScanner: ReturnType<typeof setInterval>;
   private scanningDescendants = false;
+  private lastDescendantScanAt = 0;
   /**
-   * 正在删除的项目:进入删除态后拒绝新建该项目的会话,直到删库完成(或删除失败撤销)。
-   * 没有它,清场被一个忽略 TERM 的会话拖住几秒时,并发的终端 POST / 命令 start 能在
-   * destroyProject 的快照之后溜进来,变成删库后没有任何 UI 入口的无主会话(第 2 轮
-   * 自由审查实锤)。生命周期由 project-routes 的 DELETE 用 begin/end 括起来。
+   * 正在删除的项目:进入删除态后拒绝新建该项目的会话,直到删库完成。删成功后 projectId
+   * 转入 deletedProjects **永久**留存(见下),删失败则撤销允许重试。没有它,清场被一个
+   * 忽略 TERM 的会话拖住几秒时,并发的终端 POST / 命令 start 能在 destroyProject 的快照
+   * 之后溜进来,变成删库后没有任何 UI 入口的无主会话(第 2 轮自由审查实锤)。生命周期
+   * 由 project-routes 的 DELETE 用 begin/end 括起来。
    */
   private readonly closingProjects = new Set<string>();
+  /**
+   * 已删除的项目 id。**只增不减**(projectId 不复用,进程重启即清零,量级可忽略)。用于
+   * 封死一类竞态:慢终端 POST 在删除开始前已缓存 cwd、停在 `await c.req.json()`,删除完成
+   * 撤掉 closingProjects 后它才走到 create —— 只靠「删除执行期布尔 Set」拦不住它(第 3 轮
+   * 自由审查实锤)。deleted 标记让这类在途请求**永远**拿不到创建资格。
+   */
+  private readonly deletedProjects = new Set<string>();
 
-  constructor() {
+  constructor(options: { descendantScanMs?: number } = {}) {
     this.sweeper = setInterval(() => this.sweepIdleSessions(), 60_000);
     this.sweeper.unref?.();
-    this.descendantScanner = setInterval(() => void this.trackDescendants(), DESCENDANT_SCAN_MS);
+    this.descendantScanner = setInterval(
+      () => void this.trackDescendants(),
+      options.descendantScanMs ?? DESCENDANT_SCAN_MS,
+    );
     this.descendantScanner.unref?.();
   }
 
   create(projectId: string, cwd: string, options: CreateOptions = {}): TerminalSessionInfo {
-    // 项目正在删除:拒绝新建(shell 与命令 start 都走这里),否则会成为删库后的无主会话。
-    if (this.closingProjects.has(projectId)) throw new Error("项目正在删除，暂时无法新建终端会话");
+    // 项目正在删除 / 已删除:拒绝新建(shell 与命令 start 都走这里),否则会成为无主会话。
+    if (this.closingProjects.has(projectId) || this.deletedProjects.has(projectId)) {
+      throw new Error("项目正在删除或已删除，无法新建终端会话");
+    }
     // 同一条命令的退出记录只为回看而留,新会话一起就没意义了 —— **无条件**清掉整组
     // 已死透的那些(组里还有活人的会话是唯一能停到那些进程的把手,不能删)。开着日志
     // tab(有订阅)也照清:订阅钉住退出记录会把 16 个会话槽慢慢吃光,反复重启后 create
@@ -197,7 +211,13 @@ export class TerminalSessionManager {
       descendantPgids: new Set(),
     };
     this.sessions.set(info.id, session);
-    processHandle.onData((data) => this.publish(session, { type: "data", data }));
+    processHandle.onData((data) => {
+      this.publish(session, { type: "data", data });
+      // shell 产出输出 = 它还活着,且可能刚起了后台作业(job-control 会打印 `[1] pid`)。
+      // 限流触发一次后代扫描,让新作业在毫秒级被记进 descendantPgids,而不必等满一个周期
+      // —— 缩小「起作业后立刻退 shell」的漏记窗口(第 3 轮审查)。
+      this.maybeScanFromData();
+    });
     processHandle.onExit(({ exitCode, signal }) => {
       session.exitCode = exitCode;
       this.publish(session, { type: "exit", exitCode, signal });
@@ -246,12 +266,23 @@ export class TerminalSessionManager {
     return true;
   }
 
+  /**
+   * 删会话 + 兜底清场。**同步**路径(sweeper 回收、destroy 收尾都走它),所以用同步 ps:
+   * 实时抓一次后代(shell 若还活着能抓全)并入累积的 pgid,一起 SIGKILL。destroy 里 terminate
+   * 已确认杀净、这里基本是空跑;但 sweeper 直接 close 一个「shell 退了、独立组作业还赖着」
+   * 的会话时,这次同步清场就是最后的兜底 —— 否则回收会话会连把手一起丢(第 3 轮审查)。
+   */
   close(sessionId: string, projectId?: string): boolean {
     const session = this.session(sessionId, projectId);
     if (!session) return false;
     this.sessions.delete(sessionId);
     session.listeners.clear();
-    try { session.process.kill(); } catch { /* the shell already exited */ }
+    const live = snapshotDescendantsSync(session.process.pid);
+    const members: DescendantSnapshot = {
+      pids: live.pids,
+      pgids: [...new Set([...session.descendantPgids, ...live.pgids])],
+    };
+    this.signalTree(session, "SIGKILL", members);
     return true;
   }
 
@@ -371,21 +402,45 @@ export class TerminalSessionManager {
     return { ok: true };
   }
 
-  /** 进入/退出项目删除态。由 project-routes 的 DELETE 用 try/finally 括住整个删除流程。 */
+  /** 进入项目删除态。由 project-routes 的 DELETE 用 try/finally 括住整个删除流程。 */
   beginProjectShutdown(projectId: string): void { this.closingProjects.add(projectId); }
-  endProjectShutdown(projectId: string): void { this.closingProjects.delete(projectId); }
-  /** 项目是否正在删除:命令 start/restart 据此拒绝,别把正在被杀的会话当「已在跑」交还。 */
-  isProjectClosing(projectId: string): boolean { return this.closingProjects.has(projectId); }
+  /**
+   * 退出删除态。deleted=true(删库成功)时把 projectId 转入 deletedProjects **永久**留存,
+   * 让删除开始前就已进入创建路由、删除完成后才走到 create 的在途慢请求**永远**拿不到创建
+   * 资格 —— 只在删除执行期维护一个布尔 Set 封不住这条竞态(第 3 轮自由审查实锤)。deleted=false
+   * (删库失败、需重试)时只撤销执行期标记,不留永久墓碑。
+   */
+  endProjectShutdown(projectId: string, deleted = false): void {
+    this.closingProjects.delete(projectId);
+    if (deleted) this.deletedProjects.add(projectId);
+  }
+  /** 项目是否正在删除或已删除:命令 start/restart、终端 create 据此拒绝,别把正在被杀/已无
+   *  归宿的会话当「已在跑」交还,也别为已删项目起无主 shell。 */
+  isProjectClosing(projectId: string): boolean {
+    return this.closingProjects.has(projectId) || this.deletedProjects.has(projectId);
+  }
+
+  /**
+   * shell 每产出一批输出就(限流地)触发一次后代扫描。job-control 起后台作业时会打印
+   * `[1] <pid>`、命令自己也会有 stdout —— 这些都是「shell 还活着且刚可能起了新作业」的
+   * 信号,借它把独立组 pgid 在毫秒级记进 descendantPgids,把「起作业后很快关 shell」的
+   * 漏记窗口从「一个周期」压到「一次限流」。它**不是**正确性来源(异步 ps 仍可能慢于
+   * shell 退出),只是收窄窗口;真正兜底的是结束/退出时的实时快照 + 周期扫。
+   */
+  private maybeScanFromData(): void {
+    if (Date.now() - this.lastDescendantScanAt < DESCENDANT_DATA_THROTTLE_MS) return;
+    void this.trackDescendants();
+  }
 
   /**
    * 持续累积每个活会话见过的后代进程组 pgid。一次 ps 覆盖全部活 shell(命令会话也扫,
-   * 无害)。**公开仅为可测**(回归里要精确控制「扫一轮」的时机,不靠 sleep 等定时器);
-   * 生产由 constructor 的定时器每 DESCENDANT_SCAN_MS 调一次。幂等只累积、门闩防重入。
-   * 已知边界:用户起后台作业**又**在同一个扫描间隔内关掉 shell,这一个 pgid 会漏记 ——
-   * 窗口 = DESCENDANT_SCAN_MS,配合 terminate/destroy 的实时补抓(shell 那时多半还活着)
-   * 已能覆盖绝大多数;彻底消除要 shell 侧配合,超出本层能力。
+   * 无害)。由 constructor 的定时器每 DESCENDANT_SCAN_MS 调一次,外加 onData 的限流触发
+   * (maybeScanFromData)。幂等只累积、门闩防重入、记录本次扫描时刻给限流用。
+   * 已知边界:后台作业启动**又**在任何一次扫描落地前(周期 + data 触发都没赶上)关掉 shell,
+   * 这一个独立组 pgid 会漏记 —— shell 一 exit 树就断、macOS 又无从按会话/SID 反查孤儿
+   * (sess 列被 SIP 抹成 0、无数字 sid、控制 tty 被吊销),这一残留超出本层能力,如实记录。
    */
-  async trackDescendants(): Promise<void> {
+  private async trackDescendants(): Promise<void> {
     if (this.scanningDescendants) return;
     const shells = [...this.sessions.values()].filter((session) => session.exitCode === null);
     if (!shells.length) return;
@@ -399,27 +454,35 @@ export class TerminalSessionManager {
         }
       }
     } finally {
+      this.lastDescendantScanAt = Date.now();
       this.scanningDescendants = false;
     }
   }
 
   /**
-   * server 退出前的清场:对每个还活着的会话**整组 + 累积的后代 pgid** SIGTERM+SIGKILL
-   * 连发。必须是同步的('exit' 钩子里没有 await),所以只能读内存里已累积的 descendantPgids
-   * —— 不能临时 await ps(第 2 轮自由审查实锤:job-control 后台作业在独立组,只发组长组
-   * 会漏杀,而这条正是重启/正常退出的兜底路径)。命令会话跑的是 dev server/watch 这类可
-   * 随时重启的进程,强杀可接受;不杀的代价是它们被 PID 1 收养成孤儿,ash 重启后 UI/API
-   * 失忆显示「未启动」,旧进程却还占着端口。不能走 close():那只对组长单发一次信号。
+   * server 退出前的清场:对每个还活着的会话**整组 + 后代 pgid** SIGTERM+SIGKILL 连发。
+   * 必须同步('exit' 钩子里没有 await),但同步 ps 是可以的(readProcessTableSync)——
+   * 一次读全表,给每个会话就地补一份**实时**后代快照(shell 此刻还活着就能抓全独立组),
+   * 与存续期累积的 descendantPgids 合并。不能只读累积值:那会漏掉「起了作业但还没被任何
+   * 一次扫描记下」的独立组(第 2、3 轮自由审查实锤)。ps 不可用时退回只用累积值。命令会话
+   * 跑的是 dev server/watch 这类可随时重启的进程,强杀可接受;不杀的代价是它们被 PID 1
+   * 收养成孤儿,ash 重启后 UI/API 失忆显示「未启动」、旧进程却还占着端口。不能走 close():
+   * 它每会话各跑一次同步 ps,退出路径上 N 个会话就是 N 次 ps,这里合成一次。
    */
   shutdown(): void {
     clearInterval(this.sweeper);
     clearInterval(this.descendantScanner);
+    const table = readProcessTableSync();
     for (const session of [...this.sessions.values()]) {
       session.listeners.clear();
       // 无条件连发,不按 exitCode 筛:组长退了组不一定空(daemonize 形状),而对已空的组
-      // 发信号只是 ESRCH,signalTree 兜得住 —— 少一个条件就少一类漏杀。后代 pgid 只能用
-      // 累积值(同步,不能 await),job-control 的独立组全靠它。
-      const descendants: DescendantSnapshot = { pids: [], pgids: [...session.descendantPgids] };
+      // 发信号只是 ESRCH,signalTree 兜得住 —— 少一个条件就少一类漏杀。后代 = 实时快照
+      // (若 ps 可用)∪ 存续期累积,job-control 的独立组全靠这两份。
+      const live = table ? descendantsFromTable(table, session.process.pid) : { pids: [], pgids: [] };
+      const descendants: DescendantSnapshot = {
+        pids: live.pids,
+        pgids: [...new Set([...session.descendantPgids, ...live.pgids])],
+      };
       this.signalTree(session, "SIGTERM", descendants);
       this.signalTree(session, "SIGKILL", descendants);
       this.sessions.delete(session.id);
@@ -535,104 +598,7 @@ export const terminalSessions = new TerminalSessionManager();
 // 属已知边界。
 process.once("exit", () => terminalSessions.shutdown());
 
-async function projectDirectory(projectId: string): Promise<string | null> {
-  const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
-  return resolveTerminalDirectory(project?.repoPath);
-}
-
 export function resolveTerminalDirectory(repoPath: string | null | undefined): string | null {
   const resolved = expandHome(repoPath);
   try { return resolved && statSync(resolved).isDirectory() ? resolved : null; } catch { return null; }
-}
-
-export function mountTerminalRoutes(api: Hono): void {
-  // 终端是**实例管理员专属**(§七):它开的是宿主机上的一个真 shell,项目目录只是
-  // 起始 cwd —— 一条 `cd /` 就出去了。给普通用户就等于把「护栏」变成一句空话。
-  api.use("/projects/:projectId/terminal/*", async (c, next) => {
-    const denied = await instanceAdminOnly(c, "终端");
-    if (denied) return c.json(denied.body, denied.status);
-    return next();
-  });
-
-  api.post("/projects/:projectId/terminal/sessions", async (c) => {
-    const projectId = c.req.param("projectId");
-    const cwd = await projectDirectory(projectId);
-    if (!cwd) return c.json({ error: "项目目录不存在，请先在项目设置中填写可用的本地目录" }, 400);
-    const body: { cols?: number; rows?: number } = await c.req.json().catch(() => ({}));
-    try {
-      return c.json(terminalSessions.create(projectId, cwd, body), 201);
-    } catch (error) {
-      return c.json({ error: `终端启动失败：${error instanceof Error ? error.message : String(error)}` }, 500);
-    }
-  });
-
-  // 终端抽屉打开时先问一遍「这个项目已经有哪些会话」：常用命令的常驻会话要 attach
-  // 而不是新建，普通 shell 则永远新建（它的生命周期跟着前端 tab 走）。项目已删时
-  // 404 —— 项目删除会连带清场终端会话,这里再回数据就是在展示幽灵(第 1 轮自由审查)。
-  api.get("/projects/:projectId/terminal/sessions", async (c) => {
-    const projectId = c.req.param("projectId");
-    const row = (await db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId))).at(0);
-    if (!row) return c.json({ error: "project not found" }, 404);
-    return c.json({ sessions: terminalSessions.listForProject(projectId) });
-  });
-
-  api.get("/projects/:projectId/terminal/sessions/:sessionId/events", (c) => {
-    const projectId = c.req.param("projectId");
-    const sessionId = c.req.param("sessionId");
-    const after = Number(c.req.header("last-event-id") ?? c.req.query("after") ?? 0) || 0;
-    const replay = terminalSessions.eventsAfter(sessionId, projectId, after);
-    if (!replay) return c.json({ error: "terminal session not found" }, 404);
-    return streamSSE(c, async (stream) => {
-      let replaying = true;
-      const pending: TerminalEvent[] = [];
-      const write = (event: TerminalEvent) => stream.writeSSE({ id: String(event.seq), data: JSON.stringify(event) });
-      const unsubscribe = terminalSessions.subscribe(sessionId, projectId, (event) => {
-        if (replaying) pending.push(event);
-        else void write(event).catch(() => undefined);
-      });
-      stream.onAbort(() => unsubscribe?.());
-      try {
-        for (const event of replay) await write(event);
-        replaying = false;
-        for (const event of pending) await write(event);
-        while (!stream.aborted) {
-          await stream.writeSSE({ event: "ping", data: "1" });
-          await stream.sleep(15_000);
-        }
-      } catch {
-        /* normal disconnect */
-      } finally {
-        unsubscribe?.();
-      }
-    });
-  });
-
-  api.post("/projects/:projectId/terminal/sessions/:sessionId/input", async (c) => {
-    const body: { data?: unknown } = await c.req.json().catch(() => ({}));
-    if (typeof body.data !== "string") return c.json({ error: "data required" }, 400);
-    if (Buffer.byteLength(body.data) > 64 * 1024) return c.json({ error: "data too large" }, 413);
-    if (!terminalSessions.write(c.req.param("sessionId"), c.req.param("projectId"), body.data)) {
-      return c.json({ error: "terminal session not found" }, 404);
-    }
-    return c.body(null, 204);
-  });
-
-  api.post("/projects/:projectId/terminal/sessions/:sessionId/resize", async (c) => {
-    const body: { cols?: unknown; rows?: unknown } = await c.req.json().catch(() => ({}));
-    if (typeof body.cols !== "number" || typeof body.rows !== "number") {
-      return c.json({ error: "cols and rows required" }, 400);
-    }
-    if (!terminalSessions.resize(c.req.param("sessionId"), c.req.param("projectId"), body.cols, body.rows)) {
-      return c.json({ error: "terminal session not found" }, 404);
-    }
-    return c.body(null, 204);
-  });
-
-  // 「结束会话」:进程组级终止,确认整组清空才移除会话。杀不净回 502 —— 前端必须
-  // 保留 tab 和把手,不能静默收掉(否则忽略 HUP/TERM 的后台作业成 PID 1 孤儿还没人管)。
-  api.delete("/projects/:projectId/terminal/sessions/:sessionId", async (c) => {
-    const result = await terminalSessions.destroy(c.req.param("sessionId"), c.req.param("projectId"));
-    if (!result.ok) return c.json({ error: `结束会话失败：${result.reason}` }, 502);
-    return c.body(null, 204);
-  });
 }

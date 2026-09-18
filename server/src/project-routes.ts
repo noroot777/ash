@@ -313,8 +313,12 @@ export function mountProjectRoutes(api: Hono): void {
     if (live) return c.json({ error: "项目有正在运行/排队/验收中的任务，无法删除", taskId: live.id }, 409);
     // 进入删除态:先挂 tombstone(拒绝该项目新建会话),再清场,再删库。三步共享这一个
     // 标记,并发的终端 POST / 命令 start 就不会在清场之后溜进来变成无主会话(第 2 轮自由
-    // 审查实锤)。finally 撤销 —— 删成功后项目行已没、新建自然被 DB 拦;删失败要放行重试。
+    // 审查实锤)。删成功后把 projectId 转为**永久** deleted 墓碑(endProjectShutdown 的
+    // deleted=true):删除开始前已进入创建路由、缓存了 cwd、删除完成后才走到 create 的在途
+    // 慢请求,靠执行期布尔 Set 拦不住 —— 永久墓碑让它永远拿不到创建资格(第 3 轮自由审查
+    // 实锤)。删失败(deleted 仍为 false)只撤销执行期标记,放行重试。
     terminalSessions.beginProjectShutdown(pid);
+    let deleted = false;
     try {
       // 终端会话(内存态)先清场:项目行一删,该项目的 shell/服务就再没有 UI/API 把手,
       // 只能占着全局会话槽继续跑到 server 重启(第 1 轮自由审查实锤)。进程组级终止、
@@ -339,9 +343,10 @@ export function mountProjectRoutes(api: Hono): void {
       await deleteProjectMembers(pid);
       await deleteProjectInvites(pid);
       await db.delete(projects).where(eq(projects.id, pid));
+      deleted = true;
       return c.json({ deleted: true });
     } finally {
-      terminalSessions.endProjectShutdown(pid);
+      terminalSessions.endProjectShutdown(pid, deleted);
     }
   });
 
