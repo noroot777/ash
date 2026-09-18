@@ -1,5 +1,7 @@
-.workspace-git-page { width: 100%; height: 100dvh; display: flex; min-width: 0; overflow: hidden; }
-.gwb.gwb-design { width: 100%; height: 100dvh; min-width: 0; min-height: 0; flex: 1; }
+/* 高度用 100% 而不是 100dvh:git 页在 .workspace-system-layout 的中间行里渲染
+   (底下还有全局状态栏),量到视口会把状态栏顶出屏幕。 */
+.workspace-git-page { width: 100%; height: 100%; min-height: 0; display: flex; min-width: 0; overflow: hidden; }
+.gwb.gwb-design { width: 100%; height: 100%; min-width: 0; min-height: 0; flex: 1; }
 .gwb-design .shell, .gwb-design .view { min-height: 0; }
 .gwb-design .view { flex-direction: column; overflow: hidden; }
 .gwb-design .topbar .repo-name { text-align: left; min-width: 0; max-width: 240px; }

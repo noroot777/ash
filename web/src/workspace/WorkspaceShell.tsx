@@ -9,6 +9,7 @@ import { handedOut, useOutboundState } from "./useOutboundState.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
+import { StatusBar } from "./StatusBar.tsx";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
@@ -43,7 +44,6 @@ import {
   WORKSPACE_SIDEBAR_STORAGE_KEY,
 } from "./WorkspaceResizeHandle.tsx";
 import { pushTaskHistoryEntry, selectedTaskProjectId } from "./workspaceHistory.ts";
-import { TerminalToggle } from "./TerminalToggle.tsx";
 import { HandoffApprovalAlert } from "../handoff/HandoffApprovalAlert.tsx";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
 import { HandoffDialog } from "../task-detail/HandoffDialog.tsx";
@@ -109,6 +109,13 @@ export function WorkspaceShell() {
   const [collapsed, setCollapsed] = useState(() => readRenamedStorage("ash:sidebar-collapsed") === "1");
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
+  // 日志聚焦是一次性命令:ProjectTerminal 消费完(成功、失败、还是消费中被卸载)都会
+  // 回执终结,否则关抽屉再开会重放最后一次请求,把用户按回同一条日志(第 4/5 轮审查
+  // 实锤)。回执带 seq,只清对应请求 —— 回执可能和用户刚点的下一次请求并发。
+  const clearTerminalFocus = useCallback((seq: number) => {
+    setTerminalFocus((prev) => prev && prev.seq === seq ? null : prev);
+  }, []);
   const isMultiUser = useIsMultiUser();
   const isInstanceAdmin = useIsInstanceAdmin();
   const canUseTerminal = !isMultiUser || isInstanceAdmin;
@@ -493,11 +500,37 @@ export function WorkspaceShell() {
   const dropSettingsAnchor = useCallback(() => setSettingsAnchor(null), []);
   const notesProject = notes ? projects.find((project) => project.id === notes.projectId) ?? null : null;
   // 终端开的是**宿主机上的一个真 shell**,项目目录只是起始 cwd(一条 `cd /` 就出去了),
-  // 所以多人模式下它是实例管理员专属(§四)。后端已经 403,这里连入口一起收掉 ——
-  // 留一颗按不动的按钮只会让人以为功能坏了。
-  const terminalToggle = currentProject && canUseTerminal ? (
-    <TerminalToggle open={terminalOpen} onToggle={() => setTerminalOpen((open) => !open)} />
-  ) : null;
+  // 所以多人模式下它是实例管理员专属(§四)。后端已经 403,状态栏连入口一起收掉 ——
+  // 留一颗按不动的按钮只会让人以为功能坏了。入口在全局状态栏(StatusBar),不再挤任务顶栏。
+  //
+  // 状态栏是 app 级的,设置页和 Git 工作台也挂(三个早退分支都得带上它,少一处就是
+  // 「进设置底栏就消失」);但终端抽屉只在工作区视图里渲染,所以从设置/Git 里点「终端」
+  // 或「日志」要先退回工作区,不然只是改了个没人消费的 state。
+  const revealTerminal = () => {
+    setSettingsSection(null);
+    setGitOpen(false);
+    setTerminalOpen(true);
+  };
+  const statusBar = (
+    <StatusBar
+      projects={projects}
+      currentProject={currentProject}
+      taskMode={scopeKind === "tasks"}
+      canUseTerminal={canUseTerminal}
+      connected={connected}
+      terminalOpen={terminalOpen}
+      onToggleTerminal={() => {
+        if (settingsSection || gitOpen) revealTerminal();
+        else setTerminalOpen((open) => !open);
+      }}
+      onOpenCommandLog={(sessionId) => {
+        setTerminalFocus({ sessionId, seq: Date.now() });
+        revealTerminal();
+      }}
+      onManageCommands={() => openSettings("project", "commands")}
+      notify={notify}
+    />
+  );
   const handoffAlert = (
     <div className="handoff-approval-slot">
       <HandoffApprovalAlert notify={notify} onOpenSettings={() => openSettings("defaults")} />
@@ -513,7 +546,7 @@ export function WorkspaceShell() {
     {createDialog?.kind === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
     <WorkspaceToast toasts={toasts} onDismiss={dismissToast} onOpenSettings={openSettings} />
   </>;
-  if (gitOpen && !settingsSection) return <><div className="workspace-git-page">{currentProject ? <Suspense fallback={<div className="workspace-load-error">正在打开 Git 工作台…</div>}><GitWorkbench key={`${currentProject.id}:${gitLocation.root || ""}:${gitLocation.taskId || ""}`} projectId={currentProject.id} projectName={currentProject.name} projects={projects} root={gitLocation.root} taskId={gitLocation.taskId} view={gitLocation.view} initialRef={gitLocation.ref} onAssist={(body) => openComposer("single", { body, attachments: [] })} notify={notify} onExit={() => { setGitOpen(false); if (gitLocation.taskId) void selectTaskById(gitLocation.taskId); }} openTask={(id) => { setGitOpen(false); void selectTaskById(id); }} /></Suspense> : <div className="workspace-load-error">{loadError?.message || (projectsReady ? "项目不存在或不可访问" : "正在读取项目…")}<button onClick={() => setGitOpen(false)}>返回 ash</button></div>}</div>{overlays}</>;
+  if (gitOpen && !settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><div className="workspace-git-page">{currentProject ? <Suspense fallback={<div className="workspace-load-error">正在打开 Git 工作台…</div>}><GitWorkbench key={`${currentProject.id}:${gitLocation.root || ""}:${gitLocation.taskId || ""}`} projectId={currentProject.id} projectName={currentProject.name} projects={projects} root={gitLocation.root} taskId={gitLocation.taskId} view={gitLocation.view} initialRef={gitLocation.ref} onAssist={(body) => openComposer("single", { body, attachments: [] })} notify={notify} onExit={() => { setGitOpen(false); if (gitLocation.taskId) void selectTaskById(gitLocation.taskId); }} openTask={(id) => { setGitOpen(false); void selectTaskById(id); }} /></Suspense> : <div className="workspace-load-error">{loadError?.message || (projectsReady ? "项目不存在或不可访问" : "正在读取项目…")}<button onClick={() => setGitOpen(false)}>返回 ash</button></div>}</div>{statusBar}</div>{overlays}</>;
   if (settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><SettingsPage
     section={settingsSection}
     anchor={settingsAnchor}
@@ -528,7 +561,7 @@ export function WorkspaceShell() {
     onTaskUpdated={updateTask}
     onGroupsChanged={refreshGroups}
     notify={notify}
-  /></div>{overlays}</>;
+  />{statusBar}</div>{overlays}</>;
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}${chatOpen ? " is-chat" : ""}${assistantOpen ? " is-assistant" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
@@ -544,14 +577,14 @@ export function WorkspaceShell() {
             onLocalOwnership={openLocalOwnership}
           />
         ) : selectedFullTask?.mode === "team" ? (
-          <TeamView task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
+          <TeamView task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
         ) : selectedFullTask?.mode === "duet" ? (
-          <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} terminalToggle={terminalToggle} notify={notify} />
+          <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
         ) : selectedFullTask ? (
-          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer("single", draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
-        ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "tasks" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "tasks" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项{scopeKind === "tasks" ? "还没落地" : "任务"}</span>}{terminalToggle}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
-        {terminalOpen && currentProject && <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>}
+          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer("single", draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
+        ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "tasks" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "tasks" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项{scopeKind === "tasks" ? "还没落地" : "任务"}</span>}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
+        {terminalOpen && currentProject && <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} focusRequest={terminalFocus} onFocusHandled={clearTerminalFocus} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>}
       </main>
-    </div></div>{overlays}</>
+    </div>{statusBar}</div>{overlays}</>
   );
 }

@@ -122,6 +122,10 @@
       "types": "./src/preview.ts",
       "default": "./src/preview.ts"
     },
+    "./project-commands": {
+      "types": "./src/project-commands.ts",
+      "default": "./src/project-commands.ts"
+    },
     "./page-annotation-batch": {
       "types": "./src/page-annotation-batch.ts",
       "default": "./src/page-annotation-batch.ts"

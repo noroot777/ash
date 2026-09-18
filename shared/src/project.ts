@@ -5,6 +5,7 @@
 // 类型原样再导出(它只能转发**类型**,见 server/CLAUDE.md)。
 import type { ProjectRole } from "./multiuser.ts";
 import type { ProjectPreviewConfig } from "./preview.ts";
+import type { ProjectCommandConfig } from "./project-commands.ts";
 
 export interface Project {
   id: string;
@@ -21,6 +22,8 @@ export interface Project {
   // Django / go / cargo / dotnet / Node…），认出恰好一个才自动用，多个就回来问人。
   previewCommand: string | null;
   previewConfig?: ProjectPreviewConfig | null;
+  // 常用命令（全局状态栏的启动/停止/重启）。跟预览的分界见 project-commands.ts 顶部。
+  commandsConfig?: ProjectCommandConfig[] | null;
   // 验收合并完要不要落提交。true = 老规矩（合并产生提交）；false = 只把改动合进目标
   // 分支的工作区并暂存，目标分支 ref 一动不动，提交与否由人自己决定。这是**项目默认**，
   // 每次验收都能单独覆盖（验收确认框里那个勾）。

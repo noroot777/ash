@@ -30,6 +30,19 @@ export type TerminalSessionInfo = {
   cwd: string;
   shell: string;
   name: string;
+  /** 非空 = 这是「常用命令」的常驻会话（shared/src/project-commands.ts），不是交互 shell。 */
+  commandId: string | null;
+  startedAt: number;
+  /** null = 进程还活着。命令会话靠它区分「运行中」和「退了但日志还能回看」。 */
+  exitCode: number | null;
+  /** 用户主动停的（区别于自己崩了）：UI 显示「已停止」，不算异常退出、不亮红点。 */
+  stoppedByUser: boolean;
+  /**
+   * 进程组里是否还有活着的进程(info() 时即时探测)。组长退了组不一定空:启动脚本
+   * `cmd & …; exit 0` 这种 daemonize 形状下 exitCode 已落、后台子进程还在跑 ——
+   * 「这条命令还活着吗」一律看这个字段,别看 exitCode(第 4 轮审查实锤)。
+   */
+  groupAlive: boolean;
 };
 
 type TerminalSession = TerminalSessionInfo & {
@@ -46,12 +59,23 @@ type CreateOptions = {
   rows?: number;
   shell?: string;
   shellArgs?: string[];
+  /**
+   * 常用命令模式：不开交互 shell，直接 `shell -lc <script>` 跑这条命令，进程退出
+   * 会话就结束（exitCode 落在会话上）。`-l` 保留 —— dev 命令的 PATH/nvm 全靠登录 shell。
+   */
+  command?: { id: string; name: string; script: string };
 };
 
 function terminalSize(value: unknown, fallback: number, min: number, max: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(min, Math.min(max, Math.round(value)))
     : fallback;
+}
+
+/** 进程组里还有没有活人:信号 0 只探测不打扰,整组已空时抛 ESRCH。Windows 没有进程组。 */
+function groupAlive(groupId: number): boolean {
+  if (IS_WINDOWS) return false;
+  try { process.kill(-groupId, 0); return true; } catch { return false; }
 }
 
 /**
@@ -97,10 +121,27 @@ export class TerminalSessionManager {
   }
 
   create(projectId: string, cwd: string, options: CreateOptions = {}): TerminalSessionInfo {
+    // 同一条命令的退出记录只为回看而留,新会话一起就没意义了 —— **无条件**清掉整组
+    // 已死透的那些(组里还有活人的会话是唯一能停到那些进程的把手,不能删)。开着日志
+    // tab(有订阅)也照清:订阅钉住退出记录会把 16 个会话槽慢慢吃光,反复重启后 create
+    // 失败、restart 变成服务中断(第 1 轮审查实锤)。前端本来就只挂同命令最新会话的
+    // tab,旧记录被替换是预期行为。
+    if (options.command) {
+      for (const stale of [...this.sessions.values()]) {
+        if (stale.projectId === projectId && stale.commandId === options.command.id
+          && !this.sessionAlive(stale)) {
+          stale.listeners.clear();
+          this.sessions.delete(stale.id);
+        }
+      }
+    }
     if (this.sessions.size >= MAX_SESSIONS) throw new Error("终端会话数量已达上限");
     const fallback = shellCommand();
     const shell = options.shell ?? fallback.shell;
-    const args = options.shellArgs ?? fallback.args;
+    // 常用命令在 Windows 上没有对应的「-lc」语义，且 win32 分支未经真机验证 —— 与其留
+    // 一段没跑过的 cmd/pwsh 参数拼接，不如明确拒绝（AGENTS.md「Windows 真机」一节）。
+    if (options.command && IS_WINDOWS) throw new Error("常用命令暂不支持 Windows 上的 ash 实例");
+    const args = options.command ? ["-lc", options.command.script] : options.shellArgs ?? fallback.args;
     const processHandle = pty.spawn(shell, args, {
       name: "xterm-256color",
       cols: terminalSize(options.cols, 100, 20, 400),
@@ -113,7 +154,12 @@ export class TerminalSessionManager {
       projectId,
       cwd,
       shell,
-      name: basename(cwd) || cwd,
+      name: options.command ? options.command.name : basename(cwd) || cwd,
+      commandId: options.command?.id ?? null,
+      startedAt: Date.now(),
+      exitCode: null,
+      stoppedByUser: false,
+      groupAlive: true,
     };
     const session: TerminalSession = {
       ...info,
@@ -127,9 +173,10 @@ export class TerminalSessionManager {
     this.sessions.set(info.id, session);
     processHandle.onData((data) => this.publish(session, { type: "data", data }));
     processHandle.onExit(({ exitCode, signal }) => {
+      session.exitCode = exitCode;
       this.publish(session, { type: "exit", exitCode, signal });
     });
-    return info;
+    return this.info(session);
   }
 
   get(sessionId: string, projectId?: string): TerminalSessionInfo | null {
@@ -156,7 +203,10 @@ export class TerminalSessionManager {
     const session = this.session(sessionId, projectId);
     if (!session) return false;
     session.lastAccessedAt = Date.now();
-    session.process.write(data);
+    // 已退出的会话(常用命令跑完/被停,日志还挂着给人看)吞掉输入:进程都没了,写下去
+    // 只会让 node-pty 抛错、前端弹「连接失败」——而用户只是在死 tab 里碰了下键盘。
+    if (session.exitCode !== null) return true;
+    try { session.process.write(data); } catch { /* pty died between checks */ }
     return true;
   }
 
@@ -164,7 +214,9 @@ export class TerminalSessionManager {
     const session = this.session(sessionId, projectId);
     if (!session) return false;
     session.lastAccessedAt = Date.now();
-    session.process.resize(terminalSize(cols, 100, 20, 400), terminalSize(rows, 24, 5, 200));
+    // 同上:对死 pty 调 resize 是 ioctl ENOTTY,不是调用方的错,静默成功。
+    if (session.exitCode !== null) return true;
+    try { session.process.resize(terminalSize(cols, 100, 20, 400), terminalSize(rows, 24, 5, 200)); } catch { /* pty died between checks */ }
     return true;
   }
 
@@ -177,9 +229,86 @@ export class TerminalSessionManager {
     return true;
   }
 
+  /**
+   * 停止一个会话但**保留现场**:会话不删、缓冲日志不丢,退出码照常经 onExit 落在会话上
+   * —— 停止是用户动作,刷新页面后要看得出「我停过」(根 AGENTS.md 的硬要求),所以它和
+   * close(关掉 tab、连日志一起丢)是两个动词。
+   *
+   * 杀的是**整个进程组**(pty 子进程 fork 后 setsid,组长就是它自己,dev server 派生的
+   * 子进程都在组里):SIGTERM 给进程收尾的机会,等不到**整组清空**再 SIGKILL 兜底;两轮
+   * 都压不住(基本只剩 D 状态)就如实返回失败,绝不把「没杀死」报成「已停」—— 会话还在,
+   * UI 可重试。判定必须是「组长退了 **且** 组里没人」:`cmd & wait` 这种形状下组长(shell)
+   * 收 TERM 先死,忽略信号的后台子进程还占着端口,只看组长就会漏杀(第 2 轮审查实锤)。
+   * 自己再 setsid 逃出进程组的守护进程超出本方法能力,属已知边界。
+   */
+  async terminate(
+    sessionId: string,
+    projectId?: string,
+    timeouts?: { termMs?: number; killMs?: number },
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const session = this.session(sessionId, projectId);
+    if (!session) return { ok: true };
+    const groupId = session.process.pid;
+    if (session.exitCode !== null && !groupAlive(groupId)) return { ok: true };
+    session.stoppedByUser = true;
+    this.signalTree(session, "SIGTERM");
+    if (await this.waitForGroupExit(session, timeouts?.termMs ?? 3000)) return { ok: true };
+    this.signalTree(session, "SIGKILL");
+    if (await this.waitForGroupExit(session, timeouts?.killMs ?? 2000)) return { ok: true };
+    return {
+      ok: false,
+      reason: session.exitCode === null
+        ? "进程连 SIGKILL 都没响应，可能卡在不可中断的系统调用里"
+        : "主进程已退出，但它派生的子进程杀不掉，可能卡在不可中断的系统调用里",
+    };
+  }
+
+  private signalTree(session: TerminalSession, signal: "SIGTERM" | "SIGKILL"): void {
+    try {
+      // Windows 没有进程组信号这一说,交给 node-pty 收 ConPTY;命令会话在 create 时
+      // 已拒绝 win32,这里只是让普通会话也调用得动。
+      if (IS_WINDOWS) session.process.kill();
+      else process.kill(-session.process.pid, signal);
+    } catch {
+      // 整组已空(ESRCH):没人可杀,waitForGroupExit 会立刻确认。
+      try { session.process.kill(signal); } catch { /* already gone */ }
+    }
+  }
+
+  /**
+   * 等「组长的 exitCode 落了 **且** 进程组里没有任何存活成员」;超时返回 false,由调用方
+   * 决定升级还是报失败。组长先死不算完 —— 组号还被子进程占着(kill(-pgid, 0) 探测)。
+   */
+  private waitForGroupExit(session: TerminalSession, timeoutMs: number): Promise<boolean> {
+    const groupId = session.process.pid;
+    return new Promise((resolve) => {
+      const deadline = Date.now() + timeoutMs;
+      const check = () => {
+        if (session.exitCode !== null && !groupAlive(groupId)) return resolve(true);
+        if (Date.now() >= deadline) return resolve(false);
+        setTimeout(check, 50);
+      };
+      check();
+    });
+  }
+
+  /**
+   * server 退出前的清场:对每个还活着的会话**整组** SIGTERM+SIGKILL 连发。必须是同步的
+   * ('exit' 钩子里没有 await),所以没有优雅等待窗口 —— 命令会话跑的是 dev server/watch
+   * 这类可随时重启的进程,强杀可接受;不杀的代价是它们被 PID 1 收养成孤儿,ash 重启后
+   * UI/API 失忆显示「未启动」,旧进程却还占着端口。不能走 close():那只对组长单发一次
+   * SIGHUP,`cmd & wait` 里忽略信号的子进程杀不掉。
+   */
   shutdown(): void {
     clearInterval(this.sweeper);
-    for (const sessionId of [...this.sessions.keys()]) this.close(sessionId);
+    for (const session of [...this.sessions.values()]) {
+      session.listeners.clear();
+      // 无条件连发,不按 exitCode 筛:组长退了组不一定空(daemonize 形状),而对已空的组
+      // 发信号只是 ESRCH,signalTree 兜得住 —— 少一个条件就少一类漏杀。
+      this.signalTree(session, "SIGTERM");
+      this.signalTree(session, "SIGKILL");
+      this.sessions.delete(session.id);
+    }
   }
 
   sweepIdleSessions(now = Date.now()): number {
@@ -188,9 +317,55 @@ export class TerminalSessionManager {
     for (const session of this.sessions.values()) {
       // A subscriber means the CLI is still open, even when the shell is silent.
       if (session.listeners.size > 0 || session.lastAccessedAt >= cutoff) continue;
+      // 活着的常用命令会话是「常驻服务」，没人盯着看不是退出的理由 —— 判「活」含
+      // daemonize 形状(组长退了、子进程还在):回收会话就没人能停那些进程了。只有整组
+      // 都退了才回到普通回收轨道，让退出日志保留半小时可回看。
+      if (session.commandId !== null && this.sessionAlive(session)) continue;
       if (this.close(session.id)) closed += 1;
     }
     return closed;
+  }
+
+  /** 一个项目的全部会话（交互 shell + 常用命令），给终端抽屉 attach 和状态栏用。 */
+  listForProject(projectId: string): TerminalSessionInfo[] {
+    return [...this.sessions.values()]
+      .filter((session) => session.projectId === projectId)
+      .map((session) => this.info(session));
+  }
+
+  /** 所有项目的常用命令会话（含刚退出还没被回收的），给全局状态栏汇总用。 */
+  listCommandSessions(): TerminalSessionInfo[] {
+    return [...this.sessions.values()]
+      .filter((session) => session.commandId !== null)
+      .map((session) => this.info(session));
+  }
+
+  /**
+   * 某条常用命令当前活着的会话;判「活」用 sessionAlive 而不是 exitCode ——
+   * daemonize 形状(组长退了、后台子进程还在)也算活:stop/restart 得能找到它交给
+   * terminate,start 得知道「其实还在跑」而不是在旁边再起一份抢端口。
+   */
+  liveCommandSession(projectId: string, commandId: string): TerminalSessionInfo | null {
+    for (const session of this.sessions.values()) {
+      if (session.projectId === projectId && session.commandId === commandId && this.sessionAlive(session)) {
+        return this.info(session);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * restart 的容量预检:排除同命令会话(活的会被 terminate、死的会被 create 清掉,
+   * 都会让位)后还有没有槽。restart 的顺序是先杀旧再建新,若 create 注定因上限失败,
+   * 必须在动手前拒绝 —— 「重启失败」绝不能落成「服务被停了」(第 1 轮审查实锤)。
+   */
+  hasSlotForCommand(projectId: string, commandId: string): boolean {
+    let occupied = 0;
+    for (const session of this.sessions.values()) {
+      if (session.projectId === projectId && session.commandId === commandId) continue;
+      occupied++;
+    }
+    return occupied < MAX_SESSIONS;
   }
 
   private session(sessionId: string, projectId?: string): TerminalSession | null {
@@ -200,8 +375,17 @@ export class TerminalSessionManager {
   }
 
   private info(session: TerminalSession): TerminalSessionInfo {
-    const { id: sessionId, projectId, cwd, shell, name } = session;
-    return { id: sessionId, projectId, cwd, shell, name };
+    const { id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode, stoppedByUser } = session;
+    return {
+      id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode, stoppedByUser,
+      // 即时探测,不是缓存值:组长退没退(exitCode)和组里有没有活人是两件事。
+      groupAlive: this.sessionAlive(session),
+    };
+  }
+
+  /** 这条会话是否还有活着的进程:组长没退,或组长退了但同组子进程还在(daemonize 形状)。 */
+  private sessionAlive(session: TerminalSession): boolean {
+    return session.exitCode === null || groupAlive(session.process.pid);
   }
 
   private publish(session: TerminalSession, event: TerminalEventInput): void {
@@ -219,6 +403,14 @@ export class TerminalSessionManager {
 }
 
 export const terminalSessions = new TerminalSessionManager();
+
+// server 无论怎么退,'exit' 都会同步触发:SIGINT/SIGTERM 处理器(singleton.ts
+// installCleanup)和 `npm run restart` 的杀法最终都走 process.exit(),uncaught 的默认
+// 行为也是 exit。在这里收掉所有活着的会话进程,否则常用命令的 dev server 被 PID 1
+// 收养成孤儿 —— ash 重启后会话表(内存态)清零,UI 显示「未启动」,旧进程却继续占端口,
+// 再点启动只会得到端口冲突(第 3 轮审查实锤)。kill -9 / 崩溃 / 断电没有钩子能接,
+// 属已知边界。
+process.once("exit", () => terminalSessions.shutdown());
 
 async function projectDirectory(projectId: string): Promise<string | null> {
   const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
@@ -249,6 +441,12 @@ export function mountTerminalRoutes(api: Hono): void {
     } catch (error) {
       return c.json({ error: `终端启动失败：${error instanceof Error ? error.message : String(error)}` }, 500);
     }
+  });
+
+  // 终端抽屉打开时先问一遍「这个项目已经有哪些会话」：常用命令的常驻会话要 attach
+  // 而不是新建，普通 shell 则永远新建（它的生命周期跟着前端 tab 走）。
+  api.get("/projects/:projectId/terminal/sessions", (c) => {
+    return c.json({ sessions: terminalSessions.listForProject(c.req.param("projectId")) });
   });
 
   api.get("/projects/:projectId/terminal/sessions/:sessionId/events", (c) => {

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>方案 D · 跨项目运行中心</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .stats { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+  .filter { display: flex; gap: 6px; }
+  .filter .chip { cursor: pointer; border: none; }
+  .filter .chip.on { background: var(--accent); color: #fff; }
+  .runrow { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 8px; }
+  .runrow:hover { background: var(--raised); }
+  .runrow + .runrow { border-top: 1px solid var(--line); border-radius: 0; }
+  .runrow .name { font-weight: 600; font-size: 12.5px; min-width: 150px; }
+  .runrow .meta { font-size: 11.5px; color: var(--faint); }
+  .runrow .age { margin-left: auto; font-size: 11px; color: var(--faint); }
+  .runrow.dead { opacity: 0.55; }
+  .type { min-width: 44px; text-align: center; padding: 2px 0; border-radius: 5px; font-size: 10.5px; font-weight: 650; }
+  .type.svc { background: var(--green-bg); color: var(--green); }
+  .type.pre { background: var(--accent-soft); color: var(--accent); }
+  .type.term { background: #e8e8ee; color: #5c5e6b; }
+  .type.agent { background: var(--amber-bg); color: var(--amber); }
+  .grp-head { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; }
+  .grp-head .sb-avatar { width: 20px; height: 20px; font-size: 11px; border-radius: 6px; }
+  .grp-head h3 { margin: 0; font-size: 13px; }
+  .warn-card { border-left: 3px solid var(--amber); }
+  .warn-card p { margin: 6px 0 10px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+</style>
+</head>
+<body>
+<nav class="demo-nav">
+  <strong>运行现场 demo</strong>
+  <a href="a-project-home.html">A · 项目主页</a>
+  <a href="b-status-bar.html">B · 全局状态栏</a>
+  <a href="c-tree-entity.html">C · 树里的第二实体</a>
+  <a class="on" href="d-run-center.html">D · 跨项目运行中心</a>
+  <span class="demo-hint">「现在到底有什么在跑」的一张总图：常驻服务、预览、终端、agent 全在一页 —— 点类型 chip 过滤</span>
+</nav>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sb-section">全局</div>
+    <div class="row sel"><span style="width:8px;text-align:center">▶</span><span class="t"><b>运行中心</b></span><span class="sub" id="side-count"></span></div>
+    <div class="sb-section">项目</div>
+    <div class="row"><span class="sb-avatar" style="width:20px;height:20px;font-size:11px;border-radius:6px">A</span><span class="t">ash</span><span class="sub">5 项</span></div>
+    <div class="row"><span class="sb-avatar" style="width:20px;height:20px;font-size:11px;border-radius:6px;background:#0e9db8">W</span><span class="t">aweb</span><span class="sub">2 项</span></div>
+  </aside>
+
+  <main class="main">
+    <header class="appbar">
+      <span class="kind">全局</span><span class="title">运行中心</span>
+      <span class="spacer"></span>
+      <div class="filter" id="filter"></div>
+    </header>
+    <div class="columns">
+      <section class="primary">
+        <div class="stats" id="stats"></div>
+        <div id="groups"></div>
+
+        <div class="sect"><h2>ash 管辖之外</h2><span class="hint">只上报，不代杀 —— 杀不杀由用户自己按</span></div>
+        <div class="card warn-card">
+          <div class="runrow" style="padding:0">
+            <span class="dot amber"></span>
+            <span class="name">SkyComputerUseService</span>
+            <span class="meta">codex computer-use 的旁路会话 · 开机级全局单例，进程树三条线索都够不着</span>
+            <span class="age">疑似残留</span>
+          </div>
+          <p>杀它会外溢到 ChatGPT 里的其它会话。这里只如实报告，动手走显式按钮并明示副作用。</p>
+          <button class="btn sm danger">强制结束（明示副作用后二次确认）</button>
+          <button class="btn sm ghost">查看引导</button>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+const rows = [
+  { proj: "ash", type: "svc", name: "web dev", meta: ":5173 · npm -w web run dev", age: "2 小时", state: "on" },
+  { proj: "ash", type: "svc", name: "server watch", meta: ":4317 · npm -w server run dev", age: "2 小时", state: "on" },
+  { proj: "ash", type: "pre", name: "preview · vite", meta: "任务「端口漂移误报」 · 借出 :45831", age: "18 分钟", state: "on" },
+  { proj: "ash", type: "term", name: "zsh", meta: "~/code/harness", age: "40 分钟", state: "on" },
+  { proj: "ash", type: "agent", name: "claude · opus", meta: "任务「端口漂移误报」 · worktree pR2x", age: "12 分钟", state: "on" },
+  { proj: "ash", type: "agent", name: "codex · gpt-5.6-sol", meta: "任务「浏览器回归」 · 团队执行者", age: "3 分钟", state: "on" },
+  { proj: "aweb", type: "svc", name: "next dev", meta: ":3000 · npm run dev", age: "昨天", state: "on" },
+  { proj: "aweb", type: "term", name: "zsh", meta: "~/code/aweb", age: "闲置 25 分钟", state: "on" },
+];
+const TYPES = { all: "全部", svc: "常驻服务", pre: "预览", term: "终端", agent: "agent" };
+const AVATARS = { ash: ["A", "#5e6ad2"], aweb: ["W", "#0e9db8"] };
+let filter = "all";
+
+function render() {
+  document.getElementById("filter").innerHTML = Object.entries(TYPES).map(([k, label]) =>
+    `<button class="chip ${filter === k ? "on" : ""}" onclick="setFilter('${k}')">${label}</button>`).join("");
+
+  const live = rows.filter((r) => r.state === "on");
+  const count = (t) => live.filter((r) => r.type === t).length;
+  document.getElementById("stats").innerHTML = `
+    <span class="chip green">● 在跑 ${live.length}</span>
+    <span class="chip">常驻服务 ${count("svc")}</span>
+    <span class="chip">预览 ${count("pre")}</span>
+    <span class="chip">终端 ${count("term")}</span>
+    <span class="chip">agent ${count("agent")}</span>`;
+  document.getElementById("side-count").textContent = `${live.length} 在跑`;
+
+  const shown = rows.filter((r) => filter === "all" || r.type === filter);
+  const byProj = [...new Set(shown.map((r) => r.proj))];
+  document.getElementById("groups").innerHTML = byProj.map((proj) => {
+    const [ch, color] = AVATARS[proj];
+    return `
+    <div class="grp-head" style="margin-top:16px"><span class="sb-avatar" style="background:${color}">${ch}</span><h3>${proj}</h3></div>
+    <div class="card" style="padding:4px 10px">
+      ${shown.filter((r) => r.proj === proj).map((r, i) => `
+        <div class="runrow ${r.state === "off" ? "dead" : ""}">
+          <span class="type ${r.type}">${{ svc: "服务", pre: "预览", term: "终端", agent: "agent" }[r.type]}</span>
+          <span class="dot ${r.state === "on" ? (r.type === "agent" ? "amber" : "green") : "gray"}"></span>
+          <span class="name">${r.name}</span>
+          <span class="meta mono">${r.meta}</span>
+          <span class="age">${r.state === "on" ? r.age : "刚停"}</span>
+          ${r.type === "agent"
+            ? `<button class="btn sm ghost">打开任务</button>`
+            : r.state === "on"
+              ? `${r.type === "svc" ? `<button class="btn sm" onclick="restartRow(${rows.indexOf(r)})">重启</button>` : ""}
+                 <button class="btn sm danger" onclick="stopRow(${rows.indexOf(r)})">停止</button>`
+              : `<button class="btn sm primary" onclick="startRow(${rows.indexOf(r)})">再启动</button>`}
+        </div>`).join("")}
+    </div>`;
+  }).join("");
+}
+function setFilter(k) { filter = k; render(); }
+function stopRow(i) { rows[i].state = "off"; render(); }
+function startRow(i) { rows[i].state = "on"; render(); }
+function restartRow(i) {
+  const el = event.target; el.textContent = "重启中…"; el.disabled = true;
+  setTimeout(() => render(), 900);
+}
+render();
+</script>
+</body>
+</html>

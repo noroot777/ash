@@ -15,6 +15,7 @@
 @import "./workspace-enhancements.css";
 @import "./project-git.css";
 @import "./terminal.css";
+@import "./status-bar.css";
 @import "./sidebar-spread.css";
 @import "./task-detail.css";
 @import "./task-conversation.css";

@@ -263,13 +263,14 @@
 .task-handoff-clear:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .task-handoff-clear:disabled { cursor: not-allowed; opacity: 0.55; }
 
-/* 系统级入站申请占一行布局空间，出现时把工作区整体下推，不遮任何操作面。 */
+/* 系统级入站申请占一行布局空间，出现时把工作区整体下推，不遮任何操作面。
+   第三行是全局状态栏（status-bar.css）——工作区、设置页、Git 工作台三个视图都挂。 */
 .workspace-system-layout {
   display: grid;
   width: 100%;
   height: 100%;
   min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
 }
 .workspace-system-layout > .workspace-shell,

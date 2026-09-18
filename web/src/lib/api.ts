@@ -148,7 +148,7 @@ export const api = {
     request(`/projects/${id(projectId)}/preview/detect`),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "acceptCommit">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
@@ -204,6 +204,16 @@ export const api = {
     request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/resize`, json("POST", size)),
   closeTerminalSession: (projectId: string, sessionId: string): Promise<void> =>
     request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}`, { method: "DELETE" }),
+  listTerminalSessions: (projectId: string, signal?: AbortSignal): Promise<{ sessions: TerminalSessionInfo[] }> =>
+    request(`/projects/${id(projectId)}/terminal/sessions`, signal ? { signal } : undefined),
+  listCommandSessions: (): Promise<{ sessions: TerminalSessionInfo[] }> =>
+    request("/terminal-commands"),
+  startProjectCommand: (projectId: string, commandId: string): Promise<{ session: TerminalSessionInfo; alreadyRunning?: boolean }> =>
+    request(`/projects/${id(projectId)}/commands/${id(commandId)}/start`, json("POST", {})),
+  stopProjectCommand: (projectId: string, commandId: string): Promise<{ stopped: boolean }> =>
+    request(`/projects/${id(projectId)}/commands/${id(commandId)}/stop`, json("POST", {})),
+  restartProjectCommand: (projectId: string, commandId: string): Promise<{ session: TerminalSessionInfo }> =>
+    request(`/projects/${id(projectId)}/commands/${id(commandId)}/restart`, json("POST", {})),
   checkPath: (repoPath: string): Promise<ProjectHealth> =>
     request("/projects/check", json("POST", { repoPath })),
   discardTaskWorkspace: (
