@@ -54,6 +54,49 @@ const NO_NEWLINE_DIFF = [
   "",
 ].join("\n");
 
+// 两个 hunk 的 diff：第一个开在文件第一行（它不指示任何断开，不该摆分隔条），第二个在
+// 中间（摆一条分隔条，只写 git 给的上下文，不印 `@@ -20,4 +20,4 @@` 这串区间）。
+const TWO_HUNK_DIFF = [
+  "diff --git a/twohunks.ts b/twohunks.ts",
+  "index 5555555..6666666 100644",
+  "--- a/twohunks.ts",
+  "+++ b/twohunks.ts",
+  "@@ -1,3 +1,3 @@",
+  " const head = 0;",
+  "-const first = 1;",
+  "+const first = 2;",
+  "@@ -20,4 +20,4 @@ function tail() {",
+  "   const inner = 0;",
+  "-  return inner + 1;",
+  "+  return inner + 2;",
+  " }",
+  "",
+].join("\n");
+
+// 文件内容本身以 `-- ` / `++ ` 开头：删改它时 diff 行长得跟文件头一模一样，但它是**内容**，
+// 必须照常摆出来、照常计数（按文本前缀认文件头会把这两行连着计数一起吞掉）。
+const FLAG_DIFF = [
+  "diff --git a/flags.txt b/flags.txt",
+  "index 7777777..8888888 100644",
+  "--- a/flags.txt",
+  "+++ b/flags.txt",
+  "@@ -1,3 +1,3 @@",
+  " keep",
+  "--- old flag",
+  "+++ new flag",
+  " tail",
+  "",
+].join("\n");
+
+// 纯重命名：整段 diff 只有文件头，格式行摘掉之后一行内容都不剩——得摆一句话，不能留白。
+const RENAME_DIFF = [
+  "diff --git a/old-name.ts b/renamed.ts",
+  "similarity index 100%",
+  "rename from old-name.ts",
+  "rename to renamed.ts",
+  "",
+].join("\n");
+
 const entry = (path, options = {}) => ({
   name: path.split("/").at(-1),
   path,
@@ -68,12 +111,15 @@ const entry = (path, options = {}) => ({
 const listing = {
   root: { path: "/tmp/file-diff-view", branch: "feature/open-diff", gitRepo: true, source: "session" },
   path: "",
-  entries: [entry("changed.ts"), entry("nonl.ts"), entry("clean.ts")],
+  entries: [entry("changed.ts"), entry("nonl.ts"), entry("twohunks.ts"), entry("renamed.ts"), entry("flags.txt"), entry("clean.ts")],
   truncated: false,
   git: {
     changes: [
       { path: "changed.ts", origPath: null, kind: "modified", source: "unstaged" },
       { path: "nonl.ts", origPath: null, kind: "modified", source: "unstaged" },
+      { path: "twohunks.ts", origPath: null, kind: "modified", source: "unstaged" },
+      { path: "renamed.ts", origPath: "old-name.ts", kind: "renamed", source: "unstaged" },
+      { path: "flags.txt", origPath: null, kind: "modified", source: "unstaged" },
     ],
     truncated: false,
     error: null,
@@ -99,7 +145,13 @@ try {
         path: url.searchParams.get("path"),
         origPath: null,
         source: url.searchParams.get("source"),
-        diff: url.searchParams.get("path") === "nonl.ts" ? NO_NEWLINE_DIFF : DIFF_TEXT,
+        diff: url.searchParams.get("path") === "nonl.ts"
+          ? NO_NEWLINE_DIFF
+          : url.searchParams.get("path") === "twohunks.ts"
+            ? TWO_HUNK_DIFF
+            : url.searchParams.get("path") === "renamed.ts"
+              ? RENAME_DIFF
+              : url.searchParams.get("path") === "flags.txt" ? FLAG_DIFF : DIFF_TEXT,
         truncated: false,
         limitBytes: 256 * 1024,
         binary: false,
@@ -182,9 +234,26 @@ try {
   assert.equal(await sideLine(4, 1), "5");
   assert.equal(await pairs.nth(4).locator(".single-review-side").first().getAttribute("class").then((v) => v?.includes("is-empty")), false,
     "真实的空上下文行被当成了补出来的空位");
-  // 段头横跨两栏，不该被塞进某一侧。
-  assert.equal(await center.locator(".single-review-line.is-span.is-hunk code").innerText(), "@@ -1,5 +1,6 @@");
+  // diff 的**格式行**不摆出来：`diff --git` / `index` / `---` / `+++` 是传输格式而不是
+  // 文件内容（路径和增删数在标题栏上已经有了），开在第一行的那个段头也不指示任何断开。
+  assert.equal(await center.locator(".single-review-line.is-hunk").count(), 0,
+    "开在文件第一行的段头不该再摆一条分隔条");
+  const splitText = await code.innerText();
+  for (const noise of ["@@", "diff --git", "index 1111111", "--- a/", "+++ b/"]) {
+    assert(!splitText.includes(noise), `diff 的格式行还印在正文里：${noise}`);
+  }
   await page.screenshot({ path: "/tmp/ash-file-diff-view-split.png", fullPage: true });
+
+  // 中间的段头 → 一条分隔条：只写 git 给的上下文（所在函数），不印 `@@ -20,4 +20,4 @@`。
+  await row("twohunks.ts").click();
+  await center.getByText("const first = 2;", { exact: false }).waitFor();
+  const splitDividers = center.locator(".single-review-line.is-span.is-hunk");
+  assert.equal(await splitDividers.count(), 1, "两个 hunk 里只有中间那个该摆分隔条");
+  assert.equal(await splitDividers.locator("code").innerText(), "⋯ function tail() {");
+  assert(!(await code.innerText()).includes("@@"), "分隔条上还印着 `@@` 区间");
+  await page.screenshot({ path: "/tmp/ash-file-diff-view-hunk-split.png", fullPage: true });
+  await row("changed.ts").click();
+  await center.getByText("export const gone = 3;", { exact: false }).waitFor();
 
   // 无尾换行的文件：`\ No newline` 是上一行的属性，不能把同一处替换顶成上下两行。
   await row("nonl.ts").click();
@@ -209,6 +278,33 @@ try {
   // 单栏里 `\ No newline` 仍旧是独立的一行——并排只是把它换了个挂法，不是把它吞掉。
   await row("nonl.ts").click();
   await center.getByText("No newline at end of file", { exact: false }).first().waitFor();
+  await row("changed.ts").click();
+  await center.getByText("-export const gone = 3;", { exact: false }).waitFor();
+
+  // 单栏里的分隔条：行号栏摆一个「⋯」，正文位置只有上下文。
+  await row("twohunks.ts").click();
+  await center.getByText("-  return inner + 1;", { exact: false }).waitFor();
+  const unifiedDividers = center.locator(".single-review-line.is-hunk");
+  assert.equal(await unifiedDividers.count(), 1, "单栏里也只有中间那个段头该摆分隔条");
+  assert.equal((await unifiedDividers.locator("code").innerText()).trim(), "function tail() {");
+  assert.equal((await unifiedDividers.locator("span").first().innerText()).trim(), "⋯");
+  assert(!(await code.innerText()).includes("@@"), "单栏的分隔条上还印着 `@@` 区间");
+  await page.screenshot({ path: "/tmp/ash-file-diff-view-hunk-unified.png", fullPage: true });
+
+  // 只有文件头的 diff（纯重命名）：摘掉格式行就空了，得摆一句话而不是留白。
+  await row("renamed.ts").click();
+  await center.getByText("没有内容改动", { exact: false }).waitFor();
+  assert.equal(await center.locator(".single-review-line").count(), 0, "纯重命名不该摆出任何 diff 行");
+
+  // 以 `-- ` / `++ ` 开头的内容行长得像文件头，但它是内容：摆出来、计数照算。
+  await row("flags.txt").click();
+  await center.getByText("--- old flag", { exact: false }).waitFor();
+  assert.equal(await center.locator(".single-review-line.is-delete code").innerText(), "--- old flag");
+  assert.equal(await center.locator(".single-review-line.is-add code").innerText(), "+++ new flag");
+  assert.equal(await center.locator(".scm-diff__counts i").innerText(), "+1", "内容行没被算进新增数");
+  assert.equal(await center.locator(".scm-diff__counts em").innerText(), "−1", "内容行没被算进删除数");
+  assert(!(await code.innerText()).includes("a/flags.txt"), "真正的文件头反而漏出来了");
+  await page.screenshot({ path: "/tmp/ash-file-diff-view-flags.png", fullPage: true });
   await row("changed.ts").click();
   await center.getByText("-export const gone = 3;", { exact: false }).waitFor();
 

@@ -103,8 +103,11 @@
 .single-review-line.is-add > code { color:#17634f; }
 .single-review-line.is-delete { background:#fcecef; }
 .single-review-line.is-delete > code { color:#8f2733; }
-.single-review-line.is-hunk { background:#eef0fb; }
-.single-review-line.is-hunk > code { color:#4f58a8; }
+/* `@@` 段头 → 一条「这里跳过了一段没改的代码」的分隔条：淡底加上下两条细线，正文位置
+   只放 git 给的上下文（所在函数），区间数字不印（行号栏里已经有了）。 */
+.single-review-line.is-hunk { border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:#f7f7f9; }
+.single-review-line.is-hunk > span { background:#f0f0f3; color:#b4b4bd; }
+.single-review-line.is-hunk > code { color:#9a9aa5; font-size:9px; }
 .single-review-line.is-meta > code { color:#a1a1aa; }
 /* 并排（左右分栏）：每一行是「旧的一格 + 新的一格」，两格各自带行号；一侧没有对应行时
    那一格是 is-empty，用斜纹底表示「这里本来就没东西」，而不是留一块白让人以为是空行。
@@ -130,8 +133,8 @@
 .single-review-code.is-split .single-review-side.is-empty { background:repeating-linear-gradient(135deg,#fafafb,#fafafb 4px,#f2f2f4 4px,#f2f2f4 8px); }
 .single-review-code.is-split .single-review-line.is-span { grid-column:1/-1; grid-template-columns:1fr; min-width:0; }
 .single-review-code.is-split .single-review-line.is-span > code { overflow-wrap:anywhere; white-space:pre-wrap; }
-.single-review-code.is-split .single-review-line.is-span.is-hunk { background:#eef0fb; }
-.single-review-code.is-split .single-review-line.is-span.is-hunk > code { color:#4f58a8; }
+.single-review-code.is-split .single-review-line.is-span.is-hunk { border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:#f7f7f9; }
+.single-review-code.is-split .single-review-line.is-span.is-hunk > code { color:#9a9aa5; font-size:9px; }
 .single-review-code.is-split .single-review-line.is-span.is-meta > code { color:#a1a1aa; }
 /* 行号不跟着整块横向滚（并排根本不横向滚），也不能用单栏那种 sticky 到最左——那会让右栏
    的行号贴到左栏上去。底色继承所在格，一眼能看出这一行属于删还是增。 */
