@@ -1,5 +1,7 @@
 import { existsSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { basename } from "node:path";
+import { promisify } from "node:util";
 import { streamSSE } from "hono/streaming";
 import type { Hono } from "hono";
 import { eq } from "drizzle-orm";
@@ -76,6 +78,53 @@ function terminalSize(value: unknown, fallback: number, min: number, max: number
 function groupAlive(groupId: number): boolean {
   if (IS_WINDOWS) return false;
   try { process.kill(-groupId, 0); return true; } catch { return false; }
+}
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+const execFileAsync = promisify(execFile);
+
+type DescendantSnapshot = { pids: number[]; pgids: number[] };
+
+/**
+ * 组长进程的全部后代(pid)与它们**自己的进程组**(pgid)。交互 shell 开着 job control:
+ * 每个后台作业 setpgid 进独立进程组,`kill(-组长pgid)` 够不着它们 —— 忽略 HUP/TERM 的
+ * 后台作业会被 PID 1 收养继续跑(第 1 轮自由审查实锤)。必须在**发信号之前**快照:组长
+ * 一死后代就被收养,ppid 树的线索当场断掉。ps 不可用时退回空快照(= 只杀组长的组,
+ * 即原有行为)。pgid ≤ 1 一律不收:kill(-1) 是「向所有能杀的进程广播」,绝不能碰。
+ */
+async function snapshotDescendants(rootPid: number): Promise<DescendantSnapshot> {
+  if (IS_WINDOWS) return { pids: [], pgids: [] };
+  try {
+    const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid=,pgid="]);
+    const children = new Map<number, number[]>();
+    const pgidOf = new Map<number, number>();
+    for (const line of stdout.split("\n")) {
+      const [pid, ppid, pgid] = line.trim().split(/\s+/).map(Number);
+      if (!pid || Number.isNaN(ppid) || Number.isNaN(pgid)) continue;
+      pgidOf.set(pid, pgid);
+      const siblings = children.get(ppid) ?? [];
+      siblings.push(pid);
+      children.set(ppid, siblings);
+    }
+    const pids: number[] = [];
+    const pgids = new Set<number>();
+    const queue = [rootPid];
+    while (queue.length) {
+      for (const child of children.get(queue.shift()!) ?? []) {
+        if (child <= 1) continue;
+        pids.push(child);
+        const pgid = pgidOf.get(child);
+        if (pgid !== undefined && pgid > 1 && pgid !== rootPid) pgids.add(pgid);
+        queue.push(child);
+      }
+    }
+    return { pids, pgids: [...pgids] };
+  } catch {
+    return { pids: [], pgids: [] };
+  }
 }
 
 /**
@@ -234,12 +283,14 @@ export class TerminalSessionManager {
    * —— 停止是用户动作,刷新页面后要看得出「我停过」(根 AGENTS.md 的硬要求),所以它和
    * close(关掉 tab、连日志一起丢)是两个动词。
    *
-   * 杀的是**整个进程组**(pty 子进程 fork 后 setsid,组长就是它自己,dev server 派生的
-   * 子进程都在组里):SIGTERM 给进程收尾的机会,等不到**整组清空**再 SIGKILL 兜底;两轮
-   * 都压不住(基本只剩 D 状态)就如实返回失败,绝不把「没杀死」报成「已停」—— 会话还在,
-   * UI 可重试。判定必须是「组长退了 **且** 组里没人」:`cmd & wait` 这种形状下组长(shell)
-   * 收 TERM 先死,忽略信号的后台子进程还占着端口,只看组长就会漏杀(第 2 轮审查实锤)。
-   * 自己再 setsid 逃出进程组的守护进程超出本方法能力,属已知边界。
+   * 杀的是**整个进程组 + 发信号前快照到的全部后代**(pty 子进程 fork 后 setsid,组长就是
+   * 它自己,dev server 派生的子进程都在组里;交互 shell 的 job control 会把后台作业挪进
+   * 独立进程组,靠快照逐组覆盖):SIGTERM 给进程收尾的机会,等不到**整组+后代清空**再
+   * SIGKILL 兜底;两轮都压不住(基本只剩 D 状态)就如实返回失败,绝不把「没杀死」报成
+   * 「已停」—— 会话还在,UI 可重试。判定必须是「组长退了 **且** 组里没人 **且** 快照后代
+   * 全消失」:`cmd & wait` 这种形状下组长(shell)收 TERM 先死,忽略信号的后台子进程还
+   * 占着端口,只看组长就会漏杀(第 2 轮审查实锤)。双 fork 后立刻被 PID 1 收养的守护
+   * 进程在快照前就断了树的线索,超出本方法能力,属已知边界。
    */
   async terminate(
     sessionId: string,
@@ -251,10 +302,13 @@ export class TerminalSessionManager {
     const groupId = session.process.pid;
     if (session.exitCode !== null && !groupAlive(groupId)) return { ok: true };
     session.stoppedByUser = true;
-    this.signalTree(session, "SIGTERM");
-    if (await this.waitForGroupExit(session, timeouts?.termMs ?? 3000)) return { ok: true };
-    this.signalTree(session, "SIGKILL");
-    if (await this.waitForGroupExit(session, timeouts?.killMs ?? 2000)) return { ok: true };
+    // 后代快照必须在发信号之前拿(见 snapshotDescendants):交互 shell 里 job control
+    // 把每个后台作业挪进了独立进程组,只对组长的组发信号会漏杀。
+    const descendants = await snapshotDescendants(groupId);
+    this.signalTree(session, "SIGTERM", descendants);
+    if (await this.waitForGroupExit(session, timeouts?.termMs ?? 3000, descendants)) return { ok: true };
+    this.signalTree(session, "SIGKILL", descendants);
+    if (await this.waitForGroupExit(session, timeouts?.killMs ?? 2000, descendants)) return { ok: true };
     return {
       ok: false,
       reason: session.exitCode === null
@@ -263,7 +317,7 @@ export class TerminalSessionManager {
     };
   }
 
-  private signalTree(session: TerminalSession, signal: "SIGTERM" | "SIGKILL"): void {
+  private signalTree(session: TerminalSession, signal: "SIGTERM" | "SIGKILL", descendants?: DescendantSnapshot): void {
     try {
       // Windows 没有进程组信号这一说,交给 node-pty 收 ConPTY;命令会话在 create 时
       // 已拒绝 win32,这里只是让普通会话也调用得动。
@@ -273,23 +327,64 @@ export class TerminalSessionManager {
       // 整组已空(ESRCH):没人可杀,waitForGroupExit 会立刻确认。
       try { session.process.kill(signal); } catch { /* already gone */ }
     }
+    // job control 的后台作业在自己的组里,逐组、逐 pid 补刀(快照见 snapshotDescendants;
+    // 逐 pid 是兜底 —— 覆盖 setpgid 到快照外新组的边角)。
+    for (const pgid of descendants?.pgids ?? []) {
+      try { process.kill(-pgid, signal); } catch { /* already gone */ }
+    }
+    for (const pid of descendants?.pids ?? []) {
+      try { process.kill(pid, signal); } catch { /* already gone */ }
+    }
   }
 
   /**
-   * 等「组长的 exitCode 落了 **且** 进程组里没有任何存活成员」;超时返回 false,由调用方
-   * 决定升级还是报失败。组长先死不算完 —— 组号还被子进程占着(kill(-pgid, 0) 探测)。
+   * 等「组长的 exitCode 落了 **且** 进程组里没有任何存活成员 **且** 快照里的后代
+   * 进程/进程组全部消失」;超时返回 false,由调用方决定升级还是报失败。组长先死不算完
+   * —— 组号还被子进程占着(kill(-pgid, 0) 探测),job control 的后台作业还占着自己的组。
    */
-  private waitForGroupExit(session: TerminalSession, timeoutMs: number): Promise<boolean> {
+  private waitForGroupExit(session: TerminalSession, timeoutMs: number, descendants?: DescendantSnapshot): Promise<boolean> {
     const groupId = session.process.pid;
     return new Promise((resolve) => {
       const deadline = Date.now() + timeoutMs;
       const check = () => {
-        if (session.exitCode !== null && !groupAlive(groupId)) return resolve(true);
+        const cleared = session.exitCode !== null && !groupAlive(groupId)
+          && (descendants?.pgids ?? []).every((pgid) => !groupAlive(pgid))
+          && (descendants?.pids ?? []).every((pid) => !processAlive(pid));
+        if (cleared) return resolve(true);
         if (Date.now() >= deadline) return resolve(false);
         setTimeout(check, 50);
       };
       check();
     });
+  }
+
+  /**
+   * 结束并移除一个会话:先走 terminate 的进程组级确认(TERM→整组清空→KILL 兜底),
+   * 确认杀净才从 Map 删除。close() 只对组长单发一次信号,交互 shell 里忽略 HUP/TERM
+   * 的后台作业会被 PID 1 收养、而控制把手已被删掉(第 1 轮自由审查实锤)——所以
+   * 「关 tab = 结束会话」必须走这里;杀不净时会话保留在 Map 里,失败如实回给调用方。
+   */
+  async destroy(
+    sessionId: string,
+    projectId?: string,
+    timeouts?: { termMs?: number; killMs?: number },
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const result = await this.terminate(sessionId, projectId, timeouts);
+    if (result.ok) this.close(sessionId, projectId);
+    return result;
+  }
+
+  /**
+   * 删项目前的清场:该项目的全部会话(交互 shell + 常用命令)逐个 destroy。任何一个
+   * 杀不净都如实报失败,由调用方**拒绝删项目**——项目行一删,这些会话就再没有任何
+   * UI/API 把手,只能占着全局会话槽等 server 重启(第 1 轮自由审查实锤)。
+   */
+  async destroyProject(projectId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    for (const session of this.listForProject(projectId)) {
+      const result = await this.destroy(session.id, projectId);
+      if (!result.ok) return { ok: false, reason: `「${session.name}」${result.reason}` };
+    }
+    return { ok: true };
   }
 
   /**
@@ -445,9 +540,13 @@ export function mountTerminalRoutes(api: Hono): void {
   });
 
   // 终端抽屉打开时先问一遍「这个项目已经有哪些会话」：常用命令的常驻会话要 attach
-  // 而不是新建，普通 shell 则永远新建（它的生命周期跟着前端 tab 走）。
-  api.get("/projects/:projectId/terminal/sessions", (c) => {
-    return c.json({ sessions: terminalSessions.listForProject(c.req.param("projectId")) });
+  // 而不是新建，普通 shell 则永远新建（它的生命周期跟着前端 tab 走）。项目已删时
+  // 404 —— 项目删除会连带清场终端会话,这里再回数据就是在展示幽灵(第 1 轮自由审查)。
+  api.get("/projects/:projectId/terminal/sessions", async (c) => {
+    const projectId = c.req.param("projectId");
+    const row = (await db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId))).at(0);
+    if (!row) return c.json({ error: "project not found" }, 404);
+    return c.json({ sessions: terminalSessions.listForProject(projectId) });
   });
 
   api.get("/projects/:projectId/terminal/sessions/:sessionId/events", (c) => {
@@ -502,8 +601,11 @@ export function mountTerminalRoutes(api: Hono): void {
     return c.body(null, 204);
   });
 
-  api.delete("/projects/:projectId/terminal/sessions/:sessionId", (c) => {
-    terminalSessions.close(c.req.param("sessionId"), c.req.param("projectId"));
+  // 「结束会话」:进程组级终止,确认整组清空才移除会话。杀不净回 502 —— 前端必须
+  // 保留 tab 和把手,不能静默收掉(否则忽略 HUP/TERM 的后台作业成 PID 1 孤儿还没人管)。
+  api.delete("/projects/:projectId/terminal/sessions/:sessionId", async (c) => {
+    const result = await terminalSessions.destroy(c.req.param("sessionId"), c.req.param("projectId"));
+    if (!result.ok) return c.json({ error: `结束会话失败：${result.reason}` }, 502);
     return c.body(null, 204);
   });
 }

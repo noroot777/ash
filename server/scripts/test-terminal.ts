@@ -68,6 +68,56 @@ try {
   await exited;
   assert.equal(manager.sweepIdleSessions(Date.now() + 31 * 60 * 1000), 1);
   assert.equal(manager.get(session.id), null);
+
+  // destroy = tab ✕「结束会话」:进程组级确认杀净才移除。探针是 shell 里 fork 一个
+  // **忽略 TERM/HUP** 的后台作业 —— close() 只对组长单发一次信号,它会被 PID 1 收养
+  // 继续跑(第 1 轮自由审查实锤);destroy 必须整组清掉。Windows 没有进程组,只跑 POSIX。
+  if (!IS_WINDOWS) {
+    const victim = manager.create("project-destroy", cwd, { shell, shellArgs: [], cols: 80, rows: 20 });
+    let pidOutput = "";
+    const orphanPid = await new Promise<number>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`orphan pid output timed out: ${JSON.stringify(pidOutput)}`));
+      }, 5000);
+      const stop = manager.subscribe(victim.id, "project-destroy", (event) => {
+        if (event.type !== "data") return;
+        pidOutput += event.data;
+        const match = pidOutput.match(/__ASH_PID_(\d+)__/);
+        if (match) {
+          clearTimeout(timeout);
+          stop?.();
+          resolve(Number(match[1]));
+        }
+      });
+      // 先关掉 history expansion(交互态 bash 会把双引号里的 `$!__` 当历史引用炸掉;
+      // 必须单独一行 —— 展开发生在整行执行之前,同一行里 set +H 救不了自己)。
+      manager.write(victim.id, "project-destroy", "set +H 2>/dev/null\n");
+      manager.write(victim.id, "project-destroy", "trap '' TERM HUP; sleep 300 & echo \"__ASH_PID_$!__\"\n");
+    });
+    const destroyed = await manager.destroy(victim.id, "project-destroy", { termMs: 250, killMs: 2000 });
+    assert.equal(destroyed.ok, true, "destroy 应确认整组清空");
+    assert.equal(manager.get(victim.id), null, "destroy 成功后会话应被移除");
+    // 后台作业可能短暂停留在僵尸态等 PID 1 收尸,轮询到 ESRCH 为止。
+    const deadline = Date.now() + 3000;
+    for (;;) {
+      try { process.kill(orphanPid, 0); } catch { break; }
+      assert.ok(Date.now() < deadline, "忽略 TERM/HUP 的后台作业应随 destroy 一起被杀掉");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    // destroyProject = 删项目前的清场:该项目全部会话(交互 shell + 常用命令)一把清掉,
+    // 别的项目一个不动。
+    const keep = manager.create("project-keep", cwd, { shell, shellArgs: [], cols: 80, rows: 20 });
+    manager.create("project-doomed", cwd, { shell, shellArgs: [], cols: 80, rows: 20 });
+    manager.create("project-doomed", cwd, { shell, command: { id: "dev", name: "dev", script: "sleep 300" } });
+    assert.equal(manager.listForProject("project-doomed").length, 2);
+    const cleared = await manager.destroyProject("project-doomed");
+    assert.equal(cleared.ok, true, "destroyProject 应确认全部清空");
+    assert.equal(manager.listForProject("project-doomed").length, 0, "项目的会话应全部移除");
+    assert.ok(manager.get(keep.id, "project-keep"), "别的项目的会话不能被殃及");
+    const keptCleared = await manager.destroy(keep.id, "project-keep");
+    assert.equal(keptCleared.ok, true);
+  }
   console.log("terminal session test passed");
 } finally {
   manager.shutdown();

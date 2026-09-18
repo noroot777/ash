@@ -36,6 +36,8 @@ function Ash() {
       setScope((current) => current === "tasks" ? "project" : "tasks");
     },
     onOpenSettings: () => setLog((current) => [...current, "settings"]),
+    onToggleCommands: () => setLog((current) => [...current, "commands"]),
+    onToggleTerminal: () => setLog((current) => [...current, "terminal"]),
   });
 
   return (

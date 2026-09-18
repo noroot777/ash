@@ -384,10 +384,10 @@ export function ProjectTerminal({
   }, [project.id, project.name, project.repoPath]);
 
   // focusRequest 是**一次性命令**:同一个 seq 只消费一次(fetch 前就标记,任何 deps
-  // 变化引起的重跑都被开头拦住),且**无论成功、失败、还是消费中被卸载,结局都是回执
-  // 终结** —— 失败只吞不清会让旧请求潜伏在父层,靠卸载重置本地 ref 在下一次「打开
-  // 终端」时突然重放(第 5 轮审查实锤);失败提示只给仍有效的请求(第 6 轮:被新请求
-  // 顶掉的旧请求迟到失败,不该对着新请求的成功现场喊失败)。deps
+  // 变化引起的重跑都被开头拦住),且**结局必是回执终结** —— 失败只吞不清会让旧请求
+  // 潜伏在父层,靠卸载重置本地 ref 在下一次「打开终端」时突然重放(第 5 轮审查实锤);
+  // 失败提示只给仍有效的请求(第 6 轮:被新请求顶掉的旧请求迟到失败,不该对着新请求
+  // 的成功现场喊失败)。deps
   // 里绝不能有 activeId —— 依赖自己会修改的状态,用户切 tab/收起目标日志都会让
   // effect 重跑、把焦点抢回目标,抽屉从此被最后一次日志请求锁死(第 4 轮审查实锤)。
   useEffect(() => {
@@ -396,10 +396,19 @@ export function ProjectTerminal({
     const { sessionId, seq } = focusRequest;
     const tabId = `attach:${sessionId}`;
     let alive = true;
+    let settled = false;
+    // 作废轮(cleanup 已跑)的迟到响应:seq 已被重挂的下一轮接手(StrictMode 双跑,
+    // consumedFocusSeq 又等于本 seq)就什么都不做,回执归那一轮;真没人接手(抽屉
+    // 整个卸载了)才补回执终结请求,防潜伏重放(第 5 轮语义在双跑下的拆分)。
+    const settleOrphan = () => {
+      if (consumedFocusSeq.current !== seq) onFocusHandled?.(seq);
+    };
     // tab 可能还不存在(刚从状态栏启动的会话),先查一次列表补上再激活。
     api.listTerminalSessions(project.id).then(({ sessions }) => {
+      settled = true;
+      if (!alive) return settleOrphan();
       const session = sessions.find((item) => item.id === sessionId);
-      if (alive && session) {
+      if (session) {
         // 「日志」入口和「新建 CLI」对 MAX_TABS 必须一致(第 2 轮审查),且判断-顶替-激活
         // 全部在同一个 updater 里对同一份 tabs 完成(第 3 轮审查:快照分支 + 延后插入会
         // 在首挂并发时超限)。满员时顶掉一个可让位的:非激活的**命令日志** tab(收起无
@@ -436,12 +445,22 @@ export function ProjectTerminal({
       // 会话已经没了(状态栏的日志按钮只出现在会话还在时,竞态兜底)也算命令终结
       onFocusHandled?.(seq);
     }).catch(() => {
-      // 回执无条件(终结旧请求防重放),提示只给仍有效的请求 —— 已被新请求顶掉/已卸载的
-      // 旧请求迟到失败时,页面事实是新请求的结果,再弹「失败请重点」就与同屏成功矛盾。
-      if (alive) notify("打开命令日志失败，请再点一次");
+      settled = true;
+      if (!alive) return settleOrphan();
+      // 提示只给仍有效的请求 —— 已被顶掉/已卸载的旧请求迟到失败时,页面事实是新请求
+      // 的结果,再弹「失败请重点」就与同屏成功矛盾。
+      notify("打开命令日志失败，请再点一次");
       onFocusHandled?.(seq);
     });
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+      // StrictMode 开发态 effect→cleanup→effect 双跑:第一轮请求未归就被 cleanup,不归
+      // 还 seq 的话,重挂的第二轮会被开头「已消费」拦住直接退出,聚焦静默丢失(第 1 轮
+      // 自由审查实锤:预览态点启动后选中的是默认 shell 而不是服务日志)。只归还**未
+      // settle** 的轮次 —— 已回执的轮次再归还 seq,deps 抖动重跑时会重复消费、把焦点
+      // 从用户手里抢回来(第 4 轮语义)。
+      if (!settled && consumedFocusSeq.current === seq) consumedFocusSeq.current = null;
+    };
   }, [focusRequest, project.id, notify, onFocusHandled]);
 
   // 所有 attach tab 的状态点由这**一条**集中轮询驱动(会话事实:跑着/脚本退了服务在/
@@ -510,20 +529,33 @@ export function ProjectTerminal({
     setPane((prev) => prev.tabs.length >= MAX_TABS ? prev : { tabs: [...prev.tabs, tab], activeId: tab.id });
   };
 
-  const closeTab = (id: string) => {
-    const closing = tabs.find((tab) => tab.id === id);
-    // 交互 shell 的 ✕ = 结束会话(VSCode 的垃圾桶,持久终端只有这里会杀它);命令日志的
-    // ✕ = 收起,服务照跑(停止走状态栏)。
-    if (closing?.kind === "shell") {
-      const sessionId = closing.sessionId ?? closing.attachSessionId;
-      if (sessionId) void api.closeTerminalSession(project.id, sessionId).catch(() => undefined);
-    }
-    const next = withoutTerminalTab(tabs, activeId, id);
+  const removeTab = (id: string) => {
+    const snapshot = paneRef.current;
+    const next = withoutTerminalTab(snapshot.tabs, snapshot.activeId, id);
     if (!next.activeId) {
       onClose();
       return;
     }
     setPane({ tabs: next.tabs, activeId: next.activeId });
+  };
+
+  const closeTab = (id: string) => {
+    const closing = paneRef.current.tabs.find((tab) => tab.id === id);
+    // 交互 shell 的 ✕ = 结束会话(VSCode 的垃圾桶,持久终端只有这里会杀它);命令日志的
+    // ✕ = 收起,服务照跑(停止走状态栏)。
+    const sessionId = closing?.kind === "shell" ? closing.sessionId ?? closing.attachSessionId : undefined;
+    if (!sessionId) {
+      removeTab(id);
+      return;
+    }
+    // 「结束会话」要等 server 确认**整组进程**都清了才收 tab:单发一次信号就收,忽略
+    // HUP/TERM 的后台作业会成 PID 1 孤儿、把手还没了(第 1 轮自由审查实锤)。失败保留
+    // tab + 提示,用户可重试;removeTab 用 paneRef 取新鲜状态,等待期间切 tab 不受影响。
+    api.closeTerminalSession(project.id, sessionId)
+      .then(() => removeTab(id))
+      .catch((error) => {
+        notify(error instanceof Error ? error.message : "结束会话失败，请重试");
+      });
   };
 
   const beginResize = (event: React.PointerEvent<HTMLDivElement>) => {

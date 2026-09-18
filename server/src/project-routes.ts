@@ -20,6 +20,7 @@ import { branchDeletionRejection } from "./task-branch-plan.js";
 import { withRepoLock } from "./repo-lock.js";
 import { deleteTaskAssociations } from "./task-routes.js";
 import { isTaskBusy, taskBusyRejection } from "./task-busy.js";
+import { terminalSessions } from "./terminal.js";
 import { findWorkflow } from "./workflows.js";
 import { ensureProjectDir } from "./project-dir.js";
 import { deleteProjectGitCredential } from "./git-credentials.js";
@@ -310,6 +311,13 @@ export function mountProjectRoutes(api: Hono): void {
     // 完全绕过了任务级门禁）。判据与单任务入口共用 isTaskBusy（task-busy.ts）。
     const live = ptasks.find(isTaskBusy);
     if (live) return c.json({ error: "项目有正在运行/排队/验收中的任务，无法删除", taskId: live.id }, 409);
+    // 终端会话(内存态)先清场:项目行一删,该项目的 shell/服务就再没有 UI/API 把手,
+    // 只能占着全局会话槽继续跑到 server 重启(第 1 轮自由审查实锤)。进程组级终止、
+    // 逐个确认;杀不净就拒绝删项目 —— 宁可删除失败,不留无主进程。
+    const cleared = await terminalSessions.destroyProject(pid);
+    if (!cleared.ok) {
+      return c.json({ error: `项目的终端会话 ${cleared.reason}，请先处理再删除` }, 502);
+    }
     for (const t of ptasks) {
       // 与单任务 DELETE 同一份级联（审查链/预约/事件/消息/会话/计划/队列位），不留
       // reconcile 收不掉的孤儿（state/event/message/queue item 都没有自愈入口）。
