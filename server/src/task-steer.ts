@@ -29,7 +29,8 @@ import { setTaskStatus } from "./status.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
-import { id, now } from "./util.js";
+import { attachmentsPrompt, id, now } from "./util.js";
+import { bindUploadsToTask } from "./uploads.js";
 import { nativeCliCommand } from "./skills.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { DIRECTION_PROTOCOL } from "./run-prompts.js";
@@ -376,10 +377,24 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
 
 type NativeReservation = Extract<NativeSteerReservation, { kind: "native" }>;
 
+/**
+ * 附件在 ash 里就是一段文本：`attachmentsPrompt` 把绝对路径清单拼进 prompt，agent 自己
+ * 去 Read。原生引导送的也是同一条文本通道（claude 写一行 user 消息、codex 走 turn/steer），
+ * CLI 一侧看不出「这句话带没带附件」，所以带附件不构成降级成 kill + resume 的理由。
+ * 只有 attachments 列本身解析不出路径时才退回硬切 —— 那时原生送过去等于把附件丢了。
+ */
+function steerAttachments(message: MessageRow): string[] | null {
+  try {
+    const parsed: unknown = JSON.parse(message.attachments);
+    if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) return null;
+    return parsed as string[];
+  } catch { return null; }
+}
+
 function nativeMessageCanSteer(message: MessageRow, agentType: Parameters<typeof nativeCliCommand>[0]): boolean {
-  let attachments: unknown[] = [];
-  try { attachments = JSON.parse(message.attachments) as unknown[]; } catch { return false; }
-  return attachments.length === 0
+  // 余下几条是真的做不到，不是保守：换执行器/模型/思考强度都得换进程才生效；审查链的答复
+  // 不归这条会话；CLI 原生命令要由 CLI 在一个新回合里自己解析。
+  return steerAttachments(message) !== null
     && !message.agent
     && !message.executorId
     && !message.model
@@ -399,9 +414,16 @@ async function deliverNativeSteer(
       reservation.cancel();
       return { ok: false, status: 409, error: "消息正在投递或已被处理，请稍后查看" };
     }
+    const attachments = steerAttachments(message) ?? [];
+    // 普通投递的这一步在 continueTask 里（上传归属这条任务，多人模式下的可读范围也靠它）；
+    // 原生引导绕过了 continueTask，得自己补上，否则同一张图从托盘走和从输入框走归属不一样。
+    await bindUploadsToTask(attachments, message.taskId, message.ownerUserId ?? null);
+    // 落盘/展示的那一份和送进 CLI 的那一份必须是同一段文本（差别只有方向身份协议），
+    // 否则会话里看到的原话跟 agent 实际收到的对不上。
+    const turnText = message.text + attachmentsPrompt(attachments);
     previous = await clearPreviousDirectionState(message.taskId, false);
-    await reservation.deliver(message.text, now(), {
-      promptText: message.text + DIRECTION_PROTOCOL(previous.clearedDirectionToken),
+    await reservation.deliver(turnText, now(), {
+      promptText: turnText + DIRECTION_PROTOCOL(previous.clearedDirectionToken),
       beforeSend: reservation.agentType === "claude"
         ? () => discardLateDirectionState(
             message.taskId,

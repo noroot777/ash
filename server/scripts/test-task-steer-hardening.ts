@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -9,6 +9,12 @@ import { releaseTmpDb } from "./tmp-db.js";
 const root = mkdtempSync(join(tmpdir(), "ash-task-steer-hardening-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
+// 带附件的引导要走真实的归属回填：uploadNameOf 只认真的落在 uploads 目录直下的路径。
+process.env.ASH_UPLOADS_DIR = join(root, "uploads");
+const attachmentFile = "hardening-shot.png";
+const attachmentPath = join(root, "uploads", attachmentFile);
+mkdirSync(join(root, "uploads"), { recursive: true });
+writeFileSync(attachmentPath, "png");
 
 const [
   { db, ensureSchema },
@@ -31,7 +37,7 @@ const [
   import("../src/task-stage.js"),
   import("../src/status.js"),
 ]);
-const { projects, scheduledMessages, sessions, tasks } = schema;
+const { projects, scheduledMessages, sessions, tasks, uploads } = schema;
 await ensureSchema();
 
 const at = new Date().toISOString();
@@ -166,6 +172,7 @@ try {
     task("claude-native-state", { activeTurnToken: "claude-native-token", activeDirectionToken: "claude-old-direction" }),
     task("codex-native-state", { activeTurnToken: "codex-native-token", activeDirectionToken: "codex-old-direction" }),
     task("claude-native-fallback", { activeTurnToken: "fallback-token", activeDirectionToken: "fallback-old-direction" }),
+    task("native-attachment", { activeTurnToken: "attachment-token", activeDirectionToken: "attachment-old-direction" }),
     task("stopping", { activeTurnToken: "stopping-token" }),
     task("late-stop-db", {
       activeTurnToken: "late-stop-token",
@@ -199,6 +206,11 @@ try {
     message("m-claude-native-state", "claude-native-state"),
     message("m-codex-native-state", "codex-native-state"),
     message("m-claude-native-fallback", "claude-native-fallback"),
+    {
+      ...message("m-native-attachment", "native-attachment"),
+      attachments: JSON.stringify([attachmentPath]),
+      ownerUserId: "u-attachment-owner",
+    },
     message("m-stopping", "stopping"),
     message("m-late-stop-db", "late-stop-db"),
     message("m-lost-db", "lost-db"),
@@ -209,6 +221,9 @@ try {
     { id: "s-fallback", taskId: "claude-native-fallback", role: "single", agentType: "claude",
       executor: "claude", cwd: root, startedAt: at },
   ]);
+  await db.insert(uploads).values({
+    file: attachmentFile, ownerUserId: "u-attachment-owner", taskId: null, createdAt: at,
+  });
 
   for (const [messageId, pattern] of [
     ["m-verify", /验证/],
@@ -324,6 +339,34 @@ try {
   runs.untrackRun("claude-native-fallback", fallbackHandle);
   runs.releaseTurn("claude-native-fallback");
   console.log("✓ Claude ACK 失败明确降级重投，并留下持久时间线说明");
+
+  // 附件不是降级理由：它在 ash 里本来就是一段路径文本，steer 送的是同一条通道。
+  assert.equal(runs.claimTurn("native-attachment", "single"), true);
+  let attachmentKills = 0;
+  let steeredPrompt = "";
+  let recordedTurn = "";
+  const attachmentHandle = {
+    kill: () => { attachmentKills += 1; },
+    steer: async (text: string) => { steeredPrompt = text; },
+  };
+  runs.trackRun("native-attachment", attachmentHandle);
+  runs.bindNativeSteer("native-attachment", attachmentHandle, {
+    agentType: "claude",
+    record: (text: string) => { recordedTurn = text; },
+  });
+  const attachmentSteer = await steer.steerQueuedMessage("m-native-attachment");
+  assert.equal(attachmentSteer.ok, true, "带附件的队首消息必须能原生引导");
+  assert.equal(attachmentKills, 0, "带附件不得降级成杀掉当前回合再 resume");
+  assert.ok(steeredPrompt.includes(attachmentPath), "附件绝对路径必须原样进送给 CLI 的 prompt");
+  assert.match(steeredPrompt, /用户附带的文件/, "附件必须按 attachmentsPrompt 的格式交代给 agent");
+  assert.ok(recordedTurn.includes(attachmentPath),
+    "会话里落盘的用户边界必须与送进 CLI 的正文一致，否则界面上看不到这张图");
+  const boundUpload = (await db.select().from(uploads).where(eq(uploads.file, attachmentFile))).at(0)!;
+  assert.equal(boundUpload.taskId, "native-attachment",
+    "原生引导绕过 continueTask，附件归属得自己补，否则同一张图从托盘走和从输入框走可读范围不一样");
+  runs.untrackRun("native-attachment", attachmentHandle);
+  runs.releaseTurn("native-attachment");
+  console.log("✓ 带附件的消息照样走原生引导，路径进 prompt、归属回填到任务");
 
   assert.equal(runs.claimTurn("stopping", "single"), true);
   const stoppingHandle = { kill: () => { kills++; } };
