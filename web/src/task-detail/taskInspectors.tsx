@@ -1,5 +1,6 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
-import { Browser, FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass, Robot, Chats } from "@phosphor-icons/react";
+import { Browser, FolderOpen, GitPullRequest, Info, MagnifyingGlass, Robot, Chats } from "@phosphor-icons/react";
+import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import { PreviewWorkspaceEntry } from "../preview-workspace/PreviewWorkspace.tsx";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
@@ -100,7 +101,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
   {
     id: "workflow",
     title: "工作流",
-    icon: <GitBranch size={14} />,
+    icon: <WorkflowIcon size={14} />,
     defaultOpen: true,
     shortcut: "w",
     render: (context) => context.task.workflowMode === "free"

@@ -1,14 +1,13 @@
 import type { Group, ProjectView, Task, TaskListItem } from "@ash/shared";
 import { useEffect } from "react";
+import type { ComponentType } from "react";
 import {
   Archive,
   ArrowLeft,
   ArrowsLeftRight,
   CirclesThreePlus,
   FolderSimple,
-  GearSix,
   PlugsConnected,
-  FlowArrow,
   Robot,
   MagnifyingGlass,
   SlidersHorizontal,
@@ -17,6 +16,7 @@ import {
   UserCircle,
   UsersThree,
 } from "@phosphor-icons/react";
+import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import { AccountSettings } from "./AccountSettings.tsx";
 import { ArchiveSettings } from "./ArchiveSettings.tsx";
 import { ConfigTransferSettings } from "./ConfigTransferSettings.tsx";
@@ -51,7 +51,9 @@ import "./reviewer-settings.css";
 export type { SettingsSection } from "./sections.ts";
 export { parseSettingsSection, projectSectionLabel } from "./sections.ts";
 
-const NAV_ICONS: Record<SettingsSection, typeof GearSix> = {
+// 图标只按下面这两个 prop 渲染，所以类型也只要这两个 —— phosphor 的图标和自绘的
+// WorkflowIcon 都满足，混着放不用各自开一档。
+const NAV_ICONS: Record<SettingsSection, ComponentType<{ size?: number; "aria-hidden"?: boolean | "true" | "false" }>> = {
   project: FolderSimple,
   members: UsersThree,
   groups: Stack,
@@ -59,7 +61,7 @@ const NAV_ICONS: Record<SettingsSection, typeof GearSix> = {
   providers: PlugsConnected,
   executors: Robot,
   modes: CirclesThreePlus,
-  workflows: FlowArrow,
+  workflows: WorkflowIcon,
   reviewers: MagnifyingGlass,
   "cli-env": Terminal,
   config: ArrowsLeftRight,

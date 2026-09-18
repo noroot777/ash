@@ -7,7 +7,8 @@ import type {
   TaskWorkflowMode,
   TeamPresetConfig,
 } from "@ash/shared";
-import { ChatsCircle, Check, FlowArrow, FolderSimple, GitBranch, NotePencil, Tag, UsersThree } from "@phosphor-icons/react";
+import { ChatsCircle, Check, FolderSimple, GitBranch, NotePencil, Tag, UsersThree } from "@phosphor-icons/react";
+import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import { ComposerStarters } from "./ComposerStudio.tsx";
 import { ComposerPopover } from "./ComposerPopover.tsx";
 import { MODES } from "./composerParts.tsx";
@@ -170,7 +171,7 @@ export function ComposerFields({
   const executorTools = single
     ? preset
       ? <span className="studio-preset-run" aria-label={`起手式执行器：${singleRunSummary.provider} · ${singleRunSummary.model} · ${singleRunSummary.effort}`}>
-        <FlowArrow size={14} /><span>{singleRunSummary.model} · {singleRunSummary.effort}</span>
+        <WorkflowIcon size={14} /><span>{singleRunSummary.model} · {singleRunSummary.effort}</span>
       </span>
       : <div className="studio-inline-executor">{picker("single", "任务执行器")}</div>
     : <ComposerPopover key={mode} label="谁来做" value={duet ? `${nameFor("voiceA")} × ${nameFor("voiceB")}` : `${nameFor("lead")} 调度`}
@@ -200,7 +201,7 @@ export function ComposerFields({
         </div>
         <span className="studio-tool-divider" aria-hidden="true" />
         {single ? <ComposerPopover label="工作方式" value={preset ? "起手式" : "自由工作流"} wide={preset}
-          trigger={<><FlowArrow size={14} /><span>{preset ? "起手式" : "自由工作流"}</span></>}>
+          trigger={<><WorkflowIcon size={14} /><span>{preset ? "起手式" : "自由工作流"}</span></>}>
           <section className="studio-workflow">
             <PillTabs label="工作方式" value={workflowMode}
               items={[{ value: "free", label: "自由工作流" }, { value: "preset", label: "起手式" }]} onChange={onWorkflowModeChange} />

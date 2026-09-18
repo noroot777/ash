@@ -11,7 +11,8 @@ import type { ProjectView } from "@ash/shared";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import { checkWorkflow, resolveWorkflowFromList, workflowDenied } from "@ash/shared/workflow";
 import { DEFAULT_WORKFLOW_KEY } from "@ash/shared/workflow-presets";
-import { CaretDown, FlowArrow } from "@phosphor-icons/react";
+import { CaretDown } from "@phosphor-icons/react";
+import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import { api } from "../lib/api.ts";
 import { useAuth } from "../auth/authContext.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
@@ -174,7 +175,7 @@ export function ComposerWorkflow({
   return (
     <section className="composer-config-section is-workflow">
       <header className="composer-section-heading">
-        <span><FlowArrow size={14} /></span>
+        <span><WorkflowIcon size={14} /></span>
         <div><h2>干完之后</h2><p>谁来验、什么时候停下等你、过了要不要合并。</p></div>
         <button type="button" className="composer-wf-grow" onClick={() => setOpen((value) => !value)}>
           {open ? "收起" : "展开编排"}

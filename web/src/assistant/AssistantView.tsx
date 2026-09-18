@@ -5,7 +5,8 @@ import type { ProjectView, TaskListItem, TaskMode } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import type { ChatMessage, ChatSnapshot } from "@ash/shared/chat";
 import { STEP_LABELS, WORKSPACE_LABELS } from "@ash/shared/workflow";
-import { ArrowUp, ArrowUpRight, FlowArrow, MagnifyingGlass, Robot, Stop, Trash } from "@phosphor-icons/react";
+import { ArrowUp, ArrowUpRight, MagnifyingGlass, Robot, Stop, Trash } from "@phosphor-icons/react";
+import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import { AssistantConnection } from "./AssistantConnection.tsx";
 import { AssistantArchive } from "./AssistantArchive.tsx";
 import { AssistantSidebar } from "./AssistantSidebar.tsx";
@@ -51,7 +52,7 @@ function AssistantMessage({ message, snapshot, projects, onTask, onSave, saving,
       </button>;
     })}</div>}
     {result?.workflow && <section className="assistant-workflow" aria-label="起手式草案">
-      <header><FlowArrow size={20} /><span><small>{saved ? "已保存到起手式库" : result.workflowId ? "起手式已删除，可重新保存" : "起手式草案"}</small><h3>{result.workflow.name}</h3></span></header>
+      <header><WorkflowIcon size={20} /><span><small>{saved ? "已保存到起手式库" : result.workflowId ? "起手式已删除，可重新保存" : "起手式草案"}</small><h3>{result.workflow.name}</h3></span></header>
       <p>{result.workflow.description}</p><small>{WORKSPACE_LABELS[result.workflow.def.workspace]}</small>
       <ol>{result.workflow.def.steps.map((step) => <li key={step.id}>{STEP_LABELS[step.kind]}</li>)}</ol>
       <details><summary>查看每站配置</summary><div className="assistant-workflow-rail"><WorkflowRail def={result.workflow.def} /></div></details>
