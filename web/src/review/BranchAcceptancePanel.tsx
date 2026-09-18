@@ -87,8 +87,11 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         <h3><GitPullRequest size={14} aria-hidden="true" />派生与验收</h3>
         {/* 刷新态只画在这颗按钮上（图标转、aria-busy），不另起一行「正在更新…」：那一行
             会把下面的快照卡和整块 diff 顶下去、回来再弹上来，而刷新一秒就完，用户看到的
-            就是页面每隔一会儿自己蹦一下。 */}
-        <button className="branch-acceptance-refresh" type="button" disabled={busy || refreshing} aria-busy={refreshing}
+            就是页面每隔一会儿自己蹦一下。
+            **忙态不禁用这颗按钮**：显式刷新是可重入的（load 会递增 sequence，让挂起的
+            旧响应释放后不再覆盖新结果）。禁掉就等于把那条竞态保护从 UI 层堵死——请求慢、
+            挂起或将返回过期数据时，用户反而点不动这颗唯一的重试入口。 */}
+        <button className="branch-acceptance-refresh" type="button" disabled={busy} aria-busy={refreshing}
           onClick={() => void refresh()}>
           <ArrowClockwise size={12} className={refreshing ? "is-spinning" : ""} aria-hidden="true" />刷新依赖
         </button>
