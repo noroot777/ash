@@ -6,11 +6,45 @@ import type { TaskDiffResult } from "../lib/api.ts";
 
 export type DiffLineKind = "add" | "delete" | "context" | "hunk" | "meta";
 
+/** 拆开的 `@@ -a,b +c,d @@ 上下文` ——界面摆一条分隔条，不印 `@@` 原文。 */
+export interface DiffHunkHead {
+  oldStart: number;
+  newStart: number;
+  /** `@@ … @@` 后面 git 附的那段所在函数（`diff.context`），没有就是空串。 */
+  context: string;
+}
+
 export interface DiffLine {
   kind: DiffLineKind;
   oldLine: number | null;
   newLine: number | null;
   text: string;
+  /** 只有 `kind === "hunk"` 有。 */
+  head?: DiffHunkHead;
+}
+
+const HUNK_RE = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/;
+
+/**
+ * 文件头那几行（`diff --git` / `index` / `---` / `+++` / mode / rename）是 diff 的
+ * **传输格式**，不是文件内容：路径、重命名、增删数在界面上都另有出处（标题栏、文件树、
+ * 计数胶囊），原样印出来只是噪声——而且是最显眼的那几行，正好压在第一屏。
+ *
+ * 判定放在解析层但过滤发生在渲染层：解析出的行序列还要拿去数增删、推行号，丢信息不如
+ * 标出来由各视图自己决定摆不摆。
+ */
+const FILE_HEADER_RE =
+  /^(diff --git |index |--- |\+\+\+ |old mode |new mode |new file mode |deleted file mode |similarity index |dissimilarity index |rename (from|to) |copy (from|to) )/;
+
+export function isDiffFileHeader(line: DiffLine): boolean {
+  return line.kind === "meta" && FILE_HEADER_RE.test(line.text);
+}
+
+/** `@@ -28,10 +28,12 @@ const sumOf = …` → 区间 + 上下文。不是 hunk 头就给 null。 */
+export function parseHunkHead(text: string): DiffHunkHead | null {
+  const match = HUNK_RE.exec(text);
+  if (!match) return null;
+  return { oldStart: Number(match[1]), newStart: Number(match[2]), context: match[3].trim() };
 }
 
 export interface DiffSection {
@@ -51,12 +85,12 @@ export function parseDiffLines(text: string): DiffLine[] {
   const rows = text.split("\n");
   if (rows.at(-1) === "") rows.pop();
   return rows.map((line): DiffLine => {
-    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
-    if (hunk) {
-      oldLine = Number(hunk[1]);
-      newLine = Number(hunk[2]);
+    const head = parseHunkHead(line);
+    if (head) {
+      oldLine = head.oldStart;
+      newLine = head.newStart;
       inHunk = true;
-      return { kind: "hunk", oldLine: null, newLine: null, text: line };
+      return { kind: "hunk", oldLine: null, newLine: null, text: line, head };
     }
     if (!inHunk || line.startsWith("diff --git") || line.startsWith("index ")
       || line.startsWith("---") || line.startsWith("+++")) {
@@ -104,7 +138,7 @@ export interface DiffCell {
 
 export type DiffRow =
   /** 文件头和 `@@` 段头在并排视图里横跨两栏——它们不属于任何一侧。 */
-  | { kind: "hunk" | "meta"; text: string }
+  | { kind: "hunk" | "meta"; text: string; head?: DiffHunkHead }
   | { kind: "pair"; left: DiffCell; right: DiffCell };
 
 const EMPTY_CELL: DiffCell = { kind: "empty", line: null, text: "", noNewline: false };
@@ -185,7 +219,7 @@ export function toSideBySideRows(lines: readonly DiffLine[]): DiffRow[] {
         right: { kind: "context", line: line.newLine, text, noNewline: false },
       });
     } else {
-      rows.push({ kind: line.kind, text: line.text });
+      rows.push({ kind: line.kind, text: line.text, head: line.head });
     }
   }
   flush();

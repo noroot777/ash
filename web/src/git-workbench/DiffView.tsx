@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { Plus, Sparkle, Trash } from "@phosphor-icons/react";
 import type { GitDiff } from "@ash/shared/git-workbench";
+import { parseHunkHead } from "../review/diffModel.ts";
+
+/** 段头摆成「⋯ 所在函数」，不印 `@@ -a,b +c,d @@`——区间是 patch 工具用的，行号栏里已有。 */
+function hunkHeading(header: string): string {
+  const context = parseHunkHead(header)?.context;
+  return context ? `⋯ ${context}` : "⋯";
+}
 
 export const discardLineGuidance =
   "丢弃时，所选＋行会从文件中删除，所选−行会恢复。修改只选＋行时，被替换的原始行不会恢复；只选−行时，新增内容会保留。完整还原修改需同时勾选对应的 − / + 行。";
@@ -157,6 +164,7 @@ export function DiffView({
             const indices = part.rows
               .filter((row) => eligible(row.text))
               .map((row) => row.index);
+            const context = parseHunkHead(part.header)?.context;
             return (
               <div key={part.index}>
                 {part.path &&
@@ -172,17 +180,17 @@ export function DiffView({
                       <button
                         className="gwb-diff-line is-hunk diff-hunk-header"
                         disabled={selectionDisabled}
-                        aria-label={`选择改动块 ${part.header}`}
+                        aria-label={`选择改动块 ${index + 1}${context ? `：${context}` : ""}`}
                         aria-pressed={
                           indices.length > 0 &&
                           indices.every((i) => selected.has(i))
                         }
                         onClick={() => toggle(indices)}
                       >
-                        {part.header}
+                        {hunkHeading(part.header)}
                       </button>
                     ) : (
-                      <code className="diff-hunk-header">{part.header}</code>
+                      <code className="diff-hunk-header">{hunkHeading(part.header)}</code>
                     )}
                     {canSelect && (
                       <div className="diff-hunk-actions">
