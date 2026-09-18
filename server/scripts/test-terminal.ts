@@ -121,10 +121,10 @@ try {
 
     // ── 第 2/3 轮:job-control 后台作业(独立进程组)的清场路径 ──────────────────────
     // `set -m` 让每个 `&` 后台作业进**自己的**进程组(pgid == 作业 pid),忽略 TERM/HUP。
-    // shell 先退出后原组已空,只看组长会把仍活的作业谎报成「已清空」—— 靠会话存续期累积
-    // 的 descendantPgids 兜住。第 3 轮审查要求:测试**不得**手动调扫描(它已改私有),必须
-    // 让**真实定时器**在 shell 还活着时跑完一轮累积,再按**真实退出时序**关 shell、清场。
-    // 因此用小间隔 manager + 真实 sleep(> 间隔)等真定时器落一轮。
+    // shell 先退出后原组已空,只看组长会把仍活的作业谎报成「已清空」。测试**不手动调**
+    // 扫描(第 3 轮审查:必须按真实定时器/真实退出时序验证),用小间隔 manager + 真实
+    // sleep 让周期扫描自然落一轮 —— 验证的是采样累积这层降级兜底仍然工作;第 4 轮起
+    // wrapper 会在 shell 退出时先行清杀,毫秒级退出的场景见下面的 immediate 用例。
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const SCAN_MS = 120;
     const spawnJobControlOrphan = async (mgr: TerminalSessionManager, projectId: string) => {
@@ -189,6 +189,45 @@ try {
       const { pid } = await spawnJobControlOrphan(doomed, "project-shutdown");
       doomed.shutdown();
       await waitDead(pid, "shutdown 应用累积/实时的独立组 pgid 杀掉 job-control 后台作业");
+    }
+
+    // [P1·第 4 轮] 「起作业 + disown + exit 同一行」:shell 在毫秒级退出,任何采样(周期
+    // /onData)都来不及命中,累积清单为空、ppid 树已断 —— 只有 TTY_REAPER_WRAPPER(session
+    // leader 常驻,shell 退出时按 lsof 清单确定性清杀)和 manager 的 tty 持有者快照能兜住。
+    // 生产默认扫描间隔、全程不等待任何扫描,精确复刻第 4 轮审查探针的时序。
+    const spawnImmediateOrphan = async (mgr: TerminalSessionManager, projectId: string, marker: string) => {
+      const s = mgr.create(projectId, cwd, { shell, shellArgs: [], cols: 80, rows: 20 });
+      let buf = "";
+      const pid = await new Promise<number>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(`${marker} pid timed out: ${JSON.stringify(buf)}`)), 6000);
+        const pattern = new RegExp(`__${marker}_(\\d+)__`);
+        const stop = mgr.subscribe(s.id, projectId, (event) => {
+          if (event.type !== "data") return;
+          buf += event.data;
+          const match = buf.match(pattern);
+          if (match) { clearTimeout(timeout); stop?.(); resolve(Number(match[1])); }
+        });
+        mgr.write(s.id, projectId, "set +H 2>/dev/null\n");
+        mgr.write(s.id, projectId, "set -m\n");
+        mgr.write(s.id, projectId, `trap '' TERM HUP; sleep 300 & echo __${marker}_$!__; disown; exit\n`);
+      });
+      return { session: s, pid };
+    };
+
+    // destroy 路径:看到 pid 立即 destroy(不等 exit 事件、不等扫描)。
+    {
+      const { session: s, pid } = await spawnImmediateOrphan(manager, "project-imm-destroy", "IMM1");
+      const res = await manager.destroy(s.id, "project-imm-destroy", { termMs: 500, killMs: 2000 });
+      assert.equal(res.ok, true, "immediate disown;exit 后 destroy 仍应确认清场");
+      await waitDead(pid, "immediate disown;exit 的独立组孤儿应被确定性清杀(wrapper/tty 持有者)");
+    }
+
+    // shutdown 路径:看到 pid 立即 shutdown(可能正打断 wrapper 清杀,靠 tty 持有者快照兜)。
+    {
+      const doomed = new TerminalSessionManager();
+      const { pid } = await spawnImmediateOrphan(doomed, "project-imm-shutdown", "IMM2");
+      doomed.shutdown();
+      await waitDead(pid, "immediate disown;exit 后 shutdown 应无残留");
     }
 
     // [P2] 删除态互斥:进入 shutdown 态后拒绝新建该项目会话,删失败(deleted=false)退出后恢复。

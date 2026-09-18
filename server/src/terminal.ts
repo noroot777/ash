@@ -11,21 +11,21 @@ import {
   processAlive,
   readProcessTable,
   readProcessTableSync,
-  snapshotDescendants,
-  snapshotDescendantsSync,
+  TTY_REAPER_WRAPPER,
+  ttyHolderPids,
+  ttyHolderPidsSync,
   type DescendantSnapshot,
 } from "./terminal-process-tree.js";
 
 const MAX_BUFFER_BYTES = 512 * 1024;
 const MAX_SESSIONS = 16;
 const IDLE_TTL_MS = 30 * 60 * 1000;
-// 后代累积扫描的默认间隔。它**不是正确性的唯一来源**:结束/退出会话时会先抓一次**实时**
-// 后代快照(shell 还活着就能抓全,这是点 ✕ 关活 shell 的常见路径);累积只兜底「shell 已经
-// 自己退出、树断了」的场景。除周期扫外,shell 每次产出输出(onData)也会触发一次限流扫描,
-// 让刚起的后台作业在毫秒级被记下,而不必等满一个周期。构造可注入间隔,回归用小间隔 + 真实
-// sleep 按真实定时器验证(第 3 轮审查:测试不得手动调 trackDescendants)。
+// 后代累积扫描的间隔。采样是**第三道防线**,不承担正确性(第 4 轮审查实锤:毫秒级的
+// `disown; exit` 任何采样都赢不了):交互会话的独立组孤儿由 TTY_REAPER_WRAPPER 在 shell
+// 退出时确定性清杀,manager 结束/关服路径再用 lsof + ppid 快照确定性补抓;累积只兜
+// 「lsof 缺失的降级环境」。构造可注入间隔,回归用小间隔 + 真实 sleep 按真实定时器验证。
 const DESCENDANT_SCAN_MS = 1_500;
-// onData 触发扫描的限流:shell 输出很密,别每帧都 ps。
+// onData 触发扫描的限流窗口:shell 输出很密,别每帧都 ps。trailing edge,不丢触发。
 const DESCENDANT_DATA_THROTTLE_MS = 250;
 
 export type TerminalEvent =
@@ -70,6 +70,12 @@ type TerminalSession = TerminalSessionInfo & {
    * (第 2 轮自由审查实锤)。见 terminal-process-tree.ts 顶部与 trackDescendants。
    */
   descendantPgids: Set<number>;
+  /**
+   * pty slave 路径(/dev/ttysN)。session leader 活着时 `lsof -t` 它就是**确定性**的
+   * 会话成员清单(不依赖 ppid 树与采样,disown 后照样在列),terminate/close/shutdown
+   * 都用它补抓。node-pty 未暴露进公开类型,拿不到(理论上不会)就退回快照 + 累积。
+   */
+  ttyPath: string | null;
 };
 
 type CreateOptions = {
@@ -120,7 +126,15 @@ function ptyEnvironment(): Record<string, string> {
   const env = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
-  return { ...env, TERM: "xterm-256color", COLORTERM: "truecolor", ASH_TERMINAL: "1" };
+  return {
+    ...env,
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+    ASH_TERMINAL: "1",
+    // TTY_REAPER_WRAPPER 清杀时排除 server 自己(它持有全部 pty master,macOS 的 lsof
+    // 会把 master 端也列进 /dev/ttysN 的持有者 —— 不排除等于让 wrapper 杀掉 ash)。
+    ASH_PTY_PARENT: String(process.pid),
+  };
 }
 
 export class TerminalSessionManager {
@@ -128,6 +142,8 @@ export class TerminalSessionManager {
   private readonly sweeper: ReturnType<typeof setInterval>;
   private readonly descendantScanner: ReturnType<typeof setInterval>;
   private scanningDescendants = false;
+  private rescanQueued = false;
+  private scanTimer: ReturnType<typeof setTimeout> | null = null;
   private lastDescendantScanAt = 0;
   /**
    * 正在删除的项目:进入删除态后拒绝新建该项目的会话,直到删库完成。删成功后 projectId
@@ -181,13 +197,30 @@ export class TerminalSessionManager {
     // 一段没跑过的 cmd/pwsh 参数拼接，不如明确拒绝（AGENTS.md「Windows 真机」一节）。
     if (options.command && IS_WINDOWS) throw new Error("常用命令暂不支持 Windows 上的 ash 实例");
     const args = options.command ? ["-lc", options.command.script] : options.shellArgs ?? fallback.args;
-    const processHandle = pty.spawn(shell, args, {
-      name: "xterm-256color",
-      cols: terminalSize(options.cols, 100, 20, 400),
-      rows: terminalSize(options.rows, 24, 5, 200),
-      cwd,
-      env: ptyEnvironment(),
-    });
+    // 交互 shell 包进 TTY_REAPER_WRAPPER(POSIX):session leader 是常驻 wrapper,用户
+    // shell 是它的孩子 —— 用户 shell 无论怎么退(exit / kill -9),leader 未死、tty fd 未
+    // 被 revoke,wrapper 在退出前按 `lsof -t $(tty)` 确定性清杀余党(细节与两条硬性排除
+    // 见 terminal-process-tree.ts)。这是对「起后台作业后立即 disown; exit」盲窗的根治:
+    // 不依赖任何采样命中(第 3、4 轮自由审查实锤:异步 ps 采样永远赢不了毫秒级退出)。
+    // 命令会话(-lc)**不包**:非交互 shell 不开 job control、不产生独立进程组;组长退了
+    // 后台还活着的 daemonize 形状是**合法保活特性**(groupAlive 字段,第 4 轮终端审查),
+    // wrapper 会把它误杀。exitCode 由 wrapper 透传(信号死的内层 shell 折算成 128+n)。
+    const wrapped = !options.command && !IS_WINDOWS;
+    const processHandle = wrapped
+      ? pty.spawn("/bin/sh", ["-c", TTY_REAPER_WRAPPER, "ash-terminal", shell, ...args], {
+        name: "xterm-256color",
+        cols: terminalSize(options.cols, 100, 20, 400),
+        rows: terminalSize(options.rows, 24, 5, 200),
+        cwd,
+        env: ptyEnvironment(),
+      })
+      : pty.spawn(shell, args, {
+        name: "xterm-256color",
+        cols: terminalSize(options.cols, 100, 20, 400),
+        rows: terminalSize(options.rows, 24, 5, 200),
+        cwd,
+        env: ptyEnvironment(),
+      });
     const info: TerminalSessionInfo = {
       id: id(),
       projectId,
@@ -209,6 +242,7 @@ export class TerminalSessionManager {
       lastAccessedAt: Date.now(),
       listeners: new Set(),
       descendantPgids: new Set(),
+      ttyPath: (processHandle as unknown as { ptsName?: string }).ptsName ?? null,
     };
     this.sessions.set(info.id, session);
     processHandle.onData((data) => {
@@ -267,22 +301,28 @@ export class TerminalSessionManager {
   }
 
   /**
-   * 删会话 + 兜底清场。**同步**路径(sweeper 回收、destroy 收尾都走它),所以用同步 ps:
-   * 实时抓一次后代(shell 若还活着能抓全)并入累积的 pgid,一起 SIGKILL。destroy 里 terminate
-   * 已确认杀净、这里基本是空跑;但 sweeper 直接 close 一个「shell 退了、独立组作业还赖着」
-   * 的会话时,这次同步清场就是最后的兜底 —— 否则回收会话会连把手一起丢(第 3 轮审查)。
+   * 删会话 + 兜底清场。**同步**路径(sweeper 回收、destroy 收尾都走它),所以用同步 ps/lsof:
+   * ppid 树 ∪ tty 持有者 ∪ 累积 pgid 一起 SIGKILL。destroy 里 terminate 已确认杀净、这里
+   * 基本是空跑;但 sweeper 直接 close 一个「shell 退了、独立组作业还赖着」的会话时,这次
+   * 同步清场就是最后的兜底 —— 否则回收会话会连把手一起丢(第 3 轮审查)。
    */
   close(sessionId: string, projectId?: string): boolean {
     const session = this.session(sessionId, projectId);
     if (!session) return false;
     this.sessions.delete(sessionId);
     session.listeners.clear();
-    const live = snapshotDescendantsSync(session.process.pid);
-    const members: DescendantSnapshot = {
-      pids: live.pids,
-      pgids: [...new Set([...session.descendantPgids, ...live.pgids])],
-    };
-    this.signalTree(session, "SIGKILL", members);
+    const table = readProcessTableSync();
+    const live = table ? descendantsFromTable(table, session.process.pid) : { pids: [], pgids: [] };
+    const holders = (session.ttyPath ? ttyHolderPidsSync([session.ttyPath]) : null) ?? [];
+    const pids = new Set(live.pids);
+    const pgids = new Set([...session.descendantPgids, ...live.pgids]);
+    for (const pid of holders) {
+      if (pid === session.process.pid) continue;
+      pids.add(pid);
+      const pgid = table?.pgidOf.get(pid);
+      if (pgid !== undefined && pgid > 1 && pgid !== session.process.pid) pgids.add(pgid);
+    }
+    this.signalTree(session, "SIGKILL", { pids: [...pids], pgids: [...pgids] });
     return true;
   }
 
@@ -308,13 +348,23 @@ export class TerminalSessionManager {
     const session = this.session(sessionId, projectId);
     if (!session) return { ok: true };
     const groupId = session.process.pid;
-    // 后代快照要在**发信号 + 早退判定之前**拿齐:实时再抓一次(shell 还活着就能抓到最新
-    // 后代),并入会话存续期累积的那份(shell 已 exit、树断了就只剩它)。早退绝不能只看
-    // 组长的原组 —— job-control 后台作业在自己的独立组里,shell 先 exit 后原组空、作业还
-    // 在跑,只看原组会把它谎报成「已结束」(第 2 轮自由审查实锤)。
-    const live = await snapshotDescendants(groupId);
-    for (const pgid of live.pgids) session.descendantPgids.add(pgid);
-    const descendants: DescendantSnapshot = { pids: live.pids, pgids: [...session.descendantPgids] };
+    // 成员清单要在**发信号 + 早退判定之前**拿齐,三份并集:① 一次 ps 读表挖 ppid 树
+    // (leader 活着时树完整);② tty 持有者(lsof,leader 活着时的确定性清单 —— disown
+    // 离树的独立组也在列,这正是采样赢不了的那类);③ 存续期累积的 pgid(leader 已退、
+    // 树断 + fd 被 revoke 时仅存的线索;交互会话此时 wrapper 已顺路清杀过,累积只是兜底)。
+    // 早退绝不能只看组长的原组 —— job-control 后台作业在自己的独立组里(第 2 轮实锤)。
+    const table = await readProcessTable();
+    const tree = table ? descendantsFromTable(table, groupId) : { pids: [], pgids: [] };
+    const holders = session.ttyPath ? await ttyHolderPids([session.ttyPath]) : null;
+    const memberPids = new Set(tree.pids);
+    for (const pgid of tree.pgids) session.descendantPgids.add(pgid);
+    for (const pid of holders ?? []) {
+      if (pid === groupId) continue;
+      memberPids.add(pid);
+      const pgid = table?.pgidOf.get(pid);
+      if (pgid !== undefined && pgid > 1 && pgid !== groupId) session.descendantPgids.add(pgid);
+    }
+    const descendants: DescendantSnapshot = { pids: [...memberPids], pgids: [...session.descendantPgids] };
     const cleared = () => session.exitCode !== null && !groupAlive(groupId)
       && descendants.pgids.every((pgid) => !groupAlive(pgid))
       && descendants.pids.every((pid) => !processAlive(pid));
@@ -342,8 +392,8 @@ export class TerminalSessionManager {
       // 整组已空(ESRCH):没人可杀,waitForGroupExit 会立刻确认。
       try { session.process.kill(signal); } catch { /* already gone */ }
     }
-    // job control 的后台作业在自己的组里,逐组、逐 pid 补刀(快照见 snapshotDescendants;
-    // 逐 pid 是兜底 —— 覆盖 setpgid 到快照外新组的边角)。
+    // job control 的后台作业在自己的组里,逐组、逐 pid 补刀(清单由调用方按 ppid 树 +
+    // tty 持有者 + 累积拼出;逐 pid 是兜底 —— 覆盖 setpgid 到快照外新组的边角)。
     for (const pgid of descendants?.pgids ?? []) {
       try { process.kill(-pgid, signal); } catch { /* already gone */ }
     }
@@ -421,27 +471,31 @@ export class TerminalSessionManager {
   }
 
   /**
-   * shell 每产出一批输出就(限流地)触发一次后代扫描。job-control 起后台作业时会打印
-   * `[1] <pid>`、命令自己也会有 stdout —— 这些都是「shell 还活着且刚可能起了新作业」的
-   * 信号,借它把独立组 pgid 在毫秒级记进 descendantPgids,把「起作业后很快关 shell」的
-   * 漏记窗口从「一个周期」压到「一次限流」。它**不是**正确性来源(异步 ps 仍可能慢于
-   * shell 退出),只是收窄窗口;真正兜底的是结束/退出时的实时快照 + 周期扫。
+   * shell 每产出一批输出就(限流地)触发一次后代扫描,收窄「起作业后很快关 shell」时
+   * 累积清单的空窗。**trailing edge**:限流窗口内到达的触发不丢弃而是排队一个补扫
+   * (第 4 轮审查:全局限流直接跳过会让另一终端的输出吃掉本终端的扫描名额)。它只是
+   * 让累积兜底更快命中 —— 正确性主力是 wrapper 清杀 + 结束时的 lsof/ppid 快照。
    */
   private maybeScanFromData(): void {
-    if (Date.now() - this.lastDescendantScanAt < DESCENDANT_DATA_THROTTLE_MS) return;
-    void this.trackDescendants();
+    if (this.scanTimer) return;
+    const wait = Math.max(0, this.lastDescendantScanAt + DESCENDANT_DATA_THROTTLE_MS - Date.now());
+    this.scanTimer = setTimeout(() => {
+      this.scanTimer = null;
+      void this.trackDescendants();
+    }, wait);
+    this.scanTimer.unref?.();
   }
 
   /**
    * 持续累积每个活会话见过的后代进程组 pgid。一次 ps 覆盖全部活 shell(命令会话也扫,
    * 无害)。由 constructor 的定时器每 DESCENDANT_SCAN_MS 调一次,外加 onData 的限流触发
-   * (maybeScanFromData)。幂等只累积、门闩防重入、记录本次扫描时刻给限流用。
-   * 已知边界:后台作业启动**又**在任何一次扫描落地前(周期 + data 触发都没赶上)关掉 shell,
-   * 这一个独立组 pgid 会漏记 —— shell 一 exit 树就断、macOS 又无从按会话/SID 反查孤儿
-   * (sess 列被 SIP 抹成 0、无数字 sid、控制 tty 被吊销),这一残留超出本层能力,如实记录。
+   * (maybeScanFromData)。幂等只累积;正在扫时到达的请求**排队一次**扫完即补(不静默
+   * 丢弃,第 4 轮审查)。它是第三道防线:交互会话的独立组孤儿由 wrapper 清杀(确定性)
+   * 与结束时 lsof/ppid 快照(leader 活着时确定性)负责,累积只兜「lsof 缺失的环境 +
+   * leader 已退」这类降级路径。
    */
   private async trackDescendants(): Promise<void> {
-    if (this.scanningDescendants) return;
+    if (this.scanningDescendants) { this.rescanQueued = true; return; }
     const shells = [...this.sessions.values()].filter((session) => session.exitCode === null);
     if (!shells.length) return;
     this.scanningDescendants = true;
@@ -456,28 +510,35 @@ export class TerminalSessionManager {
     } finally {
       this.lastDescendantScanAt = Date.now();
       this.scanningDescendants = false;
+      if (this.rescanQueued) {
+        this.rescanQueued = false;
+        void this.trackDescendants();
+      }
     }
   }
 
   /**
    * server 退出前的清场:对每个还活着的会话**整组 + 后代 pgid** SIGTERM+SIGKILL 连发。
-   * 必须同步('exit' 钩子里没有 await),但同步 ps 是可以的(readProcessTableSync)——
-   * 一次读全表,给每个会话就地补一份**实时**后代快照(shell 此刻还活着就能抓全独立组),
-   * 与存续期累积的 descendantPgids 合并。不能只读累积值:那会漏掉「起了作业但还没被任何
-   * 一次扫描记下」的独立组(第 2、3 轮自由审查实锤)。ps 不可用时退回只用累积值。命令会话
-   * 跑的是 dev server/watch 这类可随时重启的进程,强杀可接受;不杀的代价是它们被 PID 1
-   * 收养成孤儿,ash 重启后 UI/API 失忆显示「未启动」、旧进程却还占着端口。不能走 close():
-   * 它每会话各跑一次同步 ps,退出路径上 N 个会话就是 N 次 ps,这里合成一次。
+   * 必须同步('exit' 钩子里没有 await),但同步 ps/lsof 是可以的 —— 各一次读全表/批量
+   * 枚举全部会话的 tty 持有者,给每个会话就地补实时快照,与存续期累积合并。不能只读
+   * 累积值:那会漏掉「起了作业但还没被任何一次扫描记下」的独立组(第 2、3 轮实锤)。
+   * tty 持有者兜底封的是第 4 轮竞态:内层 shell 刚退、wrapper 正在清杀,这一轮组信号把
+   * wrapper 打断的话,disown 的独立组既不在 ppid 树也不在累积里,只有 lsof 清单上有它。
+   * 命令会话跑的是 dev server/watch 这类可随时重启的进程,强杀可接受;不杀的代价是它们
+   * 被 PID 1 收养成孤儿,ash 重启后 UI/API 失忆显示「未启动」、旧进程却还占着端口。
    */
   shutdown(): void {
     clearInterval(this.sweeper);
     clearInterval(this.descendantScanner);
+    if (this.scanTimer) { clearTimeout(this.scanTimer); this.scanTimer = null; }
     const table = readProcessTableSync();
+    const holders = ttyHolderPidsSync(
+      [...this.sessions.values()].map((s) => s.ttyPath).filter((p): p is string => p !== null),
+    ) ?? [];
     for (const session of [...this.sessions.values()]) {
       session.listeners.clear();
       // 无条件连发,不按 exitCode 筛:组长退了组不一定空(daemonize 形状),而对已空的组
-      // 发信号只是 ESRCH,signalTree 兜得住 —— 少一个条件就少一类漏杀。后代 = 实时快照
-      // (若 ps 可用)∪ 存续期累积,job-control 的独立组全靠这两份。
+      // 发信号只是 ESRCH,signalTree 兜得住 —— 少一个条件就少一类漏杀。
       const live = table ? descendantsFromTable(table, session.process.pid) : { pids: [], pgids: [] };
       const descendants: DescendantSnapshot = {
         pids: live.pids,
@@ -486,6 +547,16 @@ export class TerminalSessionManager {
       this.signalTree(session, "SIGTERM", descendants);
       this.signalTree(session, "SIGKILL", descendants);
       this.sessions.delete(session.id);
+    }
+    // tty 持有者(全会话并集)最后补刀:比 ppid 树多出来的就是已 disown 的离树余党。
+    for (const pid of holders) {
+      const pgid = table?.pgidOf.get(pid);
+      for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+        try { process.kill(pid, signal); } catch { /* already gone */ }
+        if (pgid !== undefined && pgid > 1) {
+          try { process.kill(-pgid, signal); } catch { /* already gone */ }
+        }
+      }
     }
   }
 
