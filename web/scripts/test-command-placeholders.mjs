@@ -89,18 +89,18 @@ try {
   assert.equal(await hints.count(), 1, "只有带占位符的那条命令显示提示");
   assert.match(await hints.first().innerText(), /分支/);
 
-  // ④ 状态栏:多行命令只显示首行 + 共几行。
-  const statusTrigger = page.getByRole("button", { name: "常用命令", exact: true });
+  // ④ 侧栏顶行那颗 ▶ 的弹层:多行命令只显示首行 + 共几行。
+  const statusTrigger = page.getByRole("button", { name: /^常用命令（/ });
   const pop = page.getByRole("dialog", { name: "常用命令" });
   // 执行完弹层不一定关（没有新会话就留在原处），所以只在它关着时才点开。
   const openPop = async () => { if (await pop.count() === 0) await statusTrigger.click(); await pop.waitFor(); };
   await openPop();
-  const checkoutRow = pop.locator(".status-bar__row").filter({ hasText: "切分支" });
+  const checkoutRow = pop.locator(".cmd-pop__row").filter({ hasText: "切分支" });
   assert.equal(await checkoutRow.locator("code").innerText(), "git checkout {{分支}} … 共 2 行");
 
   // 没跑过的命令不写「未启动」:默认态不是事件,旁边就摆着「执行」按钮(fixture 的
   // sessions 为空,弹层里每一条都是这个态,连头部 service 也是)。
-  assert.equal(await pop.locator(".status-bar__row-state").count(), 0, "没跑过的命令不该显示状态文案");
+  assert.equal(await pop.locator(".cmd-pop__row-state").count(), 0, "没跑过的命令不该显示状态文案");
   assert.doesNotMatch(await pop.innerText(), /未启动/, "弹层里不该再出现「未启动」");
 
   // ⑤ 带占位符 → 先弹框收值。必填没填不让执行。
@@ -123,7 +123,7 @@ try {
 
   // ⑥ 没占位符的命令不多问一句,点了就跑。
   await openPop();
-  await pop.locator(".status-bar__row").filter({ hasText: "构建" }).getByRole("button", { name: "执行 构建" }).click();
+  await pop.locator(".cmd-pop__row").filter({ hasText: "构建" }).getByRole("button", { name: "执行 构建" }).click();
   await page.waitForFunction(() => JSON.parse(document.getElementById("calls").textContent).length === 2);
   const calls = JSON.parse(await page.getByTestId("calls").innerText());
   assert.deepEqual(calls[1], { path: "/api/projects/p-one/commands/plain/start", body: { values: {} } });
@@ -131,7 +131,7 @@ try {
 
   // ⑦ 上次填过的值下次预填 —— 改端口/换分支这类命令,多数时候值是同一个。
   await openPop();
-  await pop.locator(".status-bar__row").filter({ hasText: "切分支" }).getByRole("button", { name: "执行 切分支" }).click();
+  await pop.locator(".cmd-pop__row").filter({ hasText: "切分支" }).getByRole("button", { name: "执行 切分支" }).click();
   await dialog.waitFor();
   assert.equal(await dialog.locator("input").first().inputValue(), "release/1.2", "应当预填上次用过的取值");
   await page.keyboard.press("Escape");

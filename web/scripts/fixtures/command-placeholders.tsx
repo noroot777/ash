@@ -2,11 +2,11 @@ import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ProjectView } from "@ash/shared";
 import "../../src/styles/global.css";
-import "../../src/styles/status-bar.css";
+import "../../src/styles/commands-launcher.css";
 import { ProjectCommandsSettings } from "../../src/settings/ProjectCommandsSettings.tsx";
-import { StatusBar } from "../../src/workspace/StatusBar.tsx";
+import { CommandsLauncher } from "../../src/workspace/CommandsLauncher.tsx";
 
-// 常用命令的两面各摆一份:设置里的 Shell 编辑器(多行 / 自适应高度 / 拖底边)和状态栏里的
+// 常用命令的两面各摆一份:设置里的 Shell 编辑器(多行 / 自适应高度 / 拖底边)和侧栏顶行那颗 ▶ 的
 // 执行入口(带 `{{占位符}}` 就先弹框收值)。用例见 scripts/test-command-placeholders.mjs。
 
 const reply = (body: unknown, status = 200) =>
@@ -66,14 +66,10 @@ function Fixture() {
       <pre data-testid="notices">{JSON.stringify(notices)}</pre>
       <pre data-testid="config">{JSON.stringify(current.commandsConfig)}</pre>
     </main>
-    <StatusBar
+    <CommandsLauncher
       projects={[current]}
       currentProject={current}
-      taskMode={false}
       canUseTerminal
-      connected
-      terminalOpen={false}
-      onToggleTerminal={() => {}}
       onOpenCommandLog={() => {}}
       onManageCommands={() => {}}
       notify={notify}
