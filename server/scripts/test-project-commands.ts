@@ -2,7 +2,7 @@
 // 普通回收轨道)+ parseProjectCommands 的校验。路由层只是这些原语的薄壳,不在这里起 HTTP。
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseProjectCommands } from "@ash/shared/project-commands";
@@ -277,6 +277,33 @@ try {
   assert.equal(restarted.status, 201);
   await assertProcessGone(n2, "restart 必须先真正杀掉旧的 nohup 服务");
   assert.deepEqual((await stopCommand("pc3", "noh2")).body, { stopped: true });
+
+  // 第 7 轮审查探针固化:TERM handler 在解冻窗口 fork 出新的独立 PGID。停止顺序是
+  // 冻结→枚举→TERM→解冻(给收尾机会)→等待→升级 KILL;可捕获 TERM 的 shell 在解冻后
+  // 跑 trap、创建首次快照里没有的新组。两重保障必须都在:wrapper(leader)用 no-op
+  // 忽略 TERM 常驻(否则它被 TERM 杀 → revoke → 新组 ctty 变 ?? 枚举不到),且升级 KILL
+  // 前**重新冻结 + 枚举到不动点**、判定基于最后一次完整枚举。pid 走文件不走 pty echo,
+  // 避免受 pty 事件时序影响。
+  const tfFlag = join(cwd, "tf.pid");
+  const termForkScript =
+    `set -m; trap 'nohup sleep 300 </dev/null >/dev/null 2>&1 & echo $! > ${tfFlag}; disown' TERM; echo TFREADY; while :; do sleep 0.1; done`;
+  const tf = manager.create("p1", cwd, { command: { id: "tf", name: "tf", script: termForkScript } });
+  const tfReady = Date.now() + 8000;
+  while (!(manager.eventsAfter(tf.id, "p1", 0) ?? []).some((event) => event.type === "data" && event.data.includes("TFREADY"))) {
+    if (Date.now() > tfReady) throw new Error("term-fork trap not ready");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  // termMs 给足,让 handler 在解冻窗口跑完并 fork;killMs 给 KILL 轮重枚举 + 收割。
+  assert.deepEqual(await manager.terminate(tf.id, "p1", { termMs: 1200, killMs: 4000 }), { ok: true });
+  let tfChild = 0;
+  const tfChildDeadline = Date.now() + 3000;
+  while (tfChild === 0) {
+    try { tfChild = Number(readFileSync(tfFlag, "utf8").trim()) || 0; } catch { /* handler 还没写 */ }
+    if (tfChild === 0 && Date.now() > tfChildDeadline) throw new Error("TERM handler 未 fork —— 回归没打到缺陷路径");
+    if (tfChild === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await assertProcessGone(tfChild, "TERM handler 在解冻窗口 fork 的独立 PGID 也必须被停止触达(leader 常驻 + KILL 前重枚举)");
+  assert.equal(manager.liveCommandSession("p1", "tf"), null);
 
   // 日志订阅不钉住退出记录:create 同命令新会话时,被订阅的死记录也照清 —— 否则反复
   // 「重启 + 开日志」把 16 个会话槽吃光后,restart 先杀旧再建新,建新失败落成服务中断

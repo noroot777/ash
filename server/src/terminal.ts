@@ -5,11 +5,11 @@ import { id } from "./util.js";
 import {
   containmentAvailable,
   descendantsFromTable,
+  freezeAndEnumerate,
   groupAlive,
   processAlive,
   readProcessTable,
   readProcessTableSync,
-  sessionMemberPids,
   sessionMemberPidsSync,
   TTY_COMMAND_WRAPPER,
   TTY_REAPER_WRAPPER,
@@ -311,69 +311,35 @@ export class TerminalSessionManager {
     const session = this.session(sessionId, projectId);
     if (!session) return { ok: true };
     const groupId = session.process.pid;
-    // 成员清单要在**发信号 + 早退判定之前**拿齐,且拿之前先**冻结**:枚举与发信号之间,
-    // 组内 shell 可能正把新服务 fork 进新 PGID(实测 restart 后立即 stop,nohup 服务恰好
-    // 从快照缝里漏出去、stopped:true 却留下孤儿)。SIGSTOP 不可捕获,冻住的进程不能再
-    // fork/setpgid;对枚举新发现的成员/独立组继续冻结、再补枚举,直到不动点,快照才算
-    // 封口。TERM 发完统一 SIGCONT:可捕获信号在 stopped 状态下挂起,CONT 后才递送。
-    // 清单三份并集:① 读表挖 ppid 树(leader 活着时树完整);② 会话成员(ctty/sid ∪
-    // fd 持有者,leader 活着时的确定性清单 —— disown 离树的独立组、stdio 全重定向的
-    // nohup 服务都在列,这正是采样和 ppid 树都赢不了的那两类);③ 存续期累积的 pgid
-    // (leader 已退、树断 + ctty 已被 revoke 时仅存的线索;交互会话此时 wrapper 已顺路
-    // 清杀过,累积只是兜底)。早退绝不能只看组长的原组(第 2 轮实锤)。
-    const frozenGroups = new Set<number>();
-    const frozenPids = new Set<number>();
-    const freezeGroup = (pgid: number) => {
-      if (pgid <= 1 || frozenGroups.has(pgid)) return;
-      frozenGroups.add(pgid);
-      try { process.kill(-pgid, "SIGSTOP"); } catch { /* 组已空 */ }
-    };
-    const freezePid = (pid: number) => {
-      if (pid <= 1 || pid === groupId || frozenPids.has(pid)) return;
-      frozenPids.add(pid);
-      try { process.kill(pid, "SIGSTOP"); } catch { /* 已死 */ }
-    };
-    const thaw = () => {
-      for (const pgid of frozenGroups) { try { process.kill(-pgid, "SIGCONT"); } catch { /* 已空 */ } }
-      for (const pid of frozenPids) { try { process.kill(pid, "SIGCONT"); } catch { /* 已死 */ } }
-    };
-    freezeGroup(groupId);
-    const table = await readProcessTable();
-    const tree = table ? descendantsFromTable(table, groupId) : { pids: [], pgids: [] };
-    const memberPids = new Set(tree.pids);
-    for (const pid of tree.pids) freezePid(pid);
-    for (const pgid of tree.pgids) session.descendantPgids.add(pgid);
-    for (const pgid of session.descendantPgids) freezeGroup(pgid);
-    for (let pass = 0; pass < 5; pass++) {
-      const members = await sessionMemberPids([groupId], session.ttyPath ? [session.ttyPath] : []);
-      if (!members) break;
-      let discovered = false;
-      for (const member of members) {
-        if (member.pid === groupId) continue;
-        if (!memberPids.has(member.pid)) {
-          memberPids.add(member.pid);
-          freezePid(member.pid);
-          discovered = true;
-        }
-        if (member.pgid > 1 && member.pgid !== groupId && !session.descendantPgids.has(member.pgid)) {
-          session.descendantPgids.add(member.pgid);
-          freezeGroup(member.pgid);
-          discovered = true;
-        }
-      }
-      if (!discovered) break;
-    }
-    const descendants: DescendantSnapshot = { pids: [...memberPids], pgids: [...session.descendantPgids] };
-    const cleared = () => session.exitCode !== null && !groupAlive(groupId)
-      && descendants.pgids.every((pgid) => !groupAlive(pgid))
-      && descendants.pids.every((pid) => !processAlive(pid));
-    if (cleared()) { thaw(); return { ok: true }; }
+    // 成员清单要在**发信号 + 早退判定之前**拿齐,且拿之前先**冻结**(freezeAndEnumerate):
+    // 枚举与发信号之间,组内 shell 可能正把新服务 fork 进新 PGID(实测 restart 后立即
+    // stop,nohup 服务恰好从快照缝里漏出去、stopped:true 却留下孤儿)。清单三份并集 ——
+    // ① ppid 树(leader 活着时完整);② 会话成员(ctty/sid ∪ fd 持有者,disown 离树的
+    // 独立组、stdio 全重定向的 nohup 服务都在列);③ 存续期累积的 pgid(leader 已退、
+    // ctty 已 revoke 时仅存的线索)。
+    //
+    // **两轮都要重新冻结枚举**:TERM 轮解冻是必须的(可捕获信号在 stopped 态挂起,得
+    // SIGCONT 才递送,进程才有机会收尾),但解冻窗口里进程的 TERM handler 可以再 fork
+    // 出新的独立 PGID(第 7 轮审查实锤);所以升级 KILL **之前**再冻结、再枚举到不动点、
+    // 更新快照,把 handler 新建的组一并纳管。SIGKILL 不可捕获,冻结态下发它进程没有
+    // 再 fork 的机会,这一轮的完整枚举就是终态判定的依据。
+    const memberPids = new Set<number>();
+    const clearedBy = (snapshot: DescendantSnapshot) => session.exitCode !== null && !groupAlive(groupId)
+      && snapshot.pgids.every((pgid) => !groupAlive(pgid))
+      && snapshot.pids.every((pid) => !processAlive(pid));
+
+    const term = await freezeAndEnumerate(groupId, session.ttyPath, session.descendantPgids, memberPids);
+    if (clearedBy(term.snapshot)) { term.thaw(); return { ok: true }; }
     session.stoppedByUser = true;
-    this.signalTree(session, "SIGTERM", descendants);
-    thaw();
-    if (await this.waitForGroupExit(session, timeouts?.termMs ?? 3000, descendants)) return { ok: true };
-    this.signalTree(session, "SIGKILL", descendants);
-    if (await this.waitForGroupExit(session, timeouts?.killMs ?? 2000, descendants)) return { ok: true };
+    this.signalTree(session, "SIGTERM", term.snapshot);
+    term.thaw(); // 解冻:让 TERM handler 收尾(它也可能 fork —— 交给下面的 KILL 轮抓)
+    if (await this.waitForGroupExit(session, timeouts?.termMs ?? 3000, term.snapshot)) return { ok: true };
+
+    // KILL 轮:重新冻结 + 枚举到不动点,纳管 TERM handler 解冻期新建的独立 PGID。
+    const kill = await freezeAndEnumerate(groupId, session.ttyPath, session.descendantPgids, memberPids);
+    this.signalTree(session, "SIGKILL", kill.snapshot);
+    kill.thaw(); // KILL 已致命,CONT 只为不把万一没死透的留在 stopped(D 状态那种)
+    if (await this.waitForGroupExit(session, timeouts?.killMs ?? 2000, kill.snapshot)) return { ok: true };
     return {
       ok: false,
       reason: session.exitCode === null
@@ -393,7 +359,7 @@ export class TerminalSessionManager {
       try { session.process.kill(signal); } catch { /* already gone */ }
     }
     // job control 的后台作业在自己的组里,逐组、逐 pid 补刀(清单由调用方按 ppid 树 +
-    // tty 持有者 + 累积拼出;逐 pid 是兜底 —— 覆盖 setpgid 到快照外新组的边角)。
+    // 会话成员 + 累积拼出;逐 pid 是兜底 —— 覆盖 setpgid 到快照外新组的边角)。
     for (const pgid of descendants?.pgids ?? []) {
       try { process.kill(-pgid, signal); } catch { /* already gone */ }
     }

@@ -265,6 +265,12 @@ ash_members() {
     done
   fi
 }
+# wrapper(session leader)自己忽略 TERM:manager 的 kill(-pgid,TERM) 会波及整组,leader
+# 一旦被 TERM 杀掉,XNU 立即 revoke 整个会话的 tty —— TERM handler 此刻新 fork 的独立组
+# ctty 变 "??",事后枚举无路,停止便谎报成功留下孤儿(第 7 轮审查实锤)。用 no-op handler
+# 而**不是** SIG_IGN(trap '' TERM):非空 handler 在 exec 子命令后被内核重置为 SIG_DFL,
+# 所以内层服务的 TERM 语义不变(默认终止/自设 handler 照跑),只有 leader 常驻到 KILL。
+trap ':' TERM
 `;
 
 /**
@@ -434,4 +440,66 @@ export function sessionMemberPidsSync(leaderPids: number[], ttyPaths: string[]):
   } catch {
     return null;
   }
+}
+
+/**
+ * 冻结整个会话并枚举成员到**不动点**,返回本轮完整快照与配套 thaw。SIGSTOP 不可捕获,
+ * 冻住的进程不能再 fork/setpgid;对枚举新发现的成员/独立组继续冻结、再补枚举,直到没有
+ * 新成员出现 —— 此时快照封口(能 fork 的父进程全冻结,不会再冒出新的)。memberPids 与
+ * accPgids(= session 累积的独立组)都**跨轮累积并原地更新**,所以第二轮(KILL)会在第一轮
+ * (TERM)基础上补齐 TERM handler 解冻期新建的组(第 7 轮审查实锤)。每轮的 frozen 集合各自
+ * 独立(上轮已 thaw),thaw 只 SIGCONT 本轮冻的这些。三份并集:ppid 树 ∪ 会话成员
+ * (ctty/sid ∪ fd 持有者)∪ 累积 pgid。
+ */
+export async function freezeAndEnumerate(
+  groupId: number,
+  ttyPath: string | null,
+  accPgids: Set<number>,
+  memberPids: Set<number>,
+): Promise<{ snapshot: DescendantSnapshot; thaw: () => void }> {
+  const frozenGroups = new Set<number>();
+  const frozenPids = new Set<number>();
+  const freezeGroup = (pgid: number) => {
+    if (pgid <= 1 || frozenGroups.has(pgid)) return;
+    frozenGroups.add(pgid);
+    try { process.kill(-pgid, "SIGSTOP"); } catch { /* 组已空 */ }
+  };
+  const freezePid = (pid: number) => {
+    if (pid <= 1 || pid === groupId || frozenPids.has(pid)) return;
+    frozenPids.add(pid);
+    try { process.kill(pid, "SIGSTOP"); } catch { /* 已死 */ }
+  };
+  // 先冻原组,再冻上一轮已知的成员/组(它们上轮被 thaw 过),挡住解冻期已经在跑的 fork。
+  freezeGroup(groupId);
+  for (const pid of memberPids) freezePid(pid);
+  for (const pgid of accPgids) freezeGroup(pgid);
+  const table = await readProcessTable();
+  const tree = table ? descendantsFromTable(table, groupId) : { pids: [], pgids: [] };
+  for (const pid of tree.pids) { if (!memberPids.has(pid)) { memberPids.add(pid); freezePid(pid); } }
+  for (const pgid of tree.pgids) { if (!accPgids.has(pgid)) { accPgids.add(pgid); freezeGroup(pgid); } }
+  for (let pass = 0; pass < 5; pass++) {
+    const members = await sessionMemberPids([groupId], ttyPath ? [ttyPath] : []);
+    if (!members) break;
+    let discovered = false;
+    for (const member of members) {
+      if (member.pid === groupId) continue;
+      if (!memberPids.has(member.pid)) {
+        memberPids.add(member.pid);
+        freezePid(member.pid);
+        discovered = true;
+      }
+      if (member.pgid > 1 && member.pgid !== groupId && !accPgids.has(member.pgid)) {
+        accPgids.add(member.pgid);
+        freezeGroup(member.pgid);
+        discovered = true;
+      }
+    }
+    if (!discovered) break;
+  }
+  const snapshot: DescendantSnapshot = { pids: [...memberPids], pgids: [...accPgids] };
+  const thaw = () => {
+    for (const pgid of frozenGroups) { try { process.kill(-pgid, "SIGCONT"); } catch { /* 已空 */ } }
+    for (const pid of frozenPids) { try { process.kill(pid, "SIGCONT"); } catch { /* 已死 */ } }
+  };
+  return { snapshot, thaw };
 }
