@@ -412,13 +412,18 @@ export function ProjectTerminal({
             ?? [...list].reverse().find(yieldable);
         };
         setPane((prev) => {
-          if (prev.tabs.some((tab) => tab.id === tabId)) return { ...prev, activeId: tabId };
-          if (prev.tabs.length < MAX_TABS) {
-            return { tabs: [createAttachTab(session), ...prev.tabs], activeId: tabId };
+          // 先收幽灵:会话在 server 已不存在的命令日志 tab(重启后被同命令新会话顶替清掉)。
+          // server 缓冲没了、内容只剩 xterm 里那份残影,留着只会在每次「启动→看日志」后
+          // 攒一排「已退出」的重名 tab。只收 kind=command:交互 shell 的死活由自己的 ✕ 管。
+          const liveIds = new Set(sessions.map((item) => item.id));
+          const tabs = prev.tabs.filter((tab) => tab.kind !== "command" || !tab.attachSessionId || liveIds.has(tab.attachSessionId));
+          if (tabs.some((tab) => tab.id === tabId)) return { tabs, activeId: tabId };
+          if (tabs.length < MAX_TABS) {
+            return { tabs: [createAttachTab(session), ...tabs], activeId: tabId };
           }
-          const victim = pickVictim(prev.tabs, prev.activeId);
+          const victim = pickVictim(tabs, prev.activeId);
           if (!victim) return prev;
-          return { tabs: [createAttachTab(session), ...prev.tabs.filter((tab) => tab.id !== victim.id)], activeId: tabId };
+          return { tabs: [createAttachTab(session), ...tabs.filter((tab) => tab.id !== victim.id)], activeId: tabId };
         });
         // 提示走渲染快照的预判:拒绝只发生在「满员且全是 shell/激活」的稳定态,快照准确;
         // 首挂并发的竞态态挂的全是可让位的 attach tab,不会走到拒绝。

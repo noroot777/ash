@@ -179,13 +179,22 @@ export function StatusBar({
   const act = (target: { projectId: string; commandId: string; name: string }, action: "start" | "stop" | "restart") => {
     const key = `${target.projectId}:${target.commandId}`;
     setBusy(key);
-    const call = action === "start"
+    const call: Promise<{ session?: TerminalSessionInfo; stopped?: boolean }> = action === "start"
       ? api.startProjectCommand(target.projectId, target.commandId)
       : action === "stop"
         ? api.stopProjectCommand(target.projectId, target.commandId)
         : api.restartProjectCommand(target.projectId, target.commandId);
     call
-      .then(() => refresh())
+      .then((result) => {
+        refresh();
+        // 启动/重启成功就把日志直接摆到眼前:关弹层、开终端抽屉并聚焦这条会话的 tab
+        // (VSCode 跑任务的习惯 —— 点了「执行」却要自己再去找日志,等于没执行完这个动作)。
+        // 只对锚定项目做:别的项目的会话在这个抽屉里没有落点。stop 没有新现场,留在弹层。
+        if (action !== "stop" && result.session && result.session.projectId === currentProject?.id) {
+          setOpen(false);
+          onOpenCommandLog(result.session.id);
+        }
+      })
       .catch((error) => notify(error instanceof Error ? error.message : `${target.name} 操作失败`))
       .finally(() => setBusy((value) => value === key ? null : value));
   };
