@@ -9,8 +9,23 @@ import { api } from "../lib/api.ts";
  * 15 秒一次的后台重验两者都不置位：它是 stale-while-revalidate，界面上那份数据一直有效，
  * 宣布「取数中」只会让消费方把内容顶开又收回。判据是「用户能不能把这次取数跟自己的动作
  * 对上」——对不上的就必须静默。
+ *
+ * 失败路径同一把尺子，所以失败分两种：
+ * - `error`：**可归因**的失败（首屏、点刷新、任务刚变过）。用户正等着这次结果，照常摆出来
+ *   并阻塞验收。
+ * - `staleReason`：后台静默重验失败。手上那份 view 并没有失效，把它升级成一行 alert 只会
+ *   在用户什么都没做的时候把版面顶开 56px、顺手禁掉验收按钮——就是这次要修的毛病本身。
+ *   不阻塞、不占版面，只够消费方在原地做个记号说明「这是上次的结果」。
+ *
+ * 两者都在下一次取数成功时清掉：恢复也不该留痕。
  */
-type Snapshot = { view: BranchPlanView | null; error: string | null; loading: boolean; refreshing: boolean };
+type Snapshot = {
+  view: BranchPlanView | null;
+  error: string | null;
+  staleReason: string | null;
+  loading: boolean;
+  refreshing: boolean;
+};
 type Entry = {
   snapshot: Snapshot;
   listeners: Set<(snapshot: Snapshot) => void>;
@@ -19,7 +34,7 @@ type Entry = {
   pending?: Promise<void>;
   timer?: ReturnType<typeof setInterval>;
 };
-const empty: Snapshot = { view: null, error: null, loading: false, refreshing: false };
+const empty: Snapshot = { view: null, error: null, staleReason: null, loading: false, refreshing: false };
 const entries = new Map<string, Entry>();
 
 function load(taskId: string, entry: Entry, mode: "background" | "explicit" = "background"): Promise<void> {
@@ -32,13 +47,18 @@ function load(taskId: string, entry: Entry, mode: "background" | "explicit" = "b
     for (const listener of entry.listeners) listener(snapshot);
   };
   const hasView = !!entry.snapshot.view;
+  // 这一次取数用户归不归得到自己头上——开头宣不宣布、失败怎么摆，都看它。
+  const attributable = force || !hasView;
   // 后台重验且已有 view：一个字都不宣布，连一次空转的 publish 都不发。
-  if (force || !hasView) publish({ ...entry.snapshot, loading: !hasView, refreshing: hasView });
-  const settle = (snapshot: Omit<Snapshot, "loading" | "refreshing">) =>
-    publish({ ...snapshot, loading: false, refreshing: false });
+  if (attributable) publish({ ...entry.snapshot, loading: !hasView, refreshing: hasView });
   const pending = api.branchPlan(taskId).then(
-    view => settle({ view, error: null }),
-    reason => settle({ view: entry.snapshot.view, error: reason instanceof Error ? reason.message : String(reason) }),
+    view => publish({ view, error: null, staleReason: null, loading: false, refreshing: false }),
+    reason => {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      publish(attributable
+        ? { view: entry.snapshot.view, error: message, staleReason: null, loading: false, refreshing: false }
+        : { ...entry.snapshot, staleReason: message, loading: false, refreshing: false });
+    },
   ).finally(() => { if (entry.pending === pending) entry.pending = undefined; });
   entry.pending = pending;
   return pending;

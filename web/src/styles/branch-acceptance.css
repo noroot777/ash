@@ -36,6 +36,12 @@
 .branch-acceptance-panel button:disabled { opacity:.5; cursor:default; }
 .branch-acceptance-panel :is(button,select,input,a):focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .branch-acceptance-heading .branch-acceptance-refresh { min-height:24px; border-color:transparent; background:transparent; padding:2px 5px; color:var(--muted); font-size:10px; }
+/* 后台自动重验失败：只换颜色、加一颗绝对定位的小点。尺寸一格不动，所以不会在用户什么
+   都没做的时候把下面的内容顶开——那正是这颗记号要替掉的那行 alert 干过的事。 */
+.branch-acceptance-heading .branch-acceptance-refresh[data-stale="true"] { position:relative; color:var(--amber); }
+.branch-acceptance-heading .branch-acceptance-refresh[data-stale="true"]::after {
+  position:absolute; top:1px; right:0; width:4px; height:4px; border-radius:50%; background:var(--amber); content:"";
+}
 .branch-acceptance-panel > .branch-acceptance-route { display:flex; grid-column:1; align-items:start; gap:40px; margin:0; }
 .branch-acceptance-route > div { min-width:0; }
 .branch-acceptance-route > div:first-child { flex-shrink:0; }

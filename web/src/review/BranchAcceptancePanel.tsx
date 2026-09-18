@@ -3,6 +3,7 @@ import { ArrowClockwise, ArrowRight, GitBranch, GitCommit, GitPullRequest } from
 import type { BranchPlanView, Task, TaskListItem } from "@ash/shared";
 import { familyAcceptanceNotices, familySelectionBlock } from "@ash/shared/branch-plan";
 import { api } from "../lib/api.ts";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { MergeTargetEditor } from "./MergeTargetEditor.tsx";
 import { useBranchPlan } from "./useBranchPlan.ts";
@@ -14,7 +15,12 @@ import { AcceptCommitChoice, useAcceptCommitDefault } from "./AcceptCommitChoice
 const taskHref = (projectId: string, taskId: string) => `/?${new URLSearchParams({ project: projectId, task: taskId })}`;
 
 export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: TaskListItem; notify: (text: string) => void; onTaskUpdated?: (task: Task) => void }) {
-  const { view, error, loading, refreshing, refresh } = useBranchPlan(task);
+  const { view, error, staleReason, loading, refreshing, refresh } = useBranchPlan(task);
+  // 后台重验失败的说明：只经这颗刷新按钮露出（悬停/聚焦看得到，屏幕阅读器经 describedby
+  // 念得到），不进入正文流，所以宽高一格不动。
+  const staleTip = useHoverTip();
+  const staleId = `branch-plan-stale-${task.id}`;
+  const staleNote = `上次自动重验没成功（${staleReason}），这里显示的还是上一次读到的依赖。点一下重新读取。`;
   const [action, setAction] = useState<"update" | "family" | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -90,11 +96,16 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
             就是页面每隔一会儿自己蹦一下。
             **忙态不禁用这颗按钮**：显式刷新是可重入的（load 会递增 sequence，让挂起的
             旧响应释放后不再覆盖新结果）。禁掉就等于把那条竞态保护从 UI 层堵死——请求慢、
-            挂起或将返回过期数据时，用户反而点不动这颗唯一的重试入口。 */}
+            挂起或将返回过期数据时，用户反而点不动这颗唯一的重试入口。
+            后台重验失败也落在这儿：换个颜色、指上去说清楚，宽高一格不动，可读名字仍是
+            「刷新依赖」。既不静默吞掉，也不在用户没动手的时候把版面顶开。 */}
         <button className="branch-acceptance-refresh" type="button" disabled={busy} aria-busy={refreshing}
-          onClick={() => void refresh()}>
+          data-stale={staleReason ? "true" : undefined} aria-describedby={staleReason ? staleId : undefined}
+          onClick={() => void refresh()} {...staleTip.anchorProps}>
           <ArrowClockwise size={12} className={refreshing ? "is-spinning" : ""} aria-hidden="true" />刷新依赖
         </button>
+        {staleReason && <span id={staleId} className="task-visually-hidden">{staleNote}</span>}
+        <HoverTip at={staleReason ? staleTip.at : null}>{staleNote}</HoverTip>
       </header>
       {error && <p role="alert">验收依赖读取失败：{error}<button onClick={() => void refresh()}>重试</button></p>}
       <dl className="branch-acceptance-route">
