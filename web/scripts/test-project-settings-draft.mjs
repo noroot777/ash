@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
-import { testPreviewCommandEditor } from "./preview-command-editor-checks.mjs";
+import { testShellScriptEditor } from "./shell-script-editor-checks.mjs";
 
 const editorText = async (editor) => editor.locator(".cm-line").evaluateAll((lines) => lines.map((line) => line.querySelector(".cm-placeholder") ? "" : line.textContent).join("\n"));
 
@@ -55,7 +55,7 @@ try {
   await page.getByTestId("mode-single").click();
   await page.getByText("当前使用反代：", { exact: false }).waitFor();
   await proxy.selectOption("auto");
-  await testPreviewCommandEditor(page, preview, savePreview);
+  await testShellScriptEditor(page, preview, savePreview);
 
   const draft = [
     "cd web",

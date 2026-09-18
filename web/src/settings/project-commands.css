@@ -9,7 +9,15 @@
 .project-commands__intro small {
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.7;
+}
+.project-commands__intro code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--raised);
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11.5px;
+  color: var(--ink);
 }
 
 /* 项目级「启动 / 重启」:一对命令,独立于下面的命令列表。 */
@@ -33,20 +41,47 @@
 .project-commands__service-fields {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
-.project-commands__service-fields input {
-  border: none;
-  border-radius: 7px;
-  background: var(--panel);
-  box-shadow: var(--control-shadow);
-  padding: 6px 9px;
+
+/* 一格 = 标题 + Shell 编辑器(settings/ShellScriptEditor.tsx) + 占位符提示。 */
+.project-commands__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.project-commands__field > span {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+/* 执行前会问哪些占位符。 */
+.project-commands__placeholders {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 1px 0 0;
+  color: var(--faint);
+  font-size: 11px;
+}
+.project-commands__placeholders code {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
   font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-  font-size: 12px;
-  color: var(--ink);
-  width: 100%;
+  font-size: 11px;
 }
-.project-commands__service-fields input:disabled { opacity: 0.6; }
+.project-commands__placeholders code em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 10px;
+}
 
 .project-commands__list-head {
   display: flex;
@@ -61,38 +96,35 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 8px 0;
+  padding: 10px 0;
   border-top: 1px solid var(--line);
 }
 
-.project-commands__row input {
+/* 只给名称框上样式:命令正文已经是编辑器组件,别把它工具栏里的复选框也当输入框刷一遍。 */
+.project-commands__name {
+  flex: 0 0 160px;
   border: none;
   border-radius: 7px;
   background: var(--panel);
   box-shadow: var(--control-shadow);
   padding: 6px 9px;
+  margin-top: 4px;
   font-size: 12.5px;
   color: var(--ink);
-  width: 100%;
 }
-.project-commands__row input:disabled { opacity: 0.6; }
-
-.project-commands__name { flex: 0 0 160px; }
+.project-commands__name:disabled { opacity: 0.6; }
 
 .project-commands__scripts {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-}
-.project-commands__scripts input {
-  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-  font-size: 12px;
+  gap: 4px;
 }
 
 .project-commands__remove {
   flex: 0 0 auto;
+  margin-top: 2px;
   display: grid;
   place-items: center;
   width: 28px;

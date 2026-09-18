@@ -4,8 +4,8 @@ const editorText = async (editor) => editor.locator(".cm-line").evaluateAll((lin
 const waitForText = (page, expected) => page.waitForFunction((text) =>
   [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')].map((line) => line.querySelector(".cm-placeholder") ? "" : line.textContent).join("\n") === text, expected);
 
-export async function testPreviewCommandEditor(page, editor, save) {
-  const container = page.locator(".preview-command-editor").first();
+export async function testShellScriptEditor(page, editor, save) {
+  const container = page.locator(".shell-editor").first();
   const wrap = page.getByRole("checkbox", { name: "启动脚本 自动换行" });
   assert.equal(await wrap.isChecked(), false, "默认沿用不换行的命令显示方式");
   await wrap.check();
@@ -54,7 +54,7 @@ export async function testPreviewCommandEditor(page, editor, save) {
   await container.scrollIntoViewIfNeeded();
   const scroller = container.locator(".cm-scroller");
   await page.waitForFunction(() => {
-    const scroller = document.querySelector(".preview-command-editor .cm-scroller");
+    const scroller = document.querySelector(".shell-editor .cm-scroller");
     return scroller && scroller.scrollWidth <= scroller.clientWidth + 1;
   });
   const wrappedHeight = await editor.locator(".cm-line").first().evaluate((line) => line.getBoundingClientRect().height);
@@ -63,7 +63,7 @@ export async function testPreviewCommandEditor(page, editor, save) {
   if (process.env.PREVIEW_EDITOR_NARROW_SHOT) await container.screenshot({ path: process.env.PREVIEW_EDITOR_NARROW_SHOT });
   await wrap.uncheck();
   await page.waitForFunction(() => {
-    const scroller = document.querySelector(".preview-command-editor .cm-scroller");
+    const scroller = document.querySelector(".shell-editor .cm-scroller");
     return scroller && scroller.scrollWidth > scroller.clientWidth;
   });
   assert.ok(await scroller.evaluate((node) => node.scrollWidth > node.clientWidth), "不换行时应在编辑器内横向滚动");

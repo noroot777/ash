@@ -208,12 +208,14 @@ export const api = {
     request(`/projects/${id(projectId)}/terminal/sessions`, signal ? { signal } : undefined),
   listCommandSessions: (): Promise<{ sessions: TerminalSessionInfo[] }> =>
     request("/terminal-commands"),
-  startProjectCommand: (projectId: string, commandId: string): Promise<{ session: TerminalSessionInfo; alreadyRunning?: boolean }> =>
-    request(`/projects/${id(projectId)}/commands/${id(commandId)}/start`, json("POST", {})),
+  // values = 命令里 `{{占位符}}` 的取值（shared/project-commands.ts）。只送取值不送脚本：
+  // 跑什么永远以库里存的那条命令为准。
+  startProjectCommand: (projectId: string, commandId: string, values: Record<string, string> = {}): Promise<{ session: TerminalSessionInfo; alreadyRunning?: boolean }> =>
+    request(`/projects/${id(projectId)}/commands/${id(commandId)}/start`, json("POST", { values })),
   stopProjectCommand: (projectId: string, commandId: string): Promise<{ stopped: boolean }> =>
     request(`/projects/${id(projectId)}/commands/${id(commandId)}/stop`, json("POST", {})),
-  restartProjectCommand: (projectId: string, commandId: string): Promise<{ session: TerminalSessionInfo }> =>
-    request(`/projects/${id(projectId)}/commands/${id(commandId)}/restart`, json("POST", {})),
+  restartProjectCommand: (projectId: string, commandId: string, values: Record<string, string> = {}): Promise<{ session: TerminalSessionInfo }> =>
+    request(`/projects/${id(projectId)}/commands/${id(commandId)}/restart`, json("POST", { values })),
   checkPath: (repoPath: string): Promise<ProjectHealth> =>
     request("/projects/check", json("POST", { repoPath })),
   discardTaskWorkspace: (

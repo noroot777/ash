@@ -6,6 +6,12 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseProjectCommands } from "@ash/shared/project-commands";
+import {
+  fillCommandPlaceholders,
+  missingCommandValues,
+  parseCommandPlaceholders,
+  parseCommandValues,
+} from "@ash/shared/project-commands";
 import { IS_WINDOWS } from "../src/platform.js";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { restartCommand, startCommand, stopCommand, type RunnableCommand } from "../src/terminal-commands.js";
@@ -40,6 +46,36 @@ assert.throws(() => parseProjectCommands({ commands: [
 ] }));
 assert.throws(() => parseProjectCommands({ commands: [{ id: "a", name: "x", command: "   " }] }));
 assert.throws(() => parseProjectCommands("nope"));
+// 多行脚本是合法命令(编辑面是 CodeMirror,跑法是 shell -lc):只 trim 首尾,中间原样留着。
+assert.equal(
+  parseProjectCommands({ commands: [{ id: "m", name: "多行", command: "\ncd web\nnpm run dev\n" }] })!.commands[0].command,
+  "cd web\nnpm run dev",
+);
+
+// ── 占位符 ─────────────────────────────────────────────────────────────────
+assert.deepEqual(parseCommandPlaceholders("git checkout {{分支}}"), [{ name: "分支", defaultValue: null }]);
+// 有 `=` 就是可选(默认值可以为空);同名只出现一次,谁写了默认值算谁的。
+assert.deepEqual(parseCommandPlaceholders("echo {{a=1}} {{ a }} {{b=}}"), [
+  { name: "a", defaultValue: "1" },
+  { name: "b", defaultValue: "" },
+]);
+// 不是合法占位符的 `{{…}}` 当普通文本,不问也不替换。
+assert.deepEqual(parseCommandPlaceholders("echo {{}} ${VAR}"), []);
+assert.equal(fillCommandPlaceholders("echo {{}} ${VAR}", {}), "echo {{}} ${VAR}");
+assert.equal(fillCommandPlaceholders("git checkout {{分支}}", { 分支: "main" }), "git checkout main");
+// 留空 = 用默认值;没有默认值就是必填,填不上一律抛(绝不把 {{分支}} 交给 shell)。
+assert.equal(fillCommandPlaceholders("npm run dev -- --port {{端口=5173}}", { 端口: "" }), "npm run dev -- --port 5173");
+assert.deepEqual(missingCommandValues("git checkout {{分支}}", {}), ["分支"]);
+assert.deepEqual(missingCommandValues("git checkout {{分支=main}}", {}), []);
+assert.throws(() => fillCommandPlaceholders("git checkout {{分支}}", {}), /分支/);
+// 替换是原样文本,但换行会把一条命令变成好几条 —— 那是意外不是意图,一律拒绝。
+assert.throws(() => parseCommandValues({ a: "x\nrm -rf /" }), /换行/);
+assert.throws(() => fillCommandPlaceholders("echo {{a}}", { a: "x\ny" }), /换行/);
+assert.throws(() => parseCommandValues({ a: 1 }));
+assert.throws(() => parseCommandValues([]));
+assert.deepEqual(parseCommandValues(undefined), {});
+// 替换出来的值本身带 `$&` 这类正则替换记号也必须原样(用的是函数式 replace)。
+assert.equal(fillCommandPlaceholders("echo {{a}}", { a: "$& $1" }), "echo $& $1");
 
 if (IS_WINDOWS) {
   // 命令会话在 Windows 上明确拒绝(未真机验证的分支不留静默陷阱),没有可测的生命周期。
@@ -173,6 +209,36 @@ try {
   const stopKeep = await stopCommand("pc", "keep");
   assert.deepEqual(stopKeep.body, { stopped: true });
   assert.equal(liveKeep().length, 0);
+
+  // 占位符命令的端到端:取值由服务端填进脚本再跑,必填缺失一律 400 且**不动现场**。
+  const marker = join(cwd, "placeholder.txt");
+  const holder: RunnableCommand = {
+    id: "holder",
+    name: "带参命令",
+    command: `printf '%s' {{文本}} > ${marker}; sleep 60`,
+    restartCommand: null,
+  };
+  const missing = await startCommand("pc4", cwd, holder);
+  assert.equal(missing.status, 400, "必填占位符没填就该原地拒绝");
+  assert.equal(terminalSessions.liveCommandSession("pc4", "holder"), null, "拒绝时不得留下会话");
+  const filled = await startCommand("pc4", cwd, holder, { 文本: "alpha" });
+  assert.equal(filled.status, 201);
+  // 会话名缀上这次的取值,终端 tab 上看得出跑的是哪一次。
+  assert.equal((filled.body as { session: { name: string } }).session.name, "带参命令 · alpha");
+  const markerDeadline = Date.now() + 5000;
+  let written = "";
+  while (written !== "alpha") {
+    try { written = readFileSync(marker, "utf8"); } catch { /* 还没写 */ }
+    if (written !== "alpha" && Date.now() > markerDeadline) throw new Error(`占位符没有被替换:${written}`);
+    if (written !== "alpha") await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  // 取值非法时,重启必须在**杀旧进程之前**就拒绝 —— 「重启失败」不能落成「服务被停了」。
+  const badRestart = await restartCommand("pc4", cwd, holder, { 文本: "a\nb" });
+  assert.equal(badRestart.status, 400);
+  assert.ok(terminalSessions.liveCommandSession("pc4", "holder"), "取值非法的重启不得把在跑的服务停掉");
+  const reRun = await restartCommand("pc4", cwd, holder, { 文本: "beta" });
+  assert.equal(reRun.status, 201);
+  assert.deepEqual((await stopCommand("pc4", "holder")).body, { stopped: true });
 
   // daemonize 形状:组长自然退出(exit 0),忽略信号的子进程还握着 tty。命令会话包
   // TTY_COMMAND_WRAPPER(第 5 轮):wrapper 不杀合法保活的服务,但**持续拥有**它 ——

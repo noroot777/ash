@@ -8,7 +8,7 @@ import { useHostInfo } from "../lib/useHostInfo.ts";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import { ProjectPreviewHelp } from "./ProjectPreviewHelp.tsx";
-import { PreviewCommandEditor, usePreviewCommandWrapping } from "./PreviewCommandEditor.tsx";
+import { ShellScriptEditor, useShellScriptWrapping } from "./ShellScriptEditor.tsx";
 import "./project-preview.css";
 
 const emptyConfig = (): ProjectPreviewConfig => ({ mode: "script", proxy: "auto", services: [], primaryServiceId: null, launch: "frontend" });
@@ -28,7 +28,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
   const canManage = project.myRole === "admin";
   const [config, setConfig] = useState<ProjectPreviewConfig>(() => loadConfig(project.previewConfig));
   const [script, setScript] = useState(project.previewCommand ?? "");
-  const [wrap, onWrapChange] = usePreviewCommandWrapping();
+  const [wrap, onWrapChange] = useShellScriptWrapping();
   const [saved, setSaved] = useState(() => JSON.stringify({ config: loadConfig(project.previewConfig), script: project.previewCommand ?? "" }));
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
@@ -92,7 +92,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       </div>
     </div>
     {config.mode === "script" ? <>
-      <div className="settings-field preview-script-field"><span>启动脚本</span><PreviewCommandEditor label="启动脚本" value={script} onChange={setScript} readOnly={!canManage || busy} rows={9} wrap={wrap} onWrapChange={onWrapChange} placeholder={`例如：\ncd web\nnpm run dev -- --port ${variable("PORT")}`} /></div>
+      <div className="settings-field preview-script-field"><span>启动脚本</span><ShellScriptEditor label="启动脚本" value={script} onChange={setScript} readOnly={!canManage || busy} minRows={9} heightKey={`preview:${project.id}`} wrap={wrap} onWrapChange={onWrapChange} placeholder={`例如：\ncd web\nnpm run dev -- --port ${variable("PORT")}`} /></div>
       <div className="preview-help preview-script-help">
         <small>支持多行、缩进和完整脚本，也可以调用仓库里的脚本文件。留空延续原来的行为：只在恰好识别出一个服务时自动使用。</small>
         {/* 「主服务使用 $PORT」只说了变量叫什么，没说**要不要写**——一半的运行时自己读 PORT
@@ -124,7 +124,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
           <Button className="preview-service-remove" variant="ghost" disabled={!canManage || busy} aria-label={`移除 ${service.name}`} onClick={() => setConfig((current) => ({ ...current, services: current.services.filter((s) => s.id !== service.id), primaryServiceId: current.primaryServiceId === service.id ? null : current.primaryServiceId }))}><Trash size={14} aria-hidden="true" /></Button>
         </div>
         <div className="preview-service-command">
-          <PreviewCommandEditor label={`${service.name} 启动脚本`} value={service.command} onChange={(command) => patchService(service.id, { command })} readOnly={!canManage || busy} rows={Math.min(8, Math.max(2, service.command.split("\n").length))} wrap={wrap} onWrapChange={onWrapChange} placeholder={`启动命令，例如 npm run dev -- --port ${variable("PORT")}`} />
+          <ShellScriptEditor label={`${service.name} 启动脚本`} value={service.command} onChange={(command) => patchService(service.id, { command })} readOnly={!canManage || busy} minRows={2} wrap={wrap} onWrapChange={onWrapChange} placeholder={`启动命令，例如 npm run dev -- --port ${variable("PORT")}`} />
         </div>
       </div>)}</div>
       <div className="preview-help"><small>每条脚本都从任务工作区根目录独立执行，使用自己的 <code>{variable("PORT")}</code>。已选服务按列表顺序对应 <code>{variable("URL1")}</code>、<code>{variable("URL2")}</code>…，可传给前端开发服务器的接口代理配置。它们是服务端内部地址。</small></div>
