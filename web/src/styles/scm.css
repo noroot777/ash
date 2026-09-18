@@ -74,6 +74,11 @@
 .scm-group header b { color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.02em; }
 .scm-group.is-merge header b { color:var(--red); }
 .scm-group__count { border-radius:8px; background:var(--overlay); padding:0 5px; color:var(--faint); font-size:9px; }
+/* 跟「已提交的改动」那节的切换同一档：小一圈、不描边，挨着计数摆。它常驻而不是跟着
+   hover 出现——藏起来的控件等于没有，而这颗是「我习惯怎么看清单」的入口，不是危险动作。
+   摆在左边这一簇里，右侧那组批量操作浮出来时也就不会把它挤走。 */
+.scm-group__layout { display:grid; width:18px; height:18px; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--faint); }
+.scm-group__layout:hover { background:var(--raised); color:var(--ink); }
 .scm-group__bulk { display:inline-flex; margin-left:auto; gap:2px; opacity:0; transition:opacity .12s; }
 .scm-group:hover .scm-group__bulk, .scm-group__bulk:focus-within { opacity:1; }
 .scm-group__bulk button, .scm-row__actions button { display:grid; width:20px; height:20px; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--faint); }

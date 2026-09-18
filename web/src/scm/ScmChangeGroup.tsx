@@ -2,6 +2,7 @@ import { ArrowCounterClockwise, Minus, Plus, Trash } from "@phosphor-icons/react
 import type { ScmChange, ScmGroupId } from "../lib/api.ts";
 import { CONFLICT_LABEL, KIND_BADGE, KIND_LABEL, dirName, fileName, pathsOf } from "./scmModel.ts";
 import { indentStyle, useFileTreeRows, type FileListLayout } from "../lib/fileLayout.ts";
+import { FileLayoutToggle } from "../components/FileLayoutToggle.tsx";
 import { ScmDirRow } from "./ScmTreeParts.tsx";
 
 // 一个改动分组（冲突 / 已暂存 / 更改 / 未跟踪）。条目本身是按钮——点它开 diff，跟
@@ -190,6 +191,10 @@ export function ScmChangeGroup({
       <header>
         <b>{title}</b>
         <span className="scm-group__count">{changes.length}</span>
+        {/* 切换摆在**每个分组的标题上**，跟「已提交的改动」那节同一个理由：面板是滚动的，
+            分支栏上那颗常常已经滚出视野，而清单就在眼前。几颗按钮共用同一份全局偏好，
+            按哪颗都是整页一起翻（见 `lib/fileLayout.ts`）。 */}
+        <FileLayoutToggle className="scm-group__layout" size={12} />
         <span className="scm-group__bulk">
           {actions.onDiscard && (
             <button
