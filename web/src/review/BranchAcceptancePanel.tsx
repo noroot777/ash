@@ -3,6 +3,7 @@ import { ArrowClockwise, ArrowRight, GitBranch, GitCommit, GitPullRequest } from
 import type { BranchPlanView, Task, TaskListItem } from "@ash/shared";
 import { familyAcceptanceNotices, familySelectionBlock } from "@ash/shared/branch-plan";
 import { api } from "../lib/api.ts";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { MergeTargetEditor } from "./MergeTargetEditor.tsx";
 import { useBranchPlan } from "./useBranchPlan.ts";
@@ -14,7 +15,12 @@ import { AcceptCommitChoice, useAcceptCommitDefault } from "./AcceptCommitChoice
 const taskHref = (projectId: string, taskId: string) => `/?${new URLSearchParams({ project: projectId, task: taskId })}`;
 
 export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: TaskListItem; notify: (text: string) => void; onTaskUpdated?: (task: Task) => void }) {
-  const { view, error, loading, refresh } = useBranchPlan(task);
+  const { view, error, staleReason, loading, refreshing, refresh } = useBranchPlan(task);
+  // 后台重验失败的说明：只经这颗刷新按钮露出（悬停/聚焦看得到，屏幕阅读器经 describedby
+  // 念得到），不进入正文流，所以宽高一格不动。
+  const staleTip = useHoverTip();
+  const staleId = `branch-plan-stale-${task.id}`;
+  const staleNote = `上次自动重验没成功（${staleReason}），这里显示的还是上一次读到的依赖。点一下重新读取。`;
   const [action, setAction] = useState<"update" | "family" | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -28,7 +34,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   useEffect(() => { setChecked([]); setAction(null); setMessage(""); }, [task.id]);
   if (!task.useWorktree) return null;
   if (!view) return error ? <p role="alert">验收依赖读取失败：{error}<button onClick={() => void refresh()}>重试</button></p> : <p>正在检查验收依赖…</p>;
-  const checking = loading || !!error;
+  const checking = loading || refreshing || !!error;
   const dep = view.task.dependency;
   const descendants = view.descendants.filter(row => row.stage !== "accepted");
   if (!view.task.startCommit && !dep && !descendants.length && !view.task.blocker) return null;
@@ -85,11 +91,22 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
     <section className="branch-acceptance-panel" aria-label="派生与验收依赖">
       <header className="branch-acceptance-heading">
         <h3><GitPullRequest size={14} aria-hidden="true" />派生与验收</h3>
-        <button className="branch-acceptance-refresh" type="button" disabled={busy} onClick={() => void refresh()}>
-          <ArrowClockwise size={12} aria-hidden="true" />刷新依赖
+        {/* 刷新态只画在这颗按钮上（图标转、aria-busy），不另起一行「正在更新…」：那一行
+            会把下面的快照卡和整块 diff 顶下去、回来再弹上来，而刷新一秒就完，用户看到的
+            就是页面每隔一会儿自己蹦一下。
+            **忙态不禁用这颗按钮**：显式刷新是可重入的（load 会递增 sequence，让挂起的
+            旧响应释放后不再覆盖新结果）。禁掉就等于把那条竞态保护从 UI 层堵死——请求慢、
+            挂起或将返回过期数据时，用户反而点不动这颗唯一的重试入口。
+            后台重验失败也落在这儿：换个颜色、指上去说清楚，宽高一格不动，可读名字仍是
+            「刷新依赖」。既不静默吞掉，也不在用户没动手的时候把版面顶开。 */}
+        <button className="branch-acceptance-refresh" type="button" disabled={busy} aria-busy={refreshing}
+          data-stale={staleReason ? "true" : undefined} aria-describedby={staleReason ? staleId : undefined}
+          onClick={() => void refresh()} {...staleTip.anchorProps}>
+          <ArrowClockwise size={12} className={refreshing ? "is-spinning" : ""} aria-hidden="true" />刷新依赖
         </button>
+        {staleReason && <span id={staleId} className="task-visually-hidden">{staleNote}</span>}
+        <HoverTip at={staleReason ? staleTip.at : null}>{staleNote}</HoverTip>
       </header>
-      {loading && <p role="status">正在更新验收依赖…</p>}
       {error && <p role="alert">验收依赖读取失败：{error}<button onClick={() => void refresh()}>重试</button></p>}
       <dl className="branch-acceptance-route">
         <div><dt>开工起点</dt><dd><GitCommit size={14} aria-hidden="true" />
@@ -141,7 +158,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         confirmLabel={action === "update" ? "更新基线" : canChooseCommit && !commitChecked ? "确认统一验收（不提交）" : "确认统一验收"} danger busy={busy}
         confirmDisabled={checking || (action === "family" && (!!view.task.blocker || !!selectionBlock || (!!unverified.length && !confirmUnverified) || (canChooseCommit && (commitDefault.pending || !!commitBatchBlock))))}
         onConfirm={() => void run()} onClose={() => { if (!busy) setAction(null); }}>
-        {loading && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
+        {(loading || refreshing) && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
         {error && <p role="alert">验收依赖读取失败：{error}</p>}
         {action === "update" && <p>{proposal.task.dependency?.message}</p>}
         {action === "family" && <ul>{selectedProposal.map(row => <li key={row.taskId}>{row.title} · {row.sourceCommit?.slice(0, 8) || "已验收"} · {row.strategy} → {row.targetBranch}</li>)}</ul>}

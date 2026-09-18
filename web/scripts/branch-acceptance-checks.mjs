@@ -233,6 +233,28 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   ensure(await review().getByRole("button", { name: "验收通过", exact: true }).isEnabled(), "fresh task plan must restore acceptance");
 
+  // 后台自动重验（15 秒那个）**失败**时也不许惊动版面：它对不上用户的任何动作，升级成一行
+  // alert 只会在没人动手的时候把下面的内容顶开、还顺手禁掉验收按钮。失败只落在刷新按钮的
+  // 记号上（换色 + 指上去说清楚），手上那份依赖仍然有效。
+  const panel = () => page.getByRole("region", { name: "派生与验收依赖" });
+  const panelHeight = () => panel().evaluate(node => node.getBoundingClientRect().height);
+  const quietHeight = await panelHeight();
+  await button("下次依赖请求失败").click();
+  await button("轮询一次").click();
+  await settled(11);
+  // 先等失败真的落到界面上（记号出现），再断言版面没动——反过来写的话，三条断言可能只是
+  // 抢在状态更新之前跑完，永远为真。
+  await button("刷新依赖").and(page.locator('[data-stale="true"]')).waitFor({ state: "visible" });
+  ensure(await panel().getByRole("alert").count() === 0, "background revalidation failure must not raise an alert");
+  ensure(await panelHeight() === quietHeight, "background revalidation failure must not reflow the panel");
+  ensure(await review().getByRole("button", { name: "验收通过", exact: true }).isEnabled(), "background revalidation failure must not block acceptance");
+  await button("刷新依赖").hover();
+  await page.getByRole("tooltip").filter({ hasText: "上次自动重验没成功" }).waitFor({ state: "visible" });
+  ensure(await panelHeight() === quietHeight, "stale explanation must stay out of the layout flow");
+  await button("刷新依赖").click();
+  await settled(12);
+  await button("刷新依赖").and(page.locator("button:not([data-stale])")).waitFor({ state: "visible" });
+
   await go("case2-child");
   await button("更新子分支基线").click();
   await dialog.getByRole("heading", { name: "更新子分支基线？" }).waitFor({ state: "visible" });
