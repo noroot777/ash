@@ -42,12 +42,13 @@ export type ScmDiffTarget = {
 
 export { branchDiffReason } from "../lib/branch-diff-reason.ts";
 
+// 面板没有推送入口（分支栏那颗图标已撤，推送归 Git 工作台），所以这个联合里也没有
+// push——`api.scmPush` 与后端 `/tasks/:id/scm/push` 仍在，只是这一栏不再是它的调用点。
 export type ScmAction =
   | { kind: "stage"; paths: string[] }
   | { kind: "unstage"; paths: string[] }
   | { kind: "discard"; paths: string[]; deleteUntracked: string[] }
-  | { kind: "commit"; message: string; stagePaths?: string[]; amend?: boolean }
-  | { kind: "push"; remote: string | null };
+  | { kind: "commit"; message: string; stagePaths?: string[]; amend?: boolean };
 
 /** 一次写操作的结果：要么落地了（带一句可以直接 notify 的话），要么被 running 门禁挡下。 */
 export type ScmActionOutcome =
@@ -166,16 +167,6 @@ async function runOne(taskId: string, action: ScmAction, force: boolean) {
       return {
         status: result.status,
         message: withNote(result.warning ? `${done}（${result.warning}）` : done, result.note),
-      };
-    }
-    case "push": {
-      const result = await api.scmPush(taskId, action.remote, force);
-      const count = result.pushed && result.pushed > 0 ? ` ${result.pushed} 个提交` : "";
-      return {
-        status: result.status,
-        message: result.published
-          ? `已发布分支 ${result.branch} 到 ${result.remote}`
-          : `已推送${count}到 ${result.remote}/${result.branch}`,
       };
     }
   }
@@ -298,7 +289,7 @@ export function useScmWorkspace(taskId: string) {
       } else {
         setStale(STALE_AFTER_WRITE);
       }
-      if (action.kind === "commit" || action.kind === "push" || !result.status) void refresh(true);
+      if (action.kind === "commit" || !result.status) void refresh(true);
       setError(null);
       setPartial(null);
       return { ok: true, message: result.message };
