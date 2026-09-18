@@ -139,7 +139,10 @@ export function AcceptanceControls({
   // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
   const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
   const branchPlan = useBranchPlan(task, !midGate && task.stage !== "accepted");
-  const checkingDependencies = !midGate && !!task.useWorktree && task.stage !== "accepted" && (branchPlan.loading || !branchPlan.view);
+  // 后台静默重验不算「正在检查」：branchPlan 每 15 秒重验一次，把它算进来会让这颗主按钮
+  // 每隔 15 秒把字换成「检查验收依赖」再换回去（宽度跟着变），点击也在那一瞬间被吞掉。
+  const checkingDependencies = !midGate && !!task.useWorktree && task.stage !== "accepted"
+    && (branchPlan.loading || branchPlan.refreshing || !branchPlan.view);
   if (!midGate && task.useWorktree && task.stage !== "accepted") {
     acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : null;
     acceptanceBlock ??= branchPlan.view?.task.blockerLabel ?? branchPlan.view?.task.blocker ?? null;

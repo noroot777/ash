@@ -2,7 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import type { BranchPlanView, TaskListItem } from "@ash/shared";
 import { api } from "../lib/api.ts";
 
-type Snapshot = { view: BranchPlanView | null; error: string | null; loading: boolean };
+/**
+ * `loading` = 还不知道（手上没有可显示的 view）；`refreshing` = 手上有 view，正在做一次
+ * **用户自己触发得出来**的重取（点刷新、任务刚变过）。
+ *
+ * 15 秒一次的后台重验两者都不置位：它是 stale-while-revalidate，界面上那份数据一直有效，
+ * 宣布「取数中」只会让消费方把内容顶开又收回。判据是「用户能不能把这次取数跟自己的动作
+ * 对上」——对不上的就必须静默。
+ */
+type Snapshot = { view: BranchPlanView | null; error: string | null; loading: boolean; refreshing: boolean };
 type Entry = {
   snapshot: Snapshot;
   listeners: Set<(snapshot: Snapshot) => void>;
@@ -11,10 +19,11 @@ type Entry = {
   pending?: Promise<void>;
   timer?: ReturnType<typeof setInterval>;
 };
-const empty: Snapshot = { view: null, error: null, loading: false };
+const empty: Snapshot = { view: null, error: null, loading: false, refreshing: false };
 const entries = new Map<string, Entry>();
 
-function load(taskId: string, entry: Entry, force = false): Promise<void> {
+function load(taskId: string, entry: Entry, mode: "background" | "explicit" = "background"): Promise<void> {
+  const force = mode === "explicit";
   if (entry.pending && !force) return entry.pending;
   const sequence = ++entry.sequence;
   const publish = (snapshot: Snapshot) => {
@@ -22,10 +31,14 @@ function load(taskId: string, entry: Entry, force = false): Promise<void> {
     entry.snapshot = snapshot;
     for (const listener of entry.listeners) listener(snapshot);
   };
-  publish({ ...entry.snapshot, loading: true });
+  const hasView = !!entry.snapshot.view;
+  // 后台重验且已有 view：一个字都不宣布，连一次空转的 publish 都不发。
+  if (force || !hasView) publish({ ...entry.snapshot, loading: !hasView, refreshing: hasView });
+  const settle = (snapshot: Omit<Snapshot, "loading" | "refreshing">) =>
+    publish({ ...snapshot, loading: false, refreshing: false });
   const pending = api.branchPlan(taskId).then(
-    view => publish({ view, error: null, loading: false }),
-    reason => publish({ view: entry.snapshot.view, error: reason instanceof Error ? reason.message : String(reason), loading: false }),
+    view => settle({ view, error: null }),
+    reason => settle({ view: entry.snapshot.view, error: reason instanceof Error ? reason.message : String(reason) }),
   ).finally(() => { if (entry.pending === pending) entry.pending = undefined; });
   entry.pending = pending;
   return pending;
@@ -60,11 +73,11 @@ export function useBranchPlan(task: TaskListItem, enabled = true) {
     const entry = active && entries.get(task.id);
     if (!entry || (entry.sequence > 0 && entry.version === task.updatedAt)) return;
     entry.version = task.updatedAt;
-    void load(task.id, entry, true);
+    void load(task.id, entry, "explicit");
   }, [task.id, task.updatedAt, active]);
   const refresh = useCallback(async () => {
     const entry = active && entries.get(task.id);
-    if (entry) await load(task.id, entry, true);
+    if (entry) await load(task.id, entry, "explicit");
   }, [task.id, active]);
   return { ...(active && state.taskId === task.id ? state.snapshot : empty), refresh };
 }

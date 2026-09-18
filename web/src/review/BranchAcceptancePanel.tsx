@@ -14,7 +14,7 @@ import { AcceptCommitChoice, useAcceptCommitDefault } from "./AcceptCommitChoice
 const taskHref = (projectId: string, taskId: string) => `/?${new URLSearchParams({ project: projectId, task: taskId })}`;
 
 export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: TaskListItem; notify: (text: string) => void; onTaskUpdated?: (task: Task) => void }) {
-  const { view, error, loading, refresh } = useBranchPlan(task);
+  const { view, error, loading, refreshing, refresh } = useBranchPlan(task);
   const [action, setAction] = useState<"update" | "family" | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -28,7 +28,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   useEffect(() => { setChecked([]); setAction(null); setMessage(""); }, [task.id]);
   if (!task.useWorktree) return null;
   if (!view) return error ? <p role="alert">验收依赖读取失败：{error}<button onClick={() => void refresh()}>重试</button></p> : <p>正在检查验收依赖…</p>;
-  const checking = loading || !!error;
+  const checking = loading || refreshing || !!error;
   const dep = view.task.dependency;
   const descendants = view.descendants.filter(row => row.stage !== "accepted");
   if (!view.task.startCommit && !dep && !descendants.length && !view.task.blocker) return null;
@@ -85,11 +85,14 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
     <section className="branch-acceptance-panel" aria-label="派生与验收依赖">
       <header className="branch-acceptance-heading">
         <h3><GitPullRequest size={14} aria-hidden="true" />派生与验收</h3>
-        <button className="branch-acceptance-refresh" type="button" disabled={busy} onClick={() => void refresh()}>
-          <ArrowClockwise size={12} aria-hidden="true" />刷新依赖
+        {/* 刷新态只画在这颗按钮上（图标转、aria-busy），不另起一行「正在更新…」：那一行
+            会把下面的快照卡和整块 diff 顶下去、回来再弹上来，而刷新一秒就完，用户看到的
+            就是页面每隔一会儿自己蹦一下。 */}
+        <button className="branch-acceptance-refresh" type="button" disabled={busy || refreshing} aria-busy={refreshing}
+          onClick={() => void refresh()}>
+          <ArrowClockwise size={12} className={refreshing ? "is-spinning" : ""} aria-hidden="true" />刷新依赖
         </button>
       </header>
-      {loading && <p role="status">正在更新验收依赖…</p>}
       {error && <p role="alert">验收依赖读取失败：{error}<button onClick={() => void refresh()}>重试</button></p>}
       <dl className="branch-acceptance-route">
         <div><dt>开工起点</dt><dd><GitCommit size={14} aria-hidden="true" />
@@ -141,7 +144,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         confirmLabel={action === "update" ? "更新基线" : canChooseCommit && !commitChecked ? "确认统一验收（不提交）" : "确认统一验收"} danger busy={busy}
         confirmDisabled={checking || (action === "family" && (!!view.task.blocker || !!selectionBlock || (!!unverified.length && !confirmUnverified) || (canChooseCommit && (commitDefault.pending || !!commitBatchBlock))))}
         onConfirm={() => void run()} onClose={() => { if (!busy) setAction(null); }}>
-        {loading && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
+        {(loading || refreshing) && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
         {error && <p role="alert">验收依赖读取失败：{error}</p>}
         {action === "update" && <p>{proposal.task.dependency?.message}</p>}
         {action === "family" && <ul>{selectedProposal.map(row => <li key={row.taskId}>{row.title} · {row.sourceCommit?.slice(0, 8) || "已验收"} · {row.strategy} → {row.targetBranch}</li>)}</ul>}
