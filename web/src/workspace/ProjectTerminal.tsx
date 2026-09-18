@@ -19,21 +19,28 @@ import {
 const TERMINAL_HEIGHT_KEY = "ash:terminal-height";
 const DEFAULT_HEIGHT = 280;
 const MIN_HEIGHT = 170;
+const MAX_HEIGHT = 560;
 const MAX_TABS = 8;
 
 function maximumHeight(viewportHeight: number = window.innerHeight): number {
-  return Math.max(MIN_HEIGHT, Math.min(560, viewportHeight - 210));
+  return Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, viewportHeight - 210));
 }
 
+/** 拖拽用:按**当前窗口**能给的高度夹。 */
 function clampHeight(value: number, viewportHeight?: number): number {
   return Math.max(MIN_HEIGHT, Math.min(maximumHeight(viewportHeight), Math.round(value)));
+}
+
+/** 偏好用:只按绝对上下限夹,**不看窗口** —— 看了就等于「窗口临时矮」把偏好永久改小。 */
+function preferredHeight(value: number): number {
+  return Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.round(value)));
 }
 
 function initialHeight(): number {
   // 没存过时 readRenamedStorage 给的是 null,Number(null) = 0 —— 0 也是有限数,照单全收
   // 就等于每个新用户第一次开终端都只得到 MIN_HEIGHT 那一条缝,而不是 DEFAULT_HEIGHT。
   const stored = Number(readRenamedStorage(TERMINAL_HEIGHT_KEY));
-  return Number.isFinite(stored) && stored > 0 ? clampHeight(stored) : DEFAULT_HEIGHT;
+  return Number.isFinite(stored) && stored > 0 ? preferredHeight(stored) : DEFAULT_HEIGHT;
 }
 
 function clientTabId(): string {
@@ -310,10 +317,12 @@ export function ProjectTerminal({
   notify: (message: string) => void;
 }) {
   const nextOrdinal = useRef(1);
+  // height = 用户挑的那个高度(偏好),appliedHeight = 按当前窗口夹过的实际高度。
+  // 底部坞横着占一整行,高度不跟着窗口收就会把上面的工作区整个挤没(实测:560 的终端
+  // + 620 高的窗口 = 侧栏和主区只剩 34px);但**夹只发生在渲染这一侧** —— 偏好既不在
+  // 读取时按窗口夹、也不在挂载/窗口变化时回写,否则「在矮窗口里开一次终端」就等于
+  // 把他存的 560 永久改成 410,窗口拉回来也回不去了(第 1 轮审查实锤)。
   const [height, setHeight] = useState(initialHeight);
-  // 底部坞在窗口里横着占一整行,高度不跟着窗口收就会把上面的工作区整个挤没(实测:
-  // 560 的终端 + 620 高的窗口 = 侧栏和主区只剩 34px)。**存的是用户挑的那个高度,
-  // 用的是按当前窗口夹过的值** —— 窗口临时变矮不该顺手把他的偏好改小,拉回来还得再调一次。
   const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
   useEffect(() => {
     const onResize = () => setViewportHeight(window.innerHeight);
@@ -321,6 +330,12 @@ export function ProjectTerminal({
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const appliedHeight = clampHeight(height, viewportHeight);
+  // 落盘只由**用户亲手调**触发(拖拽收手、双击复位),不挂 effect 跟着 state 走。
+  const rememberHeight = useCallback((value: number) => {
+    const next = preferredHeight(value);
+    setHeight(next);
+    window.localStorage.setItem(TERMINAL_HEIGHT_KEY, String(next));
+  }, []);
   // tabs 和 activeId 是同一份状态:容量决策、victim 顶替和激活必须在同一个函数式
   // updater 里原子完成。拆成两个 state 时,「先读快照定分支、再对可能已变的 cur 插入」
   // 会在首次挂载与 focusRequest 并发时插出第 9 个 tab(第 3 轮审查实锤:抽屉关着
@@ -525,10 +540,6 @@ export function ProjectTerminal({
     };
   }, [pollKey, project.id]);
 
-  useEffect(() => {
-    window.localStorage.setItem(TERMINAL_HEIGHT_KEY, String(height));
-  }, [height]);
-
   const updateTabMeta = useCallback((id: string, patch: Partial<Pick<ProjectTerminalTab, "cwd" | "status" | "sessionId">>) => {
     setPane((prev) => ({ ...prev, tabs: prev.tabs.map((tab) => tab.id === id ? { ...tab, ...patch } : tab) }));
   }, []);
@@ -579,11 +590,18 @@ export function ProjectTerminal({
     const startY = event.clientY;
     const startHeight = appliedHeight;
     document.body.classList.add("terminal-drawer-resizing");
-    const move = (next: PointerEvent) => setHeight(clampHeight(startHeight + startY - next.clientY));
+    // 拖的过程中只动 state(跟手),收手时才落盘 —— 每个 pointermove 都写一次
+    // localStorage 是同步 IO,没必要。
+    let latest = startHeight;
+    const move = (next: PointerEvent) => {
+      latest = clampHeight(startHeight + startY - next.clientY, viewportHeight);
+      setHeight(latest);
+    };
     const finish = () => {
       document.body.classList.remove("terminal-drawer-resizing");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", finish);
+      rememberHeight(latest);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", finish, { once: true });
@@ -600,7 +618,7 @@ export function ProjectTerminal({
         aria-valuemax={maximumHeight(viewportHeight)}
         aria-valuenow={appliedHeight}
         onPointerDown={beginResize}
-        onDoubleClick={() => setHeight(DEFAULT_HEIGHT)}
+        onDoubleClick={() => rememberHeight(DEFAULT_HEIGHT)}
       />
       <header className="project-terminal__bar">
         <div className="project-terminal__tabs" role="tablist" aria-label="CLI 终端">
