@@ -1,7 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { MAX_PREVIEW_SCRIPT_LENGTH, parsePreviewConfig } from "@ash/shared/preview";
-import { parseProjectCommands } from "@ash/shared/project-commands";
+import { normalizeProjectCommands, parseProjectCommands } from "@ash/shared/project-commands";
 import { detectPreviewCandidates } from "./preview-command.js";
 import { rmSync } from "node:fs";
 import { join, basename } from "node:path";
@@ -75,6 +75,9 @@ export function mountProjectRoutes(api: Hono): void {
   // 它是必填的:少写一处就是「界面上以为自己能改、点下去 403」,类型上钉死比事后 grep 稳。
   const toProject = (r: typeof projects.$inferSelect, myRole: ProjectRole): ProjectView => ({
     ...r,
+    // 列里可能是旧一代的数组形状(每条命令自带 restartCommand),出门前归一成
+    // { service, commands },前端只认识新形状。
+    commandsConfig: normalizeProjectCommands(r.commandsConfig),
     health: projectHealthLight(r.repoPath),
     myRole,
   });

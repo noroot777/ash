@@ -110,6 +110,8 @@ export function WorkspaceShell() {
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
+  // G C 的信号:每按一下加一,StatusBar 收到变化就开合常用命令弹层(状态住在它那边)。
+  const [commandsPopSignal, setCommandsPopSignal] = useState(0);
   // 日志聚焦是一次性命令:ProjectTerminal 消费完(成功、失败、还是消费中被卸载)都会
   // 回执终结,否则关抽屉再开会重放最后一次请求,把用户按回同一条日志(第 4/5 轮审查
   // 实锤)。回执带 seq,只清对应请求 —— 回执可能和用户刚点的下一次请求并发。
@@ -495,6 +497,9 @@ export function WorkspaceShell() {
     onToggleTaskMode: toggleTaskMode,
     // G S 进设置，落点和项目下拉里那颗「设置」完全一样（见 openSettingsHome）。
     onOpenSettings: openSettingsHome,
+    // G C / G Z 跟状态栏上那两颗按钮完全同一条路;没权限(多人模式非管理员)就没有落点。
+    onToggleCommands: () => { if (canUseTerminal) setCommandsPopSignal((value) => value + 1); },
+    onToggleTerminal: () => { if (canUseTerminal && currentProject) toggleTerminal(); },
   });
 
   const dropSettingsAnchor = useCallback(() => setSettingsAnchor(null), []);
@@ -511,6 +516,12 @@ export function WorkspaceShell() {
     setGitOpen(false);
     setTerminalOpen(true);
   };
+  // 状态栏「终端」按钮和快捷键 G Z 的同一条路:在设置/Git 页先退回工作区再展开,
+  // 已在工作区就纯开合。
+  const toggleTerminal = () => {
+    if (settingsSection || gitOpen) revealTerminal();
+    else setTerminalOpen((open) => !open);
+  };
   const statusBar = (
     <StatusBar
       projects={projects}
@@ -519,10 +530,8 @@ export function WorkspaceShell() {
       canUseTerminal={canUseTerminal}
       connected={connected}
       terminalOpen={terminalOpen}
-      onToggleTerminal={() => {
-        if (settingsSection || gitOpen) revealTerminal();
-        else setTerminalOpen((open) => !open);
-      }}
+      openSignal={commandsPopSignal}
+      onToggleTerminal={toggleTerminal}
       onOpenCommandLog={(sessionId) => {
         setTerminalFocus({ sessionId, seq: Date.now() });
         revealTerminal();

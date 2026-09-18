@@ -27,6 +27,10 @@ type ShortcutOptions = {
   onCloseSpread: () => void;
   onToggleTaskMode: () => void;
   onOpenSettings: () => void;
+  /** G C:开合状态栏的常用命令弹层。 */
+  onToggleCommands: () => void;
+  /** G Z:开合终端抽屉。 */
+  onToggleTerminal: () => void;
 };
 
 function isTextEntry(target: EventTarget | null): boolean {
@@ -78,6 +82,8 @@ export function useWorkspaceShortcuts({
   onCloseSpread,
   onToggleTaskMode,
   onOpenSettings,
+  onToggleCommands,
+  onToggleTerminal,
 }: ShortcutOptions): void {
   const inspectorSequence = useRef(createInspectorShortcutSequence());
   const goSequence = useRef(createKeyChordSequence(GO_CHORD_PREFIX, isGoChordKey));
@@ -127,7 +133,8 @@ export function useWorkspaceShortcuts({
         inspectorSequence.current.reset();
       }
 
-      // `G …` 那一族（G T 切任务模式、G S 进项目设置）。两条序列互相清对方的半截状态：
+      // `G …` 那一族（G T 切任务模式、G S 进项目设置、G C 常用命令弹层、G Z 终端抽屉）。
+      // 两条序列互相清对方的半截状态：
       // 不清的话 `g i f t` 会被串成一次切换 —— 中间整条 Inspector 序列本该把那个 g 作废掉。
       if (!event.repeat) {
         const goChord = goSequence.current.handle(event.key);
@@ -143,6 +150,8 @@ export function useWorkspaceShortcuts({
           event.stopImmediatePropagation();
           if (goChord.key === GO_CHORD_KEYS.taskMode) onToggleTaskMode();
           else if (goChord.key === GO_CHORD_KEYS.settings) onOpenSettings();
+          else if (goChord.key === GO_CHORD_KEYS.commands) onToggleCommands();
+          else if (goChord.key === GO_CHORD_KEYS.terminal) onToggleTerminal();
           return;
         }
       }
@@ -199,7 +208,7 @@ export function useWorkspaceShortcuts({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [composerOpen, enabled, onCloseSpread, onCreate, onOpenSettings, onTask, onToggleSpread, onToggleTaskMode, onTogglePalette, orderedTasks, paletteOpen, selectedTaskId, spreadOpen]);
+  }, [composerOpen, enabled, onCloseSpread, onCreate, onOpenSettings, onTask, onToggleCommands, onToggleSpread, onToggleTaskMode, onTogglePalette, onToggleTerminal, orderedTasks, paletteOpen, selectedTaskId, spreadOpen]);
 
   useEffect(() => {
     if (!selectedTaskId) return;

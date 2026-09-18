@@ -50,6 +50,22 @@ try {
   assert.equal(manager.sweepIdleSessions(Date.now() + 31 * 60 * 1000), 0);
   assert.ok(manager.get(session.id, "project-test"));
   unsubscribe();
+  // 交互 shell 是持久终端:没人订阅(抽屉收起)也不回收,活着就一直在。
+  assert.equal(manager.sweepIdleSessions(Date.now() + 31 * 60 * 1000), 0);
+  assert.ok(manager.get(session.id, "project-test"));
+  // shell 自己退出(整组死透)后,退出记录才回到闲置回收轨道。
+  const exited = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("shell did not exit in time")), 8000);
+    const stop = manager.subscribe(session.id, "project-test", (event) => {
+      if (event.type !== "exit") return;
+      clearTimeout(timeout);
+      stop?.();
+      resolve();
+    });
+    if (!stop) { clearTimeout(timeout); reject(new Error("session not found")); }
+  });
+  manager.write(session.id, "project-test", IS_WINDOWS ? "exit\r\n" : "exit\n");
+  await exited;
   assert.equal(manager.sweepIdleSessions(Date.now() + 31 * 60 * 1000), 1);
   assert.equal(manager.get(session.id), null);
   console.log("terminal session test passed");

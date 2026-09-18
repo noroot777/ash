@@ -6,27 +6,39 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseProjectCommands } from "@ash/shared/project-commands";
-import type { ProjectCommandConfig } from "@ash/shared/project-commands";
 import { IS_WINDOWS } from "../src/platform.js";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
-import { restartCommand, startCommand, stopCommand } from "../src/terminal-commands.js";
+import { restartCommand, startCommand, stopCommand, type RunnableCommand } from "../src/terminal-commands.js";
 
 // ── parse ──────────────────────────────────────────────────────────────────
 assert.equal(parseProjectCommands(null), null);
-assert.deepEqual(parseProjectCommands([]), []);
-const parsed = parseProjectCommands([
-  { id: "dev", name: " web dev ", command: " npm run dev ", restartCommand: "  " },
-])!;
-assert.equal(parsed[0].name, "web dev");
-assert.equal(parsed[0].command, "npm run dev");
+// 空配置归一成 null(= 清空),不落一份空壳对象。
+assert.equal(parseProjectCommands({ service: null, commands: [] }), null);
+const parsed = parseProjectCommands({
+  service: { command: " npm run dev ", restartCommand: "  " },
+  commands: [{ id: "dev", name: " web dev ", command: " npm test " }],
+})!;
+assert.equal(parsed.service?.command, "npm run dev");
 // 空白重启命令归一成 null(= 杀掉再跑启动命令),不能存成 ""。
-assert.equal(parsed[0].restartCommand, null);
-assert.throws(() => parseProjectCommands([{ id: "a b", name: "x", command: "y", restartCommand: null }]));
-assert.throws(() => parseProjectCommands([
-  { id: "a", name: "x", command: "y", restartCommand: null },
-  { id: "a", name: "z", command: "w", restartCommand: null },
-]));
-assert.throws(() => parseProjectCommands([{ id: "a", name: "x", command: "   ", restartCommand: null }]));
+assert.equal(parsed.service?.restartCommand, null);
+assert.equal(parsed.commands[0].name, "web dev");
+assert.equal(parsed.commands[0].command, "npm test");
+// 旧客户端发来的纯数组照收:当作普通命令,那一代的逐条 restartCommand 丢弃。
+const legacy = parseProjectCommands([
+  { id: "dev", name: "web dev", command: "npm run dev", restartCommand: "npm run dev -- --reset" },
+])!;
+assert.equal(legacy.service, null);
+assert.deepEqual(legacy.commands, [{ id: "dev", name: "web dev", command: "npm run dev" }]);
+// 只填重启不填启动没有意义:重启的前半段就是杀旧进程,起点必须有启动命令。
+assert.throws(() => parseProjectCommands({ service: { command: " ", restartCommand: "x" }, commands: [] }));
+assert.throws(() => parseProjectCommands({ commands: [{ id: "a b", name: "x", command: "y" }] }));
+// "service" 是保留 id(项目级启动/重启的会话身份),普通命令不得占用。
+assert.throws(() => parseProjectCommands({ commands: [{ id: "service", name: "x", command: "y" }] }));
+assert.throws(() => parseProjectCommands({ commands: [
+  { id: "a", name: "x", command: "y" },
+  { id: "a", name: "z", command: "w" },
+] }));
+assert.throws(() => parseProjectCommands({ commands: [{ id: "a", name: "x", command: "   " }] }));
 assert.throws(() => parseProjectCommands("nope"));
 
 if (IS_WINDOWS) {
@@ -141,7 +153,7 @@ try {
 
   // 并发 restart / start 按 (projectId, commandId) 串行化:同一条命令绝不出现两个活会话。
   // 服务函数用的是全局单例 terminalSessions,不是上面的 manager。
-  const keep: ProjectCommandConfig = { id: "keep", name: "keep alive", command: "sleep 60", restartCommand: null };
+  const keep: RunnableCommand = { id: "keep", name: "keep alive", command: "sleep 60", restartCommand: null };
   const [restart1, restart2] = await Promise.all([
     restartCommand("pc", cwd, keep),
     restartCommand("pc", cwd, keep),
@@ -198,7 +210,7 @@ try {
   assert.deepEqual(await manager.terminate(replacing.id, "p1"), { ok: true });
 
   // audit 的完整场景:连环 restart、每次都订阅新会话的日志,槽不再被吃光,每次都成功。
-  const churn: ProjectCommandConfig = { id: "churn", name: "churn", command: "sleep 60", restartCommand: null };
+  const churn: RunnableCommand = { id: "churn", name: "churn", command: "sleep 60", restartCommand: null };
   for (let i = 0; i < 18; i++) {
     const result = await restartCommand("pc2", cwd, churn);
     assert.equal(result.status, 201, `第 ${i + 1} 次 restart 必须成功(退出记录不被订阅钉住)`);

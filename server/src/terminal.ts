@@ -317,10 +317,11 @@ export class TerminalSessionManager {
     for (const session of this.sessions.values()) {
       // A subscriber means the CLI is still open, even when the shell is silent.
       if (session.listeners.size > 0 || session.lastAccessedAt >= cutoff) continue;
-      // 活着的常用命令会话是「常驻服务」，没人盯着看不是退出的理由 —— 判「活」含
-      // daemonize 形状(组长退了、子进程还在):回收会话就没人能停那些进程了。只有整组
-      // 都退了才回到普通回收轨道，让退出日志保留半小时可回看。
-      if (session.commandId !== null && this.sessionAlive(session)) continue;
+      // 活着的会话一律不回收:命令会话是「常驻服务」,交互 shell 是**持久终端**(VSCode
+      // 语义:关抽屉只是收起,回来还要原样在,结束它的只有 tab 上的关闭按钮和它自己
+      // exit)。判「活」含 daemonize 形状(组长退了、子进程还在):回收会话就没人能停
+      // 那些进程了。只有整组死透的(纯退出日志)才闲置半小时后回收。
+      if (this.sessionAlive(session)) continue;
       if (this.close(session.id)) closed += 1;
     }
     return closed;

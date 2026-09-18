@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowsClockwise, CircleNotch, Play, Scroll, Square, TerminalWindow } from "@phosphor-icons/react";
 import type { ProjectView } from "@ash/shared";
+import { SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
 import { api, type TerminalSessionInfo } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { COMMANDS_SHORTCUT_LABEL, TERMINAL_SHORTCUT_LABEL } from "./goChord.ts";
 
 // 全局状态栏(方案 B):横贯窗口底部的一条 app 级栏,项目级「运行现场」的常显面 ——
 // 常用命令的启停/重启住在这里,不挤进任务尺度的 inspector 或任务顶栏。
+//
+// 弹层分三段:头部 = 项目 + **service(启动/重启)的 ▶/⟳ 图标按钮**(项目级一对,
+// 没配置就置灰 —— 用户点名要独立按钮,不当普通命令摆一行);正文 = 普通常用命令的
+// 行列表;底部 = 管理入口。快捷键 G C 开合弹层、G Z 开合终端(workspace/goChord.ts),
+// G C 由 openSignal 从外面递进来 —— 弹层的开合状态住在这里,快捷键的分发住在
+// useWorkspaceShortcuts,两边用一个递增序号说话。
 //
 // 任务模式(G T)下没有「当前项目」这个概念,所以「运行中 N」的数**永远是跨项目总和**
 // (吃 /terminal-commands 全局端点),单项目场景自然塌成一组;左侧上下文段跟随
@@ -30,17 +38,35 @@ type CommandRow = {
   startable: boolean;
 };
 
+// 同一条命令可能挂着「一条活会话」或「一条刚退出的」——一处只说一件事,活的优先。
+// 判「活」用 groupAlive:组长退了但后台子进程还在(daemonize)也算活,那正是要能停的现场。
+function bestSession(sessions: TerminalSessionInfo[], projectId: string, commandId: string): TerminalSessionInfo | null {
+  const mine = sessions.filter((s) => s.projectId === projectId && s.commandId === commandId);
+  return mine.find((s) => s.groupAlive) ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
+}
+
+/** 会话事实 → 状态点/文案。service 头部和普通命令行共用,口径才不会劈叉。 */
+function sessionState(session: TerminalSessionInfo | null): { tone: string; text: string } {
+  if (session?.groupAlive) {
+    return session.exitCode === null
+      ? { tone: "on", text: "运行中" }
+      : { tone: "on", text: "运行中（启动脚本已退出）" };
+  }
+  if (session) {
+    // 用户自己点的停止不是异常 —— 哪怕进程死于信号带回非零退出码。
+    if (session.stoppedByUser) return { tone: "off", text: "已停止" };
+    return session.exitCode === 0
+      ? { tone: "off", text: "已退出" }
+      : { tone: "err", text: `已退出（${session.exitCode}）` };
+  }
+  return { tone: "off", text: "未启动" };
+}
+
 function rowsOf(current: ProjectView | null, sessions: TerminalSessionInfo[], projects: ProjectView[]): CommandRow[] {
   const nameOf = (projectId: string) => projects.find((p) => p.id === projectId)?.name ?? "未知项目";
   const rows: CommandRow[] = [];
   const seen = new Set<string>();
-  // 同一条命令可能挂着「一条活会话」或「一条刚退出的」——弹层一行只说一件事,活的优先。
-  // 判「活」用 groupAlive:组长退了但后台子进程还在(daemonize)也算活,那正是要能停的现场。
-  const bestSession = (projectId: string, commandId: string) => {
-    const mine = sessions.filter((s) => s.projectId === projectId && s.commandId === commandId);
-    return mine.find((s) => s.groupAlive) ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
-  };
-  for (const command of current?.commandsConfig ?? []) {
+  for (const command of current?.commandsConfig?.commands ?? []) {
     seen.add(`${current!.id}:${command.id}`);
     rows.push({
       projectId: current!.id,
@@ -48,10 +74,12 @@ function rowsOf(current: ProjectView | null, sessions: TerminalSessionInfo[], pr
       commandId: command.id,
       name: command.name,
       command: command.command,
-      session: bestSession(current!.id, command.id),
+      session: bestSession(sessions, current!.id, command.id),
       startable: true,
     });
   }
+  // 锚定项目的 service 会话由弹层头部的 ▶/⟳ 代表,不再挤进行列表。
+  if (current) seen.add(`${current.id}:${SERVICE_COMMAND_ID}`);
   for (const session of sessions) {
     // 其他项目只列**还活着**的:这一段的全部意义是「别的项目有服务在跑、给你一个停止按钮」,
     // 已退出的会话在没有锚定项目上下文时既没法重启也没必要展示。
@@ -77,6 +105,7 @@ export function StatusBar({
   canUseTerminal,
   connected,
   terminalOpen,
+  openSignal,
   onToggleTerminal,
   onOpenCommandLog,
   onManageCommands,
@@ -88,6 +117,8 @@ export function StatusBar({
   canUseTerminal: boolean;
   connected: boolean;
   terminalOpen: boolean;
+  /** 递增序号,变一次 = 快捷键 G C 按了一下:开合常用命令弹层。0 = 还没按过。 */
+  openSignal?: number;
   onToggleTerminal: () => void;
   /** 打开终端抽屉并聚焦这条命令会话的 tab(只对锚定项目的会话可用)。 */
   onOpenCommandLog: (sessionId: string) => void;
@@ -115,6 +146,11 @@ export function StatusBar({
     return () => window.clearInterval(timer);
   }, [canUseTerminal, refresh]);
   useEffect(() => { if (open) refresh(); }, [open, refresh]);
+  // G C:每按一下序号加一,这里开合一次。初始 0 = 没按过,别在挂载时误触发。
+  useEffect(() => {
+    if (!openSignal) return;
+    setOpen((value) => !value);
+  }, [openSignal]);
 
   // 「运行中 N」和每行的「活/死」都看 groupAlive,不看 exitCode:daemonize 形状
   // (启动脚本把服务放后台后自己退出)下组长退了、服务还在跑,那也是在跑。
@@ -123,36 +159,34 @@ export function StatusBar({
   const anchorRows = rows.filter((row) => row.startable);
   const otherRows = rows.filter((row) => !row.startable);
 
-  const rowState = (row: CommandRow): { tone: string; text: string } => {
-    if (row.session?.groupAlive) {
-      return row.session.exitCode === null
-        ? { tone: "on", text: "运行中" }
-        : { tone: "on", text: "运行中（启动脚本已退出）" };
-    }
-    if (row.session) {
-      // 用户自己点的停止不是异常 —— 哪怕进程死于信号带回非零退出码。
-      if (row.session.stoppedByUser) return { tone: "off", text: "已停止" };
-      return row.session.exitCode === 0
-        ? { tone: "off", text: "已退出" }
-        : { tone: "err", text: `已退出（${row.session.exitCode}）` };
-    }
-    return { tone: "off", text: "未启动" };
-  };
-  // 红点口径 = 弹层里实际显示的行:锚定项目的某条命令处于异常退出态才亮。跟弹层同一个
-  // rowState 算出来,天然不会出现「点亮了却找不到哪行红」。
-  const crashed = anchorRows.some((row) => rowState(row).tone === "err");
+  // 项目级「启动/重启」(service):配置在 commandsConfig.service,会话身份是保留
+  // commandId "service"。没配置按钮置灰 —— 这正是用户要的「没设置就灰掉」。
+  const serviceConfig = currentProject?.commandsConfig?.service ?? null;
+  const serviceSession = currentProject ? bestSession(sessions, currentProject.id, SERVICE_COMMAND_ID) : null;
+  const serviceLive = serviceSession?.groupAlive ? serviceSession : null;
+  const serviceTarget = currentProject
+    ? { projectId: currentProject.id, commandId: SERVICE_COMMAND_ID, name: "服务" }
+    : null;
+  const serviceKey = currentProject ? `${currentProject.id}:${SERVICE_COMMAND_ID}` : "";
+  const serviceState = serviceConfig || serviceSession ? sessionState(serviceSession) : null;
 
-  const act = (row: CommandRow, action: "start" | "stop" | "restart") => {
-    const key = `${row.projectId}:${row.commandId}`;
+  const rowState = (row: CommandRow) => sessionState(row.session);
+  // 红点口径 = 弹层里实际显示的现场:锚定项目的 service 或某条命令处于异常退出态才亮。
+  // 跟弹层同一个 sessionState 算出来,天然不会出现「点亮了却找不到哪行红」。
+  const crashed = anchorRows.some((row) => rowState(row).tone === "err")
+    || (serviceState?.tone === "err");
+
+  const act = (target: { projectId: string; commandId: string; name: string }, action: "start" | "stop" | "restart") => {
+    const key = `${target.projectId}:${target.commandId}`;
     setBusy(key);
     const call = action === "start"
-      ? api.startProjectCommand(row.projectId, row.commandId)
+      ? api.startProjectCommand(target.projectId, target.commandId)
       : action === "stop"
-        ? api.stopProjectCommand(row.projectId, row.commandId)
-        : api.restartProjectCommand(row.projectId, row.commandId);
+        ? api.stopProjectCommand(target.projectId, target.commandId)
+        : api.restartProjectCommand(target.projectId, target.commandId);
     call
       .then(() => refresh())
-      .catch((error) => notify(error instanceof Error ? error.message : `${row.name} 操作失败`))
+      .catch((error) => notify(error instanceof Error ? error.message : `${target.name} 操作失败`))
       .finally(() => setBusy((value) => value === key ? null : value));
   };
 
@@ -176,6 +210,7 @@ export function StatusBar({
             className={`status-bar__item status-bar__run${live.length ? " is-live" : ""}${crashed ? " has-crash" : ""}`}
             aria-expanded={open}
             aria-haspopup="dialog"
+            aria-keyshortcuts="g c"
             onClick={() => setOpen((value) => !value)}
           >
             <span className={`status-bar__dot${live.length ? " is-on" : ""}`} aria-hidden="true" />
@@ -184,71 +219,122 @@ export function StatusBar({
           </button>
           {open && (
             <div className="status-bar__pop" role="dialog" aria-label="常用命令">
-              {anchorRows.length === 0 && otherRows.length === 0 && (
-                <p className="status-bar__empty">
-                  这个项目还没配置常用命令 —— dev server、watch 这类常驻服务配置好后，在这里一键启停。
-                </p>
+              {currentProject && (
+                <header className="status-bar__pop-head">
+                  <ProjectAvatar project={currentProject} size="dot" />
+                  <h3>{currentProject.name}</h3>
+                  {serviceState
+                    ? <span className={`status-bar__svc-state is-${serviceState.tone}`}>{serviceState.text}</span>
+                    : <span className="status-bar__svc-state is-unset">未配置启动命令</span>}
+                  <div className="status-bar__svc" role="group" aria-label="启动 / 重启">
+                    {busy === serviceKey ? <CircleNotch size={14} className="is-spinning" aria-label="执行中" /> : (
+                      <>
+                        {serviceLive && (
+                          <button
+                            type="button"
+                            className="status-bar__svc-btn"
+                            aria-label="查看启动日志"
+                            onClick={() => { setOpen(false); onOpenCommandLog(serviceLive.id); }}
+                          ><Scroll size={14} /></button>
+                        )}
+                        {serviceLive ? (
+                          <button
+                            type="button"
+                            className="status-bar__svc-btn is-stop"
+                            aria-label="停止"
+                            onClick={() => serviceTarget && act(serviceTarget, "stop")}
+                          ><Square size={11} weight="fill" /></button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="status-bar__svc-btn"
+                            aria-label={serviceConfig ? "启动" : "未配置启动命令，在「管理常用命令」里设置"}
+                            disabled={!serviceConfig}
+                            onClick={() => serviceTarget && act(serviceTarget, "start")}
+                          ><Play size={14} /></button>
+                        )}
+                        <button
+                          type="button"
+                          className="status-bar__svc-btn"
+                          aria-label={serviceConfig ? "重启" : "未配置启动命令，在「管理常用命令」里设置"}
+                          disabled={!serviceConfig || !serviceLive}
+                          onClick={() => serviceTarget && act(serviceTarget, "restart")}
+                        ><ArrowsClockwise size={13} /></button>
+                      </>
+                    )}
+                  </div>
+                </header>
               )}
-              {anchorRows.length > 0 && (
-                <section>
-                  <h3>{currentProject?.name}</h3>
-                  {anchorRows.map((row) => {
-                    const state = rowState(row);
-                    const key = `${row.projectId}:${row.commandId}`;
-                    const running = row.session?.groupAlive ? row.session : null;
-                    return (
-                      <div className="status-bar__row" key={key}>
-                        <span className={`status-bar__row-dot is-${state.tone}`} aria-hidden="true" />
-                        <div className="status-bar__row-main">
-                          <b>{row.name}</b>
-                          <code>{row.command}</code>
+              <div className="status-bar__pop-body">
+                {anchorRows.length === 0 && otherRows.length === 0 && (
+                  <p className="status-bar__empty">
+                    dev server 这类常驻服务：在「管理常用命令」里配置启动/重启命令后，上面的 ▶ / ⟳ 一键启停；
+                    watch、tunnel 这些再各配一条常用命令，在这里逐条启停。
+                  </p>
+                )}
+                {anchorRows.length > 0 && (
+                  <section className="status-bar__group" aria-label="常用命令">
+                    {anchorRows.map((row) => {
+                      const state = rowState(row);
+                      const key = `${row.projectId}:${row.commandId}`;
+                      const running = row.session?.groupAlive ? row.session : null;
+                      return (
+                        <div className="status-bar__row" key={key}>
+                          <span className={`status-bar__row-dot is-${state.tone}`} aria-hidden="true" />
+                          <div className="status-bar__row-main">
+                            <b>{row.name}</b>
+                            <code>{row.command}</code>
+                          </div>
+                          <span className={`status-bar__row-state is-${state.tone}`}>{state.text}</span>
+                          <div className="status-bar__row-actions">
+                            {busy === key ? <CircleNotch size={13} className="is-spinning" aria-label="执行中" /> : running ? (
+                              <>
+                                <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(running.id); }} aria-label={`查看 ${row.name} 日志`}><Scroll size={13} />日志</button>
+                                <button type="button" onClick={() => act(row, "restart")} aria-label={`重启 ${row.name}`}><ArrowsClockwise size={13} />重启</button>
+                                <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>
+                              </>
+                            ) : (
+                              <>
+                                {row.session && <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(row.session!.id); }} aria-label={`查看 ${row.name} 退出日志`}><Scroll size={13} />日志</button>}
+                                <button type="button" className="is-primary" onClick={() => act(row, "start")} aria-label={`启动 ${row.name}`}><Play size={12} weight="fill" />启动</button>
+                              </>
+                            )}
+                          </div>
                         </div>
-                        <span className={`status-bar__row-state is-${state.tone}`}>{state.text}</span>
-                        <div className="status-bar__row-actions">
-                          {busy === key ? <CircleNotch size={13} className="is-spinning" aria-label="执行中" /> : running ? (
-                            <>
-                              <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(running.id); }} aria-label={`查看 ${row.name} 日志`}><Scroll size={13} />日志</button>
-                              <button type="button" onClick={() => act(row, "restart")} aria-label={`重启 ${row.name}`}><ArrowsClockwise size={13} />重启</button>
-                              <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>
-                            </>
-                          ) : (
-                            <>
-                              {row.session && <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(row.session!.id); }} aria-label={`查看 ${row.name} 退出日志`}><Scroll size={13} />日志</button>}
-                              <button type="button" className="is-primary" onClick={() => act(row, "start")} aria-label={`启动 ${row.name}`}><Play size={12} weight="fill" />启动</button>
-                            </>
-                          )}
+                      );
+                    })}
+                  </section>
+                )}
+                {otherRows.length > 0 && (
+                  <section className="status-bar__group">
+                    <h3>其他项目在跑的</h3>
+                    {otherRows.map((row) => {
+                      const key = `${row.projectId}:${row.commandId}`;
+                      return (
+                        <div className="status-bar__row" key={key}>
+                          <span className="status-bar__row-dot is-on" aria-hidden="true" />
+                          <div className="status-bar__row-main">
+                            <b>{row.name}</b>
+                            <code>{row.projectName} · 日志在该项目的终端里看</code>
+                          </div>
+                          <div className="status-bar__row-actions">
+                            {busy === key
+                              ? <CircleNotch size={13} className="is-spinning" aria-label="执行中" />
+                              : <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </section>
-              )}
-              {otherRows.length > 0 && (
-                <section>
-                  <h3>其他项目在跑的</h3>
-                  {otherRows.map((row) => {
-                    const key = `${row.projectId}:${row.commandId}`;
-                    return (
-                      <div className="status-bar__row" key={key}>
-                        <span className="status-bar__row-dot is-on" aria-hidden="true" />
-                        <div className="status-bar__row-main">
-                          <b>{row.name}</b>
-                          <code>{row.projectName} · 日志在该项目的终端里看</code>
-                        </div>
-                        <div className="status-bar__row-actions">
-                          {busy === key
-                            ? <CircleNotch size={13} className="is-spinning" aria-label="执行中" />
-                            : <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </section>
-              )}
+                      );
+                    })}
+                  </section>
+                )}
+              </div>
               {currentProject && currentProject.myRole === "admin" && (
-                <button type="button" className="status-bar__manage" onClick={() => { setOpen(false); onManageCommands(); }}>
-                  管理常用命令…
-                </button>
+                <div className="status-bar__pop-foot">
+                  <button type="button" className="status-bar__manage" onClick={() => { setOpen(false); onManageCommands(); }}>
+                    管理常用命令…
+                  </button>
+                  <kbd aria-label={`快捷键 ${COMMANDS_SHORTCUT_LABEL}`}>{COMMANDS_SHORTCUT_LABEL}</kbd>
+                </div>
               )}
             </div>
           )}
@@ -260,6 +346,8 @@ export function StatusBar({
           type="button"
           className={`status-bar__item${terminalOpen ? " is-active" : ""}`}
           aria-pressed={terminalOpen}
+          aria-keyshortcuts="g z"
+          aria-label={`终端（${TERMINAL_SHORTCUT_LABEL}）`}
           onClick={onToggleTerminal}
         >
           <TerminalWindow size={13} aria-hidden="true" />
