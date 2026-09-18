@@ -6,6 +6,8 @@ export interface GitLocation {
   root?: string;
   taskId?: string;
   ref?: string;
+  /** 指定要打开的那一条提交（完整 sha）。历史视图会选中它并把它滚进视野。 */
+  commit?: string;
 }
 export const GIT_VIEWS: GitView[] = [
   "changes",
@@ -32,6 +34,7 @@ export function gitWorkbenchUrl(location: GitLocation): string {
     ...(location.root ? { gitRoot: location.root } : {}),
     ...(taskId ? { gitTask: taskId } : {}),
     ...(location.ref ? { gitRef: location.ref } : {}),
+    ...(location.commit ? { gitCommit: location.commit } : {}),
   }).toString();
   return url.pathname + url.search;
 }
@@ -46,5 +49,6 @@ export function readGitLocation(): Omit<GitLocation, "projectId"> {
     root: params.get("gitRoot") || undefined,
     taskId: params.get("gitTask") || undefined,
     ref: params.get("gitRef") || undefined,
+    commit: params.get("gitCommit") || undefined,
   };
 }

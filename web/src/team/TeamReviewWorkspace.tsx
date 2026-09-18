@@ -375,6 +375,7 @@ function ChangeSummary({ task, data, loading, error }: { task: TaskListItem; dat
           ? worktreeLabel(session.worktreePath)
           : task.useWorktree ? "worktree 尚未记录" : "共享项目目录"}
         commits={data.commits}
+        link={{ projectId: task.projectId, taskId: task.id }}
       />
       <ReviewDiffViewer result={data.diff} />
     </div>

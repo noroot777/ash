@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ArrowRight, CaretDown, GitBranch, GitCommit } from "@phosphor-icons/react";
 import type { TaskCommit } from "../lib/api.ts";
-import { CommitStrip } from "./CommitStrip.tsx";
+import { CommitStrip, type CommitLink } from "./CommitStrip.tsx";
 
 // worktree 全路径又长又共前缀，元信息行里只留最后一段（worktree 目录名）足够认人；要看
 // 全路径去任务详情。
@@ -18,11 +18,14 @@ export function ChangeMetaBar({
   target,
   where,
   commits,
+  link,
 }: {
   source: string;
   target: string;
   where?: string | null;
   commits: TaskCommit[];
+  /** 有归属就让每条提交点得开（跳 Git 工作台的历史视图）。 */
+  link?: CommitLink;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -45,8 +48,8 @@ export function ChangeMetaBar({
       </div>
       {open && commits.length > 0 && (
         <div className="review-meta-bar__commits">
-          <small>下面的 diff 是这条分支相对基线的整体改动，不按单个提交切分。</small>
-          <CommitStrip commits={commits} />
+          <small>下面的 diff 是这条分支相对基线的整体改动，不按单个提交切分{link ? "；点某一条可在 Git 工作台看它自己的 diff" : ""}。</small>
+          <CommitStrip commits={commits} link={link} />
         </div>
       )}
     </section>

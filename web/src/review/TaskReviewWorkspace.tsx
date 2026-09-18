@@ -176,6 +176,7 @@ export function TaskReviewWorkspace({
                 target={data.diff.targetBranch || task.worktreeBase || "项目当前分支"}
                 where={data.diff.mergeBase ? `基点 ${data.diff.mergeBase.slice(0, 8)}` : null}
                 commits={data.commits}
+                link={{ projectId: task.projectId, taskId: task.id }}
               />
               <ReviewDiffViewer result={data.diff} />
             </div>

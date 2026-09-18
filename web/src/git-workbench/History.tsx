@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { GitDiff, GitHistoryCommit } from "@ash/shared/git-workbench";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
@@ -14,11 +14,13 @@ export function History({
   workbench: w,
   ask,
   initialRef,
+  initialCommit,
 }: {
   projectId: string;
   workbench: Workbench;
   ask: AskAction;
   initialRef?: string;
+  initialCommit?: string;
 }) {
   const data = w.data!;
   const [ref, setRef] = useState(initialRef || "");
@@ -39,6 +41,30 @@ export function History({
   const [blame, setBlame] = useState(false);
   const [rebase, setRebase] = useState<GitHistoryCommit | null>(null);
   const historyRequest = useRef(0);
+  // 「点开某一条提交」跳进来的落点。两件事要保证：这一条被选中（右边直接是它的 diff），
+  // 而且它得在视野里——默认范围是全部分支、一页 100 条，目标很可能排在需要滚动的位置。
+  //
+  // 找不到的兜底只做一次：把范围收成这条提交本身（`git log <sha>` 保证它是第一行），
+  // 否则仓库里分支一多，任务分支上的提交会被别的分支挤出第一页，点了等于没反应。
+  //
+  // 这个意图**只兑现一次**（兑现完 `pending` 置空）。它是「跳进来时打开哪一条」，不是一条
+  // 常驻规则：之后用户自己在列表里点别的提交、换范围、或者后台刷新重取，都不该被它拽回来。
+  const pending = useRef<string | null>(initialCommit || null);
+  const fellBack = useRef(false);
+  const scrolledTo = useRef<string | null>(null);
+  useEffect(() => {
+    pending.current = initialCommit || null;
+    fellBack.current = false;
+    scrolledTo.current = null;
+  }, [initialCommit]);
+  const pinnedRow = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node || !initialCommit || scrolledTo.current === initialCommit) return;
+      scrolledTo.current = initialCommit;
+      node.scrollIntoView({ block: "center" });
+    },
+    [initialCommit],
+  );
   const refsVersion = data.refs.map((r) => r.sha + r.name).join(":");
   const refClass = (name: string) => {
     if (name.startsWith("HEAD")) return " is-head";
@@ -51,6 +77,7 @@ export function History({
   };
   useEffect(() => {
     let alive = true;
+    let handoff = false;
     historyRequest.current++;
     setLoading(true);
     setError(null);
@@ -63,17 +90,27 @@ export function History({
         path: path || undefined,
       })
       .then((next) => {
-        if (alive) {
-          setCommits(next.commits);
-          setSelected(next.commits[0] || null);
-          setMore(next.more);
+        if (!alive) return;
+        const want = pending.current;
+        const target = want
+          ? next.commits.find((commit) => commit.sha === want) || null
+          : null;
+        if (want && !target && !fellBack.current) {
+          fellBack.current = true;
+          handoff = true;
+          setRef(want);
+          return;
         }
+        if (want) pending.current = null;
+        setCommits(next.commits);
+        setSelected(target || next.commits[0] || null);
+        setMore(next.more);
       })
       .catch((reason: Error) => {
         if (alive) setError(reason.message);
       })
       .finally(() => {
-        if (alive) setLoading(false);
+        if (alive && !handoff) setLoading(false);
       });
     return () => {
       alive = false;
@@ -87,6 +124,7 @@ export function History({
     w.revision,
     ref,
     path,
+    initialCommit,
   ]);
   useEffect(() => {
     let alive = true;
@@ -242,6 +280,11 @@ export function History({
               >
                 <option value="">全部分支</option>
                 <option value="HEAD">当前分支</option>
+                {/* 定位到某条提交时范围会被收成那条 sha（见上面的兜底）。它不在分支列表里，
+                    不补一项的话这颗下拉会显示成空的——用户看不出当前在按什么范围筛。 */}
+                {/^[0-9a-f]{7,40}$/.test(ref) && (
+                  <option value={ref}>提交 {ref.slice(0, 8)} 及更早</option>
+                )}
                 {data.refs
                   .filter((r) => r.kind !== "tag")
                   .map((r) => (
@@ -304,6 +347,7 @@ export function History({
               return (
                 <div
                   key={commit.sha}
+                  ref={commit.sha === initialCommit ? pinnedRow : undefined}
                   className={`gwb-commit-row commit-row ui-selectable${selected?.sha === commit.sha ? " is-active is-selected" : ""}`}
                 >
                   <button

@@ -1,5 +1,5 @@
 import { api } from "../lib/api.ts";
-import { openGitWorkbench } from "../git-workbench/navigation.ts";
+import { openGitWorkbench, type GitLocation } from "../git-workbench/navigation.ts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
@@ -319,6 +319,16 @@ export function ScmInspector({
     return status?.merge.some((change) => change.path === activeDiff.path) ? "merge" : "unstaged";
   }, [activeDiff, status]);
 
+  /**
+   * 跳 Git 工作台。这个面板只拿得到 taskId，projectId 得现查一次任务——所以顶上那颗入口
+   * 和下面「最近提交」的每一行都走这里，别各写一份异步。
+   */
+  const openWorkbench = (where: Omit<GitLocation, "projectId" | "taskId"> = {}) => {
+    void api.task(taskId)
+      .then((task) => openGitWorkbench({ projectId: task.projectId, taskId, ...where }))
+      .catch((error: Error) => notify(error.message));
+  };
+
   /** 跑一次写操作；被 running 门禁挡下就换成 force 确认框，其它错误只报不吞。 */
   const perform = async (action: ScmAction, force = false) => {
     try {
@@ -449,7 +459,7 @@ export function ScmInspector({
           type="button"
           className="scm-workbench-entry"
           aria-label="打开此工作区的 Git 工作台"
-          onClick={() => { void api.task(taskId).then((task) => openGitWorkbench({ projectId: task.projectId, taskId })).catch((error: Error) => notify(error.message)); }}
+          onClick={() => openWorkbench()}
         >
           Git 工作台 <ArrowUpRight size={12} />
         </button>
@@ -548,12 +558,20 @@ export function ScmInspector({
       {scm.overview.commits.length > 0 && (
         <section className="scm-commits">
           <header><GitCommit size={13} />最近提交</header>
+          {/* 每一条都点得开：跳 Git 工作台的历史视图，选中这条提交、右边直接是它的 diff。
+              这份清单原先是纯展示的死胡同——看见了想看内容，只能自己去工作台再找一遍。 */}
           <ul>
             {scm.overview.commits.slice(0, 8).map((commit) => (
               <li key={commit.sha}>
-                <code>{commit.shortSha}</code>
-                <span>{commit.subject}</span>
-                <small>{commit.author}</small>
+                <button
+                  type="button"
+                  aria-label={`在 Git 工作台打开提交 ${commit.shortSha} ${commit.subject}`}
+                  onClick={() => openWorkbench({ view: "history", commit: commit.sha })}
+                >
+                  <code>{commit.shortSha}</code>
+                  <span>{commit.subject}</span>
+                  <small>{commit.author}</small>
+                </button>
               </li>
             ))}
           </ul>

@@ -51,6 +51,10 @@
 .review-commit-strip { overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .review-commit-strip > ul { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,290px),1fr)); gap:6px; margin:0; padding:8px 9px; list-style:none; }
 .review-commit-strip > ul > li { display:flex; min-width:0; align-items:baseline; gap:6px; border:1px solid var(--line); border-radius:6px; background:var(--canvas); padding:5px 7px; }
+/* 可点开的那一份：内边距交给里面的按钮，整格都是热区。 */
+.review-commit-strip > ul > li.is-linked { padding:0; }
+.review-commit-strip > ul > li.is-linked > button { display:flex; width:100%; min-width:0; align-items:baseline; gap:6px; border:0; border-radius:6px; background:transparent; padding:5px 7px; text-align:left; }
+.review-commit-strip > ul > li.is-linked:hover { border-color:var(--accent); background:var(--raised); }
 .review-commit-strip li code { flex:0 0 auto; color:var(--accent); font-family:var(--font-mono); font-size:9px; }
 .review-commit-strip li b { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:10px; font-weight:550; text-overflow:ellipsis; white-space:nowrap; }
 .review-commit-strip li time { flex:0 0 auto; color:var(--faint); font-size:8.5px; }

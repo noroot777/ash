@@ -37,6 +37,7 @@ export function GitWorkbench({
   taskId,
   view = "changes",
   initialRef,
+  initialCommit,
   notify,
   onExit,
   openTask,
@@ -49,6 +50,8 @@ export function GitWorkbench({
   taskId?: string;
   view?: GitView;
   initialRef?: string;
+  /** 从别处「点开某一条提交」跳进来时带的完整 sha。 */
+  initialCommit?: string;
   notify: (message: string) => void;
   onExit: () => void;
   openTask: (taskId: string) => void;
@@ -316,6 +319,7 @@ export function GitWorkbench({
                 workbench={w}
                 ask={ask}
                 initialRef={initialRef}
+                initialCommit={initialCommit}
               />
             ) : view === "branches" ? (
               <Branches
