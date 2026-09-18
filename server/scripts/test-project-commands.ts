@@ -174,8 +174,10 @@ try {
   assert.deepEqual(stopKeep.body, { stopped: true });
   assert.equal(liveKeep().length, 0);
 
-  // daemonize 形状:组长自然退出(exit 0),忽略信号的子进程留在原进程组 —— 判「活」必须
-  // 看整组而不是 exitCode:liveCommandSession 要找得到它、stop 要能停(第 4 轮审查实锤)。
+  // daemonize 形状:组长自然退出(exit 0),忽略信号的子进程还握着 tty。命令会话包
+  // TTY_COMMAND_WRAPPER(第 5 轮):wrapper 不杀合法保活的服务,但**持续拥有**它 ——
+  // exitCode 不落、会话保持「运行中」,liveCommandSession 找得到、stop 能确定性触达,
+  // 不再依赖一次采样命中原 PGID(第 4、5 轮审查实锤)。
   const daemonScript = (flag: string, tag: string) =>
     `node -e 'process.on("SIGTERM",()=>{});process.on("SIGHUP",()=>{});console.log("${tag}:"+process.pid);require("fs").writeFileSync("${flag}","1");setInterval(()=>{},1000)' & while [ ! -f ${flag} ]; do sleep 0.05; done; exit 0`;
   const readChild = (sessionId: string, tag: string): number => {
@@ -188,16 +190,45 @@ try {
   const daemon = manager.create("p1", cwd, { command: { id: "daemon", name: "daemon", script: daemonScript("readyA", "DCHILD") } });
   let dchild = 0;
   const daemonReady = Date.now() + 8000;
-  while (manager.get(daemon.id, "p1")?.exitCode === null || (dchild = readChild(daemon.id, "DCHILD")) === 0) {
-    if (Date.now() > daemonReady) throw new Error("daemon leader did not exit in time");
+  while ((dchild = readChild(daemon.id, "DCHILD")) === 0) {
+    if (Date.now() > daemonReady) throw new Error("daemon child not ready");
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  assert.equal(manager.get(daemon.id, "p1")?.groupAlive, true, "组长退了但组里还有活人,groupAlive 必须为 true");
+  // 组长写完 flag 就 exit 0;假如 wrapper 会误退,exit 事件毫秒级就落 —— 静置后 exitCode
+  // 必须仍为 null(wrapper 守着 tty 持有者不退)。
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(manager.get(daemon.id, "p1")?.exitCode, null, "daemonize 下 wrapper 必须持续拥有会话,exitCode 不得落下");
+  assert.equal(manager.get(daemon.id, "p1")?.groupAlive, true, "组里还有活人,groupAlive 必须为 true");
   assert.equal(manager.liveCommandSession("p1", "daemon")?.id, daemon.id, "daemonize 会话必须仍算活,否则 stop/restart 找不到它");
   assert.deepEqual(await manager.terminate(daemon.id, "p1", { termMs: 600, killMs: 4000 }), { ok: true });
   await assertProcessGone(dchild, "daemonize 的子进程也必须被停掉");
   assert.equal(manager.liveCommandSession("p1", "daemon"), null);
   assert.equal(manager.get(daemon.id, "p1")?.groupAlive, false);
+
+  // 第 5 轮审查探针固化:命令 shell 自己 `set -m`,把服务挪进**独立 PGID** 再 disown、
+  // 立即退出(原 PGID 探活彻底失效的形状)。服务还握着 tty ⇒ wrapper 持续拥有:会话
+  // 必须仍算活(再点启动不得在旁边另起一份抢端口),停止必须真正杀到独立组。
+  const rogue = manager.create("p1", cwd, {
+    command: { id: "rogue", name: "rogue", script: "set -m; trap '' TERM HUP; sleep 300 & echo __CMD_$!__; disown; exit 0" },
+  });
+  let rchild = 0;
+  const rogueReady = Date.now() + 8000;
+  while (rchild === 0) {
+    for (const event of manager.eventsAfter(rogue.id, "p1", 0) ?? []) {
+      const match = event.type === "data" ? /__CMD_(\d+)__/.exec(event.data) : null;
+      if (match) rchild = Number(match[1]);
+    }
+    if (rchild === 0 && Date.now() > rogueReady) throw new Error("rogue child not ready");
+    if (rchild === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const rpgid = Number(spawnSync("ps", ["-o", "pgid=", "-p", String(rchild)]).stdout?.toString().trim());
+  assert.equal(rpgid, rchild, "探针前提:服务确实在自己的独立进程组里");
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(manager.get(rogue.id, "p1")?.exitCode, null, "独立 PGID 服务还在,会话不得落「已结束」");
+  assert.equal(manager.liveCommandSession("p1", "rogue")?.id, rogue.id, "独立 PGID 服务还在,liveCommandSession 必须找得到(否则会被重复启动)");
+  assert.deepEqual(await manager.terminate(rogue.id, "p1", { termMs: 600, killMs: 4000 }), { ok: true });
+  await assertProcessGone(rchild, "独立 PGID 的服务进程也必须被停止触达");
+  assert.equal(manager.liveCommandSession("p1", "rogue"), null);
 
   // 日志订阅不钉住退出记录:create 同命令新会话时,被订阅的死记录也照清 —— 否则反复
   // 「重启 + 开日志」把 16 个会话槽吃光后,restart 先杀旧再建新,建新失败落成服务中断
@@ -223,8 +254,8 @@ try {
 
   // server 退出路径:shutdown() 必须整组收割,忽略信号的孤儿也不能漏 —— 否则 ash 重启后
   // 会话表清零(内存态),旧进程却被 PID 1 收养继续占端口。两种形状都要盖:组长还活着的
-  // (orphan2,& wait)和组长已自然退出的(daemon2,exitCode 已落 —— 只筛 exitCode===null
-  // 就会跳过它,正是第 4 轮审查的漏杀)。
+  // (orphan2,& wait)和组长已自然退出、KEEPER wrapper 还守着的(daemon2 —— 它的 dchild2
+  // 已脱离 ppid 树,只有 tty 持有者清单能点到名,正是第 4 轮审查的漏杀形状)。
   const orphan2 = manager.create("p1", cwd, {
     command: { id: "orphan2", name: "orphan2", script: orphanScript.replace("CHILD:", "CHILD2:") },
   });
@@ -233,7 +264,6 @@ try {
   let dchild2 = 0;
   const shutdownReady = Date.now() + 8000;
   while ((child2 = readChild(orphan2.id, "CHILD2")) === 0
-    || manager.get(daemon2.id, "p1")?.exitCode === null
     || (dchild2 = readChild(daemon2.id, "DCHILD2")) === 0) {
     if (Date.now() > shutdownReady) throw new Error("shutdown fixtures not ready");
     await new Promise((resolve) => setTimeout(resolve, 50));

@@ -4,6 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { IS_WINDOWS } from "../src/platform.js";
+import { resolveLsofPath } from "../src/terminal-process-tree.js";
 import { resolveTerminalDirectory, TerminalSessionManager } from "../src/terminal.js";
 
 // realpath 一次:Windows 的 %TEMP% 常常是 8.3 短名(`C:\Users\RUNNER~1\…`),而
@@ -228,6 +229,57 @@ try {
       const { pid } = await spawnImmediateOrphan(doomed, "project-imm-shutdown", "IMM2");
       doomed.shutdown();
       await waitDead(pid, "immediate disown;exit 后 shutdown 应无残留");
+    }
+
+    // ── 第 5 轮:lsof 解析与 containment gate ─────────────────────────────────────
+    // [P1] lsof 缺失/不可执行:必须解析成 null(下面的 gate 用例接手「拒绝承诺」);
+    // 不在 PATH(非交互 PATH 常丢 /usr/sbin,而 macOS 的 lsof 就装在那):必须仍经
+    // 兜底候选找到绝对路径 —— 解析结果经 ASH_LSOF 传给 wrapper,两侧都不吃运行时 PATH。
+    assert.equal(resolveLsofPath("/definitely/not/here", []), null, "lsof 不存在时必须解析为 null,不得假装可用");
+    assert.equal(resolveLsofPath("", []), null, "空 PATH + 无兜底必须解析为 null");
+    if (process.platform === "darwin") {
+      assert.equal(
+        resolveLsofPath("/usr/bin:/bin", ["/usr/sbin/lsof"]),
+        "/usr/sbin/lsof",
+        "PATH 丢了 /usr/sbin 时必须经兜底候选找到 lsof",
+      );
+      assert.equal(resolveLsofPath("/usr/sbin", []), "/usr/sbin/lsof", "PATH 里有 lsof 就用 PATH 解析出的绝对路径");
+    }
+
+    // [P1] containment 依赖缺失(非 Linux 且 lsof 连兜底都找不到)时 create 必须显式拒绝:
+    // 没有确定性成员枚举就不能承诺「关会话清空进程树」,绝不静默降级到采样后照常报成功。
+    {
+      const denied = new TerminalSessionManager({ containment: false });
+      try {
+        assert.throws(
+          () => denied.create("project-denied", cwd, { shell, shellArgs: [] }),
+          /依赖缺失|无法保证/,
+          "containment 依赖缺失时必须拒绝开终端,而不是带病运行",
+        );
+      } finally {
+        denied.shutdown();
+      }
+    }
+
+    // [P1·e2e] 复刻第 5 轮探针「PATH=…:/usr/bin:/bin(去掉 /usr/sbin)」:wrapper 与
+    // manager 侧枚举都必须仍能清场 —— 靠启动时解析好的 ASH_LSOF 绝对路径(macOS)或
+    // /proc(Linux),不吃会话运行时的 PATH。时序与 IMM1 相同:毫秒级 disown;exit。
+    {
+      const savedPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const stripped = new TerminalSessionManager();
+        try {
+          const { session: s, pid } = await spawnImmediateOrphan(stripped, "project-no-sbin", "IMM3");
+          const res = await stripped.destroy(s.id, "project-no-sbin", { termMs: 500, killMs: 2000 });
+          assert.equal(res.ok, true, "PATH 缺 /usr/sbin 时 destroy 仍应确认清场(ASH_LSOF 绝对路径/procfs)");
+          await waitDead(pid, "PATH 缺 /usr/sbin 时独立组孤儿仍应被确定性清杀");
+        } finally {
+          stripped.shutdown();
+        }
+      } finally {
+        process.env.PATH = savedPath;
+      }
     }
 
     // [P2] 删除态互斥:进入 shutdown 态后拒绝新建该项目会话,删失败(deleted=false)退出后恢复。

@@ -6,11 +6,14 @@ import { expandHome } from "./git.js";
 import { IS_WINDOWS } from "./platform.js";
 import { id } from "./util.js";
 import {
+  containmentAvailable,
   descendantsFromTable,
   groupAlive,
+  LSOF_PATH,
   processAlive,
   readProcessTable,
   readProcessTableSync,
+  TTY_COMMAND_WRAPPER,
   TTY_REAPER_WRAPPER,
   ttyHolderPids,
   ttyHolderPidsSync,
@@ -131,9 +134,11 @@ function ptyEnvironment(): Record<string, string> {
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
     ASH_TERMINAL: "1",
-    // TTY_REAPER_WRAPPER 清杀时排除 server 自己(它持有全部 pty master,macOS 的 lsof
+    // wrapper 清杀/守护时排除 server 自己(它持有全部 pty master,macOS 的 lsof
     // 会把 master 端也列进 /dev/ttysN 的持有者 —— 不排除等于让 wrapper 杀掉 ash)。
     ASH_PTY_PARENT: String(process.pid),
+    // lsof 的绝对路径(启动时解析,含 /usr/sbin 兜底):wrapper 不吃运行时 PATH。
+    ASH_LSOF: LSOF_PATH ?? "",
   };
 }
 
@@ -161,7 +166,11 @@ export class TerminalSessionManager {
    */
   private readonly deletedProjects = new Set<string>();
 
-  constructor(options: { descendantScanMs?: number } = {}) {
+  /** containment 依赖(lsof / procfs)是否齐备;构造可注入 false 供回归验证拒绝路径。 */
+  private readonly containment: boolean;
+
+  constructor(options: { descendantScanMs?: number; containment?: boolean } = {}) {
+    this.containment = options.containment ?? containmentAvailable();
     this.sweeper = setInterval(() => this.sweepIdleSessions(), 60_000);
     this.sweeper.unref?.();
     this.descendantScanner = setInterval(
@@ -196,31 +205,33 @@ export class TerminalSessionManager {
     // 常用命令在 Windows 上没有对应的「-lc」语义，且 win32 分支未经真机验证 —— 与其留
     // 一段没跑过的 cmd/pwsh 参数拼接，不如明确拒绝（AGENTS.md「Windows 真机」一节）。
     if (options.command && IS_WINDOWS) throw new Error("常用命令暂不支持 Windows 上的 ash 实例");
+    // containment 依赖缺失(非 Linux 且 lsof 连 /usr/sbin 都没有)就**显式拒绝**开会话:
+    // 没有确定性成员枚举,「关会话/关服时清空进程树」的承诺就兑现不了 —— 绝不静默降级到
+    // 已被证伪的采样后继续对清场报成功(第 5 轮自由审查)。Linux 有 /proc 永真,macOS 的
+    // lsof 是系统自带,真实环境到不了这里;到了就是环境坏了,该修环境而不是带病运行。
+    if (!IS_WINDOWS && !this.containment) {
+      throw new Error("终端依赖缺失：lsof 与 /proc 都不可用，无法保证关闭会话时清空进程树；请安装 lsof 后重启 ash");
+    }
     const args = options.command ? ["-lc", options.command.script] : options.shellArgs ?? fallback.args;
-    // 交互 shell 包进 TTY_REAPER_WRAPPER(POSIX):session leader 是常驻 wrapper,用户
-    // shell 是它的孩子 —— 用户 shell 无论怎么退(exit / kill -9),leader 未死、tty fd 未
-    // 被 revoke,wrapper 在退出前按 `lsof -t $(tty)` 确定性清杀余党(细节与两条硬性排除
-    // 见 terminal-process-tree.ts)。这是对「起后台作业后立即 disown; exit」盲窗的根治:
-    // 不依赖任何采样命中(第 3、4 轮自由审查实锤:异步 ps 采样永远赢不了毫秒级退出)。
-    // 命令会话(-lc)**不包**:非交互 shell 不开 job control、不产生独立进程组;组长退了
-    // 后台还活着的 daemonize 形状是**合法保活特性**(groupAlive 字段,第 4 轮终端审查),
-    // wrapper 会把它误杀。exitCode 由 wrapper 透传(信号死的内层 shell 折算成 128+n)。
-    const wrapped = !options.command && !IS_WINDOWS;
-    const processHandle = wrapped
-      ? pty.spawn("/bin/sh", ["-c", TTY_REAPER_WRAPPER, "ash-terminal", shell, ...args], {
-        name: "xterm-256color",
-        cols: terminalSize(options.cols, 100, 20, 400),
-        rows: terminalSize(options.rows, 24, 5, 200),
-        cwd,
-        env: ptyEnvironment(),
-      })
-      : pty.spawn(shell, args, {
-        name: "xterm-256color",
-        cols: terminalSize(options.cols, 100, 20, 400),
-        rows: terminalSize(options.rows, 24, 5, 200),
-        cwd,
-        env: ptyEnvironment(),
-      });
+    // POSIX 一律包 wrapper,session leader 是常驻 /bin/sh、真正的 shell/命令是它的孩子,
+    // 详见 terminal-process-tree.ts:
+    //   交互 → TTY_REAPER_WRAPPER:shell 退出时确定性清杀余党(「起作业后立即 disown;
+    //   exit」的根治 —— 任何采样都赢不了毫秒级退出,第 3、4 轮实锤);
+    //   命令 → TTY_COMMAND_WRAPPER:命令退出后**不杀**(daemonize 是合法保活形状),但
+    //   只要还有进程握着 tty 就保持存活 —— 会话持续「运行中」,stop/restart 随时能经
+    //   成员枚举触达,独立 PGID 服务不再失控/被重复启动(第 5 轮实锤)。
+    // exitCode 由 wrapper 透传(信号死的内层折算成 128+n)。
+    const wrapper = options.command ? TTY_COMMAND_WRAPPER : TTY_REAPER_WRAPPER;
+    const spawnSpec = IS_WINDOWS
+      ? { file: shell, args }
+      : { file: "/bin/sh", args: ["-c", wrapper, "ash-terminal", shell, ...args] };
+    const processHandle = pty.spawn(spawnSpec.file, spawnSpec.args, {
+      name: "xterm-256color",
+      cols: terminalSize(options.cols, 100, 20, 400),
+      rows: terminalSize(options.rows, 24, 5, 200),
+      cwd,
+      env: ptyEnvironment(),
+    });
     const info: TerminalSessionInfo = {
       id: id(),
       projectId,
