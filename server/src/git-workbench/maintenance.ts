@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import type { GitWorkbenchState } from "@ash/shared/git-workbench";
 import { fail, git } from "./core.js";
 import { journalDirectory } from "./journal.js";
+import { worktreePorcelain } from "../git-worktree-state.js";
 
 export async function readBackups(
   root: string,
@@ -55,7 +56,7 @@ export async function cleanupRebaseHelpers(
         /^rebase-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(entry.name),
     );
     if (!candidates.length) return { removed: 0, blocked: null };
-    const trees = (await git(root, ["worktree", "list", "--porcelain", "-z"]))
+    const trees = (await worktreePorcelain(args => git(root, args)))
       .split("\0")
       .filter((field) => field.startsWith("worktree "))
       .map((field) => field.slice(9));

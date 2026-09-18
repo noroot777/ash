@@ -1,5 +1,6 @@
 import { expandHome, listBranches } from "./git.js";
 import { execFileText as exec } from "./exec.js";
+import { worktreePorcelain } from "./git-worktree-state.js";
 
 export type GitWorktreeOverview = {
   path: string;
@@ -48,11 +49,11 @@ export function parseWorktreePorcelain(output: string): GitWorktreeOverview[] {
 export async function getGitOverview(repoPath: string): Promise<GitOverview> {
   const branchOverview = await listBranches(repoPath);
   try {
-    const { stdout } = await exec(
+    const stdout = await worktreePorcelain(async args => (await exec(
       "git",
-      ["-C", expandHome(repoPath), "worktree", "list", "--porcelain", "-z"],
+      ["-C", expandHome(repoPath), ...args],
       { maxBuffer: 2 * 1024 * 1024 },
-    );
+    )).stdout);
     return { ...branchOverview, worktrees: parseWorktreePorcelain(stdout) };
   } catch {
     return { ...branchOverview, worktrees: [] };

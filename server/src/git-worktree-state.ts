@@ -3,6 +3,26 @@ import { lstatSync, realpathSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { execFileText as exec } from "./exec.js";
 
+// Git < 2.36 没有 worktree list -z；旧格式的路径原样输出，只有原因文字会被转义。
+export async function worktreePorcelain(run: (args: string[]) => Promise<string>): Promise<string> {
+  const args = ["worktree", "list", "--porcelain"];
+  try {
+    return await run([...args, "-z"]);
+  } catch {
+    const output = await run(args);
+    // 旧格式无法可靠分隔带换行的路径；拒绝异常记录，避免生成错误的工作树白名单。
+    const records = output.replace(/\r\n/g, "\n").split("\n\n").filter(Boolean);
+    for (const record of records) {
+      const [path, head, ...fields] = record.replace(/\n$/, "").split("\n");
+      if (!path.startsWith("worktree ") || !/^(?:HEAD [a-f0-9]+|bare)$/.test(head ?? "")
+        || fields.some(field => !/^(?:branch refs\/heads\/\S+|detached|(?:locked|prunable)(?: .*)?)$/.test(field))) {
+        throw new Error("无法安全读取旧版 Git 的工作树列表（路径可能包含换行），请升级 Git 至 2.36 或更新版本");
+      }
+    }
+    return records.map(record => record.replace(/\n$/, "").replace(/\n/g, "\0") + "\0\0").join("");
+  }
+}
+
 type Registration = { path: string; branch: string | null; prunable: boolean; locked: boolean };
 type Scope = { branch: string } | { path: string };
 type Checkout = {
@@ -36,7 +56,7 @@ function missing(path: string): boolean {
 }
 
 async function registrations(repo: string): Promise<Registration[]> {
-  const { stdout } = await exec("git", ["-C", repo, "worktree", "list", "--porcelain", "-z"]);
+  const stdout = await worktreePorcelain(async args => (await exec("git", ["-C", repo, ...args])).stdout);
   return stdout.split("\0\0").filter(Boolean).map(record => {
     const fields = record.split("\0");
     return {

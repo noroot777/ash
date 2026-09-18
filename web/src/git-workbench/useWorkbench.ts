@@ -20,9 +20,9 @@ export function useWorkbench(
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   const sequence = useRef(0);
+  const activeRead = useRef<number | null>(null);
   const mounted = useRef(true);
   const running = useRef(false);
-  const refreshingAfterWrite = useRef(false);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -32,6 +32,7 @@ export function useWorkbench(
   }, []);
   const refresh = useCallback(async () => {
     const request = ++sequence.current;
+    activeRead.current = request;
     try {
       const next = await workbenchApi.state(projectId, root, taskId);
       if (!mounted.current || sequence.current !== request) return;
@@ -41,13 +42,16 @@ export function useWorkbench(
       if (mounted.current && sequence.current === request)
         setError(reason instanceof Error ? reason.message : "Git 状态读取失败");
     } finally {
+      if (activeRead.current === request) activeRead.current = null;
       if (mounted.current && sequence.current === request) setLoading(false);
     }
   }, [projectId, root, taskId]);
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => {
-      if (!document.hidden && !refreshingAfterWrite.current) void refresh();
+      // 慢读尚未返回时发起下一轮，会让每一份成功响应的 sequence 都过期。
+      if (!document.hidden && activeRead.current === null && !running.current)
+        void refresh();
     }, 5000);
     return () => {
       clearInterval(timer);
@@ -92,9 +96,7 @@ export function useWorkbench(
       if (mounted.current) setMessage(text);
       notify(text);
     } finally {
-      refreshingAfterWrite.current = true;
       if (mounted.current) await refresh();
-      refreshingAfterWrite.current = false;
       running.current = false;
       if (mounted.current) setBusy(false);
     }

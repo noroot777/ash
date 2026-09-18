@@ -7,6 +7,7 @@ import type {
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { getGitOverview } from "../git-overview.js";
+import { worktreePorcelain } from "../git-worktree-state.js";
 import {
   readScmFileDiff,
   readScmRemotes,
@@ -107,7 +108,7 @@ export async function readWorkbench(
     readStashes(root, actor),
     readJournal(repo),
     stateVersion(root, status),
-    git(repo, ["worktree", "list", "--porcelain", "-z"]),
+    worktreePorcelain(args => git(repo, args)),
     readBackups(root),
     readChangeStats(root, true),
     readChangeStats(root, false),
