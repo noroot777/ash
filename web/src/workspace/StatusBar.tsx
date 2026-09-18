@@ -160,7 +160,10 @@ export function StatusBar({
   const otherRows = rows.filter((row) => !row.startable);
 
   // 项目级「启动/重启」(service):配置在 commandsConfig.service,会话身份是保留
-  // commandId "service"。没配置按钮置灰 —— 这正是用户要的「没设置就灰掉」。
+  // commandId "service"。置灰只由**配置**决定(没配置就灰 —— 这正是用户要的「没设置就
+  // 灰掉」);重启不要求服务在跑:后端冷态 restart 用 restartCommand ?? command 直接起
+  // 新会话(server/src/terminal-commands.ts),`expo start -c` 这类清缓存启动冷态点重启
+  // 是合法且常用的路径(第 1 轮逻辑审查)。
   const serviceConfig = currentProject?.commandsConfig?.service ?? null;
   const serviceSession = currentProject ? bestSession(sessions, currentProject.id, SERVICE_COMMAND_ID) : null;
   const serviceLive = serviceSession?.groupAlive ? serviceSession : null;
@@ -266,7 +269,7 @@ export function StatusBar({
                           type="button"
                           className="status-bar__svc-btn"
                           aria-label={serviceConfig ? "重启" : "未配置启动命令，在「管理常用命令」里设置"}
-                          disabled={!serviceConfig || !serviceLive}
+                          disabled={!serviceConfig}
                           onClick={() => serviceTarget && act(serviceTarget, "restart")}
                         ><ArrowsClockwise size={13} /></button>
                       </>
