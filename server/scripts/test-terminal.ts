@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,6 +118,83 @@ try {
     assert.ok(manager.get(keep.id, "project-keep"), "别的项目的会话不能被殃及");
     const keptCleared = await manager.destroy(keep.id, "project-keep");
     assert.equal(keptCleared.ok, true);
+
+    // ── 第 2 轮:job-control 后台作业(独立进程组)的三条清场路径 ──────────────────
+    // `set -m` 让每个 `&` 后台作业进**自己的**进程组(pgid == 作业 pid),忽略 TERM/HUP。
+    // shell 先退出后原组已空,只看组长会把仍活的作业谎报成「已清空」—— 靠会话存续期累积
+    // 的 descendantPgids 兜住。spawnJobControlOrphan 起这样一个作业并累积一轮。
+    const spawnJobControlOrphan = async (mgr: TerminalSessionManager, projectId: string) => {
+      const s = mgr.create(projectId, cwd, { shell, shellArgs: [], cols: 80, rows: 20 });
+      let buf = "";
+      const pid = await new Promise<number>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(`job pid timed out: ${JSON.stringify(buf)}`)), 6000);
+        const stop = mgr.subscribe(s.id, projectId, (event) => {
+          if (event.type !== "data") return;
+          buf += event.data;
+          const match = buf.match(/__JOB_(\d+)__/);
+          if (match) { clearTimeout(timeout); stop?.(); resolve(Number(match[1])); }
+        });
+        mgr.write(s.id, projectId, "set +H 2>/dev/null\n"); // 关 history expansion(见上文)
+        mgr.write(s.id, projectId, "set -m\n");             // 开 job control → 独立进程组
+        mgr.write(s.id, projectId, "trap '' TERM HUP\n");
+        mgr.write(s.id, projectId, "sleep 300 & echo __JOB_$!__\n");
+      });
+      // 证明作业确实在独立组里(pgid == 自身 pid),否则这条测试就没打到 round-2 的痛点
+      const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(pid)]).toString().trim());
+      assert.equal(pgid, pid, "后台作业应在自己的独立进程组(set -m job control)");
+      await mgr.trackDescendants(); // 此刻 shell 还活着,把这个独立 pgid 记进会话
+      return { session: s, pid };
+    };
+    const waitDead = async (pid: number, label: string) => {
+      const deadline = Date.now() + 3000;
+      for (;;) {
+        try { process.kill(pid, 0); } catch { return; }
+        assert.ok(Date.now() < deadline, label);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+
+    // [P1] shell 先 exit,再 destroy:实时快照已抓不到(树断),只能靠累积的 pgid 杀净。
+    {
+      const { session: s, pid } = await spawnJobControlOrphan(manager, "project-exit-orphan");
+      const exited = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("orphan shell did not exit")), 6000);
+        const stop = manager.subscribe(s.id, "project-exit-orphan", (event) => {
+          if (event.type !== "exit") return;
+          clearTimeout(timeout); stop?.(); resolve();
+        });
+      });
+      // disown 让 shell 别把作业算进「还有运行中的任务」而拒绝退出(交互态 bash 会拦一次)。
+      manager.write(s.id, "project-exit-orphan", "disown\n");
+      manager.write(s.id, "project-exit-orphan", "exit\n");
+      await exited;
+      const res = await manager.destroy(s.id, "project-exit-orphan", { termMs: 250, killMs: 2000 });
+      assert.equal(res.ok, true, "shell 已退出时 destroy 仍应确认独立组后台作业被杀净");
+      await waitDead(pid, "shell 退出后的独立组后台作业应随 destroy 被杀掉");
+    }
+
+    // [P1] shutdown 同步清场:不能 await ps,只能读累积的 pgid 杀独立组。用独立 manager。
+    {
+      const doomed = new TerminalSessionManager();
+      const { pid } = await spawnJobControlOrphan(doomed, "project-shutdown");
+      doomed.shutdown();
+      await waitDead(pid, "shutdown 应用累积的独立组 pgid 杀掉 job-control 后台作业");
+    }
+
+    // [P2] 删除态互斥:进入 shutdown 态后拒绝新建该项目会话,退出后恢复。
+    {
+      manager.beginProjectShutdown("project-locked");
+      assert.throws(
+        () => manager.create("project-locked", cwd, { shell, shellArgs: [] }),
+        /正在删除/,
+        "项目删除态应拒绝新建终端会话",
+      );
+      manager.endProjectShutdown("project-locked");
+      const reopened = manager.create("project-locked", cwd, { shell, shellArgs: [] });
+      assert.ok(reopened, "退出删除态后应能新建");
+      const done = await manager.destroy(reopened.id, "project-locked");
+      assert.equal(done.ok, true);
+    }
   }
   console.log("terminal session test passed");
 } finally {

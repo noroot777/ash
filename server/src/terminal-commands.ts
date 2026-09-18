@@ -75,6 +75,11 @@ export type CommandActionResult = { status: 200 | 201 | 500 | 502; body: Record<
 /** 启动。幂等:已经在跑就原样返回那条会话(状态栏两个终端里各点一次不该起两份)。 */
 export function startCommand(projectId: string, cwd: string, command: RunnableCommand): Promise<CommandActionResult> {
   return withCommandLock(projectId, command.id, async () => {
+    // 项目正在删除:拒绝启动,别把正被 destroyProject 杀掉的旧会话当「已在跑」交还
+    // (会误导前端 + 竞态下可能残留,第 2 轮自由审查)。
+    if (terminalSessions.isProjectClosing(projectId)) {
+      return { status: 500 as const, body: { error: "启动失败：项目正在删除" } };
+    }
     const live = terminalSessions.liveCommandSession(projectId, command.id);
     if (live) return { status: 200 as const, body: { session: live, alreadyRunning: true } };
     try {
@@ -101,6 +106,10 @@ export function stopCommand(projectId: string, commandId: string): Promise<Comma
 
 export function restartCommand(projectId: string, cwd: string, command: RunnableCommand): Promise<CommandActionResult> {
   return withCommandLock(projectId, command.id, async () => {
+    // 项目正在删除:拒绝重启(同 startCommand)。
+    if (terminalSessions.isProjectClosing(projectId)) {
+      return { status: 500 as const, body: { error: "重启失败：项目正在删除" } };
+    }
     // 先确认建得出替代会话再动手杀旧的:create 若注定因会话上限失败,「重启失败」
     // 会落成「服务被停了」。同命令会话不占这个判断(它们都会让位)。
     if (!terminalSessions.hasSlotForCommand(projectId, command.id)) {

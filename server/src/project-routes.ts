@@ -311,30 +311,38 @@ export function mountProjectRoutes(api: Hono): void {
     // 完全绕过了任务级门禁）。判据与单任务入口共用 isTaskBusy（task-busy.ts）。
     const live = ptasks.find(isTaskBusy);
     if (live) return c.json({ error: "项目有正在运行/排队/验收中的任务，无法删除", taskId: live.id }, 409);
-    // 终端会话(内存态)先清场:项目行一删,该项目的 shell/服务就再没有 UI/API 把手,
-    // 只能占着全局会话槽继续跑到 server 重启(第 1 轮自由审查实锤)。进程组级终止、
-    // 逐个确认;杀不净就拒绝删项目 —— 宁可删除失败,不留无主进程。
-    const cleared = await terminalSessions.destroyProject(pid);
-    if (!cleared.ok) {
-      return c.json({ error: `项目的终端会话 ${cleared.reason}，请先处理再删除` }, 502);
+    // 进入删除态:先挂 tombstone(拒绝该项目新建会话),再清场,再删库。三步共享这一个
+    // 标记,并发的终端 POST / 命令 start 就不会在清场之后溜进来变成无主会话(第 2 轮自由
+    // 审查实锤)。finally 撤销 —— 删成功后项目行已没、新建自然被 DB 拦;删失败要放行重试。
+    terminalSessions.beginProjectShutdown(pid);
+    try {
+      // 终端会话(内存态)先清场:项目行一删,该项目的 shell/服务就再没有 UI/API 把手,
+      // 只能占着全局会话槽继续跑到 server 重启(第 1 轮自由审查实锤)。进程组级终止、
+      // 逐个确认;杀不净就拒绝删项目 —— 宁可删除失败,不留无主进程。
+      const cleared = await terminalSessions.destroyProject(pid);
+      if (!cleared.ok) {
+        return c.json({ error: `项目的终端会话 ${cleared.reason}，请先处理再删除` }, 502);
+      }
+      for (const t of ptasks) {
+        // 与单任务 DELETE 同一份级联（审查链/预约/事件/消息/会话/计划/队列位），不留
+        // reconcile 收不掉的孤儿（state/event/message/queue item 都没有自愈入口）。
+        await deleteTaskAssociations(t.id);
+        rmSync(join(RUNS_DIR, t.id), { recursive: true, force: true });
+        rmSync(join(DATA_DIR, "scratch", t.id), { recursive: true, force: true });
+      }
+      await db.delete(tasks).where(eq(tasks.projectId, pid));
+      await db.delete(groups).where(eq(groups.projectId, pid));
+      const projectNotes = await db.select({ id: notes.id }).from(notes).where(eq(notes.projectId, pid));
+      if (projectNotes.length) await db.delete(noteTasks).where(inArray(noteTasks.noteId, projectNotes.map((note) => note.id)));
+      await db.delete(notes).where(eq(notes.projectId, pid));
+      await deleteProjectGitCredential(pid);
+      await deleteProjectMembers(pid);
+      await deleteProjectInvites(pid);
+      await db.delete(projects).where(eq(projects.id, pid));
+      return c.json({ deleted: true });
+    } finally {
+      terminalSessions.endProjectShutdown(pid);
     }
-    for (const t of ptasks) {
-      // 与单任务 DELETE 同一份级联（审查链/预约/事件/消息/会话/计划/队列位），不留
-      // reconcile 收不掉的孤儿（state/event/message/queue item 都没有自愈入口）。
-      await deleteTaskAssociations(t.id);
-      rmSync(join(RUNS_DIR, t.id), { recursive: true, force: true });
-      rmSync(join(DATA_DIR, "scratch", t.id), { recursive: true, force: true });
-    }
-    await db.delete(tasks).where(eq(tasks.projectId, pid));
-    await db.delete(groups).where(eq(groups.projectId, pid));
-    const projectNotes = await db.select({ id: notes.id }).from(notes).where(eq(notes.projectId, pid));
-    if (projectNotes.length) await db.delete(noteTasks).where(inArray(noteTasks.noteId, projectNotes.map((note) => note.id)));
-    await db.delete(notes).where(eq(notes.projectId, pid));
-    await deleteProjectGitCredential(pid);
-    await deleteProjectMembers(pid);
-    await deleteProjectInvites(pid);
-    await db.delete(projects).where(eq(projects.id, pid));
-    return c.json({ deleted: true });
   });
 
   // 单项目读型端点的统一取数:看不见就 403,不存在就 404。
