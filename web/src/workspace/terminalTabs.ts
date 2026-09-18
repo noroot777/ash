@@ -10,9 +10,18 @@ export type ProjectTerminalTab = {
   status: TerminalStatus;
   cwd: string;
   /**
-   * 非空 = attach 到 server 上已有的会话（常用命令的常驻会话）而不是新建 shell。
-   * 这类 tab 的生命周期跟前端无关：关 tab 只是不看了，会话照跑；停止走状态栏。
+   * shell = 交互终端。**持久**(VSCode 语义):关抽屉/收起 tab 都只是不看了,server 上的
+   * 会话照活,重开抽屉从会话列表原样恢复;真正结束它的只有 tab 上的 ✕(closeTab 里
+   * DELETE)和 shell 自己 exit。
+   * command = 常用命令的日志镜像:生命周期归状态栏管,✕ 永远只是收起。
    */
+  kind: "shell" | "command";
+  /**
+   * server 会话 id。attach tab 一开始就有;新建 shell 要 create 完由 pane 回填 ——
+   * closeTab 靠它结束会话。
+   */
+  sessionId?: string;
+  /** 非空 = 挂载时 attach 到 server 上已有的会话(SSE 从 seq 0 重放)而不是新建 shell。 */
   attachSessionId?: string;
   /** attach tab:会话事实的镜像,由集中轮询维护,驱动状态点与正文说明的措辞。 */
   stoppedByUser?: boolean;
@@ -31,6 +40,7 @@ export function createTerminalTab(
     label: ordinal === 1 ? projectName : `${projectName} ${ordinal}`,
     status: "starting",
     cwd,
+    kind: "shell",
   };
 }
 
@@ -39,21 +49,28 @@ export function attachStatusOf(session: { exitCode: number | null; groupAlive: b
   return session.exitCode === null ? "ready" : session.groupAlive ? "detached" : "ended";
 }
 
-export function createAttachTab(session: {
-  id: string;
-  name: string;
-  cwd: string;
-  exitCode: number | null;
-  groupAlive: boolean;
-  stoppedByUser: boolean;
-}): ProjectTerminalTab {
+export function createAttachTab(
+  session: {
+    id: string;
+    name: string;
+    cwd: string;
+    commandId: string | null;
+    exitCode: number | null;
+    groupAlive: boolean;
+    stoppedByUser: boolean;
+  },
+  /** 恢复的交互 shell 用项目名 + 序号做标签,跟新建 shell 一个排法;命令日志用会话名。 */
+  shellLabel?: { label: string; ordinal: number },
+): ProjectTerminalTab {
   return {
     id: `attach:${session.id}`,
-    ordinal: 0,
-    label: session.name,
+    ordinal: shellLabel?.ordinal ?? 0,
+    label: shellLabel?.label ?? session.name,
     // 初始状态直接由会话事实算出:从未点开过的 tab 也要显示真实状态,不能挂在「正在启动」
     status: attachStatusOf(session),
     cwd: session.cwd,
+    kind: session.commandId === null ? "shell" : "command",
+    sessionId: session.id,
     attachSessionId: session.id,
     stoppedByUser: session.stoppedByUser,
     exitCode: session.exitCode,

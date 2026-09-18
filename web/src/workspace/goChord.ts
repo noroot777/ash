@@ -2,6 +2,8 @@
 //
 //   G T  任务模式 ⇄ 当前项目（侧栏列表在看谁）
 //   G S  项目设置
+//   G C  常用命令弹层（状态栏那颗,开合）
+//   G Z  终端抽屉（开合;焦点在终端里打字时按不出来,属文本输入护栏的既定取舍）
 //
 // 用两键连打而不是单键，是因为这一族要在**任何界面**上都按得到，而单键预算留给了列表里
 // 高频的 j/k/f/c/r。前缀 g 同时是 Inspector `I G` 的第二键，两条序列因此必须互相让路，
@@ -15,6 +17,8 @@ export const GO_CHORD_PREFIX = "g";
 export const GO_CHORD_KEYS = {
   taskMode: "t",
   settings: "s",
+  commands: "c",
+  terminal: "z",
 } as const;
 
 export type GoChordKey = (typeof GO_CHORD_KEYS)[keyof typeof GO_CHORD_KEYS];
@@ -31,3 +35,5 @@ export function goChordLabel(key: GoChordKey): string {
 
 export const TASK_MODE_SHORTCUT_LABEL = goChordLabel(GO_CHORD_KEYS.taskMode);
 export const SETTINGS_SHORTCUT_LABEL = goChordLabel(GO_CHORD_KEYS.settings);
+export const COMMANDS_SHORTCUT_LABEL = goChordLabel(GO_CHORD_KEYS.commands);
+export const TERMINAL_SHORTCUT_LABEL = goChordLabel(GO_CHORD_KEYS.terminal);

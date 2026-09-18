@@ -1,4 +1,5 @@
-// G T 切「任务模式」的按键回归：真按键、真捕获阶段，跟 Inspector 的 `I …` 交叉着按。
+// G 族和弦（G T / G S / G C / G Z）的按键回归：真按键、真捕获阶段，跟 Inspector 的
+// `I …` 交叉着按。
 // 跑法：npm -w web run test:workspace-shortcuts
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
@@ -63,10 +64,26 @@ try {
   assert.match(await log.textContent(), /settings$/, "G S 应打开设置");
   await assertScope("project", "G S 不应顺带切模式");
 
-  // 半截 G 之后，别的单键快捷键仍然照常：c 该新建就新建。
+  // 半截 G 之后，别的单键快捷键仍然照常：f 该切铺开就切铺开。（c 已升级为 G C 的
+  // 第二键，不能再用它测这条。）
+  await type(["g", "f"]);
+  assert.match(await log.textContent(), /spread$/, "半截 G 之后的单键快捷键仍应生效");
+  await assertScope("project", "g f 不应切模式");
+
+  // 新档位：G C 常用命令弹层、G Z 终端抽屉 —— 都是开合切换，连按两轮必须发两次
+  // （和弦触发后序列要复位，第二轮的 g 不能被上一轮吃掉）。
   await type(["g", "c"]);
-  assert.match(await log.textContent(), /create$/, "半截 G T 之后的单键快捷键仍应生效");
-  await assertScope("project", "g c 不应切模式");
+  assert.match(await log.textContent(), /commands$/, "G C 应切换常用命令弹层");
+  await type(["g", "c"]);
+  assert.match(await log.textContent(), /commands commands$/, "再按一轮 G C 应再次触发（开合复位）");
+  await type(["g", "z"]);
+  assert.match(await log.textContent(), /terminal$/, "G Z 应切换终端抽屉");
+  await type(["g", "z"]);
+  assert.match(await log.textContent(), /terminal terminal$/, "再按一轮 G Z 应再次触发（开合复位）");
+
+  // 无前缀的单键 c 仍是新建 —— G C 抢走的只是「g 之后的 c」。
+  await type(["c"]);
+  assert.match(await log.textContent(), /create$/, "无前缀的 c 仍应新建任务");
 
   // 聊天 / 助手 / 设置页把列表导航键关掉（enabled=false）。`G …` 一族的整个存在理由就是
   // 「在任何界面都按得到」，所以它必须穿过这道开关 —— 否则在聊天页按 G T 什么都不会发生。
@@ -77,6 +94,10 @@ try {
   await assertScope("project", "列表导航关掉后 G T 仍应能按同样两下退回来");
   await type(["g", "s"]);
   assert.match(await log.textContent(), /settings$/, "列表导航关掉后 G S 仍应打开设置");
+  await type(["g", "c"]);
+  assert.match(await log.textContent(), /commands$/, "列表导航关掉后 G C 仍应可用");
+  await type(["g", "z"]);
+  assert.match(await log.textContent(), /terminal$/, "列表导航关掉后 G Z 仍应可用");
 
   // 反过来，列表导航那几颗单键在那些界面上没有落点，一颗都不能响。
   const quiet = await log.textContent();
@@ -91,12 +112,17 @@ try {
 
   await toggleListNavigation("on");
 
-  // 输入框里 g t 是两个字符，不是快捷键。
+  // 输入框里 g t 是两个字符，不是快捷键。g c / g z 同理。
   const entry = page.getByTestId("text-entry");
   await entry.click();
   await entry.type("gt");
   assert.equal(await entry.inputValue(), "gt");
   await assertScope("project", "输入框里的 g t 不应切模式");
+  const beforeEntry = await log.textContent();
+  await entry.fill("");
+  await entry.type("gcgz");
+  assert.equal(await entry.inputValue(), "gcgz");
+  assert.equal(await log.textContent(), beforeEntry, "输入框里的 g c / g z 不应触发弹层或终端");
 
   console.log("workspace shortcut tests passed");
 

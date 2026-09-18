@@ -17,21 +17,41 @@
 // terminal.ts mountTerminalRoutes 顶部。
 import type { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import type { ProjectCommandConfig } from "@ash/shared/project-commands";
+import { normalizeProjectCommands, SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
 import { resolveTerminalDirectory, terminalSessions } from "./terminal.js";
 
+/**
+ * 会话层跑的一条命令。restartCommand 只有项目级 service 才有(配置见
+ * shared/src/project-commands.ts):普通命令的重启一律「杀掉再跑一遍 command」。
+ */
+export type RunnableCommand = { id: string; name: string; command: string; restartCommand: string | null };
+
+/** service 会话在终端 tab / 状态栏「其他项目」里的显示名。 */
+const SERVICE_SESSION_NAME = "服务";
+
 type CommandTarget =
-  | { ok: true; cwd: string; command: ProjectCommandConfig }
+  | { ok: true; cwd: string; command: RunnableCommand }
   | { ok: false; error: string; status: 400 | 404 };
 
 async function commandTarget(projectId: string, commandId: string): Promise<CommandTarget> {
   const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
   if (!project) return { ok: false, error: "项目不存在", status: 404 };
-  const command = (project.commandsConfig ?? []).find((item) => item.id === commandId);
-  if (!command) return { ok: false, error: "这条常用命令不存在（可能刚被删除），刷新后再试", status: 404 };
+  const config = normalizeProjectCommands(project.commandsConfig);
+  let command: RunnableCommand | null = null;
+  if (commandId === SERVICE_COMMAND_ID) {
+    // 项目级「启动/重启」:弹层头部的 ▶/⟳,不占普通命令的名额。
+    if (config?.service) {
+      command = { id: SERVICE_COMMAND_ID, name: SERVICE_SESSION_NAME, ...config.service };
+    }
+    if (!command) return { ok: false, error: "还没配置启动命令，先在项目设置的常用命令里填写", status: 404 };
+  } else {
+    const found = (config?.commands ?? []).find((item) => item.id === commandId);
+    if (!found) return { ok: false, error: "这条常用命令不存在（可能刚被删除），刷新后再试", status: 404 };
+    command = { ...found, restartCommand: null };
+  }
   const cwd = resolveTerminalDirectory(project.repoPath);
   if (!cwd) return { ok: false, error: "项目目录不存在，请先在项目设置中填写可用的本地目录", status: 400 };
   return { ok: true, cwd, command };
@@ -53,8 +73,13 @@ function withCommandLock<T>(projectId: string, commandId: string, fn: () => Prom
 export type CommandActionResult = { status: 200 | 201 | 500 | 502; body: Record<string, unknown> };
 
 /** 启动。幂等:已经在跑就原样返回那条会话(状态栏两个终端里各点一次不该起两份)。 */
-export function startCommand(projectId: string, cwd: string, command: ProjectCommandConfig): Promise<CommandActionResult> {
+export function startCommand(projectId: string, cwd: string, command: RunnableCommand): Promise<CommandActionResult> {
   return withCommandLock(projectId, command.id, async () => {
+    // 项目正在删除:拒绝启动,别把正被 destroyProject 杀掉的旧会话当「已在跑」交还
+    // (会误导前端 + 竞态下可能残留,第 2 轮自由审查)。
+    if (terminalSessions.isProjectClosing(projectId)) {
+      return { status: 500 as const, body: { error: "启动失败：项目正在删除" } };
+    }
     const live = terminalSessions.liveCommandSession(projectId, command.id);
     if (live) return { status: 200 as const, body: { session: live, alreadyRunning: true } };
     try {
@@ -79,8 +104,12 @@ export function stopCommand(projectId: string, commandId: string): Promise<Comma
   });
 }
 
-export function restartCommand(projectId: string, cwd: string, command: ProjectCommandConfig): Promise<CommandActionResult> {
+export function restartCommand(projectId: string, cwd: string, command: RunnableCommand): Promise<CommandActionResult> {
   return withCommandLock(projectId, command.id, async () => {
+    // 项目正在删除:拒绝重启(同 startCommand)。
+    if (terminalSessions.isProjectClosing(projectId)) {
+      return { status: 500 as const, body: { error: "重启失败：项目正在删除" } };
+    }
     // 先确认建得出替代会话再动手杀旧的:create 若注定因会话上限失败,「重启失败」
     // 会落成「服务被停了」。同命令会话不占这个判断(它们都会让位)。
     if (!terminalSessions.hasSlotForCommand(projectId, command.id)) {
