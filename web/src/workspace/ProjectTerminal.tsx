@@ -21,17 +21,19 @@ const DEFAULT_HEIGHT = 280;
 const MIN_HEIGHT = 170;
 const MAX_TABS = 8;
 
-function maximumHeight(): number {
-  return Math.max(MIN_HEIGHT, Math.min(560, window.innerHeight - 210));
+function maximumHeight(viewportHeight: number = window.innerHeight): number {
+  return Math.max(MIN_HEIGHT, Math.min(560, viewportHeight - 210));
 }
 
-function clampHeight(value: number): number {
-  return Math.max(MIN_HEIGHT, Math.min(maximumHeight(), Math.round(value)));
+function clampHeight(value: number, viewportHeight?: number): number {
+  return Math.max(MIN_HEIGHT, Math.min(maximumHeight(viewportHeight), Math.round(value)));
 }
 
 function initialHeight(): number {
+  // 没存过时 readRenamedStorage 给的是 null,Number(null) = 0 —— 0 也是有限数,照单全收
+  // 就等于每个新用户第一次开终端都只得到 MIN_HEIGHT 那一条缝,而不是 DEFAULT_HEIGHT。
   const stored = Number(readRenamedStorage(TERMINAL_HEIGHT_KEY));
-  return Number.isFinite(stored) ? clampHeight(stored) : DEFAULT_HEIGHT;
+  return Number.isFinite(stored) && stored > 0 ? clampHeight(stored) : DEFAULT_HEIGHT;
 }
 
 function clientTabId(): string {
@@ -131,21 +133,24 @@ function TerminalPane({
       lineHeight: 1.35,
       scrollback: 5000,
       allowTransparency: true,
+      // 底部坞是深色的(terminal.css),xterm 的调色板跟着走:浅色那套落在 #17181d 上
+      // 只剩一团糊。色值取自设计稿 demo(docs/demos/project-command-center/shared.css)。
       theme: {
-        background: "#fbfbfc",
-        foreground: "#2b2b30",
-        cursor: "#5e6ad2",
-        cursorAccent: "#fbfbfc",
-        selectionBackground: "#dfe2fa",
-        black: "#343438",
-        red: "#c64a55",
-        green: "#168466",
-        yellow: "#a46f00",
-        blue: "#5260c9",
-        magenta: "#8250b6",
-        cyan: "#0e879d",
-        white: "#e8e8eb",
-        brightBlack: "#76767d",
+        background: "#17181d",
+        foreground: "#c9cbd6",
+        cursor: "#8f9aff",
+        cursorAccent: "#17181d",
+        selectionBackground: "#3a3d55",
+        black: "#2b2c34",
+        red: "#ef7a86",
+        green: "#58c99a",
+        yellow: "#e0b356",
+        blue: "#7f9cf5",
+        magenta: "#c08bf0",
+        cyan: "#5ac8d8",
+        white: "#c9cbd6",
+        brightBlack: "#71737f",
+        brightWhite: "#ecedf2",
       },
     });
     const fit = new FitAddon();
@@ -306,6 +311,16 @@ export function ProjectTerminal({
 }) {
   const nextOrdinal = useRef(1);
   const [height, setHeight] = useState(initialHeight);
+  // 底部坞在窗口里横着占一整行,高度不跟着窗口收就会把上面的工作区整个挤没(实测:
+  // 560 的终端 + 620 高的窗口 = 侧栏和主区只剩 34px)。**存的是用户挑的那个高度,
+  // 用的是按当前窗口夹过的值** —— 窗口临时变矮不该顺手把他的偏好改小,拉回来还得再调一次。
+  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const appliedHeight = clampHeight(height, viewportHeight);
   // tabs 和 activeId 是同一份状态:容量决策、victim 顶替和激活必须在同一个函数式
   // updater 里原子完成。拆成两个 state 时,「先读快照定分支、再对可能已变的 cur 插入」
   // 会在首次挂载与 focusRequest 并发时插出第 9 个 tab(第 3 轮审查实锤:抽屉关着
@@ -562,7 +577,7 @@ export function ProjectTerminal({
     if (event.button !== 0) return;
     event.preventDefault();
     const startY = event.clientY;
-    const startHeight = height;
+    const startHeight = appliedHeight;
     document.body.classList.add("terminal-drawer-resizing");
     const move = (next: PointerEvent) => setHeight(clampHeight(startHeight + startY - next.clientY));
     const finish = () => {
@@ -575,15 +590,15 @@ export function ProjectTerminal({
   };
 
   return (
-    <section className="project-terminal" style={{ height }} aria-label={`${project.name} CLI`}>
+    <section className="project-terminal" style={{ height: appliedHeight }} aria-label={`${project.name} CLI`}>
       <div
         className="project-terminal__resize"
         role="separator"
         aria-label="调整 CLI 高度，双击恢复默认高度"
         aria-orientation="horizontal"
         aria-valuemin={MIN_HEIGHT}
-        aria-valuemax={maximumHeight()}
-        aria-valuenow={height}
+        aria-valuemax={maximumHeight(viewportHeight)}
+        aria-valuenow={appliedHeight}
         onPointerDown={beginResize}
         onDoubleClick={() => setHeight(DEFAULT_HEIGHT)}
       />

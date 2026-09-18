@@ -1,14 +1,20 @@
 /* 终端开关已从任务顶栏移到全局状态栏(status-bar.css),.terminal-toggle 随组件一起退役。 */
 .workspace-app-bar > .terminal-toggle { margin-left: auto; }
 
+/* 底部坞(设计稿方案 B):终端横贯整个窗口、压在状态栏正上方,和它连成一条深色带 ——
+   所以它挂在 .workspace-system-layout 的第三行,不是主区卡片里的一块(见 handoff.css)。
+   配色跟状态栏同一套(#17181d / #202128 / #2b2d36),别用浅色主题那几个变量:它们是给
+   白底调的,落在这里要么糊要么刺眼。 */
 .project-terminal {
   position: relative;
+  z-index: 25;
   display: flex;
+  min-width: 0;
   min-height: 170px;
-  flex: 0 0 auto;
   flex-direction: column;
-  border-top: 0.5px solid var(--line2);
-  background: #fbfbfc;
+  background: #17181d;
+  color: #c9cbd6;
+  box-shadow: 0 -8px 30px rgb(0 0 0 / 22%);
 }
 
 .project-terminal__resize {
@@ -34,17 +40,16 @@
 }
 
 .project-terminal__resize:hover::after,
-.terminal-drawer-resizing .project-terminal__resize::after { opacity: .65; }
+.terminal-drawer-resizing .project-terminal__resize::after { opacity: .8; }
 .terminal-drawer-resizing { cursor: row-resize; user-select: none; }
 
 .project-terminal__bar {
   display: flex;
-  height: 36px;
-  flex: 0 0 36px;
+  height: 34px;
+  flex: 0 0 34px;
   align-items: center;
   gap: 8px;
-  border-bottom: 0.5px solid var(--line);
-  background: color-mix(in lch, var(--canvas) 82%, var(--panel));
+  background: #202128;
   padding: 0 8px;
 }
 
@@ -64,30 +69,20 @@
 .project-terminal__tab-shell {
   position: relative;
   display: flex;
-  height: 30px;
-  min-width: 118px;
+  height: 24px;
+  min-width: 110px;
   max-width: 190px;
-  flex: 0 1 154px;
+  flex: 0 1 150px;
   align-items: center;
-  border-radius: 7px 7px 0 0;
-  color: var(--muted);
+  border-radius: 6px;
+  color: #b6b8c4;
 }
+
+.project-terminal__tab-shell:hover { background: #2b2c34; }
 
 .project-terminal__tab-shell.is-active {
-  background: color-mix(in lch, var(--canvas) 92%, var(--accent));
-  color: var(--ink);
-}
-
-.project-terminal__tab-shell.is-active::after {
-  position: absolute;
-  right: 6px;
-  bottom: -3px;
-  left: 6px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--accent);
-  content: "";
-  opacity: .72;
+  background: #33343d;
+  color: #ecedf2;
 }
 
 .project-terminal__tab {
@@ -99,41 +94,40 @@
   border: 0;
   background: transparent;
   padding: 0 2px 0 8px;
-  color: var(--muted);
+  color: inherit;
   box-shadow: none;
 }
 
-.project-terminal__tab-shell.is-active .project-terminal__tab { color: var(--ink); }
 .project-terminal__tab:focus-visible,
 .project-terminal__tab-close:focus-visible,
 .project-terminal__add:focus-visible,
-.project-terminal__drawer-close:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 64%, transparent); outline-offset: -2px; }
+.project-terminal__drawer-close:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 78%, white); outline-offset: -2px; }
 
-.project-terminal__tab b { overflow: hidden; color: inherit; font-size: 11.5px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
-.project-terminal__status { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: var(--faint); }
+.project-terminal__tab b { overflow: hidden; color: inherit; font-size: 11.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.project-terminal__status { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: #6c6e7b; }
 .project-terminal__status.is-ready,
-.project-terminal__status.is-detached { background: var(--green); }
+.project-terminal__status.is-detached { background: #4cc38a; }
 .project-terminal__status.is-reconnecting,
-.project-terminal__status.is-starting { background: var(--amber); }
+.project-terminal__status.is-starting { background: #e0b356; }
 .project-terminal__status.is-error,
-.project-terminal__status.is-ended { background: var(--red); }
+.project-terminal__status.is-ended { background: #ef7a86; }
 
-.project-terminal__bar > code { min-width: 0; flex: 1; overflow: hidden; color: var(--faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.project-terminal__bar > code { min-width: 0; flex: 1; overflow: hidden; color: #6c6e7b; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 .project-terminal__tab-close,
 .project-terminal__add,
-.project-terminal__drawer-close { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border: 0; border-radius: 6px; background: transparent; padding: 0; color: var(--faint); box-shadow: none; }
-.project-terminal__tab-close { width: 20px; height: 20px; flex-basis: 20px; margin-right: 4px; opacity: .55; }
+.project-terminal__drawer-close { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border: 0; border-radius: 6px; background: transparent; padding: 0; color: #8a8c99; box-shadow: none; }
+.project-terminal__tab-close { width: 18px; height: 18px; flex-basis: 18px; margin-right: 4px; color: inherit; opacity: .5; }
 .project-terminal__tab-shell:hover .project-terminal__tab-close,
 .project-terminal__tab-shell.is-active .project-terminal__tab-close { opacity: 1; }
-.project-terminal__tab-close:hover,
+.project-terminal__tab-close:hover { background: #45464f; color: #ecedf2; }
 .project-terminal__add:hover,
-.project-terminal__drawer-close:hover { background: var(--raised); color: var(--ink); }
+.project-terminal__drawer-close:hover { background: #2b2c34; color: #ecedf2; }
 .project-terminal__add { margin: 0 3px; }
 
-.project-terminal__viewport { min-height: 0; flex: 1; overflow: hidden; padding: 8px 10px 10px; }
+.project-terminal__viewport { min-height: 0; flex: 1; overflow: hidden; padding: 8px 12px 10px; }
 .project-terminal__viewport[hidden] { display: none; }
 .project-terminal__viewport .xterm { height: 100%; }
-.project-terminal__viewport .xterm-viewport { scrollbar-color: rgb(55 57 63 / 22%) transparent; }
+.project-terminal__viewport .xterm-viewport { scrollbar-color: rgb(201 203 214 / 22%) transparent; }
 
 @media (max-width: 760px) {
   .project-terminal__bar > code { display: none; }
