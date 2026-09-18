@@ -298,10 +298,11 @@ export class TerminalSessionManager {
    * dev server 派生的子进程都在组里;交互 shell 的 job control 会把后台作业挪进独立进程组,
    * 靠「存续期累积 + 发信号前实时补抓」两份后代 pgid 覆盖):SIGTERM 给进程收尾的机会,等不到
    * **整组+后代清空**再 SIGKILL 兜底;两轮都压不住(基本只剩 D 状态)就如实返回失败,绝不把
-   * 「没杀死」报成「已停」—— 会话还在,UI 可重试。判定必须是「组长退了 **且** 组里没人 **且**
-   * 已见后代组/进程全消失」:`cmd & wait`(或 shell 先 exit、独立组作业还在)这种形状下只看
-   * 组长就会漏杀(第 2 轮审查实锤)。双 fork 后立刻 setsid 逃逸、且从没被任一次扫描抓到的
-   * 守护进程超出本方法能力,属已知边界。
+   * 「没杀死」报成「已停」—— 会话还在,UI 可重试。交互会话的内层 shell 另加一发 SIGHUP
+   * (它忽略 TERM,只认挂断;理由见下面发信号处),整组的 TERM 收尾宽限不受影响。判定必须
+   * 是「组长退了 **且** 组里没人 **且** 已见后代组/进程全消失」:`cmd & wait`(或 shell
+   * 先 exit、独立组作业还在)这种形状下只看组长就会漏杀(第 2 轮审查实锤)。双 fork 后
+   * 立刻 setsid 逃逸、且从没被任一次扫描抓到的守护进程超出本方法能力,属已知边界。
    */
   async terminate(
     sessionId: string,
@@ -332,6 +333,21 @@ export class TerminalSessionManager {
     if (clearedBy(term.snapshot)) { term.thaw(); return { ok: true }; }
     session.stoppedByUser = true;
     this.signalTree(session, "SIGTERM", term.snapshot);
+    // 交互 shell 只认挂断:zsh/bash 按 POSIX 惯例**忽略 SIGTERM**(交互模式下),于是
+    // 「关 tab」的 TERM 轮必然空等满 termMs 才升级 KILL —— 实测一个什么都没跑的空闲 tab
+    // 也要 3.5s 才关掉,而这 3s 全花在等一个约定好不会发生的事件上(leader 自己也 trap 了
+    // TERM,成功判定的第一条却是 leader 的 exitCode 落地)。关 tab 的正确语义本来就是
+    // **终端挂断**,对应 SIGHUP:shell 收到即退出、并按自己的规矩通知作业(nohup/disown
+    // 的不动),wrapper 随后确定性清杀余党,TERM 轮在几百毫秒内自然满足退出条件。
+    // 只发给 leader 的直接子进程(那个内层 shell),不广播到整组:组里的服务/前台作业
+    // 该拿的仍是 TERM 那份**完整**收尾宽限,一秒都不缩短(命令会话的 stop 因此完全不受
+    // 影响 —— dev server 照旧优雅退出)。leader 自己 trap 了 HUP,shell 转发也杀不到它,
+    // tty 不会被提前 revoke,枚举能力全程在线。
+    if (session.commandId === null) {
+      for (const pid of term.innerShellPids) {
+        try { process.kill(pid, "SIGHUP"); } catch { /* 已死 */ }
+      }
+    }
     term.thaw(); // 解冻:让 TERM handler 收尾(它也可能 fork —— 交给下面的 KILL 轮抓)
     if (await this.waitForGroupExit(session, timeouts?.termMs ?? 3000, term.snapshot)) return { ok: true };
 

@@ -5,6 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { IS_WINDOWS } from "../src/platform.js";
 import { resolveLsofPath, resolvePsPath } from "../src/terminal-process-tree.js";
+import { shellCommand } from "../src/terminal-shell.js";
 import { resolveTerminalDirectory, TerminalSessionManager } from "../src/terminal.js";
 
 // realpath 一次:Windows 的 %TEMP% 常常是 8.3 短名(`C:\Users\RUNNER~1\…`),而
@@ -119,6 +120,39 @@ try {
     assert.ok(manager.get(keep.id, "project-keep"), "别的项目的会话不能被殃及");
     const keptCleared = await manager.destroy(keep.id, "project-keep");
     assert.equal(keptCleared.ok, true);
+
+    // 关 tab = **终端挂断**:交互 shell 按 POSIX 惯例忽略 SIGTERM(zsh/bash 在提示符上
+    // 等输入时尤其如此),只认 SIGHUP。少了那发 HUP,一个什么都没跑的空闲 tab 也得空等满
+    // termMs 才升级 KILL —— 白等,因为成功判定的第一条是 leader 的 exitCode 落地,而
+    // leader 自己 trap 了 TERM(实测 3.5s/次,前端还要等这个 204 才收 tab)。
+    //
+    // 形状必须照抄线上,否则打不到缺陷路径(本用例上一版用 /bin/sh 就没打到):
+    //   ① 用 shellCommand() 的**默认登录 shell**,不是测试里那个确定性的 /bin/sh;
+    //   ② 必须**等到提示符再静置**一会儿 —— 刚起来还在跑启动文件的 zsh 收 TERM 就死,
+    //      只有回到提示符等输入的它才忽略 TERM(实测:到提示符立刻关 590ms,静置 3s
+    //      再关 3580ms)。
+    const login = shellCommand();
+    const idle = manager.create("project-idle", cwd, { shell: login.shell, shellArgs: login.args, cols: 80, rows: 20 });
+    await new Promise<void>((resolve, reject) => {
+      let seen = "";
+      const timeout = setTimeout(() => reject(new Error(`idle shell not ready: ${JSON.stringify(seen)}`)), 10_000);
+      const stop = manager.subscribe(idle.id, "project-idle", (event) => {
+        if (event.type !== "data") return;
+        seen += event.data;
+        if (seen.includes("__ASH_IDLE_OK__")) {
+          clearTimeout(timeout);
+          stop?.();
+          resolve();
+        }
+      });
+      manager.write(idle.id, "project-idle", "printf '__ASH_IDLE_OK__\\n'\n");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 3200));
+    const idleStart = Date.now();
+    const idleClosed = await manager.destroy(idle.id, "project-idle");
+    const idleElapsed = Date.now() - idleStart;
+    assert.equal(idleClosed.ok, true, "空闲交互会话应确认清空");
+    assert.ok(idleElapsed < 2500, `关空闲 tab 不该空等满 TERM 宽限（实测 ${idleElapsed}ms）`);
 
     // ── 第 2/3 轮:job-control 后台作业(独立进程组)的清场路径 ──────────────────────
     // `set -m` 让每个 `&` 后台作业进**自己的**进程组(pgid == 作业 pid),忽略 TERM/HUP。
