@@ -1,0 +1,58 @@
+/* 常用命令占位符收值框(workspace/CommandArgsDialog.tsx),壳是 task-detail/ConfirmDialog。 */
+.command-args-dialog .command-args__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 2px 0 12px;
+}
+
+.command-args__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.command-args__field > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.command-args__field > span em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--faint);
+}
+.command-args__field > span em.is-required { color: var(--amber); }
+.command-args__field input {
+  border: none;
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--control-shadow);
+  padding: 7px 10px;
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 12.5px;
+  color: var(--ink);
+  width: 100%;
+}
+.command-args__field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.command-args__field input:disabled { opacity: 0.6; }
+
+.command-args__preview {
+  margin: 0 0 4px;
+  padding: 8px 10px;
+  max-height: 160px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--canvas);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--muted);
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

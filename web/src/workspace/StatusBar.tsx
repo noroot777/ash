@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowsClockwise, CircleNotch, Play, Scroll, Square, TerminalWindow } from "@phosphor-icons/react";
 import type { ProjectView } from "@ash/shared";
-import { SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
+import { parseCommandPlaceholders, SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
 import { api, type TerminalSessionInfo } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { CommandArgsDialog } from "./CommandArgsDialog.tsx";
 import { COMMANDS_SHORTCUT_LABEL, TERMINAL_SHORTCUT_LABEL } from "./goChord.ts";
 
 // 全局状态栏(方案 B):横贯窗口底部的一条 app 级栏,项目级「运行现场」的常显面 ——
@@ -21,10 +22,17 @@ import { COMMANDS_SHORTCUT_LABEL, TERMINAL_SHORTCUT_LABEL } from "./goChord.ts";
 // currentProject —— 它在任务模式下的语义是「终端/git/新建任务落在哪」,跟着选中任务走
 // (WorkspaceShell 的既有定义),这里不另发明规则。
 //
+// 命令正文里可以带 `{{占位符}}`:点启动/重启时先弹 CommandArgsDialog 收值,再把**取值**
+// 送给后端替换(服务端才是真相,见 server/src/terminal-commands.ts)。没有占位符的命令
+// 一如既往点了就跑,不多一次点击。
+//
 // 权限跟终端同一道门:常用命令是任意 shell,多人模式只有实例管理员看得到这一段
 // (canUseTerminal),后端 403 兜底。
 
 const POLL_MS = 15_000;
+
+/** 一次启停打在哪条命令上(弹层头部的 service 和行列表共用同一套动作)。 */
+type CommandTarget = { projectId: string; commandId: string; name: string };
 
 type CommandRow = {
   projectId: string;
@@ -43,6 +51,13 @@ type CommandRow = {
 function bestSession(sessions: TerminalSessionInfo[], projectId: string, commandId: string): TerminalSessionInfo | null {
   const mine = sessions.filter((s) => s.projectId === projectId && s.commandId === commandId);
   return mine.find((s) => s.groupAlive) ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
+}
+
+/** 命令可能是整段多行脚本,行里只摆得下一行:首行 + 还有几行,细节去设置里看。 */
+function commandSummary(script: string): string {
+  const lines = script.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length <= 1) return lines[0] ?? "";
+  return `${lines[0]} … 共 ${lines.length} 行`;
 }
 
 /** 会话事实 → 状态点/文案。service 头部和普通命令行共用,口径才不会劈叉。 */
@@ -128,6 +143,12 @@ export function StatusBar({
   const [sessions, setSessions] = useState<TerminalSessionInfo[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  /** 带占位符的命令:点了执行但还没填完值的那一次。 */
+  const [pendingRun, setPendingRun] = useState<{
+    target: CommandTarget;
+    action: "start" | "restart";
+    script: string;
+  } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   useDismissable({ enabled: open, containerRef: root, onClose: () => setOpen(false), restoreFocusRef: trigger });
@@ -179,14 +200,14 @@ export function StatusBar({
   const crashed = anchorRows.some((row) => rowState(row).tone === "err")
     || (serviceState?.tone === "err");
 
-  const act = (target: { projectId: string; commandId: string; name: string }, action: "start" | "stop" | "restart") => {
+  const act = (target: CommandTarget, action: "start" | "stop" | "restart", values: Record<string, string> = {}) => {
     const key = `${target.projectId}:${target.commandId}`;
     setBusy(key);
     const call: Promise<{ session?: TerminalSessionInfo; stopped?: boolean }> = action === "start"
-      ? api.startProjectCommand(target.projectId, target.commandId)
+      ? api.startProjectCommand(target.projectId, target.commandId, values)
       : action === "stop"
         ? api.stopProjectCommand(target.projectId, target.commandId)
-        : api.restartProjectCommand(target.projectId, target.commandId);
+        : api.restartProjectCommand(target.projectId, target.commandId, values);
     call
       .then((result) => {
         refresh();
@@ -200,6 +221,16 @@ export function StatusBar({
       })
       .catch((error) => notify(error instanceof Error ? error.message : `${target.name} 操作失败`))
       .finally(() => setBusy((value) => value === key ? null : value));
+  };
+
+  /**
+   * 点执行的统一入口:命令里有占位符就先开框收值(填好再 act),没有就直接跑 ——
+   * 不给无占位符的命令平白加一次点击。script 传的是**这次真正会跑的那段**
+   * (service 重启跑的是 restartCommand),否则框里问的占位符跟实际跑的对不上。
+   */
+  const requestRun = (target: CommandTarget, action: "start" | "restart", script: string) => {
+    if (!parseCommandPlaceholders(script).length) { act(target, action, {}); return; }
+    setPendingRun({ target, action, script });
   };
 
   return (
@@ -262,7 +293,7 @@ export function StatusBar({
                             className="status-bar__svc-btn"
                             aria-label={serviceConfig ? "启动" : "未配置启动命令，在「管理常用命令」里设置"}
                             disabled={!serviceConfig}
-                            onClick={() => serviceTarget && act(serviceTarget, "start")}
+                            onClick={() => serviceTarget && serviceConfig && requestRun(serviceTarget, "start", serviceConfig.command)}
                           ><Play size={14} /></button>
                         )}
                         <button
@@ -270,7 +301,7 @@ export function StatusBar({
                           className="status-bar__svc-btn"
                           aria-label={serviceConfig ? "重启" : "未配置启动命令，在「管理常用命令」里设置"}
                           disabled={!serviceConfig}
-                          onClick={() => serviceTarget && act(serviceTarget, "restart")}
+                          onClick={() => serviceTarget && serviceConfig && requestRun(serviceTarget, "restart", serviceConfig.restartCommand ?? serviceConfig.command)}
                         ><ArrowsClockwise size={13} /></button>
                       </>
                     )}
@@ -295,20 +326,20 @@ export function StatusBar({
                           <span className={`status-bar__row-dot is-${state.tone}`} aria-hidden="true" />
                           <div className="status-bar__row-main">
                             <b>{row.name}</b>
-                            <code>{row.command}</code>
+                            <code>{commandSummary(row.command)}</code>
                           </div>
                           <span className={`status-bar__row-state is-${state.tone}`}>{state.text}</span>
                           <div className="status-bar__row-actions">
                             {busy === key ? <CircleNotch size={13} className="is-spinning" aria-label="执行中" /> : running ? (
                               <>
                                 <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(running.id); }} aria-label={`查看 ${row.name} 日志`}><Scroll size={13} />日志</button>
-                                <button type="button" onClick={() => act(row, "restart")} aria-label={`重启 ${row.name}`}><ArrowsClockwise size={13} />重启</button>
+                                <button type="button" onClick={() => requestRun(row, "restart", row.command)} aria-label={`重启 ${row.name}`}><ArrowsClockwise size={13} />重启</button>
                                 <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>
                               </>
                             ) : (
                               <>
                                 {row.session && <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(row.session!.id); }} aria-label={`查看 ${row.name} 退出日志`}><Scroll size={13} />日志</button>}
-                                <button type="button" className="is-primary" onClick={() => act(row, "start")} aria-label={`启动 ${row.name}`}><Play size={12} weight="fill" />启动</button>
+                                <button type="button" className="is-primary" onClick={() => requestRun(row, "start", row.command)} aria-label={`启动 ${row.name}`}><Play size={12} weight="fill" />启动</button>
                               </>
                             )}
                           </div>
@@ -373,6 +404,18 @@ export function StatusBar({
           {connected ? "已连接" : "连接断开"}
         </span>
       </div>
+
+      {pendingRun && (
+        <CommandArgsDialog
+          commandName={pendingRun.target.name}
+          actionLabel={pendingRun.action === "start" ? "启动" : "重启"}
+          script={pendingRun.script}
+          rememberKey={`${pendingRun.target.projectId}:${pendingRun.target.commandId}`}
+          busy={busy === `${pendingRun.target.projectId}:${pendingRun.target.commandId}`}
+          onRun={(values) => { setPendingRun(null); act(pendingRun.target, pendingRun.action, values); }}
+          onClose={() => setPendingRun(null)}
+        />
+      )}
     </footer>
   );
 }

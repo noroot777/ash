@@ -1,0 +1,35 @@
+/* Shell 脚本编辑器(settings/ShellScriptEditor.tsx):预览启动脚本与常用命令共用。
+   高度由 --shell-editor-height 给(自适应内容 / 用户拖出来的值,见组件顶部注释),
+   .cm-editor 吃这个高度、.cm-scroller 负责滚 —— 这是 CM6 的定高写法。 */
+.shell-editor { flex: 1; min-width: 0; width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); }
+.shell-editor:has(.cm-focused) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shell-editor__toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; min-height: 32px; padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--raised); color: var(--muted); font-size: 11px; }
+.shell-editor__toolbar > span { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); }
+.shell-editor__toolbar > span > span { font-family: var(--font-sans); color: var(--faint); }
+.shell-editor__toolbar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+.shell-editor__toolbar input[type="checkbox"] { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.shell-editor__toolbar label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+.shell-editor__surface { min-width: 0; }
+.shell-editor .cm-editor { height: var(--shell-editor-height); background: var(--canvas); font-size: 13px; }
+.shell-editor .cm-editor.cm-focused { outline: none; }
+.shell-editor .cm-scroller { overflow: auto; font-family: var(--font-mono); line-height: 21px; }
+.shell-editor .cm-content { padding: 8px 0; caret-color: var(--ink); }
+.shell-editor .cm-line { padding: 0 12px; }
+.shell-editor .cm-gutters { border-right: 1px solid var(--line); background: var(--raised); color: var(--faint); }
+.shell-editor .cm-lineNumbers .cm-gutterElement { min-width: 34px; padding: 0 8px; }
+.shell-editor .cm-activeLine, .shell-editor .cm-activeLineGutter { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.shell-editor .cm-activeLineGutter { color: var(--muted); }
+.shell-editor .cm-cursor { border-left-color: var(--ink); }
+.shell-editor .cm-selectionBackground, .shell-editor .cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground { background: var(--accent-soft); }
+.shell-editor .cm-placeholder { color: var(--faint); }
+.shell-editor .cm-matchingBracket { background: var(--accent-soft); outline: 1px solid var(--accent); }
+
+/* 底边条兼提示行 + 拖拽把手。 */
+.shell-editor__foot { display: flex; align-items: center; gap: 8px; padding: 3px 10px 4px; border-top: 1px solid var(--line); background: var(--panel); cursor: ns-resize; user-select: none; touch-action: none; }
+.shell-editor__foot:hover, .shell-editor__foot:focus-visible { background: var(--raised); }
+.shell-editor__foot:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.shell-editor__hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 10px; line-height: 1.6; }
+.shell-editor__grip { flex: none; width: 22px; height: 3px; border-radius: 99px; background: var(--line2); }
+.shell-editor__foot:hover .shell-editor__grip { background: var(--muted); }
+.shell-editor__limit { padding: 4px 10px; border-top: 1px solid var(--line); color: var(--red); font-size: 10px; line-height: 1.6; }
+.shell-editor[data-readonly] .cm-activeLine, .shell-editor[data-readonly] .cm-activeLineGutter { background: transparent; }

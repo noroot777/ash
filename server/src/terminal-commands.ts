@@ -8,6 +8,10 @@
 //            (否则新旧抢端口,新的挂、旧的失控)。重启永远先杀 —— restartCommand 替换的是
 //            「重新启动用什么命令」(例如 `expo start -c`),不是「不杀进程的原地重载」。
 //
+// 命令正文可以带 `{{占位符}}`(shared/src/project-commands.ts):前端点执行时先弹框收值,
+// 把**取值**(不是最终脚本)发过来,替换在这里做 —— 客户端始终无权指定跑什么,跑的永远是
+// 库里存的那条命令。必填项缺失一律 400,绝不把 `{{分支}}` 原样交给 shell。
+//
 // 三个动作都按 (projectId, commandId) **串行化**(withCommandLock):它们全是
 // 「查活会话 → 做点慢事 → 起/停」的形状,并发下两边都查到同一个现场,双双起新会话
 // 就是两个实例抢一个端口(第 2 轮审查用并发 restart 实锤)。锁内只有本条命令的操作,
@@ -17,7 +21,13 @@
 // terminal.ts mountTerminalRoutes 顶部。
 import type { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { normalizeProjectCommands, SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
+import {
+  fillCommandPlaceholders,
+  normalizeProjectCommands,
+  parseCommandPlaceholders,
+  parseCommandValues,
+  SERVICE_COMMAND_ID,
+} from "@ash/shared/project-commands";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
@@ -70,10 +80,41 @@ function withCommandLock<T>(projectId: string, commandId: string, fn: () => Prom
 }
 
 /** 服务函数统一返回 HTTP 形状,路由原样透传;测试直接调函数、断言 body。 */
-export type CommandActionResult = { status: 200 | 201 | 500 | 502; body: Record<string, unknown> };
+export type CommandActionResult = { status: 200 | 201 | 400 | 500 | 502; body: Record<string, unknown> };
+
+/** 这次实际要跑的脚本:模板填上占位符取值。必填项缺失 → 400,不落成「启动失败」。 */
+type ResolvedScript = { ok: true; script: string; name: string } | { ok: false; result: CommandActionResult };
+
+function resolveScript(command: RunnableCommand, template: string, values: Record<string, string>): ResolvedScript {
+  let script: string;
+  try {
+    script = fillCommandPlaceholders(template, values);
+  } catch (error) {
+    return { ok: false, result: { status: 400, body: { error: error instanceof Error ? error.message : "占位符取值无效" } } };
+  }
+  return { ok: true, script, name: sessionName(command.name, template, values) };
+}
+
+/**
+ * 带占位符的命令,会话名后面缀上这次用的取值 —— 终端 tab 和状态栏「其他项目在跑的」
+ * 只显示名字,不缀就看不出「这条 checkout 到底跑的哪个分支」。脚本本身不回显给终端。
+ */
+function sessionName(name: string, template: string, values: Record<string, string>): string {
+  const used = parseCommandPlaceholders(template)
+    .map((placeholder) => values[placeholder.name] || placeholder.defaultValue || "")
+    .filter(Boolean)
+    .join(" ");
+  if (!used) return name;
+  return `${name} · ${used.length > 40 ? `${used.slice(0, 39)}…` : used}`;
+}
 
 /** 启动。幂等:已经在跑就原样返回那条会话(状态栏两个终端里各点一次不该起两份)。 */
-export function startCommand(projectId: string, cwd: string, command: RunnableCommand): Promise<CommandActionResult> {
+export function startCommand(
+  projectId: string,
+  cwd: string,
+  command: RunnableCommand,
+  values: Record<string, string> = {},
+): Promise<CommandActionResult> {
   return withCommandLock(projectId, command.id, async () => {
     // 项目正在删除:拒绝启动,别把正被 destroyProject 杀掉的旧会话当「已在跑」交还
     // (会误导前端 + 竞态下可能残留,第 2 轮自由审查)。
@@ -82,9 +123,11 @@ export function startCommand(projectId: string, cwd: string, command: RunnableCo
     }
     const live = terminalSessions.liveCommandSession(projectId, command.id);
     if (live) return { status: 200 as const, body: { session: live, alreadyRunning: true } };
+    const resolved = resolveScript(command, command.command, values);
+    if (!resolved.ok) return resolved.result;
     try {
       const session = terminalSessions.create(projectId, cwd, {
-        command: { id: command.id, name: command.name, script: command.command },
+        command: { id: command.id, name: resolved.name, script: resolved.script },
       });
       return { status: 201 as const, body: { session } };
     } catch (error) {
@@ -104,7 +147,12 @@ export function stopCommand(projectId: string, commandId: string): Promise<Comma
   });
 }
 
-export function restartCommand(projectId: string, cwd: string, command: RunnableCommand): Promise<CommandActionResult> {
+export function restartCommand(
+  projectId: string,
+  cwd: string,
+  command: RunnableCommand,
+  values: Record<string, string> = {},
+): Promise<CommandActionResult> {
   return withCommandLock(projectId, command.id, async () => {
     // 项目正在删除:拒绝重启(同 startCommand)。
     if (terminalSessions.isProjectClosing(projectId)) {
@@ -115,15 +163,17 @@ export function restartCommand(projectId: string, cwd: string, command: Runnable
     if (!terminalSessions.hasSlotForCommand(projectId, command.id)) {
       return { status: 500 as const, body: { error: "重启失败：终端会话数量已达上限" } };
     }
+    // 占位符也在杀之前填 —— 同一个理由:取值不合法就该原地拒绝,而不是先把服务停了。
+    const resolved = resolveScript(command, command.restartCommand ?? command.command, values);
+    if (!resolved.ok) return resolved.result;
     const live = terminalSessions.liveCommandSession(projectId, command.id);
     if (live) {
       const result = await terminalSessions.terminate(live.id, projectId);
       if (!result.ok) return { status: 502 as const, body: { error: `重启失败：旧进程停不下来（${result.reason}）` } };
     }
     try {
-      const script = command.restartCommand ?? command.command;
       const session = terminalSessions.create(projectId, cwd, {
-        command: { id: command.id, name: command.name, script },
+        command: { id: command.id, name: resolved.name, script: resolved.script },
       });
       return { status: 201 as const, body: { session } };
     } catch (error) {
@@ -132,8 +182,20 @@ export function restartCommand(projectId: string, cwd: string, command: Runnable
   });
 }
 
-export function mountProjectCommandRoutes(api: Hono): void {
-  api.use("/projects/:projectId/commands/*", async (c, next) => {
+/** 请求体里的占位符取值（`{ values: { 分支: "main" } }`）。没有 body 也合法 = 没占位符。 */
+async function commandValues(c: { req: { json: () => Promise<unknown> } }): Promise<
+  { ok: true; values: Record<string, string> } | { ok: false; error: string }
+> {
+  const body = await c.req.json().catch(() => null);
+  try {
+    const record = body && typeof body === "object" ? (body as Record<string, unknown>).values : null;
+    return { ok: true, values: parseCommandValues(record) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "占位符取值无效" };
+  }
+}
+
+export function mountProjectCommandRoutes(api: Hono): void {  api.use("/projects/:projectId/commands/*", async (c, next) => {
     const denied = await instanceAdminOnly(c, "常用命令");
     if (denied) return c.json(denied.body, denied.status);
     return next();
@@ -143,7 +205,9 @@ export function mountProjectCommandRoutes(api: Hono): void {
     const projectId = c.req.param("projectId");
     const target = await commandTarget(projectId, c.req.param("commandId"));
     if (!target.ok) return c.json({ error: target.error }, target.status);
-    const result = await startCommand(projectId, target.cwd, target.command);
+    const values = await commandValues(c);
+    if (!values.ok) return c.json({ error: values.error }, 400);
+    const result = await startCommand(projectId, target.cwd, target.command, values.values);
     return c.json(result.body, result.status);
   });
 
@@ -156,7 +220,9 @@ export function mountProjectCommandRoutes(api: Hono): void {
     const projectId = c.req.param("projectId");
     const target = await commandTarget(projectId, c.req.param("commandId"));
     if (!target.ok) return c.json({ error: target.error }, target.status);
-    const result = await restartCommand(projectId, target.cwd, target.command);
+    const values = await commandValues(c);
+    if (!values.ok) return c.json({ error: values.error }, 400);
+    const result = await restartCommand(projectId, target.cwd, target.command, values.values);
     return c.json(result.body, result.status);
   });
 
