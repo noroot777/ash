@@ -11,6 +11,7 @@ import {
   Stack,
   ChatCircleDots,
 } from "@phosphor-icons/react";
+import { CommandsLauncher } from "./CommandsLauncher.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectGitContext } from "./ProjectGitContext.tsx";
 import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
@@ -43,6 +44,7 @@ export function WorkspaceSidebar({
   onHandoffFinished,
   outbound,
   onOpenTerminal,
+  commands,
   notify,
   onToggleCollapsed,
   onSearch,
@@ -76,6 +78,14 @@ export function WorkspaceSidebar({
   onHandoffFinished: () => Promise<void> | void;
   outbound: OutboundBar;
   onOpenTerminal: (() => void) | null;
+  /** 顶行那颗 ▶(常用命令)要的一整套接线;没权限用终端时由 CommandsLauncher 自己收掉。 */
+  commands: {
+    canUseTerminal: boolean;
+    /** 递增序号,变一次 = 快捷键 G C 按了一下。 */
+    openSignal: number;
+    onOpenCommandLog: (sessionId: string) => void;
+    onManageCommands: () => void;
+  };
   notify: (message: string) => void;
   onToggleCollapsed: () => void;
   onSearch: () => void;
@@ -121,6 +131,17 @@ export function WorkspaceSidebar({
         {taskMode
           ? <span className="workspace-project-avatar workspace-project-avatar--task-mode is-large" aria-label={TASK_MODE_LABEL}><ListChecks size={17} weight="bold" /></span>
           : currentProject && <ProjectAvatar project={currentProject} size="large" />}
+        {/* 收起后常用命令也得有落点:不然侧栏一收,▶ 和快捷键 G C 就一起没了去处。 */}
+        <CommandsLauncher
+          projects={projects}
+          currentProject={currentProject}
+          canUseTerminal={commands.canUseTerminal}
+          collapsed
+          openSignal={commands.openSignal}
+          onOpenCommandLog={commands.onOpenCommandLog}
+          onManageCommands={commands.onManageCommands}
+          notify={notify}
+        />
         <span className={`workspace-connection-light${connected ? " is-connected" : ""}`} role="status" aria-label={connectionLabel} tabIndex={0} {...tipProps("connection")} />
         <button className="workspace-side-icon" type="button" onClick={onToggleCollapsed} aria-label="展开侧边栏">
           <SidebarSimple size={17} weight="bold" aria-hidden="true" />
@@ -153,6 +174,16 @@ export function WorkspaceSidebar({
               onOpenTerminal={onOpenTerminal}
             />
           )}
+          {/* 顶行最右:常用命令的启动入口。项目名、分支、运行现场三件事凑在同一行里。 */}
+          <CommandsLauncher
+            projects={projects}
+            currentProject={currentProject}
+            canUseTerminal={commands.canUseTerminal}
+            openSignal={commands.openSignal}
+            onOpenCommandLog={commands.onOpenCommandLog}
+            onManageCommands={commands.onManageCommands}
+            notify={notify}
+          />
         </div>
         <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
           {onChat && <button className="workspace-side-icon" type="button" aria-label="聊天" aria-pressed={!!chatOpen} onClick={() => onChat()}><ChatCircleDots size={16} /></button>}

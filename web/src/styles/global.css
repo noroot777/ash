@@ -14,6 +14,7 @@
 @import "./project-switcher.css";
 @import "./workspace-enhancements.css";
 @import "./project-git.css";
+@import "./commands-launcher.css";
 @import "./terminal.css";
 @import "./status-bar.css";
 @import "./sidebar-spread.css";

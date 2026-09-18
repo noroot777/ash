@@ -110,7 +110,8 @@ export function WorkspaceShell() {
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
-  // G C 的信号:每按一下加一,StatusBar 收到变化就开合常用命令弹层(状态住在它那边)。
+  // G C 的信号:每按一下加一,CommandsLauncher(侧栏顶行那颗 ▶)收到变化就开合弹层
+  // (状态住在它那边)。侧栏收起 / 去设置页时它会重新挂载,所以那边按「挂载时那一格」比对。
   const [commandsPopSignal, setCommandsPopSignal] = useState(0);
   // 日志聚焦是一次性命令:ProjectTerminal 消费完(成功、失败、还是消费中被卸载)都会
   // 回执终结,否则关抽屉再开会重放最后一次请求,把用户按回同一条日志(第 4/5 轮审查
@@ -506,7 +507,8 @@ export function WorkspaceShell() {
   const notesProject = notes ? projects.find((project) => project.id === notes.projectId) ?? null : null;
   // 终端开的是**宿主机上的一个真 shell**,项目目录只是起始 cwd(一条 `cd /` 就出去了),
   // 所以多人模式下它是实例管理员专属(§四)。后端已经 403,状态栏连入口一起收掉 ——
-  // 留一颗按不动的按钮只会让人以为功能坏了。入口在全局状态栏(StatusBar),不再挤任务顶栏。
+  // 留一颗按不动的按钮只会让人以为功能坏了。入口在全局状态栏(StatusBar),不再挤任务顶栏;
+  // 常用命令则相反,它是项目级的东西,入口在侧栏顶行(CommandsLauncher)。
   //
   // 终端和状态栏是**同一条底部坞**(设计稿:横贯窗口、压在状态栏正上方),所以它和状态栏
   // 一样挂在 workspace-system-layout 上、三个视图分支都带着 —— 不再是工作区主区里的一块。
@@ -516,22 +518,24 @@ export function WorkspaceShell() {
   const toggleTerminal = () => setTerminalOpen((open) => !open);
   const statusBar = (
     <StatusBar
-      projects={projects}
       currentProject={currentProject}
       taskMode={scopeKind === "tasks"}
       canUseTerminal={canUseTerminal}
       connected={connected}
       terminalOpen={terminalOpen}
-      openSignal={commandsPopSignal}
       onToggleTerminal={toggleTerminal}
-      onOpenCommandLog={(sessionId) => {
-        setTerminalFocus({ sessionId, seq: Date.now() });
-        revealTerminal();
-      }}
-      onManageCommands={() => openSettings("project", "commands")}
-      notify={notify}
     />
   );
+  // 常用命令那颗 ▶ 住在侧栏顶行(WorkspaceSidebar → CommandsLauncher),这里只把它要的线接好。
+  const commandsWiring = {
+    canUseTerminal,
+    openSignal: commandsPopSignal,
+    onOpenCommandLog: (sessionId: string) => {
+      setTerminalFocus({ sessionId, seq: Date.now() });
+      revealTerminal();
+    },
+    onManageCommands: () => openSettings("project", "commands"),
+  };
   const handoffAlert = (
     <div className="handoff-approval-slot">
       <HandoffApprovalAlert notify={notify} onOpenSettings={() => openSettings("defaults")} />
@@ -572,7 +576,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}${chatOpen ? " is-chat" : ""}${assistantOpen ? " is-assistant" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={openChat} chatOpen={chatOpen} onAssistant={openAssistant} assistantOpen={assistantOpen} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={openSettingsHome} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? () => setTerminalOpen(true) : null} commands={commandsWiring} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={openChat} chatOpen={chatOpen} onAssistant={openAssistant} assistantOpen={assistantOpen} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={openSettingsHome} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {assistantOpen ? <AssistantView project={currentProject} projects={projects} onTask={(task) => { updateTask(task); selectTask(task); }} onSettings={openSettings} onExit={closeAssistant} onMode={openComposer} onChat={openChat} /> : chatOpen && currentProject ? <ChatView key={currentProject.id} project={currentProject} onTask={selectTask} onExit={() => setChatOpen(false)} onMode={openComposer} onAssistant={openAssistant} /> : composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} onDraftSeeded={dropComposerSeed} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onChat={openChat} onAssistant={openAssistant} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} onProjectUpdated={applyProjectUpdate} notify={notify} /> : remoteSelection ? (

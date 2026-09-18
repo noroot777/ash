@@ -27,7 +27,7 @@ type ShortcutOptions = {
   onCloseSpread: () => void;
   onToggleTaskMode: () => void;
   onOpenSettings: () => void;
-  /** G C:开合状态栏的常用命令弹层。 */
+  /** G C:开合侧栏顶行那颗 ▶ 的常用命令弹层。 */
   onToggleCommands: () => void;
   /** G Z:开合终端抽屉。 */
   onToggleTerminal: () => void;
