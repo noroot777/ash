@@ -4,9 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
   ArrowUp,
+  ArrowUpRight,
   ArrowsClockwise,
+  CaretRight,
+  CheckCircle,
   GitBranch,
   GitCommit,
+  LockSimple,
   Warning,
   WarningCircle,
 } from "@phosphor-icons/react";
@@ -240,17 +244,19 @@ function BranchBar({
 }) {
   return (
     <header className="scm-branch">
-      <span className="scm-branch__name">
-        <GitBranch size={13} />
-        <b>{branch.detached ? "游离 HEAD" : branch.head ?? "（无分支）"}</b>
-      </span>
-      {branch.upstream && (
-        <span className="scm-branch__upstream">
-          {branch.upstream}
-          {(branch.ahead ?? 0) > 0 && <i>↑{branch.ahead}</i>}
-          {(branch.behind ?? 0) > 0 && <i>↓{branch.behind}</i>}
+      <div className="scm-branch__identity">
+        <span className="scm-branch__name">
+          <GitBranch size={15} />
+          <b>{branch.detached ? "游离 HEAD" : branch.head ?? "（无分支）"}</b>
         </span>
-      )}
+        {branch.upstream && (
+          <span className="scm-branch__upstream">
+            <span>{branch.upstream}</span>
+            {(branch.ahead ?? 0) > 0 && <i>↑{branch.ahead}</i>}
+            {(branch.behind ?? 0) > 0 && <i>↓{branch.behind}</i>}
+          </span>
+        )}
+      </div>
       <BranchTools
         branch={branch}
         remotes={remotes}
@@ -260,7 +266,10 @@ function BranchBar({
         onRefresh={onRefresh}
         showPush={!frozen}
       />
-      <small className="scm-branch__root">{ROOT_SOURCE_LABEL[rootSource]} · {rootPath}</small>
+      <div className="scm-branch__root">
+        <span>{ROOT_SOURCE_LABEL[rootSource]}</span>
+        <code><bdi dir="ltr">{rootPath}</bdi></code>
+      </div>
     </header>
   );
 }
@@ -401,10 +410,15 @@ export function ScmInspector({
         </p>
       )}
       {readOnly && (
-        <p className="scm-banner is-warning">
-          <WarningCircle size={13} />
-          {readOnly}
-        </p>
+        <details className="scm-readonly" key={readOnly}>
+          <summary>
+            <LockSimple size={13} />
+            <strong>工作区只读</strong>
+            <span>原因与操作指引</span>
+            <CaretRight size={11} className="scm-readonly__caret" />
+          </summary>
+          <p>{readOnly}</p>
+        </details>
       )}
       {status.operation && (
         <p className="scm-banner is-warning">
@@ -425,9 +439,23 @@ export function ScmInspector({
         </p>
       )}
 
-      <button type="button" className="project-git-workbench-entry" onClick={() => { void api.task(taskId).then((task) => openGitWorkbench({ projectId: task.projectId, taskId })).catch((error: Error) => notify(error.message)); }}>打开此工作区的 Git 工作台 →</button>
+      <div className="scm-workspace-actions">
+        {clean ? (
+          <span className="scm-clean-state"><CheckCircle size={13} />无未提交改动</span>
+        ) : (
+          <span className="scm-workspace-actions__label">工作区改动</span>
+        )}
+        <button
+          type="button"
+          className="scm-workbench-entry"
+          aria-label="打开此工作区的 Git 工作台"
+          onClick={() => { void api.task(taskId).then((task) => openGitWorkbench({ projectId: task.projectId, taskId })).catch((error: Error) => notify(error.message)); }}
+        >
+          Git 工作台 <ArrowUpRight size={12} />
+        </button>
+      </div>
 
-      {!readOnly && (
+      {!readOnly && !clean && (
         <section className="scm-commit">
           <textarea
             value={message}
@@ -453,9 +481,7 @@ export function ScmInspector({
         </section>
       )}
 
-      {clean ? (
-        <p className="scm-hint">工作区干净，没有未提交的改动。这个任务改了什么，看下面「已提交的改动」。</p>
-      ) : (
+      {!clean && (
         <div className="scm-groups">
           <ScmChangeGroup
             group="merge"

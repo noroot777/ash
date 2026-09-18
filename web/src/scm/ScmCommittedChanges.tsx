@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CaretRight, GitDiff, SpinnerGap } from "@phosphor-icons/react";
+import { CaretRight, FileText, GitDiff, SpinnerGap } from "@phosphor-icons/react";
 import { api, type TaskDiffResult } from "../lib/api.ts";
 import { branchDiffReason, dirName, fileName, type ScmDiffTarget } from "./scmModel.ts";
 import { indentStyle, useFileListLayout, useFileTreeRows } from "../lib/fileLayout.ts";
@@ -28,10 +28,12 @@ const sumOf = (files: readonly DiffFile[], side: "additions" | "deletions") =>
   files.reduce((sum, file) => sum + (file[side] ?? 0), 0);
 
 function DiffCounts({ files }: { files: readonly DiffFile[] }) {
+  const additions = sumOf(files, "additions");
+  const deletions = sumOf(files, "deletions");
   return (
     <span className="scm-diff__counts">
-      <i>+{sumOf(files, "additions")}</i>
-      <em>−{sumOf(files, "deletions")}</em>
+      <i className={additions === 0 ? "is-zero" : undefined}>+{additions}</i>
+      <em className={deletions === 0 ? "is-zero" : undefined}>−{deletions}</em>
     </span>
   );
 }
@@ -53,12 +55,13 @@ function CommittedFileRow({
 }) {
   return (
     <li className={`scm-row${active ? " is-active" : ""}`} style={indentStyle(depth)}>
-      <button type="button" className="scm-row__open" onClick={onOpen}>
+      <button type="button" className="scm-row__open" aria-label={file.path} aria-current={active ? "true" : undefined} onClick={onOpen}>
+        <FileText size={12} className="scm-row__file-icon" aria-hidden="true" />
         <span className="scm-row__name">{fileName(file.path)}</span>
         {/* 改名的来源路径要摆出来：只显示新名字的话，清单上会凭空多一个「新文件」，
             而它的 diff 里满是删除行。 */}
         {file.origPath && <i className="scm-row__from">← {fileName(file.origPath)}</i>}
-        {showDir && <span className="scm-row__dir">{dirName(file.path)}</span>}
+        {showDir && dirName(file.path) && <span className="scm-row__dir">{dirName(file.path)}</span>}
       </button>
       <DiffCounts files={[file]} />
     </li>
@@ -99,16 +102,19 @@ export function ScmCommittedChanges({
   const tree = useFileTreeRows(shown, diffFilePath, layout === "tree");
 
   return (
-    <section className="scm-committed">
+    <section className="scm-committed" data-layout={layout}>
       <header>
-        <GitDiff size={13} />
-        本任务已提交的改动
-        {diff?.available && files.length > 0 && <span className="scm-committed__count">{files.length}</span>}
-        {diff?.available && files.length > 0 && <DiffCounts files={files} />}
+        <h3><GitDiff size={14} />本任务已提交改动</h3>
         {/* 这一节常常在滚动面板的下半截，顶上分支栏那颗切换按钮此时已经滚出视野——
             清单在哪儿，切换就得在哪儿够得着。两处共用同一份偏好。 */}
         {diff?.available && files.length > 0 && <FileLayoutToggle className="scm-committed__layout" size={12} />}
       </header>
+      {diff?.available && files.length > 0 && (
+        <div className="scm-committed__summary">
+          <span className="scm-committed__count">{files.length} 个文件</span>
+          <DiffCounts files={files} />
+        </div>
+      )}
 
       {loading && !diff && <p className="scm-committed__state"><SpinnerGap size={12} className="is-spinning" />正在读取分支改动…</p>}
       {!loading && error && <p className="scm-committed__state">读取失败：{error}</p>}
@@ -163,7 +169,7 @@ export function ScmCommittedChanges({
           {diff.truncated && <p className="scm-committed__state">diff 内容超出上限，文件清单可能不完整。</p>}
           {onOpenReview && (
             <button type="button" className="scm-committed__open" onClick={onOpenReview}>
-              <span><GitDiff size={13} />查看完整 diff 与提交</span>
+              <span>查看完整 diff 与提交</span>
               <CaretRight size={13} />
             </button>
           )}

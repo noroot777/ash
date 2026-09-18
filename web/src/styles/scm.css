@@ -1,6 +1,6 @@
 /* 工作区源代码管理面板（inspector）+ 中间栏的工作区 diff */
 
-.scm-panel { display:flex; min-height:0; height:100%; flex-direction:column; overflow:auto; }
+.scm-panel { display:flex; min-width:0; min-height:0; height:100%; flex-direction:column; overflow:auto; background:var(--canvas); }
 /* 这是个 flex 列向滚动容器：子块默认 flex-shrink:1，改动一多就会被压扁成一条，内容
    原地溢出、叠印到下一块身上（文件列表画在「最近提交」上）。滚动容器里的块不该被
    压，一律锁死 shrink，超出的部分交给 overflow 滚。 */
@@ -12,22 +12,27 @@
 .scm-empty button { border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:3px 9px; color:var(--muted); font-size:10px; }
 .scm-empty button:hover { background:var(--raised); color:var(--ink); }
 
-.scm-branch { display:flex; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:6px; border-bottom:.5px solid var(--line); padding:8px 9px; }
-.scm-branch__name { display:inline-flex; min-width:0; align-items:center; gap:4px; }
+.scm-panel :is(button, summary):focus-visible { outline:2px solid var(--accent); outline-offset:-2px; border-radius:5px; }
+.scm-branch { display:flex; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:8px; border-bottom:1px solid var(--line); padding:12px; }
+.scm-branch__identity { display:flex; min-width:0; flex:1; flex-wrap:wrap; align-items:center; gap:5px 8px; }
+.scm-branch__name { display:inline-flex; min-width:0; max-width:100%; align-items:center; gap:6px; }
 .scm-branch__name > svg { flex:0 0 auto; color:var(--accent); }
-.scm-branch__name b { overflow:hidden; color:var(--ink); font-size:11px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
-.scm-branch__upstream { display:inline-flex; align-items:center; gap:4px; border-radius:4px; background:var(--overlay); padding:1px 5px; color:var(--faint); font-size:9px; }
+.scm-branch__name b { overflow:hidden; color:var(--ink); font-size:12px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.scm-branch__upstream { display:inline-flex; min-width:0; max-width:100%; align-items:center; gap:4px; border-radius:4px; background:var(--overlay); padding:2px 5px; color:var(--muted); font-family:var(--font-mono); font-size:9px; }
+.scm-branch__upstream > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .scm-branch__upstream i { color:var(--muted); font-style:normal; }
-.scm-branch__tools { position:relative; display:inline-flex; margin-left:auto; align-items:center; gap:4px; }
-.scm-branch__refresh { display:grid; width:22px; height:22px; place-items:center; border:1px solid var(--line2); border-radius:6px; background:var(--panel); color:var(--muted); }
+.scm-branch__tools { position:relative; display:inline-flex; flex:0 0 auto; margin-left:auto; align-items:center; gap:2px; }
+.scm-branch__refresh { display:grid; width:24px; height:24px; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--muted); }
 .scm-branch__refresh:hover:not([aria-disabled="true"]) { background:var(--raised); color:var(--ink); }
 .scm-branch__refresh[aria-disabled="true"] { opacity:.5; cursor:default; }
-.scm-branch__root { width:100%; overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+.scm-branch__root { display:flex; width:100%; min-width:0; align-items:baseline; gap:8px; font-size:9px; }
+.scm-branch__root > span { flex:0 0 auto; color:var(--muted); }
+.scm-branch__root code { min-width:0; overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
 /* 平铺/目录树切换。跟刷新同尺寸并排，另一处入口在「已提交的改动」那一节的标题栏。 */
-.scm-layout-toggle { display:grid; width:22px; height:22px; place-items:center; border:1px solid var(--line2); border-radius:6px; background:var(--panel); color:var(--muted); }
+.scm-layout-toggle { display:grid; width:24px; height:24px; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--muted); }
 .scm-layout-toggle:hover { background:var(--raised); color:var(--ink); }
 /* 推送/发布跟刷新同尺寸并排,只用底色区分「这颗会写远端」——说明归指上去的提示。 */
-.scm-branch__push { display:grid; width:22px; height:22px; place-items:center; border:1px solid color-mix(in lch,var(--accent) 35%,var(--line2)); border-radius:6px; background:color-mix(in lch,var(--accent) 10%,var(--panel)); color:var(--accent); }
+.scm-branch__push { display:grid; width:24px; height:24px; place-items:center; border:1px solid color-mix(in lch,var(--accent) 25%,var(--line)); border-radius:5px; background:color-mix(in lch,var(--accent) 8%,var(--panel)); color:var(--accent); }
 .scm-branch__push:hover:not([aria-disabled="true"]) { background:color-mix(in lch,var(--accent) 18%,var(--panel)); }
 .scm-branch__push[aria-disabled="true"] { border-color:var(--line2); background:var(--panel); color:var(--faint); cursor:default; }
 .scm-branch__remotes { position:absolute; top:calc(100% + 4px); right:0; z-index:20; display:flex; min-width:120px; flex-direction:column; gap:1px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:4px; box-shadow:var(--menu-shadow); }
@@ -44,7 +49,22 @@
 .scm-banner__dismiss { flex:0 0 auto; align-self:flex-start; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 6px; color:var(--muted); font-size:9.5px; }
 .scm-banner__dismiss:hover { color:var(--ink); }
 
-.scm-commit { display:flex; flex:0 0 auto; flex-direction:column; gap:6px; padding:9px; }
+.scm-readonly { margin:10px 12px 0; border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--muted); }
+.scm-readonly summary { display:flex; min-height:32px; align-items:center; gap:6px; padding:7px 9px; cursor:pointer; list-style:none; }
+.scm-readonly summary::-webkit-details-marker { display:none; }
+.scm-readonly summary > svg { flex:0 0 auto; }
+.scm-readonly summary strong { font-size:10px; font-weight:600; }
+.scm-readonly summary > span { margin-left:auto; color:var(--faint); font-size:9px; }
+.scm-readonly[open] .scm-readonly__caret { transform:rotate(90deg); }
+.scm-readonly p { margin:0; border-top:1px solid var(--line); padding:9px; font-size:10px; line-height:1.7; overflow-wrap:anywhere; }
+.scm-workspace-actions { display:flex; min-width:0; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; }
+.scm-clean-state { display:inline-flex; align-items:center; gap:5px; color:var(--muted); font-size:10px; }
+.scm-clean-state > svg { flex:0 0 auto; color:var(--green); }
+.scm-workspace-actions__label { color:var(--muted); font-size:10px; font-weight:600; }
+.scm-workbench-entry { display:inline-flex; flex:0 0 auto; align-items:center; gap:4px; border:0; border-radius:5px; background:transparent; padding:3px 0 3px 5px; color:var(--accent); font-size:10px; }
+.scm-workbench-entry:hover { background:var(--overlay); }
+
+.scm-commit { display:flex; flex:0 0 auto; flex-direction:column; gap:6px; padding:0 12px 10px; }
 .scm-commit textarea { width:100%; min-height:46px; resize:vertical; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:6px 8px; color:var(--ink); font-size:11px; line-height:1.5; }
 .scm-commit textarea:focus { border-color:color-mix(in lch,var(--accent) 45%,var(--line2)); outline:none; }
 .scm-commit__submit { display:inline-flex; height:28px; align-items:center; justify-content:center; gap:5px; border:1px solid color-mix(in lch,var(--accent) 35%,var(--line2)); border-radius:7px; background:color-mix(in lch,var(--accent) 12%,var(--panel)); color:var(--accent); font-size:10.5px; font-weight:600; }
@@ -52,20 +72,31 @@
 .scm-commit__submit:disabled { border-color:var(--line2); background:var(--panel); color:var(--faint); }
 .scm-commit__hint { margin:0; color:var(--faint); font-size:9.5px; line-height:1.55; }
 
-.scm-committed { border-top:.5px solid var(--line); padding:8px 9px 14px; }
-.scm-committed header { display:flex; align-items:center; gap:5px; color:var(--faint); font-size:9.5px; }
-.scm-committed__count { border-radius:8px; background:var(--overlay); padding:0 5px; font-size:9px; }
-.scm-committed header .scm-diff__counts { margin-left:auto; font-size:9.5px; }
-/* 标题栏里那颗切换：比分支栏那颗小一圈、不描边——它是这一节的附属控件，不该跟标题抢。
-   它和右侧那组加减行数同进同退（都只在有文件时出现），所以只要挨着摆，不用再抢 auto。 */
-.scm-committed__layout { width:18px; height:18px; margin-left:4px; border:0; background:transparent; color:var(--faint); }
-.scm-committed__state { display:flex; align-items:center; gap:5px; margin:6px 0 0; color:var(--faint); font-size:10px; line-height:1.55; }
-.scm-committed ul { margin:6px 0 0; padding:0; list-style:none; }
-/* 这一节自带 9px 内边距，行里不用再让出上半截那种「组标题缩进」，把 .scm-row__open
-   的左缩进收回来，否则条目会比这一节的标题多缩一截。 */
-.scm-committed .scm-row__open { min-height:22px; gap:6px; padding:0 4px 0 calc(4px + var(--file-indent,0px)); }
+.scm-committed { border-top:1px solid var(--line); background:color-mix(in lch,var(--panel) 55%,var(--canvas)); padding:12px 8px; }
+.scm-committed header { display:flex; align-items:center; gap:6px; padding:0 4px; }
+.scm-committed h3 { display:flex; min-width:0; align-items:center; gap:6px; margin:0; color:var(--ink); font-size:11px; font-weight:600; }
+.scm-committed h3 > svg { color:var(--muted); }
+.scm-committed__summary { display:flex; align-items:center; gap:8px; padding:6px 4px 10px; }
+.scm-committed__count { color:var(--muted); font-size:10px; }
+.scm-committed__summary .scm-diff__counts { margin-left:auto; }
+.scm-committed__summary :is(i, em) { border-radius:4px; padding:2px 5px; }
+.scm-committed__summary i { background:color-mix(in lch,var(--green) 9%,transparent); }
+.scm-committed__summary em { background:color-mix(in lch,var(--red) 7%,transparent); }
+.scm-committed__layout { display:grid; width:22px; height:22px; margin-left:auto; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--muted); }
+.scm-committed__layout:hover { background:var(--raised); color:var(--ink); }
+.scm-committed__state { display:flex; align-items:center; gap:5px; margin:6px 4px 0; color:var(--muted); font-size:10px; line-height:1.55; }
+.scm-committed ul { margin:0; padding:0; list-style:none; }
+.scm-committed .scm-row__open { min-height:26px; gap:5px; padding:0 4px 0 calc(6px + var(--file-indent,0px)); }
+.scm-committed .scm-row__name { color:var(--ink); }
+.scm-row__file-icon { flex:0 0 auto; color:var(--faint); }
+.scm-committed[data-layout="flat"] .scm-row__open { display:grid; min-height:34px; grid-template-columns:12px minmax(0,1fr); column-gap:6px; row-gap:0; padding-top:4px; padding-bottom:4px; }
+.scm-committed[data-layout="flat"] .scm-row__file-icon { grid-row:1 / span 3; }
+.scm-committed[data-layout="flat"] :is(.scm-row__name, .scm-row__dir, .scm-row__from) { grid-column:2; }
 .scm-committed .scm-diff__counts { flex:0 0 auto; font-size:9px; }
-.scm-committed__open { display:flex; width:100%; align-items:center; justify-content:space-between; gap:6px; margin-top:8px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:5px 8px; color:var(--muted); font-size:10.5px; }
+.scm-committed .scm-diff__counts > * { min-width:4ch; text-align:right; }
+.scm-committed .scm-row--dir .scm-row__open { min-height:24px; }
+.scm-committed .scm-row--dir .scm-diff__counts :is(i, em) { color:var(--faint); }
+.scm-committed__open { display:flex; width:100%; align-items:center; justify-content:space-between; gap:6px; margin-top:10px; border:1px solid var(--line); border-radius:6px; background:var(--panel); padding:7px 8px; color:var(--muted); font-size:10px; }
 .scm-committed__open span { display:inline-flex; align-items:center; gap:5px; }
 .scm-committed__open:hover { background:var(--raised); color:var(--ink); }
 
@@ -86,7 +117,7 @@
 .scm-group__hint { margin:0 9px 4px; color:var(--faint); font-size:9.5px; line-height:1.5; }
 .scm-group ul { margin:0; padding:0; list-style:none; }
 
-.scm-row { display:flex; align-items:center; border-radius:5px; padding-right:4px; }
+.scm-row { display:flex; min-width:0; align-items:center; border-radius:5px; padding-right:4px; }
 .scm-row:hover { background:var(--raised); }
 .scm-row.is-active { background:color-mix(in lch,var(--accent) 12%,var(--panel)); box-shadow:inset 2px 0 var(--accent); }
 .scm-row__open { display:flex; min-width:0; min-height:24px; flex:1; align-items:center; gap:6px; border:0; background:transparent; padding:0 4px 0 calc(9px + var(--file-indent,0px)); text-align:left; }
@@ -108,17 +139,25 @@
 /* 目录树里的目录行。缩进走 --file-indent（由行内样式给），每一节各自的基准内边距不变。 */
 .scm-row--dir .scm-row__open { min-height:21px; gap:3px; }
 .scm-row--dir .scm-row__open > svg { flex:0 0 auto; color:var(--faint); }
-.scm-row__folder { min-width:0; flex:0 1 auto; overflow:hidden; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
-.scm-row__folder-count { flex:0 0 auto; color:var(--faint); font-size:9px; }
+.scm-row__folder { min-width:0; flex:0 1 auto; overflow:hidden; color:var(--muted); font-size:10px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.scm-row__folder-count { flex:0 0 auto; margin-left:3px; color:var(--faint); font-size:9px; font-variant-numeric:tabular-nums; }
 
-.scm-commits { border-top:.5px solid var(--line); padding:8px 9px 16px; }
+.scm-commits { border-top:1px solid var(--line); padding:12px 12px 16px; }
 .scm-commits header { display:flex; align-items:center; gap:5px; color:var(--faint); font-size:9.5px; }
 .scm-commits ul { margin:6px 0 0; padding:0; list-style:none; }
-.scm-commits li { display:flex; align-items:baseline; gap:6px; padding:2px 0; }
+.scm-commits li { display:flex; align-items:baseline; gap:7px; padding:4px 0; }
 .scm-commits code { flex:0 0 auto; color:var(--faint); font-family:var(--font-mono); font-size:9.5px; }
 .scm-commits span { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
-.scm-commits small { flex:0 0 auto; color:var(--faint); font-size:9px; }
+.scm-commits small { max-width:25%; overflow:hidden; flex:0 0 auto; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
 
-.scm-diff__counts { display:inline-flex; flex:0 0 auto; gap:6px; font-family:var(--font-mono); font-size:10px; }
+.scm-diff__counts { display:inline-flex; flex:0 0 auto; gap:6px; font-family:var(--font-mono); font-size:10px; font-variant-numeric:tabular-nums; }
 .scm-diff__counts i { color:var(--green); font-style:normal; }
 .scm-diff__counts em { color:var(--red); font-style:normal; }
+.scm-diff__counts .is-zero { color:var(--faint); }
+
+@media (prefers-reduced-motion:reduce) {
+  .scm-group__bulk, .scm-row__actions { transition:none; }
+}
+@media (hover:none) {
+  .scm-group__bulk, .scm-row__actions { opacity:1; }
+}
