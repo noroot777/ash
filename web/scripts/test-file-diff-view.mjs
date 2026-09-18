@@ -73,6 +73,21 @@ const TWO_HUNK_DIFF = [
   "",
 ].join("\n");
 
+// 文件内容本身以 `-- ` / `++ ` 开头：删改它时 diff 行长得跟文件头一模一样，但它是**内容**，
+// 必须照常摆出来、照常计数（按文本前缀认文件头会把这两行连着计数一起吞掉）。
+const FLAG_DIFF = [
+  "diff --git a/flags.txt b/flags.txt",
+  "index 7777777..8888888 100644",
+  "--- a/flags.txt",
+  "+++ b/flags.txt",
+  "@@ -1,3 +1,3 @@",
+  " keep",
+  "--- old flag",
+  "+++ new flag",
+  " tail",
+  "",
+].join("\n");
+
 // 纯重命名：整段 diff 只有文件头，格式行摘掉之后一行内容都不剩——得摆一句话，不能留白。
 const RENAME_DIFF = [
   "diff --git a/old-name.ts b/renamed.ts",
@@ -96,7 +111,7 @@ const entry = (path, options = {}) => ({
 const listing = {
   root: { path: "/tmp/file-diff-view", branch: "feature/open-diff", gitRepo: true, source: "session" },
   path: "",
-  entries: [entry("changed.ts"), entry("nonl.ts"), entry("twohunks.ts"), entry("renamed.ts"), entry("clean.ts")],
+  entries: [entry("changed.ts"), entry("nonl.ts"), entry("twohunks.ts"), entry("renamed.ts"), entry("flags.txt"), entry("clean.ts")],
   truncated: false,
   git: {
     changes: [
@@ -104,6 +119,7 @@ const listing = {
       { path: "nonl.ts", origPath: null, kind: "modified", source: "unstaged" },
       { path: "twohunks.ts", origPath: null, kind: "modified", source: "unstaged" },
       { path: "renamed.ts", origPath: "old-name.ts", kind: "renamed", source: "unstaged" },
+      { path: "flags.txt", origPath: null, kind: "modified", source: "unstaged" },
     ],
     truncated: false,
     error: null,
@@ -133,7 +149,9 @@ try {
           ? NO_NEWLINE_DIFF
           : url.searchParams.get("path") === "twohunks.ts"
             ? TWO_HUNK_DIFF
-            : url.searchParams.get("path") === "renamed.ts" ? RENAME_DIFF : DIFF_TEXT,
+            : url.searchParams.get("path") === "renamed.ts"
+              ? RENAME_DIFF
+              : url.searchParams.get("path") === "flags.txt" ? FLAG_DIFF : DIFF_TEXT,
         truncated: false,
         limitBytes: 256 * 1024,
         binary: false,
@@ -277,6 +295,16 @@ try {
   await row("renamed.ts").click();
   await center.getByText("没有内容改动", { exact: false }).waitFor();
   assert.equal(await center.locator(".single-review-line").count(), 0, "纯重命名不该摆出任何 diff 行");
+
+  // 以 `-- ` / `++ ` 开头的内容行长得像文件头，但它是内容：摆出来、计数照算。
+  await row("flags.txt").click();
+  await center.getByText("--- old flag", { exact: false }).waitFor();
+  assert.equal(await center.locator(".single-review-line.is-delete code").innerText(), "--- old flag");
+  assert.equal(await center.locator(".single-review-line.is-add code").innerText(), "+++ new flag");
+  assert.equal(await center.locator(".scm-diff__counts i").innerText(), "+1", "内容行没被算进新增数");
+  assert.equal(await center.locator(".scm-diff__counts em").innerText(), "−1", "内容行没被算进删除数");
+  assert(!(await code.innerText()).includes("a/flags.txt"), "真正的文件头反而漏出来了");
+  await page.screenshot({ path: "/tmp/ash-file-diff-view-flags.png", fullPage: true });
   await row("changed.ts").click();
   await center.getByText("-export const gone = 3;", { exact: false }).waitFor();
 

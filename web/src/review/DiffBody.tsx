@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Columns, Rows } from "@phosphor-icons/react";
-import { isDiffFileHeader, toSideBySideRows, type DiffCell, type DiffHunkHead, type DiffLine } from "./diffModel.ts";
+import { displayDiffLines, toSideBySideRows, type DiffCell, type DiffHunkHead, type DiffLine } from "./diffModel.ts";
 import { DIFF_LAYOUT_LABEL, DIFF_LAYOUT_TITLE, type DiffLayout } from "./diffLayout.ts";
 
 // diff 正文的唯一渲染处。工作区 SCM 的单文件 diff 和分支审查的多文件 diff 都走这里，
@@ -72,18 +72,6 @@ function HunkDivider({ head, span }: { head?: DiffHunkHead; span?: boolean }) {
 }
 
 /**
- * 摆出来之前先把 diff 的**格式行**摘掉：文件头那几行是噪声（`isDiffFileHeader`），而开
- * 在文件第一行的首个 hunk 头连「跳过了一段」都不成立——它不指示任何断开，只是 diff 的
- * 起点，摆一条分隔条反而像文件上面还藏着东西。
- */
-function visibleLines(lines: readonly DiffLine[]): DiffLine[] {
-  const rows = lines.filter((line) => !isDiffFileHeader(line));
-  const first = rows[0];
-  if (first?.kind === "hunk" && (first.head?.oldStart ?? 1) <= 1 && (first.head?.newStart ?? 1) <= 1) rows.shift();
-  return rows;
-}
-
-/**
  * `visible` 按**当前摆法下的行数**算：并排把连续的删除和新增对到了一行上，行数比单栏少，
  * 沿用单栏的计数会让「展开后续 N 行」报一个对不上的数。
  */
@@ -103,7 +91,7 @@ export function DiffBody({
   onMore: () => void;
   label: string;
 }) {
-  const shown = useMemo(() => visibleLines(lines), [lines]);
+  const shown = useMemo(() => displayDiffLines(lines), [lines]);
   const rows = useMemo(() => layout === "split" ? toSideBySideRows(shown) : [], [layout, shown]);
   const total = layout === "split" ? rows.length : shown.length;
   const rest = Math.max(0, total - visible);

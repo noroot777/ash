@@ -32,12 +32,26 @@ const HUNK_RE = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/;
  *
  * 判定放在解析层但过滤发生在渲染层：解析出的行序列还要拿去数增删、推行号，丢信息不如
  * 标出来由各视图自己决定摆不摆。
+ *
+ * 只会命中**文件头区域**的行：`parseDiffLines` 进 hunk 之后不再产出 meta（除了
+ * `\ No newline`），所以 hunk 里真实的 `--- old flag` / `+++ new flag` 摸不到这条正则。
  */
 const FILE_HEADER_RE =
   /^(diff --git |index |--- |\+\+\+ |old mode |new mode |new file mode |deleted file mode |similarity index |dissimilarity index |rename (from|to) |copy (from|to) )/;
 
 export function isDiffFileHeader(line: DiffLine): boolean {
   return line.kind === "meta" && FILE_HEADER_RE.test(line.text);
+}
+
+/**
+ * 摆出来的那些行：格式行摘掉（`isDiffFileHeader`），开在文件第一行的首个 hunk 头也摘掉
+ * ——它不指示任何断开，只是 diff 的起点，摆一条分隔条反而像文件上面还藏着东西。
+ */
+export function displayDiffLines(lines: readonly DiffLine[]): DiffLine[] {
+  const rows = lines.filter((line) => !isDiffFileHeader(line));
+  const first = rows[0];
+  if (first?.kind === "hunk" && (first.head?.oldStart ?? 1) <= 1 && (first.head?.newStart ?? 1) <= 1) rows.shift();
+  return rows;
 }
 
 /** `@@ -28,10 +28,12 @@ const sumOf = …` → 区间 + 上下文。不是 hunk 头就给 null。 */
@@ -70,8 +84,14 @@ export function splitDiff(result: TaskDiffResult): DiffSection[] {
 /**
  * 逐行标注类型与新旧行号。
  *
- * 行号只在 hunk 头之后才有意义（`inHunk`）：文件头的 `--- a/x` / `+++ b/x` 也以 -/+
- * 开头，当成增删行会把整段行号推错一位。
+ * 一行是什么，由**它在哪个区域**决定，不由文本前缀决定：文件头区域（`inHunk === false`）
+ * 里的一律是 meta——那儿的 `--- a/x` / `+++ b/x` 也以 -/+ 开头，当成增删行会把整段行号
+ * 推错一位；进了 hunk 之后就只看第一个字符（` ` / `+` / `-` / `\`），因为 hunk 里每一行
+ * 都带前缀。这两件事不能混着判：`--- old flag` 在 hunk 里是**删掉了一行以 `-- ` 开头的
+ * 内容**，按前缀去认文件头会把它吞掉（连带增删计数一起错）。
+ *
+ * 多文件 diff 整份丢进来时，下一个 `diff --git ` 把区域切回文件头。它顶格出现不会跟内容
+ * 行撞车——hunk 里的内容行一定带前缀，顶格的 `diff --git ` / `@@ ` / `index ` 只能是格式行。
  *
  * `git diff` 的 stdout 以换行收尾，`split` 出来的最后那个空字符串是**行分隔符的尾巴，
  * 不是一行内容**——留着它会在 hunk 里多出一条并不存在的空上下文行，还把行号多推一位
@@ -85,6 +105,10 @@ export function parseDiffLines(text: string): DiffLine[] {
   const rows = text.split("\n");
   if (rows.at(-1) === "") rows.pop();
   return rows.map((line): DiffLine => {
+    if (line.startsWith("diff --git ")) {
+      inHunk = false;
+      return { kind: "meta", oldLine: null, newLine: null, text: line };
+    }
     const head = parseHunkHead(line);
     if (head) {
       oldLine = head.oldStart;
@@ -92,8 +116,7 @@ export function parseDiffLines(text: string): DiffLine[] {
       inHunk = true;
       return { kind: "hunk", oldLine: null, newLine: null, text: line, head };
     }
-    if (!inHunk || line.startsWith("diff --git") || line.startsWith("index ")
-      || line.startsWith("---") || line.startsWith("+++")) {
+    if (!inHunk) {
       return { kind: "meta", oldLine: null, newLine: null, text: line };
     }
     if (line.startsWith("+")) {
