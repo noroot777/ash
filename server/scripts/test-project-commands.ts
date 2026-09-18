@@ -230,6 +230,54 @@ try {
   await assertProcessGone(rchild, "独立 PGID 的服务进程也必须被停止触达");
   assert.equal(manager.liveCommandSession("p1", "rogue"), null);
 
+  // 第 6 轮审查探针固化:nohup + stdio 全重定向 + 独立 PGID + 立即退出 —— 服务不持有
+  // 任何 pty fd,只看 fd 持有者会立刻误判「没人了」。ctty 是会话属性:leader(wrapper)
+  // 活着时它仍是会话成员,会话必须保持「运行中」,stop 必须真正杀到它。
+  const nohScript = "set -m; nohup sleep 300 </dev/null >/dev/null 2>&1 & echo NOHCHILD:$!; disown; exit 0";
+  const noh = manager.create("p1", cwd, { command: { id: "noh", name: "noh", script: nohScript } });
+  let nchild = 0;
+  const nohReady = Date.now() + 8000;
+  while ((nchild = readChild(noh.id, "NOHCHILD")) === 0) {
+    if (Date.now() > nohReady) throw new Error("nohup child not ready");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const npgid = Number(spawnSync("ps", ["-o", "pgid=", "-p", String(nchild)]).stdout?.toString().trim());
+  assert.equal(npgid, nchild, "探针前提:nohup 服务在自己的独立进程组里");
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  assert.equal(manager.get(noh.id, "p1")?.exitCode, null, "全重定向的 nohup 服务还活着,会话不得落「已结束」");
+  assert.equal(manager.liveCommandSession("p1", "noh")?.id, noh.id, "全重定向的 nohup 服务必须仍算活(否则 stop 找不到、start 会另起一份)");
+  assert.deepEqual(await manager.terminate(noh.id, "p1", { termMs: 600, killMs: 4000 }), { ok: true });
+  await assertProcessGone(nchild, "全重定向的 nohup 服务必须被停止触达");
+  assert.equal(manager.liveCommandSession("p1", "noh"), null);
+
+  // 同一形状走真实 start/stop/restart 服务函数(全局 terminalSessions):运行中再点
+  // 「启动」必须幂等返回原会话;restart 必须先真正杀掉旧服务再起新的。
+  const nohCmd: RunnableCommand = { id: "noh2", name: "noh2", command: nohScript.replace("NOHCHILD", "NOH2CHILD"), restartCommand: null };
+  const started = await startCommand("pc3", cwd, nohCmd);
+  assert.equal(started.status, 201);
+  const startedId = (started.body as { session: { id: string } }).session.id;
+  let n2 = 0;
+  const n2Ready = Date.now() + 8000;
+  while (n2 === 0) {
+    for (const event of terminalSessions.eventsAfter(startedId, "pc3", 0) ?? []) {
+      const match = event.type === "data" ? /NOH2CHILD:(\d+)/.exec(event.data) : null;
+      if (match) n2 = Number(match[1]);
+    }
+    if (n2 === 0 && Date.now() > n2Ready) throw new Error("noh2 child not ready");
+    if (n2 === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const again = await startCommand("pc3", cwd, nohCmd);
+  assert.equal(
+    (again.body as { session: { id: string } }).session.id,
+    startedId,
+    "nohup 服务运行中,再次 start 必须幂等返回原会话,不得另起一份抢端口",
+  );
+  const restarted = await restartCommand("pc3", cwd, nohCmd);
+  assert.equal(restarted.status, 201);
+  await assertProcessGone(n2, "restart 必须先真正杀掉旧的 nohup 服务");
+  assert.deepEqual((await stopCommand("pc3", "noh2")).body, { stopped: true });
+
   // 日志订阅不钉住退出记录:create 同命令新会话时,被订阅的死记录也照清 —— 否则反复
   // 「重启 + 开日志」把 16 个会话槽吃光后,restart 先杀旧再建新,建新失败落成服务中断
   // (第 1 轮审查实锤:第 16 次 restart 后 live null)。
@@ -253,24 +301,31 @@ try {
   assert.deepEqual((await stopCommand("pc2", "churn")).body, { stopped: true });
 
   // server 退出路径:shutdown() 必须整组收割,忽略信号的孤儿也不能漏 —— 否则 ash 重启后
-  // 会话表清零(内存态),旧进程却被 PID 1 收养继续占端口。两种形状都要盖:组长还活着的
-  // (orphan2,& wait)和组长已自然退出、KEEPER wrapper 还守着的(daemon2 —— 它的 dchild2
-  // 已脱离 ppid 树,只有 tty 持有者清单能点到名,正是第 4 轮审查的漏杀形状)。
+  // 会话表清零(内存态),旧进程却被 PID 1 收养继续占端口。三种形状都要盖:组长还活着的
+  // (orphan2,& wait)、组长已自然退出而 KEEPER wrapper 还守着 tty 持有者的(daemon2,
+  // dchild2 已脱离 ppid 树,第 4 轮的漏杀形状)、以及 stdio 全重定向 + 独立 PGID 的
+  // nohup 服务(noh3,连 fd 都不持,只有 ctty/sid 枚举能点到名,第 6 轮实锤)。
   const orphan2 = manager.create("p1", cwd, {
     command: { id: "orphan2", name: "orphan2", script: orphanScript.replace("CHILD:", "CHILD2:") },
   });
   const daemon2 = manager.create("p1", cwd, { command: { id: "daemon2", name: "daemon2", script: daemonScript("readyB", "DCHILD2") } });
+  const noh3 = manager.create("p1", cwd, {
+    command: { id: "noh3", name: "noh3", script: nohScript.replace("NOHCHILD", "NOH3CHILD") },
+  });
   let child2 = 0;
   let dchild2 = 0;
+  let nchild3 = 0;
   const shutdownReady = Date.now() + 8000;
   while ((child2 = readChild(orphan2.id, "CHILD2")) === 0
-    || (dchild2 = readChild(daemon2.id, "DCHILD2")) === 0) {
+    || (dchild2 = readChild(daemon2.id, "DCHILD2")) === 0
+    || (nchild3 = readChild(noh3.id, "NOH3CHILD")) === 0) {
     if (Date.now() > shutdownReady) throw new Error("shutdown fixtures not ready");
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   manager.shutdown();
   await assertProcessGone(child2, "shutdown 必须收掉组长还活着的孤儿");
   await assertProcessGone(dchild2, "shutdown 必须收掉组长已退出的 daemonize 子进程");
+  await assertProcessGone(nchild3, "shutdown 必须收掉全重定向 + 独立 PGID 的 nohup 服务");
   assert.equal(manager.listCommandSessions().length, 0);
 
   console.log("project commands test passed");

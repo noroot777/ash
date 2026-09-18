@@ -5,28 +5,26 @@
 // (第 2 轮自由审查实锤)。
 //
 // 对策分三层(可靠性从高到低):
-//   ① 交互会话的 TTY_REAPER_WRAPPER:session leader 常驻,shell 退出时确定性清杀(见下);
-//   ② 结束/关服路径的实时快照:ppid 树 + tty 持有者(leader 活着时确定性);
+//   ① wrapper 常驻当 session leader:交互会话退出时确定性清杀、命令会话持续拥有(见下);
+//   ② 结束/关服路径的实时快照:ppid 树 + 会话成员(leader 活着时确定性);
 //   ③ 会话存续期**持续累积**见过的后代 pgid(①② 都不可用时的降级线索)。
-// 这个文件只放纯函数与 wrapper 脚本(探活 + 读进程表 + 挖后代 + 枚举 tty 持有者),
+// 这个文件只放纯函数与 wrapper 脚本(探活 + 读进程表 + 挖后代 + 枚举会话成员),
 // 累积与信号逻辑在 terminal.ts。
 //
-// 为什么不按 SID/会话枚举孤儿(第 3 轮审查建议,macOS 上实测走不通):
+// 「会话成员」怎么枚举(多轮探针的结论,别推翻重试已证伪的路):
 //   - `ps -o sess=`:BSD 的会话指针,SIP 下对非 root 一律抹成 0,拿不到会话身份;
-//   - `ps -o sid=`:macOS 的 ps 根本没有这个数字 keyword;
-//   - 控制 tty:session leader(pty 里的 shell)一 exit,XNU 直接 **revoke 整个会话所有
-//     进程的 tty fd**(第 4 轮实测:孤儿 fd 表里连 tty 行都消失,lsof 无从关联)——so 事后
-//     连「谁还握着这个 pty」都查不到;
-//   - `pgrep -s`:macOS 不支持 `-s`。
-// 结论:session leader 退出之后,userspace 没有任何一条线索能把独立组孤儿关联回原 pty
-// 会话。所以对交互会话反过来做(第 4 轮):**别让用户 shell 当 session leader** ——
-// pty 直接子进程是 TTY_REAPER_WRAPPER(常驻 /bin/sh),用户 shell 是它的孩子。用户 shell
-// 无论怎么退,leader 还活着、revoke 未发生,wrapper 在退出前用 `lsof -t $(tty)` **确定性**
-// 枚举全部余党并 TERM→KILL 清杀,再以内层退出码退出。这不依赖任何采样命中。manager 侧
-// (terminate/close/shutdown)在 leader 活着时也用同一枚举补抓(ttyHolderPids),封住
-// 「manager 在 wrapper 清杀中途把 wrapper 杀掉」的竞态。仅剩的真实残留:双 fork +
-// 关全部 tty fd 的**真 daemon**(不持 tty,枚举不到)——那是刻意脱离终端的合法形状,
-// 与 Terminal.app/VSCode 行为一致,如实记录。
+//   - `ps -o sid=`:macOS 的 ps 根本没有这个 keyword;`pgrep -s`:macOS 不支持;
+//   - 但 `ps -o tty=`(kinfo 的 e_tdev,控制终端)**在 session leader 存活期间**一直指着
+//     pty —— ctty 是会话属性而不是 fd,进程把 stdio 全部重定向掉(nohup 典型形状)也不
+//     影响(第 6 轮探针实证:nohup 全重定向孤儿照样列出 ttysNNN);
+//   - leader 一退,XNU revoke 整个会话的 tty fd + e_tdev 变 "??"(第 4 轮实测:孤儿 fd
+//     表里连 tty 行都消失)—— 事后枚举无路。
+// 结论:leader 必须常驻(TTY_REAPER_WRAPPER / TTY_COMMAND_WRAPPER 当 session leader,
+// 真正的 shell/命令是它的孩子),枚举必须发生在 leader 活着的时候;成员判定 =
+// **会话成员(Linux 读 /proc stat 的 session 字段;macOS 按 ps 的 ctty 列)∪ pty fd
+// 持有者(lsof,补充覆盖「setsid 出逃但还握着 fd」的形状)**。只看 fd 持有者会漏掉
+// stdio 全重定向的服务(第 6 轮审查实锤);只剩的真实残留:自己调 setsid() 且不留 fd
+// 的**真 daemon**——那是刻意脱离终端的合法形状,与 Terminal.app/VSCode 行为一致。
 import { execFile } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, existsSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
@@ -35,13 +33,15 @@ import { IS_WINDOWS } from "./platform.js";
 
 const execFileAsync = promisify(execFile);
 const PS_ARGS = ["-axo", "pid=,ppid=,pgid="];
+const PS_SESSION_ARGS = ["-axo", "pid=,pgid=,tty="];
 
-/** Linux 的 procfs 可用:进程表 / tty 持有者都能**零外部命令**从 /proc 读,精简容器免疫
+/** Linux 的 procfs 可用:进程表 / 会话成员都能**零外部命令**从 /proc 读,精简容器免疫
  *  「lsof/ps 没装」(scripts/platform.mjs 记录过 Rocky 容器踩坑)。macOS 没有 /proc。 */
 export const HAS_PROC = !IS_WINDOWS && existsSync("/proc/self/stat");
 
 export type DescendantSnapshot = { pids: number[]; pgids: number[] };
 export type ProcessTable = { children: Map<number, number[]>; pgidOf: Map<number, number> };
+export type SessionMember = { pid: number; pgid: number };
 
 /** 进程组里还有没有活人:信号 0 只探测不打扰,整组已空时抛 ESRCH。Windows 没有进程组。 */
 export function groupAlive(groupId: number): boolean {
@@ -108,8 +108,9 @@ function procProcessTable(): ProcessTable | null {
 export async function readProcessTable(): Promise<ProcessTable | null> {
   if (IS_WINDOWS) return null;
   if (HAS_PROC) return procProcessTable();
+  if (!PS_PATH) return null;
   try {
-    const { stdout } = await execFileAsync("ps", PS_ARGS);
+    const { stdout } = await execFileAsync(PS_PATH, PS_ARGS);
     return parseProcessTable(stdout);
   } catch {
     return null;
@@ -120,8 +121,9 @@ export async function readProcessTable(): Promise<ProcessTable | null> {
 export function readProcessTableSync(): ProcessTable | null {
   if (IS_WINDOWS) return null;
   if (HAS_PROC) return procProcessTable();
+  if (!PS_PATH) return null;
   try {
-    return parseProcessTable(execFileSync("ps", PS_ARGS, { encoding: "utf8" }));
+    return parseProcessTable(execFileSync(PS_PATH, PS_ARGS, { encoding: "utf8" }));
   } catch {
     return null;
   }
@@ -150,19 +152,16 @@ export function descendantsFromTable(table: ProcessTable, rootPid: number): Desc
 }
 
 /**
- * lsof 的**绝对路径**解析:PATH 逐目录找,找不到再试几处知名安装位 —— `/usr/sbin` 常常
- * 不在非交互 shell 的 PATH 里(scripts/platform.mjs 有同款教训),而 macOS 的 lsof 就装在
- * /usr/sbin。解析结果经 env `ASH_LSOF` 传给 wrapper、manager 侧枚举也用它,两边都不再
- * 依赖运行时 PATH(第 5 轮审查:PATH 去掉 /usr/sbin 就静默失去清场能力)。
+ * 关键外部命令的**绝对路径**解析:PATH 逐目录找,找不到再试知名安装位 —— `/usr/sbin`
+ * 常常不在非交互 shell 的 PATH 里(scripts/platform.mjs 有同款教训)。解析结果经 env
+ * (ASH_PS / ASH_LSOF)传给 wrapper、manager 侧枚举也用它,两边都不再依赖运行时 PATH
+ * (第 5 轮审查:PATH 去掉 /usr/sbin 就静默失去清场能力)。
  */
-export function resolveLsofPath(
-  pathEnv: string | undefined = process.env.PATH,
-  fallbacks: string[] = ["/usr/sbin/lsof", "/usr/bin/lsof", "/opt/homebrew/bin/lsof"],
-): string | null {
+function resolveBinPath(name: string, pathEnv: string | undefined, fallbacks: string[]): string | null {
   if (IS_WINDOWS) return null;
   for (const dir of (pathEnv ?? "").split(":")) {
     if (!dir) continue;
-    const candidate = `${dir}/lsof`;
+    const candidate = `${dir}/${name}`;
     try { accessSync(candidate, constants.X_OK); return candidate; } catch { /* 下一个 */ }
   }
   for (const candidate of fallbacks) {
@@ -171,30 +170,52 @@ export function resolveLsofPath(
   return null;
 }
 
+export function resolveLsofPath(
+  pathEnv: string | undefined = process.env.PATH,
+  fallbacks: string[] = ["/usr/sbin/lsof", "/usr/bin/lsof", "/opt/homebrew/bin/lsof"],
+): string | null {
+  return resolveBinPath("lsof", pathEnv, fallbacks);
+}
+
+/** macOS 的 ps 固定在 /bin/ps(系统卷,SIP 保护);Linux 常见 /bin 或 /usr/bin。 */
+export function resolvePsPath(
+  pathEnv: string | undefined = process.env.PATH,
+  fallbacks: string[] = ["/bin/ps", "/usr/bin/ps"],
+): string | null {
+  return resolveBinPath("ps", pathEnv, fallbacks);
+}
+
 export const LSOF_PATH = resolveLsofPath();
+export const PS_PATH = resolvePsPath();
 
 /**
- * 终端 containment 依赖是否齐备:Linux 靠 /proc(零外部命令),其余 POSIX 靠 lsof。
- * 都没有就**不能承诺**「关会话时清空进程树」——终端 create 会显式拒绝(terminal.ts),
- * 绝不静默降级到已被证伪的采样后继续对清场报成功(第 5 轮审查)。
+ * 终端 containment 依赖是否齐备:Linux 靠 /proc(零外部命令),其余 POSIX 靠 ps 的
+ * ctty 枚举(lsof 只是补充,不再是硬依赖)。都没有就**不能承诺**「关会话时清空进程树」
+ * —— 终端 create 会显式拒绝(terminal.ts),绝不静默降级到已被证伪的采样后继续对清场
+ * 报成功(第 5 轮审查)。
  */
 export function containmentAvailable(): boolean {
-  return !IS_WINDOWS && (HAS_PROC || LSOF_PATH !== null);
+  return !IS_WINDOWS && (HAS_PROC || PS_PATH !== null);
 }
 
 // ── wrapper 脚本 ────────────────────────────────────────────────────────────────
-// 共享 prelude:ash_lsof 解析 lsof(env ASH_LSOF 绝对路径优先,再 PATH,再 /usr/sbin);
-// ash_members 产出 "pid:pgid " 清单 —— Linux 扫 /proc/*/fd(零外部命令,pgid 直接读
-// stat 第 3 字段),其余用 lsof + ps。两个硬性排除,少一个都出事故:
-//   - `$$`(wrapper 自己):不排除就自杀,清杀中断;
-//   - `$ASH_PTY_PARENT`(ash server):macOS 的 lsof 把 pty **master** 端也解析成同一个
-//     /dev/ttysN 名字,持有全部 master 的 server 会出现在每个会话的清单里 —— 探针实测
-//     不排除会把 server 整个 TERM 掉(probe4,exit 143)。
-// lsof 分支的两道防呆(实测各卡死过一次 KEEPER 等待循环):命令替换的**中间 subshell**
-// 在 lsof 扫描期间还握着 wrapper 的 tty(fd0/2),重定向绑在 lsof 上救不了它 —— 所以子
-// shell 里先 `exec` 重定向自身;以及 pgid 查不到(ps 输出为空)的命中一律跳过 —— 那是
-// 已死的瞬时进程(subshell / 枚举工具自己),不算成员,真成员恰在间隙死掉也无需再管。
-const WRAPPER_PRELUDE = `ash_lsof() {
+// 共享 prelude。ash_members 产出 " pid:pgid" 清单,成员判定 = 会话成员 ∪ pty fd 持有者
+// (为什么是这两条、为什么必须在 leader 存活期间枚举,见文件头)。两个硬性排除,少一个
+// 都出事故:`$$`(wrapper 自己,不排除就自杀)与 `$ASH_PTY_PARENT`(ash server:macOS
+// 的 lsof 把 pty **master** 端也解析成同一个 /dev/ttysN,不排除会把 server TERM 掉,
+// probe4 实测 exit 143)。
+// 枚举工具自身的防呆(各卡死过一次 KEEPER 等待循环):
+//   - macOS 的 ps 走「后台起 ps 写临时文件、记下 $!、父 shell read 过滤」—— ps 自己也是
+//     会话成员、会出现在自己的快照里,靠 $PSPID 精确排除;不经命令替换,子 shell 不进场。
+//   - lsof 补充枚举经命令替换,中间 subshell 在 lsof 扫描期间握着 tty:子 shell 先 exec
+//     重定向自身;pgid 查不到(ps 输出为空 = 已死的瞬时进程)的命中一律跳过。
+//   - Linux 分支用 read 内建读 stat,零 fork;fd 反查的 ls/grep 是瞬时子进程,不在循环
+//     开头展开的 /proc 通配結果里,不会自计。
+const WRAPPER_PRELUDE = `ash_bins() {
+  PSB="$ASH_PS"
+  [ -x "$PSB" ] || PSB="$(command -v ps 2>/dev/null)"
+  [ -x "$PSB" ] || PSB=/bin/ps
+  [ -x "$PSB" ] || PSB=""
   L="$ASH_LSOF"
   [ -x "$L" ] || L="$(command -v lsof 2>/dev/null)"
   [ -x "$L" ] || L=/usr/sbin/lsof
@@ -207,20 +228,40 @@ ash_members() {
       p="\${d#/proc/}"
       [ "$p" = "$$" ] && continue
       [ -n "$ASH_PTY_PARENT" ] && [ "$p" = "$ASH_PTY_PARENT" ] && continue
-      [ -n "$T" ] || continue
-      ls -l "$d/fd" 2>/dev/null | grep -q -- "-> $T\\$" || continue
-      s="$(cat "$d/stat" 2>/dev/null)" || continue
+      { read -r s < "$d/stat"; } 2>/dev/null || continue
       r="\${s##*) }"
       set -- $r
-      MEMBERS="$MEMBERS$p:$3 "
+      if [ "$4" = "$$" ]; then
+        MEMBERS="$MEMBERS $p:$3"
+      elif [ -n "$T" ] && ls -l "$d/fd" 2>/dev/null | grep -q -- "-> $T\\$"; then
+        MEMBERS="$MEMBERS $p:$3"
+      fi
     done
-  elif [ -n "$T" ] && [ -n "$L" ]; then
+    return 0
+  fi
+  TN="\${T#/dev/}"
+  if [ -n "$TN" ] && [ -n "$PSB" ]; then
+    TF="\${TMPDIR:-/tmp}/.ash_members.$$"
+    "$PSB" -axo pid=,pgid=,tty= </dev/null > "$TF" 2>/dev/null &
+    PSPID=$!
+    wait "$PSPID"
+    while read -r p g t; do
+      [ "$t" = "$TN" ] || continue
+      [ "$p" = "$$" ] && continue
+      [ "$p" = "$PSPID" ] && continue
+      [ -n "$ASH_PTY_PARENT" ] && [ "$p" = "$ASH_PTY_PARENT" ] && continue
+      MEMBERS="$MEMBERS $p:$g"
+    done < "$TF"
+    rm -f "$TF"
+  fi
+  if [ -n "$T" ] && [ -n "$L" ]; then
     for p in $(exec </dev/null 2>/dev/null; "$L" -t "$T"); do
       [ "$p" = "$$" ] && continue
       [ -n "$ASH_PTY_PARENT" ] && [ "$p" = "$ASH_PTY_PARENT" ] && continue
-      g="$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')"
+      case "$MEMBERS" in *" $p:"*) continue ;; esac
+      g="$("\${PSB:-ps}" -o pgid= -p "$p" 2>/dev/null | tr -d ' ')"
       [ -n "$g" ] || continue
-      MEMBERS="$MEMBERS$p:$g "
+      MEMBERS="$MEMBERS $p:$g"
     done
   fi
 }
@@ -230,14 +271,14 @@ ash_members() {
  * 交互会话的 containment wrapper。作为 pty 的直接子进程(= session leader)常驻,内层
  * 用户 shell 经 "$@" 起($0 占位、$1.. 是 shell 与参数)。内层 shell 退出(任意方式,含
  * kill -9)后 leader 仍活、revoke 未发生,此刻的成员枚举是**确定性**的 —— 对余党
- * TERM→0.2s→重枚举→KILL(逐 pid + 逐进程组,防重定向了 stdio 的组员漏杀),然后以内层
- * 退出码退出。不依赖任何采样命中(第 4 轮);枚举机制不可用时(排查过的真实场景只剩
- * 「非 Linux 且 lsof 缺失」)manager 的 create 已拒绝开会话,不会走到这里。
+ * TERM→0.2s→重枚举→KILL(逐 pid + 逐进程组,防独立组/重定向了 stdio 的成员漏杀),
+ * 然后以内层退出码退出。不依赖任何采样命中(第 4 轮);枚举机制不可用时 manager 的
+ * create 已拒绝开会话,不会走到这里。
  */
 export const TTY_REAPER_WRAPPER = `${WRAPPER_PRELUDE}"$@"
 code=$?
 T="$(tty 2>/dev/null)"
-ash_lsof
+ash_bins
 ash_members
 if [ -n "$MEMBERS" ]; then
   for e in $MEMBERS; do
@@ -257,16 +298,16 @@ exit $code`;
 
 /**
  * 常用命令会话的 supervisor wrapper。与交互版的差别:命令退出后**不杀**余党 —— 组长退了
- * 后台还活着的 daemonize 形状是合法保活特性;但也**不弃养**:只要还有进程握着这个 tty,
- * wrapper(session leader)就活着轮询等待,于是会话在 manager 眼里保持「运行中」
- * (exitCode 未落),liveCommandSession 找得到、stop/restart/destroy 随时能经成员枚举
- * 确定性触达(第 5 轮审查:排除在 containment 外的命令会话,独立 PGID 服务会失控 +
- * 被重复启动)。服务全部退出后 wrapper 以命令原退出码退出,会话正常落「已结束」。
+ * 后台还活着的 daemonize 形状是合法保活特性;但也**不弃养**:只要会话里还有成员(含
+ * stdio 全重定向、独立 PGID 的 nohup 形状,第 6 轮审查实锤),wrapper(session leader)
+ * 就活着轮询等待,于是会话在 manager 眼里保持「运行中」(exitCode 未落),
+ * liveCommandSession 找得到、stop/restart/destroy 随时能经成员枚举确定性触达(第 5 轮
+ * 审查)。服务全部退出后 wrapper 以命令原退出码退出,会话正常落「已结束」。
  */
 export const TTY_COMMAND_WRAPPER = `${WRAPPER_PRELUDE}"$@"
 code=$?
 T="$(tty 2>/dev/null)"
-ash_lsof
+ash_bins
 while :; do
   ash_members
   [ -z "$MEMBERS" ] && break
@@ -281,67 +322,116 @@ function parseHolderPids(stdout: string): number[] {
     .filter((pid) => pid > 1 && pid !== process.pid))];
 }
 
-/** Linux:扫 /proc/<pid>/fd 找「谁的某个 fd 指着这些 pty slave」。master 已关时链接目标带
- *  " (deleted)" 后缀,也算持有(进程还活着、fd 还开着)。 */
-function procTtyHolders(ttyPaths: string[]): number[] {
+/** Linux:一次 /proc 扫描拿会话成员(stat 的 session 字段 ∈ leaders)∪ pty fd 持有者
+ *  (master 已关时链接目标带 " (deleted)" 后缀,也算持有)。 */
+function procSessionMembers(leaderPids: number[], ttyPaths: string[]): SessionMember[] {
+  const leaders = new Set(leaderPids);
   const targets = new Set(ttyPaths.flatMap((path) => [path, `${path} (deleted)`]));
-  const holders: number[] = [];
+  const members: SessionMember[] = [];
   try {
     for (const entry of readdirSync("/proc")) {
       if (!/^\d+$/.test(entry)) continue;
       const pid = Number(entry);
       if (pid <= 1 || pid === process.pid) continue;
       try {
+        const fields = procStatFields(readFileSync(`/proc/${entry}/stat`, "utf8"));
+        const pgid = Number(fields[2]);
+        const sid = Number(fields[3]);
+        if (leaders.has(sid)) { members.push({ pid, pgid }); continue; }
+        if (!targets.size) continue;
         for (const fd of readdirSync(`/proc/${entry}/fd`)) {
           if (targets.has(readlinkSync(`/proc/${entry}/fd/${fd}`))) {
-            holders.push(pid);
+            members.push({ pid, pgid });
             break;
           }
         }
       } catch { /* 进程退出或无权限,跳过 */ }
     }
   } catch { /* /proc 读挂了,按空处理 */ }
-  return holders;
+  return members;
+}
+
+/** ps 的 ctty 快照(pid pgid tty)+ lsof 的 fd 持有者,合成去重后的成员清单。 */
+function membersFromPs(stdout: string, ttyNames: Set<string>, lsofPids: number[]): SessionMember[] {
+  const members = new Map<number, number>();
+  const pgidOf = new Map<number, number>();
+  for (const line of stdout.split("\n")) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 3) continue;
+    const pid = Number(parts[0]);
+    const pgid = Number(parts[1]);
+    if (!pid || Number.isNaN(pgid)) continue;
+    pgidOf.set(pid, pgid);
+    if (ttyNames.has(parts[2])) members.set(pid, pgid);
+  }
+  for (const pid of lsofPids) {
+    if (!members.has(pid)) members.set(pid, pgidOf.get(pid) ?? 0);
+  }
+  return [...members.entries()]
+    .filter(([pid]) => pid > 1 && pid !== process.pid)
+    .map(([pid, pgid]) => ({ pid, pgid }));
+}
+
+function existingTtyPaths(ttyPaths: string[]): string[] {
+  // lsof 对已消失的路径刷 usage 噪音,先过滤;返回仍存在的路径。
+  return ttyPaths.filter((path) => existsSync(path));
 }
 
 /**
- * 「谁还握着这些 pty slave」:session leader 活着时的**确定性**会话成员清单(不依赖
- * ppid 树,disown 后照样在列)。Linux 走 /proc(零外部命令),其余 POSIX 用解析好的
- * lsof 绝对路径(不吃运行时 PATH)。返回 null = 无法枚举(机制缺失,或 leader 已退、
- * fd 已被 revoke、路径已回收)——调用方退回已知清单(快照 + 累积)判定,**不要**把
- * null 当「确证无人」。已消失的路径先过滤掉(lsof 分支):revoke 后本来就不可枚举,
- * 还会让 lsof 刷 usage 噪音。lsof 无匹配时退 1 但 stdout 可信:能解析出 pid 就用。
+ * 「这些 pty 会话里还有谁」:session leader(wrapper)活着时的**确定性**成员清单 ——
+ * 不依赖 ppid 树,disown、独立 PGID、stdio 全重定向都照样在列。Linux 走 /proc(零外部
+ * 命令),其余 POSIX 用解析好的 ps 绝对路径按 ctty 枚举,lsof(若有)补充 fd 持有者。
+ * 返回 null = 无法枚举(机制缺失)——调用方退回已知清单(快照 + 累积)判定,**不要**
+ * 把 null 当「确证无人」。leader 已退、ctty 已被 revoke 的会话,本来就不可枚举,
+ * 返回的是空命中而不是 null。
  */
-export async function ttyHolderPids(ttyPaths: string[]): Promise<number[] | null> {
-  if (IS_WINDOWS || !ttyPaths.length) return null;
-  if (HAS_PROC) return procTtyHolders(ttyPaths);
-  const paths = ttyPaths.filter((path) => existsSync(path));
-  if (!paths.length || !LSOF_PATH) return null;
+export async function sessionMemberPids(leaderPids: number[], ttyPaths: string[]): Promise<SessionMember[] | null> {
+  if (IS_WINDOWS || (!leaderPids.length && !ttyPaths.length)) return null;
+  if (HAS_PROC) return procSessionMembers(leaderPids, ttyPaths);
+  if (!PS_PATH) return null;
+  const ttyNames = new Set(ttyPaths.map((path) => path.replace(/^\/dev\//, "")));
   try {
-    const { stdout } = await execFileAsync(LSOF_PATH, ["-t", ...paths]);
-    return parseHolderPids(stdout);
-  } catch (error) {
-    const stdout = (error as { stdout?: string }).stdout;
-    if (typeof stdout === "string" && stdout.trim()) return parseHolderPids(stdout);
+    const { stdout } = await execFileAsync(PS_PATH, PS_SESSION_ARGS);
+    let lsofPids: number[] = [];
+    const paths = existingTtyPaths(ttyPaths);
+    if (paths.length && LSOF_PATH) {
+      try {
+        lsofPids = parseHolderPids((await execFileAsync(LSOF_PATH, ["-t", ...paths])).stdout);
+      } catch (error) {
+        const out = (error as { stdout?: string }).stdout;
+        if (typeof out === "string" && out.trim()) lsofPids = parseHolderPids(out);
+      }
+    }
+    return membersFromPs(stdout, ttyNames, lsofPids);
+  } catch {
     return null;
   }
 }
 
-/** ttyHolderPids 的同步版(close/shutdown 没有 await)。stderr 收进管道,别刷进服务日志。 */
-export function ttyHolderPidsSync(ttyPaths: string[]): number[] | null {
-  if (IS_WINDOWS || !ttyPaths.length) return null;
-  if (HAS_PROC) return procTtyHolders(ttyPaths);
-  const paths = ttyPaths.filter((path) => existsSync(path));
-  if (!paths.length || !LSOF_PATH) return null;
+/** sessionMemberPids 的同步版(close/shutdown 没有 await)。stderr 收进管道,别刷日志。 */
+export function sessionMemberPidsSync(leaderPids: number[], ttyPaths: string[]): SessionMember[] | null {
+  if (IS_WINDOWS || (!leaderPids.length && !ttyPaths.length)) return null;
+  if (HAS_PROC) return procSessionMembers(leaderPids, ttyPaths);
+  if (!PS_PATH) return null;
+  const ttyNames = new Set(ttyPaths.map((path) => path.replace(/^\/dev\//, "")));
   try {
-    return parseHolderPids(execFileSync(LSOF_PATH, ["-t", ...paths], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }));
-  } catch (error) {
-    const stdout = (error as { stdout?: string | Buffer }).stdout;
-    const text = typeof stdout === "string" ? stdout : stdout?.toString() ?? "";
-    if (text.trim()) return parseHolderPids(text);
+    const stdout = execFileSync(PS_PATH, PS_SESSION_ARGS, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    let lsofPids: number[] = [];
+    const paths = existingTtyPaths(ttyPaths);
+    if (paths.length && LSOF_PATH) {
+      try {
+        lsofPids = parseHolderPids(execFileSync(LSOF_PATH, ["-t", ...paths], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        }));
+      } catch (error) {
+        const out = (error as { stdout?: string | Buffer }).stdout;
+        const text = typeof out === "string" ? out : out?.toString() ?? "";
+        if (text.trim()) lsofPids = parseHolderPids(text);
+      }
+    }
+    return membersFromPs(stdout, ttyNames, lsofPids);
+  } catch {
     return null;
   }
 }

@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { IS_WINDOWS } from "../src/platform.js";
-import { resolveLsofPath } from "../src/terminal-process-tree.js";
+import { resolveLsofPath, resolvePsPath } from "../src/terminal-process-tree.js";
 import { resolveTerminalDirectory, TerminalSessionManager } from "../src/terminal.js";
 
 // realpath 一次:Windows 的 %TEMP% 常常是 8.3 短名(`C:\Users\RUNNER~1\…`),而
@@ -196,7 +196,7 @@ try {
     // /onData)都来不及命中,累积清单为空、ppid 树已断 —— 只有 TTY_REAPER_WRAPPER(session
     // leader 常驻,shell 退出时按 lsof 清单确定性清杀)和 manager 的 tty 持有者快照能兜住。
     // 生产默认扫描间隔、全程不等待任何扫描,精确复刻第 4 轮审查探针的时序。
-    const spawnImmediateOrphan = async (mgr: TerminalSessionManager, projectId: string, marker: string) => {
+    const spawnImmediateOrphan = async (mgr: TerminalSessionManager, projectId: string, marker: string, jobLine?: string) => {
       const s = mgr.create(projectId, cwd, { shell, shellArgs: [], cols: 80, rows: 20 });
       let buf = "";
       const pid = await new Promise<number>((resolve, reject) => {
@@ -210,7 +210,7 @@ try {
         });
         mgr.write(s.id, projectId, "set +H 2>/dev/null\n");
         mgr.write(s.id, projectId, "set -m\n");
-        mgr.write(s.id, projectId, `trap '' TERM HUP; sleep 300 & echo __${marker}_$!__; disown; exit\n`);
+        mgr.write(s.id, projectId, jobLine ?? `trap '' TERM HUP; sleep 300 & echo __${marker}_$!__; disown; exit\n`);
       });
       return { session: s, pid };
     };
@@ -223,7 +223,7 @@ try {
       await waitDead(pid, "immediate disown;exit 的独立组孤儿应被确定性清杀(wrapper/tty 持有者)");
     }
 
-    // shutdown 路径:看到 pid 立即 shutdown(可能正打断 wrapper 清杀,靠 tty 持有者快照兜)。
+    // shutdown 路径:看到 pid 立即 shutdown(可能正打断 wrapper 清杀,靠会话成员快照兜)。
     {
       const doomed = new TerminalSessionManager();
       const { pid } = await spawnImmediateOrphan(doomed, "project-imm-shutdown", "IMM2");
@@ -231,12 +231,28 @@ try {
       await waitDead(pid, "immediate disown;exit 后 shutdown 应无残留");
     }
 
-    // ── 第 5 轮:lsof 解析与 containment gate ─────────────────────────────────────
-    // [P1] lsof 缺失/不可执行:必须解析成 null(下面的 gate 用例接手「拒绝承诺」);
-    // 不在 PATH(非交互 PATH 常丢 /usr/sbin,而 macOS 的 lsof 就装在那):必须仍经
-    // 兜底候选找到绝对路径 —— 解析结果经 ASH_LSOF 传给 wrapper,两侧都不吃运行时 PATH。
+    // [P1·第 6 轮] nohup + stdio 全重定向 + 独立组 + 毫秒级 exit:不持任何 pty fd,
+    // 只有会话成员(ctty)枚举能点到名 —— destroy 后不得残留。
+    {
+      const { session: s, pid } = await spawnImmediateOrphan(
+        manager,
+        "project-imm-nohup",
+        "IMM5",
+        "trap '' TERM HUP; nohup sleep 300 </dev/null >/dev/null 2>&1 & echo __IMM5_$!__; disown; exit\n",
+      );
+      const res = await manager.destroy(s.id, "project-imm-nohup", { termMs: 500, killMs: 2000 });
+      assert.equal(res.ok, true, "全重定向 nohup 孤儿的 destroy 仍应确认清场");
+      await waitDead(pid, "全重定向的 nohup 独立组孤儿应被会话成员枚举清杀");
+    }
+
+    // ── 第 5/6 轮:ps/lsof 解析与 containment gate ────────────────────────────────
+    // [P1] 关键命令缺失/不可执行:必须解析成 null(下面的 gate 用例接手「拒绝承诺」);
+    // 不在 PATH(非交互 PATH 常丢 /usr/sbin 等目录):必须仍经兜底候选找到绝对路径 ——
+    // 解析结果经 ASH_PS / ASH_LSOF 传给 wrapper,两侧都不吃运行时 PATH。
     assert.equal(resolveLsofPath("/definitely/not/here", []), null, "lsof 不存在时必须解析为 null,不得假装可用");
     assert.equal(resolveLsofPath("", []), null, "空 PATH + 无兜底必须解析为 null");
+    assert.equal(resolvePsPath("/definitely/not/here", []), null, "ps 不存在时必须解析为 null");
+    assert.ok(resolvePsPath(), "POSIX 环境必须能解析到 ps");
     if (process.platform === "darwin") {
       assert.equal(
         resolveLsofPath("/usr/bin:/bin", ["/usr/sbin/lsof"]),
@@ -244,9 +260,10 @@ try {
         "PATH 丢了 /usr/sbin 时必须经兜底候选找到 lsof",
       );
       assert.equal(resolveLsofPath("/usr/sbin", []), "/usr/sbin/lsof", "PATH 里有 lsof 就用 PATH 解析出的绝对路径");
+      assert.equal(resolvePsPath("/definitely/not/here", ["/bin/ps"]), "/bin/ps", "PATH 全丢时必须经兜底候选找到 /bin/ps");
     }
 
-    // [P1] containment 依赖缺失(非 Linux 且 lsof 连兜底都找不到)时 create 必须显式拒绝:
+    // [P1] containment 依赖缺失(非 Linux 且连 ps 都找不到)时 create 必须显式拒绝:
     // 没有确定性成员枚举就不能承诺「关会话清空进程树」,绝不静默降级到采样后照常报成功。
     {
       const denied = new TerminalSessionManager({ containment: false });

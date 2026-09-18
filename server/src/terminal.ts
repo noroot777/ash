@@ -1,32 +1,32 @@
-import { existsSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import * as pty from "node-pty";
-import { resolveBin } from "./executors/bin-resolve.js";
-import { expandHome } from "./git.js";
 import { IS_WINDOWS } from "./platform.js";
 import { id } from "./util.js";
 import {
   containmentAvailable,
   descendantsFromTable,
   groupAlive,
-  LSOF_PATH,
   processAlive,
   readProcessTable,
   readProcessTableSync,
+  sessionMemberPids,
+  sessionMemberPidsSync,
   TTY_COMMAND_WRAPPER,
   TTY_REAPER_WRAPPER,
-  ttyHolderPids,
-  ttyHolderPidsSync,
   type DescendantSnapshot,
 } from "./terminal-process-tree.js";
+import { ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
+
+export { resolveTerminalDirectory } from "./terminal-shell.js";
 
 const MAX_BUFFER_BYTES = 512 * 1024;
 const MAX_SESSIONS = 16;
 const IDLE_TTL_MS = 30 * 60 * 1000;
 // 后代累积扫描的间隔。采样是**第三道防线**,不承担正确性(第 4 轮审查实锤:毫秒级的
 // `disown; exit` 任何采样都赢不了):交互会话的独立组孤儿由 TTY_REAPER_WRAPPER 在 shell
-// 退出时确定性清杀,manager 结束/关服路径再用 lsof + ppid 快照确定性补抓;累积只兜
-// 「lsof 缺失的降级环境」。构造可注入间隔,回归用小间隔 + 真实 sleep 按真实定时器验证。
+// 退出时确定性清杀,manager 结束/关服路径再用会话成员 + ppid 快照确定性补抓;累积只兜
+// 「leader 已退、枚举已不可用」的降级路径。构造可注入间隔,回归用小间隔 + 真实 sleep
+// 按真实定时器验证。
 const DESCENDANT_SCAN_MS = 1_500;
 // onData 触发扫描的限流窗口:shell 输出很密,别每帧都 ps。trailing edge,不丢触发。
 const DESCENDANT_DATA_THROTTLE_MS = 250;
@@ -74,8 +74,9 @@ type TerminalSession = TerminalSessionInfo & {
    */
   descendantPgids: Set<number>;
   /**
-   * pty slave 路径(/dev/ttysN)。session leader 活着时 `lsof -t` 它就是**确定性**的
-   * 会话成员清单(不依赖 ppid 树与采样,disown 后照样在列),terminate/close/shutdown
+   * pty slave 路径(/dev/ttysN)。leader(wrapper)活着时,按它枚举会话成员(ctty/sid
+   * ∪ fd 持有者,见 terminal-process-tree.ts 文件头)就是**确定性**清单 —— 不依赖 ppid
+   * 树与采样,disown、独立 PGID、stdio 全重定向都照样在列,terminate/close/shutdown
    * 都用它补抓。node-pty 未暴露进公开类型,拿不到(理论上不会)就退回快照 + 累积。
    */
   ttyPath: string | null;
@@ -92,55 +93,6 @@ type CreateOptions = {
    */
   command?: { id: string; name: string; script: string };
 };
-
-function terminalSize(value: unknown, fallback: number, min: number, max: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(min, Math.min(max, Math.round(value)))
-    : fallback;
-}
-
-/**
- * 起一个交互 shell 用什么命令。
- *
- * POSIX:`$SHELL`,回退 zsh / bash,带 `-l` 走登录 shell(用户的 PATH、nvm、rbenv
- * 这些全靠它)。
- *
- * Windows:**没有 `-l` 这一档**,登录 shell 是 POSIX 概念,PowerShell 会把它当成
- * 一个位置参数、当脚本名去找,直接起不来。回退顺序按「用户更可能想要哪个」排:
- * PowerShell 7(`pwsh`)→ 随系统自带的 Windows PowerShell 5.1 → `cmd`。`$SHELL`
- * 在 Windows 上基本只由 Git Bash 之类的环境设置,而且往往是一条 MSYS 风格的路径
- * (`/usr/bin/bash`),ConPTY 起不了 —— 所以那边不认它。
- */
-function shellCommand(): { shell: string; args: string[] } {
-  if (IS_WINDOWS) {
-    for (const candidate of ["pwsh.exe", "powershell.exe", "cmd.exe"]) {
-      const resolved = resolveBin(candidate);
-      if (resolved) return { shell: resolved, args: [] };
-    }
-    // 一个都没解析到(PATH 被改坏了)也别抛:交给 ConPTY 自己去找,起不来会走
-    // onExit,前端至少能看见退出码,比这里直接 500 强。
-    return { shell: "cmd.exe", args: [] };
-  }
-  const shell = process.env.SHELL || (existsSync("/bin/zsh") ? "/bin/zsh" : "/bin/bash");
-  return { shell, args: ["-l"] };
-}
-
-function ptyEnvironment(): Record<string, string> {
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-  );
-  return {
-    ...env,
-    TERM: "xterm-256color",
-    COLORTERM: "truecolor",
-    ASH_TERMINAL: "1",
-    // wrapper 清杀/守护时排除 server 自己(它持有全部 pty master,macOS 的 lsof
-    // 会把 master 端也列进 /dev/ttysN 的持有者 —— 不排除等于让 wrapper 杀掉 ash)。
-    ASH_PTY_PARENT: String(process.pid),
-    // lsof 的绝对路径(启动时解析,含 /usr/sbin 兜底):wrapper 不吃运行时 PATH。
-    ASH_LSOF: LSOF_PATH ?? "",
-  };
-}
 
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, TerminalSession>();
@@ -205,12 +157,12 @@ export class TerminalSessionManager {
     // 常用命令在 Windows 上没有对应的「-lc」语义，且 win32 分支未经真机验证 —— 与其留
     // 一段没跑过的 cmd/pwsh 参数拼接，不如明确拒绝（AGENTS.md「Windows 真机」一节）。
     if (options.command && IS_WINDOWS) throw new Error("常用命令暂不支持 Windows 上的 ash 实例");
-    // containment 依赖缺失(非 Linux 且 lsof 连 /usr/sbin 都没有)就**显式拒绝**开会话:
-    // 没有确定性成员枚举,「关会话/关服时清空进程树」的承诺就兑现不了 —— 绝不静默降级到
-    // 已被证伪的采样后继续对清场报成功(第 5 轮自由审查)。Linux 有 /proc 永真,macOS 的
-    // lsof 是系统自带,真实环境到不了这里;到了就是环境坏了,该修环境而不是带病运行。
+    // containment 依赖缺失(非 Linux 且连 ps 都找不到)就**显式拒绝**开会话:没有确定性
+    // 成员枚举,「关会话/关服时清空进程树」的承诺就兑现不了 —— 绝不静默降级到已被证伪的
+    // 采样后继续对清场报成功(第 5 轮自由审查)。Linux 有 /proc 永真,macOS 的 ps 在
+    // /bin/ps(SIP 保护),真实环境到不了这里;到了就是环境坏了,该修环境而不是带病运行。
     if (!IS_WINDOWS && !this.containment) {
-      throw new Error("终端依赖缺失：lsof 与 /proc 都不可用，无法保证关闭会话时清空进程树；请安装 lsof 后重启 ash");
+      throw new Error("终端依赖缺失：ps 与 /proc 都不可用，无法保证关闭会话时清空进程树；请安装 procps 后重启 ash");
     }
     const args = options.command ? ["-lc", options.command.script] : options.shellArgs ?? fallback.args;
     // POSIX 一律包 wrapper,session leader 是常驻 /bin/sh、真正的 shell/命令是它的孩子,
@@ -218,8 +170,9 @@ export class TerminalSessionManager {
     //   交互 → TTY_REAPER_WRAPPER:shell 退出时确定性清杀余党(「起作业后立即 disown;
     //   exit」的根治 —— 任何采样都赢不了毫秒级退出,第 3、4 轮实锤);
     //   命令 → TTY_COMMAND_WRAPPER:命令退出后**不杀**(daemonize 是合法保活形状),但
-    //   只要还有进程握着 tty 就保持存活 —— 会话持续「运行中」,stop/restart 随时能经
-    //   成员枚举触达,独立 PGID 服务不再失控/被重复启动(第 5 轮实锤)。
+    //   只要会话里还有成员(含 stdio 全重定向 + 独立 PGID 的 nohup 形状,第 6 轮实锤)
+    //   就保持存活 —— 会话持续「运行中」,stop/restart 随时能经成员枚举触达,独立 PGID
+    //   服务不再失控/被重复启动(第 5 轮实锤)。
     // exitCode 由 wrapper 透传(信号死的内层折算成 128+n)。
     const wrapper = options.command ? TTY_COMMAND_WRAPPER : TTY_REAPER_WRAPPER;
     const spawnSpec = IS_WINDOWS
@@ -324,14 +277,13 @@ export class TerminalSessionManager {
     session.listeners.clear();
     const table = readProcessTableSync();
     const live = table ? descendantsFromTable(table, session.process.pid) : { pids: [], pgids: [] };
-    const holders = (session.ttyPath ? ttyHolderPidsSync([session.ttyPath]) : null) ?? [];
+    const members = sessionMemberPidsSync([session.process.pid], session.ttyPath ? [session.ttyPath] : []) ?? [];
     const pids = new Set(live.pids);
     const pgids = new Set([...session.descendantPgids, ...live.pgids]);
-    for (const pid of holders) {
-      if (pid === session.process.pid) continue;
-      pids.add(pid);
-      const pgid = table?.pgidOf.get(pid);
-      if (pgid !== undefined && pgid > 1 && pgid !== session.process.pid) pgids.add(pgid);
+    for (const member of members) {
+      if (member.pid === session.process.pid) continue;
+      pids.add(member.pid);
+      if (member.pgid > 1 && member.pgid !== session.process.pid) pgids.add(member.pgid);
     }
     this.signalTree(session, "SIGKILL", { pids: [...pids], pgids: [...pgids] });
     return true;
@@ -359,29 +311,66 @@ export class TerminalSessionManager {
     const session = this.session(sessionId, projectId);
     if (!session) return { ok: true };
     const groupId = session.process.pid;
-    // 成员清单要在**发信号 + 早退判定之前**拿齐,三份并集:① 一次 ps 读表挖 ppid 树
-    // (leader 活着时树完整);② tty 持有者(lsof,leader 活着时的确定性清单 —— disown
-    // 离树的独立组也在列,这正是采样赢不了的那类);③ 存续期累积的 pgid(leader 已退、
-    // 树断 + fd 被 revoke 时仅存的线索;交互会话此时 wrapper 已顺路清杀过,累积只是兜底)。
-    // 早退绝不能只看组长的原组 —— job-control 后台作业在自己的独立组里(第 2 轮实锤)。
+    // 成员清单要在**发信号 + 早退判定之前**拿齐,且拿之前先**冻结**:枚举与发信号之间,
+    // 组内 shell 可能正把新服务 fork 进新 PGID(实测 restart 后立即 stop,nohup 服务恰好
+    // 从快照缝里漏出去、stopped:true 却留下孤儿)。SIGSTOP 不可捕获,冻住的进程不能再
+    // fork/setpgid;对枚举新发现的成员/独立组继续冻结、再补枚举,直到不动点,快照才算
+    // 封口。TERM 发完统一 SIGCONT:可捕获信号在 stopped 状态下挂起,CONT 后才递送。
+    // 清单三份并集:① 读表挖 ppid 树(leader 活着时树完整);② 会话成员(ctty/sid ∪
+    // fd 持有者,leader 活着时的确定性清单 —— disown 离树的独立组、stdio 全重定向的
+    // nohup 服务都在列,这正是采样和 ppid 树都赢不了的那两类);③ 存续期累积的 pgid
+    // (leader 已退、树断 + ctty 已被 revoke 时仅存的线索;交互会话此时 wrapper 已顺路
+    // 清杀过,累积只是兜底)。早退绝不能只看组长的原组(第 2 轮实锤)。
+    const frozenGroups = new Set<number>();
+    const frozenPids = new Set<number>();
+    const freezeGroup = (pgid: number) => {
+      if (pgid <= 1 || frozenGroups.has(pgid)) return;
+      frozenGroups.add(pgid);
+      try { process.kill(-pgid, "SIGSTOP"); } catch { /* 组已空 */ }
+    };
+    const freezePid = (pid: number) => {
+      if (pid <= 1 || pid === groupId || frozenPids.has(pid)) return;
+      frozenPids.add(pid);
+      try { process.kill(pid, "SIGSTOP"); } catch { /* 已死 */ }
+    };
+    const thaw = () => {
+      for (const pgid of frozenGroups) { try { process.kill(-pgid, "SIGCONT"); } catch { /* 已空 */ } }
+      for (const pid of frozenPids) { try { process.kill(pid, "SIGCONT"); } catch { /* 已死 */ } }
+    };
+    freezeGroup(groupId);
     const table = await readProcessTable();
     const tree = table ? descendantsFromTable(table, groupId) : { pids: [], pgids: [] };
-    const holders = session.ttyPath ? await ttyHolderPids([session.ttyPath]) : null;
     const memberPids = new Set(tree.pids);
+    for (const pid of tree.pids) freezePid(pid);
     for (const pgid of tree.pgids) session.descendantPgids.add(pgid);
-    for (const pid of holders ?? []) {
-      if (pid === groupId) continue;
-      memberPids.add(pid);
-      const pgid = table?.pgidOf.get(pid);
-      if (pgid !== undefined && pgid > 1 && pgid !== groupId) session.descendantPgids.add(pgid);
+    for (const pgid of session.descendantPgids) freezeGroup(pgid);
+    for (let pass = 0; pass < 5; pass++) {
+      const members = await sessionMemberPids([groupId], session.ttyPath ? [session.ttyPath] : []);
+      if (!members) break;
+      let discovered = false;
+      for (const member of members) {
+        if (member.pid === groupId) continue;
+        if (!memberPids.has(member.pid)) {
+          memberPids.add(member.pid);
+          freezePid(member.pid);
+          discovered = true;
+        }
+        if (member.pgid > 1 && member.pgid !== groupId && !session.descendantPgids.has(member.pgid)) {
+          session.descendantPgids.add(member.pgid);
+          freezeGroup(member.pgid);
+          discovered = true;
+        }
+      }
+      if (!discovered) break;
     }
     const descendants: DescendantSnapshot = { pids: [...memberPids], pgids: [...session.descendantPgids] };
     const cleared = () => session.exitCode !== null && !groupAlive(groupId)
       && descendants.pgids.every((pgid) => !groupAlive(pgid))
       && descendants.pids.every((pid) => !processAlive(pid));
-    if (cleared()) return { ok: true };
+    if (cleared()) { thaw(); return { ok: true }; }
     session.stoppedByUser = true;
     this.signalTree(session, "SIGTERM", descendants);
+    thaw();
     if (await this.waitForGroupExit(session, timeouts?.termMs ?? 3000, descendants)) return { ok: true };
     this.signalTree(session, "SIGKILL", descendants);
     if (await this.waitForGroupExit(session, timeouts?.killMs ?? 2000, descendants)) return { ok: true };
@@ -530,11 +519,12 @@ export class TerminalSessionManager {
 
   /**
    * server 退出前的清场:对每个还活着的会话**整组 + 后代 pgid** SIGTERM+SIGKILL 连发。
-   * 必须同步('exit' 钩子里没有 await),但同步 ps/lsof 是可以的 —— 各一次读全表/批量
-   * 枚举全部会话的 tty 持有者,给每个会话就地补实时快照,与存续期累积合并。不能只读
+   * 必须同步('exit' 钩子里没有 await),但同步 ps/procfs 是可以的 —— 各一次读全表/
+   * 批量枚举全部会话的成员,给每个会话就地补实时快照,与存续期累积合并。不能只读
    * 累积值:那会漏掉「起了作业但还没被任何一次扫描记下」的独立组(第 2、3 轮实锤)。
-   * tty 持有者兜底封的是第 4 轮竞态:内层 shell 刚退、wrapper 正在清杀,这一轮组信号把
-   * wrapper 打断的话,disown 的独立组既不在 ppid 树也不在累积里,只有 lsof 清单上有它。
+   * 会话成员兜底封两类:第 4 轮竞态(内层 shell 刚退、wrapper 正在清杀,这一轮组信号
+   * 把 wrapper 打断的话,disown 的独立组既不在 ppid 树也不在累积里)和第 6 轮的
+   * stdio 全重定向 nohup 服务(不持 fd,只有 ctty/sid 能点到名)。
    * 命令会话跑的是 dev server/watch 这类可随时重启的进程,强杀可接受;不杀的代价是它们
    * 被 PID 1 收养成孤儿,ash 重启后 UI/API 失忆显示「未启动」、旧进程却还占着端口。
    */
@@ -543,7 +533,8 @@ export class TerminalSessionManager {
     clearInterval(this.descendantScanner);
     if (this.scanTimer) { clearTimeout(this.scanTimer); this.scanTimer = null; }
     const table = readProcessTableSync();
-    const holders = ttyHolderPidsSync(
+    const members = sessionMemberPidsSync(
+      [...this.sessions.values()].map((s) => s.process.pid),
       [...this.sessions.values()].map((s) => s.ttyPath).filter((p): p is string => p !== null),
     ) ?? [];
     for (const session of [...this.sessions.values()]) {
@@ -559,13 +550,13 @@ export class TerminalSessionManager {
       this.signalTree(session, "SIGKILL", descendants);
       this.sessions.delete(session.id);
     }
-    // tty 持有者(全会话并集)最后补刀:比 ppid 树多出来的就是已 disown 的离树余党。
-    for (const pid of holders) {
-      const pgid = table?.pgidOf.get(pid);
+    // 会话成员(全会话并集)最后补刀:比 ppid 树多出来的就是已 disown 离树/已重定向
+    // 脱 fd 的余党。
+    for (const member of members) {
       for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-        try { process.kill(pid, signal); } catch { /* already gone */ }
-        if (pgid !== undefined && pgid > 1) {
-          try { process.kill(-pgid, signal); } catch { /* already gone */ }
+        try { process.kill(member.pid, signal); } catch { /* already gone */ }
+        if (member.pgid > 1) {
+          try { process.kill(-member.pgid, signal); } catch { /* already gone */ }
         }
       }
     }
@@ -679,8 +670,3 @@ export const terminalSessions = new TerminalSessionManager();
 // 再点启动只会得到端口冲突(第 3 轮审查实锤)。kill -9 / 崩溃 / 断电没有钩子能接,
 // 属已知边界。
 process.once("exit", () => terminalSessions.shutdown());
-
-export function resolveTerminalDirectory(repoPath: string | null | undefined): string | null {
-  const resolved = expandHome(repoPath);
-  try { return resolved && statSync(resolved).isDirectory() ? resolved : null; } catch { return null; }
-}
