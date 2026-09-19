@@ -90,6 +90,9 @@ export function useTerminalDock({
   const { tabs, activeId } = view;
   const paneRef = useRef(view);
   paneRef.current = view;
+  // 「此刻在哪个项目」。异步回调里不能读闭包里的 projectId —— 那一份和调用它的那次点击一样旧。
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
   const nextOrdinal = useRef(1);
   // 用户亲手收起过的会话:引导时跳过它们。命令日志的 ✕ 是「收起,服务照跑」——收完下一次
   // 引导又把它挂回来,那个 ✕ 就等于没按。要再看,从常用命令弹层点「日志」(openSession)。
@@ -297,6 +300,15 @@ export function useTerminalDock({
   }, [notify, projectId]);
 
   const openSession = useCallback((session: TerminalSessionInfo) => {
+    // 别家的会话进不来。常用命令点「执行」→ 请求还没回来人已经切走,那条 .then 捕获的仍是切走
+    // 前的这只回调,照样会调进来(第 2 轮逻辑审查实锤)。放行的话:setOpen(true) 展开的是
+    // **当前**项目的抽屉,而 tab 写进的是原项目的 pane —— 当前项目看见「抽屉开着却一个 shell
+    // 都没有」,引导 effect 就在这个用户根本没碰过终端的项目上凭空起一个 shell。
+    // 比的是 ref 而不是闭包里的 projectId:闭包和它的调用方一样旧,两边一样旧就比不出来。
+    if (session.projectId !== projectIdRef.current) {
+      notify(`${session.name} 的日志在原来的项目里，切回去就能看`);
+      return;
+    }
     const tabId = `attach:${session.id}`;
     dismissed.current.delete(session.id); // 显式要看的,收起过也得回来
     setOpen(true);

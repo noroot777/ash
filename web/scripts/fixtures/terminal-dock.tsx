@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ProjectView } from "@ash/shared";
 import type { TerminalSessionInfo } from "../../src/lib/api.ts";
@@ -106,6 +106,10 @@ function Fixture() {
   const project = projects[index];
   const notify = useCallback((message: string) => setNotices((all) => [...all, message]), []);
   const terminal = useTerminalDock({ project, enabled: true, notify });
+  // 常用命令点「执行」那一刻,act() 的 .then 捕获的是**当时那一只** onOpenCommandLog —— 请求
+  // 回来时照样调它,哪怕人已经切走了。下面两颗按钮把这段时序拆开重演:先捕获,再切项目,再让
+  // 结果落回来。(CommandsLauncher 本身在 command-placeholders 那个 fixture 里。)
+  const late = useRef<{ open: (session: TerminalSessionInfo) => void; session: TerminalSessionInfo } | null>(null);
   // 每一次渲染都记下「这一帧把谁的 tab 交给了哪个项目」。切项目时旧 tab 哪怕只漏过去一帧,
   // 新项目的抽屉就会照着它去建 shell —— 用例查的是这条序列,不靠抓帧的运气。
   const renders = ((window as unknown as { __renders?: unknown[] }).__renders ??= []) as {
@@ -117,6 +121,11 @@ function Fixture() {
       <div style={{ flex: 1, padding: 16 }}>
         {/* 真应用里这一下是侧栏的项目切换(WorkspaceShell 的 currentProject 换人)。 */}
         <button type="button" onClick={() => setIndex((value) => (value + 1) % projects.length)}>切项目</button>
+        <button
+          type="button"
+          onClick={() => { late.current = { open: terminal.openSession, session: sessions.find((item) => item.id === "s-dev")! }; }}
+        >发起命令</button>
+        <button type="button" onClick={() => late.current?.open(late.current.session)}>命令结果晚返回</button>
       </div>
       {terminal.open && <ProjectTerminal key={project.id} project={project} dock={terminal} notify={notify} />}
       <StatusBar currentProject={project} taskMode={false} canUseTerminal connected terminal={terminal} />

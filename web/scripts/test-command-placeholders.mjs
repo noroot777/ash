@@ -1,7 +1,9 @@
 // 常用命令的两件新能力,各自钉住:
 //   ① 命令正文是 Shell 编辑器(多行):默认一行高、跟着内容长、到上限就在框里滚、
 //      拖底边能定高且记得住、双击恢复自适应;
-//   ② 命令里带 `{{占位符}}` 时,点执行先弹框收值,取值随请求发出去;没占位符的照旧直接跑。
+//   ② 命令里带 `{{占位符}}` 时,点执行先弹框收值,取值随请求发出去;没占位符的照旧直接跑;
+//   ③ 这颗 ▶ 只说当前项目的事:别的项目在跑不点亮它,连**切走后才落回来的旧会话事实**也不算
+//      (第 2 轮逻辑审查:晚返回的跨项目结果会赖到新项目头上)。
 //
 // 跑法：npm -w web run test:command-placeholders
 import assert from "node:assert/strict";
@@ -141,6 +143,24 @@ try {
   await dialog.waitFor();
   assert.equal(await dialog.locator("input").first().inputValue(), "release/1.2", "应当预填上次用过的取值");
   await page.keyboard.press("Escape");
+
+  // ⑧ 切项目那一刻,上一个项目的会话事实可能还在飞(启停成功后的那次 refresh 尤其容易赶上)。
+  //   它晚一步落回来,不能算到新项目头上 —— 否则「别的项目在跑」照样点亮了这颗 ▶,正是用户
+  //   点名要去掉的那个误导。
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => { window.__slowFact = true; });
+  if (await pop.count()) await page.keyboard.press("Escape"); // 收值框关了,弹层还开着 —— 先合上
+  await statusTrigger.click();           // 开弹层 = 对第一个项目发一次查询(这次慢 400ms)
+  await pop.waitFor();
+  await page.keyboard.press("Escape");   // 关掉弹层,但那次查询还在路上
+  await page.getByRole("button", { name: "切项目" }).click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="config"]')?.textContent === '{"service":null,"commands":[]}');
+  await page.waitForTimeout(800);        // 旧事实这会儿早落回来了
+  assert.equal(
+    await page.locator(".cmd-launcher.is-live").count(),
+    0,
+    "上一个项目晚返回的会话不该点亮新项目的 ▶",
+  );
 
   assert.deepEqual(errors, [], "页面不应抛异常");
   console.log("command placeholders test passed");

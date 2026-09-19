@@ -35,6 +35,10 @@ import { COMMANDS_SHORTCUT_LABEL } from "./goChord.ts";
 
 const POLL_MS = 15_000;
 
+/** 会话事实自带「这是哪个项目的」,读的那一侧才认得出晚到的旧事实(见 refresh)。 */
+type SessionFact = { projectId: string | null; sessions: TerminalSessionInfo[] };
+const NO_FACT: SessionFact = { projectId: null, sessions: [] };
+
 /** 一次启停打在哪条命令上(弹层头部的 service 和行列表共用同一套动作)。 */
 type CommandTarget = { projectId: string; commandId: string; name: string };
 
@@ -114,7 +118,7 @@ export function CommandsLauncher({
   onManageCommands: () => void;
   notify: (message: string) => void;
 }) {
-  const [sessions, setSessions] = useState<TerminalSessionInfo[]>([]);
+  const [fact, setFact] = useState<SessionFact>(NO_FACT);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   /** 带占位符的命令:点了执行但还没填完值的那一次。 */
@@ -131,11 +135,19 @@ export function CommandsLauncher({
 
   // 只问当前项目,拿回来再按项目和「是不是常用命令」筛一道:交互 shell(commandId 为 null)
   // 不是常用命令,别让它点亮这颗 ▶;projectId 那道是口径的兜底 —— 这颗按钮只说本项目的事。
+  //
+  // 事实上还要防**晚一步落回来的旧事实**:切项目那一刻上一次 list 可能还在飞(启停成功的
+  // .then 里也会再 refresh 一次,它捕获的是切走前那只),落回来就会把上一个项目在跑的服务
+  // 记到当前项目头上、点亮这颗按钮。所以结果带着来源项目一起存,读的那一侧只认当前项目的。
   const projectId = currentProject?.id ?? null;
+  const sessions = fact.projectId === projectId ? fact.sessions : NO_FACT.sessions;
   const refresh = useCallback(() => {
-    if (!canUseTerminal || !projectId) { setSessions([]); return; }
+    if (!canUseTerminal || !projectId) { setFact(NO_FACT); return; }
     api.listTerminalSessions(projectId)
-      .then((result) => setSessions(result.sessions.filter((session) => session.commandId !== null && session.projectId === projectId)))
+      .then((result) => setFact({
+        projectId,
+        sessions: result.sessions.filter((session) => session.commandId !== null && session.projectId === projectId),
+      }))
       .catch(() => undefined); // 轮询失败不打扰人,下一轮再试
   }, [canUseTerminal, projectId]);
 

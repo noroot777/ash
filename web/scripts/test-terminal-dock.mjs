@@ -5,7 +5,9 @@
 //   ④ 「终端」后面写着快捷键 G Z;
 //   ⑤ shell 的 ✕ 结束会话(DELETE),命令日志的 ✕ 只是收起;
 //   ⑥ 切项目:上一个项目的 tab 立刻消失,新项目最多为自己建**一个** shell(第 1 轮逻辑审查
-//      实锤过:旧 tab 被当成「新项目要建 shell」,切一次建了两个)。
+//      实锤过:旧 tab 被当成「新项目要建 shell」,切一次建了两个);
+//   ⑦ 切走之后才返回的「打开这条命令日志」不算数 —— 它属于上一个项目(第 2 轮逻辑审查实锤过:
+//      当前项目的抽屉被它展开,并在当前项目上凭空建了一个 shell)。
 //
 // 跑法：npm -w web run test:terminal-dock
 import assert from "node:assert/strict";
@@ -140,6 +142,33 @@ try {
   assert.deepEqual(await calls(), beforeBack, `切回已有活 shell 的项目不该再建会话，实际 ${JSON.stringify(await calls())}`);
   assert.equal(await tabs.count(), 2, "恢复的是 server 上那两条现场，不多不少");
   assert.match(await page.locator(".status-bar__tabs").innerText(), /网页前端/, "还在跑的命令日志跟着现场回来");
+
+  // ⑦ 在 A 点了「执行」,请求还没回来就切到了 B:那条 .then 捕获的仍是 A 的 openSession,照样
+  //   会调进来。放它进来的话,展开的是**B** 的抽屉,而 tab 写进的是 A 的现场 —— B 看见「抽屉
+  //   开着却没有 shell」,就在这个用户根本没碰过终端的项目上凭空起一个(第 2 轮逻辑审查)。
+  //   先把 B 的现场清空,这样「有没有平白建一个」才看得见。
+  await page.getByRole("button", { name: "切项目" }).click();
+  await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "第二个项目");
+  await tabs.first().waitFor();
+  await tabs.getByRole("button", { name: /^关闭 第二个项目/ }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".status-bar__tab").length === 0);
+  await page.getByRole("button", { name: "切项目" }).click();
+  await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "测试项目");
+  await page.waitForFunction(() => document.querySelectorAll(".status-bar__tab").length === 2);
+  await page.getByRole("button", { name: "发起命令" }).click(); // 捕获此刻(项目 A)的那只回调
+  await page.getByRole("button", { name: "切项目" }).click();
+  await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "第二个项目");
+  const beforeLate = await calls();
+  await page.getByRole("button", { name: "命令结果晚返回" }).click();
+  await page.waitForTimeout(600); // 抽屉要是被它展开了,引导 effect 这段时间足够建出一个 shell
+  assert.deepEqual(await calls(), beforeLate, `别的项目晚返回的命令结果不该在当前项目建会话，实际 ${JSON.stringify(await calls())}`);
+  assert.equal(await page.locator(".project-terminal").count(), 0, "没人碰过这个项目的终端，抽屉不该自己展开");
+  assert.equal(await tabs.count(), 0, "上一个项目的命令日志不该挂到当前项目上");
+  const notices = JSON.parse(await page.getByTestId("notices").textContent());
+  assert.ok(
+    notices.some((text) => text.includes("网页前端")),
+    `日志没在这儿打开要说一声，实际 ${JSON.stringify(notices)}`,
+  );
 
   assert.deepEqual(errors, [], "页面不应抛异常");
   console.log("terminal dock test passed");

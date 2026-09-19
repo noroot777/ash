@@ -12,10 +12,10 @@ import { CommandsLauncher } from "../../src/workspace/CommandsLauncher.tsx";
 const reply = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-const project = (commandsConfig: ProjectView["commandsConfig"]): ProjectView => ({
-  id: "p-one",
-  name: "第一个项目",
-  repoPath: "/workspace/p-one",
+const project = (commandsConfig: ProjectView["commandsConfig"], id = "p-one", name = "第一个项目"): ProjectView => ({
+  id,
+  name,
+  repoPath: `/workspace/${id}`,
   workflowId: null,
   useWorktreeDefault: false,
   previewCommand: null,
@@ -30,17 +30,27 @@ const project = (commandsConfig: ProjectView["commandsConfig"]): ProjectView => 
 /** 每次启停调用都记下来,用例断言请求体里带的占位符取值。 */
 const calls: { path: string; body: unknown }[] = [];
 
+/** 第一个项目自己在跑的一条常用命令:只在「晚返回」那一幕出现(见下面的 __slowFact)。 */
+const lateSession = { id: "s-late", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "构建", commandId: "plain", startedAt: 3, exitCode: null, stoppedByUser: false, groupAlive: true };
+
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const { pathname } = new URL(href, location.origin);
   // 会话事实:这个项目开着一个交互 shell(不是常用命令),另一个项目的 dev server 在跑。
   // 两者都不该点亮侧栏顶行那颗 ▶ —— 它只说当前项目的常用命令。
-  if (/^\/api\/projects\/[^/]+\/terminal\/sessions$/.test(pathname)) {
-    return reply({ sessions: [
+  const listing = pathname.match(/^\/api\/projects\/([^/]+)\/terminal\/sessions$/);
+  if (listing) {
+    // __slowFact:让**第一个项目**的这次查询慢 400ms 回来,并且带上它自己在跑的一条命令 ——
+    // 用例借此重演「切走之后旧事实才落回来」。其余时候一如既往,立刻回同一份。
+    const slow = (window as unknown as { __slowFact?: boolean }).__slowFact === true && listing[1] === "p-one";
+    const sessions = [
       { id: "s-shell", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "第一个项目", commandId: null, startedAt: 1, exitCode: null, stoppedByUser: false, groupAlive: true },
       { id: "s-other", projectId: "p-two", cwd: "/workspace/p-two", shell: "/bin/zsh", name: "别家的 dev server", commandId: "dev", startedAt: 2, exitCode: null, stoppedByUser: false, groupAlive: true },
-    ] });
+      ...(slow ? [lateSession] : []),
+    ];
+    if (slow) await new Promise((done) => window.setTimeout(done, 400));
+    return reply({ sessions });
   }
   const command = pathname.match(/^\/api\/projects\/([^/]+)\/commands\/([^/]+)\/(start|stop|restart)$/);
   if (command) {
@@ -70,6 +80,8 @@ function Fixture() {
   return <>
     <main style={{ width: "min(900px, calc(100% - 32px))", margin: "24px auto 60px" }}>
       <ProjectCommandsSettings project={current} onUpdated={setCurrent} notify={notify} />
+      {/* 切到一个什么都没跑的项目:用来看「上一个项目的会话事实晚一步回来」会不会赖到它头上。 */}
+      <button type="button" onClick={() => setCurrent(project({ service: null, commands: [] }, "p-solo", "另一个项目"))}>切项目</button>
       <pre data-testid="notices">{JSON.stringify(notices)}</pre>
       <pre data-testid="config">{JSON.stringify(current.commandsConfig)}</pre>
     </main>
