@@ -51,9 +51,10 @@ function TerminalPane({
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const sessionIdRef = useRef<string | null>(tab.attachSessionId ?? null);
-  // shell tab 的会话要 create 完才有 id;attach tab 一开始就有。流 effect 等这个。
-  const [establishedId, setEstablishedId] = useState<string | null>(tab.attachSessionId ?? null);
+  // 已经有会话的 tab(attach 来的,或自己建完回填了 sessionId)一挂上就能收发;只有全新的
+  // shell tab 要等 create 完才有 id。流 effect 等这个。
+  const sessionIdRef = useRef<string | null>(tab.attachSessionId ?? tab.sessionId ?? null);
+  const [establishedId, setEstablishedId] = useState<string | null>(tab.attachSessionId ?? tab.sessionId ?? null);
   const tabRef = useRef(tab);
   tabRef.current = tab;
   // 每条 SSE 连接生命周期内,每种说明只写一次(重连 reset 后重置,replay 末尾补写)。
@@ -191,7 +192,10 @@ function TerminalPane({
       try { fit.fit(); terminal.focus(); } catch { /* component was removed */ }
     });
 
-    if (!tab.attachSessionId) {
+    // 只有「还没有任何会话」的 tab 才新建。光看 attachSessionId 不够 —— 前端自己建的 shell
+    // 把会话 id 回填在 sessionId 上,这种 tab 要是又走一遍创建(挂到别的项目、或基座 effect
+    // 因依赖变化重跑),就会平白多起一个 shell(第 1 轮逻辑审查:切项目时 create 了两次)。
+    if (!tab.attachSessionId && !tab.sessionId) {
       void api.createTerminalSession(project.id, { cols: terminal.cols, rows: terminal.rows })
         .then((session) => {
           if (!alive) {

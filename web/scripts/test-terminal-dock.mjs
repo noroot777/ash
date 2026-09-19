@@ -3,7 +3,9 @@
 //   ② 只是看一眼 ≠ 开一个 —— 没展开过抽屉就绝不新建 shell 会话;
 //   ③ 点一个 tab 就展开到它,tab 条不在抽屉里再来一份;
 //   ④ 「终端」后面写着快捷键 G Z;
-//   ⑤ shell 的 ✕ 结束会话(DELETE),命令日志的 ✕ 只是收起。
+//   ⑤ shell 的 ✕ 结束会话(DELETE),命令日志的 ✕ 只是收起;
+//   ⑥ 切项目:上一个项目的 tab 立刻消失,新项目最多为自己建**一个** shell(第 1 轮逻辑审查
+//      实锤过:旧 tab 被当成「新项目要建 shell」,切一次建了两个)。
 //
 // 跑法：npm -w web run test:terminal-dock
 import assert from "node:assert/strict";
@@ -87,13 +89,57 @@ try {
   // ＋ 新建:状态栏上就能开一个新终端,并且展开抽屉。
   await page.getByRole("button", { name: "新建 CLI" }).click();
   await page.locator(".project-terminal").waitFor();
-  await page.waitForFunction(() => JSON.parse(document.querySelector("#calls").textContent).includes("create"));
+  await page.waitForFunction(() => JSON.parse(document.querySelector("#calls").textContent).includes("create:p-one"));
   assert.equal(await tabs.count(), 1, "新建后状态栏上有这一个终端");
 
   // 「终端」按钮照旧是开合抽屉的那颗。
   await terminalButton.click();
   assert.equal(await page.locator(".project-terminal").count(), 0, "再点「终端」收起抽屉");
   assert.equal(await tabs.count(), 1, "收起只是不看了，终端还开着");
+
+  // ⑥ 抽屉开着切项目:旧项目的 tab 一帧都不许交给新项目 —— 它会被当成「这个项目要建 shell」,
+  //   平白多起一个(而且是在别人的项目上)。新项目自己需要的那一个照常建。
+  const beforeReopen = await calls();
+  await terminalButton.click();
+  await page.locator(".project-terminal").waitFor();
+  await page.waitForTimeout(500);
+  // 收起再展开只是把现场摆回来:这个 tab 已经有会话了(自己建的,id 记在 sessionId 上),
+  // 抽屉重挂载时不许再建一个。
+  assert.deepEqual(await calls(), beforeReopen, `重新展开不该再建 shell，实际 ${JSON.stringify(await calls())}`);
+  const before = await calls();
+  await page.getByRole("button", { name: "切项目" }).click();
+  await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "第二个项目");
+  await page.waitForFunction(() => JSON.parse(document.querySelector("#calls").textContent).some((entry) => entry === "create:p-two"));
+  await page.waitForTimeout(400); // 给「多建一个」留出暴露的时间,不然断言太早
+  const afterSwitch = await calls();
+  assert.deepEqual(
+    afterSwitch.filter((entry) => entry === "create:p-two"),
+    ["create:p-two"],
+    `切到第二个项目最多建一个 shell，实际 ${JSON.stringify(afterSwitch)}`,
+  );
+  assert.deepEqual(
+    afterSwitch.filter((entry) => entry.startsWith("create:p-one")),
+    before.filter((entry) => entry.startsWith("create:p-one")),
+    "切项目不该回头在上一个项目上再建 shell",
+  );
+  assert.equal(await tabs.count(), 1, "第二个项目只有它自己那一个终端");
+  assert.doesNotMatch(await page.locator(".status-bar__tabs").innerText(), /网页前端/, "上一个项目的现场不该跟过来");
+
+  // 上面几条查的是落定之后;这条查**过程**——渲染给第二个项目的每一帧里都不许出现第一个
+  // 项目的 tab。漏过去一帧就够抽屉照着它在新项目上建一个 shell(第 1 轮逻辑审查的现场)。
+  const renders = await page.evaluate(() => window.__renders ?? []);
+  const leaked = renders.filter((frame) => frame.project === "p-two" && frame.tabs.some((cwd) => cwd.includes("p-one")));
+  assert.deepEqual(leaked, [], "第二个项目的渲染里混进了第一个项目的终端");
+
+  // 切回去:第一个项目的会话还活着,按 server 的事实原样恢复(刚才新建的那个 shell +
+  // 还在跑的命令日志),一个新会话都不用建。
+  const beforeBack = await calls();
+  await page.getByRole("button", { name: "切项目" }).click();
+  await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "测试项目");
+  await page.waitForTimeout(600); // 多建一个的话,这段时间足够它冒出来
+  assert.deepEqual(await calls(), beforeBack, `切回已有活 shell 的项目不该再建会话，实际 ${JSON.stringify(await calls())}`);
+  assert.equal(await tabs.count(), 2, "恢复的是 server 上那两条现场，不多不少");
+  assert.match(await page.locator(".status-bar__tabs").innerText(), /网页前端/, "还在跑的命令日志跟着现场回来");
 
   assert.deepEqual(errors, [], "页面不应抛异常");
   console.log("terminal dock test passed");

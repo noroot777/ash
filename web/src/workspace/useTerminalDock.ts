@@ -27,7 +27,16 @@ export const MAX_TERMINAL_TABS = 8;
 const POLL_OPEN_MS = 5_000;
 const POLL_PEEK_MS = 15_000;
 
-type Pane = { tabs: ProjectTerminalTab[]; activeId: string };
+// pane 自带「这是哪个项目的现场」:切项目时清空是 passive effect,而渲染紧跟 projectId 变化
+// 那一帧就已经发生了。不带这个标记的话,那一帧会把 A 的 tab 交给 B 的抽屉,B 看见一个
+// 「没有 attachSessionId 的 shell tab」就当成要新建,平白在 B 上起一个 shell(第 1 轮逻辑
+// 审查实锤:切到 B 出现两次 create)。所以隔离做在**读的那一侧**,不等 effect。
+type Pane = { projectId: string | null; tabs: ProjectTerminalTab[]; activeId: string };
+
+const emptyPane = (projectId: string | null): Pane => ({ projectId, tabs: [], activeId: "" });
+/** updater 里拿到的 prev 可能还是上一个项目的:先归一到目标项目再算。 */
+const paneOf = (prev: Pane, projectId: string | null): Pane =>
+  prev.projectId === projectId ? prev : emptyPane(projectId);
 type TabMeta = Partial<Pick<ProjectTerminalTab, "cwd" | "status" | "sessionId">>;
 
 export type TerminalDock = {
@@ -74,21 +83,24 @@ export function useTerminalDock({
   // tabs 和 activeId 是同一份状态:容量决策、victim 顶替和激活必须在同一个函数式 updater 里
   // 原子完成。拆成两个 state 时,「先读快照定分支、再对可能已变的 cur 插入」会在引导与聚焦
   // 并发时插出第 9 个 tab(第 3 轮审查实锤)。
-  const [pane, setPane] = useState<Pane>({ tabs: [], activeId: "" });
-  const { tabs, activeId } = pane;
-  const paneRef = useRef(pane);
-  paneRef.current = pane;
-  const nextOrdinal = useRef(1);
+  const [pane, setPane] = useState<Pane>(emptyPane(null));
   const projectId = project?.id ?? null;
+  // 当前项目的现场;pane 还停在上一个项目时这里就是空的(见 Pane 上面那段)。
+  const view = paneOf(pane, projectId);
+  const { tabs, activeId } = view;
+  const paneRef = useRef(view);
+  paneRef.current = view;
+  const nextOrdinal = useRef(1);
   // 用户亲手收起过的会话:引导时跳过它们。命令日志的 ✕ 是「收起,服务照跑」——收完下一次
   // 引导又把它挂回来,那个 ✕ 就等于没按。要再看,从常用命令弹层点「日志」(openSession)。
   const dismissed = useRef(new Set<string>());
 
-  // 换项目 = 换一整套会话:先清空,再由下面的引导按新项目的事实重建。
+  // 换项目 = 换一整套会话:把上一套真正丢掉(读的那一侧已经隔离了,这里是把内存也收回),
+  // 再由下面的引导按新项目的事实重建。
   useEffect(() => {
     nextOrdinal.current = 1;
     dismissed.current = new Set();
-    setPane((prev) => prev.tabs.length ? { tabs: [], activeId: "" } : prev);
+    setPane((prev) => prev.projectId === projectId ? prev : emptyPane(projectId));
   }, [projectId]);
 
   // 引导:按 server 会话事实建 tab。
@@ -108,9 +120,13 @@ export function useTerminalDock({
     const freshTabId = createClientId();
     const seedFresh = () => {
       nextOrdinal.current = 2;
-      setPane((prev) => prev.tabs.length ? prev : {
-        tabs: [createTerminalTab(freshTabId, 1, name, repoPath)],
-        activeId: freshTabId,
+      setPane((prev) => {
+        const mine = paneOf(prev, id);
+        return mine.tabs.length ? mine : {
+          projectId: id,
+          tabs: [createTerminalTab(freshTabId, 1, name, repoPath)],
+          activeId: freshTabId,
+        };
       });
     };
     api.listTerminalSessions(id).then(({ sessions }) => {
@@ -134,7 +150,8 @@ export function useTerminalDock({
         }
       }
       nextOrdinal.current = (shellSessions.length || (open ? 1 : 0)) + 1;
-      setPane((prev) => {
+      setPane((previous) => {
+        const prev = paneOf(previous, id);
         // 先收幽灵:会话在 server 已不存在的命令日志 tab(重启后被同命令新会话顶替清掉)。
         // server 缓冲没了、内容只剩 xterm 里那份残影,留着只会在每次「启动→看日志」后攒一排
         // 「已退出」的重名 tab。只收 kind=command:交互 shell 的死活由自己的 ✕ 管。
@@ -163,9 +180,10 @@ export function useTerminalDock({
         const keptShells = [...shellTabs, ...fresh].slice(0, room);
         const keptCommands = commandTabs.slice(0, Math.max(0, room - keptShells.length));
         const nextTabs = [...keptCommands, ...base, ...keptShells];
-        if (nextTabs.length === 0) return prev.tabs.length ? { tabs: [], activeId: "" } : prev;
+        if (nextTabs.length === 0) return prev.tabs.length ? emptyPane(id) : prev;
         const activeStays = prev.activeId && nextTabs.some((tab) => tab.id === prev.activeId);
         return {
+          projectId: id,
           tabs: nextTabs,
           activeId: activeStays ? prev.activeId : (nextTabs.find((tab) => tab.kind === "shell") ?? nextTabs[0]).id,
         };
@@ -194,7 +212,7 @@ export function useTerminalDock({
       const timeout = window.setTimeout(() => controller.abort(), 4000);
       api.listTerminalSessions(projectId, controller.signal).then(({ sessions }) => {
         if (!alive) return;
-        setPane((prev) => ({ ...prev, tabs: prev.tabs.map((tab) => {
+        setPane((previous) => { const prev = paneOf(previous, projectId); return { ...prev, tabs: prev.tabs.map((tab) => {
           if (!tab.attachSessionId || tab.status === "ended") return tab; // ended 是终态
           const info = sessions.find((item) => item.id === tab.attachSessionId);
           // 会话在服务端已不存在 = 被同命令新会话顶替或闲置回收,对这个 tab 就是结束
@@ -203,7 +221,7 @@ export function useTerminalDock({
           const stoppedByUser = info?.stoppedByUser ?? tab.stoppedByUser;
           if (status === tab.status && exitCode === tab.exitCode && stoppedByUser === tab.stoppedByUser) return tab;
           return { ...tab, status, exitCode, stoppedByUser };
-        }) }));
+        }) }; });
       }).catch(() => undefined) // 拿不到事实就不动,下一轮再试
         .finally(() => {
           window.clearTimeout(timeout);
@@ -220,14 +238,22 @@ export function useTerminalDock({
     };
   }, [pollKey, projectId, open]);
 
+  // 下面这些动作都作用在**当前项目**的现场上:updater 先经 paneOf 归一,pane 还停在上一个
+  // 项目时它们不会误改别人的 tab。
   const setMeta = useCallback((id: string, patch: TabMeta) => {
-    setPane((prev) => ({ ...prev, tabs: prev.tabs.map((tab) => tab.id === id ? { ...tab, ...patch } : tab) }));
-  }, []);
+    setPane((previous) => {
+      const prev = paneOf(previous, projectId);
+      return { ...prev, tabs: prev.tabs.map((tab) => tab.id === id ? { ...tab, ...patch } : tab) };
+    });
+  }, [projectId]);
 
   const select = useCallback((id: string) => {
-    setPane((prev) => prev.tabs.some((tab) => tab.id === id) ? { ...prev, activeId: id } : prev);
+    setPane((previous) => {
+      const prev = paneOf(previous, projectId);
+      return prev.tabs.some((tab) => tab.id === id) ? { ...prev, activeId: id } : prev;
+    });
     setOpen(true);
-  }, []);
+  }, [projectId]);
 
   const add = useCallback(() => {
     if (!project) return;
@@ -238,7 +264,10 @@ export function useTerminalDock({
     const ordinal = nextOrdinal.current++;
     const tab = createTerminalTab(createClientId(), ordinal, project.name, project.repoPath);
     // 原子兜底:即使渲染值过期,updater 里也绝不越过上限
-    setPane((prev) => prev.tabs.length >= MAX_TERMINAL_TABS ? prev : { tabs: [...prev.tabs, tab], activeId: tab.id });
+    setPane((previous) => {
+      const prev = paneOf(previous, project.id);
+      return prev.tabs.length >= MAX_TERMINAL_TABS ? prev : { ...prev, tabs: [...prev.tabs, tab], activeId: tab.id };
+    });
     setOpen(true);
   }, [notify, project]);
 
@@ -247,8 +276,9 @@ export function useTerminalDock({
     const closing = snapshot.tabs.find((tab) => tab.id === id);
     if (closing?.attachSessionId) dismissed.current.add(closing.attachSessionId);
     const drop = () => {
-      const next = withoutTerminalTab(paneRef.current.tabs, paneRef.current.activeId, id);
-      setPane({ tabs: next.tabs, activeId: next.activeId ?? "" });
+      const now = paneRef.current;
+      const next = withoutTerminalTab(now.tabs, now.activeId, id);
+      setPane({ projectId: now.projectId, tabs: next.tabs, activeId: next.activeId ?? "" });
       if (!next.activeId) setOpen(false);
     };
     // 交互 shell 的 ✕ = 结束会话(VSCode 的垃圾桶,持久终端只有这里会杀它);命令日志的
@@ -270,13 +300,14 @@ export function useTerminalDock({
     const tabId = `attach:${session.id}`;
     dismissed.current.delete(session.id); // 显式要看的,收起过也得回来
     setOpen(true);
-    setPane((prev) => {
+    setPane((previous) => {
+      const prev = paneOf(previous, session.projectId);
       if (prev.tabs.some((tab) => tab.id === tabId)) return { ...prev, activeId: tabId };
-      if (prev.tabs.length < MAX_TERMINAL_TABS) return { tabs: [createAttachTab(session), ...prev.tabs], activeId: tabId };
+      if (prev.tabs.length < MAX_TERMINAL_TABS) return { ...prev, tabs: [createAttachTab(session), ...prev.tabs], activeId: tabId };
       const victim = pickVictim(prev.tabs, prev.activeId);
       // 全让不出位才拒绝 —— 拒绝时 tabs 和 activeId 都不动,active 不能指向没插入的 tab。
       if (!victim) return prev;
-      return { tabs: [createAttachTab(session), ...prev.tabs.filter((tab) => tab.id !== victim.id)], activeId: tabId };
+      return { ...prev, tabs: [createAttachTab(session), ...prev.tabs.filter((tab) => tab.id !== victim.id)], activeId: tabId };
     });
     // 提示走渲染快照的预判:拒绝只发生在「满员且全是 shell/激活」的稳定态,快照准确。
     const snapshot = paneRef.current;
