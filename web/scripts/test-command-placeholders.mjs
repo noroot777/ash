@@ -98,6 +98,12 @@ try {
   const checkoutRow = pop.locator(".cmd-pop__row").filter({ hasText: "切分支" });
   assert.equal(await checkoutRow.locator("code").innerText(), "git checkout {{分支}} … 共 2 行");
 
+  // 别的项目在跑、本项目只开着交互 shell —— 这颗 ▶ 都不该点亮,也不该再有计数徽标
+  // (用户 2026-09-19:其他项目在跑的不要在别的项目展示,按钮灰着、数字也不要)。
+  assert.equal(await page.locator(".cmd-launcher.is-live").count(), 0, "别的项目在跑不该点亮这颗按钮");
+  assert.equal(await page.locator(".cmd-launcher__count").count(), 0, "运行中的计数徽标已经退役");
+  assert.doesNotMatch(await pop.innerText(), /其他项目|别家的 dev server/, "弹层里不该出现别的项目的现场");
+
   // 没跑过的命令不写「未启动」:默认态不是事件,旁边就摆着「执行」按钮(fixture 的
   // sessions 为空,弹层里每一条都是这个态,连头部 service 也是)。
   assert.equal(await pop.locator(".cmd-pop__row-state").count(), 0, "没跑过的命令不该显示状态文案");

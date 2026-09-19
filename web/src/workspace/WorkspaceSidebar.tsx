@@ -1,6 +1,7 @@
 import { AssistantIcon } from "../assistant/AssistantIcon.tsx";
 import { useState, type FocusEvent, type MouseEvent } from "react";
 import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
+import type { TerminalSessionInfo } from "../lib/api.ts";
 import type { OutboundBar } from "./OutboundStatusBar.tsx";
 import {
   ListChecks,
@@ -83,7 +84,7 @@ export function WorkspaceSidebar({
     canUseTerminal: boolean;
     /** 递增序号,变一次 = 快捷键 G C 按了一下。 */
     openSignal: number;
-    onOpenCommandLog: (sessionId: string) => void;
+    onOpenCommandLog: (session: TerminalSessionInfo) => void;
     onManageCommands: () => void;
   };
   notify: (message: string) => void;
@@ -133,7 +134,6 @@ export function WorkspaceSidebar({
           : currentProject && <ProjectAvatar project={currentProject} size="large" />}
         {/* 收起后常用命令也得有落点:不然侧栏一收,▶ 和快捷键 G C 就一起没了去处。 */}
         <CommandsLauncher
-          projects={projects}
           currentProject={currentProject}
           canUseTerminal={commands.canUseTerminal}
           collapsed
@@ -176,7 +176,6 @@ export function WorkspaceSidebar({
           )}
           {/* 顶行最右:常用命令的启动入口。项目名、分支、运行现场三件事凑在同一行里。 */}
           <CommandsLauncher
-            projects={projects}
             currentProject={currentProject}
             canUseTerminal={commands.canUseTerminal}
             openSignal={commands.openSignal}

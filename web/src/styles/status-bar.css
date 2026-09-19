@@ -59,6 +59,101 @@
 .status-bar__item:hover { background: #3d3f4b; }
 .status-bar__item.is-active { background: #454756; color: #ecedf2; }
 
+/* 快捷键提示:比正文淡一档、字号再小一点,提示是提示,别跟「终端」两个字抢。 */
+.status-bar__kbd {
+  border-radius: 3px;
+  background: #3d3f4b;
+  padding: 0 4px;
+  color: #9092a0;
+  font-family: inherit;
+  font-size: 9.5px;
+  letter-spacing: .04em;
+}
+.status-bar__item.is-active .status-bar__kbd { background: #54566a; color: #c3c5d1; }
+
+/* 开着的终端:抽屉收起时也摆在这儿,点一下展开到那一个(账本见 workspace/useTerminalDock.ts)。 */
+.status-bar__tabs {
+  display: flex;
+  min-width: 0;
+  /* 开多了也不许把整条栏吃掉:自己横向滚,右边的连接指示照旧在位。 */
+  max-width: min(58%, 620px);
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.status-bar__tabs::-webkit-scrollbar { display: none; }
+
+.status-bar__tab {
+  display: inline-flex;
+  height: 20px;
+  /* 压到这条线就不再缩,改成整条 tab 区横向滚 —— 八个终端各剩两个字谁也认不出是哪个。 */
+  min-width: 96px;
+  max-width: 170px;
+  align-items: center;
+  border-radius: 4px;
+  color: #a8aab8;
+}
+.status-bar__tab:hover { background: #3d3f4b; color: #ecedf2; }
+/* is-current = 抽屉再展开时落在它身上;is-active = 此刻就摊在眼前。 */
+.status-bar__tab.is-current { background: #3a3c48; color: #d8dae4; }
+.status-bar__tab.is-active { background: #4d5063; color: #ecedf2; }
+
+.status-bar__tab-open {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  padding: 0 2px 0 7px;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.status-bar__tab-open b {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-bar__tab-dot { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: #6c6e7b; }
+.status-bar__tab-dot.is-ready,
+.status-bar__tab-dot.is-detached { background: #4cc38a; }
+.status-bar__tab-dot.is-starting,
+.status-bar__tab-dot.is-reconnecting { background: #e0b356; }
+.status-bar__tab-dot.is-ended,
+.status-bar__tab-dot.is-error { background: #ef7a86; }
+
+.status-bar__tab-close,
+.status-bar__tab-add {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  place-items: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+}
+.status-bar__tab-close { margin-right: 3px; opacity: .45; }
+.status-bar__tab:hover .status-bar__tab-close,
+.status-bar__tab.is-active .status-bar__tab-close { opacity: 1; }
+.status-bar__tab-close:hover,
+.status-bar__tab-add:hover { background: #55586a; color: #ecedf2; }
+.status-bar__tab-add { width: 20px; height: 20px; flex-basis: 20px; margin-left: 2px; color: #8b8d9b; }
+
+.status-bar__item:focus-visible,
+.status-bar__tab-open:focus-visible,
+.status-bar__tab-close:focus-visible,
+.status-bar__tab-add:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 78%, white); outline-offset: -2px; }
+
 .status-bar__dot {
   width: 7px;
   height: 7px;

@@ -20,9 +20,10 @@ import { COMMANDS_SHORTCUT_LABEL } from "./goChord.ts";
 // 连同组件一起卸载**,所以 openSignal 要按「挂载时那一格」做基准比对,否则重新挂载
 // 那一瞬间会被历史信号误开一次。
 //
-// 任务模式(G T)下没有「当前项目」这个概念,所以「运行中 N」的数**永远是跨项目总和**
-// (吃 /terminal-commands 全局端点),单项目场景自然塌成一组;左侧上下文段跟随
-// currentProject —— 它在任务模式下的语义是「终端/git/新建任务落在哪」,跟着选中任务走
+// 这颗按钮**只说当前项目的事**(用户 2026-09-19 点名):别的项目有服务在跑,既不点亮它、
+// 也不在弹层里列出来 —— 那些现场在那个项目的状态栏和终端里,摆到这儿只会让人以为是自己
+// 这个项目在跑。所以会话事实吃的是项目级端点,跨项目总和连带那个计数徽标一并退役。
+// currentProject 在任务模式(G T)下的语义是「终端/git/新建任务落在哪」,跟着选中任务走
 // (WorkspaceShell 的既有定义),这里不另发明规则。
 //
 // 命令正文里可以带 `{{占位符}}`:点执行/重启时先弹 CommandArgsDialog 收值,再把**取值**
@@ -39,14 +40,11 @@ type CommandTarget = { projectId: string; commandId: string; name: string };
 
 type CommandRow = {
   projectId: string;
-  projectName: string;
   commandId: string;
   name: string;
   command: string;
   /** null = 没跑过也没退出记录(纯配置行)。 */
   session: TerminalSessionInfo | null;
-  /** 只有锚定项目的行有完整配置(能启动);其他项目只有运行中的会话行。 */
-  startable: boolean;
 };
 
 // 同一条命令可能挂着「一条活会话」或「一条刚退出的」——一处只说一件事,活的优先。
@@ -84,44 +82,19 @@ function sessionState(session: TerminalSessionInfo | null): { tone: string; text
   return { tone: "off", text: null };
 }
 
-function rowsOf(current: ProjectView | null, sessions: TerminalSessionInfo[], projects: ProjectView[]): CommandRow[] {
-  const nameOf = (projectId: string) => projects.find((p) => p.id === projectId)?.name ?? "未知项目";
-  const rows: CommandRow[] = [];
-  const seen = new Set<string>();
-  for (const command of current?.commandsConfig?.commands ?? []) {
-    seen.add(`${current!.id}:${command.id}`);
-    rows.push({
-      projectId: current!.id,
-      projectName: current!.name,
-      commandId: command.id,
-      name: command.name,
-      command: command.command,
-      session: bestSession(sessions, current!.id, command.id),
-      startable: true,
-    });
-  }
-  // 锚定项目的 service 会话由弹层头部的 ▶/⟳ 代表,不再挤进行列表。
-  if (current) seen.add(`${current.id}:${SERVICE_COMMAND_ID}`);
-  for (const session of sessions) {
-    // 其他项目只列**还活着**的:这一段的全部意义是「别的项目有服务在跑、给你一个停止按钮」,
-    // 已退出的会话在没有锚定项目上下文时既没法重启也没必要展示。
-    if (session.commandId === null || !session.groupAlive || seen.has(`${session.projectId}:${session.commandId}`)) continue;
-    seen.add(`${session.projectId}:${session.commandId}`);
-    rows.push({
-      projectId: session.projectId,
-      projectName: nameOf(session.projectId),
-      commandId: session.commandId,
-      name: session.name,
-      command: "",
-      session,
-      startable: false,
-    });
-  }
-  return rows;
+function rowsOf(current: ProjectView | null, sessions: TerminalSessionInfo[]): CommandRow[] {
+  if (!current) return [];
+  // service 会话由弹层头部的 ▶/⟳ 代表,不再挤进行列表。
+  return (current.commandsConfig?.commands ?? []).map((command) => ({
+    projectId: current.id,
+    commandId: command.id,
+    name: command.name,
+    command: command.command,
+    session: bestSession(sessions, current.id, command.id),
+  }));
 }
 
 export function CommandsLauncher({
-  projects,
   currentProject,
   canUseTerminal,
   collapsed = false,
@@ -130,15 +103,14 @@ export function CommandsLauncher({
   onManageCommands,
   notify,
 }: {
-  projects: ProjectView[];
   currentProject: ProjectView | null;
   canUseTerminal: boolean;
   /** 侧栏收起时这颗按钮塌成纯图标(和其它 workspace-side-icon 一列)。 */
   collapsed?: boolean;
   /** 递增序号,变一次 = 快捷键 G C 按了一下:开合常用命令弹层。0 = 还没按过。 */
   openSignal?: number;
-  /** 打开终端抽屉并聚焦这条命令会话的 tab(只对锚定项目的会话可用)。 */
-  onOpenCommandLog: (sessionId: string) => void;
+  /** 打开终端抽屉并聚焦这条命令会话的 tab。 */
+  onOpenCommandLog: (session: TerminalSessionInfo) => void;
   onManageCommands: () => void;
   notify: (message: string) => void;
 }) {
@@ -157,12 +129,15 @@ export function CommandsLauncher({
   const seenSignal = useRef(openSignal ?? 0);
   useDismissable({ enabled: open, containerRef: root, onClose: () => setOpen(false), restoreFocusRef: trigger });
 
+  // 只问当前项目,拿回来再按项目和「是不是常用命令」筛一道:交互 shell(commandId 为 null)
+  // 不是常用命令,别让它点亮这颗 ▶;projectId 那道是口径的兜底 —— 这颗按钮只说本项目的事。
+  const projectId = currentProject?.id ?? null;
   const refresh = useCallback(() => {
-    if (!canUseTerminal) return;
-    api.listCommandSessions()
-      .then((result) => setSessions(result.sessions))
+    if (!canUseTerminal || !projectId) { setSessions([]); return; }
+    api.listTerminalSessions(projectId)
+      .then((result) => setSessions(result.sessions.filter((session) => session.commandId !== null && session.projectId === projectId)))
       .catch(() => undefined); // 轮询失败不打扰人,下一轮再试
-  }, [canUseTerminal]);
+  }, [canUseTerminal, projectId]);
 
   useEffect(() => {
     if (!canUseTerminal) return;
@@ -179,12 +154,10 @@ export function CommandsLauncher({
     setOpen((value) => !value);
   }, [openSignal]);
 
-  // 「运行中 N」和每行的「活/死」都看 groupAlive,不看 exitCode:daemonize 形状
+  // 按钮亮不亮和每行的「活/死」都看 groupAlive,不看 exitCode:daemonize 形状
   // (启动脚本把服务放后台后自己退出)下组长退了、服务还在跑,那也是在跑。
-  const live = sessions.filter((session) => session.groupAlive);
-  const rows = rowsOf(currentProject, sessions, projects);
-  const anchorRows = rows.filter((row) => row.startable);
-  const otherRows = rows.filter((row) => !row.startable);
+  const live = sessions.some((session) => session.groupAlive);
+  const rows = rowsOf(currentProject, sessions);
 
   // 项目级「启动/重启」(service):配置在 commandsConfig.service,会话身份是保留
   // commandId "service"。置灰只由**配置**决定(没配置就灰 —— 这正是用户要的「没设置就
@@ -203,7 +176,7 @@ export function CommandsLauncher({
   const rowState = (row: CommandRow) => sessionState(row.session);
   // 红点口径 = 弹层里实际显示的现场:锚定项目的 service 或某条命令处于异常退出态才亮。
   // 跟弹层同一个 sessionState 算出来,天然不会出现「点亮了却找不到哪行红」。
-  const crashed = anchorRows.some((row) => rowState(row).tone === "err")
+  const crashed = rows.some((row) => rowState(row).tone === "err")
     || (serviceState?.tone === "err");
 
   const act = (target: CommandTarget, action: "start" | "stop" | "restart", values: Record<string, string> = {}) => {
@@ -219,10 +192,10 @@ export function CommandsLauncher({
         refresh();
         // 启动/重启成功就把日志直接摆到眼前:关弹层、开终端抽屉并聚焦这条会话的 tab
         // (VSCode 跑任务的习惯 —— 点了「执行」却要自己再去找日志,等于没执行完这个动作)。
-        // 只对锚定项目做:别的项目的会话在这个抽屉里没有落点。stop 没有新现场,留在弹层。
-        if (action !== "stop" && result.session && result.session.projectId === currentProject?.id) {
+        // stop 没有新现场,留在弹层。
+        if (action !== "stop" && result.session) {
           setOpen(false);
-          onOpenCommandLog(result.session.id);
+          onOpenCommandLog(result.session);
         }
       })
       .catch((error) => notify(error instanceof Error ? error.message : `${target.name} 操作失败`))
@@ -241,14 +214,15 @@ export function CommandsLauncher({
 
   if (!canUseTerminal) return null;
 
-  const triggerLabel = `常用命令（${COMMANDS_SHORTCUT_LABEL}）${live.length ? `，运行中 ${live.length}` : ""}`;
+  // 计数徽标退役(用户 2026-09-19:「数字也没必要有」)—— 这个项目在不在跑,一个亮/灰就说完了。
+  const triggerLabel = `常用命令（${COMMANDS_SHORTCUT_LABEL}）${live ? "，运行中" : ""}`;
 
   return (
     <span className={`cmd-launcher-host${collapsed ? " is-collapsed" : ""}`} ref={root}>
       <button
         ref={trigger}
         type="button"
-        className={`cmd-launcher${live.length ? " is-live" : ""}${crashed ? " has-crash" : ""}`}
+        className={`cmd-launcher${live ? " is-live" : ""}${crashed ? " has-crash" : ""}`}
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-keyshortcuts="g c"
@@ -256,7 +230,6 @@ export function CommandsLauncher({
         onClick={() => setOpen((value) => !value)}
       >
         <Play size={13} weight="fill" aria-hidden="true" />
-        {live.length > 0 && <span className="cmd-launcher__count">{live.length}</span>}
         {crashed && <span className="cmd-launcher__crash" role="img" aria-label="有命令异常退出" />}
       </button>
       {open && (
@@ -276,7 +249,7 @@ export function CommandsLauncher({
                         type="button"
                         className="cmd-pop__svc-btn"
                         aria-label="查看启动日志"
-                        onClick={() => { setOpen(false); onOpenCommandLog(serviceLive.id); }}
+                        onClick={() => { setOpen(false); onOpenCommandLog(serviceLive); }}
                       ><Scroll size={14} /></button>
                     )}
                     {serviceLive ? (
@@ -308,15 +281,15 @@ export function CommandsLauncher({
             </header>
           )}
           <div className="cmd-pop__body">
-            {anchorRows.length === 0 && otherRows.length === 0 && (
+            {rows.length === 0 && (
               <p className="cmd-pop__empty">
                 dev server 这类常驻服务：在「管理常用命令」里配置启动/重启命令后，上面的 ▶ / ⟳ 一键启停；
                 watch、tunnel 这些再各配一条常用命令，在这里逐条启停。
               </p>
             )}
-            {anchorRows.length > 0 && (
+            {rows.length > 0 && (
               <section className="cmd-pop__group" aria-label="常用命令">
-                {anchorRows.map((row) => {
+                {rows.map((row) => {
                   const state = rowState(row);
                   const key = `${row.projectId}:${row.commandId}`;
                   const running = row.session?.groupAlive ? row.session : null;
@@ -331,38 +304,16 @@ export function CommandsLauncher({
                       <div className="cmd-pop__row-actions">
                         {busy === key ? <CircleNotch size={13} className="is-spinning" aria-label="执行中" /> : running ? (
                           <>
-                            <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(running.id); }} aria-label={`查看 ${row.name} 日志`}><Scroll size={13} />日志</button>
+                            <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(running); }} aria-label={`查看 ${row.name} 日志`}><Scroll size={13} />日志</button>
                             <button type="button" onClick={() => requestRun(row, "restart", row.command)} aria-label={`重启 ${row.name}`}><ArrowsClockwise size={13} />重启</button>
                             <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>
                           </>
                         ) : (
                           <>
-                            {row.session && <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(row.session!.id); }} aria-label={`查看 ${row.name} 退出日志`}><Scroll size={13} />日志</button>}
+                            {row.session && <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(row.session!); }} aria-label={`查看 ${row.name} 退出日志`}><Scroll size={13} />日志</button>}
                             <button type="button" className="is-primary" onClick={() => requestRun(row, "start", row.command)} aria-label={`执行 ${row.name}`}><Play size={12} weight="fill" />执行</button>
                           </>
                         )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </section>
-            )}
-            {otherRows.length > 0 && (
-              <section className="cmd-pop__group">
-                <h3>其他项目在跑的</h3>
-                {otherRows.map((row) => {
-                  const key = `${row.projectId}:${row.commandId}`;
-                  return (
-                    <div className="cmd-pop__row" key={key}>
-                      <span className="cmd-pop__row-dot is-on" aria-hidden="true" />
-                      <div className="cmd-pop__row-main">
-                        <b>{row.name}</b>
-                        <code>{row.projectName} · 日志在该项目的终端里看</code>
-                      </div>
-                      <div className="cmd-pop__row-actions">
-                        {busy === key
-                          ? <CircleNotch size={13} className="is-spinning" aria-label="执行中" />
-                          : <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>}
                       </div>
                     </div>
                   );

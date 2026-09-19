@@ -10,6 +10,7 @@ import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
 import { StatusBar } from "./StatusBar.tsx";
+import { useTerminalDock } from "./useTerminalDock.ts";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
@@ -108,17 +109,9 @@ export function WorkspaceShell() {
   const [createDialog, setCreateDialog] = useState<{ kind: "group" } | { kind: "project"; reason: string | null } | null>(null);
   const [collapsed, setCollapsed] = useState(() => readRenamedStorage("ash:sidebar-collapsed") === "1");
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
   // G C 的信号:每按一下加一,CommandsLauncher(侧栏顶行那颗 ▶)收到变化就开合弹层
   // (状态住在它那边)。侧栏收起 / 去设置页时它会重新挂载,所以那边按「挂载时那一格」比对。
   const [commandsPopSignal, setCommandsPopSignal] = useState(0);
-  // 日志聚焦是一次性命令:ProjectTerminal 消费完(成功、失败、还是消费中被卸载)都会
-  // 回执终结,否则关抽屉再开会重放最后一次请求,把用户按回同一条日志(第 4/5 轮审查
-  // 实锤)。回执带 seq,只清对应请求 —— 回执可能和用户刚点的下一次请求并发。
-  const clearTerminalFocus = useCallback((seq: number) => {
-    setTerminalFocus((prev) => prev && prev.seq === seq ? null : prev);
-  }, []);
   const isMultiUser = useIsMultiUser();
   const isInstanceAdmin = useIsInstanceAdmin();
   const canUseTerminal = !isMultiUser || isInstanceAdmin;
@@ -153,6 +146,9 @@ export function WorkspaceShell() {
 
   // 提示的寿命（常规两秒多自己走 / 长报错等用户收，两条通道互不打断）都在 WorkspaceToast.tsx 里。
   const { toasts, notify, dismiss: dismissToast } = useToast();
+  // 底部坞的会话账本：开着哪几个终端、哪个在前台、抽屉展开没有。住在这一层是因为 tab 条摆在
+  // 状态栏上（StatusBar），抽屉收起时它照样要说得出还有什么活着。
+  const terminal = useTerminalDock({ project: currentProject, enabled: canUseTerminal, notify });
   const remoteReturns = useRemoteReturns(notify);
   // 主仓 git 操作落定时那一句话挂在这一层，为的是**盖得住切项目**：分支胶囊跟着当前项目
   // 卸载，操作跑一半切走，结果就没人认领了。
@@ -500,7 +496,7 @@ export function WorkspaceShell() {
     onOpenSettings: openSettingsHome,
     // G C / G Z 跟状态栏上那两颗按钮完全同一条路;没权限(多人模式非管理员)就没有落点。
     onToggleCommands: () => { if (canUseTerminal) setCommandsPopSignal((value) => value + 1); },
-    onToggleTerminal: () => { if (canUseTerminal && currentProject) toggleTerminal(); },
+    onToggleTerminal: () => { if (canUseTerminal && currentProject) terminal.toggle(); },
   });
 
   const dropSettingsAnchor = useCallback(() => setSettingsAnchor(null), []);
@@ -513,27 +509,21 @@ export function WorkspaceShell() {
   // 终端和状态栏是**同一条底部坞**(设计稿:横贯窗口、压在状态栏正上方),所以它和状态栏
   // 一样挂在 workspace-system-layout 上、三个视图分支都带着 —— 不再是工作区主区里的一块。
   // 于是从设置 / Git 工作台点「终端」或「日志」就地展开即可,不用先把人踢回工作区。
-  const revealTerminal = () => setTerminalOpen(true);
-  // 状态栏「终端」按钮和快捷键 G Z 的同一条路。
-  const toggleTerminal = () => setTerminalOpen((open) => !open);
   const statusBar = (
     <StatusBar
       currentProject={currentProject}
       taskMode={scopeKind === "tasks"}
       canUseTerminal={canUseTerminal}
       connected={connected}
-      terminalOpen={terminalOpen}
-      onToggleTerminal={toggleTerminal}
+      terminal={terminal}
     />
   );
   // 常用命令那颗 ▶ 住在侧栏顶行(WorkspaceSidebar → CommandsLauncher),这里只把它要的线接好。
   const commandsWiring = {
     canUseTerminal,
     openSignal: commandsPopSignal,
-    onOpenCommandLog: (sessionId: string) => {
-      setTerminalFocus({ sessionId, seq: Date.now() });
-      revealTerminal();
-    },
+    // 启动/看日志:会话对象直接交给账本挂成 tab 并展开抽屉(不必再回服务端问一次它是谁)。
+    onOpenCommandLog: terminal.openSession,
     onManageCommands: () => openSettings("project", "commands"),
   };
   const handoffAlert = (
@@ -544,8 +534,8 @@ export function WorkspaceShell() {
   // 底部坞的上半截:横贯整个窗口、和状态栏连成一条,而不是缩在主区卡片里。
   // 三个视图分支都渲染它(和 statusBar 同进同出),项目不变就不重挂 —— 切到设置 / Git
   // 时终端里的现场原样留着。
-  const terminalDock = terminalOpen && currentProject
-    ? <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} focusRequest={terminalFocus} onFocusHandled={clearTerminalFocus} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>
+  const terminalDock = terminal.open && currentProject
+    ? <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} dock={terminal} notify={notify} /></Suspense>
     : null;
   const overlays = <>
     <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onTaskMode={() => { selectTaskMode(); setPaletteOpen(false); }} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => { if (requireProject("新建分组")) setCreateDialog({ kind: "group" }); }} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
@@ -576,7 +566,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}${chatOpen ? " is-chat" : ""}${assistantOpen ? " is-assistant" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? () => setTerminalOpen(true) : null} commands={commandsWiring} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={openChat} chatOpen={chatOpen} onAssistant={openAssistant} assistantOpen={assistantOpen} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={openSettingsHome} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? terminal.reveal : null} commands={commandsWiring} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={openChat} chatOpen={chatOpen} onAssistant={openAssistant} assistantOpen={assistantOpen} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={openSettingsHome} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {assistantOpen ? <AssistantView project={currentProject} projects={projects} onTask={(task) => { updateTask(task); selectTask(task); }} onSettings={openSettings} onExit={closeAssistant} onMode={openComposer} onChat={openChat} /> : chatOpen && currentProject ? <ChatView key={currentProject.id} project={currentProject} onTask={selectTask} onExit={() => setChatOpen(false)} onMode={openComposer} onAssistant={openAssistant} /> : composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} onDraftSeeded={dropComposerSeed} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onChat={openChat} onAssistant={openAssistant} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} onProjectUpdated={applyProjectUpdate} notify={notify} /> : remoteSelection ? (

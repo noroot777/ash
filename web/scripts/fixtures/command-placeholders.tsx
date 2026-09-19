@@ -34,7 +34,14 @@ const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const { pathname } = new URL(href, location.origin);
-  if (pathname === "/api/terminal-commands") return reply({ sessions: [] });
+  // 会话事实:这个项目开着一个交互 shell(不是常用命令),另一个项目的 dev server 在跑。
+  // 两者都不该点亮侧栏顶行那颗 ▶ —— 它只说当前项目的常用命令。
+  if (/^\/api\/projects\/[^/]+\/terminal\/sessions$/.test(pathname)) {
+    return reply({ sessions: [
+      { id: "s-shell", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "第一个项目", commandId: null, startedAt: 1, exitCode: null, stoppedByUser: false, groupAlive: true },
+      { id: "s-other", projectId: "p-two", cwd: "/workspace/p-two", shell: "/bin/zsh", name: "别家的 dev server", commandId: "dev", startedAt: 2, exitCode: null, stoppedByUser: false, groupAlive: true },
+    ] });
+  }
   const command = pathname.match(/^\/api\/projects\/([^/]+)\/commands\/([^/]+)\/(start|stop|restart)$/);
   if (command) {
     calls.push({ path: pathname, body: init?.body ? JSON.parse(String(init.body)) : null });
@@ -67,7 +74,6 @@ function Fixture() {
       <pre data-testid="config">{JSON.stringify(current.commandsConfig)}</pre>
     </main>
     <CommandsLauncher
-      projects={[current]}
       currentProject={current}
       canUseTerminal
       onOpenCommandLog={() => {}}
