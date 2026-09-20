@@ -3,6 +3,7 @@ import { readSource } from "../../scripts/read-source.mjs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ScheduledMessage } from "@ash/shared";
+import { annotationBatchPrompt, type AnnotationBatch } from "../../shared/src/page-annotation-batch.ts";
 import {
   retainScheduledMessageActionError,
   ScheduledMessageTray,
@@ -92,6 +93,19 @@ assert.match(
   /scheduled-message-guide/,
   "带角色的消息被跳过后，引导动作要落到最早的那条用户消息上",
 );
+const annotationBatch: AnnotationBatch = {
+  id: "batch", taskId: "task", createdAt: 1, gen: "gen", serviceId: "web", evidence: [],
+  items: [{ id: "item", number: 1, comment: "把按钮加大", gen: "gen", serviceId: "web", documentId: "document", tool: "element",
+    points: [{ x: 1, y: 2 }], element: null,
+    context: { route: "/", scroll: { x: 0, y: 0 }, viewport: { width: 1000, height: 700, scale: 1 }, capturedAt: 1 } }],
+};
+const annotationHtml = renderToStaticMarkup(
+  <ScheduledMessageTray messages={[row("annotation", annotationBatchPrompt(annotationBatch), "2026-08-25T10:00:00.000Z")]}
+    loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => undefined} />,
+);
+assert.match(annotationHtml, /页面批注 · 1 条/);
+assert.match(annotationHtml, /#1 把按钮加大/);
+assert.doesNotMatch(annotationHtml, /preview_page_data|公共组件 vs 单实例/);
 
 const actionError = { messageId: "first", message: "消息继续排队" };
 assert.deepEqual(

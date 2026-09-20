@@ -6,6 +6,7 @@ import { desc, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
 import { sessionTranscriptPath } from "./transcript.js";
+import { annotationBatchDisplayText } from "./page-annotation-display.js";
 
 type UserSeg = Extract<ConvSeg, { kind: "user" }>;
 const isFollowUp = (seg: ConvSeg): seg is UserSeg => isUserFollowUp(seg);
@@ -49,7 +50,7 @@ async function lastFollowUpIn(path: string): Promise<UserSeg | null> {
 
 function toFollowUp(taskId: string, seg: UserSeg): TaskFollowUp {
   const { body, paths } = parseAttachmentText(seg.text);
-  const text = body.trim();
+  const text = (annotationBatchDisplayText(body) ?? body).trim();
   return {
     taskId,
     text: text.length > TEXT_CAP ? `${text.slice(0, TEXT_CAP)}…` : text,

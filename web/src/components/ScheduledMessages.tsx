@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { ScheduledMessage } from "@ash/shared";
+import { annotationBatchDisplayText } from "../page-annotation/message.ts";
 import { ArrowUUpLeft, ChatsCircle, Clock, Queue, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
@@ -171,6 +172,7 @@ export function ScheduledMessageTray({
       {loading && messages.length === 0 && <small>正在加载待发送消息…</small>}
       {error && <p role="alert">待发送消息：{error}</p>}
       {orderedMessages.map((message) => {
+        const displayText = annotationBatchDisplayText(message.text) ?? message.text;
         const canceling = cancelingIds.has(message.id);
         const steering = steeringIds?.has(message.id) ?? false;
         const busy = canceling || steering;
@@ -188,15 +190,15 @@ export function ScheduledMessageTray({
               ? <em>排队 · 当前回合结束后发送</em>
               : <time dateTime={message.sendAt}>{formatInstant(message.sendAt)}</time>}
             {message.agent && <span>@{message.agent}</span>}
-            <b title={message.text || message.attachments.join("\n")}>
-              {message.text || (message.attachments.length ? `[${message.attachments.length} 个附件]` : "[空消息]")}
+            <b title={displayText || message.attachments.join("\n")}>
+              {displayText || (message.attachments.length ? `[${message.attachments.length} 个附件]` : "[空消息]")}
             </b>
             {message.id === steerable?.id && onSteer && (
               <button
                 type="button"
                 className="scheduled-message-guide"
                 disabled={busy}
-                aria-label={`用最早的排队消息“${message.text || "附件"}”引导会话`}
+                aria-label={`用最早的排队消息“${displayText || "附件"}”引导会话`}
                 onClick={() => onSteer(message.id)}
               >
                 {steering
@@ -213,7 +215,7 @@ export function ScheduledMessageTray({
                   className="scheduled-message-withdraw"
                   disabled={busy}
                   title={queued ? "撤回这条排队消息，内容放回输入框" : "撤回这条定时消息，内容放回输入框"}
-                  aria-label={`撤回${when}的待发送消息“${message.text || "附件"}”，内容放回输入框`}
+                  aria-label={`撤回${when}的待发送消息“${displayText || "附件"}”，内容放回输入框`}
                   onClick={() => onWithdraw(message)}
                 >
                   {canceling
