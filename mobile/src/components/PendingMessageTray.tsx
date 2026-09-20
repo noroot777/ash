@@ -1,6 +1,7 @@
 import { Alert, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { ScheduledMessage } from "@ash/shared";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { api } from "@/lib/api";
 import { useTheme, radius, fonts } from "@/lib/theme";
 import { formatInstant } from "@/lib/time";
@@ -74,68 +75,71 @@ export function PendingMessageTray({
 
   return (
     <>
-      {messages.map((m) => (
-        <View
-          key={m.id}
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 8,
-            backgroundColor: theme.overlay,
-            borderRadius: radius.sm,
-            paddingHorizontal: 10,
-            paddingVertical: 4,
-          }}
-        >
-          {/* 排队消息不看时间（跑完就发），所以那一列写「排队中」而不是一个骗人的时刻。 */}
-          <Ionicons name={m.mode === "queued" ? "layers-outline" : "time-outline"} size={13} color={theme.faint} />
-          <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>
-            {m.mode === "queued" ? "排队中" : formatInstant(m.sendAt)}
-          </Text>
-          <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>
-            {m.text || "[附件]"}
-          </Text>
-          {/* 手机端撤不回附件（见 withdraw），所以按之前先让人看见这条带了几个。 */}
-          {m.attachments.length > 0 && (
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-              <Ionicons name="attach-outline" size={12} color={theme.faint} />
-              <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{m.attachments.length}</Text>
-            </View>
-          )}
-          {/* 带会话角色的消息（审查链排给 reviewer 会话的答复）不归这个输入框管：撤回
-              回来的正文再发一次只会走普通回复，角色就丢了；丢弃更是直接卡住审查链。
-              所以只标出来，两颗按钮都不给。 */}
-          {m.sessionRole ? (
-            <Text style={{ color: theme.faint, fontSize: 11 }}>审查会话 · 自动投递</Text>
-          ) : (
-            /* 撤回可逆、丢弃不可逆，两颗挨在一起。原来图标 15 + hitSlop 8 = 31pt 见方、
-               间距 8pt，指腹一按容易点到隔壁。撑成 36pt 见方 + hitSlop 4 = 44pt 热区，
-               两颗正好在 8pt 间距的中线相接，不重叠。 */
-            <>
-              <Pressable
-                onPress={() => void withdraw(m)}
-                hitSlop={4}
-                accessibilityRole="button"
-                accessibilityLabel={m.attachments.length
-                  ? `撤回这条待发送消息；它带了 ${m.attachments.length} 个附件，需要到网页端撤回`
-                  : "撤回这条待发送消息，内容放回输入框"}
-                style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
-              >
-                <Ionicons name="arrow-undo-outline" size={17} color={theme.faint} />
-              </Pressable>
-              <Pressable
-                onPress={() => discard(m)}
-                hitSlop={4}
-                accessibilityRole="button"
-                accessibilityLabel="丢弃这条待发送消息，内容不保留"
-                style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
-              >
-                <Ionicons name="trash-outline" size={17} color={theme.faint} />
-              </Pressable>
-            </>
-          )}
-        </View>
-      ))}
+      {messages.map((m) => {
+        const displayText = annotationBatchDisplayText(m.text) ?? m.text;
+        return (
+          <View
+            key={m.id}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              backgroundColor: theme.overlay,
+              borderRadius: radius.sm,
+              paddingHorizontal: 10,
+              paddingVertical: 4,
+            }}
+          >
+            {/* 排队消息不看时间（跑完就发），所以那一列写「排队中」而不是一个骗人的时刻。 */}
+            <Ionicons name={m.mode === "queued" ? "layers-outline" : "time-outline"} size={13} color={theme.faint} />
+            <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>
+              {m.mode === "queued" ? "排队中" : formatInstant(m.sendAt)}
+            </Text>
+            <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>
+              {displayText || "[附件]"}
+            </Text>
+            {/* 手机端撤不回附件（见 withdraw），所以按之前先让人看见这条带了几个。 */}
+            {m.attachments.length > 0 && (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+                <Ionicons name="attach-outline" size={12} color={theme.faint} />
+                <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{m.attachments.length}</Text>
+              </View>
+            )}
+            {/* 带会话角色的消息（审查链排给 reviewer 会话的答复）不归这个输入框管：撤回
+                回来的正文再发一次只会走普通回复，角色就丢了；丢弃更是直接卡住审查链。
+                所以只标出来，两颗按钮都不给。 */}
+            {m.sessionRole ? (
+              <Text style={{ color: theme.faint, fontSize: 11 }}>审查会话 · 自动投递</Text>
+            ) : (
+              /* 撤回可逆、丢弃不可逆，两颗挨在一起。原来图标 15 + hitSlop 8 = 31pt 见方、
+                 间距 8pt，指腹一按容易点到隔壁。撑成 36pt 见方 + hitSlop 4 = 44pt 热区，
+                 两颗正好在 8pt 间距的中线相接，不重叠。 */
+              <>
+                <Pressable
+                  onPress={() => void withdraw(m)}
+                  hitSlop={4}
+                  accessibilityRole="button"
+                  accessibilityLabel={m.attachments.length
+                    ? `撤回这条待发送消息；它带了 ${m.attachments.length} 个附件，需要到网页端撤回`
+                    : "撤回这条待发送消息，内容放回输入框"}
+                  style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
+                >
+                  <Ionicons name="arrow-undo-outline" size={17} color={theme.faint} />
+                </Pressable>
+                <Pressable
+                  onPress={() => discard(m)}
+                  hitSlop={4}
+                  accessibilityRole="button"
+                  accessibilityLabel="丢弃这条待发送消息，内容不保留"
+                  style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
+                >
+                  <Ionicons name="trash-outline" size={17} color={theme.faint} />
+                </Pressable>
+              </>
+            )}
+          </View>
+        );
+      })}
     </>
   );
 }

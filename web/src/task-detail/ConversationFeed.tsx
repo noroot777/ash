@@ -4,7 +4,7 @@ import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import type { ConversationItem } from "./conversationModel.ts";
-import { annotationBatchDisplayText } from "../page-annotation/message.ts";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";

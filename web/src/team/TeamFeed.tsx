@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import type { Batch } from "@ash/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
@@ -64,6 +65,7 @@ function UserRow({ row, noticeMode }: { row: Extract<TeamFeedRow, { kind: "conv"
   if (row.kind !== "user") return null;
   if (row.isAnswer || isQuestionAnswer(row.text)) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} />;
   const parsed = parseAttachmentText(row.text);
+  const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
   const paths = [...parsed.paths, ...row.attachments];
   const bySystem = !!row.bySystem;
   if (bySystem && !isReviewSystemPrompt(row.text)) {
@@ -73,7 +75,7 @@ function UserRow({ row, noticeMode }: { row: Extract<TeamFeedRow, { kind: "conv"
     <article className={`team-feed-user${bySystem ? " is-system-authored" : ""}`}>
       <div>
         <header><b>{bySystem ? "系统" : "你"}</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
-        {parsed.body && (bySystem ? <MarkdownBody text={parsed.body} /> : <p>{parsed.body}</p>)}
+        {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />
       </div>
     </article>

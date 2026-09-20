@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AnnotationWaiting } from "../src/preview-workspace/AnnotationWaiting.tsx";
 import { AnnotationReviewPanel } from "../src/preview-workspace/AnnotationReviewPanel.tsx";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
+import { TeamFeed } from "../src/team/TeamFeed.tsx";
 import type { useAnnotationBatch } from "../src/preview-workspace/useAnnotationBatch.ts";
 import type { useAnnotationReview } from "../src/preview-workspace/useAnnotationReview.ts";
 import { annotationBatchPrompt, type AnnotationBatchRecord } from "../../shared/src/page-annotation-batch.ts";
@@ -42,4 +43,13 @@ assert(conversation.includes("页面批注 · 1 条"));
 assert(conversation.includes("#1 加大按钮"));
 assert(!conversation.includes("preview_page_data"));
 assert(!conversation.includes("公共组件 vs 单实例"));
+const teamConversation = renderToStaticMarkup(<TeamFeed
+  task={{ id: "task-a", status: "done", mode: "team", agentType: "codex" } as never}
+  rows={[{ kind: "conv", key: "annotation", item: { kind: "user", id: "annotation", text: annotationBatchPrompt(record.batch), attachments: [], at: "2026-09-10" } }]}
+  workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null}
+/>);
+assert(teamConversation.includes("页面批注 · 1 条"));
+assert(teamConversation.includes("#1 加大按钮"));
+assert(!teamConversation.includes("preview_page_data"));
+assert(!teamConversation.includes("公共组件 vs 单实例"));
 console.log("annotation presentation: readable conversation summary, noninteractive waiting evidence, missing-image fallback, dismissed/pending reopen hint and separate per-item satisfaction passed");

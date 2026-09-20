@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { annotationBatchPrompt, parseAnnotationBatch, type AnnotationBatch } from "@ash/shared/page-annotation-batch";
-import { annotationBatchDisplayText } from "../src/page-annotation-display.js";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 
 const child = process.env.ASH_ANNOTATION_RESTART === "1";
 const root = child ? process.env.ASH_ANNOTATION_TEST_ROOT! : mkdtempSync(join(tmpdir(), "ash-annotation-batch-"));

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
-import { annotationBatchDisplayText } from "../page-annotation/message.ts";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { useSubagents } from "./useSubagents.tsx";
 import { InspectorHost } from "../inspector/index.ts";

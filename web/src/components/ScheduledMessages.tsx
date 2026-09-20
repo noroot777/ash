@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { ScheduledMessage } from "@ash/shared";
-import { annotationBatchDisplayText } from "../page-annotation/message.ts";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { ArrowUUpLeft, ChatsCircle, Clock, Queue, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";

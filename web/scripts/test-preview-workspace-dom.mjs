@@ -263,6 +263,11 @@ export async function testPreviewWorkspaceDom() {
       const style = getComputedStyle(element);
       return { background: style.backgroundColor, color: style.color };
     }), { background: "rgb(85, 102, 187)", color: "rgb(255, 255, 255)" }, "ready annotation submission is visually primary");
+    await submitBatch.hover();
+    assert.deepEqual(await submitBatch.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { background: style.backgroundColor, color: style.color };
+    }), { background: "rgb(85, 102, 187)", color: "rgb(255, 255, 255)" }, "hover preserves the primary annotation action");
     await submitBatch.click();
     assert.equal(await button("撤销").isDisabled(), true);
     assert.equal(await button("删除标注 #1").isDisabled(), true);
