@@ -1,4 +1,5 @@
 import type { Task } from "@ash/shared";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import type { ConversationItem } from "./conversationModel.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
@@ -13,7 +14,8 @@ export function conversationToMarkdown(items: ConversationItem[], task: Task): s
     if (item.kind === "user") {
       const parsed = parseAttachmentText(item.text);
       const paths = [...parsed.paths, ...item.attachments];
-      const body = [parsed.body, ...paths.map((path) => `- ${path}`)].filter(Boolean).join("\n");
+      const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
+      const body = [displayBody, ...paths.map((path) => `- ${path}`)].filter(Boolean).join("\n");
       if (body) parts.push(`## ${item.bySystem ? "系统" : "你"}${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
       continue;
     }

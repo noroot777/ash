@@ -2,6 +2,7 @@ import { open, stat } from "node:fs/promises";
 import type { ConvSeg, TaskFollowUp } from "@ash/shared";
 import { isUserFollowUp, parseSessionOutput } from "@ash/shared";
 import { parseAttachmentText } from "@ash/shared/attachments";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { desc, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
@@ -49,7 +50,7 @@ async function lastFollowUpIn(path: string): Promise<UserSeg | null> {
 
 function toFollowUp(taskId: string, seg: UserSeg): TaskFollowUp {
   const { body, paths } = parseAttachmentText(seg.text);
-  const text = body.trim();
+  const text = (annotationBatchDisplayText(body) ?? body).trim();
   return {
     taskId,
     text: text.length > TEXT_CAP ? `${text.slice(0, TEXT_CAP)}…` : text,

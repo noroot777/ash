@@ -130,6 +130,10 @@
       "types": "./src/page-annotation-batch.ts",
       "default": "./src/page-annotation-batch.ts"
     },
+    "./page-annotation-display": {
+      "types": "./src/page-annotation-display.ts",
+      "default": "./src/page-annotation-display.ts"
+    },
     "./page-annotation-parse": {
       "types": "./src/page-annotation-parse.ts",
       "default": "./src/page-annotation-parse.ts"

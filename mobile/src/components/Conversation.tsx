@@ -13,6 +13,7 @@ import { View, Text, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { Session } from "@ash/shared";
 import { mergeFeed } from "@ash/shared/team";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import type { LogLine } from "@/lib/log";
 import { useTheme, radius, fonts, type Theme } from "@/lib/theme";
 import { formatInstant, Duration } from "@/lib/time";
@@ -344,7 +345,8 @@ function renderBlock(b: Block, theme: Theme, timing?: Timing, onSelect?: (t: str
           <View style={{ flex: 1, minWidth: 12, height: 1, backgroundColor: theme.line }} />
         </View>
       );
-    case "user":
+    case "user": {
+      const displayText = annotationBatchDisplayText(b.text) ?? b.text;
       return (
         <View style={{ alignSelf: "flex-end", maxWidth: "88%", gap: 4 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingRight: 2 }}>
@@ -365,10 +367,11 @@ function renderBlock(b: Block, theme: Theme, timing?: Timing, onSelect?: (t: str
               borderBottomRightRadius: 4,
             }}
           >
-            <SelectableText value={b.text} style={{ color: theme.accentFg, fontSize: 14, lineHeight: 20 }} />
+            <SelectableText value={displayText} style={{ color: theme.accentFg, fontSize: 14, lineHeight: 20 }} />
           </View>
         </View>
       );
+    }
     case "system":
       return (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginVertical: 2 }}>

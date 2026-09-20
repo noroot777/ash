@@ -26,7 +26,7 @@ export function AnnotationBatchPanel({ controller: c, selectedId, mismatchReason
         <small>页面转图可能缺少输入值、Canvas、Shadow DOM、登录态、外部图片或字体。服务端参考图是非用户现场，失败也可发送。</small>
       </div>
       <AnnotationBatchMismatch reason={mismatchReason} controller={c} />
-      <button type="button" disabled={c.locked || !batch.items.length || batch.items.some((item) => !item.comment.trim())} onClick={c.preview}>预览批次并发送</button>
+      <button className="annotation-batch-submit" type="button" disabled={c.locked || !batch.items.length || batch.items.some((item) => !item.comment.trim())} onClick={c.preview}>预览批次并发送</button>
     </>}
     {c.review && batch && <section className="annotation-batch-review" aria-label="发送前批次预览">
       <h4>确认发送 {batch.items.length} 条批注</h4>
@@ -37,7 +37,7 @@ export function AnnotationBatchPanel({ controller: c, selectedId, mismatchReason
       </li>)}</ol>
       <details><summary>查看将投递的完整文本</summary><pre>{annotationBatchPrompt(batch)}</pre></details>
       <button type="button" disabled={c.busy} onClick={c.cancelReview}>继续编辑</button>
-      <button type="button" disabled={c.busy} onClick={() => void c.send()}>{c.busy ? "正在投递…" : "确认发送此批次"}</button>
+      <button className="annotation-batch-confirm" type="button" disabled={c.busy} onClick={() => void c.send()}>{c.busy ? "正在投递…" : "确认发送此批次"}</button>
     </section>}
     {!!batch?.evidence.length && <details open={c.review} className="annotation-batch-evidence"><summary>图像证据与缺失说明（{batch.evidence.filter((e) => e.path).length} 张图）</summary>
       {batch.evidence.map((entry) => <figure key={entry.id}>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { useSubagents } from "./useSubagents.tsx";
 import { InspectorHost } from "../inspector/index.ts";
@@ -112,7 +113,7 @@ export function TaskDetail({
   const followUps = useMemo(
     () => conversation.items.flatMap((item) => (
       item.kind === "user" && isUserFollowUp(item)
-        ? [{ text: item.text, attachments: item.attachments, ...(item.at ? { at: item.at } : {}) }]
+        ? [{ text: annotationBatchDisplayText(item.text) ?? item.text, attachments: item.attachments, ...(item.at ? { at: item.at } : {}) }]
         : []
     )),
     [conversation.items],

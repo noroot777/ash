@@ -4,6 +4,7 @@ import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import type { ConversationItem } from "./conversationModel.ts";
+import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
@@ -142,6 +143,7 @@ function UserMessage({
   preserveSystemStyle?: boolean;
 }) {
   const parsed = parseAttachmentText(item.text);
+  const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
   if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} />;
   const paths = [...parsed.paths, ...item.attachments];
   const bySystem = !!item.bySystem;
@@ -155,11 +157,11 @@ function UserMessage({
         <header>
           <b>{bySystem ? "系统" : "你"}</b>
           {item.at && <time>{formatInstant(item.at)}</time>}
-          {parsed.body && (
-            <CopyButton value={parsed.body} ariaLabel="复制这条回复" icon />
+          {displayBody && (
+            <CopyButton value={displayBody} ariaLabel="复制这条回复" icon />
           )}
         </header>
-        {parsed.body && (bySystem ? <MarkdownBody text={parsed.body} /> : <p>{parsed.body}</p>)}
+        {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />
       </div>
     </article>
