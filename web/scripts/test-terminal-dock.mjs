@@ -1,7 +1,7 @@
 // 底部坞的「开着的终端」搬到状态栏之后要钉住的几件事:
 //   ① 抽屉收着也看得见开着的那几个终端,且它们就摆在「终端」按钮右边;
 //   ② 只是看一眼 ≠ 开一个 —— 没展开过抽屉就绝不新建 shell 会话;
-//   ③ 点一个 tab 就展开到它,tab 条不在抽屉里再来一份;
+//   ③ 点一个 tab 就展开到它,展开后顶部、底部两份 tab 都能切换同一批终端;
 //   ④ 「终端」后面写着快捷键 G Z;
 //   ⑤ shell 的 ✕ 结束会话(DELETE),命令日志的 ✕ 只是收起;
 //   ⑥ 切项目:上一个项目的 tab 立刻消失,新项目最多为自己建**一个** shell(第 1 轮逻辑审查
@@ -38,7 +38,7 @@ try {
   const bar = page.locator(".status-bar");
   await bar.waitFor();
   const terminalButton = page.getByRole("button", { name: "终端（G Z）" });
-  const tabs = page.locator(".status-bar__tab");
+  const tabs = bar.locator(".status-bar__tab");
   const calls = async () => JSON.parse(await page.getByTestId("calls").textContent());
 
   // ① 收着也看得见:server 上那两条会话原样列在状态栏上。
@@ -49,7 +49,7 @@ try {
 
   // 位置:就在「终端」按钮右边(用户点名的那个位置),不是别处。
   const buttonBox = await terminalButton.boundingBox();
-  const stripBox = await page.locator(".status-bar__tabs").boundingBox();
+  const stripBox = await bar.locator(".status-bar__tabs").boundingBox();
   assert.ok(stripBox.x >= buttonBox.x + buttonBox.width - 1, "开着的终端应当摆在「终端」按钮右边");
   assert.ok(
     Math.abs((stripBox.y + stripBox.height / 2) - (buttonBox.y + buttonBox.height / 2)) < 4,
@@ -62,29 +62,34 @@ try {
   // ④ 快捷键提示写在按钮上,不只藏在 aria-label 里。
   assert.match(await terminalButton.innerText(), /终端\s*G Z/, "「终端」后面应当写着快捷键");
 
-  // ③ 点 tab = 展开到它;抽屉里不再有第二份 tab 条。
+  // ③ 点底部 tab = 展开到它；抽屉顶栏同步显示同一批 tab。
   await tabs.filter({ hasText: "网页前端" }).locator(".status-bar__tab-open").click();
   await page.locator(".project-terminal").waitFor();
-  assert.equal(await page.locator(".project-terminal__tabs").count(), 0, "tab 条只在状态栏上有一份");
+  const panelTabs = page.locator(".project-terminal__tabs .status-bar__tab");
+  assert.equal(await panelTabs.count(), 2, "抽屉顶栏应镜像显示开着的终端");
   assert.equal(await tabs.filter({ hasText: "网页前端" }).evaluate((node) => node.classList.contains("is-active")), true);
   assert.equal(await page.locator(".project-terminal__bar > code").innerText(), "/workspace/p-one");
 
-  // 切到另一个终端:选中跟着走。
-  await tabs.filter({ hasText: "测试项目" }).locator(".status-bar__tab-open").click();
+  // 从顶部切到另一个终端:上下两份选中态一起走。
+  await panelTabs.filter({ hasText: "测试项目" }).locator(".status-bar__tab-open").click();
   assert.equal(await tabs.filter({ hasText: "测试项目" }).evaluate((node) => node.classList.contains("is-active")), true);
   assert.equal(await tabs.filter({ hasText: "网页前端" }).evaluate((node) => node.classList.contains("is-active")), false);
+  assert.equal(await panelTabs.filter({ hasText: "测试项目" }).evaluate((node) => node.classList.contains("is-active")), true);
+
+  const collapse = page.getByRole("button", { name: "收起终端（shell 与服务继续跑）" });
+  assert.equal(await collapse.locator("svg").count(), 0, "收起按钮不应再显示成关闭用的叉号");
 
   // 展开着的抽屉里有现场(xterm 已经挂上)。
   await page.locator(".project-terminal__viewport:not([hidden]) .xterm").waitFor();
 
   // ⑤ 命令日志的 ✕ 只是收起,服务照跑 —— 不发 DELETE。
   await tabs.filter({ hasText: "网页前端" }).getByRole("button", { name: /^收起 网页前端/ }).click();
-  await page.waitForFunction(() => document.querySelectorAll(".status-bar__tab").length === 1);
+  await page.waitForFunction(() => document.querySelectorAll("footer.status-bar .status-bar__tab").length === 1);
   assert.deepEqual(await calls(), [], "收起命令日志不该结束会话");
 
   // shell 的 ✕ = 结束会话,tab 和抽屉一起收。
   await tabs.filter({ hasText: "测试项目" }).getByRole("button", { name: /^关闭 测试项目/ }).click();
-  await page.waitForFunction(() => document.querySelectorAll(".status-bar__tab").length === 0);
+  await page.waitForFunction(() => document.querySelectorAll("footer.status-bar .status-bar__tab").length === 0);
   assert.deepEqual(await calls(), ["delete:s-shell"], "关闭交互 shell 应当结束 server 上的会话");
   assert.equal(await page.locator(".project-terminal").count(), 0, "最后一个终端关掉后抽屉收起");
 
@@ -125,7 +130,7 @@ try {
     "切项目不该回头在上一个项目上再建 shell",
   );
   assert.equal(await tabs.count(), 1, "第二个项目只有它自己那一个终端");
-  assert.doesNotMatch(await page.locator(".status-bar__tabs").innerText(), /网页前端/, "上一个项目的现场不该跟过来");
+  assert.doesNotMatch(await bar.locator(".status-bar__tabs").innerText(), /网页前端/, "上一个项目的现场不该跟过来");
 
   // 上面几条查的是落定之后;这条查**过程**——渲染给第二个项目的每一帧里都不许出现第一个
   // 项目的 tab。漏过去一帧就够抽屉照着它在新项目上建一个 shell(第 1 轮逻辑审查的现场)。
@@ -141,7 +146,7 @@ try {
   await page.waitForTimeout(600); // 多建一个的话,这段时间足够它冒出来
   assert.deepEqual(await calls(), beforeBack, `切回已有活 shell 的项目不该再建会话，实际 ${JSON.stringify(await calls())}`);
   assert.equal(await tabs.count(), 2, "恢复的是 server 上那两条现场，不多不少");
-  assert.match(await page.locator(".status-bar__tabs").innerText(), /网页前端/, "还在跑的命令日志跟着现场回来");
+  assert.match(await bar.locator(".status-bar__tabs").innerText(), /网页前端/, "还在跑的命令日志跟着现场回来");
 
   // ⑦ 在 A 点了「执行」,请求还没回来就切到了 B:那条 .then 捕获的仍是 A 的 openSession,照样
   //   会调进来。放它进来的话,展开的是**B** 的抽屉,而 tab 写进的是 A 的现场 —— B 看见「抽屉
@@ -151,10 +156,10 @@ try {
   await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "第二个项目");
   await tabs.first().waitFor();
   await tabs.getByRole("button", { name: /^关闭 第二个项目/ }).click();
-  await page.waitForFunction(() => document.querySelectorAll(".status-bar__tab").length === 0);
+  await page.waitForFunction(() => document.querySelectorAll("footer.status-bar .status-bar__tab").length === 0);
   await page.getByRole("button", { name: "切项目" }).click();
   await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "测试项目");
-  await page.waitForFunction(() => document.querySelectorAll(".status-bar__tab").length === 2);
+  await page.waitForFunction(() => document.querySelectorAll("footer.status-bar .status-bar__tab").length === 2);
   await page.getByRole("button", { name: "发起命令" }).click(); // 捕获此刻(项目 A)的那只回调
   await page.getByRole("button", { name: "切项目" }).click();
   await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "第二个项目");

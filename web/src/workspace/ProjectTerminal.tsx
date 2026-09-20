@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProjectView } from "@ash/shared";
-import { X } from "@phosphor-icons/react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { api, type TerminalEvent } from "../lib/api.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
+import { TerminalTabStrip } from "./TerminalTabStrip.tsx";
 import type { ProjectTerminalTab } from "./terminalTabs.ts";
 import type { TerminalDock } from "./useTerminalDock.ts";
 
@@ -291,8 +291,7 @@ export function ProjectTerminal({
   notify,
 }: {
   project: ProjectView;
-  /** 开着哪几个终端、哪个在前台,统一由 WorkspaceShell 那份账本(useTerminalDock)说了算 —— 
-      tab 条本身摆在状态栏上,抽屉这里只负责现场。 */
+  /** 开着哪几个终端、哪个在前台,统一由 WorkspaceShell 那份账本(useTerminalDock)说了算。 */
   dock: TerminalDock;
   notify: (message: string) => void;
 }) {
@@ -354,10 +353,14 @@ export function ProjectTerminal({
         onDoubleClick={() => rememberHeight(DEFAULT_HEIGHT)}
       />
       <header className="project-terminal__bar">
+        <TerminalTabStrip
+          ariaLabel="终端面板中的终端"
+          className="project-terminal__tabs"
+          dock={dock}
+          idPrefix="panel-terminal-tab"
+        />
         <code>{activeTab?.cwd ?? project.repoPath}</code>
-        <button type="button" className="project-terminal__drawer-close" aria-label="收起终端（shell 与服务继续跑）" onClick={dock.hide}>
-          <X size={15} />
-        </button>
+        <button type="button" className="project-terminal__drawer-hide" aria-label="收起终端（shell 与服务继续跑）" onClick={dock.hide} />
       </header>
       {tabs.map((tab) => (
         <TerminalPane
