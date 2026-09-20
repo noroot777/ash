@@ -496,7 +496,8 @@ async function parentIsTeam(task: TaskRow): Promise<boolean> {
 // settles, never by setTaskStatus/manual PATCH, so a casual follow-up that falls
 // back to done cannot accidentally create another review.
 //
-// `turnOk` = 这一回合本身干净收尾了（没被停、退出码 0）。它跟 `status` 不是一回事：
+// `turnOk` = 这一回合本身干净收尾了（没被停、退出码 0、也没有执行器 error 事件）。
+// 它跟 `status` 不是一回事：
 // 旁路回合（就地验证）的 status 是任务原来的终态，只有 turnOk 说得清这一轮跑成没跑成。
 export async function handleTaskSettlement(
   taskId: string,

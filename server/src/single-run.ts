@@ -53,9 +53,10 @@ export async function afterSettlement(
   turnOk = true,
   role: SessionRole = "single",
   exitObserved = true,
+  executionFailed = false,
 ) {
   try {
-    if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk, role, exitObserved)) return;
+    if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk, role, exitObserved, executionFailed)) return;
     await handleTaskSettlement(taskId, status, confirmedDone, turnOk);
   } catch (error) {
     // Review orchestration is a post-settlement side effect. A failure here must
@@ -282,6 +283,10 @@ export async function consumeSingleRun(a: {
   let exitStatus = 0;
   let doneEvent: AgentEvent | null = null;
   let streamError: unknown = null;
+  // CLI 有时把 API 层失败报成 error 事件后仍以 exit 0 收尾（Claude 的
+  // is_error/api_error_status 就是这种）。退出码只能说明进程活着走完，不能证明这一轮
+  // 执行成功；自由工作流据此决定是否继续自动复审链。
+  let sawExecutionError = false;
   // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
   // executors/session-lost.ts）。认下来的话这一轮收尾时要把失效 id 从库里清掉，
   // 否则每一次重试都在 --resume 同一条坏会话。
@@ -443,6 +448,7 @@ export async function consumeSingleRun(a: {
         }
         persistTrace(emittedEvent);
         if (emittedEvent.kind === "error") {
+          sawExecutionError = true;
           writeRunError(out, emittedEvent.message);
           sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
         }
@@ -474,13 +480,14 @@ export async function consumeSingleRun(a: {
   const steered = requestedSteer && !stopped;
   if (streamError && !steered && !stopped) throw streamError;
   const endIso = now();
+  const executionFailed = !stopped && (exitStatus !== 0 || sawExecutionError);
   // CLI 否认了这条会话：把失效的 id 连同由它派生的三件套恢复命令一起清掉。清了之后
   // orchestrator 的 `resuming`（判据就是「这条会话行上有没有 cli_session_id」）自然为
   // 假，下一次运行走全新会话那条路 —— 不必在别处再加一个「要不要续」的开关。
   // 普通 lost 仍要求非零退出，防止正文碰巧出现原话；poisoned 是 stderr 诊断生成的
   // error，即使 exit 0 / turn.completed 也必须清掉。
   const dropSession = !steered && shouldDropSession(sessionFault, exitStatus);
-  await closeExecution(steered ? "canceled" : stopped ?? (exitStatus === 0 ? "completed" : "failed"), endIso);
+  await closeExecution(steered ? "canceled" : stopped ?? (executionFailed ? "failed" : "completed"), endIso);
   await db
     .update(sessions)
     .set({
@@ -544,14 +551,23 @@ export async function consumeSingleRun(a: {
   // **必须排在 afterSettlement 之前** —— 那一步会拿着游标把这条线往下推,放回晚一步
   // 就会把纯询问回合的游标推乱(详见 turn-baseline.ts)。
   await reconcileTurnBaseline(taskId, settled.confirmedDone);
-  // turnOk = 这一回合本身干净收尾了(没被停、退出码 0)。跟落位状态不是一回事:旁路
+  // turnOk = 这一回合本身干净收尾了(没被停、退出码 0、也没有执行器 error 事件)。
+  // 跟落位状态不是一回事:旁路
   // 回合(就地验证)的落位是任务原来的终态,只有它说得清这一轮跑成没跑成。
   //
   // 原生命令回合(`/compact`)整段跳过:它是 CLI 本地的一次压缩,没有模型输出、没有
   // 结论 —— 交给结算钩子的话,正在跑的那一轮就地验证会被当成「验完了」收掉(清轮次、
   // 涨轮数、却给不出 verified/verify_failed),自由工作流那边同理。
   if (!settled.nativeTurn) {
-    await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0, role, !!doneEvent);
+    await afterSettlement(
+      taskId,
+      settled.status,
+      settled.confirmedDone,
+      !stopped && !executionFailed,
+      role,
+      !!doneEvent,
+      executionFailed,
+    );
   }
   if (settled.note) {
     // 结算说明落成**会话旁注**（持久 system 行 + SSE），跟会话轮换旁注同一条道：

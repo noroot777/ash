@@ -273,6 +273,7 @@ export async function handleFreeWorkflowSettlement(
   turnOk: boolean,
   role: SessionRole = "single",
   exitObserved = true,
+  executionFailed = false,
 ): Promise<boolean> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.workflowMode !== "free") return false;
@@ -282,6 +283,19 @@ export async function handleFreeWorkflowSettlement(
     // 存在 reviewing run 说明有一条审查在排队等这个回合结束（并发派审）：不结算它、
     // 也不消费预约（审查在跑时消费预约会双开）。
     if (run) return true;
+    // 自动续轮预约只服务于「修复成功后复审」。修复执行器自己已经报错（包括 error 事件
+    // 后仍 exit 0 的 API 故障）时继续审查，只会反复检查一份没有完成修复的代码。按预约
+    // 快照 CAS 取消这一条自动预约；用户并发改成的手动预约不碰，仍走下面的等待语义。
+    if (executionFailed) {
+      const reservation = await readFreeReviewReservation(taskId);
+      if (reservation?.armed && reservation.runId) {
+        const canceled = await consumeFreeReviewReservation(taskId, reservation);
+        if (canceled) {
+          await appendTaskTimeline(taskId, "修复执行回合异常结束，自动复审已取消；修复成功后可重新派审。");
+          return true;
+        }
+      }
+    }
     // 缺退出事件只限制未交卷的备用触发路径，已落库的完成确认和审查结论仍各自有效。
     if (turnOk && (confirmedDone || exitObserved) && (status === "done" || status === "failed" || status === "canceled")) {
       const reservation = await readFreeReviewReservation(taskId);

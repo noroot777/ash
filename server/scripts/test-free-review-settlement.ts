@@ -15,7 +15,7 @@ delete process.env.ASH_LAX_DONE;
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, freeReviewRounds, freeReviewRuns, projects, reviewerProfiles, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
+  const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, reviewerProfiles, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { consumeSingleRun } = await import("../src/single-run.js");
   const { pendingMessageRow } = await import("../src/pending-messages.js");
@@ -41,8 +41,10 @@ try {
     resumePrompt?: string;
     native?: boolean;
     truncated?: boolean;
+    executionError?: string;
     role?: "single" | "reviewer";
     reserve?: boolean;
+    autoFollowUp?: boolean;
     /** 托盘里排着的待发送消息（结算时要给它让路）。 */
     pending?: { mode: "queued" | "timed"; sendAt?: string };
     reviewConclusion?: "verified" | "verify_failed" | null;
@@ -70,7 +72,22 @@ try {
         ...(options.pending.sendAt ? { sendAt: new Date(options.pending.sendAt) } : {}),
       }));
     }
-    if (options.reserve !== false) {
+    if (options.autoFollowUp) {
+      const runId = `${id}-auto-review`;
+      await db.insert(freeReviewRuns).values({
+        id: runId, taskId: id, reviewerId: "reviewer", reviewerName: "reviewer", agentType: "codex",
+        executorId: "ex", checkMode: "logic", retryLimit: 1, currentRound: 1, status: "stopped",
+        createdAt: at, updatedAt: at, finishedAt: at,
+      });
+      await db.insert(freeReviewRounds).values({
+        id: `${runId}-round`, runId, round: 1, status: "failed", conclusion: "verify_failed",
+        startedAt: at, endedAt: at,
+      });
+      await db.insert(freeWorkflowStates).values({
+        taskId: id, selectedReviewerId: "reviewer", reviewArmed: true,
+        reviewCheckMode: "logic", reviewRetryLimit: 1, reviewRunId: runId, updatedAt: at,
+      });
+    } else if (options.reserve !== false) {
       await reserveFreeReview(id, { reviewerId: "reviewer", checkMode: "logic", retryLimit: 1 });
     }
     if (options.reviewConclusion !== undefined) {
@@ -102,6 +119,7 @@ try {
       sessionId: "", commandLine: "fixture", kill() {},
       events: (async function* (): AsyncGenerator<AgentEvent> {
         yield { kind: "text", text: "本轮输出。" };
+        if (options.executionError) yield { kind: "error", message: options.executionError };
         if (!options.truncated) yield { kind: "done", exitStatus: options.exitStatus ?? 0 };
       })(),
     };
@@ -173,6 +191,7 @@ try {
     { resumePrompt: "等依赖完成" },
     { native: true },
     { truncated: true },
+    { executionError: "API Error: 503 service unavailable" },
     { truncated: true, confirmed: true, stopped: "canceled" as const },
     { role: "reviewer" as const },
   ]) {
@@ -182,6 +201,19 @@ try {
     assert.equal(result.state.reviews.length, 0, JSON.stringify(options));
     if (options.stopped || options.exitStatus) assert.match(result.transcript, /预约审查仍在等待/);
   }
+
+  const autoFailed = await runTurn("auto-follow-up-execution-error", {
+    followUp: true,
+    reserve: false,
+    autoFollowUp: true,
+    executionError: "API Error: 503 service unavailable: no available accounts",
+  });
+  assert.equal(autoFailed.state.reviewReservation.armed, false, "修复执行异常后必须取消自动续轮预约");
+  assert.equal(autoFailed.state.reviews.length, 1, "执行异常不得启动下一轮审查");
+  assert.equal(autoFailed.state.reviews[0]?.status, "stopped");
+  assert.equal(autoFailed.state.reviews[0]?.currentRound, 1);
+  assert.equal(autoFailed.state.executions.at(-1)?.status, "failed", "exit 0 但带 error 事件的执行应记为失败");
+  assert.match(autoFailed.transcript, /自动复审已取消/);
 
   // ── 排队消息优先于预约审查 ──
   // 用户排在托盘里的那几句是给实现会话的后续指令，审查该看的是它们都说完之后的工作区。

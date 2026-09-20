@@ -258,7 +258,7 @@ export async function runTask(
     await reportTurnFailure({ taskId, message, role: "single" });
     const status = stopped ?? "failed";
     await setTaskStatus(taskId, status);
-    await afterSettlement(taskId, status, false, false);
+    await afterSettlement(taskId, status, false, false, "single", true, !stopped);
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);

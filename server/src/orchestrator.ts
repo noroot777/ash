@@ -654,7 +654,7 @@ export async function continueTask(
     // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
     // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、
     // 涨 verifyRounds,却给不出 verified/verify_failed),白耗用户一轮验证配额。
-    if (!nativeTurn) await afterSettlement(taskId, status, false, false, sessionRole);
+    if (!nativeTurn) await afterSettlement(taskId, status, false, false, sessionRole, true, !stopped);
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);
