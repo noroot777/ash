@@ -52,7 +52,10 @@ export type AgentEvent =
   // 分级的理由:结算说明混在故障里,新用户看到红叉只会读成「它崩了」,而真出故障时
   // 那句说明又会盖住真正的原因(docs/incidents.md「接力到多用户机器」)。缺省(旧 trace、
   // 执行器报的错)仍是故障级,展示端照旧红着。
-  | { kind: "error"; message: string; scope?: "session"; level?: "notice" }
+  // affectsTurn=false = 仍按红色异常展示和落 trace，但它只是旁路诊断（例如 Claude 自动
+  // 压缩失败），不能据此把已经成功的模型回合判失败。缺省=true，真正的回合/API 错误
+  // 不必每个执行器重复标注。
+  | { kind: "error"; message: string; scope?: "session"; level?: "notice"; affectsTurn?: false }
   // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。
   // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。
   | { kind: "turnEnd" }

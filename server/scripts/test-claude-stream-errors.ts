@@ -133,6 +133,8 @@ console.log("4) 压缩(/compact 与自动压缩)的过程与成败必须显式�
   else fail(`压缩开始没有任何提示:${JSON.stringify(text)}`);
   if (errors.length === 1 && errors[0].message.includes("503")) ok(`压缩失败抬成了 error:${errors[0].message}`);
   else fail(`压缩失败没有报错(收到 ${errors.length} 条:${errors[0]?.message})`);
+  if (errors[0]?.affectsTurn === false) ok("压缩失败只影响展示，不把成功回合判失败");
+  else fail(`压缩失败缺少旁路诊断标记:${JSON.stringify(errors[0])}`);
 
   const succeeded = await collect([
     { type: "system", subtype: "status", status: "compacting", session_id: "sess-5" },

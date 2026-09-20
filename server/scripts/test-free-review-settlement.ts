@@ -41,7 +41,7 @@ try {
     resumePrompt?: string;
     native?: boolean;
     truncated?: boolean;
-    executionError?: string;
+    executionError?: { message: string; affectsTurn?: false };
     role?: "single" | "reviewer";
     reserve?: boolean;
     autoFollowUp?: boolean;
@@ -119,7 +119,7 @@ try {
       sessionId: "", commandLine: "fixture", kill() {},
       events: (async function* (): AsyncGenerator<AgentEvent> {
         yield { kind: "text", text: "本轮输出。" };
-        if (options.executionError) yield { kind: "error", message: options.executionError };
+        if (options.executionError) yield { kind: "error", ...options.executionError };
         if (!options.truncated) yield { kind: "done", exitStatus: options.exitStatus ?? 0 };
       })(),
     };
@@ -191,7 +191,7 @@ try {
     { resumePrompt: "等依赖完成" },
     { native: true },
     { truncated: true },
-    { executionError: "API Error: 503 service unavailable" },
+    { executionError: { message: "API Error: 503 service unavailable" } },
     { truncated: true, confirmed: true, stopped: "canceled" as const },
     { role: "reviewer" as const },
   ]) {
@@ -206,7 +206,7 @@ try {
     followUp: true,
     reserve: false,
     autoFollowUp: true,
-    executionError: "API Error: 503 service unavailable: no available accounts",
+    executionError: { message: "API Error: 503 service unavailable: no available accounts" },
   });
   assert.equal(autoFailed.state.reviewReservation.armed, false, "修复执行异常后必须取消自动续轮预约");
   assert.equal(autoFailed.state.reviews.length, 1, "执行异常不得启动下一轮审查");
@@ -214,6 +214,34 @@ try {
   assert.equal(autoFailed.state.reviews[0]?.currentRound, 1);
   assert.equal(autoFailed.state.executions.at(-1)?.status, "failed", "exit 0 但带 error 事件的执行应记为失败");
   assert.match(autoFailed.transcript, /自动复审已取消/);
+
+  const compactFailed = await runTurn("auto-follow-up-compact-error", {
+    followUp: true,
+    reserve: false,
+    autoFollowUp: true,
+    executionError: {
+      message: "上下文压缩失败，会话大小原地不动：API Error: 503 upstream connect error",
+      affectsTurn: false,
+    },
+  });
+  assert.equal(compactFailed.state.reviewReservation.armed, false, "修复成功后应消费自动续轮预约");
+  assert.equal(compactFailed.state.reviews.length, 1);
+  assert.equal(compactFailed.state.reviews[0]?.status, "reviewing", "展示用压缩错误不得阻止下一轮审查");
+  assert.equal(compactFailed.state.reviews[0]?.currentRound, 2);
+  assert.equal(compactFailed.state.executions.at(-1)?.status, "completed", "展示用压缩错误不得把执行记为失败");
+
+  const reviewedWithCompactError = await runTurn("review-conclusion-with-compact-error", {
+    followUp: true,
+    role: "reviewer",
+    reserve: false,
+    reviewConclusion: "verify_failed",
+    executionError: {
+      message: "上下文压缩失败，会话大小原地不动：API Error: 503 upstream connect error",
+      affectsTurn: false,
+    },
+  });
+  assert.equal(reviewedWithCompactError.state.reviews[0]?.status, "stopped", "展示用压缩错误不得覆盖已交审查结论");
+  assert.equal(reviewedWithCompactError.state.reviewReservation.armed, true, "未通过结论仍应挂起修复后的自动复审");
 
   // ── 排队消息优先于预约审查 ──
   // 用户排在托盘里的那几句是给实现会话的后续指令，审查该看的是它们都说完之后的工作区。

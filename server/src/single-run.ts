@@ -448,7 +448,9 @@ export async function consumeSingleRun(a: {
         }
         persistTrace(emittedEvent);
         if (emittedEvent.kind === "error") {
-          sawExecutionError = true;
+          // 有些 error 是需要留在红色诊断块里的旁路故障，但不代表模型回合失败（目前的
+          // 实例是 Claude 自动压缩失败：压缩没成，后续 result 仍明确为 success）。
+          if (emittedEvent.affectsTurn !== false) sawExecutionError = true;
           writeRunError(out, emittedEvent.message);
           sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
         }

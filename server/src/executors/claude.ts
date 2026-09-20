@@ -550,7 +550,11 @@ export async function* parseClaudeStream(
             const detail = typeof ev.compact_error === "string" && ev.compact_error.trim()
               ? ev.compact_error.trim()
               : "CLI 没有给出原因";
-            push({ kind: "error", message: `上下文压缩失败，会话大小原地不动：${detail}` });
+            push({
+              kind: "error",
+              message: `上下文压缩失败，会话大小原地不动：${detail}`,
+              affectsTurn: false,
+            });
           } else {
             push({ kind: "text", text: "\n> 上下文已压缩。\n\n" });
           }
