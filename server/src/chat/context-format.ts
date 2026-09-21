@@ -46,25 +46,29 @@ const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 const graphemes = new Intl.Segmenter("und", { granularity: "grapheme" });
 /**
- * 找 grapheme 边界时在目标位置两侧各看这么多码元。整串分词没必要（一条消息可能几十万字），
- * 只有边界附近要精确；窗口比任何正常的字符序列都宽出一个数量级（ZWJ 家庭 emoji 11 个码元、
- * 国旗 4 个、肤色 4 个），够长到从窗口开头起步的分词早已和真实边界对齐。
+ * 分段时在目标切点之后多带这么多码元。grapheme 的判定要看后文（国旗是两个区域指示符、
+ * ZWJ 序列要看连接符后面跟着什么），尾部截得太紧会让 `Intl.Segmenter` 以为序列到此为止，
+ * 把切点误判成边界。**起点不需要余量**——分段一律从 `start` 开始，它本身就是真边界。
  */
-const BOUNDARY_WINDOW = 256;
+const BOUNDARY_TAIL = 256;
 
 /** `end` 落在一个字符中间时，往前挪到最近的 grapheme 边界；挪不动就退回码点边界。 */
 function safeEnd(body: string, start: number, end: number): number {
-  const from = Math.max(start, end - BOUNDARY_WINDOW);
-  const window = body.slice(from, Math.min(body.length, end + BOUNDARY_WINDOW));
+  // 从 start 起分段：它是上一块的切点或正文开头，一定是真实的 grapheme 边界，所以这里
+  // 看到的每个分段起点都是真边界。换成「切点前后各取一段」的窗口就会翻车——窗口起点可能
+  // 落在一个长序列（比如几百个组合附加符）的内部，而 Segmenter 必须把窗口起点当成一个
+  // 分段起点，那个伪边界会被当作可用切点，照样从字符中间切开。
+  const segment = body.slice(start, Math.min(body.length, end + BOUNDARY_TAIL));
   let boundary = 0;
-  for (const { index } of graphemes.segment(window)) {
-    const at = from + index;
+  for (const { index } of graphemes.segment(segment)) {
+    const at = start + index;
     if (at > end) break;
     if (at === end) return end;
     if (at > start) boundary = at;
   }
+  // 一个 grapheme 自己就比整块还长（几千个组合符堆在一起的构造）：块长上限是硬的，只能
+  // 切开它，但至少别把代理对劈成两半。
   if (boundary) return boundary;
-  // 窗口里一个可用边界都没有（比如几百个组合符堆在一起的构造）：至少别把代理对劈开。
   return end - 1 > start && isHighSurrogate(body.charCodeAt(end - 1)) && isLowSurrogate(body.charCodeAt(end)) ? end - 1 : end;
 }
 

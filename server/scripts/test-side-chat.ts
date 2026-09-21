@@ -306,8 +306,11 @@ try {
   // （😀）会被劈成两个孤立代理；多码点的 grapheme——肤色修饰、ZWJ 家庭、国旗、组合附加符
   // ——两半各自都合法、拼起来也等于原文，可**最终提示词里两块之间隔着下一条记录的 JSON
   // 字段和换行**，模型再也拼不回那个字符。所以判据直接落在两种最终提示词上。
-  for (const sequence of ["😀", "👍🏽", "👨‍👩‍👧‍👦", "🇨🇳", "é"]) {
-    const body = `${"A".repeat(4000 - sequence.length + 1)}${sequence}${"Z".repeat(4100)}`;
+  // 最后一条是**分解**的组合序列（e + U+0301），不是预组的 U+00E9——后者 length 为 1，
+  // 根本跨不过边界，写成它等于这条用例没测组合符。倒数第二条长到切点前就超过任何固定窗口，
+  // 专治「窗口起点落在长序列内部、把伪边界当真边界」那种切法（审查第 5 轮 P2）。
+  for (const sequence of ["😀", "👍🏽", "👨‍👩‍👧‍👦", "🇨🇳", `e${"\u0301".repeat(600)}`, "e\u0301"]) {
+    const body = `${"A".repeat(4001 - sequence.length)}${sequence}${"Z".repeat(4100)}`;
     const parts = contextEntries({ role: "user", author: "用户", body });
     assert.ok(parts.length > 1, `${sequence}：超长正文仍然切块`);
     // JSON.stringify 会把孤立代理写成字面的 \ud83d 转义，所以条目字符串本身永远是
