@@ -20,7 +20,8 @@ const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { sideChatHistory } = await import("../src/chat/side-routes.js");
 const { settleSideChat } = await import("../src/chat/side-delivery.js");
 const { parseSideChatReply } = await import("../src/chat/side-prompt.js");
-const { contextEntries } = await import("../src/chat/context-format.js");
+const { contextEntries, summaryPrompt } = await import("../src/chat/context-format.js");
+const { sideChatPrompt } = await import("../src/chat/side-prompt.js");
 const { verifySideChatReply } = await import("../src/chat/side-authorization.js");
 const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
@@ -301,16 +302,21 @@ try {
   assert.equal(followUp.status, "done", followUp.body);
   assert.equal(followUp.body, fakeReply);
   assert.notEqual((await snapshot("wide-room")).context?.status, "failed");
-  // 切块不能把一个字符切成两半（审查第 3 轮 P2）：边界正好落在代理对中间时前挪一格，
-  // 否则两块各留半个 emoji，JSON 化之后模型看到的是分处两条记录的 \ud83d / \ude00。
-  const emojiBody = `${"A".repeat(3999)}😀${"Z".repeat(4100)}`;
-  const emojiParts = contextEntries({ role: "user", author: "用户", body: emojiBody });
-  assert.ok(emojiParts.length > 1, "超长正文仍然切块");
-  // 判据落在 JSON.parse 之后的正文上：JSON.stringify 会把孤立代理写成字面的 \ud83d 转义，
-  // 所以条目字符串本身永远是 well-formed 的，被劈开的字符只在解出来的正文里才看得出来。
-  for (const part of emojiParts) assert.ok((JSON.parse(part) as { body: string }).body.isWellFormed(), "每块正文都不留半个字符");
-  assert.equal(emojiParts.map((part) => (JSON.parse(part) as { body: string }).body).join(""), emojiBody, "切块拼回去还是原文");
-  assert.ok(emojiParts.some((part) => part.includes("😀")), "emoji 完整落在某一块里");
+  // 切块不能把「用户眼里的一个字符」切成两半（审查第 3、4 轮 P2）。单码点的补充平面字符
+  // （😀）会被劈成两个孤立代理；多码点的 grapheme——肤色修饰、ZWJ 家庭、国旗、组合附加符
+  // ——两半各自都合法、拼起来也等于原文，可**最终提示词里两块之间隔着下一条记录的 JSON
+  // 字段和换行**，模型再也拼不回那个字符。所以判据直接落在两种最终提示词上。
+  for (const sequence of ["😀", "👍🏽", "👨‍👩‍👧‍👦", "🇨🇳", "é"]) {
+    const body = `${"A".repeat(4000 - sequence.length + 1)}${sequence}${"Z".repeat(4100)}`;
+    const parts = contextEntries({ role: "user", author: "用户", body });
+    assert.ok(parts.length > 1, `${sequence}：超长正文仍然切块`);
+    // JSON.stringify 会把孤立代理写成字面的 \ud83d 转义，所以条目字符串本身永远是
+    // well-formed 的——被劈开的字符只在解出来的正文里才看得出来。
+    for (const part of parts) assert.ok((JSON.parse(part) as { body: string }).body.isWellFormed(), `${sequence}：每块正文都不留半个字符`);
+    assert.equal(parts.map((part) => (JSON.parse(part) as { body: string }).body).join(""), body, `${sequence}：切块拼回去还是原文`);
+    assert.ok(sideChatPrompt(member, parts, "这段里那个字符是什么").includes(sequence), `${sequence}：直接回复的提示词里仍是完整序列`);
+    assert.ok(summaryPrompt("", parts, 2000).includes(sequence), `${sequence}：摘要提示词里仍是完整序列`);
+  }
   // 主会话快照走同一把尺子，同样不能在边界上把字符劈开。
   writeFileSync(join(parentPath, "session.md"), `${"A".repeat(3999)}😀${"Z".repeat(100)}`);
   assert.equal((await req("/tasks/parent/side-chats", { id: "emoji-room", member })).status, 201);

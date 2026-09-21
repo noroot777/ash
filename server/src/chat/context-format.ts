@@ -44,22 +44,50 @@ const CONTEXT_ENTRY_CHARS = 4000;
 
 const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+const graphemes = new Intl.Segmenter("und", { granularity: "grapheme" });
+/**
+ * 找 grapheme 边界时在目标位置两侧各看这么多码元。整串分词没必要（一条消息可能几十万字），
+ * 只有边界附近要精确；窗口比任何正常的字符序列都宽出一个数量级（ZWJ 家庭 emoji 11 个码元、
+ * 国旗 4 个、肤色 4 个），够长到从窗口开头起步的分词早已和真实边界对齐。
+ */
+const BOUNDARY_WINDOW = 256;
+
+/** `end` 落在一个字符中间时，往前挪到最近的 grapheme 边界；挪不动就退回码点边界。 */
+function safeEnd(body: string, start: number, end: number): number {
+  const from = Math.max(start, end - BOUNDARY_WINDOW);
+  const window = body.slice(from, Math.min(body.length, end + BOUNDARY_WINDOW));
+  let boundary = 0;
+  for (const { index } of graphemes.segment(window)) {
+    const at = from + index;
+    if (at > end) break;
+    if (at === end) return end;
+    if (at > start) boundary = at;
+  }
+  if (boundary) return boundary;
+  // 窗口里一个可用边界都没有（比如几百个组合符堆在一起的构造）：至少别把代理对劈开。
+  return end - 1 > start && isHighSurrogate(body.charCodeAt(end - 1)) && isLowSurrogate(body.charCodeAt(end)) ? end - 1 : end;
+}
 
 /**
- * 按长度切块，但**不把一个字符切成两半**。
+ * 按长度切块，但**不把用户眼里的一个字符切成两半**。
  *
- * `slice` 数的是 UTF-16 码元，补充平面的字符（emoji、CJK 扩展区、古文字、部分数学符号）
- * 占两个——边界正好落在代理对中间时，两块各留半个，`JSON.stringify` 之后变成分处两条
- * 记录的 `\ud83d` / `\ude00`，那个字符在模型看到的上下文里就此消失，而页面上的原始消息
- * 完好无损，所以只会表现为「它怎么没看懂那段」。边界前挪一格即可，块长只差 1。
+ * 两层理由。第一层是 `slice` 数的是 UTF-16 码元，补充平面的字符占两个——边界落在代理对
+ * 中间时两块各留半个，`JSON.stringify` 之后变成分处两条记录的 `\ud83d` / `\ude00`，那个
+ * 字符在模型看到的上下文里就此消失。第二层是一个「字符」往往不止一个码点：肤色修饰
+ * （👍🏽）、ZWJ 家庭（👨‍👩‍👧‍👦）、国旗（🇨🇳）、组合附加符（e + ◌́）都是多码点的 grapheme
+ * cluster，从中间切开后两半各自都是合法字符串，可**上下文里两块之间隔着下一条历史记录的
+ * JSON 字段和换行**，模型再也拼不回原来那个字符。所以边界按 grapheme 对齐，不只按码点。
+ *
+ * 两种情况下用户都看不出异样：页面显示的是原始消息，完好无损；只有模型的回答会透着
+ * 「它怎么没看懂那段」。
  */
 export function chunkForContext(body: string, limit = CONTEXT_ENTRY_CHARS): string[] {
   const parts: string[] = [];
   for (let start = 0; start < body.length;) {
-    let end = Math.min(start + limit, body.length);
-    if (end < body.length && end - 1 > start && isHighSurrogate(body.charCodeAt(end - 1)) && isLowSurrogate(body.charCodeAt(end))) end -= 1;
-    parts.push(body.slice(start, end));
-    start = end;
+    const end = Math.min(start + limit, body.length);
+    const cut = end < body.length ? safeEnd(body, start, end) : end;
+    parts.push(body.slice(start, cut));
+    start = cut;
   }
   return parts;
 }
