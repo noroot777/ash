@@ -33,7 +33,7 @@ export function estimateChatTokens(text: string): number {
 }
 
 /**
- * 冻结成历史条目时的切块长度，和侧聊快照那边同一把尺子（`side-routes.ts`）。
+ * 冻结成历史条目时的切块长度，和侧聊快照那边同一把尺子（两处都用下面的 `chunkForContext`）。
  *
  * 整条消息写成一个条目会在很后面才爆：一条超长消息（侧聊已经不按长度拒收了）冻结成单个
  * 条目后，既塞不进 `recentTokens` 的近期原文，也大于 `batchTokens` 的整理批次预算，于是
@@ -41,6 +41,28 @@ export function estimateChatTokens(text: string): number {
  * 重试」不会自愈（条目还在那儿）。切块之后它只是若干条普通历史，该保留保留、该摘要摘要。
  */
 const CONTEXT_ENTRY_CHARS = 4000;
+
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+
+/**
+ * 按长度切块，但**不把一个字符切成两半**。
+ *
+ * `slice` 数的是 UTF-16 码元，补充平面的字符（emoji、CJK 扩展区、古文字、部分数学符号）
+ * 占两个——边界正好落在代理对中间时，两块各留半个，`JSON.stringify` 之后变成分处两条
+ * 记录的 `\ud83d` / `\ude00`，那个字符在模型看到的上下文里就此消失，而页面上的原始消息
+ * 完好无损，所以只会表现为「它怎么没看懂那段」。边界前挪一格即可，块长只差 1。
+ */
+export function chunkForContext(body: string, limit = CONTEXT_ENTRY_CHARS): string[] {
+  const parts: string[] = [];
+  for (let start = 0; start < body.length;) {
+    let end = Math.min(start + limit, body.length);
+    if (end < body.length && end - 1 > start && isHighSurrogate(body.charCodeAt(end - 1)) && isLowSurrogate(body.charCodeAt(end))) end -= 1;
+    parts.push(body.slice(start, end));
+    start = end;
+  }
+  return parts;
+}
 
 /** 一条消息进上下文时的最终形态：选出要留的正文，附上任务回链。 */
 function contextContent(message: Pick<ChatMessage, "role" | "author" | "body"> & { taskId?: string | null; status?: string; modelReply?: string | null }) {
@@ -62,11 +84,7 @@ export function contextMessage(message: Parameters<typeof contextContent>[0]): s
 export function contextEntries(message: Parameters<typeof contextContent>[0]): string[] {
   const content = contextContent(message);
   if (content.body.length <= CONTEXT_ENTRY_CHARS) return [JSON.stringify(content)];
-  const parts: string[] = [];
-  for (let start = 0; start < content.body.length; start += CONTEXT_ENTRY_CHARS) {
-    parts.push(JSON.stringify({ ...content, body: content.body.slice(start, start + CONTEXT_ENTRY_CHARS) }));
-  }
-  return parts;
+  return chunkForContext(content.body).map((body) => JSON.stringify({ ...content, body }));
 }
 
 export function summaryPrompt(previous: string, entries: string[], maxTokens: number): string {

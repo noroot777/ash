@@ -8,7 +8,7 @@ import { actorOf, ownerIdOf } from "../auth/context.js";
 import { filterOwned } from "../auth/owned.js";
 import { id, now } from "../util.js";
 import { readableRunPath, sessionTranscriptPath } from "../transcript.js";
-import { estimateChatTokens } from "./context-format.js";
+import { chunkForContext, estimateChatTokens } from "./context-format.js";
 import { isHumanRequest, parseMembers, visibleProject } from "./route-access.js";
 import { toRoom } from "./service.js";
 
@@ -59,13 +59,9 @@ export async function sideChatHistory(task: typeof tasks.$inferSelect) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT" || session.endedAt) throw error;
     } finally { await handle?.close(); }
   }
-  const entries = history.flatMap((message) => {
-    const parts: string[] = [];
-    for (let start = 0; start < message.body.length; start += 4000) {
-      parts.push(JSON.stringify({ ...message, source: "主会话快照，仅供参考", body: message.body.slice(start, start + 4000) }));
-    }
-    return parts;
-  });
+  // 切块和历史条目同一把尺子（`chunkForContext`：按长度切，但不把一个字符切成两半）。
+  const entries = history.flatMap((message) =>
+    chunkForContext(message.body).map((body) => JSON.stringify({ ...message, source: "主会话快照，仅供参考", body })));
   return entries;
 }
 

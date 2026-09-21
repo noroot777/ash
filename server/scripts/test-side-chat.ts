@@ -20,6 +20,7 @@ const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { sideChatHistory } = await import("../src/chat/side-routes.js");
 const { settleSideChat } = await import("../src/chat/side-delivery.js");
 const { parseSideChatReply } = await import("../src/chat/side-prompt.js");
+const { contextEntries } = await import("../src/chat/context-format.js");
 const { verifySideChatReply } = await import("../src/chat/side-authorization.js");
 const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
@@ -300,6 +301,22 @@ try {
   assert.equal(followUp.status, "done", followUp.body);
   assert.equal(followUp.body, fakeReply);
   assert.notEqual((await snapshot("wide-room")).context?.status, "failed");
+  // 切块不能把一个字符切成两半（审查第 3 轮 P2）：边界正好落在代理对中间时前挪一格，
+  // 否则两块各留半个 emoji，JSON 化之后模型看到的是分处两条记录的 \ud83d / \ude00。
+  const emojiBody = `${"A".repeat(3999)}😀${"Z".repeat(4100)}`;
+  const emojiParts = contextEntries({ role: "user", author: "用户", body: emojiBody });
+  assert.ok(emojiParts.length > 1, "超长正文仍然切块");
+  // 判据落在 JSON.parse 之后的正文上：JSON.stringify 会把孤立代理写成字面的 \ud83d 转义，
+  // 所以条目字符串本身永远是 well-formed 的，被劈开的字符只在解出来的正文里才看得出来。
+  for (const part of emojiParts) assert.ok((JSON.parse(part) as { body: string }).body.isWellFormed(), "每块正文都不留半个字符");
+  assert.equal(emojiParts.map((part) => (JSON.parse(part) as { body: string }).body).join(""), emojiBody, "切块拼回去还是原文");
+  assert.ok(emojiParts.some((part) => part.includes("😀")), "emoji 完整落在某一块里");
+  // 主会话快照走同一把尺子，同样不能在边界上把字符劈开。
+  writeFileSync(join(parentPath, "session.md"), `${"A".repeat(3999)}😀${"Z".repeat(100)}`);
+  assert.equal((await req("/tasks/parent/side-chats", { id: "emoji-room", member })).status, 201);
+  const emojiRows = await db.select().from(chatContextEntries).where(eq(chatContextEntries.roomId, "emoji-room"));
+  for (const row of emojiRows) assert.ok((JSON.parse(row.content) as { body: string }).body.isWellFormed(), "快照每块正文都不留半个字符");
+  assert.ok(emojiRows.some((row) => row.content.includes("😀")), "快照里的 emoji 完整");
   const parent = (await db.select().from(tasks).where(eq(tasks.id, "parent")))[0]!;
   rmSync(join(parentPath, "session.md"));
   await assert.rejects(sideChatHistory(parent), /ENOENT/, "已结束的会话正文丢失时不能生成不完整快照");
