@@ -32,7 +32,18 @@ export function estimateChatTokens(text: string): number {
   return Math.ceil(ascii / 3 + (Buffer.byteLength(text, "utf8") - ascii) / 2);
 }
 
-export function contextMessage(message: Pick<ChatMessage, "role" | "author" | "body"> & { taskId?: string | null; status?: string; modelReply?: string | null }): string {
+/**
+ * 冻结成历史条目时的切块长度，和侧聊快照那边同一把尺子（`side-routes.ts`）。
+ *
+ * 整条消息写成一个条目会在很后面才爆：一条超长消息（侧聊已经不按长度拒收了）冻结成单个
+ * 条目后，既塞不进 `recentTokens` 的近期原文，也大于 `batchTokens` 的整理批次预算，于是
+ * `compact()` 凑不出批次直接抛错——这一条消息就把整个房间的后续回复全卡死，而且「稍后
+ * 重试」不会自愈（条目还在那儿）。切块之后它只是若干条普通历史，该保留保留、该摘要摘要。
+ */
+const CONTEXT_ENTRY_CHARS = 4000;
+
+/** 一条消息进上下文时的最终形态：选出要留的正文，附上任务回链。 */
+function contextContent(message: Pick<ChatMessage, "role" | "author" | "body"> & { taskId?: string | null; status?: string; modelReply?: string | null }) {
   const content = message.role === "agent" && typeof message.modelReply === "string"
     ? { role: "agent", author: message.author, body: message.modelReply }
     : message.role === "agent" && (message.status === "failed" || message.status === "stopped")
@@ -40,7 +51,22 @@ export function contextMessage(message: Pick<ChatMessage, "role" | "author" | "b
       ? `${message.author}已创建任务，后续流程未正常结束；请查看任务卡。`
       : `${message.author}${message.status === "failed" ? "本轮未能回复。" : "本轮回复已停止。"}` }
     : { role: message.role, author: message.author, body: message.body };
-  return JSON.stringify({ ...content, ...(message.taskId ? { taskId: message.taskId } : {}) });
+  return { ...content, ...(message.taskId ? { taskId: message.taskId } : {}) };
+}
+
+export function contextMessage(message: Parameters<typeof contextContent>[0]): string {
+  return JSON.stringify(contextContent(message));
+}
+
+/** 同一条消息冻结成的历史条目：正文过长就切块，顺序即数组顺序。 */
+export function contextEntries(message: Parameters<typeof contextContent>[0]): string[] {
+  const content = contextContent(message);
+  if (content.body.length <= CONTEXT_ENTRY_CHARS) return [JSON.stringify(content)];
+  const parts: string[] = [];
+  for (let start = 0; start < content.body.length; start += CONTEXT_ENTRY_CHARS) {
+    parts.push(JSON.stringify({ ...content, body: content.body.slice(start, start + CONTEXT_ENTRY_CHARS) }));
+  }
+  return parts;
 }
 
 export function summaryPrompt(previous: string, entries: string[], maxTokens: number): string {

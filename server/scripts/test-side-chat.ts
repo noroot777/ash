@@ -295,6 +295,11 @@ try {
   assert.match(huge.body, /本轮没有带上主会话快照原文/);
   assert.doesNotMatch(prompts[promptsBeforeHuge]!, /A{4000}/u, "让路之后这一轮确实不带快照原文");
   assert.match(prompts[promptsBeforeHuge]!, /M{4000}/u, "用户消息本身照常进 prompt");
+  // 超长消息不能把房间毒死（审查第 2 轮 P1）：它冻结成历史后要能被整理，下一条短问题照常回答。
+  const followUp = await send("继续问一个很短的问题", "user-after-huge", "wide-room");
+  assert.equal(followUp.status, "done", followUp.body);
+  assert.equal(followUp.body, fakeReply);
+  assert.notEqual((await snapshot("wide-room")).context?.status, "failed");
   const parent = (await db.select().from(tasks).where(eq(tasks.id, "parent")))[0]!;
   rmSync(join(parentPath, "session.md"));
   await assert.rejects(sideChatHistory(parent), /ENOENT/, "已结束的会话正文丢失时不能生成不完整快照");

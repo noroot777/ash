@@ -3,7 +3,7 @@ import type { ChatContextStatus, ChatMessage } from "@ash/shared/chat";
 import { db } from "../db/index.js";
 import { chatContextEntries as entries, chatContextStates as states, chatContextResets as resets, chatMessages, chatRooms, chatSummaries as summaries } from "../db/schema.js";
 import { id, now } from "../util.js";
-import { contextMessage, estimateChatTokens } from "./context-format.js";
+import { contextEntries, contextMessage, estimateChatTokens } from "./context-format.js";
 
 // 完成后的消息冻结为只含正文的记录；排队状态、时间戳和后续任务状态不再反复改动提示词前缀。
 export async function captureChatHistory(roomId: string): Promise<number> {
@@ -25,8 +25,11 @@ export async function captureChatSnapshot(roomId: string): Promise<{ cutoff: num
         .orderBy(asc(chatMessages.createdAt), asc(chatMessages.id)).limit(500);
       if (!missing.length) break;
       for (const message of missing) {
-        const content = contextMessage({ ...message, role: message.role as ChatMessage["role"] });
-        await tx.insert(entries).values({ roomId, messageId: message.id, content, tokens: estimateChatTokens(`${content}\n`) }).onConflictDoNothing();
+        // 超长正文切成多条（见 contextEntries）。`message_id` 唯一，所以第一块沿用消息 id
+        // ——`unfrozen` 的 leftJoin 认的就是它，后续块按确定性后缀排开，重入时一样冲突跳过。
+        for (const [index, content] of contextEntries({ ...message, role: message.role as ChatMessage["role"] }).entries()) {
+          await tx.insert(entries).values({ roomId, messageId: index ? `${message.id}#${index + 1}` : message.id, content, tokens: estimateChatTokens(`${content}\n`) }).onConflictDoNothing();
+        }
       }
     }
     // 未完成回复之后的已完成消息只进入本次快照，等缺口补齐后再按原时间顺序冻结。
