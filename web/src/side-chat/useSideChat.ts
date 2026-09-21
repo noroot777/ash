@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMember, ChatRoom, ChatSnapshot } from "@ash/shared/chat";
 import { chatApi } from "../chat/chatApi.ts";
 import { createClientId } from "../lib/clientId.ts";
-import { clearSideChatQuote, moveNewSideChatQuote, SIDE_CHAT_MESSAGE_LIMIT, sideChatMessageBody, useSideChatQuote } from "./sideChatQuote.ts";
+import { clearSideChatQuote, moveNewSideChatQuote, sideChatMessageBody, useSideChatQuote } from "./sideChatQuote.ts";
 import { newSideChatScope, readSideStorage as read, sideDraftKey as draftKey, sideRequestKey as requestKey, writeSideStorage as write } from "./sideChatStorage.ts";
 
 const finished = (status: string) => ["done", "failed", "stopped"].includes(status);
@@ -128,8 +128,7 @@ export function useSideChat(taskId: string) {
   const room = baseRoom && proposedMember?.roomId === baseRoom.id ? { ...baseRoom, members: [proposedMember.member] } : baseRoom;
   const busy = !!snapshot?.messages.some((message) => !finished(message.status)) || snapshot?.context?.status === "compacting";
   const body = sideChatMessageBody(draft, quote);
-  const overLimit = body.length > SIDE_CHAT_MESSAGE_LIMIT;
-  const canSend = loaded && (!roomId || !!snapshot) && !busy && !sending && !savingMember && !memberUncertain && !!draft.trim() && !overLimit;
+  const canSend = loaded && (!roomId || !!snapshot) && !busy && !sending && !savingMember && !memberUncertain && !!draft.trim();
   const setDraft = (value: string) => {
     write(draftKey(selected.current ?? newScope), value);
     setDraftState(value);
@@ -211,6 +210,5 @@ export function useSideChat(taskId: string) {
   };
   const select = (id: string | null) => { if (!locked.current && !savingMember) chooseRoom(id); };
   const removeQuote = () => { if (quote) clearSideChatQuote(taskId, roomId, quote.id); };
-  return { rooms, room, snapshot, ready, loaded, connected, error: sendError || error, memberError, memberUncertain, draft, quote, removeQuote, overLimit,
-    messageLength: body.length, sending, savingMember, busy, canSend, select, setDraft, saveMember, send, stop, reload };
+  return { rooms, room, snapshot, ready, loaded, connected, error: sendError || error, memberError, memberUncertain, draft, quote, removeQuote, sending, savingMember, busy, canSend, select, setDraft, saveMember, send, stop, reload };
 }

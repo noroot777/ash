@@ -75,10 +75,12 @@ try {
   let summaryStarted!: () => void;
   const summaryEntered = new Promise<void>((resolve) => { summaryStarted = resolve; });
   let finishSummary!: (value: { text: string }) => void;
+  // 侧聊按自己那档预算走（见 context-format.ts），所以这里两档都注入同一份小 policy，
+  // 让这个竞态用例仍然能在几条历史上触发整理。
   const manager = new ChatContextManager(async () => {
     summaryStarted();
     return new Promise((resolve) => { finishSummary = resolve; });
-  }, policy);
+  }, policy, policy);
   const job = manager.prepare(summaryRoom, member, 1000000, "总结", new AbortController().signal, [], () => "短提示");
   const rejected = assert.rejects(job, /聊天已删除/);
   await summaryEntered;

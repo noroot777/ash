@@ -241,17 +241,19 @@ try {
   await input.fill("窄屏输入可见");
   await send.click();
   await page.getByText("窄屏输入可见", { exact: true }).waitFor();
+  // 快照体积不再是门槛（用户 2026-09-21 指定：侧聊和主会话一样不设限）：几十万字的主任务
+  // 背景照样建房、照样回复，不再在第一次发送时撞一句「超过上限」。
   await control("large-history", {});
   await page.getByRole("button", { name: "新建侧聊", exact: true }).click();
-  await input.fill("长历史首次发送仍保留草稿");
+  await input.fill("长历史首次发送照常建房");
   const roomsBeforeLargeHistory = (await roomsFor("parent")).length;
   await send.click();
-  await page.getByText(/超过侧聊的 64 KiB 上限/).waitFor();
-  assert.equal(await roomPicker.inputValue(), "");
-  assert.equal(await input.inputValue(), "长历史首次发送仍保留草稿");
-  assert.equal((await roomsFor("parent")).length, roomsBeforeLargeHistory, "首次发送建房失败不能留下空房间");
+  await page.getByText("长历史首次发送照常建房", { exact: true }).waitFor();
+  await page.locator(".side-chat-message.is-agent").last().getByText(/建议选择方案 B/).waitFor();
+  assert.equal((await roomsFor("parent")).length, roomsBeforeLargeHistory + 1, "长历史照常建房");
+  assert.equal(await input.inputValue(), "");
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log(`✓ 真实侧聊 API + headless Chrome：连续对话、执行过程实时/停止后留存、自然回传、回执、排队取消、停止/刷新、草稿/任务隔离、390px 通过\n截图：${artifacts}`);
+  console.log(`✓ 真实侧聊 API + headless Chrome：连续对话、执行过程实时/停止后留存、自然回传、回执、排队取消、停止/刷新、草稿/任务隔离、长历史照常建房、390px 通过\n截图：${artifacts}`);
 } finally {
   await browser?.close(); await server?.close();
   if (fixture.exitCode === null) { fixture.kill("SIGTERM"); await once(fixture, "exit"); }

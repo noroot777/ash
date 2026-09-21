@@ -8,7 +8,6 @@ import { ChatContextNotice } from "../chat/ChatContextNotice.tsx";
 import { executorRunSummary, isExecutorPickable, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { useSideChatMember } from "./useSideChatMember.ts";
 import type { useSideChat } from "./useSideChat.ts";
-import { SIDE_CHAT_MESSAGE_LIMIT } from "./sideChatQuote.ts";
 
 type SideChatState = ReturnType<typeof useSideChat>;
 
@@ -43,7 +42,7 @@ export function SideChatComposer({ task, chat }: { task: Task; chat: SideChatSta
     </div>}
     <ChatContextNotice context={chat.snapshot?.context} />
     <div className="side-chat-input">
-      <textarea ref={input} aria-label="侧聊消息输入" placeholder={chat.quote ? "想问这段内容什么？" : "围绕主会话问个问题…"} disabled={!chat.ready} maxLength={SIDE_CHAT_MESSAGE_LIMIT} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} onKeyDown={(event) => {
+      <textarea ref={input} aria-label="侧聊消息输入" placeholder={chat.quote ? "想问这段内容什么？" : "围绕主会话问个问题…"} disabled={!chat.ready} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} onKeyDown={(event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); }
       }} />
       <footer>
@@ -60,7 +59,6 @@ export function SideChatComposer({ task, chat }: { task: Task; chat: SideChatSta
         <button type="button" className="side-chat-primary" aria-label="发送侧聊消息" disabled={!chat.canSend || !valid} onClick={send}><ArrowUp size={17} weight="bold" /></button>
       </footer>
     </div>
-    {chat.overLimit && <p className="side-chat-limit" role="alert">引用与问题合计 {chat.messageLength} 字，超过 {SIDE_CHAT_MESSAGE_LIMIT} 字上限。请缩短问题，或移除引用后重新选择较短的内容。</p>}
     {connection.ready && !connection.error && !valid && <p className="side-chat-note">{connection.profiles.length ? "当前执行器不可用，请重新选择。" : "请先在设置中添加执行器。"}</p>}
   </div>;
 }

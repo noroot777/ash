@@ -102,7 +102,10 @@ export function mountChatRoutes(api: Hono, service: ChatService = chatService) {
     const room = await visibleRoom(c);
     if (!room) return c.json({ error: "chat not found" }, 404);
     const body = await c.req.json();
-    if (typeof body.body !== "string" || !body.body.trim() || body.body.length > 8000 || typeof body.id !== "string" || !/^[\w-]{8,80}$/u.test(body.id)) return c.json({ error: "消息限 1–8000 字，并需有效消息编号。" }, 400);
+    // 侧聊不设字数上限（用户 2026-09-21 指定：和主会话一样）——主会话的 /reply 也不限长，
+    // 而侧聊的一条消息里常常整段带着主会话选文的引用，8000 字是按群聊的一句话来回定的。
+    const limit = room.kind === "side" ? Infinity : 8000;
+    if (typeof body.body !== "string" || !body.body.trim() || body.body.length > limit || typeof body.id !== "string" || !/^[\w-]{8,80}$/u.test(body.id)) return c.json({ error: room.kind === "side" ? "消息不能为空，并需有效消息编号。" : "消息限 1–8000 字，并需有效消息编号。" }, 400);
     if (body.role !== undefined || body.mentions !== undefined) return c.json({ error: "角色和点名对象由服务器确定。" }, 400);
     if (body.projectId !== undefined && (room.kind !== "assistant" || typeof body.projectId !== "string")) return c.json({ error: "项目上下文无效" }, 400);
     if (body.projectId && !await visibleProject(c, body.projectId)) return c.json({ error: "project not found" }, 404);

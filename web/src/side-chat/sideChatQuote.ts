@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { createClientId } from "../lib/clientId.ts";
 
-export const SIDE_CHAT_MESSAGE_LIMIT = 8000;
 export type SideChatQuote = { id: string; text: string };
 const pendingKey = (taskId: string) => `ash:side-chat:quote:task:${taskId}`;
 const roomKey = (roomId: string) => `ash:side-chat:quote:room:${roomId}`;

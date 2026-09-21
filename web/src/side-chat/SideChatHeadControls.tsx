@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import { Info, Plus } from "@phosphor-icons/react";
-import { SIDE_CHAT_HISTORY_MAX_BYTES } from "@ash/shared/chat";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import type { useSideChat } from "./useSideChat.ts";
@@ -34,7 +33,7 @@ export function SideChatHeadControls({ chat }: { chat: SideChatState }) {
       <button ref={helpTrigger} type="button" aria-label="侧聊说明" aria-haspopup="dialog" aria-expanded={helpOpen} onClick={() => setHelpOpen((open) => !open)}><Info size={13} /></button>
       {helpOpen && <div className="side-chat-help" ref={help} role="dialog" aria-label="侧聊说明">
         <p>围绕主会话独立提问，不打断主任务。需要回传时，直接说：<code>把结论告诉主任务</code>。</p>
-        <p>首次发送时带入主会话快照，最多 {SIDE_CHAT_HISTORY_MAX_BYTES / 1024} KiB；较长历史的整理可能增加等待时间和用量。关闭面板保留对话与草稿。</p>
+        <p>首次发送时带入主会话快照，不限长度；主会话特别长时会先整理一份摘要，可能增加等待时间和用量，整理过程可随时停止。关闭面板保留对话与草稿。</p>
         <p>输入框里 Enter 发送，Shift Enter 换行。</p>
       </div>}
     </div>

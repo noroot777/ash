@@ -50,9 +50,9 @@ export class ChatService {
   private discarded = new Set<string>();
   private invoke: typeof invokeChat;
   private contexts: ChatContextManager;
-  constructor(invoke = invokeChat, private startTask = runTask, policy?: ChatContextPolicy) {
+  constructor(invoke = invokeChat, private startTask = runTask, policy?: ChatContextPolicy, sidePolicy?: ChatContextPolicy) {
     this.invoke = limitedChatInvoke(invoke);
-    this.contexts = new ChatContextManager(this.invoke, policy);
+    this.contexts = new ChatContextManager(this.invoke, policy, sidePolicy);
   }
 
   async recover() {

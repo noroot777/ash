@@ -1,8 +1,6 @@
 import type { AgentType, TaskListItem } from "./index.ts";
 import type { WorkflowDef } from "./workflow.ts";
 
-export const SIDE_CHAT_HISTORY_MAX_BYTES = 64 * 1024;
-
 export interface AssistantResult {
   matches: { taskId: string; reason: string }[];
   queries: string[];
@@ -44,11 +42,12 @@ export interface ChatTraceEvent {
 }
 
 /**
- * 一条回复能记多少执行过程。上限存在的理由是这份记录跟着**每一次**房间快照走
- * (SSE 每秒一整份)，不封顶时一次跑飞的咨询就能把快照撑成几 MB。
+ * 一条回复能记多少执行过程。上限**不是**产品策略（侧聊本身不限步数），纯粹因为这份记录
+ * 跟着**每一次**房间快照走（SSE 每秒一整份），不封顶时一次跑飞的咨询就能把快照撑成几 MB。
+ * 所以按「一次深入调研跑几百步也记得下」定档，而不是按「咨询该跑多少步」定档。
  * 撞上限不静默：`ChatTraceLog` 会补一行说明，别让用户以为它只干了这么点事。
  */
-export const CHAT_TRACE_LIMITS = { events: 120, detail: 800, total: 24_000 } as const;
+export const CHAT_TRACE_LIMITS = { events: 600, detail: 800, total: 120_000 } as const;
 
 export interface ChatMessage {
   id: string;

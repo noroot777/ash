@@ -193,10 +193,15 @@ try {
   authorizeWholeMessage = false;
   const overlong = "保留正文".repeat(4000);
   assert.equal(parseSideChatReply(JSON.stringify({ reply: overlong }), "解释方案").reply, overlong);
-  const malformed = parseSideChatReply(JSON.stringify({ reply: fakeReply, forward: { text: "x".repeat(8001), authorization: "把结论告诉主任务" } }), "把结论告诉主任务");
+  // 回传不再按字数拒（用户 2026-09-21 指定：侧聊不比主会话多设限），授权对得上就照常发。
+  const longForward = parseSideChatReply(JSON.stringify({ reply: fakeReply, forward: { text: "x".repeat(8001), authorization: "把结论告诉主任务" } }), "把结论告诉主任务");
+  assert.equal(longForward.reply, fakeReply);
+  assert.equal(longForward.forward?.text.length, 8001);
+  // 结构本身坏掉仍然只回答、不回传。
+  const malformed = parseSideChatReply(JSON.stringify({ reply: fakeReply, forward: { text: "   ", authorization: "把结论告诉主任务" } }), "把结论告诉主任务");
   assert.equal(malformed.reply, fakeReply);
   assert.equal(malformed.forward, null);
-  assert.match(malformed.forwardError!, /8000/);
+  assert.match(malformed.forwardError!, /格式无效/);
   // 拿不到 JSON 不再作废整轮：十几次工具调用换来的结论直接当正文展示，同时挂上格式提示、
   // 并且一定不回传（回传要动主任务，必须是结构完整的 JSON）。
   const degraded = parseSideChatReply("查完了，结论是排序没生效。\n原因在 search.py 的融合那一段。", "解释一下");
@@ -261,18 +266,27 @@ try {
   assert.equal((await send("长回答", "user-long-answer")).body, fakeReply);
   fakeReply = "继续分析的详细结论。";
   const callsBeforeScale = summaryCalls;
+  // 体积不再是创建侧聊的门槛（用户 2026-09-21 指定：和主会话一样不设限）。这几档以前一律
+  // 400，现在必须照常建房；创建本身仍然不调用模型，只把快照落进上下文表。
   for (const bytes of [256 * 1024, 1024 * 1024, 4 * 1024 * 1024]) {
     writeFileSync(join(parentPath, "session.md"), "A".repeat(bytes));
     const response = await req("/tasks/parent/side-chats", { id: `scale-room-${bytes}`, member });
-    assert.equal(response.status, 400);
-    assert.match(await response.text(), /超过/);
-    assert.equal((await db.select().from(chatRooms).where(eq(chatRooms.id, `scale-room-${bytes}`))).length, 0);
+    assert.equal(response.status, 201, await response.text());
+    assert.equal((await db.select().from(chatRooms).where(eq(chatRooms.id, `scale-room-${bytes}`))).length, 1);
   }
-  assert.equal(summaryCalls, callsBeforeScale, "大体积创建拒绝不调用模型");
-  writeFileSync(join(parentPath, "session.md"), "长篇资料。".repeat(4000));
+  assert.equal(summaryCalls, callsBeforeScale, "创建侧聊不调用模型");
+  // 256 KiB 的快照在侧聊那档预算里原样进 prompt：既不拒绝，也不该先跑一轮摘要把原文换成转述。
+  writeFileSync(join(parentPath, "session.md"), "A".repeat(256 * 1024));
+  assert.equal((await req("/tasks/parent/side-chats", { id: "wide-room", member })).status, 201);
+  const promptsBeforeWide = prompts.length;
+  await send("这段历史里都有什么", "user-wide", "wide-room");
+  assert.equal(summaryCalls, callsBeforeScale, "常见规模的快照不再触发历史整理");
+  assert.match(prompts[promptsBeforeWide]!, /A{4000}/u, "快照原文进了 prompt，没有被裁掉");
+  // 真正超出一轮预算的历史仍然分批整理、不截断原文——只是入口不再拒绝。
+  writeFileSync(join(parentPath, "session.md"), "长篇资料。".repeat(40000));
   assert.equal((await req("/tasks/parent/side-chats", { id: "long-room", member })).status, 201);
   await send("总结主任务", "user-long", "long-room");
-  assert.ok(summaryCalls > callsBeforeScale && summaryCalls - callsBeforeScale <= 3, "允许的近上限快照首次回复最多整理三批，不截断历史");
+  assert.ok(summaryCalls > callsBeforeScale && summaryCalls - callsBeforeScale <= 4, "超预算快照首次回复分批整理，不截断历史");
   const parent = (await db.select().from(tasks).where(eq(tasks.id, "parent")))[0]!;
   rmSync(join(parentPath, "session.md"));
   await assert.rejects(sideChatHistory(parent), /ENOENT/, "已结束的会话正文丢失时不能生成不完整快照");
@@ -287,7 +301,7 @@ try {
   assert.equal((await req(`/chats/${room.id}`, undefined, { "x-user": "alice" })).status, 404);
   console.log("✓ 侧聊快照、连续历史、长历史整理、自然回传授权、幂等、native/排队、停止/恢复、归档与权限隔离通过");
 } finally {
-  await service.stop("side-room"); await service.stop("long-room");
+  await service.stop("side-room"); await service.stop("long-room"); await service.stop("wide-room");
   runs.untrackRun("parent", handle); runs.releaseTurn("parent");
   await delay(30); dbClient.close(); rmSync(stage, { recursive: true, force: true });
 }

@@ -10,6 +10,22 @@ export const CHAT_CONTEXT_POLICY = {
 };
 export type ChatContextPolicy = typeof CHAT_CONTEXT_POLICY;
 
+/**
+ * 侧聊单独一档，比群聊宽一个数量级（用户 2026-09-21 指定：侧聊不额外设限，和主会话一样）。
+ *
+ * 群聊那档小是因为它是一句话来回的多人对话，把历史压到 6k 也不丢什么；侧聊带的是主会话
+ * 的整份快照，按那个预算几乎每次开聊都要先跑几轮摘要——又慢、又花钱、还把原文换成转述。
+ * 这里按主流 CLI 的上下文窗口（200k 档）留出输出和 prompt 开销后定档，常见规模的主会话
+ * 直接原样进 prompt，只有真正超大的才落到整理流程上，和主会话自己的 auto-compact 同理。
+ */
+export const SIDE_CHAT_CONTEXT_POLICY: ChatContextPolicy = {
+  inputTokens: 160000,
+  backgroundTokens: 120000,
+  recentTokens: 100000,
+  summaryTokens: 8000,
+  batchTokens: 100000,
+};
+
 // 不同 CLI 没有统一 tokenizer；ASCII 按约 3 字符/token，其他文字按约 2 UTF-8 字节/token 估算。
 export function estimateChatTokens(text: string): number {
   const ascii = text.match(/[\x00-\x7f]/gu)?.length ?? 0;

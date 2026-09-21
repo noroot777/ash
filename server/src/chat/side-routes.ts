@@ -1,7 +1,6 @@
 import { open } from "node:fs/promises";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
-import { SIDE_CHAT_HISTORY_MAX_BYTES } from "@ash/shared/chat";
 import { parseSessionOutput } from "@ash/shared";
 import { db } from "../db/index.js";
 import { chatContextEntries, chatRooms, sessions, tasks } from "../db/schema.js";
@@ -19,11 +18,23 @@ async function parentFor(c: Context) {
   return task && task.mode === "single" && await visibleProject(c, task.projectId) ? task : undefined;
 }
 
+/**
+ * 侧聊带进去的主会话快照。**不按体积拒绝创建**（用户 2026-09-21 指定：侧聊和主会话一样，
+ * 不额外设限）——主会话自己吃得下的历史，侧聊没有理由以「太长」为由不让开。快照超出一轮
+ * 上下文预算时交给既有的历史整理（`ChatContextManager`，状态可见、可随时停止），而不是在
+ * 入口上甩一句「无法创建」——那是用户唯一没法绕开的失败。
+ *
+ * 下面唯一保留的阀是**内存保护**，不是产品策略：整份 transcript 要读进内存再切块，几十 MB
+ * 起就会把 server 的堆顶起来，而 server 是所有任务共用的。阀设在实测 p99（约 10 MB）之上
+ * 一个数量级，正常任务撞不到；真撞上时报错也说清是内存保护，不是「你的会话太长」。
+ */
+const SNAPSHOT_MEMORY_LIMIT = 64 * 1024 * 1024;
+
 export async function sideChatHistory(task: typeof tasks.$inferSelect) {
   const history = [{ role: "user", author: "原始任务", body: `${task.title}\n\n${task.body}` }];
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, task.id)).orderBy(asc(sessions.startedAt), asc(sessions.id));
   let total = Buffer.byteLength(history[0]!.body);
-  if (total > 4 * 1024 * 1024) throw new Error("主任务正文超过 4 MB，暂时无法创建侧聊。");
+  if (total > SNAPSHOT_MEMORY_LIMIT) throw new Error("主任务正文超过 64 MB，一次读进内存会拖垮服务；请从指定回复派生任务继续讨论。");
   for (const session of rows) {
     // 固定每个文件本次读到的长度，主任务继续追加的内容留在主会话。
     let handle;
@@ -31,7 +42,7 @@ export async function sideChatHistory(task: typeof tasks.$inferSelect) {
       handle = await open(readableRunPath(sessionTranscriptPath(task.id, session.id)), "r");
       const size = (await handle.stat()).size;
       total += size;
-      if (total > 4 * 1024 * 1024) throw new Error("主会话超过 4 MB，暂时无法创建侧聊；可从指定回复派生任务继续讨论。");
+      if (total > SNAPSHOT_MEMORY_LIMIT) throw new Error("主会话记录超过 64 MB，一次读进内存会拖垮服务；请从指定回复派生任务继续讨论。");
       const data = Buffer.alloc(size);
       let offset = 0;
       while (offset < size) {
@@ -55,8 +66,6 @@ export async function sideChatHistory(task: typeof tasks.$inferSelect) {
     }
     return parts;
   });
-  const bytes = entries.reduce((sum, content) => sum + Buffer.byteLength(content), 0);
-  if (bytes > SIDE_CHAT_HISTORY_MAX_BYTES) throw new Error(`主会话快照约 ${Math.ceil(bytes / 1024)} KiB，超过侧聊的 ${SIDE_CHAT_HISTORY_MAX_BYTES / 1024} KiB 上限。未创建侧聊，也未调用摘要；可新建简短任务整理要讨论的背景。`);
   return entries;
 }
 

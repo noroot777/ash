@@ -252,14 +252,10 @@ try {
   await ask.click();
   assert.equal(await reference.locator("blockquote").innerText(), longSelection, "超长引用完整展示且不截断");
   await input.fill("请解释这段内容");
-  await page.getByText(/8000/).first().waitFor();
-  assert.equal(await send.isDisabled(), true, "引用加问题超过 8000 字时禁止发送");
-  const requestsBeforeLimitEnter = messageRequests;
-  const usersBeforeLimitEnter = await page.locator(".side-chat-message.is-user").count();
-  await input.press("Enter");
-  await page.waitForTimeout(100);
-  assert.equal(messageRequests, requestsBeforeLimitEnter, "超限时 Enter 也不能绕过发送门禁");
-  assert.equal(await page.locator(".side-chat-message.is-user").count(), usersBeforeLimitEnter);
+  // 引用加问题不再有 8000 字门禁（用户 2026-09-21 指定：侧聊和主会话一样不设限）。这里先
+  // 只确认能发，真正发送留到后面切回这个房间时做——中间几条断言要用到这份引用和草稿。
+  assert.equal(await page.getByText(/字上限/).count(), 0, "不再提示字数上限");
+  assert.equal(await send.isDisabled(), false, "超长引用不再禁止发送");
   assert.equal(await reference.locator("blockquote").innerText(), longSelection);
   await page.getByText("展开超长选文测试", { exact: true }).click();
 
@@ -269,10 +265,9 @@ try {
   await page.getByText("展开超长选文测试", { exact: true }).click();
   await selectContents(page.getByTestId("selection-long"));
   await ask.click();
-  await input.fill("新草稿里的超长引用也不能发送");
-  await input.press("Enter");
-  await page.waitForTimeout(100);
-  assert.equal((await roomsFor("parent")).length, 1, "超长引用门禁不能创建新房间");
+  await input.fill("新草稿里的超长引用也能发送");
+  assert.equal(await send.isDisabled(), false, "新侧聊草稿里的超长引用同样可发送");
+  assert.equal((await roomsFor("parent")).length, 1, "只是没点发送，不该凭空建房");
   await page.getByRole("button", { name: "移除主会话引用", exact: true }).click();
   await page.getByText("展开超长选文测试", { exact: true }).click();
   await selectContents(primary);
@@ -311,8 +306,15 @@ try {
   assert.ok(quoteBox && quoteBox.x >= pane.x && quoteBox.x + quoteBox.width <= pane.x + pane.width + 1);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await page.screenshot({ path: join(artifacts, "selection-long-mobile.png") });
+  // 最后再把这条超长引用真发一次：门禁撤掉之后，前端发得出去、服务端也不再按 8000 字拒收。
+  const requestsBeforeLongSend = messageRequests;
+  await send.click();
+  await page.locator(".side-chat-message.is-user").last().getByText(/请解释这段内容/).waitFor();
+  assert.ok(messageRequests > requestsBeforeLongSend, "超长引用加问题照常发送");
+  await page.locator(".side-chat-message.is-agent.is-done").last().waitFor();
+  assert.equal(await reference.count(), 0, "发送后引用归位");
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log(`✓ 主会话选文两条去处：添加到对话（草稿追加/光标/不建房）、进入侧聊的键盘入口、首次配置、引用持久化/替换/失败保留、草稿与房间/任务隔离、8000 字门禁、390px 通过\n截图：${artifacts}`);
+  console.log(`✓ 主会话选文两条去处：添加到对话（草稿追加/光标/不建房）、进入侧聊的键盘入口、首次配置、引用持久化/替换/失败保留、草稿与房间/任务隔离、超长引用照常发送、390px 通过\n截图：${artifacts}`);
 } finally {
   await browser?.close();
   await server?.close();
