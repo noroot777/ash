@@ -211,11 +211,15 @@ export class ChatService {
       const isAssistant = room.kind === "assistant";
       if (room.kind === "side") await sideChatParent(room);
       const format = room.kind === "side" ? sideChatPrompt : isAssistant ? await assistantFormatter(room) : undefined;
-      const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail, format, isAssistant ? 9000 : 0);
+      // 上下文降级（历史给超长消息让路）不能只留在服务端：正文照给，但得让用户知道这一轮
+      // 它没看主会话原文。走 notice 那条通道——附注会落 chat_messages.notice 持久列、拼在
+      // 展示正文后面，且按设计不进 modelReply（不会被下一轮当成对话内容复读）。
+      let contextDegraded: string | undefined;
+      const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail, format, isAssistant ? 9000 : 0, (text) => { contextDegraded = text; });
       if (room.kind === "side") trace = new ChatTraceLog(message.id);
       const assistantReply = isAssistant ? await invokeAssistant(member, room, prompt, abort.signal, this.invoke) : undefined;
       const invoked = assistantReply ? { text: "", notice: undefined } : await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId, room.kind === "side" ? { purpose: "side", taskId: room.parentTaskId!, onTrace: trace!.push } : undefined);
-      notice = invoked.notice;
+      notice = [contextDegraded, invoked.notice].filter(Boolean).join("\n\n") || undefined;
       // 落列必须和「补 stopped 正文」是同一条 UPDATE：stop() 可能已在 notice 落列之前把本消息
       // 覆盖成不带附注的停止文案（那时列还是 NULL，withStoredNotice 拼不到）。若分两步写、
       // 中间进程崩溃，preserveNotice 的闭包消失，而 recover() 只处理 queued/running——附注就

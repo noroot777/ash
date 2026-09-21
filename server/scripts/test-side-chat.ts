@@ -287,6 +287,14 @@ try {
   assert.equal((await req("/tasks/parent/side-chats", { id: "long-room", member })).status, 201);
   await send("总结主任务", "user-long", "long-room");
   assert.ok(summaryCalls > callsBeforeScale && summaryCalls - callsBeforeScale <= 4, "超预算快照首次回复分批整理，不截断历史");
+  // 当前消息自己就吃光预算时不再异步失败（审查第 1 轮 P1）：HTTP 已经回了 202、草稿也清了，
+  // 这时候抛错等于让用户白打一遍材料。历史给消息让路，降级说明随正文一起展示。
+  const promptsBeforeHuge = prompts.length;
+  const huge = await send(`超长材料：${"M".repeat(520000)}`, "user-huge-message", "wide-room");
+  assert.equal(huge.status, "done");
+  assert.match(huge.body, /本轮没有带上主会话快照原文/);
+  assert.doesNotMatch(prompts[promptsBeforeHuge]!, /A{4000}/u, "让路之后这一轮确实不带快照原文");
+  assert.match(prompts[promptsBeforeHuge]!, /M{4000}/u, "用户消息本身照常进 prompt");
   const parent = (await db.select().from(tasks).where(eq(tasks.id, "parent")))[0]!;
   rmSync(join(parentPath, "session.md"));
   await assert.rejects(sideChatHistory(parent), /ENOENT/, "已结束的会话正文丢失时不能生成不完整快照");

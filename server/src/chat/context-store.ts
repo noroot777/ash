@@ -37,11 +37,20 @@ export async function captureChatSnapshot(roomId: string): Promise<{ cutoff: num
   });
 }
 
+/**
+ * 只取当前生效的那份摘要，不把历史原文读进内存。侧聊在「当前消息自己就吃光预算」时靠它
+ * 降级：历史给消息让路，但已有摘要还是要带上（见 context.ts `prepare`）。
+ */
+export async function readChatSummary(roomId: string, cutoff: number) {
+  const after = (await chatContextReset(roomId))?.afterSequence ?? 0;
+  return (await db.select().from(summaries).where(and(eq(summaries.roomId, roomId), gt(summaries.throughSequence, after), lte(summaries.throughSequence, cutoff)))
+    .orderBy(desc(summaries.throughSequence), desc(summaries.id)).limit(1)).at(0);
+}
+
 export async function readChatHistory(roomId: string, cutoff: number) {
   const reset = await chatContextReset(roomId);
   const after = reset?.afterSequence ?? 0;
-  const summary = (await db.select().from(summaries).where(and(eq(summaries.roomId, roomId), gt(summaries.throughSequence, after), lte(summaries.throughSequence, cutoff)))
-    .orderBy(desc(summaries.throughSequence), desc(summaries.id)).limit(1)).at(0);
+  const summary = await readChatSummary(roomId, cutoff);
   const messages = await db.select().from(entries).where(and(eq(entries.roomId, roomId), gt(entries.sequence, summary?.throughSequence ?? after), lte(entries.sequence, cutoff)))
     .orderBy(asc(entries.sequence));
   return { summary, messages, tokens: (summary?.tokens ?? 0) + messages.reduce((sum, message) => sum + message.tokens, 0) };

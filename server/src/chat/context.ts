@@ -7,7 +7,7 @@ import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import type { invokeChat } from "./execution.js";
 import { chatPrompt } from "./prompt.js";
 import { CHAT_CONTEXT_POLICY, SIDE_CHAT_CONTEXT_POLICY, estimateChatTokens, parseChatSummary, summaryPrompt, type ChatContextPolicy } from "./context-format.js";
-import { acknowledgeContextFailure, captureChatHistory, captureChatSnapshot, chatHasPending, contextState, readChatHistory, recoverChatContext, resetChatContext, setContextState, showContextFailure } from "./context-store.js";
+import { acknowledgeContextFailure, captureChatHistory, captureChatSnapshot, chatHasPending, contextState, readChatHistory, readChatSummary, recoverChatContext, resetChatContext, setContextState, showContextFailure } from "./context-store.js";
 import { abortable } from "./invocation-queue.js";
 
 type Room = typeof chatRooms.$inferSelect;
@@ -58,7 +58,11 @@ export class ChatContextManager {
     return await job.promise as T;
   }
 
-  async prepare(room: Room, member: ChatMember, cutoff: number, request: string, signal: AbortSignal, tail: string[] = [], format = chatPrompt, reserveTokens = 0): Promise<string> {
+  /**
+   * 拼出这一轮要发给执行器的提示词。`onDegrade` 在「历史给当前消息让路」时回调一次，调用
+   * 方负责把这句话展示给用户——降级是静默不得的，否则用户以为它看过主会话历史。
+   */
+  async prepare(room: Room, member: ChatMember, cutoff: number, request: string, signal: AbortSignal, tail: string[] = [], format = chatPrompt, reserveTokens = 0, onDegrade?: (notice: string) => void): Promise<string> {
     return this.locked(room.id, signal, async (sharedSignal) => {
       sharedSignal.throwIfAborted();
       this.prewarmStopped.delete(room.id);
@@ -66,9 +70,20 @@ export class ChatContextManager {
       const overhead = estimateChatTokens(withGlobalBrowserPolicy(format(member, tail, request), "full"));
       const policy = this.policyOf(room);
       const budget = policy.inputTokens - overhead - reserveTokens;
-      if (budget <= policy.summaryTokens) throw new Error(tail.length
-        ? "较早的回复尚未完成，后续消息已超出上下文预算。请等待或停止较早回复后重新 @，原文已保留。"
-        : "本次消息过长，无法为群聊历史保留空间，请缩短消息后重新 @。");
+      if (budget <= policy.summaryTokens) {
+        // 侧聊不因「你这条消息太长」拒收（用户 2026-09-21 指定：和主会话一样）。主任务的
+        // /reply 只看非空，长不长由执行器自己说；在这里抛错的话，HTTP 早就回了 202、前端
+        // 也已经按「已发送」清掉草稿，用户只剩一个异步失败回合，材料还得重打一遍。所以让
+        // 历史给当前消息让路：带上已有摘要、不带原文，能不能吃下交给执行器自己报。
+        if (room.kind === "side") {
+          const summary = await readChatSummary(room.id, cutoff);
+          onDegrade?.(`⚠️ 本次消息很长，本轮没有带上主会话快照原文${summary ? "（已有摘要仍然带上）" : ""}。能否处理这么长的输入由所选执行器决定；想让它对着主会话历史回答，可以把消息拆短再问一次。`);
+          return format(member, tail, request, summary?.body);
+        }
+        throw new Error(tail.length
+          ? "较早的回复尚未完成，后续消息已超出上下文预算。请等待或停止较早回复后重新 @，原文已保留。"
+          : "本次消息过长，无法为历史保留空间，请缩短消息后重新 @。");
+      }
       const history = await this.compact(room, member, cutoff, budget, sharedSignal);
       return format(member, [...history.messages.map((message) => message.content), ...tail], request, history.summary?.body);
     });
