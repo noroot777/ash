@@ -40,6 +40,15 @@ assert.equal(canForkReply({ ...target, endedAt: null }), false);
 assert.equal(canForkReply({ ...target, markdown: "" }), false);
 assert.throws(() => snapshotConversationFork(task, [{ ...target, endedAt: null }], target.id));
 
+// 审查轮的发言不是派生落点：它是搭在任务上的旁路回合，给的是结论不是新需求。三种审查
+// 身份（就地验证轮带轮号、自由派审不带轮号）共用 `reviewer` 这一个标，所以都挡得住。
+for (const reviewer of [{ round: 6 }, { round: null }]) {
+  assert.equal(canForkReply({ ...target, reviewer }), false, `审查者发言不给派生入口（round=${reviewer.round}）`);
+  assert.throws(() => snapshotConversationFork(task, [{ ...target, reviewer }], target.id), /审查轮/);
+}
+// 同一条回复摘掉审查身份就恢复可派生 —— 别把普通实现回合一起误伤。
+assert.ok(canForkReply({ ...target, reviewer: undefined }));
+
 // 引导打断的半截不给派生：真人的话直接投进正在跑的会话（原生引导不结束回合，所以没有
 // agentEnd），.md 却已经被那条 sentinel 切成两段。上半截白得一个「结束时刻」，看着像说完
 // 的一条回复 —— 派生带走的是截至它的整份上下文，拿半截当落点就是把没说完的话当结论。

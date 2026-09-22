@@ -40,9 +40,10 @@ try {
   });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/conversation-fork.html`);
   const forks = page.getByRole("button", { name: "派生新任务", exact: true });
-  // 打断的那条确实渲染在页面上（不是因为没画出来才数不到按钮）。
+  // 打断的那条、审查那条都确实渲染在页面上（不是因为没画出来才数不到按钮）。
   await page.getByText("刚查到一半就被打断的回复", { exact: true }).waitFor();
-  assert.equal(await forks.count(), 2, "未完成的回复、被引导打断的半截都没有派生入口");
+  await page.getByText(/第 6 轮结论/).waitFor();
+  assert.equal(await forks.count(), 2, "未完成的回复、被引导打断的半截、审查轮的结论都没有派生入口");
   await page.screenshot({ path: join(artifacts, "reply-actions.png") });
   await page.getByRole("button", { name: "普通新建", exact: true }).click();
   const objective = page.locator(".composer-objective textarea");

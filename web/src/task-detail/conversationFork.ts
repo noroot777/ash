@@ -31,21 +31,30 @@ export type ConversationFork = {
 /**
  * 这条回复能不能当派生的落点。
  *
- * 除了「说完了、且确实说了话」，还要求这一轮是**自己收的口**：被下一条引导打断的半截
- * （`interrupted`）看着有结束时刻，其实话没说完 —— 派生带走的是截至这条回复的整份上下文，
- * 半截回复当落点就是把一句没说完的话当结论（用户 2026-09-16 报的）。
+ * 除了「说完了、且确实说了话」，还有两条排除：
+ *
+ * ① 这一轮得是**自己收的口**：被下一条引导打断的半截（`interrupted`）看着有结束时刻，
+ *    其实话没说完 —— 派生带走的是截至这条回复的整份上下文，半截回复当落点就是把一句
+ *    没说完的话当结论（用户 2026-09-16 报的）。
+ * ② **审查者的发言不是落点**（用户 2026-09-22 报的）。审查轮是搭在任务上的旁路回合，
+ *    它的产出是「这份产物有什么毛病」，不是一条能往下接着做的需求；从它派生出去，新任务
+ *    拿到的上下文里最后一句是验证过程与结论，读起来像「继续验证」。审查没过本来就自动
+ *    打回原任务修复（`repairPrompt`），合并结果审查另有「创建修复任务」的专用入口
+ *    （`createPostMergeRepairTask`）—— 两条正路都不经过这颗按钮。
  */
 export function canForkReply(item: ConversationItem): boolean {
-  return item.kind === "agent" && !!item.endedAt && !item.interrupted && !!item.markdown.trim();
+  return item.kind === "agent" && !item.reviewer && !!item.endedAt && !item.interrupted && !!item.markdown.trim();
 }
 
 export function snapshotConversationFork(task: Task, items: ConversationItem[], replyId: string) {
   const cutoff = items.findIndex((item) => item.id === replyId);
   const reply = items[cutoff];
   if (!reply || reply.kind !== "agent" || !canForkReply(reply)) {
-    throw new Error(reply?.kind === "agent" && reply.interrupted
-      ? "这条回复被后面的引导打断了，不是完整的一轮，请挑一条说完的回复再派生。"
-      : "这条回复尚未完成，请等回复结束后再派生。");
+    throw new Error(reply?.kind === "agent" && reply.reviewer
+      ? "审查轮的发言不能当派生落点：它是搭在本任务上的旁路回合，产出的是结论不是新需求。审查没过会自动打回本任务修复，请挑一条实现回合的回复再派生。"
+      : reply?.kind === "agent" && reply.interrupted
+        ? "这条回复被后面的引导打断了，不是完整的一轮，请挑一条说完的回复再派生。"
+        : "这条回复尚未完成，请等回复结束后再派生。");
   }
   const history = items.slice(0, cutoff + 1);
   if (history.some((item) => item.kind === "agent" && item.session && item.session.taskId !== task.id)) {

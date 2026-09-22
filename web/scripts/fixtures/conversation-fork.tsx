@@ -22,6 +22,8 @@ const items: ConversationItem[] = [
   reply("a2", "方案 C 的后续结论"), reply("streaming", "正在生成的回复", false),
   // 被引导打断的半截：有结束时刻，但话没说完，不该挂派生入口。
   { ...reply("steered", "刚查到一半就被打断的回复"), interrupted: true },
+  // 审查轮的发言：说完了、正文也齐，但它是旁路回合的结论，同样不该挂派生入口。
+  { ...reply("reviewed", "第 6 轮结论：verify_failed，发现两个 P1 缺陷。"), reviewer: { round: 6 } },
 ];
 
 function IncompleteConversation() {

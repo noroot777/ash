@@ -407,7 +407,11 @@ export function TaskDetail({
                     loading={conversation.refreshing}
                     error={conversation.error}
                     forkBlockedReason={conversation.forkBlockedReason}
-                    onForkReply={onForkTask && !conversation.traceError && !conversation.forkBlockedReason && !handedOut
+                    onForkReply={
+                      // `!task.reviewOf`：历史那种独立审查任务整条会话都是审查，而逐条的
+                      // reviewer 标只认 verifyRound 与 role=reviewer，认不出它 —— 那条路上
+                      // 每一条发言都不是派生落点，在这里整体关掉。
+                      onForkTask && !task.reviewOf && !conversation.traceError && !conversation.forkBlockedReason && !handedOut
                       && conversation.sessions.every((session) => session.taskId === task.id) ? (replyId) => {
                       try { onForkTask(snapshotConversationFork(task, conversation.items, replyId)); }
                       catch (reason) { notify(reason instanceof Error ? reason.message : String(reason)); }
