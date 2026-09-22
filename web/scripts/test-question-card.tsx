@@ -24,12 +24,26 @@ const render = (items: ConversationItem[], history = [record]) => renderToStatic
 );
 const count = (text: string, needle: string) => text.split(needle).length - 1;
 const current = renderToStaticMarkup(<QuestionCard task={task} onAnswer={async () => undefined} />);
+// 提问卡一次只出一题：后面几题连同它们的选项都不该提前渲染出来。
 assert.match(current, /aria-label="答复：放在哪里？"/);
-assert.equal(count(current, 'aria-pressed="false"'), 4);
-assert.match(current, /<button type="button" disabled="">[^]*发送答复/);
-assert.match(current, /已答 0\/2 项/);
-assert.match(current, /留空项会标记为未答/);
+assert.doesNotMatch(current, /aria-label="答复：保留什么？"/);
+assert.doesNotMatch(current, /只留答案/);
+assert.equal(count(current, 'aria-pressed="false"'), 2);
+assert.match(current, /<nav class="task-question-progress"/);
+assert.match(current, /aria-current="step"[^>]*aria-label="第 1 题（未答）"/);
+assert.match(current, /aria-label="第 2 题（未答）"/);
+assert.match(current, /<button type="button" class="task-question-nav" disabled="">[^]*发送答复/);
+assert.match(current, /<button type="button" class="task-question-send">[^]*下一题/);
+assert.match(current, /已答 0\/2/);
+assert.match(current, /留空的题会标记为未答/);
 assert.doesNotMatch(current, /可稍后补充/);
+// 单题没有题号导航，也没有「上一题 / 下一题」那套壳。
+const single = renderToStaticMarkup(
+  <QuestionCard task={{ ...task, questionItems: undefined, questionOptions: ["甲", "乙"] } as Task} onAnswer={async () => undefined} />,
+);
+assert.doesNotMatch(single, /task-question-progress/);
+assert.doesNotMatch(single, /上一题|下一题/);
+assert.match(single, /⌘ \/ Ctrl \+ Enter 发送/);
 const recorded = render([answer]);
 assert.equal(count(recorded, 'class="task-question-record"'), 1, "会话与数据库里的同一份答复只显示一张卡");
 assert.match(recorded, /<details class="task-question-record">/);

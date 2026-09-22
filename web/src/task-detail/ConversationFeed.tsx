@@ -177,6 +177,7 @@ export function ConversationFeed({
   error,
   forkBlockedReason,
   footer,
+  dock,
   onRetryTurn,
   onForkReply,
   reviewRetryable,
@@ -194,6 +195,12 @@ export function ConversationFeed({
   error: Error | null;
   forkBlockedReason?: string | null;
   footer?: React.ReactNode;
+  /**
+   * 停在会话下方、不跟着滚的一条：待答复的提问卡走这里。
+   * 跟 `footer` 的区别是它在滚动容器**外面**——问题一直在手边，
+   * 也不会被「回到底部」那颗浮动按钮压住。
+   */
+  dock?: React.ReactNode;
   /** 重跑上一回合。不给就不出重试按钮（只读的会话视图用得上）。 */
   onRetryTurn?: (target: TurnRetryTarget) => Promise<void> | void;
   onForkReply?: (replyId: string) => void;
@@ -326,6 +333,7 @@ export function ConversationFeed({
         </div>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} />
       </div>
+      {dock && <div className="task-question-dock">{dock}</div>}
     </ImagePreviewGroup>
     </QuestionHistoryProvider>
   );

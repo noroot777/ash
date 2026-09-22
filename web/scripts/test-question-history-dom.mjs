@@ -166,12 +166,33 @@ try {
 
   const form = await browser.newPage();
   await form.goto(`${origin}/scripts/fixtures/question-card.html`);
+  await form.evaluate(() => localStorage.clear());
+  await form.reload();
   await form.getByRole("button", { name: "留在会话里，点击展开", exact: true }).click();
-  assert.match(await form.locator(".task-question-card footer").innerText(), /已答 1\/2 项 · 留空项会标记为未答/);
+  assert.match(await form.locator(".task-question-card footer").innerText(), /已答 1\/2 · 留空的题会标记为未答/);
   assert.doesNotMatch(await form.locator("main").innerText(), /可稍后补充/);
+  // 提问卡停在滚动容器**外面**的坞里：会话照常滚，问题不会被滚走、也压不到浮动按钮上。
+  assert.equal(await form.locator(".task-conversation .task-question-card").count(), 0);
+  assert.equal(await form.locator(".task-question-dock > .task-question-card").count(), 1);
+  // 一次只出一题；翻到第 2 题后第 1 题连同它的选项都不在 DOM 里。
+  assert.equal(await form.locator(".task-question-step").innerText().then((t) => t.includes("同时提供历史入口")), true);
+  await form.getByRole("button", { name: /下一题/ }).click();
+  assert.match(await form.locator(".task-question-step").innerText(), /发给智能体的回复保留哪些内容/);
+  assert.doesNotMatch(await form.locator(".task-question-step").innerText(), /同时提供历史入口/);
+  // 翻页后焦点落在选项上，数字键立刻可用。
+  await form.keyboard.press("2");
+  assert.equal(await form.locator(".task-question-step textarea").inputValue(), "加一句简短说明");
+  assert.match(await form.locator(".task-question-card footer").innerText(), /已答 2\/2/);
+  // 题号既是进度也是跳转：点回第 1 题，之前的答案还在。
+  await form.getByRole("button", { name: "第 1 题（已答）" }).click();
+  assert.equal(await form.locator(".task-question-step textarea").inputValue(), "留在会话里，点击展开");
+  // 收起后只剩一条标题栏，仍然看得出还欠几题。
+  await form.getByRole("button", { name: "收起答复卡，先看上文" }).click();
+  assert.equal(await form.locator(".task-question-step").count(), 0);
+  assert.match(await form.locator(".task-question-heading").innerText(), /2\/2 · 待答复/);
   await form.close();
   assert.deepEqual(failures, []);
-  console.log("question history DOM: seeded history, remount recovery, live receipts, single initial load, reconnect, stale responses, switching, retry/SSE recovery, snapshot and truthful copy passed");
+  console.log("question history DOM: seeded history, remount recovery, live receipts, single initial load, reconnect, stale responses, switching, retry/SSE recovery, snapshot, docked one-at-a-time form and truthful copy passed");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();

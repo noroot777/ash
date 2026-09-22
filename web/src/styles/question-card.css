@@ -1,40 +1,72 @@
+/* 待答复的提问卡（`QuestionCard`）与已答复的问答记录（`QuestionHistory`）。
+   提问卡停在会话下方的「坞」里（`ConversationFeed` 的 dock，在滚动容器外面）：
+   上文照常滚，问题永远在手边，也压不到「回到底部」那颗浮动按钮上；
+   一次只出一题——多题一次全摊开的版本要滚半天才找得到发送键。 */
 .task-question-card,
-.task-question-record { max-width: 790px; margin: 18px 0 12px 30px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); overflow: hidden; }
-.task-question-card { border-color: color-mix(in lch, var(--cyan) 32%, var(--line)); box-shadow: 0 2px 8px rgb(0 0 0 / 3%); }
-.task-question-heading { display: flex; align-items: center; gap: 9px; padding: 13px 16px; background: color-mix(in lch, var(--cyan) 5%, var(--panel)); }
+.task-question-record { max-width: 790px; margin: 18px 0 12px 30px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); color: var(--ink); overflow: hidden; }
+.task-question-card { border-color: color-mix(in lch, var(--cyan) 30%, var(--line)); }
+
+.task-question-dock { flex: 0 0 auto; padding: 0 clamp(18px, 4vw, 48px) 12px; background: var(--canvas); }
+.task-question-dock .task-question-card { margin: 0; box-shadow: 0 -10px 20px -18px rgb(0 0 0 / 35%); }
+
+.task-question-heading { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 7px 10px 7px 13px; background: color-mix(in lch, var(--cyan) 5%, var(--panel)); }
 .task-question-icon { display: grid; place-items: center; color: var(--cyan); }
-.task-question-heading b { font-size: 12px; font-weight: 650; }
-.task-question-status { margin-left: auto; color: var(--cyan); font-size: 10px; }
-.task-question-context { padding: 12px 16px 0; color: var(--muted); }
-.task-question-items > section,
-.task-question-record-body > section { padding: 16px; }
-.task-question-items > section + section,
-.task-question-record-body > section + section { border-top: 1px solid var(--line); }
-.task-question-title { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 12px; min-width: 0; }
+.task-question-heading b { font-size: 11.5px; font-weight: 650; white-space: nowrap; }
+.task-question-status { margin-left: auto; color: var(--cyan); font-size: 10px; white-space: nowrap; }
+.task-question-collapse { display: grid; width: 24px; height: 24px; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
+.task-question-collapse:hover { background: var(--raised); color: var(--ink); }
+.task-question-collapse svg { transition: transform .15s ease; }
+.is-collapsed .task-question-collapse svg { transform: rotate(180deg); }
+
+/* 进度条就是题号本身：点一下直接跳过去，比「下一题」点四次快。 */
+.task-question-progress { display: flex; flex-wrap: wrap; gap: 4px; margin-left: 4px; }
+.task-question-progress button { display: grid; width: 19px; height: 19px; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); font: 10px/1 var(--font-mono); }
+.task-question-progress button:hover:not(:disabled) { border-color: color-mix(in lch, var(--cyan) 45%, var(--line)); color: var(--ink); }
+.task-question-progress button.is-answered { border-color: color-mix(in lch, var(--cyan) 40%, var(--line)); background: color-mix(in lch, var(--cyan) 12%, var(--panel)); color: var(--cyan); }
+.task-question-progress button[aria-current="step"] { border-color: var(--cyan); background: var(--cyan); color: white; font-weight: 700; }
+
+.task-question-context { position: relative; padding: 11px 14px 0; color: var(--muted); }
+/* 用 max-height 而不是 -webkit-line-clamp：背景是 markdown，行都在内层 <p> 里，
+   line-clamp 挂在外层 div 上夹不住。这里的 2 就是「两行」（行高也是 1.6em）。 */
+.task-question-context.is-clamped .task-markdown { max-height: calc(1.6em * 2); overflow: hidden; }
+.task-question-context > button { margin-top: 2px; border: 0; padding: 0; background: transparent; color: var(--cyan); font-size: 10.5px; }
+.task-question-context .task-markdown { font-size: 12px; line-height: 1.6; }
+
+/* 一次只出一题，所以这里限高而不是整张卡限高：头尾（题号、发送）任何时候都看得见。 */
+.task-question-step { max-height: 44vh; overflow-y: auto; padding: 13px 14px; }
+.task-question-title { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 11px; min-width: 0; }
 .task-question-title > span { display: grid; place-items: center; flex: 0 0 20px; height: 20px; margin-top: 1px; border-radius: 6px; background: var(--raised); color: var(--muted); font: 11px/1 var(--font-mono); }
 .task-question-title .task-markdown { min-width: 0; font-size: 13px; line-height: 1.6; font-weight: 550; }
-.task-question-context .task-markdown { font-size: 12px; line-height: 1.6; }
 .task-question-title .task-markdown > :first-child,
 .task-question-context .task-markdown > :first-child { margin-top: 0; }
 .task-question-title .task-markdown > :last-child,
 .task-question-context .task-markdown > :last-child { margin-bottom: 0; }
-.task-question-options { display: grid; gap: 6px; margin-bottom: 10px; }
-.task-question-options button { display: flex; align-items: flex-start; gap: 10px; min-height: 38px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); text-align: left; font-size: 12px; line-height: 1.55; }
+
+.task-question-options { display: grid; gap: 5px; margin-bottom: 8px; }
+.task-question-options button { display: flex; align-items: flex-start; gap: 9px; min-height: 32px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); text-align: left; font-size: 12.5px; line-height: 1.5; }
 .task-question-options button > span:last-child { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-question-options button:hover:not(:disabled) { border-color: color-mix(in lch, var(--cyan) 50%, var(--line)); background: color-mix(in lch, var(--cyan) 3%, var(--panel)); }
 .task-question-options button[aria-pressed="true"] { border-color: var(--cyan); background: color-mix(in lch, var(--cyan) 7%, var(--panel)); }
-.task-question-option-mark { display: grid; flex: 0 0 16px; height: 16px; margin-top: 1px; place-items: center; border: 1px solid var(--line2); border-radius: 4px; }
-[aria-pressed="true"] .task-question-option-mark { background: var(--cyan); border-color: var(--cyan); color: white; }
-.task-question-options small { padding-top: 2px; color: var(--muted); font-size: 10px; }
-.task-question-answer textarea { width: 100%; min-height: 68px; resize: vertical; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 10px 11px; color: var(--ink); font: 12px/1.65 var(--font-sans); }
-.task-question-answer textarea:focus { outline: 2px solid color-mix(in lch, var(--cyan) 22%, transparent); outline-offset: 1px; border-color: var(--cyan); background: var(--panel); }
-.task-question-card > footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; border-top: 1px solid var(--line); padding: 10px 16px; color: var(--muted); font-size: 10px; }
-.task-question-card > footer button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; margin-left: auto; border: 0; border-radius: 7px; padding: 0 12px; background: var(--cyan); color: white; font-size: 12px; font-weight: 600; }
+/* 平时是序号（配数字键），选中了就换成勾：同一颗徽标既是快捷键提示又是选中态。 */
+.task-question-option-key { display: grid; flex: 0 0 17px; height: 17px; place-items: center; border: 1px solid var(--line2); border-radius: 5px; color: var(--faint); font: 10px/1 var(--font-mono); }
+[aria-pressed="true"] .task-question-option-key { border-color: var(--cyan); background: var(--cyan); color: white; }
+.task-question-hint { display: block; padding: 0 0 7px; color: var(--faint); font-size: 10px; }
+.task-question-step textarea { width: 100%; min-height: 34px; resize: vertical; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 8px 10px; color: var(--ink); font: 12.5px/1.6 var(--font-sans); }
+.task-question-step textarea:focus { outline: 2px solid color-mix(in lch, var(--cyan) 22%, transparent); outline-offset: 1px; border-color: var(--cyan); background: var(--panel); }
+
+.task-question-card > footer { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; border-top: 1px solid var(--line); padding: 8px 12px; color: var(--muted); font-size: 10px; }
+.task-question-card > footer > span:first-child { margin-right: auto; }
+.task-question-nav { display: inline-flex; align-items: center; gap: 3px; min-height: 28px; border: 1px solid var(--line); border-radius: 7px; padding: 0 9px; background: var(--panel); color: var(--muted); font-size: 11.5px; }
+.task-question-nav:hover:not(:disabled) { border-color: var(--line2); color: var(--ink); }
+.task-question-send { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 0; border-radius: 7px; padding: 0 13px; background: var(--cyan); color: white; font-size: 12px; font-weight: 600; }
 .task-question-card button:disabled { opacity: .48; cursor: not-allowed; }
 .task-question-card button:focus-visible,
 .task-question-record summary:focus-visible,
 .task-question-record button:focus-visible { outline: 2px solid var(--cyan); outline-offset: -3px; }
-.task-question-error { margin: 0; padding: 0 16px 12px; color: var(--red); font-size: 12px; overflow-wrap: anywhere; }
+.task-question-error { margin: 0; padding: 0 14px 10px; color: var(--red); font-size: 12px; overflow-wrap: anywhere; }
+
+.task-question-record-body > section { padding: 16px; }
+.task-question-record-body > section + section { border-top: 1px solid var(--line); }
 .task-question-record > summary { display: flex; align-items: center; gap: 10px; padding: 13px 16px; cursor: pointer; list-style: none; }
 .task-question-record > summary::-webkit-details-marker { display: none; }
 .task-question-record > summary:hover { background: var(--canvas); }
@@ -61,12 +93,22 @@
 .task-question-record-body > footer button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; }
 .task-question-history-error { color: var(--red); font-size: 11px; }
 .team-feed .task-question-record { margin-left: 0; }
+
+@media (max-width: 820px) {
+  /* 与 `.task-conversation` 的窄屏内边距对齐（task-detail.css），坞里的卡片才跟正文一条线。 */
+  .task-question-dock { padding-left: 16px; padding-right: 16px; }
+}
+
 @media (max-width: 560px) {
   .task-question-card, .task-question-record { margin-left: 0; border-radius: 10px; }
-  .task-question-heading, .task-question-record > summary { padding: 12px; }
-  .task-question-items > section, .task-question-record-body > section { padding: 12px; }
-  .task-question-card > footer, .task-question-record-body > footer { padding: 10px 12px; }
+  .task-question-record > summary { padding: 12px; }
+  .task-question-step { max-height: 52vh; padding: 12px; }
+  .task-question-record-body > section { padding: 12px; }
+  .task-question-record-body > footer { padding: 10px 12px; }
   .task-question-record-action { display: none; }
-  .task-question-options button { min-height: 44px; }
-  .task-question-card > footer button { min-height: 38px; }
+  .task-question-options button { min-height: 40px; }
+  /* 三颗按钮挤不进一行就整行换：提示自己占一行，按钮平分下一行，
+     别让「下一题」单独掉到左下角。 */
+  .task-question-card > footer > span:first-child { flex: 1 0 100%; margin-right: 0; }
+  .task-question-nav, .task-question-send { flex: 1; min-height: 36px; justify-content: center; padding: 0 6px; }
 }

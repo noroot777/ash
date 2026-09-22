@@ -188,7 +188,7 @@ export function RemoteTaskDetail({
             sessions={snapshot?.sessions ?? []}
             loading={loading}
             error={error}
-            footer={task.question ? (
+            dock={task.question ? (
               <QuestionCard
                 task={task}
                 onAnswer={async (answer, input) => {

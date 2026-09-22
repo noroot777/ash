@@ -434,7 +434,7 @@ export function TaskDetail({
                     }}
                     reviewRetryable={freeReviewRetryable(free.state?.reviews)}
                     reviews={free.state?.reviews}
-                    footer={task.question ? (
+                    dock={task.question ? (
                       <QuestionCard
                         task={task}
                         onAnswer={async (answer, input) => {
