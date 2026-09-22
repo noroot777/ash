@@ -18,9 +18,27 @@
 
 import { execFile, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 export const IS_WINDOWS = process.platform === "win32";
 export const IS_MAC = process.platform === "darwin";
+
+// ── `~` 展开 ───────────────────────────────────────────────────────────────
+// Users type `~/code/foo`, but Node's fs/git APIs don't understand `~` (only
+// shells do) — so expand a leading `~` to the home dir before any filesystem
+// use. Applied at every repoPath boundary (projects.repo_path 存的就是带 `~` 的
+// 原样文本,见 git.ts tidyRepoPath),所以 `~` 能在全系统生效。
+// Windows 上用户会写成 `~\code\foo`,反斜杠是那边的正规分隔符,一并认。
+//
+// 住在 platform.ts 而不是 git.ts:它跟 git 无关(是路径/平台的事),而 `/` 补全的
+// 技能扫描是同步热路径,不该为一个纯函数把整条 git 链(exec / repo-lock /
+// git-worktree-state)拖进来。`git.ts` 仍原样转出,存量导入点不用动。
+export function expandHome(p: string | null | undefined): string {
+  if (!p) return "";
+  if (p === "~") return homedir();
+  if (p.startsWith("~/") || (IS_WINDOWS && p.startsWith("~\\"))) return join(homedir(), p.slice(2));
+  return p;
+}
 
 // ── PowerShell 调用 ────────────────────────────────────────────────────────
 // 脚本一律走 -EncodedCommand(UTF-16LE + base64):PowerShell 的引号规则跟 cmd 的

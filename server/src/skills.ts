@@ -14,6 +14,7 @@
 import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
+import { expandHome } from "./platform.js";
 import { configDirEnvVar, userCliDir } from "./auth/user-cli.js";
 import { isHostCliIsolatedSync } from "./auth/multi-flag.js";
 import {
@@ -319,7 +320,10 @@ export function calibrateSkills(
   }
   if (!names.size) return;
   const all = loaded();
-  all.set(cacheKey(agentType, cwd), { names: [...names], at: Date.now() });
+  // 键一律记绝对路径:认亲(calibrationFor)是按 cwd 前缀比的,一边 `~/code/x`
+  // 一边 `/Users/me/code/x` 就永远认不到亲。init 事件给的本来就是绝对路径,
+  // 这一下只是把「键的形态」钉死成同一种。
+  all.set(cacheKey(agentType, expandHome(cwd)), { names: [...names], at: Date.now() });
   saveCalibrations(all);
 }
 
@@ -364,9 +368,14 @@ export function listSkills(opts: {
   userId?: string | null;
 }): SkillList {
   const agentType = opts.agentType as AgentType;
+  // 调用方多半直接把 `projects.repo_path` 递进来,而那一列**存的就是用户写下的原样
+  // 文本**(`~/code/foo`,见 git.ts tidyRepoPath)。`~` 只有 shell 认,readdirSync 会
+  // 拿它当相对路径 → 目录不存在 → 整个项目级技能根被 walk 静默跳过:菜单里一个项目
+  // 技能都没有,重新扫描也永远好不了(2026-09-22 ascut 的现场)。
+  const cwd = expandHome(opts.cwd);
   const base: SkillList = {
     agentType,
-    cwd: opts.cwd,
+    cwd,
     fingerprint: "empty",
     authoritative: false,
     skills: [],
@@ -374,13 +383,13 @@ export function listSkills(opts: {
   if (!isScannable(agentType)) return base;
 
   const userId = opts.userId ?? null;
-  const self = scan(agentType, opts.cwd, opts.force, userId);
+  const self = scan(agentType, cwd, opts.force, userId);
   // 同一个技能常常跨 CLI 软链共享(本机 78 个条目去重后只有 54 个物理技能)。标一个
   // 「谁都能用」的角标,免得用户切一次执行器看见列表短了一半,以为技能丢了。
   const others = new Map<string, AgentType[]>();
   for (const other of SCANNABLE) {
     if (other === agentType) continue;
-    for (const entry of scan(other, opts.cwd, opts.force, userId).entries) {
+    for (const entry of scan(other, cwd, opts.force, userId).entries) {
       if (!entry.realPath) continue;
       const list = others.get(entry.realPath) ?? [];
       if (!list.includes(other)) list.push(other);
@@ -393,7 +402,7 @@ export function listSkills(opts: {
     alsoIn: entry.realPath ? others.get(entry.realPath) ?? [] : [],
   }));
 
-  const calibration = calibrationFor(agentType, opts.cwd);
+  const calibration = calibrationFor(agentType, cwd);
   if (calibration) {
     // **并集而不是交集**:init 补上磁盘看不见的(内置、插件),磁盘补上 init 之后新装的。
     // 取交集的话「加一个技能目录、不重启就该出现」这条就废了 —— 那份清单是上一轮跑的。
@@ -465,7 +474,9 @@ export function withSkillInvocation(opts: {
 
 /** server 启动预热:把常用 CLI 的清单先扫进内存,免得第一次敲 `/` 等 IO。 */
 export function warmSkills(cwds: string[], userIds: (string | null)[] = [null]): void {
-  for (const cwd of new Set(cwds)) {
+  // 传进来的是 `projects.repo_path` 原样文本,先展开再去重 —— 否则 `~/code/foo` 与
+  // `/Users/me/code/foo` 会各占一个缓存键,预热的那份永远不是请求那一刻要查的那份。
+  for (const cwd of new Set(cwds.map(expandHome))) {
     for (const userId of new Set(userIds)) {
     for (const agentType of SCANNABLE) {
       try {
@@ -489,6 +500,7 @@ export function scanOverview(opts: {
   force?: boolean;
   userId?: string | null;
 }): SkillScanOverview {
+  const cwd = expandHome(opts.cwd); // 设置页的「重新扫描」也是拿存储形态的 repoPath 来问
   const groups = new Map<string, { agentType: string; executors: string[] }>();
   for (const executor of opts.executors) {
     const key = executor.agentType;
@@ -502,7 +514,7 @@ export function scanOverview(opts: {
   const rows: SkillScanRow[] = [...groups.values()].map((group) => {
     const list = listSkills({
       agentType: group.agentType,
-      cwd: opts.cwd,
+      cwd,
       force: opts.force,
       userId: opts.userId,
     });
@@ -517,5 +529,5 @@ export function scanOverview(opts: {
       sample: list.skills.slice(0, 6).map((skill) => skill.command),
     };
   });
-  return { cwd: opts.cwd, scannedAt: new Date().toISOString(), rows };
+  return { cwd, scannedAt: new Date().toISOString(), rows };
 }

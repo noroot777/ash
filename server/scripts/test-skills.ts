@@ -11,8 +11,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir, homedir } from "node:os";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = mkdtempSync(join(tmpdir(), "ash-skills-"));
@@ -70,6 +70,32 @@ assert.equal(find(list, ALPHA)?.command, `/${ALPHA}`, "项目级技能应该出�
 assert.equal(find(list, ALPHA)?.description, "第一版描述");
 assert.equal(find(list, ALPHA)?.source, "project");
 assert.equal(list.authoritative, false, "没有 init 校准时不能自称权威");
+
+// ── cwd 是「存储形态」的 repoPath:`~/code/foo` 必须先展开再扫 ────────────────
+// projects.repo_path 存的就是用户写下的原样文本(git.ts tidyRepoPath 故意留着 `~`),
+// 而 `~` 只有 shell 认。不展开的话 readdirSync 把它当相对路径 → 目录不存在 → 项目级
+// 技能根被静默跳过,菜单里一个项目技能都没有,点「重新扫描」也永远好不了。
+// 2026-09-22 的现场:ascut 项目装了 38 个项目级技能,`/` 菜单里一个都不出现。
+{
+  const inHome = mkdtempSync(join(homedir(), "ash-skills-tilde-"));
+  process.on("exit", () => rmSync(inHome, { recursive: true, force: true }));
+  const TILDE = "zz-probe-tilde";
+  const dir = join(inHome, ".claude", "skills", TILDE);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${TILDE}\ndescription: 住在 ~ 底下\n---\n\n正文\n`);
+  const stored = `~/${basename(inHome)}`;
+  resetSkillCache();
+  const tilde = listSkills({ agentType: "claude", cwd: stored });
+  assert.ok(find(tilde, TILDE), "`~/…` 形态的 repoPath 必须先展开,否则项目级技能全部扫不到");
+  assert.equal(tilde.cwd, inHome, "回给前端的 cwd 要是真正扫过的那个绝对路径");
+  // 设置页的「重新扫描」走的是另一条入口,同样得展开(否则界面显示 0 条项目技能)。
+  const overviewTilde = scanOverview({ cwd: stored, executors: [{ label: "claude@x", agentType: "claude" }], force: true });
+  assert.ok(overviewTilde.rows[0]!.bySource.project >= 1, "scanOverview 也要认 `~`");
+  // 运行前的 SKILL.md 注入同理:注入的是绝对路径,`~` 递给 CLI 是打不开的。
+  const tildeInvocation = withSkillInvocation({ agentType: "claude", cwd: stored, text: `/${TILDE} 做事` });
+  assert.ok(tildeInvocation.includes(JSON.stringify(join(dir, "SKILL.md"))), "`~` 形态的 cwd 也要注入展开后的 SKILL.md 路径");
+  resetSkillCache();
+}
 
 // 无人值守/完成协议前言会让 slash 不再位于 prompt 开头，所以必须显式指向 SKILL.md。
 const invoked = withSkillInvocation({ agentType: "claude", cwd: root, text: `/${ALPHA} 做一件事` });

@@ -1,9 +1,8 @@
 import { join, isAbsolute, dirname, basename, resolve } from "node:path";
-import { homedir } from "node:os";
 import { mkdirSync, statSync, existsSync, readdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import type { ProjectHealth } from "@ash/shared";
 import { DATA_DIR } from "./paths.js";
-import { IS_WINDOWS, windowsLongPathHint } from "./platform.js";
+import { IS_WINDOWS, expandHome, windowsLongPathHint } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { execFileText as exec } from "./exec.js";
@@ -25,16 +24,9 @@ export function isEmptyDir(p: string): boolean {
   try { return readdirSync(p).length === 0; } catch { return true; }
 }
 
-// Users type `~/code/foo`, but Node's fs/git APIs don't understand `~` (only
-// shells do) — so expand a leading `~` to the home dir before any filesystem
-// use. Applied at every repoPath boundary below so `~` works system-wide.
-// Windows 上用户会写成 `~\code\foo`，反斜杠是那边的正规分隔符，一并认。
-export function expandHome(p: string | null | undefined): string {
-  if (!p) return "";
-  if (p === "~") return homedir();
-  if (p.startsWith("~/") || (IS_WINDOWS && p.startsWith("~\\"))) return join(homedir(), p.slice(2));
-  return p;
-}
+// `~` 展开住在 platform.ts(路径/平台的单点,不是 git 的事);这里原样转出,
+// 因为「repoPath 用之前先展开」的调用点几乎全在本文件的下游。
+export { expandHome };
 
 // Canonicalize a repoPath for *storage*: trim, drop trailing slashes, but keep
 // `~` intact so the value stays portable/readable in the UI. `/Users/x/foo/`
