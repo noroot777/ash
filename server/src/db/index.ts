@@ -198,8 +198,8 @@ export async function ensureSchema() {
       exchanges INTEGER NOT NULL DEFAULT 1, current_seq INTEGER NOT NULL DEFAULT 1,
       verdict TEXT, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS free_review_debates_round_idx
-      ON free_review_debates (round_id);
+    CREATE INDEX IF NOT EXISTS free_review_debates_round_idx
+      ON free_review_debates (round_id, started_at);
     CREATE INDEX IF NOT EXISTS free_review_debates_task_idx
       ON free_review_debates (task_id, started_at);
     CREATE TABLE IF NOT EXISTS free_review_debate_turns (

@@ -431,7 +431,9 @@ export const freeReviewDebates = sqliteTable(
     finishedAt: text("finished_at"),
   },
   (t) => ({
-    roundIdx: uniqueIndex("free_review_debates_round_idx").on(t.roundId),
+    // 一轮意见可以留多条辩论记录：辩完的那条挡着再辩，中断的允许重开（判据在
+    // free-review-debate.ts，不靠唯一索引表达）。
+    roundIdx: index("free_review_debates_round_idx").on(t.roundId, t.startedAt),
     taskIdx: index("free_review_debates_task_idx").on(t.taskId, t.startedAt),
   }),
 );

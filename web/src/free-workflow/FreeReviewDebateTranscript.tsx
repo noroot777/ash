@@ -27,11 +27,18 @@ export function debateStatusText(debate: FreeReviewDebate): string {
 }
 
 /** 一条驳回上那几段发言的逐段回放。发言正文是 agent 写的 Markdown，按报告同样的方式渲染。 */
-export function FreeReviewDebateTranscript({ debate }: { debate: FreeReviewDebate }) {
+export function FreeReviewDebateTranscript({
+  debate,
+  ordinal = null,
+}: {
+  debate: FreeReviewDebate;
+  /** 同一条驳回上辩过多次时的第几次（只有一次就传 null，不摆序号）。 */
+  ordinal?: number | null;
+}) {
   return (
     <div className="free-review-debate" aria-label="审查意见辩论">
       <header>
-        <b>辩论</b>
+        <b>{ordinal ? `第 ${ordinal} 次辩论` : "辩论"}</b>
         <small>{debateStatusText(debate)}</small>
       </header>
       <ol>

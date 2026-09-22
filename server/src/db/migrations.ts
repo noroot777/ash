@@ -375,8 +375,26 @@ async function dropRetiredColumns(client: Client, skip?: ReadonlySet<string>): P
  *  · 退役列最后摘:某几列是唯一还认得出旧状态的证据,对应迁移没跑成就把它们留到
  *    下次启动(`keepColumns`)。
  */
+// 一轮意见原来只许挂一条辩论（唯一索引）。中断过的辩论因此没法重开——系统自己崩了
+// 却把用户的出路关掉了。改成非唯一：辩完的那条仍然挡着再辩（判据在
+// free-review-debate.ts），中断的可以重开，历史逐条留着。
+async function relaxDebateRoundIndex(client: Client): Promise<void> {
+  try {
+    const list = await client.execute("PRAGMA index_list(free_review_debates)");
+    const old = list.rows.find((row) => String((row as Record<string, unknown>).name) === "free_review_debates_round_idx");
+    if (!old || Number((old as Record<string, unknown>).unique) !== 1) return;
+    await client.execute("DROP INDEX IF EXISTS free_review_debates_round_idx");
+    await client.execute(
+      "CREATE INDEX IF NOT EXISTS free_review_debates_round_idx ON free_review_debates (round_id, started_at)",
+    );
+  } catch (e) {
+    console.warn("[ash] 辩论轮次索引放宽失败,忽略:", e);
+  }
+}
+
 export async function runDataMigrations(client: Client): Promise<void> {
   await widenWorkflowBuiltinIndex(client);
+  await relaxDebateRoundIndex(client);
   await migrateLegacyNoteTaskLinks(client);
   await migrateWorktreeDefaultToProjects(client);
   await migrateDebateToDuet(client);

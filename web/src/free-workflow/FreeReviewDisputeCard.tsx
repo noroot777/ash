@@ -37,8 +37,12 @@ export function FreeReviewDisputeCard({
   const [busy, setBusy] = useState(false);
   const [exchanges, setExchanges] = useState(1);
   const dispute = round.dispute;
-  const debate = dispute?.debate ?? null;
-  const debateRunning = debate?.status === "running";
+  const debates = dispute?.debates ?? [];
+  const latestDebate = debates.at(-1) ?? null;
+  const debateRunning = latestDebate?.status === "running";
+  // 辩完的那条挡住再辩（后端同判据）：同一份报告挂两条辩完的记录只会让「以哪条为准」
+  // 变成新问题。中断的可以重开——那是系统没让人说完，不该连带把用户的出路关掉。
+  const canDebate = !latestDebate || latestDebate.status === "failed";
   if (!dispute) return null;
   const blocked = disabled || debateRunning;
 
@@ -87,17 +91,29 @@ export function FreeReviewDisputeCard({
         <b>驳回理由</b>
         <MarkdownBody text={dispute.reason} />
       </div>
-      {debate && <FreeReviewDebateTranscript debate={debate} />}
+      {debates.map((item, index) => (
+        <FreeReviewDebateTranscript
+          key={item.id}
+          debate={item}
+          ordinal={debates.length > 1 ? index + 1 : null}
+        />
+      ))}
       <p>
         {debateRunning
           ? "双方正在各自陈词；辩论只产生发言，不改变结论，说完仍由你裁定。"
-          : "审查链已停在这里：既没有照改，也没有当成通过。"}
+          : latestDebate?.status === "finished"
+            ? "双方都说完了。审查者收尾时给的只是它自己的立场，最后由你裁定。"
+            : latestDebate?.status === "failed"
+              ? "上一场辩论中途断了（有一段没能发言）；可以重开一场，也可以直接裁定。"
+              : "审查链已停在这里：既没有照改，也没有当成通过。"}
       </p>
       <div className="free-review-dispute-card__actions">
-        <button type="button" disabled={blocked || busy} onClick={() => setPending("debate")}>
-          {debateRunning ? <SpinnerGap size={12} className="is-spinning" /> : <ChatsCircle size={12} />}
-          {debate ? "再辩一轮" : "让双方辩论"}
-        </button>
+        {(canDebate || debateRunning) && (
+          <button type="button" disabled={blocked || busy} onClick={() => setPending("debate")}>
+            {debateRunning ? <SpinnerGap size={12} className="is-spinning" /> : <ChatsCircle size={12} />}
+            {latestDebate ? "重开辩论" : "让双方辩论"}
+          </button>
+        )}
         <button type="button" disabled={blocked || busy} onClick={() => setPending("withdrawn")}>
           <HandPalm size={12} />采纳执行者说法
         </button>

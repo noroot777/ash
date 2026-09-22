@@ -78,9 +78,16 @@ export function sideOfSeq(seq: number): FreeReviewDebateSide {
   return seq % 2 === 1 ? "reviewer" : "executor";
 }
 
+/** 这一轮意见上的全部辩论，按开始时间排（通常只有一条）。 */
+export async function debatesOfRound(roundId: string): Promise<DebateRow[]> {
+  return db.select().from(freeReviewDebates)
+    .where(eq(freeReviewDebates.roundId, roundId))
+    .orderBy(asc(freeReviewDebates.startedAt));
+}
+
+/** 这一轮意见上最近的那条辩论（没有则 null）。 */
 export async function debateOfRound(roundId: string): Promise<DebateRow | null> {
-  return (await db.select().from(freeReviewDebates)
-    .where(eq(freeReviewDebates.roundId, roundId))).at(0) ?? null;
+  return (await debatesOfRound(roundId)).at(-1) ?? null;
 }
 
 export async function debateTurnsOf(debateId: string): Promise<DebateTurnRow[]> {
@@ -183,9 +190,12 @@ export async function startFreeReviewDebate(
       const open = await openDisputeOf(taskId);
       if (!open) throw new Error("现在没有等待裁定的驳回，没有可辩的对象");
       if (await activeDebateOf(taskId)) throw new Error("已经有一轮辩论正在进行");
-      // 一轮审查只辩一次：想再辩就先裁定这一条，否则同一份报告会挂着两条互相矛盾的记录。
-      if (await debateOfRound(open.round.id)) {
-        throw new Error("这一轮意见已经辩过一次了；先裁定它，或者再派一轮审查");
+      // 好好辩完的那条挡住再辩：同一份报告挂两条辩完的记录，只会让「到底以哪条为准」
+      // 变成新问题——该裁定了，或者再派一轮审查。**中断的不挡**：那是系统没让人说完
+      // （回合崩了 / 没交卷），把用户的出路一起关掉是拿自己的失败惩罚他。
+      const previousDebate = await debateOfRound(open.round.id);
+      if (previousDebate?.status === "finished") {
+        throw new Error("这一轮意见已经辩完了；先裁定它，或者再派一轮审查");
       }
 
       const at = now();
@@ -348,18 +358,16 @@ export async function reconcileFreeReviewDebates(): Promise<void> {
   }
 }
 
-/** 把一条辩论读成对外的形状（状态快照用）。 */
-export async function debateView(roundId: string) {
-  const debate = await debateOfRound(roundId);
-  if (!debate) return null;
-  const turns = await debateTurnsOf(debate.id);
-  return {
+/** 把这一轮上的辩论读成对外的形状（状态快照用），按开始时间排。 */
+export async function debateViews(roundId: string) {
+  const debates = await debatesOfRound(roundId);
+  return Promise.all(debates.map(async (debate) => ({
     id: debate.id,
     status: debate.status as "running" | "finished" | "failed",
     exchanges: debate.exchanges,
     currentSide: debate.status === "running" ? sideOfSeq(debate.currentSeq) : null,
     verdict: (debate.verdict as FreeReviewDebateVerdict | null) ?? null,
-    turns: turns.map((turn) => ({
+    turns: (await debateTurnsOf(debate.id)).map((turn) => ({
       seq: turn.seq,
       side: turn.side as FreeReviewDebateSide,
       statement: turn.statement ?? "",
@@ -369,5 +377,5 @@ export async function debateView(roundId: string) {
     })),
     startedAt: debate.startedAt,
     finishedAt: debate.finishedAt,
-  };
+  })));
 }

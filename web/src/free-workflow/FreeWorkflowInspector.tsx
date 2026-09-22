@@ -98,7 +98,7 @@ function disputeSuffix(round: FreeReviewRound): string {
   if (!dispute) return "";
   if (dispute.resolution === "withdrawn") return " · 意见已作废";
   if (dispute.resolution === "upheld") return " · 驳回未获支持";
-  return dispute.debate?.status === "running" ? " · 辩论中" : " · 执行者已驳回";
+  return dispute.debates.at(-1)?.status === "running" ? " · 辩论中" : " · 执行者已驳回";
 }
 
 function disputeStateText(round: FreeReviewRound): string {
@@ -106,7 +106,7 @@ function disputeStateText(round: FreeReviewRound): string {
   if (!dispute) return "执行者驳回";
   if (dispute.resolution === "withdrawn") return "执行者驳回 · 你已采纳，这条意见作废";
   if (dispute.resolution === "upheld") return "执行者驳回 · 你维持了审查意见";
-  return dispute.debate?.status === "running" ? "执行者驳回 · 双方辩论中" : "执行者驳回 · 等你裁定";
+  return dispute.debates.at(-1)?.status === "running" ? "执行者驳回 · 双方辩论中" : "执行者驳回 · 等你裁定";
 }
 
 function reviewKey(runId: string, round: number): string {
@@ -160,7 +160,7 @@ export function FreeWorkflowInspector({
     ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
     : null;
   const view = freeReviewView(state, task);
-  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, debateRunning } = view;
+  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, withdrawnRound, debateRunning } = view;
   const taskReady = task.status !== "backlog";
   // waiting 只锁「立即派审/修复」，预约与取消预约照常（同 Toolbar，也与后端口径一致）。
   // waiting / reservationMode 都由 freeReviewCopy.ts 的 freeReviewView 算,两个表面共用
@@ -183,7 +183,9 @@ export function FreeWorkflowInspector({
     ? `第 ${reviewing.currentRound} 轮审查中`
     : disputedRound
       ? `第 ${disputedRound.round} 轮未通过 · 执行者已驳回，${debateRunning ? "双方辩论中" : "等你裁定"}`
-      : repairing
+      : withdrawnRound
+        ? `第 ${withdrawnRound.round} 轮未通过 · 你已采纳执行者说法，这条意见作废`
+        : repairing
       ? `第 ${latestRun?.currentRound ?? 1} 轮未通过 · 任务修改中`
       : stoppedRun && stale
         ? `第 ${stoppedRun.currentRound} 轮未通过 · 之后代码有变化，建议审查新改动`
@@ -253,7 +255,13 @@ export function FreeWorkflowInspector({
             <div className="review-round-dispute">
               <b>{disputeStateText(opened.round)}</b>
               <MarkdownBody text={opened.round.dispute.reason} />
-              {opened.round.dispute.debate && <FreeReviewDebateTranscript debate={opened.round.dispute.debate} />}
+              {opened.round.dispute.debates.map((debate, index) => (
+                <FreeReviewDebateTranscript
+                  key={debate.id}
+                  debate={debate}
+                  ordinal={opened.round.dispute!.debates.length > 1 ? index + 1 : null}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -325,8 +333,10 @@ export function FreeWorkflowInspector({
             <div className="review-inspector__actions">
               {repairing && <FreeReviewProgress kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
               {/* 挂着待裁定的驳回时，「按意见修复」让位给下面那张卡——同一个动作在两处
-                  各写一半措辞，用户按哪一颗都不知道自己是不是顺手把驳回否掉了。 */}
-              {stoppedRun && !taskBusy && !disputedRound && view.freshness === "fresh" && notify && (
+                  各写一半措辞，用户按哪一颗都不知道自己是不是顺手把驳回否掉了。
+                  已裁定作废的那一轮更不能再修：确认框刚说完「执行者不再按它修改」。
+                  后端 manualRepairBlocker 同样挡着，这里不是唯一防线。 */}
+              {stoppedRun && !taskBusy && !disputedRound && !withdrawnRound && view.freshness === "fresh" && notify && (
                 <FreeReviewRepairButton
                   taskId={task.id}
                   run={stoppedRun}

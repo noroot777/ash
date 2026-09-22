@@ -71,6 +71,20 @@ export async function openDisputeOf(taskId: string): Promise<{ run: ReviewRunRow
 }
 
 /**
+ * 「这一轮意见已经被用户裁定作废了」——采纳执行者说法之后的那一轮。
+ *
+ * 修复入口必须认它：确认框上写的是「执行者不再按它修改」，裁定完却还能把同一份报告
+ * 重新发回去修，等于让用户自己把刚做的裁定按没了（第 1 轮审查实测）。前端藏按钮，
+ * 后端照样挡——只藏按钮就是把规矩交给界面守。
+ */
+export async function withdrawnDisputeOf(taskId: string): Promise<{ run: ReviewRunRow; round: ReviewRoundRow } | null> {
+  const run = await latestWorkspaceRun(taskId);
+  if (!run || run.status !== "stopped") return null;
+  const round = await currentRoundOf(run);
+  return round?.disputeResolution === "withdrawn" ? { run, round } : null;
+}
+
+/**
  * 执行者驳回最近一轮的未通过结论（MCP `dispute_review`）。
  *
  * 必须出自**执行者自己的回合**：审查旁路回合（role=reviewer）调它就是审查者替执行者

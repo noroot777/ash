@@ -83,20 +83,33 @@ export type FreeReviewView = {
   stale: boolean;
   /** 执行者驳回了最近一轮未通过意见、用户还没裁定的那一轮；null = 没有待裁定的驳回。 */
   disputedRound: FreeReviewRound | null;
-  /** 待裁定驳回上的辩论（含已结束的）；没开过为 null。 */
+  /** 最近一轮未通过意见已被用户裁定作废（采纳了执行者）；修复入口必须跟着消失。 */
+  withdrawnRound: FreeReviewRound | null;
+  /** 待裁定驳回上最近那条辩论（含已结束/已中止的）；没开过为 null。 */
   debate: FreeReviewDebate | null;
   /** 辩论正在进行（双方轮流发言的旁路回合还没走完）。 */
   debateRunning: boolean;
 };
+
+/** 最新有结论的那一轮（驳回、裁定都挂在它身上）。 */
+function concludedRound(run: FreeReviewRun | null | undefined): FreeReviewRound | null {
+  if (run?.status !== "stopped") return null;
+  return [...run.rounds].reverse().find((round) => round.conclusion) ?? null;
+}
 
 /**
  * 「执行者驳回了、等用户裁定」——审查链停在未通过、最新有结论的那一轮挂着未裁定的驳回。
  * 只认最新结论轮：更早轮次的驳回要么已裁定，要么已被后续轮次覆盖。
  */
 export function openDisputeRound(run: FreeReviewRun | null | undefined): FreeReviewRound | null {
-  if (run?.status !== "stopped") return null;
-  const concluded = [...run.rounds].reverse().find((round) => round.conclusion);
-  return concluded?.dispute && !concluded.dispute.resolution ? concluded : null;
+  const round = concludedRound(run);
+  return round?.dispute && !round.dispute.resolution ? round : null;
+}
+
+/** 「用户已经采纳执行者说法」——这条意见作废，不能再按它修复。 */
+export function withdrawnDisputeRound(run: FreeReviewRun | null | undefined): FreeReviewRound | null {
+  const round = concludedRound(run);
+  return round?.dispute?.resolution === "withdrawn" ? round : null;
 }
 
 export function freeReviewView(state: FreeWorkflowState | null | undefined, task: Task): FreeReviewView {
@@ -112,7 +125,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
   const autoRereview = reservationArmed && !!state?.reviewReservation?.runId;
   const freshness = freeConclusionFreshness(latestRun, state?.workspaceHead, state?.workspaceDirty);
   const disputedRound = openDisputeRound(stoppedRun);
-  const debate = disputedRound?.dispute?.debate ?? null;
+  const debate = disputedRound?.dispute?.debates.at(-1) ?? null;
   return {
     latestRun,
     reviewing,
@@ -128,6 +141,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
     freshness,
     stale: freshness === "stale",
     disputedRound,
+    withdrawnRound: withdrawnDisputeRound(stoppedRun),
     debate,
     debateRunning: debate?.status === "running",
   };

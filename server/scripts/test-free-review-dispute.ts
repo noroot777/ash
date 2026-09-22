@@ -31,10 +31,10 @@ try {
     disputeFreeReview, disputeReasonOf, disputeResolutionOf, openDisputeOf, resolveFreeReviewDispute,
   } = await import("../src/free-review-dispute.js");
   const {
-    activeDebateOf, debateOfRound, debateView, exchangesOf, reconcileFreeReviewDebates,
+    activeDebateOf, debateOfRound, debateViews, debatesOfRound, exchangesOf, reconcileFreeReviewDebates,
     settleDebateTurn, sideOfSeq, startFreeReviewDebate, submitDebateStatement, totalSegments,
   } = await import("../src/free-review-debate.js");
-  const { freeWorkflowState } = await import("../src/free-workflow.js");
+  const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
 
   await ensureSchema();
   const at = new Date().toISOString();
@@ -146,7 +146,7 @@ try {
   assert.equal(stateRound?.dispute?.reason, "报告说的第 3 行是生成代码，不在本次改动里",
     "状态快照必须带上驳回理由");
   assert.equal(stateRound?.dispute?.resolution, null, "快照里的裁定此刻为空");
-  assert.equal(stateRound?.dispute?.debate, null, "还没开过辩论");
+  assert.deepEqual(stateRound?.dispute?.debates, [], "还没开过辩论");
 
   // ── ③ 用户裁定 ──
   // 采纳执行者：意见作废，但**审查结论本身不许被改写成通过**（那是伪造审查者的结论）。
@@ -158,6 +158,10 @@ try {
   assert.equal(autoRun?.status, "stopped", "采纳执行者不把审查链改写成通过");
   assert.equal(await openDisputeOf("d-auto"), null, "裁定之后不再是「待裁定」");
   await rejects(() => resolveFreeReviewDispute("d-auto", "upheld"), "没有等待裁定的驳回", "裁过的不能再裁");
+  // 采纳执行者之后，**修复入口必须跟着关掉**：确认框写的是「执行者不再按它修改」，
+  // 还能照旧报告修一遍的话，用户点一下就把自己刚下的裁定推翻了（第 1 轮审查实测）。
+  await rejects(() => startManualFreeReviewRepair("d-auto"), "已被你裁定作废",
+    "已作废的意见不能再发起修复（后端挡，不只是前端藏按钮）");
 
   // 维持意见：顺带发起修复；这里回合被占着，修复必然投不出去——裁定**仍然落账**，
   // 只把投递失败如实回报（裁定是用户的决定，投递失败是另一件事）。
@@ -203,8 +207,14 @@ try {
   const failed = await debateOfRound(debated.roundId);
   assert.equal(failed?.status, "failed", "没交卷的一段让辩论中止");
   assert.ok((await openDisputeOf("d-debate")), "辩论中止不影响「还在等你裁定」");
-  await rejects(() => startFreeReviewDebate("d-debate", { exchanges: 1 }), "已经辩过一次了",
-    "同一轮意见不许挂两条辩论记录");
+  // 中断的辩论可以重开：那一段是系统没让人说完，把用户的出路一起关掉等于拿自己的
+  // 失败惩罚他。历史那条原样留着，不被覆盖。
+  const reopened = await startFreeReviewDebate("d-debate", { exchanges: 1 });
+  assert.notEqual(reopened.debateId, debate!.id, "重开的是新的一场，不是把旧记录改回 running");
+  assert.equal((await debatesOfRound(debated.roundId)).length, 2, "中断那场的发言记录仍然留着");
+  assert.equal((await activeDebateOf("d-debate"))?.id, reopened.debateId, "重开后轮到新那场在跑");
+  await rejects(() => startFreeReviewDebate("d-debate", { exchanges: 1 }), "已经有一轮辩论正在进行",
+    "同时只许有一场辩论");
 
   // ── ⑤ 收尾段：必须给立场，给了之后辩论结束，但**不改写任何结论** ──
   const closing = await seedStoppedReview("d-closing");
@@ -234,13 +244,15 @@ try {
   assert.equal(finished?.verdict, "partial", "审查者的自述立场落库");
   assert.ok(await openDisputeOf("d-closing"),
     "辩论结束不等于裁定：驳回仍在等用户（审查者的立场不是签字）");
-  await rejects(() => startFreeReviewDebate("d-closing", { exchanges: 1 }), "已经辩过一次了", "一轮只辩一次");
+  await rejects(() => startFreeReviewDebate("d-closing", { exchanges: 1 }), "已经辩完了",
+    "好好辩完的那场挡住再辩：该裁定了，或者再派一轮审查");
 
-  const view = await debateView(closing.roundId);
-  assert.equal(view?.turns.length, 3, "回放要带全部段落");
-  assert.equal(view?.currentSide, null, "结束的辩论没有「正在发言的一方」");
-  assert.equal(view?.turns.at(0)?.side, "reviewer");
-  assert.equal(view?.turns.at(1)?.side, "executor");
+  const views = await debateViews(closing.roundId);
+  assert.equal(views.length, 1, "这一轮只辩过一场");
+  assert.equal(views[0]?.turns.length, 3, "回放要带全部段落");
+  assert.equal(views[0]?.currentSide, null, "结束的辩论没有「正在发言的一方」");
+  assert.equal(views[0]?.turns.at(0)?.side, "reviewer");
+  assert.equal(views[0]?.turns.at(1)?.side, "executor");
 
   // 辩论进行中不许裁定（否则用户按下的那一刻，下一段还在往里写）。
   const midway = await seedStoppedReview("d-midway");

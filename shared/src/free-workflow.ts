@@ -102,8 +102,9 @@ export interface FreeReviewDispute {
   /** 用户的裁定；null = 还在等用户。 */
   resolution: FreeReviewDisputeResolution | null;
   resolvedAt: string | null;
-  /** 这一条驳回上开过的辩论；null = 还没辩过。 */
-  debate: FreeReviewDebate | null;
+  /** 这一条驳回上开过的辩论，按开始时间排；空数组 = 还没辩过。中断过的可以重开，
+   *  所以同一条驳回上可能有多条（辩完的那条会挡住再开，判据在服务端）。 */
+  debates: FreeReviewDebate[];
 }
 
 export interface FreeReviewRound {
