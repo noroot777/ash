@@ -1,6 +1,8 @@
 import type {
   AgentType,
   FreeReviewCheckMode,
+  FreeReviewDebate,
+  FreeReviewDispute,
   FreeReviewRun,
   FreeReviewRound,
   FreeWorkflowExecution,
@@ -22,6 +24,7 @@ import {
   tasks,
 } from "./db/schema.js";
 import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files.js";
+import { debateView } from "./free-review-debate.js";
 import { headCommit, workspaceDirty, worktreePathFor } from "./git.js";
 import { existsSync } from "node:fs";
 import { previewState } from "./preview-public.js";
@@ -142,6 +145,11 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
   const profiles = profilesOwnedBy(profileRows, task.ownerUserId);
   const roundsByRun = new Map<string, typeof roundRows>();
   for (const round of roundRows) roundsByRun.set(round.runId, [...(roundsByRun.get(round.runId) ?? []), round]);
+  // 驳回挂在轮次上，辩论挂在驳回上：一条任务最多只有个位数条，直接按轮次逐条读。
+  const debates = new Map<string, FreeReviewDebate | null>(await Promise.all(
+    roundRows.filter((round) => round.disputeReason)
+      .map(async (round) => [round.id, await debateView(round.id)] as const),
+  ));
   const reviews: FreeReviewRun[] = runs.map((run) => ({
     id: run.id,
     reviewerId: run.reviewerId,
@@ -172,6 +180,15 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       reviewedCommit: round.reviewedCommit,
       reportMarkdown: readFreeReviewReport(taskId, run.id, round.round),
       screenshots: freeReviewScreenshots(taskId, run.id, round.round),
+      dispute: round.disputeReason
+        ? {
+            reason: round.disputeReason,
+            at: round.disputeAt ?? round.endedAt ?? round.startedAt,
+            resolution: (round.disputeResolution as FreeReviewDispute["resolution"]) ?? null,
+            resolvedAt: round.disputeResolvedAt,
+            debate: debates.get(round.id) ?? null,
+          }
+        : null,
       startedAt: round.startedAt,
       endedAt: round.endedAt,
     })),

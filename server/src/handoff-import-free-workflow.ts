@@ -102,6 +102,12 @@ export async function buildFreeWorkflowRows(
     status: round.status,
     conclusion: round.conclusion,
     reviewedCommit: round.reviewedCommit,
+    // 驳回理由与用户裁定原样带走（老载荷没有这几项 → null = 没驳回过）。辩论记录不迁移：
+    // 双方说过什么本来就在两条 CLI 会话历史里，对端要的话重新辩一轮即可。
+    disputeReason: round.disputeReason ?? null,
+    disputeAt: round.disputeAt ?? null,
+    disputeResolution: round.disputeResolution ?? null,
+    disputeResolvedAt: round.disputeResolvedAt ?? null,
     startedAt: round.startedAt,
     endedAt: round.endedAt,
   })));

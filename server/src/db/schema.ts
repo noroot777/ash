@@ -397,10 +397,60 @@ export const freeReviewRounds = sqliteTable(
     conclusion: text("conclusion"),
     // 本轮启动时任务工作区的 HEAD。结论新不新鲜靠它跟当前 HEAD 比，不靠状态字段。
     reviewedCommit: text("reviewed_commit"),
+    // 执行者对这一轮结论的驳回：理由正文 + 时刻。非空 = 这一轮没被执行者认下。
+    disputeReason: text("dispute_reason"),
+    disputeAt: text("dispute_at"),
+    // **用户**的裁定（upheld=维持审查意见 / withdrawn=采纳执行者），与辩论里审查者
+    // 自述的 verdict 分开存：让被驳回的一方替用户签字，等于绕过裁定这件事本身。
+    disputeResolution: text("dispute_resolution"),
+    disputeResolvedAt: text("dispute_resolved_at"),
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
   },
   (t) => ({ runRoundIdx: uniqueIndex("free_review_rounds_run_round_idx").on(t.runId, t.round) }),
+);
+
+// 一条驳回上开的辩论。一轮审查至多一条（`round_id` 唯一）：用户再想让双方说一次，
+// 得先裁定这一条 —— 否则同一份报告会挂着两条互相矛盾的辩论记录。
+export const freeReviewDebates = sqliteTable(
+  "free_review_debates",
+  {
+    id: text("id").primaryKey(),
+    roundId: text("round_id").notNull(),
+    taskId: text("task_id").notNull(),
+    runId: text("run_id").notNull(),
+    round: integer("round").notNull(),
+    status: text("status").notNull(),
+    /** 来回数；总发言段数 = exchanges * 2 + 1（末尾多一段审查者收尾）。 */
+    exchanges: integer("exchanges").notNull().default(1),
+    /** 正在发言的是第几段；结束后停在最后一段的序号。 */
+    currentSeq: integer("current_seq").notNull().default(1),
+    verdict: text("verdict"),
+    startedAt: text("started_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    finishedAt: text("finished_at"),
+  },
+  (t) => ({
+    roundIdx: uniqueIndex("free_review_debates_round_idx").on(t.roundId),
+    taskIdx: index("free_review_debates_task_idx").on(t.taskId, t.startedAt),
+  }),
+);
+
+export const freeReviewDebateTurns = sqliteTable(
+  "free_review_debate_turns",
+  {
+    id: text("id").primaryKey(),
+    debateId: text("debate_id").notNull(),
+    seq: integer("seq").notNull(),
+    side: text("side").notNull(),
+    // 发言正文由 `debate_reply` 直接落库（不走证据目录）：它是对话，不是证据文件，
+    // 而且必须能在「这一段到底交卷没有」上给出确定答案 —— 文件存不存在答不了这个。
+    statement: text("statement"),
+    status: text("status").notNull(),
+    startedAt: text("started_at").notNull(),
+    endedAt: text("ended_at"),
+  },
+  (t) => ({ debateSeqIdx: uniqueIndex("free_review_debate_turns_seq_idx").on(t.debateId, t.seq) }),
 );
 
 export const sessions = sqliteTable("sessions", {

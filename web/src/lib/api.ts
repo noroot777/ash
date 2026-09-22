@@ -9,6 +9,7 @@ import type {
   BatchCreateTasksBody,
   ExecutorDowngradeItem,
   FreeReviewDispatchInput,
+  FreeReviewDisputeResolution,
   GateAction,
   Group,
   LlmProtocol,
@@ -359,6 +360,17 @@ export const api = {
     request(`/tasks/${id(taskId)}/free-workflow/post-merge-review/repair`, json("POST", { runId })),
   repairFreeReview: (taskId: string): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review/repair`, { method: "POST" }),
+  // 执行者驳回某一轮未通过意见后，用户的裁定。upheld = 维持意见并让执行者照改
+  // （后端接着发起修复），withdrawn = 采纳执行者说法（**不会**把那条 run 改写成
+  // 已通过——伪造审查者的结论比留一条「用户裁定作废」的记录危险得多）。
+  resolveFreeReviewDispute: (
+    taskId: string,
+    resolution: FreeReviewDisputeResolution,
+  ): Promise<{ resolution: FreeReviewDisputeResolution; repairError: string | null; state: FreeWorkflowApiState }> =>
+    request(`/tasks/${id(taskId)}/free-workflow/review/dispute/resolution`, json("POST", { resolution })),
+  // 让审查者和执行者就这条驳回各说几段。exchanges 是来回数，发言段数 = exchanges*2+1。
+  startFreeReviewDebate: (taskId: string, exchanges: number): Promise<{ debateId: string; state: FreeWorkflowApiState }> =>
+    request(`/tasks/${id(taskId)}/free-workflow/review/debate`, json("POST", { exchanges })),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
   cancelFreeReviewReservation: (taskId: string): Promise<FreeWorkflowApiState> =>

@@ -7,7 +7,7 @@ import { TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
+import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
@@ -37,6 +37,14 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
   await db.delete(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, taskId));
   const runIds = (await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
     .where(eq(freeReviewRuns.taskId, taskId))).map((run) => run.id);
+  // 辩论挂在轮次上（debates → debate_turns），得先于 rounds 收掉，否则 round 行一删
+  // 就再没有任何线索能找到那些发言行。
+  const debateIds = (await db.select({ id: freeReviewDebates.id }).from(freeReviewDebates)
+    .where(eq(freeReviewDebates.taskId, taskId))).map((debate) => debate.id);
+  if (debateIds.length) {
+    await db.delete(freeReviewDebateTurns).where(inArray(freeReviewDebateTurns.debateId, debateIds));
+  }
+  await db.delete(freeReviewDebates).where(eq(freeReviewDebates.taskId, taskId));
   if (runIds.length) await db.delete(freeReviewRounds).where(inArray(freeReviewRounds.runId, runIds));
   await db.delete(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId));
   await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId));

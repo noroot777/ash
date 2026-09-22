@@ -49,6 +49,63 @@ export interface FreeReviewExecutorOverride {
   reasoningEffort: string | null;
 }
 
+/**
+ * 「驳回」这条支线的三个概念，**不共用一个状态字段**：
+ * - `FreeReviewDispute`：执行者不认某一轮未通过结论（`dispute_review`），链停下来等用户裁定。
+ * - `FreeReviewDebate`：用户看过驳回后让双方各自陈词的那几个旁路回合。
+ * - `resolution`：**用户**的裁定。审查者在辩论收尾时给的 `verdict` 只是它自己的立场，
+ *   两者分开存 —— 让被驳回的一方替用户签字，等于绕过用户裁定这件事本身。
+ */
+export type FreeReviewDisputeResolution =
+  /** 维持审查意见：照报告修 */
+  | "upheld"
+  /** 采纳执行者：这条未通过意见作废，报告与证据原样留着 */
+  | "withdrawn";
+
+/** 辩论收尾时**审查者自述**的立场（不是用户裁定，不自动改变任何状态）。 */
+export type FreeReviewDebateVerdict = "upheld" | "withdrawn" | "partial";
+
+export type FreeReviewDebateSide = "reviewer" | "executor";
+export type FreeReviewDebateStatus = "running" | "finished" | "failed";
+export type FreeReviewDebateTurnStatus = "speaking" | "done" | "error";
+
+/** 一次辩论最多几个来回（一个来回 = 审查者答辩 + 执行者回应）。 */
+export const MAX_FREE_REVIEW_DEBATE_EXCHANGES = 3;
+
+export interface FreeReviewDebateTurn {
+  seq: number;
+  side: FreeReviewDebateSide;
+  /** 这一段发言正文；还没交卷（speaking/error）时为空串。 */
+  statement: string;
+  status: FreeReviewDebateTurnStatus;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+export interface FreeReviewDebate {
+  id: string;
+  status: FreeReviewDebateStatus;
+  /** 用户选的来回数；总发言段数 = exchanges * 2 + 1（末尾多一段审查者收尾）。 */
+  exchanges: number;
+  /** 正在发言的一方；辩论已结束为 null。 */
+  currentSide: FreeReviewDebateSide | null;
+  verdict: FreeReviewDebateVerdict | null;
+  turns: FreeReviewDebateTurn[];
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface FreeReviewDispute {
+  /** 执行者写的驳回理由（逐条对着报告说）。 */
+  reason: string;
+  at: string;
+  /** 用户的裁定；null = 还在等用户。 */
+  resolution: FreeReviewDisputeResolution | null;
+  resolvedAt: string | null;
+  /** 这一条驳回上开过的辩论；null = 还没辩过。 */
+  debate: FreeReviewDebate | null;
+}
+
 export interface FreeReviewRound {
   round: number;
   status: FreeReviewRoundStatus;
@@ -57,6 +114,8 @@ export interface FreeReviewRound {
   reviewedCommit: string | null;
   reportMarkdown: string;
   screenshots: string[];
+  /** 执行者对这一轮结论的驳回；null = 没驳回过（绝大多数轮次）。 */
+  dispute: FreeReviewDispute | null;
   startedAt: string;
   endedAt: string | null;
 }

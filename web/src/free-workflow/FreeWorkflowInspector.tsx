@@ -9,6 +9,7 @@ import {
   CaretRight,
   CheckCircle,
   GitCommit,
+  HandPalm,
   MagnifyingGlass,
   SpinnerGap,
   WarningCircle,
@@ -20,7 +21,9 @@ import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewNote } from "../review/ReviewNote.tsx";
 import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
+import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
+import { FreeReviewDisputeCard } from "./FreeReviewDisputeCard.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
 import { freeReviewView } from "./freeReviewCopy.ts";
@@ -84,8 +87,26 @@ function executionLabel(execution: FreeWorkflowExecution): string {
 function reviewRoundLabel(round: FreeReviewRound): string {
   if (round.status === "reviewing") return "审查中";
   if (round.conclusion === "verified") return "已通过";
-  if (round.conclusion === "verify_failed") return "未通过";
+  if (round.conclusion === "verify_failed") return `未通过${disputeSuffix(round)}`;
   return "异常";
+}
+
+// 驳回过的轮次不能只显示「未通过」：那一轮到底是照改了、还是被用户判作废了，是两件
+// 完全不同的事，列表和抽屉标题都得带着说。
+function disputeSuffix(round: FreeReviewRound): string {
+  const dispute = round.dispute;
+  if (!dispute) return "";
+  if (dispute.resolution === "withdrawn") return " · 意见已作废";
+  if (dispute.resolution === "upheld") return " · 驳回未获支持";
+  return dispute.debate?.status === "running" ? " · 辩论中" : " · 执行者已驳回";
+}
+
+function disputeStateText(round: FreeReviewRound): string {
+  const dispute = round.dispute;
+  if (!dispute) return "执行者驳回";
+  if (dispute.resolution === "withdrawn") return "执行者驳回 · 你已采纳，这条意见作废";
+  if (dispute.resolution === "upheld") return "执行者驳回 · 你维持了审查意见";
+  return dispute.debate?.status === "running" ? "执行者驳回 · 双方辩论中" : "执行者驳回 · 等你裁定";
 }
 
 function reviewKey(runId: string, round: number): string {
@@ -139,7 +160,7 @@ export function FreeWorkflowInspector({
     ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
     : null;
   const view = freeReviewView(state, task);
-  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale } = view;
+  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, debateRunning } = view;
   const taskReady = task.status !== "backlog";
   // waiting 只锁「立即派审/修复」，预约与取消预约照常（同 Toolbar，也与后端口径一致）。
   // waiting / reservationMode 都由 freeReviewCopy.ts 的 freeReviewView 算,两个表面共用
@@ -160,7 +181,9 @@ export function FreeWorkflowInspector({
   const exhausted = stoppedRun && stoppedRun.currentRound > stoppedRun.retryLimit;
   const overviewDetail = reviewing
     ? `第 ${reviewing.currentRound} 轮审查中`
-    : repairing
+    : disputedRound
+      ? `第 ${disputedRound.round} 轮未通过 · 执行者已驳回，${debateRunning ? "双方辩论中" : "等你裁定"}`
+      : repairing
       ? `第 ${latestRun?.currentRound ?? 1} 轮未通过 · 任务修改中`
       : stoppedRun && stale
         ? `第 ${stoppedRun.currentRound} 轮未通过 · 之后代码有变化，建议审查新改动`
@@ -171,7 +194,7 @@ export function FreeWorkflowInspector({
             : view.freshness === "unknown" && latestRun?.status === "passed"
               ? "已通过 · 无法确认结论是否仍对应当前代码"
               : latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审";
-  const overviewStatus = repairing ? "repairing" : stale ? "stale" : null;
+  const overviewStatus = disputedRound ? "disputed" : repairing ? "repairing" : stale ? "stale" : null;
 
   if (free.loading && !free.state) return <div className="free-workflow-inspector is-loading"><SpinnerGap size={14} className="is-spinning" />正在生成实际工作流…</div>;
   if (free.error && !free.state) return <div className="free-workflow-inspector is-loading is-error"><WarningCircle size={14} />{free.error}</div>;
@@ -224,6 +247,15 @@ export function FreeWorkflowInspector({
         <div className="review-round-body">
           {opened.run.note && <ReviewNote text={opened.run.note} />}
           {opened.round.reportMarkdown ? <MarkdownBody text={opened.round.reportMarkdown} /> : <p>报告尚未生成。</p>}
+          {/* 驳回与辩论跟报告长在同一轮上，读结论的人必须在同一个地方读到「执行者不认这条、
+              理由是什么」。这里只回放，裁定入口在审查面板那张卡上（一个动作一个入口）。 */}
+          {opened.round.dispute && (
+            <div className="review-round-dispute">
+              <b>{disputeStateText(opened.round)}</b>
+              <MarkdownBody text={opened.round.dispute.reason} />
+              {opened.round.dispute.debate && <FreeReviewDebateTranscript debate={opened.round.dispute.debate} />}
+            </div>
+          )}
         </div>
       </ReviewEvidenceDrawer>
     </ImagePreviewGroup>
@@ -277,11 +309,13 @@ export function FreeWorkflowInspector({
           <section className="review-inspector__overview">
             <header>
               <span className={`review-inspector__status${overviewStatus ? ` is-${overviewStatus}` : latestReview?.round.conclusion ? ` is-${latestReview.round.conclusion}` : ""}`}>
-                {repairing
-                  ? <SpinnerGap size={13} className="is-spinning" />
-                  : stale
-                    ? <MagnifyingGlass size={13} />
-                    : latestReview ? reviewStatusIcon(latestReview.round) : <MagnifyingGlass size={13} />}
+                {disputedRound
+                  ? <HandPalm size={13} weight="fill" />
+                  : repairing
+                    ? <SpinnerGap size={13} className="is-spinning" />
+                    : stale
+                      ? <MagnifyingGlass size={13} />
+                      : latestReview ? reviewStatusIcon(latestReview.round) : <MagnifyingGlass size={13} />}
               </span>
               <div>
                 <b>{workspaceReviewActivities.length ? `${workspaceReviewActivities.length} 轮审查` : "实现阶段审查"}</b>
@@ -290,7 +324,9 @@ export function FreeWorkflowInspector({
             </header>
             <div className="review-inspector__actions">
               {repairing && <FreeReviewProgress kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
-              {stoppedRun && !taskBusy && view.freshness === "fresh" && notify && (
+              {/* 挂着待裁定的驳回时，「按意见修复」让位给下面那张卡——同一个动作在两处
+                  各写一半措辞，用户按哪一颗都不知道自己是不是顺手把驳回否掉了。 */}
+              {stoppedRun && !taskBusy && !disputedRound && view.freshness === "fresh" && notify && (
                 <FreeReviewRepairButton
                   taskId={task.id}
                   run={stoppedRun}
@@ -316,6 +352,17 @@ export function FreeWorkflowInspector({
               <ReviewNote text={state.reviewReservation.note} label="预约附言" />
             )}
           </section>
+
+          {disputedRound && stoppedRun && notify && (
+            <FreeReviewDisputeCard
+              taskId={task.id}
+              run={stoppedRun}
+              round={disputedRound}
+              disabled={locked || taskBusy || !!reviewing}
+              onChanged={free.setState}
+              notify={notify}
+            />
+          )}
 
           <section className="review-inspector__targets" aria-label="自由审查轮次">
             <header>

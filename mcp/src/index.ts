@@ -389,6 +389,49 @@ server.registerTool(
 );
 
 server.registerTool(
+  "dispute_review",
+  {
+    title: "驳回审查意见(不认这条结论)",
+    description:
+      "自由工作流的审查意见被打回来修复时,**你不必 100% 认可那份报告**。发现某条意见读错了代码、依据不可复现,或者那处是知情且有意为之、这次不该动,就调用本工具把驳回落下来,然后结束回合——链会停在「等用户裁定」,不会自动复审,也不会当成任务完成。\n\n用法:reason 里逐条写清**哪一条不成立、依据是什么**(指到具体文件/行/可复现步骤);部分成立时先把成立的那几条改掉并验证,再用本工具只驳不成立的那几条,并在 reason 里写明已经改了什么。默认仍然是照报告修复——拿不出具体依据就不要驳回。\n\n只能在**执行回合**里调用(审查回合不能驳回自己的结论),一轮意见只能驳一次;驳回之后不要调用 complete_task。用户看到驳回后可以让你和审查者辩论一轮(那时你会收到辩论提示并用 debate_reply 发言),也可以直接采纳你的说法或维持原意见让你照改。",
+    inputSchema: {
+      taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
+      reason: z.string().min(1).describe("逐条写清哪一条意见不成立、依据是什么;部分成立时写明你已经改了哪几条"),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
+    },
+  },
+  async ({ taskId, reason, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/free-workflow/review/dispute`, { reason }, directionToken)); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "debate_reply",
+  {
+    title: "辩论发言(审查意见之争)",
+    description:
+      "执行者驳回审查意见后,用户可以让双方各说几段。你收到【审查意见辩论】提示时,说完自己这一段就调用本工具交卷,然后结束回合——**发言只认这次调用**,写在输出文本里的内容不算数,没交卷这场辩论会按「没说话」中止。\n\n这一段只辩论:不要改动任何文件、不要提交、不要跑会改变状态的命令。收尾那一段(提示里会写明)必须同时给 verdict:upheld=维持原意见 / withdrawn=撤回原意见 / partial=部分成立;那只是你自己的立场,**最终由用户裁定**,不改变任何结论。非收尾段传 verdict 会被忽略。本回合不要调用 report_stage / complete_task / accept_task。",
+    inputSchema: {
+      taskId: z.string().describe("正在辩论的任务 id(提示里有)"),
+      statement: z.string().min(1).describe("你这一段的完整发言:逐条说清坚持什么、接受什么、依据是什么"),
+      verdict: z
+        .enum(["upheld", "withdrawn", "partial"])
+        .optional()
+        .describe("仅收尾那一段需要:upheld=维持原意见 / withdrawn=撤回原意见 / partial=部分成立"),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
+    },
+  },
+  async ({ taskId, statement, verdict, directionToken }) => {
+    try {
+      return ok(await call(
+        "POST", `/tasks/${taskId}/free-workflow/review/debate/reply`, { statement, verdict }, directionToken,
+      ));
+    } catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
   "accept_task",
   {
     title: "确认验收通过并合并清理",
