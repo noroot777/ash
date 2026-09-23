@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inspector 删除文件 / 文件夹 · 交互原型</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="inspector-file-delete.css">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-caret-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-caret-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5h6l2 2h10v10H3Z"/></symbol>
+  <symbol id="i-folder-open" viewBox="0 0 24 24"><path d="M3 6.5h6l2 2h10M3 6.5v12h18l1.5-8H5.2Z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v4h4"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M18 8c0 6-12 3-12 9"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 10.7a2 2 0 0 0 2.8 2.8M6.1 6.3A10.6 10.6 0 0 0 2 12s3.6 6 10 6a10 10 0 0 0 4.2-.9M9.9 5.2A10 10 0 0 1 12 5c6.4 0 10 6 10 6a17 17 0 0 1-3 3.6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-1.3 5.3M20 5v6h-6"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 7V4h4v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 6V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h1"/></symbol>
+  <symbol id="i-reveal" viewBox="0 0 24 24"><path d="M3 6.5h6l2 2h10v10H3Z"/><path d="M12 16v-4M9.5 14.5 12 12l2.5 2.5"/></symbol>
+  <symbol id="i-open-with" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-zoom" viewBox="0 0 24 24"><path d="M4 9V4h5M20 15v5h-5M15 4h5v5M9 20H4v-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="i-warning" viewBox="0 0 24 24"><path d="M12 3.5 22 20H2Z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-diff" viewBox="0 0 24 24"><path d="M7 3v14M7 3 4 6M7 3l3 3M17 21V7M17 21l3-3M17 21l-3-3"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-8 8H4l1-4a8 8 0 1 1 15-4Z"/></symbol>
+  <symbol id="i-files" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v4h4M9 12h6M9 16h4"/></symbol>
+  <symbol id="i-scm" viewBox="0 0 24 24"><circle cx="12" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M12 8.4v7.2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+</svg>
+
+<header class="demo-bar">
+  <div class="demo-bar__id">
+    <b>Inspector · 删除文件与文件夹</b>
+    <span>交互原型 — 中间视图是唯一的删除入口</span>
+  </div>
+  <div class="demo-bar__scenes">
+    <span class="demo-seg" role="group" aria-label="工作目录状态">
+      <button type="button" data-busy="idle" aria-pressed="true">任务空闲</button>
+      <button type="button" data-busy="running" aria-pressed="false">任务在跑</button>
+    </span>
+    <span class="demo-seg" role="group" aria-label="删除去向">
+      <button type="button" data-trash="on" aria-pressed="true">有废纸篓</button>
+      <button type="button" data-trash="off" aria-pressed="false">无废纸篓</button>
+    </span>
+    <span class="demo-seg" role="group" aria-label="配色">
+      <button type="button" data-theme="light" aria-pressed="true">浅色</button>
+      <button type="button" data-theme="dark" aria-pressed="false">深色</button>
+    </span>
+  </div>
+</header>
+
+<main class="shell">
+  <!-- 中间栏：会话 / 文件全文 / 文件夹详情，三选一 -->
+  <section class="stage" id="stage" aria-label="中间视图"></section>
+
+  <!-- 右侧 inspector：文件树 + 图标条 -->
+  <aside class="inspector">
+    <div class="inspector__panel">
+      <div class="file-tree" aria-label="工作目录文件">
+        <header class="file-tree__head" data-git-kind="modified">
+          <div class="file-tree__where">
+            <b><svg class="ico11"><use href="#i-branch"/></svg>ash/kiMZNL_H</b>
+            <small>任务 worktree · ~/code/harness/.worktrees/kiMZNL_HuMtr</small>
+          </div>
+          <button type="button" class="file-tree__action" aria-label="显示被 .gitignore 忽略的文件" aria-pressed="false" id="toggleIgnored">
+            <svg class="ico13"><use href="#i-eye-off"/></svg>
+          </button>
+          <button type="button" class="file-tree__action" aria-label="重新读取文件列表">
+            <svg class="ico13"><use href="#i-refresh"/></svg>
+          </button>
+        </header>
+        <div class="file-tree__body" id="tree"></div>
+      </div>
+    </div>
+    <nav class="inspector__rail" aria-label="Inspector 页签">
+      <button type="button" aria-label="会话"><svg class="ico16"><use href="#i-chat"/></svg></button>
+      <button type="button" class="is-active" aria-label="文件" aria-current="page"><svg class="ico16"><use href="#i-files"/></svg></button>
+      <button type="button" aria-label="源代码管理"><svg class="ico16"><use href="#i-scm"/></svg></button>
+    </nav>
+  </aside>
+</main>
+
+<div class="toast-host" id="toasts" aria-live="polite"></div>
+<div class="scrim" id="scrim" hidden></div>
+
+<script src="inspector-file-delete.js"></script>
+</body>
+</html>
