@@ -12,7 +12,7 @@ import { sessions } from "./db/schema.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
-import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
+import { parseSessionTraceLines, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
 import type { SessionTraceEntry } from "./transcript.js";
 import { sessionContext, sessionUsage } from "./usage.js";
 import { codexHome, findArchivedRollout, readCodexCliVersion } from "./executors/codex-rollout.js";
@@ -74,30 +74,38 @@ export async function readSessionOutput(taskId: string, sessionId: string): Prom
   return readRunFile(sessionTranscriptPath(taskId, sessionId));
 }
 
-export async function readSessionTrace(
-  taskId: string,
-  sessionId: string,
-): Promise<RunFileRead<SessionTraceEntry[]>> {
+/**
+ * trace 读出来之后还多一位：**末行是不是半截**。`parseSessionTraceLines` 已经把
+ * 「整行写完却解析不出来」判成坏（那种直接 ok:false），剩下这一位交给路由结合会话有没有
+ * 收口来判 —— 还在跑的会话末行半截是 agent 正在落笔，收了口还残着半行就是被截断了。
+ */
+type TraceRead =
+  | { ok: true; value: SessionTraceEntry[]; truncatedTail: boolean }
+  | { ok: false; missing: boolean };
+
+export async function readSessionTrace(taskId: string, sessionId: string): Promise<TraceRead> {
   const raw = await readRunFile(sessionTracePath(taskId, sessionId));
   if (!raw.ok) return raw;
-  let trace: SessionTraceEntry[];
-  try {
-    trace = parseSessionTrace(raw.value);
-  } catch {
-    // 文件在、却解析不出来：这跟读不出来一样是故障，别装作这条会话没干过活。
-    return { ok: false, missing: false };
+  const parsed = parseSessionTraceLines(raw.value);
+  // 一整行写完了却解析不出来 —— 那不是「正在写」，是文件坏了。把它当成空 trace 交出去，
+  // 前端就既看不到执行过程、也收不到任何警告，派生照样挂着（第 4 轮审查）。
+  if (parsed.badLines > 0) return { ok: false, missing: false };
+  const trace = parsed.entries;
+  const tail = parsed.truncatedTail;
+  if (!trace.some((entry) => entry.event.kind === "tool" && entry.event.nativeWork)) {
+    return { ok: true, value: trace, truncatedTail: tail };
   }
-  if (!trace.some((entry) => entry.event.kind === "tool" && entry.event.nativeWork)) return { ok: true, value: trace };
   try {
     const row = (await db.select().from(sessions).where(eq(sessions.id, sessionId))).at(0);
     // 补模型名只是锦上添花，补不上就给裸 trace —— 这一条降级是有意的。
     return {
       ok: true,
+      truncatedTail: tail,
       value: row && row.taskId === taskId
         ? await enrichNativeWorkModels(trace, row, await sessionCliConfigDir(row, row.agentType)) : trace,
     };
   } catch {
-    return { ok: true, value: trace };
+    return { ok: true, value: trace, truncatedTail: tail };
   }
 }
 
@@ -136,12 +144,17 @@ export function mountTaskSessionRoutes(api: Hono): void {
     const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
     if (!row) return c.json({ error: "not found" }, 404);
     const read = await readSessionTrace(row.taskId, sid);
-    if (read.ok) return c.json(read.value);
+    if (read.ok) {
+      // 末行半截：还在跑就是 agent 正在落那一笔（照常给已读到的部分）；收了口还残着
+      // 半行，说明文件写到一半断了，跟坏行一样得说出来。
+      if (read.truncatedTail && row.endedAt) return c.json({ error: "trace unreadable" }, 500);
+      return c.json(read.value);
+    }
     // **trace 不能套正文那条判据。** 它是 2026-08-01 才加的功能（bd8ed749 / de2c9893），
     // 在那之前跑完的会话本来就没有这个文件，眼下也没有任何标记能证明「这条会话应该
     // 产 trace」—— 同一个库里 992/1924 条已收口会话没有 .trace.jsonl。把它们一律判成
     // 故障，前端的 traceError 就会把整页的「派生新任务」入口静默关掉（第 3 轮审查）。
-    // 文件不在就是没有；只有文件在却读不动、或者解析不出来，才是真的坏了。
+    // 文件不在就是没有；只有文件在却读不动、或者内容坏了，才是真的坏了。
     if (read.missing) return c.json([]);
     return c.json({ error: "trace unreadable" }, 500);
   });

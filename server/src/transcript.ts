@@ -105,33 +105,63 @@ export async function turnProducedWork(taskId: string, sessionId: string, turnSt
     && (entry.event.kind === "text" || entry.event.kind === "tool" || entry.event.kind === "attachment"));
 }
 
-export function parseSessionTrace(raw: string): SessionTraceEntry[] {
+/**
+ * 解析结果外加两位诊断。**「最后一行写了一半」和「整行写完了却解析不出来」是两回事**：
+ * 前者是 agent 正在落笔的那一笔，本来就该容错（不能让它盖掉此前合法的 trace）；后者
+ * 只可能是文件被写坏或从中间截断，读端必须知道，否则整份坏文件会被解释成「这条会话
+ * 什么都没干」，前端的派生门禁也就永远不会触发（第 4 轮审查）。
+ */
+export type SessionTraceParse = {
+  entries: SessionTraceEntry[];
+  /** 完整的坏行数：它后面还有内容，所以不可能是写到一半。 */
+  badLines: number;
+  /** 末行解析不出来、且文件没有以换行收尾 —— 正在写的那一笔。 */
+  truncatedTail: boolean;
+};
+
+export function parseSessionTraceLines(raw: string): SessionTraceParse {
   const entries: SessionTraceEntry[] = [];
-  for (const line of raw.split("\n")) {
+  let badLines = 0;
+  let truncatedTail = false;
+  const lines = raw.split("\n");
+  // 以 \n 收尾时 split 的末项是空串；否则末项就是还没写完的那一行。
+  const tailIndex = raw.endsWith("\n") ? -1 : lines.length - 1;
+  for (const [index, line] of lines.entries()) {
     if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line) as Partial<SessionTraceEntry>;
-      const event = entry.event;
-      const validRun = event?.kind !== "run" || (
-        (event.model === null || typeof event.model === "string")
-        && (event.reasoningEffort === null || typeof event.reasoningEffort === "string")
-      );
-      if (
-        typeof entry.at !== "string"
-        || typeof entry.turnStartedAt !== "string"
-        || !event
-        || !["text", "thinking", "tool", "error", "usage", "attachment", "run"].includes(event.kind)
-        || !validRun
-        || (event.kind === "text" && typeof event.text !== "string")
-        || (event.kind === "attachment" && typeof event.path !== "string")
-        || (event.kind === "usage" && (!event.usage || typeof event.usage !== "object"))
-      ) continue;
-      entries.push(entry as SessionTraceEntry);
-    } catch {
-      // A partially written final JSONL line should not hide earlier valid trace.
-    }
+    const entry = parseTraceLine(line);
+    if (entry) entries.push(entry);
+    else if (index === tailIndex) truncatedTail = true;
+    else badLines += 1;
   }
-  return entries;
+  return { entries, badLines, truncatedTail };
+}
+
+export function parseSessionTrace(raw: string): SessionTraceEntry[] {
+  return parseSessionTraceLines(raw).entries;
+}
+
+function parseTraceLine(line: string): SessionTraceEntry | null {
+  try {
+    const entry = JSON.parse(line) as Partial<SessionTraceEntry>;
+    const event = entry.event;
+    const validRun = event?.kind !== "run" || (
+      (event.model === null || typeof event.model === "string")
+      && (event.reasoningEffort === null || typeof event.reasoningEffort === "string")
+    );
+    if (
+      typeof entry.at !== "string"
+      || typeof entry.turnStartedAt !== "string"
+      || !event
+      || !["text", "thinking", "tool", "error", "usage", "attachment", "run"].includes(event.kind)
+      || !validRun
+      || (event.kind === "text" && typeof event.text !== "string")
+      || (event.kind === "attachment" && typeof event.path !== "string")
+      || (event.kind === "usage" && (!event.usage || typeof event.usage !== "object"))
+    ) return null;
+    return entry as SessionTraceEntry;
+  } catch {
+    return null;
+  }
 }
 
 // A non-text interjection in the run timeline — a 你→@agent reply or a 〔系统〕

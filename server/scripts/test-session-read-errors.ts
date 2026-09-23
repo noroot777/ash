@@ -84,6 +84,29 @@ try {
   // ④ 会话行本身不存在仍然是 404，没被上面的分支带歪。
   assert.equal((await get("/sessions/s-nope/output")).status, 404);
 
+  // ⑤ **文件在、内容坏了。** parseSessionTrace 对每一行都容错，所以一份整体损坏的
+  // trace 以前会被解释成「这条会话什么都没干」并回 200 []：页面既看不到执行过程，
+  // 也收不到任何警告，派生入口照样挂着（第 4 轮审查）。
+  const good = JSON.stringify({
+    at: "2026-09-20T01:00:01.000Z", turnStartedAt: at, event: { kind: "text", text: "说了一句" },
+  });
+  const corrupt = async (id: string, raw: string) => {
+    writeFileSync(sessionTracePath(taskId, id), raw);
+    return get(`/sessions/${id}/trace`);
+  };
+  assert.equal((await corrupt("s-ended", "not-json\n{乱码}\n")).status, 500, "整份坏掉的 trace 不许当成空 trace");
+  assert.equal((await corrupt("s-ended", `${good}\nnot-json\n`)).status, 500, "写完的坏行夹在中间，同样是坏了");
+  assert.equal((await corrupt("s-ended", `${good}\n{"at":1}\n`)).status, 500, "行能 JSON 解析但字段不合法，也是坏行");
+
+  // ⑥ 末行半截是另一回事：agent 正在落那一笔。还在跑就照常给已读到的部分，
+  // 收了口还残着半行才算被截断。
+  const half = `${good}\n{"at":"2026-09-20T01:00:02.000Z","turnSta`;
+  const running = await corrupt("s-running", half);
+  assert.equal(running.status, 200, "还在跑的会话，末行写了一半不算故障");
+  assert.equal(JSON.parse(running.text).length, 1, "半截那行丢掉，此前合法的条目要留住");
+  assert.equal((await corrupt("s-ended", half)).status, 500, "收口之后还残着半行，说明文件断了");
+  assert.deepEqual(await corrupt("s-ended", `${good}\n`), { status: 200, text: `[${good}]` }, "干净的 trace 照常读出来");
+
   console.log("会话正文/轨迹读取失败语义验证通过");
 } finally {
   for (const path of locked) chmodSync(path, 0o600);
