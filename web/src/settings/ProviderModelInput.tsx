@@ -16,6 +16,12 @@ import {
 // 转发，是因为几个设置页早就 `import { clearProviderModelCache } from "./ProviderModelInput.tsx"`。
 export { clearProviderModelCache } from "../lib/modelCatalog.ts";
 
+export type ClaudeModelMode = "alias" | "exact";
+
+export function claudeModelMode(model: string | null | undefined): ClaudeModelMode {
+  return !model || CLI_MODEL_PRESETS.claude.includes(model) ? "alias" : "exact";
+}
+
 /**
  * 「这个执行器跑哪个模型」的选择器。
  *
@@ -36,6 +42,7 @@ export function ProviderModelInput({
   effort,
   onChange,
   onCommit,
+  onClaudeModeChange,
 }: {
   type: AgentType;
   provider?: LlmProvider;
@@ -46,11 +53,18 @@ export function ProviderModelInput({
   effort?: { value: string; onChange: (value: string) => void };
   onChange: (value: string) => void;
   onCommit?: (value: string) => void;
+  onClaudeModeChange?: (mode: ClaudeModelMode) => void;
 }) {
   const cacheVersion = provider ? providerCacheVersion(provider.id) : 0;
+  const claudeOfficial = type === "claude" && !provider;
+  const savedMode = claudeModelMode(value);
+  const [selectionMode, setSelectionMode] = useState<ClaudeModelMode>(savedMode);
+  useEffect(() => {
+    if (claudeOfficial) setSelectionMode(savedMode);
+  }, [claudeOfficial, savedMode]);
   // 没挂供应商 = 走 CLI 官方账号,候选由服务端现问 CLI(`grok models` 之类)。
   // 挂了供应商就传 null:这个 hook 不发请求,免得每个设置页白探一次。
-  const cli = useCliModelCatalog(provider ? null : type);
+  const cli = useCliModelCatalog(provider || (claudeOfficial && selectionMode === "alias") ? null : type);
   const [models, setModels] = useState<string[]>(() => (provider ? cachedProviderModels(provider) ?? [] : []));
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "failed">(
     provider ? (cachedProviderModels(provider) ? "ready" : "loading") : "idle",
@@ -113,18 +127,19 @@ export function ProviderModelInput({
   const options = useMemo<DropdownOption[]>(() => {
     const seen = new Set<string>();
     const rows: DropdownOption[] = [];
-    const aliases = !provider && type === "claude" ? CLI_MODEL_PRESETS.claude : [];
+    const aliases = claudeOfficial && selectionMode === "alias" ? CLI_MODEL_PRESETS.claude : [];
     for (const alias of aliases) {
       rows.push({ value: alias, label: alias, group: "CLI 别名 · 不指定具体版本", mono: true });
       seen.add(alias);
     }
     for (const model of [...(defaultModel ? [defaultModel] : []), ...candidates, ...(value ? [value] : [])]) {
+      if (claudeOfficial && (selectionMode === "alias") !== CLI_MODEL_PRESETS.claude.includes(model)) continue;
       if (!model || seen.has(model)) continue;
       seen.add(model);
       rows.push({
         value: model,
         label: model,
-        group: aliases.length ? "完整模型 ID · 精确指定" : groupName,
+        group: claudeOfficial ? "完整模型 ID · 精确指定" : groupName,
         mono: true,
         detail: [model === defaultModel ? defaultDetail : "", provider?.context1mModels.includes(model) ? "1M" : ""]
           .filter(Boolean)
@@ -132,7 +147,7 @@ export function ProviderModelInput({
       });
     }
     return rows;
-  }, [candidates, defaultDetail, defaultModel, groupName, provider?.context1mModels, type, value]);
+  }, [candidates, claudeOfficial, defaultDetail, defaultModel, groupName, provider?.context1mModels, selectionMode, value]);
 
   const note = status === "loading"
     ? `正在从「${provider?.name ?? type}」探测模型…`
@@ -148,30 +163,44 @@ export function ProviderModelInput({
   // 换模型不动档位：新模型支不支持已选档位由旁边那颗胶囊如实提示，静默改掉会让
   // 用户下次打开时看见一个自己没设过的值。
   const commit = (next: string) => {
+    if (claudeOfficial) onClaudeModeChange?.(claudeModelMode(next));
     onChange(next);
     onCommit?.(next);
     if (effort) setEffortOpen(true);
   };
 
   const clear = () => commit("");
+  const changeMode = (next: ClaudeModelMode) => {
+    setSelectionMode(next);
+    onClaudeModeChange?.(next);
+  };
 
   return (
     <div className="agent-model-control">
       <div className="model-effort-row">
         <Dropdown
           label={provider ? `模型 · ${provider.name}` : "模型"}
-          value={value}
+          value={claudeOfficial && selectionMode !== savedMode ? "" : value}
           options={options}
           status={status}
-          note={note}
           disabled={disabled}
-          allowCustom
+          allowCustom={!claudeOfficial || selectionMode === "exact"}
           mono
-          filterPlaceholder="筛选或直接填写模型名"
-          emptyText="没有匹配的模型，输入完整模型名即可直接使用"
-          placeholder={provider ? provider.model || "跟随供应商默认" : type === "claude" ? "选择 CLI 别名或完整 ID" : "跟随 CLI"}
+          filterPlaceholder={claudeOfficial && selectionMode === "alias" ? "筛选 CLI 别名" : "筛选或直接填写模型名"}
+          emptyText={claudeOfficial && selectionMode === "alias" ? "没有匹配的 CLI 别名" : "没有匹配的模型，输入完整模型名即可直接使用"}
+          placeholder={provider ? provider.model || "跟随供应商默认" : claudeOfficial
+            ? selectionMode === "alias" ? "选择 CLI 别名" : "选择或填写完整模型 ID"
+            : "跟随 CLI"}
+          filterResetKey={claudeOfficial ? selectionMode : undefined}
+          panelHeader={claudeOfficial && (
+            <div className="claude-model-mode-tabs" role="group" aria-label="Claude 模型选择方式">
+              <button type="button" aria-pressed={selectionMode === "alias"} onClick={() => changeMode("alias")}>CLI 原有方式</button>
+              <button type="button" aria-pressed={selectionMode === "exact"} onClick={() => changeMode("exact")}>指定完整模型</button>
+            </div>
+          )}
+          note={claudeOfficial && selectionMode !== savedMode ? "选定下方模型后才会更改此 Profile" : note}
           onChange={commit}
-          onClear={value && (provider || type !== "claude") ? clear : undefined}
+          onClear={value && !claudeOfficial ? clear : undefined}
           clearLabel={followLabel}
         />
         {effort && (

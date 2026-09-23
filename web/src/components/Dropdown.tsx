@@ -58,6 +58,8 @@ export function Dropdown({
   mono = false,
   className = "",
   panelClassName = "",
+  panelHeader,
+  filterResetKey,
   onClear,
   clearLabel = "清空",
 }: {
@@ -78,6 +80,10 @@ export function Dropdown({
   mono?: boolean;
   className?: string;
   panelClassName?: string;
+  /** 只影响候选列表的附加选择控件（例如模型目录模式）。 */
+  panelHeader?: React.ReactNode;
+  /** 切换候选集时清掉上一次的筛选词。 */
+  filterResetKey?: string;
   /** 给一个「回到不设置」的出口；候选列表里就不必再占一行「跟随…」。 */
   onClear?: () => void;
   clearLabel?: string;
@@ -89,6 +95,11 @@ export function Dropdown({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setQuery("");
+    setIndex(0);
+  }, [filterResetKey]);
 
   const close = () => {
     setOpen(false);
@@ -168,6 +179,7 @@ export function Dropdown({
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {
+    if ((event.target as HTMLElement).closest(".ui-dropdown-header")) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       if (!rows.length) return;
@@ -214,6 +226,7 @@ export function Dropdown({
           onKeyDown={onKeyDown}
           style={{ left: place.left, top: place.top, bottom: place.bottom, width: place.width }}
         >
+          {panelHeader && <div className="ui-dropdown-header">{panelHeader}</div>}
           {filterable && (
             <div className="ui-dropdown-search">
               <input
@@ -232,7 +245,7 @@ export function Dropdown({
             className="ui-dropdown-rows"
             role="listbox"
             aria-label={label}
-            style={{ maxHeight: place.maxHeight - (filterable ? 42 : 0) - (onClear ? 28 : 0) }}
+            style={{ maxHeight: Math.max(80, place.maxHeight - (panelHeader ? 38 : 0) - (filterable ? 42 : 0) - (onClear ? 28 : 0)) }}
           >
             {!rows.length && <p className="ui-dropdown-empty">{emptyText}</p>}
             {rows.map((row, rowIndex) => {

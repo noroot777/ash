@@ -106,7 +106,7 @@ function fetchCatalog(type: AgentType, force: boolean): Promise<CliModelCatalog>
 export function useCliModelCatalog(type: AgentType | null): {
   catalog: CliModelCatalog | null;
   refreshing: boolean;
-  refresh: () => void;
+  refresh: () => Promise<CliModelCatalog | null>;
 } {
   const [catalog, setCatalog] = useState<CliModelCatalog | null>(() => (type ? cache.get(type) ?? presetFallback(type) : null));
   const [refreshing, setRefreshing] = useState(false);
@@ -139,10 +139,10 @@ export function useCliModelCatalog(type: AgentType | null): {
   }, [type]);
 
   const refresh = useCallback(() => {
-    if (!type) return;
+    if (!type) return Promise.resolve(null);
     pending.current += 1;
     setRefreshing(true);
-    void fetchCatalog(type, true).finally(() => {
+    return fetchCatalog(type, true).finally(() => {
       pending.current = Math.max(0, pending.current - 1);
       if (!pending.current) setRefreshing(false);
     });

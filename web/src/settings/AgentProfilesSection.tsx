@@ -13,6 +13,7 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { AgentDetectionResults } from "./AgentDetectionResults.tsx";
 import { AgentProfileRow } from "./AgentProfileRow.tsx";
 import { ClaudeModelsSettings } from "./ClaudeModelsSettings.tsx";
+import { claudeModelMode, type ClaudeModelMode } from "./ProviderModelInput.tsx";
 
 function profileAvatar(type: AgentType) {
   if (type === "claude") return "C";
@@ -61,7 +62,10 @@ function AgentProfileGroup({
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [claudeModes, setClaudeModes] = useState<Record<string, ClaudeModelMode>>({});
   const defaultProfile = profiles.find((profile) => profile.isDefault);
+  const showClaudeDirectory = type === "claude" && profiles.some((profile) =>
+    !profile.providerId && (claudeModes[profile.id] ?? claudeModelMode(profile.model)) === "exact");
 
   const addLocal = async () => {
     // 门禁同时落在按钮和提交函数上(web/CLAUDE.md「主工作区」那条同款理由):
@@ -163,12 +167,22 @@ function AgentProfileGroup({
             key={profile.id}
             profile={profile}
             providers={providers}
-            onChange={(updated) => onProfileChanged(profile.id, updated)}
+            onChange={(updated) => {
+              if (updated?.providerId !== profile.providerId) {
+                setClaudeModes((current) => {
+                  const next = { ...current };
+                  delete next[profile.id];
+                  return next;
+                });
+              }
+              onProfileChanged(profile.id, updated);
+            }}
+            onClaudeModeChange={(mode) => setClaudeModes((current) => ({ ...current, [profile.id]: mode }))}
             notify={notify}
           />
         ))}
       </div>
-      {type === "claude" && <ClaudeModelsSettings notify={notify} />}
+      {showClaudeDirectory && <ClaudeModelsSettings notify={notify} />}
       {confirmDelete && (
         <ConfirmDialog
           title={`删除全部 ${type} 执行器`}
@@ -264,9 +278,6 @@ export function AgentProfilesSection({
               />
             ))}
           </div>
-        )}
-        {!profileGroups.some((group) => group.type === "claude") && (
-          <div className="claude-model-ungrouped"><ClaudeModelsSettings notify={notify} /></div>
         )}
         <div className="settings-card-foot agent-profile-foot">
           <span>供应商决定账号与模型目录；任务仍可逐个覆盖执行器、模型和智能水平。</span>

@@ -14,14 +14,30 @@
   padding: 13px 16px 15px;
 }
 
-.claude-model-ungrouped {
-  border-top: 1px solid var(--line);
-  padding: 0 12px;
+.claude-model-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  border-bottom: 1px solid var(--line);
+  padding: 5px 6px;
 }
-
-.claude-model-ungrouped .claude-model-settings {
-  border-top: 0;
+.claude-model-mode-tabs button {
+  min-width: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 6px 4px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
 }
+.claude-model-mode-tabs button[aria-pressed="true"] {
+  background: color-mix(in lch, #a76338 13%, var(--panel));
+  color: var(--ink);
+  font-weight: 650;
+}
+.claude-model-mode-tabs button:focus-visible { outline: 2px solid #a76338; outline-offset: -2px; }
 
 .claude-model-settings-head,
 .claude-model-settings-foot {

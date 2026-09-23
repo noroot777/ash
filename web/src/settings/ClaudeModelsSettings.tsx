@@ -11,6 +11,7 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
   const [hours, setHours] = useState(6);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [fetchResult, setFetchResult] = useState<{ text: string; error: boolean } | null>(null);
   const isMulti = useIsMultiUser();
   const isAdmin = useIsInstanceAdmin();
   const canEdit = !isMulti || isAdmin;
@@ -39,7 +40,7 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
     setSaving(true);
     try {
       await persist();
-      cli.refresh();
+      void cli.refresh();
       notify("Claude 模型目录设置已保存");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Claude 模型目录保存失败");
@@ -49,19 +50,37 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
   };
 
   const refreshNow = async () => {
+    setFetchResult({ text: "正在从官方获取模型目录…", error: false });
     if (changed) {
       if (!canEdit || !validHours) return;
       setSaving(true);
       try {
         await persist();
       } catch (error) {
-        notify(error instanceof Error ? error.message : "Claude 模型目录保存失败，未获取官方目录");
+        const message = error instanceof Error ? error.message : "Claude 模型目录保存失败，未获取官方目录";
+        setFetchResult({ text: message, error: true });
+        notify(message);
         return;
       } finally {
         setSaving(false);
       }
     }
-    cli.refresh();
+    try {
+      const catalog = await cli.refresh();
+      if (catalog?.source === "docs") {
+        const message = `已从官方更新模型目录 · ${catalog.models.length} 个候选 · ${new Date(catalog.probedAt ?? Date.now()).toLocaleTimeString()}`;
+        setFetchResult({ text: message, error: false });
+        notify(message);
+      } else {
+        const message = `官方目录未更新：${catalog?.error ?? catalog?.skipped ?? "服务端仅返回内置别名，请检查服务端版本或网络"}`;
+        setFetchResult({ text: message, error: true });
+        notify(message);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "官方目录获取失败";
+      setFetchResult({ text: message, error: true });
+      notify(message);
+    }
   };
 
   return (
@@ -80,11 +99,12 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
               onChange={(event) => setHours(Number(event.target.value))} /> 小时</span>
           </label>
           <button type="button" className="model-refresh"
-            disabled={loading || saving || cli.refreshing || !!cli.catalog?.skipped || (changed && (!canEdit || !validHours))}
+            disabled={loading || saving || cli.refreshing || (changed && (!canEdit || !validHours))}
             onClick={() => void refreshNow()}>{saving ? "保存中…" : cli.refreshing ? "获取中…" : "立即从官方获取"}</button>
         </div>
       </div>
       <small className={cli.catalog?.error ? "is-error" : ""}>{cliCatalogNote(cli.catalog)}</small>
+      {fetchResult && <small className={fetchResult.error ? "is-error" : ""} role="status" aria-live="polite">{fetchResult.text}</small>}
       <label className="claude-model-custom">
         <span>自己添加完整 ID（每行一个，也可用逗号分隔）</span>
         <textarea rows={3} value={models} disabled={loading || saving || !canEdit}
