@@ -163,7 +163,11 @@ export function ProviderModelInput({
   // 换模型不动档位：新模型支不支持已选档位由旁边那颗胶囊如实提示，静默改掉会让
   // 用户下次打开时看见一个自己没设过的值。
   const commit = (next: string) => {
-    if (claudeOfficial) onClaudeModeChange?.(claudeModelMode(next));
+    if (claudeOfficial) {
+      const mode = claudeModelMode(next);
+      setSelectionMode(mode);
+      onClaudeModeChange?.(mode);
+    }
     onChange(next);
     onCommit?.(next);
     if (effort) setEffortOpen(true);
@@ -198,7 +202,11 @@ export function ProviderModelInput({
               <button type="button" aria-pressed={selectionMode === "exact"} onClick={() => changeMode("exact")}>指定完整模型</button>
             </div>
           )}
-          note={claudeOfficial && selectionMode !== savedMode ? "选定下方模型后才会更改此 Profile" : note}
+          note={claudeOfficial && selectionMode !== savedMode
+            ? "选定下方模型后才会更改此 Profile"
+            : claudeOfficial && selectionMode === "alias"
+              ? "CLI 内置别名，具体版本由 Claude CLI 决定。完整 ID 的目录与刷新在「指定完整模型」中。"
+              : note}
           onChange={commit}
           onClear={value && !claudeOfficial ? clear : undefined}
           clearLabel={followLabel}

@@ -136,7 +136,8 @@ export function Dropdown({
     if (!rect) return;
     const below = window.innerHeight - rect.bottom - 10;
     const above = rect.top - 10;
-    const flip = below < MIN_PANEL && above > below;
+    const flipThreshold = MIN_PANEL + (panelHeader ? 80 : 0) + (note ? 50 : 0);
+    const flip = below < flipThreshold && above > below;
     const maxHeight = Math.max(MIN_PANEL, Math.min(320, flip ? above : below));
     const width = Math.max(rect.width, 200);
     setPlace({
@@ -224,7 +225,7 @@ export function Dropdown({
           ref={panelRef}
           tabIndex={-1}
           onKeyDown={onKeyDown}
-          style={{ left: place.left, top: place.top, bottom: place.bottom, width: place.width }}
+          style={{ left: place.left, top: place.top, bottom: place.bottom, width: place.width, maxHeight: place.maxHeight, overflowY: "auto" }}
         >
           {panelHeader && <div className="ui-dropdown-header">{panelHeader}</div>}
           {filterable && (
@@ -245,7 +246,7 @@ export function Dropdown({
             className="ui-dropdown-rows"
             role="listbox"
             aria-label={label}
-            style={{ maxHeight: Math.max(80, place.maxHeight - (panelHeader ? 38 : 0) - (filterable ? 42 : 0) - (onClear ? 28 : 0)) }}
+            style={{ maxHeight: Math.max(40, place.maxHeight - (panelHeader ? 38 : 0) - (filterable ? 42 : 0) - (note ? 60 : 0) - (onClear ? 28 : 0)) }}
           >
             {!rows.length && <p className="ui-dropdown-empty">{emptyText}</p>}
             {rows.map((row, rowIndex) => {
