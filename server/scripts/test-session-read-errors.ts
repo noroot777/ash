@@ -8,6 +8,7 @@
 // 两种语义必须分开钉住：
 //   ① 还在跑、还没落第一笔的会话 → 200 空正文（合法的空）
 //   ② 已经收口却读不出来，或者文件在但读失败 → 5xx（前端得能看见）
+//   ③ trace 缺文件**不算故障**：它是后加的功能，历史会话本来就没有（第 3 轮审查）
 //
 // 跑法：npm -w server run test:session-read-errors
 import assert from "node:assert/strict";
@@ -57,11 +58,15 @@ try {
   assert.deepEqual(await get("/sessions/s-running/output"), { status: 200, text: "" }, "新会话还没写 transcript 是合法的空");
   assert.deepEqual(await get("/sessions/s-running/trace"), { status: 200, text: "[]" }, "trace 同理");
 
-  // ② 已经收口却找不到文件：那是丢了，不能伪装成「它没说过话」。
+  // ② 已经收口却找不到正文：那是丢了，不能伪装成「它没说过话」。
   const ended = await get("/sessions/s-ended/output");
   assert.equal(ended.status, 500, "已收口会话的 transcript 丢了必须报出来，不能回 200 空正文");
   assert.match(ended.text, /unreadable/);
-  assert.equal((await get("/sessions/s-ended/trace")).status, 500, "trace 丢了同样要报");
+
+  // ②′ trace 走的是**另一条**判据：它 2026-08-01 才加（bd8ed749 / de2c9893），此前跑完的
+  // 会话本来就没这个文件 —— 真实库里 992/1924 条已收口会话缺 .trace.jsonl。判成故障的话，
+  // 前端 traceError 会把整页的「派生新任务」入口静默关掉（第 3 轮审查）。
+  assert.deepEqual(await get("/sessions/s-ended/trace"), { status: 200, text: "[]" }, "历史会话没有 trace 是常态，不是故障");
 
   // ③ 文件在、读不动（权限）：跟丢了一样是故障，与会话有没有收口无关。
   for (const path of [sessionTranscriptPath(taskId, "s-unreadable"), sessionTracePath(taskId, "s-unreadable")]) {

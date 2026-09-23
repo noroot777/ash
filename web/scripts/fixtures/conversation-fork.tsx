@@ -6,7 +6,7 @@ import { TaskComposerPanel, type ComposerDraft } from "../../src/composer/TaskCo
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
 import { useConversation } from "../../src/lib/useConversation.ts";
-import { snapshotConversationFork } from "../../src/task-detail/conversationFork.ts";
+import { forkReadBlock, snapshotConversationFork } from "../../src/task-detail/conversationFork.ts";
 import "../../src/styles/global.css";
 
 const project = { id: "p1", name: "ash", repoPath: "/tmp/ash", workflowId: null, useWorktreeDefault: false, health: { exists: true, isRepo: false } } as ProjectView;
@@ -30,7 +30,11 @@ function IncompleteConversation() {
   const conversation = useConversation("source");
   return <><button onClick={() => void conversation.refetch()}>刷新正文</button>
     <ConversationFeed task={{ ...task, status: "running" }} items={conversation.items} sessions={conversation.sessions}
-      loading={conversation.refreshing} error={conversation.error} forkBlockedReason={conversation.forkBlockedReason} onForkReply={() => {}} />
+      loading={conversation.refreshing} error={conversation.error}
+      // 门禁和提示都从生产那一处算（TaskDetail 用的是同一个 forkReadBlock），
+      // 免得 fixture 自己抄一份判据、测出来的却不是页面上跑的那套。
+      forkBlockedReason={forkReadBlock(conversation)}
+      onForkReply={forkReadBlock(conversation) ? undefined : () => {}} />
   </>;
 }
 

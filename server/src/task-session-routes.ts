@@ -124,7 +124,10 @@ export function mountTaskSessionRoutes(api: Hono): void {
     if (!row) return c.json({ error: "not found" }, 404);
     const read = await readSessionOutput(row.taskId, sid);
     if (read.ok) return c.text(read.value);
-    if (unwritten(read, row)) return c.text("");
+    // 还没收口的会话可以还没建文件；已经收口了还找不到，就是丢了。正文是每条会话都
+    // 必然产出的东西（真实库 1924 条已收口会话里只有 2 条缺，且它们的 runs 目录整个
+    // 已被清掉），所以这条判据站得住。
+    if (read.missing && !row.endedAt) return c.text("");
     return c.json({ error: "transcript unreadable" }, 500);
   });
 
@@ -134,12 +137,12 @@ export function mountTaskSessionRoutes(api: Hono): void {
     if (!row) return c.json({ error: "not found" }, 404);
     const read = await readSessionTrace(row.taskId, sid);
     if (read.ok) return c.json(read.value);
-    if (unwritten(read, row)) return c.json([]);
+    // **trace 不能套正文那条判据。** 它是 2026-08-01 才加的功能（bd8ed749 / de2c9893），
+    // 在那之前跑完的会话本来就没有这个文件，眼下也没有任何标记能证明「这条会话应该
+    // 产 trace」—— 同一个库里 992/1924 条已收口会话没有 .trace.jsonl。把它们一律判成
+    // 故障，前端的 traceError 就会把整页的「派生新任务」入口静默关掉（第 3 轮审查）。
+    // 文件不在就是没有；只有文件在却读不动、或者解析不出来，才是真的坏了。
+    if (read.missing) return c.json([]);
     return c.json({ error: "trace unreadable" }, 500);
   });
-}
-
-/** 还没收口的会话可以还没建文件；已经收口了还找不到，就是丢了。 */
-function unwritten(read: { missing: boolean }, row: typeof sessions.$inferSelect): boolean {
-  return read.missing && !row.endedAt;
 }
