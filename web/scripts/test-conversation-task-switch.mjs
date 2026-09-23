@@ -152,21 +152,27 @@ try {
     await page.close();
   }
 
-  // ── 同一个任务里两个写者撞车：先发出的那份晚到，也不许盖掉已经写进去的新快照 ──
+  // ── 同一个任务里两个写者撞车：先读到的那份晚一步落地，也不许盖掉已经写进去的新快照 ──
+  // 串行闸只管到 sessions 这一发落地为止；load() 后面还要读正文，那段时间里直播补刷完全
+  // 可能带着更新的快照先写进去。所以应用时还要按出门序号让位。
   {
     let releaseOutput;
     const heldOutput = new Promise((resolve) => { releaseOutput = resolve; });
     pending.push(() => releaseOutput());
-    // warmup/reloading 期间给旧快照，live 之后才有新起的 s2。
+    // warmup/reloading 期间给旧快照，live 之后才有新起的 s2，水位也已经压缩下去了。
     let phase = "warmup";
     let holdOutput = false;
     let sessionsCalls = 0;
+    const withContext = (id, used) => ({
+      ...session(id, "task-a"),
+      context: { used, window: 200000, windowEstimated: false },
+    });
     const page = await open(async (route, path) => {
       if (path === "/api/tasks/task-a/sessions") {
         sessionsCalls += 1;
         await route.fulfill({ json: phase === "live"
-          ? [session("task-a-s1", "task-a"), session("task-a-s2", "task-a")]
-          : [session("task-a-s1", "task-a")] });
+          ? [withContext("task-a-s1", 40000), withContext("task-a-s2", 0)]
+          : [withContext("task-a-s1", 180000)] });
         return true;
       }
       if (path === "/api/sessions/task-a-s1/output" && holdOutput) {
@@ -202,36 +208,42 @@ try {
     assert.equal(
       await sessionsOf(page),
       "task-a-s1,task-a-s2",
-      "重读发得更早、回得更晚，不许把已经写进去的新会话抹掉",
+      "重读读得更早、落地更晚，不许把已经写进去的新会话抹掉",
+    );
+    assert.equal(
+      await page.getByTestId("context").textContent(),
+      "40000,0",
+      "水位同理：重读那份读到的是压缩前的 180k，它落地晚，不许顶掉已经降下来的 40k",
     );
     assert.equal(await readyOf(page), "true/true");
     await page.close();
   }
 
-  // ── 到达顺序跟发起顺序相反：先发的那一发最后回来，带的却是**更新**的快照 ──
-  // 连接池/代理会把请求打乱，客户端判不出谁的快照更新，所以这一段必须跟上一段同时成立。
+  // ── 两个写者不许同时在途：一发没落地，下一发就不出门 ──────────────────────
+  // 并发是「迟到的旧响应顶回新水位」的唯一入口。客户端判不出两份快照谁读得更晚（服务端
+  // 没给会话行发版本号，context 这种覆盖值还会合法降下来甚至清空），所以只能不让它并发。
   {
     let releaseReload;
     const heldReload = new Promise((resolve) => { releaseReload = resolve; });
     pending.push(() => releaseReload());
     let armed = false;
     let reloadHeld = false;
-    let liveCalls = 0;
+    let laterCalls = 0;
+    // 压缩前后的两份水位：重读那一发读到的是压缩前的 180k，之后每一发都是 40k。
+    const withContext = (used) => ({
+      ...session("task-a-s1", "task-a"),
+      context: { used, window: 200000, windowEstimated: false },
+    });
     const page = await open(async (route, path) => {
       if (path !== "/api/tasks/task-a/sessions" || !armed) return false;
       if (!reloadHeld) {
-        // 手动重读这一发先出门，却卡在连接层；放行时服务端那边已经有 s2 了。
         reloadHeld = true;
         await heldReload;
-        await route.fulfill({ json: [
-          session("task-a-s1", "task-a"),
-          session("task-a-s2", "task-a", "2026-09-10T01:30:00Z"),
-        ] });
+        await route.fulfill({ json: [withContext(180000)] });
         return true;
       }
-      // 直播补刷后出门却先到，它读到的还是只有 s1 的旧快照。
-      liveCalls += 1;
-      await route.fulfill({ json: [session("task-a-s1", "task-a")] });
+      laterCalls += 1;
+      await route.fulfill({ json: [withContext(40000)] });
       return true;
     });
     await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
@@ -242,33 +254,33 @@ try {
     while (!reloadHeld && Date.now() < heldDeadline) await page.waitForTimeout(20);
     assert.ok(reloadHeld, "重读那一发已经出门并卡住");
 
-    await page.evaluate(() => {
-      for (const source of window.__sources.filter((item) => !item.closed)) {
-        source.onmessage?.({ data: JSON.stringify({
-          type: "agent.event", taskId: "task-a", event: { kind: "session", sessionId: "task-a-s1" },
-        }) });
-      }
-    });
-    const liveDeadline = Date.now() + 5000;
-    while (liveCalls < 1 && Date.now() < liveDeadline) await page.waitForTimeout(20);
-    await page.waitForTimeout(100);
-    assert.equal(await sessionsOf(page), "task-a-s1", "旧快照先到，此刻确实还只有 s1");
+    // 卡住期间连来三发直播事件：它们只能排队，一发都不该挤出门。
+    for (let i = 0; i < 3; i += 1) {
+      await page.evaluate(() => {
+        for (const source of window.__sources.filter((item) => !item.closed)) {
+          source.onmessage?.({ data: JSON.stringify({
+            type: "agent.event", taskId: "task-a", event: { kind: "session", sessionId: "task-a-s1" },
+          }) });
+        }
+      });
+      await page.waitForTimeout(100);
+    }
+    assert.equal(laterCalls, 0, "上一发还没落地，后面的刷新不许出门——并发一旦发生就再也分不出谁读得更晚");
 
     releaseReload();
-    const settleDeadline = Date.now() + 3000;
-    while (Date.now() < settleDeadline && await sessionsOf(page) !== "task-a-s1,task-a-s2") {
+    // 放行后：重读那一发先落地（180k），排队的补刷跟着出门并带回压缩后的 40k。
+    const settleDeadline = Date.now() + 5000;
+    while (Date.now() < settleDeadline && await page.getByTestId("context").textContent() !== "40000") {
       await page.waitForTimeout(50);
     }
-    assert.equal(
-      await sessionsOf(page),
-      "task-a-s1,task-a-s2",
-      "先发后到的那一份带着新会话，不能因为「发得早」就判定它更旧",
-    );
-    assert.match(
-      await page.locator(".task-conversation").innerText(),
-      /任务 A 第二条会话的正文/,
-      "正文读到了 s2，会话列表就不能只剩 s1——那是自相矛盾的 ready 状态",
-    );
+    assert.equal(await page.getByTestId("context").textContent(), "40000", "排队的那一发出门后，水位跟着服务端降下来");
+    assert.ok(laterCalls >= 1, "卡住期间挤进来的刷新不是被丢掉，只是被推迟到上一发之后");
+    assert.equal(laterCalls, 1, "三次事件折叠成一发：它们要的是同一份最新状态");
+
+    // 再等一会：不会有更早读到的那份把 180k 顶回来。
+    await page.waitForTimeout(300);
+    assert.equal(await page.getByTestId("context").textContent(), "40000", "压缩后的水位不许被读得更早的那份顶回去");
+    assert.equal(await sessionsOf(page), "task-a-s1");
     assert.equal(await readyOf(page), "true/true");
     await page.close();
   }

@@ -100,11 +100,13 @@ function sameUsage(left: TokenUsage, right: TokenUsage): boolean {
  * 就返回 `context: null`——目的正是别再拿上一轮的陈旧数字冒充当前值（server/src/usage.ts）。
  *
  * 所以这一项不能合并：取大会把压缩后的低水位顶回去，「谁有取谁」会把明确的清空吃掉，
- * 两种都让客户端永远收敛不到服务端真值。客户端判不出两份快照谁更新，那就**跟随这一发
- * 响应**——短暂读到旧值，下一次刷新就纠正；而只增的并集是永远纠正不回来的。
+ * 两种都让客户端永远收敛不到服务端真值。这里跟随 `incoming`——它是**读得更晚**的那份，
+ * 不是「后到」的那份：调用方 useConversation 把 sessions 请求排成一条链（一发落地才发
+ * 下一发），并用出门序号挡掉读得更早的响应，所以到这儿时顺序已经是确定的。
  *
- * 代价是 context 这一项不满足交换律。这是有意的：交换律本是为「别把已拿到的信息抹掉」
- * 服务的，而水位本来就该被抹掉。
+ * 换句话说 context 这一项的正确性依赖那条链。合并层自己给不出这个保证——没有服务端
+ * revision 时，左偏、右偏、按大小取都至少破坏「合法下降」「明确清空」「乱序保护」中的
+ * 一条。真要拿掉那条链，就得先让 sessions API 发版本号。
  */
 function takeContext(current: Session["context"], incoming: Session["context"]): Session["context"] {
   if (current && incoming && sameContext(current, incoming)) return current;

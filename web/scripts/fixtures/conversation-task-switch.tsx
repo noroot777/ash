@@ -35,6 +35,7 @@ function Fixture() {
       <button onClick={() => void conversation.refetch()}>重读会话</button>
       <output>{taskId}</output>
       <output data-testid="sessions">{conversation.sessions.map((session) => session.id).join(",")}</output>
+      <output data-testid="context">{conversation.sessions.map((s) => s.context?.used ?? "-").join(",")}</output>
       <output data-testid="ready">{`${conversation.ready}/${conversation.transcriptReady}`}</output>
     </nav>
     <ConversationFeed
