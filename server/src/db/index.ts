@@ -186,10 +186,29 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS free_review_rounds (
       id TEXT PRIMARY KEY, run_id TEXT NOT NULL, round INTEGER NOT NULL,
       status TEXT NOT NULL, conclusion TEXT, reviewed_commit TEXT,
+      dispute_reason TEXT, dispute_at TEXT,
+      dispute_resolution TEXT, dispute_resolved_at TEXT,
       started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
       ON free_review_rounds (run_id, round);
+    CREATE TABLE IF NOT EXISTS free_review_debates (
+      id TEXT PRIMARY KEY, round_id TEXT NOT NULL, task_id TEXT NOT NULL,
+      run_id TEXT NOT NULL, round INTEGER NOT NULL, status TEXT NOT NULL,
+      exchanges INTEGER NOT NULL DEFAULT 1, current_seq INTEGER NOT NULL DEFAULT 1,
+      verdict TEXT, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS free_review_debates_round_idx
+      ON free_review_debates (round_id, started_at);
+    CREATE INDEX IF NOT EXISTS free_review_debates_task_idx
+      ON free_review_debates (task_id, started_at);
+    CREATE TABLE IF NOT EXISTS free_review_debate_turns (
+      id TEXT PRIMARY KEY, debate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+      side TEXT NOT NULL, statement TEXT, status TEXT NOT NULL,
+      started_at TEXT NOT NULL, ended_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS free_review_debate_turns_seq_idx
+      ON free_review_debate_turns (debate_id, seq);
     CREATE TABLE IF NOT EXISTS project_git_credentials (
       project_id TEXT PRIMARY KEY, username TEXT NOT NULL,
       secret TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -392,6 +411,11 @@ export async function ensureSchema() {
     "ALTER TABLE free_review_runs ADD COLUMN target_commit TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN repair_task_id TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN reviewed_commit TEXT",
+    // 执行者驳回审查结论那条支线（理由 + 用户裁定）；老库补列即可，空 = 没驳回过。
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_reason TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_at TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolved_at TEXT",
     // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
     "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",

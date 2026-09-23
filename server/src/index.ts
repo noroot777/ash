@@ -156,6 +156,9 @@ async function initializeServer() {
     // 收拾死在投递链上的 reviewing run（详见 free-workflow.ts reconcileFreeReviews）。
     const { reconcileFreeReviews } = await import("./free-workflow.js");
     await reconcileFreeReviews().catch((err) => console.error("[ash] 自由审查对账失败（不影响启动）:", err));
+    // 驳回后的辩论同理：`running` 落库，而推进它的投递链只活在内存里（见 free-review-debate.ts）。
+    const { reconcileFreeReviewDebates } = await import("./free-review-debate.js");
+    await reconcileFreeReviewDebates().catch((err) => console.error("[ash] 审查辩论对账失败（不影响启动）:", err));
   }
   // 个人 CLI 配置目录里的 ash MCP 登记（隔离档专属的一位）。放在这里是因为它跟任务
   // 能不能交卷直接相关：缺了它 agent 干完活也记 failed，而这一趟能在第一个任务起跑

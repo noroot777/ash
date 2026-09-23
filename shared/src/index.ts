@@ -18,7 +18,15 @@ export type {
 } from "./team.ts";
 export type {
   FreeReviewCheckMode,
+  FreeReviewDebate,
+  FreeReviewDebateSide,
+  FreeReviewDebateStatus,
+  FreeReviewDebateTurn,
+  FreeReviewDebateTurnStatus,
+  FreeReviewDebateVerdict,
   FreeReviewDispatchInput,
+  FreeReviewDispute,
+  FreeReviewDisputeResolution,
   FreeReviewExecutorOverride,
   FreeReviewRound,
   FreeReviewRun,

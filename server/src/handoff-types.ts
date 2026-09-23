@@ -85,6 +85,13 @@ export interface HandoffFreeReviewRound {
   status: string;
   conclusion: string | null;
   reviewedCommit: string | null;
+  // 执行者驳回这一轮结论的理由与用户裁定。老载荷没有这几项（缺省 = 没驳回过）。
+  // 辩论发言**不随载荷走**：那是两条 CLI 会话之间的对话，会话历史本身已经接力过去，
+  // 对端重开一次辩论即可；把它再复制一份反而会有两份互相矛盾的「双方说过什么」。
+  disputeReason?: string | null;
+  disputeAt?: string | null;
+  disputeResolution?: string | null;
+  disputeResolvedAt?: string | null;
   startedAt: string;
   endedAt: string | null;
 }

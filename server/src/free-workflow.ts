@@ -28,6 +28,11 @@ import {
 } from "./free-review-input.js";
 import { freeManualRepairPrompt, freeRepairPrompt } from "./free-review-prompts.js";
 export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
+// 驳回与辩论那条支线（执行者不认某一轮结论 → 用户裁定 / 让双方各说几段）住在
+// free-review-dispute.ts 与 free-review-debate.ts；这里只接两个口：辩论段的结算，
+// 和「用户已裁定维持意见」时修复交接的措辞。
+import { activeDebateOf, settleDebateTurn } from "./free-review-debate.js";
+import { currentRoundOf, upholdOpenDispute, withdrawnDisputeOf } from "./free-review-dispute.js";
 // 一轮审查的生命周期（起一轮 / 续下一轮 / 启动失败收尾 / 重跑崩掉的那一轮）住在
 // free-review-round.ts；这里只做「派/预约/结算」这一层的编排。
 import {
@@ -277,6 +282,9 @@ export async function handleFreeWorkflowSettlement(
 ): Promise<boolean> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.workflowMode !== "free") return false;
+  // 辩论段（审查者答辩 / 执行者回应）排在角色分流**之前**收：它既可能是 reviewer 回合
+  // 也可能是任务自己的旁路回合，按角色分流会把它误当成普通审查/执行回合结算掉。
+  if (await settleDebateTurn(taskId, turnOk)) return true;
   const run = await reviewingRun(taskId);
   if (role !== "reviewer") {
     if (task.question || task.resumePrompt) return true;
@@ -481,6 +489,8 @@ export async function startFreeReview(
   if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   try {
     if (await reviewingRun(taskId)) throw new Error("审查回合正在进行，结束后再派审");
+    // 辩论也是占着这条任务的旁路回合（段与段之间回合是空的，只查 turn 挡不住）。
+    if (await activeDebateOf(taskId)) throw new Error("审查意见辩论正在进行，结束后再派审");
     const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
     // 「不是我的」与「根本没有」报同一句话(owned.ts `notYours` 同一个理由)。
     if (!profile || (actor && !(await canUseOwned(profile, actor)))) throw new Error("所选审查者不存在");
@@ -549,6 +559,12 @@ async function manualRepairBlocker(taskId: string): Promise<string | null> {
   if (!task) return "任务不存在";
   if (task.stage === "accepted" || task.stage === "merged") return "任务已进入验收结果";
   if (await reviewingRun(taskId)) return "审查回合正在进行";
+  if (await activeDebateOf(taskId)) return "审查意见辩论正在进行，等它说完再决定";
+  // 用户已经裁定作废的那一轮不能再拿去修：确认框写的是「执行者不再按它修改」，
+  // 修复入口却照单放行的话，用户点一下就把自己刚下的裁定推翻了（第 1 轮审查实测）。
+  if (await withdrawnDisputeOf(taskId)) {
+    return "这一轮意见已被你裁定作废（采纳了执行者的说法），不再按它修复；要继续推进请再派一轮审查";
+  }
   const run = await latestWorkspaceRun(taskId);
   if (!run || run.status !== "stopped") return "最近一轮审查没有停在未通过状态";
   // 报告读取走安全解析（拒 symlink 祖先），且必须有非空正文——raw existsSync 会被
@@ -580,7 +596,13 @@ async function deliverManualRepair(taskId: string, run: ReviewRunRow): Promise<v
     const blocker = await manualRepairBlocker(taskId);
     if (blocker) return void await abort(blocker);
     const { continueTask } = await import("./orchestrator.js");
-    const delivered = await continueTask(taskId, freeManualRepairPrompt(taskId, run), { byBackend: true });
+    // 用户裁定「维持审查意见」之后的这一趟不再给驳回这条路（措辞见 free-review-prompts）。
+    const round = await currentRoundOf(run);
+    const delivered = await continueTask(
+      taskId,
+      freeManualRepairPrompt(taskId, run, { disputeUpheld: round?.disputeResolution === "upheld" }),
+      { byBackend: true },
+    );
     if (delivered === false) await abort("回合被其它执行抢占，消息未能投递");
   } catch (error) {
     await abort(error instanceof Error ? error.message : String(error));
@@ -619,6 +641,8 @@ export async function startManualFreeReviewRepair(
           : blocker.includes("无法确认") ? `${blocker}；请再派一轮审查` : blocker);
       }
       const run = (await latestWorkspaceRun(taskId))!;
+      // 点下修复 = 用户维持审查意见（幂等；已裁定或没驳回过时空转）。
+      await upholdOpenDispute(taskId);
       await appendTaskTimeline(taskId, `已按自由工作流第 ${run.currentRound} 轮审查意见发起修复。`);
       bus.publish({ type: "task.review", taskId });
       pendingRepairs.add(taskId);
