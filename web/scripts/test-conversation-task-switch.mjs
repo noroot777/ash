@@ -151,6 +151,62 @@ try {
     await page.close();
   }
 
+  // ── 同一个任务里两个写者撞车：先发出的那份晚到，也不许盖掉已经写进去的新快照 ──
+  {
+    let releaseOutput;
+    const heldOutput = new Promise((resolve) => { releaseOutput = resolve; });
+    pending.push(() => releaseOutput());
+    // warmup/reloading 期间给旧快照，live 之后才有新起的 s2。
+    let phase = "warmup";
+    let holdOutput = false;
+    let sessionsCalls = 0;
+    const page = await open(async (route, path) => {
+      if (path === "/api/tasks/task-a/sessions") {
+        sessionsCalls += 1;
+        await route.fulfill({ json: phase === "live"
+          ? [session("task-a-s1", "task-a"), session("task-a-s2", "task-a")]
+          : [session("task-a-s1", "task-a")] });
+        return true;
+      }
+      if (path === "/api/sessions/task-a-s1/output" && holdOutput) {
+        await heldOutput;
+        await route.fulfill({ body: outputFor("task-a-s1") });
+        return true;
+      }
+      return false;
+    });
+    await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
+
+    // 全量重读先出门：它的 sessions 已经拿到旧快照，然后卡在正文上。
+    holdOutput = true;
+    const before = sessionsCalls;
+    await page.getByRole("button", { name: "重读会话" }).click();
+    const reloadDeadline = Date.now() + 5000;
+    while (sessionsCalls <= before && Date.now() < reloadDeadline) await page.waitForTimeout(20);
+    assert.ok(sessionsCalls > before, "重读确实发出了一发 sessions");
+
+    // 这中间起了一条新会话，直播事件补刷把它写了进去。
+    phase = "live";
+    await page.evaluate(() => {
+      for (const source of window.__sources.filter((item) => !item.closed)) {
+        source.onmessage?.({ data: JSON.stringify({
+          type: "agent.event", taskId: "task-a", event: { kind: "session", sessionId: "task-a-s2" },
+        }) });
+      }
+    });
+    await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1,task-a-s2");
+
+    releaseOutput();
+    await page.waitForTimeout(300);
+    assert.equal(
+      await sessionsOf(page),
+      "task-a-s1,task-a-s2",
+      "重读发得更早、回得更晚，不许把已经写进去的新会话抹掉",
+    );
+    assert.equal(await readyOf(page), "true/true");
+    await page.close();
+  }
+
   // ── 正文读失败：错误要显示，但问答历史不能又铺满一屏 ────────────────────
   for (const failing of ["sessions", "output"]) {
     let broken = true;

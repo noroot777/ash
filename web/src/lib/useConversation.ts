@@ -65,6 +65,18 @@ export function useConversation(taskId: string, revision = 0) {
   const [forkBlockedReason, setForkBlockedReason] = useState<string | null>(null);
   const [traceError, setTraceError] = useState<Error | null>(null);
   const loadToken = useRef(0);
+  // sessions 有两个写者：load() 的全量重读，和直播事件顺手补的那一发轻量刷新。两者可以
+  // 同时在途，回来的顺序跟发出的顺序无关——先发出的那份就是更旧的那份，晚到也不许盖掉
+  // 已经写进去的新快照（否则刚起的会话会从列表里消失，页面上还一切正常）。发号器按
+  // **发起顺序**发票，写入时只认比已写入的更新的那张。
+  const sessionsTicket = useRef(0);
+  const sessionsApplied = useRef(0);
+
+  const applySessions = useCallback((ticket: number, next: Session[]) => {
+    if (ticket < sessionsApplied.current) return;
+    sessionsApplied.current = ticket;
+    setSessions(next);
+  }, []);
 
   const replaceTimeline = useCallback((next: TimelineEntry[]) => {
     timelineRef.current = next;
@@ -85,6 +97,7 @@ export function useConversation(taskId: string, revision = 0) {
   const load = useCallback(async (preserveArrivals: boolean) => {
     const cutoff = timelineRef.current.length;
     const token = ++loadToken.current;
+    const ticket = ++sessionsTicket.current;
     setRefreshing(true);
     setError(null);
     setTraceError(null);
@@ -104,7 +117,9 @@ export function useConversation(taskId: string, revision = 0) {
       );
       // 切任务后旧任务的这一发才回来：全部丢掉，否则它会盖掉新任务已经读好的正文。
       if (token !== loadToken.current) return;
-      setSessions(nextSessions);
+      // 正文那份（persisted）只有 load() 一个写者，token 已经保证它是最新的一轮；
+      // sessions 另有直播刷新这个写者，得按票号再比一次。
+      applySessions(ticket, nextSessions);
       if (outputFailures) setForkBlockedReason(`${outputFailures} 个会话的正文暂未读全，派生功能暂不可用；刷新会话可重试。`);
       if (traceFailures) setTraceError(new Error(`${traceFailures} 个会话的执行过程读取失败，子智能体与内部任务记录可能不完整。`));
       setPersisted(outputs.filter((entry) => entry.output.trim() || entry.trace.length));
@@ -126,22 +141,25 @@ export function useConversation(taskId: string, revision = 0) {
     } finally {
       if (token === loadToken.current) setRefreshing(false);
     }
-  }, [replaceTimeline, taskId]);
+  }, [applySessions, replaceTimeline, taskId]);
 
   const refetch = useCallback(() => load(true), [load]);
 
   // 直播事件也会顺手补一发 sessions。它跟 load() 共用同一个代号：切走（或又起了一轮
   // 读取）之后才回来的那一发直接丢掉，否则它会把上一个任务的会话盖到当前任务上——
-  // 那时 ready 已经是 true，页面不会有任何「还在读」的迹象。
+  // 那时 ready 已经是 true，页面不会有任何「还在读」的迹象。同一轮之内则按票号排序。
   const refreshSessions = useCallback(() => {
     const token = loadToken.current;
+    const ticket = ++sessionsTicket.current;
     void api.sessions(taskId).then((next) => {
-      if (token === loadToken.current) setSessions(next);
+      if (token === loadToken.current) applySessions(ticket, next);
     }).catch(() => undefined);
-  }, [taskId]);
+  }, [applySessions, taskId]);
 
   useEffect(() => {
     setSessions([]);
+    // 清空也是一次写入，票号取最新的：切任务时还在途的那些请求一律比它旧，回来即作废。
+    sessionsApplied.current = ++sessionsTicket.current;
     setPersisted([]);
     setLoadedTaskId(null);
     setTranscriptTaskId(null);
