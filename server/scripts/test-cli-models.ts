@@ -6,7 +6,7 @@
 //   ① 解析器只认清单段落,抬头/提示语/表头不能被当成模型名;未登录那种输出解析成空数组
 //      (空数组是**降级信号**,上层据此退回快照——解析器硬凑一个假模型才是灾难);
 //   ② 去重保序 + CLI 报告的默认模型排首位;
-//   ③ 每个 AgentType 都拿得到 catalog,`probeSupported` 与 spec.models 严格一致;
+//   ③ 每个 AgentType 都拿得到 catalog,Claude 文档及 spec.models 能力与按钮一致;
 //   ④ 没有清单命令 / 没装 CLI 时诚实降级:source==="preset" 且 models 等于内置快照;
 //   ⑤ 缓存命中不重复起子进程,force 会绕过缓存,降级结果比成功结果短命;
 //   ⑥ 本机装了 grok 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提);
@@ -33,11 +33,27 @@ requireTmpDb("test-cli-models");
 const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
 const { parseGrokModels } = await import("../src/executors/catalog/grok.js");
 const { parsePiModels } = await import("../src/executors/catalog/pi.js");
+const { extractClaudeDocModels } = await import("../src/executors/claude-doc-models.js");
 const { catalogTtlMs, modelCatalogFor, modelCatalogs, normalizeModelList, resetModelCatalogCache } =
   await import("../src/executors/model-probe.js");
 const { probeBins } = await import("../src/executors/bin-probe.js");
 const { ensureSchema } = await import("../src/db/index.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
+
+assert.deepEqual(
+  extractClaudeDocModels("claude-opus-4-6 claude-opus-4-6 claude-sonnet-4-6 claude-haiku-4-5-20251001 claude-platform-on-aws claude-opus-5-system-card"),
+  ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+  "Claude 官方文档:去重并滤掉非模型链接",
+);
+const originalFetch = globalThis.fetch;
+let docsFetches = 0;
+let docsFail = false;
+globalThis.fetch = async () => {
+  docsFetches += 1;
+  return new Response(docsFail ? "unavailable" : "claude-opus-4-6 claude-sonnet-4-6", {
+    status: docsFail ? 503 : 200,
+  });
+};
 
 await ensureSchema();
 
@@ -113,8 +129,8 @@ assert.deepEqual(
 // 这正是 86a3f06 修过一次的症状,所以在这里钉死。
 assert.deepEqual(
   [...CLI_MODEL_PROBE_TYPES].sort(),
-  AGENT_TYPES.filter((type) => !!CLI_SPEC_BY_KEY[type].models).sort(),
-  "CLI_MODEL_PROBE_TYPES 必须与填了 spec.models 的 type 完全一致(前端首帧据它画刷新按钮)",
+  AGENT_TYPES.filter((type) => type === "claude" || !!CLI_SPEC_BY_KEY[type].models).sort(),
+  "CLI_MODEL_PROBE_TYPES 必须与可刷新来源一致(前端首帧据它画刷新按钮)",
 );
 resetModelCatalogCache();
 const all = await modelCatalogs();
@@ -123,10 +139,10 @@ for (const catalog of all) {
   const spec = CLI_SPEC_BY_KEY[catalog.type];
   assert.equal(
     catalog.probeSupported,
-    !!spec.models,
-    `${catalog.type}:probeSupported 必须跟 spec.models 一致(界面据此决定要不要给刷新按钮)`,
+    catalog.type === "claude" || !!spec.models,
+    `${catalog.type}:probeSupported 必须跟可刷新来源一致(界面据此决定要不要给刷新按钮)`,
   );
-  if (!spec.models) {
+  if (!spec.models && catalog.type !== "claude") {
     assert.equal(catalog.source, "preset", `${catalog.type}:没有清单命令时只可能是快照`);
     assert.deepEqual(
       [...catalog.models],
@@ -141,6 +157,21 @@ for (const catalog of all) {
     assert.equal(catalog.error, null, `${catalog.type}:探测成功不该带错误`);
   }
 }
+const claudeDocs = all.find((catalog) => catalog.type === "claude")!;
+assert.equal(claudeDocs.source, "docs", "Claude 官方账号应从文档取完整模型 ID");
+assert.ok(claudeDocs.probedAt);
+assert.equal(claudeDocs.error, null);
+assert.ok(claudeDocs.models.includes("claude-opus-4-6"));
+assert.ok(claudeDocs.models.includes("opus"), "文档 ID 不应盖掉 CLI 别名");
+assert.equal(docsFetches, 1);
+assert.equal(await modelCatalogFor("claude"), claudeDocs, "Claude 文档结果应命中缓存");
+docsFail = true;
+const docsFallback = await modelCatalogFor("claude", true);
+assert.equal(docsFallback.source, "preset", "文档不可用时应回退内置别名");
+assert.match(docsFallback.error ?? "", /HTTP 503/);
+docsFail = false;
+assert.equal((await modelCatalogFor("claude", true)).source, "docs", "手动刷新应恢复文档清单");
+assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败的兜底应尽快重试");
 
 // ── ⑤ 缓存 ───────────────────────────────────────────────────────────────
 {
@@ -255,5 +286,6 @@ for (const catalog of all) {
 }
 
 console.log("cli-models 回归测试通过");
+globalThis.fetch = originalFetch;
 await releaseTmpDb();
 rmSync(stage, { recursive: true, force: true });

@@ -98,7 +98,7 @@ export function ProviderModelInput({
     return () => { alive = false; };
   }, [provider?.id, provider?.protocol, provider?.baseUrl, provider?.modelListMode, provider?.pinnedModels, type, cacheVersion]);
 
-  const groupName = provider ? provider.name : `${type} 预设`;
+  const groupName = provider ? provider.name : type === "claude" ? "Claude 官方账号" : `${type} 预设`;
   // 供应商那条走探测状态,CLI 那条走服务端现问的结果。
   const candidates = provider ? models : cli.catalog ? [...cli.catalog.models] : [];
   // 「默认」两边都有:供应商是用户自己配的,CLI 是它自己报的(`Default model:` 那行)。
@@ -111,7 +111,9 @@ export function ProviderModelInput({
   // 走浮层底部那条「清空」。
   const options = useMemo<DropdownOption[]>(() => {
     const seen = new Set<string>();
-    const rows: DropdownOption[] = [];
+    const rows: DropdownOption[] = !provider && type === "claude"
+      ? [{ value: "", label: "不指定模型", detail: "跟随 Claude CLI 默认" }]
+      : [];
     for (const model of [...(defaultModel ? [defaultModel] : []), ...candidates, ...(value ? [value] : [])]) {
       if (!model || seen.has(model)) continue;
       seen.add(model);
@@ -126,7 +128,7 @@ export function ProviderModelInput({
       });
     }
     return rows;
-  }, [candidates, defaultDetail, defaultModel, groupName, provider?.context1mModels, value]);
+  }, [candidates, defaultDetail, defaultModel, groupName, provider?.context1mModels, type, value]);
 
   const note = status === "loading"
     ? `正在从「${provider?.name ?? type}」探测模型…`
@@ -163,9 +165,9 @@ export function ProviderModelInput({
           mono
           filterPlaceholder="筛选或直接填写模型名"
           emptyText="没有匹配的模型，输入完整模型名即可直接使用"
-          placeholder={provider ? provider.model || "跟随供应商默认" : "跟随 CLI"}
+          placeholder={provider ? provider.model || "跟随供应商默认" : type === "claude" ? "不指定模型" : "跟随 CLI"}
           onChange={commit}
-          onClear={value ? clear : undefined}
+          onClear={value && (provider || type !== "claude") ? clear : undefined}
           clearLabel={followLabel}
         />
         {effort && (

@@ -26,7 +26,7 @@ const DEGRADED_RETRY_MS = 60_000;
 
 function degraded(catalog: CliModelCatalog): boolean {
   // 没有清单命令的 CLI 本来就只有快照,那不是失败,别去重试。
-  return catalog.source !== "probe" && catalog.probeSupported;
+  return catalog.source === "preset" && catalog.probeSupported;
 }
 
 function shouldFetch(type: AgentType): boolean {
@@ -153,12 +153,20 @@ export function cliCatalogNote(catalog: CliModelCatalog | null): string {
     const when = catalog.probedAt ? new Date(catalog.probedAt).toLocaleTimeString() : "";
     return `CLI 实时清单 · ${catalog.models.length} 个${when ? ` · ${when} 探测` : ""}`;
   }
+  if (catalog.source === "docs") {
+    const when = catalog.probedAt ? new Date(catalog.probedAt).toLocaleTimeString() : "";
+    return `Anthropic 文档模型 ID + CLI 别名 · ${catalog.models.length} 个${when ? ` · ${when} 更新` : ""}（账号可用性以实际运行为准）`;
+  }
   if (!catalog.models.length) return "该 CLI 未公布模型别名，可手填";
   // 「服务端故意没问」和「问了但失败」得分开说:写成失败的话,界面等于在催用户去点
   // 刷新，而多人模式下刷新永远不会有别的结果。
   if (catalog.skipped) return `内置清单（${catalog.skipped}）`;
+  if (catalog.type === "claude" && catalog.error) return `内置别名（获取 Anthropic 文档失败：${catalog.error}）`;
   if (catalog.error) return `内置清单（现问 CLI 失败：${catalog.error}）`;
   if (catalog.probeSupported && !catalog.available) return "内置清单（本机没装这个 CLI，问不到）";
+  if (catalog.type === "claude") return catalog.probeSupported
+    ? "内置别名，可刷新 Anthropic 官方文档模型 ID"
+    : "CLI 内置别名（当前服务端尚无文档清单）";
   if (catalog.probeSupported) return "内置清单，可点刷新现问 CLI";
   return "CLI 自带的模型别名（该 CLI 没有可查询的清单命令）";
 }

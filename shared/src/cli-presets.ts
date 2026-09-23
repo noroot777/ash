@@ -16,9 +16,9 @@ import type { AgentType } from "./index.ts";
  *
  * 为什么要有它:`CLI_MODEL_PRESETS` 是发版时抄下来的**快照**,而各家 CLI 上新模型
  * 跟 ash 发版毫无关系 —— grok 4.6 上线后本机 CLI 早就能用,系统里却只有 4.5。
- * 所以凡是 CLI 自己给得出清单的(`grok models` 之类),一律现问 CLI;问不到才退回快照。
+ * 所以 CLI 给得出清单的现问 CLI;Claude 从官方文档获取完整 ID 候选;失败才退回快照。
  *
- * 字段的诚实边界:`source` 说清这批模型是**问出来的**还是**兜底的**,`error` 保留
+ * 字段的诚实边界:`source` 区分 CLI 清单、文档候选与内置兜底,`error` 保留
  * 失败原因(没登录 / 网络不通 / 命令改了)。界面必须把这两个照实展示 —— 拿一份
  * 兜底清单假装是实时目录,比清单短一点更坏。
  */
@@ -28,9 +28,9 @@ export interface CliModelCatalog {
   models: readonly string[];
   /** CLI 报告的默认模型(排在候选首位);问不到就是 null。 */
   defaultModel: string | null;
-  /** probe = 现问 CLI 的结果;preset = 内置兜底快照。 */
-  source: "probe" | "preset";
-  /** 这个 CLI 有没有已实测的清单命令。false = 只可能有 preset。 */
+  /** probe = 现问 CLI;docs = Anthropic 官方文档 ID 加 CLI 别名;preset = 内置兜底快照。 */
+  source: "probe" | "docs" | "preset";
+  /** 是否有可刷新的来源（CLI 清单命令或 Claude 官方文档）。 */
   probeSupported: boolean;
   /** 本机装没装这个 CLI。 */
   available: boolean;
@@ -53,10 +53,10 @@ export interface CliModelCatalog {
  * 哪些 CLI 已有实测过的清单查询命令。
  *
  * 前端首帧 / 接口还没回 / 接口挂了时靠它决定要不要画「刷新」按钮;权威答案仍是
- * 服务端现问 CLI 后返回的 `probeSupported`。与 server catalog 里填了 `models` 的
+ * 服务端返回的 `probeSupported`。与 server catalog 里填了 `models` 的
  * type 是否一致,由 `server/scripts/test-cli-models.ts` 断言,不靠自觉。
  */
-export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["grok", "pi"]);
+export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", "grok", "pi"]);
 
 // CLI-native model aliases used when an executor is on its official account.
 // Provider-backed executors replace these with that provider's /v1/models list.
