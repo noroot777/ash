@@ -6,6 +6,7 @@
 // （载荷就是把某条划掉）是同一个毛病的另一副面孔。
 import assert from "node:assert/strict";
 import { splitTurnSegments, turnLayout } from "../src/task-detail/turnFold.ts";
+import { auxEvent } from "../src/task-detail/conversationSegments.ts";
 
 const segment = (id, { markdown = "", events = [], attachments = [] } = {}) => ({ id, markdown, events, attachments });
 const tool = (label) => ({ kind: "tool", label });
@@ -175,6 +176,22 @@ for (const label of [
   assert.equal(text(settled.process), "先看一圈。|");
   assert.equal(text(settled.conclusion), "|改好了。");
   assert.equal(labels(settled.process), "Bash");
+}
+
+// 一条没名字的 tool 事件不许把整页打崩。服务端已经把它判成坏行回 500（见
+// server/src/transcript.ts 的 validTraceEvent），但历史落盘和接力快照仍可能递进来，
+// 而下游是拿 label 去 split / startsWith 的 —— 崩了就是整个任务页被 React 卸载成
+// 白屏，比少显示一行执行过程严重得多（第 5 轮审查）。
+{
+  const nameless = auxEvent({ kind: "tool" });
+  assert.equal(nameless.label, "", "缺 name 的 tool 事件兜底成空串");
+  assert.equal(auxEvent({ kind: "error" }).label, "", "没有 message 的 error 同理");
+  // 这一步会走到 isBookkeepingEvent → ashMcpTool(label)，label 是 undefined 就在这里炸。
+  const { process, conclusion } = splitTurnSegments([
+    segment("a", { events: [nameless], markdown: "照样说完这句。" }),
+  ]);
+  assert.equal(labels(process) + labels(conclusion), "", "没名字就是没名字，不编一个出来");
+  assert.match(text(process) + text(conclusion), /照样说完这句。/, "整条回合照常渲染");
 }
 
 console.log("turn fold tests passed");

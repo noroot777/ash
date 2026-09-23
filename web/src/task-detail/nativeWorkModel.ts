@@ -42,7 +42,11 @@ export const NATIVE_WORK_NO_ASSIGNMENT = "未记录主会话给它的输入：co
 
 type Call = Extract<NativeWorkEvent, { type: "call" }>;
 const str = (value: unknown): string => typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
-const toolName = (name: string) => name.split(/[./]/).at(-1)!.toLowerCase();
+// 参数类型写成可空是**故意的**：服务端已经把缺 name 的 tool 事件判成坏行并回 500
+// （server/src/transcript.ts 的 validTraceEvent），但那是新判据，历史落盘和别的读端
+// 都可能递进来一条没名字的记录。这里 `name!.split()` 一崩，React 会把整个任务页卸载
+// 成白屏——一条坏记录不值这个代价（第 5 轮审查）。
+const toolName = (name: string | undefined) => (name ?? "").split(/[./]/).at(-1)!.toLowerCase();
 const spawnTools = new Set(["agent", "task", "spawn_agent"]);
 const legacyTools = new Set([...spawnTools, "taskcreate", "taskupdate", "todowrite", "update_plan"]);
 const terminal = (status: NativeWorkStatus) => ["completed", "failed", "stopped"].includes(status);

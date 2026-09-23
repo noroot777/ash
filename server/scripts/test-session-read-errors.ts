@@ -107,6 +107,45 @@ try {
   assert.equal((await corrupt("s-ended", half)).status, 500, "收口之后还残着半行，说明文件断了");
   assert.deepEqual(await corrupt("s-ended", `${good}\n`), { status: 200, text: `[${good}]` }, "干净的 trace 照常读出来");
 
+  // ⑦ **语法合法、必填字段缺了，同样是坏行。** 只验 envelope 的话，`{"kind":"tool"}`
+  // 会被当成有效条目放行，读端拿它去 name.split(…) 就把整个任务页卸载成白屏 ——
+  // 既没有 500，也没有任何提示（第 5 轮审查）。判别联合每一支的负载都要验到底。
+  const line = (event: unknown) => `${JSON.stringify({ at: "2026-09-20T01:00:03.000Z", turnStartedAt: at, event })}\n`;
+  const malformed: [string, unknown][] = [
+    ["tool 缺 name", { kind: "tool" }],
+    ["tool.detail 类型错", { kind: "tool", name: "exec", detail: 7 }],
+    ["thinking.text 非字符串", { kind: "thinking", text: { a: 1 } }],
+    ["error 缺 message", { kind: "error" }],
+    ["error.level 不认识", { kind: "error", message: "x", level: "warn" }],
+    ["run.verifyRound 类型错", { kind: "run", model: null, reasoningEffort: null, verifyRound: "2" }],
+    ["attachment 缺 path", { kind: "attachment" }],
+    ["usage.usage 不是对象", { kind: "usage", usage: "many" }],
+    ["不认识的 kind", { kind: "telepathy", text: "x" }],
+    ["nativeWork 缺 id", { kind: "tool", name: "Agent", nativeWork: { type: "call", name: "a", input: {} } }],
+    ["nativeWork 的 type 不认识", { kind: "tool", name: "Agent", nativeWork: { type: "ghost", id: "n1" } }],
+    ["nativeWork.activity 负载坏", { kind: "tool", name: "Agent", nativeWork: { type: "activity", id: "n1", event: { kind: "tool" } } }],
+    ["nativeWork.result.failed 类型错", { kind: "tool", name: "Agent", nativeWork: { type: "result", id: "n1", result: "ok", failed: "no" } }],
+  ];
+  for (const [name, event] of malformed) {
+    assert.equal((await corrupt("s-ended", good + "\n" + line(event))).status, 500, `${name}：必须算坏行`);
+  }
+
+  // ⑧ 合法负载别被上面那批校验误伤 —— 这几种形状真实 trace 里天天在写。
+  const wellFormed: [string, unknown][] = [
+    ["带 detail 的 tool", { kind: "tool", name: "exec", detail: "rg -n trace" }],
+    ["就地验证轮的 run", { kind: "run", model: "gpt-5.6-sol", reasoningEffort: "xhigh", verifyRound: 2 }],
+    ["结算说明级 error", { kind: "error", message: "没交卷", level: "notice", affectsTurn: false }],
+    ["归一过的 usage", { kind: "usage", usage: { input: 1, output: 2 }, accounting: "incremental" }],
+    ["派子智能体的 call", { kind: "tool", name: "Agent", nativeWork: { type: "call", id: "n1", name: "Agent", input: { prompt: "x" }, at: "2026-09-20T01:00:03.000Z" } }],
+    ["子智能体状态", { kind: "tool", name: "Agent", nativeWork: { type: "agent", id: "n1", status: "运行中", title: "查东西", closed: false } }],
+    ["子智能体活动", { kind: "tool", name: "Agent", nativeWork: { type: "activity", id: "n1", event: { kind: "thinking", text: "想" } } }],
+  ];
+  for (const [name, event] of wellFormed) {
+    const res = await corrupt("s-ended", good + "\n" + line(event));
+    assert.equal(res.status, 200, `${name}：是合法条目，不许判成坏行`);
+    assert.equal(JSON.parse(res.text).length, 2, `${name}：两条都要读出来`);
+  }
+
   console.log("会话正文/轨迹读取失败语义验证通过");
 } finally {
   for (const path of locked) chmodSync(path, 0o600);
