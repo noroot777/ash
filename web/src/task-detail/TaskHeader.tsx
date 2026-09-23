@@ -299,7 +299,11 @@ export function TaskHeader({
         </button>
         {menu && (
           <div className="task-overflow-menu" role="menu">
-            <button type="button" role="menuitem" onClick={() => { setMenu(false); onRefresh(); }} disabled={refreshing}>
+            {/* 正在读就把「刷新」禁掉，等于把唯一的恢复入口交给了它要恢复的那件事——
+                会话读取卡住时 refreshing 恰好一直是 true。重读本身是抢占式的（点它就
+                掐掉在途那一发重来，见 lib/useConversation.ts），连点无害，所以只留转圈
+                这个反馈，不再拦着点。 */}
+            <button type="button" role="menuitem" onClick={() => { setMenu(false); onRefresh(); }}>
               <ArrowCounterClockwise size={14} className={refreshing ? "is-spinning" : ""} />刷新
             </button>
             <button type="button" role="menuitem" onClick={() => { setMenu(false); onReview(); }}>

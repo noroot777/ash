@@ -88,10 +88,10 @@ export function useConversation(
   // 出门顺序 = 读取顺序（上面那条链保证的），所以这个号大的那份一定更新。
   const sessionsSeq = useRef(0);
   const appliedSeq = useRef(0);
-  // 换一次任务 +1。链上排着的那些是**上一个任务**的请求，换任务时把 ref 指向新链只是
-  // 断开引用，它们该跑还是会跑——所以每一发都记下自己那一代，出门前对一次：对不上就
-  // 直接退，连请求都不发。否则旧任务的排队项会把下面那个取消句柄抢过去，当前任务点
-  // 「重读会话」掐到的就是别人，自己那一发照样卡着。
+  // 换一次任务 +1，用户手动重读时也 +1。链上排着的那些是**上一代**的请求，把 ref 指向
+  // 新链只是断开引用，它们该跑还是会跑——所以每一发都记下自己那一代，出门前对一次：对
+  // 不上就直接退，连请求都不发。否则旧任务的排队项会把下面那个取消句柄抢过去（当前任务
+  // 点「重读会话」掐到的就是别人），同任务里排着的旧刷新也会把手动读取挡在后面。
   const chainGen = useRef(0);
   // 排队的代价是「一发卡住就轮不到后面的」——网络半开、反代不收尾、服务端 handler 卡死
   // 都能做到，而裸 fetch 是不会自己超时的。所以链上每一发都有人替它收尾：到点掐掉让链
@@ -107,10 +107,18 @@ export function useConversation(
   }, []);
 
   const fetchSessions = useCallback((options: { onStart?: () => void; preempt?: boolean } = {}) => {
+    if (options.preempt) {
+      // 手动重读要救的是「现在卡着」这件事，光掐在途那一发不够：链里还可能排着一发更早
+      // 的轻量刷新，不作废它，手动这一发就得排在它后面，它再卡住就又是一个超时周期。
+      // 所以开新的一代——排着还没出门的那些一律作废。
+      abortActiveSessions("已被新的读取取代");
+      chainGen.current += 1;
+      // 被作废的那一发不再算「排着」，否则后面的直播事件会以为还有人替它去读。
+      refreshQueued.current = false;
+    }
     const gen = chainGen.current;
-    if (options.preempt) abortActiveSessions("已被新的读取取代");
     const run = () => {
-      if (gen !== chainGen.current) return Promise.reject(new Error("已切换任务"));
+      if (gen !== chainGen.current) return Promise.reject(new Error("这一发已被作废"));
       options.onStart?.();
       const seq = ++sessionsSeq.current;
       const controller = new AbortController();

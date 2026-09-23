@@ -458,6 +458,66 @@ try {
     await page.close();
   }
 
+  // ── 手动重读要顶到队首：排在前面的旧刷新一并作废，不能再陪等一个超时 ──────
+  {
+    let releaseA;
+    const hangA = new Promise((resolve) => { releaseA = resolve; });
+    pending.push(() => releaseA());
+    let armed = false;
+    let calls = 0;
+    const withContext = (used) => ({
+      ...session("task-a-s1", "task-a"),
+      context: { used, window: 200000, windowEstimated: false },
+    });
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-a/sessions" || !armed) return false;
+      calls += 1;
+      if (calls === 1) {
+        await hangA; // 第一发一直卡着，整段都不放行
+        await route.fulfill({ json: [withContext(180000)] }).catch(() => undefined);
+        return true;
+      }
+      await route.fulfill({ json: [withContext(40000)] }).catch(() => undefined);
+      return true;
+    // 上限调到 30s，确保救场的是抢占本身，不是超时顺手把队列放开了。
+    }, "?sessionsTimeout=30000");
+    await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
+
+    armed = true;
+    const fireSession = () => page.evaluate(() => {
+      for (const source of window.__sources.filter((item) => !item.closed)) {
+        source.onmessage?.({ data: JSON.stringify({
+          type: "agent.event", taskId: "task-a", event: { kind: "session", sessionId: "task-a-s1" },
+        }) });
+      }
+    });
+    await fireSession();
+    const armedDeadline = Date.now() + 5000;
+    while (calls < 1 && Date.now() < armedDeadline) await page.waitForTimeout(20);
+    assert.equal(calls, 1, "第一发轻量刷新出门并卡住");
+    await fireSession();
+    await page.waitForTimeout(150);
+    assert.equal(calls, 1, "第二发轻量刷新排在它后面，还没出门");
+
+    await page.getByRole("button", { name: "重读会话" }).click();
+    const settleDeadline = Date.now() + 5000;
+    while (Date.now() < settleDeadline && await page.getByTestId("context").textContent() !== "40000") {
+      await page.waitForTimeout(50);
+    }
+    assert.equal(await page.getByTestId("context").textContent(), "40000", "手动重读把水位读回来了");
+    assert.equal(calls, 2, "出门的是手动那一发，排在前头的旧刷新被作废——不是排在它后面");
+    await page.waitForTimeout(300);
+    assert.equal(calls, 2, "被作废的那一发不会事后补出门");
+
+    // 作废不能把「还有人排着」这个标记留在那，否则后面的直播事件再也刷不动。
+    await fireSession();
+    const resumeDeadline = Date.now() + 5000;
+    while (calls < 3 && Date.now() < resumeDeadline) await page.waitForTimeout(20);
+    assert.equal(calls, 3, "抢占之后，新来的直播事件照样能排队出门");
+    assert.equal(await readyOf(page), "true/true");
+    await page.close();
+  }
+
   // ── 正文读失败：错误要显示，但问答历史不能又铺满一屏 ────────────────────
   for (const failing of ["sessions", "output"]) {
     let broken = true;
