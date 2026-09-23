@@ -154,6 +154,18 @@ export function ProviderModelInput({
     : status === "failed"
       ? `探测失败：${error}（仍可手填模型名）`
       : "";
+  const exactCatalog = claudeOfficial && selectionMode === "exact";
+  const dropdownStatus = exactCatalog
+    ? cli.loading || cli.refreshing ? "loading" : cli.catalog?.error ? "failed" : "idle"
+    : status;
+  const catalogNote = exactCatalog
+    ? cli.loading || cli.refreshing
+      ? "正在获取 Anthropic 官方模型目录…"
+      : cli.catalog?.error
+        ? `官方目录获取失败：${cli.catalog.error}（仍可手填完整模型 ID）`
+        : ""
+    : "";
+  const modeNote = claudeOfficial && selectionMode !== savedMode ? "选定下方模型后才会更改此 Profile" : "";
 
   // 这个执行器钉着的模型不是 CLI 现在的默认(比如还钉在 grok-4.5,而 CLI 已经默认 4.6)。
   // 只在**实时清单**里成立:拿滞后的内置快照去说「默认已是」会反过来误导人。
@@ -186,7 +198,7 @@ export function ProviderModelInput({
           label={provider ? `模型 · ${provider.name}` : "模型"}
           value={claudeOfficial && selectionMode !== savedMode ? "" : value}
           options={options}
-          status={status}
+          status={dropdownStatus}
           disabled={disabled}
           allowCustom={!claudeOfficial || selectionMode === "exact"}
           mono
@@ -202,11 +214,11 @@ export function ProviderModelInput({
               <button type="button" aria-pressed={selectionMode === "exact"} onClick={() => changeMode("exact")}>指定完整模型</button>
             </div>
           )}
-          note={claudeOfficial && selectionMode !== savedMode
-            ? "选定下方模型后才会更改此 Profile"
-            : claudeOfficial && selectionMode === "alias"
+          note={modeNote && catalogNote ? `${modeNote} · ${catalogNote}` : modeNote || catalogNote || (
+            claudeOfficial && selectionMode === "alias"
               ? "CLI 内置别名，具体版本由 Claude CLI 决定。完整 ID 的目录与刷新在「指定完整模型」中。"
-              : note}
+              : note
+          )}
           onChange={commit}
           onClear={value && !claudeOfficial ? clear : undefined}
           clearLabel={followLabel}

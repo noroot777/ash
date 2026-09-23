@@ -16,6 +16,11 @@ const cache = new Map<AgentType, CliModelCatalog>();
 const fetchedAt = new Map<AgentType, number>();
 const requests = new Map<AgentType, Promise<CliModelCatalog>>();
 const subscribers = new Map<AgentType, Set<(catalog: CliModelCatalog) => void>>();
+const loadingSubscribers = new Map<AgentType, Set<(loading: boolean) => void>>();
+
+function publishLoading(type: AgentType, loading: boolean) {
+  for (const notify of loadingSubscribers.get(type) ?? []) notify(loading);
+}
 
 /**
  * 降级结果(接口抖了、服务端那次没探到)隔多久允许再自动拉一次。成功的清单缓存到刷新
@@ -92,9 +97,13 @@ function fetchCatalog(type: AgentType, force: boolean): Promise<CliModelCatalog>
       })),
     )
     .finally(() => {
-      if (requests.get(type) === request) requests.delete(type);
+      if (requests.get(type) === request) {
+        requests.delete(type);
+        publishLoading(type, false);
+      }
     });
   requests.set(type, request);
+  publishLoading(type, true);
   return request;
 }
 
@@ -105,10 +114,12 @@ function fetchCatalog(type: AgentType, force: boolean): Promise<CliModelCatalog>
  */
 export function useCliModelCatalog(type: AgentType | null): {
   catalog: CliModelCatalog | null;
+  loading: boolean;
   refreshing: boolean;
   refresh: () => Promise<CliModelCatalog | null>;
 } {
   const [catalog, setCatalog] = useState<CliModelCatalog | null>(() => (type ? cache.get(type) ?? presetFallback(type) : null));
+  const [loading, setLoading] = useState(() => !!type && requests.has(type));
   const [refreshing, setRefreshing] = useState(false);
   // 连点刷新时,转圈要等**最后一次**结束才停:按先结束的那次熄灯,后一次还在飞,
   // 界面却已经显示「好了」。
@@ -117,16 +128,22 @@ export function useCliModelCatalog(type: AgentType | null): {
   useEffect(() => {
     if (!type) {
       setCatalog(null);
+      setLoading(false);
       return;
     }
     let alive = true;
     pending.current = 0;
     setRefreshing(false);
     setCatalog(cache.get(type) ?? presetFallback(type));
+    setLoading(requests.has(type));
     const notify = (next: CliModelCatalog) => { if (alive) setCatalog(next); };
+    const notifyLoading = (next: boolean) => { if (alive) setLoading(next); };
     const listeners = subscribers.get(type) ?? new Set();
     listeners.add(notify);
     subscribers.set(type, listeners);
+    const pendingListeners = loadingSubscribers.get(type) ?? new Set();
+    pendingListeners.add(notifyLoading);
+    loadingSubscribers.set(type, pendingListeners);
     if (shouldFetch(type)) void fetchCatalog(type, false);
     const interval = type === "claude"
       ? window.setInterval(() => { if (shouldFetch(type)) void fetchCatalog(type, false); }, 60_000)
@@ -134,6 +151,7 @@ export function useCliModelCatalog(type: AgentType | null): {
     return () => {
       alive = false;
       listeners.delete(notify);
+      pendingListeners.delete(notifyLoading);
       if (interval !== null) window.clearInterval(interval);
     };
   }, [type]);
@@ -148,7 +166,7 @@ export function useCliModelCatalog(type: AgentType | null): {
     });
   }, [type]);
 
-  return { catalog, refreshing, refresh };
+  return { catalog, loading, refreshing, refresh };
 }
 
 /**

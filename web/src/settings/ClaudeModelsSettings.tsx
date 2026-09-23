@@ -26,6 +26,7 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
   const isAdmin = useIsInstanceAdmin();
   const canEdit = !isMulti || isAdmin;
   const cli = useCliModelCatalog("claude");
+  const custom = [...new Set(models.split(/[\n,]+/).map((id) => id.trim()).filter(Boolean))];
 
   useEffect(() => {
     api.settings().then((current) => {
@@ -37,13 +38,12 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
   }, [notify]);
 
   const persist = async () => {
-    const custom = [...new Set(models.split(/[\n,]+/).map((id) => id.trim()).filter(Boolean))];
     const next = await api.patchSettings({ claudeCustomModelIds: custom, claudeModelRefreshHours: hours });
     setSettings(next);
     setModels(next.claudeCustomModelIds.join("\n"));
   };
 
-  const changed = models !== settings.claudeCustomModelIds.join("\n") || hours !== settings.claudeModelRefreshHours;
+  const changed = custom.join("\n") !== settings.claudeCustomModelIds.join("\n") || hours !== settings.claudeModelRefreshHours;
   const validHours = Number.isInteger(hours) && hours >= 1 && hours <= 168;
 
   const refreshCatalog = async (): Promise<RefreshResult> => {
