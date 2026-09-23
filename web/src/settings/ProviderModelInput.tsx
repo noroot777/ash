@@ -169,10 +169,10 @@ export function ProviderModelInput({
           mono
           filterPlaceholder="筛选或直接填写模型名"
           emptyText="没有匹配的模型，输入完整模型名即可直接使用"
-          placeholder={provider ? provider.model || "跟随供应商默认" : "跟随 CLI（不传 --model）"}
+          placeholder={provider ? provider.model || "跟随供应商默认" : type === "claude" ? "选择 CLI 别名或完整 ID" : "跟随 CLI"}
           onChange={commit}
-          onClear={value ? clear : undefined}
-          clearLabel={type === "claude" && !provider ? "完全跟随 CLI（不传 --model）" : followLabel}
+          onClear={value && (provider || type !== "claude") ? clear : undefined}
+          clearLabel={followLabel}
         />
         {effort && (
           <EffortPicker
