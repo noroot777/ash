@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { AgentEvent, AgentType } from "@ash/shared";
+import { isTokenUsage } from "@ash/shared/usage";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
@@ -105,33 +106,130 @@ export async function turnProducedWork(taskId: string, sessionId: string, turnSt
     && (entry.event.kind === "text" || entry.event.kind === "tool" || entry.event.kind === "attachment"));
 }
 
-export function parseSessionTrace(raw: string): SessionTraceEntry[] {
+/**
+ * 解析结果外加两位诊断。**「最后一行写了一半」和「整行写完了却解析不出来」是两回事**：
+ * 前者是 agent 正在落笔的那一笔，本来就该容错（不能让它盖掉此前合法的 trace）；后者
+ * 只可能是文件被写坏或从中间截断，读端必须知道，否则整份坏文件会被解释成「这条会话
+ * 什么都没干」，前端的派生门禁也就永远不会触发（第 4 轮审查）。
+ */
+export type SessionTraceParse = {
+  entries: SessionTraceEntry[];
+  /** 完整的坏行数：它后面还有内容，所以不可能是写到一半。 */
+  badLines: number;
+  /** 末行解析不出来、且文件没有以换行收尾 —— 正在写的那一笔。 */
+  truncatedTail: boolean;
+};
+
+export function parseSessionTraceLines(raw: string): SessionTraceParse {
   const entries: SessionTraceEntry[] = [];
-  for (const line of raw.split("\n")) {
+  let badLines = 0;
+  let truncatedTail = false;
+  const lines = raw.split("\n");
+  // 以 \n 收尾时 split 的末项是空串；否则末项就是还没写完的那一行。
+  const tailIndex = raw.endsWith("\n") ? -1 : lines.length - 1;
+  for (const [index, line] of lines.entries()) {
     if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line) as Partial<SessionTraceEntry>;
-      const event = entry.event;
-      const validRun = event?.kind !== "run" || (
-        (event.model === null || typeof event.model === "string")
-        && (event.reasoningEffort === null || typeof event.reasoningEffort === "string")
-      );
-      if (
-        typeof entry.at !== "string"
-        || typeof entry.turnStartedAt !== "string"
-        || !event
-        || !["text", "thinking", "tool", "error", "usage", "attachment", "run"].includes(event.kind)
-        || !validRun
-        || (event.kind === "text" && typeof event.text !== "string")
-        || (event.kind === "attachment" && typeof event.path !== "string")
-        || (event.kind === "usage" && (!event.usage || typeof event.usage !== "object"))
-      ) continue;
-      entries.push(entry as SessionTraceEntry);
-    } catch {
-      // A partially written final JSONL line should not hide earlier valid trace.
-    }
+    const entry = parseTraceLine(line);
+    if (entry) entries.push(entry);
+    else if (index === tailIndex) truncatedTail = true;
+    else badLines += 1;
   }
-  return entries;
+  return { entries, badLines, truncatedTail };
+}
+
+export function parseSessionTrace(raw: string): SessionTraceEntry[] {
+  return parseSessionTraceLines(raw).entries;
+}
+
+function parseTraceLine(line: string): SessionTraceEntry | null {
+  try {
+    const entry = JSON.parse(line) as Partial<SessionTraceEntry>;
+    if (typeof entry.at !== "string" || typeof entry.turnStartedAt !== "string") return null;
+    return validTraceEvent(entry.event) ? entry as SessionTraceEntry : null;
+  } catch {
+    return null;
+  }
+}
+
+const isString = (value: unknown): boolean => typeof value === "string";
+const optionalString = (value: unknown): boolean => value === undefined || typeof value === "string";
+
+/**
+ * **每一种事件的负载都要验到底。** 只验 envelope（at / turnStartedAt / kind）是不够的：
+ * 一行语法合法、却缺 `tool.name` 的记录会被当成有效条目放行，读端拿它去 `name.split(…)`
+ * 就把整个任务页卸载成白屏——既没有 500，也没有「执行过程读取失败」的提示（第 5 轮审查）。
+ * 判别联合改一次，这里就得跟着改一次；漏掉的那一支会静默变成「合法条目」。
+ */
+function validTraceEvent(event: unknown): boolean {
+  if (!event || typeof event !== "object") return false;
+  const e = event as Record<string, unknown>;
+  switch (e.kind) {
+    case "text":
+    case "thinking":
+      return isString(e.text);
+    case "tool":
+      return isString(e.name) && optionalString(e.detail)
+        && (e.nativeWork === undefined || validNativeWork(e.nativeWork));
+    case "attachment":
+      return isString(e.path);
+    case "error":
+      return isString(e.message)
+        && (e.scope === undefined || e.scope === "session")
+        && (e.level === undefined || e.level === "notice")
+        && (e.affectsTurn === undefined || e.affectsTurn === false);
+    case "usage":
+      // 口径和判据都归 shared/src/usage.ts —— 账本那边怎么定义，这里就怎么验。
+      return isTokenUsage(e.usage) && (e.accounting === undefined || e.accounting === "incremental");
+    case "run":
+      return (e.model === null || isString(e.model))
+        && (e.reasoningEffort === null || isString(e.reasoningEffort))
+        && (e.verifyRound === undefined || e.verifyRound === null || typeof e.verifyRound === "number");
+    default:
+      return false;
+  }
+}
+
+/** 子智能体那一层（shared/src/native-work.ts）同样是判别联合，同样得逐支验。 */
+function validNativeWork(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const work = value as Record<string, unknown>;
+  if (!optionalString(work.at) || !isString(work.id)) return false;
+  switch (work.type) {
+    case "activity":
+      return validNativeActivity(work.event);
+    case "call":
+      return isString(work.name) && optionalString(work.parentId)
+        && !!work.input && typeof work.input === "object";
+    case "result":
+      return isString(work.result) && typeof work.failed === "boolean";
+    case "agent":
+      // status 只要求是字符串：认不出的值由 nativeWorkStatus() 归一成 "unknown"。
+      return isString(work.status)
+        && (work.closed === undefined || typeof work.closed === "boolean")
+        && ["nativeId", "parentId", "title", "description", "message", "result",
+          "model", "requestedModel", "effort", "requestedEffort", "agentType"]
+          .every((field) => optionalString(work[field]));
+    default:
+      return false;
+  }
+}
+
+function validNativeActivity(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const activity = value as Record<string, unknown>;
+  switch (activity.kind) {
+    case "text":
+    case "thinking":
+      return isString(activity.text);
+    case "tool":
+      return isString(activity.name) && optionalString(activity.detail);
+    case "error":
+      return isString(activity.message);
+    case "attachment":
+      return isString(activity.path);
+    default:
+      return false;
+  }
 }
 
 // A non-text interjection in the run timeline — a 你→@agent reply or a 〔系统〕

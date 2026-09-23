@@ -55,6 +55,26 @@ export function sumUsage(items: Iterable<TokenUsage | null | undefined>): TokenU
 }
 
 /**
+ * 一份 usage 负载长得对不对。
+ *
+ * **落盘的 trace 是外部输入**：文件可能被写坏、被截断，而读端拿它直接做加法 ——
+ * 缺字段算出来是 NaN，界面只会静默不显示本轮用量，没人知道那份数据已经坏了
+ * （第 6 轮审查）。所以读进来之前就验到字段层，坏行由调用方判成读取失败。
+ *
+ * 计数字段一律要求**非负整数**（`EMPTY_USAGE` 的 `turns: 0` 也在其内）：正式库里
+ * 2740 条 usage 全部如此，没有需要兼容的空对象或缺字段旧格式。`costUsd` 是 null
+ * 或非负有限小数（实测 0 ~ 88.09）。
+ */
+export function isTokenUsage(value: unknown): value is TokenUsage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const usage = value as Record<string, unknown>;
+  const counted = (field: string): boolean => Number.isInteger(usage[field]) && (usage[field] as number) >= 0;
+  if (!["input", "output", "cacheRead", "cacheWrite", "reasoning", "turns"].every(counted)) return false;
+  return usage.costUsd === null
+    || (typeof usage.costUsd === "number" && Number.isFinite(usage.costUsd) && usage.costUsd >= 0);
+}
+
+/**
  * 「这一轮吃了多少 token」的那个数:**所有**进出模型的 token,缓存读也算。
  *
  * 缓存读便宜十倍但它确实被读进了上下文,漏掉它会让长会话看着像没花钱;费用另有

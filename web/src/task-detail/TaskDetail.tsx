@@ -42,7 +42,7 @@ import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { freeReviewRetryable } from "./turnRetry.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
-import { snapshotConversationFork } from "./conversationFork.ts";
+import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
 import { TASK_INSPECTORS } from "./taskInspectors.tsx";
 import { ConversationSelection } from "../side-chat/ConversationSelection.tsx";
 import { useAddReplyQuote } from "./replyQuote.ts";
@@ -420,17 +420,18 @@ export function TaskDetail({
                     task={task}
                     questionHistory={task.questionHistory}
                     liveQuestionHistory
+                    historyReady={conversation.transcriptReady}
                     items={conversation.items}
                     sessions={conversation.sessions}
                     pendingExecutor={pendingExecutor}
                     loading={conversation.refreshing}
                     error={conversation.error}
-                    forkBlockedReason={conversation.forkBlockedReason}
+                    forkBlockedReason={forkReadBlock(conversation)}
                     onForkReply={
                       // `!task.reviewOf`：历史那种独立审查任务整条会话都是审查，而逐条的
                       // reviewer 标只认 verifyRound 与 role=reviewer，认不出它 —— 那条路上
                       // 每一条发言都不是派生落点，在这里整体关掉。
-                      onForkTask && !task.reviewOf && !conversation.traceError && !conversation.forkBlockedReason && !handedOut
+                      onForkTask && !task.reviewOf && !forkReadBlock(conversation) && !handedOut
                       && conversation.sessions.every((session) => session.taskId === task.id) ? (replyId) => {
                       try { onForkTask(snapshotConversationFork(task, conversation.items, replyId)); }
                       catch (reason) { notify(reason instanceof Error ? reason.message : String(reason)); }

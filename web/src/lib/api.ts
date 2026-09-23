@@ -12,13 +12,10 @@ import type {
   FreeReviewDisputeResolution,
   GateAction,
   Group,
-  LlmProtocol,
-  LlmProvider,
   Note,
   Project,
   ProjectHealth,
   ProjectView,
-  ProviderModelListMode,
   ReviewDispatchInput,
   ReviewerProfile,
   Schedule,
@@ -43,6 +40,7 @@ import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
+import { llmApi } from "./apiLlm.ts";
 import { handoffApi } from "./handoffApi.ts";
 import { fileApi } from "./fileApi.ts";
 import { pendingMergeApi } from "./pendingMergeApi.ts";
@@ -606,7 +604,10 @@ export const api = {
   deleteTeamPreset: (presetId: string): Promise<{ deleted: true }> =>
     request(`/team-presets/${id(presetId)}`, { method: "DELETE" }),
 
-  sessions: (taskId: string): Promise<Session[]> => request(`/tasks/${id(taskId)}/sessions`),
+  // signal：会话列表是排成一条链读的（见 lib/useConversation.ts），一发卡住就轮不到
+  // 后面的，所以调用方要能给它设上限、也能在用户手动重读时把它掐掉。
+  sessions: (taskId: string, signal?: AbortSignal): Promise<Session[]> =>
+    request(`/tasks/${id(taskId)}/sessions`, signal ? { signal } : undefined),
   sessionOutput: async (sessionId: string): Promise<string> => {
     const response = await fetch(apiPath(`/sessions/${id(sessionId)}/output`));
     if (!response.ok) throw new ApiError(response.status, `${response.status} 会话输出读取失败`, null);
@@ -632,50 +633,8 @@ export const api = {
   steerScheduledMessage: (messageId: string): Promise<{ steered: true; messageId: string }> =>
     request(`/scheduled-messages/${id(messageId)}/steer`, json("POST", {})),
 
-  llmProviders: (): Promise<LlmProvider[]> => request("/llm-providers"),
-  probeModels: (body: {
-    protocol: LlmProtocol;
-    baseUrl: string;
-    apiKey?: string;
-    id?: string;
-  }): Promise<{ models: string[] }> => request("/llm-providers/models", json("POST", body)),
-  testLlmProvider: (body: {
-    id?: string;
-    protocol?: LlmProtocol;
-    baseUrl?: string;
-    apiKey?: string;
-    model?: string;
-    protocolConversionEnabled?: boolean;
-    context1m?: boolean;
-  }): Promise<{ ok: true; model: string; reply: string; elapsedMs: number; endpoint: string }> =>
-    request("/llm-providers/test", json("POST", body)),
-  createLlmProvider: (provider: {
-    name: string;
-    protocol: LlmProtocol;
-    baseUrl: string;
-    apiKey: string;
-    model: string;
-    protocolConversionEnabled: boolean;
-    modelListMode?: ProviderModelListMode;
-    pinnedModels?: string[];
-    context1mModels?: string[];
-  }): Promise<LlmProvider> => request("/llm-providers", json("POST", provider)),
-  patchLlmProvider: (
-    providerId: string,
-    patch: Partial<{
-      name: string;
-      protocol: LlmProtocol;
-      baseUrl: string;
-      apiKey: string;
-      model: string;
-      protocolConversionEnabled: boolean;
-      modelListMode: ProviderModelListMode;
-      pinnedModels: string[];
-      context1mModels: string[];
-    }>,
-  ): Promise<LlmProvider> => request(`/llm-providers/${id(providerId)}`, json("PATCH", patch)),
-  deleteLlmProvider: (providerId: string): Promise<{ deleted: true }> =>
-    request(`/llm-providers/${id(providerId)}`, { method: "DELETE" }),
+  // 直连 LLM 供应商那一组住在 apiLlm.ts（同样是为了守住 700 行），调用点写法不变。
+  ...llmApi,
 
   queue: (queueId: string): Promise<{
     queueId: string;

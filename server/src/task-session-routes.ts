@@ -12,7 +12,8 @@ import { sessions } from "./db/schema.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
-import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
+import { parseSessionTraceLines, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
+import type { SessionTraceEntry } from "./transcript.js";
 import { sessionContext, sessionUsage } from "./usage.js";
 import { codexHome, findArchivedRollout, readCodexCliVersion } from "./executors/codex-rollout.js";
 import { affectedCodexSessionWarning } from "./executors/version-policy.js";
@@ -52,29 +53,71 @@ export async function sessionsForTask(taskId: string): Promise<Session[]> {
   return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id))));
 }
 
-export async function sessionOutputText(taskId: string, sessionId: string): Promise<string> {
+/**
+ * 读一份 run 产物。**「文件还没建」和「读不出来」是两回事**，调用方必须能分开：
+ * 前者对刚起跑、还没落第一笔的会话是合法的空；后者（权限、I/O、路径解析，以及
+ * 已经收口的会话 transcript 丢了）是故障。一律吞成空字符串的话，前端会把 200 空正文
+ * 当成「正文已完整读到」，放开问答历史的去重门禁，把匹配不上的记录整屏补出来 ——
+ * 正是这个任务一开始要修的那屏答复卡（第 2 轮审查）。
+ */
+type RunFileRead<T> = { ok: true; value: T } | { ok: false; missing: boolean };
+
+async function readRunFile(path: string): Promise<RunFileRead<string>> {
   try {
-    return await readFile(readableRunPath(sessionTranscriptPath(taskId, sessionId)), "utf8");
-  } catch {
-    return "";
+    return { ok: true, value: await readFile(readableRunPath(path), "utf8") };
+  } catch (err) {
+    return { ok: false, missing: (err as NodeJS.ErrnoException)?.code === "ENOENT" };
   }
 }
 
-export async function sessionTraceEntries(taskId: string, sessionId: string) {
-  try {
-    const raw = await readFile(readableRunPath(sessionTracePath(taskId, sessionId)), "utf8");
-    const trace = parseSessionTrace(raw);
-    if (!trace.some((entry) => entry.event.kind === "tool" && entry.event.nativeWork)) return trace;
-    try {
-      const row = (await db.select().from(sessions).where(eq(sessions.id, sessionId))).at(0);
-      return row && row.taskId === taskId
-        ? await enrichNativeWorkModels(trace, row, await sessionCliConfigDir(row, row.agentType)) : trace;
-    } catch {
-      return trace;
-    }
-  } catch {
-    return [];
+export async function readSessionOutput(taskId: string, sessionId: string): Promise<RunFileRead<string>> {
+  return readRunFile(sessionTranscriptPath(taskId, sessionId));
+}
+
+/**
+ * trace 读出来之后还多一位：**末行是不是半截**。`parseSessionTraceLines` 已经把
+ * 「整行写完却解析不出来」判成坏（那种直接 ok:false），剩下这一位交给路由结合会话有没有
+ * 收口来判 —— 还在跑的会话末行半截是 agent 正在落笔，收了口还残着半行就是被截断了。
+ */
+type TraceRead =
+  | { ok: true; value: SessionTraceEntry[]; truncatedTail: boolean }
+  | { ok: false; missing: boolean };
+
+export async function readSessionTrace(taskId: string, sessionId: string): Promise<TraceRead> {
+  const raw = await readRunFile(sessionTracePath(taskId, sessionId));
+  if (!raw.ok) return raw;
+  const parsed = parseSessionTraceLines(raw.value);
+  // 一整行写完了却解析不出来 —— 那不是「正在写」，是文件坏了。把它当成空 trace 交出去，
+  // 前端就既看不到执行过程、也收不到任何警告，派生照样挂着（第 4 轮审查）。
+  if (parsed.badLines > 0) return { ok: false, missing: false };
+  const trace = parsed.entries;
+  const tail = parsed.truncatedTail;
+  if (!trace.some((entry) => entry.event.kind === "tool" && entry.event.nativeWork)) {
+    return { ok: true, value: trace, truncatedTail: tail };
   }
+  try {
+    const row = (await db.select().from(sessions).where(eq(sessions.id, sessionId))).at(0);
+    // 补模型名只是锦上添花，补不上就给裸 trace —— 这一条降级是有意的。
+    return {
+      ok: true,
+      truncatedTail: tail,
+      value: row && row.taskId === taskId
+        ? await enrichNativeWorkModels(trace, row, await sessionCliConfigDir(row, row.agentType)) : trace,
+    };
+  } catch {
+    return { ok: true, value: trace, truncatedTail: tail };
+  }
+}
+
+// 接力快照那边读不到就当空：那是一次性搬运，缺一段正文不该让整个快照失败。
+export async function sessionOutputText(taskId: string, sessionId: string): Promise<string> {
+  const read = await readSessionOutput(taskId, sessionId);
+  return read.ok ? read.value : "";
+}
+
+export async function sessionTraceEntries(taskId: string, sessionId: string): Promise<SessionTraceEntry[]> {
+  const read = await readSessionTrace(taskId, sessionId);
+  return read.ok ? read.value : [];
 }
 
 export function mountTaskSessionRoutes(api: Hono): void {
@@ -87,13 +130,32 @@ export function mountTaskSessionRoutes(api: Hono): void {
     const sid = c.req.param("id");
     const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
     if (!row) return c.json({ error: "not found" }, 404);
-    return c.text(await sessionOutputText(row.taskId, sid));
+    const read = await readSessionOutput(row.taskId, sid);
+    if (read.ok) return c.text(read.value);
+    // 还没收口的会话可以还没建文件；已经收口了还找不到，就是丢了。正文是每条会话都
+    // 必然产出的东西（真实库 1924 条已收口会话里只有 2 条缺，且它们的 runs 目录整个
+    // 已被清掉），所以这条判据站得住。
+    if (read.missing && !row.endedAt) return c.text("");
+    return c.json({ error: "transcript unreadable" }, 500);
   });
 
   api.get("/sessions/:id/trace", async (c) => {
     const sid = c.req.param("id");
     const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
     if (!row) return c.json({ error: "not found" }, 404);
-    return c.json(await sessionTraceEntries(row.taskId, sid));
+    const read = await readSessionTrace(row.taskId, sid);
+    if (read.ok) {
+      // 末行半截：还在跑就是 agent 正在落那一笔（照常给已读到的部分）；收了口还残着
+      // 半行，说明文件写到一半断了，跟坏行一样得说出来。
+      if (read.truncatedTail && row.endedAt) return c.json({ error: "trace unreadable" }, 500);
+      return c.json(read.value);
+    }
+    // **trace 不能套正文那条判据。** 它是 2026-08-01 才加的功能（bd8ed749 / de2c9893），
+    // 在那之前跑完的会话本来就没有这个文件，眼下也没有任何标记能证明「这条会话应该
+    // 产 trace」—— 同一个库里 992/1924 条已收口会话没有 .trace.jsonl。把它们一律判成
+    // 故障，前端的 traceError 就会把整页的「派生新任务」入口静默关掉（第 3 轮审查）。
+    // 文件不在就是没有；只有文件在却读不动、或者内容坏了，才是真的坏了。
+    if (read.missing) return c.json([]);
+    return c.json({ error: "trace unreadable" }, 500);
   });
 }

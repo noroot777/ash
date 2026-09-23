@@ -153,6 +153,8 @@ try {
   assert.deepEqual(mergeUserTimeline([optimisticReply], serverReply), [serverReply], "服务端落盘事件应替换同一条乐观消息");
   assert.deepEqual(mergeUserTimeline([serverReply], optimisticReply), [serverReply], "事件先到时，后来的乐观消息不能重复追加");
 
+  // sessions 两份快照的合并（规则见 src/lib/sessionMerge.ts）在 scripts/test-session-merge.mjs。
+
   const systemHandoff = { ...serverReply, id: "system-handoff", text: "请读取 report.md", bySystem: true };
   const handoffConversation = buildConversationItems([], [session], mergeUserTimeline([], systemHandoff));
   assert.equal(handoffConversation[0]?.kind === "user" ? handoffConversation[0].bySystem : false, true);

@@ -21,6 +21,7 @@ try {
   const posts = [];
   let rejectCreation = true;
   let failOutput = true;
+  let failTrace = false;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -33,6 +34,9 @@ try {
     }
     if (path === "/api/tasks/source/sessions") return json([{ id: "s1", taskId: "source", role: "single", agentType: "codex", startedAt: "2026-09-10T01:00:00Z", endedAt: "2026-09-10T01:01:00Z" }]);
     if (path === "/api/sessions/s1/output") return failOutput ? json({ error: "暂时不可读" }, 503) : route.fulfill({ body: "已恢复的回复" });
+    // 历史会话本来就没有 .trace.jsonl，服务端按「缺文件不是故障」回 200 []（见
+    // server/src/task-session-routes.ts）。failTrace 模拟的是另一种：文件在却读不动。
+    if (path === "/api/sessions/s1/trace") return failTrace ? json({ error: "trace unreadable" }, 500) : json([]);
     if (path === "/api/agents") return json([{ id: "exec-codex", name: "codex@local", type: "codex", isDefault: true }]);
     if (path === "/api/settings") return json({ defaultWorkflowId: null });
     if (path.endsWith("/run")) return json({ ok: true });
@@ -106,7 +110,24 @@ try {
   await page.getByRole("button", { name: "刷新正文", exact: true }).click();
   await page.getByText("已恢复的回复", { exact: true }).waitFor();
   await page.waitForFunction(() => !document.body.innerText.includes("正文暂未读全"));
-  assert.equal(await forks.count(), 1);
+  // 这一颗是在 trace 回 200 [] 的情况下拿到的：**没有 trace 不等于 trace 坏了**，
+  // 半数历史会话本来就没这个文件，不该因此关掉整页的派生入口（第 3 轮审查）。
+  assert.equal(await forks.count(), 1, "历史会话没有 trace 是常态，派生入口照旧");
+
+  // trace 真读不动是另一回事：派生快照拼不全，入口该关 —— 但关掉必须说出来，
+  // 而不是让按钮凭空消失（那句话原先只落在子智能体面板里）。
+  failTrace = true;
+  await page.getByRole("button", { name: "刷新正文", exact: true }).click();
+  await page.getByText(/执行过程读取失败/).waitFor();
+  await page.getByText(/派生功能暂不可用/).waitFor();
+  assert.equal(await forks.count(), 0, "trace 读不动时派生入口关掉");
+  failTrace = false;
+  await page.getByRole("button", { name: "刷新正文", exact: true }).click();
+  // 等这一轮读完再数：提示在 refetch 一开始就清掉了，那会儿正文还没落地、按钮也还没画。
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "派生新任务").length === 1,
+  );
+  assert.ok(!(await page.evaluate(() => document.body.innerText.includes("执行过程读取失败"))), "提示跟着消失");
   assert.deepEqual(errors, []);
   console.log(`conversation fork UI, creation failure/retry, draft isolation, narrow screen: passed (${artifacts})`);
 } finally {

@@ -3,6 +3,26 @@ import type { ConversationItem } from "./conversationModel.ts";
 import { parseAttachmentText } from "./utils.ts";
 
 export const FORK_BODY_MAX_BYTES = 128 * 1024;
+
+/**
+ * 会话读取这一侧挡不挡派生，以及挡住时那句话。
+ *
+ * 派生要把整段会话快照拼出来，正文或执行过程缺一块就拼不全，所以两种读取失败都关掉
+ * 入口。但**关掉必须说出来**：trace 失败原先只把理由送进子智能体面板，主区的人只看到
+ * 派生按钮凭空消失（第 3 轮审查）。门禁和提示从这里同一处算出来，不会再各说各话。
+ *
+ * 注意「读不出来」和「本来就没有」是两回事：历史会话没有 .trace.jsonl 是常态，服务端
+ * 按缺文件回空数组，不会走到这里（见 server/src/task-session-routes.ts）。
+ */
+export function forkReadBlock(conversation: {
+  forkBlockedReason: string | null;
+  traceError: Error | null;
+}): string | null {
+  if (conversation.forkBlockedReason) return conversation.forkBlockedReason;
+  if (conversation.traceError) return `${conversation.traceError.message}派生功能暂不可用；刷新会话可重试。`;
+  return null;
+}
+
 const encoder = new TextEncoder();
 const contextSizes = new WeakMap<ConversationFork, { context: string; bytes: number }>();
 export function forkContextBytes(fork: ConversationFork): number {

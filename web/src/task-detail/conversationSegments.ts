@@ -28,10 +28,20 @@ type TracedAttachmentEntry = TracedContentEntry & {
   event: Extract<SessionTraceEntry["event"], { kind: "attachment" }>;
 };
 
+/**
+ * trace 事件 → 执行过程那一行。
+ *
+ * `label` 兜底成空串是**故意的**：服务端已经把缺 `name` 的 tool 事件判成坏行并回 500
+ * （server/src/transcript.ts 的 `validTraceEvent`），但那是新判据，历史落盘、接力过来的
+ * 快照都可能递一条没名字的进来。下游拿 label 去 `split` / `startsWith`（executionTrace.ts、
+ * nativeWorkModel.ts），一条坏记录就能把整个任务页卸载成白屏——直播和刷新两路都在这里
+ * 汇合，兜一次就够（第 5 轮审查）。
+ */
 export function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
-  if (event.kind === "tool") return { kind: "tool", label: event.name, detail: event.detail, ...(at ? { at } : {}), ...(event.nativeWork ? { nativeWork: event.nativeWork } : {}) };
+  const text = (value: unknown): string => typeof value === "string" ? value : "";
+  if (event.kind === "tool") return { kind: "tool", label: text(event.name), detail: event.detail, ...(at ? { at } : {}), ...(event.nativeWork ? { nativeWork: event.nativeWork } : {}) };
   if (event.kind === "thinking") return { kind: "thinking", label: "思考过程", detail: event.text };
-  return { kind: "error", label: event.message };
+  return { kind: "error", label: text(event.message) };
 }
 
 // 相邻的思考过程合并成一行(见 appendExecutionEvent) —— 整块 trace 一次算完。

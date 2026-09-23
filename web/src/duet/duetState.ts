@@ -130,7 +130,9 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
       if (turns[index]!.speaker !== speaker || turns[index]!.done) continue;
       const turn = { ...turns[index]! };
       if (event.event.kind === "text") turn.text += event.event.text;
-      if (event.event.kind === "tool" && isVisibleExecutionEvent(event.event)) turn.events = [...turn.events, { kind: "tool", label: event.event.name, detail: event.event.detail }];
+      // label 兜底同 task-detail/conversationSegments.ts 的 auxEvent：下游按字符串用它，
+      // 一条没名字的 tool 事件能把整页打崩。
+      if (event.event.kind === "tool" && isVisibleExecutionEvent(event.event)) turn.events = [...turn.events, { kind: "tool", label: typeof event.event.name === "string" ? event.event.name : "", detail: event.event.detail }];
       // 思考是流式小块,相邻的合并成一行(见 appendExecutionEvent)。
       if (event.event.kind === "thinking") turn.events = appendExecutionEvent(turn.events, { kind: "thinking", label: "思考过程", detail: event.event.text });
       // error / notice 都累积:服务端 runTurn 落 transcript 时就是拼接的,实时这边要是
