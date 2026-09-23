@@ -6,6 +6,62 @@
   margin: 0 2px 8px;
 }
 
+.claude-model-settings {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid #a76338;
+  border-radius: 10px;
+  margin-bottom: 18px;
+  background: var(--panel);
+  padding: 14px 16px;
+}
+
+.claude-model-settings-head,
+.claude-model-settings-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.claude-model-settings-head > div { display: grid; gap: 4px; }
+.claude-model-settings-head b { font-size: 12px; }
+.claude-model-settings small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.claude-model-settings small.is-error { color: var(--red); }
+.claude-model-settings button {
+  flex: 0 0 auto;
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 5px 9px;
+  color: var(--ink);
+  font-size: 10px;
+  cursor: pointer;
+}
+.claude-model-settings button:disabled { opacity: .55; cursor: default; }
+.claude-model-settings-fields { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 12px; }
+.claude-model-settings-fields label { display: grid; align-content: start; gap: 6px; min-width: 0; font-size: 10px; color: var(--muted); }
+.claude-model-settings input,
+.claude-model-settings textarea {
+  min-width: 0;
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 7px 8px;
+  color: var(--ink);
+  font: 11px var(--font-mono);
+}
+.claude-model-settings textarea { width: 100%; resize: vertical; }
+.claude-model-hours { display: flex; align-items: center; gap: 6px; }
+.claude-model-hours input { width: 72px; }
+.claude-model-settings :is(button, input, textarea):focus-visible { outline: 2px solid #a76338; outline-offset: 2px; }
+
+@media (max-width: 650px) {
+  .claude-model-settings-fields { grid-template-columns: 1fr; }
+  .claude-model-settings-head, .claude-model-settings-foot { align-items: flex-start; flex-wrap: wrap; }
+}
+
 .settings-section .agent-profiles-section-head h2 {
   margin: 0;
 }

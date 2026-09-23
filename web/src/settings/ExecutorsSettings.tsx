@@ -3,6 +3,7 @@ import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
 import { refreshAgentAvailability } from "../lib/agentAvailability.ts";
 import { api, type DetectedCli } from "../lib/api.ts";
 import { AgentProfilesSection } from "./AgentProfilesSection.tsx";
+import { ClaudeModelsSettings } from "./ClaudeModelsSettings.tsx";
 
 function updateById(rows: AgentExecutorProfile[], updated: AgentExecutorProfile) {
   return rows.map((row) => {
@@ -79,6 +80,8 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
           <p>配置实际调用的 CLI 身份、运行位置、模型供应商与默认覆盖。</p>
         </div>
       </header>
+
+      <ClaudeModelsSettings notify={notify} />
 
       <AgentProfilesSection
         profiles={profiles}

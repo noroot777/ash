@@ -19,6 +19,15 @@ const SETTING_SPECS = {
       typeof v === "number" && Number.isInteger(v) && (v === 0 || (v >= 3600 && v <= 86400)),
     hint: "必须是 0（关闭轮询）或 3600~86400 之间的整数秒（1~24 小时）",
   },
+  claudeModelRefreshHours: {
+    ok: (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 168,
+    hint: "必须是 1~168 之间的整数小时",
+  },
+  claudeCustomModelIds: {
+    ok: (v: unknown) => Array.isArray(v) && v.length <= 100 && v.every((id) =>
+      typeof id === "string" && id.length > 0 && id.length <= 160 && id.trim() === id),
+    hint: "必须是最多 100 个、各不超过 160 字符的非空模型 ID",
+  },
   handoffTargets: {
     ok: (v: unknown) =>
       Array.isArray(v) && v.length <= 20 && v.every((t) => {
@@ -146,6 +155,10 @@ export async function writeAppSettingsPatch(
 
 export async function patchAppSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
   await writeAppSettingsPatch(patch, db);
+  if (patch.claudeModelRefreshHours !== undefined || patch.claudeCustomModelIds !== undefined) {
+    const { resetClaudeModelCatalogCache } = await import("./executors/model-probe.js");
+    resetClaudeModelCatalogCache();
+  }
   // 无条件失效,不按 key 挑:挑就得在这里再维护一份「哪些键进了那份缓存」的清单,
   // 而漏一个的表现是「改了不生效」——最难查的那一类。这条路每天走不了几次。
   if (Object.keys(patch).length) await invalidateInstanceCache();

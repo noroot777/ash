@@ -4,7 +4,7 @@ import type { QuestionRecord } from "./questions.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
-import type { HandoffAudit, HandoffTarget, TaskHandoff } from "./handoff.ts";
+import type { HandoffAudit, TaskHandoff } from "./handoff.ts";
 export type { Session, SessionRole } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@ash/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
@@ -42,58 +42,8 @@ export type {
 // 回 "./x.ts",转发一加进程就起不来。
 
 // ── Global app settings ────────────────────────────────────────────────────
-// Stored server-side in the generic app_settings KV table. Consumers always
-// merge persisted values over this object so a fresh/older database gets the
-// current factory defaults without requiring seed rows.
-export interface AppSettings {
-  // 新建任务默认用哪条起手式（workflows.id 或内置 key）。空串 = 没设过，服务端落到
-  // DEFAULT_WORKFLOW_KEY —— 那个 key 是运行时常量，这里不能 import（见上面的说明）。
-  defaultWorkflowId: string;
-  // 输入框里的 `/技能` 清单多久重拉一次(秒)。0 = 关闭轮询,只在打开输入框那一下拉。
-  // 这是**前端轮询间隔**,不是服务端扫描周期:服务端每次请求都真扫盘(命中 mtime
-  // 指纹就走缓存,~0.5ms)。按小时计:装新技能是低频动作,等不及有「立即重新扫描」。
-  skillRefreshSeconds: number;
-  // 任务接力的候选目标:另一台跑着 ash 的机器。url 是对端根地址(http://host:4317)。
-  handoffTargets: HandoffTarget[];
-  // 接力**入站**审批开关。开着(默认)时,别的机器要把任务接力进本机,必须先在
-  // 「设置 → 默认规则 → 接力来源」里被批准一次,且每个请求都要带本机认得的签名。
-  // 关掉 = 退回旧行为(谁连得上谁就能推任务进来),只有在两台机器版本不一致、
-  // 老版本源机没法签名时才临时用。
-  handoffRequireApproval: boolean;
-  // 接力载荷(git bundle + 完整 CLI 会话历史)出门前用对端公钥加密,防同网段抓包。
-  // 签名机制本来就管冒充和篡改,这一条只管**窃听**,所以关掉不会削弱身份校验。
-  // 关掉的唯一用途是调试:密文在抓包工具里看不了,排查接力本身的问题时需要明文。
-  handoffEncrypt: boolean;
-  // 接力入站载荷的大小上限(MB)。验签必须等 body 读完(签名覆盖 body 哈希),所以鉴权
-  // 天生排在缓冲之后 —— 没有这条闸,未鉴权的巨大 body 就能把内存吃光。
-  // 硬顶 512:body 最终要变成一个 JS 字符串,而 Node 的字符串最长就这么大。
-  handoffMaxBodyMb: number;
-  // ── 多人模式(docs/multi-user-plan.md)────────────────────────────────────
-  // 实例模式。"" = 还没定过(首启向导);"single" = 自用,鉴权一行不拦;
-  // "multi" = 多人。**只能 single→multi 单向转换**,多人数据无法合并回单人。
-  instanceMode: "" | "single" | "multi";
-  // 多人模式的根目录。每个用户在其下有一个目录 `rootDir/<dirName>`。
-  // **设定后锁死**,系统不提供修改入口(一改所有已建项目路径失效)。
-  rootDir: string;
-  // 多人模式下大家**共用这台机器上的 CLI 登录态与官方额度**吗。
-  // false(默认)= 隔离:每人一个 CLI 配置目录,宿主订阅抹去,执行器必须挂自己的供应商。
-  // true = 共用:不注入个人配置目录、不清出站凭证、派发闸放开 —— 一份官方订阅几个人一起烧。
-  // **不锁死**,管理员随时能在设置里改;改了之后已有 CLI 会话接不上(配置目录换了),
-  // 系统会自动另开新会话并在时间线里说明。判据在 server/src/auth/mode.ts。
-  sharedHostCli: boolean;
-}
-
-export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
-  defaultWorkflowId: "",
-  skillRefreshSeconds: 3600,
-  handoffTargets: [],
-  handoffRequireApproval: true,
-  handoffEncrypt: true,
-  handoffMaxBodyMb: 512,
-  instanceMode: "",
-  rootDir: "",
-  sharedHostCli: false,
-});
+export type { AppSettings } from "./app-settings.ts";
+export { DEFAULT_APP_SETTINGS } from "./app-settings.ts";
 
 // ── 多人模式 ────────────────────────────────────────────────────────────────
 // 类型本体在 ./multiuser.ts;运行时判据(目录名校验、权限判据)走子路径

@@ -39,6 +39,7 @@ const { catalogTtlMs, modelCatalogFor, modelCatalogs, normalizeModelList, resetM
 const { probeBins } = await import("../src/executors/bin-probe.js");
 const { ensureSchema } = await import("../src/db/index.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
+const { parseAppSettingsPatch, patchAppSettings } = await import("../src/app-settings.js");
 
 assert.deepEqual(
   extractClaudeDocModels("claude-opus-4-6 claude-opus-4-6 claude-sonnet-4-6 claude-haiku-4-5-20251001 claude-platform-on-aws claude-opus-5-system-card"),
@@ -56,6 +57,8 @@ globalThis.fetch = async () => {
 };
 
 await ensureSchema();
+assert.throws(() => parseAppSettingsPatch({ claudeModelRefreshHours: 0 }), /1~168/);
+assert.throws(() => parseAppSettingsPatch({ claudeCustomModelIds: [""] }), /模型 ID/);
 
 // ── ① 解析器:真实输出 ────────────────────────────────────────────────────
 // 2026-08-13 本机 `grok models`(v1.0.3)的原样输出。
@@ -165,10 +168,18 @@ assert.ok(claudeDocs.models.includes("claude-opus-4-6"));
 assert.ok(claudeDocs.models.includes("opus"), "文档 ID 不应盖掉 CLI 别名");
 assert.equal(docsFetches, 1);
 assert.equal(await modelCatalogFor("claude"), claudeDocs, "Claude 文档结果应命中缓存");
+await patchAppSettings({ claudeModelRefreshHours: 12, claudeCustomModelIds: ["claude-opus-9-9"] });
+const configuredDocs = await modelCatalogFor("claude");
+assert.equal(configuredDocs.source, "docs", "设置变化后缓存必须失效");
+assert.ok(configuredDocs.models.includes("claude-opus-9-9"), "手填列表要进候选");
+assert.equal(configuredDocs.refreshIntervalHours, 12);
+assert.equal(catalogTtlMs(configuredDocs, 12), 12 * 60 * 60 * 1000);
+assert.equal(docsFetches, 2, "保存配置后应该重新获取官方目录");
 docsFail = true;
 const docsFallback = await modelCatalogFor("claude", true);
 assert.equal(docsFallback.source, "preset", "文档不可用时应回退内置别名");
 assert.match(docsFallback.error ?? "", /HTTP 503/);
+assert.ok(docsFallback.models.includes("claude-opus-9-9"), "文档失败也要保留手填模型");
 docsFail = false;
 assert.equal((await modelCatalogFor("claude", true)).source, "docs", "手动刷新应恢复文档清单");
 assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败的兜底应尽快重试");

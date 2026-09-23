@@ -32,6 +32,9 @@ function degraded(catalog: CliModelCatalog): boolean {
 function shouldFetch(type: AgentType): boolean {
   const cached = cache.get(type);
   if (!cached) return true;
+  if (type === "claude" && cached.source === "docs") {
+    return Date.now() - (fetchedAt.get(type) ?? 0) >= (cached.refreshIntervalHours ?? 6) * 60 * 60 * 1000;
+  }
   if (!degraded(cached)) return false;
   return Date.now() - (fetchedAt.get(type) ?? 0) >= DEGRADED_RETRY_MS;
 }
@@ -45,6 +48,7 @@ export function presetFallback(type: AgentType, patch: Partial<CliModelCatalog> 
     source: "preset",
     // 首帧 / 接口失败也要按「这家能不能现问」画刷新按钮,不能等服务端回了才出现。
     probeSupported: CLI_MODEL_PROBE_TYPES.has(type),
+    ...(type === "claude" ? { refreshIntervalHours: 6 } : {}),
     available: false,
     probedAt: null,
     cliVersion: null,
@@ -124,9 +128,13 @@ export function useCliModelCatalog(type: AgentType | null): {
     listeners.add(notify);
     subscribers.set(type, listeners);
     if (shouldFetch(type)) void fetchCatalog(type, false);
+    const interval = type === "claude"
+      ? window.setInterval(() => { if (shouldFetch(type)) void fetchCatalog(type, false); }, 60_000)
+      : null;
     return () => {
       alive = false;
       listeners.delete(notify);
+      if (interval !== null) window.clearInterval(interval);
     };
   }, [type]);
 
@@ -161,7 +169,7 @@ export function cliCatalogNote(catalog: CliModelCatalog | null): string {
   // 「服务端故意没问」和「问了但失败」得分开说:写成失败的话,界面等于在催用户去点
   // 刷新，而多人模式下刷新永远不会有别的结果。
   if (catalog.skipped) return `内置清单（${catalog.skipped}）`;
-  if (catalog.type === "claude" && catalog.error) return `内置别名（获取 Anthropic 文档失败：${catalog.error}）`;
+  if (catalog.type === "claude" && catalog.error) return `自填模型与内置别名（获取 Anthropic 文档失败：${catalog.error}）`;
   if (catalog.error) return `内置清单（现问 CLI 失败：${catalog.error}）`;
   if (catalog.probeSupported && !catalog.available) return "内置清单（本机没装这个 CLI，问不到）";
   if (catalog.type === "claude") return catalog.probeSupported

@@ -17,7 +17,7 @@
 // 为什么不落库:清单是**本机 CLI 当下的事实**,不是用户配置。落库要额外处理「换了
 // CLI 版本 / 换了登录账号 / 卸载了」的失效,而重启后重探一次的代价只有几百毫秒。
 
-import type { AgentType } from "@ash/shared";
+import type { AgentType, AppSettings } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
 import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@ash/shared/multiuser";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
@@ -27,6 +27,7 @@ import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 import { execFileText as exec } from "../exec.js";
 import { isHostCliIsolated } from "../auth/mode.js";
 import { fetchClaudeDocModels } from "./claude-doc-models.js";
+import { getAppSettings } from "../app-settings.js";
 
 /** 探测结果的保鲜期。到点后下一次读取会**等**一次重探(不做后台预热那套复杂度)。 */
 const TTL_MS = 6 * 60 * 60 * 1000;
@@ -99,8 +100,14 @@ export function normalizeModelList(models: string[], defaultModel: string | null
   return ordered;
 }
 
-async function probe(type: AgentType): Promise<CliModelCatalog> {
+async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelCatalog> {
   if (type === "claude") {
+    const config = settings ?? await getAppSettings();
+    const custom = config.claudeCustomModelIds;
+    const base = {
+      refreshIntervalHours: config.claudeModelRefreshHours,
+      models: normalizeModelList([...CLI_MODEL_PRESETS.claude, ...custom], null),
+    };
     try {
       const [models, found] = await Promise.all([
         fetchClaudeDocModels(),
@@ -108,15 +115,16 @@ async function probe(type: AgentType): Promise<CliModelCatalog> {
       ]);
       return {
         ...presetCatalog(type),
-        models: normalizeModelList([...CLI_MODEL_PRESETS.claude, ...models], null),
+        models: normalizeModelList([...base.models, ...models], null),
         source: "docs",
+        refreshIntervalHours: base.refreshIntervalHours,
         available: !!found,
         cliVersion: found?.version ?? null,
         probedAt: new Date().toISOString(),
         error: null,
       };
     } catch (error) {
-      return presetCatalog(type, { error: reasonOf(error) });
+      return presetCatalog(type, { ...base, error: reasonOf(error) });
     }
   }
   const spec = CLI_SPEC_BY_KEY[type];
@@ -162,13 +170,14 @@ async function probe(type: AgentType): Promise<CliModelCatalog> {
  * 一条缓存能存多久。导出只为回归测试钉住「降级结果不许和成功结果一样保鲜」。
  * 没有清单命令的 CLI 除外:它永远只有快照,重探不会有新结果,没必要反复问。
  */
-export function catalogTtlMs(catalog: CliModelCatalog): number {
+export function catalogTtlMs(catalog: CliModelCatalog, refreshHours = 6): number {
   if (!catalog.probeSupported) return TTL_MS;
-  return catalog.source === "probe" || catalog.source === "docs" ? TTL_MS : DEGRADED_TTL_MS;
+  if (catalog.source === "docs") return refreshHours * 60 * 60 * 1000;
+  return catalog.source === "probe" ? TTL_MS : DEGRADED_TTL_MS;
 }
 
-function fresh(entry: CacheEntry | undefined): boolean {
-  return !!entry && Date.now() - entry.at < catalogTtlMs(entry.catalog);
+function fresh(entry: CacheEntry | undefined, refreshHours = 6): boolean {
+  return !!entry && Date.now() - entry.at < catalogTtlMs(entry.catalog, refreshHours);
 }
 
 /**
@@ -206,9 +215,10 @@ export function modelCatalogFor(type: AgentType, force = false): Promise<CliMode
           probed: false,
         };
       }
+      const settings = type === "claude" ? await getAppSettings() : undefined;
       const cached = cache.get(type);
-      if (!force && fresh(cached)) return { catalog: cached!.catalog, probed: false };
-      return { catalog: await probe(type), probed: true };
+      if (!force && fresh(cached, settings?.claudeModelRefreshHours)) return { catalog: cached!.catalog, probed: false };
+      return { catalog: await probe(type, settings), probed: true };
     })
     .then(({ catalog, probed }) => {
       // **只有当前那次探测有权写缓存**。force 会另起一次并顶掉 inflight,此时先前
@@ -238,4 +248,20 @@ export function modelCatalogs(types?: AgentType[], force = false): Promise<CliMo
 export function resetModelCatalogCache(): void {
   cache.clear();
   inflight.clear();
+}
+
+export function resetClaudeModelCatalogCache(): void {
+  cache.delete("claude");
+  inflight.delete("claude");
+}
+
+let claudeRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startClaudeModelRefreshLoop(): void {
+  if (claudeRefreshTimer) return;
+  const refresh = () => void modelCatalogFor("claude").catch((error) =>
+    console.error("[ash] Claude 模型目录更新失败:", error));
+  refresh();
+  claudeRefreshTimer = setInterval(refresh, 60_000);
+  claudeRefreshTimer.unref();
 }

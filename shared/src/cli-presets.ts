@@ -38,6 +38,8 @@ export interface CliModelCatalog {
   probedAt: string | null;
   /** 探测时用的 CLI 版本,用于「换了版本要不要重探」的判断与展示。 */
   cliVersion: string | null;
+  /** Claude 文档目录的刷新周期；其他 CLI 不使用。 */
+  refreshIntervalHours?: number;
   /** 探测失败的原因原文(截断)。成功或不支持时为 null。 */
   error: string | null;
   /**
