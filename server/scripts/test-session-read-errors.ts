@@ -111,6 +111,8 @@ try {
   // 会被当成有效条目放行，读端拿它去 name.split(…) 就把整个任务页卸载成白屏 ——
   // 既没有 500，也没有任何提示（第 5 轮审查）。判别联合每一支的负载都要验到底。
   const line = (event: unknown) => `${JSON.stringify({ at: "2026-09-20T01:00:03.000Z", turnStartedAt: at, event })}\n`;
+  // 正式库里 usage 的真实形状（2740 条无一例外）。
+  const fullUsage = { input: 12, output: 34, cacheRead: 5, cacheWrite: 6, reasoning: 7, costUsd: null, turns: 1 };
   const malformed: [string, unknown][] = [
     ["tool 缺 name", { kind: "tool" }],
     ["tool.detail 类型错", { kind: "tool", name: "exec", detail: 7 }],
@@ -119,7 +121,19 @@ try {
     ["error.level 不认识", { kind: "error", message: "x", level: "warn" }],
     ["run.verifyRound 类型错", { kind: "run", model: null, reasoningEffort: null, verifyRound: "2" }],
     ["attachment 缺 path", { kind: "attachment" }],
+    // usage 的 7 个字段是账本口径（shared/src/usage.ts 的 TokenUsage）。只验「是对象」
+    // 的话，{} 和 [] 都能穿过去，前端拿它做加法得到 NaN —— 本轮用量静默消失，还没有任何
+    // 读取失败的提示（第 6 轮审查）。正式库 2740 条 usage 全是完整七字段，没有要兼容的旧形状。
     ["usage.usage 不是对象", { kind: "usage", usage: "many" }],
+    ["usage 是空对象", { kind: "usage", usage: {} }],
+    ["usage 是数组", { kind: "usage", usage: [] }],
+    ["usage 缺 cacheRead 等字段", { kind: "usage", usage: { input: 1, output: 2 } }],
+    ["usage 的数字写成字符串", { kind: "usage", usage: { ...fullUsage, input: "1" } }],
+    ["usage 的计数为负", { kind: "usage", usage: { ...fullUsage, output: -1 } }],
+    ["usage 的计数不是整数", { kind: "usage", usage: { ...fullUsage, cacheRead: 1.5 } }],
+    ["usage 缺 costUsd", { kind: "usage", usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, reasoning: 0, turns: 1 } }],
+    ["usage.costUsd 写成字符串", { kind: "usage", usage: { ...fullUsage, costUsd: "0.5" } }],
+    ["usage.accounting 不认识", { kind: "usage", usage: fullUsage, accounting: "cumulative" }],
     ["不认识的 kind", { kind: "telepathy", text: "x" }],
     ["nativeWork 缺 id", { kind: "tool", name: "Agent", nativeWork: { type: "call", name: "a", input: {} } }],
     ["nativeWork 的 type 不认识", { kind: "tool", name: "Agent", nativeWork: { type: "ghost", id: "n1" } }],
@@ -135,7 +149,10 @@ try {
     ["带 detail 的 tool", { kind: "tool", name: "exec", detail: "rg -n trace" }],
     ["就地验证轮的 run", { kind: "run", model: "gpt-5.6-sol", reasoningEffort: "xhigh", verifyRound: 2 }],
     ["结算说明级 error", { kind: "error", message: "没交卷", level: "notice", affectsTurn: false }],
-    ["归一过的 usage", { kind: "usage", usage: { input: 1, output: 2 }, accounting: "incremental" }],
+    // 正式 trace 里 usage 就长这样：七个字段齐全、计数非负整数、costUsd 是 null 或金额。
+    ["归一过的 usage", { kind: "usage", usage: fullUsage, accounting: "incremental" }],
+    ["带费用的 usage", { kind: "usage", usage: { ...fullUsage, costUsd: 0.1234 } }],
+    ["全零的 usage", { kind: "usage", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: null, turns: 0 } }],
     ["派子智能体的 call", { kind: "tool", name: "Agent", nativeWork: { type: "call", id: "n1", name: "Agent", input: { prompt: "x" }, at: "2026-09-20T01:00:03.000Z" } }],
     ["子智能体状态", { kind: "tool", name: "Agent", nativeWork: { type: "agent", id: "n1", status: "运行中", title: "查东西", closed: false } }],
     ["子智能体活动", { kind: "tool", name: "Agent", nativeWork: { type: "activity", id: "n1", event: { kind: "thinking", text: "想" } } }],

@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { AgentEvent, AgentType } from "@ash/shared";
+import { isTokenUsage } from "@ash/shared/usage";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
@@ -177,8 +178,8 @@ function validTraceEvent(event: unknown): boolean {
         && (e.level === undefined || e.level === "notice")
         && (e.affectsTurn === undefined || e.affectsTurn === false);
     case "usage":
-      return !!e.usage && typeof e.usage === "object"
-        && (e.accounting === undefined || e.accounting === "incremental");
+      // 口径和判据都归 shared/src/usage.ts —— 账本那边怎么定义，这里就怎么验。
+      return isTokenUsage(e.usage) && (e.accounting === undefined || e.accounting === "incremental");
     case "run":
       return (e.model === null || isString(e.model))
         && (e.reasoningEffort === null || isString(e.reasoningEffort))
