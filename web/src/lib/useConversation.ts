@@ -9,6 +9,7 @@ import {
 } from "../task-detail/conversationModel.ts";
 import { parseAttachmentText } from "../task-detail/utils.ts";
 import { createClientId } from "./clientId.ts";
+import { mergeSessions } from "./sessionMerge.ts";
 
 const settledStatuses = new Set(["done", "failed", "canceled", "idle"]);
 const SAME_TURN_WINDOW_MS = 30_000;
@@ -47,32 +48,6 @@ export function mergeUserTimeline(
   return next;
 }
 
-/**
- * 这条会话行最近一次被写过的时刻。会话可复用：起一轮推进 `turnStartedAt`，收一轮落
- * `endedAt`，两者都只会往后走，所以取三者里最晚的那个就够当「版本」用。
- */
-function sessionStamp(session: Session): string {
-  return [session.startedAt, session.turnStartedAt ?? "", session.endedAt ?? ""]
-    .reduce((latest, value) => (value > latest ? value : latest), "");
-}
-
-/**
- * 合并两份 sessions 快照：取并集，同一条会话取更晚被写过的那份。
- *
- * 之所以不是「后到的整份替换」：全量重读和直播补刷可以同时在途，而**客户端判不出谁的
- * 快照更新**——请求发起早不代表服务端读得早，先回来也不代表更旧。按 id 合并让结果与
- * 到达顺序无关，怎么乱序都收敛到同一份。
- */
-export function mergeSessions(current: Session[], incoming: Session[]): Session[] {
-  const byId = new Map(current.map((session) => [session.id, session]));
-  for (const session of incoming) {
-    const existing = byId.get(session.id);
-    if (!existing || sessionStamp(session) >= sessionStamp(existing)) byId.set(session.id, session);
-  }
-  return [...byId.values()].sort((left, right) =>
-    left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id));
-}
-
 export function useConversation(taskId: string, revision = 0) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [persisted, setPersisted] = useState<PersistedConversation[]>([]);
@@ -93,12 +68,8 @@ export function useConversation(taskId: string, revision = 0) {
   const loadToken = useRef(0);
 
   // sessions 有两个写者：load() 的全量重读，和直播事件顺手补的那一发轻量刷新。两者可以
-  // 同时在途，而**谁的快照更新，客户端无从得知**——请求发起早不代表服务端读得早（连接池、
-  // 代理都会打乱到达顺序），先回来也不代表更旧。所以不按顺序取舍，改成按会话 id 合并：
-  // 两份快照的并集，同一条取更晚被写过的那份。合并满足交换律，响应怎么乱序结果都一样。
-  //
-  // 合并不删会话：任务活着的时候 sessions 只增不减（服务端只有「删任务」和「接力导入」
-  // 会删它们，前者任务都没了，后者随之而来的刷新/切任务会把基线清掉重读）。
+  // 同时在途，而谁的快照更新客户端判不出来，所以一律不看到达顺序，按数据合并——规则和
+  // 它为什么是这样，都在 sessionMerge.ts 里。
   const applySessions = useCallback((next: Session[]) => {
     setSessions((current) => mergeSessions(current, next));
   }, []);
