@@ -12,13 +12,10 @@ import type {
   FreeReviewDisputeResolution,
   GateAction,
   Group,
-  LlmProtocol,
-  LlmProvider,
   Note,
   Project,
   ProjectHealth,
   ProjectView,
-  ProviderModelListMode,
   ReviewDispatchInput,
   ReviewerProfile,
   Schedule,
@@ -43,6 +40,7 @@ import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
+import { llmApi } from "./apiLlm.ts";
 import { handoffApi } from "./handoffApi.ts";
 import { pendingMergeApi } from "./pendingMergeApi.ts";
 export type { TaskScopedHandoffPreflightResult } from "./handoffApi.ts";
@@ -663,50 +661,8 @@ export const api = {
   steerScheduledMessage: (messageId: string): Promise<{ steered: true; messageId: string }> =>
     request(`/scheduled-messages/${id(messageId)}/steer`, json("POST", {})),
 
-  llmProviders: (): Promise<LlmProvider[]> => request("/llm-providers"),
-  probeModels: (body: {
-    protocol: LlmProtocol;
-    baseUrl: string;
-    apiKey?: string;
-    id?: string;
-  }): Promise<{ models: string[] }> => request("/llm-providers/models", json("POST", body)),
-  testLlmProvider: (body: {
-    id?: string;
-    protocol?: LlmProtocol;
-    baseUrl?: string;
-    apiKey?: string;
-    model?: string;
-    protocolConversionEnabled?: boolean;
-    context1m?: boolean;
-  }): Promise<{ ok: true; model: string; reply: string; elapsedMs: number; endpoint: string }> =>
-    request("/llm-providers/test", json("POST", body)),
-  createLlmProvider: (provider: {
-    name: string;
-    protocol: LlmProtocol;
-    baseUrl: string;
-    apiKey: string;
-    model: string;
-    protocolConversionEnabled: boolean;
-    modelListMode?: ProviderModelListMode;
-    pinnedModels?: string[];
-    context1mModels?: string[];
-  }): Promise<LlmProvider> => request("/llm-providers", json("POST", provider)),
-  patchLlmProvider: (
-    providerId: string,
-    patch: Partial<{
-      name: string;
-      protocol: LlmProtocol;
-      baseUrl: string;
-      apiKey: string;
-      model: string;
-      protocolConversionEnabled: boolean;
-      modelListMode: ProviderModelListMode;
-      pinnedModels: string[];
-      context1mModels: string[];
-    }>,
-  ): Promise<LlmProvider> => request(`/llm-providers/${id(providerId)}`, json("PATCH", patch)),
-  deleteLlmProvider: (providerId: string): Promise<{ deleted: true }> =>
-    request(`/llm-providers/${id(providerId)}`, { method: "DELETE" }),
+  // 直连 LLM 供应商那一组住在 apiLlm.ts（同样是为了守住 700 行），调用点写法不变。
+  ...llmApi,
 
   queue: (queueId: string): Promise<{
     queueId: string;

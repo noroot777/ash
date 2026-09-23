@@ -88,18 +88,33 @@ export function useConversation(
   // 出门顺序 = 读取顺序（上面那条链保证的），所以这个号大的那份一定更新。
   const sessionsSeq = useRef(0);
   const appliedSeq = useRef(0);
+  // 换一次任务 +1。链上排着的那些是**上一个任务**的请求，换任务时把 ref 指向新链只是
+  // 断开引用，它们该跑还是会跑——所以每一发都记下自己那一代，出门前对一次：对不上就
+  // 直接退，连请求都不发。否则旧任务的排队项会把下面那个取消句柄抢过去，当前任务点
+  // 「重读会话」掐到的就是别人，自己那一发照样卡着。
+  const chainGen = useRef(0);
   // 排队的代价是「一发卡住就轮不到后面的」——网络半开、反代不收尾、服务端 handler 卡死
   // 都能做到，而裸 fetch 是不会自己超时的。所以链上每一发都有人替它收尾：到点掐掉让链
   // 往下走，用户手动重读则直接抢占，不必陪着那一发干等。
-  const sessionsAbort = useRef<AbortController | null>(null);
+  const sessionsAbort = useRef<{ gen: number; controller: AbortController } | null>(null);
+
+  // 只掐**当前这一代**在途的那一发。上面那道闸已经让旧代的请求出不了门，所以正常情况
+  // 下这里的 gen 总是对得上；句柄仍然连着代号存，是为了让「掐当前这一代」这个意思落在
+  // 数据上，而不是靠「上面那道闸保证了 ref 里不会有别人」这种隔着几十行的推理。
+  const abortActiveSessions = useCallback((reason: string) => {
+    const active = sessionsAbort.current;
+    if (active?.gen === chainGen.current) active.controller.abort(new Error(reason));
+  }, []);
 
   const fetchSessions = useCallback((options: { onStart?: () => void; preempt?: boolean } = {}) => {
-    if (options.preempt) sessionsAbort.current?.abort(new Error("已被新的读取取代"));
+    const gen = chainGen.current;
+    if (options.preempt) abortActiveSessions("已被新的读取取代");
     const run = () => {
+      if (gen !== chainGen.current) return Promise.reject(new Error("已切换任务"));
       options.onStart?.();
       const seq = ++sessionsSeq.current;
       const controller = new AbortController();
-      sessionsAbort.current = controller;
+      sessionsAbort.current = { gen, controller };
       const timer = setTimeout(
         () => controller.abort(new Error("会话列表读取超时，刷新可重试")),
         sessionsTimeoutMs,
@@ -108,14 +123,14 @@ export function useConversation(
         .then((list) => ({ seq, sessions: list }))
         .finally(() => {
           clearTimeout(timer);
-          if (sessionsAbort.current === controller) sessionsAbort.current = null;
+          if (sessionsAbort.current?.controller === controller) sessionsAbort.current = null;
         });
     };
     // 前一发**不论成败**都要把链往下传，否则一次失败就把后面所有刷新卡死。
     const next = sessionsChain.current.then(run, run);
     sessionsChain.current = next.then(() => undefined, () => undefined);
     return next;
-  }, [sessionsTimeoutMs, taskId]);
+  }, [abortActiveSessions, sessionsTimeoutMs, taskId]);
 
   // 链上排在后面的那份已经写进去了，就别再拿更早读到的这份往回盖。同一个任务内的两份
   // 快照仍按数据合并（服务端的 usage / context 分两步落库，读到中间态是常事），规则在
@@ -220,9 +235,13 @@ export function useConversation(
     setTranscriptTaskId(null);
     replaceTimeline([]);
     void load(false);
-    // 切走/卸载时把在途那一发掐掉：它的结果反正会被代号丢弃，留着只是占着连接不放。
-    return () => { sessionsAbort.current?.abort(new Error("已离开该会话")); };
-  }, [load, replaceTimeline, revision]);
+    // 切走/卸载时把在途那一发掐掉，并把这一代作废：旧链上还排着的那些出门前会自己退，
+    // 它们的结果反正会被代号丢弃，却足以把取消句柄抢走。
+    return () => {
+      abortActiveSessions("已离开该会话");
+      chainGen.current += 1;
+    };
+  }, [abortActiveSessions, load, replaceTimeline, revision]);
 
   const connected = useServerEvents(
     useCallback((event) => {

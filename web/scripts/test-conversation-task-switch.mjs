@@ -382,6 +382,82 @@ try {
     await page.close();
   }
 
+  // ── 切任务之后，上一个任务排在队里的那些不许再出门 ──────────────────────
+  // 它们的结果反正会被代号丢弃，却足以把取消句柄抢走——那之后当前任务点「重读会话」
+  // 掐掉的是别人的请求，自己那一发照样卡着。
+  {
+    let releaseA;
+    let releaseB;
+    const hangA = new Promise((resolve) => { releaseA = resolve; });
+    const hangB = new Promise((resolve) => { releaseB = resolve; });
+    pending.push(() => { releaseA(); releaseB(); });
+    let armed = false;
+    let aCalls = 0;
+    let bCalls = 0;
+    const withContext = (id, taskId, used) => ({
+      ...session(id, taskId),
+      context: { used, window: 200000, windowEstimated: false },
+    });
+    const page = await open(async (route, path) => {
+      if (path === "/api/tasks/task-a/sessions" && armed) {
+        aCalls += 1;
+        if (aCalls === 1) {
+          await hangA;
+          await route.fulfill({ json: [withContext("task-a-s1", "task-a", 180000)] }).catch(() => undefined);
+          return true;
+        }
+        await route.fulfill({ json: [withContext("task-a-s1", "task-a", 180000)] }).catch(() => undefined);
+        return true;
+      }
+      if (path === "/api/tasks/task-b/sessions") {
+        bCalls += 1;
+        if (bCalls === 1) {
+          await hangB;
+          await route.fulfill({ json: [withContext("task-b-s1", "task-b", 180000)] }).catch(() => undefined);
+          return true;
+        }
+        await route.fulfill({ json: [withContext("task-b-s1", "task-b", 40000)] }).catch(() => undefined);
+        return true;
+      }
+      return false;
+    }, "?sessionsTimeout=30000");
+    await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
+
+    armed = true;
+    const fire = (payload) => page.evaluate((data) => {
+      for (const source of window.__sources.filter((item) => !item.closed)) source.onmessage?.({ data });
+    }, JSON.stringify(payload));
+    // 任务 A：一发出门后卡死，后面再排两发（直播补刷一发 + 收口状态触发的全量重读一发）。
+    await fire({ type: "agent.event", taskId: "task-a", event: { kind: "session", sessionId: "task-a-s1" } });
+    const armedDeadline = Date.now() + 5000;
+    while (aCalls < 1 && Date.now() < armedDeadline) await page.waitForTimeout(20);
+    assert.equal(aCalls, 1, "任务 A 的第一发已经出门并卡住");
+    await fire({ type: "agent.event", taskId: "task-a", event: { kind: "session", sessionId: "task-a-s1" } });
+    await fire({ type: "task.status", taskId: "task-a", status: "done" });
+    await page.waitForTimeout(150);
+    assert.equal(aCalls, 1, "它们都排在卡死那一发后面");
+
+    // 切到任务 B，B 的第一发也卡死。
+    await page.getByRole("button", { name: "切换任务" }).click();
+    const bDeadline = Date.now() + 5000;
+    while (bCalls < 1 && Date.now() < bDeadline) await page.waitForTimeout(20);
+    await page.waitForTimeout(400);
+    assert.equal(aCalls, 1, "切走之后，任务 A 排着的那两发不许再出门");
+    assert.equal(bCalls, 1, "当前任务卡在第一发上");
+
+    // 用户在任务 B 点「重读会话」：要掐掉的是 B 自己那一发。
+    await page.getByRole("button", { name: "重读会话" }).click();
+    const settleDeadline = Date.now() + 5000;
+    while (Date.now() < settleDeadline && await page.getByTestId("context").textContent() !== "40000") {
+      await page.waitForTimeout(50);
+    }
+    assert.equal(bCalls, 2, "抢占掐的是当前任务那一发，第二发要能立刻出门");
+    assert.equal(await page.getByTestId("context").textContent(), "40000", "救回来的是当前任务的最新水位");
+    assert.equal(await sessionsOf(page), "task-b-s1");
+    assert.equal(aCalls, 1, "整个过程里上一个任务的排队项一发都没出去");
+    await page.close();
+  }
+
   // ── 正文读失败：错误要显示，但问答历史不能又铺满一屏 ────────────────────
   for (const failing of ["sessions", "output"]) {
     let broken = true;
