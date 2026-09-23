@@ -92,12 +92,15 @@ function touchesGitDir(relPath: string): boolean {
  * 是链接本身，目标一个字节都不碰）。所以这里先把父目录过一遍那两道闸（字符串前缀 +
  * realpath），再把最后一段名字拼回去、用 lstat 按它自己论。`a/../b`、`../outside`、
  * 指向外面的目录软链下面的路径，仍旧全在父目录那一关上被拦住。
+ *
+ * **归一只交给 `resolve`**（它自己处理 `./`、重复分隔符和结尾的 `/`），一个字符都不许
+ * 额外削。尤其不能 `trim()`：`" a.txt"`、`"a.txt "` 在 POSIX 上都是合法文件名，削掉空格
+ * 就把「删我点的这个」解析成「删旁边那个同名的」——永久删除那一档还没得后悔。
  */
 async function resolveEntry(root: WorkspaceRoot, relPath: string) {
-  const trimmed = (relPath ?? "").trim().replace(/^\.\/+/, "").replace(/[\\/]+$/, "");
   const rootAbs = resolve(root.path);
-  const targetAbs = resolve(rootAbs, trimmed || ".");
-  if (!trimmed || targetAbs === rootAbs) {
+  const targetAbs = resolve(rootAbs, relPath || ".");
+  if (targetAbs === rootAbs) {
     throw Object.assign(new Error("这是任务的工作目录本身，不能在这里删它"), { status: 400 });
   }
   const insidePath = relative(rootAbs, targetAbs).split(sep).join("/");

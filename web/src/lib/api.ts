@@ -44,6 +44,7 @@ import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
 import { handoffApi } from "./handoffApi.ts";
+import { fileApi } from "./fileApi.ts";
 import { pendingMergeApi } from "./pendingMergeApi.ts";
 export type { TaskScopedHandoffPreflightResult } from "./handoffApi.ts";
 
@@ -52,16 +53,9 @@ import type {
   DeleteTaskResult,
   DetectedCli,
   DirectoryPick,
-  FileContent,
-  FileDeleteResult,
-  FileEntryOverview,
-  FileListing,
-  FileSearchResult,
-  FileWorkspaceRoot,
   FreeWorkflowApiState,
   GitOverview,
   HostInfo,
-  OpenerProbe,
   ProjectGitConfig,
   ProjectGitConfigPatch,
   ProjectGitResult,
@@ -437,48 +431,9 @@ export const api = {
   taskCommits: (taskId: string): Promise<{ branch: string | null; commits: TaskCommit[] }> =>
     request(`/tasks/${id(taskId)}/commits`),
 
-  taskFiles: (taskId: string, path = ""): Promise<FileListing> =>
-    request(`/tasks/${id(taskId)}/files?path=${id(path)}`),
-  // 输入框敲 `@` 的候选。两条同形，区别只在「在哪搜」：已有任务按它实际的工作目录
-  // （worktree 里改的文件才是用户要引用的那些），新建任务只能按项目仓库本身。
-  taskFileSearch: (taskId: string, query: string, signal?: AbortSignal): Promise<FileSearchResult> =>
-    request(`/tasks/${id(taskId)}/file-search?q=${id(query)}`, { signal }),
-  projectFileSearch: (projectId: string, query: string, signal?: AbortSignal): Promise<FileSearchResult> =>
-    request(`/projects/${id(projectId)}/file-search?q=${id(query)}`, { signal }),
-  // 树里展开一层。`dir=""` 就是仓库根，所以参数一律要带上，不能因为空就省掉。
-  taskFileDir: (taskId: string, dir: string, signal?: AbortSignal): Promise<FileSearchResult> =>
-    request(`/tasks/${id(taskId)}/file-search?dir=${id(dir)}`, { signal }),
-  projectFileDir: (projectId: string, dir: string, signal?: AbortSignal): Promise<FileSearchResult> =>
-    request(`/projects/${id(projectId)}/file-search?dir=${id(dir)}`, { signal }),
-  taskFile: (taskId: string, path: string): Promise<{ root: FileWorkspaceRoot; file: FileContent }> =>
-    request(`/tasks/${id(taskId)}/file?path=${id(path)}`),
-  // 图片/PDF 预览直接把这个地址交给 <img>/<iframe>，不经过 JSON。
-  taskFileRawUrl: (taskId: string, path: string): string =>
-    apiPath(`/tasks/${id(taskId)}/file/raw?path=${id(path)}`),
-  taskFileOpeners: (taskId: string, path: string, refresh = false): Promise<OpenerProbe> =>
-    request(`/tasks/${id(taskId)}/file/openers?path=${id(path)}${refresh ? "&refresh=1" : ""}`),  revealTaskFile: (taskId: string, path: string): Promise<{ ok: true; absPath: string }> =>
-    request(`/tasks/${id(taskId)}/file/reveal`, json("POST", { path })),
-  openTaskFile: (
-    taskId: string,
-    path: string,
-    appId: string | null,
-  ): Promise<{ ok: true; absPath: string }> =>
-    request(`/tasks/${id(taskId)}/file/open`, json("POST", { path, appId })),
-  // 文件夹详情页和删除确认框读的是同一份（见 FileEntryOverview）。
-  taskFileOverview: (taskId: string, path: string, signal?: AbortSignal): Promise<FileEntryOverview> =>
-    request(`/tasks/${id(taskId)}/file/overview?path=${id(path)}`, { signal }),
-  // 删除默认移到系统废纸篓。两种 409 都不是「失败」而是「再确认一次」，所以**别在这一层
-  // 偷偷补 force、也别把 trashFailed 自动降级成永久删除**：那两下都得用户自己点。
-  deleteTaskFile: (
-    taskId: string,
-    path: string,
-    options: { mode?: "trash" | "permanent"; force?: boolean } = {},
-  ): Promise<FileDeleteResult> =>
-    request(`/tasks/${id(taskId)}/file`, json("DELETE", {
-      path,
-      mode: options.mode ?? "trash",
-      force: options.force ?? false,
-    })),
+  // 工作目录里的文件那一族（列目录、`@` 候选、读全文、打开方式、删除）在 `fileApi.ts`，
+  // 整份 spread 进来，`api.taskFiles()` 这类调用点一字不动。
+  ...fileApi,
 
   // 工作区源代码管理。写操作在任务运行中会被后端拦成 409（body 带 needsForce），
   // 由调用点弹确认框后带 force 重试——别在这一层偷偷补 force。

@@ -60,6 +60,11 @@ const outsideTarget = join(stage, "outside.txt");
 writeFileSync(outsideTarget, "我在工作区外面\n");
 symlinkSync(outsideTarget, join(repo, "link-outside"));
 
+// 名字带前后空格的一对同名文件。POSIX 上这两个是**两个不同的文件**，解析路径时少削一个
+// 空格就会删错人。
+writeFileSync(join(repo, " spaced.txt"), "带前导空格的那个\n");
+writeFileSync(join(repo, "spaced.txt"), "不带空格的那个\n");
+
 const ts = new Date().toISOString();
 const common = {
   projectId: "proj",
@@ -162,6 +167,21 @@ await check("工作目录本身 / .git / 越界路径一律拒", async () => {
   assert.ok(existsSync(outsideTarget), "工作区外面的文件没被碰");
   const missing = await remove("task-main", "src/不存在.ts");
   assert.equal(missing.status, 404);
+});
+
+// 名字里的空格是名字的一部分，不是「脏数据」。曾经在解析时 trim 过一次：用户点着
+// `" spaced.txt"` 按删除，后端删掉的是旁边那个 `"spaced.txt"`，被点中的那个还在——
+// 永久删除那一档没有后悔药，所以这条必须钉住。
+await check("名字前后的空格是名字本身，不许被削掉", async () => {
+  const seen = await overview("task-main", " spaced.txt");
+  assert.equal(seen.status, 200);
+  assert.equal((seen.json.target as { name: string }).name, " spaced.txt", "overview 就不该改写用户给的名字");
+
+  const gone = await remove("task-main", " spaced.txt");
+  assert.equal(gone.status, 200);
+  assert.equal((gone.json as { name: string }).name, " spaced.txt");
+  assert.ok(!existsSync(join(repo, " spaced.txt")), "被点中的那个要没");
+  assert.ok(existsSync(join(repo, "spaced.txt")), "旁边那个同名文件不许受牵连");
 });
 
 // ── 只读档：force 也不解 ───────────────────────────────────────────────────
