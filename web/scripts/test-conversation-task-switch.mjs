@@ -35,7 +35,7 @@ try {
   const failures = [];
 
   /** 开一页，路由交给调用方按段定制；默认行为是「两个任务都正常」。 */
-  const open = async (handler) => {
+  const open = async (handler, query = "") => {
     const page = await browser.newPage();
     page.setDefaultTimeout(5000);
     page.on("pageerror", (error) => failures.push(error.message));
@@ -57,7 +57,7 @@ try {
       failures.push(`unexpected API request: ${path}`);
       await route.fulfill({ status: 500, json: { error: "unexpected request" } });
     });
-    await page.goto(`${origin}/scripts/fixtures/conversation-task-switch.html`);
+    await page.goto(`${origin}/scripts/fixtures/conversation-task-switch.html${query}`);
     return page;
   };
   const sessionsOf = (page) => page.getByTestId("sessions").textContent();
@@ -281,6 +281,103 @@ try {
     await page.waitForTimeout(300);
     assert.equal(await page.getByTestId("context").textContent(), "40000", "压缩后的水位不许被读得更早的那份顶回去");
     assert.equal(await sessionsOf(page), "task-a-s1");
+    assert.equal(await readyOf(page), "true/true");
+    await page.close();
+  }
+
+  // ── 排队的代价：一发卡死不能把后面所有刷新和手动重试一起锁死 ──────────────
+  // 裸 fetch 不会自己超时，网络半开、反代不收尾、服务端 handler 卡住都能让那一发永远
+  // pending。所以链上每一发都要有人收尾（到点掐掉），手动重读还要能直接抢占。
+  for (const recovery of ["timeout", "preempt"]) {
+    let releaseHang;
+    const hang = new Promise((resolve) => { releaseHang = resolve; });
+    pending.push(() => releaseHang());
+    let armed = false;
+    let calls = 0;
+    const withContext = (used) => ({
+      ...session("task-a-s1", "task-a"),
+      context: { used, window: 200000, windowEstimated: false },
+    });
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-a/sessions") return false;
+      if (!armed) return false;
+      calls += 1;
+      if (calls === 1) {
+        // 第一发永不收尾。测试结束前也不放行——真要靠产品代码自己爬出来。
+        await hang;
+        await route.fulfill({ json: [withContext(180000)] }).catch(() => undefined);
+        return true;
+      }
+      await route.fulfill({ json: [withContext(40000)] });
+      return true;
+    // 超时那条路把上限调到 700ms 好等；抢占那条路调到 30s，确保救场的是抢占而不是超时。
+    }, recovery === "timeout" ? "?sessionsTimeout=700" : "?sessionsTimeout=30000");
+    await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
+
+    armed = true;
+    // 直播事件补的那一发卡死在连接层。
+    const fireLiveEvent = () => page.evaluate(() => {
+      for (const source of window.__sources.filter((item) => !item.closed)) {
+        source.onmessage?.({ data: JSON.stringify({
+          type: "agent.event", taskId: "task-a", event: { kind: "session", sessionId: "task-a-s1" },
+        }) });
+      }
+    });
+    await fireLiveEvent();
+    const armedDeadline = Date.now() + 5000;
+    while (calls < 1 && Date.now() < armedDeadline) await page.waitForTimeout(20);
+    assert.equal(calls, 1, "卡死的那一发确实出门了");
+
+    if (recovery === "preempt") {
+      await page.waitForTimeout(300);
+      assert.equal(calls, 1, "没人抢占时它就一直卡在那——这正是要救的场面");
+      // 用户点「重读会话」：它要能把那一发掐掉自己上，而不是排在后面陪等。
+      await page.getByRole("button", { name: "重读会话" }).click();
+    } else {
+      // 后面又来了一发直播刷新，规规矩矩排在队里。链要能靠自己的超时把它放出来。
+      await fireLiveEvent();
+      await page.waitForTimeout(100);
+      assert.equal(calls, 1, "排队中，还没轮到它");
+    }
+    const settleDeadline = Date.now() + 6000;
+    while (Date.now() < settleDeadline && await page.getByTestId("context").textContent() !== "40000") {
+      await page.waitForTimeout(50);
+    }
+    assert.equal(calls, 2, `${recovery}：卡死的那一发被收尾之后，后面的读取要能出门`);
+    assert.equal(
+      await page.getByTestId("context").textContent(),
+      "40000",
+      `${recovery}：救场之后读回来的是服务端此刻的水位`,
+    );
+    assert.equal(await readyOf(page), "true/true");
+    await page.close();
+  }
+
+  // ── 卡死的那一发正是用户在等的：超时之后要说话，不能一直转圈 ──────────────
+  {
+    let releaseHang;
+    const hang = new Promise((resolve) => { releaseHang = resolve; });
+    pending.push(() => releaseHang());
+    let broken = true;
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-b/sessions" || !broken) return false;
+      await hang;
+      await route.fulfill({ json: [session("task-b-s1", "task-b")] }).catch(() => undefined);
+      return true;
+    }, "?sessionsTimeout=700");
+    await page.waitForFunction(() => document.querySelectorAll(".task-question-record").length === 1);
+    await page.getByRole("button", { name: "切换任务" }).click();
+    await page.locator(".task-conversation-error").filter({ hasText: /读取超时/ }).waitFor();
+    assert.equal(
+      await page.locator(".task-question-record").count(),
+      0,
+      "读超时跟读失败一样：正文对不上号，整段问答历史不能当成「没出现过」铺出来",
+    );
+    assert.equal(await readyOf(page), "true/false", "这一轮结束了，但正文没读到");
+
+    broken = false;
+    await page.getByRole("button", { name: "重读会话" }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".task-question-record").length === 2);
     assert.equal(await readyOf(page), "true/true");
     await page.close();
   }

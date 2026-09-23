@@ -48,7 +48,14 @@ export function mergeUserTimeline(
   return next;
 }
 
-export function useConversation(taskId: string, revision = 0) {
+/** 链上单发 sessions 的上限。没人替裸 fetch 收尾，卡住的那一发会挡住它后面所有刷新。 */
+const SESSIONS_TIMEOUT_MS = 20_000;
+
+export function useConversation(
+  taskId: string,
+  revision = 0,
+  { sessionsTimeoutMs = SESSIONS_TIMEOUT_MS }: { sessionsTimeoutMs?: number } = {},
+) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [persisted, setPersisted] = useState<PersistedConversation[]>([]);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
@@ -81,18 +88,34 @@ export function useConversation(taskId: string, revision = 0) {
   // 出门顺序 = 读取顺序（上面那条链保证的），所以这个号大的那份一定更新。
   const sessionsSeq = useRef(0);
   const appliedSeq = useRef(0);
+  // 排队的代价是「一发卡住就轮不到后面的」——网络半开、反代不收尾、服务端 handler 卡死
+  // 都能做到，而裸 fetch 是不会自己超时的。所以链上每一发都有人替它收尾：到点掐掉让链
+  // 往下走，用户手动重读则直接抢占，不必陪着那一发干等。
+  const sessionsAbort = useRef<AbortController | null>(null);
 
-  const fetchSessions = useCallback((onStart?: () => void) => {
+  const fetchSessions = useCallback((options: { onStart?: () => void; preempt?: boolean } = {}) => {
+    if (options.preempt) sessionsAbort.current?.abort(new Error("已被新的读取取代"));
     const run = () => {
-      onStart?.();
+      options.onStart?.();
       const seq = ++sessionsSeq.current;
-      return api.sessions(taskId).then((list) => ({ seq, sessions: list }));
+      const controller = new AbortController();
+      sessionsAbort.current = controller;
+      const timer = setTimeout(
+        () => controller.abort(new Error("会话列表读取超时，刷新可重试")),
+        sessionsTimeoutMs,
+      );
+      return api.sessions(taskId, controller.signal)
+        .then((list) => ({ seq, sessions: list }))
+        .finally(() => {
+          clearTimeout(timer);
+          if (sessionsAbort.current === controller) sessionsAbort.current = null;
+        });
     };
     // 前一发**不论成败**都要把链往下传，否则一次失败就把后面所有刷新卡死。
     const next = sessionsChain.current.then(run, run);
     sessionsChain.current = next.then(() => undefined, () => undefined);
     return next;
-  }, [taskId]);
+  }, [sessionsTimeoutMs, taskId]);
 
   // 链上排在后面的那份已经写进去了，就别再拿更早读到的这份往回盖。同一个任务内的两份
   // 快照仍按数据合并（服务端的 usage / context 分两步落库，读到中间态是常事），规则在
@@ -119,7 +142,7 @@ export function useConversation(taskId: string, revision = 0) {
     replaceTimeline(mergeUserTimeline(timelineRef.current, entry));
   }, [replaceTimeline]);
 
-  const load = useCallback(async (preserveArrivals: boolean) => {
+  const load = useCallback(async (preserveArrivals: boolean, preempt = false) => {
     const cutoff = timelineRef.current.length;
     const token = ++loadToken.current;
     setRefreshing(true);
@@ -127,7 +150,7 @@ export function useConversation(taskId: string, revision = 0) {
     setTraceError(null);
     setForkBlockedReason(null);
     try {
-      const { seq, sessions: nextSessions } = await fetchSessions();
+      const { seq, sessions: nextSessions } = await fetchSessions({ preempt });
       let traceFailures = 0;
       let outputFailures = 0;
       const outputs = await Promise.all(
@@ -168,7 +191,8 @@ export function useConversation(taskId: string, revision = 0) {
     }
   }, [applySessions, fetchSessions, replaceTimeline, taskId]);
 
-  const refetch = useCallback(() => load(true), [load]);
+  // 手动重读要能救场：它抢占在途的那一发，而不是排在一个可能卡死的请求后面干等。
+  const refetch = useCallback(() => load(true, true), [load]);
 
   // 直播事件也会顺手补一发 sessions。跨任务仍由代号兜住：切走之后才回来的那一发直接
   // 丢掉，否则它会把上一个任务的会话盖到当前任务上——那时 ready 已经是 true，页面不会
@@ -178,7 +202,7 @@ export function useConversation(taskId: string, revision = 0) {
     if (refreshQueued.current) return;
     refreshQueued.current = true;
     const token = loadToken.current;
-    void fetchSessions(() => { refreshQueued.current = false; }).then(
+    void fetchSessions({ onStart: () => { refreshQueued.current = false; } }).then(
       ({ seq, sessions: next }) => { if (token === loadToken.current) applySessions(seq, next); },
       () => undefined,
     );
@@ -196,6 +220,8 @@ export function useConversation(taskId: string, revision = 0) {
     setTranscriptTaskId(null);
     replaceTimeline([]);
     void load(false);
+    // 切走/卸载时把在途那一发掐掉：它的结果反正会被代号丢弃，留着只是占着连接不放。
+    return () => { sessionsAbort.current?.abort(new Error("已离开该会话")); };
   }, [load, replaceTimeline, revision]);
 
   const connected = useServerEvents(

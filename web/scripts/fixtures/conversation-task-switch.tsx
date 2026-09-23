@@ -27,7 +27,10 @@ const tasks: Record<string, TaskListItem> = {
 
 function Fixture() {
   const [taskId, setTaskId] = useState("task-a");
-  const conversation = useConversation(taskId);
+  // 链上单发的上限默认是 20s，测里等不起；用 query 调短，好把「卡住的那一发到点被掐掉」
+  // 和「手动重读抢占」两条路分开验。
+  const timeout = Number(new URLSearchParams(location.search).get("sessionsTimeout"));
+  const conversation = useConversation(taskId, 0, Number.isFinite(timeout) && timeout > 0 ? { sessionsTimeoutMs: timeout } : {});
   const task = tasks[taskId]!;
   return <main style={{ height: "100dvh", display: "flex", flexDirection: "column" }}>
     <nav>

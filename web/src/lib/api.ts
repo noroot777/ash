@@ -634,7 +634,10 @@ export const api = {
   deleteTeamPreset: (presetId: string): Promise<{ deleted: true }> =>
     request(`/team-presets/${id(presetId)}`, { method: "DELETE" }),
 
-  sessions: (taskId: string): Promise<Session[]> => request(`/tasks/${id(taskId)}/sessions`),
+  // signal：会话列表是排成一条链读的（见 lib/useConversation.ts），一发卡住就轮不到
+  // 后面的，所以调用方要能给它设上限、也能在用户手动重读时把它掐掉。
+  sessions: (taskId: string, signal?: AbortSignal): Promise<Session[]> =>
+    request(`/tasks/${id(taskId)}/sessions`, signal ? { signal } : undefined),
   sessionOutput: async (sessionId: string): Promise<string> => {
     const response = await fetch(apiPath(`/sessions/${id(sessionId)}/output`));
     if (!response.ok) throw new ApiError(response.status, `${response.status} 会话输出读取失败`, null);
