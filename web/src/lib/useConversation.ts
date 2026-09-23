@@ -52,10 +52,15 @@ export function useConversation(taskId: string, revision = 0) {
   const [persisted, setPersisted] = useState<PersistedConversation[]>([]);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const timelineRef = useRef<TimelineEntry[]>([]);
+  // 已经读完、且读的就是当前这个任务的正文。切任务时 state 还留着上一个任务的
+  // sessions/persisted，重置要等 effect 跑完——那之间渲染出来的会话是**别人的**。
+  // 判据放在渲染期而不是 effect 里，上一任务的正文一帧都不会漏出去。
+  const [loadedTaskId, setLoadedTaskId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [forkBlockedReason, setForkBlockedReason] = useState<string | null>(null);
   const [traceError, setTraceError] = useState<Error | null>(null);
+  const loadToken = useRef(0);
 
   const replaceTimeline = useCallback((next: TimelineEntry[]) => {
     timelineRef.current = next;
@@ -75,6 +80,7 @@ export function useConversation(taskId: string, revision = 0) {
 
   const load = useCallback(async (preserveArrivals: boolean) => {
     const cutoff = timelineRef.current.length;
+    const token = ++loadToken.current;
     setRefreshing(true);
     setError(null);
     setTraceError(null);
@@ -92,24 +98,32 @@ export function useConversation(taskId: string, revision = 0) {
           return { session, output, trace };
         }),
       );
+      // 切任务后旧任务的这一发才回来：全部丢掉，否则它会盖掉新任务已经读好的正文。
+      if (token !== loadToken.current) return;
       setSessions(nextSessions);
       if (outputFailures) setForkBlockedReason(`${outputFailures} 个会话的正文暂未读全，派生功能暂不可用；刷新会话可重试。`);
       if (traceFailures) setTraceError(new Error(`${traceFailures} 个会话的执行过程读取失败，子智能体与内部任务记录可能不完整。`));
       setPersisted(outputs.filter((entry) => entry.output.trim() || entry.trace.length));
+      setLoadedTaskId(taskId);
       if (preserveArrivals) {
         const current = timelineRef.current;
         replaceTimeline(current.slice(Math.min(cutoff, current.length)));
       }
     } catch (reason) {
+      if (token !== loadToken.current) return;
       setError(reason instanceof Error ? reason : new Error("会话读取失败"));
+      setLoadedTaskId(taskId);
     } finally {
-      setRefreshing(false);
+      if (token === loadToken.current) setRefreshing(false);
     }
   }, [replaceTimeline, taskId]);
 
   const refetch = useCallback(() => load(true), [load]);
 
   useEffect(() => {
+    setSessions([]);
+    setPersisted([]);
+    setLoadedTaskId(null);
     replaceTimeline([]);
     void load(false);
   }, [load, replaceTimeline, revision]);
@@ -166,10 +180,25 @@ export function useConversation(taskId: string, revision = 0) {
     appendUserTurn(entry);
   }, [appendUserTurn]);
 
+  const ready = loadedTaskId === taskId;
   const items = useMemo(
-    () => buildConversationItems(persisted, sessions, timeline),
-    [persisted, sessions, timeline],
+    () => ready ? buildConversationItems(persisted, sessions, timeline) : [],
+    [persisted, ready, sessions, timeline],
   );
 
-  return { sessions, persisted, items, connected, refreshing, error, traceError, forkBlockedReason, refetch, addUser };
+  return {
+    sessions: ready ? sessions : [],
+    persisted: ready ? persisted : [],
+    items,
+    connected,
+    // 没读完就是没读完:切任务后的第一帧 refreshing 还是上一次读完时的 false,
+    // 只看它会让空态提示("点击运行开始")闪一下。
+    refreshing: refreshing || !ready,
+    ready,
+    error: ready ? error : null,
+    traceError: ready ? traceError : null,
+    forkBlockedReason: ready ? forkBlockedReason : null,
+    refetch,
+    addUser,
+  };
 }

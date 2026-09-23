@@ -175,6 +175,7 @@ export function TeamFeed({
   onAskLead,
   delegatingIds,
   indicatorForTask,
+  historyReady = true,
 }: {
   task: Task;
   rows: TeamFeedRow[];
@@ -183,6 +184,8 @@ export function TeamFeed({
   onAskLead: (worker: TaskListItem) => void | Promise<void>;
   delegatingIds: ReadonlySet<string>;
   indicatorForTask: IndicatorForTask;
+  /** 会话正文读完之前算不出「哪些问答还没出现在正文里」，见 ConversationFeed 同名参数。 */
+  historyReady?: boolean;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const search = typeof window === "undefined" ? "" : window.location.search;
@@ -249,7 +252,7 @@ export function TeamFeed({
             }
             return <SystemEventNote item={item} mode={noticeMode} key={row.key} />;
           })}
-          <QuestionHistoryRemainder messages={rows.flatMap((row) => row.kind === "conv" && row.item.kind === "user" ? [row.item.text] : [])} />
+          {historyReady && <QuestionHistoryRemainder messages={rows.flatMap((row) => row.kind === "conv" && row.item.kind === "user" ? [row.item.text] : [])} />}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} />

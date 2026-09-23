@@ -185,6 +185,7 @@ export function ConversationFeed({
   systemNoticeMode,
   questionHistory,
   liveQuestionHistory,
+  historyReady = true,
 }: {
   task: TaskListItem;
   items: ConversationItem[];
@@ -212,6 +213,12 @@ export function ConversationFeed({
   systemNoticeMode?: SystemNoticeMode;
   questionHistory?: QuestionRecord[];
   liveQuestionHistory?: boolean;
+  /**
+   * 会话正文已经读完、且读的就是当前这个任务。
+   * 「哪些问答记录还没在正文里出现」只有这时候才算得准——正文还没到位时
+   * 每一条记录都像是没出现过，补渲染会把整段历史当成卡片糊在屏幕上。
+   */
+  historyReady?: boolean;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
@@ -328,7 +335,7 @@ export function ConversationFeed({
           {loading && !items.length && <p className="task-conversation-note">正在读取会话…</p>}
           {forkBlockedReason && <p className="task-conversation-error" role="status">{forkBlockedReason}</p>}
           {error && <p className="task-conversation-error">{error.message}</p>}
-          <QuestionHistoryRemainder messages={items.flatMap((item) => item.kind === "user" ? [item.text] : [])} />
+          {historyReady && <QuestionHistoryRemainder messages={items.flatMap((item) => item.kind === "user" ? [item.text] : [])} />}
           {footer}
         </div>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} />

@@ -623,6 +623,7 @@ export function TeamView({
               onAskLead={askLead}
               delegatingIds={delegatingIds}
               indicatorForTask={indicatorForTask}
+              historyReady={conversation.ready}
             />
             <TeamReplyBox task={task} onSend={async (text, attachments, options) => {
               // 回复也会起一轮(与普通任务详情页同口径)。
