@@ -47,7 +47,7 @@ function compareVersions(left: [string, number, number], right: [string, number,
  * - 一边为空 → 取非空那边（`cliSessionId`、恢复命令这类一旦写入就不会变回 null 的字段
  *   最怕被旧快照抹掉）；
  * - 都是数字/字符串 → 取较大的那个（时间戳、退出码天然如此）；
- * - 都是对象（usage / context）→ 交给下面两个专门的比较。
+ * - 都是对象（usage / context）→ 交给下面两个专门的合并。
  */
 function pickField(left: unknown, right: unknown): unknown {
   if (left == null) return right;
@@ -58,22 +58,67 @@ function pickField(left: unknown, right: unknown): unknown {
   return undefined; // 交给调用方特判
 }
 
-function pickUsage(left: TokenUsage | null, right: TokenUsage | null): TokenUsage | null {
+/** 两个可空数字里那个「更靠后」的：一边为空取另一边，都在取大。 */
+function maxNullable(left: number | null | undefined, right: number | null | undefined): number | null {
+  if (left == null) return right ?? null;
+  if (right == null) return left;
+  return Math.max(left, right);
+}
+
+/**
+ * usage 整对象取一边就会丢字段：`reasoning`、`costUsd` 这类不参与版本比较的量，可能
+ * 只在其中一份里有（enrichment 补上的、或那一发正好带上了）。所以这里逐字段取大——
+ * 会话级用量的每一项都是跨回合累加的单调量（见 shared/src/usage.ts 的 addUsage），
+ * 取大既与顺序无关，又不会把已经拿到的数抹回 0/null。
+ */
+function mergeUsage(left: TokenUsage | null, right: TokenUsage | null): TokenUsage | null {
   if (!left) return right;
   if (!right) return left;
-  return usageTotal(right) > usageTotal(left) || (usageTotal(right) === usageTotal(left) && right.turns > left.turns)
-    ? right
-    : left;
+  const merged: TokenUsage = {
+    input: Math.max(left.input, right.input),
+    output: Math.max(left.output, right.output),
+    cacheRead: Math.max(left.cacheRead, right.cacheRead),
+    cacheWrite: Math.max(left.cacheWrite, right.cacheWrite),
+    reasoning: Math.max(left.reasoning, right.reasoning),
+    costUsd: maxNullable(left.costUsd, right.costUsd),
+    turns: Math.max(left.turns, right.turns),
+  };
+  return sameUsage(merged, left) ? left : merged;
+}
+
+function sameUsage(left: TokenUsage, right: TokenUsage): boolean {
+  return left.input === right.input && left.output === right.output
+    && left.cacheRead === right.cacheRead && left.cacheWrite === right.cacheWrite
+    && left.reasoning === right.reasoning && left.costUsd === right.costUsd
+    && left.turns === right.turns;
 }
 
 /**
  * 上下文水位是**覆盖**值不是流水：压缩之后它会掉下来，所以大小说明不了新旧。版本已经
- * 分不出高下了，这里只需要一个与顺序无关的确定结果——取水位高的那份，下一次刷新自会纠正。
+ * 分不出高下了，`used` 只需要一个与顺序无关的确定结果——取水位高的那份，下一次刷新自
+ * 会纠正。窗口那几个字段则是**元数据**：CLI 自报或按模型名估出来之后就不再变，所以按
+ * 「谁有取谁」补齐，别让没带窗口的那一发把分母抹成 null。
  */
-function pickContext(left: Session["context"], right: Session["context"]): Session["context"] {
+function mergeContext(left: Session["context"], right: Session["context"]): Session["context"] {
   if (!left) return right;
   if (!right) return left;
-  return right.used > left.used ? right : left;
+  const window = maxNullable(left.window, right.window);
+  const compactWindow = maxNullable(left.compactWindow, right.compactWindow);
+  const merged: NonNullable<Session["context"]> = {
+    used: Math.max(left.used, right.used),
+    window,
+    // 分母是不是估的要跟着被选中的那个窗口走；两边窗口一样时，只要有一边是自报的就不算估。
+    windowEstimated: left.window === right.window
+      ? left.windowEstimated && right.windowEstimated
+      : window === left.window ? left.windowEstimated : right.windowEstimated,
+    ...(compactWindow == null ? {} : { compactWindow }),
+  };
+  return sameContext(merged, left) ? left : merged;
+}
+
+function sameContext(left: NonNullable<Session["context"]>, right: NonNullable<Session["context"]>): boolean {
+  return left.used === right.used && left.window === right.window
+    && left.compactWindow === right.compactWindow && left.windowEstimated === right.windowEstimated;
 }
 
 function mergeSessionRow(current: Session, incoming: Session): Session {
@@ -86,9 +131,9 @@ function mergeSessionRow(current: Session, incoming: Session): Session {
     const left = (current as unknown as Record<string, unknown>)[key];
     const right = (incoming as unknown as Record<string, unknown>)[key];
     const picked = key === "usage"
-      ? pickUsage(current.usage, incoming.usage)
+      ? mergeUsage(current.usage, incoming.usage)
       : key === "context"
-        ? pickContext(current.context, incoming.context)
+        ? mergeContext(current.context, incoming.context)
         : pickField(left, right) ?? right;
     if (picked !== left) changed = true;
     merged[key] = picked;

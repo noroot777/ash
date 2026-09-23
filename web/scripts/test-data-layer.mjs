@@ -189,6 +189,30 @@ try {
   assert.equal(mergeSessions([sameA], [sameB])[0].cliSessionId, "cli-1", "各自非空的字段都保住");
   assert.equal(mergeSessions([sameA], [sameB])[0].branch, "ash/x");
 
+  // 版本比不到的那几项（reasoning / costUsd 不参与版本，窗口元数据是 enrichment 后才有的）
+  // 也不能整对象取一边就丢掉，否则缺字段的那一发后到就把它们抹回 0/null。
+  const enriched = {
+    ...s1,
+    usage: { ...usageOf(1, 10), reasoning: 25, costUsd: 1.25 },
+    context: { used: 100, window: 200000, windowEstimated: true },
+  };
+  const baseThenEnriched = mergeSessions([s1], [enriched])[0];
+  const enrichedThenBase = mergeSessions([enriched], [s1])[0];
+  assert.deepEqual(baseThenEnriched, enrichedThenBase, "同版本平局时，换个到达顺序结果也必须一样");
+  assert.equal(baseThenEnriched.usage.reasoning, 25, "reasoning token 不被没带它的那一发抹成 0");
+  assert.equal(baseThenEnriched.usage.costUsd, 1.25, "费用不被抹回 null");
+  assert.equal(baseThenEnriched.context.window, 200000, "上下文窗口这个分母不被抹回 null");
+  assert.equal(baseThenEnriched.context.windowEstimated, true, "分母是不是估的要跟着那个窗口走");
+  // 两边窗口一样、只有一边说是估的：自报的那份说了算，且与顺序无关。
+  const reported = { ...s1, context: { used: 100, window: 200000, windowEstimated: false } };
+  const estimated = { ...s1, context: { used: 100, window: 200000, windowEstimated: true } };
+  assert.deepEqual(
+    mergeSessions([reported], [estimated])[0].context,
+    mergeSessions([estimated], [reported])[0].context,
+    "窗口相同、估算标记不同时也要收敛到同一个结果",
+  );
+  assert.equal(mergeSessions([estimated], [reported])[0].context.windowEstimated, false, "有一边是 CLI 自报的就不算估");
+
   assert.deepEqual(
     mergeSessions(mergeSessions([], [s1, s2]), [s1Ended]).map((s) => [s.id, s.endedAt]),
     mergeSessions(mergeSessions([], [s1Ended]), [s1, s2]).map((s) => [s.id, s.endedAt]),
