@@ -401,7 +401,7 @@ export function TaskDetail({
                     task={task}
                     questionHistory={task.questionHistory}
                     liveQuestionHistory
-                    historyReady={conversation.ready}
+                    historyReady={conversation.transcriptReady}
                     items={conversation.items}
                     sessions={conversation.sessions}
                     pendingExecutor={pendingExecutor}

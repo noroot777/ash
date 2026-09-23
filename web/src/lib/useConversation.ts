@@ -56,6 +56,10 @@ export function useConversation(taskId: string, revision = 0) {
   // sessions/persisted，重置要等 effect 跑完——那之间渲染出来的会话是**别人的**。
   // 判据放在渲染期而不是 effect 里，上一任务的正文一帧都不会漏出去。
   const [loadedTaskId, setLoadedTaskId] = useState<string | null>(null);
+  // 正文不但读完了，而且**整份都读到了**。「哪些问答记录没在正文里出现过」这个判断
+  // 只有这时候才算得准：sessions 请求挂了、或者某条会话的正文没读下来，正文里就必然
+  // 认不出那几条答复，补渲染会把整段历史当成「没出现过」铺满屏幕——正是这次要消除的形态。
+  const [transcriptTaskId, setTranscriptTaskId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [forkBlockedReason, setForkBlockedReason] = useState<string | null>(null);
@@ -105,6 +109,9 @@ export function useConversation(taskId: string, revision = 0) {
       if (traceFailures) setTraceError(new Error(`${traceFailures} 个会话的执行过程读取失败，子智能体与内部任务记录可能不完整。`));
       setPersisted(outputs.filter((entry) => entry.output.trim() || entry.trace.length));
       setLoadedTaskId(taskId);
+      // 正文缺了一块就不算读全。trace 读失败不影响：那是执行过程，不是会话正文。
+      if (outputFailures) setTranscriptTaskId((current) => current === taskId ? null : current);
+      else setTranscriptTaskId(taskId);
       if (preserveArrivals) {
         const current = timelineRef.current;
         replaceTimeline(current.slice(Math.min(cutoff, current.length)));
@@ -112,7 +119,10 @@ export function useConversation(taskId: string, revision = 0) {
     } catch (reason) {
       if (token !== loadToken.current) return;
       setError(reason instanceof Error ? reason : new Error("会话读取失败"));
+      // 读失败也是「这一轮结束了」：错误要显示、空态提示不能再冒出来。但正文没到手，
+      // 去重算不了，transcriptTaskId 保持不动。
       setLoadedTaskId(taskId);
+      setTranscriptTaskId((current) => current === taskId ? null : current);
     } finally {
       if (token === loadToken.current) setRefreshing(false);
     }
@@ -120,10 +130,21 @@ export function useConversation(taskId: string, revision = 0) {
 
   const refetch = useCallback(() => load(true), [load]);
 
+  // 直播事件也会顺手补一发 sessions。它跟 load() 共用同一个代号：切走（或又起了一轮
+  // 读取）之后才回来的那一发直接丢掉，否则它会把上一个任务的会话盖到当前任务上——
+  // 那时 ready 已经是 true，页面不会有任何「还在读」的迹象。
+  const refreshSessions = useCallback(() => {
+    const token = loadToken.current;
+    void api.sessions(taskId).then((next) => {
+      if (token === loadToken.current) setSessions(next);
+    }).catch(() => undefined);
+  }, [taskId]);
+
   useEffect(() => {
     setSessions([]);
     setPersisted([]);
     setLoadedTaskId(null);
+    setTranscriptTaskId(null);
     replaceTimeline([]);
     void load(false);
   }, [load, replaceTimeline, revision]);
@@ -141,7 +162,7 @@ export function useConversation(taskId: string, revision = 0) {
           bySystem: event.bySystem,
           source: "server",
         });
-        void api.sessions(taskId).then(setSessions).catch(() => undefined);
+        refreshSessions();
       }
       if (event.type === "agent.event" && event.taskId === taskId) {
         appendTimeline({
@@ -150,7 +171,7 @@ export function useConversation(taskId: string, revision = 0) {
           event,
         });
         if (event.event.kind === "session") {
-          void api.sessions(taskId).then(setSessions).catch(() => undefined);
+          refreshSessions();
         }
       }
       if (
@@ -160,7 +181,7 @@ export function useConversation(taskId: string, revision = 0) {
       ) {
         void load(true);
       }
-    }, [appendTimeline, appendUserTurn, load, taskId]),
+    }, [appendTimeline, appendUserTurn, load, refreshSessions, taskId]),
   );
 
   const addUser = useCallback((
@@ -181,6 +202,8 @@ export function useConversation(taskId: string, revision = 0) {
   }, [appendUserTurn]);
 
   const ready = loadedTaskId === taskId;
+  // 读全了才谈得上「哪些问答没出现在正文里」：ready 只说明这一轮读完了，可能是读失败结束的。
+  const transcriptReady = ready && transcriptTaskId === taskId;
   const items = useMemo(
     () => ready ? buildConversationItems(persisted, sessions, timeline) : [],
     [persisted, ready, sessions, timeline],
@@ -195,6 +218,7 @@ export function useConversation(taskId: string, revision = 0) {
     // 只看它会让空态提示("点击运行开始")闪一下。
     refreshing: refreshing || !ready,
     ready,
+    transcriptReady,
     error: ready ? error : null,
     traceError: ready ? traceError : null,
     forkBlockedReason: ready ? forkBlockedReason : null,

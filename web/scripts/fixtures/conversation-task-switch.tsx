@@ -32,7 +32,10 @@ function Fixture() {
   return <main style={{ height: "100dvh", display: "flex", flexDirection: "column" }}>
     <nav>
       <button onClick={() => setTaskId(taskId === "task-a" ? "task-b" : "task-a")}>切换任务</button>
+      <button onClick={() => void conversation.refetch()}>重读会话</button>
       <output>{taskId}</output>
+      <output data-testid="sessions">{conversation.sessions.map((session) => session.id).join(",")}</output>
+      <output data-testid="ready">{`${conversation.ready}/${conversation.transcriptReady}`}</output>
     </nav>
     <ConversationFeed
       task={task}
@@ -40,9 +43,10 @@ function Fixture() {
       sessions={conversation.sessions}
       loading={conversation.refreshing}
       error={conversation.error}
+      forkBlockedReason={conversation.forkBlockedReason}
       questionHistory={task.questionHistory}
       liveQuestionHistory={false}
-      historyReady={conversation.ready}
+      historyReady={conversation.transcriptReady}
     />
   </main>;
 }

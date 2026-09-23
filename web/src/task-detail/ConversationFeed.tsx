@@ -326,7 +326,9 @@ export function ConversationFeed({
               queuePosition={task.queuePosition}
             />
           )}
-          {!items.length && !loading && !error && !activityPhase && (
+          {/* 正文一条都没读下来时这里是空的，但那不是「还没开始跑」——`forkBlockedReason`
+              在场就说明读挂了，再劝用户点运行是把失败说成了空会话。 */}
+          {!items.length && !loading && !error && !forkBlockedReason && !activityPhase && (
             <div className="task-conversation-empty">
               <File size={20} aria-hidden="true" />
               <p>点击「运行」开始，执行输出会实时显示在这里。</p>
