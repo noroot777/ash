@@ -47,6 +47,32 @@ export function mergeUserTimeline(
   return next;
 }
 
+/**
+ * 这条会话行最近一次被写过的时刻。会话可复用：起一轮推进 `turnStartedAt`，收一轮落
+ * `endedAt`，两者都只会往后走，所以取三者里最晚的那个就够当「版本」用。
+ */
+function sessionStamp(session: Session): string {
+  return [session.startedAt, session.turnStartedAt ?? "", session.endedAt ?? ""]
+    .reduce((latest, value) => (value > latest ? value : latest), "");
+}
+
+/**
+ * 合并两份 sessions 快照：取并集，同一条会话取更晚被写过的那份。
+ *
+ * 之所以不是「后到的整份替换」：全量重读和直播补刷可以同时在途，而**客户端判不出谁的
+ * 快照更新**——请求发起早不代表服务端读得早，先回来也不代表更旧。按 id 合并让结果与
+ * 到达顺序无关，怎么乱序都收敛到同一份。
+ */
+export function mergeSessions(current: Session[], incoming: Session[]): Session[] {
+  const byId = new Map(current.map((session) => [session.id, session]));
+  for (const session of incoming) {
+    const existing = byId.get(session.id);
+    if (!existing || sessionStamp(session) >= sessionStamp(existing)) byId.set(session.id, session);
+  }
+  return [...byId.values()].sort((left, right) =>
+    left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id));
+}
+
 export function useConversation(taskId: string, revision = 0) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [persisted, setPersisted] = useState<PersistedConversation[]>([]);
@@ -65,17 +91,16 @@ export function useConversation(taskId: string, revision = 0) {
   const [forkBlockedReason, setForkBlockedReason] = useState<string | null>(null);
   const [traceError, setTraceError] = useState<Error | null>(null);
   const loadToken = useRef(0);
-  // sessions 有两个写者：load() 的全量重读，和直播事件顺手补的那一发轻量刷新。两者可以
-  // 同时在途，回来的顺序跟发出的顺序无关——先发出的那份就是更旧的那份，晚到也不许盖掉
-  // 已经写进去的新快照（否则刚起的会话会从列表里消失，页面上还一切正常）。发号器按
-  // **发起顺序**发票，写入时只认比已写入的更新的那张。
-  const sessionsTicket = useRef(0);
-  const sessionsApplied = useRef(0);
 
-  const applySessions = useCallback((ticket: number, next: Session[]) => {
-    if (ticket < sessionsApplied.current) return;
-    sessionsApplied.current = ticket;
-    setSessions(next);
+  // sessions 有两个写者：load() 的全量重读，和直播事件顺手补的那一发轻量刷新。两者可以
+  // 同时在途，而**谁的快照更新，客户端无从得知**——请求发起早不代表服务端读得早（连接池、
+  // 代理都会打乱到达顺序），先回来也不代表更旧。所以不按顺序取舍，改成按会话 id 合并：
+  // 两份快照的并集，同一条取更晚被写过的那份。合并满足交换律，响应怎么乱序结果都一样。
+  //
+  // 合并不删会话：任务活着的时候 sessions 只增不减（服务端只有「删任务」和「接力导入」
+  // 会删它们，前者任务都没了，后者随之而来的刷新/切任务会把基线清掉重读）。
+  const applySessions = useCallback((next: Session[]) => {
+    setSessions((current) => mergeSessions(current, next));
   }, []);
 
   const replaceTimeline = useCallback((next: TimelineEntry[]) => {
@@ -97,7 +122,6 @@ export function useConversation(taskId: string, revision = 0) {
   const load = useCallback(async (preserveArrivals: boolean) => {
     const cutoff = timelineRef.current.length;
     const token = ++loadToken.current;
-    const ticket = ++sessionsTicket.current;
     setRefreshing(true);
     setError(null);
     setTraceError(null);
@@ -118,8 +142,8 @@ export function useConversation(taskId: string, revision = 0) {
       // 切任务后旧任务的这一发才回来：全部丢掉，否则它会盖掉新任务已经读好的正文。
       if (token !== loadToken.current) return;
       // 正文那份（persisted）只有 load() 一个写者，token 已经保证它是最新的一轮；
-      // sessions 另有直播刷新这个写者，得按票号再比一次。
-      applySessions(ticket, nextSessions);
+      // sessions 另有直播刷新这个写者，两份快照按会话 id 合并（见 mergeSessions）。
+      applySessions(nextSessions);
       if (outputFailures) setForkBlockedReason(`${outputFailures} 个会话的正文暂未读全，派生功能暂不可用；刷新会话可重试。`);
       if (traceFailures) setTraceError(new Error(`${traceFailures} 个会话的执行过程读取失败，子智能体与内部任务记录可能不完整。`));
       setPersisted(outputs.filter((entry) => entry.output.trim() || entry.trace.length));
@@ -145,21 +169,19 @@ export function useConversation(taskId: string, revision = 0) {
 
   const refetch = useCallback(() => load(true), [load]);
 
-  // 直播事件也会顺手补一发 sessions。它跟 load() 共用同一个代号：切走（或又起了一轮
-  // 读取）之后才回来的那一发直接丢掉，否则它会把上一个任务的会话盖到当前任务上——
-  // 那时 ready 已经是 true，页面不会有任何「还在读」的迹象。同一轮之内则按票号排序。
+  // 直播事件也会顺手补一发 sessions。跨任务仍由代号兜住：切走之后才回来的那一发直接
+  // 丢掉，否则它会把上一个任务的会话盖到当前任务上——那时 ready 已经是 true，页面不会
+  // 有任何「还在读」的迹象。同一个任务之内不比顺序，交给 mergeSessions 合并。
   const refreshSessions = useCallback(() => {
     const token = loadToken.current;
-    const ticket = ++sessionsTicket.current;
     void api.sessions(taskId).then((next) => {
-      if (token === loadToken.current) applySessions(ticket, next);
+      if (token === loadToken.current) applySessions(next);
     }).catch(() => undefined);
   }, [applySessions, taskId]);
 
   useEffect(() => {
+    // 换任务先清空：合并只在同一个任务内做，跨任务的在途请求由代号挡在外面。
     setSessions([]);
-    // 清空也是一次写入，票号取最新的：切任务时还在途的那些请求一律比它旧，回来即作废。
-    sessionsApplied.current = ++sessionsTicket.current;
     setPersisted([]);
     setLoadedTaskId(null);
     setTranscriptTaskId(null);

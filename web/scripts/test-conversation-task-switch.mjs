@@ -17,12 +17,13 @@ const turn = (text, at) => `${RS}${JSON.stringify({ t: "user", text, at })}`;
 const outputs = {
   "task-a": `${turn("【答复】\na1的答案", "2026-09-10T02:00:00Z")}\n任务 A 的回复正文\n`,
   "task-b": `${turn("【答复】\nb1的答案", "2026-09-10T02:00:00Z")}\n任务 B 的回复正文\n`,
+  "task-a-s2": "任务 A 第二条会话的正文\n",
 };
-const session = (id, taskId) => ({
+const session = (id, taskId, startedAt = "2026-09-10T01:00:00Z") => ({
   id, taskId, role: "single", agentType: "claude",
-  startedAt: "2026-09-10T01:00:00Z", endedAt: "2026-09-10T02:10:00Z",
+  startedAt, endedAt: "2026-09-10T02:10:00Z",
 });
-const outputFor = (sessionId) => outputs[sessionId.replace(/-s1$|-late$/, "")] ?? "";
+const outputFor = (sessionId) => outputs[sessionId] ?? outputs[sessionId.replace(/-(s\d+|late)$/, "")] ?? "";
 
 const server = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
 let browser;
@@ -202,6 +203,71 @@ try {
       await sessionsOf(page),
       "task-a-s1,task-a-s2",
       "重读发得更早、回得更晚，不许把已经写进去的新会话抹掉",
+    );
+    assert.equal(await readyOf(page), "true/true");
+    await page.close();
+  }
+
+  // ── 到达顺序跟发起顺序相反：先发的那一发最后回来，带的却是**更新**的快照 ──
+  // 连接池/代理会把请求打乱，客户端判不出谁的快照更新，所以这一段必须跟上一段同时成立。
+  {
+    let releaseReload;
+    const heldReload = new Promise((resolve) => { releaseReload = resolve; });
+    pending.push(() => releaseReload());
+    let armed = false;
+    let reloadHeld = false;
+    let liveCalls = 0;
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-a/sessions" || !armed) return false;
+      if (!reloadHeld) {
+        // 手动重读这一发先出门，却卡在连接层；放行时服务端那边已经有 s2 了。
+        reloadHeld = true;
+        await heldReload;
+        await route.fulfill({ json: [
+          session("task-a-s1", "task-a"),
+          session("task-a-s2", "task-a", "2026-09-10T01:30:00Z"),
+        ] });
+        return true;
+      }
+      // 直播补刷后出门却先到，它读到的还是只有 s1 的旧快照。
+      liveCalls += 1;
+      await route.fulfill({ json: [session("task-a-s1", "task-a")] });
+      return true;
+    });
+    await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
+
+    armed = true;
+    await page.getByRole("button", { name: "重读会话" }).click();
+    const heldDeadline = Date.now() + 5000;
+    while (!reloadHeld && Date.now() < heldDeadline) await page.waitForTimeout(20);
+    assert.ok(reloadHeld, "重读那一发已经出门并卡住");
+
+    await page.evaluate(() => {
+      for (const source of window.__sources.filter((item) => !item.closed)) {
+        source.onmessage?.({ data: JSON.stringify({
+          type: "agent.event", taskId: "task-a", event: { kind: "session", sessionId: "task-a-s1" },
+        }) });
+      }
+    });
+    const liveDeadline = Date.now() + 5000;
+    while (liveCalls < 1 && Date.now() < liveDeadline) await page.waitForTimeout(20);
+    await page.waitForTimeout(100);
+    assert.equal(await sessionsOf(page), "task-a-s1", "旧快照先到，此刻确实还只有 s1");
+
+    releaseReload();
+    const settleDeadline = Date.now() + 3000;
+    while (Date.now() < settleDeadline && await sessionsOf(page) !== "task-a-s1,task-a-s2") {
+      await page.waitForTimeout(50);
+    }
+    assert.equal(
+      await sessionsOf(page),
+      "task-a-s1,task-a-s2",
+      "先发后到的那一份带着新会话，不能因为「发得早」就判定它更旧",
+    );
+    assert.match(
+      await page.locator(".task-conversation").innerText(),
+      /任务 A 第二条会话的正文/,
+      "正文读到了 s2，会话列表就不能只剩 s1——那是自相矛盾的 ready 状态",
     );
     assert.equal(await readyOf(page), "true/true");
     await page.close();

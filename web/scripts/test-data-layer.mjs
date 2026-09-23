@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mergeFeed, timeMs } from "@ash/shared/team";
 import { ApiError, api } from "../src/lib/api.ts";
-import { mergeUserTimeline } from "../src/lib/useConversation.ts";
+import { mergeSessions, mergeUserTimeline } from "../src/lib/useConversation.ts";
 import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { taskDurationInfo } from "../src/task-detail/utils.ts";
@@ -152,6 +152,21 @@ try {
   };
   assert.deepEqual(mergeUserTimeline([optimisticReply], serverReply), [serverReply], "服务端落盘事件应替换同一条乐观消息");
   assert.deepEqual(mergeUserTimeline([serverReply], optimisticReply), [serverReply], "事件先到时，后来的乐观消息不能重复追加");
+
+  // sessions 的两个写者（全量重读 / 直播补刷）谁的快照更新，客户端判不出来 ——
+  // 合并必须与到达顺序无关：并集 + 同一条取更晚被写过的那份。
+  const s1 = { id: "s1", taskId: "t", startedAt: "2026-07-30T01:00:00.000Z", endedAt: null, turnStartedAt: null };
+  const s1Ended = { ...s1, endedAt: "2026-07-30T01:05:00.000Z" };
+  const s2 = { id: "s2", taskId: "t", startedAt: "2026-07-30T01:06:00.000Z", endedAt: null, turnStartedAt: null };
+  assert.deepEqual(mergeSessions([s1], [s1, s2]).map((s) => s.id), ["s1", "s2"], "新起的会话要补进来");
+  assert.deepEqual(mergeSessions([s1, s2], [s1]).map((s) => s.id), ["s1", "s2"], "更旧的快照不能把新会话抹掉");
+  assert.deepEqual(mergeSessions([s1Ended], [s1])[0], s1Ended, "已经收口的那份不被未收口的旧快照盖回去");
+  assert.deepEqual(mergeSessions([s1], [s1Ended])[0], s1Ended, "收口了就跟着更新");
+  assert.deepEqual(
+    mergeSessions(mergeSessions([], [s1, s2]), [s1Ended]).map((s) => [s.id, s.endedAt]),
+    mergeSessions(mergeSessions([], [s1Ended]), [s1, s2]).map((s) => [s.id, s.endedAt]),
+    "两份快照换个顺序合并，结果必须一样",
+  );
 
   const systemHandoff = { ...serverReply, id: "system-handoff", text: "请读取 report.md", bySystem: true };
   const handoffConversation = buildConversationItems([], [session], mergeUserTimeline([], systemHandoff));
