@@ -128,7 +128,7 @@ export async function taskFileRoot(taskId: string): Promise<WorkspaceRoot | null
  * UNC(`\\server\share`、`\\?\C:\`)和 8.3 短名则是另一类 —— 前缀比较根本盖不住,
  * 单独由 windowsPathRejection 拒掉。
  */
-async function resolveInRoot(root: string, relPath: string): Promise<string> {
+export async function resolveInRoot(root: string, relPath: string): Promise<string> {
   const outside = () => Object.assign(new Error("路径不在这个任务的工作目录里"), { status: 400 });
   const rootAbs = resolve(root);
   const target = resolve(rootAbs, relPath || ".");

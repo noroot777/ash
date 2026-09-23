@@ -193,6 +193,54 @@ export type FileContent = {  path: string;
   mime: string | null;
 };
 
+/**
+ * 「这是什么、有多大、git 怎么看它、现在能不能删」。
+ *
+ * 文件夹详情页和删除确认框读同一份：确认框要说的话（里面多少个文件、几个未跟踪、删了
+ * 还找不找得回来）正是详情页要展示的东西。
+ */
+export type FileEntryOverview = {
+  root: FileWorkspaceRoot;
+  target: {
+    path: string;
+    name: string;
+    kind: "dir" | "file";
+    size: number;
+    mtime: string | null;
+    absPath: string;
+    symlink: boolean;
+  };
+  /** 文件夹才有：递归统计。`truncated` = 数到上限停了，数字是「至少这么多」。 */
+  stats: { files: number; dirs: number; bytes: number; truncated: boolean } | null;
+  /** 文件夹才有：这一层的子项。 */
+  entries: FileEntry[] | null;
+  git: {
+    repo: boolean;
+    /** 被跟踪的文件数 >0 = 删了还能从提交里找回来。 */
+    tracked: number;
+    dirty: number;
+    /** 未跟踪 = git 里没有任何备份的那些。 */
+    untracked: number;
+    untrackedSamples: string[];
+    error: string | null;
+  };
+  /** 这台机器上删除的去向。`available:false` 时只剩永久删除那一档。 */
+  trash: { available: boolean; label: string | null; reason: string | null };
+  /** 非 null = 这个工作区此刻只读（归档 / 回落主仓 / 预览实例），删除按钮要禁掉。 */
+  readOnly: string | null;
+  /** 这个目录上有没有任务在跑——有就得先弹一次「明知故犯」的确认。 */
+  busy: { running: boolean; reason: string | null };
+};
+
+export type FileDeleteResult = {
+  ok: true;
+  mode: "trash" | "permanent";
+  path: string;
+  name: string;
+  kind: "dir" | "file";
+  absPath: string;
+};
+
 /** 本机上能打开某个文件的一个应用。`match` 说明它凭什么被列进来。 */
 export type AppOpener = {
   id: string;

@@ -53,6 +53,8 @@ import type {
   DetectedCli,
   DirectoryPick,
   FileContent,
+  FileDeleteResult,
+  FileEntryOverview,
   FileListing,
   FileSearchResult,
   FileWorkspaceRoot,
@@ -462,6 +464,21 @@ export const api = {
     appId: string | null,
   ): Promise<{ ok: true; absPath: string }> =>
     request(`/tasks/${id(taskId)}/file/open`, json("POST", { path, appId })),
+  // 文件夹详情页和删除确认框读的是同一份（见 FileEntryOverview）。
+  taskFileOverview: (taskId: string, path: string, signal?: AbortSignal): Promise<FileEntryOverview> =>
+    request(`/tasks/${id(taskId)}/file/overview?path=${id(path)}`, { signal }),
+  // 删除默认移到系统废纸篓。两种 409 都不是「失败」而是「再确认一次」，所以**别在这一层
+  // 偷偷补 force、也别把 trashFailed 自动降级成永久删除**：那两下都得用户自己点。
+  deleteTaskFile: (
+    taskId: string,
+    path: string,
+    options: { mode?: "trash" | "permanent"; force?: boolean } = {},
+  ): Promise<FileDeleteResult> =>
+    request(`/tasks/${id(taskId)}/file`, json("DELETE", {
+      path,
+      mode: options.mode ?? "trash",
+      force: options.force ?? false,
+    })),
 
   // 工作区源代码管理。写操作在任务运行中会被后端拦成 409（body 带 needsForce），
   // 由调用点弹确认框后带 force 重试——别在这一层偷偷补 force。

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   ArrowClockwise,
+  ArrowSquareOut,
   CaretDown,
   CaretRight,
   Eye,
@@ -34,6 +35,7 @@ function Level({
   showIgnored,
   activePath,
   onOpenFile,
+  onOpenFolder,
   onOpenDiff,
   decorations,
 }: {
@@ -43,6 +45,7 @@ function Level({
   showIgnored: boolean;
   activePath: string | null;
   onOpenFile: (entry: FileEntry) => void;
+  onOpenFolder: ((path: string) => void) | undefined;
   onOpenDiff: ((target: ScmDiffTarget) => void) | undefined;
   decorations: ReadonlyMap<string, FileGitDecoration>;
 }) {
@@ -73,38 +76,52 @@ function Level({
         const diffTarget = entry.kind === "file" && onOpenDiff ? decoration?.diff ?? null : null;
         return (
           <div key={entry.path} className="file-tree__node">
-            <button
-              type="button"
-              className={`file-tree__row${active ? " is-active" : ""}${entry.ignored ? " is-ignored" : ""}`}
-              data-git-kind={decoration?.kind}
-              aria-label={gitLabel
-                ? `${entry.name}，${gitLabel}${diffTarget ? "，打开对比" : ""}`
-                : undefined}
-              style={{ paddingLeft: 6 + depth * 12 }}
-              aria-expanded={entry.kind === "dir" ? open : undefined}
-              onClick={() => {
-                if (entry.kind === "dir") tree.toggle(entry.path);
-                else if (diffTarget && onOpenDiff) onOpenDiff(diffTarget);
-                else onOpenFile(entry);
-              }}
-            >
-              <span className="file-tree__caret" aria-hidden="true">
-                {entry.kind === "dir"
-                  ? (open ? <CaretDown size={10} weight="bold" /> : <CaretRight size={10} weight="bold" />)
-                  : null}
-              </span>
-              <span className="file-tree__glyph">
-                {entry.kind === "dir"
-                  ? (open ? <FolderOpen size={13} aria-hidden="true" /> : <Folder size={13} aria-hidden="true" />)
-                  : <FileGlyph name={entry.name} />}
-              </span>
-              <span className="file-tree__name">{entry.name}</span>
-              {entry.symlink && <em className="file-tree__tag">软链</em>}
-              {decoration && <span className="file-tree__git-badge" aria-hidden="true">
-                {entry.kind === "dir" ? "●" : KIND_BADGE[decoration.kind]}
-              </span>}
-              {entry.kind === "file" && <small>{formatSize(entry.size)}</small>}
-            </button>
+            {/* 行本身是一颗按钮，所以「打开文件夹详情」只能做成它的**兄弟**：嵌在里面的话
+                浏览器会把里层按钮拎出去，点哪儿都变成点了整行（ScmChangeGroup 踩过）。 */}
+            <div className="file-tree__row-wrap">
+              <button
+                type="button"
+                className={`file-tree__row${active ? " is-active" : ""}${entry.ignored ? " is-ignored" : ""}`}
+                data-git-kind={decoration?.kind}
+                aria-label={gitLabel
+                  ? `${entry.name}，${gitLabel}${diffTarget ? "，打开对比" : ""}`
+                  : undefined}
+                style={{ paddingLeft: 6 + depth * 12 }}
+                aria-expanded={entry.kind === "dir" ? open : undefined}
+                onClick={() => {
+                  if (entry.kind === "dir") tree.toggle(entry.path);
+                  else if (diffTarget && onOpenDiff) onOpenDiff(diffTarget);
+                  else onOpenFile(entry);
+                }}
+              >
+                <span className="file-tree__caret" aria-hidden="true">
+                  {entry.kind === "dir"
+                    ? (open ? <CaretDown size={10} weight="bold" /> : <CaretRight size={10} weight="bold" />)
+                    : null}
+                </span>
+                <span className="file-tree__glyph">
+                  {entry.kind === "dir"
+                    ? (open ? <FolderOpen size={13} aria-hidden="true" /> : <Folder size={13} aria-hidden="true" />)
+                    : <FileGlyph name={entry.name} />}
+                </span>
+                <span className="file-tree__name">{entry.name}</span>
+                {entry.symlink && <em className="file-tree__tag">软链</em>}
+                {decoration && <span className="file-tree__git-badge" aria-hidden="true">
+                  {entry.kind === "dir" ? "●" : KIND_BADGE[decoration.kind]}
+                </span>}
+                {entry.kind === "file" && <small>{formatSize(entry.size)}</small>}
+              </button>
+              {entry.kind === "dir" && onOpenFolder && (
+                <button
+                  type="button"
+                  className="file-tree__peek"
+                  aria-label={`打开 ${entry.name} 文件夹详情`}
+                  onClick={() => onOpenFolder(entry.path)}
+                >
+                  <ArrowSquareOut size={11} aria-hidden="true" />
+                </button>
+              )}
+            </div>
             {entry.kind === "dir" && open && (
               <Level
                 path={entry.path}
@@ -113,6 +130,7 @@ function Level({
                 showIgnored={showIgnored}
                 activePath={activePath}
                 onOpenFile={onOpenFile}
+                onOpenFolder={onOpenFolder}
                 onOpenDiff={onOpenDiff}
                 decorations={decorations}
               />
@@ -138,16 +156,23 @@ function Level({
  *
  * 带 git 标识（有颜色）的文件点开走 `onOpenDiff`：改过的文件，用户点它是想看改了什么。
  * 没接 `onOpenDiff` 的表面退回全文，行为跟以前一样。
+ *
+ * 文件夹点一下仍然只是展开/折叠。要看它里面有多少东西、或者把它整个删掉，走行尾那颗
+ * 「打开文件夹详情」——删除入口只有中间视图一处，树里不放危险按钮（行高 24px，紧挨着
+ * 展开箭头，那是误点重灾区）。
  */
 export function FileTreeInspector({
   taskId,
   activePath,
   onOpenFile,
+  onOpenFolder,
   onOpenDiff,
 }: {
   taskId: string;
   activePath: string | null;
   onOpenFile: (path: string) => void;
+  /** 在中间栏摊开文件夹详情。没接就不显示行尾那颗按钮。 */
+  onOpenFolder?: (path: string) => void;
   onOpenDiff?: (target: ScmDiffTarget) => void;
 }) {
   const tree = useFileTree(taskId);
@@ -213,6 +238,7 @@ export function FileTreeInspector({
           showIgnored={showIgnored}
           activePath={activePath}
           onOpenFile={(entry) => onOpenFile(entry.path)}
+          onOpenFolder={onOpenFolder}
           onOpenDiff={onOpenDiff}
           decorations={decorations}
         />

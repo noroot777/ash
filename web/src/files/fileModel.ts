@@ -23,6 +23,29 @@ function messageOf(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
+/**
+ * 「这个任务的工作目录被我们自己改了」。
+ *
+ * 只有一个订阅者（文件树）和一个发布者（中间栏的删除），却仍然走一个小广播：两边是
+ * inspector 和中间栏两棵子树里的兄弟组件，没有共同的状态可挂，而删完之后树上那一行必须
+ * 当场消失——等 5 秒轮询轮到它，用户看到的是「删了个东西，它还在」。
+ */
+const treeListeners = new Map<string, Set<() => void>>();
+
+export function fileTreeChanged(taskId: string): void {
+  for (const listener of treeListeners.get(taskId) ?? []) listener();
+}
+
+function subscribeFileTree(taskId: string, listener: () => void): () => void {
+  const set = treeListeners.get(taskId) ?? new Set();
+  set.add(listener);
+  treeListeners.set(taskId, set);
+  return () => {
+    set.delete(listener);
+    if (!set.size) treeListeners.delete(taskId);
+  };
+}
+
 const withAdded = (set: ReadonlySet<string>, value: string) => new Set(set).add(value);
 const withRemoved = (set: ReadonlySet<string>, value: string) => {
   const next = new Set(set);
@@ -122,11 +145,14 @@ export function useFileTree(taskId: string) {
     };
     const timer = window.setInterval(() => void tick(), 5000);
     document.addEventListener("visibilitychange", tick);
+    // 自己人改了工作目录（删文件/文件夹）就立刻重拉，不等这一轮 5 秒。
+    const unsubscribe = subscribeFileTree(taskId, () => void refresh());
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", tick);
+      unsubscribe();
     };
-  }, [refresh]);
+  }, [refresh, taskId]);
 
   return {
     root,

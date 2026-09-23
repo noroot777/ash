@@ -34,6 +34,13 @@
 .file-tree__row[data-git-kind] .file-tree__name, .file-tree__row[data-git-kind] .file-tree__glyph { color:var(--file-git-color); }
 .file-tree__git-badge { width:12px; flex:0 0 12px; color:var(--file-git-color); text-align:center; font-family:var(--font-mono); font-size:9px; font-weight:600; }
 
+/* 行是一颗按钮，所以「打开文件夹详情」只能是它的兄弟，绝对定位压在行尾那点留白上。
+   悬停/聚焦才现身：24px 的行里常驻第二颗按钮会挤掉文件名，也是误点重灾区。 */
+.file-tree__row-wrap { position:relative; }
+.file-tree__peek { position:absolute; top:2px; right:4px; display:none; width:20px; height:20px; place-items:center; border:1px solid var(--line2); border-radius:5px; background:var(--panel); color:var(--muted); }
+.file-tree__row-wrap:hover .file-tree__peek, .file-tree__peek:focus-visible { display:grid; }
+.file-tree__peek:hover { background:var(--raised); color:var(--accent); }
+
 .file-viewer { display:flex; min-width:0; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
 .file-viewer__bar { display:flex; min-height:52px; flex:0 0 auto; align-items:center; gap:8px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
 .file-viewer__title { min-width:0; flex:1; }
@@ -42,6 +49,9 @@
 .file-viewer__action { display:inline-flex; height:28px; flex:0 0 auto; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 9px; color:var(--muted); font-size:10.5px; }
 .file-viewer__action:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
 .file-viewer__action:disabled { opacity:.5; }
+/* 删除单独成组：跟「关闭」之间隔一道竖线，避免顺手点到。真正的防线是那个确认框。 */
+.file-viewer__danger-group { display:flex; flex:0 0 auto; align-items:center; gap:8px; margin-left:2px; border-left:1px solid var(--line); padding-left:8px; }
+.file-viewer__action.is-danger:hover:not(:disabled) { border-color:color-mix(in lch,var(--red) 45%,var(--line2)); background:color-mix(in lch,var(--red) 9%,var(--panel)); color:var(--red); }
 .file-viewer__notice { display:flex; align-items:center; gap:5px; margin:0; border-bottom:.5px solid var(--line); background:color-mix(in lch,var(--amber) 8%,var(--panel)); padding:6px 16px; color:var(--muted); font-size:10px; }
 .file-viewer__body { display:flex; min-height:0; flex:1; flex-direction:column; overflow:auto; }
 .file-viewer__state { display:flex; align-items:center; gap:6px; margin:18px; color:var(--faint); font-size:11px; }
@@ -62,6 +72,52 @@
    层本身的定位、层高见 `zoom-layer.css`。 */
 .zoom-layer--file > .file-viewer { min-height:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; }
 .zoom-layer--file .single-review-code { max-height:none; flex:1; }
+
+/* 文件夹详情：跟文件全文抢中间栏同一个位置，所以顶栏沿用 .file-viewer__bar，只换 body。
+   内容限宽 860px——统计卡和子项清单都是短行，铺满超宽屏会读得很累。 */
+.folder-viewer__body { display:flex; width:100%; max-width:860px; min-height:0; flex-direction:column; gap:14px; padding:18px 20px 26px; }
+.folder-viewer__stats { display:flex; flex-wrap:wrap; gap:8px; }
+.folder-viewer__stat { min-width:116px; flex:1; border:.5px solid var(--line); border-radius:10px; background:var(--panel); padding:10px 12px; }
+.folder-viewer__stat b { display:block; color:var(--ink); font-size:17px; font-weight:680; letter-spacing:-.02em; }
+.folder-viewer__stat span { color:var(--faint); font-size:10px; }
+.folder-viewer__stat[data-tone="dirty"] b { color:var(--amber); }
+.folder-viewer__stat[data-tone="untracked"] b { color:var(--green); }
+.folder-viewer__section { overflow:hidden; border:.5px solid var(--line); border-radius:10px; background:var(--panel); }
+.folder-viewer__section > h3 { display:flex; align-items:center; justify-content:space-between; margin:0; border-bottom:.5px solid var(--line); padding:8px 12px; color:var(--muted); font-size:10.5px; font-weight:600; }
+.folder-viewer__section > h3 em { color:var(--faint); font-style:normal; font-weight:450; }
+.folder-viewer__list { display:flex; flex-direction:column; }
+.folder-viewer__item { display:flex; width:100%; align-items:center; gap:8px; border:0; border-top:.5px solid var(--line); background:transparent; padding:7px 12px; text-align:left; }
+.folder-viewer__item:first-child { border-top:0; }
+.folder-viewer__item:hover { background:var(--raised); }
+.folder-viewer__item.is-ignored { opacity:.55; }
+.folder-viewer__item > svg { flex:0 0 auto; color:var(--faint); }
+.folder-viewer__item b { min-width:0; flex:1; overflow:hidden; color:var(--ink); font-size:11.5px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
+.folder-viewer__item small { flex:0 0 auto; color:var(--faint); font-family:var(--font-mono); font-size:9.5px; }
+.folder-viewer__note { display:flex; gap:7px; margin:0; border:1px dashed var(--line2); border-radius:10px; padding:10px 12px; color:var(--faint); font-size:10.5px; line-height:1.7; }
+.folder-viewer__note > svg { margin-top:2px; flex:0 0 auto; color:var(--amber); }
+
+/* 删除确认框里的「后果卡」。红色只留给两件事：有人正在写这个目录、git 里没有备份；
+   「这台机器没废纸篓」是要当心而不是要命，走琥珀那一档。 */
+.file-delete__fact { display:flex; gap:9px; margin-top:13px; border:1px solid var(--line); border-radius:12px; background:var(--raised); padding:11px 13px; }
+.file-delete__fact > span { display:grid; flex:0 0 auto; place-items:start; margin-top:1px; color:var(--muted); }
+.file-delete__fact b { display:block; color:var(--ink); font-size:11.5px; font-weight:600; }
+.file-delete__fact p { margin:3px 0 0; color:var(--faint); font-size:10.5px; line-height:1.65; }
+.file-delete__fact.is-danger { border-color:color-mix(in lch,var(--red) 30%,var(--line)); background:color-mix(in lch,var(--red) 7%,var(--panel)); }
+.file-delete__fact.is-danger > span, .file-delete__fact.is-danger b { color:var(--red); }
+.file-delete__fact.is-warn { border-color:color-mix(in lch,var(--amber) 32%,var(--line)); background:color-mix(in lch,var(--amber) 8%,var(--panel)); }
+.file-delete__fact.is-warn > span, .file-delete__fact.is-warn b { color:var(--amber); }
+.file-delete__fact.is-ok > span { color:var(--green); }
+.file-delete__fact ul { margin:6px 0 0; padding-left:15px; color:var(--faint); font-family:var(--font-mono); font-size:10px; line-height:1.75; }
+.file-delete__switch { margin-top:6px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:4px 9px; color:var(--muted); font-size:10px; }
+.file-delete__switch:hover { background:var(--raised); color:var(--ink); }
+
+.file-delete__type { margin-top:13px; }
+.file-delete__type label { display:block; margin-bottom:6px; color:var(--muted); font-size:11px; }
+.file-delete__type label b { color:var(--ink); font-family:var(--font-mono); font-weight:650; }
+.file-delete__type input { width:100%; border:1px solid var(--line2); border-radius:9px; background:var(--panel); padding:9px 11px; color:var(--ink); font-family:var(--font-mono); font-size:12px; }
+.file-delete__type input:focus { border-color:var(--accent); outline:none; }
+.file-delete__error { display:flex; align-items:center; gap:6px; margin:11px 0 0; color:var(--red); font-size:10.5px; }
+.file-delete__error.is-busy { color:var(--faint); }
 
 .file-openwith { position:relative; flex:0 0 auto; }
 .file-openwith__menu { position:absolute; z-index:40; top:calc(100% + 5px); right:0; width:250px; max-height:340px; overflow-y:auto; }

@@ -7,6 +7,7 @@ import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { useSubagents } from "./useSubagents.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
+import { FolderViewer } from "../files/FolderViewer.tsx";
 import { useFileView } from "../files/useFileView.ts";
 import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
@@ -306,6 +307,12 @@ export function TaskDetail({
           subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
+        onOpenFolder: (path: string) => {
+          setPreviewOpen(false);
+          fileView.openFolder(path);
+          subagents.closeAgent();
+          if (reviewOpen) changeReviewOpen(false);
+        },
         activeFilePath: fileView.activePath,
         openScmDiff: fileView.diff,
         onOpenScmDiff: (target: ScmDiffTarget) => {
@@ -377,6 +384,18 @@ export function TaskDetail({
                 onToggleZoom={fileView.toggleZoom}
                 onExitZoom={fileView.exitZoom}
                 onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
+                onClose={fileView.close}
+                notify={notify}
+              />
+            ) : fileView.folderPath ? (
+              <FolderViewer
+                taskId={task.id}
+                path={fileView.folderPath}
+                zoomed={fileView.zoomed}
+                onToggleZoom={fileView.toggleZoom}
+                onExitZoom={fileView.exitZoom}
+                onOpenFile={fileView.openFile}
+                onOpenFolder={fileView.openFolder}
                 onClose={fileView.close}
                 notify={notify}
               />

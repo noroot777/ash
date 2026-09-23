@@ -12,6 +12,7 @@ import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
+import { FolderViewer } from "../files/FolderViewer.tsx";
 import { useFileView } from "../files/useFileView.ts";
 import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
@@ -537,6 +538,12 @@ export function TeamView({
           subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
+        onOpenFolder: (path: string) => {
+          fileView.openFolder(path);
+          setSelectedWorkerId(null);
+          subagents.closeAgent();
+          if (reviewOpen) changeReviewOpen(false);
+        },
         onOpenDiff: (target: ScmDiffTarget) => {
           fileView.openDiff(target);
           setSelectedWorkerId(null);
@@ -578,6 +585,18 @@ export function TeamView({
           onToggleZoom={fileView.toggleZoom}
           onExitZoom={fileView.exitZoom}
           onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
+          onClose={fileView.close}
+          notify={notify}
+        />
+      ) : fileView.folderPath ? (
+        <FolderViewer
+          taskId={task.id}
+          path={fileView.folderPath}
+          zoomed={fileView.zoomed}
+          onToggleZoom={fileView.toggleZoom}
+          onExitZoom={fileView.exitZoom}
+          onOpenFile={fileView.openFile}
+          onOpenFolder={fileView.openFolder}
           onClose={fileView.close}
           notify={notify}
         />

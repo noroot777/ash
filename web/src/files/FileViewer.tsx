@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, FolderOpen, GitDiff, SpinnerGap, Warning, X } from "@phosphor-icons/react";
+import { Copy, FolderOpen, GitDiff, SpinnerGap, Trash, Warning, X } from "@phosphor-icons/react";
 import { api, type FileContent } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { formatSize } from "./fileModel.ts";
 import { OpenWithMenu } from "./OpenWithMenu.tsx";
+import { useDeleteEntry } from "./useDeleteEntry.tsx";
 
 function TextBody({ file }: { file: FileContent }) {
   const lines = useMemo(() => (file.text ?? "").split("\n"), [file.text]);
@@ -78,6 +79,8 @@ export function FileViewer({
     label: `放大查看文件：${path}`,
     className: "zoom-layer--file",
   });
+  // 删完这个文件就没得看了，跟着关掉这块内容回到会话。
+  const deletion = useDeleteEntry({ taskId, notify, onDeleted: () => onClose() });
 
   useEffect(() => {
     let alive = true;
@@ -146,10 +149,23 @@ export function FileViewer({
         >
           <Copy size={13} aria-hidden="true" />
         </button>
-        {onToggleZoom && <ZoomToggle zoomed={zoomed} onToggle={onToggleZoom} className="file-viewer__action" />}
-        <button type="button" className="file-viewer__action" aria-label="关闭文件，回到会话" onClick={onClose}>
-          <X size={13} aria-hidden="true" />
-        </button>
+        {/* 删除单独成组：跟「关闭」之间隔一道竖线，避免顺手点到。真正的防线是那个确认框。 */}
+        <span className="file-viewer__danger-group">
+          <button
+            type="button"
+            className="file-viewer__action is-danger"
+            aria-label={`删除文件 ${path}`}
+            disabled={!!deletion.preparing}
+            onClick={() => void deletion.ask(path)}
+          >
+            <Trash size={13} aria-hidden="true" />
+            {deletion.preparing ? "准备中…" : "删除"}
+          </button>
+          {onToggleZoom && <ZoomToggle zoomed={zoomed} onToggle={onToggleZoom} className="file-viewer__action" />}
+          <button type="button" className="file-viewer__action" aria-label="关闭文件，回到会话" onClick={onClose}>
+            <X size={13} aria-hidden="true" />
+          </button>
+        </span>
       </header>
 
       {file?.truncated && (
@@ -164,6 +180,7 @@ export function FileViewer({
         {error && <p className="file-viewer__state is-error"><Warning size={14} aria-hidden="true" />{error}</p>}
         {!loading && !error && file && <Body taskId={taskId} file={file} />}
       </div>
+      {deletion.dialog}
     </div>,
   );
 }

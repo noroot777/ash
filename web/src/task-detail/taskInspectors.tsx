@@ -28,7 +28,9 @@ export interface TaskInspectorContext {
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: (updatedTask?: Task) => void;
   onOpenFile: (path: string) => void;
-  /** 文件树该高亮哪一行：摊的是全文还是 diff，对它来说是同一个文件。 */
+  /** 在中间栏摊开文件夹详情（里面有多少东西、能不能删）。 */
+  onOpenFolder: (path: string) => void;
+  /** 文件树该高亮哪一行：摊的是全文、diff 还是文件夹，对它来说是同一个路径。 */
   activeFilePath: string | null;
   openScmDiff: ScmDiffTarget | null;
   onOpenScmDiff: (target: ScmDiffTarget) => void;
@@ -60,6 +62,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
         taskId={context.task.id}
         activePath={context.activeFilePath}
         onOpenFile={context.onOpenFile}
+        onOpenFolder={context.onOpenFolder}
         onOpenDiff={context.onOpenScmDiff}
       />
     ),
