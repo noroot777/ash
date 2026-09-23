@@ -12,6 +12,7 @@ import { api, type DetectedCli } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { AgentDetectionResults } from "./AgentDetectionResults.tsx";
 import { AgentProfileRow } from "./AgentProfileRow.tsx";
+import { ClaudeModelsSettings } from "./ClaudeModelsSettings.tsx";
 
 function profileAvatar(type: AgentType) {
   if (type === "claude") return "C";
@@ -167,6 +168,7 @@ function AgentProfileGroup({
           />
         ))}
       </div>
+      {type === "claude" && <ClaudeModelsSettings notify={notify} />}
       {confirmDelete && (
         <ConfirmDialog
           title={`删除全部 ${type} 执行器`}
@@ -262,6 +264,9 @@ export function AgentProfilesSection({
               />
             ))}
           </div>
+        )}
+        {!profileGroups.some((group) => group.type === "claude") && (
+          <div className="claude-model-ungrouped"><ClaudeModelsSettings notify={notify} /></div>
         )}
         <div className="settings-card-foot agent-profile-foot">
           <span>供应商决定账号与模型目录；任务仍可逐个覆盖执行器、模型和智能水平。</span>

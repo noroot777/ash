@@ -195,9 +195,7 @@ export function ProviderModelInput({
           {status === "failed" && `仍可手填模型：${error}`}
         </small>
       )}
-      {/* CLI 官方账号:来源说明 + 刷新。执行器表用 compact 藏供应商状态行,但这条不能藏 ——
-          设置页唯一入口就是 AgentProfileRow(compact),藏掉等于按钮根本不存在。 */}
-      {!provider && (
+      {!provider && type !== "claude" && (
         <small className={cli.catalog?.error ? "is-error" : ""}>
           <span>{cliCatalogNote(cli.catalog)}</span>
           {/* 「能选到新模型」不等于「这个执行器已经在用它」:钉死的旧模型会一直跑下去,
