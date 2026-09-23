@@ -99,6 +99,7 @@
     "test:codex-archive": "tsx scripts/test-codex-session-archive.ts && tsx scripts/test-codex-resume-command.ts && tsx scripts/test-codex-desktop-catalog.ts",
     "test:codex-archive-live": "tsx scripts/test-codex-archive-live.ts",
     "test:session-trace": "tsx scripts/test-session-trace.ts",
+    "test:session-read-errors": "tsx scripts/test-session-read-errors.ts",
     "test:conversation-turn": "tsx scripts/test-conversation-turn.ts",
     "test:retry-turn": "tsx scripts/test-retry-turn.ts",
     "test:settlement-note": "tsx scripts/test-settlement-note.ts",

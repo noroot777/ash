@@ -13,6 +13,7 @@ import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
 import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
+import type { SessionTraceEntry } from "./transcript.js";
 import { sessionContext, sessionUsage } from "./usage.js";
 import { codexHome, findArchivedRollout, readCodexCliVersion } from "./executors/codex-rollout.js";
 import { affectedCodexSessionWarning } from "./executors/version-policy.js";
@@ -52,29 +53,63 @@ export async function sessionsForTask(taskId: string): Promise<Session[]> {
   return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id))));
 }
 
-export async function sessionOutputText(taskId: string, sessionId: string): Promise<string> {
+/**
+ * 读一份 run 产物。**「文件还没建」和「读不出来」是两回事**，调用方必须能分开：
+ * 前者对刚起跑、还没落第一笔的会话是合法的空；后者（权限、I/O、路径解析，以及
+ * 已经收口的会话 transcript 丢了）是故障。一律吞成空字符串的话，前端会把 200 空正文
+ * 当成「正文已完整读到」，放开问答历史的去重门禁，把匹配不上的记录整屏补出来 ——
+ * 正是这个任务一开始要修的那屏答复卡（第 2 轮审查）。
+ */
+type RunFileRead<T> = { ok: true; value: T } | { ok: false; missing: boolean };
+
+async function readRunFile(path: string): Promise<RunFileRead<string>> {
   try {
-    return await readFile(readableRunPath(sessionTranscriptPath(taskId, sessionId)), "utf8");
-  } catch {
-    return "";
+    return { ok: true, value: await readFile(readableRunPath(path), "utf8") };
+  } catch (err) {
+    return { ok: false, missing: (err as NodeJS.ErrnoException)?.code === "ENOENT" };
   }
 }
 
-export async function sessionTraceEntries(taskId: string, sessionId: string) {
+export async function readSessionOutput(taskId: string, sessionId: string): Promise<RunFileRead<string>> {
+  return readRunFile(sessionTranscriptPath(taskId, sessionId));
+}
+
+export async function readSessionTrace(
+  taskId: string,
+  sessionId: string,
+): Promise<RunFileRead<SessionTraceEntry[]>> {
+  const raw = await readRunFile(sessionTracePath(taskId, sessionId));
+  if (!raw.ok) return raw;
+  let trace: SessionTraceEntry[];
   try {
-    const raw = await readFile(readableRunPath(sessionTracePath(taskId, sessionId)), "utf8");
-    const trace = parseSessionTrace(raw);
-    if (!trace.some((entry) => entry.event.kind === "tool" && entry.event.nativeWork)) return trace;
-    try {
-      const row = (await db.select().from(sessions).where(eq(sessions.id, sessionId))).at(0);
-      return row && row.taskId === taskId
-        ? await enrichNativeWorkModels(trace, row, await sessionCliConfigDir(row, row.agentType)) : trace;
-    } catch {
-      return trace;
-    }
+    trace = parseSessionTrace(raw.value);
   } catch {
-    return [];
+    // 文件在、却解析不出来：这跟读不出来一样是故障，别装作这条会话没干过活。
+    return { ok: false, missing: false };
   }
+  if (!trace.some((entry) => entry.event.kind === "tool" && entry.event.nativeWork)) return { ok: true, value: trace };
+  try {
+    const row = (await db.select().from(sessions).where(eq(sessions.id, sessionId))).at(0);
+    // 补模型名只是锦上添花，补不上就给裸 trace —— 这一条降级是有意的。
+    return {
+      ok: true,
+      value: row && row.taskId === taskId
+        ? await enrichNativeWorkModels(trace, row, await sessionCliConfigDir(row, row.agentType)) : trace,
+    };
+  } catch {
+    return { ok: true, value: trace };
+  }
+}
+
+// 接力快照那边读不到就当空：那是一次性搬运，缺一段正文不该让整个快照失败。
+export async function sessionOutputText(taskId: string, sessionId: string): Promise<string> {
+  const read = await readSessionOutput(taskId, sessionId);
+  return read.ok ? read.value : "";
+}
+
+export async function sessionTraceEntries(taskId: string, sessionId: string): Promise<SessionTraceEntry[]> {
+  const read = await readSessionTrace(taskId, sessionId);
+  return read.ok ? read.value : [];
 }
 
 export function mountTaskSessionRoutes(api: Hono): void {
@@ -87,13 +122,24 @@ export function mountTaskSessionRoutes(api: Hono): void {
     const sid = c.req.param("id");
     const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
     if (!row) return c.json({ error: "not found" }, 404);
-    return c.text(await sessionOutputText(row.taskId, sid));
+    const read = await readSessionOutput(row.taskId, sid);
+    if (read.ok) return c.text(read.value);
+    if (unwritten(read, row)) return c.text("");
+    return c.json({ error: "transcript unreadable" }, 500);
   });
 
   api.get("/sessions/:id/trace", async (c) => {
     const sid = c.req.param("id");
     const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
     if (!row) return c.json({ error: "not found" }, 404);
-    return c.json(await sessionTraceEntries(row.taskId, sid));
+    const read = await readSessionTrace(row.taskId, sid);
+    if (read.ok) return c.json(read.value);
+    if (unwritten(read, row)) return c.json([]);
+    return c.json({ error: "trace unreadable" }, 500);
   });
+}
+
+/** 还没收口的会话可以还没建文件；已经收口了还找不到，就是丢了。 */
+function unwritten(read: { missing: boolean }, row: typeof sessions.$inferSelect): boolean {
+  return read.missing && !row.endedAt;
 }
