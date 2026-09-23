@@ -1,9 +1,19 @@
 import { useEffect, useState } from "react";
 import type { AppSettings } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { cliCatalogNote, useCliModelCatalog } from "../lib/cliModelCatalog.ts";
 import { api } from "../lib/api.ts";
+
+type RefreshResult = { text: string; error: boolean };
+
+function refreshFailure(catalog: CliModelCatalog | null): string {
+  if (catalog?.error) return catalog.error;
+  if (catalog?.skipped) return catalog.skipped;
+  if (catalog?.probeSupported === false) return "当前 ash 服务端尚不支持官方文档模型目录，请更新并重启服务端";
+  return "服务端未返回官方目录，请检查服务端版本或网络";
+}
 
 export function ClaudeModelsSettings({ notify }: { notify: (message: string) => void }) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
@@ -11,7 +21,7 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
   const [hours, setHours] = useState(6);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [fetchResult, setFetchResult] = useState<{ text: string; error: boolean } | null>(null);
+  const [fetchResult, setFetchResult] = useState<RefreshResult | null>(null);
   const isMulti = useIsMultiUser();
   const isAdmin = useIsInstanceAdmin();
   const canEdit = !isMulti || isAdmin;
@@ -36,12 +46,26 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
   const changed = models !== settings.claudeCustomModelIds.join("\n") || hours !== settings.claudeModelRefreshHours;
   const validHours = Number.isInteger(hours) && hours >= 1 && hours <= 168;
 
+  const refreshCatalog = async (): Promise<RefreshResult> => {
+    try {
+      const catalog = await cli.refresh();
+      if (catalog?.source === "docs") {
+        return { text: `已从官方更新模型目录 · ${catalog.models.length} 个候选 · ${new Date(catalog.probedAt ?? Date.now()).toLocaleTimeString()}`, error: false };
+      }
+      return { text: `官方目录未更新：${refreshFailure(catalog)}`, error: true };
+    } catch (error) {
+      return { text: error instanceof Error ? error.message : "官方目录获取失败", error: true };
+    }
+  };
+
   const save = async () => {
     setSaving(true);
     try {
       await persist();
-      void cli.refresh();
-      notify("Claude 模型目录设置已保存");
+      const result = await refreshCatalog();
+      const savedResult = { ...result, text: `目录设置已保存；${result.text}` };
+      setFetchResult(savedResult);
+      notify(savedResult.text);
     } catch (error) {
       notify(error instanceof Error ? error.message : "Claude 模型目录保存失败");
     } finally {
@@ -65,22 +89,9 @@ export function ClaudeModelsSettings({ notify }: { notify: (message: string) => 
         setSaving(false);
       }
     }
-    try {
-      const catalog = await cli.refresh();
-      if (catalog?.source === "docs") {
-        const message = `已从官方更新模型目录 · ${catalog.models.length} 个候选 · ${new Date(catalog.probedAt ?? Date.now()).toLocaleTimeString()}`;
-        setFetchResult({ text: message, error: false });
-        notify(message);
-      } else {
-        const message = `官方目录未更新：${catalog?.error ?? catalog?.skipped ?? "服务端仅返回内置别名，请检查服务端版本或网络"}`;
-        setFetchResult({ text: message, error: true });
-        notify(message);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "官方目录获取失败";
-      setFetchResult({ text: message, error: true });
-      notify(message);
-    }
+    const result = await refreshCatalog();
+    setFetchResult(result);
+    notify(result.text);
   };
 
   return (
