@@ -13,7 +13,8 @@ import type { TokenUsage } from "@ash/shared/usage";
  * 的只有会话自己那几个**单调不减**的量：回合起止时刻、累计回合数、累计 token。它们够
  * 覆盖真实的更新路径——起新回合推进 turnStartedAt，收口落 endedAt，用量事件推进 usage。
  * 版本分得出高下就按版本取；分不出（两份对应同一状态，或这家 CLI 压根不报账）就逐字段
- * 保信息：已经拿到的东西不许被 null 抹回去。两条路径都与到达顺序无关。
+ * 保信息：已经拿到的东西不许被 null 抹回去。两条路径都与到达顺序无关。唯一的例外是
+ * `context`——它是覆盖值，服务端会合法地把它调低甚至清空，见 takeContext。
  */
 
 /** 这条会话行最近一次被写过的时刻。三个字段都只会往后走。 */
@@ -47,7 +48,7 @@ function compareVersions(left: [string, number, number], right: [string, number,
  * - 一边为空 → 取非空那边（`cliSessionId`、恢复命令这类一旦写入就不会变回 null 的字段
  *   最怕被旧快照抹掉）；
  * - 都是数字/字符串 → 取较大的那个（时间戳、退出码天然如此）；
- * - 都是对象（usage / context）→ 交给下面两个专门的合并。
+ * - 都是对象（usage / context）→ 交给下面两个专门的函数。
  */
 function pickField(left: unknown, right: unknown): unknown {
   if (left == null) return right;
@@ -94,26 +95,20 @@ function sameUsage(left: TokenUsage, right: TokenUsage): boolean {
 }
 
 /**
- * 上下文水位是**覆盖**值不是流水：压缩之后它会掉下来，所以大小说明不了新旧。版本已经
- * 分不出高下了，`used` 只需要一个与顺序无关的确定结果——取水位高的那份，下一次刷新自
- * 会纠正。窗口那几个字段则是**元数据**：CLI 自报或按模型名估出来之后就不再变，所以按
- * 「谁有取谁」补齐，别让没带窗口的那一发把分母抹成 null。
+ * 上下文水位是**覆盖**值，而且服务端把「没采到」也当成一个真值：执行器读不到可信水位
+ * 时会发 `used=0` 哨兵，`setSessionContext()` 收到后把库里那几列清空，sessions API 随后
+ * 就返回 `context: null`——目的正是别再拿上一轮的陈旧数字冒充当前值（server/src/usage.ts）。
+ *
+ * 所以这一项不能合并：取大会把压缩后的低水位顶回去，「谁有取谁」会把明确的清空吃掉，
+ * 两种都让客户端永远收敛不到服务端真值。客户端判不出两份快照谁更新，那就**跟随这一发
+ * 响应**——短暂读到旧值，下一次刷新就纠正；而只增的并集是永远纠正不回来的。
+ *
+ * 代价是 context 这一项不满足交换律。这是有意的：交换律本是为「别把已拿到的信息抹掉」
+ * 服务的，而水位本来就该被抹掉。
  */
-function mergeContext(left: Session["context"], right: Session["context"]): Session["context"] {
-  if (!left) return right;
-  if (!right) return left;
-  const window = maxNullable(left.window, right.window);
-  const compactWindow = maxNullable(left.compactWindow, right.compactWindow);
-  const merged: NonNullable<Session["context"]> = {
-    used: Math.max(left.used, right.used),
-    window,
-    // 分母是不是估的要跟着被选中的那个窗口走；两边窗口一样时，只要有一边是自报的就不算估。
-    windowEstimated: left.window === right.window
-      ? left.windowEstimated && right.windowEstimated
-      : window === left.window ? left.windowEstimated : right.windowEstimated,
-    ...(compactWindow == null ? {} : { compactWindow }),
-  };
-  return sameContext(merged, left) ? left : merged;
+function takeContext(current: Session["context"], incoming: Session["context"]): Session["context"] {
+  if (current && incoming && sameContext(current, incoming)) return current;
+  return incoming;
 }
 
 function sameContext(left: NonNullable<Session["context"]>, right: NonNullable<Session["context"]>): boolean {
@@ -133,7 +128,7 @@ function mergeSessionRow(current: Session, incoming: Session): Session {
     const picked = key === "usage"
       ? mergeUsage(current.usage, incoming.usage)
       : key === "context"
-        ? mergeContext(current.context, incoming.context)
+        ? takeContext(current.context, incoming.context)
         : pickField(left, right) ?? right;
     if (picked !== left) changed = true;
     merged[key] = picked;
