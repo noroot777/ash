@@ -140,9 +140,8 @@ export function useConversation(
     return next;
   }, [abortActiveSessions, sessionsTimeoutMs, taskId]);
 
-  // 链上排在后面的那份已经写进去了，就别再拿更早读到的这份往回盖。同一个任务内的两份
-  // 快照仍按数据合并（服务端的 usage / context 分两步落库，读到中间态是常事），规则在
-  // sessionMerge.ts。
+  // 链上排在后面的那份已经写进去了，就别再拿更早读到的这份往回盖。序号让位之后剩下的
+  // 就只是「采用这一发」——为什么不再做字段级合并，见 sessionMerge.ts。
   const applySessions = useCallback((seq: number, next: Session[]) => {
     if (seq <= appliedSeq.current) return;
     appliedSeq.current = seq;
