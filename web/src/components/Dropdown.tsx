@@ -58,6 +58,8 @@ export function Dropdown({
   mono = false,
   className = "",
   panelClassName = "",
+  panelHeader,
+  filterResetKey,
   onClear,
   clearLabel = "清空",
 }: {
@@ -78,6 +80,10 @@ export function Dropdown({
   mono?: boolean;
   className?: string;
   panelClassName?: string;
+  /** 只影响候选列表的附加选择控件（例如模型目录模式）。 */
+  panelHeader?: React.ReactNode;
+  /** 切换候选集时清掉上一次的筛选词。 */
+  filterResetKey?: string;
   /** 给一个「回到不设置」的出口；候选列表里就不必再占一行「跟随…」。 */
   onClear?: () => void;
   clearLabel?: string;
@@ -89,6 +95,11 @@ export function Dropdown({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setQuery("");
+    setIndex(0);
+  }, [filterResetKey]);
 
   const close = () => {
     setOpen(false);
@@ -125,7 +136,8 @@ export function Dropdown({
     if (!rect) return;
     const below = window.innerHeight - rect.bottom - 10;
     const above = rect.top - 10;
-    const flip = below < MIN_PANEL && above > below;
+    const flipThreshold = MIN_PANEL + (panelHeader ? 80 : 0) + (note ? 50 : 0);
+    const flip = below < flipThreshold && above > below;
     const maxHeight = Math.max(MIN_PANEL, Math.min(320, flip ? above : below));
     const width = Math.max(rect.width, 200);
     setPlace({
@@ -168,6 +180,7 @@ export function Dropdown({
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {
+    if ((event.target as HTMLElement).closest(".ui-dropdown-header")) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       if (!rows.length) return;
@@ -212,8 +225,9 @@ export function Dropdown({
           ref={panelRef}
           tabIndex={-1}
           onKeyDown={onKeyDown}
-          style={{ left: place.left, top: place.top, bottom: place.bottom, width: place.width }}
+          style={{ left: place.left, top: place.top, bottom: place.bottom, width: place.width, maxHeight: place.maxHeight, overflowY: "auto" }}
         >
+          {panelHeader && <div className="ui-dropdown-header">{panelHeader}</div>}
           {filterable && (
             <div className="ui-dropdown-search">
               <input
@@ -232,7 +246,7 @@ export function Dropdown({
             className="ui-dropdown-rows"
             role="listbox"
             aria-label={label}
-            style={{ maxHeight: place.maxHeight - (filterable ? 42 : 0) - (onClear ? 28 : 0) }}
+            style={{ maxHeight: Math.max(40, place.maxHeight - (panelHeader ? 38 : 0) - (filterable ? 42 : 0) - (note ? 60 : 0) - (onClear ? 28 : 0)) }}
           >
             {!rows.length && <p className="ui-dropdown-empty">{emptyText}</p>}
             {rows.map((row, rowIndex) => {

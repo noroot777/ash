@@ -1,22 +1,23 @@
-// 「这个 CLI 现在有哪些模型」——现问 CLI,而不是只读发版时抄下的快照
+// 「这个 CLI 现在有哪些模型」——有只读命令就现问 CLI；Claude 没有清单命令，
+// 复用 ccb 的官方文档提取方式，提供完整 ID 候选（不代表账号一定可用）。
 // (`shared/src/cli-presets.ts` 的 CLI_MODEL_PRESETS:各家上新模型跟 ash 发版
 // 毫无关系,那张表必然滞后,且滞后多久取决于「有没有人想起来改它」)。
 //
 // 三条设计约束,都来自这个系统里已有的先例:
-//  ① **只问,不跑**:探测走 spec.models 那条只读查询命令(`grok models` 之类),绝不
+//  ① **只问,不跑**:探测走只读清单命令(`grok models` 之类)或公开文档,绝不
 //     为了拿清单起一个真实回合 —— skills.ts 顶部记着教训:那一下 haiku 烧了 $0.084。
 //  ② **诚实降级**:探不到(没装 / 没登录 / 命令改了)就退回快照,并把原因原样带给前端。
 //     `source` 字段就是给界面区分「实时目录」和「内置兜底」用的,不许拿后者冒充前者。
 //  ③ **缓存 + 显式刷新**:跟 skills 一样是内存缓存(重启即重探,不会有陈旧数据长期骗人),
 //     TTL 到点自动重探,用户也能在选择器里点「刷新」强制现问。
-//  ④ **多人模式下一次都不问**:探测问的是宿主机那个登录账号,而 §八 要抹掉的就是它。
+//  ④ **多人模式下一次都不问**:CLI 清单问的是宿主机那个登录账号,而 §八 要抹掉的就是它。
 //     判据见 `modelCatalogFor` 顶部 —— 这条端点没有鉴权可言(它不读任何人的资源),
 //     真正的边界是「多人模式下压根不去起这个子进程」。
 //
 // 为什么不落库:清单是**本机 CLI 当下的事实**,不是用户配置。落库要额外处理「换了
 // CLI 版本 / 换了登录账号 / 卸载了」的失效,而重启后重探一次的代价只有几百毫秒。
 
-import type { AgentType } from "@ash/shared";
+import type { AgentType, AppSettings } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
 import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@ash/shared/multiuser";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
@@ -25,6 +26,8 @@ import { probeBins } from "./bin-probe.js";
 import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 import { execFileText as exec } from "../exec.js";
 import { isHostCliIsolated } from "../auth/mode.js";
+import { fetchClaudeDocModels } from "./claude-doc-models.js";
+import { getAppSettings } from "../app-settings.js";
 
 /** 探测结果的保鲜期。到点后下一次读取会**等**一次重探(不做后台预热那套复杂度)。 */
 const TTL_MS = 6 * 60 * 60 * 1000;
@@ -56,7 +59,7 @@ const presetCatalog = (type: AgentType, patch: Partial<CliModelCatalog> = {}): C
   models: [...CLI_MODEL_PRESETS[type]],
   defaultModel: null,
   source: "preset",
-  probeSupported: !!CLI_SPEC_BY_KEY[type]?.models,
+  probeSupported: type === "claude" || !!CLI_SPEC_BY_KEY[type]?.models,
   available: false,
   probedAt: null,
   cliVersion: null,
@@ -97,7 +100,33 @@ export function normalizeModelList(models: string[], defaultModel: string | null
   return ordered;
 }
 
-async function probe(type: AgentType): Promise<CliModelCatalog> {
+async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelCatalog> {
+  if (type === "claude") {
+    const config = settings ?? await getAppSettings();
+    const custom = config.claudeCustomModelIds;
+    const base = {
+      refreshIntervalHours: config.claudeModelRefreshHours,
+      models: normalizeModelList([...CLI_MODEL_PRESETS.claude, ...custom], null),
+    };
+    try {
+      const [models, found] = await Promise.all([
+        fetchClaudeDocModels(),
+        probeBins(CLI_SPEC_BY_KEY.claude.bins, CLI_SPEC_BY_KEY.claude.fallbackVersionMatch),
+      ]);
+      return {
+        ...presetCatalog(type),
+        models: normalizeModelList([...base.models, ...models], null),
+        source: "docs",
+        refreshIntervalHours: base.refreshIntervalHours,
+        available: !!found,
+        cliVersion: found?.version ?? null,
+        probedAt: new Date().toISOString(),
+        error: null,
+      };
+    } catch (error) {
+      return presetCatalog(type, { ...base, error: reasonOf(error) });
+    }
+  }
   const spec = CLI_SPEC_BY_KEY[type];
   if (!spec?.models) return presetCatalog(type);
 
@@ -141,13 +170,14 @@ async function probe(type: AgentType): Promise<CliModelCatalog> {
  * 一条缓存能存多久。导出只为回归测试钉住「降级结果不许和成功结果一样保鲜」。
  * 没有清单命令的 CLI 除外:它永远只有快照,重探不会有新结果,没必要反复问。
  */
-export function catalogTtlMs(catalog: CliModelCatalog): number {
+export function catalogTtlMs(catalog: CliModelCatalog, refreshHours = 6): number {
   if (!catalog.probeSupported) return TTL_MS;
+  if (catalog.source === "docs") return refreshHours * 60 * 60 * 1000;
   return catalog.source === "probe" ? TTL_MS : DEGRADED_TTL_MS;
 }
 
-function fresh(entry: CacheEntry | undefined): boolean {
-  return !!entry && Date.now() - entry.at < catalogTtlMs(entry.catalog);
+function fresh(entry: CacheEntry | undefined, refreshHours = 6): boolean {
+  return !!entry && Date.now() - entry.at < catalogTtlMs(entry.catalog, refreshHours);
 }
 
 /**
@@ -179,15 +209,16 @@ export function modelCatalogFor(type: AgentType, force = false): Promise<CliMode
       if (isolated) {
         // 只有本来就会去问的那几家才谈得上「没去问」;没有清单命令的 CLI 在两种模式下
         // 拿到的是同一份快照,给它挂一句多人模式的说明只会平白多出一行噪音。
-        const wouldProbe = !!CLI_SPEC_BY_KEY[type]?.models;
+        const wouldProbe = type === "claude" || !!CLI_SPEC_BY_KEY[type]?.models;
         return {
           catalog: presetCatalog(type, wouldProbe ? { skipped: MULTI_USER_HOST_CLI_MODELS_HIDDEN } : {}),
           probed: false,
         };
       }
+      const settings = type === "claude" ? await getAppSettings() : undefined;
       const cached = cache.get(type);
-      if (!force && fresh(cached)) return { catalog: cached!.catalog, probed: false };
-      return { catalog: await probe(type), probed: true };
+      if (!force && fresh(cached, settings?.claudeModelRefreshHours)) return { catalog: cached!.catalog, probed: false };
+      return { catalog: await probe(type, settings), probed: true };
     })
     .then(({ catalog, probed }) => {
       // **只有当前那次探测有权写缓存**。force 会另起一次并顶掉 inflight,此时先前
@@ -217,4 +248,20 @@ export function modelCatalogs(types?: AgentType[], force = false): Promise<CliMo
 export function resetModelCatalogCache(): void {
   cache.clear();
   inflight.clear();
+}
+
+export function resetClaudeModelCatalogCache(): void {
+  cache.delete("claude");
+  inflight.delete("claude");
+}
+
+let claudeRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startClaudeModelRefreshLoop(): void {
+  if (claudeRefreshTimer) return;
+  const refresh = () => void modelCatalogFor("claude").catch((error) =>
+    console.error("[ash] Claude 模型目录更新失败:", error));
+  refresh();
+  claudeRefreshTimer = setInterval(refresh, 60_000);
+  claudeRefreshTimer.unref();
 }

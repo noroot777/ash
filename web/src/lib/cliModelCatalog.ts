@@ -16,6 +16,11 @@ const cache = new Map<AgentType, CliModelCatalog>();
 const fetchedAt = new Map<AgentType, number>();
 const requests = new Map<AgentType, Promise<CliModelCatalog>>();
 const subscribers = new Map<AgentType, Set<(catalog: CliModelCatalog) => void>>();
+const loadingSubscribers = new Map<AgentType, Set<(loading: boolean) => void>>();
+
+function publishLoading(type: AgentType, loading: boolean) {
+  for (const notify of loadingSubscribers.get(type) ?? []) notify(loading);
+}
 
 /**
  * 降级结果(接口抖了、服务端那次没探到)隔多久允许再自动拉一次。成功的清单缓存到刷新
@@ -26,12 +31,15 @@ const DEGRADED_RETRY_MS = 60_000;
 
 function degraded(catalog: CliModelCatalog): boolean {
   // 没有清单命令的 CLI 本来就只有快照,那不是失败,别去重试。
-  return catalog.source !== "probe" && catalog.probeSupported;
+  return catalog.source === "preset" && catalog.probeSupported;
 }
 
 function shouldFetch(type: AgentType): boolean {
   const cached = cache.get(type);
   if (!cached) return true;
+  if (type === "claude" && cached.source === "docs") {
+    return Date.now() - (fetchedAt.get(type) ?? 0) >= (cached.refreshIntervalHours ?? 6) * 60 * 60 * 1000;
+  }
   if (!degraded(cached)) return false;
   return Date.now() - (fetchedAt.get(type) ?? 0) >= DEGRADED_RETRY_MS;
 }
@@ -45,6 +53,7 @@ export function presetFallback(type: AgentType, patch: Partial<CliModelCatalog> 
     source: "preset",
     // 首帧 / 接口失败也要按「这家能不能现问」画刷新按钮,不能等服务端回了才出现。
     probeSupported: CLI_MODEL_PROBE_TYPES.has(type),
+    ...(type === "claude" ? { refreshIntervalHours: 6 } : {}),
     available: false,
     probedAt: null,
     cliVersion: null,
@@ -88,9 +97,13 @@ function fetchCatalog(type: AgentType, force: boolean): Promise<CliModelCatalog>
       })),
     )
     .finally(() => {
-      if (requests.get(type) === request) requests.delete(type);
+      if (requests.get(type) === request) {
+        requests.delete(type);
+        publishLoading(type, false);
+      }
     });
   requests.set(type, request);
+  publishLoading(type, true);
   return request;
 }
 
@@ -101,10 +114,12 @@ function fetchCatalog(type: AgentType, force: boolean): Promise<CliModelCatalog>
  */
 export function useCliModelCatalog(type: AgentType | null): {
   catalog: CliModelCatalog | null;
+  loading: boolean;
   refreshing: boolean;
-  refresh: () => void;
+  refresh: () => Promise<CliModelCatalog | null>;
 } {
   const [catalog, setCatalog] = useState<CliModelCatalog | null>(() => (type ? cache.get(type) ?? presetFallback(type) : null));
+  const [loading, setLoading] = useState(() => !!type && requests.has(type));
   const [refreshing, setRefreshing] = useState(false);
   // 连点刷新时,转圈要等**最后一次**结束才停:按先结束的那次熄灯,后一次还在飞,
   // 界面却已经显示「好了」。
@@ -113,34 +128,45 @@ export function useCliModelCatalog(type: AgentType | null): {
   useEffect(() => {
     if (!type) {
       setCatalog(null);
+      setLoading(false);
       return;
     }
     let alive = true;
     pending.current = 0;
     setRefreshing(false);
     setCatalog(cache.get(type) ?? presetFallback(type));
+    setLoading(requests.has(type));
     const notify = (next: CliModelCatalog) => { if (alive) setCatalog(next); };
+    const notifyLoading = (next: boolean) => { if (alive) setLoading(next); };
     const listeners = subscribers.get(type) ?? new Set();
     listeners.add(notify);
     subscribers.set(type, listeners);
+    const pendingListeners = loadingSubscribers.get(type) ?? new Set();
+    pendingListeners.add(notifyLoading);
+    loadingSubscribers.set(type, pendingListeners);
     if (shouldFetch(type)) void fetchCatalog(type, false);
+    const interval = type === "claude"
+      ? window.setInterval(() => { if (shouldFetch(type)) void fetchCatalog(type, false); }, 60_000)
+      : null;
     return () => {
       alive = false;
       listeners.delete(notify);
+      pendingListeners.delete(notifyLoading);
+      if (interval !== null) window.clearInterval(interval);
     };
   }, [type]);
 
   const refresh = useCallback(() => {
-    if (!type) return;
+    if (!type) return Promise.resolve(null);
     pending.current += 1;
     setRefreshing(true);
-    void fetchCatalog(type, true).finally(() => {
+    return fetchCatalog(type, true).finally(() => {
       pending.current = Math.max(0, pending.current - 1);
       if (!pending.current) setRefreshing(false);
     });
   }, [type]);
 
-  return { catalog, refreshing, refresh };
+  return { catalog, loading, refreshing, refresh };
 }
 
 /**
@@ -153,12 +179,20 @@ export function cliCatalogNote(catalog: CliModelCatalog | null): string {
     const when = catalog.probedAt ? new Date(catalog.probedAt).toLocaleTimeString() : "";
     return `CLI 实时清单 · ${catalog.models.length} 个${when ? ` · ${when} 探测` : ""}`;
   }
+  if (catalog.source === "docs") {
+    const when = catalog.probedAt ? new Date(catalog.probedAt).toLocaleTimeString() : "";
+    return `Anthropic 文档模型 ID + CLI 别名 · ${catalog.models.length} 个${when ? ` · ${when} 更新` : ""}（账号可用性以实际运行为准）`;
+  }
   if (!catalog.models.length) return "该 CLI 未公布模型别名，可手填";
   // 「服务端故意没问」和「问了但失败」得分开说:写成失败的话,界面等于在催用户去点
   // 刷新，而多人模式下刷新永远不会有别的结果。
   if (catalog.skipped) return `内置清单（${catalog.skipped}）`;
+  if (catalog.type === "claude" && catalog.error) return `自填模型与内置别名（获取 Anthropic 文档失败：${catalog.error}）`;
   if (catalog.error) return `内置清单（现问 CLI 失败：${catalog.error}）`;
   if (catalog.probeSupported && !catalog.available) return "内置清单（本机没装这个 CLI，问不到）";
+  if (catalog.type === "claude") return catalog.probeSupported
+    ? "内置别名，可刷新 Anthropic 官方文档模型 ID"
+    : "CLI 内置别名（当前服务端尚无文档清单）";
   if (catalog.probeSupported) return "内置清单，可点刷新现问 CLI";
   return "CLI 自带的模型别名（该 CLI 没有可查询的清单命令）";
 }

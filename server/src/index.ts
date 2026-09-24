@@ -447,6 +447,9 @@ activeServer = serve({ fetch: app.fetch, port }, (info) => {
   } else {
     try {
       startScheduler();
+      void import("./executors/model-probe.js")
+        .then(({ startClaudeModelRefreshLoop }) => startClaudeModelRefreshLoop())
+        .catch((error) => console.error("[ash] Claude 模型目录定时检查启动失败:", error));
     } catch (e) {
       exitAfterStartupFailure("scheduler failed to start", e);
     }

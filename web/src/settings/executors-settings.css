@@ -6,6 +6,84 @@
   margin: 0 2px 8px;
 }
 
+.claude-model-settings {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in lch, var(--agent-color, #a76338) 3%, var(--panel));
+  padding: 13px 16px 15px;
+}
+
+.claude-model-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  border-bottom: 1px solid var(--line);
+  padding: 5px 6px;
+}
+.claude-model-mode-tabs button {
+  min-width: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 6px 4px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.claude-model-mode-tabs button[aria-pressed="true"] {
+  background: color-mix(in lch, #a76338 13%, var(--panel));
+  color: var(--ink);
+  font-weight: 650;
+}
+.claude-model-mode-tabs button:focus-visible { outline: 2px solid #a76338; outline-offset: -2px; }
+
+.claude-model-settings-head,
+.claude-model-settings-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.claude-model-settings-head > div:first-child { display: grid; gap: 4px; }
+.claude-model-settings-head b { font-size: 12px; }
+.claude-model-settings small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.claude-model-settings small.is-error { color: var(--red); }
+.claude-model-fetch { display: flex; flex: 0 0 auto; align-items: end; gap: 9px; }
+.claude-model-fetch label, .claude-model-custom { display: grid; align-content: start; gap: 6px; min-width: 0; font-size: 10px; color: var(--muted); }
+.claude-model-settings button {
+  flex: 0 0 auto;
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 5px 9px;
+  color: var(--ink);
+  font-size: 10px;
+  cursor: pointer;
+}
+.claude-model-settings button:disabled { opacity: .55; cursor: default; }
+.claude-model-settings input,
+.claude-model-settings textarea {
+  min-width: 0;
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 7px 8px;
+  color: var(--ink);
+  font: 11px var(--font-mono);
+}
+.claude-model-settings textarea { width: 100%; resize: vertical; }
+.claude-model-hours { display: flex; align-items: center; gap: 6px; }
+.claude-model-hours input { width: 72px; }
+.claude-model-settings :is(button, input, textarea):focus-visible { outline: 2px solid #a76338; outline-offset: 2px; }
+
+@media (max-width: 650px) {
+  .claude-model-settings-head, .claude-model-settings-foot { align-items: flex-start; flex-wrap: wrap; }
+  .claude-model-fetch { flex-wrap: wrap; }
+}
+
 .settings-section .agent-profiles-section-head h2 {
   margin: 0;
 }

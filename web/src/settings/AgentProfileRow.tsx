@@ -12,7 +12,7 @@ import {
 } from "./agentProviderRules.ts";
 import { ProfileArgsControl } from "./ProfileArgsControl.tsx";
 import { ProfileOverridesControl } from "./ProfileOverridesControl.tsx";
-import { ProviderModelInput } from "./ProviderModelInput.tsx";
+import { ProviderModelInput, type ClaudeModelMode } from "./ProviderModelInput.tsx";
 
 const SPEED_CHOICES: DropdownOption[] = [
   { value: "standard", label: "标准" },
@@ -23,11 +23,13 @@ export function AgentProfileRow({
   profile,
   providers,
   onChange,
+  onClaudeModeChange,
   notify,
 }: {
   profile: AgentExecutorProfile;
   providers: LlmProvider[];
   onChange: (profile: AgentExecutorProfile | null) => void;
+  onClaudeModeChange?: (mode: ClaudeModelMode) => void;
   notify: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -166,6 +168,7 @@ export function AgentProfileRow({
             value={profile.model ?? ""}
             disabled={busy}
             compact
+            onClaudeModeChange={onClaudeModeChange}
             // 换模型不动档位：对不上时由旁边那颗智能水平胶囊出提示，让用户自己决定改哪边。
             // 以前这里静默归一，结果是「我明明选了 ultra，回头一看变成空的」。
             onChange={(model) => onChange({ ...profile, model: model || undefined })}
