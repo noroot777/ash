@@ -112,18 +112,22 @@ export function SystemEventDigest({
       {mode === "aligned" && (
         <span className="system-event-avatar" aria-hidden="true">{eventIcon(lead.kind)}</span>
       )}
-      <details>
-        <summary>{line}</summary>
-        <ol>
-          {items.map((item) => (
-            <li key={item.id} className={`is-${systemEventKind(item.text, item.tone)}`}>
-              <span>{cleanEventText(item)}</span>
-              {item.at && <time>{formatInstant(item.at)}</time>}
-            </li>
-          ))}
-        </ol>
-      </details>
-      {action && <div className="system-event-action">{action}</div>}
+      {/* 摘要行和按钮共处一格：aligned 模式下外层是「头像列 + 正文列」两列网格，按钮
+          单独当直接子元素会被自动排进下一行的头像列里，20px 宽把三个字挤成竖排。 */}
+      <div className="system-event-digest-main">
+        <details>
+          <summary>{line}</summary>
+          <ol>
+            {items.map((item) => (
+              <li key={item.id} className={`is-${systemEventKind(item.text, item.tone)}`}>
+                <span>{cleanEventText(item)}</span>
+                {item.at && <time>{formatInstant(item.at)}</time>}
+              </li>
+            ))}
+          </ol>
+        </details>
+        {action && <span className="system-event-action">{action}</span>}
+      </div>
     </div>
   );
 }
@@ -141,8 +145,10 @@ export function SystemEventNote({ item, mode = "footnote", action }: { item: Eve
         {recovery && <b>工作区已恢复</b>}
         {recovery ? "原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。" : cleanEventText(item)}
       </p>
-      {action && <span className="system-event-action">{action}</span>}
       {item.at && <time>{formatInstant(item.at)}</time>}
+      {/* 按钮是这条旁注上的最后一件东西：正文、时间都是「发生了什么」，只有它是「你要做
+          什么」，插在正文和时间之间会把一行事实截成两段。摘要版同理（在 summary 之后）。 */}
+      {action && <span className="system-event-action">{action}</span>}
     </div>
   );
 }

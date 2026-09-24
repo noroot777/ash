@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { File, ShieldCheck, GitFork } from "@phosphor-icons/react";
+import { File, Gavel, ShieldCheck, GitFork } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
@@ -257,7 +257,9 @@ export function ConversationFeed({
     ? [...items].reverse().find((item) => item.kind === "event" && pendingDisputeEvent(item.text))?.id ?? null
     : null;
   const ruleAction = disputeEventId ? (
-    <button type="button" className="system-event-cta" onClick={onOpenReviewPanel}>去裁定</button>
+    <button type="button" className="system-event-cta" onClick={onOpenReviewPanel}>
+      <Gavel size={11} weight="fill" aria-hidden="true" />去裁定
+    </button>
   ) : null;
   const hiddenTimes = new Set<string>();
   for (let index = 1; index < items.length; index += 1) {

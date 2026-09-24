@@ -117,7 +117,7 @@
   margin: 8px 0 12px;
   color: var(--muted);
 }
-.system-event-digest.is-aligned > :is(details, .system-event-digest-line) { grid-column: 2; min-width: 0; }
+.system-event-digest.is-aligned > :is(.system-event-digest-main, .system-event-digest-line) { grid-column: 2; min-width: 0; }
 .system-event-digest.is-aligned :is(summary, .system-event-digest-line) { min-height: 20px; align-items: center; }
 .system-event-digest.is-aligned :is(summary, .system-event-digest-line) > span { color: var(--muted); }
 .system-event-digest.is-aligned:is(.is-error, .is-warning) :is(summary, .system-event-digest-line) > span { color: color-mix(in lch, var(--red) 64%, var(--muted)); }
@@ -294,21 +294,35 @@
   .task-message--user.is-system-authored .task-user-bubble { max-width: 100%; }
 }
 
-/* 「去裁定」一类挂在旁注上的行动入口。旁注本身是最轻的一档文字，所以这颗按钮也压到
-   同一个字号上，只靠边框和 hover 说明它能点——把它做成正经按钮会让一条旁注看起来比
-   上面那段真正的对话还重。摘要行是 <summary>，按钮只能摆在 <details> 外面：摆进去
-   点一下会连带把这段折叠掉。 */
-.system-event-action { flex: none; align-self: center; }
-.system-event-digest .system-event-action { margin: 5px 0 0 10px; }
+/* 「去裁定」一类挂在旁注上的行动入口。
+ *
+ * 摆在 <summary> 外面：摆进去点一下会连带把这段折叠掉。所以摘要行和按钮由
+ * `.system-event-digest-main` 收成一行——aligned 模式的外层是「头像列 + 正文列」两列
+ * 网格，按钮直接当外层的子元素会被自动排进下一行的头像列，20px 宽把「去裁定」挤成竖排
+ * （用户 2026-09-24 截图报的）。`white-space: nowrap` 是这件事的兜底：以后不管哪个容器
+ * 再把它挤窄，它宁可顶出去也不会再断成一列字。
+ *
+ * 一条旁注上别的东西（正文、时间）都是「发生了什么」，只有它是「现在等你做什么」，而且
+ * 它出现的前提就是任务停在那儿等人——所以给实心，不跟旁注一起淡下去。字号回到旁注正文
+ * 这一档：比正文还小的按钮看着像个脚注编号，不像能点的东西。 */
+.system-event-digest-main { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
+.system-event-action { display: inline-flex; flex: none; }
 .system-event-cta {
-  border: 1px solid var(--line2);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
   border-radius: 999px;
-  background: transparent;
-  padding: 2px 9px;
-  color: var(--muted);
+  background: var(--accent);
+  padding: 2px 10px;
+  color: #fff;
   font: inherit;
-  font-size: 10px;
+  font-size: 10.5px;
+  font-weight: 600;
   line-height: 1.5;
   cursor: pointer;
+  white-space: nowrap;
 }
-.system-event-cta:hover { border-color: var(--line); background: var(--raised); color: var(--ink); }
+.system-event-cta:hover { background: color-mix(in lch, var(--accent) 86%, var(--ink)); }
+.system-event-cta:active { background: color-mix(in lch, var(--accent) 74%, var(--ink)); }
+.system-event-cta svg { flex: none; }
