@@ -391,18 +391,25 @@ server.registerTool(
 server.registerTool(
   "dispute_review",
   {
-    title: "驳回审查意见(不认这条结论)",
+    title: "驳回审查意见(不认这条结论/越界建议转独立任务)",
     description:
-      "自由工作流的审查意见被打回来修复时,**你不必 100% 认可那份报告**。发现某条意见读错了代码、依据不可复现,或者那处是知情且有意为之、这次不该动,就调用本工具把驳回落下来,然后结束回合——链会停在「等用户裁定」,不会自动复审,也不会当成任务完成。\n\n用法:reason 里逐条写清**哪一条不成立、依据是什么**(指到具体文件/行/可复现步骤);部分成立时先把成立的那几条改掉并验证,再用本工具只驳不成立的那几条,并在 reason 里写明已经改了什么。默认仍然是照报告修复——拿不出具体依据就不要驳回。\n\n只能在**执行回合**里调用(审查回合不能驳回自己的结论),一轮意见只能驳一次;驳回之后不要调用 complete_task。用户看到驳回后可以让你和审查者辩论一轮(那时你会收到辩论提示并用 debate_reply 发言),也可以直接采纳你的说法或维持原意见让你照改。",
+      "自由工作流的审查意见被打回来修复时,**你不必 100% 认可那份报告**。发现某条意见读错了代码、依据不可复现,或者那处是知情且有意为之、这次不该动,就调用本工具把驳回落下来,然后结束回合——链会停在「等用户裁定」,不会自动复审,也不会当成任务完成。\n\n用法:reason 里逐条写清**哪一条不成立、依据是什么**(指到具体文件/行/可复现步骤);部分成立时先把成立的那几条改掉并验证,再用本工具只驳不成立的那几条,并在 reason 里写明已经改了什么。默认仍然是照报告修复——拿不出具体依据就不要驳回。\n\n**第三种情况用 deferReason,别塞进 reason**:某条意见技术上成立、依据也可复现,但它**不属于本任务的边界**——最典型的是**本轮修复自己引入的衍生问题**。照改会让这条链没有终点(改→引入→再被打回),谎称「依据不可复现」一拆就穿。这种就填 deferReason,逐条写明哪几条、为什么越界(是哪一轮的哪次改动引入的)、建议的独立任务范围;用户同意后系统会建一个待办派生任务把它们带走。reason 与 deferReason 可以同时给,只提转出时 reason 可以不填。两者判据不同:reason 问「它对不对」,deferReason 问「它属不属于本任务」——后者的判据是**边界**不是**工作量**,说不出「为什么它不属于本任务」就照改。**你只负责提出,转不转由用户裁定**,本工具不会建任何任务。\n\n只能在**执行回合**里调用(审查回合不能驳回自己的结论),一轮意见只能驳一次;驳回之后不要调用 complete_task。用户看到驳回后可以让你和审查者辩论一轮(那时你会收到辩论提示并用 debate_reply 发言),也可以直接采纳你的说法、维持原意见让你照改,或者把越界的那几条转成独立任务。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
-      reason: z.string().min(1).describe("逐条写清哪一条意见不成立、依据是什么;部分成立时写明你已经改了哪几条"),
+      reason: z.string().default("").describe("逐条写清哪一条意见不成立、依据是什么;部分成立时写明你已经改了哪几条。只提 deferReason 时可以留空"),
+      deferReason: z.string().optional().describe("哪几条你认可、但超出本任务边界(多半是本轮修复引入的衍生问题),建议转独立任务:逐条写明是哪几条、为什么越界、建议的独立任务范围"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, reason, directionToken }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/free-workflow/review/dispute`, { reason }, directionToken)); }
-    catch (e) { return fail(e); }
+  async ({ taskId, reason, deferReason, directionToken }) => {
+    try {
+      return ok(await call(
+        "POST",
+        `/tasks/${taskId}/free-workflow/review/dispute`,
+        { reason, deferReason },
+        directionToken,
+      ));
+    } catch (e) { return fail(e); }
   },
 );
 

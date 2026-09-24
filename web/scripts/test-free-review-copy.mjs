@@ -79,3 +79,27 @@ assert.equal(freeReviewView(autoState, busyTask).autoRereview, true, "runId 预�
 assert.equal(freeReviewView({ ...autoState, reviewReservation: { ...autoState.reviewReservation, runId: null } }, busyTask).autoRereview, false);
 
 console.log("free review activity copy tests passed");
+
+// 「已裁定为不在本任务里修」是两档：采纳执行者作废，和转成独立任务。两档都要关掉修复
+// 入口——后者更硬，那几条已经有别的任务在承接，这里再修一遍就是两处各改一版。
+const disputeRun = (resolution, deferReason = null) => ({
+  ...run,
+  status: "stopped",
+  rounds: [{
+    round: 1, status: "failed", conclusion: "verify_failed", reviewedCommit: "aaa",
+    dispute: { reason: "读错了行号", deferReason, at: "t", resolution, resolvedAt: null, deferredTaskId: null, debates: [] },
+  }],
+});
+const viewOf = (runValue) => freeReviewView({
+  workspaceHead: "aaa",
+  workspaceDirty: false,
+  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
+  reviews: [runValue],
+}, { status: "done" });
+assert.equal(viewOf(disputeRun(null)).disputedRound?.round, 1, "没裁定的驳回是「等你裁定」");
+assert.equal(viewOf(disputeRun(null)).waivedRound, null, "没裁定就不算「不在本任务里修」");
+assert.equal(viewOf(disputeRun("withdrawn")).waivedRound?.round, 1, "采纳执行者 = 不在本任务里修");
+assert.equal(viewOf(disputeRun("deferred")).waivedRound?.round, 1, "转独立任务同样关掉修复入口");
+assert.equal(viewOf(disputeRun("upheld")).waivedRound, null, "维持意见恰恰是要照改，不能关掉修复入口");
+
+console.log("free review dispute view tests passed");

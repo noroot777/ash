@@ -25,6 +25,7 @@ import {
 } from "./db/schema.js";
 import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files.js";
 import { debateViews } from "./free-review-debate.js";
+import { hasDispute } from "./free-review-dispute.js";
 import { headCommit, workspaceDirty, worktreePathFor } from "./git.js";
 import { existsSync } from "node:fs";
 import { previewState } from "./preview-public.js";
@@ -147,7 +148,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
   for (const round of roundRows) roundsByRun.set(round.runId, [...(roundsByRun.get(round.runId) ?? []), round]);
   // 驳回挂在轮次上，辩论挂在驳回上：一条任务最多只有个位数条，直接按轮次逐条读。
   const debates = new Map<string, FreeReviewDebate[]>(await Promise.all(
-    roundRows.filter((round) => round.disputeReason)
+    roundRows.filter((round) => hasDispute(round))
       .map(async (round) => [round.id, await debateViews(round.id)] as const),
   ));
   const reviews: FreeReviewRun[] = runs.map((run) => ({
@@ -180,12 +181,14 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       reviewedCommit: round.reviewedCommit,
       reportMarkdown: readFreeReviewReport(taskId, run.id, round.round),
       screenshots: freeReviewScreenshots(taskId, run.id, round.round),
-      dispute: round.disputeReason
+      dispute: hasDispute(round)
         ? {
-            reason: round.disputeReason,
+            reason: round.disputeReason ?? "",
+            deferReason: round.disputeDeferReason,
             at: round.disputeAt ?? round.endedAt ?? round.startedAt,
             resolution: (round.disputeResolution as FreeReviewDispute["resolution"]) ?? null,
             resolvedAt: round.disputeResolvedAt,
+            deferredTaskId: round.disputeDeferredTaskId,
             debates: debates.get(round.id) ?? [],
           }
         : null,

@@ -15,7 +15,24 @@
 //
 // 「驳回成立」时**不把 run 改成 passed**：那是伪造审查者的结论。报告与证据原样留着，
 // 只多一条「用户裁定：采纳执行者」——与验证站那颗「人工强制通过」同一个规矩。
-import type { FreeReviewDisputeResolution } from "@ash/shared";
+//
+// ── 第三条出路：转独立任务（`deferred`，2026-09-24 加） ──
+// 上面两条判据（不成立 / 知情有意为之）漏掉了一整类意见：**技术上成立、依据可复现、
+// 也不是有意为之，但它不属于本任务**——最典型的形态是**上一轮修复自己引入的衍生问题**。
+// 执行者碰上它时手里只有两条路：照改（于是修复再引入新问题，下一轮再被打回，这条链
+// 没有终止条件），或者谎称「依据不可复现」（审查者每次都附了可复现构造，一拆就穿）。
+// 实测后果：一条任务连着被打回 10 轮，第 1 轮就修好了原始症状，后 9 轮全在修上一轮的
+// 修复，分支从 +191/-7 涨到 +1045/-67。
+//
+// 所以给它一条**同样是一等状态**的出路：执行者在同一次 `dispute_review` 里多写一段
+// `deferReason`（逐条写明哪几条越界、为什么），用户裁定同意后建一个 **backlog、不起跑**
+// 的派生任务把那几条带走。四条规矩与上面两条完全一致，一条都不放松：
+// ① 裁定权只在用户手上——执行者只能**提出**，`disputeFreeReview` 这一路永远不建任务；
+// ② 不改写审查结论——转走 ≠ 这一轮 passed，报告和证据原样留着；
+// ③ 不能变成逃避修复的捷径——没写 `deferReason` 就拒绝这个裁定（判据是**边界**不是
+//    **工作量**，措辞见 free-review-prompts.ts 的 disputeOption）；
+// ④ 提出之后停下来等人——与驳回共用同一条停顿，撤自动复审预约的规矩也共用。
+import type { FreeReviewDisputeResolution, Task } from "@ash/shared";
 import { and, eq, isNull } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -37,10 +54,39 @@ export type ReviewRoundRow = typeof freeReviewRounds.$inferSelect;
 /** 驳回理由的长度上限：够写满一页逐条反驳，又不至于把一整份 diff 灌进数据库。 */
 export const MAX_DISPUTE_REASON_LEN = 20_000;
 
+function trimmed(raw: unknown): string {
+  return typeof raw === "string" ? raw.trim().slice(0, MAX_DISPUTE_REASON_LEN) : "";
+}
+
 export function disputeReasonOf(raw: unknown): string {
-  const text = typeof raw === "string" ? raw.trim() : "";
+  const text = trimmed(raw);
   if (!text) throw new Error("驳回必须写明理由：逐条说清报告里哪一条不成立、依据是什么");
-  return text.slice(0, MAX_DISPUTE_REASON_LEN);
+  return text;
+}
+
+/**
+ * 两段理由的联合入参校验：`reason`（哪几条不成立）与 `deferReason`（哪几条成立但越界）
+ * **至少要有一段**。只提转出时不强求 `reason` —— 强求的话执行者就只能在「哪一条不成立」
+ * 那一栏里编一句它自己都不认的话，而那正是这条出路要消灭的东西。
+ */
+export function disputeInputOf(raw: { reason?: unknown; deferReason?: unknown }): {
+  reason: string;
+  deferReason: string | null;
+} {
+  const deferReason = trimmed(raw.deferReason);
+  const reason = trimmed(raw.reason);
+  if (!reason && !deferReason) {
+    throw new Error(
+      "驳回必须写明理由：逐条说清报告里哪一条不成立、依据是什么；" +
+      "若你认可这些意见、只是认为它们超出本任务边界，就把逐条依据写进 deferReason",
+    );
+  }
+  return { reason, deferReason: deferReason || null };
+}
+
+/** 「这一轮挂着一条驳回」——两段理由任意一段非空即算（只提转出的那次 reason 为空）。 */
+export function hasDispute(round: ReviewRoundRow | null | undefined): boolean {
+  return !!(round?.disputeReason || round?.disputeDeferReason);
 }
 
 async function freeTask(taskId: string): Promise<TaskRow> {
@@ -60,28 +106,31 @@ export async function currentRoundOf(run: ReviewRunRow): Promise<ReviewRoundRow 
 
 /**
  * 「现在有没有一条等着用户裁定的驳回」——驳回已写下、用户还没裁定。
- * 界面上的三颗按钮、辩论入口、修复入口全读它，一处定义。
+ * 界面上的几颗按钮、辩论入口、修复入口全读它，一处定义。
  */
 export async function openDisputeOf(taskId: string): Promise<{ run: ReviewRunRow; round: ReviewRoundRow } | null> {
   const run = await latestWorkspaceRun(taskId);
   if (!run || run.status !== "stopped") return null;
   const round = await currentRoundOf(run);
-  if (!round?.disputeReason || round.disputeResolution) return null;
-  return { run, round };
+  if (!hasDispute(round) || round?.disputeResolution) return null;
+  return { run, round: round! };
 }
 
 /**
- * 「这一轮意见已经被用户裁定作废了」——采纳执行者说法之后的那一轮。
+ * 「这一轮意见已经被用户裁定成『不在本任务里修』了」——采纳执行者（`withdrawn`）或者
+ * 转成了独立任务（`deferred`）之后的那一轮。
  *
  * 修复入口必须认它：确认框上写的是「执行者不再按它修改」，裁定完却还能把同一份报告
  * 重新发回去修，等于让用户自己把刚做的裁定按没了（第 1 轮审查实测）。前端藏按钮，
- * 后端照样挡——只藏按钮就是把规矩交给界面守。
+ * 后端照样挡——只藏按钮就是把规矩交给界面守。`deferred` 同理，而且更硬：那几条已经
+ * 有一个独立任务在承接了，在本任务里再修一遍就是两处各改一版。
  */
-export async function withdrawnDisputeOf(taskId: string): Promise<{ run: ReviewRunRow; round: ReviewRoundRow } | null> {
+export async function waivedDisputeOf(taskId: string): Promise<{ run: ReviewRunRow; round: ReviewRoundRow } | null> {
   const run = await latestWorkspaceRun(taskId);
   if (!run || run.status !== "stopped") return null;
   const round = await currentRoundOf(run);
-  return round?.disputeResolution === "withdrawn" ? { run, round } : null;
+  const resolution = round?.disputeResolution;
+  return resolution === "withdrawn" || resolution === "deferred" ? { run, round: round! } : null;
 }
 
 /**
@@ -89,10 +138,14 @@ export async function withdrawnDisputeOf(taskId: string): Promise<{ run: ReviewR
  *
  * 必须出自**执行者自己的回合**：审查旁路回合（role=reviewer）调它就是审查者替执行者
  * 驳回自己的结论，一律拒。判据取回合的运行时身份（同 report_stage 的理由，见 runs.ts）。
+ *
+ * `deferReason` 只是**一份提案**：这一路一个任务都不会建（规矩①）。真正建任务在
+ * free-review-defer.ts，且只能从用户裁定那条路进去。
  */
 export async function disputeFreeReview(
   taskId: string,
   reason: string,
+  deferReason: string | null = null,
 ): Promise<{ runId: string; round: number }> {
   const task = await freeTask(taskId);
   if (task.archived) throw new Error("归档任务不能驳回审查意见");
@@ -108,14 +161,19 @@ export async function disputeFreeReview(
   if (!run || run.status !== "stopped") throw new Error("最近一轮审查没有停在未通过状态，没有可驳回的意见");
   const round = await currentRoundOf(run);
   if (!round || round.conclusion !== "verify_failed") throw new Error("最近一轮审查没有未通过结论，无需驳回");
-  if (round.disputeReason) throw new Error("这一轮意见已经驳回过了；还有话要说就等用户开辩论，别重复驳回");
+  if (hasDispute(round)) throw new Error("这一轮意见已经驳回过了；还有话要说就等用户开辩论，别重复驳回");
 
   const at = now();
-  // CAS：只有把 dispute_reason 从空写成非空的那一次算数。并发重试（MCP 的重连重试、
-  // 用户手点两下）到这里都只会落一条驳回，而不是后写的盖掉先写的。
+  // CAS：只有把两段理由从空写成非空的那一次算数。并发重试（MCP 的重连重试、用户手点
+  // 两下）到这里都只会落一条驳回，而不是后写的盖掉先写的。两列一起判——只判一列的话，
+  // 「只提转出」和「只提不成立」这两次并发调用会各自看到对方那列是空，双双写进去。
   const written = await db.update(freeReviewRounds)
-    .set({ disputeReason: reason, disputeAt: at })
-    .where(and(eq(freeReviewRounds.id, round.id), isNull(freeReviewRounds.disputeReason)))
+    .set({ disputeReason: reason || null, disputeDeferReason: deferReason, disputeAt: at })
+    .where(and(
+      eq(freeReviewRounds.id, round.id),
+      isNull(freeReviewRounds.disputeReason),
+      isNull(freeReviewRounds.disputeDeferReason),
+    ))
     .returning({ id: freeReviewRounds.id });
   if (!written.length) throw new Error("这一轮意见已经驳回过了；还有话要说就等用户开辩论，别重复驳回");
 
@@ -127,10 +185,16 @@ export async function disputeFreeReview(
     ? await consumeFreeReviewReservation(taskId, reservation)
     : null;
 
+  const what = deferReason
+    ? reason
+      ? "驳回了部分意见，并提出另几条虽然成立、但超出本任务边界，建议转独立任务"
+      : "认可这一轮意见，但提出它们超出本任务边界，建议转独立任务"
+    : "驳回了这一轮审查意见";
   await appendTaskTimeline(taskId,
-    `执行者驳回了第 ${run.currentRound} 轮审查意见（${run.reviewerName}）：${summarize(reason)}` +
+    `执行者${what}（第 ${run.currentRound} 轮 · ${run.reviewerName}）：${summarize(reason || deferReason || "")}` +
     `${canceledAuto ? "；自动复审已取消" : ""}。` +
-    "现在由你裁定：可以让双方辩一轮，也可以直接采纳执行者的说法，或维持审查意见让它照改。");
+    "现在由你裁定：可以让双方辩一轮，也可以直接采纳执行者的说法、维持审查意见让它照改" +
+    `${deferReason ? "，或者把越界的那几条转成一个独立任务" : ""}。`);
   bus.publish({ type: "task.review", taskId });
   return { runId: run.id, round: run.currentRound };
 }
@@ -163,21 +227,28 @@ export async function upholdOpenDispute(taskId: string): Promise<boolean> {
 export const DISPUTE_RESOLUTION_LABELS: Record<FreeReviewDisputeResolution, string> = {
   upheld: "维持审查意见",
   withdrawn: "采纳执行者说法",
+  deferred: "转为独立任务",
 };
 
 export function disputeResolutionOf(raw: unknown): FreeReviewDisputeResolution {
-  if (raw === "upheld" || raw === "withdrawn") return raw;
-  throw new Error("裁定只能是 upheld（维持审查意见）或 withdrawn（采纳执行者说法）");
+  if (raw === "upheld" || raw === "withdrawn" || raw === "deferred") return raw;
+  throw new Error(
+    "裁定只能是 upheld（维持审查意见）、withdrawn（采纳执行者说法）或 deferred（转为独立任务）",
+  );
 }
 
 /**
  * 用户裁定一条驳回。`upheld` 会顺带把「按意见修复」发起来（那正是这个裁定的意思）；
  * 修复起不来不回滚裁定 —— 裁定是用户的决定，投递失败是另一件事，如实写进时间线即可。
+ *
+ * `deferred` 走另一条路（free-review-defer.ts）：它的「顺带」是**建一个任务**，而建
+ * 失败了这个裁定就什么也没剩下——没有第二个入口能把那个任务补建出来。所以它必须能
+ * 回滚，不能照抄 upheld 的「失败也落账」。
  */
 export async function resolveFreeReviewDispute(
   taskId: string,
   resolution: FreeReviewDisputeResolution,
-): Promise<{ resolution: FreeReviewDisputeResolution; repairError: string | null }> {
+): Promise<{ resolution: FreeReviewDisputeResolution; repairError: string | null; deferredTask: Task | null }> {
   const task = await freeTask(taskId);
   if (task.archived) throw new Error("归档任务不能裁定审查驳回");
   const handedOff = handoffBlockReason(task.handoff);
@@ -186,6 +257,12 @@ export async function resolveFreeReviewDispute(
   if (!open) throw new Error("现在没有等待裁定的驳回");
   const { activeDebateOf } = await import("./free-review-debate.js");
   if (await activeDebateOf(taskId)) throw new Error("辩论正在进行，等它结束再裁定");
+
+  if (resolution === "deferred") {
+    const { deferOpenDispute } = await import("./free-review-defer.js");
+    const deferredTask = await deferOpenDispute(task, open);
+    return { resolution, repairError: null, deferredTask };
+  }
 
   const at = now();
   await db.update(freeReviewRounds)
@@ -208,5 +285,5 @@ export async function resolveFreeReviewDispute(
       bus.publish({ type: "task.review", taskId });
     }
   }
-  return { resolution, repairError };
+  return { resolution, repairError, deferredTask: null };
 }

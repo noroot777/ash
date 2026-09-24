@@ -83,8 +83,8 @@ export type FreeReviewView = {
   stale: boolean;
   /** 执行者驳回了最近一轮未通过意见、用户还没裁定的那一轮；null = 没有待裁定的驳回。 */
   disputedRound: FreeReviewRound | null;
-  /** 最近一轮未通过意见已被用户裁定作废（采纳了执行者）；修复入口必须跟着消失。 */
-  withdrawnRound: FreeReviewRound | null;
+  /** 最近一轮未通过意见已被用户裁定为「不在本任务里修」（作废或转独立任务）；修复入口必须跟着消失。 */
+  waivedRound: FreeReviewRound | null;
   /** 待裁定驳回上最近那条辩论（含已结束/已中止的）；没开过为 null。 */
   debate: FreeReviewDebate | null;
   /** 辩论正在进行（双方轮流发言的旁路回合还没走完）。 */
@@ -106,10 +106,15 @@ export function openDisputeRound(run: FreeReviewRun | null | undefined): FreeRev
   return round?.dispute && !round.dispute.resolution ? round : null;
 }
 
-/** 「用户已经采纳执行者说法」——这条意见作废，不能再按它修复。 */
-export function withdrawnDisputeRound(run: FreeReviewRun | null | undefined): FreeReviewRound | null {
+/**
+ * 「用户已经裁定这一轮不在本任务里修」——采纳执行者（`withdrawn`）或转成了独立任务
+ * （`deferred`）。两档都必须关掉修复入口：前者那条意见作废了，后者已经有别的任务在
+ * 承接，在本任务里再修一遍就是两处各改一版。
+ */
+export function waivedDisputeRound(run: FreeReviewRun | null | undefined): FreeReviewRound | null {
   const round = concludedRound(run);
-  return round?.dispute?.resolution === "withdrawn" ? round : null;
+  const resolution = round?.dispute?.resolution;
+  return resolution === "withdrawn" || resolution === "deferred" ? round : null;
 }
 
 export function freeReviewView(state: FreeWorkflowState | null | undefined, task: Task): FreeReviewView {
@@ -141,7 +146,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
     freshness,
     stale: freshness === "stale",
     disputedRound,
-    withdrawnRound: withdrawnDisputeRound(stoppedRun),
+    waivedRound: waivedDisputeRound(stoppedRun),
     debate,
     debateRunning: debate?.status === "running",
   };

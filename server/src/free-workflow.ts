@@ -32,7 +32,7 @@ export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./fr
 // free-review-dispute.ts 与 free-review-debate.ts；这里只接两个口：辩论段的结算，
 // 和「用户已裁定维持意见」时修复交接的措辞。
 import { activeDebateOf, settleDebateTurn } from "./free-review-debate.js";
-import { currentRoundOf, upholdOpenDispute, withdrawnDisputeOf } from "./free-review-dispute.js";
+import { currentRoundOf, upholdOpenDispute, waivedDisputeOf } from "./free-review-dispute.js";
 // 一轮审查的生命周期（起一轮 / 续下一轮 / 启动失败收尾 / 重跑崩掉的那一轮）住在
 // free-review-round.ts；这里只做「派/预约/结算」这一层的编排。
 import {
@@ -560,10 +560,14 @@ async function manualRepairBlocker(taskId: string): Promise<string | null> {
   if (task.stage === "accepted" || task.stage === "merged") return "任务已进入验收结果";
   if (await reviewingRun(taskId)) return "审查回合正在进行";
   if (await activeDebateOf(taskId)) return "审查意见辩论正在进行，等它说完再决定";
-  // 用户已经裁定作废的那一轮不能再拿去修：确认框写的是「执行者不再按它修改」，
-  // 修复入口却照单放行的话，用户点一下就把自己刚下的裁定推翻了（第 1 轮审查实测）。
-  if (await withdrawnDisputeOf(taskId)) {
-    return "这一轮意见已被你裁定作废（采纳了执行者的说法），不再按它修复；要继续推进请再派一轮审查";
+  // 用户已经裁定「不在本任务里修」的那一轮不能再拿去修：确认框写的是「执行者不再按它
+  // 修改」，修复入口却照单放行的话，用户点一下就把自己刚下的裁定推翻了（第 1 轮审查实测）。
+  // 转成了独立任务的那档更硬——那几条已经有别的任务在承接，这里再修一遍就是两处各改一版。
+  const waived = await waivedDisputeOf(taskId);
+  if (waived) {
+    return waived.round.disputeResolution === "deferred"
+      ? `这一轮意见已被你裁定转为独立任务（${waived.round.disputeDeferredTaskId ?? "待办任务"}），不在本任务里修；要继续推进请再派一轮审查`
+      : "这一轮意见已被你裁定作废（采纳了执行者的说法），不再按它修复；要继续推进请再派一轮审查";
   }
   const run = await latestWorkspaceRun(taskId);
   if (!run || run.status !== "stopped") return "最近一轮审查没有停在未通过状态";

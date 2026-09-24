@@ -14,7 +14,7 @@ import {
 import { startFreeReviewDebate, submitDebateStatement } from "./free-review-debate.js";
 import {
   disputeFreeReview,
-  disputeReasonOf,
+  disputeInputOf,
   disputeResolutionOf,
   resolveFreeReviewDispute,
 } from "./free-review-dispute.js";
@@ -112,8 +112,10 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const identity = await turnIdentityError(c, taskId, "驳回");
     if (identity) return c.json({ error: identity }, 409);
     try {
-      const body = await c.req.json<{ reason?: unknown }>().catch(() => ({} as { reason?: unknown }));
-      const result = await disputeFreeReview(taskId, disputeReasonOf(body.reason));
+      const body = await c.req.json<{ reason?: unknown; deferReason?: unknown }>()
+        .catch(() => ({} as { reason?: unknown; deferReason?: unknown }));
+      const { reason, deferReason } = disputeInputOf(body);
+      const result = await disputeFreeReview(taskId, reason, deferReason);
       return c.json({ disputed: true, taskId, ...result });
     } catch (error) { return c.json(errorBody(error), 409); }
   });

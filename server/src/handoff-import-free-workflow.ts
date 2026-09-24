@@ -104,7 +104,10 @@ export async function buildFreeWorkflowRows(
     reviewedCommit: round.reviewedCommit,
     // 驳回理由与用户裁定原样带走（老载荷没有这几项 → null = 没驳回过）。辩论记录不迁移：
     // 双方说过什么本来就在两条 CLI 会话历史里，对端要的话重新辩一轮即可。
+    // `disputeDeferredTaskId` 是机器本地外键（对端库里没有那行任务），不随载荷走——
+    // 同 repairTaskId 的规矩，见 handoff-types.ts 顶部。
     disputeReason: round.disputeReason ?? null,
+    disputeDeferReason: round.disputeDeferReason ?? null,
     disputeAt: round.disputeAt ?? null,
     disputeResolution: round.disputeResolution ?? null,
     disputeResolvedAt: round.disputeResolvedAt ?? null,

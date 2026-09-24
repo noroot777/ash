@@ -1,21 +1,25 @@
 import { useState } from "react";
 import type { FreeReviewRound, FreeReviewRun } from "@ash/shared";
 import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@ash/shared/free-workflow";
-import { ChatsCircle, HandPalm, SpinnerGap, Wrench } from "@phosphor-icons/react";
+import { ArrowSquareOut, ChatsCircle, HandPalm, SpinnerGap, Wrench } from "@phosphor-icons/react";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
 
-type Pending = "debate" | "withdrawn" | "upheld";
+type Pending = "debate" | "withdrawn" | "upheld" | "deferred";
 
 /**
- * 「执行者不认这一轮意见」的那张卡：驳回理由 + 辩论回放 + 三个只有用户能按的出口。
+ * 「执行者不认这一轮意见」的那张卡：驳回理由 + 辩论回放 + 几个只有用户能按的出口。
  *
- * 三个出口互不等价，文案必须把差别说死：
+ * 出口互不等价，文案必须把差别说死：
  * - 让双方辩论：先听几段再决定，**不改变任何结论**，辩完还是回到这张卡上裁定。
  * - 采纳执行者：这条未通过意见作废；审查记录与证据原样留着，那条 run 也**不会**被
  *   改写成「已通过」——替审查者签字比留一条「用户裁定作废」的记录危险得多。
+ * - 转为独立任务：意见**成立**，只是不属于本任务边界（多半是本轮修复引入的衍生问题）。
+ *   建一个待办派生任务把它带走，本轮不再在这里修。**只在执行者逐条写明越界依据时才
+ *   出现**——凭空给这颗按钮，它就成了谁都能按的免修开关（后端同样拒绝，这里不是唯一
+ *   防线）。它与「采纳执行者」的差别是：那条意见没有作废，只是换了个地方修。
  * - 维持意见：驳回作废，后端接着按原报告发起修复。
  */
 export function FreeReviewDisputeCard({
@@ -45,6 +49,10 @@ export function FreeReviewDisputeCard({
   const canDebate = !latestDebate || latestDebate.status === "failed";
   if (!dispute) return null;
   const blocked = disabled || debateRunning;
+  const deferReason = dispute.deferReason;
+  // 只提了转出、一条都没驳：标题不能还写「驳回了意见」——那会让用户以为执行者在说
+  // 报告不对，而它说的恰恰是「报告是对的，只是不该在这儿修」。
+  const deferOnly = !!deferReason && !dispute.reason;
 
   const startDebate = async () => {
     setBusy(true);
@@ -60,7 +68,7 @@ export function FreeReviewDisputeCard({
     }
   };
 
-  const resolve = async (resolution: "withdrawn" | "upheld") => {
+  const resolve = async (resolution: "withdrawn" | "upheld" | "deferred") => {
     setBusy(true);
     try {
       const result = await api.resolveFreeReviewDispute(taskId, resolution);
@@ -68,9 +76,13 @@ export function FreeReviewDisputeCard({
       setPending(null);
       notify(resolution === "withdrawn"
         ? `已采纳执行者说法：第 ${round.round} 轮那条意见作废，审查记录原样保留`
-        : result.repairError
-          ? `已维持审查意见，但发起修复失败：${result.repairError}`
-          : `已维持审查意见，正在按第 ${round.round} 轮报告发起修复`);
+        : resolution === "deferred"
+          ? result.deferredTask
+            ? `已转为独立任务：${result.deferredTask.title}（待办，未起跑）`
+            : "已转为独立任务"
+          : result.repairError
+            ? `已维持审查意见，但发起修复失败：${result.repairError}`
+            : `已维持审查意见，正在按第 ${round.round} 轮报告发起修复`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "裁定失败");
     } finally {
@@ -83,14 +95,24 @@ export function FreeReviewDisputeCard({
       <header>
         <span><HandPalm size={13} weight="fill" /></span>
         <div>
-          <b>执行者驳回了第 {round.round} 轮意见</b>
+          <b>{deferOnly
+            ? `执行者认为第 ${round.round} 轮意见超出本任务边界`
+            : `执行者驳回了第 ${round.round} 轮意见`}</b>
           <small>{run.reviewerName} · {debateRunning ? "辩论进行中" : "等你裁定"}</small>
         </div>
       </header>
-      <div className="free-review-dispute-card__reason">
-        <b>驳回理由</b>
-        <MarkdownBody text={dispute.reason} />
-      </div>
+      {dispute.reason && (
+        <div className="free-review-dispute-card__reason">
+          <b>驳回理由</b>
+          <MarkdownBody text={dispute.reason} />
+        </div>
+      )}
+      {deferReason && (
+        <div className="free-review-dispute-card__reason is-defer">
+          <b>认可、但认为超出本任务边界的那几条</b>
+          <MarkdownBody text={deferReason} />
+        </div>
+      )}
       {debates.map((item, index) => (
         <FreeReviewDebateTranscript
           key={item.id}
@@ -112,6 +134,11 @@ export function FreeReviewDisputeCard({
           <button type="button" disabled={blocked || busy} onClick={() => setPending("debate")}>
             {debateRunning ? <SpinnerGap size={12} className="is-spinning" /> : <ChatsCircle size={12} />}
             {latestDebate ? "重开辩论" : "让双方辩论"}
+          </button>
+        )}
+        {deferReason && (
+          <button type="button" disabled={blocked || busy} onClick={() => setPending("deferred")}>
+            <ArrowSquareOut size={12} />转为独立任务
           </button>
         )}
         <button type="button" disabled={blocked || busy} onClick={() => setPending("withdrawn")}>
@@ -149,6 +176,22 @@ export function FreeReviewDisputeCard({
             <small>一个来回 = 审查者答辩 + 执行者回应；末尾审查者再收个尾，共 {exchanges * 2 + 1} 段发言。</small>
           </div>
         </ConfirmDialog>
+      )}
+      {pending === "deferred" && (
+        <ConfirmDialog
+          title="转为独立任务"
+          eyebrow="CONFIRM ACTION"
+          icon={<ArrowSquareOut size={19} weight="duotone" />}
+          message={
+            `会建一个待办、不起跑的新任务，把上面那几条意见连同第 ${round.round} 轮的报告与证据目录带过去，` +
+            "并回链到本任务。这几条意见没有作废，只是不在本任务里修；审查报告与截图原样保留，" +
+            "这条审查链也不会被改写成「已通过」。什么时候开工由你决定。"
+          }
+          confirmLabel="建任务并转走这几条"
+          busy={busy}
+          onConfirm={() => void resolve("deferred")}
+          onClose={() => { if (!busy) setPending(null); }}
+        />
       )}
       {pending === "withdrawn" && (
         <ConfirmDialog

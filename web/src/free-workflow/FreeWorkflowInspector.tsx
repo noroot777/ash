@@ -93,20 +93,32 @@ function reviewRoundLabel(round: FreeReviewRound): string {
 
 // 驳回过的轮次不能只显示「未通过」：那一轮到底是照改了、还是被用户判作废了，是两件
 // 完全不同的事，列表和抽屉标题都得带着说。
+//
+// 「只提了转出、一条都没驳」要单独说：执行者那时说的恰恰是**报告是对的**，只是不该
+// 在这个任务里修。一律写「已驳回」会让用户以为双方在争这条意见成不成立，从而把
+// 「转为独立任务」当成「采纳执行者」的同义词按下去（卡片标题同判据）。
+function deferOnly(round: FreeReviewRound): boolean {
+  return !!round.dispute?.deferReason && !round.dispute.reason;
+}
+
 function disputeSuffix(round: FreeReviewRound): string {
   const dispute = round.dispute;
   if (!dispute) return "";
   if (dispute.resolution === "withdrawn") return " · 意见已作废";
+  if (dispute.resolution === "deferred") return " · 已转独立任务";
   if (dispute.resolution === "upheld") return " · 驳回未获支持";
-  return dispute.debates.at(-1)?.status === "running" ? " · 辩论中" : " · 执行者已驳回";
+  if (dispute.debates.at(-1)?.status === "running") return " · 辩论中";
+  return deferOnly(round) ? " · 执行者提出越界" : " · 执行者已驳回";
 }
 
 function disputeStateText(round: FreeReviewRound): string {
   const dispute = round.dispute;
   if (!dispute) return "执行者驳回";
-  if (dispute.resolution === "withdrawn") return "执行者驳回 · 你已采纳，这条意见作废";
-  if (dispute.resolution === "upheld") return "执行者驳回 · 你维持了审查意见";
-  return dispute.debates.at(-1)?.status === "running" ? "执行者驳回 · 双方辩论中" : "执行者驳回 · 等你裁定";
+  const who = deferOnly(round) ? "执行者提出越界" : "执行者驳回";
+  if (dispute.resolution === "withdrawn") return `${who} · 你已采纳，这条意见作废`;
+  if (dispute.resolution === "deferred") return `${who} · 你已裁定转为独立任务，不在本任务里修`;
+  if (dispute.resolution === "upheld") return `${who} · 你维持了审查意见`;
+  return dispute.debates.at(-1)?.status === "running" ? `${who} · 双方辩论中` : `${who} · 等你裁定`;
 }
 
 function reviewKey(runId: string, round: number): string {
@@ -160,7 +172,7 @@ export function FreeWorkflowInspector({
     ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
     : null;
   const view = freeReviewView(state, task);
-  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, withdrawnRound, debateRunning } = view;
+  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, waivedRound, debateRunning } = view;
   const taskReady = task.status !== "backlog";
   // waiting 只锁「立即派审/修复」，预约与取消预约照常（同 Toolbar，也与后端口径一致）。
   // waiting / reservationMode 都由 freeReviewCopy.ts 的 freeReviewView 算,两个表面共用
@@ -182,9 +194,11 @@ export function FreeWorkflowInspector({
   const overviewDetail = reviewing
     ? `第 ${reviewing.currentRound} 轮审查中`
     : disputedRound
-      ? `第 ${disputedRound.round} 轮未通过 · 执行者已驳回，${debateRunning ? "双方辩论中" : "等你裁定"}`
-      : withdrawnRound
-        ? `第 ${withdrawnRound.round} 轮未通过 · 你已采纳执行者说法，这条意见作废`
+      ? `第 ${disputedRound.round} 轮未通过 · ${deferOnly(disputedRound) ? "执行者提出越界" : "执行者已驳回"}，${debateRunning ? "双方辩论中" : "等你裁定"}`
+      : waivedRound
+        ? waivedRound.dispute?.resolution === "deferred"
+          ? `第 ${waivedRound.round} 轮未通过 · 你已把越界的那几条转为独立任务`
+          : `第 ${waivedRound.round} 轮未通过 · 你已采纳执行者说法，这条意见作废`
         : repairing
       ? `第 ${latestRun?.currentRound ?? 1} 轮未通过 · 任务修改中`
       : stoppedRun && stale
@@ -334,9 +348,10 @@ export function FreeWorkflowInspector({
               {repairing && <FreeReviewProgress kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
               {/* 挂着待裁定的驳回时，「按意见修复」让位给下面那张卡——同一个动作在两处
                   各写一半措辞，用户按哪一颗都不知道自己是不是顺手把驳回否掉了。
-                  已裁定作废的那一轮更不能再修：确认框刚说完「执行者不再按它修改」。
+                  已裁定作废（或已转独立任务）的那一轮更不能再修：确认框刚说完「执行者
+                  不再按它修改」，转出去的那几条也已经有别的任务在承接。
                   后端 manualRepairBlocker 同样挡着，这里不是唯一防线。 */}
-              {stoppedRun && !taskBusy && !disputedRound && !withdrawnRound && view.freshness === "fresh" && notify && (
+              {stoppedRun && !taskBusy && !disputedRound && !waivedRound && view.freshness === "fresh" && notify && (
                 <FreeReviewRepairButton
                   taskId={task.id}
                   run={stoppedRun}

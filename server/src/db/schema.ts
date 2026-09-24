@@ -399,11 +399,18 @@ export const freeReviewRounds = sqliteTable(
     reviewedCommit: text("reviewed_commit"),
     // 执行者对这一轮结论的驳回：理由正文 + 时刻。非空 = 这一轮没被执行者认下。
     disputeReason: text("dispute_reason"),
+    // 同一次驳回里「我认可这几条，但它们超出本任务边界，建议转独立任务」那一段。
+    // 与 dispute_reason 分开存：界面据它决定给不给「转为独立任务」那个出口，服务端
+    // 据它拒绝凭空的 deferred 裁定——两段揉进一个字段就只能靠在文本里找关键词。
+    // 两列**至少有一列非空** = 这一轮挂着一条驳回（CAS 与 openDisputeOf 都按这个判）。
+    disputeDeferReason: text("dispute_defer_reason"),
     disputeAt: text("dispute_at"),
-    // **用户**的裁定（upheld=维持审查意见 / withdrawn=采纳执行者），与辩论里审查者
-    // 自述的 verdict 分开存：让被驳回的一方替用户签字，等于绕过裁定这件事本身。
+    // **用户**的裁定（upheld=维持审查意见 / withdrawn=采纳执行者 / deferred=转独立任务），
+    // 与辩论里审查者自述的 verdict 分开存：让被驳回的一方替用户签字，等于绕过裁定这件事本身。
     disputeResolution: text("dispute_resolution"),
     disputeResolvedAt: text("dispute_resolved_at"),
+    // deferred 裁定建出的那个 backlog 派生任务；非空即幂等返回同一任务（同 repair_task_id）。
+    disputeDeferredTaskId: text("dispute_deferred_task_id"),
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
   },

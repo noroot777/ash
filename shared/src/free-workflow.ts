@@ -60,7 +60,16 @@ export type FreeReviewDisputeResolution =
   /** 维持审查意见：照报告修 */
   | "upheld"
   /** 采纳执行者：这条未通过意见作废，报告与证据原样留着 */
-  | "withdrawn";
+  | "withdrawn"
+  /**
+   * 转独立任务：意见**成立**，但不属于本任务边界（多半是本轮修复自己引入的衍生问题）。
+   * 建一个 backlog 派生任务把它带走，本轮不再要求在本任务里修；报告与证据同样原样留着。
+   *
+   * 与 `withdrawn` 的差别只有一处——**这条意见没有作废，只是换了个地方修**。所以它不是
+   * 「不想改」的第三种说法：必须由执行者先在 `deferReason` 里逐条写明越界/衍生的依据
+   * （没写时服务端拒绝这个裁定），再由用户签字。
+   */
+  | "deferred";
 
 /** 辩论收尾时**审查者自述**的立场（不是用户裁定，不自动改变任何状态）。 */
 export type FreeReviewDebateVerdict = "upheld" | "withdrawn" | "partial";
@@ -96,12 +105,22 @@ export interface FreeReviewDebate {
 }
 
 export interface FreeReviewDispute {
-  /** 执行者写的驳回理由（逐条对着报告说）。 */
+  /** 执行者写的「哪几条不成立 / 哪几条是知情且有意为之」；空串 = 它只提了转出那几条。 */
   reason: string;
+  /**
+   * 执行者写的「哪几条我认可、但超出本任务边界，建议转独立任务」；null = 没提过。
+   *
+   * 与 `reason` 分开存而不是挤进同一段文本：界面要据此决定「转为独立任务」那个出口
+   * 给不给，服务端也要据此拒绝凭空的 `deferred` 裁定——靠在自由文本里找关键词判断，
+   * 等于把一条裁定门禁交给措辞去守。
+   */
+  deferReason: string | null;
   at: string;
   /** 用户的裁定；null = 还在等用户。 */
   resolution: FreeReviewDisputeResolution | null;
   resolvedAt: string | null;
+  /** `deferred` 裁定后建出的那个 backlog 派生任务；其它裁定恒为 null。 */
+  deferredTaskId: string | null;
   /** 这一条驳回上开过的辩论，按开始时间排；空数组 = 还没辩过。中断过的可以重开，
    *  所以同一条驳回上可能有多条（辩完的那条会挡住再开，判据在服务端）。 */
   debates: FreeReviewDebate[];
