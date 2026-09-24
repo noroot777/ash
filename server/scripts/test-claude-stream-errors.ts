@@ -196,5 +196,45 @@ console.log("7) CLI 自身失败时,原因在 errors[] 里,不能只报一句 su
   else fail("session-lost 认不出这条消息");
 }
 
+// 起因(2026-09-24):中转网关先 502 再整个不响应,两个任务的回合各停了 47 分钟。CLI
+// 一直在退避重试(10 次里退到后面单次就等半分钟),事件流里 `api_retry` 一条不落,而
+// 解析器把整个 subtype 丢了 —— 界面上只有一句「智能体委派中」停着不动,跟正常思考
+// 长得一模一样。用户无从判断,只能靠重启 ash 试探问题出在哪(重启其实也救不了:agent
+// 进程根本没被重启,恢复靠的是 CLI 自己重试成功)。下面这两组事件按现场原样抄。
+console.log("8) 上游重试必须看得见,且不把仍在进行的回合判成失败");
+{
+  const retries = [1, 2, 3].map((attempt) => ({
+    type: "system",
+    subtype: "api_retry",
+    attempt,
+    max_retries: 10,
+    retry_delay_ms: attempt === 1 ? 547 : attempt * 2000,
+    error_status: null,
+    error: "unknown",
+    session_id: "sess-8",
+  }));
+  const events = await collect([
+    { type: "system", subtype: "init", session_id: "sess-8" },
+    ...retries,
+    { type: "system", subtype: "api_retry", attempt: 9, max_retries: 10, retry_delay_ms: 32964, error_status: 502, error: "server_error", session_id: "sess-8" },
+    { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "接着干\n" } } },
+    { type: "result", subtype: "success", session_id: "sess-8" },
+  ]);
+  const errors = events.filter((e) => e.kind === "error");
+  if (errors.length === 4) ok("每一次重试都留下了一条旁注(同时是「还活着」的心跳)");
+  else fail(`期望 4 条重试旁注,实到 ${errors.length}`);
+  if (errors.every((e) => e.affectsTurn === false && e.level === "notice")) ok("重试只作展示:不判回合失败,也不冒充故障红字");
+  else fail(`重试旁注的分级不对:${JSON.stringify(errors.map((e) => ({ level: e.level, affectsTurn: e.affectsTurn })))}`);
+  if (errors[0]?.message?.includes("第 1/10 次")) ok(`第几次、还要等多久都说清了:${errors[0].message}`);
+  else fail(`没说清重试进度:${JSON.stringify(errors[0]?.message)}`);
+  if (!errors.some((e) => e.message.includes("unknown"))) ok("连接挂住时不把生硬的 unknown 透给用户");
+  else fail(`透传了 unknown:${errors.find((e) => e.message.includes("unknown"))?.message}`);
+  if (errors[3]?.message?.includes("502")) ok(`上游给了状态码就报出来:${errors[3].message}`);
+  else fail(`502 丢了:${JSON.stringify(errors[3]?.message)}`);
+  const text = events.filter((e) => e.kind === "text").map((e) => e.text).join("");
+  if (text.includes("接着干")) ok("重试成功后回合照常继续");
+  else fail(`重试之后正文丢了:${JSON.stringify(text)}`);
+}
+
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
 process.exit(bad ? 1 : 0);

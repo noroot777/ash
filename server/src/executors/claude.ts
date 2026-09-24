@@ -562,6 +562,35 @@ export async function* parseClaudeStream(
           push({ kind: "text", text: "\n> 正在压缩上下文…\n\n" });
         }
       }
+      // 上游重试是 CLI 唯一一次说出「不是我卡住了,是上游不给响应」。不接住它,重试和
+      // 正常思考在界面上长得一模一样:只有一句「智能体委派中」停在那,而退避到后面单次
+      // 就要等半分钟,一轮十次足够把回合拖上三刻钟(2026-09-24:中转网关先 502 再整个不
+      // 响应,两个任务各停了 47 分钟,用户无从判断,只能靠重启 ash 试探问题在哪 ——
+      // 重启其实也救不了,恢复靠的是 CLI 自己重试成功)。所以每一次重试都抬成一条旁注:
+      // 它同时是「还活着」的心跳,重试间隔本来就是分钟级,不会刷屏。
+      // 只作展示:重试期间回合仍在正常进行中,故 affectsTurn=false;真的重试耗尽,收尾的
+      // result / synthetic 消息会照旧把失败报出来。
+      if (ev.subtype === "api_retry") {
+        const attempt = Number(ev.attempt) || 0;
+        const max = Number(ev.max_retries) || 0;
+        const status = Number(ev.error_status) || 0;
+        // error 常常就是字符串 "unknown"(连接挂住、没有响应体),那时它不比「没有响应」
+        // 多说什么,别原样抬给用户看。
+        const reason = typeof ev.error === "string" && ev.error.trim() && ev.error !== "unknown" ? ev.error.trim() : "";
+        const cause = status
+          ? `上游返回 ${status}${reason ? ` ${reason}` : ""}`
+          : reason ? `上游报 ${reason}` : "上游没有响应";
+        const wait = Number(ev.retry_delay_ms) || 0;
+        const parts: string[] = [];
+        if (attempt) parts.push(max ? `第 ${attempt}/${max} 次` : `第 ${attempt} 次`);
+        if (wait) parts.push(`等 ${wait >= 1000 ? `${Math.round(wait / 1000)} 秒` : `${(wait / 1000).toFixed(1)} 秒`}`);
+        push({
+          kind: "error",
+          message: `${cause}，正在重试${parts.length ? `（${parts.join("，")}）` : ""}`,
+          level: "notice",
+          affectsTurn: false,
+        });
+      }
       push({ kind: "session", cliSessionId: ev.session_id });
     } else if (ev.type === "assistant" && ev.message?.content) {
       flushText(); // settle this message's text-delta tail before its tools
