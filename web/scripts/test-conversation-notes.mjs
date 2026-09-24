@@ -11,7 +11,8 @@ import {
   normalizeSessionNoteText,
 } from "@ash/shared/session-notes";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
-import { isWorkspaceRecoveryNote, noteTone } from "../src/task-detail/conversationNotes.ts";
+import { isWorkspaceRecoveryNote, noteTone, verifyNoteOf } from "../src/task-detail/conversationNotes.ts";
+import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
 import { conversationSystemRows } from "../src/task-detail/conversationSystemRows.ts";
 import { isConflictHandoff, isReviewSystemPrompt, systemEventKind, systemNoticeModeFromSearch } from "../src/task-detail/systemNoticeModel.ts";
 
@@ -372,5 +373,42 @@ assert.deepEqual(
 );
 assert.equal(rawScoped.find((item) => item.kind === "event")?.variant, "note");
 assert.equal(rawScoped.find((item) => item.kind === "event")?.tone, "neutral");
+
+// —— 辩论旁注不是审查轮的起止 ——
+// 「开始辩论第 1 轮审查意见：…」里带着「第 1 轮审查」四个字，被 VERIFY_NOTE 读成一轮
+// **就地验证**的开始（前缀「自由工作流」没在，所以还退化成了「验证」），当场开出一张
+// 「第 1 轮验证」的卡；而服务端从不为它写就地验证的收尾旁注，那张卡永远停在「进行中」，
+// 还吞掉了第 1 段辩论发言（用户 2026-09-24 截图）。四句原文照抄 free-review-debate.ts。
+const DEBATE_NOTES = [
+  "开始辩论第 1 轮审查意见：3 个来回，审查者（顶级审查）先答辩，最后由它收尾给出立场；结论仍由你裁定。",
+  "辩论第 1/7 段：轮到审查者发言（顶级审查）。",
+  "辩论第 3 段没能起跑（执行器不可用）；辩论已中止；驳回仍在等你裁定，也可以再开一轮辩论。",
+  "辩论结束，审查者收尾立场：维持原意见。这只是它自己的立场，结论仍由你裁定：采纳执行者，或维持审查意见让它照改。",
+];
+for (const note of DEBATE_NOTES) {
+  assert.equal(verifyNoteOf(note), null, `辩论旁注被当成了审查轮的起止：${note.slice(0, 26)}…`);
+}
+// 真正的审查起止不能被上面那条判据误伤。
+assert.deepEqual(verifyNoteOf("自由工作流第 1 轮审查开始：顶级审查 · 逻辑检查。"), { kind: "free", round: 1, phase: "start" });
+assert.deepEqual(verifyNoteOf("自由工作流第 1 轮审查未通过，意见已发回会话；修复回合正常结束后自动复审。"), { kind: "free", round: 1, phase: "end" });
+assert.deepEqual(verifyNoteOf("第 3 轮验证开始：就在这个任务的工作目录里跑。"), { kind: "inline", round: 3, phase: "start" });
+
+// 端到端：一整条辩论走完，时间线上只该留下那一轮真审查的卡，不该多出一张永远「进行中」的。
+const debateSession = {
+  id: "s-debate", taskId: "t1", agentType: "claude", role: "main",
+  executor: "claude@ccb", startedAt: "2026-09-24T12:00:00.000Z", endedAt: "2026-09-24T15:00:00.000Z",
+};
+const timeline = [
+  "自由工作流第 1 轮审查开始：顶级审查 · 逻辑检查。",
+  "自由工作流第 1 轮审查未通过，意见已发回会话；修复回合正常结束后自动复审。",
+  ...DEBATE_NOTES.slice(0, 2),
+  DEBATE_NOTES[3],
+].map((text, index) => `\x1e${JSON.stringify({ t: "system", text, at: `2026-09-24T12:${String(index * 5).padStart(2, "0")}:00.000Z` })}`);
+const debateLanes = conversationFeedRows(
+  buildConversationItems([{ session: debateSession, output: timeline.join("\n"), trace: [] }], [debateSession], []),
+).filter((row) => row.kind === "review-lane");
+assert.equal(debateLanes.length, 1, `辩论旁注另开了审查卡：${JSON.stringify(debateLanes.map((lane) => lane.title))}`);
+assert.equal(debateLanes[0].title, "第 1 轮审查");
+assert.equal(debateLanes[0].complete, true, "唯一那张卡是收了口的；「进行中」说明它等的收尾旁注根本不会来");
 
 console.log("conversation-notes ok");

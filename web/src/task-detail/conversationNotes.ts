@@ -74,8 +74,23 @@ const MERGE_END = /^合并结果审查(通过|未通过|未能正常给出结论
 // 继续」＝接着上一回合做）——它们开的都是同一轮的新回合，把它判成收口的话，重跑后审查者
 // 的发言会整段掉出区间（没徽标、也进不了折叠卡）。
 const STARTS = /开始|重跑上一回合|从中断处继续/;
+/**
+ * 辩论的旁注**不是**审查轮的起止。
+ *
+ * 它们讲的是「这一轮审查意见被驳回之后，双方在辩它」，而不是「又开了一轮审查」——
+ * 可措辞里天然带着轮号：`开始辩论第 1 轮审查意见：…`（free-review-debate.ts）。上面
+ * 那条 VERIFY_NOTE 认的是「第 N 轮审查」这四个字，于是它被读成 `inline / round 1 /
+ * start`（前缀「自由工作流」没在，所以还退化成了**验证**），当场开出一张「第 1 轮验证」
+ * 的卡；而服务端从不为它写任何一条就地验证的收尾旁注，这张卡就**永远停在「进行中」**，
+ * 还把第 1 段辩论发言吞了进去（用户 2026-09-24 截图报的）。
+ *
+ * 判据放在 verifyNoteOf 的**最前面**而不是改服务端文案：下一次有人在旁注里顺手写下
+ * 「第 N 轮审查」同样会中招，parser 不该指望每一处文案都绕着它走。
+ */
+const DEBATE_NOTE = /辩论/;
 
 export function verifyNoteOf(text: string): VerifyNoteMark | null {
+  if (DEBATE_NOTE.test(text)) return null;
   const matched = VERIFY_NOTE.exec(text);
   if (matched) {
     const round = Number(matched[2]);
