@@ -1,0 +1,147 @@
+/* 时间线上那张辩论卡，以及它的全宽阅读态。
+ *
+ * 外形刻意跟审查卡（.verify-lane）同族——都是「一段跑完的旁路过程收成一行」，不同族
+ * 会让人以为它们是两类东西。只有左边那道竖线换成 accent：审查是青的，辩论不是审查。 */
+
+.debate-lane {
+  position: relative;
+  width: 100%;
+  max-width: 790px;
+  margin: 18px 0 22px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgb(30 32 38 / 3%);
+}
+.debate-lane::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: -1px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
+}
+
+.debate-lane-head {
+  display: flex;
+  min-height: 36px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 7px 10px 7px 12px;
+  font-size: 10.5px;
+}
+.debate-lane.is-collapsed .debate-lane-head { border-bottom-color: transparent; }
+.debate-lane-mark {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in lch, var(--accent) 13%, var(--panel));
+  color: var(--accent);
+}
+.debate-lane-head > b { flex: none; color: color-mix(in lch, var(--accent) 66%, var(--ink)); font-size: 11px; font-weight: 680; }
+.debate-lane-by { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.debate-lane-verdict { flex: none; border-radius: 999px; padding: 1px 7px; font-size: 9.5px; font-weight: 650; }
+.debate-lane-verdict.is-running { background: color-mix(in lch, var(--cyan) 11%, var(--panel)); color: color-mix(in lch, var(--cyan) 72%, var(--ink)); }
+.debate-lane-verdict.is-failed { background: color-mix(in lch, var(--red) 11%, var(--panel)); color: var(--red); }
+.debate-lane-verdict.is-verdict { background: color-mix(in lch, var(--amber) 12%, var(--panel)); color: var(--amber); }
+.debate-lane-verdict.is-done { background: var(--raised); color: var(--muted); }
+.debate-lane-time { margin-left: auto; color: var(--faint); font-size: 9.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.debate-lane-actions { display: inline-flex; flex: none; align-items: center; gap: 5px; }
+.debate-lane-time + .debate-lane-actions { margin-left: 0; }
+.debate-lane-actions:first-of-type { margin-left: auto; }
+.debate-lane-actions > button {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 2px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.debate-lane-actions > button:hover { background: var(--raised); color: var(--ink); }
+.debate-lane-body { padding: 12px 13px 6px; }
+.debate-lane-body[hidden] { display: none; }
+
+/* 一格一段发言，颜色即发言方，空心的是还没说的 —— 替掉的是原来七条「辩论第 i/7 段：
+   轮到 X 发言」的流水旁注：那七条讲的是进度，而进度七个像素格就说完了。
+   配色跟下面那份逐段记录（.free-review-debate li）同源：审查者 accent、执行者 amber。
+   同一张卡上同样两方各染两套色，读的人只会以为那是四种东西。 */
+.debate-lane-strip { display: inline-flex; flex: none; gap: 3px; }
+.debate-lane-strip i { width: 13px; height: 4px; border-radius: 2px; background: var(--line2); }
+.debate-lane-strip i.is-reviewer:is(.is-done, .is-speaking) { background: color-mix(in lch, var(--accent) 78%, var(--panel)); }
+.debate-lane-strip i.is-executor:is(.is-done, .is-speaking) { background: color-mix(in lch, var(--amber) 88%, var(--panel)); }
+/* 正在说的那格用呼吸区分，而不是换颜色：换色会跟「执行者」撞成同一种黄。 */
+.debate-lane-strip i.is-speaking { animation: debate-strip-pulse 1.1s ease-in-out infinite; }
+.debate-lane-strip i.is-error { background: color-mix(in lch, var(--red) 55%, var(--panel)); }
+
+@keyframes debate-strip-pulse {
+  0%, 100% { opacity: .3; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .debate-lane-strip i.is-speaking { animation: none; opacity: .55; }
+}
+
+/* ——— 全宽阅读态 ——— */
+.debate-reader {
+  position: fixed;
+  z-index: 70;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  padding: 44px 28px;
+  background: lch(0 0 0 / 0.38);
+  inset: 0;
+  overflow-y: auto;
+  backdrop-filter: blur(2px);
+}
+.debate-reader__sheet {
+  width: min(900px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.debate-reader__sheet > header {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 12px 12px 0 0;
+  background: var(--panel);
+  padding: 11px 15px;
+}
+.debate-reader__sheet > header b { display: block; color: var(--ink); font-size: 12.5px; font-weight: 660; }
+.debate-reader__sheet > header small { color: var(--faint); font-size: 10.5px; }
+.debate-reader__sheet > header button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 4px 9px;
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.debate-reader__sheet > header button:hover { background: var(--raised); color: var(--ink); }
+.debate-reader__body { padding: 6px 15px 18px; }

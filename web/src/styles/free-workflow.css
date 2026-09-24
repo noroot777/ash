@@ -114,9 +114,22 @@
 .free-review-debate > header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }.free-review-debate > header b { color:var(--ink); font-size:9.5px; }.free-review-debate > header small { color:var(--faint); font-size:8.5px; }
 .free-review-debate > ol { display:grid; gap:7px; margin:7px 0 0; padding:0; list-style:none; }
 .free-review-debate li { border-left:2px solid var(--line2); padding-left:8px; }.free-review-debate li.is-reviewer { border-left-color:color-mix(in lch,var(--accent) 45%,var(--line2)); }.free-review-debate li.is-executor { border-left-color:color-mix(in lch,var(--amber) 45%,var(--line2)); }.free-review-debate li.is-speaking { opacity:.75; }
-.free-review-debate li > span { display:flex; align-items:center; gap:4px; color:var(--faint); }.free-review-debate li > span b { font-size:9px; }
+.free-review-debate li > span { display:flex; align-items:center; gap:4px; color:var(--faint); }.free-review-debate li > span b { font-size:9px; }.free-review-debate li > span em { font-size:8.5px; font-style:normal; font-variant-numeric:tabular-nums; }
 .free-review-debate .task-markdown { margin-top:3px; color:var(--muted); font-size:10px; line-height:1.6; }
 .free-review-debate__pending { margin:3px 0 0; color:var(--faint); font-size:9.5px; }
+/* 「全宽阅读」：面板这一栏只有 ~540px，七段发言在里面是一根一万像素高的细条。 */
+.free-review-debate__expand { display:inline-flex; flex:none; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 7px; color:var(--muted); font-size:9px; cursor:pointer; }
+.free-review-debate__expand:hover { background:var(--raised); color:var(--ink); }
+/* 阅读态同一份数据、另一档排版：正文回到能读的字号，两侧留白也跟着松开。 */
+.free-review-debate.is-reading { border:0; border-radius:0; padding:0; }
+.free-review-debate.is-reading > header { display:none; }
+.free-review-debate.is-reading > ol { gap:20px; margin:0; }
+.free-review-debate.is-reading li { border-left-width:2px; padding-left:14px; }
+.free-review-debate.is-reading li > span { gap:7px; margin-bottom:4px; font-size:10px; }
+.free-review-debate.is-reading li > span b { font-size:11px; font-weight:650; color:var(--muted); }
+.free-review-debate.is-reading li > span em { font-size:10px; }
+.free-review-debate.is-reading .task-markdown { margin-top:0; color:var(--ink); font-size:12.5px; line-height:1.68; }
+.free-review-debate.is-reading .free-review-debate__pending { font-size:11.5px; }
 .free-review-debate-exchanges { display:grid; gap:5px; padding:0 2px; }.free-review-debate-exchanges > b { color:var(--ink); font-size:10px; }.free-review-debate-exchanges > div { display:flex; gap:5px; }.free-review-debate-exchanges > div > button { width:32px; height:28px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); color:var(--muted); font-size:10.5px; }.free-review-debate-exchanges > div > button.is-selected { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); background:color-mix(in lch,var(--accent) 10%,var(--panel)); color:var(--accent); font-weight:700; }.free-review-debate-exchanges > small { color:var(--faint); font-size:9px; line-height:1.5; }
 .review-round-dispute { margin-top:10px; border-top:0.5px solid var(--line); padding-top:9px; }.review-round-dispute > b { display:block; margin-bottom:5px; color:var(--amber); font-size:10px; }.review-round-dispute > .free-review-debate { margin-top:8px; }
 .post-merge-review-card { display:grid; gap:8px; border-bottom:1px solid var(--line); background:color-mix(in lch,var(--cyan) 2.5%,var(--panel)); padding:12px 14px; }

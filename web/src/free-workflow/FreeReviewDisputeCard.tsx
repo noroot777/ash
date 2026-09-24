@@ -1,10 +1,11 @@
 import { useState } from "react";
 import type { FreeReviewRound, FreeReviewRun } from "@ash/shared";
 import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@ash/shared/free-workflow";
-import { ArrowSquareOut, ChatsCircle, HandPalm, SpinnerGap, Wrench } from "@phosphor-icons/react";
+import { ArrowSquareOut, ArrowsOutSimple, ChatsCircle, HandPalm, SpinnerGap, Wrench } from "@phosphor-icons/react";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { FreeReviewDebateReader } from "./FreeReviewDebateReader.tsx";
 import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
 
 type Pending = "debate" | "withdrawn" | "upheld" | "deferred";
@@ -40,6 +41,8 @@ export function FreeReviewDisputeCard({
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
   const [exchanges, setExchanges] = useState(1);
+  /** 正在全宽阅读的那场辩论（debate.id）；同一条驳回可能辩过多次，按 id 认。 */
+  const [reading, setReading] = useState<string | null>(null);
   const dispute = round.dispute;
   const debates = dispute?.debates ?? [];
   const latestDebate = debates.at(-1) ?? null;
@@ -47,6 +50,7 @@ export function FreeReviewDisputeCard({
   // 辩完的那条挡住再辩（后端同判据）：同一份报告挂两条辩完的记录只会让「以哪条为准」
   // 变成新问题。中断的可以重开——那是系统没让人说完，不该连带把用户的出路关掉。
   const canDebate = !latestDebate || latestDebate.status === "failed";
+  const readingDebate = debates.find((item) => item.id === reading) ?? null;
   if (!dispute) return null;
   const blocked = disabled || debateRunning;
   const deferReason = dispute.deferReason;
@@ -113,13 +117,27 @@ export function FreeReviewDisputeCard({
           <MarkdownBody text={deferReason} />
         </div>
       )}
-      {debates.map((item, index) => (
-        <FreeReviewDebateTranscript
-          key={item.id}
-          debate={item}
-          ordinal={debates.length > 1 ? index + 1 : null}
-        />
-      ))}
+      {debates.map((item, index) => {
+        const ordinal = debates.length > 1 ? index + 1 : null;
+        return (
+          <FreeReviewDebateTranscript
+            key={item.id}
+            debate={item}
+            ordinal={ordinal}
+            // 面板这一栏只有 ~540px，七段发言在里面是一根一万像素高的细条（用户 2026-09-24
+            // 实测）。正文归属没错，错的是读不下去，所以给一个够宽的读法而不是搬家。
+            action={(
+              <button
+                type="button"
+                className="free-review-debate__expand"
+                onClick={() => setReading(item.id)}
+              >
+                <ArrowsOutSimple size={11} aria-hidden="true" />全宽阅读
+              </button>
+            )}
+          />
+        );
+      })}
       <p>
         {debateRunning
           ? "双方正在各自陈词；辩论只产生发言，不改变结论，说完仍由你裁定。"
@@ -149,6 +167,14 @@ export function FreeReviewDisputeCard({
         </button>
       </div>
 
+      {readingDebate && (
+        <FreeReviewDebateReader
+          debate={readingDebate}
+          title={`第 ${round.round} 轮审查意见 · ${run.reviewerName}`}
+          ordinal={debates.length > 1 ? debates.indexOf(readingDebate) + 1 : null}
+          onClose={() => setReading(null)}
+        />
+      )}
       {pending === "debate" && (
         <ConfirmDialog
           title="让审查者和执行者辩论"

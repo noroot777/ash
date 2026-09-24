@@ -16,7 +16,9 @@ import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
+import { conversationDebateRows } from "./conversationDebateRows.ts";
 import { conversationSystemRows } from "./conversationSystemRows.ts";
+import { DebateLane } from "./DebateLane.tsx";
 import { ReviewerLane } from "./ReviewerLane.tsx";
 import {
   SystemAuthoredMessage,
@@ -243,7 +245,9 @@ export function ConversationFeed({
   const search = typeof window === "undefined" ? "" : window.location.search;
   const modeFromUrl = SYSTEM_NOTICE_DEMO_REQUESTED;
   const noticeMode = systemNoticeMode ?? INITIAL_SYSTEM_NOTICE_MODE;
-  const rows = conversationSystemRows(conversationFeedRows(items, { reviews }));
+  // 一整场辩论折成一行，排在系统旁注收拢之前 —— 反过来的话，那七条「轮到 X 发言」会先
+  // 被 conversationSystemRows 收进摘要行，辩论就再也认不出自己的边界了。
+  const rows = conversationSystemRows(conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }));
   // 「执行者驳回了，现在由你裁定」那条旁注上挂一颗「去裁定」——那句话把出路列了出来，
   // 却没给任何能点的东西（用户 2026-09-24：「直接给个按钮不行吗」）。
   //
@@ -340,6 +344,15 @@ export function ConversationFeed({
                   mode={noticeMode}
                   attached={row.attached}
                   action={row.items.some((item) => item.id === disputeEventId) ? ruleAction : undefined}
+                />
+              );
+            }
+            if (row.kind === "debate-lane") {
+              return (
+                <DebateLane
+                  key={row.id}
+                  row={row}
+                  fallback={row.items.map((item) => renderItem(item, true))}
                 />
               );
             }
