@@ -7,7 +7,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { call, fail, ok } from "../runtime.js";
-import { AGENT_TYPE, MODE, TASK_STATUS, taskShape } from "../schemas.js";
+import { AGENT_TYPE, MODE, TASK_STATUS, WORKFLOW_MODE, taskShape } from "../schemas.js";
 
 export function registerOrchestrationTools(server: McpServer): void {
 server.registerTool(
@@ -64,7 +64,7 @@ server.registerTool(
   "batch_create_tasks",
   {
     title: "批量建任务到已有分组",
-    description: "往一个已存在的分组里批量创建 single 任务。chain:true → 创建一个 queue 把这批任务按数组顺序串成 A→B→C→D(前一个 done 后下一个自动启动)。**chain:true 只能用于 serial group**,parallel group 会返回 400。想真正并行就别开 chain。run:true 建完立即开跑。",
+    description: "往一个已存在的分组里批量创建 single 任务。chain:true → 创建一个 queue 把这批任务按数组顺序串成 A→B→C→D(前一个 done 后下一个自动启动)。**chain:true 只能用于 serial group**,parallel group 会返回 400。想真正并行就别开 chain。run:true 建完立即开跑。建出来的任务默认走**自由工作流**(workflowMode=free);要那条固定的站点线才传 preset。",
     inputSchema: {
       groupId: z.string(),
       tasks: z.array(taskShape).min(1),
@@ -78,6 +78,7 @@ server.registerTool(
         useWorktree: z.boolean().optional().describe("默认是否使用 worktree；缺省跟随全局默认，任务自身可覆盖"),
         worktreeBase: z.string().nullable().optional().describe("默认 worktree base ref；任务自身可覆盖"),
         mergeTargetBranch: z.string().nullable().optional().describe("默认最终合入分支，独立于开工起点"),
+        workflowMode: WORKFLOW_MODE.optional(),
         labels: z.array(z.string()).optional(),
       }).optional().describe("每个任务的兜底值，任务自身可覆盖"),
     },
@@ -197,7 +198,7 @@ server.registerTool(
   {
     title: "一步建任务批次",
     description:
-      "便利工具:按 repoPath 找到/创建项目 → 找到或复用分组 → 把一批任务建进去,一次调用搞定。返回 {project, group, tasks}。chain 默认 true=创建一个 queue 串成 A→B→C(前一个 done 后下一个自动启动);想真正并行就传 chain:false 并把 mode 设 parallel。run:true 立即开跑。多步编排首选这个。",
+      "便利工具:按 repoPath 找到/创建项目 → 找到或复用分组 → 把一批任务建进去,一次调用搞定。返回 {project, group, tasks}。chain 默认 true=创建一个 queue 串成 A→B→C(前一个 done 后下一个自动启动);想真正并行就传 chain:false 并把 mode 设 parallel。run:true 立即开跑。多步编排首选这个。建出来的任务默认走**自由工作流**(workflowMode=free);要那条固定的站点线才传 preset。",
     inputSchema: {
       repoPath: z.string().describe("git 仓库绝对路径；项目按它找到或创建"),
       tasks: z.array(taskShape).min(1).describe("按顺序排列；chain 时即依赖链顺序"),
@@ -211,10 +212,11 @@ server.registerTool(
       useWorktree: z.boolean().optional().describe("所有任务是否使用 worktree；缺省跟随全局默认，任务可逐个覆盖"),
       worktreeBase: z.string().nullable().optional().describe("所有任务的默认 worktree base ref；任务可逐个覆盖"),
       mergeTargetBranch: z.string().nullable().optional().describe("所有任务的默认最终合入分支"),
+      workflowMode: WORKFLOW_MODE.optional(),
       run: z.boolean().optional(),
     },
   },
-  async ({ repoPath, tasks, groupName, mode, chain, agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, run }) => {
+  async ({ repoPath, tasks, groupName, mode, chain, agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode, run }) => {
     try {
       const project = (await call("POST", "/projects/resolve", { repoPath })) as { id: string; name: string };
       // resolve（找到或复用）而非每次新建，避免同名分组被反复建出重复副本。
@@ -224,8 +226,8 @@ server.registerTool(
       const batch = (await call("POST", `/groups/${group.id}/tasks/batch`, {
         chain: chain ?? true,
         run: !!run,
-        defaults: [agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch].some((v) => v !== undefined)
-          ? { agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch }
+        defaults: [agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode].some((v) => v !== undefined)
+          ? { agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, workflowMode }
           : undefined,
         tasks,
       })) as { tasks: unknown[]; warning?: string };

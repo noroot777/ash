@@ -2,11 +2,21 @@
 // 各处写死，新增一个执行器后 MCP 侧会莫名 400（见下面那段注释）。
 import { z } from "zod";
 import { AGENT_TYPES, STAGE_ORDER } from "@ash/shared";
+import { TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
 
 export const AGENT_TYPE = z.enum(AGENT_TYPES);
 export const MODE = z.enum(["parallel", "serial"]);
 export const TASK_STATUS = z.enum(["backlog", "done", "failed", "canceled"]);
 export const TASK_STAGE = z.enum(STAGE_ORDER);
+
+// 工作方式。**措辞是给 agent 看的判据，不是字段说明**：它手上只有这段话能决定选哪个，
+// 说成「free / preset 二选一」它就会随便挑一个。所以直接写「默认 free，什么时候才该改」。
+export const WORKFLOW_MODE = z.enum(TASK_WORKFLOW_MODES).describe(
+  "工作方式,缺省 free。free=自由工作流:建完就跑,跑完由人在界面上随时派审查、开预览、" +
+  "驳回审查意见——**绝大多数活都该用这个**。preset=预设工作流:按一条排好的站点线走" +
+  "(实现→验证→预览→人工→验收),只有在你确实要那条固定流程、或者要指定 workflowId " +
+  "起手式时才选它。选了 preset 的任务在界面上没有「派审查/打开预览」入口。",
+);
 
 // One task spec, reused by batch_create_tasks and create_task_chain.
 // 注意:不再接受 dependsOn / resumeDependsOn —— 顺序依赖统一走 queue,
@@ -22,5 +32,6 @@ export const taskShape = z.object({
   useWorktree: z.boolean().optional().describe("是否在独立 worktree 中运行；缺省跟随全局默认，非 git 项目始终为 false"),
   worktreeBase: z.string().nullable().optional().describe("开工起点；可选父任务分支，服务端冻结该提交并记录验收依赖"),
   mergeTargetBranch: z.string().nullable().optional().describe("最终合入分支；派生任务默认继承父任务的最终目标，独立于开工起点"),
+  workflowMode: WORKFLOW_MODE.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),
 });

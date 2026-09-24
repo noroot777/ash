@@ -18,7 +18,7 @@ import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
 import { branchDeletionRejection } from "./task-branch-plan.js";
 import { withRepoLock } from "./repo-lock.js";
-import { deleteTaskAssociations } from "./task-routes.js";
+import { deleteTaskAssociations } from "./task-delete-routes.js";
 import { isTaskBusy, taskBusyRejection } from "./task-busy.js";
 import { terminalSessions } from "./terminal.js";
 import { findWorkflow } from "./workflows.js";

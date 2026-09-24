@@ -1,6 +1,8 @@
 import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
 import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
+import type { TaskWorkflowMode } from "@ash/shared/free-workflow";
+import { TASK_WORKFLOW_MODES, freeWorkflowFits } from "@ash/shared/free-workflow";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -116,6 +118,30 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     }
   }
 
+  // 这一批每个任务走哪种工作方式。判据与 `POST /tasks` 完全一样（`freeWorkflowFits`）：
+  // 批量这条路建出来的全是普通单任务，所以只剩「有没有自带起手式」这一条——省略
+  // workflowMode 时，没给 workflowId 的就是 free。
+  //
+  // 默认给 free 而不是 preset，是因为拿到 preset 的任务在界面上没有「派审查 / 开预览」
+  // 入口（`FreeWorkflowToolbar` 按 workflowMode 整条返回 null）。以前这条路根本收不下
+  // workflowMode，agent 建出来的任务一律落 preset，用户只看到一个功能被剪掉的任务。
+  const modeOf = (s: BatchTaskInput): TaskWorkflowMode => {
+    const workflowId = s.workflowId !== undefined ? s.workflowId : b.defaults?.workflowId ?? null;
+    return s.workflowMode ?? b.defaults?.workflowMode ?? (freeWorkflowFits({ workflowId }) ? "free" : "preset");
+  };
+  for (const [i, s] of specs.entries()) {
+    const wm = modeOf(s);
+    if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(wm)) {
+      return c.json({ error: `tasks[${i}].workflowMode 只能是 free 或 preset`, allowed: TASK_WORKFLOW_MODES }, 400);
+    }
+    // 显式的 free + 显式的起手式是自相矛盾的，不能静默丢掉其中一个：自由工作流没有
+    // 起手式这个概念（createTasks 会把 workflow 置空），丢了用户就拿到一条没有验证站
+    // 的任务而毫不知情。
+    if (wm === "free" && (s.workflowId ?? b.defaults?.workflowId) != null) {
+      return c.json({ error: `tasks[${i}]: 自由工作流不能同时携带起手式（workflowId）` }, 400);
+    }
+  }
+
   // 拒绝 legacy 字段:本版本不再接受 dependsOn / resumeDependsOn。
   // 想串行就用 chain:true,想跨组依赖就用 queue API。
   for (const [i, s] of specs.entries()) {
@@ -202,6 +228,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
         s.worktreeBase !== undefined ? s.worktreeBase : b.defaults?.worktreeBase ?? null,
       mergeTargetBranch: s.mergeTargetBranch ?? b.defaults?.mergeTargetBranch ?? null,
       workflowId: s.workflowId !== undefined ? s.workflowId : b.defaults?.workflowId ?? null,
+      workflowMode: modeOf(s),
       ownerUserId: batchOwner,
     };
   });

@@ -4,6 +4,31 @@ import type { PreviewServiceState } from "./preview.ts";
 export const TASK_WORKFLOW_MODES = ["free", "preset"] as const;
 export type TaskWorkflowMode = (typeof TASK_WORKFLOW_MODES)[number];
 
+/**
+ * 「这个建任务请求容得下自由工作流吗」——**建任务路由的门禁与默认值共用同一份判据**。
+ *
+ * 自由工作流只适用于普通单任务：团队/讨论任务、派生执行者（`parentId`）、审查任务
+ * （`reviewOf`）各自有自己的编排，自带起手式（`workflow`/`workflowId`）的请求则是明摆着
+ * 要走预设那条线。这几种传 `workflowMode: "free"` 一律 409/400。
+ *
+ * 之所以要把它抽成一个函数：默认值现在按它推导（没显式说就是「配得上就给 free」）。
+ * 判据但凡和门禁差一个字，老调用方就会在自己什么都没改的情况下凭空吃 409——它们
+ * 压根不知道有 `workflowMode` 这个字段。两处各写一份，早晚漂。
+ */
+export function freeWorkflowFits(req: {
+  mode?: string | null;
+  parentId?: string | null;
+  reviewOf?: string | null;
+  workflow?: unknown;
+  workflowId?: string | null;
+}): boolean {
+  return (req.mode ?? "single") === "single"
+    && req.parentId == null
+    && req.reviewOf == null
+    && req.workflow == null
+    && req.workflowId == null;
+}
+
 export const FREE_REVIEW_CHECK_MODES = ["syntax", "logic"] as const;
 export type FreeReviewCheckMode = (typeof FREE_REVIEW_CHECK_MODES)[number];
 

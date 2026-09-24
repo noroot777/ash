@@ -1,19 +1,18 @@
-import type { AgentType, Task, TaskStatus, TaskWorkspaceDiscardResult } from "@ash/shared";
+import type { AgentType, Task, TaskStatus } from "@ash/shared";
 import { AGENT_TYPES, isUserSettableStatus, TASK_BATCH_LIMIT } from "@ash/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { inheritExecutorOverrides, sameExecutor } from "@ash/shared/executors";
 import { normalizeWorkflowDef } from "@ash/shared/workflow";
-import { TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
+import { TASK_WORKFLOW_MODES, freeWorkflowFits } from "@ash/shared/free-workflow";
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
+import { projects, queueItems, tasks } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
+import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
-import { taskBusyRejection } from "./task-busy.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { duetTopicText } from "./duet/user-message.js";
@@ -23,46 +22,16 @@ import { canSeeProject, groupInProject, projectOfQueue, taskInProject, visiblePr
 import { executorScopeForOwner, type ExecutorScope } from "./auth/owned-executors.js";
 import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
-import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
-import { withRepoLock } from "./repo-lock.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
-import { deleteTaskSideChats } from "./chat/lifecycle.js";
-
-// 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
-// 随手记回链。没有 FK cascade,只删任务行会留下孤儿——审查实测:等答复的审查在任务
-// 删除后永远停在 reviewing,答复消息永远 pending(投递时任务已不存在)。
-export async function deleteTaskAssociations(taskId: string): Promise<void> {
-  await deleteTaskSideChats(taskId);
-  await deleteTaskBranchRefs(taskId);
-  await db.delete(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, taskId));
-  const runIds = (await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
-    .where(eq(freeReviewRuns.taskId, taskId))).map((run) => run.id);
-  // 辩论挂在轮次上（debates → debate_turns），得先于 rounds 收掉，否则 round 行一删
-  // 就再没有任何线索能找到那些发言行。
-  const debateIds = (await db.select({ id: freeReviewDebates.id }).from(freeReviewDebates)
-    .where(eq(freeReviewDebates.taskId, taskId))).map((debate) => debate.id);
-  if (debateIds.length) {
-    await db.delete(freeReviewDebateTurns).where(inArray(freeReviewDebateTurns.debateId, debateIds));
-  }
-  await db.delete(freeReviewDebates).where(eq(freeReviewDebates.taskId, taskId));
-  if (runIds.length) await db.delete(freeReviewRounds).where(inArray(freeReviewRounds.runId, runIds));
-  await db.delete(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId));
-  await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId));
-  await db.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId));
-  await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
-  await db.delete(teamInbound).where(eq(teamInbound.taskId, taskId)); // 调度台还没送出的入站消息
-  await db.delete(noteTasks).where(eq(noteTasks.taskId, taskId));
-  // 会话行、定时计划、队列位也一起收：孤儿 cron 每个 tick 都会被扫到再查不到任务，
-  // 队列残位会顶住后续推进（审查实测：删除后 sessionRows/scheduleRows 各剩 1）。
-  await db.delete(sessions).where(eq(sessions.taskId, taskId));
-  await db.delete(schedules).where(eq(schedules.taskId, taskId));
-  await db.delete(queueItems).where(eq(queueItems.taskId, taskId));
-  // 团队派活自建的内部组（groups.owner_task_id=本任务）：GET /groups 默认过滤掉它们，
-  // 留下来就是永远不可见也没入口清理的孤儿（审查实测：删 lead 后两个内部组原样保留）。
-  await db.delete(groups).where(eq(groups.ownerTaskId, taskId));
-}
+import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
 
 export function mountTaskRoutes(api: Hono): void {
+  // 删除那一族(连带关联行 + DELETE 本体)住在 task-delete-routes.ts —— 只是为了行数,
+  // **挂载契约一个字没变**:所有调用方(含十几个回归测试的迷你 api)照旧只调
+  // `mountTaskRoutes`。让它们各自再记得多挂一次,漏掉的那个不会编译报错,只会在某条
+  // 用例里变成一个莫名其妙的 404。
+  mountTaskDeleteRoutes(api);
+
   // 一次最多问这么多任务的追问 / 正文（判据和常量本体在 shared 的 TASK_BATCH_LIMIT）：
   // 追问每个都要摸一次盘，别让一个手抖的请求把整个进程钉在 I/O 上。
   // **超了返 400，不截断** —— 静默少返几行会被前端渲染成「还没读到」，一条永远不会
@@ -189,7 +158,16 @@ api.post("/tasks", async (c) => {
       return c.json({ error: "task not found", [field]: taskRef }, 404);
     }
   }
-  const workflowMode = b.workflowMode ?? "preset";
+  // 没显式指定就按**这个请求配不配自由工作流**推导（`freeWorkflowFits` 与下面三条门禁
+  // 共用同一份判据）。以前这里写死 `preset`，于是同一件事从界面建和从 MCP/脚本建会落到
+  // 两种模式上：新建面板默认选的是 free（`TaskComposerPanel`），而调用方压根不知道有
+  // `workflowMode` 这个字段可传，只能拿到 preset —— 拿到的那种任务没有「派审查 / 开预览」
+  // 入口（`FreeWorkflowToolbar` 第一行就按 workflowMode 整条返回 null），用户在界面上看到
+  // 的是一个功能被剪掉的任务，却找不到原因。
+  //
+  // 反过来**不能无条件默认 free**：团队/讨论任务、派生执行者、审查任务、自带起手式的请求
+  // 都容不下它，默认给它们 free 等于让老调用方凭空吃 409。所以判据必须就是门禁那一份。
+  const workflowMode = b.workflowMode ?? (freeWorkflowFits(b) ? "free" : "preset");
   if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(workflowMode)) {
     return c.json({ error: "workflowMode 只能是 free 或 preset" }, 400);
   }
@@ -619,80 +597,6 @@ api.get("/tasks/:id/workspace", async (c) => {
     ...(await detectTaskWorkspace(project?.repoPath, child.id)),
   })))).filter((entry) => entry.path || entry.branch);
   return c.json({ ...own, ...(children.length ? { children } : {}) });
-});
-
-
-// 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支
-// 一起删」,`force=1` 是看过第一次失败之后的再来一次(--force / -D)。
-//
-// 顺序刻意是「先删任务行,再清 git」:删任务是用户的主要意图,git 那边失败(worktree
-// 脏、分支未合并)不该把它一起挡回去 —— 结果原样回给 UI,由用户决定强制删还是留着。
-api.delete("/tasks/:id", async (c) => {
-  const tid = c.req.param("id");
-  const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
-  const deletionProject = existing ? (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0) : undefined;
-  return withRepoLock(deletionProject?.repoPath, async () => {
-  // 正在跑 / 占着 turn / 在验收 / 有 child 在飞的任务都不能整行删掉,判据与理由见
-  // task-busy.ts —— 项目级的两个入口用的是同一份,别在这里再拼一遍。
-  const busy = await taskBusyRejection(tid, "删除");
-  if (busy) return c.json(busy, 409);
-  // 都停了则连 children 行一并删,不留悬空 parentId。
-  const children = existing ? await db.select().from(tasks).where(eq(tasks.parentId, tid)) : [];
-  const project = existing
-    ? (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0)
-    : undefined;
-  for (const row of [existing, ...children]) {
-    if (!row || !project) continue;
-    const rejection = await branchDeletionRejection(project.repoPath, row.id);
-    if (rejection) return c.json(rejection, 409);
-  }
-  const wantWorktree = c.req.query("worktree") === "1";
-  const wantBranch = c.req.query("branch") === "1";
-  // children 的 Git 工作区必须与它们的行一起处理：只删行的话，独立 worktree/分支会变成
-  // 数据库里查无此任务的孤儿资源，leftover 检测（按父任务 id）也看不到（审查实测）。
-  const childCleanups: (TaskWorkspaceDiscardResult & { taskId: string })[] = [];
-  for (const child of children) {
-    await deleteTaskAssociations(child.id);
-    await db.delete(tasks).where(eq(tasks.id, child.id));
-    if (project && child.useWorktree && (wantWorktree || wantBranch)) {
-      childCleanups.push({
-        taskId: child.id,
-        ...await discardTaskWorkspace(project.repoPath, child.id, {
-          worktree: wantWorktree,
-          branch: wantBranch,
-          force: c.req.query("force") === "1",
-        }),
-      });
-    }
-  }
-  await deleteTaskAssociations(tid);
-  await db.delete(tasks).where(eq(tasks.id, tid));
-  let cleanup: TaskWorkspaceDiscardResult | null = null;
-  if (project && (wantWorktree || wantBranch)) {
-    cleanup = await discardTaskWorkspace(project.repoPath, tid, {
-      worktree: wantWorktree,
-      branch: wantBranch,
-      force: c.req.query("force") === "1",
-    });
-  }
-  // 清理之后仍然剩下的东西:没勾选、或勾了但 git 拒绝。UI 据此决定要不要继续追问。
-  // children 的残留一并报（它们的行已删，之后没有别的入口能发现这些资源）。
-  const leftover = project ? await detectTaskWorkspace(project.repoPath, tid) : null;
-  const childLeftovers = project
-    ? (await Promise.all(children.map(async (child) => ({
-        taskId: child.id,
-        leftover: await detectTaskWorkspace(project.repoPath, child.id),
-      })))).filter((entry) => entry.leftover && (entry.leftover.path || entry.leftover.branch))
-    : [];
-  return c.json({
-    deleted: true, leftover, cleanup,
-    // 连删的全部行（父 + children）：前端按它同步本地任务集合——只摘父 id 会把
-    // children 留成刷新前的幽灵任务（审查实测）。
-    deletedTaskIds: [tid, ...children.map((child) => child.id)],
-    ...(childCleanups.length ? { childCleanups } : {}),
-    ...(childLeftovers.length ? { childLeftovers } : {}),
-  });
-  });
 });
 
 }

@@ -110,6 +110,8 @@
     "test:usage": "tsx scripts/test-usage-accounting.ts",
     "test:peer-context": "tsx scripts/test-peer-context.ts",
     "test:auto-title": "tsx scripts/test-auto-title.ts && tsx scripts/test-auto-title-run.ts",
+    "//test:workflow-mode-default": "建任务时 workflowMode 的默认值:普通单任务给 free,容不下 free 的四种请求仍是 preset 且不吃 409。默认值的判据必须与路由门禁同源。",
+    "test:workflow-mode-default": "tsx scripts/test-workflow-mode-default.ts",
     "test:workflow": "tsx scripts/test-workflow-def.ts",
     "test:workflow-library": "tsx scripts/test-workflow-library.ts",
     "test:workflow-run": "tsx scripts/test-workflow-run.ts",

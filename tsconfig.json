@@ -1,0 +1,18 @@
+// 根目录的**方案文件**（solution-style）：自己一行代码都不编（`files: []`），只把四个
+// workspace 串起来，让仓库根上的 `npx tsc -b` 直接等价于 `tsc -b shared server web mcp`。
+//
+// 在这之前根目录只有 `tsconfig.base.json`，`npx tsc -b` 会报 TS5083（读不到 tsconfig.json）。
+// 于是「全仓类型检查」这件事没有一个能照着敲的命令：`npm run build` 顺带做了，但它还要
+// 打包；想只做类型检查就得自己把四个 workspace 名字背下来。少一个就漏检一整块。
+//
+// mobile 不在这里：它不在 npm workspaces 里，自带一套 Expo 的 tsconfig，用
+// `npm run verify:mobile` 单独验（那条里 `tsc -p mobile/tsconfig.json --noEmit` 就是它的份）。
+{
+  "files": [],
+  "references": [
+    { "path": "./shared" },
+    { "path": "./server" },
+    { "path": "./web" },
+    { "path": "./mcp" }
+  ]
+}
