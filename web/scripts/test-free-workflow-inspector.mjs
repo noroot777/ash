@@ -249,6 +249,27 @@ try {
   assert.equal(await postMergeInspector.getByText("可选", { exact: true }).count(), 1, "Inspector 应明确标注合并结果审查是可选操作");
   assert.match(await postMergeInspector.getByRole("region", { name: "合并结果审查", exact: true }).innerText(), /原任务仍保持已验收/);
 
+  // 裁定完不是终点：执行者在提驳回之前已经把「认可且在边界内」的那几条改掉了，那部分
+  // 代码一轮都没审过，而这一轮的结论又作不得数了。概览必须把下一步说出来，否则这条链
+  // 静悄悄地停在原地，用户只会以为「已经处理完了」。
+  const waivedStale = page.locator(".waived-stale-fixture .review-inspector__overview small");
+  await waivedStale.waitFor();
+  assert.match(await waivedStale.innerText(), /转为独立任务/);
+  assert.match(
+    await waivedStale.innerText(),
+    /还没审过.*审查新改动/,
+    "裁定完且代码变过时，概览要指出执行者改的那部分还没审过、该再派一轮",
+  );
+  // 另一半：工作区没变过就别劝人再审——那一轮什么都审不出来，纯烧额度。
+  const waivedFresh = page.locator(".waived-fresh-fixture .review-inspector__overview small");
+  await waivedFresh.waitFor();
+  assert.match(await waivedFresh.innerText(), /这条意见作废/);
+  assert.doesNotMatch(
+    await waivedFresh.innerText(),
+    /还没审过/,
+    "工作区没变过时不该凭空劝人再审一轮",
+  );
+
   console.log("free workflow inspector preview test passed");
 } finally {
   await browser?.close();

@@ -78,11 +78,18 @@ export function SystemEventDigest({
   items,
   mode,
   attached = false,
+  action,
 }: {
   items: EventItem[];
   mode: SystemNoticeMode;
   /** 贴着上一颗气泡排成这一回合的尾注（见 ConversationSystemDigestRow.attached）。 */
   attached?: boolean;
+  /**
+   * 这组旁注里有一条此刻**要用户做点什么**时，摆在摘要行旁边的那颗按钮。
+   * 摆在 `<summary>` 外面：`<details>` 里的点击会连带展开/收起，按钮就成了「点一下
+   * 顺手把这段折叠掉」。
+   */
+  action?: ReactNode;
 }) {
   const lead = digestLead(items);
   const lastAt = items.at(-1)?.at;
@@ -116,11 +123,12 @@ export function SystemEventDigest({
           ))}
         </ol>
       </details>
+      {action && <div className="system-event-action">{action}</div>}
     </div>
   );
 }
 
-export function SystemEventNote({ item, mode = "footnote" }: { item: EventLike; mode?: SystemNoticeMode }) {
+export function SystemEventNote({ item, mode = "footnote", action }: { item: EventLike; mode?: SystemNoticeMode; action?: ReactNode }) {
   const kind = systemEventKind(item.text, item.tone);
   const recovery = kind === "recovery";
   return (
@@ -133,6 +141,7 @@ export function SystemEventNote({ item, mode = "footnote" }: { item: EventLike; 
         {recovery && <b>工作区已恢复</b>}
         {recovery ? "原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。" : cleanEventText(item)}
       </p>
+      {action && <span className="system-event-action">{action}</span>}
       {item.at && <time>{formatInstant(item.at)}</time>}
     </div>
   );

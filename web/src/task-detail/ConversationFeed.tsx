@@ -29,8 +29,10 @@ import {
   INITIAL_SYSTEM_NOTICE_MODE,
   SYSTEM_NOTICE_DEMO_REQUESTED,
   isReviewSystemPrompt,
+  pendingDisputeEvent,
   type SystemNoticeMode,
 } from "./systemNoticeModel.ts";
+import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
 import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
@@ -182,6 +184,7 @@ export function ConversationFeed({
   onForkReply,
   reviewRetryable,
   reviews,
+  onOpenReviewPanel,
   systemNoticeMode,
   questionHistory,
   liveQuestionHistory,
@@ -209,6 +212,11 @@ export function ConversationFeed({
   reviewRetryable?: boolean;
   /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
   reviews?: readonly FreeReviewRun[] | null;
+  /**
+   * 打开审查面板（那张裁定卡在里面）。不给就不出「去裁定」按钮——只读的会话视图、
+   * 团队时间线都没有那块面板，给一颗点了没反应的按钮比不给更糟。
+   */
+  onOpenReviewPanel?: () => void;
   /** 比较系统提示方案时覆盖 URL 模式；普通任务不传。 */
   systemNoticeMode?: SystemNoticeMode;
   questionHistory?: QuestionRecord[];
@@ -236,6 +244,21 @@ export function ConversationFeed({
   const modeFromUrl = SYSTEM_NOTICE_DEMO_REQUESTED;
   const noticeMode = systemNoticeMode ?? INITIAL_SYSTEM_NOTICE_MODE;
   const rows = conversationSystemRows(conversationFeedRows(items, { reviews }));
+  // 「执行者驳回了，现在由你裁定」那条旁注上挂一颗「去裁定」——那句话把出路列了出来，
+  // 却没给任何能点的东西（用户 2026-09-24：「直接给个按钮不行吗」）。
+  //
+  // 两个条件都要：**此刻真的挂着一条待裁定的驳回**（`openDisputeIn`，与审查面板同一口径），
+  // 以及**最后那条**这样的旁注。只认文本会在裁定完之后留下一颗按钮，指向一张已经不在的卡；
+  // 只认状态则会给历史上每一次驳回都挂一颗，而其中只有最后一条还作数。
+  //
+  // 按钮只把人送到那张卡跟前，不在这里复制四个出口：每个出口都带自己的确认框和说明
+  // （「作废」和「转出去」的差别就写在那些文字里），复制一份必然漂成两套说法。
+  const disputeEventId = onOpenReviewPanel && openDisputeIn(reviews)
+    ? [...items].reverse().find((item) => item.kind === "event" && pendingDisputeEvent(item.text))?.id ?? null
+    : null;
+  const ruleAction = disputeEventId ? (
+    <button type="button" className="system-event-cta" onClick={onOpenReviewPanel}>去裁定</button>
+  ) : null;
   const hiddenTimes = new Set<string>();
   for (let index = 1; index < items.length; index += 1) {
     const item = items[index]!;
@@ -292,7 +315,7 @@ export function ConversationFeed({
         </p>
       );
     }
-    return <SystemEventNote item={item} mode={noticeMode} key={item.id} />;
+    return <SystemEventNote item={item} mode={noticeMode} key={item.id} action={item.id === disputeEventId ? ruleAction : undefined} />;
   };
 
   return (
@@ -308,7 +331,15 @@ export function ConversationFeed({
               return <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} mode={noticeMode} />;
             }
             if (row.kind === "system-digest") {
-              return <SystemEventDigest key={row.id} items={row.items} mode={noticeMode} attached={row.attached} />;
+              return (
+                <SystemEventDigest
+                  key={row.id}
+                  items={row.items}
+                  mode={noticeMode}
+                  attached={row.attached}
+                  action={row.items.some((item) => item.id === disputeEventId) ? ruleAction : undefined}
+                />
+              );
             }
             const roles = reviewLaneMessageRoles(row);
             return (

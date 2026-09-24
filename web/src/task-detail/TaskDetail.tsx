@@ -458,6 +458,7 @@ export function TaskDetail({
                     }}
                     reviewRetryable={freeReviewRetryable(free.state?.reviews)}
                     reviews={free.state?.reviews}
+                    onOpenReviewPanel={() => openTab("review")}
                     dock={task.question ? (
                       <QuestionCard
                         task={task}

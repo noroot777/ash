@@ -83,6 +83,13 @@ try {
   const message = await dialog.innerText();
   assert.match(message, /待办、不起跑/, "确认框必须说清建出来的是待办任务，不会自己起跑");
   assert.match(message, /没有作废/, "确认框必须把它和「采纳执行者说法」的差别说死");
+  // 转出之后这条链就停住了，可执行者在提驳回之前已经把在边界内的那几条改掉了——那部分
+  // 代码一轮都没审过。不说一句，用户按完只会以为「处理完了」，改动就这么没人看地留着。
+  assert.match(
+    message,
+    /还没审过.*再派一轮审查/,
+    "确认框要说清：执行者已经改掉的那部分还没审过，要继续推进得再派一轮",
+  );
   await dialog.getByRole("button", { name: "建任务并转走这几条" }).click();
 
   await page.waitForFunction(() => (window.__resolutions ?? []).length === 1);

@@ -293,3 +293,22 @@
   .task-message--user.is-system-authored { padding-right: 10px; padding-left: 10px; }
   .task-message--user.is-system-authored .task-user-bubble { max-width: 100%; }
 }
+
+/* 「去裁定」一类挂在旁注上的行动入口。旁注本身是最轻的一档文字，所以这颗按钮也压到
+   同一个字号上，只靠边框和 hover 说明它能点——把它做成正经按钮会让一条旁注看起来比
+   上面那段真正的对话还重。摘要行是 <summary>，按钮只能摆在 <details> 外面：摆进去
+   点一下会连带把这段折叠掉。 */
+.system-event-action { flex: none; align-self: center; }
+.system-event-digest .system-event-action { margin: 5px 0 0 10px; }
+.system-event-cta {
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  background: transparent;
+  padding: 2px 9px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.system-event-cta:hover { border-color: var(--line); background: var(--raised); color: var(--ink); }

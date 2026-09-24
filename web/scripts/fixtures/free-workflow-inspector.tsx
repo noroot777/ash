@@ -245,6 +245,34 @@ const reviewTurnState: FreeWorkflowApiState = {
   })),
 };
 
+// 用户已裁定「这一轮不在本任务里修」（转独立任务 / 采纳执行者）之后的样子。裁定完并不是
+// 终点：执行者在提驳回之前多半已经把「认可且在边界内」的那几条改掉了，那部分代码一轮都
+// 没审过。两份并排——工作区变过（stale，reviewedCommit ≠ workspaceHead）该提醒再审一轮，
+// 没变过（fresh）就不该凭空劝人烧一轮。
+const waivedRound = (resolution: "deferred" | "withdrawn") => ({
+  ...repairState.reviews[0].rounds[0],
+  dispute: {
+    reason: resolution === "withdrawn" ? "第 2 条读错了行号" : "",
+    deferReason: resolution === "deferred" ? "第 2、3 条是第 1 轮修复引入的" : null,
+    at: "2026-08-09T01:12:00.000Z",
+    resolution,
+    resolvedAt: "2026-08-09T01:20:00.000Z",
+    deferredTaskId: resolution === "deferred" ? "derived-1" : null,
+    debates: [],
+  },
+});
+const waivedStaleState: FreeWorkflowApiState = {
+  ...repairState,
+  taskId: "free-waived-stale-task",
+  workspaceHead: "commit-after-repair",
+  reviews: [{ ...repairState.reviews[0], id: "run-waived-stale", rounds: [waivedRound("deferred")] }],
+};
+const waivedFreshState: FreeWorkflowApiState = {
+  ...repairState,
+  taskId: "free-waived-fresh-task",
+  reviews: [{ ...repairState.reviews[0], id: "run-waived-fresh", rounds: [waivedRound("withdrawn")] }],
+};
+
 const reviewer = {
   id: "reviewer-one", name: "Codex 审查", agentType: "codex", executorId: "reviewer-executor",
   executorLabel: "codex@test", model: "gpt-test", reasoningEffort: "high",
@@ -324,6 +352,14 @@ window.fetch = (input, init) => {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
+  }
+  for (const waived of [waivedStaleState, waivedFreshState]) {
+    if (url.pathname.startsWith(`/api/tasks/${waived.taskId}/free-workflow`)) {
+      return Promise.resolve(new Response(JSON.stringify(waived), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    }
   }
   if (url.pathname.startsWith("/api/tasks/free-waiting-task/free-workflow")) {
     return Promise.resolve(new Response(JSON.stringify(waitingChatState), {
@@ -512,6 +548,9 @@ const repairTask = {
   workflowMode: "free",
 } as Task;
 
+const waivedStaleTask = { ...repairTask, id: "free-waived-stale-task", title: "已裁定 · 工作区变过" } as Task;
+const waivedFreshTask = { ...repairTask, id: "free-waived-fresh-task", title: "已裁定 · 工作区没变" } as Task;
+
 const manualChatTask = {
   id: "free-chat-rework-task",
   title: "自由工作流普通修改",
@@ -590,6 +629,12 @@ createRoot(document.getElementById("root")!).render(
           同一个 taskId 的共享状态，所以工具栏存下预约后这里应立刻显示出来。 */}
       <aside className="inspector-host reservation-inspector-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
         <FreeWorkflowInspector task={manualChatTask} reviewOnly notify={() => undefined} />
+      </aside>
+      <aside className="inspector-host waived-stale-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
+        <FreeWorkflowInspector task={waivedStaleTask} reviewOnly notify={() => undefined} />
+      </aside>
+      <aside className="inspector-host waived-fresh-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
+        <FreeWorkflowInspector task={waivedFreshTask} reviewOnly notify={() => undefined} />
       </aside>
       {/* 摆在最后、不进顶部那条网格：往顶上加一行会把下面所有东西推下去，审查证据抽屉里
           的截图就被挤出视口，点不着了（实测）。 */}

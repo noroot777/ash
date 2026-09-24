@@ -5,6 +5,7 @@ import {
   freeReviewActivityTitle,
   freeReviewBlockingLabel,
   freeReviewView,
+  openDisputeIn,
 } from "../src/free-workflow/freeReviewCopy.ts";
 
 const run = {
@@ -101,5 +102,25 @@ assert.equal(viewOf(disputeRun(null)).waivedRound, null, "没裁定就不算「�
 assert.equal(viewOf(disputeRun("withdrawn")).waivedRound?.round, 1, "采纳执行者 = 不在本任务里修");
 assert.equal(viewOf(disputeRun("deferred")).waivedRound?.round, 1, "转独立任务同样关掉修复入口");
 assert.equal(viewOf(disputeRun("upheld")).waivedRound, null, "维持意见恰恰是要照改，不能关掉修复入口");
+
+// 会话那一侧（时间线上的「去裁定」）只拿得到 reviews 列表，拿不到整个 FreeWorkflowState，
+// 所以它走 openDisputeIn。口径必须和上面 freeReviewView 那条完全一致——按钮和它指向的那
+// 张卡各算各的，就会出现「按钮还在、点进去什么也没有」。
+assert.equal(openDisputeIn([disputeRun(null)])?.round, 1, "挂着未裁定驳回 = 有卡可裁");
+assert.equal(openDisputeIn([disputeRun("deferred")]), null, "裁定完那张卡就没了");
+assert.equal(openDisputeIn([]), null);
+assert.equal(openDisputeIn(null), null);
+// 只认最新那条 run：之前那轮的驳回早已随着新一轮开审翻篇了。
+assert.equal(
+  openDisputeIn([{ ...run, status: "reviewing", rounds: [] }, disputeRun(null)]),
+  null,
+  "又开了新一轮时，旧 run 上的驳回不再是「等你裁定」",
+);
+// 合并结果审查是验收后的独立只读链，不参与验收前的裁定语义（与 freeReviewView 同判据）。
+assert.equal(
+  openDisputeIn([{ ...disputeRun("deferred"), target: { kind: "accepted_merge" } }, disputeRun(null)])?.round,
+  1,
+  "合并结果审查要跳过，取它后面那条工作区审查链",
+);
 
 console.log("free review dispute view tests passed");

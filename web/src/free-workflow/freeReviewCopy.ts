@@ -107,6 +107,18 @@ export function openDisputeRound(run: FreeReviewRun | null | undefined): FreeRev
 }
 
 /**
+ * 同上，但从**整份审查链列表**出发（会话那一侧只拿得到 `reviews`，拿不到整个
+ * FreeWorkflowState）。口径必须和 `freeReviewView` 一致——会话里那颗「去裁定」按钮
+ * 和审查面板上那张卡必须同生共死，各算各的就会出现「按钮还在、卡片没了」。
+ */
+export function openDisputeIn(runs: readonly FreeReviewRun[] | null | undefined): FreeReviewRound | null {
+  // 合并结果审查是验收后的独立只读链，不参与验收前的裁定语义（同 freeReviewView）。
+  const workspace = (runs ?? []).filter((run) => run.target?.kind !== "accepted_merge");
+  const latest = workspace[0];
+  return openDisputeRound(latest?.status === "stopped" ? latest : null);
+}
+
+/**
  * 「用户已经裁定这一轮不在本任务里修」——采纳执行者（`withdrawn`）或转成了独立任务
  * （`deferred`）。两档都必须关掉修复入口：前者那条意见作废了，后者已经有别的任务在
  * 承接，在本任务里再修一遍就是两处各改一版。
@@ -129,7 +141,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
   const reservationArmed = !!state?.reviewReservation?.armed;
   const autoRereview = reservationArmed && !!state?.reviewReservation?.runId;
   const freshness = freeConclusionFreshness(latestRun, state?.workspaceHead, state?.workspaceDirty);
-  const disputedRound = openDisputeRound(stoppedRun);
+  const disputedRound = openDisputeIn(state?.reviews);
   const debate = disputedRound?.dispute?.debates.at(-1) ?? null;
   return {
     latestRun,

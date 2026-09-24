@@ -196,9 +196,16 @@ export function FreeWorkflowInspector({
     : disputedRound
       ? `第 ${disputedRound.round} 轮未通过 · ${deferOnly(disputedRound) ? "执行者提出越界" : "执行者已驳回"}，${debateRunning ? "双方辩论中" : "等你裁定"}`
       : waivedRound
-        ? waivedRound.dispute?.resolution === "deferred"
+        // 裁定完不是终点：执行者在提出驳回/转出之前，多半已经把「认可且在本任务边界内」
+        // 的那几条改掉了（`disputeOption` 的第一条就要求它先改完再提）。那部分代码**一轮
+        // 都没审过**，而这一轮的结论已经作不得数了。所以代码确实变过（stale）时要把下一步
+        // 说出来，指向上面那颗此刻正好写着「审查新改动」的按钮。
+        // 只在 stale 时说：freshness 为 unknown（缺锚点 / 工作区读不到）时无从判断执行者
+        // 到底改没改，凭空劝人再审一轮可能是白烧一轮。
+        ? (waivedRound.dispute?.resolution === "deferred"
           ? `第 ${waivedRound.round} 轮未通过 · 你已把越界的那几条转为独立任务`
-          : `第 ${waivedRound.round} 轮未通过 · 你已采纳执行者说法，这条意见作废`
+          : `第 ${waivedRound.round} 轮未通过 · 你已采纳执行者说法，这条意见作废`)
+          + (stale ? "；执行者这一轮改的代码还没审过，点上面「审查新改动」再审一轮" : "")
         : repairing
       ? `第 ${latestRun?.currentRound ?? 1} 轮未通过 · 任务修改中`
       : stoppedRun && stale
