@@ -451,6 +451,7 @@ export async function* parseClaudeStream(
   calibrateAs?: AgentType,
   compactWindow: number | null = null,
   onInitialized: () => void = () => {},
+  waitNoticeMs = 5 * 60_000,
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -490,6 +491,31 @@ export async function* parseClaudeStream(
   const nativeWork = new NativeWorkTrace();
 
   const rl = createInterface({ input: child.stdout! });
+
+  // 「在等上游回话」等到什么份上就该说一声。CLI 发请求时给一条 status:"requesting",
+  // 之后连接要是挂住,那就是**彻底的静默**:不重试、不报错、一个事件都没有
+  // (2026-09-24:中转网关上单次请求挂了 47 分钟,回合从头到尾零事件)。上面那条
+  // api_retry 救不了这种 —— 它压根没重试过。
+  //
+  // 判据必须钉死在「最后一件事是在等 API」上,不能只看「多久没有事件」:工具在跑
+  // (pytest 跑上半小时)同样一个事件都不发,那是活儿正常在干,报出来纯属误报。收到
+  // 任何别的事件就立刻解除等待 —— 上游一开口,requesting 后面马上跟着 message_start。
+  let awaitingSince: number | null = null;
+  let waitNoticed = 0;
+  const waitTimer = setInterval(() => {
+    if (finished || awaitingSince === null) return;
+    const waited = Date.now() - awaitingSince;
+    const due = Math.floor(waited / waitNoticeMs);
+    if (due <= waitNoticed) return; // 每满一个间隔才报一次,别把静默刷成滚屏
+    waitNoticed = due;
+    push({
+      kind: "error",
+      message: `已经等上游 ${Math.max(1, Math.round(waited / 60_000))} 分钟没有响应，本回合仍在等待中`,
+      level: "notice",
+      affectsTurn: false,
+    });
+  }, Math.max(1_000, Math.floor(waitNoticeMs / 10)));
+  waitTimer.unref?.(); // 心跳不能拖着进程不让退
   rl.on("line", (line) => {
     const t = line.trim();
     if (!t) return;
@@ -498,6 +524,12 @@ export async function* parseClaudeStream(
       ev = JSON.parse(t);
     } catch {
       return;
+    }
+    if (ev?.type === "system" && ev.subtype === "status" && ev.status === "requesting") {
+      awaitingSince = Date.now();
+      waitNoticed = 0;
+    } else {
+      awaitingSince = null;
     }
     for (const activity of nativeWork.claudeMessage(ev)) push(activity);
     if (ev.parent_tool_use_id) {
@@ -713,12 +745,17 @@ export async function* parseClaudeStream(
     resolve = null;
   });
 
-  while (true) {
-    if (queue.length) {
-      yield queue.shift()!;
-      continue;
+  // finally 而不是逐条终止路径里 clear:消费方提前 break(用户停任务)一样走得到这里。
+  try {
+    while (true) {
+      if (queue.length) {
+        yield queue.shift()!;
+        continue;
+      }
+      if (finished) return;
+      await new Promise<void>((r) => (resolve = r));
     }
-    if (finished) return;
-    await new Promise<void>((r) => (resolve = r));
+  } finally {
+    clearInterval(waitTimer);
   }
 }

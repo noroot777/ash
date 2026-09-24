@@ -37,6 +37,26 @@ async function collect(lines: unknown[], resident?: { interruptPending: boolean;
   return events;
 }
 
+/**
+ * 跑一段假 CLI:把 lines 输出完之后**挂住不退**,过 hangMs 才结束 —— 用来复现
+ * 「请求发出去了,上游再也没回话」。waitNoticeMs 缩到毫秒级,免得测试真等 5 分钟。
+ */
+async function collectHanging(lines: unknown[], hangMs: number, waitNoticeMs: number) {
+  const script = join(dir, `stub-${Math.random().toString(36).slice(2, 8)}.mjs`);
+  writeFileSync(
+    script,
+    lines.map((line) => `process.stdout.write(${JSON.stringify(JSON.stringify(line) + "\n")});`).join("\n")
+      + `\nsetTimeout(() => process.exit(0), ${hangMs});`,
+  );
+  const child = spawn(process.execPath, [script], { stdio: ["pipe", "pipe", "pipe"] });
+  child.stdin?.end();
+  const events: any[] = [];
+  for await (const event of parseClaudeStream(child as any, undefined, "claude", undefined, null, () => {}, waitNoticeMs)) {
+    events.push(event);
+  }
+  return events;
+}
+
 /** 跑一段非零退出的假 CLI stderr。 */
 async function collectStderr(stderr: string) {
   const script = join(dir, `stub-${Math.random().toString(36).slice(2, 8)}.mjs`);
@@ -234,6 +254,41 @@ console.log("8) 上游重试必须看得见,且不把仍在进行的回合判成
   const text = events.filter((e) => e.kind === "text").map((e) => e.text).join("");
   if (text.includes("接着干")) ok("重试成功后回合照常继续");
   else fail(`重试之后正文丢了:${JSON.stringify(text)}`);
+}
+
+// 同一次事故的另一半:BRw9 那个回合根本没走到重试 —— 请求发出去,`status:"requesting"`
+// 之后 47 分钟一个事件都没有。只接 api_retry 对这种情况一点用都没有。
+console.log("9) 等上游等到超时无响应要自己冒头,而工具在跑不算");
+{
+  const stalled = await collectHanging(
+    [
+      { type: "system", subtype: "init", session_id: "sess-9" },
+      { type: "system", subtype: "status", status: "requesting", session_id: "sess-9" },
+    ],
+    3_000,
+    1_200,
+  );
+  const notices = stalled.filter((e) => e.kind === "error" && e.level === "notice");
+  if (notices.length >= 1) ok(`静默等待自己冒了头:${notices[0].message}`);
+  else fail("等上游等到天荒地老,界面上仍然一个字都没有");
+  if (notices.every((e) => e.affectsTurn === false)) ok("等待期的提示不把回合判失败");
+  else fail(`等待提示的分级不对:${JSON.stringify(notices.map((e) => e.affectsTurn))}`);
+  if (notices.length <= 5) ok(`每满一个间隔才报一次,没刷成滚屏(${notices.length} 条)`);
+  else fail(`静默提示刷屏了:${notices.length} 条`);
+
+  // 反面:工具在跑(最后一件事不是等 API)同样长时间零事件,一个字都不该报。
+  const working = await collectHanging(
+    [
+      { type: "system", subtype: "init", session_id: "sess-10" },
+      { type: "system", subtype: "status", status: "requesting", session_id: "sess-10" },
+      { type: "assistant", message: { model: "claude-opus-5", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "pytest" } }] } },
+    ],
+    3_000,
+    1_200,
+  );
+  const falseAlarms = working.filter((e) => e.kind === "error");
+  if (!falseAlarms.length) ok("工具跑得久不会被误报成「上游没响应」");
+  else fail(`误报了:${falseAlarms.map((e) => e.message).join(" / ")}`);
 }
 
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
