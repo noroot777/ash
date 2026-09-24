@@ -240,17 +240,21 @@ console.log("8) 上游重试必须看得见,且不把仍在进行的回合判成
     { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "接着干\n" } } },
     { type: "result", subtype: "success", session_id: "sess-8" },
   ]);
-  const errors = events.filter((e) => e.kind === "error");
-  if (errors.length === 4) ok("每一次重试都留下了一条旁注(同时是「还活着」的心跳)");
-  else fail(`期望 4 条重试旁注,实到 ${errors.length}`);
-  if (errors.every((e) => e.affectsTurn === false && e.level === "notice")) ok("重试只作展示:不判回合失败,也不冒充故障红字");
-  else fail(`重试旁注的分级不对:${JSON.stringify(errors.map((e) => ({ level: e.level, affectsTurn: e.affectsTurn })))}`);
-  if (errors[0]?.message?.includes("第 1/10 次")) ok(`第几次、还要等多久都说清了:${errors[0].message}`);
-  else fail(`没说清重试进度:${JSON.stringify(errors[0]?.message)}`);
-  if (!errors.some((e) => e.message.includes("unknown"))) ok("连接挂住时不把生硬的 unknown 透给用户");
-  else fail(`透传了 unknown:${errors.find((e) => e.message.includes("unknown"))?.message}`);
-  if (errors[3]?.message?.includes("502")) ok(`上游给了状态码就报出来:${errors[3].message}`);
-  else fail(`502 丢了:${JSON.stringify(errors[3]?.message)}`);
+  const notices = events.filter((e) => e.kind === "system" && e.level === "notice");
+  if (notices.length === 4) ok("每一次重试都留下了一条旁注(同时是「还活着」的心跳)");
+  else fail(`期望 4 条重试旁注,实到 ${notices.length}`);
+  // 关键:**一条 error 都不许有**。重试是可恢复状态,不是故障 —— 走 error 会被
+  // duet 的 failed() 判成整场讨论失败,也会在普通任务/团队界面渲染成红叉(第 1 轮审查)。
+  if (!events.some((e) => e.kind === "error")) ok("重试不产生 error:duet 不会把成功回合判失败,界面也不显示红叉");
+  else fail(`重试仍在发 error:${events.filter((e) => e.kind === "error").map((e) => e.message).join(" / ")}`);
+  if (notices.every((e) => typeof e.at === "string" && e.at)) ok("旁注带时间戳,刷新后仍留在时间线上");
+  else fail(`旁注缺 at:${JSON.stringify(notices.map((e) => e.at))}`);
+  if (notices[0]?.text?.includes("第 1/10 次")) ok(`第几次、还要等多久都说清了:${notices[0].text}`);
+  else fail(`没说清重试进度:${JSON.stringify(notices[0]?.text)}`);
+  if (!notices.some((e) => e.text.includes("unknown"))) ok("连接挂住时不把生硬的 unknown 透给用户");
+  else fail(`透传了 unknown:${notices.find((e) => e.text.includes("unknown"))?.text}`);
+  if (notices[3]?.text?.includes("502")) ok(`上游给了状态码就报出来:${notices[3].text}`);
+  else fail(`502 丢了:${JSON.stringify(notices[3]?.text)}`);
   const text = events.filter((e) => e.kind === "text").map((e) => e.text).join("");
   if (text.includes("接着干")) ok("重试成功后回合照常继续");
   else fail(`重试之后正文丢了:${JSON.stringify(text)}`);
@@ -268,27 +272,43 @@ console.log("9) 等上游等到超时无响应要自己冒头,而工具在跑不
     3_000,
     1_200,
   );
-  const notices = stalled.filter((e) => e.kind === "error" && e.level === "notice");
-  if (notices.length >= 1) ok(`静默等待自己冒了头:${notices[0].message}`);
+  const notices = stalled.filter((e) => e.kind === "system" && e.level === "notice");
+  if (notices.length >= 1) ok(`静默等待自己冒了头:${notices[0].text}`);
   else fail("等上游等到天荒地老,界面上仍然一个字都没有");
-  if (notices.every((e) => e.affectsTurn === false)) ok("等待期的提示不把回合判失败");
-  else fail(`等待提示的分级不对:${JSON.stringify(notices.map((e) => e.affectsTurn))}`);
+  if (!stalled.some((e) => e.kind === "error")) ok("等待期的提示不是故障,不把回合判失败");
+  else fail(`等待期冒出了 error:${stalled.filter((e) => e.kind === "error").map((e) => e.message).join(" / ")}`);
   if (notices.length <= 5) ok(`每满一个间隔才报一次,没刷成滚屏(${notices.length} 条)`);
   else fail(`静默提示刷屏了:${notices.length} 条`);
+
+  // 现场的真实序列是 requesting → api_retry × N,中间**不再有新的 requesting**。
+  // 把 retry 当「别的事件」解除等待,等于第一次失败之后心跳永久熄火,而那之后每一次
+  // 重试请求同样可能挂住 —— 静默场景原样回来(第 1 轮审查 P2)。
+  const retriedThenHung = await collectHanging(
+    [
+      { type: "system", subtype: "init", session_id: "sess-10" },
+      { type: "system", subtype: "status", status: "requesting", session_id: "sess-10" },
+      { type: "system", subtype: "api_retry", attempt: 1, max_retries: 10, retry_delay_ms: 546, error_status: null, error: "unknown", session_id: "sess-10" },
+    ],
+    3_000,
+    1_200,
+  );
+  const afterRetry = retriedThenHung.filter((e) => e.kind === "system" && e.level === "notice" && e.text.includes("没有响应，本回合仍在等待中"));
+  if (afterRetry.length >= 1) ok(`重试之后再挂住,心跳照样冒头:${afterRetry[0].text}`);
+  else fail("第一次重试就把心跳解除了,之后的挂起又变回彻底静默");
 
   // 反面:工具在跑(最后一件事不是等 API)同样长时间零事件,一个字都不该报。
   const working = await collectHanging(
     [
-      { type: "system", subtype: "init", session_id: "sess-10" },
-      { type: "system", subtype: "status", status: "requesting", session_id: "sess-10" },
+      { type: "system", subtype: "init", session_id: "sess-11" },
+      { type: "system", subtype: "status", status: "requesting", session_id: "sess-11" },
       { type: "assistant", message: { model: "claude-opus-5", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "pytest" } }] } },
     ],
     3_000,
     1_200,
   );
-  const falseAlarms = working.filter((e) => e.kind === "error");
+  const falseAlarms = working.filter((e) => (e.kind === "system" && e.level === "notice") || e.kind === "error");
   if (!falseAlarms.length) ok("工具跑得久不会被误报成「上游没响应」");
-  else fail(`误报了:${falseAlarms.map((e) => e.message).join(" / ")}`);
+  else fail(`误报了:${falseAlarms.map((e) => e.text ?? e.message).join(" / ")}`);
 }
 
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
