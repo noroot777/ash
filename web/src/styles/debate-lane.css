@@ -105,20 +105,23 @@
   padding: 44px 28px;
   background: lch(0 0 0 / 0.38);
   inset: 0;
-  overflow-y: auto;
+  overflow: hidden;
   backdrop-filter: blur(2px);
 }
+/* 滚动归正文那一格，不归遮罩：遮罩当滚动容器时，正文会从上面那条 44px 内边距带里穿过去
+   露在吸顶标题之上——标题栏看着像浮在正文中间，还把经过它的那行字切一半。 */
 .debate-reader__sheet {
+  display: grid;
   width: min(900px, 100%);
+  max-height: 100%;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel);
   box-shadow: var(--shadow);
 }
 .debate-reader__sheet > header {
-  position: sticky;
-  z-index: 1;
-  top: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -144,4 +147,4 @@
   cursor: pointer;
 }
 .debate-reader__sheet > header button:hover { background: var(--raised); color: var(--ink); }
-.debate-reader__body { padding: 6px 15px 18px; }
+.debate-reader__body { overflow-y: auto; overscroll-behavior: contain; padding: 6px 15px 18px; }
