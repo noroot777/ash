@@ -101,6 +101,8 @@
 
 .status-bar__tab-open {
   display: inline-flex;
+  /* 名字短也把剩余宽度吃满,叉号才会贴在 tab 最右边而不是黏着名字。 */
+  flex: 1 1 auto;
   min-width: 0;
   align-items: center;
   gap: 5px;
@@ -108,7 +110,7 @@
   border: none;
   border-radius: 4px;
   background: transparent;
-  padding: 0 2px 0 7px;
+  padding: 0 6px 0 7px;
   color: inherit;
   font-size: 11px;
   cursor: pointer;
