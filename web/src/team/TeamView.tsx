@@ -550,6 +550,7 @@ export function TeamView({
           subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
+        notify,
       } satisfies TeamInspectorContext}
       tabPolicy={inspectorPolicy}
     >

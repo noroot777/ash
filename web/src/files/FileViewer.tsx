@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, FolderOpen, GitDiff, SpinnerGap, Trash, Warning, X } from "@phosphor-icons/react";
+import { Code, Copy, FolderOpen, GitDiff, SpinnerGap, Trash, Warning, X } from "@phosphor-icons/react";
 import { api, type FileContent } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { formatSize } from "./fileModel.ts";
@@ -18,7 +18,31 @@ function TextBody({ file }: { file: FileContent }) {
   );
 }
 
-function Body({ taskId, file }: { taskId: string; file: FileContent }) {
+const PAGE_PATTERN = /\.html?$/i;
+const VIDEO_PATTERN = /\.(?:mp4|m4v|mov|webm|mkv|ogv)$/i;
+const AUDIO_PATTERN = /\.(?:mp3|wav|m4a|aac|flac|ogg|opus|aiff)$/i;
+
+/**
+ * 任务做出来的网页，就地渲染。
+ *
+ * `sandbox` 里**故意没有 `allow-same-origin`**：这些 html 是 agent 现写的，给了它就等于
+ * 让页面以 ash 自己的源跑脚本，读得到登录态、能带着 cookie 调 ash 的接口。服务端那条
+ * `/tasks/:id/page/*` 还会再压一道同样的 CSP，直接在地址栏打开也照样被钉住。
+ * 代价见 server/src/task-page.ts 顶部：@font-face 的字体会退到系统字体，要完整保真走
+ * 头带上的「打开方式」。
+ */
+function PageBody({ taskId, path }: { taskId: string; path: string }) {
+  return (
+    <iframe
+      className="file-viewer__page"
+      src={api.taskPageUrl(taskId, path)}
+      sandbox="allow-scripts allow-forms allow-popups allow-modals"
+      aria-label={`${path} 页面预览`}
+    />
+  );
+}
+
+function Body({ taskId, file, showSource }: { taskId: string; file: FileContent; showSource: boolean }) {
   const rawUrl = api.taskFileRawUrl(taskId, file.path);
   if (file.kind === "image") {
     return (
@@ -30,6 +54,22 @@ function Body({ taskId, file }: { taskId: string; file: FileContent }) {
   if (file.kind === "pdf") {
     // iframe 的无障碍名用 aria-label 而不是 title：原生 title 在这个仓库是受管控的存量。
     return <iframe className="file-viewer__pdf" src={rawUrl} aria-label={`${file.name} 预览`} />;
+  }
+  if (PAGE_PATTERN.test(file.path) && !showSource) return <PageBody taskId={taskId} path={file.path} />;
+  if (VIDEO_PATTERN.test(file.path)) {
+    return (
+      <div className="file-viewer__media">
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption -- 任务产出的视频没有字幕轨可挂 */}
+        <video className="file-viewer__video" src={rawUrl} controls preload="metadata" />
+      </div>
+    );
+  }
+  if (AUDIO_PATTERN.test(file.path)) {
+    return (
+      <div className="file-viewer__media">
+        <audio className="file-viewer__audio" src={rawUrl} controls preload="metadata" />
+      </div>
+    );
   }
   if (file.kind === "binary") {
     return (
@@ -73,6 +113,11 @@ export function FileViewer({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revealing, setRevealing] = useState(false);
+  // 网页默认渲染、可切回源码。默认摊开渲染那一面：点开一份 html 十有八九是想看它长什么样，
+  // 想读源码的人按一下就有；换文件时重置，不然上一个文件选的「源码」会跟着带到下一个。
+  const [showSource, setShowSource] = useState(false);
+  useEffect(() => setShowSource(false), [path]);
+  const isPage = PAGE_PATTERN.test(path);
   const zoom = useZoomLayer({
     zoomed,
     onExit: () => onExitZoom?.(),
@@ -116,6 +161,17 @@ export function FileViewer({
           <b>{file?.name ?? path.split("/").pop()}</b>
           <small>{path}{file ? ` · ${formatSize(file.size)}` : ""}</small>
         </div>
+        {isPage && (
+          <button
+            type="button"
+            className="file-viewer__action"
+            aria-pressed={showSource}
+            onClick={() => setShowSource((current) => !current)}
+          >
+            <Code size={13} aria-hidden="true" />
+            {showSource ? "看页面" : "看源码"}
+          </button>
+        )}
         {onOpenDiff && (
           <button type="button" className="file-viewer__action" onClick={onOpenDiff}>
             <GitDiff size={13} aria-hidden="true" />
@@ -178,7 +234,7 @@ export function FileViewer({
       <div className="file-viewer__body">
         {loading && <p className="file-viewer__state"><SpinnerGap size={14} aria-hidden="true" />正在读取…</p>}
         {error && <p className="file-viewer__state is-error"><Warning size={14} aria-hidden="true" />{error}</p>}
-        {!loading && !error && file && <Body taskId={taskId} file={file} />}
+        {!loading && !error && file && <Body taskId={taskId} file={file} showSource={showSource} />}
       </div>
       {deletion.dialog}
     </div>,

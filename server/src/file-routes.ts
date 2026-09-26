@@ -13,6 +13,7 @@ import { trashCapability, TrashUnavailableError } from "./file-trash.js";
 import { openWithApp, probeOpeners, revealInFileManager } from "./openers/index.js";
 import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
 import { readFileGitStatus } from "./file-git-status.js";
+import { readTaskArtifacts } from "./task-artifacts.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import {
@@ -80,16 +81,37 @@ export function mountFileRoutes(api: Hono) {
     const root = await rootFor(c.req.param("id"));
     if (!root) return c.json({ error: "这个任务还没有可浏览的工作目录" }, 404);
     try {
-      const raw = await openRawStream(root, c.req.query("path") ?? "");
+      const raw = await openRawStream(root, c.req.query("path") ?? "", c.req.header("range"));
       return new Response(Readable.toWeb(raw.stream) as ReadableStream, {
+        // 206 那一档是音视频能拖进度条的前提（Safari 不给 206 干脆不播）。
+        status: raw.range ? 206 : 200,
         headers: {
           "content-type": raw.mime,
           "content-length": String(raw.size),
+          "accept-ranges": "bytes",
+          ...(raw.range ? { "content-range": `bytes ${raw.range.start}-${raw.range.end}/${raw.total}` } : {}),
           // 一律 inline：这个端点只服务预览，不该触发下载。
           "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(raw.name)}`,
           "cache-control": "no-store",
         },
       });
+    } catch (error) {
+      return c.json({ error: messageOf(error) }, statusOf(error) as 400);
+    }
+  });
+
+  /**
+   * 「这个任务做出来了什么可以直接看的东西」——图片、网页、音视频、PDF。
+   *
+   * 跟文件树、改动面板是三个不同的问题，判据见 `task-artifacts.ts` 顶部。没有工作目录时
+   * 回空表而不是 404：任务还没跑过就是「还没有产物」，那是正常状态，不是错误。
+   */
+  api.get("/tasks/:id/artifacts", async (c) => {
+    const taskId = c.req.param("id");
+    const root = await rootFor(taskId);
+    if (!root) return c.json({ root: null, artifacts: [], truncated: false, since: null, error: null });
+    try {
+      return c.json({ root: publicRoot(root), ...await readTaskArtifacts(taskId, root) });
     } catch (error) {
       return c.json({ error: messageOf(error) }, statusOf(error) as 400);
     }

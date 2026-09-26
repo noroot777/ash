@@ -44,6 +44,7 @@ import { mountProjectGitRoutes } from "./project-git-routes.js";
 import { mountGitWorkbenchRoutes } from "./git-workbench/routes.js";
 import { mountScmRoutes } from "./scm-routes.js";
 import { mountTaskDiffRoutes } from "./task-diff-routes.js";
+import { mountTaskPageRoutes } from "./task-page.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
 import { mountProviderTestRoutes } from "./provider-test.js";
 import { mountTerminalRoutes } from "./terminal-routes.js";
@@ -454,6 +455,8 @@ mountTaskRunRoutes(api);
 mountHandoffRoutes(api);
 // 任务工作目录的只读文件浏览 + 交给本机去做的三个动作(实现在 ./file-routes.ts)。
 mountFileRoutes(api);
+// 任务做出来的网页，钉在 sandbox 里给前端 iframe 用(实现在 ./task-page.ts)。
+mountTaskPageRoutes(api);
 mountScmRoutes(api);
 mountProjectGitRoutes(api);
 mountGitWorkbenchRoutes(api);

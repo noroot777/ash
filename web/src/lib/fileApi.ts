@@ -15,6 +15,7 @@ import type {
   FileSearchResult,
   FileWorkspaceRoot,
   OpenerProbe,
+  TaskArtifactsResult,
 } from "./apiTypes.ts";
 import { apiPath, id, json, request } from "./apiClient.ts";
 
@@ -37,6 +38,13 @@ export const fileApi = {
   // 图片/PDF 预览直接把这个地址交给 <img>/<iframe>，不经过 JSON。
   taskFileRawUrl: (taskId: string, path: string): string =>
     apiPath(`/tasks/${id(taskId)}/file/raw?path=${id(path)}`),
+  // 任务做出来的**网页**。刻意不走 raw：那条给 html 配 text/html 就等于让 agent 现写的
+  // 页面以 ash 自己的源跑脚本。这条把文档钉在 sandbox 里（服务端响应头 + iframe 属性
+  // 两道），路径式地址还让页面里的相对引用自己解得对。见 server/src/task-page.ts。
+  taskPageUrl: (taskId: string, path: string): string =>
+    apiPath(`/tasks/${id(taskId)}/page/${path.split("/").map(encodeURIComponent).join("/")}`),
+  taskArtifacts: (taskId: string, signal?: AbortSignal): Promise<TaskArtifactsResult> =>
+    request(`/tasks/${id(taskId)}/artifacts`, { signal }),
   taskFileOpeners: (taskId: string, path: string, refresh = false): Promise<OpenerProbe> =>
     request(`/tasks/${id(taskId)}/file/openers?path=${id(path)}${refresh ? "&refresh=1" : ""}`),
   revealTaskFile: (taskId: string, path: string): Promise<{ ok: true; absPath: string }> =>

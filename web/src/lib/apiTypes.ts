@@ -257,6 +257,36 @@ export type OpenerProbe = {
   note: string | null;
 };
 
+// ── 生成物（产物面板）────────────────────────────────────────────────────────
+// 「这个任务做出来了什么可以直接看的东西」。判据、三路线索和它们各自的可信区间都在服务端
+// `task-artifacts.ts` 顶部，这里只是它的形状。
+
+export type ArtifactKind = "image" | "video" | "audio" | "page" | "pdf";
+/** 这份产物是从哪条线索认出来的：还没提交 / 已提交在任务分支上 / 被 .gitignore 挡着。 */
+export type ArtifactOrigin = "working" | "committed" | "ignored";
+
+export type TaskArtifact = {
+  /** 相对工作区根、posix 分隔符——跟文件树、文件查看器同一个主键。 */
+  path: string;
+  name: string;
+  dir: string;
+  kind: ArtifactKind;
+  size: number;
+  mtime: string | null;
+  origin: ArtifactOrigin;
+};
+
+export type TaskArtifactsResult = {
+  /** 任务还没有工作目录时为 null——那是「还没有产物」，不是错误。 */
+  root: FileWorkspaceRoot | null;
+  artifacts: TaskArtifact[];
+  truncated: boolean;
+  /** 被忽略那一档的时间下限（任务第一次开跑）。 */
+  since: string | null;
+  /** 某一路线索读失败了。另外两路通常还有东西，所以不当致命错误。 */
+  error: string | null;
+};
+
 // ── 工作区源代码管理（SCM 面板）─────────────────────────────────────────────
 // 跟 `TaskDiffResult` 是两回事：那个是任务分支 vs 合入目标的只读 diff（给审查用），
 // 这里是**工作目录此刻**的暂存区/未暂存/未跟踪/冲突。字段与服务端 `git-status.ts`

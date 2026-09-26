@@ -64,6 +64,11 @@
 .file-viewer__media { display:grid; min-height:0; flex:1; place-items:center; padding:20px; }
 .file-viewer__media img { max-width:100%; max-height:100%; border:1px solid var(--line); border-radius:8px; background:var(--panel); object-fit:contain; }
 .file-viewer__pdf { min-height:0; flex:1; border:0; background:var(--panel); }
+/* 任务做出来的网页。白底是刻意的：绝大多数生成页面假定自己跑在白底上，套进深色外壳里
+   会出现「深色边框裹着一张白纸」之外更糟的情况——没设 background 的页面直接糊成一团。 */
+.file-viewer__page { min-height:0; flex:1; border:0; background:#fff; }
+.file-viewer__video { max-width:100%; max-height:100%; border-radius:8px; background:#000; }
+.file-viewer__audio { width:min(520px,100%); }
 .file-viewer__placeholder { max-width:420px; margin:40px auto; border:1px dashed var(--line2); border-radius:10px; padding:22px; text-align:center; }
 .file-viewer__placeholder b { color:var(--ink); font-size:12px; }
 .file-viewer__placeholder p { margin:6px 0 0; color:var(--faint); font-size:10.5px; line-height:1.6; }
