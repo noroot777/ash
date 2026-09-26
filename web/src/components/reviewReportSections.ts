@@ -64,13 +64,21 @@ const MARK_LINES = CONTRACT_MARKS.map(
 
 export function splitReviewReport(text: string): ReviewReportSections {
   const lines = text.split("\n");
+  // 匹配用的是**去掉行尾 `\r` 的副本**，切片仍用原始行——这样 CRLF 报告认得出，返回的
+  // 正文又跟入参逐字节一致（不悄悄替换用户的换行）。
+  //
+  // 非这么做不可：JS 正则里 `\r` 是行终结符，`.` 不匹配它，而不带 `m` 的 `$` 只认串尾。
+  // 于是 `## 结论\r` 里 `(.*)` 吃不下 `\r`、`$` 又不肯在它前面收手，**一个二级标题都认
+  // 不出来**，整份 Windows 报告直接走「认不出契约」那条降级路径：基线、命令输出、清场
+  // 记录全铺在首屏，连展开按钮都没有——正是这个改动要消灭的样子。
+  const probes = lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
   const heads: { at: number; title: string }[] = [];
   /** 每个契约标记出现过的行号；围栏里的不算。 */
   const markAt: number[][] = CONTRACT_MARKS.map(() => []);
   // 围栏里的 `## xxx` 是被审代码或命令输出的一部分，不是小节标题。开闭用同种记号配对，
   // 这样 ``` 块里贴的 ~~~ 不会把围栏提前关掉。
   let fence: string | null = null;
-  for (const [at, line] of lines.entries()) {
+  for (const [at, line] of probes.entries()) {
     const marker = FENCE.exec(line)?.[1];
     if (fence) {
       if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;

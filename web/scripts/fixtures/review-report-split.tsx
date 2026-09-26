@@ -117,6 +117,10 @@ createRoot(document.getElementById("root")!).render(
     <div className="legacy-fixture markdown-report-body">
       <ReviewReportBody text={legacy} reportKey="run-2:1" />
     </div>
+    {/* Windows 上生成的同一份报告：换行是 CRLF，屏幕上该长得一模一样。 */}
+    <div className="crlf-fixture markdown-report-body">
+      <ReviewReportBody text={conforming.replace(/\n/g, "\r\n")} reportKey="run-3:1" />
+    </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />
     </div>

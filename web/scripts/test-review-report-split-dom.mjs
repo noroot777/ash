@@ -158,6 +158,28 @@ try {
     "换轮后按钮应回到「展开」态",
   );
 
+  // ⑦ Windows 报告（CRLF）在屏幕上必须跟 LF 那份长得一样：默认只有结论和问题，技术
+  //    记录收在按钮后面。认不出 CRLF 时这份会整篇铺开、连按钮都没有——内容没丢，但这个
+  //    改动的全部收益在 Windows 常见文本格式上归零。
+  const crlf = page.locator(".crlf-fixture");
+  const crlfSummary = await crlf.locator(".task-markdown").first().innerText();
+  assert.match(crlfSummary, /不能 —— 有 1 条必须先修/, "CRLF 报告的结论同样默认可见");
+  assert.match(crlfSummary, /烧录出来的成片/, "CRLF 报告的问题同样默认可见");
+  for (const noise of ["被审范围与基线", "d7ee0b07", "npm run build", "清场", "lsof"]) {
+    assert.doesNotMatch(crlfSummary, new RegExp(noise), `CRLF 报告里「${noise}」同样该收进明细`);
+  }
+  assert.equal(
+    await crlf.getByRole("button", { name: /展开技术明细/ }).count(),
+    1,
+    "CRLF 报告同样要给出展开明细的出口",
+  );
+  await crlf.getByRole("button", { name: /展开技术明细/ }).click();
+  assert.match(
+    await crlf.locator(".review-report-detail .task-markdown").innerText(),
+    /d7ee0b07/,
+    "展开后 CRLF 报告的明细同样原样都在",
+  );
+
   console.log("review report split dom ok");
 } finally {
   await browser?.close();

@@ -343,6 +343,29 @@ for (const colon of ["：", ":"]) {
   );
 }
 
+// Windows 上生成的报告（CRLF）必须一视同仁。踩过的坑不在换行本身，而在正则：`\r` 是
+// 行终结符，`.` 不匹配它、不带 `m` 的 `$` 只认串尾，于是 `## 结论\r` 一个标题都认不出，
+// 整份合规报告掉进「认不出契约」那条降级路径——首屏全是基线和命令输出，连按钮都没有。
+{
+  const crlf = conforming.replace(/\n/g, "\r\n");
+  const { summary, detail } = splitReviewReport(crlf);
+  assert.match(summary, /## 结论/, "CRLF 报告同样要拆出摘要");
+  assert.match(summary, /烧录出来的成片/, "问题留在摘要里");
+  assert.doesNotMatch(summary, /被审范围|d7ee0b07|清场/, "技术记录不该留在摘要里");
+  assert.match(detail, /^## 被审范围与基线/, "明细从第二个 `##` 起");
+  // 返回的正文跟入参逐字节一致：认 CRLF 不等于替换用户的换行。
+  assert.ok(detail.includes("\r\n"), "切片必须用原始行，别把 CRLF 悄悄改成 LF");
+  assert.equal(`${summary}\r\n\r\n${detail}`.replace(/\s+/g, ""), crlf.replace(/\s+/g, ""));
+}
+
+// 认不出契约的 CRLF 报告同样整篇铺开（降级路径不因换行而变）。
+{
+  const legacyCrlf = "# 第 1 轮\r\n\r\n## 一、改动范围\r\n\r\n27 个文件。\r\n\r\n## 三、发现的缺陷\r\n\r\n缺陷 1……\r\n";
+  const { summary, detail } = splitReviewReport(legacyCrlf);
+  assert.equal(summary, legacyCrlf, "拆不动时原样返回，一个字节都不动");
+  assert.equal(detail, "");
+}
+
 // 空报告不该炸。
 assert.deepEqual(splitReviewReport(""), { summary: "", detail: "" });
 
