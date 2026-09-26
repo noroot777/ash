@@ -298,6 +298,24 @@ try {
   assert.match(lcDetail, /45b8a02/, "展开后技术记录原样都在");
   assert.match(lcDetail, /清场/);
 
+  // ⑭ 四栏写成 `###` 小标题、问题写成 `####` 的真实形态（`MiBg8G40scWo` 四轮 + 本任务
+  //    上一轮报告）。只认加粗标签那一版时，这份会整篇铺开——首屏紧跟着结论就是仓库状态、
+  //    命令和清场记录，连按钮都没有，正是这个改动要消灭的样子。
+  const headingColumns = page.locator(".heading-columns-fixture");
+  const hcSummary = await headingColumns.locator(".task-markdown").first().innerText();
+  assert.match(hcSummary, /不能 —— 有 1 条必须先修/, "结论默认可见");
+  assert.match(hcSummary, /四个栏目写成小标题时，整份报告又全部展开/, "问题本身默认可见");
+  for (const noise of ["被审范围与仓库状态", "abc1234", "npm test", "临时服务已停止"]) {
+    assert.doesNotMatch(hcSummary, new RegExp(noise), `「${noise}」属于技术明细，默认不该在屏幕上`);
+  }
+  const hcToggle = headingColumns.getByRole("button", { name: /展开技术明细/ });
+  assert.equal(await hcToggle.count(), 1, "小标题写法跟加粗写法一样是契约，按钮也该这么写");
+  await hcToggle.click();
+  const hcDetail = await headingColumns.locator(".review-report-detail .task-markdown").innerText();
+  for (const line of ["abc1234", "npm test", "临时服务已停止"]) {
+    assert.match(hcDetail, new RegExp(line), `展开后「${line}」原样还在`);
+  }
+
   console.log("review report split dom ok");
 } finally {
   await browser?.close();

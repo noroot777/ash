@@ -283,6 +283,45 @@ const legacyConclusion = `# 自由工作流第 1 轮审查报告
 已停掉本轮起的服务。
 `;
 
+// 四栏写成 `###` 小标题、每条问题写成 `####` 的真实形态（`MiBg8G40scWo` 的四轮报告和本
+// 任务 `dB45LYOzuxnx/round-2` 都长这样）。只认加粗标签那一版时，这份会整篇铺开——首屏
+// 紧跟着结论就是仓库状态、命令和清场记录，连展开按钮都没有。
+const headingColumns = `## 结论
+
+### 能不能验收
+
+不能 —— 有 1 条必须先修。
+
+### 现在什么能用了
+
+旧报告把通过或失败写在「结论」一节时，这一节现在会默认显示。
+
+### 必须修的问题
+
+#### 1. 四个栏目写成小标题时，整份报告又全部展开
+
+**你会遇到**：打开报告后，结论下面立刻接着整页仓库状态、测试命令和清场记录。
+**为什么**：签名只认加粗段落，小标题写法凑不出 \`marked\`。
+
+### 不拦验收、但你该知道的
+
+没有额外的不拦验收问题。
+
+## 被审范围与仓库状态
+
+- 被审 HEAD：\`abc1234\`
+
+## 测试与验证
+
+\`\`\`text
+npm test
+\`\`\`
+
+## 清场
+
+临时服务已停止。
+`;
+
 // 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
 //
@@ -338,6 +377,9 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="legacy-conclusion-fixture markdown-report-body">
       <ReviewReportBody text={legacyConclusion} reportKey="run-11:1" />
+    </div>
+    <div className="heading-columns-fixture markdown-report-body">
+      <ReviewReportBody text={headingColumns} reportKey="run-12:3" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

@@ -148,6 +148,58 @@ function plainText(node: ParsedNode): string {
   return "";
 }
 
+/** 一个栏目候选：它那一段/那个小标题的起始行，加上命中的是第几栏。 */
+type Column = { at: number; column: number };
+
+/**
+ * 四栏写成 `###` 小标题的那种写法（真实形态：`MiBg8G40scWo` 的两轮、`ANhYpXO-L1ic`，
+ * 以及本任务 `dB45LYOzuxnx/round-2`）。
+ *
+ * 判据是标题的可见文字**精确等于**栏目名（容一个结尾冒号）。这跟被抓过三次的那种放宽
+ * 不是一回事：那几次危险都来自**前缀**匹配（`**能不能验收不了**`、`**能不能验收**不
+ * 了解的人先看这里`），续写能混进来；这里是整段标题的全文相等，混不进东西。
+ */
+function headingColumns(root: Parsed, after: number, before: number): Column[] {
+  const columns: Column[] = [];
+  for (const node of root.children) {
+    if (node.type !== "heading" || node.depth !== 3 || !node.position) continue;
+    const at = node.position.start.line - 1;
+    if (at <= after || at >= before) continue;
+    const text = plainText(node).trim();
+    const column = CONTRACT_MARKS.findIndex((mark) => new RegExp(`^${mark}[：:]?$`).test(text));
+    if (column >= 0) columns.push({ at, column });
+  }
+  return columns;
+}
+
+/**
+ * 这组栏目候选够不够格判成契约。两件事都得成立：
+ *
+ * ① **四个独立栏目、齐全、按序、不重样。**「按序、不重样」是第 9 轮补的：只问「这四个
+ *    标签各自出现过没有」时，四栏完全倒着写也算数——那更像是抄了一份别人的结论。
+ * ② **问题本身证明得了在摘要里**，不能只凭标签就假定第二个 `##` 之后都是技术记录。第
+ *    10 轮的反例：摘要写着「不能 —— 有 1 条必须先修」「必须修的问题：见下方」，那一条
+ *    却写成了下一个 `##`，于是首屏只剩「见下方」。判据照契约本身来
+ *    （`server/src/review-report-format.ts`）：要么每条问题一个小标题，要么只写「没有
+ *    发现问题」六个字。
+ *
+ * `depth` 是「问题小标题至少得多深」，跟着栏目的写法走：加粗标签那一版栏目是段落、问题
+ * 是 `###`；栏目写成 `###` 时问题就得是 `####`。写死成 `>= 3` 的话，栏目自己那一级的
+ * 标题就能冒充问题小标题，① 和 ② 一起被绕开。
+ */
+function provesContract(root: Parsed, probes: string[], columns: Column[], depth: number): boolean {
+  if (columns.length !== MARK_LINES.length) return false;
+  if (!columns.every((hit, order) => hit.column === order)) return false;
+  const [, , problems, aside] = columns;
+  const listed = root.children.some(
+    (node) =>
+      node.type === "heading" && node.depth >= depth && node.position
+      && node.position.start.line - 1 > problems.at
+      && node.position.start.line - 1 < aside.at,
+  );
+  return listed || probes.slice(problems.at, aside.at).some((line) => line.includes("没有发现问题"));
+}
+
 export function splitReviewReport(text: string): ReviewReportSections {
   const whole: ReviewReportSections = { summary: text, detail: "", kind: "whole" };
   // 解析器把孤立的 `\r` 也当换行，我们按 `\n` 切片——真碰上这种老式换行，行号就对不上了。
@@ -236,34 +288,20 @@ export function splitReviewReport(text: string): ReviewReportSections {
   // 后面那个 `##` 可能就是问题小节。认错方向的代价不对称，宁可多铺开 18 份。
   const section = probes.slice(first, second).join("\n");
   if (!CONTRACT_MARKS.some((mark) => new RegExp(mark).test(section))) return afterConclusion();
-  // 只有**证明得了自己按新契约写**的报告才走第一档：四个栏目各占一段，齐全、按序、不
-  // 重样。把发现藏进一个写着「验证过程、证据、清场记录」的折叠里，比让人多滚两屏严重
-  // 得多，这一档不留猜的余地：降一档只是多点一下按钮，认错成契约是让按钮替报告撒谎。
+  // 只有**证明得了自己按新契约写**的报告才走第一档。把发现藏进一个写着「验证过程、证据、
+  // 清场记录」的折叠里，比让人多滚两屏严重得多，这一档不留猜的余地：降一档只是多点一下
+  // 按钮，认错成契约是让按钮替报告撒谎。
   //
-  // 「按序、不重样」是第 9 轮补的：只问「这四个标签各自出现过没有」时，四栏完全倒着
-  // 写也算数——那更像是抄了一份别人的结论，而不是按这份契约写的摘要。
-  const marked = markCandidateStarts(root, first, second)
+  // 四栏有两种写法，都认（判据见 `provesContract`）：prompt 给的加粗标签段落，以及把同样
+  // 四个栏目写成 `###` 小标题。后者是真实存在的形态——全库 1036 份里 4 份长这样，其中
+  // 一份就是本任务上一轮的审查报告。它在结构上跟加粗版一样确定（标题的可见文字必须精确
+  // 等于栏目名），认不出的后果却是整份技术明细重新铺满首屏，正好是这次改动要消灭的东西。
+  const columns = markCandidateStarts(root, first, second)
     .map((at) => ({ at, column: MARK_LINES.findIndex((pattern) => pattern.test(probes[at])) }))
     .filter((hit) => hit.column >= 0);
-  const complete =
-    marked.length === MARK_LINES.length && marked.every((hit, order) => hit.column === order);
-  if (!complete) return whole;
-
-  // 四个标签齐了还不够——得**证明问题本身就在摘要里**，不能只凭标签就假定第二个 `##`
-  // 之后都是技术记录。第 10 轮的反例：摘要写着「不能 —— 有 1 条必须先修」「必须修的
-  // 问题：见下方」，那一条却写成了下一个 `##`，于是首屏只剩「见下方」，问题在折叠里。
-  //
-  // 判据照契约本身来（`server/src/review-report-format.ts`）：这一栏要么每条问题一个小
-  // 标题，要么只写「没有发现问题」六个字。两样都拿不出来就整篇铺开。
-  const [, , problems, aside] = marked;
-  const listed = root.children.some(
-    (node) =>
-      node.type === "heading" && node.depth >= 3 && node.position
-      && node.position.start.line - 1 > problems.at
-      && node.position.start.line - 1 < aside.at,
-  );
-  const none = probes.slice(problems.at, aside.at).some((line) => line.includes("没有发现问题"));
-  if (!listed && !none) return whole;
+  if (!provesContract(root, probes, columns, 3) && !provesContract(root, probes, headingColumns(root, first, second), 4)) {
+    return whole;
+  }
 
   return {
     summary: lines.slice(0, second).join("\n").trimEnd(),
