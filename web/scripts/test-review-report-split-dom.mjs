@@ -278,6 +278,26 @@ try {
     );
   }
 
+  // ⑬ 旧格式的另一种主力形态：判定写在 `## 结论` 那一节里。折在第一个 `##` 之前时，
+  //    首屏只剩「任务/时间/审查者」三行，「到底过没过」要点一下才知道——全库 21 份是
+  //    这个形状。这一档从第二个 `##` 起折：结论整节留在首屏，技术记录照折。
+  const legacyConclusion = page.locator(".legacy-conclusion-fixture");
+  const lcSummary = await legacyConclusion.locator(".task-markdown").first().innerText();
+  assert.match(lcSummary, /verified/, "判定必须默认可见");
+  assert.match(lcSummary, /结论/, "结论那一节整个留在首屏");
+  assert.doesNotMatch(lcSummary, /被审范围|45b8a02|清场/, "技术记录照折");
+  assert.equal(
+    await legacyConclusion.getByRole("button", { name: /技术明细/ }).count(),
+    0,
+    "旧格式不是契约，按钮不准替折叠里的东西背书",
+  );
+  const lcToggle = legacyConclusion.getByRole("button", { name: /^展开完整报告$/ });
+  assert.equal(await lcToggle.count(), 1);
+  await lcToggle.click();
+  const lcDetail = await legacyConclusion.locator(".review-report-detail .task-markdown").innerText();
+  assert.match(lcDetail, /45b8a02/, "展开后技术记录原样都在");
+  assert.match(lcDetail, /清场/);
+
   console.log("review report split dom ok");
 } finally {
   await browser?.close();

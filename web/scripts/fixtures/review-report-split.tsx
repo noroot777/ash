@@ -260,6 +260,29 @@ const problemAsHeading = `# 第 10 轮自动验证报告
 你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
 `;
 
+// 旧格式的另一种主力形态（取自真实报告 `x3Jj_JW5SoXk/udvEI_K-2YiL/round-1`，全库同形态
+// 21 份）：一级标题 + 任务/日期/审查者三行 + `## 结论` + `verified` + `## 被审范围`。
+// 判定写在 `## 结论` 那一节里——按「折在第一个 `##` 之前」处理，首屏就只剩三行元数据，
+// 「它到底过没过」得点一下才知道。这一档从**第二个** `##` 起折。
+const legacyConclusion = `# 自由工作流第 1 轮审查报告
+
+任务：x3Jj_JW5SoXk / Grok 模型接入与刷新
+审查时间：2026-08-13
+审查者：独立逻辑审查（旁路回合）
+
+## 结论
+
+**verified。** 本轮固化需求已落地：本机 \`grok models\` 的 \`grok-4.6\` 能进入系统候选；设置页与新建任务选择器都有可用的「刷新」按钮。本轮未再复现会让验收失败的行为错误。
+
+## 被审范围
+
+工作树 \`/Users/fjh/code/harness/.worktrees/x3Jj_JW5SoXk\`，分支 \`harness/x3Jj_JW5\`，HEAD \`45b8a02\`。
+
+## 清场
+
+已停掉本轮起的服务。
+`;
+
 // 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
 //
@@ -312,6 +335,9 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="problem-heading-fixture markdown-report-body">
       <ReviewReportBody text={problemAsHeading} reportKey="run-10:10" />
+    </div>
+    <div className="legacy-conclusion-fixture markdown-report-body">
+      <ReviewReportBody text={legacyConclusion} reportKey="run-11:1" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

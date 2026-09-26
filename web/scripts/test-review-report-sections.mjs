@@ -1,14 +1,15 @@
 // 一份报告**算不算按契约写的**——签名判据。钉住它是因为契约横跨前后端：
 // `server/src/review-report-format.ts` 让审查者写出四段固定摘要，这里认那四段拆。任何
 // 一边漂了，用户要么看见整篇合规证明，要么更糟——发现被藏进一个宣称「里面只有验证过程、
-// 证据、清场记录」的折叠里。所以「认不出契约时必须降到第二档」是重点用例。
+// 证据、清场记录」的折叠里。所以「认不出契约时不许走第一档」是重点用例。
 //
 // 折叠有两档，签名决定走哪一档（两档的定义见 `reviewReportSections.ts`）：认出契约就拆
-// 在第二个 `##`、按钮写「展开技术明细」；认不出就拆在**第一个** `##` 之前、按钮只写
-// 「展开完整报告」，什么都不宣称；连引子都没有就整篇铺开。降级一档的代价是多点一下
-// 按钮，误判成契约的代价是让按钮替报告撒谎——所以拿不准一律往下降。
+// 在第二个 `##`、按钮写「展开技术明细」；认不出就降级，按钮只写「展开完整报告」，什么都
+// 不宣称。降级一档的代价是多点一下按钮，误判成契约的代价是让按钮替报告撒谎——所以拿不准
+// 一律往下降。
 //
-// 「哪个 `##` 是分界」那一类在 `test-review-report-boundary.mjs`。
+// 降级那一档**折到哪**在 `test-review-report-fallback.mjs`；「哪个 `##` 是分界」在
+// `test-review-report-boundary.mjs`。
 //
 // 六条**别再走回头路**的判据，各自有用例钉在下面：
 // ① 别拿标题**代替**四栏。「标题里有没有『结论』」那一版放行过两份真实报告，把【高】/
@@ -68,102 +69,6 @@ import { contract, conforming } from "./fixtures/review-report-contract.mjs";
   assert.match(summary, /导出内容仍是旧版本/, "问题必须留在首屏——半套摘要宁可整篇铺开");
 }
 
-// 反例一（真实报告 `yz74LehaZzwl/H1MQnmqKzCSl/round-1` 的骨架）：首节标题含「结论」，
-// 意思却正相反——「先说**结论之外的**」。按标题当契约拆会把两条【高】折叠掉，首屏只剩
-// 「做对的部分」，而那个折叠按钮上写着「验证过程、证据、清场记录」，等于骗用户里面
-// 只有合规证明。
-//
-// 现在它走第二档：拆点是**第一个** `##`，报告自己的开场结论留在首屏，「做对的部分」
-// 跟两条【高】一起收进不作任何承诺的「展开完整报告」。两档的区别就在这两处——拆在哪，
-// 以及按钮替不替折叠里的东西背书。
-{
-  const opposite = [
-    "# 第 1 轮审查",
-    "",
-    "结论：**verify_failed**，2 个高优先级问题。",
-    "",
-    "## 0. 先说结论之外的：这轮做对的部分",
-    "",
-    "核心流程已跑通，新增回归测试全部通过。",
-    "",
-    "## 1. 【高】身份页高内容屏：顶部被裁，而且滚不回去",
-    "",
-    "复现：……",
-  ].join("\n");
-  const { summary, detail, kind } = splitReviewReport(opposite);
-  assert.equal(kind, "lead", "「先说结论之外的」不是摘要契约，只能降级");
-  assert.match(summary, /verify_failed\*\*，2 个高优先级问题/, "报告自己的开场结论留在首屏");
-  assert.doesNotMatch(summary, /做对的部分|核心流程已跑通/, "「做对的部分」不许冒充摘要占着首屏");
-  assert.match(detail, /^## 0\. 先说结论之外的/, "拆点是第一个 `##`，不是第二个");
-  assert.match(detail, /【高】身份页高内容屏/);
-}
-
-// 反例二（真实报告 `KyF5hukfZ5D9/RJPSXRqyJIo2/round-1` 的骨架）：首节确实在讲结论，
-// 但只讲了**正面那半**，高危发现全在后面的 `##` 里。这份开头除了标题什么都没写，
-// 连引子都没有，于是连第二档都不给——整篇铺开。
-{
-  const positiveOnly = [
-    "# 第 1 轮审查",
-    "",
-    "## 一、先说结论：核心功能是真的能用",
-    "",
-    "主链路验证通过。",
-    "",
-    "## 二、Finding 1（高危 · 已确定复现）：所有 codex 任务开机即死",
-    "",
-    "复现：……",
-  ].join("\n");
-  const { summary, detail, kind } = splitReviewReport(positiveOnly);
-  assert.equal(kind, "whole", "开头只有一个标题，拆出来的首屏就只剩标题加按钮，不如整篇铺开");
-  assert.equal(detail, "");
-  assert.match(summary, /高危/, "高危发现必须留在首屏");
-}
-
-// 存量报告的主力形态（ascut `LqhF7g_rqANy` 第 1 轮就是这样，结论混在开头的无序列表里，
-// 缺陷在第三个 `##`）：抽查的 7 份真实报告全是这个样子——开头 7~12 行写明
-// `结论：verify_failed —— N 个可复现缺陷`，后面 118~169 行是范围、命令、清场记录。
-// 这正是用户点名要消灭的「46 行合规证明糊一脸」。
-{
-  const legacy = "# 第 1 轮逻辑审查报告\n\n- 结论：**verify_failed**\n\n## 一、改动范围\n\n27 个文件。\n\n## 三、发现的缺陷\n\n缺陷 1……\n";
-  const { summary, detail, kind } = splitReviewReport(legacy);
-  assert.equal(kind, "lead");
-  assert.match(summary, /结论：\*\*verify_failed\*\*/, "开场那句判定留在首屏");
-  assert.doesNotMatch(summary, /改动范围|27 个文件/, "第一个 `##` 起全部收进折叠");
-  assert.match(detail, /^## 一、改动范围/);
-  assert.match(detail, /缺陷 1/);
-  assert.equal(
-    `${summary}\n\n${detail}`.replace(/\s+/g, ""),
-    legacy.replace(/\s+/g, ""),
-    "折叠不是丢弃：一个字都不能少",
-  );
-}
-
-// `zs6JLcw1VAdr` 那种**全部发现就在第一个 `##`** 里的报告，降级后发现确实会落进折叠。
-// 这是明知的代价，不是疏漏：首屏仍有报告自己的 `verify_failed`，按钮也不宣称里面只有
-// 合规证明。用户拍板过这个取舍——「就算某轮审查者没照 prompt 写，你也不会被 46 行合规
-// 证明糊一脸」。要消灭这一档代价只有一条路：让审查者按契约写，那样走的是第一档。
-{
-  const findingFirst = "# 第 10 轮逻辑审查报告\n\n结论：**verify_failed**。\n\n## Finding\n\n### P1：……\n\n## 清理\n\n略\n";
-  const { summary, detail, kind } = splitReviewReport(findingFirst);
-  assert.equal(kind, "lead");
-  assert.match(summary, /verify_failed/, "首屏至少得说清能不能验收");
-  assert.match(detail, /P1/);
-}
-
-// 引子要的是**真有话说**，不是「标题下面空着」。只有一行 `#` 时整篇铺开。
-{
-  const bare = "# 第 1 轮审查\n\n## 发现 1：数据会丢\n\n复现：……\n";
-  assert.equal(splitReviewReport(bare).kind, "whole", "标题不算引子");
-  assert.equal(splitReviewReport(bare).detail, "");
-}
-
-// 连一个顶层 `##` 都没有：没有拆点，整篇铺开。
-{
-  const flat = "# 第 1 轮审查\n\n结论：**verify_failed**。\n\n### 发现 1\n\n复现：……\n";
-  assert.equal(splitReviewReport(flat).kind, "whole");
-  assert.equal(splitReviewReport(flat).detail, "");
-}
-
 // 首节标题本身也是契约的一部分：prompt 要求「报告开头必须先写一节 `## 结论`（就用这四个
 // 字起头）」。第 10 轮的反例是一份开头写「## 前言」、里面整段抄着上一轮四项结论的报告——
 // 四栏各自独立成段、顺序还对，光验四栏就照样放行。
@@ -192,6 +97,10 @@ for (const head of ["## 结论：不能验收", "## 结论（第 3 轮）", "## 
 }
 
 // 栏目名写在正文里不算数：契约要的是那四段**结构**真的在，不是那几个词出现过。
+//
+// 提过栏目名就一律整篇铺开，不降到「旧格式的结论节」那一档——正文提及凑不出签名，却
+// 足以说明有人在照新格式写，后面那个 `##` 很可能就是问题小节。下面第二份把这一点摆明：
+// 同样是正文提及，第二个 `##` 装的是问题。
 {
   const prose = [
     "# 报告",
@@ -206,6 +115,23 @@ for (const head of ["## 结论：不能验收", "## 结论（第 3 轮）", "## 
     "略",
   ].join("\n");
   assert.equal(splitReviewReport(prose).detail, "", "顺口提到四个栏目名不构成契约签名");
+}
+{
+  const proseThenProblem = [
+    "# 报告",
+    "",
+    "## 结论",
+    "",
+    "必须修的问题写在下面。",
+    "",
+    "## 真正的问题",
+    "",
+    "### 导出内容仍是旧版本",
+  ].join("\n");
+  const { summary, detail, kind } = splitReviewReport(proseThenProblem);
+  assert.equal(kind, "whole", "正文提过栏目名 = 新格式写坏了，不是旧格式");
+  assert.equal(detail, "");
+  assert.match(summary, /导出内容仍是旧版本/, "问题必须留在首屏");
 }
 
 // 「开头像」不算数：标签必须完整闭合。第 3 轮审查报告里的反例——四行加粗标签各自只是
