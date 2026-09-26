@@ -180,6 +180,21 @@ try {
     "展开后 CRLF 报告的明细同样原样都在",
   );
 
+  // ⑧ 结论里带代码示例的报告：代码内容里那行 ```… 不是闭合围栏，后面的 `##` 也不是小节
+  //    标题。认错时用户打开报告只看到半截代码加一个按钮，真正的问题折在里面还被当成代码。
+  const fence = page.locator(".fence-fixture");
+  const fenceSummary = await fence.locator(".task-markdown").first().innerText();
+  assert.match(fenceSummary, /保存后你刚改的内容会全部消失/, "真正的问题必须默认可见");
+  assert.match(fenceSummary, /这一行仍是代码内容/, "代码示例本身也留在摘要里");
+  assert.match(fenceSummary, /命令输出里的井号/, "代码里的 `##` 不是分界，不该被拆走");
+  assert.doesNotMatch(fenceSummary, /被审范围与基线|d7ee0b07/, "技术记录该收进明细");
+  await fence.getByRole("button", { name: /展开技术明细/ }).click();
+  assert.match(
+    await fence.locator(".review-report-detail .task-markdown").innerText(),
+    /d7ee0b07/,
+    "拆点应当落在那个真的二级标题上",
+  );
+
   console.log("review report split dom ok");
 } finally {
   await browser?.close();

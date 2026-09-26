@@ -89,6 +89,37 @@ const legacy = `# 自由工作流 · 第 1 轮逻辑审查报告
 ## 2. 【高】设置页 ≤640px 的新单列断点把导航切断
 `;
 
+// 结论里贴了代码示例的报告：示例**内容**里有一行以三个反引号打头（CommonMark 里那不是
+// 闭合围栏），后面还跟着 `##`。围栏开闭共用一条判据时，报告会从代码中间被腰斩——首屏只
+// 剩半截代码加一个按钮，真正的问题折在里面，还被当成代码渲染。
+const fenced = `# 第 6 轮自动验证报告
+
+## 结论
+
+**能不能验收**：不能 —— 有 1 条必须先修
+
+**现在什么能用了**：项目中心的卡片在深色主题下不再出现亮紫白空位。
+
+**不拦验收、但你该知道的**：没有。
+
+**必须修的问题**
+
+执行者贴的报错原文如下：
+
+\`\`\`text
+\`\`\`这一行仍是代码内容，不是闭合围栏
+## 命令输出里的井号
+\`\`\`
+
+### 保存后你刚改的内容会全部消失
+
+你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
+
+## 被审范围与基线
+
+- 被审 HEAD：\`d7ee0b07\`
+`;
+
 // 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
 //
@@ -120,6 +151,9 @@ createRoot(document.getElementById("root")!).render(
     {/* Windows 上生成的同一份报告：换行是 CRLF，屏幕上该长得一模一样。 */}
     <div className="crlf-fixture markdown-report-body">
       <ReviewReportBody text={conforming.replace(/\n/g, "\r\n")} reportKey="run-3:1" />
+    </div>
+    <div className="fence-fixture markdown-report-body">
+      <ReviewReportBody text={fenced} reportKey="run-4:6" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

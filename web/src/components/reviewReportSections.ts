@@ -18,9 +18,26 @@ export type ReviewReportSections = {
   detail: string;
 };
 
-const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
-/** 正好两个 `#`：`###` 是小节内部结构，不构成明细分界。 */
-const H2 = /^##\s+(.*)$/;
+/**
+ * 围栏开头：三个以上反引号或波浪线。
+ *
+ * **开头和结尾不能共用一条判据。**CommonMark 里开头允许跟信息串（```text），结尾却只
+ * 允许同种记号加空白。拿开头这条宽松的正则去认结尾，代码块里任何一行以三个反引号打头
+ * 的内容——贴进来的原始报告、命令输出里的 diff——都会把围栏提前关掉；关掉之后代码里的
+ * `## xxx` 就成了第二个二级标题，报告从那里腰斩：首屏只剩半截代码，真正的问题连同后
+ * 半截代码一起被折进「展开技术明细」，还被当成代码渲染。
+ */
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
+/** 围栏结尾：同种记号、不短于开头，而且**后面只能是空白**。 */
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+/**
+ * 正好两个 `#`：`###` 是小节内部结构，不构成明细分界。
+ *
+ * 缩进容忍 0–3 个**空格**（Markdown 对 ATX 标题就是这么算的），但写 ` ` 不写 `\s`：
+ * 制表符按 4 列算，`\t## x` 是缩进代码块而不是标题，认成标题就可能拆在代码中间。
+ * 下面的标记行同理。
+ */
+const H2 = /^ {0,3}##\s+(.*)$/;
 
 /**
  * 新契约那一节的四个固定小标题（`server/src/review-report-format.ts` 要求原样写出）。
@@ -58,7 +75,7 @@ const CONTRACT_MARKS = ["能不能验收", "现在什么能用了", "必须修�
  */
 const MARK_LINES = CONTRACT_MARKS.map(
   (mark) => new RegExp(
-    `^\\s{0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\*\\*\\s*${mark}\\s*(?:\\*\\*\\s*(?:[：:].*)?$|[：:]\\s*\\*\\*)`,
+    `^ {0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\*\\*\\s*${mark}\\s*(?:\\*\\*\\s*(?:[：:].*)?$|[：:]\\s*\\*\\*)`,
   ),
 );
 
@@ -75,17 +92,19 @@ export function splitReviewReport(text: string): ReviewReportSections {
   const heads: { at: number; title: string }[] = [];
   /** 每个契约标记出现过的行号；围栏里的不算。 */
   const markAt: number[][] = CONTRACT_MARKS.map(() => []);
-  // 围栏里的 `## xxx` 是被审代码或命令输出的一部分，不是小节标题。开闭用同种记号配对，
-  // 这样 ``` 块里贴的 ~~~ 不会把围栏提前关掉。
+  // 围栏里的 `## xxx` 是被审代码或命令输出的一部分，不是小节标题。开闭分别判：开头认
+  // 记号种类，结尾还要求同种、不短于开头、后面只有空白——这样 ``` 块里贴的 ~~~ 关不掉
+  // 它，块里那行带着说明文字的 ``` 也关不掉它。
   let fence: string | null = null;
   for (const [at, line] of probes.entries()) {
-    const marker = FENCE.exec(line)?.[1];
     if (fence) {
-      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+      const close = FENCE_CLOSE.exec(line)?.[1];
+      if (close && close[0] === fence[0] && close.length >= fence.length) fence = null;
       continue;
     }
-    if (marker) {
-      fence = marker;
+    const open = FENCE_OPEN.exec(line)?.[1];
+    if (open) {
+      fence = open;
       continue;
     }
     const title = H2.exec(line)?.[1];
