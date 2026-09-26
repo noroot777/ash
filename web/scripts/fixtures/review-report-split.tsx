@@ -430,6 +430,49 @@ npm -w @ash/web test
 已停掉本轮起的无头浏览器。
 `;
 
+// 第 6 轮的两份。一份：报告自己写着「有 2 条必须先修」，摘要里却只排得下一条。逐条校验
+// 之前，「有一条写对了」就算证明完，第二条被折进写着「技术明细」的按钮里——按钮替报告
+// 说了谎。
+const countsShort = `## 结论
+
+**能不能验收**：不能 —— 有 2 条必须先修。
+
+**现在什么能用了**：页面可以打开。
+
+**必须修的问题**：
+
+### 1. 保存后内容消失
+你会遇到：保存后刚写的内容消失。
+为什么：保存请求没有落盘。
+建议怎么修：修复保存流程。
+
+**不拦验收、但你该知道的**：没有。
+
+## 2. 删除会删错项目
+你会遇到：删除甲项目后，乙项目也消失。
+为什么：删除请求使用了错误标识。
+建议怎么修：按当前项目标识删除。
+`;
+
+// 另一份：真实形态 \`-MseXJQXVHVH/cRBWIpQJMYfT/round-1\`（49 行）。首节标题自己标了严重度，
+// 问题完整写在首节里，后面四五十行是命令、浏览器通道和清场——原先整篇铺开、连按钮都没有。
+const severityFirst = `# 第 1 轮逻辑审查结论：未通过
+
+## [中] 点「常一起出现」会选中隐藏节点，结果区整体灰掉
+
+你会遇到：筛选状态下点详情面板的关联按钮，结果区整体灰掉。
+
+## 验证记录
+
+\`\`\`text
+npm -w @ash/web test
+\`\`\`
+
+## 浏览器验证
+
+独立无头会话，已清场。
+`;
+
 // 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
 //
@@ -500,6 +543,12 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="findings-fixture markdown-report-body">
       <ReviewReportBody text={findingsReport} reportKey="run-16:1" />
+    </div>
+    <div className="counts-short-fixture markdown-report-body">
+      <ReviewReportBody text={countsShort} reportKey="run-17:1" />
+    </div>
+    <div className="severity-first-fixture markdown-report-body">
+      <ReviewReportBody text={severityFirst} reportKey="run-18:1" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

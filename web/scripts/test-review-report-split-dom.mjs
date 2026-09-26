@@ -388,6 +388,40 @@ try {
     "展开后技术记录原样都在",
   );
 
+  // ⑲ 报告自己写着「有 2 条必须先修」、摘要里只排得下一条：第二条默认看不见，按钮却写
+  //    着「技术明细」——按钮替报告说了谎。跟条数对不上就证明不了问题都在摘要里，整篇铺开。
+  const short = page.locator(".counts-short-fixture");
+  assert.match(
+    await short.locator(".task-markdown").first().innerText(),
+    /删除会删错项目/,
+    "第二条问题必须默认可见",
+  );
+  assert.equal(
+    await short.locator(".review-report-more").count(),
+    0,
+    "说了 2 条只证明了 1 条，不该画出任何展开按钮",
+  );
+
+  // ⑳ 首节标题自己标了严重度（真实样本 `-MseXJQXVHVH` 的 49 行报告）：问题完整写在首节，
+  //    后面是命令和清场。原先整篇铺开连按钮都没有，现在按第一个没标严重度的 `##` 折。
+  const severity = page.locator(".severity-first-fixture");
+  const sSummary = await severity.locator(".task-markdown").first().innerText();
+  assert.match(sSummary, /结果区整体灰掉/, "问题必须默认可见");
+  assert.doesNotMatch(sSummary, /npm -w|已清场/, "命令和清场照折");
+  assert.equal(
+    await severity.getByRole("button", { name: /技术明细/ }).count(),
+    0,
+    "没签契约，按钮不准替折叠里的东西背书",
+  );
+  const sToggle = severity.getByRole("button", { name: /^展开完整报告$/ });
+  assert.equal(await sToggle.count(), 1);
+  await sToggle.click();
+  assert.match(
+    await severity.locator(".review-report-detail .task-markdown").innerText(),
+    /已清场/,
+    "展开后技术记录原样都在",
+  );
+
   console.log("review report split dom ok");} finally {
   await browser?.close();
   await server.close();

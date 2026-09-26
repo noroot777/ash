@@ -19,6 +19,8 @@
 //      `## 结论：verify_failed` / `## Findings` / `## 发现`）：整节留在首屏，从**第二个**
 //      `##` 起折。折在第一个 `##` 之前会把判定一起折掉；只认中文「结论」那一个词时，222
 //      行的英文报告和 323 份「发现」开场的报告都折不对。
+//    - 小节标题自己标了严重度（`## [中] …`）：开头连着的那几节问题全部留在首屏，从第一个
+//      没标的 `##` 起折。
 //    - 其它形态：开头到**第一个** `##` 之前的引子留在首屏。
 // ③ 首屏凑不出读得懂的东西（开头只有标题、首节又不是报告自己声明的结论节，或者声明了
 //    却没有第二个 `##`）就整篇铺开：一个标题加一个按钮的首屏，比多滚两屏更糟。
@@ -126,6 +128,19 @@ const MARK_LINES = CONTRACT_MARKS.map(
 const VERDICT_TITLES = /^(?:结论|Conclusion|Verdict)\s*(?:[：:]\s*(?:verified|verify_failed|blocked))?$|^(?:Findings?|发现)$/i;
 
 /**
+ * 小节标题自己**打头标了严重度**——`## [中] 筛选状态下点击…`、`## 【高】…`、`## [P1] …`。
+ *
+ * 这种标题不需要猜：报告自己说了这一节是一条问题，而且多严重。开头连着的这几节全部留在
+ * 首屏，从第一个没标的 `##` 起才折（真实形态：`-MseXJQXVHVH` 的四轮报告，首节是问题、
+ * 第二节就是「验证记录」，原先整篇铺开四五十行）。
+ *
+ * 只认**打头**，不认「标题里出现过」：`## 1. 【高】身份页高内容屏` 那种前面还有序号的
+ * 不算——真实样本 `yz74LehaZzwl` 的首节是 `## 0. 先说结论之外的：这轮做对的部分`，它跟
+ * 几条【高】是并列小节，从它折起才对。
+ */
+const SEVERITY_TITLES = /^[[【(（]\s*(?:P[0-3]|高|中|低|严重|阻断|Blocker|Critical|High|Medium|Low|Major|Minor)\s*[\]】)）]/i;
+
+/**
  * 摘要那一节里，够得上「一个栏目」的节点起始行——按源码先后排好。
  *
  * 允许的形态只有两种：第一、第二个顶层 `##` 之间的**顶层段落**，以及顶层列表**直属**
@@ -200,6 +215,14 @@ function headingColumns(root: Parsed, after: number, before: number): Column[] {
  *    （`server/src/review-report-format.ts`）：要么每条问题一个小标题**并带着那固定三行**，
  *    要么只写「没有发现问题」六个字。
  *
+ * ② 验的是**全部条目**，不是「有一条就行」。第 6 轮的反例：摘要写着「有 2 条必须先修」，
+ * 第一条按契约写全，第二条却写成了下一个 `##`——只要一条过关就放行时，那第二条连同按钮
+ * 上的「验证过程、证据、清场记录」一起把人骗了。所以两道都验：
+ *
+ * - 问题栏里**每一个**小标题都得是一条按契约写的问题（契约原话：「不许把一条塞进另一条
+ *   的正文里，扫标题要能数清楚一共几条」——说明性小标题混在里面就数不清了）；
+ * - 「能不能验收」里报了数的，数目还得**对得上**摘要里的条目数。
+ *
  * `depth` 是「问题小标题至少得多深」，跟着栏目的写法走：加粗标签那一版栏目是段落、问题
  * 是 `###`；栏目写成 `###` 时问题就得是 `####`。写死成 `>= 3` 的话，栏目自己那一级的
  * 标题就能冒充问题小标题，① 和 ② 一起被绕开。
@@ -207,26 +230,72 @@ function headingColumns(root: Parsed, after: number, before: number): Column[] {
 function provesContract(root: Parsed, probes: string[], columns: Column[], depth: number): boolean {
   if (columns.length !== MARK_LINES.length) return false;
   if (!columns.every((hit, order) => hit.column === order)) return false;
-  const [, , problems, aside] = columns;
-  const listed = root.children.some(
-    (node) =>
-      node.type === "heading" && node.depth >= depth && node.position
-      && node.position.start.line - 1 > problems.at
-      && node.position.start.line - 1 < aside.at
-      && writesProblem(root, probes, node.position.start.line - 1, node.depth, aside.at),
-  );
-  return listed || saysNoProblem(probes, problems, aside);
+  const [verdict, , problems, aside] = columns;
+  const items: Array<{ at: number; depth: number }> = [];
+  for (const node of root.children) {
+    if (node.type !== "heading" || node.depth < depth || !node.position) continue;
+    const at = node.position.start.line - 1;
+    if (at > problems.at && at < aside.at) items.push({ at, depth: node.depth });
+  }
+  if (!items.length) return saysNoProblem(probes, problems, aside);
+  const listed = items.every((item) => writesProblem(root, probes, item.at, item.depth, aside.at));
+  return listed && countsUp(probes, verdict, problems, items.length);
+}
+
+/**
+ * 「能不能验收」里报的条数，跟摘要里真写出来的条目数对不对得上。没报数就不管。
+ *
+ * 契约允许**摘要里最多展开 5 条**，更多的在第 5 条后面写一行「其余 N 条：…」并把完整三行
+ * 放进明细——那一档不是漏写，所以单独放行。
+ */
+function countsUp(probes: string[], verdict: Column, problems: Column, items: number): boolean {
+  const declared = probes.slice(verdict.at, problems.at).join("\n").match(/有\s*(\d+)\s*条/);
+  if (!declared) return true;
+  if (Number(declared[1]) === items) return true;
+  return items === 5 && Number(declared[1]) > 5
+    && /其余\s*\d+\s*条/.test(probes.slice(problems.at, problems.at + 64).join("\n"));
 }
 
 /**
  * 契约给每条问题定死的三行（`server/src/review-report-format.ts`：「每条一个小标题，固定
  * 三行」）：第一行「你会遇到」写现象，第二行「为什么」讲机制，第三行「建议怎么修」。
  *
- * 容的写法跟栏目标签一样：加粗写不写、冒号在加粗里还是外面、前面带不带列表符号。
+ * 比对前先把加粗记号去掉，所以三种真实写法一次认全：加粗写不写、冒号在加粗里还是外面、
+ * 前面带不带列表符号。**冒号后面必须真有字**——`你会遇到：` 后面空着是模板占位，不是
+ * 一条问题。
  */
 const PROBLEM_LINES = ["你会遇到", "为什么", "建议怎么修"].map(
-  (mark) => new RegExp(`^ {0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\*{0,2}\\s*${mark}\\s*(?:\\*\\*\\s*)?[：:]`),
+  (mark) => new RegExp(`^ {0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\s*${mark}\\s*[：:]\\s*\\S`),
 );
+
+/**
+ * 这段行号范围里，哪些行是**正文**——顶层段落，以及顶层列表直属项里的段落。
+ *
+ * 白名单跟 `markCandidateStarts` 同一套，理由也一样：围栏、HTML 块、块引用、嵌套列表里
+ * 的字看着顶格，解析树里各有归属。第 6 轮的反例就是围栏——一段「写法示例」代码块里照着
+ * 模板写了那三行，按源码逐行扫就成了一条真问题，真正的问题被折进明细。黑名单永远缺一
+ * 条，白名单漏掉一种写法只是不拆。
+ *
+ * 这里收**节点覆盖的每一行**而不是起始行：那三行是一段里的三个软换行，本来就该整段收。
+ */
+function proseLines(root: Parsed, from: number, to: number): Set<number> {
+  const lines = new Set<number>();
+  const take = (node: ParsedNode) => {
+    if (!node.position) return;
+    for (let at = node.position.start.line - 1; at <= node.position.end.line - 1; at += 1) {
+      if (at >= from && at < to) lines.add(at);
+    }
+  };
+  for (const node of root.children) {
+    if (node.type === "paragraph") take(node);
+    else if (node.type === "list") {
+      for (const item of node.children) {
+        for (const child of item.children) if (child.type === "paragraph") take(child);
+      }
+    }
+  }
+  return lines;
+}
 
 /**
  * `at` 那个小标题底下**真写着一条问题**，不是别的什么。
@@ -236,8 +305,9 @@ const PROBLEM_LINES = ["你会遇到", "为什么", "建议怎么修"].map(
  * `##` 里，首屏只剩「有 1 条必须先修」和「补充说明」，按钮还宣称折叠里只有技术记录。
  * 这跟第 4 轮「『没有发现问题』被当子串」是同一个形状：判据比它要证明的事松一档。
  *
- * 所以照契约验那三行——**按序、各自独占一行的开头**。不问「这段里出现过『你会遇到』吗」：
- * 那正是被抓过的子串问法，「这里不写你会遇到、为什么、建议怎么修」一句话就能骗过去。
+ * 所以照契约验那三行——**按序、各自独占一行的开头、冒号后有字，而且那一行得是正文**。
+ * 三处都被绕过过：不验顺序和行首就是子串问法（「这里不写你会遇到、为什么、建议怎么修」
+ * 一句话就够）；不验节点类型，围栏里的写法示例算数；不验冒号后有没有字，空模板算数。
  *
  * 条目正文止于下一个同级或更浅的标题（同一栏里的下一条问题），最远到第四栏。
  */
@@ -248,11 +318,15 @@ function writesProblem(root: Parsed, probes: string[], at: number, depth: number
       && node.position.start.line - 1 > at,
   );
   const end = Math.min(until, sibling?.position ? sibling.position.start.line - 1 : until);
+  const prose = proseLines(root, at + 1, end);
   let cursor = at + 1;
   for (const line of PROBLEM_LINES) {
-    const hit = probes.slice(cursor, end).findIndex((text) => line.test(text));
+    let hit = -1;
+    for (let scan = cursor; scan < end; scan += 1) {
+      if (prose.has(scan) && line.test(probes[scan].replace(/\*\*/g, ""))) { hit = scan; break; }
+    }
     if (hit < 0) return false;
-    cursor += hit + 1;
+    cursor = hit + 1;
   }
   return true;
 }
@@ -362,6 +436,19 @@ export function splitReviewReport(text: string): ReviewReportSections {
     }
     return cut(second, "contract");
   }
+
+  /**
+   * 第二档 · 报告自己标了严重度：开头连着的那几节问题全部留在首屏，从第一个没标的 `##`
+   * 起折。
+   *
+   * 这不是「按标题猜哪一节像摘要」——`## [中] 筛选状态下点击…` 已经把「这是一条问题、
+   * 多严重」写在标题上了，比任何猜法都确定。拆点也不靠猜：**所有标了严重度的小节都留在
+   * 首屏**，折的是它们后面的验证记录、浏览器通道和清场。真实形态是 `-MseXJQXVHVH` 的四轮
+   * 报告，原先整篇铺开四五十行。
+   */
+  const tail = heads.findIndex((node) => !SEVERITY_TITLES.test(plainText(node).trim()));
+  const fold = tail > 0 ? heads[tail]?.position : undefined;
+  if (SEVERITY_TITLES.test(title) && fold) return cut(fold.start.line - 1, "lead");
 
   /**
    * 第二档 · 通用形态：引子铺开，第一个 `##` 起收进「展开完整报告」。
