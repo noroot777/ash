@@ -9,7 +9,8 @@
 // ④ 对不上契约的存量报告走降级那一档：引子留在首屏，第一个 `##` 起收进一个**什么都不
 //    宣称**的「展开完整报告」。按钮文案是这一档的全部安全边际——「展开技术明细（验证
 //    过程、证据、清场记录）」只有在报告证明得了自己按契约写时才准出现；
-// ⑤ 连引子都没有的报告整篇铺开，一个按钮都不画。
+// ⑤ 连引子都没有、解析器认不出摘要边界的报告不猜拆点——按渲染高度夹住，底下同样给一个
+//    什么都不宣称的「展开完整报告」；装得下（或只超出一点点）的就一个按钮都不画。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -421,6 +422,47 @@ try {
     /已清场/,
     "展开后技术记录原样都在",
   );
+
+  // ㉑ 认不出摘要边界的那一档（真实形态：元数据开场的 111 行报告）。不猜拆点——按首节拆
+  //    会把 P1～P3 折掉——改成按渲染高度夹住：首屏不许糊人一脸，按钮照旧什么都不宣称，
+  //    整篇仍在 DOM 里一个字没少。
+  const metadata = page.locator(".metadata-first-fixture");
+  const clamp = metadata.locator(".review-report-whole");
+  assert.equal(await clamp.count(), 1, "认不出摘要的报告走夹住那一档");
+  assert.ok(await clamp.evaluate((node) => node.classList.contains("is-clamped")), "长报告默认夹住");
+  const clampedHeight = (await clamp.boundingBox())?.height ?? 0;
+  assert.ok(clampedHeight > 0 && clampedHeight <= 641, `夹住后高度应止于上限，实为 ${clampedHeight}`);
+  assert.equal(
+    await metadata.getByRole("button", { name: /技术明细/ }).count(),
+    0,
+    "没签契约，按钮不准替看不见的那半截背书",
+  );
+  // 夹住的是视觉，不是内容：整篇都还在 DOM 里，修复 agent 读的盘上那份更是一个字没动。
+  assert.match(await clamp.innerText(), /建议先修 P1/, "夹住不是丢弃");
+
+  const wholeToggle = metadata.getByRole("button", { name: /^展开完整报告$/ });
+  assert.equal(await wholeToggle.count(), 1, "夹住了就得给一个展开的出口");
+  await wholeToggle.click();
+  assert.ok(
+    !(await clamp.evaluate((node) => node.classList.contains("is-clamped"))),
+    "点开之后不再夹",
+  );
+  assert.ok(((await clamp.boundingBox())?.height ?? 0) > clampedHeight, "展开后铺满全文");
+  assert.equal(await metadata.getByRole("button", { name: /^收起完整报告$/ }).count(), 1);
+
+  // ㉒ 装得下的报告一个按钮都不画；**刚过上限也不画**——夹住得真省下东西，不然那个按钮
+  //    只是碍事。真实形态 `YsEYKwIz-EaC`（34 行、844px）就卡在这一档。判据是渲染高度，
+  //    所以这份 fixture 的宽度写死，先断言它确实落在「过了上限、没过余量」那一段。
+  const justOver = page.locator(".just-over-fixture");
+  const justOverBody = justOver.locator(".review-report-whole > div");
+  const natural = await justOverBody.evaluate((node) => node.scrollHeight);
+  assert.ok(natural > 640, `这份 fixture 得真的超过上限，否则下面的断言是空的（实为 ${natural}px）`);
+  assert.equal(
+    await justOver.locator(".review-report-more").count(),
+    0,
+    `只超出上限两百来 px 时不该画按钮（实为 ${natural}px）`,
+  );
+  assert.equal(await justOver.locator(".review-report-whole.is-clamped").count(), 0, "没过余量就别夹");
 
   console.log("review report split dom ok");} finally {
   await browser?.close();

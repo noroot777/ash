@@ -473,6 +473,68 @@ npm -w @ash/web test
 独立无头会话，已清场。
 `;
 
+// 第 7 轮：认不出摘要边界、又长得糊人一脸的那一档。形态照真实样本
+// `_wWMPNIsrXF7/5XWkSb3U0UQK/round-1`（111 行）：先写任务元数据、再写编译记录，
+// `## 2. 高优先级缺陷` 在第 24 行往后。按首节拆会把 P1～P3 全折掉，不拆又要用户先滚过
+// 几十行验证记录——所以这一档不猜拆点，按渲染高度夹住，按钮照旧什么都不宣称。
+const metadataFirst = [
+  "# 第 1 轮逻辑审查报告",
+  "",
+  "## 任务：查询 Claude 模型 (ash 中增加 Claude CLI 模型指定功能)",
+  "",
+  "### 被审提交范围",
+  "",
+  ...Array.from({ length: 6 }, (_, k) => `- \`c0ffee${k}\` 第 ${k + 1} 个提交：改了设置页的模型下拉。`),
+  "",
+  "## 1. 编译验证",
+  "",
+  "```text",
+  "npm -w @ash/web run build",
+  "npm -w @ash/server run build",
+  "```",
+  "",
+  "两条命令都真实运行并退出 0。",
+  "",
+  "## 2. 高优先级缺陷",
+  "",
+  ...[
+    "P1 行为缺陷 — 保存后内容会全部消失",
+    "P2 交互缺陷 — 别名模式下缺少「清除模型」出口",
+    "P3 回归风险 — Claude profile 的状态行被完全隐藏",
+  ].flatMap((title, k) => [
+    `### ${title}`,
+    "",
+    `复现：第 ${k + 1} 步照着点一遍就能看到，界面上没有任何提示。`,
+    "",
+    "```ts",
+    `const value = readModel(${k});`,
+    "```",
+    "",
+  ]),
+  "## 3. 边界条件与竞态",
+  "",
+  ...Array.from({ length: 3 }, (_, k) => [`### B${k + 1}. 模式切换时的竞态`, "", "切换过程中下拉框会短暂变空。", ""]).flat(),
+  "## 4. 业务逻辑验证",
+  "",
+  ...Array.from({ length: 8 }, (_, k) => `- 第 ${k + 1} 项核对：与设置页实际行为一致。`),
+  "",
+  "## 5. 结论",
+  "",
+  "建议先修 P1，其余可以随后跟进。",
+].join("\n");
+
+// 刚过上限、但没过「值不值得给这个按钮」那道余量的报告。真实形态 `YsEYKwIz-EaC`（34 行、
+// 按对话栏宽度量 844px）：只比上限高两百来 px，夹了它等于让人为了 200px 多点一下。宽度写
+// 死是为了让这个高度稳定——band 判据靠的是渲染高度，容器一宽就全变了。
+const justOver = [
+  "# 第 1 轮审查记录",
+  "",
+  ...Array.from({ length: 30 }, (_, k) =>
+    `${k + 1}. 第 ${k + 1} 项核对：按设置页的实际行为逐条走了一遍，与预期一致，没有发现偏差。`),
+  "",
+  "以上全部核对完毕，没有需要拦验收的问题。",
+].join("\n");
+
 // 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
 //
@@ -549,6 +611,12 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="severity-first-fixture markdown-report-body">
       <ReviewReportBody text={severityFirst} reportKey="run-18:1" />
+    </div>
+    <div className="metadata-first-fixture markdown-report-body">
+      <ReviewReportBody text={metadataFirst} reportKey="run-19:1" />
+    </div>
+    <div className="just-over-fixture markdown-report-body" style={{ width: 720 }}>
+      <ReviewReportBody text={justOver} reportKey="run-20:1" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

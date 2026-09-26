@@ -23,7 +23,11 @@
 //      没标的 `##` 起折。
 //    - 其它形态：开头到**第一个** `##` 之前的引子留在首屏。
 // ③ 首屏凑不出读得懂的东西（开头只有标题、首节又不是报告自己声明的结论节，或者声明了
-//    却没有第二个 `##`）就整篇铺开：一个标题加一个按钮的首屏，比多滚两屏更糟。
+//    却没有第二个 `##`）就不拆：一个标题加一个按钮的首屏，比多滚两屏更糟。**这一档不拆
+//    不等于铺满**——`MarkdownBody.tsx` 会按渲染高度把它夹住，底下同样给一个什么都不宣称
+//    的「展开完整报告」。拆点靠猜会把问题藏掉，按高度夹不会：铺的是报告自己的开头，一个
+//    字没被重排。（真实形态 `_wWMPNIsrXF7/5XWkSb3U0UQK/round-1`：111 行，先写任务元数据
+//    和编译记录，`## 2. 高优先级缺陷` 在第 24 行往后——按首节拆会把 P1～P3 全折掉。）
 //
 // 第二档为什么安全，而「按标题猜出摘要在哪」不安全：差别不在折不折，在**折掉的是什么**
 // 和**按钮说了什么**。按标题猜那一版把「## 0. 先说结论之外的：这轮做对的部分」当成摘要，
@@ -221,7 +225,9 @@ function headingColumns(root: Parsed, after: number, before: number): Column[] {
  *
  * - 问题栏里**每一个**小标题都得是一条按契约写的问题（契约原话：「不许把一条塞进另一条
  *   的正文里，扫标题要能数清楚一共几条」——说明性小标题混在里面就数不清了）；
- * - 「能不能验收」里报了数的，数目还得**对得上**摘要里的条目数。
+ * - 「能不能验收」里**必须报出条数**，而且对得上摘要里的条目数。第 7 轮的反例是同一形状
+ *   的最后一个口子：不报数时曾经直接放行，于是「不能，请修完再验」加一条合规问题就够，
+ *   真正的第二条写在下一个 `##` 里照样被折走。数不出来就证明不了摘要是全的。
  *
  * `depth` 是「问题小标题至少得多深」，跟着栏目的写法走：加粗标签那一版栏目是段落、问题
  * 是 `###`；栏目写成 `###` 时问题就得是 `####`。写死成 `>= 3` 的话，栏目自己那一级的
@@ -230,7 +236,7 @@ function headingColumns(root: Parsed, after: number, before: number): Column[] {
 function provesContract(root: Parsed, probes: string[], columns: Column[], depth: number): boolean {
   if (columns.length !== MARK_LINES.length) return false;
   if (!columns.every((hit, order) => hit.column === order)) return false;
-  const [verdict, , problems, aside] = columns;
+  const [verdict, works, problems, aside] = columns;
   const items: Array<{ at: number; depth: number }> = [];
   for (const node of root.children) {
     if (node.type !== "heading" || node.depth < depth || !node.position) continue;
@@ -239,21 +245,96 @@ function provesContract(root: Parsed, probes: string[], columns: Column[], depth
   }
   if (!items.length) return saysNoProblem(probes, problems, aside);
   const listed = items.every((item) => writesProblem(root, probes, item.at, item.depth, aside.at));
-  return listed && countsUp(probes, verdict, problems, items.length);
+  return listed && countsUp(root, probes, verdict, works, aside, items);
 }
 
 /**
- * 「能不能验收」里报的条数，跟摘要里真写出来的条目数对不对得上。没报数就不管。
+ * 摘要里真写出来的条目数，跟「能不能验收」里报的条数对不对得上。
  *
- * 契约允许**摘要里最多展开 5 条**，更多的在第 5 条后面写一行「其余 N 条：…」并把完整三行
- * 放进明细——那一档不是漏写，所以单独放行。
+ * **报了数才算数，没报数一律不算。**第 7 轮的反例：摘要写「不能，请修完再验」不带数字，
+ * 第二条问题写成了下一个 `##`——逐条校验的是摘要里那一条，它写得完全合规，于是整份判成
+ * 契约，第二条落进写着「验证过程、证据、清场记录」的折叠。这跟前几轮是同一种形状：判据
+ * 比它要证明的事松一档。要担保「折叠里只有技术记录」，就得先知道**一共有几条**；报告不
+ * 说，就没有任何东西能证明摘要是全的，只能降级。
+ *
+ * 契约本来就要求报这个数（`server/src/review-report-format.ts`：「不能的话写『不能 ——
+ * 有 N 条必须先修，最要命的是…』」），所以这不是对报告提新要求，是不再替它补全。全库
+ * 24 份契约报告里只有 1 份漏写（`9WhVyjTyJwZd/round-1`），它确实没按契约写。
+ *
+ * 数字只认「能不能验收」那一栏自己的范围，不扫到「现在什么能用了」里去——后者说「修好了
+ * 有 3 条」之类的话不是本轮的问题数。
+ *
+ * 另一条被绕过的路是**中文数字**：「有两条必须先修」不匹配只认阿拉伯数字的正则，于是
+ * 报了数也等于没报。两种写法一起认。
  */
-function countsUp(probes: string[], verdict: Column, problems: Column, items: number): boolean {
-  const declared = probes.slice(verdict.at, problems.at).join("\n").match(/有\s*(\d+)\s*条/);
-  if (!declared) return true;
-  if (Number(declared[1]) === items) return true;
-  return items === 5 && Number(declared[1]) > 5
-    && /其余\s*\d+\s*条/.test(probes.slice(problems.at, problems.at + 64).join("\n"));
+function countsUp(
+  root: Parsed,
+  probes: string[],
+  verdict: Column,
+  works: Column,
+  aside: Column,
+  items: Array<{ at: number }>,
+): boolean {
+  const declared = declaredCount(probes.slice(verdict.at, works.at).join("\n"));
+  if (declared === null) return false;
+  if (declared === items.length) return true;
+  return spillsOver(root, probes, declared, items, aside);
+}
+
+/** 中文数字的个位。`两` 跟 `二` 同值——「有两条」是真实写法。 */
+const CN_DIGITS: Record<string, number> = {
+  零: 0, 〇: 0, 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+};
+
+/** 「有 N 条」里的 N，阿拉伯数字和中文数字都认；没报数返回 `null`（跟「报了 0 条」不是一回事）。 */
+function declaredCount(text: string): number | null {
+  const arabic = text.match(/有\s*(\d+)\s*条/);
+  if (arabic) return Number(arabic[1]);
+  const chinese = text.match(/有\s*([零〇一两二三四五六七八九十]+)\s*条/);
+  return chinese ? fromChinese(chinese[1]) : null;
+}
+
+/** 个位、`十`、`十X`、`X十`、`X十Y`。再大的数没人用中文写，认不出就当没报数。 */
+function fromChinese(word: string): number | null {
+  const ten = word.indexOf("十");
+  if (ten < 0) return word.length === 1 ? CN_DIGITS[word] ?? null : null;
+  const high = ten === 0 ? 1 : CN_DIGITS[word.slice(0, ten)];
+  const rest = word.slice(ten + 1);
+  const low = rest === "" ? 0 : CN_DIGITS[rest];
+  return high === undefined || low === undefined ? null : high * 10 + low;
+}
+
+/**
+ * 报的数比摘要里的条目多，唯一放行的理由：契约允许**摘要里最多展开 5 条**，更多的在第 5
+ * 条后面写一行「其余 N 条：<标题>、<标题>……完整写在下面的技术明细里」，完整三行放进明细
+ * （`server/src/review-report-format.ts`）。那一档不是漏写。
+ *
+ * 但这一行得**真是那一行**，三件事一件都不能省：
+ *
+ * ① 位置：得在**第 5 条之后**，而且是问题栏里一个**独立的顶层段落**。曾经只在问题栏开头
+ *    64 行里搜「其余 N 条」，于是第一条问题的现象写成「页面只显示其余 3 条记录」就够了——
+ *    报告声明 8 条、摘要只有 5 条，明细里第 6～8 条根本不存在，按钮照样说折叠里只有技术
+ *    记录。「独立段落」这个判据跟栏目候选同一套白名单（`markCandidateStarts`），围栏、
+ *    引用、嵌套列表里的同样一行都不算。
+ * ② 数目：N 必须正好是 `声明总数 - 5`。不校验时「有 8 条」配「其余 1 条」也能过，那等于
+ *    承认摘要 5 条 + 明细 1 条 = 8 条。
+ * ③ 清单非空：冒号后面得真有标题。契约要的是「列出标题」，空着的分流行证明不了明细里有
+ *    东西——跟问题三行要求「冒号后有字」是同一条判据。
+ */
+function spillsOver(
+  root: Parsed,
+  probes: string[],
+  declared: number,
+  items: Array<{ at: number }>,
+  aside: Column,
+): boolean {
+  const last = items[4];
+  if (items.length !== 5 || declared <= 5 || !last) return false;
+  const rest = new RegExp(
+    `^ {0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\s*其余\\s*${declared - 5}\\s*条\\s*[：:]\\s*\\S`,
+  );
+  return markCandidateStarts(root, last.at, aside.at)
+    .some((at) => rest.test(probes[at].replace(/\*\*/g, "")));
 }
 
 /**
