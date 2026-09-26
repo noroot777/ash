@@ -82,11 +82,17 @@ const executorProfiles: AgentExecutorProfile[] = [
 ];
 
 // 「AI 协助」那台短命作业的假服务端。真实的那份是内存态（server/src/preview-assist.ts），
-// 所以这里也就是一个模块级变量 —— 连带能演「ash 重启把它吞了」：把它清成 null。
-let assist: PreviewAssistState | null = null;
+// 但**它不跟着浏览器刷新一起消失** —— 所以这里存 localStorage，不是模块级变量：刷新页面不是
+// 重启服务端，作业该还在那儿（第 3 轮审查复现「刷新后旧的成功结果又被填回输入框」正靠这一点）。
+const JOB_KEY = `${storageKey}:assist-job`;
+const SEQ_KEY = `${storageKey}:assist-seq`;
+let assist: PreviewAssistState | null = JSON.parse(localStorage.getItem(JOB_KEY) ?? "null") as PreviewAssistState | null;
+const setAssist = (next: PreviewAssistState | null) => {
+  assist = next;
+  localStorage.setItem(JOB_KEY, JSON.stringify(next));
+};
 // 服务端自报的实例身份：ash 重启才会变。前端靠它把「重启吞了」和「终态自己过期了」分开。
-// 存进 localStorage 是因为**刷新页面不是重启服务端**：模块级变量会跟着页面一起重来，
-// 那样「刷新之后还看得见中断」这条就测不成了(刷新后实例又变回原值=没重启过)。
+// 同样得存住 —— 刷新后实例又变回原值就等于「没重启过」，那条测不成了。
 const INSTANCE_KEY = `${storageKey}:assist-instance`;
 let assistInstance = localStorage.getItem(INSTANCE_KEY) ?? "inst-1";
 localStorage.setItem(INSTANCE_KEY, assistInstance);
@@ -95,9 +101,27 @@ const restartAssistInstance = () => {
   localStorage.setItem(INSTANCE_KEY, assistInstance);
 };
 // 下一次 POST 装成「请求发出去了但回不来」—— 服务端那边已经接单，浏览器这边只拿到一个错。
-let assistDropNextPost = false;
+// "succeeded" 这一档更狠：接单之后作业还跑完了、还成功了，丢掉的只是那一发的响应。
+let assistDropNextPost: false | "running" | "succeeded" = false;
+// 作业身份每次 POST 换一个 —— 真实的那份是 reservePreviewAssistJob() 新开一份，前端正是靠
+// 「身份跟点之前看到的那份不一样」认出「这一发在服务端落地了」（响应丢了也认得出来）。
+let assistSeq = Number(localStorage.getItem(SEQ_KEY) ?? "0");
+const nextAssistSeq = () => {
+  assistSeq += 1;
+  localStorage.setItem(SEQ_KEY, String(assistSeq));
+};
+const succeeded = (patch: Partial<PreviewAssistState> = {}): Partial<PreviewAssistState> => ({
+  status: "succeeded",
+  phase: "done",
+  step: "已在 http://localhost:14611/ 上真的起来过一次",
+  script: "npm run dev -- --port $PORT",
+  url: "http://localhost:14611/",
+  endedAt: "2026-09-26T00:02:00.000Z",
+  attempts: [{ round: 1, script: "npm run dev -- --port $PORT", ok: true, url: "http://localhost:14611/", reason: null, log: "ready in 300ms" }],
+  ...patch,
+});
 const assistJob = (patch: Partial<PreviewAssistState>): PreviewAssistState => ({
-  jobId: "job-1",
+  jobId: `job-${assistSeq}`,
   projectId: "p-one",
   status: "running",
   phase: "thinking",
@@ -128,13 +152,18 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   const assistRoute = pathname.match(/^\/api\/projects\/[^/]+\/preview\/assist$/);
   if (assistRoute) {
     if (init?.method === "POST") {
-      assist = assistJob({});
+      nextAssistSeq();
+      setAssist(assistJob({}));
       // 服务端照样接单了(真实实现是同步预占的)，只是这一发的响应回不到浏览器。
-      if (assistDropNextPost) { assistDropNextPost = false; throw new TypeError("Failed to fetch"); }
+      if (assistDropNextPost) {
+        if (assistDropNextPost === "succeeded") setAssist(assistJob(succeeded()));
+        assistDropNextPost = false;
+        throw new TypeError("Failed to fetch");
+      }
       return reply({ job: assist, instance: assistInstance });
     }
     if (init?.method === "DELETE") {
-      if (assist?.status === "running") assist = { ...assist, status: "canceled", phase: "done", step: "已取消", error: "已取消", endedAt: "2026-09-26T00:01:00.000Z" };
+      if (assist?.status === "running") setAssist({ ...assist, status: "canceled", phase: "done", step: "已取消", error: "已取消", endedAt: "2026-09-26T00:01:00.000Z" });
       return reply({ canceled: true, job: assist, instance: assistInstance });
     }
     return reply({ job: assist, instance: assistInstance });
@@ -201,31 +230,26 @@ function Fixture() {
         </button>
         {/* AI 协助这台作业是内存态的：ash 一重启服务端就只会回 `job: null`。这颗按钮演的
             就是那一下 —— 面板必须还看得出「我点过、它被打断了」，而不是退回初始按钮。 */}
-        <button type="button" data-testid="assist-restart" onClick={() => { assist = null; restartAssistInstance(); }}>
+        <button type="button" data-testid="assist-restart" onClick={() => { setAssist(null); restartAssistInstance(); }}>
           假装 ash 重启
         </button>
         {/* 跟上面那颗的区别只在实例身份没变：作业是自己跑完、终态过了 10 分钟被清掉的。
             这一档说成「重启」就是让用户去查一台根本没重启过的 ash。 */}
-        <button type="button" data-testid="assist-expire" onClick={() => { assist = null; }}>
+        <button type="button" data-testid="assist-expire" onClick={() => { setAssist(null); }}>
           假装结果过期
         </button>
-        <button type="button" data-testid="assist-drop-post" onClick={() => { assistDropNextPost = true; }}>
+        <button type="button" data-testid="assist-drop-post" onClick={() => { assistDropNextPost = "running"; }}>
           假装启动请求断线
+        </button>
+        {/* 响应丢了 ≠ 没跑起来：服务端接单之后照样跑完、还成功了。那次验证是真的，不能被一句
+            「Failed to fetch」丢掉（第 3 轮审查复现）。 */}
+        <button type="button" data-testid="assist-drop-post-succeeded" onClick={() => { assistDropNextPost = "succeeded"; }}>
+          假装断线前已经成功
         </button>
         <button
           type="button"
           data-testid="assist-succeed"
-          onClick={() => {
-            assist = assistJob({
-              status: "succeeded",
-              phase: "done",
-              step: "已在 http://localhost:14611/ 上真的起来过一次",
-              script: "npm run dev -- --port $PORT",
-              url: "http://localhost:14611/",
-              endedAt: "2026-09-26T00:02:00.000Z",
-              attempts: [{ round: 1, script: "npm run dev -- --port $PORT", ok: true, url: "http://localhost:14611/", reason: null, log: "ready in 300ms" }],
-            });
-          }}
+          onClick={() => { setAssist(assistJob({ ...succeeded(), jobId: assist?.jobId ?? `job-${assistSeq}` })); }}
         >
           假装真起来了
         </button>

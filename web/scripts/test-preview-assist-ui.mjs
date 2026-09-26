@@ -9,8 +9,12 @@
 //   ④ 作业正常跑完、终态过了 10 分钟被清掉 → 说的是「过期」，**不能说成重启**
 //      （服务端回的都是 job: null，靠它自报的实例身份分辨）；
 //   ⑤ 启动请求断在路上 → 服务端那边已经接单了，页面必须把它接管回来（否则停都停不了）；
-//   ⑥ 用户在这期间自己写了脚本 → 成功结果**不许静默覆盖**，摆出来让他挑；
-//   ⑦ 输入框没动过 → 成功就直接填，且只填一次。
+//      连「响应丢掉之前作业已经跑成功」也算数：那一次验证是真的，不能变成一句 Failed to fetch；
+//   ⑥ 用户在这期间自己写了脚本 → 成功结果**不许静默覆盖**，摆出来让他挑，挑完的话要说准
+//      （「保留我写的」之后还说「已填入」＝骗人）；
+//   ⑦ 输入框没动过 → 成功就直接填，且只填一次；
+//   ⑧ 不是这个页面点出来的那份成功结果（服务端留 10 分钟，刷新就会再读到一遍）→ 只许展示，
+//      **不许再动一次输入框**（否则用户刚手写并保存的脚本被旧结果盖回去）。
 //
 // 服务端那份是假的（fixture 里几个模块级变量），这里测的是前端这一侧的判断：什么时候轮询、
 // null 该读成哪一种、填还是不填。
@@ -112,6 +116,16 @@ try {
   await progress.locator(".preview-assist-step").getByText("已取消", { exact: false }).waitFor();
   await dismiss().catch(() => {});
 
+  // ⑤b 响应丢在路上，但服务端那边作业已经跑完、还成功了：那次验证是真的
+  await page.getByTestId("assist-drop-post-succeeded").click();
+  await startAssist.click();
+  await progress.getByText("真的起来过一次", { exact: false }).waitFor();
+  assert.equal(await page.locator(".preview-assist-error").count(), 0, "作业其实成功了就不该只报一句启动失败");
+  await page.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
+  assert.equal(await editorText(script), "npm run dev -- --port $PORT", "响应丢了也不能把已经起来过的脚本丢掉");
+
   // ⑥ 跑的这几分钟里用户自己写了东西：不许静默覆盖
   await startAssist.click();
   await progress.getByText("正在读这个项目", { exact: false }).waitFor();
@@ -125,26 +139,64 @@ try {
   assert.equal(await editorText(script), mine, "下一拍轮询也不能把它盖回去");
   // 摆出来的那条脚本要看得见，而且换不换由用户点
   assert.match(await progress.innerText(), /npm run dev -- --port \$PORT/, "AI 试出来的那条要摆出来给人看");
+  // 点完「保留我写的」，卡片得说准：说成「已填进上面的输入框」，用户就会以为框里这条手写的
+  // 是 ash 验证过的（第 3 轮审查）。
+  await progress.getByRole("button", { name: "保留我写的" }).click();
+  await progress.getByText("保留你自己写的那条", { exact: false }).waitFor();
+  const kept = await progress.innerText();
+  assert.doesNotMatch(kept, /脚本已填进上面的输入框/, "没填进去就不能说填了");
+  assert.match(kept, /没有经过 ash 试跑/, "要说清框里这条没被验证过");
+  assert.equal(await editorText(script), mine, "选了保留就还是手写那份");
+
+  // ⑥b 同一张卡的另一个选择：点「用这条替换」才换
+  await startAssist.click();
+  await progress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await script.fill(`${mine} 再改一遍`);
+  await page.getByTestId("assist-succeed").click();
+  await progress.getByText("没有直接覆盖", { exact: false }).waitFor();
   await progress.getByRole("button", { name: "用这条替换" }).click();
   await page.waitForFunction((expected) =>
     [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
       .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
   assert.equal(await editorText(script), "npm run dev -- --port $PORT", "点了替换才换");
+  assert.match(await progress.innerText(), /保存预览设置/, "替换之后才该说「已填进输入框、还得点保存」");
 
   // ⑦ 输入框没动过：成功就直接填，且只填一次
+  const filledBefore = (await notices()).filter((line) => line.includes("脚本已填入")).length;
+  await script.fill("# 等 AI 填");
   await startAssist.click();
   await progress.getByText("正在读这个项目", { exact: false }).waitFor();
   await page.getByTestId("assist-succeed").click();
   await progress.getByText("真的起来过一次", { exact: false }).waitFor();
+  await page.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
   assert.equal(await editorText(script), "npm run dev -- --port $PORT", "起来过的那条脚本要填进输入框");
   assert.match(await progress.innerText(), /保存预览设置/, "填完要说清还得点保存");
-  assert.equal((await notices()).filter((line) => line.includes("脚本已填入")).length, 1, "同一个作业只提示一次");
-  await script.fill("我自己改的");
+  assert.equal((await notices()).filter((line) => line.includes("脚本已填入")).length, filledBefore + 1, "同一个作业只提示一次");
+  const handwritten = "npm run dev -- --port 8888 # 这条是我自己定的";
+  await script.fill(handwritten);
   await page.waitForTimeout(1500);
-  assert.equal(await editorText(script), "我自己改的", "轮询不能反复把脚本盖回去");
+  assert.equal(await editorText(script), handwritten, "轮询不能反复把脚本盖回去");
+  assert.equal((await notices()).filter((line) => line.includes("脚本已填入")).length, filledBefore + 1, "下一拍轮询也不该再提示一次");
+
+  // ⑧ 服务端把成功终态留 10 分钟：**不是这个页面点出来的**那一份只许展示，不许再动输入框
+  //    （第 3 轮审查复现：手写并保存之后刷一下页面，旧结果又被填回去，再点保存就把刚存的改回去）
+  await page.getByRole("button", { name: "保存预览设置" }).click();
+  await page.waitForFunction((expected) =>
+    (document.querySelector('[data-testid="stored-projects"]')?.textContent ?? "").includes(expected), handwritten);
+  await page.reload();
+  await script.waitFor();
+  await progress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
+  await page.waitForTimeout(1500);
+  assert.equal(await editorText(script), handwritten, "刷新后旧的成功结果不许再覆盖一次");
+  const shown = await progress.innerText();
+  assert.doesNotMatch(shown, /脚本已填进上面的输入框/, "没动输入框就不能说填了");
+  assert.match(shown, /npm run dev -- --port \$PORT/, "旧结果本身还是要看得见，能复制走");
+  assert.deepEqual((await notices()).filter((line) => line.includes("脚本已填入")), [], "刷新之后不该再提示一次填入");
 
   assert.deepEqual(errors, [], "AI 协助面板不应产生运行时异常");
-  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, manual edit protected, fill once)");
+  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied)");
 } finally {
   await browser?.close();
   await server.close();

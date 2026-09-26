@@ -8,7 +8,9 @@
 //
 // 跑法：npm -w server run test:preview-assist
 import { parseAssistScript } from "@ash/shared/preview-assist";
+import { PREVIEW_MODE, previewLaunchOf } from "@ash/shared/preview";
 import { cancelPreviewAssist, previewAssistState, reservePreviewAssistJob } from "../src/preview-assist-jobs.js";
+import { isPidAlive } from "../src/platform.js";
 import { canConnect } from "../src/preview-probe.js";
 import { trialPreviewScript } from "../src/preview-trial.js";
 
@@ -72,6 +74,20 @@ check(
 check("只有开头那道围栏也不认", parseAssistScript("启动脚本：\n```sh"), null);
 check("闭合了才认（同一段话补上结束围栏）", parseAssistScript("启动脚本：\n```sh\nnpm run dev -- --port $PORT\n```\n这段回答说完了"), "npm run dev -- --port $PORT");
 
+// ── 选的那一档启动范围要真的走到试跑里 ──────────────────────────────────────
+// 第 3 轮审查复现：端点递给 previewLaunchOf 的是请求体里那个**字符串**，而它当时只认整份配置
+// 对象，于是 command/full/test 三档静默变成 frontend —— 用户选了「前后端全启动」，验过的却是
+// 只起前端那一档，保存完打开预览才发现不是一回事。两头都钉：读得对、注得对。
+check("四档字符串都认", PREVIEW_MODE.map((mode) => previewLaunchOf(mode)), [...PREVIEW_MODE]);
+check("整份配置对象照旧认", previewLaunchOf({ mode: "script", launch: "full" }), "full");
+check("不认识的值才回落 frontend", [previewLaunchOf("nope"), previewLaunchOf(null), previewLaunchOf({})], ["frontend", "frontend", "frontend"]);
+for (const mode of PREVIEW_MODE) {
+  const seen = await trialPreviewScript({
+    cwd: process.cwd(), script: "echo MODE=$ASH_PREVIEW_MODE; exit 9", mode, timeoutMs: 20_000,
+  });
+  check(`试跑里的 ASH_PREVIEW_MODE 是 ${mode}`, seen.log.includes(`MODE=${mode}\n`), true);
+}
+
 // ── 同一项目只占一格 ────────────────────────────────────────────────────────
 // 第 1 轮审查复现：老实现在「查有没有在跑」和「写进索引」之间 await 挑执行器，两个页面同时
 // 点就真起两个智能体，后写入的把前一个顶掉 —— 被顶掉的那份查不到也停不了，一直在用户的
@@ -107,6 +123,26 @@ const stopped = await trialPreviewScript({
   canceled: () => true,
 });
 check("点了取消就当场收摊", [stopped.ok, stopped.reason], [false, "已取消"]);
+
+// 组长先退、后台后代赖着不走：`npm run dev &` 这种写法的形状，而忽略 SIGTERM 的脚本满地都是。
+// 第 3 轮审查复现：收尾只问组长（那层 shell）还活着没有，组长一退就立刻得到「已经没了」，
+// 补 SIGKILL 那一步根本不执行 —— 机器上于是留着一个谁也管不到的进程，占着端口吃着 CPU，
+// 而界面上连它存在过的痕迹都没有（试跑不写预览记录）。
+const orphan = await trialPreviewScript({
+  cwd: process.cwd(), mode: "command", timeoutMs: 30_000,
+  script: `node -e "process.on('SIGTERM',()=>{});setTimeout(()=>{},60000);console.log('KID='+process.pid)" & sleep 0.6; exit 7`,
+});
+const kid = Number(/KID=(\d+)/.exec(orphan.log)?.[1] ?? 0);
+// 收摊是「发信号」，进程消失是内核那边的事（组长已经退了，这个后代要挂到 launchd 上才被回收），
+// 所以给它一点时间再判 —— 但只给一点：修好之前它会一直活着，这几秒等不出结果。
+const waitGone = async (pid: number, within: number) => {
+  const until = Date.now() + within;
+  while (Date.now() < until && isPidAlive(pid)) await new Promise((done) => setTimeout(done, 50));
+  return !isPidAlive(pid);
+};
+check("后台后代的 pid 报出来了（这条测不成就是脚本自己的问题）", kid > 0, true);
+check("组长先退、后代忽略 TERM，也得被收走", kid > 0 && await waitGone(kid, 3_000), true);
+if (kid > 0 && isPidAlive(kid)) { try { process.kill(kid, "SIGKILL"); } catch { /* 已经没了 */ } }
 
 console.log(failures ? `\n${failures} 处不符` : "\n全部通过");
 process.exit(failures ? 1 : 0);

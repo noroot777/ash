@@ -79,8 +79,14 @@ export function previewProxyEnabled(setting: ProjectPreviewConfig["proxy"] | und
 }
 
 /**
- * 存着的项目预览配置里那一档启动范围，**宽容读**：整份配置坏掉、字段没有、值不认识，
- * 一律当 `"frontend"`。
+ * 那一档启动范围，**宽容读**：整份配置坏掉、字段没有、值不认识，一律当 `"frontend"`。
+ * 存着的整份配置（读 `.launch`）和光秃秃的一个值都认 —— 调用方手上有哪个就递哪个。
+ *
+ * 两种都认是被咬过一口才加的（第 3 轮审查）：AI 协助的端点递的是请求体里那个字符串，
+ * 而当时这里只从对象上取 `.launch`，于是 `command`/`full`/`test` 三档**静默**变成
+ * `frontend` —— 试跑时注入的 `ASH_PREVIEW_MODE` 跟用户在页面上选的不是一回事，而判出来的
+ * 那条脚本照样填进输入框，保存之后开预览才发现对不上。少一层包装就错一档，这种签名
+ * 不该留着等下一个调用方踩。
  *
  * 为什么不复用会抛的 `parsePreviewConfig`：这个值的用处是「递一个 env 给启动命令」，
  * 一份历史遗留的坏配置不该因此挡住任务里临时填的那条命令 —— 真要报配置错，是保存
@@ -88,7 +94,7 @@ export function previewProxyEnabled(setting: ProjectPreviewConfig["proxy"] | und
  */
 export function previewLaunchOf(stored: unknown): PreviewMode {
   const value = stored && typeof stored === "object" && !Array.isArray(stored)
-    ? (stored as Record<string, unknown>).launch : undefined;
+    ? (stored as Record<string, unknown>).launch : stored;
   return PREVIEW_MODE.includes(value as PreviewMode) ? value as PreviewMode : "frontend";
 }
 

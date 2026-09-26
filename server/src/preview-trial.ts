@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PreviewMode } from "@ash/shared/preview";
 import { boundListeningPort, currentListeningPort } from "./listening-port.js";
-import { isPidAlive, killTree } from "./platform.js";
+import { isPidAlive, isProcessGroupAlive, killTree } from "./platform.js";
 import { afterLoginShell, previewBaseEnv, previewScriptLaunch } from "./preview-env.js";
 import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint, stripAnsi } from "./preview-log.js";
 import { nodeDepsAdvice } from "./preview-deps.js";
@@ -160,10 +160,16 @@ export async function trialPreviewScript(options: PreviewTrialOptions): Promise<
  *
  * 杀不干净的代价很具体：这台机器上留着一个谁也管不到的 dev server，占着端口、吃着 CPU，
  * 而界面上连它存在过的痕迹都没有（试跑不写预览记录）。所以 TERM 之后还要确认，不退就 KILL。
+ *
+ * 确认要问**整组**还活着没有，不能只问组长（第 3 轮审查复现）：`npm run dev &` 这种写法里
+ * 组长（那层 shell）先退、后台那个后代还赖在组里，而它要是忽略 TERM——`process.on('SIGTERM')`
+ * 里什么都不做的脚本满地都是——只问组长就立刻得到「已经没了」，KILL 那一步根本不会执行，
+ * 于是它一直活着。判据跟正式预览收尾那套一致（preview-process-stop.ts 的 `alive`）。
  */
 async function stopTrial(pid: number): Promise<void> {
   if (!pid) return;
+  const alive = () => isPidAlive(pid) || isProcessGroupAlive(pid);
   killTree(pid, "SIGTERM");
-  for (let i = 0; i < 12 && isPidAlive(pid); i += 1) await sleep(250);
-  if (isPidAlive(pid)) killTree(pid, "SIGKILL");
+  for (let i = 0; i < 12 && alive(); i += 1) await sleep(250);
+  if (alive()) killTree(pid, "SIGKILL");
 }
