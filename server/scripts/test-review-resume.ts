@@ -19,6 +19,8 @@ const PREV = "2026-09-11T05:00:00.000Z";
 try {
   const { appendSessionTrace, sessionTracePath, turnProducedWork } = await import("../src/transcript.js");
   const { freeReviewResumeMessage } = await import("../src/free-review-prompts.js");
+  const { REPORT_SUMMARY_REMINDER } = await import("../src/review-report-format.js");
+  const { assertSummaryRules } = await import("./review-summary-rules.js");
 
   const line = (turnStartedAt: string, event: Record<string, unknown>) =>
     JSON.stringify({ at: turnStartedAt, turnStartedAt, event });
@@ -88,20 +90,17 @@ try {
     assert.ok(message.includes("directionToken"), "方向身份必须带上，否则 report_stage 会被拒");
     assert.ok(message.includes("不要调用 complete_task"), "旁路审查回合的边界必须重申");
     assert.ok(/不要从头/.test(message), "这句话的全部意义就是「别从头再来」");
-    // 格式要求在这条路径上只有这句话跟得到底（完整 prompt 不重发），所以凡是「丢了就
-    // 退回改动之前的样子」的规则都得在这里留得住——漏一条就是中断过的那一轮报告又混用
-    // 多套严重度、又把命令输出铺回首屏。逐条钉，别只钉最近一次被点名的那两条。
-    assert.ok(message.includes("能不能验收"), "摘要四栏必须带上");
-    assert.ok(message.includes("最要命"), "首句必须点名最严重那条，光报数不算");
-    assert.ok(message.includes("最多展开 5 条"), "摘要 5 条上限必须带上");
-    assert.ok(/一条不许丢|完整三行写进技术明细/.test(message), "得说明超出的条目去哪，别被读成截断");
-    assert.ok(/第三行写建议怎么修/.test(message), "每条问题第三行要给修法");
-    assert.ok(message.includes("没有发现问题"), "「没问题」得有固定写法，否则核对记录会被当成问题清单");
-    assert.ok(message.includes("不写原因"), "不拦项一行一条的约束必须带上");
-    assert.ok(message.includes("两档"), "严重度两档必须带上，否则又冒出第二套刻度");
-    assert.ok(message.includes("不进这一节"), "合规证明必须继续挡在摘要之外");
-    // 上限不放宽：这句话的全部意义是「别从头重发任务书」，写胖了就失去了意义。
-    assert.ok(message.length < 700, `续跑指令要短，现在 ${message.length} 字`);
+    // 格式要求在这条路径上只有这句话跟得到底（完整 prompt 不重发），所以契约规则**逐条**
+    // 都得在这里留得住。清单和理由在 `review-summary-rules.ts`——别再手写一串 includes，
+    // 那正是连续三轮「提醒里又漏了 N 条」的来源。
+    assertSummaryRules(message, "自由审查续跑指令");
+    // 长度闸拦的是「别从头重发任务书」，所以量的是**非规则的那部分**：规则带全了本来就
+    // 该变长，把两者加在一起量，等于每加一条契约规则就侵蚀一次防重发的预算——第 3 轮
+    // 补齐规则后整条 737 字，照旧 700 的话只能靠削措辞去凑一个整数，那是本末倒置。
+    const scaffolding = message.length - REPORT_SUMMARY_REMINDER.length;
+    assert.ok(scaffolding < 450, `续跑指令的非规则部分要短，现在 ${scaffolding} 字`);
+    // 规则那半边也不是无限的：真长到这个量级就该回头想想是不是该重发完整 prompt 了。
+    assert.ok(message.length < 900, `整条续跑指令仍要远短于完整任务书，现在 ${message.length} 字`);
   }
 
   console.log("✓ review resume predicate");
