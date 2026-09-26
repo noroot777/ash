@@ -15,11 +15,12 @@
 // ② 认不出契约（存量报告、某轮审查者没照 prompt 写）就降一档：铺开的那一段留在首屏，
 //    余下全部收进一个不作任何承诺的「展开完整报告」。这是用户点名要的结构保证——「就算
 //    某轮审查者没照 prompt 写，你也不会被 46 行合规证明糊一脸」。折在哪看报告自己怎么写：
-//    - 首个 `##` 就是「结论」（旧格式：`## 结论` + `verified` / `verify_failed`）：整节
-//      留在首屏，从**第二个** `##` 起折。折在第一个 `##` 之前会把判定一起折掉。
+//    - 首节标题就是「这是结论」的声明（`## 结论` / `## Conclusion` / `## Verdict` /
+//      `## 结论：verify_failed`）：整节留在首屏，从**第二个** `##` 起折。折在第一个 `##`
+//      之前会把判定一起折掉；只认中文那一个词，222 行的英文报告就一份都折不了。
 //    - 其它形态：开头到**第一个** `##` 之前的引子留在首屏。
-// ③ 首屏凑不出读得懂的东西（开头只有标题，或首个 `##` 是「结论」却没有第二个 `##`）就
-//    整篇铺开：一个标题加一个按钮的首屏，比多滚两屏更糟。
+// ③ 首屏凑不出读得懂的东西（开头只有标题、首节又不是报告自己声明的结论节，或者声明了
+//    却没有第二个 `##`）就整篇铺开：一个标题加一个按钮的首屏，比多滚两屏更糟。
 //
 // 第二档为什么安全，而「按标题猜出摘要在哪」不安全：差别不在折不折，在**折掉的是什么**
 // 和**按钮说了什么**。按标题猜那一版把「## 0. 先说结论之外的：这轮做对的部分」当成摘要，
@@ -107,6 +108,15 @@ const MARK_LINES = CONTRACT_MARKS.map(
     `^ {0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\*\\*\\s*${mark}\\s*(?:\\*\\*\\s*(?:[：:].*)?$|[：:]\\s*\\*\\*)`,
   ),
 );
+
+/**
+ * 首个 `##` 写成这样，就算**报告自己声明了「这一节是结论」**——整节留在首屏，从第二个
+ * `##` 起才折。
+ *
+ * 全文相等，不是「含结论二字」；后缀只容协议自己的判定词（`## 结论：verify_failed` 是
+ * 真实形态）。放宽到前缀的代价见 `splitReviewReport` 里那段注释。
+ */
+const CONCLUSION_TITLES = /^(?:结论|Conclusion|Verdict)\s*(?:[：:]\s*(?:verified|verify_failed|blocked))?$/i;
 
 /**
  * 摘要那一节里，够得上「一个栏目」的节点起始行——按源码先后排好。
@@ -197,7 +207,31 @@ function provesContract(root: Parsed, probes: string[], columns: Column[], depth
       && node.position.start.line - 1 > problems.at
       && node.position.start.line - 1 < aside.at,
   );
-  return listed || probes.slice(problems.at, aside.at).some((line) => line.includes("没有发现问题"));
+  return listed || saysNoProblem(probes, problems, aside);
+}
+
+/**
+ * 第三栏是不是**整栏只写了**「没有发现问题」——契约的原话就是「没有问题时，这一栏只写
+ * 『没有发现问题』六个字」（`server/src/review-report-format.ts`）。
+ *
+ * 曾经问的是「这一栏有没有哪一行**包含**这六个字」，于是否定句把判据整个翻了过来：
+ * 「详情见下方；这里不是说没有发现问题」照样算「没有问题」，那一条真正的问题写在后面的
+ * `##` 里，首屏只剩「有 1 条必须先修」和「详情见下方」，按钮还宣称折叠里是技术明细。
+ * 引文、注释、代码示例里出现同样的字样也一样能骗过去。
+ *
+ * 所以改成**整栏比对**：去掉加粗记号和栏目标签本身，余下的可见字符必须一个不多、正好是
+ * 那六个字（容一个句号）。这不是又一次收紧前缀匹配，是换了个问法——前者问「出现过吗」，
+ * 后者问「除了它还写了别的吗」，后者没有「混进来」的余地。
+ */
+function saysNoProblem(probes: string[], problems: Column, aside: Column): boolean {
+  const label = new RegExp(`^\\s*(?:[-*+]\\s+|\\d+[.)]\\s+)?#{0,6}\\s*${CONTRACT_MARKS[2]}\\s*[：:]?`);
+  const body = probes
+    .slice(problems.at, aside.at)
+    .join("\n")
+    .replace(/\*\*/g, "")
+    .replace(label, "")
+    .replace(/\s+/g, "");
+  return body === "没有发现问题" || body === "没有发现问题。";
 }
 
 export function splitReviewReport(text: string): ReviewReportSections {
@@ -219,6 +253,67 @@ export function splitReviewReport(text: string): ReviewReportSections {
   const [head, next] = heads;
   if (!head?.position) return whole;
   const first = head.position.start.line - 1;
+  // 匹配用的是去掉行尾 `\r` 的副本，切片仍用原始行——这样 CRLF 报告认得出，返回的正文
+  // 又跟入参逐字节一致（不悄悄替换用户的换行）。踩过的坑在正则语义：`\r` 是行终结符，
+  // `.` 不匹配它、不带 `m` 的 `$` 只认串尾，于是 `**能不能验收**：不能\r` 认不出来。
+  const probes = lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  const cut = (at: number, kind: "contract" | "lead"): ReviewReportSections => ({
+    summary: lines.slice(0, at).join("\n").trimEnd(),
+    detail: lines.slice(at).join("\n").trimEnd(),
+    kind,
+  });
+
+  /**
+   * 首节标题是不是**报告自己声明的「这一节是结论」**。
+   *
+   * 判据是整段标题全文相等（容一个协议判定词后缀），不是「含结论二字」——差别就是
+   * `## 0. 先说结论之外的：这轮做对的部分` 和 `## 一、先说结论：核心功能是真的能用`
+   * 这两份真实报告：它们把正面那半写在首节、【高】写在后面的 `##` 里，认成结论节就会
+   * 把发现折走。（`## 结论：核心功能是真的能用` 同理，落不进这个正则。）
+   *
+   * 认英文是第 4 轮补的：判据本来写死成中文「结论」，于是 `## Conclusion` / `## Verdict`
+   * 开场的报告一份都折不了——全库 13 份整篇铺开的报告里，最长那份 222 行就是这个形状。
+   * 语言不是判据，「报告把判定写在哪」才是。
+   */
+  const title = plainText(head).trim();
+  if (CONCLUSION_TITLES.test(title)) {
+    // 没有第二个 `##` 时折掉的就是整个结论节，那还不如整篇铺开。
+    if (!next?.position) return whole;
+    const second = next.position.start.line - 1;
+    // 这一节里**提没提过栏目名**，决定了它是「旧格式」还是「新格式写坏了」——两者的安全
+    // 方向正相反，所以判在最前面：
+    //
+    // - 一个栏目名都没出现 = 旧格式的结论节。这类报告的判定就写在这一节里，从第二个 `##`
+    //   起折才对（全库 164 份首个 `##` 是「结论」的报告，146 份是这个样子）。
+    // - 出现过 = 有人在照新格式写、只是没写对。这类报告的问题**本来就该写在结论节里**，
+    //   从第二个 `##` 起折会连问题一起折掉（第 2 轮把第三栏写成 `## 必须修的问题`、第 10
+    //   轮把那条问题写成 `##`，都是这个形状）。一律整篇铺开。
+    //
+    // 判「提过没有」而不是「凑齐加粗标签没有」，是因为差的那一档正好是危险的那一档：
+    // 「我按模板核对了能不能验收、现在什么能用了……」这种正文提及凑不出签名，却足以说明
+    // 后面那个 `##` 可能就是问题小节。认错方向的代价不对称，宁可多铺开 18 份。
+    const section = probes.slice(first, second).join("\n");
+    if (!CONTRACT_MARKS.some((mark) => new RegExp(mark).test(section))) return cut(second, "lead");
+    // 只有**证明得了自己按新契约写**的报告才走第一档。把发现藏进一个写着「验证过程、证据、
+    // 清场记录」的折叠里，比让人多滚两屏严重得多，这一档不留猜的余地：降一档只是多点一下
+    // 按钮，认错成契约是让按钮替报告撒谎。
+    //
+    // 契约档的标题闸比折点那道**严**：prompt 要求原样写「## 结论」，所以这里只认这两个字。
+    // 拿「报告自己声明这节是结论」决定**摘要到哪为止**可以，拿它当**四栏契约成立**的证据
+    // 不行——第 10 轮那份 `## 前言` 里整段抄着上一轮四项结论的报告就是后者的反例。
+    if (title !== "结论") return whole;
+    // 四栏有两种写法，都认（判据见 `provesContract`）：prompt 给的加粗标签段落，以及把同样
+    // 四个栏目写成 `###` 小标题。后者是真实存在的形态——全库 1036 份里 4 份长这样，其中
+    // 一份就是本任务上一轮的审查报告。它在结构上跟加粗版一样确定（标题的可见文字必须精确
+    // 等于栏目名），认不出的后果却是整份技术明细重新铺满首屏，正好是这次改动要消灭的东西。
+    const columns = markCandidateStarts(root, first, second)
+      .map((at) => ({ at, column: MARK_LINES.findIndex((pattern) => pattern.test(probes[at])) }))
+      .filter((hit) => hit.column >= 0);
+    if (!provesContract(root, probes, columns, 3) && !provesContract(root, probes, headingColumns(root, first, second), 4)) {
+      return whole;
+    }
+    return cut(second, "contract");
+  }
 
   /**
    * 第二档 · 通用形态：引子铺开，第一个 `##` 起收进「展开完整报告」。
@@ -227,85 +322,11 @@ export function splitReviewReport(text: string): ReviewReportSections {
    * `# 报告` 的开头不算，只有一条水平线、一段 HTML 注释或一张图的开头也不算——那样首屏
    * 就是「一个标题 + 一坨看不懂的东西 + 一个按钮」，比多滚两屏更糟。
    */
-  const lead = (): ReviewReportSections => {
-    const told = root.children.some(
-      (node) =>
-        node.type !== "heading" && node.position
-        && node.position.start.line - 1 < first
-        && plainText(node).trim() !== "",
-    );
-    if (!told) return whole;
-    return {
-      summary: lines.slice(0, first).join("\n").trimEnd(),
-      detail: lines.slice(first).join("\n").trimEnd(),
-      kind: "lead",
-    };
-  };
-
-  // 首节标题本身也是契约的一部分：prompt 要求「报告开头必须先写一节 `## 结论`（就用这
-  // 四个字起头）」。第 10 轮的反例是一份开头写「## 前言」、里面整段抄着上一轮四项结论的
-  // 报告——四栏各自独立成段、顺序还对，签名照样齐全。
-  //
-  // 这跟「别按标题拆」（`## 0. 先说结论之外的` 那两份真实报告）不冲突：标题是**又一道**
-  // 必须过的闸，不是四栏的替代品。两道都过才算数。
-  if (plainText(head).trim() !== "结论") return lead();
-
-  if (!next?.position) return whole;
-  const second = next.position.start.line - 1;
-
-  /**
-   * 第二档 · 旧格式的结论节：这一节整个留在首屏，从**第二个** `##` 起才折。
-   *
-   * 报告自己写了 `## 结论`，那「这一节是结论」就是它自己的声明——拿它决定**摘要到哪为
-   * 止**是可以的，拿它当「四栏契约成立」的证据才不行（第 1 轮那两份 `## 0. 先说结论之
-   * 外的` 就是后者的反例）。旧格式报告普遍长这样：一级标题 + 任务/日期/审查者三行 +
-   * `## 结论` + `verified` / `verify_failed` + `## 被审范围`。按通用形态折在第一个 `##`
-   * 之前，首屏就只剩元数据，判定被折进去了——全库 1215 份里 21 份是这个形状。
-   *
-   * 上面那句 `if (!next)` 就是「没有第二个 `##` 时整篇铺开」：那时折掉的是整个结论节。
-   */
-  const afterConclusion = (): ReviewReportSections => ({
-    summary: lines.slice(0, second).join("\n").trimEnd(),
-    detail: lines.slice(second).join("\n").trimEnd(),
-    kind: "lead",
-  });
-
-  // 匹配用的是去掉行尾 `\r` 的副本，切片仍用原始行——这样 CRLF 报告认得出，返回的正文
-  // 又跟入参逐字节一致（不悄悄替换用户的换行）。踩过的坑在正则语义：`\r` 是行终结符，
-  // `.` 不匹配它、不带 `m` 的 `$` 只认串尾，于是 `**能不能验收**：不能\r` 认不出来。
-  const probes = lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
-  // 这一节里**提没提过栏目名**，决定了它是「旧格式」还是「新格式写坏了」——两者的安全
-  // 方向正相反，所以判在最前面：
-  //
-  // - 一个栏目名都没出现 = 旧格式的结论节。这类报告的判定就写在这一节里，从第二个 `##`
-  //   起折才对（全库 164 份首个 `##` 是「结论」的报告，146 份是这个样子）。
-  // - 出现过 = 有人在照新格式写、只是没写对。这类报告的问题**本来就该写在结论节里**，
-  //   从第二个 `##` 起折会连问题一起折掉（第 2 轮把第三栏写成 `## 必须修的问题`、第 10
-  //   轮把那条问题写成 `##`，都是这个形状）。一律整篇铺开。
-  //
-  // 判「提过没有」而不是「凑齐加粗标签没有」，是因为差的那一档正好是危险的那一档：
-  // 「我按模板核对了能不能验收、现在什么能用了……」这种正文提及凑不出签名，却足以说明
-  // 后面那个 `##` 可能就是问题小节。认错方向的代价不对称，宁可多铺开 18 份。
-  const section = probes.slice(first, second).join("\n");
-  if (!CONTRACT_MARKS.some((mark) => new RegExp(mark).test(section))) return afterConclusion();
-  // 只有**证明得了自己按新契约写**的报告才走第一档。把发现藏进一个写着「验证过程、证据、
-  // 清场记录」的折叠里，比让人多滚两屏严重得多，这一档不留猜的余地：降一档只是多点一下
-  // 按钮，认错成契约是让按钮替报告撒谎。
-  //
-  // 四栏有两种写法，都认（判据见 `provesContract`）：prompt 给的加粗标签段落，以及把同样
-  // 四个栏目写成 `###` 小标题。后者是真实存在的形态——全库 1036 份里 4 份长这样，其中
-  // 一份就是本任务上一轮的审查报告。它在结构上跟加粗版一样确定（标题的可见文字必须精确
-  // 等于栏目名），认不出的后果却是整份技术明细重新铺满首屏，正好是这次改动要消灭的东西。
-  const columns = markCandidateStarts(root, first, second)
-    .map((at) => ({ at, column: MARK_LINES.findIndex((pattern) => pattern.test(probes[at])) }))
-    .filter((hit) => hit.column >= 0);
-  if (!provesContract(root, probes, columns, 3) && !provesContract(root, probes, headingColumns(root, first, second), 4)) {
-    return whole;
-  }
-
-  return {
-    summary: lines.slice(0, second).join("\n").trimEnd(),
-    detail: lines.slice(second).join("\n").trimEnd(),
-    kind: "contract",
-  };
+  const told = root.children.some(
+    (node) =>
+      node.type !== "heading" && node.position
+      && node.position.start.line - 1 < first
+      && plainText(node).trim() !== "",
+  );
+  return told ? cut(first, "lead") : whole;
 }

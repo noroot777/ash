@@ -322,6 +322,54 @@ npm test
 临时服务已停止。
 `;
 
+// 第 4 轮的两份：一份**标题开场的英文报告**（真实样本 `GM775FBSbr4y/YGXHJtf-Zvkz/round-1`
+// 共 222 行，`# 标题` 之后直接 `## Conclusion`，后面全是仓库状态、命令和清场）。判据写死
+// 成中文「结论」时它整篇铺开，连按钮都没有。
+const englishConclusion = `# GM775FBSbr4y free review round 1
+
+## Conclusion
+
+\`verified\`. I did not find a reproducible blocking defect in the SDK 57 upgrade.
+
+## Repository State
+
+\`\`\`text
+$ git status --short
+# clean
+\`\`\`
+
+## Cleanup
+
+Stopped the headless browser session.
+`;
+
+// 另一份：四栏齐全、问题栏却塞了一句**含着「没有发现问题」的否定句**。子串判据下它会被
+// 当成「没有问题」认成契约，真正的问题折进一个写着「技术明细」的按钮里。
+const negatedNoProblem = `# 第 4 轮自动验证报告
+
+## 结论
+
+### 能不能验收
+
+不能 —— 有 1 条必须先修。
+
+### 现在什么能用了
+
+基础流程可用。
+
+### 必须修的问题
+
+详情见下方；这里不是说没有发现问题
+
+### 不拦验收、但你该知道的
+
+没有。
+
+## 保存后你刚改的内容会全部消失
+
+你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
+`;
+
 // 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
 //
@@ -380,6 +428,12 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="heading-columns-fixture markdown-report-body">
       <ReviewReportBody text={headingColumns} reportKey="run-12:3" />
+    </div>
+    <div className="english-conclusion-fixture markdown-report-body">
+      <ReviewReportBody text={englishConclusion} reportKey="run-13:1" />
+    </div>
+    <div className="negated-fixture markdown-report-body">
+      <ReviewReportBody text={negatedNoProblem} reportKey="run-14:4" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

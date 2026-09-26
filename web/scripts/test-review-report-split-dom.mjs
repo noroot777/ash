@@ -316,8 +316,44 @@ try {
     assert.match(hcDetail, new RegExp(line), `展开后「${line}」原样还在`);
   }
 
-  console.log("review report split dom ok");
-} finally {
+  // ⑮ 标题开场的英文报告（真实样本 222 行）：判据写死成中文「结论」时整篇铺开，仓库
+  //    状态、命令和清场记录全部糊在屏幕上，连按钮都没有。语言不是判据——报告自己把判定
+  //    写在哪才是，所以这一档跟 `## 结论` 一样从第二个 `##` 起折，按钮照旧什么都不宣称。
+  const english = page.locator(".english-conclusion-fixture");
+  const enSummary = await english.locator(".task-markdown").first().innerText();
+  assert.match(enSummary, /verified/, "判定必须默认可见");
+  assert.match(enSummary, /Conclusion/, "结论那一节整个留在首屏");
+  assert.doesNotMatch(enSummary, /Repository State|git status|Cleanup/, "技术记录照折");
+  assert.equal(
+    await english.getByRole("button", { name: /技术明细/ }).count(),
+    0,
+    "没签契约，按钮不准替折叠里的东西背书",
+  );
+  const enToggle = english.getByRole("button", { name: /^展开完整报告$/ });
+  assert.equal(await enToggle.count(), 1);
+  await enToggle.click();
+  assert.match(
+    await english.locator(".review-report-detail .task-markdown").innerText(),
+    /Cleanup/,
+    "展开后技术记录原样都在",
+  );
+
+  // ⑯ 四栏齐全、问题栏却写着「详情见下方；这里不是说没有发现问题」：子串判据把这句否定
+  //    句当成「没有问题」，真正的问题被折进一个写着「技术明细」的按钮里。整栏比对之后它
+  //    走整篇铺开，问题留在首屏。
+  const negated = page.locator(".negated-fixture");
+  assert.match(
+    await negated.locator(".task-markdown").first().innerText(),
+    /保存后你刚改的内容会全部消失/,
+    "问题必须默认可见",
+  );
+  assert.equal(
+    await negated.locator(".review-report-more").count(),
+    0,
+    "证明不了问题在摘要里就整篇铺开，不该画出任何展开按钮",
+  );
+
+  console.log("review report split dom ok");} finally {
   await browser?.close();
   await server.close();
 }

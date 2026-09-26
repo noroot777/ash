@@ -5,18 +5,22 @@
 // 底下一个『展开完整报告』——这样就算某轮审查者没照 prompt 写，你也不会被 46 行合规证明
 // 糊一脸」。它跟被否掉的「按标题猜摘要在哪」差在两处，这两处就是全部安全边际：
 //
-// - **折的起点由「报告自己把判定写在哪」决定**，不由我们猜哪一节像摘要。首个 `##` 就是
-//   「结论」的旧格式报告，整节留在首屏、从第二个 `##` 起折；其它形态留第一个 `##` 之前
-//   的引子（抽查的 7 份 ascut 报告把 `结论：verify_failed —— N 个可复现缺陷` 写在那儿）。
+// - **折的起点由「报告自己把判定写在哪」决定**，不由我们猜哪一节像摘要。首节标题就是
+//   「这是结论」的声明（`## 结论` / `## Conclusion` / `## Verdict` / `## 结论：verify_failed`）
+//   的报告，整节留在首屏、从第二个 `##` 起折；其它形态留第一个 `##` 之前的引子（抽查的
+//   7 份 ascut 报告把 `结论：verify_failed —— N 个可复现缺陷` 写在那儿）。
 // - **按钮什么都不宣称**（「展开完整报告」）。「展开技术明细（验证过程、证据、清场记录）」
 //   那句话只有第一档配用——折叠里可能装着问题本身，替它背书就是撒谎。
 //
-// 三条别再走回头路的判据：
-// ① 首屏凑不出**读得出字**的东西就整篇铺开：只有 `#` 标题、只有水平线/HTML 注释/一张图、
-//    首个 `##` 是「结论」却没有第二个 `##`——这些折完只剩「标题 + 按钮」，比多滚两屏更糟。
+// 四条别再走回头路的判据：
+// ① 首屏凑不出**读得出字**的东西就整篇铺开：开头只有 `#` 标题、只有水平线/HTML 注释/
+//    一张图而首节又不是报告自己声明的结论节，或者声明了却没有第二个 `##`——这些折完只剩
+//    「标题 + 按钮」，比多滚两屏更糟。
 // ② 「旧格式的结论节」只给**一个栏目名都没提过**的报告。提过就是新格式写坏了，问题本来
 //    就该在结论节里，从第二个 `##` 起折会把问题一起折掉。
 // ③ 折进去的一个字都不能少：`summary + detail` 拼回来必须等于原文。
+// ④ 「声明这是结论节」是**整段标题全文相等**，不是「含结论二字」：`## 一、先说结论：核心
+//    功能是真的能用` 这类首节只讲正面那半，认成结论节就会把后面的【高】折走。
 import assert from "node:assert/strict";
 import { splitReviewReport } from "../src/components/reviewReportSections.ts";
 
@@ -51,8 +55,13 @@ import { splitReviewReport } from "../src/components/reviewReportSections.ts";
 }
 
 // 反例二（真实报告 `KyF5hukfZ5D9/RJPSXRqyJIo2/round-1` 的骨架）：首节确实在讲结论，
-// 但只讲了**正面那半**，高危发现全在后面的 `##` 里。这份开头除了标题什么都没写，
-// 连引子都没有，于是连第二档都不给——整篇铺开。
+// 但只讲了**正面那半**，高危发现全在后面的 `##` 里。这份开头除了标题什么都没写，首节
+// 标题又不是报告自己声明的结论节（「一、先说结论：核心功能是真的能用」不等于「结论」），
+// 于是连第二档都不给——整篇铺开。
+//
+// 第 4 轮想让「标题开场的报告一律留第一节」，这一份就是不能一律的理由：留了第一节，首屏
+// 只剩「核心功能是真的能用」，高危发现进折叠。同形态的真实样本还有 `_wWMPNIsrXF7` 那份
+// 111 行报告（首节是 `## 任务：…` 元数据，`## 2. 高优先级缺陷` 在后面）。
 {
   const positiveOnly = [
     "# 第 1 轮审查",
@@ -66,7 +75,7 @@ import { splitReviewReport } from "../src/components/reviewReportSections.ts";
     "复现：……",
   ].join("\n");
   const { summary, detail, kind } = splitReviewReport(positiveOnly);
-  assert.equal(kind, "whole", "开头只有一个标题，拆出来的首屏就只剩标题加按钮，不如整篇铺开");
+  assert.equal(kind, "whole", "开头只有一个标题，首节又不是报告自己声明的结论节");
   assert.equal(detail, "");
   assert.match(summary, /高危/, "高危发现必须留在首屏");
 }
@@ -102,11 +111,13 @@ import { splitReviewReport } from "../src/components/reviewReportSections.ts";
   assert.match(detail, /P1/);
 }
 
-// 引子要的是**真有话说**，不是「标题下面空着」。只有一行 `#` 时整篇铺开。
+// 引子要的是**真有话说**，不是「标题下面空着」。只有一行 `#`、首节又不是声明的结论节
+// （`## 发现 1：数据会丢` 是问题本身）时整篇铺开——首屏只剩标题加按钮，发现还被折走。
 {
   const bare = "# 第 1 轮审查\n\n## 发现 1：数据会丢\n\n复现：……\n";
   assert.equal(splitReviewReport(bare).kind, "whole", "标题不算引子");
   assert.equal(splitReviewReport(bare).detail, "");
+  assert.match(splitReviewReport(bare).summary, /数据会丢/, "发现必须留在首屏");
 }
 
 // 读不出字的也不算引子：首屏「一个标题 + 一坨看不懂的东西 + 一个按钮」比多滚两屏更糟。
@@ -170,6 +181,54 @@ for (const [what, lead] of [
   const only = "# 第 1 轮审查报告\n\n审查时间：2026-08-13\n\n## 结论\n\n**verified。** 没有发现缺陷。\n";
   assert.equal(splitReviewReport(only).kind, "whole", "没有第二个 `##` 就别折");
   assert.equal(splitReviewReport(only).detail, "");
+}
+
+// 「报告自己声明这一节是结论」跟它用哪种语言写没关系。判据本来写死成中文「结论」，于是
+// `## Conclusion` / `## Verdict` 开场的报告一份都折不了——全库 13 份整篇铺开的报告里，
+// 最长那份 222 行（`GM775FBSbr4y/YGXHJtf-Zvkz/round-1`）就是这个形状：`# 标题` 之后直接
+// `## Conclusion`，后面 216 行是仓库状态、命令、原生验证证据和清场。这类报告恰恰是用户
+// 点名要兜底的「审查者没完全照提示写」。
+for (const [what, title, body] of [
+  ["英文 Conclusion", "## Conclusion", "`verified`. No reproducible blocking defect."],
+  ["英文 Verdict", "## Verdict", "verified"],
+  ["判定写进标题", "## 结论：verify_failed", "完整构建失败，本轮必须报 `verify_failed`。"],
+]) {
+  const text = [
+    "# GM775FBSbr4y free review round 1",
+    "",
+    title,
+    "",
+    body,
+    "",
+    "## Repository State",
+    "",
+    "`git status --short` → clean",
+  ].join("\n");
+  const { summary, detail, kind } = splitReviewReport(text);
+  assert.equal(kind, "lead", `${what}：报告自己声明了结论节，该折`);
+  assert.match(summary, new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${what}：结论那一节整个留在首屏`);
+  assert.match(summary, /verif/, `${what}：「到底过没过」不许折进去`);
+  assert.doesNotMatch(summary, /Repository State|clean/, `${what}：技术记录照折`);
+  assert.match(detail, /^## Repository State/, `${what}：拆点是第二个 `.concat("`##`"));
+  assert.equal(
+    `${summary}\n\n${detail}`.replace(/\s+/g, ""),
+    text.replace(/\s+/g, ""),
+    `${what}：折叠不是丢弃`,
+  );
+}
+
+// 但「声明」要的是**整段标题全文相等**（后缀只容协议自己的判定词），不是「含结论二字」。
+// 放宽到前缀，上面反例一、二那两份真实报告就会被认成结论节，【高】跟着折进去。
+for (const [what, title] of [
+  ["正面那半", "## 结论：核心功能是真的能用"],
+  ["先说结论之外的", "## 0. 先说结论之外的：这轮做对的部分"],
+  ["任务元数据", "## 任务：查询 Claude 模型"],
+  ["英文但不是判定词", "## Conclusion and next steps"],
+]) {
+  const text = `# 第 1 轮审查\n\n${title}\n\n主链路验证通过。\n\n## 2. 高优先级缺陷\n\nP1：保存后内容会全部消失。\n`;
+  const { summary, kind } = splitReviewReport(text);
+  assert.equal(kind, "whole", `${what}：不是报告自己声明的结论节，开头又没引子，只能整篇铺开`);
+  assert.match(summary, /高优先级缺陷/, `${what}：缺陷必须留在首屏`);
 }
 
 // 但「新格式写坏了」不吃这一档：`## 结论` 里出现过栏目标签、却凑不齐/不按序/证明不了

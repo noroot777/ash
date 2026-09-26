@@ -9,7 +9,8 @@
 // 一律往下降。
 //
 // 降级那一档**折到哪**在 `test-review-report-fallback.mjs`；「哪个 `##` 是分界」在
-// `test-review-report-boundary.mjs`。
+// `test-review-report-boundary.mjs`；四栏写成 `###` 小标题的那一种形态在
+// `test-review-report-heading-columns.mjs`。
 //
 // 六条**别再走回头路**的判据，各自有用例钉在下面：
 // ① 别拿标题**代替**四栏。「标题里有没有『结论』」那一版放行过两份真实报告，把【高】/
@@ -29,13 +30,15 @@
 //    里面整段抄上一轮四项结论的报告，四栏独立成段、顺序还对，光验四栏就放行。
 // ⑥ 光有四个标签不算数，还得**证明问题本身在摘要里**：要么每条问题一个小标题，要么只写
 //    「没有发现问题」。否则「必须修的问题：见下方」+ 问题误用 `##` 就能把它折进明细。
-// ⑦ 四栏有**两种**真实写法：加粗标签段落，和写成 `###` 小标题。只认前者时，后者那 4 份
-//    真实报告（含本任务上一轮的）整份技术明细重新铺满首屏。④⑥ 两道闸对两种写法都要过，
-//    而且「问题小标题至少多深」跟着栏目的写法走一级——写死 `>= 3` 会让栏目自己那一级的
-//    标题冒充问题小标题，两道闸一起被绕开。
+// ⑦ 四栏有**两种**真实写法：加粗标签段落，和写成 `###` 小标题（后者的用例整件搬去了
+//    `test-review-report-heading-columns.mjs`）。只认前者时，后者那 4 份真实报告（含本
+//    任务上一轮的）整份技术明细重新铺满首屏。
+// ⑧ ⑥ 的「没有发现问题」要**整栏只写这六个字**，不是「哪一行里出现过」。子串判据下
+//    「详情见下方；这里不是说没有发现问题」这句否定句就能把判据翻过来——首屏写着有问题，
+//    问题本身进了那个宣称「技术明细」的折叠。
 import assert from "node:assert/strict";
 import { splitReviewReport } from "../src/components/reviewReportSections.ts";
-import { contract, conforming, headingContract } from "./fixtures/review-report-contract.mjs";
+import { contract, conforming } from "./fixtures/review-report-contract.mjs";
 
 {
   const { summary, detail } = splitReviewReport(conforming);
@@ -448,6 +451,66 @@ for (const [kind, column] of [
   assert.match(splitReviewReport(clean).detail, /^## 明细/, `${kind}：没问题的报告照样要拆`);
 }
 
+// 但「没有发现问题」这一栏得**整栏只写这六个字**，不是「哪一行里出现过」。第 4 轮的反例：
+// 问题栏写着「详情见下方；这里不是说没有发现问题」，一句否定句就把判据翻了过来——真正的
+// 问题写在后面的 `##` 里，首屏只剩「有 1 条必须先修」和「详情见下方」，按钮还宣称折叠里
+// 是「验证过程、证据、清场记录」。引文、注释、代码示例里出现同样字样是同一个洞。
+for (const [what, column] of [
+  ["否定句", "详情见下方；这里不是说没有发现问题"],
+  ["带条件", "没有发现问题，但建议后续再看一眼导出路径"],
+  ["引文里提过", "> 上一轮写的是「没有发现问题」\n\n本轮的问题见下方。"],
+  ["代码示例里提过", "```text\n没有发现问题\n```"],
+  ["整栏空着", ""],
+]) {
+  const evasive = [
+    "# 报告",
+    "",
+    "## 结论",
+    "",
+    "**能不能验收**：不能 —— 有 1 条必须先修",
+    "",
+    "**现在什么能用了**：基础流程可用。",
+    "",
+    "**必须修的问题**",
+    "",
+    column,
+    "",
+    "**不拦验收、但你该知道的**：没有。",
+    "",
+    "## 保存后内容会全部消失",
+    "",
+    "你会遇到：点保存以后整篇内容清空。",
+  ].join("\n");
+  const { summary, detail, kind } = splitReviewReport(evasive);
+  assert.equal(kind, "whole", `${what}：不是「只写了那六个字」，证明不了问题在摘要里`);
+  assert.equal(detail, "");
+  assert.match(summary, /保存后内容会全部消失/, `${what}：问题必须留在首屏`);
+}
+
+// 容一个句号，别的都不容——这是「整栏比对」留的唯一余地。
+{
+  const period = [
+    "# 报告",
+    "",
+    "## 结论",
+    "",
+    "**能不能验收**：可以",
+    "",
+    "**现在什么能用了**：略",
+    "",
+    "**必须修的问题**",
+    "",
+    "没有发现问题。",
+    "",
+    "**不拦验收、但你该知道的**：没有。",
+    "",
+    "## 明细",
+    "",
+    "略",
+  ].join("\n");
+  assert.equal(splitReviewReport(period).kind, "contract", "结尾那个句号不算「多写了东西」");
+}
+
 // 拆分器据此拆，用户看到的却是另一回事。同一个道理第 7 轮已经栽过一次。
 {
   const table = [
@@ -510,103 +573,6 @@ for (const [kind, column] of [
   );
 }
 
-// 四栏的**另一种真实写法**：写成 `###` 小标题，每条问题写成 `####`。认不出它的后果不是
-// 少折一点，是整份技术明细重新铺满首屏——全库 1036 份里 4 份长这样，其中一份就是本任务
-// 上一轮的审查报告。
-{
-  const text = `## 结论\n\n${headingContract}\n\n## 被审范围\n\n- 基线 \`d7ee0b07\`\n\n## 清场\n\n已停掉 5175。\n`;
-  const { summary, detail, kind } = splitReviewReport(text);
-  assert.equal(kind, "contract", "小标题写法跟加粗写法一样确定，一样该认");
-  assert.match(summary, /### 能不能验收/, "四栏留在首屏");
-  assert.match(summary, /烧录出来的成片/, "问题本身留在首屏");
-  assert.doesNotMatch(summary, /被审范围|d7ee0b07|清场/, "技术记录收进明细");
-  assert.match(detail, /^## 被审范围/);
-}
-
-// 这一档同样要过 ④⑥ 两道闸，判据跟着写法走一级：栏目是 `###`，问题就得是 `####`。
-{
-  // 少一栏
-  const three = headingContract.split("\n### 不拦验收、但你该知道的")[0];
-  assert.equal(
-    splitReviewReport(`## 结论\n\n${three}\n\n## 明细\n\n略\n`).detail,
-    "",
-    "小标题写法缺一栏同样不算契约",
-  );
-}
-{
-  // 倒序
-  const reversed = [
-    "### 不拦验收、但你该知道的", "", "没有。", "",
-    "### 必须修的问题", "", "#### 1. 导出内容仍是旧版本", "", "你会遇到：……", "",
-    "### 现在什么能用了", "", "略。", "",
-    "### 能不能验收", "", "不能。",
-  ].join("\n");
-  const { summary, detail } = splitReviewReport(`## 结论\n\n${reversed}\n\n## 明细\n\n略\n`);
-  assert.equal(detail, "", "四栏倒着写是抄件，不是按契约写的摘要");
-  assert.match(summary, /导出内容仍是旧版本/, "问题必须留在首屏");
-}
-{
-  // 问题写成 `###`：那是栏目自己那一级，冒充不了问题小标题（否则 ④⑥ 一起被绕开）
-  const shallow = [
-    "### 能不能验收", "", "不能 —— 有 1 条必须先修。", "",
-    "### 现在什么能用了", "", "略。", "",
-    "### 必须修的问题", "", "见下方。", "",
-    "### 不拦验收、但你该知道的", "", "没有。",
-  ].join("\n");
-  const { summary, detail } = splitReviewReport(
-    `## 结论\n\n${shallow}\n\n## 导出内容仍是旧版本\n\n你会遇到：……\n`,
-  );
-  assert.equal(detail, "", "拿不出 `####` 问题小标题就不能拆");
-  assert.match(summary, /导出内容仍是旧版本/, "问题必须留在首屏");
-}
-{
-  // 同上，但两栏之间**真有**一个 `###`——它是栏目自己那一级的闲话，不是问题条目。
-  // 「问题小标题至少多深」写死成 `>= 3` 时，这一行就能冒充问题证明，把真正的问题折走。
-  const strayHeading = [
-    "### 能不能验收", "", "不能 —— 有 1 条必须先修。", "",
-    "### 现在什么能用了", "", "略。", "",
-    "### 必须修的问题", "", "见下方。", "",
-    "### 补充说明", "", "这一段不是问题条目。", "",
-    "### 不拦验收、但你该知道的", "", "没有。",
-  ].join("\n");
-  const { summary, detail } = splitReviewReport(
-    `## 结论\n\n${strayHeading}\n\n## 导出内容仍是旧版本\n\n你会遇到：……\n`,
-  );
-  assert.equal(detail, "", "栏目同级的标题不是问题小标题，证明不了问题在摘要里");
-  assert.match(summary, /导出内容仍是旧版本/, "问题必须留在首屏");
-}
-{
-  // 没问题那一支照拆
-  const none = [
-    "### 能不能验收", "", "可以。", "",
-    "### 现在什么能用了", "", "略。", "",
-    "### 必须修的问题", "", "没有发现问题", "",
-    "### 不拦验收、但你该知道的", "", "没有。",
-  ].join("\n");
-  assert.match(
-    splitReviewReport(`## 结论\n\n${none}\n\n## 明细\n\n略\n`).detail,
-    /^## 明细/,
-    "「没有发现问题」那一支同样该拆",
-  );
-}
-// 标题得是**整段全文相等**，不是开头像。这跟加粗那一版被抓过三次的放宽是同一条教训。
-for (const bad of ["### 能不能验收不了", "### 能不能验收（详见下文）", "### 先说能不能验收"]) {
-  const broke = headingContract.replace("### 能不能验收", bad);
-  assert.equal(
-    splitReviewReport(`## 结论\n\n${broke}\n\n## 明细\n\n略\n`).detail,
-    "",
-    `${bad} 不是固定栏目`,
-  );
-}
-// 结尾一个冒号是真实写法，认。
-for (const colon of ["：", ":"]) {
-  const withColon = headingContract.replace("### 能不能验收", `### 能不能验收${colon}`);
-  assert.match(
-    splitReviewReport(`## 结论\n\n${withColon}\n\n## 明细\n\n略\n`).detail,
-    /^## 明细/,
-    `小标题结尾带「${colon}」仍属于契约`,
-  );
-}
 
 // 空报告不该炸。
 assert.deepEqual(splitReviewReport(""), { summary: "", detail: "", kind: "whole" });
