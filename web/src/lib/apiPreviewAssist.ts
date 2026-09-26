@@ -14,11 +14,12 @@ export interface PreviewAssistStartBody {
   reasoningEffort?: string | null;
 }
 
+/** `instance` = 回话的这一台 ash 的身份，每次启动换一个（见 server 的 ASSIST_INSTANCE）。 */
 export const previewAssistApi = {
-  previewAssist: (projectId: string): Promise<{ job: PreviewAssistState | null }> =>
+  previewAssist: (projectId: string): Promise<{ job: PreviewAssistState | null; instance: string }> =>
     request(`/projects/${id(projectId)}/preview/assist`),
-  startPreviewAssist: (projectId: string, body: PreviewAssistStartBody): Promise<{ job: PreviewAssistState }> =>
+  startPreviewAssist: (projectId: string, body: PreviewAssistStartBody): Promise<{ job: PreviewAssistState; instance: string }> =>
     request(`/projects/${id(projectId)}/preview/assist`, json("POST", body)),
-  cancelPreviewAssist: (projectId: string): Promise<{ canceled: boolean; job: PreviewAssistState | null }> =>
+  cancelPreviewAssist: (projectId: string): Promise<{ canceled: boolean; job: PreviewAssistState | null; instance: string }> =>
     request(`/projects/${id(projectId)}/preview/assist`, { method: "DELETE" }),
 };

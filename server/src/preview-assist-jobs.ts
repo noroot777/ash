@@ -20,6 +20,18 @@ const jobs = new Map<string, Job>();
 /** 结束的 job 留一会儿给前端把结果取走，之后自己清掉。 */
 const KEEP_FINISHED_MS = 10 * 60_000;
 
+/**
+ * 这一台 ash 进程的身份，每次启动换一个。
+ *
+ * 前端要靠它把两件长得一模一样的事分开：都是「我本地记着一个跑着的作业、服务端却回
+ * `job: null`」，但一种是 **ash 重启把内存态吞了**（该说「已随 ash 重启中断」），另一种是
+ * **作业早就正常跑完、终态过了 10 分钟被清掉**（说「重启」就是在撒谎，第 2 轮审查复现过：
+ * 页面关着的时候它跑完了，十分钟后回来看到一句 ash 从来没发生过的重启）。
+ *
+ * 光凭那个 null 分不出来，所以得有个人说「我还是刚才那一台」——就是它。
+ */
+export const ASSIST_INSTANCE = id();
+
 export function previewAssistState(projectId: string): PreviewAssistState | null {
   return jobs.get(projectId)?.state ?? null;
 }

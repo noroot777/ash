@@ -84,6 +84,18 @@ const executorProfiles: AgentExecutorProfile[] = [
 // 「AI 协助」那台短命作业的假服务端。真实的那份是内存态（server/src/preview-assist.ts），
 // 所以这里也就是一个模块级变量 —— 连带能演「ash 重启把它吞了」：把它清成 null。
 let assist: PreviewAssistState | null = null;
+// 服务端自报的实例身份：ash 重启才会变。前端靠它把「重启吞了」和「终态自己过期了」分开。
+// 存进 localStorage 是因为**刷新页面不是重启服务端**：模块级变量会跟着页面一起重来，
+// 那样「刷新之后还看得见中断」这条就测不成了(刷新后实例又变回原值=没重启过)。
+const INSTANCE_KEY = `${storageKey}:assist-instance`;
+let assistInstance = localStorage.getItem(INSTANCE_KEY) ?? "inst-1";
+localStorage.setItem(INSTANCE_KEY, assistInstance);
+const restartAssistInstance = () => {
+  assistInstance = `inst-${Date.now()}`;
+  localStorage.setItem(INSTANCE_KEY, assistInstance);
+};
+// 下一次 POST 装成「请求发出去了但回不来」—— 服务端那边已经接单，浏览器这边只拿到一个错。
+let assistDropNextPost = false;
 const assistJob = (patch: Partial<PreviewAssistState>): PreviewAssistState => ({
   jobId: "job-1",
   projectId: "p-one",
@@ -117,13 +129,15 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   if (assistRoute) {
     if (init?.method === "POST") {
       assist = assistJob({});
-      return reply({ job: assist });
+      // 服务端照样接单了(真实实现是同步预占的)，只是这一发的响应回不到浏览器。
+      if (assistDropNextPost) { assistDropNextPost = false; throw new TypeError("Failed to fetch"); }
+      return reply({ job: assist, instance: assistInstance });
     }
     if (init?.method === "DELETE") {
       if (assist?.status === "running") assist = { ...assist, status: "canceled", phase: "done", step: "已取消", error: "已取消", endedAt: "2026-09-26T00:01:00.000Z" };
-      return reply({ canceled: true, job: assist });
+      return reply({ canceled: true, job: assist, instance: assistInstance });
     }
-    return reply({ job: assist });
+    return reply({ job: assist, instance: assistInstance });
   }
   if (pathname.endsWith("/git")) return reply({
     identity: {
@@ -187,8 +201,16 @@ function Fixture() {
         </button>
         {/* AI 协助这台作业是内存态的：ash 一重启服务端就只会回 `job: null`。这颗按钮演的
             就是那一下 —— 面板必须还看得出「我点过、它被打断了」，而不是退回初始按钮。 */}
-        <button type="button" data-testid="assist-restart" onClick={() => { assist = null; }}>
+        <button type="button" data-testid="assist-restart" onClick={() => { assist = null; restartAssistInstance(); }}>
           假装 ash 重启
+        </button>
+        {/* 跟上面那颗的区别只在实例身份没变：作业是自己跑完、终态过了 10 分钟被清掉的。
+            这一档说成「重启」就是让用户去查一台根本没重启过的 ash。 */}
+        <button type="button" data-testid="assist-expire" onClick={() => { assist = null; }}>
+          假装结果过期
+        </button>
+        <button type="button" data-testid="assist-drop-post" onClick={() => { assistDropNextPost = true; }}>
+          假装启动请求断线
         </button>
         <button
           type="button"

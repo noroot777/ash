@@ -11,6 +11,7 @@ import { projects } from "./db/schema.js";
 import { actorOf, authErrorResponse, ownerIdOf } from "./auth/context.js";
 import { requireProjectAdmin } from "./auth/visibility.js";
 import { expandHome, projectHealthLight } from "./git.js";
+import { ASSIST_INSTANCE } from "./preview-assist-jobs.js";
 import { cancelPreviewAssist, previewAssistState, startPreviewAssist } from "./preview-assist.js";
 
 const str = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null);
@@ -20,7 +21,9 @@ export function mountPreviewAssistRoutes(api: Hono): void {
     try {
       await requireProjectAdmin(actorOf(c), c.req.param("id"));
       c.header("cache-control", "no-store");
-      return c.json({ job: previewAssistState(c.req.param("id")) });
+      // instance:「我是哪一台 ash」。前端拿它把「重启吞了」和「终态过期了」分开 —— 两种
+      // 情况服务端回的都是 job: null（见 preview-assist-jobs.ts 的 ASSIST_INSTANCE）。
+      return c.json({ job: previewAssistState(c.req.param("id")), instance: ASSIST_INSTANCE });
     } catch (error) {
       const mapped = authErrorResponse(error);
       if (mapped) return c.json(mapped.body, mapped.status);
@@ -50,7 +53,7 @@ export function mountPreviewAssistRoutes(api: Hono): void {
         reasoningEffort: str(body.reasoningEffort),
         owner: ownerIdOf(actorOf(c)),
       });
-      return c.json({ job });
+      return c.json({ job, instance: ASSIST_INSTANCE });
     } catch (error) {
       const mapped = authErrorResponse(error);
       if (mapped) return c.json(mapped.body, mapped.status);
@@ -61,7 +64,7 @@ export function mountPreviewAssistRoutes(api: Hono): void {
   api.delete("/projects/:id/preview/assist", async (c) => {
     try {
       await requireProjectAdmin(actorOf(c), c.req.param("id"));
-      return c.json({ canceled: cancelPreviewAssist(c.req.param("id")), job: previewAssistState(c.req.param("id")) });
+      return c.json({ canceled: cancelPreviewAssist(c.req.param("id")), job: previewAssistState(c.req.param("id")), instance: ASSIST_INSTANCE });
     } catch (error) {
       const mapped = authErrorResponse(error);
       if (mapped) return c.json(mapped.body, mapped.status);

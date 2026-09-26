@@ -1,15 +1,19 @@
 // 「AI 协助填写」这块面板的浏览器回归。
 //
-// 要钉的是**四种结局在界面上都留得下痕迹**，因为这颗按钮要跑几分钟，而用户在这几分钟里
-// 会换页面、会刷新、会碰上 ash 重启：
+// 要钉的是**每一种结局在界面上都留得下痕迹、而且说的是实话**，因为这颗按钮要跑几分钟，
+// 用户在这几分钟里会换页面、会刷新、会自己动手写脚本，还可能碰上 ash 重启或者网断一下：
 //   ① 点下去 → 看得见第几轮、看得见「停止」；
 //   ② 点停止 → 留下「已取消」（不是悄悄退回初始按钮）；
-//   ③ ash 重启把内存态吞了 → 摆出「已随 ash 重启中断」，而且**刷新之后还在**
+//   ③ ash 重启把内存态吞了 → 「已随 ash 重启中断」，而且**刷新之后还在**
 //      （项目约定：停止/中断必须留下持久可见的状态，判据就是刷新后还看得见）；
-//   ④ 真起来了 → 脚本自己落进上面的启动脚本输入框，并说清下一步还得点保存。
+//   ④ 作业正常跑完、终态过了 10 分钟被清掉 → 说的是「过期」，**不能说成重启**
+//      （服务端回的都是 job: null，靠它自报的实例身份分辨）；
+//   ⑤ 启动请求断在路上 → 服务端那边已经接单了，页面必须把它接管回来（否则停都停不了）；
+//   ⑥ 用户在这期间自己写了脚本 → 成功结果**不许静默覆盖**，摆出来让他挑；
+//   ⑦ 输入框没动过 → 成功就直接填，且只填一次。
 //
-// 服务端那份是假的（fixture 里一个模块级变量），这里测的是前端这一侧的判断：什么时候轮询、
-// null 该读成「中断」还是「没点过」、填一次还是填两次。
+// 服务端那份是假的（fixture 里几个模块级变量），这里测的是前端这一侧的判断：什么时候轮询、
+// null 该读成哪一种、填还是不填。
 // 跑法：npm -w web run test:preview-assist-ui
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
@@ -48,6 +52,8 @@ try {
   const assistButton = page.locator(".preview-assist-actions > button").first();
   const stopAssist = page.getByRole("button", { name: "停止" });
   const progress = page.locator(".preview-assist-progress");
+  const dismiss = () => progress.getByRole("button", { name: "知道了" }).click();
+  const notices = async () => JSON.parse(await page.getByTestId("notices").textContent());
   await script.waitFor();
   await startAssist.waitFor();
   assert.equal(await progress.count(), 0, "没点过的时候不该有进度卡");
@@ -78,32 +84,67 @@ try {
   await progress.getByText("已随 ash 重启中断", { exact: false }).waitFor();
   assert.match(await progress.innerText(), /再点一次/, "中断之后要说清下一步怎么办");
   // 这张卡是本地记录推出来的，服务端没有对应的东西可轮询，所以必须给它一个出口。
-  await progress.getByRole("button", { name: "知道了" }).click();
+  await dismiss();
   await progress.waitFor({ state: "detached" });
   await page.reload();
   await script.waitFor();
   await page.waitForTimeout(1500);
-  assert.equal(await progress.count(), 0, "收掉的中断提示不该在刷新后又冒出来");
+  assert.equal(await progress.count(), 0, "收掉的提示不该在刷新后又冒出来");
 
-  // ④ 真起来了：脚本自己落进输入框
+  // ④ 同样是 job: null，但 ash 没重启过：那是作业跑完之后终态自己过期了
+  await startAssist.click();
+  await progress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await page.getByTestId("assist-expire").click();
+  await progress.getByText("已经过期", { exact: false }).waitFor();
+  const expired = await progress.innerText();
+  assert.doesNotMatch(expired, /重启/, "ash 没重启过就不能说它重启了");
+  assert.match(expired, /只保留 10 分钟/, "要说清结果为什么没了");
+  await dismiss();
+  await progress.waitFor({ state: "detached" });
+
+  // ⑤ 启动请求断在路上：服务端已经接单，页面得把它接管回来
+  await page.getByTestId("assist-drop-post").click();
+  await startAssist.click();
+  await progress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await stopAssist.waitFor();
+  assert.equal(await page.locator(".preview-assist-error").count(), 0, "接管成功就不该再红一条启动失败");
+  await stopAssist.click();
+  await progress.locator(".preview-assist-step").getByText("已取消", { exact: false }).waitFor();
+  await dismiss().catch(() => {});
+
+  // ⑥ 跑的这几分钟里用户自己写了东西：不许静默覆盖
+  await startAssist.click();
+  await progress.getByText("正在读这个项目", { exact: false }).waitFor();
+  const mine = "npm run dev -- --port 7777 # 我正在手写";
+  await script.fill(mine);
+  await page.getByTestId("assist-succeed").click();
+  await progress.getByText("没有直接覆盖", { exact: false }).waitFor();
+  assert.equal(await editorText(script), mine, "运行期间手写的内容不能被成功结果顶掉");
+  assert.equal((await notices()).filter((line) => line.includes("没有直接覆盖")).length, 1, "不覆盖这件事要说一声");
+  await page.waitForTimeout(1500);
+  assert.equal(await editorText(script), mine, "下一拍轮询也不能把它盖回去");
+  // 摆出来的那条脚本要看得见，而且换不换由用户点
+  assert.match(await progress.innerText(), /npm run dev -- --port \$PORT/, "AI 试出来的那条要摆出来给人看");
+  await progress.getByRole("button", { name: "用这条替换" }).click();
+  await page.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
+  assert.equal(await editorText(script), "npm run dev -- --port $PORT", "点了替换才换");
+
+  // ⑦ 输入框没动过：成功就直接填，且只填一次
   await startAssist.click();
   await progress.getByText("正在读这个项目", { exact: false }).waitFor();
   await page.getByTestId("assist-succeed").click();
   await progress.getByText("真的起来过一次", { exact: false }).waitFor();
-  await page.waitForFunction(() =>
-    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
-      .map((line) => line.textContent).join("\n").includes("npm run dev -- --port $PORT"));
   assert.equal(await editorText(script), "npm run dev -- --port $PORT", "起来过的那条脚本要填进输入框");
   assert.match(await progress.innerText(), /保存预览设置/, "填完要说清还得点保存");
-  const notices = JSON.parse(await page.getByTestId("notices").textContent());
-  assert.equal(notices.filter((line) => line.includes("脚本已填入")).length, 1, "同一个作业只提示一次");
-  // 用户在填完之后手工改的内容，不该被下一拍轮询又盖回去。
+  assert.equal((await notices()).filter((line) => line.includes("脚本已填入")).length, 1, "同一个作业只提示一次");
   await script.fill("我自己改的");
   await page.waitForTimeout(1500);
   assert.equal(await editorText(script), "我自己改的", "轮询不能反复把脚本盖回去");
 
   assert.deepEqual(errors, [], "AI 协助面板不应产生运行时异常");
-  console.log("preview ai assist: ok (running rounds, cancel, restart interruption survives refresh, dismiss, fill once)");
+  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, manual edit protected, fill once)");
 } finally {
   await browser?.close();
   await server.close();
