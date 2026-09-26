@@ -464,6 +464,40 @@ try {
   );
   assert.equal(await justOver.locator(".review-report-whole.is-clamped").count(), 0, "没过余量就别夹");
 
+  // ㉓ 自相矛盾的报告：首屏同时写着「有 2 条必须先修」和「没有发现问题」，真问题在下一个
+  //    `##` 里。零条目那一支曾经跳过条数校验，把真问题折进写着「技术明细」的按钮。
+  const contradictory = page.locator(".contradictory-none-fixture");
+  assert.match(
+    await contradictory.locator(".task-markdown").first().innerText(),
+    /保存后内容消失/,
+    "真问题必须默认可见",
+  );
+  assert.equal(
+    await contradictory.locator(".review-report-more").count(),
+    0,
+    "报告自相矛盾时证明不了任何事，不该画出任何展开按钮",
+  );
+
+  // ㉔ 走契约那条「摘要最多展开 5 条、其余列标题」的路：格式合规，但第 6 条往后躺在折叠
+  //    里——拆点不变（5 条问题和分流声明全留首屏），按钮必须收回那句承诺。
+  const spilled = page.locator(".spilled-fixture");
+  const spilledSummary = await spilled.locator(".task-markdown").first().innerText();
+  assert.match(spilledSummary, /5\. 导出内容仍是旧版本/, "5 条问题全留在首屏");
+  assert.match(spilledSummary, /其余 3 条/, "分流声明也留在首屏");
+  assert.equal(
+    await spilled.getByRole("button", { name: /技术明细/ }).count(),
+    0,
+    "折叠里有第 6 条往后，按钮不准说里面只有验证过程、证据、清场记录",
+  );
+  const spilledToggle = spilled.getByRole("button", { name: /^展开完整报告$/ });
+  assert.equal(await spilledToggle.count(), 1);
+  await spilledToggle.click();
+  assert.match(
+    await spilled.locator(".review-report-detail .task-markdown").innerText(),
+    /npm -w @ash\/web test/,
+    "展开后技术记录原样都在",
+  );
+
   console.log("review report split dom ok");} finally {
   await browser?.close();
   await server.close();

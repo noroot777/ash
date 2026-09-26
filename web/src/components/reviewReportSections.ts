@@ -12,13 +12,19 @@
 //    二级小节是写给人看的摘要，里面有「能不能验收 / 现在什么能用了 / 必须修的问题 /
 //    不拦验收但你该知道的」四个固定小标题，下一个 `##` 起是技术明细。这一档能担保折叠
 //    里只有技术记录，所以按钮敢写「展开技术明细（验证过程、证据、清场记录）」。
-// ② 认不出契约（存量报告、某轮审查者没照 prompt 写）就降一档：铺开的那一段留在首屏，
-//    余下全部收进一个不作任何承诺的「展开完整报告」。这是用户点名要的结构保证——「就算
-//    某轮审查者没照 prompt 写，你也不会被 46 行合规证明糊一脸」。折在哪看报告自己怎么写：
+//    **担保的是「折叠里没有问题」，不是「摘要够短」**——四栏齐全、每条问题写全三行、条数
+//    对得上，折叠里就只剩技术记录，这句话跟摘要里写了几条无关。
+// ② 认不出契约（存量报告、某轮审查者没照 prompt 写），**或者报告自己把一部分问题放进了
+//    折叠**，就降一档：铺开的那一段留在首屏，余下全部收进一个不作任何承诺的「展开完整
+//    报告」。这是用户点名要的结构保证——「就算某轮审查者没照 prompt 写，你也不会被 46 行
+//    合规证明糊一脸」。折在哪看报告自己怎么写：
 //    - 首节标题就是「这是给人看的判定」的声明（`## 结论` / `## Conclusion` / `## Verdict` /
 //      `## 结论：verify_failed` / `## Findings` / `## 发现`）：整节留在首屏，从**第二个**
 //      `##` 起折。折在第一个 `##` 之前会把判定一起折掉；只认中文「结论」那一个词时，222
 //      行的英文报告和 323 份「发现」开场的报告都折不对。
+//    - 四栏齐全、但走了契约自己那条「摘要最多展开 5 条，其余在第 5 条后面列标题、完整三行
+//      写进明细」的路：格式完全合规，可折叠里**确实躺着第 6 条往后的问题**，所以按钮必须
+//      收回那句承诺。拆点不变（第二个 `##`），换的只是按钮说什么。
 //    - 小节标题自己标了严重度（`## [中] …`）：开头连着的那几节问题全部留在首屏，从第一个
 //      没标的 `##` 起折。
 //    - 其它形态：开头到**第一个** `##` 之前的引子留在首屏。
@@ -228,57 +234,45 @@ function headingColumns(root: Parsed, after: number, before: number): Column[] {
  * - 「能不能验收」里**必须报出条数**，而且对得上摘要里的条目数。第 7 轮的反例是同一形状
  *   的最后一个口子：不报数时曾经直接放行，于是「不能，请修完再验」加一条合规问题就够，
  *   真正的第二条写在下一个 `##` 里照样被折走。数不出来就证明不了摘要是全的。
+ * - **「没有发现问题」那条岔路也得对数。**第 8 轮的反例：「不能 —— 有 2 条必须先修」配上
+ *   问题栏只写「没有发现问题」，零条目分支曾经直接返回、把条数校验整个跳过去，两条真问题
+ *   写在下一个 `##` 里，首屏于是同时显示「有 2 条必须先修」和「没有发现问题」。报告自相
+ *   矛盾时不许挑对自己有利的那一半读。
+ *
+ * 返回的是**哪一档**，不是「行不行」——因为契约本身允许一种「问题就在折叠里」的写法：摘要
+ * 最多展开 5 条，更多的在第 5 条后面写一行「其余 N 条：…」，完整三行放进明细。那种报告
+ * 格式完全合规，但折叠里**确实有问题**，所以它不能走契约档——按钮会替它宣称「里面只有
+ * 验证过程、证据、清场记录」。这类报告降到 `lead`：照样从第二个 `##` 起折（5 条问题和那
+ * 行分流声明全留在首屏），按钮换成什么都不宣称的「展开完整报告」。第 8 轮抓到的
+ * 「其余 3 条：详见明细」正是这个形状——明细里一条都没有，但那已经是报告在撒谎，解析器
+ * 能做的是不替它背书。
  *
  * `depth` 是「问题小标题至少得多深」，跟着栏目的写法走：加粗标签那一版栏目是段落、问题
  * 是 `###`；栏目写成 `###` 时问题就得是 `####`。写死成 `>= 3` 的话，栏目自己那一级的
  * 标题就能冒充问题小标题，① 和 ② 一起被绕开。
  */
-function provesContract(root: Parsed, probes: string[], columns: Column[], depth: number): boolean {
-  if (columns.length !== MARK_LINES.length) return false;
-  if (!columns.every((hit, order) => hit.column === order)) return false;
+function provesContract(
+  root: Parsed,
+  probes: string[],
+  columns: Column[],
+  depth: number,
+): "contract" | "lead" | null {
+  if (columns.length !== MARK_LINES.length) return null;
+  if (!columns.every((hit, order) => hit.column === order)) return null;
   const [verdict, works, problems, aside] = columns;
+  const declared = declaredCount(probes.slice(verdict.at, works.at).join("\n"));
   const items: Array<{ at: number; depth: number }> = [];
   for (const node of root.children) {
     if (node.type !== "heading" || node.depth < depth || !node.position) continue;
     const at = node.position.start.line - 1;
     if (at > problems.at && at < aside.at) items.push({ at, depth: node.depth });
   }
-  if (!items.length) return saysNoProblem(probes, problems, aside);
-  const listed = items.every((item) => writesProblem(root, probes, item.at, item.depth, aside.at));
-  return listed && countsUp(root, probes, verdict, works, aside, items);
-}
-
-/**
- * 摘要里真写出来的条目数，跟「能不能验收」里报的条数对不对得上。
- *
- * **报了数才算数，没报数一律不算。**第 7 轮的反例：摘要写「不能，请修完再验」不带数字，
- * 第二条问题写成了下一个 `##`——逐条校验的是摘要里那一条，它写得完全合规，于是整份判成
- * 契约，第二条落进写着「验证过程、证据、清场记录」的折叠。这跟前几轮是同一种形状：判据
- * 比它要证明的事松一档。要担保「折叠里只有技术记录」，就得先知道**一共有几条**；报告不
- * 说，就没有任何东西能证明摘要是全的，只能降级。
- *
- * 契约本来就要求报这个数（`server/src/review-report-format.ts`：「不能的话写『不能 ——
- * 有 N 条必须先修，最要命的是…』」），所以这不是对报告提新要求，是不再替它补全。全库
- * 24 份契约报告里只有 1 份漏写（`9WhVyjTyJwZd/round-1`），它确实没按契约写。
- *
- * 数字只认「能不能验收」那一栏自己的范围，不扫到「现在什么能用了」里去——后者说「修好了
- * 有 3 条」之类的话不是本轮的问题数。
- *
- * 另一条被绕过的路是**中文数字**：「有两条必须先修」不匹配只认阿拉伯数字的正则，于是
- * 报了数也等于没报。两种写法一起认。
- */
-function countsUp(
-  root: Parsed,
-  probes: string[],
-  verdict: Column,
-  works: Column,
-  aside: Column,
-  items: Array<{ at: number }>,
-): boolean {
-  const declared = declaredCount(probes.slice(verdict.at, works.at).join("\n"));
-  if (declared === null) return false;
-  if (declared === items.length) return true;
-  return spillsOver(root, probes, declared, items, aside);
+  // 「没有发现问题」只有在报告自己也没报出问题数时才算数（没报数和报了 0 条都行）。
+  if (!items.length) return saysNoProblem(probes, problems, aside) && !declared ? "contract" : null;
+  if (!items.every((item) => writesProblem(root, probes, item.at, item.depth, aside.at))) return null;
+  if (declared === null) return null;
+  if (declared === items.length) return "contract";
+  return spillsOver(root, probes, declared, items, aside) ? "lead" : null;
 }
 
 /** 中文数字的个位。`两` 跟 `二` 同值——「有两条」是真实写法。 */
@@ -305,21 +299,27 @@ function fromChinese(word: string): number | null {
 }
 
 /**
- * 报的数比摘要里的条目多，唯一放行的理由：契约允许**摘要里最多展开 5 条**，更多的在第 5
- * 条后面写一行「其余 N 条：<标题>、<标题>……完整写在下面的技术明细里」，完整三行放进明细
- * （`server/src/review-report-format.ts`）。那一档不是漏写。
+ * 「能不能验收」里报的数比摘要里的条目多时，唯一说得通的解释：契约允许**摘要里最多展开
+ * 5 条**，更多的在第 5 条后面写一行「其余 N 条：<标题>、<标题>……完整写在下面的技术明细
+ * 里」，完整三行放进明细（`server/src/review-report-format.ts`）。
  *
- * 但这一行得**真是那一行**，三件事一件都不能省：
+ * 认出这个形状**不是为了放行契约档**——这种报告的折叠里确实躺着第 6 条往后的问题，按钮
+ * 不准替它宣称「里面只有验证过程、证据、清场记录」。认出来是为了知道「从第二个 `##` 起
+ * 折」对这份报告安全：5 条问题和那行分流声明都留在首屏，余下的收进什么都不宣称的「展开
+ * 完整报告」。所以这里返回真，`provesContract` 给的是 `lead` 而不是 `contract`。
+ *
+ * 判据要求三件事，都是「这真是那一行」而不是「某处出现过这几个字」：
  *
  * ① 位置：得在**第 5 条之后**，而且是问题栏里一个**独立的顶层段落**。曾经只在问题栏开头
- *    64 行里搜「其余 N 条」，于是第一条问题的现象写成「页面只显示其余 3 条记录」就够了——
- *    报告声明 8 条、摘要只有 5 条，明细里第 6～8 条根本不存在，按钮照样说折叠里只有技术
- *    记录。「独立段落」这个判据跟栏目候选同一套白名单（`markCandidateStarts`），围栏、
- *    引用、嵌套列表里的同样一行都不算。
- * ② 数目：N 必须正好是 `声明总数 - 5`。不校验时「有 8 条」配「其余 1 条」也能过，那等于
- *    承认摘要 5 条 + 明细 1 条 = 8 条。
- * ③ 清单非空：冒号后面得真有标题。契约要的是「列出标题」，空着的分流行证明不了明细里有
- *    东西——跟问题三行要求「冒号后有字」是同一条判据。
+ *    64 行里搜「其余 N 条」，于是第一条问题的现象写成「页面只显示其余 3 条记录」就够了。
+ *    「独立段落」这个判据跟栏目候选同一套白名单（`markCandidateStarts`），围栏、引用、
+ *    嵌套列表里的同样一行都不算。
+ * ② 数目：N 必须正好是 `声明总数 - 5`。不校验时「有 8 条」配「其余 1 条」也能过。
+ * ③ 冒号后面得真有字。
+ *
+ * 剩下那一半——明细里到底有没有第 6 条往后的完整三行——**这里不验，也验不动**：契约允许
+ * 它们写在任何一节里，报告把「其余 3 条：详见明细」写成一句空话时，是报告在骗人。解析器
+ * 管得住的只有自己那句承诺，所以这一档根本不发那句承诺。
  */
 function spillsOver(
   root: Parsed,
@@ -512,10 +512,10 @@ export function splitReviewReport(text: string): ReviewReportSections {
     const columns = markCandidateStarts(root, first, second)
       .map((at) => ({ at, column: MARK_LINES.findIndex((pattern) => pattern.test(probes[at])) }))
       .filter((hit) => hit.column >= 0);
-    if (!provesContract(root, probes, columns, 3) && !provesContract(root, probes, headingColumns(root, first, second), 4)) {
-      return whole;
-    }
-    return cut(second, "contract");
+    const proven = provesContract(root, probes, columns, 3)
+      ?? provesContract(root, probes, headingColumns(root, first, second), 4);
+    if (!proven) return whole;
+    return cut(second, proven);
   }
 
   /**
