@@ -97,6 +97,43 @@ try {
     "拆不动的报告不该画出一个什么都不装的展开按钮",
   );
 
+  // ⑤ 换一轮报告必须回到默认折叠。侧栏抽屉在同一个位置换正文、组件不重新挂载，
+  //    展开状态一旦是独立 state 就会串过去——下一份报告一打开就是满屏命令输出。
+  const switchable = page.locator(".switch-fixture");
+  await switchable.getByRole("button", { name: /展开技术明细/ }).click();
+  assert.equal(
+    await switchable.locator(".review-report-detail").count(),
+    1,
+    "第一轮应当能正常展开",
+  );
+
+  await switchable.getByRole("button", { name: "切换轮次" }).click();
+  const switched = await switchable.locator(".task-markdown").first().innerText();
+  assert.match(switched, /第 5 轮自动验证报告/, "正文应当换成了下一轮");
+  assert.equal(
+    await switchable.locator(".review-report-detail").count(),
+    0,
+    "换一轮报告必须回到默认折叠，上一轮的展开状态不许串过来",
+  );
+  assert.equal(
+    await switchable.getByRole("button", { name: /展开技术明细/ }).count(),
+    1,
+    "换轮后按钮应回到「展开」态",
+  );
+  assert.doesNotMatch(
+    await switchable.innerText(),
+    /ROUND2_ONLY_MARKER/,
+    "下一轮的命令输出不该在用户没点之前就摆出来",
+  );
+
+  // 切回去同样是折叠的（不是只在「换到新的」那一个方向上归位）。
+  await switchable.getByRole("button", { name: "切换轮次" }).click();
+  assert.equal(
+    await switchable.locator(".review-report-detail").count(),
+    0,
+    "切回上一轮也该是折叠的",
+  );
+
   console.log("review report split dom ok");
 } finally {
   await browser?.close();

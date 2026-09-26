@@ -42,8 +42,15 @@ export function splitReviewReport(text: string): ReviewReportSections {
   }
 
   const [first, second] = heads;
-  // 「结论」开头而不是全等：`## 结论：不能验收`、`## 结论（第 3 轮）` 都算。
-  if (!first || !second || !first.title.startsWith("结论")) return { summary: text, detail: "" };
+  // 判据是「第一个二级标题**是不是在讲结论**」，不是标题长什么样：`## 结论`、
+  // `## 结论：不能验收`、`## 给人看的结论`、`## 范围与审查结论` 都算。审查者把标题写歪
+  // 一个字就整篇铺开，那第二层就白做了。
+  //
+  // 但**不含「结论」就坚决不拆**，哪怕因此啰嗦：拆点是第二个 `##`，一律拆会把第一节之后
+  // 的东西全收进折叠，而存量报告的发现常常就在那儿——`LqhF7g_rqANy` 的缺陷在「三、发现的
+  // 缺陷」（第三个 `##`）、`zs6JLcw1VAdr` 的全部发现在「Finding」（第一个 `##`）。
+  // 把发现藏起来比让人多滚两屏严重得多，所以这一档只做保守放宽。
+  if (!first || !second || !first.title.includes("结论")) return { summary: text, detail: "" };
   return {
     summary: lines.slice(0, second.at).join("\n").trimEnd(),
     detail: lines.slice(second.at).join("\n").trimEnd(),

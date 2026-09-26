@@ -103,6 +103,15 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
  *
  * 明细用条件渲染而不是 `hidden`：折叠着的那半截里的截图不该混进 `ImagePreviewGroup`
  * 的灯箱队列，否则左右翻会翻到屏幕上根本没有的图。
+ *
+ * 正文一换就**硬复位成折叠**：侧栏的轮次抽屉在同一个位置换 `text`，组件不会重新挂载，
+ * 独立 `useState` 会把上一轮展开着的状态串给下一轮——换一轮报告一打开就是满屏命令输出，
+ * 恰好是这个改动要消灭的东西。
+ *
+ * 复位写在渲染期（React 官方的「prop 变了就调整 state」写法）而不是 `useEffect`：effect
+ * 要等提交后才跑，中间会闪一帧展开态。也不要改成「记住展开过哪一份」那种派生写法——
+ * 那样切走再切回来它又自己展开了，于是「打开报告第一眼是结论」这个保证会带一个取决于
+ * 不可见历史的例外。回到一份读过的报告，行为必须跟第一次打开它完全一样。
  */
 function ReviewReportSplit({ text, onReviewReport, onActionError }: {
   text: string;
@@ -111,7 +120,12 @@ function ReviewReportSplit({ text, onReviewReport, onActionError }: {
 }) {
   const { summary, detail } = useMemo(() => splitReviewReport(text), [text]);
   const [open, setOpen] = useState(false);
+  const [shownText, setShownText] = useState(text);
   const detailId = useId();
+  if (shownText !== text) {
+    setShownText(text);
+    setOpen(false);
+  }
   if (!detail) return <MarkdownDocument text={text} onReviewReport={onReviewReport} onActionError={onActionError} />;
   return (
     <>
