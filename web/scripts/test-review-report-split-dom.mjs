@@ -228,6 +228,25 @@ try {
     "认不出契约就整篇铺开，不该画出一个什么都不装的展开按钮",
   );
 
+  // ⑪ 两份「像契约、其实是抄件」的报告：说明段里抄的四行、四栏整个倒着写。两份都不该
+  //    拆——首屏写着「可以 / 没有」、真正的问题折在按钮里，正是这个改动要消灭的样子。
+  for (const [kind, selector, finding] of [
+    ["说明段里的抄件", ".prose-copy-fixture", /保存后你刚改的内容会全部消失/],
+    ["四栏倒序", ".reordered-fixture", /导出的视频仍然使用旧字幕/],
+  ]) {
+    const fake = page.locator(selector);
+    assert.match(
+      await fake.locator(".task-markdown").first().innerText(),
+      finding,
+      `${kind}：真正的问题必须默认可见`,
+    );
+    assert.equal(
+      await fake.getByRole("button", { name: /技术明细/ }).count(),
+      0,
+      `${kind}：认不出契约就整篇铺开，不该画出展开按钮`,
+    );
+  }
+
   console.log("review report split dom ok");
 } finally {
   await browser?.close();

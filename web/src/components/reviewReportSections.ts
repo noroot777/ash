@@ -21,6 +21,8 @@
 // 现在顶层二级标题由 `mdast-util-from-markdown`（`react-markdown` 渲染这份报告时用的就是
 // 它）给出，围栏、HTML 块、列表、引用、缩进代码块一次性全部各归各位。
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 
 export type ReviewReportSections = {
   /** 从开头到技术明细之前：一级标题 + 摘要那一节。不合契约时是整篇。 */
@@ -75,28 +77,26 @@ const MARK_LINES = CONTRACT_MARKS.map(
 );
 
 /**
- * 契约标记可以落在哪些行上。
+ * 摘要那一节里，够得上「一个栏目」的节点起始行——按源码先后排好。
  *
- * 标记本身仍按源码逐行认——那四行的措辞判据是一轮轮反例攒出来的，跟怎么解析无关——但
- * **哪些行有资格参选，由解析树说了算**：第一、第二个顶层 `##` 之间的顶层段落，以及顶层
- * 列表**直属**列表项里的段落。就这两种。嵌套一层的列表项也不算——「上一轮报告的结论：」
- * 底下缩一格抄四行，跟块引用是同一种伪造。
+ * 允许的形态只有两种：第一、第二个顶层 `##` 之间的**顶层段落**，以及顶层列表**直属**
+ * 列表项里的段落。嵌套一层的列表项不算——「上一轮报告的结论：」底下缩一格抄四行，跟块
+ * 引用是同一种伪造。
  *
- * 这里从前是反过来的：先收一份「不算数的行」（代码块、HTML 块），剩下的都算。那份名单
- * 永远缺一条——第 8 轮的反例是块引用。CommonMark 允许引用段落的后续行省掉 `>`，于是
- * 「> 下面引用上一轮的结论格式：」后面那四行源码看着顶格、解析树里却整段在 `blockquote`
- * 里；拿它们凑齐签名，本轮真正的问题就被折进明细。上一轮把「哪个 `##` 是分界」交给了
- * 解析器，这一半却还在自己扫字符，同一个洞于是从标题识别搬到了契约识别。
+ * 只收**起始行**，不收节点覆盖的每一行，这是第 9 轮补的一刀。收整段时，一个普通说明段
+ * 里顺手抄四行旧结论就能凑齐签名（「下面抄的是上一轮结论，不是本轮：」后面跟四行），
+ * 那一份真正的问题于是被折进明细。栏目是**独立的一段**，不是「某段里出现过这四个词」。
  *
- * 白名单这个形状才是对的：漏掉一种合法写法只是不拆（啰嗦），多算一种容器是把发现藏掉。
+ * 这份名单的形状变过两次，方向都一样。最早是黑名单（排除代码块和 HTML 块、剩下的都
+ * 算），漏了块引用——CommonMark 允许引用段落的后续行省掉 `>`，源码看着顶格、解析树里
+ * 整段在 `blockquote` 里。黑名单永远缺一条，所以换成白名单：漏掉一种合法写法只是不拆
+ * （啰嗦），多算一种容器是把发现藏掉。
  */
-function markCandidateLines(root: Parsed, after: number, before: number): Set<number> {
-  const candidates = new Set<number>();
+function markCandidateStarts(root: Parsed, after: number, before: number): number[] {
+  const starts: number[] = [];
   const take = (node: ParsedNode) => {
-    if (!node.position) return;
-    for (let at = node.position.start.line - 1; at < node.position.end.line; at += 1) {
-      if (at > after && at < before) candidates.add(at);
-    }
+    const at = node.position ? node.position.start.line - 1 : -1;
+    if (at > after && at < before) starts.push(at);
   };
   for (const node of root.children) {
     if (node.type === "paragraph") take(node);
@@ -106,7 +106,7 @@ function markCandidateLines(root: Parsed, after: number, before: number): Set<nu
       }
     }
   }
-  return candidates;
+  return starts.sort((a, b) => a - b);
 }
 
 export function splitReviewReport(text: string): ReviewReportSections {
@@ -115,7 +115,11 @@ export function splitReviewReport(text: string): ReviewReportSections {
   if (/\r(?!\n)/.test(text)) return { summary: text, detail: "" };
 
   const lines = text.split("\n");
-  const root = fromMarkdown(text);
+  // 解析配置必须跟页面上那份一致（`MarkdownBody.tsx` 用 `remark-gfm`）。不一致的地方就是
+  // 下一个洞：单列的 GFM 表格在核心语法眼里是普通段落，在页面上却是表格——我们据此拆，
+  // 用户看到的却是另一回事。同一个道理已经让这份代码栽过一次（第 7 轮：手写扫描器跟
+  // 渲染器对不上），这次直接把 GFM 扩展装上。
+  const root = fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
   // 只认**顶层**的二级标题：列表项里、引用里、HTML 块里、围栏里的 `##` 都不是分界。
   const heads: number[] = [];
   for (const node of root.children) {
@@ -130,14 +134,19 @@ export function splitReviewReport(text: string): ReviewReportSections {
   // 又跟入参逐字节一致（不悄悄替换用户的换行）。踩过的坑在正则语义：`\r` 是行终结符，
   // `.` 不匹配它、不带 `m` 的 `$` 只认串尾，于是 `**能不能验收**：不能\r` 认不出来。
   const probes = lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
-  const candidates = markCandidateLines(root, first, second);
-  // 只有**证明得了自己按新契约写**的报告才拆：四个加粗标签行全都落在第一节里。存量报告
-  // 一律整篇铺开——拆点是第二个 `##`，而它们的发现常常就在那之后（`LqhF7g_rqANy` 的缺陷
-  // 在第三个 `##`、`zs6JLcw1VAdr` 的全部发现在第一个 `##`）。把发现藏起来比让人多滚两屏
-  // 严重得多，这一档不留猜的余地：认不出只是啰嗦，认错了是骗人。
-  const complete = MARK_LINES.every((pattern) =>
-    probes.some((line, at) => candidates.has(at) && pattern.test(line)),
-  );
+  // 只有**证明得了自己按新契约写**的报告才拆：四个栏目各占一段，齐全、按序、不重样。
+  // 存量报告一律整篇铺开——拆点是第二个 `##`，而它们的发现常常就在那之后
+  // （`LqhF7g_rqANy` 的缺陷在第三个 `##`、`zs6JLcw1VAdr` 的全部发现在第一个 `##`）。
+  // 把发现藏起来比让人多滚两屏严重得多，这一档不留猜的余地：认不出只是啰嗦，认错了
+  // 是骗人。
+  //
+  // 「按序、不重样」是第 9 轮补的：只问「这四个标签各自出现过没有」时，四栏完全倒着
+  // 写也算数——那更像是抄了一份别人的结论，而不是按这份契约写的摘要。
+  const found = markCandidateStarts(root, first, second)
+    .map((at) => MARK_LINES.findIndex((pattern) => pattern.test(probes[at])))
+    .filter((index) => index >= 0);
+  const complete =
+    found.length === MARK_LINES.length && found.every((index, order) => index === order);
   if (!complete) return { summary: text, detail: "" };
   return {
     summary: lines.slice(0, second).join("\n").trimEnd(),

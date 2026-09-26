@@ -1,6 +1,9 @@
-// 报告摘要/明细的拆分契约。钉住它是因为契约横跨前后端：`server/src/review-report-format.ts`
-// 让审查者写出四段固定摘要，这里认那四段拆。任何一边漂了，用户要么看见整篇合规证明，
-// 要么更糟——发现被藏掉。所以「认不出契约时必须整篇铺开」是重点用例。
+// 一份报告**算不算按契约写的**——签名判据。钉住它是因为契约横跨前后端：
+// `server/src/review-report-format.ts` 让审查者写出四段固定摘要，这里认那四段拆。任何
+// 一边漂了，用户要么看见整篇合规证明，要么更糟——发现被藏掉。所以「认不出契约时必须整篇
+// 铺开」是重点用例。
+//
+// 「哪个 `##` 是分界」那一类在 `test-review-report-boundary.mjs`。
 //
 // 四条**别再走回头路**的判据，各自有用例钉在下面：
 // ① 别改回「标题里有没有『结论』」——那一版放行过两份真实报告，把【高】/高危发现整批
@@ -9,34 +12,15 @@
 //    「命中任意两段」让半套摘要过关；「只锚定行首」让 `**能不能验收不了**` 过关；
 //    「只要求闭合 `**`」让 `**能不能验收**不了解的人先看这里` 过关。首屏都写着有问题，
 //    问题本身都在折叠里。认不出只是啰嗦，认错了是骗人——拿不准就不拆。
-// ③ 别把「哪个 `##` 是分界」改回自己数字符。手写扫描器连错三轮（围栏闭合、HTML 注释、
-//    列表里的缩进标题），每轮都是同一种形状：我们以为那行是标题、渲染器不这么认，拆点
-//    落在一段不存在的边界上，必须修的问题被折进明细。下面那一批「不是顶层标题」的用例
-//    现在由解析器保证，改判据前先想清楚要怎么重新保证它们。
-// ④ 「哪些行有资格当契约标记」别改回黑名单。「排除代码块和 HTML 块、剩下的都算」漏过
+// ③ 「哪些行有资格当契约标记」别改回黑名单。「排除代码块和 HTML 块、剩下的都算」漏过
 //    块引用——引用段落的后续行可以省掉 `>`，源码看着顶格，解析树里整段在 blockquote 里。
 //    白名单（顶层段落 + 顶层列表直属项）漏掉一种写法只是不拆，黑名单漏掉一种是藏发现。
+// ④ 签名要认「四个独立栏目、齐全按序不重样」，不是「这四个词都出现过」。只收节点**起始
+//    行**——收整段时，一个说明段里顺手抄四行旧结论就够签名了；只验集合不验顺序时，四栏
+//    完全倒着写也算数。两种都是抄件，不是按契约写的摘要。
 import assert from "node:assert/strict";
 import { splitReviewReport } from "../src/components/reviewReportSections.ts";
-
-/** 四个固定小标题的加粗标签行——契约签名就是它们齐全地出现在第一节里。 */
-const contract = [
-  "**能不能验收**：不能 —— 有 1 条必须先修，最要命的是烧录用了旧字幕",
-  "",
-  "**现在什么能用了**：深色主题下卡片不再出现亮紫白空位。",
-  "",
-  "**必须修的问题**",
-  "",
-  "### 烧录出来的成片用的是你改之前的字幕",
-  "",
-  "你会遇到：改完字幕立刻点烧录，导出的视频里还是上一版。",
-  "",
-  "**不拦验收、但你该知道的**",
-  "",
-  "- 删除项目后整个网格会闪一下。",
-].join("\n");
-
-const conforming = ["# 第 4 轮自动验证报告", "", "## 结论", "", contract, "", "## 被审范围与基线", "", "- 基线 `d7ee0b07`", "", "## 清场", "已停掉 5175。"].join("\n");
+import { contract, conforming } from "./fixtures/review-report-contract.mjs";
 
 {
   const { summary, detail } = splitReviewReport(conforming);
@@ -299,169 +283,6 @@ for (const colon of ["：", ":"]) {
   assert.equal(splitReviewReport(only).detail, "");
 }
 
-// 围栏里的 `## xxx` 是被审代码或命令输出，不是小节标题——拿它当分界会把摘要腰斩。
-{
-  const fenced = [
-    "# 报告",
-    "",
-    "## 结论",
-    "",
-    contract,
-    "",
-    "执行者贴的原文如下：",
-    "",
-    "```md",
-    "## 这是被审文件里的标题",
-    "```",
-    "",
-    "继续写结论。",
-    "",
-    "## 真正的明细",
-    "",
-    "略",
-  ].join("\n");
-  const { summary, detail } = splitReviewReport(fenced);
-  assert.match(summary, /这是被审文件里的标题/);
-  assert.match(summary, /继续写结论。/);
-  assert.match(detail, /^## 真正的明细/);
-}
-
-// 围栏用同种记号配对：``` 块里贴的 ~~~ 不能把围栏提前关掉。
-{
-  const nested = `# 报告\n\n## 结论\n\n${contract}\n\n\`\`\`\n~~~\n## 输出里的井号\n~~~\n\`\`\`\n\n## 明细\n\n略\n`;
-  assert.match(splitReviewReport(nested).detail, /^## 明细/);
-}
-
-// 闭合判据必须比开头严（第 6 轮审查报告的反例）。CommonMark 里开头允许跟信息串
-// （```text），闭合却只允许同种记号加空白；共用一条宽松正则时，代码块里**任何一行以
-// 三个反引号打头的内容**都会把围栏提前关掉，于是代码里的 `## xxx` 成了第二个 `##`——
-// 报告从那里腰斩，真正的问题被折进明细，还被当成代码渲染。
-for (const [kind, mark] of [["反引号", "```"], ["波浪线", "~~~"]]) {
-  const report = [
-    "# 报告",
-    "",
-    "## 结论",
-    "",
-    "**能不能验收**：不能 —— 有 1 条必须先修",
-    "**现在什么能用了**：深色主题下卡片正常了。",
-    "**不拦验收、但你该知道的**：没有。",
-    "**必须修的问题**",
-    "",
-    "执行者贴的报错原文如下：",
-    "",
-    `${mark}text`,
-    `${mark}这一行仍是代码内容，不是闭合围栏`,
-    "## 命令输出里的井号",
-    mark,
-    "",
-    "### 保存后你刚改的内容会全部消失",
-    "",
-    "## 明细",
-    "",
-    "略",
-  ].join("\n");
-  const { summary, detail } = splitReviewReport(report);
-  assert.match(summary, /保存后你刚改的内容会全部消失/, `${kind}：真正的问题必须留在首屏`);
-  assert.match(summary, /命令输出里的井号/, `${kind}：代码内容里的 \`##\` 不是小节标题`);
-  assert.match(detail, /^## 明细/, `${kind}：拆点是那个真的二级标题`);
-}
-
-// 真闭合还是要认：同种记号、不短于开头、后面只有空白（更长、带尾随空格都算）。
-// 认不出闭合会把后面整篇都吞进围栏，`## 明细` 也就成了代码——这一档同样不许漂。
-{
-  const closed = `# 报告\n\n## 结论\n\n${contract}\n\n\`\`\`text\n略\n\`\`\`\`   \n\n## 明细\n\n略\n`;
-  assert.match(splitReviewReport(closed).detail, /^## 明细/, "更长的闭合记号加尾随空格仍是闭合");
-}
-
-// Markdown 允许 ATX 标题前有 0–3 个空格，认不出只是白白丢掉折叠收益（不藏内容）。
-// 样本里把契约末尾那条列表换成普通段落——紧跟在 `- ` 列表后面、又缩进 2 格的行属于
-// 列表项内容，那种形态在下一段单独钉。
-for (const pad of ["", " ", "  ", "   "]) {
-  const flat = contract.replace("- 删除项目后整个网格会闪一下。", "删除项目后整个网格会闪一下。");
-  const padded = `# 报告\n\n${pad}## 结论\n\n${flat}\n\n${pad}## 明细\n\n略\n`;
-  assert.match(
-    splitReviewReport(padded).detail,
-    /^\s{0,3}## 明细/,
-    `标题前 ${pad.length} 个空格仍是标题`,
-  );
-}
-
-// 4 个空格起就是缩进代码块，不是标题——认成标题就可能拆在代码中间。
-{
-  const indented = `# 报告\n\n    ## 结论\n\n${contract}\n\n    ## 明细\n\n略\n`;
-  assert.equal(splitReviewReport(indented).detail, "", "4 空格缩进的是代码块，不构成分界");
-}
-
-// 列表项里缩进出来的 `##` 不是顶层标题（第 6 轮补缩进容忍时带出来的洞，本轮自查发现）。
-// 只数缩进字符的扫描器会把它当成第二个 `##`，于是它后面的第二条问题被折进明细。
-{
-  const inList = [
-    "# 报告",
-    "",
-    "## 结论",
-    "",
-    contract,
-    "",
-    "### 1. 烧录用了旧字幕",
-    "",
-    "- 复现步骤：",
-    "  ## 这一行在列表项里，不是顶层标题",
-    "",
-    "### 2. 保存后你刚改的内容会全部消失",
-    "",
-    "## 明细",
-    "",
-    "略",
-  ].join("\n");
-  const { summary, detail } = splitReviewReport(inList);
-  assert.match(summary, /保存后你刚改的内容会全部消失/, "第二条问题必须留在首屏");
-  assert.match(detail, /^## 明细/, "拆点是那个真的顶层标题");
-}
-
-// 引用里的 `##` 同理：贴一段别人的报告当证据，不能拆在它身上。
-{
-  const quoted = `# 报告\n\n## 结论\n\n${contract}\n\n> ## 上一轮报告里的标题\n\n## 明细\n\n略\n`;
-  assert.match(splitReviewReport(quoted).detail, /^## 明细/, "引用里的 `##` 不是分界");
-}
-
-// HTML 块里的 `##` 同样不是标题（第 7 轮审查报告的反例）。注释根本不会显示，用户看到的
-// 是：首屏写着「有 2 条必须先修」却只列了第一条，摘要断在一个孤零零的 `<!--` 上，第二条
-// 要点开「展开技术明细」才出现——还被当成标题渲染。
-for (const [kind, open, close] of [
-  ["HTML 注释", "<!--", "-->"],
-  ["details 块", "<details>", "</details>"],
-  ["pre 块", "<pre>", "</pre>"],
-]) {
-  const hidden = [
-    "# 报告",
-    "",
-    "## 结论",
-    "",
-    contract,
-    "",
-    "### 1. 烧录用了旧字幕",
-    "",
-    open,
-    "## 这一段不会当成标题",
-    close,
-    "",
-    "### 2. 保存后你刚改的内容会全部消失",
-    "",
-    "## 明细",
-    "",
-    "略",
-  ].join("\n");
-  const { summary, detail } = splitReviewReport(hidden);
-  assert.match(summary, /保存后你刚改的内容会全部消失/, `${kind}：第二条问题必须留在首屏`);
-  assert.match(detail, /^## 明细/, `${kind}：拆点是那个真的顶层标题`);
-}
-
-// 别矫枉过正：单行注释后面紧跟的真标题还是标题，该拆照拆。
-{
-  const inline = `# 报告\n\n## 结论\n\n${contract}\n\n<!-- 一行注释 -->\n\n## 明细\n\n略\n`;
-  assert.match(splitReviewReport(inline).detail, /^## 明细/, "注释闭合了，后面的 `##` 仍是标题");
-}
-
 // 注释里留一份契约模板不算契约：那四行根本不会显示，用它凑签名等于拿看不见的字骗拆分。
 {
   const templated = [
@@ -480,15 +301,6 @@ for (const [kind, open, close] of [
   const { summary, detail } = splitReviewReport(templated);
   assert.equal(detail, "", "注释里的标签行不构成契约签名");
   assert.match(summary, /导出后所有修改都会消失/, "问题必须留在首屏");
-}
-
-// 孤立的 `\r`（老式 Mac 换行）：解析器把它当换行、我们按 `\n` 切片，行号对不上。
-// 这种时候一律整篇铺开——按错的行号拆就是把内容藏掉。
-{
-  const cr = `# 报告\r\n\r\n## 结论\r\n\r\n${contract}\r\n\r\n## 明细\r\r略\r\n`;
-  const { summary, detail } = splitReviewReport(cr);
-  assert.equal(summary, cr, "行号对不上时原样返回，一个字节都不动");
-  assert.equal(detail, "");
 }
 
 // 块引用里的标签行不算签名（第 8 轮审查报告的反例）。CommonMark 允许引用段落的后续行
@@ -535,12 +347,121 @@ for (const [kind, quote] of [
   assert.match(summary, /保存后你刚改的内容会全部消失/, "问题必须留在首屏");
 }
 
-// `###` 是小节内部结构（「必须修的问题」下面每条问题一个小标题），不构成明细分界。
+// 栏目是**独立的一段**，不是「某段里出现过这四个词」（第 9 轮审查报告的反例之一）。
+// 一个普通说明段里顺手抄四行旧结论，按「节点覆盖的每一行都能参选」算就凑齐了签名。
 {
-  const { summary, detail } = splitReviewReport(`# 报告\n\n## 结论\n\n${contract}\n\n## 明细\n\n略\n`);
-  assert.match(summary, /### 烧录出来的成片/);
-  assert.match(summary, /改完字幕立刻点烧录/);
-  assert.match(detail, /^## 明细/);
+  const prose = [
+    "# 报告",
+    "",
+    "## 前言",
+    "",
+    "下面抄的是上一轮结论，不是本轮：",
+    ...contract.split("\n").filter((line) => line.startsWith("**")),
+    "",
+    "## 真正的问题",
+    "",
+    "### 保存后你刚改的内容会全部消失",
+  ].join("\n");
+  const { summary, detail } = splitReviewReport(prose);
+  assert.equal(detail, "", "说明段里抄的四行不构成契约签名");
+  assert.match(summary, /保存后你刚改的内容会全部消失/, "问题必须留在首屏");
+}
+
+// 四栏挤在同一段里（中间没有空行）同样不算：那是一整段，不是四个栏目。
+{
+  const crammed = [
+    "# 报告",
+    "",
+    "## 结论",
+    "",
+    ...contract.split("\n").filter((line) => line.startsWith("**")),
+    "",
+    "## 真正的问题",
+    "",
+    "### 保存后你刚改的内容会全部消失",
+  ].join("\n");
+  const { summary, detail } = splitReviewReport(crammed);
+  assert.equal(detail, "", "四栏挤成一段不构成契约签名");
+  assert.match(summary, /保存后你刚改的内容会全部消失/, "问题必须留在首屏");
+}
+
+// 顺序也是契约的一部分（`server/src/review-report-format.ts` 的规则表就是按这个次序
+// 排的）。只问「四个标签各自出现过没有」时，完全倒着写也算数——那更像抄了一份别人的
+// 结论，而不是按这份契约写的摘要。
+{
+  const labels = contract.split("\n").filter((line) => line.startsWith("**"));
+  const reversed = [
+    "# 报告",
+    "",
+    "## 结论",
+    "",
+    ...[...labels].reverse().flatMap((line) => [line, ""]),
+    "## 真正的问题",
+    "",
+    "### 导出的视频仍然使用旧字幕",
+  ].join("\n");
+  const { summary, detail } = splitReviewReport(reversed);
+  assert.equal(detail, "", "四栏倒序不构成契约签名");
+  assert.match(summary, /导出的视频仍然使用旧字幕/, "问题必须留在首屏");
+}
+
+// 重样的也不算：同一栏写两遍说明这不是一份按契约写的摘要，宁可不拆。
+{
+  const repeated = `# 报告\n\n## 结论\n\n${contract}\n\n**能不能验收**：再说一遍\n\n## 明细\n\n略\n`;
+  assert.equal(splitReviewReport(repeated).detail, "", "栏目重复不构成契约签名");
+}
+
+// 解析配置必须跟页面一致。这段单列 GFM 表格在核心语法眼里是普通段落、在页面上是表格——
+// 拆分器据此拆，用户看到的却是另一回事。同一个道理第 7 轮已经栽过一次。
+{
+  const table = [
+    "# 报告",
+    "",
+    "## 结论",
+    "",
+    "**能不能验收**：可以 |",
+    "--- |",
+    "**现在什么能用了**：略 |",
+    "**必须修的问题**：没有 |",
+    "**不拦验收、但你该知道的**：没有 |",
+    "",
+    "## 真正的问题",
+    "",
+    "### 导出的视频仍然使用旧字幕",
+  ].join("\n");
+  const { summary, detail } = splitReviewReport(table);
+  assert.equal(detail, "", "表格里的四行不构成契约签名");
+  assert.match(summary, /导出的视频仍然使用旧字幕/, "问题必须留在首屏");
+}
+
+// 四张各带分隔行的表格：这一份**只有装上 GFM 才认得出**。核心语法把它们读成四个段落，
+// 每段首行正好是一个栏目、顺序还对——签名当场齐全，真正的问题被折进明细；页面上渲染出来
+// 的却是四张表格。拆分和渲染用两套语法，分歧就长在这种地方。
+{
+  const tables = [
+    "# 报告",
+    "",
+    "## 结论",
+    "",
+    "**能不能验收**：可以 | x",
+    "--- | ---",
+    "",
+    "**现在什么能用了**：略 | x",
+    "--- | ---",
+    "",
+    "**必须修的问题**：没有 | x",
+    "--- | ---",
+    "",
+    "**不拦验收、但你该知道的**：没有 | x",
+    "--- | ---",
+    "",
+    "## 真正的问题",
+    "",
+    "### 导出的视频仍然使用旧字幕",
+  ].join("\n");
+  const { summary, detail } = splitReviewReport(tables);
+  assert.equal(detail, "", "表头里的四个栏目名不构成契约签名");
+  assert.match(summary, /导出的视频仍然使用旧字幕/, "问题必须留在首屏");
 }
 
 // 列表符号打头的标签行也认：`- **能不能验收**：…` 是同一段结构，不是另一种写法。
@@ -551,29 +472,6 @@ for (const [kind, quote] of [
     /^## 明细/,
     "标签行前面带列表符号仍属于契约",
   );
-}
-
-// Windows 上生成的报告（CRLF）必须一视同仁。踩过的坑不在换行本身，而在正则：`\r` 是
-// 行终结符，`.` 不匹配它、不带 `m` 的 `$` 只认串尾，于是 `## 结论\r` 一个标题都认不出，
-// 整份合规报告掉进「认不出契约」那条降级路径——首屏全是基线和命令输出，连按钮都没有。
-{
-  const crlf = conforming.replace(/\n/g, "\r\n");
-  const { summary, detail } = splitReviewReport(crlf);
-  assert.match(summary, /## 结论/, "CRLF 报告同样要拆出摘要");
-  assert.match(summary, /烧录出来的成片/, "问题留在摘要里");
-  assert.doesNotMatch(summary, /被审范围|d7ee0b07|清场/, "技术记录不该留在摘要里");
-  assert.match(detail, /^## 被审范围与基线/, "明细从第二个 `##` 起");
-  // 返回的正文跟入参逐字节一致：认 CRLF 不等于替换用户的换行。
-  assert.ok(detail.includes("\r\n"), "切片必须用原始行，别把 CRLF 悄悄改成 LF");
-  assert.equal(`${summary}\r\n\r\n${detail}`.replace(/\s+/g, ""), crlf.replace(/\s+/g, ""));
-}
-
-// 认不出契约的 CRLF 报告同样整篇铺开（降级路径不因换行而变）。
-{
-  const legacyCrlf = "# 第 1 轮\r\n\r\n## 一、改动范围\r\n\r\n27 个文件。\r\n\r\n## 三、发现的缺陷\r\n\r\n缺陷 1……\r\n";
-  const { summary, detail } = splitReviewReport(legacyCrlf);
-  assert.equal(summary, legacyCrlf, "拆不动时原样返回，一个字节都不动");
-  assert.equal(detail, "");
 }
 
 // 空报告不该炸。
