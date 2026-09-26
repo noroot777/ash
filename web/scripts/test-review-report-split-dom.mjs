@@ -195,6 +195,27 @@ try {
     "拆点应当落在那个真的二级标题上",
   );
 
+  // ⑨ 结论里夹了一段 HTML 注释：里面的 `##` 不是分界，后面那条问题必须默认可见。
+  //    （这份渲染器不解析裸 HTML，注释会以纯文本显示——那不影响这里要保证的事：
+  //    它在 Markdown 里不是标题，不能拿它当拆点。）
+  const comment = page.locator(".comment-fixture");
+  const commentSummary = await comment.locator(".task-markdown").first().innerText();
+  assert.match(commentSummary, /烧录出来的成片/, "第一条问题默认可见");
+  assert.match(commentSummary, /保存后你刚改的内容会全部消失/, "第二条问题同样默认可见");
+  assert.match(commentSummary, /这一段不会当成标题/, "注释整段留在摘要里，没被当成分界");
+  assert.doesNotMatch(commentSummary, /被审范围与基线|d7ee0b07/, "技术记录该收进明细");
+  assert.equal(
+    await comment.locator(".task-markdown").first().getByRole("heading", { name: /这一段不会当成标题/ }).count(),
+    0,
+    "注释里的 `##` 不是标题",
+  );
+  await comment.getByRole("button", { name: /展开技术明细/ }).click();
+  assert.match(
+    await comment.locator(".review-report-detail .task-markdown").innerText(),
+    /d7ee0b07/,
+    "拆点应当落在那个真的顶层标题上",
+  );
+
   console.log("review report split dom ok");
 } finally {
   await browser?.close();

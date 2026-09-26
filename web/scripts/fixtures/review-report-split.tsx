@@ -120,6 +120,38 @@ const fenced = `# 第 6 轮自动验证报告
 - 被审 HEAD：\`d7ee0b07\`
 `;
 
+// 结论里夹了一段 HTML 注释，注释后面还有第二条问题。只数字符的扫描器会把注释里的 `##`
+// 当成第二个二级标题：首屏写着「有 2 条必须先修」却只列第一条，摘要断在一个孤零零的
+// `<!--` 上，第二条要点开按钮才出现——注释内容还被当成标题渲染出来。
+const commented = `# 第 7 轮自动验证报告
+
+## 结论
+
+**能不能验收**：不能 —— 有 2 条必须先修
+
+**现在什么能用了**：项目中心的卡片在深色主题下不再出现亮紫白空位。
+
+**不拦验收、但你该知道的**：没有。
+
+**必须修的问题**
+
+### 1. 烧录出来的成片用的是你改之前的字幕
+
+你会遇到：改完字幕立刻点烧录，导出的视频里还是上一版。
+
+<!--
+## 这一段不会当成标题，下面那条问题才是第二条
+-->
+
+### 2. 保存后你刚改的内容会全部消失
+
+你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
+
+## 被审范围与基线
+
+- 被审 HEAD：\`d7ee0b07\`
+`;
+
 // 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
 //
@@ -154,6 +186,9 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="fence-fixture markdown-report-body">
       <ReviewReportBody text={fenced} reportKey="run-4:6" />
+    </div>
+    <div className="comment-fixture markdown-report-body">
+      <ReviewReportBody text={commented} reportKey="run-5:7" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

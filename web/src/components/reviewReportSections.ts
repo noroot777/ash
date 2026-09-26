@@ -10,6 +10,17 @@
 // 是写给人看的摘要，里面有「能不能验收 / 现在什么能用了 / 必须修的问题 / 不拦验收但你该
 // 知道的」四个固定小标题，下一个 `##` 起是技术明细。**认不出这四段结构就整篇铺开**——
 // 存量报告没有这个约定，宁可啰嗦也不能把内容藏掉。
+//
+// 「哪个 `##` 是分界」交给解析器，不自己数字符。手写的行扫描器在这上面连错三轮，每轮都
+// 是同一种形状——我们以为那行是标题，渲染器不这么认，于是拆点落在一段本不存在的边界上，
+// 必须修的问题被折进「展开技术明细」：
+// ① 第 6 轮：代码示例里一行带说明文字的 ```，被当成闭合围栏，块里的 `##` 成了拆点；
+// ② 第 7 轮：`<!-- ... -->` 里的 `##` 成了拆点，摘要断在一个孤零零的 `<!--` 上；
+// ③ 同轮自查：列表项里缩进两格的 `##` 也成了拆点（第 6 轮补缩进容忍时带出来的）。
+// 每修一个角就露出下一个角，因为判据本身是「我复刻的 CommonMark」而不是 CommonMark。
+// 现在顶层二级标题由 `mdast-util-from-markdown`（`react-markdown` 渲染这份报告时用的就是
+// 它）给出，围栏、HTML 块、列表、引用、缩进代码块一次性全部各归各位。
+import { fromMarkdown } from "mdast-util-from-markdown";
 
 export type ReviewReportSections = {
   /** 从开头到技术明细之前：一级标题 + 摘要那一节。不合契约时是整篇。 */
@@ -18,26 +29,8 @@ export type ReviewReportSections = {
   detail: string;
 };
 
-/**
- * 围栏开头：三个以上反引号或波浪线。
- *
- * **开头和结尾不能共用一条判据。**CommonMark 里开头允许跟信息串（```text），结尾却只
- * 允许同种记号加空白。拿开头这条宽松的正则去认结尾，代码块里任何一行以三个反引号打头
- * 的内容——贴进来的原始报告、命令输出里的 diff——都会把围栏提前关掉；关掉之后代码里的
- * `## xxx` 就成了第二个二级标题，报告从那里腰斩：首屏只剩半截代码，真正的问题连同后
- * 半截代码一起被折进「展开技术明细」，还被当成代码渲染。
- */
-const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
-/** 围栏结尾：同种记号、不短于开头，而且**后面只能是空白**。 */
-const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
-/**
- * 正好两个 `#`：`###` 是小节内部结构，不构成明细分界。
- *
- * 缩进容忍 0–3 个**空格**（Markdown 对 ATX 标题就是这么算的），但写 ` ` 不写 `\s`：
- * 制表符按 4 列算，`\t## x` 是缩进代码块而不是标题，认成标题就可能拆在代码中间。
- * 下面的标记行同理。
- */
-const H2 = /^ {0,3}##\s+(.*)$/;
+type Parsed = ReturnType<typeof fromMarkdown>;
+type ParsedNode = Parsed | Parsed["children"][number];
 
 /**
  * 新契约那一节的四个固定小标题（`server/src/review-report-format.ts` 要求原样写出）。
@@ -72,6 +65,8 @@ const CONTRACT_MARKS = ["能不能验收", "现在什么能用了", "必须修�
  *
  * 两个分支对应上面说的两种写法：冒号在加粗外面时，它（或行尾）就是标签结束的证据；
  * 冒号在加粗里面时，紧跟在标签后的那个冒号本身就是证据，后面写什么都行。
+ *
+ * 缩进写 ` {0,3}` 不写 `\s{0,3}`：制表符按 4 列算，那已经是缩进代码块了。
  */
 const MARK_LINES = CONTRACT_MARKS.map(
   (mark) => new RegExp(
@@ -79,54 +74,57 @@ const MARK_LINES = CONTRACT_MARKS.map(
   ),
 );
 
-export function splitReviewReport(text: string): ReviewReportSections {
-  const lines = text.split("\n");
-  // 匹配用的是**去掉行尾 `\r` 的副本**，切片仍用原始行——这样 CRLF 报告认得出，返回的
-  // 正文又跟入参逐字节一致（不悄悄替换用户的换行）。
-  //
-  // 非这么做不可：JS 正则里 `\r` 是行终结符，`.` 不匹配它，而不带 `m` 的 `$` 只认串尾。
-  // 于是 `## 结论\r` 里 `(.*)` 吃不下 `\r`、`$` 又不肯在它前面收手，**一个二级标题都认
-  // 不出来**，整份 Windows 报告直接走「认不出契约」那条降级路径：基线、命令输出、清场
-  // 记录全铺在首屏，连展开按钮都没有——正是这个改动要消灭的样子。
-  const probes = lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
-  const heads: { at: number; title: string }[] = [];
-  /** 每个契约标记出现过的行号；围栏里的不算。 */
-  const markAt: number[][] = CONTRACT_MARKS.map(() => []);
-  // 围栏里的 `## xxx` 是被审代码或命令输出的一部分，不是小节标题。开闭分别判：开头认
-  // 记号种类，结尾还要求同种、不短于开头、后面只有空白——这样 ``` 块里贴的 ~~~ 关不掉
-  // 它，块里那行带着说明文字的 ``` 也关不掉它。
-  let fence: string | null = null;
-  for (const [at, line] of probes.entries()) {
-    if (fence) {
-      const close = FENCE_CLOSE.exec(line)?.[1];
-      if (close && close[0] === fence[0] && close.length >= fence.length) fence = null;
-      continue;
+/**
+ * 代码块和 HTML 块占掉的行号。
+ *
+ * 契约标记仍按源码逐行认——那四行的措辞判据是一轮轮反例攒出来的，跟怎么解析无关——但
+ * 认之前要先把这些行摘掉：贴一份别人的报告当证据，或者在注释里留一段模板，都不能把自己
+ * 变成契约报告。
+ */
+function inertLines(root: Parsed): Set<number> {
+  const inert = new Set<number>();
+  const walk = (node: ParsedNode) => {
+    if ((node.type === "code" || node.type === "html") && node.position) {
+      for (let at = node.position.start.line - 1; at < node.position.end.line; at += 1) inert.add(at);
     }
-    const open = FENCE_OPEN.exec(line)?.[1];
-    if (open) {
-      fence = open;
-      continue;
-    }
-    const title = H2.exec(line)?.[1];
-    if (title !== undefined) {
-      heads.push({ at, title: title.trim() });
-      continue;
-    }
-    MARK_LINES.forEach((pattern, index) => {
-      if (pattern.test(line)) markAt[index].push(at);
-    });
-  }
+    if ("children" in node) for (const child of node.children) walk(child);
+  };
+  walk(root);
+  return inert;
+}
 
+export function splitReviewReport(text: string): ReviewReportSections {
+  // 解析器把孤立的 `\r` 也当换行，我们按 `\n` 切片——真碰上这种老式换行，行号就对不上了。
+  // 对不上时一律整篇铺开：认不出只是啰嗦，按错的行号拆是把内容藏掉。
+  if (/\r(?!\n)/.test(text)) return { summary: text, detail: "" };
+
+  const lines = text.split("\n");
+  const root = fromMarkdown(text);
+  // 只认**顶层**的二级标题：列表项里、引用里、HTML 块里、围栏里的 `##` 都不是分界。
+  const heads: number[] = [];
+  for (const node of root.children) {
+    if (node.type === "heading" && node.depth === 2 && node.position) {
+      heads.push(node.position.start.line - 1);
+    }
+  }
   const [first, second] = heads;
-  if (!first || !second) return { summary: text, detail: "" };
+  if (first === undefined || second === undefined) return { summary: text, detail: "" };
+
+  // 匹配用的是去掉行尾 `\r` 的副本，切片仍用原始行——这样 CRLF 报告认得出，返回的正文
+  // 又跟入参逐字节一致（不悄悄替换用户的换行）。踩过的坑在正则语义：`\r` 是行终结符，
+  // `.` 不匹配它、不带 `m` 的 `$` 只认串尾，于是 `**能不能验收**：不能\r` 认不出来。
+  const probes = lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  const inert = inertLines(root);
   // 只有**证明得了自己按新契约写**的报告才拆：四个加粗标签行全都落在第一节里。存量报告
   // 一律整篇铺开——拆点是第二个 `##`，而它们的发现常常就在那之后（`LqhF7g_rqANy` 的缺陷
   // 在第三个 `##`、`zs6JLcw1VAdr` 的全部发现在第一个 `##`）。把发现藏起来比让人多滚两屏
   // 严重得多，这一档不留猜的余地：认不出只是啰嗦，认错了是骗人。
-  const complete = markAt.every((hits) => hits.some((at) => at > first.at && at < second.at));
+  const complete = MARK_LINES.every((pattern) =>
+    probes.some((line, at) => at > first && at < second && !inert.has(at) && pattern.test(line)),
+  );
   if (!complete) return { summary: text, detail: "" };
   return {
-    summary: lines.slice(0, second.at).join("\n").trimEnd(),
-    detail: lines.slice(second.at).join("\n").trimEnd(),
+    summary: lines.slice(0, second).join("\n").trimEnd(),
+    detail: lines.slice(second).join("\n").trimEnd(),
   };
 }
