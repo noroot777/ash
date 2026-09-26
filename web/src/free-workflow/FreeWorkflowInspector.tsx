@@ -16,7 +16,7 @@ import {
   Wrench,
 } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { MarkdownBody, ReviewReportBody } from "../components/MarkdownBody.tsx";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewNote } from "../review/ReviewNote.tsx";
@@ -269,7 +269,7 @@ export function FreeWorkflowInspector({
       >
         <div className="review-round-body">
           {opened.run.note && <ReviewNote text={opened.run.note} />}
-          {opened.round.reportMarkdown ? <MarkdownBody text={opened.round.reportMarkdown} /> : <p>报告尚未生成。</p>}
+          {opened.round.reportMarkdown ? <ReviewReportBody text={opened.round.reportMarkdown} /> : <p>报告尚未生成。</p>}
           {/* 驳回与辩论跟报告长在同一轮上，读结论的人必须在同一个地方读到「执行者不认这条、
               理由是什么」。这里只回放，裁定入口在审查面板那张卡上（一个动作一个入口）。 */}
           {opened.round.dispute && (

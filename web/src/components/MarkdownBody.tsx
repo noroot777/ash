@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { X } from "@phosphor-icons/react";
+import { CaretDown, X } from "@phosphor-icons/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
+import { splitReviewReport } from "./reviewReportSections.ts";
 import {
   imagePreviewTarget,
   isLocalDiskImagePath,
@@ -96,6 +97,59 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
   );
 }
 
+/**
+ * 审查报告正文：摘要段铺开，技术明细收进开关。拆不动（存量报告不合契约）就整篇铺开，
+ * 不会把内容藏掉——判据和理由见 `reviewReportSections.ts`。
+ *
+ * 明细用条件渲染而不是 `hidden`：折叠着的那半截里的截图不该混进 `ImagePreviewGroup`
+ * 的灯箱队列，否则左右翻会翻到屏幕上根本没有的图。
+ */
+function ReviewReportSplit({ text, onReviewReport, onActionError }: {
+  text: string;
+  onReviewReport: (target: ReviewFileTarget) => void;
+  onActionError: (message: string | null) => void;
+}) {
+  const { summary, detail } = useMemo(() => splitReviewReport(text), [text]);
+  const [open, setOpen] = useState(false);
+  const detailId = useId();
+  if (!detail) return <MarkdownDocument text={text} onReviewReport={onReviewReport} onActionError={onActionError} />;
+  return (
+    <>
+      <MarkdownDocument text={summary} onReviewReport={onReviewReport} onActionError={onActionError} />
+      <button
+        type="button"
+        className={`review-report-more${open ? " is-open" : ""}`}
+        aria-expanded={open}
+        aria-controls={open ? detailId : undefined}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <CaretDown size={11} weight="bold" aria-hidden="true" />
+        {open ? "收起技术明细" : "展开技术明细（验证过程、证据、清场记录）"}
+      </button>
+      {open && (
+        <div id={detailId} className="review-report-detail">
+          <MarkdownDocument text={detail} onReviewReport={onReviewReport} onActionError={onActionError} />
+        </div>
+      )}
+    </>
+  );
+}
+
+/** 跟 `MarkdownBody` 同构，只是正文走上面的拆分。报告以外的地方别用它。 */
+export function ReviewReportBody({ text }: { text: string }) {
+  const [reviewReport, setReviewReport] = useState<ReviewFileTarget | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  return (
+    <ImagePreviewGroup>
+      <ReviewReportSplit text={text} onReviewReport={setReviewReport} onActionError={setActionError} />
+      {actionError && <p className="markdown-action-error" role="status">本地文件打开失败：{actionError}</p>}
+      {reviewReport && (
+        <ReviewReportDialog target={reviewReport} onReviewReport={setReviewReport} onClose={() => setReviewReport(null)} />
+      )}
+    </ImagePreviewGroup>
+  );
+}
+
 export function ReviewReportDialog({ target, onReviewReport, onClose }: {
   target: ReviewFileTarget;
   onReviewReport: (target: ReviewFileTarget) => void;
@@ -151,7 +205,7 @@ export function ReviewReportDialog({ target, onReviewReport, onClose }: {
         <div className="markdown-report-body">
           {text !== null ? (
             <ImagePreviewGroup isolated>
-              <MarkdownDocument text={text} onReviewReport={onReviewReport} onActionError={setActionError} />
+              <ReviewReportSplit text={text} onReviewReport={onReviewReport} onActionError={setActionError} />
             </ImagePreviewGroup>
           ) : error ? (
             <p className="markdown-report-error">审查报告加载失败：{error}</p>

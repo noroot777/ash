@@ -9,7 +9,7 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { ReviewReportBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { ReviewDispatchControl } from "../review/ReviewDispatchControl.tsx";
@@ -87,7 +87,7 @@ export function ReviewRoundBody({
   const reviewTaskId = round.reviewTaskId;
   return (
     <>
-      {round.reportMarkdown ? <MarkdownBody text={round.reportMarkdown} /> : <p>验证报告尚未写入。</p>}
+      {round.reportMarkdown ? <ReviewReportBody text={round.reportMarkdown} /> : <p>验证报告尚未写入。</p>}
       {includeScreenshots && round.screenshots.length > 0 && (
         <section className="review-shots">
           <h5><ImageSquare size={12} />证据截图 · {round.screenshots.length}</h5>

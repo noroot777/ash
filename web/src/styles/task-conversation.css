@@ -132,6 +132,18 @@
 .markdown-report-error { margin: 0; color: var(--faint); font-size: 12px; }
 .markdown-report-error { color: var(--red); }
 
+/* 摘要段和技术明细之间的那道开关。做成一条贯通的分隔线而不是普通按钮：它在语义上是
+   「上面写给你看，下面写给照着修的 agent 看」的分界，不是一个可有可无的动作。 */
+.review-report-more { display: flex; width: 100%; align-items: center; justify-content: center; gap: 6px; margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); padding: 7px 10px; color: var(--muted); font-size: 11px; }
+.review-report-more:hover { border-color: var(--line2); color: var(--ink); }
+.review-report-more svg { transition: transform .15s ease; }
+.review-report-more.is-open svg { transform: rotate(180deg); }
+.review-report-detail { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .review-report-more svg { transition: none; }
+}
+
 .task-agent-segment + .task-agent-segment { margin-top: 7px; }
 .task-execution-block { max-width: 680px; margin: 2px 0 1px; border: 0; color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; }
 .task-execution-block > summary { display: inline-flex; max-width: 100%; cursor: pointer; align-items: center; gap: 4px; border-radius: 5px; padding: 2px 3px; list-style: none; opacity: .72; transition: color 150ms ease, opacity 150ms ease; }

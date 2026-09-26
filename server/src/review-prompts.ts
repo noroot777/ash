@@ -19,6 +19,7 @@ import { taskWorkflowDef } from "./workflows.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { reviewRequestReference } from "./review-request-context.js";
 import { BROWSER_VERIFICATION_POLICY, BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
+import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import type { Workspace } from "./git.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -57,7 +58,8 @@ function verifyRules(evidenceDir: string): string {
     `- 截图按需：**改动看得见**（界面、渲染结果、视觉回归）时必须截，因为文字替代不了；` +
     `看不见的改动（服务端逻辑、CLI、脚本、纯数据）**不需要截图就别截**，别为了凑证据补一张没有信息量的图。截了就放在 ${evidenceDir} 目录内\n` +
     `- 证据**只落盘，绝不 git add / commit 进仓库**（data/ 本就在 .gitignore 里，不要 -f 强加）：` +
-    `验收界面直接从磁盘读证据，塞进 git 只会拿二进制文件污染被审分支的验收 diff\n\n`;
+    `验收界面直接从磁盘读证据，塞进 git 只会拿二进制文件污染被审分支的验收 diff\n\n` +
+    REPORT_SUMMARY_FORMAT;
 }
 
 /**
@@ -96,6 +98,7 @@ export async function verifyProtocolFor(
 export function verifyReminderFor(taskId: string, round: number): string {
   const dir = reviewRoundDir(taskId, round);
   return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
+    REPORT_SUMMARY_REMINDER +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
     BROWSER_VERIFICATION_REMINDER +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
@@ -133,6 +136,7 @@ export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "rev
   if (!review.reviewOf || !review.reviewRound) return "";
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
   return `审查提醒:这是第 ${review.reviewRound} 轮审查；必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
+    REPORT_SUMMARY_REMINDER +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
     BROWSER_VERIFICATION_REMINDER +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
