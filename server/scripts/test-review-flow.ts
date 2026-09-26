@@ -280,6 +280,22 @@ const assertBrowserOrder = (text: string, source: string) => {
 assertBrowserOrder(reviewPrompt, "自动验证 prompt");
 assertBrowserOrder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
 assertBrowserOrder(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "历史审查续跑提醒");
+// 续跑提醒是被打断那条路径上**唯一**还在重贴格式要求的东西（完整 prompt 不重发）。
+// 所以凡是「丢了报告就退回改动之前的样子」的规则，都必须在缩略版里也留得住：首句点名
+// 最要命的那条、摘要最多 5 条——只写栏目名的话，续跑出来的报告又会是「有 11 条，自己翻」。
+const assertSummaryRules = (text: string, source: string) => {
+  assert.match(text, /能不能验收/, `${source} 必须带上摘要四栏`);
+  // 完整 prompt 和缩略提醒措辞不同（前者「第一行「你会遇到」」、后者「第一行只写用户会
+  // 遇到什么」），所以两种都认——断言钉的是规则在不在，不是措辞怎么写。
+  assert.match(text, /第一行「你会遇到」|第一行只写用户会遇到什么/, `${source} 必须要求第一行写现象`);
+  assert.match(text, /第二行「为什么」|机制放第二行/, `${source} 必须要求机制退到第二行`);
+  assert.match(text, /最要命/, `${source} 必须要求首句点名最严重的那一条`);
+  assert.match(text, /最多展开 5 条/, `${source} 必须保留摘要 5 条上限`);
+  assert.match(text, /一条都?不许丢|完整三行写进技术明细/, `${source} 必须说明超出的条目去哪，别被读成截断`);
+};
+assertSummaryRules(reviewPrompt, "自动验证 prompt");
+assertSummaryRules(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
+assertSummaryRules(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "历史审查续跑提醒");
 const globalFreshPrompt = withGlobalBrowserPolicy("普通任务正文", "full");
 assert.match(globalFreshPrompt, /【全局浏览器操作规范】/, "普通新会话必须收到全局浏览器规范");
 assertBrowserOrder(globalFreshPrompt, "普通新会话");

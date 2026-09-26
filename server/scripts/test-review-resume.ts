@@ -88,6 +88,13 @@ try {
     assert.ok(message.includes("directionToken"), "方向身份必须带上，否则 report_stage 会被拒");
     assert.ok(message.includes("不要调用 complete_task"), "旁路审查回合的边界必须重申");
     assert.ok(/不要从头/.test(message), "这句话的全部意义就是「别从头再来」");
+    // 格式要求在这条路径上只有这句话跟得到底（完整 prompt 不重发），所以凡是「丢了就
+    // 退回改动之前的样子」的规则都得在这里留得住——否则断线续跑出来的报告又是首屏
+    // 十几条平铺、首句只报个数。
+    assert.ok(message.includes("能不能验收"), "摘要四栏必须带上");
+    assert.ok(message.includes("最要命"), "首句必须点名最严重那条，光报数不算");
+    assert.ok(message.includes("最多展开 5 条"), "摘要 5 条上限必须带上");
+    assert.ok(/一条不许丢|完整三行写进技术明细/.test(message), "得说明超出的条目去哪，别被读成截断");
     assert.ok(message.length < 700, `续跑指令要短，现在 ${message.length} 字`);
   }
 

@@ -6,12 +6,13 @@
 // 所以拆：摘要段铺开给人看，其余收进开关。**盘上的 report.md 一个字都不动**，修复 agent
 // 读的还是完整文件——这也是能在界面上敢折叠的前提。
 //
-// 契约（`server/src/review-prompts.ts` 的 `verifyRules` 负责让审查者照着写）：
-// 报告的第一个二级标题是 `## 结论`，那一节就是写给人看的摘要，下一个 `##` 起是技术明细。
-// 对不上就整篇铺开——存量报告没有这个约定，宁可啰嗦也不能把内容藏掉。
+// 契约（`server/src/review-report-format.ts` 负责让审查者照着写）：报告的第一个二级小节
+// 是写给人看的摘要，里面有「能不能验收 / 现在什么能用了 / 必须修的问题 / 不拦验收但你该
+// 知道的」四个固定小标题，下一个 `##` 起是技术明细。**认不出这四段结构就整篇铺开**——
+// 存量报告没有这个约定，宁可啰嗦也不能把内容藏掉。
 
 export type ReviewReportSections = {
-  /** 从开头到技术明细之前：一级标题 + `## 结论` 那一节。不合契约时是整篇。 */
+  /** 从开头到技术明细之前：一级标题 + 摘要那一节。不合契约时是整篇。 */
   summary: string;
   /** 第二个 `##` 起的技术明细；为空表示这篇没拆，别画展开按钮。 */
   detail: string;
@@ -20,6 +21,20 @@ export type ReviewReportSections = {
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
 /** 正好两个 `#`：`###` 是小节内部结构，不构成明细分界。 */
 const H2 = /^##\s+(.*)$/;
+
+/**
+ * 新契约那一节的四个固定小标题（`server/src/review-report-format.ts` 要求原样写出）。
+ *
+ * 判据用它们而不是标题措辞，是因为**标题证明不了这是一份按契约写的报告**：
+ * 「0. 先说结论之外的：这轮做对的部分」和「一、先说结论：核心功能是真的能用」都含
+ * 「结论」二字，前者意思还正相反；按标题拆，这两份报告的【高】/高危发现会整批落进
+ * 一个写着「验证过程、证据、清场记录」的折叠里——用户看到的首屏只剩「做对的部分」。
+ * （真实样本：`yz74LehaZzwl/H1MQnmqKzCSl/round-1`、`KyF5hukfZ5D9/RJPSXRqyJIo2/round-1`）
+ *
+ * 要两个而不是一个：一句话里偶然出现某个词不算数，四段结构同时出现才是签名。
+ */
+const CONTRACT_MARKS = ["能不能验收", "现在什么能用了", "必须修的问题", "不拦验收"];
+const MARKS_REQUIRED = 2;
 
 export function splitReviewReport(text: string): ReviewReportSections {
   const lines = text.split("\n");
@@ -42,15 +57,13 @@ export function splitReviewReport(text: string): ReviewReportSections {
   }
 
   const [first, second] = heads;
-  // 判据是「第一个二级标题**是不是在讲结论**」，不是标题长什么样：`## 结论`、
-  // `## 结论：不能验收`、`## 给人看的结论`、`## 范围与审查结论` 都算。审查者把标题写歪
-  // 一个字就整篇铺开，那第二层就白做了。
-  //
-  // 但**不含「结论」就坚决不拆**，哪怕因此啰嗦：拆点是第二个 `##`，一律拆会把第一节之后
-  // 的东西全收进折叠，而存量报告的发现常常就在那儿——`LqhF7g_rqANy` 的缺陷在「三、发现的
-  // 缺陷」（第三个 `##`）、`zs6JLcw1VAdr` 的全部发现在「Finding」（第一个 `##`）。
-  // 把发现藏起来比让人多滚两屏严重得多，所以这一档只做保守放宽。
-  if (!first || !second || !first.title.includes("结论")) return { summary: text, detail: "" };
+  if (!first || !second) return { summary: text, detail: "" };
+  // 只有**证明得了自己按新契约写**的报告才拆。存量报告一律整篇铺开：拆点是第二个 `##`，
+  // 而它们的发现常常就在那之后——`LqhF7g_rqANy` 的缺陷在第三个 `##`、`zs6JLcw1VAdr`
+  // 的全部发现在第一个 `##`。把发现藏起来比让人多滚两屏严重得多，这一档不留猜的余地。
+  const firstSection = lines.slice(first.at, second.at).join("\n");
+  const marks = CONTRACT_MARKS.filter((mark) => firstSection.includes(mark)).length;
+  if (marks < MARKS_REQUIRED) return { summary: text, detail: "" };
   return {
     summary: lines.slice(0, second.at).join("\n").trimEnd(),
     detail: lines.slice(second.at).join("\n").trimEnd(),

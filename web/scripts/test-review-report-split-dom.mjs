@@ -83,14 +83,17 @@ try {
     "收起后明细应重新从 DOM 上摘掉",
   );
 
-  // ④ 存量报告：整篇铺开，不给展开按钮。
+  // ④ 存量报告：整篇铺开，不给展开按钮。样本的首节标题含「结论」但意思相反
+  //    （「先说结论之外的」），正是按标题判契约那一版会误拆的形态——两条【高】
+  //    会被折叠进写着「验证过程、证据、清场记录」的按钮里。
   const legacyText = await legacy.locator(".task-markdown").first().innerText();
   assert.match(legacyText, /verify_failed/, "存量报告的结论要照常可见");
   assert.match(
     legacyText,
-    /缺陷 1 深色主题下缩略图降级块/,
-    "对不上契约就整篇铺开——宁可啰嗦也不能把内容藏进折叠里",
+    /【高】身份页高内容屏/,
+    "高优先级发现必须留在首屏——认不出契约就整篇铺开，宁可啰嗦也不能把发现藏掉",
   );
+  assert.match(legacyText, /【高】设置页/, "第二条【高】同样不能被折叠吃掉");
   assert.equal(
     await legacy.getByRole("button", { name: /技术明细/ }).count(),
     0,
