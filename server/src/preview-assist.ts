@@ -10,9 +10,11 @@
 //     可能把 build 当成了 serve、也可能压根没跑。
 // 起不来就把失败原因和日志尾巴甩回给它再来一轮，最多 PREVIEW_ASSIST_MAX_ROUNDS 轮。
 //
-// 进度是**内存态**：一个项目同时只有一个 job，server 重启就没了（前端轮询拿到 null 会说
-// 一句「已随 ash 重启中断」）。不落库是有意的 —— 它是一次几分钟的交互式动作，不是任务，
-// 落库只会多出一张要清理的表和一堆「上次那个还挂在那儿」的僵尸状态。
+// 进度是**内存态**：一个项目同时只有一个 job，server 重启就没了。不落库是有意的 —— 它是
+// 一次几分钟的交互式动作，不是任务，落库只会多出一张要清理的表和一堆「上次那个还挂在那儿」
+// 的僵尸状态。代价是「重启把它打断了」这件事服务端自己说不出来，所以那句话由**点过按钮的
+// 那个浏览器**负责留下（web/src/settings/previewAssistMemory.ts：本地记着 jobId，轮询突然
+// 拿到 null 就摆出「已随 ash 重启中断」，刷新也还在）。
 import {
   parseAssistScript,
   PREVIEW_ASSIST_MAX_ROUNDS,
@@ -28,8 +30,15 @@ import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { assistOpeningPrompt, assistRetryPrompt } from "./preview-assist-prompt.js";
+import {
+  finishPreviewAssistJob as finish,
+  reservePreviewAssistJob,
+  type Job,
+} from "./preview-assist-jobs.js";
 import { trialPreviewScript } from "./preview-trial.js";
-import { id, now } from "./util.js";
+
+// 进度查询和取消就住在登记簿里（那边不碰 DB）；这里只管「起一趟」和那三轮循环。
+export { cancelPreviewAssist, previewAssistState } from "./preview-assist-jobs.js";
 
 export interface PreviewAssistStartOptions {
   projectId: string;
@@ -46,67 +55,31 @@ export interface PreviewAssistStartOptions {
   owner?: string | null;
 }
 
-interface Job {
-  state: PreviewAssistState;
-  canceled: boolean;
-  /** 正在跑的那个智能体回合，取消时要杀它。 */
-  handle: RunHandle | null;
-}
-
-const jobs = new Map<string, Job>();
-/** 结束的 job 留一会儿给前端把结果取走，之后自己清掉。 */
-const KEEP_FINISHED_MS = 10 * 60_000;
-
-export function previewAssistState(projectId: string): PreviewAssistState | null {
-  return jobs.get(projectId)?.state ?? null;
-}
-
-/** 用户点了取消。返回 false = 本来就没有在跑的。 */
-export function cancelPreviewAssist(projectId: string): boolean {
-  const job = jobs.get(projectId);
-  if (!job || job.state.status !== "running") return false;
-  job.canceled = true;
-  try { job.handle?.kill(); } catch { /* 已经退了 */ }
-  finish(job, "canceled", "已取消");
-  return true;
-}
-
 export async function startPreviewAssist(options: PreviewAssistStartOptions): Promise<PreviewAssistState> {
-  const running = jobs.get(options.projectId);
-  if (running?.state.status === "running") return running.state;
-  const executor = await resolveExecutorFor({
-    executorId: options.executorId ?? null,
-    type: options.agentType ?? null,
-    model: options.model ?? null,
-    reasoningEffort: options.reasoningEffort ?? null,
-    owner: options.owner,
-  });
-  const job: Job = {
-    canceled: false,
-    handle: null,
-    state: {
-      jobId: id(),
-      projectId: options.projectId,
-      status: "running",
-      phase: "starting",
-      round: 0,
-      maxRounds: PREVIEW_ASSIST_MAX_ROUNDS,
-      executorLabel: executor.label,
-      step: `${executor.label} 准备开工…`,
-      say: "",
-      attempts: [],
-      script: null,
-      url: null,
-      error: null,
-      startedAt: now(),
-      endedAt: null,
-    },
-  };
-  jobs.set(options.projectId, job);
-  const runEnv = await runEnvForOwner(options.owner ?? null, executor.type);
-  void loop(job, options, executor, runEnv).catch((error) => {
+  const { job, fresh } = reservePreviewAssistJob(options.projectId);
+  if (!fresh) return job.state;
+  try {
+    const executor = await resolveExecutorFor({
+      executorId: options.executorId ?? null,
+      type: options.agentType ?? null,
+      model: options.model ?? null,
+      reasoningEffort: options.reasoningEffort ?? null,
+      owner: options.owner,
+    });
+    const runEnv = await runEnvForOwner(options.owner ?? null, executor.type);
+    // 挑执行器这两步之间用户就可能点了「停止」。已经落终态的就别再往下起循环，也别拿
+    // 「准备开工」把「已取消」那句话盖回去。
+    if (job.canceled || job.state.status !== "running") return job.state;
+    job.state.executorLabel = executor.label;
+    job.state.step = `${executor.label} 准备开工…`;
+    void loop(job, options, executor, runEnv).catch((error) => {
+      finish(job, "failed", error instanceof Error ? error.message : String(error));
+    });
+  } catch (error) {
+    // 挑执行器、备环境都可能抛（供应商配歪了、owner 名下一个执行器都没有）。这时候
+    // **必须把预占的那一格落成终态**，否则界面对着一条没有循环在跑的 `running` 一直转圈。
     finish(job, "failed", error instanceof Error ? error.message : String(error));
-  });
+  }
   return job.state;
 }
 
@@ -141,6 +114,9 @@ async function loop(
       job.state.attempts = [...job.state.attempts, last];
       continue;
     }
+    // 这一轮带着错误（超时被杀、CLI 挂了）但**说过话**的，还是要解析一遍：结论早就写完、
+    // 之后才出事的情况下，那条脚本照样作数（反正接下来 ash 自己会真跑一遍）。判据在解析器
+    // 那一侧：围栏开合不齐就是半截输出，一律不认（shared/src/preview-assist.ts）。
     const script = parseAssistScript(said.text);
     if (!script) {
       noScript += 1;
@@ -247,19 +223,4 @@ async function think(
   }
   if (timedOut) error ??= `这一轮超过 ${Math.round(PREVIEW_ASSIST_THINK_MS / 60_000)} 分钟还没给结论，已中止`;
   return { text, sessionId: handle?.sessionId ?? null, error };
-}
-
-function finish(job: Job, status: PreviewAssistState["status"], error: string | null): void {
-  if (job.state.status !== "running") return;
-  job.state.status = status;
-  job.state.phase = "done";
-  job.state.error = error;
-  job.state.endedAt = now();
-  job.state.step = status === "succeeded"
-    ? `已在 ${job.state.url ?? "借来的端口"} 上真的起来过一次`
-    : error ?? "已结束";
-  const projectId = job.state.projectId;
-  setTimeout(() => {
-    if (jobs.get(projectId) === job) jobs.delete(projectId);
-  }, KEEP_FINISHED_MS).unref?.();
 }

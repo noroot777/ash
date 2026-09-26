@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AuthState, ProjectView } from "@ash/shared";
+import type { AgentExecutorProfile, AuthState, ProjectView } from "@ash/shared";
+import type { PreviewAssistState } from "@ash/shared/preview-assist";
 import type { DetectedPreviewService, ProjectPreviewConfig } from "@ash/shared/preview";
 import "../../src/styles/global.css";
 import { AuthContext } from "../../src/auth/authContext.ts";
@@ -73,15 +74,57 @@ const detectedServices: DetectedPreviewService[] = [
   },
 ];
 
+// 执行器注册表。**不能让它落到下面那条 `{}` 兜底上**：项目设置页里的「AI 协助填写」要用
+// 它算候选，拿到一个对象就是 `profiles.map is not a function`，整页白屏（第 1 轮审查复现过）。
+const executorProfiles: AgentExecutorProfile[] = [
+  { id: "a-claude", name: "claude@local·opus", type: "claude", isDefault: true },
+  { id: "a-codex", name: "codex@local·gpt-5.6", type: "codex", isDefault: true },
+];
+
+// 「AI 协助」那台短命作业的假服务端。真实的那份是内存态（server/src/preview-assist.ts），
+// 所以这里也就是一个模块级变量 —— 连带能演「ash 重启把它吞了」：把它清成 null。
+let assist: PreviewAssistState | null = null;
+const assistJob = (patch: Partial<PreviewAssistState>): PreviewAssistState => ({
+  jobId: "job-1",
+  projectId: "p-one",
+  status: "running",
+  phase: "thinking",
+  round: 1,
+  maxRounds: 3,
+  executorLabel: "claude@local·opus",
+  step: "第 1 轮：claude@local·opus 正在读这个项目，判断该怎么起",
+  say: "",
+  attempts: [],
+  script: null,
+  url: null,
+  error: null,
+  startedAt: "2026-09-26T00:00:00.000Z",
+  endedAt: null,
+  ...patch,
+});
+
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const { pathname } = new URL(href, location.origin);
   if (pathname === "/api/host") return reply({ platform: "linux", sep: "/", home: "/root", canPickDirectory: false });
+  if (pathname === "/api/agents") return reply(structuredClone(executorProfiles));
   if (pathname === "/api/projects/check") {
     return reply({ exists: true, isRepo: true, dirty: false, branch: "main" });
   }
   if (pathname === "/api/workflows") return reply([]);
+  const assistRoute = pathname.match(/^\/api\/projects\/[^/]+\/preview\/assist$/);
+  if (assistRoute) {
+    if (init?.method === "POST") {
+      assist = assistJob({});
+      return reply({ job: assist });
+    }
+    if (init?.method === "DELETE") {
+      if (assist?.status === "running") assist = { ...assist, status: "canceled", phase: "done", step: "已取消", error: "已取消", endedAt: "2026-09-26T00:01:00.000Z" };
+      return reply({ canceled: true, job: assist });
+    }
+    return reply({ job: assist });
+  }
   if (pathname.endsWith("/git")) return reply({
     identity: {
       isRepo: true,
@@ -141,6 +184,28 @@ function Fixture() {
         </button>
         <button type="button" data-testid="switch-project" onClick={() => setCurrent(loadProject("p-two"))}>
           换个项目
+        </button>
+        {/* AI 协助这台作业是内存态的：ash 一重启服务端就只会回 `job: null`。这颗按钮演的
+            就是那一下 —— 面板必须还看得出「我点过、它被打断了」，而不是退回初始按钮。 */}
+        <button type="button" data-testid="assist-restart" onClick={() => { assist = null; }}>
+          假装 ash 重启
+        </button>
+        <button
+          type="button"
+          data-testid="assist-succeed"
+          onClick={() => {
+            assist = assistJob({
+              status: "succeeded",
+              phase: "done",
+              step: "已在 http://localhost:14611/ 上真的起来过一次",
+              script: "npm run dev -- --port $PORT",
+              url: "http://localhost:14611/",
+              endedAt: "2026-09-26T00:02:00.000Z",
+              attempts: [{ round: 1, script: "npm run dev -- --port $PORT", ok: true, url: "http://localhost:14611/", reason: null, log: "ready in 300ms" }],
+            });
+          }}
+        >
+          假装真起来了
         </button>
         <ProjectSettingsPanel
           project={current}

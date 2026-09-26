@@ -18,8 +18,11 @@ const EMPTY: ExecutorCatalog = { profiles: [] };
 let cached: Promise<ExecutorCatalog> | null = null;
 
 function load(): Promise<ExecutorCatalog> {
+  // 形状守到这一层：下游（agentAvailability 的 registeredAgentTypes 等）全按数组用，拿到
+  // 一个对象就是 `profiles.map is not a function` —— 而这条 hook 挂在项目设置、composer、
+  // 线路图上，一个整页白屏换来的只是「某个接口回了别的东西」。第 1 轮审查就是这么白的。
   cached ??= api.agents().then(
-    (profiles) => ({ profiles }),
+    (profiles) => (Array.isArray(profiles) ? { profiles } : EMPTY),
     () => EMPTY,
   );
   return cached;

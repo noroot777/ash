@@ -88,6 +88,8 @@
 .preview-assist-attempt.is-ok > summary { color: var(--accent); }
 .preview-assist :is(pre) { margin: 6px 0 0; max-height: 220px; overflow: auto; border-radius: 6px; background: var(--canvas); padding: 8px 10px; color: var(--muted); font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .preview-assist .preview-assist-script { color: var(--ink); }
+/* 「中断」那张卡是本地记录推出来的，服务端没有对应的东西可轮询——它得自己带一个出口。 */
+.preview-assist-dismiss { display: flex; justify-content: flex-end; }
 @media (max-width: 680px) {
   .preview-assist-executor { margin-left: 0; width: 100%; }
 }

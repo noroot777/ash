@@ -88,7 +88,7 @@ try {
   await dialog.waitFor();
   assert.equal(await help.getAttribute("aria-expanded"), "true");
   assert.deepEqual(await dialog.getByRole("heading", { level: 3 }).allTextContents(), [
-    "自动识别启动命令", "命令在哪里执行", "预览端口与服务地址", "同时启动前后端", "把端口传给运行时", "启动失败时排查",
+    "自动识别启动命令", "AI 协助填写", "命令在哪里执行", "预览端口与服务地址", "同时启动前后端", "把端口传给运行时", "启动失败时排查",
   ]);
   const commandExample = await dialog.locator("pre").innerText();
   assert.ok(commandExample.includes("SERVER_PORT=$PORT2"));

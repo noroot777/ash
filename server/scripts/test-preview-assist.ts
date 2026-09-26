@@ -8,6 +8,7 @@
 //
 // 跑法：npm -w server run test:preview-assist
 import { parseAssistScript } from "@ash/shared/preview-assist";
+import { cancelPreviewAssist, previewAssistState, reservePreviewAssistJob } from "../src/preview-assist-jobs.js";
 import { canConnect } from "../src/preview-probe.js";
 import { trialPreviewScript } from "../src/preview-trial.js";
 
@@ -60,6 +61,26 @@ check(
 );
 check("标记后面贴回显同样不认", parseAssistScript("启动脚本：\n```sh\n$ npm run dev\n> dev\n起来了\n```"), null);
 check("单行连提示符一起粘过来，剥掉提示符", parseAssistScript("启动脚本：\n```sh\n$ npm run dev -- --port $PORT\n```"), "npm run dev -- --port $PORT");
+// 第 1 轮审查复现：模型超时被杀 / CLI 挂掉 / 撞上 200 KB 截断线的时候，输出就断在围栏里。
+// 老实现读到文件末尾也照样交给 clean()，于是半截内容进了 trialPreviewScript()，在用户的
+// 项目目录里真跑一遍 —— 而那半截里可能正好只剩某条命令的前半句。
+check(
+  "围栏没闭合 = 这段输出是半截的，不认",
+  parseAssistScript("启动脚本：\n```sh\nnpm run dev -- --port $PORT\n这段回答还没说完"),
+  null,
+);
+check("只有开头那道围栏也不认", parseAssistScript("启动脚本：\n```sh"), null);
+check("闭合了才认（同一段话补上结束围栏）", parseAssistScript("启动脚本：\n```sh\nnpm run dev -- --port $PORT\n```\n这段回答说完了"), "npm run dev -- --port $PORT");
+
+// ── 同一项目只占一格 ────────────────────────────────────────────────────────
+// 第 1 轮审查复现：老实现在「查有没有在跑」和「写进索引」之间 await 挑执行器，两个页面同时
+// 点就真起两个智能体，后写入的把前一个顶掉 —— 被顶掉的那份查不到也停不了，一直在用户的
+// 项目目录里跑着。这里直接钉预占这一步（走 startPreviewAssist 会真起 CLI，烧额度）。
+const first = reservePreviewAssistJob("p-assist-race");
+const second = reservePreviewAssistJob("p-assist-race");
+check("第二次点进来不另开一份", [second.fresh, second.job.state.jobId === first.job.state.jobId], [false, true]);
+check("拿到的就是在跑的那一份", previewAssistState("p-assist-race")?.jobId, first.job.state.jobId);
+check("停掉之后这一格能再占", [cancelPreviewAssist("p-assist-race"), reservePreviewAssistJob("p-assist-race").fresh], [true, true]);
 
 // ── 试跑判定 ────────────────────────────────────────────────────────────────
 const listen = `node -e "require('http').createServer((q,s)=>{s.end('ok')}).listen(process.env.PORT)"`;

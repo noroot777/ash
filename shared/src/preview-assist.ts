@@ -106,7 +106,7 @@ function clean(body: string): string | null {
 
 /**
  * 从智能体的整段输出里抠出那份脚本。**只认约定的那一种写法**：一整行
- * 「启动脚本：」，紧跟一个围栏块（中间可以空行），或者命令就写在同一行上。
+ * 「启动脚本：」，紧跟一个**开合齐全**的围栏块（中间可以空行），或者命令就写在同一行上。
  *
  * 曾经还有两条退路——「取最后一个围栏块」和「取标记后面那一行文字」——都删了。它们是
  * 为「它忘了写标记」准备的，实际抓到的却是它贴的终端回显、package.json 全文和半句正文，
@@ -124,9 +124,17 @@ export function parseAssistScript(text: string): string | null {
     let at = i + 1;
     while (at < lines.length && !lines[at]!.trim()) at += 1;
     if (at >= lines.length || !lines[at]!.trim().startsWith("```")) return null;
+    // **结束围栏必须真的在**。少了它意味着这段输出是半截的：模型超时被杀、CLI 挂了、
+    // 或者撞上了 200 KB 的截断线。拿半截内容当脚本的后果不是「解析失败」这么轻——
+    // ash 会把它在用户的项目目录里真跑一遍，而那半截里可能正好只剩 `rm -rf` 的前半句。
+    // 这一轮判成「没按格式给结论」重来，比赌它恰好断在一条完整命令后面便宜得多。
     const body: string[] = [];
-    for (let k = at + 1; k < lines.length && !lines[k]!.trim().startsWith("```"); k += 1) body.push(lines[k]!);
-    return clean(body.join("\n"));
+    let closed = false;
+    for (let k = at + 1; k < lines.length; k += 1) {
+      if (lines[k]!.trim().startsWith("```")) { closed = true; break; }
+      body.push(lines[k]!);
+    }
+    return closed ? clean(body.join("\n")) : null;
   }
   return null;
 }
