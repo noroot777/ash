@@ -7,6 +7,7 @@ import { useAuth } from "../auth/authContext.ts";
 import { useHostInfo } from "../lib/useHostInfo.ts";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
+import { PreviewAiAssist } from "./PreviewAiAssist.tsx";
 import { ProjectPreviewHelp } from "./ProjectPreviewHelp.tsx";
 import { ShellScriptEditor, useShellScriptWrapping } from "./ShellScriptEditor.tsx";
 import "./project-preview.css";
@@ -93,6 +94,9 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
     </div>
     {config.mode === "script" ? <>
       <div className="settings-field preview-script-field"><span>启动脚本</span><ShellScriptEditor label="启动脚本" value={script} onChange={setScript} readOnly={!canManage || busy} minRows={9} heightKey={`preview:${project.id}`} wrap={wrap} onWrapChange={onWrapChange} placeholder={`例如：\ncd web\nnpm run dev -- --port ${variable("PORT")}`} /></div>
+      {/* 「检测服务」那颗按钮只住在选择服务那一档里，自定义脚本这一档从前没有任何
+          「帮我想一下」的入口 —— 这一颗就是它的对位：AI 判别 + ash 真跑一遍。 */}
+      {canManage && <PreviewAiAssist projectId={project.id} script={script} launch={config.launch} disabled={busy} onFilled={setScript} notify={notify} />}
       <div className="preview-help preview-script-help">
         <small>支持多行、缩进和完整脚本，也可以调用仓库里的脚本文件。留空延续原来的行为：只在恰好识别出一个服务时自动使用。</small>
         {/* 「主服务使用 $PORT」只说了变量叫什么，没说**要不要写**——一半的运行时自己读 PORT

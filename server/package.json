@@ -16,6 +16,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "test:preview-annotation": "tsx scripts/test-preview-annotation.ts",
+    "test:preview-assist": "tsx scripts/test-preview-assist.ts",
     "prestart": "node ../scripts/check-built.mjs",
     "start": "node dist/index.js",
     "db:push": "drizzle-kit push",

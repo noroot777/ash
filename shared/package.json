@@ -122,6 +122,10 @@
       "types": "./src/preview.ts",
       "default": "./src/preview.ts"
     },
+    "./preview-assist": {
+      "types": "./src/preview-assist.ts",
+      "default": "./src/preview-assist.ts"
+    },
     "./project-commands": {
       "types": "./src/project-commands.ts",
       "default": "./src/project-commands.ts"

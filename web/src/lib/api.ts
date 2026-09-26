@@ -41,6 +41,7 @@ import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
 import { llmApi } from "./apiLlm.ts";
+import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
 import { fileApi } from "./fileApi.ts";
 import { pendingMergeApi } from "./pendingMergeApi.ts";
@@ -642,6 +643,8 @@ export const api = {
 
   // 直连 LLM 供应商那一组住在 apiLlm.ts（同样是为了守住 700 行），调用点写法不变。
   ...llmApi,
+  // 预览的「AI 协助」同理，住在 apiPreviewAssist.ts。
+  ...previewAssistApi,
 
   queue: (queueId: string): Promise<{
     queueId: string;

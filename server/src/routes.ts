@@ -28,6 +28,7 @@ import { mountChatRoutes } from "./chat/routes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { mountWorkflowRoutes } from "./workflows.js";
 import { mountPreviewRoutes } from "./preview-routes.js";
+import { mountPreviewAssistRoutes } from "./preview-assist-routes.js";
 import { mountPageAnnotationRoutes } from "./page-annotation-routes.js";
 import { parseAppSettingsPatch } from "./app-settings.js";
 import { hostInfo } from "./platform.js";
@@ -602,6 +603,7 @@ mountQueueRoutes(api);
 mountTeamPresetRoutes(api);
 mountWorkflowRoutes(api);
 mountPreviewRoutes(api);
+mountPreviewAssistRoutes(api);
 mountReviewerProfileRoutes(api);
 mountFreeWorkflowRoutes(api);
 
