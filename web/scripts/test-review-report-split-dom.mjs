@@ -216,6 +216,18 @@ try {
     "拆点应当落在那个真的顶层标题上",
   );
 
+  // ⑩ 先引用上一轮栏目格式、后面才写真实问题的报告：引用里的四行不能充当本轮签名。
+  //    认错时首屏只剩引用里的「可以 / 没有问题」，真正的问题要点开按钮才看得到。
+  const quoted = page.locator(".quoted-fixture");
+  const quotedText = await quoted.locator(".task-markdown").first().innerText();
+  assert.match(quotedText, /保存后你刚改的内容会全部消失/, "真正的问题必须默认可见");
+  assert.match(quotedText, /下面引用上一轮的结论格式/, "引用段落照常铺开");
+  assert.equal(
+    await quoted.getByRole("button", { name: /技术明细/ }).count(),
+    0,
+    "认不出契约就整篇铺开，不该画出一个什么都不装的展开按钮",
+  );
+
   console.log("review report split dom ok");
 } finally {
   await browser?.close();

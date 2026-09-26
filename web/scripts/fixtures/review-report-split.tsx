@@ -152,6 +152,26 @@ const commented = `# 第 7 轮自动验证报告
 - 被审 HEAD：\`d7ee0b07\`
 `;
 
+// 先引用上一轮的栏目格式、后面才写真实问题。引用段落的后续行可以省掉 `>`，源码看着顶格，
+// 解析树里整段在 blockquote 里——按源码逐行认标签就会拿这四行凑齐签名，首屏只剩「可以 /
+// 没有问题」，这一份真正的问题被折进「展开技术明细」。
+const quoted = `# 第 8 轮自动验证报告
+
+## 前言
+
+> 下面引用上一轮的结论格式：
+**能不能验收**：可以
+**现在什么能用了**：略
+**必须修的问题**：没有
+**不拦验收、但你该知道的**：没有
+
+## 真正的问题
+
+### 保存后你刚改的内容会全部消失
+
+你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
+`;
+
 // 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
 //
@@ -189,6 +209,9 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="comment-fixture markdown-report-body">
       <ReviewReportBody text={commented} reportKey="run-5:7" />
+    </div>
+    <div className="quoted-fixture markdown-report-body">
+      <ReviewReportBody text={quoted} reportKey="run-6:8" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

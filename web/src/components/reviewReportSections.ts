@@ -75,22 +75,38 @@ const MARK_LINES = CONTRACT_MARKS.map(
 );
 
 /**
- * 代码块和 HTML 块占掉的行号。
+ * 契约标记可以落在哪些行上。
  *
- * 契约标记仍按源码逐行认——那四行的措辞判据是一轮轮反例攒出来的，跟怎么解析无关——但
- * 认之前要先把这些行摘掉：贴一份别人的报告当证据，或者在注释里留一段模板，都不能把自己
- * 变成契约报告。
+ * 标记本身仍按源码逐行认——那四行的措辞判据是一轮轮反例攒出来的，跟怎么解析无关——但
+ * **哪些行有资格参选，由解析树说了算**：第一、第二个顶层 `##` 之间的顶层段落，以及顶层
+ * 列表**直属**列表项里的段落。就这两种。嵌套一层的列表项也不算——「上一轮报告的结论：」
+ * 底下缩一格抄四行，跟块引用是同一种伪造。
+ *
+ * 这里从前是反过来的：先收一份「不算数的行」（代码块、HTML 块），剩下的都算。那份名单
+ * 永远缺一条——第 8 轮的反例是块引用。CommonMark 允许引用段落的后续行省掉 `>`，于是
+ * 「> 下面引用上一轮的结论格式：」后面那四行源码看着顶格、解析树里却整段在 `blockquote`
+ * 里；拿它们凑齐签名，本轮真正的问题就被折进明细。上一轮把「哪个 `##` 是分界」交给了
+ * 解析器，这一半却还在自己扫字符，同一个洞于是从标题识别搬到了契约识别。
+ *
+ * 白名单这个形状才是对的：漏掉一种合法写法只是不拆（啰嗦），多算一种容器是把发现藏掉。
  */
-function inertLines(root: Parsed): Set<number> {
-  const inert = new Set<number>();
-  const walk = (node: ParsedNode) => {
-    if ((node.type === "code" || node.type === "html") && node.position) {
-      for (let at = node.position.start.line - 1; at < node.position.end.line; at += 1) inert.add(at);
+function markCandidateLines(root: Parsed, after: number, before: number): Set<number> {
+  const candidates = new Set<number>();
+  const take = (node: ParsedNode) => {
+    if (!node.position) return;
+    for (let at = node.position.start.line - 1; at < node.position.end.line; at += 1) {
+      if (at > after && at < before) candidates.add(at);
     }
-    if ("children" in node) for (const child of node.children) walk(child);
   };
-  walk(root);
-  return inert;
+  for (const node of root.children) {
+    if (node.type === "paragraph") take(node);
+    else if (node.type === "list") {
+      for (const item of node.children) {
+        for (const child of item.children) if (child.type === "paragraph") take(child);
+      }
+    }
+  }
+  return candidates;
 }
 
 export function splitReviewReport(text: string): ReviewReportSections {
@@ -114,13 +130,13 @@ export function splitReviewReport(text: string): ReviewReportSections {
   // 又跟入参逐字节一致（不悄悄替换用户的换行）。踩过的坑在正则语义：`\r` 是行终结符，
   // `.` 不匹配它、不带 `m` 的 `$` 只认串尾，于是 `**能不能验收**：不能\r` 认不出来。
   const probes = lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
-  const inert = inertLines(root);
+  const candidates = markCandidateLines(root, first, second);
   // 只有**证明得了自己按新契约写**的报告才拆：四个加粗标签行全都落在第一节里。存量报告
   // 一律整篇铺开——拆点是第二个 `##`，而它们的发现常常就在那之后（`LqhF7g_rqANy` 的缺陷
   // 在第三个 `##`、`zs6JLcw1VAdr` 的全部发现在第一个 `##`）。把发现藏起来比让人多滚两屏
   // 严重得多，这一档不留猜的余地：认不出只是啰嗦，认错了是骗人。
   const complete = MARK_LINES.every((pattern) =>
-    probes.some((line, at) => at > first && at < second && !inert.has(at) && pattern.test(line)),
+    probes.some((line, at) => candidates.has(at) && pattern.test(line)),
   );
   if (!complete) return { summary: text, detail: "" };
   return {
