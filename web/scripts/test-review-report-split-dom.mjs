@@ -247,6 +247,25 @@ try {
     );
   }
 
+  // ⑫ 四栏写对了、但结构没证明问题在摘要里：首节写成「前言」（里面是上一轮抄件）、
+  //    问题误用 `##`（首屏只剩「见下方」）。两份都该整篇铺开。
+  for (const [kind, selector] of [
+    ["首节写成「前言」", ".wrong-heading-fixture"],
+    ["问题误用二级标题", ".problem-heading-fixture"],
+  ]) {
+    const fake = page.locator(selector);
+    assert.match(
+      await fake.locator(".task-markdown").first().innerText(),
+      /保存后你刚改的内容会全部消失/,
+      `${kind}：真正的问题必须默认可见`,
+    );
+    assert.equal(
+      await fake.getByRole("button", { name: /技术明细/ }).count(),
+      0,
+      `${kind}：认不出契约就整篇铺开，不该画出展开按钮`,
+    );
+  }
+
   console.log("review report split dom ok");
 } finally {
   await browser?.close();

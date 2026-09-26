@@ -214,6 +214,46 @@ const reordered = `# 第 9 轮自动验证报告
 你会遇到：改完字幕立刻点烧录，导出的视频里还是上一版。
 `;
 
+// 两份「四栏写对了、结构却没证明问题在摘要里」的报告。上面那份首节写成「前言」，里面整段
+// 抄着上一轮四项结论；下面那份首节是对的，但那条问题误用了 `##`，于是首屏只剩「见下方」。
+const wrongHeading = `# 第 10 轮自动验证报告
+
+## 前言
+
+下面完整抄录上一轮结论：
+
+**能不能验收**：可以
+
+**现在什么能用了**：略
+
+**必须修的问题**：没有
+
+**不拦验收、但你该知道的**：没有
+
+## 真正的问题
+
+### 保存后你刚改的内容会全部消失
+
+你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
+`;
+
+const problemAsHeading = `# 第 10 轮自动验证报告
+
+## 结论
+
+**能不能验收**：不能 —— 有 1 条必须先修
+
+**现在什么能用了**：略
+
+**必须修的问题**：见下方
+
+**不拦验收、但你该知道的**：没有
+
+## 保存后你刚改的内容会全部消失
+
+你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
+`;
+
 // 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
 //
@@ -260,6 +300,12 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="reordered-fixture markdown-report-body">
       <ReviewReportBody text={reordered} reportKey="run-8:9" />
+    </div>
+    <div className="wrong-heading-fixture markdown-report-body">
+      <ReviewReportBody text={wrongHeading} reportKey="run-9:10" />
+    </div>
+    <div className="problem-heading-fixture markdown-report-body">
+      <ReviewReportBody text={problemAsHeading} reportKey="run-10:10" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

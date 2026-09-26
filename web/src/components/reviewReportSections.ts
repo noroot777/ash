@@ -109,26 +109,40 @@ function markCandidateStarts(root: Parsed, after: number, before: number): numbe
   return starts.sort((a, b) => a - b);
 }
 
+/** 节点的可见文字。核小标题写没写对用得上，别的地方别指望它排版。 */
+function plainText(node: ParsedNode): string {
+  if (node.type === "text" || node.type === "inlineCode") return node.value;
+  if ("children" in node) return node.children.map(plainText).join("");
+  return "";
+}
+
 export function splitReviewReport(text: string): ReviewReportSections {
   // 解析器把孤立的 `\r` 也当换行，我们按 `\n` 切片——真碰上这种老式换行，行号就对不上了。
   // 对不上时一律整篇铺开：认不出只是啰嗦，按错的行号拆是把内容藏掉。
   if (/\r(?!\n)/.test(text)) return { summary: text, detail: "" };
 
   const lines = text.split("\n");
+  const whole = { summary: text, detail: "" };
   // 解析配置必须跟页面上那份一致（`MarkdownBody.tsx` 用 `remark-gfm`）。不一致的地方就是
   // 下一个洞：单列的 GFM 表格在核心语法眼里是普通段落，在页面上却是表格——我们据此拆，
   // 用户看到的却是另一回事。同一个道理已经让这份代码栽过一次（第 7 轮：手写扫描器跟
   // 渲染器对不上），这次直接把 GFM 扩展装上。
   const root = fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
   // 只认**顶层**的二级标题：列表项里、引用里、HTML 块里、围栏里的 `##` 都不是分界。
-  const heads: number[] = [];
-  for (const node of root.children) {
-    if (node.type === "heading" && node.depth === 2 && node.position) {
-      heads.push(node.position.start.line - 1);
-    }
-  }
-  const [first, second] = heads;
-  if (first === undefined || second === undefined) return { summary: text, detail: "" };
+  const heads = root.children.filter(
+    (node) => node.type === "heading" && node.depth === 2 && node.position,
+  );
+  const [head, next] = heads;
+  if (!head?.position || !next?.position) return whole;
+  const first = head.position.start.line - 1;
+  const second = next.position.start.line - 1;
+  // 首节标题本身也是契约的一部分：prompt 要求「报告开头必须先写一节 `## 结论`（就用这
+  // 四个字起头）」。第 10 轮的反例是一份开头写「## 前言」、里面整段抄着上一轮四项结论的
+  // 报告——四栏各自独立成段、顺序还对，签名照样齐全。
+  //
+  // 这跟「别按标题拆」（`## 0. 先说结论之外的` 那两份真实报告）不冲突：标题是**又一道**
+  // 必须过的闸，不是四栏的替代品。两道都过才算数。
+  if (plainText(head).trim() !== "结论") return whole;
 
   // 匹配用的是去掉行尾 `\r` 的副本，切片仍用原始行——这样 CRLF 报告认得出，返回的正文
   // 又跟入参逐字节一致（不悄悄替换用户的换行）。踩过的坑在正则语义：`\r` 是行终结符，
@@ -142,12 +156,29 @@ export function splitReviewReport(text: string): ReviewReportSections {
   //
   // 「按序、不重样」是第 9 轮补的：只问「这四个标签各自出现过没有」时，四栏完全倒着
   // 写也算数——那更像是抄了一份别人的结论，而不是按这份契约写的摘要。
-  const found = markCandidateStarts(root, first, second)
-    .map((at) => MARK_LINES.findIndex((pattern) => pattern.test(probes[at])))
-    .filter((index) => index >= 0);
+  const marked = markCandidateStarts(root, first, second)
+    .map((at) => ({ at, column: MARK_LINES.findIndex((pattern) => pattern.test(probes[at])) }))
+    .filter((hit) => hit.column >= 0);
   const complete =
-    found.length === MARK_LINES.length && found.every((index, order) => index === order);
-  if (!complete) return { summary: text, detail: "" };
+    marked.length === MARK_LINES.length && marked.every((hit, order) => hit.column === order);
+  if (!complete) return whole;
+
+  // 四个标签齐了还不够——得**证明问题本身就在摘要里**，不能只凭标签就假定第二个 `##`
+  // 之后都是技术记录。第 10 轮的反例：摘要写着「不能 —— 有 1 条必须先修」「必须修的
+  // 问题：见下方」，那一条却写成了下一个 `##`，于是首屏只剩「见下方」，问题在折叠里。
+  //
+  // 判据照契约本身来（`server/src/review-report-format.ts`）：这一栏要么每条问题一个小
+  // 标题，要么只写「没有发现问题」六个字。两样都拿不出来就不拆。
+  const [, , problems, aside] = marked;
+  const listed = root.children.some(
+    (node) =>
+      node.type === "heading" && node.depth >= 3 && node.position
+      && node.position.start.line - 1 > problems.at
+      && node.position.start.line - 1 < aside.at,
+  );
+  const none = probes.slice(problems.at, aside.at).some((line) => line.includes("没有发现问题"));
+  if (!listed && !none) return whole;
+
   return {
     summary: lines.slice(0, second).join("\n").trimEnd(),
     detail: lines.slice(second).join("\n").trimEnd(),
