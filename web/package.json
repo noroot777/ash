@@ -39,7 +39,7 @@
     "//test:debate-lane": "时间线上那张辩论卡:一整场折成一行、段间流水不留、展开列的是双方交卷的 statement(不是气泡里随口那句)、卡头说清谁跟谁几段什么立场、全宽阅读真的更宽、配不到落盘记录时原始行原样兜底。",
     "test:debate-lane": "node scripts/test-debate-lane.mjs",
     "test:task-review-rounds": "node scripts/test-task-review-rounds.mjs",
-    "test:review-report-sections": "node --experimental-strip-types scripts/test-review-report-sections.mjs && node --experimental-strip-types scripts/test-review-report-boundary.mjs && node --experimental-strip-types scripts/test-review-report-fallback.mjs && node --experimental-strip-types scripts/test-review-report-heading-columns.mjs",
+    "test:review-report-sections": "node --experimental-strip-types scripts/test-review-report-sections.mjs && node --experimental-strip-types scripts/test-review-report-boundary.mjs && node --experimental-strip-types scripts/test-review-report-fallback.mjs && node --experimental-strip-types scripts/test-review-report-heading-columns.mjs && node --experimental-strip-types scripts/test-review-report-problem-proof.mjs",
     "test:review-report-split-dom": "node scripts/test-review-report-split-dom.mjs",
     "test:review-diff-zoom": "node scripts/test-review-diff-zoom.mjs",
     "test:data-layer": "node --experimental-strip-types scripts/test-data-layer.mjs && npm run test:session-merge",

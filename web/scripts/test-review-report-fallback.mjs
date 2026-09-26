@@ -99,16 +99,44 @@ import { splitReviewReport } from "../src/components/reviewReportSections.ts";
   );
 }
 
-// `zs6JLcw1VAdr` 那种**全部发现就在第一个 `##`** 里的报告，降级后发现确实会落进折叠。
-// 这是明知的代价，不是疏漏：首屏仍有报告自己的 `verify_failed`，按钮也不宣称里面只有
-// 合规证明。用户拍板过这个取舍——「就算某轮审查者没照 prompt 写，你也不会被 46 行合规
-// 证明糊一脸」。要消灭这一档代价只有一条路：让审查者按契约写，那样走的是第一档。
+// `zs6JLcw1VAdr` 那种**全部发现就在第一个 `##`** 里、而那一节又没有自报家门的报告，降级
+// 后发现确实会落进折叠。这是明知的代价，不是疏漏：首屏仍有报告自己的 `verify_failed`，
+// 按钮也不宣称里面只有合规证明。用户拍板过这个取舍——「就算某轮审查者没照 prompt 写，你
+// 也不会被 46 行合规证明糊一脸」。要消灭这一档代价有两条路：让审查者按契约写（走第一
+// 档），或者像下面那样把那一节老老实实叫「Findings」。
 {
-  const findingFirst = "# 第 10 轮逻辑审查报告\n\n结论：**verify_failed**。\n\n## Finding\n\n### P1：……\n\n## 清理\n\n略\n";
+  const findingFirst = "# 第 10 轮逻辑审查报告\n\n结论：**verify_failed**。\n\n## 一、逐条核对\n\n### P1：……\n\n## 清理\n\n略\n";
   const { summary, detail, kind } = splitReviewReport(findingFirst);
   assert.equal(kind, "lead");
   assert.match(summary, /verify_failed/, "首屏至少得说清能不能验收");
   assert.match(detail, /P1/);
+}
+
+// 但首节老老实实叫 `## Findings` / `## 发现` 时，那就是报告自己声明「发现写在这儿」——
+// 跟 `## 结论` 同一档，整节留在首屏、从第二个 `##` 起折。全库 323 份报告是这个形状，
+// 尾部清一色是验证记录、浏览器通道和清理，正是用户点名不想被糊一脸的东西。
+for (const [what, title] of [["英文 Findings", "## Findings"], ["单数 Finding", "## Finding"], ["中文发现", "## 发现"]]) {
+  const text = `# 第 10 轮逻辑审查报告\n\n结论：**verify_failed**。\n\n${title}\n\n### P1：保存后内容会全部消失\n\n复现：……\n\n## 验证记录\n\n\`npm test\` 通过。\n\n## 清理\n\n已停掉 5175。\n`;
+  const { summary, detail, kind } = splitReviewReport(text);
+  assert.equal(kind, "lead", `${what}：报告自己声明了发现节，该折`);
+  assert.match(summary, /P1：保存后内容会全部消失/, `${what}：发现必须留在首屏`);
+  assert.doesNotMatch(summary, /验证记录|npm test|已停掉/, `${what}：技术记录照折`);
+  assert.match(detail, /^## 验证记录/, `${what}：拆点是第二个 ` + "`##`");
+  assert.equal(
+    `${summary}\n\n${detail}`.replace(/\s+/g, ""),
+    text.replace(/\s+/g, ""),
+    `${what}：折叠不是丢弃`,
+  );
+}
+
+// 开头连引子都没有的那两份真实报告（`Z7OFKHcfagfx` 74 行、`MOVQDcvhAC3-` 34 行）同理：
+// 原本整篇铺开，现在发现那一节留首屏、范围和清理收进按钮。
+{
+  const noLead = "# Z7OFKHcfagfx round-1 logic review\n\n## Findings\n\n未发现可复现的行为缺陷。\n\n## Scope\n\n……\n\n## Cleanup\n\n……\n";
+  const { summary, detail, kind } = splitReviewReport(noLead);
+  assert.equal(kind, "lead", "首节自报家门时，标题开场也能折");
+  assert.match(summary, /未发现可复现的行为缺陷/, "判定必须默认可见");
+  assert.doesNotMatch(summary, /Scope|Cleanup/, "技术记录照折");
 }
 
 // 引子要的是**真有话说**，不是「标题下面空着」。只有一行 `#`、首节又不是声明的结论节
@@ -224,11 +252,38 @@ for (const [what, title] of [
   ["先说结论之外的", "## 0. 先说结论之外的：这轮做对的部分"],
   ["任务元数据", "## 任务：查询 Claude 模型"],
   ["英文但不是判定词", "## Conclusion and next steps"],
+  ["一条问题不是发现节", "## 发现 1：保存后内容会全部消失"],
 ]) {
   const text = `# 第 1 轮审查\n\n${title}\n\n主链路验证通过。\n\n## 2. 高优先级缺陷\n\nP1：保存后内容会全部消失。\n`;
   const { summary, kind } = splitReviewReport(text);
-  assert.equal(kind, "whole", `${what}：不是报告自己声明的结论节，开头又没引子，只能整篇铺开`);
+  assert.equal(kind, "whole", `${what}：不是报告自己声明的判定节，开头又没引子，只能整篇铺开`);
   assert.match(summary, /高优先级缺陷/, `${what}：缺陷必须留在首屏`);
+}
+
+// 全库还剩一份 110 行的长报告整篇铺开（`_wWMPNIsrXF7/5XWkSb3U0UQK/round-1`），这是**有意
+// 留着**的，不是没修完：它首节是 `## 任务：查询 Claude 模型` 的元数据，`## 2. 高优先级
+// 缺陷` 在后面。按「标题开场就留第一节」一律处理，首屏会只剩任务名，P1~P3 全进折叠——
+// 长度不是判据，「报告把判定写在哪」才是。要折它只有一条路：让那份报告自己把判定写在
+// 首节里。
+{
+  const metadataFirst = [
+    "# 第 1 轮逻辑审查报告",
+    "",
+    "## 任务：查询 Claude 模型 (ash 中增加 Claude CLI 模型指定功能)",
+    "",
+    "审查对象：`ash/_wWMPNIsr`。",
+    "",
+    "## 1. 编译验证",
+    "",
+    "`npm run build` 通过。",
+    "",
+    "## 2. 高优先级缺陷",
+    "",
+    "### P1 行为缺陷 — 保存后内容会全部消失",
+  ].join("\n");
+  const { summary, kind } = splitReviewReport(metadataFirst);
+  assert.equal(kind, "whole", "首节是元数据，折了首屏就只剩任务名");
+  assert.match(summary, /P1 行为缺陷/, "缺陷必须留在首屏");
 }
 
 // 但「新格式写坏了」不吃这一档：`## 结论` 里出现过栏目标签、却凑不齐/不按序/证明不了

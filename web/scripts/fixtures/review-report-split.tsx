@@ -111,6 +111,8 @@ const fenced = `# 第 6 轮自动验证报告
 ### 保存后你刚改的内容会全部消失
 
 你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
+为什么：保存请求还没回来，列表就按旧数据重画了一次。
+建议怎么修：等服务端确认之后再重画列表。
 
 **不拦验收、但你该知道的**
 
@@ -144,10 +146,14 @@ const commented = `# 第 7 轮自动验证报告
 ### 1. 烧录出来的成片用的是你改之前的字幕
 
 你会遇到：改完字幕立刻点烧录，导出的视频里还是上一版。
+为什么：烧录读的是缓存里的字幕，保存只写了盘。
+建议怎么修：烧录前先让缓存跟盘上那份对齐。
 
 ### 2. 保存后你刚改的内容会全部消失
 
 你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
+为什么：保存请求还没回来，列表就按旧数据重画了一次。
+建议怎么修：等服务端确认之后再重画列表。
 
 **不拦验收、但你该知道的**
 
@@ -302,6 +308,7 @@ const headingColumns = `## 结论
 
 **你会遇到**：打开报告后，结论下面立刻接着整页仓库状态、测试命令和清场记录。
 **为什么**：签名只认加粗段落，小标题写法凑不出 \`marked\`。
+**建议怎么修**：把小标题写法也认成一种栏目形态。
 
 ### 不拦验收、但你该知道的
 
@@ -370,6 +377,59 @@ const negatedNoProblem = `# 第 4 轮自动验证报告
 你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
 `;
 
+// 第 5 轮的两份：一份四栏齐全、问题栏底下却是个**说明性小标题**。判据只数「有没有一个
+// 够深的标题」时，它会被判成契约，真正的问题折进一个写着「技术明细」的按钮里。
+const nonProblemHeading = `# 第 5 轮自动验证报告
+
+## 结论
+
+### 能不能验收
+
+不能 —— 有 1 条必须先修。
+
+### 现在什么能用了
+
+基础流程可以正常打开。
+
+### 必须修的问题
+
+#### 补充说明
+
+真正的问题见下方。
+
+### 不拦验收、但你该知道的
+
+没有。
+
+## 保存后你刚改的内容会全部消失
+
+你会遇到：点保存回到列表，刚写的东西没了，界面上没有任何提示。
+`;
+
+// 另一份：`## Findings` 开场的旧报告（真实样本 `Z7OFKHcfagfx/RqTtYTBeFreQ/round-1` 共
+// 74 行）。首节已经把发现说清楚了，判据只认「结论」时整篇铺开，范围、命令和清场全糊在
+// 屏幕上、连按钮都没有。
+const findingsReport = `# Z7OFKHcfagfx round-1 logic review
+
+## Findings
+
+未发现可复现的行为缺陷。
+
+## Scope
+
+\`web/src/task-detail\` 下本轮改动的 6 个文件。
+
+## Verification
+
+\`\`\`text
+npm -w @ash/web test
+\`\`\`
+
+## Cleanup
+
+已停掉本轮起的无头浏览器。
+`;
+
 // 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
 //
@@ -434,6 +494,12 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="negated-fixture markdown-report-body">
       <ReviewReportBody text={negatedNoProblem} reportKey="run-14:4" />
+    </div>
+    <div className="non-problem-heading-fixture markdown-report-body">
+      <ReviewReportBody text={nonProblemHeading} reportKey="run-15:5" />
+    </div>
+    <div className="findings-fixture markdown-report-body">
+      <ReviewReportBody text={findingsReport} reportKey="run-16:1" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

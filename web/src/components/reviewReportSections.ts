@@ -15,9 +15,10 @@
 // ② 认不出契约（存量报告、某轮审查者没照 prompt 写）就降一档：铺开的那一段留在首屏，
 //    余下全部收进一个不作任何承诺的「展开完整报告」。这是用户点名要的结构保证——「就算
 //    某轮审查者没照 prompt 写，你也不会被 46 行合规证明糊一脸」。折在哪看报告自己怎么写：
-//    - 首节标题就是「这是结论」的声明（`## 结论` / `## Conclusion` / `## Verdict` /
-//      `## 结论：verify_failed`）：整节留在首屏，从**第二个** `##` 起折。折在第一个 `##`
-//      之前会把判定一起折掉；只认中文那一个词，222 行的英文报告就一份都折不了。
+//    - 首节标题就是「这是给人看的判定」的声明（`## 结论` / `## Conclusion` / `## Verdict` /
+//      `## 结论：verify_failed` / `## Findings` / `## 发现`）：整节留在首屏，从**第二个**
+//      `##` 起折。折在第一个 `##` 之前会把判定一起折掉；只认中文「结论」那一个词时，222
+//      行的英文报告和 323 份「发现」开场的报告都折不对。
 //    - 其它形态：开头到**第一个** `##` 之前的引子留在首屏。
 // ③ 首屏凑不出读得懂的东西（开头只有标题、首节又不是报告自己声明的结论节，或者声明了
 //    却没有第二个 `##`）就整篇铺开：一个标题加一个按钮的首屏，比多滚两屏更糟。
@@ -110,13 +111,19 @@ const MARK_LINES = CONTRACT_MARKS.map(
 );
 
 /**
- * 首个 `##` 写成这样，就算**报告自己声明了「这一节是结论」**——整节留在首屏，从第二个
- * `##` 起才折。
+ * 首个 `##` 写成这样，就算**报告自己声明了「这一节是给人看的判定」**——整节留在首屏，
+ * 从第二个 `##` 起才折。
  *
- * 全文相等，不是「含结论二字」；后缀只容协议自己的判定词（`## 结论：verify_failed` 是
- * 真实形态）。放宽到前缀的代价见 `splitReviewReport` 里那段注释。
+ * 收的是两种声明，因为读报告的人要的就是这两件事：判定（`结论` / `Conclusion` /
+ * `Verdict`，后缀只容协议自己的判定词，`## 结论：verify_failed` 是真实形态）和发现
+ * （`Findings` / `发现`）。全库 323 份报告的首节是后者，尾部一水儿是验证记录、浏览器
+ * 通道、清理——正是用户点名不想被糊一脸的东西。
+ *
+ * **全文相等**，不是「开头像」：`## 发现 1：数据会丢` 是一条问题本身，不是发现那一节；
+ * `## 一、先说结论：核心功能是真的能用` 只讲了正面那半。放宽到前缀的代价见
+ * `splitReviewReport` 里那段注释。
  */
-const CONCLUSION_TITLES = /^(?:结论|Conclusion|Verdict)\s*(?:[：:]\s*(?:verified|verify_failed|blocked))?$/i;
+const VERDICT_TITLES = /^(?:结论|Conclusion|Verdict)\s*(?:[：:]\s*(?:verified|verify_failed|blocked))?$|^(?:Findings?|发现)$/i;
 
 /**
  * 摘要那一节里，够得上「一个栏目」的节点起始行——按源码先后排好。
@@ -190,8 +197,8 @@ function headingColumns(root: Parsed, after: number, before: number): Column[] {
  * ② **问题本身证明得了在摘要里**，不能只凭标签就假定第二个 `##` 之后都是技术记录。第
  *    10 轮的反例：摘要写着「不能 —— 有 1 条必须先修」「必须修的问题：见下方」，那一条
  *    却写成了下一个 `##`，于是首屏只剩「见下方」。判据照契约本身来
- *    （`server/src/review-report-format.ts`）：要么每条问题一个小标题，要么只写「没有
- *    发现问题」六个字。
+ *    （`server/src/review-report-format.ts`）：要么每条问题一个小标题**并带着那固定三行**，
+ *    要么只写「没有发现问题」六个字。
  *
  * `depth` 是「问题小标题至少得多深」，跟着栏目的写法走：加粗标签那一版栏目是段落、问题
  * 是 `###`；栏目写成 `###` 时问题就得是 `####`。写死成 `>= 3` 的话，栏目自己那一级的
@@ -205,9 +212,49 @@ function provesContract(root: Parsed, probes: string[], columns: Column[], depth
     (node) =>
       node.type === "heading" && node.depth >= depth && node.position
       && node.position.start.line - 1 > problems.at
-      && node.position.start.line - 1 < aside.at,
+      && node.position.start.line - 1 < aside.at
+      && writesProblem(root, probes, node.position.start.line - 1, node.depth, aside.at),
   );
   return listed || saysNoProblem(probes, problems, aside);
+}
+
+/**
+ * 契约给每条问题定死的三行（`server/src/review-report-format.ts`：「每条一个小标题，固定
+ * 三行」）：第一行「你会遇到」写现象，第二行「为什么」讲机制，第三行「建议怎么修」。
+ *
+ * 容的写法跟栏目标签一样：加粗写不写、冒号在加粗里还是外面、前面带不带列表符号。
+ */
+const PROBLEM_LINES = ["你会遇到", "为什么", "建议怎么修"].map(
+  (mark) => new RegExp(`^ {0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\*{0,2}\\s*${mark}\\s*(?:\\*\\*\\s*)?[：:]`),
+);
+
+/**
+ * `at` 那个小标题底下**真写着一条问题**，不是别的什么。
+ *
+ * 曾经只数「第三、四栏之间有没有一个够深的标题」，于是任何一个说明性小标题都能冒充问题
+ * 条目：`#### 补充说明` + 「真正的问题见下方。」照样判成契约，那一条真正的问题写在后面的
+ * `##` 里，首屏只剩「有 1 条必须先修」和「补充说明」，按钮还宣称折叠里只有技术记录。
+ * 这跟第 4 轮「『没有发现问题』被当子串」是同一个形状：判据比它要证明的事松一档。
+ *
+ * 所以照契约验那三行——**按序、各自独占一行的开头**。不问「这段里出现过『你会遇到』吗」：
+ * 那正是被抓过的子串问法，「这里不写你会遇到、为什么、建议怎么修」一句话就能骗过去。
+ *
+ * 条目正文止于下一个同级或更浅的标题（同一栏里的下一条问题），最远到第四栏。
+ */
+function writesProblem(root: Parsed, probes: string[], at: number, depth: number, until: number): boolean {
+  const sibling = root.children.find(
+    (node) =>
+      node.type === "heading" && node.depth <= depth && node.position
+      && node.position.start.line - 1 > at,
+  );
+  const end = Math.min(until, sibling?.position ? sibling.position.start.line - 1 : until);
+  let cursor = at + 1;
+  for (const line of PROBLEM_LINES) {
+    const hit = probes.slice(cursor, end).findIndex((text) => line.test(text));
+    if (hit < 0) return false;
+    cursor += hit + 1;
+  }
+  return true;
 }
 
 /**
@@ -264,7 +311,7 @@ export function splitReviewReport(text: string): ReviewReportSections {
   });
 
   /**
-   * 首节标题是不是**报告自己声明的「这一节是结论」**。
+   * 首节标题是不是**报告自己声明的「这一节是给人看的判定」**。
    *
    * 判据是整段标题全文相等（容一个协议判定词后缀），不是「含结论二字」——差别就是
    * `## 0. 先说结论之外的：这轮做对的部分` 和 `## 一、先说结论：核心功能是真的能用`
@@ -273,10 +320,11 @@ export function splitReviewReport(text: string): ReviewReportSections {
    *
    * 认英文是第 4 轮补的：判据本来写死成中文「结论」，于是 `## Conclusion` / `## Verdict`
    * 开场的报告一份都折不了——全库 13 份整篇铺开的报告里，最长那份 222 行就是这个形状。
-   * 语言不是判据，「报告把判定写在哪」才是。
+   * 语言不是判据，「报告把判定写在哪」才是。第 5 轮同理补上 `Findings` / `发现`：全库
+   * 323 份报告把发现写在首节，尾部清一色是验证记录、浏览器通道和清理。
    */
   const title = plainText(head).trim();
-  if (CONCLUSION_TITLES.test(title)) {
+  if (VERDICT_TITLES.test(title)) {
     // 没有第二个 `##` 时折掉的就是整个结论节，那还不如整篇铺开。
     if (!next?.position) return whole;
     const second = next.position.start.line - 1;

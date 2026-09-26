@@ -353,6 +353,41 @@ try {
     "证明不了问题在摘要里就整篇铺开，不该画出任何展开按钮",
   );
 
+  // ⑰ 四栏齐全、问题栏底下却是个说明性小标题（`#### 补充说明` + 「真正的问题见下方」）：
+  //    判据只数标题时它判成契约，真正的问题折进写着「技术明细」的按钮。验过那三行之后它
+  //    走整篇铺开，问题留在首屏。
+  const nonProblem = page.locator(".non-problem-heading-fixture");
+  assert.match(
+    await nonProblem.locator(".task-markdown").first().innerText(),
+    /保存后你刚改的内容会全部消失/,
+    "问题必须默认可见",
+  );
+  assert.equal(
+    await nonProblem.locator(".review-report-more").count(),
+    0,
+    "说明性小标题证明不了问题在摘要里，不该画出任何展开按钮",
+  );
+
+  // ⑱ `## Findings` 开场的旧报告（真实样本 74 行）：只认「结论」时整篇铺开，范围、命令
+  //    和清场全糊在屏幕上。发现节跟结论节同一档——整节留首屏，按钮照旧什么都不宣称。
+  const findings = page.locator(".findings-fixture");
+  const fSummary = await findings.locator(".task-markdown").first().innerText();
+  assert.match(fSummary, /未发现可复现的行为缺陷/, "判定必须默认可见");
+  assert.doesNotMatch(fSummary, /Scope|npm -w|Cleanup/, "技术记录照折");
+  assert.equal(
+    await findings.getByRole("button", { name: /技术明细/ }).count(),
+    0,
+    "没签契约，按钮不准替折叠里的东西背书",
+  );
+  const fToggle = findings.getByRole("button", { name: /^展开完整报告$/ });
+  assert.equal(await fToggle.count(), 1);
+  await fToggle.click();
+  assert.match(
+    await findings.locator(".review-report-detail .task-markdown").innerText(),
+    /Cleanup/,
+    "展开后技术记录原样都在",
+  );
+
   console.log("review report split dom ok");} finally {
   await browser?.close();
   await server.close();
