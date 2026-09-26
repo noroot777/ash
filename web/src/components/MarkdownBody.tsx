@@ -98,8 +98,9 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
 }
 
 /**
- * 审查报告正文：摘要段铺开，技术明细收进开关。拆不动（存量报告不合契约）就整篇铺开，
- * 不会把内容藏掉——判据和理由见 `reviewReportSections.ts`。
+ * 审查报告正文：铺开一半、收起一半。分两档——按契约拆的报告折的是技术明细，认不出契约的
+ * 存量报告折的是「第一个 `##` 起的全部内容」，按钮文案跟着换。拆不动（开头连引子都没有）
+ * 就整篇铺开，不会把内容藏掉——判据和理由见 `reviewReportSections.ts`。
  *
  * 明细用条件渲染而不是 `hidden`：折叠着的那半截里的截图不该混进 `ImagePreviewGroup`
  * 的灯箱队列，否则左右翻会翻到屏幕上根本没有的图。
@@ -125,7 +126,7 @@ function ReviewReportSplit({ text, reportKey, onReviewReport, onActionError }: {
   onReviewReport: (target: ReviewFileTarget) => void;
   onActionError: (message: string | null) => void;
 }) {
-  const { summary, detail } = useMemo(() => splitReviewReport(text), [text]);
+  const { summary, detail, kind } = useMemo(() => splitReviewReport(text), [text]);
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState({ key: reportKey, text });
   const detailId = useId();
@@ -134,6 +135,12 @@ function ReviewReportSplit({ text, reportKey, onReviewReport, onActionError }: {
     setOpen(false);
   }
   if (!detail) return <MarkdownDocument text={text} onReviewReport={onReviewReport} onActionError={onActionError} />;
+  // 按钮只能照 `kind` 说话。按契约拆的那一档能担保折叠里只有技术记录；降级那一档折的是
+  // 报告余下的全部内容，**问题可能就在里面**，所以一个字都不许替它宣称。`kind` 万一漏了
+  // 一档，落到不作承诺的那句上——猜错方向的代价不对称。
+  const label = kind === "contract"
+    ? { open: "收起技术明细", closed: "展开技术明细（验证过程、证据、清场记录）" }
+    : { open: "收起完整报告", closed: "展开完整报告" };
   return (
     <>
       <MarkdownDocument text={summary} onReviewReport={onReviewReport} onActionError={onActionError} />
@@ -145,7 +152,7 @@ function ReviewReportSplit({ text, reportKey, onReviewReport, onActionError }: {
         onClick={() => setOpen((value) => !value)}
       >
         <CaretDown size={11} weight="bold" aria-hidden="true" />
-        {open ? "收起技术明细" : "展开技术明细（验证过程、证据、清场记录）"}
+        {open ? label.open : label.closed}
       </button>
       {open && (
         <div id={detailId} className="review-report-detail">

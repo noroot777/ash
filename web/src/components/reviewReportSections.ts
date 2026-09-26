@@ -6,10 +6,26 @@
 // 所以拆：摘要段铺开给人看，其余收进开关。**盘上的 report.md 一个字都不动**，修复 agent
 // 读的还是完整文件——这也是能在界面上敢折叠的前提。
 //
-// 契约（`server/src/review-report-format.ts` 负责让审查者照着写）：报告的第一个二级小节
-// 是写给人看的摘要，里面有「能不能验收 / 现在什么能用了 / 必须修的问题 / 不拦验收但你该
-// 知道的」四个固定小标题，下一个 `##` 起是技术明细。**认不出这四段结构就整篇铺开**——
-// 存量报告没有这个约定，宁可啰嗦也不能把内容藏掉。
+// 折叠分**两档**，按「这份报告能证明什么」给：
+//
+// ① 按契约拆（`server/src/review-report-format.ts` 负责让审查者照着写）：报告的第一个
+//    二级小节是写给人看的摘要，里面有「能不能验收 / 现在什么能用了 / 必须修的问题 /
+//    不拦验收但你该知道的」四个固定小标题，下一个 `##` 起是技术明细。这一档能担保折叠
+//    里只有技术记录，所以按钮敢写「展开技术明细（验证过程、证据、清场记录）」。
+// ② 认不出契约（存量报告、某轮审查者没照 prompt 写）就降一档：**开头到第一个 `##` 之前**
+//    的引子铺开，余下全部收进一个不作任何承诺的「展开完整报告」。这是用户点名要的结构
+//    保证——「就算某轮审查者没照 prompt 写，你也不会被 46 行合规证明糊一脸」。
+//
+// 第二档为什么安全，而「按标题猜出摘要在哪」不安全：差别不在折不折，在**拆点**和**按钮
+// 说了什么**。按标题猜那一版把拆点放在第二个 `##`，于是「## 0. 先说结论之外的：这轮做对
+// 的部分」被当成摘要，两条【高】落进一个写着「验证过程、证据、清场记录」的折叠——首屏
+// 只剩「做对的部分」，按钮还在替它背书。降级这一档拆在**第一个** `##` 之前，报告自己的
+// 开场白原样留在首屏（抽查的 7 份存量报告里，`结论：verify_failed —— N 个可复现缺陷`
+// 这句话全部写在这一段），按钮则什么都不宣称。
+//
+// 没有引子就不降级（整篇铺开）：只剩一个标题加一个按钮的首屏，比多滚两屏更糟。这也是
+// 那些「抄一份别人的结论冒充摘要」的反例仍然整篇铺开的原因——它们开头除了标题什么都没有。
+// 不按长度设阈值：结构保证一旦变成「短的时候不保证」，就又会在某一份报告上糊人一脸。
 //
 // 「哪个 `##` 是分界」交给解析器，不自己数字符。手写的行扫描器在这上面连错三轮，每轮都
 // 是同一种形状——我们以为那行是标题，渲染器不这么认，于是拆点落在一段本不存在的边界上，
@@ -25,10 +41,19 @@ import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 
 export type ReviewReportSections = {
-  /** 从开头到技术明细之前：一级标题 + 摘要那一节。不合契约时是整篇。 */
+  /** 铺开的那一半：按契约拆时是「一级标题 + 摘要那一节」，降级时是第一个 `##` 之前的引子。 */
   summary: string;
-  /** 第二个 `##` 起的技术明细；为空表示这篇没拆，别画展开按钮。 */
+  /** 收进开关的那一半；为空表示这篇没拆，别画展开按钮。 */
   detail: string;
+  /**
+   * 折叠里装的是什么——**按钮文案只能照它写**。
+   *
+   * - `"whole"`：没拆，`detail` 为空。
+   * - `"contract"`：按新契约拆的，折叠里只有技术记录，可以这么写在按钮上。
+   * - `"lead"`：存量报告的粗拆，折叠里是报告余下的**全部**内容，**可能包含问题本身**，
+   *   所以按钮不准替它宣称里面是什么。
+   */
+  kind: "whole" | "contract" | "lead";
 };
 
 type Parsed = ReturnType<typeof fromMarkdown>;
@@ -46,7 +71,8 @@ type ParsedNode = Parsed | Parsed["children"][number];
  * **四个一个都不能少，而且必须是加粗标签行。**曾经只要求任意命中两个子串，结果半套
  * 摘要照样被拆：审查者把第三栏误写成 `## 必须修的问题`，前两栏就凑够了两个标记，拆点
  * 正好落在那个标题上——首屏写着「有 1 条必须先修」，那一条却在折叠里。放宽一档就等于
- * 把「认不出就整篇铺开」这条保证换成了猜，而猜错的方向恰好是藏发现。
+ * 把「拿不准就降到第二档」换成了猜，而猜错的代价不对称：降级最多让人多点一下按钮，
+ * 误判成契约是让那个按钮替报告宣称「里面只有验证过程、证据、清场记录」。
  *
  * 加粗行这一条同时挡掉「正文、引文或代码块里顺口提到两个栏目名」：契约要的是那四段
  * 结构真的在，不是那几个词出现过。
@@ -117,12 +143,12 @@ function plainText(node: ParsedNode): string {
 }
 
 export function splitReviewReport(text: string): ReviewReportSections {
+  const whole: ReviewReportSections = { summary: text, detail: "", kind: "whole" };
   // 解析器把孤立的 `\r` 也当换行，我们按 `\n` 切片——真碰上这种老式换行，行号就对不上了。
-  // 对不上时一律整篇铺开：认不出只是啰嗦，按错的行号拆是把内容藏掉。
-  if (/\r(?!\n)/.test(text)) return { summary: text, detail: "" };
+  // 对不上时一律整篇铺开（两档都不给）：认不出只是啰嗦，按错的行号拆是把内容藏掉。
+  if (/\r(?!\n)/.test(text)) return whole;
 
   const lines = text.split("\n");
-  const whole = { summary: text, detail: "" };
   // 解析配置必须跟页面上那份一致（`MarkdownBody.tsx` 用 `remark-gfm`）。不一致的地方就是
   // 下一个洞：单列的 GFM 表格在核心语法眼里是普通段落，在页面上却是表格——我们据此拆，
   // 用户看到的却是另一回事。同一个道理已经让这份代码栽过一次（第 7 轮：手写扫描器跟
@@ -133,8 +159,28 @@ export function splitReviewReport(text: string): ReviewReportSections {
     (node) => node.type === "heading" && node.depth === 2 && node.position,
   );
   const [head, next] = heads;
-  if (!head?.position || !next?.position) return whole;
+  if (!head?.position) return whole;
   const first = head.position.start.line - 1;
+
+  /**
+   * 第二档：引子铺开，第一个 `##` 起收进「展开完整报告」。
+   *
+   * 「有没有引子」按解析树问，不数行：标题之外还有顶层内容才算。只有一行 `# 报告` 的
+   * 开头不算——那样首屏就只剩标题加按钮了，不如整篇铺开。
+   */
+  const lead = (): ReviewReportSections => {
+    const told = root.children.some(
+      (node) => node.type !== "heading" && node.position && node.position.start.line - 1 < first,
+    );
+    if (!told) return whole;
+    return {
+      summary: lines.slice(0, first).join("\n").trimEnd(),
+      detail: lines.slice(first).join("\n").trimEnd(),
+      kind: "lead",
+    };
+  };
+
+  if (!next?.position) return lead();
   const second = next.position.start.line - 1;
   // 首节标题本身也是契约的一部分：prompt 要求「报告开头必须先写一节 `## 结论`（就用这
   // 四个字起头）」。第 10 轮的反例是一份开头写「## 前言」、里面整段抄着上一轮四项结论的
@@ -142,17 +188,17 @@ export function splitReviewReport(text: string): ReviewReportSections {
   //
   // 这跟「别按标题拆」（`## 0. 先说结论之外的` 那两份真实报告）不冲突：标题是**又一道**
   // 必须过的闸，不是四栏的替代品。两道都过才算数。
-  if (plainText(head).trim() !== "结论") return whole;
+  if (plainText(head).trim() !== "结论") return lead();
 
   // 匹配用的是去掉行尾 `\r` 的副本，切片仍用原始行——这样 CRLF 报告认得出，返回的正文
   // 又跟入参逐字节一致（不悄悄替换用户的换行）。踩过的坑在正则语义：`\r` 是行终结符，
   // `.` 不匹配它、不带 `m` 的 `$` 只认串尾，于是 `**能不能验收**：不能\r` 认不出来。
   const probes = lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
-  // 只有**证明得了自己按新契约写**的报告才拆：四个栏目各占一段，齐全、按序、不重样。
-  // 存量报告一律整篇铺开——拆点是第二个 `##`，而它们的发现常常就在那之后
+  // 只有**证明得了自己按新契约写**的报告才走第一档：四个栏目各占一段，齐全、按序、不
+  // 重样。差一点就降到第二档——拆点是第二个 `##`，而存量报告的发现常常就在那之后
   // （`LqhF7g_rqANy` 的缺陷在第三个 `##`、`zs6JLcw1VAdr` 的全部发现在第一个 `##`）。
-  // 把发现藏起来比让人多滚两屏严重得多，这一档不留猜的余地：认不出只是啰嗦，认错了
-  // 是骗人。
+  // 把发现藏进一个写着「验证过程、证据、清场记录」的折叠里，比让人多滚两屏严重得多，
+  // 这一档不留猜的余地：降错一档只是多点一下按钮，认错成契约是让按钮替报告撒谎。
   //
   // 「按序、不重样」是第 9 轮补的：只问「这四个标签各自出现过没有」时，四栏完全倒着
   // 写也算数——那更像是抄了一份别人的结论，而不是按这份契约写的摘要。
@@ -161,7 +207,7 @@ export function splitReviewReport(text: string): ReviewReportSections {
     .filter((hit) => hit.column >= 0);
   const complete =
     marked.length === MARK_LINES.length && marked.every((hit, order) => hit.column === order);
-  if (!complete) return whole;
+  if (!complete) return lead();
 
   // 四个标签齐了还不够——得**证明问题本身就在摘要里**，不能只凭标签就假定第二个 `##`
   // 之后都是技术记录。第 10 轮的反例：摘要写着「不能 —— 有 1 条必须先修」「必须修的
@@ -177,10 +223,11 @@ export function splitReviewReport(text: string): ReviewReportSections {
       && node.position.start.line - 1 < aside.at,
   );
   const none = probes.slice(problems.at, aside.at).some((line) => line.includes("没有发现问题"));
-  if (!listed && !none) return whole;
+  if (!listed && !none) return lead();
 
   return {
     summary: lines.slice(0, second).join("\n").trimEnd(),
     detail: lines.slice(second).join("\n").trimEnd(),
+    kind: "contract",
   };
 }

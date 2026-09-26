@@ -6,8 +6,10 @@
 // ② 结论和问题默认就在屏幕上，不需要先点一下；
 // ③ 明细只是折叠**不是丢弃**：展开后原样都在（盘上的 report.md 更是一个字没动，
 //    修复 agent 读的就是它）；
-// ④ 对不上契约的存量报告必须整篇铺开、不画展开按钮——误拆会把内容藏起来，
-//    那比啰嗦严重得多。
+// ④ 对不上契约的存量报告走降级那一档：引子留在首屏，第一个 `##` 起收进一个**什么都不
+//    宣称**的「展开完整报告」。按钮文案是这一档的全部安全边际——「展开技术明细（验证
+//    过程、证据、清场记录）」只有在报告证明得了自己按契约写时才准出现；
+// ⑤ 连引子都没有的报告整篇铺开，一个按钮都不画。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -83,22 +85,31 @@ try {
     "收起后明细应重新从 DOM 上摘掉",
   );
 
-  // ④ 存量报告：整篇铺开，不给展开按钮。样本的首节标题含「结论」但意思相反
-  //    （「先说结论之外的」），正是按标题判契约那一版会误拆的形态——两条【高】
-  //    会被折叠进写着「验证过程、证据、清场记录」的按钮里。
+  // ④ 存量报告走第二档。样本的首节标题含「结论」但意思相反（「先说结论之外的」），
+  //    正是按标题判契约那一版会误拆的形态——那一版把两条【高】折进写着「验证过程、
+  //    证据、清场记录」的按钮里，首屏只剩「做对的部分」。
+  //
+  //    现在拆点在**第一个** `##` 之前：报告自己写的 `verify_failed` 留在首屏，「做对的
+  //    部分」跟两条【高】一起收进「展开完整报告」。按钮一个字都不宣称里面装了什么，
+  //    这是这一档跟误拆的分界线。
   const legacyText = await legacy.locator(".task-markdown").first().innerText();
-  assert.match(legacyText, /verify_failed/, "存量报告的结论要照常可见");
-  assert.match(
-    legacyText,
-    /【高】身份页高内容屏/,
-    "高优先级发现必须留在首屏——认不出契约就整篇铺开，宁可啰嗦也不能把发现藏掉",
-  );
-  assert.match(legacyText, /【高】设置页/, "第二条【高】同样不能被折叠吃掉");
+  assert.match(legacyText, /verify_failed/, "报告自己的判定必须留在首屏");
+  assert.match(legacyText, /2 个可复现的高优先级问题/, "「有几个问题」也留在首屏");
+  assert.doesNotMatch(legacyText, /做对的部分/, "「做对的部分」不许冒充摘要占着首屏");
   assert.equal(
     await legacy.getByRole("button", { name: /技术明细/ }).count(),
     0,
-    "拆不动的报告不该画出一个什么都不装的展开按钮",
+    "认不出契约的报告，按钮不准替折叠里的东西背书",
   );
+  const legacyToggle = legacy.getByRole("button", { name: /^展开完整报告$/ });
+  assert.equal(await legacyToggle.count(), 1, "存量报告要给一个不作承诺的展开入口");
+  await legacyToggle.click();
+  const legacyDetail = await legacy.locator(".review-report-detail .task-markdown").innerText();
+  assert.match(legacyDetail, /【高】身份页高内容屏/, "展开后第一条【高】原样都在");
+  assert.match(legacyDetail, /【高】设置页/, "第二条【高】同样在");
+  assert.match(legacyDetail, /做对的部分/, "折叠不是丢弃");
+  await legacy.getByRole("button", { name: /^收起完整报告$/ }).click();
+  assert.equal(await legacy.locator(".review-report-detail").count(), 0, "能收回去");
 
   // ⑤ 换一轮报告必须回到默认折叠。侧栏抽屉在同一个位置换正文、组件不重新挂载，
   //    展开状态一旦是独立 state 就会串过去——下一份报告一打开就是满屏命令输出。
@@ -218,14 +229,15 @@ try {
 
   // ⑩ 先引用上一轮栏目格式、后面才写真实问题的报告：引用里的四行不能充当本轮签名。
   //    认错时首屏只剩引用里的「可以 / 没有问题」，真正的问题要点开按钮才看得到。
+  //    这份开头除了一级标题什么都没有，连降级的引子都凑不出来——整篇铺开，一个按钮都没有。
   const quoted = page.locator(".quoted-fixture");
   const quotedText = await quoted.locator(".task-markdown").first().innerText();
   assert.match(quotedText, /保存后你刚改的内容会全部消失/, "真正的问题必须默认可见");
   assert.match(quotedText, /下面引用上一轮的结论格式/, "引用段落照常铺开");
   assert.equal(
-    await quoted.getByRole("button", { name: /技术明细/ }).count(),
+    await quoted.locator(".review-report-more").count(),
     0,
-    "认不出契约就整篇铺开，不该画出一个什么都不装的展开按钮",
+    "没有引子就整篇铺开，不该画出任何展开按钮",
   );
 
   // ⑪ 两份「像契约、其实是抄件」的报告：说明段里抄的四行、四栏整个倒着写。两份都不该
@@ -241,14 +253,14 @@ try {
       `${kind}：真正的问题必须默认可见`,
     );
     assert.equal(
-      await fake.getByRole("button", { name: /技术明细/ }).count(),
+      await fake.locator(".review-report-more").count(),
       0,
-      `${kind}：认不出契约就整篇铺开，不该画出展开按钮`,
+      `${kind}：没有引子就整篇铺开，不该画出任何展开按钮`,
     );
   }
 
   // ⑫ 四栏写对了、但结构没证明问题在摘要里：首节写成「前言」（里面是上一轮抄件）、
-  //    问题误用 `##`（首屏只剩「见下方」）。两份都该整篇铺开。
+  //    问题误用 `##`（首屏只剩「见下方」）。两份开头都只有一级标题，整篇铺开。
   for (const [kind, selector] of [
     ["首节写成「前言」", ".wrong-heading-fixture"],
     ["问题误用二级标题", ".problem-heading-fixture"],
@@ -260,9 +272,9 @@ try {
       `${kind}：真正的问题必须默认可见`,
     );
     assert.equal(
-      await fake.getByRole("button", { name: /技术明细/ }).count(),
+      await fake.locator(".review-report-more").count(),
       0,
-      `${kind}：认不出契约就整篇铺开，不该画出展开按钮`,
+      `${kind}：没有引子就整篇铺开，不该画出任何展开按钮`,
     );
   }
 

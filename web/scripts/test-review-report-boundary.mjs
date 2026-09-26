@@ -201,12 +201,23 @@ for (const [kind, open, close] of [
   assert.equal(`${summary}\r\n\r\n${detail}`.replace(/\s+/g, ""), crlf.replace(/\s+/g, ""));
 }
 
-// 认不出契约的 CRLF 报告同样整篇铺开（降级路径不因换行而变）。
+// 开头除了标题什么都没写的 CRLF 报告：连引子都没有，整篇铺开。
 {
   const legacyCrlf = "# 第 1 轮\r\n\r\n## 一、改动范围\r\n\r\n27 个文件。\r\n\r\n## 三、发现的缺陷\r\n\r\n缺陷 1……\r\n";
   const { summary, detail } = splitReviewReport(legacyCrlf);
   assert.equal(summary, legacyCrlf, "拆不动时原样返回，一个字节都不动");
   assert.equal(detail, "");
+}
+
+// 有引子的 CRLF 存量报告走第二档：换行同样不许被悄悄改掉。
+{
+  const leadCrlf = "# 第 1 轮\r\n\r\n结论：**verify_failed**。\r\n\r\n## 一、改动范围\r\n\r\n27 个文件。\r\n";
+  const { summary, detail, kind } = splitReviewReport(leadCrlf);
+  assert.equal(kind, "lead");
+  assert.ok(summary.includes("\r\n"), "引子也得留着 CRLF");
+  assert.ok(detail.includes("\r\n"), "切片必须用原始行");
+  assert.match(detail, /^## 一、改动范围/);
+  assert.equal(`${summary}\r\n\r\n${detail}`.replace(/\s+/g, ""), leadCrlf.replace(/\s+/g, ""));
 }
 
 
