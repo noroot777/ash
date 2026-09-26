@@ -31,14 +31,25 @@ const H2 = /^##\s+(.*)$/;
  * 一个写着「验证过程、证据、清场记录」的折叠里——用户看到的首屏只剩「做对的部分」。
  * （真实样本：`yz74LehaZzwl/H1MQnmqKzCSl/round-1`、`KyF5hukfZ5D9/RJPSXRqyJIo2/round-1`）
  *
- * 要两个而不是一个：一句话里偶然出现某个词不算数，四段结构同时出现才是签名。
+ * **四个一个都不能少，而且必须是加粗标签行。**曾经只要求任意命中两个子串，结果半套
+ * 摘要照样被拆：审查者把第三栏误写成 `## 必须修的问题`，前两栏就凑够了两个标记，拆点
+ * 正好落在那个标题上——首屏写着「有 1 条必须先修」，那一条却在折叠里。放宽一档就等于
+ * 把「认不出就整篇铺开」这条保证换成了猜，而猜错的方向恰好是藏发现。
+ *
+ * 加粗行这一条同时挡掉「正文、引文或代码块里顺口提到两个栏目名」：契约要的是那四段
+ * 结构真的在，不是那几个词出现过。
  */
 const CONTRACT_MARKS = ["能不能验收", "现在什么能用了", "必须修的问题", "不拦验收"];
-const MARKS_REQUIRED = 2;
+/** `**能不能验收**：…`；容忍前面带列表符号，别的形态一律当没写。 */
+const MARK_LINES = CONTRACT_MARKS.map(
+  (mark) => new RegExp(`^\\s{0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\*\\*\\s*${mark}`),
+);
 
 export function splitReviewReport(text: string): ReviewReportSections {
   const lines = text.split("\n");
   const heads: { at: number; title: string }[] = [];
+  /** 每个契约标记出现过的行号；围栏里的不算。 */
+  const markAt: number[][] = CONTRACT_MARKS.map(() => []);
   // 围栏里的 `## xxx` 是被审代码或命令输出的一部分，不是小节标题。开闭用同种记号配对，
   // 这样 ``` 块里贴的 ~~~ 不会把围栏提前关掉。
   let fence: string | null = null;
@@ -53,17 +64,23 @@ export function splitReviewReport(text: string): ReviewReportSections {
       continue;
     }
     const title = H2.exec(line)?.[1];
-    if (title !== undefined) heads.push({ at, title: title.trim() });
+    if (title !== undefined) {
+      heads.push({ at, title: title.trim() });
+      continue;
+    }
+    MARK_LINES.forEach((pattern, index) => {
+      if (pattern.test(line)) markAt[index].push(at);
+    });
   }
 
   const [first, second] = heads;
   if (!first || !second) return { summary: text, detail: "" };
-  // 只有**证明得了自己按新契约写**的报告才拆。存量报告一律整篇铺开：拆点是第二个 `##`，
-  // 而它们的发现常常就在那之后——`LqhF7g_rqANy` 的缺陷在第三个 `##`、`zs6JLcw1VAdr`
-  // 的全部发现在第一个 `##`。把发现藏起来比让人多滚两屏严重得多，这一档不留猜的余地。
-  const firstSection = lines.slice(first.at, second.at).join("\n");
-  const marks = CONTRACT_MARKS.filter((mark) => firstSection.includes(mark)).length;
-  if (marks < MARKS_REQUIRED) return { summary: text, detail: "" };
+  // 只有**证明得了自己按新契约写**的报告才拆：四个加粗标签行全都落在第一节里。存量报告
+  // 一律整篇铺开——拆点是第二个 `##`，而它们的发现常常就在那之后（`LqhF7g_rqANy` 的缺陷
+  // 在第三个 `##`、`zs6JLcw1VAdr` 的全部发现在第一个 `##`）。把发现藏起来比让人多滚两屏
+  // 严重得多，这一档不留猜的余地：认不出只是啰嗦，认错了是骗人。
+  const complete = markAt.every((hits) => hits.some((at) => at > first.at && at < second.at));
+  if (!complete) return { summary: text, detail: "" };
   return {
     summary: lines.slice(0, second.at).join("\n").trimEnd(),
     detail: lines.slice(second.at).join("\n").trimEnd(),

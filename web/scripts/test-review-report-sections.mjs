@@ -2,32 +2,39 @@
 // 让审查者写出四段固定摘要，这里认那四段拆。任何一边漂了，用户要么看见整篇合规证明，
 // 要么更糟——发现被藏掉。所以「认不出契约时必须整篇铺开」是重点用例。
 //
-// 别把判据改回「标题里有没有『结论』」：那一版放行过两份真实报告，把【高】/高危发现
-// 整批折叠进了写着「验证过程、证据、清场记录」的按钮下面（下面有用例钉住）。
+// 两条**别再走回头路**的判据，各自有用例钉在下面：
+// ① 别改回「标题里有没有『结论』」——那一版放行过两份真实报告，把【高】/高危发现整批
+//    折叠进了写着「验证过程、证据、清场记录」的按钮下面。
+// ② 别把「四段齐全」放宽成「命中任意两段」——那一版会把半套摘要当成完整摘要：审查者
+//    只要把第三栏误写成 `## 必须修的问题`，前两栏就凑够数，拆点正好落在那个标题上，
+//    首屏写着「有 1 条必须先修」而那一条在折叠里。
 import assert from "node:assert/strict";
 import { splitReviewReport } from "../src/components/reviewReportSections.ts";
 
-const conforming = [
-  "# 第 4 轮自动验证报告",
-  "",
-  "## 结论",
-  "",
+/** 四个固定小标题的加粗标签行——契约签名就是它们齐全地出现在第一节里。 */
+const contract = [
   "**能不能验收**：不能 —— 有 1 条必须先修，最要命的是烧录用了旧字幕",
   "",
   "**现在什么能用了**：深色主题下卡片不再出现亮紫白空位。",
   "",
-  "## 被审范围与基线",
+  "**必须修的问题**",
   "",
-  "- 基线 `d7ee0b07`",
+  "### 烧录出来的成片用的是你改之前的字幕",
   "",
-  "## 清场",
-  "已停掉 5175。",
+  "你会遇到：改完字幕立刻点烧录，导出的视频里还是上一版。",
+  "",
+  "**不拦验收、但你该知道的**",
+  "",
+  "- 删除项目后整个网格会闪一下。",
 ].join("\n");
+
+const conforming = ["# 第 4 轮自动验证报告", "", "## 结论", "", contract, "", "## 被审范围与基线", "", "- 基线 `d7ee0b07`", "", "## 清场", "已停掉 5175。"].join("\n");
 
 {
   const { summary, detail } = splitReviewReport(conforming);
   assert.match(summary, /## 结论/);
   assert.match(summary, /不能 —— 有 1 条必须先修/);
+  assert.match(summary, /烧录出来的成片/, "问题本身必须留在摘要里，那才是用户要看的");
   // 摘要段止于第二个 `##`：明细一行都不许漏进来。
   assert.doesNotMatch(summary, /被审范围|基线|清场|d7ee0b07/);
   // 明细从第二个 `##` 起，后面的小节全都在——折叠不是丢弃。
@@ -35,6 +42,28 @@ const conforming = [
   assert.match(detail, /## 清场/);
   assert.match(detail, /已停掉 5175。/);
   assert.equal(`${summary}\n\n${detail}`.replace(/\s+/g, ""), conforming.replace(/\s+/g, ""));
+}
+
+// 半套摘要（第 2 轮审查报告里的反例）：前两栏写对了，第三栏却写成了 `##` 标题。
+// 放宽成「任意两段」时这份会被拆，而拆点正好是「必须修的问题」——首屏写着「有 1 条
+// 必须先修」，那一条却在折叠里，正是这次改动要消灭的形态。
+{
+  const half = [
+    "# 第 1 轮审查报告",
+    "",
+    "## 结论",
+    "",
+    "**能不能验收**：不能 —— 有 1 条必须先修",
+    "",
+    "**现在什么能用了**：基础流程已经可用。",
+    "",
+    "## 必须修的问题",
+    "",
+    "### 导出内容仍是旧版本",
+  ].join("\n");
+  const { summary, detail } = splitReviewReport(half);
+  assert.equal(detail, "", "四段缺一段就不是契约，不许拆");
+  assert.match(summary, /导出内容仍是旧版本/, "问题必须留在首屏——半套摘要宁可整篇铺开");
 }
 
 // 反例一（真实报告 `yz74LehaZzwl/H1MQnmqKzCSl/round-1` 的骨架）：首节标题含「结论」，
@@ -98,23 +127,66 @@ const conforming = [
   assert.equal(detail, "");
 }
 
-// 契约认的是四段结构，不是标题措辞：标题怎么写都行，四段里出现两段才算数。
+// 契约认的是四段结构，不是标题措辞：标题怎么写都行，四段齐全才算数。
 for (const head of ["## 结论", "## 结论：不能验收", "## 结论（第 3 轮）", "## 给人看的结论", "## 摘要"]) {
-  const body = "**能不能验收**：可以\n\n**现在什么能用了**：登录能用了。";
-  const { summary, detail } = splitReviewReport(`# 报告\n\n${head}\n\n${body}\n\n## 明细\n\n略\n`);
+  const { summary, detail } = splitReviewReport(`# 报告\n\n${head}\n\n${contract}\n\n## 明细\n\n略\n`);
   assert.match(summary, new RegExp(head.slice(3)), `${head} 那一节本身要留在摘要里`);
-  assert.match(detail, /^## 明细/, `${head} 带着四段结构就该被认作摘要节`);
+  assert.match(detail, /^## 明细/, `${head} 带着完整四段就该被认作摘要节`);
 }
 
-// 只凑出一段不算：一句话里偶然出现某个词不能触发折叠。
+// 缺一段就不算：三段齐全也不行，契约签名没有「差不多」这一档。
 {
-  const oneMark = "# 报告\n\n## 结论\n\n这里只提到必须修的问题这几个字。\n\n## 明细\n\n略\n";
-  assert.equal(splitReviewReport(oneMark).detail, "", "只命中一段标记不构成契约签名");
+  const three = contract.split("\n**不拦验收、但你该知道的**")[0];
+  assert.equal(
+    splitReviewReport(`# 报告\n\n## 结论\n\n${three}\n\n## 明细\n\n略\n`).detail,
+    "",
+    "四段缺一段都不构成契约签名",
+  );
+}
+
+// 栏目名写在正文里不算数：契约要的是那四段**结构**真的在，不是那几个词出现过。
+{
+  const prose = [
+    "# 报告",
+    "",
+    "## 结论",
+    "",
+    "我按模板核对了能不能验收、现在什么能用了、必须修的问题、不拦验收但你该知道的这四栏，",
+    "都写在下面的分析里了。",
+    "",
+    "## 明细",
+    "",
+    "略",
+  ].join("\n");
+  assert.equal(splitReviewReport(prose).detail, "", "顺口提到四个栏目名不构成契约签名");
+}
+
+// 围栏里的加粗标签行同样不算——贴一份别人的报告当证据，不能把自己变成契约报告。
+{
+  const quoted = [
+    "# 报告",
+    "",
+    "## 结论",
+    "",
+    "上一轮的报告长这样：",
+    "",
+    "```md",
+    "**能不能验收**：可以",
+    "**现在什么能用了**：略",
+    "**必须修的问题**",
+    "**不拦验收、但你该知道的**",
+    "```",
+    "",
+    "## 明细",
+    "",
+    "略",
+  ].join("\n");
+  assert.equal(splitReviewReport(quoted).detail, "", "围栏里引用的标签行不是这份报告的结构");
 }
 
 // 只有 `## 结论` 一节、没有下文：没有明细就不该画出那个展开按钮。
 {
-  const only = "# 报告\n\n## 结论\n\n**能不能验收**：可以\n";
+  const only = `# 报告\n\n## 结论\n\n${contract}\n`;
   assert.equal(splitReviewReport(only).detail, "");
 }
 
@@ -125,9 +197,9 @@ for (const head of ["## 结论", "## 结论：不能验收", "## 结论（第 3 
     "",
     "## 结论",
     "",
-    "**能不能验收**：可以。执行者贴的原文如下：",
+    contract,
     "",
-    "**现在什么能用了**：登录能用了。",
+    "执行者贴的原文如下：",
     "",
     "```md",
     "## 这是被审文件里的标题",
@@ -147,17 +219,26 @@ for (const head of ["## 结论", "## 结论：不能验收", "## 结论（第 3 
 
 // 围栏用同种记号配对：``` 块里贴的 ~~~ 不能把围栏提前关掉。
 {
-  const nested = "# 报告\n\n## 结论\n\n**能不能验收**：可以\n\n**现在什么能用了**：略\n\n```\n~~~\n## 输出里的井号\n~~~\n```\n\n## 明细\n\n略\n";
+  const nested = `# 报告\n\n## 结论\n\n${contract}\n\n\`\`\`\n~~~\n## 输出里的井号\n~~~\n\`\`\`\n\n## 明细\n\n略\n`;
   assert.match(splitReviewReport(nested).detail, /^## 明细/);
 }
 
 // `###` 是小节内部结构（「必须修的问题」下面每条问题一个小标题），不构成明细分界。
 {
-  const h3 = "# 报告\n\n## 结论\n\n**能不能验收**：不能\n\n**必须修的问题**\n\n### 问题 1\n\n你会遇到：烧录出旧字幕\n\n## 明细\n\n略\n";
-  const { summary, detail } = splitReviewReport(h3);
-  assert.match(summary, /### 问题 1/);
-  assert.match(summary, /烧录出旧字幕/);
+  const { summary, detail } = splitReviewReport(`# 报告\n\n## 结论\n\n${contract}\n\n## 明细\n\n略\n`);
+  assert.match(summary, /### 烧录出来的成片/);
+  assert.match(summary, /改完字幕立刻点烧录/);
   assert.match(detail, /^## 明细/);
+}
+
+// 列表符号打头的标签行也认：`- **能不能验收**：…` 是同一段结构，不是另一种写法。
+{
+  const bulleted = contract.replace(/^\*\*/gm, "- **");
+  assert.match(
+    splitReviewReport(`# 报告\n\n## 结论\n\n${bulleted}\n\n## 明细\n\n略\n`).detail,
+    /^## 明细/,
+    "标签行前面带列表符号仍属于契约",
+  );
 }
 
 // 空报告不该炸。

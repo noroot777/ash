@@ -1,5 +1,5 @@
-// 审查报告摘要/明细折叠的 DOM fixture。两份报告并排挂出来：
-// 一份按契约写（第一个二级标题是 `## 结论`），一份是存量格式（结论混在开头正文里）。
+// 审查报告摘要/明细折叠的 DOM fixture。四份并排挂出来：合契约的、存量格式的，
+// 以及两份「在同一个位置换轮次」的（正文不同 / 正文一字不差）。
 //
 // 并排是必须的：这个改动真正的风险不是「折叠不灵」，而是**对不上契约的报告被误拆、
 // 内容被藏进折叠里还没人发现**。两种形态同屏才能一眼看出降级行为是「整篇铺开」。
@@ -89,16 +89,22 @@ const legacy = `# 自由工作流 · 第 1 轮逻辑审查报告
 ## 2. 【高】设置页 ≤640px 的新单列断点把导航切断
 `;
 
-// 第三块：在**同一个位置**换正文，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
+// 第三、四块：在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，
 // 换一轮就会串过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
-function SwitchableReport() {
+//
+// `identical` 那一份是边界：**两轮报告一字不差**（同一处没修好、原样重报一遍）。按正文
+// 判「换了没有」在这里认不出来，所以复位判据必须是报告身份 `reportKey`。
+function SwitchableReport({ identical = false }: { identical?: boolean }) {
   const [second, setSecond] = useState(false);
   return (
     <>
       <button type="button" className="switch-round" onClick={() => setSecond((value) => !value)}>
         切换轮次
       </button>
-      <ReviewReportBody text={second ? conformingRound2 : conforming} />
+      <ReviewReportBody
+        text={!second || identical ? conforming : conformingRound2}
+        reportKey={`run-1:${second ? 2 : 1}`}
+      />
     </>
   );
 }
@@ -106,13 +112,16 @@ function SwitchableReport() {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <div className="conforming-fixture markdown-report-body">
-      <ReviewReportBody text={conforming} />
+      <ReviewReportBody text={conforming} reportKey="run-1:4" />
     </div>
     <div className="legacy-fixture markdown-report-body">
-      <ReviewReportBody text={legacy} />
+      <ReviewReportBody text={legacy} reportKey="run-2:1" />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />
+    </div>
+    <div className="identical-fixture markdown-report-body">
+      <SwitchableReport identical />
     </div>
   </StrictMode>,
 );

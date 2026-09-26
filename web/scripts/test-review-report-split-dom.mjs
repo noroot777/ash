@@ -137,6 +137,27 @@ try {
     "切回上一轮也该是折叠的",
   );
 
+  // ⑥ 两轮报告**一字不差**时同样要复位。同一处没修好、原样重报一遍就会撞上：正文判不出
+  //    「换过轮」，于是上一轮展开的明细直接留在新轮次的标题底下。复位判据必须是报告身份。
+  const identical = page.locator(".identical-fixture");
+  await identical.getByRole("button", { name: /展开技术明细/ }).click();
+  assert.equal(
+    await identical.locator(".review-report-detail").count(),
+    1,
+    "第一轮应当能正常展开",
+  );
+  await identical.getByRole("button", { name: "切换轮次" }).click();
+  assert.equal(
+    await identical.locator(".review-report-detail").count(),
+    0,
+    "正文一字不差也算换了一轮，展开状态不许串过去",
+  );
+  assert.equal(
+    await identical.getByRole("button", { name: /展开技术明细/ }).count(),
+    1,
+    "换轮后按钮应回到「展开」态",
+  );
+
   console.log("review report split dom ok");
 } finally {
   await browser?.close();

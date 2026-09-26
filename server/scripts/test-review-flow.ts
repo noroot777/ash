@@ -283,15 +283,26 @@ assertBrowserOrder(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, re
 // 续跑提醒是被打断那条路径上**唯一**还在重贴格式要求的东西（完整 prompt 不重发）。
 // 所以凡是「丢了报告就退回改动之前的样子」的规则，都必须在缩略版里也留得住：首句点名
 // 最要命的那条、摘要最多 5 条——只写栏目名的话，续跑出来的报告又会是「有 11 条，自己翻」。
+// 报告形状的规则本体，完整 prompt 和缩略提醒**逐条都要有**。
+//
+// 为什么缩略版不能只留「上一轮点名的那两条」：断线续跑时完整 prompt 不重发，格式要求只有
+// 那一句话跟得到底。漏掉的每一条都不是省字，是「中断过的那一轮报告退回改动之前的样子」
+// ——严重度又混用五套刻度、命令输出又铺回首屏。这里逐条钉住，下次往完整 prompt 加规则
+// 而忘了加进提醒，当场红。
 const assertSummaryRules = (text: string, source: string) => {
   assert.match(text, /能不能验收/, `${source} 必须带上摘要四栏`);
   // 完整 prompt 和缩略提醒措辞不同（前者「第一行「你会遇到」」、后者「第一行只写用户会
   // 遇到什么」），所以两种都认——断言钉的是规则在不在，不是措辞怎么写。
   assert.match(text, /第一行「你会遇到」|第一行只写用户会遇到什么/, `${source} 必须要求第一行写现象`);
   assert.match(text, /第二行「为什么」|机制放第二行/, `${source} 必须要求机制退到第二行`);
+  assert.match(text, /第三行「建议怎么修」|第三行写建议怎么修/, `${source} 必须要求第三行给修法`);
   assert.match(text, /最要命/, `${source} 必须要求首句点名最严重的那一条`);
   assert.match(text, /最多展开 5 条/, `${source} 必须保留摘要 5 条上限`);
   assert.match(text, /一条都?不许丢|完整三行写进技术明细/, `${source} 必须说明超出的条目去哪，别被读成截断`);
+  assert.match(text, /没有发现问题/, `${source} 必须给「没问题」一个固定写法，否则核对记录会被当成问题清单`);
+  assert.match(text, /不写原因/, `${source} 必须约束不拦项一行一条`);
+  assert.match(text, /两档/, `${source} 必须把严重度钉死成两档，别放任第二套刻度`);
+  assert.match(text, /不进这一节|不许出现基线 hash/, `${source} 必须把合规证明挡在摘要之外`);
 };
 assertSummaryRules(reviewPrompt, "自动验证 prompt");
 assertSummaryRules(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
