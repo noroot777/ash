@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LlmProtocol, ProviderModelListMode } from "@ash/shared";
-import { ArrowsClockwise, Play, Plus, X } from "@phosphor-icons/react";
+import { ArrowsClockwise, Play, X } from "@phosphor-icons/react";
 import { Button, PillTabs } from "../components/ui.tsx";
+import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { api } from "../lib/api.ts";
 
 /**
@@ -42,11 +43,9 @@ export function ProviderPinnedModels({
   const [probing, setProbing] = useState(false);
   const [probeError, setProbeError] = useState("");
   const [probed, setProbed] = useState(false);
-  const [filter, setFilter] = useState("");
   const [testing, setTesting] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, { ok: boolean; text: string }>>({});
   const probeRequest = useRef(0);
-  const filterId = `provider-${providerId ?? "new"}-pinned-filter`;
 
   // 连的还是不是同一家供应商变了，之前探到的目录和测试结论就都不作数了。
   useEffect(() => {
@@ -111,33 +110,17 @@ export function ProviderPinnedModels({
     }
   };
 
-  // 探测过就在目录里筛，没探过（或探失败）也能直接手打模型名回车加进去。
-  const matches = useMemo(() => {
-    const keyword = filter.trim().toLowerCase();
-    return catalog
-      .filter((model) => !pinned.includes(model))
-      .filter((model) => !keyword || model.toLowerCase().includes(keyword));
-  }, [catalog, filter, pinned]);
-  const suggestions = useMemo(() => matches.slice(0, 8), [matches]);
+  // 探测过就在目录里挑（已钉的不再重复列），没探过（或探失败）也能在筛选框里
+  // 直接手打模型名当自由值加进去。
+  const candidates = useMemo<DropdownOption[]>(() => catalog
+    .filter((model) => !pinned.includes(model))
+    .map((model) => ({ value: model, label: model, mono: true, group: "探测到的模型" })),
+  [catalog, pinned]);
 
-  /**
-   * `keepFilter`：点候选是「在这批筛出来的里挑」，挑完往往还要接着挑下一个，所以
-   * 筛选词必须留着——加进去的那个会因为 suggestions 过滤掉已钉项而自己消失，剩下的
-   * 原地不动。手打模型名回车/点「添加」才清空，否则刚打完的那串会赖在输入框里。
-   */
-  const add = (model: string, keepFilter = false) => {
+  const add = (model: string) => {
     const value = model.trim();
     if (!value || pinned.includes(value)) return;
     onPinnedChange([...pinned, value]);
-    if (!keepFilter) setFilter("");
-  };
-
-  // 回车/「添加」：筛得出候选就取第一个（算作从候选里挑，留住筛选词继续挑），
-  // 筛不出来才把手打的这串当模型名。
-  const addFromInput = () => {
-    const hit = suggestions[0];
-    if (hit) add(hit, true);
-    else add(filter);
   };
 
   const remove = (model: string) => {
@@ -171,39 +154,32 @@ export function ProviderPinnedModels({
       {mode === "pinned" && (
         <div className="provider-pinned-body">
           <div className="provider-pinned-add">
-            <input
-              id={filterId}
-              value={filter}
-              placeholder={probed ? "筛选或直接填写模型名" : "填写模型名，或先探测再筛选"}
-              onChange={(event) => setFilter(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                addFromInput();
-              }}
+            <Dropdown
+              label="添加固定模型"
+              value=""
+              options={candidates}
+              status={probing ? "loading" : probeError ? "failed" : catalog.length ? "ready" : "idle"}
+              note={probeError ? `探测失败：${probeError}（仍可直接填写模型名）` : ""}
+              allowCustom
+              mono
+              keepOpenOnSelect
+              filterPlaceholder={probed ? "筛选或直接填写模型名" : "填写模型名，或先探测再筛选"}
+              emptyText={probed
+                ? "没有匹配的模型，输入完整模型名即可直接使用"
+                : "还没探测目录，输入完整模型名即可直接添加"}
+              placeholder="添加模型"
+              onChange={add}
             />
             <Button disabled={probing} onClick={() => void probe()}>
               <ArrowsClockwise size={12} className={probing ? "provider-spin" : ""} />
               {probing ? "探测中…" : "探测模型"}
             </Button>
-            <Button disabled={!filter.trim() && !suggestions.length} onClick={addFromInput}>
-              <Plus size={12} weight="bold" /> 添加
-            </Button>
           </div>
 
-          {probeError && <small className="is-error">{probeError}</small>}
-
-          {!!suggestions.length && (
-            <div className="provider-pinned-suggest">
-              {suggestions.map((model) => (
-                <button type="button" key={model} onClick={() => add(model, true)}>
-                  <Plus size={10} weight="bold" /> {model}
-                </button>
-              ))}
-              {matches.length > suggestions.length && (
-                <small>还有 {matches.length - suggestions.length} 个，继续输入以筛选</small>
-              )}
-            </div>
+          {(catalog.length > 0 || probeError) && (
+            <small className={probeError ? "is-error" : ""}>
+              {probeError || `已返回 ${catalog.length} 个完整模型名`}
+            </small>
           )}
 
           {pinned.length ? (
