@@ -5,6 +5,7 @@ import { type ChatMember } from "@ash/shared/chat";
 import { ArrowUp, Quotes, Stop, X } from "@phosphor-icons/react";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { ChatContextNotice } from "../chat/ChatContextNotice.tsx";
+import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { executorRunSummary, isExecutorPickable, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { useSideChatMember } from "./useSideChatMember.ts";
 import type { useSideChat } from "./useSideChat.ts";
@@ -15,6 +16,9 @@ export function SideChatComposer({ task, chat }: { task: Task; chat: SideChatSta
   const connection = useSideChatMember(task);
   const input = useRef<HTMLTextAreaElement>(null);
   const [expanded, setExpanded] = useState(false);
+  // 附件跟主会话回复框同一套（上传、在途卡片、取消、上限）；草稿归 useSideChat 管，
+  // 所以这里只把状态接过去，切侧聊/刷新页面时粘好的图还在。
+  const uploads = useAttachments({ value: chat.attachments, onChange: chat.setAttachments, pending: chat.pending, onPendingChange: chat.setPending });
   const types = registeredAgentTypes(connection.profiles);
   const member = chat.room?.members[0] ?? connection.member;
   const valid = !!member && connection.ready && !connection.error && isExecutorPickable(member, types, connection.profiles);
@@ -23,7 +27,7 @@ export function SideChatComposer({ task, chat }: { task: Task; chat: SideChatSta
     if (chat.room) void chat.saveMember(next);
     else connection.choose(next);
   };
-  const send = () => { if (valid) void chat.send(member); };
+  const send = () => { if (valid && chat.canSend) void chat.send(member); };
   useEffect(() => {
     if (chat.ready) input.current?.focus({ preventScroll: true });
   }, [chat.ready, chat.room?.id, chat.quote?.id]);
@@ -41,11 +45,13 @@ export function SideChatComposer({ task, chat }: { task: Task; chat: SideChatSta
       {chat.busy && <button type="button" disabled={chat.sending} onClick={() => void chat.stop()}><Stop size={12} weight="fill" />停止侧聊</button>}
     </div>}
     <ChatContextNotice context={chat.snapshot?.context} />
+    <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending} error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
     <div className="side-chat-input">
-      <textarea ref={input} aria-label="侧聊消息输入" placeholder={chat.quote ? "想问这段内容什么？" : "围绕主会话问个问题…"} disabled={!chat.ready} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} onKeyDown={(event) => {
+      <textarea ref={input} aria-label="侧聊消息输入" placeholder={chat.quote ? "想问这段内容什么？" : "围绕主会话问个问题…"} disabled={!chat.ready} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); }
       }} />
       <footer>
+        <AttachmentPicker addFiles={uploads.addFiles} disabled={!chat.ready || chat.sending} />
         {/* 「选谁干活」那颗三段胶囊就放在输入框里：它是每次发送前都可能要看一眼的东西，
             单开一条横栏在侧栏这点宽度里太贵。Enter/Shift Enter 的提示挪进头带的 ⓘ。 */}
         <RunTargetPicker label="侧聊执行器" variant="chip" types={types} profiles={connection.profiles} knownProfiles={connection.profiles} selection={member ?? null}

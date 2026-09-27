@@ -11,7 +11,7 @@ export const chatApi = {
   update: (roomId: string, patch: { name?: string; members?: ChatMember[] }) => request<ChatRoom>(`/chats/${roomId}`, json(patch, "PATCH")),
   remove: (roomId: string) => request<{ deleted: true }>(`/chats/${roomId}`, { method: "DELETE" }),
   snapshot: (roomId: string) => request<ChatSnapshot>(`/chats/${roomId}`),
-  send: (roomId: string, body: string, id: string, projectId?: string) => request<ChatSnapshot>(`/chats/${roomId}/messages`, json({ body, id, projectId })),
+  send: (roomId: string, body: string, id: string, projectId?: string, attachments?: string[]) => request<ChatSnapshot>(`/chats/${roomId}/messages`, json({ body, id, projectId, attachments })),
   stop: (roomId: string) => request<ChatSnapshot>(`/chats/${roomId}/stop`, json({})),
   assistants: (projectId: string) => request<ChatRoom[]>(`/chats?kind=assistant&projectId=${encodeURIComponent(projectId)}`),
   createAssistant: (projectId: string, member: ChatMember, name = "ash 助手") => request<ChatRoom>("/chats", json({ projectId, name, members: [member], kind: "assistant" })),

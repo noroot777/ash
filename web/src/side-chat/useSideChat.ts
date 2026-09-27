@@ -1,14 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import type { ChatMember, ChatRoom, ChatSnapshot } from "@ash/shared/chat";
 import { chatApi } from "../chat/chatApi.ts";
 import { createClientId } from "../lib/clientId.ts";
+import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments.tsx";
 import { clearSideChatQuote, moveNewSideChatQuote, sideChatMessageBody, useSideChatQuote } from "./sideChatQuote.ts";
-import { newSideChatScope, readSideStorage as read, sideDraftKey as draftKey, sideRequestKey as requestKey, writeSideStorage as write } from "./sideChatStorage.ts";
+import { newSideChatScope, readSideStorage as read, sideAttachmentsKey as filesKey, sideDraftKey as draftKey, sideRequestKey as requestKey, writeSideStorage as write } from "./sideChatStorage.ts";
 
 const finished = (status: string) => ["done", "failed", "stopped"].includes(status);
-type SendRequest = { id: string; body: string; draft?: string; quoteId?: string };
+type SendRequest = { id: string; body: string; draft?: string; quoteId?: string; attachments?: string[] };
 const sameMember = (a: ChatMember, b: ChatMember) => a.agentType === b.agentType && a.executorId === b.executorId
   && a.model === b.model && a.reasoningEffort === b.reasoningEffort && a.name === b.name;
+const samePaths = (a: string[] | undefined, b: string[]) => JSON.stringify(a ?? []) === JSON.stringify(b);
+
+// 已上传的附件跟草稿一样按 scope 落在本地：刷新页面、切到别的侧聊再切回来，
+// 粘好还没发的那几张图仍在原处（字节早就在服务端了，这里存的只是路径和缩略图信息）。
+function readAttachments(scope: string): UploadAttachment[] {
+  try {
+    const value = JSON.parse(read(filesKey(scope)) ?? "[]") as unknown;
+    return Array.isArray(value) ? value.filter((item): item is UploadAttachment =>
+      !!item && typeof (item as UploadAttachment).path === "string") : [];
+  } catch { return []; }
+}
 
 export function mergeSideSnapshot(previous: ChatSnapshot | null, next: ChatSnapshot): ChatSnapshot {
   if (!previous || previous.room.id !== next.room.id) return next;
@@ -36,6 +48,8 @@ export function useSideChat(taskId: string) {
   const [memberError, setMemberError] = useState("");
   const [memberUncertain, setMemberUncertain] = useState(false);
   const [draft, setDraftState] = useState(() => read(draftKey(newScope)) ?? "");
+  const [attachments, setAttachmentsState] = useState<UploadAttachment[]>(() => readAttachments(newScope));
+  const [pending, setPendingState] = useState<UploadingFile[]>([]);
   const [sending, setSending] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
   const [proposedMember, setProposedMember] = useState<{ roomId: string; member: ChatMember } | null>(null);
@@ -48,7 +62,14 @@ export function useSideChat(taskId: string) {
   const memberRevision = useRef(0);
   const memberPending = useRef(false);
   const confirmedMembers = useRef(new Map<string, ChatMember>());
+  const attached = useRef(attachments);
+  const uploading = useRef(pending);
   const selectionKey = `ash:side-chat:task:${taskId}`;
+  const restoreAttachments = useCallback((scope: string) => {
+    const restored = readAttachments(scope);
+    attached.current = restored;
+    setAttachmentsState(restored);
+  }, []);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const chooseRoom = useCallback((id: string | null) => {
     initialized.current = true; selected.current = id;
@@ -56,7 +77,8 @@ export function useSideChat(taskId: string) {
     setRoomId(id); setSnapshot(null); setConnected(false); setError(""); setSendError(""); setMemberError(""); setMemberUncertain(false);
     setProposedMember(null); memberPending.current = false;
     setDraftState(read(draftKey(id ?? newSideChatScope(taskId))) ?? "");
-  }, [taskId, selectionKey]);
+    restoreAttachments(id ?? newSideChatScope(taskId));
+  }, [taskId, selectionKey, restoreAttachments]);
   const apply = useCallback((value: ChatSnapshot) => {
     if (value.room.parentTaskId !== taskId) return;
     const confirmed = confirmedMembers.current.get(value.room.id);
@@ -66,6 +88,7 @@ export function useSideChat(taskId: string) {
     }
     const active = alive.current && selected.current === value.room.id;
     let clearedDraft = false;
+    let clearedFiles = false;
     let acknowledged = false;
     try {
       const request = JSON.parse(read(requestKey(value.room.id)) ?? "null") as SendRequest | null;
@@ -73,6 +96,10 @@ export function useSideChat(taskId: string) {
         acknowledged = true;
         if (read(draftKey(value.room.id)) === (request.draft ?? request.body)) {
           write(draftKey(value.room.id), ""); clearedDraft = true;
+        }
+        // 发出去的那几张才摘：请求在途期间又粘进来的留着（跟主会话回复框同一条判据）。
+        if (samePaths(request.attachments, readAttachments(value.room.id).map((file) => file.path))) {
+          write(filesKey(value.room.id), "[]"); clearedFiles = true;
         }
         if (request.quoteId) clearSideChatQuote(taskId, value.room.id, request.quoteId);
         write(requestKey(value.room.id), "null");
@@ -84,6 +111,7 @@ export function useSideChat(taskId: string) {
     setError("");
     if (acknowledged) setSendError("");
     if (clearedDraft) setDraftState("");
+    if (clearedFiles) { attached.current = []; setAttachmentsState([]); }
   }, [taskId]);
   const reload = useCallback(async () => {
     const revision = memberRevision.current;
@@ -128,10 +156,24 @@ export function useSideChat(taskId: string) {
   const room = baseRoom && proposedMember?.roomId === baseRoom.id ? { ...baseRoom, members: [proposedMember.member] } : baseRoom;
   const busy = !!snapshot?.messages.some((message) => !finished(message.status)) || snapshot?.context?.status === "compacting";
   const body = sideChatMessageBody(draft, quote);
-  const canSend = loaded && (!roomId || !!snapshot) && !busy && !sending && !savingMember && !memberUncertain && !!draft.trim();
+  // 只粘一张图不打字也能发（正文空、附件在，服务端按有附件放行）；在途的没传完不放行，
+  // 否则发出去的那条会少几张图，而用户以为都带上了。
+  const canSend = loaded && (!roomId || !!snapshot) && !busy && !sending && !savingMember && !memberUncertain
+    && !pending.length && (!!draft.trim() || attachments.length > 0);
   const setDraft = (value: string) => {
     write(draftKey(selected.current ?? newScope), value);
     setDraftState(value);
+  };
+  const setAttachments = (update: SetStateAction<UploadAttachment[]>) => {
+    const next = typeof update === "function" ? update(attached.current) : update;
+    attached.current = next;
+    write(filesKey(selected.current ?? newScope), JSON.stringify(next));
+    setAttachmentsState(next);
+  };
+  const setPending = (update: SetStateAction<UploadingFile[]>) => {
+    const next = typeof update === "function" ? update(uploading.current) : update;
+    uploading.current = next;
+    setPendingState(next);
   };
   const updateRoom = (value: ChatRoom) => {
     if (!alive.current || selected.current !== value.id) return;
@@ -168,7 +210,8 @@ export function useSideChat(taskId: string) {
     const scope = targetId ?? newScope;
     let previous: SendRequest | null = null;
     try { previous = JSON.parse(read(requestKey(scope)) ?? "null"); } catch { /* Recreate invalid local metadata. */ }
-    const request: SendRequest = { id: previous?.body === body ? previous.id : createClientId(), body, draft: draft.trim(), quoteId: quote?.id };
+    const paths = attached.current.map((file) => file.path);
+    const request: SendRequest = { id: previous?.body === body && samePaths(previous.attachments, paths) ? previous.id : createClientId(), body, draft: draft.trim(), quoteId: quote?.id, attachments: paths };
     write(requestKey(scope), JSON.stringify(request));
     write(draftKey(scope), draft.trim());
     try {
@@ -180,7 +223,8 @@ export function useSideChat(taskId: string) {
         targetId = created.id;
         write(requestKey(targetId), JSON.stringify(request));
         write(draftKey(targetId), read(draftKey(newScope)) ?? request.draft!);
-        write(draftKey(newScope), ""); write(requestKey(newScope), "null");
+        write(filesKey(targetId), read(filesKey(newScope)) ?? "[]");
+        write(draftKey(newScope), ""); write(requestKey(newScope), "null"); write(filesKey(newScope), "[]");
         write(selectionKey, targetId); write(key, "");
         selected.current = targetId; initialized.current = true;
         moveNewSideChatQuote(taskId, targetId);
@@ -188,6 +232,7 @@ export function useSideChat(taskId: string) {
           setRooms((rows) => [created, ...rows.filter((row) => row.id !== created.id)]);
           setRoomId(targetId); setSnapshot(null); setConnected(false);
           setDraftState(read(draftKey(targetId)) ?? "");
+          restoreAttachments(targetId);
         }
         // A retry can recover a room created with the user's earlier model choice.
         if (created.members[0] && !sameMember(created.members[0], member)) {
@@ -197,7 +242,7 @@ export function useSideChat(taskId: string) {
           if (alive.current) setMemberUncertain(false);
         }
       }
-      apply(await chatApi.send(targetId, body, request.id));
+      apply(await chatApi.send(targetId, body, request.id, undefined, paths));
     } catch (reason) {
       if (alive.current && (!targetId || selected.current === targetId)
         && read(requestKey(targetId ?? scope)) !== "null") setSendError(String(reason));
@@ -208,7 +253,9 @@ export function useSideChat(taskId: string) {
     try { apply(await chatApi.stop(roomId)); }
     catch (reason) { if (alive.current && selected.current === roomId) setError(String(reason)); }
   };
-  const select = (id: string | null) => { if (!locked.current && !savingMember) chooseRoom(id); };
+  // 传到一半不换房间：在途那张传完会落进「切换之后」的草稿，等于把图挂到别人名下。
+  // 头带上的选择框同时也是禁用的，这一句挡的是别的表面直接调过来的情况。
+  const select = (id: string | null) => { if (!locked.current && !savingMember && !uploading.current.length) chooseRoom(id); };
   const removeQuote = () => { if (quote) clearSideChatQuote(taskId, roomId, quote.id); };
-  return { rooms, room, snapshot, ready, loaded, connected, error: sendError || error, memberError, memberUncertain, draft, quote, removeQuote, sending, savingMember, busy, canSend, select, setDraft, saveMember, send, stop, reload };
+  return { rooms, room, snapshot, ready, loaded, connected, error: sendError || error, memberError, memberUncertain, draft, attachments, pending, quote, removeQuote, sending, savingMember, busy, canSend, select, setDraft, setAttachments, setPending, saveMember, send, stop, reload };
 }

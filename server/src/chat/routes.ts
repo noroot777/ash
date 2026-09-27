@@ -7,7 +7,7 @@ import { actorOf, ownerIdOf } from "../auth/context.js";
 import { visibleTaskIds } from "../auth/visibility.js";
 import { canUseOwned, filterOwned } from "../auth/owned.js";
 import { enrichTasks, toTaskListItem } from "../task-store.js";
-import { id, now } from "../util.js";
+import { attachmentsPrompt, id, now } from "../util.js";
 import { chatService, roomMessages, toRoom, type ChatService, type RoomRow } from "./service.js";
 import { chatContextStatus } from "./context-store.js";
 import { validateAssistantWorkflow } from "./assistant.js";
@@ -105,12 +105,22 @@ export function mountChatRoutes(api: Hono, service: ChatService = chatService) {
     // 侧聊不设字数上限（用户 2026-09-21 指定：和主会话一样）——主会话的 /reply 也不限长，
     // 而侧聊的一条消息里常常整段带着主会话选文的引用，8000 字是按群聊的一句话来回定的。
     const limit = room.kind === "side" ? Infinity : 8000;
-    if (typeof body.body !== "string" || !body.body.trim() || body.body.length > limit || typeof body.id !== "string" || !/^[\w-]{8,80}$/u.test(body.id)) return c.json({ error: room.kind === "side" ? "消息不能为空，并需有效消息编号。" : "消息限 1–8000 字，并需有效消息编号。" }, 400);
+    // 粘贴进来的图片/文件跟主会话同一条路：附件本身早已经上传落盘（/uploads），这里
+    // 收到的只是路径清单，由 attachmentsPrompt 拼成正文末尾那段固定文本——agent 只认
+    // 文本，读端（shared 的 parseAttachmentText）再把这段摘回来变成缩略图。
+    const attachments = body.attachments as unknown;
+    if (attachments !== undefined && (!Array.isArray(attachments) || attachments.length > 20
+      || attachments.some((path) => typeof path !== "string" || !path.trim() || path.length > 1000))) {
+      return c.json({ error: "附件清单无效。" }, 400);
+    }
+    const paths = (attachments as string[] | undefined) ?? [];
+    // 只带图不打字是常态（「看看这张截图」），所以正文空但有附件时不算空消息。
+    if (typeof body.body !== "string" || (!body.body.trim() && !paths.length) || body.body.length > limit || typeof body.id !== "string" || !/^[\w-]{8,80}$/u.test(body.id)) return c.json({ error: room.kind === "side" ? "消息不能为空，并需有效消息编号。" : "消息限 1–8000 字，并需有效消息编号。" }, 400);
     if (body.role !== undefined || body.mentions !== undefined) return c.json({ error: "角色和点名对象由服务器确定。" }, 400);
     if (body.projectId !== undefined && (room.kind !== "assistant" || typeof body.projectId !== "string")) return c.json({ error: "项目上下文无效" }, 400);
     if (body.projectId && !await visibleProject(c, body.projectId)) return c.json({ error: "project not found" }, 404);
     try {
-      await service.send(room, body.body.trim(), body.id, actorOf(c).name, body.projectId);
+      await service.send(room, body.body.trim() + attachmentsPrompt(paths), body.id, actorOf(c).name, body.projectId);
       return c.json(await snapshot(room, c), 202);
     } catch (error) { return c.json({ error: error instanceof Error ? error.message : "消息发送失败" }, 409); }
   });

@@ -1,9 +1,11 @@
 import { useRef } from "react";
 import type { Task } from "@ash/shared";
 import type { ChatMessage } from "@ash/shared/chat";
+import { parseAttachmentText } from "@ash/shared/attachments";
 import { ArrowDown, ArrowBendUpLeft } from "@phosphor-icons/react";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 import { SideChatComposer } from "./SideChatComposer.tsx";
@@ -19,11 +21,15 @@ function SideMessage({ message }: { message: ChatMessage }) {
   // 跑完/被停之后仍留在回复上方折着。有过程可看时就不再说「正在思考…」——那句话此刻
   // 反而比真实进度少。
   const trace = message.trace ?? [];
+  // 自己发的那条里，附件是正文末尾一段固定文本（server 的 attachmentsPrompt 拼的）。
+  // 这里按同一把尺子摘回来还原成缩略图，别让用户读自己粘的图的绝对路径。
+  const parsed = message.role === "user" ? parseAttachmentText(message.body) : null;
   return <article className={`side-chat-message is-${message.role} is-${message.status}`}>
     <header><strong>{message.role === "user" ? "你" : message.role === "system" ? "ash" : "侧聊助手"}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>
     {!!trace.length && <ExecutionDetails events={trace} running={busy} />}
     {busy && !trace.length && <p className="side-chat-thinking" role="status">{message.status === "queued" ? "等待回复…" : "正在思考…"}</p>}
-    {!busy && <MarkdownBody text={message.body} />}
+    {!busy && <MarkdownBody text={parsed?.body ?? message.body} />}
+    {!!parsed?.paths.length && <MessageAttachments paths={parsed.paths} />}
     {message.forwardError && <p className="side-chat-error" role="status">未发送到主任务：{message.forwardError}</p>}
     {message.forward && <details className={`side-chat-receipt is-${message.forward.status}`}>
       <summary><ArrowBendUpLeft size={14} /><span>{receiptLabels[message.forward.status]}</span></summary>

@@ -20,7 +20,9 @@ export function SideChatHeadControls({ chat }: { chat: SideChatState }) {
   const help = useRef<HTMLDivElement>(null);
   const helpTrigger = useRef<HTMLButtonElement>(null);
   useDismissable({ enabled: helpOpen, containerRef: help, restoreFocusRef: helpTrigger, onClose: () => setHelpOpen(false) });
-  const locked = chat.sending || chat.savingMember;
+  // 传图传到一半不让切房间：在途那张传完之后会落进「当时那个侧聊」的草稿，
+  // 切走等于把图挂到别人名下。上传就那么几秒，这里跟发送中同一档处理。
+  const locked = chat.sending || chat.savingMember || chat.pending.length > 0;
   return <InspectorHeadActions>
     <div className="side-chat-head">
       {!!chat.rooms.length && <>
@@ -34,7 +36,7 @@ export function SideChatHeadControls({ chat }: { chat: SideChatState }) {
       {helpOpen && <div className="side-chat-help" ref={help} role="dialog" aria-label="侧聊说明">
         <p>围绕主会话独立提问，不打断主任务。需要回传时，直接说：<code>把结论告诉主任务</code>。</p>
         <p>首次发送时带入主会话快照，不因篇幅被拒（仅超过 64 MB 的极长记录会因服务内存保护挡下）；主会话特别长时会先整理一份摘要，可能增加等待时间和用量，整理过程可随时停止。关闭面板保留对话与草稿。</p>
-        <p>输入框里 Enter 发送，Shift Enter 换行。</p>
+        <p>输入框里 Enter 发送，Shift Enter 换行；截图和文件可直接粘贴或用回形针选取。</p>
       </div>}
     </div>
   </InspectorHeadActions>;
