@@ -71,6 +71,15 @@ export interface AssistTrace {
    * （第 5 轮审查：原来空 jobId 的 pending 记录会认领任意作业，别人的结果照样覆盖输入框）。
    */
   claim: string;
+  /**
+   * **点下去那一刻输入框里是什么**。成功时拿它跟现在比：不一样就说明用户这期间自己写了东西，
+   * 那份手写的比 AI 的结果更该留着。
+   *
+   * 它必须**跟着记录走**、而且只在点下去那一刻写一次 —— 刷新之后拿它当基准才站得住。事后
+   * 「用现在框里这份补一个基准」是错的：首次读取还在路上时用户就能改输入框，那一份补出来的
+   * 基准必然等于新内容，比较必然相等，于是刚写的几行被静默顶掉（第 13 轮审查复现）。
+   */
+  baseline: string;
   executorLabel: string;
   round: number;
   maxRounds: number;
@@ -84,7 +93,10 @@ export function readAssistTrace(projectId: string): AssistTrace | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as AssistTrace;
-    return typeof parsed?.jobId === "string" ? parsed : null;
+    if (typeof parsed?.jobId !== "string") return null;
+    // 老版本留下的记录没有 baseline。当成空串 = 跟框里现在这份不一样 = 走「你改过」那一档，
+    // 宁可多问一句，也不拿一个猜出来的基准去覆盖用户的内容。
+    return { ...parsed, baseline: typeof parsed.baseline === "string" ? parsed.baseline : "" };
   } catch { return null; }
 }
 
@@ -96,20 +108,25 @@ export function readAssistTrace(projectId: string): AssistTrace | null {
  * 都没有——按钮弹回原样，停也停不了，之后 ash 一重启更是连一句交代都没有。先写后发，这条
  * 记录才覆盖得住「请求在路上出事」的那一段。
  */
-export function pendingAssistTrace(projectId: string, instance: string, claim: string): void {
+export function pendingAssistTrace(projectId: string, instance: string, claim: string, baseline: string): void {
   writeLive(LIVE_KEY(projectId), JSON.stringify({
-    jobId: "", claim, executorLabel: "", round: 0, maxRounds: 3, startedAt: new Date().toISOString(), instance,
+    jobId: "", claim, baseline, executorLabel: "", round: 0, maxRounds: 3,
+    startedAt: new Date().toISOString(), instance,
   } satisfies AssistTrace));
   holdAssistClaim(projectId, claim, "click");
 }
 
 /** 作业还在跑：把身份记住（每一拍都写，轮次跟着走，中断那句话才说得出第几轮）。 */
 export function traceAssistJob(projectId: string, job: PreviewAssistState, instance: string): void {
+  // 基准只在点下去那一刻写一次，这里只是**把它原样带过去** —— 每拍拿框里现在这份去刷新它，
+  // 等于把用户这期间写的东西一点点吃进基准里，「你改过就不覆盖」那一档就废了。
+  const baseline = readAssistTrace(projectId)?.baseline ?? "";
   writeLive(LIVE_KEY(projectId), JSON.stringify({
     jobId: job.jobId,
     // 调用方只在「这份确实是我点的」时才写（PreviewAiAssist 的 absorb），所以这儿的 claim
     // 就是我们自己那个；从作业上读省得再传一遍。
     claim: job.claim,
+    baseline,
     executorLabel: job.executorLabel,
     round: job.round,
     maxRounds: job.maxRounds,
@@ -135,11 +152,18 @@ export const forgetAssistTrace = (projectId: string): void => {
  *
  * 必须**排在第一次轮询前面**：颠倒过来的话，抢在前面那一拍就已经把别人那份认成自己的了。
  * 所有权也可能**事后被撤回**（降级路上的迟到应答），那一路走 watchAssistClaimLost。
+ *
+ * 认下来就把这条记录交回去 —— 里头的 baseline 是点下去那一刻的输入框内容，调用方拿它当基准，
+ * 不然刷新后就只能拿「现在框里这份」凑一个（那一份可能是用户刷新后刚写的，见 AssistTrace.baseline）。
  */
-export async function adoptAssistTrace(projectId: string): Promise<void> {
+export async function adoptAssistTrace(projectId: string): Promise<AssistTrace | null> {
   const trace = readAssistTrace(projectId);
-  if (!trace?.claim) return;
-  if (!await claimAssistOwnership(projectId, trace.claim)) forgetAssistTrace(projectId);
+  if (!trace?.claim) return null;
+  if (!await claimAssistOwnership(projectId, trace.claim)) {
+    forgetAssistTrace(projectId);
+    return null;
+  }
+  return trace;
 }
 
 /**

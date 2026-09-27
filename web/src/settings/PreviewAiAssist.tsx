@@ -76,16 +76,33 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   const instance = useRef<string>("");
   /** 这份作业是不是这台浏览器点出来的（见 absorb）。不是就只许看，不许动输入框。 */
   const mine = useRef(false);
-  // 点下去那一刻输入框里是什么。成功之后拿它跟现在比：**不一样就说明用户在这几分钟里
-  // 自己写了东西**，那份手写的比 AI 的结果更该留着（第 2 轮审查：原来是无条件覆盖）。
-  const startedWith = useRef<string | null>(null);
+  /**
+   * **「用户还没动过」算哪几份内容。** 成功之后框里这份不在里头 = 他在这几分钟里自己写了东西，
+   * 那份手写的比 AI 的结果更该留着（第 2 轮审查：原来是无条件覆盖）。空 = 没有基准，一律当他
+   * 动过 —— 不可逆的动作宁可少做。
+   *
+   * 取基准只有两个时刻**用户插不进手**：点下去那一刻（start）、以及文档刚挂上来那一刻
+   * （loadedWith，同步定在第一次渲染上）。**绝不能等结果到了再拿框里那份补**：刷新后的首次
+   * 读取可以被网络压上几秒，那期间用户完全能改输入框，补出来的基准必然「相等」，刚写的几行
+   * 就被静默顶掉（第 13 轮审查复现）。
+   */
+  const untouched = useRef<string[]>([]);
+  /**
+   * **这个文档挂上来那一刻**框里是什么。刷新之后的基准只能这么取：未保存的草稿不跟着刷新走，
+   * 页面回来时框里就是已保存那一份，跟刷新前点下去时那份不一定一样 —— 拿点击时那份去比，
+   * 每一次刷新都会被读成「你改过」，同一个标签的可信接力就再也不自动填了（⑯/⑯d）。
+   */
+  const loadedWith = useRef(script);
   const current = useRef(script);
   useEffect(() => { current.current = script; });
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => {
     setExecutor(rememberedExecutor(projectId));
     setJob(null); setLost(false); setOffered(null); setApplied(null); setForeign(false);
-    filled.current = null; startedWith.current = null; mine.current = false;
+    filled.current = null; untouched.current = []; mine.current = false;
+    // 换项目等于换一份内容：新项目的基准是它自己刚加载出来的这一份（上面那条 effect 先跑，
+    // current 已经是新项目的脚本了）。
+    loadedWith.current = current.current;
   }, [projectId]);
 
   const running = job?.status === "running";
@@ -110,11 +127,6 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       //     在跑，服务端既然报的是别人那份，我们那份已经不在了。
       if (mine.current && result.job.status === "running") traceAssistJob(projectId, result.job, result.instance);
       else forgetAssistTrace(projectId);
-      // 刷新过页面、但作业还在跑：这一刻框里是什么就拿它当基准,用户接着在这几分钟里写的
-      // 东西照样受保护(否则 startedWith 一直是空的,成功时按「没动过」直接覆盖)。
-      if (result.job.status === "running" && mine.current && startedWith.current === null) {
-        startedWith.current = current.current;
-      }
       setLost(false);
       setForeign(!mine.current);
       setJob(result.job);
@@ -137,9 +149,17 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   // **问服务端之前先把所有权定下来**（adoptAssistTrace）：本地那条记录有可能是从来源页面继承
   // 来的会话副本（复制标签页 / window.open），那样它手里的 claim 跟正主一模一样。颠倒顺序就
   // 等于让副本页抢在裁决之前先认领一拍 —— 第 7 轮审查复现的正是这一下。
+  //
+  // 认下来的同时把基准定下来：这个文档**刚挂上来那一刻**框里是什么（loadedWith），再加上随凭据
+  // 接过来的「刷新前点下去那一刻」那一份 —— 两份都算「这个文档没动过」。基准只能在这两个时刻取，
+  // 不能等结果到了再拿框里那份补（见 untouched 的说明）。
   useEffect(() => {
     let stale = false;
-    void adoptAssistTrace(projectId).then(() => { if (!stale) void poll(); });
+    void adoptAssistTrace(projectId).then((trace) => {
+      if (stale) return;
+      if (trace) untouched.current = [loadedWith.current, trace.baseline];
+      void poll();
+    });
     return () => { stale = true; };
   }, [projectId, poll]);
   // 裁决还可能**事后翻过来**：降级路（没有 Web Locks 的环境）上正主的应答迟到了几百毫秒，
@@ -148,7 +168,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   useEffect(() => watchAssistClaimLost((lost) => {
     if (lost !== projectId) return;
     mine.current = false;
-    startedWith.current = null;
+    untouched.current = [];
     forgetAssistTrace(projectId);
     setForeign(true);
   }), [projectId]);
@@ -176,13 +196,12 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       notify("AI 真的把它起起来过一次；这个页面的归属没能确认，所以没有直接覆盖输入框");
       return;
     }
-    // 站得住、却没有基准：**刷新的那一瞬作业刚好跑成**，这一页第一次问服务端就直接读到终态，
-    // 于是「点下去那一刻框里是什么」没人记过。拿现在框里这份当基准 —— 接班的是同一个标签，
-    // 它本来就该继续「跑成了就直接填」，而不是反过来要用户再点一次「用这条替换」
-    // （第 12 轮审查复现：刷新期间成功 → 明明是可信的接力，却被当成「没看着它跑」）。
-    if (startedWith.current === null) startedWith.current = current.current;
-    // 跑之前那份还原封不动 → 直接填。动过了 → 不覆盖，把 AI 这条摆出来让他自己选。
-    if (current.current !== startedWith.current) {
+    // 站得住、框里也还是那几份「没动过」的内容之一 → 直接填（刷新的那一瞬作业刚好跑成也算：
+    // 接班的是同一个标签，它本来就该继续「跑成了就直接填」；第 12 轮审查复现：这种可信接力当时
+    // 被当成「没看着它跑」）。**这里绝不能顺手补一个基准**：首次读取被压在路上时框里那份已经是
+    // 用户刷新后新写的东西，补出来必然「相等」，刚写的几行就被静默顶掉（第 13 轮审查复现）。
+    // 动过了、或者一份基准都没接到手 → 不覆盖，把 AI 这条摆出来让他自己选。
+    if (!untouched.current.includes(current.current)) {
       setOffered({ script: job.script, reason: "edited" });
       notify("AI 已真的把它起起来一次；你在这期间改过启动脚本，所以没有直接覆盖");
       return;
@@ -215,12 +234,13 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
     setOffered(null);
     setApplied(null);
     setForeign(false);
-    startedWith.current = script;
+    untouched.current = [script];
     const claim = newAssistClaim();
     // **先记后发**：服务端是同步预占的，请求一旦发出去它就可能已经接单了。等响应回来再记，
     // 中间断线就等于这台浏览器从此不知道有这么个作业在跑（第 2 轮审查复现过）。记的正是这次
-    // 点击的 claim —— 回头认领全靠它。
-    pendingAssistTrace(projectId, instance.current, claim);
+    // 点击的 claim —— 回头认领全靠它；连**这一刻框里是什么**一起记下，刷新之后的基准只能从
+    // 这儿来（见 AssistTrace.baseline）。
+    pendingAssistTrace(projectId, instance.current, claim, script);
     try {
       const picked = executor
         ? parseExecutorValue(executor, catalog.profiles, { agentType: types[0] ?? "claude", executorId: null })
@@ -264,7 +284,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   const takeOffered = () => {
     if (!offered) return;
     onFilled(offered.script);
-    startedWith.current = offered.script;
+    untouched.current = [offered.script];
     setOffered(null);
     setApplied("filled");
     notify("已用 AI 试出来的那条脚本替换输入框里的内容");

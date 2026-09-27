@@ -146,6 +146,14 @@ if (localStorage.getItem(SUCCEED_ON_BOOT_KEY)) {
   if (live?.status === "running") setAssist({ ...live, ...succeeded() });
 }
 
+// **刷新后的第一次状态读取卡在路上**：真实网络就是会这样，而这段时间里页面已经能用了 —— 用户
+// 完全可以先往启动脚本里敲几行。这一段时序是第 13 轮审查的复现要件：终态到达时框里那份已经不是
+// 「点下去那一刻」的内容，谁拿它当基准谁就会把用户刚写的顶掉。标记同样得活过那次刷新，所以走
+// localStorage 而不是模块级变量。
+const HOLD_GET_KEY = `${storageKey}:assist-hold-next-get`;
+let holdFirstGet = localStorage.getItem(HOLD_GET_KEY) ? 1800 : 0;
+localStorage.removeItem(HOLD_GET_KEY);
+
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -179,6 +187,11 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       const live = readAssist();
       if (live?.status === "running") setAssist({ ...live, status: "canceled", phase: "done", step: "已取消", error: "已取消", endedAt: "2026-09-26T00:01:00.000Z" });
       return reply({ canceled: true, job: readAssist(), instance: assistInstance() });
+    }
+    if (holdFirstGet) {
+      const wait = holdFirstGet;
+      holdFirstGet = 0;
+      await new Promise((done) => setTimeout(done, wait));
     }
     return reply({ job: readAssist(), instance: assistInstance() });
   }
@@ -282,6 +295,14 @@ function Fixture() {
           onClick={() => { localStorage.setItem(SUCCEED_ON_BOOT_KEY, "1"); }}
         >
           假装刷新期间就成功
+        </button>
+        {/* 跟上面那颗配着用：刷新后的第一次状态读取压在路上，页面已经能用、用户已经能改输入框。 */}
+        <button
+          type="button"
+          data-testid="assist-hold-next-get"
+          onClick={() => { localStorage.setItem(HOLD_GET_KEY, "1"); }}
+        >
+          假装刷新后首次读取很慢
         </button>
         <ProjectSettingsPanel
           project={current}

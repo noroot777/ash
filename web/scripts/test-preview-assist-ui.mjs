@@ -31,6 +31,8 @@
 //   ⑯ 同一档里**同一个标签自己刷新**（顺序交接，不是复制出来的分身）→ 照旧是正主，成功就直接填；
 //      刷新后又自己改过输入框的，仍旧不覆盖，但原因得说成「你改过」而不是「归属没能确认」；
 //      作业**恰好在刷新那一瞬跑完**（第一次 GET 就是终态、压根没见过 running）也照样直接填；
+//      而这一段里**首次读取被网络压在路上**时用户先改了输入框 → 基准得是随凭据接过来的那一份
+//      （点下去那一刻），拿终态到达时框里这份补基准会把刚写的几行静默顶掉；
 //   ⑰ 那张接力凭据**不是只有刷新会写**（跳走、关掉同样触发 pagehide）→ 带着它的标签再开出两个
 //      设置页，两页各克隆一份，谁都不许把自己洗成正主（凭据只认「刷新出来的那一份文档」，且读到就删）。
 //
@@ -515,6 +517,32 @@ try {
   assert.equal((await ownerNotices()).filter((line) => line.includes("脚本已填入")).length, filledBeforeBoot + 1,
     "填了就该提示一次");
   assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
+
+  // ⑯e 同一段可信接力，只是**首次读取压在路上**：页面已经能用了，用户先往框里敲了几行，之后
+  //     那一次读取才带回终态。基准必须是「点下去那一刻」那份（随凭据接过来的），拿终态到达时
+  //     框里这份补基准就必然「相等」，刚写的几行会被静默顶掉（第 13 轮审查复现）。
+  const beforeSlow = "# 慢读取之前：等 AI";
+  await ownerScript.fill(beforeSlow);
+  await owner.getByRole("button", { name: "AI 协助填写" }).click();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await owner.getByTestId("assist-succeed-on-boot").click();
+  await owner.getByTestId("assist-hold-next-get").click();
+  await owner.reload();
+  await ownerScript.waitFor();
+  // 首次读取还没回来（卡片还没出现），这时候动输入框
+  assert.equal(await ownerProgress.count(), 0, "这一条要的就是「首次读取还没回来」那一段");
+  const duringSlow = "# 我在刷新后刚写的新内容";
+  await ownerScript.fill(duringSlow);
+  await ownerProgress.getByText("你在这期间改过", { exact: false }).waitFor();
+  assert.equal(await editorText(ownerScript), duringSlow, "首次读取还在路上时写的内容照样不许被顶掉");
+  assert.match(await ownerProgress.innerText(), /npm run dev -- --port \$PORT/, "AI 那条要摆出来让他自己挑");
+  // 刷新把提示清了，所以这一页从头到尾都不该出现「已填入」
+  assert.deepEqual((await ownerNotices()).filter((line) => line.includes("脚本已填入")), [],
+    "没填就不该提示填入");
+  assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
+  // 挑了「用这条替换」才该换 —— 这条路还得是通的
+  await ownerProgress.getByRole("button", { name: "用这条替换" }).click();
+  assert.equal(await editorText(ownerScript), "npm run dev -- --port $PORT", "他自己点了替换就该换上去");
 
   // ⑯c 两套机制碰头：副本已经「暂且认领」了，正主才刷新回来。站得住的那一份必须压得过暂且认下的
   //     —— 按「谁先拿住」比就会判错，因为刷新后的新文档 since 反而更晚。
