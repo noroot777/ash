@@ -110,11 +110,65 @@ export function freeRepairPrompt(taskId: string, run: ReviewRunRow): string {
     disputeOption(taskId);
 }
 
+/**
+ * 审查者的辩论收尾发言，读法见 free-review-debate.ts 的 `debateClosingOf`。
+ * `verdictLabel` 已经是中文标签（"部分成立"…）——在这里再 import 一次那张表会把
+ * prompts ← debate 这条依赖变成环。
+ */
+export interface DebateClosing {
+  seq: number;
+  total: number;
+  verdictLabel: string | null;
+  statement: string;
+}
+
+/**
+ * 审查者的辩论收尾发言，**整段内联**。
+ *
+ * 为什么不能只给路径、也不能指望执行者会话里有：段序是奇数=审查者、偶数=执行者，
+ * 总段数 2n+1，所以收尾必定由审查者说；而它说完辩论直接 finished，不再给执行者发段
+ * （free-review-debate.ts `settleDebateTurn`）。也就是说**执行者的上下文里结构上不可能
+ * 有这一段**。不带上的话，辩论辩出来的共识对真正去改代码的那一方就是不存在的：用户
+ * 点「维持意见并修复」，执行者只会照原报告改——哪怕审查者自己在收尾里已经改了主意。
+ *
+ * 同时必须写死它**不是结论**：裁定权只在用户手上（见 free-review-dispute.ts 文件头
+ * 规矩③）。把被驳回一方的收尾发言当指令执行，等于绕开裁定这件事本身。
+ */
+function debateClosingSection(closing: DebateClosing | null | undefined): string {
+  if (!closing?.statement.trim()) return "";
+  return `\n\n【审查者的辩论收尾发言 · 第 ${closing.seq}/${closing.total} 段】` +
+    `\n这一段是在你最后一次发言**之后**说的，**你的会话里没有它**，所以整段抄在这里。` +
+    (closing.verdictLabel ? `\n它的自述立场：${closing.verdictLabel}` : "") +
+    `\n\n${closing.statement.trim()}\n\n` +
+    "以上是审查者自己的立场，**不是结论**——要不要改、怎么改，以报告和下面用户的裁定为准。";
+}
+
+/**
+ * 用户裁定时写给执行者的要点。
+ *
+ * 它**压过报告**，这句必须写在提示里：报告是审查者的一份判断，用户才是裁定人。
+ * 不说清优先级的话，执行者拿到两份互相打架的要求，只能自己挑一个——而挑错的那次
+ * 没有任何人会发现，因为两边看着都「按要求改了」。
+ */
+function resolutionNoteSection(note: string | null | undefined): string {
+  const text = note?.trim();
+  if (!text) return "";
+  return `\n\n【用户裁定时写给你的要点】\n\n${text}\n\n` +
+    "这段话出自**裁定人**：与报告冲突的地方一律以它为准，它没提到的部分仍按报告修。" +
+    "读不懂或做不到就用 ask_question 问清楚，别自己挑一个改法。";
+}
+
 export function freeManualRepairPrompt(
   taskId: string,
   run: ReviewRunRow,
   // 用户已经裁定「维持审查意见」：这一趟没有驳回这条路了，照改。
-  opts: { disputeUpheld?: boolean } = {},
+  // `resolutionNote` / `debateClosing` 是那场裁定与辩论真正留给执行者的东西，理由见
+  // 上面两个 section —— 少任何一边，「双方辩完达成的共识」都到不了改代码的那一方。
+  opts: {
+    disputeUpheld?: boolean;
+    resolutionNote?: string | null;
+    debateClosing?: DebateClosing | null;
+  } = {},
 ): string {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   return `【自由工作流审查未通过 · 自动复审已停止】\n` +
@@ -126,6 +180,8 @@ export function freeManualRepairPrompt(
     `修复完成并验证后调用 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
     `如果用户在修复期间预约了复审，执行回合正常结束后按预约开始，否则等待用户决定再次审查或验收。\n\n` +
     `证据目录：${dir}` +
+    debateClosingSection(opts.debateClosing) +
+    resolutionNoteSection(opts.resolutionNote) +
     (opts.disputeUpheld ? "" : disputeOption(taskId));
 }
 

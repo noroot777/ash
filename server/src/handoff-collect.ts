@@ -272,6 +272,7 @@ export async function collectFreeWorkflow(taskId: string): Promise<HandoffFreeWo
       reviewedCommit: r.reviewedCommit,
       disputeReason: r.disputeReason, disputeDeferReason: r.disputeDeferReason, disputeAt: r.disputeAt,
       disputeResolution: r.disputeResolution, disputeResolvedAt: r.disputeResolvedAt,
+      disputeResolutionNote: r.disputeResolutionNote,
       startedAt: r.startedAt, endedAt: r.endedAt,
     });
     byRun.set(r.runId, list);

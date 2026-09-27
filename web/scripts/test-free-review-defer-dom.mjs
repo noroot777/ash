@@ -6,7 +6,9 @@
 // ② 只提转出时标题不能还写「驳回了意见」：执行者说的恰恰是「报告是对的，只是不该
 //    在这儿修」；
 // ③ 两段理由同时给时，两块都得摆出来，四个出口并存（不逼执行者三选一）；
-// ④ 按下去发的是 resolution=deferred，回报里带着建出来的那个任务。
+// ④ 按下去发的是 resolution=deferred，回报里带着建出来的那个任务；
+// ⑤ 每个裁定确认框里都有**裁定要点**那一栏，措辞按档位换，写下的话真的随裁定发出去。
+//    三档枚举表达不了「这条我认，但按辩论里达成的方案做」，它是那部分结论唯一的出口。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -90,6 +92,15 @@ try {
     /还没审过.*再派一轮审查/,
     "确认框要说清：执行者已经改掉的那部分还没审过，要继续推进得再派一轮",
   );
+  // ⑤ 裁定要点：这一档写给的是新任务，措辞得说清它落到哪儿去。
+  const note = dialog.locator(".free-review-dispute-note");
+  await note.waitFor();
+  assert.match(await note.locator("span").innerText(), /写给新任务的要点/,
+    "转出这一档的要点是写给派生任务的，不是写给本任务执行者的");
+  assert.match(await note.locator("small").innerText(), /待办任务的描述/,
+    "要说清这段话落到哪儿，否则用户不知道有没有人会看");
+  await note.locator("textarea").fill("这几条连同上一轮那个 helper 一起重写。");
+
   await dialog.getByRole("button", { name: "建任务并转走这几条" }).click();
 
   await page.waitForFunction(() => (window.__resolutions ?? []).length === 1);
@@ -98,6 +109,11 @@ try {
     ["deferred"],
     "点下去发的裁定必须是 deferred",
   );
+  assert.deepEqual(
+    await page.evaluate(() => window.__notes),
+    ["这几条连同上一轮那个 helper 一起重写。"],
+    "裁定要点必须跟着裁定一起发出去：漏传的话界面看着一切正常，那段话却谁都收不到",
+  );
   await page.waitForFunction(() => (window.__notices ?? []).length === 1);
   assert.match(
     (await page.evaluate(() => window.__notices))[0],
@@ -105,8 +121,35 @@ try {
     "提示里要带上建出来的那个任务，否则用户不知道东西落到哪儿去了",
   );
 
-  console.log("free review defer dom tests passed");
-} finally {
+  // ⑤（续）另外两档各有各的去处，措辞不能共用一份：「维持并修复」那段会随修复指令
+  // 发给执行者并压过报告，「采纳执行者」那档压根不发消息。说反了用户就会把话写错地方。
+  await reasonOnly.getByRole("button", { name: "维持意见并修复" }).click();
+  const upheldDialog = page.getByRole("dialog");
+  await upheldDialog.locator(".free-review-dispute-note").waitFor();
+  assert.match(await upheldDialog.locator(".free-review-dispute-note span").innerText(), /写给执行者的要点/);
+  assert.match(
+    await upheldDialog.locator(".free-review-dispute-note small").innerText(),
+    /随修复指令一起发过去.*以你这段为准/,
+    "维持这一档要说清：这段话会发给执行者，并且压过报告",
+  );
+  await upheldDialog.getByRole("button", { name: "取消" }).click();
+
+  await reasonOnly.getByRole("button", { name: "采纳执行者说法" }).click();
+  const withdrawnDialog = page.getByRole("dialog");
+  await withdrawnDialog.locator(".free-review-dispute-note").waitFor();
+  assert.match(
+    await withdrawnDialog.locator(".free-review-dispute-note small").innerText(),
+    /不会给执行者发任何消息/,
+    "采纳这一档不发消息，要说清这段话只是备查，别让用户以为执行者会读到",
+  );
+  await withdrawnDialog.getByRole("button", { name: "取消" }).click();
+  assert.equal(
+    (await page.evaluate(() => window.__resolutions)).length,
+    1,
+    "取消掉的两个确认框一个裁定都不许发出去",
+  );
+
+  console.log("free review defer dom tests passed");} finally {
   await browser?.close();
   await server.close();
 }

@@ -90,6 +90,10 @@ export const freeReviewRounds = sqliteTable(
     // 与辩论里审查者自述的 verdict 分开存：让被驳回的一方替用户签字，等于绕过裁定这件事本身。
     disputeResolution: text("dispute_resolution"),
     disputeResolvedAt: text("dispute_resolved_at"),
+    // 用户裁定时写给执行者的那段话。三档裁定表达不了「这条我认，但按辩论里达成的那个
+    // 方案做」，这一列就是它的出口；upheld 时整段拼进修复提示，并在措辞里声明它压过
+    // 报告——裁定人是用户，报告只是审查者的一份判断。
+    disputeResolutionNote: text("dispute_resolution_note"),
     // deferred 裁定建出的那个 backlog 派生任务；非空即幂等返回同一任务（同 repair_task_id）。
     disputeDeferredTaskId: text("dispute_deferred_task_id"),
     startedAt: text("started_at").notNull(),

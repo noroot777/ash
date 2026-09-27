@@ -41,6 +41,7 @@ function round(dispute: { reason: string; deferReason: string | null }): FreeRev
       at: "2026-09-24T00:12:00.000Z",
       resolution: null,
       resolvedAt: null,
+      resolutionNote: null,
       deferredTaskId: null,
       debates: [],
     },
@@ -67,8 +68,10 @@ window.fetch = (input, init) => {
   const url = new URL(typeof input === "string" ? input : input.url, window.location.origin);
   if (url.pathname.endsWith("/free-workflow/review/dispute/resolution") && init?.method === "POST") {
     const body = JSON.parse(String(init.body ?? "{}"));
-    const log = window as Window & { __resolutions?: string[] };
+    const log = window as Window & { __resolutions?: string[]; __notes?: (string | null)[] };
     log.__resolutions = [...(log.__resolutions ?? []), body.resolution];
+    // 裁定要点单独记一条：三档裁定表达不了的结论全靠它送出去，漏传的话界面看不出异样。
+    log.__notes = [...(log.__notes ?? []), body.note ?? null];
     return Promise.resolve(new Response(JSON.stringify({
       resolution: body.resolution,
       repairError: null,
