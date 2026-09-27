@@ -77,32 +77,34 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   /** 这份作业是不是这台浏览器点出来的（见 absorb）。不是就只许看，不许动输入框。 */
   const mine = useRef(false);
   /**
-   * **「用户还没动过」算哪几份内容。** 成功之后框里这份不在里头 = 他在这几分钟里自己写了东西，
-   * 那份手写的比 AI 的结果更该留着（第 2 轮审查：原来是无条件覆盖）。空 = 没有基准，一律当他
-   * 动过 —— 不可逆的动作宁可少做。
+   * **这一段里用户自己动过输入框没有。** 动过就不许静默覆盖（第 2 轮审查：原来是无条件覆盖），
+   * 把 AI 那条摆出来让他自己挑。
    *
-   * 取基准只有两个时刻**用户插不进手**：点下去那一刻（start）、以及文档刚挂上来那一刻
-   * （loadedWith，同步定在第一次渲染上）。**绝不能等结果到了再拿框里那份补**：刷新后的首次
-   * 读取可以被网络压上几秒，那期间用户完全能改输入框，补出来的基准必然「相等」，刚写的几行
-   * 就被静默顶掉（第 13 轮审查复现）。
+   * 记的是**有没有发生过编辑**，不是「内容等不等于某一份基准」。按内容比对表达不了这件事：
+   *   · 拿终态到达那一刻框里那份当基准 → 首次读取被网络压住的几秒里用户写的东西全被吃进基准，
+   *     比较必然相等，刚写的几行静默消失（第 13 轮审查复现）
+   *   · 退一步「刷新前点下去那份 + 刷新后刚加载那份都算没动过」 → 用户刷新后**重新敲一遍**那份
+   *     旧草稿（或者同样再清空一次）就恰好命中集合，照样被覆盖（第 14 轮审查复现）
+   * 编辑这件事只有一个诚实的判据：框里的内容变了，而且**不是我们自己填进去的**。
    */
-  const untouched = useRef<string[]>([]);
-  /**
-   * **这个文档挂上来那一刻**框里是什么。刷新之后的基准只能这么取：未保存的草稿不跟着刷新走，
-   * 页面回来时框里就是已保存那一份，跟刷新前点下去时那份不一定一样 —— 拿点击时那份去比，
-   * 每一次刷新都会被读成「你改过」，同一个标签的可信接力就再也不自动填了（⑯/⑯d）。
-   */
-  const loadedWith = useRef(script);
+  const edited = useRef(false);
+  /** 我们自己填进去的那一份。它引起的那次变化不算用户编辑（见 edited）。 */
+  const wrote = useRef<string | null>(null);
+  /** 上一次渲染时框里是什么 —— 只用来发现「变了」。 */
   const current = useRef(script);
-  useEffect(() => { current.current = script; });
+  useEffect(() => {
+    if (script === current.current) return;
+    if (script !== wrote.current) edited.current = true;
+    current.current = script;
+  });
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => {
     setExecutor(rememberedExecutor(projectId));
     setJob(null); setLost(false); setOffered(null); setApplied(null); setForeign(false);
-    filled.current = null; untouched.current = []; mine.current = false;
-    // 换项目等于换一份内容：新项目的基准是它自己刚加载出来的这一份（上面那条 effect 先跑，
-    // current 已经是新项目的脚本了）。
-    loadedWith.current = current.current;
+    filled.current = null; mine.current = false; wrote.current = null;
+    // 换项目不是「用户改了这个项目的脚本」：上面那条 effect 先跑、已经把换项目那一下记成编辑了，
+    // 这里把它清掉（换项目本来就把整块面板重置了）。
+    edited.current = false;
   }, [projectId]);
 
   const running = job?.status === "running";
@@ -149,17 +151,9 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   // **问服务端之前先把所有权定下来**（adoptAssistTrace）：本地那条记录有可能是从来源页面继承
   // 来的会话副本（复制标签页 / window.open），那样它手里的 claim 跟正主一模一样。颠倒顺序就
   // 等于让副本页抢在裁决之前先认领一拍 —— 第 7 轮审查复现的正是这一下。
-  //
-  // 认下来的同时把基准定下来：这个文档**刚挂上来那一刻**框里是什么（loadedWith），再加上随凭据
-  // 接过来的「刷新前点下去那一刻」那一份 —— 两份都算「这个文档没动过」。基准只能在这两个时刻取，
-  // 不能等结果到了再拿框里那份补（见 untouched 的说明）。
   useEffect(() => {
     let stale = false;
-    void adoptAssistTrace(projectId).then((trace) => {
-      if (stale) return;
-      if (trace) untouched.current = [loadedWith.current, trace.baseline];
-      void poll();
-    });
+    void adoptAssistTrace(projectId).then(() => { if (!stale) void poll(); });
     return () => { stale = true; };
   }, [projectId, poll]);
   // 裁决还可能**事后翻过来**：降级路（没有 Web Locks 的环境）上正主的应答迟到了几百毫秒，
@@ -168,7 +162,6 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   useEffect(() => watchAssistClaimLost((lost) => {
     if (lost !== projectId) return;
     mine.current = false;
-    untouched.current = [];
     forgetAssistTrace(projectId);
     setForeign(true);
   }), [projectId]);
@@ -183,7 +176,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   // **动输入框是有门槛的**，三档往下让：
   //   · 不是这台浏览器点的 → 只展示（第 3 轮审查：刷新一下就把旧结果盖回用户刚保存的脚本上）
   //   · 所有权只是「暂且算我的」（降级路静默超时给的那一档） → 摆出来让他自己挑：填进去就收不回来了
-  //   · 所有权站得住、而且框里还是当初那份 → 直接填，这才是用户点那颗按钮想要的
+  //   · 所有权站得住、而且这一段里用户没自己动过输入框 → 直接填，这才是用户点那颗按钮想要的
   useEffect(() => {
     if (job?.status !== "succeeded" || !job.script || filled.current === job.jobId) return;
     filled.current = job.jobId;
@@ -196,17 +189,17 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       notify("AI 真的把它起起来过一次；这个页面的归属没能确认，所以没有直接覆盖输入框");
       return;
     }
-    // 站得住、框里也还是那几份「没动过」的内容之一 → 直接填（刷新的那一瞬作业刚好跑成也算：
-    // 接班的是同一个标签，它本来就该继续「跑成了就直接填」；第 12 轮审查复现：这种可信接力当时
-    // 被当成「没看着它跑」）。**这里绝不能顺手补一个基准**：首次读取被压在路上时框里那份已经是
-    // 用户刷新后新写的东西，补出来必然「相等」，刚写的几行就被静默顶掉（第 13 轮审查复现）。
-    // 动过了、或者一份基准都没接到手 → 不覆盖，把 AI 这条摆出来让他自己选。
-    if (!untouched.current.includes(current.current)) {
+    // 站得住、而且这一段里他没自己动过输入框 → 直接填（刷新的那一瞬作业刚好跑成也算：接班的是
+    // 同一个标签，它本来就该继续「跑成了就直接填」；第 12 轮审查复现：这种可信接力当时被当成
+    // 「没看着它跑」）。动过了就不覆盖，把 AI 这条摆出来让他自己选 —— 判据是**发生过编辑**，
+    // 不是「内容等不等于某一份基准」（见 edited：按内容比对会把「重新敲一遍旧草稿」读成没动过）。
+    if (edited.current) {
       setOffered({ script: job.script, reason: "edited" });
       notify("AI 已真的把它起起来一次；你在这期间改过启动脚本，所以没有直接覆盖");
       return;
     }
     onFilled(job.script);
+    wrote.current = job.script;
     setApplied("filled");
     notify("AI 已真的把它起起来一次，脚本已填入上面的输入框，确认后点保存");
   }, [job, projectId, onFilled, notify]);
@@ -234,13 +227,13 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
     setOffered(null);
     setApplied(null);
     setForeign(false);
-    untouched.current = [script];
+    // 点下去这一刻重新起算：之前改过什么都不算，用户要的就是拿这一次的结果填这个框。
+    edited.current = false;
     const claim = newAssistClaim();
     // **先记后发**：服务端是同步预占的，请求一旦发出去它就可能已经接单了。等响应回来再记，
     // 中间断线就等于这台浏览器从此不知道有这么个作业在跑（第 2 轮审查复现过）。记的正是这次
-    // 点击的 claim —— 回头认领全靠它；连**这一刻框里是什么**一起记下，刷新之后的基准只能从
-    // 这儿来（见 AssistTrace.baseline）。
-    pendingAssistTrace(projectId, instance.current, claim, script);
+    // 点击的 claim —— 回头认领全靠它。
+    pendingAssistTrace(projectId, instance.current, claim);
     try {
       const picked = executor
         ? parseExecutorValue(executor, catalog.profiles, { agentType: types[0] ?? "claude", executorId: null })
@@ -284,7 +277,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   const takeOffered = () => {
     if (!offered) return;
     onFilled(offered.script);
-    untouched.current = [offered.script];
+    wrote.current = offered.script;
     setOffered(null);
     setApplied("filled");
     notify("已用 AI 试出来的那条脚本替换输入框里的内容");

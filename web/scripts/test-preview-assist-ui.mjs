@@ -31,8 +31,8 @@
 //   ⑯ 同一档里**同一个标签自己刷新**（顺序交接，不是复制出来的分身）→ 照旧是正主，成功就直接填；
 //      刷新后又自己改过输入框的，仍旧不覆盖，但原因得说成「你改过」而不是「归属没能确认」；
 //      作业**恰好在刷新那一瞬跑完**（第一次 GET 就是终态、压根没见过 running）也照样直接填；
-//      而这一段里**首次读取被网络压在路上**时用户先改了输入框 → 基准得是随凭据接过来的那一份
-//      （点下去那一刻），拿终态到达时框里这份补基准会把刚写的几行静默顶掉；
+//      而这一段里**首次读取被网络压在路上**时用户先改了输入框 → 判据只能是「这一段里发生过编辑
+//      没有」；按内容比对会漏掉「刷新后重新敲一遍那份旧草稿」和「刷新后再清空一次」这两种编辑；
 //   ⑰ 那张接力凭据**不是只有刷新会写**（跳走、关掉同样触发 pagehide）→ 带着它的标签再开出两个
 //      设置页，两页各克隆一份，谁都不许把自己洗成正主（凭据只认「刷新出来的那一份文档」，且读到就删）。
 //
@@ -519,8 +519,8 @@ try {
   assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
 
   // ⑯e 同一段可信接力，只是**首次读取压在路上**：页面已经能用了，用户先往框里敲了几行，之后
-  //     那一次读取才带回终态。基准必须是「点下去那一刻」那份（随凭据接过来的），拿终态到达时
-  //     框里这份补基准就必然「相等」，刚写的几行会被静默顶掉（第 13 轮审查复现）。
+  //     那一次读取才带回终态。判「他动过手没有」不能等终态到了再拿框里那份当基准 —— 那一份已经
+  //     是他刷新后新写的东西，比较必然「相等」，刚写的几行会被静默顶掉（第 13 轮审查复现）。
   const beforeSlow = "# 慢读取之前：等 AI";
   await ownerScript.fill(beforeSlow);
   await owner.getByRole("button", { name: "AI 协助填写" }).click();
@@ -543,6 +543,46 @@ try {
   // 挑了「用这条替换」才该换 —— 这条路还得是通的
   await ownerProgress.getByRole("button", { name: "用这条替换" }).click();
   assert.equal(await editorText(ownerScript), "npm run dev -- --port $PORT", "他自己点了替换就该换上去");
+
+  // ⑯f 同一段时序，但用户刷新后**重新敲了一遍刷新前那份草稿**：内容恰好等于点下去那一刻那一份，
+  //     可按内容比对就会把这次明明白白的编辑读成「没动过」，照样覆盖（第 14 轮审查复现）。
+  const retyped = "# 刷新后我会重新敲一遍这一份";
+  await ownerScript.fill(retyped);
+  await owner.getByRole("button", { name: "AI 协助填写" }).click();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await owner.getByTestId("assist-succeed-on-boot").click();
+  await owner.getByTestId("assist-hold-next-get").click();
+  await owner.reload();
+  await ownerScript.waitFor();
+  assert.equal(await ownerProgress.count(), 0, "这一条要的还是「首次读取还没回来」那一段");
+  assert.notEqual(await editorText(ownerScript), retyped, "刷新把未保存的草稿丢了，这一条才测得着「重新敲一遍」");
+  await ownerScript.fill(retyped);
+  await ownerProgress.getByText("你在这期间改过", { exact: false }).waitFor();
+  assert.equal(await editorText(ownerScript), retyped, "重新敲一遍旧草稿也是编辑，不许被顶掉");
+  assert.deepEqual((await ownerNotices()).filter((line) => line.includes("脚本已填入")), [],
+    "没填就不该提示填入");
+
+  // ⑯g 同一条的另一面：**清空**也是编辑。已保存一份非空脚本 → 清空后点 AI → 刷新（框里恢复成
+  //     已保存那份）→ 再清空一次。按内容比对时「空」恰好等于点下去那一刻那份，于是被当成没动过。
+  const saved = "# 已保存的启动脚本";
+  await ownerScript.fill(saved);
+  await owner.getByRole("button", { name: "保存预览设置" }).click();
+  await owner.waitForFunction((expected) =>
+    (document.querySelector('[data-testid="stored-projects"]')?.textContent ?? "").includes(expected), saved);
+  await ownerScript.fill("");
+  await owner.getByRole("button", { name: "AI 协助填写" }).click();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await owner.getByTestId("assist-succeed-on-boot").click();
+  await owner.getByTestId("assist-hold-next-get").click();
+  await owner.reload();
+  await ownerScript.waitFor();
+  assert.equal(await editorText(ownerScript), saved, "刷新后框里是已保存那一份");
+  await ownerScript.fill("");
+  await ownerProgress.getByText("你在这期间改过", { exact: false }).waitFor();
+  assert.equal(await editorText(ownerScript), "", "他刷新后自己清空的，就别替他填回去");
+  assert.deepEqual((await ownerNotices()).filter((line) => line.includes("脚本已填入")), [],
+    "没填就不该提示填入");
+  assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
 
   // ⑯c 两套机制碰头：副本已经「暂且认领」了，正主才刷新回来。站得住的那一份必须压得过暂且认下的
   //     —— 按「谁先拿住」比就会判错，因为刷新后的新文档 since 反而更晚。
