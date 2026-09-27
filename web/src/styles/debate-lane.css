@@ -71,6 +71,17 @@
   cursor: pointer;
 }
 .debate-lane-actions > button:hover { background: var(--raised); color: var(--ink); }
+/* 「去裁定」：辩论是为了裁定才开的，读完就该能当场决定。只在「这场辩论辩的正是此刻
+   待裁定的那条驳回、且它已经说完」时才挂（判据在 ConversationFeed）。 */
+.debate-lane-actions > button.debate-lane-resolve {
+  border-color: color-mix(in lch, var(--accent) 40%, var(--line2));
+  background: color-mix(in lch, var(--accent) 10%, var(--panel));
+  color: var(--accent);
+}
+.debate-lane-actions > button.debate-lane-resolve:hover {
+  background: color-mix(in lch, var(--accent) 18%, var(--panel));
+  color: var(--accent);
+}
 .debate-lane-body { padding: 12px 13px 6px; }
 .debate-lane-body[hidden] { display: none; }
 

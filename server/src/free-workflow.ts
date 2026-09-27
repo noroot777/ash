@@ -31,7 +31,7 @@ export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./fr
 // 驳回与辩论那条支线（执行者不认某一轮结论 → 用户裁定 / 让双方各说几段）住在
 // free-review-dispute.ts 与 free-review-debate.ts；这里只接两个口：辩论段的结算，
 // 和「用户已裁定维持意见」时修复交接的措辞。
-import { activeDebateOf, settleDebateTurn } from "./free-review-debate.js";
+import { activeDebateOf, debateClosingOf, settleDebateTurn } from "./free-review-debate.js";
 import { currentRoundOf, upholdOpenDispute, waivedDisputeOf } from "./free-review-dispute.js";
 // 一轮审查的生命周期（起一轮 / 续下一轮 / 启动失败收尾 / 重跑崩掉的那一轮）住在
 // free-review-round.ts；这里只做「派/预约/结算」这一层的编排。
@@ -601,10 +601,17 @@ async function deliverManualRepair(taskId: string, run: ReviewRunRow): Promise<v
     if (blocker) return void await abort(blocker);
     const { continueTask } = await import("./orchestrator.js");
     // 用户裁定「维持审查意见」之后的这一趟不再给驳回这条路（措辞见 free-review-prompts）。
+    // 辩论的收尾发言与用户写的裁定要点也在这里一并带上：前者执行者的会话里结构上没有，
+    // 后者是三档裁定表达不了的那部分结论。少任何一边，「辩完达成的共识」都到不了真正
+    // 去改代码的那一方，用户点完「让它接着改」只会看到执行者照原报告改。
     const round = await currentRoundOf(run);
     const delivered = await continueTask(
       taskId,
-      freeManualRepairPrompt(taskId, run, { disputeUpheld: round?.disputeResolution === "upheld" }),
+      freeManualRepairPrompt(taskId, run, {
+        disputeUpheld: round?.disputeResolution === "upheld",
+        resolutionNote: round?.disputeResolutionNote ?? null,
+        debateClosing: round ? await debateClosingOf(round.id) : null,
+      }),
       { byBackend: true },
     );
     if (delivered === false) await abort("回合被其它执行抢占，消息未能投递");

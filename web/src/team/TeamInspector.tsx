@@ -1,14 +1,16 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { agentMix } from "@ash/shared/team";
-import { Clock, FolderOpen, Info, MagnifyingGlass, Robot, UsersThree } from "@phosphor-icons/react";
+import { Clock, FolderOpen, Images, Info, MagnifyingGlass, Robot, UsersThree } from "@phosphor-icons/react";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "../task-detail/NativeWorkInspector.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
+import { ArtifactsInspector } from "../files/ArtifactsInspector.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { retireInspectorTab, type InspectorDescriptor } from "../inspector/index.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
+import type { Notify } from "../lib/notify.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { parseAttachmentText } from "../task-detail/utils.ts";
@@ -41,6 +43,7 @@ export interface TeamInspectorContext {
   /** 在中间栏摊开文件夹详情（里面有多少东西、能不能删）。 */
   onOpenFolder: (path: string) => void;
   onOpenDiff: (target: ScmDiffTarget) => void;
+  notify: Notify;
 }
 
 function ConfigValue({ label, value }: { label: string; value: string }) {
@@ -221,6 +224,21 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
         onOpenFile={context.onOpenFile}
         onOpenFolder={context.onOpenFolder}
         onOpenDiff={context.onOpenDiff}
+      />
+    ),
+  },
+  {
+    // 团队共享调度台的工作目录，所以这一格收的是整队人做出来的东西。
+    id: "artifacts",
+    title: "生成物",
+    icon: <Images size={14} />,
+    shortcut: "a",
+    render: (context) => (
+      <ArtifactsInspector
+        taskId={context.task.id}
+        activePath={context.activeFilePath}
+        onOpenFile={context.onOpenFile}
+        notify={context.notify}
       />
     ),
   },

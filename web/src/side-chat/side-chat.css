@@ -48,6 +48,12 @@
 .side-chat-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; margin-bottom: 6px; font-size: 11px; color: var(--muted); }
 .side-chat-status button { display: flex; align-items: center; gap: 4px; color: var(--ink); background: transparent; border: 0; padding: 4px 0; font-size: 11px; }
 .side-chat-input { border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
+/* 附件卡片沿用主会话那套（task-reply.css / task-conversation.css）。侧栏只有三百来像素宽，
+   190px 的固定上限会让两张图挤成一行半，这里改成跟着栏宽走。 */
+.side-chat-compose .task-upload-list { margin: 0 0 8px; }
+.side-chat-compose .task-upload-chip { max-width: min(190px, calc(50% - 4px)); }
+.side-chat-message .task-message-attachments { margin-top: 8px; }
+.side-chat-input footer .task-reply-icon { width: 26px; height: 26px; flex: 0 0 auto; }
 .side-chat-input:focus-within { border-color: var(--accent); }
 .side-chat-input textarea { display: block; width: 100%; min-height: 64px; max-height: 180px; resize: vertical; border: 0; outline: none; padding: 2px; color: var(--ink); background: transparent; font: inherit; line-height: 1.6; }
 .side-chat-input footer { display: flex; gap: 6px; align-items: center; justify-content: space-between; margin-top: 6px; }

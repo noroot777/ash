@@ -10,10 +10,14 @@ import { acceptedSideRequests } from "./side-authorization-cases.js";
 const stage = mkdtempSync(join(tmpdir(), "ash-side-browser-"));
 process.env.ASH_DB = join(stage, "test.db");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
+// 粘进侧聊的图要真落盘：走的是正式的 /uploads 路由，只是把目录挪进这次的临时舞台。
+// 末段必须仍是 data/uploads —— 前端按这段路径判断附件能不能直接预览（attachmentView）。
+process.env.ASH_UPLOADS_DIR = join(stage, "data", "uploads");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects, agents, tasks, scheduledMessages } = await import("../src/db/schema.js");
 const { ChatService } = await import("../src/chat/service.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
+const { mountUploadRoutes } = await import("../src/upload-routes.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
 const runs = await import("../src/runs.js");
 await ensureSchema(); await setInstanceMode("single", stage);
@@ -27,6 +31,8 @@ let forceForward = false;
 let excerptAuthorization = false;
 let judgeMode = "auto";
 const judgedSources: string[] = [];
+/** 每一轮真正喂给侧聊的当前用户消息，用例拿它核对附件块有没有拼进 prompt。 */
+const sources: string[] = [];
 const native = { kill: () => { kills++; }, steer: async (text: string) => { delivered.push(text); } };
 const plain = { kill: () => { kills++; } };
 function bind(enabled: boolean) {
@@ -48,6 +54,7 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
   }
   // 模拟执行过程：真实 CLI 的工具/思考事件由 invokeChat 转成 onTrace，这里直接给两步，
   // 好让浏览器用例验「跑的中途看得见、停下/刷新之后还在」。
+  sources.push(source);
   options?.onTrace?.({ kind: "tool", label: "Bash", detail: "git log --oneline | head" });
   options?.onTrace?.({ kind: "thinking", label: "思考过程", detail: "先确认主任务改了哪些文件" });
   await delay(source.includes("等待") ? 30000 : 350, undefined, { signal });
@@ -56,8 +63,9 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
 });
 const api = new Hono();
 mountChatRoutes(api, service);
+mountUploadRoutes(api);
 api.get("/agents", async (c) => c.json(await db.select().from(agents)));
-api.get("/fixture/state", async (c) => c.json({ delivered, kills, judgedSources, pending: await db.select().from(scheduledMessages) }));
+api.get("/fixture/state", async (c) => c.json({ delivered, kills, judgedSources, sources, pending: await db.select().from(scheduledMessages) }));
 api.post("/fixture/authorization-mode", async (c) => { judgeMode = (await c.req.json()).mode ?? "auto"; return c.json({ ok: true }); });
 api.post("/fixture/forward-mode", async (c) => { const mode = await c.req.json(); forceForward = !!mode.forced; excerptAuthorization = !!mode.excerpt; return c.json({ ok: true }); });
 api.post("/fixture/native", async (c) => { bind((await c.req.json()).enabled); return c.json({ ok: true }); });

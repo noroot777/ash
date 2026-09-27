@@ -109,6 +109,10 @@
    而是「报告是对的、只是不该在这儿修」,和上面那块同色会被读成同一件事。 */
 .free-review-dispute-card__reason.is-defer { border-color:var(--line2); }.free-review-dispute-card__reason.is-defer > b { color:var(--muted); }
 .free-review-dispute-card__actions { display:flex; flex-wrap:wrap; gap:5px; }.free-review-dispute-card__actions > button { display:inline-flex; height:27px; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }.free-review-dispute-card__actions > button:hover:not(:disabled) { background:var(--raised); color:var(--ink); }.free-review-dispute-card__actions > button:disabled { opacity:.5; }
+/* 「让它接着改」是这几个出口里的常路（辩完多半就是带着谈定的方案接着改），给它主色；
+   另外两个是岔路，保持平级的次要样式。 */
+.free-review-dispute-card__actions > button.is-primary { border-color:color-mix(in lch,var(--accent) 45%,var(--line2)); background:color-mix(in lch,var(--accent) 12%,var(--panel)); color:var(--accent); font-weight:600; }
+.free-review-dispute-card__actions > button.is-primary:hover:not(:disabled) { background:color-mix(in lch,var(--accent) 20%,var(--panel)); color:var(--accent); }
 /* 辩论回放：两侧用不同的左边线区分，正文仍按报告那套 markdown 渲染。 */
 .free-review-debate { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:8px 9px; }
 .free-review-debate > header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }.free-review-debate > header b { color:var(--ink); font-size:9.5px; }.free-review-debate > header small { color:var(--faint); font-size:8.5px; }
@@ -120,6 +124,11 @@
 /* 「全宽阅读」：面板这一栏只有 ~540px，七段发言在里面是一根一万像素高的细条。 */
 .free-review-debate__expand { display:inline-flex; flex:none; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 7px; color:var(--muted); font-size:9px; cursor:pointer; }
 .free-review-debate__expand:hover { background:var(--raised); color:var(--ink); }
+/* 「用这段作要点」：贴在每段发言的头一行右端。辩论最有用的产物常常就是某一段里的
+   具体方案，点它等于把那段话交给执行者去做——不点也能自己写，所以它是轻量的。 */
+.free-review-debate__quote { display:inline-flex; margin-left:auto; flex:none; align-items:center; gap:3px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 6px; color:var(--faint); font-size:8.5px; cursor:pointer; }
+.free-review-debate__quote:hover { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); background:color-mix(in lch,var(--accent) 8%,var(--panel)); color:var(--accent); }
+.free-review-debate.is-reading .free-review-debate__quote { font-size:9.5px; padding:2px 8px; }
 /* 阅读态同一份数据、另一档排版：正文回到能读的字号，两侧留白也跟着松开。 */
 .free-review-debate.is-reading { border:0; border-radius:0; padding:0; }
 .free-review-debate.is-reading > header { display:none; }
@@ -132,6 +141,10 @@
 .free-review-debate.is-reading .free-review-debate__pending { font-size:11.5px; }
 .free-review-debate-exchanges { display:grid; gap:5px; padding:0 2px; }.free-review-debate-exchanges > b { color:var(--ink); font-size:10px; }.free-review-debate-exchanges > div { display:flex; gap:5px; }.free-review-debate-exchanges > div > button { width:32px; height:28px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); color:var(--muted); font-size:10.5px; }.free-review-debate-exchanges > div > button.is-selected { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); background:color-mix(in lch,var(--accent) 10%,var(--panel)); color:var(--accent); font-weight:700; }.free-review-debate-exchanges > small { color:var(--faint); font-size:9px; line-height:1.5; }
 .review-round-dispute { margin-top:10px; border-top:0.5px solid var(--line); padding-top:9px; }.review-round-dispute > b { display:block; margin-bottom:5px; color:var(--amber); font-size:10px; }.review-round-dispute > .free-review-debate { margin-top:8px; }
+/* 裁定要点是用户自己写的那段，配色跟驳回理由（琥珀=执行者的话）分开，免得读成同一个人说的。 */
+.review-round-dispute__note { margin-top:9px; border:1px solid color-mix(in lch,var(--accent) 22%,var(--line)); border-radius:8px; background:color-mix(in lch,var(--accent) 4%,var(--panel)); padding:8px 9px; }.review-round-dispute__note > b { display:block; margin-bottom:4px; color:var(--accent); font-size:9px; }.review-round-dispute__note .task-markdown { color:var(--muted); font-size:10px; line-height:1.6; }
+/* 裁定确认框里的要点输入：三档共用，措辞由 NOTE_FIELDS 换。 */
+.free-review-dispute-note { display:grid; gap:5px; padding:0 2px; }.free-review-dispute-note > span { color:var(--ink); font-size:10px; }.free-review-dispute-note > textarea { border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:7px 8px; color:var(--ink); font-size:10.5px; line-height:1.6; resize:vertical; }.free-review-dispute-note > textarea:focus-visible { border-color:color-mix(in lch,var(--accent) 45%,var(--line2)); outline:none; }.free-review-dispute-note > small { color:var(--faint); font-size:9px; line-height:1.5; }
 .post-merge-review-card { display:grid; gap:8px; border-bottom:1px solid var(--line); background:color-mix(in lch,var(--cyan) 2.5%,var(--panel)); padding:12px 14px; }
 .post-merge-review-card > header { display:grid; min-width:0; grid-template-columns:28px minmax(0,1fr) auto; align-items:center; gap:8px; }.post-merge-review-card > header > span { display:grid; width:28px; height:28px; place-items:center; border:1px solid color-mix(in lch,var(--cyan) 24%,var(--line)); border-radius:8px; background:var(--panel); color:var(--cyan); }.post-merge-review-card header b,.post-merge-review-card header small { display:block; }.post-merge-review-card header b { font-size:11px; }.post-merge-review-card header small { overflow:hidden; margin-top:1px; color:var(--faint); font-family:var(--font-mono); font-size:8.5px; text-overflow:ellipsis; white-space:nowrap; }.post-merge-review-card header em { border:1px solid var(--line); border-radius:999px; padding:2px 6px; color:var(--faint); font-size:8.5px; font-style:normal; }
 .post-merge-review-card > p { margin:0; color:var(--muted); font-size:9.5px; line-height:1.5; }.post-merge-review-card > div { display:flex; flex-wrap:wrap; gap:5px; }.post-merge-review-card > div > button { display:inline-flex; height:27px; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }.post-merge-review-card > div > button:hover:not(:disabled) { background:var(--raised); color:var(--ink); }.post-merge-review-card > div > button:disabled { opacity:.5; }

@@ -6,7 +6,8 @@
 // 于是看上去像**只有一方在讨论**。这份回归盯四件事：
 // ① 那一整段收成一张 .debate-lane，七条段间流水一条不留；
 // ② 展开后能读到 codex（审查者）那七段里真正的话，尤其是最后的收尾立场；
-// ③ 卡头把「谁跟谁、几段、什么立场」一次说清，且七段发言 = 七个色块；
+// ③ 卡头把「谁跟谁、几段、什么立场」一次说清，且七段发言 = 七个色块；外加辩完之后的
+//    出口——「去裁定」得挂在这张卡上（只在这场已经说完时给）；
 // ④ 「全宽阅读」开出来的读面，比面板那一栏宽出一大截——这条卡的毛病一半是宽度（面板栏
 //    542px 里那七段是一根一万像素高的细条）。
 // 外加一条兜底：拿不到 reviews（只读会话视图）时，原始行必须原样还在，不能凭空少掉。
@@ -91,6 +92,17 @@ try {
     );
   }
 
+  // ③（续）辩完就该能当场裁定。辩论是为了裁定才开的，读到收尾立场的人正在这张卡上，让他
+  // 再滚回上面那条旁注去找「去裁定」是白走一趟。
+  const resolve = lane.getByRole("button", { name: "去裁定" });
+  assert.equal(await resolve.count(), 1, "辩完的卡上要有「去裁定」——读完立场的人就在这儿");
+  await resolve.click();
+  assert.equal(
+    await page.evaluate(() => window.__resolveClicks ?? 0),
+    1,
+    "「去裁定」点下去要真的开审查面板",
+  );
+
   // ④ 全宽阅读：读面显著宽于时间线上那张卡，Esc 能退出去。
   await lane.getByRole("button", { name: "全宽阅读" }).click();
   const sheet = page.locator(".debate-reader__sheet");
@@ -139,6 +151,11 @@ try {
     await running.locator(".debate-lane-verdict.is-verdict").count(),
     0,
     "还没结束就不该摆立场——审查者要到收尾那段才给",
+  );
+  assert.equal(
+    await running.getByRole("button", { name: "去裁定" }).count(),
+    0,
+    "还在辩就别催着裁定：这一档的入口只在这场辩论说完之后才给",
   );
 
   console.log("debate lane tests passed");

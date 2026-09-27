@@ -265,6 +265,13 @@ export function ConversationFeed({
       <Gavel size={11} weight="fill" aria-hidden="true" />去裁定
     </button>
   ) : null;
+  // 辩论条上的同一颗按钮：辩论就是为了裁定才开的，读完该能当场决定，而不是往上翻回
+  // 那条旁注（用户 2026-09-27）。条件比旁注那颗更严一格——必须**这场辩论**辩的就是
+  // 此刻待裁定的那条驳回，而且它已经说完了（还在跑时后端也会拒绝裁定）。
+  const openDispute = onOpenReviewPanel ? openDisputeIn(reviews) : null;
+  const resolvableDebateIds = new Set(
+    (openDispute?.dispute?.debates ?? []).filter((debate) => debate.status !== "running").map((debate) => debate.id),
+  );
   const hiddenTimes = new Set<string>();
   for (let index = 1; index < items.length; index += 1) {
     const item = items[index]!;
@@ -352,6 +359,11 @@ export function ConversationFeed({
                 <DebateLane
                   key={row.id}
                   row={row}
+                  onResolve={
+                    onOpenReviewPanel && row.candidate && resolvableDebateIds.has(row.candidate.debate.id)
+                      ? onOpenReviewPanel
+                      : undefined
+                  }
                   fallback={row.items.map((item) => renderItem(item, true))}
                 />
               );

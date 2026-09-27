@@ -283,6 +283,15 @@ export function FreeWorkflowInspector({
                   ordinal={opened.round.dispute!.debates.length > 1 ? index + 1 : null}
                 />
               ))}
+              {/* 裁定要点是**用户**写的那一段，跟驳回理由和发言不是一回事，所以单独摆
+                  在最后（时间顺序也在最后）。裁定完那张卡就收了，不在这儿留一份的话，
+                  用户自己写的话下次打开就只剩时间线里那 60 字摘要。 */}
+              {opened.round.dispute.resolutionNote && (
+                <div className="review-round-dispute__note">
+                  <b>你裁定时写的要点</b>
+                  <MarkdownBody text={opened.round.dispute.resolutionNote} />
+                </div>
+              )}
             </div>
           )}
         </div>

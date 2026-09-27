@@ -60,6 +60,7 @@ export function Dropdown({
   panelClassName = "",
   panelHeader,
   filterResetKey,
+  keepOpenOnSelect = false,
   onClear,
   clearLabel = "清空",
 }: {
@@ -84,6 +85,11 @@ export function Dropdown({
   panelHeader?: React.ReactNode;
   /** 切换候选集时清掉上一次的筛选词。 */
   filterResetKey?: string;
+  /**
+   * 选中后浮层留着继续挑：用在「往一个清单里累加」的场景（例：固定模型列表），
+   * 那里选一个不等于选完了。单值选择器不要开，选完还杵着会让人以为没生效。
+   */
+  keepOpenOnSelect?: boolean;
   /** 给一个「回到不设置」的出口；候选列表里就不必再占一行「跟随…」。 */
   onClear?: () => void;
   clearLabel?: string;
@@ -154,12 +160,13 @@ export function Dropdown({
     });
   };
 
+  // 候选数量变了（异步探测回来、累加选走一个）浮层高度跟着变，得重新量一遍翻转方向。
   useLayoutEffect(() => {
     if (!open) return;
     measure();
     inputRef.current?.focus();
     if (!filterable) panelRef.current?.focus();
-  }, [filterable, open]);
+  }, [filterable, open, options.length]);
 
   // 页面滚动/尺寸变化时跟着走：浮层是 fixed 的，不重算就会飘到别处。
   useEffect(() => {
@@ -175,6 +182,14 @@ export function Dropdown({
 
   const commit = (next: string) => {
     onChange(next);
+    if (keepOpenOnSelect) {
+      // 累加场景：筛选词留着接着挑——选中的那个会从候选里消失，剩下的原地不动。
+      // 手打的自由值没有「剩下的」，清空，否则刚打完的那串会赖在筛选框里。
+      if (!options.some((option) => option.value === next)) setQuery("");
+      setIndex(0);
+      inputRef.current?.focus();
+      return;
+    }
     close();
     triggerRef.current?.focus();
   };

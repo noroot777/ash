@@ -22,11 +22,18 @@ const MAX_ENTRIES = 4000;
 const SNIFF_BYTES = 8192;
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg", "heic", "tif", "tiff"]);
+// `text/html` **故意不在这张表里**：这个端点带 `content-disposition: inline`，给 html 配上
+// text/html 就等于让工作区里任何一份 html 以 ash 自己的源跑脚本（读得到登录态、能带着
+// cookie 调 ash 的接口）。要看网页走 `task-page.ts` 那条——它把文档钉在 sandbox 里。
 const MIME_BY_EXTENSION: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
   webp: "image/webp", avif: "image/avif", bmp: "image/bmp", ico: "image/x-icon",
   svg: "image/svg+xml", heic: "image/heic", tif: "image/tiff", tiff: "image/tiff",
   pdf: "application/pdf",
+  mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", webm: "video/webm",
+  mkv: "video/x-matroska", avi: "video/x-msvideo", ogv: "video/ogg",
+  mp3: "audio/mpeg", wav: "audio/wav", m4a: "audio/mp4", aac: "audio/aac",
+  flac: "audio/flac", ogg: "audio/ogg", opus: "audio/ogg", aiff: "audio/aiff",
 };
 
 export type FileEntryKind = "dir" | "file";
@@ -301,15 +308,40 @@ export async function readFileContent(root: WorkspaceRoot, relPath: string): Pro
   }
 }
 
-/** 原样吐字节（图片/PDF 预览用）。 */
-export async function openRawStream(root: WorkspaceRoot, relPath: string) {
+/**
+ * `Range: bytes=...` 里我们认的那一种：单区间。多区间（`bytes=0-9,20-29`）要回
+ * multipart/byteranges，没人为了预览一段视频去实现它——不认就当整份给，符合规范。
+ */
+function parseByteRange(header: string | null | undefined, total: number) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec((header ?? "").trim());
+  if (!match || total <= 0) return null;
+  const [, rawStart, rawEnd] = match;
+  if (!rawStart && !rawEnd) return null;
+  // `bytes=-500` 是「最后 500 字节」，不是「从 -500 开始」。
+  const start = rawStart ? Number(rawStart) : Math.max(0, total - Number(rawEnd));
+  const end = rawStart ? (rawEnd ? Math.min(Number(rawEnd), total - 1) : total - 1) : total - 1;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= total) return null;
+  return { start, end };
+}
+
+/**
+ * 原样吐字节（图片 / PDF / 音视频预览用）。
+ *
+ * 认 Range 是音视频能用的前提：`<video>` 想拖进度条就得能只取中间一段，Safari 更是
+ * 不给 206 就直接不播。所以这里不再只有「整份」一种回法。
+ */
+export async function openRawStream(root: WorkspaceRoot, relPath: string, range?: string | null) {
   const abs = await resolveInRoot(root.path, relPath);
   const info = await stat(abs).catch(() => null);
   if (!info || info.isDirectory()) throw Object.assign(new Error("文件不存在"), { status: 404 });
   if (info.size > MAX_RAW_BYTES) throw Object.assign(new Error("文件过大，无法在线预览"), { status: 413 });
+  const window = parseByteRange(range, info.size);
   return {
-    stream: createReadStream(abs),
-    size: info.size,
+    stream: window ? createReadStream(abs, { start: window.start, end: window.end }) : createReadStream(abs),
+    /** 这一次回多少字节（206 时是区间长度，不是文件大小）。 */
+    size: window ? window.end - window.start + 1 : info.size,
+    total: info.size,
+    range: window,
     mime: MIME_BY_EXTENSION[extensionOf(abs)] ?? "application/octet-stream",
     name: basename(abs),
     absPath: abs,

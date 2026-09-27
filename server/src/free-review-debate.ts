@@ -34,7 +34,7 @@ import {
   projects,
   tasks,
 } from "./db/schema.js";
-import { debatePrompt } from "./free-review-prompts.js";
+import { debatePrompt, type DebateClosing } from "./free-review-prompts.js";
 import { openDisputeOf, type ReviewRunRow } from "./free-review-dispute.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -100,6 +100,31 @@ export async function debateTurnsOf(debateId: string): Promise<DebateTurnRow[]> 
 export async function activeDebateOf(taskId: string): Promise<DebateRow | null> {
   return (await db.select().from(freeReviewDebates)
     .where(and(eq(freeReviewDebates.taskId, taskId), eq(freeReviewDebates.status, "running")))).at(0) ?? null;
+}
+
+/**
+ * 这一轮意见上「审查者的收尾发言」——只认好好辩完的那条（中断的那条压根没说到收尾）。
+ *
+ * 唯一的消费者是修复提示：**执行者的会话里结构上不可能有这一段**，所以它必须被整段
+ * 抄过去，理由与措辞见 free-review-prompts.ts 的 `debateClosingSection`。
+ *
+ * 同一条驳回可能辩过多次（中断的允许重开），取最后一条：能走到 finished 的至多一条，
+ * 前面那些都是 failed。
+ */
+export async function debateClosingOf(roundId: string): Promise<DebateClosing | null> {
+  const debate = await debateOfRound(roundId);
+  if (!debate || debate.status !== "finished") return null;
+  const total = totalSegments(debate.exchanges);
+  const closing = (await debateTurnsOf(debate.id)).find((turn) =>
+    turn.seq === total && turn.side === "reviewer" && turn.status === "done" && !!turn.statement);
+  if (!closing?.statement) return null;
+  const verdict = debate.verdict as FreeReviewDebateVerdict | null;
+  return {
+    seq: closing.seq,
+    total,
+    verdictLabel: verdict ? DEBATE_VERDICT_LABELS[verdict] : null,
+    statement: closing.statement,
+  };
 }
 
 async function speakingTurnOf(debate: DebateRow): Promise<DebateTurnRow | null> {
@@ -310,7 +335,7 @@ export async function settleDebateTurn(taskId: string, turnOk: boolean): Promise
       .where(eq(freeReviewDebates.id, debate.id))).at(0)?.verdict as FreeReviewDebateVerdict | null;
     await appendTaskTimeline(taskId,
       `辩论结束，审查者收尾立场：${verdict ? DEBATE_VERDICT_LABELS[verdict] : "未给出"}。` +
-      "这只是它自己的立场，结论仍由你裁定：采纳执行者，或维持审查意见让它照改。");
+      "这只是它自己的立场，结论仍由你裁定：让它接着改（可以把某一段发言直接作为裁定要点），或者判这一轮不用改了。");
     bus.publish({ type: "task.review", taskId });
     return true;
   }

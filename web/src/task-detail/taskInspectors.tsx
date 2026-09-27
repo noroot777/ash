@@ -1,10 +1,11 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
-import { Browser, FolderOpen, GitPullRequest, Info, MagnifyingGlass, Robot, Chats } from "@phosphor-icons/react";
+import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, Robot, Chats } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import { PreviewWorkspaceEntry } from "../preview-workspace/PreviewWorkspace.tsx";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
+import { ArtifactsInspector } from "../files/ArtifactsInspector.tsx";
 import { ScmInspector } from "../scm/ScmInspector.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import type { Notify } from "../lib/notify.ts";
@@ -40,7 +41,7 @@ export interface TaskInspectorContext {
 
 // 图标条的顺序就是这个数组的顺序（`orderedValidTabs` 按它归位，localStorage 里存的次序
 // 不作数）。排法是「看任务本身 → 看它改了什么 → 跟它一起干活」：
-// 信息 · 文件 · 改动 · 子智能体 · 侧聊 · 工作流 · 审查 · 预览指正。
+// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 侧聊 · 工作流 · 审查 · 预览指正。
 // 每一格都带快捷键（`I` 加面板名首字母），键位表在 inspector/shortcuts.ts。
 export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
   {
@@ -64,6 +65,24 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
         onOpenFile={context.onOpenFile}
         onOpenFolder={context.onOpenFolder}
         onOpenDiff={context.onOpenScmDiff}
+      />
+    ),
+  },
+  {
+    // 跟「文件」分开的理由：文件树答的是「目录里现在有什么」，这一格答的是「它做出了
+    // 什么可以直接看的东西」。一张生成的图在树里只是几十行里的一行，在 diff 里是一句
+    // `Binary files differ` —— 两边都等于没有。
+    id: "artifacts",
+    title: "生成物",
+    icon: <Images size={14} />,
+    defaultOpen: true,
+    shortcut: "a",
+    render: (context) => (
+      <ArtifactsInspector
+        taskId={context.task.id}
+        activePath={context.activeFilePath}
+        onOpenFile={context.onOpenFile}
+        notify={context.notify}
       />
     ),
   },

@@ -140,6 +140,37 @@ async function taskBranchRange(
   }
 }
 
+/**
+ * 只要「这条分支相对合入目标动过哪些文件」的**路径**，不读内容。
+ *
+ * 产物面板要的就是这一句：它只想知道有没有新出来一张图，不关心图里改了哪几个字节，
+ * 而 `taskBranchDiff` 会顺带把整份 diff 文本读出来（默认上限 1 MB）——面板每隔几秒问
+ * 一次，那是白读。区间仍走 `taskBranchRange`，跟清单、单文件 diff 同源。
+ *
+ * 已删除的路径照样在结果里：调用方随后要 stat 它们（要 size/mtime），那一步自然会把
+ * 磁盘上已经没有的滤掉，这里不必重复判一次。
+ */
+export async function taskBranchChangedPaths(
+  repoPath: string,
+  taskId: string,
+  requestedTarget: string | null | undefined,
+  startCommit?: string | null,
+): Promise<{ available: boolean; paths: string[]; reason?: string }> {
+  const repo = expandHome(repoPath);
+  const range = await taskBranchRange(repo, taskId, requestedTarget, startCommit);
+  if (!range.ok) return { available: false, paths: [], reason: range.reason };
+  try {
+    const { stdout } = await exec(
+      "git",
+      ["-C", repo, "diff", "--name-only", "-z", range.mergeBase, range.sourceBranch],
+      { maxBuffer: 16 * 1024 * 1024 },
+    );
+    return { available: true, paths: stdout.split("\0").filter(Boolean) };
+  } catch {
+    return { available: false, paths: [], reason: "task_diff_unreadable" };
+  }
+}
+
 export async function taskBranchDiff(
   repoPath: string,
   taskId: string,

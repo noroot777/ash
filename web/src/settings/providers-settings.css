@@ -171,7 +171,8 @@
 }
 
 .provider-mono-input,
-.provider-model-field .ui-dropdown-trigger {
+.provider-model-field .ui-dropdown-trigger,
+.provider-pinned-add .ui-dropdown-trigger {
   font-family: var(--font-mono);
 }
 
@@ -180,12 +181,15 @@
   gap: 7px;
 }
 
-.provider-model-control > .ui-dropdown {
+/* 固定模型的「添加」下拉跟上面的「默认模型」共用一套观感：同样的 trigger、同样高。 */
+.provider-model-control > .ui-dropdown,
+.provider-pinned-add > .ui-dropdown {
   min-width: 0;
   flex: 1;
 }
 
-.provider-model-control > .ui-dropdown .ui-dropdown-trigger {
+.provider-model-control > .ui-dropdown .ui-dropdown-trigger,
+.provider-pinned-add > .ui-dropdown .ui-dropdown-trigger {
   height: 29px;
   border-color: var(--line);
   background: var(--canvas);
@@ -193,7 +197,9 @@
 }
 
 .provider-model-control > .ui-dropdown .ui-dropdown-trigger:hover,
-.provider-model-control > .ui-dropdown .ui-dropdown-trigger[aria-expanded="true"] {
+.provider-model-control > .ui-dropdown .ui-dropdown-trigger[aria-expanded="true"],
+.provider-pinned-add > .ui-dropdown .ui-dropdown-trigger:hover,
+.provider-pinned-add > .ui-dropdown .ui-dropdown-trigger[aria-expanded="true"] {
   border-color: var(--accent);
   background: var(--canvas);
   box-shadow: none;
@@ -447,44 +453,8 @@
   gap: 7px;
 }
 
-.provider-pinned-add input {
-  flex: 1;
-  font-family: var(--font-mono);
-}
-
 .provider-pinned-add .ui-button {
   flex: none;
-}
-
-.provider-pinned-suggest {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-}
-
-.provider-pinned-suggest > button {
-  display: inline-flex;
-  height: 23px;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid var(--line2);
-  border-radius: 999px;
-  background: var(--panel);
-  padding: 0 9px 0 7px;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
-.provider-pinned-suggest > button:hover {
-  border-color: color-mix(in lch, var(--accent) 42%, var(--line2));
-  color: var(--ink);
-}
-
-.provider-pinned-suggest > small {
-  color: var(--faint);
-  font-size: 9.5px;
 }
 
 .provider-pinned-list {
@@ -595,15 +565,18 @@
     grid-column: auto;
   }
 
-  .provider-model-field > div {
+  .provider-model-field > div,
+  .provider-pinned-add {
     flex-wrap: wrap;
   }
 
-  .provider-model-control > .ui-dropdown {
+  .provider-model-control > .ui-dropdown,
+  .provider-pinned-add > .ui-dropdown {
     flex-basis: 100%;
   }
 
-  .provider-model-field > div .ui-button {
+  .provider-model-field > div .ui-button,
+  .provider-pinned-add .ui-button {
     flex: 1;
     min-width: 0;
     gap: 4px;

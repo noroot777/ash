@@ -100,14 +100,22 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <div style={{ background: "var(--bg)" }}>
       <section className="folded-fixture">
-        <ConversationFeed {...common} reviews={[run]} onOpenReviewPanel={() => {}} />
+        <ConversationFeed
+          {...common}
+          reviews={[run]}
+          onOpenReviewPanel={() => {
+            const log = window as Window & { __resolveClicks?: number };
+            log.__resolveClicks = (log.__resolveClicks ?? 0) + 1;
+          }}
+        />
       </section>
       {/* 拿不到 reviews 的只读场合：配不到落盘记录，原始行原样摆出来兜底，不能凭空少掉一段。 */}
       <section className="fallback-fixture">
         <ConversationFeed {...common} reviews={null} />
       </section>
+      {/* 辩到一半：入口给了，但这场还没说完——「去裁定」不该在这时候挂出来。 */}
       <section className="running-fixture">
-        <ConversationFeed {...common} items={runningItems} reviews={[runningRun]} />
+        <ConversationFeed {...common} items={runningItems} reviews={[runningRun]} onOpenReviewPanel={() => {}} />
       </section>
     </div>
   </StrictMode>,

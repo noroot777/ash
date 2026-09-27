@@ -188,6 +188,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
             at: round.disputeAt ?? round.endedAt ?? round.startedAt,
             resolution: (round.disputeResolution as FreeReviewDispute["resolution"]) ?? null,
             resolvedAt: round.disputeResolvedAt,
+            resolutionNote: round.disputeResolutionNote,
             deferredTaskId: round.disputeDeferredTaskId,
             debates: debates.get(round.id) ?? [],
           }

@@ -138,6 +138,8 @@
     "test:anthropic-context-1m": "tsx scripts/test-anthropic-context-1m.ts",
     "test:skills": "tsx scripts/test-skills.ts",
     "test:file-browser": "tsx scripts/test-file-browser.ts",
+    "test:task-artifacts": "tsx scripts/test-task-artifacts.ts",
+    "test:task-page": "tsx scripts/test-task-page.ts",
     "test:file-search": "tsx scripts/test-file-search.ts",
     "test:local-open": "tsx scripts/test-local-open.ts",
     "test:openers-windows": "tsx scripts/test-openers-windows.ts",

@@ -49,7 +49,13 @@ function titleOf(source: TaskRow, round: number): string {
   return `承接第 ${round} 轮审查的越界意见：${name}`;
 }
 
-function bodyOf(source: TaskRow, run: ReviewRunRow, round: ReviewRoundRow, deferReason: string): string {
+function bodyOf(
+  source: TaskRow,
+  run: ReviewRunRow,
+  round: ReviewRoundRow,
+  deferReason: string,
+  note: string | null,
+): string {
   const report = freeReviewReportPath(source.id, run.id, round.round);
   const dir = freeReviewEvidenceDir(source.id, run.id, round.round);
   return `承接任务「${source.title}」第 ${round.round} 轮审查里的几条意见。\n\n` +
@@ -60,6 +66,9 @@ function bodyOf(source: TaskRow, run: ReviewRunRow, round: ReviewRoundRow, defer
     `审查报告：[report.md](${report})\n证据目录：${dir}\n` +
     (round.reviewedCommit ? `被审查的那一版：${round.reviewedCommit}\n` : "") +
     `\n执行者逐条给出的「为什么它属于本任务之外」：\n\n${deferReason}\n\n` +
+    // 用户裁定时写的要点必须跟着搬过来：它多半是「转走，但按辩论里那个方案做」这类
+    // 只有裁定人能定的话。留在原任务上的话，真正干这几条活的人一个字都看不到。
+    (note ? `用户裁定转出时写给你的要点（以这段为准）：\n\n${note}\n\n` : "") +
     "请完整读取报告，**只处理上面列出的那几条**；报告里其余部分要么原任务已经改掉、" +
     "要么被用户裁定作废，不在本任务范围内。";
 }
@@ -77,6 +86,7 @@ function bodyOf(source: TaskRow, run: ReviewRunRow, round: ReviewRoundRow, defer
 export async function deferOpenDispute(
   source: TaskRow,
   open: { run: ReviewRunRow; round: ReviewRoundRow },
+  note: string | null = null,
 ): Promise<Task> {
   const { run, round } = open;
   // 规矩③：执行者没有逐条写明越界依据，就没有这个出口。凭空的 deferred 裁定等于
@@ -85,7 +95,7 @@ export async function deferOpenDispute(
   if (!deferReason) {
     throw new Error(
       "执行者没有提出「这几条超出本任务边界」，不能转成独立任务；" +
-      "要让它不改就用「采纳执行者说法」，要让它照改就用「维持审查意见」",
+      "要让它不改就用「这一轮不用改了」，要让它照改就用「让它接着改」",
     );
   }
   if (!tryAcquireFreeWorkflowAction(source.id)) throw new Error("当前已有自由工作流操作正在进行");
@@ -100,7 +110,7 @@ export async function deferOpenDispute(
 
     const at = now();
     const claimed = await db.update(freeReviewRounds)
-      .set({ disputeResolution: "deferred", disputeResolvedAt: at })
+      .set({ disputeResolution: "deferred", disputeResolvedAt: at, disputeResolutionNote: note })
       .where(and(eq(freeReviewRounds.id, round.id), isNull(freeReviewRounds.disputeResolution)))
       .returning({ id: freeReviewRounds.id });
     if (!claimed.length) throw new Error("这一轮驳回已经被裁定过了");
@@ -113,7 +123,7 @@ export async function deferOpenDispute(
         groupId: source.groupId,
         parentId: null,
         title: titleOf(source, round.round),
-        body: bodyOf(source, run, round, deferReason),
+        body: bodyOf(source, run, round, deferReason, note),
         mode: "single",
         // backlog 且不起跑：这是一条**计划**，起不起、什么时候起由用户决定。裁定的
         // 意思是「这几条不在本任务里修」，不是「现在立刻开一个新回合去修」。
@@ -143,7 +153,7 @@ export async function deferOpenDispute(
       if (!created) throw new Error("派生任务创建失败");
     } catch (error) {
       await db.update(freeReviewRounds)
-        .set({ disputeResolution: null, disputeResolvedAt: null })
+        .set({ disputeResolution: null, disputeResolvedAt: null, disputeResolutionNote: null })
         .where(eq(freeReviewRounds.id, round.id));
       throw error;
     }
@@ -154,7 +164,8 @@ export async function deferOpenDispute(
     await appendTaskTimeline(source.id,
       `你裁定把第 ${run.currentRound} 轮里超出本任务边界的那几条意见转成独立任务：` +
       `${created.title}（${created.id}，待办、未起跑）。` +
-      "这一轮不再要求本任务照它修复；审查报告与证据原样保留，审查结论本身不改写。");
+      "这一轮不再要求本任务照它修复；审查报告与证据原样保留，审查结论本身不改写。" +
+      (note ? `你写下的裁定要点已随任务带过去。` : ""));
     bus.publish({ type: "task.review", taskId: source.id });
     return created;
   } finally {
