@@ -37,6 +37,25 @@ import { resolveInRoot, taskFileRoot } from "./file-browser.js";
 // 也枚举不动，拿不到令牌的第三方站点连 404 都摸不到。重启换密钥，前端下次读文件时自然
 // 拿到新的。
 //
+// ## 但令牌挡不住页面自己（第 2 轮审查复现的洞）
+//
+// 令牌就写在 iframe 的地址里，页面脚本一句 `location.pathname` 就拿到了。于是这些
+// **agent 现写、最不该信**的页面可以 `fetch(base + "/secret.txt")`，靠 `ACAO: null`
+// 把同一工作区里任意文件的正文读走——再 POST 到任何外站。令牌防的是别人，防不了自己。
+//
+// 所以 ACAO **按请求目的发**，判据是 `Sec-Fetch-Dest`（`Sec-` 前缀是禁止头，页面脚本
+// 改不动，只有浏览器自己填）：
+//   • 真正非 CORS 不可的只有**模块脚本**和**字体**（这两类恒定走 CORS 模式），外加
+//     module worker。给它们 ACAO。
+//   • `fetch()` / `XMLHttpRequest` 的 dest 是 `empty`——正是读文件那条路，一律不给。
+//   • 样式表、图片、媒体是 no-cors 加载（`crossorigin` 已被摘掉），**本来就不需要**
+//     ACAO，所以也不给。
+//   • 头缺失（老浏览器、curl）时**按不给处理**：宁可这类页面退回外部打开，也不因为
+//     认不出请求目的就把工作区交出去。
+//
+// 剩下的口子只有「执行」不是「读取」：页面仍能 `import()` 工作区里一个**真的是 JS 模块**
+// 的文件并跑它。拿不到源码文本，且 `nosniff` + 严格 MIME 让非 JS 的文件连加载都过不去。
+//
 // ## 仍然做不到的事（所以外部打开那颗按钮不能撤）
 //
 // 改写只能碰 HTML 属性和 CSS 的 `url()`。页面若在**打包后的 JS 里** `fetch("/api/…")`，
@@ -65,6 +84,11 @@ const MIME: Record<string, string> = {
 
 /** 不给 `allow-same-origin`：给了这层沙箱就等于没有。 */
 const SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals";
+/**
+ * 只有这几类请求目的拿得到 `ACAO: null`——它们非 CORS 不可，而且拿到的是「能跑」不是
+ * 「能读正文」。`fetch`/`XHR` 的 `empty`、以及任何认不出来的目的，一律不给（见顶部注释）。
+ */
+const CORS_DESTINATIONS = new Set(["script", "worker", "sharedworker", "font"]);
 const MAX_PAGE_BYTES = 64 * 1024 * 1024;
 /** 改写要把整份读进内存，所以文本类另设一道上限，别为一个 200 MB 的 .map 爆掉。 */
 const MAX_REWRITE_BYTES = 8 * 1024 * 1024;
@@ -219,11 +243,13 @@ export function mountTaskPageRoutes(api: Hono): void {
         "x-content-type-options": "nosniff",
       };
       // 只对不透明源放行（沙箱 iframe 的 Origin 字面量就是 `null`），且**绝不回显**真实
-      // 来源——带着自己源的普通网站一律拿不到 ACAO，照常被 CORS 拦下。
-      if (c.req.header("origin") === "null") {
+      // 来源——带着自己源的普通网站一律拿不到 ACAO，照常被 CORS 拦下。再按请求目的收一道：
+      // 页面脚本的 `fetch` 是 `empty`，给了它就等于把整个工作区交给一份 agent 现写的 html。
+      if (c.req.header("origin") === "null" && CORS_DESTINATIONS.has(c.req.header("sec-fetch-dest") ?? "")) {
         headers["access-control-allow-origin"] = "null";
-        headers["vary"] = "Origin";
       }
+      // 发不发 ACAO 同时取决于这两个请求头，缓存键就得带上它们——哪怕这里是 no-store。
+      headers["vary"] = "Origin, Sec-Fetch-Dest";
 
       const isPage = PAGE_EXTENSIONS.has(extension);
       const rewritable = (isPage || extension === ".css") && info.size <= MAX_REWRITE_BYTES;

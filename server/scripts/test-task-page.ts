@@ -4,11 +4,13 @@
 // **根路径引用**（`/assets/index-x.js`）——它不跟着页面地址走，直奔 ash 自己的根，取回来
 // 的是 ash 的 index.html；加上不透明源下模块脚本恒定走 CORS，没有 ACAO 一律被拦。
 //
-// 所以这里钉四件事，少一件那个空白页就回来：
+// 所以这里钉五件事，少一件那个空白页就回来、或者那个洞就回来：
 //   1. 根路径引用改写到**本次预览的站点根**（站点根≠工作区根，也≠html 所在目录）
 //   2. `crossorigin` 摘掉（它把本来 no-cors 的样式表/图片也拖进 CORS）
 //   3. `ACAO: null` 只发给不透明源，**绝不回显真实来源**
-//   4. 预览令牌：放开 ACAO 之后挡住第三方站点的那一道，错了/没有一律 403
+//   4. 而且只发给 `Sec-Fetch-Dest` 是模块脚本/字体/worker 的请求——`fetch` 的 `empty`
+//      一律不给，否则页面脚本能从自己地址里抠出令牌把整个工作区读走（第 2 轮审查复现）
+//   5. 预览令牌：放开 ACAO 之后挡住第三方站点的那一道，错了/没有一律 403
 // 跑：npm -w server run test:task-page
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -138,13 +140,35 @@ try {
   assert((await about.text()).includes(`href="${base}/site/css/main.css"`),
     "/css/main.css 的站点根是 site，不是 html 所在的 site/pages");
 
-  // ── 5. CORS：只给不透明源，绝不回显真实来源 ───────────────────────────────
-  const opaque = await get(`${siteBase}/assets/index-abc.js`, { origin: "null" });
-  assert.equal(opaque.headers.get("access-control-allow-origin"), "null", "沙箱 iframe 的模块脚本非它不可");
-  assert.equal(opaque.headers.get("vary"), "Origin");
-  const evil = await get(`${siteBase}/assets/index-abc.js`, { origin: "https://evil.example" });
-  assert.equal(evil.headers.get("access-control-allow-origin"), null, "带着自己源的站点一律不给 ACAO");
-  assert.equal((await get(`${siteBase}/assets/index-abc.js`)).headers.get("access-control-allow-origin"), null);
+  // ── 5. CORS：只给不透明源，且只给「非 CORS 不可」的那几种请求目的 ────────────
+  // 第 2 轮审查的洞就在这一格：令牌写在 iframe 地址里，页面脚本读得到，于是它能
+  // `fetch` 同工作区任意文件并靠 ACAO 读走正文。判据换成 `Sec-Fetch-Dest`（禁止头，
+  // 页面脚本伪造不了）之后，能跑的照跑，能读的只剩它自己。
+  const assetUrl = `${siteBase}/assets/index-abc.js`;
+  const acao = async (headers: Record<string, string>) =>
+    (await get(assetUrl, headers)).headers.get("access-control-allow-origin");
+
+  // 真正非 CORS 不可的：模块脚本、字体、module worker
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "script" }), "null", "模块脚本非它不可");
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "font" }), "null", "字体恒定走 CORS");
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "worker" }), "null");
+  // 读文件那条路
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "empty" }), null,
+    "fetch/XHR 的 dest 就是 empty——给了它就等于把工作区交给一份 agent 现写的 html");
+  // no-cors 加载的本来就不需要，所以也不给
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "style" }), null);
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "image" }), null);
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "document" }), null);
+  // 认不出请求目的（老浏览器、curl）一律按不给处理：宁可退回外部打开
+  assert.equal(await acao({ origin: "null" }), null, "头缺失要 fail closed");
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "" }), null);
+  // 带着自己源的站点，不管什么目的都拿不到
+  assert.equal(await acao({ origin: "https://evil.example", "sec-fetch-dest": "script" }), null);
+  assert.equal(await acao({ "sec-fetch-dest": "script" }), null);
+  // 发不发取决于这两个头，缓存键就得带上
+  assert.equal((await get(assetUrl, { origin: "null", "sec-fetch-dest": "script" })).headers.get("vary"),
+    "Origin, Sec-Fetch-Dest");
+  assert.equal((await get(assetUrl)).headers.get("vary"), "Origin, Sec-Fetch-Dest");
 
   // ── 6. 越界 ───────────────────────────────────────────────────────────────
   for (const bad of ["..%2F..%2Fash.db", "web%2Fdist%2F..%2F..%2F..%2Fetc%2Fpasswd"]) {
@@ -156,7 +180,7 @@ try {
   assert.equal(taskPageUrlFor(TASK_ID, "out/a.png"), null, "图片不走网页预览那条");
   assert.equal(taskPageUrlFor(TASK_ID, "readme.md"), null);
 
-  console.log("✓ task page: 根路径改写(两种站点根布局)、crossorigin 摘除、令牌按任务、ACAO 只给不透明源、越界拒绝");
+  console.log("✓ task page: 根路径改写(两种站点根布局)、crossorigin 摘除、令牌按任务、ACAO 只给不透明源的模块脚本/字体、越界拒绝");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
