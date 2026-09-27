@@ -16,6 +16,7 @@ import {
   disputeFreeReview,
   disputeInputOf,
   disputeResolutionOf,
+  disputeResolutionNoteOf,
   resolveFreeReviewDispute,
 } from "./free-review-dispute.js";
 import { freeReviewFile } from "./free-review-files.js";
@@ -123,8 +124,13 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
     try {
-      const body = await c.req.json<{ resolution?: unknown }>().catch(() => ({} as { resolution?: unknown }));
-      const result = await resolveFreeReviewDispute(c.req.param("id"), disputeResolutionOf(body.resolution));
+      const body = await c.req.json<{ resolution?: unknown; note?: unknown }>()
+        .catch(() => ({} as { resolution?: unknown; note?: unknown }));
+      const result = await resolveFreeReviewDispute(
+        c.req.param("id"),
+        disputeResolutionOf(body.resolution),
+        disputeResolutionNoteOf(body.note),
+      );
       return c.json({ ...result, state: await freeWorkflowState(c.req.param("id")) });
     } catch (error) { return c.json(errorBody(error), 409); }
   });

@@ -54,6 +54,9 @@ export type ReviewRoundRow = typeof freeReviewRounds.$inferSelect;
 /** 驳回理由的长度上限：够写满一页逐条反驳，又不至于把一整份 diff 灌进数据库。 */
 export const MAX_DISPUTE_REASON_LEN = 20_000;
 
+/** 裁定要点的长度上限：够写清「这条按辩论里那个方案做」，但它是一段批注，不是第二份报告。 */
+export const MAX_DISPUTE_RESOLUTION_NOTE_LEN = 4_000;
+
 function trimmed(raw: unknown): string {
   return typeof raw === "string" ? raw.trim().slice(0, MAX_DISPUTE_REASON_LEN) : "";
 }
@@ -238,16 +241,33 @@ export function disputeResolutionOf(raw: unknown): FreeReviewDisputeResolution {
 }
 
 /**
+ * 裁定时用户写给执行者的要点（选填）。
+ *
+ * 为什么裁定要带一栏自由文本：三档裁定各自表达的是一整条驳回的去留，而辩论辩出来的
+ * 结论常常落在三档之间——「第 1、3 条已修好，第 2 条我认但按后来达成的方案做」。没有
+ * 这一栏时，用户只能点完 `upheld` 再手打一条续聊补充，那段话不进任何结构化状态：
+ * 刷新看不见、接力不跟着走，而且它到得比修复提示晚，执行者多半已经照原报告动手了。
+ */
+export function disputeResolutionNoteOf(raw: unknown): string | null {
+  const text = typeof raw === "string" ? raw.trim().slice(0, MAX_DISPUTE_RESOLUTION_NOTE_LEN) : "";
+  return text || null;
+}
+
+/**
  * 用户裁定一条驳回。`upheld` 会顺带把「按意见修复」发起来（那正是这个裁定的意思）；
  * 修复起不来不回滚裁定 —— 裁定是用户的决定，投递失败是另一件事，如实写进时间线即可。
  *
  * `deferred` 走另一条路（free-review-defer.ts）：它的「顺带」是**建一个任务**，而建
  * 失败了这个裁定就什么也没剩下——没有第二个入口能把那个任务补建出来。所以它必须能
  * 回滚，不能照抄 upheld 的「失败也落账」。
+ *
+ * `note` 是用户写给执行者的要点（选填，理由见 disputeResolutionNoteOf）。它跟着裁定
+ * 一起落库、一起进时间线；`upheld` 时还会整段拼进修复提示，**并在那里声明它压过报告**。
  */
 export async function resolveFreeReviewDispute(
   taskId: string,
   resolution: FreeReviewDisputeResolution,
+  note: string | null = null,
 ): Promise<{ resolution: FreeReviewDisputeResolution; repairError: string | null; deferredTask: Task | null }> {
   const task = await freeTask(taskId);
   if (task.archived) throw new Error("归档任务不能裁定审查驳回");
@@ -260,17 +280,19 @@ export async function resolveFreeReviewDispute(
 
   if (resolution === "deferred") {
     const { deferOpenDispute } = await import("./free-review-defer.js");
-    const deferredTask = await deferOpenDispute(task, open);
+    const deferredTask = await deferOpenDispute(task, open, note);
     return { resolution, repairError: null, deferredTask };
   }
 
   const at = now();
   await db.update(freeReviewRounds)
-    .set({ disputeResolution: resolution, disputeResolvedAt: at })
+    .set({ disputeResolution: resolution, disputeResolvedAt: at, disputeResolutionNote: note })
     .where(eq(freeReviewRounds.id, open.round.id));
-  await appendTaskTimeline(taskId, resolution === "withdrawn"
+  await appendTaskTimeline(taskId, (resolution === "withdrawn"
     ? `你裁定采纳执行者的说法：第 ${open.run.currentRound} 轮的未通过意见不再要求修复（报告与证据原样保留，审查结论本身不改写）。`
-    : `你裁定维持第 ${open.run.currentRound} 轮审查意见：执行者需要照报告修复。`);
+    : `你裁定维持第 ${open.run.currentRound} 轮审查意见：执行者需要照报告修复。`)
+    // 时间线只放摘要，全文留在那一轮的审查记录里（时间线不是正文的第二个家）。
+    + (note ? `你写下的裁定要点：${summarize(note)}` : ""));
   bus.publish({ type: "task.review", taskId });
 
   let repairError: string | null = null;

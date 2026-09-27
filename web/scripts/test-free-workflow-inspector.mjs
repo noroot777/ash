@@ -270,6 +270,21 @@ try {
     "工作区没变过时不该凭空劝人再审一轮",
   );
 
+  // 裁定要点得在这一轮的审查记录里留一份：裁定一落，驳回卡就收了，用户自己写的那段话
+  // 除了时间线上那句摘要就再无去处。它是**用户**的话，所以跟驳回理由分块摆。
+  const waivedFixture = page.locator(".waived-fresh-fixture");
+  await waivedFixture.locator(".review-inspector__targets button").first().click();
+  const waivedDrawer = page.locator(".review-evidence-drawer");
+  await waivedDrawer.waitFor();
+  const resolutionNote = waivedDrawer.locator(".review-round-dispute__note");
+  await resolutionNote.waitFor();
+  assert.match(await resolutionNote.innerText(), /你裁定时写的要点/, "要标明这段是用户自己写的");
+  assert.match(
+    await resolutionNote.innerText(),
+    /按辩论里达成的方案做/,
+    "裁定要点原文要留在审查记录里，否则用户回头只剩时间线上那 60 字摘要",
+  );
+
   console.log("free workflow inspector preview test passed");
 } finally {
   await browser?.close();

@@ -187,7 +187,8 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, run_id TEXT NOT NULL, round INTEGER NOT NULL,
       status TEXT NOT NULL, conclusion TEXT, reviewed_commit TEXT,
       dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
-      dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_deferred_task_id TEXT,
+      dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
+      dispute_deferred_task_id TEXT,
       started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
@@ -419,6 +420,8 @@ export async function ensureSchema() {
     // 第三条出路：「意见成立但越界，建议转独立任务」的理由，以及裁定后建出的那个任务。
     "ALTER TABLE free_review_rounds ADD COLUMN dispute_defer_reason TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN dispute_deferred_task_id TEXT",
+    // 裁定时用户写给执行者的要点（三档裁定表达不了的那部分结论，多半是辩论里达成的方案）。
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution_note TEXT",
     // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
     "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",

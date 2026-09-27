@@ -257,6 +257,8 @@ const waivedRound = (resolution: "deferred" | "withdrawn") => ({
     at: "2026-08-09T01:12:00.000Z",
     resolution,
     resolvedAt: "2026-08-09T01:20:00.000Z",
+    // 用户裁定时写的那段话：裁定完驳回卡就收了，这一轮的审查记录是它唯一还看得到的地方。
+    resolutionNote: "第 2 条按辩论里达成的方案做，不要按报告那版降档。",
     deferredTaskId: resolution === "deferred" ? "derived-1" : null,
     debates: [],
   },

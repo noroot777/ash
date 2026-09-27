@@ -10,6 +10,22 @@ import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
 
 type Pending = "debate" | "withdrawn" | "upheld" | "deferred";
 
+/** 裁定要点在三档裁定里各自流向哪儿——文案必须说死，否则用户不知道这段话有没有人看。 */
+const NOTE_FIELDS: Record<"withdrawn" | "upheld" | "deferred", { label: string; hint: string }> = {
+  upheld: {
+    label: "写给执行者的要点（选填）",
+    hint: "会随修复指令一起发过去，并注明与报告冲突时以你这段为准。",
+  },
+  withdrawn: {
+    label: "记下你的理由（选填）",
+    hint: "这一档不会给执行者发任何消息，这段话只留在审查记录和时间线里备查。",
+  },
+  deferred: {
+    label: "写给新任务的要点（选填）",
+    hint: "会写进新建那个待办任务的描述里，接手的人一开始就看得到。",
+  },
+};
+
 /**
  * 「执行者不认这一轮意见」的那张卡：驳回理由 + 辩论回放 + 几个只有用户能按的出口。
  *
@@ -22,6 +38,11 @@ type Pending = "debate" | "withdrawn" | "upheld" | "deferred";
  *   出现**——凭空给这颗按钮，它就成了谁都能按的免修开关（后端同样拒绝，这里不是唯一
  *   防线）。它与「采纳执行者」的差别是：那条意见没有作废，只是换了个地方修。
  * - 维持意见：驳回作废，后端接着按原报告发起修复。
+ *
+ * 三档之外还有一栏**裁定要点**：辩论常常辩出「第 2 条我认，但按后来达成的方案做，
+ * 不是报告里那版」这种结论，三档一个都表达不了它（`upheld` 会让执行者照原报告改，
+ * 正好是双方都已否掉的那版）。没有这一栏时用户只能事后再手打一条续聊，而那段话不在
+ * 任何结构化状态里，也比修复指令到得晚。
  */
 export function FreeReviewDisputeCard({
   taskId,
@@ -41,6 +62,8 @@ export function FreeReviewDisputeCard({
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
   const [exchanges, setExchanges] = useState(1);
+  /** 裁定要点，三档共用一份草稿：用户在几个确认框之间来回看的时候不该丢掉已经写的话。 */
+  const [note, setNote] = useState("");
   /** 正在全宽阅读的那场辩论（debate.id）；同一条驳回可能辩过多次，按 id 认。 */
   const [reading, setReading] = useState<string | null>(null);
   const dispute = round.dispute;
@@ -75,9 +98,11 @@ export function FreeReviewDisputeCard({
   const resolve = async (resolution: "withdrawn" | "upheld" | "deferred") => {
     setBusy(true);
     try {
-      const result = await api.resolveFreeReviewDispute(taskId, resolution);
+      const written = note.trim();
+      const result = await api.resolveFreeReviewDispute(taskId, resolution, written || null);
       onChanged(result.state);
       setPending(null);
+      setNote("");
       notify(resolution === "withdrawn"
         ? `已采纳执行者说法：第 ${round.round} 轮那条意见作废，审查记录原样保留`
         : resolution === "deferred"
@@ -86,13 +111,30 @@ export function FreeReviewDisputeCard({
             : "已转为独立任务"
           : result.repairError
             ? `已维持审查意见，但发起修复失败：${result.repairError}`
-            : `已维持审查意见，正在按第 ${round.round} 轮报告发起修复`);
+            : `已维持审查意见，正在按第 ${round.round} 轮报告${written ? "和你写的要点" : ""}发起修复`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "裁定失败");
     } finally {
       setBusy(false);
     }
   };
+
+  /** 三个裁定确认框共用的要点输入框（措辞按档位换，见 NOTE_FIELDS）。 */
+  const noteField = (kind: "withdrawn" | "upheld" | "deferred") => (
+    <label className="free-review-dispute-note">
+      <span>{NOTE_FIELDS[kind].label}</span>
+      <textarea
+        autoFocus
+        rows={4}
+        value={note}
+        maxLength={4000}
+        disabled={busy}
+        placeholder="例：第 2 条我认，但按刚才辩论里达成的方案做，别按报告里那版改法。"
+        onChange={(event) => setNote(event.target.value)}
+      />
+      <small>{NOTE_FIELDS[kind].hint}</small>
+    </label>
+  );
 
   return (
     <section className="free-review-dispute-card" aria-label="执行者驳回审查意见">
@@ -142,7 +184,9 @@ export function FreeReviewDisputeCard({
         {debateRunning
           ? "双方正在各自陈词；辩论只产生发言，不改变结论，说完仍由你裁定。"
           : latestDebate?.status === "finished"
-            ? "双方都说完了。审查者收尾时给的只是它自己的立场，最后由你裁定。"
+            // 辩完最常见的结论恰恰落在三档之间（「这条我认，但按刚才达成的方案做」），
+            // 不点明要点栏的话，用户只会在两颗都不对的按钮之间挑一颗。
+            ? "双方都说完了。审查者收尾时给的只是它自己的立场，最后由你裁定；辩出来的结论如果三档都表达不了，写进裁定时的要点栏。"
             : latestDebate?.status === "failed"
               ? "上一场辩论中途断了（有一段没能发言）；可以重开一场，也可以直接裁定。"
               : "审查链已停在这里：既没有照改，也没有当成通过。"}
@@ -218,7 +262,7 @@ export function FreeReviewDisputeCard({
           busy={busy}
           onConfirm={() => void resolve("deferred")}
           onClose={() => { if (!busy) setPending(null); }}
-        />
+        >{noteField("deferred")}</ConfirmDialog>
       )}
       {pending === "withdrawn" && (
         <ConfirmDialog
@@ -228,17 +272,24 @@ export function FreeReviewDisputeCard({
           busy={busy}
           onConfirm={() => void resolve("withdrawn")}
           onClose={() => { if (!busy) setPending(null); }}
-        />
+        >{noteField("withdrawn")}</ConfirmDialog>
       )}
       {pending === "upheld" && (
         <ConfirmDialog
           title="维持审查意见"
-          message={`驳回作废，执行者会按第 ${round.round} 轮报告继续修复。`}
+          message={
+            `驳回作废，执行者会按第 ${round.round} 轮报告继续修复。` +
+            (latestDebate?.status === "finished"
+              // 辩论收尾那一段执行者结构上没见过（后端会随修复指令整段抄给它），这里
+              // 说出来，免得用户以为「它刚才都听见了」而把要点栏留空。
+              ? "辩论里审查者的收尾发言会一并发给它——那一段它自己的会话里没有。"
+              : "")
+          }
           confirmLabel="维持并发起修复"
           busy={busy}
           onConfirm={() => void resolve("upheld")}
           onClose={() => { if (!busy) setPending(null); }}
-        />
+        >{noteField("upheld")}</ConfirmDialog>
       )}
     </section>
   );

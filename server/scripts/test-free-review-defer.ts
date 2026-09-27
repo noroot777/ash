@@ -156,7 +156,7 @@ try {
   assert.equal(await taskCount(), before + 2, "被拒的裁定不许留下任务（只有两条原任务被 seed 出来）");
 
   // ── ④ 用户裁定 deferred：建出 backlog 派生任务，审查结论一个字不改 ──
-  const resolved = await resolveFreeReviewDispute("f-defer", "deferred");
+  const resolved = await resolveFreeReviewDispute("f-defer", "deferred", "这几条连同上一轮那个 helper 一起重写，别只补空值检查。");
   assert.equal(resolved.resolution, "deferred");
   assert.equal(resolved.repairError, null, "转独立任务不发起修复");
   const derived = resolved.deferredTask!;
@@ -173,9 +173,15 @@ try {
   assert.ok(derived.body.includes(freeReviewEvidenceDir("f-defer", plain.runId, 1)), "body 里要带证据目录");
   assert.ok(derived.body.includes("第 2、3 条成立"), "body 里要带执行者逐条给出的越界依据");
   assert.ok(derived.body.includes("f-defer"), "body 里要指明原任务");
+  // 裁定要点必须跟着搬进新任务：它是**用户**写的话（多半是「转走，但按这个方案做」），
+  // 留在原任务上的话，真正干这几条活的人一个字都看不到。
+  assert.ok(derived.body.includes("这几条连同上一轮那个 helper 一起重写，别只补空值检查。"),
+    "用户裁定转出时写的要点要写进派生任务的 body");
 
   const deferredRow = await roundRow(plain.roundId);
   assert.equal(deferredRow.disputeResolution, "deferred", "裁定落库");
+  assert.equal(deferredRow.disputeResolutionNote,
+    "这几条连同上一轮那个 helper 一起重写，别只补空值检查。", "裁定要点也落在这一轮上");
   assert.equal(deferredRow.disputeDeferredTaskId, derived.id, "派生任务 id 记在这一轮上（幂等靠它）");
   assert.equal(deferredRow.conclusion, "verify_failed", "转走不改写审查结论");
   assert.equal((await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, plain.runId))).at(0)?.status,

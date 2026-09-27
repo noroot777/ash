@@ -28,12 +28,15 @@ try {
   const { createTasks } = await import("../src/task-store.js");
   const { claimTurn } = await import("../src/runs.js");
   const {
-    disputeFreeReview, disputeReasonOf, disputeResolutionOf, openDisputeOf, resolveFreeReviewDispute,
+    disputeFreeReview, disputeReasonOf, disputeResolutionNoteOf, disputeResolutionOf,
+    openDisputeOf, resolveFreeReviewDispute,
   } = await import("../src/free-review-dispute.js");
   const {
-    activeDebateOf, debateOfRound, debateViews, debatesOfRound, exchangesOf, reconcileFreeReviewDebates,
-    settleDebateTurn, sideOfSeq, startFreeReviewDebate, submitDebateStatement, totalSegments,
+    activeDebateOf, debateClosingOf, debateOfRound, debateViews, debatesOfRound, exchangesOf,
+    reconcileFreeReviewDebates, settleDebateTurn, sideOfSeq, startFreeReviewDebate,
+    submitDebateStatement, totalSegments,
   } = await import("../src/free-review-debate.js");
+  const { freeManualRepairPrompt } = await import("../src/free-review-prompts.js");
   const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
 
   await ensureSchema();
@@ -90,6 +93,10 @@ try {
   assert.throws(() => disputeReasonOf("   "), /必须写明理由/, "空理由的驳回必须被拒");
   assert.equal(disputeReasonOf("  报告读错了行号  "), "报告读错了行号", "理由两端空白要去掉");
   assert.throws(() => disputeResolutionOf("passed"), /只能是 upheld/, "裁定只有两种");
+  assert.equal(disputeResolutionNoteOf("  按辩论里的方案做  "), "按辩论里的方案做", "裁定要点两端空白要去掉");
+  assert.equal(disputeResolutionNoteOf("   "), null, "只有空白的要点当成没写");
+  assert.equal(disputeResolutionNoteOf(undefined), null, "没传要点就是没写");
+  assert.equal(disputeResolutionNoteOf("x".repeat(9_000))?.length, 4_000, "超长要点要截断，不能灌进库");
   assert.throws(() => exchangesOf(0), /1 到/, "来回数下界");
   assert.throws(() => exchangesOf(4), /1 到/, "来回数上界");
   assert.equal(totalSegments(2), 5, "两个来回 = 5 段发言");
@@ -150,10 +157,13 @@ try {
 
   // ── ③ 用户裁定 ──
   // 采纳执行者：意见作废，但**审查结论本身不许被改写成通过**（那是伪造审查者的结论）。
-  const withdrawn = await resolveFreeReviewDispute("d-auto", "withdrawn");
+  const withdrawn = await resolveFreeReviewDispute("d-auto", "withdrawn", "第 3 行确实是生成代码，这条我按执行者说的作废。");
   assert.equal(withdrawn.resolution, "withdrawn");
   assert.equal(withdrawn.repairError, null, "采纳执行者不发起修复");
   assert.equal((await roundRow(auto.roundId)).disputeResolution, "withdrawn", "裁定落库");
+  assert.equal((await roundRow(auto.roundId)).disputeResolutionNote,
+    "第 3 行确实是生成代码，这条我按执行者说的作废。",
+    "采纳执行者这一档不发消息，裁定理由必须留在库里——否则它只剩时间线上那句摘要");
   const autoRun = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, auto.runId))).at(0);
   assert.equal(autoRun?.status, "stopped", "采纳执行者不把审查链改写成通过");
   assert.equal(await openDisputeOf("d-auto"), null, "裁定之后不再是「待裁定」");
@@ -165,10 +175,12 @@ try {
 
   // 维持意见：顺带发起修复；这里回合被占着，修复必然投不出去——裁定**仍然落账**，
   // 只把投递失败如实回报（裁定是用户的决定，投递失败是另一件事）。
-  const upheld = await resolveFreeReviewDispute("d-manual", "upheld");
+  const upheld = await resolveFreeReviewDispute("d-manual", "upheld", "第 2 条按摘要内部折叠做，别按报告里的降档方案。");
   assert.equal(upheld.resolution, "upheld");
   assert.ok(upheld.repairError, "回合被占时修复投不出去，要如实回报");
   assert.equal((await roundRow(manual.roundId)).disputeResolution, "upheld", "修复投递失败不回滚裁定");
+  assert.equal((await roundRow(manual.roundId)).disputeResolutionNote,
+    "第 2 条按摘要内部折叠做，别按报告里的降档方案。", "裁定要点跟裁定一起落账，投递失败也不回滚");
 
   // ── ④ 辩论：起一轮、交卷、换人说 ──
   const debated = await seedStoppedReview("d-debate");
@@ -288,8 +300,42 @@ try {
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, "d-orphan"))).at(0)?.status, "done",
     "辩论是旁路回合：收不收得掉都不动任务自己的终态");
 
-  console.log("free review dispute ok");
-} catch (error) {
+  // ── ⑦ 辩论与裁定真的流进修复指令 ──
+  // 这条链最容易出的漏子是「辩完了，然后什么也没发生」：辩论的收尾发言只进时间线和
+  // 界面，用户的裁定只有三档枚举，于是用户点完「维持意见并修复」，执行者收到的仍然是
+  // 一句「照 report.md 改」——双方刚辩出来的结论对真正动手的那一方等于不存在。
+  const closingRun = (await db.select().from(freeReviewRuns)
+    .where(eq(freeReviewRuns.id, closing.runId))).at(0)!;
+  const readClosing = await debateClosingOf(closing.roundId);
+  assert.equal(readClosing?.seq, 3, "收尾是最后一段");
+  assert.equal(readClosing?.total, 3, "1 个来回共 3 段");
+  assert.equal(readClosing?.verdictLabel, "部分成立", "自述立场要带上中文标签");
+  assert.equal(readClosing?.statement, "复现步骤我补在报告末尾了，但第 1 条我撤回。", "收尾发言原文");
+  assert.equal(await debateClosingOf(debated.roundId), null,
+    "中断的那场没说到收尾，不能把半截发言当成收尾塞进修复指令");
+
+  const repairPrompt = freeManualRepairPrompt("d-closing", closingRun, {
+    disputeUpheld: true,
+    resolutionNote: "第 2 条按摘要内部折叠做，别按报告里的降档方案。",
+    debateClosing: readClosing,
+  });
+  assert.ok(repairPrompt.includes("复现步骤我补在报告末尾了，但第 1 条我撤回。"),
+    "审查者的收尾发言必须整段进修复指令：段序决定了执行者的会话里结构上没有这一段");
+  assert.ok(repairPrompt.includes("你的会话里没有它"), "要告诉执行者这段它没见过，别当成重复信息跳过");
+  assert.ok(repairPrompt.includes("部分成立"), "收尾立场要标出来");
+  assert.ok(repairPrompt.includes("**不是结论**"),
+    "收尾发言是被驳回一方的立场，不是结论——裁定权只在用户手上");
+  assert.ok(repairPrompt.includes("第 2 条按摘要内部折叠做，别按报告里的降档方案。"),
+    "用户的裁定要点必须进修复指令，否则三档裁定表达不了的结论只能靠用户事后手打");
+  assert.ok(repairPrompt.includes("以它为准"),
+    "必须写明裁定要点压过报告：两份打架的要求让执行者自己挑，挑错了没人会发现");
+
+  // 没辩过、也没写要点时，措辞一个字都不多——那两段是条件性的，不是模板里的常驻噪音。
+  const bare = freeManualRepairPrompt("d-closing", closingRun, { disputeUpheld: true });
+  assert.ok(!bare.includes("辩论收尾发言"), "没辩过就不该出现收尾那一节");
+  assert.ok(!bare.includes("裁定时写给你的要点"), "没写要点就不该出现要点那一节");
+
+  console.log("free review dispute ok");} catch (error) {
   failure = error;
 } finally {
   releaseTmpDb();

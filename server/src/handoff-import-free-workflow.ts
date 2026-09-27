@@ -111,6 +111,7 @@ export async function buildFreeWorkflowRows(
     disputeAt: round.disputeAt ?? null,
     disputeResolution: round.disputeResolution ?? null,
     disputeResolvedAt: round.disputeResolvedAt ?? null,
+    disputeResolutionNote: round.disputeResolutionNote ?? null,
     startedAt: round.startedAt,
     endedAt: round.endedAt,
   })));

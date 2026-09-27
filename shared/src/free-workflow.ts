@@ -144,6 +144,19 @@ export interface FreeReviewDispute {
   /** 用户的裁定；null = 还在等用户。 */
   resolution: FreeReviewDisputeResolution | null;
   resolvedAt: string | null;
+  /**
+   * 用户裁定时写给执行者的要点；null = 没写。
+   *
+   * 为什么裁定光有三档不够：辩论经常辩出「第 2 条我认，但按后来达成的那个方案做，
+   * 不是报告里的原方案」这种结论——`upheld` 会让执行者照原报告改（正好是双方都已
+   * 否掉的那版），`withdrawn` 又把整条意见作废，三档一个都表达不了它。没有这一栏时
+   * 用户只能事后再手打一条续聊，而那段话不在任何结构化状态里：下次打开任务看不见，
+   * 接力到别的机器也不跟着走。
+   *
+   * 它**压过报告**（措辞见服务端 freeManualRepairPrompt）：裁定人是用户，报告只是
+   * 审查者的一份判断。
+   */
+  resolutionNote: string | null;
   /** `deferred` 裁定后建出的那个 backlog 派生任务；其它裁定恒为 null。 */
   deferredTaskId: string | null;
   /** 这一条驳回上开过的辩论，按开始时间排；空数组 = 还没辩过。中断过的可以重开，
