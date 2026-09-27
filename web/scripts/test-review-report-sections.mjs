@@ -463,7 +463,13 @@ for (const [kind, quote] of [
 }
 
 
-// 空报告不该炸。
-assert.deepEqual(splitReviewReport(""), { summary: "", detail: "", kind: "whole" });
+// 空报告不该炸。这条用**精确比对**而不是挑几个字段看，所以给返回结构加字段时它一定会
+// 红——那正是要的：新字段在「什么都没拆」这一档里得是什么，必须当场写清楚，不能靠一句
+// 注释含糊过去。摘要内部那层折叠（`more`/`rest`/`aside`）只在契约档且问题超过 5 条时才
+// 有东西，这里三个全空。
+assert.deepEqual(
+  splitReviewReport(""),
+  { summary: "", more: "", rest: 0, aside: "", detail: "", kind: "whole" },
+);
 
 console.log("review report sections ok");

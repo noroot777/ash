@@ -139,6 +139,10 @@
 .review-report-more svg { transition: transform .15s ease; }
 .review-report-more.is-open svg { transform: rotate(180deg); }
 .review-report-detail { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 4px; }
+/* 中段（其余 N 条问题）后面紧跟着第四栏「不拦验收、但你该知道的」，两块都是纯正文。
+   不留收口的话，第四栏会被读成上一条问题的第四行——它自己就长得像那三行。外层明细
+   后面没有兄弟，所以这个间距只给中段。 */
+.review-report-rest { margin-bottom: 18px; }
 
 /* 认不出摘要边界的那一档：不猜拆点，按高度夹住（上限由 `MarkdownBody.tsx` 的 `WHOLE_CLAMP`
    给，这里不重复写那个数）。收口用 `mask-image` 而不是渐变色块——报告在对话流里和在弹层

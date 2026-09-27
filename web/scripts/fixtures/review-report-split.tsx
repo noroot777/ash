@@ -32,6 +32,8 @@ import {
   justOver,
   contradictoryNone,
   spilled,
+  sixProblems,
+  fiveProblems,
 } from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
@@ -51,6 +53,22 @@ function SwitchableReport({ identical = false }: { identical?: boolean }) {
         text={!second || identical ? conforming : conformingRound2}
         reportKey={`run-1:${second ? 2 : 1}`}
       />
+    </>
+  );
+}
+
+/**
+ * 换轮次时**两个折叠都得复位**。第一层（技术明细）历轮已经钉住了，这一份盯的是新加的
+ * 那一层：上一轮展开着「其余 N 条问题」，换一份报告过来不该还是展开的。
+ */
+function SwitchableSix() {
+  const [second, setSecond] = useState(false);
+  return (
+    <>
+      <button type="button" className="switch-six" onClick={() => setSecond((value) => !value)}>
+        切换轮次
+      </button>
+      <ReviewReportBody text={sixProblems} reportKey={`run-25:${second ? 2 : 1}`} />
     </>
   );
 }
@@ -123,6 +141,16 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="spilled-fixture markdown-report-body">
       <ReviewReportBody text={spilled} reportKey="run-22:1" />
+    </div>
+    {/* 成对挂：一份超出上限要在摘要里再折一层，一份恰好卡在上限上、一个按钮都不该多画。 */}
+    <div className="six-problems-fixture markdown-report-body">
+      <ReviewReportBody text={sixProblems} reportKey="run-23:1" />
+    </div>
+    <div className="five-problems-fixture markdown-report-body">
+      <ReviewReportBody text={fiveProblems} reportKey="run-24:1" />
+    </div>
+    <div className="six-switch-fixture markdown-report-body">
+      <SwitchableSix />
     </div>
     <div className="switch-fixture markdown-report-body">
       <SwitchableReport />

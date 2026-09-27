@@ -14,6 +14,14 @@
 //    里只有技术记录，所以按钮敢写「展开技术明细（验证过程、证据、清场记录）」。
 //    **担保的是「折叠里没有问题」，不是「摘要够短」**——四栏齐全、每条问题写全三行、条数
 //    对得上，折叠里就只剩技术记录，这句话跟摘要里写了几条无关。
+//
+//    所以摘要够不够短是**另一件事**，得另外解决：契约给的是「最多 5 条」（用户需求原话
+//    「问题按用户会踩到的严重程度排，最多 5 条」），可报告把 6 条、20 条全写在摘要里时，
+//    格式其实没错——四栏齐全、每条三行俱全，错的只是它默认铺了满屏，用户要的「打开先看见
+//    结论」在第 6 条往后就没了。降档解决不了这个：降档换的是**技术明细按钮说什么**，铺开
+//    的那一段一个字都不会少。所以这种报告留在契约档，**摘要内部再折一层**——前 5 条铺开，
+//    第 6 条起收进照实写着「展开其余 N 条问题」的按钮，第四栏跨过这一层继续留在首屏。
+//    两个折叠各管各的：里面那个装问题，外面那个装技术记录，谁也不替谁背书。
 // ② 认不出契约（存量报告、某轮审查者没照 prompt 写），**或者报告自己把一部分问题放进了
 //    折叠**，就降一档：铺开的那一段留在首屏，余下全部收进一个不作任何承诺的「展开完整
 //    报告」。这是用户点名要的结构保证——「就算某轮审查者没照 prompt 写，你也不会被 46 行
@@ -60,13 +68,36 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 
+/**
+ * 一份报告切成的四段，**按源码先后排好、首尾相接、不重不漏**：
+ * `summary` → `more` → `aside` → `detail`。合起来就是原文（切点上的空行被
+ * `trimEnd()` 吃掉，别的字节一个不动）。
+ *
+ * 中间两段只在契约档的「问题超过 5 条」那一种形态下非空，其余时候一律是空串——
+ * 那时 `summary` 里就含着第四栏，读的人只面对一个折叠。
+ */
 export type ReviewReportSections = {
   /** 铺开的那一半：按契约拆时是「一级标题 + 摘要那一节」，降级时是第一个 `##` 之前的引子。 */
   summary: string;
+  /**
+   * 摘要内部第二个折叠里的东西：第 6 条起的问题。为空表示摘要不分第二层。
+   *
+   * 这一段**是问题本身**，不是技术记录——按钮得照实写「展开其余 N 条问题」，别拿
+   * 技术明细那句文案糊过去。
+   */
+  more: string;
+  /** `more` 里有几条问题，也就是按钮上的 N。`more` 为空时是 0。 */
+  rest: number;
+  /**
+   * 第四栏「不拦验收、但你该知道的」。只有在 `more` 非空时才单独拎出来——它得跨过
+   * 中间那个折叠、继续留在首屏，否则一展开就轮到它被顶走。为空表示它在 `summary` 里。
+   */
+  aside: string;
   /** 收进开关的那一半；为空表示这篇没拆，别画展开按钮。 */
   detail: string;
   /**
-   * 折叠里装的是什么——**按钮文案只能照它写**。
+   * **`detail` 那个折叠**里装的是什么——技术明细按钮的文案只能照它写。它不描述 `more`
+   * 那一层：中间那层永远是问题，跟这里判到哪一档无关。
    *
    * - `"whole"`：没拆，`detail` 为空。
    * - `"contract"`：按新契约拆的，折叠里只有技术记录，可以这么写在按钮上。
@@ -74,6 +105,20 @@ export type ReviewReportSections = {
    *   所以按钮不准替它宣称里面是什么。
    */
   kind: "whole" | "contract" | "lead";
+};
+
+/**
+ * `provesContract` 的结论：判到哪一档，以及摘要要不要再分一层。
+ *
+ * `fold` 只在契约档给：四栏齐全、每条问题写全三行、条数也对得上，**但条目多到摘要
+ * 一屏放不下**。这时折叠里确实只有技术记录（契约档的担保没变），铺开的那一段却重新
+ * 变成一堵问题墙——用户要的「打开先看见结论」在第 6 条往后就失效了。所以摘要自己
+ * 再分一层，前 5 条铺开，其余收进一个照实说话的按钮。
+ */
+type Proof = {
+  kind: "contract" | "lead";
+  /** 摘要内部的两个切点（第 6 条的起始行、第四栏的起始行），加上按钮上的 N。 */
+  fold?: { more: number; aside: number; rest: number };
 };
 
 type Parsed = ReturnType<typeof fromMarkdown>;
@@ -250,13 +295,17 @@ function headingColumns(root: Parsed, after: number, before: number): Column[] {
  * `depth` 是「问题小标题至少得多深」，跟着栏目的写法走：加粗标签那一版栏目是段落、问题
  * 是 `###`；栏目写成 `###` 时问题就得是 `####`。写死成 `>= 3` 的话，栏目自己那一级的
  * 标题就能冒充问题小标题，① 和 ② 一起被绕开。
+ *
+ * 契约档里条目超过 5 条时，顺带把**摘要内部第二层折叠**的两个切点算出来（`fold`）。
+ * 数得出条目在哪，正是 ② 那两道验证的副产物：每条问题都有自己的小标题、条数跟报告
+ * 自己报的数对得上——所以「第 6 条从哪一行开始」是证出来的，不是猜的。
  */
 function provesContract(
   root: Parsed,
   probes: string[],
   columns: Column[],
   depth: number,
-): "contract" | "lead" | null {
+): Proof | null {
   if (columns.length !== MARK_LINES.length) return null;
   if (!columns.every((hit, order) => hit.column === order)) return null;
   const [verdict, works, problems, aside] = columns;
@@ -268,12 +317,31 @@ function provesContract(
     if (at > problems.at && at < aside.at) items.push({ at, depth: node.depth });
   }
   // 「没有发现问题」只有在报告自己也没报出问题数时才算数（没报数和报了 0 条都行）。
-  if (!items.length) return saysNoProblem(probes, problems, aside) && !declared ? "contract" : null;
+  if (!items.length) {
+    return saysNoProblem(probes, problems, aside) && !declared ? { kind: "contract" } : null;
+  }
   if (!items.every((item) => writesProblem(root, probes, item.at, item.depth, aside.at))) return null;
   if (declared === null) return null;
-  if (declared === items.length) return "contract";
-  return spillsOver(root, probes, declared, items, aside) ? "lead" : null;
+  if (declared === items.length) {
+    const sixth = items[SUMMARY_ITEMS];
+    if (!sixth) return { kind: "contract" };
+    return {
+      kind: "contract",
+      fold: { more: sixth.at, aside: aside.at, rest: items.length - SUMMARY_ITEMS },
+    };
+  }
+  return spillsOver(root, probes, declared, items, aside) ? { kind: "lead" } : null;
 }
+
+/**
+ * 摘要里最多铺开几条问题（`server/src/review-report-format.ts` 里写给审查者的也是这个数，
+ * 用户需求原话「问题按用户会踩到的严重程度排，**最多 5 条**」）。
+ *
+ * 超出的部分有两条路，取决于报告自己怎么写：照契约在第 5 条后面写一行分流声明、完整三行
+ * 放进明细的，走 `spillsOver`（折叠里有问题，降到 `lead`）；把 6 条以上全写在摘要里的，
+ * 格式其实没错——错的是它默认铺了满屏——所以留在契约档，由 `fold` 在摘要内部再折一层。
+ */
+const SUMMARY_ITEMS = 5;
 
 /** 中文数字的个位。`两` 跟 `二` 同值——「有两条」是真实写法。 */
 const CN_DIGITS: Record<string, number> = {
@@ -328,10 +396,10 @@ function spillsOver(
   items: Array<{ at: number }>,
   aside: Column,
 ): boolean {
-  const last = items[4];
-  if (items.length !== 5 || declared <= 5 || !last) return false;
+  const last = items[SUMMARY_ITEMS - 1];
+  if (items.length !== SUMMARY_ITEMS || declared <= SUMMARY_ITEMS || !last) return false;
   const rest = new RegExp(
-    `^ {0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\s*其余\\s*${declared - 5}\\s*条\\s*[：:]\\s*\\S`,
+    `^ {0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\s*其余\\s*${declared - SUMMARY_ITEMS}\\s*条\\s*[：:]\\s*\\S`,
   );
   return markCandidateStarts(root, last.at, aside.at)
     .some((at) => rest.test(probes[at].replace(/\*\*/g, "")));
@@ -437,7 +505,7 @@ function saysNoProblem(probes: string[], problems: Column, aside: Column): boole
 }
 
 export function splitReviewReport(text: string): ReviewReportSections {
-  const whole: ReviewReportSections = { summary: text, detail: "", kind: "whole" };
+  const whole: ReviewReportSections = { summary: text, more: "", rest: 0, aside: "", detail: "", kind: "whole" };
   // 解析器把孤立的 `\r` 也当换行，我们按 `\n` 切片——真碰上这种老式换行，行号就对不上了。
   // 对不上时一律整篇铺开（两档都不给）：认不出只是啰嗦，按错的行号拆是把内容藏掉。
   if (/\r(?!\n)/.test(text)) return whole;
@@ -459,11 +527,26 @@ export function splitReviewReport(text: string): ReviewReportSections {
   // 又跟入参逐字节一致（不悄悄替换用户的换行）。踩过的坑在正则语义：`\r` 是行终结符，
   // `.` 不匹配它、不带 `m` 的 `$` 只认串尾，于是 `**能不能验收**：不能\r` 认不出来。
   const probes = lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
-  const cut = (at: number, kind: "contract" | "lead"): ReviewReportSections => ({
-    summary: lines.slice(0, at).join("\n").trimEnd(),
-    detail: lines.slice(at).join("\n").trimEnd(),
-    kind,
-  });
+  /**
+   * 按切点把原文分成首尾相接的几段。切点全部来自解析树里**顶层节点的起始行**，所以每一
+   * 刀都落在两个块之间——不会切进围栏、列表项或表格内部。段与段之间只有切点上被
+   * `trimEnd()` 吃掉的空白，其余字节原样。
+   */
+  const cut = (at: number, proof: Proof): ReviewReportSections => {
+    const slice = (from: number, to?: number) => lines.slice(from, to).join("\n").trimEnd();
+    const fold = proof.fold;
+    if (!fold) {
+      return { summary: slice(0, at), more: "", rest: 0, aside: "", detail: slice(at), kind: proof.kind };
+    }
+    return {
+      summary: slice(0, fold.more),
+      more: slice(fold.more, fold.aside),
+      rest: fold.rest,
+      aside: slice(fold.aside, at),
+      detail: slice(at),
+      kind: proof.kind,
+    };
+  };
 
   /**
    * 首节标题是不是**报告自己声明的「这一节是给人看的判定」**。
@@ -496,7 +579,7 @@ export function splitReviewReport(text: string): ReviewReportSections {
     // 「我按模板核对了能不能验收、现在什么能用了……」这种正文提及凑不出签名，却足以说明
     // 后面那个 `##` 可能就是问题小节。认错方向的代价不对称，宁可多铺开 18 份。
     const section = probes.slice(first, second).join("\n");
-    if (!CONTRACT_MARKS.some((mark) => new RegExp(mark).test(section))) return cut(second, "lead");
+    if (!CONTRACT_MARKS.some((mark) => new RegExp(mark).test(section))) return cut(second, { kind: "lead" });
     // 只有**证明得了自己按新契约写**的报告才走第一档。把发现藏进一个写着「验证过程、证据、
     // 清场记录」的折叠里，比让人多滚两屏严重得多，这一档不留猜的余地：降一档只是多点一下
     // 按钮，认错成契约是让按钮替报告撒谎。
@@ -529,7 +612,7 @@ export function splitReviewReport(text: string): ReviewReportSections {
    */
   const tail = heads.findIndex((node) => !SEVERITY_TITLES.test(plainText(node).trim()));
   const fold = tail > 0 ? heads[tail]?.position : undefined;
-  if (SEVERITY_TITLES.test(title) && fold) return cut(fold.start.line - 1, "lead");
+  if (SEVERITY_TITLES.test(title) && fold) return cut(fold.start.line - 1, { kind: "lead" });
 
   /**
    * 第二档 · 通用形态：引子铺开，第一个 `##` 起收进「展开完整报告」。
@@ -544,5 +627,5 @@ export function splitReviewReport(text: string): ReviewReportSections {
       && node.position.start.line - 1 < first
       && plainText(node).trim() !== "",
   );
-  return told ? cut(first, "lead") : whole;
+  return told ? cut(first, { kind: "lead" }) : whole;
 }
