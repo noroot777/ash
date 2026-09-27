@@ -148,6 +148,9 @@ if (localStorage.getItem(SUCCEED_ON_BOOT_KEY)) {
   if (live?.status === "running") setAssist({ ...live, ...succeeded() });
 }
 
+/** 最后一次「开一份协助」的请求体原文，见 POST 分支与 assist-read-start-body。 */
+const START_BODY_KEY = `${storageKey}:assist-start-body`;
+
 // **刷新后的第一次状态读取卡在路上**：真实网络就是会这样，而这段时间里页面已经能用了 —— 用户
 // 完全可以先往启动脚本里敲几行。这一段时序是第 13 轮审查的复现要件：终态到达时框里那份已经不是
 // 「点下去那一刻」的内容，谁拿它当基准谁就会把用户刚写的顶掉。标记同样得活过那次刷新，所以走
@@ -166,9 +169,16 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     return reply({ exists: true, isRepo: true, dirty: false, branch: "main" });
   }
   if (pathname === "/api/workflows") return reply([]);
+  // 模型候选按「挂了哪些供应商」分块。这里一家都没挂,于是列的就是 claude/codex 自带那几个
+  // 预设模型(shared/cli-presets)——「让谁来判断」那颗胶囊的第二段要点得开,就得让它拿到数组
+  // (掉到下面那条 `{}` 兜底上就是 providers.map is not a function)。
+  if (pathname === "/api/llm-providers") return reply([]);
   const assistRoute = pathname.match(/^\/api\/projects\/[^/]+\/preview\/assist$/);
   if (assistRoute) {
     if (init?.method === "POST") {
+      // 把整个启动请求体留下来给测试查:「界面上选的那三段有没有真的递出去」只能这么钉
+      // (第 2 轮审查:选了模型,POST 里压根没有 model)。
+      localStorage.setItem(START_BODY_KEY, String(init.body ?? "{}"));
       const claim = String((JSON.parse(String(init.body ?? "{}")) as { claim?: unknown }).claim ?? "");
       // **撞上已经在跑的那份就原样交回去,不新开**——真实端点就是这么做的
       // (reservePreviewAssistJob 的 fresh=false)。关键是 claim 保持原主:点击方一比就知道
@@ -239,6 +249,7 @@ function Fixture() {
   const [current, setCurrent] = useState<ProjectView>(() => loadProject("p-one"));
   const [authMode, setAuthMode] = useState<AuthState["mode"]>("single");
   const [notices, setNotices] = useState<string[]>([]);
+  const [startBody, setStartBody] = useState("");
   const notify = useCallback((message: string) => setNotices((all) => [...all, message]), []);
   return (
     <AuthContext.Provider value={{ state: { ...baseAuthState, mode: authMode }, refresh: async () => {} }}>
@@ -337,6 +348,11 @@ function Fixture() {
         />
         <pre data-testid="notices">{JSON.stringify(notices)}</pre>
         <output data-testid="stored-projects" hidden>{localStorage.getItem(storageKey)}</output>
+        {/* 最后一次启动请求的请求体：三段胶囊选的东西有没有真的递出去，只能从这儿看。 */}
+        <button type="button" data-testid="assist-read-start-body" onClick={() => setStartBody(localStorage.getItem(START_BODY_KEY) ?? "")}>
+          读出最后一次启动请求
+        </button>
+        <output data-testid="assist-start-body" hidden>{startBody}</output>
       </main>
     </AuthContext.Provider>
   );

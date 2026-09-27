@@ -24,6 +24,8 @@
 //      claim 跟服务端作业对得上）→ 同样只读：所有权得靠一次「谁还拿着这个 claim」的裁决分出来；
 //   ⑬ 那次裁决**不能靠正主答话**：正主主线程卡住、标签被冻结时它一声不出，静默不许被读成
 //      「没有正主」（主路交给浏览器记账的页面租约，JS 停摆不影响锁的账）；
+//   ⑳ 「让谁来判断」那颗三段胶囊的每一段都得作数：选了模型/智能水平，胶囊上写的是它，启动
+//      请求里递出去的也是它，刷新之后还记着（点得动却不生效的入口比没有更糟）；
 //   ⑱ 页面刚打开那次「现在有作业吗」**回来得晚**（它问的时候确实还没有）→ 不许把刚点出来的那份
 //      running 覆盖成「已经过期」：那会连轮询和「停止」一起弄丢，而作业还在服务端跑着；
 //   ⑲ 跨轮次：上一轮 AI 填过 A，用户手改成 B，第二轮跑着时又亲手改回 A → 这仍然是编辑，
@@ -80,6 +82,37 @@ try {
   assert.equal(await progress.count(), 0, "没点过的时候不该有进度卡");
   // 「让谁来判断」那颗胶囊必须真的渲染出来 —— 它读的是 /api/agents，回了个非数组就整页白屏。
   assert.equal(await page.locator(".preview-assist-executor").count(), 1, "执行器选择应随面板一起出现");
+
+  // ⑳ 那颗胶囊的**三段都得作数**：选了模型，胶囊上要写它，启动请求里也得带着它
+  //    （第 2 轮审查复现：选完 sonnet 当场弹回「跟随执行器」，POST 里压根没有 model —— 一个
+  //    点得动却不生效的入口比没有更糟，用户以为自己已经换了模型）。
+  const capsule = page.locator(".preview-assist-executor");
+  const agentSeg = capsule.getByRole("button", { name: /智能体：/ });
+  const modelSeg = capsule.getByRole("button", { name: /模型：/ });
+  assert.match(await modelSeg.getAttribute("aria-label") ?? "", /模型：跟随执行器/, "一开始是跟随执行器");
+  await modelSeg.click();
+  await page.getByPlaceholder("筛选 claude 的模型…").waitFor();
+  await page.getByRole("option", { name: /^sonnet/ }).first().click();
+  assert.match(await modelSeg.getAttribute("aria-label") ?? "", /模型：sonnet/, "选了模型，第二段就得写它");
+  assert.match(await agentSeg.getAttribute("aria-label") ?? "", /智能体：claude/, "选模型不该把第一段带歪");
+  // 选定模型后第三段自动展开：智能水平同样是这颗胶囊的一段，选了也得作数。
+  await page.getByRole("listbox", { name: "智能水平" }).waitFor();
+  await page.getByRole("option", { name: /^high/ }).first().click();
+  await startAssist.click();
+  await progress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await page.getByTestId("assist-read-start-body").click();
+  const startBody = JSON.parse(await page.getByTestId("assist-start-body").textContent() || "{}");
+  assert.equal(startBody.model, "sonnet", "界面上选的模型必须真的递给服务端");
+  assert.equal(startBody.reasoningEffort, "high", "智能水平同理");
+  assert.equal(startBody.agentType, "claude", "派给谁也照旧递出去");
+  // 选过的这三段下次打开还在（按项目记着，见 previewAssistMemory）。
+  await stopAssist.click();
+  await progress.locator(".preview-assist-step").getByText("已取消", { exact: false }).waitFor();
+  await page.reload();
+  await script.waitFor();
+  assert.match(await capsule.getByRole("button", { name: /模型：/ }).getAttribute("aria-label") ?? "",
+    /模型：sonnet/, "刷新之后还得记着刚选的模型");
+  await dismiss().catch(() => {});
 
   // ① 点下去
   await startAssist.click();
@@ -391,7 +424,7 @@ try {
   // ⑭–⑰ 那一整档（没有 Web Locks 的降级路）各自另开 context，拆到单独文件里，见那边的开头说明。
   await fallbackArbitrationCases({ browser, address, caseId });
 
-  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims, silent owner still owns, late answer revokes, provisional claim never fills, same-tab reload keeps filling, reloaded owner outranks provisional copy, cloned handoff never fills, stale first read never buries a running job, cross-round self-write mark consumed)");
+  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims, silent owner still owns, late answer revokes, provisional claim never fills, same-tab reload keeps filling, reloaded owner outranks provisional copy, cloned handoff never fills, picked model really runs, stale first read never buries a running job, cross-round self-write mark consumed)");
 } finally {
   await browser?.close();
   await server.close();

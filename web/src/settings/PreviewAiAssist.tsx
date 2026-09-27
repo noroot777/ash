@@ -7,6 +7,7 @@ import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import { api } from "../lib/api.ts";
 import { parseExecutorValue, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { useExecutorCatalog } from "../workflow/executorCatalog.ts";
+import type { AssistRunTarget } from "./previewAssistMemory.ts";
 import {
   adoptAssistTrace,
   forgetAssistTrace,
@@ -45,7 +46,8 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
 }) {
   const catalog = useExecutorCatalog();
   const types = registeredAgentTypes(catalog.profiles);
-  const [executor, setExecutor] = useState(() => rememberedExecutor(projectId));
+  /** 「让谁来判断」这颗三段胶囊的三段（派给谁 / 哪个模型 / 多高的智能水平），按项目记住。 */
+  const [target, setTarget] = useState<AssistRunTarget>(() => rememberedExecutor(projectId));
   const [job, setJob] = useState<PreviewAssistState | null>(null);
   /** 摆出来的这张卡是本地记录推出来的（重启中断 / 过期 / 没收到回复），不是服务端回的作业。 */
   const [lost, setLost] = useState(false);
@@ -115,7 +117,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   });
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => {
-    setExecutor(rememberedExecutor(projectId));
+    setTarget(rememberedExecutor(projectId));
     setJob(null); setLost(false); setOffered(null); setApplied(null); setForeign(false);
     filled.current = null; mine.current = false; wrote.current = null;
     // 换项目不是「用户改了这个项目的脚本」：上面那条 effect 先跑、已经把换项目那一下记成编辑了，
@@ -263,8 +265,8 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
     // 点击的 claim —— 回头认领全靠它。
     pendingAssistTrace(projectId, instance.current, claim);
     try {
-      const picked = executor
-        ? parseExecutorValue(executor, catalog.profiles, { agentType: types[0] ?? "claude", executorId: null })
+      const picked = target.value
+        ? parseExecutorValue(target.value, catalog.profiles, { agentType: types[0] ?? "claude", executorId: null })
         : null;
       const result = await api.startPreviewAssist(projectId, {
         script,
@@ -272,6 +274,10 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
         claim,
         executorId: picked?.executorId ?? null,
         agentType: picked?.agentType ?? null,
+        // 三段都得递出去：只递前一段就等于用户选的模型/智能水平在界面上写着、跑的却是别的
+        // （第 2 轮审查复现）。空串 = 跟随执行器，按 null 递。
+        model: target.model || null,
+        reasoningEffort: target.effort || null,
       });
       if (!active.current) return;
       settleStart(result, claim);
@@ -304,6 +310,8 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   // 「作业不见了」那张卡是本地记录推出来的，服务端没有对应的东西可轮询，所以得给它一个
   // 出口，否则它会在这个项目上一直挂着（不点「AI 协助填写」就不会被新作业顶掉）。
   const dismiss = () => { forgetAssistTrace(projectId); setJob(null); setLost(false); };
+  /** 选完就记住：这三段是一次性的选择，不进库（见 previewAssistMemory 顶部）。 */
+  const pick = (next: AssistRunTarget) => { setTarget(next); rememberExecutor(projectId, next); };
   const takeOffered = () => {
     if (!offered) return;
     onFilled(offered.script);
@@ -327,15 +335,20 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       {types.length + catalog.profiles.length > 0 && <div className="preview-assist-executor">
         <ExecutorPickerField
           label="让谁来判断"
-          value={executor}
+          value={target.value}
           types={types}
           profiles={catalog.profiles}
           knownProfiles={catalog.profiles}
           fallbackType={types[0] ?? "claude"}
+          // 胶囊上写的「实际会跑什么」要照这三段算（executorRunSummary），不然选完模型那一段
+          // 立刻写回「跟随执行器」。
+          override={{ model: target.model, effort: target.effort }}
           disabled={disabled || busy || running}
           unsetText="默认执行器"
-          onUnset={() => { setExecutor(""); rememberExecutor(projectId, ""); }}
-          onChange={(next) => { setExecutor(next); rememberExecutor(projectId, next); }}
+          onUnset={() => pick({ value: "", model: "", effort: "" })}
+          // 换执行器和「模型要不要跟着清」是同一次选择的结果，一起落（见 ExecutorPickerField）。
+          onChange={(value, override) => pick({ value, model: override.model, effort: override.effort })}
+          onEffortChange={(effort) => pick({ ...target, effort })}
         />
       </div>}
     </div>

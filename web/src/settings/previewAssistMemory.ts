@@ -48,9 +48,39 @@ function writeLive(key: string, value: string | null): void {
   write(key, null);
 }
 
-export const rememberedExecutor = (projectId: string): string => read(EXECUTOR_KEY(projectId)) ?? "";
-export const rememberExecutor = (projectId: string, value: string): void =>
-  write(EXECUTOR_KEY(projectId), value || null);
+/**
+ * 「让谁来判断」那颗三段胶囊记下来的**三段**：派给谁、哪个模型、多高的智能水平。
+ *
+ * 三段得一起记。只记第一段的话，用户选了个模型、胶囊却在下次打开时写回「跟随执行器」，
+ * 而真正跑的也不是他选的那个（第 2 轮审查：选了 sonnet 当场就被丢掉）。
+ */
+export interface AssistRunTarget {
+  /** executorValue() 那种「智能体 / profile」串；空串 = 用默认执行器。 */
+  value: string;
+  /** 空串 = 跟随执行器。 */
+  model: string;
+  /** 空串 = 跟随执行器（对外叫「智能水平」，字段名沿用 effort）。 */
+  effort: string;
+}
+const NO_TARGET: AssistRunTarget = { value: "", model: "", effort: "" };
+
+export function rememberedExecutor(projectId: string): AssistRunTarget {
+  const raw = read(EXECUTOR_KEY(projectId));
+  if (!raw) return NO_TARGET;
+  // 2026-09-27 之前这里只存第一段（一个裸串）。老记录照旧认下来，模型和智能水平当没指定。
+  if (!raw.startsWith("{")) return { ...NO_TARGET, value: raw };
+  try {
+    const parsed = JSON.parse(raw) as Partial<AssistRunTarget>;
+    return {
+      value: typeof parsed.value === "string" ? parsed.value : "",
+      model: typeof parsed.model === "string" ? parsed.model : "",
+      effort: typeof parsed.effort === "string" ? parsed.effort : "",
+    };
+  } catch { return NO_TARGET; }
+}
+
+export const rememberExecutor = (projectId: string, target: AssistRunTarget): void =>
+  write(EXECUTOR_KEY(projectId), target.value || target.model || target.effort ? JSON.stringify(target) : null);
 
 /**
  * 给这一次点击发一个身份。服务端只把它存进**新建**的那份作业，所以「作业上的 claim 等于我
