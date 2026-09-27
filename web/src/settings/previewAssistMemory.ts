@@ -1,8 +1,15 @@
-// 「AI 协助」在浏览器本地记的两件事。
+// 「AI 协助」在浏览器本地记的两件事。**它们的存储范围不一样，这一点是硬要求**：
 //
-// ① 选了谁来判断 —— 一次性的选择，记在本地按项目记就够，不进库（它不像任务的执行器那样
-//    要被别人、被重启后的服务端读到）。
-// ② **这个浏览器点过的那个作业** —— 服务端的进度是内存态（server/src/preview-assist.ts 说了
+// ① 选了谁来判断 —— 按项目记在 `localStorage`，整个浏览器共享（一次性的选择，不进库：它不像
+//    任务的执行器那样要被别人、被重启后的服务端读到）。
+// ② **这个页面点过的那个作业** —— 记在 `sessionStorage`，**按标签页隔离**。放 localStorage 就
+//    等于把所有权凭据摊给同源的每一个标签：同一项目开着的另一个页面（从没点过按钮）会读到
+//    这条记录、把服务端那份作业认成自己的，于是在成功时把**它自己**输入框里的草稿改掉
+//    （第 6 轮审查双标签复现）。sessionStorage 正好是「刷新还在、别的标签读不到」。
+//    代价说清楚：整个标签页关掉再开，新标签确实没有任何证据说明「我点过」，那三句交代
+//    （见下）就给不出来了 —— 这是对的，一个刚开的上下文本来就不该去认领谁的作业。
+//
+// 服务端的进度是内存态（server/src/preview-assist.ts 说了
 //    为什么不落库），GET 回来 `job: null` 的原因有三种，而这三种在用户眼里是完全不同的事：
 //      · 从来没点过              → 什么都不该显示
 //      · 点过，ash 重启吞了它    → 「已随 ash 重启中断」（第 1 轮审查：原来这一档什么都不显示，
@@ -17,12 +24,23 @@ import type { PreviewAssistState } from "@ash/shared/preview-assist";
 const EXECUTOR_KEY = (projectId: string) => `ash:preview-assist-executor:${projectId}`;
 const LIVE_KEY = (projectId: string) => `ash:preview-assist-live:${projectId}`;
 
-/** localStorage 在隐私模式下会抛，这一整套都是「有就用、没有就算了」。 */
-function read(key: string): string | null {
-  try { return localStorage.getItem(key); } catch { return null; }
+/** 两种存储在隐私模式下都会抛，这一整套都是「有就用、没有就算了」。 */
+function get(store: Storage | undefined, key: string): string | null {
+  try { return store?.getItem(key) ?? null; } catch { return null; }
 }
-function write(key: string, value: string | null): void {
-  try { value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value); } catch { /* 隐私模式 */ }
+function set(store: Storage | undefined, key: string, value: string | null): void {
+  try { value === null ? store?.removeItem(key) : store?.setItem(key, value); } catch { /* 隐私模式 */ }
+}
+/** 整个浏览器共享的那一份（执行器偏好）。 */
+const read = (key: string): string | null => get(globalThis.localStorage, key);
+const write = (key: string, value: string | null): void => set(globalThis.localStorage, key, value);
+/** **只属于这个标签页**的那一份（作业所有权）。见文件顶部为什么必须分开。 */
+const readLive = (key: string): string | null => get(globalThis.sessionStorage, key);
+function writeLive(key: string, value: string | null): void {
+  set(globalThis.sessionStorage, key, value);
+  // 这条记录在 2026-09-27 之前存在 localStorage 里。留着的话，那台浏览器上每个同源标签都还
+  // 认着一份旧凭据，所以顺手把它清掉（只清这一个键，执行器偏好照旧住在 localStorage）。
+  write(key, null);
 }
 
 export const rememberedExecutor = (projectId: string): string => read(EXECUTOR_KEY(projectId)) ?? "";
@@ -57,7 +75,7 @@ export interface AssistTrace {
 }
 
 export function readAssistTrace(projectId: string): AssistTrace | null {
-  const raw = read(LIVE_KEY(projectId));
+  const raw = readLive(LIVE_KEY(projectId));
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as AssistTrace;
@@ -74,14 +92,14 @@ export function readAssistTrace(projectId: string): AssistTrace | null {
  * 记录才覆盖得住「请求在路上出事」的那一段。
  */
 export function pendingAssistTrace(projectId: string, instance: string, claim: string): void {
-  write(LIVE_KEY(projectId), JSON.stringify({
+  writeLive(LIVE_KEY(projectId), JSON.stringify({
     jobId: "", claim, executorLabel: "", round: 0, maxRounds: 3, startedAt: new Date().toISOString(), instance,
   } satisfies AssistTrace));
 }
 
 /** 作业还在跑：把身份记住（每一拍都写，轮次跟着走，中断那句话才说得出第几轮）。 */
 export function traceAssistJob(projectId: string, job: PreviewAssistState, instance: string): void {
-  write(LIVE_KEY(projectId), JSON.stringify({
+  writeLive(LIVE_KEY(projectId), JSON.stringify({
     jobId: job.jobId,
     // 调用方只在「这份确实是我点的」时才写（PreviewAiAssist 的 absorb），所以这儿的 claim
     // 就是我们自己那个；从作业上读省得再传一遍。
@@ -94,7 +112,7 @@ export function traceAssistJob(projectId: string, job: PreviewAssistState, insta
   } satisfies AssistTrace));
 }
 
-export const forgetAssistTrace = (projectId: string): void => write(LIVE_KEY(projectId), null);
+export const forgetAssistTrace = (projectId: string): void => writeLive(LIVE_KEY(projectId), null);
 
 /**
  * 服务端回了 `job: null`，而本地这条记录还在：把它摆成一张卡交给进度面板渲染。

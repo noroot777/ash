@@ -17,7 +17,9 @@
 //      **不许再动一次输入框**（否则用户刚手写并保存的脚本被旧结果盖回去）；
 //   ⑨ 别处点的那份**正在跑**的时候才打开页面 → 同样一路只读，不许在它成功时冒充「我点的」；
 //   ⑩ 别处那份正在跑的时候**点了按钮** → 服务端复用了它、这一次并没有新开，界面要说实话，
-//      而且它的结果照样不许动输入框（认领只认这次点击自报的 claim）。
+//      而且它的结果照样不许动输入框（认领只认这次点击自报的 claim）；
+//   ⑪ 同一个浏览器的**另一个标签页**（同源、共享 localStorage、从没点过按钮）→ 照实显示这个
+//      项目上有一份在跑，但说清「是别的页面点的」，成功时一个字都不动它自己的输入框。
 //
 // 服务端那份是假的（fixture 里几个模块级变量），这里测的是前端这一侧的判断：什么时候轮询、
 // null 该读成哪一种、填还是不填。
@@ -45,7 +47,10 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
   browser = await chromium.launch(await chromeLaunchOptions());
-  const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
+  // 一个 context 里开页面（不是 browser.newPage()，那样每页一份独立存储）：⑪ 要的正是
+  // **同源、共享 localStorage 的两个标签页**，作业所有权不能在它们之间串。
+  const context = await browser.newContext({ viewport: { width: 1000, height: 1200 } });
+  const page = await context.newPage();
   await page.emulateMedia({ reducedMotion: "reduce" });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -226,8 +231,37 @@ try {
   assert.equal(await editorText(script), handwritten, "服务端复用的那份别人的作业，成功了也不许覆盖");
   assert.deepEqual((await notices()).filter((line) => line.includes("脚本已填入")), [], "没填就不该提示填入");
 
+  // ⑪ 同一浏览器的另一个标签页：所有权凭据不能摊给同源的每一个标签（第 6 轮审查双标签复现：
+  //    B 从没点过按钮，却显示「AI 正在判断…」，并在成功时把自己输入框里的内容改掉）
+  const own = "# 等这一页自己的 AI 结果";
+  await script.fill(own);
+  await startAssist.click();
+  await progress.getByText("正在读这个项目", { exact: false }).waitFor();
+  const other = await context.newPage();
+  const otherErrors = [];
+  other.on("pageerror", (failure) => otherErrors.push(failure.message));
+  await other.goto(url);
+  const otherScript = other.getByRole("textbox", { name: "启动脚本", exact: true });
+  const otherProgress = other.locator(".preview-assist-progress");
+  const otherNotices = async () => JSON.parse(await other.getByTestId("notices").textContent());
+  await otherScript.waitFor();
+  // 照实说这个项目上有一份在跑，同时说清它不是这一页点的
+  await otherProgress.getByText("别的页面点的", { exact: false }).waitFor();
+  assert.equal(await editorText(otherScript), handwritten, "另一个标签页读的是已保存那条，不该被动");
+  await page.getByTestId("assist-succeed").click();
+  // 点了按钮的那一页照旧拿到结果（隔离所有权不能把正常那条路一起隔掉）
+  await page.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
+  await otherProgress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
+  await other.waitForTimeout(1500);
+  assert.equal(await editorText(otherScript), handwritten, "别的页面点出来的结果不许改这个标签页的脚本");
+  assert.deepEqual((await otherNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
+  assert.deepEqual(otherErrors, [], "另一个标签页也不应产生运行时异常");
+  await other.close();
+
   assert.deepEqual(errors, [], "AI 协助面板不应产生运行时异常");
-  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed)");
+  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims)");
 } finally {
   await browser?.close();
   await server.close();

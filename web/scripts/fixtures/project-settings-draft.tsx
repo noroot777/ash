@@ -86,30 +86,25 @@ const executorProfiles: AgentExecutorProfile[] = [
 // 重启服务端，作业该还在那儿（第 3 轮审查复现「刷新后旧的成功结果又被填回输入框」正靠这一点）。
 const JOB_KEY = `${storageKey}:assist-job`;
 const SEQ_KEY = `${storageKey}:assist-seq`;
-let assist: PreviewAssistState | null = JSON.parse(localStorage.getItem(JOB_KEY) ?? "null") as PreviewAssistState | null;
-const setAssist = (next: PreviewAssistState | null) => {
-  assist = next;
-  localStorage.setItem(JOB_KEY, JSON.stringify(next));
-};
+// **每次都从存储里读**，不留模块级副本：同一个浏览器的两个标签页各有一份自己的 window.fetch，
+// 副本一留，A 那页让作业成功了 B 那页的假服务端还在回旧状态 —— 而真实服务端是一份、两页都看得见
+// （⑪ 那条双标签回归就靠这个）。
+const readAssist = (): PreviewAssistState | null =>
+  JSON.parse(localStorage.getItem(JOB_KEY) ?? "null") as PreviewAssistState | null;
+const setAssist = (next: PreviewAssistState | null) => localStorage.setItem(JOB_KEY, JSON.stringify(next));
 // 服务端自报的实例身份：ash 重启才会变。前端靠它把「重启吞了」和「终态自己过期了」分开。
 // 同样得存住 —— 刷新后实例又变回原值就等于「没重启过」，那条测不成了。
 const INSTANCE_KEY = `${storageKey}:assist-instance`;
-let assistInstance = localStorage.getItem(INSTANCE_KEY) ?? "inst-1";
-localStorage.setItem(INSTANCE_KEY, assistInstance);
-const restartAssistInstance = () => {
-  assistInstance = `inst-${Date.now()}`;
-  localStorage.setItem(INSTANCE_KEY, assistInstance);
-};
+localStorage.setItem(INSTANCE_KEY, localStorage.getItem(INSTANCE_KEY) ?? "inst-1");
+const assistInstance = (): string => localStorage.getItem(INSTANCE_KEY) ?? "inst-1";
+const restartAssistInstance = () => localStorage.setItem(INSTANCE_KEY, `inst-${Date.now()}`);
 // 下一次 POST 装成「请求发出去了但回不来」—— 服务端那边已经接单，浏览器这边只拿到一个错。
 // "succeeded" 这一档更狠：接单之后作业还跑完了、还成功了，丢掉的只是那一发的响应。
 let assistDropNextPost: false | "running" | "succeeded" = false;
 // 作业身份每次**新开**时换一个 —— 真实的那份是 reservePreviewAssistJob() 里的 id()。
 // 注意所有权不看它:看的是 POST 带上来的 claim(见下面的 POST 分支)。
-let assistSeq = Number(localStorage.getItem(SEQ_KEY) ?? "0");
-const nextAssistSeq = () => {
-  assistSeq += 1;
-  localStorage.setItem(SEQ_KEY, String(assistSeq));
-};
+const assistSeq = (): number => Number(localStorage.getItem(SEQ_KEY) ?? "0");
+const nextAssistSeq = () => localStorage.setItem(SEQ_KEY, String(assistSeq() + 1));
 const succeeded = (patch: Partial<PreviewAssistState> = {}): Partial<PreviewAssistState> => ({
   status: "succeeded",
   phase: "done",
@@ -121,7 +116,7 @@ const succeeded = (patch: Partial<PreviewAssistState> = {}): Partial<PreviewAssi
   ...patch,
 });
 const assistJob = (patch: Partial<PreviewAssistState>): PreviewAssistState => ({
-  jobId: `job-${assistSeq}`,
+  jobId: `job-${assistSeq()}`,
   projectId: "p-one",
   claim: "",
   status: "running",
@@ -157,7 +152,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       // **撞上已经在跑的那份就原样交回去,不新开**——真实端点就是这么做的
       // (reservePreviewAssistJob 的 fresh=false)。关键是 claim 保持原主:点击方一比就知道
       // 「这不是我开的」,不会把别人跑出来的脚本填进自己的输入框(第 5 轮审查)。
-      if (assist?.status !== "running") {
+      if (readAssist()?.status !== "running") {
         nextAssistSeq();
         setAssist(assistJob({ claim }));
       }
@@ -167,13 +162,14 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
         assistDropNextPost = false;
         throw new TypeError("Failed to fetch");
       }
-      return reply({ job: assist, instance: assistInstance });
+      return reply({ job: readAssist(), instance: assistInstance() });
     }
     if (init?.method === "DELETE") {
-      if (assist?.status === "running") setAssist({ ...assist, status: "canceled", phase: "done", step: "已取消", error: "已取消", endedAt: "2026-09-26T00:01:00.000Z" });
-      return reply({ canceled: true, job: assist, instance: assistInstance });
+      const live = readAssist();
+      if (live?.status === "running") setAssist({ ...live, status: "canceled", phase: "done", step: "已取消", error: "已取消", endedAt: "2026-09-26T00:01:00.000Z" });
+      return reply({ canceled: true, job: readAssist(), instance: assistInstance() });
     }
-    return reply({ job: assist, instance: assistInstance });
+    return reply({ job: readAssist(), instance: assistInstance() });
   }
   if (pathname.endsWith("/git")) return reply({
     identity: {
@@ -261,7 +257,10 @@ function Fixture() {
         <button
           type="button"
           data-testid="assist-succeed"
-          onClick={() => { setAssist(assistJob({ ...succeeded(), jobId: assist?.jobId ?? `job-${assistSeq}`, claim: assist?.claim ?? "" })); }}
+          onClick={() => {
+            const live = readAssist();
+            setAssist(assistJob({ ...succeeded(), jobId: live?.jobId ?? `job-${assistSeq()}`, claim: live?.claim ?? "" }));
+          }}
         >
           假装真起来了
         </button>

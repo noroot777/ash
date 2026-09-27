@@ -58,6 +58,14 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   // 「填了没填」（第 3 轮审查：点完「保留我写的」，卡片照旧说「脚本已填进上面的输入框」，
   // 用户于是以为框里那条手写的是 ash 验证过的）。
   const [applied, setApplied] = useState<"filled" | "kept" | "shown" | null>(null);
+  /**
+   * 摆着的这份作业不是这个页面点出来的。
+   *
+   * 服务端的作业是**项目级**的（一个项目一格），所以同一项目开着的任何页面都会看见它在跑 ——
+   * 照实显示是对的，但必须同时说清「它不是这个页面点的、它的结果不会动这里的输入框」，否则
+   * 用户从「AI 正在判断…」只能读出「我这一页在跑」（第 6 轮审查就是拿这个当所有权证据的）。
+   */
+  const [foreign, setForeign] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const filled = useRef<string | null>(null);
@@ -74,7 +82,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => {
     setExecutor(rememberedExecutor(projectId));
-    setJob(null); setLost(false); setOffered(null); setApplied(null);
+    setJob(null); setLost(false); setOffered(null); setApplied(null); setForeign(false);
     filled.current = null; startedWith.current = null; mine.current = false;
   }, [projectId]);
 
@@ -106,11 +114,13 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
         startedWith.current = current.current;
       }
       setLost(false);
+      setForeign(!mine.current);
       setJob(result.job);
       return;
     }
-    if (!trace) { setLost(false); setJob(null); return; }
+    if (!trace) { setLost(false); setForeign(false); setJob(null); return; }
     setLost(true);
+    setForeign(false);
     setJob(lostAssistState(projectId, trace, trace.instance === result.instance));
   }, [projectId]);
   const poll = useCallback(async () => {
@@ -176,6 +186,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
     setError(null);
     setOffered(null);
     setApplied(null);
+    setForeign(false);
     startedWith.current = script;
     const claim = newAssistClaim();
     // **先记后发**：服务端是同步预占的，请求一旦发出去它就可能已经接单了。等响应回来再记，
@@ -264,12 +275,14 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       <small>AI 在<b>项目目录</b>里读文件判断启动方式，ash 再借一个空闲端口把它给的脚本<b>真跑一遍</b>——端口上真有响应才算数，随后进程会被停掉，起不来就甩回去重来（最多 {job?.maxRounds ?? 3} 轮）。它被要求不改仓库里的任何文件、不替你装依赖。</small>
     </div>
     {error && <p className="preview-assist-error" role="alert">{error}</p>}
-    {job && <PreviewAssistProgress job={job} offered={offered} applied={applied} onTakeOffered={takeOffered} onKeepMine={keepMine} onDismiss={lost ? dismiss : undefined} />}
+    {job && <PreviewAssistProgress job={job} offered={offered} applied={applied} foreign={foreign} onTakeOffered={takeOffered} onKeepMine={keepMine} onDismiss={lost ? dismiss : undefined} />}
   </div>;
 }
 
-function PreviewAssistProgress({ job, offered, applied, onTakeOffered, onKeepMine, onDismiss }: {
+function PreviewAssistProgress({ job, offered, applied, foreign, onTakeOffered, onKeepMine, onDismiss }: {
   job: PreviewAssistState;
+  /** 这份作业是别的页面点的：照实显示进度，但要说清它不会动这里的输入框。 */
+  foreign: boolean;
   /** 成功了但没敢直接覆盖：这条脚本等用户自己拍板，连带没覆盖的原因。 */
   offered: { script: string; reason: "edited" | "unwatched" } | null;
   /** 成功之后输入框到底怎么了：填了 AI 的 / 留了手写的 / 一个字没动。 */
@@ -288,6 +301,9 @@ function PreviewAssistProgress({ job, offered, applied, onTakeOffered, onKeepMin
     {/* 上面那行状态已经说了「在哪个地址上起来过」，这里只说接下来该做什么——同一件事写两遍
         会把真正的下一步（还得点保存）淹掉。**而这句话只能照 applied 说**：说成「已填入」却
         没填，用户就会以为框里那条手写的是 ash 验证过的（第 3 轮审查）。 */}
+    {job.status === "running" && foreign && <p className="preview-assist-verdict">
+      这一份是<b>别的页面点的</b>（AI 协助按项目算，一个项目同时只跑一份），这里只是照实显示它的进度；它跑出来的脚本<b>不会动这个页面的输入框</b>。
+    </p>}
     {job.status === "succeeded" && applied === "filled" && <p className="preview-assist-verdict">
       脚本已填进上面的输入框；确认无误后点「保存预览设置」，任务里的「打开预览」就按它启动。
     </p>}
