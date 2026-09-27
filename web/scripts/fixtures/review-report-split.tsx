@@ -41,6 +41,7 @@ import {
   pendingAcceptance,
   englishVerdict,
   contradictedTail,
+  revokedVerdict,
 } from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
@@ -181,6 +182,10 @@ createRoot(document.getElementById("root")!).render(
     {/* 复审第 4 轮：主句合格、反悔写在尾巴上（「但保存问题仍未解决」），同样得整篇铺开。 */}
     <div className="contradicted-tail-fixture markdown-report-body">
       <ReviewReportBody text={contradictedTail} reportKey="run-32:1" />
+    </div>
+    {/* 复审第 5 轮：判定被删除线划掉了，同样不许当成生效的「可以验收」。 */}
+    <div className="revoked-verdict-fixture markdown-report-body">
+      <ReviewReportBody text={revokedVerdict} reportKey="run-33:1" />
     </div>
     <div className="six-switch-fixture markdown-report-body">
       <SwitchableSix />

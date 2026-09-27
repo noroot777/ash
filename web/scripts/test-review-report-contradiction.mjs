@@ -21,6 +21,11 @@
 //    「功能正常」里有个「能」，「yesterday's checks were green」里有个「yes」。前者说的是
 //    测试或功能的状态、不是验收决定，后者根本还没决定。所以正面这一侧改成**白名单、而且
 //    比主句整体**——「测试通过」整体不等于「通过」，不用认识「尚待」也拦住了。
+// ⑦ 收紧自己也会开口子（复审第 5 轮）：⑥ 为了认出 `no blocking issues`，在 `no` 和问题
+//    名词之间留了个任意单词的位置，于是 `no fixed issues`「没有已修好的问题」照样命中——
+//    形容词位得是白名单。同轮还有一类更基本的：`~~可以验收~~`、`❌ 可以验收`、`[ ] 可以
+//    验收`，两头的标点符号当时是一律剥掉的，**剥掉的恰好是那句话的反面**。删除线、红叉、
+//    空的任务框是内容不是装饰；`[x]` 才是装饰，剥掉它跟没写一样。
 // ⑥ 主句合格了，**尾巴还在**（复审第 4 轮）：「可以验收，但保存问题仍未解决」「verified —
 //    save bug remains」「verified — rejected by QA」「verified — needs fixes」，主句一个字
 //    都没错，反悔全写在后面。当时尾巴是拿否定表和未决表排除的，这四句一个固定词都没共用。
@@ -319,6 +324,49 @@ for (const [what, verdict] of [
       splitReviewReport(contradicts(verdict, ["改名只写了内存那份、刷新就回退，这一条还没修。"])).kind,
       "whole",
       `「${verdict}」的尾巴推翻了它的主句，别只看前半句`,
+    );
+  }
+
+  // 复审第 5 轮 · 其一：上一轮为了认出 `no blocking issues` 给形容词位留了个任意单词，
+  // 这三句就从那里进来——「没有已修好的问题」跟「没有问题」正好反着。
+  for (const verdict of [
+    "verified — no fixed issues",
+    "verified — no resolved blockers",
+    "verified — no addressed problems",
+  ]) {
+    assert.equal(
+      splitReviewReport(contradicts(verdict, ["改名只写了内存那份、刷新就回退，这一条还没修。"])).kind,
+      "whole",
+      `「${verdict}」说的是没有已修好的问题，不是没有问题`,
+    );
+  }
+
+  // 复审第 5 轮 · 其二：这句判定被划掉了 / 被打叉了 / 还没勾。两头的标点符号当时一律剥掉，
+  // 剥掉的恰好是那句话的反面，于是一句作废的结论被读成了生效的结论。
+  for (const verdict of ["~~可以验收~~", "~~verified~~", "❌ 可以验收", "✗ 可以验收", "[ ] 可以验收", "[] verified"]) {
+    assert.equal(
+      splitReviewReport(contradicts(verdict, ["改名只写了内存那份、刷新就回退，这一条还没修。"])).kind,
+      "whole",
+      `「${verdict}」这句判定被划掉/打叉/没勾，别把记号当装饰剥掉`,
+    );
+  }
+
+  // 上面那组是**列举出来**的记号。真正管用的是另一头：两头能剥的装饰也收成白名单，于是
+  // 表上没写过的记号自动降档，不用等下一轮反例来补表。`⛔`、`🔴` 都没在任何表里出现过。
+  for (const verdict of ["⛔ 可以验收", "🔴 可以验收"]) {
+    assert.equal(
+      splitReviewReport(contradicts(verdict, ["构建与测试均退出 0。"])).kind,
+      "whole",
+      `「${verdict}」前面那个记号没人认领，别当装饰剥掉`,
+    );
+  }
+
+  // 反过来，勾上的那种剥掉才对——`[x]`/`✅` 跟直接写「可以验收」是一个意思。
+  for (const verdict of ["✅ 可以验收", "[x] 可以验收", "[✔] verified"]) {
+    assert.equal(
+      splitReviewReport(contradicts(verdict, ["构建与测试均退出 0。"])).kind,
+      "contract",
+      `「${verdict}」是勾上的肯定判定，照拆`,
     );
   }
 

@@ -171,6 +171,25 @@ const contradictedTail = `## 结论
 保存后内容仍可能消失，修复前不能验收。
 `;
 
+// 复审第 5 轮：这句判定被划掉了。两头的标点符号当时一律剥掉，删除线跟着没了,
+// 一句作废的结论被读成生效的结论。
+const revokedVerdict = `## 结论
+
+**能不能验收**：~~可以验收~~
+
+**现在什么能用了**：页面可以打开。
+
+**必须修的问题**：
+
+没有发现问题
+
+**不拦验收、但你该知道的**：没有。
+
+## 技术明细
+
+保存后内容仍可能消失，修复前不能验收。
+`;
+
 export {
   contradictoryNone,
   contradictoryUncounted,
@@ -180,4 +199,5 @@ export {
   pendingAcceptance,
   englishVerdict,
   contradictedTail,
+  revokedVerdict,
 };

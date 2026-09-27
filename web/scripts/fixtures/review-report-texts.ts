@@ -15,6 +15,7 @@ import {
   pendingAcceptance,
   englishVerdict,
   contradictedTail,
+  revokedVerdict,
 } from "./review-report-contradiction-texts.ts";
 
 
@@ -635,4 +636,5 @@ export {
   pendingAcceptance,
   englishVerdict,
   contradictedTail,
+  revokedVerdict,
 };

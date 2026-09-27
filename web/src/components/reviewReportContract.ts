@@ -287,8 +287,13 @@ const ACCEPTS = new RegExp(`^(?:${[
 ].join("|")})$`, "iu");
 /**
  * 判定之后还允许写什么。只收**整段说死了「没有问题」**的写法：条数为零、没有发现问题、
- * 全部通过、`no blockers`。多一个形容词（`no blocking issues`）也认，多一截自由文本
- * （`no blockers were fixed`）就不认——后者正是第 4 轮的反例。
+ * 全部通过、`no blockers`。多一截自由文本（`no blockers were fixed`）不认——那是第 4 轮
+ * 的反例。
+ *
+ * 英文那条的形容词位是**白名单**，不是任意单词。第 4 轮为了认出 `no blocking issues`
+ * 开了个 `\w+`，第 5 轮的反例就从那里进来：`no fixed issues`、`no resolved blockers`、
+ * `no addressed problems`——说的全是「没有已经修好的问题」，正好反着。形容词只收「还没
+ * 处理」那一侧的词，「已处理」那一侧一个都不收。
  */
 const SAFE_TAILS = [
   /^有?\s*0\s*条(?:必须先修|要修|需要先修|必须修)?(?:的问题)?$/u,
@@ -296,20 +301,43 @@ const SAFE_TAILS = [
   /^(?:本轮)?(?:没有|无)(?:发现)?(?:任何)?(?:必须先修的|需要先修的|拦验收的|阻塞的)?(?:问题|风险|缺陷)$/u,
   /^全部(?:通过|修复|已修复)$/u,
   /^(?:全部)?(?:都)?已(?:全部)?修复$/u,
-  /^no\s+(?:\w+\s+)?(?:blocker|issue|problem|concern|risk|regression)s?$/iu,
+  /^no\s+(?:blocking|open|outstanding|remaining|pending|known|critical|major|new|other)?\s*(?:blocker|issue|problem|concern|risk|regression)s?$/iu,
   /^(?:all\s+)?(?:checks?\s+)?(?:pass|passed|green)$/iu,
 ];
 
-/** 两头的空白、强调符号、勾选记号都不算内容。 */
-const trimMarks = (part: string) => part.replace(/^[\p{P}\p{S}\s]+/u, "").replace(/[\p{P}\p{S}\s]+$/u, "");
+/**
+ * 这条判定**被划掉、被否掉、或者还没勾**。这些记号是内容，不是装饰。
+ *
+ * 第 5 轮的反例：`~~可以验收~~`、`❌ 可以验收`、`[ ] 可以验收`。当时两头是按 `\p{P}\p{S}`
+ * 一律剥掉的，删除线、红叉、空的任务框全被洗成一句裸的「可以验收」——洗掉的恰好是那句话
+ * 的**反面**。`[x]`（已勾选）是另一回事，由 `CHECKED` 单独剥掉。
+ */
+const REVOKED = /~~|❌|❎|✗|✘|🚫|\[\s*\]|☐|▢/u;
+/** 开头的「已勾选」记号：剥掉它跟没写是一个意思。空框不在这里——那是 `REVOKED`。 */
+const CHECKED = /^\s*\[\s*[xX✓✔]\s*\]\s*/u;
+/**
+ * 两头能当装饰剥掉的**只有这些**：空白、强调、引号、勾选。
+ *
+ * 不再按 `\p{P}\p{S}` 通剥——那个范围把删除线和红叉也算成装饰（第 5 轮）。句号、破折号
+ * 这类真正的标点不用在这里管，它们本来就是 `CLAUSE_SPLIT` 的分隔符。
+ */
+const DECOR = /[\s*_`"'“”‘’「」『』·•…✅✔☑🟢👍]/u;
+const trimMarks = (part: string) => part
+  .replace(new RegExp(`^(?:${DECOR.source})+`, "u"), "")
+  .replace(new RegExp(`(?:${DECOR.source})+$`, "u"), "");
 
 function admitsAcceptance(probes: string[], verdict: Column, works: Column): boolean {
   const label = new RegExp(`^\\s*(?:[-*+]\\s+|\\d+[.)]\\s+)?#{0,6}\\s*${CONTRACT_MARKS[0]}\\s*[：:]?`);
-  const parts = probes
+  const body = probes
     .slice(verdict.at, works.at)
     .join("\n")
     .replace(/\*\*/g, "")
     .replace(label, "")
+    .replace(CHECKED, "");
+  // 划掉的、打叉的、没勾的，先于一切判断——后面的切段会把方括号当分隔符，空框在那一步
+  // 就没了。
+  if (REVOKED.test(body)) return false;
+  const parts = body
     .split(CLAUSE_SPLIT)
     .map(trimMarks)
     .filter((part) => part !== "");
