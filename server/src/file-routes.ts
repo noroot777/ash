@@ -14,7 +14,7 @@ import { openWithApp, probeOpeners, revealInFileManager } from "./openers/index.
 import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
 import { readFileGitStatus } from "./file-git-status.js";
 import { readTaskArtifacts } from "./task-artifacts.js";
-import { taskPageUrlFor } from "./task-page.js";
+import { pagePreviewNotice, taskPageUrlFor } from "./task-page.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import {
@@ -76,8 +76,13 @@ export function mountFileRoutes(api: Hono) {
       const path = c.req.query("path") ?? "";
       const file = await readFileContent(root, path);
       // 网页的预览地址由服务端随内容一起发：它带着一段预览令牌，前端猜不出也不该自己拼
-      // （令牌是放开 ACAO 之后挡住第三方站点的那一道，见 task-page.ts 顶部）。
-      return c.json({ root: publicRoot(root), file, pageUrl: taskPageUrlFor(taskId, file.path) });
+      // （令牌是挡住第三方站点的那一道，见 task-page.ts 顶部）。`pageNotice` 是同一趟里
+      // 把「这份网页在沙箱里跑不全」说清楚——沙箱不发脚本 ACAO，模块脚本跑不起来。
+      const pageUrl = taskPageUrlFor(taskId, file.path);
+      const pageNotice = pageUrl && file.text !== null
+        ? await pagePreviewNotice(root.path, file.path, file.text)
+        : null;
+      return c.json({ root: publicRoot(root), file, pageUrl, pageNotice });
     } catch (error) {
       return c.json({ error: messageOf(error) }, statusOf(error) as 400);
     }

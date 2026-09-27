@@ -7,13 +7,15 @@
 // 所以这里钉五件事，少一件那个空白页就回来、或者那个洞就回来：
 //   1. 根路径引用改写到**本次预览的站点根**（站点根≠工作区根，也≠html 所在目录）
 //   2. `crossorigin` 摘掉（它把本来 no-cors 的样式表/图片也拖进 CORS）
-//   3. `ACAO: null` 只发给不透明源，**绝不回显真实来源**
-//   4. 而且只发给 `Sec-Fetch-Dest` 是模块脚本/字体/worker 的请求——`fetch` 的 `empty`
-//      一律不给，否则页面脚本能从自己地址里抠出令牌把整个工作区读走（第 2 轮审查复现）
-//   5. 预览令牌：放开 ACAO 之后挡住第三方站点的那一道，错了/没有一律 403
+//   3. **脚本一律不发 ACAO**，只有字体发——否则页面能 `fetch`（第 2 轮）或 `import()`
+//      （第 3 轮）把工作区里的文件读走。凡是「按页面声明的依赖发通行证」都是假的：
+//      HTML 就是 agent 写的，白名单由它自己填。
+//   4. 外链模块脚本因此改当**普通脚本**发（no-cors 能跑、源码读不到）；转不了的那种要
+//      在 `pagePreviewNotice` 里说清楚，不许留个空壳让用户猜
+//   5. 预览令牌：挡住第三方站点的那一道，错了/没有一律 403
 // 跑：npm -w server run test:task-page
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
@@ -46,13 +48,18 @@ try {
   write("web/dist/assets/index-def.css", "@font-face{src:url(/assets/f.woff2)}\n.x{background:url('/assets/bg.png')}");
   write("web/dist/assets/index-abc.js", "console.log(1)");
   write("web/dist/local.png", "x");
+  // 带模块专属语法的产物：转不成普通脚本，只能让它加载失败并当面提醒。
+  write("esm/index.html", '<html><head><link rel="modulepreload" href="/app.js">'
+    + '<script type="module" src="/app.js"></script></head><body>x</body></html>');
+  write("esm/app.js", 'const x=1;\nexport{x};\n');
   // 另一种布局：html 在子目录，站点根在它的上一级。
   write("site/pages/about.html", '<html><body><link href="/css/main.css"></body></html>');
   write("site/css/main.css", ".a{color:red}");
 
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, sessions, tasks } = await import("../src/db/schema.js");
-  const { mountTaskPageRoutes, rewriteHtml, taskPageBase, taskPageUrlFor } = await import("../src/task-page.js");
+  const { mountTaskPageRoutes, pagePreviewNotice, rewriteHtml, taskPageBase, taskPageUrlFor }
+    = await import("../src/task-page.js");
   const { Hono } = await import("hono");
   await ensureSchema();
 
@@ -113,7 +120,7 @@ try {
   assert.equal(page.headers.get("content-security-policy"), "sandbox allow-scripts allow-forms allow-popups allow-modals");
   const html = await page.text();
   const siteBase = `${base}/web/dist`;
-  assert(html.includes(`src="${siteBase}/assets/index-abc.js"`), "站点根要认成 web/dist，不是工作区根");
+  assert(html.includes(`${siteBase}/assets/index-abc.js`), "站点根要认成 web/dist，不是工作区根");
   assert(html.includes(`href="${siteBase}/assets/index-def.css"`));
   assert(html.includes(`url(${siteBase}/assets/bg.png)`));
   assert(html.includes(`${siteBase}/assets/a.png 1x`) && html.includes(`${siteBase}/assets/b.png 2x`), "srcset 每一条都要改");
@@ -140,35 +147,48 @@ try {
   assert((await about.text()).includes(`href="${base}/site/css/main.css"`),
     "/css/main.css 的站点根是 site，不是 html 所在的 site/pages");
 
-  // ── 5. CORS：只给不透明源，且只给「非 CORS 不可」的那几种请求目的 ────────────
-  // 第 2 轮审查的洞就在这一格：令牌写在 iframe 地址里，页面脚本读得到，于是它能
-  // `fetch` 同工作区任意文件并靠 ACAO 读走正文。判据换成 `Sec-Fetch-Dest`（禁止头，
-  // 页面脚本伪造不了）之后，能跑的照跑，能读的只剩它自己。
+  // ── 5. CORS：脚本一律不给，只有字体给 ──────────────────────────────────────
+  // 第 2、3 轮审查连着从这里打进来：`fetch` 读走任意文件 → 堵掉 fetch 之后改用
+  // `import()` 跑工作区里的 JS 模块读它的导出值。结论是判据不能是「该不该给这个路径」
+  // （路径由 agent 写的 HTML 声明，等于攻击者自己填白名单），只能是「能不能读到字节」。
   const assetUrl = `${siteBase}/assets/index-abc.js`;
   const acao = async (headers: Record<string, string>) =>
     (await get(assetUrl, headers)).headers.get("access-control-allow-origin");
 
-  // 真正非 CORS 不可的：模块脚本、字体、module worker
-  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "script" }), "null", "模块脚本非它不可");
-  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "font" }), "null", "字体恒定走 CORS");
-  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "worker" }), "null");
-  // 读文件那条路
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "script" }), null,
+    "脚本给了 ACAO，页面就能 import() 工作区里任意 JS 模块读它的导出值");
   assert.equal(await acao({ origin: "null", "sec-fetch-dest": "empty" }), null,
-    "fetch/XHR 的 dest 就是 empty——给了它就等于把工作区交给一份 agent 现写的 html");
-  // no-cors 加载的本来就不需要，所以也不给
-  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "style" }), null);
+    "fetch/XHR 的 dest 就是 empty");
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "worker" }), null);
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "style" }), null, "no-cors 加载本来就不需要");
   assert.equal(await acao({ origin: "null", "sec-fetch-dest": "image" }), null);
   assert.equal(await acao({ origin: "null", "sec-fetch-dest": "document" }), null);
-  // 认不出请求目的（老浏览器、curl）一律按不给处理：宁可退回外部打开
   assert.equal(await acao({ origin: "null" }), null, "头缺失要 fail closed");
-  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "" }), null);
+  // 唯一的例外：字体恒定走 CORS，而字体解析只吃得懂字体格式的字节，读不出内容
+  assert.equal(await acao({ origin: "null", "sec-fetch-dest": "font" }), "null", "不给就没有自定义字体");
   // 带着自己源的站点，不管什么目的都拿不到
-  assert.equal(await acao({ origin: "https://evil.example", "sec-fetch-dest": "script" }), null);
-  assert.equal(await acao({ "sec-fetch-dest": "script" }), null);
+  assert.equal(await acao({ origin: "https://evil.example", "sec-fetch-dest": "font" }), null);
+  assert.equal(await acao({ "sec-fetch-dest": "font" }), null);
   // 发不发取决于这两个头，缓存键就得带上
-  assert.equal((await get(assetUrl, { origin: "null", "sec-fetch-dest": "script" })).headers.get("vary"),
+  assert.equal((await get(assetUrl, { origin: "null", "sec-fetch-dest": "font" })).headers.get("vary"),
     "Origin, Sec-Fetch-Dest");
   assert.equal((await get(assetUrl)).headers.get("vary"), "Origin, Sec-Fetch-Dest");
+
+  // ── 6. 模块脚本转普通脚本（不给 ACAO 之后还能跑起来的那一半）───────────────
+  assert(html.includes(`<script defer src="${siteBase}/assets/index-abc.js"></script>`),
+    "没有模块专属语法的，要转成普通脚本——普通脚本是 no-cors 加载，能跑而读不到源码");
+  assert(!/type\s*=\s*["']module["']/i.test(html), "转完就不该再留 type=module");
+  assert(!/modulepreload/i.test(html), "modulepreload 现在必然失败，留着只会刷红");
+  assert.equal(await pagePreviewNotice(repo, "web/dist/index.html", readFileSync(join(repo, "web/dist/index.html"), "utf8")), null,
+    "转得了就没什么好提醒的");
+
+  // 真带模块语法的转不了：原样留着，并且要当面告诉用户
+  const esm = await get(`${base}/esm/index.html`);
+  const esmHtml = await esm.text();
+  assert(/type\s*=\s*["']module["']/i.test(esmHtml), "有 export 的转不了，只能让它加载失败");
+  assert(!esmHtml.includes("<script defer"), "别把带模块语法的也转了——那会变成 SyntaxError");
+  const notice = await pagePreviewNotice(repo, "esm/index.html", readFileSync(join(repo, "esm/index.html"), "utf8"));
+  assert(notice && notice.includes("在浏览器中打开"), "跑不全就得当面说，并指向外部打开");
 
   // ── 6. 越界 ───────────────────────────────────────────────────────────────
   for (const bad of ["..%2F..%2Fash.db", "web%2Fdist%2F..%2F..%2F..%2Fetc%2Fpasswd"]) {
@@ -180,7 +200,7 @@ try {
   assert.equal(taskPageUrlFor(TASK_ID, "out/a.png"), null, "图片不走网页预览那条");
   assert.equal(taskPageUrlFor(TASK_ID, "readme.md"), null);
 
-  console.log("✓ task page: 根路径改写(两种站点根布局)、crossorigin 摘除、令牌按任务、ACAO 只给不透明源的模块脚本/字体、越界拒绝");
+  console.log("✓ task page: 根路径改写(两种站点根布局)、脚本一律不发 ACAO(只给字体)、模块脚本转普通脚本+转不了要提醒、令牌按任务、越界拒绝");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

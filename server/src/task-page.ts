@@ -29,32 +29,36 @@ import { resolveInRoot, taskFileRoot } from "./file-browser.js";
 // 所以这里做三件事：把根路径引用改写到本次预览的站点根、摘掉 `crossorigin`（它只会把
 // 本来 no-cors 就能加载的样式表/图片也拖进 CORS 检查）、对不透明源回 `ACAO: null`。
 //
-// ## 令牌：放开 ACAO 之后必须补的那一道
+// ## 令牌：挡住第三方站点的那一道
 //
 // `ACAO: null` 会匹配**任何**不透明源的请求者——攻击者在自己站上开一个 sandbox iframe
-// 就能造出 `Origin: null`。所以不能光凭这个头就把工作区文件交出去。路径里因此多一段
-// 令牌（进程级随机密钥对 taskId 做 HMAC）：地址由服务端随文件内容一起发给前端，猜不出
-// 也枚举不动，拿不到令牌的第三方站点连 404 都摸不到。重启换密钥，前端下次读文件时自然
-// 拿到新的。
+// 就能造出 `Origin: null`。所以路径里带一段令牌（进程级随机密钥对 taskId 做 HMAC）：
+// 地址由服务端随文件内容一起发给前端，猜不出也枚举不动。重启换密钥，前端下次读文件时
+// 自然拿到新的。
 //
-// ## 但令牌挡不住页面自己（第 2 轮审查复现的洞）
+// ## 但页面读不到工作区，靠的不是令牌，是「压根不发 ACAO」
 //
-// 令牌就写在 iframe 的地址里，页面脚本一句 `location.pathname` 就拿到了。于是这些
-// **agent 现写、最不该信**的页面可以 `fetch(base + "/secret.txt")`，靠 `ACAO: null`
-// 把同一工作区里任意文件的正文读走——再 POST 到任何外站。令牌防的是别人，防不了自己。
+// 令牌就写在 iframe 的地址里，页面脚本一句 `location.pathname` 就拿到了。**防得了别人，
+// 防不了页面自己。** 第 2、3 轮审查连着从这里打进来：先是 `fetch` 读走任意文件，堵掉
+// `fetch` 之后又用 `import()` 跑工作区里的 JS 模块、读它的导出值。
 //
-// 所以 ACAO **按请求目的发**，判据是 `Sec-Fetch-Dest`（`Sec-` 前缀是禁止头，页面脚本
-// 改不动，只有浏览器自己填）：
-//   • 真正非 CORS 不可的只有**模块脚本**和**字体**（这两类恒定走 CORS 模式），外加
-//     module worker。给它们 ACAO。
-//   • `fetch()` / `XMLHttpRequest` 的 dest 是 `empty`——正是读文件那条路，一律不给。
-//   • 样式表、图片、媒体是 no-cors 加载（`crossorigin` 已被摘掉），**本来就不需要**
-//     ACAO，所以也不给。
-//   • 头缺失（老浏览器、curl）时**按不给处理**：宁可这类页面退回外部打开，也不因为
-//     认不出请求目的就把工作区交出去。
+// 这两轮之后能确认一件事：**凡是「按页面声明的依赖发通行证」的方案都是假的**——HTML 就是
+// agent 写的，它在页面里写一句 `<script type="module" src="/secrets.js">`，服务端就会
+// 老老实实给那个文件发通行证。白名单由攻击者填，等于没有白名单。
 //
-// 剩下的口子只有「执行」不是「读取」：页面仍能 `import()` 工作区里一个**真的是 JS 模块**
-// 的文件并跑它。拿不到源码文本，且 `nosniff` + 严格 MIME 让非 JS 的文件连加载都过不去。
+// 所以判据换成「**能不能读到字节**」，而不是「该不该给这个路径」：
+//   • 脚本（含 `import()`）**一律不发 ACAO**——模块脚本恒定走 CORS，没有 ACAO 就既读不到
+//     也跑不了。这条路彻底断掉，不留可收窄的余地。
+//   • 页面自己那几个模块脚本怎么办：服务端在改写 HTML 时**把它们的代码直接内联进文档**。
+//     行内模块脚本不需要 CORS，所以普通页面照常跑。
+//   • 样式表、图片、媒体、普通（非 module）脚本本来就是 no-cors 加载，**从来不需要**
+//     ACAO；没有 `crossorigin`（已摘），画到 canvas 会被污染，页面读不到像素。
+//   • 只剩字体还发 ACAO：`@font-face` 恒定走 CORS，而字体加载只认得懂字体格式的字节，
+//     解不出内容也拿不到源文本；`fetch` 一个文件再喂给 `FontFace` 那条路已经被堵死。
+//
+// 代价写在这里，别当成 bug 再修一轮：页面里**模块之间的相对 import**（多文件 ESM 源码、
+// 构建产物的懒加载分块）加载不了。ash 自己那份 dist 的入口块就没有静态 import，只有两处
+// 懒加载路由，所以外壳照常挂得出来。真要完整跑，走「在浏览器中打开」。
 //
 // ## 仍然做不到的事（所以外部打开那颗按钮不能撤）
 //
@@ -85,10 +89,13 @@ const MIME: Record<string, string> = {
 /** 不给 `allow-same-origin`：给了这层沙箱就等于没有。 */
 const SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals";
 /**
- * 只有这几类请求目的拿得到 `ACAO: null`——它们非 CORS 不可，而且拿到的是「能跑」不是
- * 「能读正文」。`fetch`/`XHR` 的 `empty`、以及任何认不出来的目的，一律不给（见顶部注释）。
+ * 只有字体拿得到 `ACAO: null`。
+ *
+ * `@font-face` 恒定走 CORS，不给就没有自定义字体；而字体解析只吃得懂字体格式的字节，
+ * 页面拿不到源文本，`fetch` 一个文件再喂给 `FontFace` 那条路也已经被同一道闸堵死。
+ * **脚本一律不在这里面**——原因见顶部「靠的不是令牌」那一节，别顺手加回来。
  */
-const CORS_DESTINATIONS = new Set(["script", "worker", "sharedworker", "font"]);
+const CORS_DESTINATIONS = new Set(["font"]);
 const MAX_PAGE_BYTES = 64 * 1024 * 1024;
 /** 改写要把整份读进内存，所以文本类另设一道上限，别为一个 200 MB 的 .map 爆掉。 */
 const MAX_REWRITE_BYTES = 8 * 1024 * 1024;
@@ -207,8 +214,101 @@ export function rewriteHtml(html: string, base: string): string {
   );
 }
 
-export function mountTaskPageRoutes(api: Hono): void {
-  api.get("/tasks/:id/page/:token/*", async (c) => {
+/** 外链模块脚本：`<script type="module" src="…"></script>`，src 已经是改写过的预览地址。 */
+const MODULE_SCRIPT = /<script\b([^>]*\btype\s*=\s*["']module["'][^>]*)>\s*<\/script\s*>/gi;
+const SRC_ATTR = /\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+/** `modulepreload` 现在必然加载失败（脚本不发 ACAO），留着只会在控制台刷红。 */
+const MODULE_PRELOAD = /<link\b[^>]*\brel\s*=\s*["']modulepreload["'][^>]*>\s*/gi;
+/**
+ * 模块专属语法。有这些就当不了普通脚本，只能让它加载失败。
+ *
+ * `import(` 是动态导入，普通脚本也支持，**不算**。判错方向是安全的：误判成「有」只是少
+ * 转一个页面（用户还有外部打开），误判成「没有」才会让页面报 SyntaxError。
+ */
+const MODULE_ONLY_SYNTAX = /(?:^|[\s;}])export\b|(?:^|[\s;}])import\s*(?:["'{*]|[A-Za-z$_])|import\.meta/;
+
+/**
+ * 外链模块脚本能不能改当普通脚本发。
+ *
+ * 这是「脚本一律不发 ACAO」之后还能让普通页面跑起来的那一半：**普通脚本是 no-cors 加载**
+ * ——浏览器照跑，而页面读不到它的源码（跨源脚本没有任何读取入口，`crossorigin` 也已摘）。
+ * 模块脚本做不到这点，它恒定走 CORS，给了 ACAO 就等于把文件正文交出去。
+ *
+ * 返回每个 src 的判定：`true` = 可以当普通脚本，`false` = 只能让它失败。
+ */
+export async function planModuleScripts(
+  html: string,
+  workspaceRoot: string,
+  pageBase: string,
+  fileDir: string,
+): Promise<Map<string, boolean>> {
+  const plan = new Map<string, boolean>();
+  for (const [, attrs] of html.matchAll(MODULE_SCRIPT)) {
+    const hit = SRC_ATTR.exec(attrs);
+    const src = hit ? (hit[1] ?? hit[2] ?? hit[3] ?? "") : "";
+    if (!src || plan.has(src)) continue;
+    const bare = src.split(/[?#]/)[0];
+    let rel: string | null = null;
+    if (bare.startsWith(`${pageBase}/`)) rel = bare.slice(pageBase.length + 1);
+    else if (!/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(bare)) rel = fileDir ? `${fileDir}/${bare}` : bare;
+    if (!rel) continue;
+    try {
+      const abs = await resolveInRoot(workspaceRoot, decodeURIComponent(rel));
+      if ((await stat(abs)).size > MAX_REWRITE_BYTES) { plan.set(src, false); continue; }
+      plan.set(src, !MODULE_ONLY_SYNTAX.test(await readFile(abs, "utf8")));
+    } catch {
+      plan.set(src, false);
+    }
+  }
+  return plan;
+}
+
+/** 按 `planModuleScripts` 的判定把能转的转成普通脚本；转不了的原样留着，让它自己失败。 */
+export function convertModuleScripts(html: string, plan: ReadonlyMap<string, boolean>): string {
+  return html.replace(MODULE_PRELOAD, "").replace(MODULE_SCRIPT, (whole, attrs: string) => {
+    const hit = SRC_ATTR.exec(attrs);
+    const src = hit ? (hit[1] ?? hit[2] ?? hit[3] ?? "") : "";
+    if (!src || !plan.get(src)) return whole;
+    // 模块脚本本来就是延迟执行的，转普通脚本要补 `defer` 才不会把执行时机提前到文档就绪前。
+    const kept = attrs.replace(/\stype\s*=\s*["']module["']/i, "").replace(/\sdefer\b/gi, "").trim();
+    return `<script defer ${kept}></script>`;
+  });
+}
+
+/** 这份网页有没有跑不起来的模块脚本——有就得当面告诉用户，别让他对着半死的预览猜。 */
+export function blockedModuleScripts(plan: ReadonlyMap<string, boolean>): number {
+  let blocked = 0;
+  for (const ok of plan.values()) if (!ok) blocked += 1;
+  return blocked;
+}
+
+/**
+ * 打开某份网页之前先问一句：它在沙箱里跑得全吗。跑不全就把话说在前面（见 FileViewer）。
+ *
+ * 判据只有一条硬事实——**有没有转不成普通脚本的外链模块脚本**。有就意味着那几段 JS 在
+ * 预览里根本不会执行，页面十有八九是个空壳；与其让用户对着空壳猜，不如直接指向外部打开。
+ */
+export async function pagePreviewNotice(
+  workspaceRoot: string,
+  relPath: string,
+  html: string,
+): Promise<string | null> {
+  if (!PAGE_EXTENSIONS.has(extname(relPath).toLowerCase())) return null;
+  const fileDir = relPath.includes("/") ? relPath.slice(0, relPath.lastIndexOf("/")) : "";
+  const siteRoot = resolveSiteRoot(workspaceRoot, fileDir, rootSegments(html, HTML_ROOT_REF));
+  // 令牌是什么无所谓，这里只关心「哪些 src 指向工作区里的哪个文件」，所以拿占位前缀跑一遍
+  // 改写，让 planModuleScripts 走的是跟真实渲染**同一条**解析路径（前缀的拆法也必须同源：
+  // 站点根拼进改写基址，剥前缀时只剥到令牌那一段）。
+  const pageBase = "/api/tasks/x/page/x";
+  const base = `${pageBase}${siteRoot ? `/${encodePath(siteRoot)}` : ""}`;
+  const plan = await planModuleScripts(rewriteHtml(html, base), workspaceRoot, pageBase, fileDir);
+  const blocked = blockedModuleScripts(plan);
+  return blocked
+    ? "这个网页要用模块脚本（ES module），沙箱预览里跑不起来，你看到的多半只是个空壳。点「在浏览器中打开」看完整效果。"
+    : null;
+}
+
+export function mountTaskPageRoutes(api: Hono): void {  api.get("/tasks/:id/page/:token/*", async (c) => {
     const taskId = c.req.param("id");
     const token = c.req.param("token");
     // 先验令牌，再碰磁盘：没令牌的请求连「这个任务在不在」都不该问出来。
@@ -261,8 +361,12 @@ export function mountTaskPageRoutes(api: Hono): void {
           fileDir,
           rootSegments(text, isPage ? HTML_ROOT_REF : CSS_ROOT_REF),
         );
-        const base = `${taskPageBase(taskId)}${siteRoot ? `/${encodePath(siteRoot)}` : ""}`;
-        return new Response(isPage ? rewriteHtml(text, base) : rewriteCss(text, base), { headers });
+        const pageBase = taskPageBase(taskId);
+        const base = `${pageBase}${siteRoot ? `/${encodePath(siteRoot)}` : ""}`;
+        if (!isPage) return new Response(rewriteCss(text, base), { headers });
+        const rewritten = rewriteHtml(text, base);
+        const plan = await planModuleScripts(rewritten, root.path, pageBase, fileDir);
+        return new Response(convertModuleScripts(rewritten, plan), { headers });
       }
 
       headers["content-length"] = String(info.size);

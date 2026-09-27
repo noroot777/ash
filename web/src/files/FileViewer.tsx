@@ -28,12 +28,12 @@ const AUDIO_PATTERN = /\.(?:mp3|wav|m4a|aac|flac|ogg|opus|aiff)$/i;
  * 让页面以 ash 自己的源跑脚本，读得到登录态、能带着 cookie 调 ash 的接口。服务端那条
  * `/tasks/:id/page/<令牌>/*` 还会再压一道同样的 CSP，直接在地址栏打开也照样被钉住。
  *
- * 地址由服务端随文件内容一起发（`pageUrl`），前端不自己拼：里面那段令牌是放开
- * `ACAO: null` 之后挡住第三方站点的那一道。根路径资源（`/assets/…`）的改写也在服务端做。
+ * 地址由服务端随文件内容一起发（`pageUrl`），前端不自己拼：里面那段令牌是挡住第三方
+ * 站点的那一道。根路径资源（`/assets/…`）的改写也在服务端做。
  *
- * 仍有改不动的一类：页面在**打包后的 JS 里** `fetch("/api/…")`，那串地址是字符串常量。
- * 这种页面在沙箱里只渲染得出外壳——所以头带上那颗「在浏览器中打开」是**兜底出口**，
- * 不是冗余入口。
+ * 跑不全的那一类由服务端在 `pageNotice` 里说明（模块脚本在沙箱里加载不了——给它放行
+ * 就等于把工作区文件交给页面读）。加上页面在**打包后的 JS 里** `fetch("/api/…")` 这种
+ * 改不动的地址，所以头上那颗「在浏览器中打开」是**兜底出口**，不是冗余入口。
  */
 function PageBody({ url, path }: { url: string; path: string }) {
   return (
@@ -126,6 +126,8 @@ export function FileViewer({
   const [file, setFile] = useState<FileContent | null>(null);
   /** 网页预览地址（带令牌，服务端随内容发下来）。不是网页就一直是 null。 */
   const [pageUrl, setPageUrl] = useState<string | null>(null);
+  /** 这份网页在沙箱里跑不全时的说明，同样由服务端判定（前端没法知道它加载了什么）。 */
+  const [pageNotice, setPageNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revealing, setRevealing] = useState(false);
@@ -151,11 +153,13 @@ export function FileViewer({
         if (!alive) return;
         setFile(result.file);
         setPageUrl(result.pageUrl);
+        setPageNotice(result.pageNotice);
       })
       .catch((reason) => {
         if (!alive) return;
         setFile(null);
         setPageUrl(null);
+        setPageNotice(null);
         setError(reason instanceof Error ? reason.message : String(reason));
       })
       .finally(() => { if (alive) setLoading(false); });
@@ -274,6 +278,22 @@ export function FileViewer({
         <p className="file-viewer__notice">
           <Warning size={12} aria-hidden="true" />
           文件超过 2 MB，只显示了前面一部分。要看全文请用本机应用打开。
+        </p>
+      )}
+
+      {/* 跑不全的网页当面说清楚，并把外部打开摆在话旁边——不让用户对着一个空壳猜是不是坏了。 */}
+      {pageNotice && !showSource && (
+        <p className="file-viewer__notice">
+          <Warning size={12} aria-hidden="true" />
+          {pageNotice}
+          <button
+            type="button"
+            className="file-viewer__notice-action"
+            disabled={openingExternally}
+            onClick={() => void openExternally()}
+          >
+            在浏览器中打开
+          </button>
         </p>
       )}
 

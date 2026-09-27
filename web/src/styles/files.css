@@ -53,6 +53,9 @@
 .file-viewer__danger-group { display:flex; flex:0 0 auto; align-items:center; gap:8px; margin-left:2px; border-left:1px solid var(--line); padding-left:8px; }
 .file-viewer__action.is-danger:hover:not(:disabled) { border-color:color-mix(in lch,var(--red) 45%,var(--line2)); background:color-mix(in lch,var(--red) 9%,var(--panel)); color:var(--red); }
 .file-viewer__notice { display:flex; align-items:center; gap:5px; margin:0; border-bottom:.5px solid var(--line); background:color-mix(in lch,var(--amber) 8%,var(--panel)); padding:6px 16px; color:var(--muted); font-size:10px; }
+.file-viewer__notice-action { flex:none; margin-left:auto; border:.5px solid var(--line); border-radius:4px; background:var(--panel); padding:2px 8px; color:var(--text); font-size:10px; cursor:pointer; }
+.file-viewer__notice-action:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+.file-viewer__notice-action:disabled { opacity:.5; cursor:default; }
 .file-viewer__body { display:flex; min-height:0; flex:1; flex-direction:column; overflow:auto; }
 .file-viewer__state { display:flex; align-items:center; gap:6px; margin:18px; color:var(--faint); font-size:11px; }
 .file-viewer__state.is-error { color:var(--red); }
