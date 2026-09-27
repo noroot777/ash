@@ -35,6 +35,9 @@ import {
   sixProblems,
   fiveProblems,
   contradictoryUncounted,
+  problemAtBoundary,
+  hiddenDeepProblem,
+  softDeniedVerdict,
 } from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
@@ -152,6 +155,17 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="contradictory-uncounted-fixture markdown-report-body">
       <ReviewReportBody text={contradictoryUncounted} reportKey="run-26:1" />
+    </div>
+    {/* 复审第 2 轮的三份：分界标题本身就是问题、问题藏在更深一层、判定写成「不建议通过」。
+        三份都必须整篇铺开——首屏写着「没有发现问题」时，任何一条真问题都不许进折叠。 */}
+    <div className="problem-at-boundary-fixture markdown-report-body">
+      <ReviewReportBody text={problemAtBoundary} reportKey="run-27:1" />
+    </div>
+    <div className="hidden-deep-problem-fixture markdown-report-body">
+      <ReviewReportBody text={hiddenDeepProblem} reportKey="run-28:1" />
+    </div>
+    <div className="soft-denied-fixture markdown-report-body">
+      <ReviewReportBody text={softDeniedVerdict} reportKey="run-29:1" />
     </div>
     <div className="six-switch-fixture markdown-report-body">
       <SwitchableSix />

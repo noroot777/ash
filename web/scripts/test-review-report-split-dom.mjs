@@ -516,6 +516,29 @@ try {
     "这一档整篇铺开，没有折叠",
   );
 
+  // 复审第 2 轮的三份。共同形状还是「同一份报告里两句话对不上」，只是坏在不同地方：
+  // 分界标题本身就是那条问题（扫后文问题的边界差一个等号）、问题藏在更深一层的 `###`
+  // （同一件事的另一个深度，成对验才说明修的是边界不是某个样例）、判定写成「不建议通过」
+  // （整段里躺着一个「通过」，按子串问就读成了肯定）。三份都得整篇铺开。
+  for (const [what, selector, problem] of [
+    ["分界标题就是问题", ".problem-at-boundary-fixture", /保存后内容会全部消失/],
+    ["问题藏在更深一层", ".hidden-deep-problem-fixture", /保存后内容会全部消失/],
+    ["判定写成不建议通过", ".soft-denied-fixture", /改名只写了内存里的那份/],
+  ]) {
+    const box = page.locator(selector);
+    assert.match(
+      await box.locator(".task-markdown").first().innerText(),
+      problem,
+      `${what}：真问题必须留在首屏`,
+    );
+    assert.equal(
+      await box.getByRole("button", { name: /技术明细|展开完整报告/ }).count(),
+      0,
+      `${what}：两句话对不上的报告不许折叠，更不许替折叠里的东西背书`,
+    );
+    assert.equal(await box.locator(".review-report-detail").count(), 0, `${what}：这一档整篇铺开`);
+  }
+
   console.log("review report split dom ok");} finally {
   await browser?.close();
   await server.close();

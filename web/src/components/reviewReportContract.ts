@@ -224,19 +224,44 @@ export function provesContract(
  * `declaredCount` 返回 `null`，零条目分支于是照放——首屏同时写着「不能验收」和「没有
  * 发现问题」，真正的问题在下一个 `##` 里，按钮还替它宣称折叠里只有技术记录。
  *
- * 所以问法从「有没有反面证据」换成**「有没有正面证据」**：先拿负面词表拦一道，再要求
- * 读得出一个正面判定，两样都不占就当没说清楚。这跟 `saysNoProblem` 从「出现过吗」换成
- * 「除了它还写了别的吗」是同一次收紧——拿不准就降档，降错一档只是多点一下按钮。
+ * 所以问法从「有没有反面证据」换成**「有没有正面证据」**。但「正面证据」按**整段搜子串**
+ * 问又松了一档——复审第 2 轮的四个反例全是这么绕过去的：
  *
- * 负面表先跑是必须的：「不能」里含着「能」。标签也得先去掉，栏目名「能不能验收」本身
- * 就带着「不能」两个字。
+ *   不建议通过，修完再验     ← 「通过」
+ *   暂缓通过，等人工确认     ← 「通过」
+ *   not verified; fix ...   ← 「verified」
+ *   测试通过，但暂不验收      ← 「通过」
  *
- * 负面表只收**判定词**，不收「先修」「请修」这类动作词：`**能不能验收**：可以 —— 有 0 条
- * 必须先修` 是一句正面结论（要修的有 0 条），把「先修」当负面标记会把它误降一档。条数本身
- * 由上一道闸（`declared`）管，不用在这里再抓一遍。
+ * 四句话的意思都是「不能验收」，可整段里都躺着一个正面词。契约要第一栏写的是**一句判定**
+ * （「能不能验收：能/不能 —— …」），不是「这一段里提没提过『通过』」。所以改成按判定本身读：
+ *
+ * ① **主句**——标签之后到第一个标点为止的那一小句——里不许有否定修饰，而且得有一个肯定
+ *    判定词。前三个反例在这里就被拦下（主句分别是「不建议通过」「暂缓通过」「not verified」）。
+ * ② **整段**再扫一遍否定判定词，管的是「主句说能、后半句反悔」：第四个反例主句是「测试
+ *    通过」，反悔写在「但暂不验收」里。
+ *
+ * 两道分工不同，都不能省：①防的是正面子串被整段搜出来，②防的是主句之后的转折。
+ *
+ * 否定表只收**判定词**，不收「先修」「请修」这类动作词：`**能不能验收**：可以 —— 有 0 条
+ * 必须先修` 是一句正面结论（要修的有 0 条），把「先修」当否定标记会把它误降一档。条数本身
+ * 由上一道闸（`declared`）管，不用在这里再抓一遍。裸「不」也不进整段表，`可以 —— 没有不
+ * 兼容问题` 这种正面结论会被它误伤；主句短，裸「不」只放在 ① 里。
+ *
+ * 「可能」算**读不出**而不是肯定：`可能可以验收` 这种没说死的判定，本来就不该拿来给按钮
+ * 背书。标签得先去掉——栏目名「能不能验收」自己就带着「不能」两个字；前导空白也得去掉，
+ * 四栏写成 `###` 时正文在标题的下一行，不 `trim` 的话主句会切出一个空串。
+ *
+ * 真实语料里走这条岔路的报告一共 6 份，主句分别是「可以验收」「能验收」「可以」——三种都
+ * 在这套判据下照常放行。
  */
-const DENIES = /不能|不可以|不予|未通过|不通过|拒绝|verify_failed|blocked|failed/i;
-const ADMITS = /能|可以|通过|没问题|无问题|verified|pass/i;
+/** 主句到哪为止：第一个标点（中英文都算，破折号也算）。 */
+const CLAUSE_END = /[，,。.；;：:—–、!！?？\n]/;
+/** 主句里的否定修饰。主句短，这里可以收得宽一点——「可能」这种没说死的也算读不出。 */
+const NEGATES = /不|未|暂|否|无法|可能|\bnot\b|\bno\b|fail/i;
+/** 主句里的肯定判定词。 */
+const ASSERTS = /能|可以|可验收|通过|verified|passed?|yes/i;
+/** 整段里的否定判定词，管「主句说能、后半句反悔」。只收判定词，不收裸「不」。 */
+const DENIES = /不能|不可以|不予|不建议|不通过|未通过|暂不|暂缓|缓议|拒绝|无法|verify_failed|blocked|failed|\bnot\b|\bno\b/i;
 
 function admitsAcceptance(probes: string[], verdict: Column, works: Column): boolean {
   const label = new RegExp(`^\\s*(?:[-*+]\\s+|\\d+[.)]\\s+)?#{0,6}\\s*${CONTRACT_MARKS[0]}\\s*[：:]?`);
@@ -244,8 +269,11 @@ function admitsAcceptance(probes: string[], verdict: Column, works: Column): boo
     .slice(verdict.at, works.at)
     .join("\n")
     .replace(/\*\*/g, "")
-    .replace(label, "");
-  return !DENIES.test(body) && ADMITS.test(body);
+    .replace(label, "")
+    .trim();
+  if (DENIES.test(body)) return false;
+  const clause = body.split(CLAUSE_END)[0] ?? "";
+  return !NEGATES.test(clause) && ASSERTS.test(clause);
 }
 
 /**
@@ -262,12 +290,17 @@ function admitsAcceptance(probes: string[], verdict: Column, works: Column): boo
  *
  * **只在零条目分支上问这一句**。正常的契约档（摘要里逐条写了问题）明细里本来就允许复述
  * 每条问题的证据，那是契约要的东西，不是矛盾。
+ *
+ * 边界含 `tail` 本身，不是 `tail` 之后。复审第 2 轮的反例就差这一个等号：那条问题**自己
+ * 就是第二个 `##`**（`## 保存后内容消失` 底下直接跟三行），`at === tail` 被跳过，于是报告
+ * 照判契约、问题照样进折叠。摘要里的条目不会因此被重复扫到——它们都在第一、第二个 `##`
+ * 之间，行号严格小于 `tail`。
  */
 function hidesProblem(root: Parsed, probes: string[], tail: number): boolean {
   for (const node of root.children) {
     if (node.type !== "heading" || node.depth < 2 || !node.position) continue;
     const at = node.position.start.line - 1;
-    if (at <= tail) continue;
+    if (at < tail) continue;
     if (writesProblem(root, probes, at, node.depth, probes.length)) return true;
   }
   return false;
