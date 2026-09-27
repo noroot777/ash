@@ -14,6 +14,7 @@ import {
   softDeniedVerdict,
   pendingAcceptance,
   englishVerdict,
+  contradictedTail,
 } from "./review-report-contradiction-texts.ts";
 
 
@@ -633,4 +634,5 @@ export {
   softDeniedVerdict,
   pendingAcceptance,
   englishVerdict,
+  contradictedTail,
 };

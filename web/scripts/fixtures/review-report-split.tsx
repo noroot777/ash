@@ -40,6 +40,7 @@ import {
   softDeniedVerdict,
   pendingAcceptance,
   englishVerdict,
+  contradictedTail,
 } from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
@@ -176,6 +177,10 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="english-verdict-fixture markdown-report-body">
       <ReviewReportBody text={englishVerdict} reportKey="run-31:1" />
+    </div>
+    {/* 复审第 4 轮：主句合格、反悔写在尾巴上（「但保存问题仍未解决」），同样得整篇铺开。 */}
+    <div className="contradicted-tail-fixture markdown-report-body">
+      <ReviewReportBody text={contradictedTail} reportKey="run-32:1" />
     </div>
     <div className="six-switch-fixture markdown-report-body">
       <SwitchableSix />

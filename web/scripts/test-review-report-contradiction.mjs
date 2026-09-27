@@ -20,8 +20,13 @@
 // ⑤ 主句里搜子串还是搜子串（复审第 3 轮）：「测试通过，尚待人工验收」的主句是「测试通过」，
 //    「功能正常」里有个「能」，「yesterday's checks were green」里有个「yes」。前者说的是
 //    测试或功能的状态、不是验收决定，后者根本还没决定。所以正面这一侧改成**白名单、而且
-//    比主句整体**——「测试通过」整体不等于「通过」，不用认识「尚待」也拦住了；未决表达
-//    （「尚待」「等待」「awaiting」）另由整段那道闸管，接住「主句说能、后半句还没定」。
+//    比主句整体**——「测试通过」整体不等于「通过」，不用认识「尚待」也拦住了。
+// ⑥ 主句合格了，**尾巴还在**（复审第 4 轮）：「可以验收，但保存问题仍未解决」「verified —
+//    save bug remains」「verified — rejected by QA」「verified — needs fixes」，主句一个字
+//    都没错，反悔全写在后面。当时尾巴是拿否定表和未决表排除的，这四句一个固定词都没共用。
+//    所以整栏一起收进白名单，**不再留任何黑名单**：按标点切段，第一段必须是判定，其余每段
+//    必须是判定的同义重复或一句说死了的「没有问题」，认不出的段落一律降档。这条判据的立场
+//    就一句话——白名单漏一条只是多铺开一屏，黑名单漏一条是按钮替报告撒谎。
 //
 // 每次都是同一个形状：判据比它要证明的事松一档，于是首屏写着一句话、折叠里躺着相反的
 // 事实，而按钮还在宣称「里面只有验证过程、证据、清场记录」。拿不准一律降档。
@@ -293,16 +298,56 @@ for (const [what, verdict] of [
   }
 
   // 反过来也得验：真实语料里走这条岔路的 6 份报告，主句就是下面这三种写法，一份都不能误伤。
-  // 英文那两种写法一并钉住：`passed?` 曾经匹配 `passe`/`passed` 却漏掉 `pass`，而整段否定表
-  // 里的裸 `no` 会把 `verified — no blockers` 一起拒掉。两处都只是白白把合规报告铺满一屏，
-  // 但判据松紧认错了就是认错了（复审第 3 轮的不拦验收回归）。
+  // 复审第 4 轮 · 尾巴：主句一个字都没错，反悔全写在后面。前四句彼此不共用任何固定词——
+  // 「仍未解决」「remains」「rejected」「needs fixes」——所以给否定表添词是追不上的；后两句
+  // 更刁：`no blockers` / `no issues` 本来是允许的安全说明，被续上一截自由文本就反过来了。
+  // 整栏切段、每段都得有人认领之后，这六句全在「认不出的那一段」上降档。
+  for (const verdict of [
+    "可以验收，但保存问题仍未解决",
+    "verified — save bug remains",
+    "verified — rejected by QA",
+    "verified — needs fixes",
+    "verified — no blockers were fixed; fix before acceptance",
+    "verified — no issues resolved; changes are still required",
+    // 上面两句其实是**两段一起拦的**（`fix before acceptance` / `changes are still
+    // required` 自己就认不出），单看它们证不出「安全说明得锚定到整段」。这两句只有尾巴
+    // 那一段，前缀正是允许的 `no blockers` / `no issues`，续上的自由文本才是反悔。
+    "verified — no blockers were fixed",
+    "verified — no issues resolved",
+  ]) {
+    assert.equal(
+      splitReviewReport(contradicts(verdict, ["改名只写了内存那份、刷新就回退，这一条还没修。"])).kind,
+      "whole",
+      `「${verdict}」的尾巴推翻了它的主句，别只看前半句`,
+    );
+  }
+
+  // **这一份是收紧的代价，不是漏网。**真实语料里走这条岔路的第 6 份报告写的就是它：主句
+  // 「可以」合格，可尾巴里的「第 1 轮的 2 条都已修复」是自由文本，白名单认不出。全库 1249
+  // 份里只有这一份因此降档——技术记录会铺开在首屏，问题一条都不会被藏起来。宁可停在这边：
+  // 把这种尾巴也收进白名单，等于重新开一条「像是正面就放行」的口子。
+  assert.equal(
+    splitReviewReport(contradicts(
+      "可以 —— 第 1 轮的 2 条都已修复，本轮没有发现必须先修的问题。",
+      ["构建与测试均退出 0。"],
+    )).kind,
+    "whole",
+    "尾巴里有自由文本就降档——白名单漏一条只是多铺开一屏",
+  );
+
+  // 英文那几种写法一并钉住：`passed?` 曾经匹配 `passe`/`passed` 却漏掉 `pass`；整段否定表
+  // 里的裸 `no` 会把 `verified — no blockers` 一起拒掉；`no blocking issues` 中间多一个
+  // 形容词也曾认不出；`通过（verified）` 的括注被当成主句的一部分（复审第 3、4 轮的不拦
+  // 验收回归）。这些都只是白白把合规报告铺满一屏，但判据松紧认错了就是认错了。
   for (const verdict of [
     "可以验收。",
     "能验收。",
-    "可以 —— 第 1 轮的 2 条都已修复，本轮没有发现必须先修的问题。",
+    "可以 —— 有 0 条必须先修",
+    "通过（verified）",
     "pass",
     "passed",
     "verified — no blockers",
+    "verified — no blocking issues",
   ]) {
     assert.equal(
       splitReviewReport(contradicts(verdict, ["构建与测试均退出 0。"])).kind,

@@ -525,6 +525,7 @@ try {
     ["问题藏在更深一层", ".hidden-deep-problem-fixture", /保存后内容会全部消失/],
     ["判定写成不建议通过", ".soft-denied-fixture", /改名只写了内存里的那份/],
     ["判定还没作出", ".pending-acceptance-fixture", /保存后内容仍可能消失/],
+    ["反悔写在尾巴上", ".contradicted-tail-fixture", /保存后内容仍可能消失/],
   ]) {
     const box = page.locator(selector);
     assert.match(

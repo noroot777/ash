@@ -152,6 +152,25 @@ const englishVerdict = `## 结论
 \`npm -w @ash/web test\` 退出 0；临时服务已停，无残留监听。
 `;
 
+// 复审第 4 轮：主句一个字都没错，反悔写在尾巴上。「可以验收」合格，「但保存问题仍未解决」
+// 当时既不在否定词表里也不在未决词表里，于是整栏照判契约、风险照样进折叠。
+const contradictedTail = `## 结论
+
+**能不能验收**：可以验收，但保存问题仍未解决。
+
+**现在什么能用了**：页面可以打开。
+
+**必须修的问题**：
+
+没有发现问题
+
+**不拦验收、但你该知道的**：没有。
+
+## 技术明细
+
+保存后内容仍可能消失，修复前不能验收。
+`;
+
 export {
   contradictoryNone,
   contradictoryUncounted,
@@ -160,4 +179,5 @@ export {
   softDeniedVerdict,
   pendingAcceptance,
   englishVerdict,
+  contradictedTail,
 };
