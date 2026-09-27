@@ -85,9 +85,11 @@ try {
   // ④ 传到一半：发送按住，房间也不让切——在途那张传完会落进「当时那个侧聊」的草稿。
   await page.locator(".side-chat-message.is-agent.is-done").nth(1).waitFor();
   let release;
+  // route 回调里的异常是**未捕获的 promise 拒绝**，会绕过下面的 finally 让 fixture 和
+  // 浏览器活下来（实测漏过一次），所以两处放行都自己吞掉。
   await page.route("**/api/uploads", async (route) => {
     await new Promise((resolve) => { release = resolve; });
-    await route.continue();
+    await route.continue().catch(() => {});
   });
   await input.fill("等图传完再说");
   await paste("slow.png");
@@ -122,8 +124,40 @@ try {
   await page.locator(".side-chat-compose .task-upload-chip").waitFor({ state: "detached" });
   assert.equal(await send.isDisabled(), true, "既没正文也没附件时不能发");
 
+  // ⑧ 发送在途时又粘一张：摘的只能是**这次发出去的那几张**。整份清空会把刚粘的那张
+  //    一起扔掉，而「一模一样才清」会让已经发出去的那张赖在草稿里、下一条重复带上。
+  let releaseSend;
+  let heldOnce = false;
+  await page.route("**/api/chats/*/messages", async (route) => {
+    if (!heldOnce) {
+      heldOnce = true;
+      await new Promise((resolve) => { releaseSend = resolve; });
+    }
+    await route.continue().catch(() => {});
+  });
+  await input.fill("第一条带图的");
+  await paste("race-a.png");
+  await page.locator(".side-chat-compose .task-upload-chip img").waitFor();
+  await send.click();
+  for (let i = 0; i < 100 && !releaseSend; i += 1) await page.waitForTimeout(50);
+  await paste("race-b.png");
+  await page.waitForFunction(() => document.querySelectorAll(".side-chat-compose .task-upload-chip img").length === 2);
+  releaseSend();
+  await page.locator(".side-chat-message.is-user").nth(2).waitFor();
+  await page.getByRole("button", { name: "移除 race-a.png" }).waitFor({ state: "detached" });
+  assert.equal(await page.getByRole("button", { name: "移除 race-b.png" }).count(), 1, "在途期间粘的那张要留在草稿里");
+  assert.equal(await page.locator(".side-chat-compose .task-upload-chip").count(), 1, "已发出去的那张要被摘掉");
+
+  // 下一条只带 race-b：发过的那张不能被重复带上。
+  await page.locator(".side-chat-message.is-agent.is-done").nth(2).waitFor();
+  await send.click();
+  await page.locator(".side-chat-message.is-user").nth(3).waitFor();
+  const raceSource = (await state()).sources.at(-1);
+  assert.match(raceSource, /race-b\.png/, "留下的那张要跟着下一条发出去");
+  assert.doesNotMatch(raceSource, /race-a\.png/, "上一条已经发过的图不能再带一遍");
+
   assert.deepEqual(errors, [], "页面不应抛异常");
-  console.log("✓ 侧聊粘贴附件：上传、只带图发送、正文+附件、在途门禁、草稿持久化与侧聊隔离、移除");
+  console.log("✓ 侧聊粘贴附件：上传、只带图发送、正文+附件、在途门禁、草稿持久化与侧聊隔离、移除、发送在途再粘只摘已发的");
 } finally {
   await browser?.close();
   await server?.close();

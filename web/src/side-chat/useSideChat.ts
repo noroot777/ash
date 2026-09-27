@@ -88,7 +88,7 @@ export function useSideChat(taskId: string) {
     }
     const active = alive.current && selected.current === value.room.id;
     let clearedDraft = false;
-    let clearedFiles = false;
+    let remainingFiles: UploadAttachment[] | null = null;
     let acknowledged = false;
     try {
       const request = JSON.parse(read(requestKey(value.room.id)) ?? "null") as SendRequest | null;
@@ -97,10 +97,14 @@ export function useSideChat(taskId: string) {
         if (read(draftKey(value.room.id)) === (request.draft ?? request.body)) {
           write(draftKey(value.room.id), ""); clearedDraft = true;
         }
-        // 发出去的那几张才摘：请求在途期间又粘进来的留着（跟主会话回复框同一条判据）。
-        if (samePaths(request.attachments, readAttachments(value.room.id).map((file) => file.path))) {
-          write(filesKey(value.room.id), "[]"); clearedFiles = true;
-        }
+        // 只摘**这一次发出去的那几张**（按路径做差集，跟主会话回复框的 dropSentAttachments
+        // 同一条判据）：发送在途的那一两秒里用户完全可能又粘一张，整份清空会把它一起扔掉，
+        // 而「发的那几张必须和手上这几张一模一样才清」则相反——刚粘的那张让条件不成立，
+        // 已经发出去的旧图就赖在草稿里，下一条消息把它重复带上一遍。
+        const sent = new Set(request.attachments ?? []);
+        const kept = readAttachments(value.room.id).filter((file) => !sent.has(file.path));
+        write(filesKey(value.room.id), JSON.stringify(kept));
+        remainingFiles = kept;
         if (request.quoteId) clearSideChatQuote(taskId, value.room.id, request.quoteId);
         write(requestKey(value.room.id), "null");
       }
@@ -111,7 +115,7 @@ export function useSideChat(taskId: string) {
     setError("");
     if (acknowledged) setSendError("");
     if (clearedDraft) setDraftState("");
-    if (clearedFiles) { attached.current = []; setAttachmentsState([]); }
+    if (remainingFiles) { attached.current = remainingFiles; setAttachmentsState(remainingFiles); }
   }, [taskId]);
   const reload = useCallback(async () => {
     const revision = memberRevision.current;
