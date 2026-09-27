@@ -603,7 +603,7 @@ async function deliverManualRepair(taskId: string, run: ReviewRunRow): Promise<v
     // 用户裁定「维持审查意见」之后的这一趟不再给驳回这条路（措辞见 free-review-prompts）。
     // 辩论的收尾发言与用户写的裁定要点也在这里一并带上：前者执行者的会话里结构上没有，
     // 后者是三档裁定表达不了的那部分结论。少任何一边，「辩完达成的共识」都到不了真正
-    // 去改代码的那一方，用户点完「维持意见并修复」只会看到执行者照原报告改。
+    // 去改代码的那一方，用户点完「让它接着改」只会看到执行者照原报告改。
     const round = await currentRoundOf(run);
     const delivered = await continueTask(
       taskId,

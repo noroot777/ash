@@ -129,7 +129,7 @@ export interface DebateClosing {
  * 总段数 2n+1，所以收尾必定由审查者说；而它说完辩论直接 finished，不再给执行者发段
  * （free-review-debate.ts `settleDebateTurn`）。也就是说**执行者的上下文里结构上不可能
  * 有这一段**。不带上的话，辩论辩出来的共识对真正去改代码的那一方就是不存在的：用户
- * 点「维持意见并修复」，执行者只会照原报告改——哪怕审查者自己在收尾里已经改了主意。
+ * 点「让它接着改」，执行者只会照原报告改——哪怕审查者自己在收尾里已经改了主意。
  *
  * 同时必须写死它**不是结论**：裁定权只在用户手上（见 free-review-dispute.ts 文件头
  * 规矩③）。把被驳回一方的收尾发言当指令执行，等于绕开裁定这件事本身。
@@ -161,9 +161,10 @@ function resolutionNoteSection(note: string | null | undefined): string {
 export function freeManualRepairPrompt(
   taskId: string,
   run: ReviewRunRow,
-  // 用户已经裁定「维持审查意见」：这一趟没有驳回这条路了，照改。
-  // `resolutionNote` / `debateClosing` 是那场裁定与辩论真正留给执行者的东西，理由见
-  // 上面两个 section —— 少任何一边，「双方辩完达成的共识」都到不了改代码的那一方。
+  // 用户已经裁定「维持审查意见」（界面上那颗按钮写的是「让它接着改」）：这一趟没有
+  // 驳回这条路了，照改。`resolutionNote` / `debateClosing` 是那场裁定与辩论真正留给
+  // 执行者的东西，理由见上面两个 section —— 少任何一边，「双方辩完达成的共识」都到
+  // 不了改代码的那一方。
   opts: {
     disputeUpheld?: boolean;
     resolutionNote?: string | null;
@@ -171,10 +172,14 @@ export function freeManualRepairPrompt(
   } = {},
 ): string {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
+  // 有要点时开场白不能再写「照报告修复」：用户写要点，多半正是因为要改的不是报告那版。
+  // 两句话打架时执行者只能自己挑一个，而挑错了没人会发现（两边看着都「按要求改了」）。
+  const noted = !!opts.resolutionNote?.trim();
   return `【自由工作流审查未通过 · 自动复审已停止】\n` +
     (opts.disputeUpheld
-      ? `你驳回过这一轮意见，用户已经裁定**维持审查意见**。这一次请照报告修复，不要再驳回；` +
-        `确有做不到的地方就用 ask_question 说清楚，别默默跳过。\n`
+      ? `你驳回过这一轮意见，用户已经裁定**不采纳这条驳回**，让你接着改。` +
+        (noted ? `按下面【用户裁定时写给你的要点】和报告来改` : `这一次请照报告修复`) +
+        `，不要再驳回；确有做不到的地方就用 ask_question 说清楚，别默默跳过。\n`
       : "") +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按第 ${run.currentRound} 轮意见修复，不要扩大原任务边界。` +
     `修复完成并验证后调用 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +

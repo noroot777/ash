@@ -109,6 +109,10 @@
    而是「报告是对的、只是不该在这儿修」,和上面那块同色会被读成同一件事。 */
 .free-review-dispute-card__reason.is-defer { border-color:var(--line2); }.free-review-dispute-card__reason.is-defer > b { color:var(--muted); }
 .free-review-dispute-card__actions { display:flex; flex-wrap:wrap; gap:5px; }.free-review-dispute-card__actions > button { display:inline-flex; height:27px; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }.free-review-dispute-card__actions > button:hover:not(:disabled) { background:var(--raised); color:var(--ink); }.free-review-dispute-card__actions > button:disabled { opacity:.5; }
+/* 「让它接着改」是这几个出口里的常路（辩完多半就是带着谈定的方案接着改），给它主色；
+   另外两个是岔路，保持平级的次要样式。 */
+.free-review-dispute-card__actions > button.is-primary { border-color:color-mix(in lch,var(--accent) 45%,var(--line2)); background:color-mix(in lch,var(--accent) 12%,var(--panel)); color:var(--accent); font-weight:600; }
+.free-review-dispute-card__actions > button.is-primary:hover:not(:disabled) { background:color-mix(in lch,var(--accent) 20%,var(--panel)); color:var(--accent); }
 /* 辩论回放：两侧用不同的左边线区分，正文仍按报告那套 markdown 渲染。 */
 .free-review-debate { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:8px 9px; }
 .free-review-debate > header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }.free-review-debate > header b { color:var(--ink); font-size:9.5px; }.free-review-debate > header small { color:var(--faint); font-size:8.5px; }
@@ -120,6 +124,11 @@
 /* 「全宽阅读」：面板这一栏只有 ~540px，七段发言在里面是一根一万像素高的细条。 */
 .free-review-debate__expand { display:inline-flex; flex:none; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 7px; color:var(--muted); font-size:9px; cursor:pointer; }
 .free-review-debate__expand:hover { background:var(--raised); color:var(--ink); }
+/* 「用这段作要点」：贴在每段发言的头一行右端。辩论最有用的产物常常就是某一段里的
+   具体方案，点它等于把那段话交给执行者去做——不点也能自己写，所以它是轻量的。 */
+.free-review-debate__quote { display:inline-flex; margin-left:auto; flex:none; align-items:center; gap:3px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 6px; color:var(--faint); font-size:8.5px; cursor:pointer; }
+.free-review-debate__quote:hover { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); background:color-mix(in lch,var(--accent) 8%,var(--panel)); color:var(--accent); }
+.free-review-debate.is-reading .free-review-debate__quote { font-size:9.5px; padding:2px 8px; }
 /* 阅读态同一份数据、另一档排版：正文回到能读的字号，两侧留白也跟着松开。 */
 .free-review-debate.is-reading { border:0; border-radius:0; padding:0; }
 .free-review-debate.is-reading > header { display:none; }

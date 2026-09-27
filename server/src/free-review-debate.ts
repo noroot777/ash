@@ -335,7 +335,7 @@ export async function settleDebateTurn(taskId: string, turnOk: boolean): Promise
       .where(eq(freeReviewDebates.id, debate.id))).at(0)?.verdict as FreeReviewDebateVerdict | null;
     await appendTaskTimeline(taskId,
       `辩论结束，审查者收尾立场：${verdict ? DEBATE_VERDICT_LABELS[verdict] : "未给出"}。` +
-      "这只是它自己的立场，结论仍由你裁定：采纳执行者，或维持审查意见让它照改。");
+      "这只是它自己的立场，结论仍由你裁定：让它接着改（可以把某一段发言直接作为裁定要点），或者判这一轮不用改了。");
     bus.publish({ type: "task.review", taskId });
     return true;
   }

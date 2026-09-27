@@ -196,8 +196,8 @@ export async function disputeFreeReview(
   await appendTaskTimeline(taskId,
     `执行者${what}（第 ${run.currentRound} 轮 · ${run.reviewerName}）：${summarize(reason || deferReason || "")}` +
     `${canceledAuto ? "；自动复审已取消" : ""}。` +
-    "现在由你裁定：可以让双方辩一轮，也可以直接采纳执行者的说法、维持审查意见让它照改" +
-    `${deferReason ? "，或者把越界的那几条转成一个独立任务" : ""}。`);
+    "现在由你裁定：可以让双方辩一轮，也可以直接让它接着改、或者判这一轮不用改了" +
+    `${deferReason ? "，还可以把越界的那几条转成一个独立任务" : ""}。`);
   bus.publish({ type: "task.review", taskId });
   return { runId: run.id, round: run.currentRound };
 }
@@ -211,7 +211,7 @@ function summarize(reason: string): string {
 /**
  * 「按意见修复」= 维持审查意见（幂等，没有待裁定的驳回时空转）。
  *
- * 两个入口都经这一处：用户可以点「维持并修复」，也可以直接点那颗老的「按意见修复」。
+ * 两个入口都经这一处：用户可以点「让它接着改」，也可以直接点那颗老的「按意见修复」。
  * 不在第二个入口上记裁定的话，驳回会一直挂着「等你裁定」——而用户其实已经用行动
  * 裁定过了，界面却还在催他做一件已经做完的事。
  */
@@ -289,8 +289,10 @@ export async function resolveFreeReviewDispute(
     .set({ disputeResolution: resolution, disputeResolvedAt: at, disputeResolutionNote: note })
     .where(eq(freeReviewRounds.id, open.round.id));
   await appendTaskTimeline(taskId, (resolution === "withdrawn"
-    ? `你裁定采纳执行者的说法：第 ${open.run.currentRound} 轮的未通过意见不再要求修复（报告与证据原样保留，审查结论本身不改写）。`
-    : `你裁定维持第 ${open.run.currentRound} 轮审查意见：执行者需要照报告修复。`)
+    ? `你裁定第 ${open.run.currentRound} 轮的未通过意见不用改了（采纳执行者的说法，报告与证据原样保留，审查结论本身不改写）。`
+    // 写了要点时不能只说「照报告修复」：用户写要点，多半正是因为要改的不是报告那版。
+    : `你裁定让执行者接着改第 ${open.run.currentRound} 轮的意见（维持审查意见，未采纳驳回）：` +
+      `${note ? "按你写的要点和报告修复" : "照报告修复"}。`)
     // 时间线只放摘要，全文留在那一轮的审查记录里（时间线不是正文的第二个家）。
     + (note ? `你写下的裁定要点：${summarize(note)}` : ""));
   bus.publish({ type: "task.review", taskId });

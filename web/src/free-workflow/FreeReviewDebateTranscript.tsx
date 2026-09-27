@@ -1,5 +1,5 @@
-import type { FreeReviewDebate } from "@ash/shared";
-import { SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import type { FreeReviewDebate, FreeReviewDebateTurn } from "@ash/shared";
+import { Quotes, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { DEBATE_SIDE_LABEL, debateStatusText, debateTotalSegments } from "./debateModel.ts";
@@ -18,6 +18,7 @@ export function FreeReviewDebateTranscript({
   ordinal = null,
   variant = "panel",
   action,
+  onQuote,
 }: {
   debate: FreeReviewDebate;
   /** 同一条驳回上辩过多次时的第几次（只有一次就传 null，不摆序号）。 */
@@ -25,6 +26,17 @@ export function FreeReviewDebateTranscript({
   variant?: "panel" | "reading";
   /** 卡头右边挂的东西（面板里是「全宽阅读」，阅读态里没有）。 */
   action?: ReactNode;
+  /**
+   * 「把这一段拿去当裁定要点」。传了才出现——只有驳回卡上那份回放能裁定，时间线和
+   * 全宽阅读态是只读的。
+   *
+   * 为什么值得给一颗按钮：辩论最有用的产物往往就是某一段里的具体方案（审查者收尾那段
+   * 通常直接写着「我建议你现在怎么裁定」），而用户要做的就是把它交给执行者去做。没有
+   * 这颗按钮时那是一次跨面板的手动复制粘贴，用户 2026-09-27 反馈「想把这段直接给后面
+   * 执行，不知道该点哪个按钮」。每段都给而不是只给收尾段：执行者那几段里也可能有「就
+   * 按我说的这个办法改」，只许引用一方等于替用户挑了立场。
+   */
+  onQuote?: (turn: FreeReviewDebateTurn) => void;
 }) {
   const total = debateTotalSegments(debate);
   return (
@@ -42,6 +54,11 @@ export function FreeReviewDebateTranscript({
               <em>第 {turn.seq}/{total} 段{turn.seq === total ? " · 收尾" : ""}</em>
               {turn.status === "speaking" && <SpinnerGap size={10} className="is-spinning" />}
               {turn.status === "error" && <WarningCircle size={10} weight="fill" />}
+              {onQuote && turn.statement && (
+                <button type="button" className="free-review-debate__quote" onClick={() => onQuote(turn)}>
+                  <Quotes size={10} weight="fill" aria-hidden="true" />用这段作要点
+                </button>
+              )}
             </span>
             {turn.statement
               ? <MarkdownBody text={turn.statement} />

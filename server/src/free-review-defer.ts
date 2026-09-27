@@ -95,7 +95,7 @@ export async function deferOpenDispute(
   if (!deferReason) {
     throw new Error(
       "执行者没有提出「这几条超出本任务边界」，不能转成独立任务；" +
-      "要让它不改就用「采纳执行者说法」，要让它照改就用「维持审查意见」",
+      "要让它不改就用「这一轮不用改了」，要让它照改就用「让它接着改」",
     );
   }
   if (!tryAcquireFreeWorkflowAction(source.id)) throw new Error("当前已有自由工作流操作正在进行");

@@ -1,6 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
-import { ArrowsOutSimple, Gavel } from "@phosphor-icons/react";
-import { FreeReviewDebateReader } from "../free-workflow/FreeReviewDebateReader.tsx";
+import { ArrowsOutSimple, Gavel } from "@phosphor-icons/react";import { FreeReviewDebateReader } from "../free-workflow/FreeReviewDebateReader.tsx";
 import { FreeReviewDebateTranscript } from "../free-workflow/FreeReviewDebateTranscript.tsx";
 import { DEBATE_SIDE_LABEL, debateTotalSegments, debateVerdictBadge } from "../free-workflow/debateModel.ts";
 import type { ConversationDebateRow } from "./conversationDebateRows.ts";
@@ -44,8 +43,18 @@ function SegmentStrip({ row }: { row: ConversationDebateRow }) {
  * CLI 回合里随口说的那句话——照对话渲染会得到一边完整长文、一边一句「本段发言已提交」，
  * 看上去像只有一方在讨论（用户 2026-09-24 报的）。配不到落盘记录时（只读视图没传
  * reviews、或快照还没跟上）退回原始行，宁可啰嗦也不凭空少掉一段。
+ *
+ * `onResolve` 是辩完之后的出口。辩论是**为了裁定**才开的，读完就该能当场决定；没有它
+ * 时用户得往上翻回那条「执行者驳回了…」的旁注去点「去裁定」（用户 2026-09-27 反馈
+ * 「辩论里没有任何按钮能快捷操作」）。和那条旁注上的按钮同一个动作、同一个去处——都
+ * 只把人送到审查面板那张卡跟前，四个出口各带各的确认框和说明，复制一份必然漂成两套
+ * 说法。挂不挂由调用方按「此刻真有一条待裁定的驳回、且就是这场辩论辩的那条」决定。
  */
-export function DebateLane({ row, fallback }: { row: ConversationDebateRow; fallback: ReactNode }) {
+export function DebateLane({ row, fallback, onResolve }: {
+  row: ConversationDebateRow;
+  fallback: ReactNode;
+  onResolve?: () => void;
+}) {
   const [collapsed, setCollapsed] = useState(true);
   const [reading, setReading] = useState(false);
   const bodyId = useId();
@@ -81,6 +90,11 @@ export function DebateLane({ row, fallback }: { row: ConversationDebateRow; fall
           >
             {collapsed ? "展开" : "收起"}
           </button>
+          {onResolve && (
+            <button type="button" className="debate-lane-resolve" onClick={onResolve}>
+              <Gavel size={11} weight="fill" aria-hidden="true" />去裁定
+            </button>
+          )}
         </span>
       </header>
       <div className="debate-lane-body" id={bodyId} hidden={collapsed}>
