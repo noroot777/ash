@@ -25,24 +25,42 @@
 // 「暂且是我的」撑不起**不可逆**的动作 —— 第 9 轮审查把正主的应答延到 30 秒,副本在那之前就
 // 让作业成功了:脚本填进输入框、通知也发了,撤回只能改状态,填进去的东西收不回来。所以所有权
 // 分两档,`assistClaimSettled` 就是这条线:
-//   · click(这一页自己点的按钮)/ lease(浏览器仲裁的租约)→ **站得住**,成功就直接填
+//   · click(这一页自己点的按钮)/ lease(浏览器仲裁的租约)/ handoff(刷新时自己给自己的接力凭据)
+//     → **站得住**,成功就直接填
 //   · provisional(降级路上靠静默超时暂且认下的)→ 只够只读地跟进度;作业成功时不许动输入框,
 //     把脚本摆出来让用户自己拍板(PreviewAiAssist 的 offered)。等待多久都换不来确认,那就别等
-// 「这一页自己点过按钮」是**副本复制不走的**证据:它只活在这一份文档的内存里,所以裸 http 上
-// 正常那一路(点一下、等它跑完、自动填上)一点没变,降级只落在「刷新过、或者是复制出来的页面」。
+//
+// handoff 这一档是第 10 轮审查补的:「刷新」和「复制」压根不是一回事 —— 刷新是**顺序交接**
+// (旧文档先死,新文档才活),复制是**并发分身**(来源页面一直活着)。所以走的那一份可以在
+// `pagehide` 里给自己留一张一次性凭据(sessionStorage,见 takeHandoff):
+//   · 同一个标签刷新 → 新文档当场取走它 → 站得住,成功照旧自动填(裸 http 上刷新不再降级)
+//   · 复制 / window.open → 它那份快照是在来源页面**还活着**的时候拷走的,里面压根没有这张凭据,
+//     而且凭据是一次性的(取走即删),所以伪造不出来 —— 第 9 轮钉住的「副本不许填」一点没松
+// 「这一页自己点过按钮」同理是副本复制不走的证据:它只活在这一份文档的内存里。
 //
 // BroadcastChannel 不会把消息投回给发送方自己,所以「自己应答自己」这种事不会发生。
 const CHANNEL = "ash:preview-assist-claims";
 const LOCK = (projectId: string, claim: string) => `ash:preview-assist:${projectId}:${claim}`;
+const HANDOFF_KEY = (projectId: string) => `ash:preview-assist-handoff:${projectId}`;
+/** 接力凭据的有效期。刷新是一瞬间的事,给足加载时间就够;过期只是退回「摆出来让用户拍板」。 */
+const HANDOFF_MS = 60_000;
 /** 这一页的身份。只活在内存里 —— sessionStorage 里的东西会被复制,这个不会。 */
 const PAGE = `page-${Math.random().toString(36).slice(2, 10)}`;
 
 type Note =
   | { kind: "ask"; projectId: string; claim: string }
-  | { kind: "held"; projectId: string; claim: string; since: number; page: string };
+  | {
+    kind: "held";
+    projectId: string;
+    claim: string;
+    since: number;
+    page: string;
+    /** 报一声的这一份站不站得住:站得住的压得过「暂且认下的」,跟谁先谁后无关。 */
+    settled: boolean;
+  };
 
 /** 所有权是怎么来的 —— 决定它撑不撑得起「直接改用户的输入框」。见文件头。 */
-export type AssistClaimSource = "click" | "lease" | "provisional";
+export type AssistClaimSource = "click" | "lease" | "handoff" | "provisional";
 
 interface Hold {
   claim: string;
@@ -105,6 +123,14 @@ function channel(): BroadcastChannel | null {
     }
     const held = holds.get(note.projectId);
     if (held?.claim !== note.claim) return;
+    // **站得住的那一份压得过「暂且认下的」,跟谁先谁后无关** —— 正主刷新之后 since 反而更晚
+    // （新文档刚起来），按先后比就会把它判给还活着的那份副本（第 10 轮审查）。
+    const mineSettled = held.source !== "provisional";
+    if (note.settled !== mineSettled) {
+      if (note.settled) surrender(note.projectId);
+      else announce(note.projectId); // 我站得住 → 反过来让它交出去
+      return;
+    }
     // **迟到的应答照样算数**:已经认领过了也要交出去(第 8 轮审查:原来等待项一超时就删,
     // 迟到那句话谁都不认,副本从此永久占着所有权)。谁先拿住谁算,同毫秒按页面 id 定。
     if (note.since < held.since || (note.since === held.since && note.page < PAGE)) surrender(note.projectId);
@@ -115,7 +141,12 @@ function channel(): BroadcastChannel | null {
 
 function announce(projectId: string): void {
   const held = holds.get(projectId);
-  if (held) channel()?.postMessage({ kind: "held", projectId, claim: held.claim, since: held.since, page: PAGE } satisfies Note);
+  if (held) {
+    channel()?.postMessage({
+      kind: "held", projectId, claim: held.claim, since: held.since, page: PAGE,
+      settled: held.source !== "provisional",
+    } satisfies Note);
+  }
 }
 
 /** 交出所有权:登记抹掉,再让订阅者把本地追踪和界面改回「别人的作业」。 */
@@ -144,8 +175,8 @@ export function holdAssistClaim(projectId: string, claim: string | null, source:
   if (!claim) { holds.delete(projectId); return; }
   if (holds.get(projectId)?.claim === claim) return; // 每一拍轮询都会调一次，别重复登记和广播
   holds.set(projectId, { claim, since: Date.now(), source });
-  // 站得住的来路只记一次、也不随登记一起放掉（见 settled 的注释）。
-  if (source !== "provisional") settled.add(settledKey(projectId, claim));
+  // 站得住的来路只记一次、也不随登记一起放掉（见 settled 的注释）；同时挂上刷新时的接力钩子。
+  if (source !== "provisional") { settled.add(settledKey(projectId, claim)); armHandoff(); }
   void grabLock(projectId, claim);
   // 主动报一声:两份副本同时恢复、谁都没来得及应答谁的那一种，就靠这一声分出先后。
   announce(projectId);
@@ -154,9 +185,9 @@ export function holdAssistClaim(projectId: string, claim: string | null, source:
 /**
  * 这份所有权**站不站得住**:站得住才允许动用户的输入框。
  *
- * 只有「这一页自己点的按钮」和「浏览器仲裁的租约」算站得住；降级路上靠静默超时暂且认下的那一
- * 档不算 —— 等多久都换不来确认，而填进输入框和那句「脚本已填入」都收不回来（第 9 轮审查：
- * 正主应答延到 30 秒，副本在撤回之前已经把脚本填了）。
+ * 站得住的三种来路:这一页自己点的按钮、浏览器仲裁的租约、刷新时自己给自己的接力凭据。降级路上
+ * 靠静默超时暂且认下的那一档不算 —— 等多久都换不来确认，而填进输入框和那句「脚本已填入」都
+ * 收不回来（第 9 轮审查：正主应答延到 30 秒，副本在撤回之前已经把脚本填了）。
  */
 export function assistClaimSettled(projectId: string, claim: string): boolean {
   return settled.has(settledKey(projectId, claim));
@@ -175,7 +206,62 @@ export async function claimAssistOwnership(projectId: string, claim: string): Pr
     if (byLock) holdAssistClaim(projectId, claim, "lease");
     return byLock;
   }
+  // 没有 Web Locks:先看这一页刷新时给自己留的那张一次性凭据 —— 副本伪造不出来(见文件头)。
+  if (takeHandoff(projectId, claim)) { holdAssistClaim(projectId, claim, "handoff"); return true; }
   return askAround(projectId, claim);
+}
+
+const session = (): Storage | undefined => {
+  try { return globalThis.sessionStorage; } catch { return undefined; } // 隐私模式会抛
+};
+
+/** 走之前留下的那张凭据:只给站得住的那一档发,而且只此一份。 */
+function writeHandoff(projectId: string, claim: string): void {
+  try { session()?.setItem(HANDOFF_KEY(projectId), JSON.stringify({ claim, at: Date.now() })); } catch { /* 隐私模式 */ }
+}
+const dropHandoff = (projectId: string): void => {
+  try { session()?.removeItem(HANDOFF_KEY(projectId)); } catch { /* 隐私模式 */ }
+};
+
+/**
+ * 取走凭据(一次性)。在，就说明「这一页刷新过，而且刷新之前它就是站得住的那个正主」。
+ *
+ * 取走即删是这套东西站得住的关键:留着的话，之后从这一页复制出去的标签会把它一起拷走，
+ * 那就等于给副本开了后门。
+ */
+function takeHandoff(projectId: string, claim: string): boolean {
+  const store = session();
+  if (!store) return false;
+  let raw: string | null = null;
+  try { raw = store.getItem(HANDOFF_KEY(projectId)); } catch { return false; }
+  if (!raw) return false;
+  dropHandoff(projectId);
+  try {
+    const baton = JSON.parse(raw) as { claim?: unknown; at?: unknown };
+    return baton?.claim === claim && typeof baton.at === "number" && Date.now() - baton.at < HANDOFF_MS;
+  } catch { return false; }
+}
+
+let armed = false;
+/** 挂上「这一页要走了」的钩子:站得住的所有权第一次落地时挂一次就够。 */
+function armHandoff(): void {
+  if (armed || typeof globalThis.addEventListener !== "function") return;
+  armed = true;
+  const wrote = new Set<string>();
+  // pagehide 而不是 unload/beforeunload:刷新、关掉、跳走都会走到它，而且它是现在推荐的那一个。
+  globalThis.addEventListener("pagehide", () => {
+    for (const [projectId, held] of holds) {
+      if (held.source === "provisional") continue; // 暂且认下的那一档不配发凭据
+      writeHandoff(projectId, held.claim);
+      wrote.add(projectId);
+    }
+  });
+  // 进了 bfcache 又被恢复:文档没换过，凭据没人消费。留着它等于给之后复制出去的标签留了个后门。
+  globalThis.addEventListener("pageshow", (event) => {
+    if (!(event as PageTransitionEvent).persisted) return;
+    for (const projectId of wrote) dropHandoff(projectId);
+    wrote.clear();
+  });
 }
 
 /** 拿锁:true=拿到了,false=别的活文档拿着,null=这个环境没有 Web Locks(走降级路)。 */

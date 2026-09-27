@@ -27,7 +27,9 @@
 //   ⑭ 没有 Web Locks 的环境（裸 http 的局域网地址不是安全上下文）只能点名，那就必须**可撤回**：
 //      正主的应答迟到 800ms，副本先认了领，迟到那句话一到就得当场交出去；
 //   ⑮ 同一档里顺序反过来（作业先成功、确认后到）→ 「暂且算我的」撑不起不可逆的动作：成功时只许
-//      把脚本摆出来让用户拍板，不许自己填（填进去和那句「已填入」都收不回来）。正主那一路照旧自动填。
+//      把脚本摆出来让用户拍板，不许自己填（填进去和那句「已填入」都收不回来）。正主那一路照旧自动填；
+//   ⑯ 同一档里**同一个标签自己刷新**（顺序交接，不是复制出来的分身）→ 照旧是正主，成功就直接填；
+//      刷新后又自己改过输入框的，仍旧不覆盖，但原因得说成「你改过」而不是「归属没能确认」。
 //
 // 服务端那份是假的（fixture 里几个模块级变量），这里测的是前端这一侧的判断：什么时候轮询、
 // null 该读成哪一种、填还是不填。
@@ -406,6 +408,7 @@ try {
   await owner.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}-lan`);
   const ownerScript = owner.getByRole("textbox", { name: "启动脚本", exact: true });
   const ownerProgress = owner.locator(".preview-assist-progress");
+  const ownerNotices = async () => JSON.parse(await owner.getByTestId("notices").textContent());
   await ownerScript.waitFor();
   await ownerScript.fill("# 局域网正主：等 AI 自己填上来");
   await owner.getByRole("button", { name: "AI 协助填写" }).click();
@@ -450,9 +453,89 @@ try {
   assert.deepEqual((await earlyNotices()).filter((line) => line.includes("脚本已填入")), [], "没填就不该提示填入");
   assert.deepEqual(earlyErrors, [], "副本页不应产生运行时异常");
   assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
+  await early.close();
+
+  // ⑯ 还是这一档（没有 Web Locks），但这次是**同一个标签自己刷新**：刷新是顺序交接（旧文档先死
+  //    才有新文档），不是复制出来的分身，所以它照旧是正主 —— 成功就直接填，不该退化成「再点一次
+  //    用这条替换」（第 10 轮审查：我上一轮把刷新和复制归成了一档，裸 http 上刷新之后就不自动填了）。
+  await ownerScript.fill("# 刷新之前：等 AI");
+  await owner.getByRole("button", { name: "AI 协助填写" }).click();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await owner.reload();
+  await ownerScript.waitFor();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  assert.equal(await owner.evaluate(() => navigator.locks === undefined), true, "这一条测的还是没有 Web Locks 那一档");
+  const filledBeforeReload = (await ownerNotices()).filter((line) => line.includes("脚本已填入")).length;
+  await owner.getByTestId("assist-succeed").click();
+  await owner.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
+  assert.equal(await editorText(ownerScript), "npm run dev -- --port $PORT", "同一个标签刷新过，成功了照旧直接填");
+  assert.match(await ownerProgress.innerText(), /保存预览设置/, "填完要说清还得点保存");
+  assert.doesNotMatch(await ownerProgress.innerText(), /归属没能确认/, "自己刷新的标签不是会话副本，别把它当副本");
+  assert.equal((await ownerNotices()).filter((line) => line.includes("脚本已填入")).length, filledBeforeReload + 1,
+    "填了就该提示一次");
+
+  // ⑯b 刷新之后**又自己动过**输入框：那就仍旧不许静默覆盖（第 2 轮定下的），但话要说准 ——
+  //     是「你改过」，不是「归属没能确认」。
+  await ownerScript.fill("# 刷新之前：等 AI（第二发）");
+  await owner.getByRole("button", { name: "AI 协助填写" }).click();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await owner.reload();
+  await ownerScript.waitFor();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  const afterReload = "# 刷新后继续等待";
+  await ownerScript.fill(afterReload);
+  await owner.getByTestId("assist-succeed").click();
+  await ownerProgress.getByText("你在这期间改过", { exact: false }).waitFor();
+  assert.equal(await editorText(ownerScript), afterReload, "刷新后手写的内容照样不许被顶掉");
+  assert.doesNotMatch(await ownerProgress.innerText(), /归属没能确认/, "这一档的原因是「你改过」，不是归属没定");
+  assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
+
+  // ⑯c 两套机制碰头：副本已经「暂且认领」了，正主才刷新回来。站得住的那一份必须压得过暂且认下的
+  //     —— 按「谁先拿住」比就会判错，因为刷新后的新文档 since 反而更晚。
+  await ownerScript.fill("# 刷新前：等 AI（第三发）");
+  await owner.getByRole("button", { name: "AI 协助填写" }).click();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await owner.evaluate(() => {
+    const post = BroadcastChannel.prototype.postMessage;
+    BroadcastChannel.prototype.postMessage = function (note) {
+      if (note && typeof note === "object" && note.kind === "held") return undefined;
+      return post.call(this, note);
+    };
+  });
+  const [rival] = await Promise.all([
+    lanContext.waitForEvent("page"),
+    owner.evaluate(() => { window.open(location.href, "_blank"); }),
+  ]);
+  const rivalErrors = [];
+  rival.on("pageerror", (failure) => rivalErrors.push(failure.message));
+  await rival.waitForLoadState();
+  const rivalScript = rival.getByRole("textbox", { name: "启动脚本", exact: true });
+  const rivalProgress = rival.locator(".preview-assist-progress");
+  const rivalNotices = async () => JSON.parse(await rival.getByTestId("notices").textContent());
+  await rivalScript.waitFor();
+  await rivalProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  assert.equal(await rivalProgress.getByText("别的页面点的", { exact: false }).count(), 0, "它这时确实暂且认了领");
+  const rivalBefore = await editorText(rivalScript);
+  // 正主刷新回来（patch 随文档一起没了）：凭据在它手里，所有权该回到它身上
+  await owner.reload();
+  await ownerScript.waitFor();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await rivalProgress.getByText("别的页面点的", { exact: false }).waitFor();
+  await owner.getByTestId("assist-succeed").click();
+  await owner.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
+  await rivalProgress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
+  await rival.waitForTimeout(1500);
+  assert.equal(await editorText(rivalScript), rivalBefore, "被顶回去的那一页不许改自己的输入框");
+  assert.deepEqual((await rivalNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
+  assert.deepEqual(rivalErrors, [], "副本页不应产生运行时异常");
+  assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
   await lanContext.close();
 
-  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims, silent owner still owns, late answer revokes, provisional claim never fills)");
+  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims, silent owner still owns, late answer revokes, provisional claim never fills, same-tab reload keeps filling, reloaded owner outranks provisional copy)");
 } finally {
   await browser?.close();
   await server.close();
