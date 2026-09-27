@@ -246,6 +246,11 @@ function Fixture() {
         <button type="button" data-testid="assist-drop-post-succeeded" onClick={() => { assistDropNextPost = "succeeded"; }}>
           假装断线前已经成功
         </button>
+        {/* 别处（另一个页面、另一个人）点的那一份正在跑：这台浏览器从没点过，本地没有任何追踪。
+            它必须一路只读到底 —— 连它成功之后都不许动输入框（第 4 轮审查复现）。 */}
+        <button type="button" data-testid="assist-foreign-running" onClick={() => { nextAssistSeq(); setAssist(assistJob({})); }}>
+          假装别处正在跑
+        </button>
         <button
           type="button"
           data-testid="assist-succeed"

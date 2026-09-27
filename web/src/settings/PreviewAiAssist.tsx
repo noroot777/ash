@@ -91,9 +91,14 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       // 过的,都会被下一次挂载照样读到一遍(第 3 轮审查:用户保留并保存了自己手写的脚本,十
       // 分钟内刷一下页面,旧的 AI 结果又被填回输入框,再点保存就把刚存的改回去了)。
       mine.current = !!trace && (trace.jobId === result.job.jobId || !trace.jobId);
-      // 跑着就记住身份，落终态就把记录删掉 —— 留着的话，服务端 10 分钟后清掉终态，
-      // 同一个 null 会被下面读成「出事了」。
-      if (result.job.status === "running") traceAssistJob(projectId, result.job, result.instance);
+      // 本地这条追踪**只许记我们自己那份、而且还在跑的作业**，其余一切情形都把它抹掉：
+      //   · 我们的、跑着 → 每拍都刷（轮次跟着走，中断那句话才说得出第几轮）
+      //   · 我们的、落终态 → 抹掉：留着的话服务端 10 分钟后清掉终态，同一个 null 会被下面读成「出事了」
+      //   · 别处点的那份 → **一个字都不能记**。记下去，下一拍就凭「jobId 对上了」把它认成自己点的，
+      //     然后照样去动用户的输入框（第 4 轮审查复现：同事在跑，你只是打开了这个页面，你已经保存
+      //     的脚本就被换掉了）。同时我们手上那条也作废了 —— 一个项目同时只有一份作业在跑，服务端
+      //     既然报的是别人那份，我们那份已经不在了。
+      if (mine.current && result.job.status === "running") traceAssistJob(projectId, result.job, result.instance);
       else forgetAssistTrace(projectId);
       // 刷新过页面、但作业还在跑：这一刻框里是什么就拿它当基准,用户接着在这几分钟里写的
       // 东西照样受保护(否则 startedWith 一直是空的,成功时按「没动过」直接覆盖)。
@@ -272,7 +277,7 @@ function PreviewAssistProgress({ job, offered, applied, onTakeOffered, onKeepMin
       已按你的选择<b>保留你自己写的那条</b>：上面输入框一个字都没动，它没有经过 ash 试跑。AI 真起来过的是这一条，要换就把它复制过去：
     </p><pre className="preview-assist-script">{job.script}</pre></>}
     {job.status === "succeeded" && applied === "shown" && <><p className="preview-assist-verdict">
-      这条结果不是这个页面点出来的（AI 协助的结果在服务端留 10 分钟），所以<b>没有动上面输入框里的内容</b>。要用它就把下面这条复制过去，或者自己再点一次「AI 协助填写」：
+      这条结果不是这个页面点出来的（别的页面点的，或者上一次留下的——服务端把结果留 10 分钟），所以<b>没有动上面输入框里的内容</b>。要用它就把下面这条复制过去，或者自己再点一次「AI 协助填写」：
     </p><pre className="preview-assist-script">{job.script}</pre></>}
     {/* 用户在这几分钟里自己写了东西、或者压根没看见这次跑：他手上那份留着，AI 这条摆出来由他
         挑。静默覆盖等于把人家刚敲的几行删了，而那几行不在任何一个撤销栈里（第 2 轮审查）。 */}
