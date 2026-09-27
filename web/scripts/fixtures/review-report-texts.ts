@@ -12,6 +12,8 @@ import {
   problemAtBoundary,
   hiddenDeepProblem,
   softDeniedVerdict,
+  pendingAcceptance,
+  englishVerdict,
 } from "./review-report-contradiction-texts.ts";
 
 
@@ -629,4 +631,6 @@ export {
   problemAtBoundary,
   hiddenDeepProblem,
   softDeniedVerdict,
+  pendingAcceptance,
+  englishVerdict,
 };

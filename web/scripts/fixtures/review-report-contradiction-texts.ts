@@ -114,10 +114,50 @@ const softDeniedVerdict = `## 结论
 改名只写了内存里的那份、刷新就回退，这一条还没修。
 `;
 
+// 复审第 3 轮：主句里搜子串还是搜子串。「测试通过」讲的是测试的状态、不是验收决定，
+// 「尚待人工验收」把话说得更明白——可整段里躺着一个「通过」，于是曾经照判契约。
+const pendingAcceptance = `## 结论
+
+**能不能验收**：测试通过，尚待人工验收。
+
+**现在什么能用了**：页面可以打开。
+
+**必须修的问题**：
+
+没有发现问题
+
+**不拦验收、但你该知道的**：没有。
+
+## 技术明细
+
+保存后内容仍可能消失，需确认后再验收。
+`;
+
+// 收紧的另一侧：这一份**该折叠**。主句是一句明确的 `verified`，`no blockers` 是它的理由
+// 不是反悔。判据收紧时最容易顺手把这种写法一起拒掉，那样折叠里的技术记录会重新铺满首屏。
+const englishVerdict = `## 结论
+
+**能不能验收**：verified — no blockers
+
+**现在什么能用了**：页面可以打开。
+
+**必须修的问题**：
+
+没有发现问题
+
+**不拦验收、但你该知道的**：没有。
+
+## 技术明细
+
+\`npm -w @ash/web test\` 退出 0；临时服务已停，无残留监听。
+`;
+
 export {
   contradictoryNone,
   contradictoryUncounted,
   problemAtBoundary,
   hiddenDeepProblem,
   softDeniedVerdict,
+  pendingAcceptance,
+  englishVerdict,
 };

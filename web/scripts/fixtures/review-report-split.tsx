@@ -38,6 +38,8 @@ import {
   problemAtBoundary,
   hiddenDeepProblem,
   softDeniedVerdict,
+  pendingAcceptance,
+  englishVerdict,
 } from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
@@ -166,6 +168,14 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="soft-denied-fixture markdown-report-body">
       <ReviewReportBody text={softDeniedVerdict} reportKey="run-29:1" />
+    </div>
+    {/* 复审第 3 轮的一对：判定还没作出（「测试通过，尚待人工验收」）必须铺开，
+        判定明确作出了（`verified — no blockers`）照旧折叠——收紧不许把这一种也收掉。 */}
+    <div className="pending-acceptance-fixture markdown-report-body">
+      <ReviewReportBody text={pendingAcceptance} reportKey="run-30:1" />
+    </div>
+    <div className="english-verdict-fixture markdown-report-body">
+      <ReviewReportBody text={englishVerdict} reportKey="run-31:1" />
     </div>
     <div className="six-switch-fixture markdown-report-body">
       <SwitchableSix />

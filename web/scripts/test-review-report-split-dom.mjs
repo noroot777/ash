@@ -524,6 +524,7 @@ try {
     ["分界标题就是问题", ".problem-at-boundary-fixture", /保存后内容会全部消失/],
     ["问题藏在更深一层", ".hidden-deep-problem-fixture", /保存后内容会全部消失/],
     ["判定写成不建议通过", ".soft-denied-fixture", /改名只写了内存里的那份/],
+    ["判定还没作出", ".pending-acceptance-fixture", /保存后内容仍可能消失/],
   ]) {
     const box = page.locator(selector);
     assert.match(
@@ -538,6 +539,25 @@ try {
     );
     assert.equal(await box.locator(".review-report-detail").count(), 0, `${what}：这一档整篇铺开`);
   }
+
+  // 收紧的另一侧同样得盯住：主句是一句明确的 `verified`、`no blockers` 只是它的理由，
+  // 这一份该照旧折叠。判据收紧时顺手把它一起拒掉，折叠里的技术记录就重新铺满首屏了。
+  const englishVerdictBox = page.locator(".english-verdict-fixture");
+  assert.match(
+    await englishVerdictBox.locator(".task-markdown").first().innerText(),
+    /no blockers/,
+    "结论留在首屏",
+  );
+  assert.equal(
+    await englishVerdictBox.getByRole("button", { name: /技术明细/ }).count(),
+    1,
+    "明确作出的肯定判定照旧折叠技术明细",
+  );
+  assert.doesNotMatch(
+    await englishVerdictBox.locator(".task-markdown").first().innerText(),
+    /退出 0/,
+    "技术记录默认不在首屏",
+  );
 
   console.log("review report split dom ok");} finally {
   await browser?.close();
