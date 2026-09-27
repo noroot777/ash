@@ -203,7 +203,7 @@ export function provesContract(
     if (hidesProblem(root, probes, tail)) return null;
     return { kind: "contract" };
   }
-  if (!items.every((item) => writesProblem(root, probes, item.at, item.depth, aside.at))) return null;
+  if (!items.every((item) => writesProblem(root, item.at, item.depth, aside.at))) return null;
   if (declared === null) return null;
   if (declared === items.length) {
     const sixth = items[SUMMARY_ITEMS];
@@ -330,9 +330,21 @@ const REVOKED = /~~|❌|❎|✗|✘|🚫|\[\s*\]|☐|▢/u;
  * 算可剥装饰，两个都在匹配之前就没了，送进白名单的只剩一句裸的肯定。跟 `REVOKED` 一样
  * 得先于切段判断——切段会把它们当分隔符吃掉。
  *
- * 句号、破折号、逗号不在这里：它们不改变判定的语气。
+ * 句号不在这里：它不改变判定的语气。逗号和破折号另说——它们**结束不了句子**，由
+ * `UNFINISHED` 管。
  */
-const HEDGED = /[?？]|…|\.{3,}|。{2,}/u;
+const HEDGED = /[?？]|…/u;
+/**
+ * 这句判定**没说完**——最后一个字符还等着下文。
+ *
+ * 第 7 轮的反例：`可以验收：`、`verified —`、`pass;`、`可以验收，`、`可以验收（`、
+ * `verified..`、`verified. . .`。这些标点全是 `CLAUSE_SPLIT` 的分隔符，切完只剩一句裸的
+ * 肯定，空段又被过滤掉，于是一句话说到一半也算数。
+ *
+ * 放行的只有**把句子结束掉**的那几个：句号（中英文各一个）、叹号，或者干脆不写标点。
+ * 连着两个以上的点是省略号的另一种写法，归「没说完」。
+ */
+const UNFINISHED = /[，,、；;：:—–·/|\\（(【\[{]\s*$|(?:\.\s*){2,}$|(?:。\s*){2,}$/u;
 /** 开头的「已勾选」记号：剥掉它跟没写是一个意思。空框不在这里——那是 `REVOKED`。 */
 const CHECKED = /^\s*\[\s*[xX✓✔]\s*\]\s*/u;
 /**
@@ -356,7 +368,7 @@ function admitsAcceptance(probes: string[], verdict: Column, works: Column): boo
     .replace(CHECKED, "");
   // 划掉的、打叉的、没勾的、在问的、没说完的，都先于一切判断——后面的切段会把方括号和
   // 问号当分隔符，到那一步就没了。
-  if (REVOKED.test(body) || HEDGED.test(body)) return false;
+  if (REVOKED.test(body) || HEDGED.test(body) || UNFINISHED.test(body.trimEnd())) return false;
   const parts = body
     .split(CLAUSE_SPLIT)
     .map(trimMarks)
@@ -391,7 +403,7 @@ function hidesProblem(root: Parsed, probes: string[], tail: number): boolean {
     if (node.type !== "heading" || node.depth < 2 || !node.position) continue;
     const at = node.position.start.line - 1;
     if (at < tail) continue;
-    if (writesProblem(root, probes, at, node.depth, probes.length)) return true;
+    if (writesProblem(root, at, node.depth, probes.length)) return true;
   }
   return false;
 }
@@ -472,13 +484,49 @@ function spillsOver(
  * 契约给每条问题定死的三行（`server/src/review-report-format.ts`：「每条一个小标题，固定
  * 三行」）：第一行「你会遇到」写现象，第二行「为什么」讲机制，第三行「建议怎么修」。
  *
- * 比对前先把加粗记号去掉，所以三种真实写法一次认全：加粗写不写、冒号在加粗里还是外面、
- * 前面带不带列表符号。**冒号后面必须真有字**——`你会遇到：` 后面空着是模板占位，不是
- * 一条问题。
+ * 比对的是**渲染出来的那行字**（`visibleLines`），不是源码，所以三种真实写法一次认全：
+ * 加粗写不写、冒号在加粗里还是外面、前面带不带列表符号。剩下的 `**` 还得去掉一遍——
+ * `**你会遇到：**导出的还是上一版。` 这种写法里 `**` 闭合不了，原样留在可见文本里。**冒号后面必须真有字**——`你会遇到：` 后面空着是模板占位，`你会遇到：[](#x)`
+ * 页面上同样一个字都没有（第 7 轮），两种都不是一条问题。
  */
 const PROBLEM_LINES = ["你会遇到", "为什么", "建议怎么修"].map(
   (mark) => new RegExp(`^ {0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)?\\s*${mark}\\s*[：:]\\s*\\S`),
 );
+
+/**
+ * 这段行号范围里，每一行**渲染出来是什么字**。
+ *
+ * 第 7 轮的反例：`你会遇到：[](#symptom)`。源码里冒号后面确实有字符，页面上却只有一个
+ * 空标签——三行占着位置，一个字都读不到。所以「冒号后有没有字」得问渲染结果，不能问源码。
+ *
+ * 只收 `text` 和 `inlineCode` 的内容，以及图片的 `alt`：链接、强调这些容器本身不出字，
+ * 出字的是它们里面的文本节点。HTML 注释、空链接、只有锚点的写法因此都读不到字，一律不
+ * 算一行说明——跟别处一样，认不出就降档。
+ */
+function visibleLines(root: Parsed, from: number, to: number): Map<number, string> {
+  const lines = new Map<number, string>();
+  const add = (at: number, text: string) => {
+    if (at < from || at >= to || text === "") return;
+    lines.set(at, (lines.get(at) ?? "") + text);
+  };
+  const walk = (node: ParsedNode) => {
+    if (!node.position) return;
+    const start = node.position.start.line - 1;
+    if (node.type === "text" || node.type === "inlineCode") {
+      node.value.split("\n").forEach((piece, index) => add(start + index, piece));
+      return;
+    }
+    if (node.type === "image") { add(start, node.alt ?? ""); return; }
+    if ("children" in node && Array.isArray(node.children)) for (const child of node.children) walk(child);
+  };
+  for (const node of root.children) {
+    if (node.type === "paragraph") walk(node);
+    else if (node.type === "list") {
+      for (const item of node.children) for (const child of item.children) if (child.type === "paragraph") walk(child);
+    }
+  }
+  return lines;
+}
 
 /**
  * 这段行号范围里，哪些行是**正文**——顶层段落，以及顶层列表直属项里的段落。
@@ -523,7 +571,7 @@ function proseLines(root: Parsed, from: number, to: number): Set<number> {
  *
  * 条目正文止于下一个同级或更浅的标题（同一栏里的下一条问题），最远到第四栏。
  */
-function writesProblem(root: Parsed, probes: string[], at: number, depth: number, until: number): boolean {
+function writesProblem(root: Parsed, at: number, depth: number, until: number): boolean {
   const sibling = root.children.find(
     (node) =>
       node.type === "heading" && node.depth <= depth && node.position
@@ -531,11 +579,12 @@ function writesProblem(root: Parsed, probes: string[], at: number, depth: number
   );
   const end = Math.min(until, sibling?.position ? sibling.position.start.line - 1 : until);
   const prose = proseLines(root, at + 1, end);
+  const visible = visibleLines(root, at + 1, end);
   let cursor = at + 1;
   for (const line of PROBLEM_LINES) {
     let hit = -1;
     for (let scan = cursor; scan < end; scan += 1) {
-      if (prose.has(scan) && line.test(probes[scan].replace(/\*\*/g, ""))) { hit = scan; break; }
+      if (prose.has(scan) && line.test((visible.get(scan) ?? "").replace(/\*\*/g, ""))) { hit = scan; break; }
     }
     if (hit < 0) return false;
     cursor = hit + 1;

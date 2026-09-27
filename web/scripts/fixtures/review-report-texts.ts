@@ -18,6 +18,8 @@ import {
   revokedVerdict,
   hedgedVerdict,
   narrowedScope,
+  unfinishedVerdict,
+  invisibleProblem,
 } from "./review-report-contradiction-texts.ts";
 
 
@@ -641,4 +643,6 @@ export {
   revokedVerdict,
   hedgedVerdict,
   narrowedScope,
+  unfinishedVerdict,
+  invisibleProblem,
 };

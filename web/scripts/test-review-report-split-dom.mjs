@@ -529,6 +529,8 @@ try {
     ["判定被划掉", ".revoked-verdict-fixture", /保存后内容仍可能消失/],
     ["判定是在问", ".hedged-verdict-fixture", /旧的保存问题仍未解决/],
     ["只排除了一类问题", ".narrowed-scope-fixture", /旧的保存问题仍未解决/],
+    ["判定没说完", ".unfinished-verdict-fixture", /旧的保存问题仍未解决/],
+    ["三行渲染不出字", ".invisible-problem-fixture", /保存后内容消失/],
   ]) {
     const box = page.locator(selector);
     assert.match(

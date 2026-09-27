@@ -44,6 +44,8 @@ import {
   revokedVerdict,
   hedgedVerdict,
   narrowedScope,
+  unfinishedVerdict,
+  invisibleProblem,
 } from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
@@ -195,6 +197,13 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="narrowed-scope-fixture markdown-report-body">
       <ReviewReportBody text={narrowedScope} reportKey="run-35:1" />
+    </div>
+    {/* 复审第 7 轮：一句没说完的判定，和一条三行都渲染不出字的「问题」。 */}
+    <div className="unfinished-verdict-fixture markdown-report-body">
+      <ReviewReportBody text={unfinishedVerdict} reportKey="run-36:1" />
+    </div>
+    <div className="invisible-problem-fixture markdown-report-body">
+      <ReviewReportBody text={invisibleProblem} reportKey="run-37:1" />
     </div>
     <div className="six-switch-fixture markdown-report-body">
       <SwitchableSix />
