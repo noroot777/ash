@@ -52,10 +52,10 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   /**
    * 成功了，但没敢直接覆盖：脚本摆在这儿等他自己决定要不要换。
    *
-   * 连「为什么没覆盖」一起记着 —— 这三种情形下用户面前的东西完全不同（一种是他自己刚敲的几行，
-   * 一种是他压根没看见这次跑，一种是这份作业的归属没能确认），话说错了他就没法判断该点哪颗。
+   * 连「为什么没覆盖」一起记着 —— 这两种情形下用户面前的东西完全不同（一种是他自己刚敲的几行，
+   * 一种是这份作业的归属没能确认），话说错了他就没法判断该点哪颗。
    */
-  const [offered, setOffered] = useState<{ script: string; reason: "edited" | "unwatched" | "unsettled" } | null>(null);
+  const [offered, setOffered] = useState<{ script: string; reason: "edited" | "unsettled" } | null>(null);
   // 成功之后**输入框到底怎么了**。卡片上的那句话只能照这个说 —— 「有没有待选脚本」推不出
   // 「填了没填」（第 3 轮审查：点完「保留我写的」，卡片照旧说「脚本已填进上面的输入框」，
   // 用户于是以为框里那条手写的是 ash 验证过的）。
@@ -160,21 +160,15 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   // 成功那一刻把脚本填上去。认 jobId 而不是认脚本内容：同一条脚本连着成功两次也该只填一次，
   // 而用户在这之后手工改过的内容不该被下一拍轮询再盖回来。
   //
-  // **动输入框是有门槛的**，四档往下让：
+  // **动输入框是有门槛的**，三档往下让：
   //   · 不是这台浏览器点的 → 只展示（第 3 轮审查：刷新一下就把旧结果盖回用户刚保存的脚本上）
-  //   · 是我们点的，但这条页面生命里没看着它开工（关着页面跑完的） → 摆出来让他自己挑
-  //   · 所有权只是「暂且算我的」（降级路静默超时给的那一档） → 同样摆出来：填进去就收不回来了
-  //   · 看着它开工、而且框里还是当初那份 → 直接填，这才是用户点那颗按钮想要的
+  //   · 所有权只是「暂且算我的」（降级路静默超时给的那一档） → 摆出来让他自己挑：填进去就收不回来了
+  //   · 所有权站得住、而且框里还是当初那份 → 直接填，这才是用户点那颗按钮想要的
   useEffect(() => {
     if (job?.status !== "succeeded" || !job.script || filled.current === job.jobId) return;
     filled.current = job.jobId;
     if (!mine.current) { setApplied("shown"); return; }
-    if (startedWith.current === null) {
-      setOffered({ script: job.script, reason: "unwatched" });
-      notify("AI 上一次真的把它起起来过；这个页面没看着它跑，所以没有直接覆盖输入框");
-      return;
-    }
-    // 所有权站不站得住是**填之前最后一道闸**：降级路上「没人应答」只是暂且算我的，正主的应答
+    // 所有权站不站得住是**填之前第一道闸**：降级路上「没人应答」只是暂且算我的，正主的应答
     // 可能在几十秒后才到 —— 而那时脚本早填进去了，撤回改得了状态，改不回用户的输入框
     // （第 9 轮审查复现：正主应答延到 30 秒，副本页在那之前就填了，还说「脚本已填入」）。
     if (!assistClaimSettled(projectId, job.claim)) {
@@ -182,6 +176,11 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       notify("AI 真的把它起起来过一次；这个页面的归属没能确认，所以没有直接覆盖输入框");
       return;
     }
+    // 站得住、却没有基准：**刷新的那一瞬作业刚好跑成**，这一页第一次问服务端就直接读到终态，
+    // 于是「点下去那一刻框里是什么」没人记过。拿现在框里这份当基准 —— 接班的是同一个标签，
+    // 它本来就该继续「跑成了就直接填」，而不是反过来要用户再点一次「用这条替换」
+    // （第 12 轮审查复现：刷新期间成功 → 明明是可信的接力，却被当成「没看着它跑」）。
+    if (startedWith.current === null) startedWith.current = current.current;
     // 跑之前那份还原封不动 → 直接填。动过了 → 不覆盖，把 AI 这条摆出来让他自己选。
     if (current.current !== startedWith.current) {
       setOffered({ script: job.script, reason: "edited" });
@@ -313,7 +312,7 @@ function PreviewAssistProgress({ job, offered, applied, foreign, onTakeOffered, 
   /** 这份作业是别的页面点的：照实显示进度，但要说清它不会动这里的输入框。 */
   foreign: boolean;
   /** 成功了但没敢直接覆盖：这条脚本等用户自己拍板，连带没覆盖的原因。 */
-  offered: { script: string; reason: "edited" | "unwatched" | "unsettled" } | null;
+  offered: { script: string; reason: "edited" | "unsettled" } | null;
   /** 成功之后输入框到底怎么了：填了 AI 的 / 留了手写的 / 一个字没动。 */
   applied: "filled" | "kept" | "shown" | null;
   onTakeOffered: () => void;
@@ -342,14 +341,12 @@ function PreviewAssistProgress({ job, offered, applied, foreign, onTakeOffered, 
     {job.status === "succeeded" && applied === "shown" && <><p className="preview-assist-verdict">
       这条结果不是这个页面点出来的（别的页面点的，或者上一次留下的——服务端把结果留 10 分钟），所以<b>没有动上面输入框里的内容</b>。要用它就把下面这条复制过去，或者自己再点一次「AI 协助填写」：
     </p><pre className="preview-assist-script">{job.script}</pre></>}
-    {/* 用户在这几分钟里自己写了东西、或者压根没看见这次跑：他手上那份留着，AI 这条摆出来由他
+    {/* 用户在这几分钟里自己写了东西、或者这一页的归属没能确认：他手上那份留着，AI 这条摆出来由他
         挑。静默覆盖等于把人家刚敲的几行删了，而那几行不在任何一个撤销栈里（第 2 轮审查）。 */}
     {job.status === "succeeded" && offered && <div className="preview-assist-offer">
       <p className="preview-assist-verdict">{offered.reason === "edited"
         ? "你在这期间改过上面的启动脚本，所以没有直接覆盖。AI 真起来过的是这一条："
-        : offered.reason === "unsettled"
-          ? "这一份作业的归属没能确认（这个页面可能是从另一个页面复制或打开出来的——那种情况下它手里的凭据跟正主一模一样），所以没有直接覆盖上面的输入框。AI 真起来过的是这一条："
-          : "这次是在你没看着的时候跑完的（中间换过页面或刷新过），所以没有直接覆盖上面的输入框。AI 真起来过的是这一条："}</p>
+        : "这一份作业的归属没能确认（这个页面可能是从另一个页面复制或打开出来的——那种情况下它手里的凭据跟正主一模一样），所以没有直接覆盖上面的输入框。AI 真起来过的是这一条："}</p>
       <pre className="preview-assist-script">{offered.script}</pre>
       <div className="preview-assist-offer-actions">
         <Button variant="primary" onClick={onTakeOffered}>用这条替换</Button>

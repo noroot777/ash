@@ -30,6 +30,7 @@
 //      把脚本摆出来让用户拍板，不许自己填（填进去和那句「已填入」都收不回来）。正主那一路照旧自动填；
 //   ⑯ 同一档里**同一个标签自己刷新**（顺序交接，不是复制出来的分身）→ 照旧是正主，成功就直接填；
 //      刷新后又自己改过输入框的，仍旧不覆盖，但原因得说成「你改过」而不是「归属没能确认」；
+//      作业**恰好在刷新那一瞬跑完**（第一次 GET 就是终态、压根没见过 running）也照样直接填；
 //   ⑰ 那张接力凭据**不是只有刷新会写**（跳走、关掉同样触发 pagehide）→ 带着它的标签再开出两个
 //      设置页，两页各克隆一份，谁都不许把自己洗成正主（凭据只认「刷新出来的那一份文档」，且读到就删）。
 //
@@ -492,6 +493,27 @@ try {
   await ownerProgress.getByText("你在这期间改过", { exact: false }).waitFor();
   assert.equal(await editorText(ownerScript), afterReload, "刷新后手写的内容照样不许被顶掉");
   assert.doesNotMatch(await ownerProgress.innerText(), /归属没能确认/, "这一档的原因是「你改过」，不是归属没定");
+  assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
+
+  // ⑯d 作业**恰好在刷新那一瞬跑完**：新文档第一次问服务端就直接读到终态，压根没见过 running，
+  //     于是「点下去那一刻框里是什么」没人记过。接班的是同一个标签、凭据也验过，它就该继续
+  //     「跑成了就直接填」，而不是反过来要用户再点一次「用这条替换」（第 12 轮审查复现）。
+  await ownerScript.fill("# 刷新那一瞬它就跑成了");
+  await owner.getByRole("button", { name: "AI 协助填写" }).click();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await owner.getByTestId("assist-succeed-on-boot").click();
+  const filledBeforeBoot = (await ownerNotices()).filter((line) => line.includes("脚本已填入")).length;
+  await owner.reload();
+  await ownerScript.waitFor();
+  await owner.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
+  const booted = await ownerProgress.innerText();
+  assert.match(booted, /保存预览设置/, "填完要说清还得点保存");
+  assert.doesNotMatch(booted, /没有直接覆盖/, "可信的刷新接力不该反过来要用户再挑一次");
+  assert.doesNotMatch(booted, /归属没能确认/, "凭据验过了就不是「归属没定」");
+  assert.equal((await ownerNotices()).filter((line) => line.includes("脚本已填入")).length, filledBeforeBoot + 1,
+    "填了就该提示一次");
   assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
 
   // ⑯c 两套机制碰头：副本已经「暂且认领」了，正主才刷新回来。站得住的那一份必须压得过暂且认下的

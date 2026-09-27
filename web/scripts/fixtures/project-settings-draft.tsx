@@ -135,6 +135,17 @@ const assistJob = (patch: Partial<PreviewAssistState>): PreviewAssistState => ({
   ...patch,
 });
 
+// **作业恰好在刷新那一瞬跑完**：armed 之后下一次页面加载时就把它落成终态，所以新文档第一次 GET
+// 读到的直接是 succeeded、压根没见过 running（第 12 轮审查复现这一段时序，那时可信的刷新接力
+// 反而被当成「没看着它跑」，要用户再点一次「用这条替换」）。放在模块初始化里执行，比测试自己去
+// 拼一份终态 JSON 靠得住 —— 终态长什么样只有这里说得准。
+const SUCCEED_ON_BOOT_KEY = `${storageKey}:assist-succeed-on-boot`;
+if (localStorage.getItem(SUCCEED_ON_BOOT_KEY)) {
+  localStorage.removeItem(SUCCEED_ON_BOOT_KEY);
+  const live = readAssist();
+  if (live?.status === "running") setAssist({ ...live, ...succeeded() });
+}
+
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -263,6 +274,14 @@ function Fixture() {
           }}
         >
           假装真起来了
+        </button>
+        {/* 上面那颗是「现在就成功」；这颗是「下一次页面加载时它已经成功了」—— 刷新那一瞬跑完的那种。 */}
+        <button
+          type="button"
+          data-testid="assist-succeed-on-boot"
+          onClick={() => { localStorage.setItem(SUCCEED_ON_BOOT_KEY, "1"); }}
+        >
+          假装刷新期间就成功
         </button>
         <ProjectSettingsPanel
           project={current}
