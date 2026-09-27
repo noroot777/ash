@@ -14,6 +14,7 @@ import { openWithApp, probeOpeners, revealInFileManager } from "./openers/index.
 import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
 import { readFileGitStatus } from "./file-git-status.js";
 import { readTaskArtifacts } from "./task-artifacts.js";
+import { taskPageUrlFor } from "./task-page.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import {
@@ -68,10 +69,15 @@ export function mountFileRoutes(api: Hono) {
   });
 
   api.get("/tasks/:id/file", async (c) => {
-    const root = await rootFor(c.req.param("id"));
+    const taskId = c.req.param("id");
+    const root = await rootFor(taskId);
     if (!root) return c.json({ error: "这个任务还没有可浏览的工作目录" }, 404);
     try {
-      return c.json({ root: publicRoot(root), file: await readFileContent(root, c.req.query("path") ?? "") });
+      const path = c.req.query("path") ?? "";
+      const file = await readFileContent(root, path);
+      // 网页的预览地址由服务端随内容一起发：它带着一段预览令牌，前端猜不出也不该自己拼
+      // （令牌是放开 ACAO 之后挡住第三方站点的那一道，见 task-page.ts 顶部）。
+      return c.json({ root: publicRoot(root), file, pageUrl: taskPageUrlFor(taskId, file.path) });
     } catch (error) {
       return c.json({ error: messageOf(error) }, statusOf(error) as 400);
     }

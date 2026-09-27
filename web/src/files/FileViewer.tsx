@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Code, Copy, FolderOpen, GitDiff, SpinnerGap, Trash, Warning, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, Code, Copy, FolderOpen, GitDiff, SpinnerGap, Trash, Warning, X } from "@phosphor-icons/react";
 import { api, type FileContent } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { formatSize } from "./fileModel.ts";
@@ -18,7 +18,6 @@ function TextBody({ file }: { file: FileContent }) {
   );
 }
 
-const PAGE_PATTERN = /\.html?$/i;
 const VIDEO_PATTERN = /\.(?:mp4|m4v|mov|webm|mkv|ogv)$/i;
 const AUDIO_PATTERN = /\.(?:mp3|wav|m4a|aac|flac|ogg|opus|aiff)$/i;
 
@@ -27,22 +26,37 @@ const AUDIO_PATTERN = /\.(?:mp3|wav|m4a|aac|flac|ogg|opus|aiff)$/i;
  *
  * `sandbox` 里**故意没有 `allow-same-origin`**：这些 html 是 agent 现写的，给了它就等于
  * 让页面以 ash 自己的源跑脚本，读得到登录态、能带着 cookie 调 ash 的接口。服务端那条
- * `/tasks/:id/page/*` 还会再压一道同样的 CSP，直接在地址栏打开也照样被钉住。
- * 代价见 server/src/task-page.ts 顶部：@font-face 的字体会退到系统字体，要完整保真走
- * 头带上的「打开方式」。
+ * `/tasks/:id/page/<令牌>/*` 还会再压一道同样的 CSP，直接在地址栏打开也照样被钉住。
+ *
+ * 地址由服务端随文件内容一起发（`pageUrl`），前端不自己拼：里面那段令牌是放开
+ * `ACAO: null` 之后挡住第三方站点的那一道。根路径资源（`/assets/…`）的改写也在服务端做。
+ *
+ * 仍有改不动的一类：页面在**打包后的 JS 里** `fetch("/api/…")`，那串地址是字符串常量。
+ * 这种页面在沙箱里只渲染得出外壳——所以头带上那颗「在浏览器中打开」是**兜底出口**，
+ * 不是冗余入口。
  */
-function PageBody({ taskId, path }: { taskId: string; path: string }) {
+function PageBody({ url, path }: { url: string; path: string }) {
   return (
     <iframe
       className="file-viewer__page"
-      src={api.taskPageUrl(taskId, path)}
+      src={url}
       sandbox="allow-scripts allow-forms allow-popups allow-modals"
       aria-label={`${path} 页面预览`}
     />
   );
 }
 
-function Body({ taskId, file, showSource }: { taskId: string; file: FileContent; showSource: boolean }) {
+function Body({
+  taskId,
+  file,
+  pageUrl,
+  showSource,
+}: {
+  taskId: string;
+  file: FileContent;
+  pageUrl: string | null;
+  showSource: boolean;
+}) {
   const rawUrl = api.taskFileRawUrl(taskId, file.path);
   if (file.kind === "image") {
     return (
@@ -55,7 +69,7 @@ function Body({ taskId, file, showSource }: { taskId: string; file: FileContent;
     // iframe 的无障碍名用 aria-label 而不是 title：原生 title 在这个仓库是受管控的存量。
     return <iframe className="file-viewer__pdf" src={rawUrl} aria-label={`${file.name} 预览`} />;
   }
-  if (PAGE_PATTERN.test(file.path) && !showSource) return <PageBody taskId={taskId} path={file.path} />;
+  if (pageUrl && !showSource) return <PageBody url={pageUrl} path={file.path} />;
   if (VIDEO_PATTERN.test(file.path)) {
     return (
       <div className="file-viewer__media">
@@ -110,6 +124,8 @@ export function FileViewer({
   notify: (message: string) => void;
 }) {
   const [file, setFile] = useState<FileContent | null>(null);
+  /** 网页预览地址（带令牌，服务端随内容发下来）。不是网页就一直是 null。 */
+  const [pageUrl, setPageUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revealing, setRevealing] = useState(false);
@@ -117,7 +133,6 @@ export function FileViewer({
   // 想读源码的人按一下就有；换文件时重置，不然上一个文件选的「源码」会跟着带到下一个。
   const [showSource, setShowSource] = useState(false);
   useEffect(() => setShowSource(false), [path]);
-  const isPage = PAGE_PATTERN.test(path);
   const zoom = useZoomLayer({
     zoomed,
     onExit: () => onExitZoom?.(),
@@ -132,15 +147,33 @@ export function FileViewer({
     setLoading(true);
     setError(null);
     api.taskFile(taskId, path)
-      .then((result) => { if (alive) setFile(result.file); })
+      .then((result) => {
+        if (!alive) return;
+        setFile(result.file);
+        setPageUrl(result.pageUrl);
+      })
       .catch((reason) => {
         if (!alive) return;
         setFile(null);
+        setPageUrl(null);
         setError(reason instanceof Error ? reason.message : String(reason));
       })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [path, taskId]);
+
+  const [openingExternally, setOpeningExternally] = useState(false);
+  const openExternally = async () => {
+    setOpeningExternally(true);
+    try {
+      await api.openTaskFile(taskId, path, null);
+      notify("已交给本机浏览器打开");
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setOpeningExternally(false);
+    }
+  };
 
   const reveal = async () => {
     setRevealing(true);
@@ -161,7 +194,7 @@ export function FileViewer({
           <b>{file?.name ?? path.split("/").pop()}</b>
           <small>{path}{file ? ` · ${formatSize(file.size)}` : ""}</small>
         </div>
-        {isPage && (
+        {pageUrl && (
           <button
             type="button"
             className="file-viewer__action"
@@ -170,6 +203,19 @@ export function FileViewer({
           >
             <Code size={13} aria-hidden="true" />
             {showSource ? "看页面" : "看源码"}
+          </button>
+        )}
+        {/* 沙箱预览做不到完全保真（打包后的 JS 里 fetch("/api/…") 改不动），所以网页多给一颗
+            直达按钮，而不是让用户到「打开方式」菜单里翻。 */}
+        {pageUrl && (
+          <button
+            type="button"
+            className="file-viewer__action"
+            disabled={openingExternally}
+            onClick={() => void openExternally()}
+          >
+            <ArrowSquareOut size={13} aria-hidden="true" />
+            在浏览器中打开
           </button>
         )}
         {onOpenDiff && (
@@ -234,7 +280,9 @@ export function FileViewer({
       <div className="file-viewer__body">
         {loading && <p className="file-viewer__state"><SpinnerGap size={14} aria-hidden="true" />正在读取…</p>}
         {error && <p className="file-viewer__state is-error"><Warning size={14} aria-hidden="true" />{error}</p>}
-        {!loading && !error && file && <Body taskId={taskId} file={file} showSource={showSource} />}
+        {!loading && !error && file && (
+          <Body taskId={taskId} file={file} pageUrl={pageUrl} showSource={showSource} />
+        )}
       </div>
       {deletion.dialog}
     </div>,

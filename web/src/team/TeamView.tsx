@@ -388,9 +388,13 @@ export function TeamView({
     && workers.length > 0
     && workers.every((worker) => worker.status === "done");
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `team:timeline:${allWorkersComplete ? "complete" : "active"}`,
+    // `-v2`：生成物那一格是后加的，存量用户的 `openTabs` 躺在 localStorage 里，只有
+    // `stateKey` 变过一次才会拿下面这张表去并集。加面板要连带跳一版（同 TaskDetail）。
+    stateKey: `team:timeline-v2:${allWorkersComplete ? "complete" : "active"}`,
     requiredTabId: "info",
-    defaultOpenTabIds: allWorkersComplete ? ["info", "review", "timeline"] : ["info", "workers", "timeline"],
+    defaultOpenTabIds: allWorkersComplete
+      ? ["info", "review", "artifacts", "timeline"]
+      : ["info", "workers", "artifacts", "timeline"],
     defaultActiveTabId: allWorkersComplete ? "review" : "workers",
   }), [allWorkersComplete]);
   const selectWorker = useCallback((taskId: string) => {

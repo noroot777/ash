@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { requireTmpDb } from "./tmp-db.js";
+import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-artifacts-"));
 process.env.ASH_DB = join(stage, "ash.db");
@@ -147,5 +147,7 @@ try {
 
   console.log("✓ task artifacts: committed/working/ignored 三档、仓库原有物免疫 mtime、依赖树与过期产物排除、删除即消失");
 } finally {
+  // ASH_DB 落在舞台目录里,Windows 上不先松开就删不掉(见 tmp-db.ts)。
+  await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
 }

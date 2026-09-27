@@ -8,14 +8,13 @@
 // 空路径算不算根」这类讲究全在这里；而且它是前端唯一会**写工作目录**的地方（删除），那一
 // 条上的两次「再确认」由调用点负责，这一层不代劳。
 import type {
-  FileContent,
   FileDeleteResult,
   FileEntryOverview,
   FileListing,
   FileSearchResult,
-  FileWorkspaceRoot,
   OpenerProbe,
   TaskArtifactsResult,
+  TaskFileRead,
 } from "./apiTypes.ts";
 import { apiPath, id, json, request } from "./apiClient.ts";
 
@@ -33,16 +32,13 @@ export const fileApi = {
     request(`/tasks/${id(taskId)}/file-search?dir=${id(dir)}`, { signal }),
   projectFileDir: (projectId: string, dir: string, signal?: AbortSignal): Promise<FileSearchResult> =>
     request(`/projects/${id(projectId)}/file-search?dir=${id(dir)}`, { signal }),
-  taskFile: (taskId: string, path: string): Promise<{ root: FileWorkspaceRoot; file: FileContent }> =>
+  taskFile: (taskId: string, path: string): Promise<TaskFileRead> =>
     request(`/tasks/${id(taskId)}/file?path=${id(path)}`),
   // 图片/PDF 预览直接把这个地址交给 <img>/<iframe>，不经过 JSON。
   taskFileRawUrl: (taskId: string, path: string): string =>
     apiPath(`/tasks/${id(taskId)}/file/raw?path=${id(path)}`),
-  // 任务做出来的**网页**。刻意不走 raw：那条给 html 配 text/html 就等于让 agent 现写的
-  // 页面以 ash 自己的源跑脚本。这条把文档钉在 sandbox 里（服务端响应头 + iframe 属性
-  // 两道），路径式地址还让页面里的相对引用自己解得对。见 server/src/task-page.ts。
-  taskPageUrl: (taskId: string, path: string): string =>
-    apiPath(`/tasks/${id(taskId)}/page/${path.split("/").map(encodeURIComponent).join("/")}`),
+  // 网页产物的预览地址**不在前端拼**：它带着一段预览令牌，由 `taskFile` 随内容一起发下来
+  // （见 server/src/task-page.ts 顶部——令牌是放开 ACAO 之后挡住第三方站点的那一道）。
   taskArtifacts: (taskId: string, signal?: AbortSignal): Promise<TaskArtifactsResult> =>
     request(`/tasks/${id(taskId)}/artifacts`, { signal }),
   taskFileOpeners: (taskId: string, path: string, refresh = false): Promise<OpenerProbe> =>

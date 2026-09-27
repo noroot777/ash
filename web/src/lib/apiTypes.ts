@@ -193,6 +193,20 @@ export type FileContent = {  path: string;
   mime: string | null;
 };
 
+/** 读一份文件全文的返回。 */
+export type TaskFileRead = {
+  root: FileWorkspaceRoot;
+  file: FileContent;
+  /**
+   * 这份文件当作网页渲染时的地址（不是网页就是 null）。
+   *
+   * **前端不能自己拼**：里面带着一段预览令牌，它是服务端放开 `ACAO: null`（沙箱 iframe
+   * 里的模块脚本非它不可）之后，用来挡住第三方站点读工作区文件的那一道。
+   * 细节在 server/src/task-page.ts 顶部。
+   */
+  pageUrl: string | null;
+};
+
 /**
  * 「这是什么、有多大、git 怎么看它、现在能不能删」。
  *
