@@ -34,6 +34,7 @@ import {
   spilled,
   sixProblems,
   fiveProblems,
+  contradictoryUncounted,
 } from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
@@ -148,6 +149,9 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="five-problems-fixture markdown-report-body">
       <ReviewReportBody text={fiveProblems} reportKey="run-24:1" />
+    </div>
+    <div className="contradictory-uncounted-fixture markdown-report-body">
+      <ReviewReportBody text={contradictoryUncounted} reportKey="run-26:1" />
     </div>
     <div className="six-switch-fixture markdown-report-body">
       <SwitchableSix />

@@ -498,6 +498,24 @@ try {
     "展开后技术记录原样都在",
   );
 
+  // 复审第 1 轮的形态：第一栏写着「不能验收」却不报数，问题栏写「没有发现问题」。
+  // 第 8 轮那道「报了数就得对上」的闸在这里读不到数，于是曾经照放——首屏同时出现两句
+  // 对不上的话，真正那条被一个写着「验证过程、证据、清场记录」的按钮藏住。
+  const uncounted = page.locator(".contradictory-uncounted-fixture");
+  const uncountedText = await uncounted.locator(".task-markdown").first().innerText();
+  assert.match(uncountedText, /改完名字刷新就回到旧名字/, "真问题必须留在首屏");
+  assert.match(uncountedText, /改名只写了内存里的那份/, "它的三行也得在首屏");
+  assert.equal(
+    await uncounted.getByRole("button", { name: /技术明细/ }).count(),
+    0,
+    "两句话对不上的报告，按钮不准替折叠里的东西背书",
+  );
+  assert.equal(
+    await uncounted.locator(".review-report-detail").count(),
+    0,
+    "这一档整篇铺开，没有折叠",
+  );
+
   console.log("review report split dom ok");} finally {
   await browser?.close();
   await server.close();
