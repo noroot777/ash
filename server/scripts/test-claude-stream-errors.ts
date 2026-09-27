@@ -313,5 +313,62 @@ console.log("9) 等上游等到超时无响应要自己冒头,而工具在跑不
   else fail(`误报了:${falseAlarms.map((e) => e.text ?? e.message).join(" / ")}`);
 }
 
+// 起因(2026-09-27):P5EH_BPGxLt- 的第 9→10 轮之间「没有执行者跑」。执行者上一回合把
+// 测试丢进 5 个后台 Task 就结束了回合,进程收台后那 5 个成了孤儿;下一回合 resume 时
+// CLI 先替它们补一条聚合回执 —— `origin:{kind:"task-notification"}`、`num_turns:0`、
+// `result:""`、58ms。解析器把它当回合结束,singleRunFromResident 当场 close 进程,而
+// ash 送进 stdin 的「按审查意见修复」此时才刚 init 完(现场日志最后一行停在
+// `status:requesting`),一个 token 都没吐。外面看到一个 1.7 秒的「成功」空回合,
+// 自由工作流照它推进,于是第 10 轮审的还是第 8 轮那个 commit,报告与第 9 轮一字不差。
+// 下面这组事件按现场 agent-out.jsonl 原样抄。
+console.log("10) 孤儿后台任务的回执不是回合结果,不许拿它收台");
+{
+  const ORPHAN_RECEIPT = {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    num_turns: 0,
+    duration_ms: 58,
+    duration_api_ms: 0,
+    stop_reason: null,
+    result: "",
+    total_cost_usd: 0,
+    usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    modelUsage: {},
+    origin: { kind: "task-notification" },
+    session_id: "sess-12",
+  };
+  const resident = { interruptPending: false, failPending: () => {} };
+  const events = await collect(
+    [
+      { type: "system", subtype: "init", session_id: "sess-12" },
+      { type: "system", subtype: "task_notification", task_id: "bicrdbmso", status: "stopped", summary: "Orphaned by a previous Claude Code process exit and reported in an aggregate summary.", session_id: "sess-12" },
+      ORPHAN_RECEIPT,
+      // ——— 这之后才是 ash 送进去的那条 prompt 的回合 ———
+      { type: "system", subtype: "init", session_id: "sess-12" },
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "改好了\n" } } },
+      { type: "assistant", message: { model: "claude-opus-5", content: [{ type: "text", text: "改好了" }], usage: { input_tokens: 120, output_tokens: 8 } } },
+      { type: "result", subtype: "success", num_turns: 3, result: "改好了", session_id: "sess-12", usage: { input_tokens: 120, output_tokens: 8 } },
+    ],
+    resident,
+  );
+  const ends = events.filter((e) => e.kind === "turnEnd");
+  if (ends.length === 1) ok("整段只收了一次台(孤儿回执没冒充回合结束)");
+  else fail(`期望 1 个 turnEnd,实到 ${ends.length} —— 回合会被提前掐断`);
+  const text = events.filter((e) => e.kind === "text").map((e) => e.text).join("");
+  if (text.includes("改好了")) ok("真正那一回合的正文照常吐出来");
+  else fail(`回合被吞了,正文没了:${JSON.stringify(text)}`);
+  // 收台必须排在正文**之后**:turnEnd 一旦排到前面,singleRunFromResident 就
+  // close 进程了,后面这些事件在真实进程里根本不会发生。
+  if (events.findIndex((e) => e.kind === "turnEnd") > events.findIndex((e) => e.kind === "text")) ok("收台排在正文之后");
+  else fail("turnEnd 排在了正文前面:真实进程会在这里被 close");
+  // 回执的 usage 全是 0,而 usage/context 落库是**覆盖**不是累加 —— 照收会把账目清零。
+  const zeroUsage = events.filter((e) => e.kind === "usage" && !e.usage?.output);
+  if (!zeroUsage.length) ok("没拿全 0 的回执 usage 去覆盖本回合账目");
+  else fail(`全 0 usage 被当成回合用量落下来了:${JSON.stringify(zeroUsage[0])}`);
+  if (!events.some((e) => e.kind === "error")) ok("孤儿回执本身不是故障,不报错");
+  else fail(`孤儿回执被误报成故障:${events.filter((e) => e.kind === "error").map((e) => e.message).join(" / ")}`);
+}
+
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
 process.exit(bad ? 1 : 0);

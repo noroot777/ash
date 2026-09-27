@@ -258,6 +258,25 @@ export async function* parseClaudeStream(
         for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
       }
     } else if (ev.type === "result") {
+      // **不是每一条 `result` 都是「本回合说完了」。** claude CLI resume 时会先替
+      // **上一个进程遗弃的后台任务**(`Orphaned by a previous Claude Code process exit`)
+      // 补一条聚合回执,长这样:`origin:{kind:"task-notification"}`、`num_turns:0`、
+      // `result:""`、`duration_ms` 几十毫秒 —— 它汇报的是孤儿通知,不是我们送进 stdin
+      // 的那条 prompt 的结果。
+      //
+      // 把它当回合结束的代价是**整个回合被静默吞掉**:singleRunFromResident 见到第一个
+      // turnEnd 就 `resident.close()` 并 yield done,进程当场收台,而那条 prompt 此时
+      // 才刚 init 完、连 `status:requesting` 都没走完,一个 token 都没吐。外面看到的是
+      // 一个「1.7 秒成功完成」的空回合,自由工作流照它推进下一轮审查。
+      // (2026-09-27 实测:P5EH_BPGxLt- 第 9→10 轮之间执行者就是这么被吞的 —— 上一回合
+      // 把测试丢进 5 个后台 Task 就结束,那 5 个成了孤儿,下一回合 resume 时汇报,
+      // 于是第 10 轮审的还是第 8 轮那个 commit,报告与第 9 轮一字不差。)
+      //
+      // 整条跳过而不是只跳过 turnEnd:这条回执的 usage/context 全是 0,而两者落库都是
+      // **覆盖**不是累加(shared/src/events.ts),照收会把本回合账目清零;session 也已经
+      // 由它前面那条 init 推过了。跳过之后真正的 result 照常到达;万一 CLI 只吐了这一条
+      // 就没了下文,进程退出还有 forceFinishOnExit 兜底,不会静默挂死。
+      if (ev.origin?.kind === "task-notification") return;
       flushText();
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
       const usage = claudeUsage(ev);
