@@ -8,6 +8,7 @@ import { api } from "../lib/api.ts";
 import { parseExecutorValue, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { useExecutorCatalog } from "../workflow/executorCatalog.ts";
 import {
+  adoptAssistTrace,
   forgetAssistTrace,
   lostAssistState,
   newAssistClaim,
@@ -131,7 +132,15 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   }, [projectId, absorb]);
   // 开着页面就先问一次：上一次点开的作业可能还在跑（换页面、刷新都不该把它弄丢），
   // 也可能已经没了（那就说清是重启吞了还是自己过期了，而不是装作没点过）。
-  useEffect(() => { void poll(); }, [poll]);
+  //
+  // **问服务端之前先点一次名**（adoptAssistTrace）：本地那条记录有可能是从来源页面继承来的
+  // 会话副本（复制标签页 / window.open），那样它手里的 claim 跟正主一模一样。颠倒顺序就等于
+  // 让副本页抢在确认之前先认领一拍 —— 第 7 轮审查复现的正是这一下。
+  useEffect(() => {
+    let stale = false;
+    void adoptAssistTrace(projectId).then(() => { if (!stale) void poll(); });
+    return () => { stale = true; };
+  }, [projectId, poll]);
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => { void poll(); }, 1200);

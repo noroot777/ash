@@ -19,7 +19,9 @@
 //   ⑩ 别处那份正在跑的时候**点了按钮** → 服务端复用了它、这一次并没有新开，界面要说实话，
 //      而且它的结果照样不许动输入框（认领只认这次点击自报的 claim）；
 //   ⑪ 同一个浏览器的**另一个标签页**（同源、共享 localStorage、从没点过按钮）→ 照实显示这个
-//      项目上有一份在跑，但说清「是别的页面点的」，成功时一个字都不动它自己的输入框。
+//      项目上有一份在跑，但说清「是别的页面点的」，成功时一个字都不动它自己的输入框；
+//   ⑫ 从点过按钮的那一页**打开/复制出来的标签**（sessionStorage 带着来源页的初始副本，手里那份
+//      claim 跟服务端作业对得上）→ 同样只读：所有权得靠一次「谁还拿着这个 claim」的点名分出来。
 //
 // 服务端那份是假的（fixture 里几个模块级变量），这里测的是前端这一侧的判断：什么时候轮询、
 // null 该读成哪一种、填还是不填。
@@ -260,8 +262,41 @@ try {
   assert.deepEqual(otherErrors, [], "另一个标签页也不应产生运行时异常");
   await other.close();
 
+  // ⑫ 由点过按钮的这一页 `window.open` 出来的新标签（「复制标签页」是同一种入口）：浏览器会把
+  //    **来源页面 sessionStorage 的初始副本**交给它，于是它手里也有一份对得上的 claim
+  //    （第 7 轮审查复现：副本页从没点过按钮，成功时却自动改掉自己的启动脚本并说「脚本已填入」）。
+  //    ⑪ 用的 context.newPage() 没有 opener，正好绕过了这种复制语义，所以得单开一条。
+  await script.fill("# 等这一页自己的 AI 结果（第二发）");
+  await startAssist.click();
+  await progress.getByText("正在读这个项目", { exact: false }).waitFor();
+  const [copy] = await Promise.all([
+    context.waitForEvent("page"),
+    page.evaluate(() => { window.open(location.href, "_blank"); }),
+  ]);
+  const copyErrors = [];
+  copy.on("pageerror", (failure) => copyErrors.push(failure.message));
+  await copy.waitForLoadState();
+  const copyScript = copy.getByRole("textbox", { name: "启动脚本", exact: true });
+  const copyProgress = copy.locator(".preview-assist-progress");
+  const copyNotices = async () => JSON.parse(await copy.getByTestId("notices").textContent());
+  await copyScript.waitFor();
+  // 它也该照实显示这个项目上有一份在跑 —— 但必须说清不是这一页点的
+  await copyProgress.getByText("别的页面点的", { exact: false }).waitFor();
+  assert.equal(await editorText(copyScript), handwritten, "复制出来的标签读的是已保存那条，不该被动");
+  await page.getByTestId("assist-succeed").click();
+  // 点了按钮的那一页照旧拿到结果
+  await page.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
+  await copyProgress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
+  await copy.waitForTimeout(1500);
+  assert.equal(await editorText(copyScript), handwritten, "继承来的会话副本不许把结果填进自己的输入框");
+  assert.deepEqual((await copyNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
+  assert.deepEqual(copyErrors, [], "复制出来的标签也不应产生运行时异常");
+  await copy.close();
+
   assert.deepEqual(errors, [], "AI 协助面板不应产生运行时异常");
-  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims)");
+  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims)");
 } finally {
   await browser?.close();
   await server.close();

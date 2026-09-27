@@ -6,6 +6,9 @@
 //    等于把所有权凭据摊给同源的每一个标签：同一项目开着的另一个页面（从没点过按钮）会读到
 //    这条记录、把服务端那份作业认成自己的，于是在成功时把**它自己**输入框里的草稿改掉
 //    （第 6 轮审查双标签复现）。sessionStorage 正好是「刷新还在、别的标签读不到」。
+//    **但它挡不住会话副本**：带 opener 打开的页面和「复制标签页」会继承来源页那一份的初始
+//    副本，两边 claim 一模一样（第 7 轮审查复现）。所以页面打开时还要点一次名 —— 见
+//    adoptAssistTrace 与 previewAssistTabs.ts。
 //    代价说清楚：整个标签页关掉再开，新标签确实没有任何证据说明「我点过」，那三句交代
 //    （见下）就给不出来了 —— 这是对的，一个刚开的上下文本来就不该去认领谁的作业。
 //
@@ -20,6 +23,7 @@
 // 分开这三种要两样东西：本地记着的作业身份，以及**服务端自报的实例身份**（ASSIST_INSTANCE，
 // 每次 ash 启动换一个）。实例没变 = 这台 ash 没重启过 = 那条记录是自己过期的。
 import type { PreviewAssistState } from "@ash/shared/preview-assist";
+import { assistClaimHeldElsewhere, holdAssistClaim } from "./previewAssistTabs.ts";
 
 const EXECUTOR_KEY = (projectId: string) => `ash:preview-assist-executor:${projectId}`;
 const LIVE_KEY = (projectId: string) => `ash:preview-assist-live:${projectId}`;
@@ -95,6 +99,7 @@ export function pendingAssistTrace(projectId: string, instance: string, claim: s
   writeLive(LIVE_KEY(projectId), JSON.stringify({
     jobId: "", claim, executorLabel: "", round: 0, maxRounds: 3, startedAt: new Date().toISOString(), instance,
   } satisfies AssistTrace));
+  holdAssistClaim(projectId, claim);
 }
 
 /** 作业还在跑：把身份记住（每一拍都写，轮次跟着走，中断那句话才说得出第几轮）。 */
@@ -110,9 +115,28 @@ export function traceAssistJob(projectId: string, job: PreviewAssistState, insta
     startedAt: job.startedAt,
     instance,
   } satisfies AssistTrace));
+  holdAssistClaim(projectId, job.claim);
 }
 
-export const forgetAssistTrace = (projectId: string): void => writeLive(LIVE_KEY(projectId), null);
+export const forgetAssistTrace = (projectId: string): void => {
+  writeLive(LIVE_KEY(projectId), null);
+  holdAssistClaim(projectId, null);
+};
+
+/**
+ * 页面刚打开时先确认手里这条记录**不是会话副本**，确认完才允许拿它去认领作业。
+ *
+ * 副本从哪来、为什么只能靠点名分辨，见 previewAssistTabs.ts。确认是自己的就把 claim 登记下来
+ * —— 之后从这一页复制出去的标签才有人应答它。
+ *
+ * 必须**排在第一次轮询前面**：颠倒过来的话，抢在前面那一拍就已经把别人那份认成自己的了。
+ */
+export async function adoptAssistTrace(projectId: string): Promise<void> {
+  const trace = readAssistTrace(projectId);
+  if (!trace?.claim) return;
+  if (await assistClaimHeldElsewhere(projectId, trace.claim)) { forgetAssistTrace(projectId); return; }
+  holdAssistClaim(projectId, trace.claim);
+}
 
 /**
  * 服务端回了 `job: null`，而本地这条记录还在：把它摆成一张卡交给进度面板渲染。
