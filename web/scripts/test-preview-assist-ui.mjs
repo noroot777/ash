@@ -29,7 +29,9 @@
 //   ⑮ 同一档里顺序反过来（作业先成功、确认后到）→ 「暂且算我的」撑不起不可逆的动作：成功时只许
 //      把脚本摆出来让用户拍板，不许自己填（填进去和那句「已填入」都收不回来）。正主那一路照旧自动填；
 //   ⑯ 同一档里**同一个标签自己刷新**（顺序交接，不是复制出来的分身）→ 照旧是正主，成功就直接填；
-//      刷新后又自己改过输入框的，仍旧不覆盖，但原因得说成「你改过」而不是「归属没能确认」。
+//      刷新后又自己改过输入框的，仍旧不覆盖，但原因得说成「你改过」而不是「归属没能确认」；
+//   ⑰ 那张接力凭据**不是只有刷新会写**（跳走、关掉同样触发 pagehide）→ 带着它的标签再开出两个
+//      设置页，两页各克隆一份，谁都不许把自己洗成正主（凭据只认「刷新出来的那一份文档」，且读到就删）。
 //
 // 服务端那份是假的（fixture 里几个模块级变量），这里测的是前端这一侧的判断：什么时候轮询、
 // null 该读成哪一种、填还是不填。
@@ -535,7 +537,64 @@ try {
   assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
   await lanContext.close();
 
-  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims, silent owner still owns, late answer revokes, provisional claim never fills, same-tab reload keeps filling, reloaded owner outranks provisional copy)");
+  // ⑰ 接力凭据**不是只有刷新会写**（pagehide 在跳走、关掉时同样触发）：那个带着未消费凭据的标签
+  //    再开出两个设置页，两页各克隆一份、各自消费掉，于是两页都算站得住、都往自己的输入框里填
+  //    （第 11 轮审查复现）。这一档里把跨页仲裁整个掐掉（held 一律不发），所以剩下的唯一防线就是
+  //    凭据自己：只有「刷新出来的那一份文档」认得它，而且读到就删、认不认都删。
+  const cloneContext = await browser.newContext({ viewport: { width: 1000, height: 1200 } });
+  await cloneContext.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "locks", { configurable: true, get: () => undefined });
+    const post = BroadcastChannel.prototype.postMessage;
+    BroadcastChannel.prototype.postMessage = function (note) {
+      if (note && typeof note === "object" && note.kind === "held") return undefined;
+      return post.call(this, note);
+    };
+  });
+  const settingsUrl = `http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}-clone`;
+  const carrier = await cloneContext.newPage();
+  const carrierErrors = [];
+  carrier.on("pageerror", (failure) => carrierErrors.push(failure.message));
+  await carrier.goto(settingsUrl);
+  const carrierScript = carrier.getByRole("textbox", { name: "启动脚本", exact: true });
+  await carrierScript.waitFor();
+  await carrierScript.fill("# 这一页点完就跳走");
+  await carrier.getByRole("button", { name: "AI 协助填写" }).click();
+  await carrier.locator(".preview-assist-progress").getByText("正在读这个项目", { exact: false }).waitFor();
+  // 跳到同源的空白中间页：这一跳会触发 pagehide，把接力凭据留在这个标签的 sessionStorage 里
+  await carrier.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/blank.html`);
+  const clones = [];
+  for (let i = 0; i < 2; i += 1) {
+    const [opened] = await Promise.all([
+      cloneContext.waitForEvent("page"),
+      carrier.evaluate((target) => { window.open(target, "_blank"); }, settingsUrl),
+    ]);
+    await opened.waitForLoadState();
+    clones.push(opened);
+  }
+  const cloneErrors = [];
+  for (const clone of clones) clone.on("pageerror", (failure) => cloneErrors.push(failure.message));
+  const cloneScripts = clones.map((clone) => clone.getByRole("textbox", { name: "启动脚本", exact: true }));
+  const cloneProgress = clones.map((clone) => clone.locator(".preview-assist-progress"));
+  for (let i = 0; i < clones.length; i += 1) {
+    await cloneScripts[i].waitFor();
+    await cloneProgress[i].getByText("正在读这个项目", { exact: false }).waitFor();
+  }
+  const cloneBefore = await Promise.all(cloneScripts.map((editor) => editorText(editor)));
+  await clones[0].getByTestId("assist-succeed").click();
+  for (let i = 0; i < clones.length; i += 1) {
+    await cloneProgress[i].getByText("归属没能确认", { exact: false }).waitFor();
+  }
+  await clones[0].waitForTimeout(1500);
+  for (let i = 0; i < clones.length; i += 1) {
+    assert.equal(await editorText(cloneScripts[i]), cloneBefore[i], `克隆出来的第 ${i + 1} 页不许自己填脚本`);
+    const lines = JSON.parse(await clones[i].getByTestId("notices").textContent());
+    assert.deepEqual(lines.filter((line) => line.includes("脚本已填入")), [], `第 ${i + 1} 页没填就不该提示填入`);
+  }
+  assert.deepEqual(cloneErrors, [], "克隆页不应产生运行时异常");
+  assert.deepEqual(carrierErrors, [], "中间页不应产生运行时异常");
+  await cloneContext.close();
+
+  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims, silent owner still owns, late answer revokes, provisional claim never fills, same-tab reload keeps filling, reloaded owner outranks provisional copy, cloned handoff never fills)");
 } finally {
   await browser?.close();
   await server.close();

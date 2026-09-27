@@ -36,6 +36,13 @@
 //   · 同一个标签刷新 → 新文档当场取走它 → 站得住,成功照旧自动填(裸 http 上刷新不再降级)
 //   · 复制 / window.open → 它那份快照是在来源页面**还活着**的时候拷走的,里面压根没有这张凭据,
 //     而且凭据是一次性的(取走即删),所以伪造不出来 —— 第 9 轮钉住的「副本不许填」一点没松
+//
+// 但「拿到凭据」本身还不够(第 11 轮审查):`pagehide` **不止刷新会触发** —— 跳走、关掉也写。
+// 那个带着未消费凭据的标签接着 window.open 出两个设置页,两页各克隆一份、各自消费掉,于是
+// **两页都算站得住**,作业一成功两页都往自己的输入框里填。所以凭据要认两件事:
+//   ① 这一份文档是不是**刷新**出来的(导航类型 "reload";window.open / 复制 / 会话恢复都不是)
+//   ② 读到就删,**认不认都删** —— 否则那个克隆页自己刷新一下就把凭据洗成了「刷新出来的」
+// 两条合起来,一次 pagehide 写下的凭据最多只有「写它的那个标签刷新出来的那一份文档」用得上。
 // 「这一页自己点过按钮」同理是副本复制不走的证据:它只活在这一份文档的内存里。
 //
 // BroadcastChannel 不会把消息投回给发送方自己,所以「自己应答自己」这种事不会发生。
@@ -224,10 +231,11 @@ const dropHandoff = (projectId: string): void => {
 };
 
 /**
- * 取走凭据(一次性)。在，就说明「这一页刷新过，而且刷新之前它就是站得住的那个正主」。
+ * 取走凭据(一次性)。认下来就说明「这一页刷新过，而且刷新之前它就是站得住的那个正主」。
  *
- * 取走即删是这套东西站得住的关键:留着的话，之后从这一页复制出去的标签会把它一起拷走，
- * 那就等于给副本开了后门。
+ * 两条都得过:**这一份文档是刷新出来的**，而且**读到就删、认不认都删**。缺哪一条都能被克隆出
+ * 几个正主来(见文件头第 11 轮审查那一段)——尤其是「认不认都删」:留着的话，克隆页自己刷新
+ * 一下就把它洗成了「刷新出来的」。
  */
 function takeHandoff(projectId: string, claim: string): boolean {
   const store = session();
@@ -236,10 +244,27 @@ function takeHandoff(projectId: string, claim: string): boolean {
   try { raw = store.getItem(HANDOFF_KEY(projectId)); } catch { return false; }
   if (!raw) return false;
   dropHandoff(projectId);
+  if (!cameFromReload()) return false;
   try {
     const baton = JSON.parse(raw) as { claim?: unknown; at?: unknown };
     return baton?.claim === claim && typeof baton.at === "number" && Date.now() - baton.at < HANDOFF_MS;
   } catch { return false; }
+}
+
+let reloaded: boolean | undefined;
+/**
+ * 这一份文档是不是**同一个标签刷新**出来的（导航类型 "reload"）。
+ *
+ * `window.open`、复制标签、会话恢复都不是刷新 —— 它们是并发分身或历史恢复，各自克隆了一份
+ * 存储。取不到这条信息就按「不是」算：那只是退回「把脚本摆出来让用户拍板」，不会认错人。
+ */
+function cameFromReload(): boolean {
+  if (reloaded !== undefined) return reloaded;
+  try {
+    const entries = globalThis.performance?.getEntriesByType?.("navigation") as { type?: string }[] | undefined;
+    reloaded = entries?.[0]?.type === "reload";
+  } catch { reloaded = false; }
+  return reloaded;
 }
 
 let armed = false;
