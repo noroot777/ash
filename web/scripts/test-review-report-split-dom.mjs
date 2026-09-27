@@ -531,6 +531,8 @@ try {
     ["只排除了一类问题", ".narrowed-scope-fixture", /旧的保存问题仍未解决/],
     ["判定没说完", ".unfinished-verdict-fixture", /旧的保存问题仍未解决/],
     ["三行渲染不出字", ".invisible-problem-fixture", /保存后内容消失/],
+    ["没说完的判定套了层斜体", ".decorated-verdict-fixture", /旧的保存问题仍未解决/],
+    ["三行是页面渲染不出的图", ".image-alt-problem-fixture", /改完名字刷新就回到旧名字/],
   ]) {
     const box = page.locator(selector);
     assert.match(
@@ -545,6 +547,15 @@ try {
     );
     assert.equal(await box.locator(".review-report-detail").count(), 0, `${what}：这一档整篇铺开`);
   }
+
+  // 复审第 8 轮的依据本身也得钉在真实页面上：那三行的字**浏览器渲染完一个都读不到**。
+  // 判据不再收图片 `alt` 靠的就是这一条——不是解析器觉得读不到，是页面上确实没有。
+  const imageAltBox = page.locator(".image-alt-problem-fixture");
+  assert.doesNotMatch(
+    await imageAltBox.locator(".task-markdown").first().innerText(),
+    /保存请求没有落盘/,
+    "本地磁盘图片的 alt 在页面上一个字都不出",
+  );
 
   // 收紧的另一侧同样得盯住：主句是一句明确的 `verified`、`no blockers` 只是它的理由，
   // 这一份该照旧折叠。判据收紧时顺手把它一起拒掉，折叠里的技术记录就重新铺满首屏了。

@@ -46,6 +46,8 @@ import {
   narrowedScope,
   unfinishedVerdict,
   invisibleProblem,
+  decoratedVerdict,
+  imageAltProblem,
 } from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
@@ -204,6 +206,14 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="invisible-problem-fixture markdown-report-body">
       <ReviewReportBody text={invisibleProblem} reportKey="run-37:1" />
+    </div>
+    {/* 复审第 8 轮：一句被斜体包着、其实没说完的判定，和三行都写成本地磁盘图片的「问题」
+        ——后者在页面上是标题底下一整片空白，`alt` 一个字都不出。 */}
+    <div className="decorated-verdict-fixture markdown-report-body">
+      <ReviewReportBody text={decoratedVerdict} reportKey="run-38:1" />
+    </div>
+    <div className="image-alt-problem-fixture markdown-report-body">
+      <ReviewReportBody text={imageAltProblem} reportKey="run-39:1" />
     </div>
     <div className="six-switch-fixture markdown-report-body">
       <SwitchableSix />

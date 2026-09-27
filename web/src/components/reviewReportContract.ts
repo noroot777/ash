@@ -5,11 +5,18 @@
 // 问题写全没有、条数对不对得上、报告有没有自相矛盾」，一个字都不碰切片；那一份拿着这里
 // 给的结论决定从哪一刀下手。
 //
+// 这一份自己也到了上限，于是再分出两块（复审第 8 轮）：**第一栏说了什么**在
+// `reviewReportVerdict.ts`，**页面上读出来是什么字**在 `reviewReportVisible.ts`。三份的
+// 问法是三层——这份问「报告结构证明了什么」，那份问「那句话是什么意思」，最底下那份问
+// 「用户到底读得到什么」。
+//
 // 每一条判据背后都有一份真实报告或一轮反例，改之前先读它头上那段注释——十一轮下来被打回
 // 的形状**从来只有一种**：判据比它要证明的事松一档，于是首屏写着有问题，问题本身进了那个
 // 宣称「里面只有验证过程、证据、清场记录」的折叠。拿不准一律降档：降错一档只是多点一下
 // 按钮，认错成契约是让按钮替报告撒谎。
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { admitsAcceptance } from "./reviewReportVerdict.ts";
+import { proseLines, visibleLines } from "./reviewReportVisible.ts";
 
 /**
  * `provesContract` 的结论：判到哪一档，以及摘要要不要再分一层。
@@ -199,7 +206,7 @@ export function provesContract(
   if (!items.length) {
     if (!saysNoProblem(probes, problems, aside)) return null;
     if (declared) return null;
-    if (!admitsAcceptance(probes, verdict, works)) return null;
+    if (!admitsAcceptance(root, probes, verdict, works)) return null;
     if (hidesProblem(root, probes, tail)) return null;
     return { kind: "contract" };
   }
@@ -214,168 +221,6 @@ export function provesContract(
     };
   }
   return spillsOver(root, probes, declared, items, aside) ? { kind: "lead" } : null;
-}
-
-/**
- * 第一栏**整段就是一句明确的验收结论**——「没有发现问题」那条岔路的第二道闸。
- *
- * 第 8 轮堵的是「报了数就得对上」，可条数只是报告表达矛盾的一种写法。第 1 轮（复审）
- * 的反例换了个写法就绕过去了：`**能不能验收**：不能验收，请修完再验` 压根不报数，
- * `declaredCount` 返回 `null`，零条目分支于是照放——首屏同时写着「不能验收」和「没有
- * 发现问题」，真正的问题在下一个 `##` 里，按钮还替它宣称折叠里只有技术记录。
- *
- * 于是问法从「有没有反面证据」换成「有没有正面证据」。接下来三轮，每一轮的反例都在说
- * 同一句话：**只要还有一块地方是按词表判的，下一种措辞就从那里进来**。
- *
- * 第 2 轮——整段搜正面子串：`不建议通过` `暂缓通过` `not verified` `测试通过，但暂不验收`
- * 四句都是不能验收，整段里却都躺着一个正面词。于是收到主句上搜。
- *
- * 第 3 轮——主句里搜子串还是搜子串：`测试通过，尚待人工验收` 的主句是「测试通过」，
- * 「功能正常」里有个「能」，`yesterday's checks were green` 里有个「yes」。于是正面这一侧
- * 改成白名单、比的是主句整体。
- *
- * 第 4 轮——**主句合格了，尾巴还在**。这几句的主句一个字都没错，反悔全写在后面：
- *
- *   可以验收，但保存问题仍未解决
- *   verified — save bug remains
- *   verified — rejected by QA
- *   verified — needs fixes
- *   verified — no issues resolved; changes are still required
- *
- * 当时尾巴是用否定词表和未决词表排除的，这几句一个固定词都没共用。继续添词追不上——
- * 添的是反例的措辞，漏的永远是下一种。
- *
- * 所以整栏一起收进白名单，不再留任何黑名单：
- *
- * ① 整栏按标点（括号也算）切成若干段，**每一段都得有人认领**。
- * ② 第一段必须整体落在 `ACCEPTS` 里——一句当前的验收判定，不是测试或功能的状态。
- * ③ 其余每一段必须整体落在 `ACCEPTS` 或 `SAFE_TAILS` 里——判定的同义重复（`通过（verified）`）
- *    或者一句说得死的「没有问题」（`有 0 条必须先修`、`no blockers`）。
- *
- * 认不出的段落一律降档。这就是这套判据唯一的立场：**白名单漏一条的代价是多铺开一屏，
- * 黑名单漏一条的代价是按钮替报告撒谎**。两者不对称，所以宁可漏在白名单这边。
- *
- * 标签得先去掉——栏目名「能不能验收」自己就带着「不能」两个字；前导空白也得去掉，四栏
- * 写成 `###` 时正文在标题的下一行，不 `trim` 的话第一段会切出一个空串。
- *
- * 真实语料里走这条岔路的报告一共 6 份：5 份写的是「可以验收」「能验收」，第 6 份写的是
- * 「可以 —— 第 1 轮的 2 条都已修复，本轮没有发现必须先修的问题。」——「第 1 轮的 2 条都
- * 已修复」是自由文本，按这套判据降档。那是这次收紧的全部代价：那一份报告的技术记录会
- * 铺开在首屏，问题一条都不会被藏起来。
- */
-/**
- * 切段的分隔符：标点（中英文都算，破折号也算）和括号。空白不算——`no blockers` 是一段。
- *
- * 英文句点是第 6 轮补测试时发现漏的：中文「可以验收。」切得开、英文 `verified.` 切不开，
- * 于是后者整段落不进白名单、白白降一档。全库 1251 份报告加上它之后档位 0 变化。
- */
-const CLAUSE_SPLIT = /[，,。.；;：:—–、!！?？\n（）()[\]【】/|]+/;
-/**
- * 一句**当前的验收判定**。比的是整段，不是「含有」——差别正是第 3 轮那几个反例：
- * 「测试通过」含「通过」但不是「通过」。
- */
-const ACCEPTS = new RegExp(`^(?:${[
-  "可以(?:验收|通过)?",
-  "能(?:验收|通过)?",
-  "可验收",
-  "(?:验收)?通过",
-  "通过验收",
-  "同意(?:验收)?",
-  "建议验收",
-  "verified",
-  "pass(?:ed)?",
-  "approved",
-  "accepted",
-  "yes",
-  "ok(?:ay)?",
-  "lgtm",
-].join("|")})$`, "iu");
-/**
- * 判定之后还允许写什么。只收**整段说死了「没有问题」**的写法：条数为零、没有发现问题、
- * 全部通过、`no blockers`。多一截自由文本（`no blockers were fixed`）不认——那是第 4 轮
- * 的反例。
- *
- * 英文那条的形容词位是**白名单**，不是任意单词。第 4 轮为了认出 `no blocking issues`
- * 开了个 `\w+`，第 5 轮的反例就从那里进来：`no fixed issues`、`no resolved blockers`、
- * `no addressed problems`——说的全是「没有已经修好的问题」，正好反着。
- *
- * 第 6 轮又从同一张表里进来一批：`no new issues`、`no other blockers` 只缩小了**范围**，
- * `no major problems`、`no critical risks` 只限定了**严重度**——四句话都没说「没有问题」，
- * 说的是「没有某一类问题」，旧的、次要的那些还在。所以形容词位只留「这个问题还没被处理
- * 掉」这一个意思的词（`blocking`/`open`/`outstanding`/`remaining`/`pending`/`known`），
- * 凡是给问题分类、分级的一律不收。
- */
-const SAFE_TAILS = [
-  /^有?\s*0\s*条(?:必须先修|要修|需要先修|必须修)?(?:的问题)?$/u,
-  /^(?:本轮)?(?:没有|无)(?:发现)?(?:任何)?(?:必须先修的|需要先修的|拦验收的|阻塞的)?问题$/u,
-  /^(?:本轮)?(?:没有|无)(?:发现)?(?:任何)?(?:必须先修的|需要先修的|拦验收的|阻塞的)?(?:问题|风险|缺陷)$/u,
-  /^全部(?:通过|修复|已修复)$/u,
-  /^(?:全部)?(?:都)?已(?:全部)?修复$/u,
-  /^no\s+(?:blocking|open|outstanding|remaining|pending|known)?\s*(?:blocker|issue|problem|concern|risk|regression)s?$/iu,
-  /^(?:all\s+)?(?:checks?\s+)?(?:pass|passed|green)$/iu,
-];
-
-/**
- * 这条判定**被划掉、被否掉、或者还没勾**。这些记号是内容，不是装饰。
- *
- * 第 5 轮的反例：`~~可以验收~~`、`❌ 可以验收`、`[ ] 可以验收`。当时两头是按 `\p{P}\p{S}`
- * 一律剥掉的，删除线、红叉、空的任务框全被洗成一句裸的「可以验收」——洗掉的恰好是那句话
- * 的**反面**。`[x]`（已勾选）是另一回事，由 `CHECKED` 单独剥掉。
- */
-const REVOKED = /~~|❌|❎|✗|✘|🚫|\[\s*\]|☐|▢/u;
-/**
- * 这句判定**是在问、或者没说完**。
- *
- * 第 6 轮的反例：`可以验收？`、`verified?`、`可以验收…`。问号当时是普通切段符、省略号
- * 算可剥装饰，两个都在匹配之前就没了，送进白名单的只剩一句裸的肯定。跟 `REVOKED` 一样
- * 得先于切段判断——切段会把它们当分隔符吃掉。
- *
- * 句号不在这里：它不改变判定的语气。逗号和破折号另说——它们**结束不了句子**，由
- * `UNFINISHED` 管。
- */
-const HEDGED = /[?？]|…/u;
-/**
- * 这句判定**没说完**——最后一个字符还等着下文。
- *
- * 第 7 轮的反例：`可以验收：`、`verified —`、`pass;`、`可以验收，`、`可以验收（`、
- * `verified..`、`verified. . .`。这些标点全是 `CLAUSE_SPLIT` 的分隔符，切完只剩一句裸的
- * 肯定，空段又被过滤掉，于是一句话说到一半也算数。
- *
- * 放行的只有**把句子结束掉**的那几个：句号（中英文各一个）、叹号，或者干脆不写标点。
- * 连着两个以上的点是省略号的另一种写法，归「没说完」。
- */
-const UNFINISHED = /[，,、；;：:—–·/|\\（(【\[{]\s*$|(?:\.\s*){2,}$|(?:。\s*){2,}$/u;
-/** 开头的「已勾选」记号：剥掉它跟没写是一个意思。空框不在这里——那是 `REVOKED`。 */
-const CHECKED = /^\s*\[\s*[xX✓✔]\s*\]\s*/u;
-/**
- * 两头能当装饰剥掉的**只有这些**：空白、强调、引号、勾选。
- *
- * 不再按 `\p{P}\p{S}` 通剥——那个范围把删除线和红叉也算成装饰（第 5 轮）。句号、破折号
- * 这类真正的标点不用在这里管，它们本来就是 `CLAUSE_SPLIT` 的分隔符。
- */
-const DECOR = /[\s*_`"'“”‘’「」『』·•✅✔☑🟢👍]/u;
-const trimMarks = (part: string) => part
-  .replace(new RegExp(`^(?:${DECOR.source})+`, "u"), "")
-  .replace(new RegExp(`(?:${DECOR.source})+$`, "u"), "");
-
-function admitsAcceptance(probes: string[], verdict: Column, works: Column): boolean {
-  const label = new RegExp(`^\\s*(?:[-*+]\\s+|\\d+[.)]\\s+)?#{0,6}\\s*${CONTRACT_MARKS[0]}\\s*[：:]?`);
-  const body = probes
-    .slice(verdict.at, works.at)
-    .join("\n")
-    .replace(/\*\*/g, "")
-    .replace(label, "")
-    .replace(CHECKED, "");
-  // 划掉的、打叉的、没勾的、在问的、没说完的，都先于一切判断——后面的切段会把方括号和
-  // 问号当分隔符，到那一步就没了。
-  if (REVOKED.test(body) || HEDGED.test(body) || UNFINISHED.test(body.trimEnd())) return false;
-  const parts = body
-    .split(CLAUSE_SPLIT)
-    .map(trimMarks)
-    .filter((part) => part !== "");
-  const [first, ...tail] = parts;
-  if (!first || !ACCEPTS.test(first)) return false;
-  return tail.every((part) => ACCEPTS.test(part) || SAFE_TAILS.some((safe) => safe.test(part)));
 }
 
 /**
@@ -494,70 +339,6 @@ const PROBLEM_LINES = ["你会遇到", "为什么", "建议怎么修"].map(
 );
 
 /**
- * 这段行号范围里，每一行**渲染出来是什么字**。
- *
- * 第 7 轮的反例：`你会遇到：[](#symptom)`。源码里冒号后面确实有字符，页面上却只有一个
- * 空标签——三行占着位置，一个字都读不到。所以「冒号后有没有字」得问渲染结果，不能问源码。
- *
- * 只收 `text` 和 `inlineCode` 的内容，以及图片的 `alt`：链接、强调这些容器本身不出字，
- * 出字的是它们里面的文本节点。HTML 注释、空链接、只有锚点的写法因此都读不到字，一律不
- * 算一行说明——跟别处一样，认不出就降档。
- */
-function visibleLines(root: Parsed, from: number, to: number): Map<number, string> {
-  const lines = new Map<number, string>();
-  const add = (at: number, text: string) => {
-    if (at < from || at >= to || text === "") return;
-    lines.set(at, (lines.get(at) ?? "") + text);
-  };
-  const walk = (node: ParsedNode) => {
-    if (!node.position) return;
-    const start = node.position.start.line - 1;
-    if (node.type === "text" || node.type === "inlineCode") {
-      node.value.split("\n").forEach((piece, index) => add(start + index, piece));
-      return;
-    }
-    if (node.type === "image") { add(start, node.alt ?? ""); return; }
-    if ("children" in node && Array.isArray(node.children)) for (const child of node.children) walk(child);
-  };
-  for (const node of root.children) {
-    if (node.type === "paragraph") walk(node);
-    else if (node.type === "list") {
-      for (const item of node.children) for (const child of item.children) if (child.type === "paragraph") walk(child);
-    }
-  }
-  return lines;
-}
-
-/**
- * 这段行号范围里，哪些行是**正文**——顶层段落，以及顶层列表直属项里的段落。
- *
- * 白名单跟 `markCandidateStarts` 同一套，理由也一样：围栏、HTML 块、块引用、嵌套列表里
- * 的字看着顶格，解析树里各有归属。第 6 轮的反例就是围栏——一段「写法示例」代码块里照着
- * 模板写了那三行，按源码逐行扫就成了一条真问题，真正的问题被折进明细。黑名单永远缺一
- * 条，白名单漏掉一种写法只是不拆。
- *
- * 这里收**节点覆盖的每一行**而不是起始行：那三行是一段里的三个软换行，本来就该整段收。
- */
-function proseLines(root: Parsed, from: number, to: number): Set<number> {
-  const lines = new Set<number>();
-  const take = (node: ParsedNode) => {
-    if (!node.position) return;
-    for (let at = node.position.start.line - 1; at <= node.position.end.line - 1; at += 1) {
-      if (at >= from && at < to) lines.add(at);
-    }
-  };
-  for (const node of root.children) {
-    if (node.type === "paragraph") take(node);
-    else if (node.type === "list") {
-      for (const item of node.children) {
-        for (const child of item.children) if (child.type === "paragraph") take(child);
-      }
-    }
-  }
-  return lines;
-}
-
-/**
  * `at` 那个小标题底下**真写着一条问题**，不是别的什么。
  *
  * 曾经只数「第三、四栏之间有没有一个够深的标题」，于是任何一个说明性小标题都能冒充问题
@@ -579,7 +360,7 @@ function writesProblem(root: Parsed, at: number, depth: number, until: number): 
   );
   const end = Math.min(until, sibling?.position ? sibling.position.start.line - 1 : until);
   const prose = proseLines(root, at + 1, end);
-  const visible = visibleLines(root, at + 1, end);
+  const visible = visibleLines(root, at + 1, end).lines;
   let cursor = at + 1;
   for (const line of PROBLEM_LINES) {
     let hit = -1;

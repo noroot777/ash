@@ -20,6 +20,8 @@ import {
   narrowedScope,
   unfinishedVerdict,
   invisibleProblem,
+  decoratedVerdict,
+  imageAltProblem,
 } from "./review-report-contradiction-texts.ts";
 
 
@@ -645,4 +647,6 @@ export {
   narrowedScope,
   unfinishedVerdict,
   invisibleProblem,
+  decoratedVerdict,
+  imageAltProblem,
 };

@@ -272,6 +272,51 @@ const invisibleProblem = `## 结论
 建议怎么修：修复保存流程。
 `;
 
+// 复审第 8 轮 · 其一：同样是「没说完」，外面套了层斜体。判「最后一个字符」当时问的是源码，
+// 末尾那个 `_` 把冒号挡在了后面；页面上读出来分明就是「可以验收：」。
+const decoratedVerdict = `## 结论
+
+**能不能验收**：_可以验收：_
+
+**现在什么能用了**：页面可以打开。
+
+**必须修的问题**：
+
+没有发现问题
+
+**不拦验收、但你该知道的**：没有。
+
+## 技术明细
+
+旧的保存问题仍未解决，修复前不能验收。
+`;
+
+// 同轮另一条：三行各写成一张**电脑本地磁盘**的图。`alt` 曾被当成那一行的可见文字，可
+// `MarkdownBody` 对这种路径直接 `return null`——页面上是标题底下一片空白，真问题在折叠里。
+const imageAltProblem = `## 结论
+
+**能不能验收**：不能 —— 有 1 条必须先修。
+
+**现在什么能用了**：页面可以打开。
+
+**必须修的问题**：
+
+### 1. 保存仍会失败
+
+![你会遇到：保存后内容消失](/Users/fjh/round8-symptom.png)
+![为什么：保存请求没有落盘](/Users/fjh/round8-cause.png)
+![建议怎么修：修复保存流程](/Users/fjh/round8-fix.png)
+
+**不拦验收、但你该知道的**：没有。
+
+## 技术明细
+
+### 改完名字刷新就回到旧名字
+你会遇到：给项目改完名，刷新页面又变回原来那个名字。
+为什么：改名只写了内存里的那份，没落盘。
+建议怎么修：改名后把项目记录一起写回磁盘。
+`;
+
 export {
   contradictoryNone,
   contradictoryUncounted,
@@ -286,4 +331,6 @@ export {
   narrowedScope,
   unfinishedVerdict,
   invisibleProblem,
+  decoratedVerdict,
+  imageAltProblem,
 };
