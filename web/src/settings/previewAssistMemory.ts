@@ -100,7 +100,7 @@ export function pendingAssistTrace(projectId: string, instance: string, claim: s
   writeLive(LIVE_KEY(projectId), JSON.stringify({
     jobId: "", claim, executorLabel: "", round: 0, maxRounds: 3, startedAt: new Date().toISOString(), instance,
   } satisfies AssistTrace));
-  holdAssistClaim(projectId, claim);
+  holdAssistClaim(projectId, claim, "click");
 }
 
 /** 作业还在跑：把身份记住（每一拍都写，轮次跟着走，中断那句话才说得出第几轮）。 */
@@ -116,7 +116,9 @@ export function traceAssistJob(projectId: string, job: PreviewAssistState, insta
     startedAt: job.startedAt,
     instance,
   } satisfies AssistTrace));
-  holdAssistClaim(projectId, job.claim);
+  // 兜底：走到这儿时登记早就有了（点击时、或页面打开裁决完时就登记过）。真要是没有，也只当最弱
+  // 那一档 —— 不可逆的动作宁可少做（见 previewAssistTabs.ts 的 assistClaimSettled）。
+  holdAssistClaim(projectId, job.claim, "provisional");
 }
 
 export const forgetAssistTrace = (projectId: string): void => {

@@ -20,8 +20,16 @@
 // 降级路:`navigator.locks` 要安全上下文,裸 http 的局域网地址(ash 常这么开)根本没有它。那一档
 // 退回 BroadcastChannel 点名,但**判断必须是可撤回的**:超时只算「暂且是我的」,迟到的应答一到
 // 就当场交出去;两份副本同时恢复、彼此都没来得及登记的那一种,靠「谁先拿住谁算」(since 早的赢)
-// 收口。代价照实说:降级路上「超时」到「撤回」之间那几百毫秒里副本仍把自己当正主 —— 比原来
-// 「永久认错」小得多,而安全上下文(localhost / https)压根走不到这一档。
+// 收口。
+//
+// 「暂且是我的」撑不起**不可逆**的动作 —— 第 9 轮审查把正主的应答延到 30 秒,副本在那之前就
+// 让作业成功了:脚本填进输入框、通知也发了,撤回只能改状态,填进去的东西收不回来。所以所有权
+// 分两档,`assistClaimSettled` 就是这条线:
+//   · click(这一页自己点的按钮)/ lease(浏览器仲裁的租约)→ **站得住**,成功就直接填
+//   · provisional(降级路上靠静默超时暂且认下的)→ 只够只读地跟进度;作业成功时不许动输入框,
+//     把脚本摆出来让用户自己拍板(PreviewAiAssist 的 offered)。等待多久都换不来确认,那就别等
+// 「这一页自己点过按钮」是**副本复制不走的**证据:它只活在这一份文档的内存里,所以裸 http 上
+// 正常那一路(点一下、等它跑完、自动填上)一点没变,降级只落在「刷新过、或者是复制出来的页面」。
 //
 // BroadcastChannel 不会把消息投回给发送方自己,所以「自己应答自己」这种事不会发生。
 const CHANNEL = "ash:preview-assist-claims";
@@ -33,10 +41,14 @@ type Note =
   | { kind: "ask"; projectId: string; claim: string }
   | { kind: "held"; projectId: string; claim: string; since: number; page: string };
 
+/** 所有权是怎么来的 —— 决定它撑不撑得起「直接改用户的输入框」。见文件头。 */
+export type AssistClaimSource = "click" | "lease" | "provisional";
+
 interface Hold {
   claim: string;
   /** 这一页从什么时候起拿着它:正主是点下按钮那一刻,副本是它自己打开的那一刻(必然更晚)。 */
   since: number;
+  source: AssistClaimSource;
 }
 interface Ask {
   projectId: string;
@@ -45,6 +57,17 @@ interface Ask {
 }
 
 const holds = new Map<string, Hold>();
+/**
+ * 站得住的那些 claim（`${projectId}\0${claim}`）。
+ *
+ * **跟 `holds` 分开记是必须的**：`holds` 是「现在还应不应答点名」，作业一落终态，
+ * previewAssistMemory 就会正常抹掉本地追踪、顺手把登记放掉（不放掉的话服务端 10 分钟后清掉
+ * 终态，那个 null 会被读成「出事了」）。而「这份结果能不能填进输入框」是那之后才判的 ——
+ * 挂在 `holds` 上就等于「响应丢了但作业已经成功」那一路(回归 ⑤b)自己把自己判成不可信。
+ * 只有被撤回（surrender）才真的不再算数。
+ */
+const settled = new Set<string>();
+const settledKey = (projectId: string, claim: string) => `${projectId}\u0000${claim}`;
 const asking = new Set<Ask>();
 const losers = new Set<(projectId: string) => void>();
 /** 已经拿在手里的锁名(拿到就不放,所以只记不删)。 */
@@ -97,6 +120,8 @@ function announce(projectId: string): void {
 
 /** 交出所有权:登记抹掉,再让订阅者把本地追踪和界面改回「别人的作业」。 */
 function surrender(projectId: string): void {
+  const held = holds.get(projectId);
+  if (held) settled.delete(settledKey(projectId, held.claim));
   holds.delete(projectId);
   for (const loser of losers) loser(projectId);
 }
@@ -112,25 +137,42 @@ export function watchAssistClaimLost(listener: (projectId: string) => void): () 
  *
  * 登记跟本地那条追踪记录同生同死(previewAssistMemory.ts 的三个写入口各调一次):记录一抹掉
  * 就不再应答 —— 之后从这一页复制出去的标签本来也继承不到什么。
+ *
+ * `source` 只在**第一次**认下时记住(每一拍轮询都会再调一次,不能把它冲掉)。
  */
-export function holdAssistClaim(projectId: string, claim: string | null): void {
+export function holdAssistClaim(projectId: string, claim: string | null, source: AssistClaimSource = "click"): void {
   if (!claim) { holds.delete(projectId); return; }
   if (holds.get(projectId)?.claim === claim) return; // 每一拍轮询都会调一次，别重复登记和广播
-  holds.set(projectId, { claim, since: Date.now() });
+  holds.set(projectId, { claim, since: Date.now(), source });
+  // 站得住的来路只记一次、也不随登记一起放掉（见 settled 的注释）。
+  if (source !== "provisional") settled.add(settledKey(projectId, claim));
   void grabLock(projectId, claim);
   // 主动报一声:两份副本同时恢复、谁都没来得及应答谁的那一种，就靠这一声分出先后。
   announce(projectId);
 }
 
 /**
+ * 这份所有权**站不站得住**:站得住才允许动用户的输入框。
+ *
+ * 只有「这一页自己点的按钮」和「浏览器仲裁的租约」算站得住；降级路上靠静默超时暂且认下的那一
+ * 档不算 —— 等多久都换不来确认，而填进输入框和那句「脚本已填入」都收不回来（第 9 轮审查：
+ * 正主应答延到 30 秒，副本在撤回之前已经把脚本填了）。
+ */
+export function assistClaimSettled(projectId: string, claim: string): boolean {
+  return settled.has(settledKey(projectId, claim));
+}
+
+/**
  * 这一页能不能**独占**这个 claim。
  *
  * true = 能(这一页就是正主);false = 另一个活着的文档拿着它(这一页是会话副本，只许看)。
+ * 注意 true 还分两档:租约给的 true 站得住，降级路静默超时给的 true 只够只读跟进度
+ * (assistClaimSettled)。
  */
 export async function claimAssistOwnership(projectId: string, claim: string): Promise<boolean> {
   const byLock = await grabLock(projectId, claim);
   if (byLock !== null) {
-    if (byLock) holdAssistClaim(projectId, claim);
+    if (byLock) holdAssistClaim(projectId, claim, "lease");
     return byLock;
   }
   return askAround(projectId, claim);
@@ -157,10 +199,10 @@ function grabLock(projectId: string, claim: string): Promise<boolean | null> {
   });
 }
 
-/** 降级路的点名:有人应答就是别人的;没人应答**暂且**算自己的（可撤回，见文件头）。 */
+/** 降级路的点名:有人应答就是别人的;没人应答**暂且**算自己的（可撤回且不足以动输入框，见文件头）。 */
 function askAround(projectId: string, claim: string, waitMs = 300): Promise<boolean> {
   const wire = channel();
-  if (!wire) { holdAssistClaim(projectId, claim); return Promise.resolve(true); }
+  if (!wire) { holdAssistClaim(projectId, claim, "provisional"); return Promise.resolve(true); }
   return new Promise<boolean>((resolve) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const ask: Ask = {
@@ -174,8 +216,8 @@ function askAround(projectId: string, claim: string, waitMs = 300): Promise<bool
     };
     asking.add(ask);
     timer = setTimeout(() => {
-      // 静默不等于没有正主,所以这只是「暂且是我的」:先登记下来,迟到的应答会把它撤回。
-      holdAssistClaim(projectId, claim);
+      // 静默不等于没有正主,所以这只是「暂且是我的」:够只读地跟着进度，不够改用户的输入框。
+      holdAssistClaim(projectId, claim, "provisional");
       ask.settle(false);
     }, waitMs);
     wire.postMessage({ kind: "ask", projectId, claim } satisfies Note);

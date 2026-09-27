@@ -25,7 +25,9 @@
 //   ⑬ 那次裁决**不能靠正主答话**：正主主线程卡住、标签被冻结时它一声不出，静默不许被读成
 //      「没有正主」（主路交给浏览器记账的页面租约，JS 停摆不影响锁的账）；
 //   ⑭ 没有 Web Locks 的环境（裸 http 的局域网地址不是安全上下文）只能点名，那就必须**可撤回**：
-//      正主的应答迟到 800ms，副本先认了领，迟到那句话一到就得当场交出去。
+//      正主的应答迟到 800ms，副本先认了领，迟到那句话一到就得当场交出去；
+//   ⑮ 同一档里顺序反过来（作业先成功、确认后到）→ 「暂且算我的」撑不起不可逆的动作：成功时只许
+//      把脚本摆出来让用户拍板，不许自己填（填进去和那句「已填入」都收不回来）。正主那一路照旧自动填。
 //
 // 服务端那份是假的（fixture 里几个模块级变量），这里测的是前端这一侧的判断：什么时候轮询、
 // null 该读成哪一种、填还是不填。
@@ -392,9 +394,65 @@ try {
   assert.deepEqual((await slowNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
   assert.deepEqual(slowErrors, [], "副本页不应产生运行时异常");
   assert.deepEqual(lanErrors, [], "正主页不应产生运行时异常");
+  await slow.close();
+
+  // ⑮ 同一档里**顺序反过来**：作业先成功，正主的确认后到（第 9 轮审查把应答延到 30 秒复现）。
+  //    「暂且算我的」撑不起不可逆的动作 —— 填进输入框和那句「脚本已填入」都收不回来，所以这一档
+  //    成功时只许把脚本摆出来让用户拍板。顺带钉住：**正主自己那一路没被降级**（裸 http 上点一下、
+  //    等它跑完、自动填上，一点没变）。
+  const owner = await lanContext.newPage();
+  const ownerErrors = [];
+  owner.on("pageerror", (failure) => ownerErrors.push(failure.message));
+  await owner.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}-lan`);
+  const ownerScript = owner.getByRole("textbox", { name: "启动脚本", exact: true });
+  const ownerProgress = owner.locator(".preview-assist-progress");
+  await ownerScript.waitFor();
+  await ownerScript.fill("# 局域网正主：等 AI 自己填上来");
+  await owner.getByRole("button", { name: "AI 协助填写" }).click();
+  await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  // 这一次把确认压到 5 秒之后 —— 足够让作业先成功
+  await owner.evaluate(() => {
+    const post = BroadcastChannel.prototype.postMessage;
+    BroadcastChannel.prototype.postMessage = function (note) {
+      if (note && typeof note === "object" && note.kind === "held") {
+        setTimeout(() => post.call(this, note), 5000);
+        return undefined;
+      }
+      return post.call(this, note);
+    };
+  });
+  const [early] = await Promise.all([
+    lanContext.waitForEvent("page"),
+    owner.evaluate(() => { window.open(location.href, "_blank"); }),
+  ]);
+  const earlyErrors = [];
+  early.on("pageerror", (failure) => earlyErrors.push(failure.message));
+  await early.waitForLoadState();
+  const earlyScript = early.getByRole("textbox", { name: "启动脚本", exact: true });
+  const earlyProgress = early.locator(".preview-assist-progress");
+  const earlyNotices = async () => JSON.parse(await early.getByTestId("notices").textContent());
+  await earlyScript.waitFor();
+  // 它已经暂且认了领：这时还没有「别的页面点的」那句（确认要 5 秒后才到）
+  await earlyProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  assert.equal(await earlyProgress.getByText("别的页面点的", { exact: false }).count(), 0,
+    "这一步要测的正是「确认还没到、它已经暂且认了领」");
+  const earlyBefore = await editorText(earlyScript);
+  await owner.getByTestId("assist-succeed").click();
+  // 正主照旧自动填上（点过按钮这件事是副本复制不走的证据）
+  await owner.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
+  // 副本这边：脚本摆出来等拍板，一个字都不许自己填
+  await earlyProgress.getByText("归属没能确认", { exact: false }).waitFor();
+  await early.waitForTimeout(1500);
+  assert.equal(await editorText(earlyScript), earlyBefore, "归属没定下来就不许改用户的输入框");
+  assert.match(await earlyProgress.innerText(), /npm run dev -- --port \$PORT/, "摆出来的那条脚本还是要看得见");
+  assert.deepEqual((await earlyNotices()).filter((line) => line.includes("脚本已填入")), [], "没填就不该提示填入");
+  assert.deepEqual(earlyErrors, [], "副本页不应产生运行时异常");
+  assert.deepEqual(ownerErrors, [], "正主页不应产生运行时异常");
   await lanContext.close();
 
-  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims, silent owner still owns, late answer revokes)");
+  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims, silent owner still owns, late answer revokes, provisional claim never fills)");
 } finally {
   await browser?.close();
   await server.close();
