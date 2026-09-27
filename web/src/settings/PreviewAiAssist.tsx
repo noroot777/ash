@@ -88,13 +88,29 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
    * 编辑这件事只有一个诚实的判据：框里的内容变了，而且**不是我们自己填进去的**。
    */
   const edited = useRef(false);
-  /** 我们自己填进去的那一份。它引起的那次变化不算用户编辑（见 edited）。 */
+  /**
+   * 我们自己填进去的那一份 —— 它引起的**紧接着那一次**变化不算用户编辑（见 edited）。
+   *
+   * 看见就消费掉、立刻清空。留着不清的话它会一直挂在那儿当「这是程序写的」：用户在下一轮里
+   * 亲手把输入框改回上一轮 AI 填过的那条，就恰好命中这个残留标记、被判成没动过手，第二轮的
+   * 结果照样静默覆盖（第 15 轮审查复现）。
+   */
   const wrote = useRef<string | null>(null);
+  /**
+   * 已经发出去过几次读取。**只有最新那一次的响应算数。**
+   *
+   * 服务端这几个端点之间没有版本号，而响应的到达顺序跟发出顺序无关：页面刚打开那一次
+   * 「这个项目现在有作业吗」问的时候确实还没有，回来的路上却慢了一步——它一落地就把刚点出来
+   * 的那份 running 覆盖成「上一次的结果已经过期」，`running` 一关轮询定时器也停了，作业还在
+   * 服务端跑着，用户却连「停止」都点不到（第 15 轮审查复现）。
+   */
+  const reads = useRef(0);
   /** 上一次渲染时框里是什么 —— 只用来发现「变了」。 */
   const current = useRef(script);
   useEffect(() => {
     if (script === current.current) return;
-    if (script !== wrote.current) edited.current = true;
+    if (script === wrote.current) wrote.current = null;
+    else edited.current = true;
     current.current = script;
   });
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
@@ -139,10 +155,21 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
     setForeign(false);
     setJob(lostAssistState(projectId, trace, trace.instance === result.instance));
   }, [projectId]);
+  /**
+   * 刚拿到的这一份是**最新消息**（启动 / 取消 / 重查的响应）：把代次推上去，在它之前发出的
+   * 读取全部作废 —— 那些响应携带的是更早的世界，晚到也不能翻盘（见 reads）。
+   */
+  const land = useCallback((result: { job: PreviewAssistState | null; instance: string }) => {
+    reads.current += 1;
+    absorb(result);
+  }, [absorb]);
   const poll = useCallback(async () => {
+    const at = reads.current + 1;
+    reads.current = at;
     try {
       const result = await api.previewAssist(projectId);
-      if (active.current) absorb(result);
+      // 这一拍在路上时又发出过更新的读取（或者启动/取消已经落了状态）→ 这份已经过时，丢掉。
+      if (active.current && at === reads.current) absorb(result);
     } catch { /* 轮询失败就等下一拍，别把界面搞成一片红 */ }
   }, [projectId, absorb]);
   // 开着页面就先问一次：上一次点开的作业可能还在跑（换页面、刷新都不该把它弄丢），
@@ -215,7 +242,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
    */
   const settleStart = (result: { job: PreviewAssistState | null; instance: string }, claim: string) => {
     filled.current = null;
-    absorb(result);
+    land(result);
     if (result.job && result.job.claim !== claim) {
       setError("这个项目上已经有一份 AI 协助在跑（别的页面或别人点的），所以这一次没有新开。下面是那一份的进度，它跑出来的脚本不会动你的输入框。");
     }
@@ -229,6 +256,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
     setForeign(false);
     // 点下去这一刻重新起算：之前改过什么都不算，用户要的就是拿这一次的结果填这个框。
     edited.current = false;
+    wrote.current = null;
     const claim = newAssistClaim();
     // **先记后发**：服务端是同步预占的，请求一旦发出去它就可能已经接单了。等响应回来再记，
     // 中间断线就等于这台浏览器从此不知道有这么个作业在跑（第 2 轮审查复现过）。记的正是这次
@@ -257,7 +285,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       const checked = await api.previewAssist(projectId).catch(() => null);
       if (!active.current) return;
       if (checked?.job?.claim === claim) { settleStart(checked, claim); return; }
-      if (checked) { forgetAssistTrace(projectId); if (checked.job?.status === "running") absorb(checked); }
+      if (checked) { forgetAssistTrace(projectId); if (checked.job?.status === "running") land(checked); }
       setError(failure instanceof Error ? failure.message : "启动失败");
     } finally { if (active.current) setBusy(false); }
   };
@@ -266,6 +294,8 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
     try {
       const result = await api.cancelPreviewAssist(projectId);
       forgetAssistTrace(projectId);
+      // 取消的响应同样是最新消息：在它之前发出的那些读取里作业还在跑，晚到不能把「已取消」顶掉。
+      reads.current += 1;
       if (active.current) { setLost(false); setJob(result.job); }
     } catch (failure) {
       if (active.current) setError(failure instanceof Error ? failure.message : "取消失败");

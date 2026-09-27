@@ -115,6 +115,8 @@ const succeeded = (patch: Partial<PreviewAssistState> = {}): Partial<PreviewAssi
   attempts: [{ round: 1, script: "npm run dev -- --port $PORT", ok: true, url: "http://localhost:14611/", reason: null, log: "ready in 300ms" }],
   ...patch,
 });
+/** 第二轮真跑出来的那一条,跟 succeeded() 默认那条不一样(见 assist-succeed-other)。 */
+const OTHER_SCRIPT = "npm run preview:new -- --port $PORT";
 const assistJob = (patch: Partial<PreviewAssistState>): PreviewAssistState => ({
   jobId: `job-${assistSeq()}`,
   projectId: "p-one",
@@ -188,12 +190,17 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       if (live?.status === "running") setAssist({ ...live, status: "canceled", phase: "done", step: "已取消", error: "已取消", endedAt: "2026-09-26T00:01:00.000Z" });
       return reply({ canceled: true, job: readAssist(), instance: assistInstance() });
     }
+    // **先把这一刻的状态定下来,再压住响应**——真实服务端就是这样:它在收到请求那一刻照实回答,
+    // 慢的是回程。压住之后再去读一遍,等于让这条响应捎回未来的状态,那就测不着「旧响应晚到」了
+    // (第 15 轮审查复现的正是这一段:打开页面时问的那一句「现在有作业吗」答的是「没有」,
+    // 它却在点完按钮之后才落地)。
+    const payload = { job: readAssist(), instance: assistInstance() };
     if (holdFirstGet) {
       const wait = holdFirstGet;
       holdFirstGet = 0;
       await new Promise((done) => setTimeout(done, wait));
     }
-    return reply({ job: readAssist(), instance: assistInstance() });
+    return reply(payload);
   }
   if (pathname.endsWith("/git")) return reply({
     identity: {
@@ -287,6 +294,24 @@ function Fixture() {
           }}
         >
           假装真起来了
+        </button>
+        {/* 同上,但给的是**另一条**脚本:一轮填过 A、下一轮真跑出来的是 C,两条得分得开。 */}
+        <button
+          type="button"
+          data-testid="assist-succeed-other"
+          onClick={() => {
+            const live = readAssist();
+            setAssist(assistJob({
+              ...succeeded({
+                script: OTHER_SCRIPT,
+                attempts: [{ round: 1, script: OTHER_SCRIPT, ok: true, url: "http://localhost:14611/", reason: null, log: "ready in 300ms" }],
+              }),
+              jobId: live?.jobId ?? `job-${assistSeq()}`,
+              claim: live?.claim ?? "",
+            }));
+          }}
+        >
+          假装真起来了(另一条)
         </button>
         {/* 上面那颗是「现在就成功」；这颗是「下一次页面加载时它已经成功了」—— 刷新那一瞬跑完的那种。 */}
         <button
