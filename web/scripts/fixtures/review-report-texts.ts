@@ -16,6 +16,8 @@ import {
   englishVerdict,
   contradictedTail,
   revokedVerdict,
+  hedgedVerdict,
+  narrowedScope,
 } from "./review-report-contradiction-texts.ts";
 
 
@@ -637,4 +639,6 @@ export {
   englishVerdict,
   contradictedTail,
   revokedVerdict,
+  hedgedVerdict,
+  narrowedScope,
 };

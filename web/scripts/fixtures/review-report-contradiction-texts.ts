@@ -190,6 +190,43 @@ const revokedVerdict = `## 结论
 保存后内容仍可能消失，修复前不能验收。
 `;
 
+// 复审第 6 轮：这句判定是在问，不是在答。问号当时是普通切段符，切完只剩一句裸的
+// 「可以验收」——一句没说死的话被读成了说死的判定。
+const hedgedVerdict = `## 结论
+
+**能不能验收**：可以验收？
+
+**现在什么能用了**：页面可以打开。
+
+**必须修的问题**：
+
+没有发现问题
+
+**不拦验收、但你该知道的**：没有。
+
+## 技术明细
+
+旧的保存问题仍未解决，修复前不能验收。
+`;
+
+// 同轮另一条：`no new issues` 只缩小了范围——旧问题还在，它没说「没有问题」。
+const narrowedScope = `## 结论
+
+**能不能验收**：verified — no new issues
+
+**现在什么能用了**：页面可以打开。
+
+**必须修的问题**：
+
+没有发现问题
+
+**不拦验收、但你该知道的**：没有。
+
+## 技术明细
+
+旧的保存问题仍未解决，修复前不能验收。
+`;
+
 export {
   contradictoryNone,
   contradictoryUncounted,
@@ -200,4 +237,6 @@ export {
   englishVerdict,
   contradictedTail,
   revokedVerdict,
+  hedgedVerdict,
+  narrowedScope,
 };

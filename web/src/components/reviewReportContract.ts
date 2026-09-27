@@ -263,8 +263,13 @@ export function provesContract(
  * 已修复」是自由文本，按这套判据降档。那是这次收紧的全部代价：那一份报告的技术记录会
  * 铺开在首屏，问题一条都不会被藏起来。
  */
-/** 切段的分隔符：标点（中英文都算，破折号也算）和括号。空白不算——`no blockers` 是一段。 */
-const CLAUSE_SPLIT = /[，,。；;：:—–、!！?？\n（）()[\]【】/|]+/;
+/**
+ * 切段的分隔符：标点（中英文都算，破折号也算）和括号。空白不算——`no blockers` 是一段。
+ *
+ * 英文句点是第 6 轮补测试时发现漏的：中文「可以验收。」切得开、英文 `verified.` 切不开，
+ * 于是后者整段落不进白名单、白白降一档。全库 1251 份报告加上它之后档位 0 变化。
+ */
+const CLAUSE_SPLIT = /[，,。.；;：:—–、!！?？\n（）()[\]【】/|]+/;
 /**
  * 一句**当前的验收判定**。比的是整段，不是「含有」——差别正是第 3 轮那几个反例：
  * 「测试通过」含「通过」但不是「通过」。
@@ -292,8 +297,13 @@ const ACCEPTS = new RegExp(`^(?:${[
  *
  * 英文那条的形容词位是**白名单**，不是任意单词。第 4 轮为了认出 `no blocking issues`
  * 开了个 `\w+`，第 5 轮的反例就从那里进来：`no fixed issues`、`no resolved blockers`、
- * `no addressed problems`——说的全是「没有已经修好的问题」，正好反着。形容词只收「还没
- * 处理」那一侧的词，「已处理」那一侧一个都不收。
+ * `no addressed problems`——说的全是「没有已经修好的问题」，正好反着。
+ *
+ * 第 6 轮又从同一张表里进来一批：`no new issues`、`no other blockers` 只缩小了**范围**，
+ * `no major problems`、`no critical risks` 只限定了**严重度**——四句话都没说「没有问题」，
+ * 说的是「没有某一类问题」，旧的、次要的那些还在。所以形容词位只留「这个问题还没被处理
+ * 掉」这一个意思的词（`blocking`/`open`/`outstanding`/`remaining`/`pending`/`known`），
+ * 凡是给问题分类、分级的一律不收。
  */
 const SAFE_TAILS = [
   /^有?\s*0\s*条(?:必须先修|要修|需要先修|必须修)?(?:的问题)?$/u,
@@ -301,7 +311,7 @@ const SAFE_TAILS = [
   /^(?:本轮)?(?:没有|无)(?:发现)?(?:任何)?(?:必须先修的|需要先修的|拦验收的|阻塞的)?(?:问题|风险|缺陷)$/u,
   /^全部(?:通过|修复|已修复)$/u,
   /^(?:全部)?(?:都)?已(?:全部)?修复$/u,
-  /^no\s+(?:blocking|open|outstanding|remaining|pending|known|critical|major|new|other)?\s*(?:blocker|issue|problem|concern|risk|regression)s?$/iu,
+  /^no\s+(?:blocking|open|outstanding|remaining|pending|known)?\s*(?:blocker|issue|problem|concern|risk|regression)s?$/iu,
   /^(?:all\s+)?(?:checks?\s+)?(?:pass|passed|green)$/iu,
 ];
 
@@ -313,6 +323,16 @@ const SAFE_TAILS = [
  * 的**反面**。`[x]`（已勾选）是另一回事，由 `CHECKED` 单独剥掉。
  */
 const REVOKED = /~~|❌|❎|✗|✘|🚫|\[\s*\]|☐|▢/u;
+/**
+ * 这句判定**是在问、或者没说完**。
+ *
+ * 第 6 轮的反例：`可以验收？`、`verified?`、`可以验收…`。问号当时是普通切段符、省略号
+ * 算可剥装饰，两个都在匹配之前就没了，送进白名单的只剩一句裸的肯定。跟 `REVOKED` 一样
+ * 得先于切段判断——切段会把它们当分隔符吃掉。
+ *
+ * 句号、破折号、逗号不在这里：它们不改变判定的语气。
+ */
+const HEDGED = /[?？]|…|\.{3,}|。{2,}/u;
 /** 开头的「已勾选」记号：剥掉它跟没写是一个意思。空框不在这里——那是 `REVOKED`。 */
 const CHECKED = /^\s*\[\s*[xX✓✔]\s*\]\s*/u;
 /**
@@ -321,7 +341,7 @@ const CHECKED = /^\s*\[\s*[xX✓✔]\s*\]\s*/u;
  * 不再按 `\p{P}\p{S}` 通剥——那个范围把删除线和红叉也算成装饰（第 5 轮）。句号、破折号
  * 这类真正的标点不用在这里管，它们本来就是 `CLAUSE_SPLIT` 的分隔符。
  */
-const DECOR = /[\s*_`"'“”‘’「」『』·•…✅✔☑🟢👍]/u;
+const DECOR = /[\s*_`"'“”‘’「」『』·•✅✔☑🟢👍]/u;
 const trimMarks = (part: string) => part
   .replace(new RegExp(`^(?:${DECOR.source})+`, "u"), "")
   .replace(new RegExp(`(?:${DECOR.source})+$`, "u"), "");
@@ -334,9 +354,9 @@ function admitsAcceptance(probes: string[], verdict: Column, works: Column): boo
     .replace(/\*\*/g, "")
     .replace(label, "")
     .replace(CHECKED, "");
-  // 划掉的、打叉的、没勾的，先于一切判断——后面的切段会把方括号当分隔符，空框在那一步
-  // 就没了。
-  if (REVOKED.test(body)) return false;
+  // 划掉的、打叉的、没勾的、在问的、没说完的，都先于一切判断——后面的切段会把方括号和
+  // 问号当分隔符，到那一步就没了。
+  if (REVOKED.test(body) || HEDGED.test(body)) return false;
   const parts = body
     .split(CLAUSE_SPLIT)
     .map(trimMarks)

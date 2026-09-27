@@ -42,6 +42,8 @@ import {
   englishVerdict,
   contradictedTail,
   revokedVerdict,
+  hedgedVerdict,
+  narrowedScope,
 } from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
@@ -186,6 +188,13 @@ createRoot(document.getElementById("root")!).render(
     {/* 复审第 5 轮：判定被删除线划掉了，同样不许当成生效的「可以验收」。 */}
     <div className="revoked-verdict-fixture markdown-report-body">
       <ReviewReportBody text={revokedVerdict} reportKey="run-33:1" />
+    </div>
+    {/* 复审第 6 轮：一句在问的判定、一句只排除了某一类问题的判定，都不算把话说死。 */}
+    <div className="hedged-verdict-fixture markdown-report-body">
+      <ReviewReportBody text={hedgedVerdict} reportKey="run-34:1" />
+    </div>
+    <div className="narrowed-scope-fixture markdown-report-body">
+      <ReviewReportBody text={narrowedScope} reportKey="run-35:1" />
     </div>
     <div className="six-switch-fixture markdown-report-body">
       <SwitchableSix />

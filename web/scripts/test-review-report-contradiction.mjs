@@ -21,6 +21,11 @@
 //    「功能正常」里有个「能」，「yesterday's checks were green」里有个「yes」。前者说的是
 //    测试或功能的状态、不是验收决定，后者根本还没决定。所以正面这一侧改成**白名单、而且
 //    比主句整体**——「测试通过」整体不等于「通过」，不用认识「尚待」也拦住了。
+// ⑧ 白名单也会混进不安全的词（复审第 6 轮）：⑦ 收窄形容词位时放进了 `new`/`other`/
+//    `major`/`critical`——`no new issues` 只缩小范围、`no major problems` 只限定严重度，
+//    旧的和次要的那些还在。同轮另一类是**语气**：「可以验收？」「可以验收…」，问号当时
+//    是普通切段符、省略号算可剥装饰，两个都在匹配之前就没了，送进白名单的只剩裸判定。
+//    在问、没说完，跟划掉打叉一样得先于切段拦下。
 // ⑦ 收紧自己也会开口子（复审第 5 轮）：⑥ 为了认出 `no blocking issues`，在 `no` 和问题
 //    名词之间留了个任意单词的位置，于是 `no fixed issues`「没有已修好的问题」照样命中——
 //    形容词位得是白名单。同轮还有一类更基本的：`~~可以验收~~`、`❌ 可以验收`、`[ ] 可以
@@ -341,6 +346,40 @@ for (const [what, verdict] of [
     );
   }
 
+  // 复审第 6 轮 · 其一：上一轮收窄形容词位时，自己把「给问题分类、分级」的词放了进去。
+  // 这四句都没说「没有问题」，说的是「没有某一类问题」——旧的、次要的那些还在。
+  for (const verdict of [
+    "verified — no new issues",
+    "verified — no other blockers",
+    "verified — no major problems",
+    "verified — no critical risks",
+  ]) {
+    assert.equal(
+      splitReviewReport(contradicts(verdict, ["旧的保存问题仍未解决，修复前不能验收。"])).kind,
+      "whole",
+      `「${verdict}」只排除了一类问题，不是没有问题`,
+    );
+  }
+
+  // 复审第 6 轮 · 其二：这句判定**是在问、或者没说完**。问号当时是普通切段符、省略号算
+  // 可剥装饰，两个都在匹配之前就没了，于是一句没说死的话被读成了说死的判定。
+  for (const verdict of ["可以验收？", "verified?", "pass?", "可以验收…", "verified…", "能验收?"]) {
+    assert.equal(
+      splitReviewReport(contradicts(verdict, ["旧的保存问题仍未解决，修复前不能验收。"])).kind,
+      "whole",
+      `「${verdict}」没把话说死，别当成一句判定`,
+    );
+  }
+
+  // 反过来，不改变语气的句末标点照旧放行——句号、破折号、逗号都不是「在问」。
+  for (const verdict of ["可以验收。", "verified.", "可以 —— 有 0 条必须先修", "能验收，全部通过"]) {
+    assert.equal(
+      splitReviewReport(contradicts(verdict, ["构建与测试均退出 0。"])).kind,
+      "contract",
+      `「${verdict}」把话说死了，照拆`,
+    );
+  }
+
   // 复审第 5 轮 · 其二：这句判定被划掉了 / 被打叉了 / 还没勾。两头的标点符号当时一律剥掉，
   // 剥掉的恰好是那句话的反面，于是一句作废的结论被读成了生效的结论。
   for (const verdict of ["~~可以验收~~", "~~verified~~", "❌ 可以验收", "✗ 可以验收", "[ ] 可以验收", "[] verified"]) {
@@ -396,6 +435,9 @@ for (const [what, verdict] of [
     "passed",
     "verified — no blockers",
     "verified — no blocking issues",
+    "verified — no open issues",
+    "verified — no known issues",
+    "verified — no outstanding risks",
   ]) {
     assert.equal(
       splitReviewReport(contradicts(verdict, ["构建与测试均退出 0。"])).kind,
