@@ -8,6 +8,11 @@ export interface PreviewAssistStartBody {
   script: string;
   /** 页面上此刻的启动范围，试跑时按它递 `$ASH_PREVIEW_MODE`。 */
   launch: string;
+  /**
+   * 这一次点击自报的身份。服务端只把它存进**新建**的那份作业，页面回头靠它认领
+   * （见 PreviewAssistState.claim）—— 撞上已经在跑的作业时端点会把原主那份原样返回。
+   */
+  claim: string;
   executorId?: string | null;
   agentType?: string | null;
   model?: string | null;

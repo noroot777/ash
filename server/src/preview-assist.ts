@@ -42,6 +42,11 @@ export { cancelPreviewAssist, previewAssistState } from "./preview-assist-jobs.j
 
 export interface PreviewAssistStartOptions {
   projectId: string;
+  /**
+   * 点这一下的那个页面自报的身份，原样存进新建的作业（见 PreviewAssistState.claim）。
+   * 撞上已经在跑的那份时**不覆盖**它的 claim —— 那一份不是这次点出来的，页面得看得出来。
+   */
+  claim: string;
   /** 项目目录（已展开 `~`）。智能体和试跑都在这里干活。 */
   cwd: string;
   mode: PreviewMode;
@@ -56,7 +61,7 @@ export interface PreviewAssistStartOptions {
 }
 
 export async function startPreviewAssist(options: PreviewAssistStartOptions): Promise<PreviewAssistState> {
-  const { job, fresh } = reservePreviewAssistJob(options.projectId);
+  const { job, fresh } = reservePreviewAssistJob(options.projectId, options.claim);
   if (!fresh) return job.state;
   try {
     const executor = await resolveExecutorFor({

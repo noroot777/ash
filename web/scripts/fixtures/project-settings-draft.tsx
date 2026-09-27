@@ -103,8 +103,8 @@ const restartAssistInstance = () => {
 // 下一次 POST 装成「请求发出去了但回不来」—— 服务端那边已经接单，浏览器这边只拿到一个错。
 // "succeeded" 这一档更狠：接单之后作业还跑完了、还成功了，丢掉的只是那一发的响应。
 let assistDropNextPost: false | "running" | "succeeded" = false;
-// 作业身份每次 POST 换一个 —— 真实的那份是 reservePreviewAssistJob() 新开一份，前端正是靠
-// 「身份跟点之前看到的那份不一样」认出「这一发在服务端落地了」（响应丢了也认得出来）。
+// 作业身份每次**新开**时换一个 —— 真实的那份是 reservePreviewAssistJob() 里的 id()。
+// 注意所有权不看它:看的是 POST 带上来的 claim(见下面的 POST 分支)。
 let assistSeq = Number(localStorage.getItem(SEQ_KEY) ?? "0");
 const nextAssistSeq = () => {
   assistSeq += 1;
@@ -123,6 +123,7 @@ const succeeded = (patch: Partial<PreviewAssistState> = {}): Partial<PreviewAssi
 const assistJob = (patch: Partial<PreviewAssistState>): PreviewAssistState => ({
   jobId: `job-${assistSeq}`,
   projectId: "p-one",
+  claim: "",
   status: "running",
   phase: "thinking",
   round: 1,
@@ -152,11 +153,17 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   const assistRoute = pathname.match(/^\/api\/projects\/[^/]+\/preview\/assist$/);
   if (assistRoute) {
     if (init?.method === "POST") {
-      nextAssistSeq();
-      setAssist(assistJob({}));
+      const claim = String((JSON.parse(String(init.body ?? "{}")) as { claim?: unknown }).claim ?? "");
+      // **撞上已经在跑的那份就原样交回去,不新开**——真实端点就是这么做的
+      // (reservePreviewAssistJob 的 fresh=false)。关键是 claim 保持原主:点击方一比就知道
+      // 「这不是我开的」,不会把别人跑出来的脚本填进自己的输入框(第 5 轮审查)。
+      if (assist?.status !== "running") {
+        nextAssistSeq();
+        setAssist(assistJob({ claim }));
+      }
       // 服务端照样接单了(真实实现是同步预占的)，只是这一发的响应回不到浏览器。
       if (assistDropNextPost) {
-        if (assistDropNextPost === "succeeded") setAssist(assistJob(succeeded()));
+        if (assistDropNextPost === "succeeded") setAssist(assistJob({ ...succeeded(), claim }));
         assistDropNextPost = false;
         throw new TypeError("Failed to fetch");
       }
@@ -248,13 +255,13 @@ function Fixture() {
         </button>
         {/* 别处（另一个页面、另一个人）点的那一份正在跑：这台浏览器从没点过，本地没有任何追踪。
             它必须一路只读到底 —— 连它成功之后都不许动输入框（第 4 轮审查复现）。 */}
-        <button type="button" data-testid="assist-foreign-running" onClick={() => { nextAssistSeq(); setAssist(assistJob({})); }}>
+        <button type="button" data-testid="assist-foreign-running" onClick={() => { nextAssistSeq(); setAssist(assistJob({ claim: "别处那一页的 claim" })); }}>
           假装别处正在跑
         </button>
         <button
           type="button"
           data-testid="assist-succeed"
-          onClick={() => { setAssist(assistJob({ ...succeeded(), jobId: assist?.jobId ?? `job-${assistSeq}` })); }}
+          onClick={() => { setAssist(assistJob({ ...succeeded(), jobId: assist?.jobId ?? `job-${assistSeq}`, claim: assist?.claim ?? "" })); }}
         >
           假装真起来了
         </button>

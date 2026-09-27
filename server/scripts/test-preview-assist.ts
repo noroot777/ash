@@ -92,11 +92,16 @@ for (const mode of PREVIEW_MODE) {
 // 第 1 轮审查复现：老实现在「查有没有在跑」和「写进索引」之间 await 挑执行器，两个页面同时
 // 点就真起两个智能体，后写入的把前一个顶掉 —— 被顶掉的那份查不到也停不了，一直在用户的
 // 项目目录里跑着。这里直接钉预占这一步（走 startPreviewAssist 会真起 CLI，烧额度）。
-const first = reservePreviewAssistJob("p-assist-race");
-const second = reservePreviewAssistJob("p-assist-race");
+const first = reservePreviewAssistJob("p-assist-race", "claim-甲");
+const second = reservePreviewAssistJob("p-assist-race", "claim-乙");
 check("第二次点进来不另开一份", [second.fresh, second.job.state.jobId === first.job.state.jobId], [false, true]);
 check("拿到的就是在跑的那一份", previewAssistState("p-assist-race")?.jobId, first.job.state.jobId);
-check("停掉之后这一格能再占", [cancelPreviewAssist("p-assist-race"), reservePreviewAssistJob("p-assist-race").fresh], [true, true]);
+// 第 5 轮审查复现：交回去的那份**必须还是原主的 claim**。盖成后来这一次的，点击方就会把
+// 别人跑出来的脚本当成自己的结果填进输入框——用户已经保存的那条就这么被换掉了。
+check("新开的那份认下点击自报的身份", first.job.state.claim, "claim-甲");
+check("复用回去的那份不认后来者", second.job.state.claim, "claim-甲");
+check("停掉之后这一格能再占", [cancelPreviewAssist("p-assist-race"), reservePreviewAssistJob("p-assist-race", "claim-丙").fresh], [true, true]);
+check("再占的那份认新身份", previewAssistState("p-assist-race")?.claim, "claim-丙");
 
 // ── 试跑判定 ────────────────────────────────────────────────────────────────
 const listen = `node -e "require('http').createServer((q,s)=>{s.end('ok')}).listen(process.env.PORT)"`;

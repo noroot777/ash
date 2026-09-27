@@ -15,7 +15,9 @@
 //   ⑦ 输入框没动过 → 成功就直接填，且只填一次；
 //   ⑧ 不是这个页面点出来的那份成功结果（服务端留 10 分钟，刷新就会再读到一遍）→ 只许展示，
 //      **不许再动一次输入框**（否则用户刚手写并保存的脚本被旧结果盖回去）；
-//   ⑨ 别处点的那份**正在跑**的时候才打开页面 → 同样一路只读，不许在它成功时冒充「我点的」。
+//   ⑨ 别处点的那份**正在跑**的时候才打开页面 → 同样一路只读，不许在它成功时冒充「我点的」；
+//   ⑩ 别处那份正在跑的时候**点了按钮** → 服务端复用了它、这一次并没有新开，界面要说实话，
+//      而且它的结果照样不许动输入框（认领只认这次点击自报的 claim）。
 //
 // 服务端那份是假的（fixture 里几个模块级变量），这里测的是前端这一侧的判断：什么时候轮询、
 // null 该读成哪一种、填还是不填。
@@ -211,8 +213,21 @@ try {
   assert.equal(await editorText(script), handwritten, "别处跑出来的结果不许覆盖我已保存的脚本");
   assert.deepEqual((await notices()).filter((line) => line.includes("脚本已填入")), [], "没填就不该提示填入");
 
+  // ⑩ 别处那份还在跑的时候点按钮：服务端直接把那一份交回来（不新开）。界面必须说清「这次没有
+  //    新开」，而且它成功时也不许当成自己的结果填进输入框（第 5 轮审查复现：空 jobId 的 pending
+  //    记录会认领任意作业，同事跑出来的脚本覆盖了用户已保存的那条）
+  await page.getByTestId("assist-foreign-running").click();
+  await startAssist.click();
+  await page.locator(".preview-assist-error").getByText("没有新开", { exact: false }).waitFor();
+  assert.equal(await editorText(script), handwritten, "这一次没开起来，输入框不该动");
+  await page.getByTestId("assist-succeed").click();
+  await progress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
+  await page.waitForTimeout(1500);
+  assert.equal(await editorText(script), handwritten, "服务端复用的那份别人的作业，成功了也不许覆盖");
+  assert.deepEqual((await notices()).filter((line) => line.includes("脚本已填入")), [], "没填就不该提示填入");
+
   assert.deepEqual(errors, [], "AI 协助面板不应产生运行时异常");
-  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only)");
+  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed)");
 } finally {
   await browser?.close();
   await server.close();

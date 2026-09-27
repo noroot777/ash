@@ -11,6 +11,7 @@ import { projects } from "./db/schema.js";
 import { actorOf, authErrorResponse, ownerIdOf } from "./auth/context.js";
 import { requireProjectAdmin } from "./auth/visibility.js";
 import { expandHome, projectHealthLight } from "./git.js";
+import { id } from "./util.js";
 import { ASSIST_INSTANCE } from "./preview-assist-jobs.js";
 import { cancelPreviewAssist, previewAssistState, startPreviewAssist } from "./preview-assist.js";
 
@@ -47,6 +48,9 @@ export function mountPreviewAssistRoutes(api: Hono): void {
         cwd: expandHome(row.repoPath),
         mode: previewLaunchOf(body.launch),
         currentScript: typeof body.script === "string" ? body.script : (row.previewCommand ?? ""),
+        // 页面自报的身份：新建的作业原样带上它，页面回头才认得出「这一份是我点的」。没带就
+        // 生成一个 —— 那种调用方（curl、脚本）反正也不会回来认领。
+        claim: str(body.claim) ?? id(),
         executorId: str(body.executorId),
         agentType: str(body.agentType) as AgentType | null,
         model: str(body.model),

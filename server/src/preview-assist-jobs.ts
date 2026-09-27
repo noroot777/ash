@@ -47,8 +47,11 @@ export function previewAssistState(projectId: string): PreviewAssistState | null
  * 都得把这一格落成终态（见 startPreviewAssist）——留着一条没有循环在跑的 `running`，界面会
  * 一直转圈，而且这个项目从此点不动那颗按钮。
  */
-export function reservePreviewAssistJob(projectId: string): { job: Job; fresh: boolean } {
+export function reservePreviewAssistJob(projectId: string, claim: string): { job: Job; fresh: boolean } {
   const running = jobs.get(projectId);
+  // 撞上在跑的那份就原样交回去（不新开）。**它的 claim 保持原主**，这样点击方一比就知道
+  // 「这不是我开的」—— 冒充成自己那份的代价是把别人跑出来的脚本填进用户的输入框
+  // （第 5 轮审查复现）。
   if (running?.state.status === "running") return { job: running, fresh: false };
   const job: Job = {
     canceled: false,
@@ -56,6 +59,7 @@ export function reservePreviewAssistJob(projectId: string): { job: Job; fresh: b
     state: {
       jobId: id(),
       projectId,
+      claim,
       status: "running",
       phase: "starting",
       round: 0,

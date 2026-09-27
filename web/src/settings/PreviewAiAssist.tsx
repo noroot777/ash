@@ -10,6 +10,7 @@ import { useExecutorCatalog } from "../workflow/executorCatalog.ts";
 import {
   forgetAssistTrace,
   lostAssistState,
+  newAssistClaim,
   pendingAssistTrace,
   readAssistTrace,
   rememberedExecutor,
@@ -65,8 +66,6 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   const instance = useRef<string>("");
   /** 这份作业是不是这台浏览器点出来的（见 absorb）。不是就只许看，不许动输入框。 */
   const mine = useRef(false);
-  /** 服务端上一次让我们看见的那份作业身份。POST 断线之后靠它认「这一发有没有落地」。 */
-  const lastSeen = useRef<string | null>(null);
   // 点下去那一刻输入框里是什么。成功之后拿它跟现在比：**不一样就说明用户在这几分钟里
   // 自己写了东西**，那份手写的比 AI 的结果更该留着（第 2 轮审查：原来是无条件覆盖）。
   const startedWith = useRef<string | null>(null);
@@ -76,7 +75,7 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   useEffect(() => {
     setExecutor(rememberedExecutor(projectId));
     setJob(null); setLost(false); setOffered(null); setApplied(null);
-    filled.current = null; startedWith.current = null; mine.current = false; lastSeen.current = null;
+    filled.current = null; startedWith.current = null; mine.current = false;
   }, [projectId]);
 
   const running = job?.status === "running";
@@ -84,20 +83,21 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   const absorb = useCallback((result: { job: PreviewAssistState | null; instance: string }) => {
     instance.current = result.instance;
     const trace = readAssistTrace(projectId);
-    lastSeen.current = result.job?.jobId ?? null;
     if (result.job) {
-      // **这份结果该不该动用户的输入框,只取决于它是不是这台浏览器点出来的。** 服务端把终态
-      // 留 10 分钟(preview-assist-jobs.ts),所以别的窗口点的、甚至这台浏览器上一次已经处理
-      // 过的,都会被下一次挂载照样读到一遍(第 3 轮审查:用户保留并保存了自己手写的脚本,十
-      // 分钟内刷一下页面,旧的 AI 结果又被填回输入框,再点保存就把刚存的改回去了)。
-      mine.current = !!trace && (trace.jobId === result.job.jobId || !trace.jobId);
+      // **这份结果该不该动用户的输入框,只取决于它是不是这台浏览器点出来的**,判据是点下去那一刻
+      // 自报的 claim —— 服务端只把它存进**新建**的那份作业。别的线索都不够:
+      //   · 「读到一份 running」不算:服务端把终态留 10 分钟,刷新一下就又读到一遍(第 3 轮审查:
+      //     旧的成功结果被填回用户刚保存的脚本上)
+      //   · 「jobId 对得上」也不算:点下去、POST 还没回来的那一段里 jobId 是个未知数,拿空 jobId
+      //     去认领等于认领任何人 —— 撞上同事那份在跑,服务端直接把它交回来,它的结果就顺着
+      //     「成功就填」覆盖了用户已保存的脚本(第 5 轮审查复现)
+      mine.current = !!trace?.claim && result.job.claim === trace.claim;
       // 本地这条追踪**只许记我们自己那份、而且还在跑的作业**，其余一切情形都把它抹掉：
       //   · 我们的、跑着 → 每拍都刷（轮次跟着走，中断那句话才说得出第几轮）
       //   · 我们的、落终态 → 抹掉：留着的话服务端 10 分钟后清掉终态，同一个 null 会被下面读成「出事了」
-      //   · 别处点的那份 → **一个字都不能记**。记下去，下一拍就凭「jobId 对上了」把它认成自己点的，
-      //     然后照样去动用户的输入框（第 4 轮审查复现：同事在跑，你只是打开了这个页面，你已经保存
-      //     的脚本就被换掉了）。同时我们手上那条也作废了 —— 一个项目同时只有一份作业在跑，服务端
-      //     既然报的是别人那份，我们那份已经不在了。
+      //   · 别处点的那份 → **一个字都不能记**（第 4 轮审查复现：同事在跑，你只是打开了这个页面，
+      //     你已经保存的脚本就被换掉了）。同时我们手上那条也作废了 —— 一个项目同时只有一份作业
+      //     在跑，服务端既然报的是别人那份，我们那份已经不在了。
       if (mine.current && result.job.status === "running") traceAssistJob(projectId, result.job, result.instance);
       else forgetAssistTrace(projectId);
       // 刷新过页面、但作业还在跑：这一刻框里是什么就拿它当基准,用户接着在这几分钟里写的
@@ -154,16 +154,34 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
     notify("AI 已真的把它起起来一次，脚本已填入上面的输入框，确认后点保存");
   }, [job, onFilled, notify]);
 
+  /**
+   * 这一发到底有没有开出一份**属于我**的作业：服务端只把点击自报的 claim 存进新建的那份。
+   *
+   * 对不上就一律不认领，只把它当别人的作业照实摆出来 —— 一个项目同时只有一格，撞上在跑的
+   * 那份时启动端点直接把原主那份交回来（reservePreviewAssistJob），此时「我点了、也拿到一份
+   * running」离「这是我那份」差得很远（第 5 轮审查复现：页面刚打开就点，覆盖的是同事跑出来
+   * 的脚本）。这条判据连响应丢在路上的那一段也覆盖得住：claim 是我们自己生成的，不用去猜
+   * 服务端给了什么 jobId。
+   */
+  const settleStart = (result: { job: PreviewAssistState | null; instance: string }, claim: string) => {
+    filled.current = null;
+    absorb(result);
+    if (result.job && result.job.claim !== claim) {
+      setError("这个项目上已经有一份 AI 协助在跑（别的页面或别人点的），所以这一次没有新开。下面是那一份的进度，它跑出来的脚本不会动你的输入框。");
+    }
+  };
+
   const start = async () => {
     setBusy(true);
     setError(null);
     setOffered(null);
     setApplied(null);
     startedWith.current = script;
-    const before = lastSeen.current;
+    const claim = newAssistClaim();
     // **先记后发**：服务端是同步预占的，请求一旦发出去它就可能已经接单了。等响应回来再记，
-    // 中间断线就等于这台浏览器从此不知道有这么个作业在跑（第 2 轮审查复现过）。
-    pendingAssistTrace(projectId, instance.current);
+    // 中间断线就等于这台浏览器从此不知道有这么个作业在跑（第 2 轮审查复现过）。记的正是这次
+    // 点击的 claim —— 回头认领全靠它。
+    pendingAssistTrace(projectId, instance.current, claim);
     try {
       const picked = executor
         ? parseExecutorValue(executor, catalog.profiles, { agentType: types[0] ?? "claude", executorId: null })
@@ -171,23 +189,23 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
       const result = await api.startPreviewAssist(projectId, {
         script,
         launch,
+        claim,
         executorId: picked?.executorId ?? null,
         agentType: picked?.agentType ?? null,
       });
       if (!active.current) return;
-      filled.current = null;
-      absorb(result);
+      settleStart(result, claim);
     } catch (failure) {
       // 没拿到回复 ≠ 没接单：预占是同步的（preview-assist-jobs.ts），请求只要到了服务端就
       // 已经有一份作业了，而它完全可以在响应丢掉之后照样跑完、跑成功——**那就是一次真起来过
       // 的验证，不能当成「这一发没开起来」丢掉**（第 3 轮审查：页面只显示 Failed to fetch，
-      // 脚本不填）。判据是作业身份跟点之前看到的那份不一样 = 服务端新开了一份 = 就是这一发；
-      // 一样就说明这一发根本没落地（400/409 那种），照常把错误摆出来并把刚记的那条抹掉；
-      // 连问都问不通就留着它，下次打开页面还有据可查。
+      // 脚本不填）。去问一句服务端，claim 对得上就照常接管；对不上（这一发没落地，或者服务端
+      // 只是把别人那份交回来了）就把错误摆出来并把刚记的那条抹掉；连问都问不通就留着它，
+      // 下次打开页面还有据可查。
       const checked = await api.previewAssist(projectId).catch(() => null);
       if (!active.current) return;
-      if (checked?.job && checked.job.jobId !== before) { filled.current = null; absorb(checked); return; }
-      if (checked) forgetAssistTrace(projectId);
+      if (checked?.job?.claim === claim) { settleStart(checked, claim); return; }
+      if (checked) { forgetAssistTrace(projectId); if (checked.job?.status === "running") absorb(checked); }
       setError(failure instanceof Error ? failure.message : "启动失败");
     } finally { if (active.current) setBusy(false); }
   };

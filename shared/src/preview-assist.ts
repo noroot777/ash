@@ -38,6 +38,16 @@ export interface PreviewAssistAttempt {
 export interface PreviewAssistState {
   jobId: string;
   projectId: string;
+  /**
+   * **开这一份作业的那一次点击自报的身份**（浏览器生成，服务端只在新建作业时原样存下）。
+   *
+   * 有它才答得上「这份作业是不是我点出来的」。一个项目同时只有一格：撞上已经在跑的那份，
+   * 启动端点直接把那一份原样返回（不新开，见 reservePreviewAssistJob），于是「我点了按钮
+   * 并且拿到了一份 running」根本推不出「这是我那一份」—— 别人的结果会顺着「成功就填进
+   * 输入框」把用户已保存的脚本换掉（第 5 轮审查复现）。jobId 也不行：页面点下去、POST 还没
+   * 回来的那一段里它就是个未知数，拿「不认识的 jobId」去认领等于认领任何人。
+   */
+  claim: string;
   status: PreviewAssistStatus;
   phase: PreviewAssistPhase;
   /** 第几轮（1 起）。 */

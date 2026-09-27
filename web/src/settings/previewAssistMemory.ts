@@ -29,9 +29,25 @@ export const rememberedExecutor = (projectId: string): string => read(EXECUTOR_K
 export const rememberExecutor = (projectId: string, value: string): void =>
   write(EXECUTOR_KEY(projectId), value || null);
 
+/**
+ * 给这一次点击发一个身份。服务端只把它存进**新建**的那份作业，所以「作业上的 claim 等于我
+ * 手里这个」是唯一靠得住的所有权证据（见 AssistTrace.claim）。
+ *
+ * `crypto.randomUUID` 在非安全上下文里可能没有（ash 常走裸 http 的局域网地址），退一步用
+ * 时间 + 随机串 —— 这东西只要在同一个项目的几份作业之间不撞就够了。
+ */
+export const newAssistClaim = (): string =>
+  globalThis.crypto?.randomUUID?.() ?? `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
 export interface AssistTrace {
   /** 服务端认下来的作业 id；空串 = 请求发出去了但结果没回来（见 pendingAssistTrace）。 */
   jobId: string;
+  /**
+   * 点下去那一刻这个页面自报的身份。**认领作业只认它**：服务端只把它存进新建的那一份，
+   * 撞上已经在跑的作业时原样交回原主的 claim，所以一比就知道「这不是我点出来的」
+   * （第 5 轮审查：原来空 jobId 的 pending 记录会认领任意作业，别人的结果照样覆盖输入框）。
+   */
+  claim: string;
   executorLabel: string;
   round: number;
   maxRounds: number;
@@ -57,9 +73,9 @@ export function readAssistTrace(projectId: string): AssistTrace | null {
  * 都没有——按钮弹回原样，停也停不了，之后 ash 一重启更是连一句交代都没有。先写后发，这条
  * 记录才覆盖得住「请求在路上出事」的那一段。
  */
-export function pendingAssistTrace(projectId: string, instance: string): void {
+export function pendingAssistTrace(projectId: string, instance: string, claim: string): void {
   write(LIVE_KEY(projectId), JSON.stringify({
-    jobId: "", executorLabel: "", round: 0, maxRounds: 3, startedAt: new Date().toISOString(), instance,
+    jobId: "", claim, executorLabel: "", round: 0, maxRounds: 3, startedAt: new Date().toISOString(), instance,
   } satisfies AssistTrace));
 }
 
@@ -67,6 +83,9 @@ export function pendingAssistTrace(projectId: string, instance: string): void {
 export function traceAssistJob(projectId: string, job: PreviewAssistState, instance: string): void {
   write(LIVE_KEY(projectId), JSON.stringify({
     jobId: job.jobId,
+    // 调用方只在「这份确实是我点的」时才写（PreviewAiAssist 的 absorb），所以这儿的 claim
+    // 就是我们自己那个；从作业上读省得再传一遍。
+    claim: job.claim,
     executorLabel: job.executorLabel,
     round: job.round,
     maxRounds: job.maxRounds,
@@ -100,6 +119,7 @@ export function lostAssistState(
       : `上一次的 AI 协助在你没看着的时候结束了，结果只保留 10 分钟、现在已经取不回来了（它跑到${at}）。要拿脚本就再点一次「AI 协助填写」。`;
   return {
     jobId: trace.jobId || "pending",
+    claim: trace.claim,
     projectId,
     status: "failed",
     phase: "done",
