@@ -193,6 +193,26 @@ export type FileContent = {  path: string;
   mime: string | null;
 };
 
+/** 读一份文件全文的返回。 */
+export type TaskFileRead = {
+  root: FileWorkspaceRoot;
+  file: FileContent;
+  /**
+   * 这份文件当作网页渲染时的地址（不是网页就是 null）。
+   *
+   * **前端不能自己拼**：里面带着一段预览令牌，它是用来挡住第三方站点读工作区文件的那
+   * 一道。细节在 server/src/task-page.ts 顶部。
+   */
+  pageUrl: string | null;
+  /**
+   * 这份网页在沙箱里跑不全时的说明（跑得全就是 null）。
+   *
+   * 沙箱对脚本一律不发 `ACAO`（否则页面能读走工作区里的文件），模块脚本因此加载不了。
+   * 与其让用户对着一个空壳猜「是不是坏了」，不如把话说在前面并指向「在浏览器中打开」。
+   */
+  pageNotice: string | null;
+};
+
 /**
  * 「这是什么、有多大、git 怎么看它、现在能不能删」。
  *
@@ -255,6 +275,36 @@ export type OpenerProbe = {
   canReveal: boolean;
   apps: AppOpener[];
   note: string | null;
+};
+
+// ── 生成物（产物面板）────────────────────────────────────────────────────────
+// 「这个任务做出来了什么可以直接看的东西」。判据、三路线索和它们各自的可信区间都在服务端
+// `task-artifacts.ts` 顶部，这里只是它的形状。
+
+export type ArtifactKind = "image" | "video" | "audio" | "page" | "pdf";
+/** 这份产物是从哪条线索认出来的：还没提交 / 已提交在任务分支上 / 被 .gitignore 挡着。 */
+export type ArtifactOrigin = "working" | "committed" | "ignored";
+
+export type TaskArtifact = {
+  /** 相对工作区根、posix 分隔符——跟文件树、文件查看器同一个主键。 */
+  path: string;
+  name: string;
+  dir: string;
+  kind: ArtifactKind;
+  size: number;
+  mtime: string | null;
+  origin: ArtifactOrigin;
+};
+
+export type TaskArtifactsResult = {
+  /** 任务还没有工作目录时为 null——那是「还没有产物」，不是错误。 */
+  root: FileWorkspaceRoot | null;
+  artifacts: TaskArtifact[];
+  truncated: boolean;
+  /** 被忽略那一档的时间下限（任务第一次开跑）。 */
+  since: string | null;
+  /** 某一路线索读失败了。另外两路通常还有东西，所以不当致命错误。 */
+  error: string | null;
 };
 
 // ── 工作区源代码管理（SCM 面板）─────────────────────────────────────────────
