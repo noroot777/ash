@@ -18,6 +18,7 @@ import {
   rememberExecutor,
   traceAssistJob,
 } from "./previewAssistMemory.ts";
+import { watchAssistClaimLost } from "./previewAssistTabs.ts";
 
 // 「AI 协助」——把「这个项目该怎么起」这件事交给一个真的 CLI 智能体去判断，**并且由 ash
 // 真跑一遍**，跑起来了才填回上面的输入框。
@@ -133,14 +134,24 @@ export function PreviewAiAssist({ projectId, script, launch, disabled, onFilled,
   // 开着页面就先问一次：上一次点开的作业可能还在跑（换页面、刷新都不该把它弄丢），
   // 也可能已经没了（那就说清是重启吞了还是自己过期了，而不是装作没点过）。
   //
-  // **问服务端之前先点一次名**（adoptAssistTrace）：本地那条记录有可能是从来源页面继承来的
-  // 会话副本（复制标签页 / window.open），那样它手里的 claim 跟正主一模一样。颠倒顺序就等于
-  // 让副本页抢在确认之前先认领一拍 —— 第 7 轮审查复现的正是这一下。
+  // **问服务端之前先把所有权定下来**（adoptAssistTrace）：本地那条记录有可能是从来源页面继承
+  // 来的会话副本（复制标签页 / window.open），那样它手里的 claim 跟正主一模一样。颠倒顺序就
+  // 等于让副本页抢在裁决之前先认领一拍 —— 第 7 轮审查复现的正是这一下。
   useEffect(() => {
     let stale = false;
     void adoptAssistTrace(projectId).then(() => { if (!stale) void poll(); });
     return () => { stale = true; };
   }, [projectId, poll]);
+  // 裁决还可能**事后翻过来**：降级路（没有 Web Locks 的环境）上正主的应答迟到了几百毫秒，
+  // 这一页已经暂且认领过了。一撤回就当场收手 —— 否则那份作业成功时它照样填自己的输入框
+  // （第 8 轮审查复现：正主主线程忙 800ms，副本在 300ms 静默超时上认了领，迟到那句话没人认）。
+  useEffect(() => watchAssistClaimLost((lost) => {
+    if (lost !== projectId) return;
+    mine.current = false;
+    startedWith.current = null;
+    forgetAssistTrace(projectId);
+    setForeign(true);
+  }), [projectId]);
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => { void poll(); }, 1200);

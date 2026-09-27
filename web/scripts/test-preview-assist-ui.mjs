@@ -21,7 +21,11 @@
 //   ⑪ 同一个浏览器的**另一个标签页**（同源、共享 localStorage、从没点过按钮）→ 照实显示这个
 //      项目上有一份在跑，但说清「是别的页面点的」，成功时一个字都不动它自己的输入框；
 //   ⑫ 从点过按钮的那一页**打开/复制出来的标签**（sessionStorage 带着来源页的初始副本，手里那份
-//      claim 跟服务端作业对得上）→ 同样只读：所有权得靠一次「谁还拿着这个 claim」的点名分出来。
+//      claim 跟服务端作业对得上）→ 同样只读：所有权得靠一次「谁还拿着这个 claim」的裁决分出来；
+//   ⑬ 那次裁决**不能靠正主答话**：正主主线程卡住、标签被冻结时它一声不出，静默不许被读成
+//      「没有正主」（主路交给浏览器记账的页面租约，JS 停摆不影响锁的账）；
+//   ⑭ 没有 Web Locks 的环境（裸 http 的局域网地址不是安全上下文）只能点名，那就必须**可撤回**：
+//      正主的应答迟到 800ms，副本先认了领，迟到那句话一到就得当场交出去。
 //
 // 服务端那份是假的（fixture 里几个模块级变量），这里测的是前端这一侧的判断：什么时候轮询、
 // null 该读成哪一种、填还是不填。
@@ -295,8 +299,102 @@ try {
   assert.deepEqual(copyErrors, [], "复制出来的标签也不应产生运行时异常");
   await copy.close();
 
+  // ⑬ 正主**答不上话**的时候（主线程卡住几百毫秒、标签被冻结、调度延迟）：所有权裁决不许把
+  //    静默读成「没有正主」（第 8 轮审查复现：正主回包迟到 800ms，副本在 300ms 静默超时上
+  //    就认了领，作业成功后把自己的输入框改了）。主路的账记在浏览器那边 —— 锁还在正主手里，
+  //    它一个字不答也照样是正主。
+  await script.fill("# 正主正在忙，但它还活着");
+  await startAssist.click();
+  await progress.getByText("正在读这个项目", { exact: false }).waitFor();
+  // 让这一页从此不再应答任何点名（等价于它的 JS 停摆）。产品代码一行没动，patch 只在测试里。
+  const muteHeld = () => {
+    const post = BroadcastChannel.prototype.postMessage;
+    BroadcastChannel.prototype.postMessage = function (note) {
+      if (note && typeof note === "object" && note.kind === "held") return undefined;
+      return post.call(this, note);
+    };
+  };
+  await page.evaluate(muteHeld);
+  const [mute] = await Promise.all([
+    context.waitForEvent("page"),
+    page.evaluate(() => { window.open(location.href, "_blank"); }),
+  ]);
+  const muteErrors = [];
+  mute.on("pageerror", (failure) => muteErrors.push(failure.message));
+  await mute.waitForLoadState();
+  const muteScript = mute.getByRole("textbox", { name: "启动脚本", exact: true });
+  const muteProgress = mute.locator(".preview-assist-progress");
+  const muteNotices = async () => JSON.parse(await mute.getByTestId("notices").textContent());
+  await muteScript.waitFor();
+  await muteProgress.getByText("别的页面点的", { exact: false }).waitFor();
+  await page.getByTestId("assist-succeed").click();
+  // 正主自己那一路不能被这套裁决挡掉
+  await page.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
+  await muteProgress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
+  await mute.waitForTimeout(1500);
+  assert.equal(await editorText(muteScript), handwritten, "正主答不上话，也不等于副本可以认领它的作业");
+  assert.deepEqual((await muteNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
+  assert.deepEqual(muteErrors, [], "这一页也不应产生运行时异常");
+  await mute.close();
+
   assert.deepEqual(errors, [], "AI 协助面板不应产生运行时异常");
-  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims)");
+
+  // ⑭ 没有 Web Locks 的那一档（裸 http 的局域网地址不是安全上下文，ash 常这么开）：只能点名，
+  //    于是「暂且算我的」必须可撤回 —— 正主的应答迟到 800ms，远超 300ms 静默超时。
+  const lanContext = await browser.newContext({ viewport: { width: 1000, height: 1200 } });
+  await lanContext.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "locks", { configurable: true, get: () => undefined });
+  });
+  const lan = await lanContext.newPage();
+  const lanErrors = [];
+  lan.on("pageerror", (failure) => lanErrors.push(failure.message));
+  await lan.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}-lan`);
+  const lanScript = lan.getByRole("textbox", { name: "启动脚本", exact: true });
+  const lanProgress = lan.locator(".preview-assist-progress");
+  await lanScript.waitFor();
+  assert.equal(await lan.evaluate(() => navigator.locks === undefined), true, "这一档要测的就是没有 Web Locks");
+  await lanScript.fill("# 局域网那一档：正主在等 AI");
+  await lan.getByRole("button", { name: "AI 协助填写" }).click();
+  await lanProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  await lan.evaluate(() => {
+    const post = BroadcastChannel.prototype.postMessage;
+    BroadcastChannel.prototype.postMessage = function (note) {
+      if (note && typeof note === "object" && note.kind === "held") {
+        setTimeout(() => post.call(this, note), 800);
+        return undefined;
+      }
+      return post.call(this, note);
+    };
+  });
+  const [slow] = await Promise.all([
+    lanContext.waitForEvent("page"),
+    lan.evaluate(() => { window.open(location.href, "_blank"); }),
+  ]);
+  const slowErrors = [];
+  slow.on("pageerror", (failure) => slowErrors.push(failure.message));
+  await slow.waitForLoadState();
+  const slowScript = slow.getByRole("textbox", { name: "启动脚本", exact: true });
+  const slowProgress = slow.locator(".preview-assist-progress");
+  const slowNotices = async () => JSON.parse(await slow.getByTestId("notices").textContent());
+  await slowScript.waitFor();
+  const slowBefore = await editorText(slowScript);
+  // 迟到的那句应答一到，先前那次认领就得当场翻过来
+  await slowProgress.getByText("别的页面点的", { exact: false }).waitFor();
+  await lan.getByTestId("assist-succeed").click();
+  await lan.waitForFunction((expected) =>
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
+      .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
+  await slowProgress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
+  await slow.waitForTimeout(1500);
+  assert.equal(await editorText(slowScript), slowBefore, "撤回之后，副本不许再把结果填进自己的输入框");
+  assert.deepEqual((await slowNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
+  assert.deepEqual(slowErrors, [], "副本页不应产生运行时异常");
+  assert.deepEqual(lanErrors, [], "正主页不应产生运行时异常");
+  await lanContext.close();
+
+  console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims, silent owner still owns, late answer revokes)");
 } finally {
   await browser?.close();
   await server.close();

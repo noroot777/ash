@@ -7,8 +7,9 @@
 //    这条记录、把服务端那份作业认成自己的，于是在成功时把**它自己**输入框里的草稿改掉
 //    （第 6 轮审查双标签复现）。sessionStorage 正好是「刷新还在、别的标签读不到」。
 //    **但它挡不住会话副本**：带 opener 打开的页面和「复制标签页」会继承来源页那一份的初始
-//    副本，两边 claim 一模一样（第 7 轮审查复现）。所以页面打开时还要点一次名 —— 见
-//    adoptAssistTrace 与 previewAssistTabs.ts。
+//    副本，两边 claim 一模一样（第 7 轮审查复现）。所以页面打开时还要过一道所有权裁决 ——
+//    见 adoptAssistTrace 与 previewAssistTabs.ts（那里用的是浏览器自己记账的页面租约，
+//    「正主卡住」和「正主已经消失」靠它才分得开）。
 //    代价说清楚：整个标签页关掉再开，新标签确实没有任何证据说明「我点过」，那三句交代
 //    （见下）就给不出来了 —— 这是对的，一个刚开的上下文本来就不该去认领谁的作业。
 //
@@ -23,7 +24,7 @@
 // 分开这三种要两样东西：本地记着的作业身份，以及**服务端自报的实例身份**（ASSIST_INSTANCE，
 // 每次 ash 启动换一个）。实例没变 = 这台 ash 没重启过 = 那条记录是自己过期的。
 import type { PreviewAssistState } from "@ash/shared/preview-assist";
-import { assistClaimHeldElsewhere, holdAssistClaim } from "./previewAssistTabs.ts";
+import { claimAssistOwnership, holdAssistClaim } from "./previewAssistTabs.ts";
 
 const EXECUTOR_KEY = (projectId: string) => `ash:preview-assist-executor:${projectId}`;
 const LIVE_KEY = (projectId: string) => `ash:preview-assist-live:${projectId}`;
@@ -126,16 +127,17 @@ export const forgetAssistTrace = (projectId: string): void => {
 /**
  * 页面刚打开时先确认手里这条记录**不是会话副本**，确认完才允许拿它去认领作业。
  *
- * 副本从哪来、为什么只能靠点名分辨，见 previewAssistTabs.ts。确认是自己的就把 claim 登记下来
- * —— 之后从这一页复制出去的标签才有人应答它。
+ * 副本从哪来、为什么只能靠「同一时刻还有没有另一个活着的文档拿着它」分辨（以及为什么这件事
+ * 不能靠问一句、等一会儿），见 previewAssistTabs.ts。确认是自己的那一刻就把 claim 握住 ——
+ * 之后从这一页复制出去的标签才会当场知道自己是副本。
  *
  * 必须**排在第一次轮询前面**：颠倒过来的话，抢在前面那一拍就已经把别人那份认成自己的了。
+ * 所有权也可能**事后被撤回**（降级路上的迟到应答），那一路走 watchAssistClaimLost。
  */
 export async function adoptAssistTrace(projectId: string): Promise<void> {
   const trace = readAssistTrace(projectId);
   if (!trace?.claim) return;
-  if (await assistClaimHeldElsewhere(projectId, trace.claim)) { forgetAssistTrace(projectId); return; }
-  holdAssistClaim(projectId, trace.claim);
+  if (!await claimAssistOwnership(projectId, trace.claim)) forgetAssistTrace(projectId);
 }
 
 /**
