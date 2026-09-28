@@ -49,6 +49,10 @@
 .file-viewer__action { display:inline-flex; height:28px; flex:0 0 auto; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 9px; color:var(--muted); font-size:10.5px; }
 .file-viewer__action:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
 .file-viewer__action:disabled { opacity:.5; }
+/* 「‹ 3 / 13 ›」：两颗按钮窄一档、数字夹在中间，整组读成一件东西而不是三颗散按钮。 */
+.file-viewer__reel { display:flex; flex:0 0 auto; align-items:center; gap:4px; }
+.file-viewer__reel .file-viewer__action { padding:0 6px; }
+.file-viewer__reel small { min-width:44px; color:var(--faint); font-size:10.5px; font-variant-numeric:tabular-nums; text-align:center; }
 /* 删除单独成组：跟「关闭」之间隔一道竖线，避免顺手点到。真正的防线是那个确认框。 */
 .file-viewer__danger-group { display:flex; flex:0 0 auto; align-items:center; gap:8px; margin-left:2px; border-left:1px solid var(--line); padding-left:8px; }
 .file-viewer__action.is-danger:hover:not(:disabled) { border-color:color-mix(in lch,var(--red) 45%,var(--line2)); background:color-mix(in lch,var(--red) 9%,var(--panel)); color:var(--red); }

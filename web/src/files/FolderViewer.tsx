@@ -41,7 +41,7 @@ export function FolderViewer({
   zoomed?: boolean;
   onToggleZoom?: () => void;
   onExitZoom?: () => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, reel?: readonly string[]) => void;
   onOpenFolder: (path: string) => void;
   onClose: () => void;
   notify: (message: string) => void;
@@ -76,6 +76,9 @@ export function FolderViewer({
   const stats = overview?.stats;
   const git = overview?.git;
   const entries = overview?.entries ?? [];
+  // 这一层的文件（不含子文件夹），给中间栏当翻页的那一串——点开一张截图后能直接翻同
+  // 目录的下一张，不用回来再点一次。
+  const reel = entries.filter((entry) => entry.kind !== "dir").map((entry) => entry.path);
 
   return zoom.render(
     <div className="file-viewer folder-viewer" aria-label="文件夹详情">
@@ -193,7 +196,7 @@ export function FolderViewer({
                     key={entry.path}
                     type="button"
                     className={`folder-viewer__item${entry.ignored ? " is-ignored" : ""}`}
-                    onClick={() => (entry.kind === "dir" ? onOpenFolder(entry.path) : onOpenFile(entry.path))}
+                    onClick={() => (entry.kind === "dir" ? onOpenFolder(entry.path) : onOpenFile(entry.path, reel))}
                   >
                     {entry.kind === "dir"
                       ? <Folder size={13} aria-hidden="true" />

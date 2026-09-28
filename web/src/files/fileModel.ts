@@ -7,6 +7,22 @@ export const ROOT_SOURCE_LABEL: Record<FileWorkspaceRoot["source"], string> = {
   repo: "项目仓库",
 };
 
+/**
+ * 光看文件名就能认出的图片。
+ *
+ * 服务端读完内容会给出权威的 `kind`，但有两处等不及它：文件树上的图标（一层几百行，为
+ * 画个图标去读每份文件是不可能的），以及查看器里的左右翻页——键得在图还在路上时就管用，
+ * 等 `kind` 回来再接管，用户的第一下必然落空。两处都是「猜错了也不伤」的用途。
+ */
+const IMAGE_EXTENSIONS = new Set([
+  "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg", "heic", "tif", "tiff",
+]);
+
+export function isImageName(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && IMAGE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
+}
+
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ["KB", "MB", "GB", "TB"];

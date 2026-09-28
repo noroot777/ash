@@ -1,8 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowSquareOut, Code, Copy, FolderOpen, GitDiff, SpinnerGap, Trash, Warning, X } from "@phosphor-icons/react";
+import {
+  ArrowSquareOut,
+  CaretLeft,
+  CaretRight,
+  Code,
+  Copy,
+  FolderOpen,
+  GitDiff,
+  SpinnerGap,
+  Trash,
+  Warning,
+  X,
+} from "@phosphor-icons/react";
 import { api, type FileContent } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
-import { formatSize } from "./fileModel.ts";
+import { formatSize, isImageName } from "./fileModel.ts";
 import { OpenWithMenu } from "./OpenWithMenu.tsx";
 import { useDeleteEntry } from "./useDeleteEntry.tsx";
 
@@ -96,6 +108,68 @@ function Body({
   return <TextBody file={file} />;
 }
 
+const EDITABLE = "input, textarea, select, [contenteditable='true'], [contenteditable='']";
+
+/**
+ * 左右方向键翻上一张/下一张。
+ *
+ * **只在图片上接管这两个键**：文本全文和网页源码是横向滚得动的，PDF 与音视频里箭头本来
+ * 就有意思（翻页、快进），抢过来等于把人家的键掰坏了。顶栏那两颗按钮不受这条限制——它
+ * 们不跟任何东西抢。
+ *
+ * 挂在冒泡阶段：大图浮层（`ImagePreview`）在捕获阶段拦这两个键翻它自己的那一组，浮层开
+ * 着时它先 `stopImmediatePropagation`，这里就收不到——层叠顺序对的那一头赢。
+ */
+function useReelKeys(enabled: boolean, onStep: ((delta: number) => void) | undefined) {
+  useEffect(() => {
+    if (!enabled || !onStep) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      if (event.target instanceof Element && event.target.closest(EDITABLE)) return;
+      event.preventDefault();
+      onStep(event.key === "ArrowLeft" ? -1 : 1);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [enabled, onStep]);
+}
+
+/** 顶栏那一组「‹ 3 / 13 ›」。位置紧挨着文件名：翻的是哪一串，看的就是这个名字在变。 */
+function ReelControl({
+  index,
+  total,
+  unit,
+  onStep,
+}: {
+  index: number;
+  total: number;
+  unit: string;
+  onStep: (delta: number) => void;
+}) {
+  return (
+    <span className="file-viewer__reel">
+      <button
+        type="button"
+        className="file-viewer__action"
+        aria-label={`上一${unit}`}
+        onClick={() => onStep(-1)}
+      >
+        <CaretLeft size={13} weight="bold" aria-hidden="true" />
+      </button>
+      <small aria-label={`这一组里的第 ${index + 1} 个，共 ${total} 个`}>{index + 1} / {total}</small>
+      <button
+        type="button"
+        className="file-viewer__action"
+        aria-label={`下一${unit}`}
+        onClick={() => onStep(1)}
+      >
+        <CaretRight size={13} weight="bold" aria-hidden="true" />
+      </button>
+    </span>
+  );
+}
+
 /**
  * 会话区里的文件查看器。
  *
@@ -105,6 +179,8 @@ function Body({
 export function FileViewer({
   taskId,
   path,
+  reel,
+  onStep,
   zoomed = false,
   onToggleZoom,
   onExitZoom,
@@ -114,6 +190,12 @@ export function FileViewer({
 }: {
   taskId: string;
   path: string;
+  /**
+   * 这份文件是从哪一串里点开的（同一组生成物、同一层文件），按页面上的先后排。给了就能
+   * 在这儿直接翻下一张，不用每看一张都回侧栏点一次——十几张截图的任务这是常态。
+   */
+  reel?: readonly string[] | null;
+  onStep?: (delta: number) => void;
   /** 放大态。由 `useFileView` 持有，全文与 diff 互切时才不会掉。 */
   zoomed?: boolean;
   onToggleZoom?: () => void;
@@ -143,6 +225,15 @@ export function FileViewer({
   });
   // 删完这个文件就没得看了，跟着关掉这块内容回到会话。
   const deletion = useDeleteEntry({ taskId, notify, onDeleted: () => onClose() });
+
+  const reelIndex = reel ? reel.indexOf(path) : -1;
+  // 那一串里得真有这一份、且不止一份，才谈得上翻。`indexOf` 每次渲染都算一遍：十几到
+  // 上千个路径的数组，比多存一份索引再操心它跟 path 对不对得上便宜。
+  const step = onStep && reel && reel.length > 1 && reelIndex >= 0 ? onStep : null;
+  // 认「是不是图」先看文件名、再认服务端给的 kind：内容要等一趟请求回来，而翻页键必须在
+  // 图还在路上时就管用——连按两下箭头本来就是翻图时最常见的手势，等 kind 回来第一下就丢了。
+  const imageish = isImageName(path) || file?.kind === "image";
+  useReelKeys(imageish, step ?? undefined);
 
   useEffect(() => {
     let alive = true;
@@ -198,6 +289,14 @@ export function FileViewer({
           <b>{file?.name ?? path.split("/").pop()}</b>
           <small>{path}{file ? ` · ${formatSize(file.size)}` : ""}</small>
         </div>
+        {step && reel && (
+          <ReelControl
+            index={reelIndex}
+            total={reel.length}
+            unit={imageish ? "张" : "个"}
+            onStep={step}
+          />
+        )}
         {pageUrl && (
           <button
             type="button"

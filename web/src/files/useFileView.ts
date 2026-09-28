@@ -13,6 +13,15 @@ import type { ScmDiffTarget } from "../scm/scmModel.ts";
  */
 type FileViewState = {
   filePath: string | null;
+  /**
+   * 这份文件是从哪一串里点开的（生成物的一组、文件夹或文件树里同一层的文件），按它在
+   * 页面上的先后排。有它才翻得了上一张/下一张——看图本来就是一张接一张地看，而点开
+   * 那一刻用户眼前是哪一串，只有点它的那个面板知道，所以由调用方随 `openFile` 一起给。
+   *
+   * 存的是**点开那一刻的快照**：生成物面板 8 秒轮询一次，跟着它变会让「3 / 13」在手底下
+   * 跳号。要翻到新出现的那张，回列表里点一下就是新的一串。
+   */
+  reel: readonly string[] | null;
   /** 摊开的文件夹详情（`FolderViewer`）。和上面两个互斥。 */
   folderPath: string | null;
   diff: ScmDiffTarget | null;
@@ -29,7 +38,7 @@ type FileViewState = {
   zoomed: boolean;
 };
 
-const CLOSED: FileViewState = { filePath: null, folderPath: null, diff: null, behind: null, zoomed: false };
+const CLOSED: FileViewState = { filePath: null, reel: null, folderPath: null, diff: null, behind: null, zoomed: false };
 
 export function useFileView(taskId: string) {
   const [state, setState] = useState<FileViewState>(CLOSED);
@@ -38,25 +47,42 @@ export function useFileView(taskId: string) {
 
   // 全部走函数式更新，回调才能一直是同一个引用 —— 调用方会把它们塞进 effect 依赖和
   // inspector 的 context 里。
-  const openFile = useCallback((path: string) => setState((current) => (
-    { filePath: path, folderPath: null, diff: null, behind: null, zoomed: current.zoomed }
+  const openFile = useCallback((path: string, reel?: readonly string[]) => setState((current) => (
+    { filePath: path, reel: reel && reel.length > 1 ? reel : null, folderPath: null, diff: null, behind: null, zoomed: current.zoomed }
   )), []);
   const openFolder = useCallback((path: string) => setState((current) => (
-    { filePath: null, folderPath: path, diff: null, behind: null, zoomed: current.zoomed }
+    { filePath: null, reel: null, folderPath: path, diff: null, behind: null, zoomed: current.zoomed }
   )), []);
   const openDiff = useCallback((target: ScmDiffTarget) => setState((current) => (
-    { filePath: null, folderPath: null, diff: target, behind: null, zoomed: current.zoomed }
+    { filePath: null, reel: null, folderPath: null, diff: target, behind: null, zoomed: current.zoomed }
   )), []);
+  /**
+   * 在那一串里翻一格（左右箭头、顶栏的两颗按钮）。到头绕回另一端：翻图时「已经是最后
+   * 一张了」不值得用一颗点不动的按钮去说，绕回去再翻一遍反而是大家都熟的手感。
+   *
+   * 留在 hook 里而不是让查看器自己 `openFile(下一张)`：那样每翻一格都要把整串再传一遍，
+   * 传丢了就翻不动了。
+   */
+  const stepFile = useCallback((delta: number) => setState((current) => {
+    const reel = current.reel;
+    if (!current.filePath || !reel?.length) return current;
+    const at = reel.indexOf(current.filePath);
+    if (at < 0) return current;
+    const next = reel[(at + delta % reel.length + reel.length) % reel.length];
+    if (!next || next === current.filePath) return current;
+    // `behind`（切回 diff 的回头路）是上一份文件的，翻走就不成立了。
+    return { ...current, filePath: next, behind: null };
+  }), []);
   /** diff 视图里的「查看文件全文」。 */
   const showFile = useCallback(() => setState((current) => (
     current.diff
-      ? { filePath: current.diff.path, folderPath: null, diff: null, behind: current.diff, zoomed: current.zoomed }
+      ? { filePath: current.diff.path, reel: null, folderPath: null, diff: null, behind: current.diff, zoomed: current.zoomed }
       : current
   )), []);
   /** 全文视图里的「查看改动」，回到刚才那份 diff。 */
   const showDiff = useCallback(() => setState((current) => (
     current.behind
-      ? { filePath: null, folderPath: null, diff: current.behind, behind: null, zoomed: current.zoomed }
+      ? { filePath: null, reel: null, folderPath: null, diff: current.behind, behind: null, zoomed: current.zoomed }
       : current
   )), []);
   const toggleZoom = useCallback(() => setState((current) => ({ ...current, zoomed: !current.zoomed })), []);
@@ -65,6 +91,8 @@ export function useFileView(taskId: string) {
 
   return {
     filePath: state.filePath,
+    /** 当前这份文件所在的那一串（同一组生成物、同一层文件）；只有一个的时候是 null。 */
+    reel: state.reel,
     folderPath: state.folderPath,
     diff: state.diff,
     /** 文件树和改动列表里该高亮哪一行——摊的是 diff、全文还是文件夹，对它们来说是同一个路径。 */
@@ -75,6 +103,7 @@ export function useFileView(taskId: string) {
     openFile,
     openFolder,
     openDiff,
+    stepFile,
     showFile,
     showDiff,
     toggleZoom,

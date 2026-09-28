@@ -536,8 +536,8 @@ export function TeamView({
         indicatorForTask,
         workerLiveLines,
         activeFilePath: fileView.activePath,
-        onOpenFile: (path: string) => {
-          fileView.openFile(path);
+        onOpenFile: (path: string, reel?: readonly string[]) => {
+          fileView.openFile(path, reel);
           setSelectedWorkerId(null);
           subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
@@ -586,6 +586,8 @@ export function TeamView({
         <FileViewer
           taskId={task.id}
           path={fileView.filePath}
+          reel={fileView.reel}
+          onStep={fileView.stepFile}
           zoomed={fileView.zoomed}
           onToggleZoom={fileView.toggleZoom}
           onExitZoom={fileView.exitZoom}

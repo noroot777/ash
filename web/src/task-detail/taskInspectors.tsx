@@ -28,7 +28,8 @@ export interface TaskInspectorContext {
   onTaskUpdated: (task: Task) => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: (updatedTask?: Task) => void;
-  onOpenFile: (path: string) => void;
+  /** 第二个参数是「这一串」：同组生成物、同一层文件，中间栏据此能翻上一张/下一张。 */
+  onOpenFile: (path: string, reel?: readonly string[]) => void;
   /** 在中间栏摊开文件夹详情（里面有多少东西、能不能删）。 */
   onOpenFolder: (path: string) => void;
   /** 文件树该高亮哪一行：摊的是全文、diff 还是文件夹，对它来说是同一个路径。 */

@@ -15,16 +15,13 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import type { FileEntry } from "../lib/api.ts";
-import { formatSize, ROOT_SOURCE_LABEL, useFileTree } from "./fileModel.ts";
+import { formatSize, isImageName, ROOT_SOURCE_LABEL, useFileTree } from "./fileModel.ts";
 import { KIND_BADGE, KIND_LABEL, type ScmDiffTarget } from "../scm/scmModel.ts";
 import { fileGitDecorations, type FileGitDecoration } from "./fileGitDecorations.ts";
 
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg", "heic", "tif", "tiff"]);
-
 function FileGlyph({ name }: { name: string }) {
-  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
-  if (ext === "pdf") return <FilePdf size={13} aria-hidden="true" />;
-  if (IMAGE_EXTENSIONS.has(ext)) return <FileImage size={13} aria-hidden="true" />;
+  if (name.toLowerCase().endsWith(".pdf")) return <FilePdf size={13} aria-hidden="true" />;
+  if (isImageName(name)) return <FileImage size={13} aria-hidden="true" />;
   return <File size={13} aria-hidden="true" />;
 }
 
@@ -44,7 +41,7 @@ function Level({
   tree: ReturnType<typeof useFileTree>;
   showIgnored: boolean;
   activePath: string | null;
-  onOpenFile: (entry: FileEntry) => void;
+  onOpenFile: (entry: FileEntry, siblings: readonly FileEntry[]) => void;
   onOpenFolder: ((path: string) => void) | undefined;
   onOpenDiff: ((target: ScmDiffTarget) => void) | undefined;
   decorations: ReadonlyMap<string, FileGitDecoration>;
@@ -91,7 +88,7 @@ function Level({
                 onClick={() => {
                   if (entry.kind === "dir") tree.toggle(entry.path);
                   else if (diffTarget && onOpenDiff) onOpenDiff(diffTarget);
-                  else onOpenFile(entry);
+                  else onOpenFile(entry, visible);
                 }}
               >
                 <span className="file-tree__caret" aria-hidden="true">
@@ -170,7 +167,8 @@ export function FileTreeInspector({
 }: {
   taskId: string;
   activePath: string | null;
-  onOpenFile: (path: string) => void;
+  /** 第二个参数是同一层里的文件（不含子文件夹），中间栏据此摊开「上一张 / 下一张」。 */
+  onOpenFile: (path: string, reel?: readonly string[]) => void;
   /** 在中间栏摊开文件夹详情。没接就不显示行尾那颗按钮。 */
   onOpenFolder?: (path: string) => void;
   onOpenDiff?: (target: ScmDiffTarget) => void;
@@ -237,7 +235,10 @@ export function FileTreeInspector({
           tree={tree}
           showIgnored={showIgnored}
           activePath={activePath}
-          onOpenFile={(entry) => onOpenFile(entry.path)}
+          onOpenFile={(entry, siblings) => onOpenFile(
+            entry.path,
+            siblings.filter((candidate) => candidate.kind !== "dir").map((candidate) => candidate.path),
+          )}
           onOpenFolder={onOpenFolder}
           onOpenDiff={onOpenDiff}
           decorations={decorations}

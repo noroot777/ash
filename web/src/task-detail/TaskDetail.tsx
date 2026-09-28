@@ -306,9 +306,9 @@ export function TaskDetail({
           if (updatedTask) onTaskUpdate(updatedTask);
           else void refreshTask();
         },
-        onOpenFile: (path: string) => {
+        onOpenFile: (path: string, reel?: readonly string[]) => {
           setPreviewOpen(false);
-          fileView.openFile(path);
+          fileView.openFile(path, reel);
           subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
@@ -385,6 +385,8 @@ export function TaskDetail({
               <FileViewer
                 taskId={task.id}
                 path={fileView.filePath}
+                reel={fileView.reel}
+                onStep={fileView.stepFile}
                 zoomed={fileView.zoomed}
                 onToggleZoom={fileView.toggleZoom}
                 onExitZoom={fileView.exitZoom}

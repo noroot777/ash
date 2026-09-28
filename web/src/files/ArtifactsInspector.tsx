@@ -74,7 +74,8 @@ export function ArtifactsInspector({
 }: {
   taskId: string;
   activePath: string | null;
-  onOpenFile: (path: string) => void;
+  /** 第二个参数是这一组的全部路径：中间栏据此摊开「上一张 / 下一张」。 */
+  onOpenFile: (path: string, reel?: readonly string[]) => void;
   notify: (message: string) => void;
 }) {
   const { result, error, loading, refresh } = useTaskArtifacts(taskId);
@@ -139,7 +140,9 @@ export function ArtifactsInspector({
                   type="button"
                   className={`artifacts__card${artifact.path === activePath ? " is-active" : ""}`}
                   aria-label={`打开 ${artifact.path}，${ARTIFACT_ORIGIN_LABEL[artifact.origin]}`}
-                  onClick={() => onOpenFile(artifact.path)}
+                  // 翻页的那一串按**这一组**给（图片跟图片翻、网页跟网页翻）：分组本来就是
+                  // 「同一类东西」的意思，跨组翻到一份 html 只会让人以为点错了。
+                  onClick={() => onOpenFile(artifact.path, group.items.map((item) => item.path))}
                 >
                   <span className="artifacts__thumb" data-kind={artifact.kind}>
                     <Thumb taskId={taskId} artifact={artifact} />
