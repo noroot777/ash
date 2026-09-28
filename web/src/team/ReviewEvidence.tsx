@@ -87,7 +87,13 @@ export function ReviewRoundBody({
   const reviewTaskId = round.reviewTaskId;
   return (
     <>
-      {round.reportMarkdown ? <ReviewReportBody text={round.reportMarkdown} /> : <p>验证报告尚未写入。</p>}
+      {round.reportMarkdown
+        ? <ReviewReportBody
+            text={round.reportMarkdown}
+            reportKey={`${taskId}:${round.where}:${round.round}`}
+            conclusion={round.conclusion}
+          />
+        : <p>验证报告尚未写入。</p>}
       {includeScreenshots && round.screenshots.length > 0 && (
         <section className="review-shots">
           <h5><ImageSquare size={12} />证据截图 · {round.screenshots.length}</h5>

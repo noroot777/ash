@@ -1,74 +1,154 @@
-// 审查报告摘要/明细折叠的 DOM fixture。两份报告并排挂出来：
-// 一份按契约写（第一个二级标题是 `## 结论`），一份是存量格式（结论混在开头正文里）。
+// 审查报告摘要/明细折叠的 DOM fixture：把每一档并排挂出来。
 //
-// 并排是必须的：这个改动真正的风险不是「折叠不灵」，而是**对不上契约的报告被误拆、
-// 内容被藏进折叠里还没人发现**。两种形态同屏才能一眼看出降级行为是「整篇铺开」。
-import { StrictMode } from "react";
+// 并排是必须的：这个改动真正的风险不是「折叠不灵」，而是**按钮替折叠里的东西撒谎**——
+// 首屏写着「没问题」、真正的问题折在一个宣称「里面只有验证过程、证据、清场记录」的开关
+// 底下。所以这一份的主线是同一份报告配不同的权威结论：`verified` 那份敢宣称，其余一律
+// 只写「展开完整报告」。
+//
+// 报告正文在 `review-report-texts.ts`（十轮复审攒下来的真实形态，只增不改），这一份只
+// 负责挂载。每一档的判据由纯函数测试穷举（`test-review-report-*.mjs`），这里只挂**屏幕上
+// 看得出差别**的那几份。
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ReviewReportBody } from "../../src/components/MarkdownBody.tsx";
+import {
+  conforming,
+  conformingRound2,
+  legacy,
+  fenced,
+  commented,
+  proseCopy,
+  legacyConclusion,
+  headingColumns,
+  metadataFirst,
+  justOver,
+  contradictoryNone,
+  sixProblems,
+  fiveProblems,
+} from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
-// 照 `NG0arezydQ2e` 第 4 轮那份的骨架，按新契约重写开头那一节。
-const conforming = `# 第 4 轮自动验证报告
+// 在**同一个位置**换报告，模拟侧栏抽屉切换轮次。展开状态如果是独立 state，换一轮就会串
+// 过去——下一份报告一打开就是满屏命令输出，恰好是这个改动要消灭的东西。
+//
+// `identical` 那一份是边界：**两轮报告一字不差**（同一处没修好、原样重报一遍）。按正文
+// 判「换了没有」在这里认不出来，所以复位判据必须是报告身份 `reportKey`。
+function SwitchableReport({ identical = false }: { identical?: boolean }) {
+  const [second, setSecond] = useState(false);
+  return (
+    <>
+      <button type="button" className="switch-round" onClick={() => setSecond((value) => !value)}>
+        切换轮次
+      </button>
+      <ReviewReportBody
+        text={!second || identical ? conforming : conformingRound2}
+        reportKey={`run-1:${second ? 2 : 1}`}
+        conclusion="verified"
+      />
+    </>
+  );
+}
 
-## 结论
-
-**能不能验收**：不能 —— 有 1 条必须先修
-
-**现在什么能用了**：项目中心的卡片在深色主题下不再出现一块亮紫白的空位。
-
-**必须修的问题**
-
-### 烧录出来的成片用的是你改之前的字幕
-
-你会遇到：改完字幕立刻点烧录，导出的视频里还是上一版字幕，界面上没有任何提示。
-为什么：保存请求还在服务端处理时，另一个标签页的一次拉取会把「有改动待落盘」的标记提前消费掉。
-建议怎么修：标记推迟到服务端确认提交之后再发。
-
-**不拦验收、但你该知道的**
-
-- 删除项目后整个网格会闪一下「正在加载项目…」。
-
-## 被审范围与基线
-
-- 工作树：\`/Users/fjh/code/ascut/.worktrees/LqhF7g_rqANy\`
-- 被审 HEAD：\`d7ee0b07\`，比较基线 \`8e428641\`
-- \`git diff HEAD^ HEAD --check\` 通过
-
-## 实际验证
-
-\`\`\`text
-npm run build
-npm test
-\`\`\`
-
-## 清场
-
-- 已停止本轮启动的 Vite 服务，\`lsof -nP -iTCP:5175 -sTCP:LISTEN\` 无输出。
-`;
-
-// 存量形态：结论写在开头的无序列表里，第一个二级标题是「一、改动范围」。
-const legacy = `# 自由工作流 · 第 1 轮逻辑审查报告
-
-- 被审提交：\`711d78f\`
-- 结论：**verify_failed** —— 有 2 个可复现的缺陷是本次改动引入的
-
-## 一、改动范围
-
-27 个文件，+811 / −451。
-
-## 二、发现的缺陷
-
-### 缺陷 1 深色主题下缩略图降级块是一块刺眼的浅色
-`;
+/**
+ * 换轮次时**两个折叠都得复位**。第一层（技术明细）历轮已经钉住了，这一份盯的是摘要
+ * 内部那一层：上一轮展开着「其余 N 条问题」，换一份报告过来不该还是展开的。
+ */
+function SwitchableSix() {
+  const [second, setSecond] = useState(false);
+  return (
+    <>
+      <button type="button" className="switch-six" onClick={() => setSecond((value) => !value)}>
+        切换轮次
+      </button>
+      <ReviewReportBody
+        text={sixProblems}
+        reportKey={`run-25:${second ? 2 : 1}`}
+        conclusion="verified"
+      />
+    </>
+  );
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
+    {/* 第一档：这一轮**权威结论是通过**，报告又照格式写了四栏。只有这一种配得上那句
+        「展开技术明细（验证过程、证据、清场记录）」。 */}
     <div className="conforming-fixture markdown-report-body">
-      <ReviewReportBody text={conforming} />
+      <ReviewReportBody text={conforming} reportKey="run-1:4" conclusion="verified" />
     </div>
+    {/* 同一份正文、换一个权威结论。这两份并排就是整套判据：按钮说什么只看 `conclusion`,
+        不看报告写了什么。正文里那句「能不能验收」骗得过判据，骗不过这个字段。 */}
+    <div className="failed-fixture markdown-report-body">
+      <ReviewReportBody text={conforming} reportKey="run-1:5" conclusion="verify_failed" />
+    </div>
+    {/* 拿不到结论（老数据、还没判完）同样按「不宣称」办。 */}
+    <div className="unknown-fixture markdown-report-body">
+      <ReviewReportBody text={conforming} reportKey="run-1:6" conclusion={null} />
+    </div>
+    {/* Windows 上生成的同一份报告：换行是 CRLF，屏幕上该长得一模一样。 */}
+    <div className="crlf-fixture markdown-report-body">
+      <ReviewReportBody text={conforming.replace(/\n/g, "\r\n")} reportKey="run-3:1" conclusion="verified" />
+    </div>
+    {/* 切点落在哪：代码围栏里的 `##`、HTML 注释里的 `##` 都不是分界。 */}
+    <div className="fence-fixture markdown-report-body">
+      <ReviewReportBody text={fenced} reportKey="run-4:6" conclusion="verified" />
+    </div>
+    <div className="comment-fixture markdown-report-body">
+      <ReviewReportBody text={commented} reportKey="run-5:7" conclusion="verified" />
+    </div>
+    {/* 四栏写成 `###` 小标题：全库 4 份真实报告长这样，同样算照格式写的。 */}
+    <div className="heading-columns-fixture markdown-report-body">
+      <ReviewReportBody text={headingColumns} reportKey="run-12:3" conclusion="verified" />
+    </div>
+    {/* 第二档：切得动，但按钮什么都不宣称。两份的来由不同——一份是这一轮没通过，一份是
+        通过了却没照格式写（判定写在 `## 结论` 那一节里的旧形态，全库 146 份）。 */}
     <div className="legacy-fixture markdown-report-body">
-      <ReviewReportBody text={legacy} />
+      <ReviewReportBody text={legacy} reportKey="run-2:1" conclusion="verify_failed" />
+    </div>
+    <div className="legacy-conclusion-fixture markdown-report-body">
+      <ReviewReportBody text={legacyConclusion} reportKey="run-11:1" conclusion="verified" />
+    </div>
+    {/* 正文自相矛盾的那一类（首屏「没有发现问题」、条数却写着 2）：现在不读它，只问权威
+        结论。没通过 = 按钮一个字都不宣称。 */}
+    <div className="contradictory-fixture markdown-report-body">
+      <ReviewReportBody text={contradictoryNone} reportKey="run-21:1" conclusion="verify_failed" />
+    </div>
+    {/* 第三档：切不动。说明段里抄了四行栏目名、却凑不齐签名 = 新格式写坏了，问题本来就
+        该在结论节里，从第二个 `##` 起切会把问题一起切走——整篇铺开。 */}
+    <div className="prose-copy-fixture markdown-report-body">
+      <ReviewReportBody text={proseCopy} reportKey="run-7:9" conclusion="verified" />
+    </div>
+    {/* 同一档的另一半：元数据开场，连引子都凑不出来。不猜切点，按渲染高度夹住。 */}
+    <div className="metadata-first-fixture markdown-report-body">
+      <ReviewReportBody text={metadataFirst} reportKey="run-19:1" conclusion="verify_failed" />
+    </div>
+    {/* 只超出上限两百来 px 的报告：夹住省不下什么，一个按钮都不该画。判据是渲染高度，
+        所以这一份的宽度写死。 */}
+    <div className="just-over-fixture markdown-report-body" style={{ width: 720 }}>
+      <ReviewReportBody text={justOver} reportKey="run-20:1" conclusion="verify_failed" />
+    </div>
+    <div className="switch-fixture markdown-report-body">
+      <SwitchableReport />
+    </div>
+    <div className="identical-fixture markdown-report-body">
+      <SwitchableReport identical />
+    </div>
+    {/* 摘要内部那一层：照格式写了、每条三行俱全，**只是条目多到铺满一屏**。前 5 条铺开、
+        第 6 条起收进「展开其余 N 条问题」、第四栏跨过它留在首屏（用户 2026-09-27 裁定）。
+        这一层跟权威结论无关,所以同一份正文配两个结论并排挂:里层文案一模一样,只有外层那
+        个按钮跟着结论变——里层绝不许套用外层那句「验证过程、证据、清场记录」。 */}
+    <div className="six-problems-fixture markdown-report-body">
+      <ReviewReportBody text={sixProblems} reportKey="run-23:1" conclusion="verify_failed" />
+    </div>
+    <div className="six-verified-fixture markdown-report-body">
+      <ReviewReportBody text={sixProblems} reportKey="run-23:2" conclusion="verified" />
+    </div>
+    {/* 成对挂：恰好卡在上限上的那份一个按钮都不该多画,「展开其余 0 条问题」是纯噪音。 */}
+    <div className="five-problems-fixture markdown-report-body">
+      <ReviewReportBody text={fiveProblems} reportKey="run-24:1" conclusion="verify_failed" />
+    </div>
+    <div className="six-switch-fixture markdown-report-body">
+      <SwitchableSix />
     </div>
   </StrictMode>,
 );

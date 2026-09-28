@@ -9,6 +9,11 @@ import { readSource } from "../../scripts/read-source.mjs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
+import {
+  assertCarriesSummaryFormat,
+  assertCarriesSummaryReminder,
+  assertSummaryRuleTable,
+} from "./review-summary-rules.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-review-flow-"));
 process.env.ASH_DB = join(root, "ash.db");
@@ -280,6 +285,22 @@ const assertBrowserOrder = (text: string, source: string) => {
 assertBrowserOrder(reviewPrompt, "自动验证 prompt");
 assertBrowserOrder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
 assertBrowserOrder(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "历史审查续跑提醒");
+// 续跑提醒是被打断那条路径上**唯一**还在重贴格式要求的东西（完整 prompt 不重发）。
+// 所以凡是「丢了报告就退回改动之前的样子」的规则，都必须在缩略版里也留得住：首句点名
+// 最要命的那条、摘要最多 5 条——只写栏目名的话，续跑出来的报告又会是「有 11 条，自己翻」。
+// 报告形状的规则本体只有一份源：`server/src/review-report-format.ts` 的 SUMMARY_RULES，
+// 完整版和缩略版都从它拼出来。这里核两件拼接兜不住的事——表自身完整、常量真的被塞进了
+// 各条 prompt。
+//
+// 断言对象是「原样包含那个常量」而不是「grep 得到几个关键词」：后者会被旁文喂饱,
+// 需求引用、浏览器策略、任务正文里碰巧出现同样的词,格式常量整段删了也照样绿。
+assertSummaryRuleTable();
+assertCarriesSummaryFormat(reviewPrompt, "自动验证 prompt");
+assertCarriesSummaryReminder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
+assertCarriesSummaryReminder(
+  reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }),
+  "历史审查续跑提醒",
+);
 const globalFreshPrompt = withGlobalBrowserPolicy("普通任务正文", "full");
 assert.match(globalFreshPrompt, /【全局浏览器操作规范】/, "普通新会话必须收到全局浏览器规范");
 assertBrowserOrder(globalFreshPrompt, "普通新会话");

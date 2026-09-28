@@ -19,6 +19,8 @@ const PREV = "2026-09-11T05:00:00.000Z";
 try {
   const { appendSessionTrace, sessionTracePath, turnProducedWork } = await import("../src/transcript.js");
   const { freeReviewResumeMessage } = await import("../src/free-review-prompts.js");
+  const { REPORT_SUMMARY_REMINDER } = await import("../src/review-report-format.js");
+  const { assertCarriesSummaryReminder, assertSummaryRuleTable } = await import("./review-summary-rules.js");
 
   const line = (turnStartedAt: string, event: Record<string, unknown>) =>
     JSON.stringify({ at: turnStartedAt, turnStartedAt, event });
@@ -88,7 +90,19 @@ try {
     assert.ok(message.includes("directionToken"), "方向身份必须带上，否则 report_stage 会被拒");
     assert.ok(message.includes("不要调用 complete_task"), "旁路审查回合的边界必须重申");
     assert.ok(/不要从头/.test(message), "这句话的全部意义就是「别从头再来」");
-    assert.ok(message.length < 700, `续跑指令要短，现在 ${message.length} 字`);
+    // 格式要求在这条路径上只有这句话跟得到底（完整 prompt 不重发），所以缩略版契约必须
+    // 原样在里面。规则「逐条都在」由拼接和类型保证（`review-report-format.ts` 的
+    // SUMMARY_RULES，`short` 必填），不再靠一份要人工同步的清单——那份清单第 4 轮被发现
+    // 自己漏登记了排序规则。
+    assertSummaryRuleTable();
+    assertCarriesSummaryReminder(message, "自由审查续跑指令");
+    // 长度闸拦的是「别从头重发任务书」，所以量的是**非规则的那部分**：规则带全了本来就
+    // 该变长，把两者加在一起量，等于每加一条契约规则就侵蚀一次防重发的预算——第 3 轮
+    // 补齐规则后整条 737 字，照旧 700 的话只能靠削措辞去凑一个整数，那是本末倒置。
+    const scaffolding = message.length - REPORT_SUMMARY_REMINDER.length;
+    assert.ok(scaffolding < 450, `续跑指令的非规则部分要短，现在 ${scaffolding} 字`);
+    // 规则那半边也不是无限的：真长到这个量级就该回头想想是不是该重发完整 prompt 了。
+    assert.ok(message.length < 900, `整条续跑指令仍要远短于完整任务书，现在 ${message.length} 字`);
   }
 
   console.log("✓ review resume predicate");
