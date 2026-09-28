@@ -24,6 +24,11 @@
 import assert from "node:assert/strict";
 import { splitReviewReport } from "../src/components/reviewReportSections.ts";
 
+// 这份文件管的是**降级那一档折到哪**，那一档的按钮什么都不宣称，跟权威结论无关；
+// 统一按「这一轮没通过」调用（真实语料里 68% 是这个）。按钮说什么由
+// `test-review-report-claim.mjs` 单独钉。
+const split = (text, conclusion = "verify_failed") => splitReviewReport(text, conclusion);
+
 // 反例一（真实报告 `yz74LehaZzwl/H1MQnmqKzCSl/round-1` 的骨架）：首节标题含「结论」，
 // 意思却正相反——「先说**结论之外的**」。按标题当契约拆会把两条【高】折叠掉，首屏只剩
 // 「做对的部分」，而那个折叠按钮上写着「验证过程、证据、清场记录」，等于骗用户里面
@@ -46,7 +51,7 @@ import { splitReviewReport } from "../src/components/reviewReportSections.ts";
     "",
     "复现：……",
   ].join("\n");
-  const { summary, detail, kind } = splitReviewReport(opposite);
+  const { summary, detail, kind } = split(opposite);
   assert.equal(kind, "lead", "「先说结论之外的」不是摘要契约，只能降级");
   assert.match(summary, /verify_failed\*\*，2 个高优先级问题/, "报告自己的开场结论留在首屏");
   assert.doesNotMatch(summary, /做对的部分|核心流程已跑通/, "「做对的部分」不许冒充摘要占着首屏");
@@ -74,7 +79,7 @@ import { splitReviewReport } from "../src/components/reviewReportSections.ts";
     "",
     "复现：……",
   ].join("\n");
-  const { summary, detail, kind } = splitReviewReport(positiveOnly);
+  const { summary, detail, kind } = split(positiveOnly);
   assert.equal(kind, "whole", "开头只有一个标题，首节又不是报告自己声明的结论节");
   assert.equal(detail, "");
   assert.match(summary, /高危/, "高危发现必须留在首屏");
@@ -86,7 +91,7 @@ import { splitReviewReport } from "../src/components/reviewReportSections.ts";
 // 这正是用户点名要消灭的「46 行合规证明糊一脸」。
 {
   const legacy = "# 第 1 轮逻辑审查报告\n\n- 结论：**verify_failed**\n\n## 一、改动范围\n\n27 个文件。\n\n## 三、发现的缺陷\n\n缺陷 1……\n";
-  const { summary, detail, kind } = splitReviewReport(legacy);
+  const { summary, detail, kind } = split(legacy);
   assert.equal(kind, "lead");
   assert.match(summary, /结论：\*\*verify_failed\*\*/, "开场那句判定留在首屏");
   assert.doesNotMatch(summary, /改动范围|27 个文件/, "第一个 `##` 起全部收进折叠");
@@ -106,7 +111,7 @@ import { splitReviewReport } from "../src/components/reviewReportSections.ts";
 // 档），或者像下面那样把那一节老老实实叫「Findings」。
 {
   const findingFirst = "# 第 10 轮逻辑审查报告\n\n结论：**verify_failed**。\n\n## 一、逐条核对\n\n### P1：……\n\n## 清理\n\n略\n";
-  const { summary, detail, kind } = splitReviewReport(findingFirst);
+  const { summary, detail, kind } = split(findingFirst);
   assert.equal(kind, "lead");
   assert.match(summary, /verify_failed/, "首屏至少得说清能不能验收");
   assert.match(detail, /P1/);
@@ -117,7 +122,7 @@ import { splitReviewReport } from "../src/components/reviewReportSections.ts";
 // 尾部清一色是验证记录、浏览器通道和清理，正是用户点名不想被糊一脸的东西。
 for (const [what, title] of [["英文 Findings", "## Findings"], ["单数 Finding", "## Finding"], ["中文发现", "## 发现"]]) {
   const text = `# 第 10 轮逻辑审查报告\n\n结论：**verify_failed**。\n\n${title}\n\n### P1：保存后内容会全部消失\n\n复现：……\n\n## 验证记录\n\n\`npm test\` 通过。\n\n## 清理\n\n已停掉 5175。\n`;
-  const { summary, detail, kind } = splitReviewReport(text);
+  const { summary, detail, kind } = split(text);
   assert.equal(kind, "lead", `${what}：报告自己声明了发现节，该折`);
   assert.match(summary, /P1：保存后内容会全部消失/, `${what}：发现必须留在首屏`);
   assert.doesNotMatch(summary, /验证记录|npm test|已停掉/, `${what}：技术记录照折`);
@@ -133,7 +138,7 @@ for (const [what, title] of [["英文 Findings", "## Findings"], ["单数 Findin
 // 原本整篇铺开，现在发现那一节留首屏、范围和清理收进按钮。
 {
   const noLead = "# Z7OFKHcfagfx round-1 logic review\n\n## Findings\n\n未发现可复现的行为缺陷。\n\n## Scope\n\n……\n\n## Cleanup\n\n……\n";
-  const { summary, detail, kind } = splitReviewReport(noLead);
+  const { summary, detail, kind } = split(noLead);
   assert.equal(kind, "lead", "首节自报家门时，标题开场也能折");
   assert.match(summary, /未发现可复现的行为缺陷/, "判定必须默认可见");
   assert.doesNotMatch(summary, /Scope|Cleanup/, "技术记录照折");
@@ -143,9 +148,9 @@ for (const [what, title] of [["英文 Findings", "## Findings"], ["单数 Findin
 // （`## 发现 1：数据会丢` 是问题本身）时整篇铺开——首屏只剩标题加按钮，发现还被折走。
 {
   const bare = "# 第 1 轮审查\n\n## 发现 1：数据会丢\n\n复现：……\n";
-  assert.equal(splitReviewReport(bare).kind, "whole", "标题不算引子");
-  assert.equal(splitReviewReport(bare).detail, "");
-  assert.match(splitReviewReport(bare).summary, /数据会丢/, "发现必须留在首屏");
+  assert.equal(split(bare).kind, "whole", "标题不算引子");
+  assert.equal(split(bare).detail, "");
+  assert.match(split(bare).summary, /数据会丢/, "发现必须留在首屏");
 }
 
 // 读不出字的也不算引子：首屏「一个标题 + 一坨看不懂的东西 + 一个按钮」比多滚两屏更糟。
@@ -155,7 +160,7 @@ for (const [what, lead] of [
   ["一张图", "![](./shot.png)"],
 ]) {
   const text = `# 第 1 轮审查\n\n${lead}\n\n## 发现 1：数据会丢\n\n复现：……\n`;
-  const { kind, detail, summary } = splitReviewReport(text);
+  const { kind, detail, summary } = split(text);
   assert.equal(kind, "whole", `引子只有${what}，读不出字，不算引子`);
   assert.equal(detail, "");
   assert.match(summary, /数据会丢/, `${what}：发现必须留在首屏`);
@@ -164,8 +169,8 @@ for (const [what, lead] of [
 // 连一个顶层 `##` 都没有：没有拆点，整篇铺开。
 {
   const flat = "# 第 1 轮审查\n\n结论：**verify_failed**。\n\n### 发现 1\n\n复现：……\n";
-  assert.equal(splitReviewReport(flat).kind, "whole");
-  assert.equal(splitReviewReport(flat).detail, "");
+  assert.equal(split(flat).kind, "whole");
+  assert.equal(split(flat).detail, "");
 }
 
 // 旧格式最常见的另一种形态（真实样本 `x3Jj_JW5SoXk/udvEI_K-2YiL/round-1`，全库同形态
@@ -191,7 +196,7 @@ for (const [what, lead] of [
     "",
     "工作树 `/Users/fjh/code/harness/.worktrees/x3Jj_JW5SoXk`，HEAD `45b8a02`。",
   ].join("\n");
-  const { summary, detail, kind } = splitReviewReport(oldStyle);
+  const { summary, detail, kind } = split(oldStyle);
   assert.equal(kind, "lead", "旧格式的结论节不构成契约，但仍然只能降级折");
   assert.match(summary, /## 结论/, "结论那一节整个留在首屏");
   assert.match(summary, /verified/, "「到底过没过」不许折进去");
@@ -207,8 +212,8 @@ for (const [what, lead] of [
 // 同形态但只有一个 `##`：折掉的就是整个结论节，那还不如整篇铺开。
 {
   const only = "# 第 1 轮审查报告\n\n审查时间：2026-08-13\n\n## 结论\n\n**verified。** 没有发现缺陷。\n";
-  assert.equal(splitReviewReport(only).kind, "whole", "没有第二个 `##` 就别折");
-  assert.equal(splitReviewReport(only).detail, "");
+  assert.equal(split(only).kind, "whole", "没有第二个 `##` 就别折");
+  assert.equal(split(only).detail, "");
 }
 
 // 「报告自己声明这一节是结论」跟它用哪种语言写没关系。判据本来写死成中文「结论」，于是
@@ -232,7 +237,7 @@ for (const [what, title, body] of [
     "",
     "`git status --short` → clean",
   ].join("\n");
-  const { summary, detail, kind } = splitReviewReport(text);
+  const { summary, detail, kind } = split(text);
   assert.equal(kind, "lead", `${what}：报告自己声明了结论节，该折`);
   assert.match(summary, new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${what}：结论那一节整个留在首屏`);
   assert.match(summary, /verif/, `${what}：「到底过没过」不许折进去`);
@@ -255,7 +260,7 @@ for (const [what, title] of [
   ["一条问题不是发现节", "## 发现 1：保存后内容会全部消失"],
 ]) {
   const text = `# 第 1 轮审查\n\n${title}\n\n主链路验证通过。\n\n## 2. 高优先级缺陷\n\nP1：保存后内容会全部消失。\n`;
-  const { summary, kind } = splitReviewReport(text);
+  const { summary, kind } = split(text);
   assert.equal(kind, "whole", `${what}：不是报告自己声明的判定节，开头又没引子，只能整篇铺开`);
   assert.match(summary, /高优先级缺陷/, `${what}：缺陷必须留在首屏`);
 }
@@ -281,7 +286,7 @@ for (const [what, title] of [
     "",
     "### P1 行为缺陷 — 保存后内容会全部消失",
   ].join("\n");
-  const { summary, kind } = splitReviewReport(metadataFirst);
+  const { summary, kind } = split(metadataFirst);
   assert.equal(kind, "whole", "首节是元数据，折了首屏就只剩任务名");
   assert.match(summary, /P1 行为缺陷/, "缺陷必须留在首屏");
 }
@@ -306,7 +311,7 @@ for (const [what, mark] of [["[中]", "[中]"], ["【高】", "【高】"], ["[P
     "",
     "无头会话，已清场。",
   ].join("\n");
-  const { summary, detail, kind } = splitReviewReport(text);
+  const { summary, detail, kind } = split(text);
   assert.equal(kind, "lead", `${what}：标题自己标了严重度，该折`);
   assert.match(summary, /结果区整体灰掉/, `${what}：问题必须留在首屏`);
   assert.doesNotMatch(summary, /验证记录|浏览器验证/, `${what}：技术记录照折`);
@@ -335,7 +340,7 @@ for (const [what, mark] of [["[中]", "[中]"], ["【高】", "【高】"], ["[P
     "",
     "`npm test` 通过。",
   ].join("\n");
-  const { summary, detail } = splitReviewReport(many);
+  const { summary, detail } = split(many);
   assert.match(summary, /保存后内容会全部消失/, "第一条留在首屏");
   assert.match(summary, /导出内容仍是旧版本/, "第二条也得留在首屏");
   assert.match(detail, /^## 验证记录/, "折的是技术记录");
@@ -358,7 +363,7 @@ for (const [what, mark] of [["[中]", "[中]"], ["【高】", "【高】"], ["[P
     "",
     "复现：……",
   ].join("\n");
-  const { summary, detail } = splitReviewReport(numbered);
+  const { summary, detail } = split(numbered);
   assert.doesNotMatch(summary, /做对的部分/, "序号打头的不算问题小节");
   assert.match(detail, /^## 0\. 先说结论之外的/, "拆点仍是第一个 `##`");
 }
@@ -366,7 +371,7 @@ for (const [what, mark] of [["[中]", "[中]"], ["【高】", "【高】"], ["[P
 // 全篇每一节都标了严重度时没得可折——折了首屏就只剩一个标题。
 {
   const allMarked = "# 第 1 轮审查\n\n## [高] 保存后内容会全部消失\n\n复现：……\n\n## [中] 导出内容仍是旧版本\n\n复现：……\n";
-  const { kind, detail } = splitReviewReport(allMarked);
+  const { kind, detail } = split(allMarked);
   assert.equal(kind, "whole", "没有技术记录可折就别折");
   assert.equal(detail, "");
 }
@@ -390,7 +395,7 @@ for (const [what, mark] of [["[中]", "[中]"], ["【高】", "【高】"], ["[P
     "",
     "### 导出内容仍是旧版本",
   ].join("\n");
-  const { summary, detail, kind } = splitReviewReport(halfThenProblem);
+  const { summary, detail, kind } = split(halfThenProblem);
   assert.equal(kind, "whole", "有标签却凑不齐 = 新格式写坏了，不是旧格式");
   assert.equal(detail, "");
   assert.match(summary, /导出内容仍是旧版本/, "问题必须留在首屏");

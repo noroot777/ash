@@ -270,7 +270,11 @@ export function FreeWorkflowInspector({
         <div className="review-round-body">
           {opened.run.note && <ReviewNote text={opened.run.note} />}
           {opened.round.reportMarkdown
-            ? <ReviewReportBody text={opened.round.reportMarkdown} reportKey={`${opened.run.id}:${opened.round.round}`} />
+            ? <ReviewReportBody
+                text={opened.round.reportMarkdown}
+                reportKey={`${opened.run.id}:${opened.round.round}`}
+                conclusion={opened.round.conclusion}
+              />
             : <p>报告尚未生成。</p>}
           {/* 驳回与辩论跟报告长在同一轮上，读结论的人必须在同一个地方读到「执行者不认这条、
               理由是什么」。这里只回放，裁定入口在审查面板那张卡上（一个动作一个入口）。 */}

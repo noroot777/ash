@@ -7,6 +7,11 @@
 // 改判据前先想清楚要怎么重新保证它们。
 import assert from "node:assert/strict";
 import { splitReviewReport } from "../src/components/reviewReportSections.ts";
+
+// 切点跟权威结论无关，所以这份文件统一按「这一轮通过了」调用——那是唯一会走到
+// 「展开技术明细」那句话的组合，切偏了最容易看出来。按钮说什么由
+// `test-review-report-claim.mjs` 单独钉。
+const split = (text, conclusion = "verified") => splitReviewReport(text, conclusion);
 import { contract, conforming } from "./fixtures/review-report-contract.mjs";
 
 // 围栏里的 `## xxx` 是被审代码或命令输出，不是小节标题——拿它当分界会把摘要腰斩。
@@ -30,7 +35,7 @@ import { contract, conforming } from "./fixtures/review-report-contract.mjs";
     "",
     "略",
   ].join("\n");
-  const { summary, detail } = splitReviewReport(fenced);
+  const { summary, detail } = split(fenced);
   assert.match(summary, /这是被审文件里的标题/);
   assert.match(summary, /继续写结论。/);
   assert.match(detail, /^## 真正的明细/);
@@ -39,7 +44,7 @@ import { contract, conforming } from "./fixtures/review-report-contract.mjs";
 // 围栏用同种记号配对：``` 块里贴的 ~~~ 不能把围栏提前关掉。
 {
   const nested = `# 报告\n\n## 结论\n\n${contract}\n\n\`\`\`\n~~~\n## 输出里的井号\n~~~\n\`\`\`\n\n## 明细\n\n略\n`;
-  assert.match(splitReviewReport(nested).detail, /^## 明细/);
+  assert.match(split(nested).detail, /^## 明细/);
 }
 
 // 闭合判据必须比开头严（第 6 轮审查报告的反例）。CommonMark 里开头允许跟信息串
@@ -67,7 +72,7 @@ for (const [kind, mark] of [["反引号", "```"], ["波浪线", "~~~"]]) {
     "",
     "略",
   ].join("\n");
-  const { summary, detail } = splitReviewReport(report);
+  const { summary, detail } = split(report);
   assert.match(summary, /删除项目后整个网格还会闪一下/, `${kind}：代码块后面的正文必须留在首屏`);
   assert.match(summary, /命令输出里的井号/, `${kind}：代码内容里的 \`##\` 不是小节标题`);
   assert.match(detail, /^## 明细/, `${kind}：拆点是那个真的二级标题`);
@@ -77,7 +82,7 @@ for (const [kind, mark] of [["反引号", "```"], ["波浪线", "~~~"]]) {
 // 认不出闭合会把后面整篇都吞进围栏，`## 明细` 也就成了代码——这一档同样不许漂。
 {
   const closed = `# 报告\n\n## 结论\n\n${contract}\n\n\`\`\`text\n略\n\`\`\`\`   \n\n## 明细\n\n略\n`;
-  assert.match(splitReviewReport(closed).detail, /^## 明细/, "更长的闭合记号加尾随空格仍是闭合");
+  assert.match(split(closed).detail, /^## 明细/, "更长的闭合记号加尾随空格仍是闭合");
 }
 
 // Markdown 允许 ATX 标题前有 0–3 个空格，认不出只是白白丢掉折叠收益（不藏内容）。
@@ -87,7 +92,7 @@ for (const pad of ["", " ", "  ", "   "]) {
   const flat = contract.replace("- 删除项目后整个网格会闪一下。", "删除项目后整个网格会闪一下。");
   const padded = `# 报告\n\n${pad}## 结论\n\n${flat}\n\n${pad}## 明细\n\n略\n`;
   assert.match(
-    splitReviewReport(padded).detail,
+    split(padded).detail,
     /^\s{0,3}## 明细/,
     `标题前 ${pad.length} 个空格仍是标题`,
   );
@@ -96,7 +101,7 @@ for (const pad of ["", " ", "  ", "   "]) {
 // 4 个空格起就是缩进代码块，不是标题——认成标题就可能拆在代码中间。
 {
   const indented = `# 报告\n\n    ## 结论\n\n${contract}\n\n    ## 明细\n\n略\n`;
-  assert.equal(splitReviewReport(indented).detail, "", "4 空格缩进的是代码块，不构成分界");
+  assert.equal(split(indented).detail, "", "4 空格缩进的是代码块，不构成分界");
 }
 
 // 列表项里缩进出来的 `##` 不是顶层标题（第 6 轮补缩进容忍时带出来的洞，本轮自查发现）。
@@ -120,7 +125,7 @@ for (const pad of ["", " ", "  ", "   "]) {
     "",
     "略",
   ].join("\n");
-  const { summary, detail } = splitReviewReport(inList);
+  const { summary, detail } = split(inList);
   assert.match(summary, /保存后你刚改的内容会全部消失/, "第二条问题必须留在首屏");
   assert.match(detail, /^## 明细/, "拆点是那个真的顶层标题");
 }
@@ -128,7 +133,7 @@ for (const pad of ["", " ", "  ", "   "]) {
 // 引用里的 `##` 同理：贴一段别人的报告当证据，不能拆在它身上。
 {
   const quoted = `# 报告\n\n## 结论\n\n${contract}\n\n> ## 上一轮报告里的标题\n\n## 明细\n\n略\n`;
-  assert.match(splitReviewReport(quoted).detail, /^## 明细/, "引用里的 `##` 不是分界");
+  assert.match(split(quoted).detail, /^## 明细/, "引用里的 `##` 不是分界");
 }
 
 // HTML 块里的 `##` 同样不是标题（第 7 轮审查报告的反例）。注释根本不会显示，用户看到的
@@ -158,7 +163,7 @@ for (const [kind, open, close] of [
     "",
     "略",
   ].join("\n");
-  const { summary, detail } = splitReviewReport(hidden);
+  const { summary, detail } = split(hidden);
   assert.match(summary, /保存后你刚改的内容会全部消失/, `${kind}：第二条问题必须留在首屏`);
   assert.match(detail, /^## 明细/, `${kind}：拆点是那个真的顶层标题`);
 }
@@ -166,21 +171,21 @@ for (const [kind, open, close] of [
 // 别矫枉过正：单行注释后面紧跟的真标题还是标题，该拆照拆。
 {
   const inline = `# 报告\n\n## 结论\n\n${contract}\n\n<!-- 一行注释 -->\n\n## 明细\n\n略\n`;
-  assert.match(splitReviewReport(inline).detail, /^## 明细/, "注释闭合了，后面的 `##` 仍是标题");
+  assert.match(split(inline).detail, /^## 明细/, "注释闭合了，后面的 `##` 仍是标题");
 }
 
 // 孤立的 `\r`（老式 Mac 换行）：解析器把它当换行、我们按 `\n` 切片，行号对不上。
 // 这种时候一律整篇铺开——按错的行号拆就是把内容藏掉。
 {
   const cr = `# 报告\r\n\r\n## 结论\r\n\r\n${contract}\r\n\r\n## 明细\r\r略\r\n`;
-  const { summary, detail } = splitReviewReport(cr);
+  const { summary, detail } = split(cr);
   assert.equal(summary, cr, "行号对不上时原样返回，一个字节都不动");
   assert.equal(detail, "");
 }
 
 // `###` 是小节内部结构（「必须修的问题」下面每条问题一个小标题），不构成明细分界。
 {
-  const { summary, detail } = splitReviewReport(`# 报告\n\n## 结论\n\n${contract}\n\n## 明细\n\n略\n`);
+  const { summary, detail } = split(`# 报告\n\n## 结论\n\n${contract}\n\n## 明细\n\n略\n`);
   assert.match(summary, /### 烧录出来的成片/);
   assert.match(summary, /改完字幕立刻点烧录/);
   assert.match(detail, /^## 明细/);
@@ -191,7 +196,7 @@ for (const [kind, open, close] of [
 // 整份合规报告掉进「认不出契约」那条降级路径——首屏全是基线和命令输出，连按钮都没有。
 {
   const crlf = conforming.replace(/\n/g, "\r\n");
-  const { summary, detail } = splitReviewReport(crlf);
+  const { summary, detail } = split(crlf);
   assert.match(summary, /## 结论/, "CRLF 报告同样要拆出摘要");
   assert.match(summary, /烧录出来的成片/, "问题留在摘要里");
   assert.doesNotMatch(summary, /被审范围|d7ee0b07|清场/, "技术记录不该留在摘要里");
@@ -204,7 +209,7 @@ for (const [kind, open, close] of [
 // 开头除了标题什么都没写的 CRLF 报告：连引子都没有，整篇铺开。
 {
   const legacyCrlf = "# 第 1 轮\r\n\r\n## 一、改动范围\r\n\r\n27 个文件。\r\n\r\n## 三、发现的缺陷\r\n\r\n缺陷 1……\r\n";
-  const { summary, detail } = splitReviewReport(legacyCrlf);
+  const { summary, detail } = split(legacyCrlf);
   assert.equal(summary, legacyCrlf, "拆不动时原样返回，一个字节都不动");
   assert.equal(detail, "");
 }
@@ -212,7 +217,7 @@ for (const [kind, open, close] of [
 // 有引子的 CRLF 存量报告走第二档：换行同样不许被悄悄改掉。
 {
   const leadCrlf = "# 第 1 轮\r\n\r\n结论：**verify_failed**。\r\n\r\n## 一、改动范围\r\n\r\n27 个文件。\r\n";
-  const { summary, detail, kind } = splitReviewReport(leadCrlf);
+  const { summary, detail, kind } = split(leadCrlf);
   assert.equal(kind, "lead");
   assert.ok(summary.includes("\r\n"), "引子也得留着 CRLF");
   assert.ok(detail.includes("\r\n"), "切片必须用原始行");

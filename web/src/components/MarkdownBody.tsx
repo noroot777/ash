@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { CaretDown, X } from "@phosphor-icons/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { ReviewConclusion } from "@ash/shared";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
 import {
@@ -148,24 +149,22 @@ const WHOLE_SLACK = 240;
  * 那样切走再切回来它又自己展开了，于是「打开报告第一眼是结论」这个保证会带一个取决于
  * 不可见历史的例外。回到一份读过的报告，行为必须跟第一次打开它完全一样。
  */
-function ReviewReportSplit({ text, reportKey, onReviewReport, onActionError }: {
+function ReviewReportSplit({ text, reportKey, conclusion, onReviewReport, onActionError }: {
   text: string;
   reportKey: string;
+  conclusion: ReviewConclusion;
   onReviewReport: (target: ReviewFileTarget) => void;
   onActionError: (message: string | null) => void;
 }) {
-  const { summary, more, rest, aside, detail, kind } = useMemo(() => splitReviewReport(text), [text]);
+  const { summary, detail, kind } = useMemo(() => splitReviewReport(text, conclusion), [text, conclusion]);
   const [open, setOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [shown, setShown] = useState({ key: reportKey, text });
   const [tall, setTall] = useState(false);
   const body = useRef<HTMLDivElement>(null);
   const detailId = useId();
-  const moreId = useId();
   if (shown.key !== reportKey || shown.text !== text) {
     setShown({ key: reportKey, text });
     setOpen(false);
-    setMoreOpen(false);
   }
   // 量的是**没被夹住的自然高度**：夹子挂在外层，这个 ref 指着里层，所以展开与否都量得准。
   // 图片是后到的，高度会变，所以挂 `ResizeObserver` 而不是只量一次——量早了会漏画按钮。
@@ -210,9 +209,10 @@ function ReviewReportSplit({ text, reportKey, onReviewReport, onActionError }: {
       </>
     );
   }
-  // 按钮只能照 `kind` 说话。按契约拆的那一档能担保折叠里只有技术记录；降级那一档折的是
-  // 报告余下的全部内容，**问题可能就在里面**，所以一个字都不许替它宣称。`kind` 万一漏了
-  // 一档，落到不作承诺的那句上——猜错方向的代价不对称。
+  // 按钮只能照 `kind` 说话，而 `kind` 只由权威结论 `conclusion` 决定（见
+  // `reviewReportSections.ts`）。权威结论说这一轮通过、切点又落在报告自己的结论节之后，
+  // 折叠里就不可能有拦验收的问题；其余一切情况折的是报告余下的全部内容，**问题可能就在
+  // 里面**，所以一个字都不许替它宣称。`kind` 万一漏了一档，落到不作承诺的那句上。
   const label = kind === "contract"
     ? { open: "收起技术明细", closed: "展开技术明细（验证过程、证据、清场记录）" }
     : { open: "收起完整报告", closed: "展开完整报告" };
@@ -222,27 +222,6 @@ function ReviewReportSplit({ text, reportKey, onReviewReport, onActionError }: {
   return (
     <>
       {part(summary)}
-      {/* 中段那个折叠装的是**问题**。按钮照实说它有几条，一个字都不往技术记录上靠。 */}
-      {more && (
-        <>
-          <button
-            type="button"
-            className={`review-report-more${moreOpen ? " is-open" : ""}`}
-            aria-expanded={moreOpen}
-            aria-controls={moreOpen ? moreId : undefined}
-            onClick={() => setMoreOpen((value) => !value)}
-          >
-            <CaretDown size={11} weight="bold" aria-hidden="true" />
-            {moreOpen ? `收起其余 ${rest} 条问题` : `展开其余 ${rest} 条问题`}
-          </button>
-          {moreOpen && (
-            <div id={moreId} className="review-report-detail review-report-rest">
-              {part(more)}
-            </div>
-          )}
-        </>
-      )}
-      {aside && part(aside)}
       <button
         type="button"
         className={`review-report-more${open ? " is-open" : ""}`}
@@ -266,8 +245,14 @@ function ReviewReportSplit({ text, reportKey, onReviewReport, onActionError }: {
  * 跟 `MarkdownBody` 同构，只是正文走上面的拆分。报告以外的地方别用它。
  *
  * `reportKey` 必填：它是这份报告的身份（哪一次审查的第几轮），折叠状态靠它复位。
+ * `conclusion` 是这一轮的权威结论，决定折叠按钮敢不敢说折叠里装着什么；拿不到就传
+ * `null`（按钮跟着什么都不说）。
  */
-export function ReviewReportBody({ text, reportKey }: { text: string; reportKey: string }) {
+export function ReviewReportBody({ text, reportKey, conclusion }: {
+  text: string;
+  reportKey: string;
+  conclusion: ReviewConclusion;
+}) {
   const [reviewReport, setReviewReport] = useState<ReviewFileTarget | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   return (
@@ -275,6 +260,7 @@ export function ReviewReportBody({ text, reportKey }: { text: string; reportKey:
       <ReviewReportSplit
         text={text}
         reportKey={reportKey}
+        conclusion={conclusion}
         onReviewReport={setReviewReport}
         onActionError={setActionError}
       />
@@ -341,7 +327,9 @@ export function ReviewReportDialog({ target, onReviewReport, onClose }: {
         <div className="markdown-report-body">
           {text !== null ? (
             <ImagePreviewGroup isolated>
-              <ReviewReportSplit text={text} reportKey={target.url} onReviewReport={onReviewReport} onActionError={setActionError} />
+              {/* 这个弹窗打开的是一份**孤立的报告文件**（正文里的 report.md 链接），手上
+                  没有它属于哪一轮，也就拿不到权威结论——按钮跟着什么都不宣称。 */}
+              <ReviewReportSplit text={text} reportKey={target.url} conclusion={null} onReviewReport={onReviewReport} onActionError={setActionError} />
             </ImagePreviewGroup>
           ) : error ? (
             <p className="markdown-report-error">审查报告加载失败：{error}</p>
