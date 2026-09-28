@@ -19,8 +19,22 @@ const IMAGE_EXTENSIONS = new Set([
 ]);
 
 export function isImageName(name: string): boolean {
-  const dot = name.lastIndexOf(".");
-  return dot > 0 && IMAGE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
+  // 只认最后一段的扩展名：传进来的可能是整条路径，而 `shots.v2/readme` 里那个点不是它的。
+  const base = name.slice(name.lastIndexOf("/") + 1);
+  const dot = base.lastIndexOf(".");
+  return dot > 0 && IMAGE_EXTENSIONS.has(base.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * 同一层文件里跟它同类的那些（图片一串、其余一串），给查看器当翻页的那一串。
+ *
+ * 混着给会出这种事：看图时按右箭头翻出一份 .txt —— 方向键只在图片上接管，翻过去之后键
+ * 就不动了，人被晾在半路。生成物面板天然按类分组，文件树和文件夹详情靠这个补上同一条
+ * 规矩：翻页翻的始终是「同一类东西」。
+ */
+export function siblingReel(paths: readonly string[], current: string): string[] {
+  const wantImage = isImageName(current);
+  return paths.filter((path) => isImageName(path) === wantImage);
 }
 
 export function formatSize(bytes: number): string {

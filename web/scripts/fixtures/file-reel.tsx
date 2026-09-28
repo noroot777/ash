@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { CSSProperties } from "react";
 import { ArtifactsInspector } from "../../src/files/ArtifactsInspector.tsx";
+import { FileTreeInspector } from "../../src/files/FileTreeInspector.tsx";
 import { FileViewer } from "../../src/files/FileViewer.tsx";
 import { useFileView } from "../../src/files/useFileView.ts";
 import "../../src/styles/global.css";
@@ -10,6 +11,8 @@ const TASK_ID = "task-1";
 
 // 真实页面的两段：中间摊开一份产物，右边是生成物面板。翻页的那一串由面板在点开那一刻
 // 给出（同一组的全部路径），所以两边必须都在，光挂一个查看器测不出。
+//
+// 文件树一起挂着：它那一层是图片和文本混着的，翻页不许翻出类别（图片跟图片一串）。
 function Fixture() {
   const view = useFileView(TASK_ID);
 
@@ -40,6 +43,11 @@ function Fixture() {
             activePath={view.activePath}
             onOpenFile={view.openFile}
             notify={() => undefined}
+          />
+          <FileTreeInspector
+            taskId={TASK_ID}
+            activePath={view.activePath}
+            onOpenFile={view.openFile}
           />
           {/* 侧栏里随便一个输入框：翻页键不能在人打字的时候把图翻走。 */}
           <input id="fixture-input" aria-label="侧栏输入框" />

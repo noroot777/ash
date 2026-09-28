@@ -12,7 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { api, type FileEntryOverview } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
-import { formatSize } from "./fileModel.ts";
+import { formatSize, siblingReel } from "./fileModel.ts";
 import { useDeleteEntry } from "./useDeleteEntry.tsx";
 
 /**
@@ -77,8 +77,8 @@ export function FolderViewer({
   const git = overview?.git;
   const entries = overview?.entries ?? [];
   // 这一层的文件（不含子文件夹），给中间栏当翻页的那一串——点开一张截图后能直接翻同
-  // 目录的下一张，不用回来再点一次。
-  const reel = entries.filter((entry) => entry.kind !== "dir").map((entry) => entry.path);
+  // 目录的下一张，不用回来再点一次。真正给出去的是 `siblingReel` 挑出的同类那几份。
+  const files = entries.filter((entry) => entry.kind !== "dir").map((entry) => entry.path);
 
   return zoom.render(
     <div className="file-viewer folder-viewer" aria-label="文件夹详情">
@@ -196,7 +196,9 @@ export function FolderViewer({
                     key={entry.path}
                     type="button"
                     className={`folder-viewer__item${entry.ignored ? " is-ignored" : ""}`}
-                    onClick={() => (entry.kind === "dir" ? onOpenFolder(entry.path) : onOpenFile(entry.path, reel))}
+                    onClick={() => (entry.kind === "dir"
+                      ? onOpenFolder(entry.path)
+                      : onOpenFile(entry.path, siblingReel(files, entry.path)))}
                   >
                     {entry.kind === "dir"
                       ? <Folder size={13} aria-hidden="true" />

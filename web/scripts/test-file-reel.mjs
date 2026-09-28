@@ -6,11 +6,13 @@ import { createServer } from "vite";
 
 // 生成物点开之后能一张接一张地翻（左右方向键 + 顶栏那两颗按钮）。
 //
-// 钉的是三条别处看不出来的：
+// 钉的是四条别处看不出来的：
 // ① 翻的那一串是**点开那一刻的那一组**——图片跟图片翻，翻到头绕回去，不会窜到网页组里；
-// ② 方向键只在图片上接管：文本/网页那一屏横向滚得动，抢了键就等于把人家的滚动掰坏了，
+// ② 文件树/文件夹那一层是混着的，给出去的那一串只留同类：看图时按右箭头翻出一份 .txt，
+//    键在那儿又不接管，人就被晾在半路（2026-09-28 审查打回的就是这条）；
+// ③ 方向键只在图片上接管：文本/网页那一屏横向滚得动，抢了键就等于把人家的滚动掰坏了，
 //    所以那儿只留按钮；在输入框里打字更不许翻；
-// ③ 一组只有一个的时候整组控件都不出现（「1 / 1」和两颗点不动的箭头是噪音）。
+// ④ 一组只有一个的时候整组控件都不出现（「1 / 1」和两颗点不动的箭头是噪音）。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
@@ -44,6 +46,25 @@ const artifacts = [
   artifact("clips/only.mp4", "video"),
 ];
 
+// 文件树那一层：图片和文本混着摆，正是审查里翻出类别的那种目录。
+const entry = (path) => ({
+  name: path.split("/").at(-1),
+  path,
+  kind: "file",
+  size: 64,
+  mtime: "2026-09-28T02:00:00.000Z",
+  ignored: false,
+  symlink: false,
+});
+
+const listing = {
+  root: { path: "/tmp/file-reel", branch: "feature/reel", gitRepo: true, source: "session" },
+  path: "",
+  entries: [entry("keep.png"), entry("notes.txt"), entry("other.png"), entry("readme.md")],
+  truncated: false,
+  git: { changes: [], truncated: false, error: null },
+};
+
 let browser;
 try {
   await server.listen();
@@ -64,6 +85,7 @@ try {
         error: null,
       });
     }
+    if (url.pathname.endsWith("/files")) return json(listing);
     if (url.pathname.endsWith("/file/raw")) {
       return route.fulfill({ status: 200, contentType: "image/png", body: PNG });
     }
@@ -147,6 +169,24 @@ try {
   await card("only.mp4").click();
   await page.waitForFunction(() => document.querySelector(".file-viewer__title b")?.textContent === "only.mp4");
   assert.equal(await page.locator(".file-viewer__reel").count(), 0, "只有一个产物的组不该出现翻页控件");
+
+  // 文件树里那一层是混着的：翻页只在同类里走，不会从图片翻出一份 .txt——方向键在文本上
+  // 又不接管，翻过去人就被晾在半路。
+  const row = (name) => page.locator(".file-tree__row")
+    .filter({ has: page.locator(".file-tree__name", { hasText: name }) }).first();
+  await row("keep.png").click();
+  await page.waitForFunction(() => document.querySelector(".file-viewer__title b")?.textContent === "keep.png");
+  assert.equal(await counter.textContent(), "1 / 2", "混着的一层里只该把图片算进这一串");
+  await page.keyboard.press("ArrowRight");
+  await page.waitForFunction(() => document.querySelector(".file-viewer__title b")?.textContent === "other.png");
+  assert.equal(await counter.textContent(), "2 / 2", "下一张该是同层的另一张图，不是中间那份 .txt");
+
+  // 非图片那一串同样成立：它们自成一串，用按钮翻。
+  await row("notes.txt").click();
+  await page.waitForFunction(() => document.querySelector(".file-viewer__title b")?.textContent === "notes.txt");
+  assert.equal(await counter.textContent(), "1 / 2", "文本该跟文本一串");
+  await page.getByRole("button", { name: "下一个" }).click();
+  await page.waitForFunction(() => document.querySelector(".file-viewer__title b")?.textContent === "readme.md");
 
   console.log("file reel test passed");
 } finally {

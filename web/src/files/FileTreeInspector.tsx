@@ -15,7 +15,7 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import type { FileEntry } from "../lib/api.ts";
-import { formatSize, isImageName, ROOT_SOURCE_LABEL, useFileTree } from "./fileModel.ts";
+import { formatSize, isImageName, ROOT_SOURCE_LABEL, siblingReel, useFileTree } from "./fileModel.ts";
 import { KIND_BADGE, KIND_LABEL, type ScmDiffTarget } from "../scm/scmModel.ts";
 import { fileGitDecorations, type FileGitDecoration } from "./fileGitDecorations.ts";
 
@@ -167,7 +167,7 @@ export function FileTreeInspector({
 }: {
   taskId: string;
   activePath: string | null;
-  /** 第二个参数是同一层里的文件（不含子文件夹），中间栏据此摊开「上一张 / 下一张」。 */
+  /** 第二个参数是同一层里跟它同类的文件（图片一串、其余一串），中间栏据此摊开「上一张 / 下一张」。 */
   onOpenFile: (path: string, reel?: readonly string[]) => void;
   /** 在中间栏摊开文件夹详情。没接就不显示行尾那颗按钮。 */
   onOpenFolder?: (path: string) => void;
@@ -237,7 +237,10 @@ export function FileTreeInspector({
           activePath={activePath}
           onOpenFile={(entry, siblings) => onOpenFile(
             entry.path,
-            siblings.filter((candidate) => candidate.kind !== "dir").map((candidate) => candidate.path),
+            siblingReel(
+              siblings.filter((candidate) => candidate.kind !== "dir").map((candidate) => candidate.path),
+              entry.path,
+            ),
           )}
           onOpenFolder={onOpenFolder}
           onOpenDiff={onOpenDiff}
