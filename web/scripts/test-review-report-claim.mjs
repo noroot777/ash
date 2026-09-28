@@ -58,6 +58,8 @@ import {
   problemAsHeading,
   countsShort,
   spilled,
+  sixProblems,
+  fiveProblems,
 } from "./fixtures/review-report-texts.ts";
 
 // 十轮复审攒下来的**正文会骗人**的报告，一份不落。它们当年各自绕过了一道判据；现在
@@ -128,11 +130,14 @@ for (const [what, text] of Object.entries({
   "问题误用二级标题": problemAsHeading,
   "说了 2 条只写了 1 条": countsShort,
   "问题多到摘要里只列标题": spilled,
+  "六条问题": sixProblems,
+  "五条问题": fiveProblems,
 })) {
   const passed = splitReviewReport(text, "verified");
   const failed = splitReviewReport(text, "verify_failed");
-  assert.equal(passed.summary, failed.summary, `${what}：切点不该跟着结论变`);
-  assert.equal(passed.detail, failed.detail, `${what}：切点不该跟着结论变`);
+  for (const part of ["summary", "more", "rest", "aside", "detail"]) {
+    assert.deepEqual(passed[part], failed[part], `${what}：切点不该跟着结论变（${part}）`);
+  }
 }
 
 console.log("review report claim ok");

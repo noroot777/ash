@@ -505,6 +505,6 @@ for (const colon of ["：", ":"]) {
 
 // 空报告不该炸。这条用**精确比对**而不是挑几个字段看，所以给返回结构加字段时它一定会
 // 红——那正是要的：新字段在「什么都没切」这一档里得是什么，必须当场写清楚。
-assert.deepEqual(split(""), { summary: "", detail: "", kind: "whole" });
+assert.deepEqual(split(""), { summary: "", more: "", rest: 0, aside: "", detail: "", kind: "whole" });
 
 console.log("review report format ok");

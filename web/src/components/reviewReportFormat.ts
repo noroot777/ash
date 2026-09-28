@@ -132,21 +132,56 @@ export function headingColumns(root: Parsed, after: number, before: number): Col
 }
 
 /**
- * 这一节**照格式写了四栏**：四个栏目齐全、按序、不重样。
+ * 这一节**照格式写了四栏**时的结构：四个栏目各自的起始行，加上问题条目该有的标题深度。
+ * 凑不齐（缺栏、乱序、重样）返回 `null`。
  *
  * 「按序、不重样」是第 9 轮补的：只问「这四个标签各自出现过没有」时，四栏完全倒着写也
  * 算数——那更像是抄了一份别人的结论。
  *
- * 两种写法都认：prompt 给的加粗标签段落，以及把同样四个栏目写成 `###` 小标题。后者是真实
- * 存在的形态——全库 1036 份里 4 份长这样。
+ * 两种写法都认，`depth` 跟着载体走一级：prompt 给的加粗标签段落（问题是 `###`），以及
+ * 把同样四个栏目写成 `###` 小标题（问题就得是 `####`）。后者是真实存在的形态——全库
+ * 1036 份里 4 份长这样。写死成一个深度的话，栏目自己那一级的标题就能冒充问题条目。
  */
-export function usesContractFormat(root: Parsed, probes: string[], first: number, second: number): boolean {
+export function contractShape(
+  root: Parsed,
+  probes: string[],
+  first: number,
+  second: number,
+): ContractShape | null {
   const bold = markCandidateStarts(root, first, second)
     .map((at) => ({ at, column: MARK_LINES.findIndex((pattern) => pattern.test(probes[at])) }))
     .filter((hit) => hit.column >= 0);
   const complete = (columns: Column[]) =>
     columns.length === MARK_LINES.length && columns.every((hit, order) => hit.column === order);
-  return complete(bold) || complete(headingColumns(root, first, second));
+  if (complete(bold)) return { columns: bold, depth: 3 };
+  const headings = headingColumns(root, first, second);
+  if (complete(headings)) return { columns: headings, depth: 4 };
+  return null;
+}
+
+/** 四栏的结构：栏目起始行（按序），以及一条问题的小标题该有多深。 */
+export type ContractShape = { columns: Column[]; depth: number };
+
+/**
+ * 「必须修的问题」栏底下，每条问题小标题的起始行。
+ *
+ * 只收**正好那一级**的标题：`### 1. …` 底下再写 `#### 复现步骤` 是这条问题的一部分，
+ * 不是另一条问题。收 `>=` 的话，一条写得细的问题就能把条数撑大，摘要内部那一刀于是落进
+ * 某条问题的中间——折出来的半截问题比不折更难读。
+ *
+ * 范围卡在第三栏和第四栏之间：第四栏「不拦验收、但你该知道的」不是必须修的问题。
+ */
+export function problemStarts(root: Parsed, shape: ContractShape): number[] {
+  const problems = shape.columns[2];
+  const aside = shape.columns[3];
+  if (!problems || !aside) return [];
+  const starts: number[] = [];
+  for (const node of root.children) {
+    if (node.type !== "heading" || node.depth !== shape.depth || !node.position) continue;
+    const at = node.position.start.line - 1;
+    if (at > problems.at && at < aside.at) starts.push(at);
+  }
+  return starts;
 }
 
 /** 这一节**提过**栏目名——哪怕只是正文里顺口提了一句。 */

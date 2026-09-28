@@ -579,6 +579,39 @@ ${Array.from({ length: 5 }, (_, k) => `### ${k + 1}. 导出内容仍是旧版本
 `;
 
 
+// 第 8 轮用户裁定后补的一对：四栏齐全、每条问题三行俱全、条数也对得上，**只是条目多到
+// 铺满一屏**。格式没错，所以不降档、也不截断——要治的是「打开报告先看见结论」在第 6 条
+// 往后失效，由摘要内部那第二层折叠解决。
+//
+// 成对放是为了让「分层」和「不分层」同屏可比：`fiveProblems` 恰好卡在上限上，一个按钮
+// 都不该多画。两份除了条数完全一样。
+const graded = (count: number) => `# 审查报告
+
+## 结论
+
+**能不能验收**：不能 —— 有 ${count} 条必须先修，最要命的是保存之后内容会丢。
+
+**现在什么能用了**：项目能建、能改名，列表排序也正常了。
+
+**必须修的问题**：
+
+${Array.from({ length: count }, (_, k) => `### ${k + 1}. 第 ${k + 1} 处操作会出错
+
+你会遇到：走到第 ${k + 1} 步时页面报错，刚填的内容留不住。
+为什么：第 ${k + 1} 处的判断写反了。
+建议怎么修：把第 ${k + 1} 处的判断改回来，并补一条回归。
+`).join("\n")}
+**不拦验收、但你该知道的**：还有两处文案不统一，不影响用。
+
+## 技术明细
+
+基线 \`abc1234\`；\`npm -w @ash/web test\` 退出 0；临时服务已停，无残留监听。
+`;
+
+const sixProblems = graded(6);
+const fiveProblems = graded(5);
+
+
 export {
   conforming,
   conformingRound2,
@@ -602,6 +635,8 @@ export {
   justOver,
   contradictoryNone,
   spilled,
+  sixProblems,
+  fiveProblems,
   contradictoryUncounted,
   problemAtBoundary,
   hiddenDeepProblem,

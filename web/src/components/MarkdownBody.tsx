@@ -129,10 +129,10 @@ const WHOLE_SLACK = 240;
  * 的灯箱队列，否则左右翻会翻到屏幕上根本没有的图。夹住的那一档是例外——它整篇都在 DOM
  * 里，只是视觉上截断，所以灯箱队列本来就是全的。
  *
- * 契约档里问题超过 5 条时，摘要**自己再折一层**（`sections.more`）：前 5 条铺开，其余收进
- * 「展开其余 N 条问题」，第四栏「不拦验收、但你该知道的」跨过这一层继续留在首屏。两个折叠
- * 完全独立——各自的 state、各自的 `aria-controls`、各自的文案，里面那个装的是问题，绝不
- * 许套用技术明细那句承诺。中段同样是条件渲染，理由跟明细一样。
+ * 报告照格式写了、问题却超过 5 条时，摘要**自己再折一层**（`sections.more`）：前 5 条铺开，
+ * 其余收进「展开其余 N 条问题」，第四栏「不拦验收、但你该知道的」跨过这一层继续留在首屏。
+ * 两个折叠完全独立——各自的 state、各自的 `aria-controls`、各自的文案，里面那个装的是问题，
+ * 绝不许套用技术明细那句承诺。中段同样是条件渲染，理由跟明细一样。
  *
  * 换一份报告就**硬复位成折叠**：侧栏的轮次抽屉在同一个位置换报告，组件不会重新挂载，
  * 独立 `useState` 会把上一轮展开着的状态串给下一轮——换一轮报告一打开就是满屏命令输出，
@@ -156,15 +156,21 @@ function ReviewReportSplit({ text, reportKey, conclusion, onReviewReport, onActi
   onReviewReport: (target: ReviewFileTarget) => void;
   onActionError: (message: string | null) => void;
 }) {
-  const { summary, detail, kind } = useMemo(() => splitReviewReport(text, conclusion), [text, conclusion]);
+  const { summary, more, rest, aside, detail, kind } = useMemo(
+    () => splitReviewReport(text, conclusion),
+    [text, conclusion],
+  );
   const [open, setOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [shown, setShown] = useState({ key: reportKey, text });
   const [tall, setTall] = useState(false);
   const body = useRef<HTMLDivElement>(null);
   const detailId = useId();
+  const moreId = useId();
   if (shown.key !== reportKey || shown.text !== text) {
     setShown({ key: reportKey, text });
     setOpen(false);
+    setMoreOpen(false);
   }
   // 量的是**没被夹住的自然高度**：夹子挂在外层，这个 ref 指着里层，所以展开与否都量得准。
   // 图片是后到的，高度会变，所以挂 `ResizeObserver` 而不是只量一次——量早了会漏画按钮。
@@ -222,6 +228,28 @@ function ReviewReportSplit({ text, reportKey, conclusion, onReviewReport, onActi
   return (
     <>
       {part(summary)}
+      {/* 中段那个折叠装的是**问题**，不是技术记录。按钮照实说它有几条——名字就是内容，
+          所以它跟权威结论无关，`verified` 与否都照折照说。 */}
+      {more && (
+        <>
+          <button
+            type="button"
+            className={`review-report-more${moreOpen ? " is-open" : ""}`}
+            aria-expanded={moreOpen}
+            aria-controls={moreOpen ? moreId : undefined}
+            onClick={() => setMoreOpen((value) => !value)}
+          >
+            <CaretDown size={11} weight="bold" aria-hidden="true" />
+            {moreOpen ? `收起其余 ${rest} 条问题` : `展开其余 ${rest} 条问题`}
+          </button>
+          {moreOpen && (
+            <div id={moreId} className="review-report-detail review-report-rest">
+              {part(more)}
+            </div>
+          )}
+        </>
+      )}
+      {aside && part(aside)}
       <button
         type="button"
         className={`review-report-more${open ? " is-open" : ""}`}

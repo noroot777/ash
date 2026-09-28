@@ -9,7 +9,7 @@
 // 这一份只回答两个问题，**都不从报告正文里猜意思**：
 //
 // ① **从哪一刀下手**——按报告自己的结构切（下面那三条规则），判据全是「解析树里这个块
-//    是什么」，不是「这句话什么意思」。
+//    是什么」，不是「这句话什么意思」。摘要自己太长时还有第二刀（`SUMMARY_ITEMS`）。
 // ② **按钮能说什么**——只看 `conclusion` 这个权威字段。
 //
 // ② 是 2026-09-28 重做的，来由值得写下来。原先这里还挂着一套六百多行的判据，干的是
@@ -71,19 +71,38 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 
-import { mentionsContractMarks, usesContractFormat, type ParsedNode } from "./reviewReportFormat.ts";
+import { mentionsContractMarks, contractShape, problemStarts, type ParsedNode } from "./reviewReportFormat.ts";
 
 /**
- * 一份报告切成的两段，**按源码先后排好、首尾相接、不重不漏**：`summary` → `detail`。
- * 合起来就是原文（切点上的空行被 `trimEnd()` 吃掉，别的字节一个不动）。
+ * 一份报告切成的四段，**按源码先后排好、首尾相接、不重不漏**：
+ * `summary` → `more` → `aside` → `detail`。合起来就是原文（切点上的空行被 `trimEnd()`
+ * 吃掉，别的字节一个不动）。
+ *
+ * 中间两段只在「照格式写了、问题却超过 5 条」那一种形态下非空，其余时候一律是空串——
+ * 那时 `summary` 里就含着第四栏，读的人只面对一个折叠。
  */
 export type ReviewReportSections = {
   /** 铺开的那一半：报告自己的开头——结论节、标了严重度的那几节，或第一个 `##` 之前的引子。 */
   summary: string;
+  /**
+   * 摘要内部第二个折叠里的东西：第 6 条起的问题。为空表示摘要不分第二层。
+   *
+   * 这一段**是问题本身**，不是技术记录——按钮得照实写「展开其余 N 条问题」，别拿技术
+   * 明细那句文案糊过去。
+   */
+  more: string;
+  /** `more` 里有几条问题，也就是按钮上的 N。`more` 为空时是 0。 */
+  rest: number;
+  /**
+   * 第四栏「不拦验收、但你该知道的」。只有在 `more` 非空时才单独拎出来——它得跨过中间
+   * 那个折叠、继续留在首屏，否则一展开就轮到它被顶走。为空表示它在 `summary` 里。
+   */
+  aside: string;
   /** 收进开关的那一半；为空表示这篇没拆，别画展开按钮。 */
   detail: string;
   /**
-   * 折叠按钮**能说什么**，只有两档：
+   * **`detail` 那个折叠**里装的是什么——技术明细按钮的文案只能照它写。它不描述 `more`
+   * 那一层：中间那层永远是问题，跟这里判到哪一档无关。
    *
    * - `"contract"`：权威结论是 `verified`，而且切点落在报告自己声明的结论/发现节之后。
    *   折叠里不可能有拦验收的问题，按钮可以写「展开技术明细（验证过程、证据、清场记录）」。
@@ -93,6 +112,17 @@ export type ReviewReportSections = {
    */
   kind: "whole" | "contract" | "lead";
 };
+
+/**
+ * 摘要里最多铺开几条问题（`server/src/review-report-format.ts` 里写给审查者的也是这个数，
+ * 用户需求原话「问题按用户会踩到的严重程度排，**最多 5 条**」）。
+ *
+ * 超出的部分不降档、也不截断：报告把 6 条全写在摘要里时**格式其实没错**——四栏齐全、
+ * 每条三行俱全——错的只是它默认铺了满屏，用户要的「打开先看见结论」在第 6 条往后就没了。
+ * 降档解决不了这个：降档换的是**技术明细按钮说什么**，铺开的那一段一个字都不会少。所以
+ * 治的是铺开那一段，在摘要内部再折一层。（用户 2026-09-27 裁定，见 `5a34b180`。）
+ */
+const SUMMARY_ITEMS = 5;
 
 /**
  * 首个 `##` 写成这样，就算**报告自己声明了「这一节是给人看的判定」**——整节留在首屏，
@@ -138,7 +168,9 @@ function plainText(node: ParsedNode): string {
  * 文件）就传 `null`——按钮跟着什么都不说。
  */
 export function splitReviewReport(text: string, conclusion: ReviewConclusion): ReviewReportSections {
-  const whole: ReviewReportSections = { summary: text, detail: "", kind: "whole" };
+  const whole: ReviewReportSections = {
+    summary: text, more: "", rest: 0, aside: "", detail: "", kind: "whole",
+  };
   // 解析器把孤立的 `\r` 也当换行，我们按 `\n` 切片——真碰上这种老式换行，行号就对不上了。
   // 对不上时一律整篇铺开：认不出只是啰嗦，按错的行号拆是把内容藏掉。
   if (/\r(?!\n)/.test(text)) return whole;
@@ -158,18 +190,34 @@ export function splitReviewReport(text: string, conclusion: ReviewConclusion): R
   const first = head.position.start.line - 1;
 
   /**
-   * 按切点把原文分成首尾相接的两段。切点全部来自解析树里**顶层节点的起始行**，所以每一
+   * 按切点把原文分成首尾相接的几段。切点全部来自解析树里**顶层节点的起始行**，所以每一
    * 刀都落在两个块之间——不会切进围栏、列表项或表格内部。段与段之间只有切点上被
    * `trimEnd()` 吃掉的空白，其余字节原样。
    *
    * `claims` 说的是「这一刀切在报告自己声明的结论/发现节之后」。只有它和权威结论
-   * `verified` **同时**成立，按钮才敢讲折叠里装着什么。
+   * `verified` **同时**成立，技术明细那个按钮才敢讲折叠里装着什么。
+   *
+   * `fold` 是摘要内部那第二层的两个切点（第 6 条的起始行、第四栏的起始行）。它**不看
+   * 权威结论**：那一层的按钮照实写「展开其余 N 条问题」，名字就是内容，撒不了谎；而问题
+   * 多到 6 条的报告几乎必然是没通过的那一批——跟着 `conclusion` 走等于把这一层关掉。
    */
-  const cut = (at: number, claims: boolean): ReviewReportSections => ({
-    summary: lines.slice(0, at).join("\n").trimEnd(),
-    detail: lines.slice(at).join("\n").trimEnd(),
-    kind: claims && conclusion === "verified" ? "contract" : "lead",
-  });
+  const cut = (
+    at: number,
+    claims: boolean,
+    fold?: { more: number; aside: number; rest: number },
+  ): ReviewReportSections => {
+    const slice = (from: number, to?: number) => lines.slice(from, to).join("\n").trimEnd();
+    const kind = claims && conclusion === "verified" ? "contract" as const : "lead" as const;
+    if (!fold) return { summary: slice(0, at), more: "", rest: 0, aside: "", detail: slice(at), kind };
+    return {
+      summary: slice(0, fold.more),
+      more: slice(fold.more, fold.aside),
+      rest: fold.rest,
+      aside: slice(fold.aside, at),
+      detail: slice(at),
+      kind,
+    };
+  };
 
   const title = plainText(head).trim();
   if (VERDICT_TITLES.test(title)) {
@@ -182,8 +230,15 @@ export function splitReviewReport(text: string, conclusion: ReviewConclusion): R
     const probes = lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
     const section = probes.slice(first, second).join("\n");
     if (!mentionsContractMarks(section)) return cut(second, false);
-    if (!usesContractFormat(root, probes, first, second)) return whole;
-    return cut(second, true);
+    const shape = contractShape(root, probes, first, second);
+    if (!shape) return whole;
+    // 照格式写了，但问题多到铺满一屏：前 5 条留在首屏，第 6 条起收进摘要内部那一层，
+    // 第四栏跨过它继续留在首屏（否则一展开就轮到它被顶走）。
+    const items = problemStarts(root, shape);
+    const sixth = items[SUMMARY_ITEMS];
+    const aside = shape.columns[3];
+    if (sixth === undefined || !aside) return cut(second, true);
+    return cut(second, true, { more: sixth, aside: aside.at, rest: items.length - SUMMARY_ITEMS });
   }
 
   // 报告自己标了严重度：所有标了的小节都留在首屏，折的是它们后面的验证记录和清场。

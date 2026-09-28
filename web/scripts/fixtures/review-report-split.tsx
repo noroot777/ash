@@ -23,6 +23,8 @@ import {
   metadataFirst,
   justOver,
   contradictoryNone,
+  sixProblems,
+  fiveProblems,
 } from "./review-report-texts.ts";
 import "../../src/styles/global.css";
 
@@ -41,6 +43,26 @@ function SwitchableReport({ identical = false }: { identical?: boolean }) {
       <ReviewReportBody
         text={!second || identical ? conforming : conformingRound2}
         reportKey={`run-1:${second ? 2 : 1}`}
+        conclusion="verified"
+      />
+    </>
+  );
+}
+
+/**
+ * 换轮次时**两个折叠都得复位**。第一层（技术明细）历轮已经钉住了，这一份盯的是摘要
+ * 内部那一层：上一轮展开着「其余 N 条问题」，换一份报告过来不该还是展开的。
+ */
+function SwitchableSix() {
+  const [second, setSecond] = useState(false);
+  return (
+    <>
+      <button type="button" className="switch-six" onClick={() => setSecond((value) => !value)}>
+        切换轮次
+      </button>
+      <ReviewReportBody
+        text={sixProblems}
+        reportKey={`run-25:${second ? 2 : 1}`}
         conclusion="verified"
       />
     </>
@@ -110,6 +132,23 @@ createRoot(document.getElementById("root")!).render(
     </div>
     <div className="identical-fixture markdown-report-body">
       <SwitchableReport identical />
+    </div>
+    {/* 摘要内部那一层：照格式写了、每条三行俱全，**只是条目多到铺满一屏**。前 5 条铺开、
+        第 6 条起收进「展开其余 N 条问题」、第四栏跨过它留在首屏（用户 2026-09-27 裁定）。
+        这一层跟权威结论无关,所以同一份正文配两个结论并排挂:里层文案一模一样,只有外层那
+        个按钮跟着结论变——里层绝不许套用外层那句「验证过程、证据、清场记录」。 */}
+    <div className="six-problems-fixture markdown-report-body">
+      <ReviewReportBody text={sixProblems} reportKey="run-23:1" conclusion="verify_failed" />
+    </div>
+    <div className="six-verified-fixture markdown-report-body">
+      <ReviewReportBody text={sixProblems} reportKey="run-23:2" conclusion="verified" />
+    </div>
+    {/* 成对挂：恰好卡在上限上的那份一个按钮都不该多画,「展开其余 0 条问题」是纯噪音。 */}
+    <div className="five-problems-fixture markdown-report-body">
+      <ReviewReportBody text={fiveProblems} reportKey="run-24:1" conclusion="verify_failed" />
+    </div>
+    <div className="six-switch-fixture markdown-report-body">
+      <SwitchableSix />
     </div>
   </StrictMode>,
 );
