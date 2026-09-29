@@ -166,6 +166,23 @@ console.log("4) 压缩(/compact 与自动压缩)的过程与成败必须显式�
   else fail(`压缩成功没有任何提示:${JSON.stringify(okText)}`);
   if (!succeeded.filter((e) => e.kind === "error").length) ok("压缩成功不报错");
   else fail("压缩成功却报了 error");
+
+  // `status:"compacting"` 是压缩期间每隔几秒重发的**心跳**,不是「又压了一次」。
+  // 2026-09-29 现场:一次压缩连发 9 条,时间线上「正在压缩上下文…」刷了九行,用户
+  // 看到的是「怎么压缩这么多次」。一次压缩只准说一句,压第二次时才准再说。
+  const heartbeat = await collect([
+    ...Array.from({ length: 9 }, () => ({ type: "system", subtype: "status", status: "compacting", session_id: "sess-6" })),
+    { type: "system", subtype: "status", status: null, compact_result: "success", session_id: "sess-6" },
+    { type: "system", subtype: "status", status: "compacting", session_id: "sess-6" },
+    { type: "system", subtype: "status", status: "compacting", session_id: "sess-6" },
+    { type: "system", subtype: "status", status: null, compact_result: "success", session_id: "sess-6" },
+    { type: "result", subtype: "success", session_id: "sess-6" },
+  ]);
+  const beats = heartbeat.filter((e) => e.kind === "text").map((e) => e.text).join("");
+  const started = beats.split("正在压缩上下文").length - 1;
+  const ended = beats.split("上下文已压缩").length - 1;
+  if (started === 2 && ended === 2) ok("心跳去重:压两次就报两次开始、两次结束");
+  else fail(`压缩提示数量不对(开始 ${started} 次、结束 ${ended} 次,期望各 2 次)`);
 }
 
 console.log("5) 旧版 Claude Code 的 --effort 参数错误要给出可操作提示");

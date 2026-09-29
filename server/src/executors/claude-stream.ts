@@ -86,6 +86,12 @@ export async function* parseClaudeStream(
   // system 这条路三条消费链(single-run / team / duet)都已经当旁注收。
   let awaitingSince: number | null = null;
   let waitNoticed = 0;
+  // `status:"compacting"` 是**心跳**不是**开始**:CLI 在整个压缩过程里每隔几秒重发一条,
+  // 实测一次压缩发了 9 条(2026-09-29 的 run,连着 9 行之后才是 compact_result:success)。
+  // 一条一行地抬上去,界面上就成了「正在压缩上下文…」刷屏九遍,看着像压了九次。
+  // 所以只在**从没压到在压**的那一刻报一行,收到 compact_result 复位 —— 一个回合里真压
+  // 两次时,第二次照样会报。
+  let compacting = false;
   const waitTimer = setInterval(() => {
     if (finished || awaitingSince === null) return;
     const waited = Date.now() - awaitingSince;
@@ -168,6 +174,7 @@ export async function* parseClaudeStream(
       // → 一行正文。三者都只管展示,不碰任务状态(原生命令本来就走旁路回合)。
       if (ev.subtype === "status") {
         if (typeof ev.compact_result === "string") {
+          compacting = false;
           if (ev.compact_result === "failed") {
             const detail = typeof ev.compact_error === "string" && ev.compact_error.trim()
               ? ev.compact_error.trim()
@@ -180,7 +187,8 @@ export async function* parseClaudeStream(
           } else {
             push({ kind: "text", text: "\n> 上下文已压缩。\n\n" });
           }
-        } else if (ev.status === "compacting") {
+        } else if (ev.status === "compacting" && !compacting) {
+          compacting = true;
           push({ kind: "text", text: "\n> 正在压缩上下文…\n\n" });
         }
       }
