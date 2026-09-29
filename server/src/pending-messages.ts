@@ -236,14 +236,36 @@ export function deliveryOptions(m: Row) {
   };
 }
 
+// 一条排队消息从「该发了」到「原话进会话」之间只有两段路,分段计时是因为它们的病因
+// 完全不同,合成一个总耗时就分不出该去查谁:
+//   等回合退干净 = 上一轮结算还没跑完(钩子在 run loop 的 try 里就调了,releaseTurn 在更后面)
+//   拉起回合     = prepareWorktree + 工作目录快照 + spawn 执行器
+// 阈值以上才出声:典型值是 1.5~2.6 秒,偶发十几秒时用户看到的是「任务都显示完成了,
+// 我那句话还挂在托盘里」(2026-09-29 实测一次 13.1 秒,当时无埋点、事后无从归因)。
+const SLOW_DELIVERY_MS = 3_000;
+
+function noteDeliveryTiming(taskId: string, queuedAt: number, idleAt: number, at: number): void {
+  if (at - queuedAt < SLOW_DELIVERY_MS) return;
+  const s = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+  console.warn(
+    `[ash] 排队消息投递偏慢 task=${taskId} 共 ${s(at - queuedAt)}`
+    + `（等回合退干净 ${s(idleAt - queuedAt)} + 拉起回合 ${s(at - idleAt)}）`,
+  );
+}
+
 // 单任务的实际投递:在**当前这一轮退干净之后**才跑(由 whenTurnIdle 排空)。
 //
 // 三个状态迁移各自对应一件真事,别再合并:
 //   beginDelivery  = 我来送这条(行仍是 pending,重启/崩溃后开机自动回收重投)
 //   onDelivered    = 原话进会话了 → markSent(唯一写 sent 的地方)
 //   落空 / 出错     = abortDelivery 把租约还回去,消息留在托盘里等下一次
-async function deliverWhenIdle(message: Row, options: ReturnType<typeof deliveryOptions>): Promise<void> {
+async function deliverWhenIdle(
+  message: Row,
+  options: ReturnType<typeof deliveryOptions>,
+  queuedAt: number,
+): Promise<void> {
   let delivered = false;
+  const idleAt = Date.now();
   try {
     // 等待期间它还是 pending,所以用户可能已经手动取消、另一个触发源也可能抢先
     // 送掉了。抢不到租约就什么都不做。
@@ -256,6 +278,7 @@ async function deliverWhenIdle(message: Row, options: ReturnType<typeof delivery
       onDelivered: async () => {
         delivered = true;
         await markSent(message);
+        noteDeliveryTiming(message.taskId, queuedAt, idleAt, Date.now());
       },
     });
     if (!started) await abortDelivery(message);
@@ -296,6 +319,9 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
         continue;
       }
       const options = deliveryOptions(m);
+      // 计时起点是「判定它该发了」的这一刻,不是用户排队那一刻 —— 用户等的那几十分钟
+      // 是排队语义本身(等 agent 这一轮说完),不是投递链路的账。
+      const queuedAt = Date.now();
       if (t!.mode === "team") {
         if (!(await beginDelivery(m.id))) continue; // 另一个触发源刚抢走
         fired.add(m.taskId);
@@ -308,6 +334,8 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
             onDelivered: async () => {
               delivered = true;
               await markSent(m);
+              // 调度台是常驻的,没有「等回合退干净」这一段,所以两个时间点同一个值。
+              noteDeliveryTiming(m.taskId, queuedAt, queuedAt, Date.now());
             },
           });
           if (!started) await abortDelivery(m); // 调度台明确拒收:清租约、保持 pending,下一台接手时补送
@@ -323,7 +351,7 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
         // 由 releaseTurn 同一处排空,是结算钩子里给同一个任务续跑的唯一安全写法。
         fired.add(m.taskId);
         inFlight.add(m.taskId);
-        whenTurnIdle(m.taskId, () => void deliverWhenIdle(m, options));
+        whenTurnIdle(m.taskId, () => void deliverWhenIdle(m, options, queuedAt));
       }
     } catch {
       /* 一条投递失败不影响其它任务,下一轮再来 */
