@@ -183,6 +183,27 @@ console.log("4) 压缩(/compact 与自动压缩)的过程与成败必须显式�
   const ended = beats.split("上下文已压缩").length - 1;
   if (started === 2 && ended === 2) ok("心跳去重:压两次就报两次开始、两次结束");
   else fail(`压缩提示数量不对(开始 ${started} 次、结束 ${ended} 次,期望各 2 次)`);
+
+  // 去重标志不许泄漏到下一次压缩。CLI 的合法终止路径不止「带 compact_result」一种:
+  // PreCompact hook 把自动压缩拦下时是 `compacting` → `status:null`(没有 compact_result),
+  // 只认 compact_result 复位的话,下一次压缩的开始提示会被上一次的残留整个吞掉。
+  const skipped = await collect([
+    { type: "system", subtype: "status", status: "compacting", session_id: "sess-7" },
+    { type: "system", subtype: "status", status: "compacting", session_id: "sess-7" },
+    { type: "system", subtype: "status", status: null, session_id: "sess-7" }, // hook 拦下,没有结论
+    { type: "result", subtype: "success", session_id: "sess-7" },
+    { type: "system", subtype: "status", status: "compacting", session_id: "sess-7" },
+    { type: "system", subtype: "status", status: "compacting", session_id: "sess-7" },
+    { type: "system", subtype: "status", status: null, compact_result: "success", session_id: "sess-7" },
+    { type: "result", subtype: "success", session_id: "sess-7" },
+  ]);
+  const skipText = skipped.filter((e) => e.kind === "text").map((e) => e.text).join("");
+  const skipStarted = skipText.split("正在压缩上下文").length - 1;
+  const skipEnded = skipText.split("上下文已压缩").length - 1;
+  if (skipStarted === 2) ok("被拦下的那次不影响下一次:两次尝试各报一次开始");
+  else fail(`跳过路径后开始提示报了 ${skipStarted} 次,期望 2 次:${JSON.stringify(skipText)}`);
+  if (skipEnded === 1) ok("没有结论的那次不谎报「已压缩」");
+  else fail(`结束提示报了 ${skipEnded} 次,期望 1 次:${JSON.stringify(skipText)}`);
 }
 
 console.log("5) 旧版 Claude Code 的 --effort 参数错误要给出可操作提示");

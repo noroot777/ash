@@ -190,6 +190,14 @@ export async function* parseClaudeStream(
         } else if (ev.status === "compacting" && !compacting) {
           compacting = true;
           push({ kind: "text", text: "\n> 正在压缩上下文…\n\n" });
+        } else if (ev.status === null) {
+          // 压缩结束了却没有结论:CLI 的合法路径之一 —— PreCompact hook 把这次自动压缩
+          // 拦下时,就是先 `status:"compacting"` 再以 `status:null` 收尾,`compact_result`
+          // 整个字段缺失。没有结论就不说话(压没压、成没成都无从谈起),但标志必须复位,
+          // 否则它会泄漏到下一次压缩,把那次的开始提示整个吞掉。
+          // 只认显式的 `null`:`requesting` 这类别的状态值在压缩期间也可能出现,拿它复位
+          // 等于把心跳去重白做一遍。
+          compacting = false;
         }
       }
       // 上游重试是 CLI 唯一一次说出「不是我卡住了,是上游不给响应」。不接住它,重试和
@@ -335,6 +343,9 @@ export async function* parseClaudeStream(
       if (resident) push({ kind: "turnEnd" });
       seenImages.clear();
       childImages.clear();
+      // 回合结束 = 压缩绝不可能还在进行中。兜底复位,免得将来 CLI 新增一条我们没认出来
+      // 的终止路径时,残留的标志把下一回合的开始提示吞掉(常驻进程一份标志跨多回合)。
+      compacting = false;
     }
   });
 
