@@ -71,6 +71,7 @@ const lockedTaskId = "scheduled-single-locked";
 const pausedChatTaskId = "scheduled-single-paused-chat";
 const pausedCompleteTaskId = "scheduled-single-paused-complete";
 const crashTaskId = "scheduled-single-crashed";
+const blockedTaskId = "scheduled-single-blocked";
 const steerTaskId = "scheduled-single-steer";
 const steerLockedTaskId = "scheduled-single-steer-locked";
 const steerLateTaskId = "scheduled-single-steer-late-tool";
@@ -176,6 +177,7 @@ try {
     { ...taskRow(pausedChatTaskId, "claude", "paused"), mode: "single", team: null, resumePrompt: "等上游完成后继续第三步" },
     { ...taskRow(pausedCompleteTaskId, "claude", "paused"), mode: "single", team: null, resumePrompt: "Windows 打开后继续验证" },
     { ...taskRow(crashTaskId, "claude", "done"), mode: "single", team: null },
+    { ...taskRow(blockedTaskId, "claude", "running"), mode: "single", team: null },
     {
       ...taskRow(steerTaskId, "claude", "done"),
       mode: "single",
@@ -236,6 +238,7 @@ try {
     messageRow("scheduled-unavailable", unavailableTaskId, "这条消息应安全取消"),
     messageRow("scheduled-queued", queuedTaskId, "排队追问:等这一轮跑完再发", "queued"),
     messageRow("scheduled-locked", lockedTaskId, "结算钩子里投递的这句话不许丢", "queued"),
+    messageRow("scheduled-blocked", blockedTaskId, "被挡回一次也不该干等半分钟", "queued"),
     messageRow("scheduled-steer-unavailable", steerUnavailableTaskId, "没有活动进程时仍要留队", "queued"),
   ]);
 
@@ -456,6 +459,45 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log("✓ 结算钩子里投递:锁还锁着不抢跑,锁一放立刻把原话送进会话");
 
+  // ── 挡回一次,不许退回去干等那个 30 秒兜底扫描 ──────────────────────────────
+  // `continueTask` 有一串「一个字都没送出去」的出口(回合被别的执行抢走、验收互斥、
+  // 调度台拒收)。它们原本既不出声也不重排,消息就静静躺在托盘里等 scheduler 的 30s
+  // tick —— 用户看到的是「任务都跑完了,我那句话还挂着」,而日志里什么都没有
+  // (2026-09-30 现场:回合结束到原话进会话 16.7 秒,一条慢日志都没打,因为分段计时只挂
+  // 在成功投递上)。这里用验收锁复现那个「挡回」,钉住两件事:挡回时租约要还、消息要留
+  // 在托盘;挡回的原因一消失,它得**靠自己排的重投**送出去。
+  // 本用例跑在 startScheduler 之前,所以这里能送出去,只可能是挡回时排的那次重投。
+  assert.equal(acceptance.beginAccepting(blockedTaskId), true, "测试前提:验收锁应能占住");
+  await status.setTaskStatus(blockedTaskId, "done");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(
+    (await db.select().from(sessions).where(eq(sessions.taskId, blockedTaskId))).length,
+    0,
+    "验收锁下不该为这条消息起任何一轮",
+  );
+  const blockedWhileLocked = (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-blocked"))).at(0)!;
+  assert.equal(blockedWhileLocked.status, "pending", "挡回的消息必须原样留在托盘里");
+  assert.equal(blockedWhileLocked.deliveringSince, null, "挡回之后必须把投递租约还回去");
+  acceptance.endAccepting(blockedTaskId);
+  await waitFor(
+    async () => (await db.select().from(scheduledMessages)
+      .where(eq(scheduledMessages.id, "scheduled-blocked"))).at(0)!.status === "sent",
+    "挡回的原因消失了,消息却没有自己重投——它只能干等 30 秒兜底扫描",
+  );
+  await waitFor(
+    async () => (await db.select().from(sessions).where(eq(sessions.taskId, blockedTaskId))).length > 0,
+    "标成 sent 了却没有为它起那一轮运行",
+  );
+  await waitFor(
+    async () => {
+      const t = (await db.select().from(tasks).where(eq(tasks.id, blockedTaskId))).at(0)!;
+      return t.status !== "running" && t.status !== "queued";
+    },
+    "重投出去的那一轮没有结算",
+  );
+  console.log("✓ 挡回之后自己重投:验收锁一放就送出去,不退回去等 30 秒兜底扫描");
+
   // ── 引导会话:默认排队,点按钮后在同一 Claude 进程里 interrupt + send ───────
   const oldRun = orchestrator.continueTask(steerTaskId, "保持运行等待引导");
   await waitFor(() => runs.isRunning(steerTaskId), "旧方向的一次性回合没有进入 running");
@@ -674,6 +716,7 @@ try {
   rmSync(join(paths.RUNS_DIR, queuedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, lockedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, crashTaskId), { recursive: true, force: true });
+  rmSync(join(paths.RUNS_DIR, blockedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, steerTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, steerUnavailableTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, steerLockedTaskId), { recursive: true, force: true });
