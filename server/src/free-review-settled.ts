@@ -23,8 +23,16 @@ import { freeReviewReportPath } from "./free-review-files.js";
 /** 每段自由文本带过去的上限：够逐条写清，又不至于把整份报告灌进下一轮 prompt。 */
 const MAX_TEXT = 1_200;
 
-/** 最多带几条裁定：按时间倒着取最近的几条，更早的多半已被后续轮次覆盖。 */
-const MAX_RULINGS = 4;
+/**
+ * 所有裁定的逐条依据加起来的总预算。
+ *
+ * 超预算时**只省正文、绝不省裁定本身**：每一条的轮次、裁定、承接任务和那一轮报告的
+ * 路径，不论多少条都照登；被省掉正文的那几条会明说「逐条依据没有内联，去读上面那份
+ * 报告」。曾经按条数截断过一版（只留最近 4 条），第 1 轮审查复现了它的后果：同一任务
+ * 第 5 次裁定之后，最早那次转出的意见在三条交接里全部消失，界面却仍按全部条数承诺
+ * 「会自动讲给审查者」——用户于是又得手写那句话，正好是这一节要消灭的东西。
+ */
+const MAX_DETAIL = 8_000;
 
 export interface SettledRuling {
   runId: string;
@@ -60,10 +68,11 @@ export async function settledRulingsOf(
       eq(freeReviewRuns.taskId, taskId),
       inArray(freeReviewRounds.disputeResolution, ["withdrawn", "deferred"]),
     ));
+  // 一条都不丢：裁定本身是**事实**，界面也按全部条数告诉用户「不用再手写了」。
+  // 长度由 settledRulingsSection 的正文预算去管，不在这里悄悄砍清单。
   const kept = rows
     .filter(({ run, round }) => !(run.id === current.runId && round.round >= current.round))
-    .sort((a, b) => (a.round.disputeResolvedAt ?? "").localeCompare(b.round.disputeResolvedAt ?? ""))
-    .slice(-MAX_RULINGS);
+    .sort((a, b) => (a.round.disputeResolvedAt ?? "").localeCompare(b.round.disputeResolvedAt ?? ""));
   if (!kept.length) return [];
 
   const derivedIds = kept.map(({ round }) => round.disputeDeferredTaskId).filter((value): value is string => !!value);
@@ -94,7 +103,7 @@ function clip(text: string | null | undefined): string | null {
   return value.length > MAX_TEXT ? `${value.slice(0, MAX_TEXT)}…（全文见那一轮的审查记录）` : value;
 }
 
-function entryOf(ruling: SettledRuling): string {
+function entryOf(ruling: SettledRuling, detail: boolean): string {
   const verdict = ruling.resolution === "deferred"
     ? "转为独立任务（意见成立，但超出本任务边界）"
     : "这一轮不用改了（采纳了执行者的说法）";
@@ -102,11 +111,39 @@ function entryOf(ruling: SettledRuling): string {
     ? `\n承接它们的独立任务：${ruling.deferredTaskId ?? "(裁定时未记下 id)"}` +
       (ruling.deferredTaskTitle ? `「${ruling.deferredTaskTitle}」` : "")
     : "";
-  return `〔第 ${ruling.round} 轮 · ${ruling.reviewerName} · 用户裁定：${verdict}〕${target}\n` +
-    `那一轮的报告：${ruling.reportPath}` +
+  const head = `〔第 ${ruling.round} 轮 · ${ruling.reviewerName} · 用户裁定：${verdict}〕${target}\n` +
+    `那一轮的报告：${ruling.reportPath}`;
+  if (!detail) {
+    // 有正文却没带上时必须说出来并给出去处，否则读者只会以为这一条本来就没写依据。
+    return head + (hasDetail(ruling)
+      ? "\n（这一条的逐条依据没有内联——裁定攒得多，正文只带得下最近几条；要看就读上面那份报告。）"
+      : "");
+  }
+  return head +
     (ruling.deferReason ? `\n执行者当时逐条写的「为什么它超出本任务边界」：\n${ruling.deferReason}` : "") +
     (ruling.reason ? `\n执行者当时逐条写的「为什么这条不成立」：\n${ruling.reason}` : "") +
     (ruling.note ? `\n用户裁定时写的要点：\n${ruling.note}` : "");
+}
+
+function hasDetail(ruling: SettledRuling): boolean {
+  return !!(ruling.deferReason || ruling.reason || ruling.note);
+}
+
+/**
+ * 哪几条带得起正文：从**最近的一条往回**给，越新的裁定越可能正对着这一轮的代码。
+ * 最近那一条不论多长都给（否则一条超长裁定会让整节只剩标题）。
+ */
+function detailed(rulings: readonly SettledRuling[]): Set<number> {
+  const picked = new Set<number>();
+  let spent = 0;
+  for (let index = rulings.length - 1; index >= 0; index -= 1) {
+    const ruling = rulings[index]!;
+    const cost = (ruling.deferReason?.length ?? 0) + (ruling.reason?.length ?? 0) + (ruling.note?.length ?? 0);
+    if (picked.size && spent + cost > MAX_DETAIL) break;
+    spent += cost;
+    picked.add(index);
+  }
+  return picked;
 }
 
 /**
@@ -139,7 +176,8 @@ export function settledRulingsSection(
           "由用户再确认一次。",
         "- 报告里**除此之外**的意见照常修。",
       ];
-  const body = rulings.map(entryOf).join("\n\n");
+  const picked = detailed(rulings);
+  const body = rulings.map((ruling, index) => entryOf(ruling, picked.has(index))).join("\n\n");
   return `\n\n【已由用户裁定、不在本任务里修的意见】\n${body}\n\n${lines.filter(Boolean).join("\n")}`;
 }
 

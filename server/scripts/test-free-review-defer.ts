@@ -44,7 +44,8 @@ try {
   const { deferOpenDispute } = await import("../src/free-review-defer.js");
   const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
   const { freeReviewEvidenceDir, freeReviewReportPath } = await import("../src/free-review-files.js");
-  const { freeRepairPrompt, freeReviewPrompt } = await import("../src/free-review-prompts.js");
+  const { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } = await import("../src/free-review-prompts.js");
+  const { settledRulingsOf } = await import("../src/free-review-settled.js");
 
   await ensureSchema();
   const at = new Date().toISOString();
@@ -263,6 +264,43 @@ try {
   const cleanPrompt = await freeReviewPrompt(
     cleanSource, { ...nextRun, id: "f-no-offer-run-2", taskId: "f-no-offer" }, 1, repo);
   assert.doesNotMatch(cleanPrompt, /已由用户裁定/, "没裁定过的任务不该凭空多出这一节");
+
+  // ── ⑨ 裁定攒多了也一条都不许丢（第 1 轮审查复现的那条） ──
+  // 曾按条数只留最近 4 条，于是第 5 次裁定之后最早那次转出的意见在三条交接里全部消失，
+  // 界面却仍按全部条数承诺「会自动讲给审查者」——用户又得手写那句话。现在清单不截断，
+  // 只在正文超预算时省掉**正文**，并明说去哪读。
+  const bulk = "越界依据正文".repeat(400); // 远超单段上限，用来把正文预算撑爆
+  for (let n = 1; n <= 8; n += 1) {
+    const stamp = `2027-01-0${n}T00:00:00.000Z`;
+    await db.insert(freeReviewRuns).values({
+      id: `f-defer-hist-${n}`, taskId: "f-defer", reviewerId: "reviewer", reviewerName: "逻辑审查者",
+      agentType: "codex", executorId: "ex", checkMode: "logic", retryLimit: 1, currentRound: 1,
+      status: "stopped", createdAt: stamp, updatedAt: stamp, finishedAt: stamp,
+    });
+    await db.insert(freeReviewRounds).values({
+      id: `f-defer-hist-${n}-round`, runId: `f-defer-hist-${n}`, round: 1, status: "failed",
+      conclusion: "verify_failed", reviewedCommit, disputeDeferReason: `第 ${n} 次转出：${bulk}`,
+      disputeResolution: "deferred", disputeResolvedAt: stamp, disputeDeferredTaskId: `f-defer-derived-${n}`,
+      startedAt: stamp, endedAt: stamp,
+    });
+  }
+  const many = await settledRulingsOf("f-defer", { runId: "f-defer-run-3", round: 1 });
+  assert.equal(many.length, 9, "9 次裁定就得回 9 条：界面按全部条数承诺会自动讲，服务端不能偷偷少讲几条");
+  const manyPrompt = await freeReviewPrompt(sourceRow, { ...nextRun, id: "f-defer-run-3" }, 1, repo);
+  for (let n = 1; n <= 8; n += 1) {
+    assert.ok(manyPrompt.includes(`f-defer-derived-${n}`), `第 ${n} 次转出的承接任务不许从提示里消失`);
+  }
+  assert.ok(manyPrompt.includes(derived.id), "最早那次转出的承接任务同样不许消失");
+  // 正文超预算时省的是**正文**，且必须说出来并给去处，否则读者会以为这几条本来就没写依据。
+  assert.match(manyPrompt, /逐条依据没有内联/, "正文带不下时要明说，不能悄悄少一段");
+  assert.ok(manyPrompt.includes(freeReviewReportPath("f-defer", "f-defer-hist-1", 1)),
+    "被省掉正文的那条也要留下报告路径，读者才有地方去看");
+  const manyRepair = await freeRepairPrompt("f-defer", { ...nextRun, id: "f-defer-run-3" });
+  const manyManual = await freeManualRepairPrompt("f-defer", { ...nextRun, id: "f-defer-run-3" });
+  for (const prompt of [manyRepair, manyManual]) {
+    assert.ok(prompt.includes("f-defer-derived-1") && prompt.includes("f-defer-derived-8"),
+      "执行者那两条交接同样一条都不许丢");
+  }
 
   console.log("free review defer ok");
 } catch (error) {
