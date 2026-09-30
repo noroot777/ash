@@ -10,7 +10,7 @@
 // ⑤ 修复入口跟着关掉——那几条已经有别的任务在承接，在本任务里再修一遍就是两处各改一版。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -45,7 +45,7 @@ try {
   const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
   const { freeReviewEvidenceDir, freeReviewReportPath } = await import("../src/free-review-files.js");
   const { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } = await import("../src/free-review-prompts.js");
-  const { settledRulingsOf } = await import("../src/free-review-settled.js");
+  const { SETTLED_RULINGS_FILE, settledRulingsOf } = await import("../src/free-review-settled.js");
 
   await ensureSchema();
   const at = new Date().toISOString();
@@ -291,10 +291,30 @@ try {
     assert.ok(manyPrompt.includes(`f-defer-derived-${n}`), `第 ${n} 次转出的承接任务不许从提示里消失`);
   }
   assert.ok(manyPrompt.includes(derived.id), "最早那次转出的承接任务同样不许消失");
-  // 正文超预算时省的是**正文**，且必须说出来并给去处，否则读者会以为这几条本来就没写依据。
+  // 正文超预算时省的是**正文**，且必须说出来并给一个**真读得到全文**的去处。
+  // 第 2 轮审查复现过一版假去处：那时指回 report.md，而裁定依据根本不在报告里。
   assert.match(manyPrompt, /逐条依据没有内联/, "正文带不下时要明说，不能悄悄少一段");
   assert.ok(manyPrompt.includes(freeReviewReportPath("f-defer", "f-defer-hist-1", 1)),
-    "被省掉正文的那条也要留下报告路径，读者才有地方去看");
+    "被省掉正文的那条也要留下它那一轮的报告路径");
+  const fullTextPath = join(freeReviewEvidenceDir("f-defer", "f-defer-run-3", 1), SETTLED_RULINGS_FILE);
+  // 判在**那一行**上：整段提示里到处都有这个路径（截断处也指它），只断言「出现过」
+  // 的话，去处退回 report.md 也照样绿。
+  const omission = manyPrompt.split("\n").find((line) => line.includes("逐条依据没有内联"))!;
+  assert.ok(omission.includes(fullTextPath), "省掉正文那一行要指向落盘的全文文件");
+  assert.ok(!omission.includes("report.md"), "去处不许是那一轮的报告：裁定依据根本不在报告里");
+  assert.match(omission, /别去翻上面那份报告：裁定内容不在报告里/, "要写明报告里没有裁定内容，免得读者白跑一趟");
+  // 去处必须**真的**读得到那几段正文——上一版就是路径存在、内容不在。
+  const fullText = readFileSync(fullTextPath, "utf8");
+  for (let n = 1; n <= 8; n += 1) {
+    assert.ok(fullText.includes(`第 ${n} 次转出：`), `全文文件里必须有第 ${n} 次转出的逐条依据`);
+  }
+  assert.ok(fullText.includes("第 2、3 条成立"), "最早那次转出的依据同样要在全文文件里");
+  assert.ok(fullText.includes("这几条连同上一轮那个 helper 一起重写"), "用户裁定要点也要能在全文文件里读到");
+  // 单段超过内联上限时，截断处指的也得是这份全文文件（那里存的是没截过的原文）。
+  assert.match(manyPrompt, /截断，全文见 /, "内联那份被单段上限截掉时要说清去哪读原文");
+  assert.ok(fullText.includes(bulk), "落盘的是原文，不能把内联那份截断后的文本写进去");
+  const readBack = await settledRulingsOf("f-defer", { runId: "f-defer-run-3", round: 1 });
+  assert.ok((readBack.at(-1)?.deferReason?.length ?? 0) > 1_200, "SettledRuling 里存的是原文，截断只发生在内联那一刻");
   const manyRepair = await freeRepairPrompt("f-defer", { ...nextRun, id: "f-defer-run-3" });
   const manyManual = await freeManualRepairPrompt("f-defer", { ...nextRun, id: "f-defer-run-3" });
   for (const prompt of [manyRepair, manyManual]) {

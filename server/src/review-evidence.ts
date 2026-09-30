@@ -5,11 +5,36 @@
 // 「这一轮的证据在哪、怎么读才安全」。安全那部分（symlink 祖先、O_EXCL 写结论）
 // 是有回归测试钉住的边界，单独成文件才不会跟编排逻辑搅在一起改坏。
 import { constants as fsConstants } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir } from "node:fs/promises";
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ReviewConclusion } from "@ash/shared";
 import { RUNS_DIR } from "./paths.js";
-import { now } from "./util.js";
+import { id, now } from "./util.js";
+
+/**
+ * 往证据目录里**原子替换**一个普通文件。
+ *
+ * 不直接 writeFile：目标可能已经被换成 symlink，写下去就落到证据根之外。先用
+ * O_EXCL|O_NOFOLLOW 写一个临时文件，再 rename 顶上去——rename 换的是目录项本身，
+ * 不会顺着旧文件上的 symlink 走。调用方要先 `safeRunDirectory(dir, true)` 保证祖先干净。
+ */
+export async function replaceEvidenceFile(path: string, content: string): Promise<void> {
+  const temporary = join(dirname(path), `.${basename(path)}.${id()}.tmp`);
+  const handle = await open(
+    temporary,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    await handle.writeFile(content);
+    await handle.close();
+    await rename(temporary, path);
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await unlink(temporary).catch(() => undefined);
+    throw error;
+  }
+}
 
 export const REVIEW_MIME: Record<string, string> = {
   ".png": "image/png",
