@@ -90,4 +90,62 @@ const toolCount = (item) => item.segments.reduce((total, segment) => total + seg
   console.log("   ✓ 没有回合结束标记时,用时收在下一条发言之前");
 }
 
+{
+  const olderStart = "2026-09-30T08:33:03.116Z";
+  const retryAt = "2026-09-30T08:49:51.842Z";
+  const olderToolAt = "2026-09-30T08:50:09.413Z";
+  const errorAt = "2026-09-30T09:01:13.994Z";
+  const olderEnd = "2026-09-30T09:01:14.992Z";
+  const resumedAt = "2026-09-30T10:14:36.420Z";
+  const resumedEnd = "2026-09-30T11:02:14.444Z";
+  const currentStart = "2026-09-30T12:10:09.164Z";
+  const currentToolAt = "2026-09-30T12:11:51.740Z";
+  const currentTextAt = "2026-09-30T12:16:36.632Z";
+  const failure = "HTTP 502: 无法连接供应商：fetch failed";
+  const row = {
+    ...session("sess-retry-fragment", null),
+    startedAt: olderStart,
+    turnStartedAt: currentStart,
+  };
+  const output = [
+    `${failure}\n`,
+    turn({ t: "agentEnd", at: olderEnd }),
+    turn({ t: "system", text: "上游返回 502，正在重试", level: "notice", at: retryAt }),
+    turn({ t: "user", text: "继续", at: resumedAt }),
+    "继续实现。\n",
+    turn({ t: "agentEnd", at: resumedEnd }),
+    turn({ t: "user", text: "读取第 2 轮报告并修复", at: currentStart }),
+  ].join("");
+  const trace = [
+    { at: olderStart, turnStartedAt: olderStart, event: { kind: "run", model: "claude-opus-5", reasoningEffort: "xhigh" } },
+    { at: olderToolAt, turnStartedAt: olderStart, event: { kind: "tool", name: "Bash", detail: "cat wechat_setup.js" } },
+    { at: errorAt, turnStartedAt: olderStart, event: { kind: "text", text: `${failure}\n` } },
+    { at: errorAt, turnStartedAt: olderStart, event: { kind: "error", message: failure } },
+    { at: resumedAt, turnStartedAt: resumedAt, event: { kind: "run", model: "claude-opus-5", reasoningEffort: "xhigh" } },
+    { at: "2026-09-30T10:20:00.000Z", turnStartedAt: resumedAt, event: { kind: "text", text: "继续实现。\n" } },
+    { at: currentStart, turnStartedAt: currentStart, event: { kind: "run", model: "claude-opus-5", reasoningEffort: "xhigh" } },
+  ];
+  const currentTool = { at: currentToolAt, turnStartedAt: currentStart, event: { kind: "tool", name: "Bash", detail: "cat round-2/report.md" } };
+  const currentText = { at: currentTextAt, turnStartedAt: currentStart, event: { kind: "text", text: "开始修复。\n" } };
+  const phases = [
+    { label: "新回合尚未执行工具", output, trace, hasCurrentTurn: false },
+    { label: "新回合只有工具还没有正文", output, trace: [...trace, currentTool], hasCurrentTurn: true },
+    { label: "新回合已输出正文", output: `${output}开始修复。\n`, trace: [...trace, currentTool, currentText], hasCurrentTurn: true },
+  ];
+  for (const phase of phases) {
+    const items = agents(buildConversationItems([{ session: row, output: phase.output, trace: phase.trace }], [row], []));
+    const failed = items.filter((item) => item.segments.some((segment) => segment.events.some((event) => event.kind === "error")));
+    assert.equal(failed.length, 1, `${phase.label}：历史错误应完整保留一次`);
+    assert.equal(failed[0].at, olderToolAt, `${phase.label}：旧重试碎片被挪到了新回合`);
+    assert.equal(toolCount(failed[0]), 2, `${phase.label}：旧回合应只包含自己的工具和错误`);
+    const current = items.find((item) => item.at === currentStart);
+    assert.equal(!!current, phase.hasCurrentTurn, `${phase.label}：空回合不应因旧错误凭空生成气泡`);
+    if (current) {
+      assert.equal(toolCount(current), 1, `${phase.label}：旧工具或旧错误串进了当前回合`);
+      assert.equal(current.segments.flatMap((segment) => segment.events)[0].detail, "cat round-2/report.md");
+    }
+  }
+  console.log("   ✓ 旧重试碎片按原回合保留，新回合输出正文前后都不串旧错误");
+}
+
 console.log("conversation self-started turn ok");

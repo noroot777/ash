@@ -461,7 +461,7 @@ function appendPersistedSession(
       segments: traceSegments,
     });
   };
-  for (const [traceTurn, entries] of traceGroups) {
+  for (const [traceTurn, entries] of [...traceGroups].sort(([left], [right]) => Date.parse(left) - Date.parse(right))) {
     if (consumedTrace.has(traceTurn) || entries.some((entry) => entry.event.kind === "run")) flushFragment();
     if (consumedTrace.has(traceTurn)) continue;
     if (fragment) fragment.entries.push(...entries);
