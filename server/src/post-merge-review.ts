@@ -2,6 +2,7 @@ import type { FreeReviewDispatchInput, Task } from "@ash/shared";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
+import { derivedTaskTitle } from "./derived-task-title.js";
 import { freeReviewRounds, freeReviewRuns, projects, tasks } from "./db/schema.js";
 import { freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
@@ -83,7 +84,7 @@ export async function createPostMergeRepairTask(taskId: string, runId: string): 
       projectId: source.projectId,
       groupId: source.groupId,
       parentId: null,
-      title: `修复合并结果：${source.title}`,
+      title: derivedTaskTitle(source.title, "修复合并结果"),
       body: `修复已验收任务「${source.title}」的合并结果问题。\n\n` +
         `审查链：${run.id}\n目标分支：${run.targetBranch}\n合并区间：${run.targetBaseCommit}..${run.targetCommit}\n` +
         `审查报告：[report.md](${report})\n\n` +

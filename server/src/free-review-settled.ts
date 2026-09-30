@@ -1,0 +1,153 @@
+// 「已经被用户裁定过、下一轮不该原样再提一遍」的那几条审查意见。
+//
+// 为什么需要它：`deferred`（转独立任务）和 `withdrawn`（采纳执行者说法）这两档裁定，
+// 意思都是**这几条不在本任务里修**；但裁定只落在做出它的那条审查链的那一轮上。用户
+// 接着派下一轮审查开的是**新的 run**，新审查者的上下文里一个字都没有——于是它对着
+// 同一份代码把同样几条再报一遍，执行者要么照改（那几条已经有独立任务在承接，改了就是
+// 两处各改一版），要么再驳回一次、用户再裁定一次。这正是转出那条出路要消灭的循环，
+// 却在链的**交界处**原样复活。
+//
+// 在此之前用户只能每次派审时手打一句「有异议的已经转为新任务，只审查本次改动内容」
+// ——一条系统自己就记着的事实，靠人每一轮复述（用户 2026-09-30 反馈）。所以把它做成
+// prompt 的一节，两侧都送：审查者知道哪几条不必再报，执行者知道报告里若又冒出它们
+// 该走哪个出口。用户当然仍可以写附言，只是不必再写这一句。
+//
+// **只搬事实，不替用户下新判断**：裁定本身、执行者当时逐条写的依据、转出去的那个任务、
+// 那一轮报告的路径。要不要重提由审查者按证据决定（`withdrawn` 那档明确留了口子）——
+// 系统替它判死「这条永远不许再提」的话，这一节就从「补上下文」变成了「消音」。
+import { and, eq, inArray } from "drizzle-orm";
+import { db } from "./db/index.js";
+import { freeReviewRounds, freeReviewRuns, tasks } from "./db/schema.js";
+import { freeReviewReportPath } from "./free-review-files.js";
+
+/** 每段自由文本带过去的上限：够逐条写清，又不至于把整份报告灌进下一轮 prompt。 */
+const MAX_TEXT = 1_200;
+
+/** 最多带几条裁定：按时间倒着取最近的几条，更早的多半已被后续轮次覆盖。 */
+const MAX_RULINGS = 4;
+
+export interface SettledRuling {
+  runId: string;
+  round: number;
+  reviewerName: string;
+  resolution: "withdrawn" | "deferred";
+  /** 执行者写的「哪几条不成立」；只提转出时为空。 */
+  reason: string | null;
+  /** 执行者写的「哪几条成立但越界」；`withdrawn` 那档多半为空。 */
+  deferReason: string | null;
+  /** 用户裁定时写的要点。 */
+  note: string | null;
+  deferredTaskId: string | null;
+  deferredTaskTitle: string | null;
+  reportPath: string;
+}
+
+/**
+ * 这个任务上**已经裁定成「不在本任务里修」**的那几轮，按时间先后排。
+ *
+ * `current` 是正在拼 prompt 的那一轮，要排除掉自己和它之后的轮次：同一条 run 上
+ * 裁定过 withdrawn/deferred 就不会再续轮（链停在那里），所以正常只会命中更早的 run；
+ * 排除只是不让「把自己的裁定讲给自己听」这种可能存在。
+ */
+export async function settledRulingsOf(
+  taskId: string,
+  current: { runId: string; round: number },
+): Promise<SettledRuling[]> {
+  const rows = await db.select({ run: freeReviewRuns, round: freeReviewRounds })
+    .from(freeReviewRounds)
+    .innerJoin(freeReviewRuns, eq(freeReviewRounds.runId, freeReviewRuns.id))
+    .where(and(
+      eq(freeReviewRuns.taskId, taskId),
+      inArray(freeReviewRounds.disputeResolution, ["withdrawn", "deferred"]),
+    ));
+  const kept = rows
+    .filter(({ run, round }) => !(run.id === current.runId && round.round >= current.round))
+    .sort((a, b) => (a.round.disputeResolvedAt ?? "").localeCompare(b.round.disputeResolvedAt ?? ""))
+    .slice(-MAX_RULINGS);
+  if (!kept.length) return [];
+
+  const derivedIds = kept.map(({ round }) => round.disputeDeferredTaskId).filter((value): value is string => !!value);
+  const titles = new Map<string, string>();
+  if (derivedIds.length) {
+    for (const row of await db.select({ id: tasks.id, title: tasks.title }).from(tasks)
+      .where(inArray(tasks.id, derivedIds))) {
+      titles.set(row.id, row.title ?? "");
+    }
+  }
+  return kept.map(({ run, round }) => ({
+    runId: run.id,
+    round: round.round,
+    reviewerName: run.reviewerName,
+    resolution: round.disputeResolution === "deferred" ? "deferred" : "withdrawn",
+    reason: clip(round.disputeReason),
+    deferReason: clip(round.disputeDeferReason),
+    note: clip(round.disputeResolutionNote),
+    deferredTaskId: round.disputeDeferredTaskId,
+    deferredTaskTitle: round.disputeDeferredTaskId ? titles.get(round.disputeDeferredTaskId) ?? null : null,
+    reportPath: freeReviewReportPath(run.taskId, run.id, round.round),
+  }));
+}
+
+function clip(text: string | null | undefined): string | null {
+  const value = text?.trim();
+  if (!value) return null;
+  return value.length > MAX_TEXT ? `${value.slice(0, MAX_TEXT)}…（全文见那一轮的审查记录）` : value;
+}
+
+function entryOf(ruling: SettledRuling): string {
+  const verdict = ruling.resolution === "deferred"
+    ? "转为独立任务（意见成立，但超出本任务边界）"
+    : "这一轮不用改了（采纳了执行者的说法）";
+  const target = ruling.resolution === "deferred"
+    ? `\n承接它们的独立任务：${ruling.deferredTaskId ?? "(裁定时未记下 id)"}` +
+      (ruling.deferredTaskTitle ? `「${ruling.deferredTaskTitle}」` : "")
+    : "";
+  return `〔第 ${ruling.round} 轮 · ${ruling.reviewerName} · 用户裁定：${verdict}〕${target}\n` +
+    `那一轮的报告：${ruling.reportPath}` +
+    (ruling.deferReason ? `\n执行者当时逐条写的「为什么它超出本任务边界」：\n${ruling.deferReason}` : "") +
+    (ruling.reason ? `\n执行者当时逐条写的「为什么这条不成立」：\n${ruling.reason}` : "") +
+    (ruling.note ? `\n用户裁定时写的要点：\n${ruling.note}` : "");
+}
+
+/**
+ * 裁定这一节的正文。两侧共用同一份事实清单，**只有结尾那几行按读者分叉**——各写一份
+ * 的话，「哪几条已经裁定过」这张清单迟早只剩一侧还是准的。
+ */
+export function settledRulingsSection(
+  rulings: readonly SettledRuling[],
+  audience: "reviewer" | "executor",
+): string {
+  if (!rulings.length) return "";
+  const deferred = rulings.some((item) => item.resolution === "deferred");
+  const withdrawn = rulings.some((item) => item.resolution === "withdrawn");
+  // 只写命中的那几档：一条 withdrawn 都没有时还讲「已被裁定作废的那几条怎么办」，
+  // 等于凭空给读者添一类它手上根本没有的东西。
+  const lines = audience === "reviewer"
+    ? [
+        "以上是**用户的裁定**，不是执行者的一面之词。",
+        deferred && "- 已转为独立任务的那几条：本轮**不要再报**，也不要因为它们判未通过——" +
+          "它们还留在代码里是预期之中的，另有一个任务在做。",
+        withdrawn && "- 已被裁定作废的那几条：不要原样再提一遍；确有**裁定之后才成立的新依据**" +
+          "（例如它实际造成了可复现的故障）才可以重提，且必须在报告里写明「这条已被裁定作废，我为什么仍然提」。",
+        "- 同一处代码上**新出现**的问题不受此限，照常报，但要在报告里写明它与上面那几条的区别。",
+      ]
+    : [
+        "以上是**用户已经下过的裁定**：这几条不在本任务里修。",
+        "- 这一轮报告如果又提到它们，不要在这里改，调用 dispute_review 说清楚：" +
+          (deferred ? "已转为独立任务的写进 deferReason（指名承接它们的那个任务）；" : "") +
+          (withdrawn ? "已被裁定作废的写进 reason（指明是哪一轮裁的）；" : "") +
+          "由用户再确认一次。",
+        "- 报告里**除此之外**的意见照常修。",
+      ];
+  const body = rulings.map(entryOf).join("\n\n");
+  return `\n\n【已由用户裁定、不在本任务里修的意见】\n${body}\n\n${lines.filter(Boolean).join("\n")}`;
+}
+
+/** 取 + 拼一步到位：调用方只关心「这一节是什么」。 */
+export async function settledRulingsFor(
+  taskId: string,
+  current: { runId: string; round: number },
+  audience: "reviewer" | "executor",
+): Promise<string> {
+  return settledRulingsSection(await settledRulingsOf(taskId, current), audience);
+}

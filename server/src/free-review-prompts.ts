@@ -4,6 +4,7 @@
 import { freeReviewDebateTurns, freeReviewDebates, freeReviewRuns, tasks } from "./db/schema.js";
 import { freeReviewEvidenceDir, freeReviewReportPath } from "./free-review-files.js";
 import { reviewRequestReference } from "./review-request-context.js";
+import { settledRulingsFor } from "./free-review-settled.js";
 import { BROWSER_VERIFICATION_POLICY } from "./browser-verification-policy.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 
@@ -19,6 +20,11 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误和相关测试。不要扩张成产品方案评审。"
     : "本轮做逻辑审查：除编译与测试外，重点找行为错误、状态竞争、失败路径、边界条件和回归风险。涉及可见前端改动时必须启动页面真实操作并截图；是否还需要其它截图由你按证据价值判断。";
   const note = run.note ? `\n\n用户附言（作为审查重点补充，不覆盖上述职责）：\n${run.note}` : "";
+  // 上一条审查链里已被用户裁定「不在本任务里修」的那几条：不带过来的话，新审查者会
+  // 把同样几条原样再报一遍，用户只能每轮手打一句「有异议的已经转为新任务」（理由见
+  // free-review-settled.ts 文件头）。放在用户附言**之前**：它是边界事实，附言是这一
+  // 次的重点补充，附言里说的话仍然压在最后一句。
+  const settled = await settledRulingsFor(task.id, { runId: run.id, round }, "reviewer");
   const acceptedMerge = run.targetKind === "accepted_merge" && run.targetBranch && run.targetBaseCommit && run.targetCommit;
   const target = acceptedMerge
     ? `\n\n本轮审查的是已经验收后的合并快照，不是原任务工作区：\n` +
@@ -30,7 +36,7 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
   return `【自由工作流 · 第 ${round} 轮审查】\n` +
     `你是独立审查者，不是继续实现需求。默认产物可能有问题，主动寻找能复现的缺陷。\n\n` +
     `任务：${task.id}\n${requirements}\n\n` +
-    `${focus}${note}${target}\n\n先检查 ${reviewLocation} 中的真实 git status、diff 和提交，再选择验证命令。` +
+    `${focus}${settled}${note}${target}\n\n先检查 ${reviewLocation} 中的真实 git status、diff 和提交，再选择验证命令。` +
     `必须真实运行与风险相称的检查。\n\n${BROWSER_VERIFICATION_POLICY}` +
     `一旦用了 playwright，结束前清掉工作区产物；所有验证临时服务和浏览器进程都必须停掉。\n\n` +
     `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
@@ -101,12 +107,15 @@ function disputeOption(taskId: string): string {
     `说不出「为什么它不属于本任务」就照改。转不转、转出去做什么，都由用户裁定——你只负责提出。`;
 }
 
-export function freeRepairPrompt(taskId: string, run: ReviewRunRow): string {
+export async function freeRepairPrompt(taskId: string, run: ReviewRunRow): Promise<string> {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   return `【自由工作流审查未通过 · 第 ${run.currentRound} 轮】\n` +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按报告修复，不要扩大原任务边界。` +
     `修复完成并验证后调用 complete_task(taskId="${taskId}") 确认任务完成；已预约的复审会在修复回合正常结束后自动启动。\n\n` +
     `证据目录：${dir}` +
+    // 已经裁定转出/作废的那几条也要告诉执行者：报告是新审查者写的，它可能不知道那场
+    // 裁定，而照着改就是两处各改一版（理由见 free-review-settled.ts 文件头）。
+    await settledRulingsFor(taskId, { runId: run.id, round: run.currentRound }, "executor") +
     disputeOption(taskId);
 }
 
@@ -158,7 +167,7 @@ function resolutionNoteSection(note: string | null | undefined): string {
     "读不懂或做不到就用 ask_question 问清楚，别自己挑一个改法。";
 }
 
-export function freeManualRepairPrompt(
+export async function freeManualRepairPrompt(
   taskId: string,
   run: ReviewRunRow,
   // 用户已经裁定「维持审查意见」（界面上那颗按钮写的是「让它接着改」）：这一趟没有
@@ -170,7 +179,7 @@ export function freeManualRepairPrompt(
     resolutionNote?: string | null;
     debateClosing?: DebateClosing | null;
   } = {},
-): string {
+): Promise<string> {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   // 有要点时开场白不能再写「照报告修复」：用户写要点，多半正是因为要改的不是报告那版。
   // 两句话打架时执行者只能自己挑一个，而挑错了没人会发现（两边看着都「按要求改了」）。
@@ -185,6 +194,7 @@ export function freeManualRepairPrompt(
     `修复完成并验证后调用 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
     `如果用户在修复期间预约了复审，执行回合正常结束后按预约开始，否则等待用户决定再次审查或验收。\n\n` +
     `证据目录：${dir}` +
+    await settledRulingsFor(taskId, { runId: run.id, round: run.currentRound }, "executor") +
     debateClosingSection(opts.debateClosing) +
     resolutionNoteSection(opts.resolutionNote) +
     (opts.disputeUpheld ? "" : disputeOption(taskId));

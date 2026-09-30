@@ -44,6 +44,7 @@ try {
   const { deferOpenDispute } = await import("../src/free-review-defer.js");
   const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
   const { freeReviewEvidenceDir, freeReviewReportPath } = await import("../src/free-review-files.js");
+  const { freeRepairPrompt, freeReviewPrompt } = await import("../src/free-review-prompts.js");
 
   await ensureSchema();
   const at = new Date().toISOString();
@@ -165,6 +166,10 @@ try {
   assert.equal(derived.originTaskId, "f-defer", "回链到原任务");
   assert.equal(derived.parentId, null, "它是独立任务，不是谁的执行者");
   assert.equal(derived.workflowMode, "free");
+  // 标题**先说是哪个任务，再说派生缘由**：缘由放前面时，列表里连着几条派生任务只剩同一
+  // 串前缀，真正区分它们的那半截被挤到省略号之后（用户 2026-09-30 反馈）。
+  assert.equal(derived.title, "原任务 f-defer · 承接第 1 轮审查的越界意见",
+    "派生任务标题必须是「原任务名 · 缘由」，不是「缘由：原任务名」");
   assert.equal(derived.agentType, "codex", "执行器配置继承原任务");
   assert.equal(derived.mergeTargetBranch, "main", "最终合入目标继承原任务，与开工起点各算各的");
   assert.equal(derived.worktreeBase, reviewedCommit,
@@ -228,6 +233,36 @@ try {
     "没选转出就不该留下派生任务");
   await rejects(() => startManualFreeReviewRepair("f-mixed"), "已被你裁定作废",
     "withdrawn 的措辞一个字不变（现有两条出路语义不许动）");
+
+  // ── ⑧ 裁定过的那几条自动讲给下一轮，两侧都讲 ──
+  // 不做这一步的话，用户每次派审都得手打一句「有异议的已经转为新任务，只审查本次改动
+  // 内容」——一条系统自己就记着的事实，靠人每轮复述（用户 2026-09-30 反馈）。
+  const nextRun: Parameters<typeof freeReviewPrompt>[1] = {
+    id: "f-defer-run-2", taskId: "f-defer", reviewerId: "reviewer", reviewerName: "逻辑审查者",
+    agentType: "codex", executorId: "ex", model: null, reasoningEffort: null, checkMode: "logic",
+    note: null, retryLimit: 1, targetKind: "workspace", targetBranch: null, targetBaseCommit: null,
+    targetCommit: null, repairTaskId: null, currentRound: 1, status: "reviewing",
+    createdAt: at, updatedAt: at, finishedAt: null,
+  };
+  const nextPrompt = await freeReviewPrompt(sourceRow, nextRun, 1, repo);
+  assert.match(nextPrompt, /已由用户裁定、不在本任务里修的意见/, "下一轮审查提示必须带上已裁定的那几条");
+  assert.ok(nextPrompt.includes(derived.id), "要指名承接它们的那个独立任务，否则审查者无从核对");
+  assert.ok(nextPrompt.includes("第 2、3 条成立"), "执行者当时逐条写的越界依据要带过去（哪几条靠它认）");
+  assert.ok(nextPrompt.includes("这几条连同上一轮那个 helper 一起重写"), "用户裁定时写的要点也要带过去");
+  assert.match(nextPrompt, /本轮\*\*不要再报\*\*/, "审查者那一侧的落点是「不要再报」");
+  assert.match(nextPrompt, /新出现\*\*的问题不受此限/, "但不能把审查者的嘴封死：同一处的新问题照常报");
+
+  const nextRepair = await freeRepairPrompt("f-defer", nextRun);
+  assert.match(nextRepair, /已由用户裁定、不在本任务里修的意见/, "执行者那一侧也要知道，否则它会照新报告再改一遍");
+  assert.match(nextRepair, /不要在这里改，调用 dispute_review/, "执行者那一侧的落点是「走转出这个出口」而不是照改");
+  assert.ok(nextRepair.includes("写进 deferReason"), "转出过的那几条要指明走 deferReason 这个出口");
+  assert.ok(!nextRepair.includes("写进 reason"), "这个任务没裁定过作废，就别讲作废那一档怎么办");
+
+  // 没有裁定过的任务不许凭空多出这一节（空清单必须什么都不加）。
+  const cleanSource = (await db.select().from(tasks).where(eq(tasks.id, "f-no-offer"))).at(0)!;
+  const cleanPrompt = await freeReviewPrompt(
+    cleanSource, { ...nextRun, id: "f-no-offer-run-2", taskId: "f-no-offer" }, 1, repo);
+  assert.doesNotMatch(cleanPrompt, /已由用户裁定/, "没裁定过的任务不该凭空多出这一节");
 
   console.log("free review defer ok");
 } catch (error) {

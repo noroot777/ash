@@ -285,6 +285,30 @@ try {
     "裁定要点原文要留在审查记录里，否则用户回头只剩时间线上那 60 字摘要",
   );
 
+  // 裁定过的那几条，服务端派审时会自动讲给下一位审查者（free-review-settled.ts）。
+  // 派审面上必须说出这件事：不说的话用户无从知道它已经自动化了，只会照旧每轮手打一句
+  // 「有异议的已经转为新任务，只审查本次改动内容」（用户 2026-09-30 反馈）。
+  await waivedFixture.locator(".review-inspector__targets button").first().click();
+  await waivedDrawer.waitFor({ state: "detached" });
+  await waivedFixture.getByRole("button", { name: "再审一轮" }).click();
+  await reviewDialog.getByRole("heading", { name: "派审查" }).waitFor();
+  assert.match(
+    await reviewDialog.locator("#free-review-note-hint").innerText(),
+    /已有 1 处意见被你裁定「不在本任务里修」[\s\S]*不必在这里重复说明/,
+    "裁定过之后，派审面要告诉用户这句话不用自己写了",
+  );
+  await reviewDialog.getByRole("button", { name: "关闭派审查" }).click();
+  await reviewDialog.waitFor({ state: "detached" });
+  // 反面：没裁定过的任务不该凭空多出这句提示。
+  await chatToolbar.getByRole("button", { name: "已预约复审" }).click();
+  await reviewDialog.getByRole("heading", { name: "调整预约审查" }).waitFor();
+  assert.equal(
+    await reviewDialog.locator("#free-review-note-hint").innerText(),
+    "Enter 提交 · Shift+Enter 换行",
+    "没裁定过的任务不该凭空多出这句提示",
+  );
+  await reviewDialog.getByRole("button", { name: "关闭调整预约审查" }).click();
+
   console.log("free workflow inspector preview test passed");
 } finally {
   await browser?.close();

@@ -11,6 +11,7 @@ import type { Task } from "@ash/shared";
 import { and, eq, isNull } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
+import { derivedTaskTitle } from "./derived-task-title.js";
 import { freeReviewRounds, tasks } from "./db/schema.js";
 import { freeReviewEvidenceDir, freeReviewReportPath } from "./free-review-files.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
@@ -20,9 +21,6 @@ import { id, now } from "./util.js";
 import type { ReviewRoundRow, ReviewRunRow } from "./free-review-dispute.js";
 
 type TaskRow = typeof tasks.$inferSelect;
-
-/** 标题里给原任务留的长度：派生任务在列表里要一眼看出它承接的是谁。 */
-const TITLE_SOURCE_LEN = 40;
 
 /**
  * 派生任务的开工起点：**被审查的那一版代码的 commit**（`round.reviewedCommit`）。
@@ -43,10 +41,7 @@ function baseOf(round: ReviewRoundRow): string | null {
 }
 
 function titleOf(source: TaskRow, round: number): string {
-  const name = source.title.length > TITLE_SOURCE_LEN
-    ? `${source.title.slice(0, TITLE_SOURCE_LEN)}…`
-    : source.title;
-  return `承接第 ${round} 轮审查的越界意见：${name}`;
+  return derivedTaskTitle(source.title, `承接第 ${round} 轮审查的越界意见`);
 }
 
 function bodyOf(
