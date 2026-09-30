@@ -8,8 +8,9 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
-import { parseSessionOutput, TEAM_DEFAULTS } from "@ash/shared";
+import { TEAM_DEFAULTS } from "@ash/shared";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
+import { runSteerCases } from "./scheduled-steer-cases.js";
 
 // 子进程抢下投递租约后 SIGKILL，留下可由重启回收的「pending + 租约」现场。
 const crashMessageId = process.env.ASH_TEST_CRASH_MESSAGE;
@@ -29,14 +30,13 @@ const fakeBin = installFakeClaude(root);
 // Windows PATH 使用 `;`，必须走 path.delimiter。
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
 
-const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, steer, orchestrator, transcript, paths, { bus }, acceptance, runRoutes, team] = await Promise.all([
+const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, orchestrator, transcript, paths, { bus }, acceptance, runRoutes, team] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/schedules.js"),
   import("../src/pending-messages.js"),
   import("../src/runs.js"),
   import("../src/status.js"),
-  import("../src/task-steer.js"),
   import("../src/orchestrator.js"),
   import("../src/transcript.js"),
   import("../src/paths.js"),
@@ -71,6 +71,7 @@ const lockedTaskId = "scheduled-single-locked";
 const pausedChatTaskId = "scheduled-single-paused-chat";
 const pausedCompleteTaskId = "scheduled-single-paused-complete";
 const crashTaskId = "scheduled-single-crashed";
+const blockedTaskId = "scheduled-single-blocked";
 const steerTaskId = "scheduled-single-steer";
 const steerLockedTaskId = "scheduled-single-steer-locked";
 const steerLateTaskId = "scheduled-single-steer-late-tool";
@@ -176,6 +177,7 @@ try {
     { ...taskRow(pausedChatTaskId, "claude", "paused"), mode: "single", team: null, resumePrompt: "等上游完成后继续第三步" },
     { ...taskRow(pausedCompleteTaskId, "claude", "paused"), mode: "single", team: null, resumePrompt: "Windows 打开后继续验证" },
     { ...taskRow(crashTaskId, "claude", "done"), mode: "single", team: null },
+    { ...taskRow(blockedTaskId, "claude", "running"), mode: "single", team: null },
     {
       ...taskRow(steerTaskId, "claude", "done"),
       mode: "single",
@@ -236,6 +238,7 @@ try {
     messageRow("scheduled-unavailable", unavailableTaskId, "这条消息应安全取消"),
     messageRow("scheduled-queued", queuedTaskId, "排队追问:等这一轮跑完再发", "queued"),
     messageRow("scheduled-locked", lockedTaskId, "结算钩子里投递的这句话不许丢", "queued"),
+    messageRow("scheduled-blocked", blockedTaskId, "被挡回一次也不该干等半分钟", "queued"),
     messageRow("scheduled-steer-unavailable", steerUnavailableTaskId, "没有活动进程时仍要留队", "queued"),
   ]);
 
@@ -456,146 +459,61 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log("✓ 结算钩子里投递:锁还锁着不抢跑,锁一放立刻把原话送进会话");
 
-  // ── 引导会话:默认排队,点按钮后在同一 Claude 进程里 interrupt + send ───────
-  const oldRun = orchestrator.continueTask(steerTaskId, "保持运行等待引导");
-  await waitFor(() => runs.isRunning(steerTaskId), "旧方向的一次性回合没有进入 running");
-  await waitFor(() => agentEvents.some(({ taskId, event }) => taskId === steerTaskId && event.text?.includes("旧方向最后一段正文")), "旧方向正文尚未到达消费层");
-  await db.update(tasks).set({
-    completeConfirmedAt: at,
-    resumePrompt: "旧方向留下的续跑指令",
-    question: "旧方向留下的问题",
-    questionOptions: JSON.stringify(["旧答案"]),
-  }).where(eq(tasks.id, steerTaskId));
-  runs.confirmDone(steerTaskId); // 旧方向刚拿到的完成票也不能穿进新方向
-  await db.insert(scheduledMessages).values(
-    messageRow("scheduled-steer", steerTaskId, "先停下旧方案，改做更稳妥的新方向", "queued"),
-  );
-  const statusEventStart = statusEvents.length;
-  const agentEventStart = agentEvents.length;
-
-  const steered = await steer.steerQueuedMessage("scheduled-steer");
-  assert.equal(steered.ok, true, "活动单飞回合上的 queued 消息应能升级为引导");
-  assert.equal(await oldRun, true, "旧回合应由原 run loop 完整接管并受控收口");
-  const steeringAgentEvents = agentEvents.slice(agentEventStart).filter((event) => event.taskId === steerTaskId);
-  assert.equal(
-    steeringAgentEvents.some(({ event }) => event.kind === "done" && (event.exitStatus ?? 0) !== 0),
-    false,
-    "原生引导的中间 interrupt 不得向 SSE 发布红色 done 边界",
+  // ── 挡回一次,不许退回去干等那个 30 秒兜底扫描 ──────────────────────────────
+  // `continueTask` 有一串「一个字都没送出去」的出口(回合被别的执行抢走、验收互斥、
+  // 调度台拒收)。它们原本既不出声也不重排,消息就静静躺在托盘里等 scheduler 的 30s
+  // tick —— 用户看到的是「任务都跑完了,我那句话还挂着」,而日志里什么都没有
+  // (2026-09-30 现场:回合结束到原话进会话 16.7 秒,一条慢日志都没打,因为分段计时只挂
+  // 在成功投递上)。这里用验收锁复现那个「挡回」,钉住两件事:挡回时租约要还、消息要留
+  // 在托盘;挡回的原因一消失,它得**靠自己排的重投**送出去。
+  // 本用例跑在 startScheduler 之前,所以这里能送出去,只可能是挡回时排的那次重投。
+  // 挡回的原因一消失就有两条路能把它送出去(自己排的重投、endAccepting 那一推),所以
+  // 「最后 sent 了」证明不了重投在跑。收一份 warn 出来,把重投这条路单独钉住。
+  const warned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warned.push(args.map(String).join(" ")); realWarn(...args as []); };
+  assert.equal(acceptance.beginAccepting(blockedTaskId), true, "测试前提:验收锁应能占住");
+  await status.setTaskStatus(blockedTaskId, "done");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.ok(
+    warned.some((line) => line.includes("scheduled-blocked") && line.includes("重投（第 1 次）")),
+    `挡回必须留下可归因的日志并排下一次重投，实际：${JSON.stringify(warned)}`,
   );
   assert.equal(
-    steeringAgentEvents.some(({ event }) => event.kind === "system" && event.text?.includes("当前回合已由")),
-    false,
-    "原生引导不应伪装成旧回合结束后重启",
+    (await db.select().from(sessions).where(eq(sessions.taskId, blockedTaskId))).length,
+    0,
+    "验收锁下不该为这条消息起任何一轮",
   );
-  const steeringStatuses = statusEvents.slice(statusEventStart).filter((event) => event.taskId === steerTaskId);
-  assert.equal(steeringStatuses.filter((event) => event.status !== "running").length, 1,
-    `同一活动回合只允许最终结算一次，实际事件：${JSON.stringify(steeringStatuses)}`);
-  const steeredMessage = (await db.select().from(scheduledMessages)
-    .where(eq(scheduledMessages.id, "scheduled-steer"))).at(0)!;
-  assert.equal(steeredMessage.status, "sent", "新方向真正落进会话后才标 sent");
-  assert.equal(steeredMessage.deliveringSince, null, "成功引导后应清掉投递租约");
-  const steeredTask = (await db.select().from(tasks).where(eq(tasks.id, steerTaskId))).at(0)!;
-  assert.equal(steeredTask.completeConfirmedAt, null, "旧方向的完成确认不得污染新方向");
-  assert.equal(steeredTask.resumePrompt, null, "旧方向的 pause 指令不得污染新方向");
-  assert.equal(steeredTask.question, null, "旧方向的提问不得污染新方向");
-  assert.equal(runs.takeConfirmed(steerTaskId), false, "旧方向的内存完成票也应清掉");
-  const steerTranscript = transcript.sessionTranscriptPath(steerTaskId, "scheduled-steer-session");
+  const blockedWhileLocked = (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-blocked"))).at(0)!;
+  assert.equal(blockedWhileLocked.status, "pending", "挡回的消息必须原样留在托盘里");
+  assert.equal(blockedWhileLocked.deliveringSince, null, "挡回之后必须把投递租约还回去");
+  acceptance.endAccepting(blockedTaskId);
   await waitFor(
-    () => existsSync(steerTranscript)
-      && readFileSync(steerTranscript, "utf8").includes("先停下旧方案，改做更稳妥的新方向"),
-    "引导消息没有落回旧 CLI 会话对应的同一条 session 时间线",
+    async () => (await db.select().from(scheduledMessages)
+      .where(eq(scheduledMessages.id, "scheduled-blocked"))).at(0)!.status === "sent",
+    "挡回的原因消失了,消息却没有自己重投——它只能干等 30 秒兜底扫描",
   );
-  assert.match(readFileSync(steerTranscript, "utf8"), /先停下旧方案，改做更稳妥的新方向/,
-    "引导消息应落回旧 CLI 会话对应的同一条 session 时间线");
-  assert.doesNotMatch(readFileSync(steerTranscript, "utf8"), /当前回合已由“引导会话”结束/,
-    "原生引导不应写入一次假的回合结束边界");
-  const steeredOutput = parseSessionOutput(readFileSync(steerTranscript, "utf8"));
-  const steeredUser = steeredOutput.find((segment) => segment.kind === "user" && segment.text.includes("先停下旧方案"));
-  assert.ok(steeredUser?.at, "引导消息必须带精确用户边界时间");
-  const steerTrace = transcript.parseSessionTrace(
-    readFileSync(transcript.sessionTracePath(steerTaskId, "scheduled-steer-session"), "utf8"),
+  await waitFor(
+    async () => (await db.select().from(sessions).where(eq(sessions.taskId, blockedTaskId))).length > 0,
+    "标成 sent 了却没有为它起那一轮运行",
   );
-  const oldTextTrace = steerTrace.find((entry) => entry.event.kind === "text" && entry.event.text.includes("旧方向最后一段正文"));
-  assert.ok(oldTextTrace, "旧方向最后一段正文必须进入结构化 trace");
-  assert.ok(Date.parse(oldTextTrace.at) < Date.parse(steeredUser!.at!), "旧方向正文必须在用户边界前 flush");
   await waitFor(
     async () => {
-      const current = (await db.select().from(tasks).where(eq(tasks.id, steerTaskId))).at(0)!;
-      return current.status !== "running" && current.status !== "queued";
+      const t = (await db.select().from(tasks).where(eq(tasks.id, blockedTaskId))).at(0)!;
+      return t.status !== "running" && t.status !== "queued";
     },
-    "引导出去的新回合没有结算",
+    "重投出去的那一轮没有结算",
   );
-  console.log("✓ 引导会话:Claude 同进程 interrupt + send,清旧状态并在落盘后标 sent");
+  console.warn = realWarn;
+  console.log("✓ 挡回之后自己重投:留下可归因日志,验收锁一放就送出去,不退回去等 30 秒兜底扫描");
 
-  // 活动 handle 不存在(启动缝隙/刚好结束)时不谎报成功，更不能把消息从队列拿走。
-  const unavailableSteer = await steer.steerQueuedMessage("scheduled-steer-unavailable");
-  assert.equal(unavailableSteer.ok, false, "没有可控活动进程时应拒绝升级");
-  if (!unavailableSteer.ok) {
-    assert.match(unavailableSteer.error, /启动|结束|引导/, "无活动回合不得误报成审查或旁路");
-    assert.doesNotMatch(unavailableSteer.error, /审查|旁路/);
-  }
-  const retained = (await db.select().from(scheduledMessages)
-    .where(eq(scheduledMessages.id, "scheduled-steer-unavailable"))).at(0)!;
-  assert.equal(retained.status, "pending", "升级失败的消息必须继续留在队列");
-  assert.equal(retained.deliveringSince, null, "升级失败必须归还投递租约,允许稍后重试");
-  const retainedTaskState = (await db.select().from(tasks).where(eq(tasks.id, steerUnavailableTaskId))).at(0)!;
-  assert.equal(retainedTaskState.completeConfirmedAt, at, "没有活动 handle 时不得提前清掉旧回合完成票");
-  assert.equal(retainedTaskState.resumePrompt, "仍属于当前回合的检查点", "失败点击不得清掉检查点");
-  assert.equal(retainedTaskState.question, "仍属于当前回合的问题", "失败点击不得清掉提问");
-  console.log("✓ 引导会话失败:消息保持 pending 并归还租约");
-
-  // 旧回合已跳过结算、但新回合被验收锁挡回：任务必须离开假 running，消息仍 pending。
-  const lockedOldRun = orchestrator.continueTask(steerLockedTaskId, "保持运行等待引导");
-  await waitFor(() => runs.isRunning(steerLockedTaskId), "验收锁复现的旧回合没有进入 running");
-  await db.insert(scheduledMessages).values(
-    messageRow("scheduled-steer-locked", steerLockedTaskId, "验收结束后再执行这条新方向", "queued"),
-  );
-  assert.equal(acceptance.beginAccepting(steerLockedTaskId), true, "测试前提:验收锁应能占住");
-  const lockedSteer = await steer.steerQueuedMessage("scheduled-steer-locked");
-  acceptance.endAccepting(steerLockedTaskId);
-  assert.equal(lockedSteer.ok, false, "续送被验收锁挡回应如实失败");
-  assert.equal(runs.isRunning(steerLockedTaskId), true, "验收挡回不应强行切断当前原生回合");
-  const lockedSteerMessage = (await db.select().from(scheduledMessages)
-    .where(eq(scheduledMessages.id, "scheduled-steer-locked"))).at(0)!;
-  assert.equal(lockedSteerMessage.status, "pending", "续送失败的原话必须继续排队");
-  assert.equal(lockedSteerMessage.deliveringSince, null, "续送失败应在落位后归还租约");
-  assert.equal(runs.stopTask(steerLockedTaskId), true);
-  assert.equal(await lockedOldRun, true);
-  console.log("✓ 引导被验收挡回:当前回合不断线，原话保留并归还租约");
-
-  // 真引导成功后新方向仍在跑：旧回合迟到的 ask_question（旧 token 或无 token）都不能写入。
-  const lateOldRun = orchestrator.continueTask(steerLateTaskId, "保持运行等待引导");
-  await waitFor(() => runs.isRunning(steerLateTaskId), "迟到工具复现的旧回合没有进入 running");
-  const oldIdentity = (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!;
-  await db.insert(scheduledMessages).values(
-    messageRow("scheduled-steer-late", steerLateTaskId, "保持新方向运行", "queued"),
-  );
-  assert.equal((await steer.steerQueuedMessage("scheduled-steer-late")).ok, true, "迟到工具复现应先成功引导");
-  const newIdentity = (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!;
-  assert.equal(newIdentity.activeTurnToken, oldIdentity.activeTurnToken, "原生引导必须保留 turn token");
-  assert.notEqual(newIdentity.activeDirectionToken, oldIdentity.activeDirectionToken, "引导必须旋转方向 token");
-  assert.equal(newIdentity.activeDirectionVersion, 2, "首次引导必须进入第二个方向世代");
-  const api = new Hono(); runRoutes.mountTaskRunRoutes(api);
-  const ask = (direction?: string) => api.request(`/tasks/${steerLateTaskId}/ask`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-ash-turn-token": oldIdentity.activeTurnToken!,
-      ...(direction ? { "x-ash-direction-token": direction } : {}) },
-    body: JSON.stringify({ question: "current question after native steer" }),
+  // 「引导会话」那一组(硬切 + 原生 steer + 验收挡回 + 迟到工具调用)搬去了
+  // scheduled-steer-cases.ts —— 这份已经顶到 700 行上限，再加用例必须先拆。
+  await runSteerCases({
+    at, waitFor, messageRow, statusEvents, agentEvents,
+    steerTaskId, steerLockedTaskId, steerLateTaskId, steerUnavailableTaskId,
   });
-  assert.equal((await ask(oldIdentity.activeDirectionToken!)).status, 409, "旧方向迟到提问必须被拒绝");
-  assert.equal((await ask()).status, 409, "缺少新方向身份的提问必须被拒绝");
-  assert.equal((await ask(newIdentity.activeDirectionToken!)).status, 200, "新方向工具调用应继续有效");
-  await db.update(tasks).set({ question: null, questionOptions: null, questionItems: null }).where(eq(tasks.id, steerLateTaskId));
-  assert.equal(
-    (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.question,
-    null,
-    "测试收尾前应清掉问题卡",
-  );
-  assert.equal(runs.stopTask(steerLateTaskId), true, "测试收尾应停止挂起的新方向");
-  assert.equal(await lateOldRun, true);
-  await waitFor(async () => (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.status !== "running",
-    "挂起的新方向没有完成停止结算");
-  console.log("✓ 原生引导保留 turn token、旋转方向 token，旧方向迟到调用被拒绝");
 
   // ── 进程死在投递中途:重启后必须自己回来。锁不是唯一能掐断投递的东西，服务重启会把内存里
   // 的等待/在途标记连根拔掉。所以「有人正在送」必须**落库**成一个可回收的租约,而不是
@@ -674,6 +592,7 @@ try {
   rmSync(join(paths.RUNS_DIR, queuedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, lockedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, crashTaskId), { recursive: true, force: true });
+  rmSync(join(paths.RUNS_DIR, blockedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, steerTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, steerUnavailableTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, steerLockedTaskId), { recursive: true, force: true });
