@@ -58,7 +58,7 @@ export interface CliModelCatalog {
  * 服务端返回的 `probeSupported`。与 server catalog 里填了 `models` 的
  * type 是否一致,由 `server/scripts/test-cli-models.ts` 断言,不靠自觉。
  */
-export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", "grok", "pi"]);
+export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", "codex", "grok", "pi"]);
 
 // CLI-native model aliases used when an executor is on its official account.
 // Provider-backed executors replace these with that provider's /v1/models list.
@@ -69,7 +69,9 @@ export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", 
 // 会现问 CLI 并缓存,前端也给了「刷新」入口;探不到才退回这里。
 export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   claude: ["opus", "sonnet", "haiku", "fable"],
-  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
+  // 2026-09-30 用 `codex debug models`(0.153.4)核对:按 priority 排,gpt-5.4 已被 codex
+  // 自己标成 hide,所以兜底里也去掉 —— 装了 CLI 的机器上这份根本用不到(会现问)。
+  codex: ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.2"],
   // Antigravity(agy)的 model slug **自带 effort 后缀**:官方 docs/cli/headless 里
   // 唯一的实例是 `--model gemini-3.5-flash-medium`,其余按 docs/models 模型选择器的
   // 展示名(Gemini 3.6/3.5 Flash 各 Low/Medium/High、3.1 Pro 的 Low/High)照同一条
@@ -150,7 +152,8 @@ export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
 // 同样是全键 Record;空数组 = 该 CLI 没有(或还没实测出)思考强度档位。
 export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
-  codex: ["low", "medium", "high", "xhigh", "ultra", "max"],
+  // ultra 排在 max 之后:codex 自己的目录就是这个序(max=最深推理,ultra=最深推理+自动委派)。
+  codex: ["low", "medium", "high", "xhigh", "max", "ultra"],
   // 2026-07-30 核对 docs/cli/headless 与 changelog:`--effort` 在 CLI 1.1.5 加入,只有这三档。
   // 注意 model slug 本身也带 effort 后缀(gemini-3.5-flash-medium),两边同时给的行为未实测。
   antigravity: ["low", "medium", "high"],
@@ -212,11 +215,19 @@ export interface ModelEffortRule {
 }
 
 const CODEX_CLASSIC_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
-const CODEX_56_EFFORTS = ["low", "medium", "high", "xhigh", "ultra"] as const;
+// 2026-09-30 用 `codex debug models`(0.153.4)的 supported_reasoning_levels 逐个核对。
+// 顺序照它报的来:`max` 是「最深推理」,`ultra` 是「最深推理 + 自动任务委派」,后者更高。
+const CODEX_TOP_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
+// luna 是同代里唯一没有 ultra 的 —— 之前一条 `gpt-5.6` 前缀规则给三个模型发同一套,
+// 于是 luna 多出一个会被 API 拒掉的档,sol/terra 又少了实际支持的 max。
+const CODEX_56_LUNA_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export const MODEL_EFFORT_RULES: readonly ModelEffortRule[] = [
-  // Codex：每个模型家族写完整集合；5.6 已确认 ultra，max 未确认所以不列。
-  { id: "codex:gpt-5.6", types: ["codex"], match: { model: "gpt-5.6", mode: "prefix" }, efforts: CODEX_56_EFFORTS },
+  // Codex：每个模型家族写完整集合。命中按特异度打分(见 ruleScore),所以 luna 这条
+  // 更长的前缀会赢过下面那条 gpt-5.6 通条,声明顺序不影响结果。
+  { id: "codex:gpt-6", types: ["codex"], match: { model: "gpt-6", mode: "prefix" }, efforts: CODEX_TOP_EFFORTS },
+  { id: "codex:gpt-5.6-luna", types: ["codex"], match: { model: "gpt-5.6-luna", mode: "prefix" }, efforts: CODEX_56_LUNA_EFFORTS },
+  { id: "codex:gpt-5.6", types: ["codex"], match: { model: "gpt-5.6", mode: "prefix" }, efforts: CODEX_TOP_EFFORTS },
   { id: "codex:gpt-5.5", types: ["codex"], match: { model: "gpt-5.5", mode: "prefix" }, efforts: CODEX_CLASSIC_EFFORTS },
   { id: "codex:gpt-5.4", types: ["codex"], match: { model: "gpt-5.4", mode: "prefix" }, efforts: CODEX_CLASSIC_EFFORTS },
   { id: "codex:gpt-5.3", types: ["codex"], match: { model: "gpt-5.3", mode: "prefix" }, efforts: CODEX_CLASSIC_EFFORTS },

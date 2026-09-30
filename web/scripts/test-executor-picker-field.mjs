@@ -27,6 +27,26 @@ try {
     contentType: "application/json",
     body: "[]",
   }));
+  // 模型候选必须**喂固定的**:这条端点现在会现问本机 CLI(grok/codex/pi 都是),
+  // 不 mock 的话断言等于钉在了跑测试那台机器的 CLI 版本上 —— 本机 grok 从 1.0.3
+  // 升到 1.0.41、清单从 grok-4.5 变成 grok-4.7,这个用例就红了,而它想测的
+  // 「选完模型智能体不许弹回去」跟有哪些模型毫无关系。
+  await page.route("**/api/agents/models*", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify([{
+      type: "grok",
+      models: ["grok-4.6", "grok-4.5"],
+      defaultModel: "grok-4.6",
+      source: "probe",
+      probeSupported: true,
+      available: true,
+      probedAt: new Date().toISOString(),
+      cliVersion: "grok 1.0.3 (test fixture)",
+      error: null,
+      skipped: null,
+    }]),
+  }));
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/executor-picker-field.html`);
 
   const agentTrigger = page.getByRole("button", { name: /智能体：/ });

@@ -113,7 +113,15 @@ export function ProviderModelInput({
     return () => { alive = false; };
   }, [provider?.id, provider?.protocol, provider?.baseUrl, provider?.modelListMode, provider?.pinnedModels, type, cacheVersion]);
 
-  const groupName = provider ? provider.name : `${type} 预设`;
+  // 分组标题要跟着**来源**走。写死「预设」是从 codex 只有内置快照那会儿留下的:
+  // 现在 codex/grok/pi 都是现问 CLI,组里明明是实时清单、抬头却写「预设」,等于把
+  // 这套代码到处强调的诚实边界反着做了一遍(下面 cliCatalogNote 说的是另一回事)。
+  const cliGroupName = cli.catalog?.source === "probe"
+    ? `${type} · CLI 实时清单`
+    : cli.catalog?.source === "docs"
+      ? `${type} · 官方文档`
+      : `${type} 预设`;
+  const groupName = provider ? provider.name : cliGroupName;
   // 供应商那条走探测状态,CLI 那条走服务端现问的结果。
   const candidates = provider ? models : cli.catalog ? [...cli.catalog.models] : [];
   // 「默认」两边都有:供应商是用户自己配的,CLI 是它自己报的(`Default model:` 那行)。

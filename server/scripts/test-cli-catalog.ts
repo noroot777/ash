@@ -155,10 +155,23 @@ assert.deepEqual(
   ["low", "medium", "high", "xhigh"],
   "带 provider 前缀/后缀名的同一模型也要收窄",
 );
+// 2026-09-30 用 `codex debug models` 的 supported_reasoning_levels 逐个核对过:
+// 同一代里档位并不一致,所以这里同时钉住「有 ultra 的」和「没有的」两侧 —— 只测一个
+// 的话,一条 `gpt-5.6` 前缀通条给三个模型发同一套档位仍然能过。
 assert.deepEqual(
   reasoningEffortsFor("codex", "gpt-5.6-sol"),
-  ["low", "medium", "high", "xhigh", "ultra"],
-  "gpt-5.6 系列恢复 ultra；未确认的 max 不应混进来",
+  ["low", "medium", "high", "xhigh", "max", "ultra"],
+  "gpt-5.6-sol 支持到 ultra，max 也在其中",
+);
+assert.deepEqual(
+  reasoningEffortsFor("codex", "gpt-5.6-luna"),
+  ["low", "medium", "high", "xhigh", "max"],
+  "同代的 luna 没有 ultra：更长的前缀规则要赢过 gpt-5.6 通条",
+);
+assert.deepEqual(
+  reasoningEffortsFor("codex", "gpt-6-astra"),
+  ["low", "medium", "high", "xhigh", "max", "ultra"],
+  "gpt-6 系列要有自己的规则，不能掉回 CLI 并集",
 );
 assert.deepEqual(
   reasoningEffortsFor("opencode", "anthropic/claude-opus-4-8"),

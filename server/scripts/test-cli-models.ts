@@ -9,7 +9,7 @@
 //   ③ 每个 AgentType 都拿得到 catalog,Claude 文档及 spec.models 能力与按钮一致;
 //   ④ 没有清单命令 / 没装 CLI 时诚实降级:source==="preset" 且 models 等于内置快照;
 //   ⑤ 缓存命中不重复起子进程,force 会绕过缓存,降级结果比成功结果短命;
-//   ⑥ 本机装了 grok 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提);
+//   ⑥ 本机装了 grok / codex 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提);
 //   ⑦ 多人模式下**一次都不问宿主机 CLI**(§八),连自用模式下探到的缓存也不许端出来。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -32,6 +32,7 @@ requireTmpDb("test-cli-models");
 
 const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
 const { parseGrokModels } = await import("../src/executors/catalog/grok.js");
+const { parseCodexModels } = await import("../src/executors/catalog/codex.js");
 const { parsePiModels } = await import("../src/executors/catalog/pi.js");
 const { extractClaudeDocModels } = await import("../src/executors/claude-doc-models.js");
 const { catalogTtlMs, modelCatalogFor, modelCatalogs, normalizeModelList, resetModelCatalogCache } =
@@ -92,6 +93,44 @@ Available models:
   // ANSI 色码是 CLI 输出的常态(它并不总是判断 TTY),不能因此漏掉模型。
   const parsed = parseGrokModels("Available models:\n  * [32mgrok-4.6[0m (default)\n");
   assert.deepEqual(parsed.models, ["grok-4.6"], "grok:带色码的输出也要能解析");
+}
+
+// `codex debug models` 是 JSON:字段齐全但混着 codex 自己都不列的内部模型。
+// 这段是 0.153.4 实测输出的**结构**裁剪版(每个模型真身还带 500KB 的 prompt 模板)。
+const CODEX_REAL = JSON.stringify({
+  models: [
+    { slug: "gpt-5.5", visibility: "list", priority: 12 },
+    { slug: "gpt-6-astra", visibility: "list", priority: 1 },
+    { slug: "gpt-daybreak-blue-latest", visibility: "hide", priority: 10 },
+    { slug: "codex-auto-review", visibility: "hide", priority: 43 },
+    { slug: "gpt-5.6-sol", visibility: "list", priority: 6 },
+  ],
+});
+{
+  const parsed = parseCodexModels(CODEX_REAL);
+  assert.deepEqual(
+    parsed.models,
+    ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.5"],
+    "codex:按 priority 升序,且 visibility=hide 的内部模型不进候选",
+  );
+  // codex 的目录里没有「默认模型」字段(实际默认还受 ~/.codex/config.toml 影响),
+  // 不许拿 priority 最小的那个冒充 —— 界面会据此打「CLI 默认」标记。
+  assert.equal(parsed.defaultModel, null, "codex:没有默认模型字段就必须报 null");
+}
+{
+  // 升级提示之类会印在 JSON 前面,从第一个 `{` 截起才解析得动。
+  const parsed = parseCodexModels(`A new version of codex is available!\n${CODEX_REAL}`);
+  assert.equal(parsed.models[0], "gpt-6-astra", "codex:JSON 前面的噪音行不能让解析失败");
+}
+{
+  assert.deepEqual(parseCodexModels("command not found").models, [], "codex:非 JSON 输出解析成空数组");
+  assert.deepEqual(parseCodexModels('{"models":"nope"}').models, [], "codex:models 不是数组时不许硬凑");
+  assert.deepEqual(parseCodexModels("{}").models, [], "codex:缺 models 字段解析成空数组");
+}
+{
+  // 老版本 CLI 还没有 visibility/priority 字段时,少列一个真实模型比多列一个内部代号更糟。
+  const parsed = parseCodexModels(JSON.stringify({ models: [{ slug: "gpt-x" }, { slug: "gpt-y" }] }));
+  assert.deepEqual(parsed.models, ["gpt-x", "gpt-y"], "codex:字段缺失时按可见处理并保持原序");
 }
 
 {
@@ -252,6 +291,24 @@ assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败�
       // 没登录也是合法状态 —— 但必须说清楚为什么退回快照,不许装作实时目录。
       assert.ok(catalog.error, "探测失败必须带上原因,否则界面只能显示一个假的实时清单");
       console.log(`· grok 装着但没探到清单(${catalog.error}),已降级到快照 —— 符合预期`);
+    }
+  }
+}
+
+{
+  const codex = CLI_SPEC_BY_KEY.codex;
+  const installed = await probeBins(codex.bins, codex.fallbackVersionMatch);
+  if (!installed) {
+    console.log("· 本机没装 codex,跳过真实探测断言(机制本身已由上面几条覆盖)");
+  } else {
+    const catalog = await modelCatalogFor("codex", true);
+    assert.ok(catalog.available, "探到了 bin 就该报 available");
+    if (catalog.source === "probe") {
+      assert.ok(catalog.models.length > 0, "codex 探测成功应给出非空清单");
+      console.log(`· codex ${catalog.cliVersion ?? "?"} 实探:${catalog.models.join(", ")}`);
+    } else {
+      assert.ok(catalog.error, "探测失败必须带上原因,否则界面只能显示一个假的实时清单");
+      console.log(`· codex 装着但没探到清单(${catalog.error}),已降级到快照 —— 符合预期`);
     }
   }
 }
