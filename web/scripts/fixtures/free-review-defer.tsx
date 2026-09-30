@@ -80,7 +80,7 @@ const mixed = round({
 const debated = round({ reason: "第 1 条读错了行号：那一行是生成代码。", deferReason: null }, [finishedDebate]);
 
 const state = { taskId: "defer-task", stateVersion: 2 } as never;
-const deferredTask = { id: "derived-1", title: "承接第 1 轮审查的越界意见：原任务" };
+const deferredTask = { id: "derived-1", title: "原任务 · 承接第 1 轮审查的越界意见" };
 
 const nativeFetch = window.fetch.bind(window);
 window.fetch = (input, init) => {

@@ -118,7 +118,7 @@ try {
   await page.waitForFunction(() => (window.__notices ?? []).length === 1);
   assert.match(
     (await page.evaluate(() => window.__notices))[0],
-    /已转为独立任务：承接第 1 轮审查的越界意见/,
+    /已转为独立任务：原任务 · 承接第 1 轮审查的越界意见/,
     "提示里要带上建出来的那个任务，否则用户不知道东西落到哪儿去了",
   );
 

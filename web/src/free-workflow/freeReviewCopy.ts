@@ -129,6 +129,25 @@ export function waivedDisputeRound(run: FreeReviewRun | null | undefined): FreeR
   return resolution === "withdrawn" || resolution === "deferred" ? round : null;
 }
 
+/**
+ * 整个任务上**已经裁定成「不在本任务里修」**的那几轮（转独立任务 / 采纳执行者说法）。
+ *
+ * 派审面上只用它显示一句话：这几条服务端会自动讲给下一位审查者听，附言里不必再复述
+ * 一遍。不说的话用户无从知道这件事已经自动化了，只会照旧每轮手打「有异议的已经转为
+ * 新任务，只审查本次改动内容」（用户 2026-09-30 反馈）。真正把它拼进 prompt 的是服务端
+ * free-review-settled.ts —— 这里只负责**告诉用户有这回事**，措辞不必两边对齐。
+ */
+export function settledDisputeRounds(
+  runs: readonly FreeReviewRun[] | null | undefined,
+): { round: number; resolution: "withdrawn" | "deferred" }[] {
+  return (runs ?? []).flatMap((run) => run.rounds).flatMap((round) => {
+    const resolution = round.dispute?.resolution;
+    return resolution === "withdrawn" || resolution === "deferred"
+      ? [{ round: round.round, resolution }]
+      : [];
+  });
+}
+
 export function freeReviewView(state: FreeWorkflowState | null | undefined, task: Task): FreeReviewView {
   // 合并结果审查是验收后的独立只读链，不参与验收前的修复、新鲜度和预约语义。
   const reviews = (state?.reviews ?? []).filter((run) => run.target?.kind !== "accepted_merge");

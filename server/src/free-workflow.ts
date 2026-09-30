@@ -431,7 +431,7 @@ export async function handleFreeWorkflowSettlement(
     // 用户在这期间保存的新预约一起删掉（审查实测同型交错）。没挂上时槽里那条是用户的，
     // 一个字都不能动。
     const armed = hooked ? await readFreeReviewReservation(taskId) : null;
-    continueWhenIdle(taskId, freeRepairPrompt(taskId, run), { byBackend: true }, async (error) => {
+    continueWhenIdle(taskId, await freeRepairPrompt(taskId, run), { byBackend: true }, async (error) => {
       const canceled = armed ? await consumeFreeReviewReservation(taskId, armed) : null;
       await appendTaskTimeline(taskId, canceled
         ? `自由工作流审查意见投递失败：${error}；自动复审已取消，可手动按意见修复或再派审查。`
@@ -607,7 +607,7 @@ async function deliverManualRepair(taskId: string, run: ReviewRunRow): Promise<v
     const round = await currentRoundOf(run);
     const delivered = await continueTask(
       taskId,
-      freeManualRepairPrompt(taskId, run, {
+      await freeManualRepairPrompt(taskId, run, {
         disputeUpheld: round?.disputeResolution === "upheld",
         resolutionNote: round?.disputeResolutionNote ?? null,
         debateClosing: round ? await debateClosingOf(round.id) : null,

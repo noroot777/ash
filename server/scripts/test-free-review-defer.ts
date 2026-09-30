@@ -10,7 +10,7 @@
 // ⑤ 修复入口跟着关掉——那几条已经有别的任务在承接，在本任务里再修一遍就是两处各改一版。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -44,6 +44,8 @@ try {
   const { deferOpenDispute } = await import("../src/free-review-defer.js");
   const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
   const { freeReviewEvidenceDir, freeReviewReportPath } = await import("../src/free-review-files.js");
+  const { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } = await import("../src/free-review-prompts.js");
+  const { SETTLED_RULINGS_FILE, settledRulingsOf } = await import("../src/free-review-settled.js");
 
   await ensureSchema();
   const at = new Date().toISOString();
@@ -165,6 +167,10 @@ try {
   assert.equal(derived.originTaskId, "f-defer", "回链到原任务");
   assert.equal(derived.parentId, null, "它是独立任务，不是谁的执行者");
   assert.equal(derived.workflowMode, "free");
+  // 标题**先说是哪个任务，再说派生缘由**：缘由放前面时，列表里连着几条派生任务只剩同一
+  // 串前缀，真正区分它们的那半截被挤到省略号之后（用户 2026-09-30 反馈）。
+  assert.equal(derived.title, "原任务 f-defer · 承接第 1 轮审查的越界意见",
+    "派生任务标题必须是「原任务名 · 缘由」，不是「缘由：原任务名」");
   assert.equal(derived.agentType, "codex", "执行器配置继承原任务");
   assert.equal(derived.mergeTargetBranch, "main", "最终合入目标继承原任务，与开工起点各算各的");
   assert.equal(derived.worktreeBase, reviewedCommit,
@@ -228,6 +234,117 @@ try {
     "没选转出就不该留下派生任务");
   await rejects(() => startManualFreeReviewRepair("f-mixed"), "已被你裁定作废",
     "withdrawn 的措辞一个字不变（现有两条出路语义不许动）");
+
+  // ── ⑧ 裁定过的那几条自动讲给下一轮，两侧都讲 ──
+  // 不做这一步的话，用户每次派审都得手打一句「有异议的已经转为新任务，只审查本次改动
+  // 内容」——一条系统自己就记着的事实，靠人每轮复述（用户 2026-09-30 反馈）。
+  const nextRun: Parameters<typeof freeReviewPrompt>[1] = {
+    id: "f-defer-run-2", taskId: "f-defer", reviewerId: "reviewer", reviewerName: "逻辑审查者",
+    agentType: "codex", executorId: "ex", model: null, reasoningEffort: null, checkMode: "logic",
+    note: null, retryLimit: 1, targetKind: "workspace", targetBranch: null, targetBaseCommit: null,
+    targetCommit: null, repairTaskId: null, currentRound: 1, status: "reviewing",
+    createdAt: at, updatedAt: at, finishedAt: null,
+  };
+  const nextPrompt = await freeReviewPrompt(sourceRow, nextRun, 1, repo);
+  assert.match(nextPrompt, /已由用户裁定、不在本任务里修的意见/, "下一轮审查提示必须带上已裁定的那几条");
+  assert.ok(nextPrompt.includes(derived.id), "要指名承接它们的那个独立任务，否则审查者无从核对");
+  assert.ok(nextPrompt.includes("第 2、3 条成立"), "执行者当时逐条写的越界依据要带过去（哪几条靠它认）");
+  assert.ok(nextPrompt.includes("这几条连同上一轮那个 helper 一起重写"), "用户裁定时写的要点也要带过去");
+  assert.match(nextPrompt, /本轮\*\*不要再报\*\*/, "审查者那一侧的落点是「不要再报」");
+  assert.match(nextPrompt, /新出现\*\*的问题不受此限/, "但不能把审查者的嘴封死：同一处的新问题照常报");
+
+  const nextRepair = await freeRepairPrompt("f-defer", nextRun);
+  assert.match(nextRepair, /已由用户裁定、不在本任务里修的意见/, "执行者那一侧也要知道，否则它会照新报告再改一遍");
+  assert.match(nextRepair, /不要在这里改，调用 dispute_review/, "执行者那一侧的落点是「走转出这个出口」而不是照改");
+  assert.ok(nextRepair.includes("在 deferReason 里指名承接它们的那个任务"),
+    "转出过的那几条要指明走 deferReason 这个出口");
+  assert.ok(!nextRepair.includes("已被裁定作废的那几条"), "这个任务没裁定过作废，就别讲作废那一档怎么办");
+
+  // 没有裁定过的任务不许凭空多出这一节（空清单必须什么都不加）。
+  const cleanSource = (await db.select().from(tasks).where(eq(tasks.id, "f-no-offer"))).at(0)!;
+  const cleanPrompt = await freeReviewPrompt(
+    cleanSource, { ...nextRun, id: "f-no-offer-run-2", taskId: "f-no-offer" }, 1, repo);
+  assert.doesNotMatch(cleanPrompt, /已由用户裁定/, "没裁定过的任务不该凭空多出这一节");
+
+  // ── ⑨ 裁定攒多了也一条都不许丢（第 1 轮审查复现的那条） ──
+  // 曾按条数只留最近 4 条，于是第 5 次裁定之后最早那次转出的意见在三条交接里全部消失，
+  // 界面却仍按全部条数承诺「会自动讲给审查者」——用户又得手写那句话。现在清单不截断，
+  // 只在正文超预算时省掉**正文**，并明说去哪读。
+  const bulk = "越界依据正文".repeat(400); // 远超单段上限，用来把正文预算撑爆
+  for (let n = 1; n <= 8; n += 1) {
+    const stamp = `2027-01-0${n}T00:00:00.000Z`;
+    await db.insert(freeReviewRuns).values({
+      id: `f-defer-hist-${n}`, taskId: "f-defer", reviewerId: "reviewer", reviewerName: "逻辑审查者",
+      agentType: "codex", executorId: "ex", checkMode: "logic", retryLimit: 1, currentRound: 1,
+      status: "stopped", createdAt: stamp, updatedAt: stamp, finishedAt: stamp,
+    });
+    await db.insert(freeReviewRounds).values({
+      id: `f-defer-hist-${n}-round`, runId: `f-defer-hist-${n}`, round: 1, status: "failed",
+      conclusion: "verify_failed", reviewedCommit, disputeDeferReason: `第 ${n} 次转出：${bulk}`,
+      disputeResolution: "deferred", disputeResolvedAt: stamp, disputeDeferredTaskId: `f-defer-derived-${n}`,
+      startedAt: stamp, endedAt: stamp,
+    });
+  }
+  const many = await settledRulingsOf("f-defer", { runId: "f-defer-run-3", round: 1 });
+  assert.equal(many.length, 9, "9 次裁定就得回 9 条：界面按全部条数承诺会自动讲，服务端不能偷偷少讲几条");
+  const manyPrompt = await freeReviewPrompt(sourceRow, { ...nextRun, id: "f-defer-run-3" }, 1, repo);
+  for (let n = 1; n <= 8; n += 1) {
+    assert.ok(manyPrompt.includes(`f-defer-derived-${n}`), `第 ${n} 次转出的承接任务不许从提示里消失`);
+  }
+  assert.ok(manyPrompt.includes(derived.id), "最早那次转出的承接任务同样不许消失");
+  // 正文超预算时省的是**正文**，且必须说出来并给一个**真读得到全文**的去处。
+  // 第 2 轮审查复现过一版假去处：那时指回 report.md，而裁定依据根本不在报告里。
+  assert.match(manyPrompt, /逐条依据没有内联/, "正文带不下时要明说，不能悄悄少一段");
+  assert.ok(manyPrompt.includes(freeReviewReportPath("f-defer", "f-defer-hist-1", 1)),
+    "被省掉正文的那条也要留下它那一轮的报告路径");
+  const fullTextPath = join(freeReviewEvidenceDir("f-defer", "f-defer-run-3", 1), SETTLED_RULINGS_FILE);
+  // 判在**那一行**上：整段提示里到处都有这个路径（截断处也指它），只断言「出现过」
+  // 的话，去处退回 report.md 也照样绿。
+  const omission = manyPrompt.split("\n").find((line) => line.includes("逐条依据没有内联"))!;
+  assert.ok(omission.includes(fullTextPath), "省掉正文那一行要指向落盘的全文文件");
+  assert.ok(!omission.includes("report.md"), "去处不许是那一轮的报告：裁定依据根本不在报告里");
+  assert.match(omission, /别去翻上面那份报告：裁定内容不在报告里/, "要写明报告里没有裁定内容，免得读者白跑一趟");
+  // 去处必须**真的**读得到那几段正文——上一版就是路径存在、内容不在。
+  const fullText = readFileSync(fullTextPath, "utf8");
+  for (let n = 1; n <= 8; n += 1) {
+    assert.ok(fullText.includes(`第 ${n} 次转出：`), `全文文件里必须有第 ${n} 次转出的逐条依据`);
+  }
+  assert.ok(fullText.includes("第 2、3 条成立"), "最早那次转出的依据同样要在全文文件里");
+  assert.ok(fullText.includes("这几条连同上一轮那个 helper 一起重写"), "用户裁定要点也要能在全文文件里读到");
+  // 单段超过内联上限时，截断处指的也得是这份全文文件（那里存的是没截过的原文）。
+  assert.match(manyPrompt, /截断，全文见 /, "内联那份被单段上限截掉时要说清去哪读原文");
+  assert.ok(fullText.includes(bulk), "落盘的是原文，不能把内联那份截断后的文本写进去");
+  const readBack = await settledRulingsOf("f-defer", { runId: "f-defer-run-3", round: 1 });
+  assert.ok((readBack.at(-1)?.deferReason?.length ?? 0) > 1_200, "SettledRuling 里存的是原文，截断只发生在内联那一刻");
+  const manyRepair = await freeRepairPrompt("f-defer", { ...nextRun, id: "f-defer-run-3" });
+  const manyManual = await freeManualRepairPrompt("f-defer", { ...nextRun, id: "f-defer-run-3" });
+  for (const prompt of [manyRepair, manyManual]) {
+    assert.ok(prompt.includes("f-defer-derived-1") && prompt.includes("f-defer-derived-8"),
+      "执行者那两条交接同样一条都不许丢");
+  }
+
+  // ── ⑩ 旧裁定不许压过本轮的新裁定，也不许把作废当成永久豁免 ──
+  // f-mixed 那一轮被裁定 withdrawn（采纳执行者）。两件事各有判据：
+  const mixedSource = (await db.select().from(tasks).where(eq(tasks.id, "f-mixed"))).at(0)!;
+  const mixedRun = { ...nextRun, id: "f-mixed-run-2", taskId: "f-mixed" };
+  // ① 常态下，作废掉的是**当时那份依据**而不是永久豁免：审查者那一侧明写了「有新依据
+  //    可以重提」，执行者这一侧要是无条件禁止修，同一条就卡在两边规矩中间谁都动不了。
+  const mixedExec = await freeRepairPrompt("f-mixed", mixedRun);
+  assert.match(mixedExec, /作废的是\*\*当时那份依据\*\*，不是永久豁免/,
+    "执行者那一侧不能把 withdrawn 讲成永久豁免——审查者带着新依据重提时它得能改");
+  assert.match(mixedExec, /只有\*\*原样重提\*\*同一条才用 dispute_review/, "驳回只留给原样重提那一种");
+  const mixedReview = await freeReviewPrompt(mixedSource, mixedRun, 1, repo);
+  assert.match(mixedReview, /裁定之后才成立的新依据/, "审查者那一侧的口子照旧留着（两侧口径必须对得上）");
+  // ② 用户这一轮已经裁定「接着改」时，这一节只能当背景：再指路去驳回就是跟开场白
+  //    正面打架，而且那条路已经关了（同一轮只能驳一次，再调会被 409 一样地拒）。
+  const upheldExec = await freeManualRepairPrompt("f-mixed", mixedRun, { disputeUpheld: true });
+  assert.ok(!upheldExec.includes("不要在这里改，调用 dispute_review"),
+    "用户已裁定接着改，这一节不能再指路去驳回（开场白刚说完「不要再驳回」）");
+  assert.match(upheldExec, /以那条裁定为准/, "要写明以本轮裁定为准，而不是让执行者自己在两条指令间挑一个");
+  assert.match(upheldExec, /这一轮不要再驳回：同一轮的驳回只能提一次/, "要说清那条路已经关了，别让它去撞 409");
+  assert.match(upheldExec, /用 ask_question 问清楚/, "关掉一个出口就得给另一个，否则它只能自己猜");
+  assert.ok(upheldExec.includes("第 1 条读错了行号"), "降级成背景 ≠ 把事实删掉：旧裁定的依据仍要带着");
+  assert.match(upheldExec, /此前已由用户裁定过的意见（背景）/, "标题也要跟着降级，否则整节仍读成「这几条不用改」");
 
   console.log("free review defer ok");
 } catch (error) {

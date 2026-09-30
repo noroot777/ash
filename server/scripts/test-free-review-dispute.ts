@@ -314,7 +314,7 @@ try {
   assert.equal(await debateClosingOf(debated.roundId), null,
     "中断的那场没说到收尾，不能把半截发言当成收尾塞进修复指令");
 
-  const repairPrompt = freeManualRepairPrompt("d-closing", closingRun, {
+  const repairPrompt = await freeManualRepairPrompt("d-closing", closingRun, {
     disputeUpheld: true,
     resolutionNote: "第 2 条按摘要内部折叠做，别按报告里的降档方案。",
     debateClosing: readClosing,
@@ -331,7 +331,7 @@ try {
     "必须写明裁定要点压过报告：两份打架的要求让执行者自己挑，挑错了没人会发现");
 
   // 没辩过、也没写要点时，措辞一个字都不多——那两段是条件性的，不是模板里的常驻噪音。
-  const bare = freeManualRepairPrompt("d-closing", closingRun, { disputeUpheld: true });
+  const bare = await freeManualRepairPrompt("d-closing", closingRun, { disputeUpheld: true });
   assert.ok(!bare.includes("辩论收尾发言"), "没辩过就不该出现收尾那一节");
   assert.ok(!bare.includes("裁定时写给你的要点"), "没写要点就不该出现要点那一节");
 

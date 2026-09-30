@@ -4,6 +4,7 @@ import type { AgentExecutorProfile, FreeReviewCheckMode, FreeReviewExecutorOverr
 import { MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
 import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, X } from "@phosphor-icons/react";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
+import { settledDisputeRounds } from "./freeReviewCopy.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
@@ -76,6 +77,15 @@ export function FreeReviewDialog({
     ? "审查合并结果"
     : reservationMode ? (state?.reviewReservation?.armed ? "调整预约审查" : "预约审查") : "派审查";
   const types = useMemo(() => registeredAgentTypes(profiles), [profiles]);
+  // 已裁定「不在本任务里修」的那几轮：服务端派审时会自动讲给审查者听（见后端
+  // free-review-settled.ts）。这里摆一句，否则用户不知道这件事已经自动化了，只会
+  // 照旧每轮手打「有异议的已经转为新任务，只审查本次改动内容」。
+  const settled = useMemo(() => settledDisputeRounds(state?.reviews), [state?.reviews]);
+  // 轮号跨 run 会重复（第二条审查链又从第 1 轮数起），所以这里只报条数、不报轮号。
+  const noteHint = settled.length
+    ? `Enter 提交 · Shift+Enter 换行 · 已有 ${settled.length} 处意见被你裁定「不在本任务里修」` +
+      "（转为独立任务或作废），派审时会自动讲给审查者，不必在这里重复说明"
+    : "Enter 提交 · Shift+Enter 换行";
   // 预约里的覆盖每次轮询都是新对象，直接进依赖会把用户正在改的草稿冲掉；按值序列化当键。
   const reservedOverrideKey = JSON.stringify(state?.reviewReservation?.override ?? null);
   const selectedReviewer = reviewers.find((item) => item.id === selectedId) ?? null;
@@ -323,7 +333,7 @@ export function FreeReviewDialog({
                     event.currentTarget.form?.requestSubmit();
                   }}
                 />
-                <small id="free-review-note-hint">Enter 提交 · Shift+Enter 换行</small>
+                <small id="free-review-note-hint">{noteHint}</small>
               </label>
               <p>{postMerge ? "这次只检查冻结的合并快照，不改动原任务。若发现问题，可从审查记录创建基于该 merge commit 的独立修复任务。" : "默认 1 轮：首次审查未通过后，执行方修完会自动再审一次。逻辑检查遇到可见前端改动时必须真实打开页面并截图。"}</p>
             </section>
