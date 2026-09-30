@@ -11,7 +11,14 @@ export function beginAccepting(taskId: string): boolean {
 }
 
 export function endAccepting(taskId: string): void {
-  acceptingTaskIds.delete(taskId);
+  if (!acceptingTaskIds.delete(taskId)) return;
+  // 验收期间被挡回的排队消息现在可以送了。投递那边只有「有界重试 + 30 秒兜底扫描」,
+  // 一次验收(尤其带发布/命令的尾段)轻易就超过重试窗口,消息于是要多躺一整个 tick
+  // 才被捡走 —— 而这一刻我们**确知**挡回的原因没了,直接推一把最省事。
+  // 动态 import:pending-messages 那条链路会回头读任务/回合状态,静态引会绕回来成环。
+  void import("./pending-messages.js")
+    .then(({ flushPendingForTask }) => flushPendingForTask(taskId))
+    .catch((error) => console.error(`[ash] 验收结束后补送排队消息失败 task=${taskId}:`, error));
 }
 
 /** 验收（含尾段）是否正在进行。 */
