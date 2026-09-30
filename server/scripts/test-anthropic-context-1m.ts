@@ -175,5 +175,11 @@ await directRun.cleanup?.();
 
 upstream.close();
 await once(upstream, "close");
+const disconnected = await app.request("/llm-providers/provider-1/context-1m/v1/models", {
+  headers: { authorization: "Bearer secret-key" },
+});
+assert.equal(disconnected.status, 502);
+assert.match(await disconnected.text(), /ECONNREFUSED/);
+assert.match(disconnected.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
 for (const suffix of ["", "-shm", "-wal"]) rmSync(dbPath + suffix, { force: true });
 console.log("anthropic context 1m tests passed");

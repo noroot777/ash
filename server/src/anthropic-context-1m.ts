@@ -5,6 +5,7 @@ import { llmProviders } from "./db/schema.js";
 import { relayApi } from "./llm.js";
 import { bearerToken, errorResponse, responseHeaders, secretsEqual } from "./openai-converter/common.js";
 import { currentListeningPort } from "./listening-port.js";
+import { relayErrorResponse, relayFetch } from "./llm-relay.js";
 
 const CONTEXT_1M_SUFFIX = "[1m]";
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
@@ -95,7 +96,7 @@ async function proxyAnthropicContext1m(request: Request, provider: { baseUrl: st
   const relative = path.replace(/^\/+/, "");
   let upstream: Response;
   try {
-    upstream = await fetch(`${relayApi(provider.baseUrl)}/${relative}${new URL(request.url).search}`, {
+    upstream = await relayFetch(`${relayApi(provider.baseUrl)}/${relative}${new URL(request.url).search}`, {
       method: request.method,
       headers: upstreamHeaders(request.headers, provider.apiKey, transformed.context1m),
       body: transformed.body,
@@ -103,7 +104,7 @@ async function proxyAnthropicContext1m(request: Request, provider: { baseUrl: st
       signal: request.signal,
     });
   } catch (error) {
-    return errorResponse(502, `无法连接供应商：${error instanceof Error ? error.message : String(error)}`);
+    return relayErrorResponse(error);
   }
   return new Response(upstream.body, {
     status: upstream.status,

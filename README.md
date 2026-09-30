@@ -305,5 +305,5 @@ MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` �
 ---
 
 <p align="center">
-  <a href="docs/install.md"><b>📦 部署与运维</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/handoff.md"><b>🔄 任务接力指南</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/incidents.md"><b>📋 事故与踩坑记录</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/windows-testing.md"><b>🪟 Windows 测试基线</b></a>
+  <a href="docs/install.md"><b>📦 部署与运维</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/handoff.md"><b>🔄 任务接力指南</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/llm-relay.md"><b>🔌 供应商转发诊断</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/incidents.md"><b>📋 事故与踩坑记录</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="docs/windows-testing.md"><b>🪟 Windows 测试基线</b></a>
 </p>

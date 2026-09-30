@@ -192,13 +192,27 @@ assert.equal(converted.status, 200);
 assert.equal(lastPath, "/v1/chat/completions");
 assert.equal(lastAuthorization, "Bearer secret-key");
 assert.equal(lastBody.messages[0].content, "hello");
+assert.match(converted.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
 assert.equal(((await converted.json()) as any).output[0].content[0].text, "converted");
+
+const convertedStream = await app.request("/llm-providers/provider-1/convert/v1/responses", {
+  method: "POST",
+  headers: { authorization: "Bearer secret-key", "content-type": "application/json" },
+  body: JSON.stringify({ model: "demo-model", input: "hello", stream: true }),
+});
+assert.equal(convertedStream.status, 200);
+assert.match(convertedStream.headers.get("content-type") ?? "", /text\/event-stream/);
+assert.match(convertedStream.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
+const convertedStreamText = await convertedStream.text();
+assert.match(convertedStreamText, /response\.output_text\.delta/);
+assert.match(convertedStreamText, /response\.completed/);
 
 const models = await app.request("/llm-providers/provider-1/convert/v1/models", {
   headers: { authorization: "Bearer secret-key" },
 });
 assert.equal(models.status, 200);
 assert.equal(lastPath, "/v1/models");
+assert.match(models.headers.get("x-ash-relay-request-id") ?? "", /^[a-f0-9-]{36}$/);
 assert.deepEqual(await models.json(), { data: [{ id: "demo-model" }] });
 
 const { testProviderModel } = await import("../src/provider-test.js");

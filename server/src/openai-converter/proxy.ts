@@ -1,4 +1,5 @@
 import { relayApi } from "../llm.js";
+import { relayErrorResponse, relayFetch } from "../llm-relay.js";
 import {
   asBoolean,
   asString,
@@ -30,7 +31,7 @@ async function upstreamFetch(
   forceJson = false,
 ): Promise<Response> {
   const method = request.method.toUpperCase();
-  return fetch(upstreamUrl(provider, path, new URL(request.url).search), {
+  return relayFetch(upstreamUrl(provider, path, new URL(request.url).search), {
     method,
     headers: upstreamHeaders(request.headers, provider.apiKey, forceJson),
     body: method === "GET" || method === "HEAD" ? undefined : body,
@@ -68,7 +69,7 @@ async function responsesViaChat(request: Request, provider: ConverterProvider): 
   try {
     upstream = await upstreamFetch(request, provider, "chat/completions", JSON.stringify(converted), true);
   } catch (error) {
-    return errorResponse(502, `无法连接供应商：${error instanceof Error ? error.message : String(error)}`);
+    return relayErrorResponse(error);
   }
   if (!upstream.ok) {
     return new Response(upstream.body, {
@@ -81,14 +82,17 @@ async function responsesViaChat(request: Request, provider: ConverterProvider): 
   const streaming = asBoolean(sourceObject.stream) === true;
   if (streaming) {
     if (!upstream.body) return errorResponse(502, "供应商没有返回流式响应体");
+    const headers = new Headers({
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    const requestId = upstream.headers.get("x-ash-relay-request-id");
+    if (requestId) headers.set("x-ash-relay-request-id", requestId);
     return new Response(chatStreamToResponses(upstream.body, asString(sourceObject.model) ?? ""), {
       status: 200,
-      headers: {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      },
+      headers,
     });
   }
   let payload: unknown;
@@ -119,6 +123,6 @@ export async function proxyConvertedOpenAiRequest(
   try {
     return await passthrough(request, provider, path);
   } catch (error) {
-    return errorResponse(502, `无法连接供应商：${error instanceof Error ? error.message : String(error)}`);
+    return relayErrorResponse(error);
   }
 }
