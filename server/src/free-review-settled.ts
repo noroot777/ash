@@ -224,6 +224,7 @@ export function settledRulingsSection(
   rulings: readonly SettledRuling[],
   audience: "reviewer" | "executor",
   full: FullText | null = null,
+  disputeUpheld = false,
 ): string {
   if (!rulings.length) return "";
   const deferred = rulings.some((item) => item.resolution === "deferred");
@@ -239,16 +240,30 @@ export function settledRulingsSection(
           "（例如它实际造成了可复现的故障）才可以重提，且必须在报告里写明「这条已被裁定作废，我为什么仍然提」。",
         "- 同一处代码上**新出现**的问题不受此限，照常报，但要在报告里写明它与上面那几条的区别。",
       ]
-    : [
-        "以上是**用户已经下过的裁定**：这几条不在本任务里修。",
-        "- 这一轮报告如果又提到它们，不要在这里改，调用 dispute_review 说清楚：" +
-          (deferred ? "已转为独立任务的写进 deferReason（指名承接它们的那个任务）；" : "") +
-          (withdrawn ? "已被裁定作废的写进 reason（指明是哪一轮裁的）；" : "") +
-          "由用户再确认一次。",
+    // 用户**这一轮**已经裁定「接着改」时，这一节只能当背景：再说一遍「不要在这里改、
+    // 去驳回」就是跟开场白正面打架，而且那条路已经关了——同一轮的驳回只能提一次，
+    // 真去调 dispute_review 只会吃一句「这一轮意见已经驳回过了」（审查实测）。
+    : disputeUpheld
+      ? [
+          "以上是**用户此前下过的裁定**，只作背景：用户在这一轮已经裁定「接着改」，**以那条裁定为准**。",
+          "- 这一轮不要再驳回：同一轮的驳回只能提一次，再调 dispute_review 会被拒。",
+          "- 上面这些裁定里若有哪条你认为跟这次要改的冲突，用 ask_question 问清楚，别自己挑一个改法。",
+        ]
+      : [
+        "以上是**用户已经下过的裁定**，说的是「按当时那份依据，这几条不在本任务里修」。",
+        deferred && "- 已转为独立任务的那几条：已经有一个任务在做，在这里再修一遍就是两处各改一版。" +
+          "报告若又提到同一条，不要在这里改，调用 dispute_review 在 deferReason 里指名承接它们的那个任务。",
+        // 作废掉的是**当时那份依据**，不是永久豁免：审查者那一侧明写了「有裁定之后才成立的
+        // 新依据可以重提」，执行者这一侧要是无条件禁止修，同一条意见就卡在两边规矩中间，
+        // 谁都动不了（审查实测）。
+        withdrawn && "- 已被裁定作废的那几条：作废的是**当时那份依据**，不是永久豁免。" +
+          "审查者带着新依据重新提出（报告里会写明裁定之后它为什么仍然成立）时照常修；" +
+          "只有**原样重提**同一条才用 dispute_review，在 reason 里指明是哪一轮裁的。",
         "- 报告里**除此之外**的意见照常修。",
       ];
   const body = rulings.map((ruling, index) => entryOf(ruling, index, full)).join("\n\n");
-  return `\n\n【已由用户裁定、不在本任务里修的意见】\n${body}\n\n${lines.filter(Boolean).join("\n")}`;
+  const title = disputeUpheld ? "此前已由用户裁定过的意见（背景）" : "已由用户裁定、不在本任务里修的意见";
+  return `\n\n【${title}】\n${body}\n\n${lines.filter(Boolean).join("\n")}`;
 }
 
 /**
@@ -259,17 +274,19 @@ export function settledRulingsSection(
  * 之前审查者写的意见，驳回依据和用户裁定要点根本不在里面（第 2 轮审查复现）。
  * 写不进去（目录不安全、磁盘满）时不留假去处：照旧内联，截断处改说去审查记录里看。
  */
-export async function settledRulingsFor(
-  taskId: string,
-  current: { runId: string; round: number },
-  audience: "reviewer" | "executor",
-  evidenceDir: string,
-): Promise<string> {
-  const rulings = await settledRulingsOf(taskId, current);
+export async function settledRulingsFor(input: {
+  taskId: string;
+  current: { runId: string; round: number };
+  audience: "reviewer" | "executor";
+  evidenceDir: string;
+  /** 用户**这一轮**已裁定「维持审查意见、接着改」：这一节降级成背景，不再指路去驳回。 */
+  disputeUpheld?: boolean;
+}): Promise<string> {
+  const rulings = await settledRulingsOf(input.taskId, input.current);
   if (!rulings.length) return "";
   // 无条件落一份全文：内联那份随时可能被单段上限截掉，截了就得有地方读没截的。
-  const reference = await writeSettledRulings(evidenceDir, rulings);
+  const reference = await writeSettledRulings(input.evidenceDir, rulings);
   // 落盘失败时不留假去处：整份内联（仍受单段上限），截断处改说「见任务详情的审查记录」。
-  return settledRulingsSection(rulings, audience,
-    reference ? { reference, detailed: detailed(rulings) } : null);
+  return settledRulingsSection(rulings, input.audience,
+    reference ? { reference, detailed: detailed(rulings) } : null, input.disputeUpheld === true);
 }

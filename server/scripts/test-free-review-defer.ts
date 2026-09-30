@@ -256,8 +256,9 @@ try {
   const nextRepair = await freeRepairPrompt("f-defer", nextRun);
   assert.match(nextRepair, /已由用户裁定、不在本任务里修的意见/, "执行者那一侧也要知道，否则它会照新报告再改一遍");
   assert.match(nextRepair, /不要在这里改，调用 dispute_review/, "执行者那一侧的落点是「走转出这个出口」而不是照改");
-  assert.ok(nextRepair.includes("写进 deferReason"), "转出过的那几条要指明走 deferReason 这个出口");
-  assert.ok(!nextRepair.includes("写进 reason"), "这个任务没裁定过作废，就别讲作废那一档怎么办");
+  assert.ok(nextRepair.includes("在 deferReason 里指名承接它们的那个任务"),
+    "转出过的那几条要指明走 deferReason 这个出口");
+  assert.ok(!nextRepair.includes("已被裁定作废的那几条"), "这个任务没裁定过作废，就别讲作废那一档怎么办");
 
   // 没有裁定过的任务不许凭空多出这一节（空清单必须什么都不加）。
   const cleanSource = (await db.select().from(tasks).where(eq(tasks.id, "f-no-offer"))).at(0)!;
@@ -321,6 +322,29 @@ try {
     assert.ok(prompt.includes("f-defer-derived-1") && prompt.includes("f-defer-derived-8"),
       "执行者那两条交接同样一条都不许丢");
   }
+
+  // ── ⑩ 旧裁定不许压过本轮的新裁定，也不许把作废当成永久豁免 ──
+  // f-mixed 那一轮被裁定 withdrawn（采纳执行者）。两件事各有判据：
+  const mixedSource = (await db.select().from(tasks).where(eq(tasks.id, "f-mixed"))).at(0)!;
+  const mixedRun = { ...nextRun, id: "f-mixed-run-2", taskId: "f-mixed" };
+  // ① 常态下，作废掉的是**当时那份依据**而不是永久豁免：审查者那一侧明写了「有新依据
+  //    可以重提」，执行者这一侧要是无条件禁止修，同一条就卡在两边规矩中间谁都动不了。
+  const mixedExec = await freeRepairPrompt("f-mixed", mixedRun);
+  assert.match(mixedExec, /作废的是\*\*当时那份依据\*\*，不是永久豁免/,
+    "执行者那一侧不能把 withdrawn 讲成永久豁免——审查者带着新依据重提时它得能改");
+  assert.match(mixedExec, /只有\*\*原样重提\*\*同一条才用 dispute_review/, "驳回只留给原样重提那一种");
+  const mixedReview = await freeReviewPrompt(mixedSource, mixedRun, 1, repo);
+  assert.match(mixedReview, /裁定之后才成立的新依据/, "审查者那一侧的口子照旧留着（两侧口径必须对得上）");
+  // ② 用户这一轮已经裁定「接着改」时，这一节只能当背景：再指路去驳回就是跟开场白
+  //    正面打架，而且那条路已经关了（同一轮只能驳一次，再调会被 409 一样地拒）。
+  const upheldExec = await freeManualRepairPrompt("f-mixed", mixedRun, { disputeUpheld: true });
+  assert.ok(!upheldExec.includes("不要在这里改，调用 dispute_review"),
+    "用户已裁定接着改，这一节不能再指路去驳回（开场白刚说完「不要再驳回」）");
+  assert.match(upheldExec, /以那条裁定为准/, "要写明以本轮裁定为准，而不是让执行者自己在两条指令间挑一个");
+  assert.match(upheldExec, /这一轮不要再驳回：同一轮的驳回只能提一次/, "要说清那条路已经关了，别让它去撞 409");
+  assert.match(upheldExec, /用 ask_question 问清楚/, "关掉一个出口就得给另一个，否则它只能自己猜");
+  assert.ok(upheldExec.includes("第 1 条读错了行号"), "降级成背景 ≠ 把事实删掉：旧裁定的依据仍要带着");
+  assert.match(upheldExec, /此前已由用户裁定过的意见（背景）/, "标题也要跟着降级，否则整节仍读成「这几条不用改」");
 
   console.log("free review defer ok");
 } catch (error) {

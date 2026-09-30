@@ -24,7 +24,9 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
   // 把同样几条原样再报一遍，用户只能每轮手打一句「有异议的已经转为新任务」（理由见
   // free-review-settled.ts 文件头）。放在用户附言**之前**：它是边界事实，附言是这一
   // 次的重点补充，附言里说的话仍然压在最后一句。
-  const settled = await settledRulingsFor(task.id, { runId: run.id, round }, "reviewer", dir);
+  const settled = await settledRulingsFor({
+    taskId: task.id, current: { runId: run.id, round }, audience: "reviewer", evidenceDir: dir,
+  });
   const acceptedMerge = run.targetKind === "accepted_merge" && run.targetBranch && run.targetBaseCommit && run.targetCommit;
   const target = acceptedMerge
     ? `\n\n本轮审查的是已经验收后的合并快照，不是原任务工作区：\n` +
@@ -115,7 +117,9 @@ export async function freeRepairPrompt(taskId: string, run: ReviewRunRow): Promi
     `证据目录：${dir}` +
     // 已经裁定转出/作废的那几条也要告诉执行者：报告是新审查者写的，它可能不知道那场
     // 裁定，而照着改就是两处各改一版（理由见 free-review-settled.ts 文件头）。
-    await settledRulingsFor(taskId, { runId: run.id, round: run.currentRound }, "executor", dir) +
+    await settledRulingsFor({
+      taskId, current: { runId: run.id, round: run.currentRound }, audience: "executor", evidenceDir: dir,
+    }) +
     disputeOption(taskId);
 }
 
@@ -194,7 +198,10 @@ export async function freeManualRepairPrompt(
     `修复完成并验证后调用 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
     `如果用户在修复期间预约了复审，执行回合正常结束后按预约开始，否则等待用户决定再次审查或验收。\n\n` +
     `证据目录：${dir}` +
-    await settledRulingsFor(taskId, { runId: run.id, round: run.currentRound }, "executor", dir) +
+    await settledRulingsFor({
+      taskId, current: { runId: run.id, round: run.currentRound }, audience: "executor", evidenceDir: dir,
+      disputeUpheld: opts.disputeUpheld === true,
+    }) +
     debateClosingSection(opts.debateClosing) +
     resolutionNoteSection(opts.resolutionNote) +
     (opts.disputeUpheld ? "" : disputeOption(taskId));
