@@ -4,13 +4,13 @@ import { createServer } from "node:http";
 import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
-import { relayErrorResponse, relayFetch, RelayRequestError } from "../src/llm-relay.js";
+import { closeRelayDispatchers, relayErrorResponse, relayFetch, RelayRequestError } from "../src/llm-relay.js";
 
 const warnings: string[] = [];
 const originalWarn = console.warn;
 const originalFetch = globalThis.fetch;
 console.warn = (message: unknown) => { warnings.push(String(message)); };
-const envKeys = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "ASH_LLM_RELAY_HEADERS_TIMEOUT_MS"];
+const envKeys = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "ASH_LLM_RELAY_HEADERS_TIMEOUT_MS", "ASH_LLM_RELAY_BODY_TIMEOUT_MS"];
 const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 const sockets = new Set<Socket>();
 const calls: { path: string; method: string; socket: Socket }[] = [];
@@ -27,6 +27,23 @@ const upstream = createServer(async (request, response) => {
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write("data: first\n\n");
     setTimeout(() => response.end("data: last\n\n"), 120);
+    return;
+  }
+  if (request.url === "/heartbeat") {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write("data: first\n\n");
+    let chunks = 0;
+    const timer = setInterval(() => {
+      chunks += 1;
+      if (chunks === 12) response.end("data: last\n\n");
+      else response.write(": ping\n\n");
+    }, 80);
+    response.on("close", () => clearInterval(timer));
+    return;
+  }
+  if (request.url === "/idle") {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write("data: first\n\n");
     return;
   }
   if (request.url === "/abort" || request.url === "/cancel") {
@@ -83,6 +100,7 @@ try {
   process.env.https_proxy = process.env.HTTPS_PROXY = "http://127.0.0.1:1";
   process.env.no_proxy = process.env.NO_PROXY = "only-remote-provider.test";
   delete process.env.ASH_LLM_RELAY_HEADERS_TIMEOUT_MS;
+  delete process.env.ASH_LLM_RELAY_BODY_TIMEOUT_MS;
 
   const globalDispatcher = getGlobalDispatcher();
   const blocked = new MockAgent();
@@ -100,7 +118,18 @@ try {
   }
   console.log("  ✓ 转发独立于全局连接池，本地供应商不绕系统代理");
 
+  const reusedSockets = new Set<Socket>();
+  for (let index = 0; index < 8; index += 1) {
+    const reused = await relayFetch(`${origin}/healthy`, { method: "POST", body: "inference-request" });
+    assert.deepEqual(await reused.json(), { ok: true });
+    reusedSockets.add(calls.at(-1)!.socket);
+  }
+  assert(reusedSockets.size <= 2, `连续请求应复用 keep-alive 连接，实际用了 ${reusedSockets.size} 条`);
+  console.log("  ✓ 同一供应商的连续推理请求复用独立连接池，不重复建连");
+
   const started = new Promise<void>((resolve) => { slowStarted = resolve; });
+  const headerTimeoutSurvivor = await relayFetch(`${origin}/heartbeat`, {});
+  const headerTimeoutSurvivorText = headerTimeoutSurvivor.text();
   const hung = relayFetch(`${origin}/hang`, { method: "POST", body: "inference-request" }, { headersTimeoutMs: 150 });
   const hungFailure = assert.rejects(hung, (error: unknown) => {
     assert(error instanceof RelayRequestError);
@@ -116,6 +145,7 @@ try {
   const hungCall = calls.find((entry) => entry.path === "/hang")!;
   assert.notEqual(hungCall.socket, calls.at(-1)!.socket);
   await hungFailure;
+  assert.match(await headerTimeoutSurvivorText, /data: last/);
   assert.equal(calls.filter((entry) => entry.path === "/hang").length, 1);
   assert.equal(hungCall.method, "POST");
   const recovery = await relayFetch(`${origin}/healthy`, {});
@@ -130,6 +160,30 @@ try {
   assert.equal(await empty.text(), "");
   console.log("  ✓ 响应头超时不截断已经开始的长流，空响应也正确释放连接");
 
+  process.env.ASH_LLM_RELAY_BODY_TIMEOUT_MS = "200";
+  const idle = await relayFetch(`${origin}/idle`, {});
+  let idleGuard: ReturnType<typeof setTimeout> | undefined;
+  const idleFailure = assert.rejects(Promise.race([
+    idle.text(),
+    new Promise<never>((_resolve, reject) => {
+      idleGuard = setTimeout(() => reject(new Error("响应流没有触发空闲超时")), 3000);
+    }),
+  ]), (error: unknown) => {
+    assert(error instanceof RelayRequestError);
+    assert.equal(error.diagnostic.phase, "stream");
+    assert.equal(error.diagnostic.status, 504);
+    assert(error.diagnostic.codes.includes("UND_ERR_BODY_TIMEOUT"));
+    assert.match(error.message, /响应流空闲超过 200ms/);
+    return true;
+  }).finally(() => clearTimeout(idleGuard));
+  const heartbeat = await relayFetch(`${origin}/heartbeat`, {}, { headersTimeoutMs: 60 });
+  assert.match(await heartbeat.text(), /data: first[\s\S]*data: last/);
+  await idleFailure;
+  delete process.env.ASH_LLM_RELAY_BODY_TIMEOUT_MS;
+  console.log("  ✓ 无数据的流触发空闲超时，持续有心跳的长流不被截断，并行流不受牵连");
+
+  const cancelSurvivor = await relayFetch(`${origin}/heartbeat`, {});
+  const cancelSurvivorText = cancelSurvivor.text();
   const controller = new AbortController();
   const disconnected = new Promise<void>((resolve) => { abortClosed = resolve; });
   const aborting = await relayFetch(`${origin}/abort`, { signal: controller.signal });
@@ -147,6 +201,7 @@ try {
   await canceling.body!.cancel();
   await canceled;
   assert.equal(warnings.length, warningCount);
+  assert.match(await cancelSurvivorText, /data: last/);
   console.log("  ✓ 客户端停止和响应取消都关闭上游连接，不制造伪网络报错");
 
   const broken = await relayFetch(`${origin}/broken-stream`, {});
@@ -172,9 +227,13 @@ try {
   assert.equal(proxyAuthority, `provider.test:${address.port}`);
   console.log("  ✓ 远端供应商仍遵守 HTTP_PROXY 和 NO_PROXY 配置");
 
+  const mappedUrl = `http://[::ffff:127.0.0.1]:${address.port}/healthy`;
+  const mappedProxied = await relayFetch(mappedUrl, {});
+  assert.deepEqual(await mappedProxied.json(), { ok: true });
+  assert.equal(proxyAuthority, `[::ffff:7f00:1]:${address.port}`);
   process.env.no_proxy = process.env.NO_PROXY = "*";
   proxyAuthority = "";
-  const wildcardBypass = await relayFetch(`http://[::ffff:127.0.0.1]:${address.port}/healthy`, {});
+  const wildcardBypass = await relayFetch(mappedUrl, {});
   assert.deepEqual(await wildcardBypass.json(), { ok: true });
   assert.equal(proxyAuthority, "", "NO_PROXY=* 应保持全局直连，而不是绕进 HTTP_PROXY");
 
@@ -208,6 +267,7 @@ try {
     else process.env[key] = originalEnv[key];
   }
   for (const socket of [...sockets, ...tunnelSockets]) socket.destroy();
+  await closeRelayDispatchers();
   upstream.close();
   if (proxy.listening) proxy.close();
 }
