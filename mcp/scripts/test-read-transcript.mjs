@@ -13,6 +13,9 @@
 //     会话各保一段尾巴——否则 9-28 建、9-29 续聊出新结论的那条会被整块砍掉,活下来的
 //     是另一条当天就结束的旧审查(审查第 1 轮复现的那个场景)
 //  7. 正文**原样**取回:恰好是 `null` / `"带引号的结果"` 的正文不许被 JSON 解码改写
+//  8. **小额度下不许撒谎**:六条会话 + 紧额度时,要么给出真正文,要么明说哪几条没读;
+//     不许只回一行标题却宣称「每条会话都保留了它最近的部分」,返回也不许超过声称的
+//     上限(审查第 2 轮复现的那个场景)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
@@ -38,6 +41,10 @@ const SESSIONS = {
     { id: "old", role: "single", executor: "claude@a", startedAt: "2026-09-28T00:00:00.000Z", turnStartedAt: "2026-09-29T10:00:00.000Z", endedAt: null },
     { id: "stale", role: "reviewer", executor: "claude@b", startedAt: "2026-09-28T01:00:00.000Z", turnStartedAt: "2026-09-28T01:00:00.000Z", endedAt: "2026-09-28T02:00:00.000Z" },
   ],
+  T6: Array.from({ length: 6 }, (_, i) => ({
+    id: `sess${i}`, role: "single", executor: "claude@ccb",
+    startedAt: `2026-05-0${i + 1}T00:00:00.000Z`, endedAt: `2026-05-0${i + 1}T01:00:00.000Z`,
+  })),
   T3: [
     { id: "jnull", role: "single", executor: "claude@a", startedAt: "2026-03-01T00:00:00.000Z", endedAt: null },
     { id: "jstr", role: "single", executor: "claude@a", startedAt: "2026-03-02T00:00:00.000Z", endedAt: null },
@@ -52,6 +59,7 @@ const OUTPUT = {
   sB: `${"填充".repeat(3000)}\n这是最后的结论行。`,
   old: `早期讨论。${turn({ t: "user", agent: "claude", text: "再想想方案 B", at: "2026-09-29T10:00:00.000Z" })}${"续聊正文".repeat(200)}\nLATEST_CONFIRMED_PLAN_B`,
   stale: `${"旧审查记录".repeat(2000)}\nSTALE_REVIEW_REJECTS_PLAN_B`,
+  ...Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`sess${i}`, `${"六条会话的正文".repeat(300)}\nLATEST_SESSION_${i}`])),
   jnull: "null",
   jstr: '"quoted-result"',
 };
@@ -66,6 +74,7 @@ const TRACE = {
 const TASKS = {
   T1: { id: "T1", title: "假任务", status: "done", body: "这是任务指令", executorLabel: "claude@a", mode: "duet" },
   T2: { id: "T2", title: "续聊任务", status: "running", body: "原始指令", executorLabel: "claude@a" },
+  T6: { id: "T6", title: "六条会话的任务", status: "done", body: "原始指令", executorLabel: "claude@ccb" },
   T3: { id: "T3", title: "正文像 JSON", status: "running", body: "原始指令", executorLabel: "claude@a" },
 };
 // 这条会话的 trace 一律 500:断言故障不被粉饰成「老会话本来就没有 trace」。
@@ -176,7 +185,7 @@ try {
   check("超限时另一条会话的尾巴也在（分会话各保尾）", chronoCut.body.includes("STALE_REVIEW_REJECTS_PLAN_B"));
   check("被裁的会话仍带着自己的标题行", /## 会话 1\/2 · stale/.test(chronoCut.body));
   check("裁剪提示说清是按会话分别裁的", chronoCut.body.includes("每条会话都保留了它最近的部分"));
-  check("裁剪后不超过上限", chronoCut.body.length <= 3000 + 200, `len=${chronoCut.body.length}`);
+  check("裁剪后不超过上限", chronoCut.body.length <= 3000, `len=${chronoCut.body.length}`);
 
   // ── 审查第 2 轮:正文恰好是合法 JSON ──────────────────────────────────────
   const json = await text({ taskId: "T3", maxChars: 200_000 });
@@ -187,6 +196,33 @@ try {
   const brokenTrace = await text({ taskId: "T1", sessionId: "sA", includeTrace: true, maxChars: 200_000 });
   check("trace 真失败时报出原因", brokenTrace.body.includes("读不到:") && brokenTrace.body.includes("500")
     && !brokenTrace.body.includes("上线之前"), brokenTrace.body.slice(0, 300));
+
+  // ── 审查第 2 轮:小额度不许把正文删光还说保留了 ──────────────────────────
+  const FAKE_PROMISE = "每条会话都保留了它最近的部分";
+  for (const cap of [200, 400, 800, 1200, 3000, 30_000]) {
+    const r = await text({ taskId: "T6", maxChars: cap });
+    const skipped = (r.body.match(/本次没读:/g) ?? []).length;
+    const got = (r.body.match(/LATEST_SESSION_/g) ?? []).length;
+    const denied = r.body.includes("这次什么都没读到");
+    check(`额度 ${cap}:返回不超过声称的上限`, r.body.length <= cap, `实际 ${r.body.length}`);
+    check(`额度 ${cap}:没读到的会话不冒充读过`, !(r.body.includes(FAKE_PROMISE) && skipped > 0));
+    // 核心那条:要么真给了正文,要么明说没读 —— 不许两头都不沾(只剩标题却宣称保留)。
+    check(`额度 ${cap}:要么有正文、要么明说读不到`, denied || got > 0 || skipped > 0,
+      `got=${got} skipped=${skipped} ${r.body.slice(0, 200)}`);
+    if (denied) check(`额度 ${cap}:拒绝时说清要多少字、怎么单读`, /把 maxChars 调到/.test(r.body) && r.body.includes("sessionId"));
+  }
+  const big = await text({ taskId: "T6", maxChars: 30_000 });
+  check("额度够时六条结论一条不少", (big.body.match(/LATEST_SESSION_/g) ?? []).length === 6,
+    `只有 ${(big.body.match(/LATEST_SESSION_/g) ?? []).length} 条`);
+  const mid = await text({ taskId: "T6", maxChars: 3000 });
+  check("中等额度优先给最近的会话", mid.body.includes("LATEST_SESSION_5"), mid.body.slice(-200));
+
+  const tooSmall = await rpc("tools/call", { name: "read_task_transcript", arguments: { taskId: "T6", maxChars: 1 } });
+  check("maxChars 小到放不下任何说明时直接拒收", !!tooSmall.result?.isError || !!tooSmall.error,
+    JSON.stringify(tooSmall).slice(0, 200));
+
+  const longBody = await text({ taskId: "T6", maxChars: 1200 });
+  check("任务指令不许挤掉会话正文（最多占四分之一）", longBody.length === undefined || !/## 任务指令[\s\S]{400,}## 会话/.test(longBody.body));
 
   const noTask = await text({ taskId: "NOPE" });
   check("任务不存在时原样抛出 404", noTask.isError && noTask.body.includes("404"), noTask.body);
