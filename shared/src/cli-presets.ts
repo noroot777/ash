@@ -11,6 +11,21 @@
 import type { AgentType } from "./index.ts";
 
 /**
+ * 「某个模型允许哪些思考强度档位」的 probe 结果。key 由 `modelEffortKey()` 归一。
+ *
+ * **来源的权威性不一样,裁剪责任在适配器而不在这里**:
+ *   • codex(`codex debug models` 的 `supported_reasoning_levels`)与 claude
+ *     (control protocol 的 `list_models`/initialize 响应)是 CLI **自己**报的,
+ *     原样登记 —— 它们将来加一个新档位,ash 不该因为并集里没有就把它挡掉,那又回到
+ *     「手写表滞后」的老问题。
+ *   • opencode / kilo 读的是 models.dev 快照,描述的是「这个模型/API 支持什么」,
+ *     不等于「`--variant` 接受什么」(它有 `none`、`budget_tokens` 这些对不上的值)。
+ *     那两家的适配器**先与 CLI 并集求交**再登记:第三方数据只用来**收窄**已知并集,
+ *     不引入新值。
+ */
+export type ModelEffortMap = Readonly<Record<string, readonly string[]>>;
+
+/**
  * 「这个 CLI 现在到底有哪些模型」的一次回答。`GET /api/agents/models` 与
  * `POST /api/agents/models/refresh` 的元素形状。
  *
@@ -49,6 +64,19 @@ export interface CliModelCatalog {
    * 没问」被写成「问了但失败」的话,界面会催用户去点刷新,而刷新永远不会有别的结果。
    */
   skipped: string | null;
+  /**
+   * CLI **亲口报的** per-model 思考强度能力。key 由 `modelEffortKey()` 归一,与
+   * `resolveReasoningEfforts` 查表时用的是同一个函数 —— 两边各自归一就会出现
+   * 「登记了却查不到」这种只在某些模型名上复现的坑。
+   *
+   * 三种状态必须分得开,不能用空数组兼表「不知道」:
+   *   • **缺 key** = 这个模型它没说 → 退回 `MODEL_EFFORT_RULES` / CLI 并集;
+   *   • **空数组** = 它明确说了「这个模型没有档位」(claude 的 haiku 就是这样);
+   *   • 非空 = 完整允许集合。
+   *
+   * 整个字段缺省 = 这家 CLI 没有可问的档位来源(grok / gemini 等),一切照旧。
+   */
+  modelEfforts?: ModelEffortMap;
 }
 
 /**
@@ -252,7 +280,13 @@ export const MODEL_EFFORT_RULES: readonly ModelEffortRule[] = [
 
 export interface ReasoningEffortResolution {
   readonly efforts: readonly string[];
-  readonly source: "model-rule" | "cli-fallback";
+  /**
+   * probe = CLI 亲口报的(最权威);model-rule = 内置实测规则;cli-fallback = 该模型
+   * 没有任何依据,退回 CLI 并集(这是明确的 unknown,不是对它能力的断言)。
+   *
+   * 界面与报错文案必须把这三者分开:拿一条猜出来的规则当 CLI 的原话,比承认不知道更坏。
+   */
+  readonly source: "probe" | "model-rule" | "cli-fallback";
   readonly ruleId: string | null;
 }
 
@@ -269,6 +303,35 @@ function modelRef(model: string): { provider: string | null; id: string } {
     provider: segments.length > 1 ? segments[0]! : null,
     id: segments.at(-1) ?? "",
   };
+}
+
+/**
+ * probe 表的 key:与查表时完全同一套归一(小写、剥 Pi 的 `:high` 后缀、保留 provider)。
+ * 服务端适配器登记 key 时必须用它,别自己 toLowerCase —— 口径一分叉就是静默查不到。
+ */
+export function modelEffortKey(model: string): string {
+  const ref = modelRef(model);
+  return ref.provider ? `${ref.provider}/${ref.id}` : ref.id;
+}
+
+/**
+ * 查 probe 表。先按 `provider/id` 精确找(多 provider CLI 必须靠它区分),再退一步按
+ * 裸 id 找 —— 用户在 profile 里常常只填 `claude-opus-4-8` 而 opencode 报的是
+ * `anthropic/claude-opus-4-8`。
+ *
+ * 用 `Object.hasOwn` 而不是真值判断:**空数组是有意义的答案**(「这个模型没有档位」),
+ * 按「没找到」处理会让它退回 CLI 并集,等于把 CLI 的明确否认又改回了猜测。
+ */
+function lookupProbed(
+  probed: ModelEffortMap | null | undefined,
+  ref: { provider: string | null; id: string },
+): readonly string[] | null {
+  if (!probed || !ref.id) return null;
+  if (ref.provider) {
+    const full = `${ref.provider}/${ref.id}`;
+    if (Object.hasOwn(probed, full)) return probed[full] ?? null;
+  }
+  return Object.hasOwn(probed, ref.id) ? probed[ref.id] ?? null : null;
 }
 
 function matchesModel(value: string, pattern: string, mode: ModelEffortMatchMode): boolean {
@@ -289,10 +352,18 @@ function ruleScore(rule: ModelEffortRule): number {
  * 不传 model（或该模型没登记）就退回 CLI 并集：这是明确的 unknown fallback，不是
  * 对该模型能力的断言。
  */
-export function resolveReasoningEfforts(type: AgentType, model?: string | null): ReasoningEffortResolution {
+export function resolveReasoningEfforts(
+  type: AgentType,
+  model?: string | null,
+  probed?: ModelEffortMap | null,
+): ReasoningEffortResolution {
   const fallback = REASONING_EFFORT_VALUES[type] ?? [];
   if (!model?.trim()) return { efforts: fallback, source: "cli-fallback", ruleId: null };
   const ref = modelRef(model);
+  // probe 优先:CLI 自己报的档位胜过任何内置规则。拿不到(没装 / 没登录 / 这家没来源)
+  // 时下面两级一字不差地照旧,所以接 probe 不会让任何现有组合变得跑不起来。
+  const hit = lookupProbed(probed, ref);
+  if (hit) return { efforts: hit, source: "probe", ruleId: null };
   let winner: ModelEffortRule | null = null;
   for (const rule of MODEL_EFFORT_RULES) {
     if (!rule.types.includes(type)) continue;
@@ -313,10 +384,19 @@ export function resolveReasoningEfforts(type: AgentType, model?: string | null):
  */
 export const GENERIC_REASONING_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh"];
 
-/** 兼容选择器的简写：只取解析后的允许集合；不知道 CLI 就退到通用四档。 */
-export function reasoningEffortsFor(type: AgentType | null | undefined, model?: string | null): readonly string[] {
+/**
+ * 兼容选择器的简写：只取解析后的允许集合；不知道 CLI 就退到通用四档。
+ *
+ * `probed` 可选,**不传就是老行为**：同步上下文(存库前归一、工作流站点编辑)拿不到
+ * 探测结果,那里按规则表判就够了 —— 它只会比 probe 更宽松,不会把合法值拒掉。
+ */
+export function reasoningEffortsFor(
+  type: AgentType | null | undefined,
+  model?: string | null,
+  probed?: ModelEffortMap | null,
+): readonly string[] {
   if (!type) return GENERIC_REASONING_EFFORTS;
-  return resolveReasoningEfforts(type, model).efforts;
+  return resolveReasoningEfforts(type, model, probed).efforts;
 }
 
 /** 空值 = 跟随 CLI，永远合法；非空必须落在该模型解析出的允许集合里。 */
@@ -324,9 +404,10 @@ export function isReasoningEffortSupported(
   type: AgentType | null | undefined,
   model: string | null | undefined,
   effort: string | null | undefined,
+  probed?: ModelEffortMap | null,
 ): boolean {
   const value = effort?.trim();
-  return !value || reasoningEffortsFor(type, model).includes(value);
+  return !value || reasoningEffortsFor(type, model, probed).includes(value);
 }
 
 /** 模型改变时保留仍合法的档位，否则清回 null（跟随 CLI）。 */
@@ -334,7 +415,8 @@ export function normalizeReasoningEffort(
   type: AgentType,
   model: string | null | undefined,
   effort: string | null | undefined,
+  probed?: ModelEffortMap | null,
 ): string | null {
   const value = effort?.trim();
-  return value && isReasoningEffortSupported(type, model, value) ? value : null;
+  return value && isReasoningEffortSupported(type, model, value, probed) ? value : null;
 }

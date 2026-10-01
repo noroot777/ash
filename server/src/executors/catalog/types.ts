@@ -101,7 +101,19 @@ export interface CliModelsSpec {
    * stdout(+stderr)→ 模型 id 清单。**解析不出来就返回空数组**,由上层如实降级到快照,
    * 别硬凑或抛异常。`defaultModel` 是 CLI 报告的默认值(会被排到候选首位),没有就省略。
    */
-  parse: (stdout: string, stderr: string) => { models: string[]; defaultModel?: string | null };
+  parse: (stdout: string, stderr: string) => {
+    models: string[];
+    defaultModel?: string | null;
+    /**
+     * 顺手报出来的 per-model 思考强度档位(key 用 shared 的 `modelEffortKey()` 归一)。
+     *
+     * **只在同一份输出里本来就有这个信息时才填** —— codex 的 `debug models` 每行带
+     * `supported_reasoning_levels`,pi 的 `--list-models` 有 `thinking` 列,那是白给的;
+     * 为了凑这个字段去另跑一条命令不值得(档位缺省会诚实退回规则表,代价远小于每次开
+     * 选择器多起一个子进程)。省略 = 这家没有可读的档位来源。
+     */
+    modelEfforts?: Record<string, readonly string[]>;
+  };
 }
 
 /** 非交互一次性运行的命令构造。 */

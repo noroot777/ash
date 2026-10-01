@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import type { AgentEvent } from "@ash/shared";
+import { modelEffortKey } from "@ash/shared/cli-presets";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser, CliParserContext, CliSpec } from "./types.js";
@@ -98,22 +99,45 @@ export const piSpec: CliSpec = {
 };
 
 /**
- * `pi --list-models` 的表格 → `provider/model` 清单。
+ * `pi --list-models` 的表格 → `provider/model` 清单 + 「这个模型有没有 thinking」。
  *
  * 只认「前两列都是模型 id 长相」的行:表头(provider/model)与任何说明性文字都不满足,
  * 于是格式一变就是解析出空数组、如实降级到内置快照,而不是把 "context" 当模型名端上去。
+ *
+ * **档位只做得了半件事**:`thinking` 列是 yes/no,pi 不报具体子集(`--help` 里那 7 档
+ * 是 CLI 级并集,docs 的 thinkingLevelMap 允许有洞)。所以 `no` → 登记空数组(明确
+ * 「这个模型没有档位」,这是真信息),`yes` → **不登记**,退回并集让上游去拒不合法的
+ * 那几档。把 yes 当成「支持全部 7 档」是无依据的放大。
  */
-export function parsePiModels(stdout: string): { models: string[]; defaultModel?: string | null } {
+export function parsePiModels(stdout: string): {
+  models: string[];
+  defaultModel?: string | null;
+  modelEfforts?: Record<string, readonly string[]>;
+} {
   const models: string[] = [];
+  const modelEfforts: Record<string, readonly string[]> = {};
+  // 按**表头**定位 thinking 列,不写死下标:pi 加一列(实测 6 列:provider/model/
+  // context/max-out/thinking/images)就会让固定下标静默读到隔壁列的值。
+  let thinkingColumn = -1;
   for (const line of stdout.split("\n")) {
     const cols = line.trim().split(/\s{2,}/);
     if (cols.length < 2) continue;
     const [provider, model] = cols as [string, string];
-    if (provider === "provider" || model === "model") continue; // 表头
+    if (provider === "provider" || model === "model") {
+      const at = cols.findIndex((col) => col.trim().toLowerCase() === "thinking");
+      if (at >= 0) thinkingColumn = at;
+      continue; // 表头
+    }
     if (!/^[a-z0-9][\w.-]*$/i.test(provider) || !/^[a-z0-9][\w.:-]*$/i.test(model)) continue;
     models.push(`${provider}/${model}`);
+    const thinking = thinkingColumn >= 0 ? cols[thinkingColumn]?.trim().toLowerCase() : undefined;
+    if (thinking === "no") modelEfforts[modelEffortKey(`${provider}/${model}`)] = [];
   }
-  return { models, defaultModel: null };
+  return {
+    models,
+    defaultModel: null,
+    ...(Object.keys(modelEfforts).length ? { modelEfforts } : {}),
+  };
 }
 
 /**

@@ -21,6 +21,7 @@ import { listModels } from "./llm.js";
 import { mountQueueRoutes } from "./queues.js";
 import { detectKnownClis, detectLocalAgents, registrationBlockReason } from "./detect.js";
 import { cliHostEnv } from "./executors/cli-env.js";
+import { cachedModelEfforts } from "./executors/model-probe.js";
 import { searchAll } from "./search.js";
 import { repoKey } from "./git.js";
 import { mountNoteRoutes } from "./notes.js";
@@ -277,10 +278,13 @@ api.post("/agents", async (c) => {
   const badProvider = await providerRejection(c, b.providerId);
   if (badProvider) return c.json(badProvider, 404);
   const model = b.model?.trim() || null;
-  if (b.reasoningEffort && !isReasoningEffortSupported(type, model, b.reasoningEffort)) {
+  // 档位能力以**已探到的** CLI 原话为准,拿不到就按内置规则判(cachedModelEfforts 不
+  // 触发探测,所以这条路不会因为冷缓存而变慢)。
+  const efforts = cachedModelEfforts(type);
+  if (b.reasoningEffort && !isReasoningEffortSupported(type, model, b.reasoningEffort, efforts)) {
     return c.json({
       error: `${type} 模型 ${model ?? "（跟随 CLI）"} 不支持思考强度 ${b.reasoningEffort}`,
-      allowedReasoningEfforts: reasoningEffortsFor(type, model),
+      allowedReasoningEfforts: reasoningEffortsFor(type, model, efforts),
     }, 400);
   }
   // CLI 配置覆盖:有的键单独填是空转的(claude 的触发百分比要配合窗口才生效)。
@@ -295,7 +299,7 @@ api.post("/agents", async (c) => {
     ...ownerStamp(actorOf(c)),
     model,
     extraArgs: JSON.stringify(b.extraArgs ?? []),
-    reasoningEffort: normalizeReasoningEffort(type, model, b.reasoningEffort),
+    reasoningEffort: normalizeReasoningEffort(type, model, b.reasoningEffort, efforts),
     // 只落 "fast";"standard"/空 归一成 null(标准=不传参,单一表示)
     speed: b.speed === "fast" ? "fast" : null,
     providerId: b.providerId || null,
@@ -319,16 +323,17 @@ api.patch("/agents/:id", async (c) => {
   const type = existing.type as AgentType;
   const nextModel = b.model !== undefined ? b.model?.trim() || null : existing.model;
   const requestedEffort = b.reasoningEffort !== undefined ? b.reasoningEffort : existing.reasoningEffort;
-  if (b.reasoningEffort && !isReasoningEffortSupported(type, nextModel, b.reasoningEffort)) {
+  const efforts = cachedModelEfforts(type);
+  if (b.reasoningEffort && !isReasoningEffortSupported(type, nextModel, b.reasoningEffort, efforts)) {
     return c.json({
       error: `${type} 模型 ${nextModel ?? "（跟随 CLI）"} 不支持思考强度 ${b.reasoningEffort}`,
-      allowedReasoningEfforts: reasoningEffortsFor(type, nextModel),
+      allowedReasoningEfforts: reasoningEffortsFor(type, nextModel, efforts),
     }, 400);
   }
   if (b.model !== undefined) patch.model = nextModel;
   if (b.extraArgs !== undefined) patch.extraArgs = JSON.stringify(b.extraArgs);
   if (b.reasoningEffort !== undefined || b.model !== undefined) {
-    patch.reasoningEffort = normalizeReasoningEffort(type, nextModel, requestedEffort);
+    patch.reasoningEffort = normalizeReasoningEffort(type, nextModel, requestedEffort, efforts);
   }
   if (b.speed !== undefined) patch.speed = b.speed === "fast" ? "fast" : null;
   if (b.providerId !== undefined) {

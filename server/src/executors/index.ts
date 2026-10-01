@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
-import { isReasoningEffortSupported, reasoningEffortsFor } from "@ash/shared/cli-presets";
+import { isReasoningEffortSupported, resolveReasoningEfforts } from "@ash/shared/cli-presets";
 import { readCliConfigOverrides } from "@ash/shared/cli-overrides";
 import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
@@ -11,6 +11,7 @@ import { cliSpec } from "./catalog/index.js";
 import { execBinFor, probeBinFlag } from "./bin-probe.js";
 import { GenericCliExecutor } from "./generic.js";
 import { normalizeProfileExtraArgs } from "./args.js";
+import { cachedModelEfforts } from "./model-probe.js";
 import { claudeEffortUnsupportedMessage } from "./claude.js";
 
 type AgentRow = typeof agents.$inferSelect;
@@ -151,11 +152,21 @@ async function build(
   const relay = profile ? await loadRelay(profile.providerId) : undefined;
   const model = overrides.model || profile?.model || relay?.defaultModel || undefined;
   const reasoningEffort = overrides.reasoningEffort || profile?.reasoningEffort || undefined;
-  if (!isReasoningEffortSupported(type, model, reasoningEffort)) {
-    const allowed = reasoningEffortsFor(type, model);
+  // 档位能力优先用**已探到的** CLI 原话(见 cachedModelEfforts:不触发探测,拿不到就
+  // 退回规则表)。报错文案带上来源,因为「谁说这个组合不行」直接决定用户下一步怎么办:
+  // 是改配置,还是去查 ash 的规则表写错了。
+  const probed = cachedModelEfforts(type);
+  if (!isReasoningEffortSupported(type, model, reasoningEffort, probed)) {
+    const resolution = resolveReasoningEfforts(type, model, probed);
+    const source = resolution.source === "probe"
+      ? `${type} CLI 报的`
+      : resolution.source === "model-rule"
+        ? `ash 内置规则 ${resolution.ruleId}`
+        : `${type} 的档位并集`;
     throw new Error(
       `${type} 模型 ${model ?? "（跟随 CLI）"} 不支持思考强度 ${reasoningEffort}`
-      + (allowed.length ? `；可选：${allowed.join("、")}` : "；该模型没有独立思考强度档位"),
+      + (resolution.efforts.length ? `；可选：${resolution.efforts.join("、")}` : "；该模型没有独立思考强度档位")
+      + `（依据：${source}）`,
     );
   }
   const opts: ExecutorBuildOpts = profile
