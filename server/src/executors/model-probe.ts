@@ -32,6 +32,7 @@ import { probeBins } from "./bin-probe.js";
 import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 import { execFileText as exec } from "../exec.js";
 import { isHostCliIsolated } from "../auth/mode.js";
+import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { fetchClaudeDocModels } from "./claude-doc-models.js";
 import { probeClaudeModels } from "./claude-model-probe.js";
 import { readOpencodeModelEfforts } from "./opencode-model-efforts.js";
@@ -282,12 +283,22 @@ export function modelCatalogs(types?: AgentType[], force = false): Promise<CliMo
  * 缓存就退回 `MODEL_EFFORT_RULES`,与没接 probe 时一字不差。
  *
  * 实际命中率不低:claude 有 `startClaudeModelRefreshLoop()` 开机预热,其余几家在用户
- * 打开过任意一个模型选择器之后就有了(前端那一拉同时暖了服务端这份缓存)。
+ * 打开过任意一个模型选择器之后就有了 —— 而界面读的正是同一份缓存,所以**界面给得出
+ * 的档位就是服务端会接受的**。冷缓存只发生在「没人开过界面就直接打 API」,那时两边
+ * 一起退回规则表,仍然一致,且方向是更宽松(由上游诚实报错)。
  *
- * 隔离档下恒为 undefined —— 那条路**不写缓存**(见 modelCatalogFor),所以这里自然
- * 什么都查不到,不需要在这儿再判一次模式。
+ * **隔离判据必须在这儿再判一次**。原先这里写着「隔离档那条路不写缓存,所以自然什么
+ * 都查不到」—— 那只覆盖了「一直是隔离」,漏掉了**先共用、后隔离**这个状态转换:切换
+ * 之前探到的宿主机档位仍留在缓存里,于是目录(按隔离返回兜底)和校验(读旧缓存)用上
+ * 了两套依据 —— 界面给得出的档位,保存时被 400 拒掉;重启一次又能存进去了。
+ * 第 1 轮审查复现 A/B。
+ *
+ * 读同步镜像而不是 `await isHostCliIsolated()`:这个函数的全部意义就是不阻塞派任务
+ * 路径。镜像在设置写入时被立刻回填(`invalidateInstanceCache`),而且只用在降级方向 ——
+ * 万一落后一拍,后果是多退回一次规则表,不会反过来把隔离状态弄丢。
  */
 export function cachedModelEfforts(type: AgentType): ModelEffortMap | undefined {
+  if (isHostCliIsolatedSync()) return undefined;
   return cache.get(type)?.catalog.modelEfforts;
 }
 

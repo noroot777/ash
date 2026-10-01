@@ -26,6 +26,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { modelEffortKey } from "@ash/shared/cli-presets";
 import type { ModelEffortMap } from "@ash/shared/cli-presets";
+import { resolveLaunch } from "./bin-resolve.js";
 
 /** 握手超时。实测 185ms 拿到结果,给够 10s 足以容忍冷启动与磁盘慢。 */
 const TIMEOUT_MS = 10_000;
@@ -111,26 +112,47 @@ export function parseClaudeModelInfos(rows: unknown): ClaudeModelProbe | null {
   return models.length ? { models, modelEfforts } : null;
 }
 
+const PROBE_ARGS = [
+  "-p",
+  "--input-format", "stream-json",
+  "--output-format", "stream-json",
+  "--verbose",
+  // 见文件头 ②:不加载 settings、不起 MCP server。
+  "--setting-sources", "",
+  "--strict-mcp-config",
+];
+
 /**
  * 起一次 claude、握一次手、拿到 models 就杀掉。失败/超时返回 null(由调用方诚实降级)。
  *
  * `bin` 必须是 `probeBins` 解析出的**绝对路径**:GUI 启动的 server 常常缺
  * `/opt/homebrew/bin`,裸命令名会「装了却查不到」。
+ *
+ * **必须走 `resolveLaunch`**,不能裸 spawn:Windows 上 npm 装的 claude 是一个 `.cmd`
+ * 垫片,而 Node 自 CVE-2024-27980 起拒绝在没有 shell 的情况下执行批处理 —— 裸 spawn
+ * 的结果是这台机器上档位探测**永远**失败,而且因为本函数的失败是静默降级(退回规则
+ * 表),没有任何一处会报出来。`resolveLaunch` 在 POSIX 上是恒等变换,Windows 上会把
+ * 垫片拆成 `node <script>`(拆不出才退 cmd.exe),与派任务用的是同一套口径。
+ * `windowsHide` 同理:不加的话 server 每探一次就在用户桌面上闪一个控制台窗口。
  */
 export function probeClaudeModels(bin: string): Promise<ClaudeModelProbe | null> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(bin, [
-        "-p",
-        "--input-format", "stream-json",
-        "--output-format", "stream-json",
-        "--verbose",
-        // 见文件头 ②:不加载 settings、不起 MCP server。
-        "--setting-sources", "",
-        "--strict-mcp-config",
-      ], { cwd: tmpdir(), stdio: ["pipe", "pipe", "ignore"] });
+      const plan = resolveLaunch(bin, PROBE_ARGS);
+      if (!plan) {
+        resolve(null);
+        return;
+      }
+      child = spawn(plan.file, plan.args, {
+        cwd: tmpdir(),
+        stdio: ["pipe", "pipe", "ignore"],
+        windowsHide: true,
+        windowsVerbatimArguments: plan.windowsVerbatimArguments,
+      });
     } catch {
+      // resolveLaunch 在「参数含换行、Windows 无法转义」时会抛 —— 我们的参数是常量,
+      // 到不了那条路,但接住它比让一个探测失败冒泡成请求失败强。
       resolve(null);
       return;
     }

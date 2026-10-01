@@ -43,7 +43,8 @@
     "web": "expo start --web",
     "test:project-path": "node --experimental-strip-types scripts/test-project-path.mjs",
     "lint": "expo lint",
-    "test:web-smoke": "node scripts/test-web-smoke.mjs"
+    "test:cli-capability": "node --experimental-strip-types scripts/test-cli-capability.mjs",
+  "test:web-smoke": "node scripts/test-web-smoke.mjs"
   },
   "private": true
 }

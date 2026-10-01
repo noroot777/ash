@@ -83,6 +83,7 @@
     "test:cli-overrides": "tsx scripts/test-cli-overrides.ts",
     "test:claude-settings-live": "tsx scripts/test-claude-settings-live.ts",
     "test:claude-relay-settings-live": "tsx scripts/test-claude-relay-settings-live.ts",
+    "test:model-effort-isolation": "tsx scripts/test-model-effort-isolation.ts",
     "test:cli-catalog": "tsx scripts/test-cli-catalog.ts",
     "test:cli-models": "tsx scripts/test-cli-models.ts",
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",

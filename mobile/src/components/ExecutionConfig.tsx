@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentProps } from "react";
+import { useEffect, useMemo, useState, type ComponentProps } from "react";
 import { ActivityIndicator, Pressable, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@ash/shared";
 import {
@@ -7,10 +7,14 @@ import {
   isReasoningEffortSupported,
   reasoningEffortsFor,
 } from "@ash/shared/cli-presets";
-import type { ModelEffortMap } from "@ash/shared/cli-presets";
 import { sameExecutor } from "@ash/shared/executors";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/lib/api";
+import {
+  fetchCliCapability,
+  peekCliCapability,
+  type CliCapability,
+} from "@/lib/cliCapability";
 import { useTheme, radius, fonts } from "@/lib/theme";
 import { Button, Input } from "@/components/ui";
 import { SelectSheet, type SelectSheetOption } from "@/components/SelectSheet";
@@ -22,13 +26,6 @@ export type ExecutorSelection = {
 
 type PickerKind = "executor" | "model" | "effort";
 const providerModelCache = new Map<string, string[]>();
-// CLI 官方账号那一档的候选:server 现问 CLI 的结果(`grok models` 之类)。整个 app
-// 共一份,打开哪个任务都不用重探。拿不到就退回 CLI_MODEL_PRESETS 那份内置快照 ——
-// 快照是发版时抄的,新模型上线后会滞后,所以只当兜底,不当第一来源。
-//
-// `efforts` 是同一份回答里顺带的 per-model 智能水平档位(CLI 亲口报的,见服务端
-// `cachedModelEfforts`)。缺省 = 这家没有可问的档位来源,档位退回内置规则。
-const cliModelCache = new Map<AgentType, { models: string[]; efforts?: ModelEffortMap }>();
 
 export function ExecutionConfig({
   role,
@@ -61,10 +58,8 @@ export function ExecutionConfig({
   const [picker, setPicker] = useState<PickerKind | null>(null);
   const [providerModels, setProviderModels] = useState<string[] | null>(null);
   // 连类型一起记:换了智能体但还没打开选择器时,不能把上一个 CLI 的清单继续显示。
-  const [cliModels, setCliModels] = useState<
-    { type: AgentType; models: string[]; efforts?: ModelEffortMap } | null
-  >(() => {
-    const cached = cliModelCache.get(selection.agentType);
+  const [cliModels, setCliModels] = useState<({ type: AgentType } & CliCapability) | null>(() => {
+    const cached = peekCliCapability(selection.agentType);
     return cached ? { type: selection.agentType, ...cached } : null;
   });
   const [modelError, setModelError] = useState<string | null>(null);
@@ -76,9 +71,12 @@ export function ExecutionConfig({
 
   // 挂了供应商就用它的实时目录;没挂就是 CLI 官方账号那一档 —— 优先用 server 现问
   // CLI 的结果,还没拿到(首帧/离线)才退回内置快照,免得下拉框先空一下。
-  const cached = cliModels?.type === selection.agentType ? cliModels : cliModelCache.get(selection.agentType)
-    ? { type: selection.agentType, ...cliModelCache.get(selection.agentType)! }
-    : null;
+  const peeked = peekCliCapability(selection.agentType);
+  const cached = cliModels?.type === selection.agentType
+    ? cliModels
+    : peeked
+      ? { type: selection.agentType, ...peeked }
+      : null;
   const cliCandidates = cached?.models;
   const modelValues = provider
     ? providerModels ?? []
@@ -118,6 +116,27 @@ export function ExecutionConfig({
       || !!reasoningEffort;
     setPicker(canContinue ? "effort" : null);
   };
+  // 档位目录必须在**显示之前**就位,不能等用户去点模型选择器。
+  //
+  // 第 1 轮审查复现:一个 opencode + anthropic/claude-opus-4-8 + low 的任务,打开验证
+  // 设置时整片变红写着「不支持 low」—— 因为那一刻还没取过目录,只能按内置规则判(那条
+  // 规则比 CLI 实际支持的窄);点开模型选择器再关掉、什么都不改,目录到了,警告就消失。
+  // 用户看到的是「同一份配置忽好忽坏」。
+  //
+  // 挂了供应商的那一档不取:那时跑的是供应商的模型,CLI 报的 per-model 能力说的是另一
+  // 回事(判据与下面 probedEfforts 一致),白发一个请求。
+  useEffect(() => {
+    if (provider) return;
+    const type = selection.agentType;
+    let alive = true;
+    void fetchCliCapability(type, api.cliModels).then((cap) => {
+      if (alive && cap) setCliModels({ type, ...cap });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [provider, selection.agentType]);
+
   const executorItems = useMemo(
     () => executorOptions(types, profiles, selection),
     [types, profiles, selection],
@@ -155,19 +174,12 @@ export function ExecutionConfig({
   // CLI 那一档的候选。失败**不报错**:内置快照顶着,选择器照常能用 —— 为一个「清单
   // 可能少两个」的问题弹红字,不如安静降级。
   function loadCliModels(agentType: AgentType) {
-    const hit = cliModelCache.get(agentType);
+    const hit = peekCliCapability(agentType);
     setCliModels(hit ? { type: agentType, ...hit } : null);
     if (hit) return;
-    api
-      .cliModels(agentType)
-      .then((list) => {
-        const entry = list.find((item) => item.type === agentType);
-        if (!entry?.models.length) return;
-        const next = { models: [...entry.models], ...(entry.modelEfforts ? { efforts: entry.modelEfforts } : {}) };
-        cliModelCache.set(agentType, next);
-        setCliModels({ type: agentType, ...next });
-      })
-      .catch(() => {});
+    void fetchCliCapability(agentType, api.cliModels).then((cap) => {
+      if (cap) setCliModels({ type: agentType, ...cap });
+    });
   }
 
   const options = picker === "executor"
