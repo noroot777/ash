@@ -16,6 +16,8 @@
 //  8. **小额度下不许撒谎**:六条会话 + 紧额度时,要么给出真正文,要么明说哪几条没读;
 //     不许只回一行标题却宣称「每条会话都保留了它最近的部分」,返回也不许超过声称的
 //     上限(审查第 2 轮复现的那个场景)
+//  9. **最新回复很短时也必须读到**:一条「同意」渲染出来比「本次没读」那行占位还短,
+//     不许因为「文本没变长」就把它一直留在未读里、把额度让给旧的长正文(第 3 轮复现)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
@@ -80,6 +82,40 @@ const TASKS = {
 // 这条会话的 trace 一律 500:断言故障不被粉饰成「老会话本来就没有 trace」。
 const TRACE_BROKEN = "sA";
 
+// `short:<回复>` / `longinst:<回复>` / `many13` 这几类任务由 mock 现场合成,省得为每种
+// 短回复变体各写一份常量表。
+// 这几种渲染出来都比「本次没读」那行占位还短(甚至更省额度)。回复**不写进 taskId**:
+// 标题里会回显 taskId,拿它做 body.includes 断言就成了恒真。
+const SHORT_REPLIES = ["同意", "null", '"yes"', "123", "true", "好的,就这么办"];
+
+function dynamic(taskId) {
+  if (taskId === "many13") {
+    const ss = Array.from({ length: 13 }, (_, i) => ({
+      id: `many13-s${i}`, role: "single", executor: "claude@ccb",
+      startedAt: `2026-07-01T0${i % 10}:00:00.000Z`, endedAt: `2026-07-01T0${i % 10}:30:00.000Z`,
+    }));
+    return { task: { id: taskId, title: "十三条会话", status: "done", body: "指令" },
+      sessions: ss, output: Object.fromEntries(ss.map((x) => [x.id, "正文".repeat(200)])) };
+  }
+  const m = /^(short|longinst):(\d+)$/.exec(taskId);
+  if (!m) return null;
+  const [, kind, idx] = m;
+  const reply = SHORT_REPLIES[Number(idx)];
+  const fresh = { id: `${kind}-${idx}-new`, role: "single", executor: "claude@ccb",
+    startedAt: "2026-09-29T00:00:00.000Z", endedAt: "2026-09-29T01:00:00.000Z" };
+  const older = { id: `${kind}-${idx}-old`, role: "single", executor: "claude@ccb",
+    startedAt: "2026-09-28T00:00:00.000Z", endedAt: "2026-09-28T01:00:00.000Z" };
+  const sessions = kind === "longinst" ? [fresh] : [older, fresh];
+  return {
+    task: { id: taskId, title: "短回复场景", status: "done",
+      body: kind === "longinst" ? "长材料".repeat(400) : "指令" },
+    sessions,
+    output: { [fresh.id]: `${reply}${turn({ t: "agentEnd", at: "2026-09-29T01:00:00.000Z" })}`,
+      // 旧会话要足够长,否则连默认 30000 额度都装得下整份文本,根本进不了裁剪分支
+      [older.id]: `${"旧的长讨论".repeat(8000)}\nOLDER_LONG_CONCLUSION` },
+  };
+}
+
 function fakeAsh() {
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
@@ -87,11 +123,19 @@ function fakeAsh() {
       const send = (code, body, type = "application/json") => { res.writeHead(code, { "content-type": type }); res.end(body); };
       let m;
       if ((m = /^\/api\/tasks\/([^/]+)$/.exec(path))) {
-        const t = TASKS[m[1]];
+        const id = decodeURIComponent(m[1]);
+        const t = TASKS[id] ?? dynamic(id)?.task;
         return t ? send(200, JSON.stringify(t)) : send(404, JSON.stringify({ error: "not found" }));
       }
-      if ((m = /^\/api\/tasks\/([^/]+)\/sessions$/.exec(path))) return send(200, JSON.stringify(SESSIONS[m[1]] ?? []));
-      if ((m = /^\/api\/sessions\/([^/]+)\/output$/.exec(path))) return send(200, OUTPUT[m[1]] ?? "", "text/plain; charset=utf-8");
+      if ((m = /^\/api\/tasks\/([^/]+)\/sessions$/.exec(path))) {
+        const id = decodeURIComponent(m[1]);
+        return send(200, JSON.stringify(SESSIONS[id] ?? dynamic(id)?.sessions ?? []));
+      }
+      if ((m = /^\/api\/sessions\/([^/]+)\/output$/.exec(path))) {
+        const id = decodeURIComponent(m[1]);
+        const dyn = dynamic(id.startsWith("many13") ? "many13" : id.replace(/^(short|longinst)-(\d+)-(new|old)$/, "$1:$2"));
+        return send(200, OUTPUT[id] ?? dyn?.output?.[id] ?? "", "text/plain; charset=utf-8");
+      }
       if ((m = /^\/api\/sessions\/([^/]+)\/trace$/.exec(path))) {
         if (m[1] === TRACE_BROKEN) return send(500, JSON.stringify({ error: "trace unreadable" }));
         return send(200, JSON.stringify(TRACE[m[1]] ?? []));
@@ -221,8 +265,33 @@ try {
   check("maxChars 小到放不下任何说明时直接拒收", !!tooSmall.result?.isError || !!tooSmall.error,
     JSON.stringify(tooSmall).slice(0, 200));
 
-  const longBody = await text({ taskId: "T6", maxChars: 1200 });
-  check("任务指令不许挤掉会话正文（最多占四分之一）", longBody.length === undefined || !/## 任务指令[\s\S]{400,}## 会话/.test(longBody.body));
+  // ── 审查第 3 轮:最新回复很短时不许被占位文字挡在门外 ────────────────────
+  // 取「最新那条会话」的块,核对它里面有没有真正的回复 —— 不看全文 includes。
+  const freshBlock = (body) => (body.split("## 会话 ").find((b) => b.startsWith("2/2 ·") || b.startsWith("1/1 ·")) ?? "");
+  for (const [i, reply] of SHORT_REPLIES.entries()) {
+    for (const cap of [800, 30_000]) {
+      const r = await text({ taskId: `short:${i}`, maxChars: cap });
+      const fresh = freshBlock(r.body);
+      check(`最新的短回复「${reply}」在 ${cap} 字下读得到`,
+        fresh.includes(reply) && !fresh.includes("本次没读"), fresh.slice(0, 200) || r.body.slice(0, 200));
+    }
+  }
+  const shortCut = await text({ taskId: "short:0", maxChars: 800 });
+  check("紧额度下旧长会话也还在(只是被裁)", shortCut.body.includes("short-0-old"), shortCut.body.slice(0, 200));
+
+  // 单条会话 + 长任务指令:同一个判据错误在这里表现为「0/1 条」
+  const lonely = await text({ taskId: "longinst:0", maxChars: 800 });
+  check("唯一一条会话的短回复不会被标成没读",
+    freshBlock(lonely.body).includes("同意") && !lonely.body.includes("本次没读"), lonely.body.slice(-260));
+  check("任务指令不许挤掉会话正文（最多占四分之一）", !/## 任务指令[\s\S]{400,}?## 会话/.test(lonely.body),
+    lonely.body.slice(0, 300));
+
+  // 不拦项:会话多到 id 清单放不下时,拒绝提示本身也不许超上限
+  for (const cap of [200, 400]) {
+    const many = await text({ taskId: "many13", maxChars: cap });
+    check(`十三条会话 + ${cap} 字:拒绝提示本身也不超上限`, many.body.length <= cap, `实际 ${many.body.length}`);
+    check(`十三条会话 + ${cap} 字:说清有几条、怎么单读`, many.body.includes("13 条会话") && many.body.includes("sessionId"));
+  }
 
   const noTask = await text({ taskId: "NOPE" });
   check("任务不存在时原样抛出 404", noTask.isError && noTask.body.includes("404"), noTask.body);

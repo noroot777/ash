@@ -89,12 +89,16 @@ const SKIPPED = "〔本次没读:额度不够,见上方说明〕";
  *
  * 返回 null = 连「每条一行标题」的骨架都放不下,这时候调用方该明确拒绝而不是硬挤。
  */
-function fitBlocks(blocks: Block[], budget: number): string[] | null {
+function fitBlocks(blocks: Block[], budget: number): { texts: string[]; read: number } | null {
   const whole = (b: Block) => `${b.title}\n\n${b.body}`;
   const cut = (b: Block, keep: number) =>
     `${b.title}\n〔略去前 ${b.body.length - keep} 字,下面是这条会话最近的部分〕\n…${b.body.slice(b.body.length - keep)}`;
 
   const out = blocks.map((b) => `${b.title}\n${SKIPPED}`);
+  // 判「这一块读到正文了没有」只能靠这个标记,**不能靠文本变没变长**。一条「同意」渲染
+  // 出来比「本次没读」那行占位还短 —— 第 2 轮那版拿长度当进展判据,于是真正的最新回复
+  // 被一路挡在门外,读到的全是旧长正文,顶上还写着「优先给了最近的几条」(第 3 轮复现)。
+  const got = blocks.map(() => false);
   let used = out.reduce((n, t) => n + t.length, 0) + SEP.length * Math.max(0, blocks.length - 1);
   if (used > budget) return null;
 
@@ -112,15 +116,19 @@ function fitBlocks(blocks: Block[], budget: number): string[] | null {
       const c = cut(b, keep);
       return c.length <= room ? c : null;
     })();
-    if (!next || next.length <= (out[i] as string).length) return;
+    if (!next) return;
+    // 还没读到正文的块:只要放得下就换上,**哪怕换完更短**(短回复省下来的额度会回到
+    // 池子里给别人用)。已经读到的块,才要求必须更长 —— 那是第二轮加厚,不变长没意义。
+    if (got[i] && next.length <= (out[i] as string).length) return;
     used += next.length - (out[i] as string).length;
     out[i] = next;
+    got[i] = true;
   };
 
   const titleCost = (i: number) => (blocks[i] as Block).title.length + 2;
   for (let i = blocks.length - 1; i >= 0; i--) grow(i, titleCost(i) + cut(blocks[i] as Block, 0).length + MIN_BODY);
   for (let i = blocks.length - 1; i >= 0; i--) grow(i, Number.MAX_SAFE_INTEGER);
-  return out;
+  return { texts: out, read: got.filter(Boolean).length };
 }
 
 // 执行过程按回合分组,放在会话正文**之前**而不是内联:trace 与正文的对应关系只靠
@@ -249,17 +257,29 @@ server.registerTool(
         // 提示本身也要短:这里只给 id,不重复每条的角色/模型/时间。
         const need = bodies.reduce((n, b) => n + b.title.length + SKIPPED.length + SEP.length, 0)
           + headCore.length + noteRoom + MIN_BODY;
-        const ids = bodies.slice(0, 12).map((b) => b.id).join(" ");
-        return ok(`〔这次什么都没读到:上限 ${limit} 字不够。这个任务有 ${bodies.length} 条会话,`
-          + `全列出来至少要 ${Math.ceil(need / 100) * 100} 字。把 maxChars 调到那个数以上,或者用 sessionId 单读一条。〕\n`
-          + `会话 id${bodies.length > 12 ? `(前 12 条,共 ${bodies.length} 条)` : ""}:${ids}`);
+        const lead = `〔这次什么都没读到:上限 ${limit} 字不够。这个任务有 ${bodies.length} 条会话,`
+          + `全列出来至少要 ${Math.ceil(need / 100) * 100} 字。把 maxChars 调到那个数以上,或者用 sessionId 单读一条。〕`;
+        // 这一支也受 limit 约束:十几条会话的 id 拼起来能把 200 字的额度顶穿(第 3 轮不拦项)。
+        // 按**实际渲染出来的长度**逐个试加,别拿一个估出来的余量去减 —— 前缀本身就有二十来字。
+        const ids: string[] = [];
+        let listed = "";
+        for (const b of bodies) {
+          const next = [...ids, b.id];
+          const prefix = next.length === bodies.length
+            ? "\n会话 id:" : `\n会话 id(前 ${next.length} 条,共 ${bodies.length} 条):`;
+          const candidate = `${prefix}${next.join(" ")}`;
+          if (lead.length + candidate.length > limit) break;
+          ids.push(b.id);
+          listed = candidate;
+        }
+        return ok(`${lead}${listed}`);
       }
 
-      const read = fitted.filter((t) => !t.includes(SKIPPED)).length;
-      const body = `${noteFor(read)}\n\n${headCut}\n\n${fitted.join(SEP)}`;
+      const body = `${noteFor(fitted.read)}\n\n${headCut}\n\n${fitted.texts.join(SEP)}`;
       // 兜底:声称了上限就不许超。上面每一步都按渲染后的长度算过,正常走不到这里;真走到了
       // 也只砍头部的说明,不碰各条会话的尾巴。
-      return ok(body.length <= limit ? body : `${noteFor(read).slice(0, 80)}…\n\n${fitted.join(SEP).slice(-(limit - 90))}`);
+      return ok(body.length <= limit ? body
+        : `${noteFor(fitted.read).slice(0, 80)}…\n\n${fitted.texts.join(SEP).slice(-(limit - 90))}`);
     } catch (e) { return fail(e); }
   },
 );
