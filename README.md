@@ -177,7 +177,7 @@ npm start            # http://localhost:4317
 
 ## MCP 工具
 
-Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent 暴露 **25 个工具**，覆盖任务全生命周期：
+Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent 暴露 **28 个工具**，覆盖任务全生命周期：
 
 | 类别 | 工具 |
 |---|---|
@@ -185,7 +185,10 @@ Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent �
 | 任务管理 | `create_task_chain` `batch_create_tasks` `get_task` `list_tasks` `patch_task` |
 | 队列 | `create_queue` `get_queue` `queue_insert` `queue_remove` `queue_reorder` `requeue_task` |
 | 生命周期 | `run_task` `run_group` `stop_task` `complete_task` `pause_task` `accept_task` |
-| 协作 | `ask_question` `answer_question` `report_stage` `dispatch` |
+| 协作 | `ask_question` `answer_question` `report_stage` `dispatch` `dispute_review` `debate_reply` |
+| 旁观 | `read_task_transcript` |
+
+`read_task_transcript` 读的是**别的任务**说过的话：拿到一个任务 id 就能看到它当时的指令、回复和结论，与界面上同一份语料。没有它时，agent 只能从工具清单得出「ash 不提供这个能力」，转去翻各家 CLI 自己的落盘文件 —— 那条路只对单一执行器成立。
 
 ## 项目结构
 
@@ -193,7 +196,7 @@ Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent �
 server/   Hono 后端 — API、任务编排、进程管理、前端托管
 web/      React + Vite + Tailwind 前端
 shared/   前后端共享类型
-mcp/      MCP server — 25 个工具供 agent 调用
+mcp/      MCP server — 28 个工具供 agent 调用
 mobile/   Expo 移动端（iOS / Android）
 scripts/  setup / restart / package（.mjs，跨平台）
 ```

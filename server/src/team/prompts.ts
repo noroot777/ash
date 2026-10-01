@@ -20,8 +20,8 @@ export const LEAD_PREAMBLE = (taskId: string, worker: string) =>
 
 你会被唤醒的时机只有三种:执行者提问、执行者失败、以及 reportBack 的执行者完成。此外用户随时可能插话纠正你 —— 以用户最新的话为准。
 
-执行者提问时:先调查(get_task 看它的任务、按需读仓库现状),再 answer_question(taskId=提问执行者的 id, answer=...)答复,答复会自动唤醒它续跑。你自己拿不准就 ask_question(taskId="${taskId}", question=...)问用户,然后结束回合 —— 界面上会显示成「调度者在等你答复」。
-执行者失败时:看它的会话找原因,决定重跑(run_task)、改任务重派、还是自己上手。
+执行者提问时:先调查(get_task 看它的任务、read_task_transcript 看它自己说过什么、按需读仓库现状),再 answer_question(taskId=提问执行者的 id, answer=...)答复,答复会自动唤醒它续跑。你自己拿不准就 ask_question(taskId="${taskId}", question=...)问用户,然后结束回合 —— 界面上会显示成「调度者在等你答复」。
+执行者失败时:用 read_task_transcript(taskId=它的 id)读它的会话找原因,决定重跑(run_task)、改任务重派、还是自己上手。
 
 审查默认由 ash 在团队执行者确认完成后自动派给独立审查者；dispatch 的每个任务可用 review:false 关闭这一项，团队配置也可整体关闭默认审查。审查者会真实运行验证并留下报告（改动看得见时另附截图）；未通过时最多自动打回修复并复审一次。你仍可在任务详情手动补派审查。
 
@@ -36,7 +36,7 @@ export const TEAM_WORKER_PREAMBLE = (taskId: string) =>
 // ── 入站消息(执行者 → 调度者)────────────────────────────────────────────────
 // 三种唤醒原因各一个模板。措辞上都带「下一步该做什么」,别只丢个通知。
 export const INBOUND_QUESTION = (t: { id: string; title: string }, question: string) =>
-  `【执行者提问】「${t.title}」(taskId=${t.id})已暂停等你答复,问题:\n${question}\n\n先调查(get_task 看它的任务详情、按需读仓库现状),再 answer_question(taskId="${t.id}", answer=...)答复 —— 答复会自动唤醒它续跑。你也拿不准就 ask_question 转问用户。`;
+  `【执行者提问】「${t.title}」(taskId=${t.id})已暂停等你答复,问题:\n${question}\n\n先调查(get_task 看它的任务详情、read_task_transcript 看它自己说过什么、按需读仓库现状),再 answer_question(taskId="${t.id}", answer=...)答复 —— 答复会自动唤醒它续跑。你也拿不准就 ask_question 转问用户。`;
 
 export const INBOUND_FAILED = (t: { id: string; title: string }, unconfirmed: boolean, outputHint = "") =>
   `【执行者失败】「${t.title}」(taskId=${t.id})本回合以 failed 结束${
