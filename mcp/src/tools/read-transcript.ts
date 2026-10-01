@@ -14,17 +14,18 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { parseSessionOutput } from "@ash/shared";
-import { call, fail, ok } from "../runtime.js";
+import { call, callText, fail, ok } from "../runtime.js";
 
 type TaskRow = Record<string, unknown>;
 type SessionRow = {
   id: string; role?: string; agentType?: string; executor?: string;
-  startedAt?: string | null; endedAt?: string | null; sideTurn?: boolean | null;
+  startedAt?: string | null; endedAt?: string | null; turnStartedAt?: string | null; sideTurn?: boolean | null;
   turnModel?: string | null; cwd?: string | null; branch?: string | null;
 };
 type TraceEntry = { at: string; turnStartedAt: string; event: Record<string, unknown> };
 
 const DEFAULT_MAX_CHARS = 30_000;
+const SEP = "\n\n---\n\n";
 
 // 落盘的 at 是 ISO UTC。读的人在本机，给本地时间——让 agent 自己换算时区是白耗一轮。
 function local(at?: string | null): string {
@@ -33,14 +34,6 @@ function local(at?: string | null): string {
   if (Number.isNaN(d.getTime())) return at;
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-// `call` 对非 JSON 的响应原样返回字符串；正文偶尔恰好是合法 JSON（纯数字、true）时会
-// 被 parse 掉，所以这里把它拍回字符串，别让下游的 split 炸在一个 number 上。
-function asText(v: unknown): string {
-  if (typeof v === "string") return v;
-  if (v === null || v === undefined) return "";
-  return JSON.stringify(v);
 }
 
 function renderSegments(raw: string): string {
@@ -57,6 +50,44 @@ function renderSegments(raw: string): string {
     const tag = seg.aside ? "旁注" : seg.level === "notice" ? "结算说明" : "系统";
     return `【${tag}${at ? ` ${at}` : ""}】\n${seg.text}`;
   }).join("\n\n");
+}
+
+// 会话排序/裁剪的时间基准:**最后一次活动**,不是创建时间。
+//
+// `startedAt` 是会话第一次建起来的时刻,而续聊是 resume 同一条会话——它会更新
+// `turnStartedAt` 和正文,却永远停在原来的 `startedAt` 上。于是「9-28 建的会话在
+// 9-29 续聊出新结论」会排在「9-28 晚些建、当天就结束的旧会话」前面,再被保尾一截,
+// 活下来的是旧结论、丢掉的是新结论(审查第 1 轮复现)。
+function lastActivity(s: SessionRow): string {
+  return [s.endedAt, s.turnStartedAt, s.startedAt].filter(Boolean).sort().at(-1) ?? "";
+}
+
+/**
+ * 把总预算摊给各条会话,每条**各自保尾**,而不是把它们拼起来再砍一刀尾巴。
+ *
+ * 块级排序对交错的会话(duet 三条并行、实现与审查来回、续聊复用老会话)永远只是近似,
+ * 所以裁剪不能把「最新的东西在整份文本的末尾」当成前提 —— 那等于把排序的瑕疵直接
+ * 放大成「整条会话一个字都不剩」。每条会话各留一段尾巴之后,不管块怎么排,**每条会话
+ * 最近说的话都在**。用不完的额度回收给超额的那些,别让一条短会话把份额白占着。
+ */
+function fitBlocks(blocks: string[], budget: number): string[] {
+  if (blocks.reduce((n, b) => n + b.length, 0) <= budget) return blocks;
+  let share = Math.floor(budget / blocks.length);
+  let spare = budget - share * blocks.length;
+  // 两轮分配:先把短块用不完的额度收回来,再按还差多少摊给超额的块。
+  const over = blocks.filter((b) => b.length > share);
+  if (over.length && over.length < blocks.length) {
+    const used = blocks.filter((b) => b.length <= share).reduce((n, b) => n + b.length, 0);
+    share = Math.floor((budget - used) / over.length);
+    spare = 0;
+  }
+  return blocks.map((b, i) => {
+    const room = share + (i === blocks.length - 1 ? spare : 0);
+    if (b.length <= room) return b;
+    const head = b.split("\n")[0] ?? "";            // 会话标题行一定留住:没有它就不知道这段是谁说的
+    const tail = b.slice(Math.max(0, b.length - Math.max(0, room - head.length - 40)));
+    return `${head}\n〔这条会话太长,略去前 ${b.length - tail.length} 字,下面是它最近的部分〕\n…${tail}`;
+  });
 }
 
 // 执行过程按回合分组,放在会话正文**之前**而不是内联:trace 与正文的对应关系只靠
@@ -105,11 +136,11 @@ server.registerTool(
       "拿到一个任务 id、想知道「它当时得出了什么结论/做过什么」时用这个——不要去翻 ~/.claude/projects 或 codex 的 rollout 文件,那条路只对单一执行器成立。" +
       "任务有多条会话时(duet 的 voiceA/voiceB/implementer、重试新建的会话、就地验证的旁路回合)默认全读,按开始时间排序;用 sessionId 可只读一条。" +
       "团队任务的执行者是各自独立的任务,先用 list_tasks(parentId=团队 id) 拿到 id 再逐个读。" +
-      "默认不含工具调用明细(includeTrace 打开,最多列最近 80 次),正文超长时**保留末尾**(结论通常在最后)并标明截掉了多少。",
+      "默认不含工具调用明细(includeTrace 打开,最多列最近 80 次)。超长时按会话分别裁剪,**每条会话都保留它最近的部分**——不是把全文拼起来砍尾巴,那样整条会话都可能一个字不剩。",
     inputSchema: {
       taskId: z.string().describe("要读的任务 id"),
       sessionId: z.string().optional().describe("只读这一条会话;缺省读该任务的全部会话"),
-      maxChars: z.number().int().positive().optional().describe(`正文上限,缺省 ${DEFAULT_MAX_CHARS} 字;超了保留末尾`),
+      maxChars: z.number().int().positive().optional().describe(`正文上限,缺省 ${DEFAULT_MAX_CHARS} 字;超了按会话分摊、各保末尾`),
       includeTrace: z.boolean().optional().describe("附上每条会话的工具调用清单(按回合分组),缺省 false"),
     },
   },
@@ -119,10 +150,10 @@ server.registerTool(
       const task = (await call("GET", `/tasks/${taskId}`)) as TaskRow;
       const all = (await call("GET", `/tasks/${taskId}/sessions`)) as SessionRow[];
       // 服务端那条查询没有 orderBy,顺序是数据库给什么算什么。对 duet 这种一个任务三条
-      // 会话的情形,顺序错了整段对话就读反了,所以在这里显式按开始时间排。
+      // 会话的情形,顺序错了整段对话就读反了,所以在这里显式排 —— 按最后活动时间。
       const rows = all
         .filter((s) => !sessionId || s.id === sessionId)
-        .sort((a, b) => String(a.startedAt ?? "").localeCompare(String(b.startedAt ?? "")));
+        .sort((a, b) => lastActivity(a).localeCompare(lastActivity(b)));
 
       if (!rows.length) {
         return ok(sessionId
@@ -140,22 +171,28 @@ server.registerTool(
 
       const bodies: string[] = [];
       for (const [i, s] of rows.entries()) {
-        const raw = asText(await call("GET", `/sessions/${s.id}/output`));
+        const raw = await callText(`/sessions/${s.id}/output`);
         const meta = [s.role, s.executor, s.turnModel, s.sideTurn ? "旁路回合" : "",
           `${local(s.startedAt)}${s.endedAt ? ` → ${local(s.endedAt)}` : " → 进行中"}`].filter(Boolean).join(" · ");
         let trace = "";
         if (includeTrace) {
-          // trace 是 2026-08-01 才加的,老会话本来就没有;读不到不该让整次调用失败。
+          // 老会话(trace 2026-08-01 才加)服务端已经给成功的 `[]` 了,所以这里 catch 到的
+          // **一定是真失败**。把它说成「多半跑在该功能上线之前」等于把故障粉饰成历史
+          // 遗留,读的人连重试的念头都不会有 —— 原样把错误带出来。
           try { trace = renderTrace((await call("GET", `/sessions/${s.id}/trace`)) as TraceEntry[]); }
-          catch { trace = "### 执行过程\n（这条会话没有 trace —— 多半跑在该功能上线之前）\n\n"; }
+          catch (e) { trace = `### 执行过程\n（读不到:${e instanceof Error ? e.message : String(e)}）\n\n`; }
         }
         bodies.push(`## 会话 ${i + 1}/${rows.length} · ${s.id} · ${meta}\n\n${trace}${renderSegments(raw)}`);
       }
 
-      const full = `${head}\n\n${bodies.join("\n\n---\n\n")}`;
+      const full = `${head}\n\n${bodies.join(SEP)}`;
       if (full.length <= limit) return ok(full);
-      const kept = full.slice(full.length - limit);
-      return ok(`〔已截断:全文 ${full.length} 字,下面只给末尾 ${limit} 字(结论通常在最后)。要看全部就调大 maxChars,或用 sessionId 单读一条会话。〕\n\n…${kept}`);
+      // 元信息和任务指令先于会话正文占位:没有它们,剩下的正文不知道是谁在什么任务里说的。
+      const headRoom = Math.min(head.length, Math.max(400, Math.floor(limit * 0.15)));
+      const headCut = head.length <= headRoom ? head : `${head.slice(0, headRoom)}\n〔任务指令过长,已截去后半段〕`;
+      const fitted = fitBlocks(bodies, Math.max(0, limit - headCut.length - SEP.length * (bodies.length - 1)));
+      return ok(`〔已截断:全文 ${full.length} 字,上限 ${limit} 字。裁剪按会话分别进行,**每条会话都保留了它最近的部分**;`
+        + `想看全部就调大 maxChars,或用 sessionId 单读一条会话。〕\n\n${headCut}\n\n${fitted.join(SEP)}`);
     } catch (e) { return fail(e); }
   },
 );

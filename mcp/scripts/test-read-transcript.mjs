@@ -9,6 +9,10 @@
 //     ——改之前正是这样：保下来的全是 trace，结论一个字不剩
 //  4. trace 超额时只留**最近** 80 次
 //  5. sessionId 指向不存在的会话时，报出这个任务实际有哪几条
+//  6. **续聊复用老会话**:排序基准必须是「最后活动」而不是「会话创建」,且超限时每条
+//     会话各保一段尾巴——否则 9-28 建、9-29 续聊出新结论的那条会被整块砍掉,活下来的
+//     是另一条当天就结束的旧审查(审查第 1 轮复现的那个场景)
+//  7. 正文**原样**取回:恰好是 `null` / `"带引号的结果"` 的正文不许被 JSON 解码改写
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
@@ -19,11 +23,26 @@ const PORT = 14734;
 const RS = "\x1e";
 
 const turn = (o) => `\n${RS}${JSON.stringify(o)}\n`;
-// 两条会话,**喂进去的顺序是反的** —— 断言 1 靠这个。
-const SESSIONS = [
-  { id: "sB", role: "implementer", executor: "claude@b", startedAt: "2026-01-02T00:00:00.000Z", endedAt: null },
-  { id: "sA", role: "voiceA", executor: "claude@a", startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T01:00:00.000Z" },
-];
+// ── 语料 ────────────────────────────────────────────────────────────────────
+// T1:两条会话,**喂进去的顺序是反的** —— 断言排序。
+// T2:续聊场景。old 9-28 建、9-29 续聊出新结论且还在跑;stale 9-28 晚些建、当天结束,
+//    正文很长。按 startedAt 排 + 整体保尾的话,新结论会被整块砍掉。
+// T3:正文恰好是合法 JSON 的两条会话(agent 刚写完、还没落 agentEnd 哨兵的那个窗口)。
+const RS_ = RS;
+const SESSIONS = {
+  T1: [
+    { id: "sB", role: "implementer", executor: "claude@b", startedAt: "2026-01-02T00:00:00.000Z", endedAt: null },
+    { id: "sA", role: "voiceA", executor: "claude@a", startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T01:00:00.000Z" },
+  ],
+  T2: [
+    { id: "old", role: "single", executor: "claude@a", startedAt: "2026-09-28T00:00:00.000Z", turnStartedAt: "2026-09-29T10:00:00.000Z", endedAt: null },
+    { id: "stale", role: "reviewer", executor: "claude@b", startedAt: "2026-09-28T01:00:00.000Z", turnStartedAt: "2026-09-28T01:00:00.000Z", endedAt: "2026-09-28T02:00:00.000Z" },
+  ],
+  T3: [
+    { id: "jnull", role: "single", executor: "claude@a", startedAt: "2026-03-01T00:00:00.000Z", endedAt: null },
+    { id: "jstr", role: "single", executor: "claude@a", startedAt: "2026-03-02T00:00:00.000Z", endedAt: null },
+  ],
+};
 const OUTPUT = {
   sA: `第一段 agent 正文。${turn({ t: "user", agent: "claude", text: "真人追问一句", at: "2026-01-01T00:10:00.000Z" })}回应追问的正文。`
     + turn({ t: "user", agent: "claude", text: "验证打回：改这里", at: "2026-01-01T00:20:00.000Z", by: "system" })
@@ -31,6 +50,10 @@ const OUTPUT = {
     + turn({ t: "system", agent: "claude", text: "本回合没有交卷", at: "2026-01-01T00:40:00.000Z", level: "notice" }),
   // 长正文 + 结尾的标记:断言 3 用它确认保下来的是尾巴。
   sB: `${"填充".repeat(3000)}\n这是最后的结论行。`,
+  old: `早期讨论。${turn({ t: "user", agent: "claude", text: "再想想方案 B", at: "2026-09-29T10:00:00.000Z" })}${"续聊正文".repeat(200)}\nLATEST_CONFIRMED_PLAN_B`,
+  stale: `${"旧审查记录".repeat(2000)}\nSTALE_REVIEW_REJECTS_PLAN_B`,
+  jnull: "null",
+  jstr: '"quoted-result"',
 };
 const TRACE = {
   sA: [],
@@ -40,6 +63,13 @@ const TRACE = {
     event: { kind: "tool", name: `Tool${i}`, detail: "{}" },
   })),
 };
+const TASKS = {
+  T1: { id: "T1", title: "假任务", status: "done", body: "这是任务指令", executorLabel: "claude@a", mode: "duet" },
+  T2: { id: "T2", title: "续聊任务", status: "running", body: "原始指令", executorLabel: "claude@a" },
+  T3: { id: "T3", title: "正文像 JSON", status: "running", body: "原始指令", executorLabel: "claude@a" },
+};
+// 这条会话的 trace 一律 500:断言故障不被粉饰成「老会话本来就没有 trace」。
+const TRACE_BROKEN = "sA";
 
 function fakeAsh() {
   return new Promise((resolve) => {
@@ -48,12 +78,15 @@ function fakeAsh() {
       const send = (code, body, type = "application/json") => { res.writeHead(code, { "content-type": type }); res.end(body); };
       let m;
       if ((m = /^\/api\/tasks\/([^/]+)$/.exec(path))) {
-        if (m[1] !== "T1") return send(404, JSON.stringify({ error: "not found" }));
-        return send(200, JSON.stringify({ id: "T1", title: "假任务", status: "done", body: "这是任务指令", executorLabel: "claude@a", mode: "duet" }));
+        const t = TASKS[m[1]];
+        return t ? send(200, JSON.stringify(t)) : send(404, JSON.stringify({ error: "not found" }));
       }
-      if ((m = /^\/api\/tasks\/([^/]+)\/sessions$/.exec(path))) return send(200, JSON.stringify(SESSIONS));
+      if ((m = /^\/api\/tasks\/([^/]+)\/sessions$/.exec(path))) return send(200, JSON.stringify(SESSIONS[m[1]] ?? []));
       if ((m = /^\/api\/sessions\/([^/]+)\/output$/.exec(path))) return send(200, OUTPUT[m[1]] ?? "", "text/plain; charset=utf-8");
-      if ((m = /^\/api\/sessions\/([^/]+)\/trace$/.exec(path))) return send(200, JSON.stringify(TRACE[m[1]] ?? []));
+      if ((m = /^\/api\/sessions\/([^/]+)\/trace$/.exec(path))) {
+        if (m[1] === TRACE_BROKEN) return send(500, JSON.stringify({ error: "trace unreadable" }));
+        return send(200, JSON.stringify(TRACE[m[1]] ?? []));
+      }
       send(404, JSON.stringify({ error: "not found" }));
     });
     server.listen(PORT, "127.0.0.1", () => resolve(server));
@@ -109,7 +142,7 @@ try {
   const full = await text({ taskId: "T1", maxChars: 200_000 });
   const posA = full.body.indexOf("会话 1/2 · sA");
   const posB = full.body.indexOf("会话 2/2 · sB");
-  check("多会话按 startedAt 排序（喂进去是乱的）", posA > 0 && posB > posA, `posA=${posA} posB=${posB}`);
+  check("多会话按时间排序（喂进去是乱的）", posA > 0 && posB > posA, `posA=${posA} posB=${posB}`);
   check("带上任务指令", full.body.includes("## 任务指令") && full.body.includes("这是任务指令"));
   check("真人追问渲染成「你」", /【你 2026-01-01 \d\d:\d\d】\n真人追问一句/.test(full.body));
   check("后端代发的回合不冒充真人", full.body.includes("【系统代发") && /【系统代发[^】]*】\n验证打回/.test(full.body));
@@ -131,6 +164,29 @@ try {
 
   const missing = await text({ taskId: "T1", sessionId: "nope" });
   check("会话 id 不存在时报出实际有哪几条", missing.body.includes("没有会话 nope") && missing.body.includes("sB") && missing.body.includes("sA"));
+
+  // ── 审查第 1 轮:续聊复用老会话 ───────────────────────────────────────────
+  const chronoFull = await text({ taskId: "T2", maxChars: 200_000 });
+  const iOld = chronoFull.body.indexOf("会话 2/2 · old");
+  check("续聊过的老会话排在后面（按最后活动,不是创建时间）", iOld > 0, chronoFull.body.slice(0, 400));
+  check("不截断时两条结论都在", chronoFull.body.includes("LATEST_CONFIRMED_PLAN_B") && chronoFull.body.includes("STALE_REVIEW_REJECTS_PLAN_B"));
+
+  const chronoCut = await text({ taskId: "T2", maxChars: 3000 });
+  check("超限时续聊出的新结论不丢", chronoCut.body.includes("LATEST_CONFIRMED_PLAN_B"), chronoCut.body.slice(-200));
+  check("超限时另一条会话的尾巴也在（分会话各保尾）", chronoCut.body.includes("STALE_REVIEW_REJECTS_PLAN_B"));
+  check("被裁的会话仍带着自己的标题行", /## 会话 1\/2 · stale/.test(chronoCut.body));
+  check("裁剪提示说清是按会话分别裁的", chronoCut.body.includes("每条会话都保留了它最近的部分"));
+  check("裁剪后不超过上限", chronoCut.body.length <= 3000 + 200, `len=${chronoCut.body.length}`);
+
+  // ── 审查第 2 轮:正文恰好是合法 JSON ──────────────────────────────────────
+  const json = await text({ taskId: "T3", maxChars: 200_000 });
+  check("正文 null 不被当成「没有正文」", json.body.includes("null") && !json.body.includes("还没有落下任何正文"), json.body.slice(-300));
+  check("正文的引号不被 JSON 解码吃掉", json.body.includes('"quoted-result"'), json.body.slice(-300));
+
+  // ── 不拦项 1:trace 读取故障不许粉饰成「老会话没有 trace」 ────────────────
+  const brokenTrace = await text({ taskId: "T1", sessionId: "sA", includeTrace: true, maxChars: 200_000 });
+  check("trace 真失败时报出原因", brokenTrace.body.includes("读不到:") && brokenTrace.body.includes("500")
+    && !brokenTrace.body.includes("上线之前"), brokenTrace.body.slice(0, 300));
 
   const noTask = await text({ taskId: "NOPE" });
   check("任务不存在时原样抛出 404", noTask.isError && noTask.body.includes("404"), noTask.body);

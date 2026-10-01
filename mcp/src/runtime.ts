@@ -65,7 +65,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // `complete_task` 走 HTTP —— 正好撞上重启那几秒就会硬失败,于是「进程活下来了、
 // 成果却丢了」。重试把这个窗口抹平。只重试确定没送达的错误,所以 dispatch 这种
 // 非幂等调用也不会被做两遍。
-export async function call(method: string, path: string, body?: unknown, directionToken = DIRECTION_TOKEN): Promise<unknown> {
+async function request(method: string, path: string, body: unknown, directionToken: string): Promise<string> {
   const deadline = Date.now() + RECONNECT_WINDOW_MS;
   let delay = 400;
   let lastCode = "";
@@ -100,7 +100,27 @@ export async function call(method: string, path: string, body?: unknown, directi
   }
   const text = await res.text();
   if (!res.ok) throw new Error(`HTTP ${res.status} ${method} ${path} — ${text}`);
+  return text;
+}
+
+/** JSON 端点。解析不出来就把原文给回去 —— 兼容早年几个返回裸文本的端点。 */
+export async function call(method: string, path: string, body?: unknown, directionToken = DIRECTION_TOKEN): Promise<unknown> {
+  const text = await request(method, path, body, directionToken);
   try { return JSON.parse(text); } catch { return text; }
+}
+
+/**
+ * **原样**取一个 text/plain 端点的响应体,不经过 JSON。
+ *
+ * 为什么非得另开一个:`call` 对所有成功响应都先试 `JSON.parse`,而会话正文
+ * (`/sessions/:id/output`,服务端用 `c.text()` 发的)偶尔**恰好是一段合法 JSON** ——
+ * agent 刚写完 `null` 或 `"某个结果"`、进程还没结束(此时末尾还没有 agentEnd 哨兵,
+ * 整份正文就是那一个字面量)。于是 `null` 被解析成 JS null、当成「这条会话还没有落下
+ * 任何正文」报给调用方,`"某个结果"` 则悄悄掉了一对引号。正文是**原文**,一个字节都
+ * 不该被解码改写。重连退避与 HTTP 错误处理共用同一段,不另抄一份。
+ */
+export async function callText(path: string, directionToken = DIRECTION_TOKEN): Promise<string> {
+  return request("GET", path, undefined, directionToken);
 }
 
 export const ok = (data: unknown) => ({
