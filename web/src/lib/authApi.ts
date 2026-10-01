@@ -14,6 +14,7 @@ import type {
   UserView,
 } from "@ash/shared";
 import { id, json, request } from "./apiClient.ts";
+import { syncHostCliPolicy } from "./hostCliPolicy.ts";
 import { takeAuthProbe } from "./authProbe.ts";
 
 export interface UnbackedExecutor {
@@ -40,7 +41,14 @@ export const authApi = {
   recoveryHint: () => request<{ command: string; note: string }>("/auth/recovery-hint"),
 
   setupPreflight: () => request<SetupPreflight>("/auth/setup/preflight"),
-  chooseSingle: () => request<AuthState>("/auth/setup", json("POST", { mode: "single" })),
+  // 首启向导也是「学到 CLI 额度那一档」的一条路(§八之二 的初值就在这里选)。
+  // 不在这里同步的话,转多人之前取回的目录会留在缓存里 —— 与 api.ts 的 adopt()
+  // 同一条判据,两条入口都得接上(第 2 轮审查那条的另一个方向)。
+  chooseSingle: async () => {
+    const state = await request<AuthState>("/auth/setup", json("POST", { mode: "single" }));
+    syncHostCliPolicy({ instanceMode: "single", sharedHostCli: false });
+    return state;
+  },
   chooseMulti: (input: {
     adminName: string;
     rootDir: string;
@@ -53,7 +61,10 @@ export const authApi = {
     request<{ key: string; user: UserView; claimed: Record<string, number>; rootDir: string }>(
       "/auth/setup",
       json("POST", { mode: "multi", ...input }),
-    ),
+    ).then((result) => {
+      syncHostCliPolicy({ instanceMode: "multi", sharedHostCli: !!input.sharedHostCli });
+      return result;
+    }),
 
   // 领取专属邀请链接。三步:看说明 → 领取(生成 key) → 「我已保存」作废链接。
   // 中间那步**不作废** —— 手滑点开就锁死是计划明确要避免的。

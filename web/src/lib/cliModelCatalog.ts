@@ -3,6 +3,7 @@ import type { AgentType } from "@ash/shared";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@ash/shared/cli-presets";
 import { api } from "./api.ts";
+import { onHostCliPolicyChange } from "./hostCliPolicy.ts";
 
 /**
  * 「CLI 官方账号」那一块的模型候选。跟 provider 的 `/models` 探测(见 modelCatalog.ts)
@@ -28,6 +29,34 @@ function publishLoading(type: AgentType, loading: boolean) {
  * 服务端已经恢复了,界面却要等用户想起来点刷新。
  */
 const DEGRADED_RETRY_MS = 60_000;
+
+/**
+ * 「CLI 额度」那一档(§八之二)一改,这份缓存里的东西**全部作废**:隔离档下服务端一次都
+ * 不问宿主机 CLI,端出来是内置快照 + 兜底档位;共用档下端出来是 CLI 的原话。两档的清单
+ * 和 per-model 档位都不一样。
+ *
+ * 2026-10-01 第 2 轮审查复现:在设置页把额度改成「共用」,不刷新页面回到执行器设置,
+ * 档位菜单仍列着 `ultra`(隔离档的兜底并集),点下去保存返回 400 —— 界面给得出的值
+ * 服务端不收,刷新一次才对。服务端那半在第 1 轮已经按当前政策翻面了,翻不过来的是
+ * **已经打开的这个页面**手里的旧结果。
+ *
+ * 三件事一起做,少一件就还是不一致:
+ *  ① 清掉缓存与时间戳 —— 否则 `shouldFetch` 会判「有成功结果,不用再问」。opencode 这类
+ *    `probeSupported=false` 的 preset 结果连 DEGRADED_RETRY 都不会重试,会一直占着。
+ *  ② 让在途请求失去 publish 权 —— 切换前发出的那一次结算得更晚,不拦住就会把切换后
+ *    刚取回的结果盖回旧政策的答案(与 force 刷新那条「只有当前那次有权 publish」同一个
+ *    机制:清空 requests 之后,旧请求的身份核对必然不成立)。
+ *  ③ **主动替已挂载的选择器重取** —— 只清缓存的话,正开着的那个菜单要等下一次挂载才
+ *    更新,而用户此刻正盯着它。
+ */
+onHostCliPolicyChange(() => {
+  cache.clear();
+  fetchedAt.clear();
+  requests.clear();
+  for (const [type, set] of subscribers) {
+    if (set.size) void fetchCatalog(type, false);
+  }
+});
 
 function degraded(catalog: CliModelCatalog): boolean {
   // 没有清单命令的 CLI 本来就只有快照,那不是失败,别去重试。
