@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentProps } from "react";
+import { useEffect, useMemo, useState, type ComponentProps } from "react";
 import { ActivityIndicator, Pressable, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@ash/shared";
 import {
@@ -10,6 +10,11 @@ import {
 import { sameExecutor } from "@ash/shared/executors";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/lib/api";
+import {
+  fetchCliCapability,
+  peekCliCapability,
+  type CliCapability,
+} from "@/lib/cliCapability";
 import { useTheme, radius, fonts } from "@/lib/theme";
 import { Button, Input } from "@/components/ui";
 import { SelectSheet, type SelectSheetOption } from "@/components/SelectSheet";
@@ -21,10 +26,6 @@ export type ExecutorSelection = {
 
 type PickerKind = "executor" | "model" | "effort";
 const providerModelCache = new Map<string, string[]>();
-// CLI 官方账号那一档的候选:server 现问 CLI 的结果(`grok models` 之类)。整个 app
-// 共一份,打开哪个任务都不用重探。拿不到就退回 CLI_MODEL_PRESETS 那份内置快照 ——
-// 快照是发版时抄的,新模型上线后会滞后,所以只当兜底,不当第一来源。
-const cliModelCache = new Map<AgentType, string[]>();
 
 export function ExecutionConfig({
   role,
@@ -57,12 +58,10 @@ export function ExecutionConfig({
   const [picker, setPicker] = useState<PickerKind | null>(null);
   const [providerModels, setProviderModels] = useState<string[] | null>(null);
   // 连类型一起记:换了智能体但还没打开选择器时,不能把上一个 CLI 的清单继续显示。
-  const [cliModels, setCliModels] = useState<{ type: AgentType; models: string[] } | null>(
-    () => {
-      const cached = cliModelCache.get(selection.agentType);
-      return cached ? { type: selection.agentType, models: cached } : null;
-    },
-  );
+  const [cliModels, setCliModels] = useState<({ type: AgentType } & CliCapability) | null>(() => {
+    const cached = peekCliCapability(selection.agentType);
+    return cached ? { type: selection.agentType, ...cached } : null;
+  });
   const [modelError, setModelError] = useState<string | null>(null);
   const [customModel, setCustomModel] = useState(model);
   const profile = profileForSelection(selection, profiles);
@@ -72,9 +71,13 @@ export function ExecutionConfig({
 
   // 挂了供应商就用它的实时目录;没挂就是 CLI 官方账号那一档 —— 优先用 server 现问
   // CLI 的结果,还没拿到(首帧/离线)才退回内置快照,免得下拉框先空一下。
-  const cliCandidates = cliModels?.type === selection.agentType
-    ? cliModels.models
-    : cliModelCache.get(selection.agentType);
+  const peeked = peekCliCapability(selection.agentType);
+  const cached = cliModels?.type === selection.agentType
+    ? cliModels
+    : peeked
+      ? { type: selection.agentType, ...peeked }
+      : null;
+  const cliCandidates = cached?.models;
   const modelValues = provider
     ? providerModels ?? []
     : cliCandidates ?? [...CLI_MODEL_PRESETS[selection.agentType]];
@@ -89,7 +92,10 @@ export function ExecutionConfig({
   // 多数 CLI 没有（或还没实测出）智能水平档位，这时 sheet 里只剩一条「跟随执行器」，
   // 点开一个单选项没有意义 —— 整个 trigger 不渲染。已经设过值的仍要渲染：换类型后
   // 留下的旧覆盖得有地方看见和清掉。
-  const effortValues = reasoningEffortsFor(selection.agentType, model);
+  // 挂了供应商那一档不读 CLI 的档位表:那时跑的是供应商的模型,CLI 报的 per-model
+  // 能力说的是另一回事(它只认自己账号里那些)。
+  const effortValues = reasoningEffortsFor(selection.agentType, model, provider ? undefined : cached?.efforts);
+
   const effortPickable = effortValues.length > 0 || !!reasoningEffort;
   const effortOptions = followOptions(
     // 已选档位不在允许集合里时它不在候选中，得补一条，否则想清掉都点不着。
@@ -100,12 +106,37 @@ export function ExecutionConfig({
   );
   // 模型和强度是两件独立的事：换模型不静默改强度，对不上就在下面写清楚，让用户
   // 自己决定改哪一边。静默清空会让人以为自己没点中。
-  const effortSupported = isReasoningEffortSupported(selection.agentType, model, reasoningEffort);
+  const probedEfforts = provider ? undefined : cached?.efforts;
+  const effortSupported = isReasoningEffortSupported(selection.agentType, model, reasoningEffort, probedEfforts);
   const commitModel = (next: string) => {
     onModelChange(next);
-    const canContinue = reasoningEffortsFor(selection.agentType, next).length > 0 || !!reasoningEffort;
+    // 判据必须跟 effortValues 用同一份依据,否则会出现「选完模型弹开档位 sheet,里面
+    // 只有一条『跟随执行器』」这种自相矛盾的交互。
+    const canContinue = reasoningEffortsFor(selection.agentType, next, probedEfforts).length > 0
+      || !!reasoningEffort;
     setPicker(canContinue ? "effort" : null);
   };
+  // 档位目录必须在**显示之前**就位,不能等用户去点模型选择器。
+  //
+  // 第 1 轮审查复现:一个 opencode + anthropic/claude-opus-4-8 + low 的任务,打开验证
+  // 设置时整片变红写着「不支持 low」—— 因为那一刻还没取过目录,只能按内置规则判(那条
+  // 规则比 CLI 实际支持的窄);点开模型选择器再关掉、什么都不改,目录到了,警告就消失。
+  // 用户看到的是「同一份配置忽好忽坏」。
+  //
+  // 挂了供应商的那一档不取:那时跑的是供应商的模型,CLI 报的 per-model 能力说的是另一
+  // 回事(判据与下面 probedEfforts 一致),白发一个请求。
+  useEffect(() => {
+    if (provider) return;
+    const type = selection.agentType;
+    let alive = true;
+    void fetchCliCapability(type, api.cliModels).then((cap) => {
+      if (alive && cap) setCliModels({ type, ...cap });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [provider, selection.agentType]);
+
   const executorItems = useMemo(
     () => executorOptions(types, profiles, selection),
     [types, profiles, selection],
@@ -143,18 +174,12 @@ export function ExecutionConfig({
   // CLI 那一档的候选。失败**不报错**:内置快照顶着,选择器照常能用 —— 为一个「清单
   // 可能少两个」的问题弹红字,不如安静降级。
   function loadCliModels(agentType: AgentType) {
-    const cached = cliModelCache.get(agentType);
-    setCliModels(cached ? { type: agentType, models: cached } : null);
-    if (cached) return;
-    api
-      .cliModels(agentType)
-      .then((list) => {
-        const models = list.find((entry) => entry.type === agentType)?.models;
-        if (!models?.length) return;
-        cliModelCache.set(agentType, [...models]);
-        setCliModels({ type: agentType, models: [...models] });
-      })
-      .catch(() => {});
+    const hit = peekCliCapability(agentType);
+    setCliModels(hit ? { type: agentType, ...hit } : null);
+    if (hit) return;
+    void fetchCliCapability(agentType, api.cliModels).then((cap) => {
+      if (cap) setCliModels({ type: agentType, ...cap });
+    });
   }
 
   const options = picker === "executor"

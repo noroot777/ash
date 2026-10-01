@@ -11,6 +11,7 @@ import { projects, queueItems, tasks } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
+import { cachedModelEfforts } from "./executors/model-probe.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
@@ -532,16 +533,18 @@ api.patch("/tasks/:id", async (c) => {
   });
   const executorChanged = !sameExecutor(beforeExecutor, afterExecutor);
   const finalType = afterExecutor.agentType;
+  // 同 routes.ts:用已探到的 CLI 原话,没有就按内置规则判。
+  const finalEfforts = finalType ? cachedModelEfforts(finalType) : undefined;
   const normalizedEffort = finalType
-    ? normalizeReasoningEffort(finalType, patchedOverrides.model, patchedOverrides.reasoningEffort)
+    ? normalizeReasoningEffort(finalType, patchedOverrides.model, patchedOverrides.reasoningEffort, finalEfforts)
     : patchedOverrides.reasoningEffort;
   if (
     finalType
     && b.reasoningEffort !== undefined
     && b.reasoningEffort
-    && !isReasoningEffortSupported(finalType, patchedOverrides.model, b.reasoningEffort)
+    && !isReasoningEffortSupported(finalType, patchedOverrides.model, b.reasoningEffort, finalEfforts)
   ) {
-    const allowed = reasoningEffortsFor(finalType, patchedOverrides.model);
+    const allowed = reasoningEffortsFor(finalType, patchedOverrides.model, finalEfforts);
     return c.json({
       error: `${finalType} 模型 ${patchedOverrides.model ?? "（跟随执行器）"} 不支持思考强度 ${b.reasoningEffort}`,
       allowedReasoningEfforts: allowed,

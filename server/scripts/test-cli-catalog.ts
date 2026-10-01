@@ -11,7 +11,8 @@
 //      interactive(拿不到 CLI 真实 id)一律不展示可执行的恢复命令;
 //   ⑥ 预检失败(bin 不在 PATH)必须由事件流报错并以 done 收尾 —— 少一个 done 就是任务卡死;
 //   ⑦ 备用命令名:检测命中 bins[1] 时执行也要用它(死认 bins[0] = 目录说可用、派任务 ENOENT);
-//   ⑧ Grok 的 token 级 thought 必须按连续段聚合,不能在 UI 生成几百个「思考过程」。
+//   ⑧ Grok 的 token 级 thought 必须按连续段聚合,不能在 UI 生成几百个「思考过程」;
+//   ⑨ 档位三级优先(probe > 内置规则 > CLI 并集)与 probe 表的 key 归一。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -23,6 +24,8 @@ import {
   CLI_MODEL_PRESETS,
   MODEL_EFFORT_RULES,
   REASONING_EFFORT_VALUES,
+  isReasoningEffortSupported,
+  modelEffortKey,
   normalizeReasoningEffort,
   reasoningEffortsFor,
   resolveReasoningEfforts,
@@ -202,6 +205,65 @@ assert.equal(
   normalizeReasoningEffort("codex", "gpt-5.5", "ultra"),
   null,
   "换模型后旧档位已不支持时要自动清回跟随 CLI",
+);
+
+// ①c probe(CLI 亲口报的档位)优先于内置规则。这一层是 2026-10-01 接上的:codex 的
+// `debug models`、claude control protocol 的 ModelInfo、opencode 缓存的 models.dev 都
+// 给得出 per-model 档位,规则表退化成「探不到时的兜底」。
+//
+// 钉三件事,因为这三件各自错一次都是静默的:
+//   ① probe 赢过规则(否则接了等于没接);
+//   ② **空数组是答案不是缺失** —— 按缺失处理会把 CLI 的「这个模型没有档位」又改回猜测;
+//   ③ 缺 key 时一字不差地退回原有两级(否则接 probe 会让没探到的模型集体掉到并集)。
+assert.deepEqual(
+  resolveReasoningEfforts("codex", "gpt-5.5", { "gpt-5.5": ["low", "high"] }),
+  { efforts: ["low", "high"], source: "probe", ruleId: null },
+  "probe 必须赢过 codex:gpt-5.5 这条内置规则",
+);
+assert.deepEqual(
+  resolveReasoningEfforts("codex", "gpt-5.5", { "gpt-5.5": [] }),
+  { efforts: [], source: "probe", ruleId: null },
+  "probe 报空数组 = 这个模型没有档位,不能当成「没探到」退回并集",
+);
+assert.equal(
+  resolveReasoningEfforts("codex", "gpt-5.5", { "gpt-other": ["low"] }).ruleId,
+  "codex:gpt-5.5",
+  "probe 表里没有这个模型时要退回内置规则,而不是掉到 CLI 并集",
+);
+assert.deepEqual(
+  reasoningEffortsFor("codex", "gpt-5.5", undefined),
+  ["low", "medium", "high", "xhigh"],
+  "不传 probe 时行为必须与接 probe 之前完全一致",
+);
+// key 归一:登记侧(服务端适配器)与查询侧必须同一套,否则「登记了却查不到」而且只在
+// 某些模型名上复现 —— 所以这里连大小写、provider、Pi 的 `:high` 后缀一起钉。
+assert.equal(modelEffortKey("anthropic/Claude-Opus-4-8"), "anthropic/claude-opus-4-8");
+assert.equal(modelEffortKey("sonnet:high"), "sonnet", "已知 effort 后缀要剥掉");
+assert.equal(modelEffortKey("gpt-5.6-sol"), "gpt-5.6-sol");
+assert.deepEqual(
+  reasoningEffortsFor("opencode", "anthropic/claude-opus-4-8", { "anthropic/claude-opus-4-8": ["low", "max"] }),
+  ["low", "max"],
+  "带 provider 的 key 要精确命中",
+);
+assert.deepEqual(
+  reasoningEffortsFor("opencode", "anthropic/claude-opus-4-8", { "claude-opus-4-8": ["minimal"] }),
+  ["minimal"],
+  "用户只填裸 id 时也要能命中按 provider/id 登记的那条(反向回退)",
+);
+assert.deepEqual(
+  reasoningEffortsFor("pi", "anthropic/claude-haiku-4-5:high", { "anthropic/claude-haiku-4-5": [] }),
+  [],
+  "Pi 的档位后缀不能影响查表",
+);
+assert.equal(
+  isReasoningEffortSupported("codex", "gpt-5.5", "max", { "gpt-5.5": ["low", "medium", "high", "xhigh", "max"] }),
+  true,
+  "probe 比规则宽时要放行(规则表写窄了不该挡住 CLI 实际支持的档位)",
+);
+assert.equal(
+  isReasoningEffortSupported("codex", "gpt-5.6-sol", "ultra", { "gpt-5.6-sol": ["low", "high"] }),
+  false,
+  "probe 比规则窄时要拒(CLI 说没有就是没有)",
 );
 assert.equal(
   normalizeReasoningEffort("codex", "gpt-5.6-sol", "ultra"),

@@ -10,7 +10,8 @@
 //   ④ 没有清单命令 / 没装 CLI 时诚实降级:source==="preset" 且 models 等于内置快照;
 //   ⑤ 缓存命中不重复起子进程,force 会绕过缓存,降级结果比成功结果短命;
 //   ⑥ 本机装了 grok / codex 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提);
-//   ⑦ 多人模式下**一次都不问宿主机 CLI**(§八),连自用模式下探到的缓存也不许端出来。
+//   ⑦ 多人模式下**一次都不问宿主机 CLI**(§八),连自用模式下探到的缓存也不许端出来;
+//   ⑧ per-model 档位的三条来源各自解析得对,且「不知道」与「没有档位」永远分得开。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,6 +35,7 @@ const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
 const { parseGrokModels } = await import("../src/executors/catalog/grok.js");
 const { parseCodexModels } = await import("../src/executors/catalog/codex.js");
 const { parsePiModels } = await import("../src/executors/catalog/pi.js");
+const { parseClaudeModelInfos } = await import("../src/executors/claude-model-probe.js");
 const { extractClaudeDocModels } = await import("../src/executors/claude-doc-models.js");
 const { catalogTtlMs, modelCatalogFor, modelCatalogs, normalizeModelList, resetModelCatalogCache } =
   await import("../src/executors/model-probe.js");
@@ -309,6 +311,164 @@ assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败�
     } else {
       assert.ok(catalog.error, "探测失败必须带上原因,否则界面只能显示一个假的实时清单");
       console.log(`· codex 装着但没探到清单(${catalog.error}),已降级到快照 —— 符合预期`);
+    }
+  }
+}
+
+// ── ⑧ per-model 档位的三条来源 ───────────────────────────────────────────
+// 2026-10-01 接上:模型清单本来就在现问 CLI,而 codex / claude / opencode 这三家**同一
+// 份数据里**就带着每个模型允许哪些智能水平。钉住的是「解析得对 + 分得清不知道与没有」,
+// 不是具体档位值(那随 CLI 版本变,正是不再手写它的理由)。
+{
+  // codex:`supported_reasoning_levels` 形状取自 0.153.4 实测输出。
+  const codexOut = JSON.stringify({
+    models: [
+      {
+        slug: "gpt-x-sol",
+        priority: 1,
+        supported_reasoning_levels: [
+          { effort: "low", description: "快" },
+          { effort: "max", description: "深" },
+          { effort: "ultra", description: "最深 + 自动委派" },
+        ],
+      },
+      // 同代里少一档的那个:一条前缀规则发同一套档位就会在这里露出来。
+      { slug: "gpt-x-luna", priority: 2, supported_reasoning_levels: [{ effort: "low" }, { effort: "max" }] },
+      // 老版本 CLI 没有这个字段 → 必须是「不知道」(缺 key),不能当成「没有档位」。
+      { slug: "gpt-legacy", priority: 3 },
+      // CLI 明确报空数组 → 那是答案:这个模型没有档位。
+      { slug: "gpt-noeffort", priority: 4, supported_reasoning_levels: [] },
+      // 字段还在但形状全变了 → 同样按「不知道」处理,别硬凑。
+      { slug: "gpt-weird", priority: 5, supported_reasoning_levels: [{ level: "low" }] },
+      // 隐藏模型不进候选,但档位要登记:profile 里钉着它的老配置仍要判得对。
+      { slug: "gpt-hidden", priority: 6, visibility: "hide", supported_reasoning_levels: [{ effort: "high" }] },
+      // 裸字符串数组:字段将来简化成这种也要接得住。
+      { slug: "gpt-plain", priority: 7, supported_reasoning_levels: ["low", "LOW", "high"] },
+    ],
+  });
+  const codex = parseCodexModels(codexOut);
+  const efforts = codex.modelEfforts ?? {};
+  assert.deepEqual(codex.models, ["gpt-x-sol", "gpt-x-luna", "gpt-legacy", "gpt-noeffort", "gpt-weird", "gpt-plain"]);
+  assert.deepEqual(efforts["gpt-x-sol"], ["low", "max", "ultra"]);
+  assert.deepEqual(efforts["gpt-x-luna"], ["low", "max"], "同代模型各报各的,不许共用一套");
+  assert.equal("gpt-legacy" in efforts, false, "字段缺失 = 不知道,必须缺 key 而不是空数组");
+  assert.deepEqual(efforts["gpt-noeffort"], [], "CLI 报空数组 = 这个模型没有档位");
+  assert.equal("gpt-weird" in efforts, false, "形状变了要按不知道处理");
+  assert.deepEqual(efforts["gpt-hidden"], ["high"], "隐藏模型的档位照样登记");
+  assert.deepEqual(efforts["gpt-plain"], ["low", "high"], "裸字符串数组也接,并去重归一");
+}
+
+{
+  // pi:只有 yes/no 一列,所以只做得了「没有档位」这半件事。
+  const piOut = [
+    "provider   model            context  max-out  thinking  images",
+    "anthropic  claude-sonnet-5  1M       128K     yes       yes",
+    "openai     gpt-legacy-4     128K     16K      no        yes",
+  ].join("\n");
+  const pi = parsePiModels(piOut);
+  assert.deepEqual(pi.models, ["anthropic/claude-sonnet-5", "openai/gpt-legacy-4"]);
+  assert.deepEqual(pi.modelEfforts, { "openai/gpt-legacy-4": [] }, "thinking=no 才登记(空集);yes 不等于支持全部 7 档");
+
+  // 列序换了也要跟着走:按表头定位而不是写死下标。
+  const moved = parsePiModels([
+    "provider   model         thinking  context",
+    "openai     gpt-legacy-4  no        128K",
+  ].join("\n"));
+  assert.deepEqual(moved.modelEfforts, { "openai/gpt-legacy-4": [] }, "thinking 列换位置后仍要读对");
+
+  // 没有表头(格式大改)时不猜:宁可不给档位,也不能把隔壁列当 yes/no 读。
+  const headless = parsePiModels("openai     gpt-legacy-4  no        128K");
+  assert.equal(headless.modelEfforts, undefined, "读不到表头就不产出档位");
+}
+
+{
+  // claude:control protocol 的 ModelInfo。haiku 那行**整个没有** supportsEffort 两个
+  // 字段(2026-10-01 对 2.1.283 实测),这正是「字段缺失 = 不支持」的依据。
+  const probe = parseClaudeModelInfos([
+    {
+      value: "sonnet",
+      resolvedModel: "claude-sonnet-5[1m]",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "high", "max"],
+    },
+    { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001" },
+    // 说支持却没给清单 → 不知道,退回规则表,不能当成「没有档位」。
+    { value: "mystery", resolvedModel: "claude-mystery-9", supportsEffort: true },
+  ]);
+  assert.ok(probe);
+  assert.deepEqual(probe.models, ["sonnet", "haiku", "mystery"]);
+  assert.deepEqual(probe.modelEfforts["sonnet"], ["low", "high", "max"], "别名要能查到");
+  assert.deepEqual(probe.modelEfforts["claude-sonnet-5[1m]"], ["low", "high", "max"], "canonical id 也要");
+  assert.deepEqual(probe.modelEfforts["claude-sonnet-5"], ["low", "high", "max"], "去掉上下文后缀的那个同样要");
+  assert.deepEqual(probe.modelEfforts["haiku"], [], "没有 supportsEffort 字段 = 这个模型没有档位");
+  assert.equal("mystery" in probe.modelEfforts, false, "说支持却没给清单时按不知道处理");
+  assert.equal(parseClaudeModelInfos("not-an-array"), null, "形状不对要返回 null 让上层降级");
+  assert.equal(parseClaudeModelInfos([]), null, "空清单等于没探到");
+}
+
+{
+  // opencode/kilo:读它自己缓存的 models.dev 快照。这条来源弱一级,所以裁剪更严。
+  const cacheRoot = mkdtempSync(join(stage, "xdg-"));
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  mkdirSync(join(cacheRoot, "opencode"), { recursive: true });
+  writeFileSync(join(cacheRoot, "opencode", "models.json"), JSON.stringify({
+    anthropic: {
+      models: {
+        // `none` 不在 opencode 的 --variant 并集里 → 求交后丢掉,不引入新值。
+        "claude-x": { reasoning_options: [{ type: "effort", values: ["none", "low", "max"] }] },
+        // budget_tokens 不是 effort 档位 → 不登记(登记空数组等于替 opencode 断言「没档位」)。
+        "claude-budget": { reasoning_options: [{ type: "budget_tokens", min: 1024 }] },
+        // 全部落在并集之外 → 同样不登记,而不是登记一个空集。
+        "claude-alien": { reasoning_options: [{ type: "effort", values: ["none", "off"] }] },
+      },
+    },
+  }), "utf8");
+  const prevXdg = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = cacheRoot;
+  try {
+    const { readOpencodeModelEfforts } = await import("../src/executors/opencode-model-efforts.js");
+    const map = await readOpencodeModelEfforts("opencode");
+    assert.deepEqual(map["anthropic/claude-x"], ["low", "max"], "第三方数据只用来收窄并集,不引入 none 这种新值");
+    assert.equal("anthropic/claude-budget" in map, false, "budget_tokens 型不是 effort 档位,不登记");
+    assert.equal("anthropic/claude-alien" in map, false, "求交后为空也不登记(断言「无档位」没依据)");
+    assert.deepEqual(await readOpencodeModelEfforts("grok"), {}, "没有这条来源的 CLI 返回空表");
+  } finally {
+    if (prevXdg === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = prevXdg;
+    rmSync(cacheRoot, { recursive: true, force: true });
+  }
+}
+
+// ⑧b 本机装了 codex / claude 就实探一次档位(装了才断言,同 ⑥ 的口径)。
+{
+  const codex = CLI_SPEC_BY_KEY.codex;
+  if (await probeBins(codex.bins, codex.fallbackVersionMatch)) {
+    const catalog = await modelCatalogFor("codex", true);
+    if (catalog.source === "probe") {
+      const probed = Object.keys(catalog.modelEfforts ?? {});
+      assert.ok(probed.length > 0, "codex 探测成功时档位表不该是空的(它和清单同在一份输出里)");
+      console.log(`· codex 实探档位 ${probed.length} 条,例:${probed[0]} → ${JSON.stringify(catalog.modelEfforts![probed[0]!])}`);
+    }
+  } else {
+    console.log("· 本机没装 codex,跳过档位实探");
+  }
+}
+
+{
+  const claude = CLI_SPEC_BY_KEY.claude;
+  const found = await probeBins(claude.bins, claude.fallbackVersionMatch);
+  if (!found) {
+    console.log("· 本机没装 claude,跳过 control 探针实测");
+  } else {
+    const { probeClaudeModels } = await import("../src/executors/claude-model-probe.js");
+    const probe = await probeClaudeModels(found.path);
+    if (!probe) {
+      // 合法状态:没登录、settings 里配了认证(探针刻意不加载 settings)、或协议变了。
+      console.log("· claude 装着但 control 探针没拿到 ModelInfo —— 档位退回规则表,符合降级预期");
+    } else {
+      assert.ok(probe.models.length > 0);
+      assert.ok(Object.keys(probe.modelEfforts).length > 0, "拿到 ModelInfo 就该有档位表");
+      console.log(`· claude 实探:${probe.models.join(", ")}`);
     }
   }
 }

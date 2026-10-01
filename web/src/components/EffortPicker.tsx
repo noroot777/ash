@@ -7,6 +7,7 @@ import {
   reasoningEffortsFor,
 } from "@ash/shared/cli-presets";
 import { CaretDown, Warning } from "@phosphor-icons/react";
+import { useCliModelCatalog } from "../lib/cliModelCatalog.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 
@@ -20,10 +21,16 @@ import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
  * 这一段转成警告态、浮层顶上写清楚为什么，用户自己决定是换模型还是换档位。静默清空
  * 会让人以为自己没点中，静默保留又会让任务在真跑起来时被上游拒。
  *
- * 候选来自 shared 的 `reasoningEffortsFor(type, model)`（完整允许集合，可以有洞、
- * 可以为空）。模型压根没有档位时这一段只剩一句说明，不给点。`type` 为空 = 连哪个 CLI
- * 都还没定（工作流的站点可以跟随任务的执行器），这时给通用四档、也不判谁不支持——
+ * 候选来自 shared 的 `reasoningEffortsFor(type, model, probed)`（完整允许集合，可以
+ * 有洞、可以为空）。模型压根没有档位时这一段只剩一句说明，不给点。`type` 为空 = 连哪个
+ * CLI 都还没定（工作流的站点可以跟随任务的执行器），这时给通用四档、也不判谁不支持——
  * 不知道 ≠ 不支持。
+ *
+ * `probed` 是**该 CLI 亲口报的** per-model 档位（codex 的 `supported_reasoning_levels`、
+ * claude control protocol 的 ModelInfo、opencode 缓存的 models.dev），从模型目录里顺带
+ * 取；它自己订阅 `useCliModelCatalog` 而不是让每个调用方传一个 prop —— 那个 hook 是
+ * 全页共享缓存且合并并发请求，而这颗胶囊旁边几乎总有一个模型选择器在用同一份数据，
+ * 所以实际上不多发一个请求。探不到就退回内置规则，与接 probe 之前一字不差。
  */
 export function EffortPicker({
   type,
@@ -59,13 +66,14 @@ export function EffortPicker({
   const [localOpen, setLocalOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const probed = useCliModelCatalog(type).catalog?.modelEfforts;
   const efforts = useMemo(() => {
-    const base = reasoningEffortsFor(type, model);
+    const base = reasoningEffortsFor(type, model, probed);
     // CLI 未定时已经选过的值不能凭空从候选里消失：那多半是别处设的，这里没有依据
     // 判它不合法，至少得让用户看得见、点得回来。
     return !type && value && !base.includes(value) ? [...base, value] : base;
-  }, [model, type, value]);
-  const supported = !type || isReasoningEffortSupported(type, model, value);
+  }, [model, probed, type, value]);
+  const supported = !type || isReasoningEffortSupported(type, model, value, probed);
 
   // 这个模型没有档位可选：胶囊只作说明用（选过的值仍要显示，否则用户看不见要清什么）。
   const empty = efforts.length === 0;

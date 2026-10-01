@@ -14,19 +14,28 @@
 //     判据见 `modelCatalogFor` 顶部 —— 这条端点没有鉴权可言(它不读任何人的资源),
 //     真正的边界是「多人模式下压根不去起这个子进程」。
 //
+//  ⑤ **档位(modelEfforts)与模型清单是两件事,各自降级**。有的 CLI 两样都给得出
+//     (codex 的 `debug models` 一份输出里就带 `supported_reasoning_levels`),有的只给
+//     得出档位(opencode/kilo 没有清单命令,但缓存着一份 models.dev),claude 则是两个
+//     不同来源(清单来自官方文档、档位来自 control protocol 握手)。所以任一边失败都
+//     不拖累另一边:档位探不到就退回 `MODEL_EFFORT_RULES`,与没接这条路时完全一样。
+//
 // 为什么不落库:清单是**本机 CLI 当下的事实**,不是用户配置。落库要额外处理「换了
 // CLI 版本 / 换了登录账号 / 卸载了」的失效,而重启后重探一次的代价只有几百毫秒。
 
 import type { AgentType, AppSettings } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
 import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@ash/shared/multiuser";
-import type { CliModelCatalog } from "@ash/shared/cli-presets";
+import type { CliModelCatalog, ModelEffortMap } from "@ash/shared/cli-presets";
 import { CLI_MODEL_PRESETS } from "@ash/shared/cli-presets";
 import { probeBins } from "./bin-probe.js";
 import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 import { execFileText as exec } from "../exec.js";
 import { isHostCliIsolated } from "../auth/mode.js";
+import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { fetchClaudeDocModels } from "./claude-doc-models.js";
+import { probeClaudeModels } from "./claude-model-probe.js";
+import { readOpencodeModelEfforts } from "./opencode-model-efforts.js";
 import { getAppSettings } from "../app-settings.js";
 
 /** 探测结果的保鲜期。到点后下一次读取会**等**一次重探(不做后台预热那套复杂度)。 */
@@ -100,6 +109,10 @@ export function normalizeModelList(models: string[], defaultModel: string | null
   return ordered;
 }
 
+/** 只在非空时带上 `modelEfforts`:缺字段 = 这家没有档位来源,空对象会显得「问过了但一条没有」。 */
+const withEfforts = (efforts: ModelEffortMap | undefined): Partial<CliModelCatalog> =>
+  efforts && Object.keys(efforts).length ? { modelEfforts: efforts } : {};
+
 async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelCatalog> {
   if (type === "claude") {
     const config = settings ?? await getAppSettings();
@@ -108,27 +121,38 @@ async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelC
       refreshIntervalHours: config.claudeModelRefreshHours,
       models: normalizeModelList([...CLI_MODEL_PRESETS.claude, ...custom], null),
     };
-    try {
-      const [models, found] = await Promise.all([
-        fetchClaudeDocModels(),
-        probeBins(CLI_SPEC_BY_KEY.claude.bins, CLI_SPEC_BY_KEY.claude.fallbackVersionMatch),
-      ]);
-      return {
-        ...presetCatalog(type),
-        models: normalizeModelList([...base.models, ...models], null),
-        source: "docs",
-        refreshIntervalHours: base.refreshIntervalHours,
-        available: !!found,
-        cliVersion: found?.version ?? null,
-        probedAt: new Date().toISOString(),
-        error: null,
-      };
-    } catch (error) {
-      return presetCatalog(type, { ...base, error: reasonOf(error) });
+    // claude 的清单与档位来自**两个**来源:清单抓官方文档(给完整 ID 候选),档位来自
+    // control protocol 握手(`list_models` 的 ModelInfo)。allSettled 而不是 all:
+    // control 探针失败只该让档位退回规则表,不该把整份目录拖成 preset;反之亦然。
+    //
+    // 探针报的 models(`default`/`opus`/`sonnet[1m]` …)**不并进候选**:它是账号别名,
+    // 与 preset 高度重合,而 `default` 压根不是模型名 —— 并进去等于往下拉框里塞一个
+    // 选了会让人误解的值,收益不抵风险。它的价值全在 modelEfforts 上。
+    const found = await probeBins(CLI_SPEC_BY_KEY.claude.bins, CLI_SPEC_BY_KEY.claude.fallbackVersionMatch);
+    const [docs, control] = await Promise.allSettled([
+      fetchClaudeDocModels(),
+      found ? probeClaudeModels(found.path) : Promise.resolve(null),
+    ]);
+    const efforts = control.status === "fulfilled" ? control.value?.modelEfforts : undefined;
+    if (docs.status === "rejected") {
+      return presetCatalog(type, { ...base, error: reasonOf(docs.reason), ...withEfforts(efforts) });
     }
+    return {
+      ...presetCatalog(type),
+      models: normalizeModelList([...base.models, ...docs.value], null),
+      source: "docs",
+      refreshIntervalHours: base.refreshIntervalHours,
+      available: !!found,
+      cliVersion: found?.version ?? null,
+      probedAt: new Date().toISOString(),
+      error: null,
+      ...withEfforts(efforts),
+    };
   }
   const spec = CLI_SPEC_BY_KEY[type];
-  if (!spec?.models) return presetCatalog(type);
+  // 档位可以独立于清单存在:opencode/kilo 没有清单命令,但缓存着一份 models.dev。
+  const localEfforts = await readOpencodeModelEfforts(type);
+  if (!spec?.models) return presetCatalog(type, withEfforts(localEfforts));
 
   // 探测跑的是 probeBins 解析出的**绝对路径**,与派任务时是同一套查找口径
   // (GUI 启动的 server 常常缺 /opt/homebrew/bin 之类,裸命令名会「装了却查不到」)。
@@ -136,6 +160,10 @@ async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelC
   if (!found) return presetCatalog(type, { error: null });
 
   const base = { available: true, cliVersion: found.version, probeSupported: true as const };
+  // 清单命令自带的档位(codex 的 supported_reasoning_levels、pi 的 thinking 列)优先于
+  // 本地快照那条弱来源;两边都有的话以 CLI 亲口报的为准。
+  const merge = (fromParse?: Record<string, readonly string[]>): Partial<CliModelCatalog> =>
+    withEfforts(Object.keys(localEfforts).length || fromParse ? { ...localEfforts, ...fromParse } : undefined);
   try {
     const { stdout, stderr } = await exec(found.path, spec.models.args, {
       timeout: spec.models.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -149,6 +177,7 @@ async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelC
       return presetCatalog(type, {
         ...base,
         error: `${spec.bins[0]} ${spec.models.args.join(" ")} 没有列出任何模型(多半是未登录,或该 CLI 换了输出格式)`,
+        ...merge(parsed.modelEfforts),
       });
     }
     return {
@@ -160,9 +189,10 @@ async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelC
       error: null,
       skipped: null,
       ...base,
+      ...merge(parsed.modelEfforts),
     };
   } catch (error) {
-    return presetCatalog(type, { ...base, error: reasonOf(error) });
+    return presetCatalog(type, { ...base, error: reasonOf(error), ...merge() });
   }
 }
 
@@ -242,6 +272,34 @@ export function modelCatalogFor(type: AgentType, force = false): Promise<CliMode
 export function modelCatalogs(types?: AgentType[], force = false): Promise<CliModelCatalog[]> {
   const wanted = types?.length ? types : [...AGENT_TYPES];
   return Promise.all(wanted.map((type) => modelCatalogFor(type, force)));
+}
+
+/**
+ * **已经探到的**档位表,不触发探测。校验链(建 profile / 改任务覆盖项 / 派任务前最后
+ * 一道)用它。
+ *
+ * 为什么不能在那些地方直接 `await modelCatalogFor()`:claude 那条要抓一次官方文档,
+ * 超时给到 15s —— 冷缓存时派一个任务就可能卡十几秒,而校验本来是微秒级的事。拿不到
+ * 缓存就退回 `MODEL_EFFORT_RULES`,与没接 probe 时一字不差。
+ *
+ * 实际命中率不低:claude 有 `startClaudeModelRefreshLoop()` 开机预热,其余几家在用户
+ * 打开过任意一个模型选择器之后就有了 —— 而界面读的正是同一份缓存,所以**界面给得出
+ * 的档位就是服务端会接受的**。冷缓存只发生在「没人开过界面就直接打 API」,那时两边
+ * 一起退回规则表,仍然一致,且方向是更宽松(由上游诚实报错)。
+ *
+ * **隔离判据必须在这儿再判一次**。原先这里写着「隔离档那条路不写缓存,所以自然什么
+ * 都查不到」—— 那只覆盖了「一直是隔离」,漏掉了**先共用、后隔离**这个状态转换:切换
+ * 之前探到的宿主机档位仍留在缓存里,于是目录(按隔离返回兜底)和校验(读旧缓存)用上
+ * 了两套依据 —— 界面给得出的档位,保存时被 400 拒掉;重启一次又能存进去了。
+ * 第 1 轮审查复现 A/B。
+ *
+ * 读同步镜像而不是 `await isHostCliIsolated()`:这个函数的全部意义就是不阻塞派任务
+ * 路径。镜像在设置写入时被立刻回填(`invalidateInstanceCache`),而且只用在降级方向 ——
+ * 万一落后一拍,后果是多退回一次规则表,不会反过来把隔离状态弄丢。
+ */
+export function cachedModelEfforts(type: AgentType): ModelEffortMap | undefined {
+  if (isHostCliIsolatedSync()) return undefined;
+  return cache.get(type)?.catalog.modelEfforts;
 }
 
 /** 只给测试用:清掉缓存。 */
