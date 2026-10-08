@@ -164,11 +164,21 @@ function nextRunDirOf(
  * lock 才会指向同一处。
  *
  * 判据是「**真跑起来**会落在哪」（`nextRunDirOf`，跟 `taskWorkspace` 同一棵决策树），
- * 不是「上一次跑在哪」：要挡的是接下来那次启动。归档任务不算——归档 = 冻结，它起不来
+ * 不是「上一次跑在哪」：要挡的是接下来那次启动。归档任务默认不算——归档 = 冻结，它起不来
  * （`task-archive-routes.ts`）。归一按 `repoKey`：`~` 展开、尾斜杠、`.`/`..`、软链都算
  * 进去，所以同一个目录换一种合法写法登记的项目也照样圈得进来。
+ *
+ * `includeArchived` 是给**归档清理**用的唯一例外（第 2 轮审查确定性复现）：那条路恰好在
+ * 「整支队伍刚被标成 archived」之后跑，按默认判据圈，共用同一个目录的执行者会被全部过滤
+ * 掉，只锁住领队自己；而团队取回是**连执行者一起解冻**的，于是执行者能在领队目录正被删
+ * 的同一刻起跑。对别的调用点这个开关必须保持关着：它们面对的是未归档任务的目录，同目录
+ * 的已归档任务确实起不来，把它们算进去只会平白占锁。
  */
-export async function workspaceParticipants(task: OwnerTask, rootPath: string): Promise<WorkspacePeer[]> {
+export async function workspaceParticipants(
+  task: OwnerTask,
+  rootPath: string,
+  opts: { includeArchived?: boolean } = {},
+): Promise<WorkspacePeer[]> {
   const rows = await db.select().from(tasks);
   const byId = new Map(rows.map((row) => [row.id, row] as const));
   const lookup: OwnerLookup = async (id) => byId.get(id) ?? await lookupFromDb(id);
@@ -198,7 +208,7 @@ export async function workspaceParticipants(task: OwnerTask, rootPath: string): 
   const repoOf = (projectId: string) => projectRepos.get(projectId) ?? "";
 
   for (const row of rows) {
-    if (row.archived || peers.has(row.id)) continue;
+    if ((row.archived && !opts.includeArchived) || peers.has(row.id)) continue;
     const dir = nextRunDirOf(row, await isolatedWorkspaceOwner(row, lookup), repoOf, sessionDirs, dirExists);
     if (dir && keyOf(dir) === key) take(row);
   }

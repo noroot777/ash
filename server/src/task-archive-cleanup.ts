@@ -31,7 +31,7 @@ import { getAppSettings } from "./app-settings.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
-import { expandHome } from "./git.js";
+import { expandHome, gitError } from "./git.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { stopPreviewForWorktreeCleanup } from "./preview.js";
 import { withRepoLock } from "./repo-lock.js";
@@ -94,7 +94,10 @@ async function holdWorkspace(taskId: string, path: string | null): Promise<(() =
   if (!row) return null;
   // 共用者按**目录**算:团队执行者跟调度台跑在同一个 worktree 里,只占自己那把锁的话,
   // 兄弟执行者照样能在我们跑 git 的同一刻起跑。目录已经不在时退回只占自己。
-  const peers = path ? await workspaceParticipants(row, path) : [{ id: taskId }];
+  // includeArchived:整支队伍此刻刚被标成 archived,按默认判据圈的话共用目录的执行者
+  // 会被全部过滤掉,只锁住领队自己(第 2 轮审查复现:取回团队后执行者在领队目录正被删
+  // 的同一刻起跑)。
+  const peers = path ? await workspaceParticipants(row, path, { includeArchived: true }) : [{ id: taskId }];
   const release = claimWorkspaceTurn(peers.map((peer) => peer.id));
   if (!release) return null;
   // 占住之后再读一次 archived:等仓库锁的那段时间里用户可能已经在另一个页面点了取回,
@@ -130,10 +133,23 @@ async function discardOne(
     const rejection = await branchDeletionRejection(repo, target.id);
     if (rejection) { tryBranch = false; branchNote = rejection.error; }
   }
-  // 末端提交要在删之前读:删完就再也问不出来了。
-  const tip = tryBranch && leftover.branch ? await commitAt(repo, leftover.branch) : null;
+  // 恢复起点必须在**删分支之前**就确实落盘(第 2 轮审查复现:写 ref 撞上 .lock 残留时,
+  // 旧顺序是分支已经删掉、恢复点没存上,结果还报「已清理」)。存不下来就不删这条分支 ——
+  // 分支本身就是那份改动最后的副本,宁可留着。
+  if (tryBranch && leftover.branch) {
+    const tip = await commitAt(repo, leftover.branch);
+    if (!tip) {
+      tryBranch = false;
+      branchNote = "读不到任务分支的末端提交，无法保存恢复起点，已保留分支";
+    } else {
+      const failure = await rememberTaskHead(repo, target.id, tip);
+      if (failure) {
+        tryBranch = false;
+        branchNote = `未能保存恢复起点（${failure}），已保留分支 —— 否则这次归档就把它做完的东西变成找不回来的了`;
+      }
+    }
+  }
   const result = await discardTaskWorkspace(repo, target.id, { worktree: tryWorktree, branch: tryBranch });
-  if (result.branchDeleted && tip) await rememberTaskHead(repo, target.id, tip);
   return {
     taskId: target.id,
     title: target.title,
@@ -148,11 +164,18 @@ async function discardOne(
 }
 
 /**
- * 把任务分支的末端记成它的「完成提交」。验收那条路靠 `recordBranchReceipt` 写同一个 ref
- * (用的是合并提交),手动合入的任务没人替它写 —— 分支一删,`restoreAcceptedStart` 就只剩
- * 开工点可用。写不进去不算清理失败:提交仍在目标分支里,只是取回后要自己找。
+ * 把任务分支的末端记成它的「完成提交」,**删分支之前**调。验收那条路靠
+ * `recordBranchReceipt` 写同一个 ref(用的是合并提交),手动合入的任务没人替它写 ——
+ * 分支一删,`restoreAcceptedStart` 就只剩开工点可用。
+ *
+ * 返回失败原因(成功返回 null)。调用方据此决定**不删分支**:写 ref 失败而分支照删,
+ * 等于这次归档亲手制造了一个不可恢复的任务,还报了「已清理」。
  */
-async function rememberTaskHead(repo: string, taskId: string, commit: string): Promise<void> {
-  try { await exec("git", ["-C", expandHome(repo), "update-ref", acceptedHeadRef(taskId), commit]); }
-  catch { /* ref 写不进去不影响已经完成的清理 */ }
+async function rememberTaskHead(repo: string, taskId: string, commit: string): Promise<string | null> {
+  try {
+    await exec("git", ["-C", expandHome(repo), "update-ref", acceptedHeadRef(taskId), commit]);
+    // 写完立刻读回来核对:update-ref 报成功、ref 却不是我们要的那个值(并发改写、
+    // 残留锁被别处清掉重写)时,下一步就会把分支删掉,那时已经没有第二次机会。
+    return (await commitAt(repo, acceptedHeadRef(taskId))) === commit ? null : "恢复起点写入后核对不一致";
+  } catch (error) { return gitError(error); }
 }

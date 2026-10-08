@@ -10,7 +10,7 @@ import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { isRunning, isTurnClaimed } from "./runs.js";
+import { claimWorkspaceTurn, isRunning, isTurnClaimed } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { cleanupArchivedWorkspaces } from "./task-archive-cleanup.js";
 import { acceptedHeadRef, commitAt } from "./task-branch-plan.js";
@@ -99,16 +99,28 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
     if (!r) return c.json({ error: "not found" }, 404);
     if (!r.archived) return c.json({ task: (await enrichTasks([r]))[0], restoreNote: null }); // idempotent
-    const ts = now();
-    await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.id, r.id));
-    // 对称:团队回来了,它的执行者也一起回来(归档时是整支队伍一起走的)
-    if (r.mode === "team") {
-      await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.parentId, r.id));
+    // 取回必须和归档清理互斥(第 2 轮审查确定性复现):清理占着这批回合锁的时候解冻,
+    // 执行者就能在正被删的目录里起跑。占同一把锁 = 排在清理后面;占不到就如实让用户
+    // 稍后再点一次(清理是秒级的)。团队连执行者一起占,因为取回也是整支队伍一起回来。
+    const family = [r.id, ...(r.mode === "team"
+      ? (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.parentId, r.id))).map((w) => w.id)
+      : [])];
+    const release = claimWorkspaceTurn(family);
+    if (!release) {
+      return c.json({ error: "这个任务的工作区正在清理或有回合在跑，请稍后再取回", taskId: r.id }, 409);
     }
-    const task = (await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0];
-    // 归档会按设置把 worktree 删掉,所以「取回」之后的工作区状态必须当场说清楚 ——
-    // 否则用户点开任务看见一个不存在的路径,只能自己猜还能不能接着跑。
-    return c.json({ task, restoreNote: await restoreNoteFor(r.projectId, r.id) });
+    try {
+      const ts = now();
+      await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.id, r.id));
+      // 对称:团队回来了,它的执行者也一起回来(归档时是整支队伍一起走的)
+      if (r.mode === "team") {
+        await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.parentId, r.id));
+      }
+      const task = (await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0];
+      // 归档会按设置把 worktree 删掉,所以「取回」之后的工作区状态必须当场说清楚 ——
+      // 否则用户点开任务看见一个不存在的路径,只能自己猜还能不能接着跑。
+      return c.json({ task, restoreNote: await restoreNoteFor(r.projectId, r.id) });
+    } finally { release(); }
   });
 }
 
