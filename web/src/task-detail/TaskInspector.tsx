@@ -167,6 +167,14 @@ export function TaskInspector({
   const queuePosition = queueItems.findIndex((item) => item.taskId === task.id);
   const nextQueueItem = queuePosition >= 0 ? queueItems[queuePosition + 1] : undefined;
 
+  // 队列成员或顺序变了也要重读:只依赖自己的 queueId/位置的话,中间插人时自己的
+  // 位置纹丝不动,「第 n / m 位」「下一个」会停在旧值(第 1 轮审查复现)。列表经
+  // SSE 实时更新,从它派生一个成员签名当依赖。
+  const queueSignature = task.queueId == null ? "" : allTasks
+    .filter((item) => item.queueId === task.queueId)
+    .map((item) => `${item.id}:${item.queuePosition}`)
+    .join(",");
+
   useEffect(() => {
     let alive = true;
     if (!task.queueId) setQueueItems([]);
@@ -176,7 +184,7 @@ export function TaskInspector({
       .catch(() => { if (alive) setProfiles([]); })
       .finally(() => { if (alive) setProfilesReady(true); });
     return () => { alive = false; };
-  }, [task.id, task.queueId, task.queuePosition, queueOpen]);
+  }, [task.id, task.queueId, task.queuePosition, queueSignature, queueOpen]);
 
   const patch = async (value: Partial<Task>, message = "任务属性已更新") => {
     try {

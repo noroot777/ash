@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Group, GroupMode, ProjectView, Task, TaskMode } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import "../../src/styles/global.css";
@@ -14,6 +14,26 @@ const initialProject: ProjectView = {
   createdAt: "2026-08-28T00:00:00.000Z",
   health: { exists: true, isRepo: new URLSearchParams(location.search).has("repo") },
 };
+
+// 「创建并排队」的候选:一个正常待办目标 + 一个团队任务(必须置灰,队列不会等它)。
+const listTask = (id: string, title: string, extra: Partial<TaskListItem>): TaskListItem => ({
+  id,
+  title,
+  projectId: "p1",
+  parentId: null,
+  archived: false,
+  mode: "single",
+  groupId: null,
+  queueId: null,
+  queuePosition: null,
+  status: "backlog",
+  ...extra,
+} as unknown as TaskListItem);
+
+const listTasks: TaskListItem[] = [
+  listTask("t-backlog", "存量待办任务", {}),
+  listTask("t-team", "常驻团队任务", { mode: "team", status: "running" }),
+];
 
 function Ash() {
   const [mode, setMode] = useState<TaskMode>("single");
@@ -32,6 +52,7 @@ function Ash() {
         key={round}
         project={project}
         groups={[] as Group[]}
+        tasks={listTasks}
         mode={mode}
         onModeChange={setMode}
         onCancel={() => {}}

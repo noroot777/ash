@@ -15,6 +15,8 @@ try {
   let teamPresetRequests = 0;
   page.on("pageerror", (error) => errors.push(error.message));
   const created = [];
+  const queueCreates = [];
+  let taskRefetches = 0;
   const projectPatches = [];
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -38,6 +40,15 @@ try {
       const body = request.postDataJSON();
       created.push(body);
       data = { ...body, id: "task-1", status: "backlog", title: body.body };
+    }
+    if (path === "/api/queues" && request.method() === "POST") {
+      queueCreates.push(request.postDataJSON());
+      data = { queueId: "q1", taskIds: request.postDataJSON().taskIds };
+    }
+    // 「创建并排队」成功后面板必须重取任务快照(创建返回里 queueId 还是 null)。
+    if (path === "/api/tasks/task-1" && request.method() === "GET") {
+      taskRefetches += 1;
+      data = { id: "task-1", title: "排队新任务", status: "backlog", projectId: "p1", queueId: "q1", queuePosition: 1 };
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
   });
@@ -152,6 +163,35 @@ try {
   assert.deepEqual(created[0].labels, ["界面优化"]);
   assert.match(created[0].body, /^保留我写好的目标/);
 
+  // 「创建并排队」：无目标禁提交；团队候选置灰；提交 = 建任务 + 建队列 + 重取入队后快照。
+  await page.reload();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await objective.fill("排队新任务");
+  await page.getByRole("button", { name: /^智能体：/ }).waitFor();
+  await openLaunch();
+  await page.getByLabel("启动方式").selectOption("queue");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.getByRole("button", { name: "创建并排队", exact: true }).isDisabled(), true, "没选目标不能创建");
+  assert.match(await page.locator(".studio-input-status").innerText(), /选择要接在哪个任务之后/);
+  await openLaunch();
+  await page.locator(".composer-queue-after .ui-select-trigger").click();
+  const teamRow = page.locator(".ui-dropdown-row", { hasText: "常驻团队任务" });
+  assert.match(await teamRow.getAttribute("class"), /is-disabled/, "团队候选必须置灰");
+  assert.match(await teamRow.innerText(), /队列不会等它完成/);
+  await teamRow.click({ force: true }); // 置灰行按钮不可用,强制点一下验证不会选中
+  await page.locator(".ui-dropdown-row", { hasText: "存量待办任务" }).click();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "创建并排队", exact: true }).click();
+  await page.getByTestId("created").getByRole("listitem").waitFor();
+  assert.equal(queueCreates.length, 1, "点了置灰的团队候选不能选中");
+  assert.deepEqual(queueCreates[0].taskIds, ["t-backlog", "task-1"]);
+  assert.equal(taskRefetches, 1, "入队成功后必须重取任务快照，旧快照会盖掉队列字段");
+  // 团队任务不被普通队列调度:团队模式下「创建并排队」置灰。
+  await switchMode("团队");
+  await openLaunch();
+  assert.notEqual(await page.getByLabel("启动方式").locator('option[value="queue"]').getAttribute("disabled"), null, "团队模式不提供排队");
+  await page.keyboard.press("Escape");
+
   await page.reload();
   await page.setViewportSize({ width: 1280, height: 900 });
   await objective.fill("验证起手式配置");
@@ -179,9 +219,9 @@ try {
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "创建任务", exact: true }).click();
   await page.getByTestId("created").getByRole("listitem").waitFor();
-  assert.equal(created[1].executorId, "exec-claude");
-  assert.equal(created[1].model, "test-model");
-  assert.equal(created[1].workflowMode, "preset");
+  assert.equal(created[2].executorId, "exec-claude");
+  assert.equal(created[2].model, "test-model");
+  assert.equal(created[2].workflowMode, "preset");
   // 「设为本项目默认」：写的是项目行，而且要**把新的项目行交回上层** —— 这块面板一关就
   // 整个卸载，下次打开是按 project 重新初始化的。只更新面板内部那份的话，用户刚设完默认、
   // 重开新建任务却还预填着旧值（第 1 轮审查 P1）。

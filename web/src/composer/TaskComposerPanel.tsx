@@ -14,7 +14,6 @@ import type {
   TeamPresetConfig,
 } from "@ash/shared";
 import { ChatCircleDots } from "@phosphor-icons/react";
-import { Dropdown } from "../components/Dropdown.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
   DEFAULT_CRON,
@@ -30,7 +29,6 @@ import {
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
-import { placeTaskAfter, queueAfterOptions } from "../lib/queueAfter.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
@@ -42,6 +40,7 @@ import { ASH_SLASH_ITEMS, SLASHES } from "./composerParts.tsx";
 import { useComposerDraft, type ComposerDraft } from "./composerDraft.ts";
 import { useComposerWorkflow } from "./ComposerWorkflow.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
+import { useQueueAfter } from "./useQueueAfter.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
 import {
   emptyComposerExecutorConfigs,
@@ -60,7 +59,7 @@ export type { ComposerDraft };
 export function TaskComposerPanel({
   project,
   groups,
-  tasks,
+  tasks = [],
   initialDraft,
   onDraftSeeded,
   mode,
@@ -75,8 +74,8 @@ export function TaskComposerPanel({
 }: {
   project: ProjectView;
   groups: Group[];
-  /** 全量任务列表(「创建并排队」的目标候选,按本项目过滤)。 */
-  tasks: TaskListItem[];
+  /** 全量任务列表(「创建并排队」的目标候选,按本项目过滤)。不传按无候选处理。 */
+  tasks?: TaskListItem[];
   initialDraft?: ComposerDraft | null;
   // initialDraft 并进草稿之后回调一次，调用方据此把它摘掉（一次性投递，见 composerDraft.ts）。
   onDraftSeeded?: () => void;
@@ -117,14 +116,14 @@ export function TaskComposerPanel({
   const [base, setBase] = useState("");
   const [busy, setBusy] = useState(false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>("run");
-  // 「创建并排队」的目标任务:建完排在它后面,等它跑完自动开始(launchMode="queue")。
-  const [afterTaskId, setAfterTaskId] = useState<string | null>(null);
   const [workflowMode, setWorkflowMode] = useState<TaskWorkflowMode>("free");
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  // 「创建并排队」(launchMode="queue"):目标选择、分组联动、入队动作都在这个 hook 里。
+  const queueAfter = useQueueAfter({ tasks, groups, projectId: project.id, notify, onFollowGroup: setGroupId });
   const workflow = useComposerWorkflow({
     project,
     isRepo: project.health.isRepo,
@@ -393,7 +392,7 @@ export function TaskComposerPanel({
   const scheduleError = launchMode === "once" || launchMode === "cron"
     ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
     : null;
-  const queueTargetError = launchMode === "queue" && !afterTaskId ? "选择要接在哪个任务之后" : null;
+  const queueTargetError = launchMode === "queue" && !queueAfter.afterTaskId ? "选择要接在哪个任务之后" : null;
   // 有图还在传就先不放行：附件路径是上传成功才有的，这时候创建等于把刚粘的那张图
   // 悄悄扔掉。三种模式一视同仁——切走这个面板就没人接住在途的那张了。
   const waitingUploads = uploads.uploading;
@@ -403,38 +402,19 @@ export function TaskComposerPanel({
 
   const changeLaunchMode = (next: LaunchMode) => {
     setLaunchMode(next);
-    if (next !== "queue") setAfterTaskId(null);
+    if (next !== "queue") queueAfter.clear();
     if (next === "once" && !scheduleAt) setScheduleAt(defaultOnceTime());
   };
-  const afterTarget = afterTaskId ? tasks.find((item) => item.id === afterTaskId) ?? null : null;
-  const pickAfterTask = (value: string) => {
-    setAfterTaskId(value || null);
-    // 后端要求同队同组:新任务的分组跟着目标任务走;反向(手动改组)由 changeGroup 清掉这里。
-    const target = tasks.find((item) => item.id === value);
-    if (target) setGroupId(target.groupId ?? "");
-  };
+  // 团队任务不被普通队列调度(selectNextInQueue 按 mode !== "team" 过滤):团队模式
+  // 不提供「创建并排队」,已选了再切到团队时退回默认,不留一个兑现不了的承诺。
+  const queueUnavailable = mode === "team" ? "团队任务不参与普通队列" : null;
+  useEffect(() => {
+    if (queueUnavailable && launchMode === "queue") changeLaunchMode("run");
+  }, [queueUnavailable, launchMode]);
   const changeGroup = (value: string) => {
     setGroupId(value);
-    if (!afterTarget) return;
-    if ((afterTarget.groupId ?? "") !== value) {
-      setAfterTaskId(null);
-      notify("改了分组，已清除排队目标（跨组不能同队）");
-    }
+    queueAfter.onGroupChanged(value);
   };
-  const queueSlot = (
-    <div className="composer-field composer-queue-after">
-      <span>接在谁后面</span>
-      <Dropdown label="接在某任务之后" value={afterTaskId ?? ""} placeholder="选择一个任务…"
-        filterPlaceholder="筛选任务…"
-        options={queueAfterOptions({ tasks, groups, projectId: project.id })}
-        onChange={pickAfterTask} />
-      <p className="studio-help">
-        {afterTarget
-          ? `将归入${afterTarget.groupId ? `分组「${groups.find((group) => group.id === afterTarget.groupId)?.name ?? "未知分组"}」` : "「无分组」"}，分组跟着它走。`
-          : "同一队列必须同组；已结束且不在队列里的任务不可选。"}
-      </p>
-    </div>
-  );
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
@@ -541,20 +521,12 @@ export function TaskComposerPanel({
       return;
     }
     if (launchMode === "queue") {
-      // 创建成功后排队失败不回滚任务:如实说清两段各自的结果,用户可去详情页重排。
-      const target = tasks.find((item) => item.id === afterTaskId);
-      let queueError: unknown = null;
-      try {
-        if (!target) throw new Error("目标任务不存在，可能刚被删除");
-        await placeTaskAfter(task.id, target);
-      } catch (error) {
-        queueError = error;
-      }
-      setAfterTaskId(null);
+      // 创建成功后排队失败不回滚任务(enqueue 如实分开报两段结果);成功时 task
+      // 换成入队后的最新快照,免得旧快照把 SSE 已送达的队列字段盖回去。
+      const result = await queueAfter.enqueue(task);
+      task = result.task;
       finishCreation();
-      notify(queueError
-        ? `任务已创建，但排队失败：${queueError instanceof Error ? queueError.message : "未知错误"}`
-        : `已排在「${target!.title || "未命名任务"}」之后，轮到它时自动开始`);
+      notify(result.message);
       return;
     }
     let launchError: unknown = null;
@@ -679,7 +651,8 @@ export function TaskComposerPanel({
               onSubmit={() => void submit()}
               attachmentTool={<AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
               executorTools={executorTools}
-              queueSlot={queueSlot}
+              queueSlot={queueAfter.slot}
+              queueUnavailable={queueUnavailable}
             />
             {(uploads.uploading || allAttachments.length > 0 || scheduleError || queueTargetError) && <div className="studio-input-status" role="status">
               {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`

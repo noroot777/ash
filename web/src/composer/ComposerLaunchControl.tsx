@@ -48,6 +48,7 @@ export function ComposerLaunchControl({
   attachmentTool,
   executorTools,
   queueSlot,
+  queueUnavailable,
 }: {
   mode: LaunchMode;
   at: string;
@@ -63,6 +64,8 @@ export function ComposerLaunchControl({
   executorTools: ReactNode;
   /** mode="queue" 时的目标任务选择器(由面板构造,这里只负责摆进浮层)。 */
   queueSlot?: ReactNode;
+  /** 非空 = 当前任务模式不支持排队(如团队任务),选项置灰并附上原因。 */
+  queueUnavailable?: string | null;
 }) {
   return (
     <div className="composer-launch-control">
@@ -74,7 +77,14 @@ export function ComposerLaunchControl({
       <label className="composer-launch-mode">
         <span>启动方式</span>
         <select value={mode} disabled={busy} onChange={(event) => onModeChange(event.target.value as LaunchMode)}>
-          {LAUNCH_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+          {LAUNCH_OPTIONS.map((option) => {
+            const blocked = option.value === "queue" && !!queueUnavailable;
+            return (
+              <option value={option.value} key={option.value} disabled={blocked}>
+                {option.label}{blocked ? `（${queueUnavailable}）` : ""}
+              </option>
+            );
+          })}
         </select>
       </label>
       {mode === "queue" && queueSlot}

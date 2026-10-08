@@ -674,6 +674,9 @@ export const api = {
     request(`/queues/${id(queueId)}/remove`, json("POST", { taskId })),
   queueInsert: (queueId: string, taskId: string, position?: number): Promise<{ ok: true }> =>
     request(`/queues/${id(queueId)}/insert`, json("POST", { taskId, position })),
+  // 按前驱身份插入:服务端读当前队列定插入点,不受客户端位置快照过期影响。
+  queueInsertAfter: (queueId: string, taskId: string, afterTaskId: string): Promise<{ ok: true }> =>
+    request(`/queues/${id(queueId)}/insert`, json("POST", { taskId, afterTaskId })),
   queueCreate: (taskIds: string[]): Promise<{ queueId: string; taskIds: string[] }> =>
     request("/queues", json("POST", { taskIds })),
 };

@@ -11,11 +11,13 @@ import { api } from "./api.ts";
 
 const TERMINAL: readonly TaskStatus[] = ["done", "failed", "canceled"];
 
-/** 这个任务现在还能不能谈「排队等前面跑完」:只对还没开始跑的任务有意义。 */
-export function canJoinQueue(task: Pick<TaskListItem, "status" | "parentId" | "archived" | "queueId">): boolean {
+/** 这个任务现在还能不能谈「排队等前面跑完」:只对还没开始跑的任务有意义。
+ * 团队任务排除:调度器按 mode !== "team" 过滤队列成员,入了队也永远不会被拉起。 */
+export function canJoinQueue(task: Pick<TaskListItem, "status" | "parentId" | "archived" | "queueId" | "mode">): boolean {
   return task.parentId === null
     && !task.archived
     && task.queueId == null
+    && task.mode !== "team"
     && (task.status === "backlog" || task.status === "paused");
 }
 
@@ -51,6 +53,11 @@ export function queueAfterOptions({ tasks, groups, projectId, excludeId, subject
     if (lockedGroup && (task.groupId ?? null) !== (subjectGroupId ?? null)) {
       return { ...base, disabled: true, detail: "跨组不能同队" };
     }
+    // 调度器(selectNextInQueue)把 team 成员整个过滤掉:排在它后面不会等它完成,
+    // 它自己入队也不会被拉起。在支持团队终态判据前,先如实置灰,不承诺兑现不了的等待。
+    if (task.mode === "team") {
+      return { ...base, disabled: true, detail: "团队任务 · 队列不会等它完成" };
+    }
     if (task.queueId == null && TERMINAL.includes(task.status)) {
       return { ...base, disabled: true, detail: `${TASK_STATUS_LABELS[task.status]} · 排后面会立刻跑` };
     }
@@ -63,10 +70,12 @@ export function queueAfterOptions({ tasks, groups, projectId, excludeId, subject
   });
 }
 
-/** 把 taskId 排到 target 之后,返回落进的队列 id。 */
+/** 把 taskId 排到 target 之后,返回落进的队列 id。
+ * 目标已在队列时按**前驱身份**(afterTaskId)插入:插入点由服务端读当前队列决定,
+ * 客户端快照里的数字位置在请求在途时可能已经过期(第 1 轮审查真实复现)。 */
 export async function placeTaskAfter(taskId: string, target: TaskListItem): Promise<{ queueId: string }> {
   if (target.queueId != null) {
-    await api.queueInsert(target.queueId, taskId, (target.queuePosition ?? 0) + 1);
+    await api.queueInsertAfter(target.queueId, taskId, target.id);
     return { queueId: target.queueId };
   }
   const created = await api.queueCreate([target.id, taskId]);

@@ -227,10 +227,12 @@ export function mountQueueRoutes(api: Hono): void {
     return c.json({ ok: true });
   });
 
-  // 在指定位置插入(校验跨 group)
+  // 在指定位置插入(校验跨 group)。afterTaskId 按前驱**身份**定位(服务端读当前
+  // 队列算插入点),优先于 position:客户端传数字位置是提交时的旧快照,请求在途时
+  // 别人改了队列就会插到所选任务前面(第 1 轮审查真实复现),按身份定位没有这个窗口。
   api.post("/queues/:queueId/insert", async (c) => {
     const qid = c.req.param("queueId");
-    const b = await c.req.json<{ taskId?: string; position?: number }>();
+    const b = await c.req.json<{ taskId?: string; position?: number; afterTaskId?: string }>();
     if (!b.taskId) return c.json({ error: "taskId required" }, 400);
     const pos = typeof b.position === "number" ? Math.max(0, b.position | 0) : -1;
 
@@ -275,7 +277,14 @@ export function mountQueueRoutes(api: Hono): void {
     const violation = await assertSameGroup(qid, b.taskId);
     if (violation) return c.json({ error: violation }, 400);
 
-    const insertAt = pos < 0 || pos > items.length ? items.length : pos;
+    let insertAt: number;
+    if (b.afterTaskId) {
+      const anchor = items.find((i) => i.taskId === b.afterTaskId);
+      if (!anchor) return c.json({ error: `前驱任务 ${b.afterTaskId} 不在此 queue 里` }, 409);
+      insertAt = items.indexOf(anchor) + 1;
+    } else {
+      insertAt = pos < 0 || pos > items.length ? items.length : pos;
+    }
     const next = [
       ...items.slice(0, insertAt).map((i) => i.taskId),
       b.taskId,

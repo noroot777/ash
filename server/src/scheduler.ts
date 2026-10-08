@@ -57,12 +57,6 @@ export async function advanceQueueFromTask(taskId: string): Promise<void> {
     await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))
   ).at(0);
   if (!item) return; // 不在任何 queue 里(独立任务 / parallel group)
-  // 队列绑定到 group:如果 group 被 paused 就不推进
-  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (t?.groupId) {
-    const g = (await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0);
-    if (g?.paused) return;
-  }
   await advanceQueue(item.queueId);
 }
 
@@ -78,6 +72,11 @@ export async function advanceQueueFromTask(taskId: string): Promise<void> {
 export async function advanceQueue(queueId: string): Promise<void> {
   const next = await pickNextLaunchable(queueId);
   if (!next) return;
+  // 队列绑定到 group:组被暂停时允许编辑队列(保存排队关系),但不启动任何成员。
+  // 检查放在这里而不是各调用方 —— 建队列/插入/重排/移除/终态钩子全走本函数,
+  // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
+  // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
+  if (next.groupId && (await isPaused(next.groupId))) return;
   await setQueued(next.id);
   void resumeOrRunTask(next.id, { reason: "queue" });
 }
