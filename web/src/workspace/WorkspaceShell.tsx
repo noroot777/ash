@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
 import { outboundHolder } from "@ash/shared/handoff";
@@ -119,7 +119,7 @@ export function WorkspaceShell() {
   // 项目主仓被切分支/拉取过之后重拉一次 ProjectHealth：侧栏胶囊上的分支名和「有未提交
   // 改动」那颗点都从它来，不跟着刷就会停在操作之前的样子。
   const [gitVersion, setGitVersion] = useState(0);
-  const { tasks: localTasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, refetch: refetchTasks, applyStar } = useTasks();
+  const { tasks: localTasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, refetch: refetchTasks, applyStar, confirmedDeleteIds } = useTasks();
   // 接力出去的行，状态要跨机器问持有机才知道 —— 本机那一行停在交出去那一刻。
   // **这一问由用户按**（见 useOutboundState 顶部：自动轮询会没完没了地敲别人的服务器），
   // 所以没问过时列表里就是接力当时的状态，由 OutboundStatusBar 如实说出来。
@@ -299,15 +299,14 @@ export function WorkspaceShell() {
     setSettingsSection(null);
     void refetchTasks({ silent: true });
   }, [refetchTasks, scopeKind, updateTask]);
-  // 本页已确定删除的任务 id(删除走的本地通道只有 deleteTask 这一个汇聚点;SSE 没有
-  // 删除事件,别处删的靠 refetch 追平)。给 createTask 的迟到回写裁决用,只增不减:
-  // 任务 id 全局唯一,被删的 id 不会再被新任务复用。
-  const deletedTaskIds = useRef(new Set<string>());
+  // 本页删除走 deleteTask 这个汇聚点,登记进 useTasks 的共享失效记录(confirmedDeleteIds);
+  // 另一页面删除的,由 refetch 按「发起时已存在、快照里没有」裁决后记进同一份(第 8 轮
+  // 审查:跨页删除已被权威列表追平后,迟到回写不得再复活)。
   const deleteTask = useCallback((deletedId: string) => {
-    deletedTaskIds.current.add(deletedId);
+    confirmedDeleteIds.current.add(deletedId);
     setTasks((current) => current.filter((task) => task.id !== deletedId));
     setTaskId((current) => current === deletedId ? null : current);
-  }, [setTasks]);
+  }, [confirmedDeleteIds, setTasks]);
   // 选具体项目 = 退回单项目态：在下拉里点了某个项目，还继续按任务模式的口径列表的话，那次点击就白点了。
   const selectProject = (nextProjectId: string) => { setGitOpen(false); setChatOpen(false); setAssistantOrigin(null); setScopeKind("project"); setProjectId(nextProjectId); setTaskId(null); setRemoteSelection(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
   // 切到「任务模式」只换列表的口径，不动选中的任务和上下文项目 —— 你正看着的那条还在，
@@ -465,11 +464,16 @@ export function WorkspaceShell() {
     setTasks((current) => snapshots.reduce(mergeTaskSnapshot, current));
   }, [setTasks]);
   const createTask = (task: Task, noteIds: string[] = []) => {
-    // 迟到的创建完成回写:任务已在本页删除(DELETE 已成功、行已移除)时整段跳过
-    // ——不回插、不自动选中、不做随手记回链。「创建并排队」等慢网络在途提交完成时,
-    // 用户可能已经删掉了刚建的任务;mergeCreatedTask 的缺行占位是给「事件没送到的
-    // 真正首次插入」用的,分不出这种缺行,只能靠本页删除记录裁决(第 7 轮审查)。
-    if (deletedTaskIds.current.has(task.id)) return;
+    // 迟到的创建完成回写:任务已被确认删除(本页删的,或另一页面删、本页经权威列表
+    // 刷新确认的)时跳过回插——不回插、不自动选中、不做随手记回链。「创建并排队」等
+    // 慢网络在途提交完成时,刚建的任务可能已经被删掉;mergeCreatedTask 的缺行占位是
+    // 给「事件没送到的真正首次插入」用的,分不出这种缺行,只能靠失效记录裁决
+    // (第 7、8 轮审查;记录的构成见 useTasks.confirmedDeleteIds 注释)。
+    // 面板仍要收起:提交流程本身已经走完,留着不收会困在 busy 态(按钮永久禁用)。
+    if (confirmedDeleteIds.current.has(task.id)) {
+      setComposer(null);
+      return;
+    }
     // 合并策略(为什么已存在就不覆盖)见 createdTaskMerge.ts 顶部注释。
     setTasks((current) => mergeCreatedTask(current, task));
     pushTaskHistoryEntry(task, window, scopeKind);
