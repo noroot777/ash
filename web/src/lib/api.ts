@@ -5,6 +5,7 @@ import type {
   AgentExecutorProfile,
   AgentType,
   AppSettings,
+  ArchiveCleanupReport,
   AttachmentKind,
   BatchCreateTasksBody,
   ExecutorDowngradeItem,
@@ -309,9 +310,11 @@ export const api = {
     request(`/tasks/${id(taskId)}/requeue`, { method: "POST" }),
   fireTask: (taskId: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/fire`, { method: "POST" }),
-  archiveTask: (taskId: string): Promise<Task> =>
+  // 归档会按全局设置 archiveClean 顺手收掉 worktree/分支，所以回的是「任务 + 这次
+  // 清理到底删了什么」；取回时对称地回一句工作区实情（目录可能已经不在了）。
+  archiveTask: (taskId: string): Promise<{ task: Task; cleanup: ArchiveCleanupReport | null }> =>
     request(`/tasks/${id(taskId)}/archive`, { method: "POST" }),
-  unarchiveTask: (taskId: string): Promise<Task> =>
+  unarchiveTask: (taskId: string): Promise<{ task: Task; restoreNote: string | null }> =>
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
   answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input })),

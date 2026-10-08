@@ -21,6 +21,7 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { api, type GitOverview } from "../lib/api.ts";
+import { toggleArchive } from "../lib/archive.ts";
 import type { SettingsSection } from "../settings/SettingsPage.tsx";
 import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentMode } from "../components/TaskOrigin.tsx";
 import { GitOverviewPanel, GitProjectStep } from "./CommandPaletteGit.tsx";
@@ -299,9 +300,9 @@ export function CommandPalette({
       }
       if (!dispatchedWorker) {
         if (selectedTask.archived) {
-          result.push({ key: "task:unarchive", group: taskGroup, label: "取消归档", icon: <ArrowCounterClockwise size={14} />, run: closeRun(async () => { onTaskUpdated(await api.unarchiveTask(selectedTask.id)); notify("任务已取回"); }) });
+          result.push({ key: "task:unarchive", group: taskGroup, label: "取消归档", icon: <ArrowCounterClockwise size={14} />, run: closeRun(async () => { onTaskUpdated(await toggleArchive(selectedTask, notify)); }) });
         } else if (canArchive(selectedTask.status)) {
-          result.push({ key: "task:archive", group: taskGroup, label: "归档任务", icon: <Archive size={14} />, run: closeRun(async () => { onTaskUpdated(await api.archiveTask(selectedTask.id)); notify("任务已归档"); }) });
+          result.push({ key: "task:archive", group: taskGroup, label: "归档任务", icon: <Archive size={14} />, run: closeRun(async () => { onTaskUpdated(await toggleArchive(selectedTask, notify)); }) });
         }
         result.push({ key: "task:delete", group: taskGroup, label: "删除任务", icon: <Trash size={14} />, run: closeRun(() => onDeleteTask(selectedTask)) });
       }

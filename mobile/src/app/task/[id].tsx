@@ -29,7 +29,8 @@ import { TaskReviewPanel } from "@/components/TaskReviewPanel";
 import { MarkdownText } from "@/components/MarkdownText";
 import { ReplyComposer } from "@/components/ReplyComposer";
 import { canArchive } from "@ash/shared";
-import type { Session, ScheduledMessage } from "@ash/shared";
+import { summarizeArchiveCleanup } from "@ash/shared/project";
+import type { Session, ScheduledMessage, Task } from "@ash/shared";
 import type { LogLine } from "@/lib/log";
 import { snapshotToLogLines } from "@/lib/log";
 
@@ -181,10 +182,14 @@ export default function TaskDetail() {
 
   // 归档态只读(server 拒编辑/运行/回复):归档后退回列表落入「已归档」区;取消归档留在详情并解冻。
   const frozen = !!task.archived;
+  // 归档会按全局设置顺手删掉 worktree/分支。这一下删了什么必须当场说 —— 归档后页面
+  // 就退回列表了,手机上没有别的地方能看到(持久那份写在任务时间线里)。
   const onArchive = () =>
     api
       .archiveTask(id)
-      .then(() => {
+      .then(({ cleanup }) => {
+        const summary = summarizeArchiveCleanup(cleanup);
+        if (summary) Alert.alert("任务已归档", summary);
         refreshAll().catch(() => {});
         if (router.canGoBack()) router.back();
         else router.replace("/");
@@ -193,8 +198,10 @@ export default function TaskDetail() {
   const onUnarchive = () =>
     api
       .unarchiveTask(id)
-      .then((t) => {
-        upsertTask(t);
+      .then((payload) => {
+        // 老 server 回的是裸 Task（前端可以先更新、server 由用户自己重启）
+        upsertTask(payload.task ?? (payload as unknown as Task));
+        if (payload.restoreNote) Alert.alert("任务已取回", payload.restoreNote);
         refreshAll().catch(() => {});
       })
       .catch((e) => Alert.alert("取消归档失败", e instanceof Error ? e.message : String(e)));

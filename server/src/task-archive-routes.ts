@@ -1,16 +1,21 @@
 // 归档/取消归档（从 task-run-routes.ts 拆出，纯行数拆分）。归档 = 冻结（archived 位，
-// 不动 status），门禁与团队连带见各路由内注释。
+// 不动 status），门禁与团队连带见各路由内注释。磁盘上的 worktree/分支按全局设置
+// `archiveClean` 一起收，那一段在 task-archive-cleanup.ts。
 import type { TaskStatus } from "@ash/shared";
 import { canArchive } from "@ash/shared";
+import { summarizeArchiveCleanup } from "@ash/shared/project";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { tasks } from "./db/schema.js";
+import { projects, tasks } from "./db/schema.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { isRunning, isTurnClaimed } from "./runs.js";
 import { setTaskStatus } from "./status.js";
+import { cleanupArchivedWorkspaces } from "./task-archive-cleanup.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 import { enrichTasks } from "./task-store.js";
+import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { haltTeam } from "./team/session.js";
 import { now } from "./util.js";
 
@@ -23,7 +28,8 @@ export function mountTaskArchiveRoutes(api: Hono): void {
   api.post("/tasks/:id/archive", async (c) => {
     const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
     if (!r) return c.json({ error: "not found" }, 404);
-    if (r.archived) return c.json((await enrichTasks([r]))[0]); // idempotent
+    // idempotent：已经归档了就什么都不做（清理也不重跑——它在第一次归档时就做过了）
+    if (r.archived) return c.json({ task: (await enrichTasks([r]))[0], cleanup: null });
     if (!canArchive(r.status as TaskStatus)) {
       return c.json({ error: "只有已完成/失败/已取消的任务可以归档", status: r.status }, 409);
     }
@@ -72,19 +78,52 @@ export function mountTaskArchiveRoutes(api: Hono): void {
       }
     }
     await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, r.id));
-    return c.json((await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
+    // 任务行已经冻结,再收磁盘。顺序刻意如此:清理失败(目录脏/分支未合并/预览没停)
+    // 不该把归档一起挡回去,结果如实回给 UI,并写进时间线 —— 刷新页面后还能看出
+    // 「归档那一下到底删了什么」,否则用户只剩去 git 里翻这一条路。
+    const cleanupTargets = [{ id: r.id, title: r.title ?? r.id }];
+    if (r.mode === "team") {
+      for (const w of await db.select().from(tasks).where(eq(tasks.parentId, r.id))) {
+        cleanupTargets.push({ id: w.id, title: w.title ?? w.id });
+      }
+    }
+    const cleanup = await cleanupArchivedWorkspaces(await repoPathOf(r.projectId), cleanupTargets);
+    const summary = summarizeArchiveCleanup(cleanup);
+    if (summary) await appendTaskTimeline(r.id, `归档时清理工作区：${summary}。`);
+    const task = (await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0];
+    return c.json({ task, cleanup });
   });
 
   api.post("/tasks/:id/unarchive", async (c) => {
     const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
     if (!r) return c.json({ error: "not found" }, 404);
-    if (!r.archived) return c.json((await enrichTasks([r]))[0]); // idempotent
+    if (!r.archived) return c.json({ task: (await enrichTasks([r]))[0], restoreNote: null }); // idempotent
     const ts = now();
     await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.id, r.id));
     // 对称:团队回来了,它的执行者也一起回来(归档时是整支队伍一起走的)
     if (r.mode === "team") {
       await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.parentId, r.id));
     }
-    return c.json((await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
+    const task = (await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0];
+    // 归档会按设置把 worktree 删掉,所以「取回」之后的工作区状态必须当场说清楚 ——
+    // 否则用户点开任务看见一个不存在的路径,只能自己猜还能不能接着跑。
+    return c.json({ task, restoreNote: await restoreNoteFor(r.projectId, r.id) });
   });
 }
+
+/**
+ * 取回归档时的工作区实情。归档清理过之后目录多半已经没了,而「还能不能接着跑」全看
+ * 分支在不在:在 → 下次运行由 prepareWorktree 按分支重建;不在 → 那份改动只剩已合并
+ * 进目标分支的部分,重跑等于从当前基线新开一支。
+ */
+async function restoreNoteFor(projectId: string, taskId: string): Promise<string | null> {
+  const repo = await repoPathOf(projectId);
+  if (!repo) return null;
+  const { path, branch } = await detectTaskWorkspace(repo, taskId);
+  if (path) return null; // 工作区还在原地,没什么要交代的
+  if (branch) return `工作区已在归档时清理，下次运行会按分支 ${branch} 重建。`;
+  return "工作区和任务分支都已不在（归档清理或验收时收掉了），重新运行会从当前基线新开一份。";
+}
+
+const repoPathOf = async (projectId: string): Promise<string | null> =>
+  (await db.select({ repoPath: projects.repoPath }).from(projects).where(eq(projects.id, projectId))).at(0)?.repoPath ?? null;

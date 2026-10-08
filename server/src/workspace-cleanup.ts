@@ -10,9 +10,11 @@ const isDir = (p: string) => {
 };
 
 // ── 删除任务时 worktree/分支的去留 ──────────────────────────────────────────
-// ash 建 worktree 但**从不自行删除**;例外有三:前两个由用户显式点出——①验收通过
-// (accept,合并后清理,见 server/CLAUDE.md);②删除任务时勾选「连 worktree 和分支一起
-// 删」—— 就是这里；③任务接力确认送达后自动清理(见文件末尾 discardMigratedWorkspace)。
+// ash 建 worktree 但**不随手删**;会删的只有这四条路:①验收通过(accept,合并后清理,
+// 见 server/CLAUDE.md);②删除任务时勾选「连 worktree 和分支一起删」—— 就是这里;
+// ③任务接力确认送达后自动清理(见文件末尾 discardMigratedWorkspace);④归档,按全局
+// 设置 `archiveClean`(默认删,见 task-archive-cleanup.ts)。前两条由用户显式点出,
+// 后两条是「这件事在本机结束了」的自动收尾。
 // 任务行一没,`.worktrees/<taskId>` 目录和 `ash/<id8>` 分支
 // 就成了没人认领的垃圾:用户在界面上再也看不见它们,只能靠自己记得去 git 里收拾。
 //

@@ -17,6 +17,7 @@ import { useFileView } from "../files/useFileView.ts";
 import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
+import { toggleArchive } from "../lib/archive.ts";
 import type { Notify } from "../lib/notify.ts";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
@@ -481,10 +482,11 @@ export function TeamView({
         setLocalHalted(false);
         setCuaStatus(null);
       }
-      if (action === "archive") onTaskUpdate(task.archived ? await api.unarchiveTask(task.id) : await api.archiveTask(task.id));
+      // 归档这一支的 toast 由 toggleArchive 自己发（它要把 worktree/分支的清理结果带上）
+      if (action === "archive") onTaskUpdate(await toggleArchive(task, notify, "团队"));
       else await refreshTask();
       await refreshGroups();
-      notify(action === "halt" ? "已停止全组，暂停状态会持久保留" : action === "resume" ? "已恢复全组" : action === "archive" ? (task.archived ? "已取消归档" : "团队已归档") : "团队已启动");
+      if (action !== "archive") notify(action === "halt" ? "已停止全组，暂停状态会持久保留" : action === "resume" ? "已恢复全组" : "团队已启动");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {

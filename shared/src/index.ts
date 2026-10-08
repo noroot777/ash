@@ -170,6 +170,8 @@ export interface AgentExecutorProfile {
 // 项目、它在磁盘上的工作区残留、分组容器 —— 本体在 ./project.ts(index.ts 的行数有
 // 上限,那一段够自成一块了)。这里只做类型再导出,消费方的 import 路径不变。
 export type {
+  ArchiveCleanupItem,
+  ArchiveCleanupReport,
   Group,
   GroupMode,
   Project,
@@ -178,6 +180,8 @@ export type {
   TaskWorkspaceDiscardResult,
   TaskWorkspaceLeftover,
 } from "./project.ts";
+// summarizeArchiveCleanup 是运行时函数,**不能**从这里转发(见 server/CLAUDE.md):
+// 两端都走子路径 `@ash/shared/project` 拿它。
 export type { ProjectCommandConfig, ProjectCommandsConfig, ProjectServiceConfig } from "./project-commands.ts";
 
 export interface NoteTaskLink {
@@ -339,7 +343,9 @@ export interface Task {
   archived?: boolean;
   archivedAt?: string | null;
   // §4 per-task worktree opt-in; worktreeBase null means current HEAD.
-  // Existing worktrees are reused; cleanup is an explicit user action.
+  // Existing worktrees are reused. Cleanup happens on accept, on archive (per the
+  // `archiveClean` setting), on handoff, or when the user deletes the task —
+  // never as a side effect of anything else; see server/src/workspace-cleanup.ts.
   useWorktree?: boolean;
   worktreeBase?: string | null;
   worktreeStartCommit?: string | null;
