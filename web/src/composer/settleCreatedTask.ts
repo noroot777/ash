@@ -1,6 +1,6 @@
 import type { Task } from "@ash/shared";
 import { api } from "../lib/api.ts";
-import type { DraftHandle } from "../lib/DraftStore.tsx";
+import type { Draft, DraftHandle } from "../lib/DraftStore.tsx";
 import type { LaunchMode } from "./ComposerLaunchControl.tsx";
 
 /**
@@ -8,9 +8,11 @@ import type { LaunchMode } from "./ComposerLaunchControl.tsx";
  *
  * 提交是异步的,完成时发起那份面板可能早已卸载(用户切走、删了刚建的任务又开了
  * 新面板),共享草稿(按项目一份,见 composerDraft.ts)可能已被新面板接管。收尾
- * 必须绑定**本次提交**的归属(第 9 轮审查:旧请求的收尾清掉了用户正在写的新草稿):
- * - 清草稿:面板还挂着照常清;已卸载时只有草稿仍与提交那份一致(正文与回链都没
- *   动过,没人接管)才能清,否则一个字都不碰;
+ * 必须绑定**本次提交**的归属(第 9、10 轮审查:旧请求的收尾清掉了用户正在写的新
+ * 草稿/新附件):
+ * - 清草稿:面板还挂着照常清;已卸载时交给 clearIfUnchanged 按提交时刻的草稿
+ *   对象引用做原子裁决——引用相同 ⇔ 正文、附件、在途上传、回链、截图全都没动过,
+ *   任何变化(含改过又改回)都让旧提交失去清空资格;
  * - 随手记回链交**提交那一刻**捕获的 noteIds,不读完成时的(那可能是新面板的);
  * - ownsComposer 一并交给上层,上层只在它为 true 时收面板。
  */
@@ -19,11 +21,11 @@ export async function settleCreatedTask(args: {
   launchMode: LaunchMode;
   scheduleAt: string;
   scheduleCron: string;
-  /** 提交那一刻的正文与随手记回链。 */
-  submitted: { text: string; noteIds: string[] };
+  /** 提交那一刻的草稿对象(归属标识)与随手记回链。 */
+  submitted: { draft: Draft; noteIds: string[] };
   /** 发起提交的那份面板此刻是否仍挂载。 */
   panelMounted: () => boolean;
-  draft: Pick<DraftHandle, "read" | "clear">;
+  draft: Pick<DraftHandle, "clear" | "clearIfUnchanged">;
   resetLabels: () => void;
   enqueue: (task: Task) => Promise<{ task: Task; members: Task[]; message: string }>;
   onCreated: (task: Task, noteIds: string[], ownsComposer: boolean) => void;
@@ -35,10 +37,11 @@ export async function settleCreatedTask(args: {
   // 创建成功了草稿才丢:中途任何一步失败都原样留着,用户回到面板还能接着改。
   const finishCreation = () => {
     const ownsComposer = args.panelMounted();
-    const current = args.draft.read();
-    if (ownsComposer || (current.text === submitted.text && current.noteIds === submitted.noteIds)) {
+    if (ownsComposer) {
       args.resetLabels();
       args.draft.clear();
+    } else {
+      args.draft.clearIfUnchanged(submitted.draft);
     }
     args.onCreated(task, submitted.noteIds, ownsComposer);
   };

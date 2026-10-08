@@ -13,6 +13,9 @@ import { chromeLaunchOptions } from "./chrome-path.mjs";
 //   C. 第 9 轮(insert 分支):扣住 → SSE → 删除 → 关面板 → 新开面板写新草稿 →
 //      放行,新面板不被关、新草稿不被清;
 //   D. 第 9 轮(建队分支):同 C,前驱换成仍独立的任务走 POST /api/queues;
+//   F. 第 10 轮:扣住 → 切走关面板 → 新开面板**正文不动**只补附件 → 放行,附件与
+//      正文都保留(逐字段比较漏附件的回归;不删任务,正是审查的原始复现);
+//   G. 第 10 轮:同 F 但正文改过又改回原值 → 放行,草稿保留(任何变化都失去清空资格);
 //   E. 对照:没删过的首次创建照常插入并选中、面板收起。
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
@@ -25,6 +28,15 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
 
   const TITLES = { "t-backlog": "存量待办任务", "t-backlog2": "另一个待办任务" };
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+  // 往面板正文框粘贴一张图(走真实 paste → 上传链路,上传接口由上面的 mock 即答)。
+  const pasteFile = (name) => page.evaluate(({ name, png }) => {
+    const textarea = document.querySelector(".composer-objective textarea");
+    const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
+    const data = new DataTransfer();
+    data.items.add(new File([bytes], name, { type: "image/png" }));
+    textarea.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  }, { name, png: PNG });
   const row = (overrides) => ({
     id: "t-backlog", title: "存量待办任务", status: "backlog", projectId: "p1", parentId: null,
     archived: false, mode: "single", groupId: null, queueId: null, queuePosition: null,
@@ -46,6 +58,11 @@ try {
     if (path === "/api/settings") data = { defaultWorkflowId: null };
     if (path.endsWith("/branches")) data = { branches: ["main"], current: "main" };
     if (path === "/api/tasks" && request.method() === "GET") data = taskList;
+    if (path === "/api/uploads" && request.method() === "POST") {
+      const body = JSON.parse(request.postData() ?? "{}");
+      const name = typeof body.name === "string" ? body.name : "pasted.png";
+      data = { id: `up-${name}`, path: `/tmp/uploads/${name}`, url: `data:image/png;base64,${PNG}`, name, kind: "image" };
+    }
     if (path === "/api/tasks" && request.method() === "POST") {
       const body = request.postDataJSON();
       taskSeq += 1;
@@ -173,16 +190,50 @@ try {
   assert.equal(await objective.inputValue(), "建队分支的新草稿,也必须保留", "建队分支:新草稿不得被清");
   assert.doesNotMatch(await rows.innerText(), /task-4/, "建队分支:已删除任务不复活");
 
+  // ── 场景 F(第 10 轮):扣住提交后切走,新面板**正文不动**只补附件;放行后附件与
+  // 正文都保留。不删任务——审查的原始复现:正常完成的旧提交也不得清后来的草稿。
+  await objective.fill("");
+  holdEnqueue = true;
+  await submitQueued("审查r1-正文不动只补附件");
+  await waitHeld();
+  await page.getByTestId("close-composer").click();
+  await page.getByTestId("open-composer").click();
+  assert.equal(await objective.inputValue(), "审查r1-正文不动只补附件", "新面板预填同一份共享草稿");
+  await pasteFile("race-keep.png");
+  await page.getByText("race-keep.png").waitFor({ timeout: 5000 });
+  release();
+  await enqueuedToast("存量待办任务").nth(3).waitFor({ timeout: 5000 });
+  assert.equal(await composerOpen.innerText(), "开", "附件场景:旧请求不得关闭新面板");
+  assert.equal(await objective.inputValue(), "审查r1-正文不动只补附件", "正文未变也必须保留");
+  assert.equal(await page.getByText("race-keep.png").count() > 0, true, "刚补的附件不得被清");
+  assert.match(await rows.innerText(), /task-5:q1:1/, "没删除的任务照常按入队快照插入");
+
+  // ── 场景 G(第 10 轮):正文改过又改回原值,同样失去清空资格。
+  await page.getByTestId("close-composer").click();
+  await page.getByTestId("open-composer").click();
+  await objective.fill("");
+  holdEnqueue = true;
+  await submitQueued("审查r1-改过又改回");
+  await waitHeld();
+  await page.getByTestId("close-composer").click();
+  await page.getByTestId("open-composer").click();
+  await objective.fill("中途改成别的");
+  await objective.fill("审查r1-改过又改回");
+  release();
+  await enqueuedToast("存量待办任务").nth(4).waitFor({ timeout: 5000 });
+  assert.equal(await composerOpen.innerText(), "开", "改回原值:旧请求不得关闭新面板");
+  assert.equal(await objective.inputValue(), "审查r1-改过又改回", "改过又改回的草稿必须保留");
+
   // ── 场景 E(对照):没删过的首次创建照常回插并选中、面板收起。
   await objective.fill("");
   await submitQueued("正常创建的任务");
-  await enqueuedToast("存量待办任务").nth(3).waitFor({ timeout: 5000 });
-  assert.match(await rows.innerText(), /task-5:q1:1/, "真正首次创建仍按入队快照插入");
-  assert.equal(await page.getByTestId("selected").innerText(), "task-5", "正常创建仍自动选中");
+  await enqueuedToast("存量待办任务").nth(5).waitFor({ timeout: 5000 });
+  assert.match(await rows.innerText(), /task-7:q1:1/, "真正首次创建仍按入队快照插入");
+  assert.equal(await page.getByTestId("selected").innerText(), "task-7", "正常创建仍自动选中");
   assert.equal(await composerOpen.innerText(), "关", "正常创建完成后面板照常收起");
 
   assert.deepEqual(errors, []);
-  console.log("composer delete-while-inflight regression passed (local + cross-page refetch + draft ownership)");
+  console.log("composer delete-while-inflight regression passed (refetch + draft ownership + attachments)");
 } finally {
   await browser?.close();
   await server.close();

@@ -531,7 +531,7 @@ export function TaskComposerPanel({
       launchMode,
       scheduleAt,
       scheduleCron,
-      submitted: { text: body, noteIds: draft.noteIds },
+      submitted: { draft: draft.value, noteIds: draft.noteIds },
       panelMounted: () => mountedRef.current,
       draft,
       resetLabels: () => setLabels([]),
