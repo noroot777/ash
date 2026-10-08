@@ -5,6 +5,7 @@ import { REASONING_EFFORT_DETAIL } from "@ash/shared/cli-presets";
 import { addUsage, formatTokens, formatTokensExact, hasUsage, usageTotal } from "@ash/shared/usage";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { canJoinQueue, placeTaskAfter, queueAfterOptions } from "../lib/queueAfter.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
@@ -248,6 +249,19 @@ export function TaskInspector({
     }
   };
 
+  // 「排在某任务之后」:目标在队列就紧随其后插入,不在就建一条 [目标, 本任务]。
+  const joinQueueAfter = async (targetId: string) => {
+    const target = allTasks.find((item) => item.id === targetId);
+    if (!target) return;
+    try {
+      await placeTaskAfter(task.id, target);
+      notify(`已排在「${target.title || "未命名任务"}」之后，轮到它时自动开始`);
+      onQueueChanged();
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
   return (
     <div className="task-inspector" aria-label="任务信息">
       <div className="task-inspector-scroll">
@@ -334,6 +348,20 @@ export function TaskInspector({
               <button className="task-inspector-action" type="button" onClick={() => setQueueOpen(true)}>
                 <span><ListNumbers size={13} />查看队列 · {queueItems.length || "…"} 个任务</span><CaretRight size={13} />
               </button>
+            </>
+          ) : canJoinQueue(task) ? (
+            <>
+              <Dropdown className="task-inspector-queue-after" label="排在某任务之后" value=""
+                placeholder="排在某任务之后…" filterPlaceholder="筛选任务…"
+                options={queueAfterOptions({
+                  tasks: allTasks,
+                  groups,
+                  projectId: task.projectId,
+                  excludeId: task.id,
+                  subjectGroupId: task.groupId ?? null,
+                })}
+                onChange={(targetId) => void joinQueueAfter(targetId)} />
+              <p className="task-inspector-note">独立任务。选一个同组任务，等它跑完这个再自动开始。</p>
             </>
           ) : <p className="task-inspector-note">独立任务，不在任何队列中。</p>}
         </section>

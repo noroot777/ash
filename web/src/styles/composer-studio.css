@@ -58,6 +58,10 @@
 .studio-popover .composer-launch-mode select { width:100%; flex:auto; }
 .studio-popover .schedule-field { width:100%; margin-top:12px; }
 .studio-popover .composer-launch-error { display:block; margin-top:8px; white-space:normal; }
+/* 「创建并排队」的目标任务选择器(启动设置浮层内) */
+.studio-popover .composer-queue-after { display:grid; gap:6px; margin-top:12px; font-size:11.5px; color:var(--muted); }
+.studio-popover .composer-queue-after .ui-select-trigger { width:100%; }
+.studio-popover .composer-queue-after .studio-help { margin-top:0; }
 .studio-workflow > .is-workflow { padding:16px 0 0; }
 .studio-workflow .composer-wf-label { flex-wrap:wrap; }
 .studio-effective-run { margin:7px 0 0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }

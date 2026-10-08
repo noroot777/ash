@@ -672,4 +672,8 @@ export const api = {
     request(`/queues/${id(queueId)}/reorder`, json("POST", { taskIds })),
   queueRemove: (queueId: string, taskId: string): Promise<{ ok: true }> =>
     request(`/queues/${id(queueId)}/remove`, json("POST", { taskId })),
+  queueInsert: (queueId: string, taskId: string, position?: number): Promise<{ ok: true }> =>
+    request(`/queues/${id(queueId)}/insert`, json("POST", { taskId, position })),
+  queueCreate: (taskIds: string[]): Promise<{ queueId: string; taskIds: string[] }> =>
+    request("/queues", json("POST", { taskIds })),
 };

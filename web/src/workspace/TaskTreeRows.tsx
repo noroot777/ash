@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ProjectView, TaskListItem } from "@ash/shared";
 import { statusCounts, workersOf } from "@ash/shared/team";
-import { CaretRight, ChatsCircle, PaperPlaneTilt, Star, UsersThree } from "@phosphor-icons/react";
+import { CaretRight, ChatsCircle, ListNumbers, PaperPlaneTilt, Star, UsersThree } from "@phosphor-icons/react";
 import { OriginTaskChip, TaskCreationBadge, taskParentLink } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
@@ -26,6 +26,8 @@ type TaskTreeActions = {
   onStarred: (taskId: string, starredAt: number | null) => void;
   notify: (message: string) => void;
   projectBadges: Map<string, ProjectView> | null;
+  // 行尾队列徽标点开队列抽屉;抽屉挂在 TaskTree 顶层,入口用 context 递下来。
+  onOpenQueue: (queueId: string) => void;
   // 团队的状态桶写在执行者身上（见 lib/taskAttention 的 spreadBucket），行也要读它，
   // 否则「需要你处理」的底色在团队行上判据跟筛选条不是同一套。
   workerIndex: WorkerIndex;
@@ -152,16 +154,36 @@ export function TaskRow({
   // 当前就在本机运行的任务（含接力转入、已经移回）按普通任务展示；接力只在真正
   // 离开本机但尚未确认的存档行上留图标。确认转出的任务本来就只出现在“其他机器”。
   const showHandoffMeta = task.handoff?.direction === "out";
-  const hasMeta = task.mode === "duet" || showHandoffMeta || trailing != null;
   const canStar = task.parentId === null;
   const spreadRow = useSpreadRow();
   const spreadCells = spreadRow?.spread.laidOut ? spreadRow : null;
   // 执行者行不挂徽标：它缩进在团队行底下，跟着上面那行走，同一个项目再标一次只是噪音。
   const actions = useContext(TaskTreeActionsContext);
+  // 行尾队列徽标「位次/总数」：谁在等谁本来只有点进详情才看得到。执行者行不挂 ——
+  // 它们的队列由调度者管理，抽屉也只读。总数从列表就地数（抽屉打开才取权威数据）。
+  const queueTotal = task.queueId != null ? allTasks.filter((item) => item.queueId === task.queueId).length : 0;
+  const openQueue = actions?.onOpenQueue;
+  const queueBadge = task.queueId != null && task.parentId === null && openQueue
+    ? (
+      <span className="workspace-queue-badge" role="button" tabIndex={0}
+        aria-label={`队列第 ${(task.queuePosition ?? 0) + 1} / ${queueTotal} 位，查看队列`}
+        onClick={(event) => { event.stopPropagation(); openQueue(task.queueId!); }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          event.stopPropagation();
+          openQueue(task.queueId!);
+        }}>
+        <ListNumbers size={11} weight="bold" aria-hidden="true" />
+        {(task.queuePosition ?? 0) + 1}/{queueTotal}
+      </span>
+    )
+    : null;
+  const hasMeta = task.mode === "duet" || showHandoffMeta || trailing != null || queueBadge != null;
   const project = canStar && showProject ? actions?.projectBadges?.get(task.projectId) : undefined;
   const bucket = spreadCells ? spreadBucket(task, workersFrom(actions?.workerIndex, task.id)) : null;
   return (
-    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${bucket === "todo" ? " is-todo" : ""}${task.starredAt != null ? " has-star" : ""}${canStar ? " can-star" : ""}`}>
+    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${bucket === "todo" ? " is-todo" : ""}${task.starredAt != null ? " has-star" : ""}${queueBadge ? " has-queue" : ""}${canStar ? " can-star" : ""}`}>
       <span className="workspace-task-leading">
         {leading ?? <StatusMarker indicator={indicator} />}
       </span>
@@ -190,6 +212,7 @@ export function TaskRow({
                   : "接力转出"}
               />
             )}
+            {queueBadge}
             {trailing}
           </span>
         )}

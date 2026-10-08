@@ -26,6 +26,7 @@ import {
 import { buildTaskTree, groupTasksByProject, keepVisibleInPreview, orderedTopLevelTasks, previewTasksByAge, revealToIndex } from "./taskTreeModel.ts";
 import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
+import { QueueDrawer } from "../task-detail/QueueDrawer.tsx";
 
 type TaskTreeProps = {
   projects: ProjectView[];
@@ -39,6 +40,8 @@ type TaskTreeProps = {
   onRemoteTask: (task: TaskListItem, target: HandoffTarget) => void;
   onTaskStarred: (taskId: string, starredAt: number | null) => void;
   onHandoffFinished: () => Promise<void> | void;
+  // 队列抽屉里拖了顺序/移出成员后刷新任务列表(行上的「位次/总数」徽标靠它更新)。
+  onQueueChanged: () => void;
   outbound: OutboundBar;
   notify: (message: string) => void;
 };
@@ -302,7 +305,7 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, outbound, notify }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, onQueueChanged, outbound, notify }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   // 主列表看哪些行只由作用域决定（scopeTasks 是唯一判据，跟计数、筛选、J/K 遍历同源）。
@@ -310,6 +313,8 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   const taskMode = scope.kind === "tasks";
   const otherProjects = taskMode ? [] : projects.filter((project) => project.id !== currentProjectId);
   const currentProject = projects.find((project) => project.id === currentProjectId) ?? null;
+  // 行尾队列徽标点开的抽屉(查看/重排/移出),挂在树顶层,一次只开一条队列。
+  const [openQueueId, setOpenQueueId] = useState<string | null>(null);
   // 徽标表只在任务模式给：单项目态下每行都是同一个项目，标了纯属占地方。
   const projectBadges = useMemo(
     () => taskMode ? new Map(projects.map((project) => [project.id, project])) : null,
@@ -320,7 +325,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   // 执行者表按**全量**建（不是 scopedTasks）：团队的桶要它真实的执行者集合。
   const workerIndex = useMemo(() => indexWorkers(tasks), [tasks]);
   const treeActions = useMemo(
-    () => ({ onStarred: onTaskStarred, notify, projectBadges, workerIndex }),
+    () => ({ onStarred: onTaskStarred, notify, projectBadges, workerIndex, onOpenQueue: setOpenQueueId }),
     [notify, onTaskStarred, projectBadges, workerIndex],
   );
   return (
@@ -360,6 +365,15 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
         )}
       </nav>
       <SpreadPeekLayer peek={peek} spread={spread} onHold={hold} onLeave={peekOut} onDismiss={hide} />
+      {openQueueId && (
+        <QueueDrawer
+          queueId={openQueueId}
+          currentTaskId={selectedTaskId ?? ""}
+          allTasks={tasks}
+          onClose={() => setOpenQueueId(null)}
+          onChanged={onQueueChanged}
+        />
+      )}
     </SpreadRowProvider>
     </TaskTreeActionsProvider>
   );

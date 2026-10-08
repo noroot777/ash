@@ -199,6 +199,9 @@
 .task-inspector .review-dispatch-control form footer > button { justify-content: center; }
 .task-inspector-action { display: flex; width: 100%; min-height: 31px; align-items: center; border: 0; border-radius: 7px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 10.5px; text-align: left; }
 .task-inspector-action:hover { background: var(--raised); color: var(--ink); }
+/* 「排在某任务之后」入口(独立任务时顶替「查看队列」那一行的位置) */
+.task-inspector-queue-after { width: 100%; }
+.task-inspector-queue-after .ui-select-trigger { width: 100%; min-height: 31px; font-size: 10.5px; }
 .task-inspector-action span { display: inline-flex; align-items: center; gap: 5px; }
 .task-inspector-action span:last-child,
 .task-inspector-action > svg:last-child { margin-left: auto; }

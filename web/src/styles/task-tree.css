@@ -214,6 +214,36 @@
   --tail-busy: 1;
 }
 
+/* 在队列里的行:位次徽标是状态不是操作,常驻显示(同 has-star 的道理)。徽标画在
+   meta 里,所以这里连 meta 一起常驻 —— 排了队的行值得一直说明「它在等谁」。 */
+.workspace-task-row-wrap.has-queue {
+  --tail-busy: 1;
+  --row-active: 1;
+  --row-events: auto;
+}
+
+.workspace-queue-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  background: var(--panel);
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.workspace-queue-badge:hover,
+.workspace-queue-badge:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .workspace-task-row-wrap:hover:not(.is-selected) {
   --task-row-surface: var(--hover-bg);
 }
