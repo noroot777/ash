@@ -2,7 +2,9 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type Dispatch,
   type ReactNode,
@@ -28,6 +30,7 @@ type Draft = {
 type DraftContextValue = {
   drafts: Record<string, Draft>;
   updateDraft: (key: string, update: (current: Draft) => Draft) => void;
+  readDraft: (key: string) => Draft;
 };
 
 const EMPTY_DRAFT: Draft = { text: "", attachments: [], pendingUploads: [], noteIds: [] };
@@ -39,6 +42,11 @@ export const composerDraftKey = (projectId: string) => `composer:${projectId}`;
 
 export function DraftProvider({ children }: { children: ReactNode }) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  // 异步提交的收尾(发送/创建完成)读「此刻」的草稿,不能用发起那一刻的闭包值:
+  // 组件可能早已卸载、草稿可能已被后来打开的面板改写。ref 镜像给 readDraft 用。
+  const draftsRef = useRef(drafts);
+  useEffect(() => { draftsRef.current = drafts; }, [drafts]);
+  const readDraft = useCallback((key: string) => draftsRef.current[key] ?? EMPTY_DRAFT, []);
   const updateDraft = useCallback((key: string, update: (current: Draft) => Draft) => {
     setDrafts((current) => {
       const previous = current[key] ?? EMPTY_DRAFT;
@@ -57,7 +65,7 @@ export function DraftProvider({ children }: { children: ReactNode }) {
       return { ...current, [key]: next };
     });
   }, []);
-  const value = useMemo(() => ({ drafts, updateDraft }), [drafts, updateDraft]);
+  const value = useMemo(() => ({ drafts, updateDraft, readDraft }), [drafts, updateDraft, readDraft]);
   return <DraftContext.Provider value={value}>{children}</DraftContext.Provider>;
 }
 
@@ -72,6 +80,8 @@ export type DraftHandle = {
   setAttachments: Dispatch<SetStateAction<UploadAttachment[]>>;
   setPendingUploads: Dispatch<SetStateAction<UploadingFile[]>>;
   setNoteIds: Dispatch<SetStateAction<string[]>>;
+  /** 读此刻 Store 里的这份草稿(不是 handle 创建那一刻的快照)——异步收尾判断归属用。 */
+  read: () => { text: string; noteIds: string[] };
   /** 整份丢掉（发送/创建成功，或用户自己按了「清空」）。 */
   clear: () => void;
 };
@@ -80,7 +90,7 @@ export function useDraft(key: string): DraftHandle {
   const context = useContext(DraftContext);
   if (!context) throw new Error("useDraft must be used inside DraftProvider");
   const draft = context.drafts[key] ?? EMPTY_DRAFT;
-  const { updateDraft } = context;
+  const { updateDraft, readDraft } = context;
   const setScreenshot = useCallback<Dispatch<SetStateAction<ScreenshotDraft | null>>>((next) => {
     updateDraft(key, (current) => ({
       ...current,
@@ -111,11 +121,16 @@ export function useDraft(key: string): DraftHandle {
       noteIds: typeof next === "function" ? next(current.noteIds) : next,
     }));
   }, [key, updateDraft]);
+  const read = useCallback(() => {
+    const current = readDraft(key);
+    return { text: current.text, noteIds: current.noteIds };
+  }, [key, readDraft]);
   // 在途上传一并掐掉：清空之后那几张图再传完也没有地方落，进度条却还挂在别处跑。
+  // 按 Store 此刻的在途清单掐,不是 handle 创建那一刻的——clear 常在异步收尾里被调。
   const clear = useCallback(() => {
-    for (const pending of draft.pendingUploads) pending.abort();
+    for (const pending of readDraft(key).pendingUploads) pending.abort();
     updateDraft(key, () => EMPTY_DRAFT);
-  }, [draft.pendingUploads, key, updateDraft]);
+  }, [key, readDraft, updateDraft]);
   return {
     screenshot: draft.screenshot ?? null,
     setScreenshot,
@@ -127,6 +142,7 @@ export function useDraft(key: string): DraftHandle {
     setAttachments,
     setPendingUploads,
     setNoteIds,
+    read,
     clear,
   };
 }

@@ -463,15 +463,17 @@ export function WorkspaceShell() {
   const applyTaskSnapshots = useCallback((snapshots: Task[]) => {
     setTasks((current) => snapshots.reduce(mergeTaskSnapshot, current));
   }, [setTasks]);
-  const createTask = (task: Task, noteIds: string[] = []) => {
+  const createTask = (task: Task, noteIds: string[] = [], ownsComposer = true) => {
     // 迟到的创建完成回写:任务已被确认删除(本页删的,或另一页面删、本页经权威列表
     // 刷新确认的)时跳过回插——不回插、不自动选中、不做随手记回链。「创建并排队」等
     // 慢网络在途提交完成时,刚建的任务可能已经被删掉;mergeCreatedTask 的缺行占位是
     // 给「事件没送到的真正首次插入」用的,分不出这种缺行,只能靠失效记录裁决
     // (第 7、8 轮审查;记录的构成见 useTasks.confirmedDeleteIds 注释)。
-    // 面板仍要收起:提交流程本身已经走完,留着不收会困在 busy 态(按钮永久禁用)。
+    // 收面板只在 ownsComposer(发起提交的面板还挂着)时做:面板还开着等提交,不收会
+    // 困在 busy 态;但用户已切走又新开的面板不归这次提交管,收掉等于把人正在写的
+    // 新任务关了(第 9 轮审查)。
     if (confirmedDeleteIds.current.has(task.id)) {
-      setComposer(null);
+      if (ownsComposer) setComposer(null);
       return;
     }
     // 合并策略(为什么已存在就不覆盖)见 createdTaskMerge.ts 顶部注释。
@@ -479,7 +481,7 @@ export function WorkspaceShell() {
     pushTaskHistoryEntry(task, window, scopeKind);
     setTaskId(task.id);
     setRemoteSelection(null);
-    setComposer(null);
+    if (ownsComposer) setComposer(null);
     for (const noteId of noteIds) api.patchNote(noteId, { taskId: task.id }).catch(() => notify("任务已创建，但随手记回链写入失败"));
   };
   // 带进来的那份内容（随手记转任务）并进草稿之后就摘掉：它是一次性投递，留在状态里
