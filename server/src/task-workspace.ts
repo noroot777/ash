@@ -164,11 +164,21 @@ function nextRunDirOf(
  * lock 才会指向同一处。
  *
  * 判据是「**真跑起来**会落在哪」（`nextRunDirOf`，跟 `taskWorkspace` 同一棵决策树），
- * 不是「上一次跑在哪」：要挡的是接下来那次启动。归档任务不算——归档 = 冻结，它起不来
+ * 不是「上一次跑在哪」：要挡的是接下来那次启动。归档任务默认不算——归档 = 冻结，它起不来
  * （`task-archive-routes.ts`）。归一按 `repoKey`：`~` 展开、尾斜杠、`.`/`..`、软链都算
  * 进去，所以同一个目录换一种合法写法登记的项目也照样圈得进来。
+ *
+ * `includeArchived` 是给**归档清理**用的唯一例外（第 2 轮审查确定性复现）：那条路恰好在
+ * 「整支队伍刚被标成 archived」之后跑，按默认判据圈，共用同一个目录的执行者会被全部过滤
+ * 掉，只锁住领队自己；而团队取回是**连执行者一起解冻**的，于是执行者能在领队目录正被删
+ * 的同一刻起跑。对别的调用点这个开关必须保持关着：它们面对的是未归档任务的目录，同目录
+ * 的已归档任务确实起不来，把它们算进去只会平白占锁。
  */
-export async function workspaceParticipants(task: OwnerTask, rootPath: string): Promise<WorkspacePeer[]> {
+export async function workspaceParticipants(
+  task: OwnerTask,
+  rootPath: string,
+  opts: { includeArchived?: boolean } = {},
+): Promise<WorkspacePeer[]> {
   const rows = await db.select().from(tasks);
   const byId = new Map(rows.map((row) => [row.id, row] as const));
   const lookup: OwnerLookup = async (id) => byId.get(id) ?? await lookupFromDb(id);
@@ -198,17 +208,27 @@ export async function workspaceParticipants(task: OwnerTask, rootPath: string): 
   const repoOf = (projectId: string) => projectRepos.get(projectId) ?? "";
 
   for (const row of rows) {
-    if (row.archived || peers.has(row.id)) continue;
+    if ((row.archived && !opts.includeArchived) || peers.has(row.id)) continue;
     const dir = nextRunDirOf(row, await isolatedWorkspaceOwner(row, lookup), repoOf, sessionDirs, dirExists);
     if (dir && keyOf(dir) === key) take(row);
   }
   return [...peers.values()];
 }
 
+/**
+ * 有独立工作区的任务,建目录之前先把起点抬到保存下来的「完成提交」(分支已经被验收或
+ * 归档清理收掉时)。
+ *
+ * 为什么不放在 `directWorkspace` 里:它必须跑在 `taskWorkspace` 的**路由判断之前** ——
+ * 那个判断读的就是 `worktreeStartCommit`,而这一步正是把它抬起来的人。放在后面等于
+ * 「该走哪条路」先于「起点是什么」定下来(见 `taskWorkspace` 里那段注释)。
+ */
+const restoreIsolated = (task: WorkspaceTask, repoPath: string): Promise<void> =>
+  task.useWorktree ? withRepoLock(repoPath, () => restoreAcceptedStart(task, repoPath)) : Promise.resolve();
+
 async function directWorkspace(task: WorkspaceTask, repoPath: string): Promise<Workspace> {
   if (!task.useWorktree) return resolveWorkspace(repoPath, task.id);
   return withRepoLock(repoPath, async () => {
-    await restoreAcceptedStart(task, repoPath);
     const ws = await prepareWorktree(repoPath, task.id, task.worktreeStartCommit || task.worktreeBase, !!task.worktreeStartCommit);
     await persistBaseFallback(task, ws);
     return ws;
@@ -232,6 +252,13 @@ export async function taskWorkspace(task: WorkspaceTask, repoPath: string): Prom
       return taskWorkspace(target, repoPath);
     }
   }
+  // 恢复自己的完成提交要排在**下面那个路由判断之前**:漏掉这一步的后果不是「少恢复一
+  // 次」,而是走错一条路。隔离的团队执行者起点为空时(`initializeBranchPlan` 对未指定基线
+  // 的执行者刻意不冻结起点,它要在起跑那一刻从领队的共享分支开叉)会掉到下面「按领队分支
+  // 新建」那条路,而归档清理默认会把执行者自己那条已合并的分支也收掉 —— 于是取回后继续
+  // 它,目录从**领队的旧提交**重建,它刚做完、已经合进项目的文件一个都不在(第 3 轮审查
+  // 确定性复现)。恢复之后起点非空,它就按自己的完成提交重建。
+  await restoreIsolated(task, repoPath);
   if (!task.parentId || (task.useWorktree && task.worktreeStartCommit)) return directWorkspace(task, repoPath);
 
   const parent = (await db.select().from(tasks).where(eq(tasks.id, task.parentId))).at(0);
@@ -239,6 +266,9 @@ export async function taskWorkspace(task: WorkspaceTask, repoPath: string): Prom
     return directWorkspace(task, repoPath);
   }
 
+  // 领队也要恢复一次:整队归档后取回,它自己的分支一样可能已经被收掉,而共用它目录的
+  // 执行者全都跟着这一个目录走。
+  await restoreIsolated(parent, repoPath);
   const shared = await directWorkspace(parent, repoPath);
   if (!task.useWorktree) return shared;
 

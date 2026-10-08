@@ -3,6 +3,7 @@
 // browser CORS), so it talks straight to the backend over Tailscale.
 import type {
   AppSettings,
+  ArchiveCleanupReport,
   ProjectView,
   Task,
   TaskListItem,
@@ -199,8 +200,12 @@ export const api = {
   ): Promise<TaskWorkspaceDiscardResult> =>
     req(`/projects/${projectId}/workspaces/discard`, { method: "POST", body: JSON.stringify(body) }).then(j),
   // 归档/取消归档:server 仅允许归档 done/failed/canceled(canArchive),归档态只读(拒编辑/运行/回复)。
-  archiveTask: (id: string): Promise<Task> => req(`/tasks/${id}/archive`, { method: "POST" }).then(j),
-  unarchiveTask: (id: string): Promise<Task> => req(`/tasks/${id}/unarchive`, { method: "POST" }).then(j),
+  // 归档还会按全局设置 archiveClean 顺手收掉 worktree/分支,所以回的是「任务 + 这次清理
+  // 删了什么」;取回时对称地回一句工作区实情(目录可能已经不在了)。
+  archiveTask: (id: string): Promise<{ task: Task; cleanup: ArchiveCleanupReport | null }> =>
+    req(`/tasks/${id}/archive`, { method: "POST" }).then(j),
+  unarchiveTask: (id: string): Promise<{ task: Task; restoreNote: string | null }> =>
+    req(`/tasks/${id}/unarchive`, { method: "POST" }).then(j),
 
   runTask: (id: string): Promise<unknown> => req(`/tasks/${id}/run`, { method: "POST" }).then(j),
   stopTask: (id: string): Promise<unknown> => req(`/tasks/${id}/stop`, { method: "POST" }).then(j),

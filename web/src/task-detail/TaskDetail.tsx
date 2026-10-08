@@ -12,6 +12,7 @@ import { useFileView } from "../files/useFileView.ts";
 import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { api } from "../lib/api.ts";
+import { toggleArchive } from "../lib/archive.ts";
 import type { Notify } from "../lib/notify.ts";
 import { useConversation } from "../lib/useConversation.ts";
 import { useSkills } from "../lib/useSkills.ts";
@@ -226,7 +227,7 @@ export function TaskDetail({
       if (action === "run") await api.runTask(task.id);
       if (action === "retry") await api.retryTask(task.id);
       if (action === "stop") await api.stopTask(task.id);
-      if (action === "unarchive") onTaskUpdate(await api.unarchiveTask(task.id));
+      if (action === "unarchive") onTaskUpdate(await toggleArchive(task, notify));
       else await refreshTask();
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
@@ -254,7 +255,7 @@ export function TaskDetail({
   const archive = async () => {
     setBusy(true);
     try {
-      onTaskUpdate(task.archived ? await api.unarchiveTask(task.id) : await api.archiveTask(task.id));
+      onTaskUpdate(await toggleArchive(task, notify));
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {

@@ -23,6 +23,7 @@ import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { OriginTaskBar, TaskCreationBadge } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
+import { toggleArchive } from "../lib/archive.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
@@ -214,8 +215,7 @@ export function DuetView({
   };
   const archive = async () => {
     try {
-      onTaskUpdated(task.archived ? await api.unarchiveTask(task.id) : await api.archiveTask(task.id));
-      notify(task.archived ? "已取消归档" : "讨论已归档");
+      onTaskUpdated(await toggleArchive(task, notify, "讨论"));
     } catch (reason) { notify(reason instanceof Error ? reason.message : String(reason)); }
   };
   const commitTitle = async () => {

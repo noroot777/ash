@@ -1,5 +1,6 @@
 import type { AppSettings } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import { ACCEPT_CLEAN } from "@ash/shared/workflow";
 import { db } from "./db/index.js";
 import { MAX_BODY_MB } from "./handoff-body.js";
 import { appSettings } from "./db/schema.js";
@@ -39,6 +40,12 @@ const SETTING_SPECS = {
           && typeof url === "string" && /^https?:\/\/\S+$/.test(url) && url.length <= 256;
       }),
     hint: "必须是 {name,url,peerFp?}[]（url 以 http(s):// 开头，peerFp 是 64 位小写 hex 指纹，最多 20 个目标）",
+  },
+  // 归档时清到什么程度。三档语义与标签跟验收清理共用(ACCEPT_CLEAN),因为用户要决定的
+  // 是同一件事;实际能删到哪一步仍由 git 的安全检查说话(见 task-archive-cleanup.ts)。
+  archiveClean: {
+    ok: (v: unknown) => typeof v === "string" && (ACCEPT_CLEAN as readonly string[]).includes(v),
+    hint: `必须是 ${ACCEPT_CLEAN.join(" / ")} 之一（删 worktree 和分支 / 只删 worktree / 都留着）`,
   },
   handoffRequireApproval: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
   handoffEncrypt: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },

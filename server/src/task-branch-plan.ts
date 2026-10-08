@@ -20,8 +20,18 @@ export async function commitAt(repo: string, ref: string): Promise<string | null
   } catch { return null; }
 }
 
+/**
+ * 任务分支已经不在了（验收或归档清理收掉的）时，把起点抬到保存下来的「完成提交」。
+ *
+ * 判据只有一条:**分支没了 + 存过恢复点**。这里曾经还要求 `worktreeStartCommit` 非空,
+ * 那是按「只有冻结过开工点的任务才会有恢复点」推出来的前提 —— 归档清理给任何被删分支的
+ * 任务都写恢复点之后它就不成立了:没冻结过起点的旧任务照样有 ref,却因为这句早返回读不
+ * 到,重建落回 `worktreeBase`(多半是 main 的当前 HEAD),任务做完的东西一样不在工作区里
+ * （第 2 轮审查确定性复现）。ref 存在本身就是「这个任务的成果停在这个提交」的证据,跟它
+ * 当初有没有冻结开工点无关。
+ */
 export async function restoreAcceptedStart(task: { id: string; worktreeStartCommit?: string | null }, repo: string): Promise<void> {
-  if (!task.worktreeStartCommit || await commitAt(repo, await resolveWorktreeBranchName(repo, task.id))) return;
+  if (await commitAt(repo, await resolveWorktreeBranchName(repo, task.id))) return;
   const head = await commitAt(repo, acceptedHeadRef(task.id));
   if (!head) return;
   await exec("git", ["-C", expandHome(repo), "update-ref", baseRef(task.id), head]);

@@ -4,6 +4,7 @@
 // 钉着「单个代码文件不超过 700 行」。消费方的 import 路径不变 —— index.ts 仍然把这些
 // 类型原样再导出(它只能转发**类型**,见 server/CLAUDE.md)。
 import type { ProjectRole } from "./multiuser.ts";
+import type { AcceptClean } from "./workflow.ts";
 import type { ProjectPreviewConfig } from "./preview.ts";
 import type { ProjectCommandsConfig } from "./project-commands.ts";
 
@@ -81,6 +82,48 @@ export interface TaskWorkspaceDiscardResult {
   branchDeleted: boolean;
   worktreeError: string | null; // git 原样 stderr
   branchError: string | null;
+}
+
+// ── 归档时的工作区清理(用户 2026-10-08 要求「归档也删」)───────────────────
+// 归档不再只是翻一个 archived 位:它会按全局设置 `archiveClean` 顺手把这个任务
+// 留在磁盘上的 worktree/分支收掉。团队任务连执行者一起归档,所以结果是一个列表。
+// 清理失败**从不**让归档失败——归档是用户的主要意图,git 那边的拒绝如实回报。
+export interface ArchiveCleanupItem extends TaskWorkspaceDiscardResult {
+  taskId: string;
+  title: string;
+}
+
+export interface ArchiveCleanupReport {
+  mode: AcceptClean;
+  items: ArchiveCleanupItem[];
+  // 预览进程还占着 worktree 的 cwd 时跳过清理的原因;null = 没这回事。
+  skipped: string | null;
+}
+
+/**
+ * 归档清理结果的一行人话,toast 和时间线共用。空串 = 没什么可说的(设置是「都留着」,
+ * 或者这个任务本来就没有 worktree/分支)。
+ *
+ * 失败项要带上 git 原话:「分支没删掉」这句单独摆出来,用户下一步该干什么全靠猜。
+ */
+export function summarizeArchiveCleanup(report: ArchiveCleanupReport | null | undefined): string {
+  if (!report || report.mode === "none") return "";
+  const items = report.items.filter((i) => i.path || i.branch);
+  if (!items.length) return report.skipped ?? "";
+  const done: string[] = [];
+  const removed = items.filter((i) => i.worktreeRemoved).length;
+  if (removed) done.push(removed > 1 ? `${removed} 个 worktree` : "worktree");
+  const branches = items.filter((i) => i.branchDeleted).map((i) => i.branch!);
+  if (branches.length) done.push(`分支 ${branches.join("、")}`);
+  const kept = items.flatMap((i) => [
+    ...(i.path && !i.worktreeRemoved ? [`worktree ${i.path} 已保留（${i.worktreeError ?? "删除失败"}）`] : []),
+    ...(i.branch && !i.branchDeleted ? [`分支 ${i.branch} 已保留（${i.branchError ?? "未删除"}）`] : []),
+  ]);
+  return [
+    done.length ? `已清理 ${done.join(" 和 ")}` : "",
+    report.skipped ?? "",
+    ...kept,
+  ].filter(Boolean).join("；");
 }
 
 export type GroupMode = "parallel" | "serial";
