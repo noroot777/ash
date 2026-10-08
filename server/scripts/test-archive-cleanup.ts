@@ -16,6 +16,7 @@
 //  12. 团队：共用领队目录的执行者也要被锁住，取回挡在清理之后（第 2 轮审查）
 //  13. 没冻结过开工点的旧任务，取回也按保存的完成提交重建（同上）
 //  14. 恢复起点存不下来就保留分支，绝不报成「已清理」（同上）
+//  15. 整队归档取回后，隔离执行者按**自己**的完成提交重建，共用的按领队的（第 3 轮审查）
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -461,6 +462,74 @@ try {
     assert.match(item.branchError ?? "", /恢复起点/, "要当场说清为什么留着分支");
     assert.equal(item.worktreeRemoved, true, "目录照常清理 —— 它的内容在分支里");
     rmSync(lock, { force: true });
+  }
+
+  // ── 15. 整队归档取回:隔离执行者按自己的完成提交重建 ──────────────────────
+  // 第 3 轮审查确定性复现:未指定基线的隔离执行者,`initializeBranchPlan` 刻意不冻结起点
+  // (它要在起跑那一刻从领队的共享分支开叉)。起点为空就会掉到 taskWorkspace 的「按领队
+  // 分支新建」那条路,而那条路不恢复执行者自己的完成提交 —— 归档清理默认把执行者那条
+  // 已合并的分支也收掉之后,取回继续它,目录从领队的旧提交重建,它刚做完并已合进项目的
+  // 文件一个都不在。所以恢复必须跑在**路由判断之前**。
+  {
+    const { taskWorkspace } = await import("../src/task-workspace.js");
+    const { acceptedHeadRef, commitAt, initializeBranchPlan } = await import("../src/task-branch-plan.js");
+    const lead = "arcNlead001";
+    const solo = "arcNwork001";   // useWorktree=true：自己一个目录,自己一条分支
+    const shared = "arcNshar001"; // useWorktree=false：跟领队同一个目录
+    const rowOf = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+
+    await db.insert(tasks).values({
+      id: lead, projectId: "project", title: "隔离执行者的领队", body: "", mode: "team",
+      status: "done", useWorktree: true, createdAt: ts, updatedAt: ts,
+    });
+    for (const [id, useWorktree] of [[solo, true], [shared, false]] as const) {
+      const row = {
+        id, projectId: "project", title: `执行者 ${id}`, body: "", mode: "single", status: "done",
+        parentId: lead, useWorktree, createdAt: ts, updatedAt: ts,
+      };
+      await db.insert(tasks).values(row);
+      await initializeBranchPlan(row as never, repo);
+      // 前提:没指定基线的团队执行者确实没有冻结起点(走的就是出问题那条路)
+      assert.equal((row as { worktreeStartCommit?: string | null }).worktreeStartCommit ?? null, null,
+        "团队执行者按设计不冻结开工点,这一条的前提就建立在这上面");
+    }
+
+    const leadWs = await taskWorkspace(await rowOf(lead) as never, repo);
+    commitIn(leadWs.path, "lead.txt");
+    const leadFinished = git(leadWs.path, "rev-parse", "HEAD");
+    // 隔离执行者从领队的共享分支开叉,所以它的分支包含 lead.txt 再加自己那个提交。
+    const soloWs = await taskWorkspace(await rowOf(solo) as never, repo);
+    commitIn(soloWs.path, "worker-feature.txt");
+    const soloFinished = git(soloWs.path, "rev-parse", "HEAD");
+    git(repo, "merge", "--ff-only", worktreeBranchName(solo)); // 手动合入,两条分支都成了已合并
+
+    const body = await (await archive(lead)).json() as { cleanup: { items: { taskId: string; branchDeleted: boolean }[] } };
+    for (const id of [lead, solo]) {
+      assert.equal(body.cleanup.items.find((item) => item.taskId === id)?.branchDeleted, true, `${id} 的已合并分支该收掉`);
+      assert.equal(branchExists(worktreeBranchName(id)), false, `${id} 的分支应已不在`);
+    }
+    assert.equal(await commitAt(repo, acceptedHeadRef(solo)), soloFinished, "执行者的完成提交要存下来");
+    assert.equal(await commitAt(repo, acceptedHeadRef(lead)), leadFinished, "领队的完成提交也要存下来");
+    // 主分支继续走:不推进的话「落回领队分支/主仓当前 HEAD」这条错误路径恰好也带着那些
+    // 文件,断言就区分不出对错。
+    writeFileSync(join(repo, "later-team.txt"), "主分支后来的改动\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "main moves on again");
+
+    assert.equal((await unarchive(lead)).status, 200, "整队取回");
+    assert.equal((await rowOf(solo)).archived, false, "执行者跟着领队一起回来");
+
+    const soloBack = await taskWorkspace(await rowOf(solo) as never, repo);
+    assert.equal(git(soloBack.path, "rev-parse", "HEAD"), soloFinished,
+      "隔离执行者要落在**它自己**的完成提交上,不是领队的旧提交、也不是主分支当前 HEAD");
+    assert.equal(existsSync(join(soloBack.path, "worker-feature.txt")), true, "它刚做完的文件必须在自己的目录里");
+    assert.equal(existsSync(join(soloBack.path, "later-team.txt")), false, "也不该掺进主分支后来的改动");
+
+    // 共用领队目录的那位:落在领队的完成提交上(领队的分支同样被收掉过)。
+    const sharedBack = await taskWorkspace(await rowOf(shared) as never, repo);
+    assert.equal(git(sharedBack.path, "rev-parse", "HEAD"), leadFinished, "共用者跟着领队的完成提交走");
+    assert.equal(existsSync(join(sharedBack.path, "lead.txt")), true, "领队做完的文件要在共用目录里");
+    assert.equal(existsSync(join(sharedBack.path, "later-team.txt")), false, "同样不该掺进主分支后来的改动");
   }
 
   console.log("[archive-cleanup] 全部断言通过");

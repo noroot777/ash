@@ -215,10 +215,20 @@ export async function workspaceParticipants(
   return [...peers.values()];
 }
 
+/**
+ * 有独立工作区的任务,建目录之前先把起点抬到保存下来的「完成提交」(分支已经被验收或
+ * 归档清理收掉时)。
+ *
+ * 为什么不放在 `directWorkspace` 里:它必须跑在 `taskWorkspace` 的**路由判断之前** ——
+ * 那个判断读的就是 `worktreeStartCommit`,而这一步正是把它抬起来的人。放在后面等于
+ * 「该走哪条路」先于「起点是什么」定下来(见 `taskWorkspace` 里那段注释)。
+ */
+const restoreIsolated = (task: WorkspaceTask, repoPath: string): Promise<void> =>
+  task.useWorktree ? withRepoLock(repoPath, () => restoreAcceptedStart(task, repoPath)) : Promise.resolve();
+
 async function directWorkspace(task: WorkspaceTask, repoPath: string): Promise<Workspace> {
   if (!task.useWorktree) return resolveWorkspace(repoPath, task.id);
   return withRepoLock(repoPath, async () => {
-    await restoreAcceptedStart(task, repoPath);
     const ws = await prepareWorktree(repoPath, task.id, task.worktreeStartCommit || task.worktreeBase, !!task.worktreeStartCommit);
     await persistBaseFallback(task, ws);
     return ws;
@@ -242,6 +252,13 @@ export async function taskWorkspace(task: WorkspaceTask, repoPath: string): Prom
       return taskWorkspace(target, repoPath);
     }
   }
+  // 恢复自己的完成提交要排在**下面那个路由判断之前**:漏掉这一步的后果不是「少恢复一
+  // 次」,而是走错一条路。隔离的团队执行者起点为空时(`initializeBranchPlan` 对未指定基线
+  // 的执行者刻意不冻结起点,它要在起跑那一刻从领队的共享分支开叉)会掉到下面「按领队分支
+  // 新建」那条路,而归档清理默认会把执行者自己那条已合并的分支也收掉 —— 于是取回后继续
+  // 它,目录从**领队的旧提交**重建,它刚做完、已经合进项目的文件一个都不在(第 3 轮审查
+  // 确定性复现)。恢复之后起点非空,它就按自己的完成提交重建。
+  await restoreIsolated(task, repoPath);
   if (!task.parentId || (task.useWorktree && task.worktreeStartCommit)) return directWorkspace(task, repoPath);
 
   const parent = (await db.select().from(tasks).where(eq(tasks.id, task.parentId))).at(0);
@@ -249,6 +266,9 @@ export async function taskWorkspace(task: WorkspaceTask, repoPath: string): Prom
     return directWorkspace(task, repoPath);
   }
 
+  // 领队也要恢复一次:整队归档后取回,它自己的分支一样可能已经被收掉,而共用它目录的
+  // 执行者全都跟着这一个目录走。
+  await restoreIsolated(parent, repoPath);
   const shared = await directWorkspace(parent, repoPath);
   if (!task.useWorktree) return shared;
 
