@@ -3,6 +3,7 @@ import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
 import { outboundHolder } from "@ash/shared/handoff";
 import { api } from "../lib/api.ts";
+import { useLatestInteraction } from "../lib/latestInteraction.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useTasks } from "../lib/useTasks.ts";
 import { handedOut, useOutboundState } from "./useOutboundState.ts";
@@ -127,6 +128,8 @@ export function WorkspaceShell() {
     tasks, targets: handoffTargets, refreshTargets,
     refreshRemote, refreshing: outboundRefreshing, asked: outboundAsked, offline: offlinePeers,
   } = useOutboundState(localTasks);
+  // 远端打开那一问的「有没有被后来的动作取代」判据（见 openOutboundTask）。
+  const interaction = useLatestInteraction();
   const outboundBar = useMemo(() => ({
     outboundCount: tasks.filter(handedOut).length,
     offlinePeers,
@@ -327,8 +330,16 @@ export function WorkspaceShell() {
   // 地址、页面没重新挂载时它还是旧的。而后端解析持有机用的是当前设置 —— 拿旧地址发过去
   // 只会换回一个「持有机与请求目标不一致」的 409，屏幕上就成了「状态看着恢复了，点开却
   // 打不开」。取不到就退回缓存那份，总比不让点强。
+  //
+  // 这一问是个真实的异步窗口，所以要**过期就整个作废**（审查第 1 轮抓到的是缺了这道闸：
+  // 按 K 去看另一台机器上那条，还没打开就点回本机任务，主区过一会儿自己又跳成远端那条）。
+  // 判据见 useLatestInteraction —— 这期间用户再动一下手（哪怕点的是同一条任务），这次
+  // 打开就不许再写任何东西：连那句「请在持有它的机器上继续」也不提，他早就看着别的了。
+  // 它顺带也把「两条在途的远端打开」收了口：next() 推一格 = 先发起的那条当场作废。
   const openOutboundTask = async (task: TaskListItem, options?: { keepSpread?: boolean }) => {
+    const token = interaction.next();
     const latest = await refreshTargets().catch(() => handoffTargets);
+    if (token !== interaction.current()) return;
     const holder = outboundHolder(task.handoff, latest);
     if (holder) { selectRemoteTask(task, holder, options); return; }
     notify("任务已接力到另一台机器，请在当前持有它的机器上继续");

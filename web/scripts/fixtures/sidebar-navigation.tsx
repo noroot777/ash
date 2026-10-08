@@ -120,13 +120,20 @@ const idleSpread: SidebarSpread = {
 
 function Ash() {
   const [taskMode, setTaskMode] = useState(false);
+  // 「所有项目分组都收起」那一档要求屏幕上一行都不剩,而「置顶」那一节是不可折叠的
+  // （用户 2026-09-08 拍板),所以用例得先把置顶摘掉。
+  const [pinned, setPinned] = useState(true);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedRemoteTaskId, setSelectedRemoteTaskId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const spread = useMemo(() => idleSpread, []);
+  const rows = useMemo(
+    () => pinned ? tasks : tasks.map((item) => item.id === "pin" ? { ...item, pinnedAt: null } : item),
+    [pinned],
+  );
   const scope: TaskScope = taskMode ? { kind: "tasks" } : { kind: "project", projectId: ash.id };
   // 模型那份顺序：侧栏收起时 J/K 的退路，也是这个 fixture 用来证明「两种顺序确实不同」的对照。
-  const modelOrder = useMemo(() => spreadVisibleTasks(tasks, scope, "all"), [scope]);
+  const modelOrder = useMemo(() => spreadVisibleTasks(rows, scope, "all"), [rows, scope]);
 
   const select = (next: TaskListItem) => {
     // 接力出去的行点开进的是远端那份实时会话（真实里走 selectRemoteTask），
@@ -141,7 +148,7 @@ function Ash() {
   };
 
   const navigate = useSidebarTaskNavigation({
-    tasks,
+    tasks: rows,
     fallbackOrder: modelOrder,
     selectedTaskId,
     selectedRemoteTaskId,
@@ -183,13 +190,16 @@ function Ash() {
       <button type="button" data-testid="toggle-sidebar" onClick={() => setSidebarOpen((value) => !value)}>
         收起/展开侧栏
       </button>
+      <button type="button" data-testid="toggle-pin" onClick={() => setPinned((value) => !value)}>
+        切换置顶
+      </button>
       {sidebarOpen && (
         <aside className="workspace-sidebar" style={{ width: 320, minHeight: 520 }}>
           <TaskTree
             projects={[ash, other]}
             currentProjectId={ash.id}
             scope={scope}
-            tasks={tasks}
+            tasks={rows}
             selectedTaskId={selectedTaskId}
             selectedRemoteTaskId={selectedRemoteTaskId}
             spread={spread}

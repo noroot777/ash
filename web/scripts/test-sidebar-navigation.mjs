@@ -143,7 +143,47 @@ try {
   assert.ok(folded.length < screen.length, `折叠「${groupName}」后屏幕上的行应变少`);
   assert.deepEqual(await walk(folded.length), folded, "折叠起来的项目分组必须整组跳过");
 
-  // —— 六、侧栏收起：屏幕上没有这份列表了，J/K 退回模型顺序而不是哑掉。
+  // —— 六、所有项目分组都收起：侧栏还开着，只是一行可见的都没有。
+  // 这时 J/K 必须**什么都不做** —— 退回模型顺序会打开一个在列表里根本找不到的任务
+  // （审查第 1 轮抓到的就是这一条：全部收起后按 J，右侧开了一条看不见的任务）。
+  await page.getByTestId("toggle-mode").click();   // 先回单项目态，去掉置顶后再切回来
+  await page.getByTestId("toggle-pin").click();    // 置顶那一节不可折叠，得先把它摘掉
+  await page.getByTestId("toggle-mode").click();
+  await page.locator(".workspace-task-project-head").first().waitFor();
+  assert.equal(
+    await page.locator('.workspace-task-tree [data-task-section="pinned"]').count(),
+    0,
+    "摘掉置顶后不该再有置顶那一节",
+  );
+  // 先选中一条看得见的行，再把所有组收起 —— 这样「不动」是实打实的断言（选中非空）。
+  await reset();
+  const anchored = (await walk(1))[0];
+  assert.ok(anchored, "先落一个选中");
+  for (const head of await page.$$(".workspace-task-project-head")) {
+    if (await head.getAttribute("aria-expanded") === "true") await head.click();
+  }
+  await page.waitForFunction(() => document.querySelectorAll(".workspace-task-tree [data-task-id]").length === 0);
+  assert.deepEqual(await screenOrder(), [], "全部收起后屏幕上一行都没有");
+  assert.ok(await page.locator(".workspace-task-tree").count() > 0, "侧栏本身还在屏幕上");
+  await page.keyboard.press("j");
+  await page.waitForTimeout(400);
+  assert.equal(await selected.textContent(), anchored, "全部收起时 J 不得把选中挪到看不见的行上");
+  await page.keyboard.press("k");
+  await page.waitForTimeout(400);
+  assert.equal(await selected.textContent(), anchored, "K 同理");
+  // 一行都没有、也没选中时同样一动不动（别回落到模型顺序的第一行）。
+  await reset();
+  await page.keyboard.press("j");
+  await page.waitForTimeout(400);
+  assert.equal(await selected.textContent(), "", "全部收起且没选中时 J 不该凭空选一条");
+
+  // 把组重新展开，交回给下一段。
+  for (const head of await page.$$(".workspace-task-project-head")) {
+    if (await head.getAttribute("aria-expanded") === "false") await head.click();
+  }
+  await page.waitForFunction(() => document.querySelectorAll(".workspace-task-tree [data-task-id]").length > 0);
+
+  // —— 七、侧栏整栏收起：屏幕上没有这份列表了，J/K 退回模型顺序而不是哑掉。
   await page.getByTestId("toggle-mode").click();
   await page.getByTestId("toggle-sidebar").click();
   await page.waitForSelector(".workspace-task-tree", { state: "detached" });

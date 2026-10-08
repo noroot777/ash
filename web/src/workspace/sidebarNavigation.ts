@@ -29,10 +29,21 @@ function onScreen(row: HTMLElement): boolean {
   return row.offsetParent !== null;
 }
 
-/** 此刻屏幕上那份列表，按人眼从上往下的顺序。侧栏收起时是空的 —— 那时没有列表可言。 */
-export function visibleSidebarTaskIds(root: ParentNode = document): string[] {
+/**
+ * 此刻屏幕上那份列表。
+ *
+ * **「一行都没有」和「整栏不在屏幕上」必须分开说**（审查第 1 轮抓到把两者混成一个
+ * 空数组的后果）：侧栏还开着、只是所有项目分组都被收起时，可导航的行就是零行 ——
+ * 那时 J/K 该什么都不做；把它当成「没有列表可言」退回模型顺序，就会打开一个在列表里
+ * 根本找不到的任务。
+ */
+export type SidebarRowOrder =
+  | { kind: "screen"; ids: string[] }
+  | { kind: "offscreen" };
+
+export function sidebarRowOrder(root: ParentNode = document): SidebarRowOrder {
   const tree = root.querySelector(TREE_SELECTOR);
-  if (!tree) return [];
+  if (!tree) return { kind: "offscreen" };
   // 同一条任务在侧栏里只该出现一次（单项目态的主列表摘掉接力出去的行，任务模式不画
   // 「其他机器」那一节）；真撞上了只认头一处 —— 一个 id 占两个位置会让 J/K 原地打转。
   const ids = new Set<string>();
@@ -40,7 +51,7 @@ export function visibleSidebarTaskIds(root: ParentNode = document): string[] {
     const id = row.getAttribute(ROW_ATTR);
     if (id && onScreen(row)) ids.add(id);
   }
-  return [...ids];
+  return { kind: "screen", ids: [...ids] };
 }
 
 /**
@@ -58,8 +69,11 @@ export type SidebarNavigationOptions = {
   /** 全量任务：从屏幕上拿到的是 id，得还原成任务对象才交得给 onTask。 */
   tasks: TaskListItem[];
   /**
-   * 侧栏**收起**时的退路顺序（通常是 spreadVisibleTasks）。那时屏幕上根本没有这份列表，
-   * 「人眼可见的顺序」无从谈起，而把 J/K 一起关掉是功能退化 —— 所以退回模型顺序。
+   * 侧栏**整栏收起**时的退路顺序（通常是 spreadVisibleTasks）。那时屏幕上根本没有这份
+   * 列表，「人眼可见的顺序」无从谈起，而把 J/K 一起关掉是功能退化 —— 所以退回模型顺序。
+   *
+   * 注意这条退路**只管整栏不在屏幕上**那一种。侧栏还开着、只是一行可见的都没有（所有
+   * 项目分组都收起了）时一律不动选中，见 sidebarRowOrder。
    */
   fallbackOrder: TaskListItem[];
   selectedTaskId: string | null;
@@ -80,10 +94,11 @@ export function useSidebarTaskNavigation({
 }: SidebarNavigationOptions): (step: 1 | -1) => void {
   const currentId = selectedTaskId ?? selectedRemoteTaskId;
   const navigate = useCallback((step: 1 | -1) => {
-    const onScreenIds = visibleSidebarTaskIds();
-    const nextId = onScreenIds.length
-      ? stepTaskId(onScreenIds, currentId, step)
-      : stepTaskId(fallbackOrder.map((task) => task.id), currentId, step);
+    const order = sidebarRowOrder();
+    // 侧栏在屏幕上时**只认它**，哪怕它此刻一行都没有 —— 那时 stepTaskId 返回 null，
+    // 选中原样不动（全部折叠起来却打开一个找不到的任务，就是审查第 1 轮那条）。
+    const ids = order.kind === "screen" ? order.ids : fallbackOrder.map((task) => task.id);
+    const nextId = stepTaskId(ids, currentId, step);
     const next = nextId ? tasks.find((task) => task.id === nextId) : undefined;
     if (next) onTask(next);
   }, [currentId, fallbackOrder, onTask, tasks]);
