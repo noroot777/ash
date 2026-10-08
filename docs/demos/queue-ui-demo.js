@@ -1,7 +1,8 @@
 // 组内排队 · 交互原型(模拟数据,不连后端)。演示三个表面:
-// ① 任务详情的「排在某任务之后…」入口 —— 存量任务入队
+// ① 右侧检查器「队列」区块的「排在某任务之后…」入口 —— 存量任务入队(不占会话区)
 // ② 新建任务的「接在某任务后再跑」选项 —— 建完入队不起跑,分组随目标任务
 // ③ 列表行队列徽标 + 队列抽屉 —— 拖拽重排/移出,复刻现有 QueueDrawer 语义
+// 左侧边栏保持平铺干净:不加组标题行,分组只在检查器属性行与候选浮层里出现。
 // 推进规则照抄服务端 advanceQueue:同队至多一个在跑,前驱终态(done/failed/canceled)透明跳过。
 
 const GROUPS = { g1: "发布 0.9", g2: "日常" };
@@ -154,7 +155,7 @@ function openPicker(anchor, subject, onPick) {
   $("#layer").appendChild(el);
   const r = anchor.getBoundingClientRect();
   const h = Math.min(el.offsetHeight, 420);
-  el.style.left = `${Math.min(r.left, innerWidth - 392)}px`;
+  el.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 392))}px`;
   el.style.top = `${r.bottom + h + 12 > innerHeight ? Math.max(8, r.top - h - 6) : r.bottom + 6}px`;
   pickerEl = el;
   document.addEventListener("mousedown", onPickerOutside, true);
@@ -243,58 +244,79 @@ function dropInQueue(index) {
   renderAll(); renderDrawer();
 }
 
-// ── 左侧列表(行徽标)──────────────────────────────
+// ── 左侧列表:平铺,不加组标题行,行尾徽标 ───────────
 function renderList() {
   const root = $("#task-list");
   root.innerHTML = "";
-  for (const gid of Object.keys(GROUPS)) {
-    const gh = document.createElement("div");
-    gh.className = "group-head";
-    gh.textContent = `组「${GROUPS[gid]}」`;
-    root.appendChild(gh);
-    for (const t of S.tasks.filter((x) => x.group === gid)) {
-      const q = qOf(t.id);
-      const row = document.createElement("button");
-      row.type = "button";
-      row.className = `task-row${t.id === S.selectedId ? " is-selected" : ""}`;
-      row.innerHTML = `<span class="dot ${t.status}"></span><span class="t-title">${esc(t.title)}</span>
-        ${q ? `<span class="queue-badge" role="button" aria-label="查看队列"><svg class="ic ic-inline"><use href="#i-list"/></svg>${q.pos + 1}/${q.arr.length}</span>` : ""}
-        ${t.status !== "backlog" ? `<span class="t-status">${STATUS_LABEL[t.status]}</span>` : ""}`;
-      row.onclick = () => { S.selectedId = t.id; renderAll(); };
-      const badge = row.querySelector(".queue-badge");
-      if (badge) badge.onclick = (e) => { e.stopPropagation(); openDrawer(q.qid); };
-      root.appendChild(row);
-    }
+  for (const t of S.tasks) {
+    const q = qOf(t.id);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `task-row${t.id === S.selectedId ? " is-selected" : ""}`;
+    row.innerHTML = `<span class="dot ${t.status}"></span><span class="t-title">${esc(t.title)}</span>
+      ${q ? `<span class="queue-badge" role="button" aria-label="查看队列"><svg class="ic ic-inline"><use href="#i-list"/></svg>${q.pos + 1}/${q.arr.length}</span>` : ""}
+      ${t.status !== "backlog" ? `<span class="t-status">${STATUS_LABEL[t.status]}</span>` : ""}`;
+    row.onclick = () => { S.selectedId = t.id; renderAll(); };
+    const badge = row.querySelector(".queue-badge");
+    if (badge) badge.onclick = (e) => { e.stopPropagation(); openDrawer(q.qid); };
+    root.appendChild(row);
   }
 }
 
-// ── ① 任务详情:队列区块 ──────────────────────────
-function renderDetail() {
+// ── 中间会话区:排队 UI 不进这里 ────────────────────
+function renderConvo() {
   const t = byId(S.selectedId);
-  const root = $("#detail");
+  const root = $("#convo");
+  if (!t) { root.innerHTML = ""; return; }
+  const agentMsg = {
+    running: "收到,正在执行中…(模拟会话,这一栏只放对话,排队设置都在右侧检查器里)",
+    backlog: "任务还没开始。排队信息看右侧检查器的「队列」一节。",
+    paused: "已暂停,等待续跑指令。",
+    done: "已完成。产出和验证结论会出现在这里。",
+    failed: "执行失败,错误详情会出现在这里。",
+    queued: "已被队列拉起,马上开始。",
+    canceled: "任务已取消。",
+  }[t.status];
+  root.innerHTML = `<div class="convo-head"><h1>${esc(t.title)}</h1>
+      <span class="chip ${t.status}">${STATUS_LABEL[t.status]}</span></div>
+    <div class="convo-body">
+      <div class="msg user"><small>用户</small>${esc(t.body)}</div>
+      <div class="msg agent"><small>agent</small>${esc(agentMsg)}</div>
+    </div>
+    <div class="convo-reply">回复这个任务…(演示占位)</div>`;
+}
+
+// ── ① 右侧检查器:队列区块(紧凑,照抄真实样式)─────
+function renderInspector() {
+  const t = byId(S.selectedId);
+  const root = $("#inspector");
   if (!t) { root.innerHTML = ""; return; }
   const q = qOf(t.id);
   const next = q ? q.arr.slice(q.pos + 1).map(byId).find((x) => !TERMINAL.has(x.status)) : null;
   let queueHtml;
   if (q) {
-    queueHtml = `<div class="queue-meta">队列第 ${q.pos + 1} 位 · 共 ${q.arr.length} 个${next ? ` · 下一个:「${esc(next.title)}」` : " · 它后面没有待跑任务"}</div>
-      <button type="button" class="inspector-action" data-open-queue>
-        <span><svg class="ic"><use href="#i-list"/></svg>查看队列 · ${q.arr.length} 个任务</span>
-        <svg class="ic"><use href="#i-caret"/></svg></button>`;
+    queueHtml = `<div class="insp-row"><span>所在位置</span><div>第 ${q.pos + 1} / ${q.arr.length} 位</div></div>
+      <div class="insp-row"><span>下一个</span><div>${next ? esc(next.title) : "队尾"}</div></div>
+      <button type="button" class="insp-action" data-open-queue>
+        <span><svg class="ic ic-sm"><use href="#i-list"/></svg>查看队列 · ${q.arr.length} 个任务</span>
+        <svg class="ic ic-sm"><use href="#i-caret"/></svg></button>`;
   } else if (TERMINAL.has(t.status)) {
-    queueHtml = `<p class="inspector-note">任务已结束,不再参与排队。</p>`;
+    queueHtml = `<p class="insp-note">任务已结束,不再参与排队。</p>`;
   } else {
-    queueHtml = `<p class="inspector-note">独立任务,不在任何队列中。</p>
-      <button type="button" class="inspector-action" data-place-after>
-        <span><svg class="ic"><use href="#i-after"/></svg>排在某任务之后…</span>
-        <small>等它跑完再跑</small></button>`;
+    queueHtml = `<button type="button" class="insp-action" data-place-after>
+        <span><svg class="ic ic-sm"><use href="#i-after"/></svg>排在某任务之后…</span>
+        <svg class="ic ic-sm"><use href="#i-caret"/></svg></button>
+      <p class="insp-note">独立任务,不在任何队列中。选一个同组任务,等它跑完这个再自动开始。</p>`;
   }
-  root.innerHTML = `<div class="detail-head"><h1>${esc(t.title)}</h1>
-      <span class="chip ${t.status}">${STATUS_LABEL[t.status]}</span><span class="chip">组「${GROUPS[t.group]}」</span></div>
-    <p class="detail-sub">${t.id} · 单飞任务 · claude</p>
-    <div class="detail-body">${esc(t.body)}</div>
-    <h2>队列</h2>${queueHtml}
-    ${t.status === "running" ? `<button type="button" class="sim-btn" data-sim><svg class="ic"><use href="#i-check"/></svg>模拟:让这个任务完成(演示队列自动推进)</button>` : ""}`;
+  root.innerHTML = `<section><h2>属性</h2>
+      <div class="insp-row"><span>状态</span><div>${STATUS_LABEL[t.status]}</div></div>
+      <div class="insp-row"><span>分组</span><div>${GROUPS[t.group]}</div></div>
+      <div class="insp-row"><span>执行器</span><div>claude · 跟随默认</div></div></section>
+    <section><h2>队列</h2>${queueHtml}</section>
+    ${t.status === "running" ? `<section><h2>演示</h2>
+      <button type="button" class="insp-action" data-sim>
+        <span><svg class="ic ic-sm"><use href="#i-check"/></svg>模拟:让这个任务完成</span></button>
+      <p class="insp-note">仅演示用,看队列自动推进(前驱完成→下一个开跑)。</p></section>` : ""}`;
   root.querySelector("[data-open-queue]")?.addEventListener("click", () => openDrawer(q.qid));
   root.querySelector("[data-place-after]")?.addEventListener("click", (e) => {
     openPicker(e.currentTarget, { kind: "task", group: t.group, selfId: t.id }, (target) => {
@@ -411,7 +433,7 @@ function openComposer() {
 }
 
 // ── 全局 ─────────────────────────────────────────
-function renderAll() { renderList(); renderDetail(); }
+function renderAll() { renderList(); renderConvo(); renderInspector(); }
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (pickerEl) return closePicker();

@@ -22,7 +22,7 @@
 
   <header class="topbar">
     <b>组内排队 · 交互原型</b>
-    <span class="topbar-note">模拟数据,不连后端 · 三个表面:任务详情入口 / 新建任务排队 / 列表徽标与队列抽屉</span>
+    <span class="topbar-note">模拟数据,不连后端 · 排队入口在右侧检查器,会话区不受占用;行尾「n/m」徽标点开队列抽屉</span>
     <button type="button" id="reset" class="ghost-btn">重置演示</button>
   </header>
 
@@ -33,9 +33,9 @@
         <button type="button" id="open-composer"><svg class="ic"><use href="#i-plus"/></svg>新建任务</button>
       </div>
       <div id="task-list"></div>
-      <p class="sidebar-foot">行尾的「<svg class="ic ic-inline"><use href="#i-list"/></svg> n/m」徽标 = 在队列中的位次,点击打开队列抽屉。</p>
     </aside>
-    <section class="detail" id="detail"></section>
+    <section class="convo" id="convo"></section>
+    <aside class="inspector" id="inspector"></aside>
   </main>
 
   <div id="layer"></div>
