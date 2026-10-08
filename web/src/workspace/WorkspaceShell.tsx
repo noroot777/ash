@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
 import { outboundHolder } from "@ash/shared/handoff";
@@ -299,7 +299,12 @@ export function WorkspaceShell() {
     setSettingsSection(null);
     void refetchTasks({ silent: true });
   }, [refetchTasks, scopeKind, updateTask]);
+  // 本页已确定删除的任务 id(删除走的本地通道只有 deleteTask 这一个汇聚点;SSE 没有
+  // 删除事件,别处删的靠 refetch 追平)。给 createTask 的迟到回写裁决用,只增不减:
+  // 任务 id 全局唯一,被删的 id 不会再被新任务复用。
+  const deletedTaskIds = useRef(new Set<string>());
   const deleteTask = useCallback((deletedId: string) => {
+    deletedTaskIds.current.add(deletedId);
     setTasks((current) => current.filter((task) => task.id !== deletedId));
     setTaskId((current) => current === deletedId ? null : current);
   }, [setTasks]);
@@ -460,6 +465,11 @@ export function WorkspaceShell() {
     setTasks((current) => snapshots.reduce(mergeTaskSnapshot, current));
   }, [setTasks]);
   const createTask = (task: Task, noteIds: string[] = []) => {
+    // 迟到的创建完成回写:任务已在本页删除(DELETE 已成功、行已移除)时整段跳过
+    // ——不回插、不自动选中、不做随手记回链。「创建并排队」等慢网络在途提交完成时,
+    // 用户可能已经删掉了刚建的任务;mergeCreatedTask 的缺行占位是给「事件没送到的
+    // 真正首次插入」用的,分不出这种缺行,只能靠本页删除记录裁决(第 7 轮审查)。
+    if (deletedTaskIds.current.has(task.id)) return;
     // 合并策略(为什么已存在就不覆盖)见 createdTaskMerge.ts 顶部注释。
     setTasks((current) => mergeCreatedTask(current, task));
     pushTaskHistoryEntry(task, window, scopeKind);
