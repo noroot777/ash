@@ -30,6 +30,7 @@ import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
 import { CreateProjectDialog } from "../overlays/CreateProjectDialog.tsx";
 import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts.ts";
 import { spreadVisibleTasks, useSidebarSpread } from "./useSidebarSpread.ts";
+import { useSidebarTaskNavigation } from "./sidebarNavigation.ts";
 import {
   readStoredScopeKind,
   resolveScopeKind,
@@ -276,9 +277,9 @@ export function WorkspaceShell() {
       .filter((task) => task.parentId === null).length,
     [scope, tasks],
   );
-  // J/K 走的是「屏幕上看得见的那些行」，所以筛选开着时它也得跟着筛 —— 否则按一下就跳到
-  // 一个被隐藏的任务上，看着像选中丢了。判据与 TaskTree 共用（spreadVisibleTasks）。
-  const orderedTasks = useMemo(
+  // J/K 的顺序**只认屏幕**（见 sidebarNavigation）；这份模型顺序只在侧栏**收起**时当退路 ——
+  // 那时屏幕上根本没有这份列表。筛选开着时它也得跟着筛，判据与 TaskTree 共用。
+  const sidebarFallbackOrder = useMemo(
     () => spreadVisibleTasks(tasks, scope, spread.filter),
     [scope, spread.filter, tasks],
   );
@@ -326,10 +327,10 @@ export function WorkspaceShell() {
   // 地址、页面没重新挂载时它还是旧的。而后端解析持有机用的是当前设置 —— 拿旧地址发过去
   // 只会换回一个「持有机与请求目标不一致」的 409，屏幕上就成了「状态看着恢复了，点开却
   // 打不开」。取不到就退回缓存那份，总比不让点强。
-  const openOutboundTask = async (task: TaskListItem) => {
+  const openOutboundTask = async (task: TaskListItem, options?: { keepSpread?: boolean }) => {
     const latest = await refreshTargets().catch(() => handoffTargets);
     const holder = outboundHolder(task.handoff, latest);
-    if (holder) { selectRemoteTask(task, holder); return; }
+    if (holder) { selectRemoteTask(task, holder, options); return; }
     notify("任务已接力到另一台机器，请在当前持有它的机器上继续");
   };
   // keepSpread：J/K 在铺开态里只是挪选中行，右边那两列还得接着看；点行或按 Enter 才算「选定了」，
@@ -337,7 +338,7 @@ export function WorkspaceShell() {
   const selectTask = (task: TaskListItem, options?: { keepSpread?: boolean }) => {
     setGitOpen(false); setChatOpen(false); setAssistantOrigin(null);
     if (!visibleOnThisMachine(task)) {
-      void openOutboundTask(task);
+      void openOutboundTask(task, options);
       return;
     }
     pushTaskHistoryEntry(task, window, scopeKind);
@@ -350,7 +351,9 @@ export function WorkspaceShell() {
     setSettingsSection(null);
     if (!options?.keepSpread) spread.close();
   };
-  const selectRemoteTask = (task: TaskListItem, target: HandoffTarget) => {
+  // keepSpread 跟本机任务一个意思（见 selectTask）：J/K 在铺开态里挪到「其他机器」那一节
+  // 的行上，也只是挪选中行 —— 铺开不该因为下一行恰好在别的机器上就自己收了。
+  const selectRemoteTask = (task: TaskListItem, target: HandoffTarget, options?: { keepSpread?: boolean }) => {
     setGitOpen(false); setChatOpen(false); setAssistantOrigin(null);
     setProjectId(task.projectId);
     setTaskId(null);
@@ -359,7 +362,7 @@ export function WorkspaceShell() {
     setNotes(null);
     setReviewTaskId(null);
     setSettingsSection(null);
-    spread.close();
+    if (!options?.keepSpread) spread.close();
   };
   const selectTaskById = (nextTaskId: string) => {
     const target = tasks.find((task) => task.id === nextTaskId);
@@ -477,6 +480,17 @@ export function WorkspaceShell() {
     return created;
   };
 
+  // J/K 挪一格：顺序只认屏幕上那份列表（见 sidebarNavigation），所以展开/收起团队执行者、
+  // 折叠项目分组、年龄闸那几档都自动跟着走，不必在这里重算一份。
+  const navigateSidebar = useSidebarTaskNavigation({
+    tasks,
+    fallbackOrder: sidebarFallbackOrder,
+    selectedTaskId: taskId,
+    selectedRemoteTaskId: remoteSelection?.task.id ?? null,
+    // keepSpread：铺开态里 J/K 只挪选中行，右边那两列还得接着看（见 selectTask）。
+    onTask: (task) => selectTask(task, { keepSpread: true }),
+  });
+
   useWorkspaceShortcuts({
     // 这颗开关只管列表导航那几颗单键（j/k/f/c/r）：换了界面它们就没有落点。
     // `G …` 一族不受它约束，在聊天 / 助手 / 设置页照样按得到（见 useWorkspaceShortcuts）。
@@ -484,11 +498,9 @@ export function WorkspaceShell() {
     paletteOpen,
     composerOpen: composer !== null,
     spreadOpen: spread.open,
-    orderedTasks,
-    selectedTaskId: taskId,
+    onNavigate: navigateSidebar,
     onTogglePalette: () => setPaletteOpen((value) => !value),
     onCreate: () => openComposer("single"),
-    onTask: (task) => selectTask(task, { keepSpread: true }),
     onToggleSpread: () => { if (collapsed) setCollapsed(false); spread.toggle(); },
     onCloseSpread: spread.close,
     onToggleTaskMode: toggleTaskMode,

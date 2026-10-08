@@ -65,9 +65,10 @@ export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCou
   return counts;
 }
 
-// J/K 快捷键遍历的「屏幕上可见的那份顶层列表」。筛选判据必须走 matchesSpreadFilter,
-// 别在调用点自己拼 `spreadBucket(task) === filter` —— starred 不是桶,那样星标筛选下
-// 快捷键会拿到空数组,按键被吞但选中不动。
+// 「作用域里那份顶层列表」—— 筛过状态、按树的第一原则排好。侧栏**收起**时 J/K 拿它
+// 当退路顺序(展开着的时候那份顺序只认屏幕,见 sidebarNavigation)。筛选判据必须走
+// matchesSpreadFilter,别在调用点自己拼 `spreadBucket(task) === filter` —— starred 不是桶,
+// 那样星标筛选下会拿到空数组,按键被吞但选中不动。
 export function spreadVisibleTasks(tasks: TaskListItem[], scope: TaskScope, filter: SpreadFilter): TaskListItem[] {
   const workers = indexWorkers(tasks);
   return orderedTopLevelTasks(

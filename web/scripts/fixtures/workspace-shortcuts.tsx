@@ -1,6 +1,5 @@
-import { StrictMode, useEffect, useMemo, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { TaskListItem } from "@ash/shared";
 import { registerInspectorShortcutTarget } from "../../src/inspector/shortcuts.ts";
 import { useWorkspaceShortcuts } from "../../src/workspace/useWorkspaceShortcuts.ts";
 
@@ -12,7 +11,6 @@ function Ash() {
   const [scope, setScope] = useState<"project" | "tasks">("project");
   // 聊天 / 助手 / 设置页把列表导航键关掉（enabled=false），但 `G …` 一族在那儿照样按得到。
   const [enabled, setEnabled] = useState(true);
-  const orderedTasks = useMemo<TaskListItem[]>(() => [], []);
 
   useEffect(() => registerInspectorShortcutTarget((key) => {
     setLog((current) => [...current, `inspector:${key}`]);
@@ -24,11 +22,11 @@ function Ash() {
     paletteOpen: false,
     composerOpen: false,
     spreadOpen: false,
-    orderedTasks,
-    selectedTaskId: null,
+    // 这里只钉「哪颗键算一次」—— J/K 落到哪一行归 sidebarNavigation，由
+    // test-sidebar-navigation 拿真列表钉住。
+    onNavigate: (step) => setLog((current) => [...current, step > 0 ? "next" : "previous"]),
     onTogglePalette: () => setLog((current) => [...current, "palette"]),
     onCreate: () => setLog((current) => [...current, "create"]),
-    onTask: () => {},
     onToggleSpread: () => setLog((current) => [...current, "spread"]),
     onCloseSpread: () => {},
     onToggleTaskMode: () => {

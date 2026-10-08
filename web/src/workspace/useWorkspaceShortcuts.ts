@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import type { TaskListItem } from "@ash/shared";
 import {
   activateInspectorShortcut,
   createInspectorShortcutSequence,
@@ -18,11 +17,13 @@ type ShortcutOptions = {
   paletteOpen: boolean;
   composerOpen: boolean;
   spreadOpen: boolean;
-  orderedTasks: TaskListItem[];
-  selectedTaskId: string | null;
+  /**
+   * J/K（以及 ↓/↑）挪一格。顺序归 sidebarNavigation —— 它只认屏幕上那份列表，
+   * 这里只负责「哪颗键算一次」。
+   */
+  onNavigate: (step: 1 | -1) => void;
   onTogglePalette: () => void;
   onCreate: () => void;
-  onTask: (task: TaskListItem) => void;
   onToggleSpread: () => void;
   onCloseSpread: () => void;
   onToggleTaskMode: () => void;
@@ -73,11 +74,9 @@ export function useWorkspaceShortcuts({
   paletteOpen,
   composerOpen,
   spreadOpen,
-  orderedTasks,
-  selectedTaskId,
+  onNavigate,
   onTogglePalette,
   onCreate,
-  onTask,
   onToggleSpread,
   onCloseSpread,
   onToggleTaskMode,
@@ -182,18 +181,15 @@ export function useWorkspaceShortcuts({
         return;
       }
 
-      const index = orderedTasks.findIndex((task) => task.id === selectedTaskId);
       const arrowsTaken = ownsArrowKeys(event.target);
       if (event.key === "j" || (event.key === "ArrowDown" && !arrowsTaken)) {
         event.preventDefault();
-        const next = orderedTasks[Math.min(index + 1, orderedTasks.length - 1)];
-        if (next) onTask(next);
+        onNavigate(1);
         return;
       }
       if (event.key === "k" || (event.key === "ArrowUp" && !arrowsTaken)) {
         event.preventDefault();
-        const previous = orderedTasks[Math.max(index - 1, 0)];
-        if (previous) onTask(previous);
+        onNavigate(-1);
         return;
       }
       if (event.key === "c") {
@@ -208,10 +204,5 @@ export function useWorkspaceShortcuts({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [composerOpen, enabled, onCloseSpread, onCreate, onOpenSettings, onTask, onToggleCommands, onToggleSpread, onToggleTaskMode, onTogglePalette, onToggleTerminal, orderedTasks, paletteOpen, selectedTaskId, spreadOpen]);
-
-  useEffect(() => {
-    if (!selectedTaskId) return;
-    document.querySelector(`[data-task-id="${CSS.escape(selectedTaskId)}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [selectedTaskId]);
+  }, [composerOpen, enabled, onCloseSpread, onCreate, onNavigate, onOpenSettings, onToggleCommands, onToggleSpread, onToggleTaskMode, onTogglePalette, onToggleTerminal, paletteOpen, spreadOpen]);
 }

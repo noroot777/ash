@@ -305,7 +305,7 @@ function OtherProject({
 export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, outbound, notify }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
-  // 主列表看哪些行只由作用域决定（scopeTasks 是唯一判据，跟计数、筛选、J/K 遍历同源）。
+  // 主列表看哪些行只由作用域决定（scopeTasks 是唯一判据，跟计数、筛选、铺开取数同源）。
   const scopedTasks = useMemo(() => scopeTasks(activeTasks, scope), [activeTasks, scope]);
   const taskMode = scope.kind === "tasks";
   const otherProjects = taskMode ? [] : projects.filter((project) => project.id !== currentProjectId);

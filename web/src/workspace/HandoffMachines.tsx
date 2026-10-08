@@ -111,6 +111,9 @@ export function HandoffMachines({
                       className={`workspace-handoff-task${selectedRemoteTaskId === task.id ? " is-selected" : ""}`}
                       type="button"
                       aria-current={selectedRemoteTaskId === task.id ? "page" : undefined}
+                      /* J/K 按屏幕上那份列表走（见 sidebarNavigation）：这一节里的行也是人眼
+                         看得见的行，挂上同一个身份标记就自动进了那份顺序，不必单开一套。 */
+                      data-task-id={task.id}
                       onClick={() => onRemoteTask(task, target)}
                       key={task.id}
                     >
