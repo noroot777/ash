@@ -12,6 +12,7 @@ import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
 import { id, now } from "./util.js";
 import { advanceQueue, queueStatus } from "./scheduler.js";
+import { publishTaskUpdated } from "./task-store.js";
 import { handoffBlockReason, isHandoffPreparing } from "./handoff-guard.js";
 import { actorOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
@@ -30,6 +31,13 @@ export async function repackQueue(queueId: string, orderedTaskIds: string[]): Pr
       createdAt: ts,
     })),
   );
+}
+
+// 队列变更后给受影响的任务补发 task.updated:Task 的 queueId/queuePosition 是从
+// queue_items 派生的,只动 queue_items 不动 tasks 表,不发事件的话所有已打开的
+// 页面(行徽标、详情队列区块)都会停在变更前的快照上。
+async function publishQueueMembers(taskIds: string[]): Promise<void> {
+  await Promise.all(taskIds.map((taskId) => publishTaskUpdated(taskId)));
 }
 
 // 校验:queue 里所有 task 必须同 group(或都无 group),而且必须**同项目**。
@@ -183,6 +191,7 @@ export function mountQueueRoutes(api: Hono): void {
     }
 
     await repackQueue(qid, want);
+    void publishQueueMembers(want);
     // reorder 后某个 backlog/paused 可能上位到 head,立刻推进一次
     void advanceQueue(qid);
     return c.json({ ok: true });
@@ -212,6 +221,7 @@ export function mountQueueRoutes(api: Hono): void {
 
     const next = items.filter((i) => i.taskId !== b.taskId).map((i) => i.taskId);
     await repackQueue(qid, next);
+    void publishQueueMembers([...next, b.taskId]);
     // 移除后立刻推一下,看看后面的 task 是否能动了
     if (next.length > 0) void advanceQueue(qid);
     return c.json({ ok: true });
@@ -272,6 +282,7 @@ export function mountQueueRoutes(api: Hono): void {
       ...items.slice(insertAt).map((i) => i.taskId),
     ];
     await repackQueue(qid, next);
+    void publishQueueMembers(next);
     // 插入后:如果前序已全 done/canceled,新 task 应立刻起来(实测发现的竞态:
     // codex skill 在链跑完后插尾任务,不推进会一直 backlog)
     void advanceQueue(qid);
@@ -325,6 +336,7 @@ export function mountQueueRoutes(api: Hono): void {
     await db.insert(queueItems).values(
       want.map((tid, i) => ({ taskId: tid, queueId: qid, position: i, createdAt: ts })),
     );
+    void publishQueueMembers(want);
     // 新建 queue 也要推进:head 如果已经可启动(backlog/paused),让它立刻动
     void advanceQueue(qid);
     return c.json({ queueId: qid, taskIds: want }, 201);
