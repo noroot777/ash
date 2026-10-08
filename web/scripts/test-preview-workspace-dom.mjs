@@ -113,13 +113,14 @@ export async function testPreviewWorkspaceDom() {
         import { DraftProvider } from '/src/lib/DraftStore.tsx';
         import { WorkspaceToast } from '/src/workspace/WorkspaceToast.tsx';
         import { useWorkspaceShortcuts } from '/src/workspace/useWorkspaceShortcuts.ts';
+        import { stepTaskId } from '/src/workspace/sidebarNavigation.ts';
         import { CommandPalette } from '/src/overlays/CommandPalette.tsx';
         import '/src/styles/workspace.css';
         import '/src/styles/overlays.css';
         import '/src/styles/dialogs.css';
         window.closeRequests = 0;
         window.workspaceShortcutActions = [];
-        const tasks = [{id:'previous'}, {id:'fixture'}, {id:'next'}];
+        const taskIds = ['previous', 'fixture', 'next'];
         const logShortcut = action => window.workspaceShortcutActions.push(action);
         function Fixture() {
           const [toast, setToast] = React.useState(true);
@@ -127,16 +128,23 @@ export async function testPreviewWorkspaceDom() {
           const [selectedTaskId, setSelectedTaskId] = React.useState('fixture');
           const [paletteOpen, setPaletteOpen] = React.useState(false);
           const openPreview = () => { sessionStorage.setItem('preview-open', 'true'); setOpen(true); };
+          // useWorkspaceShortcuts 只管「哪颗键算一次」,落到哪一行归 sidebarNavigation ——
+          // 真实侧栏那份顺序由 test-sidebar-navigation 拿真列表钉住,这里只要一份固定顺序,
+          // 够钉「预览盖着时这颗键归谁」。
+          const navigate = step => {
+            const nextId = stepTaskId(taskIds, selectedTaskId, step);
+            if (!nextId) return;
+            logShortcut('task:' + nextId); setSelectedTaskId(nextId);
+            sessionStorage.removeItem('preview-open'); setOpen(false);
+          };
           useWorkspaceShortcuts({
             enabled: true, paletteOpen, composerOpen: false, spreadOpen: false,
-            orderedTasks: tasks, selectedTaskId,
-            onTask: task => {
-              logShortcut('task:' + task.id); setSelectedTaskId(task.id);
-              sessionStorage.removeItem('preview-open'); setOpen(false);
-            },
+            onNavigate: navigate,
             onTogglePalette: () => { logShortcut('palette'); setPaletteOpen(value => !value); }, onCreate: () => logShortcut('create'),
             onToggleSpread: () => logShortcut('spread'), onCloseSpread: () => logShortcut('close-spread'),
             onToggleTaskMode: () => logShortcut('task-mode'),
+            onOpenSettings: () => logShortcut('settings'), onToggleCommands: () => logShortcut('commands'),
+            onToggleTerminal: () => logShortcut('terminal'),
           });
           const workspace = open ? React.createElement(PreviewWorkspace, {key:selectedTaskId,taskId:selectedTaskId,onClose:()=>{
             window.closeRequests++; sessionStorage.removeItem('preview-open'); setOpen(false);
