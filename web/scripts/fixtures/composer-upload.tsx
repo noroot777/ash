@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Group, GroupMode, ProjectView, Task, TaskMode } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
 import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import "../../src/styles/global.css";
@@ -15,10 +15,32 @@ const initialProject: ProjectView = {
   health: { exists: true, isRepo: new URLSearchParams(location.search).has("repo") },
 };
 
+// 「创建并排队」的候选:一个正常待办目标 + 一个团队任务(必须置灰,队列不会等它)。
+const listTask = (id: string, title: string, extra: Partial<TaskListItem>): TaskListItem => ({
+  id,
+  title,
+  projectId: "p1",
+  parentId: null,
+  archived: false,
+  mode: "single",
+  groupId: null,
+  queueId: null,
+  queuePosition: null,
+  status: "backlog",
+  ...extra,
+} as unknown as TaskListItem);
+
+const listTasks: TaskListItem[] = [
+  listTask("t-backlog", "存量待办任务", {}),
+  listTask("t-team", "常驻团队任务", { mode: "team", status: "running" }),
+];
+
 function Ash() {
   const [mode, setMode] = useState<TaskMode>("single");
   const [created, setCreated] = useState<string[]>([]);
   const [notices, setNotices] = useState<string[]>([]);
+  // 入队响应带回的全体成员快照(含前驱)是否整批上交(第 5 轮审查)。
+  const [synced, setSynced] = useState<string[]>([]);
   const notify = useCallback((message: string) => setNotices((current) => [...current, message]), []);
   // 真实工作区里创建完这块面板就收起来了，再开是新的一份。这里用 key 复现那一下，
   // 否则提交后 busy 一直挂着，测不了「同一次会话里接着建第二条」。
@@ -32,12 +54,16 @@ function Ash() {
         key={round}
         project={project}
         groups={[] as Group[]}
+        tasks={listTasks}
         mode={mode}
         onModeChange={setMode}
         onCancel={() => {}}
         onCreated={(task: Task) => {
           setCreated((current) => [...current, task.title]);
           setRound((current) => current + 1);
+        }}
+        onTasksSynced={(tasks: Task[]) => {
+          setSynced((current) => [...current, tasks.map((item) => `${item.id}@${item.queueId ?? "无队列"}#${item.queuePosition ?? "-"}`).join(" ")]);
         }}
         onCreateGroup={async (name: string, groupMode: GroupMode) => ({
           id: "g1",
@@ -52,6 +78,7 @@ function Ash() {
       <button type="button" data-testid="reopen" onClick={() => setRound((current) => current + 1)}>重开面板</button>
       <span data-testid="project-worktree-default">{project.useWorktreeDefault ? "开" : "关"}</span>
       <ul data-testid="created">{created.map((title, index) => <li key={index}>{`已创建：${title}`}</li>)}</ul>
+      <ul data-testid="synced">{synced.map((item, index) => <li key={index}>{`同步：${item}`}</li>)}</ul>
       <ul data-testid="notices">{notices.map((item, index) => <li key={index}>{`提示：${item}`}</li>)}</ul>
     </div>
   );

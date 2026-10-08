@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>组内排队 · 交互原型</title>
+  <link rel="stylesheet" href="./queue-ui-demo.css" />
+</head>
+<body>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-caret" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-drag" viewBox="0 0 24 24"><circle cx="9" cy="5" r="1.4"/><circle cx="15" cy="5" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="19" r="1.4"/><circle cx="15" cy="19" r="1.4"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M4 5.5h2M4.9 4v3M4 10.5h2.5L4.2 13.5h2.4M4.2 16h1.9a1 1 0 0 1 0 2 1 1 0 0 1 0 2H4.2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-after" viewBox="0 0 24 24"><path d="M5 5v8a4 4 0 0 0 4 4h10M15 13l4 4-4 4"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <b>组内排队 · 交互原型</b>
+    <span class="topbar-note">模拟数据,不连后端 · 排队入口在右侧检查器,会话区不受占用;行尾「n/m」徽标点开队列抽屉</span>
+    <button type="button" id="reset" class="ghost-btn">重置演示</button>
+  </header>
+
+  <main class="app">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <span>任务</span>
+        <button type="button" id="open-composer"><svg class="ic"><use href="#i-plus"/></svg>新建任务</button>
+      </div>
+      <div id="task-list"></div>
+    </aside>
+    <section class="convo" id="convo"></section>
+    <aside class="inspector" id="inspector"></aside>
+  </main>
+
+  <div id="layer"></div>
+  <div id="toast" hidden></div>
+
+  <script src="./queue-ui-demo.js"></script>
+</body>
+</html>

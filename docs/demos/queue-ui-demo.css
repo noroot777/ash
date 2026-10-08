@@ -1,0 +1,149 @@
+/* 组内排队交互原型 —— 调色板与检查器样式照抄 web/src/styles(浅色主题) */
+:root {
+  color-scheme: light;
+  --chrome: lch(94.44% 0.5 282); --canvas: lch(97.94% 0.5 282); --panel: lch(100% 0 282);
+  --raised: lch(96.914% 0 282); --line: lch(90.55% 0 282); --line2: lch(86.5% 0 282);
+  --ink: lch(9.794% 0 282); --muted: lch(39.176% 1.25 282); --faint: lch(64.64% 1.25 282);
+  --accent: #5e6ad2; --accent-soft: lch(92.5% 12 286);
+  --green: #168466; --green-bg: #e3f4ed; --red: #d93d4c; --amber: #b57b00;
+  --hover-bg: lch(91.64% 0.5 282); --sel-bg: lch(89.54% 0.5 282);
+  --menu-shadow: lch(0 0 0 / 0.02) 0 6px 18px, lch(0 0 0 / 0.04) 0 3px 9px, lch(0 0 0 / 0.04) 0 1px 1px;
+  --shadow: lch(0 0 0 / 0.08) 0 9px 48px, lch(0 0 0 / 0.1) 0 6px 24px, lch(0 0 0 / 0.04) 0 1px 1px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--chrome); color: var(--ink);
+  font-family: "Inter Variable", "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 13px; font-weight: 450; line-height: 1.5; -webkit-font-smoothing: antialiased;
+  display: flex; flex-direction: column;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+.icon-sprite { display: none; }
+.ic { width: 14px; height: 14px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ic-sm { width: 12px; height: 12px; }
+.ic-inline { width: 11px; height: 11px; vertical-align: -1.5px; }
+
+/* ── 顶栏 ─────────────────────────────────────────── */
+.topbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line2); background: var(--panel); }
+.topbar b { font-size: 13.5px; }
+.topbar-note { color: var(--faint); font-size: 12px; }
+.ghost-btn { margin-left: auto; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 4px 10px; color: var(--muted); }
+.ghost-btn:hover { background: var(--hover-bg); }
+
+/* ── 主布局:侧栏 / 会话 / 检查器 ─────────────────── */
+.app { display: flex; flex: 1; min-height: 0; }
+.sidebar { display: flex; width: 290px; flex: 0 0 290px; flex-direction: column; border-right: 1px solid var(--line2); background: var(--canvas); overflow-y: auto; }
+.sidebar-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 6px; color: var(--faint); font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: 0.04em; }
+.sidebar-head button { display: inline-flex; align-items: center; gap: 4px; border: 0; border-radius: 7px; background: var(--accent); color: #fff; padding: 4px 10px; font-size: 12px; font-weight: 550; }
+.sidebar-head button:hover { filter: brightness(1.07); }
+
+.task-row { display: flex; width: 100%; align-items: center; gap: 8px; border: 0; background: transparent; padding: 7px 14px; text-align: left; }
+.task-row:hover { background: var(--hover-bg); }
+.task-row.is-selected { background: var(--sel-bg); }
+.task-row .t-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-row .t-status { color: var(--faint); font-size: 11px; flex: 0 0 auto; }
+.dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--faint); }
+.dot.running { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+.dot.done { background: var(--green); }
+.dot.failed { background: var(--red); }
+.dot.paused { background: var(--amber); }
+.dot.backlog { background: transparent; box-shadow: inset 0 0 0 1.5px var(--faint); }
+@keyframes pulse { 50% { opacity: 0.35; } }
+
+.queue-badge { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; border: 1px solid var(--line2); border-radius: 999px; background: var(--panel); padding: 1px 7px; color: var(--muted); font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.queue-badge:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── 会话区(占大头,排队 UI 不进这里)──────────────── */
+.convo { display: flex; flex: 1; min-width: 0; flex-direction: column; background: var(--panel); }
+.convo-head { display: flex; align-items: center; gap: 10px; border-bottom: 0.5px solid var(--line); padding: 13px 20px; }
+.convo-head h1 { margin: 0; font-size: 15px; font-weight: 600; }
+.chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 600; background: var(--raised); color: var(--muted); }
+.chip.running { background: var(--accent-soft); color: var(--accent); }
+.chip.done { background: var(--green-bg); color: var(--green); }
+.chip.failed { background: #fdecee; color: var(--red); }
+.convo-body { display: flex; flex: 1; flex-direction: column; gap: 12px; overflow-y: auto; padding: 18px 20px; }
+.msg { max-width: 640px; border-radius: 12px; padding: 9px 13px; }
+.msg.user { align-self: flex-end; background: var(--accent-soft); }
+.msg.agent { align-self: flex-start; border: 0.5px solid var(--line); background: var(--canvas); color: var(--muted); }
+.msg small { display: block; margin-bottom: 2px; color: var(--faint); font-size: 10.5px; }
+.convo-reply { margin: 0 20px 16px; border: 1px solid var(--line2); border-radius: 10px; background: var(--canvas); padding: 10px 13px; color: var(--faint); }
+
+/* ── 右侧检查器(照抄 .task-inspector 系列)─────────── */
+.inspector { width: 290px; flex: 0 0 290px; overflow-y: auto; border-left: 0.5px solid var(--line); background: var(--canvas); }
+.inspector section { border-bottom: 0.5px solid var(--line); padding: 13px 14px; }
+.inspector h2 { margin: 0 0 8px; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.insp-row { display: grid; min-height: 26px; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 7px; }
+.insp-row > span { color: var(--faint); font-size: 10.5px; }
+.insp-row > div { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10.5px; }
+.insp-note { margin: 5px 0 0; color: var(--faint); font-size: 10px; line-height: 1.5; }
+.insp-action { display: flex; width: 100%; min-height: 31px; align-items: center; border: 0; border-radius: 7px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 10.5px; text-align: left; }
+.insp-action:hover { background: var(--raised); color: var(--ink); }
+.insp-action span { display: inline-flex; align-items: center; gap: 5px; }
+.insp-action span:last-child, .insp-action > svg:last-child { margin-left: auto; }
+
+/* ── 候选选择浮层 ─────────────────────────────────── */
+.picker { position: absolute; z-index: 110; width: 380px; max-height: 420px; overflow-y: auto; border: 0.5px solid var(--line2); border-radius: 11px; background: var(--panel); box-shadow: var(--menu-shadow); }
+.picker-head { position: sticky; top: 0; background: var(--panel); border-bottom: 0.5px solid var(--line); padding: 10px 13px 8px; }
+.picker-head b { font-size: 12.5px; }
+.picker-head p { margin: 2px 0 0; color: var(--faint); font-size: 11px; }
+.picker-group { padding: 7px 13px 2px; color: var(--faint); font-size: 10px; font-weight: 750; text-transform: uppercase; }
+.picker-item { display: flex; width: 100%; align-items: center; gap: 9px; border: 0; background: transparent; padding: 7px 13px; text-align: left; }
+.picker-item:not(:disabled):hover { background: var(--hover-bg); }
+.picker-item:disabled { cursor: not-allowed; opacity: 0.55; }
+.picker-item .p-main { flex: 1; min-width: 0; }
+.picker-item .p-main b { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-item .p-main small { color: var(--faint); font-size: 11px; }
+.picker-item .p-reason { flex: 0 0 auto; max-width: 40%; color: var(--amber); font-size: 10.5px; text-align: right; line-height: 1.35; }
+
+/* ── 队列抽屉(复刻 .task-queue-drawer)────────────── */
+.scrim { position: fixed; inset: 0; z-index: 90; background: lch(20% 2 282 / 0.22); }
+.queue-drawer { position: fixed; z-index: 95; top: 0; right: 0; bottom: 0; display: flex; width: min(430px, 92vw); flex-direction: column; border-left: 1px solid var(--line2); background: var(--panel); box-shadow: -24px 0 60px rgb(40 42 48 / 18%); }
+.queue-drawer > header { display: flex; height: 48px; flex: 0 0 48px; align-items: center; gap: 8px; border-bottom: 0.5px solid var(--line); padding: 0 12px 0 16px; }
+.queue-drawer > header span { color: var(--faint); font-size: 9.5px; font-weight: 750; text-transform: uppercase; }
+.queue-drawer > header b { font-size: 12px; }
+.queue-drawer > header button { display: grid; width: 28px; height: 28px; margin-left: auto; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--faint); }
+.queue-drawer > header button:hover { background: var(--hover-bg); }
+.queue-hint { margin: 0; padding: 10px 16px; color: var(--faint); font-size: 11.5px; border-bottom: 0.5px solid var(--line); }
+.queue-list { flex: 1; overflow-y: auto; }
+.queue-row { display: flex; min-height: 62px; align-items: center; gap: 8px; border-bottom: 0.5px solid var(--line); padding: 9px 12px; color: var(--faint); }
+.queue-row.is-current { background: var(--raised); }
+.queue-row.is-over { box-shadow: inset 0 2px var(--accent); }
+.queue-row[draggable="true"] { cursor: grab; }
+.queue-row .q-pos { width: 18px; text-align: center; font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.queue-row .q-main { flex: 1; min-width: 0; }
+.queue-row .q-main b { display: block; color: var(--ink); font-weight: 500; }
+.queue-row .q-main small { font-size: 11px; }
+.queue-row .q-remove { display: grid; width: 26px; height: 26px; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--faint); }
+.queue-row .q-remove:hover { background: var(--hover-bg); color: var(--red); }
+.queue-drawer > footer { padding: 10px 16px; color: var(--faint); font-size: 11px; border-top: 0.5px solid var(--line); }
+
+/* ── 新建任务面板 ─────────────────────────────────── */
+.composer { position: fixed; z-index: 95; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(560px, 94vw); border: 0.5px solid var(--line2); border-radius: 14px; background: var(--panel); box-shadow: var(--shadow); }
+.composer > header { display: flex; align-items: center; gap: 8px; border-bottom: 0.5px solid var(--line); padding: 12px 16px; }
+.composer > header b { font-size: 13px; }
+.composer > header button { display: grid; width: 28px; height: 28px; margin-left: auto; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--faint); }
+.composer-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; }
+.composer-body label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.composer-body input[type="text"], .composer-body textarea, .composer-body select { border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 7px 10px; font-weight: 450; color: var(--ink); }
+.composer-body textarea { min-height: 64px; resize: vertical; }
+.after-field { display: flex; flex-direction: column; gap: 5px; }
+.after-field > span { color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.after-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 7px 10px; }
+.after-trigger:hover { background: var(--hover-bg); }
+.after-trigger .placeholder { color: var(--faint); }
+.after-trigger .a-clear { display: grid; width: 20px; height: 20px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); }
+.after-hint { margin: 0; color: var(--accent); font-size: 11px; }
+.composer > footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; border-top: 0.5px solid var(--line); padding: 12px 16px; }
+.composer > footer .note { margin-right: auto; color: var(--faint); font-size: 11px; }
+.primary-btn { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; padding: 7px 14px; font-weight: 550; }
+.primary-btn:hover { filter: brightness(1.07); }
+
+/* ── 确认对话框 / toast ───────────────────────────── */
+.confirm { position: fixed; z-index: 99; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(380px, 92vw); border-radius: 13px; background: var(--panel); box-shadow: var(--shadow); padding: 18px; }
+.confirm h3 { margin: 0 0 6px; font-size: 13.5px; }
+.confirm p { margin: 0 0 16px; color: var(--muted); }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.confirm-actions .danger { border: 0; border-radius: 8px; background: var(--red); color: #fff; padding: 6px 13px; font-weight: 550; }
+#toast { position: fixed; z-index: 120; bottom: 22px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: 86vw; border-radius: 10px; background: lch(18% 2 282); color: #fff; padding: 9px 15px; box-shadow: var(--shadow); font-size: 12.5px; }
+#toast button { border: 0; background: transparent; color: #9aa4f0; font-weight: 600; padding: 0; }

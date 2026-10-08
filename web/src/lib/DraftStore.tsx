@@ -2,7 +2,9 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type Dispatch,
   type ReactNode,
@@ -14,7 +16,12 @@ import type { ScreenshotDraft } from "../page-annotation/model.ts";
 // 「还没发出去的那份东西」统一放这里：对话框的回复草稿、主工作区新建任务框里的草稿，
 // 都是同一件事 —— 组件卸载（切任务、去设置、开聊天）不该把用户敲的字和粘的图弄丢。
 // 存活范围是**这一次会话**（provider 挂在 App 上），刷新页面即清空，跟对话框一致。
-type Draft = {
+// Draft 对象是**不可变**的:updateDraft 对任何实际变化都返回新对象、没变化保留原
+// 对象引用(见下方判等)。对象引用因此可以当「这份草稿的版本标识」用——异步收尾
+// 拿提交时刻的引用对比此刻的,引用相同 ⇔ 期间任何字段(正文、附件、在途上传、
+// 回链、截图)都没动过,改过又改回也算动过。clearIfUnchanged 靠这一点做原子的
+// 归属裁决。
+export type Draft = {
   screenshot?: ScreenshotDraft | null;
   text: string;
   attachments: UploadAttachment[];
@@ -28,6 +35,7 @@ type Draft = {
 type DraftContextValue = {
   drafts: Record<string, Draft>;
   updateDraft: (key: string, update: (current: Draft) => Draft) => void;
+  readDraft: (key: string) => Draft;
 };
 
 const EMPTY_DRAFT: Draft = { text: "", attachments: [], pendingUploads: [], noteIds: [] };
@@ -39,6 +47,11 @@ export const composerDraftKey = (projectId: string) => `composer:${projectId}`;
 
 export function DraftProvider({ children }: { children: ReactNode }) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  // 异步提交的收尾(发送/创建完成)读「此刻」的草稿,不能用发起那一刻的闭包值:
+  // 组件可能早已卸载、草稿可能已被后来打开的面板改写。ref 镜像给 readDraft 用。
+  const draftsRef = useRef(drafts);
+  useEffect(() => { draftsRef.current = drafts; }, [drafts]);
+  const readDraft = useCallback((key: string) => draftsRef.current[key] ?? EMPTY_DRAFT, []);
   const updateDraft = useCallback((key: string, update: (current: Draft) => Draft) => {
     setDrafts((current) => {
       const previous = current[key] ?? EMPTY_DRAFT;
@@ -57,7 +70,7 @@ export function DraftProvider({ children }: { children: ReactNode }) {
       return { ...current, [key]: next };
     });
   }, []);
-  const value = useMemo(() => ({ drafts, updateDraft }), [drafts, updateDraft]);
+  const value = useMemo(() => ({ drafts, updateDraft, readDraft }), [drafts, updateDraft, readDraft]);
   return <DraftContext.Provider value={value}>{children}</DraftContext.Provider>;
 }
 
@@ -72,6 +85,16 @@ export type DraftHandle = {
   setAttachments: Dispatch<SetStateAction<UploadAttachment[]>>;
   setPendingUploads: Dispatch<SetStateAction<UploadingFile[]>>;
   setNoteIds: Dispatch<SetStateAction<string[]>>;
+  /** 此刻这份草稿的不可变对象(引用即版本标识,提交时捕获、收尾时对比归属)。 */
+  value: Draft;
+  /**
+   * 只有草稿自提交那一刻起**完全没动过**(对象引用相同)才整份丢掉——异步创建的
+   * 收尾在面板卸载后用它,任何字段变化(附件增删、在途上传、正文改过又改回)都让
+   * 旧提交失去清空资格(第 10 轮审查:只比正文和回链漏掉了附件)。判定与清空在
+   * Store 更新处一次完成,纯函数,无竞态窗口。不掐在途上传:提交门禁保证提交时
+   * 没有在途,引用没变 ⇒ 此刻也没有。
+   */
+  clearIfUnchanged: (submitted: Draft) => void;
   /** 整份丢掉（发送/创建成功，或用户自己按了「清空」）。 */
   clear: () => void;
 };
@@ -80,7 +103,7 @@ export function useDraft(key: string): DraftHandle {
   const context = useContext(DraftContext);
   if (!context) throw new Error("useDraft must be used inside DraftProvider");
   const draft = context.drafts[key] ?? EMPTY_DRAFT;
-  const { updateDraft } = context;
+  const { updateDraft, readDraft } = context;
   const setScreenshot = useCallback<Dispatch<SetStateAction<ScreenshotDraft | null>>>((next) => {
     updateDraft(key, (current) => ({
       ...current,
@@ -111,11 +134,15 @@ export function useDraft(key: string): DraftHandle {
       noteIds: typeof next === "function" ? next(current.noteIds) : next,
     }));
   }, [key, updateDraft]);
+  const clearIfUnchanged = useCallback((submitted: Draft) => {
+    updateDraft(key, (current) => (current === submitted ? EMPTY_DRAFT : current));
+  }, [key, updateDraft]);
   // 在途上传一并掐掉：清空之后那几张图再传完也没有地方落，进度条却还挂在别处跑。
+  // 按 Store 此刻的在途清单掐,不是 handle 创建那一刻的——clear 常在异步收尾里被调。
   const clear = useCallback(() => {
-    for (const pending of draft.pendingUploads) pending.abort();
+    for (const pending of readDraft(key).pendingUploads) pending.abort();
     updateDraft(key, () => EMPTY_DRAFT);
-  }, [draft.pendingUploads, key, updateDraft]);
+  }, [key, readDraft, updateDraft]);
   return {
     screenshot: draft.screenshot ?? null,
     setScreenshot,
@@ -127,6 +154,8 @@ export function useDraft(key: string): DraftHandle {
     setAttachments,
     setPendingUploads,
     setNoteIds,
+    value: draft,
+    clearIfUnchanged,
     clear,
   };
 }

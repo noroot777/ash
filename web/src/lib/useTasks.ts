@@ -51,6 +51,20 @@ export function mergeFetchedTasks(
   });
 }
 
+// 权威快照确认的删除:**fetch 发起时本地已有**、响应里却没有的行。只有「发起时已
+// 存在」才能把缺席读成删除——行在发起前就在列表里,说明服务端在请求发出前就建好了
+// 它,响应里缺席只能是之后删了;反过来,发起更早的旧快照缺一个刚创建(SSE 在途中
+// 送达)的任务是正常时序,不构成删除证据(第 8 轮审查:要按请求先后区分「创建前的
+// 旧列表」和「创建后的删除」)。结果并入 useTasks 的失效记录,给迟到的创建完成回写
+// 当拒绝依据。
+export function confirmedDeletions(
+  idsAtFetchStart: ReadonlySet<string>,
+  fetched: readonly { id: string }[],
+): string[] {
+  const present = new Set(fetched.map((task) => task.id));
+  return [...idsAtFetchStart].filter((id) => !present.has(id));
+}
+
 type TaskStatusEvent = Extract<ServerEvent, { type: "task.status" }>;
 type TaskMetadataEvent = Extract<ServerEvent, {
   type: "task.stage" | "task.title" | "task.question";
@@ -99,9 +113,18 @@ export function useTasks(projectId?: string) {
   // 化），所以发起晚于写入的 GET 一定带着新值；只有发起早于写入的快照才可能是旧的，
   // merge 时对这些行保留本地 starredAt。
   const starEdits = useRef(new Map<string, number>());
+  // 本页已确认删除的任务 id(共享失效记录):本地删除(WorkspaceShell.deleteTask 直接
+  // add)与权威快照确认的删除(refetch 里按 confirmedDeletions 裁决)都记在这里,给
+  // 「创建并排队」等迟到的创建完成回写当拒绝依据——SSE 没有删除事件,别的页面删的
+  // 任务只有这两条路能让本页确知(第 7、8 轮审查)。只增不减:id 不复用。
+  const confirmedDeleteIds = useRef(new Set<string>());
+  // refetch 发起时刻的在列 id 集合要用「发起那一刻」的列表;state 闭包会过期,用 ref 镜像。
+  const tasksRef = useRef<TaskListItem[]>([]);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
   const refetch = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
     const gen = ++fetchGen.current;
     const startedAt = Date.now();
+    const idsAtStart = new Set(tasksRef.current.map((task) => task.id));
     if (!options?.silent) {
       setLoading(true);
       setError(null);
@@ -111,6 +134,7 @@ export function useTasks(projectId?: string) {
       // 并发的两次 GET 响应也可能乱序：只应用最新一次发起的那份快照。
       if (gen === fetchGen.current) {
         const scoped = projectId ? allTasks.filter((task) => task.projectId === projectId) : allTasks;
+        for (const id of confirmedDeletions(idsAtStart, scoped)) confirmedDeleteIds.current.add(id);
         const protectStars = new Set<string>();
         for (const [taskId, editedAt] of starEdits.current) {
           if (editedAt >= startedAt) protectStars.add(taskId);
@@ -185,5 +209,5 @@ export function useTasks(projectId?: string) {
     };
   }, [connected, refetch]);
 
-  return { tasks, setTasks, loading, error, connected, settlementVersion, refetch, applyStar };
+  return { tasks, setTasks, loading, error, connected, settlementVersion, refetch, applyStar, confirmedDeleteIds };
 }

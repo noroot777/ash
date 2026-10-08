@@ -8,6 +8,7 @@ import type {
   GroupMode,
   ProjectView,
   Task,
+  TaskListItem,
   TaskMode,
   TaskWorkflowMode,
   TeamPresetConfig,
@@ -37,8 +38,10 @@ import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments 
 import { ComposerFields } from "./ComposerFields.tsx";
 import { ASH_SLASH_ITEMS, SLASHES } from "./composerParts.tsx";
 import { useComposerDraft, type ComposerDraft } from "./composerDraft.ts";
+import { settleCreatedTask } from "./settleCreatedTask.ts";
 import { useComposerWorkflow } from "./ComposerWorkflow.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
+import { useQueueAfter } from "./useQueueAfter.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
 import {
   emptyComposerExecutorConfigs,
@@ -57,6 +60,7 @@ export type { ComposerDraft };
 export function TaskComposerPanel({
   project,
   groups,
+  tasks = [],
   initialDraft,
   onDraftSeeded,
   mode,
@@ -65,12 +69,15 @@ export function TaskComposerPanel({
   onAssistant,
   onCancel,
   onCreated,
+  onTasksSynced,
   onCreateGroup,
   onProjectUpdated,
   notify,
 }: {
   project: ProjectView;
   groups: Group[];
+  /** 全量任务列表(「创建并排队」的目标候选,按本项目过滤)。不传按无候选处理。 */
+  tasks?: TaskListItem[];
   initialDraft?: ComposerDraft | null;
   // initialDraft 并进草稿之后回调一次，调用方据此把它摘掉（一次性投递，见 composerDraft.ts）。
   onDraftSeeded?: () => void;
@@ -79,13 +86,28 @@ export function TaskComposerPanel({
   onChat?: () => void;
   onAssistant?: () => void;
   onCancel: () => void;
-  onCreated: (task: Task, noteIds: string[]) => void;
+  /**
+   * 创建(含排队)完成的回写。ownsComposer=false 表示发起提交的那份面板已经卸载——
+   * 用户等待期间切走、可能又开了新面板:上层此时**不得**收起当前面板(那是别人的),
+   * 其余回写(列表插入/守卫判废)照常(第 9 轮审查)。
+   */
+  onCreated: (task: Task, noteIds: string[], ownsComposer: boolean) => void;
+  /** 入队响应波及的全体成员快照(含前驱)整批上交,由上层按 updatedAt 合并进任务列表。 */
+  onTasksSynced?: (tasks: Task[]) => void;
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
   /** 「设为本项目默认」写回之后，把新的项目行交回上层 —— 否则下次打开这块面板还按旧值预填。 */
   onProjectUpdated: (project: ProjectView) => void;
   notify: (message: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 提交是异步的,完成时这份面板可能早已卸载(用户点了别的任务/删了刚建的任务再新开
+  // 面板)。收尾动作要按挂载状态分流,StrictMode 下 effect 会 mount→cleanup→mount,
+  // 所以置 true 必须写在 effect 体里而不是初始值。
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   // 正文与附件都存在全局草稿库里（见 composerDraft.ts）：这个面板一切走就整个卸载，
   // 存在组件 state 里等于「去看一眼别的任务」就把用户写的东西删了。
   const draft = useComposerDraft(project.id, initialDraft, onDraftSeeded);
@@ -117,6 +139,8 @@ export function TaskComposerPanel({
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  // 「创建并排队」(launchMode="queue"):目标选择、分组联动、入队动作都在这个 hook 里。
+  const queueAfter = useQueueAfter({ tasks, groups, projectId: project.id, notify, onFollowGroup: setGroupId });
   const workflow = useComposerWorkflow({
     project,
     isRepo: project.health.isRepo,
@@ -385,16 +409,28 @@ export function TaskComposerPanel({
   const scheduleError = launchMode === "once" || launchMode === "cron"
     ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
     : null;
+  const queueTargetError = launchMode === "queue" && !queueAfter.afterTaskId ? "选择要接在哪个任务之后" : null;
   // 有图还在传就先不放行：附件路径是上传成功才有的，这时候创建等于把刚粘的那张图
   // 悄悄扔掉。三种模式一视同仁——切走这个面板就没人接住在途的那张了。
   const waitingUploads = uploads.uploading;
   const forkError = forkBodyProblem(fork, body);
   const canSubmit = (fork ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
-    && !forkError && !busy && !noExecutor && !roleBlocked && !scheduleError && !waitingUploads;
+    && !forkError && !busy && !noExecutor && !roleBlocked && !scheduleError && !queueTargetError && !waitingUploads;
 
   const changeLaunchMode = (next: LaunchMode) => {
     setLaunchMode(next);
+    if (next !== "queue") queueAfter.clear();
     if (next === "once" && !scheduleAt) setScheduleAt(defaultOnceTime());
+  };
+  // 团队任务不被普通队列调度(selectNextInQueue 按 mode !== "team" 过滤):团队模式
+  // 不提供「创建并排队」,已选了再切到团队时退回默认,不留一个兑现不了的承诺。
+  const queueUnavailable = mode === "team" ? "团队任务不参与普通队列" : null;
+  useEffect(() => {
+    if (queueUnavailable && launchMode === "queue") changeLaunchMode("run");
+  }, [queueUnavailable, launchMode]);
+  const changeGroup = (value: string, opts?: { silent?: boolean }) => {
+    setGroupId(value);
+    return queueAfter.onGroupChanged(value, opts);
   };
   const submit = async () => {
     if (!canSubmit) return;
@@ -488,40 +524,22 @@ export function TaskComposerPanel({
       setBusy(false);
       return;
     }
-    // 创建成功了草稿才丢：中途任何一步失败都原样留着，用户回到面板还能接着改。
-    // 随手记回链的 id 也是这时候才交出去，交完连同正文一起清掉。
-    const finishCreation = () => {
-      const noteIds = draft.noteIds;
-      setLabels([]);
-      draft.clear();
-      onCreated(task, noteIds);
-    };
-    if (launchMode === "create") {
-      finishCreation();
-      notify("任务已创建");
-      return;
-    }
-    let launchError: unknown = null;
-    try {
-      if (launchMode === "run") await api.runTask(task.id);
-      else if (launchMode === "once") {
-        await api.setSchedule(task.id, { kind: "once", at: new Date(scheduleAt).toISOString(), cron: null });
-      } else {
-        await api.setSchedule(task.id, { kind: "cron", at: null, cron: scheduleCron.trim() });
-      }
-    } catch (error) {
-      launchError = error;
-    }
-    finishCreation();
-    if (launchError) {
-      notify(`任务已创建，但${launchMode === "run" ? "启动" : "定时设置"}失败：${launchError instanceof Error ? launchError.message : "未知错误"}`);
-      return;
-    }
-    notify(launchMode === "run"
-      ? "任务已创建并启动"
-      : launchMode === "once"
-        ? "任务已创建，已设置一次性定时"
-        : "任务已创建，已设置 Cron 定时");
+    // 创建成功后的收尾(草稿归属裁决、排队/启动/定时、onCreated 回写)整块在
+    // settleCreatedTask.ts —— 归属判据与为什么要捕获提交那一刻的正文见那边注释。
+    await settleCreatedTask({
+      task,
+      launchMode,
+      scheduleAt,
+      scheduleCron,
+      submitted: { draft: draft.value, noteIds: draft.noteIds },
+      panelMounted: () => mountedRef.current,
+      draft,
+      resetLabels: () => setLabels([]),
+      enqueue: queueAfter.enqueue,
+      onCreated,
+      onTasksSynced,
+      notify,
+    });
   };
 
   return (
@@ -574,7 +592,7 @@ export function TaskComposerPanel({
             onBaseChange={setBase}
             groups={groups}
             groupId={groupId}
-            onGroupChange={setGroupId}
+            onGroupChange={changeGroup}
             labels={labels}
             onLabelsChange={setLabels}
             onCreateGroup={() => setGroupDialogOpen(true)}
@@ -616,17 +634,19 @@ export function TaskComposerPanel({
               cron={scheduleCron}
               busy={busy}
               canSubmit={canSubmit}
-              error={scheduleError}
+              error={scheduleError || queueTargetError}
               onModeChange={changeLaunchMode}
               onAtChange={setScheduleAt}
               onCronChange={setScheduleCron}
               onSubmit={() => void submit()}
               attachmentTool={<AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
               executorTools={executorTools}
+              queueSlot={queueAfter.slot}
+              queueUnavailable={queueUnavailable}
             />
-            {(uploads.uploading || allAttachments.length > 0 || scheduleError) && <div className="studio-input-status" role="status">
+            {(uploads.uploading || allAttachments.length > 0 || scheduleError || queueTargetError) && <div className="studio-input-status" role="status">
               {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
-                : scheduleError || `${allAttachments.length} 个附件`}
+                : scheduleError || queueTargetError || `${allAttachments.length} 个附件`}
             </div>}
           </footer>
           </div>}
@@ -639,9 +659,12 @@ export function TaskComposerPanel({
         onCreate={async (name, groupMode) => {
           try {
             const created = await onCreateGroup(name, groupMode);
-            setGroupId(created.id);
+            // 走统一改组入口:新建分组也是一次手动改组,必须触发「清掉不兼容的
+            // 排队目标」的联动(第 2 轮审查:直接 setGroupId 绕过了它)。两件事
+            // 合成一条提示,免得后一条 toast 把「已清除排队目标」顶掉(第 3 轮)。
+            const cleared = changeGroup(created.id, { silent: true });
             setGroupDialogOpen(false);
-            notify("分组已创建并选中");
+            notify(cleared ? "分组已创建并选中，已清除排队目标（跨组不能同队）" : "分组已创建并选中");
           } catch (error) {
             notify(error instanceof Error ? error.message : "分组创建失败");
           }

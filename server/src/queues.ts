@@ -8,10 +8,12 @@
 // 「改队列内容」并在改完推一把。
 import type { Context, Hono } from "hono";
 import { eq, and, lt, asc, inArray } from "drizzle-orm";
+import type { Task } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
 import { id, now } from "./util.js";
 import { advanceQueue, queueStatus } from "./scheduler.js";
+import { publishTaskUpdated } from "./task-store.js";
 import { handoffBlockReason, isHandoffPreparing } from "./handoff-guard.js";
 import { actorOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
@@ -30,6 +32,23 @@ export async function repackQueue(queueId: string, orderedTaskIds: string[]): Pr
       createdAt: ts,
     })),
   );
+}
+
+// 队列变更后给受影响的任务补发 task.updated:Task 的 queueId/queuePosition 是从
+// queue_items 派生的,只动 queue_items 不动 tasks 表,不发事件的话所有已打开的
+// 页面(行徽标、详情队列区块)都会停在变更前的快照上。
+// 补发前先 bump 这些任务的 updatedAt:队列归属是任务快照的一部分,变更必须留下
+// 可比较的先后依据——前端创建完成回写(createdTaskMerge)靠它分辨「本地行只收到
+// 过早期创建事件」和「本地行已有更晚的队列更新」,否则两者在字段上无法区分
+// (第 3 轮审查:入队事件断流时,成功重取的新快照被创建事件的旧行挡掉)。
+// 返回补发的 enriched 快照:insert/create 端点把排队主体的快照放进 HTTP 响应,
+// 客户端入队成功即拿到权威状态,不必「成功后再 GET 一次」——那次 GET 失败时只能
+// 回退创建前的旧快照,已确认的入队会被显示成独立任务(第 4 轮审查)。
+async function publishQueueMembers(taskIds: string[]): Promise<Map<string, Task>> {
+  if (taskIds.length === 0) return new Map();
+  await db.update(tasks).set({ updatedAt: now() }).where(inArray(tasks.id, taskIds));
+  const published = await Promise.all(taskIds.map((taskId) => publishTaskUpdated(taskId)));
+  return new Map(published.filter((t): t is Task => t != null).map((t) => [t.id, t]));
 }
 
 // 校验:queue 里所有 task 必须同 group(或都无 group),而且必须**同项目**。
@@ -183,6 +202,7 @@ export function mountQueueRoutes(api: Hono): void {
     }
 
     await repackQueue(qid, want);
+    void publishQueueMembers(want);
     // reorder 后某个 backlog/paused 可能上位到 head,立刻推进一次
     void advanceQueue(qid);
     return c.json({ ok: true });
@@ -212,15 +232,18 @@ export function mountQueueRoutes(api: Hono): void {
 
     const next = items.filter((i) => i.taskId !== b.taskId).map((i) => i.taskId);
     await repackQueue(qid, next);
+    void publishQueueMembers([...next, b.taskId]);
     // 移除后立刻推一下,看看后面的 task 是否能动了
     if (next.length > 0) void advanceQueue(qid);
     return c.json({ ok: true });
   });
 
-  // 在指定位置插入(校验跨 group)
+  // 在指定位置插入(校验跨 group)。afterTaskId 按前驱**身份**定位(服务端读当前
+  // 队列算插入点),优先于 position:客户端传数字位置是提交时的旧快照,请求在途时
+  // 别人改了队列就会插到所选任务前面(第 1 轮审查真实复现),按身份定位没有这个窗口。
   api.post("/queues/:queueId/insert", async (c) => {
     const qid = c.req.param("queueId");
-    const b = await c.req.json<{ taskId?: string; position?: number }>();
+    const b = await c.req.json<{ taskId?: string; position?: number; afterTaskId?: string }>();
     if (!b.taskId) return c.json({ error: "taskId required" }, 400);
     const pos = typeof b.position === "number" ? Math.max(0, b.position | 0) : -1;
 
@@ -265,17 +288,33 @@ export function mountQueueRoutes(api: Hono): void {
     const violation = await assertSameGroup(qid, b.taskId);
     if (violation) return c.json({ error: violation }, 400);
 
-    const insertAt = pos < 0 || pos > items.length ? items.length : pos;
+    let insertAt: number;
+    if (b.afterTaskId) {
+      const anchor = items.find((i) => i.taskId === b.afterTaskId);
+      if (!anchor) return c.json({ error: `前驱任务 ${b.afterTaskId} 不在此 queue 里` }, 409);
+      insertAt = items.indexOf(anchor) + 1;
+    } else {
+      insertAt = pos < 0 || pos > items.length ? items.length : pos;
+    }
     const next = [
       ...items.slice(0, insertAt).map((i) => i.taskId),
       b.taskId,
       ...items.slice(insertAt).map((i) => i.taskId),
     ];
     await repackQueue(qid, next);
+    // 等 publish 拿到 enriched 快照再应答:响应带上新成员的权威入队状态,客户端
+    // 不必成功后再 GET(那条路的失败面见 publishQueueMembers 顶部注释)。
+    const published = await publishQueueMembers(next);
     // 插入后:如果前序已全 done/canceled,新 task 应立刻起来(实测发现的竞态:
     // codex skill 在链跑完后插尾任务,不推进会一直 backlog)
     void advanceQueue(qid);
-    return c.json({ ok: true });
+    // tasks 带上全体成员:老成员的 queuePosition/updatedAt 也被这次插入改了,
+    // 只回新成员的话客户端拿不到前驱的新快照(第 5 轮审查:前驱无徽标、计数错位)。
+    return c.json({
+      ok: true,
+      task: published.get(b.taskId) ?? null,
+      tasks: next.map((tid) => published.get(tid) ?? null),
+    });
   });
 
   // 新建一个 queue,用给定的 task ids
@@ -325,8 +364,11 @@ export function mountQueueRoutes(api: Hono): void {
     await db.insert(queueItems).values(
       want.map((tid, i) => ({ taskId: tid, queueId: qid, position: i, createdAt: ts })),
     );
+    // 同 insert:响应带上各成员的 enriched 快照(按 taskIds 原序),排队主体的
+    // 权威入队状态随响应到手,不必成功后再 GET。
+    const published = await publishQueueMembers(want);
     // 新建 queue 也要推进:head 如果已经可启动(backlog/paused),让它立刻动
     void advanceQueue(qid);
-    return c.json({ queueId: qid, taskIds: want }, 201);
+    return c.json({ queueId: qid, taskIds: want, tasks: want.map((tid) => published.get(tid) ?? null) }, 201);
   });
 }

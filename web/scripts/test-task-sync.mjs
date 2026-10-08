@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { applyStarredAt, applyTaskMetadataEvent, applyTaskStatusEvent, mergeFetchedTasks, starredAtChanged } from "../src/lib/useTasks.ts";
+import { applyStarredAt, applyTaskMetadataEvent, applyTaskStatusEvent, confirmedDeletions, mergeFetchedTasks, starredAtChanged } from "../src/lib/useTasks.ts";
 
 // useTasks 数据同步纯函数的回归：SSE 事件应用、星标回写、GET 快照合并。
 // 共同主题是「三条通道（SSE / PATCH 响应 / GET 快照）没有到达顺序保证，
@@ -150,5 +150,20 @@ assert.equal(
   mergeFetchedTasks(afterSse, [staleGetRow], new Set(["t-sse"]))[0].starredAt, 1754900000000,
   "stale same-updatedAt GET must not clear star received via SSE before PATCH response",
 );
+
+// ── 权威快照确认删除(confirmedDeletions,第 8 轮审查)──
+// fetch 发起时本地已有、响应里没有 → 确认删除;发起时还没有(创建在请求之后,
+// SSE 在途中送达)→ 旧快照缺席是正常时序,不构成删除证据;响应里有 → 不是删除。
+assert.deepEqual(
+  confirmedDeletions(new Set(["t-kept", "t-deleted"]), [{ id: "t-kept" }]),
+  ["t-deleted"],
+  "发起时已存在、快照缺席的行确认删除",
+);
+assert.deepEqual(
+  confirmedDeletions(new Set(["t-kept"]), [{ id: "t-kept" }]),
+  [],
+  "创建晚于 fetch 发起的新任务不被旧快照误判为删除",
+);
+assert.deepEqual(confirmedDeletions(new Set(), [{ id: "t-kept" }]), [], "发起时列表为空则无删除可确认");
 
 console.log("test-task-sync: all assertions passed");

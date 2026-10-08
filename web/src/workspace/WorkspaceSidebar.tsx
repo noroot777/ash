@@ -43,6 +43,7 @@ export function WorkspaceSidebar({
   onRemoteTask,
   onTaskStarred,
   onHandoffFinished,
+  onQueueChanged,
   outbound,
   onOpenTerminal,
   commands,
@@ -77,6 +78,7 @@ export function WorkspaceSidebar({
   onRemoteTask: (task: TaskListItem, target: HandoffTarget) => void;
   onTaskStarred: (taskId: string, starredAt: number | null) => void;
   onHandoffFinished: () => Promise<void> | void;
+  onQueueChanged: () => void;
   outbound: OutboundBar;
   onOpenTerminal: (() => void) | null;
   /** 顶行那颗 ▶(常用命令)要的一整套接线;没权限用终端时由 CommandsLauncher 自己收掉。 */
@@ -214,6 +216,7 @@ export function WorkspaceSidebar({
         onRemoteTask={onRemoteTask}
         onTaskStarred={onTaskStarred}
         onHandoffFinished={onHandoffFinished}
+        onQueueChanged={onQueueChanged}
         outbound={outbound}
         notify={notify}
       />

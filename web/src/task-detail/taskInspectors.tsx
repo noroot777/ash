@@ -28,6 +28,8 @@ export interface TaskInspectorContext {
   onTaskUpdated: (task: Task) => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: (updatedTask?: Task) => void;
+  /** 入队响应波及的全体成员快照(含前驱)整批上交,由上层按 updatedAt 合并进任务列表。 */
+  onTasksSynced: (tasks: Task[]) => void;
   /** 第二个参数是「这一串」：同组生成物、同一层文件，中间栏据此能翻上一张/下一张。 */
   onOpenFile: (path: string, reel?: readonly string[]) => void;
   /** 在中间栏摊开文件夹详情（里面有多少东西、能不能删）。 */

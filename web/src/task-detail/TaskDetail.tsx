@@ -54,6 +54,7 @@ export function TaskDetail({
   task,
   allTasks,
   onTaskUpdate,
+  onTasksSynced,
   onDeleted,
   onOpenTask,
   onHandoff,
@@ -67,6 +68,9 @@ export function TaskDetail({
   task: Task;
   allTasks: TaskListItem[];
   onTaskUpdate: (task: Task) => void;
+  /** 入队响应的全体成员快照整批上交,由工作台按 updatedAt 合并进任务列表;
+   * 不传的挂载面(团队成员抽屉,排队入口本就不可见)退回逐个 onTaskUpdate。 */
+  onTasksSynced?: (tasks: Task[]) => void;
   onDeleted: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;
   onHandoff?: (task: Task) => void;
@@ -213,6 +217,10 @@ export function TaskDetail({
     return updated;
   };
 
+  // 队列相关快照的统一落点:上层给了按版本合并的通路就用它;没给的挂载面
+  // (团队成员抽屉,排队入口本就不可见)退回逐个 onTaskUpdate。
+  const applySnapshots = onTasksSynced ?? ((synced: Task[]) => synced.forEach(onTaskUpdate));
+
   const patch = async (value: Partial<Task>) => {
     const updated = await api.patchTask(task.id, value);
     onTaskUpdate(updated);
@@ -304,9 +312,14 @@ export function TaskDetail({
         onTaskUpdated: onTaskUpdate,
         onPatch: patch,
         onQueueChanged: (updatedTask) => {
-          if (updatedTask) onTaskUpdate(updatedTask);
-          else void refreshTask();
+          // 带参分支也走按 updatedAt 的合并路径(applySnapshots),不做无条件覆盖:
+          // 迟到的旧响应不能反转 SSE 已送达的更晚状态(第 6 轮审查)。
+          if (updatedTask) applySnapshots([updatedTask]);
+          // 没带快照的兜底读取也要兜住失败:入队/排队本身已成功,GET 挂了只能
+          // 如实提示,不能让 rejection 裸冒(第 5 轮审查)。
+          else refreshTask().catch(() => notify("队列已更新，但刷新任务状态失败"));
         },
+        onTasksSynced: applySnapshots,
         onOpenFile: (path: string, reel?: readonly string[]) => {
           setPreviewOpen(false);
           fileView.openFile(path, reel);

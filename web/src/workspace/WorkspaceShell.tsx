@@ -11,6 +11,7 @@ import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
 import { StatusBar } from "./StatusBar.tsx";
+import { mergeCreatedTask, mergeTaskSnapshot } from "./createdTaskMerge.ts";
 import { useTerminalDock } from "./useTerminalDock.ts";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { useTaskBody } from "../lib/useTaskBody.ts";
@@ -120,7 +121,7 @@ export function WorkspaceShell() {
   // 项目主仓被切分支/拉取过之后重拉一次 ProjectHealth：侧栏胶囊上的分支名和「有未提交
   // 改动」那颗点都从它来，不跟着刷就会停在操作之前的样子。
   const [gitVersion, setGitVersion] = useState(0);
-  const { tasks: localTasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, refetch: refetchTasks, applyStar } = useTasks();
+  const { tasks: localTasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, refetch: refetchTasks, applyStar, confirmedDeleteIds } = useTasks();
   // 接力出去的行，状态要跨机器问持有机才知道 —— 本机那一行停在交出去那一刻。
   // **这一问由用户按**（见 useOutboundState 顶部：自动轮询会没完没了地敲别人的服务器），
   // 所以没问过时列表里就是接力当时的状态，由 OutboundStatusBar 如实说出来。
@@ -300,10 +301,14 @@ export function WorkspaceShell() {
     setSettingsSection(null);
     void refetchTasks({ silent: true });
   }, [refetchTasks, scopeKind, updateTask]);
+  // 本页删除走 deleteTask 这个汇聚点,登记进 useTasks 的共享失效记录(confirmedDeleteIds);
+  // 另一页面删除的,由 refetch 按「发起时已存在、快照里没有」裁决后记进同一份(第 8 轮
+  // 审查:跨页删除已被权威列表追平后,迟到回写不得再复活)。
   const deleteTask = useCallback((deletedId: string) => {
+    confirmedDeleteIds.current.add(deletedId);
     setTasks((current) => current.filter((task) => task.id !== deletedId));
     setTaskId((current) => current === deletedId ? null : current);
-  }, [setTasks]);
+  }, [confirmedDeleteIds, setTasks]);
   // 选具体项目 = 退回单项目态：在下拉里点了某个项目，还继续按任务模式的口径列表的话，那次点击就白点了。
   const selectProject = (nextProjectId: string) => { setGitOpen(false); setChatOpen(false); setAssistantOrigin(null); setScopeKind("project"); setProjectId(nextProjectId); setTaskId(null); setRemoteSelection(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
   // 切到「任务模式」只换列表的口径，不动选中的任务和上下文项目 —— 你正看着的那条还在，
@@ -463,12 +468,32 @@ export function WorkspaceShell() {
       setComposer((current) => current ?? assistantOrigin.composer);
     }
   };
-  const createTask = (task: Task, noteIds: string[] = []) => {
-    setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
+  // 入队响应带回的全体成员快照走同一条合并路径:每份都按 updatedAt 与本地行裁决,
+  // 在途的更晚 SSE 更新不会被旧响应盖掉;**缺行不插入**(本页已删除的成员不被旧快照
+  // 复活,见 createdTaskMerge.ts;新任务的首次插入由 createTask 负责)。两个排队入口
+  // (新建面板、任务详情检查器)共用,不依赖「成功后再 GET」确认入队。
+  const applyTaskSnapshots = useCallback((snapshots: Task[]) => {
+    setTasks((current) => snapshots.reduce(mergeTaskSnapshot, current));
+  }, [setTasks]);
+  const createTask = (task: Task, noteIds: string[] = [], ownsComposer = true) => {
+    // 迟到的创建完成回写:任务已被确认删除(本页删的,或另一页面删、本页经权威列表
+    // 刷新确认的)时跳过回插——不回插、不自动选中、不做随手记回链。「创建并排队」等
+    // 慢网络在途提交完成时,刚建的任务可能已经被删掉;mergeCreatedTask 的缺行占位是
+    // 给「事件没送到的真正首次插入」用的,分不出这种缺行,只能靠失效记录裁决
+    // (第 7、8 轮审查;记录的构成见 useTasks.confirmedDeleteIds 注释)。
+    // 收面板只在 ownsComposer(发起提交的面板还挂着)时做:面板还开着等提交,不收会
+    // 困在 busy 态;但用户已切走又新开的面板不归这次提交管,收掉等于把人正在写的
+    // 新任务关了(第 9 轮审查)。
+    if (confirmedDeleteIds.current.has(task.id)) {
+      if (ownsComposer) setComposer(null);
+      return;
+    }
+    // 合并策略(为什么已存在就不覆盖)见 createdTaskMerge.ts 顶部注释。
+    setTasks((current) => mergeCreatedTask(current, task));
     pushTaskHistoryEntry(task, window, scopeKind);
     setTaskId(task.id);
     setRemoteSelection(null);
-    setComposer(null);
+    if (ownsComposer) setComposer(null);
     for (const noteId of noteIds) api.patchNote(noteId, { taskId: task.id }).catch(() => notify("任务已创建，但随手记回链写入失败"));
   };
   // 带进来的那份内容（随手记转任务）并进草稿之后就摘掉：它是一次性投递，留在状态里
@@ -587,10 +612,10 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}${chatOpen ? " is-chat" : ""}${assistantOpen ? " is-assistant" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? terminal.reveal : null} commands={commandsWiring} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={openChat} chatOpen={chatOpen} onAssistant={openAssistant} assistantOpen={assistantOpen} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={openSettingsHome} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} onQueueChanged={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? terminal.reveal : null} commands={commandsWiring} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={openChat} chatOpen={chatOpen} onAssistant={openAssistant} assistantOpen={assistantOpen} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={openSettingsHome} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
-        {assistantOpen ? <AssistantView project={currentProject} projects={projects} onTask={(task) => { updateTask(task); selectTask(task); }} onSettings={openSettings} onExit={closeAssistant} onMode={openComposer} onChat={openChat} /> : chatOpen && currentProject ? <ChatView key={currentProject.id} project={currentProject} onTask={selectTask} onExit={() => setChatOpen(false)} onMode={openComposer} onAssistant={openAssistant} /> : composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} onDraftSeeded={dropComposerSeed} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onChat={openChat} onAssistant={openAssistant} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} onProjectUpdated={applyProjectUpdate} notify={notify} /> : remoteSelection ? (
+        {assistantOpen ? <AssistantView project={currentProject} projects={projects} onTask={(task) => { updateTask(task); selectTask(task); }} onSettings={openSettings} onExit={closeAssistant} onMode={openComposer} onChat={openChat} /> : chatOpen && currentProject ? <ChatView key={currentProject.id} project={currentProject} onTask={selectTask} onExit={() => setChatOpen(false)} onMode={openComposer} onAssistant={openAssistant} /> : composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} tasks={tasks} initialDraft={composer.draft} onDraftSeeded={dropComposerSeed} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onChat={openChat} onAssistant={openAssistant} onCancel={() => setComposer(null)} onCreated={createTask} onTasksSynced={applyTaskSnapshots} onCreateGroup={createComposerGroup} onProjectUpdated={applyProjectUpdate} notify={notify} /> : remoteSelection ? (
           <RemoteTaskDetail
             archive={remoteSelection.task}
             target={remoteSelection.target}
@@ -603,7 +628,7 @@ export function WorkspaceShell() {
         ) : selectedFullTask?.mode === "duet" ? (
           <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
         ) : selectedFullTask ? (
-          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer("single", draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
+          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTasksSynced={applyTaskSnapshots} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer("single", draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
         ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "tasks" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "tasks" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项{scopeKind === "tasks" ? "还没落地" : "任务"}</span>}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
       </main>
     </div>{terminalDock}{statusBar}</div>{overlays}</>
