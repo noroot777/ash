@@ -3,7 +3,6 @@
 import { useState } from "react";
 import type { Group, Task, TaskListItem } from "@ash/shared";
 import { Dropdown } from "../components/Dropdown.tsx";
-import { api } from "../lib/api.ts";
 import { placeTaskAfter, queueAfterOptions } from "../lib/queueAfter.ts";
 
 export function useQueueAfter({ tasks, groups, projectId, notify, onFollowGroup }: {
@@ -34,16 +33,16 @@ export function useQueueAfter({ tasks, groups, projectId, notify, onFollowGroup 
   };
 
   /** 把刚创建的任务排到所选目标之后。创建成功后排队失败不回滚任务:两段结果分开说。
-   * 成功时重取任务快照:创建返回里 queueId 还是 null,拿旧快照交回上层会把 SSE 已
-   * 送达的队列徽标整行覆盖掉(第 1 轮审查复现「第 7 / 6 位」+「独立任务」)。 */
+   * 入队后的权威快照直接来自插入/建队响应(服务端已 bump updatedAt):没有「成功后
+   * 再 GET、GET 失败回退创建前快照把已确认入队显示成独立任务」的窗口(第 4 轮审查)。
+   * 覆盖与否由 createdTaskMerge 按 updatedAt 裁决,响应在途期间的更晚变更不会被盖。 */
   const enqueue = async (task: Task): Promise<{ task: Task; message: string }> => {
     const target = afterTarget;
     setAfterTaskId(null);
     try {
       if (!target) throw new Error("目标任务不存在，可能刚被删除");
-      await placeTaskAfter(task.id, target);
-      const fresh = await api.task(task.id).catch(() => task);
-      return { task: fresh, message: `已排在「${target.title || "未命名任务"}」之后，轮到它时自动开始` };
+      const placed = await placeTaskAfter(task.id, target);
+      return { task: placed.task ?? task, message: `已排在「${target.title || "未命名任务"}」之后，轮到它时自动开始` };
     } catch (error) {
       return { task, message: `任务已创建，但排队失败：${error instanceof Error ? error.message : "未知错误"}` };
     }

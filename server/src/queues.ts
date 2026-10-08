@@ -8,6 +8,7 @@
 // 「改队列内容」并在改完推一把。
 import type { Context, Hono } from "hono";
 import { eq, and, lt, asc, inArray } from "drizzle-orm";
+import type { Task } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -40,10 +41,14 @@ export async function repackQueue(queueId: string, orderedTaskIds: string[]): Pr
 // 可比较的先后依据——前端创建完成回写(createdTaskMerge)靠它分辨「本地行只收到
 // 过早期创建事件」和「本地行已有更晚的队列更新」,否则两者在字段上无法区分
 // (第 3 轮审查:入队事件断流时,成功重取的新快照被创建事件的旧行挡掉)。
-async function publishQueueMembers(taskIds: string[]): Promise<void> {
-  if (taskIds.length === 0) return;
+// 返回补发的 enriched 快照:insert/create 端点把排队主体的快照放进 HTTP 响应,
+// 客户端入队成功即拿到权威状态,不必「成功后再 GET 一次」——那次 GET 失败时只能
+// 回退创建前的旧快照,已确认的入队会被显示成独立任务(第 4 轮审查)。
+async function publishQueueMembers(taskIds: string[]): Promise<Map<string, Task>> {
+  if (taskIds.length === 0) return new Map();
   await db.update(tasks).set({ updatedAt: now() }).where(inArray(tasks.id, taskIds));
-  await Promise.all(taskIds.map((taskId) => publishTaskUpdated(taskId)));
+  const published = await Promise.all(taskIds.map((taskId) => publishTaskUpdated(taskId)));
+  return new Map(published.filter((t): t is Task => t != null).map((t) => [t.id, t]));
 }
 
 // 校验:queue 里所有 task 必须同 group(或都无 group),而且必须**同项目**。
@@ -297,11 +302,13 @@ export function mountQueueRoutes(api: Hono): void {
       ...items.slice(insertAt).map((i) => i.taskId),
     ];
     await repackQueue(qid, next);
-    void publishQueueMembers(next);
+    // 等 publish 拿到 enriched 快照再应答:响应带上新成员的权威入队状态,客户端
+    // 不必成功后再 GET(那条路的失败面见 publishQueueMembers 顶部注释)。
+    const published = await publishQueueMembers(next);
     // 插入后:如果前序已全 done/canceled,新 task 应立刻起来(实测发现的竞态:
     // codex skill 在链跑完后插尾任务,不推进会一直 backlog)
     void advanceQueue(qid);
-    return c.json({ ok: true });
+    return c.json({ ok: true, task: published.get(b.taskId) ?? null });
   });
 
   // 新建一个 queue,用给定的 task ids
@@ -351,9 +358,11 @@ export function mountQueueRoutes(api: Hono): void {
     await db.insert(queueItems).values(
       want.map((tid, i) => ({ taskId: tid, queueId: qid, position: i, createdAt: ts })),
     );
-    void publishQueueMembers(want);
+    // 同 insert:响应带上各成员的 enriched 快照(按 taskIds 原序),排队主体的
+    // 权威入队状态随响应到手,不必成功后再 GET。
+    const published = await publishQueueMembers(want);
     // 新建 queue 也要推进:head 如果已经可启动(backlog/paused),让它立刻动
     void advanceQueue(qid);
-    return c.json({ queueId: qid, taskIds: want }, 201);
+    return c.json({ queueId: qid, taskIds: want, tasks: want.map((tid) => published.get(tid) ?? null) }, 201);
   });
 }

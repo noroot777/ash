@@ -4,7 +4,7 @@
 // 候选按用户拍板「全部列出不过滤」:不合法的置灰并在右侧灰字写明原因。
 // 落库语义:目标已在队列 → 紧随其后插入;不在 → 建一条 [目标, 本任务] 的新队列。
 // 推进由服务端 advanceQueue 负责:前驱全是终态时新成员会立刻被拉起。
-import type { Group, TaskListItem, TaskStatus } from "@ash/shared";
+import type { Group, Task, TaskListItem, TaskStatus } from "@ash/shared";
 import { TASK_STATUS_LABELS } from "@ash/shared";
 import type { DropdownOption } from "../components/Dropdown.tsx";
 import { api } from "./api.ts";
@@ -70,14 +70,19 @@ export function queueAfterOptions({ tasks, groups, projectId, excludeId, subject
   });
 }
 
-/** 把 taskId 排到 target 之后,返回落进的队列 id。
+/** 把 taskId 排到 target 之后,返回落进的队列 id 和本任务入队后的权威快照。
  * 目标已在队列时按**前驱身份**(afterTaskId)插入:插入点由服务端读当前队列决定,
- * 客户端快照里的数字位置在请求在途时可能已经过期(第 1 轮审查真实复现)。 */
-export async function placeTaskAfter(taskId: string, target: TaskListItem): Promise<{ queueId: string }> {
+ * 客户端快照里的数字位置在请求在途时可能已经过期(第 1 轮审查真实复现)。
+ * 快照直接来自插入/建队响应(updatedAt 已被服务端 bump):入队成功即拿到入队后
+ * 状态,没有「成功后再 GET、GET 失败只能回退创建前快照」的窗口(第 4 轮审查)。 */
+export async function placeTaskAfter(
+  taskId: string,
+  target: TaskListItem,
+): Promise<{ queueId: string; task: Task | null }> {
   if (target.queueId != null) {
-    await api.queueInsertAfter(target.queueId, taskId, target.id);
-    return { queueId: target.queueId };
+    const res = await api.queueInsertAfter(target.queueId, taskId, target.id);
+    return { queueId: target.queueId, task: res.task ?? null };
   }
   const created = await api.queueCreate([target.id, taskId]);
-  return { queueId: created.queueId };
+  return { queueId: created.queueId, task: created.tasks?.find((item) => item?.id === taskId) ?? null };
 }

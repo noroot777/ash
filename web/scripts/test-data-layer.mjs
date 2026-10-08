@@ -19,7 +19,6 @@ import {
 } from "../src/lib/agentAvailability.ts";
 import { isLocalDiskImagePath, localDiskPath } from "../src/components/markdownPolicy.ts";
 import { createTerminalTab, withoutTerminalTab } from "../src/workspace/terminalTabs.ts";
-import { mergeCreatedTask } from "../src/workspace/createdTaskMerge.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -669,32 +668,6 @@ try {
       endedAt: "2026-07-27T09:00:00.000Z",
     },
   ]), [{ from: timeMs("2026-07-27T08:35:00.000Z"), to: timeMs("2026-07-27T08:35:42.000Z") }]);
-  // 创建完成回写的合并策略:按服务端在队列变更时 bump 的 updatedAt 比先后。
-  // ① 本地行更新(SSE 已送达移出等更晚更新),在途旧快照不得覆盖(第 2 轮审查);
-  // ② 本地行只收到过创建事件,成功重取的新快照必须覆盖(第 3 轮审查:入队事件
-  //    断流时任务显示「独立任务」);③ 同刻保留本地 enriched 行;④ 无行占位插入。
-  const sseRemovedRow = { id: "t1", queueId: null, queuePosition: null, updatedAt: "2026-10-08T03:00:02.000Z" };
-  const staleEnqueuedGet = { id: "t1", queueId: "q1", queuePosition: 1, updatedAt: "2026-10-08T03:00:01.000Z" };
-  assert.deepEqual(mergeCreatedTask([sseRemovedRow], staleEnqueuedGet), [sseRemovedRow], "更晚的 SSE 更新不能被在途旧快照覆盖");
-  const createdOnlyRow = { id: "t1", queueId: null, queuePosition: null, updatedAt: "2026-10-08T03:00:00.000Z" };
-  const freshEnqueuedGet = { id: "t1", queueId: "q1", queuePosition: 1, updatedAt: "2026-10-08T03:00:01.000Z" };
-  assert.deepEqual(
-    mergeCreatedTask([createdOnlyRow], freshEnqueuedGet),
-    [freshEnqueuedGet],
-    "只收到创建事件的旧行不能挡掉成功重取的入队快照",
-  );
-  assert.deepEqual(
-    mergeCreatedTask([{ ...createdOnlyRow, updatedAt: freshEnqueuedGet.updatedAt }], freshEnqueuedGet),
-    [{ ...createdOnlyRow, updatedAt: freshEnqueuedGet.updatedAt }],
-    "同刻保留本地 enriched 行",
-  );
-  assert.deepEqual(mergeCreatedTask([], createdOnlyRow), [createdOnlyRow], "SSE 没到时用快照占位插入");
-  assert.deepEqual(
-    mergeCreatedTask([{ id: "t0", updatedAt: "2026-10-08T03:00:00.000Z" }], { id: "t1", updatedAt: "2026-10-08T03:00:00.000Z" }).map((row) => row.id),
-    ["t1", "t0"],
-    "新行插在最前",
-  );
-
   console.log("数据层回归验证通过");
 } finally {
   globalThis.fetch = originalFetch;

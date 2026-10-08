@@ -17,7 +17,7 @@ try {
   const created = [];
   const queueCreates = [];
   let taskRefetches = 0;
-  let failTaskGet = false;
+  let failQueueCreate = false;
   const projectPatches = [];
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -43,18 +43,19 @@ try {
       data = { ...body, id: "task-1", status: "backlog", title: body.body };
     }
     if (path === "/api/queues" && request.method() === "POST") {
-      queueCreates.push(request.postDataJSON());
-      data = { queueId: "q1", taskIds: request.postDataJSON().taskIds };
-    }
-    // 「创建并排队」成功后面板必须重取任务快照(创建返回里 queueId 还是 null)。
-    if (path === "/api/tasks/task-1" && request.method() === "GET") {
-      if (failTaskGet) {
+      if (failQueueCreate) {
         await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "boom" }) });
         return;
       }
-      taskRefetches += 1;
-      data = { id: "task-1", title: "排队新任务", status: "backlog", projectId: "p1", queueId: "q1", queuePosition: 1 };
+      const body = request.postDataJSON();
+      queueCreates.push(body);
+      // 真实服务端在响应里带各成员入队后的 enriched 快照(updatedAt 已 bump)。
+      data = { queueId: "q1", taskIds: body.taskIds,
+        tasks: body.taskIds.map((tid, i) => ({ id: tid, title: tid === "task-1" ? "排队新任务" : "存量待办任务",
+          status: "backlog", projectId: "p1", queueId: "q1", queuePosition: i, updatedAt: "2026-10-08T05:00:01.000Z" })) };
     }
+    // 入队快照随插入/建队响应返回,面板不再「成功后补一次 GET」。
+    if (path === "/api/tasks/task-1" && request.method() === "GET") taskRefetches += 1;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
   });
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/composer-upload.html?repo`);
@@ -190,7 +191,7 @@ try {
   await page.getByTestId("created").getByRole("listitem").waitFor();
   assert.equal(queueCreates.length, 1, "点了置灰的团队候选不能选中");
   assert.deepEqual(queueCreates[0].taskIds, ["t-backlog", "task-1"]);
-  assert.equal(taskRefetches, 1, "入队成功后必须重取任务快照，旧快照会盖掉队列字段");
+  assert.equal(taskRefetches, 0, "入队快照来自插入/建队响应，不应再补一次 GET");
   // 团队任务不被普通队列调度:团队模式下「创建并排队」置灰。
   await switchMode("团队");
   await openLaunch();
@@ -267,11 +268,11 @@ try {
   assert.match(await page.locator(".studio-input-status").innerText(), /选择要接在哪个任务之后/);
   assert.match(await page.getByTestId("notices").innerText(), /已清除排队目标/);
 
-  // 第 2 轮回归 B:入队后的快照重取 503 不致命——插入已成功,回退快照只做占位。
-  failTaskGet = true;
+  // 排队请求本身失败时如实分开报两段:任务已创建、排队失败,不冒充成功。
+  failQueueCreate = true;
   await page.reload();
   await page.setViewportSize({ width: 1280, height: 900 });
-  await objective.fill("重取失败回退");
+  await objective.fill("排队失败如实提示");
   await page.getByRole("button", { name: /^智能体：/ }).waitFor();
   await openLaunch();
   await page.getByLabel("启动方式").selectOption("queue");
@@ -280,9 +281,8 @@ try {
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "创建并排队", exact: true }).click();
   await page.getByTestId("created").getByRole("listitem").waitFor();
-  assert.equal(queueCreates.length, 2, "重取失败不影响已成功的入队");
-  assert.match(await page.getByTestId("notices").innerText(), /已排在「存量待办任务」之后/);
-  failTaskGet = false;
+  assert.match(await page.getByTestId("notices").innerText(), /任务已创建，但排队失败/);
+  failQueueCreate = false;
 
   assert.deepEqual(errors, []);
   console.log("composer studio: auxiliary popovers, nested dismissal, persistent config, templates, responsive layout, payload and project worktree default passed");
