@@ -308,7 +308,13 @@ export function mountQueueRoutes(api: Hono): void {
     // 插入后:如果前序已全 done/canceled,新 task 应立刻起来(实测发现的竞态:
     // codex skill 在链跑完后插尾任务,不推进会一直 backlog)
     void advanceQueue(qid);
-    return c.json({ ok: true, task: published.get(b.taskId) ?? null });
+    // tasks 带上全体成员:老成员的 queuePosition/updatedAt 也被这次插入改了,
+    // 只回新成员的话客户端拿不到前驱的新快照(第 5 轮审查:前驱无徽标、计数错位)。
+    return c.json({
+      ok: true,
+      task: published.get(b.taskId) ?? null,
+      tasks: next.map((tid) => published.get(tid) ?? null),
+    });
   });
 
   // 新建一个 queue,用给定的 task ids

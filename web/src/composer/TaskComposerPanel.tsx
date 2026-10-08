@@ -68,6 +68,7 @@ export function TaskComposerPanel({
   onAssistant,
   onCancel,
   onCreated,
+  onTasksSynced,
   onCreateGroup,
   onProjectUpdated,
   notify,
@@ -85,6 +86,8 @@ export function TaskComposerPanel({
   onAssistant?: () => void;
   onCancel: () => void;
   onCreated: (task: Task, noteIds: string[]) => void;
+  /** 入队响应波及的全体成员快照(含前驱)整批上交,由上层按 updatedAt 合并进任务列表。 */
+  onTasksSynced?: (tasks: Task[]) => void;
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
   /** 「设为本项目默认」写回之后，把新的项目行交回上层 —— 否则下次打开这块面板还按旧值预填。 */
   onProjectUpdated: (project: ProjectView) => void;
@@ -522,10 +525,13 @@ export function TaskComposerPanel({
     }
     if (launchMode === "queue") {
       // 创建成功后排队失败不回滚任务(enqueue 如实分开报两段结果);成功时 task
-      // 换成入队后的最新快照,免得旧快照把 SSE 已送达的队列字段盖回去。
+      // 换成入队后的最新快照,免得旧快照把 SSE 已送达的队列字段盖回去。前驱等
+      // 全体成员快照整批交给 onTasksSynced 同步(第 5 轮审查:前驱不同步会丢
+      // 队列徽标、再排一次还会重复建队)。
       const result = await queueAfter.enqueue(task);
       task = result.task;
       finishCreation();
+      if (result.members.length) onTasksSynced?.(result.members);
       notify(result.message);
       return;
     }

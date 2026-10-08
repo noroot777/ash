@@ -192,6 +192,9 @@ try {
   assert.equal(queueCreates.length, 1, "点了置灰的团队候选不能选中");
   assert.deepEqual(queueCreates[0].taskIds, ["t-backlog", "task-1"]);
   assert.equal(taskRefetches, 0, "入队快照来自插入/建队响应，不应再补一次 GET");
+  // 第 5 轮回归:响应里的全体成员快照(前驱 + 新任务)整批上交 onTasksSynced——
+  // 只同步新任务的话前驱在列表里保持入队前状态(无徽标、计数错位、重复建队)。
+  assert.match(await page.getByTestId("synced").innerText(), /同步：t-backlog@q1#0 task-1@q1#1/, "前驱与新任务的入队快照都要上交");
   // 团队任务不被普通队列调度:团队模式下「创建并排队」置灰。
   await switchMode("团队");
   await openLaunch();
@@ -282,6 +285,7 @@ try {
   await page.getByRole("button", { name: "创建并排队", exact: true }).click();
   await page.getByTestId("created").getByRole("listitem").waitFor();
   assert.match(await page.getByTestId("notices").innerText(), /任务已创建，但排队失败/);
+  assert.equal(await page.getByTestId("synced").getByRole("listitem").count(), 0, "排队失败没有可同步的成员快照");
   failQueueCreate = false;
 
   assert.deepEqual(errors, []);

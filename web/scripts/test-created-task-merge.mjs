@@ -31,4 +31,26 @@ assert.deepEqual(
   "新行插在最前",
 );
 
+// ⑤ 入队响应带回**全体成员**快照(含前驱)时,整批 reduce 过同一条合并路径
+//   (第 5 轮审查:只同步新成员会让前驱在列表里保持入队前状态——没有队列徽标、
+//    计数错位,不刷新再接同一前驱还会重复建队撞 409)。每份快照仍各自按
+//    updatedAt 裁决:批里混着过期快照时,只有更新的那些生效。
+const stalePredecessorRow = { id: "t-prev", queueId: null, queuePosition: null, updatedAt: "2026-10-08T03:00:00.000Z" };
+const unrelatedRow = { id: "t-other", queueId: null, queuePosition: null, updatedAt: "2026-10-08T03:00:00.000Z" };
+const memberSnapshots = [
+  { id: "t-prev", queueId: "q1", queuePosition: 0, updatedAt: "2026-10-08T03:00:01.000Z" },
+  { id: "t-new", queueId: "q1", queuePosition: 1, updatedAt: "2026-10-08T03:00:01.000Z" },
+];
+assert.deepEqual(
+  memberSnapshots.reduce(mergeCreatedTask, [stalePredecessorRow, unrelatedRow]),
+  [memberSnapshots[1], memberSnapshots[0], unrelatedRow],
+  "全体成员快照整批合并:前驱被更新快照覆盖,缺行的新成员占位插入,无关行不动",
+);
+const laterMovedPredecessor = { id: "t-prev", queueId: null, queuePosition: null, updatedAt: "2026-10-08T03:00:02.000Z" };
+assert.deepEqual(
+  memberSnapshots.reduce(mergeCreatedTask, [laterMovedPredecessor]),
+  [memberSnapshots[1], laterMovedPredecessor],
+  "批量合并仍按 updatedAt 逐份裁决:前驱已有更晚的 SSE 更新(移出)时不被在途快照盖回",
+);
+
 console.log("创建回写合并策略回归验证通过");

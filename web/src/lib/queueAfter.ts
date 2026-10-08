@@ -70,7 +70,10 @@ export function queueAfterOptions({ tasks, groups, projectId, excludeId, subject
   });
 }
 
-/** 把 taskId 排到 target 之后,返回落进的队列 id 和本任务入队后的权威快照。
+/** 把 taskId 排到 target 之后,返回落进的队列 id、本任务入队后的权威快照,以及
+ * 这次变更波及的**全体成员**快照(tasks)——前驱的 queuePosition/updatedAt 同样被
+ * 这次插入/建队改了,只同步本任务会让前驱在列表里保持旧状态(第 5 轮审查:前驱
+ * 无队列徽标、计数「2/1」、不刷新再排一次会重复建队撞 409)。
  * 目标已在队列时按**前驱身份**(afterTaskId)插入:插入点由服务端读当前队列决定,
  * 客户端快照里的数字位置在请求在途时可能已经过期(第 1 轮审查真实复现)。
  * 快照直接来自插入/建队响应(updatedAt 已被服务端 bump):入队成功即拿到入队后
@@ -78,11 +81,14 @@ export function queueAfterOptions({ tasks, groups, projectId, excludeId, subject
 export async function placeTaskAfter(
   taskId: string,
   target: TaskListItem,
-): Promise<{ queueId: string; task: Task | null }> {
+): Promise<{ queueId: string; task: Task | null; tasks: Task[] }> {
+  const present = (items: (Task | null)[] | undefined): Task[] =>
+    (items ?? []).filter((item): item is Task => item != null);
   if (target.queueId != null) {
     const res = await api.queueInsertAfter(target.queueId, taskId, target.id);
-    return { queueId: target.queueId, task: res.task ?? null };
+    return { queueId: target.queueId, task: res.task ?? null, tasks: present(res.tasks) };
   }
   const created = await api.queueCreate([target.id, taskId]);
-  return { queueId: created.queueId, task: created.tasks?.find((item) => item?.id === taskId) ?? null };
+  const members = present(created.tasks);
+  return { queueId: created.queueId, task: members.find((item) => item.id === taskId) ?? null, tasks: members };
 }

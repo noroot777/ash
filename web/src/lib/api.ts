@@ -675,8 +675,9 @@ export const api = {
   queueInsert: (queueId: string, taskId: string, position?: number): Promise<{ ok: true }> =>
     request(`/queues/${id(queueId)}/insert`, json("POST", { taskId, position })),
   // 按前驱身份插入:服务端读当前队列定插入点,不受客户端位置快照过期影响。
-  // 响应带新成员入队后的权威快照(updatedAt 已 bump),省掉「成功后再 GET」。
-  queueInsertAfter: (queueId: string, taskId: string, afterTaskId: string): Promise<{ ok: true; task: Task | null }> =>
+  // 响应带全体成员入队后的权威快照(updatedAt 已 bump),省掉「成功后再 GET」;
+  // task 是新成员自己,tasks 按队列顺序含老成员(它们的位次也被这次插入改了)。
+  queueInsertAfter: (queueId: string, taskId: string, afterTaskId: string): Promise<{ ok: true; task: Task | null; tasks: (Task | null)[] }> =>
     request(`/queues/${id(queueId)}/insert`, json("POST", { taskId, afterTaskId })),
   queueCreate: (taskIds: string[]): Promise<{ queueId: string; taskIds: string[]; tasks: (Task | null)[] }> =>
     request("/queues", json("POST", { taskIds })),

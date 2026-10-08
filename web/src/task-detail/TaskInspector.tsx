@@ -127,6 +127,7 @@ export function TaskInspector({
   onOpenReview,
   onPatch,
   onQueueChanged,
+  onTasksSynced,
   notify,
 }: {
   task: Task;
@@ -138,6 +139,8 @@ export function TaskInspector({
   onOpenReview: () => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: (updatedTask?: Task) => void;
+  /** 入队响应波及的全体成员快照(含前驱)整批上交,由上层按 updatedAt 合并进任务列表。 */
+  onTasksSynced: (tasks: Task[]) => void;
   notify: (message: string) => void;
 }) {
   const [queueItems, setQueueItems] = useState<{ taskId: string; title: string }[]>([]);
@@ -258,13 +261,17 @@ export function TaskInspector({
   };
 
   // 「排在某任务之后」:目标在队列就紧随其后插入,不在就建一条 [目标, 本任务]。
+  // 响应里的成员快照(含前驱)整批上交合并,本任务自己走 onQueueChanged 带参分支;
+  // 不再「成功后 GET」——那条路没有错误处理,断流+GET 失败时入队成功却显示成
+  // 独立任务(第 5 轮审查)。
   const joinQueueAfter = async (targetId: string) => {
     const target = allTasks.find((item) => item.id === targetId);
     if (!target) return;
     try {
-      await placeTaskAfter(task.id, target);
+      const placed = await placeTaskAfter(task.id, target);
       notify(`已排在「${target.title || "未命名任务"}」之后，轮到它时自动开始`);
-      onQueueChanged();
+      if (placed.tasks.length) onTasksSynced(placed.tasks);
+      onQueueChanged(placed.task ?? undefined);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     }
