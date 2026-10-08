@@ -17,6 +17,7 @@ try {
   const created = [];
   const queueCreates = [];
   let taskRefetches = 0;
+  let failTaskGet = false;
   const projectPatches = [];
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -47,6 +48,10 @@ try {
     }
     // 「创建并排队」成功后面板必须重取任务快照(创建返回里 queueId 还是 null)。
     if (path === "/api/tasks/task-1" && request.method() === "GET") {
+      if (failTaskGet) {
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "boom" }) });
+        return;
+      }
       taskRefetches += 1;
       data = { id: "task-1", title: "排队新任务", status: "backlog", projectId: "p1", queueId: "q1", queuePosition: 1 };
     }
@@ -239,6 +244,45 @@ try {
   await page.getByTestId("reopen").click();
   await page.getByRole("button", { name: /^智能体：/ }).waitFor();
   assert.match(await space.getAttribute("aria-label"), /独立 worktree/, "重开面板必须按刚设成的项目默认预填");
+
+  // 第 2 轮回归 A:新建分组也走统一改组联动——旧排队目标被清掉、提交被挡。
+  await page.reload();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await objective.fill("新建分组联动");
+  await page.getByRole("button", { name: /^智能体：/ }).waitFor();
+  await openLaunch();
+  await page.getByLabel("启动方式").selectOption("queue");
+  await page.locator(".composer-queue-after .ui-select-trigger").click();
+  await page.locator(".ui-dropdown-row", { hasText: "存量待办任务" }).click();
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector(".studio-submit")?.disabled);
+  await page.getByRole("button", { name: /^组织与标签：/ }).click();
+  await page.getByRole("button", { name: /^分组/ }).click();
+  await page.locator(".ui-dropdown-row", { hasText: "新建分组" }).click();
+  await page.getByRole("textbox", { name: "分组名称" }).fill("刚建的新组");
+  await page.getByRole("button", { name: "创建分组", exact: true }).click();
+  await page.getByRole("textbox", { name: "分组名称" }).waitFor({ state: "hidden" });
+  await clickOutside();
+  assert.equal(await page.getByRole("button", { name: "创建并排队", exact: true }).isDisabled(), true, "新建分组后旧排队目标必须被清掉");
+  assert.match(await page.locator(".studio-input-status").innerText(), /选择要接在哪个任务之后/);
+  assert.match(await page.getByTestId("notices").innerText(), /已清除排队目标/);
+
+  // 第 2 轮回归 B:入队后的快照重取 503 不致命——插入已成功,回退快照只做占位。
+  failTaskGet = true;
+  await page.reload();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await objective.fill("重取失败回退");
+  await page.getByRole("button", { name: /^智能体：/ }).waitFor();
+  await openLaunch();
+  await page.getByLabel("启动方式").selectOption("queue");
+  await page.locator(".composer-queue-after .ui-select-trigger").click();
+  await page.locator(".ui-dropdown-row", { hasText: "存量待办任务" }).click();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "创建并排队", exact: true }).click();
+  await page.getByTestId("created").getByRole("listitem").waitFor();
+  assert.equal(queueCreates.length, 2, "重取失败不影响已成功的入队");
+  assert.match(await page.getByTestId("notices").innerText(), /已排在「存量待办任务」之后/);
+  failTaskGet = false;
 
   assert.deepEqual(errors, []);
   console.log("composer studio: auxiliary popovers, nested dismissal, persistent config, templates, responsive layout, payload and project worktree default passed");

@@ -669,7 +669,10 @@ export function TaskComposerPanel({
         onCreate={async (name, groupMode) => {
           try {
             const created = await onCreateGroup(name, groupMode);
-            setGroupId(created.id);
+            // 走统一改组入口:新建分组也是一次手动改组,必须触发「清掉不兼容的
+            // 排队目标并提示」的联动(第 2 轮审查:直接 setGroupId 绕过了它,
+            // 带着旧目标提交会在服务端撞「跨 group 不允许」)。
+            changeGroup(created.id);
             setGroupDialogOpen(false);
             notify("分组已创建并选中");
           } catch (error) {

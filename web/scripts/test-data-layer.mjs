@@ -19,6 +19,7 @@ import {
 } from "../src/lib/agentAvailability.ts";
 import { isLocalDiskImagePath, localDiskPath } from "../src/components/markdownPolicy.ts";
 import { createTerminalTab, withoutTerminalTab } from "../src/workspace/terminalTabs.ts";
+import { mergeCreatedTask } from "../src/workspace/createdTaskMerge.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -668,6 +669,18 @@ try {
       endedAt: "2026-07-27T09:00:00.000Z",
     },
   ]), [{ from: timeMs("2026-07-27T08:35:00.000Z"), to: timeMs("2026-07-27T08:35:42.000Z") }]);
+  // 创建完成回写的合并策略:SSE 行已存在时,在途响应的过期快照不得覆盖(第 2 轮
+  // 审查:移出队列后旧 GET 响应回来,任务又显示在队列里;503 回退快照抹掉入队字段)。
+  const sseRow = { id: "t1", queueId: "q1", queuePosition: 1 };
+  const staleSnapshot = { id: "t1", queueId: null, queuePosition: null };
+  assert.deepEqual(mergeCreatedTask([sseRow], staleSnapshot), [sseRow], "已存在的 SSE 行不能被在途快照覆盖");
+  assert.deepEqual(mergeCreatedTask([], staleSnapshot), [staleSnapshot], "SSE 没到时用快照占位插入");
+  assert.deepEqual(
+    mergeCreatedTask([{ id: "t0" }], { id: "t1" }).map((row) => row.id),
+    ["t1", "t0"],
+    "新行插在最前",
+  );
+
   console.log("数据层回归验证通过");
 } finally {
   globalThis.fetch = originalFetch;

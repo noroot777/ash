@@ -10,6 +10,7 @@ import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
 import { StatusBar } from "./StatusBar.tsx";
+import { mergeCreatedTask } from "./createdTaskMerge.ts";
 import { useTerminalDock } from "./useTerminalDock.ts";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { useTaskBody } from "../lib/useTaskBody.ts";
@@ -452,7 +453,8 @@ export function WorkspaceShell() {
     }
   };
   const createTask = (task: Task, noteIds: string[] = []) => {
-    setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
+    // 合并策略(为什么已存在就不覆盖)见 createdTaskMerge.ts 顶部注释。
+    setTasks((current) => mergeCreatedTask(current, task));
     pushTaskHistoryEntry(task, window, scopeKind);
     setTaskId(task.id);
     setRemoteSelection(null);
