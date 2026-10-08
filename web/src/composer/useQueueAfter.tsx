@@ -23,13 +23,14 @@ export function useQueueAfter({ tasks, groups, projectId, notify, onFollowGroup 
     if (target) onFollowGroup(target.groupId ?? "");
   };
 
-  /** 手动改分组后调用:与目标不一致就清掉目标(跨组不能同队)。 */
-  const onGroupChanged = (groupId: string) => {
-    if (!afterTarget) return;
-    if ((afterTarget.groupId ?? "") !== groupId) {
-      setAfterTaskId(null);
-      notify("改了分组，已清除排队目标（跨组不能同队）");
-    }
+  /** 手动改分组后调用:与目标不一致就清掉目标(跨组不能同队),返回是否清了。
+   * silent 给「新建分组」这类自己要发合并提示的调用方,免得连发两条 toast。 */
+  const onGroupChanged = (groupId: string, opts?: { silent?: boolean }): boolean => {
+    if (!afterTarget) return false;
+    if ((afterTarget.groupId ?? "") === groupId) return false;
+    setAfterTaskId(null);
+    if (!opts?.silent) notify("改了分组，已清除排队目标（跨组不能同队）");
+    return true;
   };
 
   /** 把刚创建的任务排到所选目标之后。创建成功后排队失败不回滚任务:两段结果分开说。

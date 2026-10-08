@@ -411,9 +411,9 @@ export function TaskComposerPanel({
   useEffect(() => {
     if (queueUnavailable && launchMode === "queue") changeLaunchMode("run");
   }, [queueUnavailable, launchMode]);
-  const changeGroup = (value: string) => {
+  const changeGroup = (value: string, opts?: { silent?: boolean }) => {
     setGroupId(value);
-    queueAfter.onGroupChanged(value);
+    return queueAfter.onGroupChanged(value, opts);
   };
   const submit = async () => {
     if (!canSubmit) return;
@@ -670,11 +670,11 @@ export function TaskComposerPanel({
           try {
             const created = await onCreateGroup(name, groupMode);
             // 走统一改组入口:新建分组也是一次手动改组,必须触发「清掉不兼容的
-            // 排队目标并提示」的联动(第 2 轮审查:直接 setGroupId 绕过了它,
-            // 带着旧目标提交会在服务端撞「跨 group 不允许」)。
-            changeGroup(created.id);
+            // 排队目标」的联动(第 2 轮审查:直接 setGroupId 绕过了它)。两件事
+            // 合成一条提示,免得后一条 toast 把「已清除排队目标」顶掉(第 3 轮)。
+            const cleared = changeGroup(created.id, { silent: true });
             setGroupDialogOpen(false);
-            notify("分组已创建并选中");
+            notify(cleared ? "分组已创建并选中，已清除排队目标（跨组不能同队）" : "分组已创建并选中");
           } catch (error) {
             notify(error instanceof Error ? error.message : "分组创建失败");
           }

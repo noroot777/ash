@@ -36,7 +36,13 @@ export async function repackQueue(queueId: string, orderedTaskIds: string[]): Pr
 // 队列变更后给受影响的任务补发 task.updated:Task 的 queueId/queuePosition 是从
 // queue_items 派生的,只动 queue_items 不动 tasks 表,不发事件的话所有已打开的
 // 页面(行徽标、详情队列区块)都会停在变更前的快照上。
+// 补发前先 bump 这些任务的 updatedAt:队列归属是任务快照的一部分,变更必须留下
+// 可比较的先后依据——前端创建完成回写(createdTaskMerge)靠它分辨「本地行只收到
+// 过早期创建事件」和「本地行已有更晚的队列更新」,否则两者在字段上无法区分
+// (第 3 轮审查:入队事件断流时,成功重取的新快照被创建事件的旧行挡掉)。
 async function publishQueueMembers(taskIds: string[]): Promise<void> {
+  if (taskIds.length === 0) return;
+  await db.update(tasks).set({ updatedAt: now() }).where(inArray(tasks.id, taskIds));
   await Promise.all(taskIds.map((taskId) => publishTaskUpdated(taskId)));
 }
 
