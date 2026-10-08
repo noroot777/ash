@@ -9,6 +9,9 @@
 //   6. 别的任务钉着这个分支（worktreeBase）→ 分支不删，照实说原因
 //   7. 团队：执行者的工作区跟着 lead 一起收
 //   8. 取回时如实交代工作区实情（目录已不在、分支还在 → 下次运行会重建）
+//   9. 清理排队期间被取回 → 这次清理作废，正在用的目录不许删（第 1 轮审查）
+//  10. 删掉已合并的分支要留下恢复起点，取回重建回到任务完成时而不是开工点（同上）
+//  11. 预览实例一律不清理：它的任务行指向真仓库（同上）
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -198,6 +201,79 @@ try {
     assert.deepEqual(body.cleanup.items.map((i) => i.taskId).sort(), [worker, lead].sort());
     const workerRow = (await db.select().from(tasks).where(eq(tasks.id, worker))).at(0)!;
     assert.equal(workerRow.archived, true, "执行者跟着归档（既有行为，别回退）");
+  }
+
+  // ── 9. 清理还在排队,用户先一步取回:这次清理必须作废 ────────────────────
+  // 复现第 1 轮审查那条:归档先写 archived、再等仓库锁,等锁那段时间里用户在另一个页面
+  // 点了取回并重新跑起来 —— 旧实现等到锁之后照删不误,正在跑的 agent 当场失去工作目录。
+  {
+    const id = "arcIrace001";
+    await seed({ id });
+    const ws = await prepareWorktree(repo, id, "main");
+    commitIn(ws.path, "race.txt");
+
+    const { withRepoLock } = await import("../src/repo-lock.js");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    // 占住仓库锁,模拟「别人的验收还没做完」——归档会卡在清理前那一步。
+    const blocking = withRepoLock(repo, () => held);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const archiving = archive(id);
+    // 等任务行真的落成 archived(说明归档已经越过 db 那一步、正卡在仓库锁上)
+    for (let i = 0; i < 200; i++) {
+      if ((await db.select().from(tasks).where(eq(tasks.id, id))).at(0)?.archived) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal((await db.select().from(tasks).where(eq(tasks.id, id))).at(0)?.archived, true, "归档应已写库并卡在清理前");
+
+    const restored = await unarchive(id);
+    assert.equal(restored.status, 200, "取回不该被清理挡住");
+    const { claimTurn, releaseTurn } = await import("../src/runs.js");
+    const started = claimTurn(id, "single");
+    assert.equal(started, true, "取回之后必须能重新起跑（清理此刻还没占住锁）");
+
+    release();
+    await blocking;
+    const body = await (await archiving).json() as { cleanup: { items: unknown[]; skipped: string | null } };
+    releaseTurn(id);
+
+    assert.equal(existsSync(ws.path), true, "已被取回并重新跑起来的任务,目录绝不能删");
+    assert.deepEqual(body.cleanup.items, [], "作废的清理不该报成「删过了」");
+    assert.match(body.cleanup.skipped ?? "", /在跑或已被取回/, "要说清这次为什么没清理");
+  }
+
+  // ── 10. 手动合入后归档:删分支要留下恢复起点,取回重建回到完成时 ──────────
+  {
+    const { initializeBranchPlan, acceptedHeadRef, commitAt } = await import("../src/task-branch-plan.js");
+    const { taskWorkspace } = await import("../src/task-workspace.js");
+    const id = "arcJpinned1";
+    const row = { id, projectId: "project", title: `任务 ${id}`, body: "", mode: "single", status: "done",
+      useWorktree: true, createdAt: ts, updatedAt: ts };
+    await db.insert(tasks).values(row);
+    // 经真实初始化冻结开工点 —— 直接 prepareWorktree 的种子覆盖不到这条路。
+    await initializeBranchPlan(row as never, repo);
+    const seeded = (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+    const ws = await taskWorkspace(seeded as never, repo);
+    const startCommit = git(ws.path, "rev-parse", "HEAD");
+    commitIn(ws.path, "feature.txt");
+    const finishedCommit = git(ws.path, "rev-parse", "HEAD");
+    const branch = worktreeBranchName(id);
+    git(repo, "merge", "--ff-only", branch); // 手动合入,不走验收端点
+
+    const body = await (await archive(id)).json() as { cleanup: { items: { branchDeleted: boolean }[] } };
+    assert.equal(body.cleanup.items[0].branchDeleted, true, "已合并的分支该收掉");
+    assert.equal(await commitAt(repo, acceptedHeadRef(id)), finishedCommit, "删分支前必须把末端记成恢复起点");
+
+    const restored = await unarchive(id);
+    const back = await restored.json() as { restoreNote: string | null };
+    assert.match(back.restoreNote ?? "", /任务完成时的提交/, "取回提示要说清会从哪儿重建");
+
+    const fresh = (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+    const rebuilt = await taskWorkspace(fresh as never, repo);
+    assert.equal(git(rebuilt.path, "rev-parse", "HEAD"), finishedCommit,
+      `重建应回到任务完成时的提交,而不是开工点 ${startCommit.slice(0, 8)}`);
+    assert.equal(existsSync(join(rebuilt.path, "feature.txt")), true, "任务自己做完的东西必须在工作区里");
   }
 
   console.log("[archive-cleanup] 全部断言通过");

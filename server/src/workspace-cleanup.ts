@@ -4,6 +4,7 @@ import { dirtyFilesAt, expandHome, gitError, listFiles, localBranchExists, remov
 import { withRepoLock } from "./repo-lock.js";
 import { execFileText as exec } from "./exec.js";
 import { assertReadableWorktree, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
+import { assertNotPreviewInstance } from "./preview-instance.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -86,6 +87,10 @@ export async function discardTaskWorkspace(
     if (opts.branch && (await localBranchExists(repo, branch))) {
       out.branch = branch;
       try {
+        // 预览实例的任务行指向**真仓库**,删分支跟删 worktree 一样是不可逆的真实破坏。
+        // `removeWorktree` 自带这道闸,这里原来没有 —— 于是「目录已不在、只剩分支」的
+        // 任务能从预览实例里把真分支删掉(审查确定性复现)。两样东西同一道闸。
+        assertNotPreviewInstance("删任务分支");
         await exec("git", ["-C", repo, "branch", opts.force ? "-D" : "-d", branch]);
         out.branchDeleted = true;
       } catch (error) {

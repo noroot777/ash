@@ -13,6 +13,7 @@ import { isAcceptingTask } from "./acceptance-lock.js";
 import { isRunning, isTurnClaimed } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { cleanupArchivedWorkspaces } from "./task-archive-cleanup.js";
+import { acceptedHeadRef, commitAt } from "./task-branch-plan.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { enrichTasks } from "./task-store.js";
 import { detectTaskWorkspace } from "./workspace-cleanup.js";
@@ -113,8 +114,13 @@ export function mountTaskArchiveRoutes(api: Hono): void {
 
 /**
  * 取回归档时的工作区实情。归档清理过之后目录多半已经没了,而「还能不能接着跑」全看
- * 分支在不在:在 → 下次运行由 prepareWorktree 按分支重建;不在 → 那份改动只剩已合并
- * 进目标分支的部分,重跑等于从当前基线新开一支。
+ * 下次重建从哪个提交起:
+ *  · 分支还在 → `prepareWorktree` 照分支重建,原样接着干;
+ *  · 分支没了但 `acceptedHeadRef` 还在 → `restoreAcceptedStart` 把起点抬到任务完成时
+ *    那个提交(验收写的是合并提交,归档清理写的是被删分支的末端);
+ *  · 两样都没有 → 只剩 `worktreeStartCommit` 这个**开工点**,重跑等于从那儿重新做。
+ * 第三档必须说清楚是「退回开工点」而不是含糊的「新开一份」—— 用户据此决定要不要先去
+ * 主分支把自己的成果捡回来(第 1 轮审查:原文案与实际重建结果不符)。
  */
 async function restoreNoteFor(projectId: string, taskId: string): Promise<string | null> {
   const repo = await repoPathOf(projectId);
@@ -122,7 +128,10 @@ async function restoreNoteFor(projectId: string, taskId: string): Promise<string
   const { path, branch } = await detectTaskWorkspace(repo, taskId);
   if (path) return null; // 工作区还在原地,没什么要交代的
   if (branch) return `工作区已在归档时清理，下次运行会按分支 ${branch} 重建。`;
-  return "工作区和任务分支都已不在（归档清理或验收时收掉了），重新运行会从当前基线新开一份。";
+  const head = await commitAt(repo, acceptedHeadRef(taskId));
+  if (head) return `工作区和任务分支都已清理，下次运行会从任务完成时的提交 ${head.slice(0, 8)} 重建。`;
+  return "工作区和任务分支都已不在（归档清理或验收时收掉了），下次运行会退回这个任务的开工提交；"
+    + "它做完的改动如果已经合进目标分支，需要你自己决定要不要带回来。";
 }
 
 const repoPathOf = async (projectId: string): Promise<string | null> =>
