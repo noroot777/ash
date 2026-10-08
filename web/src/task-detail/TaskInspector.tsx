@@ -261,9 +261,11 @@ export function TaskInspector({
   };
 
   // 「排在某任务之后」:目标在队列就紧随其后插入,不在就建一条 [目标, 本任务]。
-  // 响应里的成员快照(含前驱)整批上交合并,本任务自己走 onQueueChanged 带参分支;
-  // 不再「成功后 GET」——那条路没有错误处理,断流+GET 失败时入队成功却显示成
-  // 独立任务(第 5 轮审查)。
+  // 响应里的成员快照(含前驱和本任务)**只走 onTasksSynced 一条按版本合并的路**;
+  // 不再对本任务另调 onQueueChanged(placed.task)——那条带参分支最终是无条件覆盖,
+  // 迟到的旧入队响应会反转 SSE 已送达的移出(第 6 轮审查双页面真实复现)。也不再
+  // 「成功后 GET」:那条路没有错误处理,断流+GET 失败时入队成功却显示成独立任务
+  // (第 5 轮审查);只有响应没带快照(老服务端)才退回无参 onQueueChanged 兜底刷新。
   const joinQueueAfter = async (targetId: string) => {
     const target = allTasks.find((item) => item.id === targetId);
     if (!target) return;
@@ -271,7 +273,7 @@ export function TaskInspector({
       const placed = await placeTaskAfter(task.id, target);
       notify(`已排在「${target.title || "未命名任务"}」之后，轮到它时自动开始`);
       if (placed.tasks.length) onTasksSynced(placed.tasks);
-      onQueueChanged(placed.task ?? undefined);
+      else onQueueChanged();
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     }

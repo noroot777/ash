@@ -10,7 +10,7 @@ import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
 import { StatusBar } from "./StatusBar.tsx";
-import { mergeCreatedTask } from "./createdTaskMerge.ts";
+import { mergeCreatedTask, mergeTaskSnapshot } from "./createdTaskMerge.ts";
 import { useTerminalDock } from "./useTerminalDock.ts";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { useTaskBody } from "../lib/useTaskBody.ts";
@@ -452,11 +452,12 @@ export function WorkspaceShell() {
       setComposer((current) => current ?? assistantOrigin.composer);
     }
   };
-  // 入队响应带回的全体成员快照走同一条合并路径:每份都按 updatedAt 与本地行裁决
-  // (createdTaskMerge),在途的更晚 SSE 更新不会被旧响应盖掉。两个排队入口(新建
-  // 面板、任务详情检查器)共用,不依赖「成功后再 GET」确认入队。
+  // 入队响应带回的全体成员快照走同一条合并路径:每份都按 updatedAt 与本地行裁决,
+  // 在途的更晚 SSE 更新不会被旧响应盖掉;**缺行不插入**(本页已删除的成员不被旧快照
+  // 复活,见 createdTaskMerge.ts;新任务的首次插入由 createTask 负责)。两个排队入口
+  // (新建面板、任务详情检查器)共用,不依赖「成功后再 GET」确认入队。
   const applyTaskSnapshots = useCallback((snapshots: Task[]) => {
-    setTasks((current) => snapshots.reduce(mergeCreatedTask, current));
+    setTasks((current) => snapshots.reduce(mergeTaskSnapshot, current));
   }, [setTasks]);
   const createTask = (task: Task, noteIds: string[] = []) => {
     // 合并策略(为什么已存在就不覆盖)见 createdTaskMerge.ts 顶部注释。

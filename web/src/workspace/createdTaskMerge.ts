@@ -15,3 +15,17 @@ export function mergeCreatedTask<T extends { id: string; updatedAt: string }>(
   if (existing.updatedAt >= created.updatedAt) return current;
   return current.map((row) => (row.id === created.id ? created : row));
 }
+
+// 入队响应波及成员(前驱等)的合并策略:同样按 updatedAt 裁决,但**缺行不插入**。
+// 与 mergeCreatedTask 的差别只在缺行语义:创建路径的缺行 = 「task.created 事件还没
+// 送到」,占位插入是对的;成员同步的缺行 = 本页已经删除它(或它本就不可见),被删的
+// 行没有 updatedAt 可比较,插入等于让在途旧快照复活已删任务(第 6 轮审查真实复现)。
+// 新任务的首次插入由创建路径(onCreated → mergeCreatedTask)负责,这里只更新存量行。
+export function mergeTaskSnapshot<T extends { id: string; updatedAt: string }>(
+  current: T[],
+  snapshot: T,
+): T[] {
+  const existing = current.find((row) => row.id === snapshot.id);
+  if (!existing || existing.updatedAt >= snapshot.updatedAt) return current;
+  return current.map((row) => (row.id === snapshot.id ? snapshot : row));
+}
