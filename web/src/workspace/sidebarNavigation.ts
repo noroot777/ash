@@ -1,5 +1,6 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { TaskListItem } from "@ash/shared";
+import { inputCount } from "../lib/latestInteraction.ts";
 
 // J/K（以及 ↑/↓）遍历的那份顺序**只认屏幕**：侧栏任务列表的 DOM 文档顺序。
 //
@@ -93,13 +94,30 @@ export function useSidebarTaskNavigation({
   onTask,
 }: SidebarNavigationOptions): (step: 1 | -1) => void {
   const currentId = selectedTaskId ?? selectedRemoteTaskId;
+  // 连着按 J/K 时「我按到哪儿了」。
+  //
+  // **导航的位置和详情的打开是两件事**：别的机器上那种行要先问一次持有机才打得开（异步），
+  // 这段时间里选中还停在原处 —— 只认选中的话，第二下 J/K 会从同一个起点再算一遍，于是
+  // 连按两下只挪一行（审查第 2 轮抓到：两下 K 只到紧挨着的那条，到不了再上面那条）。
+  // 所以位置当场就挪，打开照旧异步，迟到应答那道闸仍在 openOutboundTask 那边。
+  //
+  // 光标只在**连着按**时算数：上一次导航之后用户的下一次输入就是这一下，它才续得上。
+  // 中间点了一下别的、按了别的键，它就作废、退回选中那一行 —— 那时他已经不是在接着
+  // 刚才那串 J/K 往下走了。（判据见 lib/latestInteraction：数的是用户的输入。）
+  const cursor = useRef<{ id: string; input: number } | null>(null);
   const navigate = useCallback((step: 1 | -1) => {
+    const input = inputCount();
     const order = sidebarRowOrder();
     // 侧栏在屏幕上时**只认它**，哪怕它此刻一行都没有 —— 那时 stepTaskId 返回 null，
     // 选中原样不动（全部折叠起来却打开一个找不到的任务，就是审查第 1 轮那条）。
     const ids = order.kind === "screen" ? order.ids : fallbackOrder.map((task) => task.id);
-    const nextId = stepTaskId(ids, currentId, step);
-    const next = nextId ? tasks.find((task) => task.id === nextId) : undefined;
+    const chained = cursor.current?.input === input - 1 ? cursor.current.id : null;
+    // 光标指的那一行要是已经不在屏幕上了（列表刷新、它所在的组被折叠），就退回选中那行重算。
+    const from = chained && ids.includes(chained) ? chained : currentId;
+    const nextId = stepTaskId(ids, from, step);
+    if (!nextId) { cursor.current = null; return; }
+    cursor.current = { id: nextId, input };
+    const next = tasks.find((task) => task.id === nextId);
     if (next) onTask(next);
   }, [currentId, fallbackOrder, onTask, tasks]);
 

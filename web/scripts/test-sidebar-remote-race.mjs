@@ -140,6 +140,55 @@ try {
     "先发起的那条远端打开后回来也不得翻盘",
   );
 
+  // —— 四、**连着按**:远端那种行还没打开,第二下 J/K 也得照样往前挪一行。
+  // 导航的位置和详情的打开是两件事（审查第 2 轮抓到的是把两件事绑在一起:第二下从同一个
+  // 旧选中身份再算一遍,于是连按两下只挪一行）。两次按键之间**不放行**那份查询。
+  await page.keyboard.press("g");
+  await page.keyboard.press("t");
+  await page.waitForFunction(() => document.querySelectorAll(".workspace-handoff-task").length > 0);
+  await localRow.click();
+  await waitSelected("local");
+
+  // 向上两下 K：local → far-2 → far-1。两下都在同一个在途窗口里按完。
+  await page.evaluate(() => window.__holdTargets());
+  await localRow.focus();
+  await page.keyboard.press("k");
+  await waitPending(1);
+  await page.keyboard.press("k");
+  await waitPending(2);
+  await waitSelected("local");
+  await page.evaluate(() => window.__releaseTargets());
+  await page.waitForFunction(() => window.__pendingTargets() === 0);
+  await waitSelected("far-1");
+  await page.waitForTimeout(400);
+  assert.equal(await selected(), "far-1", "连按两下 K 要走到第二行远端任务上，不能只挪一行");
+
+  // 向下两下 J：从「一行都没选」开始，far-1 → far-2。
+  await page.reload();
+  await localRow.waitFor();
+  await farRow("far-1").waitFor();
+  await page.evaluate(() => window.__holdTargets());
+  await page.keyboard.press("j");
+  await waitPending(1);
+  await page.keyboard.press("j");
+  await waitPending(2);
+  await page.evaluate(() => window.__releaseTargets());
+  await page.waitForFunction(() => window.__pendingTargets() === 0);
+  await waitSelected("far-2");
+  await page.waitForTimeout(400);
+  assert.equal(await selected(), "far-2", "连按两下 J 要走到第二行，不能停在第一行");
+
+  // 中间插一下别的动作，光标就该作废：点回本机那条之后按 K，要重新从它上面那行算起。
+  await page.evaluate(() => window.__holdTargets());
+  await localRow.click();
+  await waitSelected("local");
+  await page.keyboard.press("k");
+  await waitPending(1);
+  await page.evaluate(() => window.__releaseTargets());
+  await page.waitForFunction(() => window.__pendingTargets() === 0);
+  await waitSelected("far-2");
+  assert.equal(await selected(), "far-2", "点过别的之后按 K 要从选中那行重新算，不接着上一串");
+
   console.log("outbound open race tests passed");
 } finally {
   await browser?.close();

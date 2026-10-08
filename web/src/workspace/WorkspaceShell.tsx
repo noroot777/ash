@@ -3,7 +3,7 @@ import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
 import { outboundHolder } from "@ash/shared/handoff";
 import { api } from "../lib/api.ts";
-import { useLatestInteraction } from "../lib/latestInteraction.ts";
+import { claimAction, isActionFresh } from "../lib/latestInteraction.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useTasks } from "../lib/useTasks.ts";
 import { handedOut, useOutboundState } from "./useOutboundState.ts";
@@ -128,8 +128,6 @@ export function WorkspaceShell() {
     tasks, targets: handoffTargets, refreshTargets,
     refreshRemote, refreshing: outboundRefreshing, asked: outboundAsked, offline: offlinePeers,
   } = useOutboundState(localTasks);
-  // 远端打开那一问的「有没有被后来的动作取代」判据（见 openOutboundTask）。
-  const interaction = useLatestInteraction();
   const outboundBar = useMemo(() => ({
     outboundCount: tasks.filter(handedOut).length,
     offlinePeers,
@@ -335,11 +333,11 @@ export function WorkspaceShell() {
   // 按 K 去看另一台机器上那条，还没打开就点回本机任务，主区过一会儿自己又跳成远端那条）。
   // 判据见 useLatestInteraction —— 这期间用户再动一下手（哪怕点的是同一条任务），这次
   // 打开就不许再写任何东西：连那句「请在持有它的机器上继续」也不提，他早就看着别的了。
-  // 它顺带也把「两条在途的远端打开」收了口：next() 推一格 = 先发起的那条当场作废。
+  // 它顺带也把「两条在途的远端打开」收了口：后领的号作废先领的，只有最后发起的那条落地。
   const openOutboundTask = async (task: TaskListItem, options?: { keepSpread?: boolean }) => {
-    const token = interaction.next();
+    const token = claimAction();
     const latest = await refreshTargets().catch(() => handoffTargets);
-    if (token !== interaction.current()) return;
+    if (!isActionFresh(token)) return;
     const holder = outboundHolder(task.handoff, latest);
     if (holder) { selectRemoteTask(task, holder, options); return; }
     notify("任务已接力到另一台机器，请在当前持有它的机器上继续");
