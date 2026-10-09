@@ -62,15 +62,6 @@ async function writeTaskStatus(
     }
   } else if (TERMINAL.includes(status)) {
     patch.endedAt = endedAt = updatedAt;
-    // 任务自己结束了,它名下的哨兵一并停掉。哨兵唯一的出口就是「唤醒这个任务」,任务都
-    // 结束了还留着它,只会在某个深夜把一个已经 done 的任务重新叫起来跑一轮。要让哨兵
-    // 继续盯,这一轮该用 pause_task 收尾而不是 complete_task —— 这句判据同时写在 MCP
-    // 工具说明里,那是 agent 做这个选择时唯一看得到的地方。
-    // 必须 await：下面那句 flushPendingForTask 会把排着队的消息立刻送进会话,清理要是还在
-    // 路上,刚攒下的哨兵事件就会抢在它前面把这个已经 done 的任务重新拉起来跑一轮。
-    await import("./monitors.js")
-      .then(({ stopMonitorsForTask }) => stopMonitorsForTask(taskId, `任务已${status}，哨兵一并收回`))
-      .catch((err) => console.error(`[ash] stopMonitorsForTask(${taskId}) failed:`, err));
   }
   if (status !== "running") {
     patch.activeTurnToken = null;
@@ -79,6 +70,23 @@ async function writeTaskStatus(
   }
 
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
+  if (TERMINAL.includes(status)) {
+    // 任务自己结束了,它名下的哨兵一并停掉。哨兵唯一的出口就是「唤醒这个任务」,任务都
+    // 结束了还留着它,只会在某个深夜把一个已经 done 的任务重新叫起来跑一轮。要让哨兵
+    // 继续盯,这一轮该用 pause_task 收尾而不是 complete_task —— 这句判据同时写在 MCP
+    // 工具说明里,那是 agent 做这个选择时唯一看得到的地方。
+    //
+    // **必须排在终态落库之后**:清理那一侧要判「这个任务还能不能被哨兵叫醒」,而它读的
+    // 就是这一行。写在前面的话,清理和紧跟其后排队的创建请求读到的都还是 running —— 于是
+    // 任务都 done 了还能起得来一个新哨兵,它一直盯到超时,推的每一条又都被终态挡回
+    // (第 3 轮审查实测:natural-terminal-start-queue 里第二次创建 ok:true、任务 done)。
+    //
+    // **必须 await**:下面那句 flushPendingForTask 会把排着队的消息立刻送进会话,清理要是
+    // 还在路上,刚攒下的哨兵事件就会抢在它前面把这个已经 done 的任务重新拉起来跑一轮。
+    await import("./monitors.js")
+      .then(({ stopMonitorsForTask }) => stopMonitorsForTask(taskId, `任务已${status}，哨兵一并收回`))
+      .catch((err) => console.error(`[ash] stopMonitorsForTask(${taskId}) failed:`, err));
+  }
   // Carry execution-time fields so every surface updates live with the status —
   // notably the terminal transition, where every turn now has ended_at so
   // activeMs is final and liveSince clears. When no session rows exist yet (status

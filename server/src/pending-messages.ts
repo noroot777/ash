@@ -27,6 +27,7 @@
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@ash/shared";
+import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
@@ -98,7 +99,7 @@ export async function enqueueMessage(input: Parameters<typeof pendingMessageRow>
 
 // 判定所需的最小任务形状,写成结构类型,单测就能直接喂字面量。
 export type DeliveryTaskView = { mode: string | null; status: string; archived: boolean };
-export type DeliveryMessageView = { mode: string; sendAt: string };
+export type DeliveryMessageView = { mode: string; sendAt: string; origin?: string | null };
 export type DeliveryVerdict =
   | { action: "deliver" }
   | { action: "wait" }
@@ -123,6 +124,15 @@ export function deliveryVerdict(
   if (task.archived) return { action: "cancel", reason: "任务已归档" };
   if (task.mode !== "single" && task.mode !== "team")
     return { action: "cancel", reason: `任务类型 ${task.mode} 不支持回复` };
+  // 哨兵事件只有一个出口——「唤醒这个任务」。任务都结束了它再醒来也只是花钱，所以这一条
+  // 必须在**消费端**也拦一道：生产端那个闸永远留着一个窗口（读到任务还在跑之后、消息写
+  // 进库之前，任务刚好收尾），而这里是所有生产路径的共同出口（第 3 轮审查实测：总线真的
+  // 走了 done → running → done，正文就是那条迟到的进展）。
+  //
+  // 真人排的队列消息恰恰相反：终态正是它该发的时候（「下次醒来处理」就是他排它的意思）。
+  // 所以只认 `origin` 是哨兵的那些，判据与创建入口同一份（`monitorBlockedReason`）。
+  if (monitorIdFromOrigin(message.origin) !== null && monitorBlockedReason(task) !== null)
+    return { action: "cancel", reason: "任务已经结束，这条哨兵事件不再唤醒它" };
   if (!isDueForDelivery(message, at)) return { action: "wait" };
   // 常驻调度台(team)正在说话时也接得住,所以只有单任务需要等它闲下来。
   if (task.mode === "single" && (task.status === "running" || task.status === "queued"))

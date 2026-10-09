@@ -28,7 +28,6 @@ function state(monitors: TaskMonitor[]): TaskMonitorsState {
   return {
     monitors,
     stoppingIds: new Set(),
-    starting: false,
     error: null,
     start: async () => true,
     stop: async () => undefined,
@@ -185,7 +184,8 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   const start = hook.slice(hook.indexOf("const start = useCallback"), hook.indexOf("return { monitors,"));
   assert.doesNotMatch(start, /^\s*return true;$/m, "跨任务的创建不许回 true：它唯一的用处是收走当前那张表单");
   assert.match(start, /return mine\(\);/, "起成功了也要先问一句「现在还是这个任务吗」");
-  assert.match(start, /if \(mine\(\)\) setStarting\(false\);/, "忙碌标记同样按归属清——它锁的是这张表单的提交按钮");
+  // 忙碌状态归表单实例，不归任务：同一个任务上可以有一张在途的、一张刚重开的。
+  assert.doesNotMatch(hook, /setStarting|starting,/, "「正在创建中」不该按任务存——那样取消重开后新表单会被旧请求按住");
 }
 
 console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、该冒头时冒头，创建结果有归属，手机端同样给得出叫停");

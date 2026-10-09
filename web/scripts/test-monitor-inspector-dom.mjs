@@ -293,8 +293,55 @@ try {
     await page.close();
   }
 
+  // ── 同一个任务上取消重开：旧请求的回执不许动新那张表单 ─────────────────────
+  // 在途期间点取消、重新打开填另一条命令，是同一个任务上的**两张**表单。只按任务判
+  // （代号只在切任务时变）的话，旧请求回来会关掉用户刚填的那一张，忙碌标记还一直按着
+  // 它的提交按钮。
+  {
+    let releaseStart;
+    const held = new Promise((resolve) => { releaseStart = resolve; });
+    pending.push(() => releaseStart());
+    let startCalls = 0;
+    const page = await open(async (route, path) => {
+      if (route.request().method() !== "POST" || path !== "/api/tasks/task-a/monitors") return false;
+      startCalls += 1;
+      await held;
+      await route.fulfill({ json: { monitor: monitor("m-task-a-2", "task-a") } }).catch(() => undefined);
+      return true;
+    });
+    await waitIds(page, "m-task-a");
+
+    // 第一张表单：提交后卡住。
+    await page.getByRole("button", { name: "手动起一个哨兵" }).click();
+    await page.locator(".monitor-composer textarea").fill("sleep 300");
+    await page.getByRole("button", { name: "起一个哨兵", exact: true }).click();
+    const armed = Date.now() + 5000;
+    while (startCalls < 1 && Date.now() < armed) await page.waitForTimeout(20);
+    assert.equal(startCalls, 1, "第一张表单的创建已经出门并卡住");
+
+    // 点取消、重新打开，填一份新草稿——同一个任务，但是另一张表单。
+    await page.getByRole("button", { name: "取消" }).click();
+    await page.locator(".monitor-composer").waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "手动起一个哨兵" }).click();
+    const draft = page.locator(".monitor-composer textarea");
+    assert.equal(await draft.inputValue(), "", "重开就是一张新表单，不该继承上一张的内容");
+    const text = String.raw`echo REOPENED_DRAFT; sleep 300`;
+    await draft.fill(text);
+    assert.equal(
+      await page.getByRole("button", { name: "起一个哨兵", exact: true }).isDisabled(),
+      false,
+      "重开的这张表单不该被上一张在途的请求按住",
+    );
+
+    releaseStart();
+    await page.waitForTimeout(400);
+    assert.equal(await page.locator(".monitor-composer").count(), 1, "旧请求的成功回执不该关掉新这张表单");
+    assert.equal(await draft.inputValue(), text, "没提交过的草稿一个字都不该丢");
+    await page.close();
+  }
+
   assert.deepEqual(failures, []);
-  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task reads/stops/creates never land");
+  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task/form results never land");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();

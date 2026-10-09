@@ -16,6 +16,8 @@
 //  ⑫ 起不来只失败这一条请求：坏 cwd 不许把 ash 自己的进程组 SIGTERM 掉
 //  ⑬⑭ 合并与投递抢同一行 pending：等回合期间追加的照样发出去，CAS 落空就另起一条
 //  ⑮ 创建入口与投递出口同一份判据：投不出去的任务上起不来，也不虚报事件数
+//  ⑯ 迟到一步的事件：清理全跑完之后才入库的那一行，出口上照样认终态
+//  ⑰ 收尾那一瞬起的哨兵：终态先落库，排在清理后面的创建读到的就是终态
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -33,12 +35,13 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitors");
 
-const [{ db, ensureSchema }, schema, monitorsModule, status, { isPidAlive }] = await Promise.all([
+const [{ db, ensureSchema }, schema, monitorsModule, status, { isPidAlive }, pending] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/monitors.js"),
   import("../src/status.js"),
   import("../src/platform.js"),
+  import("../src/pending-messages.js"),
 ]);
 const { startMonitor, stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachMonitors, detachAllMonitors } = monitorsModule;
 const { monitors, projects, scheduledMessages, tasks } = schema;
@@ -560,7 +563,103 @@ const t = setInterval(() => { i++; console.log("tick " + i); if (i >= 12) { clea
   console.log("✓ 入口与出口同一份判据：终态任务上起不来，推不出去也不虚报事件数");
 }
 
+// ── ⑯ 迟到一步的事件：清理都跑完了才入库的那一行，也不许唤醒已经结束的任务 ───────
+// 生产端那个闸永远留着一条缝:投递读到「任务还在跑」之后、消息写进库之前,任务刚好收尾。
+// 这一批行手里拿着自己的 `lines`、也早就过了状态闸,缓冲被清空不影响它;`cancelPending
+// MonitorEvents` 那一刻又扫不到尚未入库的它 —— 于是它在**所有清理之后**入队,把一个已经
+// done 的任务重新叫起来(第 3 轮审查实测:总线真的走了 done → running → done,正文就是
+// 那条迟到的进展)。所以出口上也要认一次终态,判据跟创建入口同一份。
+//
+// 这里用生产的那两个函数把这个现场摆出来:先让任务真的收尾完,再调真正的入库函数
+// (`mergeOrEnqueueMonitorEvent` = 迟到那一步落地),然后问生产的投递判定和结算判据。
+{
+  const taskId = await makeTask();
+  const started = await startMonitor({
+    taskId,
+    command: `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)"`,
+    description: "在途事件不许叫醒已结束的任务",
+  });
+  assert.equal(started.ok, true);
+  const row = (await db.select().from(monitors).where(eq(monitors.id, started.ok ? started.monitor.id : ""))).at(0)!;
+
+  await status.setTaskStatus(taskId, "done");
+  assert.equal((await pendingOf(taskId)).length, 0, "收尾之后队列是干净的——下面那一行是**之后**才落的");
+
+  // 迟到的那一步:走生产的入库函数,`existing=null` 就是「没有可合并的那一行」,
+  // 跟真实在途投递走到这一句时的处境一样。
+  await monitorsModule.mergeOrEnqueueMonitorEvent(row, "OUTPUT_IN_FLIGHT_AT_DONE", null);
+  const late = (await pendingOf(taskId)).find((m) => m.origin === `monitor:${row.id}`);
+  assert.ok(late, "这一行确实落进了队列——清理已经管不到它了");
+
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+  const verdict = pending.deliveryVerdict(late, { mode: task.mode, status: task.status, archived: !!task.archived }, new Date());
+  assert.equal(verdict.action, "cancel", "任务已经结束,这条迟到的哨兵事件只能作废,不能送进会话");
+  assert.equal(await pending.hasDeliverablePendingMessages(taskId), false, "结算那一侧也不该因为它把任务判成「还有话要说」");
+
+  // 真人排的那条在同一个终态上走的是相反的语义:「下次醒来处理」正是他排它的意思。
+  await db.insert(scheduledMessages).values({
+    id: `human-late-${seq}`, taskId, text: "这条是真人排的", attachments: "[]",
+    mode: "queued", sendAt: now(), status: "pending", createdAt: now(),
+  });
+  const human = (await pendingOf(taskId)).find((m) => !m.origin)!;
+  assert.equal(
+    pending.deliveryVerdict(human, { mode: task.mode, status: task.status, archived: !!task.archived }, new Date()).action,
+    "deliver",
+    "这道闸只能拦哨兵自己推的,拦到真人头上就是把他的话吞了",
+  );
+
+  // 收尾那一侧的边界也钉一下:只清缓冲不等在途,那条缝就一直在。
+  const monitorsSrc = readSource(join(HERE, "../src/monitors.ts"));
+  assert.match(
+    monitorsSrc,
+    /for \(const m of all\) await serialize\(m\.id/,
+    "连坐停止必须把每条哨兵自己的队列排空——轮到那个空活,才说明在途那一批已经写完",
+  );
+  console.log("✓ 迟到一步的事件:落库在清理之后,出口上照样认终态,只拦哨兵不拦真人");
+}
+
+// ── ⑰ 收尾那一瞬起的哨兵:创建权限不许早于终态落库放开 ─────────────────────────
+// 任务级队列保护了「先开始创建、后扫到这条命令」那一头,却盖不住尾段:终态是 `status.ts`
+// 在队列**外面、之后**才写的,于是排在清理后面的创建读到的还是 running —— 任务 done 了
+// 还真起得来一个新哨兵,它一直盯到超时,而它推的每一条又都被终态挡回,再也没人会被通知
+// (第 3 轮审查实测:natural-terminal-start-queue 里第二次创建 ok:true、任务 done、
+// 新命令 running)。顺序必须是「先落终态、再清理」。
+//
+// 用生产的总线把创建塞进那个窗口:旧哨兵被连坐停掉时会发一条 `task.monitors`,那一刻
+// 清理正握着 `task:<id>` 这条队列,于是这一发创建必然排在它后面。
+{
+  const taskId = await makeTask();
+  const idle = `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)"`;
+  assert.equal((await startMonitor({ taskId, command: idle, description: "收尾前就在盯的" })).ok, true);
+
+  const { bus } = await import("../src/bus.js");
+  let second: Promise<Awaited<ReturnType<typeof startMonitor>>> | null = null;
+  const off = bus.subscribe((e) => {
+    if (e.type === "task.monitors" && e.taskId === taskId && !second)
+      second = startMonitor({ taskId, command: idle, description: "收尾那一瞬插进来的" });
+  });
+  try {
+    await status.setTaskStatus(taskId, "done");
+  } finally {
+    off();
+  }
+  assert.ok(second, "没等到连坐停止发出的那一条变化信号,这一段就没验到东西");
+  const created = await second;
+
+  // 先收场再断言:没修的那一版这里真会留下一个长跑进程,断言先抛就带着它一起走了。
+  for (const m of await listMonitors(taskId)) if (m.status === "running") await stopMonitor(m.id, "测试收尾");
+
+  assert.equal(created.ok, false, "清理已经在跑了,这一发创建必须读到终态、直接拒");
+  assert.equal(created.ok === false ? created.status : 0, 409);
+  assert.equal(
+    (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)?.status,
+    "done",
+    "任务确实已经落了终态——拒的理由不是「任务不存在」之类的别的东西",
+  );
+  console.log("✓ 收尾那一瞬:终态先落库,排在清理后面的创建读到的就是终态");
+}
+
 detachAllMonitors();
 await releaseTmpDb();
 rmSync(root, { recursive: true, force: true });
-console.log("✓ 哨兵：推送 / 合并 / 连坐停止 / 真杀进程 / 日志回看 / 上限与坏参数 / 位置顺序 / 终态作废 / 跨重启接管与离线补读 / 失败不外溢 / 合并与投递抢同一行 / 入口出口同源 均受回归保护");
+console.log("✓ 哨兵：推送 / 合并 / 连坐停止 / 真杀进程 / 日志回看 / 上限与坏参数 / 位置顺序 / 终态作废 / 跨重启接管与离线补读 / 失败不外溢 / 合并与投递抢同一行 / 入口出口同源 / 迟到事件与收尾那一瞬的创建 均受回归保护");

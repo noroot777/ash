@@ -435,8 +435,14 @@ export async function stopMonitorsForTask(taskId: string, reason: string): Promi
 }
 
 async function stopMonitorsForTaskLocked(taskId: string, reason: string): Promise<number> {
+  const all = await db.select({ id: monitors.id }).from(monitors).where(eq(monitors.taskId, taskId));
   const live = await liveMonitorsOf(taskId);
   for (const m of live) await finish(m.id, "stopped", reason, null, { notify: false, keepBuffered: false });
+  // 收尾只清得掉**还在缓冲里**的行。已经开始推的那一批不受影响：它手里拿着自己的
+  // `lines`、也早就过了状态闸，落库会发生在清理之后——于是作废那一步扫不到它，它排进
+  // 队列、把一个已经 done 的任务重新叫起来（第 3 轮审查实测：done → running → done）。
+  // 所以先往每条哨兵自己的队列尾上排一个空活并等它轮到：轮到了就说明那一批已经写完。
+  for (const m of all) await serialize(m.id, async () => {});
   // 停掉进程还不够：这一刻**已经排在待发队列里**的哨兵事件同样会把任务重新拉起来。
   await cancelPendingMonitorEvents(taskId);
   return live.length;

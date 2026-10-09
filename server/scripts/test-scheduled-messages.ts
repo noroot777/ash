@@ -162,7 +162,25 @@ assert.equal(
   "cancel",
   "辩论任务不支持回复,等下去也没意义",
 );
-console.log("✓ 投递判定:排队不看时间但等任务空闲,定时看时间,忙=等而不是取消");
+// 哨兵事件在**消费端**也认一次终态。生产端那个闸永远留着一条缝(读到任务还在跑之后、
+// 消息写进库之前,任务刚好收尾),而这里是所有生产路径的共同出口。判据跟创建入口同一份,
+// 所以归档也一样拦得住。真人排的队列消息走的是相反的语义:终态正是它该发的时候。
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt, origin: "monitor:m1" }, single("done"), now).action,
+  "cancel",
+  "任务已经结束,哨兵事件再送进去只是花钱把它重新拉起来",
+);
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt, origin: "monitor:m1" }, single("paused"), now).action,
+  "deliver",
+  "暂停不是终态:哨兵盯的活有进展,正该把它叫醒",
+);
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt, origin: null }, single("done"), now).action,
+  "deliver",
+  "同一个终态上,真人排的那条照发——「下次醒来处理」就是他排它的意思",
+);
+console.log("✓ 投递判定:排队不看时间但等任务空闲,定时看时间,忙=等而不是取消,终态只拦哨兵不拦真人");
 
 // 保存断言错误，避免 finally 的 process.exit 覆盖真实失败。
 let failure: unknown = null;

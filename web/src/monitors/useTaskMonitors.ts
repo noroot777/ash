@@ -33,7 +33,6 @@ export type TaskMonitorsState = ReturnType<typeof useTaskMonitors>;
 export function useTaskMonitors(taskId: string) {
   const [monitors, setMonitors] = useState<TaskMonitor[]>([]);
   const [stoppingIds, setStoppingIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /**
    * 「现在是哪个任务、这是它的第几次读取」。
@@ -73,8 +72,6 @@ export function useTaskMonitors(taskId: string) {
     stamp.current = { gen: stamp.current.gen + 1, seq: 0, taskId };
     setMonitors([]);
     setError(null);
-    // 上一个任务的在途创建不再锁这张表单（它的 finally 已经按归属放弃清这个标记）。
-    setStarting(false);
     setStoppingIds(new Set());
     void reload();
   }, [reload, taskId]);
@@ -109,14 +106,17 @@ export function useTaskMonitors(taskId: string) {
    *
    * **切走之后它一律返回 false**，哪怕服务端那一边真的起成功了。调用方拿 true 去做的
    * 唯一一件事是「把表单收起来」，而此刻屏幕上那张表单已经是**另一个任务**的了，里面
-   * 往往还有没提交的草稿：A 的创建迟到成功一回来就把 B 刚填的命令连表单一起卸掉
-   * （第 2 轮审查实测：draftDisappeared=true）。它起没起成功由那个任务自己的列表去说，
-   * 不该由一句跨任务的返回值去动当前的表单。
+   * 往往还有没提交的草稿。它起没起成功由那个任务自己的列表去说，不该由一句跨任务的
+   * 返回值去动当前的表单。
+   *
+   * 「正在创建中」这件事**故意不住在这里**：同一个任务上可以有一张在途的表单和一张刚
+   * 重开的表单，而忙碌状态要回答的是「**这张**表单的提交按钮要不要锁」——按任务存就只有
+   * 一个值，取消重开之后新表单照样被旧请求按住（第 3 轮审查实测：
+   * reopenedBlockedByOldStart=true）。所以它归调用方按表单实例自己存。
    */
   const start = useCallback(async (input: StartMonitorInput): Promise<boolean> => {
     const gen = stamp.current.gen;
     const mine = () => stamp.current.gen === gen;
-    setStarting(true);
     setError(null);
     try {
       await api.startMonitor(taskId, input);
@@ -125,12 +125,8 @@ export function useTaskMonitors(taskId: string) {
     } catch (reason) {
       if (mine()) setError(reason instanceof Error ? reason.message : String(reason));
       return false;
-    } finally {
-      // 忙碌标记也按任务归属：它是「这张表单的提交按钮要不要锁」，切走之后那把锁锁的是
-      // 别人的表单（实测：B 的提交按钮被 A 的在途创建一直按住）。
-      if (mine()) setStarting(false);
     }
   }, [reload, taskId]);
 
-  return { monitors, stoppingIds, starting, error, start, stop, reload };
+  return { monitors, stoppingIds, error, start, stop, reload };
 }
