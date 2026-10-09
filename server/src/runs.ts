@@ -184,7 +184,7 @@ export function isCanceling(taskId: string): boolean {
  */
 export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"): boolean {
   const role = turns.get(taskId);
-  if (role === undefined || role === WORKSPACE_TURN_ROLE) return false;
+  if (role === undefined || role === WORKSPACE_TURN_ROLE || role === WAKE_TURN_ROLE) return false;
   startFreeze.set(taskId, settle);
   return true;
 }
@@ -339,6 +339,13 @@ const afterTurn = new Map<string, Array<() => void>>();
 const WORKSPACE_TURN_ROLE = "scm";
 
 /**
+ * 同样**不是一个回合**：常驻团队调度台收一条唤醒类通知(哨兵事件)时的短暂预占,只为了
+ * 和「手动改终态」互斥（`claimWakeTurn`）。调度台的一次运行是整段常驻,它平时不占这把
+ * 锁;这一次占也不代表有谁在起跑,所以照 SCM 预占同一口径排除在起跑冻结之外。
+ */
+const WAKE_TURN_ROLE = "lead-wake";
+
+/**
  * 抢占这个任务的回合；已经有人在跑就返回 false（调用方直接放弃这一次）。
  * role 是这一回合的身份（"single" / "reviewer"…）——它是**运行时事实**，审查结论的
  * 归属检查（report_stage）读它，而不是查 sessions 表猜（session 行的 endedAt 语义
@@ -432,6 +439,21 @@ export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
     if (claimTurn(taskId, WORKSPACE_TURN_ROLE)) claimed.push(taskId);
   }
   return releaserFor(claimed);
+}
+
+/**
+ * 团队调度台要收一条**唤醒类**通知：按同一把回合锁原子预占，占不到返回 null。
+ *
+ * 为什么也是这把锁：手动改终态的那条路（`PATCH /tasks/:id`）占的就是它。通知那一侧
+ * 「这个任务还能不能被叫醒」的判定与它必须互斥，否则两种交错里总有一种漏过去 —— 判定
+ * 读到 idle、结果还没交回去，完成操作照样写库，放开之后通知仍旧开台（第 6 轮审查实测）。
+ * 再多查几次状态是关不掉这个窗口的：查是观察式的。
+ *
+ * 和真回合的差别同 `claimWorkspaceTurn`：**不碰起跑冻结**（这不是一个回合）。
+ */
+export function claimWakeTurn(taskId: string): (() => void) | null {
+  if (!claimTurn(taskId, WAKE_TURN_ROLE)) return null;
+  return releaserFor([taskId]);
 }
 
 /** 释放函数可重复调用（写操作的 finally 与错误路径可能都走到）。 */

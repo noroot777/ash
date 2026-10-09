@@ -35,7 +35,7 @@ export const [
 export const { mountTaskRoutes } = taskRoutes;
 export const { startMonitor, stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachMonitors, detachAllMonitors } =
   monitorsModule;
-export const { monitors, projects, scheduledMessages, tasks } = schema;
+export const { monitors, projects, scheduledMessages, sessions, tasks } = schema;
 
 await ensureSchema();
 
@@ -54,15 +54,21 @@ let seq = 0;
 /** 给同一个任务里要手写 id 的那几行用（真人排的那条消息），保证不撞。 */
 export const uniq = (prefix: string) => `${prefix}-${seq}-${Date.now()}`;
 
-export async function makeTask(): Promise<string> {
+/**
+ * 一个真任务。默认是**正在跑的单飞任务**：投递链路对「单飞任务正在跑」的判定是**等**，
+ * 于是事件只排队、不会真去 spawn 一个 agent —— 这正是这两份测试要观察的那个现场
+ * （忙的时候攒事件）。
+ *
+ * 团队那条路要显式传 `{ mode: "team", status: "idle" }`：常驻调度台**正在说话时也接得住**
+ * （`deliveryVerdict` 对 team 不等空闲），所以它走的是完全另一条投递分支。
+ */
+export async function makeTask(opts: { mode?: string; status?: string } = {}): Promise<string> {
   const projectId = `proj-${++seq}`;
   const taskId = `task-${seq}`;
   await db.insert(projects).values({ id: projectId, name: "monitors", repoPath: root, createdAt: now() });
   await db.insert(tasks).values({
-    // 刻意落 running：投递链路对「单飞任务正在跑」的判定是**等**，于是事件只排队、
-    // 不会真去 spawn 一个 agent。这正是这两份测试都要观察的那个现场（忙的时候攒事件）。
-    id: taskId, projectId, title: `t${seq}`, body: "", status: "running",
-    agentType: "claude", mode: "single", createdAt: now(), updatedAt: now(),
+    id: taskId, projectId, title: `t${seq}`, body: "", status: opts.status ?? "running",
+    agentType: "claude", mode: opts.mode ?? "single", createdAt: now(), updatedAt: now(),
   });
   return taskId;
 }

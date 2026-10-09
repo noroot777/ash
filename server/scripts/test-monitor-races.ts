@@ -9,6 +9,8 @@
 //  ⑱ 抢到租约 ≠ 已送达：等回合期间任务被标完成，运行入口上再挡一道
 //  ⑲ 资格检查读失败：这一轮不起，但回合占位必须还回去（不然任务被锁死）
 //  ⑳ 完成操作与「起这一轮」争同一把回合锁：两种顺序都收口
+//  ㉑ 团队调度台那条路同样要互斥：完成之后不许再开台、不许把那条通知记成已发送
+//  ㉒ 团队资格读失败一次 ≠ 调度台不可用：消息留在托盘里重投，不许当场销毁
 //
 // 台子（临时库、真模块、makeTask/pendingOf）在 monitors-fixture.ts，与 test-monitors.ts 共用。
 import assert from "node:assert/strict";
@@ -16,11 +18,12 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { Hono } from "hono";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { monitorMessageOrigin } from "@ash/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
   HERE, root, db, schema, monitorsModule, status, pending, continueTask, runs, mountTaskRoutes,
   startMonitor, stopMonitor, listMonitors, getMonitor,
-  monitors, scheduledMessages, tasks,
+  monitors, scheduledMessages, sessions, tasks,
   sleep, until, now, uniq, makeTask, pendingOf, teardown,
 } from "./monitors-fixture.js";
 
@@ -422,5 +425,159 @@ import {
   console.log("✓ 完成操作与起这一轮争同一把锁：两种顺序都收口，锁不留手");
 }
 
+// ── ㉑ 团队任务：完成操作与哨兵通知同样要互斥 ─────────────────────────────────
+// 第 5 轮把单飞那一侧补齐了，团队那一侧原样留着：常驻调度台不占单飞锁，于是「最终资格
+// 读到 idle」与「用户标完成」照旧能交错 —— 第 6 轮审查实测：完成操作 200、任务 done、
+// 哨兵也 stopped，放开之后团队那侧拿着旧结果照样开台，**新开一条 lead 会话、原通知记成
+// sent**，总线走了 idle → done → running → idle。两种顺序都得收口。
+{
+  const api = new Hono();
+  mountTaskRoutes(api);
+  const markDone = (taskId: string) => api.request(`/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "x-ash-user-action": "1" },
+    body: JSON.stringify({ status: "done" }),
+  });
+  const statusOf = async (taskId: string) =>
+    (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)?.status;
+  const sessionsOf = (taskId: string) => db.select().from(sessions).where(eq(sessions.taskId, taskId));
+
+  // 顺序 ①：通知正握着锁往下走（资格 SELECT 已经读到 idle、结果还没交回调用方，正是
+  // 审查那个可控暂停的位置）→ 用户的完成操作必须被挡回，一个字都不许写库。
+  // 这里让闸返回一个理由收尾，纯粹是为了不真去开调度台；要钉的是上面那个 409。
+  {
+    const taskId = await makeTask({ mode: "team", status: "idle" });
+    let patched = 0;
+    const ran = await continueTask(taskId, "【哨兵事件】TEAM_OUTPUT_AFTER_DONE", {
+      byBackend: true,
+      wakeGuard: async () => {
+        patched = (await markDone(taskId)).status;
+        return "就到这儿，别真开台";
+      },
+    });
+    assert.equal(patched, 409, "通知正在送的时候完成操作不能放行——放行了就是上面那条链");
+    assert.equal(await statusOf(taskId), "idle", "被挡回就一个字都不许写库");
+    assert.equal(ran, false);
+    assert.equal((await sessionsOf(taskId)).length, 0, "被闸挡下的通知不许开台");
+    assert.equal(runs.isTurnClaimed(taskId), false, "拒绝那条路也得把锁还回去");
+    assert.equal((await markDone(taskId)).status, 200, "放开之后照样标得完成");
+  }
+
+  // 顺序 ②：完成操作先成功 → 这条通知既不许开台，也不许被记成已发送。
+  {
+    const taskId = await makeTask({ mode: "team", status: "idle" });
+    const started = await startMonitor({
+      taskId,
+      command: `${JSON.stringify(process.execPath)} -e 'setInterval(() => {}, 1000);'`,
+      description: "团队任务完成之后",
+    });
+    assert.equal(started.ok, true);
+    const monitorId = started.ok ? started.monitor.id : "";
+    // 事件那一行手造（来源标记用生产那一份 `monitorMessageOrigin`）：团队任务的推送出口
+    // 会**当场**触发投递（调度台正说话也接得住），真让哨兵吐一行就攒不住「先排一条、再标
+    // 完成」这个现场。推送那一侧的终态判据由 ⑮⑯ 覆盖，这里要观察的是投递那一侧。
+    const row = await pending.enqueueMessage({
+      taskId,
+      text: "【哨兵事件】TEAM_OUTPUT_AFTER_DONE",
+      origin: monitorMessageOrigin(monitorId),
+    });
+
+    assert.equal((await markDone(taskId)).status, 200);
+    assert.equal((await getMonitor(monitorId))?.status, "stopped", "任务结束,哨兵一并收回");
+
+    // 租约已经在手、完成操作刚成功的那一刻：真实的那道闸(生产的 monitorWakeGuard)必须
+    // 说不，装法与两条投递分支逐字一致（`refused` 非空 = 调用方把消息取消掉）。
+    const guard = pending.monitorWakeGuard(row);
+    assert.ok(guard, "哨兵来源的消息必须带着这道闸");
+    let refused: string | null = null;
+    const woke = await continueTask(taskId, row.text, {
+      byBackend: true,
+      wakeGuard: async () => (refused = await guard()),
+    });
+    assert.equal(woke, false, "已经结束的任务不许被一条在途通知重新开台");
+    assert.match(refused ?? "", /任务已经结束/, "这是明确拒绝,调用方据此取消消息而不是重投");
+    assert.equal((await sessionsOf(taskId)).length, 0, "不得新增 lead 会话");
+    assert.equal(await statusOf(taskId), "done", "也不许把 done 改回 running/idle");
+
+    // 生产链路自己也会把它作废(终态钩子 → flushPendingForTask → 出口那道闸)。
+    await until("那条通知按终态作废", async () => {
+      const after = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, row.id))).at(0);
+      return after?.status === "canceled";
+    });
+    assert.equal((await sessionsOf(taskId)).length, 0, "作废的路上同样不许开台");
+  }
+
+  // 锁要覆盖到**真正写进 stdin 那一刻**，不是只盖住那一问：所以释放必须在 finally 里。
+  const orchSrc = readSource(join(HERE, "../src/orchestrator.ts"));
+  assert.match(orchSrc, /\} finally \{\n      releaseLead\(\);\n    \}/,
+    "deliverToLead 抛错那条出路也得把锁还回去,否则这个任务的状态从此改不动");
+  console.log("✓ 团队任务:完成操作与哨兵通知互斥,两种顺序都不开台、不记已发送");
+}
+
+// ── ㉒ 团队资格读失败一次 ≠ 调度台不可用 ──────────────────────────────────────
+// 团队那一侧原来是直接 `await opts.wakeGuard()`：读错误顺着抛出去，投递那边的 catch 按
+// 「调度台不可用」**无条件取消**消息 —— 一次数据库抖动就永久销毁一条进展，而哨兵的读取
+// 游标早就推过去了，同一行不会再生成第二次（第 6 轮审查实测：只拒一次资格 SELECT，消息
+// 当场 canceled，恢复并等过投递冷却也不再补送）。
+{
+  const taskId = await makeTask({ mode: "team", status: "idle" });
+  const started = await startMonitor({
+    taskId,
+    command: `${JSON.stringify(process.execPath)} -e 'setInterval(() => {}, 1000);'`,
+    description: "团队任务:资格读失败",
+  });
+  assert.equal(started.ok, true);
+  // 同 ㉑ 顺序②：团队任务上的推送会当场触发投递，所以那一行手造（来源标记同生产），
+  // 下面走的是真实的投递扫描 —— 租约、那道闸、挡回后的处置全是生产代码。
+  const row = await pending.enqueueMessage({
+    taskId,
+    text: "【哨兵事件】TEAM_GUARD_READ_FAILURE",
+    origin: monitorMessageOrigin(started.ok ? started.monitor.id : ""),
+  });
+
+  // 只拒**那一问**：投递链路里按 `{status, archived}` 两字段投影读 tasks 的只有它
+  // （`monitorWakeGuard`）。拒一次就恢复；要是被别处消费掉了，下面的断言会整段失败而
+  // 不是悄悄变成空测。
+  const realSelect = db.select.bind(db);
+  let armed = true;
+  (db as unknown as { select: unknown }).select = (...args: unknown[]) => {
+    const projection = args[0] as Record<string, unknown> | undefined;
+    if (armed && projection && "status" in projection && "archived" in projection
+      && Object.keys(projection).length === 2) {
+      armed = false;
+      throw new Error("INJECTED_TEAM_DATABASE_READ_FAILURE");
+    }
+    return (realSelect as (...a: unknown[]) => unknown)(...args);
+  };
+  try {
+    await pending.deliverPendingMessages(taskId);
+  } finally {
+    (db as unknown as { select: unknown }).select = realSelect;
+  }
+  assert.equal(armed, false, "这一轮压根没问到那道闸,下面的断言就不成立了");
+
+  const after = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, row.id))).at(0)!;
+  assert.equal(after.status, "pending", "一次读故障不该让一条进展永久消失——宁可晚发,不能不发");
+  assert.equal(after.deliveringSince, null, "租约必须还回去,不然没人再碰它");
+  assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, taskId))).length, 0,
+    "读不到状态就不该开台");
+  assert.equal(runs.isTurnClaimed(taskId), false, "唤醒锁也要还");
+
+  // 恢复之后它仍然是「该送」的那一条，而且全程只有这一条：补送走的是同一行。
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+  assert.equal(
+    pending.deliveryVerdict(
+      { mode: after.mode, sendAt: after.sendAt, origin: after.origin },
+      { mode: task.mode, status: task.status, archived: !!task.archived },
+      new Date(),
+    ).action,
+    "deliver",
+    "库一恢复,这条通知就该重新进入投递 —— 取消掉的那种永远等不到了",
+  );
+  assert.equal((await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, taskId))).length, 1,
+    "只有这一条:哨兵的游标已经推过去了,系统不会再补生成一条");
+  console.log("✓ 团队资格读失败一次:消息留在托盘等重投,不当场销毁");
+}
+
 await teardown();
-console.log("✓ 哨兵终态与投递：连坐作废 / 合并与投递抢同一行 / 入口出口同源 / 迟到事件 / 收尾那一瞬的创建 / 租约不等于送达 / 读失败不锁死 / 完成与起跑互斥 均受回归保护");
+console.log("✓ 哨兵终态与投递：连坐作废 / 合并与投递抢同一行 / 入口出口同源 / 迟到事件 / 收尾那一瞬的创建 / 租约不等于送达 / 读失败不锁死 / 完成与起跑互斥 / 团队那条路同样互斥且读失败不销毁 均受回归保护");

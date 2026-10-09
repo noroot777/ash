@@ -477,7 +477,7 @@ async function deliverWhenIdle(
       if (refused) await cancelPendingMessage(message, refused);
       else {
         await abortDelivery(message);
-        scheduleRedelivery(message, "回合被其它执行抢占或工作区正被验收占用");
+        scheduleRedelivery(message, "这一轮没起：回合被其它执行抢占、工作区正被验收占用，或起跑前的资格检查读不到状态");
       }
     }
   } catch (error) {
@@ -562,7 +562,7 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
             if (refused) await cancelPendingMessage(m, refused);
             else {
               await abortDelivery(m);
-              scheduleRedelivery(m, "调度台此刻收不下（正在收尾或已离线）");
+              scheduleRedelivery(m, "这一轮没起：调度台收不下（正在收尾或已离线），或起跑前的资格检查读不到状态");
             }
           }
         } catch (reason) {
