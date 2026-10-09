@@ -39,11 +39,11 @@ import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
-import type { TaskMonitor } from "@ash/shared/monitor";
 import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
 import { syncHostCliPolicy } from "./hostCliPolicy.ts";
 import { llmApi } from "./apiLlm.ts";
+import { monitorApi } from "./apiMonitors.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
 import { fileApi } from "./fileApi.ts";
@@ -661,21 +661,10 @@ export const api = {
     request(`/scheduled-messages/${id(messageId)}`, { method: "DELETE" }),
   steerScheduledMessage: (messageId: string): Promise<{ steered: true; messageId: string }> =>
     request(`/scheduled-messages/${id(messageId)}/steer`, json("POST", {})),
-  // 哨兵：挂在任务上的长跑命令，stdout 每一行就是一条唤醒事件（server/src/monitors.ts）。
-  taskMonitors: (taskId: string): Promise<TaskMonitor[]> =>
-    request(`/tasks/${id(taskId)}/monitors`),
-  stopMonitor: (monitorId: string, reason?: string): Promise<{ monitor: TaskMonitor | null }> =>
-    request(`/monitors/${id(monitorId)}/stop`, json("POST", { reason })),
-  startMonitor: (
-    taskId: string,
-    body: { command: string; description?: string; timeoutMs?: number },
-  ): Promise<{ monitor: TaskMonitor; notice?: string }> =>
-    request(`/tasks/${id(taskId)}/monitors`, json("POST", body)),
-  /** 哨兵日志的尾巴：事件正文里被略去的行（单批超限、合并超长）只有这里还有。 */
-  monitorLog: (monitorId: string, lines?: number): Promise<{ lines: string[]; truncated: boolean }> =>
-    request(`/monitors/${id(monitorId)}/log${lines ? `?lines=${lines}` : ""}`),
 
-  // 直连 LLM 供应商那一组住在 apiLlm.ts（同样是为了守住 700 行），调用点写法不变。
+  // 哨兵那一组住在 apiMonitors.ts（同样是为了守住 700 行），调用点写法不变。
+  ...monitorApi,
+  // 直连 LLM 供应商那一组住在 apiLlm.ts，同理。
   ...llmApi,
   // 预览的「AI 协助」同理，住在 apiPreviewAssist.ts。
   ...previewAssistApi,

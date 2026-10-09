@@ -11,7 +11,7 @@
 //
 // ② **一条事件 = 唤醒一次 = 一个真实的模型回合。** 所以合并是第一位的：同一个哨兵还没
 //    送出去的事件直接往那一行后面追加，agent 一次醒来看完全部；而不是一行一个回合。
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, like, isNull } from "drizzle-orm";
 import {
   MONITOR_BATCH_MS,
   MONITOR_MAX_EVENTS,
@@ -55,10 +55,15 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
   endedReason: r.endedReason,
 });
 
+/** 任务到了这几个状态就不该再被哨兵叫醒了。`status.ts` 的 TERMINAL 同一份判据。 */
+const TERMINAL_TASK_STATUSES = new Set(["done", "failed", "canceled"]);
+
 type Runtime = {
   tail: Tailer;
   timers: NodeJS.Timeout[];
   buffer: string[];
+  /** 缓冲里这批行读到文件的哪个字节。**事件落库之后**才跟着推进（见 pushLines）。 */
+  readTo: number | null;
   flush: NodeJS.Timeout | null;
   /** 收尾只做一次：过期定时器、进程退出、用户点停，三条路可能同时到。 */
   closing: boolean;
@@ -104,51 +109,77 @@ async function resolveCwd(taskId: string, explicit?: string | null): Promise<str
 
 export type StartMonitorResult = { ok: true; monitor: TaskMonitor } | { ok: false; status: 400 | 404 | 409; error: string };
 
+const text = (value: unknown): string | null => (typeof value === "string" ? value.trim() : null);
+
+/**
+ * 起一个哨兵。
+ *
+ * **整段按任务串行**：「数一数在跑几个」和「插进去一条」之间隔着 spawn 和好几个 await，
+ * 并发打进来时每一个都在别人落库之前数完了数，于是六个请求能一起过 4 个的闸、真的起六个
+ * 长跑进程（第 1 轮审查实测 successfulStarts=6）。既有的 `serialize` 按 monitorId 排队，
+ * 护不到「还没有 id」的创建期，所以这里按 `task:<id>` 另排一条队。
+ */
 export async function startMonitor(input: StartMonitorInput): Promise<StartMonitorResult> {
-  const command = input.command?.trim();
+  // 参数一律在**起进程之前**校验并规范化。顺序反过来的话，一个 description: 7 就能让
+  // trim 抛在 spawn 之后：进程已经脱离 ash 跑起来了，记录却没落，于是它既不在列表里、
+  // 也没有到期定时器，谁都停不掉（第 1 轮审查复现：HTTP 500 + 一个无主的 shell 还活着）。
+  const command = text(input.command);
   if (!command) return { ok: false, status: 400, error: "command 不能为空" };
-  const task = (await db.select().from(tasks).where(eq(tasks.id, input.taskId))).at(0);
-  if (!task) return { ok: false, status: 404, error: "任务不存在" };
-  if (task.archived) return { ok: false, status: 409, error: "任务已归档，不能再挂哨兵" };
+  if (input.description !== undefined && input.description !== null && text(input.description) === null)
+    return { ok: false, status: 400, error: "description 必须是字符串" };
+  if (input.cwd !== undefined && input.cwd !== null && text(input.cwd) === null)
+    return { ok: false, status: 400, error: "cwd 必须是字符串" };
+  const description = text(input.description) || command;
 
-  const live = await liveMonitorsOf(input.taskId);
-  if (live.length >= MONITOR_MAX_PER_TASK)
-    return { ok: false, status: 409, error: `这个任务已经有 ${live.length} 个哨兵在盯了（上限 ${MONITOR_MAX_PER_TASK}），先停掉一个` };
+  return serialize(`task:${input.taskId}`, async () => {
+    const task = (await db.select().from(tasks).where(eq(tasks.id, input.taskId))).at(0);
+    if (!task) return { ok: false, status: 404, error: "任务不存在" };
+    if (task.archived) return { ok: false, status: 409, error: "任务已归档，不能再挂哨兵" };
 
-  const cwd = await resolveCwd(input.taskId, input.cwd);
-  if (!cwd) return { ok: false, status: 409, error: "定位不到工作目录，显式传 cwd" };
+    const live = await liveMonitorsOf(input.taskId);
+    if (live.length >= MONITOR_MAX_PER_TASK)
+      return { ok: false, status: 409, error: `这个任务已经有 ${live.length} 个哨兵在盯了（上限 ${MONITOR_MAX_PER_TASK}），先停掉一个` };
 
-  const monitorId = id();
-  const logPath = monitorLogPath(input.taskId, monitorId);
-  const spawned = spawnMonitor({ command, cwd, logPath });
-  if ("error" in spawned) return { ok: false, status: 409, error: spawned.error };
+    const cwd = await resolveCwd(input.taskId, input.cwd);
+    if (!cwd) return { ok: false, status: 409, error: "定位不到工作目录，显式传 cwd" };
 
-  const startedAt = now();
-  const timeoutMs = normalizeMonitorTimeout(input.timeoutMs);
-  const row: Row = {
-    id: monitorId,
-    taskId: input.taskId,
-    command,
-    description: input.description?.trim() || command,
-    cwd,
-    status: "running",
-    pid: spawned.pid,
-    pidStartedAt: inspectProcess(spawned.pid)?.startedAt ?? null,
-    logPath,
-    offset: 0,
-    events: 0,
-    exitCode: null,
-    startedAt,
-    expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
-    endedAt: null,
-    endedReason: null,
-    ownerUserId: input.ownerUserId ?? null,
-  };
-  await db.insert(monitors).values(row);
-  attach(row, spawned.onExit);
-  publish(row.taskId);
-  await appendTaskTimeline(row.taskId, `哨兵已起：${row.description}（${command}）`);
-  return { ok: true, monitor: toTaskMonitor(row) };
+    const monitorId = id();
+    const logPath = monitorLogPath(input.taskId, monitorId);
+    const spawned = spawnMonitor({ command, cwd, logPath });
+    if ("error" in spawned) return { ok: false, status: 409, error: spawned.error };
+
+    const timeoutMs = normalizeMonitorTimeout(input.timeoutMs);
+    const row: Row = {
+      id: monitorId,
+      taskId: input.taskId,
+      command,
+      description,
+      cwd,
+      status: "running",
+      pid: spawned.pid,
+      pidStartedAt: inspectProcess(spawned.pid)?.startedAt ?? null,
+      logPath,
+      offset: 0,
+      events: 0,
+      exitCode: null,
+      startedAt: now(),
+      expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
+      endedAt: null,
+      endedReason: null,
+      ownerUserId: input.ownerUserId ?? null,
+    };
+    try {
+      await db.insert(monitors).values(row);
+    } catch (e) {
+      // 登记失败就把刚起的进程收回来：留着它就是一个谁都看不见、也停不掉的后台命令。
+      killByPid(spawned.pid);
+      return { ok: false, status: 409, error: `哨兵登记失败，已回收它的进程：${e instanceof Error ? e.message : String(e)}` };
+    }
+    attach(row, spawned.onExit);
+    publish(row.taskId);
+    await appendTaskTimeline(row.taskId, `哨兵已起：${row.description}（${command}）`);
+    return { ok: true, monitor: toTaskMonitor(row) };
+  });
 }
 
 // ── 盯 ───────────────────────────────────────────────────────────────────────
@@ -159,13 +190,18 @@ function attach(row: Row, onExit?: (cb: (code: number | null) => void) => void):
   // 查注册表的写法有个安静的洞——`finish` 为了防重入会先把自己摘出注册表，再 drain
   // 一次把进程临死前那几行吸干；那时候回调查到的是 undefined，于是最后一批事件被整批
   // 丢掉（实测：命令吐 3 行，只收到 2 行）。
-  const rt: Runtime = { tail: null as unknown as Tailer, timers: [], buffer: [], flush: null, closing: false };
+  const rt: Runtime = { tail: null as unknown as Tailer, timers: [], buffer: [], readTo: null, flush: null, closing: false };
   rt.tail = tailLines(row.logPath, row.offset, (lines, offset) => {
     // 收尾中也照收：`finish` 会先 drain 一次再推，进程死前最后几行不该因为「已经在停了」
     // 就丢掉。收尾时不另起定时器——那一批由 finish 自己同步推出去。
     for (const line of lines) if (line.trim()) rt.buffer.push(line);
-    void serialize(row.id, () => commitOffset(row.id, offset));
-    if (rt.buffer.length && !rt.flush && !rt.closing) {
+    // 读到的全是空行：没有事件要落，位置可以直接前进（不存在「推进了却丢事件」的风险）。
+    if (!rt.buffer.length) {
+      void serialize(row.id, () => commitOffset(row.id, offset));
+      return;
+    }
+    rt.readTo = offset;
+    if (!rt.flush && !rt.closing) {
       rt.flush = setTimeout(() => {
         rt.flush = null;
         void serialize(row.id, () => flushBuffer(row.id, rt));
@@ -205,22 +241,40 @@ function trim(line: string): string {
   return line.length > MONITOR_MAX_LINE_CHARS ? `${line.slice(0, MONITOR_MAX_LINE_CHARS)}…（本行已截断）` : line;
 }
 
+/**
+ * 把一批行变成一条事件消息，**消息落库之后**才推进事件计数和读取位置。
+ *
+ * 这个顺序是硬要求，不是讲究：位置先走、消息后落的话，中间哪怕只隔那 300ms 的批量窗口，
+ * server 一停这几行就永远没人读了——游标已经越过去，内容还躺在日志里，任务却一个字都
+ * 收不到（第 1 轮审查复现：read_offset=13、events=0、消息为空，日志里那行完好无损）。
+ * 反过来排的代价只是重启后可能把同一批行再推一次，重复远比静默丢失便宜。
+ */
+async function pushLines(row: Row, lines: string[], readTo: number | null): Promise<number> {
+  const shown = lines.slice(0, MONITOR_MAX_LINES_PER_PUSH).map(trim);
+  const omitted = lines.length - shown.length;
+  const head = `【哨兵事件】${row.description}（monitorId=${row.id}）`;
+  const tail = omitted > 0 ? `\n…（这一批共 ${lines.length} 行，上面只列了前 ${shown.length} 行）` : "";
+  const delivered = await pushToTask(row, `${head}\n${shown.join("\n")}${tail}`);
+  const events = row.events + lines.length;
+  // 没投出去（任务已经结束了）就不推进位置：这批行没人读过，留着让日志回看还能看到。
+  await db
+    .update(monitors)
+    .set({ events, ...(delivered && readTo !== null ? { offset: readTo } : {}) })
+    .where(eq(monitors.id, row.id));
+  publish(row.taskId);
+  return events;
+}
+
 async function flushBuffer(monitorId: string, rtOverride?: Runtime): Promise<void> {
   const rt = rtOverride ?? runtimes.get(monitorId);
   if (!rt || !rt.buffer.length || dbClient.closed) return;
   const lines = rt.buffer.splice(0, rt.buffer.length);
+  const readTo = rt.readTo;
+  rt.readTo = null;
   const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   if (!row || row.status !== "running") return;
 
-  const shown = lines.slice(0, MONITOR_MAX_LINES_PER_PUSH).map(trim);
-  const omitted = lines.length - shown.length;
-  const events = row.events + lines.length;
-  await db.update(monitors).set({ events }).where(eq(monitors.id, monitorId));
-
-  const head = `【哨兵事件】${row.description}（monitorId=${row.id}）`;
-  const tail = omitted > 0 ? `\n…（这一批共 ${lines.length} 行，上面只列了前 ${shown.length} 行）` : "";
-  await pushToTask(row, `${head}\n${shown.join("\n")}${tail}`);
-  publish(row.taskId);
+  const events = await pushLines(row, lines, readTo);
 
   if (events >= MONITOR_MAX_EVENTS) {
     // **不能 await**：这里正跑在 `serialize(monitorId, …)` 的队列里，而 finish 收尾时
@@ -236,7 +290,17 @@ async function flushBuffer(monitorId: string, rtOverride?: Runtime): Promise<voi
  * 追加。任务正忙的那几分钟里攒下的十几条事件于是只唤醒它一次；而不是排十几行、醒十几轮。
  * 带着投递租约的那一行不能碰 —— 它正在被送进会话，改它等于改一句已经出口的话。
  */
-async function pushToTask(row: Row, text: string): Promise<void> {
+async function pushToTask(row: Row, text: string): Promise<boolean> {
+  // 任务自己已经结束/归档了就不再往它头上排事件——排了就是在某个深夜把一个 done 的任务
+  // 重新叫起来跑一轮（第 1 轮审查实测：总线真实走了 done → running → done）。这道判断
+  // 放在**唯一出口**上而不是散在调用点：收尾路径有五条（过期 / 自己退出 / 被停 / 推满
+  // 上限 / 重启后补读），逐条去加漏一条就等于没防。
+  const task = (await db
+    .select({ status: tasks.status, archived: tasks.archived })
+    .from(tasks)
+    .where(eq(tasks.id, row.taskId))).at(0);
+  if (!task || task.archived || TERMINAL_TASK_STATUSES.has(task.status)) return false;
+
   const origin = monitorMessageOrigin(row.id);
   const existing = (await db
     .select()
@@ -257,6 +321,7 @@ async function pushToTask(row: Row, text: string): Promise<void> {
     await enqueueMessage({ taskId: row.taskId, text, origin, ownerUserId: row.ownerUserId });
   }
   flushPendingForTask(row.taskId);
+  return true;
 }
 
 // ── 停 ───────────────────────────────────────────────────────────────────────
@@ -272,8 +337,10 @@ async function finish(
   status: Exclude<MonitorStatus, "running">,
   reason: string,
   exitCode: number | null,
-  notify = true,
+  opts: { notify?: boolean; keepBuffered?: boolean } = {},
 ): Promise<void> {
+  const notify = opts.notify ?? true;
+  const keepBuffered = opts.keepBuffered ?? true;
   const rt = runtimes.get(monitorId);
   if (rt) {
     if (rt.closing) return;
@@ -281,10 +348,19 @@ async function finish(
     runtimes.delete(monitorId);
     for (const t of rt.timers) { clearInterval(t); clearTimeout(t); }
     if (rt.flush) clearTimeout(rt.flush);
-    // 进程刚死那一瞬写进去的最后几行也算数：先把文件吸干，再把缓冲里剩下的一并推出去。
-    rt.tail.drain();
-    rt.tail.stop();
-    await serialize(monitorId, () => flushBuffer(monitorId, rt)).catch(() => {});
+    if (keepBuffered) {
+      // 进程刚死那一瞬写进去的最后几行也算数：先把文件吸干，再把缓冲里剩下的一并推出去。
+      rt.tail.drain();
+      rt.tail.stop();
+      await serialize(monitorId, () => flushBuffer(monitorId, rt)).catch(() => {});
+    } else {
+      // 任务自己已经结束的那一路：缓冲里这几行一个都不推。`notify=false` 只挡住最后那条
+      // 「哨兵结束」，挡不住这一批——它照样会排进待发队列，而紧接着的 flushPendingForTask
+      // 会立刻把它送进会话（第 1 轮审查实测：任务 done 之后被重新拉起跑了一轮）。
+      rt.tail.stop();
+      rt.buffer.length = 0;
+      rt.readTo = null;
+    }
   }
   if (dbClient.closed) return;
   const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
@@ -305,8 +381,9 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
   const before = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   if (!before) return null;
   if (before.status !== "running") return toTaskMonitor(before);
-  // 用户/agent 主动停的不回推收尾事件：他就是为了不再被它叫醒才点的停。
-  await finish(monitorId, "stopped", reason, null, false);
+  // 用户/agent 主动停的不回推收尾事件：他就是为了不再被它叫醒才点的停。但已经攒在缓冲里
+  // 的行要照常推完——那是已经发生的事实，而且任务还活着，收得下。
+  await finish(monitorId, "stopped", reason, null, { notify: false });
   const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   return toTaskMonitor(after ?? before);
 }
@@ -321,8 +398,31 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
  */
 export async function stopMonitorsForTask(taskId: string, reason: string): Promise<number> {
   const live = await liveMonitorsOf(taskId);
-  for (const m of live) await finish(m.id, "stopped", reason, null, false);
+  for (const m of live) await finish(m.id, "stopped", reason, null, { notify: false, keepBuffered: false });
+  // 停掉进程还不够：这一刻**已经排在待发队列里**的哨兵事件同样会把任务重新拉起来。
+  await cancelPendingMonitorEvents(taskId);
   return live.length;
+}
+
+/**
+ * 作废这个任务名下还没送出去的哨兵事件。
+ *
+ * 只动 `origin` 是哨兵的那些。真人写的排队追问要原样留着——他排的时候就知道任务可能
+ * 正要结束，那条消息的意思是「下次醒来处理」，替他取消等于把他的话吞了。带着投递租约的
+ * 那一行也不碰：它已经出口了。
+ */
+async function cancelPendingMonitorEvents(taskId: string): Promise<void> {
+  if (dbClient.closed) return;
+  await db
+    .update(scheduledMessages)
+    .set({ status: "canceled", sentAt: null, deliveringSince: null })
+    .where(and(
+      eq(scheduledMessages.taskId, taskId),
+      eq(scheduledMessages.status, "pending"),
+      isNull(scheduledMessages.deliveringSince),
+      like(scheduledMessages.origin, "monitor:%"),
+    ));
+  publishPendingMessages(taskId);
 }
 
 async function liveMonitorsOf(taskId: string): Promise<Row[]> {
@@ -362,36 +462,70 @@ export async function readMonitorTail(
 // ── 重启后认回来 ─────────────────────────────────────────────────────────────
 
 /**
+ * 进程已经不在了的那一路：**先把日志里没读过的那段补完**，再落终态。
+ *
+ * 不补的代价是整段工作白跑——而「一件事要跑两小时」恰恰是哨兵存在的全部理由：命令在
+ * ash 关闭期间跑完，重启后只看到一句「进程已不在」，那两小时的进展和结束结果一个字都
+ * 不会到任务头上（第 1 轮审查复现：日志里有 OFFLINE_DONE，任务一条通知都没有）。
+ *
+ * 退出码确实拿不到，如实记 null —— 不拿 0 冒充跑成功了。
+ */
+async function finishOffline(
+  row: Row,
+  status: Exclude<MonitorStatus, "running">,
+  reason: string,
+): Promise<void> {
+  const collected: string[] = [];
+  let readTo = row.offset;
+  const tail = tailLines(row.logPath, row.offset, (lines, offset) => {
+    for (const line of lines) if (line.trim()) collected.push(line);
+    readTo = offset;
+  });
+  tail.drain();
+  tail.stop();
+
+  let events = row.events;
+  if (collected.length) events = await pushLines(row, collected, readTo);
+  else if (readTo !== row.offset) await commitOffset(row.id, readTo);
+
+  await db
+    .update(monitors)
+    .set({ status, endedAt: now(), endedReason: reason, exitCode: null })
+    .where(eq(monitors.id, row.id));
+  publish(row.taskId);
+  await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}。${reason}（共推送 ${events} 条事件）`);
+  await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）。${reason}`);
+}
+
+/**
  * 开机把上一个 server 留下的哨兵接回来。进程本来就没跟着死（这是整件事的全部意义），
  * 所以这里要做的只有两件：确认那个 pid 还是当初那个进程，然后从 `offset` 接着读。
  * 重启那几十秒里产出的行都还在文件里，一条不漏。
  *
- * 认不出来的（进程没了、或 pid 被别人复用了）落 `lost`：如实说清楚，不冒充还在盯。
+ * 认不出来的（进程没了、或 pid 被别人复用了）落 `lost`，但**落之前先把它留下的输出读完**：
+ * 「进程不在了」说的是这一刻，不是说它这段时间什么都没干。
  */
 export async function reattachMonitors(): Promise<{ attached: number; lost: number }> {
   const rows = await db.select().from(monitors).where(eq(monitors.status, "running"));
   let attached = 0;
-  const lost: Row[] = [];
+  let lost = 0;
   for (const row of rows) {
     if (row.pid && isSameProcess(row.pid, row.pidStartedAt)) {
       if (new Date(row.expiresAt).getTime() <= Date.now()) {
-        await finish(row.id, "expired", "盯满了约定的时长（server 重启期间到期）", null, false);
+        // 先接上再收尾：attach 把 tail 建起来，finish 的 drain 才读得到停服期间那一段；
+        // 它同时负责把这个还活着、但已经超时的进程杀掉。
+        attach(row);
+        await finish(row.id, "expired", "盯满了约定的时长（server 重启期间到期）", null);
         continue;
       }
       attach(row);
       attached += 1;
     } else {
-      lost.push(row);
+      await finishOffline(row, "lost", "server 重启后这个进程已经不在了（它在停服期间跑完的，拿不到退出码）");
+      lost += 1;
     }
   }
-  if (lost.length) {
-    await db
-      .update(monitors)
-      .set({ status: "lost", endedAt: now(), endedReason: "server 重启后这个进程已经不在了" })
-      .where(inArray(monitors.id, lost.map((m) => m.id)));
-    for (const m of lost) publish(m.taskId);
-  }
-  return { attached, lost: lost.length };
+  return { attached, lost };
 }
 
 /** 只给测试用：把内存里的 tail/定时器全撤了，进程不动。 */

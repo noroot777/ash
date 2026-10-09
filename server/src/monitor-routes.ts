@@ -16,6 +16,12 @@ export function mountMonitorRoutes(api: Hono): void {
     const body = await c.req.json<StartBody>().catch((): StartBody => ({}));
     if (typeof body.command !== "string" || !body.command.trim())
       return c.json({ error: "command 不能为空" }, 400);
+    // description/cwd 也要在这儿挡住：少了这一道，一个 description: 7 会一路走到 trim 那里
+    // 才炸，而那时候进程已经起来了（startMonitor 里还有一道同样的校验兜底）。
+    if (body.description !== undefined && typeof body.description !== "string")
+      return c.json({ error: "description 必须是字符串" }, 400);
+    if (body.cwd !== undefined && typeof body.cwd !== "string")
+      return c.json({ error: "cwd 必须是字符串" }, 400);
     if (body.timeoutMs !== undefined && (typeof body.timeoutMs !== "number" || !Number.isFinite(body.timeoutMs)))
       return c.json({ error: "timeoutMs 必须是毫秒数" }, 400);
     // 越界不报错只钳住（normalizeMonitorTimeout），但得让调用方知道自己写的没生效。

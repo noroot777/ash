@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
-import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@ash/shared/team";
-import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workersOf } from "@ash/shared/team";
+import { ArrowSquareOut, Clock, PaperPlaneTilt, SpinnerGap } from "@phosphor-icons/react";
 import {
   ScheduledMessageTray,
   ScheduledSendPanel,
@@ -36,11 +36,11 @@ import {
   useReplyHeight,
 } from "../task-detail/ReplyResizeHandle.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
-import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { useSubagents } from "../task-detail/useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
+import { CuaResidualNotice, HaltNotice } from "./TeamNotices.tsx";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import {
   attachmentsFromPaths,
@@ -243,51 +243,6 @@ function TeamReplyBox({
         </footer>
       </div>
     </div>
-  );
-}
-
-function HaltNotice({ workers, groupCount, historyOnly }: { workers: TaskListItem[]; groupCount: number; historyOnly: boolean }) {
-  const stats = workerHaltStats(workers);
-  return (
-    <div className="team-halt-notice" role="status">
-      <b>全组已停止</b>
-      <span>{stats.interrupted} 个执行者被暂停打断 · {stats.completed} 个已完成 · {stats.waiting} 个尚未启动</span>
-      <small>{historyOnly ? "停止记录来自持久会话；内部组详情暂未返回" : `${groupCount} 个内部组保持暂停，刷新页面后仍可见`}</small>
-    </div>
-  );
-}
-
-function CuaResidualNotice({ taskId, status, onStatus, notify }: { taskId: string; status: TeamCuaStatus | null; onStatus: (status: TeamCuaStatus | null) => void; notify: (message: string) => void }) {
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const current = status?.current;
-  // applicable === false：非 macOS，这套机制根本不存在，这块提示连同「强制清理」
-  // 按钮一起不该出现（detected 本来也会是 false，这一条是防御性的第二道）。
-  if (!current?.detected || current.applicable === false) return null;
-  const kill = async () => {
-    setBusy(true);
-    try {
-      await api.killTeamCua(taskId);
-      onStatus(await api.teamCuaStatus(taskId));
-      setConfirmOpen(false);
-      notify("已请求强制清理 computer-use 服务");
-    } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <>
-      <div className="team-cua-notice" role="alert">
-        <WarningCircle size={14} weight="fill" />
-        <b>computer-use 服务仍在运行</b>
-        <span>{current.sideEffect}</span>
-        {current.processes.length > 0 && <code>pid {current.processes.map((process) => process.pid).join(", ")}</code>}
-        <button type="button" onClick={() => setConfirmOpen(true)}><Broom size={13} />强制清理</button>
-      </div>
-      {confirmOpen && <ConfirmDialog title="强制清理 computer-use？" message={current.sideEffect} confirmLabel="强制清理" danger busy={busy} onConfirm={() => void kill()} onClose={() => setConfirmOpen(false)} />}
-    </>
   );
 }
 

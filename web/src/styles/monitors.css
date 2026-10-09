@@ -1,6 +1,10 @@
 /* 哨兵 Inspector：挂在任务上的长跑命令。宿主外壳在 inspector.css。 */
 
-.monitor-inspector { padding: 11px 12px 16px; }
+/* 整条链上每一级都要 min-width:0。少任何一级，卡片里那行不折行的工作目录就会把 Grid
+   子项按内容撑宽——默认 340px 侧栏下，卡片宽到 392px，右上角的「停掉」按钮被推到面板
+   之外、连视口都出去了（第 1 轮审查实测：按钮 x=1624，视口才 1600）。Playwright 点击
+   会自动把元素滚进视野，所以「停止能用」的验证照样通过，人却根本看不见那颗按钮。 */
+.monitor-inspector { min-width: 0; padding: 11px 12px 16px; }
 .monitor-inspector__add { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); color: var(--muted); }
 .monitor-inspector__add:hover { background: var(--raised); color: var(--ink); }
 .monitor-inspector__add[aria-expanded="true"] { border-color: color-mix(in lch, var(--accent) 45%, var(--line2)); background: color-mix(in lch, var(--accent) 10%, var(--panel)); color: var(--accent); }
@@ -8,12 +12,12 @@
 .monitor-inspector__empty { color: var(--faint); font-size: 10.5px; line-height: 1.7; }
 .monitor-inspector__empty > p { margin: 0 0 8px; }
 .monitor-inspector__empty > p:first-child { color: var(--muted); font-weight: 600; }
-.monitor-inspector__list { display: grid; gap: 8px; }
+.monitor-inspector__list { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 
 /* 图标条上那颗：有哨兵在盯着时常亮，不做动画——它会一直在那儿，闪起来就成了噪音。 */
 .monitor-rail-icon--live { color: var(--accent); }
 
-.monitor-card { border: 1px solid var(--line); border-radius: 9px; background: var(--panel); padding: 9px 10px; }
+.monitor-card { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); padding: 9px 10px; }
 .monitor-card.is-live { border-color: color-mix(in lch, var(--accent) 30%, var(--line)); }
 /* 结束的那几张是存档：留着能看，但别跟正在烧回合的那几个抢眼睛。 */
 .monitor-card.is-ended { background: color-mix(in lch, var(--panel) 72%, var(--canvas)); }
@@ -26,9 +30,9 @@
 .monitor-card__stop:hover:not(:disabled) { background: var(--raised); color: var(--red); }
 .monitor-card__stop:disabled { opacity: .48; }
 .monitor-card__command { display: block; overflow-wrap: anywhere; margin-top: 7px; border-radius: 6px; background: var(--overlay); padding: 5px 7px; color: var(--muted); font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9.5px; line-height: 1.6; white-space: pre-wrap; }
-.monitor-card__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 7px 0 0; color: var(--faint); font-size: 9.5px; }
+.monitor-card__meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 5px; margin: 7px 0 0; color: var(--faint); font-size: 9.5px; }
 .monitor-card__reason { margin: 5px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
-.monitor-card__cwd { overflow: hidden; margin: 3px 0 0; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; opacity: .8; }
+.monitor-card__cwd { min-width: 0; max-width: 100%; overflow: hidden; margin: 3px 0 0; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; opacity: .8; }
 .monitor-card__toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; border: 0; border-radius: 6px; background: transparent; padding: 2px 4px 2px 0; color: var(--muted); font-size: 10px; }
 .monitor-card__toggle:hover { color: var(--ink); }
 .monitor-card__toggle > svg { transition: transform .12s ease; }
@@ -36,10 +40,12 @@
 .monitor-card__log { margin-top: 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--overlay); padding: 6px 7px; }
 .monitor-card__log > p { margin: 0 0 4px; color: var(--faint); font-size: 9px; line-height: 1.5; }
 .monitor-card__log > p[role="alert"] { color: var(--red); }
-/* 尾巴不折行：日志对齐靠列，折了反而读不出来；横向滚动条比错位的列好。 */
-.monitor-card__log > pre { max-height: 240px; overflow: auto; margin: 0; color: var(--muted); font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9.5px; line-height: 1.55; }
+/* 尾巴不折行：日志对齐靠列，折了反而读不出来。横向滚动条只长在这一块里——它是唯一
+   该滚的东西，让它把整张卡（连带停止按钮）一起撑出去就是另一回事了。 */
+.monitor-card__log { min-width: 0; }
+.monitor-card__log > pre { max-width: 100%; max-height: 240px; overflow: auto; margin: 0; color: var(--muted); font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9.5px; line-height: 1.55; }
 
-.monitor-composer { display: grid; gap: 8px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in lch, var(--panel) 80%, var(--canvas)); padding: 10px; }
+.monitor-composer { display: grid; min-width: 0; gap: 8px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in lch, var(--panel) 80%, var(--canvas)); padding: 10px; }
 .monitor-composer label { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 4px; }
 .monitor-composer label > span { color: var(--faint); font-size: 9.5px; }
 .monitor-composer textarea, .monitor-composer input, .monitor-composer select { width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 6px 8px; color: var(--muted); font-size: 10.5px; outline: 0; }

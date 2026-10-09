@@ -66,11 +66,11 @@ async function writeTaskStatus(
     // 结束了还留着它,只会在某个深夜把一个已经 done 的任务重新叫起来跑一轮。要让哨兵
     // 继续盯,这一轮该用 pause_task 收尾而不是 complete_task —— 这句判据同时写在 MCP
     // 工具说明里,那是 agent 做这个选择时唯一看得到的地方。
-    void import("./monitors.js").then(({ stopMonitorsForTask }) =>
-      stopMonitorsForTask(taskId, `任务已${status}，哨兵一并收回`).catch((err) =>
-        console.error(`[ash] stopMonitorsForTask(${taskId}) failed:`, err),
-      ),
-    );
+    // 必须 await：下面那句 flushPendingForTask 会把排着队的消息立刻送进会话,清理要是还在
+    // 路上,刚攒下的哨兵事件就会抢在它前面把这个已经 done 的任务重新拉起来跑一轮。
+    await import("./monitors.js")
+      .then(({ stopMonitorsForTask }) => stopMonitorsForTask(taskId, `任务已${status}，哨兵一并收回`))
+      .catch((err) => console.error(`[ash] stopMonitorsForTask(${taskId}) failed:`, err));
   }
   if (status !== "running") {
     patch.activeTurnToken = null;

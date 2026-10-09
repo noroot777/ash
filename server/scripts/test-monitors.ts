@@ -6,17 +6,21 @@
 //  ④ 任务落终态 → 名下哨兵一并停掉，**而且不回推收尾事件**（否则等于把 done 的任务叫醒）
 //  ⑤ 停掉哨兵 = 进程真的死了（不是只改数据库）
 //  ⑥ 面板能回看它的原始输出：事件正文里被略去的行（单批超限、合并超长）只剩日志里有
-//  ⑦ server 重启：另起一个进程把 ash 杀掉后，哨兵进程仍活着，新进程按 pid + offset
+//  ⑦ 四道闸真的挡得住：并发创建不绕过每任务上限、坏参数不留下无主进程
+//  ⑧ 位置只在事件落库之后才前进（先走位置再推消息 = 重启那一下静默吞掉几行）
+//  ⑨ 任务落终态时，攒着的和排着队的哨兵事件一起作废（否则把 done 的任务又拉起来）
+//  ⑩ server 重启：另起一个进程把 ash 杀掉后，哨兵进程仍活着，新进程按 pid + offset
 //     接回来，重启期间产出的行一条不漏 —— 这是整件事相对「挂在会话上的后台进程」的
 //     全部增量，也是本测试最该守住的一条
+//  ⑪ 命令在停服期间就跑完了：重启时那条「进程已经不在」的路同样要补读它留下的输出
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { and, eq } from "drizzle-orm";
-import { MONITOR_MAX_EVENTS, MONITOR_MAX_MERGED_CHARS } from "@ash/shared/monitor";
+import { MONITOR_MAX_EVENTS, MONITOR_MAX_MERGED_CHARS, MONITOR_MAX_PER_TASK } from "@ash/shared/monitor";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -32,7 +36,7 @@ const [{ db, ensureSchema }, schema, monitorsModule, status, { isPidAlive }] = a
   import("../src/status.js"),
   import("../src/platform.js"),
 ]);
-const { startMonitor, stopMonitor, listMonitors, readMonitorTail, detachAllMonitors } = monitorsModule;
+const { startMonitor, stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachMonitors, detachAllMonitors } = monitorsModule;
 const { monitors, projects, scheduledMessages, tasks } = schema;
 
 await ensureSchema();
@@ -220,7 +224,104 @@ setInterval(() => {}, 1000); // 吐完不退出：停下来必须是「到顶了
   console.log("✓ 哨兵的原始输出可回看，限行数时留最后几行并如实报截断");
 }
 
-// ── ⑦ 活得过 server 重启 ─────────────────────────────────────────────────────
+// ── ⑦ 四道闸真的挡得住 ───────────────────────────────────────────────────────
+{
+  const taskId = await makeTask();
+  const idle = `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)"`;
+  // 并发打进来的六个创建请求：检查与插入之间隔着 spawn 和好几个 await，不按任务串行
+  // 的话每一个都在别人落库前数完了数，于是六个一起过了 4 个的闸、真起六个长跑进程。
+  const results = await Promise.all(Array.from({ length: 6 }, () =>
+    startMonitor({ taskId, command: idle, description: "抢名额" })));
+  const okCount = results.filter((r) => r.ok).length;
+  assert.equal(okCount, MONITOR_MAX_PER_TASK, `并发创建只该成功 ${MONITOR_MAX_PER_TASK} 个，实际 ${okCount}`);
+  const running = (await listMonitors(taskId)).filter((m) => m.status === "running");
+  assert.equal(running.length, MONITOR_MAX_PER_TASK, "真起来的进程数也要受同一个上限约束");
+
+  // 坏参数：必须在**起进程之前**就被挡住。挡晚了进程已经脱离 ash 跑起来、记录却没落，
+  // 那个 shell 从此谁也看不见、谁也停不掉。
+  const bad = await startMonitor({ taskId, command: idle, description: 7 as unknown as string });
+  assert.equal(bad.ok, false, "description 不是字符串就该被拒");
+  assert.equal(bad.ok === false ? bad.status : 0, 400, "这是入参错误，不是冲突");
+  assert.equal(
+    (await listMonitors(taskId)).length,
+    MONITOR_MAX_PER_TASK,
+    "被拒的那次不该留下任何记录——留不下记录就更不该留下进程",
+  );
+
+  for (const m of running) await stopMonitor(m.id, "测试收尾");
+  await until("抢名额的进程都收回了", async () =>
+    (await listMonitors(taskId)).every((m) => !m.pid || !isPidAlive(m.pid)));
+  console.log("✓ 每任务上限扛得住并发创建，坏参数在起进程之前就被挡住");
+}
+
+// ── ⑧ 位置只在事件落库之后才前进 ─────────────────────────────────────────────
+// 反过来排的话，读过的位置会在那 300ms 批量窗口里先走一步：此刻 server 一停，那几行
+// 就永远没人读了——游标已经越过去，内容还躺在日志里，任务一个字都收不到。
+{
+  const taskId = await makeTask();
+  const started = await startMonitor({
+    taskId,
+    command: `${JSON.stringify(process.execPath)} -e 'console.log("BEFORE_PUSH"); setInterval(() => {}, 1000);'`,
+    description: "位置不能先走",
+  });
+  assert.equal(started.ok, true);
+  const monitorId = started.ok ? started.monitor.id : "";
+
+  let advancedWithoutEvent = false;
+  for (let i = 0; i < 200; i++) {
+    const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+    if (row.events === 0 && row.offset > 0) advancedWithoutEvent = true;
+    if (row.events > 0) break;
+    await sleep(10);
+  }
+  assert.equal(advancedWithoutEvent, false, "出现过「位置已前进、事件还没落库」的窗口");
+  const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.ok(after.events > 0 && after.offset > 0, "事件落库之后位置要跟上，否则同一行会被反复推一辈子");
+  await stopMonitor(monitorId, "测试收尾");
+  console.log("✓ 读取位置只跟在事件落库之后走");
+}
+
+// ── ⑨ 任务落终态：攒着的和排着队的哨兵事件一起作废 ───────────────────────────
+// `notify=false` 只挡住最后那条「哨兵结束」。缓冲里的行照样会排进待发队列，而终态之后
+// 紧接着就是 flushPendingForTask —— 于是一个刚 done 的任务被自己的哨兵重新拉起来跑一轮。
+{
+  const taskId = await makeTask();
+  const started = await startMonitor({
+    taskId,
+    command: `${JSON.stringify(process.execPath)} -e 'console.log("EVENT_BEFORE_DONE"); setInterval(() => {}, 1000);'`,
+    description: "任务结束就该收手",
+  });
+  assert.equal(started.ok, true);
+  const monitorId = started.ok ? started.monitor.id : "";
+  await until("第一条事件已排队", async () => (await pendingOf(taskId)).length > 0);
+
+  // 真人排的那条追问必须活下来：他排的时候就知道任务可能正要结束，那句话的意思是
+  // 「下次醒来处理」，替他取消等于把他的话吞了。
+  await db.insert(scheduledMessages).values({
+    id: `human-${seq}`, taskId, text: "这条是真人排的", attachments: "[]",
+    mode: "queued", sendAt: now(), status: "pending", createdAt: now(),
+  });
+
+  await status.setTaskStatus(taskId, "done");
+
+  const pending = await pendingOf(taskId);
+  assert.equal(pending.filter((m) => m.origin?.startsWith("monitor:")).length, 0, "排着队的哨兵事件必须一起作废");
+  assert.equal(pending.filter((m) => !m.origin).length, 1, "真人排的那条要原样留着");
+  assert.equal((await getMonitor(monitorId))?.status, "stopped", "任务结束了哨兵也该停");
+
+  // 收手之后再吐的行一个都不该进来（pushToTask 在唯一出口上认任务状态）。
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  appendFileSync(row.logPath, "AFTER_DONE\n");
+  await sleep(1200);
+  assert.equal(
+    (await pendingOf(taskId)).filter((m) => m.origin?.startsWith("monitor:")).length,
+    0,
+    "任务已经结束，哨兵不该再往它头上排任何事件",
+  );
+  console.log("✓ 任务落终态：缓冲、队列、后续输出三头都不再唤醒它");
+}
+
+// ── ⑩ 活得过 server 重启 ─────────────────────────────────────────────────────
 // 真的开两个进程：v1 起哨兵后硬退出（模拟 `npm run restart` 那句 kill），本进程确认
 // 哨兵仍活着，再由 v2 接回来读完剩下的行。
 {
@@ -263,7 +364,44 @@ const t = setInterval(() => { i++; console.log("tick " + i); if (i >= 12) { clea
   console.log("✓ 哨兵活得过 server 重启，重启期间产出的行一条不漏");
 }
 
+// ── ⑪ 停服期间跑完的活，重启后也要把它留下的输出补完 ─────────────────────────
+// 「进程不在了」说的是这一刻，不是说它这段时间什么都没干。直接落 lost 就等于：一件跑了
+// 两小时的活在 ash 关掉的时候结束了，再打开只剩一句「进程已不在」，进展和结果一个字都
+// 没到任务头上——而「一件事要跑很久」正是哨兵存在的全部理由。
+{
+  const stateFile = join(root, "offline-state.json");
+  const offline = join(root, "offline.mjs");
+  writeFileSync(offline, `setTimeout(() => { console.log("OFFLINE_DONE"); process.exit(0); }, 1500);\n`);
+  const child = join(HERE, "monitor-restart-child.ts");
+  const taskId = await makeTask();
+  detachAllMonitors();
+
+  const run = (mode: string) =>
+    spawnSync("npx", ["tsx", child, mode, taskId, stateFile, `${JSON.stringify(process.execPath)} ${JSON.stringify(offline)}`], {
+      stdio: "inherit",
+      cwd: join(HERE, ".."),
+      timeout: 120_000,
+      env: { ...process.env, ASH_DB: process.env.ASH_DB, ASH_RUNS_DIR: process.env.ASH_RUNS_DIR },
+    });
+
+  // v3 起完哨兵立刻硬退出：它一个字都没来得及读，命令随后才输出并结束。
+  assert.equal(run("v3").status, 0, "v3 子进程应正常退出");
+  const v3 = JSON.parse(readFileSync(stateFile, "utf8")) as { monitorId: string; pid: number };
+  await until("命令在停服期间自己跑完了", async () => !isPidAlive(v3.pid));
+
+  const result = await reattachMonitors();
+  assert.equal(result.lost, 1, "进程确实已经不在了，如实记 lost");
+  const row = (await db.select().from(monitors).where(eq(monitors.id, v3.monitorId))).at(0)!;
+  assert.equal(row.status, "lost");
+  assert.equal(row.exitCode, null, "退出码确实拿不到，就记 null——不拿 0 冒充跑成功了");
+  assert.ok(row.events > 0, `它留下的输出必须补读出来，实际 events=${row.events}`);
+  const texts = (await pendingOf(taskId)).map((m) => m.text).join("\n");
+  assert.match(texts, /OFFLINE_DONE/, "停服期间产出的那一行要送到任务头上");
+  assert.match(texts, /哨兵结束/, "结束这件事本身也要如实通知，不能静默");
+  console.log("✓ 停服期间跑完的活，重启后补读输出并如实通知");
+}
+
 detachAllMonitors();
 await releaseTmpDb();
 rmSync(root, { recursive: true, force: true });
-console.log("✓ 哨兵：推送 / 合并 / 连坐停止 / 真杀进程 / 日志回看 / 跨重启接管 均受回归保护");
+console.log("✓ 哨兵：推送 / 合并 / 连坐停止 / 真杀进程 / 日志回看 / 上限与坏参数 / 位置顺序 / 终态作废 / 跨重启接管与离线补读 均受回归保护");

@@ -22,7 +22,7 @@
 import type { MiddlewareHandler } from "hono";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { groups, scheduledMessages, sessions, tasks } from "../db/schema.js";
+import { groups, monitors, scheduledMessages, sessions, tasks } from "../db/schema.js";
 import { actorOf } from "./context.js";
 import { isMultiUser } from "./mode.js";
 import { canSeeProject, projectOfQueue } from "./visibility.js";
@@ -67,6 +67,20 @@ async function projectOfSession(sessionId: string): Promise<string | null> {
  * 路由 —— 列表端点在 `/tasks/:id/…` 下、被闸挡得好好的,而这两条改写端点整个漏在闸外:
  * 拿到(或试出)一个 mid 就能取消、引导别人项目里待发的消息(第 1 轮审查 P1)。
  */
+/**
+ * 哨兵也属于任务。`/api/monitors/:id/log` 与 `…/:id/stop` 又是一对**全局 id 路由**
+ * —— 列表与创建端点挂在 `/tasks/:id/monitors` 下、被闸挡着,这两条却整个漏在闸外:
+ * 拿到一个 monitorId 就能读走别人项目里长跑命令的原始输出、还能把它停掉
+ * (第 1 轮审查 P1,与定时消息那次是同一个形状的洞)。
+ */
+async function projectOfMonitor(monitorId: string): Promise<string | null> {
+  const row = (await db
+    .select({ taskId: monitors.taskId })
+    .from(monitors)
+    .where(eq(monitors.id, monitorId))).at(0);
+  return row ? await projectOfTask(row.taskId) : null;
+}
+
 async function projectOfScheduledMessage(messageId: string): Promise<string | null> {
   const row = (await db
     .select({ taskId: scheduledMessages.taskId })
@@ -94,6 +108,7 @@ const PROJECT_OF: Record<string, (ident: string) => Promise<string | null>> = {
   queues: projectOfQueue,
   sessions: projectOfSession,
   "scheduled-messages": projectOfScheduledMessage,
+  monitors: projectOfMonitor,
 };
 
 /** 归这道闸管的集合。导出给回归测试按它枚举路由表。 */
