@@ -14,6 +14,7 @@ import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
 import { SideChatPane } from "../side-chat/SideChatPane.tsx";
+import { monitorBlockedReason } from "@ash/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 
@@ -162,7 +163,9 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     title: "哨兵",
     icon: <Pulse size={14} />,
     shortcut: "m",
-    render: (context) => <MonitorInspector monitors={context.monitors} canStart={!context.task.archived} />,
+    render: (context) => (
+      <MonitorInspector monitors={context.monitors} blockedReason={monitorBlockedReason(context.task)} />
+    ),
   },
 ];
 

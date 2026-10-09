@@ -36,8 +36,8 @@ function state(monitors: TaskMonitor[]): TaskMonitorsState {
   };
 }
 
-const panel = (monitors: TaskMonitor[], canStart = true) =>
-  renderToStaticMarkup(<MonitorInspector monitors={state(monitors)} canStart={canStart} />);
+const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
+  renderToStaticMarkup(<MonitorInspector monitors={state(monitors)} blockedReason={blockedReason} />);
 
 // ── 在盯的那个必须给得出「停」，并把花掉的回合数摆在明面上 ────────────────────
 // 哨兵的进程是故意脱离 ash 的：agent 的回合、会话、甚至 server 重启都带不走它。代价
@@ -74,7 +74,11 @@ const panel = (monitors: TaskMonitor[], canStart = true) =>
   assert.match(html, /还没有哨兵/, "空态要直说现在没有");
   assert.match(html, /每吐一行/, "空态顺带解释清楚哨兵是什么，否则这一格对新用户是个谜");
   assert.match(html, /手动起一个哨兵/, "没有哨兵时也要留着手动起一个的入口");
-  assert.doesNotMatch(panel([], false), /手动起一个哨兵/, "归档任务上的哨兵早被收回，不该再给新建入口");
+  const blocked = panel([], "任务已归档，不能再挂哨兵");
+  assert.doesNotMatch(blocked, /手动起一个哨兵/, "归档任务上的哨兵早被收回，不该再给新建入口");
+  // 按钮凭空消失 = 用户以为功能坏了。不能起就必须把原因写在面板上。
+  assert.match(blocked, /任务已归档/, "不给新建入口时要说清为什么");
+  assert.doesNotMatch(blocked, /MCP 工具 start_monitor/, "连入口都没有时，别再教人怎么用那个入口");
 }
 
 // ── 图标条上的那一格：平时不占位置，第一个哨兵挂上去才自己冒出来 ──────────────
@@ -167,4 +171,21 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   assert.match(monitorBranch, /cancelPending\(m\)/, "哨兵事件只保留「取消这次唤醒」");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、该冒头时冒头，手机端同样给得出叫停");
+// ── 「起成功了」是一句有归属的话 ─────────────────────────────────────────────
+// 调用方拿这个返回值只做一件事：把表单收起来。所以切走之后它必须回 false —— 此刻屏幕上
+// 那张表单已经是另一个任务的了，里面往往还有没提交的草稿。
+//
+// 为什么这一条是源码断言、而不是像忙碌标记那半截一样从 DOM 上验：今天唯一的调用方把这一
+// 格挂在按任务取 key 的 `InspectorHost` 下，切任务时整格连表单一起重挂，于是「跨任务的
+// 成功回调收走了当前表单」在 DOM 上看不见（忙碌标记那半截看得见，因为它住在 hook 里、
+// 跨任务活着，见 test-monitor-inspector-dom.mjs）。但这是 hook 对外的契约，下一个调用方
+// 未必重挂，而届时丢的是用户打的字 —— 所以守在这里。
+{
+  const hook = readSource(new URL("../src/monitors/useTaskMonitors.ts", import.meta.url));
+  const start = hook.slice(hook.indexOf("const start = useCallback"), hook.indexOf("return { monitors,"));
+  assert.doesNotMatch(start, /^\s*return true;$/m, "跨任务的创建不许回 true：它唯一的用处是收走当前那张表单");
+  assert.match(start, /return mine\(\);/, "起成功了也要先问一句「现在还是这个任务吗」");
+  assert.match(start, /if \(mine\(\)\) setStarting\(false\);/, "忙碌标记同样按归属清——它锁的是这张表单的提交按钮");
+}
+
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、该冒头时冒头，创建结果有归属，手机端同样给得出叫停");

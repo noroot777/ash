@@ -59,3 +59,5 @@
 .monitor-composer__actions button.is-primary { border-color: transparent; background: var(--accent); color: white; font-weight: 650; }
 .monitor-composer__actions button.is-primary:hover:not(:disabled) { background: color-mix(in lch, var(--accent) 88%, black); color: white; }
 .monitor-composer__actions button:disabled { cursor: not-allowed; opacity: .48; }
+/* 不能挂哨兵时那一句：说清为什么，而不是让「+」凭空消失。 */
+.monitor-inspector__blocked { margin: 0 0 9px; border-left: 2px solid var(--line2); padding-left: 8px; color: var(--faint); font-size: 10px; line-height: 1.6; }

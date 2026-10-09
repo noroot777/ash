@@ -297,10 +297,18 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
 // 抢占一条消息必须是原子的,否则两个触发源会把同一条发两遍(WHERE 里带 status='pending'
 // 且租约为空,谁的 UPDATE 真改到行谁就赢)。
 //
+// **返回的是抢下那一刻的那一行,不是调用方手里的快照。** 待发送的正文是会变的:哨兵事件
+// 直接往同一行后面追加(monitors.ts `pushToTask`,合并才能让几十条事件只唤醒任务一次),
+// 而投递方从「选中这一条」到真正送出去中间要等当前回合退干净 —— 那段时间里追加进去的
+// 内容,按旧快照发就等于没发,行却被标成 sent,于是它永远不会再补发(第 2 轮审查实测:
+// 会话里只有 FIRST,sent 的正文里 FIRST+SECOND 都在,读取位置也已经越过去了)。
+// 租约一旦落下,追加端的 CAS 条件(租约为空)就不再成立,所以「抢租约 → 重读正文」之后
+// 这一行的内容不会再变。
+//
 // 导出是给崩溃测试用的:`test-scheduled-messages.ts` 的子进程拿它抢下租约后立刻 SIGKILL
 // 自己,好让「另一个进程死在投递中途」这个现场由**真实路径本身**造出来,而不是测试手写
 // 一行假状态。投递逻辑之外不要调它。
-export async function beginDelivery(messageId: string): Promise<boolean> {
+export async function beginDelivery(messageId: string): Promise<Row | null> {
   const claimed = await db
     .update(scheduledMessages)
     .set({ deliveringSince: now() })
@@ -311,8 +319,8 @@ export async function beginDelivery(messageId: string): Promise<boolean> {
         isNull(scheduledMessages.deliveringSince),
       ),
     )
-    .returning({ id: scheduledMessages.id });
-  return claimed.length > 0;
+    .returning();
+  return claimed.at(0) ?? null;
 }
 
 // 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
@@ -404,11 +412,14 @@ async function deliverWhenIdle(
   try {
     // 等待期间它还是 pending,所以用户可能已经手动取消、另一个触发源也可能抢先
     // 送掉了。抢不到租约就什么都不做 —— 送它的那一位会自己记账。
-    if (!(await beginDelivery(message.id))) return;
+    const claimed = await beginDelivery(message.id);
+    if (!claimed) return;
     lastFiredAt.set(message.taskId, Date.now());
     // 排空的一瞬间被别的路径抢走了回合(队列推进、用户手点运行):这一句一个字都
     // 没送出去,退回队列等下一次触发。
-    const started = await continueTask(message.taskId, message.text, {
+    // 正文用 `claimed.text` 而不是 `message.text`:等回合退干净的这段时间里,哨兵可能
+    // 已经往同一行后面追加了新的事件(见 beginDelivery 的注释)。
+    const started = await continueTask(message.taskId, claimed.text, {
       ...options,
       onDelivered: async () => {
         delivered = true;
@@ -476,12 +487,13 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
       const dueAt = markDue(m.id, queuedAt);
       const busyMs = settleBusyAgain(m.id, queuedAt);
       if (t!.mode === "team") {
-        if (!(await beginDelivery(m.id))) continue; // 另一个触发源刚抢走
+        const claimed = await beginDelivery(m.id);
+        if (!claimed) continue; // 另一个触发源刚抢走
         fired.add(m.taskId);
         lastFiredAt.set(m.taskId, Date.now());
         let delivered = false;
         try {
-          const started = await continueTask(m.taskId, m.text, {
+          const started = await continueTask(m.taskId, claimed.text, {
             ...options,
             throwOnTeamUnavailable: true,
             onDelivered: async () => {

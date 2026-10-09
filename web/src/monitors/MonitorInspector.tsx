@@ -13,12 +13,18 @@ import type { TaskMonitorsState } from "./useTaskMonitors.ts";
 
 export function MonitorInspector({
   monitors,
-  canStart,
+  blockedReason,
 }: {
   monitors: TaskMonitorsState;
-  /** 归档任务只读：进程早被收回了，再给一个「起一个」只会起完就被下一次清理掉。 */
-  canStart: boolean;
+  /**
+   * 不能挂哨兵时的原因（`monitorBlockedReason`，与服务端创建闸同一份判据）；null = 能挂。
+   *
+   * 要的是**原因**而不是一个布尔：按钮凭空消失的话，用户只会以为功能坏了或自己记错了
+   * 位置——而这里恰恰有一句话能说清楚（任务已经结束了，它的输出不会再唤醒任何人）。
+   */
+  blockedReason: string | null;
 }) {
+  const canStart = blockedReason === null;
   const [composing, setComposing] = useState(false);
   const addTip = useHoverTip();
   // 还在盯着的永远排在上面：结束的那几张是存档，正在烧回合的那几个才是要盯着看的。
@@ -46,6 +52,7 @@ export function MonitorInspector({
         </InspectorHeadActions>
       )}
       {monitors.error && <p className="monitor-inspector__error" role="alert">{monitors.error}</p>}
+      {blockedReason && <p className="monitor-inspector__blocked">{blockedReason}</p>}
       {composing && (
         <MonitorComposer
           busy={monitors.starting}
@@ -61,7 +68,7 @@ export function MonitorInspector({
               哨兵是一条绑在任务上的长跑命令，由 ash 自己起——不在智能体的进程树里，
               所以它的回合结束、会话结束、server 重启都带不走它。它每吐一行，就把这个任务唤醒一次。
             </p>
-            <p>智能体可以自己挂（MCP 工具 start_monitor），你也可以从上面那个 + 手动起一个。</p>
+            {canStart && <p>智能体可以自己挂（MCP 工具 start_monitor），你也可以从上面那个 + 手动起一个。</p>}
           </div>
         )
         : (

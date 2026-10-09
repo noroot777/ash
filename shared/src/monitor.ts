@@ -81,6 +81,28 @@ export function mergeMonitorEventText(existing: string, incoming: string): strin
   return `（更早的 ${dropped} 个字符已略去，完整输出在哨兵的日志文件里）\n${kept}${kept ? "\n\n" : ""}${incoming}`;
 }
 
+/**
+ * 「这个任务现在能不能挂哨兵」——**创建入口与投递出口共用的那一份判据**。
+ *
+ * 两边不同源就会长出这样一个洞：界面允许在一个已完成的任务上起哨兵，命令真的跑起来、
+ * 卡片上事件数还在涨，而投递那一侧按终态把每一条都拒了，任务永远不醒（第 2 轮审查实测：
+ * 待发送消息数 0、任务一直 done，用户只会以为通知已经处理过了）。所以判据只留这一份，
+ * server 的 `startMonitor` 和界面的「+」按钮都读它。
+ *
+ * 终态的那三种和归档分开说：归档是「这个任务收进柜子了」，终态是「它跑完了」——后者
+ * 重新跑起来就又能挂，措辞得给出这条出路。
+ */
+const MONITOR_BLOCKING_STATUSES = new Set(["done", "failed", "canceled"]);
+
+export function monitorBlockedReason(
+  task: { status: string; archived?: boolean | null },
+): string | null {
+  if (task.archived) return "任务已归档，不能再挂哨兵";
+  if (MONITOR_BLOCKING_STATUSES.has(task.status))
+    return "任务已经结束，哨兵的输出不会再唤醒它——要盯新的活，先让这个任务重新跑起来";
+  return null;
+}
+
 /** 待发送消息上的来源标记（`scheduled_messages.origin`）。同一个哨兵的事件按它合并。 */
 export const monitorMessageOrigin = (monitorId: string) => `monitor:${monitorId}`;
 export const monitorIdFromOrigin = (origin: string | null | undefined): string | null =>

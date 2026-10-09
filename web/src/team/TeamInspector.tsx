@@ -17,6 +17,7 @@ import { parseAttachmentText } from "../task-detail/utils.ts";
 import { TeamTimeline } from "./TeamTimeline.tsx";
 import { TeamReviewInspector } from "./TeamReviewInspector.tsx";
 import { WorkerRail } from "./WorkerRail.tsx";
+import { monitorBlockedReason } from "@ash/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 import {
@@ -261,6 +262,8 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     title: "哨兵",
     icon: <Pulse size={14} />,
     shortcut: "m",
-    render: (context) => <MonitorInspector monitors={context.monitors} canStart={!context.task.archived} />,
+    render: (context) => (
+      <MonitorInspector monitors={context.monitors} blockedReason={monitorBlockedReason(context.task)} />
+    ),
   },
 ];

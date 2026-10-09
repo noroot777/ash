@@ -22,6 +22,7 @@ import {
   MONITOR_TAIL_MAX_BYTES,
   MONITOR_TAIL_MAX_LINES,
   mergeMonitorEventText,
+  monitorBlockedReason,
   normalizeMonitorTimeout,
   monitorMessageOrigin,
   type MonitorStatus,
@@ -54,9 +55,6 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
   endedAt: r.endedAt,
   endedReason: r.endedReason,
 });
-
-/** 任务到了这几个状态就不该再被哨兵叫醒了。`status.ts` 的 TERMINAL 同一份判据。 */
-const TERMINAL_TASK_STATUSES = new Set(["done", "failed", "canceled"]);
 
 type Runtime = {
   tail: Tailer;
@@ -134,7 +132,11 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
   return serialize(`task:${input.taskId}`, async () => {
     const task = (await db.select().from(tasks).where(eq(tasks.id, input.taskId))).at(0);
     if (!task) return { ok: false, status: 404, error: "任务不存在" };
-    if (task.archived) return { ok: false, status: 409, error: "任务已归档，不能再挂哨兵" };
+    // 入口与出口同一份判据（`monitorBlockedReason`）。只判归档、不判终态的话，已完成的
+    // 任务上照样起得来一个真进程，而 `pushToTask` 会把它推的每一条都按终态拒掉——命令
+    // 在后台烧着，任务永远不醒（第 2 轮审查实测）。
+    const blocked = monitorBlockedReason(task);
+    if (blocked) return { ok: false, status: 409, error: blocked };
 
     const live = await liveMonitorsOf(input.taskId);
     if (live.length >= MONITOR_MAX_PER_TASK)
@@ -255,8 +257,11 @@ async function pushLines(row: Row, lines: string[], readTo: number | null): Prom
   const head = `【哨兵事件】${row.description}（monitorId=${row.id}）`;
   const tail = omitted > 0 ? `\n…（这一批共 ${lines.length} 行，上面只列了前 ${shown.length} 行）` : "";
   const delivered = await pushToTask(row, `${head}\n${shown.join("\n")}${tail}`);
-  const events = row.events + lines.length;
-  // 没投出去（任务已经结束了）就不推进位置：这批行没人读过，留着让日志回看还能看到。
+  // `events` 数的是「**唤醒过任务几次**」，不是「读到过几行」。没投出去的那几行一次唤醒
+  // 都没造成，计进去只会让卡片显示「已有 3 条事件」而任务那边一声没响——用户据此以为
+  // 通知已经处理过了（第 2 轮审查实测：终态任务上卡片显示 1 条事件、待发消息数 0）。
+  // 位置同理不推进：这批行没人读过，留着让日志回看还能看到。
+  const events = delivered ? row.events + lines.length : row.events;
   await db
     .update(monitors)
     .set({ events, ...(delivered && readTo !== null ? { offset: readTo } : {}) })
@@ -299,7 +304,7 @@ async function pushToTask(row: Row, text: string): Promise<boolean> {
     .select({ status: tasks.status, archived: tasks.archived })
     .from(tasks)
     .where(eq(tasks.id, row.taskId))).at(0);
-  if (!task || task.archived || TERMINAL_TASK_STATUSES.has(task.status)) return false;
+  if (!task || monitorBlockedReason(task) !== null) return false;
 
   const origin = monitorMessageOrigin(row.id);
   const existing = (await db
@@ -310,18 +315,41 @@ async function pushToTask(row: Row, text: string): Promise<boolean> {
       eq(scheduledMessages.origin, origin),
       eq(scheduledMessages.status, "pending"),
       isNull(scheduledMessages.deliveringSince),
-    ))).at(0);
-  if (existing) {
-    await db
-      .update(scheduledMessages)
-      .set({ text: mergeMonitorEventText(existing.text, text) })
-      .where(and(eq(scheduledMessages.id, existing.id), isNull(scheduledMessages.deliveringSince)));
-    publishPendingMessages(row.taskId);
-  } else {
-    await enqueueMessage({ taskId: row.taskId, text, origin, ownerUserId: row.ownerUserId });
-  }
+    ))).at(0) ?? null;
+  await mergeOrEnqueueMonitorEvent(row, text, existing);
   flushPendingForTask(row.taskId);
   return true;
+}
+
+/**
+ * 「追加进那一行」还是「另起一条」。
+ *
+ * 合并那一发是一次 CAS（条件就是「租约还空着」），**它可以合法地落空**：上面查到这一行
+ * 之后、这里改到它之前，投递方完全可能刚好抢走租约。落空就必须另起一条新消息，不能当成
+ * 改成功了 —— 那一批行既没进任何一条消息、位置还会跟着前进，于是整批进展静默消失
+ * （第 2 轮审查实测：events=2、read_offset 已越过第二条，而消息里只有第一条）。
+ *
+ * **单独成一个函数是为了让那个窗口能被测到**：`existing` 由调用方传进来，于是回归测试
+ * 可以先查出这一行、再真的抢走租约、然后拿着那份**已经过期**的 `existing` 调它 —— 这正
+ * 是竞态产生的那个现场，而且走的是生产代码本身，不需要往产线里埋测试钩子。
+ */
+export async function mergeOrEnqueueMonitorEvent(
+  row: Row,
+  text: string,
+  existing: typeof scheduledMessages.$inferSelect | null,
+): Promise<void> {
+  const merged = existing
+    ? await db
+      .update(scheduledMessages)
+      .set({ text: mergeMonitorEventText(existing.text, text) })
+      .where(and(eq(scheduledMessages.id, existing.id), isNull(scheduledMessages.deliveringSince)))
+      .returning({ id: scheduledMessages.id })
+    : [];
+  if (merged.length > 0) {
+    publishPendingMessages(row.taskId);
+  } else {
+    await enqueueMessage({ taskId: row.taskId, text, origin: monitorMessageOrigin(row.id), ownerUserId: row.ownerUserId });
+  }
 }
 
 // ── 停 ───────────────────────────────────────────────────────────────────────
@@ -395,8 +423,18 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
  * 为什么任务一结束就连坐：哨兵唯一的出口是「唤醒这个任务」，任务都结束了，它再醒来也只是
  * 花钱。要让哨兵继续盯，这一轮该用 pause_task 收尾而不是 complete_task —— 这句话同时写在
  * MCP 工具的说明里，是 agent 做选择时唯一能看到的判据。
+ *
+ * **跟创建走同一条 `task:<id>` 队列**：不排队的话「正在创建」和「任务刚结束」会并发——
+ * 创建那边数完活着的哨兵、起完进程、还没插库，连坐这边已经扫完了一遍，于是新起的那个
+ * 谁也没停，它会一直跑到自己结束或到期，而它推的每一条都被终态挡回（第 2 轮审查第 3 条
+ * 要求一并护住的那个窗口）。排上队之后两种顺序都收口：连坐先跑 → 创建在锁里读到终态、
+ * 直接拒；创建先跑 → 连坐看得见那一行、照常停它。
  */
 export async function stopMonitorsForTask(taskId: string, reason: string): Promise<number> {
+  return serialize(`task:${taskId}`, () => stopMonitorsForTaskLocked(taskId, reason));
+}
+
+async function stopMonitorsForTaskLocked(taskId: string, reason: string): Promise<number> {
   const live = await liveMonitorsOf(taskId);
   for (const m of live) await finish(m.id, "stopped", reason, null, { notify: false, keepBuffered: false });
   // 停掉进程还不够：这一刻**已经排在待发队列里**的哨兵事件同样会把任务重新拉起来。

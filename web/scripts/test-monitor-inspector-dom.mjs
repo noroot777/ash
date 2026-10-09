@@ -247,8 +247,54 @@ try {
     await page.close();
   }
 
+  // ── 上一个任务的创建迟到成功，不许清掉当前任务刚填的草稿 ───────────────────
+  // 「起成功了」唯一的用处是把表单收起来，而此刻屏幕上那张表单已经是**另一个任务**的、
+  // 里面往往还有没提交的内容。忙碌标记同理：它锁的是这张表单的提交按钮。
+  {
+    let releaseStart;
+    const held = new Promise((resolve) => { releaseStart = resolve; });
+    pending.push(() => releaseStart());
+    let startCalls = 0;
+    const page = await open(async (route, path) => {
+      if (route.request().method() !== "POST" || path !== "/api/tasks/task-a/monitors") return false;
+      startCalls += 1;
+      await held;
+      await route.fulfill({ json: { monitor: monitor("m-task-a-2", "task-a") } }).catch(() => undefined);
+      return true;
+    });
+    await waitIds(page, "m-task-a");
+
+    // 在 A 上起一个，请求卡住。
+    await page.getByRole("button", { name: "手动起一个哨兵" }).click();
+    await page.locator(".monitor-composer textarea").fill("printf 'A\\n'; sleep 300");
+    await page.getByRole("button", { name: "起一个哨兵", exact: true }).click();
+    const armed = Date.now() + 5000;
+    while (startCalls < 1 && Date.now() < armed) await page.waitForTimeout(20);
+    assert.equal(startCalls, 1, "A 的创建请求已经出门并卡住");
+
+    // 切到 B，在 B 上重新开表单、填一份草稿。
+    await page.getByRole("button", { name: "切换任务" }).click();
+    await waitIds(page, "m-task-b");
+    await page.getByRole("button", { name: "手动起一个哨兵" }).click();
+    const draft = page.locator(".monitor-composer textarea");
+    const text = String.raw`printf 'B_DRAFT\n'; sleep 300`;
+    await draft.fill(text);
+    assert.equal(
+      await page.getByRole("button", { name: "起一个哨兵", exact: true }).isDisabled(),
+      false,
+      "B 的提交按钮不该被 A 那条在途创建按住——那把锁锁的是别人的表单",
+    );
+
+    releaseStart();
+    await page.waitForTimeout(400);
+    assert.equal(await page.locator(".monitor-composer").count(), 1, "当前任务的表单不该被上一个任务的成功回调收走");
+    assert.equal(await draft.inputValue(), text, "没提交过的草稿一个字都不该丢");
+    assert.equal(await idsOf(page), "m-task-b", "列表也还是当前任务的");
+    await page.close();
+  }
+
   assert.deepEqual(failures, []);
-  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task reads/stops never land");
+  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task reads/stops/creates never land");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();

@@ -26,6 +26,14 @@ export type SpawnedMonitor = {
 };
 
 export function spawnMonitor(opts: { command: string; cwd: string; logPath: string }): SpawnedMonitor | { error: string } {
+  // 工作目录先自己判一句。它失效是**最常见**的一种失败（项目目录被移走、旧任务的
+  // worktree 被清掉），而 `spawn` 对坏 cwd 的报错是**异步**的：那条路在下面要靠两道
+  // 防线才接得住，没必要为一个一句话就能判出来的情况去赌那两道。
+  try {
+    if (!statSync(opts.cwd).isDirectory()) return { error: `哨兵的工作目录不是一个目录：${opts.cwd}` };
+  } catch {
+    return { error: `哨兵的工作目录不在了：${opts.cwd}` };
+  }
   mkdirSync(dirname(opts.logPath), { recursive: true });
   let fd: number;
   try {
@@ -44,16 +52,31 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
       stdio: ["ignore", fd, fd],
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
     });
+    // `error` 必须**此刻**就挂上，不能等调用方 `onExit` 时再挂：spawn 的失败是异步报的
+    // （坏 cwd 在 fork 之后才 chdir 失败），这一刻没有监听者的话 Node 把它升级成
+    // uncaughtException —— 整个 ash 当场退出，一次失败的创建把所有任务页一起带下线
+    // （第 2 轮审查实测：隔离服务退出码 143，日志 `uncaughtException: spawn sh ENOENT`）。
+    let failure: Error | null = null;
+    let forward: ((code: number | null) => void) | null = null;
+    child.on("error", (e) => {
+      failure = e;
+      forward?.(null);
+    });
     if (!child.pid) {
-      child.kill();
+      // **绝不能 `child.kill()`**：没有 pid 就没有进程可杀，这一步会走到
+      // `uv_process_kill(0, SIGTERM)`，而 POSIX 的 `kill(0, …)` 是「发给自己所在的
+      // 整个进程组」—— ash 把自己连同它起的一切一起 SIGTERM 掉（同上，实测）。
       return { error: `哨兵起不来：${opts.command}` };
     }
     child.unref();
     return {
       pid: child.pid,
       onExit: (cb) => {
-        child.on("error", () => cb(null));
+        forward = cb;
         child.on("exit", (code, signal) => cb(code ?? (signal ? null : 0)));
+        // 挂得比失败还晚（起进程和登记之间隔着一次 insert）：补叫一次，否则这个哨兵
+        // 会以 running 的样子一直挂到超时。
+        if (failure) cb(null);
       },
     };
   } catch (e) {

@@ -13,14 +13,18 @@
 //     接回来，重启期间产出的行一条不漏 —— 这是整件事相对「挂在会话上的后台进程」的
 //     全部增量，也是本测试最该守住的一条
 //  ⑪ 命令在停服期间就跑完了：重启时那条「进程已经不在」的路同样要补读它留下的输出
+//  ⑫ 起不来只失败这一条请求：坏 cwd 不许把 ash 自己的进程组 SIGTERM 掉
+//  ⑬⑭ 合并与投递抢同一行 pending：等回合期间追加的照样发出去，CAS 落空就另起一条
+//  ⑮ 创建入口与投递出口同一份判据：投不出去的任务上起不来，也不虚报事件数
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { and, eq } from "drizzle-orm";
 import { MONITOR_MAX_EVENTS, MONITOR_MAX_MERGED_CHARS, MONITOR_MAX_PER_TASK } from "@ash/shared/monitor";
+import { readSource } from "../../scripts/read-source.mjs";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -401,7 +405,162 @@ const t = setInterval(() => { i++; console.log("tick " + i); if (i >= 12) { clea
   console.log("✓ 停服期间跑完的活，重启后补读输出并如实通知");
 }
 
+// ── ⑫ 起不来不许外溢：一次失败的创建不能把整个 ash 带走 ───────────────────────
+// 这一段最该守的断言是「**本进程还活着**」。`spawn` 对坏 cwd 的报错是异步的，而旧代码
+// 在没拿到 pid 的分支上调了 `child.kill()` —— 那一步走到 `uv_process_kill(0, SIGTERM)`，
+// 而 POSIX 的 `kill(0, …)` 是「发给自己所在的整个进程组」：ash 自己当场 SIGTERM
+// （第 2 轮审查实测：隔离服务退出码 143，首页从此不响应，所有任务页一起下线）。
+// 所以这里不写 try/catch 也不另起进程 —— 真塌了，这条测试就是被信号打死的那个。
+{
+  const taskId = await makeTask();
+  const idle = `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)"`;
+
+  const gone = await startMonitor({ taskId, command: idle, cwd: join(root, "no-such-dir-ever") });
+  assert.equal(gone.ok, false, "工作目录不存在就该干脆地失败");
+  assert.equal(gone.ok === false ? gone.status : 0, 409, "这是环境冲突，不是入参错误");
+
+  const notDir = join(root, "a-file-not-a-dir");
+  writeFileSync(notDir, "x");
+  const wrongKind = await startMonitor({ taskId, command: idle, cwd: notDir });
+  assert.equal(wrongKind.ok, false, "cwd 指到一个文件上同样要失败");
+
+  // 预检挡不住的那一类：目录在、但进不去（chdir 返回 EACCES）。这条路真的会走到
+  // `spawn` 的异步失败，于是它同时钉住第二道防线——`error` 监听必须在那一刻就挂着，
+  // 不然 Node 把它升级成 uncaughtException，整个进程照样没了。
+  const sealed = join(root, "sealed-dir");
+  mkdirSync(sealed, { recursive: true });
+  chmodSync(sealed, 0o000);
+  try {
+    const denied = await startMonitor({ taskId, command: idle, cwd: sealed });
+    // root 跑测试时 chdir 不会被拒，那就只验「没炸」，不强求它失败。
+    if (denied.ok) await stopMonitor(denied.monitor.id, "测试收尾");
+  } finally {
+    chmodSync(sealed, 0o700);
+  }
+
+  await sleep(300);
+  assert.equal((await listMonitors(taskId)).length, 0, "三次失败一条记录都不该留下");
+  assert.ok(process.pid > 0, "本进程还活着——这就是这一段的主断言");
+
+  // 第一道防线的形状也钉一下：`child.kill()` 这一句无论以什么理由都不该回来。
+  const spawnSrc = readSource(join(HERE, "../src/monitor-spawn.ts"));
+  assert.doesNotMatch(
+    spawnSrc,
+    /^\s*child\.kill\(/m, // 只认语句，注释里引用这个名字不算
+    "没有 pid 就没有进程可杀，`child.kill()` 打的是 ash 自己所在的进程组",
+  );
+  assert.ok(
+    spawnSrc.indexOf('child.on("error"') < spawnSrc.indexOf("if (!child.pid)"),
+    "`error` 监听必须挂在拿 pid 之前：spawn 的失败是异步报的，没人听就是 uncaughtException",
+  );
+  console.log("✓ 起不来只失败这一条请求，不动 ash 自己");
+}
+
+// ── ⑬⑭ 事件与投递抢同一行：追加进去的内容一个字都不能丢 ───────────────────────
+// 合并（几十条事件只唤醒任务一次）和投递是两个写者在抢同一行 pending。两个方向各有一个
+// 真窗口，第 2 轮审查都实测到了：
+//   A. 投递方从「选中这一条」到真正送出去中间要等当前回合退干净，按**旧快照**发 = 那段
+//      时间里追加进去的事件等于没发，行却被标 sent，再也不会补发。
+//   B. 合并那一发是 CAS（条件是租约为空），它可以合法落空；不看结果就当成功，那一批行
+//      既没进任何消息、位置还跟着前进，整批进展静默消失。
+{
+  const pending = await import("../src/pending-messages.js");
+  const taskId = await makeTask();
+  const logFile = join(root, "race.log");
+  writeFileSync(logFile, "");
+  const started = await startMonitor({
+    taskId,
+    command: `${JSON.stringify(process.execPath)} -e 'process.stdout.write(require("fs").readFileSync(${JSON.stringify(logFile)}, "utf8")); setInterval(() => {}, 1000);'`,
+    description: "抢同一行",
+  });
+  assert.equal(started.ok, true);
+  const monitorId = started.ok ? started.monitor.id : "";
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+
+  appendFileSync(row.logPath, "FIRST_BEFORE_PAUSE\n");
+  await until("第一条事件已排队", async () => (await pendingOf(taskId)).length > 0);
+  const queued = (await pendingOf(taskId))[0]!;
+
+  // ⑬ 投递方抢租约那一刻拿到的必须是**此刻**那一行，而不是它选中时的快照。
+  appendFileSync(row.logPath, "SECOND_WHILE_WAITING\n");
+  await until("第二条已合并进同一行", async () =>
+    (await pendingOf(taskId)).some((m) => m.text.includes("SECOND_WHILE_WAITING")));
+  const claimed = await pending.beginDelivery(queued.id);
+  assert.ok(claimed, "没抢到租约，这一段的前提就不成立");
+  assert.equal(
+    typeof claimed?.text,
+    "string",
+    "beginDelivery 要把抢到的那一行交回来——只回一个 true 的话，投递方手里永远只有旧快照",
+  );
+  assert.match(claimed!.text, /FIRST_BEFORE_PAUSE/);
+  assert.match(
+    claimed!.text,
+    /SECOND_WHILE_WAITING/,
+    "等回合期间追加进去的那条必须在抢租约时一起拿到——按旧快照发等于把它吞了",
+  );
+
+  // 投递链路两处发送都必须用抢到的那一行，不能用调用方手里的快照。
+  const deliverySrc = readSource(join(HERE, "../src/pending-messages.ts"));
+  assert.equal(
+    /continueTask\((?:message|m)\.taskId, (?:message|m)\.text/.test(deliverySrc),
+    false,
+    "投递要发的是 beginDelivery 抢到的那一行的正文（claimed.text），不是选中时的快照",
+  );
+
+  // ⑭ 「查到可合并的那一行之后，投递方才抢走租约」——那一发 CAS 必然落空。拿一份**已经
+  // 过期**的 `existing` 调生产函数就是这个现场本身（不需要往产线里埋钩子）：行是查出来
+  // 的，租约是真抢的，落空之后该怎么办全由生产代码自己决定。
+  await monitorsModule.mergeOrEnqueueMonitorEvent(row, "【哨兵事件】THIRD_AFTER_LEASE", queued);
+  const after = await pendingOf(taskId);
+  assert.equal(
+    after.filter((m) => m.text.includes("THIRD_AFTER_LEASE")).length,
+    1,
+    "合并落空不是「改成功了」：那一批行必须另起一条消息，不能静默消失",
+  );
+  // 带着租约的那一行已经出口了（行还是 pending —— 租约不是 sent），但它的正文不许再被
+  // 改动：改它等于改一句已经交到投递方手里的话。另起的那一条也得是真的另一行。
+  const leased = after.find((m) => m.id === queued.id)!;
+  assert.match(leased.text, /FIRST_BEFORE_PAUSE/);
+  assert.match(leased.text, /SECOND_WHILE_WAITING/);
+  assert.doesNotMatch(leased.text, /THIRD_AFTER_LEASE/, "租约落下之后追加的内容不该再挤进这一行");
+
+  await stopMonitor(monitorId, "测试收尾");
+  console.log("✓ 合并与投递抢同一行：等回合期间追加的照样发出去，CAS 落空就另起一条");
+}
+
+// ── ⑮ 入口与出口同一份判据：投不出去的任务上不许起，也不许虚报事件数 ───────────
+// 两边不同源就会长出这个洞：界面允许在已完成的任务上起哨兵，命令真跑起来、卡片上事件数
+// 还在涨，而投递那一侧按终态把每一条都拒了，任务永远不醒（第 2 轮审查实测：待发送消息
+// 数 0、任务一直 done，而用户看到「1 条事件」，只会以为通知已经处理过了）。
+{
+  const taskId = await makeTask();
+  const idle = `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)"`;
+  await status.setTaskStatus(taskId, "done");
+  const refused = await startMonitor({ taskId, command: idle, description: "已结束的任务" });
+  assert.equal(refused.ok, false, "投不出去的任务上就不该起得来");
+  assert.equal(refused.ok === false ? refused.status : 0, 409);
+  assert.match(refused.ok === false ? refused.error : "", /已经结束/, "拒的理由要能直接给用户看");
+  assert.equal((await listMonitors(taskId)).length, 0, "拒了就不该留下记录，更不该留下进程");
+
+  // 事件数只数「唤醒过任务几次」。归档不走连坐（它不是终态迁移），正好留出一个
+  // 「哨兵还在跑、但推不出去」的现场来验这一条。
+  const live = await makeTask();
+  const running = await startMonitor({ taskId: live, command: idle, description: "归档后推不出去" });
+  assert.equal(running.ok, true);
+  const monitorId = running.ok ? running.monitor.id : "";
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  await db.update(tasks).set({ archived: true }).where(eq(tasks.id, live));
+  appendFileSync(row.logPath, "AFTER_ARCHIVE\n");
+  await sleep(1500);
+  const settled = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(settled.events, 0, "一次唤醒都没造成，就不能报「已有 1 条事件」");
+  assert.equal(settled.offset, 0, "没人读过的行，位置也不该越过去");
+  assert.equal((await pendingOf(live)).length, 0, "归档的任务上确实一条都没排进去");
+  await stopMonitor(monitorId, "测试收尾");
+  console.log("✓ 入口与出口同一份判据：终态任务上起不来，推不出去也不虚报事件数");
+}
+
 detachAllMonitors();
 await releaseTmpDb();
 rmSync(root, { recursive: true, force: true });
-console.log("✓ 哨兵：推送 / 合并 / 连坐停止 / 真杀进程 / 日志回看 / 上限与坏参数 / 位置顺序 / 终态作废 / 跨重启接管与离线补读 均受回归保护");
+console.log("✓ 哨兵：推送 / 合并 / 连坐停止 / 真杀进程 / 日志回看 / 上限与坏参数 / 位置顺序 / 终态作废 / 跨重启接管与离线补读 / 失败不外溢 / 合并与投递抢同一行 / 入口出口同源 均受回归保护");

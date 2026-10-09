@@ -19,7 +19,7 @@ const DESCRIPTORS: readonly InspectorDescriptor<Context>[] = [{
   title: "哨兵",
   icon: <Pulse size={14} />,
   shortcut: "m",
-  render: (context) => <MonitorInspector monitors={context.monitors} canStart />,
+  render: (context) => <MonitorInspector monitors={context.monitors} blockedReason={null} />,
 }];
 
 function Fixture() {

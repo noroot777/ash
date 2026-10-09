@@ -73,6 +73,9 @@ export function useTaskMonitors(taskId: string) {
     stamp.current = { gen: stamp.current.gen + 1, seq: 0, taskId };
     setMonitors([]);
     setError(null);
+    // 上一个任务的在途创建不再锁这张表单（它的 finally 已经按归属放弃清这个标记）。
+    setStarting(false);
+    setStoppingIds(new Set());
     void reload();
   }, [reload, taskId]);
 
@@ -101,20 +104,31 @@ export function useTaskMonitors(taskId: string) {
     }
   }, [reload]);
 
-  /** 手动起一个。成功返回 true，失败把原因留在 `error` 上——表单据此决定要不要收起来。 */
+  /**
+   * 手动起一个。成功返回 true，失败把原因留在 `error` 上——表单据此决定要不要收起来。
+   *
+   * **切走之后它一律返回 false**，哪怕服务端那一边真的起成功了。调用方拿 true 去做的
+   * 唯一一件事是「把表单收起来」，而此刻屏幕上那张表单已经是**另一个任务**的了，里面
+   * 往往还有没提交的草稿：A 的创建迟到成功一回来就把 B 刚填的命令连表单一起卸掉
+   * （第 2 轮审查实测：draftDisappeared=true）。它起没起成功由那个任务自己的列表去说，
+   * 不该由一句跨任务的返回值去动当前的表单。
+   */
   const start = useCallback(async (input: StartMonitorInput): Promise<boolean> => {
     const gen = stamp.current.gen;
+    const mine = () => stamp.current.gen === gen;
     setStarting(true);
     setError(null);
     try {
       await api.startMonitor(taskId, input);
       await reload();
-      return true;
+      return mine();
     } catch (reason) {
-      if (stamp.current.gen === gen) setError(reason instanceof Error ? reason.message : String(reason));
+      if (mine()) setError(reason instanceof Error ? reason.message : String(reason));
       return false;
     } finally {
-      setStarting(false);
+      // 忙碌标记也按任务归属：它是「这张表单的提交按钮要不要锁」，切走之后那把锁锁的是
+      // 别人的表单（实测：B 的提交按钮被 A 的在途创建一直按住）。
+      if (mine()) setStarting(false);
     }
   }, [reload, taskId]);
 
