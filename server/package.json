@@ -24,6 +24,7 @@
     "test:singleton": "tsx scripts/test-singleton.ts",
     "test:detached": "tsx scripts/test-detached-survival.ts && tsx scripts/test-controllable-detached.ts",
     "test:reattach": "tsx scripts/test-reattach.ts",
+    "test:monitors": "tsx scripts/test-monitors.ts",
     "test:queue": "tsx scripts/test-queue-order.ts",
     "test:search": "tsx scripts/test-search-query.ts",
     "test:search-scan": "tsx scripts/test-search-scan.ts",

@@ -123,6 +123,16 @@ export async function ensureSchema() {
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT,
       delivering_since TEXT
     );
+    CREATE TABLE IF NOT EXISTS monitors (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, command TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '', cwd TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running', pid INTEGER, pid_started_at TEXT,
+      log_path TEXT NOT NULL, read_offset INTEGER NOT NULL DEFAULT 0,
+      events INTEGER NOT NULL DEFAULT 0, exit_code INTEGER,
+      started_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+      ended_at TEXT, ended_reason TEXT, owner_user_id TEXT
+    );
+    CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS llm_providers (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
       protocol TEXT NOT NULL DEFAULT 'openai', base_url TEXT NOT NULL,
@@ -394,6 +404,10 @@ export async function ensureSchema() {
     "ALTER TABLE scheduled_messages ADD COLUMN delivering_since TEXT",
     // 投递时恢复的回合身份（审查者提问期间排队的答复必须以 reviewer 身份送回）。
     "ALTER TABLE scheduled_messages ADD COLUMN session_role TEXT",
+    // 这条消息是谁写的。null = 真人；"monitor:<id>" = 某个哨兵推来的事件。两件事靠它：
+    // 同一个哨兵还没送出去的事件合并进同一行（一次唤醒看完全部，而不是一行一个回合），
+    // 投递时标 byBackend 让它在会话里显示成系统代写而不是用户发言。
+    "ALTER TABLE scheduled_messages ADD COLUMN origin TEXT",
     // 自由工作流预约审查：只保存一份配置，confirmed done 后复用现有派审链。
     "ALTER TABLE free_workflow_states ADD COLUMN review_armed INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE free_workflow_states ADD COLUMN review_check_mode TEXT",

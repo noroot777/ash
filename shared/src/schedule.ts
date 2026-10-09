@@ -43,6 +43,10 @@ export interface ScheduledMessage {
   model: string | null;
   reasoningEffort: string | null;
   sessionRole: ScheduledMessageSessionRole | null;
+  // 这条是谁写的。null = 用户自己打的字；"monitor:<id>" = 某个哨兵推来的事件。
+  // 托盘据此换一副面孔：哨兵事件没有「撤回后放回输入框继续编辑」这回事（那不是用户
+  // 写的句子），能做的只有取消这一次唤醒，或者直接去把那个哨兵停掉。
+  origin: string | null;
   mode: ScheduledMessageMode;
   // timed：ISO 到期发送时间。queued：入队时刻（排队消息不看时间，只用它排先后）。
   sendAt: string;

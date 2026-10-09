@@ -62,6 +62,15 @@ async function writeTaskStatus(
     }
   } else if (TERMINAL.includes(status)) {
     patch.endedAt = endedAt = updatedAt;
+    // 任务自己结束了,它名下的哨兵一并停掉。哨兵唯一的出口就是「唤醒这个任务」,任务都
+    // 结束了还留着它,只会在某个深夜把一个已经 done 的任务重新叫起来跑一轮。要让哨兵
+    // 继续盯,这一轮该用 pause_task 收尾而不是 complete_task —— 这句判据同时写在 MCP
+    // 工具说明里,那是 agent 做这个选择时唯一看得到的地方。
+    void import("./monitors.js").then(({ stopMonitorsForTask }) =>
+      stopMonitorsForTask(taskId, `任务已${status}，哨兵一并收回`).catch((err) =>
+        console.error(`[ash] stopMonitorsForTask(${taskId}) failed:`, err),
+      ),
+    );
   }
   if (status !== "running") {
     patch.activeTurnToken = null;

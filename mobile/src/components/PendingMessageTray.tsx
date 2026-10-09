@@ -105,10 +105,23 @@ export function PendingMessageTray({
                 <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{m.attachments.length}</Text>
               </View>
             )}
-            {/* 带会话角色的消息（审查链排给 reviewer 会话的答复）不归这个输入框管：撤回
-                回来的正文再发一次只会走普通回复，角色就丢了；丢弃更是直接卡住审查链。
-                所以只标出来，两颗按钮都不给。 */}
-            {m.sessionRole ? (
+            {/* 哨兵推来的事件不是用户打的字：「撤回后放回输入框继续编辑」对它是假承诺。
+                能做的只有取消这一次唤醒（哨兵还在盯，下一条事件照样会来；要让它别再来，
+                去上面的哨兵条把哨兵停掉）。 */}
+            {m.origin ? (
+              <>
+                <Text style={{ color: theme.faint, fontSize: 11 }}>哨兵事件</Text>
+                <Pressable
+                  onPress={() => void cancelPending(m)}
+                  hitSlop={4}
+                  accessibilityRole="button"
+                  accessibilityLabel="取消这次唤醒；哨兵仍在盯，下一条事件还会来"
+                  style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
+                >
+                  <Ionicons name="close-outline" size={17} color={theme.faint} />
+                </Pressable>
+              </>
+            ) : m.sessionRole ? (
               <Text style={{ color: theme.faint, fontSize: 11 }}>审查会话 · 自动投递</Text>
             ) : (
               /* 撤回可逆、丢弃不可逆，两颗挨在一起。原来图标 15 + hitSlop 8 = 31pt 见方、

@@ -10,14 +10,19 @@
 // （实测那批文件是目前 data/runs 的大头，要不要设保留期得单独拍板。）
 import { readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { isNull } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { sessions } from "./db/schema.js";
+import { monitors, sessions } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
 
 // 只认这三种后缀 —— 白名单而不是黑名单：这个目录里还躺着 .md 正文、审查证据、
 // 用户上传的图片，误删任何一样都是不可逆的。
 const SUFFIXES = [".agent-out.jsonl", ".agent-err.log", ".agent-rc"];
+// 哨兵的输出文件（`monitor-<id>.log`，见 monitor-spawn.ts）。性质跟上面三个一样：
+// 纯传输介质，真正要紧的内容早已作为事件进了会话。前缀判定而不是后缀——后缀 `.log`
+// 太泛，会误伤这个目录里别的日志。
+const MONITOR_PREFIX = "monitor-";
+const MONITOR_SUFFIX = ".log";
 
 // 默认保留一天。跑完就没用了，留一天纯粹是给「任务刚挂、想翻原始输出查一眼」
 // 留窗口。ASH_RUNLOG_KEEP_H 可调，0 = 结束即删。
@@ -33,6 +38,10 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }
   for (const s of await db.select().from(sessions).where(isNull(sessions.endedAt))) {
     if (!s.agentPid) continue;
     for (const p of [s.agentOutPath, s.agentErrPath, s.agentRcPath]) if (p) live.add(p);
+  }
+  // 还在盯的哨兵同理：它的进程此刻正往这个文件里写，tail 也正从里面读。
+  for (const m of await db.select({ logPath: monitors.logPath }).from(monitors).where(eq(monitors.status, "running"))) {
+    live.add(m.logPath);
   }
 
   let removed = 0;
@@ -53,7 +62,8 @@ export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }
       continue;
     }
     for (const name of entries) {
-      if (!SUFFIXES.some((sfx) => name.endsWith(sfx))) continue;
+      const isMonitorLog = name.startsWith(MONITOR_PREFIX) && name.endsWith(MONITOR_SUFFIX);
+      if (!isMonitorLog && !SUFFIXES.some((sfx) => name.endsWith(sfx))) continue;
       const full = join(dir, name);
       if (live.has(full)) continue;
       try {

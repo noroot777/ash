@@ -26,6 +26,7 @@ const row = (id: string, text: string, sendAt: string): ScheduledMessage => ({
   model: null,
   reasoningEffort: null,
   sessionRole: null,
+  origin: null,
   mode: "queued",
   sendAt,
   status: "pending",
@@ -187,6 +188,40 @@ assert.deepEqual(
   "已经在草稿里的附件不得因撤回变成两份",
 );
 // 手机端那一屏没有附件通道：撤回承诺「内容原样回到输入框」，对带附件的消息做不到，
+// ── 哨兵事件行 ───────────────────────────────────────────────────────────────
+// 哨兵推来的事件不是用户打的字。托盘对它只能做两件事：标明来源，给一个「取消这次唤醒」。
+// **绝不能给撤回**——撤回承诺「放回输入框、改完再发一次」，而那句话本来就不是用户写的，
+// 再发一次等于用户替哨兵冒名说话；引导会话同理（把一条机器事件硬塞进当前回合）。
+{
+  const monitorRow: ScheduledMessage = {
+    ...row("mon", "【哨兵事件】盯三轮\n第 1 轮完成", "2026-08-25T10:00:02.000Z"),
+    origin: "monitor:m1",
+  };
+  const monitorHtml = renderToStaticMarkup(
+    <ScheduledMessageTray
+      messages={[monitorRow, row("mine", "我自己写的", "2026-08-25T10:00:03.000Z")]}
+      loading={false}
+      error={null}
+      cancelingIds={new Set()}
+      steeringIds={new Set()}
+      onSteer={() => undefined}
+      onWithdraw={() => undefined}
+      onCancel={() => undefined}
+    />,
+  );
+  const rows = monitorHtml.split('<div class="scheduled-message-row">');
+  const monitorMarkup = rows.find((chunk) => chunk.includes("哨兵事件")) ?? "";
+  const mineMarkup = rows.find((chunk) => chunk.includes("我自己写的")) ?? "";
+  assert.ok(monitorMarkup, "哨兵事件行应被渲染出来");
+  assert.match(monitorMarkup, /哨兵事件 · 任务空闲后唤醒/, "哨兵行要标明这条是谁推的");
+  assert.match(monitorMarkup, /取消哨兵事件[\s\S]*这一次唤醒/, "哨兵行要给「取消这次唤醒」");
+  assert.doesNotMatch(monitorMarkup, /放回输入框/, "哨兵事件不是用户写的，不得提供撤回");
+  assert.doesNotMatch(monitorMarkup, /scheduled-message-guide/, "哨兵事件不得出现引导会话入口");
+  assert.match(mineMarkup, /放回输入框/, "用户自己那条照旧可以撤回");
+  // 队首是哨兵行时，引导入口必须落到用户自己最早的那条上，而不是整个消失。
+  assert.match(mineMarkup, /scheduled-message-guide/, "引导入口应落到用户自己最早的那条排队消息上");
+}
+
 // 就一次都不做——只提示去网页端，绝不能从这个入口发出取消请求。真要扔掉走独立的丢弃。
 const mobileSource = readSource(new URL("../../mobile/src/components/PendingMessageTray.tsx", import.meta.url));
 const slice = (from: string, to: string) => {
@@ -216,4 +251,4 @@ assert.ok(
   mobileRow.indexOf("审查会话 · 自动投递") < mobileRow.indexOf("void withdraw(m)"),
   "撤回与丢弃必须落在 sessionRole 为空的那个分支里",
 );
-console.log("✓ 撤回回填、发送减法、附件丢失防线、审查会话答复只读、引导按钮位置、错误失效与窄托盘降级均受回归保护");
+console.log("✓ 撤回回填、发送减法、附件丢失防线、审查会话答复只读、哨兵事件只许取消、引导按钮位置、错误失效与窄托盘降级均受回归保护");

@@ -8,6 +8,7 @@ import type { ScheduledMessage, TaskListItem } from "@ash/shared";
 import { useAndroidKeyboardOverlap, useKeyboardVisible } from "@/lib/keyboard";
 import { fonts, radius, useTheme } from "@/lib/theme";
 import { DateTimeButton } from "@/components/DateTimeField";
+import { MonitorStrip } from "@/components/MonitorStrip";
 import { PendingMessageTray } from "@/components/PendingMessageTray";
 import { SkillSuggestions } from "@/components/SkillSuggestions";
 
@@ -84,6 +85,8 @@ export function ReplyComposer({
         gap: 8,
       }}
     >
+      <MonitorStrip taskId={task.id} visible={!task.archived} />
+
       <PendingMessageTray
         messages={pending}
         onRemoved={onPendingRemoved}

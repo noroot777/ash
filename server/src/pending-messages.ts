@@ -59,6 +59,8 @@ export function pendingMessageRow(input: {
   sessionRole?: string | null;
   /** 谁发的这条(多人模式);投递时按它解析执行器与 CLI 环境。 */
   ownerUserId?: string | null;
+  /** 不是真人写的那种消息的来源标记(`monitor:<id>`)。null = 用户自己发的。 */
+  origin?: string | null;
   mode?: ScheduledMessageMode;
   // 排队消息不看钟点,sendAt 只用来排先后,所以默认取此刻。
   sendAt?: Date;
@@ -74,6 +76,7 @@ export function pendingMessageRow(input: {
     reasoningEffort: input.reasoningEffort ?? null,
     sessionRole: input.sessionRole ?? null,
     ownerUserId: input.ownerUserId ?? null,
+    origin: input.origin ?? null,
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
     sendAt: (input.sendAt ?? new Date()).toISOString(),
     status: "pending" as const,
@@ -349,6 +352,10 @@ export function deliveryOptions(m: Row) {
     ...(m.sessionRole ? { sessionRole: m.sessionRole as "single" | "reviewer" } : {}),
     // 排队/定时消息落地时,烧的仍是**当时排队那个人**的 key,不退回任务归属人。
     ...(m.ownerUserId ? { actingUserId: m.ownerUserId } : {}),
+    // 带来源的消息不是真人打的字(眼下只有哨兵事件)。标 byBackend 之后它在会话里显示
+    // 成「系统代写的一回合」,而不是冒充用户说过这句话 —— 读端据此分开(见 orchestrator
+    // 的 byBackend 注释)。它仍然占一个真实回合,因为 agent 确实要为它跑一轮。
+    ...(m.origin ? { byBackend: true } : {}),
   };
 }
 

@@ -7,6 +7,7 @@ import {
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
+import { TaskMonitorStrip, useTaskMonitors } from "../components/TaskMonitors.tsx";
 import { SideDrawer } from "../components/SideDrawer.tsx";
 import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
@@ -80,6 +81,7 @@ function TeamReplyBox({
   const replyHeight = useReplyHeight(TEAM_REPLY_PIN);
   useAutoGrowTextarea(inputRef, { value, pinned: replyHeight.height });
   const scheduled = useScheduledMessages(task.id);
+  const monitors = useTaskMonitors(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
     onChange: draft.setAttachments,
@@ -187,12 +189,19 @@ function TeamReplyBox({
           onSubmit={() => void send(new Date(sendAt).toISOString())}
         />
       )}
+      <TaskMonitorStrip
+        monitors={monitors.monitors}
+        stoppingIds={monitors.stoppingIds}
+        error={monitors.error}
+        onStop={(monitorId) => void monitors.stop(monitorId)}
+      />
       <ScheduledMessageTray
         messages={scheduled.messages}
         loading={scheduled.loading}
         error={scheduled.error}
         cancelingIds={scheduled.cancelingIds}
         onWithdraw={(message) => void withdraw(message)}
+        onCancel={(messageId) => void scheduled.cancel(messageId)}
       />
       <UploadAttachmentList
         attachments={uploads.attachments}

@@ -475,6 +475,10 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // —— 排队消息可能几分钟后才送出去,那时不能退回「任务归属人」:在别人的任务上排的
   // 队,烧的仍该是排队那个人自己的 key(§八)。null = 自用模式或存量行。
   ownerUserId: text("owner_user_id"),
+  // 这条消息是谁写的。null = 真人；"monitor:<id>" = 某个哨兵推来的事件。两件事靠它：
+  // 同一个哨兵还没送出去的事件合并进同一行（一次唤醒看完全部，而不是一行一个回合），
+  // 投递时标 byBackend，让它在会话里显示成系统代写的一回合而不是冒充用户发言。
+  origin: text("origin"),
   mode: text("mode").notNull().default("timed"), // timed | queued
   sendAt: text("send_at").notNull(), // timed=ISO 到期时间；queued=入队时刻（只用来排先后）
   status: text("status").notNull().default("pending"), // pending | sent | canceled
@@ -631,4 +635,34 @@ export const taskBranchReceipts = sqliteTable("task_branch_receipts", {
 export const handoffLocalKeyRevisions = sqliteTable("handoff_local_key_revisions", {
   url: text("url").primaryKey(),
   revision: text("revision").notNull(),
+});
+
+// 哨兵（Monitor）：一条绑在任务上的长跑命令，由 **ash server** 起、不在 agent 进程树里，
+// stdout 每一行就是一条事件（语义与上限见 shared/src/monitor.ts）。
+//
+// 为什么必须落库而不是只放内存:它的全部意义就是「活得比一个回合久」。进程脱离了 ash
+// (detached + 输出落文件,跟 executors/detached.ts 同一招),所以 server 重启后要靠
+// 库里这几列把它认回来 —— pid 会被复用,认人的判据是 pid + 进程启动时刻一起对上
+// (proc.ts 的 isSameProcess),读到哪一字节则靠 `offset`,重启期间产出的行一条不漏。
+export const monitors = sqliteTable("monitors", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  command: text("command").notNull(),
+  description: text("description").notNull().default(""),
+  cwd: text("cwd").notNull(),
+  status: text("status").notNull().default("running"), // MonitorStatus
+  pid: integer("pid"),
+  // ps 的 lstart 原文。只有 pid 对上**而且**这个也对上,才算还是当初那个进程。
+  pidStartedAt: text("pid_started_at"),
+  logPath: text("log_path").notNull(),
+  // 已经读进来并推送过的字节位置。重启后从这里接着读。
+  offset: integer("read_offset").notNull().default(0),
+  events: integer("events").notNull().default(0),
+  exitCode: integer("exit_code"),
+  startedAt: text("started_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  endedAt: text("ended_at"),
+  endedReason: text("ended_reason"),
+  // 谁起的这个哨兵(多人模式)。停它、看它都按任务归属判权,这一列只做记账。
+  ownerUserId: text("owner_user_id"),
 });

@@ -26,6 +26,7 @@ import type {
 } from "@ash/shared";
 import type { AuthState } from "@ash/shared/multiuser";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
+import type { TaskMonitor } from "@ash/shared/monitor";
 import { getApiKey, getBaseURL } from "./config";
 
 // 删除任务的返回:`leftover` 是清理之后**仍然剩下**的 worktree/分支(没勾选、或勾
@@ -243,6 +244,13 @@ export const api = {
     req(`/tasks/${taskId}/scheduled-messages`).then(j),
   cancelScheduledMessage: (mid: string): Promise<unknown> =>
     req(`/scheduled-messages/${mid}`, { method: "DELETE" }).then(j),
+
+  // —— 哨兵（挂在任务上的长跑命令，stdout 每一行唤醒任务一次）——
+  // 手机上只看和停：起哨兵是 agent 在回合里做的事，没有手动起的入口。
+  taskMonitors: (taskId: string): Promise<TaskMonitor[]> =>
+    req(`/tasks/${taskId}/monitors`).then(j),
+  stopMonitor: (monitorId: string, reason?: string): Promise<{ monitor: TaskMonitor | null }> =>
+    req(`/monitors/${monitorId}/stop`, { method: "POST", body: JSON.stringify({ reason }) }).then(j),
 
   sessions: (taskId: string): Promise<Session[]> => req(`/tasks/${taskId}/sessions`).then(j),
   sessionOutput: (id: string): Promise<string> => req(`/sessions/${id}/output`).then((r) => r.text()),

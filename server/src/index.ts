@@ -152,6 +152,17 @@ async function initializeServer() {
   if (!IS_PREVIEW_INSTANCE) {
     await reattachRunningTasks();
     await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
+
+    // 哨兵接回来。它们的进程本来就没跟着死（那是整件事的全部意义），这里只是把 tail
+    // 和定时器重新挂上；认不出来的落 lost，不冒充还在盯。
+    const { reattachMonitors } = await import("./monitors.js");
+    const monitorRecovery = await reattachMonitors().catch((err) => {
+      console.error("[ash] 哨兵接回失败（不影响启动）:", err);
+      return null;
+    });
+    if (monitorRecovery?.attached || monitorRecovery?.lost) {
+      console.log(`[ash] 哨兵：接回 ${monitorRecovery.attached} 个，${monitorRecovery.lost} 个进程已不在`);
+    }
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
     // 收拾死在投递链上的 reviewing run（详见 free-workflow.ts reconcileFreeReviews）。
     const { reconcileFreeReviews } = await import("./free-workflow.js");

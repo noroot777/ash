@@ -9,6 +9,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
+import { stopMonitorsForTask } from "./monitors.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { claimWorkspaceTurn, isRunning, isTurnClaimed } from "./runs.js";
 import { setTaskStatus } from "./status.js";
@@ -79,6 +80,14 @@ export function mountTaskArchiveRoutes(api: Hono): void {
       }
     }
     await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, r.id));
+    // 归档 = 这件事结束了。哨兵的唯一出口是唤醒这个任务,而归档任务收不到消息
+    // (deliveryVerdict 直接作废),留着它就是一个永远喂不到人的后台进程。团队的执行者
+    // 同样要收 —— 它们各自也可能挂着哨兵。
+    for (const target of r.mode === "team"
+      ? [r.id, ...(await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.parentId, r.id))).map((w) => w.id)]
+      : [r.id]) {
+      await stopMonitorsForTask(target, "任务已归档，哨兵一并收回").catch(() => {});
+    }
     // 任务行已经冻结,再收磁盘。顺序刻意如此:清理失败(目录脏/分支未合并/预览没停)
     // 不该把归档一起挡回去,结果如实回给 UI,并写进时间线 —— 刷新页面后还能看出
     // 「归档那一下到底删了什么」,否则用户只剩去 git 里翻这一条路。

@@ -8,7 +8,8 @@ import type { TaskWorkspaceDiscardResult } from "@ash/shared";
 import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
+import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
+import { stopMonitorsForTask } from "./monitors.js";
 import { deleteTaskSideChats } from "./chat/lifecycle.js";
 import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
 import { taskBusyRejection } from "./task-busy.js";
@@ -37,6 +38,10 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
   await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId));
   await db.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId));
   await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
+  // 哨兵:**先把进程停了再删行**。顺序反过来就再也没人知道那个 pid 是谁的,它会一直
+  // 跑到机器重启为止 —— 这是整个功能最容易留下的垃圾(进程本来就是故意脱离 ash 的)。
+  await stopMonitorsForTask(taskId, "任务已删除").catch(() => {});
+  await db.delete(monitors).where(eq(monitors.taskId, taskId));
   await db.delete(teamInbound).where(eq(teamInbound.taskId, taskId)); // 调度台还没送出的入站消息
   await db.delete(noteTasks).where(eq(noteTasks.taskId, taskId));
   // 会话行、定时计划、队列位也一起收：孤儿 cron 每个 tick 都会被扫到再查不到任务，
