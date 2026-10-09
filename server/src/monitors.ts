@@ -452,8 +452,14 @@ async function stopMonitorsForTaskLocked(taskId: string, reason: string): Promis
  * 作废这个任务名下还没送出去的哨兵事件。
  *
  * 只动 `origin` 是哨兵的那些。真人写的排队追问要原样留着——他排的时候就知道任务可能
- * 正要结束，那条消息的意思是「下次醒来处理」，替他取消等于把他的话吞了。带着投递租约的
- * 那一行也不碰：它已经出口了。
+ * 正要结束，那条消息的意思是「下次醒来处理」，替他取消等于把他的话吞了。
+ *
+ * **带着投递租约的那一行不碰，但「租约 ≠ 已送达」**：那一行归抢下它的那位投递者，由它在
+ * 真正起这一轮的入口上按最新状态自己撤回并取消（`pending-messages.ts` 的 `monitorWakeGuard`
+ * —— 第 4 轮审查指出的就是这个窗口：资格只在扫描那一层判过一次，租约抢下之后再没人问）。
+ * 为什么不干脆在这里把它一起作废：`markSent` 的 CAS 条件是 `status='pending'`，这边先改成
+ * canceled 的话，一条**已经进了会话**的事件会在时间线上留下一句「未发送，已取消」——比漏掉
+ * 它更糟。所以这一行只有一个主人，就是正在送它的那位。
  */
 async function cancelPendingMonitorEvents(taskId: string): Promise<void> {
   if (dbClient.closed) return;

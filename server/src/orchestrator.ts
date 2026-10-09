@@ -146,6 +146,19 @@ export async function continueTask(
      * （见 docs/incidents.md「排队消息凭空消失」）。
      */
     onDelivered?: () => void | Promise<unknown>;
+    /**
+     * 「这个任务此刻还能不能被**这条消息**叫醒」——**占住回合之后**再问一次，返回理由
+     * 字符串就撤回这一轮（返回 false，一个字都不送）。
+     *
+     * 给哨兵事件用。它的资格判定原本只发生在投递扫描那一层，可抢到投递租约与真正起这
+     * 一轮之间还隔着「等当前回合退干净」：那段时间里用户完全可以把任务标成完成，而租约
+     * 不是送达 —— 于是一条尚未进会话的事件照样把一个已经 done 的任务拉回 running、多烧
+     * 一轮会话（第 4 轮审查实测：总线真的走了 paused → done → running → done）。
+     *
+     * 只在这条路上开：真人排的队列消息在终态上走的是相反语义（「下次醒来处理」就是他排
+     * 它的意思），给它挂这道闸等于把他的话吞了。
+     */
+    wakeGuard?: () => Promise<string | null>;
     throwOnTeamUnavailable?: boolean;
   } = {},
 ): Promise<boolean> {
@@ -174,6 +187,8 @@ export async function continueTask(
   if (head?.mode === "team") {
     if (opts.turnHeld) releaseTurn(taskId); // 占位对常驻调度台无意义，原样还回
     if (isAcceptingTask(taskId)) return false;
+    // 调度台没有回合锁，所以「最新状态」这一问只能摆在真正写进它 stdin 之前。
+    if (opts.wakeGuard && (await opts.wakeGuard())) return false;
     // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令;
     // 或者进程正在收尾、stdin 已经关了)时,这一句**一个字都没送出去** —— 绝不能顺手
     // onDelivered():那是 pending → sent 的唯一写点,标了 sent 排队/定时的那条就从托盘里
@@ -206,6 +221,14 @@ export async function continueTask(
   // 任意交错下至少一方看到对方已占而退避；只查不占是 TOCTOU（审查实测 40/40：检查刚
   // 通过验收就开始，回复照样启动并摘牌）。退避 = 消息按「未投递」排队，验收事实原封不动。
   if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return false;
+  }
+  // 跟验收互斥同一个位置、同一个理由：**占住回合之后**才问「这一轮还该不该起」。
+  // 排在这里而不是更后面，是因为从下面那句 `update(tasks)` 起这一轮就开始留痕了
+  // （followUpFrom、回合 token、基线），撤回要付的代价一路变贵；而这一句之前除了锁
+  // 本身什么都没动，`return false` 对调用方就是干净的「一个字没送出去」。
+  if (opts.wakeGuard && (await opts.wakeGuard())) {
     releaseTurn(taskId);
     return false;
   }

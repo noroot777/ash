@@ -403,6 +403,34 @@ function noteDeliveryTiming(
   );
 }
 
+/**
+ * 哨兵事件的**最后一道闸**：带着来源身份走到真正起这一轮的那个入口，在那儿按最新状态
+ * 再问一次「这个任务还能不能被叫醒」。`undefined` = 这条消息不是哨兵推的，不挂闸。
+ *
+ * 为什么扫描那一层的判定不够：`beginDelivery` 抢下的是**租约**，不是送达。从抢到租约到
+ * 真正续跑中间还要等当前这一轮退干净，那段时间里用户完全可以把任务标成完成 —— 于是一条
+ * 压根没进会话的事件把一个已经 done 的任务拉回 running，多出一轮会话（第 4 轮审查实测：
+ * `paused → done → running → done`）。
+ *
+ * 判据与创建入口、扫描出口同一份（`monitorBlockedReason`），三处分家就等于没防。
+ *
+ * **导出是给回归测试用的**（同 `beginDelivery`）：这个窗口的前提是「租约已经抢下」，而
+ * 租约一旦落下，扫描那条路就会跳过这一行 —— 现场只能由「拿着抢到的那一行，去走真正的
+ * 运行入口」摆出来。于是测试拿生产的 `beginDelivery` + `deliveryOptions` + 这一个闸去调
+ * 生产的 `continueTask`，跟 `deliverWhenIdle` 的装法逐字一致。投递逻辑之外不要调它。
+ */
+export function monitorWakeGuard(message: Row): (() => Promise<string | null>) | undefined {
+  if (monitorIdFromOrigin(message.origin) === null) return undefined;
+  return async () => {
+    const task = (await db
+      .select({ status: tasks.status, archived: tasks.archived })
+      .from(tasks)
+      .where(eq(tasks.id, message.taskId))).at(0);
+    if (!task) return "任务不存在";
+    return monitorBlockedReason(task);
+  };
+}
+
 // 单任务的实际投递:在**当前这一轮退干净之后**才跑(由 whenTurnIdle 排空)。
 //
 // 三个状态迁移各自对应一件真事,别再合并:
@@ -418,6 +446,9 @@ async function deliverWhenIdle(
   spans: { dueAt: number; busyMs: number; queuedAt: number },
 ): Promise<void> {
   let delivered = false;
+  // 被最后那道闸挡下的理由(非 null = 这一轮压根没起,原因不是「回合被抢走」)。
+  let refused: string | null = null;
+  const guard = monitorWakeGuard(message);
   const idleAt = Date.now();
   try {
     // 等待期间它还是 pending,所以用户可能已经手动取消、另一个触发源也可能抢先
@@ -431,6 +462,7 @@ async function deliverWhenIdle(
     // 已经往同一行后面追加了新的事件(见 beginDelivery 的注释)。
     const started = await continueTask(message.taskId, claimed.text, {
       ...options,
+      ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
       onDelivered: async () => {
         delivered = true;
         const at = Date.now();
@@ -439,8 +471,14 @@ async function deliverWhenIdle(
       },
     });
     if (!started) {
-      await abortDelivery(message);
-      scheduleRedelivery(message, "回合被其它执行抢占或工作区正被验收占用");
+      // 被那道闸挡下的**不能**退回托盘等下一次:任务已经结束了,下一次、下一百次都是
+      // 这个结果,留着它只会让一条永远送不出去的事件一直挂在用户的托盘里。取消会把
+      // 原文抄进时间线,所以「它说过什么」不会因此丢掉。
+      if (refused) await cancelPendingMessage(message, refused);
+      else {
+        await abortDelivery(message);
+        scheduleRedelivery(message, "回合被其它执行抢占或工作区正被验收占用");
+      }
     }
   } catch (error) {
     // 已经送进会话之后才炸的(agent 半路挂了),那是这一轮运行的事故,不是消息没送到:
@@ -502,9 +540,12 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
         fired.add(m.taskId);
         lastFiredAt.set(m.taskId, Date.now());
         let delivered = false;
+        let refused: string | null = null;
+        const guard = monitorWakeGuard(m);
         try {
           const started = await continueTask(m.taskId, claimed.text, {
             ...options,
+            ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
             throwOnTeamUnavailable: true,
             onDelivered: async () => {
               delivered = true;
@@ -517,8 +558,12 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
           // 调度台明确拒收:清租约、保持 pending,下一台接手时补送。同样要出声并自己重投,
           // 否则一次拒收就要干等一整个 30s tick。
           if (!started) {
-            await abortDelivery(m);
-            scheduleRedelivery(m, "调度台此刻收不下（正在收尾或已离线）");
+            // 同单任务：被终态那道闸挡下的不退回托盘，下一次还是同一个结果。
+            if (refused) await cancelPendingMessage(m, refused);
+            else {
+              await abortDelivery(m);
+              scheduleRedelivery(m, "调度台此刻收不下（正在收尾或已离线）");
+            }
           }
         } catch (reason) {
           if (delivered) throw reason; // 已经进调度台了,不是「未发送」,交给外层日志

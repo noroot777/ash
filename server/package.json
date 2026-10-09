@@ -24,7 +24,7 @@
     "test:singleton": "tsx scripts/test-singleton.ts",
     "test:detached": "tsx scripts/test-detached-survival.ts && tsx scripts/test-controllable-detached.ts",
     "test:reattach": "tsx scripts/test-reattach.ts",
-    "test:monitors": "tsx scripts/test-monitors.ts",
+    "test:monitors": "tsx scripts/test-monitors.ts && tsx scripts/test-monitor-races.ts",
     "test:queue": "tsx scripts/test-queue-order.ts",
     "test:search": "tsx scripts/test-search-query.ts",
     "test:search-scan": "tsx scripts/test-search-scan.ts",
@@ -165,7 +165,8 @@
     "test:preview-deps": "tsx scripts/test-preview-deps.ts && tsx scripts/test-preview-cache-path.ts",
     "test:page-annotation-batches": "tsx scripts/test-page-annotation-batches.ts && tsx scripts/test-preview-annotation.ts",
     "test:annotation-batches": "tsx scripts/test-page-annotation-batches.ts",
-    "test:preview-workspace": "tsx scripts/test-preview-workspace.ts"
+    "test:preview-workspace": "tsx scripts/test-preview-workspace.ts",
+    "test:monitor-races": "tsx scripts/test-monitor-races.ts"
   },
   "dependencies": {
     "@ash/shared": "*",
