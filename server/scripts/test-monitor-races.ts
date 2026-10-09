@@ -7,15 +7,18 @@
 //  ⑯ 迟到一步的事件：清理全跑完之后才入库的那一行，出口上照样认终态
 //  ⑰ 收尾那一瞬起的哨兵：终态先落库，排在清理后面的创建读到的就是终态
 //  ⑱ 抢到租约 ≠ 已送达：等回合期间任务被标完成，运行入口上再挡一道
+//  ⑲ 资格检查读失败：这一轮不起，但回合占位必须还回去（不然任务被锁死）
+//  ⑳ 完成操作与「起这一轮」争同一把回合锁：两种顺序都收口
 //
 // 台子（临时库、真模块、makeTask/pendingOf）在 monitors-fixture.ts，与 test-monitors.ts 共用。
 import assert from "node:assert/strict";
 import { appendFileSync, writeFileSync } from "node:fs";
+import { Hono } from "hono";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
-  HERE, root, db, schema, monitorsModule, status, pending, continueTask,
+  HERE, root, db, schema, monitorsModule, status, pending, continueTask, runs, mountTaskRoutes,
   startMonitor, stopMonitor, listMonitors, getMonitor,
   monitors, scheduledMessages, tasks,
   sleep, until, now, uniq, makeTask, pendingOf, teardown,
@@ -330,5 +333,94 @@ import {
 }
 
 
+// ── ⑲ 资格检查读失败：不许留下一个没人放的回合占位 ───────────────────────────
+// 那一问要读库，它**可能抛**。从 `claimTurn` 到大 try 之间没有 finally 兜着，抛在那儿
+// 就等于占位留在内存里没人放：任务停在 paused，点运行说「回合正在进行」、点停止说
+// 「没有在运行的进程」，连真人后续回复都起不来 —— 而库早就恢复正常了（第 5 轮审查对
+// 那一次读注入单次故障实测：isTurnClaimed=true / isRunning=false，run 与 stop 双 409）。
+//
+// 这一段的主断言是「**第二次还起得来**」：占位真漏了的话，下一次 claimTurn 必然失败，
+// 它的闸压根不会被调到。
+{
+  const taskId = await makeTask();
+  await status.setTaskStatus(taskId, "paused");
+
+  // 这一句自己接住异常：**先**断言锁，再断言别的——不接的话测试会被那个异常直接打死，
+  // 看到的人只知道「抛了」，不知道真正的后果是那个任务从此被锁死。
+  let thrown: unknown = null;
+  const ran = await continueTask(taskId, "【哨兵事件】GUARD_READ_FAILURE", {
+    byBackend: true,
+    wakeGuard: async () => { throw new Error("INJECTED_SINGLE_DATABASE_READ_FAILURE"); },
+  }).catch((error) => { thrown = error; return false; });
+  assert.equal(runs.isTurnClaimed(taskId), false, "占位必须还回去——漏了它这个任务就被锁死了");
+  assert.equal(thrown, null, "读失败不该把异常甩给调用方：上层那条 catch 会把消息直接取消掉");
+  assert.equal(ran, false, "读不到状态就不该起这一轮");
+  assert.equal(
+    (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)?.status,
+    "paused",
+    "一轮都没起，状态不该被动过",
+  );
+
+  // 再来一次：拿得到回合、闸真的被调到，就说明上面那一次确实没留下占位。
+  let asked = false;
+  const again = await continueTask(taskId, "【哨兵事件】AFTER_RECOVERY", {
+    byBackend: true,
+    wakeGuard: async () => { asked = true; return "就到这儿，别真起 agent"; },
+  });
+  assert.equal(again, false);
+  assert.equal(asked, true, "第二次连闸都没问到 = 回合锁没放回来，任务已经被锁死");
+  assert.equal(runs.isTurnClaimed(taskId), false, "拒绝那条路同样不留占位");
+  console.log("✓ 资格检查读失败：这一轮不起，但占位还回去，任务还能再跑");
+}
+
+// ── ⑳ 完成操作与「起这一轮」争同一把锁 ───────────────────────────────────────
+// 把检查挪到占位之后，只挡得住**同样要占这把锁**的启动，挡不住不占锁的终态修改：最终
+// 检查读到 paused、用户的完成操作照样 200，放开之后 `paused → done → running → done`，
+// 多出一轮会话（第 5 轮审查实测）。所以手动改终态也得占同一把锁，两种顺序才都收口。
+{
+  const taskId = await makeTask();
+  await status.setTaskStatus(taskId, "paused");
+  const api = new Hono();
+  mountTaskRoutes(api);
+  const markDone = () => api.request(`/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "x-ash-user-action": "1" },
+    body: JSON.stringify({ status: "done" }),
+  });
+  const statusOf = async () => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)?.status;
+
+  // 顺序 ①：那条还没送达的事件先占住位（库里还是 paused）→ 完成操作必须被挡回。
+  assert.ok(runs.claimTurn(taskId, "single"), "这一段的前提：先占住位");
+  const refused = await markDone();
+  assert.equal(refused.status, 409, "占位期间的完成操作不能放行——放行了就是上面那条链");
+  assert.match((await refused.json()).error as string, /回合正在进行/, "拒的理由要能直接给用户看");
+  assert.equal(await statusOf(), "paused", "被挡回就一个字都不许写库");
+  runs.releaseTurn(taskId);
+
+  // 顺序 ②：完成操作先占住位 → 那条事件的 claimTurn 失败，这一轮压根起不来。
+  let asked = false;
+  assert.ok(runs.claimTurn(taskId, "status"), "模拟完成操作正握着那把锁");
+  const blocked = await continueTask(taskId, "【哨兵事件】OUTPUT_AFTER_FINAL_GUARD_READ", {
+    byBackend: true,
+    wakeGuard: async () => { asked = true; return null; },
+  });
+  assert.equal(blocked, false, "锁在别人手里，这一轮就该干净地回 false");
+  assert.equal(asked, false, "连闸都不该问到——抢不到位的时候一个字都没送出去");
+  runs.releaseTurn(taskId);
+
+  // 正常那条路照旧：没人占位，完成操作该成，而且**必须把锁还回去**。
+  const ok = await markDone();
+  assert.equal(ok.status, 200);
+  assert.equal(await statusOf(), "done");
+  assert.equal(runs.isTurnClaimed(taskId), false, "一次 PATCH 把任务锁死，比不互斥还糟");
+
+  // 路由那一侧占的得是**同一把**锁，而且得在 finally 里还 —— 这两件事钉住。
+  const routeSrc = readSource(join(HERE, "../src/task-routes.ts"));
+  assert.match(routeSrc, /claimTurn\(tid, "status"\)/, "手动改终态要占的是同一把回合锁");
+  assert.match(routeSrc, /\} finally \{\n    \/\/[^\n]*\n    if \(lockTurn\) releaseTurn\(tid\);/,
+    "每一条出路都得还回去——含被挡回的那次 early return");
+  console.log("✓ 完成操作与起这一轮争同一把锁：两种顺序都收口，锁不留手");
+}
+
 await teardown();
-console.log("✓ 哨兵终态与投递：连坐作废 / 合并与投递抢同一行 / 入口出口同源 / 迟到事件 / 收尾那一瞬的创建 / 租约不等于送达 均受回归保护");
+console.log("✓ 哨兵终态与投递：连坐作废 / 合并与投递抢同一行 / 入口出口同源 / 迟到事件 / 收尾那一瞬的创建 / 租约不等于送达 / 读失败不锁死 / 完成与起跑互斥 均受回归保护");

@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -33,8 +33,8 @@ import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { enterTurn } from "./turn-entry-guard.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
@@ -204,34 +204,17 @@ export async function continueTask(
     }
     return true;
   }
-  // 接力出去的任务在本机只是历史存档 —— 路由层各有 409,但队列推进/排队消息投递等
-  // 程序化续聊全汇到这里,必须在占位之前收口(消息按「未投递」留在托盘,事实不丢)。
-  if (handoffBlockReason(head?.handoff)) {
-    if (opts.turnHeld) releaseTurn(taskId);
-    return false;
-  }
-  // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
-  // turnHeld = 调用方已在入口原子占好位(consulted continueWhenIdle / run 路由),这里
-  // 用真实身份接管——只读预检查代替不了原子所有权(审查实测:两个并发启动双双 202)。
+  // 起跑前的那串闸（接力存档 / 回合占位 / 验收互斥 / 唤醒资格）收在一处，见
+  // turn-entry-guard.ts 的文件头：它们共享的不变量是「从占住位到交给下面那个大 try
+  // 之间，每一条出路都得自己把位还回去」，散着写时新加一道闸就会漏掉这件事。
   const sessionRole = opts.sessionRole ?? "single";
-  if (opts.turnHeld) reclaimTurn(taskId, sessionRole);
-  else if (!claimTurn(taskId, sessionRole)) return false;
-  // 验收互斥：**先占己锁（turn），再查彼锁（acceptance），两步之间没有 await**——
-  // acceptTask 那边是镜像（beginAccepting 先占，acceptanceGuard 再查 isTurnClaimed）。
-  // 任意交错下至少一方看到对方已占而退避；只查不占是 TOCTOU（审查实测 40/40：检查刚
-  // 通过验收就开始，回复照样启动并摘牌）。退避 = 消息按「未投递」排队，验收事实原封不动。
-  if (isAcceptingTask(taskId)) {
-    releaseTurn(taskId);
-    return false;
-  }
-  // 跟验收互斥同一个位置、同一个理由：**占住回合之后**才问「这一轮还该不该起」。
-  // 排在这里而不是更后面，是因为从下面那句 `update(tasks)` 起这一轮就开始留痕了
-  // （followUpFrom、回合 token、基线），撤回要付的代价一路变贵；而这一句之前除了锁
-  // 本身什么都没动，`return false` 对调用方就是干净的「一个字没送出去」。
-  if (opts.wakeGuard && (await opts.wakeGuard())) {
-    releaseTurn(taskId);
-    return false;
-  }
+  if (!await enterTurn({
+    taskId,
+    sessionRole,
+    handoff: head?.handoff,
+    turnHeld: opts.turnHeld,
+    wakeGuard: opts.wakeGuard,
+  })) return false;
   // catch 那边署名用的就是它：出错时 task 可能压根没读出来，所以按 head 的快照兜底，
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
   const agentType = opts.agent ?? (head?.agentType as AgentType) ?? "claude";

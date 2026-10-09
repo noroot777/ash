@@ -19,16 +19,20 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitors");
 
-export const [{ db, ensureSchema }, schema, monitorsModule, status, { isPidAlive }, pending, { continueTask }] =
-  await Promise.all([
-    import("../src/db/index.js"),
-    import("../src/db/schema.js"),
-    import("../src/monitors.js"),
-    import("../src/status.js"),
-    import("../src/platform.js"),
-    import("../src/pending-messages.js"),
-    import("../src/orchestrator.js"),
-  ]);
+export const [
+  { db, ensureSchema }, schema, monitorsModule, status, { isPidAlive }, pending, { continueTask }, runs, taskRoutes,
+] = await Promise.all([
+  import("../src/db/index.js"),
+  import("../src/db/schema.js"),
+  import("../src/monitors.js"),
+  import("../src/status.js"),
+  import("../src/platform.js"),
+  import("../src/pending-messages.js"),
+  import("../src/orchestrator.js"),
+  import("../src/runs.js"),
+  import("../src/task-routes.js"),
+]);
+export const { mountTaskRoutes } = taskRoutes;
 export const { startMonitor, stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachMonitors, detachAllMonitors } =
   monitorsModule;
 export const { monitors, projects, scheduledMessages, tasks } = schema;
