@@ -5,7 +5,7 @@ import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS } from "@ash/shared/moni
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { getMonitor, listMonitors, startMonitor, stopMonitor } from "./monitors.js";
+import { getMonitor, listMonitors, readMonitorTail, startMonitor, stopMonitor } from "./monitors.js";
 
 export function mountMonitorRoutes(api: Hono): void {
   api.get("/tasks/:id/monitors", async (c) => c.json(await listMonitors(c.req.param("id"))));
@@ -31,6 +31,18 @@ export function mountMonitorRoutes(api: Hono): void {
     });
     if (!result.ok) return c.json({ error: result.error }, result.status);
     return c.json({ monitor: result.monitor, ...(clamped ? { notice: "timeoutMs 超出允许区间，已钳到边界" } : {}) });
+  });
+
+  // 日志尾巴。面板按需拉取（点开那一张卡才问），所以不塞进列表响应里——几十个哨兵
+  // 的尾巴一起走会让任务页每次刷新都背上几百 KB。
+  api.get("/monitors/:monitorId/log", async (c) => {
+    const lines = Number(c.req.query("lines"));
+    const tail = await readMonitorTail(
+      c.req.param("monitorId"),
+      Number.isFinite(lines) && lines > 0 ? lines : undefined,
+    );
+    if (!tail) return c.json({ error: "哨兵不存在" }, 404);
+    return c.json(tail);
   });
 
   api.post("/monitors/:monitorId/stop", async (c) => {

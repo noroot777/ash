@@ -7,7 +7,6 @@ import {
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
-import { TaskMonitorStrip, useTaskMonitors } from "../components/TaskMonitors.tsx";
 import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { AgentPlate } from "../components/AgentPlate.tsx";
@@ -131,7 +130,6 @@ export function ReplyBox({
     setSendError,
   );
   const scheduled = useScheduledMessages(task.id);
-  const monitors = useTaskMonitors(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
     onChange: draft.setAttachments,
@@ -505,12 +503,6 @@ export function ReplyBox({
         />
       )}
       {inlinePanel && !menuOpen && !mention.open && !picker && !scheduleOpen && <div className="task-reply-inline-panel">{inlinePanel}</div>}
-      <TaskMonitorStrip
-        monitors={monitors.monitors}
-        stoppingIds={monitors.stoppingIds}
-        error={monitors.error}
-        onStop={(monitorId) => void monitors.stop(monitorId)}
-      />
       <ScheduledMessageTray
         messages={scheduled.messages}
         loading={scheduled.loading}

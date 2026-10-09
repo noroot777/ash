@@ -1,5 +1,5 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
-import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, Robot, Chats } from "@phosphor-icons/react";
+import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, Pulse, Robot, Chats } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import { PreviewWorkspaceEntry } from "../preview-workspace/PreviewWorkspace.tsx";
@@ -14,9 +14,13 @@ import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
 import { SideChatPane } from "../side-chat/SideChatPane.tsx";
+import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
+import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 
 export interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
+  /** 哨兵那一格的数据源；由 `useMonitorInspector` 提上来，面板开不开都在拉。 */
+  monitors: TaskMonitorsState;
   task: Task;
   groups: Group[];
   sessions: Session[];
@@ -44,7 +48,7 @@ export interface TaskInspectorContext {
 
 // 图标条的顺序就是这个数组的顺序（`orderedValidTabs` 按它归位，localStorage 里存的次序
 // 不作数）。排法是「看任务本身 → 看它改了什么 → 跟它一起干活」：
-// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 侧聊 · 工作流 · 审查 · 预览指正。
+// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 侧聊 · 工作流 · 审查 · 预览指正 · 哨兵。
 // 每一格都带快捷键（`I` 加面板名首字母），键位表在 inspector/shortcuts.ts。
 export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
   {
@@ -150,6 +154,15 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     defaultOpen: true,
     shortcut: "p",
     render: (context) => <PreviewWorkspaceEntry onOpen={context.onOpenPreview} />,
+  },
+  {
+    // 这一格的 defaultOpen 由 useMonitorInspector 按「这个任务有没有哨兵」翻：平时只待在
+    // 「+」菜单里不占位置，第一个哨兵挂上去才自己冒出来。
+    id: "monitors",
+    title: "哨兵",
+    icon: <Pulse size={14} />,
+    shortcut: "m",
+    render: (context) => <MonitorInspector monitors={context.monitors} canStart={!context.task.archived} />,
   },
 ];
 

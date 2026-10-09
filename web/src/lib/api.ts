@@ -666,6 +666,14 @@ export const api = {
     request(`/tasks/${id(taskId)}/monitors`),
   stopMonitor: (monitorId: string, reason?: string): Promise<{ monitor: TaskMonitor | null }> =>
     request(`/monitors/${id(monitorId)}/stop`, json("POST", { reason })),
+  startMonitor: (
+    taskId: string,
+    body: { command: string; description?: string; timeoutMs?: number },
+  ): Promise<{ monitor: TaskMonitor; notice?: string }> =>
+    request(`/tasks/${id(taskId)}/monitors`, json("POST", body)),
+  /** 哨兵日志的尾巴：事件正文里被略去的行（单批超限、合并超长）只有这里还有。 */
+  monitorLog: (monitorId: string, lines?: number): Promise<{ lines: string[]; truncated: boolean }> =>
+    request(`/monitors/${id(monitorId)}/log${lines ? `?lines=${lines}` : ""}`),
 
   // 直连 LLM 供应商那一组住在 apiLlm.ts（同样是为了守住 700 行），调用点写法不变。
   ...llmApi,

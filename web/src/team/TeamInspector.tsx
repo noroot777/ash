@@ -1,6 +1,6 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { agentMix } from "@ash/shared/team";
-import { Clock, FolderOpen, Images, Info, MagnifyingGlass, Robot, UsersThree } from "@phosphor-icons/react";
+import { Clock, FolderOpen, Images, Info, MagnifyingGlass, Pulse, Robot, UsersThree } from "@phosphor-icons/react";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "../task-detail/NativeWorkInspector.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -17,6 +17,8 @@ import { parseAttachmentText } from "../task-detail/utils.ts";
 import { TeamTimeline } from "./TeamTimeline.tsx";
 import { TeamReviewInspector } from "./TeamReviewInspector.tsx";
 import { WorkerRail } from "./WorkerRail.tsx";
+import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
+import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 import {
   teamLeadLabel,
   teamReviewerLabel,
@@ -26,6 +28,8 @@ import {
 
 export interface TeamInspectorContext {
   nativeWork: NativeWorkInspectorProps;
+  /** 哨兵那一格的数据源；挂在调度台自己身上（执行者各有各的任务页）。 */
+  monitors: TaskMonitorsState;
   task: Task;
   workers: TaskListItem[];
   groups: Group[];
@@ -250,5 +254,13 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     shortcut: "s",
     icon: <Robot size={14} />,
     render: (context) => <NativeWorkInspector {...context.nativeWork} />,
+  },
+  {
+    // 盯的是调度台自己挂的哨兵。defaultOpen 由 useMonitorInspector 按有没有哨兵翻。
+    id: "monitors",
+    title: "哨兵",
+    icon: <Pulse size={14} />,
+    shortcut: "m",
+    render: (context) => <MonitorInspector monitors={context.monitors} canStart={!context.task.archived} />,
   },
 ];

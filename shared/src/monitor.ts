@@ -54,6 +54,11 @@ export const MONITOR_MAX_EVENTS = 200;
 /** 一个任务同时最多挂几个哨兵。 */
 export const MONITOR_MAX_PER_TASK = 4;
 
+/** 面板上回看哨兵输出的尾巴：默认多少行、最多多少行、以及回读多少字节封顶。 */
+export const MONITOR_TAIL_DEFAULT_LINES = 80;
+export const MONITOR_TAIL_MAX_LINES = 500;
+export const MONITOR_TAIL_MAX_BYTES = 256 * 1024;
+
 export function normalizeMonitorTimeout(ms: unknown): number {
   const n = typeof ms === "number" && Number.isFinite(ms) ? Math.round(ms) : MONITOR_DEFAULT_TIMEOUT_MS;
   return Math.min(MONITOR_MAX_TIMEOUT_MS, Math.max(MONITOR_MIN_TIMEOUT_MS, n));

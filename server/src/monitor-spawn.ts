@@ -139,3 +139,35 @@ export function tailLines(
     drain: () => pump(),
   };
 }
+
+/**
+ * 从文件**尾部**回读一段，切成完整的行。给界面看「它这会儿在吐什么」用。
+ *
+ * 不从头读的理由不只是省内存：哨兵盯的东西一跑就是几小时，日志动辄几十上百兆，而人想看
+ * 的永远是最后那几十行。从尾部截一段再把开头那半行丢掉（`start > 0` 时），比按行遍历
+ * 整个文件便宜几个数量级，代价只是最旧的那一行可能缺个头——那一行本来也不在视野里。
+ */
+export function readLogTail(path: string, maxBytes: number): { lines: string[]; truncated: boolean } {
+  let size = 0;
+  try { size = statSync(path).size; } catch { return { lines: [], truncated: false }; }
+  const start = Math.max(0, size - maxBytes);
+  let fd: number;
+  try { fd = openSync(path, "r"); } catch { return { lines: [], truncated: false }; }
+  try {
+    const buf = Buffer.allocUnsafe(size - start);
+    let filled = 0;
+    while (filled < buf.length) {
+      const n = readSync(fd, buf, filled, buf.length - filled, start + filled);
+      if (n <= 0) break;
+      filled += n;
+    }
+    const text = buf.subarray(0, filled).toString("utf8");
+    const lines = text.split("\n");
+    // 截断点多半落在某一行中间：那半行不是一行，丢掉而不是当成一行展示。
+    if (start > 0) lines.shift();
+    if (lines.at(-1) === "") lines.pop();
+    return { lines, truncated: start > 0 };
+  } finally {
+    try { closeSync(fd); } catch { /* ignore */ }
+  }
+}

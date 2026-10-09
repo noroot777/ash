@@ -18,6 +18,9 @@ import {
   MONITOR_MAX_LINE_CHARS,
   MONITOR_MAX_LINES_PER_PUSH,
   MONITOR_MAX_PER_TASK,
+  MONITOR_TAIL_DEFAULT_LINES,
+  MONITOR_TAIL_MAX_BYTES,
+  MONITOR_TAIL_MAX_LINES,
   mergeMonitorEventText,
   normalizeMonitorTimeout,
   monitorMessageOrigin,
@@ -28,7 +31,7 @@ import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, projects, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
-import { monitorLogPath, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
+import { monitorLogPath, readLogTail, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
 import { enqueueMessage, flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
 import { isSameProcess, inspectProcess } from "./proc.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -334,6 +337,26 @@ export async function listMonitors(taskId: string): Promise<TaskMonitor[]> {
 export async function getMonitor(monitorId: string): Promise<TaskMonitor | null> {
   const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   return row ? toTaskMonitor(row) : null;
+}
+
+/**
+ * 哨兵日志的尾巴。界面要能回答「它这会儿到底在吐什么」——只给事件数的话，一个「0 条事件」
+ * 既可能是命令还没开始吐，也可能是过滤条件写错了把什么都滤没了，而这两件事的处理方式相反。
+ *
+ * 读的是**日志全文的尾巴**，而不是事件正文的回放：单批超过上限时事件里只留条数、合并
+ * 超长时最早那截会被掐掉，被省掉的那些行只有这里还找得到。
+ */
+export async function readMonitorTail(
+  monitorId: string,
+  maxLines = MONITOR_TAIL_DEFAULT_LINES,
+): Promise<{ lines: string[]; truncated: boolean } | null> {
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+  if (!row) return null;
+  const limit = Math.min(MONITOR_TAIL_MAX_LINES, Math.max(1, Math.round(maxLines)));
+  const tail = readLogTail(row.logPath, MONITOR_TAIL_MAX_BYTES);
+  return tail.lines.length > limit
+    ? { lines: tail.lines.slice(-limit), truncated: true }
+    : tail;
 }
 
 // ── 重启后认回来 ─────────────────────────────────────────────────────────────

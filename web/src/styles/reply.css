@@ -134,14 +134,3 @@
 .team-reply-box footer > .reply-schedule-button { width: 27px; height: 27px; }
 
 /* 哨兵条：跟待发送消息托盘同一套视觉语言（它们讲的是同一件事——还没落到会话里的东西）。 */
-.monitor-strip { display: flex; margin-bottom: 7px; flex-direction: column; gap: 4px; }
-.monitor-strip > p { margin: 0; color: var(--red); font-size: 10.5px; }
-.monitor-row { display: flex; min-height: 28px; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--overlay); padding: 4px 6px 4px 8px; color: var(--faint); font-size: 10px; }
-.monitor-row.is-live > svg { color: var(--accent); }
-.monitor-row > b { min-width: 0; flex: 1; overflow: hidden; color: var(--ink); font-size: 10.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.monitor-row > span,
-.monitor-row > em { flex: 0 0 auto; font-style: normal; white-space: nowrap; }
-.monitor-row > button { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); }
-.monitor-row > button:hover:not(:disabled) { background: var(--raised); color: var(--red); }
-.monitor-row > button:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
-.monitor-row > button:disabled { opacity: .48; }

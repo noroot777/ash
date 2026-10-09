@@ -5,7 +5,8 @@
 //  ③ 命令自己跑完 → 落 exited，并推一条收尾事件
 //  ④ 任务落终态 → 名下哨兵一并停掉，**而且不回推收尾事件**（否则等于把 done 的任务叫醒）
 //  ⑤ 停掉哨兵 = 进程真的死了（不是只改数据库）
-//  ⑥ server 重启：另起一个进程把 ash 杀掉后，哨兵进程仍活着，新进程按 pid + offset
+//  ⑥ 面板能回看它的原始输出：事件正文里被略去的行（单批超限、合并超长）只剩日志里有
+//  ⑦ server 重启：另起一个进程把 ash 杀掉后，哨兵进程仍活着，新进程按 pid + offset
 //     接回来，重启期间产出的行一条不漏 —— 这是整件事相对「挂在会话上的后台进程」的
 //     全部增量，也是本测试最该守住的一条
 import assert from "node:assert/strict";
@@ -31,7 +32,7 @@ const [{ db, ensureSchema }, schema, monitorsModule, status, { isPidAlive }] = a
   import("../src/status.js"),
   import("../src/platform.js"),
 ]);
-const { startMonitor, stopMonitor, listMonitors, detachAllMonitors } = monitorsModule;
+const { startMonitor, stopMonitor, listMonitors, readMonitorTail, detachAllMonitors } = monitorsModule;
 const { monitors, projects, scheduledMessages, tasks } = schema;
 
 await ensureSchema();
@@ -189,7 +190,37 @@ setInterval(() => {}, 1000); // 吐完不退出：停下来必须是「到顶了
   console.log("✓ 停哨兵 = 杀进程，不是只改数据库");
 }
 
-// ── ⑥ 活得过 server 重启 ─────────────────────────────────────────────────────
+// ── ⑥ 日志尾巴：面板要能回看它到底吐了什么 ───────────────────────────────────
+// 只有事件数的话，「0 条事件」既可能是命令还没开始吐，也可能是过滤条件写错了把什么都
+// 滤没了——这两件事的处理方式相反，不看原始输出分不出来。
+{
+  const taskId = await makeTask();
+  // 不用模板串：命令整句要过一次用户 shell，反引号在那儿是命令替换。
+  const script = 'for (let i = 1; i <= 7; i++) console.log("line-" + i);';
+  const started = await startMonitor({
+    taskId,
+    command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+    description: "吐七行就走",
+  });
+  assert.equal(started.ok, true);
+  const monitorId = started.ok ? started.monitor.id : "";
+  await until("七行都落到日志里", async () => ((await readMonitorTail(monitorId))?.lines.length ?? 0) >= 7);
+
+  const all = (await readMonitorTail(monitorId))!;
+  assert.deepEqual(all.lines.slice(0, 7), ["line-1", "line-2", "line-3", "line-4", "line-5", "line-6", "line-7"]);
+  assert.equal(all.truncated, false, "没超上限就不该说自己被截断过");
+
+  // 要看的永远是最后几行：几小时的日志里，最新那截才是「它现在怎么样了」。
+  const tail = (await readMonitorTail(monitorId, 3))!;
+  assert.deepEqual(tail.lines, ["line-5", "line-6", "line-7"], "限行数时留的必须是最后几行");
+  assert.equal(tail.truncated, true, "截过就要如实说，别让人以为这就是全部");
+
+  assert.equal(await readMonitorTail("no-such-monitor"), null, "不存在的哨兵要分得清，不能装作空日志");
+  await stopMonitor(monitorId, "测试收尾");
+  console.log("✓ 哨兵的原始输出可回看，限行数时留最后几行并如实报截断");
+}
+
+// ── ⑦ 活得过 server 重启 ─────────────────────────────────────────────────────
 // 真的开两个进程：v1 起哨兵后硬退出（模拟 `npm run restart` 那句 kill），本进程确认
 // 哨兵仍活着，再由 v2 接回来读完剩下的行。
 {
@@ -235,4 +266,4 @@ const t = setInterval(() => { i++; console.log("tick " + i); if (i >= 12) { clea
 detachAllMonitors();
 await releaseTmpDb();
 rmSync(root, { recursive: true, force: true });
-console.log("✓ 哨兵：推送 / 合并 / 连坐停止 / 真杀进程 / 跨重启接管 均受回归保护");
+console.log("✓ 哨兵：推送 / 合并 / 连坐停止 / 真杀进程 / 日志回看 / 跨重启接管 均受回归保护");

@@ -7,7 +7,6 @@ import {
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
-import { TaskMonitorStrip, useTaskMonitors } from "../components/TaskMonitors.tsx";
 import { SideDrawer } from "../components/SideDrawer.tsx";
 import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
@@ -41,6 +40,7 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { useSubagents } from "../task-detail/useSubagents.tsx";
+import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import {
   attachmentsFromPaths,
@@ -81,7 +81,6 @@ function TeamReplyBox({
   const replyHeight = useReplyHeight(TEAM_REPLY_PIN);
   useAutoGrowTextarea(inputRef, { value, pinned: replyHeight.height });
   const scheduled = useScheduledMessages(task.id);
-  const monitors = useTaskMonitors(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
     onChange: draft.setAttachments,
@@ -189,12 +188,6 @@ function TeamReplyBox({
           onSubmit={() => void send(new Date(sendAt).toISOString())}
         />
       )}
-      <TaskMonitorStrip
-        monitors={monitors.monitors}
-        stoppingIds={monitors.stoppingIds}
-        error={monitors.error}
-        onStop={(monitorId) => void monitors.stop(monitorId)}
-      />
       <ScheduledMessageTray
         messages={scheduled.messages}
         loading={scheduled.loading}
@@ -382,7 +375,9 @@ export function TeamView({
     error: conversation.error ?? conversation.traceError,
     onRetry: conversation.refetch,
   }, { onOpen: () => setSelectedWorkerId(null) });
-  const inspectors = subagents.inspectors;
+  // 哨兵那一格：挂在调度台自己身上，面板关着也要拉（图标条据此自己冒出来）。
+  const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
+  const inspectors = monitorTab.inspectors;
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
   const waiting = useMemo(() => waitingWorkers(workers), [workers]);
   const workerLiveLines = useWorkerLiveLines(task.id, workers);
@@ -535,6 +530,7 @@ export function TeamView({
       descriptors={inspectors}
       context={{
         nativeWork: subagents.nativeWork,
+        monitors: monitorTab.monitors,
         task,
         workers,
         groups: teamGroups,
