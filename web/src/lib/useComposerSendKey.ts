@@ -5,46 +5,56 @@ import { useEffect, useState } from "react";
 import type { ComposerSendKey } from "@ash/shared";
 import { api } from "./api.ts";
 import {
+  composerSendKey,
   displaySendKey,
   onComposerSendKeyChange,
   sendKeyLabels,
-  settleComposerSendKeyDefault,
 } from "./sendKey.ts";
 
-// 这一档住在服务端,而读它的输入框散在全站。整页拉一次就够:`api.settings()` 的
-// adopt 会把读到的档位交给 sendKey.ts,之后所有输入框从那里取。
+// 这一档住在服务端,而读它的输入框散在全站。整页拉一次就够:`api.settings()` 读到的
+// 那一份会经 settingsSync 交给 sendKey.ts,之后所有输入框从那里取。
 //
-// 读不到就隔一会儿再试,**但有上限,而且按时间计不按挂载计**:在学到之前裸回车一律当
-// 换行(见 sendKey.ts),所以「一直学不到」必须有个了断 —— 试满就认出厂默认,否则服务端
-// 不应答时「回车发不出去」会被当成又一处坏掉的地方。按挂载计数不行:只挂载过一两个
-// 输入框的页面永远到不了上限,会无限期停在未知态。
+// 读不到怎么办:**什么都不假设**。在学到之前裸回车一律当换行(见 sendKey.ts),发送
+// 按钮和 ⌘/Ctrl+回车照常可用,所以「一直学不到」不会把谁挡死 —— 比起猜一个没人选过
+// 的档位去真的发消息,这一侧安全得多(第 2 轮审查问题 2)。
+//
+// 重试分两层,都不靠挂载计数:
+//  · 一轮里退避重试几次,盖住一次网络抖动;
+//  · 这一轮全败就放开闸门,**下一个挂载的输入框会再起一轮** —— 用户切页面、开新框
+//    的时候自然重试,既能自愈,也不会在没人看的页面上无限轮询。
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 500;
-let started = false;
+let loading = false;
 function ensureLoaded(): void {
-  if (started) return;
-  started = true;
+  if (loading || composerSendKey() !== null) return;
+  loading = true;
   void (async () => {
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-      try {
-        await api.settings();
-        return;
-      } catch {
-        if (attempt < MAX_ATTEMPTS) {
-          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    try {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+        try {
+          await api.settings();
+          return;
+        } catch {
+          if (attempt < MAX_ATTEMPTS) {
+            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+          }
         }
       }
+    } finally {
+      loading = false;
     }
-    settleComposerSendKeyDefault();
   })();
 }
 
-/** 当前这一档(未知时按出厂默认念),改了会重渲染。写提示文案用 `useSendKeyLabels`。 */
+/**
+ * 当前这一档,改了会重渲染。未知时给的是**此刻真正在生效**的那一档(见
+ * `displaySendKey`),不是出厂默认。写提示文案用 `useSendKeyLabels`。
+ */
 export function useComposerSendKey(): ComposerSendKey {
   const [mode, setMode] = useState(displaySendKey);
   useEffect(() => {
     ensureLoaded();
-    // 订阅之前这一档可能已经被别人学到了(adopt 发生在任何一次读设置时)。
+    // 订阅之前这一档可能已经被别人学到了(任何一次读设置都会推一份过来)。
     setMode(displaySendKey());
     return onComposerSendKeyChange(() => setMode(displaySendKey()));
   }, []);

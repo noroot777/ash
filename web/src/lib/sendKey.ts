@@ -5,10 +5,13 @@
 // `(metaKey || ctrlKey) && key === "Enter"` 的话,改了这一档必有几个框跟不上,而
 // 「有的框回车能发、有的不能」比两种都不支持更让人摸不着头脑。
 //
-// 这个文件**不 import `api.ts`**:它要被 api 层调(读到设置的那一刻把新档位交进来),
+// 这个文件只管**语义**(哪一下算发送、提示怎么念),不管「哪份应答算数」—— 那是
+// `settingsSync.ts` 的事,它按「写比读权威」挑出该采纳的那一份再喂进来。
+//
+// 这个文件**不 import `api.ts`**:它要被 api 那条链调(读到设置的那一刻把新档位交进来),
 // 夹在中间才不会把那两个绕成环。那一次性的拉取在 `useComposerSendKey.ts` 里。
 import type { ComposerSendKey } from "@ash/shared";
-import { COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "@ash/shared";
+import { COMPOSER_SEND_KEYS } from "@ash/shared";
 
 const isSendKey = (value: unknown): value is ComposerSendKey =>
   typeof value === "string" && (COMPOSER_SEND_KEYS as readonly string[]).includes(value);
@@ -24,63 +27,37 @@ const isSendKey = (value: unknown): value is ComposerSendKey =>
  *    同源下它是所有账号共用的一个键(多人模式里是**别人的**偏好),而且迟到的
  *    `/settings` 应答还会把过期值写回去,于是一次抖动能影响到后面每一次刷新。
  *    窗口本来就只有一次本机请求那么长,不值得用一份跨账号的猜测去填。
+ *  · 也**不拿出厂默认兜底**(「读了几次都失败就当 enter」那版已经撤掉):读设置失败
+ *    不等于发消息也失败 —— 第 2 轮审查实测,设置 GET 全部 503 时任务照样建得出来,
+ *    于是那个兜底把一个没人选过的档位变成了真实的发送行为。读不到就一直保持换行,
+ *    发送按钮和 ⌘/Ctrl+回车都还在,没有谁被挡住。
  */
 let current: ComposerSendKey | null = null;
 const listeners = new Set<(mode: ComposerSendKey | null) => void>();
 
-/**
- * 应答乱序的护栏。`/settings` 的读取点不止一处(工作台开场、设置页、技能清单、
- * 新建面板),**保存之前发出的那条 GET 完全可能在 PATCH 之后才回来**;无条件采纳
- * 的话,刚存好的「⌘/Ctrl+回车」会被那条旧应答悄悄换回去,用户下一个回车就把没写完
- * 的任务发出去了(第 1 轮审查问题 1)。
- *
- * 所以按**发请求的先后**定胜负:api 层在发出之前取号,应答回来时带着它,号比已采纳
- * 的小就直接丢掉。用「发出顺序」而不是「回来顺序」,是因为用户最后那一下点击对应的
- * 必然是最后发出的那条请求。
- */
-let issued = 0;
-let applied = 0;
-
-/** api 层在**发出请求之前**取号。 */
-export const nextSettingsTicket = (): number => ++issued;
-
 /** 当前这一档;`null` = 还没学到。事件处理里直接调它,每次按键都读一次。 */
 export const composerSendKey = (): ComposerSendKey | null => current;
 
-/** 写提示文案时用:未知期间先按出厂默认念(这段窗口只有一次本机请求那么长)。 */
-export const displaySendKey = (): ComposerSendKey => current ?? DEFAULT_APP_SETTINGS.composerSendKey;
+/**
+ * 写提示文案时用。未知期间念的是 `mod-enter` —— 那正是此刻**真正在生效**的规矩
+ * (裸回车换行、⌘/Ctrl+回车发送),不是猜一个出厂默认顶上去。
+ *
+ * 代价是:绝大多数人(用默认档)每次开页会看到提示从「⌘ / Ctrl + Enter 发送」跳成
+ * 「Enter 发送」。那一跳只有一次本机请求那么长,而反过来——先写着「Enter 发送」、
+ * 按下去却是换行——是在教用户一件不成立的事。
+ */
+export const displaySendKey = (): ComposerSendKey => current ?? "mod-enter";
 
 /**
- * 学到一份新的设置。**变了才通知**,所以可以在每次读 `/settings` 时无脑调一次
- * (钉在 `api.ts` 的 adopt 里,跟 hostCliPolicy 同一个理由:学到这一档的路只有
- * `/settings` 那两条,放在调用点迟早漏)。
+ * 学到一份新的设置。**变了才通知**。
  *
- * `ticket` 省略时取一个最新的号 —— 意思是「这是此刻最新的一句话」,给不经过 api 层
- * 的直接设定用(测试台、下面那个兜底)。走 api 的一律把发请求前取的号传进来。
+ * 调用方只有 `settingsSync.ts`(以及测试台):哪份应答算数由它判,这里收到的一律当成
+ * 「此刻的真相」。
  */
-export function syncComposerSendKey(next: ComposerSendKey, ticket = nextSettingsTicket()): void {
-  if (!isSendKey(next) || ticket < applied) return;
-  applied = ticket;
-  if (next === current) return;
+export function syncComposerSendKey(next: ComposerSendKey): void {
+  if (!isSendKey(next) || next === current) return;
   current = next;
   for (const notify of listeners) notify(next);
-}
-
-/**
- * `/settings` 实在读不到时的兜底:认出厂默认,别把裸回车无限期地锁成换行。
- *
- * 只在重试用尽之后调(useComposerSendKey.ts)。到那一步整台服务端多半已经不应答了,
- * 「回车发不出去」只会被当成又一处坏掉的地方,不如回到出厂行为。
- *
- * **故意不走 `syncComposerSendKey`,也就不动 `applied`**:这只是「等不到就先按出厂的
- * 来」,不是一句权威答复。占了号的话,别处那条还在路上的读取(设置页、新建面板各有
- * 一条,它们的号更小)回来时会被当成过期货丢掉 —— 服务端明明答了,用户的那一档却要等
- * 到下一次读取才生效。
- */
-export function settleComposerSendKeyDefault(): void {
-  if (current !== null) return;
-  current = DEFAULT_APP_SETTINGS.composerSendKey;
-  for (const notify of listeners) notify(current);
 }
 
 /** 订阅翻面(提示文案要跟着改)。返回退订函数。 */
@@ -156,8 +133,10 @@ export function sendKeyLabels(mode: ComposerSendKey = displaySendKey()): {
   send: string;
   sendShort: string;
   newline: string;
+  /** `aria-keyshortcuts` 的取值 —— 读屏念给人听的那串,同样不能停在写死的 Enter 上。 */
+  ariaShortcut: string;
 } {
   return mode === "mod-enter"
-    ? { send: "⌘ / Ctrl + Enter", sendShort: "⌘↵", newline: "Enter" }
-    : { send: "Enter", sendShort: "↵", newline: "Shift Enter" };
+    ? { send: "⌘ / Ctrl + Enter", sendShort: "⌘↵", newline: "Enter", ariaShortcut: "Meta+Enter Control+Enter" }
+    : { send: "Enter", sendShort: "↵", newline: "Shift Enter", ariaShortcut: "Enter" };
 }

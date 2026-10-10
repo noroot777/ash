@@ -45,13 +45,17 @@ const single = renderToStaticMarkup(
 assert.doesNotMatch(single, /task-question-progress/);
 assert.doesNotMatch(single, /上一题|下一题/);
 // 发送键那句提示跟着「输入框发送键」那一档走（设置 → 默认规则 → 输入框），不是写死的。
-assert.match(single, /Enter 发送/);
-assert.doesNotMatch(single, /⌘ \/ Ctrl \+ Enter 发送/);
-syncComposerSendKey("mod-enter");
-const singleModEnter = renderToStaticMarkup(
+// 还没读到设置时念的是 ⌘/Ctrl ——那正是此刻真正在生效的规矩（裸回车换行），见 sendKey.ts。
+assert.match(single, /⌘ \/ Ctrl \+ Enter 发送/, "设置还没到货时，提示该念此刻真正生效的那一档");
+const renderSingle = () => renderToStaticMarkup(
   <QuestionCard task={{ ...task, questionItems: undefined, questionOptions: ["甲", "乙"] } as Task} onAnswer={async () => undefined} />,
 );
-assert.match(singleModEnter, /⌘ \/ Ctrl \+ Enter 发送/);
+syncComposerSendKey("enter");
+const singleEnter = renderSingle();
+assert.match(singleEnter, /Enter 发送/);
+assert.doesNotMatch(singleEnter, /⌘ \/ Ctrl \+ Enter 发送/);
+syncComposerSendKey("mod-enter");
+assert.match(renderSingle(), /⌘ \/ Ctrl \+ Enter 发送/);
 syncComposerSendKey("enter");
 const recorded = render([answer]);
 assert.equal(count(recorded, 'class="task-question-record"'), 1, "会话与数据库里的同一份答复只显示一张卡");
