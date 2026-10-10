@@ -168,53 +168,8 @@ const bobActor = actorOf(bob);
   assert.equal(noDefault[0].toName, null);
 }
 
-// ── ⑥ 设置分面 ────────────────────────────────────────────────────────────
-{
-  await personal.patchSettingsFor(aliceActor, { defaultWorkflowId: "alice-flow" });
-  assert.equal((await personal.settingsFor(alice.id)).defaultWorkflowId, "alice-flow");
-  assert.equal((await personal.settingsFor(bob.id)).defaultWorkflowId, "", "个人面互不影响");
-  assert.equal((await appSettings.getAppSettings()).defaultWorkflowId, "", "个人面不该写进全局那份");
-
-  // 实例面:普通用户改不动,管理员可以。
-  await assert.rejects(
-    () => personal.patchSettingsFor(aliceActor, { skillRefreshSeconds: 7200 }),
-    /实例管理员/,
-  );
-  await personal.patchSettingsFor(adminActor, { skillRefreshSeconds: 7200 });
-  assert.equal((await appSettings.getAppSettings()).skillRefreshSeconds, 7200);
-
-  // 多人模式的接力目标机按人存,不许走 PATCH /settings。
-  await assert.rejects(
-    () => personal.patchSettingsFor(aliceActor, { handoffTargets: [] }),
-    /接力目标机/,
-  );
-
-  // 「输入框按哪一下算发送」同样是个人面的一项:同一台机器上两个人各按各的习惯。
-  await personal.patchSettingsFor(bobActor, { composerSendKey: "mod-enter" });
-  assert.equal((await personal.settingsFor(bob.id)).composerSendKey, "mod-enter");
-  assert.equal((await personal.settingsFor(alice.id)).composerSendKey, "enter", "没写过的人落回出厂默认");
-  assert.equal((await appSettings.getAppSettings()).composerSendKey, "enter", "个人面不该写进全局那份");
-  // 取值由写侧的边界把关(PATCH /settings 进 patchSettingsFor 之前就过这一道)。
-  assert.throws(
-    () => appSettings.parseAppSettingsPatch({ composerSendKey: "ctrl-enter" }),
-    /composerSendKey/,
-  );
-  assert.deepEqual(
-    appSettings.parseAppSettingsPatch({ composerSendKey: "mod-enter" }),
-    { composerSendKey: "mod-enter" },
-  );
-  // 手改过的库、或上一版写下而这一版已经不认的旧值:读回来落回默认,而不是把一个
-  // 界面上根本没有的档位端给设置页(个人面的读侧跟全局那张表共用同一份判据)。
-  await db
-    .insert(schema.userSettings)
-    .values({ userId: bob.id, key: "composerSendKey", value: JSON.stringify("cmd-enter") })
-    .onConflictDoUpdate({
-      target: [schema.userSettings.userId, schema.userSettings.key],
-      set: { value: JSON.stringify("cmd-enter") },
-    });
-  assert.equal((await personal.settingsFor(bob.id)).composerSendKey, "enter", "坏值等同没写过");
-  await personal.patchSettingsFor(bobActor, { composerSendKey: "enter" });
-}
+// ── ⑥ 设置分面 → 已搬到 test-multi-user-settings.ts ──────────────────────
+//    （个人面 / 实例面之分、写侧边界、读侧坏值；这个文件已顶到 700 行上限）
 
 // ── ⑦ 个人面资源互不可见 ──────────────────────────────────────────────────
 {

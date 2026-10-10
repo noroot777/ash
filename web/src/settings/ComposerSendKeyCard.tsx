@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ComposerSendKey } from "@ash/shared";
 import { sendKeyLabels } from "../lib/sendKey.ts";
 
@@ -21,6 +22,10 @@ export function ComposerSendKeyCard({ value, loading, onChange }: {
   loading: boolean;
   onChange: (next: ComposerSendKey) => Promise<void>;
 }) {
+  // 存的那一下把下拉按住:两次快速改动会发出两条 PATCH，服务端最后留下哪一条取决于
+  // 它们的到达顺序，而界面上只剩用户最后点的那个 —— 两边对不上就没法解释了。
+  // （前端自己采纳哪一份应答另有一道闸，见 sendKey.ts 的 nextSettingsTicket。）
+  const [saving, setSaving] = useState(false);
   const labels = sendKeyLabels(value);
   return (
     // data-settings-anchor：文案里的「设置 → 默认规则 → 输入框」照着它落点（见 sections.ts）。
@@ -40,9 +45,13 @@ export function ComposerSendKeyCard({ value, loading, onChange }: {
           </div>
           <select
             value={value}
-            disabled={loading}
+            disabled={loading || saving}
             aria-label="输入框发送键"
-            onChange={(event) => void onChange(event.target.value as ComposerSendKey)}
+            onChange={(event) => {
+              const next = event.target.value as ComposerSendKey;
+              setSaving(true);
+              void onChange(next).finally(() => setSaving(false));
+            }}
           >
             {CHOICES.map((choice) => (
               <option key={choice.value} value={choice.value}>{choice.label}</option>

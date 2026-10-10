@@ -10,43 +10,81 @@
 import type { ComposerSendKey } from "@ash/shared";
 import { COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "@ash/shared";
 
-// 本地镜像。**不是**缓存,是为了**第一下回车不出错**:这一档住在服务端,而 `/settings`
-// 回来之前页面已经可以打字了。没有镜像的话,选了「⌘+回车发送」的人每次刷新都有一个
-// 窗口期,随手一个回车就把半句话发出去 —— 发送不可撤销,比多存一个键贵得多。
-const MIRROR_KEY = "ash:composer-send-key";
-
 const isSendKey = (value: unknown): value is ComposerSendKey =>
   typeof value === "string" && (COMPOSER_SEND_KEYS as readonly string[]).includes(value);
 
-function readMirror(): ComposerSendKey {
-  try {
-    const saved = window.localStorage.getItem(MIRROR_KEY);
-    if (isSendKey(saved)) return saved;
-  } catch { /* 隐私模式下读不到:用出厂默认 */ }
-  return DEFAULT_APP_SETTINGS.composerSendKey;
-}
+/**
+ * `null` = **还没学到**(页面刚起、`/settings` 还在路上)。这一档一定要跟「已经知道
+ * 是 enter」分开记:
+ *
+ *  · 两者行为不同 —— 未知期间**裸回车一律当换行**。发送不可撤销,而这一档的两种取值
+ *    对裸回车的解读正好相反;猜错一次的代价是「半句话被发出去」,猜对一次只省下用户
+ *    一个 Shift。带 ⌘/Ctrl 的回车不受影响:**两档下它都是发送**,没有歧义。
+ *  · 这里曾经用 localStorage 存过一份镜像当「上一次那一档」来顶这段窗口。已经撤掉:
+ *    同源下它是所有账号共用的一个键(多人模式里是**别人的**偏好),而且迟到的
+ *    `/settings` 应答还会把过期值写回去,于是一次抖动能影响到后面每一次刷新。
+ *    窗口本来就只有一次本机请求那么长,不值得用一份跨账号的猜测去填。
+ */
+let current: ComposerSendKey | null = null;
+const listeners = new Set<(mode: ComposerSendKey | null) => void>();
 
-let current = readMirror();
-const listeners = new Set<(mode: ComposerSendKey) => void>();
+/**
+ * 应答乱序的护栏。`/settings` 的读取点不止一处(工作台开场、设置页、技能清单、
+ * 新建面板),**保存之前发出的那条 GET 完全可能在 PATCH 之后才回来**;无条件采纳
+ * 的话,刚存好的「⌘/Ctrl+回车」会被那条旧应答悄悄换回去,用户下一个回车就把没写完
+ * 的任务发出去了(第 1 轮审查问题 1)。
+ *
+ * 所以按**发请求的先后**定胜负:api 层在发出之前取号,应答回来时带着它,号比已采纳
+ * 的小就直接丢掉。用「发出顺序」而不是「回来顺序」,是因为用户最后那一下点击对应的
+ * 必然是最后发出的那条请求。
+ */
+let issued = 0;
+let applied = 0;
 
-/** 当前这一档。事件处理里直接调它 —— 每次按键都读一次,所以永远是最新的。 */
-export const composerSendKey = (): ComposerSendKey => current;
+/** api 层在**发出请求之前**取号。 */
+export const nextSettingsTicket = (): number => ++issued;
+
+/** 当前这一档;`null` = 还没学到。事件处理里直接调它,每次按键都读一次。 */
+export const composerSendKey = (): ComposerSendKey | null => current;
+
+/** 写提示文案时用:未知期间先按出厂默认念(这段窗口只有一次本机请求那么长)。 */
+export const displaySendKey = (): ComposerSendKey => current ?? DEFAULT_APP_SETTINGS.composerSendKey;
 
 /**
  * 学到一份新的设置。**变了才通知**,所以可以在每次读 `/settings` 时无脑调一次
  * (钉在 `api.ts` 的 adopt 里,跟 hostCliPolicy 同一个理由:学到这一档的路只有
  * `/settings` 那两条,放在调用点迟早漏)。
+ *
+ * `ticket` 省略时取一个最新的号 —— 意思是「这是此刻最新的一句话」,给不经过 api 层
+ * 的直接设定用(测试台、下面那个兜底)。走 api 的一律把发请求前取的号传进来。
  */
-export function syncComposerSendKey(next: ComposerSendKey): void {
-  if (!isSendKey(next) || next === current) return;
+export function syncComposerSendKey(next: ComposerSendKey, ticket = nextSettingsTicket()): void {
+  if (!isSendKey(next) || ticket < applied) return;
+  applied = ticket;
+  if (next === current) return;
   current = next;
-  try { window.localStorage.setItem(MIRROR_KEY, next); }
-  catch { /* 存不下就只在本轮生效 */ }
   for (const notify of listeners) notify(next);
 }
 
+/**
+ * `/settings` 实在读不到时的兜底:认出厂默认,别把裸回车无限期地锁成换行。
+ *
+ * 只在重试用尽之后调(useComposerSendKey.ts)。到那一步整台服务端多半已经不应答了,
+ * 「回车发不出去」只会被当成又一处坏掉的地方,不如回到出厂行为。
+ *
+ * **故意不走 `syncComposerSendKey`,也就不动 `applied`**:这只是「等不到就先按出厂的
+ * 来」,不是一句权威答复。占了号的话,别处那条还在路上的读取(设置页、新建面板各有
+ * 一条,它们的号更小)回来时会被当成过期货丢掉 —— 服务端明明答了,用户的那一档却要等
+ * 到下一次读取才生效。
+ */
+export function settleComposerSendKeyDefault(): void {
+  if (current !== null) return;
+  current = DEFAULT_APP_SETTINGS.composerSendKey;
+  for (const notify of listeners) notify(current);
+}
+
 /** 订阅翻面(提示文案要跟着改)。返回退订函数。 */
-export function onComposerSendKeyChange(listener: (mode: ComposerSendKey) => void): () => void {
+export function onComposerSendKeyChange(listener: (mode: ComposerSendKey | null) => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
@@ -77,6 +115,7 @@ const composing = (event: SendKeyEventLike): boolean =>
  *  · `enter`     裸回车就发;**⌘/Ctrl+回车照旧也发** —— 从另一档切过来的人肌肉记忆
  *                不白废,而且这一档下按住 ⌘ 敲回车本来什么也不会发生。
  *  · `mod-enter` 只有 ⌘/Ctrl+回车发,裸回车留给换行。
+ *  · 还没学到    按 `mod-enter` 那一套办(裸回车当换行),理由见 `current` 的注释。
  *
  * 补全菜单(`/` 技能、`@` 文件、@成员)开着时**先问它们**:那一下回车是「选中这条」。
  * 现有调用点都是先让菜单处理、它说没吃掉才轮到这里,顺序别倒。
@@ -84,7 +123,8 @@ const composing = (event: SendKeyEventLike): boolean =>
 export function isSendKeyEvent(event: SendKeyEventLike): boolean {
   if (event.key !== "Enter" || composing(event)) return false;
   if (event.shiftKey || event.altKey) return false;
-  return current === "enter" || event.metaKey || event.ctrlKey;
+  if (event.metaKey || event.ctrlKey) return true;
+  return current === "enter";
 }
 
 /**
@@ -112,7 +152,7 @@ export function isSubmitKeyEvent(
  *  · `sendShort` 短形:「↵」/「⌘↵」(挤在按钮或状态条里的那些)
  *  · `newline`   换行怎么按
  */
-export function sendKeyLabels(mode: ComposerSendKey = current): {
+export function sendKeyLabels(mode: ComposerSendKey = displaySendKey()): {
   send: string;
   sendShort: string;
   newline: string;
