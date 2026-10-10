@@ -57,9 +57,9 @@ export async function resumeOrRunTask(
   // 的修改要求迟到到回合之后(第 xNb655YqYzcA 链第 3 轮实测)。checkpoint resumePrompt
   // 在上面仍然优先(那是 agent 自己的流水线交接,消息投递时会消费它);终态任务的
   // 续聊不经过本函数,照旧不受影响。记账与去重都在 handDuePendingMessageToRun 里走
-  // 投递链路同一套租约,tick / 终态钩子不会把同一条再发一遍。
+  // 投递链路同一套租约,tick / 终态钩子不会把同一条再发一遍;执行/记录语义见
+  // continueTask 的 executionTurn 注释(第 4 轮审查:执行意图与输入来源分开表示)。
   if (await handDuePendingMessageToRun(taskId, {
-    system: opts.reason ?? "run",
     turnHeld: opts.turnHeld,
     actingUserId: acting ?? null,
   })) return;

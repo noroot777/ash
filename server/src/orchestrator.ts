@@ -95,6 +95,15 @@ export async function continueTask(
     reasoningEffort?: string | null;
     attachments?: string[];
     system?: ResumeReason;
+    /**
+     * 「执行意图」与「输入来源」分开表示(第 xNb655YqYzcA 链第 4 轮):这一回合是
+     * **任务的执行**(让位交接/手动运行/重试把到期的用户回复当启动输入),所以终态
+     * 任务不走续聊语义(followUpFrom 不护旧终态,队列照常占位)——这一点与 system
+     * 同口径;但输入是**真实用户消息**,落盘记录、工作目录基线、检查点消费、失败时
+     * 的未送达交代全按用户消息走——这一点与 system 相反。只给 system 一个标记时,
+     * 二者绑死:让位交接只能二选一,要么用户原文不进会话记录,要么终态重试被误当续聊。
+     */
+    executionTurn?: boolean;
     /** 旁路回合结束后恢复进入旁路前的任务状态。 */
     sideTurn?: boolean;
     sessionRole?: Extract<SessionRole, "single" | "reviewer">; freshSession?: boolean;
@@ -253,11 +262,14 @@ export async function continueTask(
     // DB 里的 verifyRound/nativeTurn 会在结算中途先清，handle/turn 要到 finally 才释放。
     // 把旁路身份也钉进运行时 turn role，关闭那段“标记已清、进程仍可被引导”的小窗口。
     if (sideTurn && sessionRole === "single") reclaimTurn(taskId, nativeCommand ? "native" : "side");
-    const checkpointFollowUp = !opts.system && !opts.byBackend
+    // 「这一回合是任务的执行」:system(后端代写的续跑)或 executionTurn(让位交接
+    // 把用户回复当启动输入)。只影响续聊判定,输入来源各自另算(见 opts.executionTurn)。
+    const execution = !!opts.system || !!opts.executionTurn;
+    const checkpointFollowUp = !execution && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
     const followUpFrom = sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)
-      : !opts.system && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
+      : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
         ? task.status
         : null;
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。

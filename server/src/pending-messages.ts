@@ -30,7 +30,7 @@ import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
-import { continueTask, type ResumeReason } from "./orchestrator.js";
+import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
 import { whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -423,9 +423,13 @@ async function deliverWhenIdle(
         noteDeliveryTiming(message.taskId, { ...spans, idleAt, at });
       },
     });
-    if (!started) {
+    // started=true 也可能一个字没送出去:continueTask 把起跑异常(workspace/执行器
+    // 解析)吸收在内部,结算 failed 后返回 true ——「已接管回合」≠「已送达」。唯一可信
+    // 的送达信号是 onDelivered;没响就把租约还回去,原文留在托盘等重投(第 4 轮审查
+    // 实测:项目目录暂不可用时起跑失败,租约滞留,恢复后重试/扫描全绕开这条消息)。
+    if (!delivered) {
       await abortDelivery(message);
-      scheduleRedelivery(message, "回合被其它执行抢占或工作区正被验收占用");
+      scheduleRedelivery(message, started ? "回合起跑失败，原文退回待发送" : "回合被其它执行抢占或工作区正被验收占用");
     }
   } catch (error) {
     // 已经送进会话之后才炸的(agent 半路挂了),那是这一轮运行的事故,不是消息没送到:
@@ -555,7 +559,7 @@ export function flushPendingForTask(taskId: string): void {
 // 调用方不要再开别的回合;false = 没有可交接的消息,照常走默认输入。
 export async function handDuePendingMessageToRun(
   taskId: string,
-  opts: { system?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: boolean; actingUserId?: string | null } = {},
 ): Promise<boolean> {
   if (dbClient.closed) return false;
   // 已有投递在途:它自己会开回合,这里再开默认「继续」就是同一任务两路起跑。
@@ -588,7 +592,10 @@ export async function handDuePendingMessageToRun(
       // 才算到这次启动的发起人头上。
       actingUserId: opts.actingUserId ?? undefined,
       ...deliveryOptions(due),
-      system: opts.system,
+      // 执行意图与输入来源分开表示(第 4 轮审查):这一回合是任务的执行(终态重试
+      // 不走续聊语义),但输入是真实用户回复 —— 原文/附件照常进会话记录与后续追问,
+      // 不能带 system 标记把它记成一句「〔系统〕继续」。
+      executionTurn: true,
       turnHeld: opts.turnHeld,
       onDelivered: async () => {
         delivered = true;
@@ -598,10 +605,12 @@ export async function handDuePendingMessageToRun(
         noteDeliveryTiming(taskId, { dueAt, busyMs, queuedAt, idleAt: queuedAt, at: sentAt });
       },
     });
-    if (!started) {
-      // 回合被别的执行抢占或验收互斥:这次启动整体让位,消息留在托盘等重投。
+    if (!delivered) {
+      // 同 deliverWhenIdle:「已接管回合」≠「已送达」,唯一可信的送达信号是 onDelivered。
+      // 起跑异常被 continueTask 内部吸收(结算 failed 后返回 true)时必须归还租约,
+      // 否则恢复后的重试与扫描(都只看无租约的 pending 行)永远绕开这条消息。
       await abortDelivery(due);
-      scheduleRedelivery(due, "回合被其它执行抢占或工作区正被验收占用");
+      scheduleRedelivery(due, started ? "回合起跑失败，原文退回待发送" : "回合被其它执行抢占或工作区正被验收占用");
     }
     return true;
   } catch (error) {
