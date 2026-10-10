@@ -157,11 +157,13 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     render: (context) => <PreviewWorkspaceEntry onOpen={context.onOpenPreview} />,
   },
   {
-    // 这一格的 defaultOpen 由 useMonitorInspector 按「这个任务有没有哨兵」翻：平时只待在
-    // 「+」菜单里不占位置，第一个哨兵挂上去才自己冒出来。
+    // 跟其它几格一样默认开着：哨兵不只是「agent 挂了什么」的回看面板，人也会想自己挂一个，
+    // 而这一格就是手动起哨兵唯一的入口——藏到「+」菜单里等于让人先知道它在那儿才找得到。
+    // 没有哨兵时空态自己会解释这是什么（见 MonitorInspector），不是一片空白。
     id: "monitors",
     title: "哨兵",
     icon: <Pulse size={14} />,
+    defaultOpen: true,
     shortcut: "m",
     render: (context) => (
       <MonitorInspector monitors={context.monitors} blockedReason={monitorBlockedReason(context.task)} />

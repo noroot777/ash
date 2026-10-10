@@ -330,7 +330,7 @@ export function TeamView({
     error: conversation.error ?? conversation.traceError,
     onRetry: conversation.refetch,
   }, { onOpen: () => setSelectedWorkerId(null) });
-  // 哨兵那一格：挂在调度台自己身上，面板关着也要拉（图标条据此自己冒出来）。
+  // 哨兵那一格：挂在调度台自己身上，看着别的面板时也要拉（图标条上那点活信号靠它）。
   const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
   const inspectors = monitorTab.inspectors;
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
@@ -348,13 +348,13 @@ export function TeamView({
     && workers.length > 0
     && workers.every((worker) => worker.status === "done");
   const inspectorPolicy = useMemo(() => ({
-    // `-v2`：生成物那一格是后加的，存量用户的 `openTabs` 躺在 localStorage 里，只有
-    // `stateKey` 变过一次才会拿下面这张表去并集。加面板要连带跳一版（同 TaskDetail）。
-    stateKey: `team:timeline-v2:${allWorkersComplete ? "complete" : "active"}`,
+    // `-v3`：生成物、哨兵那两格都是后加的，存量用户的 `openTabs` 躺在 localStorage 里，
+    // 只有 `stateKey` 变过一次才会拿下面这张表去并集。加面板要连带跳一版（同 TaskDetail）。
+    stateKey: `team:timeline-v3:${allWorkersComplete ? "complete" : "active"}`,
     requiredTabId: "info",
     defaultOpenTabIds: allWorkersComplete
-      ? ["info", "review", "artifacts", "timeline"]
-      : ["info", "workers", "artifacts", "timeline"],
+      ? ["info", "review", "artifacts", "timeline", "monitors"]
+      : ["info", "workers", "artifacts", "timeline", "monitors"],
     defaultActiveTabId: allWorkersComplete ? "review" : "workers",
   }), [allWorkersComplete]);
   const selectWorker = useCallback((taskId: string) => {

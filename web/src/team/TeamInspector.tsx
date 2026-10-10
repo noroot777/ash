@@ -257,10 +257,11 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     render: (context) => <NativeWorkInspector {...context.nativeWork} />,
   },
   {
-    // 盯的是调度台自己挂的哨兵。defaultOpen 由 useMonitorInspector 按有没有哨兵翻。
+    // 盯的是调度台自己挂的哨兵。和单飞任务同样默认开着（手动起哨兵只有这一个入口）。
     id: "monitors",
     title: "哨兵",
     icon: <Pulse size={14} />,
+    defaultOpen: true,
     shortcut: "m",
     render: (context) => (
       <MonitorInspector monitors={context.monitors} blockedReason={monitorBlockedReason(context.task)} />

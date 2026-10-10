@@ -6,7 +6,7 @@ import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
 import { withMonitorTab } from "../src/monitors/useMonitorInspector.tsx";
-import { visibleMonitors, type TaskMonitorsState } from "../src/monitors/useTaskMonitors.ts";
+import type { TaskMonitorsState } from "../src/monitors/useTaskMonitors.ts";
 
 const base: TaskMonitor = {
   id: "m1",
@@ -80,38 +80,47 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
   assert.doesNotMatch(blocked, /MCP 工具 start_monitor/, "连入口都没有时，别再教人怎么用那个入口");
 }
 
-// ── 图标条上的那一格：平时不占位置，第一个哨兵挂上去才自己冒出来 ──────────────
+// ── 图标条上的那一格：默认开着，标题/图标按「此刻几个在盯着」给 ───────────────
+// 默认开不是审美偏好：手动起一个哨兵只有这一格里那个「+」，藏进「+」菜单就得先知道
+// 它在那儿才找得到。所以开合写死在 TASK_INSPECTORS / TEAM_INSPECTORS 里，这个 hook
+// 只负责那点活信号。
 {
   const descriptors: InspectorDescriptor<unknown>[] = [
     { id: "info", title: "信息", icon: null, defaultOpen: true, render: () => null },
-    { id: "monitors", title: "哨兵", icon: null, render: () => null },
+    { id: "monitors", title: "哨兵", icon: null, defaultOpen: true, render: () => null },
   ];
-  const tab = (current: number, live: number) =>
-    withMonitorTab(descriptors, { current, live }).find((d) => d.id === "monitors");
+  const tab = (live: number) => withMonitorTab(descriptors, { live }).find((d) => d.id === "monitors");
 
-  const empty = tab(0, 0);
-  assert.ok(empty, "一个哨兵都没有时这一格也必须还在（否则「+」菜单里也找不到它）");
-  assert.equal(empty?.defaultOpen, false, "没哨兵就不默认开，别让没用过的人图标条上常年多一格");
-  assert.equal(empty?.title, "哨兵", "没哨兵时标题不带数量");
+  const empty = tab(0);
+  assert.ok(empty, "一个哨兵都没有时这一格也必须还在");
+  assert.equal(empty?.defaultOpen, true, "没哨兵也默认开着——手动起一个哨兵只有这一格里那个入口");
+  assert.equal(empty?.title, "哨兵", "没在盯着的就不带数量");
+  assert.equal(empty?.icon, descriptors[1].icon, "没在盯着的时候图标不该变");
 
-  const busy = tab(3, 2);
-  assert.equal(busy?.defaultOpen, true, "有哨兵就该自己冒到图标条上");
+  const busy = tab(2);
+  assert.equal(busy?.defaultOpen, true, "有哨兵时当然还是开着");
   assert.match(String(busy?.title), /哨兵（2）/, "标题上的数字是此刻真在烧回合的那几个，不含已经结束的");
-  assert.notEqual(busy?.icon, descriptors[1].icon, "有在盯的哨兵时图标要变（这是面板关着时唯一的活信号）");
+  assert.notEqual(busy?.icon, descriptors[1].icon, "有在盯的哨兵时图标要变（这是面板收起时唯一的活信号）");
 
-  // 刚跑完的那几分钟最该看结果，这时候把面板收走等于在用户伸手时把东西拿走。
-  const justEnded = tab(1, 0);
-  assert.equal(justEnded?.defaultOpen, true, "哨兵刚结束时面板要继续默认开着");
-  assert.equal(justEnded?.title, "哨兵", "没有在盯着的了，标题上就不该再挂数字");
+  // 真正决定开合的是那两份 descriptor 表，hook 只做装饰：它们上面必须写着 defaultOpen。
+  for (const file of ["../src/task-detail/taskInspectors.tsx", "../src/team/TeamInspector.tsx"] as const) {
+    assert.match(
+      readSource(new URL(file, import.meta.url)),
+      /id: "monitors",[\s\S]{0,240}?defaultOpen: true/,
+      `${file} 里哨兵那一格必须默认开着`,
+    );
+  }
 
-  // 上面那套「自己冒出来」全靠 InspectorHost 认「这一格刚变成默认开」。它要是改回按
-  // 「这一格以前存不存在」记账，哨兵这一格会因为一直存在而永远冒不出来。
-  const host = readSource(new URL("../src/inspector/InspectorHost.tsx", import.meta.url));
-  assert.match(
-    host,
-    /knownTabIds = useRef\(new Set\(\s*descriptors\.filter\(\(descriptor\) => descriptor\.defaultOpen\)/,
-    "InspectorHost 必须按「曾经默认开过」记账，否则 defaultOpen 由 false 翻 true 的面板冒不出来",
-  );
+  // 光 descriptor 上写 defaultOpen 还不够：存量用户的 openTabs 躺在 localStorage 里，
+  // `applyTabPolicy` 只在 stateKey 变过一次时才拿 defaultOpenTabIds 去并集。两处都得
+  // 带上它，否则老用户永远等不到它自己冒出来。
+  for (const [file, pattern] of [
+    ["../src/task-detail/TaskDetail.tsx", /defaultOpenTabIds: \[[^\]]*"monitors"/],
+    ["../src/team/TeamView.tsx", /defaultOpenTabIds: allWorkersComplete[\s\S]*?"monitors"[\s\S]*?"monitors"/],
+  ] as const) {
+    assert.match(readSource(new URL(file, import.meta.url)), pattern,
+      `${file} 的 defaultOpenTabIds 必须带上哨兵，否则存量用户那边它不会自己开`);
+  }
 }
 
 // ── 还在盯的排在上面：结束的那几张是存档，正在烧回合的才要盯着看 ──────────────
@@ -136,13 +145,6 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
     endedReason: "命令自己跑完了",
   }]);
   assert.equal(html.split("命令自己跑完了").length - 1, 1, "同一句话不该在一张卡上出现两次");
-}
-
-// ── 太久以前结束的不再算「当前」 ─────────────────────────────────────────────
-{
-  const stale: TaskMonitor = { ...base, status: "stopped", endedAt: "2020-01-01T00:00:00.000Z" };
-  assert.equal(visibleMonitors([stale]).length, 0, "很久以前结束的哨兵不该还算在图标条的计数里");
-  assert.equal(visibleMonitors([base]).length, 1, "在盯的永远算");
 }
 
 // ── 哨兵只有一个落脚点：回复框上面不再并排一条 ───────────────────────────────
@@ -188,4 +190,4 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   assert.doesNotMatch(hook, /setStarting|starting,/, "「正在创建中」不该按任务存——那样取消重开后新表单会被旧请求按住");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、该冒头时冒头，创建结果有归属，手机端同样给得出叫停");
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、默认开着且带活信号，创建结果有归属，手机端同样给得出叫停");

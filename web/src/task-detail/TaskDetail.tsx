@@ -114,7 +114,7 @@ export function TaskDetail({
     error: conversation.error ?? conversation.traceError,
     onRetry: conversation.refetch,
   });
-  // 哨兵那一格：数据在这一层拉（面板关着也要知道有没有哨兵，图标条才好自己冒出来）。
+  // 哨兵那一格：数据在这一层拉（看的是别的面板时也要知道有几个在盯着，图标条上那点活信号靠它）。
   const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
   const inspectors = monitorTab.inspectors;
   // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
@@ -154,7 +154,7 @@ export function TaskDetail({
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:all-tabs-v5:${task.status}:${reviewFocused ? "review" : "info"}`,
+    stateKey: `single:all-tabs-v6:${task.status}:${reviewFocused ? "review" : "info"}`,
     requiredTabId: "info",
     preserveActiveTabIds: ["side-chat"],
     // 顺序由 TASK_INSPECTORS 定，这里只说「默认哪几格开着」；子智能体那一格没派过就不存在，
@@ -164,9 +164,7 @@ export function TaskDetail({
     // `applyTabPolicy` 只在 `stateKey` 变过一次时才拿这张表去并集。所以**加面板要连
     // 带把 `all-tabs-vN` 往上跳一版**，否则老用户永远看不到它（生成物那一格就是这么
     // 差点漏掉的）。
-    // 哨兵那一格故意不在这张表里：它的「默认开」是动态的（有哨兵才算），列进来就等于
-    // 无条件并集，没用过这功能的人图标条上会常年多一格。
-    defaultOpenTabIds: ["info", "files", "artifacts", "scm", "subagents", "side-chat", "workflow", "review", "preview"],
+    defaultOpenTabIds: ["info", "files", "artifacts", "scm", "subagents", "side-chat", "workflow", "review", "preview", "monitors"],
     defaultActiveTabId: reviewFocused ? "review" : "info",
   }), [reviewFocused, task.status]);
 

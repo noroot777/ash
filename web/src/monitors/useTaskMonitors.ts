@@ -8,13 +8,6 @@ import type { TaskMonitor } from "@ash/shared/monitor";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 
-/** 已结束的哨兵留在列表里多久仍然算「当前」——「它刚刚停了、推了几条」是用户要的信息。 */
-const KEEP_ENDED_MS = 30 * 60_000;
-
-export function visibleMonitors(all: TaskMonitor[], at = Date.now()): TaskMonitor[] {
-  return all.filter((m) => m.status === "running" || (m.endedAt && at - new Date(m.endedAt).getTime() < KEEP_ENDED_MS));
-}
-
 export const MONITOR_ENDED_LABEL: Record<string, string> = {
   exited: "命令自己跑完了",
   expired: "盯满时长",
