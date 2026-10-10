@@ -152,4 +152,113 @@ export async function runHandoffCases(ctx: HandoffCaseContext): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(countIn(leadLog, failText), 1, "同一条消息被送了不止一次");
   console.log("✓ 起跑失败归还租约,条件恢复后补送恰好一次");
+
+  // ── 执行型重投守整队:起跑失败后恢复,不得与后继成员并跑(第 5 轮审查拦验收 1)──
+  // 队列 [B2, P2, C2]:P2 排队期间收到修改要求(真实 /reply 入口,落成 execution=1),
+  // 轮到它时起跑失败落 failed,C2 按队列规则顶上。失败重投若丢掉执行意图,P2 会按
+  // 终态续聊豁免启动,与仍在跑的 C2 并行执行;必须等 C2 结束后按顺序投递恰好一次。
+  const seqBId = "scheduled-single-seq-b";
+  const seqPId = "scheduled-single-seq-p";
+  const seqCId = "scheduled-single-seq-c";
+  const seqText = "中间任务修改要求：等轮到我时继续实现最新方案，别按旧方案运行。";
+  const [runRoutes, { Hono }] = await Promise.all([
+    import("../src/task-run-routes.js"),
+    import("hono"),
+  ]);
+  await db.insert(tasks).values([
+    { ...taskRow(seqBId, "claude", "running"), mode: "single", team: null },
+    { ...taskRow(seqPId, "claude", "paused"), mode: "single", team: null, useWorktree: true },
+    // C2 的 body 让假 claude 保持运行,好留出「后继在跑」的窗口。
+    { ...taskRow(seqCId, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-seq-p-prev", taskId: seqPId, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: join(root, "vanished"), cliSessionId: "scheduled-seq-p-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-seq-queue", taskId: seqBId, position: 0, createdAt: at },
+    { queueId: "scheduled-seq-queue", taskId: seqPId, position: 1, createdAt: at },
+    { queueId: "scheduled-seq-queue", taskId: seqCId, position: 2, createdAt: at },
+  ]);
+  // 从真实回复入口进:排队等轮次的暂存必须落 execution=1,重投才认得执行意图。
+  const seqApi = new Hono();
+  runRoutes.mountTaskRunRoutes(seqApi);
+  const seqReply = await seqApi.request(`/tasks/${seqPId}/reply`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: seqText }),
+  });
+  assert.equal(seqReply.status, 202, "排队等待的 P2 发回复应被暂存");
+  const seqRow = async () => (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.taskId, seqPId))).at(0)!;
+  assert.equal((await seqRow()).execution, true, "排队等轮次暂存的回复必须带执行意图(execution=1)");
+  // B2 让位 → P2 起跑失败落 failed → C2 顶上并保持运行。
+  await status.setTaskStatus(seqBId, "done");
+  await waitFor(async () => (await db.select().from(tasks).where(eq(tasks.id, seqPId))).at(0)!.status === "failed",
+    "P2 的起跑失败没有结算成 failed");
+  await waitFor(async () => (await db.select().from(tasks).where(eq(tasks.id, seqCId))).at(0)!.status === "running",
+    "P2 失败让位后 C2 没有按队列规则顶上");
+  // C2 在跑的整个窗口里:显式扫描 + 等待重投定时器,消息都必须原地等着,P2 不得启动。
+  await pending.deliverPendingMessages(seqPId);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal((await seqRow()).status, "pending", "C2 还在跑,P2 的执行型回复不得投递");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, seqPId))).at(0)!.status, "failed",
+    "C2 还在跑,P2 不得被自动重投拉起 —— 同一队列两个任务并跑");
+  assert.equal(countIn(leadLog, seqText), 0, "原文不该在 C2 运行期间进任何 stdin");
+  // 「恢复目录」后仍然要等:挡它的是整队在跑,不是目录。
+  await db.update(tasks).set({ useWorktree: false }).where(eq(tasks.id, seqPId));
+  await pending.deliverPendingMessages(seqPId);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal((await seqRow()).status, "pending", "恢复目录不等于轮到它:C2 在跑就还得等");
+  // C2 结束(真实 stopTask 杀活进程 → 结算 → 队列钩子)→ 轮到 P2,投递恰好一次。
+  const runs = await import("../src/runs.js");
+  assert.equal(runs.stopTask(seqCId), true, "测试前提:C2 的活进程应能被停掉");
+  await waitFor(async () => (await seqRow()).status === "sent",
+    "C2 结束后,P2 的执行型回复没有按顺序投递");
+  await waitFor(() => countIn(leadLog, seqText) > 0, "补送标了 sent,stdin 里却没有原文");
+  await waitFor(async () => {
+    const t = (await db.select().from(tasks).where(eq(tasks.id, seqPId))).at(0)!;
+    return t.status !== "running" && t.status !== "queued";
+  }, "P2 补送那一轮没有结算");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(countIn(leadLog, seqText), 1, "同一条修改要求被投递了不止一次");
+  console.log("✓ 执行型重投守整队:C2 在跑时原文原地等,C2 结束后按顺序投递恰好一次");
+
+  // ── 执行型重投守分组暂停:失败后暂停分组,恢复条件也不得自行重启(拦验收 2)────
+  const pauseGId = "scheduled-handoff-pause-group";
+  const pauseTId = "scheduled-single-pause-retry";
+  const pauseText = "自动补投要求：恢复后继续实现最新方案，不要按旧方案工作。";
+  await db.insert(schema.groups).values({
+    id: pauseGId, projectId: "scheduled-project", name: "pause-retry", mode: "serial",
+    paused: true, createdAt: at,
+  });
+  await db.insert(tasks).values([
+    { ...taskRow(pauseTId, "claude", "idle"), mode: "single", team: null, status: "failed", groupId: pauseGId },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-pause-retry-prev", taskId: pauseTId, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-pause-retry-cli", startedAt: at,
+  });
+  await db.insert(scheduledMessages).values([
+    { ...messageRow("scheduled-pause-retry", pauseTId, pauseText, "queued"), execution: true },
+  ]);
+  const pauseRow = async () => (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-pause-retry"))).at(0)!;
+  // 分组暂停期间:扫描不得起跑,原文保持待发送(不取消)。
+  await pending.deliverPendingMessages(pauseTId);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal((await pauseRow()).status, "pending", "分组暂停期间执行型回复必须原地等着,不是取消");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, pauseTId))).at(0)!.status, "failed",
+    "分组暂停期间任务不得被自动重投拉起");
+  assert.equal(countIn(leadLog, pauseText), 0, "分组暂停期间原文不该进任何 stdin");
+  // 用户恢复分组 → 投递恰好一次。
+  await db.update(schema.groups).set({ paused: false }).where(eq(schema.groups.id, pauseGId));
+  await pending.deliverPendingMessages(pauseTId);
+  await waitFor(async () => (await pauseRow()).status === "sent", "恢复分组后执行型回复没有投递");
+  await waitFor(() => countIn(leadLog, pauseText) > 0, "投递标了 sent,stdin 里却没有原文");
+  await waitFor(async () => {
+    const t = (await db.select().from(tasks).where(eq(tasks.id, pauseTId))).at(0)!;
+    return t.status !== "running" && t.status !== "queued";
+  }, "恢复分组后的投递回合没有结算");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(countIn(leadLog, pauseText), 1, "同一条消息被投递了不止一次");
+  console.log("✓ 执行型重投守分组暂停:暂停期间原文待发送,恢复分组后投递恰好一次");
 }

@@ -80,6 +80,10 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
       reasoningEffort: b.reasoningEffort?.trim() || null,
       ownerUserId: ownerIdOf(actorOf(c)),
       mode: b.sendAt ? "timed" : "queued",
+      // 排队等轮次时暂存的回复 = 执行型:投递它就是任务的执行回合,整队守卫与分组
+      // 暂停都要挡,失败重投也不丢意图(schema 的 execution 注释)。运行中暂存的追问
+      // 与定时消息不是——它们落地是续聊/到点提醒,照旧旁路。
+      execution: queueWhileWaiting && !b.sendAt,
       sendAt: when,
     });
     return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);

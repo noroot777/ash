@@ -71,7 +71,21 @@ export async function advanceQueueFromTask(taskId: string): Promise<void> {
 // 每次推进只启动 head 一项;它跑完触发 advanceQueueFromTask 再推下一个。
 export async function advanceQueue(queueId: string): Promise<void> {
   const next = await pickNextLaunchable(queueId);
-  if (!next) return;
+  if (!next) {
+    // 没有可启动的成员 ≠ 队里没事可做:失败成员的**执行型待发送回复**(排队期间暂存
+    // 的修改要求,见 pending-messages 的 execution)在等「整队无人在跑」才能投递。它的
+    // 任务已是终态,不会再有自己的结算钩子来救,只推自己的 flush 又只看发起任务 ——
+    // 这里是「队列刚空出来」这一事实的唯一权威时点,替队内成员推一把(扫描内部自己
+    // 判定该不该发,无关成员是 no-op)。不推的话要干等最多 30s 的兜底 tick。
+    const members = await queueMembers(queueId);
+    const idle = members.filter((t) => !t.archived && t.mode === "single");
+    if (idle.length) {
+      void import("./pending-messages.js").then(({ deliverPendingMessages }) =>
+        Promise.all(idle.map((t) => deliverPendingMessages(t.id).catch(() => undefined))),
+      );
+    }
+    return;
+  }
   // 队列绑定到 group:组被暂停时允许编辑队列(保存排队关系),但不启动任何成员。
   // 检查放在这里而不是各调用方 —— 建队列/插入/重排/移除/终态钩子全走本函数,
   // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,

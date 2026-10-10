@@ -171,6 +171,19 @@ assert.equal(
   "deliver",
   "终态任务的续聊旁路不受队列挡",
 );
+// 执行型消息(排队等轮次时暂存,execution=1):失败重试也要守整队与分组暂停(第 5 轮)。
+const execMsg = { mode: "queued", sendAt: dueAt, execution: true };
+assert.equal(pending.deliveryVerdict(execMsg, { ...single("failed"), queueBlocked: true }, now).action, "wait",
+  "执行型消息:同队还有人在跑,失败重试不得借终态续聊豁免并跑");
+assert.equal(pending.deliveryVerdict(execMsg, { ...single("failed"), groupPaused: true }, now).action, "wait",
+  "执行型消息:分组暂停时不得自行重启");
+assert.equal(pending.deliveryVerdict(execMsg, single("failed"), now).action, "deliver",
+  "执行型消息:轮到它且分组未暂停,照常投递");
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, { ...single("failed"), queueBlocked: true, groupPaused: true }, now).action,
+  "deliver",
+  "非执行型(真正的终态续聊)反向保护:不受整队与暂停挡",
+);
 assert.equal(pending.deliveryVerdict({ mode: "timed", sendAt: future }, single("done"), now).action, "wait",
   "定时消息没到点就得等,哪怕任务闲着");
 assert.equal(

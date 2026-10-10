@@ -29,7 +29,7 @@ import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
-import { scheduledMessages, tasks } from "./db/schema.js";
+import { scheduledMessages, tasks, groups } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
 import { whenTurnIdle } from "./runs.js";
@@ -61,6 +61,8 @@ export function pendingMessageRow(input: {
   /** 谁发的这条(多人模式);投递时按它解析执行器与 CLI 环境。 */
   ownerUserId?: string | null;
   mode?: ScheduledMessageMode;
+  /** 执行意图:排队等轮次时暂存的回复(投递 = 任务的执行回合,见 schema 注释)。 */
+  execution?: boolean;
   // 排队消息不看钟点,sendAt 只用来排先后,所以默认取此刻。
   sendAt?: Date;
 }): Row {
@@ -76,6 +78,7 @@ export function pendingMessageRow(input: {
     sessionRole: input.sessionRole ?? null,
     ownerUserId: input.ownerUserId ?? null,
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
+    execution: input.execution ?? false,
     sendAt: (input.sendAt ?? new Date()).toISOString(),
     status: "pending" as const,
     createdAt: now(),
@@ -99,8 +102,15 @@ export async function enqueueMessage(input: Parameters<typeof pendingMessageRow>
 // backlog 生效:对它们投递 = 开启真实执行回合,必须守「同队至多一个在跑」;终态
 // 任务的投递是续聊旁路(followUpFrom),队列按原终态看待,不受队列挡(审查:
 // 「保留已完成任务正常续聊的语义」)。
-export type DeliveryTaskView = { mode: string | null; status: string; archived: boolean; queueBlocked?: boolean };
-export type DeliveryMessageView = { mode: string; sendAt: string };
+export type DeliveryTaskView = {
+  mode: string | null;
+  status: string;
+  archived: boolean;
+  queueBlocked?: boolean;
+  /** 所在分组已被用户暂停(groups.paused,持久事实)。 */
+  groupPaused?: boolean;
+};
+export type DeliveryMessageView = { mode: string; sendAt: string; execution?: boolean };
 export type DeliveryVerdict =
   | { action: "deliver" }
   | { action: "wait" }
@@ -136,6 +146,13 @@ export function deliveryVerdict(
     (task.status === "paused" || task.status === "backlog") &&
     task.queueBlocked
   )
+    return { action: "wait" };
+  // 执行型消息(排队等轮次时暂存的回复,execution=1):它的投递**就是任务的执行回合**,
+  // 不论任务此刻处于什么状态都要守两件事 —— 整队至多一个在跑、分组暂停。关键是失败
+  // 重试:起跑失败后任务落 failed,上面按状态的检查管不到它,丢了这条就会借终态续聊
+  // 的豁免并行执行 / 穿透暂停(第 5 轮审查两条拦验收)。真正的终态续聊(execution=0)
+  // 不受影响。
+  if (task.mode === "single" && message.execution && (task.queueBlocked || task.groupPaused))
     return { action: "wait" };
   return { action: "deliver" };
 }
@@ -362,6 +379,10 @@ export function deliveryOptions(m: Row) {
     ...(m.sessionRole ? { sessionRole: m.sessionRole as "single" | "reviewer" } : {}),
     // 排队/定时消息落地时,烧的仍是**当时排队那个人**的 key,不退回任务归属人。
     ...(m.ownerUserId ? { actingUserId: m.ownerUserId } : {}),
+    // 执行型消息的意图跟着行走,重投也不丢(第 5 轮审查:首次交接传了 executionTurn,
+    // 失败后经扫描重投却按终态续聊启动,绕过整队守卫)。freezeGuard 让 spawn 前再核一次
+    // 分组暂停/删除归档的持久事实 —— 自动投递离 spawn 很远,中途用户可能刚按下暂停。
+    ...(m.execution ? { executionTurn: true, freezeGuard: true } : {}),
   };
 }
 
@@ -465,13 +486,17 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
     try {
       if (fired.has(m.taskId) || inFlight.has(m.taskId) || cooling(m.taskId, at.getTime())) continue;
       const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0) ?? null;
-      // 只有 paused/backlog 的单任务才需要问队列(verdict 也只对这两态看 queueBlocked),
-      // 其余状态别白查两张表。
-      const queueBlocked =
-        t != null && t.mode === "single" && (t.status === "paused" || t.status === "backlog")
-          ? (await queueBlockers(m.taskId)).length > 0
+      // paused/backlog 的单任务、以及执行型消息(不论任务状态)才需要问队列;执行型
+      // 还要问分组暂停。其余状态别白查几张表。
+      const needQueueCheck =
+        t != null && t.mode === "single"
+        && (m.execution || t.status === "paused" || t.status === "backlog");
+      const queueBlocked = needQueueCheck ? (await queueBlockers(m.taskId)).length > 0 : false;
+      const groupPaused =
+        t != null && t.mode === "single" && m.execution && t.groupId
+          ? !!(await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0)?.paused
           : false;
-      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked } : null, at);
+      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused } : null, at);
       if (verdict.action === "wait") {
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。
@@ -596,6 +621,10 @@ export async function handDuePendingMessageToRun(
       // 不走续聊语义),但输入是真实用户回复 —— 原文/附件照常进会话记录与后续追问,
       // 不能带 system 标记把它记成一句「〔系统〕继续」。
       executionTurn: true,
+      // 冻结核查只给无人值守的启动压上:队列推进(无 turnHeld)从 isPaused 预检查到
+      // spawn 隔着不少 await,中途用户可能刚按下暂停;手动运行/重试(turnHeld)是用户
+      // 显式动作,语义与隔壁 RESUME/fresh 路径保持一致,不额外加闸。
+      freezeGuard: !opts.turnHeld,
       turnHeld: opts.turnHeld,
       onDelivered: async () => {
         delivered = true;
