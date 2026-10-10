@@ -84,19 +84,25 @@ export function ComposerLaunchControl({
         <ComposerPopover label="启动设置" value={LAUNCH_OPTIONS.find((option) => option.value === mode)?.label}
           disabled={busy} className={`studio-submit-mode${mode !== "run" ? " is-configured" : ""}`}
           trigger={<SubmitIcon mode={mode} />}>
-        <label className="composer-launch-mode">
+        {/* 启动方式平铺成单选 chip(用户 2026-10-10:别再套一层原生下拉,点一下直达)。 */}
+        <div className="composer-launch-mode" role="radiogroup" aria-label="启动方式">
           <span>启动方式</span>
-          <select value={mode} disabled={busy} onChange={(event) => onModeChange(event.target.value as LaunchMode)}>
+          <div className="composer-launch-mode-grid">
             {LAUNCH_OPTIONS.map((option) => {
               const blocked = option.value === "queue" && !!queueUnavailable;
               return (
-                <option value={option.value} key={option.value} disabled={blocked}>
-                  {option.label}{blocked ? `（${queueUnavailable}）` : ""}
-                </option>
+                <button key={option.value} type="button" role="radio"
+                  aria-checked={mode === option.value} disabled={busy || blocked}
+                  aria-label={blocked ? `${option.label}（${queueUnavailable}）` : option.label}
+                  className={`composer-launch-mode-chip${mode === option.value ? " is-active" : ""}`}
+                  onClick={() => onModeChange(option.value)}>
+                  <SubmitIcon mode={option.value} />{option.label}
+                </button>
               );
             })}
-          </select>
-        </label>
+          </div>
+          {queueUnavailable && <small className="composer-launch-blocked">{queueUnavailable}</small>}
+        </div>
         {mode === "queue" && queueSlot}
         {(mode === "once" || mode === "cron") && (
           <ScheduleFields

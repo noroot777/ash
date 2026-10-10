@@ -139,7 +139,7 @@ try {
   assert.match(await page.getByRole("button", { name: /^组织与标签：/ }).innerText(), /1 个标签/);
 
   await openLaunch();
-  await page.getByLabel("启动方式").selectOption("once");
+  await page.getByRole("radio", { name: "一次性定时" }).click();
   await page.getByLabel("一次性运行时间").fill("");
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("button", { name: "创建并定时" }).isDisabled(), true);
@@ -158,7 +158,7 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "page overflow at " + width);
   }
   await openLaunch();
-  await page.getByLabel("启动方式").selectOption("create");
+  await page.getByRole("radio", { name: "仅创建" }).click();
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 390, height: 800 });
   await page.getByRole("button", { name: "创建任务", exact: true }).click();
@@ -175,7 +175,7 @@ try {
   await objective.fill("排队新任务");
   await page.getByRole("button", { name: /^智能体：/ }).waitFor();
   await openLaunch();
-  await page.getByLabel("启动方式").selectOption("queue");
+  await page.getByRole("radio", { name: "创建并排队" }).click();
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("button", { name: "创建并排队", exact: true }).isDisabled(), true, "没选目标不能创建");
   assert.match(await page.locator(".studio-input-status").innerText(), /选择要接在哪个任务之后/);
@@ -198,7 +198,7 @@ try {
   // 团队任务不被普通队列调度:团队模式下「创建并排队」置灰。
   await switchMode("团队");
   await openLaunch();
-  assert.notEqual(await page.getByLabel("启动方式").locator('option[value="queue"]').getAttribute("disabled"), null, "团队模式不提供排队");
+  assert.equal(await page.getByRole("radio", { name: /创建并排队/ }).isDisabled(), true, "团队模式不提供排队");
   await page.keyboard.press("Escape");
 
   await page.reload();
@@ -224,7 +224,7 @@ try {
     assert.equal(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth), true, "workflow overflow at " + width);
   }
   await openLaunch();
-  await page.getByLabel("启动方式").selectOption("create");
+  await page.getByRole("radio", { name: "仅创建" }).click();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "创建任务", exact: true }).click();
   await page.getByTestId("created").getByRole("listitem").waitFor();
@@ -255,7 +255,7 @@ try {
   await objective.fill("新建分组联动");
   await page.getByRole("button", { name: /^智能体：/ }).waitFor();
   await openLaunch();
-  await page.getByLabel("启动方式").selectOption("queue");
+  await page.getByRole("radio", { name: "创建并排队" }).click();
   await page.locator(".composer-queue-after .ui-select-trigger").click();
   await page.locator(".ui-dropdown-row", { hasText: "存量待办任务" }).click();
   await page.keyboard.press("Escape");
@@ -278,7 +278,7 @@ try {
   await objective.fill("排队失败如实提示");
   await page.getByRole("button", { name: /^智能体：/ }).waitFor();
   await openLaunch();
-  await page.getByLabel("启动方式").selectOption("queue");
+  await page.getByRole("radio", { name: "创建并排队" }).click();
   await page.locator(".composer-queue-after .ui-select-trigger").click();
   await page.locator(".ui-dropdown-row", { hasText: "存量待办任务" }).click();
   await page.keyboard.press("Escape");
