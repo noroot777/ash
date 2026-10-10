@@ -525,8 +525,12 @@ export function TaskDetail({
                       // 排队消息(前端没传 sendAt 也一样)。没真发出去就绝不能先贴进会话,
                       // 否则用户看到自己的话已在时间线上、agent 却还没收到。
                       if ("scheduled" in result) {
+                        // 同样按结果措辞:暂停/待办任务也会因排队未轮到被暂存(r3 审查),
+                        // 对它说「任务进行中」是错的。
                         notify(result.message.mode === "queued"
-                          ? "任务进行中，已排队；这一轮结束后自动发出"
+                          ? (task.status === "running" || task.status === "queued"
+                            ? "任务进行中，已排队；这一轮结束后自动发出"
+                            : "任务在队列中等待，已排队；轮到它时自动发出")
                           : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
                         return result;
                       }

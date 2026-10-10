@@ -5,6 +5,7 @@ import type { AgentType } from "@ash/shared";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { continueTask, runTask, type ResumeReason } from "./orchestrator.js";
+import { handDuePendingMessageToRun } from "./pending-messages.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
 import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
@@ -51,6 +52,17 @@ export async function resumeOrRunTask(
     // (resume/fresh),turn 由 continueTask/runTask 照常接管并释放。
   }
   const agent = (task.agentType as AgentType) ?? "claude";
+  // 让位交接:托盘里已有**到期**的用户回复时,这次(队列推进/手动运行/重试)启动的
+  // 输入就是那条回复,而不是空泛「继续」—— 否则任务先按旧方向跑完一整轮,排队期间
+  // 的修改要求迟到到回合之后(第 xNb655YqYzcA 链第 3 轮实测)。checkpoint resumePrompt
+  // 在上面仍然优先(那是 agent 自己的流水线交接,消息投递时会消费它);终态任务的
+  // 续聊不经过本函数,照旧不受影响。记账与去重都在 handDuePendingMessageToRun 里走
+  // 投递链路同一套租约,tick / 终态钩子不会把同一条再发一遍。
+  if (await handDuePendingMessageToRun(taskId, {
+    system: opts.reason ?? "run",
+    turnHeld: opts.turnHeld,
+    actingUserId: acting ?? null,
+  })) return;
   const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
     .filter((s) => s.agentType === agent)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))

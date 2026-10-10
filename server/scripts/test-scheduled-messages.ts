@@ -45,7 +45,7 @@ const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, orc
   import("../src/task-run-routes.js"),
   import("../src/team/session.js"),
 ]);
-const { projects, scheduledMessages, sessions, tasks } = schema;
+const { projects, queueItems, scheduledMessages, sessions, tasks } = schema;
 await ensureSchema();
 
 // 托盘靠显式事件收口，不能从一闪而过的任务状态跃迁推断。
@@ -481,6 +481,60 @@ try {
   );
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log("✓ 结算钩子里投递:锁还锁着不抢跑,锁一放立刻把原话送进会话");
+
+  // ── 让位交接:前驱让位后,自动起跑那一轮的输入就是排队期间的修改要求 ─────────
+  // 第 xNb655YqYzcA 链第 3 轮:P(paused,无 resumePrompt,有旧会话)排在 B 后面,
+  // 排队期间收到普通回复;B 让位后队列推进若用空泛 RESUME_PROMPT 拉起 P,这条修改
+  // 要求要等新回合跑完才补送 —— 任务先按旧方向干完一整轮。真实链路:run loop 结算 →
+  // setTaskStatus → advanceQueueFromTask → resumeOrRunTask → handDuePendingMessageToRun。
+  const handoffBId = "scheduled-single-handoff-b";
+  const handoffPId = "scheduled-single-handoff-p";
+  const handoffText = "修改要求：轮到我以后不要继续旧方案，只按这条最新说明工作。";
+  await db.insert(tasks).values([
+    { ...taskRow(handoffBId, "claude", "running"), mode: "single", team: null },
+    { ...taskRow(handoffPId, "claude", "paused"), mode: "single", team: null },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-handoff-p-prev", taskId: handoffPId, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-handoff-p-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-handoff-queue", taskId: handoffBId, position: 0, createdAt: at },
+    { queueId: "scheduled-handoff-queue", taskId: handoffPId, position: 1, createdAt: at },
+  ]);
+  await db.insert(scheduledMessages).values([messageRow("scheduled-handoff", handoffPId, handoffText, "queued")]);
+  // 排队未轮到:扫描不得穿透(deliveryVerdict 的 queueBlocked 口径,真实库上钉一遍)
+  await pending.deliverPendingMessages(handoffPId);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(
+    (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "scheduled-handoff"))).at(0)!.status,
+    "pending", "B 还在跑,P 的回复必须原地等着",
+  );
+  assert.equal(
+    (await db.select().from(sessions).where(eq(sessions.taskId, handoffPId))).length,
+    1, "排队期间不得为 P 开新回合",
+  );
+  const resumePromptHits = countIn(leadLog, "你上一次的运行被中断了");
+  await status.setTaskStatus(handoffBId, "done");
+  // resume 复用同一条 session 行(不新增行),所以以消息记账与实际 stdin 为准。
+  await waitFor(
+    async () => (await db.select().from(scheduledMessages)
+      .where(eq(scheduledMessages.id, "scheduled-handoff"))).at(0)!.status === "sent",
+    "B 让位后队列推进没有把修改要求交接进 P 的续跑",
+  );
+  await waitFor(() => countIn(leadLog, handoffText) > 0, "消息标了 sent,P 的执行器 stdin 里却没有修改要求");
+  assert.equal(
+    countIn(leadLog, "你上一次的运行被中断了"), resumePromptHits,
+    "让位那一轮先跑了一遍空泛「继续」—— 修改要求被挤到下一回合",
+  );
+  await waitFor(async () => {
+    const t = (await db.select().from(tasks).where(eq(tasks.id, handoffPId))).at(0)!;
+    return t.status !== "running" && t.status !== "queued";
+  }, "让位交接那一轮没有结算");
+  await pending.deliverPendingMessages(handoffPId); // 再扫一遍:租约/sent 必须保证只投递一次
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(countIn(leadLog, handoffText), 1, "同一条修改要求被投递了不止一次");
+  console.log("✓ 让位交接:自动起跑首轮输入即修改要求本身,恰好一次,不先跑空泛「继续」");
 
   // ── 挡回一次,不许退回去干等那个 30 秒兜底扫描 ──────────────────────────────
   // `continueTask` 有一串「一个字都没送出去」的出口(回合被别的执行抢走、验收互斥、

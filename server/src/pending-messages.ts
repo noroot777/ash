@@ -30,7 +30,7 @@ import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
-import { continueTask } from "./orchestrator.js";
+import { continueTask, type ResumeReason } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
 import { whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -541,6 +541,77 @@ export function flushPendingForTask(taskId: string): void {
     if (dbClient.closed) return;
     console.error(`[ash] deliverPendingMessages(${taskId}) failed:`, err);
   });
+}
+
+// 让位交接(第 xNb655YqYzcA 链第 3 轮):队列推进 / 手动运行 / 重试要拉起一个任务时,
+// 如果它托盘里已有**到期**的待发送回复,这一回合的输入就该是那条回复本身 —— 先跑一轮
+// 空泛「继续」,任务会按旧方向干完,回合结束后的补送替代不了启动前的交接(审查实测:
+// P 排在 B 后、排队期间收到修改要求,B 让位后 P 被 RESUME_PROMPT 拉起,修改要求迟到
+// 一整轮)。调用方(task-resume.ts)在选默认 RESUME_PROMPT / fresh 之前先问这里。
+//
+// 记账走投递链路同一套:beginDelivery 租约 → onDelivered 落 sent → 挡回 abort + 重投,
+// 所以 tick / 终态钩子 / 重投定时器靠租约与 inFlight 去重,同一条不会发两遍。
+// 返回 true = 这次启动已由消息交接接管(含「另一路已在送」与「挡回后已排重投」),
+// 调用方不要再开别的回合;false = 没有可交接的消息,照常走默认输入。
+export async function handDuePendingMessageToRun(
+  taskId: string,
+  opts: { system?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null } = {},
+): Promise<boolean> {
+  if (dbClient.closed) return false;
+  // 已有投递在途:它自己会开回合,这里再开默认「继续」就是同一任务两路起跑。
+  if (inFlight.has(taskId)) return true;
+  const at = new Date();
+  const due = (await db
+    .select()
+    .from(scheduledMessages)
+    .where(and(
+      eq(scheduledMessages.taskId, taskId),
+      eq(scheduledMessages.status, "pending"),
+      isNull(scheduledMessages.deliveringSince),
+    )))
+    .filter((m) => isDueForDelivery(m, at))
+    .sort((a, b) => a.sendAt.localeCompare(b.sendAt)
+      || a.createdAt.localeCompare(b.createdAt)
+      || a.id.localeCompare(b.id))
+    .at(0);
+  if (!due) return false;
+  if (!(await beginDelivery(due.id))) return true; // 另一个触发源刚抢走:由它开回合
+  inFlight.add(taskId);
+  lastFiredAt.set(taskId, Date.now());
+  const queuedAt = Date.now();
+  const dueAt = markDue(due.id, queuedAt);
+  const busyMs = settleBusyAgain(due.id, queuedAt);
+  let delivered = false;
+  try {
+    const started = await continueTask(taskId, due.text, {
+      // 消息登记的执行器配置与发送者身份优先(与扫描投递同口径);消息没登记归属时
+      // 才算到这次启动的发起人头上。
+      actingUserId: opts.actingUserId ?? undefined,
+      ...deliveryOptions(due),
+      system: opts.system,
+      turnHeld: opts.turnHeld,
+      onDelivered: async () => {
+        delivered = true;
+        const sentAt = Date.now();
+        await markSent(due);
+        // 这条路由调用方在回合空着时拉起,没有「等回合退干净」一段,两个时间点同值。
+        noteDeliveryTiming(taskId, { dueAt, busyMs, queuedAt, idleAt: queuedAt, at: sentAt });
+      },
+    });
+    if (!started) {
+      // 回合被别的执行抢占或验收互斥:这次启动整体让位,消息留在托盘等重投。
+      await abortDelivery(due);
+      scheduleRedelivery(due, "回合被其它执行抢占或工作区正被验收占用");
+    }
+    return true;
+  } catch (error) {
+    if (delivered) return true; // 已进会话之后才炸的是运行事故,不是未送达
+    const detail = error instanceof Error ? error.message : String(error);
+    await cancelPendingMessage(due, `续跑失败：${detail}`).catch(() => {});
+    return true;
+  } finally {
+    inFlight.delete(taskId);
+  }
 }
 
 /**
