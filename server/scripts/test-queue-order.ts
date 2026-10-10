@@ -4,7 +4,7 @@
 // 跑:npm -w server run test:queue
 import assert from "node:assert/strict";
 import { queueStatus, selectNextInQueue, type QueueMember } from "../src/scheduler.js";
-import { isOvertaken, tailOrder } from "../src/queues.js";
+import { isOvertaken, runningMembers, tailOrder } from "../src/queues.js";
 
 const m = (id: string, status: string, extra: Partial<QueueMember> = {}): QueueMember => ({
   id,
@@ -115,5 +115,21 @@ assert.equal(isOvertaken([q("04", "done", "t1")], "99"), false);
 assert.deepEqual(tailOrder(["04", "05", "06", "07"], "05"), ["04", "06", "07", "05"], "其余保持相对顺序");
 assert.deepEqual(tailOrder(["04", "05"], "05"), ["04", "05"], "已在队尾则不变");
 assert.deepEqual(tailOrder(["04", "05"], "99"), ["04", "05"], "不在队列里则原样返回");
+
+// ── runningMembers(建队/插入的双跑防线,口径与 selectNextInQueue 同源)────────
+
+const r = (id: string, status: string, extra: Partial<QueueMember> = {}) => ({
+  id, status, archived: false, mode: "single" as string | null, question: null, followUpFrom: null, ...extra,
+});
+// 两个在跑 → 返回两个,写入口按 >1 拒绝(审查复现:两个独立 running 任务被捆成一队)
+assert.deepEqual(runningMembers([r("A", "running"), r("B", "running")]), ["A", "B"]);
+// queued 是「已拉起还没 spawn」,同样算在跑
+assert.deepEqual(runningMembers([r("A", "running"), r("B", "queued")]), ["A", "B"]);
+// 一跑一待 → 只有一个,允许
+assert.deepEqual(runningMembers([r("A", "running"), r("B", "backlog")]), ["A"]);
+// 终态任务的续聊回合 status=running,但队列按续聊前的终态看待(queueStatus 同源)
+assert.deepEqual(runningMembers([r("A", "running", { followUpFrom: "done" }), r("B", "running")]), ["B"]);
+// archived / team 成员不参与队列调度,也不算在跑
+assert.deepEqual(runningMembers([r("A", "running", { archived: true }), r("B", "running", { mode: "team" }), r("C", "running")]), ["C"]);
 
 console.log("queue order tests passed");

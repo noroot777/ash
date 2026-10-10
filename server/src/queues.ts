@@ -73,6 +73,24 @@ async function assertSameGroup(queueId: string, candidateTaskId?: string): Promi
   return null;
 }
 
+// 「同一 queue 同一时刻至多一个成员在跑」(不变量②)在**写入口**的对偶校验:
+// 调度侧的守卫(selectNextInQueue)只保证不再启动新成员,拦不住建队/插入直接把
+// 两个已经在跑的任务捆成一队——那样页面显示第 1、第 2 位,实际谁也不等谁,先后
+// 承诺是假的(审查真实复现:两个独立 running 任务入同队后仍同时运行)。口径与
+// selectNextInQueue 同源:archived 与 team 成员不算,状态过 queueStatus(终态
+// 任务的续聊回合按终态看)。返回「在跑」成员的 id,调用方按 >1 拒绝。
+export function runningMembers(
+  rows: { id: string; status: string; archived: boolean; mode: string | null; followUpFrom?: string | null }[],
+): string[] {
+  return rows
+    .filter((t) => !t.archived && t.mode !== "team")
+    .filter((t) => {
+      const s = queueStatus(t);
+      return s === "running" || s === "queued";
+    })
+    .map((t) => t.id);
+}
+
 // 队列前置检查:task 在某个 queue 里时,前面所有 item 必须已让位才允许单独启动,
 // 否则等于绕过队列顺序。/run 与 /fire 共用。返回挡路的任务 id。
 // 「让位」的判定跟 selectNextInQueue 的透明跳过**同源**:done / canceled / failed
@@ -288,6 +306,17 @@ export function mountQueueRoutes(api: Hono): void {
     const violation = await assertSameGroup(qid, b.taskId);
     if (violation) return c.json({ error: violation }, 400);
 
+    // 双跑防线:候选和既有成员里「在跑」的加起来超过一个就拒(按请求时刻的最新
+    // 状态读库判,不信页面快照——状态在途变化或并发入队时前端置灰会失守)。
+    const memberRows = await db
+      .select()
+      .from(tasks)
+      .where(inArray(tasks.id, items.map((i) => i.taskId)));
+    const running = runningMembers([...memberRows, tr]);
+    if (running.length > 1) {
+      return c.json({ error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` }, 409);
+    }
+
     let insertAt: number;
     if (b.afterTaskId) {
       const anchor = items.find((i) => i.taskId === b.afterTaskId);
@@ -358,6 +387,11 @@ export function mountQueueRoutes(api: Hono): void {
         { error: `这些 task 已在其他 queue: ${occupied.map((o) => o.taskId).join(", ")}` },
         409,
       );
+    }
+    // 双跑防线(同 insert 端点):两个在跑的任务捆成一队,先后顺序是假的。
+    const running = runningMembers(rows);
+    if (running.length > 1) {
+      return c.json({ error: `同一条队列最多只能有一个在跑的成员,这些任务都在运行: ${running.join(", ")}` }, 409);
     }
     const qid = id();
     const ts = now();

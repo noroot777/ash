@@ -79,6 +79,12 @@ export function queueAfterOptions({ tasks, groups, projectId, excludeId, subject
       && tasks.some((member) => member.queueId === task.queueId && (member.status === "running" || member.status === "queued"))) {
       return { ...base, disabled: true, detail: "该队列已有任务在跑" };
     }
+    // 目标还独立但自己也在跑:建队就是把两个在跑的捆成一队,先后顺序是假的
+    // (审查真实复现:A、B 都 running 仍可互排,显示 1/2、2/2 却同时运行)。
+    // 服务端建队/插入有同口径的 409 防线,这里置灰是把话说在前面。
+    if (subjectRunning && task.queueId == null && (task.status === "running" || task.status === "queued")) {
+      return { ...base, disabled: true, detail: "它也在运行 · 同队不能两个在跑" };
+    }
     return {
       ...base,
       detail: task.queueId != null

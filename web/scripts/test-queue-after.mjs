@@ -39,6 +39,7 @@ const withRunningQueue = [
   t("t-busy-tail", { queueId: "q2", queuePosition: 1 }),
   t("t-quiet", { queueId: "q3", queuePosition: 0, status: "done" }),
   t("t-free"),
+  t("t-free-run", { status: "running" }),
   t("t-ended", { status: "failed" }),
 ];
 const runningSubject = queueAfterOptions({
@@ -50,13 +51,18 @@ assert.equal(byValue.get("t-busy-tail").disabled, true);
 assert.match(byValue.get("t-busy").detail, /已有任务在跑/);
 assert.equal(byValue.get("t-quiet").disabled, undefined, "安静队列照常可选");
 assert.equal(byValue.get("t-free").disabled, undefined);
+assert.equal(byValue.get("t-free-run").disabled, true, "独立但也在跑的目标必须置灰(两个在跑的不能捆成一队)");
+assert.match(byValue.get("t-free-run").detail, /它也在运行/);
 assert.match(byValue.get("t-ended").detail, /无需排队等它/, "running 主体下终态候选的置灰理由不再是「排后面会立刻跑」");
 
 // 主体不是 running 时,同样的在跑队列照常可选(排后面等它跑完,经典用法)。
 const idleSubject = queueAfterOptions({
   tasks: withRunningQueue, groups: [], projectId: "p1", excludeId: "me", subjectGroupId: null,
 });
-assert.equal(new Map(idleSubject.map((o) => [o.value, o])).get("t-busy").disabled, undefined,
+const idleByValue = new Map(idleSubject.map((o) => [o.value, o]));
+assert.equal(idleByValue.get("t-busy").disabled, undefined,
   "backlog 主体排进在跑队列是经典等待语义,不得置灰");
+assert.equal(idleByValue.get("t-free-run").disabled, undefined,
+  "backlog 主体接在独立 running 任务之后同样是经典等待语义");
 
 console.log("queue-after: all assertions passed");
