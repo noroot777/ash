@@ -415,4 +415,126 @@ export async function runHandoffCases(ctx: HandoffCaseContext): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(countIn(leadLog, stText), 1, "同一条消息被投了不止一次");
   console.log("✓ 持续故障下重试有界:退避约束所有触发源,恢复后仍送达恰好一次");
+
+  // ── 队列执行认领是同一个原子对象(第 7 轮审查拦验收)────────────────────────
+  // 先钉共享原语本身:同队两个失败成员并发认领,临界区串行,只许一个占到;占到的
+  // 一方 release 回滚后,另一方才能占。
+  const seatMod = await import("../src/queue-seat.js");
+  const zH = "scheduled-single-seat-head";
+  const zA = "scheduled-single-seat-a";
+  const zB = "scheduled-single-seat-b";
+  await db.insert(tasks).values([
+    { ...taskRow(zH, "claude", "done"), mode: "single", team: null },
+    { ...taskRow(zA, "claude", "idle"), mode: "single", team: null, status: "failed" },
+    { ...taskRow(zB, "claude", "idle"), mode: "single", team: null, status: "failed" },
+  ]);
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-seat-queue", taskId: zH, position: 0, createdAt: at },
+    { queueId: "scheduled-seat-queue", taskId: zA, position: 1, createdAt: at },
+    { queueId: "scheduled-seat-queue", taskId: zB, position: 2, createdAt: at },
+  ]);
+  const taskStatusOf = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!.status;
+  const [clA, clB] = await Promise.all([seatMod.claimQueueSeat(zA), seatMod.claimQueueSeat(zB)]);
+  const winner = clA.ok && clA.seat ? clA.seat : clB.ok && clB.seat ? clB.seat : null;
+  const blocked = clA.ok && clA.seat ? clB : clA;
+  assert.ok(winner, "同队并发认领至少要有一个占到位");
+  assert.equal(blocked.ok, false, "同队并发认领只许一个占到位");
+  assert.ok(!blocked.ok && blocked.blockers.length > 0, "被挡回的一方要知道是谁挡的路");
+  assert.equal(await taskStatusOf(winner.taskId), "queued", "占到位 = queued 已落库,任何入口立刻可见");
+  await winner.release();
+  assert.equal(await taskStatusOf(winner.taskId), "failed", "没人接手的占位必须回滚,不能卡在 queued");
+  const loserId = winner.taskId === zA ? zB : zA;
+  const retryClaim = await seatMod.claimQueueSeat(loserId);
+  if (!retryClaim.ok || !retryClaim.seat) throw new Error("占位释放后,被挡的一方应能占到");
+  await retryClaim.seat.release();
+  assert.equal(await taskStatusOf(loserId), "failed", "清场:测试占位释放后应回到 failed");
+  console.log("✓ 队列执行认领:并发只许一个占到,释放后按守卫回滚、让位给下一个");
+
+  // ── 跨入口占位:重跑上一回合 vs 执行型补投并发(第 7 轮审查现场)──────────────
+  // 队列 [rA(failed,挂着到期执行型回复), rB(done,上一回合 exit 1)]:并发发起
+  // POST /tasks/rB/retry-turn(resume 档,真执行)与 rA 的补投扫描。修复前,重跑在
+  // 异步读旧记录期间只占任务级回合锁、状态停在 done,扫描判定整队空闲放行 rA,两任务
+  // 同时 running(审查普通 HTTP 并发 10/10)。修复后两路都要过同一条认领链:谁先占到
+  // 谁跑,另一方 409 / 原地等 —— 任何交错下同队至多一个在跑。
+  const rA = "scheduled-single-race-a";
+  const rB = "scheduled-single-race-b";
+  const rAText = "rA 执行型修改要求:保持运行等待引导(跨入口占位用例)";
+  await db.insert(tasks).values([
+    { ...taskRow(rA, "claude", "idle"), mode: "single", team: null, status: "failed" },
+    // rB 的 body 带魔法串:retry-turn 的 resume 档对无 cliSessionId 的老任务走 fresh
+    // 重跑,喂的是任务正文 —— 假 claude 读到后保持运行,留出「rB 在跑」的观察窗口。
+    { ...taskRow(rB, "claude", "done"), mode: "single", team: null, body: "保持运行等待引导" },
+  ]);
+  await db.insert(sessions).values([
+    // rA 的旧会话:补投走 resume,原文(含魔法串)进 stdin 后保持运行。
+    { id: "scheduled-race-a-prev", taskId: rA, role: "single", agentType: "claude",
+      executor: "claude@test", cwd: root, cliSessionId: "scheduled-race-a-cli", startedAt: at },
+    // rB 的崩掉回合:exit 1、非手动停止、无 cliSessionId(transcript 也不存在)→
+    // retry-turn 落在 resume 档的 resumeOrRunTask → fresh 重跑,正是审查复现的那条路。
+    { id: "scheduled-race-b-prev", taskId: rB, role: "single", agentType: "claude",
+      executor: "claude@test", cwd: root, cliSessionId: null, startedAt: at, exitStatus: 1 },
+  ]);
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-race-queue", taskId: rA, position: 0, createdAt: at },
+    { queueId: "scheduled-race-queue", taskId: rB, position: 1, createdAt: at },
+  ]);
+  await db.insert(scheduledMessages).values([
+    { ...messageRow("scheduled-race-a-msg", rA, rAText, "queued"), execution: true },
+  ]);
+  const raceMsg = async () => (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-race-a-msg"))).at(0)!;
+  const [retryRes] = await Promise.all([
+    seqApi.request(`/tasks/${rB}/retry-turn`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}),
+    }),
+    pending.deliverPendingMessages(rA),
+  ]);
+  const runningOf = async () => {
+    const [sA, sB] = [await taskStatusOf(rA), await taskStatusOf(rB)];
+    return [sA === "running" || sA === "queued", sB === "running" || sB === "queued"] as const;
+  };
+  if (retryRes.status === 202) {
+    // 重跑先占到位:rB 真执行起跑;rA 的执行型回复必须原地等,一个字不进 stdin。
+    assert.equal((await retryRes.json() as { mode: string }).mode, "resume", "夹具应落在 resume 档");
+    await waitFor(async () => (await taskStatusOf(rB)) === "running", "占到位的 rB 没有跑起来");
+    await pending.deliverPendingMessages(rA);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const [aLive, bLive] = await runningOf();
+    assert.equal(bLive, true, "rB 应保持在跑(假 claude 读魔法串不退出)");
+    assert.equal(aLive, false, "rB 在跑期间 rA 被拉起 —— 同队两个任务并跑(第 7 轮审查现场)");
+    assert.equal((await raceMsg()).status, "pending", "rB 在跑期间 rA 的执行型回复必须原地等");
+    assert.equal(countIn(leadLog, rAText), 0, "rA 的原文不该在 rB 运行期间进 stdin");
+    // rB 结束让位 → rA 按序投递恰好一次。
+    assert.equal(runsModule.stopTask(rB), true, "测试前提:rB 的活进程应能被停掉");
+    await waitFor(async () => (await raceMsg()).status === "sent", "rB 让位后 rA 的执行型回复没有投递");
+    await waitFor(() => countIn(leadLog, rAText) > 0, "标了 sent,stdin 里却没有原文");
+  } else {
+    // 扫描先占到位:rA 起跑,重跑必须被 409 挡回、rB 一个新回合都不开。
+    assert.equal(retryRes.status, 409, `重跑没占到位时应 409,实际 ${retryRes.status}`);
+    const body = await retryRes.json() as { blockedBy?: string[] };
+    assert.ok(body.blockedBy?.includes(rA), "409 应指出挡路的同队成员");
+    await waitFor(async () => (await raceMsg()).status === "sent", "占到位的 rA 没有收到原文");
+    assert.equal(await taskStatusOf(rB), "done", "被挡回的 rB 必须保持 done,不开新回合");
+    assert.equal(
+      (await db.select().from(sessions).where(eq(sessions.taskId, rB))).length,
+      1, "被挡回的 rB 不得新增会话",
+    );
+  }
+  // 两种交错的共同收尾:此刻至多一个在跑;rA 的原文送达恰好一次。停进程前必须等原文
+  // 真进了 stdin 日志:onDelivered 在 ash 写完 stdin 那一刻就响,假 claude 还要几百毫秒
+  // 才处理到那一行,立刻 stopTask 会把日志杀没,断言只能读到 0。
+  {
+    const [aLive, bLive] = await runningOf();
+    assert.ok(!(aLive && bLive), "同一队列两个成员同时在跑");
+  }
+  await waitFor(async () => (await taskStatusOf(rA)) === "running", "rA 的执行回合应已拉起");
+  await waitFor(() => countIn(leadLog, rAText) > 0, "rA 的消息标了 sent,stdin 里却没有原文");
+  assert.equal(runsModule.stopTask(rA), true, "测试前提:rA 的活进程应能被停掉");
+  await waitFor(async () => {
+    const [aLive, bLive] = await runningOf();
+    return !aLive && !bLive;
+  }, "收尾:两任务都该停下");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(countIn(leadLog, rAText), 1, "rA 的原文被投了不止一次");
+  console.log("✓ 跨入口占位:重跑上一回合与执行型补投并发,同队至多一个在跑,另一方按序让行");
 }

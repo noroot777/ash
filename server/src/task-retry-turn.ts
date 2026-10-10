@@ -45,6 +45,7 @@ import { freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, roundOf } fr
 import { handoffBlockReason } from "./handoff-guard.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
+import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
 import { claimTurn, releaseTurn } from "./runs.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { resumeOrRunTask } from "./task-resume.js";
@@ -291,6 +292,8 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
     // 占位之后的每一条出路都必须交接或释放这把锁：漏一条就是「500 一次、之后永远 409，
     // 只能重启服务」。所以 handed 只在**真正把 turnHeld 交给下游**的那一刻才置位。
     let handed = false;
+    // 队列执行占位(重投/resume 档才占,见下;审查档是旁路回合,不是任务执行)。
+    let seat: QueueSeat | null = null;
     try {
       // 占位后镜像检查验收锁，否则下游撞上验收锁静默 return，202 就成了谎报。
       if (isAcceptingTask(taskId)) {
@@ -329,7 +332,11 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
             releaseTurn(taskId);
             await appendTaskTimeline(taskId, `${what}启动失败：${errorText(error)}；可以再试一次。`);
           },
-        );
+        ).finally(() => {
+          // 队列占位的收尾:真跑起来了是 no-op(结算覆盖状态);一个字都没跑成就按守卫
+          // 回滚,别让任务卡在 queued(判据在 seat.release() 里)。
+          if (seat) void seat.release();
+        });
       };
 
       if (kind === "review") {
@@ -386,6 +393,23 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       // 上一回合是系统续跑（会话里最后一段不是 user）：没有可重投的原话，改用续跑提示。
       // 会话行记着 profile 时仍旧钉死那一条会话；老行退回 `resumeOrRunTask`（它按任务的
       // agentType 挑会话，跟界面头部那颗「运行」同一条路）。
+      //
+      // 这一档是**任务的执行回合**(system:"retry" → followUpFrom=null),必须先认领队列
+      // 执行占位(queue-seat.ts):从这里到 CLI 真正拉起之间隔着解析执行器、准备 worktree
+      // 等一串 await,任务状态却一直停在 done —— 消息补投扫描在这个窗口里按 DB 状态判定
+      // 「整队空闲」,会放行同队另一个失败成员的执行型回复,两个任务一起跑(第 7 轮审查:
+      // 普通 HTTP 并发 10/10 复现)。claimQueueSeat 与扫描、/run、/fire、/retry、队列推进
+      // 共用同一条认领链,占到位后这段窗口对任何入口都可见。上面的重投档不占:它重放的是
+      // 续聊回合(followUpFrom 护住原终态),队列对续聊本就豁免,占位反而会让一次聊天重跑
+      // 把整条队列挡住;审查档同理(旁路回合,不是任务执行)。
+      const claim = await claimQueueSeat(taskId);
+      if (!claim.ok) {
+        return c.json(
+          { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy: claim.blockers },
+          409,
+        );
+      }
+      seat = claim.seat;
       handoff(
         latest.executorId
           ? continueTask(taskId, RESUME_PROMPT, { ...route, actingUserId: acting, system: "retry", resumeSessionId: latest.id, turnHeld: true, freezeGuard: true })
@@ -394,7 +418,11 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       );
       return c.json({ started: true, mode: "resume" }, 202);
     } finally {
-      if (!handed) releaseTurn(taskId);
+      if (!handed) {
+        releaseTurn(taskId);
+        // 占了队列位却没交接出去(权威重查 409、认领后又被拒):按守卫回滚,别卡在 queued。
+        if (seat) void seat.release();
+      }
     }
   });
 }

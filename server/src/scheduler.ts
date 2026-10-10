@@ -4,6 +4,7 @@ import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
 import { freezeStartingTurn, stopTask } from "./runs.js";
+import { serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 
 const MAX_PARALLEL = 4;
@@ -70,15 +71,30 @@ export async function advanceQueueFromTask(taskId: string): Promise<void> {
 //   - paused → 用 resumePrompt 续跑(resumeOrRunTask 内部按 status 分流)
 // 每次推进只启动 head 一项;它跑完触发 advanceQueueFromTask 再推下一个。
 export async function advanceQueue(queueId: string): Promise<void> {
-  const next = await pickNextLaunchable(queueId);
+  // 「挑下一个」与「落 queued」收进队列认领临界区(queue-seat.ts,与手动运行/重跑/
+  // 消息补投同一条链):分开的话,读完成员快照到落库之间的 await 窗口里,另一个入口
+  // 刚认领的占位在这里看不见,按旧快照再拉起一个就是同队双跑(第 7 轮审查:跨入口
+  // 竞争)。临界区里只做挑选与占位,真正拉起(resumeOrRunTask)在链外。
+  const next = await serializeQueueClaims<typeof tasks.$inferSelect | "paused" | null>(async () => {
+    const candidate = await pickNextLaunchable(queueId);
+    if (!candidate) return null;
+    // 队列绑定到 group:组被暂停时允许编辑队列(保存排队关系),但不启动任何成员。
+    // 检查放在这里而不是各调用方 —— 建队列/插入/重排/移除/终态钩子全走本函数,
+    // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
+    // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
+    if (candidate.groupId && (await isPaused(candidate.groupId))) return "paused";
+    await setQueued(candidate.id);
+    return candidate;
+  });
+  if (next === "paused") return;
   if (!next) {
     // 没有可启动的成员 ≠ 队里没事可做:失败成员的**执行型待发送回复**(排队期间暂存
     // 的修改要求,见 pending-messages 的 execution)在等「整队无人在跑」才能投递。它的
     // 任务已是终态,不会再有自己的结算钩子来救,只推自己的 flush 又只看发起任务 ——
     // 这里是「队列刚空出来」这一事实的唯一权威时点,替队内成员推一把。按 position
-    // 顺序逐个入列:deliverPendingMessages 内部是一条串行扫描链,前一个成员的 queued
-    // 占位先落库,后一个成员的判定才执行,所以**至多一个**被启动(第 6 轮审查:并行
-    // 扫描曾让两个失败成员同时恢复执行);无关成员在判定里是 no-op。
+    // 顺序逐个入列:投递侧对每个成员走 claimQueueSeat 认领占位(queue-seat.ts),前一个
+    // 成员的 queued 先落库,后一个成员的判定才执行,所以**至多一个**被启动(第 6 轮
+    // 审查:并行扫描曾让两个失败成员同时恢复执行);无关成员在判定里是 no-op。
     const members = await queueMembers(queueId);
     const idle = members.filter((t) => !t.archived && t.mode === "single");
     if (idle.length) {
@@ -88,12 +104,6 @@ export async function advanceQueue(queueId: string): Promise<void> {
     }
     return;
   }
-  // 队列绑定到 group:组被暂停时允许编辑队列(保存排队关系),但不启动任何成员。
-  // 检查放在这里而不是各调用方 —— 建队列/插入/重排/移除/终态钩子全走本函数,
-  // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
-  // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
-  if (next.groupId && (await isPaused(next.groupId))) return;
-  await setQueued(next.id);
   void resumeOrRunTask(next.id, { reason: "queue" });
 }
 

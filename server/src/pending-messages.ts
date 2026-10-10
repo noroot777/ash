@@ -29,11 +29,11 @@ import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
-import { scheduledMessages, tasks, groups, queueItems } from "./db/schema.js";
-import { setTaskStatus } from "./status.js";
+import { scheduledMessages, tasks, groups } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
-import { isTurnClaimed, whenTurnIdle } from "./runs.js";
+import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
+import { whenTurnIdle } from "./runs.js";
 import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, secs, settleBusyAgain, waitedFor } from "./pending-delivery-timing.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -370,9 +370,9 @@ async function deliverWhenIdle(
   message: Row,
   options: ReturnType<typeof deliveryOptions>,
   spans: { dueAt: number; busyMs: number; queuedAt: number },
-  // 扫描侧为执行型消息落下的 queued 占位。正常路径由 continueTask 的结算覆盖;
+  // 扫描侧认领的队列执行占位(queue-seat.ts)。正常路径由 continueTask 的结算覆盖;
   // 这里只负责「一个字都没送出去就散伙」的早退口。
-  seat?: { prevStatus: string },
+  seat?: QueueSeat,
 ): Promise<void> {
   let delivered = false;
   const idleAt = Date.now();
@@ -414,17 +414,10 @@ async function deliverWhenIdle(
   } finally {
     inFlight.delete(message.taskId);
     // 占位落空的兜底:这一次没送达(租约被抢、消息被取消、回合被验收互斥挡回而
-    // continueTask 没有结算)时,任务可能还停在扫描侧落的 queued 上。回合锁还被人
-    // 占着(手动运行刚抢走这次启动)就不动 —— 那一位的结算会覆盖;锁空着才查状态
-    // 回滚,否则把别人正要跑的任务翻回 failed,结算钩子会放行下一个成员,反而造出
-    // 双跑。起跑失败/冻结撤回则由 continueTask 自己的结算覆盖,这里查到的已不是
-    // queued,不动。
-    if (seat && !delivered && !isTurnClaimed(message.taskId)) {
-      try {
-        const cur = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, message.taskId))).at(0);
-        if (cur?.status === "queued") await setTaskStatus(message.taskId, seat.prevStatus as Parameters<typeof setTaskStatus>[1]);
-      } catch { /* 回滚失败只能留给重启 reconcile */ }
-    }
+    // continueTask 没有结算)时,任务可能还停在扫描侧认领的 queued 占位上。回滚的
+    // 守卫判据在 seat.release() 里:回合锁被人占着(手动运行刚抢走这次启动)或状态
+    // 已被结算覆盖都不动,只有「没人接手、还停在占位上」才退回原状态。
+    if (seat && !delivered) await seat.release();
   }
 }
 
@@ -530,16 +523,23 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         // 单飞锁还锁着;直接 continueTask 会被静默挡回,消息就此蒸发。`whenTurnIdle`
         // 由 releaseTurn 同一处排空,是结算钩子里给同一个任务续跑的唯一安全写法。
         //
-        // 执行型消息在安排投递前**先落 queued 占位**(与让位 setQueued、手动运行
-        // claimQueuedPlacement 同一道占位边界):本轮扫描串行,后面的成员在各自的
-        // queueBlockers 查询里立刻看见这个 queued,整队仍是「至多一个在跑」;不占位
-        // 的话,两条失败成员的消息各自读到「无人在跑」就会并行启动(第 6 轮审查)。
-        // 占位的回收路径:投递成功/失败都由 continueTask 的结算覆盖 status;唯一
-        // 落空口(租约被抢/消息已取消)由 deliverWhenIdle 的早退分支按 seat 回滚。
-        let seat: { prevStatus: string } | undefined;
-        if (m.execution && (await db.select().from(queueItems).where(eq(queueItems.taskId, m.taskId))).length) {
-          seat = { prevStatus: t!.status };
-          await setTaskStatus(m.taskId, "queued");
+        // 开启执行回合的投递(执行型消息,或 paused/backlog 任务的排队回复 —— 即
+        // needQueueCheck 那一类)先认领队列执行占位(claimQueueSeat):「整队无人在跑」
+        // 的检查与落 queued 在同一个临界区里,且与手动运行、/fire、失败重试、重跑上一
+        // 回合、队列推进共用同一条链。只靠本模块自己串行是不够的 —— 重跑上一回合在
+        // 异步读旧记录期间只占任务级回合锁、状态还停在终态,扫描按 DB 状态判定「整队
+        // 空闲」照样穿透(第 7 轮审查:普通 HTTP 并发 10/10 双跑)。被挡回按「等」记账,
+        // 下一次触发再试;终态续聊(非执行型、任务已终态)不占位,豁免保留。
+        // 占位的回收:投递成功/失败都由 continueTask 的结算覆盖 status;唯一落空口
+        // (租约被抢/消息已取消)由 deliverWhenIdle 的收尾按 seat.release() 回滚。
+        let seat: QueueSeat | undefined;
+        if (needQueueCheck) {
+          const claim = await claimQueueSeat(m.taskId);
+          if (!claim.ok) {
+            noteBusyAgain(m.id, at.getTime());
+            continue;
+          }
+          seat = claim.seat ?? undefined;
         }
         fired.add(m.taskId);
         inFlight.add(m.taskId);
@@ -572,6 +572,9 @@ export function flushPendingForTask(taskId: string): void {
 //
 // 记账走投递链路同一套:beginDelivery 租约 → onDelivered 落 sent → 挡回 abort + 重投,
 // 所以 tick / 终态钩子 / 重投定时器靠租约与 inFlight 去重,同一条不会发两遍。
+// 队列占位不在这里认领:调用链的上游已经持有 —— 队列推进/分组启动在拉起前 setQueued,
+// 手动运行//fire//retry/重跑上一回合在路由里 claimQueueSeat(queue-seat.ts),这里再占
+// 一次反而会被自己的 queued 挡住。
 // 返回 true = 这次启动已由消息交接接管(含「另一路已在送」与「挡回后已排重投」),
 // 调用方不要再开别的回合;false = 没有可交接的消息,照常走默认输入。
 export async function handDuePendingMessageToRun(
