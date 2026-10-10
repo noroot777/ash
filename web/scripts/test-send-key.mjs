@@ -13,7 +13,12 @@
 //   ⑦ 反过来也不行：PATCH 先发、GET 后发但读到的是写之前的旧值，那条 GET 同样不算数
 //      —— 请求的发出顺序不是数据的版本顺序（第 2 轮审查问题 1）；
 //   ⑧ 读设置一直失败**不许**退回出厂默认：读不到就一直换行（第 2 轮审查问题 2）；
-//   ⑨ 同一页上另一张卡的旧应答回来，不许把发送键的显示值倒灌回去（第 2 轮审查问题 3）。
+//   ⑨ 同一页上另一张卡的旧应答回来，不许把发送键的显示值倒灌回去（第 2 轮审查问题 3）；
+//   ⑩ 一条读取**整段跨过**一次保存（保存开始→它读到旧值→保存结束→它才回来），两个
+//      端点都「没有写在途」，仍然不算数（第 3 轮审查问题 1）；
+//   ⑪ 发送键保存在先、另一项设置的保存后发**先完成**，两次保存都要生效 —— 不同字段
+//      之间不存在「谁更晚谁赢」（第 3 轮审查问题 2）；
+//   ⑫ 同上，但后发的那次保存失败：它失败了，更不该把成功的发送键保存拒掉。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -53,6 +58,15 @@ try {
     await objective.focus();
     await page.keyboard.type(text);
     await page.keyboard.press(key);
+  };
+  // 等某个可观察状态落定。超时时报出「等的是什么 + 实际是什么」—— 这几条用例靠等待
+  // 本身当断言，只剩一行 TimeoutError 的话，下一个人没法知道是哪一档没跟上。
+  const settleTo = async (predicate, message) => {
+    try {
+      await page.waitForFunction(predicate, undefined, { timeout: 5000 });
+    } catch {
+      assert.fail(`${message}；实际 ${JSON.stringify(await state())}`);
+    }
   };
 
   // ① 服务端那份说 ⌘/Ctrl+回车：裸回车只换行。
@@ -158,6 +172,54 @@ try {
   assert.equal(after.mode, "mod-enter", "实际按键行为同样不该退");
   assert.equal(await picker.inputValue(), "mod-enter", "下拉显示的也得是用户刚选的那一档");
   await assertHint(hint, "⌘ / Ctrl + Enter 发送 · Enter 换行");
+
+  // ⑩ 读取整段跨过一次保存：保存开始 → 它读到旧值 → 保存结束 → 它迟到的应答才回来。
+  //    两个端点都看不到「写在途」，可它中间完整跨过了一次保存。
+  await open("?send-key=enter");
+  await page.evaluate(() => window.__holdPatch(true)); // 放行才写：保存还没到服务端
+  await picker.selectOption("mod-enter");
+  await page.evaluate(() => window.__probeHeld());     // 这条真读到 enter，应答也扣住
+  await page.waitForTimeout(200);
+  await page.evaluate(() => window.__releasePatch());  // 保存落地并结束
+  await settleTo(() => window.__state().mode === "mod-enter", "保存成功后该当场切到 ⌘/Ctrl 那一档");
+  await page.evaluate(() => window.__releaseProbe());  // 旧读取这才回来
+  await page.waitForTimeout(300);
+  assert.equal((await state()).mode, "mod-enter", "整段跨过一次保存的读取不算数");
+  assert.equal(await picker.inputValue(), "mod-enter", "下拉同样不该退档");
+  await assertHint(hint, "⌘ / Ctrl + Enter 发送 · Enter 换行");
+  await typeThen("读取跨了一次保存", "Enter");
+  assert.deepEqual(await entries(), [], "保存已成功，裸回车不该把没写完的任务发出去");
+  assert.equal(await objective.inputValue(), "读取跨了一次保存\n", "这一下回车该是换行");
+
+  // ⑪ 两个互不冲突的部分写入：发送键先发、技能间隔后发先完成，两次都该生效。
+  await open("?send-key=enter");
+  await page.evaluate(() => window.__holdPatch(true)); // 发送键这条扣住，还没到服务端
+  await picker.selectOption("mod-enter");
+  await page.waitForTimeout(200);
+  await page.evaluate(() => window.__patchSkill(3600)); // 后发、先完成，应答里发送键还是 enter
+  await settleTo(() => window.__state().skill === 3600, "另一项设置自己那次保存该先生效");
+  await page.evaluate(() => window.__releasePatch());
+  await settleTo(() => window.__state().value === "mod-enter", "较晚的另一项保存不该撤销较早的发送键保存");
+  const merged = await state();
+  assert.equal(merged.mode, "mod-enter", "较晚的另一项保存不该撤销较早的发送键保存");
+  assert.equal(merged.skill, 3600, "另一项设置也得留住 —— 两次保存都是用户的意思");
+  assert.equal(await picker.inputValue(), "mod-enter", "下拉显示的是实际存成的那一档");
+  await typeThen("两项同时保存", "Enter");
+  assert.deepEqual(await entries(), [], "裸回车该按已存成的 ⌘/Ctrl 那一档当换行");
+
+  // ⑫ 后发的那次保存失败：它自己没存上，更不该连累成功的那次。
+  await open("?send-key=enter");
+  await page.evaluate(() => window.__holdPatch(true));
+  await picker.selectOption("mod-enter");
+  await page.waitForTimeout(200);
+  await page.evaluate(() => window.__failPatch(1));
+  await page.evaluate(() => window.__patchSkill(7200)); // 503
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.__releasePatch());
+  await settleTo(() => window.__state().value === "mod-enter", "另一项保存失败，不该把成功的发送键保存拒掉");
+  assert.equal((await state()).mode, "mod-enter", "实际按键行为也得是存成的那一档");
+  await typeThen("另一项保存失败", "Enter");
+  assert.deepEqual(await entries(), [], "成功存成 ⌘/Ctrl 之后，裸回车仍该是换行");
 
   console.log("send-key test passed");
 } finally {

@@ -34,20 +34,13 @@ import type {
   TeamPresetConfig,
 } from "@ash/shared";
 
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
-import {
-  adoptSettingsRead,
-  adoptSettingsWrite,
-  beginSettingsRead,
-  beginSettingsWrite,
-  endSettingsWrite,
-} from "./settingsSync.ts";
+import { readSettings, writeSettings } from "./settingsSync.ts";
 import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
@@ -109,26 +102,8 @@ function isAcceptTaskResult(body: unknown): body is AcceptTaskResult {
     typeof body.accepted === "boolean";
 }
 
-// `/settings` 的读和写走同一个口子,三件容易各写一遍、漏一处就看不出来的事只留一份:
-// 缺字段补出厂默认(老服务端不认识新设置项时,界面上会冒出「每 undefined 秒」)、
-// 发出之前取票/取号、以及把过期应答挡在外面(新旧判定在 settingsSync.ts)。
-async function readSettings(): Promise<AppSettings> {
-  const token = beginSettingsRead();
-  const fresh = await request<AppSettings>("/settings");
-  return adoptSettingsRead({ ...DEFAULT_APP_SETTINGS, ...fresh }, token);
-}
-
-async function writeSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
-  const seq = beginSettingsWrite();
-  try {
-    const fresh = await request<AppSettings>("/settings", json("PATCH", patch));
-    return adoptSettingsWrite({ ...DEFAULT_APP_SETTINGS, ...fresh }, seq);
-  } finally {
-    endSettingsWrite();
-  }
-}
-
 export const api = {
+  // 读写都在 settingsSync.ts 里收口:缺字段补出厂默认、取号、以及把过期应答挡在外面。
   settings: (): Promise<AppSettings> => readSettings(),
   patchSettings: (patch: Partial<AppSettings>): Promise<AppSettings> => writeSettings(patch),
   // 只读的运行时事实（平台/分隔符/家目录），跟可写的 `/settings` 是两回事。

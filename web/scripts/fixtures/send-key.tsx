@@ -27,6 +27,7 @@ import { useSendKeyLabels } from "../../src/lib/useComposerSendKey.ts";
 //                              只是应答在路上」——两种交错对应两类缺陷，别混用
 //   __releasePatch()           放行被扣住的那条 PATCH
 //   __patchSkill(n)            改另一项设置（技能刷新间隔），走设置页同一个形状
+//   __failPatch(n)             接下来 n 条**没被扣住的** PATCH 直接 503
 //   __allowReads()             取消剩余的 GET 失败
 //   __state()                  { mode, value, skill }
 
@@ -36,6 +37,7 @@ const stored: AppSettings = {
   composerSendKey: (params.get("send-key") as ComposerSendKey | null) ?? DEFAULT_APP_SETTINGS.composerSendKey,
 };
 let failsLeft = Number(params.get("fail") ?? 0);
+let patchFailsLeft = 0;
 
 const reply = (body: unknown) => new Response(JSON.stringify(body), {
   status: 200, headers: { "content-type": "application/json" },
@@ -56,7 +58,10 @@ window.fetch = async (input, init) => {
       const patch = JSON.parse(String(init.body)) as Partial<AppSettings>;
       const held = holdPatch;
       holdPatch = null;
-      if (!held) { Object.assign(stored, patch); return reply(stored); }
+      if (!held) {
+        if (patchFailsLeft > 0) { patchFailsLeft -= 1; return new Response("boom", { status: 503 }); }
+        Object.assign(stored, patch); return reply(stored);
+      }
       if (!held.applyOnRelease) Object.assign(stored, patch);
       // 应答那一刻的快照：放行之后 stored 再变也不影响这一份（真实应答就是这样）。
       const snapshot = held.applyOnRelease ? null : { ...stored };
@@ -110,6 +115,7 @@ function Fixture() {
       __patchSkill: (seconds: number) => {
         void api.patchSettings({ skillRefreshSeconds: seconds }).then(setSettings).catch(() => undefined);
       },
+      __failPatch: (times = 1) => { patchFailsLeft = times; },
       __allowReads: () => { failsLeft = 0; },
       __state: () => ({
         mode: composerSendKey(),
