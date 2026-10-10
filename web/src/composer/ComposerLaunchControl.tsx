@@ -71,43 +71,47 @@ export function ComposerLaunchControl({
     <div className="composer-launch-control">
       <div className="studio-input-tools">
       {attachmentTool}
-      <ComposerPopover label="启动设置" value={LAUNCH_OPTIONS.find((option) => option.value === mode)?.label}
-        disabled={busy} className={`studio-schedule-button${mode !== "run" ? " is-configured" : ""}`}
-        trigger={<><Clock size={17} />{mode !== "run" && <span>{mode === "create" ? "仅创建" : mode === "queue" ? "排队" : mode === "once" ? "定时" : "Cron"}</span>}</>}>
-      <label className="composer-launch-mode">
-        <span>启动方式</span>
-        <select value={mode} disabled={busy} onChange={(event) => onModeChange(event.target.value as LaunchMode)}>
-          {LAUNCH_OPTIONS.map((option) => {
-            const blocked = option.value === "queue" && !!queueUnavailable;
-            return (
-              <option value={option.value} key={option.value} disabled={blocked}>
-                {option.label}{blocked ? `（${queueUnavailable}）` : ""}
-              </option>
-            );
-          })}
-        </select>
-      </label>
-      {mode === "queue" && queueSlot}
-      {(mode === "once" || mode === "cron") && (
-        <ScheduleFields
-          kind={mode}
-          at={at}
-          cron={cron}
-          disabled={busy}
-          onAtChange={onAtChange}
-          onCronChange={onCronChange}
-        />
-      )}
-      {error && <small className="composer-launch-error">{error}</small>}
-      <p className="studio-help"><SubmitIcon mode={mode} />{mode === "run" ? "创建后立即开始执行。" : mode === "queue" ? "建完入队不起跑，排在所选任务之后，轮到它时自动开始。" : mode === "create" ? "先放入待办，需要时再运行。" : mode === "once" ? "在指定的本地时间运行一次。" : "按 Cron 表达式循环运行。"}</p>
-      </ComposerPopover>
       <span className="studio-tool-divider" aria-hidden="true" />
       {executorTools}
       </div>
-      <Button variant="primary" className="studio-submit" disabled={!canSubmit} onClick={onSubmit}
-        aria-label={busy ? "创建中…" : submitLabel(mode)}>
-        <span>{busy ? "创建中…" : submitLabel(mode)}</span><ArrowUp size={18} weight="bold" />
-      </Button>
+      {/* 启动设置贴着提交按钮(连体的 ▾ 段):提交方式和提交动作是一件事,放回左侧
+          工具堆里会被淹没,用户找不到「创建并排队」在哪(2026-10-10 反馈)。 */}
+      <div className="studio-submit-group">
+        <Button variant="primary" className="studio-submit" disabled={!canSubmit} onClick={onSubmit}
+          aria-label={busy ? "创建中…" : submitLabel(mode)}>
+          <span>{busy ? "创建中…" : submitLabel(mode)}</span><ArrowUp size={18} weight="bold" />
+        </Button>
+        <ComposerPopover label="启动设置" value={LAUNCH_OPTIONS.find((option) => option.value === mode)?.label}
+          disabled={busy} className={`studio-submit-mode${mode !== "run" ? " is-configured" : ""}`}
+          trigger={<SubmitIcon mode={mode} />}>
+        <label className="composer-launch-mode">
+          <span>启动方式</span>
+          <select value={mode} disabled={busy} onChange={(event) => onModeChange(event.target.value as LaunchMode)}>
+            {LAUNCH_OPTIONS.map((option) => {
+              const blocked = option.value === "queue" && !!queueUnavailable;
+              return (
+                <option value={option.value} key={option.value} disabled={blocked}>
+                  {option.label}{blocked ? `（${queueUnavailable}）` : ""}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+        {mode === "queue" && queueSlot}
+        {(mode === "once" || mode === "cron") && (
+          <ScheduleFields
+            kind={mode}
+            at={at}
+            cron={cron}
+            disabled={busy}
+            onAtChange={onAtChange}
+            onCronChange={onCronChange}
+          />
+        )}
+        {error && <small className="composer-launch-error">{error}</small>}
+        <p className="studio-help"><SubmitIcon mode={mode} />{mode === "run" ? "创建后立即开始执行。" : mode === "queue" ? "建完入队不起跑，排在所选任务之后，轮到它时自动开始。" : mode === "create" ? "先放入待办，需要时再运行。" : mode === "once" ? "在指定的本地时间运行一次。" : "按 Cron 表达式循环运行。"}</p>
+        </ComposerPopover>
+      </div>
     </div>
   );
 }

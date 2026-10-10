@@ -11,17 +11,21 @@ import { api } from "./api.ts";
 
 const TERMINAL: readonly TaskStatus[] = ["done", "failed", "canceled"];
 
-/** 这个任务现在还能不能谈「排队等前面跑完」:只对还没开始跑的任务有意义。
- * 团队任务排除:调度器按 mode !== "team" 过滤队列成员,入了队也永远不会被拉起。 */
+/** 这个任务现在还能不能谈「排进队列」。backlog/paused 是经典情形(等前面跑完再被
+ * 拉起);running 也放行——入队不打断它,调度器(selectNextInQueue)看到在跑成员
+ * 整队不再启动别人,它跑完(advanceQueueFromTask)自动推进排在它后面的任务,这是
+ * 「正在跑 A,想让 B 接着跑」的高频编排方式(用户 2026-10-10 指定)。queued 不放:
+ * 那是队列调度自己的瞬态。团队任务排除:调度器按 mode !== "team" 过滤队列成员,
+ * 入了队也永远不会被拉起。 */
 export function canJoinQueue(task: Pick<TaskListItem, "status" | "parentId" | "archived" | "queueId" | "mode">): boolean {
   return task.parentId === null
     && !task.archived
     && task.queueId == null
     && task.mode !== "team"
-    && (task.status === "backlog" || task.status === "paused");
+    && (task.status === "backlog" || task.status === "paused" || task.status === "running");
 }
 
-export function queueAfterOptions({ tasks, groups, projectId, excludeId, subjectGroupId }: {
+export function queueAfterOptions({ tasks, groups, projectId, excludeId, subjectGroupId, subjectRunning }: {
   tasks: TaskListItem[];
   groups: Group[];
   projectId: string;
@@ -32,6 +36,12 @@ export function queueAfterOptions({ tasks, groups, projectId, excludeId, subject
    * 新建面板不传 —— 新任务的分组随选中的目标走,任何组都可选。
    */
   subjectGroupId?: string | null;
+  /**
+   * 排队主体自己正在跑(检查器入口的 running 任务)。此时目标所在队列若已有
+   * 成员在跑,插进去就是同队两个 running——调度器虽不会因此失控(都跑完才继续
+   * 推进),但「同队至多一个在跑」的编排语义已经破了,如实置灰。
+   */
+  subjectRunning?: boolean;
 }): DropdownOption[] {
   const groupName = (groupId: string | null) =>
     groupId == null ? "无分组" : groups.find((group) => group.id === groupId)?.name ?? "未知分组";
@@ -44,7 +54,7 @@ export function queueAfterOptions({ tasks, groups, projectId, excludeId, subject
     ? [...candidates].sort((a, b) =>
       Number((a.groupId ?? null) !== (subjectGroupId ?? null)) - Number((b.groupId ?? null) !== (subjectGroupId ?? null)))
     : candidates;
-  return sorted.map((task) => {
+  const options = sorted.map((task) => {
     const base: DropdownOption = {
       value: task.id,
       label: task.title || "未命名任务",
@@ -59,7 +69,15 @@ export function queueAfterOptions({ tasks, groups, projectId, excludeId, subject
       return { ...base, disabled: true, detail: "团队任务 · 队列不会等它完成" };
     }
     if (task.queueId == null && TERMINAL.includes(task.status)) {
-      return { ...base, disabled: true, detail: `${TASK_STATUS_LABELS[task.status]} · 排后面会立刻跑` };
+      return {
+        ...base,
+        disabled: true,
+        detail: `${TASK_STATUS_LABELS[task.status]} · ${subjectRunning ? "无需排队等它" : "排后面会立刻跑"}`,
+      };
+    }
+    if (subjectRunning && task.queueId != null
+      && tasks.some((member) => member.queueId === task.queueId && (member.status === "running" || member.status === "queued"))) {
+      return { ...base, disabled: true, detail: "该队列已有任务在跑" };
     }
     return {
       ...base,
@@ -68,6 +86,10 @@ export function queueAfterOptions({ tasks, groups, projectId, excludeId, subject
         : TASK_STATUS_LABELS[task.status],
     };
   });
+  // 可选的排上面、置灰的沉底(各自保持原相对顺序)。Dropdown 按出现顺序插组标题,
+  // 沉底后同一组名可能出现上下两段——上段可选、下段置灰,正好是「先看能选的」的
+  // 读法(用户 2026-10-10:可用的要排最上面,别反过来)。
+  return [...options.filter((option) => !option.disabled), ...options.filter((option) => option.disabled)];
 }
 
 /** 把 taskId 排到 target 之后,返回落进的队列 id、本任务入队后的权威快照,以及

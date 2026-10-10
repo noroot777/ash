@@ -27,8 +27,12 @@
 .studio-card .composer-footer > .composer-launch-control { display:flex; width:100%; min-width:0; flex-wrap:nowrap; justify-content:space-between; align-items:center; gap:12px; }
 .studio-input-tools { display:flex; flex:1; min-width:0; align-items:center; gap:3px; }
 .studio-input-tools > .task-reply-icon { width:30px; height:30px; flex:0 0 30px; }
-.studio-schedule-button { height:30px; padding:0 7px; }
-.studio-schedule-button > .studio-aux-caret { display:none; }
+.studio-submit-group { display:flex; flex:0 0 auto; align-items:stretch; }
+.studio-submit-group > .studio-submit.ui-button { border-top-right-radius:0; border-bottom-right-radius:0; }
+.studio-submit-mode.studio-aux-button { height:36px; flex:0 0 auto; margin-left:1px; border-radius:0 9px 9px 0; padding:0 8px; background:var(--accent); color:white; box-shadow:0 0 0 1px rgb(67 76 164 / 28%), 0 1px 2px rgb(40 42 48 / 12%); }
+.studio-submit-mode.studio-aux-button:hover:not(:disabled),.studio-submit-mode.studio-aux-button[aria-expanded="true"] { background:#5560c4; color:white; }
+.studio-submit-mode.studio-aux-button.is-configured { color:white; }
+.studio-submit-mode > .studio-aux-caret { display:inline; }
 .studio-inline-executor { flex:0 1 440px; min-width:0; }
 .studio-inline-executor > .composer-field { gap:0; }
 .studio-inline-executor > .composer-field > span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
@@ -98,8 +102,10 @@
   .studio-inline-executor .run-target-seg--agent { flex-shrink:0; }
   .studio-inline-executor .run-target-seg--agent > span { display:none; }
   .studio-input-tools > .studio-tool-divider { display:none; }
-  .studio-submit.ui-button { align-self:flex-end; width:34px; height:34px; padding:0; flex:0 0 34px; }
+  .studio-submit-group { align-self:flex-end; }
+  .studio-submit.ui-button { width:34px; height:34px; padding:0; flex:0 0 34px; }
   .studio-submit > span { display:none; }
+  .studio-submit-mode.studio-aux-button { height:34px; }
   .studio-popover .run-target-seg { padding:0 6px; }
 }
 @media(max-width:380px) {
