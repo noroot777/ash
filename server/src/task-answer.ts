@@ -57,7 +57,15 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   // 进历史,这里再落一条执行型待发送消息进托盘(带执行器路由与发送者身份),页面由托盘
   // 表达「等前项结束」;轮到时让位交接/补投扫描把它作为首轮输入送进 asker 会话,恰好一次。
   // team 调度台常驻、不进队列,保持原路直送。
-  if (task.mode === "single") {
+  //
+  // **旁路答复不占位**:审查者提问(asker.role=reviewer)与未收尾的就地验证轮
+  // (verifyRound 非空)的答复续跑是旁路回合,不是任务的执行,不占队列位置 ——
+  // followUpFrom 靠读到原状态来护住终态,占位先把 done 改成 queued,orchestrator 就
+  // 只能把 followUpFrom 写成 null,停止这轮审查会把原任务结算成 canceled(第 9 轮审查:
+  // 队列中已完成任务答复审查提问后 stop,任务从 done 变 canceled;不在队列的对照不变)。
+  // 终态任务的普通续聊同理从不经过这里的认领(它不来 /answer),豁免口径一致。
+  const sideways = asker?.role === "reviewer" || task.verifyRound !== null;
+  if (task.mode === "single" && !sideways) {
     const claim = await claimQueueSeat(taskId);
     if (!claim.ok) {
       await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting, execution: true });
