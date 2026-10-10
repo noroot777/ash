@@ -104,3 +104,20 @@ function makeSeat(taskId: string, prevStatus: string): QueueSeat {
     },
   };
 }
+
+// 「认领占位 → 启动 → 收尾释放」的组合件,凡是**占到位就 fire-and-forget 启动**的入口
+// 共用(/run、/fire、/retry、定时到点 fire):被挡把挡路成员交回调用方按自己的语义处理
+// (路由 409 / 定时不消费班次);占到位把启动 promise 挂上收尾 —— 起跑失败/被挡时按守卫
+// 回滚占位,别让任务卡在 queued(真跑起来了 release 是 no-op)。
+export async function seatThenStart(
+  taskId: string,
+  start: () => Promise<unknown>,
+): Promise<{ ok: true } | { ok: false; blockers: string[] }> {
+  const claim = await claimQueueSeat(taskId);
+  if (!claim.ok) return { ok: false, blockers: claim.blockers };
+  const seat = claim.seat;
+  void start()
+    .catch((err) => console.error(`[ash] 任务 ${taskId} 启动异常:`, err))
+    .finally(() => { if (seat) void seat.release(); });
+  return { ok: true };
+}

@@ -29,7 +29,7 @@ import { mountTaskSteerRoutes } from "./task-steer.js";
 import { RUNS_DIR } from "./paths.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
-import { claimQueueSeat } from "./queue-seat.js";
+import { seatThenStart } from "./queue-seat.js";
 import { claimTurn, confirmDone, releaseTurn, stopTask } from "./runs.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { advanceQueue } from "./scheduler.js";
@@ -47,25 +47,12 @@ import { now } from "./util.js";
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用一句)。
 const QUEUE_BUSY_ERROR = "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列";
 
-// 起跑占位(/run、/fire、/retry 的最后一道):整队检查与落 queued 在 claimQueueSeat 的
-// 同一临界区里(queue-seat.ts),且与消息补投扫描、重跑上一回合、队列推进共用同一条链。
-// 路由前面那次 queueBlockers 只是无互斥的快速失败;这里才是权威认领 —— 检查到落库之间
-// 的 await 窗口里,并发的另一个入口(哪怕只占了任务级回合锁、状态还停在终态)刚认领的
-// 占位在链上立刻可见,整队在跑守卫不再被双双穿过(第 6/7 轮审查)。
-// 占到位后把启动的 promise 交回来挂收尾:起跑失败/被挡时按守卫回滚占位,别让任务卡在
-// queued(守卫判据在 seat.release() 里 —— 真跑起来了就是 no-op)。
-async function seatThenStart(
-  taskId: string,
-  start: () => Promise<unknown>,
-): Promise<{ ok: true } | { ok: false; blockers: string[] }> {
-  const claim = await claimQueueSeat(taskId);
-  if (!claim.ok) return { ok: false, blockers: claim.blockers };
-  const seat = claim.seat;
-  void start()
-    .catch((err) => console.error(`[ash] 任务 ${taskId} 手动启动异常:`, err))
-    .finally(() => { if (seat) void seat.release(); });
-  return { ok: true };
-}
+// 起跑占位(/run、/fire、/retry 的最后一道)住在 queue-seat.ts 的 seatThenStart:整队
+// 检查与落 queued 在同一临界区里,且与消息补投扫描、重跑上一回合、定时到点、队列推进
+// 共用同一条认领链。路由前面那次 queueBlockers 只是无互斥的快速失败;seatThenStart
+// 才是权威认领 —— 检查到落库之间的 await 窗口里,并发的另一个入口(哪怕只占了任务级
+// 回合锁、状态还停在终态)刚认领的占位在链上立刻可见,整队在跑守卫不再被双双穿过
+// (第 6/7 轮审查)。
 
 export function mountTaskRunRoutes(api: Hono): void {
   mountTaskArchiveRoutes(api);
