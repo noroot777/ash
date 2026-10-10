@@ -42,8 +42,8 @@ export type {
 // 回 "./x.ts",转发一加进程就起不来。
 
 // ── Global app settings ────────────────────────────────────────────────────
-export type { AppSettings } from "./app-settings.ts";
-export { DEFAULT_APP_SETTINGS } from "./app-settings.ts";
+export type { AppSettings, ComposerSendKey } from "./app-settings.ts";
+export { COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "./app-settings.ts";
 
 // ── 多人模式 ────────────────────────────────────────────────────────────────
 // 类型本体在 ./multiuser.ts;运行时判据(目录名校验、权限判据)走子路径

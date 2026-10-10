@@ -3,7 +3,8 @@
 // 容易失守的几处各钉一条：
 //   ① 打开时焦点还留在外面那颗触发按钮上的话，回车会重新按一次触发按钮而不是确认；
 //   ② 焦点在「取消」上时回车归取消，抢过来就成了「既取消又确认」；
-//   ③ 多行输入里回车是换行，确认让给 Cmd/Ctrl+Enter；
+//   ③ 多行输入里那一下回车跟着「输入框发送键」那一档走（设置 → 默认规则 → 输入框）：
+//      默认档回车就确认，选了「⌘/Ctrl+回车」那一档才把回车让回换行；
 //   ④ 按钮按不动（busy / confirmDisabled）时回车也不该越过去；
 //   ⑤ 框里又开了一层时，回车只作用于最上面那层（和 Esc 同一套层序）。
 //
@@ -62,18 +63,42 @@ try {
   await page.keyboard.press("Enter");
   assert.deepEqual(await entries(), ["close:plain"], "焦点在取消上时回车只该取消，不该同时确认");
 
-  // ③ 多行输入里回车是换行；Cmd/Ctrl+Enter 才是确认。
+  // ③ 多行输入里的回车：默认档（回车直发）就是确认，拿到的是输入框里的内容。
+  await page.locator('[data-testid="send-key-enter"]').click();
   await page.locator('[data-testid="reset"]').click();
   await page.locator('[data-testid="open-textarea"]').click();
   const feedback = page.locator('[data-testid="feedback"]');
   await feedback.waitFor();
   await page.keyboard.type("第一行");
   await page.keyboard.press("Enter");
+  assert.deepEqual(await entries(), ['confirm:textarea("第一行")'], "默认档下多行输入里的回车应当确认");
+
+  // Shift+Enter 在哪一档都是换行，不是确认。
+  await page.locator('[data-testid="reset"]').click();
+  await page.locator('[data-testid="open-textarea"]').click();
+  await feedback.waitFor();
+  await page.keyboard.type("甲");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("乙");
+  assert.deepEqual(await entries(), [], "Shift+Enter 是换行，不该确认");
+  assert.equal(await feedback.inputValue(), "甲\n乙", "Shift+Enter 应该真的换了行");
+  await page.keyboard.press("Escape");
+
+  // 切到「⌘/Ctrl+回车发送」那一档：回车让回换行，带修饰键才确认。
+  await page.locator('[data-testid="send-key-mod"]').click();
+  await page.locator('[data-testid="reset"]').click();
+  await page.locator('[data-testid="open-textarea"]').click();
+  await feedback.waitFor();
+  await page.keyboard.type("第一行");
+  await page.keyboard.press("Enter");
   await page.keyboard.type("第二行");
-  assert.deepEqual(await entries(), [], "多行输入里的回车是换行，不该确认");
+  assert.deepEqual(await entries(), [], "⌘ 回车那一档下，多行输入里的回车是换行，不该确认");
   assert.equal(await feedback.inputValue(), "第一行\n第二行", "那一下回车应该真的换了行");
   await page.keyboard.press("ControlOrMeta+Enter");
   assert.deepEqual(await entries(), ['confirm:textarea("第一行\\n第二行")'], "Cmd/Ctrl+Enter 应当确认，且拿到的是输入框里的内容");
+
+  // 回到默认档，后面几条按原来的语义跑。
+  await page.locator('[data-testid="send-key-enter"]').click();
 
   // 单行输入里回车照常确认（新建分组那种：填完名字直接回车）。
   await page.locator('[data-testid="reset"]').click();

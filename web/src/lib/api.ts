@@ -42,6 +42,7 @@ import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
 import { syncHostCliPolicy } from "./hostCliPolicy.ts";
+import { syncComposerSendKey } from "./sendKey.ts";
 import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
@@ -104,14 +105,16 @@ function isAcceptTaskResult(body: unknown): body is AcceptTaskResult {
 }
 
 /**
- * 读到的每一份 AppSettings 都顺手把「CLI 额度」那一档同步给 hostCliPolicy。
+ * 读到的每一份 AppSettings 都顺手把两档「页面要跟着变脸」的政策同步出去:
+ * 「CLI 额度」给 hostCliPolicy,「哪一下算发送」给 sendKey。
  *
- * 为什么钉在 api 层而不是各个调用点:前端学到这一档的路**只有 `/settings` 这两条**
- * (设置页初次加载、额度开关的 PATCH),而漏掉任何一条的表现是「改了额度,菜单要刷新
+ * 为什么钉在 api 层而不是各个调用点:前端学到这些档位的路**只有 `/settings` 这两条**
+ * (设置页初次加载、开关的 PATCH),而漏掉任何一条的表现是「改了设置,界面要刷新
  * 页面才对」—— 正是第 2 轮审查那条。放在这里,以后新增一个读设置的地方也不会漏。
  */
 function adopt(settings: AppSettings): AppSettings {
   syncHostCliPolicy({ instanceMode: settings.instanceMode, sharedHostCli: settings.sharedHostCli });
+  syncComposerSendKey(settings.composerSendKey);
   return settings;
 }
 

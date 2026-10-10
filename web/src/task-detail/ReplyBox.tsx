@@ -17,6 +17,8 @@ import {
 } from "./ReplyResizeHandle.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { api, type ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
 import { AgentModelPicker } from "./AgentModelPicker.tsx";
@@ -110,6 +112,7 @@ export function ReplyBox({
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sendKeys = useSendKeyLabels();
   // null = 没拖过,交给行数自动撑高(useAutoGrowTextarea)
   const replyHeight = useReplyHeight(SINGLE_REPLY_PIN);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
@@ -149,10 +152,10 @@ export function ReplyBox({
     : task.archived
       ? command ? "任务已归档；仍可输入 /team 或 /duet 创建派生任务…" : "任务已归档，无法继续回复"
       : queueing
-        ? command ? "任务进行中；发送即排队，队尾可点“引导会话”；也可输入 /team 或 /duet…" : "任务进行中，发送即排队；需要立即接入当前对话可在队尾点“引导会话”（⌘↵）…"
+        ? command ? "任务进行中；发送即排队，队尾可点“引导会话”；也可输入 /team 或 /duet…" : `任务进行中，发送即排队；需要立即接入当前对话可在队尾点“引导会话”（${sendKeys.sendShort}）…`
         : !hasConversation
           ? command ? "可输入 /team 创建团队，或输入 /duet 发起讨论…" : "先运行任务，再继续回复"
-          : command ? "回复并继续；输入 /team 或 /duet 可派生新任务…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件）…";
+          : command ? "回复并继续；输入 /team 或 /duet 可派生新任务…" : `回复并继续（${sendKeys.sendShort} 发送，可粘贴图片或文件）…`;
 
   const resetComposerState = () => {
     setCommandIndex(0);
@@ -571,7 +574,7 @@ export function ReplyBox({
               return;
             }
             if (mention.onKeyDown(event)) return;
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            if (isSendKeyEvent(event)) {
               event.preventDefault();
               void send();
             }
@@ -627,8 +630,8 @@ export function ReplyBox({
             {uploads.uploading ? uploadingLabel(uploads.pending)
               : selectedIsSkill ? "回车补全"
                 : commandActive ? "回车配置"
-                : queueing ? (target ? "排队：跑完按上面这套发出" : "⌘↵ 排队，跑完自动发出")
-                  : target ? "本回合按上面这套跑" : "⌘↵ 发送"}
+                : queueing ? (target ? "排队：跑完按上面这套发出" : `${sendKeys.sendShort} 排队，跑完自动发出`)
+                  : target ? "本回合按上面这套跑" : `${sendKeys.sendShort} 发送`}
           </span>
           <button
             className="task-send-button"

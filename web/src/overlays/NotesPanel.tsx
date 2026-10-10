@@ -356,6 +356,9 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     const key = (event: KeyboardEvent) => {
       if (confirmDelete) return;
       if (event.key === "Escape") close();
+      // 这一下**故意不跟**「输入框发送键」那一档（设置 → 默认规则 → 输入框）：笔记本来就
+      // 自动保存，这里的 ⌘/Ctrl+回车只是「现在就存」，而笔记里换行是最常用的一个键 ——
+      // 把裸回车也算进来，等于每敲一个换行就存一次盘，还顺手把焦点以外的回车都接走。
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
         void flushDraft();

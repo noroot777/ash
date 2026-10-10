@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Task } from "@ash/shared";
 import type { QuestionRecord } from "@ash/shared/questions";
 import { QuestionCard } from "../src/task-detail/QuestionCard.tsx";
+import { syncComposerSendKey } from "../src/lib/sendKey.ts";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
 import type { ConversationItem } from "../src/task-detail/conversationModel.ts";
@@ -43,7 +44,15 @@ const single = renderToStaticMarkup(
 );
 assert.doesNotMatch(single, /task-question-progress/);
 assert.doesNotMatch(single, /上一题|下一题/);
-assert.match(single, /⌘ \/ Ctrl \+ Enter 发送/);
+// 发送键那句提示跟着「输入框发送键」那一档走（设置 → 默认规则 → 输入框），不是写死的。
+assert.match(single, /Enter 发送/);
+assert.doesNotMatch(single, /⌘ \/ Ctrl \+ Enter 发送/);
+syncComposerSendKey("mod-enter");
+const singleModEnter = renderToStaticMarkup(
+  <QuestionCard task={{ ...task, questionItems: undefined, questionOptions: ["甲", "乙"] } as Task} onAnswer={async () => undefined} />,
+);
+assert.match(singleModEnter, /⌘ \/ Ctrl \+ Enter 发送/);
+syncComposerSendKey("enter");
 const recorded = render([answer]);
 assert.equal(count(recorded, 'class="task-question-record"'), 1, "会话与数据库里的同一份答复只显示一张卡");
 assert.match(recorded, /<details class="task-question-record">/);

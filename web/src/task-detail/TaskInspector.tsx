@@ -5,6 +5,8 @@ import { REASONING_EFFORT_DETAIL } from "@ash/shared/cli-presets";
 import { addUsage, formatTokens, formatTokensExact, hasUsage, usageTotal } from "@ash/shared/usage";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { canJoinQueue, placeTaskAfter, queueAfterOptions } from "../lib/queueAfter.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
@@ -51,6 +53,7 @@ function ResumePromptEditor({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  const sendKeys = useSendKeyLabels();
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -85,7 +88,7 @@ function ResumePromptEditor({
           placeholder="续跑时发送给执行器的消息，例如：继续完成 TTS 阶段"
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            if (isSendKeyEvent(event)) {
               event.preventDefault();
               void commit();
             }
@@ -97,7 +100,7 @@ function ResumePromptEditor({
           }}
         />
         <footer>
-          <span>⌘/Ctrl + Enter 保存</span>
+          <span>{sendKeys.send} 保存</span>
           <button type="button" disabled={saving} onClick={() => { setDraft(value); setEditing(false); }}>取消</button>
           <button className="is-primary" type="button" disabled={saving} onClick={() => void commit()}>{saving ? "保存中…" : "保存"}</button>
         </footer>

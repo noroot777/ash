@@ -1,5 +1,5 @@
 import type { AppSettings } from "@ash/shared";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import { COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "@ash/shared";
 import { ACCEPT_CLEAN } from "@ash/shared/workflow";
 import { db } from "./db/index.js";
 import { MAX_BODY_MB } from "./handoff-body.js";
@@ -47,6 +47,12 @@ const SETTING_SPECS = {
     ok: (v: unknown) => typeof v === "string" && (ACCEPT_CLEAN as readonly string[]).includes(v),
     hint: `必须是 ${ACCEPT_CLEAN.join(" / ")} 之一（删 worktree 和分支 / 只删 worktree / 都留着）`,
   },
+  // 输入框里「哪一下算发送」。个人面的键(PERSONAL_SETTING_KEYS):同一台机器上两个人
+  // 可以各按各的习惯。
+  composerSendKey: {
+    ok: (v: unknown) => typeof v === "string" && (COMPOSER_SEND_KEYS as readonly string[]).includes(v),
+    hint: `必须是 ${COMPOSER_SEND_KEYS.join(" / ")} 之一（回车直接发送 / ⌘-Ctrl+回车发送）`,
+  },
   handoffRequireApproval: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
   handoffEncrypt: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
   handoffMaxBodyMb: {
@@ -81,6 +87,13 @@ const READ_ONLY_SPECS: Partial<Record<keyof AppSettings, (v: unknown) => boolean
 const SETTING_KEYS = Object.keys(SETTING_SPECS) as (keyof AppSettings)[];
 const isSettingKey = (key: string): key is keyof AppSettings =>
   (SETTING_KEYS as string[]).includes(key);
+
+/**
+ * 这个值配得上这个键吗。给**个人面**那张表用(auth/personal-settings.ts):它按人另存
+ * 一份,读回来时同样可能是手改过的库或上一版留下的旧值,校验判据不该在那边再写一遍。
+ */
+export const acceptsSettingValue = (key: keyof AppSettings, value: unknown): boolean =>
+  (READ_ONLY_SPECS[key] ?? SETTING_SPECS[key].ok)(value);
 
 // Ignore malformed persisted values and fall back to the factory default. The
 // PATCH boundary prevents new bad values; this only protects hand-edited/old DBs.

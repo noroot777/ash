@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Info, Plus } from "@phosphor-icons/react";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import type { useSideChat } from "./useSideChat.ts";
 
 type SideChatState = ReturnType<typeof useSideChat>;
@@ -17,6 +18,7 @@ const roomTime = (at: string) =>
  */
 export function SideChatHeadControls({ chat }: { chat: SideChatState }) {
   const [helpOpen, setHelpOpen] = useState(false);
+  const sendKeys = useSendKeyLabels();
   const help = useRef<HTMLDivElement>(null);
   const helpTrigger = useRef<HTMLButtonElement>(null);
   useDismissable({ enabled: helpOpen, containerRef: help, restoreFocusRef: helpTrigger, onClose: () => setHelpOpen(false) });
@@ -36,7 +38,7 @@ export function SideChatHeadControls({ chat }: { chat: SideChatState }) {
       {helpOpen && <div className="side-chat-help" ref={help} role="dialog" aria-label="侧聊说明">
         <p>围绕主会话独立提问，不打断主任务。需要回传时，直接说：<code>把结论告诉主任务</code>。</p>
         <p>首次发送时带入主会话快照，不因篇幅被拒（仅超过 64 MB 的极长记录会因服务内存保护挡下）；主会话特别长时会先整理一份摘要，可能增加等待时间和用量，整理过程可随时停止。关闭面板保留对话与草稿。</p>
-        <p>输入框里 Enter 发送，Shift Enter 换行；截图和文件可直接粘贴或用回形针选取。</p>
+        <p>输入框里 {sendKeys.send} 发送，{sendKeys.newline} 换行；截图和文件可直接粘贴或用回形针选取。</p>
       </div>}
     </div>
   </InspectorHeadActions>;

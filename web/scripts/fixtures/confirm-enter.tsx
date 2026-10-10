@@ -1,10 +1,15 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ConfirmDialog } from "../../src/task-detail/ConfirmDialog.tsx";
+import { syncComposerSendKey } from "../../src/lib/sendKey.ts";
 import "../../src/styles/global.css";
 
 // 确认框「回车 = 确认」的台子。各种 children 形态各摆一个：空的、带多行输入的、带单行
 // 输入的、按钮不可按的，外加一个「框里再开一框」用来看回车归不归最上面那层。
+//
+// 多行输入里那一下回车跟着「输入框发送键」那一档走（设置 → 默认规则 → 输入框），所以
+// 台子上还摆了两颗切档按钮：真实页面里这一档由 /settings 的应答喂进来，这里直接调同一个
+// 入口（syncComposerSendKey），走的是同一条路。
 
 type Kind = "plain" | "textarea" | "input" | "disabled";
 
@@ -19,7 +24,11 @@ function Fixture() {
 
   return <main>
     <p data-testid="log">{log.join(",")}</p>
-    <button type="button" data-testid="reset" onClick={() => { setLog([]); close(); }}>清空</button>
+    {/* 清空也把多行输入里的字一起收掉：同一条用例要连开好几次这个框，上一次剩下的字
+        会跟着下一次一起冒出来（光标落在开头，新打的字插在前面）。 */}
+    <button type="button" data-testid="reset" onClick={() => { setLog([]); setText(""); close(); }}>清空</button>
+    <button type="button" data-testid="send-key-enter" onClick={() => syncComposerSendKey("enter")}>回车直发</button>
+    <button type="button" data-testid="send-key-mod" onClick={() => syncComposerSendKey("mod-enter")}>⌘ 回车发</button>
     {(["plain", "textarea", "input", "disabled"] as Kind[]).map((kind) => (
       <button key={kind} type="button" data-testid={`open-${kind}`} onClick={() => setOpen(kind)}>打开 {kind}</button>
     ))}

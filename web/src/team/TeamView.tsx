@@ -27,6 +27,8 @@ import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useFileMention } from "../lib/useFileMention.ts";
 import { FileMentionMenu } from "../components/MentionMenu.tsx";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
@@ -75,6 +77,7 @@ function TeamReplyBox({
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const sendKeys = useSendKeyLabels();
   // 跟着输入行数长高;顶边那条拖动条拖过之后以拖出来的高度为准——跟普通任务回复框
   // 同一套(task-detail/ReplyResizeHandle.tsx),高度只有 useAutoGrowTextarea 一个写者,
   // 所以 CSS 那边把原生右下角把手关掉了。
@@ -217,7 +220,7 @@ function TeamReplyBox({
           onKeyDown={(event) => {
             if (slash.onKeyDown(event)) return;
             if (mention.onKeyDown(event)) return;
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void send(); }
+            if (isSendKeyEvent(event)) { event.preventDefault(); void send(); }
           }}
         />
         <footer>
@@ -236,7 +239,7 @@ function TeamReplyBox({
           >
             <Clock size={14} />
           </button>
-          <span>{uploads.uploading ? uploadingLabel(uploads.pending) : "调度台 · ⌘↵ 发送"}</span>
+          <span>{uploads.uploading ? uploadingLabel(uploads.pending) : `调度台 · ${sendKeys.sendShort} 发送`}</span>
           <button type="button" disabled={disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)} onClick={() => void send()} aria-label="发送给调度者">
             {sending ? <SpinnerGap size={14} className="is-spinning" /> : <PaperPlaneTilt size={14} weight="fill" />}
           </button>

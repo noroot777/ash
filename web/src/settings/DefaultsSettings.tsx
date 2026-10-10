@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AppSettings } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import type { ComposerSendKey } from "@ash/shared";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { api } from "../lib/api.ts";
 import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
+import { ComposerSendKeyCard } from "./ComposerSendKeyCard.tsx";
 import { HandoffSettings } from "./HandoffSettings.tsx";
 import { InstanceModeCard } from "./InstanceModeCard.tsx";
 import { SkillScanCard } from "./SkillScanCard.tsx";
@@ -29,6 +31,18 @@ export function DefaultsSettings({ notify, onOpen }: {
       .catch((error) => notify(error instanceof Error ? error.message : "默认规则读取失败"))
       .finally(() => setLoading(false));
   }, [notify]);
+
+  // 发送键是个人面的（一人一份），所以这里不看 canManageInstance。
+  const patchSendKey = useCallback(
+    async (next: ComposerSendKey) => {
+      try {
+        setSettings(await api.patchSettings({ composerSendKey: next }));
+      } catch (error) {
+        notify(error instanceof Error ? error.message : "发送键保存失败");
+      }
+    },
+    [notify],
+  );
 
   const patchSkillRefresh = useCallback(
     async (seconds: number) => {
@@ -85,6 +99,11 @@ export function DefaultsSettings({ notify, onOpen }: {
           </div>
         </div>
       </section>
+      <ComposerSendKeyCard
+        value={settings.composerSendKey}
+        loading={loading}
+        onChange={patchSendKey}
+      />
       <HandoffSettings
         settings={settings}
         loading={loading}

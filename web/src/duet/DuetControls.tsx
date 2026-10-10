@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { GateAction, TaskListItem } from "@ash/shared";
 import { CheckCircle, Question, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
 import type { DuetGate } from "./duetState.ts";
 import { DuetHandoffBar } from "./DuetHandoff.tsx";
 import { gateAllowsRevision } from "./handoffPolicy.ts";
@@ -96,7 +97,7 @@ export function DuetGateControls({
       {mode && !handedOff && (
         <div className="duet-gate-composer">
           {mode === "ask" && <div className="duet-targets"><span>提问对象</span>{(["both", "A", "B"] as const).map((value) => <button type="button" className={target === value ? "is-selected" : ""} key={value} onClick={() => setTarget(value)}>{value === "both" ? "双方" : `讨论者 ${value}`}</button>)}</div>}
-          <textarea autoFocus rows={3} value={text} placeholder={mode === "inject" ? "补充意见，双方据此回炉再讨论（可粘贴截图）…" : "写下要澄清的问题（可粘贴截图）…"} onChange={(event) => setText(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void submit(); } }} />
+          <textarea autoFocus rows={3} value={text} placeholder={mode === "inject" ? "补充意见，双方据此回炉再讨论（可粘贴截图）…" : "写下要澄清的问题（可粘贴截图）…"} onChange={(event) => setText(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => { if (isSendKeyEvent(event)) { event.preventDefault(); void submit(); } }} />
           <div className="duet-gate-composer-actions">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
             <button type="button" className="duet-gate-submit" disabled={busy || uploads.uploading || !canSubmit} onClick={() => void submit()}>{busy || uploads.uploading ? <SpinnerGap size={13} className="is-spinning" /> : null}{uploads.uploading ? uploadingLabel(uploads.pending) : "提交并继续"}</button>
