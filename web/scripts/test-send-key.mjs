@@ -18,7 +18,10 @@
 //      端点都「没有写在途」，仍然不算数（第 3 轮审查问题 1）；
 //   ⑪ 发送键保存在先、另一项设置的保存后发**先完成**，两次保存都要生效 —— 不同字段
 //      之间不存在「谁更晚谁赢」（第 3 轮审查问题 2）；
-//   ⑫ 同上，但后发的那次保存失败：它失败了，更不该把成功的发送键保存拒掉。
+//   ⑫ 同上，但后发的那次保存失败：它失败了，更不该把成功的发送键保存拒掉；
+//   ⑬ 保存还在途中离开设置页再回来（卡片级的「保存中」就这么丢掉的），再改一次：
+//      那条被延迟的旧 PATCH 不许最后才落到服务端把用户最后选的那一档覆盖掉
+//      —— 顺序得在**请求发出前**排好，光挑应答管不到服务端里存的是什么（第 3 轮审查）。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -83,10 +86,7 @@ try {
   // ② 设置卡上切回「回车直发」：PATCH 落到服务端，提示文案当场跟着变。
   await picker.selectOption("enter");
   await assertHint(hint, "Enter 发送 · Shift Enter 换行");
-  await page.waitForFunction(async () => {
-    const response = await fetch("/api/settings");
-    return (await response.json()).composerSendKey === "enter";
-  }, undefined, { timeout: 5000 });
+  await settleServerTo(page, "enter", "设置卡上改一下就该 PATCH 回服务端");
 
   // ③ 这一档下裸回车就提交。
   await typeThen("改一下登录页", "Enter");
@@ -221,10 +221,67 @@ try {
   await typeThen("另一项保存失败", "Enter");
   assert.deepEqual(await entries(), [], "成功存成 ⌘/Ctrl 之后，裸回车仍该是换行");
 
+  // ⑬ 同一字段的多次保存必须按用户的操作顺序落到服务端。构造报告里那条路：
+  //    保存在途 → 离开设置页再回来（卡片重新挂载、「保存中」丢失）→ 再改一次。
+  await open("?send-key=mod-enter");
+  await settleTo(() => window.__state().mode === "mod-enter", "开场该学到服务端那一份");
+  await page.evaluate(() => window.__holdPatch(true)); // 第一条:放行才写,还没到服务端
+  await picker.selectOption("enter");
+  await page.waitForTimeout(200);
+  await page.evaluate(() => window.__reopenSettings()); // 离开再回来:卡片的 saving 丢了
+  // 重新挂载的标志就是下拉不再禁用 —— 报告指出的正是这个:上一个实例的「保存中」没了。
+  await picker.locator("xpath=.").waitFor();
+  await page.waitForFunction(
+    () => !document.querySelector('[data-settings-anchor="send-key"] select')?.disabled,
+    undefined, { timeout: 5000 },
+  ).catch(() => assert.fail("卡片该重新挂载、下拉不再带着上一个实例的「保存中」"));
+  assert.equal((await state()).epoch, 1, "卡片确实重新挂载过一次");
+  assert.equal(
+    await picker.inputValue(), "enter",
+    "重新挂载的下拉该显示用户最后选的那一档，不是他已经改掉的旧值",
+  );
+  await picker.selectOption("mod-enter");              // 第二条:排在第一条后面,还没发出
+  await page.waitForTimeout(300);
+  assert.equal(
+    (await state()).applied, 0,
+    "第一条还扣着，同字段的第二条就不该抢先落到服务端",
+  );
+  await page.evaluate(() => window.__releasePatch());  // 第一条落地,第二条才接着发
+  await settleTo(() => window.__state().applied === 2, "两条保存都该落到服务端");
+  await settleTo(() => window.__state().value === "mod-enter", "界面该停在用户最后选的那一档");
+  assert.equal(
+    await serverSendKey(page), "mod-enter",
+    "旧保存不该最后才落到服务端、把用户最后选的那一档覆盖掉",
+  );
+  assert.equal((await state()).mode, "mod-enter", "按键行为跟服务端存成的那一档一致");
+  await typeThen("离开再回来改了一次", "Enter");
+  assert.deepEqual(await entries(), [], "服务端存的是 ⌘/Ctrl 那一档，裸回车该是换行");
+  assert.equal(await objective.inputValue(), "离开再回来改了一次\n", "这一下回车该是换行");
+
   console.log("send-key test passed");
 } finally {
   await browser?.close();
   await server.close();
+}
+
+function serverSendKey(page) {
+  return page.evaluate(async () => (await (await fetch("/api/settings")).json()).composerSendKey);
+}
+
+/**
+ * 轮询服务端那一份,直到它等于 expected。
+ *
+ * **不要**把 async 函数交给 `page.waitForFunction`:它不 await 返回的 Promise,而
+ * Promise 对象本身是 truthy —— 断言会在 2ms 内「满足」,等于一行没写。这个坑让本文件
+ * 原先那条「PATCH 真回到服务端了吗」的断言空转了三轮(实测:同步 `() => false` 会老实
+ * 超时,`async () => false` 立刻通过)。要读页面以外的东西就用 `page.evaluate` 自己轮。
+ */
+async function settleServerTo(page, expected, message) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if ((await serverSendKey(page)) === expected) return;
+    await page.waitForTimeout(100);
+  }
+  assert.fail(`${message}；服务端现在是 ${await serverSendKey(page)}`);
 }
 
 async function assertHint(hint, expected) {

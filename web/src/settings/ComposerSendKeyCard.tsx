@@ -22,9 +22,9 @@ export function ComposerSendKeyCard({ value, loading, onChange }: {
   loading: boolean;
   onChange: (next: ComposerSendKey) => Promise<void>;
 }) {
-  // 存的那一下把下拉按住:两次快速改动会发出两条 PATCH，服务端最后留下哪一条取决于
-  // 它们的到达顺序，而界面上只剩用户最后点的那个 —— 两边对不上就没法解释了。
-  // （前端自己采纳哪一份应答另有一道闸，见 sendKey.ts 的 nextSettingsTicket。）
+  // 存的那一下把下拉按住:让用户看出「这一下在存」。顺序**不**靠它保证 —— 它随组件
+  // 卸载消失(离开设置页再回来就重置),而同一项设置的多次保存该按什么顺序落到服务端,
+  // 由 `lib/settingsSync.ts` 在共享层排队管(同字段排队发、不同字段并发)。
   const [saving, setSaving] = useState(false);
   const labels = sendKeyLabels(value);
   return (
