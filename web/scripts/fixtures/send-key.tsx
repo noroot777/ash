@@ -22,9 +22,11 @@ import { useSendKeyLabels } from "../../src/lib/useComposerSendKey.ts";
 //   __probe()                  再发一条普通 GET（立刻回）
 //   __probeHeld()              再发一条 GET，应答被扣住，交回的是**发出那一刻**的值
 //   __releaseProbe()           放行被扣住的那条 GET
-//   __holdPatch(applyOnRelease) 扣住下一条 PATCH 的应答。applyOnRelease=true 表示
-//                              「服务端还没写，放行才写」；false 表示「服务端已经写了，
-//                              只是应答在路上」——两种交错对应两类缺陷，别混用
+//   __holdPatch(applyOnRelease, failOnRelease)
+//                              扣住下一条 PATCH。applyOnRelease=true 表示「服务端还没
+//                              写，放行才写」；false 表示「服务端已经写了，只是应答在
+//                              路上」——两种交错对应两类缺陷，别混用。failOnRelease=true
+//                              则放行时回 503（服务端一个字都没写）
 //   __releasePatch()           放行被扣住的那条 PATCH
 //   __patchSkill(n)            改另一项设置（技能刷新间隔），走设置页同一个形状
 //   __failPatch(n)             接下来 n 条**没被扣住的** PATCH 直接 503
@@ -32,6 +34,9 @@ import { useSendKeyLabels } from "../../src/lib/useComposerSendKey.ts";
 //                              「离开设置页再回来」：卡片级的「保存中」就这么丢掉的
 //   __allowReads()             取消剩余的 GET 失败
 //   __state()                  { mode, value, skill, epoch, applied }
+//                              mode  = 此刻真正生效的那一档（含排着队还没落地的选择）
+//                              value = settingsSync **交出去的快照**里的那一档，按设计
+//                                      只该有服务端确认过的值
 //                              applied = 真正落到「服务端」的 PATCH 条数
 
 const params = new URLSearchParams(location.search);
@@ -50,7 +55,7 @@ const reply = (body: unknown) => new Response(JSON.stringify(body), {
 });
 
 let patchGate: (() => void) | null = null;
-let holdPatch: { applyOnRelease: boolean } | null = null;
+let holdPatch: { applyOnRelease: boolean; failOnRelease: boolean } | null = null;
 // 显式扣住的那条 GET（__probeHeld）。跟「第几条 GET」无关，免得顺序一变用例就飘。
 let probeGate: (() => void) | null = null;
 let probing = false;
@@ -72,6 +77,7 @@ window.fetch = async (input, init) => {
       // 应答那一刻的快照：放行之后 stored 再变也不影响这一份（真实应答就是这样）。
       const snapshot = held.applyOnRelease ? null : { ...stored };
       await new Promise<void>((resolve) => { patchGate = resolve; });
+      if (held.failOnRelease) return new Response("boom", { status: 503 });
       if (held.applyOnRelease) { Object.assign(stored, patch); applied += 1; }
       return reply(snapshot ?? stored);
     }
@@ -119,7 +125,9 @@ function Fixture() {
         probing = false;
       },
       __releaseProbe: () => { probeGate?.(); probeGate = null; },
-      __holdPatch: (applyOnRelease = false) => { holdPatch = { applyOnRelease }; },
+      __holdPatch: (applyOnRelease = false, failOnRelease = false) => {
+        holdPatch = { applyOnRelease, failOnRelease };
+      },
       __releasePatch: () => { patchGate?.(); patchGate = null; },
       __patchSkill: (seconds: number) => {
         void api.patchSettings({ skillRefreshSeconds: seconds }).then(setSettings).catch(() => undefined);
@@ -143,9 +151,7 @@ function Fixture() {
   return <main className="settings-main" style={{ width: "min(100%, 960px)", margin: "auto", padding: 20 }}>
     <p data-testid="log">{log.join(",")}</p>
     <p data-testid="hint">{labels.send} 发送 · {labels.newline} 换行</p>
-    <ComposerSendKeyCard
-      key={cardEpoch} value={settings.composerSendKey} loading={loading} onChange={changeSendKey}
-    />
+    <ComposerSendKeyCard key={cardEpoch} loading={loading} onChange={changeSendKey} />
     <div style={{ marginTop: 16 }}>
       <ComposerObjective
         body={body} mode="single" textareaRef={textareaRef}

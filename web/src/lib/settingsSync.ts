@@ -32,6 +32,13 @@
 // 被判定为过期的应答**一个字都不往外发**:交回的是合并后的权威快照,所以设置页那
 // 十来个 `setSettings(await api.patchSettings(...))` 不会被一份旧对象倒灌——在一处
 // 收口,好过让每个调用点自己想起来比一次。
+//
+// 交出去的快照里**只有服务端确认过的值**,排着队还没落地的选择一律不叠进去。叠进去
+// 的那一版(第 3 轮那版)会把未保存的值灌进设置页自己持有的 state:保存失败时这里能
+// 把按键行为退回去,却退不了别人手里那份 state,于是下拉和「当前」说明继续声称一个
+// 没存成的档位正在生效,而裸回车按的是旧档 —— 界面撒谎比显示滞后危险得多
+// (第 4 轮审查问题 1)。在途的选择只经 `publish()` 推给 sendKey,而显示那一档的卡片
+// 直接订阅它(`useComposerSendKey`),所以显示、提示、按键三者同源,不会各说一套。
 import type { AppSettings } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import { json, request } from "./apiClient.ts";
@@ -61,7 +68,7 @@ export async function readSettings(): Promise<AppSettings> {
   const startedUnsettled = unsettledWrites > 0;
   const fresh = await request<AppSettings>("/settings");
   const full = { ...DEFAULT_APP_SETTINGS, ...fresh };
-  if (startedUnsettled || seenWrites !== writeSeq || unsettledWrites > 0) return shownFrom(latest ?? full);
+  if (startedUnsettled || seenWrites !== writeSeq || unsettledWrites > 0) return latest ?? full;
   // 全程没跨写 ⇒ 此刻也没有写排着队 ⇒ 这份快照含了到目前为止的全部写,字段账可以清空
   // (之后发起的写序号都比现在大,清空不会让它们误判成「已被更晚的写拍过」)。
   writtenAt.clear();
@@ -118,17 +125,17 @@ function adoptWrite(fresh: AppSettings, seq: number, keys: readonly SettingKey[]
     merged[key] = confirmed[key];
     accepted = true;
   }
-  if (!accepted && latest) return shownFrom(latest);
+  if (!accepted && latest) return latest;
   return apply(merged as unknown as AppSettings);
 }
 
 /**
- * 「此刻该按哪一档」= 服务端确认过的那份,叠上排着队还没落地的选择。
+ * 「此刻该按哪一档」= 服务端确认过的那份,叠上排着队还没落地的选择。**只给 publish 用**
+ * —— 它的结果不进任何对外交出的快照(见文件头)。
  *
- * 为什么在途的选择优先:卡片上写着「改完立刻生效,不用刷新页面」,而且少了这一层,
+ * 为什么在途的选择优先:卡片上写着「改完立刻生效,不用刷新页面」;而且少了这一层,
  * 离开设置页再回来时下拉会把在途的选择显示成没发生过,用户据此再改一次就是一串同字段
- * 的写(第 3 轮审查问题 1)。显示值、提示文案、按键行为三者由这一个函数统一供给,
- * 不会出现「下拉说一套、回车做另一套」。
+ * 的写(第 3 轮审查问题 1)。
  */
 function shownFrom(confirmed: AppSettings): AppSettings {
   if (pending.size === 0) return confirmed;
@@ -145,8 +152,8 @@ function shownFrom(confirmed: AppSettings): AppSettings {
  * 钉在这里而不是各个调用点:前端学到这些档位的路**只有 `/settings` 那两条**,而漏掉
  * 任何一条的表现是「改了设置,界面要刷新页面才对」。
  */
-function publish(): AppSettings | null {
-  if (!latest) return null;
+function publish(): void {
+  if (!latest) return;
   const shown = shownFrom(latest);
   // 这两档对「在途的选择」的态度相反,别顺手统一:
   //  · CLI 额度决定的是**向服务端要哪一份目录**,必须等服务端真写进去再推。拿在途值
@@ -156,10 +163,10 @@ function publish(): AppSettings | null {
   //    卡片上写的「改完立刻生效,不用刷新页面」。
   syncHostCliPolicy({ instanceMode: latest.instanceMode, sharedHostCli: latest.sharedHostCli });
   syncComposerSendKey(shown.composerSendKey);
-  return shown;
 }
 
 function apply(settings: AppSettings): AppSettings {
   latest = settings;
-  return publish() ?? settings;
+  publish();
+  return settings;
 }

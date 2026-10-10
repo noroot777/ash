@@ -21,7 +21,10 @@
 //   ⑫ 同上，但后发的那次保存失败：它失败了，更不该把成功的发送键保存拒掉；
 //   ⑬ 保存还在途中离开设置页再回来（卡片级的「保存中」就这么丢掉的），再改一次：
 //      那条被延迟的旧 PATCH 不许最后才落到服务端把用户最后选的那一档覆盖掉
-//      —— 顺序得在**请求发出前**排好，光挑应答管不到服务端里存的是什么（第 3 轮审查）。
+//      —— 顺序得在**请求发出前**排好，光挑应答管不到服务端里存的是什么（第 3 轮审查）；
+//   ⑭ 发送键保存**失败**时，下拉、「当前」说明、输入框提示和真实的回车行为必须一起退回
+//      已确认的那一档；两条真实路径各验一遍 —— 另一项设置同时存成了，以及保存在途中
+//      离开设置页再回来（第 4 轮审查）。界面继续声称一个没存成的档位比显示滞后危险。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -257,6 +260,56 @@ try {
   await typeThen("离开再回来改了一次", "Enter");
   assert.deepEqual(await entries(), [], "服务端存的是 ⌘/Ctrl 那一档，裸回车该是换行");
   assert.equal(await objective.inputValue(), "离开再回来改了一次\n", "这一下回车该是换行");
+
+  // ⑭ 保存失败：显示、提示、按键行为必须一起退回已确认的那一档。
+  //    路径 A —— 另一项设置同时存成了（它的应答里捎着发送键的旧值）。
+  await open("?send-key=enter");
+  await settleTo(() => window.__state().mode === "enter", "开场该学到服务端那一份");
+  await page.evaluate(() => window.__holdPatch(true, true)); // 扣住，放行时 503
+  await picker.selectOption("mod-enter");
+  await page.waitForTimeout(250);
+  assert.equal((await state()).mode, "mod-enter", "在途期间按用户刚选的那一档走");
+  assert.equal(await picker.inputValue(), "mod-enter", "下拉显示的也是它");
+  await page.evaluate(() => window.__patchSkill(7200));      // 另一项设置存成了
+  await settleTo(() => window.__state().skill === 7200, "另一项设置该存成");
+  assert.equal(
+    (await state()).value, "enter",
+    "交给设置页的快照只能带服务端确认过的值，不许把没存成的那一档灌进去",
+  );
+  await page.evaluate(() => window.__releasePatch());        // 发送键保存失败
+  await settleTo(() => window.__state().mode === "enter", "保存失败该退回已确认的那一档");
+  assert.equal(await picker.inputValue(), "enter", "下拉当场跟着退，不许继续显示没存成的那一档");
+  await assertHint(hint, "Enter 发送 · Shift Enter 换行");
+  assert.equal(await serverSendKey(page), "enter", "服务端本来就一个字没写");
+  await typeThen("保存失败之后", "Enter");
+  assert.deepEqual(
+    await entries(), ['submit("保存失败之后")'],
+    "退回的是回车直发那一档，裸回车就该发送 —— 显示和行为得是同一件事",
+  );
+
+  //    路径 B —— 保存在途中离开设置页再回来（卡片重新挂载过），随后保存失败。
+  await open("?send-key=enter");
+  await settleTo(() => window.__state().mode === "enter", "开场该学到服务端那一份");
+  await page.evaluate(() => window.__holdPatch(true, true));
+  await picker.selectOption("mod-enter");
+  await page.waitForTimeout(250);
+  await page.evaluate(() => window.__reopenSettings());
+  await page.waitForFunction(
+    () => !document.querySelector('[data-settings-anchor="send-key"] select')?.disabled,
+    undefined, { timeout: 5000 },
+  ).catch(() => assert.fail("卡片该重新挂载、下拉不再带着上一个实例的「保存中」"));
+  assert.equal(await picker.inputValue(), "mod-enter", "重新挂载时显示在途的那一档");
+  assert.equal((await state()).value, "enter", "交出去的快照仍只有已确认的值");
+  await page.evaluate(() => window.__releasePatch());        // 失败
+  await settleTo(() => window.__state().mode === "enter", "失败后该退回已确认的那一档");
+  assert.equal(await picker.inputValue(), "enter", "重新挂载过的卡片同样当场退回");
+  await assertHint(hint, "Enter 发送 · Shift Enter 换行");
+  assert.equal(await serverSendKey(page), "enter", "服务端一个字没写");
+  await typeThen("重进设置后保存失败", "Enter");
+  assert.deepEqual(
+    await entries(), ['submit("重进设置后保存失败")'],
+    "退回回车直发那一档后，裸回车就该发送",
+  );
 
   console.log("send-key test passed");
 } finally {

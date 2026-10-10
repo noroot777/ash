@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ComposerSendKey } from "@ash/shared";
 import { sendKeyLabels } from "../lib/sendKey.ts";
+import { useComposerSendKey } from "../lib/useComposerSendKey.ts";
 
 // 设置页里的「输入框」一块：全站输入框按哪一下算发送。
 //
@@ -17,11 +18,15 @@ const CHOICES: { value: ComposerSendKey; label: string }[] = [
   { value: "mod-enter", label: "⌘ / Ctrl + 回车发送（回车换行）" },
 ];
 
-export function ComposerSendKeyCard({ value, loading, onChange }: {
-  value: ComposerSendKey;
+export function ComposerSendKeyCard({ loading, onChange }: {
   loading: boolean;
   onChange: (next: ComposerSendKey) => Promise<void>;
 }) {
+  // 显示哪一档**不**从调用方的 state 来,直接订阅全站那一份(`lib/sendKey.ts`)。
+  // 这样下拉、下面那句「当前」和输入框里回车的实际行为永远是同一个值:保存失败时它
+  // 退回已确认的那一档,卡片当场跟着退,不会继续声称一个没存成的档位正在生效
+  // (第 4 轮审查问题 1)。
+  const value = useComposerSendKey();
   // 存的那一下把下拉按住:让用户看出「这一下在存」。顺序**不**靠它保证 —— 它随组件
   // 卸载消失(离开设置页再回来就重置),而同一项设置的多次保存该按什么顺序落到服务端,
   // 由 `lib/settingsSync.ts` 在共享层排队管(同字段排队发、不同字段并发)。

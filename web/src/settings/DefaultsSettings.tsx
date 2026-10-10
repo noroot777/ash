@@ -100,7 +100,6 @@ export function DefaultsSettings({ notify, onOpen }: {
         </div>
       </section>
       <ComposerSendKeyCard
-        value={settings.composerSendKey}
         loading={loading}
         onChange={patchSendKey}
       />
