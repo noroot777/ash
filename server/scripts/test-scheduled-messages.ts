@@ -141,6 +141,29 @@ assert.equal(pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, single("
   "queued(已拉起还没 spawn)同样算在跑");
 assert.equal(pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, single("paused"), now).action, "deliver",
   "提问/检查点暂停算空闲,排队消息正好是那句答复");
+// 第 xNb655YqYzcA 链第 2 轮:排队没轮到的 paused/backlog,投递 = continueTask 开真实
+// 执行回合,会跟同队 running 成员双跑 —— 必须等让位;终态任务的投递是续聊旁路
+// (followUpFrom),不占队列,queueBlocked 不该挡它。
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, { ...single("paused"), queueBlocked: true }, now).action,
+  "wait",
+  "排队没轮到的 paused 任务:投递会提前启动它,得等让位",
+);
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, { ...single("backlog"), queueBlocked: true }, now).action,
+  "wait",
+  "backlog 同口径",
+);
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, { ...single("paused"), queueBlocked: false }, now).action,
+  "deliver",
+  "轮到它了(没有挡路成员)照常投递",
+);
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, { ...single("done"), queueBlocked: true }, now).action,
+  "deliver",
+  "终态任务的续聊旁路不受队列挡",
+);
 assert.equal(pending.deliveryVerdict({ mode: "timed", sendAt: future }, single("done"), now).action, "wait",
   "定时消息没到点就得等,哪怕任务闲着");
 assert.equal(

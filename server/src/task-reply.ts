@@ -8,6 +8,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { continueTask } from "./orchestrator.js";
 import { enqueueMessage } from "./pending-messages.js";
+import { queueBlockers } from "./queues.js";
 import { nativeCliCommand } from "./skills.js";
 import { leadTypeOf } from "./team/session.js";
 import { replyWithAnnotationBatch } from "./page-annotation-routes.js";
@@ -54,7 +55,14 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   if (b.annotationBatchId) return replyWithAnnotationBatch(c, taskId, b.annotationBatchId, b.annotationRevision ?? 0);
 
   const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
-  if (b.sendAt || queueWhileRunning) {
+  // 排队没轮到的 paused/backlog:直接 continueTask 会在同队 running 成员旁边再开一个
+  // 回合(第 xNb655YqYzcA 链第 2 轮复现)。先把回复暂存成排队消息,让位后由投递链路
+  // (deliveryVerdict 同口径)送达。终态任务不走这里——续聊是 followUpFrom 旁路,不占队列。
+  const queueWhileWaiting =
+    !isTeam &&
+    (r.status === "paused" || r.status === "backlog") &&
+    (await queueBlockers(taskId)).length > 0;
+  if (b.sendAt || queueWhileRunning || queueWhileWaiting) {
     let when = new Date();
     if (b.sendAt) {
       when = new Date(b.sendAt);

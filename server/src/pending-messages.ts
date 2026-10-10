@@ -31,6 +31,7 @@ import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
+import { queueBlockers } from "./queues.js";
 import { whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -94,7 +95,11 @@ export async function enqueueMessage(input: Parameters<typeof pendingMessageRow>
 }
 
 // 判定所需的最小任务形状,写成结构类型,单测就能直接喂字面量。
-export type DeliveryTaskView = { mode: string | null; status: string; archived: boolean };
+// queueBlocked = 这个任务在队列里且还没轮到(queueBlockers 非空)。只对 paused/
+// backlog 生效:对它们投递 = 开启真实执行回合,必须守「同队至多一个在跑」;终态
+// 任务的投递是续聊旁路(followUpFrom),队列按原终态看待,不受队列挡(审查:
+// 「保留已完成任务正常续聊的语义」)。
+export type DeliveryTaskView = { mode: string | null; status: string; archived: boolean; queueBlocked?: boolean };
 export type DeliveryMessageView = { mode: string; sendAt: string };
 export type DeliveryVerdict =
   | { action: "deliver" }
@@ -123,6 +128,14 @@ export function deliveryVerdict(
   if (!isDueForDelivery(message, at)) return { action: "wait" };
   // 常驻调度台(team)正在说话时也接得住,所以只有单任务需要等它闲下来。
   if (task.mode === "single" && (task.status === "running" || task.status === "queued"))
+    return { action: "wait" };
+  // 排队没轮到的 paused/backlog:投递会 continueTask 开真实执行回合,等让位
+  // (第 xNb655YqYzcA 链第 2 轮:reply 只在入口暂存不够,30s tick 会从这里穿透)。
+  if (
+    task.mode === "single" &&
+    (task.status === "paused" || task.status === "backlog") &&
+    task.queueBlocked
+  )
     return { action: "wait" };
   return { action: "deliver" };
 }
@@ -448,7 +461,13 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
     try {
       if (fired.has(m.taskId) || inFlight.has(m.taskId) || cooling(m.taskId, at.getTime())) continue;
       const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0) ?? null;
-      const verdict = deliveryVerdict(m, t, at);
+      // 只有 paused/backlog 的单任务才需要问队列(verdict 也只对这两态看 queueBlocked),
+      // 其余状态别白查两张表。
+      const queueBlocked =
+        t != null && t.mode === "single" && (t.status === "paused" || t.status === "backlog")
+          ? (await queueBlockers(m.taskId)).length > 0
+          : false;
+      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked } : null, at);
       if (verdict.action === "wait") {
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。
