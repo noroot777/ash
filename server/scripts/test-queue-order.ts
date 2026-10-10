@@ -4,7 +4,7 @@
 // 跑:npm -w server run test:queue
 import assert from "node:assert/strict";
 import { queueStatus, selectNextInQueue, type QueueMember } from "../src/scheduler.js";
-import { isOvertaken, runningMembers, tailOrder } from "../src/queues.js";
+import { isOvertaken, manualStartBlockers, runningMembers, tailOrder } from "../src/queues.js";
 
 const m = (id: string, status: string, extra: Partial<QueueMember> = {}): QueueMember => ({
   id,
@@ -131,5 +131,27 @@ assert.deepEqual(runningMembers([r("A", "running"), r("B", "backlog")]), ["A"]);
 assert.deepEqual(runningMembers([r("A", "running", { followUpFrom: "done" }), r("B", "running")]), ["B"]);
 // archived / team 成员不参与队列调度,也不算在跑
 assert.deepEqual(runningMembers([r("A", "running", { archived: true }), r("B", "running", { mode: "team" }), r("C", "running")]), ["C"]);
+
+// ── manualStartBlockers(手动起跑的整队检查:/run、/fire、重试回合共用)─────────
+
+const b = (id: string, position: number, status: string, extra: Record<string, unknown> = {}) => ({
+  id, position, status, archived: false, mode: "single" as string | null, followUpFrom: null as string | null, ...extra,
+});
+// 审查复现:B running 排在队头 A(backlog)后面,A 没有前驱,旧口径放行 → 双跑。
+// 新口径:同队任何在跑成员都挡,位置在前在后无所谓。
+assert.deepEqual(manualStartBlockers([b("A", 0, "backlog"), b("B", 1, "running")], "A"), ["B"]);
+assert.deepEqual(manualStartBlockers([b("A", 0, "backlog"), b("B", 1, "queued")], "A"), ["B"]);
+// 前面未让位的照旧挡;done/canceled/failed 已让位不挡。
+assert.deepEqual(manualStartBlockers([b("A", 0, "backlog"), b("B", 1, "backlog")], "B"), ["A"]);
+assert.deepEqual(manualStartBlockers([b("A", 0, "done"), b("B", 1, "backlog")], "B"), []);
+assert.deepEqual(manualStartBlockers([b("A", 0, "failed"), b("B", 1, "backlog")], "B"), []);
+// 终态任务的续聊回合 status=running,按续聊前的终态看,不挡。
+assert.deepEqual(manualStartBlockers([b("A", 0, "backlog"), b("B", 1, "running", { followUpFrom: "done" })], "A"), []);
+// archived / team 成员不算在跑(调度口径同源)。
+assert.deepEqual(manualStartBlockers([b("A", 0, "backlog"), b("B", 1, "running", { archived: true })], "A"), []);
+assert.deepEqual(manualStartBlockers([b("A", 0, "backlog"), b("B", 1, "running", { mode: "team" })], "A"), []);
+// 自己在跑不算挡自己;不在队列返回空。
+assert.deepEqual(manualStartBlockers([b("A", 0, "running"), b("B", 1, "backlog")], "A"), []);
+assert.deepEqual(manualStartBlockers([b("A", 0, "backlog")], "X"), []);
 
 console.log("queue order tests passed");

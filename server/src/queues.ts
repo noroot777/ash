@@ -7,7 +7,7 @@
 // 推进规则本身不在这里,统一由 scheduler.ts 的 advanceQueue 负责;本文件只做
 // 「改队列内容」并在改完推一把。
 import type { Context, Hono } from "hono";
-import { eq, and, lt, asc, inArray } from "drizzle-orm";
+import { eq, asc, inArray } from "drizzle-orm";
 import type { Task } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
@@ -91,33 +91,59 @@ export function runningMembers(
     .map((t) => t.id);
 }
 
-// 队列前置检查:task 在某个 queue 里时,前面所有 item 必须已让位才允许单独启动,
-// 否则等于绕过队列顺序。/run 与 /fire 共用。返回挡路的任务 id。
-// 「让位」的判定跟 selectNextInQueue 的透明跳过**同源**:done / canceled / failed
-// 三种都不算挡路 —— 自动推进会跳过失败的继续跑,人手动点运行却被拦住是两套说法。
-// 状态一律过 queueStatus():前面那位若正在「续聊」(终态任务的追加对话),按它
-// 续聊前的终态算,一段闲聊不该把后面的人挡住。
+// 手动启动入口(/run、/fire、重试回合)的队列前置检查——纯判定,单测直接喂字面量。
+// 两类挡路:
+// ① **整队在跑**(与 selectNextInQueue 同口径,排除自己):同队任何成员
+//    running/queued,现在就不能再起第二个。此前只看「前面的」,队头任务没有前驱
+//    直接放行,排在后面的 running 成员被无视——B 在跑时排进 [A, B],打开 A 点
+//    「运行」,A、B 同队双跑(审查真实复现,双方 agent 进程都实际存活)。
+//    口径同调度:archived/team 不算,状态过 queueStatus(终态续聊按终态看)。
+// ② 排在它**前面**、还没让位的成员(done/canceled/failed 已让位)——与透明跳过
+//    同源:自动推进会跳过失败的继续跑,人手动点运行却被拦住是两套说法。
+export function manualStartBlockers(
+  members: {
+    id: string;
+    position: number;
+    status: string;
+    archived: boolean;
+    mode: string | null;
+    followUpFrom?: string | null;
+  }[],
+  taskId: string,
+): string[] {
+  const me = members.find((m) => m.id === taskId);
+  if (!me) return [];
+  const blockers = new Set<string>();
+  for (const m of members) {
+    if (m.id === taskId || m.archived) continue;
+    const s = queueStatus(m);
+    if (m.mode !== "team" && (s === "running" || s === "queued")) blockers.add(m.id);
+    if (m.position < me.position && s !== "done" && s !== "canceled" && s !== "failed") blockers.add(m.id);
+  }
+  return [...blockers];
+}
+
+// 队列前置检查(DB 包装):task 在某个 queue 里时,按 manualStartBlockers 的两类
+// 口径找出挡路成员,/run、/fire、重试回合共用。返回挡路的任务 id。
 export async function queueBlockers(taskId: string): Promise<string[]> {
   const myItem = (
     await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))
   ).at(0);
   if (!myItem) return [];
-  const before = await db
+  const items = await db
     .select()
     .from(queueItems)
-    .where(and(eq(queueItems.queueId, myItem.queueId), lt(queueItems.position, myItem.position)))
+    .where(eq(queueItems.queueId, myItem.queueId))
     .orderBy(asc(queueItems.position));
-  if (!before.length) return [];
-  const beforeTasks = await db
+  const rows = await db
     .select()
     .from(tasks)
-    .where(inArray(tasks.id, before.map((i) => i.taskId)));
-  return beforeTasks
-    .filter((t) => {
-      const s = queueStatus(t);
-      return !t.archived && s !== "done" && s !== "canceled" && s !== "failed";
-    })
-    .map((t) => t.id);
+    .where(inArray(tasks.id, items.map((i) => i.taskId)));
+  const position = new Map(items.map((i) => [i.taskId, i.position]));
+  return manualStartBlockers(
+    rows.map((r) => ({ ...r, position: position.get(r.id) ?? 0 })),
+    taskId,
+  );
 }
 
 // ── 重新排队(requeue)的两个纯函数 ────────────────────────────────────────────

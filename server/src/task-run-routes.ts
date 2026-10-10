@@ -48,6 +48,15 @@ import { readableRunPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { now } from "./util.js";
 
+// 手动起跑的队列占位:在队列里的任务,启动前先把 queued 落库(与 advanceQueue 拉起
+// 同款次序,resumeOrRunTask 随后改 running)。queueBlockers 的整队在跑守卫靠读库,
+// 不占位的话「检查通过 → 状态落库」之间的 await 窗口里,同队另一次手动启动读到的
+// 还是旧状态,守卫会被双双穿过。不在队列的任务不动(独立任务没有同队语义)。
+async function claimQueuedPlacement(taskId: string): Promise<void> {
+  const inQueue = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).length > 0;
+  if (inQueue) await setTaskStatus(taskId, "queued");
+}
+
 export function mountTaskRunRoutes(api: Hono): void {
   mountTaskArchiveRoutes(api);
   mountTaskRetryTurnRoutes(api);
@@ -107,7 +116,7 @@ api.post("/tasks/:id/run", async (c) => {
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
-      { error: "队列前面还有未完成的任务，先把它们处理完或把本任务移出队列", blockedBy },
+      { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy },
       409,
     );
   }
@@ -139,6 +148,11 @@ api.post("/tasks/:id/run", async (c) => {
     releaseTurn(taskId);
     return c.json({ error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }, 409);
   }
+  // 起跑占位:在队列里的任务先把 queued 落库再真正启动——与 advanceQueue 拉起同款
+  // 次序。queueBlockers 检查到状态真正落库之间原有好几个 await,并发的第二次手动
+  // 启动在这个窗口里读库看不到「有人正在起跑」,整队在跑守卫会被穿过(审查:检查
+  // 与起跑占位要在同一临界区);占位后窗口收进本请求内,后续任何入口立刻可见。
+  await claimQueuedPlacement(taskId);
   if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) }); return c.json({ started: true }, 202); }
   void resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
   return c.json({ started: true }, 202);
@@ -176,7 +190,7 @@ api.post("/tasks/:id/fire", async (c) => {
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
-      { error: "队列前面还有未完成的任务，先把它们处理完或把本任务移出队列", blockedBy },
+      { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy },
       409,
     );
   }
@@ -189,6 +203,8 @@ api.post("/tasks/:id/fire", async (c) => {
     releaseTurn(taskId);
     return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
   }
+  // 起跑占位,理由同 /run(检查与占位同临界区,堵并发双跑窗口)。
+  await claimQueuedPlacement(taskId);
   if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) }); return c.json({ started: true, fresh: true }, 202); }
   void runTask(taskId, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) }); // 全新一轮,永不 resume
   return c.json({ started: true, fresh: true }, 202);
