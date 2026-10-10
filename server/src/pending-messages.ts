@@ -29,10 +29,12 @@ import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
-import { scheduledMessages, tasks, groups } from "./db/schema.js";
+import { scheduledMessages, tasks, groups, queueItems } from "./db/schema.js";
+import { setTaskStatus } from "./status.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
-import { whenTurnIdle } from "./runs.js";
+import { isTurnClaimed, whenTurnIdle } from "./runs.js";
+import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, secs, settleBusyAgain, waitedFor } from "./pending-delivery-timing.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { id, now } from "./util.js";
@@ -169,53 +171,6 @@ function cooling(taskId: string, at: number): boolean {
   return last != null && at - last < FIRE_COOLDOWN_MS;
 }
 
-// ── 一条消息等了多久 ─────────────────────────────────────────────────────────
-// 计时起点是**这条消息第一次被判定「该发了」**的那一刻,按 message.id 记住,跨触发源、
-// 跨重试都不重置。老实现每次扫描都把起点刷新成「此刻」,于是一条被挡回、十几秒后才由
-// 兜底 tick 捡走的消息,账面上只有最后那一秒 —— 真正的等待永远算不进来。
-//
-// 用户排队那几十分钟(等 agent 这一轮说完)不在这本账里:那是排队语义本身,不是投递
-// 链路的账。所以起点是「判定该发」,不是「用户按下发送」。
-const dueSince = new Map<string, number>();
-
-// 判定该发**之后**任务又忙起来了(别的回合抢先跑、用户手点运行、重试撞上新一轮):那一段
-// 是「等 agent 这一轮说完」,跟用户排队时等的是同一件事,不是投递链路的账。单独记下来,
-// 否则它会整段混进「挡回后空等」里,把一段完全正常的运行读成「任务空闲却没投递」——
-// 排查时正好指向错误的方向(第 1 轮审查指出)。
-const busyAgain = new Map<string, { since: number | null; total: number }>();
-
-const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-
-function markDue(messageId: string, at: number): number {
-  const first = dueSince.get(messageId);
-  if (first != null) return first;
-  dueSince.set(messageId, at);
-  return at;
-}
-
-/** 已经判定过该发、这一轮又变回「等」:开始计这一段忙碌(已经在计就不动)。 */
-function noteBusyAgain(messageId: string, at: number): void {
-  if (!dueSince.has(messageId)) return; // 还没到「该发」,这段等待属于排队语义本身
-  const entry = busyAgain.get(messageId);
-  if (!entry) busyAgain.set(messageId, { since: at, total: 0 });
-  else if (entry.since == null) entry.since = at;
-}
-
-/** 又轮到它发了:收口当前这段忙碌,返回累计时长。 */
-function settleBusyAgain(messageId: string, at: number): number {
-  const entry = busyAgain.get(messageId);
-  if (!entry) return 0;
-  if (entry.since != null) {
-    entry.total += at - entry.since;
-    entry.since = null;
-  }
-  return entry.total;
-}
-
-function waitedFor(messageId: string, at = Date.now()): number {
-  return at - (dueSince.get(messageId) ?? at);
-}
-
 // 已经排上、正在等这个任务当前那一轮退干净的投递。冷却窗口(5s)只够盖住
 // continueTask 内部那道缝,盖不住「等一轮跑完」。这段时间里同一任务的第二条消息
 // 绝不能也被排上,否则两条会挤在一起争同一个回合。
@@ -239,13 +194,25 @@ const inFlight = new Set<string>();
 // 所以挡回后按退避自己再试几次,试完才把兜底交还给 tick。重试延迟要短:挡回的
 // 典型病因是「释放点上的一瞬间竞争」,对方那一轮往往几百毫秒就交接完了。
 const REDELIVERY_DELAYS_MS = [200, 1_000, 3_000];
+// 退避用完之后交给 30s 兜底扫描 —— 这个「30s」必须自己记账:失败结算钩子、队列唤醒、
+// 终态 flush 都会再触发扫描,不记下一次允许重试的时刻,它们就会绕过退避,形成
+// 「失败→结算唤醒→再失败」的自激循环(第 6 轮审查:目录不修复时 2 秒 24 次失败)。
+const RETRY_BACKSTOP_MS = 30_000;
 const redeliveryAttempts = new Map<string, number>();
 const redeliveryTimers = new Map<string, NodeJS.Timeout>();
+// 这条消息下一次允许真实投递的时刻。**所有触发源**(tick、结算钩子、队列唤醒、重投
+// 定时器唤起的扫描)统一在扫描循环里查它;只有用户显式动作(手动运行/重试走
+// handDuePendingMessageToRun)不受约束 —— 人按下按钮就是「现在再试一次」。
+const nextRetryAt = new Map<string, number>();
+
+function retryBlocked(messageId: string, at: number): boolean {
+  return (nextRetryAt.get(messageId) ?? 0) > at;
+}
 
 function forgetDeliveryBookkeeping(messageId: string): void {
   redeliveryAttempts.delete(messageId);
-  dueSince.delete(messageId);
-  busyAgain.delete(messageId);
+  forgetTiming(messageId);
+  nextRetryAt.delete(messageId);
   const timer = redeliveryTimers.get(messageId);
   if (timer) {
     clearTimeout(timer);
@@ -258,6 +225,9 @@ function scheduleRedelivery(message: Row, why: string): void {
   const waited = waitedFor(message.id);
   const attempt = redeliveryAttempts.get(message.id) ?? 0;
   if (attempt >= REDELIVERY_DELAYS_MS.length) {
+    // 退避用完也要把「下一次」写下来,否则这句「交给 30s 兜底」只是日志修辞:
+    // 结算钩子触发的扫描照样立刻取走它再撞一次。
+    nextRetryAt.set(message.id, Date.now() + RETRY_BACKSTOP_MS);
     console.warn(
       `[ash] 排队消息连挡 ${attempt} 次仍没送成 task=${message.taskId} message=${message.id}`
       + `（${why};已等 ${secs(waited)}）—— 交给 30s 兜底扫描`,
@@ -266,6 +236,7 @@ function scheduleRedelivery(message: Row, why: string): void {
   }
   const delay = REDELIVERY_DELAYS_MS[attempt]!;
   redeliveryAttempts.set(message.id, attempt + 1);
+  nextRetryAt.set(message.id, Date.now() + delay);
   console.warn(
     `[ash] 排队消息这一次没送成 task=${message.taskId} message=${message.id}`
     + `（${why};已等 ${secs(waited)}）—— ${delay}ms 后重投（第 ${attempt + 1} 次）`,
@@ -386,32 +357,6 @@ export function deliveryOptions(m: Row) {
   };
 }
 
-// 一条排队消息从「该发了」到「原话进会话」之间只有两段路,分段计时是因为它们的病因
-// 完全不同,合成一个总耗时就分不出该去查谁:
-//   等回合退干净 = 上一轮结算还没跑完(钩子在 run loop 的 try 里就调了,releaseTurn 在更后面)
-//   拉起回合     = prepareWorktree + 工作目录快照 + spawn 执行器
-// 阈值以上才出声:典型值是 1.5~2.6 秒,偶发十几秒时用户看到的是「任务都显示完成了,
-// 我那句话还挂在托盘里」(2026-09-29 实测一次 13.1 秒,当时无埋点、事后无从归因)。
-const SLOW_DELIVERY_MS = 3_000;
-
-function noteDeliveryTiming(
-  taskId: string,
-  spans: { dueAt: number; busyMs: number; queuedAt: number; idleAt: number; at: number },
-): void {
-  const { dueAt, busyMs, queuedAt, idleAt, at } = spans;
-  if (at - dueAt < SLOW_DELIVERY_MS) return;
-  // 「挡回后空等」要把任务重新忙起来的那几段扣掉,否则它读起来像「明明空闲却没人送」,
-  // 而真相可能只是别的回合在正常跑。
-  const idle = Math.max(0, queuedAt - dueAt - busyMs);
-  console.warn(
-    `[ash] 排队消息投递偏慢 task=${taskId} 共 ${secs(at - dueAt)}`
-    + `（任务又忙起来 ${secs(busyMs)}`
-    + ` + 挡回后空等 ${secs(idle)}`
-    + ` + 等回合退干净 ${secs(idleAt - queuedAt)}`
-    + ` + 拉起回合 ${secs(at - idleAt)}）`,
-  );
-}
-
 // 单任务的实际投递:在**当前这一轮退干净之后**才跑(由 whenTurnIdle 排空)。
 //
 // 三个状态迁移各自对应一件真事,别再合并:
@@ -425,13 +370,21 @@ async function deliverWhenIdle(
   message: Row,
   options: ReturnType<typeof deliveryOptions>,
   spans: { dueAt: number; busyMs: number; queuedAt: number },
+  // 扫描侧为执行型消息落下的 queued 占位。正常路径由 continueTask 的结算覆盖;
+  // 这里只负责「一个字都没送出去就散伙」的早退口。
+  seat?: { prevStatus: string },
 ): Promise<void> {
   let delivered = false;
   const idleAt = Date.now();
   try {
     // 等待期间它还是 pending,所以用户可能已经手动取消、另一个触发源也可能抢先
     // 送掉了。抢不到租约就什么都不做 —— 送它的那一位会自己记账。
-    if (!(await beginDelivery(message.id))) return;
+    if (!(await beginDelivery(message.id))) {
+      // 占位是为这条消息落的;消息已经没了(取消/已送)就得把 status 退回去,否则
+      // 任务永远卡在 queued。租约被**别的投递路径**抢走则交给 finally 的同一判据:
+      // 那一位马上会开回合,running 自然覆盖占位;真没人接手才回滚。
+      return;
+    }
     lastFiredAt.set(message.taskId, Date.now());
     // 排空的一瞬间被别的路径抢走了回合(队列推进、用户手点运行):这一句一个字都
     // 没送出去,退回队列等下一次触发。
@@ -460,12 +413,35 @@ async function deliverWhenIdle(
     await cancelPendingMessage(message, `续跑失败：${detail}`).catch(() => {});
   } finally {
     inFlight.delete(message.taskId);
+    // 占位落空的兜底:这一次没送达(租约被抢、消息被取消、回合被验收互斥挡回而
+    // continueTask 没有结算)时,任务可能还停在扫描侧落的 queued 上。回合锁还被人
+    // 占着(手动运行刚抢走这次启动)就不动 —— 那一位的结算会覆盖;锁空着才查状态
+    // 回滚,否则把别人正要跑的任务翻回 failed,结算钩子会放行下一个成员,反而造出
+    // 双跑。起跑失败/冻结撤回则由 continueTask 自己的结算覆盖,这里查到的已不是
+    // queued,不动。
+    if (seat && !delivered && !isTurnClaimed(message.taskId)) {
+      try {
+        const cur = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, message.taskId))).at(0);
+        if (cur?.status === "queued") await setTaskStatus(message.taskId, seat.prevStatus as Parameters<typeof setTaskStatus>[1]);
+      } catch { /* 回滚失败只能留给重启 reconcile */ }
+    }
   }
 }
 
 // 投递一批待发送消息。taskId 非空 = 只看这个任务(终态钩子用);为空 = 全表扫一遍
 // (tick 用)。同一个任务一次只发一条——发完它就又在跑了,剩下的继续排着。
-export async function deliverPendingMessages(taskId?: string): Promise<void> {
+//
+// **扫描串行化**:两次并发扫描各自读「整队无人在跑」再各自安排投递,就是第 6 轮审查
+// 的双跑现场(两个失败成员恢复后一起执行)。决策与占位必须在同一条链上依次发生,
+// 后一次扫描才能看见前一次刚落库的 queued 占位。链上任何一次失败都不许断链。
+let scanChain: Promise<void> = Promise.resolve();
+export function deliverPendingMessages(taskId?: string): Promise<void> {
+  const next = scanChain.then(() => scanPendingMessages(taskId));
+  scanChain = next.catch(() => undefined);
+  return next;
+}
+
+async function scanPendingMessages(taskId?: string): Promise<void> {
   // 进程正在收尾(测试关库、server 退出)时直接收手。这条链路有好几个 fire-and-forget
   // 的触发源(验收锁放开那一推、重投定时器),关库之后它们照样会醒一次,然后刷一串
   // 「database is not open」的 stack trace —— 读到的人只会以为验收自己炸了。
@@ -485,6 +461,10 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
   for (const m of pending) {
     try {
       if (fired.has(m.taskId) || inFlight.has(m.taskId) || cooling(m.taskId, at.getTime())) continue;
+      // 下一次允许重试的时刻没到就不碰:退避只写在重投定时器上管不住别的触发源 ——
+      // 失败结算钩子、队列唤醒触发的扫描会绕过它,形成「失败→结算唤醒→再失败」的
+      // 自激循环(第 6 轮审查:目录不修复时 2 秒 24 次失败)。
+      if (retryBlocked(m.id, at.getTime())) continue;
       const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0) ?? null;
       // paused/backlog 的单任务、以及执行型消息(不论任务状态)才需要问队列;执行型
       // 还要问分组暂停。其余状态别白查几张表。
@@ -549,9 +529,21 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
         // (setTaskStatus → flushPendingForTask)是在 run loop 的 try 里调的,那一刻
         // 单飞锁还锁着;直接 continueTask 会被静默挡回,消息就此蒸发。`whenTurnIdle`
         // 由 releaseTurn 同一处排空,是结算钩子里给同一个任务续跑的唯一安全写法。
+        //
+        // 执行型消息在安排投递前**先落 queued 占位**(与让位 setQueued、手动运行
+        // claimQueuedPlacement 同一道占位边界):本轮扫描串行,后面的成员在各自的
+        // queueBlockers 查询里立刻看见这个 queued,整队仍是「至多一个在跑」;不占位
+        // 的话,两条失败成员的消息各自读到「无人在跑」就会并行启动(第 6 轮审查)。
+        // 占位的回收路径:投递成功/失败都由 continueTask 的结算覆盖 status;唯一
+        // 落空口(租约被抢/消息已取消)由 deliverWhenIdle 的早退分支按 seat 回滚。
+        let seat: { prevStatus: string } | undefined;
+        if (m.execution && (await db.select().from(queueItems).where(eq(queueItems.taskId, m.taskId))).length) {
+          seat = { prevStatus: t!.status };
+          await setTaskStatus(m.taskId, "queued");
+        }
         fired.add(m.taskId);
         inFlight.add(m.taskId);
-        whenTurnIdle(m.taskId, () => void deliverWhenIdle(m, options, { dueAt, busyMs, queuedAt }));
+        whenTurnIdle(m.taskId, () => void deliverWhenIdle(m, options, { dueAt, busyMs, queuedAt }, seat));
       }
     } catch (error) {
       // 一条投递失败不影响其它任务,下一轮再来 —— 但**必须留下痕迹**:这里原来是空的
@@ -605,6 +597,14 @@ export async function handDuePendingMessageToRun(
     .at(0);
   if (!due) return false;
   if (!(await beginDelivery(due.id))) return true; // 另一个触发源刚抢走:由它开回合
+  // 一旦被交接认领为**任务执行输入**,这个转换就要在启动前持久化(第 6 轮审查:
+  // 运行中暂存的追问 execution=0,轮到时经这里交接,起跑失败后重投仍按首次发送时的
+  // 终态续聊分类放行,与同队在跑成员并行执行)。失败与重启后的重试都沿用这个意图;
+  // 真正的终态续聊从不经过本函数,不受影响。
+  if (!due.execution) {
+    await db.update(scheduledMessages).set({ execution: true }).where(eq(scheduledMessages.id, due.id));
+    due.execution = true;
+  }
   inFlight.add(taskId);
   lastFiredAt.set(taskId, Date.now());
   const queuedAt = Date.now();

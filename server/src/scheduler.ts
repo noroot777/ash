@@ -75,8 +75,10 @@ export async function advanceQueue(queueId: string): Promise<void> {
     // 没有可启动的成员 ≠ 队里没事可做:失败成员的**执行型待发送回复**(排队期间暂存
     // 的修改要求,见 pending-messages 的 execution)在等「整队无人在跑」才能投递。它的
     // 任务已是终态,不会再有自己的结算钩子来救,只推自己的 flush 又只看发起任务 ——
-    // 这里是「队列刚空出来」这一事实的唯一权威时点,替队内成员推一把(扫描内部自己
-    // 判定该不该发,无关成员是 no-op)。不推的话要干等最多 30s 的兜底 tick。
+    // 这里是「队列刚空出来」这一事实的唯一权威时点,替队内成员推一把。按 position
+    // 顺序逐个入列:deliverPendingMessages 内部是一条串行扫描链,前一个成员的 queued
+    // 占位先落库,后一个成员的判定才执行,所以**至多一个**被启动(第 6 轮审查:并行
+    // 扫描曾让两个失败成员同时恢复执行);无关成员在判定里是 no-op。
     const members = await queueMembers(queueId);
     const idle = members.filter((t) => !t.archived && t.mode === "single");
     if (idle.length) {

@@ -261,4 +261,158 @@ export async function runHandoffCases(ctx: HandoffCaseContext): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(countIn(leadLog, pauseText), 1, "同一条消息被投递了不止一次");
   console.log("✓ 执行型重投守分组暂停:暂停期间原文待发送,恢复分组后投递恰好一次");
+
+  // ── 两个失败成员恢复后只按位置启动一个(第 6 轮审查拦验收 1)─────────────────
+  // 队列 [B3, P3, Q3, C3]:P3/Q3 先后起跑失败,C3 顶上保持运行。C3 结束后,扫描在
+  // 同一条串行链上先给 P3 落 queued 占位,Q3 的判定看见占位就等;P3 真正结束后
+  // Q3 才投 —— 不占位的话两条消息各自读到「无人在跑」,两个失败任务一起复活。
+  const sB = "scheduled-single-multi-b";
+  const sP = "scheduled-single-multi-p";
+  const sQ = "scheduled-single-multi-q";
+  const sC = "scheduled-single-multi-c";
+  // P3 的原文带「保持运行等待引导」:投递后假 claude 不退出,好断言 Q3 在 P3 运行期间原地等。
+  const sPText = "P3 修改要求:保持运行等待引导";
+  const sQText = "Q3 修改要求:轮到自己再跑,不许跟 P3 并行。";
+  await db.insert(tasks).values([
+    { ...taskRow(sB, "claude", "running"), mode: "single", team: null },
+    { ...taskRow(sP, "claude", "paused"), mode: "single", team: null, useWorktree: true },
+    { ...taskRow(sQ, "claude", "paused"), mode: "single", team: null, useWorktree: true },
+    { ...taskRow(sC, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+  ]);
+  await db.insert(sessions).values([
+    { id: "scheduled-multi-p-prev", taskId: sP, role: "single", agentType: "claude",
+      executor: "claude@test", cwd: join(root, "vanished"), cliSessionId: "scheduled-multi-p-cli", startedAt: at },
+    { id: "scheduled-multi-q-prev", taskId: sQ, role: "single", agentType: "claude",
+      executor: "claude@test", cwd: join(root, "vanished"), cliSessionId: "scheduled-multi-q-cli", startedAt: at },
+  ]);
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-multi-queue", taskId: sB, position: 0, createdAt: at },
+    { queueId: "scheduled-multi-queue", taskId: sP, position: 1, createdAt: at },
+    { queueId: "scheduled-multi-queue", taskId: sQ, position: 2, createdAt: at },
+    { queueId: "scheduled-multi-queue", taskId: sC, position: 3, createdAt: at },
+  ]);
+  await db.insert(scheduledMessages).values([
+    { ...messageRow("scheduled-multi-p-msg", sP, sPText, "queued"), execution: true },
+    { ...messageRow("scheduled-multi-q-msg", sQ, sQText, "queued"), execution: true },
+  ]);
+  const msgStatus = async (id: string) => (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, id))).at(0)!.status;
+  const taskStatus = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!.status;
+  // B3 让位 → P3、Q3 依次起跑失败 → C3 顶上。
+  await status.setTaskStatus(sB, "done");
+  await waitFor(async () => (await taskStatus(sP)) === "failed", "P3 起跑失败没有结算成 failed");
+  await waitFor(async () => (await taskStatus(sQ)) === "failed", "Q3 起跑失败没有结算成 failed");
+  await waitFor(async () => (await taskStatus(sC)) === "running", "两个失败成员让位后 C3 没有顶上");
+  // 恢复起跑条件;C3 仍在跑,两条消息都得原地等。
+  await db.update(tasks).set({ useWorktree: false }).where(eq(tasks.id, sP));
+  await db.update(tasks).set({ useWorktree: false }).where(eq(tasks.id, sQ));
+  await new Promise((resolve) => setTimeout(resolve, 1200)); // 让重投定时器把退避走完
+  await pending.deliverPendingMessages();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(await msgStatus("scheduled-multi-p-msg"), "pending", "C3 在跑,P3 不得投递");
+  assert.equal(await msgStatus("scheduled-multi-q-msg"), "pending", "C3 在跑,Q3 不得投递");
+  // C3 结束 → 只有位置靠前的 P3 启动;Q3 必须等 P3 真正结束。
+  const runsModule = await import("../src/runs.js");
+  assert.equal(runsModule.stopTask(sC), true, "测试前提:C3 的活进程应能被停掉");
+  await waitFor(async () => (await msgStatus("scheduled-multi-p-msg")) === "sent", "C3 结束后 P3 没有收到原文");
+  await waitFor(async () => (await taskStatus(sP)) === "running", "P3 投递后应在运行(假 claude 保持运行)");
+  await pending.deliverPendingMessages();
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(await msgStatus("scheduled-multi-q-msg"), "pending", "P3 还在跑,Q3 就启动 —— 两个失败任务一起复活了");
+  assert.equal(countIn(leadLog, sQText), 0, "Q3 的原文不该在 P3 运行期间进 stdin");
+  assert.equal(runsModule.stopTask(sP), true, "测试前提:P3 的活进程应能被停掉");
+  await waitFor(async () => (await msgStatus("scheduled-multi-q-msg")) === "sent", "P3 结束后 Q3 没有按顺序投递");
+  await waitFor(() => countIn(leadLog, sQText) > 0, "Q3 标了 sent,stdin 里却没有原文");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(countIn(leadLog, sPText), 1, "P3 的原文被投了不止一次");
+  assert.equal(countIn(leadLog, sQText), 1, "Q3 的原文被投了不止一次");
+  console.log("✓ 两个失败成员恢复:C3 结束只启动 P3,P3 结束后 Q3 才按序投递");
+
+  // ── 交接认领即持久化执行意图(第 6 轮审查拦验收 2)──────────────────────────
+  // 运行中暂存的追问 execution=0;被 handDuePendingMessageToRun 认领为执行输入后,
+  // 转换必须在启动前落库 —— 失败重投才不会按首次发送时的终态续聊分类放行。
+  const cvT = "scheduled-single-convert";
+  const cvS = "scheduled-single-convert-next";
+  const cvText = "运行中暂存的修改要求：下次轮到我时继续实现新方案。";
+  await db.insert(tasks).values([
+    { ...taskRow(cvT, "claude", "paused"), mode: "single", team: null, useWorktree: true },
+    { ...taskRow(cvS, "claude", "running"), mode: "single", team: null },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-convert-prev", taskId: cvT, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: join(root, "vanished"), cliSessionId: "scheduled-convert-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-convert-queue", taskId: cvT, position: 0, createdAt: at },
+    { queueId: "scheduled-convert-queue", taskId: cvS, position: 1, createdAt: at },
+  ]);
+  await db.insert(scheduledMessages).values([messageRow("scheduled-convert-msg", cvT, cvText, "queued")]); // execution=0
+  assert.equal(await pending.handDuePendingMessageToRun(cvT), true, "交接应接管这次启动");
+  const cvRow = async () => (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-convert-msg"))).at(0)!;
+  assert.equal((await cvRow()).execution, true, "被交接认领为执行输入后,转换必须已持久化");
+  await waitFor(async () => (await taskStatus(cvT)) === "failed", "交接起跑失败没有结算成 failed");
+  assert.equal((await cvRow()).status, "pending", "失败后原文必须留在待发送");
+  // 后继 cvS 还在跑:恢复目录 + 走完退避,重投也必须按执行型等待,不得按续聊放行。
+  await db.update(tasks).set({ useWorktree: false }).where(eq(tasks.id, cvT));
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  await pending.deliverPendingMessages(cvT);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal((await cvRow()).status, "pending", "同队 cvS 在跑,升级后的执行型消息必须等");
+  assert.equal(countIn(leadLog, cvText), 0, "cvS 在跑期间原文不该进 stdin");
+  await status.setTaskStatus(cvS, "done");
+  await waitFor(async () => (await cvRow()).status === "sent", "cvS 让位后消息没有投递");
+  await waitFor(() => countIn(leadLog, cvText) > 0, "标了 sent,stdin 里却没有原文");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(countIn(leadLog, cvText), 1, "同一条消息被投了不止一次");
+  console.log("✓ 交接认领即持久化执行意图:失败重投不再按旧分类放行");
+
+  // ── 持续故障下的重试有界(第 6 轮审查拦验收 3)──────────────────────────────
+  // 目录不修复时,失败结算钩子触发的扫描必须遵守 next-retry-at,不得形成
+  // 「失败→结算唤醒→再失败」的自激循环(审查实测 2 秒 24 次)。真实尝试的唯一
+  // 出声点是 scheduleRedelivery 的 warn,按它计数。
+  const stT = "scheduled-single-storm";
+  const stText = "持续故障下的修改要求:目录修好前别反复撞。";
+  await db.insert(tasks).values([
+    { ...taskRow(stT, "claude", "paused"), mode: "single", team: null, useWorktree: true },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-storm-prev", taskId: stT, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: join(root, "vanished"), cliSessionId: "scheduled-storm-cli", startedAt: at,
+  });
+  await db.insert(scheduledMessages).values([
+    { ...messageRow("scheduled-storm-msg", stT, stText, "queued"), execution: true },
+  ]);
+  const stWarned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...args: unknown[]) => { stWarned.push(args.map(String).join(" ")); realWarn(...(args as [])); };
+  try {
+    assert.equal(await pending.handDuePendingMessageToRun(stT), true, "首次交接应接管");
+    await waitFor(async () => (await taskStatus(stT)) === "failed", "首次起跑失败没有结算");
+    const afterFirst = stWarned.filter((l) => l.includes("scheduled-storm-msg")).length;
+    assert.ok(afterFirst >= 1, "首次失败应出声(scheduleRedelivery)");
+    // 模拟失败结算钩子风暴:连续 20 次扫描,全部应被 next-retry-at 挡住,零新增尝试。
+    for (let i = 0; i < 20; i++) await pending.deliverPendingMessages(stT);
+    const afterStorm = stWarned.filter((l) => l.includes("scheduled-storm-msg")).length;
+    // 容忍恰好撞上 200ms 重投定时器的那一次;风暴若未被堵住,这里会是 +20 的量级。
+    assert.ok(afterStorm <= afterFirst + 1,
+      `退避期内 20 次扫描最多放行 1 次定时器重投,实际新增 ${afterStorm - afterFirst}`);
+    // 走完退避观察 1.6s:允许的真实尝试至多 200ms/1s 两次,远低于审查实测的 2 秒 24 次。
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    const bounded = stWarned.filter((l) => l.includes("scheduled-storm-msg")).length;
+    assert.ok(bounded <= afterFirst + 3, `1.6s 内失败尝试应 ≤ ${afterFirst + 3},实际 ${bounded}`);
+  } finally {
+    console.warn = realWarn;
+  }
+  // 恢复目录:消息仍能送达恰好一次。退避封顶后 next-retry-at 已推到 30s 兜底,
+  // 自动扫描按规矩等;用户显式重试(交接路径)不吃退避,立刻放行。
+  await db.update(tasks).set({ useWorktree: false }).where(eq(tasks.id, stT));
+  assert.equal(await pending.handDuePendingMessageToRun(stT), true, "显式重试应接管这次启动");
+  await waitFor(async () => (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-storm-msg"))).at(0)!.status === "sent",
+    "恢复目录后显式重试没有送达消息");
+  await waitFor(() => countIn(leadLog, stText) > 0, "标了 sent,stdin 里却没有原文");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(countIn(leadLog, stText), 1, "同一条消息被投了不止一次");
+  console.log("✓ 持续故障下重试有界:退避约束所有触发源,恢复后仍送达恰好一次");
 }
