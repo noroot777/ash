@@ -15,6 +15,8 @@ import { AssistantScroll } from "./AssistantScroll.tsx";
 import { AssistantKnowledge } from "./AssistantKnowledge.tsx";
 import { AssistantInfo } from "./AssistantInfo.tsx";
 import { useAssistantChat } from "./useAssistantChat.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { ChatContextNotice } from "../chat/ChatContextNotice.tsx";
@@ -74,6 +76,7 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit, o
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const connectionTip = useHoverTip();
+  const sendKeys = useSendKeyLabels();
   const input = useRef<HTMLTextAreaElement>(null);
   const configure = editing || (chat.ready && !chat.room && !chat.error);
   const pickStarter = (text: string) => { chat.setDraft(text); input.current?.focus(); };
@@ -114,9 +117,9 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit, o
       {chat.room && !configure && <div className="chat-composer-area">
         <div className="chat-live-line" role="status">{chat.busy ? <><span className="chat-live-dot" />正在回复<button type="button" onClick={() => void chat.stop()}><Stop size={12} weight="fill" />停止回复</button></> : <span>随时可以开始对话</span>}</div>
         <ChatContextNotice context={chat.snapshot?.context} />
-        <div className="chat-composer"><textarea ref={input} aria-label="给 ash 助手发消息" maxLength={8000} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} placeholder="描述你遇到的问题，或记得的任务内容…" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void chat.send(); } }} />
+        <div className="chat-composer"><textarea ref={input} aria-label="给 ash 助手发消息" maxLength={8000} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} placeholder="描述你遇到的问题，或记得的任务内容…" onKeyDown={(event) => { if (isSendKeyEvent(event)) { event.preventDefault(); void chat.send(); } }} />
           <footer><AssistantKnowledge /><span>直接发送，无需 @</span><button type="button" className="chat-send" aria-label="发送给助手" disabled={chat.busy || chat.sending || !chat.draft.trim() || !chat.snapshot} onClick={() => void chat.send()}><ArrowUp size={20} weight="bold" /></button></footer>
-        </div><div className="chat-composer-hint">Enter 发送 · Shift Enter 换行 · /clear 清空上下文<span>简洁回复已启用</span></div>
+        </div><div className="chat-composer-hint">{sendKeys.send} 发送 · {sendKeys.newline} 换行 · /clear 清空上下文<span>简洁回复已启用</span></div>
       </div>}
     </>}
     </div>

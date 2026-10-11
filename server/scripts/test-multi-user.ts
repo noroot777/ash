@@ -168,27 +168,8 @@ const bobActor = actorOf(bob);
   assert.equal(noDefault[0].toName, null);
 }
 
-// ── ⑥ 设置分面 ────────────────────────────────────────────────────────────
-{
-  await personal.patchSettingsFor(aliceActor, { defaultWorkflowId: "alice-flow" });
-  assert.equal((await personal.settingsFor(alice.id)).defaultWorkflowId, "alice-flow");
-  assert.equal((await personal.settingsFor(bob.id)).defaultWorkflowId, "", "个人面互不影响");
-  assert.equal((await appSettings.getAppSettings()).defaultWorkflowId, "", "个人面不该写进全局那份");
-
-  // 实例面:普通用户改不动,管理员可以。
-  await assert.rejects(
-    () => personal.patchSettingsFor(aliceActor, { skillRefreshSeconds: 7200 }),
-    /实例管理员/,
-  );
-  await personal.patchSettingsFor(adminActor, { skillRefreshSeconds: 7200 });
-  assert.equal((await appSettings.getAppSettings()).skillRefreshSeconds, 7200);
-
-  // 多人模式的接力目标机按人存,不许走 PATCH /settings。
-  await assert.rejects(
-    () => personal.patchSettingsFor(aliceActor, { handoffTargets: [] }),
-    /接力目标机/,
-  );
-}
+// ── ⑥ 设置分面 → 已搬到 test-multi-user-settings.ts ──────────────────────
+//    （个人面 / 实例面之分、写侧边界、读侧坏值；这个文件已顶到 700 行上限）
 
 // ── ⑦ 个人面资源互不可见 ──────────────────────────────────────────────────
 {

@@ -54,6 +54,10 @@ try {
         const selected = { ...task, id: taskId, title: taskId === task.id ? task.title : "另一条任务" };
         return await route.fulfill({ json: { task: selected, sessions: [], persisted: [], returnAvailable, target: { name: "远程服务器", url: targetUrl } } });
       }
+      // 「输入框按哪一下算发送」那一档：工作台挂载时会拉一次（useComposerSendKey.ts）。
+      if (path === "/api/settings") {
+        return await route.fulfill({ json: { composerSendKey: "enter" } });
+      }
       if (path.endsWith("/remote-return")) {
         requests.push(route.request().postDataJSON());
         requestedTaskIds.push(path.split("/").at(-2));

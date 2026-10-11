@@ -5,6 +5,7 @@ import { outboundHolder } from "@ash/shared/handoff";
 import { api } from "../lib/api.ts";
 import { claimAction, isActionFresh } from "../lib/latestInteraction.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
+import { useComposerSendKey } from "../lib/useComposerSendKey.ts";
 import { useTasks } from "../lib/useTasks.ts";
 import { handedOut, useOutboundState } from "./useOutboundState.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
@@ -147,6 +148,10 @@ export function WorkspaceShell() {
   useEffect(() => { writeStoredScopeKind(scopeKind); }, [scopeKind]);
   const spread = useSidebarSpread(tasks, scope, settlementVersion);
 
+  // 「哪一下算发送」这一档在这里拉一次就够（整页共用一份，见 useComposerSendKey.ts）。
+  // 挂在这一层是因为输入框散在全站，有几个（侧聊、duet 关口）不显示提示文案因而不会
+  // 自己订阅——漏掉它们的表现是「设置改了，偏偏那几个框还按老规矩」。
+  useComposerSendKey();
   // 提示的寿命（常规两秒多自己走 / 长报错等用户收，两条通道互不打断）都在 WorkspaceToast.tsx 里。
   const { toasts, notify, dismiss: dismissToast } = useToast();
   // 底部坞的会话账本：开着哪几个终端、哪个在前台、抽屉展开没有。住在这一层是因为 tab 条摆在

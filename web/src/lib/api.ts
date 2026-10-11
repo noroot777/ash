@@ -34,14 +34,13 @@ import type {
   TeamPresetConfig,
 } from "@ash/shared";
 
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
-import { syncHostCliPolicy } from "./hostCliPolicy.ts";
+import { readSettings, writeSettings } from "./settingsSync.ts";
 import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
@@ -103,29 +102,10 @@ function isAcceptTaskResult(body: unknown): body is AcceptTaskResult {
     typeof body.accepted === "boolean";
 }
 
-/**
- * 读到的每一份 AppSettings 都顺手把「CLI 额度」那一档同步给 hostCliPolicy。
- *
- * 为什么钉在 api 层而不是各个调用点:前端学到这一档的路**只有 `/settings` 这两条**
- * (设置页初次加载、额度开关的 PATCH),而漏掉任何一条的表现是「改了额度,菜单要刷新
- * 页面才对」—— 正是第 2 轮审查那条。放在这里,以后新增一个读设置的地方也不会漏。
- */
-function adopt(settings: AppSettings): AppSettings {
-  syncHostCliPolicy({ instanceMode: settings.instanceMode, sharedHostCli: settings.sharedHostCli });
-  return settings;
-}
-
 export const api = {
-  // 老服务端不认识新加的设置项时会漏字段,补上出厂默认再交出去 —— 界面上出现
-  // 「每 undefined 秒」这种东西比少一个设置项更难看,而且它没法自愈。
-  settings: async (): Promise<AppSettings> => adopt({
-    ...DEFAULT_APP_SETTINGS,
-    ...(await request<AppSettings>("/settings")),
-  }),
-  patchSettings: async (patch: Partial<AppSettings>): Promise<AppSettings> => adopt({
-    ...DEFAULT_APP_SETTINGS,
-    ...(await request<AppSettings>("/settings", json("PATCH", patch))),
-  }),
+  // 读写都在 settingsSync.ts 里收口:缺字段补出厂默认、取号、以及把过期应答挡在外面。
+  settings: (): Promise<AppSettings> => readSettings(),
+  patchSettings: (patch: Partial<AppSettings>): Promise<AppSettings> => writeSettings(patch),
   // 只读的运行时事实（平台/分隔符/家目录），跟可写的 `/settings` 是两回事。
   // 调用点走 `useHostInfo.ts`：整个前端只该拉一次。
   host: (): Promise<HostInfo> => request("/host"),
