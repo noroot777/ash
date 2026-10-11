@@ -3,7 +3,7 @@ import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { freezeStartingTurn, stopTask } from "./runs.js";
+import { freezeStartingTurn, isTurnClaimed, stopTask } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 
@@ -96,6 +96,13 @@ export async function advanceQueue(queueId: string): Promise<void> {
     // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
     // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
     if (candidate.groupId && (await isPaused(candidate.groupId))) return "paused";
+    // 挑中的成员旧回合锁还没释放(典型:旁路追问刚恢复 paused、结算还在收尾):现在
+    // 写 queued 再续跑一定被 turn-entry-guard 挡回,占位没人回滚,任务会永久卡在
+    // 「排队中」(第 4 轮审查问题 1)。不落位,记账等它 releaseTurn 后补办这次推进。
+    if (isTurnClaimed(candidate.id)) {
+      noteMissedAdvance(candidate.id, queueId);
+      return null;
+    }
     await setQueued(candidate.id);
     return candidate;
   });

@@ -8,7 +8,7 @@ import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
-import { consumeSingleRun, afterSettlement, settleOwedAdvance } from "./single-run.js";
+import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
@@ -670,18 +670,20 @@ export async function continueTask(
     // 正常那条清理路(settleTaskStatus)根本没跑过 —— 不在这儿清掉,标记就漏给下一轮,
     // 下一轮的真实结算会被整段跳过(当成「那是次压缩」)。
     const nativeTurn = !!row?.nativeTurn;
-    if (back || nativeTurn) {
-      await db
-        .update(tasks)
-        .set({ ...(back ? { followUpFrom: null } : {}), ...(nativeTurn ? { nativeTurn: false } : {}), updatedAt: now() })
-        .where(eq(tasks.id, taskId));
-    }
     const status = stopped ?? back ?? "failed";
-    // 起跑失败的恢复同 settleTaskStatus:回到 paused 原状态不是检查点落位,别让推进
-    // 钩子把静止的队列成员续跑(setTaskStatus 的 quietAdvance 注释有完整账)。
-    await setStatus(taskId, status, !stopped && back === "paused" ? { quietAdvance: true } : undefined);
-    // 期间真实发生过的让位照样补办(single-run.ts settleOwedAdvance 顶部)。
-    await settleOwedAdvance(taskId);
+    // 起跑失败的恢复同 settleTaskStatus:「清旁路身份 + 回到原状态」对队列推进原子
+    // (分开写的窗口会让推进漏记交接,见 settleTaskStatus 同款注释);恢复 paused 不是
+    // 检查点落位,quietAdvance 防静止成员被续跑(setTaskStatus 的注释有完整账)。
+    const { serializeQueueClaims } = await import("./queue-seat.js");
+    await serializeQueueClaims(async () => {
+      if (back || nativeTurn) {
+        await db
+          .update(tasks)
+          .set({ ...(back ? { followUpFrom: null } : {}), ...(nativeTurn ? { nativeTurn: false } : {}), updatedAt: now() })
+          .where(eq(tasks.id, taskId));
+      }
+      await setStatus(taskId, status, !stopped && back === "paused" ? { quietAdvance: true } : undefined);
+    });
     // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
     // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、
     // 涨 verifyRounds,却给不出 verified/verify_failed),白耗用户一轮验证配额。

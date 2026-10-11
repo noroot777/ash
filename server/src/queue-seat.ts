@@ -26,7 +26,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
 import { manualStartBlockers } from "./queues.js";
-import { isTurnClaimed } from "./runs.js";
+import { isTurnClaimed, whenTurnIdle } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 
 export type QueueSeat = {
@@ -37,28 +37,35 @@ export type QueueSeat = {
   release(): Promise<void>;
 };
 
-// ── 旁路回合欠下的队列推进(第 ln9Q6IJEgmWf 链第 3 轮)───────────────────────────
-// 续聊/旁路回合(followUpFrom 是 paused/backlog 一类非终态)正占着 running 时,前项
-// 让位触发的推进会被 selectNextInQueue 的「有人在跑」守卫冻结;这轮结算又按「恢复
-// 原样」quiet 落回 paused(setTaskStatus 的 quietAdvance),那次真实发生过的让位就
-// 没了下家 —— 后项和它自己都静止到用户手点(审查真实页面复现:前项在追问期间完成,
-// 检查点任务停在 paused,刷新也不动)。所以推进被这类回合冻结时记一笔账,旁路结算
-// 恢复后消费补办;期间没有任何推进事件的静止检查点无账,照旧不被一句追问续跑。
+// ── 旁路回合欠下的队列推进(第 ln9Q6IJEgmWf 链第 3、4 轮)─────────────────────────
+// 两类让位会在这里挂账:
+// ① 前项让位时,冻结源是旁路/续聊回合(followUpFrom 非终态)的活跃回合 —— 这轮结算
+//   按「恢复原样」quiet 落回 paused(setTaskStatus 的 quietAdvance),那次真实发生过
+//   的让位没有下家(第 3 轮:前项在追问期间完成,检查点任务静止等手点)。
+// ② 推进挑中了一个刚恢复 paused、**旧回合锁还没释放**的成员 —— 先写 queued 再续跑
+//   会被 turn-entry-guard 挡回,占位没人回滚,任务永久卡「排队中」(第 4 轮问题 1)。
 //
-// 互斥性:记账发生在 advanceQueue 的 serializeQueueClaims 临界区内,消费也必须包进
-// 同一条链 —— 消费段排在记账段之后就取得到;排在之前则恢复已先落库,记账那次推进
-// 在临界区里读到的就是 paused,自己就能挑中它,两边都不丢。
-const missedAdvances = new Map<string, string>(); // 旁路回合成员 taskId → 它的 queueId
+// 共同解法:记账的同时就把补办挂上 whenTurnIdle —— 回合锁一释放(结算收尾一定晚于
+// 状态恢复落库)回调重新 advanceQueue,那时成员已是干净的 paused,正常挑中续跑。
+// 消费不依赖结算代码的执行顺序,所以「清身份→恢复状态」间的任何窗口都塞不掉这笔账;
+// 期间没有任何推进事件的静止检查点依然无账,不会被一句追问续跑(第 2 轮语义保留)。
+// 回调里的 advanceQueue 进同一条认领链,幂等:多记几笔最多多跑几次空转判定。
+const missedAdvances = new Map<string, string>(); // 占着回合锁的成员 taskId → 它的 queueId
 
 export function noteMissedAdvance(taskId: string, queueId: string): void {
+  const pending = missedAdvances.has(taskId);
   missedAdvances.set(taskId, queueId);
-}
-
-/** 旁路结算恢复后取走欠账;要么在 serializeQueueClaims 里调(互斥才成立),要么是丢弃场景。 */
-export function takeMissedAdvance(taskId: string): string | null {
-  const queueId = missedAdvances.get(taskId) ?? null;
-  missedAdvances.delete(taskId);
-  return queueId;
+  if (pending) return; // 已有一个回调在等这次 turn 释放
+  whenTurnIdle(taskId, () => {
+    const owed = missedAdvances.get(taskId);
+    missedAdvances.delete(taskId);
+    if (!owed) return;
+    // 动态 import:scheduler 静态依赖本模块。void 不 await —— 本回调可能在推进的
+    // 临界区内同步触发(turn 恰好已空),advanceQueue 排到链尾即可,await 会死等自己。
+    void import("./scheduler.js").then(({ advanceQueue }) =>
+      advanceQueue(owed).catch((err) => console.error(`[ash] 补办队列推进(${taskId})失败:`, err)),
+    );
+  });
 }
 
 export type QueueSeatClaim =

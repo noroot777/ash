@@ -369,4 +369,84 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   // jB 的 stop 是终态让位,会连锁启动 jC(这正是正常推进)——一并收尾。
   await stopWhenLive(jC);
   console.log("✓ 前项在追问期间让位:欠账补办,追问结束后检查点任务自动续跑,末项不被越过");
+
+  // ── 挑中成员旧回合锁未释放:不落 queued,释放后补办(第 4 轮审查问题 1)────────────
+  // 队列 [kA(done), kB(paused+resumePrompt), kC(backlog)],kB 的旧回合锁还被占着
+  // (真实场景:追问刚恢复 paused、结算还在收尾)。此刻的推进若写 queued 再续跑,
+  // 会被 turn-entry-guard 挡回且无人回滚 —— kB 永久显示「排队中」、继续按钮不可点
+  // (审查真实页面复现)。修复后:挑中但锁没释放 → 不落位、记账;释放即补办续跑。
+  const kA = "scheduled-single-gate-ka";
+  const kB = "scheduled-single-gate-kb";
+  const kC = "scheduled-single-gate-kc";
+  const kBPrompt = "继续正式步骤(ckpt-turnheld);保持运行等待引导";
+  await db.insert(tasks).values([
+    { ...taskRow(kA, "claude", "done"), mode: "single", team: null },
+    { ...taskRow(kB, "claude", "paused"), mode: "single", team: null, resumePrompt: kBPrompt },
+    { ...taskRow(kC, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-gate-kb-prev", taskId: kB, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-kb-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-8", taskId: kA, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-8", taskId: kB, position: 1, createdAt: at },
+    { queueId: "scheduled-gate-queue-8", taskId: kC, position: 2, createdAt: at },
+  ]);
+  const scheduler = await import("../src/scheduler.js");
+  assert.equal(runs.claimTurn(kB), true, "测试前提:应能占住 kB 的回合锁模拟结算收尾");
+  await scheduler.advanceQueue("scheduled-gate-queue-8");
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(await taskStatusOf(kB), "paused", "旧回合锁未释放时推进不得把 kB 写成 queued(第 4 轮:卡排队中)");
+  assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, kB))).length, 1, "锁未释放时不得开新回合");
+  // 释放旧锁 = 结算收尾完成:挂着的补办回调立即重推,kB 被正常挑中续跑。
+  runs.releaseTurn(kB);
+  await waitFor(async () => {
+    const row = (await db.select().from(tasks).where(eq(tasks.id, kB))).at(0)!;
+    return row.status === "running" && row.resumePrompt === null;
+  }, "回合锁释放后欠账没有补办,kB 没被自动续跑");
+  await waitFor(() => countIn(leadLog, "ckpt-turnheld") > 0, "补办续跑没有用检查点指令作输入");
+  assert.equal(await taskStatusOf(kC), "backlog", "kB 在跑,kC 不得被越过");
+  await stopWhenLive(kB);
+  await stopWhenLive(kC); // kB 终态让位连锁启动 kC,一并收尾
+  console.log("✓ 旧回合锁未释放:推进不落 queued,锁释放后补办续跑,无排队中残留");
+
+  // ── 让位与追问结束任意交错:交接不丢(第 4 轮审查问题 2 的并发覆盖)────────────────
+  // [lA(running), lB(paused+ckpt 追问悬住)]:同时停掉两者,让 lA 的让位推进与 lB 的
+  // 「清旁路身份 → 恢复 paused」结算以任意顺序交错。无论推进读到哪一侧,都必须最终
+  // 把 lB 自动续跑 —— 清身份与恢复状态已包进认领临界区,中间不存在「running 且无旁路
+  // 身份」的裸窗口(修复前该窗口让推进既冻结又不记账,交接蒸发)。
+  const lA = "scheduled-single-gate-la";
+  const lB = "scheduled-single-gate-lb";
+  const lBPrompt = "继续正式步骤(ckpt-interleave);保持运行等待引导";
+  await db.insert(tasks).values([
+    { ...taskRow(lA, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+    { ...taskRow(lB, "claude", "paused"), mode: "single", team: null, resumePrompt: lBPrompt },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-gate-lb-prev", taskId: lB, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-lb-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-9", taskId: lA, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-9", taskId: lB, position: 1, createdAt: at },
+  ]);
+  assert.equal((await api.request(`/tasks/${lA}/run`, { method: "POST" })).status, 202, "前项 lA 应能启动");
+  await waitFor(async () => (await taskStatusOf(lA)) === "running", "前项 lA 没有跑起来");
+  const lBQuery = "进展如何？(ckpt-interleave-query)保持运行等待引导";
+  assert.equal((await api.request(`/tasks/${lB}/reply`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: lBQuery }),
+  })).status, 202, "追问应被接住");
+  await waitFor(() => countIn(leadLog, lBQuery) > 0, "追问原文没有进会话");
+  await waitFor(() => runs.isRunning(lA) && runs.isRunning(lB), "两个回合没有同时在跑");
+  // 同一瞬间:前项让位 + 追问结束,结算与推进任意交错。
+  assert.equal(runs.stopTask(lA), true);
+  assert.equal(runs.stopTask(lB), true);
+  await waitFor(async () => {
+    const row = (await db.select().from(tasks).where(eq(tasks.id, lB))).at(0)!;
+    return row.status === "running" && row.resumePrompt === null;
+  }, "让位与追问结束交错后,lB 没有被自动续跑(交接被吞)");
+  await waitFor(() => countIn(leadLog, "ckpt-interleave") > 1, "交错后的续跑没有用检查点指令作输入");
+  await stopWhenLive(lB);
+  console.log("✓ 让位与追问结束任意交错:交接不丢,检查点任务自动续跑");
 }
