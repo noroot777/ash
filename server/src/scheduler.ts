@@ -3,7 +3,7 @@ import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { freezeStartingTurn, isTurnClaimed, stopTask } from "./runs.js";
+import { claimTurn, freezeStartingTurn, isTurnClaimed, stopTask } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 
@@ -96,10 +96,13 @@ export async function advanceQueue(queueId: string): Promise<void> {
     // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
     // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
     if (candidate.groupId && (await isPaused(candidate.groupId))) return "paused";
-    // 挑中的成员旧回合锁还没释放(典型:旁路追问刚恢复 paused、结算还在收尾):现在
-    // 写 queued 再续跑一定被 turn-entry-guard 挡回,占位没人回滚,任务会永久卡在
-    // 「排队中」(第 4 轮审查问题 1)。不落位,记账等它 releaseTurn 后补办这次推进。
-    if (isTurnClaimed(candidate.id)) {
+    // 观察空闲 ≠ 取得所有权:上一版先 isTurnClaimed 再 setQueued,检查与落位之间的
+    // await 窗口里 checkpoint 追问这类合法入口照样抢走回合 —— 推进把追问的 running
+    // 覆盖成 queued、续跑被旧 reply 占的锁挡回、追问结算恢复 paused,交接蒸发
+    // (第 5 轮审查确定性复现)。claimTurn 是同步的内存原子操作,在临界区里直接
+    // **认领**所有权:抢到才落 queued,续跑带 turnHeld 进场;抢不到(占用方多半是
+    // 刚进来的旁路追问)记账,等它 releaseTurn 后回调补办这次推进。
+    if (!claimTurn(candidate.id)) {
       noteMissedAdvance(candidate.id, queueId);
       return null;
     }
@@ -107,6 +110,13 @@ export async function advanceQueue(queueId: string): Promise<void> {
     return candidate;
   });
   if (next === "paused") return;
+  if (next && typeof next === "object") {
+    const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
+    void resumeOrRunTask(next.id, { reason: "queue", turnHeld: true })
+      .catch((err) => console.error(`[ash] 队列推进续跑(${next.id})失败:`, err))
+      .finally(() => void reclaimStrandedSeat(next.id, queueId, prevStatus));
+    return;
+  }
   if (!next) {
     // 没有可启动的成员 ≠ 队里没事可做:失败成员的**执行型待发送回复**(排队期间暂存
     // 的修改要求,见 pending-messages 的 execution)在等「整队无人在跑」才能投递。它的
@@ -124,7 +134,20 @@ export async function advanceQueue(queueId: string): Promise<void> {
     }
     return;
   }
-  void resumeOrRunTask(next.id, { reason: "queue" });
+}
+
+// 续跑没接管占位的兜底:turnHeld 的锁被 enterTurn 退回(验收互斥、接力拒收),任务
+// 停在 queued、回合又没人持有,不收拾就是永久「排队中」。守卫与 queue-seat 的
+// seat.release 同款:正常跑完的回合在这里全是 no-op(状态早被结算覆盖/锁被真实回合
+// 接管)。回滚用 quiet(回原样不是落位);重推延迟一拍 —— 互斥方(典型:验收)没有
+// 结束钩子来推队列,立刻重试只会原地打转。
+async function reclaimStrandedSeat(taskId: string, queueId: string, prevStatus: TaskStatus): Promise<void> {
+  if (isTurnClaimed(taskId)) return;
+  const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (row?.status !== "queued") return;
+  await setTaskStatus(taskId, prevStatus, prevStatus === "paused" ? { quietAdvance: true } : undefined);
+  const timer = setTimeout(() => noteMissedAdvance(taskId, queueId), 1_000);
+  timer.unref?.();
 }
 
 // selectNextInQueue 只需要这几列,写成结构类型,单测就能直接喂字面量。

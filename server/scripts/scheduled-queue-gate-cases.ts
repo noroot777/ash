@@ -449,4 +449,53 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   await waitFor(() => countIn(leadLog, "ckpt-interleave") > 1, "交错后的续跑没有用检查点指令作输入");
   await stopWhenLive(lB);
   console.log("✓ 让位与追问结束任意交错:交接不丢,检查点任务自动续跑");
+
+  // ── 推进与追问争回合所有权(第 5 轮审查拦验收)─────────────────────────────────────
+  // [mA(done), mB(paused+resumePrompt), mC(backlog)]:队列推进(前项早已让位)与对 mB
+  // 的普通追问并发。修复前推进只「观察」isTurnClaimed,检查到落 queued 之间追问能抢走
+  // 回合:推进把追问覆盖成 queued、正式续跑被挡、追问结算恢复 paused,交接蒸发。修复
+  // 后推进在临界区里 claimTurn 原子认领、带 turnHeld 续跑:谁先占到谁跑 —— 推进先占,
+  // 追问被单飞锁挡回、按普通消息暂存稍后送达;追问先占,推进记欠账、追问结束即补办。
+  // 两种交错的终局不变量相同:mB 自动续跑消费检查点,追问原文恰好送达一次。
+  const mA = "scheduled-single-gate-ma";
+  const mB = "scheduled-single-gate-mb";
+  const mC = "scheduled-single-gate-mc";
+  const mBPrompt = "继续正式步骤(ckpt-claimrace);保持运行等待引导";
+  const mBQuery = "怎么样了？(ckpt-claimrace-query)";
+  await db.insert(tasks).values([
+    { ...taskRow(mA, "claude", "done"), mode: "single", team: null },
+    { ...taskRow(mB, "claude", "paused"), mode: "single", team: null, resumePrompt: mBPrompt },
+    { ...taskRow(mC, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-gate-mb-prev", taskId: mB, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-mb-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-10", taskId: mA, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-10", taskId: mB, position: 1, createdAt: at },
+    { queueId: "scheduled-gate-queue-10", taskId: mC, position: 2, createdAt: at },
+  ]);
+  const [, mBRes] = await Promise.all([
+    scheduler.advanceQueue("scheduled-gate-queue-10"),
+    api.request(`/tasks/${mB}/reply`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: mBQuery }),
+    }),
+  ]);
+  assert.equal(mBRes.status, 202, "并发追问应被接住(直送或暂存都 202)");
+  // 终局不变量:无论谁先占到回合,mB 都被自动续跑、检查点被消费,不卡 paused/queued。
+  await waitFor(async () => {
+    const row = (await db.select().from(tasks).where(eq(tasks.id, mB))).at(0)!;
+    return row.status === "running" && row.resumePrompt === null;
+  }, "推进与追问并发后 mB 没有被自动续跑(交接被吞或卡排队中)");
+  await waitFor(() => countIn(leadLog, "(ckpt-claimrace)") > 0, "续跑没有用检查点指令作输入");
+  assert.equal(await taskStatusOf(mC), "backlog", "mB 在跑,mC 不得被越过");
+  await stopWhenLive(mB);
+  // 追问若被暂存(推进先占),mB 结算后由待发送链路作为续聊送达;直送(追问先占)则早已送达。
+  await waitFor(() => countIn(leadLog, mBQuery) > 0, "追问原文始终没有送达");
+  await waitFor(async () => !["running", "queued"].includes(await taskStatusOf(mB)), "追问续聊回合没有结算");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(countIn(leadLog, mBQuery), 1, "追问原文被投递了不止一次");
+  await stopWhenLive(mC); // mB 终态让位连锁启动 mC,一并收尾
+  console.log("✓ 推进与追问争回合所有权:任意交错 mB 自动续跑,追问恰好送达一次");
 }
