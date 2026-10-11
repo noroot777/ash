@@ -31,6 +31,8 @@ import { abortIfFrozen } from "./turn-freeze.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
+import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
+import { interruptCliGoal, prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
@@ -178,6 +180,8 @@ export async function continueTask(
     opts.agent ?? (head?.agentType as AgentType) ?? "claude",
     userText,
   );
+  const slash = parseCliCommand(opts.agent ?? (head?.agentType as AgentType) ?? "claude", userText);
+  const goalExecution = isGoalExecution(slash);
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
   // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的
@@ -260,13 +264,13 @@ export async function continueTask(
     // `/compact` 这类 CLI 原生命令(在函数顶部就算好了):整条消息归 CLI 本地执行,不进
     // 模型 —— 没有产出、也不可能交卷,所以必须当旁路回合,否则「压一下上下文」会把任务
     // 打成 failed。
-    const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
+    let sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
     // DB 里的 verifyRound/nativeTurn 会在结算中途先清，handle/turn 要到 finally 才释放。
     // 把旁路身份也钉进运行时 turn role，关闭那段“标记已清、进程仍可被引导”的小窗口。
     if (sideTurn && sessionRole === "single") reclaimTurn(taskId, nativeCommand ? "native" : "side");
     const checkpointFollowUp = !opts.system && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
-    const followUpFrom = sideTurn
+    const followUpFrom = goalExecution ? null : sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)
       : !opts.system && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
         ? task.status
@@ -278,7 +282,7 @@ export async function continueTask(
     const directionToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
+      .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
     // 续聊/重跑同样按**这一回合是谁点的**解析执行器(§八)。跨人时降级到本人的默认
@@ -300,6 +304,12 @@ export async function continueTask(
       ...owner,
     });
     if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
+    const planning = !goalExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
+    if (planning) {
+      sideTurn = true;
+      if (sessionRole === "single") reclaimTurn(taskId, "side");
+      await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status }).where(eq(tasks.id, taskId));
+    }
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 
     // A single task can now host several agents — one session line per agentType,
@@ -348,7 +358,7 @@ export async function continueTask(
       await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
       prev = undefined;
     }
-    const resuming = !!prev?.cliSessionId;
+    const resuming = !!prev?.cliSessionId && !["fork", "new", "clear"].includes(slash?.name ?? "");
 
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
@@ -441,6 +451,7 @@ export async function continueTask(
     // 浏览器策略那段同理 —— 它也是拼在正文外面的字。
     const prompt = nativeCommand
       ? promptedUserTurnText
+      : planning ? withGlobalBrowserPolicy(`${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`, "reminder")
       : withGlobalBrowserPolicy(
           (invited ? COLLAB_INVITE : "") +
           invitedTaskBrief(task.body, invited, verifying) +
@@ -457,6 +468,8 @@ export async function continueTask(
         );
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
+    const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null);
+    if (opts.sideTurn || task.verifyRound || freeReviewTurn) cli.cliState = { ...cli.cliState, plan: false };
     // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 `trackRun` 之间不再有
     // await，暂停请求要么在这里被消费、要么之后才到——那时已有 handle 可杀。
     // freezeGuard 的启动路径（重试按钮、自由审查重跑）还会再查一遍库：它们的预检查离
@@ -473,8 +486,9 @@ export async function continueTask(
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
     handle = run({
       prompt,
+      ...cli,
       cwd,
-      sessionId: resuming ? prev!.cliSessionId! : undefined,
+      sessionId: resuming || slash?.name === "fork" ? prev?.cliSessionId ?? undefined : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
       detach,
       // 多人模式:个人 CLI 配置目录 + git 署名(auth/run-env.ts)。自用模式恒为空对象。
@@ -649,6 +663,7 @@ export async function continueTask(
     // 续聊回合里出的岔子(典型:worktree 建不出来)不该把任务状态打差 —— 同
     // settleTaskStatus 的约定:续聊只能让任务变好,不能让它变坏。
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (row?.goalTurn) await interruptCliGoal(row, agentType);
     const back = row?.followUpFrom as TaskStatus | null | undefined;
     // 原生命令标记跟 followUpFrom 一样**只在本回合内有效**:CLI 还没起来就抛错时,
     // 正常那条清理路(settleTaskStatus)根本没跑过 —— 不在这儿清掉,标记就漏给下一轮,
@@ -660,7 +675,7 @@ export async function continueTask(
         .set({ ...(back ? { followUpFrom: null } : {}), ...(nativeTurn ? { nativeTurn: false } : {}), updatedAt: now() })
         .where(eq(tasks.id, taskId));
     }
-    const status = stopped ?? back ?? "failed";
+    const status = stopped ?? back ?? (row?.goalTurn ? "paused" : "failed");
     await setStatus(taskId, status);
     // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
     // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、

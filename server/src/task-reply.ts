@@ -11,6 +11,7 @@ import { enqueueMessage } from "./pending-messages.js";
 import { nativeCliCommand } from "./skills.js";
 import { leadTypeOf } from "./team/session.js";
 import { replyWithAnnotationBatch } from "./page-annotation-routes.js";
+import { taskCliCommand } from "./task-cli-command.js";
 
 export type TaskReplyBody = {
   text?: string;
@@ -52,6 +53,12 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   const isTeam = r.mode === "team";
   if (!isTeam && r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
   if (b.annotationBatchId) return replyWithAnnotationBatch(c, taskId, b.annotationBatchId, b.annotationRevision ?? 0);
+  try {
+    const command = await taskCliCommand(c, r, b);
+    if (command) return command;
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : String(error), started: false }, 409);
+  }
 
   const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
   if (b.sendAt || queueWhileRunning) {

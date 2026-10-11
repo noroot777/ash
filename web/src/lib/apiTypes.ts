@@ -635,4 +635,5 @@ export type TerminalEvent =
 
 export type ReplyTaskResult =
   | { started: true }
+  | { started: false; command: true; text: string; recorded: boolean }
   | { scheduled: true; message: ScheduledMessage };

@@ -32,6 +32,7 @@ export interface RunDiagnostics {
   exitSignal: NodeJS.Signals | null;
   stopRequested: boolean;
   turnCompleted: boolean;
+  commandCompleted?: boolean;
   turnFailed: boolean;
   agentMessageCount: number;
   lastEventType: string | null;
@@ -48,6 +49,7 @@ export interface CodexExitEvidence {
   exitSignal: NodeJS.Signals | null;
   stopRequested: boolean;
   turnCompleted: boolean;
+  commandCompleted?: boolean;
   turnFailedMessage: string | null;
   structuredErrors: string[];
   stderrTail: string;
@@ -97,7 +99,7 @@ export function classifyCodexExit(e: CodexExitEvidence): Pick<RunDiagnostics, "t
       failureReason: `Codex 以 exit ${e.exitStatus} 结束，但未收到 turn.failed/error，stderr 为空，且${e.turnCompleted ? "已" : "未"}收到 turn.completed。`,
     };
   }
-  if (!e.turnCompleted) {
+  if (!e.turnCompleted && !e.commandCompleted) {
     return {
       terminationKind: "missing_turn_completion",
       failureKind: "missing_turn_completion",
@@ -182,6 +184,7 @@ export class RunTraceRecorder {
       exitSignal: evidence.exitSignal,
       stopRequested: evidence.stopRequested,
       turnCompleted: evidence.turnCompleted,
+      ...(evidence.commandCompleted ? { commandCompleted: true } : {}),
       turnFailed: !!evidence.turnFailedMessage,
       agentMessageCount: evidence.agentMessageCount,
       lastEventType: evidence.lastEventType,

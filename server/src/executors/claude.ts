@@ -13,6 +13,7 @@ import { relayRoot } from "../llm.js";
 import { anthropicContext1mBaseUrl, modelUsesContext1m, withContext1mSuffix } from "../anthropic-context-1m.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { parseClaudeStream } from "./claude-stream.js";
+import { claudeGoalInvocation, cleanupClaudeGoalContext } from "./claude-goal.js";
 export { parseClaudeStream } from "./claude-stream.js";
 export { claudeEffortUnsupportedMessage, claudeRootBypassMessage, normalizeClaudeCliError, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 
@@ -191,10 +192,13 @@ export class ClaudeExecutor implements AgentExecutor {
       ? { arg: null, cleanup: () => {} }
       : this.runtimeSettings(opts.cwd, model);
     const args = this.buildArgs(opts, sessionId, false, model, settings.arg);
-    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
+    const goal = claudeGoalInvocation(opts);
+    args.push(...goal.args);
+    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>${goal.marker}`);
     const child = this.startupError || settings.error
       ? failedChild(this.startupError ?? settings.error!)
-      : spawnForRun(opts.cwd, this.bin, args, opts.prompt, { ...this.env(opts.cwd, model), ...opts.env }, opts.detach);
+      : spawnForRun(opts.cwd, this.bin, args, goal.input, { ...this.env(opts.cwd, model), ...opts.env }, opts.detach);
+    child.on("close", goal.cleanup);
     child.on("close", settings.cleanup);
     return {
       sessionId,
@@ -204,13 +208,14 @@ export class ClaudeExecutor implements AgentExecutor {
         settings.cleanup,
       ),
       kill: () => killChild(child),
-      cleanup: async () => { settings.cleanup(); await cleanupAfterRun(child); },
+      cleanup: async () => { settings.cleanup(); goal.cleanup(); await cleanupAfterRun(child); },
       detached: detachedInfo(child),
     };
   }
 
   // 单飞只把进程保留到当前任务回合结束：引导时 interrupt + send；最终 result 收台。
   runSteerable(opts: RunOpts): RunHandle {
+    if (opts.cliCommand?.name === "goal") return this.run(opts);
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
     const settings = this.startupError
@@ -237,6 +242,7 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+    child.on("close", () => cleanupClaudeGoalContext(opts.commandLine));
     const detached = detachedInfo(child);
     const settingsCleanup = runtimeSettingsCleanupFromCommandLine(opts.commandLine);
     child.on("close", settingsCleanup);

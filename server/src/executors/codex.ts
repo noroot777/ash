@@ -171,12 +171,17 @@ export class CodexExecutor implements AgentExecutor {
     const { args, ignored } = this.appServerArgs(opts);
     // App Server 不认识 exec 专属参数；删掉会改变每一轮的能力（例如 --search）。
     // 这类 profile 保留原 exec 语义，引导按钮沿用上层既有的 kill + resume 降级。
-    if (ignored.length) return this.run(opts);
+    if (ignored.length) {
+      if (opts.cliCommand) throw new Error(`当前 Codex profile 带有 App Server 不兼容参数 ${ignored.join("、")}，不能执行 /${opts.cliCommand.name}`);
+      return this.run(opts);
+    }
     return openCodexAppServer({
       bin: this.bin,
       args,
       cwd: opts.cwd,
       prompt: opts.prompt,
+      cliCommand: opts.cliCommand,
+      cliState: opts.cliState,
       sessionId: opts.sessionId,
       model: opts.model ?? this.model,
       reasoningEffort: this.reasoningEffort,
@@ -218,7 +223,9 @@ export class CodexExecutor implements AgentExecutor {
         reattach: {
           threadId: recovered.threadId ?? opts.sessionId,
           turnId: recovered.turnId ?? "",
+          reviewTurnId: recovered.reviewTurnId,
           completedTurn: recovered.completedTurn,
+          goal: recovered.goal,
         },
         startProcess: () => child,
       });

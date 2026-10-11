@@ -1,14 +1,17 @@
 // 重启后收拾被打断的任务（从 orchestrator.ts 拆出，纯行数拆分）。
 // **必须在 reattachRunningTasks 之后调用**（index.ts 保证顺序），理由见函数注释。
-import { eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
-import { tasks } from "./db/schema.js";
+import { sessions, tasks } from "./db/schema.js";
 import { isRunning } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { startTeam } from "./team/session.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { now } from "./util.js";
+import { interruptCliGoal } from "./task-cli-state.js";
+import { appendTaskTimeline } from "./task-timeline.js";
+import { cleanupClaudeGoalContext } from "./executors/claude-goal.js";
 
 // On (re)start nothing is actually running, so any task still in an in-flight
 // status was interrupted (e.g. the server restarted mid-run). Mark those failed
@@ -34,7 +37,13 @@ export async function reconcileInterrupted(): Promise<void> {
   const teamIds = orphaned.filter((t) => t.mode === "team").map((t) => t.id);
   const others = orphaned.filter((t) => t.mode !== "team");
   for (const t of others) {
-    const back = (t.followUpFrom as TaskStatus | null) ?? "failed";
+    const back = (t.followUpFrom as TaskStatus | null) ?? (t.goalTurn ? "paused" : "failed");
+    if (t.goalTurn) {
+      const [session] = await db.select().from(sessions).where(eq(sessions.taskId, t.id)).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt));
+      await interruptCliGoal(t, session?.agentType ?? t.agentType ?? "claude");
+      if (session?.agentType === "claude" && session.commandLine) cleanupClaudeGoalContext(session.commandLine);
+      await appendTaskTimeline(t.id, "持续目标因服务中断已暂停；任务和历史保留，使用 /goal resume 续跑。");
+    }
     if (t.followUpFrom || t.nativeTurn || t.completeConfirmedAt) {
       await db
         .update(tasks)

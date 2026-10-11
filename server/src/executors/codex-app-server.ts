@@ -15,9 +15,12 @@ import {
 import { detachedInfo, spawnControllableForRun, type DetachedPaths } from "./detached.js";
 import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
 import type { RunHandle } from "./types.js";
-import { findArchivedRollout, findRollout } from "./codex-rollout.js";
+import { findArchivedRollout, findRollout, readCodexContext } from "./codex-rollout.js";
 import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from "./codex-session-archive.js";
 import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
+import { CodexNativeCommands } from "./codex-native-commands.js";
+import { isGoalExecution, type CliCommand, type CliGoal, type CliSessionState } from "@ash/shared/cli-commands";
+import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 
 type TokenBreakdown = {
   totalTokens: number;
@@ -38,6 +41,8 @@ export type CodexAppServerOpts = {
   args: string[];
   cwd: string;
   prompt: string;
+  cliCommand?: CliCommand;
+  cliState?: CliSessionState;
   sessionId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -46,7 +51,7 @@ export type CodexAppServerOpts = {
   trace?: RunTracePaths;
   detach?: DetachedPaths;
   commandLine?: string;
-  reattach?: { threadId: string; turnId: string; completedTurn?: { id: string; status: string; error?: unknown } };
+  reattach?: { threadId: string; turnId: string; reviewTurnId?: string; completedTurn?: { id: string; status: string; error?: unknown }; goal?: CliGoal | null };
   startProcess?: () => ChildProcess;
 };
 
@@ -65,12 +70,20 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let requestId = opts.reattach ? Date.now() : 0;
   let threadId = opts.reattach?.threadId ?? opts.sessionId ?? "";
   let turnId = opts.reattach?.turnId ?? "";
-  let sessionEmitted = !!opts.sessionId;
+  let turnStartVersion = 0;
+  let reviewTurnId = opts.reattach?.reviewTurnId ?? "";
+  const replacingSession = ["fork", "new", "clear"].includes(opts.cliCommand?.name ?? "");
+  let sessionEmitted = !!opts.sessionId && !replacingSession;
   let finished = false;
   let settling = false;
   let connectionClosed = false;
   let stopRequested = false;
   let turnCompleted = false;
+  let commandCompleted = false;
+  let transientThread = false;
+  let lastCompletedStatus = "completed";
+  const completedTurns = new Set<string>();
+  let resolvedModel = opts.model ?? "";
   let latestUsage: ThreadUsage | null = null;
   let contextEmitted = false;
   let stderr = "";
@@ -154,7 +167,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     child.once("close", () => clearTimeout(timer));
   };
   const emitContext = () => {
-    if (contextEmitted) return;
+    if (contextEmitted || (opts.cliCommand && !latestUsage)) return;
     contextEmitted = true;
     push({
       kind: "context",
@@ -181,6 +194,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       exitSignal: child.signalCode,
       stopRequested,
       turnCompleted,
+      commandCompleted,
       turnFailedMessage: message ?? null,
       structuredErrors,
       lastEventType,
@@ -201,7 +215,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     settling = true;
     void (async () => {
       try {
-        if (threadId) {
+        if (threadId && !transientThread) {
           try {
             if (connectionClosed) throw new Error("Codex App Server 连接已关闭");
             await request("thread/archive", { threadId }, CODEX_ARCHIVE_TIMEOUT_MS);
@@ -229,10 +243,11 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     })();
   };
 
-  const emitSession = (id: string) => {
+  const emitSession = (id: string, force = false) => {
     if (!id || sessionEmitted) return;
-    sessionEmitted = true;
     threadId = id;
+    if (opts.cliCommand && !force) return;
+    sessionEmitted = true;
     push({ kind: "session", cliSessionId: id });
   };
   if (opts.reattach && threadId && !sessionEmitted) emitSession(threadId);
@@ -280,21 +295,39 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     }
   };
 
-  const completeTurn = (turn: any) => {
-    if (turnCompleted || settling || finished) return;
+  const native = new CodexNativeCommands({
+    request: (method, params) => request(method, params, 30_000), threadId: () => threadId,
+    turnId: () => turnCompleted ? "" : turnId, model: () => resolvedModel, cwd: opts.cwd, prompt: opts.prompt, state: opts.cliState, usage: () => latestUsage, push,
+    context: () => readCodexContext(threadId, 0, opts.env?.CODEX_HOME),
+    turnOptions: {
+      ...(opts.reasoningEffort ? { effort: opts.reasoningEffort } : {}),
+      ...(opts.cliState?.serviceTier || opts.serviceTier ? { serviceTierForTurn: opts.cliState?.serviceTier ?? opts.serviceTier } : {}),
+    },
+  });
+  if (opts.reattach?.goal) { native.goal = opts.reattach.goal; native.goalExecution = true; }
+  const completeTurn = async (turn: any) => {
+    const completedId = turn?.id ?? turnId;
+    if (completedTurns.has(completedId) || settling || finished) return;
+    completedTurns.add(completedId);
+    await ready;
+    if (settling || finished) return;
+    if (completedId !== (reviewTurnId || turnId)) return;
     turnCompleted = true;
     const status = turn?.status;
+    lastCompletedStatus = status;
     const error = typeof turn?.error?.message === "string" ? turn.error.message : null;
     if (status === "failed" && error) {
       structuredErrors.push(error);
       push({ kind: "error", message: error });
-    } else if (status === "interrupted" && !stopRequested) {
+    } else if (status === "interrupted" && !stopRequested && !native.expectedInterruption) {
       push({ kind: "error", message: "Codex 当前回合被意外中断" });
     }
+    if (!(await native.afterTurn())) return;
+    if (!turnCompleted || completedId !== (reviewTurnId || turnId)) return;
     if (latestUsage) {
       push({ kind: "usage", usage: usageEvent(latestUsage.total) });
     }
-    finish(status === "completed" ? 0 : 1);
+    finish(status === "completed" || (status === "interrupted" && native.expectedInterruption) ? 0 : 1);
   };
 
   const handleNotification = (message: any) => {
@@ -304,6 +337,10 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     }
     if (settling || finished) return;
     const p = message.params ?? {};
+    if (p.threadId === threadId && message.method.startsWith("thread/goal/")) {
+      native.notification(message.method, p);
+      if (native.goalExecution && turnCompleted && native.goal?.status !== "active") finish(lastCompletedStatus === "completed" || (lastCompletedStatus === "interrupted" && native.expectedInterruption) ? 0 : 1);
+    }
     // 派出/收回子智能体的记录在父线程上,拿回来的状态挂在子线程 id 上 —— 两条流都要过一遍。
     for (const activity of codexSubAgentWork(message.method, p, threadId)) push(activity);
     if (threadId && p.threadId && p.threadId !== threadId) {
@@ -342,7 +379,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         break;
       }
       case "thread/started": emitSession(p.thread?.id); break;
-      case "turn/started": turnId = p.turn?.id ?? turnId; break;
+      case "turn/started": turnId = p.turn?.id ?? turnId; turnStartVersion += 1; turnCompleted = false; break;
       case "thread/tokenUsage/updated": latestUsage = p.tokenUsage ?? latestUsage; break;
       case "item/started": handleItemStarted(p.item); break;
       case "item/completed": handleItemCompleted(p.item); break;
@@ -364,7 +401,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
           push({ kind: "error", message: p.error.message });
         }
         break;
-      case "turn/completed": completeTurn(p.turn); break;
+      case "turn/completed": void completeTurn(p.turn).catch((error) => finish(1, String(error))); break;
     }
   };
 
@@ -427,15 +464,38 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     });
     notify("initialized");
     if (stopRequested) throw new Error("Codex 当前回合已停止");
-    if (opts.sessionId && await findArchivedRollout(opts.sessionId, opts.env?.CODEX_HOME)) {
+    if (opts.sessionId && !["new", "clear"].includes(opts.cliCommand?.name ?? "") && await findArchivedRollout(opts.sessionId, opts.env?.CODEX_HOME)) {
       await request("thread/unarchive", { threadId: opts.sessionId }, CODEX_ARCHIVE_TIMEOUT_MS);
     }
     if (stopRequested) throw new Error("Codex 当前回合已停止");
-    const thread = opts.sessionId
+    if (opts.cliCommand?.name === "fork" && !opts.sessionId) throw new Error("当前没有可分叉的会话");
+    const thread = opts.cliCommand?.name === "fork" && opts.sessionId
+      ? await request("thread/fork", threadParams(opts, { threadId: opts.sessionId }))
+      : opts.sessionId && !["new", "clear"].includes(opts.cliCommand?.name ?? "")
       ? await request("thread/resume", threadParams(opts, { threadId: opts.sessionId }))
       : await request("thread/start", threadParams(opts));
-    emitSession(thread.thread?.id ?? opts.sessionId ?? "");
+    resolvedModel = thread.model ?? resolvedModel;
+    threadId = thread.thread?.id ?? opts.sessionId ?? "";
+    emitSession(threadId);
+    if (opts.cliCommand?.name === "fork" && opts.sessionId && threadId !== opts.sessionId) {
+      await request("thread/archive", { threadId: opts.sessionId }, CODEX_ARCHIVE_TIMEOUT_MS);
+      archivedThreadIds.add(opts.sessionId);
+    }
     if (stopRequested) throw new Error("Codex 当前回合已停止");
+    if (opts.sessionId || opts.cliCommand) await native.prepare(opts.cliCommand);
+    const startVersion = turnStartVersion;
+    if (opts.cliCommand) {
+      const result = await native.start(opts.cliCommand);
+      if (opts.cliCommand.name === "review") reviewTurnId = result.turnId ?? turnId;
+      if (turnStartVersion === startVersion) turnId = result.turnId ?? turnId;
+      if (result.immediate) {
+        commandCompleted = true;
+        transientThread = !sessionEmitted && !await findRollout(threadId, opts.env?.CODEX_HOME);
+        if (!transientThread) emitSession(threadId, true);
+        finish(0);
+      } else emitSession(threadId, true);
+      return;
+    }
     const started = await request("turn/start", {
       threadId,
       input: textInput(opts.prompt),
@@ -444,15 +504,21 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       sandboxPolicy: { type: "dangerFullAccess" },
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.reasoningEffort ? { effort: opts.reasoningEffort } : {}),
-      ...(opts.serviceTier ? { serviceTier: opts.serviceTier } : {}),
+      collaborationMode: opts.cliState?.plan ? native.collaborationMode()
+        : { mode: "default", settings: { model: resolvedModel, developer_instructions: null } },
+      ...(opts.cliState?.serviceTier || opts.serviceTier ? { serviceTierForTurn: opts.cliState?.serviceTier ?? opts.serviceTier } : {}),
     });
-    turnId = started.turn?.id ?? "";
+    if (turnStartVersion === startVersion) turnId = started.turn?.id ?? "";
     if (!threadId || !turnId) throw new Error("Codex App Server 没有返回 threadId/turnId");
   })();
   void ready.catch((error) => {
+    if (isGoalExecution(opts.cliCommand ?? null) && opts.cliState?.goal) {
+      native.goal = { ...opts.cliState.goal, status: "blocked" };
+      push({ kind: "system", level: "notice", aside: true, at: new Date().toISOString(), text: "原生目标启动失败，目标已保留；修复执行器配置后可 /goal resume。" });
+    }
     finish(1, error instanceof Error ? error.message : String(error));
   });
-  if (opts.reattach?.completedTurn) completeTurn(opts.reattach.completedTurn);
+  if (opts.reattach?.completedTurn) void completeTurn(opts.reattach.completedTurn).catch((error) => finish(1, String(error)));
 
   let steerTail = Promise.resolve();
   const events = (async function* (): AsyncIterable<AgentEvent> {
@@ -466,7 +532,14 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     }
   })();
   return {
-    sessionId: opts.sessionId ?? "",
+    cliCommand: opts.cliCommand,
+    goal: () => native.goal,
+    command: async (command) => {
+      await ready;
+      if (settling || finished) throw new Error("Codex 当前回合已结束");
+      return native.control(command);
+    },
+    sessionId: replacingSession ? "" : opts.sessionId ?? "",
     commandLine: opts.commandLine
       ?? redactSecrets(`${opts.bin} ${opts.args.map(shq).join(" ")} <App Server JSONL via stdin>`),
     events,
@@ -477,12 +550,13 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         await ready;
         if (finished || settling || stopRequested) throw new Error("Codex 当前回合已经结束");
         if (!threadId || !turnId) throw new Error("Codex App Server 重连后缺少当前 thread/turn 标识");
+        const startVersion = turnStartVersion;
         const result = await request("turn/steer", {
           threadId,
           expectedTurnId: turnId,
           input: textInput(text),
         });
-        turnId = result.turnId ?? turnId;
+        if (turnStartVersion === startVersion) turnId = result.turnId ?? turnId;
       });
       steerTail = operation.catch(() => undefined);
       return operation;
@@ -494,7 +568,10 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         killChild(child);
         return;
       }
-      void request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
+      void (async () => {
+        if (native.goalExecution && native.goal?.status === "active") await request("thread/goal/set", { threadId, status: "paused" }, 1_000).catch(() => undefined);
+        if (!turnCompleted) await request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
+      })();
       const timer = setTimeout(() => {
         if (!finished && !settling) killChild(child);
       }, 2_000);
@@ -511,8 +588,13 @@ function threadParams(opts: CodexAppServerOpts, base: Record<string, unknown> = 
     cwd: opts.cwd,
     approvalPolicy: "never",
     sandbox: "danger-full-access",
+    developerInstructions: withGlobalBrowserPolicy("", "full"),
     ...(opts.model ? { model: opts.model } : {}),
-    ...(opts.serviceTier ? { serviceTier: opts.serviceTier } : {}),
+    ...(opts.cliState?.serviceTier || opts.serviceTier ? { serviceTier: opts.cliState?.serviceTier ?? opts.serviceTier } : {}),
+    ...(opts.cliState?.personality || opts.reasoningEffort ? { config: {
+      ...(opts.cliState?.personality ? { personality: opts.cliState.personality } : {}),
+      ...(opts.reasoningEffort ? { model_reasoning_effort: opts.reasoningEffort } : {}),
+    } } : {}),
   };
 }
 
@@ -537,16 +619,21 @@ const short = (value: unknown): string => {
 export function readCodexAppServerState(
   path: string,
   knownThreadId = "",
-): { threadId: string | null; turnId: string | null; completedTurn?: { id: string; status: string; error?: unknown } } {
+): { threadId: string | null; turnId: string | null; reviewTurnId?: string; completedTurn?: { id: string; status: string; error?: unknown }; goal?: CliGoal | null } {
   let threadId: string | null = knownThreadId || null;
   let turnId: string | null = null;
   let completedTurn: { id: string; status: string; error?: unknown } | undefined;
+  let reviewTurnId: string | null = null;
+  let goal: CliGoal | null | undefined;
   let raw = "";
   try { raw = readFileSync(path, "utf8"); } catch { return { threadId, turnId }; }
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let message: any;
     try { message = JSON.parse(line); } catch { continue; }
+    if (message.params?.threadId === threadId && message.method === "thread/goal/updated") goal = message.params.goal;
+    if (message.params?.threadId === threadId && message.method === "thread/goal/cleared") goal = null;
+    if (message.result?.reviewThreadId === threadId && typeof message.result?.turn?.id === "string") reviewTurnId = message.result.turn.id;
     if (message.method === "thread/started" && !threadId && typeof message.params?.thread?.id === "string") {
       threadId = message.params.thread.id;
     } else if (message.method === "turn/started"
@@ -558,11 +645,12 @@ export function readCodexAppServerState(
     } else if (message.method === "turn/completed"
       && message.params?.threadId === threadId
       && typeof message.params?.turn?.id === "string"
-      && (!turnId || turnId === message.params.turn.id)
+      && (!turnId || turnId === message.params.turn.id || reviewTurnId === message.params.turn.id)
       && typeof message.params.turn.status === "string") {
       turnId = message.params.turn.id;
       completedTurn = message.params.turn;
+      reviewTurnId = null;
     }
   }
-  return { threadId, turnId, ...(completedTurn ? { completedTurn } : {}) };
+  return { threadId, turnId, ...(reviewTurnId ? { reviewTurnId } : {}), ...(completedTurn ? { completedTurn } : {}), ...(goal !== undefined ? { goal } : {}) };
 }

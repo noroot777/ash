@@ -179,7 +179,7 @@ assert.equal(
 assert.equal(nativeCliCommand("claude", "  /compact\n"), "compact", "识别时容忍首尾空白");
 assert.equal(nativeCliCommand("claude", `/${ALPHA}`), null, "真 skill 不是原生命令");
 assert.equal(nativeCliCommand("claude", "先压一下 /compact"), null, "不在开头就不是原生命令(CLI 也不会拦)");
-assert.equal(nativeCliCommand("codex", "/compact"), null, "codex 没有这个原生命令");
+assert.equal(nativeCliCommand("codex", "/compact"), "compact", "codex 的压缩走原生 App Server");
 // 正文中间提到原生命令时:它对 CLI 不生效,也不能写进前言让模型去「执行」。
 const mixed = withSkillInvocation({ agentType: "claude", cwd: root, text: `/${ALPHA} 做完后 /compact` });
 assert.ok(mixed.includes(`- /${ALPHA}：`), "同一句里的真 skill 照常调用");
@@ -263,7 +263,8 @@ assert.ok(find(list, "compact"), "worktree 清掉后,那次校准要上提到还
 resetSkillCache();
 forgetLoadedCalibrations();
 list = listSkills({ agentType: "claude", cwd: root });
-assert.ok(!find(list, "compact"), "resetSkillCache 之后连落盘那份也不该再冒出来");
+assert.ok(!find(list, ONLY_IN_INIT), "resetSkillCache 之后连落盘那份也不该再冒出来");
+assert.ok(find(list, "compact"), "声明的原生命令不依赖 init 校准");
 
 // 分隔符是裸 NUL 的话,git 会把整份 store 记成二进制:diff / blame / 审查者全打不开
 // (第 4 轮审查就是这么被挡在门外的)。按字节钉住。

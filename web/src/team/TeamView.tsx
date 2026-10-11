@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
+import { cliCommandsForMode } from "@ash/shared/cli-commands";
 import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workersOf } from "@ash/shared/team";
 import { ArrowSquareOut, Clock, PaperPlaneTilt, SpinnerGap } from "@phosphor-icons/react";
 import {
@@ -98,7 +99,7 @@ function TeamReplyBox({
     projectId: task.projectId,
     enabled: !disabled,
   });
-  const slash = useSlashCompletion({ value, setValue, skills: skills.skills, disabled });
+  const slash = useSlashCompletion({ value, setValue, skills: cliCommandsForMode(skills.skills, task.agentType ?? "claude", "team"), disabled });
   // `@` 引用团队工作区里的文件：团队共享一个工作目录，执行者拿到的相对路径和这里一致。
   const mention = useFileMention({
     value,

@@ -20,6 +20,7 @@ const { ensureSchema, db } = await import("../src/db/index.js");
 const { tasks, projects, sessions } = await import("../src/db/schema.js");
 const { spawnControllableDetachedAgent, spawnDetachedAgent, detachedPathsFor } = await import("../src/executors/detached.js");
 const { CodexExecutor } = await import("../src/executors/codex.js");
+const { readCodexAppServerState } = await import("../src/executors/codex-app-server.js");
 const { inspectProcess } = await import("../src/proc.js");
 const { reattachRunningTasks } = await import("../src/reattach.js");
 const { reconcileInterrupted } = await import("../src/orchestrator.js");
@@ -86,6 +87,7 @@ const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 const receive = (message) => {
   if (message.id === undefined) return;
   if (message.method === "initialize") send({ id: message.id, result: {} });
+  else if (message.method === "thread/goal/get") send({ id: message.id, result: { goal: null } });
   else if (message.method === "thread/start") {
     send({ id: message.id, result: { thread: { id: "codex-steer-thread" } } });
     send({ method: "thread/started", params: { thread: { id: "codex-steer-thread" } } });
@@ -237,6 +239,8 @@ async function makeCodexSteerCase() {
     if (!result.done && result.value.kind === "session") cliSessionId = result.value.cliSessionId;
   }
   assert.equal(cliSessionId, "codex-steer-thread", "前提：假 App Server 完成了原始握手");
+  for (let attempt = 0; attempt < 100 && !readCodexAppServerState(paths.out, cliSessionId).turnId; attempt++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(readCodexAppServerState(paths.out, cliSessionId).turnId, "codex-steer-turn", "前提：原始回合已经启动");
   await db.insert(sessions).values({
     id: sessId, taskId: CODEX_STEER, role: "single", agentType: "codex", executor: "codex@local",
     cwd: dir, cliSessionId, commandLine: handle.commandLine,

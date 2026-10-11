@@ -46,6 +46,7 @@ export function SlashMenu({
   onPick: (item: SlashItem) => void;
 }) {
   const firstSkillIndex = items.findIndex((item) => item.kind === "skill");
+  const firstNativeIndex = items.findIndex((item) => item.kind === "native");
   const selectedRef = useRef<HTMLButtonElement>(null);
   // 技能多的机器上这张菜单是滚动的（本机 57 条），↑↓ 走到视野外必须自己跟着滚，
   // 否则选中项看不见 = 回车发出去的是什么全靠猜。
@@ -58,6 +59,7 @@ export function SlashMenu({
       <small>{hint}</small>
       {items.map((item, index) => (
         <Fragment key={`${item.kind}:${item.command}`}>
+          {index === firstNativeIndex && <small className="slash-menu-divider">原生命令 · 由 CLI 执行</small>}
           {index === firstSkillIndex && firstSkillIndex > 0 && (
             <small className="slash-menu-divider">已装技能 · 发送时自动调用</small>
           )}

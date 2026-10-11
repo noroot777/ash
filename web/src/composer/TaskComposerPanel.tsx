@@ -30,6 +30,7 @@ import {
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
+import { cliCommandsForMode } from "@ash/shared/cli-commands";
 import { useSkills } from "../lib/useSkills.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
@@ -309,7 +310,7 @@ export function TaskComposerPanel({
     enabled: mode !== "duet",
   });
   const slashQuery = slashDismissed ? null : slashToken(body);
-  const slashCandidates = mergeSlashItems(ASH_SLASH_ITEMS, skills.skills, slashQuery);
+  const slashCandidates = mergeSlashItems(ASH_SLASH_ITEMS, cliCommandsForMode(skills.skills, slashRun.agentType, mode), slashQuery);
   // `@` 引用项目里的文件：任务还不存在，所以按项目仓库搜。选中的路径原样写进正文，
   // 跑起来之后 agent 在自己的工作目录（worktree 或主仓）里按同一条相对路径找得到。
   // 非 git 项目照样给：服务端那边会退回自己走一遍目录（file-search.ts 的 walk）。

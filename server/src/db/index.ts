@@ -299,6 +299,8 @@ export async function ensureSchema() {
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
+    "ALTER TABLE tasks ADD COLUMN goal_turn INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN cli_state TEXT",
     "ALTER TABLE tasks ADD COLUMN ended_at TEXT",
     "ALTER TABLE sessions ADD COLUMN ended_at TEXT",
     "ALTER TABLE groups ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",

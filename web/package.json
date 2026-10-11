@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:cli-commands": "node scripts/test-cli-commands-ui.mjs",
     "test:native-work": "npm -w @ash/server run test:native-work && tsx scripts/test-native-work-metadata.ts && tsx scripts/test-native-work-presentation.tsx && node scripts/test-native-work-dom.mjs",
     "test:chat": "node scripts/test-chat-browser.mjs",
     "dev": "vite",

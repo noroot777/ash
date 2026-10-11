@@ -1,5 +1,6 @@
 import { eq, asc, inArray } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
+import { hasCliGoalHold } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
@@ -90,6 +91,7 @@ export type QueueMember = {
   question: string | null;
   // 非空 = 这一轮是「续聊」(终态任务的追加对话),队列按这个终态看待它。
   followUpFrom?: string | null;
+  cliState?: string | null;
 };
 
 // 队列眼里的成员状态:终态任务的续聊回合虽然 status=running,但那一轮不是任务的
@@ -121,6 +123,7 @@ export function selectNextInQueue<T extends QueueMember>(rows: T[]): T | null {
     // 提问暂停(question 非空)≠ 检查点暂停:它在等 answer_question 带答复唤醒,
     // 队列跟着等,绝不能在这里用「继续」把它空手叫醒(问题会白问)。
     if (s === "paused" && t.question) return null;
+    if (s === "paused" && hasCliGoalHold(t.cliState)) return null;
     return t; // backlog / paused
   }
   return null;
@@ -211,7 +214,7 @@ async function runParallel(groupId: string): Promise<void> {
       t.mode !== "team" && // 防御:团队任务不进组,也不该被分组批量拉起
       !inQueue.has(t.id) &&
       (t.status === "backlog" ||
-        (t.status === "paused" && !t.resumePrompt && !t.question)),
+        (t.status === "paused" && !t.resumePrompt && !t.question && !hasCliGoalHold(t.cliState))),
   );
 
   if (launchable.length) {

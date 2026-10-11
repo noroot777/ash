@@ -25,7 +25,9 @@ import { reviewProtocolFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnStart } from "./turn-output.js";
 import { abortIfFrozen } from "./turn-freeze.js";
-import { withSkillInvocation } from "./skills.js";
+import { nativeCliCommand, withSkillInvocation } from "./skills.js";
+import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
+import { interruptCliGoal, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
@@ -97,7 +99,7 @@ export async function runTask(
     const directionToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
+      .set({ followUpFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
     await setTaskStatus(taskId, "running");
     // 已验收任务被 fresh 重跑（Cron 到点 / fire）：旧「已验收」牌子当场摘掉——新一版
@@ -115,6 +117,10 @@ export async function runTask(
     // 也要记 —— 漏交卷最常发生在这一路,而 turn-baseline 只给真人续聊拍照。
     await recordTurnStart(taskId, ws.path);
     const agentType = (task.agentType as AgentType) ?? "claude";
+    const commandText = task.body.trim();
+    const command = parseCliCommand(agentType, commandText);
+    const localCommand = nativeCliCommand(agentType, commandText);
+    await db.update(tasks).set({ goalTurn: isGoalExecution(command), nativeTurn: !!localCommand }).where(eq(tasks.id, taskId));
     // 多人模式:用**这一次起跑是谁点的**那个人的执行器与供应商跑(§八)。别人的执行器
     // 解析不到时降级到本人的默认执行器,并把这次降级如实写进时间线 —— 烧的是他自己的 key。
     const runOwner = opts.actingUserId ?? task.ownerUserId;
@@ -157,6 +163,8 @@ export async function runTask(
       (autoTitle ? TITLE_HINT + objective : objective),
       "full",
     );
+    const cli = await prepareCliInvocation(task, agentType, commandText, profileId, runOwner ?? null);
+    const runEnv = { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 spawn 之间没有 await，
     // 所以「已 claim、还没 spawn」的窗口里收到的暂停请求一定在这里被消费。fresh run 的
     // 冻结事实由调度侧（scheduler/queue）负责，这里只消费内存标记。
@@ -170,8 +178,8 @@ export async function runTask(
     const detach = detachedPathsFor(runDir, sessId, turnStart);
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
     handle = run({
-      prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
-      env: { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
+      prompt: localCommand ? commandText : prompt, ...cli, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
+      env: runEnv,
     });
     trackRun(taskId, handle);
     // 前言已经随 prompt 交到 agent 手上就划掉（放在 spawn 之后:起跑前还有 abortIfFrozen
@@ -256,7 +264,9 @@ export async function runTask(
     // 发生顺序。没说过才补（spawn 成功后崩的那种，上面已经写过一条）。
     if (!baseFallbackTold) await announceBaseFallback(taskId, baseFallback, { role: "single" });
     await reportTurnFailure({ taskId, message, role: "single" });
-    const status = stopped ?? "failed";
+    const [failedTask] = await db.select().from(tasks).where(eq(tasks.id, taskId));
+    if (failedTask?.goalTurn) await interruptCliGoal(failedTask);
+    const status = stopped ?? (failedTask?.goalTurn ? "paused" : "failed");
     await setTaskStatus(taskId, status);
     await afterSettlement(taskId, status, false, false, "single", true, !stopped);
   } finally {

@@ -9,7 +9,7 @@ export interface SlashItem {
   label: string;
   hint?: string;
   /** ash 自己的派生命令(/team、/duet)vs CLI 已装的技能。 */
-  kind: "ash" | "skill";
+  kind: "ash" | "native" | "skill";
   source?: SkillSource;
   /** 同一份技能还装在哪些别的 CLI 上(按物理路径认)。 */
   alsoIn?: AgentType[];
@@ -46,7 +46,7 @@ export function toSlashItems(skills: SkillEntry[]): SlashItem[] {
   return skills.map((skill) => ({
     command: skill.command,
     label: skill.description || "技能",
-    kind: "skill" as const,
+    kind: skill.native ? "native" as const : "skill" as const,
     source: skill.source,
     alsoIn: skill.alsoIn,
   }));
@@ -59,5 +59,6 @@ export function toSlashItems(skills: SkillEntry[]): SlashItem[] {
  */
 export function mergeSlashItems(ash: SlashItem[], skills: SkillEntry[], token: string | null): SlashItem[] {
   if (!token) return [];
-  return [...rankByMatch(ash, token), ...rankByMatch(toSlashItems(skills), token)];
+  const items = toSlashItems(skills);
+  return [...rankByMatch(ash, token), ...rankByMatch(items.filter((item) => item.kind === "native"), token), ...rankByMatch(items.filter((item) => item.kind === "skill"), token)];
 }

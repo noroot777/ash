@@ -14,6 +14,7 @@ import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
 import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
+import { validateCliCommand } from "@ash/shared/cli-commands";
 
 export type TaskRow = typeof tasks.$inferSelect;
 // workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
@@ -229,6 +230,11 @@ export async function createTasks(
   beforeInsert?: () => Promise<void> | void,
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
+  for (const row of rows) {
+    const agentType = row.agentType ?? "claude";
+    const command = validateCliCommand(agentType, row.body ?? "");
+    if (command && row.mode && row.mode !== "single" && !(agentType === "claude" && command.name === "compact")) throw new Error("原生命令仅支持普通单任务");
+  }
   // Creation defaults belong here so every ordinary path (HTTP single, batch /
   // chain, duet handoff, future clients) gets the same behavior. Explicit
   // true/false wins, but a non-repo project can never materialize a worktree.

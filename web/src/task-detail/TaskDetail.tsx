@@ -534,6 +534,10 @@ export function TaskDetail({
                           : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
                         return result;
                       }
+                      if ("command" in result) {
+                        notify(result.recorded ? "原生命令已执行，结果见会话记录" : result.text);
+                        return result;
+                      }
                       // 这一轮真发出去了,横幅先按这个名字报,等会话行落库再由它接管。
                       setPendingExecutor(executorLabel ?? null);
                       conversation.addUser(text, attachments);

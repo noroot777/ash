@@ -2,9 +2,12 @@ import type { ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import type { RunTracePaths } from "./diagnostics.js";
 import type { DetachedPaths } from "./detached.js";
+import type { CliCommand, CliGoal, CliSessionState } from "@ash/shared/cli-commands";
 
 export interface RunOpts {
   prompt: string;
+  cliCommand?: CliCommand;
+  cliState?: CliSessionState;
   cwd: string;
   sessionId?: string; // resume an existing CLI session
   model?: string;
@@ -23,6 +26,7 @@ export interface RunOpts {
 // before/while consuming the stream. `kill` terminates the
 // underlying subprocess (manual stop) — the stream then ends like a normal exit.
 export interface RunHandle {
+  cliCommand?: CliCommand;
   sessionId: string;
   commandLine: string;
   events: AsyncIterable<AgentEvent>;
@@ -30,6 +34,8 @@ export interface RunHandle {
   // 单飞当前回合的原生引导通道。存在时调用方把新 user 消息送进同一个活动回合，
   // 不结束任务、不释放单飞锁；回合自然结束后这根通道随 RunHandle 一起关闭。
   steer?(text: string, beforeSend?: () => void | Promise<void>): Promise<void>;
+  command?(command: CliCommand): Promise<string>;
+  goal?(): CliGoal | null;
   /** 事件流结束后回收 CLI 甩出去的后台后代；没有真实进程的失败句柄可省略。 */
   cleanup?: () => Promise<void>;
   // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
