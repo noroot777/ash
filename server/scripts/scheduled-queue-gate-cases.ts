@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import type { HandoffCaseContext } from "./scheduled-handoff-cases.js";
 
 export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> {
-  const { at, root, leadLog, waitFor, countIn, taskRow } = ctx;
+  const { at, root, leadLog, waitFor, countIn, taskRow, messageRow } = ctx;
   const [{ db }, schema, pending, runs, schedulesModule, runRoutes, { Hono }] = await Promise.all([
     import("../src/db/index.js"),
     import("../src/db/schema.js"),
@@ -498,4 +498,98 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   assert.equal(countIn(leadLog, mBQuery), 1, "追问原文被投递了不止一次");
   await stopWhenLive(mC); // mB 终态让位连锁启动 mC,一并收尾
   console.log("✓ 推进与追问争回合所有权:任意交错 mB 自动续跑,追问恰好送达一次");
+
+  // ── 认领之前暂停:自动交接不得穿透分组暂停(第 6 轮审查问题 1)─────────────────────
+  // 推进在 isPaused 预检查读到 paused=false 之后、认领/落位完成,此刻用户按下暂停:
+  // 内存冻结标记无回合可打(pauseGroup 扫描时还没 claim),预检查又已读过旧值 —— 修复
+  // 前自动交接带 turnHeld 被 handDuePendingMessageToRun 误当手动运行、跳过冻结核查,
+  // 待发送回复照常拉起执行(审查真实页面:分组显示已暂停,下一项开跑)。修复后启动
+  // 来源与所有权分开:无人值守启动在 spawn 前按持久事实复查,挡回时回复留在托盘。
+  const nA = "scheduled-single-gate-na";
+  const nB = "scheduled-single-gate-nb";
+  const nGroup = "scheduled-gate-group-n";
+  const nBText = "组内执行回复(pausegate):保持运行等待引导";
+  const nARow = { ...taskRow(nA, "claude", "done"), mode: "single", team: null, groupId: nGroup };
+  await db.insert(schema.groups).values({
+    id: nGroup, projectId: nARow.projectId as string, name: "pause-gate", mode: "serial", paused: false, createdAt: at,
+  });
+  await db.insert(tasks).values([
+    nARow,
+    { ...taskRow(nB, "claude", "paused"), mode: "single", team: null, groupId: nGroup },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-gate-nb-prev", taskId: nB, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-nb-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-11", taskId: nA, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-11", taskId: nB, position: 1, createdAt: at },
+  ]);
+  await db.insert(scheduledMessages).values({ ...messageRow("scheduled-gate-nb-msg", nB, nBText, "queued"), execution: true });
+  // 模拟推进临界区的产物(已认领 + 已落位),随后组才被暂停 —— 正是预检查看不见的窗口。
+  assert.equal(runs.claimTurn(nB), true, "测试前提:应能预认领 nB 的回合");
+  await db.update(tasks).set({ status: "queued" }).where(eq(tasks.id, nB));
+  await db.update(schema.groups).set({ paused: true }).where(eq(schema.groups.id, nGroup));
+  const taskResume = await import("../src/task-resume.js");
+  await taskResume.resumeOrRunTask(nB, { reason: "queue", turnHeld: true });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(await taskStatusOf(nB), "paused", "组已暂停,自动交接必须被 spawn 前的持久复查挡回");
+  assert.equal(runs.isTurnClaimed(nB), false, "挡回后预认领的回合必须释放");
+  assert.equal(countIn(leadLog, nBText), 0, "挡回的执行回复不得进 stdin");
+  assert.equal(
+    (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "scheduled-gate-nb-msg"))).at(0)?.status,
+    "pending", "挡回的回复必须留在托盘等恢复分组",
+  );
+  // 用户恢复分组 → 这次交接续上:回复作为执行输入送达恰好一次。
+  await db.update(schema.groups).set({ paused: false }).where(eq(schema.groups.id, nGroup));
+  await scheduler.advanceQueue("scheduled-gate-queue-11");
+  await waitFor(() => countIn(leadLog, nBText) > 0, "恢复分组后回复没有送达");
+  await waitFor(async () => (await taskStatusOf(nB)) === "running", "恢复分组后 nB 应在运行");
+  await stopWhenLive(nB);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(countIn(leadLog, nBText), 1, "同一条回复被投递了不止一次");
+  console.log("✓ 认领前暂停:自动交接被持久复查挡回,回复留在托盘,恢复分组后送达一次");
+
+  // ── 占位写入失败不遗留回合锁(第 6 轮审查问题 2)──────────────────────────────────
+  // 推进在临界区里已 claimTurn,setQueued 撞上并发写锁把 busy timeout 耗尽:修复前
+  // 临界区异常外抛,续跑与占位回收都装不上,新认领的锁永远没人释放 —— 任务 paused、
+  // 无进程,/run 却一律 409「任务回合正在进行」,人工也救不回。修复后失败即释放锁、
+  // 延迟记账重推:数据库恢复可写后这次交接自动续上。
+  const oA = "scheduled-single-gate-oa";
+  const oB = "scheduled-single-gate-ob";
+  const oBPrompt = "继续正式步骤(ckpt-writefail);保持运行等待引导";
+  await db.insert(tasks).values([
+    { ...taskRow(oA, "claude", "done"), mode: "single", team: null },
+    { ...taskRow(oB, "claude", "paused"), mode: "single", team: null, resumePrompt: oBPrompt },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-gate-ob-prev", taskId: oB, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-ob-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-12", taskId: oA, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-12", taskId: oB, position: 1, createdAt: at },
+  ]);
+  // 另一条真实 SQLite 连接持写锁,耗尽服务端 5s busy timeout(与审查同手法,不 stub)。
+  const { DatabaseSync } = await import("node:sqlite");
+  const ext = new DatabaseSync(process.env.ASH_DB!);
+  ext.exec("BEGIN IMMEDIATE");
+  const advanceDone = scheduler.advanceQueue("scheduled-gate-queue-12");
+  await advanceDone; // setQueued 超时失败,但函数自己收口,不外抛
+  assert.equal(runs.isTurnClaimed(oB), false, "占位写入失败后预认领的回合必须释放(409 永锁)");
+  assert.equal(await taskStatusOf(oB), "paused", "写入失败时任务应保持原状态");
+  assert.equal(
+    (await db.select().from(tasks).where(eq(tasks.id, oB))).at(0)!.resumePrompt, oBPrompt,
+    "写入失败不得吞掉继续指令",
+  );
+  ext.exec("ROLLBACK");
+  ext.close();
+  // 延迟记账重推:数据库恢复可写后自动续上交接。
+  await waitFor(async () => {
+    const row = (await db.select().from(tasks).where(eq(tasks.id, oB))).at(0)!;
+    return row.status === "running" && row.resumePrompt === null;
+  }, "数据库恢复后交接没有自动续上");
+  await waitFor(() => countIn(leadLog, "ckpt-writefail") > 0, "重推续跑没有用检查点指令作输入");
+  await stopWhenLive(oB);
+  console.log("✓ 占位写入失败:释放预认领、保持原状,恢复可写后自动重推续上交接");
 }

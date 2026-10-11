@@ -3,7 +3,7 @@ import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { claimTurn, freezeStartingTurn, isTurnClaimed, stopTask } from "./runs.js";
+import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 
@@ -106,14 +106,33 @@ export async function advanceQueue(queueId: string): Promise<void> {
       noteMissedAdvance(candidate.id, queueId);
       return null;
     }
-    await setQueued(candidate.id);
+    // 认领与接管之间的每个异常出口都要收口:setQueued 一旦写失败(典型:并发写锁把
+    // busy timeout 耗尽),临界区异常外抛,下面的续跑与占位回收都装不上 —— 新认领的锁
+    // 就没人释放,任务从此 /run 一律 409「回合正在进行」,人工也救不回(第 6 轮审查:
+    // 真实 SQLite 写锁 7 秒注入,一次可恢复的超时变成永久停滞)。失败即释放锁、延迟
+    // 一拍记账重推:数据库恢复可写后自动续上这次交接。
+    try {
+      await setQueued(candidate.id);
+    } catch (err) {
+      releaseTurn(candidate.id);
+      console.error(`[ash] 队列推进占位写入失败(${candidate.id}),释放预认领并稍后重推:`, err);
+      const timer = setTimeout(() => noteMissedAdvance(candidate.id, queueId), 1_000);
+      timer.unref?.();
+      return null;
+    }
     return candidate;
   });
   if (next === "paused") return;
   if (next && typeof next === "object") {
     const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
     void resumeOrRunTask(next.id, { reason: "queue", turnHeld: true })
-      .catch((err) => console.error(`[ash] 队列推进续跑(${next.id})失败:`, err))
+      .catch((err) => {
+        console.error(`[ash] 队列推进续跑(${next.id})失败:`, err);
+        // 接管前就抛了(读库/取指令那串 await):turnHeld 的锁还挂在我们头上 —— 占着
+        // 期间别的入口 claim 不进来,所以此刻还被占的锁必是这次认领的,由认领方收回。
+        // 接管后的异常由 continueTask 自己吸收并在 finally 释放,不会走到这里。
+        if (isTurnClaimed(next.id)) releaseTurn(next.id);
+      })
       .finally(() => void reclaimStrandedSeat(next.id, queueId, prevStatus));
     return;
   }

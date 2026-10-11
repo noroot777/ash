@@ -591,7 +591,7 @@ export function flushPendingForTask(taskId: string): void {
 // 调用方不要再开别的回合;false = 没有可交接的消息,照常走默认输入。
 export async function handDuePendingMessageToRun(
   taskId: string,
-  opts: { turnHeld?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null } = {},
 ): Promise<boolean> {
   if (dbClient.closed) return false;
   // 已有投递在途:它自己会开回合,这里再开默认「继续」就是同一任务两路起跑。
@@ -639,10 +639,11 @@ export async function handDuePendingMessageToRun(
       // 不走续聊语义),但输入是真实用户回复 —— 原文/附件照常进会话记录与后续追问,
       // 不能带 system 标记把它记成一句「〔系统〕继续」。
       executionTurn: true,
-      // 冻结核查只给无人值守的启动压上:队列推进(无 turnHeld)从 isPaused 预检查到
-      // spawn 隔着不少 await,中途用户可能刚按下暂停;手动运行/重试(turnHeld)是用户
-      // 显式动作,语义与隔壁 RESUME/fresh 路径保持一致,不额外加闸。
-      freezeGuard: !opts.turnHeld,
+      // 冻结核查:启动来源与回合所有权分开看(第 6 轮审查:队列推进带 turnHeld 后,
+      // 这里把 turnHeld 误当「手动运行」,自动交接穿透了分组暂停)。调用方(task-resume)
+      // 按来源显式给 freezeGuard;没给的旧调用按原判据降级 —— 手动运行/重试(turnHeld)
+      // 是用户显式动作,不加闸,与隔壁 RESUME/fresh 路径保持一致。
+      freezeGuard: opts.freezeGuard ?? !opts.turnHeld,
       turnHeld: opts.turnHeld,
       onDelivered: async () => {
         delivered = true;

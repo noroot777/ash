@@ -48,7 +48,7 @@ import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 // 队列推进、上游唤醒)不传,退回任务归属人。
 export async function runTask(
   taskId: string,
-  opts: { turnHeld?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null } = {},
 ): Promise<void> {
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
@@ -158,9 +158,10 @@ export async function runTask(
       "full",
     );
     // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 spawn 之间没有 await，
-    // 所以「已 claim、还没 spawn」的窗口里收到的暂停请求一定在这里被消费。fresh run 的
-    // 冻结事实由调度侧（scheduler/queue）负责，这里只消费内存标记。
-    await abortIfFrozen(taskId);
+    // 所以「已 claim、还没 spawn」的窗口里收到的暂停请求一定在这里被消费。无人值守的
+    // 启动(队列推进/恢复分组/上游唤醒,调用方传 freezeGuard)还要按持久事实复查 ——
+    // 暂停若发生在回合认领之前,内存标记无处可打,只有查库兜得住(第 6 轮审查)。
+    await abortIfFrozen(taskId, { checkFacts: !!opts.freezeGuard });
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
