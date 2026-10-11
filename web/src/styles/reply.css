@@ -132,3 +132,5 @@
 .agent-model-picker > footer { border-top: 0.5px solid var(--line); padding: 5px 9px 6px; color: var(--faint); font-size: 9px; }
 .team-reply-shell { position: relative; }
 .team-reply-box footer > .reply-schedule-button { width: 27px; height: 27px; }
+
+/* 哨兵条：跟待发送消息托盘同一套视觉语言（它们讲的是同一件事——还没落到会话里的东西）。 */

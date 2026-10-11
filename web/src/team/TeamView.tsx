@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
-import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@ash/shared/team";
-import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workersOf } from "@ash/shared/team";
+import { ArrowSquareOut, Clock, PaperPlaneTilt, SpinnerGap } from "@phosphor-icons/react";
 import {
   ScheduledMessageTray,
   ScheduledSendPanel,
@@ -27,6 +27,8 @@ import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useFileMention } from "../lib/useFileMention.ts";
 import { FileMentionMenu } from "../components/MentionMenu.tsx";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
@@ -36,10 +38,11 @@ import {
   useReplyHeight,
 } from "../task-detail/ReplyResizeHandle.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
-import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { useSubagents } from "../task-detail/useSubagents.tsx";
+import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
+import { CuaResidualNotice, HaltNotice } from "./TeamNotices.tsx";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import {
   attachmentsFromPaths,
@@ -74,6 +77,7 @@ function TeamReplyBox({
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const sendKeys = useSendKeyLabels();
   // 跟着输入行数长高;顶边那条拖动条拖过之后以拖出来的高度为准——跟普通任务回复框
   // 同一套(task-detail/ReplyResizeHandle.tsx),高度只有 useAutoGrowTextarea 一个写者,
   // 所以 CSS 那边把原生右下角把手关掉了。
@@ -193,6 +197,7 @@ function TeamReplyBox({
         error={scheduled.error}
         cancelingIds={scheduled.cancelingIds}
         onWithdraw={(message) => void withdraw(message)}
+        onCancel={(messageId) => void scheduled.cancel(messageId)}
       />
       <UploadAttachmentList
         attachments={uploads.attachments}
@@ -215,7 +220,7 @@ function TeamReplyBox({
           onKeyDown={(event) => {
             if (slash.onKeyDown(event)) return;
             if (mention.onKeyDown(event)) return;
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void send(); }
+            if (isSendKeyEvent(event)) { event.preventDefault(); void send(); }
           }}
         />
         <footer>
@@ -234,58 +239,13 @@ function TeamReplyBox({
           >
             <Clock size={14} />
           </button>
-          <span>{uploads.uploading ? uploadingLabel(uploads.pending) : "调度台 · ⌘↵ 发送"}</span>
+          <span>{uploads.uploading ? uploadingLabel(uploads.pending) : `调度台 · ${sendKeys.sendShort} 发送`}</span>
           <button type="button" disabled={disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)} onClick={() => void send()} aria-label="发送给调度者">
             {sending ? <SpinnerGap size={14} className="is-spinning" /> : <PaperPlaneTilt size={14} weight="fill" />}
           </button>
         </footer>
       </div>
     </div>
-  );
-}
-
-function HaltNotice({ workers, groupCount, historyOnly }: { workers: TaskListItem[]; groupCount: number; historyOnly: boolean }) {
-  const stats = workerHaltStats(workers);
-  return (
-    <div className="team-halt-notice" role="status">
-      <b>全组已停止</b>
-      <span>{stats.interrupted} 个执行者被暂停打断 · {stats.completed} 个已完成 · {stats.waiting} 个尚未启动</span>
-      <small>{historyOnly ? "停止记录来自持久会话；内部组详情暂未返回" : `${groupCount} 个内部组保持暂停，刷新页面后仍可见`}</small>
-    </div>
-  );
-}
-
-function CuaResidualNotice({ taskId, status, onStatus, notify }: { taskId: string; status: TeamCuaStatus | null; onStatus: (status: TeamCuaStatus | null) => void; notify: (message: string) => void }) {
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const current = status?.current;
-  // applicable === false：非 macOS，这套机制根本不存在，这块提示连同「强制清理」
-  // 按钮一起不该出现（detected 本来也会是 false，这一条是防御性的第二道）。
-  if (!current?.detected || current.applicable === false) return null;
-  const kill = async () => {
-    setBusy(true);
-    try {
-      await api.killTeamCua(taskId);
-      onStatus(await api.teamCuaStatus(taskId));
-      setConfirmOpen(false);
-      notify("已请求强制清理 computer-use 服务");
-    } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <>
-      <div className="team-cua-notice" role="alert">
-        <WarningCircle size={14} weight="fill" />
-        <b>computer-use 服务仍在运行</b>
-        <span>{current.sideEffect}</span>
-        {current.processes.length > 0 && <code>pid {current.processes.map((process) => process.pid).join(", ")}</code>}
-        <button type="button" onClick={() => setConfirmOpen(true)}><Broom size={13} />强制清理</button>
-      </div>
-      {confirmOpen && <ConfirmDialog title="强制清理 computer-use？" message={current.sideEffect} confirmLabel="强制清理" danger busy={busy} onConfirm={() => void kill()} onClose={() => setConfirmOpen(false)} />}
-    </>
   );
 }
 
@@ -373,7 +333,9 @@ export function TeamView({
     error: conversation.error ?? conversation.traceError,
     onRetry: conversation.refetch,
   }, { onOpen: () => setSelectedWorkerId(null) });
-  const inspectors = subagents.inspectors;
+  // 哨兵那一格：挂在调度台自己身上，看着别的面板时也要拉（图标条上那点活信号靠它）。
+  const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
+  const inspectors = monitorTab.inspectors;
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
   const waiting = useMemo(() => waitingWorkers(workers), [workers]);
   const workerLiveLines = useWorkerLiveLines(task.id, workers);
@@ -389,13 +351,13 @@ export function TeamView({
     && workers.length > 0
     && workers.every((worker) => worker.status === "done");
   const inspectorPolicy = useMemo(() => ({
-    // `-v2`：生成物那一格是后加的，存量用户的 `openTabs` 躺在 localStorage 里，只有
-    // `stateKey` 变过一次才会拿下面这张表去并集。加面板要连带跳一版（同 TaskDetail）。
-    stateKey: `team:timeline-v2:${allWorkersComplete ? "complete" : "active"}`,
+    // `-v3`：生成物、哨兵那两格都是后加的，存量用户的 `openTabs` 躺在 localStorage 里，
+    // 只有 `stateKey` 变过一次才会拿下面这张表去并集。加面板要连带跳一版（同 TaskDetail）。
+    stateKey: `team:timeline-v3:${allWorkersComplete ? "complete" : "active"}`,
     requiredTabId: "info",
     defaultOpenTabIds: allWorkersComplete
-      ? ["info", "review", "artifacts", "timeline"]
-      : ["info", "workers", "artifacts", "timeline"],
+      ? ["info", "review", "artifacts", "timeline", "monitors"]
+      : ["info", "workers", "artifacts", "timeline", "monitors"],
     defaultActiveTabId: allWorkersComplete ? "review" : "workers",
   }), [allWorkersComplete]);
   const selectWorker = useCallback((taskId: string) => {
@@ -526,6 +488,7 @@ export function TeamView({
       descriptors={inspectors}
       context={{
         nativeWork: subagents.nativeWork,
+        monitors: monitorTab.monitors,
         task,
         workers,
         groups: teamGroups,

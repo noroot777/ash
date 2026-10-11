@@ -1,6 +1,7 @@
 import type { ClipboardEventHandler, KeyboardEvent, RefObject } from "react";
 import type { TaskMode } from "@ash/shared";
 import { SlashMenu } from "../components/SlashMenu.tsx";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
 import type { SlashItem } from "../lib/useSkills.ts";
 
 export function ComposerObjective({ body, mode, textareaRef, onChange, onPaste, items, selected, token, onSelect, onPick, onDismiss, onSubmit, mention }: {
@@ -40,7 +41,7 @@ export function ComposerObjective({ body, mode, textareaRef, onChange, onPaste, 
             event.preventDefault(); event.stopPropagation(); onDismiss(); return;
           }
         }
-        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        if (isSendKeyEvent(event)) {
           event.preventDefault(); onSubmit();
         }
       }} />

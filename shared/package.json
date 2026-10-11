@@ -153,6 +153,10 @@
     "./git-workbench": {
       "types": "./src/git-workbench.ts",
       "default": "./src/git-workbench.ts"
+    },
+    "./monitor": {
+      "types": "./src/monitor.ts",
+      "default": "./src/monitor.ts"
     }
   },
   "scripts": {

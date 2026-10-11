@@ -30,6 +30,8 @@ import {
 import { api } from "../lib/api.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
+import { isSubmitKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import {
   buildTaskDerivationBody,
   defaultDuetTopic,
@@ -135,6 +137,7 @@ export function TaskDerivationComposer({
   const [worktreeContext, setWorktreeContext] = useState<WorktreeContext | null>(null);
   const noteTouched = useRef(false);
   const topicTouched = useRef(false);
+  const sendKeys = useSendKeyLabels();
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const topicRef = useRef<HTMLTextAreaElement>(null);
   const detection = useAgentAvailability();
@@ -446,7 +449,10 @@ export function TaskDerivationComposer({
           event.preventDefault();
           onClose();
         }
-        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        // 卡片级：里面有下拉、开关和按钮，它们自带回车语义，而附言框里的技能/文件
+        // 补全菜单选中一条后那个回车也已经用掉了 —— 两种都由 isSubmitKeyEvent 挡住，
+        // 否则「回车发送」这一档下选一条技能会顺手把任务创建出去。
+        if (isSubmitKeyEvent(event)) {
           event.preventDefault();
           void submit();
         }
@@ -568,7 +574,7 @@ export function TaskDerivationComposer({
           <Button variant="primary" onClick={() => void submit()} disabled={!canSubmit}>
             {busy && <SpinnerGap size={14} className="is-spinning" />}
             {busy ? "创建中…" : teamMode ? "创建并开干" : "创建并开聊"}
-            {!busy && <kbd>⌘↵</kbd>}
+            {!busy && <kbd>{sendKeys.sendShort}</kbd>}
           </Button>
         </div>
       </footer>

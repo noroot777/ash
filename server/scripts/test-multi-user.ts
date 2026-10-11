@@ -168,27 +168,8 @@ const bobActor = actorOf(bob);
   assert.equal(noDefault[0].toName, null);
 }
 
-// ── ⑥ 设置分面 ────────────────────────────────────────────────────────────
-{
-  await personal.patchSettingsFor(aliceActor, { defaultWorkflowId: "alice-flow" });
-  assert.equal((await personal.settingsFor(alice.id)).defaultWorkflowId, "alice-flow");
-  assert.equal((await personal.settingsFor(bob.id)).defaultWorkflowId, "", "个人面互不影响");
-  assert.equal((await appSettings.getAppSettings()).defaultWorkflowId, "", "个人面不该写进全局那份");
-
-  // 实例面:普通用户改不动,管理员可以。
-  await assert.rejects(
-    () => personal.patchSettingsFor(aliceActor, { skillRefreshSeconds: 7200 }),
-    /实例管理员/,
-  );
-  await personal.patchSettingsFor(adminActor, { skillRefreshSeconds: 7200 });
-  assert.equal((await appSettings.getAppSettings()).skillRefreshSeconds, 7200);
-
-  // 多人模式的接力目标机按人存,不许走 PATCH /settings。
-  await assert.rejects(
-    () => personal.patchSettingsFor(aliceActor, { handoffTargets: [] }),
-    /接力目标机/,
-  );
-}
+// ── ⑥ 设置分面 → 已搬到 test-multi-user-settings.ts ──────────────────────
+//    （个人面 / 实例面之分、写侧边界、读侧坏值；这个文件已顶到 700 行上限）
 
 // ── ⑦ 个人面资源互不可见 ──────────────────────────────────────────────────
 {
@@ -241,13 +222,21 @@ const bobActor = actorOf(bob);
 // queues / sessions 的路径里没有 task 或 project 段(`/api/queues/:id`、
 // `/api/sessions/:id/output`),第 1 轮审查前它们整个漏在闸外:拿到 queueId 能读别人
 // 的任务标题、改别人的队列顺序,拿到 sessionId 能读完整 agent transcript。
+// 哨兵(`/api/monitors/:id/log`、`…/:id/stop`)是同一个形状的第三例:列表与创建挂在
+// `/tasks/:id/monitors` 下被闸挡着,这两条却整个漏在闸外 —— 拿到一个 monitorId 就能
+// 读走别人项目里长跑命令的原始输出、还能把它停掉(2026-10-09 第 1 轮审查实测 200)。
 {
-  const { queueItems, sessions } = schema;
+  const { monitors, queueItems, sessions } = schema;
   const at = new Date().toISOString();
   await db.insert(queueItems).values([{ taskId: "t-bob", queueId: "q-bob", position: 0, createdAt: at }] as never);
   await db.insert(sessions).values([
     { id: "s-bob", taskId: "t-bob", role: "main", agentType: "claude", executor: "claude@bob", status: "done", startedAt: at },
   ] as never);
+  await db.insert(monitors).values([{
+    id: "mon-bob", taskId: "t-bob", command: "tail -F x.log", description: "bob 的哨兵",
+    cwd: "/tmp", status: "running", pid: 1, startedAt: at, expiresAt: at,
+    timeoutMs: 60_000, logPath: "/tmp/mon-bob.log", readOffset: 0, events: 0,
+  }] as never);
 
   const gateModule = await import("../src/auth/resource-gate.js");
   const hit = async (actor: unknown, path: string): Promise<number> => {
@@ -267,6 +256,9 @@ const bobActor = actorOf(bob);
   assert.equal(await hit(bobActor, "/api/sessions/s-bob/output"), 200);
   assert.equal(await hit(aliceActor, "/api/sessions/s-bob/output"), 404, "transcript 是整段会话原文");
   assert.equal(await hit(aliceActor, "/api/sessions/s-bob/trace"), 404);
+  assert.equal(await hit(bobActor, "/api/monitors/mon-bob/log"), 200, "自己的哨兵输出当然读得到");
+  assert.equal(await hit(aliceActor, "/api/monitors/mon-bob/log"), 404, "哨兵日志是命令的原始输出");
+  assert.equal(await hit(aliceActor, "/api/monitors/mon-bob/stop"), 404, "更不许停掉别人正在盯的活");
   // 实例管理员看得见一切;不存在的 id 交给业务路由报它自己的 404(闸放行)。
   assert.equal(await hit(adminActor, "/api/queues/q-bob"), 200);
   assert.equal(await hit(aliceActor, "/api/queues/does-not-exist"), 200);

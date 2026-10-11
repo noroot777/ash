@@ -1,5 +1,5 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
-import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, Robot, Chats } from "@phosphor-icons/react";
+import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, Pulse, Robot, Chats } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import { PreviewWorkspaceEntry } from "../preview-workspace/PreviewWorkspace.tsx";
@@ -14,9 +14,14 @@ import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
 import { SideChatPane } from "../side-chat/SideChatPane.tsx";
+import { monitorBlockedReason } from "@ash/shared/monitor";
+import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
+import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 
 export interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
+  /** 哨兵那一格的数据源；由 `useMonitorInspector` 提上来，面板开不开都在拉。 */
+  monitors: TaskMonitorsState;
   task: Task;
   groups: Group[];
   sessions: Session[];
@@ -44,7 +49,7 @@ export interface TaskInspectorContext {
 
 // 图标条的顺序就是这个数组的顺序（`orderedValidTabs` 按它归位，localStorage 里存的次序
 // 不作数）。排法是「看任务本身 → 看它改了什么 → 跟它一起干活」：
-// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 侧聊 · 工作流 · 审查 · 预览指正。
+// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 侧聊 · 工作流 · 审查 · 预览指正 · 哨兵。
 // 每一格都带快捷键（`I` 加面板名首字母），键位表在 inspector/shortcuts.ts。
 export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
   {
@@ -150,6 +155,19 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     defaultOpen: true,
     shortcut: "p",
     render: (context) => <PreviewWorkspaceEntry onOpen={context.onOpenPreview} />,
+  },
+  {
+    // 跟其它几格一样默认开着：哨兵不只是「agent 挂了什么」的回看面板，人也会想自己挂一个，
+    // 而这一格就是手动起哨兵唯一的入口——藏到「+」菜单里等于让人先知道它在那儿才找得到。
+    // 没有哨兵时空态自己会解释这是什么（见 MonitorInspector），不是一片空白。
+    id: "monitors",
+    title: "哨兵",
+    icon: <Pulse size={14} />,
+    defaultOpen: true,
+    shortcut: "m",
+    render: (context) => (
+      <MonitorInspector monitors={context.monitors} blockedReason={monitorBlockedReason(context.task)} />
+    ),
   },
 ];
 

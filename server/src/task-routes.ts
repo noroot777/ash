@@ -12,6 +12,8 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
 import { cachedModelEfforts } from "./executors/model-probe.js";
+import { monitorBlockedReason } from "@ash/shared/monitor";
+import { claimTurn, releaseTurn } from "./runs.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
@@ -567,14 +569,39 @@ api.patch("/tasks/:id", async (c) => {
   // task.updated 事件照发(下方 publishTaskUpdated),前端仍实时回流。
   const starOnly = "starredAt" in patch && Object.keys(patch).length === 1 && b.status === undefined;
   if (!starOnly) patch.updatedAt = now();
-  const written = await db.update(tasks).set(patch).where(updateWhere).returning({ id: tasks.id });
-  if (!written.length) return c.json({ error: "任务或发起回合已经变化，PATCH 未写入" }, 409);
-  // Status goes through the shared helper so manual changes maintain the run-time
-  // columns (startedAt/endedAt) and broadcast them just like a real run does.
-  // setTaskStatus 内部在 done/canceled 时会自动触发 queue 推进(DESIGN §3),
-  // 所以这里不需要再手动 wake 下游。
-  if (b.status !== undefined) {
-    await setTaskStatus(tid, b.status);
+  // 手动把任务改成**终态**，要和「起这一轮」争同一把回合锁。
+  //
+  // 上面那道反向守卫只看库里是不是 running/queued，而 `claimTurn` 到 status 落 running
+  // 之间有真实窗口：一条还没送达的哨兵事件此刻正握着占位往下走，库里却还是 paused。
+  // 只「再查一次 isTurnClaimed」关不掉它 —— 查是观察式的，查完到真正写库之间对方照样
+  // 能合法占位（同 `claimWorkspaceTurn` 的理由）。所以这里也占同一把锁，两种顺序才都收口：
+  //   · 这边先占 → 那条事件的 `claimTurn` 失败，`continueTask` 回 false，消息留在托盘里，
+  //     下一次扫描按终态作废它（第 3 轮那道闸）；
+  //   · 那边先占 → 这里 409，用户等这一轮结束再标完成。
+  // 不然就是第 5 轮审查实测的那条：最终检查读到 paused、完成操作照样 200，放开之后
+  // `paused → done → running → done`，多出一轮会话。
+  //
+  // **只锁终态**：能手动设的四种里，backlog 不在哨兵的拒绝判据内（它不是「结束了」），
+  // 而且终态任务会被队列推进透明跳过 —— 锁住 backlog 反而可能和「改回 backlog 就该被
+  // 队列拉起来」那一步抢自己的锁。判据直接用 `monitorBlockedReason`，与起跑那一侧
+  // 同一份，两边永远不会对「哪算结束」分家。
+  const lockTurn = b.status !== undefined && monitorBlockedReason({ status: b.status }) !== null;
+  if (lockTurn && !claimTurn(tid, "status")) {
+    return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再改状态", status: existing.status }, 409);
+  }
+  try {
+    const written = await db.update(tasks).set(patch).where(updateWhere).returning({ id: tasks.id });
+    if (!written.length) return c.json({ error: "任务或发起回合已经变化，PATCH 未写入" }, 409);
+    // Status goes through the shared helper so manual changes maintain the run-time
+    // columns (startedAt/endedAt) and broadcast them just like a real run does.
+    // setTaskStatus 内部在 done/canceled 时会自动触发 queue 推进(DESIGN §3),
+    // 所以这里不需要再手动 wake 下游。
+    if (b.status !== undefined) {
+      await setTaskStatus(tid, b.status);
+    }
+  } finally {
+    // 每一条出路都得还回去（含上面那个 409 early return），否则任务就被一次 PATCH 锁死。
+    if (lockTurn) releaseTurn(tid);
   }
   const updated = await publishTaskUpdated(tid);
   return c.json(updated!);

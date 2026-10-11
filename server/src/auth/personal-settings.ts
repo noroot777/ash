@@ -11,7 +11,13 @@
 // 自用模式下这一层整个是透明的:读写都直接落 app_settings,与本功能上线前逐字节一致。
 import { and, eq } from "drizzle-orm";
 import type { AppSettings } from "@ash/shared";
-import { getAppSettings, invalidateInstanceCache, patchAppSettings, writeAppSettingsPatch } from "../app-settings.js";
+import {
+  acceptsSettingValue,
+  getAppSettings,
+  invalidateInstanceCache,
+  patchAppSettings,
+  writeAppSettingsPatch,
+} from "../app-settings.js";
 import { db } from "../db/index.js";
 import { userSettings } from "../db/schema.js";
 import type { Actor } from "./context.js";
@@ -20,7 +26,7 @@ import { forgetRemovedPeerKeys } from "./handoff-scope.js";
 import { isMultiUser } from "./mode.js";
 
 /** 一人一份的那几项。加一项就往这里加,读写两侧同时生效。 */
-export const PERSONAL_SETTING_KEYS = ["defaultWorkflowId"] as const;
+export const PERSONAL_SETTING_KEYS = ["defaultWorkflowId", "composerSendKey"] as const;
 export type PersonalSettingKey = (typeof PERSONAL_SETTING_KEYS)[number];
 
 const isPersonalKey = (key: string): key is PersonalSettingKey =>
@@ -39,8 +45,10 @@ export async function settingsFor(ownerUserId: string | null): Promise<AppSettin
     if (!isPersonalKey(row.key)) continue;
     try {
       const value: unknown = JSON.parse(row.value);
-      // 类型由写侧的 parseAppSettingsPatch 把关;这里只防手改过的库。
-      if (typeof value === "string") {
+      // 类型由写侧的 parseAppSettingsPatch 把关;这里只防手改过的库、以及上一版写下
+      // 的、这一版已经不认的旧值 —— 判据跟全局那张表共用一份(acceptsSettingValue),
+      // 否则「只检查是不是字符串」会把一个界面上根本没有的档位端给设置页。
+      if (acceptsSettingValue(row.key, value)) {
         (merged as unknown as Record<string, unknown>)[row.key] = value;
       }
     } catch {

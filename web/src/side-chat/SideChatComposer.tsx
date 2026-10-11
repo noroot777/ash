@@ -7,6 +7,7 @@ import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { ChatContextNotice } from "../chat/ChatContextNotice.tsx";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { executorRunSummary, isExecutorPickable, registeredAgentTypes } from "../lib/agentAvailability.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSideChatMember } from "./useSideChatMember.ts";
 import type { useSideChat } from "./useSideChat.ts";
 
@@ -48,7 +49,7 @@ export function SideChatComposer({ task, chat }: { task: Task; chat: SideChatSta
     <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending} error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
     <div className="side-chat-input">
       <textarea ref={input} aria-label="侧聊消息输入" placeholder={chat.quote ? "想问这段内容什么？" : "围绕主会话问个问题…"} disabled={!chat.ready} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => {
-        if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); }
+        if (isSendKeyEvent(event)) { event.preventDefault(); send(); }
       }} />
       <footer>
         <AttachmentPicker addFiles={uploads.addFiles} disabled={!chat.ready || chat.sending} />

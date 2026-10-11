@@ -8,6 +8,8 @@ import { settledDisputeRounds } from "./freeReviewCopy.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import {
   createReviewerDraft,
   ReviewerProfileSummary,
@@ -77,15 +79,16 @@ export function FreeReviewDialog({
     ? "审查合并结果"
     : reservationMode ? (state?.reviewReservation?.armed ? "调整预约审查" : "预约审查") : "派审查";
   const types = useMemo(() => registeredAgentTypes(profiles), [profiles]);
+  const sendKeys = useSendKeyLabels();
   // 已裁定「不在本任务里修」的那几轮：服务端派审时会自动讲给审查者听（见后端
   // free-review-settled.ts）。这里摆一句，否则用户不知道这件事已经自动化了，只会
   // 照旧每轮手打「有异议的已经转为新任务，只审查本次改动内容」。
   const settled = useMemo(() => settledDisputeRounds(state?.reviews), [state?.reviews]);
   // 轮号跨 run 会重复（第二条审查链又从第 1 轮数起），所以这里只报条数、不报轮号。
   const noteHint = settled.length
-    ? `Enter 提交 · Shift+Enter 换行 · 已有 ${settled.length} 处意见被你裁定「不在本任务里修」` +
+    ? `${sendKeys.send} 提交 · ${sendKeys.newline} 换行 · 已有 ${settled.length} 处意见被你裁定「不在本任务里修」` +
       "（转为独立任务或作废），派审时会自动讲给审查者，不必在这里重复说明"
-    : "Enter 提交 · Shift+Enter 换行";
+    : `${sendKeys.send} 提交 · ${sendKeys.newline} 换行`;
   // 预约里的覆盖每次轮询都是新对象，直接进依赖会把用户正在改的草稿冲掉；按值序列化当键。
   const reservedOverrideKey = JSON.stringify(state?.reviewReservation?.override ?? null);
   const selectedReviewer = reviewers.find((item) => item.id === selectedId) ?? null;
@@ -275,6 +278,9 @@ export function FreeReviewDialog({
               )}
               {creating && (
                 <div className="free-review-create" onKeyDown={(event) => {
+                  // 这个小表单里只有单行输入，所以它**不跟**「输入框发送键」那一档（设置 →
+                  // 默认规则 → 输入框）：单行输入里回车提交是浏览器自己的表单语义，到处都
+                  // 一样，没有第二种读法；跟着那一档走只会变成「填完名字按回车没反应」。
                   if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.target instanceof HTMLButtonElement) return;
                   event.preventDefault();
                   void create();
@@ -328,7 +334,7 @@ export function FreeReviewDialog({
                   aria-describedby="free-review-note-hint"
                   onChange={(event) => setNote(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+                    if (!isSendKeyEvent(event)) return;
                     event.preventDefault();
                     event.currentTarget.form?.requestSubmit();
                   }}
@@ -342,7 +348,7 @@ export function FreeReviewDialog({
         <footer>
           {!postMerge && state?.reviewReservation?.armed && <button type="button" disabled={busy} onClick={() => void cancelReservation()}>取消预约</button>}
           <button type="button" disabled={busy} onClick={onClose}>{!postMerge && state?.reviewReservation?.armed ? "关闭" : "取消"}</button>
-          <button className="is-primary" type="submit" aria-keyshortcuts="Enter" disabled={busy || loading || !selectedId || retryLimitInvalid}>
+          <button className="is-primary" type="submit" aria-keyshortcuts={sendKeys.ariaShortcut} disabled={busy || loading || !selectedId || retryLimitInvalid}>
             {busy ? (reservationMode && !postMerge ? "保存中…" : "启动中…") : postMerge ? "开始审查" : reservationMode ? (state?.reviewReservation?.armed ? "保存预约" : "预约审查") : "开始审查"}
           </button>
         </footer>

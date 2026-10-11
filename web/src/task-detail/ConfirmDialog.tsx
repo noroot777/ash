@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Sparkle, Warning, X } from "@phosphor-icons/react";
 import { isTopLayer, useDismissable } from "../lib/useDismissable.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
 
 export function ConfirmDialog({
   title,
@@ -72,10 +73,11 @@ export function ConfirmDialog({
       const target = event.target;
       // 焦点漂在对话框外面时直接确认——模态开着，那一下回车不该落回背后的页面。
       if (target instanceof HTMLElement && dialog.current?.contains(target)) {
-        // 多行输入里回车是换行，确认让给 Cmd/Ctrl+Enter；按钮、链接、下拉自带回车语义，
-        // 抢过来会变成「既取消又确认」。
+        // 多行输入里按哪一下算确认，跟全站输入框同一档（设置 → 默认规则 → 输入框）：
+        // 默认回车就确认，选了「⌘/Ctrl+回车」那一档时回车留给换行。按钮、链接、下拉
+        // 自带回车语义，抢过来会变成「既取消又确认」。
         const multiline = target instanceof HTMLTextAreaElement || target.isContentEditable;
-        if (multiline ? !(event.metaKey || event.ctrlKey) : !!target.closest("button, a, select")) return;
+        if (multiline ? !isSendKeyEvent(event) : !!target.closest("button, a, select")) return;
       }
       event.preventDefault();
       event.stopPropagation();

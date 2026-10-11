@@ -84,7 +84,7 @@ try {
     assert.equal((await send(draft.id, 99)).status, 409);
     assert.equal((await store.getAnnotationBatch(taskId, draft.id))?.state, "saved");
     assert.equal((await request(`/tasks/${taskId}/annotation-reference`, { gen: "expired", serviceId: "web", route: "/" })).status, 200);
-    assert.equal(await pending.beginDelivery(message.id), true);
+    assert.ok(await pending.beginDelivery(message.id), "抢到租约（现在回的是抢下那一刻的那一行）");
     const restarted = spawnSync(process.execPath, ["--import", "tsx", fileURLToPath(import.meta.url)], {
       env: { ...process.env, ASH_ANNOTATION_RESTART: "1", ASH_ANNOTATION_TEST_ROOT: root }, encoding: "utf8", timeout: 20_000,
     });
@@ -105,7 +105,7 @@ try {
     const followup = await pending.enqueueMessage({ taskId, text: "再补一句" });
     assert.equal((await reviews.annotationReviewStatus(taskId)).canReopen, false);
     assert.equal((await store.getAnnotationBatch(taskId, batch.id))?.state, "modifying", "reviewable can return to modifying");
-    assert.equal(await pending.beginDelivery(followup.id), true);
+    assert.ok(await pending.beginDelivery(followup.id), "抢到租约（现在回的是抢下那一刻的那一行）");
     assert.equal((await reviews.annotationReviewStatus(taskId)).canReopen, false, "delivery lease is still pending");
     await pending.markSent(followup);
     runs.claimTurn(taskId);

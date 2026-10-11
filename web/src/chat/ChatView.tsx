@@ -11,6 +11,8 @@ import { createClientId } from "../lib/clientId.ts";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { ConversationModeBar } from "./ConversationModeBar.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import "./chat.css";
 
 export function ChatView({ project, onTask, onExit, onMode, onAssistant }: {
@@ -28,6 +30,7 @@ export function ChatView({ project, onTask, onExit, onMode, onAssistant }: {
   const [ready, setReady] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const sendKeys = useSendKeyLabels();
   const input = useRef<HTMLTextAreaElement>(null);
   const mentionMenu = useRef<HTMLDivElement>(null);
   const connectionTip = useHoverTip();
@@ -171,10 +174,10 @@ export function ChatView({ project, onTask, onExit, onMode, onAssistant }: {
                 if (event.key === "ArrowDown") setMentionIndex((current) => (current + 1) % candidates.length);
                 else if (event.key === "ArrowUp") setMentionIndex((current) => (current + candidates.length - 1) % candidates.length);
                 else mention(candidates[mentionIndex % candidates.length]!.name);
-              } else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
+              } else if (isSendKeyEvent(event)) { event.preventDefault(); void send(); }
             }} />
             <footer><button type="button" aria-label="选择点名成员" onClick={() => { setMentionOpen((current) => !current); input.current?.focus(); }}><At size={20} /></button><span>{isChatClearCommand(draft) ? "将清空后续上下文，并停止当前回复" : mentioned.length ? everyone ? `将唤醒全部 ${mentioned.length} 位成员` : `将唤醒 ${mentioned.map((member) => `@${member.name}`).join("、")}` : "不 @，只记录；不唤醒"}</span><button type="button" className="chat-send" aria-label="发送消息" disabled={sending || !draft.trim()} onClick={() => void send()}><ArrowUp size={20} weight="bold" /></button></footer>
-          </div><div className="chat-composer-hint">Enter 发送 · Shift Enter 换行 · /clear 清空上下文<span>短回复，长任务。</span></div>
+          </div><div className="chat-composer-hint">{sendKeys.send} 发送 · {sendKeys.newline} 换行 · /clear 清空上下文<span>短回复，长任务。</span></div>
         </div>}
       </>}
       {error && <div className="chat-error" role="alert">{error}<button type="button" onClick={() => setError("")}>关闭</button></div>}

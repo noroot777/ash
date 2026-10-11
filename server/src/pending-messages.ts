@@ -27,6 +27,7 @@
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@ash/shared";
+import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks, groups } from "./db/schema.js";
@@ -62,6 +63,8 @@ export function pendingMessageRow(input: {
   sessionRole?: string | null;
   /** 谁发的这条(多人模式);投递时按它解析执行器与 CLI 环境。 */
   ownerUserId?: string | null;
+  /** 不是真人写的那种消息的来源标记(`monitor:<id>`)。null = 用户自己发的。 */
+  origin?: string | null;
   mode?: ScheduledMessageMode;
   /** 执行意图:排队等轮次时暂存的回复(投递 = 任务的执行回合,见 schema 注释)。 */
   execution?: boolean;
@@ -79,6 +82,7 @@ export function pendingMessageRow(input: {
     reasoningEffort: input.reasoningEffort ?? null,
     sessionRole: input.sessionRole ?? null,
     ownerUserId: input.ownerUserId ?? null,
+    origin: input.origin ?? null,
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
     execution: input.execution ?? false,
     sendAt: (input.sendAt ?? new Date()).toISOString(),
@@ -100,6 +104,7 @@ export async function enqueueMessage(input: Parameters<typeof pendingMessageRow>
 }
 
 // 判定所需的最小任务形状,写成结构类型,单测就能直接喂字面量。
+// 判定所需的最小任务形状,写成结构类型,单测就能直接喂字面量。
 // queueBlocked = 这个任务在队列里且还没轮到(queueBlockers 非空)。只对 paused/
 // backlog 生效:对它们投递 = 开启真实执行回合,必须守「同队至多一个在跑」;终态
 // 任务的投递是续聊旁路(followUpFrom),队列按原终态看待,不受队列挡(审查:
@@ -112,7 +117,7 @@ export type DeliveryTaskView = {
   /** 所在分组已被用户暂停(groups.paused,持久事实)。 */
   groupPaused?: boolean;
 };
-export type DeliveryMessageView = { mode: string; sendAt: string; execution?: boolean };
+export type DeliveryMessageView = { mode: string; sendAt: string; execution?: boolean; origin?: string | null };
 export type DeliveryVerdict =
   | { action: "deliver" }
   | { action: "wait" }
@@ -137,6 +142,15 @@ export function deliveryVerdict(
   if (task.archived) return { action: "cancel", reason: "任务已归档" };
   if (task.mode !== "single" && task.mode !== "team")
     return { action: "cancel", reason: `任务类型 ${task.mode} 不支持回复` };
+  // 哨兵事件只有一个出口——「唤醒这个任务」。任务都结束了它再醒来也只是花钱，所以这一条
+  // 必须在**消费端**也拦一道：生产端那个闸永远留着一个窗口（读到任务还在跑之后、消息写
+  // 进库之前，任务刚好收尾），而这里是所有生产路径的共同出口（第 3 轮审查实测：总线真的
+  // 走了 done → running → done，正文就是那条迟到的进展）。
+  //
+  // 真人排的队列消息恰恰相反：终态正是它该发的时候（「下次醒来处理」就是他排它的意思）。
+  // 所以只认 `origin` 是哨兵的那些，判据与创建入口同一份（`monitorBlockedReason`）。
+  if (monitorIdFromOrigin(message.origin) !== null && monitorBlockedReason(task) !== null)
+    return { action: "cancel", reason: "任务已经结束，这条哨兵事件不再唤醒它" };
   if (!isDueForDelivery(message, at)) return { action: "wait" };
   // 常驻调度台(team)正在说话时也接得住,所以只有单任务需要等它闲下来。
   if (task.mode === "single" && (task.status === "running" || task.status === "queued"))
@@ -295,10 +309,18 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
 // 抢占一条消息必须是原子的,否则两个触发源会把同一条发两遍(WHERE 里带 status='pending'
 // 且租约为空,谁的 UPDATE 真改到行谁就赢)。
 //
+// **返回的是抢下那一刻的那一行,不是调用方手里的快照。** 待发送的正文是会变的:哨兵事件
+// 直接往同一行后面追加(monitors.ts `pushToTask`,合并才能让几十条事件只唤醒任务一次),
+// 而投递方从「选中这一条」到真正送出去中间要等当前回合退干净 —— 那段时间里追加进去的
+// 内容,按旧快照发就等于没发,行却被标成 sent,于是它永远不会再补发(第 2 轮审查实测:
+// 会话里只有 FIRST,sent 的正文里 FIRST+SECOND 都在,读取位置也已经越过去了)。
+// 租约一旦落下,追加端的 CAS 条件(租约为空)就不再成立,所以「抢租约 → 重读正文」之后
+// 这一行的内容不会再变。
+//
 // 导出是给崩溃测试用的:`test-scheduled-messages.ts` 的子进程拿它抢下租约后立刻 SIGKILL
 // 自己,好让「另一个进程死在投递中途」这个现场由**真实路径本身**造出来,而不是测试手写
 // 一行假状态。投递逻辑之外不要调它。
-export async function beginDelivery(messageId: string): Promise<boolean> {
+export async function beginDelivery(messageId: string): Promise<Row | null> {
   const claimed = await db
     .update(scheduledMessages)
     .set({ deliveringSince: now() })
@@ -309,8 +331,8 @@ export async function beginDelivery(messageId: string): Promise<boolean> {
         isNull(scheduledMessages.deliveringSince),
       ),
     )
-    .returning({ id: scheduledMessages.id });
-  return claimed.length > 0;
+    .returning();
+  return claimed.at(0) ?? null;
 }
 
 // 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
@@ -354,6 +376,38 @@ export function deliveryOptions(m: Row) {
     // 失败后经扫描重投却按终态续聊启动,绕过整队守卫)。freezeGuard 让 spawn 前再核一次
     // 分组暂停/删除归档的持久事实 —— 自动投递离 spawn 很远,中途用户可能刚按下暂停。
     ...(m.execution ? { executionTurn: true, freezeGuard: true } : {}),
+    // 带来源的消息不是真人打的字(眼下只有哨兵事件)。标 byBackend 之后它在会话里显示
+    // 成「系统代写的一回合」,而不是冒充用户说过这句话 —— 读端据此分开(见 orchestrator
+    // 的 byBackend 注释)。它仍然占一个真实回合,因为 agent 确实要为它跑一轮。
+    ...(m.origin ? { byBackend: true } : {}),
+  };
+}
+
+/**
+ * 哨兵事件的**最后一道闸**：带着来源身份走到真正起这一轮的那个入口，在那儿按最新状态
+ * 再问一次「这个任务还能不能被叫醒」。`undefined` = 这条消息不是哨兵推的，不挂闸。
+ *
+ * 为什么扫描那一层的判定不够：`beginDelivery` 抢下的是**租约**，不是送达。从抢到租约到
+ * 真正续跑中间还要等当前这一轮退干净，那段时间里用户完全可以把任务标成完成 —— 于是一条
+ * 压根没进会话的事件把一个已经 done 的任务拉回 running，多出一轮会话（第 4 轮审查实测：
+ * `paused → done → running → done`）。
+ *
+ * 判据与创建入口、扫描出口同一份（`monitorBlockedReason`），三处分家就等于没防。
+ *
+ * **导出是给回归测试用的**（同 `beginDelivery`）：这个窗口的前提是「租约已经抢下」，而
+ * 租约一旦落下，扫描那条路就会跳过这一行 —— 现场只能由「拿着抢到的那一行，去走真正的
+ * 运行入口」摆出来。于是测试拿生产的 `beginDelivery` + `deliveryOptions` + 这一个闸去调
+ * 生产的 `continueTask`，跟 `deliverWhenIdle` 的装法逐字一致。投递逻辑之外不要调它。
+ */
+export function monitorWakeGuard(message: Row): (() => Promise<string | null>) | undefined {
+  if (monitorIdFromOrigin(message.origin) === null) return undefined;
+  return async () => {
+    const task = (await db
+      .select({ status: tasks.status, archived: tasks.archived })
+      .from(tasks)
+      .where(eq(tasks.id, message.taskId))).at(0);
+    if (!task) return "任务不存在";
+    return monitorBlockedReason(task);
   };
 }
 
@@ -375,11 +429,15 @@ async function deliverWhenIdle(
   seat?: QueueSeat,
 ): Promise<void> {
   let delivered = false;
+  // 被最后那道闸挡下的理由(非 null = 这一轮压根没起,原因不是「回合被抢走」)。
+  let refused: string | null = null;
+  const guard = monitorWakeGuard(message);
   const idleAt = Date.now();
   try {
     // 等待期间它还是 pending,所以用户可能已经手动取消、另一个触发源也可能抢先
     // 送掉了。抢不到租约就什么都不做 —— 送它的那一位会自己记账。
-    if (!(await beginDelivery(message.id))) {
+    const claimed = await beginDelivery(message.id);
+    if (!claimed) {
       // 占位是为这条消息落的;消息已经没了(取消/已送)就得把 status 退回去,否则
       // 任务永远卡在 queued。租约被**别的投递路径**抢走则交给 finally 的同一判据:
       // 那一位马上会开回合,running 自然覆盖占位;真没人接手才回滚。
@@ -388,8 +446,11 @@ async function deliverWhenIdle(
     lastFiredAt.set(message.taskId, Date.now());
     // 排空的一瞬间被别的路径抢走了回合(队列推进、用户手点运行):这一句一个字都
     // 没送出去,退回队列等下一次触发。
-    const started = await continueTask(message.taskId, message.text, {
+    // 正文用 `claimed.text` 而不是 `message.text`:等回合退干净的这段时间里,哨兵可能
+    // 已经往同一行后面追加了新的事件(见 beginDelivery 的注释)。
+    const started = await continueTask(message.taskId, claimed.text, {
       ...options,
+      ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
       onDelivered: async () => {
         delivered = true;
         const at = Date.now();
@@ -402,8 +463,16 @@ async function deliverWhenIdle(
     // 的送达信号是 onDelivered;没响就把租约还回去,原文留在托盘等重投(第 4 轮审查
     // 实测:项目目录暂不可用时起跑失败,租约滞留,恢复后重试/扫描全绕开这条消息)。
     if (!delivered) {
-      await abortDelivery(message);
-      scheduleRedelivery(message, started ? "回合起跑失败，原文退回待发送" : "回合被其它执行抢占或工作区正被验收占用");
+      // 被终态那道闸挡下的(refused)**不能**退回托盘等下一次:任务已经结束了,下一次、
+      // 下一百次都是这个结果,留着它只会让一条永远送不出去的事件一直挂在用户的托盘里。
+      // 取消会把原文抄进时间线,所以「它说过什么」不会因此丢掉。
+      if (refused) await cancelPendingMessage(message, refused);
+      else {
+        await abortDelivery(message);
+        scheduleRedelivery(message, started
+          ? "回合起跑失败，原文退回待发送"
+          : "回合被其它执行抢占、工作区正被验收占用，或起跑前的资格检查读不到状态");
+      }
     }
   } catch (error) {
     // 已经送进会话之后才炸的(agent 半路挂了),那是这一轮运行的事故,不是消息没送到:
@@ -490,13 +559,17 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       const dueAt = markDue(m.id, queuedAt);
       const busyMs = settleBusyAgain(m.id, queuedAt);
       if (t!.mode === "team") {
-        if (!(await beginDelivery(m.id))) continue; // 另一个触发源刚抢走
+        const claimed = await beginDelivery(m.id);
+        if (!claimed) continue; // 另一个触发源刚抢走
         fired.add(m.taskId);
         lastFiredAt.set(m.taskId, Date.now());
         let delivered = false;
+        let refused: string | null = null;
+        const guard = monitorWakeGuard(m);
         try {
-          const started = await continueTask(m.taskId, m.text, {
+          const started = await continueTask(m.taskId, claimed.text, {
             ...options,
+            ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
             throwOnTeamUnavailable: true,
             onDelivered: async () => {
               delivered = true;
@@ -509,8 +582,12 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
           // 调度台明确拒收:清租约、保持 pending,下一台接手时补送。同样要出声并自己重投,
           // 否则一次拒收就要干等一整个 30s tick。
           if (!started) {
-            await abortDelivery(m);
-            scheduleRedelivery(m, "调度台此刻收不下（正在收尾或已离线）");
+            // 同单任务：被终态那道闸挡下的不退回托盘，下一次还是同一个结果。
+            if (refused) await cancelPendingMessage(m, refused);
+            else {
+              await abortDelivery(m);
+              scheduleRedelivery(m, "这一轮没起：调度台收不下（正在收尾或已离线），或起跑前的资格检查读不到状态");
+            }
           }
         } catch (reason) {
           if (delivered) throw reason; // 已经进调度台了,不是「未发送」,交给外层日志
@@ -593,13 +670,16 @@ export async function handDuePendingMessageToRun(
       eq(scheduledMessages.status, "pending"),
       isNull(scheduledMessages.deliveringSince),
     )))
-    .filter((m) => isDueForDelivery(m, at))
+    // 哨兵事件(origin 非空)不参与让位交接:它不是用户的执行指令,拿来当首轮输入会被
+    // 升级成执行意图、还绕开唤醒闸(monitorWakeGuard)与终态取消;留给扫描按哨兵语义送。
+    .filter((m) => !m.origin && isDueForDelivery(m, at))
     .sort((a, b) => a.sendAt.localeCompare(b.sendAt)
       || a.createdAt.localeCompare(b.createdAt)
       || a.id.localeCompare(b.id))
     .at(0);
   if (!due) return false;
-  if (!(await beginDelivery(due.id))) return true; // 另一个触发源刚抢走:由它开回合
+  const claimed = await beginDelivery(due.id);
+  if (!claimed) return true; // 另一个触发源刚抢走:由它开回合
   // 一旦被交接认领为**任务执行输入**,这个转换就要在启动前持久化(第 6 轮审查:
   // 运行中暂存的追问 execution=0,轮到时经这里交接,起跑失败后重投仍按首次发送时的
   // 终态续聊分类放行,与同队在跑成员并行执行)。失败与重启后的重试都沿用这个意图;

@@ -304,7 +304,8 @@ try {
   await reviewDialog.getByRole("heading", { name: "调整预约审查" }).waitFor();
   assert.equal(
     await reviewDialog.locator("#free-review-note-hint").innerText(),
-    "Enter 提交 · Shift+Enter 换行",
+    // 键名由「输入框发送键」那一档统一给出（web/src/lib/sendKey.ts），默认档就是这句。
+    "Enter 提交 · Shift Enter 换行",
     "没裁定过的任务不该凭空多出这句提示",
   );
   await reviewDialog.getByRole("button", { name: "关闭调整预约审查" }).click();

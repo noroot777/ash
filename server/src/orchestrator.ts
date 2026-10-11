@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -33,8 +33,7 @@ import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
-import { isAcceptingTask } from "./acceptance-lock.js";
-import { handoffBlockReason } from "./handoff-guard.js";
+import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
@@ -155,6 +154,19 @@ export async function continueTask(
      * （见 docs/incidents.md「排队消息凭空消失」）。
      */
     onDelivered?: () => void | Promise<unknown>;
+    /**
+     * 「这个任务此刻还能不能被**这条消息**叫醒」——**占住回合之后**再问一次，返回理由
+     * 字符串就撤回这一轮（返回 false，一个字都不送）。
+     *
+     * 给哨兵事件用。它的资格判定原本只发生在投递扫描那一层，可抢到投递租约与真正起这
+     * 一轮之间还隔着「等当前回合退干净」：那段时间里用户完全可以把任务标成完成，而租约
+     * 不是送达 —— 于是一条尚未进会话的事件照样把一个已经 done 的任务拉回 running、多烧
+     * 一轮会话（第 4 轮审查实测：总线真的走了 paused → done → running → done）。
+     *
+     * 只在这条路上开：真人排的队列消息在终态上走的是相反语义（「下次醒来处理」就是他排
+     * 它的意思），给它挂这道闸等于把他的话吞了。
+     */
+    wakeGuard?: () => Promise<string | null>;
     throwOnTeamUnavailable?: boolean;
   } = {},
 ): Promise<boolean> {
@@ -176,48 +188,47 @@ export async function continueTask(
     userText,
   );
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
-  // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
-  // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
-  // 验收互斥对 team 只能靠这一次检查（调度台没有 turn 锁）；调度台不走验收链，
-  // 摘牌对它本来就是 no-op，破坏面只有消息时序。
+  // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
+  // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的
+  // `enterLeadDelivery`:常驻调度台没有「一个回合」可以托管占位,所以它把要还的锁
+  // 当返回值交出来,这里用 finally 还 —— 含 deliverToLead 抛错那条出路。
   if (head?.mode === "team") {
-    if (opts.turnHeld) releaseTurn(taskId); // 占位对常驻调度台无意义，原样还回
-    if (isAcceptingTask(taskId)) return false;
-    // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令;
-    // 或者进程正在收尾、stdin 已经关了)时,这一句**一个字都没送出去** —— 绝不能顺手
-    // onDelivered():那是 pending → sent 的唯一写点,标了 sent 排队/定时的那条就从托盘里
-    // 消失、会话里也没有,用户的话凭空蒸发(docs/incidents.md「排队消息凭空消失」)。
-    // 跟单飞锁挡回同一口径:返回 false。
-    const delivered = await deliverToLead(taskId, userText, {
-      attachments: opts.attachments,
-      throwOnOpenFailure: opts.throwOnTeamUnavailable,
+    const releaseLead = await enterLeadDelivery({
+      taskId,
+      turnHeld: opts.turnHeld,
+      wakeGuard: opts.wakeGuard,
     });
-    if (!delivered) return false;
-    if (opts.onDelivered) {
-      try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
+    if (!releaseLead) return false;
+    try {
+      // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令;
+      // 或者进程正在收尾、stdin 已经关了)时,这一句**一个字都没送出去** —— 绝不能顺手
+      // onDelivered():那是 pending → sent 的唯一写点,标了 sent 排队/定时的那条就从托盘里
+      // 消失、会话里也没有,用户的话凭空蒸发(docs/incidents.md「排队消息凭空消失」)。
+      // 跟单飞锁挡回同一口径:返回 false。
+      const delivered = await deliverToLead(taskId, userText, {
+        attachments: opts.attachments,
+        throwOnOpenFailure: opts.throwOnTeamUnavailable,
+      });
+      if (!delivered) return false;
+      if (opts.onDelivered) {
+        try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
+      }
+      return true;
+    } finally {
+      releaseLead();
     }
-    return true;
   }
-  // 接力出去的任务在本机只是历史存档 —— 路由层各有 409,但队列推进/排队消息投递等
-  // 程序化续聊全汇到这里,必须在占位之前收口(消息按「未投递」留在托盘,事实不丢)。
-  if (handoffBlockReason(head?.handoff)) {
-    if (opts.turnHeld) releaseTurn(taskId);
-    return false;
-  }
-  // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
-  // turnHeld = 调用方已在入口原子占好位(consulted continueWhenIdle / run 路由),这里
-  // 用真实身份接管——只读预检查代替不了原子所有权(审查实测:两个并发启动双双 202)。
+  // 起跑前的那串闸（接力存档 / 回合占位 / 验收互斥 / 唤醒资格）收在一处，见
+  // turn-entry-guard.ts 的文件头：它们共享的不变量是「从占住位到交给下面那个大 try
+  // 之间，每一条出路都得自己把位还回去」，散着写时新加一道闸就会漏掉这件事。
   const sessionRole = opts.sessionRole ?? "single";
-  if (opts.turnHeld) reclaimTurn(taskId, sessionRole);
-  else if (!claimTurn(taskId, sessionRole)) return false;
-  // 验收互斥：**先占己锁（turn），再查彼锁（acceptance），两步之间没有 await**——
-  // acceptTask 那边是镜像（beginAccepting 先占，acceptanceGuard 再查 isTurnClaimed）。
-  // 任意交错下至少一方看到对方已占而退避；只查不占是 TOCTOU（审查实测 40/40：检查刚
-  // 通过验收就开始，回复照样启动并摘牌）。退避 = 消息按「未投递」排队，验收事实原封不动。
-  if (isAcceptingTask(taskId)) {
-    releaseTurn(taskId);
-    return false;
-  }
+  if (!await enterTurn({
+    taskId,
+    sessionRole,
+    handoff: head?.handoff,
+    turnHeld: opts.turnHeld,
+    wakeGuard: opts.wakeGuard,
+  })) return false;
   // catch 那边署名用的就是它：出错时 task 可能压根没读出来，所以按 head 的快照兜底，
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
   const agentType = opts.agent ?? (head?.agentType as AgentType) ?? "claude";

@@ -6,6 +6,8 @@ import {
   type QuestionAnswerInput,
 } from "@ash/shared/questions";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 
 /** 背景短就直接摊开：为两行字多设一次「展开」纯属添堵。 */
@@ -74,7 +76,7 @@ function QuestionStep({ item, value, disabled, autoFocus, onChange, onCommit }: 
         placeholder={list.length ? "补充或修改…" : "写下你的答案…"}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
-          if (!event.nativeEvent.isComposing && (event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          if (isSendKeyEvent(event)) {
             event.preventDefault();
             onCommit();
           }
@@ -106,6 +108,7 @@ function QuestionForm({ task, onAnswer }: Props) {
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
+  const sendKeys = useSendKeyLabels();
   const answered = answers.filter((answer) => answer.trim()).length;
   const settling = task.mode !== "team" && (task.status === "running" || task.status === "queued");
   const unavailable = settling || sending || sent;
@@ -138,7 +141,7 @@ function QuestionForm({ task, onAnswer }: Props) {
   const hint = sent ? "答复已发送"
     : settling ? "提问结束后即可答复"
     : multi ? `已答 ${answered}/${items.length} · 留空的题会标记为未答`
-    : "⌘ / Ctrl + Enter 发送";
+    : `${sendKeys.send} 发送`;
 
   return (
     <section className={`task-question-card${collapsed ? " is-collapsed" : ""}`} aria-label="等待答复的问题" aria-busy={sending}>

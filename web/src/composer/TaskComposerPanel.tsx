@@ -31,6 +31,7 @@ import {
 import { api } from "../lib/api.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import { useSkills } from "../lib/useSkills.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
 import { FileMentionMenu } from "../components/MentionMenu.tsx";
 import { useFileMention } from "../lib/useFileMention.ts";
@@ -100,6 +101,7 @@ export function TaskComposerPanel({
   notify: (message: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sendKeys = useSendKeyLabels();
   // 提交是异步的,完成时这份面板可能早已卸载(用户点了别的任务/删了刚建的任务再新开
   // 面板)。收尾动作要按挂载状态分流,StrictMode 下 effect 会 mount→cleanup→mount,
   // 所以置 true 必须写在 effect 体里而不是初始值。
@@ -651,7 +653,7 @@ export function TaskComposerPanel({
           </footer>
           </div>}
           </ComposerFields>
-          <div className="studio-footnote"><span>/ 调用技能 · @ 引用项目文件 · ⌘ / Ctrl + Enter 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
+          <div className="studio-footnote"><span>/ 调用技能 · @ 引用项目文件 · {sendKeys.send} 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
         </div>
       </div>
       {groupDialogOpen && <CreateGroupDialog

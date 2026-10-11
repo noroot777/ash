@@ -5,6 +5,7 @@ import { isUserFollowUp } from "@ash/shared";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { useSubagents } from "./useSubagents.tsx";
+import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
 import { FolderViewer } from "../files/FolderViewer.tsx";
@@ -113,7 +114,9 @@ export function TaskDetail({
     error: conversation.error ?? conversation.traceError,
     onRetry: conversation.refetch,
   });
-  const inspectors = subagents.inspectors;
+  // 哨兵那一格：数据在这一层拉（看的是别的面板时也要知道有几个在盯着，图标条上那点活信号靠它）。
+  const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
+  const inspectors = monitorTab.inspectors;
   // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const followUps = useMemo(
@@ -151,7 +154,7 @@ export function TaskDetail({
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:all-tabs-v5:${task.status}:${reviewFocused ? "review" : "info"}`,
+    stateKey: `single:all-tabs-v6:${task.status}:${reviewFocused ? "review" : "info"}`,
     requiredTabId: "info",
     preserveActiveTabIds: ["side-chat"],
     // 顺序由 TASK_INSPECTORS 定，这里只说「默认哪几格开着」；子智能体那一格没派过就不存在，
@@ -161,7 +164,7 @@ export function TaskDetail({
     // `applyTabPolicy` 只在 `stateKey` 变过一次时才拿这张表去并集。所以**加面板要连
     // 带把 `all-tabs-vN` 往上跳一版**，否则老用户永远看不到它（生成物那一格就是这么
     // 差点漏掉的）。
-    defaultOpenTabIds: ["info", "files", "artifacts", "scm", "subagents", "side-chat", "workflow", "review", "preview"],
+    defaultOpenTabIds: ["info", "files", "artifacts", "scm", "subagents", "side-chat", "workflow", "review", "preview", "monitors"],
     defaultActiveTabId: reviewFocused ? "review" : "info",
   }), [reviewFocused, task.status]);
 
@@ -301,6 +304,7 @@ export function TaskDetail({
       descriptors={inspectors}
       context={{
         nativeWork: subagents.nativeWork,
+        monitors: monitorTab.monitors,
         task,
         groups,
         sessions: conversation.sessions,

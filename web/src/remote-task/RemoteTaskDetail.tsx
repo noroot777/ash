@@ -5,6 +5,8 @@ import { ArrowCounterClockwise, ArrowUp, DesktopTower, SpinnerGap } from "@phosp
 import { api, type RemoteTaskSnapshot } from "../lib/api.ts";
 import type { RemoteReturns } from "./useRemoteReturns.ts";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
+import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ConversationFeed } from "../task-detail/ConversationFeed.tsx";
 import { buildConversationItems, type TimelineEntry } from "../task-detail/conversationModel.ts";
@@ -44,6 +46,7 @@ export function RemoteTaskDetail({
   const returnTarget = operation?.target ?? target;
   const refreshVersion = useRef(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const sendKeys = useSendKeyLabels();
   // 这个框沿用 .task-reply-box 的样式(resize: none,没有拖动条),高度就全交给行数自动撑。
   useAutoGrowTextarea(inputRef, { value: text });
 
@@ -211,14 +214,14 @@ export function RemoteTaskDetail({
                 aria-label="回复远程任务"
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
-                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  if (isSendKeyEvent(event)) {
                     event.preventDefault();
                     void send();
                   }
                 }}
               />
               <div className="task-reply-actions">
-                <span>上下文与执行位置：{target.name} · ⌘↵ 发送</span>
+                <span>上下文与执行位置：{target.name} · {sendKeys.sendShort} 发送</span>
                 <button className="task-send-button" type="button" disabled={!snapshot || sending || !text.trim() || !canReply || Boolean(task.question)} onClick={() => void send()} aria-label="发送到远程任务">
                   {sending ? <SpinnerGap size={15} className="is-spinning" /> : <ArrowUp size={15} weight="bold" />}
                 </button>

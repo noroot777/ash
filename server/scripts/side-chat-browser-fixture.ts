@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
 import { acceptedSideRequests } from "./side-authorization-cases.js";
+import { mountFixtureSettings } from "./fixture-settings.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-side-browser-"));
 process.env.ASH_DB = join(stage, "test.db");
@@ -64,6 +65,7 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
 const api = new Hono();
 mountChatRoutes(api, service);
 mountUploadRoutes(api);
+mountFixtureSettings(api);
 api.get("/agents", async (c) => c.json(await db.select().from(agents)));
 api.get("/fixture/state", async (c) => c.json({ delivered, kills, judgedSources, sources, pending: await db.select().from(scheduledMessages) }));
 api.post("/fixture/authorization-mode", async (c) => { judgeMode = (await c.req.json()).mode ?? "auto"; return c.json({ ok: true }); });
