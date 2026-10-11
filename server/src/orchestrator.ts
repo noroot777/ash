@@ -8,7 +8,7 @@ import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
-import { consumeSingleRun, afterSettlement } from "./single-run.js";
+import { consumeSingleRun, afterSettlement, settleOwedAdvance } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
@@ -680,6 +680,8 @@ export async function continueTask(
     // 起跑失败的恢复同 settleTaskStatus:回到 paused 原状态不是检查点落位,别让推进
     // 钩子把静止的队列成员续跑(setTaskStatus 的 quietAdvance 注释有完整账)。
     await setStatus(taskId, status, !stopped && back === "paused" ? { quietAdvance: true } : undefined);
+    // 期间真实发生过的让位照样补办(single-run.ts settleOwedAdvance 顶部)。
+    await settleOwedAdvance(taskId);
     // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
     // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、
     // 涨 verifyRounds,却给不出 verified/verify_failed),白耗用户一轮验证配额。

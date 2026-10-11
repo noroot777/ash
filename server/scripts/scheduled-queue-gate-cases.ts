@@ -318,4 +318,55 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   "队列推进的续跑应消费检查点");
   await stopWhenLive(iD);
   console.log("✓ 有阻挡的 checkpoint 追问:直送旁路不暂存,检查点只被队列推进的续跑消费");
+
+  // ── 前项在追问期间让位:交接补办(第 ln9Q6IJEgmWf 链第 3 轮拦验收)──────────────
+  // 队列 [jA(running), jB(paused+resumePrompt), jC(backlog)]:对 jB 追问并让追问回合
+  // 悬住;期间 jA 让位 —— 那次推进被 jB 的旁路 running 冻结,jB 结算又是 quiet 恢复,
+  // 修复前这次真实发生的让位就蒸发了:jB 永远停在 paused 等手点(审查真实页面复现)。
+  // 修复后推进被旁路回合冻结时记欠账(queue-seat.ts),jB 的追问一结束就补办:jB 被
+  // 队列推进自动续跑、消费检查点;jC 排在后面不被越过。
+  const jA = "scheduled-single-gate-ja";
+  const jB = "scheduled-single-gate-jb";
+  const jC = "scheduled-single-gate-jc";
+  const jBPrompt = "继续正式步骤(ckpt-handover);保持运行等待引导";
+  const jBQuery = "怎么样了？(ckpt-handover-query)保持运行等待引导";
+  await db.insert(tasks).values([
+    { ...taskRow(jA, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+    { ...taskRow(jB, "claude", "paused"), mode: "single", team: null, resumePrompt: jBPrompt },
+    { ...taskRow(jC, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-gate-jb-prev", taskId: jB, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-jb-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-7", taskId: jA, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-7", taskId: jB, position: 1, createdAt: at },
+    { queueId: "scheduled-gate-queue-7", taskId: jC, position: 2, createdAt: at },
+  ]);
+  assert.equal((await api.request(`/tasks/${jA}/run`, { method: "POST" })).status, 202, "前项 jA 应能启动");
+  await waitFor(async () => (await taskStatusOf(jA)) === "running", "前项 jA 没有跑起来");
+  // 追问文本带常驻关键词:旁路回合悬住,给「前项先结束」的交错留出确定性窗口。
+  const jBRes = await api.request(`/tasks/${jB}/reply`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: jBQuery }),
+  });
+  assert.equal(jBRes.status, 202, "追问应被接住");
+  await waitFor(() => countIn(leadLog, jBQuery) > 0, "追问原文没有进会话");
+  await waitFor(async () => (await taskStatusOf(jB)) === "running", "追问旁路回合应在运行");
+  // 前项在追问悬着的时候让位(真实 stopTask → 结算 → 推进被 jB 的 running 冻结)。
+  await stopWhenLive(jA);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(await taskStatusOf(jB), "running", "追问回合不该被前项让位打断");
+  // 追问回合结束 → 恢复 paused → 补办欠下的推进:jB 必须被自动续跑,不等手点。
+  assert.equal(runs.stopTask(jB), true, "测试前提:jB 的追问回合应能结束");
+  await waitFor(async () => {
+    const row = (await db.select().from(tasks).where(eq(tasks.id, jB))).at(0)!;
+    return row.status === "running" && row.resumePrompt === null;
+  }, "前项已让位,追问结束后 jB 没有被自动续跑(交接被吞)");
+  await waitFor(() => countIn(leadLog, "ckpt-handover") > 1, "自动续跑没有用检查点的继续指令作输入");
+  assert.equal(await taskStatusOf(jC), "backlog", "jB 在跑,jC 不得被越过启动");
+  await stopWhenLive(jB);
+  // jB 的 stop 是终态让位,会连锁启动 jC(这正是正常推进)——一并收尾。
+  await stopWhenLive(jC);
+  console.log("✓ 前项在追问期间让位:欠账补办,追问结束后检查点任务自动续跑,末项不被越过");
 }

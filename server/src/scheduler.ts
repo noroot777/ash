@@ -4,7 +4,7 @@ import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
 import { freezeStartingTurn, stopTask } from "./runs.js";
-import { serializeQueueClaims } from "./queue-seat.js";
+import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 
 const MAX_PARALLEL = 4;
@@ -76,8 +76,21 @@ export async function advanceQueue(queueId: string): Promise<void> {
   // 刚认领的占位在这里看不见,按旧快照再拉起一个就是同队双跑(第 7 轮审查:跨入口
   // 竞争)。临界区里只做挑选与占位,真正拉起(resumeOrRunTask)在链外。
   const next = await serializeQueueClaims<typeof tasks.$inferSelect | "paused" | null>(async () => {
-    const candidate = await pickNextLaunchable(queueId);
-    if (!candidate) return null;
+    const rows = await queueMembers(queueId);
+    const candidate = selectNextInQueue(rows);
+    if (!candidate) {
+      // 挑不出人,而冻结源里有旁路/续聊回合(followUpFrom 非终态)的活跃回合:这次
+      // 让位会被它结算时的 quiet 恢复吞掉(setTaskStatus 的 quietAdvance),给它记一笔
+      // 欠账,结算恢复后补办(账本与互斥性见 queue-seat.ts)。真执行的 running 不记:
+      // 它自己的终态钩子会推进。
+      for (const t of rows) {
+        if (
+          (t.followUpFrom === "paused" || t.followUpFrom === "backlog")
+          && (t.status === "running" || t.status === "queued")
+        ) noteMissedAdvance(t.id, queueId);
+      }
+      return null;
+    }
     // 队列绑定到 group:组被暂停时允许编辑队列(保存排队关系),但不启动任何成员。
     // 检查放在这里而不是各调用方 —— 建队列/插入/重排/移除/终态钩子全走本函数,
     // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,

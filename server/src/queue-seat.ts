@@ -37,6 +37,30 @@ export type QueueSeat = {
   release(): Promise<void>;
 };
 
+// ── 旁路回合欠下的队列推进(第 ln9Q6IJEgmWf 链第 3 轮)───────────────────────────
+// 续聊/旁路回合(followUpFrom 是 paused/backlog 一类非终态)正占着 running 时,前项
+// 让位触发的推进会被 selectNextInQueue 的「有人在跑」守卫冻结;这轮结算又按「恢复
+// 原样」quiet 落回 paused(setTaskStatus 的 quietAdvance),那次真实发生过的让位就
+// 没了下家 —— 后项和它自己都静止到用户手点(审查真实页面复现:前项在追问期间完成,
+// 检查点任务停在 paused,刷新也不动)。所以推进被这类回合冻结时记一笔账,旁路结算
+// 恢复后消费补办;期间没有任何推进事件的静止检查点无账,照旧不被一句追问续跑。
+//
+// 互斥性:记账发生在 advanceQueue 的 serializeQueueClaims 临界区内,消费也必须包进
+// 同一条链 —— 消费段排在记账段之后就取得到;排在之前则恢复已先落库,记账那次推进
+// 在临界区里读到的就是 paused,自己就能挑中它,两边都不丢。
+const missedAdvances = new Map<string, string>(); // 旁路回合成员 taskId → 它的 queueId
+
+export function noteMissedAdvance(taskId: string, queueId: string): void {
+  missedAdvances.set(taskId, queueId);
+}
+
+/** 旁路结算恢复后取走欠账;要么在 serializeQueueClaims 里调(互斥才成立),要么是丢弃场景。 */
+export function takeMissedAdvance(taskId: string): string | null {
+  const queueId = missedAdvances.get(taskId) ?? null;
+  missedAdvances.delete(taskId);
+  return queueId;
+}
+
 export type QueueSeatClaim =
   | { ok: true; seat: QueueSeat | null } // seat=null:任务不在任何队列,没有同队语义
   | { ok: false; blockers: string[] };

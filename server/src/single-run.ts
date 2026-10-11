@@ -12,7 +12,7 @@ import { bus } from "./bus.js";
 import { scanForTitle } from "./auto-title.js";
 import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { bindNativeSteer, takeSteered, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
+import { bindNativeSteer, takeSteered, takeStopped, takeConfirmed, whenTurnIdle, type StopSettle } from "./runs.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
 import {
   LOST_SESSION_PATCH,
@@ -42,6 +42,25 @@ async function setStatus(
   opts?: Parameters<typeof setTaskStatus>[2],
 ) {
   await setTaskStatus(taskId, status, opts);
+}
+
+// 旁路/续聊结算恢复原状态之后,补办期间被这轮 running 冻结的队列推进(账本与互斥性
+// 见 queue-seat.ts:前项在追问回合期间让位,推进被冻结、恢复又是 quiet 的,真实发生
+// 过的让位不能就此蒸发)。消费必须包进 serializeQueueClaims 与记账互斥;补办要等本
+// 回合的回合锁释放 —— 推进多半会挑中刚恢复的这个任务自己,锁还占着会被续跑挡回,
+// 这笔账就又丢了(whenTurnIdle 正是「结算钩子里给同一个任务续跑」的约定写法)。
+// 恢复终态的场景调它只是顺手清账:终态 setStatus 的钩子已经推进过,补办在临界区里
+// 看到有人 queued/running 自然空转。动态 import 是因为 scheduler → task-resume →
+// orchestrator → 本文件的环。
+export async function settleOwedAdvance(taskId: string): Promise<void> {
+  const { serializeQueueClaims, takeMissedAdvance } = await import("./queue-seat.js");
+  const owed = await serializeQueueClaims(async () => takeMissedAdvance(taskId));
+  if (!owed) return;
+  whenTurnIdle(taskId, () => {
+    void import("./scheduler.js").then(({ advanceQueue }) =>
+      advanceQueue(owed).catch((err) => console.error(`[ash] 补办队列推进(${taskId})失败:`, err)),
+    );
+  });
 }
 
 // status 是 TaskStatus 而不是四个终态：**旁路回合（就地验证）结算时恢复的是进这一轮
@@ -161,12 +180,15 @@ export async function settleTaskStatus(
     if (consumedCheckpoint) await announceResumePrompt(taskId);
     if (confirmed) {
       await setStatus(taskId, "done");
+      await settleOwedAdvance(taskId); // 清账:done 的钩子已推进,补办只会空转
       notify("done");
       return { status: "done", confirmedDone: true, nativeTurn };
     }
     // 恢复 paused 是「回到进这一轮之前的原样」,不是新的检查点落位 —— 静静等着的
     // 队列成员不能因为聊了一轮就被推进钩子续跑(quietAdvance 的注释有完整账)。
     await setStatus(taskId, back, back === "paused" ? { quietAdvance: true } : undefined);
+    // 但旁路期间真实发生过的让位不能跟着静音:有欠账就补办(settleOwedAdvance 顶部)。
+    await settleOwedAdvance(taskId);
     const label = FOLLOW_UP_LABEL[back] ?? back;
     if (t.question) {
       // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
