@@ -36,8 +36,12 @@ import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
 
 
-async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
-  await setTaskStatus(taskId, status);
+async function setStatus(
+  taskId: string,
+  status: Parameters<typeof setTaskStatus>[1],
+  opts?: Parameters<typeof setTaskStatus>[2],
+) {
+  await setTaskStatus(taskId, status, opts);
 }
 
 // status 是 TaskStatus 而不是四个终态：**旁路回合（就地验证）结算时恢复的是进这一轮
@@ -160,7 +164,9 @@ export async function settleTaskStatus(
       notify("done");
       return { status: "done", confirmedDone: true, nativeTurn };
     }
-    await setStatus(taskId, back);
+    // 恢复 paused 是「回到进这一轮之前的原样」,不是新的检查点落位 —— 静静等着的
+    // 队列成员不能因为聊了一轮就被推进钩子续跑(quietAdvance 的注释有完整账)。
+    await setStatus(taskId, back, back === "paused" ? { quietAdvance: true } : undefined);
     const label = FOLLOW_UP_LABEL[back] ?? back;
     if (t.question) {
       // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它

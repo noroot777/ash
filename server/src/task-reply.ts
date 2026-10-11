@@ -56,11 +56,18 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   if (b.annotationBatchId) return replyWithAnnotationBatch(c, taskId, b.annotationBatchId, b.annotationRevision ?? 0);
 
   const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
+  // checkpoint 追问:paused 且带 resumePrompt 的任务,非执行回合的用户回复一律是
+  // 「怎么样了」式旁路续聊(orchestrator 的 checkpointFollowUp 同判据)——结算用
+  // followUpFrom 护回 paused、不消费继续指令。它不是任务的执行,所以跟终态续聊
+  // 一样直送:既不暂存成执行型、也不占队列认领。把它套进任何一个执行化分支都会
+  // 翻掉 paused 状态,让 orchestrator 误判成执行回合——消费检查点、无确认结算
+  // failed、队列按失败跳过放行后项(第 ln9Q6IJEgmWf 链第 2 轮真实页面复现)。
+  const checkpointFollowUp = !isTeam && r.status === "paused" && !!r.resumePrompt;
   // 排队没轮到的 paused/backlog:直接 continueTask 会在同队 running 成员旁边再开一个
   // 回合(第 xNb655YqYzcA 链第 2 轮复现)。先把回复暂存成排队消息,让位后由投递链路
   // (deliveryVerdict 同口径)送达。终态任务不走这里——续聊是 followUpFrom 旁路,不占队列。
   const queueWhileWaiting =
-    !isTeam &&
+    !isTeam && !checkpointFollowUp &&
     (r.status === "paused" || r.status === "backlog") &&
     (await queueBlockers(taskId)).length > 0;
   if (b.sendAt || queueWhileRunning || queueWhileWaiting) {
@@ -116,8 +123,9 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   // 之间隔着一串 await,同队另一个成员的手动运行在这个窗口里照样认领成功,两项一起跑
   // (第 ln9Q6IJEgmWf 链第 1 轮:/reply 与 /run 真实 HTTP 并发,10/10 同队双跑)。
   // 认领失败不丢原话:按 queueWhileWaiting 同款暂存成执行型待发送,让位后由投递链路
-  // 作为首轮输入送达。终态任务不在此列 —— 续聊是 followUpFrom 旁路,不占队列,豁免保留。
-  if (!isTeam && (r.status === "paused" || r.status === "backlog")) {
+  // 作为首轮输入送达。终态任务与 checkpoint 追问不在此列 —— 它们是 followUpFrom 旁路,
+  // 不占队列,豁免保留(追问的判据见上面 checkpointFollowUp)。
+  if (!isTeam && !checkpointFollowUp && (r.status === "paused" || r.status === "backlog")) {
     const stash = () => enqueueMessage({
       taskId, text, ...route, agent: b.agent ?? null,
       ownerUserId: route.actingUserId, execution: true,

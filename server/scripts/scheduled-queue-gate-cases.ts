@@ -230,4 +230,92 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(countIn(leadLog, hBText), 1, "同一条回复被投递了不止一次");
   console.log("✓ 回复与运行并发:争同一个队列认领,至多一项执行,回复让位后恰好送达一次");
+
+  // ── 队列内 checkpoint 追问不占认领(第 ln9Q6IJEgmWf 链第 2 轮拦验收)──────────────
+  // 队列 [iA(paused+resumePrompt, 队首无阻挡), iB(backlog)]:对 iA 发「怎么样了?」。
+  // 追问是旁路续聊(orchestrator checkpointFollowUp:followUpFrom 护回 paused、不消费
+  // 继续指令),不是执行 —— 修复前它被套进认领分支,paused 先翻成 queued,orchestrator
+  // 读不到 paused 就把追问当执行回合:消费检查点、无确认结算 failed、队列按失败跳过
+  // 放行 iB(审查真实页面复现)。
+  const iA = "scheduled-single-gate-ia";
+  const iB = "scheduled-single-gate-ib";
+  const iAPrompt = "等上游完成后继续正式步骤(ckpt-head)";
+  const iAQuery = "怎么样了？(ckpt-head-query)";
+  await db.insert(tasks).values([
+    { ...taskRow(iA, "claude", "paused"), mode: "single", team: null, resumePrompt: iAPrompt },
+    { ...taskRow(iB, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-gate-ia-prev", taskId: iA, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-ia-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-5", taskId: iA, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-5", taskId: iB, position: 1, createdAt: at },
+  ]);
+  const iARes = await api.request(`/tasks/${iA}/reply`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: iAQuery }),
+  });
+  assert.equal(iARes.status, 202, "checkpoint 追问应被接住");
+  assert.equal((await iARes.json() as { started?: boolean }).started, true, "追问是旁路续聊,应直送而不是暂存");
+  await waitFor(() => countIn(leadLog, iAQuery) > 0, "追问原文没有进会话");
+  // 追问回合结算后:保持暂停、继续指令原封不动、后项没有被放行。
+  await waitFor(async () => (await taskStatusOf(iA)) === "paused", "追问结束后 iA 必须恢复 paused,而不是 failed");
+  const iARow = (await db.select().from(tasks).where(eq(tasks.id, iA))).at(0)!;
+  assert.equal(iARow.resumePrompt, iAPrompt, "普通追问不得吞掉检查点的继续指令");
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(await taskStatusOf(iB), "backlog", "追问不得把后项放行(第 2 轮审查:错误放行后项)");
+  assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, iB))).length, 0, "后项不得开任何回合");
+  assert.equal(
+    (await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, iA))).length,
+    0, "追问不该被暂存成托盘消息",
+  );
+  console.log("✓ 队列内 checkpoint 追问:保持暂停与继续指令,后项不被放行");
+
+  // ── 有阻挡翼:前项在跑时的 checkpoint 追问照旧直送旁路 ───────────────────────────
+  // 队列 [iC(running), iD(paused+resumePrompt)]:追问不被暂存成执行型(修复前
+  // queueWhileWaiting 会把它收进托盘,等前项让位后按执行回合投递,同样消费检查点)。
+  // 前项让位后,检查点由**队列推进**的续跑消费 —— 那才是任务的执行。
+  const iC = "scheduled-single-gate-ic";
+  const iD = "scheduled-single-gate-id";
+  const iDPrompt = "继续正式步骤(ckpt-blocked);保持运行等待引导";
+  const iDQuery = "进展如何？(ckpt-blocked-query)";
+  await db.insert(tasks).values([
+    { ...taskRow(iC, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+    { ...taskRow(iD, "claude", "paused"), mode: "single", team: null, resumePrompt: iDPrompt },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-gate-id-prev", taskId: iD, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-id-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-6", taskId: iC, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-6", taskId: iD, position: 1, createdAt: at },
+  ]);
+  assert.equal((await api.request(`/tasks/${iC}/run`, { method: "POST" })).status, 202, "前项 iC 应能启动");
+  await waitFor(async () => (await taskStatusOf(iC)) === "running", "前项 iC 没有跑起来");
+  const iDRes = await api.request(`/tasks/${iD}/reply`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: iDQuery }),
+  });
+  assert.equal(iDRes.status, 202, "前项在跑时的 checkpoint 追问应被接住");
+  assert.equal((await iDRes.json() as { started?: boolean }).started, true, "追问是旁路,前项在跑也直送,不暂存执行型");
+  await waitFor(() => countIn(leadLog, iDQuery) > 0, "有阻挡的追问原文没有进会话");
+  await waitFor(async () => (await taskStatusOf(iD)) === "paused", "追问结束后 iD 必须恢复 paused");
+  assert.equal(
+    (await db.select().from(tasks).where(eq(tasks.id, iD))).at(0)!.resumePrompt, iDPrompt,
+    "有阻挡的追问同样不得吞掉继续指令",
+  );
+  assert.equal(
+    (await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, iD))).length,
+    0, "追问不得落成执行型待发送消息",
+  );
+  // 前项让位 → 队列推进用继续指令续跑 iD:检查点只被真正的执行消费。
+  await stopWhenLive(iC);
+  await waitFor(async () => (await taskStatusOf(iD)) === "running", "前项让位后队列推进没有续跑 iD");
+  await waitFor(() => countIn(leadLog, "ckpt-blocked") > 0, "续跑没有用检查点的继续指令作输入");
+  await waitFor(async () =>
+    (await db.select().from(tasks).where(eq(tasks.id, iD))).at(0)!.resumePrompt === null,
+  "队列推进的续跑应消费检查点");
+  await stopWhenLive(iD);
+  console.log("✓ 有阻挡的 checkpoint 追问:直送旁路不暂存,检查点只被队列推进的续跑消费");
 }

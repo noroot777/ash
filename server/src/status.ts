@@ -21,15 +21,30 @@ const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 //   • → paused   : 跑到检查点（非终止），startedAt/endedAt 都不动；下次 resume
 //                  会走 → running 路径自动清掉 endedAt。
 //   • otherwise  : leave the timestamps untouched.
-export async function setTaskStatus(taskId: string, status: TaskStatus): Promise<void> {
+export async function setTaskStatus(
+  taskId: string,
+  status: TaskStatus,
+  opts?: {
+    /**
+     * 这次写 paused 是续聊/旁路回合**恢复原状态**,不是「刚跑到检查点落位」——别触发
+     * 队列推进钩子。推进会把一个本就静静等着的 paused 成员(典型:队列 head 上带
+     * resumePrompt 的检查点)当作新到位的立即续跑:检查点被一句「怎么样了」间接消费、
+     * 无确认结算成 failed、后项被放行(第 ln9Q6IJEgmWf 链第 2 轮)。
+     * 已知代价:追问回合期间前项恰好结束的话,那次推进被 running 的旁路回合冻结,
+     * 恢复时又不补推 —— 任务静止等下一个队列事件或用户手点。保守方向:少做不会丢
+     * 检查点,误做会。恢复终态不走这个口子:让位与待发送消息的 flush 都靠那次推进。
+     */
+    quietAdvance?: boolean;
+  },
+): Promise<void> {
   const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  // 又开跑了：这一段里不许有新的自由工作流动作（起预览、验收、派审…）。**同步竖起来、
-  // 状态落库之后才放下**——收预览和写 running 是两步，中间那条缝里库里那行还是 `done`，
-  // 按状态放行的动作会一路放行（见 rerun-gate.ts）。
+  // 又开跑了:这一段里不许有新的自由工作流动作(起预览、验收、派审…)。**同步竖起来、
+  // 状态落库之后才放下**——收预览和写 running 是两步,中间那条缝里库里那行还是 `done`,
+  // 按状态放行的动作会一路放行(见 rerun-gate.ts)。
   const rerun = status === "running" && !!cur && cur.status !== "running";
   if (rerun) beginRerunGate(taskId);
   try {
-    await writeTaskStatus(taskId, status, cur, rerun);
+    await writeTaskStatus(taskId, status, cur, rerun, opts?.quietAdvance);
   } finally {
     if (rerun) endRerunGate(taskId);
   }
@@ -40,6 +55,7 @@ async function writeTaskStatus(
   status: TaskStatus,
   cur: typeof tasks.$inferSelect | undefined,
   rerun: boolean,
+  quietAdvance?: boolean,
 ): Promise<void> {
   const updatedAt = now();
   let startedAt = cur?.startedAt ?? null;
@@ -107,7 +123,7 @@ async function writeTaskStatus(
   //   恰好是 head 的时候 advance 才会启动我;否则我继续静静等
   // awaiting_review 不触发——审查门是明确的"等人"语义。
   // 动态 import scheduler 以避免和 scheduler → status 的循环。
-  if (status === "done" || status === "canceled" || status === "failed" || status === "paused") {
+  if (status === "done" || status === "canceled" || status === "failed" || (status === "paused" && !quietAdvance)) {
     void import("./scheduler.js").then(({ advanceQueueFromTask }) =>
       advanceQueueFromTask(taskId).catch((err) =>
         console.error(`[ash] advanceQueueFromTask(${taskId}) failed:`, err),

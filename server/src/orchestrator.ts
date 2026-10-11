@@ -56,8 +56,12 @@ import { announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "./session-notice.
 // done and the settle hook is auto-resuming this paused dependent.
 export type ResumeReason = "group" | "run" | "retry" | "wake" | "queue";
 
-async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
-  await setTaskStatus(taskId, status);
+async function setStatus(
+  taskId: string,
+  status: Parameters<typeof setTaskStatus>[1],
+  opts?: Parameters<typeof setTaskStatus>[2],
+) {
+  await setTaskStatus(taskId, status, opts);
 }
 
 
@@ -673,7 +677,9 @@ export async function continueTask(
         .where(eq(tasks.id, taskId));
     }
     const status = stopped ?? back ?? "failed";
-    await setStatus(taskId, status);
+    // 起跑失败的恢复同 settleTaskStatus:回到 paused 原状态不是检查点落位,别让推进
+    // 钩子把静止的队列成员续跑(setTaskStatus 的 quietAdvance 注释有完整账)。
+    await setStatus(taskId, status, !stopped && back === "paused" ? { quietAdvance: true } : undefined);
     // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
     // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、
     // 涨 verifyRounds,却给不出 verified/verify_failed),白耗用户一轮验证配额。
