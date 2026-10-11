@@ -174,4 +174,60 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
     0, "旁路答复不该在托盘留下执行型消息",
   );
   console.log("✓ 旁路答复不占位:队列中 done 任务答复审查提问,直送续跑、停止后仍是已完成");
+
+  // ── 直接回复与手动运行并发(第 ln9Q6IJEgmWf 链第 1 轮拦验收 1)──────────────────
+  // 队列 [hA(failed), hB(backlog)],hB 此刻没有挡路成员(hA 已让位):并发发出
+  // POST /tasks/hB/reply(新的执行要求)与 POST /tasks/hA/run。修复前回复分支只在
+  // 早期 queueBlockers 读到阻挡时暂存,否则直接 continueTask —— 两路各自读到「整队
+  // 空闲」,10/10 同队双跑。修复后两路争同一个队列认领:谁先占到谁跑,另一方按自己
+  // 的语义让行(回复 → 暂存执行型待发送;运行 → 409)。
+  const hA = "scheduled-single-gate-ha";
+  const hB = "scheduled-single-gate-hb";
+  const hBText = "新的执行要求(reply-run-race):保持运行等待引导";
+  await db.insert(tasks).values([
+    { ...taskRow(hA, "claude", "idle"), mode: "single", team: null, status: "failed", body: "保持运行等待引导" },
+    { ...taskRow(hB, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+  ]);
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-4", taskId: hA, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-4", taskId: hB, position: 1, createdAt: at },
+  ]);
+  const [replyRes, runRes] = await Promise.all([
+    api.request(`/tasks/${hB}/reply`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: hBText }),
+    }),
+    api.request(`/tasks/${hA}/run`, { method: "POST" }),
+  ]);
+  assert.equal(replyRes.status, 202, "回复应被接住(直送或暂存都 202)");
+  const replyBody = await replyRes.json() as { started?: boolean; scheduled?: boolean };
+  const hMsgRows = async () => db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, hB));
+  if (runRes.status === 202) {
+    // /run 先占到:hA 起跑;hB 的回复必须已暂存为执行型待发送,hB 不得启动。
+    assert.equal(replyBody.scheduled, true, "/run 占到位时,回复必须暂存而不是直送起跑");
+    await waitFor(async () => (await taskStatusOf(hA)) === "running", "占到位的 hA 没有跑起来");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(await taskStatusOf(hB), "backlog", "hA 在跑,hB 不得被回复拉起 —— 同队双跑");
+    assert.equal((await hMsgRows()).at(0)?.execution, true, "暂存的回复必须是执行型");
+    assert.equal(countIn(leadLog, hBText), 0, "hA 在跑期间回复原文不该进 stdin");
+    await stopWhenLive(hA);
+    // hA 让位 → 回复作为 hB 的首轮输入送达恰好一次。
+    await waitFor(async () => (await hMsgRows()).at(0)?.status === "sent", "hA 让位后回复没有投递");
+  } else {
+    // 回复先占到:hB 直送起跑;/run 必须 409,hA 保持 failed、零回合。
+    assert.equal(runRes.status, 409, `回复占到位时 /run 应 409,实际 ${runRes.status}`);
+    assert.equal(replyBody.started, true, "没人挡路时回复应直送起跑");
+    assert.equal(await taskStatusOf(hA), "failed", "被挡回的 hA 必须保持 failed");
+    assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, hA))).length, 0, "被挡回的 hA 不得开回合");
+  }
+  await waitFor(() => countIn(leadLog, hBText) > 0, "回复标了送出,stdin 里却没有原文");
+  await waitFor(async () => (await taskStatusOf(hB)) === "running", "回复送达后 hB 应在运行");
+  {
+    const [sA, sB] = [await taskStatusOf(hA), await taskStatusOf(hB)];
+    assert.ok(!((sA === "running" || sA === "queued") && (sB === "running" || sB === "queued")),
+      "同一队列两个成员同时在跑");
+  }
+  await stopWhenLive(hB);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(countIn(leadLog, hBText), 1, "同一条回复被投递了不止一次");
+  console.log("✓ 回复与运行并发:争同一个队列认领,至多一项执行,回复让位后恰好送达一次");
 }

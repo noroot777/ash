@@ -9,6 +9,7 @@ import { actorOf, ownerIdOf } from "./auth/context.js";
 import { continueTask } from "./orchestrator.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { queueBlockers } from "./queues.js";
+import { claimQueueSeat } from "./queue-seat.js";
 import { nativeCliCommand } from "./skills.js";
 import { leadTypeOf } from "./team/session.js";
 import { replyWithAnnotationBatch } from "./page-annotation-routes.js";
@@ -107,6 +108,33 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err), started: false }, 409);
     }
+    return c.json({ started: true }, 202);
+  }
+  // 待办/暂停的单任务:这条回复的投递**就是任务的执行回合**,起跑前要过与 /run、/fire、
+  // 定时到点、消息补投、重跑上一回合共用的队列认领(queue-seat.ts)。上面 queueWhileWaiting
+  // 那次 queueBlockers 只是无互斥的快速判断 —— 读完到 continueTask 把状态落成 running
+  // 之间隔着一串 await,同队另一个成员的手动运行在这个窗口里照样认领成功,两项一起跑
+  // (第 ln9Q6IJEgmWf 链第 1 轮:/reply 与 /run 真实 HTTP 并发,10/10 同队双跑)。
+  // 认领失败不丢原话:按 queueWhileWaiting 同款暂存成执行型待发送,让位后由投递链路
+  // 作为首轮输入送达。终态任务不在此列 —— 续聊是 followUpFrom 旁路,不占队列,豁免保留。
+  if (!isTeam && (r.status === "paused" || r.status === "backlog")) {
+    const stash = () => enqueueMessage({
+      taskId, text, ...route, agent: b.agent ?? null,
+      ownerUserId: route.actingUserId, execution: true,
+    });
+    const claim = await claimQueueSeat(taskId);
+    if (!claim.ok) {
+      const row = await stash();
+      return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
+    }
+    const seat = claim.seat;
+    void continueTask(taskId, text, route)
+      .then(async (started) => {
+        // 回合被别的执行抢占:原话退回托盘,仍按执行型等队列位置,不按续聊放行。
+        if (!started) await stash();
+      })
+      .catch((err) => console.error(`[ash] 回复续跑 ${taskId} 异常:`, err))
+      .finally(() => { if (seat) void seat.release(); });
     return c.json({ started: true }, 202);
   }
   void continueTask(taskId, text, route).then(async (started) => {
