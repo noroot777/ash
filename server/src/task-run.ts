@@ -33,7 +33,7 @@ import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { reportTurnFailure } from "./turn-failure.js";
+import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
 import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
@@ -261,11 +261,12 @@ export async function runTask(
     const stopped = takeStopped(taskId);
     if (steered && !stopped) return;
     const message = String(err instanceof Error ? err.message : err);
+    const [failedTask] = await db.select().from(tasks).where(eq(tasks.id, taskId));
+    const target = failedTask && !handle ? await freshRunFailureTarget(failedTask, opts.actingUserId ?? failedTask.ownerUserId) : undefined;
     // 基线的事先说：它在这一轮更早的时候就**已经落库**了，说在失败交代之前才对得上
     // 发生顺序。没说过才补（spawn 成功后崩的那种，上面已经写过一条）。
-    if (!baseFallbackTold) await announceBaseFallback(taskId, baseFallback, { role: "single" });
-    await reportTurnFailure({ taskId, message, role: "single" });
-    const [failedTask] = await db.select().from(tasks).where(eq(tasks.id, taskId));
+    if (!baseFallbackTold) await announceBaseFallback(taskId, baseFallback, target ?? { role: "single" });
+    await reportTurnFailure({ taskId, message, role: "single", agentType: target?.agentType, target });
     const goalHeld = failedTask?.goalTurn && await interruptCliGoal(failedTask, failedTask.agentType ?? "claude", handle?.goalStarted?.() ?? !!handle?.goal?.());
     const status = stopped ?? (goalHeld ? "paused" : "failed");
     await setTaskStatus(taskId, status);

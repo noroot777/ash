@@ -14,6 +14,7 @@ const workspace = join(root, "workspace");
 const screenshots = process.env.ASH_CLI_SCREENSHOTS || join(root, "screenshots");
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
+delete process.env.ASH_ALLOW_REAL_AGENT;
 const { db, dbClient, ensureSchema } = await import("../../server/dist/db/index.js");
 const { appSettings, projects, tasks, agents, sessions } = await import("../../server/dist/db/schema.js");
 await ensureSchema();
@@ -27,6 +28,9 @@ await db.insert(tasks).values([
   { id: "codex-ui-task", projectId: "cli-ui", title: "Codex 命令", body: "测试夹具", mode: "single", status: "done", agentType: "codex", executorId: "codex-ui", autoTitle: false, createdAt: at, updatedAt: at },
   { id: "claude-ui-task", projectId: "cli-ui", title: "Claude 目标快照", body: "测试夹具", mode: "single", status: "done", agentType: "claude", executorId: "claude-ui", autoTitle: false, stage: "accepted", cliState: JSON.stringify({ claude: { profileId: "claude-ui", ownerUserId: null, goal: { objective: "验证目标命令", status: "paused" } } }), createdAt: at, updatedAt: at },
   { id: "team-ui-task", projectId: "cli-ui", title: "团队菜单", body: "测试夹具", mode: "team", status: "idle", agentType: "codex", executorId: "codex-ui", autoTitle: false, createdAt: at, updatedAt: at },
+  { id: "edited-cli-task", projectId: "cli-ui", title: "编辑后起跑失败", body: "普通正文", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", createdAt: at, updatedAt: at },
+  { id: "legacy-cli-task", projectId: "cli-ui", title: "Codex 老任务起跑失败", body: "/usage 看一下这个月的用量再决定", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", createdAt: at, updatedAt: at },
+  { id: "legacy-claude-task", projectId: "cli-ui", title: "Claude 老任务起跑失败", body: "/plan 怎么做这个功能", mode: "single", status: "backlog", agentType: "claude", executorId: "claude-ui", createdAt: at, updatedAt: at },
 ]);
 await db.insert(sessions).values({ id: "claude-ui-session", taskId: "claude-ui-task", role: "single", agentType: "claude", executor: "claude", executorId: "claude-ui", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
 dbClient.close();
@@ -98,8 +102,53 @@ try {
   await objective.fill("/");
   await page.getByRole("listbox").waitFor();
   assert.equal(await page.getByRole("option", { name: /^\/goal\b/ }).count(), 0);
+  await page.getByRole("tab", { name: "单任务", exact: true }).click();
+  const agentPicker = page.getByRole("button", { name: /^智能体：/ });
+  await agentPicker.click();
+  await page.getByRole("option", { name: /@claude/ }).click();
+  await page.keyboard.press("Escape");
+  assert.match(await agentPicker.getAttribute("aria-label"), /智能体：claude/);
+  await objective.fill("/plan 怎么做这个功能");
+  const beforeCreation = await (await fetch(`${base}/api/tasks`)).json();
+  const invalidCreation = page.waitForResponse((response) => response.url().endsWith("/api/tasks") && response.request().method() === "POST");
+  await page.getByRole("button", { name: "创建并运行", exact: true }).click();
+  const rejected = await invalidCreation;
+  assert.equal(rejected.status(), 400);
+  assert.match((await rejected.json()).error, /ash 通道不支持 \/plan/);
+  await page.getByText("当前执行器的 ash 通道不支持 /plan", { exact: true }).waitFor();
+  await page.locator(".workspace-toast.is-visible").filter({ hasText: "当前执行器的 ash 通道不支持 /plan" }).waitFor();
+  assert.equal(await objective.inputValue(), "/plan 怎么做这个功能");
+  assert.equal((await (await fetch(`${base}/api/tasks`)).json()).length, beforeCreation.length);
+  await page.screenshot({ path: join(screenshots, "cli-creation-validation.png"), fullPage: true, animations: "disabled" });
+
+  const edited = await fetch(`${base}/api/tasks/edited-cli-task`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ body: "/status 看一下当前进度再决定下一步" }),
+  });
+  assert.equal(edited.status, 200);
+  for (const [taskId, reason] of [
+    ["edited-cli-task", /这一轮没能起跑：\/status 不接受参数/],
+    ["legacy-cli-task", /这一轮没能起跑：\/usage 不接受参数/],
+    ["legacy-claude-task", /这一轮没能起跑：当前执行器的 ash 通道不支持 \/plan/],
+  ]) {
+    await page.goto(`${base}/?project=cli-ui&task=${taskId}`);
+    const runResponse = page.waitForResponse((response) => response.url().endsWith(`/tasks/${taskId}/run`) && response.request().method() === "POST");
+    await page.getByRole("button", { name: "运行", exact: true }).click();
+    assert.equal((await runResponse).status(), 202);
+    await page.getByText(reason).first().waitFor();
+    assert.equal(await page.getByText(/执行输出会实时显示在这里/).count(), 0);
+    await page.screenshot({ path: join(screenshots, `${taskId}-failure-live.png`), fullPage: true });
+    await page.reload();
+    await page.getByText(reason).first().waitFor();
+    await page.screenshot({ path: join(screenshots, `${taskId}-failure-reloaded.png`), fullPage: true });
+    const recorded = await (await fetch(`${base}/api/tasks/${taskId}/sessions`)).json();
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0].cliSessionId, null);
+    assert.equal(recorded[0].exitStatus, 1);
+  }
   assert.deepEqual(pageErrors, []);
   console.log("native slash UI, agent/mode filtering, inline goal status without optimistic bubbles, durable reload: passed");
+  console.log("creation validation reason, edited/legacy startup diagnostics, live display and durable reload: passed");
   console.log(`screenshots: ${screenshots}`);
 } finally {
   await browser?.close();

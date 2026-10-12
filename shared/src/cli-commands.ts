@@ -23,6 +23,9 @@ export const CODEX_COMMANDS = {
 } as const;
 
 export type CliCommandName = keyof typeof CODEX_COMMANDS;
+export class CliCommandValidationError extends Error {
+  override name = "CliCommandValidationError";
+}
 export interface CliCommand { name: CliCommandName; args: string; text: string; }
 export interface CliGoal {
   objective: string;
@@ -71,25 +74,25 @@ export function goalRequest(command: CliCommand, agentType: AgentType): { object
   const budgetOnly = /^budget\s+(\S+)$/.exec(command.args);
   const value = budget?.[1] ?? budgetOnly?.[1];
   const tokenBudget = value === undefined ? undefined : Number(value);
-  if (value !== undefined && (agentType !== "codex" || !Number.isSafeInteger(tokenBudget) || tokenBudget! <= 0)) throw new Error(agentType !== "codex" ? "Claude Code 的原生目标不支持 token 预算参数" : "目标预算必须是正整数");
+  if (value !== undefined && (agentType !== "codex" || !Number.isSafeInteger(tokenBudget) || tokenBudget! <= 0)) throw new CliCommandValidationError(agentType !== "codex" ? "Claude Code 的原生目标不支持 token 预算参数" : "目标预算必须是正整数");
   if (budgetOnly) return { tokenBudget };
   const objective = budget ? command.args.replace(budget[0], " ").trim() : command.args;
-  if (!objective || objective.length > 4000 || /(?:^|\s)--budget\b/.test(objective)) throw new Error("目标必须为 1–4000 字符；预算写作 --budget 正整数");
+  if (!objective || objective.length > 4000 || /(?:^|\s)--budget\b/.test(objective)) throw new CliCommandValidationError("目标必须为 1–4000 字符；预算写作 --budget 正整数");
   return { objective, status: "active", ...(tokenBudget !== undefined ? { tokenBudget } : {}) };
 }
 export function validateCliCommand(agentType: string, text: string): CliCommand | null {
   const name = /^\/([\w-]+)(?:\s|$)/.exec(text.trim())?.[1];
   if (agentType === "claude" && name === "review") return null;
-  if (name && Object.hasOwn(CODEX_COMMANDS, name) && !Object.hasOwn(cliCommandCatalog(agentType), name)) throw new Error(`当前执行器的 ash 通道不支持 /${name}`);
+  if (name && Object.hasOwn(CODEX_COMMANDS, name) && !Object.hasOwn(cliCommandCatalog(agentType), name)) throw new CliCommandValidationError(`当前执行器的 ash 通道不支持 /${name}`);
   const command = parseCliCommand(agentType, text);
   if (!command) return null;
-  if (command.name === "goal" && /^(pause|resume|clear|stop|off|reset|none|cancel)\s/.test(command.args)) throw new Error("目标控制命令不接受额外参数；调整预算使用 /goal budget 正整数");
-  if (command.name === "goal" && /^budget(?:\s|$)/.test(command.args) && !/^budget\s+\S+$/.test(command.args)) throw new Error("调整预算使用 /goal budget 正整数");
+  if (command.name === "goal" && /^(pause|resume|clear|stop|off|reset|none|cancel)\s/.test(command.args)) throw new CliCommandValidationError("目标控制命令不接受额外参数；调整预算使用 /goal budget 正整数");
+  if (command.name === "goal" && /^budget(?:\s|$)/.test(command.args) && !/^budget\s+\S+$/.test(command.args)) throw new CliCommandValidationError("调整预算使用 /goal budget 正整数");
   if (command.name === "goal" && command.args && !/^(pause|resume|clear|stop|off|reset|none|cancel)$/.test(command.args)) goalRequest(command, agentType as AgentType);
-  if (command.name === "personality" && command.args && !/^(friendly|pragmatic|none)$/.test(command.args)) throw new Error("/personality 支持 friendly、pragmatic、none");
-  if (command.name === "fast" && command.args && !/^(on|off)$/.test(command.args)) throw new Error("/fast 支持 on、off");
-  if (command.name === "rename" && (!command.args || command.args.length > 200)) throw new Error("/rename 后填写 1–200 字符的名称");
-  if (command.name === "review" && /^--(base|commit)\b/.test(command.args) && !/^--(base|commit)\s+\S+$/.test(command.args)) throw new Error("审查目标写作 /review --base 分支 或 /review --commit SHA");
-  if (!["goal", "plan", "review", "personality", "fast", "rename"].includes(command.name) && !(agentType === "claude" && command.name === "compact") && command.args) throw new Error(`/${command.name} 不接受参数`);
+  if (command.name === "personality" && command.args && !/^(friendly|pragmatic|none)$/.test(command.args)) throw new CliCommandValidationError("/personality 支持 friendly、pragmatic、none");
+  if (command.name === "fast" && command.args && !/^(on|off)$/.test(command.args)) throw new CliCommandValidationError("/fast 支持 on、off");
+  if (command.name === "rename" && (!command.args || command.args.length > 200)) throw new CliCommandValidationError("/rename 后填写 1–200 字符的名称");
+  if (command.name === "review" && /^--(base|commit)\b/.test(command.args) && !/^--(base|commit)\s+\S+$/.test(command.args)) throw new CliCommandValidationError("审查目标写作 /review --base 分支 或 /review --commit SHA");
+  if (!["goal", "plan", "review", "personality", "fast", "rename"].includes(command.name) && !(agentType === "claude" && command.name === "compact") && command.args) throw new CliCommandValidationError(`/${command.name} 不接受参数`);
   return command;
 }
