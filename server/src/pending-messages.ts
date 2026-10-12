@@ -463,10 +463,17 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       // 自激循环(第 6 轮审查:目录不修复时 2 秒 24 次失败)。
       if (retryBlocked(m.id, at.getTime())) continue;
       const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0) ?? null;
+      // checkpoint 追问经待发送路径投递(定时发送、第一句还在回答时自动排队的第二句)
+      // 时,与直接回复同判据旁路(task-reply.ts / orchestrator 的 checkpointFollowUp):
+      // paused+resumePrompt 任务上的非执行型消息,投递是续聊不是执行 —— 占位会把
+      // paused 翻成 queued,orchestrator 误判成执行回合:消费继续指令、无确认结算
+      // failed(第 ll7XKsu_ps0n 链第 1 轮:定时追问与连续追问实测,直接回复对照正常)。
+      const checkpointFollowUp =
+        t != null && t.mode === "single" && !m.execution && t.status === "paused" && !!t.resumePrompt;
       // paused/backlog 的单任务、以及执行型消息(不论任务状态)才需要问队列;执行型
       // 还要问分组暂停。其余状态别白查几张表。
       const needQueueCheck =
-        t != null && t.mode === "single"
+        t != null && t.mode === "single" && !checkpointFollowUp
         && (m.execution || t.status === "paused" || t.status === "backlog");
       const queueBlocked = needQueueCheck ? (await queueBlockers(m.taskId)).length > 0 : false;
       const groupPaused =

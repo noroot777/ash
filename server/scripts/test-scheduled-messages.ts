@@ -12,6 +12,7 @@ import { TEAM_DEFAULTS } from "@ash/shared";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
 import { runHandoffCases } from "./scheduled-handoff-cases.js";
 import { runQueueGateCases } from "./scheduled-queue-gate-cases.js";
+import { runCkptPendingCases } from "./scheduled-ckpt-pending-cases.js";
 import { runSteerCases } from "./scheduled-steer-cases.js";
 
 // 子进程抢下投递租约后 SIGKILL，留下可由重启回收的「pending + 租约」现场。
@@ -526,6 +527,7 @@ try {
   await runHandoffCases({ at, root, leadLog, waitFor, countIn, taskRow, messageRow });
   // 「执行入口过队列认领」那一组(定时到点 / 提问答复不越过前项)在 scheduled-queue-gate-cases.ts。
   await runQueueGateCases({ at, root, leadLog, waitFor, countIn, taskRow, messageRow });
+  await runCkptPendingCases({ at, root, leadLog, waitFor, countIn, taskRow, messageRow });
 
   // ── 挡回一次,不许退回去干等那个 30 秒兜底扫描 ──────────────────────────────
   // `continueTask` 有一串「一个字都没送出去」的出口(回合被别的执行抢走、验收互斥、

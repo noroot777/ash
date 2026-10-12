@@ -107,7 +107,25 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
     );
     if (blockers.length) return { ok: false, blockers };
     const prevStatus = rows.find((r) => r.id === taskId)?.status ?? "backlog";
-    await setTaskStatus(taskId, "queued");
+    try {
+      await setTaskStatus(taskId, "queued");
+    } catch (err) {
+      // 占位写入失败 ≠ 肯定没写入:setTaskStatus 写完 status 还要读 sessions 广播,
+      // UPDATE 已提交、附带读取才超时的话任务已经是 queued(第 7 轮审查同款)。这里
+      // 异常若直接外抛,手动启动入口(/run 等)在 claimTurn 之后的 await 就会把 500
+      // 抛给用户、回合锁没人释放,此后一律 409「回合正在进行」(第 ll7XKsu_ps0n 链
+      // 第 1 轮)。按失败认领返回,让调用方走统一的「认领失败」收口(释放自己的锁/
+      // 暂存消息);可能的 queued 遗留延迟交给 scheduler 的守卫补偿按持久结果收拾。
+      console.error(`[ash] 队列占位写入失败(${taskId}),按认领失败返回并安排补偿:`, err);
+      void import("./scheduler.js").then(({ reclaimStrandedSeat }) => {
+        const timer = setTimeout(
+          () => void reclaimStrandedSeat(taskId, item.queueId, prevStatus as Parameters<typeof reclaimStrandedSeat>[2], { renote: true }),
+          1_000,
+        );
+        timer.unref?.();
+      });
+      return { ok: false, blockers: ["队列占位写入失败,稍后自动重试"] };
+    }
     return { ok: true, seat: makeSeat(taskId, prevStatus) };
   });
 }
@@ -144,7 +162,16 @@ export async function seatThenStart(
   taskId: string,
   start: () => Promise<unknown>,
 ): Promise<{ ok: true } | { ok: false; blockers: string[] }> {
-  const claim = await claimQueueSeat(taskId);
+  let claim: QueueSeatClaim;
+  try {
+    claim = await claimQueueSeat(taskId);
+  } catch (err) {
+    // 临界区里的读也可能撞锁:异常传出去就是手动入口 claimTurn 之后的 500 + 锁泄漏
+    // (调用方的「认领失败 → releaseTurn」分支走不到)。读失败没有写入遗留,按失败
+    // 认领返回即可,下一次点运行就是干净的重试。
+    console.error(`[ash] 队列占位认领读取失败(${taskId}):`, err);
+    return { ok: false, blockers: ["队列占位读写失败,请稍后重试"] };
+  }
   if (!claim.ok) return { ok: false, blockers: claim.blockers };
   const seat = claim.seat;
   void start()
