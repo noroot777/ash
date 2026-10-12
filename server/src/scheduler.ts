@@ -115,9 +115,13 @@ export async function advanceQueue(queueId: string): Promise<void> {
       await setQueued(candidate.id);
     } catch (err) {
       releaseTurn(candidate.id);
-      console.error(`[ash] 队列推进占位写入失败(${candidate.id}),释放预认领并稍后重推:`, err);
-      const timer = setTimeout(() => noteMissedAdvance(candidate.id, queueId), 1_000);
-      timer.unref?.();
+      console.error(`[ash] 队列推进占位写入失败(${candidate.id}),释放预认领并稍后补偿:`, err);
+      // 失败 ≠ 肯定没写入:setTaskStatus 写完 status 还要读 sessions 算用时再广播,
+      // UPDATE 已提交、附带 SELECT 才超时的话任务已经是 queued —— selectNextInQueue
+      // 会被这具遗留占位冻结,单纯重推救不回(第 7 轮审查:短暂锁故障后整队永久
+      // 「排队中」)。按持久结果补偿:延迟交给 reclaimStrandedSeat 守卫式收拾(queued
+      // 遗留就回滚,没写进去就只记账重推),它自己失败会再重试,数据库恢复后交接续上。
+      scheduleSeatReclaim(candidate.id, queueId, candidate.status as TaskStatus, 1_000);
       return null;
     }
     return candidate;
@@ -155,17 +159,47 @@ export async function advanceQueue(queueId: string): Promise<void> {
   }
 }
 
-// 续跑没接管占位的兜底:turnHeld 的锁被 enterTurn 退回(验收互斥、接力拒收),任务
-// 停在 queued、回合又没人持有,不收拾就是永久「排队中」。守卫与 queue-seat 的
-// seat.release 同款:正常跑完的回合在这里全是 no-op(状态早被结算覆盖/锁被真实回合
-// 接管)。回滚用 quiet(回原样不是落位);重推延迟一拍 —— 互斥方(典型:验收)没有
-// 结束钩子来推队列,立刻重试只会原地打转。
-async function reclaimStrandedSeat(taskId: string, queueId: string, prevStatus: TaskStatus): Promise<void> {
+// 续跑没接管占位的兜底:turnHeld 的锁被 enterTurn 退回(验收互斥、接力拒收),或占位
+// 写入半途而废(UPDATE 已提交、附带读取才失败)—— 任务停在 queued、回合又没人持有,
+// 不收拾就是永久「排队中」。守卫与 queue-seat 的 seat.release 同款:正常跑完的回合在
+// 这里全是 no-op(状态早被结算覆盖/锁被真实回合接管)。回滚用 quiet(回原样不是落位);
+// 重推延迟一拍 —— 互斥方(典型:验收)没有结束钩子来推队列,立刻重试只会原地打转。
+// renote:调用方确知「这次交接没发生」(占位写入失败的补偿)时,即使没有 queued 遗留
+// (写入确实没提交)也要记账重推;finally 的常规兜底不传 —— 正常结算的回合自有钩子。
+// 导出供回归直调(触发它的真实路径是「UPDATE 提交后附带 SELECT 超时」,无法从测试
+// 外侧精确注入到两条语句之间)。
+export async function reclaimStrandedSeat(
+  taskId: string,
+  queueId: string,
+  prevStatus: TaskStatus,
+  opts?: { renote?: boolean },
+): Promise<void> {
   if (isTurnClaimed(taskId)) return;
-  const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (row?.status !== "queued") return;
-  await setTaskStatus(taskId, prevStatus, prevStatus === "paused" ? { quietAdvance: true } : undefined);
-  const timer = setTimeout(() => noteMissedAdvance(taskId, queueId), 1_000);
+  try {
+    const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (row?.status === "queued") {
+      await setTaskStatus(taskId, prevStatus, prevStatus === "paused" ? { quietAdvance: true } : undefined);
+    } else if (!opts?.renote) {
+      return; // 正常结算覆盖了占位,无需收拾
+    }
+    const timer = setTimeout(() => noteMissedAdvance(taskId, queueId), 1_000);
+    timer.unref?.();
+  } catch (err) {
+    // 补偿自己也可能撞上还没放开的写锁:不放弃,退避后重试 —— 这正是「数据库恢复后
+    // 再补办交接」的那一等(第 7 轮审查:一次短暂锁故障不许变成永久停滞)。
+    console.error(`[ash] 队列占位补偿失败(${taskId}),5s 后重试:`, err);
+    scheduleSeatReclaim(taskId, queueId, prevStatus, 5_000, opts);
+  }
+}
+
+function scheduleSeatReclaim(
+  taskId: string,
+  queueId: string,
+  prevStatus: TaskStatus,
+  delayMs: number,
+  opts?: { renote?: boolean },
+): void {
+  const timer = setTimeout(() => void reclaimStrandedSeat(taskId, queueId, prevStatus, opts ?? { renote: true }), delayMs);
   timer.unref?.();
 }
 

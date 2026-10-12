@@ -1,14 +1,14 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
+import type { AgentType, SessionRole } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
-import { consumeSingleRun, afterSettlement } from "./single-run.js";
+import { consumeSingleRun } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
@@ -25,16 +25,16 @@ import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
-import { reconcileTurnBaseline, recordTurnBaseline } from "./turn-baseline.js";
+import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
-import { abortIfFrozen } from "./turn-freeze.js";
+import { abortIfFrozen, FrozenTurn } from "./turn-freeze.js";
+import { recoverFailedTurnStart } from "./turn-start-failure.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
-import { reportTurnFailure } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
@@ -44,7 +44,7 @@ import {
   WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
-import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
+import { baseFallbackNote } from "./base-fallback-notice.js";
 import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "./session-version-guard.js";
 import { announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "./session-notice.js";
@@ -241,6 +241,8 @@ export async function continueTask(
   // 事挂在 try 外面，失败那条路才补得上（见 base-fallback-notice.ts）。
   let baseFallback: Workspace["baseFallback"];
   let baseFallbackTold = false;
+  // FrozenTurn(spawn 前被冻结闸撤回)= 输入没送出去,函数尾据此返回 false。
+  let frozenBeforeSpawn = false;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
@@ -641,58 +643,28 @@ export async function continueTask(
     const steered = await takeSteered(taskId);
     const stopped = takeStopped(taskId);
     if (steered && !stopped) return true;
-    const message = String(err instanceof Error ? err.message : err);
-    // 基线的事先说：它在这一轮更早的时候就**已经落库**了（解析工作目录那一刻），说在
-    // 失败交代之前才对得上发生顺序；没说过才补。
-    if (!baseFallbackTold) {
-      await announceBaseFallback(taskId, baseFallback, {
-        sessionId: opts.resumeSessionId, agentType, role: sessionRole,
-      });
-    }
-    // handle 还没赋值 = 连 spawn 都没到，这句话一个字都没送出去（判据与措辞见
-    // turn-failure.ts）；这条交代要落到被 @ 的那位、或指名续的那条会话上。
-    await reportTurnFailure({
-      taskId, message, role: sessionRole, agentType,
-      undelivered: handle || opts.system ? undefined : userText + attachmentsPrompt(opts.attachments),
-      target: { sessionId: opts.resumeSessionId, agentType, role: sessionRole },
+    // 起跑前被冻结闸撤回(FrozenTurn 只在 spawn 之前抛):输入一个字都没进 CLI,对
+    // 调用方就是「没送出去」—— 返回 true 会让 resumePrompt 那路把检查点当已消费,
+    // 暂停撤回一次、指定继续内容永久丢失,恢复分组后只剩通用「继续」(第 7 轮审查)。
+    // 状态结算(落回 paused)仍由失败恢复完成,只是返回值改说实话。
+    frozenBeforeSpawn = err instanceof FrozenTurn;
+    // 失败交代 + 基线对账 + 状态恢复,整段住在 turn-start-failure.ts(顺序讲究见其顶部)。
+    await recoverFailedTurnStart({
+      taskId,
+      message: String(err instanceof Error ? err.message : err),
+      sessionRole, agentType,
+      spawned: !!handle,
+      systemTurn: !!opts.system,
+      undeliveredText: userText + attachmentsPrompt(opts.attachments),
+      resumeSessionId: opts.resumeSessionId,
+      stopped, baseFallback, baseFallbackTold,
     });
-    // 这一轮已拍过基线的话(资源都解析成功、spawn 才挂),先按基线对账:失败回合的工作
-    // 目录多半一个字节没动,开头摘掉的验收事实(stage + 合并快照 + 尾段进度)会整套挂回。
-    // 不对账的话,下一轮的 recordTurnBaseline 会直接覆盖这份基线,快照永久丢失(审查
-    // 实测:解析失败后 stage/快照回不来)。必须在 afterSettlement 之前(turn-baseline.ts
-    // 的约定);正常路径的结算已经对过账时,基线文件已被消费,这里是 no-op。
-    await reconcileTurnBaseline(taskId, false).catch(() => undefined);
-    // 续聊回合里出的岔子(典型:worktree 建不出来)不该把任务状态打差 —— 同
-    // settleTaskStatus 的约定:续聊只能让任务变好,不能让它变坏。
-    const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    const back = row?.followUpFrom as TaskStatus | null | undefined;
-    // 原生命令标记跟 followUpFrom 一样**只在本回合内有效**:CLI 还没起来就抛错时,
-    // 正常那条清理路(settleTaskStatus)根本没跑过 —— 不在这儿清掉,标记就漏给下一轮,
-    // 下一轮的真实结算会被整段跳过(当成「那是次压缩」)。
-    const nativeTurn = !!row?.nativeTurn;
-    const status = stopped ?? back ?? "failed";
-    // 起跑失败的恢复同 settleTaskStatus:「清旁路身份 + 回到原状态」对队列推进原子
-    // (分开写的窗口会让推进漏记交接,见 settleTaskStatus 同款注释);恢复 paused 不是
-    // 检查点落位,quietAdvance 防静止成员被续跑(setTaskStatus 的注释有完整账)。
-    const { serializeQueueClaims } = await import("./queue-seat.js");
-    await serializeQueueClaims(async () => {
-      if (back || nativeTurn) {
-        await db
-          .update(tasks)
-          .set({ ...(back ? { followUpFrom: null } : {}), ...(nativeTurn ? { nativeTurn: false } : {}), updatedAt: now() })
-          .where(eq(tasks.id, taskId));
-      }
-      await setStatus(taskId, status, !stopped && back === "paused" ? { quietAdvance: true } : undefined);
-    });
-    // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
-    // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、
-    // 涨 verifyRounds,却给不出 verified/verify_failed),白耗用户一轮验证配额。
-    if (!nativeTurn) await afterSettlement(taskId, status, false, false, sessionRole, true, !stopped);
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
-  // 落到时间线/状态上)。只有「被单飞锁挡回」才返回 false,那才是「一个字没送出去」。
-  return true;
+  // 落到时间线/状态上)。返回 false 的只有两类「一个字没送出去」:被单飞锁挡回,和
+  // 起跑前被冻结闸撤回(后者让 resumePrompt/待发送消息的调用方把原文安全放回)。
+  return !frozenBeforeSpawn;
 }

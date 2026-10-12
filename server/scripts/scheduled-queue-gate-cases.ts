@@ -592,4 +592,94 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   await waitFor(() => countIn(leadLog, "ckpt-writefail") > 0, "重推续跑没有用检查点指令作输入");
   await stopWhenLive(oB);
   console.log("✓ 占位写入失败:释放预认领、保持原状,恢复可写后自动重推续上交接");
+
+  // ── 认领前暂停不得吞掉检查点指令(第 7 轮审查问题 2)─────────────────────────────
+  // 同 n 用例的窗口,但 B 带的是 resumePrompt:自动续跑先 CAS 取走指令、再被 spawn 前
+  // 的冻结闸撤回 —— 修复前 continueTask 对 FrozenTurn 仍返回 true,调用方把指令当已
+  // 送达,不回填;恢复分组后只剩通用「继续」,原指令永久丢失(审查真实页面:右侧
+  // 「下次唤醒时发送」清空)。修复后 FrozenTurn 返回 false,指令按 CAS 安全放回。
+  const pA = "scheduled-single-gate-pa";
+  const pB = "scheduled-single-gate-pb";
+  const pGroup = "scheduled-gate-group-p";
+  const pBPrompt = "继续正式步骤(ckpt-pauselost);保持运行等待引导";
+  const pARow = { ...taskRow(pA, "claude", "done"), mode: "single", team: null, groupId: pGroup };
+  await db.insert(schema.groups).values({
+    id: pGroup, projectId: pARow.projectId as string, name: "pause-ckpt", mode: "serial", paused: false, createdAt: at,
+  });
+  await db.insert(tasks).values([
+    pARow,
+    { ...taskRow(pB, "claude", "paused"), mode: "single", team: null, groupId: pGroup, resumePrompt: pBPrompt },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-gate-pb-prev", taskId: pB, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-pb-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-13", taskId: pA, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-13", taskId: pB, position: 1, createdAt: at },
+  ]);
+  assert.equal(runs.claimTurn(pB), true, "测试前提:应能预认领 pB 的回合");
+  await db.update(tasks).set({ status: "queued" }).where(eq(tasks.id, pB));
+  await db.update(schema.groups).set({ paused: true }).where(eq(schema.groups.id, pGroup));
+  await taskResume.resumeOrRunTask(pB, { reason: "queue", turnHeld: true });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(await taskStatusOf(pB), "paused", "组已暂停,检查点续跑必须被挡回");
+  assert.equal(runs.isTurnClaimed(pB), false, "挡回后预认领的回合必须释放");
+  assert.equal(countIn(leadLog, "ckpt-pauselost"), 0, "挡回的检查点指令不得进 stdin");
+  assert.equal(
+    (await db.select().from(tasks).where(eq(tasks.id, pB))).at(0)!.resumePrompt, pBPrompt,
+    "暂停撤回的检查点指令必须回填,不许被当成已送达(第 7 轮:指令永久丢失)",
+  );
+  // 恢复分组 → 原指令作为输入送达恰好一次并被消费,不许用通用「继续」替代。
+  await db.update(schema.groups).set({ paused: false }).where(eq(schema.groups.id, pGroup));
+  await scheduler.advanceQueue("scheduled-gate-queue-13");
+  await waitFor(() => countIn(leadLog, "ckpt-pauselost") > 0, "恢复分组后检查点指令没有送达");
+  await waitFor(async () => {
+    const row = (await db.select().from(tasks).where(eq(tasks.id, pB))).at(0)!;
+    return row.status === "running" && row.resumePrompt === null;
+  }, "恢复分组后 pB 应以原指令续跑");
+  await stopWhenLive(pB);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(countIn(leadLog, "ckpt-pauselost"), 1, "同一段检查点指令被投递了不止一次");
+  console.log("✓ 认领前暂停:检查点指令安全回填,恢复分组后原文送达一次");
+
+  // ── queued 遗留的守卫式补偿(第 7 轮审查问题 1)──────────────────────────────────
+  // 占位 UPDATE 已提交、setTaskStatus 附带的 sessions 读取才超时:任务遗留 queued、
+  // 回合无人持有,selectNextInQueue 被它冻结,单纯重推救不回。补偿本体
+  // (reclaimStrandedSeat)导出直测:触发它的真实路径要把故障注入到同一函数的两条
+  // 语句之间,测试外侧做不到;catch → 延迟补偿的接线由写失败用例(oA/oB)覆盖。
+  const qA = "scheduled-single-gate-qa";
+  const qB = "scheduled-single-gate-qb";
+  const qC = "scheduled-single-gate-qc";
+  const qBPrompt = "继续正式步骤(ckpt-strandedq);保持运行等待引导";
+  await db.insert(tasks).values([
+    { ...taskRow(qA, "claude", "done"), mode: "single", team: null },
+    { ...taskRow(qB, "claude", "idle"), mode: "single", team: null, status: "queued", resumePrompt: qBPrompt },
+    { ...taskRow(qC, "claude", "idle"), mode: "single", team: null, status: "backlog", body: "保持运行等待引导" },
+  ]);
+  await db.insert(sessions).values({
+    id: "scheduled-gate-qb-prev", taskId: qB, role: "single", agentType: "claude",
+    executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-qb-cli", startedAt: at,
+  });
+  await db.insert(queueItems).values([
+    { queueId: "scheduled-gate-queue-14", taskId: qA, position: 0, createdAt: at },
+    { queueId: "scheduled-gate-queue-14", taskId: qB, position: 1, createdAt: at },
+    { queueId: "scheduled-gate-queue-14", taskId: qC, position: 2, createdAt: at },
+  ]);
+  // 遗留态自证:推进被 queued 冻结,救不回 —— 这正是审查复现的「永久排队中」。
+  await scheduler.advanceQueue("scheduled-gate-queue-14");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(await taskStatusOf(qB), "queued", "遗留 queued 挡住推进(前提复现)");
+  // 补偿:按持久结果回滚占位,随后记账重推 → qB 以检查点指令自动续跑。
+  await scheduler.reclaimStrandedSeat(qB, "scheduled-gate-queue-14", "paused", { renote: true });
+  assert.equal(await taskStatusOf(qB), "paused", "补偿应把遗留 queued 回滚为原状态");
+  await waitFor(async () => {
+    const row = (await db.select().from(tasks).where(eq(tasks.id, qB))).at(0)!;
+    return row.status === "running" && row.resumePrompt === null;
+  }, "补偿后交接没有自动续上");
+  await waitFor(() => countIn(leadLog, "ckpt-strandedq") > 0, "补偿续跑没有用检查点指令作输入");
+  assert.equal(await taskStatusOf(qC), "backlog", "qB 在跑,qC 不得被越过");
+  await stopWhenLive(qB);
+  await stopWhenLive(qC); // qB 终态让位连锁启动 qC,一并收尾
+  console.log("✓ queued 遗留补偿:回滚占位并重推,交接自动续上,后项不被越过");
 }

@@ -116,7 +116,9 @@ try {
   });
   assert.ok(claimTurn("t2", "single"));
   freezeStartingTurn("t2");
-  assert.equal(await continueTask("t2", "再试一次", { turnHeld: true }), true, "这一轮确实由本次调用接管了");
+  // 返回 false:spawn 前撤回 = 输入一个字没送出去(第 7 轮审查:按 true 处理会让
+  // resumePrompt 调用方把检查点指令当已消费,暂停一次、指令永久丢失)。状态结算照旧。
+  assert.equal(await continueTask("t2", "再试一次", { turnHeld: true }), false, "spawn 前撤回要如实报「没送出去」,调用方才能把原文放回");
   off();
   assert.equal(errors.length, 1, "撤回要如实报一条错误事件");
   assert.match(errors[0], /启动前被撤回/, "起跑闸必须排在 spawn 之前：拿到的应当是撤回，不是执行器的报错");
