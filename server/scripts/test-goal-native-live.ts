@@ -17,12 +17,14 @@ const workspace = join(root, "workspace");
 let count = 0;
 let lastUserInput = "";
 let lastModelInput = "";
+const reasoningEfforts: string[] = [];
 const server = createServer(async (request, response) => {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
   assert.ok(request.url?.includes("/responses"));
   count++;
   const body = JSON.parse(Buffer.concat(chunks).toString());
+  reasoningEfforts.push(body.reasoning?.effort);
   lastUserInput = JSON.stringify(body.input?.findLast((item: any) => item.role === "user") ?? {});
   lastModelInput = JSON.stringify(body.input);
   const reviewing = JSON.stringify(body.input).includes("review");
@@ -44,8 +46,8 @@ assert.ok(address && typeof address === "object");
 try {
   await mkdir(home);
   await mkdir(workspace);
-  await writeFile(join(home, "config.toml"), `model = "gpt-5.4"\nmodel_provider = "goal_fixture"\ncheck_for_update_on_startup = false\n[model_providers.goal_fixture]\nname = "Goal fixture"\nbase_url = "http://127.0.0.1:${address.port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[projects.${JSON.stringify(workspace)}]\ntrust_level = "trusted"\n`);
-  const executor = new CodexExecutor();
+  await writeFile(join(home, "config.toml"), `model = "gpt-5.4"\nmodel_reasoning_effort = "high"\nmodel_provider = "goal_fixture"\ncheck_for_update_on_startup = false\n[model_providers.goal_fixture]\nname = "Goal fixture"\nbase_url = "http://127.0.0.1:${address.port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[projects.${JSON.stringify(workspace)}]\ntrust_level = "trusted"\n`);
+  const executor = new CodexExecutor({ reasoningEffort: "xhigh" });
   const handle = executor.runSteerable({ cwd: workspace, prompt: "ash goal fixture; continue until the budget runs out", cliCommand: validateCliCommand("codex", "/goal 持续推进直到预算用完 --budget 150")!, cliState: { goal: { objective: "持续推进直到预算用完", status: "active", tokenBudget: 150 } }, env: { CODEX_HOME: home } });
   const events: AgentEvent[] = [];
   const deadline = setTimeout(() => handle.kill(), 30_000);
@@ -53,11 +55,25 @@ try {
   finally { clearTimeout(deadline); await handle.cleanup?.(); }
   assert.equal(events.find((event) => event.kind === "done")?.exitStatus, 0, events.filter((event) => event.kind === "error").map((event) => event.message).join("\n"));
   assert.ok(count >= 2, `real Codex must continue across turns: ${count}`);
+  assert.ok(reasoningEfforts.every((effort) => effort === "xhigh"), JSON.stringify(reasoningEfforts));
+  assert.equal(handle.goalStarted?.(), true);
   assert.equal(handle.goal?.()?.status, "budgetLimited");
   assert.ok(events.some((event) => event.kind === "system" && event.level === "notice" && /预算已耗尽/.test(event.text)));
   console.log(`real Codex /goal completed ${count} locally mocked turns and stopped at its native token budget`);
   let sessionId = events.find((event) => event.kind === "session")?.cliSessionId;
   assert.ok(sessionId);
+  for (const invocation of [{ prompt: "普通测试回合", plan: false }, { prompt: "计划状态下的测试回合", plan: true }, { prompt: "/plan 分析测试夹具", plan: true }]) {
+    const before = reasoningEfforts.length;
+    const run = executor.runSteerable({ cwd: workspace, prompt: invocation.prompt, cliCommand: validateCliCommand("codex", invocation.prompt) ?? undefined, cliState: { plan: invocation.plan }, sessionId, env: { CODEX_HOME: home } });
+    const output: AgentEvent[] = [];
+    const timeout = setTimeout(() => run.kill(), 15_000);
+    try { for await (const event of run.events) output.push(event); }
+    finally { clearTimeout(timeout); await run.cleanup?.(); }
+    assert.equal(output.find((event) => event.kind === "done")?.exitStatus, 0, JSON.stringify(output.filter((event) => event.kind === "error")));
+    assert.ok(reasoningEfforts.length > before);
+    assert.ok(reasoningEfforts.slice(before).every((effort) => effort === "xhigh"), JSON.stringify(reasoningEfforts.slice(before)));
+  }
+  console.log("real Codex preserves xhigh in ordinary, planning, /plan prompt, and automatic goal turns");
   for (const text of ["/status", "/mcp", "/ps", "/stop", "/hooks", "/plugins", "/debug-config", "/personality friendly", "/fast off", "/rename 原生测试会话", "/plan", "/plan off", "/compact", "/review 检查当前会话的测试夹具", "/fork", "/new"]) {
     const trace = { eventsPath: join(root, "command-events.jsonl"), stderrPath: join(root, "command-stderr.log"), diagnosticsPath: join(root, "command-diagnostics.json") };
     const command = executor.runSteerable({ cwd: workspace, prompt: text, trace, cliCommand: validateCliCommand("codex", text)!, cliState: { plan: text === "/plan", personality: "friendly", serviceTier: "default" }, sessionId, env: { CODEX_HOME: home } });
@@ -92,6 +108,7 @@ try {
     for (const session of recorded) console.log((await readFile(sessionTranscriptPath("live-task", session.id), "utf8")).slice(-1600));
   }
   assert.match(lastUserInput, /本回合只讨论计划/);
+  assert.equal(reasoningEfforts.at(-1), "high");
   assert.equal((await task()).status, "done");
   assert.equal((await task()).stage, "accepted");
   assert.equal(await continueTask("live-task", "旁路核对逻辑", { sideTurn: true }), true);
@@ -102,10 +119,12 @@ try {
   assert.equal(await continueTask("live-task", "切换默认执行器后的普通消息"), true);
   assert.doesNotMatch(lastUserInput, /本回合只讨论计划/);
   assert.equal(readCliState((await task()).cliState, "codex").profileId, "second-profile");
+  assert.equal(reasoningEfforts.at(-1), "high");
   assert.equal(readCliState((await task()).cliState, "codex").plan, undefined);
   const beforeGoal = count;
   assert.equal(await continueTask("live-task", "/goal 自动推进直到预算用完 --budget 150"), true);
   assert.ok(count >= beforeGoal + 2);
+  assert.ok(reasoningEfforts.slice(beforeGoal).every((effort) => effort === "high"), JSON.stringify(reasoningEfforts.slice(beforeGoal)));
   assert.equal((await task()).status, "paused");
   assert.equal((await task()).goalTurn, false);
   assert.equal(readCliState((await task()).cliState, "codex").goal?.status, "budgetLimited");

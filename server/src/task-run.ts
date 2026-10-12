@@ -27,7 +27,7 @@ import { recordTurnStart } from "./turn-output.js";
 import { abortIfFrozen } from "./turn-freeze.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
-import { interruptCliGoal, prepareCliInvocation } from "./task-cli-state.js";
+import { interruptCliGoal, preflightCliGoalResume, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
@@ -89,6 +89,7 @@ export async function runTask(
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
     if (task.mode !== "single") throw new Error("duet mode runs in M4");
+    await preflightCliGoalResume(task, (task.agentType as AgentType) ?? "claude", task.body.trim(), task.executorId, opts.actingUserId ?? task.ownerUserId);
 
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("project not found");
@@ -163,7 +164,7 @@ export async function runTask(
       (autoTitle ? TITLE_HINT + objective : objective),
       "full",
     );
-    const cli = await prepareCliInvocation(task, agentType, commandText, profileId, runOwner ?? null);
+    const cli = await prepareCliInvocation({ ...task, status: "running" }, agentType, commandText, profileId, runOwner ?? null);
     const runEnv = { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 spawn 之间没有 await，
     // 所以「已 claim、还没 spawn」的窗口里收到的暂停请求一定在这里被消费。fresh run 的
@@ -265,8 +266,8 @@ export async function runTask(
     if (!baseFallbackTold) await announceBaseFallback(taskId, baseFallback, { role: "single" });
     await reportTurnFailure({ taskId, message, role: "single" });
     const [failedTask] = await db.select().from(tasks).where(eq(tasks.id, taskId));
-    if (failedTask?.goalTurn) await interruptCliGoal(failedTask);
-    const status = stopped ?? (failedTask?.goalTurn ? "paused" : "failed");
+    const goalHeld = failedTask?.goalTurn && await interruptCliGoal(failedTask, failedTask.agentType ?? "claude", handle?.goalStarted?.() ?? !!handle?.goal?.());
+    const status = stopped ?? (goalHeld ? "paused" : "failed");
     await setTaskStatus(taskId, status);
     await afterSettlement(taskId, status, false, false, "single", true, !stopped);
   } finally {

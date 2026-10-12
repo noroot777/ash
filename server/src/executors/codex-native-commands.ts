@@ -6,6 +6,7 @@ type Transport = {
   threadId(): string;
   turnId(): string;
   model(): string;
+  reasoningEffort?(): string | null;
   cwd: string;
   prompt: string;
   state?: CliSessionState;
@@ -34,6 +35,7 @@ export function formatGoal(goal: CliGoal | null): string {
 export class CodexNativeCommands {
   goal: CliGoal | null = null;
   goalExecution = false;
+  goalStarted = false;
   constructor(private readonly transport: Transport) {}
 
   notification(method: string, params: any): void {
@@ -65,8 +67,9 @@ export class CodexNativeCommands {
       const started = await this.transport.request("turn/start", {
         threadId: this.transport.threadId(), input: [{ type: "text", text: this.transport.prompt }],
         ...this.transport.turnOptions,
-        collaborationMode: { mode: "default", settings: { model: this.transport.model(), developer_instructions: null } },
+        collaborationMode: this.collaborationMode("default"),
       });
+      this.goalStarted = true;
       this.goal = (await this.transport.request("thread/goal/set", { threadId: this.transport.threadId(), status: "active" })).goal;
       return { immediate: false, turnId: started.turn?.id };
     }
@@ -94,8 +97,8 @@ export class CodexNativeCommands {
     return { immediate: true };
   }
 
-  collaborationMode() {
-    return { mode: "plan", settings: { model: this.transport.model(), developer_instructions: null } };
+  collaborationMode(mode: "default" | "plan" = "plan") {
+    return { mode, settings: { model: this.transport.model(), reasoning_effort: this.transport.reasoningEffort?.() ?? this.transport.turnOptions?.effort ?? null, developer_instructions: null } };
   }
 
   async afterTurn(): Promise<boolean> {

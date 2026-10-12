@@ -39,7 +39,8 @@ try {
   assert.equal(cliCommandsForMode(entries, "codex", "single").length, entries.length);
   assert.equal(cliCommandsForMode(entries, "codex", "team").length, 0);
   assert.deepEqual(cliCommandsForMode([{ name: "goal", source: "builtin" }, { name: "compact", source: "builtin" }, { name: "review", source: "builtin" }], "claude", "team").map((entry) => entry.name), ["compact", "review"]);
-  assert.equal(hasCliGoalHold('{"codex":{"goalHold":true}}'), true);
+  assert.equal(hasCliGoalHold('{"codex":{"goalHold":true}}'), false);
+  assert.equal(hasCliGoalHold('{"codex":{"goalHold":true,"goal":{"objective":"等待恢复","status":"paused"}}}'), true);
   assert.equal(hasCliGoalHold("broken"), false);
 
   const privateData = { apiKey: "key-a", accessToken: "token-a", nested: { ASH_AUTH_TOKEN: "token-b", GITHUB_TOKEN: "token-c", env: { SAFE: "private" }, http_headers: { "x-api-key": "secret-header-value" } }, tokenBudget: 400, tokensUsed: 20 };
@@ -70,6 +71,8 @@ try {
       return {};
     },
   });
+  assert.equal(native.collaborationMode().settings.reasoning_effort, "high");
+  assert.equal(native.collaborationMode("default").settings.reasoning_effort, "high");
   await native.prepare(command("/goal 完成目标 --budget 400"));
   assert.deepEqual(await native.start(command("/goal 完成目标 --budget 400")), { immediate: false, turnId: "turn" });
   assert.deepEqual(calls.slice(1, 4).map((call) => call.method), ["thread/goal/set", "turn/start", "thread/goal/set"]);

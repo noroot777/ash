@@ -200,13 +200,19 @@ export class ClaudeExecutor implements AgentExecutor {
       : spawnForRun(opts.cwd, this.bin, args, goal.input, { ...this.env(opts.cwd, model), ...opts.env }, opts.detach);
     child.on("close", goal.cleanup);
     child.on("close", settings.cleanup);
+    let goalStarted = false;
+    const events = cleanupWithEvents(parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settings.cleanup), settings.cleanup);
     return {
+      cliCommand: opts.cliCommand,
+      goalStarted: () => goalStarted,
       sessionId,
       commandLine,
-      events: cleanupWithEvents(
-        parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settings.cleanup),
-        settings.cleanup,
-      ),
+      events: (async function* () {
+        for await (const event of events) {
+          if (event.kind === "text" || event.kind === "tool" || event.kind === "thinking") goalStarted = true;
+          yield event;
+        }
+      })(),
       kill: () => killChild(child),
       cleanup: async () => { settings.cleanup(); goal.cleanup(); await cleanupAfterRun(child); },
       detached: detachedInfo(child),

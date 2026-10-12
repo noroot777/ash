@@ -7,7 +7,7 @@ import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { nativeCommandRun, stopTask, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { readCliState, renameCliTask, saveCliState } from "./task-cli-state.js";
+import { preflightCliGoalResume, readCliState, renameCliTask, saveCliState } from "./task-cli-state.js";
 import { formatClaudeGoal } from "./executors/claude-goal.js";
 import type { TaskReplyBody } from "./task-reply.js";
 import { enqueueMessage } from "./pending-messages.js";
@@ -25,6 +25,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
   const running = task.status === "running" || task.status === "queued";
   const userId = ownerIdOf(actorOf(c));
   if (!running) {
+    await preflightCliGoalResume(task, agentType, command.text, body.agent ? body.executorId ?? null : task.executorId, userId);
     if (agentType === "claude" && command.name === "goal" && (!command.args || command.args === "pause")) {
       const state = readCliState(task.cliState, agentType, body.executorId ?? task.executorId ?? undefined, userId);
       if (command.args && state.goal) { state.goal.status = "paused"; await saveCliState(task.id, agentType, state); }
@@ -49,7 +50,8 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     if (!state.goal || !task.goalTurn) throw new Error("当前回合没有正在执行的目标");
     if (command.args) {
       state.goal = clear ? null : { ...state.goal, status: "paused" };
-      state.goalHold = true;
+      state.goalHold = !clear;
+      if (clear) delete state.goalStart;
       await saveCliState(task.id, agentType, state);
       if (!stopTask(task.id, "paused")) throw new Error("当前回合已结束");
       if (clear) whenTurnIdle(task.id, () => {
@@ -67,7 +69,8 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     if (command.name === "goal") {
       const state = readCliState(task.cliState, agentType, session.executorId, session.runOwnerUserId);
       state.goal = current.goal?.() ?? null;
-      if (task.goalTurn && (command.args === "pause" || clear)) state.goalHold = true;
+      if (task.goalTurn && (command.args === "pause" || clear)) state.goalHold = !clear;
+      if (clear) { state.goal = null; delete state.goalStart; }
       await saveCliState(task.id, agentType, state);
       if (task.goalTurn && (command.args === "pause" || clear)) stopTask(task.id, "paused");
     }

@@ -37,14 +37,18 @@ export async function reconcileInterrupted(): Promise<void> {
   const teamIds = orphaned.filter((t) => t.mode === "team").map((t) => t.id);
   const others = orphaned.filter((t) => t.mode !== "team");
   for (const t of others) {
-    const back = (t.followUpFrom as TaskStatus | null) ?? (t.goalTurn ? "paused" : "failed");
+    let back = (t.followUpFrom as TaskStatus | null) ?? (t.goalTurn ? "paused" : "failed");
     if (t.goalTurn) {
       const [session] = await db.select().from(sessions).where(eq(sessions.taskId, t.id)).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt));
-      await interruptCliGoal(t, session?.agentType ?? t.agentType ?? "claude");
+      const held = await interruptCliGoal(t, session?.agentType ?? t.agentType ?? "claude");
+      if (!held) {
+        const [restored] = await db.select().from(tasks).where(eq(tasks.id, t.id));
+        back = (restored?.followUpFrom as TaskStatus | null) ?? "failed";
+      }
       if (session?.agentType === "claude" && session.commandLine) cleanupClaudeGoalContext(session.commandLine);
-      await appendTaskTimeline(t.id, "持续目标因服务中断已暂停；任务和历史保留，使用 /goal resume 续跑。");
+      await appendTaskTimeline(t.id, held ? "持续目标因服务中断已暂停；任务和历史保留，使用 /goal resume 续跑。" : "持续目标尚未启动就遇到服务中断；已恢复起跑前的目标状态。");
     }
-    if (t.followUpFrom || t.nativeTurn || t.completeConfirmedAt) {
+    if (t.goalTurn || t.followUpFrom || t.nativeTurn || t.completeConfirmedAt) {
       await db
         .update(tasks)
         .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, updatedAt: now() })

@@ -56,6 +56,7 @@ try {
   assert.equal(working.length, 3, JSON.stringify(requests.map((request) => request.model)));
   assert.ok(requests.some((request) => request.model.includes("haiku")));
   assert.equal(events.find((event) => event.kind === "done")?.exitStatus, 0, JSON.stringify(events.filter((event) => event.kind === "error")));
+  assert.equal(handle.goalStarted?.(), true);
   assert.ok(working.every((request) => JSON.stringify(request.system).includes("ash-native-goal-context-direction")));
   const contextPath = /<ash-goal-context:("(?:[^"\\]|\\.)*")>/.exec(handle.commandLine)?.[1];
   assert.ok(contextPath);

@@ -34,7 +34,7 @@ import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart, turnOutputHint } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
-import { persistRunGoal } from "./task-cli-state.js";
+import { markCliGoalStarted, persistRunGoal } from "./task-cli-state.js";
 
 
 async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
@@ -271,9 +271,10 @@ export async function consumeSingleRun(a: {
   // verify_round 同理**从库里读**而不是让调用方传:三条起跑路径(fresh run / continueTask /
   // 重启接回)都汇到这儿,由库来答就不会漏标其中一条。验证中途提问、答复回来续跑的那一
   // 回合库里仍挂着轮次号,于是它照样归这一轮验证——跟 orchestrator 的 sideTurn 判据同源。
-  const taskRow = (await db.select({ nativeTurn: tasks.nativeTurn, verifyRound: tasks.verifyRound })
+  const taskRow = (await db.select({ nativeTurn: tasks.nativeTurn, verifyRound: tasks.verifyRound, goalTurn: tasks.goalTurn })
     .from(tasks).where(eq(tasks.id, taskId))).at(0);
   const nativeTurn = !!taskRow?.nativeTurn;
+  let goalStartPending = !!taskRow?.goalTurn;
   const verifyRound = taskRow?.verifyRound ?? null;
   const executionEventId = role === "single" && !nativeTurn
     ? await recordFreeTaskExecutionStartIfFree(taskId, a.turnStart).catch((error) => {
@@ -409,6 +410,7 @@ export async function consumeSingleRun(a: {
 
   try {
     for await (const event of a.handle.events) {
+      if (goalStartPending && a.handle.goalStarted?.()) { await markCliGoalStarted(taskId, agentType); goalStartPending = false; }
       if (event.kind === "session") {
         if (event.cliSessionId !== cliSessionId) {
           cliSessionId = event.cliSessionId;

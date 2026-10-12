@@ -32,7 +32,7 @@ import { bindUploadsToTask } from "./uploads.js";
 import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
-import { interruptCliGoal, prepareCliInvocation, readCliState } from "./task-cli-state.js";
+import { interruptCliGoal, preflightCliGoalResume, prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
@@ -167,10 +167,7 @@ export async function continueTask(
   // 任务的执行,也不是「新指令」。这一轮必须当旁路回合(下面的 sideTurn),否则「压一下
   // 上下文」既会被打成 failed,也会顺手把已验收的牌子摘掉——旁路回合不拍工作目录快照,
   // 没有任何基线能把摘掉的牌子挂回去,压一次就永久丢掉一次验收。
-  const head = (await db
-    .select({ mode: tasks.mode, agentType: tasks.agentType, handoff: tasks.handoff })
-    .from(tasks)
-    .where(eq(tasks.id, taskId))).at(0);
+  const head = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   // 这一轮带的附件跟着任务走进项目轴(uploads.ts)。放在最前面:团队调度台那条路
   // 在下面就 return 了,放后面等于团队任务的附件永远挂不上归属。
   // `actingUserId` 是「谁点的这一轮」—— 后端路径(队列推进、定时投递)不传,那时附件
@@ -182,6 +179,7 @@ export async function continueTask(
   );
   const slash = parseCliCommand(opts.agent ?? (head?.agentType as AgentType) ?? "claude", userText);
   const goalExecution = isGoalExecution(slash);
+  if (head) await preflightCliGoalResume(head, opts.agent ?? (head.agentType as AgentType) ?? "claude", userText, opts.agent ? opts.executorId ?? null : head.executorId, opts.actingUserId ?? head.ownerUserId);
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
   // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的
@@ -228,6 +226,7 @@ export async function continueTask(
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
   const agentType = opts.agent ?? (head?.agentType as AgentType) ?? "claude";
   let handle: RunHandle | undefined;
+  let goalStartFrom: TaskStatus | null = null;
   // 同 runTask：基线降级在解析工作目录那一刻就落了库，说明却写在 spawn 之后，所以这两件
   // 事挂在 try 外面，失败那条路才补得上（见 base-fallback-notice.ts）。
   let baseFallback: Workspace["baseFallback"];
@@ -236,6 +235,7 @@ export async function continueTask(
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
     if (task.mode !== "single") throw new Error("reply is for single tasks");
+    if (goalExecution && !["running", "queued"].includes(task.status)) goalStartFrom = task.status as TaskStatus;
 
     const agent = opts.agent ?? (task.agentType as AgentType) ?? "claude";
     // 对话框里 @ 出来的那一步是**显式选择**（智能体 + 执行器 + 模型 + 思考强度），这一回合
@@ -663,8 +663,8 @@ export async function continueTask(
     // 续聊回合里出的岔子(典型:worktree 建不出来)不该把任务状态打差 —— 同
     // settleTaskStatus 的约定:续聊只能让任务变好,不能让它变坏。
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    if (row?.goalTurn) await interruptCliGoal(row, agentType);
-    const back = row?.followUpFrom as TaskStatus | null | undefined;
+    const goalHeld = row?.goalTurn && await interruptCliGoal(row, agentType, handle?.goalStarted?.() ?? !!handle?.goal?.());
+    const back = (row?.followUpFrom as TaskStatus | null | undefined) ?? (!goalHeld ? goalStartFrom : null);
     // 原生命令标记跟 followUpFrom 一样**只在本回合内有效**:CLI 还没起来就抛错时,
     // 正常那条清理路(settleTaskStatus)根本没跑过 —— 不在这儿清掉,标记就漏给下一轮,
     // 下一轮的真实结算会被整段跳过(当成「那是次压缩」)。
@@ -675,7 +675,7 @@ export async function continueTask(
         .set({ ...(back ? { followUpFrom: null } : {}), ...(nativeTurn ? { nativeTurn: false } : {}), updatedAt: now() })
         .where(eq(tasks.id, taskId));
     }
-    const status = stopped ?? back ?? (row?.goalTurn ? "paused" : "failed");
+    const status = stopped ?? back ?? (goalHeld ? "paused" : "failed");
     await setStatus(taskId, status);
     // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
     // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、

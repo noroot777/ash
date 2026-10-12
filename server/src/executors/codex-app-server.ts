@@ -84,6 +84,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let lastCompletedStatus = "completed";
   const completedTurns = new Set<string>();
   let resolvedModel = opts.model ?? "";
+  let resolvedEffort = opts.reasoningEffort ?? null;
   let latestUsage: ThreadUsage | null = null;
   let contextEmitted = false;
   let stderr = "";
@@ -298,12 +299,14 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const native = new CodexNativeCommands({
     request: (method, params) => request(method, params, 30_000), threadId: () => threadId,
     turnId: () => turnCompleted ? "" : turnId, model: () => resolvedModel, cwd: opts.cwd, prompt: opts.prompt, state: opts.cliState, usage: () => latestUsage, push,
+    reasoningEffort: () => resolvedEffort,
     context: () => readCodexContext(threadId, 0, opts.env?.CODEX_HOME),
     turnOptions: {
       ...(opts.reasoningEffort ? { effort: opts.reasoningEffort } : {}),
       ...(opts.cliState?.serviceTier || opts.serviceTier ? { serviceTierForTurn: opts.cliState?.serviceTier ?? opts.serviceTier } : {}),
     },
   });
+  if (opts.reattach) native.goalStarted = !!opts.reattach.turnId;
   if (opts.reattach?.goal) { native.goal = opts.reattach.goal; native.goalExecution = true; }
   const completeTurn = async (turn: any) => {
     const completedId = turn?.id ?? turnId;
@@ -475,6 +478,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       ? await request("thread/resume", threadParams(opts, { threadId: opts.sessionId }))
       : await request("thread/start", threadParams(opts));
     resolvedModel = thread.model ?? resolvedModel;
+    resolvedEffort = opts.reasoningEffort ?? thread.reasoningEffort ?? null;
     threadId = thread.thread?.id ?? opts.sessionId ?? "";
     emitSession(threadId);
     if (opts.cliCommand?.name === "fork" && opts.sessionId && threadId !== opts.sessionId) {
@@ -504,8 +508,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       sandboxPolicy: { type: "dangerFullAccess" },
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.reasoningEffort ? { effort: opts.reasoningEffort } : {}),
-      collaborationMode: opts.cliState?.plan ? native.collaborationMode()
-        : { mode: "default", settings: { model: resolvedModel, developer_instructions: null } },
+      collaborationMode: native.collaborationMode(opts.cliState?.plan ? "plan" : "default"),
       ...(opts.cliState?.serviceTier || opts.serviceTier ? { serviceTierForTurn: opts.cliState?.serviceTier ?? opts.serviceTier } : {}),
     });
     if (turnStartVersion === startVersion) turnId = started.turn?.id ?? "";
@@ -534,6 +537,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   return {
     cliCommand: opts.cliCommand,
     goal: () => native.goal,
+    goalStarted: () => native.goalStarted,
     command: async (command) => {
       await ready;
       if (settling || finished) throw new Error("Codex 当前回合已结束");

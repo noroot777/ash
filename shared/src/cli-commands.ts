@@ -39,9 +39,10 @@ export interface CliSessionState {
   serviceTier?: "priority" | "default";
   goal?: CliGoal | null;
   goalHold?: boolean;
+  goalStart?: { previousStatus: string; previousGoal: CliGoal | null; previousHold: boolean };
 }
 export function hasCliGoalHold(raw?: string | null): boolean {
-  try { return Object.values(JSON.parse(raw ?? "{}")).some((state) => (state as CliSessionState | null)?.goalHold === true); }
+  try { return Object.values(JSON.parse(raw ?? "{}")).some((state) => (state as CliSessionState | null)?.goalHold === true && !!(state as CliSessionState | null)?.goal?.objective); }
   catch { return false; }
 }
 

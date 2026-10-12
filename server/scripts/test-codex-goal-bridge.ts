@@ -122,6 +122,7 @@ try {
   assert.equal(broken.handle.goal?.()?.objective, "通过测试");
   assert.equal(broken.handle.goal?.()?.status, "blocked");
   assert.equal(broken.events.find((event) => event.kind === "done")?.exitStatus, 1);
+  assert.equal(broken.handle.goalStarted?.(), false);
 
   const failure = new GoalServer();
   const stoppedFailure = run(failure);
@@ -131,6 +132,7 @@ try {
   failure.update("blocked");
   await stoppedFailure.consumed;
   assert.equal(stoppedFailure.events.find((event) => event.kind === "done")?.exitStatus, 1);
+  assert.equal(stoppedFailure.handle.goalStarted?.(), true);
 
   const stopping = new GoalServer();
   const stopped = run(stopping);
