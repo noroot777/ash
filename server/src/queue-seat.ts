@@ -70,7 +70,16 @@ export function noteMissedAdvance(taskId: string, queueId: string): void {
 
 export type QueueSeatClaim =
   | { ok: true; seat: QueueSeat | null } // seat=null:任务不在任何队列,没有同队语义
-  | { ok: false; blockers: string[] };
+  | { ok: false; blockers: string[]; transient?: boolean }; // transient:数据库临时故障,不是同队在跑
+
+// 手动启动入口(/run、/fire、/retry、重跑上一回合)的认领失败话术。transient(数据库
+// 临时故障)时必须说真话:把一次可重试的写失败报成「同队有人在跑」,用户会去等一个
+// 不存在的前项(第 ll7XKsu_ps0n 链第 2 轮指出)。
+export function queueClaimError(r: { blockers: string[]; transient?: boolean }): string {
+  return r.transient
+    ? r.blockers.join("；")
+    : "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列";
+}
 
 // 所有「检查整队 → 占位/落 queued」的临界区排在这一条链上依次执行。队列很小、临界区里
 // 只有几条 SQLite 查询,全局一条链足够;链上任何一次失败都不许断链(与 pending-messages
@@ -116,15 +125,21 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
       // 抛给用户、回合锁没人释放,此后一律 409「回合正在进行」(第 ll7XKsu_ps0n 链
       // 第 1 轮)。按失败认领返回,让调用方走统一的「认领失败」收口(释放自己的锁/
       // 暂存消息);可能的 queued 遗留延迟交给 scheduler 的守卫补偿按持久结果收拾。
-      console.error(`[ash] 队列占位写入失败(${taskId}),按认领失败返回并安排补偿:`, err);
+      //
+      // 补偿必须 repush:"never" —— 本函数的调用方全是带自身语义的入口(/fire 全新
+      // 一轮、/run 续跑、扫描投递消息),记账重推走的是 advanceQueue 的 resumeOrRunTask,
+      // 会把 /fire 的「永不 resume」偷换成续跑旧会话、消费掉检查点指令(第 ll7XKsu_ps0n
+      // 链第 2 轮实测:409 之后任务自行续上旧检查点)。失败就只回滚遗留,让原入口按
+      // 原语义重试(用户重点、扫描重投、定时不消费班次)。
+      console.error(`[ash] 队列占位写入失败(${taskId}),按认领失败返回并安排遗留回收:`, err);
       void import("./scheduler.js").then(({ reclaimStrandedSeat }) => {
         const timer = setTimeout(
-          () => void reclaimStrandedSeat(taskId, item.queueId, prevStatus as Parameters<typeof reclaimStrandedSeat>[2], { renote: true }),
+          () => void reclaimStrandedSeat(taskId, item.queueId, prevStatus as Parameters<typeof reclaimStrandedSeat>[2], { repush: "never" }),
           1_000,
         );
         timer.unref?.();
       });
-      return { ok: false, blockers: ["队列占位写入失败,稍后自动重试"] };
+      return { ok: false, transient: true, blockers: ["队列占位写入失败，请稍后重试"] };
     }
     return { ok: true, seat: makeSeat(taskId, prevStatus) };
   });
@@ -161,7 +176,7 @@ function makeSeat(taskId: string, prevStatus: string): QueueSeat {
 export async function seatThenStart(
   taskId: string,
   start: () => Promise<unknown>,
-): Promise<{ ok: true } | { ok: false; blockers: string[] }> {
+): Promise<{ ok: true } | { ok: false; blockers: string[]; transient?: boolean }> {
   let claim: QueueSeatClaim;
   try {
     claim = await claimQueueSeat(taskId);
@@ -170,9 +185,9 @@ export async function seatThenStart(
     // (调用方的「认领失败 → releaseTurn」分支走不到)。读失败没有写入遗留,按失败
     // 认领返回即可,下一次点运行就是干净的重试。
     console.error(`[ash] 队列占位认领读取失败(${taskId}):`, err);
-    return { ok: false, blockers: ["队列占位读写失败,请稍后重试"] };
+    return { ok: false, transient: true, blockers: ["队列占位读写失败，请稍后重试"] };
   }
-  if (!claim.ok) return { ok: false, blockers: claim.blockers };
+  if (!claim.ok) return claim;
   const seat = claim.seat;
   void start()
     .catch((err) => console.error(`[ash] 任务 ${taskId} 启动异常:`, err))

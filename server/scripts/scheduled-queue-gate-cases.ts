@@ -671,7 +671,8 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(await taskStatusOf(qB), "queued", "遗留 queued 挡住推进(前提复现)");
   // 补偿:按持久结果回滚占位,随后记账重推 → qB 以检查点指令自动续跑。
-  await scheduler.reclaimStrandedSeat(qB, "scheduled-gate-queue-14", "paused", { renote: true });
+  // repush:"always" 与队列推进自己的写失败补偿同参(手动入口是 "never",见 ckpt 用例)。
+  await scheduler.reclaimStrandedSeat(qB, "scheduled-gate-queue-14", "paused", { repush: "always" });
   assert.equal(await taskStatusOf(qB), "paused", "补偿应把遗留 queued 回滚为原状态");
   await waitFor(async () => {
     const row = (await db.select().from(tasks).where(eq(tasks.id, qB))).at(0)!;

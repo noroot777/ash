@@ -45,7 +45,7 @@ import { freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, roundOf } fr
 import { handoffBlockReason } from "./handoff-guard.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
-import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
+import { claimQueueSeat, queueClaimError, type QueueSeat } from "./queue-seat.js";
 import { claimTurn, releaseTurn } from "./runs.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { resumeOrRunTask } from "./task-resume.js";
@@ -404,10 +404,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       // 把整条队列挡住;审查档同理(旁路回合,不是任务执行)。
       const claim = await claimQueueSeat(taskId);
       if (!claim.ok) {
-        return c.json(
-          { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy: claim.blockers },
-          409,
-        );
+        return c.json({ error: queueClaimError(claim), blockedBy: claim.blockers }, 409);
       }
       seat = claim.seat;
       handoff(

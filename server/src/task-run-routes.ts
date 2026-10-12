@@ -29,7 +29,7 @@ import { mountTaskSteerRoutes } from "./task-steer.js";
 import { RUNS_DIR } from "./paths.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
-import { seatThenStart } from "./queue-seat.js";
+import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimTurn, confirmDone, releaseTurn, stopTask } from "./runs.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { advanceQueue } from "./scheduler.js";
@@ -44,8 +44,8 @@ import { readableRunPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { now } from "./util.js";
 
-// 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用一句)。
-const QUEUE_BUSY_ERROR = "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列";
+// 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
+// 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
 
 // 起跑占位(/run、/fire、/retry 的最后一道)住在 queue-seat.ts 的 seatThenStart:整队
 // 检查与落 queued 在同一临界区里,且与消息补投扫描、重跑上一回合、定时到点、队列推进
@@ -154,7 +154,7 @@ api.post("/tasks/:id/run", async (c) => {
       : resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: acting }));
   if (!started.ok) {
     releaseTurn(taskId);
-    return c.json({ error: QUEUE_BUSY_ERROR, blockedBy: started.blockers }, 409);
+    return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
   }
   return c.json({ started: true }, 202);
 });
@@ -212,7 +212,7 @@ api.post("/tasks/:id/fire", async (c) => {
       : runTask(taskId, { turnHeld: true, actingUserId: firedBy })); // 全新一轮,永不 resume
   if (!fired.ok) {
     releaseTurn(taskId);
-    return c.json({ error: QUEUE_BUSY_ERROR, blockedBy: fired.blockers }, 409);
+    return c.json({ error: queueClaimError(fired), blockedBy: fired.blockers }, 409);
   }
   return c.json({ started: true, fresh: true }, 202);
 });
@@ -470,7 +470,7 @@ api.post("/tasks/:id/retry", async (c) => {
       : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting }));
   if (!started.ok) {
     releaseTurn(taskId);
-    return c.json({ error: QUEUE_BUSY_ERROR, blockedBy: started.blockers }, 409);
+    return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
   }
   return c.json({ started: true }, 202);
 });

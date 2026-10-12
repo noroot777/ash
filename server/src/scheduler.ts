@@ -164,31 +164,41 @@ export async function advanceQueue(queueId: string): Promise<void> {
 // 不收拾就是永久「排队中」。守卫与 queue-seat 的 seat.release 同款:正常跑完的回合在
 // 这里全是 no-op(状态早被结算覆盖/锁被真实回合接管)。回滚用 quiet(回原样不是落位);
 // 重推延迟一拍 —— 互斥方(典型:验收)没有结束钩子来推队列,立刻重试只会原地打转。
-// renote:调用方确知「这次交接没发生」(占位写入失败的补偿)时,即使没有 queued 遗留
-// (写入确实没提交)也要记账重推;finally 的常规兜底不传 —— 正常结算的回合自有钩子。
+//
+// repush = 回收之后要不要记账重推队列,三档按**是谁欠下这次启动**选:
+//   "always"   队列推进自己的占位写失败:交接确实发生过、语义就是 resume-or-run,
+//              即使写入没提交也要记账,数据库恢复后由 advanceQueue 原样补办;
+//   "stranded" finally 的常规兜底(缺省):只有真收拾了 queued 遗留才记账 —— 正常
+//              结算的回合自有终态钩子,不额外多推;
+//   "never"    手动/扫描入口(/run、/fire、/retry、消息投递)的占位写失败:只回滚
+//              遗留,**绝不记账重推** —— advanceQueue 的补办是 resumeOrRunTask,会把
+//              /fire 的「全新一轮」偷换成续跑旧会话、消费掉检查点指令(第 ll7XKsu_ps0n
+//              链第 2 轮实测);这些入口各有自己的重试面(用户重点、扫描重投、定时
+//              不消费班次),失败就让原入口按原语义重来。
 // 导出供回归直调(触发它的真实路径是「UPDATE 提交后附带 SELECT 超时」,无法从测试
 // 外侧精确注入到两条语句之间)。
 export async function reclaimStrandedSeat(
   taskId: string,
   queueId: string,
   prevStatus: TaskStatus,
-  opts?: { renote?: boolean },
+  opts?: { repush?: "always" | "stranded" | "never" },
 ): Promise<void> {
+  const repush = opts?.repush ?? "stranded";
   if (isTurnClaimed(taskId)) return;
   try {
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    if (row?.status === "queued") {
+    const stranded = row?.status === "queued";
+    if (stranded) {
       await setTaskStatus(taskId, prevStatus, prevStatus === "paused" ? { quietAdvance: true } : undefined);
-    } else if (!opts?.renote) {
-      return; // 正常结算覆盖了占位,无需收拾
     }
+    if (repush === "never" || (repush === "stranded" && !stranded)) return;
     const timer = setTimeout(() => noteMissedAdvance(taskId, queueId), 1_000);
     timer.unref?.();
   } catch (err) {
     // 补偿自己也可能撞上还没放开的写锁:不放弃,退避后重试 —— 这正是「数据库恢复后
     // 再补办交接」的那一等(第 7 轮审查:一次短暂锁故障不许变成永久停滞)。
     console.error(`[ash] 队列占位补偿失败(${taskId}),5s 后重试:`, err);
-    scheduleSeatReclaim(taskId, queueId, prevStatus, 5_000, opts);
+    scheduleSeatReclaim(taskId, queueId, prevStatus, 5_000, { repush });
   }
 }
 
@@ -197,9 +207,9 @@ function scheduleSeatReclaim(
   queueId: string,
   prevStatus: TaskStatus,
   delayMs: number,
-  opts?: { renote?: boolean },
+  opts?: { repush?: "always" | "stranded" | "never" },
 ): void {
-  const timer = setTimeout(() => void reclaimStrandedSeat(taskId, queueId, prevStatus, opts ?? { renote: true }), delayMs);
+  const timer = setTimeout(() => void reclaimStrandedSeat(taskId, queueId, prevStatus, opts ?? { repush: "always" }), delayMs);
   timer.unref?.();
 }
 
