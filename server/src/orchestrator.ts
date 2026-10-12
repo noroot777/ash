@@ -36,7 +36,7 @@ import { interruptCliGoal, preflightCliGoalResume, prepareCliInvocation, readCli
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
-import { reportTurnFailure } from "./turn-failure.js";
+import { isDiagnosticSession, reportTurnFailure } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
@@ -315,6 +315,7 @@ export async function continueTask(
     // A single task can now host several agents — one session line per agentType,
     // each invited via @-mention. Newest first.
     const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
+      .filter((session) => !isDiagnosticSession(session))
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
     // 「这一条接得上吗」不止看 agentType+role:CLI 的会话文件躺在**开它的那个人**的配置
     // 目录里,而共享项目里 B 可以回复 A 的任务(runOwner 上面刚算过)。拿 A 的 session id

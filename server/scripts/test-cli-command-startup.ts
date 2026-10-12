@@ -47,6 +47,8 @@ async function runFailed(taskId: string, message: RegExp): Promise<string> {
   const recorded = await listed.json();
   assert.equal(recorded.length, 1, "起跑前失败也必须有持久会话，重试不能重复造会话");
   assert.equal(recorded[0].cliSessionId, null, "诊断记录不能冒充已经启动的 CLI 会话");
+  assert.equal(recorded[0].cwd, null, "起跑前诊断不能决定执行工作目录");
+  assert.equal(recorded[0].turnStartedAt, null);
   assert.equal(recorded[0].exitStatus, 1);
   assert.ok(recorded[0].endedAt);
   const output = await api.request(`/sessions/${recorded[0].id}/output`);
