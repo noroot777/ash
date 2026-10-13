@@ -27,6 +27,21 @@ import { join } from "node:path";
 const MAX_LINE = 110;
 /** 最多内联多少条。超了**保留最近的**：早几轮多半已经修掉，活着的类在后面。 */
 const MAX_ITEMS = 24;
+/** 路径清单最多列几条（真实数据里最多的一个任务有 32 轮）。 */
+const MAX_PATHS = 8;
+
+/** 一组路径的公共目录；没有公共前缀时退回根。只用于「另有 N 份在这儿」那句话。 */
+function commonDirectory(paths: string[]): string {
+  const split = paths.map((path) => path.split("/").slice(0, -1));
+  const first = split[0] ?? [];
+  let shared = first.length;
+  for (const parts of split.slice(1)) {
+    let index = 0;
+    while (index < shared && index < parts.length && parts[index] === first[index]) index += 1;
+    shared = index;
+  }
+  return first.slice(0, shared).join("/") || "/";
+}
 
 export interface PriorRound {
   /** 轮次标签，如 `第 3 轮`；跨 run 时带上链的序号。 */
@@ -63,6 +78,31 @@ const CONTAINER = /^(?:Findings?|Issues?|Bugs?|Defects?|发现|缺陷|问题|必
 const NOISE = ["已验证", "验证记录", "浏览器", "清场", "截图", "环境", "命令", "附录", "小结", "总结"];
 
 /**
+ * 把围栏代码块整段剔掉。
+ *
+ * 必须剔：报告里会**原样引用报告格式的写法示例**（「你会遇到：保存后刚写的内容消失。」
+ * 这种占位句），还会贴别的报告片段作证据。不剔的话这些示例会被当成真发现搬给下一轮 ——
+ * 全库 1550 份里有 7 份命中、15 行假条目（`P5EH_BPGxLt-` 那条链占了 5 份）。
+ *
+ * 判据只认行首围栏（``` 或 ~~~），闭合要求同种记号：这是 Markdown 自己的规则，不猜缩进。
+ */
+function withoutFences(lines: string[]): string[] {
+  const kept: string[] = [];
+  let fence: string | null = null;
+  for (const line of lines) {
+    const mark = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (mark) {
+      const token = mark[1]![0]!;
+      if (!fence) fence = token;
+      else if (fence === token) fence = null;
+      continue;
+    }
+    if (!fence) kept.push(line);
+  }
+  return kept;
+}
+
+/**
  * 从一份 report.md 里抽出每条发现的现象行。
  *
  * 两条路，顺序不能换：
@@ -74,17 +114,29 @@ const NOISE = ["已验证", "验证记录", "浏览器", "清场", "截图", "�
  * （理由见上面 MARKER 那组常量的注释）。
  */
 export function extractReportFindings(report: string): string[] {
-  const clean = (text: string) => text
-    .replace(/[`*_~]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, MAX_LINE);
-  const lines = report.split(/\r?\n/);
-  const phenomena = lines
-    .map((line) => /^[\s>*-]*(?:\*\*)?你会遇到(?:\*\*)?\s*[:：]?\s*(.*)$/.exec(line)?.[1] ?? "")
-    .map(clean)
-    .filter(Boolean);
-  if (phenomena.length) return phenomena;
+  const clean = (text: string) => {
+    const normalized = text.replace(/[`*_~]/g, "").replace(/\s+/g, " ").trim();
+    // 截断要留记号：不留的话一条被切掉半句的现象读起来像一句完整的话（全库 2.6% 的条目
+    // 会撞上这个上限）。
+    return normalized.length > MAX_LINE ? `${normalized.slice(0, MAX_LINE)}…` : normalized;
+  };
+  const lines = withoutFences(report.split(/\r?\n/));
+  const phenomena: string[] = [];
+  lines.forEach((line, index) => {
+    const matched = /^[\s>*-]*(?:\*\*)?你会遇到(?:\*\*)?\s*[:：]?\s*(.*)$/.exec(line);
+    if (!matched) return;
+    // 「你会遇到：」后面当行为空时，内容写在下一行（真实报告里有这种写法）。往下找第一行
+    // 非空内容，但不能跨过另一条契约行或标题 —— 那说明这一条压根没写现象。
+    const inline = clean(matched[1]!);
+    if (inline) { phenomena.push(inline); return; }
+    const next = lines.slice(index + 1).find((text) => text.trim().length > 0);
+    if (!next || /^#|^[\s>*-]*(?:\*\*)?(?:为什么|建议怎么修|你会遇到)/.test(next)) return;
+    const carried = clean(next);
+    if (carried) phenomena.push(carried);
+  });
+  // 同一份报告里重复的条目只留一条：摘要 5 条上限要求把溢出条目的完整三行再写进技术
+  // 明细，于是同一条现象在一份报告里出现两次（全库 4 份）。跨轮重复不去 —— 那是复发。
+  if (phenomena.length) return [...new Set(phenomena)];
 
   const found: string[] = [];
   // 当前所在的「发现」节及其标题级别：它下面低一级的标题算条目，再遇到同级或更浅的
@@ -116,28 +168,98 @@ export function extractReportFindings(report: string): string[] {
  * 拼成 prompt 的一节。空清单返回空串 —— 第一条链的第 1 轮本来就没有历史，塞一句
  * 「此前没有发现」只是让它多读一行。
  */
+type Entry = { round: PriorRound; text: string };
+
+/**
+ * 24 个名额怎么分给 N 轮。
+ *
+ * 原先是「取最近 24 条」。拿真实数据一跑就看出不对：`6KCDi5veaSP8` 35 轮 61 条，最近 24 条
+ * 被最新那几轮占满，前 20 轮**一条都不剩** —— 而这一节的用处是判「同一个判据的第 N 个触发
+ * 组合」，定义那个类的恰恰是早期那几轮。所以按**轮次覆盖**分，而不是按条数取尾：
+ *
+ * ① 每轮先保一条（报告按严重程度排序，第一条就是那一轮最严重的那个）；
+ * ② 名额有剩，再从**最近**那几轮往回补它们剩下的条目 —— 新轮次的细节对「这次改完又崩了
+ *    什么」最有用；
+ * ③ 轮数本身就超过名额时，按轮次**均匀取样**并钉住首尾：首轮定义类，末轮是现状，中间
+ *    等距取。等距比取尾好的理由同 ①。
+ */
+function allocate(entries: Entry[]): { kept: Entry[]; silentRounds: PriorRound[]; mode: string } {
+  if (entries.length <= MAX_ITEMS) return { kept: entries, silentRounds: [], mode: "" };
+  const groups: Entry[][] = [];
+  for (const entry of entries) {
+    const last = groups.at(-1);
+    if (last && last[0]!.round === entry.round) last.push(entry);
+    else groups.push([entry]);
+  }
+  if (groups.length > MAX_ITEMS) {
+    const step = (groups.length - 1) / (MAX_ITEMS - 1);
+    const picked = new Set<number>();
+    for (let slot = 0; slot < MAX_ITEMS; slot += 1) picked.add(Math.round(slot * step));
+    return {
+      kept: [...picked].sort((a, b) => a - b).map((index) => groups[index]![0]!),
+      silentRounds: groups.filter((_, index) => !picked.has(index)).map((group) => group[0]!.round),
+      mode: `轮数超过内联上限，按轮次均匀取样（含首轮和最近一轮），每轮只列最严重的一条`,
+    };
+  }
+  const kept = new Set(groups.map((group) => group[0]!));
+  for (const group of [...groups].reverse()) {
+    for (const entry of group.slice(1)) {
+      if (kept.size >= MAX_ITEMS) break;
+      kept.add(entry);
+    }
+    if (kept.size >= MAX_ITEMS) break;
+  }
+  return {
+    kept: entries.filter((entry) => kept.has(entry)),
+    silentRounds: [],
+    mode: "每轮至少列最严重的一条，名额剩下的给最近几轮",
+  };
+}
+
+const labelList = (rounds: PriorRound[], limit = 6): string => {
+  const labels = [...new Set(rounds.map((round) => round.label))];
+  return labels.length > limit
+    ? `${labels.slice(0, limit).join("、")} 等 ${labels.length} 轮`
+    : labels.join("、");
+};
+
 export function priorFindingsSection(rounds: PriorRound[]): string {
   // 抽不到现象行、但那一轮**确实没通过**的，仍要留一行指向报告：全库 1550 份里这类有 301
   // 份（抽到的是 518 份），整轮藏掉的话，最该让下一轮看见的恰恰是它们。只说「没抽出来 +
   // 报告在哪」，不编内容。
-  const entries = rounds.flatMap((round) =>
+  const entries: Entry[] = rounds.flatMap((round) =>
     round.findings.length
       ? round.findings.map((text) => ({ round, text }))
       : round.conclusion === "verify_failed"
         ? [{ round, text: `现象行没抽出来，整份报告在 ${round.reportPath}` }]
         : []);
   if (!entries.length) return "";
-  const withFindings = rounds.filter((round) =>
-    round.findings.length > 0 || round.conclusion === "verify_failed");
-  const flat = entries;
-  const kept = flat.slice(-MAX_ITEMS);
-  const dropped = flat.length - kept.length;
+  const { kept, silentRounds, mode } = allocate(entries);
   const body = kept.map(({ round, text }) =>
     `- 〔${round.label}${round.conclusion ? ` · ${round.conclusion}` : ""}〕${text}`).join("\n");
-  const paths = [...new Set(withFindings.map((round) => round.reportPath))].slice(-6).join("\n  ");
-  return `\n\n【这个任务此前报过的发现（${flat.length} 条，按轮次先后）】\n${body}\n` +
-    (dropped > 0 ? `（更早的 ${dropped} 条没有内联，在下面那几份报告里）\n` : "") +
-    `报告全文：\n  ${paths}\n` +
+
+  // 路径清单里**一条都没内联到的那几轮排在最前**。
+  //
+  // 原先是「取最近 6 轮的路径」，同时写着「更早的 N 条在下面那几份报告里」——两句话凑在
+  // 一起是假的：被省掉的恰恰是最早那几轮，路径一个都不在清单里。全库复演时 20 个有省略的
+  // 任务里 19 个都在说这句假话（`CIelh82KHpJu` 省掉 28 条，列出的 6 份全是已内联的轮次）。
+  // 假的指路比不指路更坏：审查者照着翻，翻到的是别的内容。
+  const silentPaths = [...new Set(silentRounds.map((round) => round.reportPath))];
+  const keptPaths = [...new Set(kept.map(({ round }) => round.reportPath))];
+  const paths = [...new Set([...silentPaths, ...keptPaths.slice(-MAX_PATHS)])].slice(0, MAX_PATHS);
+  const unlisted = silentPaths.filter((path) => !paths.includes(path));
+  const dropped = entries.length - kept.length;
+  return `\n\n【这个任务此前报过的发现（${entries.length} 条，按轮次先后）】\n${body}\n` +
+    (dropped > 0
+      ? `（${mode}；另外 ${dropped} 条没有内联` +
+        (silentRounds.length ? `，其中 ${labelList(silentRounds)} 一条都没列出` : "") +
+        `，都在各轮报告里）\n`
+      : "") +
+    `报告全文${silentRounds.length ? "（没有列出条目的那几轮排在最前）" : ""}：\n  ${paths.join("\n  ")}\n` +
+    (unlisted.length > 0
+      // 连这几轮的路径都列不下时，说清还有几份、都在哪个目录下，而不是让它以为上面就是全部。
+      ? `  另有 ${unlisted.length} 份没有列出，在 ${commonDirectory(unlisted)} 下\n`
+      : "") +
     `这一节**不是**让你重报上面这些，它只用来判一件事：你这一轮要报的东西，` +
     `是不是上面某一条**同一个判据下的第 N 个触发组合**？是的话别再报第 N 个实例 ——` +
     `按「报类不报个例」写成类问题，指出该在哪一层加不变量。\n` +

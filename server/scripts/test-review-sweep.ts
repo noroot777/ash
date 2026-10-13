@@ -106,7 +106,51 @@ try {
     "通过且无小节的报告抽不到东西，就该是空的",
   );
   const long = extractReportFindings(`- 你会遇到：${"很长的现象".repeat(60)}`);
-  assert.ok(long[0]!.length <= 110, `单条现象行必须截断，现在 ${long[0]!.length} 字`);
+  assert.ok(long[0]!.length <= 111, `单条现象行必须截断，现在 ${long[0]!.length} 字`);
+  // 截断要留记号：不留的话被切掉半句的现象读起来像一句完整的话（全库 2.6% 的条目会撞上限）。
+  assert.ok(long[0]!.endsWith("…"), "截断必须留省略号");
+  assert.ok(!extractReportFindings("- 你会遇到：短的。")[0]!.endsWith("…"), "没截断就不许加省略号");
+
+  // 围栏里的写法示例不是发现。真实来源：`P5EH_BPGxLt-` 那条链的报告在讲报告格式本身，
+  // 正文里原样贴了「你会遇到：保存后刚写的内容消失。」这种占位句（全库 7 份、15 行）。
+  const fenced = [
+    "# 报告", "", "## 结论", "", "**必须修的问题**：", "",
+    "- 你会遇到：真发现——保存后页面不刷新。", "",
+    "写法示例：", "", "```markdown", "### 示例标题",
+    "- 你会遇到：保存后刚写的内容消失。", "- 为什么：保存请求没有落盘。", "```", "",
+    "~~~", "- 你会遇到：另一种围栏里的示例。", "~~~", "",
+  ].join("\n");
+  assert.deepEqual(
+    extractReportFindings(fenced),
+    ["真发现——保存后页面不刷新。"],
+    "围栏内的示例句不许当成发现搬给下一轮",
+  );
+  // 只有围栏里的示例时，整份报告抽不到东西 —— 不许回落到标题那条路去捞围栏里的标题。
+  assert.deepEqual(
+    extractReportFindings("# 报告\n\n```\n- 你会遇到：示例。\n### P1：围栏里的标题\n```\n"),
+    [],
+    "围栏里的带标记标题同样不算发现",
+  );
+
+  // 「你会遇到：」当行为空、内容写在下一行（真实报告里有这种写法）。
+  assert.deepEqual(
+    extractReportFindings("- 你会遇到：\n  打开页面后按钮是灰的。\n- 为什么：状态没同步。"),
+    ["打开页面后按钮是灰的。"],
+    "现象写在下一行时要跟过去拿",
+  );
+  assert.deepEqual(
+    extractReportFindings("- 你会遇到：\n- 为什么：状态没同步。"),
+    [],
+    "下一行是另一条契约行时，说明这一条压根没写现象，不许把「为什么」当现象",
+  );
+
+  // 摘要 5 条上限要求把溢出条目的完整三行再写进技术明细，于是同一条现象在一份报告里
+  // 出现两次（全库 4 份）。同报告内去重，跨轮不去 —— 跨轮重复是复发。
+  assert.deepEqual(
+    extractReportFindings("- 你会遇到：同一条。\n\n## 技术明细\n\n- 你会遇到：同一条。"),
+    ["同一条。"],
+    "同一份报告里重复的条目只留一条",
+  );
 
   // ── ③ 历史清单成文 ──────────────────────────────────────────────────────────
   assert.equal(priorFindingsSection([]), "", "没有历史时不塞空小节");
@@ -132,16 +176,54 @@ try {
   assert.match(section, /第 N 个触发组合/, "这一节的用处必须写明是判同类");
   assert.match(section, /还没修好|又复发/, "必须留下「旧条目没修好照样报」这条出路，否则这一节会变成消音");
 
-  // 超出内联上限时：保留**最近的**，并如实说省掉了几条。
+  // 超出内联上限时怎么分名额。按「取最近 24 条」分的话，`6KCDi5veaSP8`（35 轮 61 条）
+  // 会被最新几轮占满、前 20 轮一条不剩 —— 而定义「类」的恰恰是早期那几轮。
+  //
+  // ① 轮数没超上限：每轮至少留最严重的那条（报告按严重度排序，第一条就是），名额剩下的
+  //    给最近几轮。
   const many = priorFindingsSection(Array.from({ length: 10 }, (_, index) => ({
     label: `第 ${index + 1} 轮`,
     conclusion: "verify_failed",
     reportPath: `/r/${index + 1}.md`,
     findings: [`现象 ${index * 3 + 1}`, `现象 ${index * 3 + 2}`, `现象 ${index * 3 + 3}`],
   })));
-  assert.match(many, /（更早的 6 条没有内联/, "省掉的条数要说出来");
-  assert.match(many, /现象 30/, "最近那几条必须留住——活着的类在后面");
-  assert.doesNotMatch(many, /现象 1〕|〕现象 1$/m, "最早那几条才是被省掉的");
+  assert.match(many, /另外 6 条没有内联/, "没内联的条数要说出来");
+  for (let round = 1; round <= 10; round += 1) {
+    assert.match(many, new RegExp(`〔第 ${round} 轮 · verify_failed〕现象 ${(round - 1) * 3 + 1}`),
+      `第 ${round} 轮最严重的那条必须留住`);
+  }
+  assert.match(many, /现象 30/, "名额剩下的给最近几轮");
+  assert.doesNotMatch(many, /现象 2$/m, "最早那几轮的次要条目才是被省掉的");
+  assert.doesNotMatch(many, /一条都没列出/, "每轮都列到了，就不许说有轮次完全没列出");
+
+  // ② 轮数本身超过上限：按轮次均匀取样，首尾必须在；没列出条目的那几轮的报告路径
+  //    **排在最前**，列不下的说清还有几份、在哪个目录下（原先写「在下面那几份报告里」却
+  //    列的全是已内联的轮次，全库 20 个有省略的任务里 19 个都在说这句假话）。
+  const huge = priorFindingsSection(Array.from({ length: 40 }, (_, index) => ({
+    label: `第 ${index + 1} 轮`,
+    conclusion: "verify_failed",
+    reportPath: `/data/runs/T/free-review/run-${index + 1}/round-1/report.md`,
+    findings: [`现象 ${index + 1}`],
+  })));
+  assert.match(huge, /按轮次均匀取样/, "取样方式要讲清楚");
+  assert.match(huge, /〔第 1 轮 · verify_failed〕现象 1$/m, "首轮定义类，必须在");
+  assert.match(huge, /〔第 40 轮 · verify_failed〕现象 40$/m, "最近一轮是现状，必须在");
+  assert.match(huge, /一条都没列出/, "完全没列出的轮次要点名");
+  assert.match(huge, /另有 \d+ 份没有列出，在 \/data\/runs\/T\/free-review 下/,
+    "路径列不下时要说清还有几份、在哪个目录下");
+  const inlined = [...huge.matchAll(/〕现象 (\d+)/g)].map((m) => Number(m[1]));
+  assert.equal(inlined.length, 24, `内联条数应等于上限，现在 ${inlined.length}`);
+  // 没列出条目的轮次，它的路径必须真的能在清单里找到（或被「另有 N 份」那句兜住）。
+  const listedPaths = huge.split("报告全文")[1]!;
+  assert.ok(
+    [1, 40].every((round) => inlined.includes(round)),
+    "首尾两轮必须内联",
+  );
+  assert.ok(
+    listedPaths.includes("/data/runs/T/free-review/run-2/round-1/report.md")
+      || /另有 \d+ 份/.test(listedPaths),
+    "被取样掉的轮次要么路径在清单里，要么被「另有 N 份」兜住",
+  );
 
   // ── ④ 真的被塞进了各条 prompt ───────────────────────────────────────────────
   assertCarriesSweepReminder(verifyReminderFor("t-1", 2), "自动验证续跑提醒");
