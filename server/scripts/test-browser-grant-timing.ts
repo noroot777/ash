@@ -18,6 +18,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 requireTmpDb("test-browser-grant-timing");
@@ -135,7 +136,55 @@ assert.match(
 );
 ok("撤销后现读与早期快照拼出的消息不同 —— 起跑前必须用前者");
 
-// ── 用例 3:顺序不变量(防止下一次又把 await 插回窗口里)────────────────────────
+// ── 用例 3:团队开台途中点「停止全组」,不许再把进程拉起来 ─────────────────────
+// 开台要穿过 worktree 准备、prepareResume、授权现读几个 await,这期间 leads 里没有调度台、
+// trackRun 也没发生 —— stopTask 空转、haltTeam 只把状态写成 idle,开台却照常起进程、
+// beginTurn 再把状态写回 running:用户点了停止、刷新后还是「运行中」(第 4 轮审查 P1)。
+// 注入点选 prepareResume:它在授权现读**之前**,所以 halt 必然落在开台途中。
+const { ClaudeExecutor } = await import("../src/executors/claude.js");
+const team = await import("../src/team/session.js");
+
+const TEAM_TASK = "grant-timing-team";
+await db.insert(tasks).values({
+  id: TEAM_TASK, projectId: PROJECT, groupId: null, parentId: null, title: "team", body: "带团队", mode: "team",
+  status: "idle", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: null, executorId: null,
+  autoTitle: false, duet: null, team: null, scheduleId: null, createdAt: at, updatedAt: at,
+  useWorktree: false, worktreeBase: null, originTaskId: null,
+});
+
+let residentStarted = false;
+let haltDone = false;
+const realPrepare = ClaudeExecutor.prototype.prepareResume;
+const realOpen = ClaudeExecutor.prototype.openResident;
+ClaudeExecutor.prototype.prepareResume = async function stubPrepare() {
+  // 停止落在这里 = 开台途中:leads 还空、trackRun 还没发生,正是谁也杀不到的那一段。
+  await team.haltTeam(TEAM_TASK);
+  haltDone = true;
+};
+ClaudeExecutor.prototype.openResident = function stubResident() {
+  residentStarted = true;
+  return {
+    sessionId: "lead-cli", commandLine: "stub", send: () => true, kill() {}, close() {},
+    events: (async function* () { yield { kind: "done", exitStatus: 0 }; })(),
+  } as unknown as ReturnType<NonNullable<typeof realOpen>>;
+};
+try {
+  await team.startTeam(TEAM_TASK);
+} finally {
+  ClaudeExecutor.prototype.prepareResume = realPrepare;
+  ClaudeExecutor.prototype.openResident = realOpen;
+}
+
+assert.equal(haltDone, true, "前置条件:停止必须在开台途中真的跑完");
+assert.equal(residentStarted, false,
+  "开台途中被「停止全组」撤回后,不许再启动调度台进程 —— 它起来时没人杀得到它");
+assert.equal(team.teamIsLive(TEAM_TASK), false, "撤回之后团队不该还在线");
+const teamRow = (await db.select().from(tasks).where(eq(tasks.id, TEAM_TASK))).at(0);
+assert.equal(teamRow?.status, "idle",
+  "状态必须停在 idle —— 写回 running 的话,用户刷新页面看到的就是「我停过的团队还在跑」");
+ok("团队:开台途中点停止,不会再拉起调度台进程,状态停在 idle");
+
+// ── 用例 4:顺序不变量(防止下一次又把 await 插回窗口里)────────────────────────
 // 行为用例盯的是「现在对不对」,这一条盯的是「以后还对不对」:启动点前最后一次取消检查
 // 与 executor.run 之间,一个 await 都不许有。
 const { readFileSync } = await import("node:fs");
@@ -166,6 +215,13 @@ for (const [label, rel, gate, start] of [
 const teamSrc = src("../src/team/session.ts");
 assert.match(teamSrc, /await ex\.prepareResume[\s\S]{0,400}?await browserGrantForProject\(/,
   "团队开台:授权要读在 prepareResume 之后,否则开台期间撤销拦不住");
+const teamGrantAt = teamSrc.indexOf("await browserGrantForProject(");
+const teamGateAt = teamSrc.indexOf("openingHalted.delete(taskId)", teamGrantAt);
+const teamStartAt = teamSrc.indexOf("openResident({", teamGateAt);
+assert.ok(teamGrantAt > 0 && teamGateAt > teamGrantAt && teamStartAt > teamGateAt,
+  "团队开台:必须是「读授权 → 消费停止标记 → 起进程」的顺序");
+assert.doesNotMatch(teamSrc.slice(teamGateAt, teamStartAt), /await /,
+  "团队开台:那道闸与 openResident 之间不许有 await,否则停止又会落进新窗口");
 ok("顺序不变量:读授权 → 查取消/闸 → 启动,中间无 await");
 
 rmSync(stage, { recursive: true, force: true });

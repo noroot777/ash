@@ -72,6 +72,27 @@ type Kind = "user" | "inbound" | "start";
 
 const leads = new Map<string, Lead>();
 const opening = new Map<string, Promise<Lead>>();
+/**
+ * 开台**进行到一半**时收到的「停止全组」。
+ *
+ * 开台要穿过好几个 await(worktree 准备、prepareResume、授权现读),这期间 `leads` 里还
+ * 没有这台调度台、`trackRun` 也还没发生 —— `stopTask` 找不到任何可杀的东西,`haltTeam`
+ * 只会把状态写成 idle,而开台随后照常起进程、`beginTurn` 又把状态写回 running:用户点了
+ * 停止、页面刷新后却还是「运行中」(第 4 轮审查 P1)。
+ *
+ * 所以把那一次停止记在这里,由开台自己在**起进程之前**消费掉。`turn-freeze` 那套
+ * (freezeStartingTurn/abortIfFrozen)解的是同一类问题,但它要求回合已经 claimTurn,
+ * 而团队开台没有占回合,用不上。
+ */
+const openingHalted = new Set<string>();
+
+/** 开台在起进程前被「停止全组」撤回 —— 这不是失败,是用户的停止真的生效了。 */
+class TeamOpenHalted extends Error {
+  constructor() {
+    super("开台在启动调度台进程之前被「停止全组」撤回");
+    this.name = "TeamOpenHalted";
+  }
+}
 // 落库失败时的**最后一档**:没能写进 team_inbound 的入站消息只剩这一份内存副本。换台时
 // 跟着它走(releasePending → adoptInbound),server 一重启就真没了 —— 但那是数据库当时
 // 拒收的直接后果,总好过当场丢掉还一声不吭(2026-08-26 第 13 轮审查)。
@@ -119,6 +140,9 @@ export async function haltTeam(taskId: string): Promise<void> {
     lead.closingSaidRotated = !lead.cliSessionId;
     recordSystemTurn(lead, HALT_NOTE(!!lead.cliSessionId));
   }
+  // 正在开台(还没 trackRun,谁也杀不到)时,把这次停止记下来交给开台自己消费 ——
+  // 否则下面 stopTask 空转、状态写成 idle,开台却照样把进程拉起来并写回 running。
+  if (opening.has(taskId)) openingHalted.add(taskId);
   stopTask(taskId); // 常驻 handle 已 trackRun → killChild 三层击杀
   const owned = await db.select().from(groups).where(eq(groups.ownerTaskId, taskId));
   for (const g of owned) await pauseGroup(g.id);
@@ -236,12 +260,20 @@ async function noteToLead(taskId: string, message: string): Promise<void> {
 
 // 开台失败:原因照上面的通道写回去,状态落回 idle —— 团队没有终态,开不起来就是待命。
 async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
-  await noteToLead(taskId, `调度台启动失败：${err instanceof Error ? err.message : String(err)}`);
+  // 被用户停止撤回的那一种照着「启动失败」报,会让他以为自己点坏了什么。
+  await noteToLead(taskId, err instanceof TeamOpenHalted
+    ? "这次开台在启动调度台进程之前被「停止全组」撤回了，团队保持待命。"
+    : `调度台启动失败：${err instanceof Error ? err.message : String(err)}`);
   await setTaskStatus(taskId, "idle");
 }
 
 function open(taskId: string, text: string, kind: Kind): Promise<Lead> {
-  const p = openLead(taskId, text, kind).finally(() => opening.delete(taskId));
+  const p = openLead(taskId, text, kind).finally(() => {
+    opening.delete(taskId);
+    // 开台在消费它之前就失败了(worktree 建不出来之类)时清掉,别让这次停止顺延到
+    // 下一次开台上去。
+    openingHalted.delete(taskId);
+  });
   opening.set(taskId, p);
   return p;
 }
@@ -362,7 +394,12 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   // 授权现读、且读在开台之前的最后一刻:正文(rawMessage)拼好之后还隔着 runEnv 和
   // prepareResume 两个 await,在那边就把授权拼死的话,用户在开台期间收回授权拦不住
   // (同第 3 轮审查 P1 的续聊路径)。
-  const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full", await browserGrantForProject(project.id));
+  const browserGrant = await browserGrantForProject(project.id);
+  // 开台前的最后一道闸:这一句之后到 openResident 之间不再有 await。上面那几个 await
+  // 期间可能来过「停止全组」,那时这台调度台还没出生、谁也杀不到它,停止只落在
+  // openingHalted 上 —— 不在这里消费掉,就会把用户已经停下的团队又拉起来。
+  if (openingHalted.delete(taskId)) throw new TeamOpenHalted();
+  const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full", browserGrant);
 
   const turnStart = now();
   const sessId = resuming ? prev!.id : id();
