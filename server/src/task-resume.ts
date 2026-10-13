@@ -1,7 +1,7 @@
 // 「运行/重试/队列推进」时选 resume 还是 fresh（从 orchestrator.ts 拆出，纯行数拆分）。
 // 依赖方向单向：这里 import orchestrator，orchestrator 不回头 import 这里。
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
+import type { AgentType, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { continueTask, runTask, type ResumeReason } from "./orchestrator.js";
@@ -20,7 +20,7 @@ import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
 // scheduler) keep chaining on the same promise.
 export async function resumeOrRunTask(
   taskId: string,
-  opts: { reason?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null } = {},
+  opts: { reason?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null; goalStartFrom?: TaskStatus } = {},
 ): Promise<void> {
   // `actingUserId` 一路原样往下传:它决定这一轮烧谁的 key(§八)。这里只是个中转,
   // 不给默认值 —— 后端触发的那几路本来就该退回任务归属人。
@@ -71,6 +71,7 @@ export async function resumeOrRunTask(
     turnHeld: opts.turnHeld,
     freezeGuard,
     actingUserId: acting ?? null,
+    goalStartFrom: opts.goalStartFrom,
   })) return;
   const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
     .filter((s) => s.agentType === agent)

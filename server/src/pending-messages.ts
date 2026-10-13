@@ -26,7 +26,8 @@
 // docs/incidents.md「排队消息凭空消失」)。做法是把「有人正在送」拆成一个**独立的租约字段**
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
-import type { AgentType, ScheduledMessageMode } from "@ash/shared";
+import type { AgentType, ScheduledMessageMode, TaskStatus } from "@ash/shared";
+import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks, groups } from "./db/schema.js";
@@ -283,6 +284,7 @@ async function deliverWhenIdle(
     // 已经往同一行后面追加了新的事件(见 beginDelivery 的注释)。
     const started = await continueTask(message.taskId, claimed.text, {
       ...options,
+      goalStartFrom: seat?.prevStatus as TaskStatus | undefined,
       ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
       onDelivered: async () => {
         delivered = true;
@@ -361,6 +363,10 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       // 自激循环(第 6 轮审查:目录不修复时 2 秒 24 次失败)。
       if (retryBlocked(m.id, at.getTime())) continue;
       const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0) ?? null;
+      if (t?.mode === "single" && !m.execution && isGoalExecution(parseCliCommand((m.agent ?? t.agentType ?? "claude") as AgentType, m.text))) {
+        await db.update(scheduledMessages).set({ execution: true }).where(and(eq(scheduledMessages.id, m.id), eq(scheduledMessages.status, "pending")));
+        m.execution = true;
+      }
       // checkpoint 追问经待发送路径投递(定时发送、第一句还在回答时自动排队的第二句)
       // 时,与直接回复同判据旁路(task-reply.ts / orchestrator 的 checkpointFollowUp):
       // paused+resumePrompt 任务上的非执行型消息,投递是续聊不是执行 —— 占位会把
@@ -496,7 +502,7 @@ export function flushPendingForTask(taskId: string): void {
 // 调用方不要再开别的回合;false = 没有可交接的消息,照常走默认输入。
 export async function handDuePendingMessageToRun(
   taskId: string,
-  opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null; goalStartFrom?: TaskStatus } = {},
 ): Promise<boolean> {
   if (dbClient.closed) return false;
   // 已有投递在途:它自己会开回合,这里再开默认「继续」就是同一任务两路起跑。
@@ -550,6 +556,7 @@ export async function handDuePendingMessageToRun(
       // 是用户显式动作,不加闸,与隔壁 RESUME/fresh 路径保持一致。
       freezeGuard: opts.freezeGuard ?? !opts.turnHeld,
       turnHeld: opts.turnHeld,
+      goalStartFrom: opts.goalStartFrom,
       onDelivered: async () => {
         delivered = true;
         const sentAt = Date.now();

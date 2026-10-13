@@ -148,10 +148,10 @@ api.post("/tasks/:id/run", async (c) => {
   }
   // 起跑占位 + 启动:认领队列执行占位后才真正拉起(见 seatThenStart 顶注)。
   const acting = ownerIdOf(actorOf(c));
-  const started = await seatThenStart(taskId, () =>
+  const started = await seatThenStart(taskId, (seat) =>
     r.mode === "duet"
       ? runDuet(taskId, { turnHeld: true, actingUserId: acting })
-      : resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: acting }));
+      : resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: acting, goalStartFrom: seat?.prevStatus as TaskStatus | undefined }));
   if (!started.ok) {
     releaseTurn(taskId);
     return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
@@ -464,10 +464,10 @@ api.post("/tasks/:id/retry", async (c) => {
   const acting = ownerIdOf(actorOf(c));
   // 起跑占位 + 启动,同 /run:失败成员的重试也是一次执行,同队有人在跑/已占位时不得
   // 再起第二个 —— 此前这里连队列检查都没有,是与第 7 轮审查同类的跨入口窗口。
-  const started = await seatThenStart(taskId, () =>
+  const started = await seatThenStart(taskId, (seat) =>
     r.mode === "duet"
       ? resumeDuet(taskId, { turnHeld: true, actingUserId: acting })
-      : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting }));
+      : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting, goalStartFrom: seat?.prevStatus as TaskStatus | undefined }));
   if (!started.ok) {
     releaseTurn(taskId);
     return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
