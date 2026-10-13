@@ -405,6 +405,10 @@ try {
   assert.equal(await planNotice.count(), 0);
   await page.screenshot({ path: join(screenshots, "queue-execution-not-plan-done.png"), fullPage: true });
 
+  const reopenGoalExecution = async (taskId) => {
+    const response = await fetch(`${base}/api/tasks/${taskId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "backlog" }) });
+    assert.equal(response.status, 200, "goal pause coverage starts a nonterminal execution, not a terminal follow-up");
+  };
   await page.goto(`${base}/?project=cli-ui&task=scoped-goal-task`);
   const scopedReply = page.getByRole("textbox", { name: "回复任务" });
   const sendScoped = async (text) => {
@@ -425,6 +429,7 @@ try {
   const otherProfileSessions = await (await fetch(`${base}/api/tasks/scoped-goal-task/sessions`)).json();
   assert.ok(otherProfileSessions.some((session) => session.executorId === "codex-ui-other"));
   await page.getByText("测试执行器：正常实施", { exact: true }).waitFor();
+  await reopenGoalExecution("scoped-goal-task");
   assert.equal((await sendScoped("/goal resume")).status, "paused");
   await page.getByText("目标：让 test/auth 全过；预算 150；已用 150", { exact: true }).waitFor();
   await page.reload();
@@ -476,6 +481,7 @@ try {
     assert.equal(runResponse.status(), 202);
     await idleTask(taskId, beforeRun);
     await page.getByText("测试执行器：正常实施", { exact: true }).last().waitFor();
+    await reopenGoalExecution(taskId);
     const liveReply = page.getByRole("textbox", { name: "回复任务" });
     const sendLive = async (text, expectedStatus) => {
       await liveReply.fill(`${text} `);

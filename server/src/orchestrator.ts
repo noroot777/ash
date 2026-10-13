@@ -289,11 +289,13 @@ export async function continueTask(
     const execution = !!opts.system || !!opts.executionTurn;
     const checkpointFollowUp = !execution && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
-    const followUpFrom = goalExecution ? null : sideTurn
-      ? (task.status === "running" || task.status === "queued" ? null : task.status)
-      : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
-        ? task.status
-        : null;
+    const followUpFrom = goalExecution && !["done", "failed", "canceled"].includes(task.status)
+      ? null
+      : sideTurn
+        ? (task.status === "running" || task.status === "queued" ? null : task.status)
+        : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
+          ? task.status
+          : null;
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
     // nativeTurn 落库而不是只留在内存里:结算钩子跟这里可能不在同一个进程(重启后由
     // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。

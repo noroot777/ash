@@ -36,7 +36,11 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     return null;
   }
   if (!LIVE_COMMANDS.has(command.name)) return null;
-  if (isGoalExecution(command)) throw new Error("目标执行中不能替换或恢复目标，请先 /goal pause");
+  if (isGoalExecution(command)) {
+    if (!task.goalTurn) return null;
+    const objective = nativeCommandRun(task.id)?.goal?.()?.objective ?? readCliState(task.cliState, task.agentType ?? agentType).goal?.objective;
+    throw new Error(`当前目标${objective ? `「${objective}」` : ""}正在执行，不能替换或恢复，请先 /goal pause，等待回合结束后再设置或恢复目标。`);
+  }
   const current = nativeCommandRun(task.id);
   if (!current) throw new Error("当前回合正在启动或收尾，请稍后再发送原生命令");
   const [session] = await db.select().from(sessions).where(and(eq(sessions.taskId, task.id), isNull(sessions.endedAt), eq(sessions.role, "single"))).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt));
