@@ -1,4 +1,7 @@
+import { eq } from "drizzle-orm";
 import { normalizeBrowserCdpDomains } from "@ash/shared/project";
+import { db } from "./db/index.js";
+import { projects, tasks } from "./db/schema.js";
 
 // 自动验证的浏览器入口必须先保护用户正在使用的 Chrome，再考虑工具便利性。
 // 完整正文给首轮 prompt，短版给被打断后的续跑提醒；两份放在一起避免降级顺序漂移。
@@ -36,6 +39,23 @@ export function browserGrantOf(
 ): BrowserCdpGrant {
   const domains = normalizeBrowserCdpDomains(project?.browserCdpDomains);
   return domains.length ? { domains } : null;
+}
+
+/**
+ * 按项目现读一次授权。**投递消息时用这个,不要用回合启动时捕获的快照** —— 用户在任务
+ * 跑着的时候收回授权,后续每一条插话都必须立刻按新授权走;拿旧快照等于撤销对活动任务
+ * 无效(第 2 轮审查 P1)。当前回合已经发出去的那部分收不回来,这是 prompt 注入的固有限制。
+ */
+export async function browserGrantForProject(projectId: string | null | undefined): Promise<BrowserCdpGrant> {
+  if (!projectId) return null;
+  const row = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
+  return browserGrantOf(row);
+}
+
+/** 同上,但手里只有 taskId(团队常驻投递、duet 各轮)。查不到任务一律按未授权。 */
+export async function browserGrantForTask(taskId: string): Promise<BrowserCdpGrant> {
+  const task = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  return browserGrantForProject(task?.projectId);
 }
 
 const UNGRANTED_CLAUSE =

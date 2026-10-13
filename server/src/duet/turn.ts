@@ -28,7 +28,7 @@ import {
 } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
-import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
+import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
@@ -175,7 +175,7 @@ export async function runTurn(args: {
   if (isCanceling(taskId)) throw new CanceledRun();
   const turnStart = now();
   const handle = executor.run({
-    prompt: withGlobalBrowserPolicy(prompt, resumeCliId ? "reminder" : "full"),
+    prompt: withGlobalBrowserPolicy(prompt, resumeCliId ? "reminder" : "full", await browserGrantForTask(taskId)),
     cwd,
     sessionId: resumeCliId || undefined,
     // 个人 CLI 配置目录 + git 署名(§八)。

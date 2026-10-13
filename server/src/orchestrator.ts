@@ -35,7 +35,7 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { preflightCliGoalResume, prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
-import { browserGrantOf, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { browserGrantForProject, browserGrantOf, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
 import { isDiagnosticSession } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
@@ -647,10 +647,11 @@ export async function continueTask(
       taskId, sessId, agentType: agent, ex, cwd,
       handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole,
       nativeSteer: {
-        prepare: (text) => withGlobalBrowserPolicy(
+        // 同上:投递这一刻现读,撤销才对活动任务即时生效。
+        prepare: async (text) => withGlobalBrowserPolicy(
           withSkillInvocation({ agentType: agent, cwd, text, userId: runOwner }),
           "reminder",
-          browserGrant,
+          await browserGrantForProject(task.projectId),
         ),
         record: (text, at) => recordUserConversationTurn({
           taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text, at,

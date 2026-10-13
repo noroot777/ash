@@ -29,7 +29,7 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalResume, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
-import { browserGrantOf, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { browserGrantForProject, browserGrantOf, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -250,10 +250,11 @@ export async function runTask(
       taskId, sessId, agentType, ex, cwd: ws.path,
       handle, out, turnStart, cliSessionId, autoTitle,
       nativeSteer: {
-        prepare: (text) => withGlobalBrowserPolicy(
+        // 现读而不是用上面那个快照:任务跑着的时候用户可能已经收回授权了。
+        prepare: async (text) => withGlobalBrowserPolicy(
           withSkillInvocation({ agentType, cwd: ws.path, text, userId: runOwner }),
           "reminder",
-          browserGrant,
+          await browserGrantForProject(task.projectId),
         ),
         record: (text, at) => recordUserConversationTurn({
           taskId, sessionId: sessId, role: "single", agentType, out, text, at,

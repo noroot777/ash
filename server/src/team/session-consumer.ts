@@ -20,7 +20,7 @@ import { noteAgentEventUpload } from "../uploads.js";
 import type { SessionTraceEvent } from "../transcript.js";
 import { isSessionScopeNotice } from "../session-notice.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
-import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
+import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { consumeInbound } from "./inbound-queue.js";
 import {
   idleRotation,
@@ -396,9 +396,11 @@ function retireLead(lead: Lead): void {
  * 时直接返回,claude 在 stdin 已关时写不进去。抛错同样按「没收下」算 —— 一次注入失败不该
  * 掀掉整台调度台(理由同 persistOrReport),但更不能被当成送到了。
  */
-function sendToLead(lead: Lead, text: string): boolean {
+async function sendToLead(lead: Lead, text: string): Promise<boolean> {
   try {
-    return lead.handle.send(withGlobalBrowserPolicy(text, "reminder"));
+    // 授权现读:开台时带的是「已授权 x.com」,后续消息若还注入默认拒绝,调度台收到的
+    // 就是一对自相矛盾的指令(第 2 轮审查 P3)。同时这也让撤销对常驻调度台即时生效。
+    return lead.handle.send(withGlobalBrowserPolicy(text, "reminder", await browserGrantForTask(lead.taskId)));
   } catch (error) {
     console.error(`[ash] team send(${lead.taskId}) failed:`, error);
     return false;
@@ -491,7 +493,7 @@ async function endTurn(lead: Lead): Promise<void> {
     // (进程正在收尾)这批汇报就再也没人送得出去了 —— 下一台健康调度台永远等不到
     // (2026-08-26 第 11 轮审查)。落盘同样要等收下之后:没送成还记一条「已投递」的
     // system turn,下一台真送成时同一份汇报在 .md 里就是两条。
-    if (sendToLead(lead, merged)) {
+    if (await sendToLead(lead, merged)) {
       lead.pending = [];
       // 销账失败宁可重送不可丢:行还在就是下一台会再送一遍(.md 里会多一条),而删早了
       // 是永久消失。所以这里只上报,不回滚也不掀掉这台调度台。

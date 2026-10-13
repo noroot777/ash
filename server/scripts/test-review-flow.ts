@@ -328,8 +328,9 @@ for (const [source, file, expected] of globalPromptCallsites) {
 const teamSessionSource = readSource(new URL("../src/team/session-consumer.ts", import.meta.url));
 assert.match(
   teamSessionSource,
-  /function sendToLead\([\s\S]{0,300}?withGlobalBrowserPolicy\(text, "reminder"\)/,
-  "sendToLead 必须在注入前贴上全局浏览器策略",
+  /function sendToLead\([\s\S]{0,700}?withGlobalBrowserPolicy\(text, "reminder", await browserGrantForTask\(/,
+  "sendToLead 必须在注入前贴上全局浏览器策略,且带上**现读**的项目授权 —— " +
+  "开台说了「已授权」、后续投递又注入默认拒绝的话,调度台收到的是一对自相矛盾的指令",
 );
 assert.equal(
   [...teamSessionSource.matchAll(/\.handle\.send\(/g)].length,

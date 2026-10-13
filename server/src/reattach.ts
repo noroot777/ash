@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import type { AgentType, SessionRole } from "@ash/shared";
 import { db } from "./db/index.js";
-import { agents, tasks, sessions, projects } from "./db/schema.js";
+import { agents, tasks, sessions } from "./db/schema.js";
 import { claimTurn, releaseTurn, trackRun, untrackRun } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
@@ -19,7 +19,7 @@ import { IS_WINDOWS } from "./platform.js";
 import { findMcpChannelHolders } from "./mcp-holders.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { withSkillInvocation } from "./skills.js";
-import { browserGrantOf, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
@@ -125,9 +125,6 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
     if (!child) continue; // 它已经不在了 → 交给 reconcileInterrupted
 
     try {
-      // 项目级浏览器授权:接回的这一轮跟 fresh run 吃同一份配置,否则重启一次授权就没了。
-      const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-      const browserGrant = browserGrantOf(project);
       const profile = (await db.select({ id: agents.id }).from(agents).where(eq(agents.name, sess.executor))).at(0);
       const ex = await resolveExecutorFor({
         executorId: profile?.id ?? task.executorId,
@@ -164,10 +161,11 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         cliSessionId: sess.cliSessionId ?? "",
         autoTitle: false, role: sess.role as SessionRole, // 标题在被打断之前那一段就已经解析过了
         nativeSteer: {
-          prepare: (text) => withGlobalBrowserPolicy(
+          // 接回的会话同样现读:重启不该把一份过期授权一直带下去。
+          prepare: async (text) => withGlobalBrowserPolicy(
             withSkillInvocation({ agentType: sess.agentType as AgentType, cwd: sess.cwd ?? "", text, userId: task.ownerUserId }),
             "reminder",
-            browserGrant,
+            await browserGrantForProject(task.projectId),
           ),
           record: (text, at) => recordUserConversationTurn({
             taskId: task.id, sessionId: sess.id, role: sess.role as SessionRole,

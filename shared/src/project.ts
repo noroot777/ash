@@ -162,25 +162,44 @@ export const MAX_BROWSER_CDP_DOMAINS = 20;
  * 而一条脏数据混进去,匹配时就可能把**别的**站点也当成已授权。
  */
 export function normalizeBrowserCdpDomains(input: unknown): string[] {
-  const raw = Array.isArray(input) ? input : typeof input === "string" ? input.split(/[\s,，、]+/) : [];
+  // 一行文本(用户在输入框里敲的)按常见分隔符拆开;**数组项不拆** —— 数组是调用方给的
+  // 结构化输入,一项就是一条,含空格就是形状不对,拆开反而会把 "a b.com" 悄悄变成授权
+  // b.com。严出优先:少放行一个站点无所谓,多放行一个就是把登录态交给了别人。
+  const tokens = typeof input === "string" ? input.split(/[\s,，、]+/)
+    : Array.isArray(input) ? input.filter((value): value is string => typeof value === "string")
+    : [];
   const out: string[] = [];
-  for (const item of raw) {
-    if (typeof item !== "string") continue;
-    let host = item.trim().toLowerCase();
-    if (!host) continue;
-    host = host.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");  // 协议
-    host = host.replace(/^[^/@]*@/, "");                  // 用户名密码
-    host = host.split("/")[0].split("?")[0].split("#")[0]; // 路径/查询/锚点
-    host = host.split(":")[0];                             // 端口
-    host = host.replace(/\.+$/, "");                       // 根域点
-    // 只认得出「至少两段、每段合法」的主机名。单段(localhost)不收:登录态场景没有意义,
-    // 而它恰好是最容易误放行的形状。
-    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) continue;
-    if (host.length > 253) continue;
-    if (!out.includes(host)) out.push(host);
+  for (const token of tokens) {
+    const host = browserCdpHostOf(token);
+    if (!host || out.includes(host)) continue;
+    out.push(host);
     if (out.length >= MAX_BROWSER_CDP_DOMAINS) break;
   }
   return out;
+}
+
+/**
+ * 一条输入里的主机名,认不出就是 null。
+ *
+ * **必须走标准 URL 解析**,不要自己按顺序剥 `@` / `?` / `#`:剥错一步就会授权到别的站点。
+ * 曾经的写法是「先删 @ 及其左边,再删查询串」,于是
+ * `https://x.com?contact=user@weibo.com` 被解析成 weibo.com —— 用户以为授权了 x.com,
+ * 实际把自己的微博登录态交了出去。这类错误没有声音,必须靠解析器而不是正则来挡。
+ */
+export function browserCdpHostOf(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const text = input.trim();
+  if (!text) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`;
+  let host: string;
+  try { host = new URL(withScheme).hostname; } catch { return null; }
+  host = host.toLowerCase().replace(/\.+$/, "");
+  // 只认得出「至少两段、每段合法」的主机名。单段(localhost)、IP、IPv6 方括号一律不收:
+  // 登录态场景里它们没有意义,而它们恰好是最容易误放行的形状。
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) return null;
+  if (/^\d+(\.\d+)+$/.test(host)) return null;
+  if (host.length > 253) return null;
+  return host;
 }
 
 /** 一个主机名是否落在白名单里。授权 `x.com` 连带授权它的子域,但不连带 `notx.com`。 */

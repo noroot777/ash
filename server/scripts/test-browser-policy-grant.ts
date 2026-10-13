@@ -37,7 +37,7 @@ const { projects } = await import("../src/db/schema.js");
 const {
   browserGrantOf, withGlobalBrowserPolicy, browserVerificationPolicy, BROWSER_VERIFICATION_POLICY,
 } = await import("../src/browser-verification-policy.js");
-const { normalizeBrowserCdpDomains, browserCdpDomainAllowed } = await import("@ash/shared/project");
+const { normalizeBrowserCdpDomains, browserCdpHostOf, browserCdpDomainAllowed } = await import("@ash/shared/project");
 
 // ── 1. 归一化:宽进严出 ──────────────────────────────────────────────────────
 assert.deepEqual(normalizeBrowserCdpDomains(["https://X.com/home?a=1", " api.x.com:8443 ", "x.com"]),
@@ -46,6 +46,22 @@ assert.deepEqual(normalizeBrowserCdpDomains("x.com, twitter.com、weibo.com"),
   ["x.com", "twitter.com", "weibo.com"], "一行文本按常见分隔符拆开(含中文顿号/逗号)");
 assert.deepEqual(normalizeBrowserCdpDomains(["localhost", "", "...", "a b.com", 42, null]), [],
   "认不出形状的整条丢掉 —— 一条脏数据混进去就可能把别的站点带成已授权");
+assert.deepEqual(normalizeBrowserCdpDomains(["10.0.0.1", "192.168.1.1:8080"]), [],
+  "纯 IP 不收:登录态场景没有意义,却是最容易误放行的形状");
+// 自己按顺序剥 @ / ? / # 会把查询串里的邮箱当成 URL 的用户信息,于是「我授权 x.com」
+// 变成「我授权 weibo.com」。这类错误没有声音,必须由标准 URL 解析来挡(第 2 轮审查 P2)。
+for (const tricky of [
+  "https://x.com?contact=user@weibo.com",
+  "https://x.com#@weibo.com",
+  "https://x.com/?contact=user@weibo.com",
+  "https://x.com:443/path?a=b@evil.net#frag",
+  "X.COM?q=@evil.net",
+]) {
+  assert.deepEqual(normalizeBrowserCdpDomains([tricky]), ["x.com"],
+    `URL 的真实 host 必须是 x.com,不能被查询串/锚点里的 @ 带偏：${tricky}`);
+}
+assert.equal(browserCdpHostOf("https://x.com?contact=user@weibo.com"), "x.com", "单条解析同样走 URL 语义");
+assert.equal(browserCdpHostOf("localhost"), null, "单段主机名不收");
 assert.equal(normalizeBrowserCdpDomains(Array.from({ length: 50 }, (_, i) => `h${i}.com`)).length, 20,
   "上限 20,防止一行文本粘成一份通行证");
 assert.deepEqual(normalizeBrowserCdpDomains(undefined), [], "空输入 = 不授权");
@@ -105,13 +121,28 @@ assert.deepEqual((await patch({ browserCdpDomains: [] })).browserCdpDomains, [],
 assert.equal(browserGrantOf((await db.select().from(projects).where(eq(projects.id, "legacy"))).at(0)), null,
   "撤销之后必须回到未授权 —— 否则用户只能靠删项目来收权");
 
-// ── 6. 注入点真的接了线 ────────────────────────────────────────────────────
+// ── 6. 撤销要对**正在跑的任务**即时生效 ─────────────────────────────────────
+// 回合启动时捕获一份 grant 快照、后续插话继续用它,等于「撤销对活动任务无效」:用户清空
+// 名单、点了收回,再对同一个任务说「继续下一页」,它照样拿着旧授权(第 2 轮审查 P1)。
+const { browserGrantForProject, browserGrantForTask } = await import("../src/browser-verification-policy.js");
+await patch({ browserCdpDomains: ["x.com"] });
+assert.deepEqual((await browserGrantForProject("legacy"))?.domains, ["x.com"], "现读拿得到刚存的授权");
+await patch({ browserCdpDomains: [] });
+assert.equal(await browserGrantForProject("legacy"), null, "撤销后**现读**必须立刻变成未授权");
+assert.equal(await browserGrantForProject(null), null, "没有项目 = 未授权");
+assert.equal(await browserGrantForTask("不存在的任务"), null, "查不到任务一律按未授权");
+
+// ── 7. 注入点真的接了线 ────────────────────────────────────────────────────
 // 上一轮就是栽在这:纯函数做对了,prompt 侧一处没接,整条功能等于不存在。
 for (const [label, rel, expected] of [
   ["普通任务 fresh run + 插话", "../src/task-run.ts", 2],
   ["续聊/召唤/计划回合", "../src/orchestrator.ts", 3],
   ["团队调度台开台", "../src/team/session.ts", 1],
   ["重启接管续跑", "../src/reattach.ts", 1],
+  // 下面两条是第 2 轮审查补上的:duet 每轮都拿不到授权,团队常驻投递则在开台说了
+  // 「已授权」之后又注入默认拒绝 —— 一对自相矛盾的指令比一致地不授权更糟。
+  ["duet 每一轮发言", "../src/duet/turn.ts", 1],
+  ["团队常驻消息投递", "../src/team/session-consumer.ts", 1],
 ] as const) {
   const src = readFileSync(new URL(rel, import.meta.url), "utf8");
   const calls = [...src.matchAll(/withGlobalBrowserPolicy\(/g)];
@@ -133,6 +164,21 @@ function callArgs(src: string, at: number): string {
     else if (src[i] === ")" && --depth === 0) return src.slice(from, i + 1);
   }
   return src.slice(from);
+}
+
+// 每一个 nativeSteer.prepare(= 用户插话的投递口)都必须**现读**。写成捕获上面那份
+// browserGrant 快照的样子,单测照样全绿,但撤销对活动任务就是无效的。
+for (const [label, rel] of [
+  ["普通任务插话", "../src/task-run.ts"],
+  ["续聊插话", "../src/orchestrator.ts"],
+  ["重启接管插话", "../src/reattach.ts"],
+] as const) {
+  const src = readFileSync(new URL(rel, import.meta.url), "utf8");
+  const at = src.indexOf("prepare:");
+  assert.ok(at > 0, `${label}: 没找到 nativeSteer.prepare`);
+  const body = callArgs(src, src.indexOf("withGlobalBrowserPolicy", at));
+  assert.match(body, /await browserGrantForProject\(/,
+    `${label}: prepare 必须在投递时现读授权,不能用回合启动时捕获的快照`);
 }
 
 rmSync(root, { recursive: true, force: true });

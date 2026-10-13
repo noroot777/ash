@@ -47,6 +47,17 @@
   border-color: var(--accent);
 }
 
+/* 「将保存为」「当前已授权」里是一串域名,合法域名可以长到 253 字符且不含空格,
+   不给断行规则就会整条撑出卡片、被 .settings-card 的 overflow:hidden 裁掉 ——
+   用户看不到自己到底授权了什么(第 2 轮审查 P4)。 */
+.browser-access__field small {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .browser-access__foot {
   display: flex;
   align-items: center;

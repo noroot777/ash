@@ -270,7 +270,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
     // **先确认进程收下了,再往时间线上落**。落早了这一句会以「用户已经说过」的样子留在
     // .md 里,可它接着还要由下一台补送 —— 同一句话在会话里出现两遍,而中间那一遍模型
     // 根本没收到。被拒时只留失败说明:原文还在待发送托盘里,用户看得见也等得到。
-    if (!sendToLead(lead, promptedText)) {
+    if (!await sendToLead(lead, promptedText)) {
       reportLeadFailure(lead, "这条消息没能送进调度台进程 —— 它正在收尾。这一句留在待发送托盘里,等下一台调度台接手时自动补送。", at);
       return false;
     }
@@ -289,7 +289,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
   // 跟 endTurn 同一条规矩:**先确认进程收下了,再算它送出去了**。还挂在 leads 里不等于
   // stdin 还开着 —— 空闲回收 close() 到 closeLead 之间就是这么一个窗口。没收下就排进持久
   // 队列等下一台送(这时候别落盘正文,否则下一台真送成时同一条汇报会在 .md 里出现两遍)。
-  if (!sendToLead(lead, text)) {
+  if (!await sendToLead(lead, text)) {
     lead.pending.push(await queueInbound(lead, text, at));
     reportLeadFailure(lead, "执行者消息没能送进调度台进程(它正在收尾),先排进待送队列交给下一台接手的调度台。", at);
     return true;

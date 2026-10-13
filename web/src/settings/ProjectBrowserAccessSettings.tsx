@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ProjectView } from "@ash/shared";
-import { MAX_BROWSER_CDP_DOMAINS, normalizeBrowserCdpDomains } from "@ash/shared/project";
+import { MAX_BROWSER_CDP_DOMAINS, browserCdpHostOf, normalizeBrowserCdpDomains } from "@ash/shared/project";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import "./project-browser-access.css";
@@ -30,7 +30,11 @@ export function ProjectBrowserAccessSettings({ project, onUpdated, notify, canMa
   // (粘了整条 URL、写了 localhost)必须当场看得见,不能等保存完才发现少了一条。
   const parsed = normalizeBrowserCdpDomains(text);
   const dirty = parsed.join("\n") !== saved.join("\n");
-  const dropped = text.split(/[\s,，、]+/).filter(Boolean).length - parsed.length;
+  // 「认不出形状」和「重复/超上限」要分开数:同一个域名写两遍也会让 parsed 变短,
+  // 一股脑算成「认不出」等于告诉用户他打错了字,而他并没有。
+  const tokens = text.split(/[\s,，、]+/).filter(Boolean);
+  const invalid = tokens.filter((token) => !browserCdpHostOf(token)).length;
+  const deduped = tokens.length - invalid - parsed.length;
 
   const save = async () => {
     setBusy(true);
@@ -38,8 +42,12 @@ export function ProjectBrowserAccessSettings({ project, onUpdated, notify, canMa
       const next = await api.updateProject(project.id, { browserCdpDomains: parsed });
       onUpdated(next);
       setText((next.browserCdpDomains ?? []).join("\n"));
-      notify(next.browserCdpDomains?.length
-        ? `已授权：本项目的任务可以用你登录的 Chrome 只读 ${next.browserCdpDomains.join("、")}`
+      // toast 是一条窄浮层,不能把整份名单原样塞进去:合法域名可长到 253 字符,
+      // 一条就能把它撑出屏幕。太长就只报个数 —— 完整名单卡片里就在眼前。
+      const list = next.browserCdpDomains ?? [];
+      const shown = list.join("、");
+      notify(list.length
+        ? `已授权：本项目的任务可以用你登录的 Chrome 只读${shown.length > 48 ? ` ${list.length} 个站点（名单见设置卡片）` : ` ${shown}`}`
         : "已收回浏览器登录态授权");
     } catch (error) {
       notify(error instanceof Error ? error.message : "浏览器授权保存失败");
@@ -72,7 +80,8 @@ export function ProjectBrowserAccessSettings({ project, onUpdated, notify, canMa
         onChange={(event) => setText(event.target.value)}
       />
       {dirty && parsed.length > 0 && <small>将保存为：{parsed.join("、")}</small>}
-      {dropped > 0 && <small>有 {dropped} 条认不出域名形状，保存时会丢掉（单段主机名如 localhost 不收）。</small>}
+      {invalid > 0 && <small>有 {invalid} 条认不出域名形状，保存时会丢掉（单段主机名如 localhost、纯 IP 不收）。</small>}
+      {deduped > 0 && <small>有 {deduped} 条重复或超出 {MAX_BROWSER_CDP_DOMAINS} 条上限，保存时会合并。</small>}
       {!dirty && saved.length > 0 && <small className="browser-access__active">当前已授权：{saved.join("、")}</small>}
     </label>
     <div className="browser-access__foot">

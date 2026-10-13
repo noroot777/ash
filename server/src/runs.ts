@@ -24,7 +24,7 @@ const stopping = new Map<string, StopSettle>();
 type NativeSteerTarget = {
   handle: Killable & { steer(text: string, beforeSend?: () => void | Promise<void>): Promise<void> };
   agentType: AgentType;
-  prepare(text: string): string;
+  prepare(text: string): string | Promise<string>;
   beforeDeliver?(at: string): void | Promise<void>;
   record(text: string, at: string): void;
 };
@@ -74,7 +74,7 @@ export function bindNativeSteer(
   handle: Killable,
   input: {
     agentType: AgentType;
-    prepare?(text: string): string;
+    prepare?(text: string): string | Promise<string>;
     beforeDeliver?(at: string): void | Promise<void>;
     record(text: string, at: string): void;
   },
@@ -126,7 +126,9 @@ export function reserveNativeSteerTask(taskId: string): NativeSteerReservation {
           throw new Error("当前活动回合已经结束");
         }
         await target.beforeDeliver?.(at);
-        await target.handle.steer(target.prepare(opts?.promptText ?? text), opts?.beforeSend);
+        // prepare 要 await:浏览器授权是**投递这一刻**现读的,不能用回合启动时的快照 ——
+        // 用户在任务跑着的时候收回授权,后续每一条插话都必须立刻按新授权走。
+        await target.handle.steer(await target.prepare(opts?.promptText ?? text), opts?.beforeSend);
         // provider 已确认收到以后，消息就已经是真实投递；实时广播失败不能把它退回队列
         // 再投一次，否则同一句会进入模型两遍。
         try { target.record(text, at); } catch (error) {

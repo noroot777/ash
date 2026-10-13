@@ -43,7 +43,7 @@ export type {
 
 // ── Global app settings ────────────────────────────────────────────────────
 export type { AppSettings, ComposerSendKey } from "./app-settings.ts";
-export { MAX_BROWSER_CDP_DOMAINS, normalizeBrowserCdpDomains, browserCdpDomainAllowed } from "./project.ts";
+export { MAX_BROWSER_CDP_DOMAINS, normalizeBrowserCdpDomains, browserCdpHostOf, browserCdpDomainAllowed } from "./project.ts";
 export { COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "./app-settings.ts";
 
 // ── 多人模式 ────────────────────────────────────────────────────────────────
