@@ -175,3 +175,33 @@ export function groupTasksByProject<T extends TaskListItem>(tasks: T[]): TaskPro
   }
   return [...groups].map(([projectId, rows]) => ({ projectId, tasks: rows }));
 }
+
+export function groupTaskModeProjects<T extends TaskListItem>(tasks: T[], allTasks: T[], pinned: T[]) {
+  const groups = groupTasksByProject(tasks);
+  const defaultIds = new Set([...tasks, ...pinned].map((task) => task.id));
+  const extras = new Map(groupTasksByProject(
+    orderedTopLevelTasks(allTasks, { includeElsewhere: true }).filter((task) => !defaultIds.has(task.id)),
+  ).map((group) => [group.projectId, group.tasks]));
+  const projectIds = new Set(groups.map((group) => group.projectId));
+  for (const task of pinned) {
+    if (projectIds.has(task.projectId) || !extras.has(task.projectId)) continue;
+    groups.push({ projectId: task.projectId, tasks: [] });
+    projectIds.add(task.projectId);
+  }
+  return groups.map((group) => ({ ...group, extraTasks: extras.get(group.projectId) ?? [] }));
+}
+
+export function previewProjectTasks<T extends TaskListItem>(
+  tasks: T[],
+  extraTasks: T[],
+  nowMs = Date.now(),
+  keepVisible?: (task: TaskListItem) => boolean,
+): TaskPreview<T> {
+  const preview = previewTasksByAge(tasks, nowMs, keepVisible);
+  return {
+    visible: preview.visible,
+    hidden: extraTasks.length
+      ? orderedTopLevelTasks([...preview.hidden, ...extraTasks], { includeElsewhere: true })
+      : preview.hidden,
+  };
+}

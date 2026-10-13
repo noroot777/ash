@@ -23,7 +23,7 @@ import {
   type SpreadFilter,
   type WorkerIndex,
 } from "./useSidebarSpread.ts";
-import { buildTaskTree, groupTasksByProject, keepVisibleInPreview, orderedTopLevelTasks, previewTasksByAge, revealToIndex } from "./taskTreeModel.ts";
+import { buildTaskTree, groupTaskModeProjects, keepVisibleInPreview, orderedTopLevelTasks, previewProjectTasks, revealToIndex } from "./taskTreeModel.ts";
 import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
 import { QueueDrawer } from "../task-detail/QueueDrawer.tsx";
@@ -87,9 +87,16 @@ function ScopedTaskTree({
   outbound: OutboundBar;
 }) {
   const sections = useMemo(
-    () => buildTaskTree(tasks, { unifiedPinned: true, includeElsewhere }),
-    [includeElsewhere, tasks],
+    () => {
+      const result = buildTaskTree(tasks, { unifiedPinned: true, includeElsewhere });
+      if (projectIndex && !result.some((section) => section.key === "rest")) {
+        result.push({ key: "rest", label: "任务", count: 0, tasks: [] });
+      }
+      return result;
+    },
+    [includeElsewhere, projectIndex, tasks],
   );
+  const rowTasks = useMemo(() => projectIndex ? allTasks.filter((task) => !task.archived) : tasks, [allTasks, projectIndex, tasks]);
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
   // 年龄闸的豁免名单（星标 / 置顶 / 没盖的章 / 摔了的 / 等你指挥的），判据本体在
   // taskTreeModel 的 keepVisibleInPreview —— 跟 previewTasksByAge 挨着，测试也钉在那儿。
@@ -118,27 +125,29 @@ function ScopedTaskTree({
         kept,
         grouped,
         groups: grouped
-          ? groupTasksByProject(kept).map((group) => ({
+          ? groupTaskModeProjects(kept, allTasks, sections.find((entry) => entry.key === "pinned")?.tasks ?? []).map((group) => ({
             key: `project:${group.projectId}`,
             project: projectIndex?.get(group.projectId) ?? null,
             tasks: group.tasks,
+            extraTasks: group.extraTasks,
           }))
-          : [{ key: section.key, project: null as ProjectView | null, tasks: kept }],
+          : [{ key: section.key, project: null as ProjectView | null, tasks: kept, extraTasks: [] as TaskListItem[] }],
       };
     }),
-    [keptBySection, projectIndex],
+    [allTasks, keptBySection, projectIndex, sections],
   );
   const hiddenSelection = useMemo(() => {
     if (!selectedTaskId) return null;
+    const selectedRootId = allTasks.find((task) => task.id === selectedTaskId)?.parentId ?? selectedTaskId;
     for (const entry of layout) {
       for (const group of entry.groups) {
-        const hidden = previewTasksByAge(group.tasks, Date.now(), keepVisible).hidden;
-        const index = hidden.findIndex((task) => task.id === selectedTaskId);
+        const hidden = previewProjectTasks(group.tasks, group.extraTasks, Date.now(), keepVisible).hidden;
+        const index = hidden.findIndex((task) => task.id === selectedRootId);
         if (index >= 0) return { sectionKey: group.key, taskId: selectedTaskId, index, hiddenCount: hidden.length };
       }
     }
     return null;
-  }, [keepVisible, layout, selectedTaskId]);
+  }, [allTasks, keepVisible, layout, selectedTaskId]);
   // 分页展开的计数按行块（分节 / 项目分组）各存一份。
   const { revealedIn, more: revealMoreIn, collapse: collapseReveal, revealAtLeast } = useKeyedReveal();
   // 选中的行藏在隐藏区里时，只放到**够看见它的那一页**为止 —— 从前这里是整块全展开，
@@ -160,7 +169,7 @@ function ScopedTaskTree({
   // 一个行块的内容：年龄闸筛过的那几行 +「展开(20/N)」（一次一页，见 TaskReveal）。
   // 分节和项目分组共用它。
   const renderRows = (group: RenderGroup, showProject: boolean) => {
-    const preview = previewTasksByAge(group.tasks, Date.now(), keepVisible);
+    const preview = previewProjectTasks(group.tasks, group.extraTasks, Date.now(), keepVisible);
     const hiddenCount = preview.hidden.length;
     const revealed = Math.min(revealedIn(group.key), hiddenCount);
     // 展开是**往后接**，不是重排：新放出来的一页接在已经露着的行后面。（早先展开后整块
@@ -174,7 +183,7 @@ function ScopedTaskTree({
             <TeamRow
               key={task.id}
               task={task}
-              tasks={tasks}
+              tasks={rowTasks}
               allTasks={allTasks}
               selectedTaskId={selectedTaskId}
               onTask={onTask}
@@ -211,14 +220,14 @@ function ScopedTaskTree({
         >
           <CaretRight size={9} weight="bold" aria-hidden="true" />
           <b>{name}</b>
-          <em>{group.tasks.length}</em>
+          <em>{group.tasks.length + group.extraTasks.length}</em>
         </button>
         {!groupCollapsed && renderRows(group, false)}
       </div>
     );
   };
   const renderSection = (entry: (typeof layout)[number] | undefined) => {
-    if (!entry?.kept.length) return null;
+    if (!entry || !entry.groups.some((group) => group.tasks.length + group.extraTasks.length)) return null;
     const { section, grouped, groups } = entry;
     // 分组时这一节自己不再顶一个「任务」标题：项目那一行已经在分段了，再压一层标题
     // 就是三级帽子叠在一起，跟「弱化」正好反着来。
