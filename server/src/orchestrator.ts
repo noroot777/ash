@@ -27,7 +27,7 @@ import { peerNoticeFor } from "./peer-context.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
-import { abortIfFrozen, FrozenTurn } from "./turn-freeze.js";
+import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
 import { recoverFailedTurnStart } from "./turn-start-failure.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { freeReviewReminder } from "./free-workflow.js";
@@ -469,7 +469,7 @@ export async function continueTask(
     // 原生命令必须**独占整条 prompt**:前面垫一个字它就退化成普通模型请求,压缩不会
     // 发生;后面跟的字则会被 CLI 整条丢弃,拼上去只是自欺(见 skills.ts NATIVE_COMMANDS)。
     // 浏览器策略那段同理 —— 它也是拼在正文外面的字。
-    // 这里只拼**正文**,浏览器策略留到起跑前最后一刻再贴(见下面 abortIfFrozen 上方):
+    // 这里只拼**正文**,浏览器策略留到起跑前最后一刻再贴(见下面 takeFreeze 那一段):
     // 这一句到 executor.run 之间隔着三个 await(runEnv / prepareResume / prepareCliInvocation),
     // 在这里就把授权拼死,用户在启动期间收回授权就拦不住了 —— 撤销已落库,发出去的
     // 第一条消息却还写着「已预先授权 x.com」(第 3 轮审查 P1)。
@@ -492,17 +492,16 @@ export async function continueTask(
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
     const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null);
     if (opts.sideTurn || task.verifyRound || freeReviewTurn) cli.cliState = { ...cli.cliState, plan: false };
-    // 浏览器授权在这里**现读**:上面那份正文拼好之后又过了三个 await,期间用户可能已经
-    // 收回授权。读完紧接着就是最后一道闸,闸之后到 run 之间不再有 await,所以这是能拿到
-    // 的最新值。原生命令必须独占整条 prompt(理由见上),不贴策略。
-    const prompt = nativeCommand
-      ? promptBody
-      : withGlobalBrowserPolicy(promptBody, promptLevel, await browserGrantForProject(task.projectId));
-    // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 `trackRun` 之间不再有
-    // await，暂停请求要么在这里被消费、要么之后才到——那时已有 handle 可杀。
-    // freezeGuard 的启动路径（重试按钮、自由审查重跑）还会再查一遍库：它们的预检查离
-    // spawn 隔着好几个 await，且中途会经过一次「先释放锁、排队再起」的交接。
-    await abortIfFrozen(taskId, { checkFacts: !!opts.freezeGuard, restorable: !!followUpFrom });
+    // 顺序定死:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论 → spawn。为什么只能这
+    // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
+    const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
+    const browserGrant = await browserGrantForProject(task.projectId);
+    // ↓ 这里往下到 `trackRun` 全同步(撤回那条岔路除外,它不起进程):暂停请求要么在
+    // takeFreeze 被消费、要么之后才到 —— 那时已有 handle 可杀。
+    const freeze = takeFreeze(taskId, frozen);
+    if (freeze) await abortFrozen(taskId, freeze, { restorable: !!followUpFrom });
+    // 原生命令必须独占整条 prompt(理由见上),不贴策略。
+    const prompt = nativeCommand ? promptBody : withGlobalBrowserPolicy(promptBody, promptLevel, browserGrant);
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);
@@ -524,7 +523,7 @@ export async function continueTask(
     });
     trackRun(taskId, handle);
     // 前言已经随 prompt 交到 agent 手上，这一刻起就该划掉（放在 spawn 之后：起跑前
-    // 还有 abortIfFrozen 那道闸，清早了被冻住的那一轮就把它白白吃掉了）。
+    // 还有 takeFreeze 那道闸，清早了被冻住的那一轮就把它白白吃掉了）。
     if (handoffNotice) await clearHandoffNotice(taskId);
 
     // Reuse the agent's session row when resuming; otherwise open a fresh line,

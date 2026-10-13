@@ -22,6 +22,12 @@ import { projects, tasks } from "./db/schema.js";
 // 两档都没有时**不许自行连 CDP**:危害(以用户身份写操作、顶掉会话)和成功长得一模一样,
 // 错了没有声音,这正是必须留给人的那类决策。
 //
+// **策略只在投递点贴**(withGlobalBrowserPolicy),审查/验证正文一律不内嵌。正文是提前生成
+// 的,内嵌进去的只能是一份「默认未授权」文本,而且会把下面的去重锚点提前占掉 —— 投递时真读
+// 到了项目授权也会被原样挡回,已经授权过的站点照样停下来等人点头(第 6 链第 1 轮审查 P2)。
+// 这也是这里不再导出 `BROWSER_VERIFICATION_POLICY`/`_REMINDER` 两个 null 常量的原因:它们
+// 存在本身就是那条错路的入口。
+//
 // 改这几段前先看 `server/scripts/test-review-flow.ts` 与 `test-browser-policy-grant.ts`:
 // 三级词序、「不得接管、复用或直连用户的普通标签」「Playwright ... headless」、默认拒绝
 // 与授权态文本都有断言钉着,而去重锚点是「浏览器验证必须按以下顺序选择通道」这句原文 ——
@@ -86,22 +92,6 @@ export function browserVerificationPolicy(grant: BrowserCdpGrant = null): string
     (grant ? grantedClause(grant.domains) : UNGRANTED_CLAUSE) +
     SHARED_PROHIBITIONS + `\n\n`;
 }
-
-/** 历史名字:未授权态的完整正文。审查/验证 prompt 直接拼它。 */
-export const BROWSER_VERIFICATION_POLICY = browserVerificationPolicy(null);
-
-export function browserVerificationReminder(grant: BrowserCdpGrant = null): string {
-  return `浏览器验证固定按“扩展具名分组后台标签 → 独立无头浏览器 → 确有必要才独立有头浏览器”降级；` +
-    `不得操作用户普通 Chrome 标签（接管、复用、导航、激活、切换一律不行），Playwright 默认 headless，任何降级原因都要写进报告；` +
-    `但只有第 1 级带登录态，需要登录后才可见的内容时降级到空 profile 等于做不成——` +
-    (grant
-      ? `本项目已预先授权用 CDP 连用户 Chrome、新建后台标签只读这些站点及其子域：${grant.domains.join("、")}，名单外的仍要停下来问；`
-      : `未经用户在本任务显式授权不得自行连 CDP；`) +
-    `无论哪种情况都只许新建后台标签、只读取，禁止 attach 已有标签和一切写操作；`;
-}
-
-/** 历史名字:未授权态的短版。 */
-export const BROWSER_VERIFICATION_REMINDER = browserVerificationReminder(null);
 
 const globalPolicy = (grant: BrowserCdpGrant) =>
   `【全局浏览器操作规范】无论当前任务是在实现、调试、验证、审查或讨论，只要操作浏览器都必须遵守下文。` +

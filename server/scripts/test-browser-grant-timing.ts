@@ -330,6 +330,87 @@ runs.stopTask(TEAM_LATE);
 ClaudeExecutor.prototype.prepareResume = realPrepare;
 ClaudeExecutor.prototype.openResident = realOpen;
 
+// ── 用例 3e:冻结事实查库的工夫里收回授权,首条消息不许再带它 ─────────────────────
+// 起跑前的最后一段是「查冻结事实 → 读授权 → 同步定论 → spawn」。授权要是读在查库**之前**,
+// 那次查库的几十毫秒就是一个真窗口:撤销已经落库、PATCH 都 200 了,发出去的第一条消息却还
+// 写着「本项目已由用户预先授权 x.com」(第 6 链第 1 轮审查 P1)。
+// 注入点选冻结事实那次查询本身:把它的 then 包起来,先把真实 PATCH 撤销跑完再放行 —— 于是
+// 撤销**必定**早于读授权,不靠 sleep 赌时序。
+const { continueTask } = await import("../src/orchestrator.js");
+const { runTask } = await import("../src/task-run.js");
+const newSingleTask = async (taskId: string) => {
+  await db.insert(tasks).values({
+    id: taskId, projectId: PROJECT, groupId: null, parentId: null, title: "抓登录后的数据", body: "读取需要登录才能看到的内容",
+    mode: "single", status: "done", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "claude", executorId: null,
+    autoTitle: false, duet: null, team: null, scheduleId: null, createdAt: at, updatedAt: at,
+    useWorktree: false, worktreeBase: null, originTaskId: null,
+  });
+};
+let captured = "";
+const realRunSteerable = ClaudeExecutor.prototype.runSteerable;
+ClaudeExecutor.prototype.prepareResume = async () => {};
+ClaudeExecutor.prototype.runSteerable = function stubRun(opts: { prompt: string }) {
+  captured = opts.prompt;
+  return {
+    sessionId: "grant-window-cli", commandLine: "stub", kill() {},
+    events: (async function* () { yield { kind: "done", exitStatus: 0 }; })(),
+  } as unknown as ReturnType<NonNullable<typeof realRunSteerable>>;
+} as unknown as NonNullable<typeof realRunSteerable>;
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const plainSelect = db.select;
+let hookFired = false;
+// 只认 freezeFacts 那一次查询(它选的字段是 {archived, groupId},全库独一份)。
+const revokingSelect = function (this: unknown, fields: unknown) {
+  const builder: any = (plainSelect as any).call(this, fields);
+  if (hookFired || !fields || typeof fields !== "object" || !("archived" in fields) || !("groupId" in fields)) return builder;
+  hookFired = true;
+  const realFrom = builder.from.bind(builder);
+  builder.from = (table: unknown) => {
+    const query = realFrom(table);
+    const realWhere = query.where.bind(query);
+    query.where = (cond: unknown) => {
+      const selected = realWhere(cond);
+      const realThen = selected.then.bind(selected);
+      selected.then = (okFn: unknown, errFn: unknown) => setDomains([]).then(() => realThen(okFn, errFn));
+      return selected;
+    };
+    return query;
+  };
+  return builder;
+} as unknown as typeof db.select;
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+for (const [label, slug, domain, start] of [
+  // taskId 里不许出现那个域名 —— prompt 一定带 taskId,带上就等于自己把断言喂饱了。
+  ["续聊/召唤", "resume", "x.com", (taskId: string) => continueTask(taskId, "接着读下一页", { system: true, freezeGuard: true, throwOnSetupError: true })],
+  ["fresh run", "fresh", "weibo.com", (taskId: string) => runTask(taskId, { freezeGuard: true })],
+] as const) {
+  const taskId = `grant-window-${slug}`;
+  assert.deepEqual((await setDomains([domain])).browserCdpDomains, [domain], "前置条件:起跑前这个站点是已授权的");
+  await newSingleTask(taskId);
+  captured = "";
+  hookFired = false;
+  db.select = revokingSelect;
+  try {
+    await start(taskId);
+  } finally {
+    db.select = plainSelect;
+  }
+  assert.equal(hookFired, true, `${label}:前置条件 —— 撤销必须真的注在冻结事实那次查库上`);
+  assert.deepEqual(
+    (await db.select().from(projects).where(eq(projects.id, PROJECT))).at(0)?.browserCdpDomains, [],
+    `${label}:前置条件 —— 撤销必须在起跑之前就已经落库`,
+  );
+  assert.ok(captured.length > 0, `${label}:前置条件 —— 执行器确实收到了首条消息`);
+  assert.doesNotMatch(captured, /已由用户预先授权/, `${label}:已经收回的授权不许再出现在首条消息里`);
+  assert.ok(!captured.includes(domain), `${label}:已经收回的站点名不许再出现在首条消息里`);
+  runs.stopTask(taskId);
+}
+ClaudeExecutor.prototype.prepareResume = realPrepare;
+ClaudeExecutor.prototype.runSteerable = realRunSteerable;
+ok("启动末段撤销授权:续聊与 fresh run 两条入口的首条消息都不再带它");
+
 // ── 用例 4:顺序不变量(防止下一次又把 await 插回窗口里)────────────────────────
 // 行为用例盯的是「现在对不对」,这一条盯的是「以后还对不对」:启动点前最后一次取消检查
 // 与 executor.run 之间,一个 await 都不许有。
@@ -345,18 +426,25 @@ assert.ok(grantAt > 0 && checkAt > grantAt && runAt > checkAt,
 assert.doesNotMatch(duetSrc.slice(checkAt, runAt), /await /,
   "duet:最后一次取消检查与 executor.run 之间不许有 await —— 停止会落进那个窗口");
 
-for (const [label, rel, gate, start] of [
-  ["普通任务 fresh run", "../src/task-run.ts", "await abortIfFrozen(", "handle = run({"],
-  ["续聊/召唤", "../src/orchestrator.ts", "await abortIfFrozen(", "handle = run({"],
+for (const [label, rel] of [
+  ["普通任务 fresh run", "../src/task-run.ts"],
+  ["续聊/召唤", "../src/orchestrator.ts"],
 ] as const) {
   const text = src(rel);
-  const grant = text.indexOf("withGlobalBrowserPolicy(promptBody");
-  const gateAt = text.indexOf(gate, grant);
-  const startAt = text.indexOf(start, gateAt);
-  assert.ok(grant > 0 && gateAt > grant && startAt > gateAt,
-    `${label}:策略必须贴在起跑前那道闸之前(现读),闸再之后才是 spawn`);
-  assert.match(text.slice(grant, gateAt), /await browserGrantForProject\(/,
-    `${label}:贴策略用的必须是**现读**的授权(await browserGrantForProject),不是启动早期的快照`);
+  const factsAt = text.indexOf("await freezeFacts(");
+  const grantAt = text.indexOf("await browserGrantForProject(", factsAt);
+  const takeAt = text.indexOf("takeFreeze(", grantAt);
+  const policyAt = text.indexOf("withGlobalBrowserPolicy(promptBody", takeAt);
+  const startAt = text.indexOf("handle = run({", policyAt);
+  assert.ok(factsAt > 0 && grantAt > factsAt && takeAt > grantAt && policyAt > takeAt && startAt > policyAt,
+    `${label}:顺序必须是「查冻结事实 → 读授权 → 同步定论 → 贴策略 → spawn」`);
+  // 授权要是**最后一个** await 读的。排在冻结事实查库之前,那次查库的工夫里用户收回授权
+  // 就拦不住 —— 撤销已经落库,首条消息却还写着已授权(第 6 链第 1 轮审查 P1)。
+  assert.doesNotMatch(text.slice(grantAt + 10, startAt).replace(/await abortFrozen\(/g, ""), /await /,
+    `${label}:读授权之后到 spawn 之间只许有撤回那一个 await —— 别的 await 都会让这份授权过期`);
+  // 反过来,停止标记必须留到同步段消费:takeFreeze 之后到 spawn 之间同样不许有别的 await。
+  assert.doesNotMatch(text.slice(takeAt, startAt).replace(/await abortFrozen\(/g, ""), /await /,
+    `${label}:消费停止标记之后到 spawn 之间不许有 await —— 停止会落进那个窗口(第 3 轮审查 P2)`);
 }
 const teamSrc = src("../src/team/session.ts");
 assert.match(teamSrc, /await ex\.prepareResume[\s\S]{0,400}?await browserGrantForProject\(/,

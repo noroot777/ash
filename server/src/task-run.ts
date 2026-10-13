@@ -24,7 +24,7 @@ import { reopenAcceptedStage } from "./task-stage.js";
 import { reviewProtocolFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnStart } from "./turn-output.js";
-import { abortIfFrozen } from "./turn-freeze.js";
+import { abortFrozen, freezeFacts, takeFreeze } from "./turn-freeze.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalResume, prepareCliInvocation } from "./task-cli-state.js";
@@ -157,7 +157,7 @@ export async function runTask(
     // 同样要投:会话文件没随任务到货时,接过来的任务第一次跑走的正是这里(见
     // handoff-notice.ts;续跑那条路在 orchestrator.ts)。
     const handoffNotice = reviewTask ? "" : handoffNoticeFrom(task.handoff);
-    // 这里只拼正文,浏览器策略留到起跑前最后一刻(abortIfFrozen 上方)用现读的授权来贴 ——
+    // 这里只拼正文,浏览器策略留到起跑前最后一刻(takeFreeze 那一段)用现读的授权来贴 ——
     // 这一句到 spawn 之间还隔着两个 await,在这里拼死授权的话,用户在启动期间收回授权就
     // 拦不住了(同第 3 轮审查 P1 的续聊路径)。
     const promptBody =
@@ -167,14 +167,23 @@ export async function runTask(
       (autoTitle ? TITLE_HINT + objective : objective);
     const cli = await prepareCliInvocation({ ...task, status: "running" }, agentType, commandText, profileId, runOwner ?? null);
     const runEnv = { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
-    // 授权现读:正文拼好之后又过了两个 await。读完紧接着就是最后一道闸,闸之后到 spawn
-    // 之间不再有 await,所以这是能拿到的最新值。
-    const prompt = withGlobalBrowserPolicy(promptBody, "full", await browserGrantForProject(task.projectId));
-    // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 spawn 之间没有 await，
-    // 所以「已 claim、还没 spawn」的窗口里收到的暂停请求一定在这里被消费。无人值守的
-    // 启动(队列推进/恢复分组/上游唤醒,调用方传 freezeGuard)还要按持久事实复查 ——
-    // 暂停若发生在回合认领之前,内存标记无处可打,只有查库兜得住(第 6 轮审查)。
-    await abortIfFrozen(taskId, { checkFacts: !!opts.freezeGuard });
+    // 启动末段的顺序是**定死的**:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论
+    // → spawn。三样东西互相挤,只有这一种排法同时满足:
+    //   · 授权必须是**最后一个** await 读到的。放在查冻结事实之前的话,那次查库的工夫里
+    //     用户收回授权就拦不住 —— 撤销已经落库,发出去的第一条消息却还写着「已预先授权」
+    //     (第 6 链第 1 轮审查 P1 实测到的就是这个)。
+    //   · 内存里的停止标记必须留到**同步段**消费。消费早了,之后到的停止既杀不到(还没
+    //     trackRun)也拦不住(闸已经过了)—— 第 3 轮审查 P2 就是这么开出来的窗口。
+    //   · 那么被挤到前面的只能是查库的那半边冻结事实,它也确实是三者里最赔得起的:最常见
+    //     的「分组暂停」有内存标记兜底(pauseGroup 先写 paused 再扫 status,扫到这一轮还没
+    //     running/没 handle 时会留标记),剩下任务被删/归档只在读授权那一次 select 的时长
+    //     里漏判,后果是多跑一个回合,而授权漏判的后果是动用户的登录态。
+    const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
+    const browserGrant = await browserGrantForProject(task.projectId);
+    // ↓ 这里往下到 spawn 全同步(撤回那条岔路除外,它不起进程)。
+    const freeze = takeFreeze(taskId, frozen);
+    if (freeze) await abortFrozen(taskId, freeze);
+    const prompt = withGlobalBrowserPolicy(promptBody, "full", browserGrant);
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
@@ -188,7 +197,7 @@ export async function runTask(
       env: runEnv,
     });
     trackRun(taskId, handle);
-    // 前言已经随 prompt 交到 agent 手上就划掉（放在 spawn 之后:起跑前还有 abortIfFrozen
+    // 前言已经随 prompt 交到 agent 手上就划掉（放在 spawn 之后:起跑前还有 takeFreeze
     // 那道闸,清早了被冻住的那一轮会把它白白吃掉）。
     if (handoffNotice) await clearHandoffNotice(taskId);
 

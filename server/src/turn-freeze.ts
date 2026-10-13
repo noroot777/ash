@@ -31,16 +31,14 @@ export class FrozenTurn extends Error {
 }
 
 /**
- * @param checkFacts 是否额外查库核对冻结事实（分组暂停 / 任务被删或归档）。
- *   内存标记无条件消费（它只可能是**这一回合**的暂停请求）；查库是给「入口预检查与
- *   spawn 之间隔了很多 await」的启动路径开的（重试按钮、自由审查重跑）。普通续聊不查：
- *   在一个 queued/暂停分组的任务上发消息本来就允许，那不是被冻结的启动。
+ * 冻结判据里**要查库**的那一半：分组暂停 / 任务被删或归档。**不碰内存标记** —— 那个必须
+ * 留到同步段的 `takeFreeze`，见它的注释。
+ *
+ * @param checkFacts 是否查库。只给「入口预检查与 spawn 之间隔了很多 await」的启动路径开
+ *   （重试按钮、自由审查重跑）。普通续聊不查：在一个 queued/暂停分组的任务上发消息本来
+ *   就允许，那不是被冻结的启动。
  */
-export async function turnFreezeReason(taskId: string, checkFacts = false): Promise<TurnFreeze | null> {
-  const marked = takeStartFreeze(taskId);
-  if (marked) {
-    return { reason: marked === "paused" ? "所在分组已暂停" : "这一轮已被停止", settle: marked };
-  }
+export async function freezeFacts(taskId: string, checkFacts = false): Promise<TurnFreeze | null> {
   if (!checkFacts) return null;
   const task = (await db
     .select({ archived: tasks.archived, groupId: tasks.groupId })
@@ -59,6 +57,23 @@ export async function turnFreezeReason(taskId: string, checkFacts = false): Prom
 }
 
 /**
+ * 定论,**同步**。先消费内存标记(它只可能是这一回合的暂停/停止请求),再回落到上面查来
+ * 的事实。
+ *
+ * 拆成「异步取事实 + 同步定论」两段,是为了让启动末段还能和别的异步活儿并行而不开窗口:
+ * 典型的是浏览器授权 —— 它必须读在**最后一个 await 里**(读早了,这段查库的工夫里用户收回
+ * 授权就拦不住),而停止标记必须消费在**最后一个同步点**(消费早了,之后收到的停止就会既杀
+ * 不到也拦不住)。两条约束只有「并行取、同步定」能同时满足(第 6 链第 1 轮审查 P1)。
+ */
+export function takeFreeze(taskId: string, facts: TurnFreeze | null = null): TurnFreeze | null {
+  const marked = takeStartFreeze(taskId);
+  if (marked) {
+    return { reason: marked === "paused" ? "所在分组已暂停" : "这一轮已被停止", settle: marked };
+  }
+  return facts;
+}
+
+/**
  * 起跑前撤回这一轮：命中就写一条时间线，然后抛错交给调用方原有的 catch 收尾
  * （runTask / continueTask 的 catch 都会对账基线、结算状态、释放回合锁）。
  *
@@ -67,13 +82,26 @@ export async function turnFreezeReason(taskId: string, checkFacts = false): Prom
  *   **不能**标停止落位（标了就把一个 done 的任务写成 paused），没有原终态时必须标
  *   （不标就落成 failed，一次暂停看着像崩了）。
  */
+export async function abortFrozen(
+  taskId: string,
+  freeze: TurnFreeze,
+  opts: { restorable?: boolean } = {},
+): Promise<never> {
+  await appendTaskTimeline(taskId, `这一轮在启动前被撤回：${freeze.reason}。`).catch(() => false);
+  if (!opts.restorable) markStopped(taskId, freeze.settle);
+  throw new FrozenTurn(freeze.reason);
+}
+
+/** 取事实 + 定论(不撤回)。给只要一个「现在该不该跑」答案的调用方。 */
+export async function turnFreezeReason(taskId: string, checkFacts = false): Promise<TurnFreeze | null> {
+  return takeFreeze(taskId, await freezeFacts(taskId, checkFacts));
+}
+
+/** 取事实 → 定论 → 撤回,一条龙。启动末段要和读授权并行的那两条路自己展开写(见上)。 */
 export async function abortIfFrozen(
   taskId: string,
   opts: { checkFacts?: boolean; restorable?: boolean } = {},
 ): Promise<void> {
-  const freeze = await turnFreezeReason(taskId, opts.checkFacts);
-  if (!freeze) return;
-  await appendTaskTimeline(taskId, `这一轮在启动前被撤回：${freeze.reason}。`).catch(() => false);
-  if (!opts.restorable) markStopped(taskId, freeze.settle);
-  throw new FrozenTurn(freeze.reason);
+  const freeze = takeFreeze(taskId, await freezeFacts(taskId, opts.checkFacts));
+  if (freeze) await abortFrozen(taskId, freeze, opts);
 }

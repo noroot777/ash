@@ -8,7 +8,7 @@
 //   4. 每个注入点都**真的**把授权传进去了 —— 上一轮的教训正是「配置做了、prompt 没读」,
 //      只测纯函数的话,少接一处线照样全绿。
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -34,9 +34,7 @@ legacy.close();
 const { ensureSchema, db } = await import("../src/db/index.js");
 await ensureSchema();
 const { projects } = await import("../src/db/schema.js");
-const {
-  browserGrantOf, withGlobalBrowserPolicy, browserVerificationPolicy, BROWSER_VERIFICATION_POLICY,
-} = await import("../src/browser-verification-policy.js");
+const { browserGrantOf, withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
 const { normalizeBrowserCdpDomains, browserCdpHostOf, browserCdpDomainAllowed } = await import("@ash/shared/project");
 
 // ── 1. 归一化:宽进严出 ──────────────────────────────────────────────────────
@@ -82,8 +80,6 @@ assert.equal(browserGrantOf({ browserCdpDomains: [] }), null, "空名单归一�
 const ungranted = withGlobalBrowserPolicy("正文", "full");
 assert.match(ungranted, /没有这种授权就停下来说明/, "未授权态要求停下来问");
 assert.doesNotMatch(ungranted, /已由用户预先授权/, "未授权态不得出现授权措辞");
-assert.equal(BROWSER_VERIFICATION_POLICY, browserVerificationPolicy(null),
-  "历史常量必须等于未授权态 —— 审查/验证 prompt 直接拼它");
 
 // ── 4. 授权态:full 与 reminder 两级都要改变,且带上具体域名 ───────────────────
 const grant = browserGrantOf({ browserCdpDomains: ["x.com", "weibo.com"] });
@@ -183,7 +179,19 @@ for (const [label, rel] of [
     `${label}: prepare 必须在投递时现读授权,不能用回合启动时捕获的快照`);
 }
 
+// 策略**只许在投递点生成**。谁要是在别处自己拼一份(典型的是提前生成的审查/验证正文),
+// 拼出来的必然是「默认未授权」那一版,还会把 withGlobalBrowserPolicy 的去重锚点提前占掉:
+// 投递时真读到了项目授权也原样挡回,用户在设置里配过的站点到了审查回合又不认(第 6 链第 1
+// 轮审查 P2)。`BROWSER_VERIFICATION_POLICY`/`_REMINDER` 两个 null 常量已经删掉(编译期就
+// 拦住了),这里补的是「换个写法绕过去」的那条路。
+const serverSrc = new URL("../src/", import.meta.url);
+for (const rel of readdirSync(serverSrc, { recursive: true, encoding: "utf8" })) {
+  if (!rel.endsWith(".ts") || rel.endsWith("browser-verification-policy.ts")) continue;
+  const text = readFileSync(new URL(rel, serverSrc), "utf8");
+  assert.doesNotMatch(text, /browserVerificationPolicy\(/,
+    `${rel}: 策略正文只能由投递点的 withGlobalBrowserPolicy 生成 —— 在这里自拼一份,项目授权就被去重锚点挡在门外了`);
+}
+
 rmSync(root, { recursive: true, force: true });
 releaseTmpDb();
 console.log("browser policy grant tests passed");
-

@@ -279,17 +279,32 @@ const promptTarget = (await db.select().from(tasks)).find((row) => row.id === ta
 const reviewPrompt = await verifyProtocolFor(promptTarget, 1, root);
 assert.doesNotMatch(reviewPrompt, /grill-me|原始需求里点名/, "自动验证 prompt 不得原样夹带被审需求里的技能名");
 assert.match(reviewPrompt, /request-context\.md/, "自动验证应通过文件交付需求上下文");
+// 审查/验证的正文与提醒**都不自带**浏览器策略:正文是提前生成的,自带的只能是一份「默认
+// 未授权」文本,而且会把 withGlobalBrowserPolicy 的去重锚点提前占掉 —— 投递时真读到了项目
+// 授权也会被原样挡回,已经在项目设置里授权过的站点照样停下来等人点头(第 6 链第 1 轮审查
+// P2)。所以这里钉的是反面:正文里不许有策略,策略一律由投递点贴。
+const assertNoEmbeddedPolicy = (text: string, source: string) => {
+  assert.doesNotMatch(text, /浏览器验证必须按以下顺序选择通道|浏览器验证固定按|【全局浏览器操作/,
+    `${source} 不得自带浏览器策略 —— 自带的那一份会把投递点带项目授权的那份挡在门外`);
+};
 const assertBrowserOrder = (text: string, source: string) => {
   const grouped = text.indexOf("扩展具名分组后台标签");
   const headless = text.indexOf("独立无头浏览器");
   const headed = text.indexOf("独立有头浏览器");
   assert.ok(grouped >= 0 && grouped < headless && headless < headed, `${source} 必须保留三级浏览器降级顺序`);
-  assert.match(text, /不得操作用户普通 Chrome 标签|不得接管、复用或直连用户的普通标签/, `${source} 必须保护用户普通标签`);
+  assert.match(text, /不得接管、复用或直连用户的普通标签|接管\/复用\/导航普通标签/, `${source} 必须保护用户普通标签`);
   assert.match(text, /Playwright.*headless/i, `${source} 必须把 Playwright 默认限制为无头`);
 };
-assertBrowserOrder(reviewPrompt, "自动验证 prompt");
-assertBrowserOrder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
-assertBrowserOrder(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "历史审查续跑提醒");
+assertNoEmbeddedPolicy(reviewPrompt, "自动验证 prompt");
+assertNoEmbeddedPolicy(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
+assertNoEmbeddedPolicy(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "历史审查续跑提醒");
+// 要求本身一条不能少,只是改由投递点交付。
+assertBrowserOrder(withGlobalBrowserPolicy(reviewPrompt, "full"), "自动验证 prompt 经投递点");
+assertBrowserOrder(withGlobalBrowserPolicy(verifyReminderFor(taskId, 1), "reminder"), "自动验证续跑提醒经投递点");
+assertBrowserOrder(
+  withGlobalBrowserPolicy(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "reminder"),
+  "历史审查续跑提醒经投递点",
+);
 // 续跑提醒是被打断那条路径上**唯一**还在重贴格式要求的东西（完整 prompt 不重发）。
 // 所以凡是「丢了报告就退回改动之前的样子」的规则，都必须在缩略版里也留得住：首句点名
 // 最要命的那条、摘要最多 5 条——只写栏目名的话，续跑出来的报告又会是「有 11 条，自己翻」。
@@ -324,7 +339,20 @@ const globalResumePrompt = withGlobalBrowserPolicy("用户续聊", "reminder");
 assert.match(globalResumePrompt, /【全局浏览器操作提醒】/, "续聊与修复回合必须重贴浏览器提醒");
 assert.match(globalResumePrompt, /标签保持后台.*禁止激活 Chrome/, "续聊提醒必须保留非打扰约束");
 assert.match(globalResumePrompt, /截图、布局检查或页面点击不算理由/, "续聊提醒必须限制有头浏览器");
-assert.equal(withGlobalBrowserPolicy(reviewPrompt, "full"), reviewPrompt, "审查 prompt 已含完整策略时不得重复注入");
+assert.equal(withGlobalBrowserPolicy(globalFreshPrompt, "full"), globalFreshPrompt, "已经贴过一次的文本不得重复注入");
+// B 方案的目的就是让审查/验证也能无人值守:项目里配过的站点,到了这两种回合必须照样算数。
+// 漏掉这一组合,就是「设置页承诺了、审查回合又不认」——用户看到的是功能没做(第 6 链第 1
+// 轮审查 P2)。
+for (const [source, text, level] of [
+  ["自动验证 prompt", reviewPrompt, "full"],
+  ["自动验证续跑提醒", verifyReminderFor(taskId, 1), "reminder"],
+  ["历史审查续跑提醒", reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "reminder"],
+] as const) {
+  const granted = withGlobalBrowserPolicy(text, level, { domains: ["x.com"] });
+  assert.match(granted, /本项目已[\s\S]{0,200}x\.com/, `${source} 必须带上项目已配的授权站点`);
+  assert.doesNotMatch(granted, /用户已在本任务中明确授权|未经用户在本任务显式授权/,
+    `${source} 已有项目授权时,不得再要求「在本任务里点名」—— 那就是停下来等人,无人值守断在这儿`);
+}
 
 const globalPromptCallsites = [
   ["普通任务 fresh run", new URL("../src/task-run.ts", import.meta.url), 2],

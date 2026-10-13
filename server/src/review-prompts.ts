@@ -18,7 +18,6 @@ import { workflowPolicy } from "@ash/shared/workflow-policy";
 import { taskWorkflowDef } from "./workflows.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { reviewRequestReference } from "./review-request-context.js";
-import { BROWSER_VERIFICATION_POLICY, BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { verifyHistorySection } from "./review-history.js";
@@ -49,7 +48,8 @@ function requiredChecks(target: TaskRow, at: string | null | undefined): string 
 function verifyRules(evidenceDir: string): string {
   return `必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务、用浏览器确认行为；` +
     `其它改动也必须运行与风险相称的测试或产物。\n\n` +
-    BROWSER_VERIFICATION_POLICY +
+    // 浏览器策略由投递点统一贴(带项目授权),这里不内嵌 —— 内嵌的只能是默认未授权那一
+    // 份,还会把去重锚点提前占掉,把真实授权挡在门外(第 6 链第 1 轮审查 P2)。
     `一旦用了 playwright，验证结束前必须把它落在仓库工作区里的产物删干净（.playwright-cli/、playwright-report/、test-results/ 等），` +
     `并用 git status 确认没有留下未跟踪文件——残留会把工作区弄脏，直接导致后续验收合并被拒。\n\n` +
     `验证收尾必须清场：结束前把你为验证启动的所有服务/进程全部停掉（dev server、mock server、throwaway 实例等），` +
@@ -109,7 +109,6 @@ export function verifyReminderFor(taskId: string, round: number): string {
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
-    BROWSER_VERIFICATION_REMINDER +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
     `结束前调 report_stage(taskId="${taskId}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论，本回合不要调 complete_task。`;
@@ -149,7 +148,6 @@ export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "rev
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
-    BROWSER_VERIFICATION_REMINDER +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
     `结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +

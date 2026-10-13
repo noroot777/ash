@@ -40,6 +40,7 @@ try {
     startManualFreeReviewRepair,
   } = await import("../src/free-workflow.js");
   const { mountFreeWorkflowRoutes } = await import("../src/free-workflow-routes.js");
+  const { withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
   const { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } = await import("../src/free-workflow-lock.js");
   const {
     createExecutionCloser,
@@ -112,7 +113,13 @@ try {
   assert.doesNotMatch(skillPrompt, /grill-me|把排队需求也一起做完/, "自由审查 prompt 不得原样夹带技能名或用户追问");
   assert.match(skillPrompt, /request-context\.md/, "自由审查应改为引用需求文件");
   assert.match(skillPrompt, /用户附言[\s\S]*重点检查 Enter 快捷键/, "派审附言必须进入审查提示");
-  const assertBrowserPolicy = (text: string, source: string) => {
+  // 浏览器策略**不在正文里**:正文是提前生成的,内嵌的只能是「默认未授权」那一份,还会把
+  // 投递点的去重锚点提前占掉,让项目授权被原样挡回(第 6 链第 1 轮审查 P2)。所以这里钉
+  // 「正文不自带」+「经投递点贴出来的那份该有的一条不少、且跟着项目授权走」。
+  const assertBrowserPolicy = (raw: string, source: string, level: "full" | "reminder" = "full") => {
+    assert.doesNotMatch(raw, /浏览器验证必须按以下顺序选择通道|【全局浏览器操作/,
+      `${source} 不得自带浏览器策略 —— 自带的会把投递点那份带项目授权的挡在门外`);
+    const text = withGlobalBrowserPolicy(raw, level);
     const groupedBrowser = text.indexOf("扩展具名分组后台标签");
     const headlessBrowser = text.indexOf("独立无头浏览器");
     const headedBrowser = text.indexOf("独立有头浏览器");
@@ -120,8 +127,12 @@ try {
       groupedBrowser >= 0 && groupedBrowser < headlessBrowser && headlessBrowser < headedBrowser,
       `${source} 必须保留三级浏览器降级顺序`,
     );
-    assert.match(text, /不得操作用户普通 Chrome 标签|不得接管、复用或直连用户的普通标签/, `${source} 不得操作用户普通 Chrome 标签`);
+    assert.match(text, /不得接管、复用或直连用户的普通标签|接管\/复用\/导航普通标签/, `${source} 不得操作用户普通 Chrome 标签`);
     assert.match(text, /Playwright.*headless/i, `${source} 的 Playwright 必须默认无头`);
+    const granted = withGlobalBrowserPolicy(raw, level, { domains: ["x.com"] });
+    assert.match(granted, /本项目已[\s\S]{0,200}x\.com/, `${source} 必须带上项目已配的授权站点`);
+    assert.doesNotMatch(granted, /用户已在本任务中明确授权|未经用户在本任务显式授权/,
+      `${source} 已有项目授权时不得再要求「在本任务里点名」—— 那就是停下来等人,无人值守断在这儿`);
   };
   assertBrowserPolicy(skillPrompt, "自由审查 prompt");
   const skillContext = readFileSync(join(root, "runs", "free-task", "free-review", "skill-review", "round-1", "request-context.md"), "utf8");
@@ -391,7 +402,7 @@ try {
   assert.deepEqual(triggeredState.reviews.map(({ status, checkMode, retryLimit, note }) => ({ status, checkMode, retryLimit, note })), [
     { status: "reviewing", checkMode: "logic", retryLimit: 2, note: "重点检查 Enter 快捷键" },
   ], "confirmed done 应按预约配置与附言自动派出且只派一份审查");
-  assertBrowserPolicy(await freeReviewReminder("free-reservation-task"), "自由审查续聊提醒");
+  assertBrowserPolicy(await freeReviewReminder("free-reservation-task"), "自由审查续聊提醒", "reminder");
 
   // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
   await createTasks([{

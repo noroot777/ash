@@ -5,7 +5,6 @@ import { freeReviewDebateTurns, freeReviewDebates, freeReviewRuns, tasks } from 
 import { freeReviewEvidenceDir, freeReviewReportPath } from "./free-review-files.js";
 import { reviewRequestReference } from "./review-request-context.js";
 import { settledRulingsFor } from "./free-review-settled.js";
-import { BROWSER_VERIFICATION_POLICY } from "./browser-verification-policy.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { freeReviewHistorySection } from "./review-history.js";
@@ -50,7 +49,11 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     // 扫描义务摆在具体动作之前：先定「这一轮要扫到什么程度」，再说「先看 git status」。
     REVIEW_SWEEP_PROTOCOL +
     `先检查 ${reviewLocation} 中的真实 git status、diff 和提交，再选择验证命令。` +
-    `必须真实运行与风险相称的检查。\n\n${BROWSER_VERIFICATION_POLICY}` +
+    // 浏览器策略**不在这里拼**:正文是提前生成的,这里拼死的只能是一份「默认未授权」的
+    // 文本,而投递时读到的项目授权会被去重锚点挡在门外 —— 已经在项目设置里授权过的站点,
+    // 审查回合照样停下来等人点头,无人值守就断在这儿(第 6 链第 1 轮审查 P2)。
+    // 统一由投递点 withGlobalBrowserPolicy 贴那一份**带最新授权**的。
+    `必须真实运行与风险相称的检查。\n\n` +
     `一旦用了 playwright，结束前清掉工作区产物；所有验证临时服务和浏览器进程都必须停掉。\n\n` +
     `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
     REPORT_SUMMARY_FORMAT +
