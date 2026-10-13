@@ -277,6 +277,56 @@ assert.deepEqual((await pendingInbound(TEAM_QUEUED)).map((r) => r.text), ["执�
 assert.equal(await statusOf(TEAM_QUEUED), "idle", "没有新的一台,状态就该停在 idle");
 ok("团队:排在被撤回开台后面的消息,插话退回待发、汇报进持久队列,都不谎报送达");
 
+// ── 用例 3d:撤回与新开台**交错**时,滞留的执行者汇报要交给已经在线的那台 ───────────
+// 3c 测的是「撤回时没有台在线」,这一条是它的交错版:用户在停止之后另发一句,新的一台已经
+// 开起来并跑完了 adoptInbound(整个消费循环里唯一一次从库里认领),旧开台才姗姗来迟地撤回。
+// 这时只把汇报写进 team_inbound,它就要在库里躺到下一次换台(默认空闲回收 30 分钟),期间
+// 用户继续对话也不补送 —— 调度者少了一份执行结果却毫不知情(第 5 轮审查 P1)。
+const TEAM_LATE = "grant-timing-team-late-inbound";
+await newTeamTask(TEAM_LATE);
+const LATE_REPORT = "执行者:第 7 项做完了,请安排下一步";
+firstPrepare = deferred();
+holdFirst = deferred();
+prepareCalls = 0;
+
+const sends: string[] = [];
+const events: unknown[] = [];
+let wake: (() => void) | null = null;
+const consuming = deferred();
+const pushEvent = (e: unknown) => { events.push(e); wake?.(); wake = null; };
+ClaudeExecutor.prototype.openResident = function stubLateResident() {
+  return {
+    sessionId: "late-lead", commandLine: "stub", kill() {}, close() {},
+    send: (text: string) => { sends.push(text); return true; },
+    events: (async function* () {
+      consuming.resolve(); // 事件流被拉第一下 = 这台的 adoptInbound 已经做完了
+      for (;;) {
+        if (events.length) { yield events.shift() as never; continue; }
+        await new Promise<void>((r) => { wake = r; });
+      }
+    })(),
+  } as unknown as ReturnType<NonNullable<typeof realOpen>>;
+} as unknown as NonNullable<typeof realOpen>;
+
+const lateOpen = team.startTeam(TEAM_LATE);
+await firstPrepare.promise;
+const lateReport = team.sendInbound(TEAM_LATE, LATE_REPORT); // 排在那台开台后面
+await new Promise((r) => setImmediate(r));
+await team.haltTeam(TEAM_LATE);
+await team.deliverToLead(TEAM_LATE, "停止完成,继续:下一页"); // 新的一台起来了
+await consuming.promise;
+assert.deepEqual(await pendingInbound(TEAM_LATE), [],
+  "前置条件:新台认领那一刻,库里还没有这条汇报 —— 否则测的就不是「晚到」了");
+
+holdFirst.resolve(); // 旧开台这才走到闸前抛 TeamOpenHalted
+await lateOpen;
+await lateReport;
+pushEvent({ kind: "turnEnd" }); // 新台这一回合收尾:待送队列该在这时合并送出
+await waitFor("滞留的汇报被交给已经在线的那台", async () => sends.some((t) => t.includes(LATE_REPORT)));
+await waitFor("送出之后持久队列销账", async () => (await pendingInbound(TEAM_LATE)).length === 0);
+ok("团队:撤回与新开台交错时,滞留的执行者汇报交给在线的那台,不必等下一次换台");
+runs.stopTask(TEAM_LATE);
+
 ClaudeExecutor.prototype.prepareResume = realPrepare;
 ClaudeExecutor.prototype.openResident = realOpen;
 

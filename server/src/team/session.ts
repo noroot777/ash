@@ -303,10 +303,20 @@ function open(taskId: string, text: string, kind: Kind): Promise<Lead> {
  *
  * 用户插话:返回 false。上层(continueTask → /reply)据此把原话退回待发送托盘 —— 那是停止
  * **完成之后**用户另发的新指令,不该跟着上一次被撤回的开台一起蒸发。
- * 执行者汇报:它有自己的持久待送队列,落进去就行,下一台调度台 adoptInbound 时自动补送。
+ * 执行者汇报:交给当下这台调度台的正常投递路径;真没有台在线才落进持久待送队列等下一台。
+ *
+ * 「有台就直接给它」这一步不能省:撤回与新开台是交错的 —— 用户在停止之后另发一句,新的一台
+ * 就已经开起来并跑完了 `adoptInbound`,而那是**整个消费循环里唯一一次**从库里认领。这时只把
+ * 汇报写进 team_inbound,它就要在库里躺到下一次换台(默认空闲回收 30 分钟),期间用户继续对话
+ * 也不补送 —— 调度者少了一份执行结果却毫不知情(第 5 轮审查 P1)。
  */
 async function strandedByHalt(taskId: string, text: string, kind: Kind): Promise<boolean> {
   if (kind !== "inbound" || !text.trim()) return false;
+  // push 自带两档落库:它忙就 queueInbound 进待送队列(回合收尾合并送),不忙就当场送进去。
+  const lead = leads.get(taskId);
+  if (lead) return push(lead, text, kind);
+  // 走到这里 = 这个任务此刻没有任何在线的调度台,库里这一行一定会被下一台的 adoptInbound
+  // 读到(它排在开台之前)。
   try {
     await enqueueInbound(taskId, text);
   } catch (error) {
