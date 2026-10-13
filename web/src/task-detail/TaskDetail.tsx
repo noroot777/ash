@@ -377,6 +377,12 @@ export function TaskDetail({
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
             />
+            {task.mode === "single" && task.codexPlanMode && (
+              <div className="task-plan-mode-notice" role="status" aria-label="Codex 计划模式">
+                <strong>Codex 计划模式</strong>
+                <span>普通回复只讨论方案，不实施或确认完成。发送 <code>/plan off</code> 退出，或重新运行任务。</span>
+              </div>
+            )}
             {task.handoffAudit && <HandoffAuditBanner audit={task.handoffAudit} />}
             {task.handoff && (
               <HandoffBanner

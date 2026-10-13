@@ -322,6 +322,7 @@ export interface Task {
   // Per-task CLI overrides. null/omitted follows the resolved executor profile.
   model?: string | null;
   reasoningEffort?: string | null;
+  codexPlanMode?: boolean;
   // Read-only label for the selected/default executor profile.
   executorLabel?: string | null;
   // duet (讨论) mode config (§7):

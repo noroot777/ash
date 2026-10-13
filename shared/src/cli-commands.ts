@@ -44,6 +44,13 @@ export interface CliSessionState {
   goalHold?: boolean;
   goalStart?: { previousStatus: string; previousGoal: CliGoal | null; previousHold: boolean };
 }
+export function readCliState(raw: string | null | undefined, agentType: string, profileId?: string | null, ownerUserId?: string | null): CliSessionState {
+  try {
+    const state = JSON.parse(raw ?? "{}")[agentType] as CliSessionState | undefined;
+    if (!state || (profileId !== undefined && state.profileId !== profileId) || (ownerUserId !== undefined && state.ownerUserId !== ownerUserId)) return {};
+    return state;
+  } catch { return {}; }
+}
 export function hasCliGoalHold(raw?: string | null): boolean {
   try { return Object.values(JSON.parse(raw ?? "{}")).some((state) => (state as CliSessionState | null)?.goalHold === true && !!(state as CliSessionState | null)?.goal?.objective); }
   catch { return false; }

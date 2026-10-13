@@ -14,7 +14,7 @@ import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
 import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
-import { CliCommandValidationError, validateCliCommand } from "@ash/shared/cli-commands";
+import { CliCommandValidationError, readCliState, validateCliCommand } from "@ash/shared/cli-commands";
 
 export type TaskRow = typeof tasks.$inferSelect;
 // workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
@@ -81,6 +81,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   executorId: r.executorId ?? null,
   model: r.model ?? null,
   reasoningEffort: r.reasoningEffort ?? null,
+  codexPlanMode: r.mode === "single" && readCliState(r.cliState, "codex").plan === true,
   executorLabel: executorLabelFor(profiles, r.executorId, (r.agentType as AgentType) ?? null),
   autoTitle: r.autoTitle,
   // 读出口归一:老库 JSON 可能还是改名前的 debaterA… 形状,前端永远只见 voiceA…。

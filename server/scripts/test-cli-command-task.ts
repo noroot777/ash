@@ -16,7 +16,7 @@ const { replyToTask } = await import("../src/task-reply.js");
 const { settleTaskStatus } = await import("../src/single-run.js");
 const { prepareCliInvocation, readCliState, saveCliState, persistRunGoal, interruptCliGoal } = await import("../src/task-cli-state.js");
 const { bus } = await import("../src/bus.js");
-const { claudeGoalInvocation } = await import("../src/executors/claude-goal.js");
+const { claudeGoalInvocation, formatClaudeGoal } = await import("../src/executors/claude-goal.js");
 const { reconcileInterrupted } = await import("../src/task-reconcile.js");
 const { createTasks, enrichTasks } = await import("../src/task-store.js");
 const { trackRun, untrackRun, takeStopped } = await import("../src/runs.js");
@@ -109,17 +109,68 @@ try {
   assert.equal((await settleTaskStatus("normal", 0)).status, "failed");
 
   await create("plan", { executorId: null, status: "done" });
+  const planUpdates: boolean[] = [];
+  const unsubscribePlan = bus.subscribe((event) => {
+    if (event.type === "task.updated" && event.task.id === "plan") planUpdates.push(!!event.task.codexPlanMode);
+  });
   const planned = await prepareCliInvocation(await row("plan"), "codex", "/plan", "resolved-profile", null);
   assert.equal(planned.cliState.plan, true);
+  const visiblePlan = (await enrichTasks([await row("plan")]))[0]!;
+  assert.equal(visiblePlan.codexPlanMode, true);
+  assert.equal(Object.hasOwn(visiblePlan, "cliState"), false);
+  assert.equal(planUpdates.at(-1), true);
   assert.equal((await prepareCliInvocation(await row("plan"), "codex", "继续讨论", "resolved-profile", null)).cliState.plan, true);
   assert.equal((await prepareCliInvocation(await row("plan"), "codex", "继续讨论", "another-profile", null)).cliState.plan, undefined);
+  assert.equal(planUpdates.at(-1), false);
   assert.deepEqual(readCliState((await row("plan")).cliState, "codex", "resolved-profile", "other-owner"), {});
+  await saveCliState("plan", "codex", { profileId: "resolved-profile", ownerUserId: null, plan: true, personality: "friendly", serviceTier: "priority" });
+  await saveCliState("plan", "claude", { goal: { objective: "保留其他执行器的目标", status: "paused" } });
+  const freshPlan = await prepareCliInvocation(await row("plan"), "codex", "开始实施", "resolved-profile", null, { resetPlan: true });
+  assert.equal(freshPlan.cliState.plan, false);
+  assert.equal(freshPlan.cliState.personality, "friendly");
+  assert.equal(freshPlan.cliState.serviceTier, "priority");
+  assert.equal(readCliState((await row("plan")).cliState, "claude").goal?.objective, "保留其他执行器的目标");
+  assert.equal((await enrichTasks([await row("plan")]))[0]?.codexPlanMode, false);
+  assert.equal(planUpdates.at(-1), false);
+  assert.equal((await prepareCliInvocation(await row("plan"), "codex", "/plan", "resolved-profile", null, { resetPlan: true })).cliState.plan, true);
+  assert.equal(planUpdates.at(-1), true);
+  assert.equal((await prepareCliInvocation(await row("plan"), "codex", "/status", "resolved-profile", null)).cliState.plan, true);
+  assert.equal((await prepareCliInvocation(await row("plan"), "codex", "/plan off", "resolved-profile", null)).cliState.plan, false);
+  assert.equal(planUpdates.at(-1), false);
+  unsubscribePlan();
+  await db.update(tasks).set({ cliState: "malformed" }).where(eq(tasks.id, "plan"));
+  assert.equal((await enrichTasks([await row("plan")]))[0]?.codexPlanMode, false);
 
   await create("claude", { agentType: "claude", status: "paused" });
   await saveCliState("claude", "claude", { ownerUserId: null, profileId: null, goal: { objective: "Claude 目标", status: "paused" } });
   const claude = await reply("claude", "/goal");
   assert.equal(claude.status, 200);
   assert.equal((await claude.json()).recorded, false);
+  await create("claude-running", { agentType: "claude" });
+  await db.insert(sessions).values({ id: "claude-running-session", taskId: "claude-running", role: "single", agentType: "claude", executor: "claude", cliSessionId: "claude-live-thread", cwd: root, startedAt: at });
+  let claudeKills = 0;
+  const claudeHandle = { ...handle, sessionId: "claude-live-thread", kill: () => { claudeKills++; } };
+  trackRun("claude-running", claudeHandle);
+  for (const snapshot of [{ objective: "普通回合里查看保存的目标", status: "paused" } as CliGoal, null]) {
+    await saveCliState("claude-running", "claude", { ownerUserId: null, profileId: null, goal: snapshot });
+    const beforeSnapshot = await row("claude-running");
+    const liveSnapshot = await reply("claude-running", "/goal");
+    assert.equal(liveSnapshot.status, 200);
+    assert.deepEqual(await liveSnapshot.json(), { started: false, command: true, text: formatClaudeGoal(snapshot), recorded: true });
+    assert.deepEqual(await row("claude-running"), beforeSnapshot);
+    for (const control of ["/goal pause", "/goal clear"]) {
+      const rejectedControl = await reply("claude-running", control);
+      assert.equal(rejectedControl.status, 409);
+      assert.match((await rejectedControl.json()).error, /当前回合没有正在执行的目标/);
+      assert.deepEqual(await row("claude-running"), beforeSnapshot);
+    }
+  }
+  assert.equal((await reply("claude-running", "/goal", { agent: "codex" })).status, 409);
+  assert.equal((await reply("claude-running", "/goal", { executorId: "other-profile" })).status, 409);
+  assert.equal(claudeKills, 0);
+  untrackRun("claude-running", claudeHandle);
+  await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, "claude-running"));
+  await db.update(sessions).set({ endedAt: at }).where(eq(sessions.id, "claude-running-session"));
   await assert.rejects(createTasks([{ id: "unsupported-team", projectId: "project", title: "goal", body: "/goal 完成", agentType: "codex", mode: "team", createdAt: at, updatedAt: at }]), /普通单任务/);
   assert.equal(await row("unsupported-team"), undefined);
   await create("legacy-slash", { agentType: "claude", body: "/fast on", status: "done" });

@@ -90,7 +90,8 @@ try {
   process.env.CODEX_HOME = home;
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { agents, projects, tasks, sessions } = await import("../src/db/schema.js");
-  const { continueTask } = await import("../src/orchestrator.js");
+  const { continueTask, runTask } = await import("../src/orchestrator.js");
+  const { resumeOrRunTask } = await import("../src/task-resume.js");
   const { readCliState } = await import("../src/task-cli-state.js");
   await ensureSchema();
   const at = new Date().toISOString();
@@ -144,6 +145,25 @@ try {
   assert.equal(await continueTask("live-task", "清空后独立问题", { sideTurn: true }), true);
   assert.notEqual((await currentSession()).cliSessionId, newSessionId);
   assert.doesNotMatch(lastModelInput, /新会话独立问题/);
+  await db.insert(tasks).values({ id: "restart-plan", projectId: "live-project", title: "restart plan", body: "重新运行后开始实施", mode: "single", agentType: "codex", status: "backlog", autoTitle: false, useWorktree: false, cliState: JSON.stringify({ codex: { profileId: "second-profile", ownerUserId: null, plan: true } }), createdAt: at, updatedAt: at });
+  const restartTask = async () => (await db.select().from(tasks).where(eq(tasks.id, "restart-plan")))[0]!;
+  const beforeRestart = count;
+  await runTask("restart-plan");
+  assert.ok(count > beforeRestart);
+  assert.equal(readCliState((await restartTask()).cliState, "codex").plan, false);
+  assert.doesNotMatch(lastUserInput, /本回合只讨论计划/);
+  assert.equal(await continueTask("restart-plan", "/plan"), true);
+  assert.equal(readCliState((await restartTask()).cliState, "codex").plan, true);
+  const beforeResumedRun = count;
+  await resumeOrRunTask("restart-plan", { reason: "run" });
+  assert.ok(count > beforeResumedRun);
+  assert.equal(readCliState((await restartTask()).cliState, "codex").plan, false);
+  assert.doesNotMatch(lastUserInput, /本回合只讨论计划/);
+  assert.equal(await continueTask("restart-plan", "/plan"), true);
+  assert.equal(await continueTask("restart-plan", "重试后开始实施", { system: "retry" }), true);
+  assert.equal(readCliState((await restartTask()).cliState, "codex").plan, false);
+  assert.doesNotMatch(lastUserInput, /本回合只讨论计划/);
+  console.log("real ash fresh run, resumable run and retry exit stored plan mode: passed");
   console.log("real ash continuation: plan scope, side-turn isolation, native multi-turn goal, durable budget pause and inspection: passed");
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));

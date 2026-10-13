@@ -47,8 +47,8 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
   if (agentType === "claude") {
     if (command.name !== "goal" || (command.args && command.args !== "pause" && !clear)) throw new Error("当前 Claude 原生通道不支持此命令");
     const state = readCliState(task.cliState, agentType, session.executorId, session.runOwnerUserId);
-    if (!state.goal || !task.goalTurn) throw new Error("当前回合没有正在执行的目标");
     if (command.args) {
+      if (!state.goal || !task.goalTurn) throw new Error("当前回合没有正在执行的目标");
       state.goal = clear ? null : { ...state.goal, status: "paused" };
       state.goalHold = !clear;
       if (clear) delete state.goalStart;
