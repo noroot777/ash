@@ -141,7 +141,9 @@
   height: 16px;
 }
 
-.inspector-rail__tab:not(.is-active):not(:hover):has(.task-subagents-icon--populated) {
+/* 「用过才浮现」的那几格（子智能体、哨兵）：自己冒上来时带一层底色，说清楚「它是因为这个
+   任务真用过才在这儿的」，跟一直常驻的那几格区分开。选中态和 hover 有自己的底色，不叠。 */
+.inspector-rail__tab:not(.is-active):not(:hover):has(.inspector-rail-icon--used) {
   background: color-mix(in srgb, var(--cyan) 16%, var(--panel));
   color: color-mix(in srgb, var(--cyan) 90%, var(--ink));
 }
@@ -216,7 +218,7 @@
   white-space: nowrap;
 }
 
-.inspector-host__menu-label .task-subagents-icon--populated {
+.inspector-host__menu-label .inspector-rail-icon--used {
   color: color-mix(in srgb, var(--cyan) 90%, var(--ink));
 }
 

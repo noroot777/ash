@@ -80,47 +80,62 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
   assert.doesNotMatch(blocked, /MCP 工具 start_monitor/, "连入口都没有时，别再教人怎么用那个入口");
 }
 
-// ── 图标条上的那一格：默认开着，标题/图标按「此刻几个在盯着」给 ───────────────
-// 默认开不是审美偏好：手动起一个哨兵只有这一格里那个「+」，藏进「+」菜单就得先知道
-// 它在那儿才找得到。所以开合写死在 TASK_INSPECTORS / TEAM_INSPECTORS 里，这个 hook
-// 只负责那点活信号。
+// ── 图标条上的那一格：用过才浮现，和子智能体同一条规矩 ──────────────────────────
+// 开合不是审美偏好。两头都踩过坑：无条件默认开着（上一版的哨兵）会让大多数任务的图标条
+// 上常年挂着一个点进去只有空话的面板；没用过就整格摘掉（上一版的子智能体）又让人翻遍
+// 「+」菜单都找不到它，只能得出「这功能没有」。所以**面板一直在、默认不开、用过才自己
+// 冒上来并带底色**；手动起哨兵仍然只有这一格里那个「+」，靠的就是它永远在菜单里。
 {
   const descriptors: InspectorDescriptor<unknown>[] = [
     { id: "info", title: "信息", icon: null, defaultOpen: true, render: () => null },
-    { id: "monitors", title: "哨兵", icon: null, defaultOpen: true, render: () => null },
+    { id: "monitors", title: "哨兵", icon: null, render: () => null },
   ];
-  const tab = (live: number) => withMonitorTab(descriptors, { live }).find((d) => d.id === "monitors");
+  const tab = (live: number, used = live) => withMonitorTab(descriptors, { live, used }).find((d) => d.id === "monitors");
 
-  const empty = tab(0);
-  assert.ok(empty, "一个哨兵都没有时这一格也必须还在");
-  assert.equal(empty?.defaultOpen, true, "没哨兵也默认开着——手动起一个哨兵只有这一格里那个入口");
+  const empty = tab(0, 0);
+  assert.ok(empty, "一个哨兵都没有时这一格也必须还在——「+」菜单和 I M 得找得到它");
+  assert.equal(empty?.defaultOpen, false, "没挂过哨兵就不往图标条上冒");
   assert.equal(empty?.title, "哨兵", "没在盯着的就不带数量");
-  assert.equal(empty?.icon, descriptors[1].icon, "没在盯着的时候图标不该变");
+  assert.equal(empty?.icon, descriptors[1].icon, "没挂过的时候图标不该变");
+
+  const ended = tab(0, 2);
+  assert.equal(ended?.defaultOpen, true, "挂过就得浮现——跑完的哨兵是干过什么的凭证，不能跟着收走");
+  assert.equal(ended?.title, "哨兵", "都结束了就别再冒充活信号");
+  assert.match(String((ended?.icon as React.ReactElement<{ className?: string }>).props.className),
+    /inspector-rail-icon--used/, "浮现的那一格要带底色记号（和子智能体同一个类名）");
 
   const busy = tab(2);
-  assert.equal(busy?.defaultOpen, true, "有哨兵时当然还是开着");
+  assert.equal(busy?.defaultOpen, true, "有哨兵在盯着当然要浮现");
   assert.match(String(busy?.title), /哨兵（2）/, "标题上的数字是此刻真在烧回合的那几个，不含已经结束的");
-  assert.notEqual(busy?.icon, descriptors[1].icon, "有在盯的哨兵时图标要变（这是面板收起时唯一的活信号）");
+  const busyClass = String((busy?.icon as React.ReactElement<{ className?: string }>).props.className);
+  assert.match(busyClass, /monitor-rail-icon--live/, "有在盯的哨兵时图标要变（这是面板收起时唯一的活信号）");
+  assert.match(busyClass, /inspector-rail-icon--used/, "活信号之外，底色记号照样要在");
 
-  // 真正决定开合的是那两份 descriptor 表，hook 只做装饰：它们上面必须写着 defaultOpen。
+  // 开合既然按「用过没用过」给，那两份 descriptor 表上就不许再写死 defaultOpen——写了
+  // 就是无条件默认开，这一条规矩当场作废。
   for (const file of ["../src/task-detail/taskInspectors.tsx", "../src/team/TeamInspector.tsx"] as const) {
-    assert.match(
-      readSource(new URL(file, import.meta.url)),
-      /id: "monitors",[\s\S]{0,240}?defaultOpen: true/,
-      `${file} 里哨兵那一格必须默认开着`,
-    );
+    const source = readSource(new URL(file, import.meta.url));
+    const tail = source.slice(source.indexOf('id: "monitors"'));
+    assert.doesNotMatch(tail.slice(0, 240), /defaultOpen/,
+      `${file} 里哨兵那一格不许写死 defaultOpen：开合归 useMonitorInspector`);
   }
 
-  // 光 descriptor 上写 defaultOpen 还不够：存量用户的 openTabs 躺在 localStorage 里，
-  // `applyTabPolicy` 只在 stateKey 变过一次时才拿 defaultOpenTabIds 去并集。两处都得
-  // 带上它，否则老用户永远等不到它自己冒出来。
-  for (const [file, pattern] of [
-    ["../src/task-detail/TaskDetail.tsx", /defaultOpenTabIds: \[[^\]]*"monitors"/],
-    ["../src/team/TeamView.tsx", /defaultOpenTabIds: allWorkersComplete[\s\S]*?"monitors"[\s\S]*?"monitors"/],
-  ] as const) {
-    assert.match(readSource(new URL(file, import.meta.url)), pattern,
-      `${file} 的 defaultOpenTabIds 必须带上哨兵，否则存量用户那边它不会自己开`);
+  // 同理，两处的 defaultOpenTabIds 也不许带上它：那张表在每次语义换挡时无条件并集，
+  // 带上等于把「用过才浮现」拆了（子智能体一起，它们是同一条规矩）。
+  for (const file of ["../src/task-detail/TaskDetail.tsx", "../src/team/TeamView.tsx"] as const) {
+    const source = readSource(new URL(file, import.meta.url));
+    for (const [, list] of source.matchAll(/defaultOpenTabIds: ([\s\S]*?)\n\s*defaultActiveTabId/g)) {
+      assert.doesNotMatch(list, /"monitors"|"subagents"/,
+        `${file} 的 defaultOpenTabIds 不许带哨兵/子智能体：那两格走「用过才浮现」`);
+    }
   }
+
+  // 存量用户的 openTabs 里还钉着旧默认，`applyTabPolicy` 是并集语义摘不掉，得靠一次性迁移。
+  assert.match(
+    readSource(new URL("../src/monitors/useMonitorInspector.tsx", import.meta.url)),
+    /retireInspectorTab\(\s*"monitors-surface-on-use"/,
+    "改默认开合要连带把存量 openTabs 里的哨兵摘一次，否则老用户那边它永远开着",
+  );
 }
 
 // ── 还在盯的排在上面：结束的那几张是存档，正在烧回合的才要盯着看 ──────────────
@@ -190,4 +205,4 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   assert.doesNotMatch(hook, /setStarting|starting,/, "「正在创建中」不该按任务存——那样取消重开后新表单会被旧请求按住");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、默认开着且带活信号，创建结果有归属，手机端同样给得出叫停");
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停");

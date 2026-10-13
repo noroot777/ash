@@ -157,7 +157,8 @@ function TeamInfoPanel({ task, workers, sessions }: Pick<TeamInspectorContext, "
 }
 
 // 团队模式的默认面板里不放子智能体：调度台自己那点工具调用远不如「谁跟谁在并行」有用，
-// 时间轴顶上它的位置；子智能体改成按需从图标条的「+」或 I S 打开。
+// 时间轴顶上它的位置。这一摘是一次性的历史迁移（当时它还是无条件默认开）；现在的开合统一
+// 走「用过才浮现」——调度台真派过子智能体才上条，否则从「+」或 I S 打开。
 retireInspectorTab("team-subagents-default", /^(?:ash|harness-next):inspector:team:/, "subagents");
 
 export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>[] = [
@@ -249,7 +250,8 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     ),
   },
   {
-    // 和单飞任务同一条判据：调度台自己没派过子智能体时这一格不存在（useSubagents 决定）。
+    // 和单飞任务同一条「用过才浮现」：调度台自己派过子智能体才上图标条（useSubagents 决定），
+    // 没派过就留在「+」菜单和 I S 里。
     id: "subagents",
     title: "子智能体",
     shortcut: "s",
@@ -257,11 +259,11 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     render: (context) => <NativeWorkInspector {...context.nativeWork} />,
   },
   {
-    // 盯的是调度台自己挂的哨兵。和单飞任务同样默认开着（手动起哨兵只有这一个入口）。
+    // 盯的是调度台自己挂的哨兵。和单飞任务同样「用过才浮现」：开合由 useMonitorInspector 翻，
+    // 所以这里不写 defaultOpen。
     id: "monitors",
     title: "哨兵",
     icon: <Pulse size={14} />,
-    defaultOpen: true,
     shortcut: "m",
     render: (context) => (
       <MonitorInspector monitors={context.monitors} blockedReason={monitorBlockedReason(context.task)} />

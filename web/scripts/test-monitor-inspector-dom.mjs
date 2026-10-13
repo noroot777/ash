@@ -48,7 +48,7 @@ try {
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   const failures = [];
 
-  const open = async (handler) => {
+  const open = async (handler, query = "") => {
     const page = await browser.newPage();
     page.setDefaultTimeout(5000);
     page.on("pageerror", (error) => failures.push(error.message));
@@ -70,7 +70,7 @@ try {
       failures.push(`unexpected API request: ${path}`);
       await route.fulfill({ status: 500, json: { error: "unexpected request" } });
     });
-    await page.goto(`${origin}/scripts/fixtures/monitor-inspector.html`);
+    await page.goto(`${origin}/scripts/fixtures/monitor-inspector.html${query}`);
     return page;
   };
   const idsOf = (page) => page.getByTestId("ids").textContent();
@@ -78,6 +78,56 @@ try {
     (want) => document.querySelector('[data-testid="ids"]')?.textContent === want,
     value,
   );
+
+  // ── 「用过才浮现」落到图标条上：没挂过不上条、挂过带底色 ────────────────────
+  // 底色是 CSS 的 `:has(.inspector-rail-icon--used)` 给的，类名两边一错位就悄悄没了，
+  // 而「少一层淡底色」这种事看快照、读代码都发现不了，只能量计算样式。
+  {
+    // ① 这个任务一个哨兵都没挂过：不上图标条，但必须留在「+」菜单里——上一版的子智能体
+    //    就是整格摘掉，结果用户翻遍菜单也找不到它。
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-a/monitors") return false;
+      await route.fulfill({ json: [] });
+      return true;
+    }, "?rail=1");
+    await page.locator('.inspector-rail__tab[data-tab-id="info"]').waitFor();
+    await page.waitForTimeout(200);
+    assert.equal(
+      await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').count(),
+      0,
+      "没挂过哨兵的任务，这一格不该占着图标条",
+    );
+    await page.getByRole("button", { name: "切换 Inspector 面板" }).click();
+    assert.equal(
+      await page.locator('.inspector-host__menu .inspector-host__menu-title', { hasText: "哨兵" }).count(),
+      1,
+      "没挂过也得留在「+」菜单里：手动起哨兵只有这一个入口",
+    );
+    await page.close();
+  }
+  {
+    // ② 挂过哨兵：自己冒到图标条上（不抢焦点），并带底色。
+    const page = await open(undefined, "?rail=1");
+    const tab = page.locator('.inspector-rail__tab[data-tab-id="monitors"]');
+    await tab.waitFor();
+    assert.equal(
+      await page.locator('.inspector-rail__tab[aria-selected="true"]').getAttribute("data-tab-id"),
+      "info",
+      "自己冒出来的那一格不许抢当前焦点",
+    );
+    const paint = await page.evaluate(() => {
+      const bg = (id) => getComputedStyle(document.querySelector(`.inspector-rail__tab[data-tab-id="${id}"]`)).backgroundColor;
+      return {
+        monitors: bg("monitors"),
+        info: bg("info"),
+        marked: !!document.querySelector('.inspector-rail__tab[data-tab-id="monitors"] .inspector-rail-icon--used'),
+      };
+    });
+    assert.ok(paint.marked, "图标上要带 inspector-rail-icon--used——底色全靠它选中");
+    assert.notEqual(paint.monitors, paint.info, `用过的那一格要有底色，现在和别的格一样是 ${paint.monitors}`);
+    assert.doesNotMatch(paint.monitors, /rgba\(0, 0, 0, 0\)|transparent/, "底色不能是透明");
+    await page.close();
+  }
 
   // ── ③ 340px 下按钮不许被挤出面板 ───────────────────────────────────────────
   {
