@@ -14,7 +14,7 @@ import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
 import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
-import { CliCommandValidationError, validateCliCommand } from "@ash/shared/cli-commands";
+import { CliCommandValidationError, readCliStateScopes, validateCliCommand } from "@ash/shared/cli-commands";
 
 export type TaskRow = typeof tasks.$inferSelect;
 // workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
@@ -59,6 +59,20 @@ const enrichTeamExecutorLabels = (
 const toTask = (r: TaskRow, allProfiles: AgentLabelRow[] = []): Task =>
   toTaskWith(r, profilesOwnedBy(allProfiles, r.ownerUserId));
 
+const codexPlanStateFor = (task: TaskRow, profiles: AgentLabelRow[]): Pick<Task, "codexPlanMode" | "codexPlanScopes"> => {
+  const states = task.mode === "single"
+    ? Object.values(readCliStateScopes(task.cliState, "codex").scopes).filter((state) => state?.plan === true)
+    : [];
+  const codexPlanScopes = states.map((state) => ({
+    executorId: state.profileId ?? null,
+    executorLabel: state.profileId
+      ? profiles.find((profile) => profile.id === state.profileId)?.name ?? state.profileId
+      : "Codex（未绑定执行器）",
+    isTaskOwner: (state.ownerUserId ?? null) === task.ownerUserId,
+  }));
+  return { codexPlanMode: codexPlanScopes.length > 0, codexPlanScopes };
+};
+
 const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   id: r.id,
   projectId: r.projectId,
@@ -81,6 +95,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   executorId: r.executorId ?? null,
   model: r.model ?? null,
   reasoningEffort: r.reasoningEffort ?? null,
+  ...codexPlanStateFor(r, profiles),
   executorLabel: executorLabelFor(profiles, r.executorId, (r.agentType as AgentType) ?? null),
   autoTitle: r.autoTitle,
   // 读出口归一:老库 JSON 可能还是改名前的 debaterA… 形状,前端永远只见 voiceA…。

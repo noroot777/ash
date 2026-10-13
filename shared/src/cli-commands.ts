@@ -44,8 +44,34 @@ export interface CliSessionState {
   goalHold?: boolean;
   goalStart?: { previousStatus: string; previousGoal: CliGoal | null; previousHold: boolean };
 }
+export interface CliStateScopes {
+  activeScope: string | null;
+  scopes: Record<string, CliSessionState>;
+}
+export function cliStateScopeKey(state: Pick<CliSessionState, "profileId" | "ownerUserId">): string {
+  return encodeURIComponent(JSON.stringify([state.profileId ?? null, state.ownerUserId ?? null]));
+}
+function stateScopes(slot: unknown): CliStateScopes {
+  if (!slot || typeof slot !== "object" || Array.isArray(slot)) return { activeScope: null, scopes: {} };
+  const stored = slot as CliStateScopes;
+  if (stored.scopes && typeof stored.scopes === "object" && !Array.isArray(stored.scopes)) return stored;
+  const legacy = slot as CliSessionState;
+  const activeScope = cliStateScopeKey(legacy);
+  return { activeScope, scopes: { [activeScope]: legacy } };
+}
+export function readCliStateScopes(raw: string | null | undefined, agentType: string): CliStateScopes {
+  try { return stateScopes(JSON.parse(raw ?? "{}")[agentType]); }
+  catch { return { activeScope: null, scopes: {} }; }
+}
+export function readCliState(raw: string | null | undefined, agentType: string, profileId?: string | null, ownerUserId?: string | null): CliSessionState {
+  const slot = readCliStateScopes(raw, agentType);
+  const active = slot.activeScope ? slot.scopes[slot.activeScope] : undefined;
+  return [active, ...Object.values(slot.scopes)].find((state) => state
+    && (profileId === undefined || (state.profileId ?? null) === profileId)
+    && (ownerUserId === undefined || (state.ownerUserId ?? null) === ownerUserId)) ?? {};
+}
 export function hasCliGoalHold(raw?: string | null): boolean {
-  try { return Object.values(JSON.parse(raw ?? "{}")).some((state) => (state as CliSessionState | null)?.goalHold === true && !!(state as CliSessionState | null)?.goal?.objective); }
+  try { return Object.values(JSON.parse(raw ?? "{}")).some((slot) => Object.values(stateScopes(slot).scopes).some((state) => state?.goalHold === true && !!state.goal?.objective)); }
   catch { return false; }
 }
 

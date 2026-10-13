@@ -164,7 +164,7 @@ export async function runTask(
       (autoTitle ? TITLE_HINT + objective : objective),
       "full",
     );
-    const cli = await prepareCliInvocation({ ...task, status: "running" }, agentType, commandText, profileId, runOwner ?? null);
+    const cli = await prepareCliInvocation({ ...task, status: "running" }, agentType, commandText, profileId, runOwner ?? null, { resetPlan: true });
     const runEnv = { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 spawn 之间没有 await，
     // 所以「已 claim、还没 spawn」的窗口里收到的暂停请求一定在这里被消费。无人值守的
