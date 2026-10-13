@@ -407,6 +407,52 @@ try {
     await page.close();
   }
 
+  // ── 首次列表还在路上，创建就失败了：那句报错必须当场露面，而且别被列表读完抹掉 ──
+  // 列表的归属闸（ready）管的是「这个任务有没有哨兵」，**不该连报错一起管**：创建是用户
+  // 刚刚按下去的动作，它的失败跟列表读没读完没有半点关系。把两件事绑在一起的后果是
+  // 慢网下点「起一个哨兵」失败后一片安静（第 2 轮审查实测），而按钮已经解锁、草稿还在,
+  // 用户只会以为自己没点到。
+  {
+    let releaseList;
+    const held = new Promise((resolve) => { releaseList = resolve; });
+    pending.push(() => releaseList());
+    const page = await open(async (route, path) => {
+      if (path === "/api/tasks/task-a/monitors" && route.request().method() === "POST") {
+        await route.fulfill({ status: 500, json: { error: "回归注入：创建哨兵失败" } });
+        return true;
+      }
+      if (path !== "/api/tasks/task-a/monitors") return false;
+      await held;
+      await route.fulfill({ json: [] }).catch(() => undefined);
+      return true;
+    });
+
+    // 列表还卡着，先手动起一个——它会失败。
+    await page.getByRole("button", { name: "手动起一个哨兵" }).click();
+    const draft = page.locator(".monitor-composer textarea");
+    const text = "printf 'never runs'";
+    await draft.fill(text);
+    const submit = page.getByRole("button", { name: "起一个哨兵", exact: true });
+    await submit.click();
+
+    const alert = page.locator(".monitor-inspector__error");
+    await alert.waitFor({ timeout: 5000 });
+    assert.match(await alert.innerText(), /创建哨兵失败/, "创建失败就得当场说出来，别等列表读完");
+    assert.equal(await submit.isDisabled(), false, "提交按钮已经解锁了：这会儿没提示等于什么都没发生");
+    assert.equal(await draft.inputValue(), text, "失败不该把草稿冲掉");
+
+    // 列表这才读完（而且是成功的空列表）：它不该把刚才那句报错抹掉。
+    releaseList();
+    await waitIds(page, "");
+    await page.waitForTimeout(300);
+    assert.equal(
+      await page.locator(".monitor-inspector__error").count(),
+      1,
+      "列表读完了就把用户那次失败的回执抹掉，等于让它只闪一下",
+    );
+    await page.close();
+  }
+
   // ── 同一个任务上取消重开：旧请求的回执不许动新那张表单 ─────────────────────
   // 在途期间点取消、重新打开填另一条命令，是同一个任务上的**两张**表单。只按任务判
   // （代号只在切任务时变）的话，旧请求回来会关掉用户刚填的那一张，忙碌标记还一直按着
