@@ -54,9 +54,10 @@ const boot = `
   const { appendFileSync } = await import("node:fs");
   const { CodexExecutor } = await import("./server/dist/executors/codex.js");
   const { ClaudeExecutor } = await import("./server/dist/executors/claude.js");
+  const { CodexNativeCommands } = await import("./server/dist/executors/codex-native-commands.js");
   function fixture(options) {
     appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.ASH_TASK_ID, cliState: options.cliState }) + "\\n");
-    const sessionId = options.sessionId || "ui-" + options.env.ASH_TASK_ID;
+    const sessionId = (options.cliCommand?.name === "fork" ? "fork-" : "") + (options.sessionId || "ui-" + options.env.ASH_TASK_ID);
     const goal = options.cliState?.goal ? { ...options.cliState.goal, status: "budgetLimited" } : null;
     return {
       sessionId, cliCommand: options.cliCommand, commandLine: "UI fixture; no CLI or model request",
@@ -64,7 +65,12 @@ const boot = `
       kill() {},
       events: (async function* () {
         yield { kind: "session", cliSessionId: sessionId };
-        yield { kind: "text", text: options.cliCommand?.name === "goal" && goal ? "目标：" + goal.objective + "；预算 " + goal.tokenBudget + "；已用 " + goal.tokensUsed : options.cliState?.plan ? "测试执行器：只讨论计划" : "测试执行器：正常实施" };
+        let text = options.cliCommand?.name === "goal" && goal ? "目标：" + goal.objective + "；预算 " + goal.tokenBudget + "；已用 " + goal.tokensUsed : options.cliState?.plan ? "测试执行器：只讨论计划" : "测试执行器：正常实施";
+        if (options.cliCommand?.name === "fork" || options.cliCommand?.name === "goal" && !options.cliCommand.args && !goal) {
+          const native = new CodexNativeCommands({ threadId: () => sessionId, turnId: () => "", model: () => "fixture", cwd: options.cwd, prompt: "", state: options.cliState, push() {}, request: async () => ({ goal }) });
+          text = await native.control(options.cliCommand);
+        }
+        yield { kind: "text", text };
         yield { kind: "done", exitStatus: 0 };
       })(),
     };
@@ -363,6 +369,35 @@ try {
   assert.equal((await (await fetch(`${base}/api/tasks/scoped-goal-task`)).json()).status, "paused");
   await page.screenshot({ path: join(screenshots, "goal-survives-profile-switch.png"), fullPage: true });
 
+  await sendScoped("/fork");
+  assert.equal((await lastInvocation()).cliState.goal, null);
+  assert.equal((await lastInvocation()).cliState.goalHold, false);
+  assert.equal((await lastInvocation()).cliState.goalStart, undefined);
+  const forkNotice = page.getByText(/^已创建独立会话分支；/).last();
+  await forkNotice.waitFor();
+  assert.match(await forkNotice.innerText(), /分叉后的会话不保留原目标、预算和已用量/);
+  assert.match(await forkNotice.innerText(), /\/goal 描述 重新设置目标/);
+  assert.match(await forkNotice.innerText(), /--budget 上限/);
+  assert.doesNotMatch(await forkNotice.innerText(), /\/goal resume/);
+  await page.screenshot({ path: join(screenshots, "fork-goal-reset-guide.png"), fullPage: true });
+  await page.reload();
+  await forkNotice.waitFor();
+  await sendScoped("/goal");
+  await page.getByText("当前没有目标。使用 /goal 描述 设置持续目标。", { exact: true }).waitFor();
+  await page.screenshot({ path: join(screenshots, "fork-goal-empty-reloaded.png"), fullPage: true });
+  const missingResume = await fetch(`${base}/api/tasks/scoped-goal-task/reply`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "/goal resume" }),
+  });
+  assert.equal(missingResume.status, 409);
+  assert.match((await missingResume.json()).error, /没有可恢复的目标/);
+  await sendScoped("/goal 分叉后的新目标 --budget 250");
+  const replacementGoal = (await lastInvocation()).cliState.goal;
+  assert.equal(replacementGoal.objective, "分叉后的新目标");
+  assert.equal(replacementGoal.tokenBudget, 250);
+  assert.equal(replacementGoal.tokensUsed, 0);
+  await page.getByText("目标：分叉后的新目标；预算 250；已用 0", { exact: true }).waitFor();
+  await page.screenshot({ path: join(screenshots, "fork-new-goal-budget.png"), fullPage: true });
+
   await page.goto(`${base}/?project=cli-ui&task=team-ui-task`);
   const teamReply = page.getByPlaceholder("调度者待命中，说句话就接回同一会话…");
   await teamReply.fill("/");
@@ -427,6 +462,7 @@ try {
   console.log("queued plan executes instead of falsely completing; profile switch/resume preserves budget and scheduler hold: passed");
   console.log("plan scope labels survive profile switches and reloads; single-scope off stays visible; Codex Run and Claude Run/Retry reset every Codex scope: passed");
   console.log("Claude standing tasks keep scoped Codex notices; real @ summon and /plan off match invocation state without changing the standing agent: passed");
+  console.log("fork output reports cleared goal and budget, remains visible after reload, and guides a fresh budgeted goal instead of unavailable resume: passed");
   console.log(`screenshots: ${screenshots}`);
 } finally {
   await browser?.close();

@@ -148,7 +148,7 @@ export class CodexNativeCommands {
       return stringify(apps);
     }
     if (command.name === "rename") { await request("thread/name/set", { threadId, name: command.args }); return `会话已重命名为：${command.args}`; }
-    if (command.name === "fork") return "已创建独立会话分支；原会话和历史记录保留，目标不会自动启动。使用 /goal resume 显式恢复。";
+    if (command.name === "fork") return "已创建独立会话分支；原会话和历史记录保留。分叉后的会话不保留原目标、预算和已用量。使用 /goal 描述 重新设置目标，需要预算时同时指定 --budget 上限。";
     if (command.name === "new" || command.name === "clear") return "已新建会话；旧会话记录保留，不删除任务或文件。";
     throw new Error(`未实现的原生命令 /${command.name}`);
   }

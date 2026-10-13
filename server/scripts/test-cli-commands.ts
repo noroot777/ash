@@ -103,6 +103,11 @@ try {
   assert.equal(calls.at(-1)!.method, "thread/backgroundTerminals/clean");
   await native.control(command("/usage"));
   assert.deepEqual(calls.find((call) => call.method === "account/usage/read")!.params, {});
+  const forkNotice = await native.control(command("/fork"));
+  assert.match(forkNotice, /分叉后的会话不保留原目标、预算和已用量/);
+  assert.match(forkNotice, /\/goal 描述 重新设置目标/);
+  assert.match(forkNotice, /--budget 上限/);
+  assert.doesNotMatch(forkNotice, /\/goal resume/);
   const idle = new CodexNativeCommands({ threadId: () => "idle", turnId: () => "ordinary", model: () => "model", cwd: root, prompt: "", push() {}, request: async (method) => { assert.notEqual(method, "turn/interrupt"); return { goal: null }; } });
   await idle.control(command("/goal"));
 
