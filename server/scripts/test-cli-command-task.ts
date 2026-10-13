@@ -61,6 +61,7 @@ try {
   const stopped = await settleTaskStatus("goal", 0, "paused");
   assert.equal(stopped.status, "paused");
   assert.match(stopped.note!, /持续目标已暂停/);
+  assert.match(stopped.note!, /\/goal resume/);
   assert.equal((await row("goal")).goalTurn, false);
   assert.equal(readCliState((await row("goal")).cliState, "codex").goalHold, true);
   assert.equal(selectNextInQueue([await row("goal")]), null);
@@ -75,10 +76,41 @@ try {
   assert.equal(readCliState((await row("goal")).cliState, "codex").goal, null);
   assert.equal(hasCliGoalHold((await row("goal")).cliState), false);
   await persistRunGoal("goal", "codex", clearing, 0, "paused");
-  assert.equal((await settleTaskStatus("goal", 0, "paused")).status, "paused");
+  const cleared = await settleTaskStatus("goal", 0, "paused");
+  assert.equal(cleared.status, "paused");
+  assert.match(cleared.note!, /持续目标已清除/);
+  assert.match(cleared.note!, /\/goal 描述/);
+  assert.doesNotMatch(cleared.note!, /\/goal resume/);
   assert.equal(hasCliGoalHold((await row("goal")).cliState), false);
   assert.equal(selectNextInQueue([await row("goal")])?.id, "goal");
   untrackRun("goal", clearing);
+
+  for (const agentType of ["codex", "claude"] as const) {
+    for (const action of ["pause", "clear", "stop", "off", "reset", "none", "cancel"]) {
+      const taskId = `scoped-${agentType}-${action}`;
+      const sessionId = `${taskId}-session`;
+      const otherAgent = agentType === "codex" ? "claude" : "codex";
+      await create(taskId, { agentType: otherAgent, goalTurn: true });
+      await db.insert(sessions).values({ id: sessionId, taskId, role: "single", agentType, executor: agentType, executorId: "running-profile", runOwnerUserId: "running-owner", cwd: root, startedAt: at, endedAt: at });
+      await saveCliState(taskId, agentType, { profileId: "running-profile", ownerUserId: "running-owner", goal, goalHold: true }, true);
+      await prepareCliInvocation(await row(taskId), agentType, `/goal ${action}`, "running-profile", "running-owner");
+      await saveCliState(taskId, agentType, { profileId: "other-profile", ownerUserId: "running-owner", goal: { ...goal, objective: "另一个 profile 的目标" } }, true);
+      await saveCliState(taskId, agentType, { profileId: "running-profile", ownerUserId: "other-owner", goal: { ...goal, objective: "另一个发起人的目标" } }, true);
+      await saveCliState(taskId, otherAgent, { goal: { ...goal, objective: "常设智能体的目标" } }, true);
+      const settled = await settleTaskStatus(taskId, 0, "paused", sessionId);
+      assert.equal(settled.status, "paused");
+      if (action === "pause") {
+        assert.match(settled.note!, /持续目标已暂停.*\/goal resume/);
+      } else {
+        assert.match(settled.note!, /持续目标已清除.*\/goal 描述/);
+        assert.doesNotMatch(settled.note!, /\/goal resume/);
+      }
+      const state = (await row(taskId)).cliState;
+      assert.equal(readCliState(state, agentType, "other-profile", "running-owner").goal?.objective, "另一个 profile 的目标");
+      assert.equal(readCliState(state, agentType, "running-profile", "other-owner").goal?.objective, "另一个发起人的目标");
+      assert.equal(readCliState(state, otherAgent).goal?.objective, "常设智能体的目标");
+    }
+  }
 
   await create("ordinary");
   await db.insert(sessions).values({ id: "ordinary-session", taskId: "ordinary", role: "single", agentType: "codex", executor: "codex", cwd: root, startedAt: at });

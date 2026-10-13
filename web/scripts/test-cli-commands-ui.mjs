@@ -37,6 +37,7 @@ await db.insert(tasks).values([
   { id: "fresh-claude-plan-task", projectId: "cli-ui", title: "Claude 首跑清除计划", body: "由 Claude 正常实施", mode: "single", status: "backlog", agentType: "claude", executorId: "claude-ui", autoTitle: false, cliState: JSON.stringify({ codex: { activeScope: encodeURIComponent(JSON.stringify(["codex-ui", null])), scopes: Object.fromEntries(["codex-ui", "codex-ui-other"].map((profileId) => [encodeURIComponent(JSON.stringify([profileId, null])), { profileId, ownerUserId: null, plan: true }])) } }), createdAt: at, updatedAt: at },
   { id: "queue-plan-task", projectId: "cli-ui", groupId: "queue-ui", title: "计划模式队列起跑", body: "开始实施队列任务", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", cliState: JSON.stringify({ codex: { profileId: "codex-ui", ownerUserId: null, plan: true } }), autoTitle: false, createdAt: at, updatedAt: at },
   { id: "scoped-goal-task", projectId: "cli-ui", groupId: "goal-ui", title: "切换执行器保留目标", body: "保持目标与预算", mode: "single", status: "paused", agentType: "codex", executorId: "codex-ui", cliState: JSON.stringify({ codex: { profileId: "codex-ui", ownerUserId: null, goalHold: true, goal: { objective: "让 test/auth 全过", status: "budgetLimited", tokenBudget: 150, tokensUsed: 150 } } }), autoTitle: false, createdAt: at, updatedAt: at },
+  ...["codex", "claude"].map((agentType) => ({ id: `live-${agentType}-goal`, projectId: "cli-ui", title: `${agentType} 运行中清除目标`, body: "实时目标控制验证", mode: "single", status: "backlog", agentType, executorId: `${agentType}-ui`, autoTitle: false, createdAt: at, updatedAt: at })),
 ]);
 await db.insert(queueItems).values({ taskId: "queue-plan-task", queueId: "queue-ui", position: 0, createdAt: at });
 await db.insert(sessions).values({ id: "queue-plan-session", taskId: "queue-plan-task", role: "single", agentType: "codex", executor: "codex", executorId: "codex-ui", cliSessionId: "queue-thread", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
@@ -56,21 +57,36 @@ const boot = `
   const { ClaudeExecutor } = await import("./server/dist/executors/claude.js");
   const { CodexNativeCommands } = await import("./server/dist/executors/codex-native-commands.js");
   function fixture(options) {
-    appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.ASH_TASK_ID, cliState: options.cliState }) + "\\n");
+    appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.ASH_TASK_ID, cliState: options.cliState, cliCommand: options.cliCommand }) + "\\n");
     const sessionId = (options.cliCommand?.name === "fork" ? "fork-" : "") + (options.sessionId || "ui-" + options.env.ASH_TASK_ID);
-    const goal = options.cliState?.goal ? { ...options.cliState.goal, status: "budgetLimited" } : null;
+    let goal = options.cliState?.goal ? { ...options.cliState.goal, status: "budgetLimited" } : null;
+    const goalStarted = !!goal;
+    const liveGoal = goal?.objective === "等待实时目标控制";
+    if (liveGoal) goal.status = "active";
+    let finish;
+    const interrupted = new Promise((resolve) => { finish = resolve; });
+    const native = new CodexNativeCommands({ threadId: () => sessionId, turnId: () => "", model: () => "fixture", cwd: options.cwd, prompt: "", state: options.cliState, push() {}, request: async (method, params) => {
+      if (method === "thread/goal/clear") goal = null;
+      if (method === "thread/goal/set") {
+        const changes = { ...params };
+        delete changes.threadId;
+        goal = { ...goal, ...changes };
+      }
+      return { goal };
+    } });
     return {
       sessionId, cliCommand: options.cliCommand, commandLine: "UI fixture; no CLI or model request",
-      goal: () => goal, goalStarted: () => !!goal,
-      kill() {},
+      goal: liveGoal && options.env.ASH_TASK_ID === "live-claude-goal" ? undefined : () => goal, goalStarted: () => goalStarted,
+      command: (command) => native.control(command),
+      kill() { finish(); },
       events: (async function* () {
         yield { kind: "session", cliSessionId: sessionId };
-        let text = options.cliCommand?.name === "goal" && goal ? "目标：" + goal.objective + "；预算 " + goal.tokenBudget + "；已用 " + goal.tokensUsed : options.cliState?.plan ? "测试执行器：只讨论计划" : "测试执行器：正常实施";
-        if (options.cliCommand?.name === "fork" || options.cliCommand?.name === "goal" && !options.cliCommand.args && !goal) {
-          const native = new CodexNativeCommands({ threadId: () => sessionId, turnId: () => "", model: () => "fixture", cwd: options.cwd, prompt: "", state: options.cliState, push() {}, request: async () => ({ goal }) });
+        let text = options.cliCommand?.name === "goal" && goal ? "目标：" + goal.objective + (goal.tokenBudget ? "；预算 " + goal.tokenBudget : "") + "；已用 " + goal.tokensUsed : options.cliState?.plan ? "测试执行器：只讨论计划" : "测试执行器：正常实施";
+        if (options.cliCommand?.name === "fork" || options.cliCommand?.name === "goal" && !goal) {
           text = await native.control(options.cliCommand);
         }
         yield { kind: "text", text };
+        if (liveGoal) await interrupted;
         yield { kind: "done", exitStatus: 0 };
       })(),
     };
@@ -398,6 +414,70 @@ try {
   await page.getByText("目标：分叉后的新目标；预算 250；已用 0", { exact: true }).waitFor();
   await page.screenshot({ path: join(screenshots, "fork-new-goal-budget.png"), fullPage: true });
 
+  for (const agentType of ["codex", "claude"]) {
+    const taskId = `live-${agentType}-goal`;
+    await page.goto(`${base}/?project=cli-ui&task=${taskId}`);
+    const beforeRun = await sessionEnds(taskId);
+    const [runResponse] = await Promise.all([
+      page.waitForResponse((value) => value.url().endsWith(`/tasks/${taskId}/run`) && value.request().method() === "POST"),
+      page.getByRole("button", { name: "运行", exact: true }).click(),
+    ]);
+    assert.equal(runResponse.status(), 202);
+    await idleTask(taskId, beforeRun);
+    await page.getByText("测试执行器：正常实施", { exact: true }).last().waitFor();
+    const liveReply = page.getByRole("textbox", { name: "回复任务" });
+    const sendLive = async (text, expectedStatus) => {
+      await liveReply.fill(`${text} `);
+      const [returned] = await Promise.all([
+        page.waitForResponse((value) => value.url().endsWith(`/tasks/${taskId}/reply`) && value.request().method() === "POST"),
+        page.getByRole("button", { name: /^(发送回复|排队发送，任务跑完自动发出)$/ }).click(),
+      ]);
+      assert.equal(returned.status(), expectedStatus);
+      return returned.json();
+    };
+    await sendLive(`/goal 等待实时目标控制${agentType === "codex" ? " --budget 500" : ""}`, 202);
+    await page.getByText(/^目标：等待实时目标控制；/).last().waitFor();
+    assert.equal((await (await fetch(`${base}/api/tasks/${taskId}`)).json()).status, "running");
+    const beforePause = await sessionEnds(taskId);
+    assert.equal((await sendLive("/goal pause", 200)).command, true);
+    const paused = await idleTask(taskId, beforePause);
+    assert.equal(paused.status, "paused");
+    const pauseNotice = page.getByText(/^持续目标已暂停；/).filter({ visible: true }).last();
+    await pauseNotice.waitFor();
+    assert.match(await pauseNotice.innerText(), /\/goal resume/);
+    await page.reload();
+    await pauseNotice.waitFor();
+    await page.screenshot({ path: join(screenshots, `${agentType}-goal-paused-reloaded.png`), fullPage: true });
+
+    await sendLive("/goal resume", 202);
+    assert.equal((await lastInvocation()).cliState.goal?.objective, "等待实时目标控制");
+    await page.getByText(/^目标：等待实时目标控制；/).last().waitFor();
+    const beforeClear = await sessionEnds(taskId);
+    assert.equal((await sendLive("/goal clear", 200)).command, true);
+    if (agentType === "claude") {
+      const deadline = Date.now() + 10_000;
+      while ((await lastInvocation()).cliCommand?.text !== "/goal clear") {
+        assert.ok(Date.now() < deadline, log);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    const cleared = await idleTask(taskId, beforeClear);
+    assert.equal(cleared.status, "paused");
+    const clearNotice = page.getByText(/^持续目标已清除；/).filter({ visible: true }).last();
+    await clearNotice.waitFor();
+    assert.match(await clearNotice.innerText(), /\/goal 描述/);
+    assert.doesNotMatch(await clearNotice.innerText(), /\/goal resume/);
+    await page.reload();
+    await clearNotice.waitFor();
+    await page.screenshot({ path: join(screenshots, `${agentType}-goal-cleared-reloaded.png`), fullPage: true });
+    assert.match((await sendLive("/goal resume", 409)).error, /没有可恢复的目标/);
+    const beforeReplacement = await sessionEnds(taskId);
+    await sendLive(`/goal 重新设置后的目标${agentType === "codex" ? " --budget 600" : ""}`, 202);
+    await idleTask(taskId, beforeReplacement);
+    assert.equal((await lastInvocation()).cliState.goal.objective, "重新设置后的目标");
+    await page.getByText(/^目标：重新设置后的目标；/).last().waitFor();
+  }
+
   await page.goto(`${base}/?project=cli-ui&task=team-ui-task`);
   const teamReply = page.getByPlaceholder("调度者待命中，说句话就接回同一会话…");
   await teamReply.fill("/");
@@ -463,6 +543,7 @@ try {
   console.log("plan scope labels survive profile switches and reloads; single-scope off stays visible; Codex Run and Claude Run/Retry reset every Codex scope: passed");
   console.log("Claude standing tasks keep scoped Codex notices; real @ summon and /plan off match invocation state without changing the standing agent: passed");
   console.log("fork output reports cleared goal and budget, remains visible after reload, and guides a fresh budgeted goal instead of unavailable resume: passed");
+  console.log("Codex and Claude live goal pause stays resumable; clear persists truthful new-goal guidance across reloads, rejects missing resume, and accepts replacement: passed");
   console.log(`screenshots: ${screenshots}`);
 } finally {
   await browser?.close();
