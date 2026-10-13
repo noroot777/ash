@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { goalRecoveryFixtures, goalRecoverySessions, runGoalRecoveryUi } from "./cli-goal-recovery-ui.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "ash-cli-ui-"));
 const workspace = join(root, "workspace");
@@ -27,6 +28,7 @@ await db.insert(agents).values([{ id: "codex-ui", name: "codex@验证", type: "c
 await db.insert(agents).values({ id: "codex-ui-other", name: "codex@验证备用", type: "codex", extraArgs: "[]", configOverrides: "{}" });
 await db.insert(groups).values([{ id: "queue-ui", projectId: "cli-ui", name: "计划队列验证", mode: "serial", createdAt: at }, { id: "goal-ui", projectId: "cli-ui", name: "目标保护验证", mode: "parallel", createdAt: at }]);
 await db.insert(tasks).values([
+  ...goalRecoveryFixtures(at),
   { id: "codex-ui-task", projectId: "cli-ui", title: "Codex 命令", body: "测试夹具", mode: "single", status: "paused", agentType: "codex", executorId: "codex-ui", autoTitle: false, createdAt: at, updatedAt: at },
   { id: "claude-ui-task", projectId: "cli-ui", title: "Claude 目标快照", body: "测试夹具", mode: "single", status: "done", agentType: "claude", executorId: "claude-ui", autoTitle: false, stage: "accepted", cliState: JSON.stringify({ claude: { profileId: "claude-ui", ownerUserId: null, goal: { objective: "验证目标命令", status: "paused" } } }), createdAt: at, updatedAt: at },
   { id: "team-ui-task", projectId: "cli-ui", title: "团队菜单", body: "测试夹具", mode: "team", status: "idle", agentType: "codex", executorId: "codex-ui", autoTitle: false, createdAt: at, updatedAt: at },
@@ -41,6 +43,7 @@ await db.insert(tasks).values([
   ...["codex", "claude"].map((agentType) => ({ id: `live-${agentType}-goal`, projectId: "cli-ui", title: `${agentType} 运行中清除目标`, body: "实时目标控制验证", mode: "single", status: "backlog", agentType, executorId: `${agentType}-ui`, autoTitle: false, createdAt: at, updatedAt: at })),
 ]);
 await db.insert(queueItems).values({ taskId: "queue-plan-task", queueId: "queue-ui", position: 0, createdAt: at });
+await db.insert(sessions).values(goalRecoverySessions(at, workspace));
 await db.insert(sessions).values({ id: "queue-plan-session", taskId: "queue-plan-task", role: "single", agentType: "codex", executor: "codex", executorId: "codex-ui", cliSessionId: "queue-thread", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
 await db.insert(sessions).values({ id: "claude-ui-session", taskId: "claude-ui-task", role: "single", agentType: "claude", executor: "claude", executorId: "claude-ui", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
 await db.insert(sessions).values({ id: "codex-ui-session", taskId: "codex-ui-task", role: "single", agentType: "codex", executor: "codex", executorId: "codex-ui", cliSessionId: "ui-plan-thread", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
@@ -118,6 +121,7 @@ backend.stdout.on("data", (chunk) => { log += chunk; });
 backend.stderr.on("data", (chunk) => { log += chunk; });
 const base = `http://127.0.0.1:${port}`;
 let browser;
+let page;
 try {
   const deadline = Date.now() + 10_000;
   while (true) {
@@ -126,7 +130,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   browser = await chromium.launch({ ...await chromeLaunchOptions(), headless: true });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(`${base}/?project=cli-ui&task=claude-ui-task`);
@@ -599,6 +603,7 @@ try {
     assert.equal(recorded[0].cliSessionId, null);
     assert.equal(recorded[0].exitStatus, 1);
   }
+  await runGoalRecoveryUi({ page, base, screenshots, sessionEnds, idleTask });
   assert.deepEqual(pageErrors, []);
   console.log("ordinary Codex fresh task and two resumed replies have no phantom goal notices live or after reload: passed");
   console.log("native slash UI, agent/mode filtering, inline goal status without optimistic bubbles, durable reload: passed");
@@ -610,6 +615,13 @@ try {
   console.log("fork output reports cleared goal and budget, remains visible after reload, and guides a fresh budgeted goal instead of unavailable resume: passed");
   console.log("Codex and Claude live goal pause stays resumable; clear persists truthful new-goal guidance across reloads, rejects missing resume, and accepts replacement: passed");
   console.log(`screenshots: ${screenshots}`);
+} catch (error) {
+  if (page) {
+    await page.screenshot({ path: join(screenshots, "cli-regression-failed.png"), fullPage: true });
+    console.error((await page.locator("body").innerText()).slice(-7000));
+  }
+  console.error(log.slice(-3000));
+  throw error;
 } finally {
   await browser?.close();
   if (backend.exitCode === null) {

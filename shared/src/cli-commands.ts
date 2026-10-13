@@ -1,7 +1,7 @@
 import type { AgentType } from "./index.ts";
 
 export const CODEX_COMMANDS = {
-  goal: "持续目标：/goal 描述；pause / resume / clear；--budget 数量",
+  goal: "持续目标：/goal 描述；pause / resume / clear；--scopes 查看作用域；--budget 数量",
   plan: "计划模式：/plan [问题]；/plan off 退出",
   compact: "原生压缩当前会话",
   review: "原生代码审查：/review [--base 分支 | --commit SHA | 要求]",
@@ -26,7 +26,7 @@ export type CliCommandName = keyof typeof CODEX_COMMANDS;
 export class CliCommandValidationError extends Error {
   override name = "CliCommandValidationError";
 }
-export interface CliCommand { name: CliCommandName; args: string; text: string; }
+export interface CliCommand { name: CliCommandName; args: string; text: string; goalScope?: string; }
 export interface CliGoal {
   objective: string;
   status: "active" | "paused" | "blocked" | "usageLimited" | "budgetLimited" | "complete";
@@ -42,7 +42,9 @@ export interface CliSessionState {
   serviceTier?: "priority" | "default";
   goal?: CliGoal | null;
   goalHold?: boolean;
-  goalStart?: { previousStatus: string; previousGoal: CliGoal | null; previousHold: boolean };
+  goalSessionId?: string;
+  goalStart?: { previousStatus: string; previousGoal: CliGoal | null; previousHold: boolean; previousSessionId?: string };
+  goalClearStart?: { previousGoal: CliGoal | null; previousHold: boolean };
 }
 export interface CliStateScopes {
   activeScope: string | null;
@@ -77,7 +79,7 @@ export function hasCliGoalHold(raw?: string | null): boolean {
 
 export function cliCommandCatalog(agentType: string): Partial<Record<CliCommandName, string>> {
   if (agentType === "codex") return CODEX_COMMANDS;
-  if (agentType === "claude") return { goal: "持续目标：/goal 描述；pause / resume / clear", compact: CODEX_COMMANDS.compact };
+  if (agentType === "claude") return { goal: "持续目标：/goal 描述；pause / resume / clear；--scopes 查看作用域", compact: CODEX_COMMANDS.compact };
   return {};
 }
 export function cliCommandsForMode<Entry extends { name: string; source: string }>(entries: Entry[] = [], agentType: string, mode: string): Entry[] {
@@ -88,10 +90,12 @@ export function cliCommandsForMode<Entry extends { name: string; source: string 
 export function parseCliCommand(agentType: string, text: string): CliCommand | null {
   const match = /^\/([a-zA-Z][\w-]*)(?:\s+([\s\S]*))?$/.exec(text.trim());
   if (!match || !Object.hasOwn(cliCommandCatalog(agentType), match[1]!)) return null;
-  return { name: match[1] as CliCommandName, args: match[2]?.trim() ?? "", text: text.trim() };
+  const args = match[2]?.trim() ?? "";
+  const scoped = match[1] === "goal" ? /^(resume|clear|stop|off|reset|none|cancel)\s+--scope\s+(\S+)$/.exec(args) : null;
+  return { name: match[1] as CliCommandName, args: scoped?.[1] ?? args, text: text.trim(), ...(scoped ? { goalScope: scoped[2]! } : {}) };
 }
 export function isGoalExecution(command: CliCommand | null): boolean {
-  return command?.name === "goal" && !!command.args && !/^(pause|clear|stop|off|reset|none|cancel|budget)(?:\s|$)/.test(command.args);
+  return command?.name === "goal" && !!command.args && !/^(pause|clear|stop|off|reset|none|cancel|budget|--scopes)(?:\s|$)/.test(command.args);
 }
 export function goalRequest(command: CliCommand, agentType: AgentType): { objective?: string; status?: CliGoal["status"]; tokenBudget?: number } {
   if (command.args === "resume") return { status: "active" };
@@ -112,9 +116,10 @@ export function validateCliCommand(agentType: string, text: string): CliCommand 
   if (name && Object.hasOwn(CODEX_COMMANDS, name) && !Object.hasOwn(cliCommandCatalog(agentType), name)) throw new CliCommandValidationError(`当前执行器的 ash 通道不支持 /${name}`);
   const command = parseCliCommand(agentType, text);
   if (!command) return null;
+  if (command.name === "goal" && /^--scopes\s/.test(command.args)) throw new CliCommandValidationError("查看目标作用域使用 /goal --scopes，不接受额外参数");
   if (command.name === "goal" && /^(pause|resume|clear|stop|off|reset|none|cancel)\s/.test(command.args)) throw new CliCommandValidationError("目标控制命令不接受额外参数；调整预算使用 /goal budget 正整数");
   if (command.name === "goal" && /^budget(?:\s|$)/.test(command.args) && !/^budget\s+\S+$/.test(command.args)) throw new CliCommandValidationError("调整预算使用 /goal budget 正整数");
-  if (command.name === "goal" && command.args && !/^(pause|resume|clear|stop|off|reset|none|cancel)$/.test(command.args)) goalRequest(command, agentType as AgentType);
+  if (command.name === "goal" && command.args && !/^(pause|resume|clear|stop|off|reset|none|cancel|--scopes)$/.test(command.args)) goalRequest(command, agentType as AgentType);
   if (command.name === "personality" && command.args && !/^(friendly|pragmatic|none)$/.test(command.args)) throw new CliCommandValidationError("/personality 支持 friendly、pragmatic、none");
   if (command.name === "fast" && command.args && !/^(on|off)$/.test(command.args)) throw new CliCommandValidationError("/fast 支持 on、off");
   if (command.name === "rename" && (!command.args || command.args.length > 200)) throw new CliCommandValidationError("/rename 后填写 1–200 字符的名称");

@@ -36,6 +36,7 @@ export class CodexNativeCommands {
   goal: CliGoal | null = null;
   goalExecution = false;
   goalStarted = false;
+  private snapshotOnlyClear = false;
   constructor(private readonly transport: Transport) {}
 
   notification(method: string, params: any): void {
@@ -55,6 +56,13 @@ export class CodexNativeCommands {
     } catch (error) {
       if (command?.name === "goal") throw error;
     }
+    const expected = this.transport.state?.goalClearStart?.previousGoal ?? this.transport.state?.goal;
+    const scopedState = this.transport.state?.profileId !== undefined || this.transport.state?.ownerUserId !== undefined;
+    const matches = !!this.goal && (!expected || (this.goal.objective === expected.objective && (this.goal.tokenBudget ?? null) === (expected.tokenBudget ?? null) && (this.goal.tokensUsed ?? 0) >= (expected.tokensUsed ?? 0)));
+    if (command?.name === "goal" && command.args === "resume" && !matches) throw new Error("原生会话中的目标与保存快照不一致；目标、预算和已用量仍保留。使用 /goal --scopes 选择原目标，或清除该作用域。");
+    if (command?.name === "goal" && (scopedState || expected) && ((command.args === "pause" || /^budget\s/.test(command.args)) ? !expected || !matches : !command.args && expected && !matches)) throw new Error("原生会话中没有与所选作用域一致的目标；未改变目标、预算或已用量。使用 /goal --scopes 选择原目标。");
+    this.snapshotOnlyClear = command?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(command.args) && !!this.goal && (expected ? !matches : scopedState);
+    if (this.snapshotOnlyClear) return;
     if (this.goal?.status === "active") {
       this.goal = (await this.transport.request("thread/goal/set", { threadId: this.transport.threadId(), status: "paused" })).goal;
     }
@@ -115,6 +123,7 @@ export class CodexNativeCommands {
     if (command.name === "goal") {
       if (!command.args) this.goal = (await request("thread/goal/get", { threadId })).goal ?? null;
       else if (/^(clear|stop|off|reset|none|cancel)$/.test(command.args)) {
+        if (this.snapshotOnlyClear) return "所选作用域的目标快照已清除；原生会话属于其他目标，未清除其目标、预算或已用量。";
         await request("thread/goal/clear", { threadId }); this.goal = null;
       } else {
         if (isGoalExecution(command)) throw new Error("运行中不能替换目标；先 /goal pause，再设置或恢复目标");

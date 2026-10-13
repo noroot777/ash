@@ -7,7 +7,7 @@
     "node": ">=22.16.0"
   },
   "scripts": {
-    "test:cli-commands": "tsx scripts/test-cli-commands.ts && tsx scripts/test-codex-goal-bridge.ts && tsx scripts/test-cli-command-task.ts && tsx scripts/test-cli-command-startup.ts && tsx scripts/test-cli-plan-scheduling.ts && tsx scripts/test-cli-state-scopes.ts && tsx scripts/test-diagnostic-session-reply.ts",
+    "test:cli-commands": "tsx scripts/test-cli-commands.ts && tsx scripts/test-codex-goal-bridge.ts && tsx scripts/test-cli-command-task.ts && tsx scripts/test-cli-command-startup.ts && tsx scripts/test-cli-plan-scheduling.ts && tsx scripts/test-cli-state-scopes.ts && tsx scripts/test-cli-goal-recovery.ts && tsx scripts/test-diagnostic-session-reply.ts",
     "test:diagnostic-session-reply": "tsx scripts/test-diagnostic-session-reply.ts",
     "test:goal-native-live": "tsx scripts/test-goal-native-live.ts && tsx scripts/test-claude-goal-live.ts",
     "test:side-chat": "tsx scripts/test-side-authorization.ts && tsx scripts/test-side-chat.ts && tsx scripts/test-side-chat-deletion.ts",

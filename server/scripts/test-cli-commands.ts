@@ -24,6 +24,15 @@ try {
   for (const agent of ["gemini", "kimi", "claude"]) assert.throws(() => command("/fast on", agent), /不支持/);
   assert.equal(isGoalExecution(command("/goal 通过所有测试")), true);
   assert.equal(isGoalExecution(command("/goal resume")), true);
+  assert.equal(isGoalExecution(command("/goal --scopes")), false);
+  for (const agent of ["codex", "claude"]) {
+    const selected = command("/goal resume --scope codex:encoded-scope", agent);
+    assert.equal(selected.args, "resume");
+    assert.equal(selected.goalScope, "codex:encoded-scope");
+    assert.equal(isGoalExecution(selected), true);
+    assert.equal(command("/goal clear --scope claude:encoded-scope", agent).args, "clear");
+    for (const text of ["/goal --scopes extra", "/goal resume --scope", "/goal resume --scope id extra", "/goal pause --scope id"]) assert.throws(() => command(text, agent));
+  }
   assert.equal(isGoalExecution(command("/goal pause")), false);
   assert.equal(isGoalExecution(command("/goal budget 400")), false);
   assert.deepEqual(goalRequest(command("/goal 通过所有测试 --budget 400"), "codex"), { objective: "通过所有测试", status: "active", tokenBudget: 400 });
@@ -110,6 +119,47 @@ try {
   assert.doesNotMatch(forkNotice, /\/goal resume/);
   const idle = new CodexNativeCommands({ threadId: () => "idle", turnId: () => "ordinary", model: () => "model", cwd: root, prompt: "", push() {}, request: async (method) => { assert.notEqual(method, "turn/interrupt"); return { goal: null }; } });
   await idle.control(command("/goal"));
+
+  const savedGoal: CliGoal = { objective: "原作用域目标", status: "paused", tokenBudget: 150, tokensUsed: 150 };
+  for (const nativeGoal of [{ ...savedGoal, objective: "另一个目标" }, { ...savedGoal, tokenBudget: 300 }, { ...savedGoal, tokensUsed: 149 }]) {
+    const guardedCalls: string[] = [];
+    const guarded = new CodexNativeCommands({
+      threadId: () => "guarded", turnId: () => "", model: () => "model", cwd: root, prompt: "", state: { goal: savedGoal, goalHold: true }, push() {},
+      request: async (method) => { guardedCalls.push(method); return { goal: nativeGoal }; },
+    });
+    for (const text of ["/goal resume", "/goal", "/goal pause", "/goal budget 300"]) {
+      guardedCalls.length = 0;
+      await assert.rejects(guarded.prepare(command(text)), /作用域|快照/);
+      assert.deepEqual(guardedCalls, ["thread/goal/get"], "mismatched goals must never issue model, setter or pause calls");
+    }
+    guardedCalls.length = 0;
+    await guarded.prepare(command("/goal clear"));
+    assert.match(await guarded.control(command("/goal clear")), /原生会话属于其他目标/);
+    assert.deepEqual(guardedCalls, ["thread/goal/get"], "selected snapshot cleanup must not clear another native goal's budget or usage");
+  }
+  for (const text of ["/goal pause", "/goal budget 300", "/goal clear"]) {
+    const noSavedGoal = new CodexNativeCommands({
+      threadId: () => "unsaved", turnId: () => "", model: () => "model", cwd: root, prompt: "", state: { profileId: "cleared-scope", ownerUserId: null }, push() {},
+      request: async (method) => { assert.equal(method, "thread/goal/get"); return { goal: savedGoal }; },
+    });
+    if (text === "/goal clear") {
+      await noSavedGoal.prepare(command(text));
+      assert.match(await noSavedGoal.control(command(text)), /未清除其目标、预算或已用量/);
+    } else await assert.rejects(noSavedGoal.prepare(command(text)), /未改变目标、预算或已用量/);
+  }
+  const matching = new CodexNativeCommands({
+    threadId: () => "matching", turnId: () => "", model: () => "model", cwd: root, prompt: "", state: { goal: savedGoal }, push() {},
+    request: async (method) => { assert.equal(method, "thread/goal/get"); return { goal: { ...savedGoal, tokensUsed: 160 } }; },
+  });
+  await matching.prepare(command("/goal resume"));
+  assert.equal(matching.goal?.tokenBudget, 150);
+  assert.equal(matching.goal?.tokensUsed, 160);
+  const standalone = new CodexNativeCommands({
+    threadId: () => "standalone", turnId: () => "", model: () => "model", cwd: root, prompt: "", state: { plan: false }, push() {},
+    request: async (method, params) => ({ goal: method === "thread/goal/set" ? { ...savedGoal, ...params } : savedGoal }),
+  });
+  await standalone.prepare(command("/goal budget 300"));
+  assert.match(await standalone.control(command("/goal budget 300")), /150 \/ 300/);
 
   const goalNotifications: AgentEvent[] = [];
   const goalChannel = new CodexNativeCommands({ threadId: () => "ordinary", turnId: () => "turn", model: () => "model", cwd: root, prompt: "", push: (event) => goalNotifications.push(event), request: async () => ({ goal: null }) });

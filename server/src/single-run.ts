@@ -433,7 +433,7 @@ export async function consumeSingleRun(a: {
 
   try {
     for await (const event of a.handle.events) {
-      if (goalStartPending && a.handle.goalStarted?.()) { await markCliGoalStarted(taskId, agentType); goalStartPending = false; }
+      if (goalStartPending && a.handle.goalStarted?.()) { await markCliGoalStarted(taskId, agentType, event.kind === "session" ? event.cliSessionId : cliSessionId); goalStartPending = false; }
       if (event.kind === "session") {
         if (event.cliSessionId !== cliSessionId) {
           cliSessionId = event.cliSessionId;

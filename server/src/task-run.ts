@@ -27,7 +27,7 @@ import { recordTurnStart } from "./turn-output.js";
 import { abortIfFrozen } from "./turn-freeze.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
-import { interruptCliGoal, preflightCliGoalResume, prepareCliInvocation } from "./task-cli-state.js";
+import { interruptCliGoal, preflightCliGoalCommand, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
@@ -80,6 +80,7 @@ export async function runTask(
   if (opts.turnHeld) reclaimTurn(taskId, "single");
   else if (!claimTurn(taskId)) return;
   let handle: RunHandle | undefined;
+  let invocationAgent: AgentType | undefined;
   // 解析工作目录那一刻就可能把登记的基线**落库换掉**了(persistBaseFallback)，而说明写在
   // 下面 spawn 成功之后 —— 所以这两件事得挂在 try 外面，失败那条路才补得上同一句话
   //（见 base-fallback-notice.ts）。
@@ -89,7 +90,9 @@ export async function runTask(
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
     if (task.mode !== "single") throw new Error("duet mode runs in M4");
-    await preflightCliGoalResume(task, (task.agentType as AgentType) ?? "claude", task.body.trim(), task.executorId, opts.actingUserId ?? task.ownerUserId);
+    const goalRoute = await preflightCliGoalCommand(task, (task.agentType as AgentType) ?? "claude", task.body.trim(), task.executorId, opts.actingUserId ?? task.ownerUserId);
+    if (goalRoute) Object.assign(task, { agentType: goalRoute.agent, executorId: goalRoute.executorId, model: null, reasoningEffort: null });
+    invocationAgent = (task.agentType as AgentType) ?? "claude";
 
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("project not found");
@@ -268,8 +271,9 @@ export async function runTask(
     // 发生顺序。没说过才补（spawn 成功后崩的那种，上面已经写过一条）。
     if (!baseFallbackTold) await announceBaseFallback(taskId, baseFallback, target ?? { role: "single" });
     await reportTurnFailure({ taskId, message, role: "single", agentType: target?.agentType, target });
-    const goalHeld = failedTask?.goalTurn && await interruptCliGoal(failedTask, failedTask.agentType ?? "claude", handle?.goalStarted?.() ?? !!handle?.goal?.());
-    const status = stopped ?? (goalHeld ? "paused" : "failed");
+    const goalHeld = failedTask && await interruptCliGoal(failedTask, invocationAgent ?? failedTask.agentType ?? "claude", handle?.goalStarted?.() ?? !!handle?.goal?.());
+    const [restored] = await db.select().from(tasks).where(eq(tasks.id, taskId));
+    const status = stopped ?? (goalHeld || (failedTask?.goalTurn && restored?.followUpFrom === "paused") ? "paused" : "failed");
     await setTaskStatus(taskId, status);
     await afterSettlement(taskId, status, false, false, "single", true, !stopped);
   } finally {

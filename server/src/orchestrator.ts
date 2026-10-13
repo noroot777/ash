@@ -33,7 +33,8 @@ import { bindUploadsToTask } from "./uploads.js";
 import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
-import { preflightCliGoalResume, prepareCliInvocation, readCliState } from "./task-cli-state.js";
+import { preflightCliGoalCommand, prepareCliInvocation, readCliState } from "./task-cli-state.js";
+import { cliGoalSessionCandidates } from "./task-cli-goal-scopes.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
@@ -193,7 +194,10 @@ export async function continueTask(
   );
   const slash = parseCliCommand(opts.agent ?? (head?.agentType as AgentType) ?? "claude", userText);
   const goalExecution = isGoalExecution(slash);
-  if (head) await preflightCliGoalResume(head, opts.agent ?? (head.agentType as AgentType) ?? "claude", userText, opts.agent ? opts.executorId ?? null : head.executorId, opts.actingUserId ?? head.ownerUserId);
+  if (head) {
+    const goalRoute = await preflightCliGoalCommand(head, opts.agent ?? (head.agentType as AgentType) ?? "claude", userText, opts.agent ? opts.executorId ?? null : head.executorId, opts.actingUserId ?? head.ownerUserId);
+    if (goalRoute) opts = { ...opts, ...goalRoute };
+  }
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
   // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的
@@ -354,7 +358,7 @@ export async function continueTask(
       ? []
       : opts.resumeSessionId
         ? all.filter((s) => s.id === opts.resumeSessionId)
-        : all.filter((s) => s.agentType === agent && s.role === sessionRole);
+        : cliGoalSessionCandidates(task, agent, profileId, runOwner, slash, all.filter((session) => session.agentType === agent && session.role === sessionRole));
     let prev: typeof all[number] | undefined;
     for (const s of candidates) {
       if (await resumableHere(s)) { prev = s; break; }
@@ -681,6 +685,7 @@ export async function continueTask(
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);
+    if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
   // 落到时间线/状态上)。返回 false 的只有两类「一个字没送出去」:被单飞锁挡回,和

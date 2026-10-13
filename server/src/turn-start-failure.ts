@@ -55,8 +55,9 @@ export async function recoverFailedTurnStart(input: {
   });
   await reconcileTurnBaseline(taskId, false).catch(() => undefined);
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  const goalHeld = row?.goalTurn && await interruptCliGoal(row, agentType, input.goalStarted ?? false);
-  const back = (row?.followUpFrom as TaskStatus | null | undefined) ?? (!goalHeld ? input.goalStartFrom : null);
+  const goalHeld = row && await interruptCliGoal(row, agentType, input.goalStarted ?? false);
+  const restored = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  const back = (restored?.followUpFrom as TaskStatus | null | undefined) ?? (!goalHeld ? input.goalStartFrom : null);
   // 原生命令标记跟 followUpFrom 一样**只在本回合内有效**:CLI 还没起来就抛错时,正常
   // 那条清理路(settleTaskStatus)根本没跑过 —— 不在这儿清掉,标记就漏给下一轮,下一轮
   // 的真实结算会被整段跳过(当成「那是次压缩」)。
