@@ -29,11 +29,10 @@ import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { abortIfFrozen, FrozenTurn } from "./turn-freeze.js";
 import { recoverFailedTurnStart } from "./turn-start-failure.js";
-import { bindUploadsToTask } from "./uploads.js";
 import { freeReviewReminder } from "./free-workflow.js";
-import { nativeCliCommand, withSkillInvocation } from "./skills.js";
-import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
-import { preflightCliGoalCommand, prepareCliInvocation, readCliState } from "./task-cli-state.js";
+import { withSkillInvocation } from "./skills.js";
+import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
+import { prepareContinuationEntry } from "./task-continuation-entry.js";
 import { cliGoalSessionCandidates } from "./task-cli-goal-scopes.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
@@ -183,22 +182,8 @@ export async function continueTask(
   // 任务的执行,也不是「新指令」。这一轮必须当旁路回合(下面的 sideTurn),否则「压一下
   // 上下文」既会被打成 failed,也会顺手把已验收的牌子摘掉——旁路回合不拍工作目录快照,
   // 没有任何基线能把摘掉的牌子挂回去,压一次就永久丢掉一次验收。
-  const head = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  // 这一轮带的附件跟着任务走进项目轴(uploads.ts)。放在最前面:团队调度台那条路
-  // 在下面就 return 了,放后面等于团队任务的附件永远挂不上归属。
-  // `actingUserId` 是「谁点的这一轮」—— 后端路径(队列推进、定时投递)不传,那时附件
-  // 早在真人发起的那一步登记过了,这里再走一遍只是补空位。
-  await bindUploadsToTask(opts.attachments, taskId, opts.actingUserId ?? null);
-  const nativeCommand = nativeCliCommand(
-    opts.agent ?? (head?.agentType as AgentType) ?? "claude",
-    userText,
-  );
-  const slash = parseCliCommand(opts.agent ?? (head?.agentType as AgentType) ?? "claude", userText);
-  const goalExecution = isGoalExecution(slash);
-  if (head) {
-    const goalRoute = await preflightCliGoalCommand(head, opts.agent ?? (head.agentType as AgentType) ?? "claude", userText, opts.agent ? opts.executorId ?? null : head.executorId, opts.actingUserId ?? head.ownerUserId);
-    if (goalRoute) opts = { ...opts, ...goalRoute };
-  }
+  const { head, nativeCommand, slash, goalExecution, options } = await prepareContinuationEntry(taskId, userText, opts);
+  opts = options;
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
   // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的

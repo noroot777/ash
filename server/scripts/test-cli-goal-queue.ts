@@ -23,10 +23,11 @@ const { saveCliState } = await import("../src/task-cli-state.js");
 const { cliGoalScopeSelector } = await import("../src/task-cli-goal-scopes.js");
 const { replyToTask } = await import("../src/task-reply.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
+const { continueTask } = await import("../src/orchestrator.js");
 const { deliverPendingMessages } = await import("../src/pending-messages.js");
 const { claimQueueSeat } = await import("../src/queue-seat.js");
 const { queueBlockers } = await import("../src/queues.js");
-const { isTurnClaimed, stopTask } = await import("../src/runs.js");
+const { claimTurn, isTurnClaimed, releaseTurn, stopTask } = await import("../src/runs.js");
 await ensureSchema();
 
 const invocations = new Map<string, RunOpts[]>();
@@ -105,9 +106,9 @@ async function createPair(taskId: string, agentType: AgentType, status: TaskStat
   ]);
   return siblingId;
 }
-async function seed(taskId: string, agentType: AgentType, held = true): Promise<CliSessionState> {
+async function seed(taskId: string, agentType: AgentType, held = true, profileId = `${agentType}-old`): Promise<CliSessionState> {
   const state: CliSessionState = {
-    profileId: `${agentType}-old`, ownerUserId: null, goalSessionId: `${taskId}-original-native`, goalHold: held,
+    profileId, ownerUserId: null, goalSessionId: `${taskId}-original-native`, goalHold: held,
     goal: { objective: "保留原目标", status: held ? "paused" : "complete", tokenBudget: 150, tokensUsed: 50, timeUsedSeconds: 21 },
   };
   await saveCliState(taskId, agentType, state, true);
@@ -255,6 +256,74 @@ try {
       await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, message.id));
     }
     console.log(`${agentType}: run/retry pending-goal handoff preserves terminal status on startup failure: passed`);
+
+    for (const status of ["failed", "canceled", "paused"] as const) for (const invalidated of ["profile", "goal", "goal-only"] as const) {
+      const taskId = `${agentType}-stale-${status}-${invalidated}`;
+      const profileId = `${taskId}-profile`;
+      const siblingId = await createPair(taskId, agentType, status, "running");
+      await db.insert(agents).values({ id: profileId, name: `${agentType}@待删除目标`, type: agentType });
+      const saved = await seed(taskId, agentType, true, profileId);
+      const foreign = await otherScopes(taskId, agentType, saved);
+      const response = await reply(taskId, "/goal resume");
+      const result = await response.json();
+      assert.equal(response.status, 202);
+      assert.equal(result.scheduled, true);
+      assert.equal(result.message.execution, true);
+      await db.update(groups).set({ paused: true }).where(eq(groups.id, taskId));
+      if (invalidated !== "goal-only") await db.delete(agents).where(eq(agents.id, profileId));
+      const clearText = `/goal clear --scope ${cliGoalScopeSelector(agentType, saved)}`;
+      if (invalidated !== "profile") {
+        assert.ok([200, 202].includes((await reply(taskId, clearText)).status));
+        await waitFor(taskId, (task) => !isTurnClaimed(taskId) && !readCliState(task.cliState, agentType, profileId, null).goal);
+      }
+      const before = await row(taskId);
+      const originalSession = (await db.select().from(sessions).where(eq(sessions.id, `${taskId}-original`)))[0]!;
+      const beforeCalls = calls(taskId);
+      assert.equal(claimTurn(taskId), true);
+      try {
+        await assert.rejects(continueTask(taskId, result.message.text), /原执行器已不可用|目标作用域不存在或已清除/);
+        assert.equal(isTurnClaimed(taskId), true, "preflight without a borrowed lock cannot release another caller's turn");
+      } finally {
+        releaseTurn(taskId);
+      }
+      await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, siblingId));
+      assert.equal((await request(`/tasks/${taskId}/${status === "failed" ? "retry" : "run"}`)).status, 202);
+      const restored = await waitFor(taskId, (task) => task.status === status && !isTurnClaimed(taskId));
+      const message = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, result.message.id)))[0]!;
+      assert.equal(message.status, "canceled", "stale recovery is rejected, not delivered or retried forever");
+      assert.equal(message.deliveringSince, null);
+      assert.equal(calls(taskId), beforeCalls, "invalid recovery never starts a CLI or silently migrates to the new default");
+      assert.equal(restored.cliState, before.cliState, "preflight refusal cannot rewrite any goal, budget, usage or hold");
+      assert.equal(restored.activeTurnToken, before.activeTurnToken);
+      assert.equal(restored.goalTurn, before.goalTurn);
+      assert.equal(restored.nativeTurn, before.nativeTurn);
+      assert.equal(restored.followUpFrom, before.followUpFrom);
+      assert.deepEqual((await db.select().from(sessions).where(eq(sessions.id, `${taskId}-original`)))[0], originalSession);
+      assert.deepEqual(await queueBlockers(siblingId), status === "paused" ? [taskId] : [], "only the original paused state may block the next task");
+      if (status !== "paused") {
+        const seat = await claimQueueSeat(siblingId);
+        assert.equal(seat.ok, true);
+        if (seat.ok) await seat.seat?.release();
+      }
+      const clearCalls = calls(taskId);
+      const clearResponse = await reply(taskId, clearText);
+      assert.ok([200, 202].includes(clearResponse.status), "a rejected recovery must not block goal clearing");
+      await waitFor(taskId, (task) => (clearResponse.status === 200 || calls(taskId) > clearCalls) && !isTurnClaimed(taskId) && !readCliState(task.cliState, agentType, profileId, null).goal);
+      const cleared = await row(taskId);
+      assert.equal(readCliState(cleared.cliState, agentType, profileId, null).goal, null);
+      assert.equal(readCliState(cleared.cliState, agentType, profileId, null).goalHold, false);
+      assert.deepEqual(readCliState(cleared.cliState, agentType, profileId, foreign.ownerUserId), foreign);
+      assert.equal(readCliState(cleared.cliState, agentType, `${agentType}-new`, null).personality, "friendly");
+      await db.update(tasks).set({ body: "普通任务" }).where(eq(tasks.id, taskId));
+      holding.add(taskId);
+      const nextCall = calls(taskId) + 1;
+      const rerun = await request(`/tasks/${taskId}/run`);
+      assert.equal(rerun.status, 202, `${taskId}: manual run must be reachable again; ${JSON.stringify(await rerun.json())}`);
+      await active(taskId, nextCall);
+      assert.equal((await request(`/tasks/${taskId}/stop`)).status, 200);
+      await settled(taskId, "canceled");
+    }
+    console.log(`${agentType}: invalidated queued goals restore run/retry status, locks, scopes and queue seats: passed`);
 
     const timedId = `${agentType}-timed`;
     const timedSibling = await createPair(timedId, agentType, "canceled", "running");
