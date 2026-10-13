@@ -50,7 +50,8 @@ try {
     "刷新后输入框被清空。",
   ], "新格式应只抽「你会遇到」那几行，且不把正向行为一节算进来");
 
-  // 老格式（1103 份）：没有锚点，退回认三级标题，并滤掉非发现小节。
+  // 老格式（库里 1103 份）：没有锚点，按「条目标记 + 发现节容器」抽。下面四种形状全是
+  // 全库真实报告里数出来的，按标题层级抽会在后两种上双向翻车（见 review-history.ts 注释）。
   const legacy = [
     "# 第 3 轮报告", "", "结论：**verify_failed**。", "", "## Finding", "",
     "### P1：孤儿写租约在 GET 途中到期时会提前放行烧录", "", "位置：`web/src/refresh.ts:198-209`", "",
@@ -60,8 +61,44 @@ try {
   assert.deepEqual(
     extractReportFindings(legacy),
     ["P1：孤儿写租约在 GET 途中到期时会提前放行烧录"],
-    "老格式应抽三级标题，并滤掉「已验证」「清场」这类小节",
+    "发现节下的条目要抽到，「已验证」「清场」这类小节要滤掉",
   );
+
+  // `ca9rtmb6aFAP/round-5` 的形状：真发现是**二级**标题，它的证据才是三级。
+  const h2Finding = [
+    "# 第 5 轮逻辑审查报告", "", "## 结论", "", "## 审查范围", "",
+    "## P1：通道基线只按世代号验盘，同号异内容会错误放行烧录", "",
+    "### 代码证据", "", "### Vitest 最小复现", "", "### 真实浏览器复现", "",
+    "## 其他验证", "", "## 清理与最终状态", "",
+  ].join("\n");
+  assert.deepEqual(
+    extractReportFindings(h2Finding),
+    ["P1：通道基线只按世代号验盘，同号异内容会错误放行烧录"],
+    "二级标题的发现要抽到，三级的证据小节不许冒充发现",
+  );
+
+  // `Fa8UBhSrhHc1/round-9` 的形状：`## 缺陷：…` 自带标记，不能被当成「缺陷」那一节的容器
+  // ——当成容器就会把它底下的原因/影响/建议搬成三条发现，而真发现被丢掉。
+  const markedWithBody = [
+    "# 第 9 轮逻辑审查报告", "", "## 结论", "",
+    "## 缺陷：generation 在正式发布后才写且失败时 fail-open，ABA 防护仍可丢失", "",
+    "### 原因", "", "### 真实子进程复现 1：generation 写失败仍成功退出", "",
+    "### 影响", "", "### 建议", "", "## 实际验证", "",
+  ].join("\n");
+  assert.deepEqual(
+    extractReportFindings(markedWithBody),
+    ["缺陷：generation 在正式发布后才写且失败时 fail-open，ABA 防护仍可丢失"],
+    "自带标记的标题是发现本体，不是容器",
+  );
+
+  // `ca9rtmb6aFAP/round-6` 的形状：那一轮通过，一条发现都没有，不许把验证步骤搬成发现。
+  const verifiedRound = [
+    "# 第 6 轮逻辑审查报告", "", "## 结论", "", "## 代码审查", "", "## 真实浏览器验证", "",
+    "### 通道选择", "", "### 同世代不同内容的通道碰撞", "", "### 冲突后清空存储", "",
+  ].join("\n");
+  assert.deepEqual(extractReportFindings(verifiedRound), [], "通过轮次的验证步骤不是发现");
+  // 「问题分析方法」这类标题不带分隔符也不带编号，不算条目标记。
+  assert.deepEqual(extractReportFindings("## 问题分析方法\n\n正文"), [], "标记必须跟编号或分隔符");
   assert.deepEqual(extractReportFindings(""), [], "空报告不许编一行出来");
   assert.deepEqual(
     extractReportFindings("# 报告\n\n结论：通过，没有发现问题。\n"),
@@ -76,8 +113,15 @@ try {
   assert.equal(
     priorFindingsSection([{ label: "第 1 轮", conclusion: "verified", reportPath: "/r/1.md", findings: [] }]),
     "",
-    "历史轮次都抽不到现象时同样不塞小节",
+    "通过的轮次抽不到现象时不塞小节",
   );
+  // 没通过却抽不到现象行（全库 301 份）：整轮藏掉等于把最该看的那几轮删了，所以留一行
+  // 指向报告，且只说「没抽出来」，不编内容。
+  const fallback = priorFindingsSection([
+    { label: "第 2 轮", conclusion: "verify_failed", reportPath: "/r/2.md", findings: [] },
+  ]);
+  assert.match(fallback, /现象行没抽出来，整份报告在 \/r\/2\.md/, "失败轮次不许被整轮藏掉");
+  assert.match(fallback, /第 2 轮 · verify_failed/, "兜底那一行也要带轮次和结论");
   const section = priorFindingsSection([
     { label: "第 1 条审查链第 2 轮", conclusion: "verify_failed", reportPath: "/r/a.md", findings: ["多开页会覆盖脚本"] },
     { label: "第 3 轮", conclusion: "verify_failed", reportPath: "/r/b.md", findings: ["刷新后结果写错", "复制标签页也会写错"] },
