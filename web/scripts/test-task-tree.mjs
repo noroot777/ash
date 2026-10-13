@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { advanceHiddenReveal, buildTaskTree, groupTasksByProject, keepVisibleInPreview, orderedTopLevelTasks, previewTasksByAge, revealMore, revealMoreLabel, revealToIndex, TASK_REVEAL_PAGE } from "../src/workspace/taskTreeModel.ts";
+import { advanceHiddenReveal, buildTaskTree, groupTaskModeProjects, groupTasksByProject, keepVisibleInPreview, orderedTopLevelTasks, previewProjectTasks, previewTasksByAge, revealMore, revealMoreLabel, revealToIndex, TASK_REVEAL_PAGE } from "../src/workspace/taskTreeModel.ts";
 
 function task(id, mode, {
   pinnedAt = null,
@@ -204,5 +204,47 @@ assert.deepEqual(byProject.map((group) => group.tasks.map((row) => row.id)), [["
 // 一条不落：分组只是把同一批行换个排法，不许顺手筛掉谁。
 assert.equal(byProject.reduce((sum, group) => sum + group.tasks.length, 0), 4);
 assert.deepEqual(groupTasksByProject([]), []);
+
+const modeDefaults = [
+  { ...task("b-live", "single"), projectId: "beta" },
+  { ...task("a-live", "single"), projectId: "alpha" },
+];
+const modePinned = [{ ...task("c-pin", "single", { pinnedAt: 50 }), projectId: "gamma" }];
+const modeAll = [
+  ...modeDefaults,
+  ...modePinned,
+  { ...task("a-recent", "single", { updatedAt: "2026-08-10T00:00:00.000Z" }), projectId: "alpha" },
+  { ...task("a-pin", "single", { pinnedAt: 100 }), projectId: "alpha" },
+  { ...task("b-elsewhere", "single"), projectId: "beta", handoff: { direction: "out" } },
+  { ...task("c-settled", "team"), projectId: "gamma" },
+  { ...task("worker", "single"), projectId: "gamma", parentId: "c-settled" },
+  { ...task("archived", "single"), projectId: "alpha", archived: true },
+  { ...task("idle", "single"), projectId: "idle" },
+];
+const modeGroups = groupTaskModeProjects(modeDefaults, modeAll, modePinned);
+assert.deepEqual(modeGroups.map((group) => group.projectId), ["beta", "alpha", "gamma"]);
+assert.deepEqual(modeGroups.map((group) => group.tasks.map((row) => row.id)), [["b-live"], ["a-live"], []]);
+assert.deepEqual(modeGroups.map((group) => group.extraTasks.map((row) => row.id)), [
+  ["b-elsewhere"], ["a-pin", "a-recent"], ["c-settled"],
+]);
+assert.deepEqual(groupTaskModeProjects([], modeAll, []), [], "没有默认任务的项目不额外占据默认列表");
+const modePreview = previewProjectTasks(modeDefaults.slice(1), modeGroups[1].extraTasks, Date.parse("2026-08-01T12:00:00.000Z"));
+assert.deepEqual(modePreview.visible.map((row) => row.id), ["a-live"], "最近更新或置顶的补充任务也必须等展开后再显示");
+assert.deepEqual(modePreview.hidden.map((row) => row.id), ["a-pin", "a-recent"]);
+const agePreview = previewProjectTasks([
+  task("recent-live", "single", { updatedAt: "2026-08-10T00:00:00.000Z" }),
+  task("old-live", "single"),
+], [task("extra", "single", { updatedAt: "2026-08-08T00:00:00.000Z" })], Date.parse("2026-08-10T12:00:00.000Z"));
+assert.deepEqual(agePreview.visible.map((row) => row.id), ["recent-live"]);
+assert.deepEqual(agePreview.hidden.map((row) => row.id), ["old-live", "extra"], "先揭示任务模式的年龄闸任务，再追加项目历史任务");
+const recentHistory = Array.from({ length: 420 }, (_, index) => task(`history-${index}`, "single", {
+  updatedAt: "2026-08-09T00:00:00.000Z",
+}));
+const deepPreview = previewProjectTasks([
+  task("recent-live", "single", { updatedAt: "2026-08-10T00:00:00.000Z" }),
+  ...Array.from({ length: 4 }, (_, index) => task(`aged-live-${index}`, "single")),
+], recentHistory, Date.parse("2026-08-10T12:00:00.000Z"));
+assert.deepEqual(deepPreview.hidden.slice(0, 4).map((row) => row.id), ["aged-live-0", "aged-live-1", "aged-live-2", "aged-live-3"]);
+assert.deepEqual(deepPreview.hidden.slice(4), recentHistory);
 
 console.log("task tree grouping tests passed");

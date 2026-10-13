@@ -3,6 +3,7 @@ import { db } from "./db/index.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { claimTurn, releaseTurn } from "./runs.js";
+import { seatThenStart } from "./queue-seat.js";
 import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
@@ -88,8 +89,17 @@ async function fire(taskId: string): Promise<boolean> {
     releaseTurn(taskId);
     return false;
   }
-  if (t.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return true; }
-  void runTask(taskId, { turnHeld: true }); // 全新一轮(新 session),不接续上次会话
+  // 队列执行认领(queue-seat.ts):排在后面的任务到了定时启动时间,也得等前项结束 ——
+  // 到点启动与手动运行/消息补投/队列推进争同一个占位,否则 fire 只占任务级回合锁、
+  // 按自己的状态放行,同队前项还在跑就开了第二个(第 8 轮审查拦验收 1:once 到点
+  // 双跑,且班次被消费)。被挡同样不消费班次:once 保持 enabled、不写 lastRunAt,
+  // 前项结束后的下一个 tick 再试。seatThenStart 会给启动挂收尾,起跑失败按守卫回滚占位。
+  const started = await seatThenStart(taskId, () =>
+    t.mode === "duet" ? runDuet(taskId, { turnHeld: true }) : runTask(taskId, { turnHeld: true }));
+  if (!started.ok) {
+    releaseTurn(taskId);
+    return false;
+  }
   return true;
 }
 

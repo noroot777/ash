@@ -2,10 +2,21 @@ import type { AgentType, SessionRole } from "@ash/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { projects, sessions, tasks } from "./db/schema.js";
+import { sessions, tasks } from "./db/schema.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { TURN_FAILED_TO_START } from "./run-prompts.js";
 import { id, now } from "./util.js";
+
+export function isDiagnosticSession(session: Pick<typeof sessions.$inferSelect,
+  "cliSessionId" | "commandLine" | "turnStartedAt" | "activeMs" | "exitStatus" | "startedAt" | "endedAt"
+>): boolean {
+  return !session.cliSessionId
+    && !session.commandLine
+    && !session.turnStartedAt
+    && session.activeMs === 0
+    && session.exitStatus === 1
+    && session.endedAt === session.startedAt;
+}
 
 export async function freshRunFailureTarget(task: typeof tasks.$inferSelect, runOwnerUserId: string | null) {
   const agentType = (task.agentType as AgentType) ?? "claude";
@@ -13,12 +24,11 @@ export async function freshRunFailureTarget(task: typeof tasks.$inferSelect, run
     .where(and(eq(sessions.taskId, task.id), eq(sessions.agentType, agentType), eq(sessions.role, "single")))
     .orderBy(desc(sessions.startedAt)).limit(1);
   if (existing) return { sessionId: existing.id, agentType, role: "single" as const };
-  const [project] = await db.select({ repoPath: projects.repoPath }).from(projects).where(eq(projects.id, task.projectId));
   const sessionId = id();
   const at = now();
   await db.insert(sessions).values({
     id: sessionId, taskId: task.id, role: "single", agentType, executor: agentType,
-    runOwnerUserId, cwd: project?.repoPath ?? null, startedAt: at, endedAt: at,
+    runOwnerUserId, cwd: null, startedAt: at, endedAt: at,
     exitStatus: 1, activeMs: 0,
   });
   return { sessionId, agentType, role: "single" as const };

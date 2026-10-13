@@ -98,7 +98,7 @@ try {
     await objective.fill(text);
     await page.waitForFunction(() => !document.querySelector(".studio-submit")?.disabled);
     await page.getByRole("button", { name: /^启动设置：/ }).click();
-    await page.getByLabel("启动方式").selectOption("queue");
+    await page.getByRole("radio", { name: "创建并排队" }).click();
     await page.locator(".composer-queue-after .ui-select-trigger").click();
     await page.locator(".ui-dropdown-row", { hasText: target }).click();
     await page.keyboard.press("Escape");

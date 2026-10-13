@@ -10,6 +10,9 @@ import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
 import { TEAM_DEFAULTS } from "@ash/shared";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
+import { runHandoffCases } from "./scheduled-handoff-cases.js";
+import { runQueueGateCases } from "./scheduled-queue-gate-cases.js";
+import { runCkptPendingCases } from "./scheduled-ckpt-pending-cases.js";
 import { runSteerCases } from "./scheduled-steer-cases.js";
 
 // 子进程抢下投递租约后 SIGKILL，留下可由重启回收的「pending + 租约」现场。
@@ -25,6 +28,12 @@ const root = mkdtempSync(join(tmpdir(), "ash-scheduled-messages-"));
 const leadLog = join(root, "lead-input.jsonl");
 const originalPath = process.env.PATH;
 process.env.ASH_DB = join(root, "ash.db");
+// transcripts/runs 一并隔离:不设的话落在仓库 data/runs,上一次运行的残留会让
+// 「会话记录里有没有某句话」这类断言读到历史内容(本文件就踩过一次)。
+process.env.ASH_RUNS_DIR = join(root, "runs");
+// 设了 ASH_RUNS_DIR 会触发 guardAgentSpawn 的测试隔离闸;本文件要跑的是自己装在
+// PATH 上的假 claude,显式放行(executors/spawn.ts)。
+process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_TEST_LEAD_LOG = leadLog;
 const fakeBin = installFakeClaude(root);
 // Windows PATH 使用 `;`，必须走 path.delimiter。
@@ -141,6 +150,42 @@ assert.equal(pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, single("
   "queued(已拉起还没 spawn)同样算在跑");
 assert.equal(pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, single("paused"), now).action, "deliver",
   "提问/检查点暂停算空闲,排队消息正好是那句答复");
+// 第 xNb655YqYzcA 链第 2 轮:排队没轮到的 paused/backlog,投递 = continueTask 开真实
+// 执行回合,会跟同队 running 成员双跑 —— 必须等让位;终态任务的投递是续聊旁路
+// (followUpFrom),不占队列,queueBlocked 不该挡它。
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, { ...single("paused"), queueBlocked: true }, now).action,
+  "wait",
+  "排队没轮到的 paused 任务:投递会提前启动它,得等让位",
+);
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, { ...single("backlog"), queueBlocked: true }, now).action,
+  "wait",
+  "backlog 同口径",
+);
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, { ...single("paused"), queueBlocked: false }, now).action,
+  "deliver",
+  "轮到它了(没有挡路成员)照常投递",
+);
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, { ...single("done"), queueBlocked: true }, now).action,
+  "deliver",
+  "终态任务的续聊旁路不受队列挡",
+);
+// 执行型消息(排队等轮次时暂存,execution=1):失败重试也要守整队与分组暂停(第 5 轮)。
+const execMsg = { mode: "queued", sendAt: dueAt, execution: true };
+assert.equal(pending.deliveryVerdict(execMsg, { ...single("failed"), queueBlocked: true }, now).action, "wait",
+  "执行型消息:同队还有人在跑,失败重试不得借终态续聊豁免并跑");
+assert.equal(pending.deliveryVerdict(execMsg, { ...single("failed"), groupPaused: true }, now).action, "wait",
+  "执行型消息:分组暂停时不得自行重启");
+assert.equal(pending.deliveryVerdict(execMsg, single("failed"), now).action, "deliver",
+  "执行型消息:轮到它且分组未暂停,照常投递");
+assert.equal(
+  pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, { ...single("failed"), queueBlocked: true, groupPaused: true }, now).action,
+  "deliver",
+  "非执行型(真正的终态续聊)反向保护:不受整队与暂停挡",
+);
 assert.equal(pending.deliveryVerdict({ mode: "timed", sendAt: future }, single("done"), now).action, "wait",
   "定时消息没到点就得等,哪怕任务闲着");
 assert.equal(
@@ -476,6 +521,13 @@ try {
   );
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log("✓ 结算钩子里投递:锁还锁着不抢跑,锁一放立刻把原话送进会话");
+
+  // 「让位交接」那一组(前驱让位后的首轮输入 + 起跑失败归还租约)搬去了
+  // scheduled-handoff-cases.ts —— 这份又顶到 700 行上限，再加用例必须先拆。
+  await runHandoffCases({ at, root, leadLog, waitFor, countIn, taskRow, messageRow });
+  // 「执行入口过队列认领」那一组(定时到点 / 提问答复不越过前项)在 scheduled-queue-gate-cases.ts。
+  await runQueueGateCases({ at, root, leadLog, waitFor, countIn, taskRow, messageRow });
+  await runCkptPendingCases({ at, root, leadLog, waitFor, countIn, taskRow, messageRow });
 
   // ── 挡回一次,不许退回去干等那个 30 秒兜底扫描 ──────────────────────────────
   // `continueTask` 有一串「一个字都没送出去」的出口(回合被别的执行抢走、验收互斥、

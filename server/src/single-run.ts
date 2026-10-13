@@ -37,8 +37,12 @@ import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
 import { markCliGoalStarted, persistRunGoal, readCliState } from "./task-cli-state.js";
 
 
-async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
-  await setTaskStatus(taskId, status);
+async function setStatus(
+  taskId: string,
+  status: Parameters<typeof setTaskStatus>[1],
+  opts?: Parameters<typeof setTaskStatus>[2],
+) {
+  await setTaskStatus(taskId, status, opts);
 }
 
 // status 是 TaskStatus 而不是四个终态：**旁路回合（就地验证）结算时恢复的是进这一轮
@@ -149,22 +153,32 @@ export async function settleTaskStatus(
     // 旁路回合(就地验证)恢复的可能是 paused/backlog 一类的原状态,不止三个终态。
     const back = t.followUpFrom as Parameters<typeof setStatus>[1];
     const consumedCheckpoint = !!(confirmed && t.resumePrompt);
-    await db.update(tasks).set({
-      followUpFrom: null,
-      // checkpoint-paused 上的真人消息先保留旧检查点，避免一句普通追问把恢复指令吞掉；
-      // 本轮明确交卷才证明这句话确实接管了检查点，此时完成优先并清掉当前指令。
-      ...(consumedCheckpoint ? { resumePrompt: null } : {}),
-      updatedAt: now(),
-    }).where(eq(tasks.id, taskId));
-    // 检查点被这一轮消费掉了：随后的 setStatus 只广播 task.status，带不动 resume_prompt，
-    // 页面会继续把任务读成「在等续跑」（见 task-resume-prompt.ts 顶部）。
-    if (consumedCheckpoint) await announceResumePrompt(taskId);
     if (confirmed) {
-      await setStatus(taskId, "done");
+      await db.update(tasks).set({
+        followUpFrom: null,
+        // checkpoint-paused 上的真人消息先保留旧检查点,避免一句普通追问把恢复指令吞掉;
+        // 本轮明确交卷才证明这句话确实接管了检查点,此时完成优先并清掉当前指令。
+        ...(consumedCheckpoint ? { resumePrompt: null } : {}),
+        updatedAt: now(),
+      }).where(eq(tasks.id, taskId));
+      // 检查点被这一轮消费掉了:随后的 setStatus 只广播 task.status,带不动 resume_prompt,
+      // 页面会继续把任务读成「在等续跑」(见 task-resume-prompt.ts 顶部)。
+      if (consumedCheckpoint) await announceResumePrompt(taskId);
+      await setStatus(taskId, "done"); // done 的终态钩子自会推进队列
       notify("done");
       return { status: "done", confirmedDone: true, nativeTurn };
     }
-    await setStatus(taskId, back);
+    // 「清旁路身份」与「恢复原状态」必须对队列推进原子:分开写的话,两次 UPDATE 之间
+    // 任务是 running + followUpFrom=null —— 前项此刻让位,推进看到的是一个「真执行」,
+    // 既冻结又不记账,交接就漏了(第 4 轮审查问题 2)。包进认领临界区后,推进要么读到
+    // 完整的旁路身份(冻结 + 记账),要么读到恢复完的 paused(挑中;旧回合锁还占着则
+    // 由 advanceQueue 记账),两边都由 whenTurnIdle 回调补办,账本见 queue-seat.ts。
+    // 恢复 paused 用 quietAdvance:回到原样不是新的检查点落位(setTaskStatus 的注释)。
+    const { serializeQueueClaims } = await import("./queue-seat.js");
+    await serializeQueueClaims(async () => {
+      await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+      await setStatus(taskId, back, back === "paused" ? { quietAdvance: true } : undefined);
+    });
     const label = FOLLOW_UP_LABEL[back] ?? back;
     if (t.question) {
       // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
