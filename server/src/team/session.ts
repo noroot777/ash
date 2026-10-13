@@ -44,7 +44,7 @@ import { appendSessionTrace, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
-import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
+import { browserGrantOf, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { announceSessionNote } from "../session-notice.js";
 import { latestTeamLeadSession } from "./session-selection.js";
@@ -357,7 +357,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const rawMessage = resuming
     ? LEAD_RESUMED + promptedText + (ws.fresh ? LEAD_WORKSPACE_RESET(ws.path) : "")
     : LEAD_PREAMBLE(taskId, cfg.worker) + objective + (promptedText ? `\n\n【新消息】${promptedText}` : "");
-  const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full");
+  const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full", browserGrantOf(project));
   const runEnv = { ...(await runEnvForTask(taskId, cfg.lead)), ASH_TASK_ID: taskId };
   await ex.prepareResume?.({ cwd: ws.path, sessionId: prev?.cliSessionId ?? undefined, env: runEnv });
 

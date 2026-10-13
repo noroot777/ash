@@ -35,7 +35,7 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { preflightCliGoalResume, prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
-import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { browserGrantOf, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
 import { isDiagnosticSession } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
@@ -330,6 +330,8 @@ export async function continueTask(
       await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status }).where(eq(tasks.id, taskId));
     }
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+    // 项目级浏览器授权:这里本来就是 async 入口,读一次带进下面三处注入(含同步的 prepare 闭包)。
+    const browserGrant = browserGrantOf(project);
 
     // A single task can now host several agents — one session line per agentType,
     // each invited via @-mention. Newest first.
@@ -471,7 +473,7 @@ export async function continueTask(
     // 浏览器策略那段同理 —— 它也是拼在正文外面的字。
     const prompt = nativeCommand
       ? promptedUserTurnText
-      : planning ? withGlobalBrowserPolicy(`${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`, "reminder")
+      : planning ? withGlobalBrowserPolicy(`${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`, "reminder", browserGrant)
       : withGlobalBrowserPolicy(
           (invited ? COLLAB_INVITE : "") +
           invitedTaskBrief(task.body, invited, verifying) +
@@ -485,6 +487,7 @@ export async function continueTask(
           DIRECTION_PROTOCOL(directionToken) +
           (reviewReminder ? `\n${reviewReminder}` : ""),
           resuming ? "reminder" : "full",
+          browserGrant,
         );
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
@@ -647,6 +650,7 @@ export async function continueTask(
         prepare: (text) => withGlobalBrowserPolicy(
           withSkillInvocation({ agentType: agent, cwd, text, userId: runOwner }),
           "reminder",
+          browserGrant,
         ),
         record: (text, at) => recordUserConversationTurn({
           taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text, at,

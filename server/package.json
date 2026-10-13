@@ -99,6 +99,7 @@
     "test:star": "tsx scripts/test-task-star.ts",
     "test:scheduled-messages": "tsx scripts/test-scheduled-messages.ts && tsx scripts/test-task-steer-hardening.ts && tsx scripts/test-codex-mcp-turn-token.ts && tsx scripts/test-native-steer.ts && tsx scripts/test-claude-steer-ack.ts && tsx scripts/test-run-notices.ts",
     "test:review": "tsx scripts/test-review-flow.ts",
+    "test:browser-policy": "tsx scripts/test-browser-policy-grant.ts",
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",
     "test:session-lost": "tsx scripts/test-session-lost.ts",
     "test:duet-session-lost": "tsx scripts/test-duet-session-lost.ts",

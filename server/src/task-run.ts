@@ -29,7 +29,7 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalResume, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
-import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { browserGrantOf, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -157,12 +157,16 @@ export async function runTask(
     // 同样要投:会话文件没随任务到货时,接过来的任务第一次跑走的正是这里(见
     // handoff-notice.ts;续跑那条路在 orchestrator.ts)。
     const handoffNotice = reviewTask ? "" : handoffNoticeFrom(task.handoff);
+    // 项目级浏览器授权。在这里取一次、闭包带进 prepare —— withGlobalBrowserPolicy 要保持
+    // 同步纯函数(nativeSteer.prepare 的签名就是同步的),读库放在本来就 async 的入口。
+    const browserGrant = browserGrantOf(project);
     const prompt = withGlobalBrowserPolicy(
       AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + DIRECTION_PROTOCOL(directionToken) + teamPreamble + reviewProtocol +
       (handoffNotice ? `${handoffNotice}\n\n` : "") +
       peerNotice +
       (autoTitle ? TITLE_HINT + objective : objective),
       "full",
+      browserGrant,
     );
     const cli = await prepareCliInvocation({ ...task, status: "running" }, agentType, commandText, profileId, runOwner ?? null);
     const runEnv = { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
@@ -249,6 +253,7 @@ export async function runTask(
         prepare: (text) => withGlobalBrowserPolicy(
           withSkillInvocation({ agentType, cwd: ws.path, text, userId: runOwner }),
           "reminder",
+          browserGrant,
         ),
         record: (text, at) => recordUserConversationTurn({
           taskId, sessionId: sessId, role: "single", agentType, out, text, at,

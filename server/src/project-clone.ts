@@ -189,7 +189,7 @@ export async function cloneProject(input: CloneProjectInput, actor?: Actor): Pro
     catch { /* 项目照常返回；设置页里还能再配 */ }
   }
   // 克隆的人就是建的人,`seedProjectOwner` 刚把他登记成项目管理员。
-  return { ...row, health: projectHealthLight(row.repoPath), myRole: "admin" };
+  return { ...row, browserCdpDomains: [], health: projectHealthLight(row.repoPath), myRole: "admin" };
 }
 
 export function mountProjectCloneRoutes(api: Hono): void {

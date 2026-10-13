@@ -27,6 +27,10 @@ export const projects = sqliteTable("projects", {
   // 合进目标分支的工作区并暂存，目标分支的 ref 一个字节都不动，由人自己提交或丢弃。
   // 单次验收可以覆盖它（POST /tasks/:id/accept 的 commit 参数），这里只是默认值。
   acceptCommit: integer("accept_commit", { mode: "boolean" }).notNull().default(true),
+  // 本项目的任务可以用用户已登录的 Chrome **只读**哪些站点（JSON 字符串数组，裸主机名）。
+  // null/空 = 不授权，也是默认。读侧一律过 normalizeBrowserCdpDomains:这一列能被手改,
+  // 而一条脏数据混进来就可能把别的站点也当成已授权(见 shared/src/project.ts)。
+  browserCdpDomains: text("browser_cdp_domains", { mode: "json" }).$type<string[]>(),
   // 建这个项目的人(多人模式)。null = 自用模式建的、或转换前的存量项目。
   // 创建者自动是项目管理员,但成员关系的真源是 project_members —— 这一列只记出身。
   ownerUserId: text("owner_user_id"),

@@ -2,6 +2,7 @@ import { eq, inArray } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { MAX_PREVIEW_SCRIPT_LENGTH, parsePreviewConfig } from "@ash/shared/preview";
 import { normalizeProjectCommands, parseProjectCommands } from "@ash/shared/project-commands";
+import { normalizeBrowserCdpDomains } from "@ash/shared/project";
 import { detectPreviewCandidates } from "./preview-command.js";
 import { rmSync } from "node:fs";
 import { join, basename } from "node:path";
@@ -79,6 +80,9 @@ export function mountProjectRoutes(api: Hono): void {
     // 列里可能是旧一代的数组形状(每条命令自带 restartCommand),出门前归一成
     // { service, commands },前端只认识新形状。
     commandsConfig: normalizeProjectCommands(r.commandsConfig),
+    // 同理:列里可能是手改进去的脏数据,读侧统一归一。认不出形状的整条丢掉,
+    // 宁可少放行一个站点,也不让一条坏数据把别的站点带成「已授权」。
+    browserCdpDomains: normalizeBrowserCdpDomains(r.browserCdpDomains),
     health: projectHealthLight(r.repoPath),
     myRole,
   });
@@ -127,6 +131,8 @@ export function mountProjectRoutes(api: Hono): void {
       previewConfig: null,
       commandsConfig: null,
       acceptCommit: true,
+      // 新项目一律不授权浏览器登录态 —— 授权必须是用户明确开的那一下。
+      browserCdpDomains: [],
       createdAt: now(),
       ownerUserId: ownerIdOf(actor),
     };
@@ -199,6 +205,8 @@ export function mountProjectRoutes(api: Hono): void {
       previewConfig: null,
       commandsConfig: null,
       acceptCommit: true,
+      // 新项目一律不授权浏览器登录态 —— 授权必须是用户明确开的那一下。
+      browserCdpDomains: [],
       createdAt: now(),
       ownerUserId: ownerIdOf(actor),
     };
@@ -288,6 +296,15 @@ export function mountProjectRoutes(api: Hono): void {
     if (b.acceptCommit !== undefined) {
       if (typeof b.acceptCommit !== "boolean") return c.json({ error: "acceptCommit 必须是布尔值" }, 400);
       patch.acceptCommit = b.acceptCommit;
+    }
+    // 浏览器登录态授权白名单。空数组 = 收回授权(不是「不变」)—— 撤销必须有明确的表达方式,
+    // 否则只能靠删项目。归一化是宽进严出的:粘一整条 URL 进来也认,认不出形状的那条丢掉。
+    // 这里**不**因为丢掉条目而报错:用户填的是一行文本,逐条报错只会让他反复试。
+    if (b.browserCdpDomains !== undefined) {
+      if (b.browserCdpDomains !== null && !Array.isArray(b.browserCdpDomains) && typeof b.browserCdpDomains !== "string") {
+        return c.json({ error: "browserCdpDomains 必须是字符串数组、逗号分隔的字符串或 null" }, 400);
+      }
+      patch.browserCdpDomains = normalizeBrowserCdpDomains(b.browserCdpDomains);
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
     const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
