@@ -313,7 +313,7 @@ assert.equal(withGlobalBrowserPolicy(reviewPrompt, "full"), reviewPrompt, "审�
 
 const globalPromptCallsites = [
   ["普通任务 fresh run", new URL("../src/task-run.ts", import.meta.url), 2],
-  ["普通任务续聊/召唤", new URL("../src/orchestrator.ts", import.meta.url), 2],
+  ["普通任务续聊/召唤", new URL("../src/orchestrator.ts", import.meta.url), 3],
   ["团队调度台开台/接回", new URL("../src/team/session.ts", import.meta.url), 1],
   ["团队调度台消息注入", new URL("../src/team/session-consumer.ts", import.meta.url), 1],
   ["duet 讨论者", new URL("../src/duet/turn.ts", import.meta.url), 1],

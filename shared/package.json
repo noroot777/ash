@@ -6,6 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./cli-commands": { "types": "./src/cli-commands.ts", "default": "./src/cli-commands.ts" },
     "./page-annotation": {
       "types": "./src/page-annotation.ts",
       "default": "./src/page-annotation.ts"

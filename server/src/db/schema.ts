@@ -217,6 +217,8 @@ export const tasks = sqliteTable("tasks", {
   // 否则「压一下上下文」会被记成一轮验证跑完，还白吃一轮配额。开跑时写，结算后清空；
   // 落库而不只放内存，理由同上一条（结算可能发生在另一个进程里）。
   nativeTurn: integer("native_turn", { mode: "boolean" }).notNull().default(false),
+  goalTurn: integer("goal_turn", { mode: "boolean" }).notNull().default(false),
+  cliState: text("cli_state"),
   // 统一验收合并的结构化落账：目标分支 + 合并前后它的 commit。合并后基线审查（对
   // base@before..after 派新任务）靠它，时间线文本反解不可靠。无合并动作（in_place /
   // marked_only / 打标签）时保持 null 或 before==after。

@@ -1,5 +1,6 @@
 import type { AgentType, Task, TaskStatus } from "@ash/shared";
 import { AGENT_TYPES, isUserSettableStatus, TASK_BATCH_LIMIT } from "@ash/shared";
+import { CliCommandValidationError } from "@ash/shared/cli-commands";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { inheritExecutorOverrides, sameExecutor } from "@ash/shared/executors";
 import { normalizeWorkflowDef } from "@ash/shared/workflow";
@@ -352,16 +353,22 @@ api.post("/tasks", async (c) => {
     }
     appendPosition = existing.length;
   }
-  const [created] = await createTasks([row], b.appendToQueue && appendPosition !== null
-    ? async () => {
-        await db.insert(queueItems).values({
-          taskId,
-          queueId: b.appendToQueue!,
-          position: appendPosition!,
-          createdAt: ts,
-        });
-      }
-    : undefined);
+  let created: Task | undefined;
+  try {
+    [created] = await createTasks([row], b.appendToQueue && appendPosition !== null
+      ? async () => {
+          await db.insert(queueItems).values({
+            taskId,
+            queueId: b.appendToQueue!,
+            position: appendPosition!,
+            createdAt: ts,
+          });
+        }
+      : undefined);
+  } catch (error) {
+    if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
+    throw error;
+  }
   if (b.appendToQueue) {
     // 追加到队尾后立刻推进:若前序全 done,新 task 应立刻起跑
     void advanceQueue(b.appendToQueue);

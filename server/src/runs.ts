@@ -1,4 +1,5 @@
 import type { AgentType } from "@ash/shared";
+import type { CliCommand, CliGoal } from "@ash/shared/cli-commands";
 
 // Registry of in-flight agent subprocesses, keyed by task, so a running task can
 // be killed on demand (manual stop / group pause) — the orchestrator/duet
@@ -10,6 +11,8 @@ import type { AgentType } from "@ash/shared";
 export interface Killable {
   kill(): void;
   steer?(text: string, beforeSend?: () => void | Promise<void>): Promise<void>;
+  command?(command: CliCommand): Promise<string>;
+  goal?(): CliGoal | null;
 }
 
 // 被杀回合的结算落位:手动停 → canceled(队列把它当离队);分组暂停 → paused
@@ -46,6 +49,11 @@ export function trackRun(taskId: string, h: Killable): void {
   let set = handles.get(taskId);
   if (!set) handles.set(taskId, (set = new Set()));
   set.add(h);
+}
+
+export function nativeCommandRun(taskId: string): Killable | null {
+  const current = [...(handles.get(taskId) ?? [])];
+  return current.length === 1 ? current[0]! : null;
 }
 
 export function untrackRun(taskId: string, h: Killable): void {

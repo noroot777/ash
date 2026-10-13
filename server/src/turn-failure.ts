@@ -1,7 +1,38 @@
 import type { AgentType, SessionRole } from "@ash/shared";
+import { and, desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
+import { db } from "./db/index.js";
+import { sessions, tasks } from "./db/schema.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { TURN_FAILED_TO_START } from "./run-prompts.js";
+import { id, now } from "./util.js";
+
+export function isDiagnosticSession(session: Pick<typeof sessions.$inferSelect,
+  "cliSessionId" | "commandLine" | "turnStartedAt" | "activeMs" | "exitStatus" | "startedAt" | "endedAt"
+>): boolean {
+  return !session.cliSessionId
+    && !session.commandLine
+    && !session.turnStartedAt
+    && session.activeMs === 0
+    && session.exitStatus === 1
+    && session.endedAt === session.startedAt;
+}
+
+export async function freshRunFailureTarget(task: typeof tasks.$inferSelect, runOwnerUserId: string | null) {
+  const agentType = (task.agentType as AgentType) ?? "claude";
+  const [existing] = await db.select({ id: sessions.id }).from(sessions)
+    .where(and(eq(sessions.taskId, task.id), eq(sessions.agentType, agentType), eq(sessions.role, "single")))
+    .orderBy(desc(sessions.startedAt)).limit(1);
+  if (existing) return { sessionId: existing.id, agentType, role: "single" as const };
+  const sessionId = id();
+  const at = now();
+  await db.insert(sessions).values({
+    id: sessionId, taskId: task.id, role: "single", agentType, executor: agentType,
+    runOwnerUserId, cwd: null, startedAt: at, endedAt: at,
+    exitStatus: 1, activeMs: 0,
+  });
+  return { sessionId, agentType, role: "single" as const };
+}
 
 // 一个回合挂掉之后，**用户那边能看见什么**。
 //
@@ -30,10 +61,8 @@ export async function reportTurnFailure(opts: {
 }): Promise<void> {
   const { taskId, message, role, agentType } = opts;
   bus.publish({
-    type: "agent.event", taskId, sessionId: "", role, agentType,
+    type: "agent.event", taskId, sessionId: opts.target?.sessionId ?? "", role, agentType,
     event: { kind: "error", message },
   });
-  // 任务第一轮就起跑失败时它还没有任何会话，appendTaskTimeline 会如实返回 false
-  //（那一档至少还有 failed 状态可见），这里不额外处理。
   await appendTaskTimeline(taskId, TURN_FAILED_TO_START(message, opts.undelivered), opts.target);
 }

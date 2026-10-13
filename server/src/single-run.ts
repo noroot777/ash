@@ -34,6 +34,7 @@ import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart, turnOutputHint } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
+import { markCliGoalStarted, persistRunGoal } from "./task-cli-state.js";
 
 
 async function setStatus(
@@ -120,6 +121,8 @@ export async function settleTaskStatus(
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   // 原生命令回合(`/compact`)的标记跟完成确认一样:读出来就清掉,只在本回合内有效。
   const nativeTurn = !!t?.nativeTurn;
+  const goalTurn = !!t?.goalTurn;
+  if (goalTurn) await db.update(tasks).set({ goalTurn: false }).where(eq(tasks.id, taskId));
   if (nativeTurn) {
     await db.update(tasks).set({ nativeTurn: false, updatedAt: now() }).where(eq(tasks.id, taskId));
   }
@@ -196,6 +199,10 @@ export async function settleTaskStatus(
     return { status: "canceled", confirmedDone: false, nativeTurn };
   }
   if (stopped === "paused") {
+    if (goalTurn) {
+      await setStatus(taskId, "paused");
+      return { status: "paused", note: "持续目标已暂停；任务和历史保留，使用 /goal resume 续跑。", confirmedDone: false, nativeTurn };
+    }
     // 组暂停打断:落 paused 占住队列位置(组是 paused 的,推进钩子不会动)。
     // 恢复分组 → advanceQueue 选中它 → resumeOrRunTask 无 resumePrompt 走
     // RESUME_PROMPT 续原会话。若它被杀前调过 ask_question,question 仍在,
@@ -218,6 +225,15 @@ export async function settleTaskStatus(
   if (t?.resumePrompt) {
     await setStatus(taskId, "paused");
     return { status: "paused", confirmedDone: false, nativeTurn };
+  }
+  if (goalTurn && !confirmed) {
+    await setStatus(taskId, "paused");
+    return { status: "paused", note: "持续目标已停止，尚未收到完成确认。停止原因与目标状态见会话记录；使用 /goal 查看、/goal resume 续跑。", confirmedDone: false, nativeTurn };
+  }
+  if (nativeTurn) {
+    const status = exitStatus === 0 ? "done" : "failed";
+    await setStatus(taskId, status);
+    return { status, confirmedDone: false, nativeTurn };
   }
   if (exitStatus !== 0) {
     await setStatus(taskId, "failed");
@@ -269,9 +285,10 @@ export async function consumeSingleRun(a: {
   // verify_round 同理**从库里读**而不是让调用方传:三条起跑路径(fresh run / continueTask /
   // 重启接回)都汇到这儿,由库来答就不会漏标其中一条。验证中途提问、答复回来续跑的那一
   // 回合库里仍挂着轮次号,于是它照样归这一轮验证——跟 orchestrator 的 sideTurn 判据同源。
-  const taskRow = (await db.select({ nativeTurn: tasks.nativeTurn, verifyRound: tasks.verifyRound })
+  const taskRow = (await db.select({ nativeTurn: tasks.nativeTurn, verifyRound: tasks.verifyRound, goalTurn: tasks.goalTurn })
     .from(tasks).where(eq(tasks.id, taskId))).at(0);
   const nativeTurn = !!taskRow?.nativeTurn;
+  let goalStartPending = !!taskRow?.goalTurn;
   const verifyRound = taskRow?.verifyRound ?? null;
   const executionEventId = role === "single" && !nativeTurn
     ? await recordFreeTaskExecutionStartIfFree(taskId, a.turnStart).catch((error) => {
@@ -407,6 +424,7 @@ export async function consumeSingleRun(a: {
 
   try {
     for await (const event of a.handle.events) {
+      if (goalStartPending && a.handle.goalStarted?.()) { await markCliGoalStarted(taskId, agentType); goalStartPending = false; }
       if (event.kind === "session") {
         if (event.cliSessionId !== cliSessionId) {
           cliSessionId = event.cliSessionId;
@@ -559,6 +577,7 @@ export async function consumeSingleRun(a: {
     turnStart: a.turnStart,
     agentType,
   }).catch(() => 0);
+  await persistRunGoal(taskId, agentType, a.handle, exitStatus, stopped);
   const settled = await settleTaskStatus(taskId, exitStatus, stopped);
   clearTurnStart(taskId); // 只有「未确认 failed」那一支会读它,别的支路在这儿扔掉残页
   // 这一轮到底改没改东西:账在回合开头就清过了,这里只管「白清了要放回去」——

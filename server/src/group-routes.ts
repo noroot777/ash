@@ -1,5 +1,6 @@
-import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group } from "@ash/shared";
+import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group, Task } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
+import { CliCommandValidationError } from "@ash/shared/cli-commands";
 import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
 import type { TaskWorkflowMode } from "@ash/shared/free-workflow";
 import { TASK_WORKFLOW_MODES, freeWorkflowFits } from "@ash/shared/free-workflow";
@@ -235,14 +236,20 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
 
   // chain:true → 创建一个 queue,把这批 task 按数组顺序加入(serial group 才走到这里)
   const queueId = b.chain && specs.length > 1 ? id() : null;
-  const created = await createTasks(rows, queueId
-    ? async () => {
-        const qts = now();
-        await db.insert(queueItems).values(
-          ids.map((tid, i) => ({ taskId: tid, queueId, position: i, createdAt: qts })),
-        );
-      }
-    : undefined);
+  let created: Task[];
+  try {
+    created = await createTasks(rows, queueId
+      ? async () => {
+          const qts = now();
+          await db.insert(queueItems).values(
+            ids.map((tid, i) => ({ taskId: tid, queueId, position: i, createdAt: qts })),
+          );
+        }
+      : undefined);
+  } catch (error) {
+    if (error instanceof CliCommandValidationError) return c.json({ error: error.message }, 400);
+    throw error;
+  }
 
   if (b.run) void runGroup(groupId);
   return c.json(

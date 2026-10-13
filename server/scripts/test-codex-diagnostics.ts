@@ -41,6 +41,7 @@ assert.deepEqual(classifyCodexExit(base({ turnFailedMessage: "upstream disconnec
 assert.equal(classifyCodexExit(base({ exitStatus: 1, exitSignal: "SIGTERM" })).failureKind, "process_signal");
 assert.equal(classifyCodexExit(base({ exitStatus: 1, structuredErrors: ["rate limit"] })).failureReason, "rate limit");
 assert.equal(classifyCodexExit(base({ turnCompleted: false })).failureKind, "missing_turn_completion");
+assert.equal(classifyCodexExit(base({ turnCompleted: false, commandCompleted: true })).failureKind, null);
 assert.deepEqual(classifyCodexExit(base({ exitStatus: 1, stopRequested: true })), {
   terminationKind: "manual_stop",
   failureKind: null,

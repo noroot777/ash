@@ -57,4 +57,9 @@ assert.equal(slashToken("  /Design"), "/design");
 assert.equal(slashToken("看下 a/b 这个路径"), null);
 assert.equal(slashToken("/team 去做这件事"), null);
 
+const native = { ...skill("/goal", "持续目标"), native: true, source: "builtin" };
+const grouped = mergeSlashItems(ASH, [skill("/goal-helper"), native], "/");
+assert.deepEqual(grouped.map((item) => item.kind), ["ash", "ash", "native", "skill"]);
+assert.equal(grouped[2].command, "/goal");
+
 console.log("slash match tests passed");

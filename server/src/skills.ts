@@ -15,6 +15,7 @@ import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync,
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { expandHome } from "./platform.js";
+import { cliCommandCatalog, isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { configDirEnvVar, userCliDir } from "./auth/user-cli.js";
 import { isHostCliIsolatedSync } from "./auth/multi-flag.js";
 import {
@@ -71,13 +72,14 @@ const NATIVE_COMMANDS: Partial<Record<AgentType, Set<string>>> = {
 };
 
 const isNativeCommandName = (agentType: string, name: string) =>
-  !!NATIVE_COMMANDS[agentType as AgentType]?.has(name);
+  !!NATIVE_COMMANDS[agentType as AgentType]?.has(name) || Object.hasOwn(cliCommandCatalog(agentType), name);
 
 /**
  * 这条消息是不是「CLI 原生命令」——即以某个原生命令打头(后面可以带参数,如
  * `/compact 重点保留 X`)。是的话返回命令名,调用方必须原样发出去,并按旁路回合处理。
  */
 export function nativeCliCommand(agentType: string, text: string): string | null {
+  if (isGoalExecution(parseCliCommand(agentType, text))) return null;
   const name = /^\/([a-zA-Z][\w-]*)(?:\s|$)/.exec(text.trim())?.[1];
   return name && isNativeCommandName(agentType, name) ? name : null;
 }
@@ -421,6 +423,12 @@ export function listSkills(opts: {
     skills.sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  for (const [name, description] of Object.entries(cliCommandCatalog(agentType))) {
+    const existing = skills.find((skill) => skill.name === name);
+    if (existing) Object.assign(existing, { description, realPath: null, source: "builtin", native: true });
+    else skills.push({ name, command: `/${name}`, description, source: "builtin", realPath: null, alsoIn: [], native: true });
+  }
+  skills.sort((first, second) => first.name.localeCompare(second.name));
   return {
     ...base,
     fingerprint: self.fingerprint,

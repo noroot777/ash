@@ -15,6 +15,7 @@ export interface SkillEntry {
   command: string;
   description: string;
   source: SkillSource;
+  native?: boolean;
   /** 软链跟随后的物理路径,用来跨 CLI 认出「这是同一个技能」;内置技能没有。 */
   realPath: string | null;
   /** 除了当前这个 CLI,还有谁也装了同一份(按 realPath 认)。 */

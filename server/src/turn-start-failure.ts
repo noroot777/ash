@@ -23,6 +23,7 @@ import { announceBaseFallback } from "./base-fallback-notice.js";
 import type { Workspace } from "./git.js";
 import { afterSettlement } from "./single-run.js";
 import { now } from "./util.js";
+import { interruptCliGoal } from "./task-cli-state.js";
 
 export async function recoverFailedTurnStart(input: {
   taskId: string;
@@ -31,6 +32,8 @@ export async function recoverFailedTurnStart(input: {
   agentType: AgentType;
   /** 已经 spawn 出进程了吗(没有 = 原话一个字没送出去,要按未送达交代)。 */
   spawned: boolean;
+  goalStarted?: boolean;
+  goalStartFrom?: TaskStatus | null;
   /** 后端代写的续跑(system)不把输入当用户原话交代。 */
   systemTurn: boolean;
   undeliveredText: string;
@@ -52,12 +55,13 @@ export async function recoverFailedTurnStart(input: {
   });
   await reconcileTurnBaseline(taskId, false).catch(() => undefined);
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  const back = row?.followUpFrom as TaskStatus | null | undefined;
+  const goalHeld = row?.goalTurn && await interruptCliGoal(row, agentType, input.goalStarted ?? false);
+  const back = (row?.followUpFrom as TaskStatus | null | undefined) ?? (!goalHeld ? input.goalStartFrom : null);
   // 原生命令标记跟 followUpFrom 一样**只在本回合内有效**:CLI 还没起来就抛错时,正常
   // 那条清理路(settleTaskStatus)根本没跑过 —— 不在这儿清掉,标记就漏给下一轮,下一轮
   // 的真实结算会被整段跳过(当成「那是次压缩」)。
   const nativeTurn = !!row?.nativeTurn;
-  const status = input.stopped ?? back ?? "failed";
+  const status = input.stopped ?? back ?? (goalHeld ? "paused" : "failed");
   const { serializeQueueClaims } = await import("./queue-seat.js");
   await serializeQueueClaims(async () => {
     if (back || nativeTurn) {

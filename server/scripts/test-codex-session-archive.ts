@@ -54,6 +54,7 @@ rl.on('line', (line) => {
     if (m.method === 'thread/start') fs.writeFileSync(active, ${JSON.stringify(original)});
     return send({ id: m.id, result: { thread: { id } } });
   }
+  if (m.method === 'thread/goal/get') return send({ id: m.id, result: { goal: null } });
   if (m.method === 'turn/start') {
     fs.appendFileSync(active, JSON.stringify({ prompt: m.params.input[0].text }) + '\\n');
     send({ id: m.id, result: { turn: { id: 'turn' } } });
@@ -134,7 +135,7 @@ try {
 
   writeFileSync(callsFile, "");
   await consume(open("success", true));
-  assert.deepEqual(calls().map((r) => r.method), ["initialize", "initialized", "thread/unarchive", "thread/resume", "turn/start", "thread/archive"]);
+  assert.deepEqual(calls().map((r) => r.method), ["initialize", "initialized", "thread/unarchive", "thread/resume", "thread/goal/get", "turn/start", "thread/archive"]);
   assert.match(readFileSync(archived, "utf8"), /FIRST/);
   assert.match(readFileSync(archived, "utf8"), /SECOND/);
   assert.ok(!calls().some((r) => r.method === "thread/start"));

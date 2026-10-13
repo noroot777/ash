@@ -1,7 +1,7 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentType, SessionRole } from "@ash/shared";
+import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -32,9 +32,12 @@ import { recoverFailedTurnStart } from "./turn-start-failure.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
+import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
+import { preflightCliGoalResume, prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
+import { isDiagnosticSession } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
@@ -178,10 +181,7 @@ export async function continueTask(
   // 任务的执行,也不是「新指令」。这一轮必须当旁路回合(下面的 sideTurn),否则「压一下
   // 上下文」既会被打成 failed,也会顺手把已验收的牌子摘掉——旁路回合不拍工作目录快照,
   // 没有任何基线能把摘掉的牌子挂回去,压一次就永久丢掉一次验收。
-  const head = (await db
-    .select({ mode: tasks.mode, agentType: tasks.agentType, handoff: tasks.handoff })
-    .from(tasks)
-    .where(eq(tasks.id, taskId))).at(0);
+  const head = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   // 这一轮带的附件跟着任务走进项目轴(uploads.ts)。放在最前面:团队调度台那条路
   // 在下面就 return 了,放后面等于团队任务的附件永远挂不上归属。
   // `actingUserId` 是「谁点的这一轮」—— 后端路径(队列推进、定时投递)不传,那时附件
@@ -191,6 +191,9 @@ export async function continueTask(
     opts.agent ?? (head?.agentType as AgentType) ?? "claude",
     userText,
   );
+  const slash = parseCliCommand(opts.agent ?? (head?.agentType as AgentType) ?? "claude", userText);
+  const goalExecution = isGoalExecution(slash);
+  if (head) await preflightCliGoalResume(head, opts.agent ?? (head.agentType as AgentType) ?? "claude", userText, opts.agent ? opts.executorId ?? null : head.executorId, opts.actingUserId ?? head.ownerUserId);
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
   // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的
@@ -237,6 +240,7 @@ export async function continueTask(
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
   const agentType = opts.agent ?? (head?.agentType as AgentType) ?? "claude";
   let handle: RunHandle | undefined;
+  let goalStartFrom: TaskStatus | null = null;
   // 同 runTask：基线降级在解析工作目录那一刻就落了库，说明却写在 spawn 之后，所以这两件
   // 事挂在 try 外面，失败那条路才补得上（见 base-fallback-notice.ts）。
   let baseFallback: Workspace["baseFallback"];
@@ -247,6 +251,7 @@ export async function continueTask(
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
     if (task.mode !== "single") throw new Error("reply is for single tasks");
+    if (goalExecution && !["running", "queued"].includes(task.status)) goalStartFrom = task.status as TaskStatus;
 
     const agent = opts.agent ?? (task.agentType as AgentType) ?? "claude";
     // 对话框里 @ 出来的那一步是**显式选择**（智能体 + 执行器 + 模型 + 思考强度），这一回合
@@ -275,7 +280,7 @@ export async function continueTask(
     // `/compact` 这类 CLI 原生命令(在函数顶部就算好了):整条消息归 CLI 本地执行,不进
     // 模型 —— 没有产出、也不可能交卷,所以必须当旁路回合,否则「压一下上下文」会把任务
     // 打成 failed。
-    const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
+    let sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
     // DB 里的 verifyRound/nativeTurn 会在结算中途先清，handle/turn 要到 finally 才释放。
     // 把旁路身份也钉进运行时 turn role，关闭那段“标记已清、进程仍可被引导”的小窗口。
     if (sideTurn && sessionRole === "single") reclaimTurn(taskId, nativeCommand ? "native" : "side");
@@ -284,7 +289,7 @@ export async function continueTask(
     const execution = !!opts.system || !!opts.executionTurn;
     const checkpointFollowUp = !execution && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
-    const followUpFrom = sideTurn
+    const followUpFrom = goalExecution ? null : sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)
       : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
         ? task.status
@@ -296,7 +301,7 @@ export async function continueTask(
     const directionToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
+      .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
     // 续聊/重跑同样按**这一回合是谁点的**解析执行器(§八)。跨人时降级到本人的默认
@@ -318,11 +323,18 @@ export async function continueTask(
       ...owner,
     });
     if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
+    const planning = !goalExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
+    if (planning) {
+      sideTurn = true;
+      if (sessionRole === "single") reclaimTurn(taskId, "side");
+      await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status }).where(eq(tasks.id, taskId));
+    }
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 
     // A single task can now host several agents — one session line per agentType,
     // each invited via @-mention. Newest first.
     const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
+      .filter((session) => !isDiagnosticSession(session))
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
     // 「这一条接得上吗」不止看 agentType+role:CLI 的会话文件躺在**开它的那个人**的配置
     // 目录里,而共享项目里 B 可以回复 A 的任务(runOwner 上面刚算过)。拿 A 的 session id
@@ -366,7 +378,7 @@ export async function continueTask(
       await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
       prev = undefined;
     }
-    const resuming = !!prev?.cliSessionId;
+    const resuming = !!prev?.cliSessionId && !["fork", "new", "clear"].includes(slash?.name ?? "");
 
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
@@ -459,6 +471,7 @@ export async function continueTask(
     // 浏览器策略那段同理 —— 它也是拼在正文外面的字。
     const prompt = nativeCommand
       ? promptedUserTurnText
+      : planning ? withGlobalBrowserPolicy(`${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`, "reminder")
       : withGlobalBrowserPolicy(
           (invited ? COLLAB_INVITE : "") +
           invitedTaskBrief(task.body, invited, verifying) +
@@ -475,6 +488,8 @@ export async function continueTask(
         );
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
+    const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null);
+    if (opts.sideTurn || task.verifyRound || freeReviewTurn) cli.cliState = { ...cli.cliState, plan: false };
     // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 `trackRun` 之间不再有
     // await，暂停请求要么在这里被消费、要么之后才到——那时已有 handle 可杀。
     // freezeGuard 的启动路径（重试按钮、自由审查重跑）还会再查一遍库：它们的预检查离
@@ -491,8 +506,9 @@ export async function continueTask(
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
     handle = run({
       prompt,
+      ...cli,
       cwd,
-      sessionId: resuming ? prev!.cliSessionId! : undefined,
+      sessionId: resuming || slash?.name === "fork" ? prev?.cliSessionId ?? undefined : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
       detach,
       // 多人模式:个人 CLI 配置目录 + git 署名(auth/run-env.ts)。自用模式恒为空对象。
@@ -654,6 +670,8 @@ export async function continueTask(
       message: String(err instanceof Error ? err.message : err),
       sessionRole, agentType,
       spawned: !!handle,
+      goalStarted: handle?.goalStarted?.() ?? !!handle?.goal?.(),
+      goalStartFrom,
       systemTurn: !!opts.system,
       undeliveredText: userText + attachmentsPrompt(opts.attachments),
       resumeSessionId: opts.resumeSessionId,
