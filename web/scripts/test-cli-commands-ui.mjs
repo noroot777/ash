@@ -57,7 +57,7 @@ const boot = `
   const { ClaudeExecutor } = await import("./server/dist/executors/claude.js");
   const { CodexNativeCommands } = await import("./server/dist/executors/codex-native-commands.js");
   function fixture(options) {
-    appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.ASH_TASK_ID, cliState: options.cliState, cliCommand: options.cliCommand }) + "\\n");
+    appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.ASH_TASK_ID, turnToken: options.env.ASH_TURN_TOKEN, cliState: options.cliState, cliCommand: options.cliCommand }) + "\\n");
     const sessionId = (options.cliCommand?.name === "fork" ? "fork-" : "") + (options.sessionId || "ui-" + options.env.ASH_TASK_ID);
     let goal = options.cliState?.goal ? { ...options.cliState.goal, status: "budgetLimited" } : null;
     const goalStarted = !!goal;
@@ -85,6 +85,7 @@ const boot = `
         if (options.cliCommand?.name === "fork" || options.cliCommand?.name === "goal" && !goal) {
           text = await native.control(options.cliCommand);
         }
+        if (liveGoal) text += "；测试回合 " + options.env.ASH_TURN_TOKEN;
         yield { kind: "text", text };
         if (liveGoal) await interrupted;
         yield { kind: "done", exitStatus: 0 };
@@ -93,6 +94,15 @@ const boot = `
   }
   CodexExecutor.prototype.runSteerable = fixture;
   ClaudeExecutor.prototype.runSteerable = fixture;
+  for (const Executor of [CodexExecutor, ClaudeExecutor]) {
+    const prepareResume = Executor.prototype.prepareResume;
+    Executor.prototype.prepareResume = async function(options) {
+      await prepareResume?.call(this, options);
+      if (/^live-(codex|claude)-goal$/.test(options.env?.ASH_TASK_ID ?? "")) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    };
+  }
   await import("./server/dist/index.js");
 `;
 const backend = spawn(process.execPath, ["--input-type=module", "-e", boot], { cwd: repo, env: { ...process.env, ASH_UPLOADS_DIR: join(root, "uploads"), ASH_PREVIEW: "1", ASH_SEED_FROM: "", PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
@@ -432,11 +442,25 @@ try {
         page.waitForResponse((value) => value.url().endsWith(`/tasks/${taskId}/reply`) && value.request().method() === "POST"),
         page.getByRole("button", { name: /^(发送回复|排队发送，任务跑完自动发出)$/ }).click(),
       ]);
-      assert.equal(returned.status(), expectedStatus);
-      return returned.json();
+      const result = await returned.json();
+      assert.equal(returned.status(), expectedStatus, `${text}: ${JSON.stringify(result)}`);
+      return result;
     };
-    await sendLive(`/goal 等待实时目标控制${agentType === "codex" ? " --budget 500" : ""}`, 202);
-    await page.getByText(/^目标：等待实时目标控制；/).last().waitFor();
+    const startLiveGoal = async (text) => {
+      const previousTurn = (await lastInvocation()).turnToken;
+      await sendLive(text, 202);
+      const deadline = Date.now() + 10_000;
+      let invocation = await lastInvocation();
+      while (invocation.taskId !== taskId || !invocation.turnToken || invocation.turnToken === previousTurn) {
+        assert.ok(Date.now() < deadline, `new goal turn did not start: ${taskId} ${text}\n${log}`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        invocation = await lastInvocation();
+      }
+      assert.equal(invocation.cliCommand?.text, text);
+      await page.getByText(/^目标：等待实时目标控制；/).filter({ hasText: `测试回合 ${invocation.turnToken}`, visible: true }).last().waitFor();
+      return invocation;
+    };
+    await startLiveGoal(`/goal 等待实时目标控制${agentType === "codex" ? " --budget 500" : ""}`);
     assert.equal((await (await fetch(`${base}/api/tasks/${taskId}`)).json()).status, "running");
     const beforePause = await sessionEnds(taskId);
     assert.equal((await sendLive("/goal pause", 200)).command, true);
@@ -449,9 +473,8 @@ try {
     await pauseNotice.waitFor();
     await page.screenshot({ path: join(screenshots, `${agentType}-goal-paused-reloaded.png`), fullPage: true });
 
-    await sendLive("/goal resume", 202);
-    assert.equal((await lastInvocation()).cliState.goal?.objective, "等待实时目标控制");
-    await page.getByText(/^目标：等待实时目标控制；/).last().waitFor();
+    const resumed = await startLiveGoal("/goal resume");
+    assert.equal(resumed.cliState.goal?.objective, "等待实时目标控制");
     const beforeClear = await sessionEnds(taskId);
     assert.equal((await sendLive("/goal clear", 200)).command, true);
     if (agentType === "claude") {
