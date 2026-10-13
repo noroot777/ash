@@ -150,9 +150,10 @@ try {
   await prepareCliInvocation(await row("plan"), "codex", "/plan off", "resolved-profile", null);
   assert.equal((await enrichTasks([await row("plan")]))[0]?.codexPlanMode, true, "turning off one scope must not hide another scope's plan");
   assert.equal((await enrichTasks([await row("plan")]))[0]?.codexPlanScopes?.length, 2);
+  const enabledPlanScopes = (await enrichTasks([await row("plan")]))[0]?.codexPlanScopes;
   await db.update(tasks).set({ agentType: "claude" }).where(eq(tasks.id, "plan"));
-  assert.equal((await enrichTasks([await row("plan")]))[0]?.codexPlanMode, false);
-  assert.deepEqual((await enrichTasks([await row("plan")]))[0]?.codexPlanScopes, []);
+  assert.equal((await enrichTasks([await row("plan")]))[0]?.codexPlanMode, true, "standing agent changes must not hide saved Codex plan scopes");
+  assert.deepEqual((await enrichTasks([await row("plan")]))[0]?.codexPlanScopes, enabledPlanScopes);
   const beforeClaudeRun = (await row("plan")).cliState;
   await prepareCliInvocation(await row("plan"), "claude", "旁路验证", "claude-profile", null, { resetPlan: true, preserveState: true });
   assert.equal((await row("plan")).cliState, beforeClaudeRun, "side turns must not reset any stored plan scopes");
@@ -164,13 +165,15 @@ try {
   }
   assert.equal(hasCliGoalHold((await row("plan")).cliState), true);
   assert.equal(readCliState((await row("plan")).cliState, "claude", null, null).goal?.objective, "保留其他执行器的目标");
+  assert.equal((await enrichTasks([await row("plan")]))[0]?.codexPlanMode, false);
+  assert.deepEqual((await enrichTasks([await row("plan")]))[0]?.codexPlanScopes, []);
   await db.update(tasks).set({ agentType: "codex" }).where(eq(tasks.id, "plan"));
   assert.equal((await enrichTasks([await row("plan")]))[0]?.codexPlanMode, false);
   await db.update(tasks).set({ cliState: JSON.stringify({ codex: { profileId: "legacy-profile", ownerUserId: null, plan: true, goal: scopedGoal, goalHold: true } }) }).where(eq(tasks.id, "plan"));
   await prepareCliInvocation(await row("plan"), "claude", "旧状态重新运行", "claude-profile", null, { resetPlan: true });
   assert.deepEqual(readCliState((await row("plan")).cliState, "codex", "legacy-profile", null), { profileId: "legacy-profile", ownerUserId: null, plan: false, goal: scopedGoal, goalHold: true });
   assert.equal(planUpdates.at(-1), false);
-  console.log("plan banner covers all profile/owner scopes, agent switches hide it, and reruns reset all scopes while preserving goals: passed");
+  console.log("plan banner covers all profile/owner scopes across standing agent switches and summoned turns; reruns reset all scopes while preserving goals: passed");
   await db.update(tasks).set({ cliState: JSON.stringify({ codex: { plan: true } }) }).where(eq(tasks.id, "plan"));
   assert.deepEqual((await enrichTasks([await row("plan")]))[0]?.codexPlanScopes, [{ executorId: null, executorLabel: "Codex（未绑定执行器）", isTaskOwner: true }]);
   await prepareCliInvocation(await row("plan"), "claude", "未绑定执行器的旧状态重新运行", "claude-profile", null, { resetPlan: true });
@@ -178,6 +181,16 @@ try {
   unsubscribePlan();
   await db.update(tasks).set({ cliState: "malformed" }).where(eq(tasks.id, "plan"));
   assert.equal((await enrichTasks([await row("plan")]))[0]?.codexPlanMode, false);
+
+  await create("summoned-plan", { agentType: "claude", status: "paused" });
+  await prepareCliInvocation(await row("summoned-plan"), "codex", "/plan", "resolved-profile", null);
+  const summonedPlan = await prepareCliInvocation(await row("summoned-plan"), "codex", "照方案动手改吧", "resolved-profile", null);
+  assert.equal(summonedPlan.cliState.plan, true);
+  assert.equal((await row("summoned-plan")).agentType, "claude", "temporary Codex turns must not change the standing agent");
+  const claudeReply = await prepareCliInvocation(await row("summoned-plan"), "claude", "Claude 正常实施", "claude-profile", null);
+  assert.notEqual(claudeReply.cliState.plan, true);
+  assert.equal((await enrichTasks([await row("summoned-plan")]))[0]?.codexPlanMode, true);
+  assert.deepEqual((await enrichTasks([await row("summoned-plan")]))[0]?.codexPlanScopes, [{ executorId: "resolved-profile", executorLabel: "resolved-profile", isTaskOwner: true }], "ordinary Claude replies must not hide saved Codex plan scopes");
 
   await create("claude", { agentType: "claude", status: "paused" });
   await saveCliState("claude", "claude", { ownerUserId: null, profileId: null, goal: { objective: "Claude 目标", status: "paused" } });

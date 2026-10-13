@@ -60,7 +60,7 @@ const toTask = (r: TaskRow, allProfiles: AgentLabelRow[] = []): Task =>
   toTaskWith(r, profilesOwnedBy(allProfiles, r.ownerUserId));
 
 const codexPlanStateFor = (task: TaskRow, profiles: AgentLabelRow[]): Pick<Task, "codexPlanMode" | "codexPlanScopes"> => {
-  const states = task.mode === "single" && task.agentType === "codex"
+  const states = task.mode === "single"
     ? Object.values(readCliStateScopes(task.cliState, "codex").scopes).filter((state) => state?.plan === true)
     : [];
   const codexPlanScopes = states.map((state) => ({
