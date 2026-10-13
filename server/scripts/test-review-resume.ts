@@ -21,6 +21,8 @@ try {
   const { freeReviewResumeMessage } = await import("../src/free-review-prompts.js");
   const { REPORT_SUMMARY_REMINDER } = await import("../src/review-report-format.js");
   const { assertCarriesSummaryReminder, assertSummaryRuleTable } = await import("./review-summary-rules.js");
+  const { REVIEW_SWEEP_REMINDER } = await import("../src/review-sweep.js");
+  const { assertCarriesSweepReminder, assertSweepRuleTable } = await import("./review-sweep-rules.js");
 
   const line = (turnStartedAt: string, event: Record<string, unknown>) =>
     JSON.stringify({ at: turnStartedAt, turnStartedAt, event });
@@ -96,13 +98,23 @@ try {
     // 自己漏登记了排序规则。
     assertSummaryRuleTable();
     assertCarriesSummaryReminder(message, "自由审查续跑指令");
-    // 长度闸拦的是「别从头重发任务书」，所以量的是**非规则的那部分**：规则带全了本来就
+    // 第二份契约：**扫描义务**的缩略版（`review-sweep.ts`）。报告形状的契约管不了「找到
+    // 几条」—— 一份格式完美的单条发现照样满足上面那条断言，而这条路径上没有别的东西会
+    // 再提一句「第一条阻塞问题不是收工信号」。只带那几条收尾时仍然做得到的规则（表里
+    // `short` 非 null 的）：广度扫描已经过去了，要求它重扫等于把续跑省下的 10M 又烧一遍。
+    assertSweepRuleTable();
+    assertCarriesSweepReminder(message, "自由审查续跑指令");
+    // 长度闸拦的是「别从头重发任务书」，所以量的是**非契约的那部分**：契约带全了本来就
     // 该变长，把两者加在一起量，等于每加一条契约规则就侵蚀一次防重发的预算——第 3 轮
     // 补齐规则后整条 737 字，照旧 700 的话只能靠削措辞去凑一个整数，那是本末倒置。
-    const scaffolding = message.length - REPORT_SUMMARY_REMINDER.length;
-    assert.ok(scaffolding < 450, `续跑指令的非规则部分要短，现在 ${scaffolding} 字`);
-    // 规则那半边也不是无限的：真长到这个量级就该回头想想是不是该重发完整 prompt 了。
-    assert.ok(message.length < 900, `整条续跑指令仍要远短于完整任务书，现在 ${message.length} 字`);
+    // 两份契约都要减掉，理由同上；这个数（363）没因为加第二份契约而变，说明脚手架没松。
+    const scaffolding = message.length - REPORT_SUMMARY_REMINDER.length - REVIEW_SWEEP_REMINDER.length;
+    assert.ok(scaffolding < 450, `续跑指令的非契约部分要短，现在 ${scaffolding} 字`);
+    // 契约那半边也不是无限的：真长到这个量级就该回头想想是不是该重发完整 prompt 了。
+    // 2026-10-13 从 900 提到 1200 —— 多了扫描义务这份契约（247 字），两份合计 642 字，
+    // 900 已经拦在「契约带全」本身上，而不是拦在「夹带任务书」上。1200 留下约 200 字余量：
+    // 再往任一张表加一条就会红，而完整派审 prompt 光扫描义务一节就 1300 字，不会混淆。
+    assert.ok(message.length < 1_200, `整条续跑指令仍要远短于完整任务书，现在 ${message.length} 字`);
   }
 
   console.log("✓ review resume predicate");

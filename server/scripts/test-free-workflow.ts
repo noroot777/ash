@@ -6,6 +6,13 @@ import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
+import {
+  assertCarriesClassRepairNote,
+  assertCarriesSweepProtocol,
+  assertCarriesSweepReminder,
+  assertSweepRuleTable,
+} from "./review-sweep-rules.js";
+import { assertCarriesSummaryReminder } from "./review-summary-rules.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-free-workflow-"));
 process.env.ASH_DB = join(root, "ash.db");
@@ -172,7 +179,65 @@ try {
   assert.match(skillContext, /标题也可能点名 \/grill-me/);
   assert.match(skillContext, /原始正文要求运行 \/grill-me/);
   assert.match(skillContext, /把排队需求也一起做完[\s\S]*\/grill-me/, "需求文件仍须完整保留后续追问");
+  // 扫描义务那份契约（`server/src/review-sweep.ts`）必须原样进派审 prompt：报告形状的
+  // 契约只管「写成什么样」，一份格式完美的单条发现照样全绿。
+  assertSweepRuleTable();
+  assertCarriesSweepProtocol(skillPrompt, "自由审查 prompt");
+  // 中途提问后续跑那条路只剩这条提醒：两份契约都得在（对称端点见 freeReviewReminder 注释）。
+  await db.insert(freeReviewRuns).values({
+    id: "reminder-run", taskId: "free-reminder-task", reviewerId: "reviewer", reviewerName: "Codex logic",
+    agentType: "codex", executorId: "reviewer-executor", model: null, reasoningEffort: "high",
+    checkMode: "logic", note: null, retryLimit: 1, currentRound: 2, status: "reviewing",
+    createdAt: "2026-10-13T02:00:00.000Z", updatedAt: "2026-10-13T02:00:00.000Z", finishedAt: null,
+  });
+  const freeReminder = await freeReviewReminder("free-reminder-task");
+  assertCarriesSummaryReminder(freeReminder, "自由审查每回合提醒");
+  assertCarriesSweepReminder(freeReminder, "自由审查每回合提醒");
+
+  // 跨 run 的发现史：用户点「再审一轮」开的是**新 run**、第 1 轮、新开一条空会话，
+  // 旧链十几轮报过什么它一个字都看不到（理由见 review-history.ts 文件头）。这里钉的就是
+  // 「上一条链的现象行有没有被搬进新链第 1 轮的 prompt」。
+  {
+    const at = "2026-10-13T00:00:00.000Z";
+    await db.insert(freeReviewRuns).values({
+      id: "history-run", taskId: "free-history-task", reviewerId: "reviewer", reviewerName: "Codex logic",
+      agentType: "codex", executorId: "reviewer-executor", model: null, reasoningEffort: "high",
+      checkMode: "logic", note: null, retryLimit: 1, currentRound: 1, status: "stopped",
+      createdAt: at, updatedAt: at, finishedAt: at,
+    });
+    await db.insert(freeReviewRounds).values({
+      id: "history-round", runId: "history-run", round: 1, status: "failed",
+      conclusion: "verify_failed", startedAt: at, endedAt: at,
+    });
+    const historyDir = join(root, "runs", "free-history-task", "free-review", "history-run", "round-1");
+    mkdirSync(historyDir, { recursive: true });
+    writeFileSync(join(historyDir, "report.md"), [
+      "# 第 1 轮报告", "", "## 结论", "", "**必须修的问题**：", "",
+      "### 多开页会互相覆盖启动脚本", "",
+      "- 你会遇到：两个页面同时开着时，另一页的结果会覆盖你已经保存的脚本。", "",
+    ].join("\n"));
+    // 独立任务 id：挂在 free-task 上会被后面「这个任务还没有审查链」那条断言撞上。
+    const historyTask = { ...promptTask, id: "free-history-task" };
+    const freshChainPrompt = await freeReviewPrompt(
+      historyTask,
+      { ...promptRun, id: "history-next-run", createdAt: "2026-10-13T01:00:00.000Z" },
+      1,
+      root,
+    );
+    assert.match(
+      freshChainPrompt,
+      /此前报过的发现[\s\S]*另一页的结果会覆盖你已经保存的脚本/,
+      "新审查链第 1 轮必须拿到旧链报过的现象行，否则它只能把同一个类再报一遍",
+    );
+    assert.match(freshChainPrompt, /第 N 个触发组合/, "搬历史的用处必须写明是判同类");
+    // 本轮自己那一条不许出现在「此前报过」里（把自己的发现讲给自己听）。
+    const selfPrompt = await freeReviewPrompt(historyTask, { ...promptRun, id: "history-run", currentRound: 1 }, 1, root);
+    assert.doesNotMatch(selfPrompt, /此前报过的发现/, "同一条链的当前轮次不算历史");
+  }
+
   const repair = await freeRepairPrompt("free-task", promptRun);
+  assertCarriesClassRepairNote(repair, "自由工作流修复交接");
+  assert.match(repair, /不要扩大原任务边界/, "边界约束仍然在——类问题是它的例外，不是取消它");
   assert.match(repair, /\[report\.md\]\([^\n]+report\.md\)/, "修复交接应引用唯一的 report.md");
   assert.doesNotMatch(repair, /shot\.png|截图：/, "截图已收进报告，不应在修复交接里重复列出");
   assert.doesNotMatch(repair, /审查报告：\n#/, "修复交接不得复制报告正文");
