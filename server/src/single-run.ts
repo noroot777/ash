@@ -4,7 +4,7 @@
 // 单向的：orchestrator / reattach 都 import 这里，这里不回头 import 它们 ——
 // 结算规则是全局单点，谁也不该另造一份。
 import type { WriteStream } from "node:fs";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import type { AgentEvent, AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -34,7 +34,7 @@ import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart, turnOutputHint } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
-import { markCliGoalStarted, persistRunGoal } from "./task-cli-state.js";
+import { markCliGoalStarted, persistRunGoal, readCliState } from "./task-cli-state.js";
 
 
 async function setStatus(
@@ -110,6 +110,7 @@ export async function settleTaskStatus(
   taskId: string,
   exitStatus: number,
   stopped: StopSettle | null,
+  sessionId?: string,
 ): Promise<{
   status: TaskStatus;
   note?: string;
@@ -200,8 +201,16 @@ export async function settleTaskStatus(
   }
   if (stopped === "paused") {
     if (goalTurn) {
+      const [session] = await db.select().from(sessions).where(and(
+        eq(sessions.taskId, taskId), eq(sessions.role, "single"),
+        sessionId ? eq(sessions.id, sessionId) : isNull(sessions.endedAt),
+      )).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt)).limit(1);
+      const goal = readCliState(t?.cliState, session?.agentType ?? t?.agentType ?? "claude", session?.executorId, session?.runOwnerUserId).goal;
+      const note = goal?.objective?.trim()
+        ? "持续目标已暂停；任务和历史保留，使用 /goal resume 续跑。"
+        : "持续目标已清除；任务和历史保留，使用 /goal 描述 设置新目标。";
       await setStatus(taskId, "paused");
-      return { status: "paused", note: "持续目标已暂停；任务和历史保留，使用 /goal resume 续跑。", confirmedDone: false, nativeTurn };
+      return { status: "paused", note, confirmedDone: false, nativeTurn };
     }
     // 组暂停打断:落 paused 占住队列位置(组是 paused 的,推进钩子不会动)。
     // 恢复分组 → advanceQueue 选中它 → resumeOrRunTask 无 resumePrompt 走
@@ -578,7 +587,7 @@ export async function consumeSingleRun(a: {
     agentType,
   }).catch(() => 0);
   await persistRunGoal(taskId, agentType, a.handle, exitStatus, stopped);
-  const settled = await settleTaskStatus(taskId, exitStatus, stopped);
+  const settled = await settleTaskStatus(taskId, exitStatus, stopped, sessId);
   clearTurnStart(taskId); // 只有「未确认 failed」那一支会读它,别的支路在这儿扔掉残页
   // 这一轮到底改没改东西:账在回合开头就清过了,这里只管「白清了要放回去」——
   // 一个字节没改就把游标/轮数/验收阶段原样放回,屋子是临时搭的还顺手拆掉。

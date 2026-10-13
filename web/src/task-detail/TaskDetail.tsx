@@ -377,6 +377,13 @@ export function TaskDetail({
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
             />
+            {task.mode === "single" && task.codexPlanMode && (
+              <div className="task-plan-mode-notice" role="status" aria-label="Codex 计划模式">
+                <strong>Codex 计划模式</strong>
+                <span>已开启：{task.codexPlanScopes?.map((scope) => `${scope.executorLabel}（${scope.isTaskOwner ? "任务归属人" : "其他发起人"}）`).join("、") || task.executorLabel || "Codex"}。仅对应 Codex 执行器与发起人的普通回复只讨论方案，不实施或确认完成。</span>
+                <span>由同一发起人使用对应 Codex 执行器发送 <code>/plan off</code> 退出该作用域，或运行/重试任务退出全部计划模式。</span>
+              </div>
+            )}
             {task.handoffAudit && <HandoffAuditBanner audit={task.handoffAudit} />}
             {task.handoff && (
               <HandoffBanner

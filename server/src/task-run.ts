@@ -165,7 +165,7 @@ export async function runTask(
       (handoffNotice ? `${handoffNotice}\n\n` : "") +
       peerNotice +
       (autoTitle ? TITLE_HINT + objective : objective);
-    const cli = await prepareCliInvocation({ ...task, status: "running" }, agentType, commandText, profileId, runOwner ?? null);
+    const cli = await prepareCliInvocation({ ...task, status: "running" }, agentType, commandText, profileId, runOwner ?? null, { resetPlan: true });
     const runEnv = { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     // 启动末段的顺序是**定死的**:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论
     // → spawn。三样东西互相挤,只有这一种排法同时满足:

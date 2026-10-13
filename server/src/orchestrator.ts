@@ -289,11 +289,13 @@ export async function continueTask(
     const execution = !!opts.system || !!opts.executionTurn;
     const checkpointFollowUp = !execution && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
-    const followUpFrom = goalExecution ? null : sideTurn
-      ? (task.status === "running" || task.status === "queued" ? null : task.status)
-      : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
-        ? task.status
-        : null;
+    const followUpFrom = goalExecution && !["done", "failed", "canceled"].includes(task.status)
+      ? null
+      : sideTurn
+        ? (task.status === "running" || task.status === "queued" ? null : task.status)
+        : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
+          ? task.status
+          : null;
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
     // nativeTurn 落库而不是只留在内存里:结算钩子跟这里可能不在同一个进程(重启后由
     // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。
@@ -323,7 +325,9 @@ export async function continueTask(
       ...owner,
     });
     if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
-    const planning = !goalExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
+    const preserveCliState = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
+    const resetPlan = !!opts.system && !preserveCliState;
+    const planning = !resetPlan && !goalExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
     if (planning) {
       sideTurn = true;
       if (sessionRole === "single") reclaimTurn(taskId, "side");
@@ -490,8 +494,7 @@ export async function continueTask(
     const promptLevel = planning || resuming ? "reminder" as const : "full" as const;
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
-    const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null);
-    if (opts.sideTurn || task.verifyRound || freeReviewTurn) cli.cliState = { ...cli.cliState, plan: false };
+    const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan, preserveState: preserveCliState });
     // 顺序定死:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论 → spawn。为什么只能这
     // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
