@@ -43,6 +43,7 @@ export class CodexNativeCommands {
       this.goal = params.goal;
       this.transport.push({ kind: "system", level: "notice", aside: true, at: new Date().toISOString(), text: `〔目标〕${formatGoal(this.goal)}` });
     } else if (method === "thread/goal/cleared") {
+      if (!this.goal) return;
       this.goal = null;
       this.transport.push({ kind: "system", level: "notice", aside: true, at: new Date().toISOString(), text: "〔目标〕已清除；任务和会话历史保留。" });
     }

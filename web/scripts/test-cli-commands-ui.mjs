@@ -33,6 +33,7 @@ await db.insert(tasks).values([
   { id: "edited-cli-task", projectId: "cli-ui", title: "编辑后起跑失败", body: "普通正文", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", createdAt: at, updatedAt: at },
   { id: "legacy-cli-task", projectId: "cli-ui", title: "Codex 老任务起跑失败", body: "/usage 看一下这个月的用量再决定", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", createdAt: at, updatedAt: at },
   { id: "legacy-claude-task", projectId: "cli-ui", title: "Claude 老任务起跑失败", body: "/plan 怎么做这个功能", mode: "single", status: "backlog", agentType: "claude", executorId: "claude-ui", createdAt: at, updatedAt: at },
+  { id: "ordinary-ui-task", projectId: "cli-ui", title: "普通续聊没有目标提示", body: "回答普通问题，不设置目标", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", autoTitle: false, createdAt: at, updatedAt: at },
   { id: "fresh-plan-task", projectId: "cli-ui", title: "计划模式重新运行", body: "开始实施测试夹具", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", cliState: JSON.stringify({ codex: { profileId: "codex-ui", ownerUserId: null, plan: true } }), createdAt: at, updatedAt: at },
   { id: "fresh-claude-plan-task", projectId: "cli-ui", title: "Claude 首跑清除计划", body: "由 Claude 正常实施", mode: "single", status: "backlog", agentType: "claude", executorId: "claude-ui", autoTitle: false, cliState: JSON.stringify({ codex: { activeScope: encodeURIComponent(JSON.stringify(["codex-ui", null])), scopes: Object.fromEntries(["codex-ui", "codex-ui-other"].map((profileId) => [encodeURIComponent(JSON.stringify([profileId, null])), { profileId, ownerUserId: null, plan: true }])) } }), createdAt: at, updatedAt: at },
   { id: "queue-plan-task", projectId: "cli-ui", groupId: "queue-ui", title: "计划模式队列起跑", body: "开始实施队列任务", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", cliState: JSON.stringify({ codex: { profileId: "codex-ui", ownerUserId: null, plan: true } }), autoTitle: false, createdAt: at, updatedAt: at },
@@ -65,7 +66,8 @@ const boot = `
     if (liveGoal) goal.status = "active";
     let finish;
     const interrupted = new Promise((resolve) => { finish = resolve; });
-    const native = new CodexNativeCommands({ threadId: () => sessionId, turnId: () => "", model: () => "fixture", cwd: options.cwd, prompt: "", state: options.cliState, push() {}, request: async (method, params) => {
+    const notices = [];
+    const native = new CodexNativeCommands({ threadId: () => sessionId, turnId: () => "", model: () => "fixture", cwd: options.cwd, prompt: "", state: options.cliState, push: (event) => notices.push(event), request: async (method, params) => {
       if (method === "thread/goal/clear") goal = null;
       if (method === "thread/goal/set") {
         const changes = { ...params };
@@ -81,11 +83,16 @@ const boot = `
       kill() { finish(); },
       events: (async function* () {
         yield { kind: "session", cliSessionId: sessionId };
+        if (options.env.ASH_TASK_ID === "ordinary-ui-task" && options.sessionId) {
+          native.notification("thread/goal/cleared", { threadId: sessionId });
+        }
+        for (const event of notices) yield event;
         let text = options.cliCommand?.name === "goal" && goal ? "目标：" + goal.objective + (goal.tokenBudget ? "；预算 " + goal.tokenBudget : "") + "；已用 " + goal.tokensUsed : options.cliState?.plan ? "测试执行器：只讨论计划" : "测试执行器：正常实施";
         if (options.cliCommand?.name === "fork" || options.cliCommand?.name === "goal" && !goal) {
           text = await native.control(options.cliCommand);
         }
         if (liveGoal) text += "；测试回合 " + options.env.ASH_TURN_TOKEN;
+        if (options.env.ASH_TASK_ID === "ordinary-ui-task") text = "普通回合：" + options.env.ASH_TURN_TOKEN;
         yield { kind: "text", text };
         if (liveGoal) await interrupted;
         yield { kind: "done", exitStatus: 0 };
@@ -183,6 +190,40 @@ try {
     return idleTask(taskId, previousEnds);
   };
   const lastInvocation = async () => JSON.parse((await readFile(traceFile, "utf8")).trim().split("\n").at(-1));
+
+  await page.goto(`${base}/?project=cli-ui&task=ordinary-ui-task`);
+  const ordinaryReply = page.getByRole("textbox", { name: "回复任务" });
+  const beforeOrdinaryRun = await sessionEnds("ordinary-ui-task");
+  const [ordinaryRun] = await Promise.all([
+    page.waitForResponse((value) => value.url().endsWith("/tasks/ordinary-ui-task/run") && value.request().method() === "POST"),
+    page.getByRole("button", { name: "运行", exact: true }).click(),
+  ]);
+  assert.equal(ordinaryRun.status(), 202);
+  await idleTask("ordinary-ui-task", beforeOrdinaryRun);
+  const waitOrdinaryOutput = async () => {
+    const invocation = await lastInvocation();
+    assert.equal(invocation.taskId, "ordinary-ui-task");
+    await page.getByText(`普通回合：${invocation.turnToken}`, { exact: true }).filter({ visible: true }).last().waitFor();
+    assert.equal(await page.getByText(/〔目标〕/).count(), 0, "ordinary conversation must not display phantom goal notices");
+  };
+  await waitOrdinaryOutput();
+  for (const text of ["再说一句", "还有一句"]) {
+    const previousEnds = await sessionEnds("ordinary-ui-task");
+    await ordinaryReply.fill(text);
+    const [returned] = await Promise.all([
+      page.waitForResponse((value) => value.url().endsWith("/tasks/ordinary-ui-task/reply") && value.request().method() === "POST"),
+      page.getByRole("button", { name: "发送回复", exact: true }).click(),
+    ]);
+    assert.equal(returned.status(), 202);
+    await idleTask("ordinary-ui-task", previousEnds);
+    await waitOrdinaryOutput();
+  }
+  await page.screenshot({ path: join(screenshots, "ordinary-no-goal-notices-live.png"), fullPage: true });
+  await page.reload();
+  await waitOrdinaryOutput();
+  await page.screenshot({ path: join(screenshots, "ordinary-no-goal-notices-reloaded.png"), fullPage: true });
+
+  await page.goto(`${base}/?project=cli-ui&task=codex-ui-task`);
   assert.equal((await sendCodex("/plan")).codexPlanMode, true);
   await planNotice.waitFor();
   await page.getByText("测试执行器：只讨论计划", { exact: true }).first().waitFor();
@@ -559,6 +600,7 @@ try {
     assert.equal(recorded[0].exitStatus, 1);
   }
   assert.deepEqual(pageErrors, []);
+  console.log("ordinary Codex fresh task and two resumed replies have no phantom goal notices live or after reload: passed");
   console.log("native slash UI, agent/mode filtering, inline goal status without optimistic bubbles, durable reload: passed");
   console.log("creation validation reason, edited/legacy startup diagnostics, live display and durable reload: passed");
   console.log("plan mode live/reload notice, slash-only exit, fresh and resumable rerun reset: passed");

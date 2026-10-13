@@ -111,6 +111,27 @@ try {
   const idle = new CodexNativeCommands({ threadId: () => "idle", turnId: () => "ordinary", model: () => "model", cwd: root, prompt: "", push() {}, request: async (method) => { assert.notEqual(method, "turn/interrupt"); return { goal: null }; } });
   await idle.control(command("/goal"));
 
+  const goalNotifications: AgentEvent[] = [];
+  const goalChannel = new CodexNativeCommands({ threadId: () => "ordinary", turnId: () => "turn", model: () => "model", cwd: root, prompt: "", push: (event) => goalNotifications.push(event), request: async () => ({ goal: null }) });
+  for (const turn of [1, 2, 3]) {
+    goalChannel.notification("thread/goal/cleared", { threadId: "ordinary" });
+    assert.deepEqual(goalNotifications, [], `goal-free turn ${turn} must not announce a cleared goal`);
+  }
+  for (const status of ["active", "paused", "budgetLimited", "blocked", "usageLimited", "complete"] as const) {
+    goalChannel.notification("thread/goal/updated", { goal: { objective: "已设置的目标", status } });
+    const beforeClear = goalNotifications.length;
+    goalChannel.notification("thread/goal/cleared", { threadId: "ordinary" });
+    assert.equal(goalChannel.goal, null);
+    const cleared = goalNotifications.at(-1);
+    assert.ok(cleared?.kind === "system");
+    assert.equal(cleared.level, "notice");
+    assert.equal(cleared.aside, true);
+    assert.equal(cleared.text, "〔目标〕已清除；任务和会话历史保留。");
+    assert.equal(goalNotifications.length, beforeClear + 1);
+    goalChannel.notification("thread/goal/cleared", { threadId: "ordinary" });
+    assert.equal(goalNotifications.length, beforeClear + 1, "duplicate clears must not announce another removed goal");
+  }
+
   const invocation = claudeGoalInvocation({ cwd: root, prompt: "完整方向身份 private-direction-token", cliCommand: command("/goal 测试通过", "claude") });
   const contextPath = invocation.args[1]!;
   assert.equal(invocation.input, "/goal 测试通过");

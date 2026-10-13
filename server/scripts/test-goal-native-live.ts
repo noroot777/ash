@@ -74,7 +74,7 @@ try {
     assert.ok(reasoningEfforts.slice(before).every((effort) => effort === "xhigh"), JSON.stringify(reasoningEfforts.slice(before)));
   }
   console.log("real Codex preserves xhigh in ordinary, planning, /plan prompt, and automatic goal turns");
-  for (const text of ["/status", "/mcp", "/ps", "/stop", "/hooks", "/plugins", "/debug-config", "/personality friendly", "/fast off", "/rename 原生测试会话", "/plan", "/plan off", "/compact", "/review 检查当前会话的测试夹具", "/fork", "/new"]) {
+  for (const text of ["/goal clear", "/status", "/mcp", "/ps", "/stop", "/hooks", "/plugins", "/debug-config", "/personality friendly", "/fast off", "/rename 原生测试会话", "/plan", "/plan off", "/compact", "/review 检查当前会话的测试夹具", "/fork", "/new"]) {
     const trace = { eventsPath: join(root, "command-events.jsonl"), stderrPath: join(root, "command-stderr.log"), diagnosticsPath: join(root, "command-diagnostics.json") };
     const command = executor.runSteerable({ cwd: workspace, prompt: text, trace, cliCommand: validateCliCommand("codex", text)!, cliState: { plan: text === "/plan", personality: "friendly", serviceTier: "default" }, sessionId, env: { CODEX_HOME: home } });
     const output: AgentEvent[] = [];
@@ -84,6 +84,7 @@ try {
     const diagnostics = await readFile(trace.diagnosticsPath, "utf8");
     const wire = output.find((event) => event.kind === "done")?.exitStatus !== 0 ? (await readFile(trace.eventsPath, "utf8")).split("\n").filter((line) => /turn\/started|turn\/completed|reviewThreadId/.test(line)).slice(-7).join("\n") : "";
     assert.equal(output.find((event) => event.kind === "done")?.exitStatus, 0, `${text}: ${diagnostics}\n${wire}`);
+    if (text === "/goal clear") assert.ok(output.some((event) => event.kind === "text" && /当前没有目标/.test(event.text)), "clearing a known native goal must display its command result");
     sessionId = output.find((event) => event.kind === "session")?.cliSessionId ?? sessionId;
   }
   console.log("real Codex inspection, local plugin inventory, settings, plan, compact, review, fork and new RPCs: passed");
@@ -98,6 +99,22 @@ try {
   const at = new Date().toISOString();
   await db.insert(projects).values({ id: "live-project", name: "native CLI integration", repoPath: workspace, useWorktreeDefault: false, createdAt: at });
   await db.insert(agents).values({ id: "first-profile", name: "codex@fixture", type: "codex", isDefault: true });
+  await db.insert(tasks).values({ id: "ordinary-task", projectId: "live-project", title: "普通续聊", body: "回答普通问题，不设置目标", mode: "single", agentType: "codex", status: "backlog", autoTitle: false, useWorktree: false, createdAt: at, updatedAt: at });
+  await runTask("ordinary-task");
+  const ordinarySessions = async () => db.select().from(sessions).where(eq(sessions.taskId, "ordinary-task"));
+  const originalOrdinarySession = (await ordinarySessions())[0]!;
+  assert.ok(originalOrdinarySession.cliSessionId);
+  for (const reply of ["再说一句", "还有一句"]) {
+    assert.equal(await continueTask("ordinary-task", reply), true);
+    const recorded = await ordinarySessions();
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0]!.cliSessionId, originalOrdinarySession.cliSessionId);
+    assert.equal(recorded[0]!.exitStatus, 0);
+    const transcript = await readFile(sessionTranscriptPath("ordinary-task", recorded[0]!.id), "utf8");
+    assert.match(transcript, new RegExp(reply));
+    assert.doesNotMatch(transcript, /〔目标〕/, "ordinary replies must not persist phantom goal notifications");
+  }
+  console.log("real Codex ordinary fresh task and two resumed replies persist no goal notifications: passed");
   await db.insert(tasks).values({ id: "live-task", projectId: "live-project", title: "native CLI", body: "验证原生命令", mode: "single", agentType: "codex", status: "done", stage: "accepted", autoTitle: false, useWorktree: false, createdAt: at, updatedAt: at });
   const task = async () => (await db.select().from(tasks).where(eq(tasks.id, "live-task")))[0]!;
   assert.equal(await continueTask("live-task", "/plan"), true);
