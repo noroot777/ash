@@ -19,6 +19,7 @@ const { CodexExecutor } = await import("../src/executors/codex.js");
 const { advanceQueue, runGroup } = await import("../src/scheduler.js");
 const { applyFailPolicy } = await import("../src/workflow-steps.js");
 const { continueTask } = await import("../src/orchestrator.js");
+const { saveCliState } = await import("../src/task-cli-state.js");
 const { isTurnClaimed } = await import("../src/runs.js");
 await ensureSchema();
 const originalRun = CodexExecutor.prototype.runSteerable;
@@ -41,6 +42,7 @@ const row = async (taskId: string) => (await db.select().from(tasks).where(eq(ta
 async function create(taskId: string, extra: Partial<typeof tasks.$inferInsert> = {}) {
   await db.insert(tasks).values({ id: taskId, projectId: "project", title: taskId, body: "开始实施", status: "backlog", mode: "single", agentType: "codex", executorId: "profile", useWorktree: false, autoTitle: false,
     cliState: JSON.stringify({ codex: { profileId: "profile", ownerUserId: null, plan: true } }), createdAt: at, updatedAt: at, ...extra });
+  await saveCliState(taskId, "codex", { profileId: "reviewer-profile", ownerUserId: "other-owner", plan: true });
   await db.insert(sessions).values({ id: `${taskId}-session`, taskId, role: "single", agentType: "codex", executor: "codex", executorId: "profile", cliSessionId: taskId, cwd: root, startedAt: at, endedAt: at });
 }
 async function settled(taskId: string) {
@@ -53,6 +55,7 @@ async function settled(taskId: string) {
 async function assertExecution(taskId: string) {
   const task = await settled(taskId);
   assert.equal(readCliState(task.cliState, "codex", "profile", null).plan, false, `${taskId}: stored plan must reset (status=${task.status})`);
+  assert.equal(readCliState(task.cliState, "codex", "reviewer-profile", "other-owner").plan, false, `${taskId}: scheduled runs must reset other profiles/owners too`);
   assert.equal(invocations.get(taskId)?.cliState?.plan, false, taskId);
   assert.doesNotMatch(invocations.get(taskId)!.prompt, /本回合只讨论计划/, taskId);
   assert.equal(task.status, "failed", `${taskId}: exit 0 without completion must not become done`);

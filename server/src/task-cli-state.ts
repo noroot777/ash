@@ -43,13 +43,25 @@ export async function resolvedCliState(task: typeof tasks.$inferSelect, agentTyp
   return readCliState(task.cliState, agentType, profileId, ownerUserId);
 }
 
+async function resetCliPlanModes(taskId: string): Promise<void> {
+  const raw = sql`CASE WHEN json_valid(${tasks.cliState}) THEN ${tasks.cliState} ELSE '{}' END`;
+  const scopes = sql`(SELECT json_group_object(key, json_object('plan', json('false'))) FROM json_each(${raw}, '$.codex.scopes') WHERE type = 'object')`;
+  await db.update(tasks).set({ cliState: sql`CASE
+    WHEN json_type(${raw}, '$.codex.scopes') = 'object'
+      THEN json_patch(${raw}, json_object('codex', json_object('scopes', json(${scopes}))))
+    WHEN json_type(${raw}, '$.codex') = 'object'
+      THEN json_set(${raw}, '$.codex.plan', json('false'))
+    ELSE ${tasks.cliState} END` }).where(eq(tasks.id, taskId));
+}
+
 export async function prepareCliInvocation(task: typeof tasks.$inferSelect, agentType: AgentType, text: string, profileId: string | null, ownerUserId: string | null, options: { resetPlan?: boolean; preserveState?: boolean } = {}) {
   const cliCommand = validateCliCommand(agentType, text);
   const previousState = readCliState(task.cliState, agentType, profileId, ownerUserId);
   const cliState = { ...previousState, profileId, ownerUserId };
   assertResumableGoal(cliCommand, cliState);
   if (options.preserveState) return { cliCommand: cliCommand ?? undefined, cliState: { ...cliState, plan: false } };
-  if (options.resetPlan && agentType === "codex") cliState.plan = false;
+  const resetPlanChanged = !!options.resetPlan && Object.values(readCliStateScopes(task.cliState, "codex").scopes).some((state) => state?.plan === true);
+  if (options.resetPlan) { await resetCliPlanModes(task.id); cliState.plan = false; }
   if (isGoalExecution(cliCommand)) cliState.goalStart = { previousStatus: task.status, previousGoal: cliState.goal ?? null, previousHold: cliState.goalHold ?? false };
   if (!cliCommand || isGoalExecution(cliCommand)) cliState.goalHold = false;
   if (cliCommand?.name === "plan") cliState.plan = cliCommand.args !== "off";
@@ -65,7 +77,7 @@ export async function prepareCliInvocation(task: typeof tasks.$inferSelect, agen
   if (cliCommand?.name === "new" || cliCommand?.name === "clear" || cliCommand?.name === "fork") { cliState.goal = null; cliState.goalHold = false; delete cliState.goalStart; }
   if (cliCommand || task.cliState) {
     await saveCliState(task.id, agentType, cliState, true);
-    if (cliState.plan !== readCliState(task.cliState, agentType).plan) await publishTaskUpdated(task.id);
+    if (resetPlanChanged || cliCommand?.name === "plan" || cliState.plan !== readCliState(task.cliState, agentType).plan) await publishTaskUpdated(task.id);
   }
   return { cliCommand: cliCommand ?? undefined, cliState };
 }

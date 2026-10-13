@@ -323,6 +323,7 @@ export interface Task {
   model?: string | null;
   reasoningEffort?: string | null;
   codexPlanMode?: boolean;
+  codexPlanScopes?: { executorId: string | null; executorLabel: string; isTaskOwner: boolean }[];
   // Read-only label for the selected/default executor profile.
   executorLabel?: string | null;
   // duet (讨论) mode config (§7):

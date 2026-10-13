@@ -37,10 +37,12 @@ Claude 的普通执行回合也能用无参数 `/goal` 查询已保存的目标�
 
 | 命令 | ash 中的行为 |
 | --- | --- |
-| `/plan`、`/plan 问题`、`/plan off` | 原生计划模式；任务页持久显示模式及 `/plan off` 提示，普通回复继续只做计划；运行、重试、队列推进、分组起跑和工作流唤醒均退出（正文显式 `/plan` 除外） |
+| `/plan`、`/plan 问题`、`/plan off` | 原生计划模式，按执行器与发起人分别保存；Codex 任务页列出仍开启的作用域，换执行器或刷新不会隐藏它们，仅对应作用域的普通回复只做计划；`/plan off` 关闭当前作用域，运行、重试、队列推进、分组起跑和工作流唤醒退出所有 Codex 作用域（正文显式 `/plan` 除外） |
 | `/compact` | 原生手动上下文压缩 |
 | `/review` | 原生当前改动审查；支持 `--base 分支`、`--commit SHA` 或自定义审查要求 |
 | `/status` | 会话、模型、计划模式和最近的真实上下文快照；没有数据时显示 null，不编造计数 |
+
+任务改用 Claude 等其他智能体后不显示 Codex 计划模式提示。重新运行或重试即使由 Claude 执行，也会清除该任务全部 Codex 计划标志；切回 Codex 不会恢复旧计划模式。清除计划标志不改其他作用域的目标、预算、用量或暂停标记，旁路审查与验证仍不修改保存的状态。
 | `/usage` | 原生账号 token 用量与额度；不支持的供应商会明确报错，不启动模型代查 |
 | `/mcp` | 当前会话的 MCP 服务与工具清单 |
 | `/ps`、`/stop` | 当前原生会话的后台终端清单与清理；`/stop` 不取消 ash 任务 |
@@ -78,7 +80,7 @@ Codex 原生适配依赖 App Server。带 exec 专属参数的 profile 不会偷
 
 `npm -w server run test:goal-native-live` 使用真实 Codex/Claude 二进制与独立配置目录，但模型端是本机 Responses/Anthropic 测试服务；不消耗用户模型额度。验证 Codex 两轮后原生预算停止，以及 Claude 三轮目标工作和上下文文件清理，另验证 Codex 的检查、设置、压缩、审查、分叉与新会话协议。它还走 ash 的真实续聊链路，覆盖计划状态按执行器隔离、旁路回合不受计划模式污染、持久预算暂停、目标查询和新建/清空后不复用旧上下文。
 
-`npm -w web run test:cli-commands` 在独立测试库中启动真实 ash 服务，验证两种执行器的补全、团队过滤、快照查询不产生假用户气泡、验收状态保留以及刷新后会话说明仍在。需要先构建 shared、server 和 web。
+`npm -w web run test:cli-commands` 在独立测试库中启动真实 ash 服务，验证两种执行器的补全、团队过滤、快照查询不产生假用户气泡、验收状态保留以及刷新后会话说明仍在。另覆盖跨执行器后的计划作用域提示、只退出一个作用域、切换 Claude 隐藏提示，以及 Codex 运行/Claude 重试清除全部作用域。需要先构建 shared、server 和 web。
 
 本轮浏览器通道先尝试 Chrome 扩展具名后台会话 `🧪 ash 原生目标命令`，扩展报告 `unsupported Codex auth method: apikey`，无法建立连接。随后使用独立临时 profile 的 headless Chromium 验证；没有激活 Chrome、接管普通标签或启动有头浏览器。
 
