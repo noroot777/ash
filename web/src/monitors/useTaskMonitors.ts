@@ -28,6 +28,17 @@ export function useTaskMonitors(taskId: string) {
   const [stoppingIds, setStoppingIds] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   /**
+   * 这份列表**是哪个任务的**。`setMonitors([])` 是 effect 做的，而 effect 跑在渲染之后：
+   * 切任务那一帧，渲染读到的还是上一个任务的列表。平时顶多闪一下旧卡片，但这一帧恰好
+   * 是 InspectorHost 按新 contextKey 重挂的那一帧——它据此算出的 `defaultOpen` 会被
+   * `defaultState` 写进 openTabs、被 `knownTabIds` 记成「这一格出现过」，两样都没有撤销
+   * 路径，本任务真实的应答回来也纠正不了（第 1 轮审查实测：上一个任务挂着哨兵就会给
+   * 从没用过的任务凭空多一格并存进 localStorage；反过来，离开期间才挂上哨兵的任务切
+   * 回来时那一格再也不冒出来）。所以归属必须在**渲染返回那一层**判，跟 useConversation
+   * 的 `loadedTaskId` 同一套：不属于当前任务的数据一概当「还没读到」。
+   */
+  const [loadedTaskId, setLoadedTaskId] = useState<string | null>(null);
+  /**
    * 「现在是哪个任务、这是它的第几次读取」。
    *
    * 宿主组件跨任务复用（切任务不重挂载），而 `setMonitors([])` 只能清掉当下那一份值、
@@ -54,9 +65,12 @@ export function useTaskMonitors(taskId: string) {
       if (!mine()) return;
       setMonitors(next);
       setError(null);
+      setLoadedTaskId(taskId);
     } catch (reason) {
       if (!mine()) return;
       setError(reason instanceof Error ? reason.message : String(reason));
+      // 读失败也算「这一轮读完了」：否则那句报错会被下面的归属判据一直压着不露面。
+      setLoadedTaskId(taskId);
     }
   }, [taskId]);
 
@@ -121,5 +135,16 @@ export function useTaskMonitors(taskId: string) {
     }
   }, [reload, taskId]);
 
-  return { monitors, stoppingIds, error, start, stop, reload };
+  // 读到的是不是当前任务的。没读到就一律按空给——别拿上一个任务的列表去回答「这个任务
+  // 有没有哨兵」，图标条的显隐就是照着这个问题走的。
+  const ready = loadedTaskId === taskId;
+  return {
+    monitors: ready ? monitors : [],
+    stoppingIds,
+    error: ready ? error : null,
+    ready,
+    start,
+    stop,
+    reload,
+  };
 }

@@ -29,6 +29,7 @@ function state(monitors: TaskMonitor[]): TaskMonitorsState {
     monitors,
     stoppingIds: new Set(),
     error: null,
+    ready: true,
     start: async () => true,
     stop: async () => undefined,
     reload: async () => undefined,
@@ -198,7 +199,12 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
 // 未必重挂，而届时丢的是用户打的字 —— 所以守在这里。
 {
   const hook = readSource(new URL("../src/monitors/useTaskMonitors.ts", import.meta.url));
-  const start = hook.slice(hook.indexOf("const start = useCallback"), hook.indexOf("return { monitors,"));
+  // 切出 start 这一段。锚点找不到时必须当场报错：`indexOf` 返回 -1 会把切片悄悄放大成
+  // 「从这里到文件末尾」，下面几条断言照样绿，但它们看的已经不是 start 那一段了。
+  const from = hook.indexOf("const start = useCallback");
+  const to = hook.indexOf("}, [reload, taskId]);", from);
+  assert.ok(from >= 0 && to > from, "切不出 start 那一段：锚点漂了，先把锚点改对再谈断言");
+  const start = hook.slice(from, to);
   assert.doesNotMatch(start, /^\s*return true;$/m, "跨任务的创建不许回 true：它唯一的用处是收走当前那张表单");
   assert.match(start, /return mine\(\);/, "起成功了也要先问一句「现在还是这个任务吗」");
   // 忙碌状态归表单实例，不归任务：同一个任务上可以有一张在途的、一张刚重开的。

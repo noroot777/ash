@@ -129,6 +129,70 @@ try {
     await page.close();
   }
 
+  // ── 切任务那一帧的归属：图标条的显隐不许吃上一个任务的哨兵列表 ───────────────
+  // `useMonitorInspector` 挂在 InspectorHost 之外，而 Host 自己按 contextKey 重挂。切任务
+  // 时列表 state 只在 effect 里清空，于是**新 Host 的第一次渲染**读到的还是上一个任务的
+  // 列表——它据此算出的 `defaultOpen` 会被 `defaultState` 写进 openTabs、被 `knownTabIds`
+  // 记成「这一格出现过」，而那两样都没有撤销路径：本任务真实的应答回来也纠正不了。
+  // 两个方向各错一次，都只在**跨任务**时出现，所以上面那些单任务用例一个都看不见。
+  {
+    // 方向一：上一个任务挂着哨兵 → 切到从没用过哨兵的任务，不该凭空多一格（还会被存下来）。
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-b/monitors") return false;
+      await route.fulfill({ json: [] });
+      return true;
+    }, "?rail=1");
+    await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').waitFor();
+    await page.getByRole("button", { name: "切换任务" }).click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="task"]')?.textContent === "task-b");
+    await page.waitForTimeout(400);
+    assert.equal(
+      await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').count(),
+      0,
+      "切到从没挂过哨兵的任务，图标条不该留着上一个任务带来的那一格",
+    );
+    assert.doesNotMatch(
+      String(await page.evaluate(() => window.localStorage.getItem("ash:inspector:task:task-b"))),
+      /"monitors"/,
+      "那一格还会被存进 openTabs：刷新之后它仍然在，错得更久",
+    );
+    await page.close();
+  }
+  {
+    // 方向二：先看一个没哨兵的任务 → 去别处 → 它期间挂上了哨兵 → 切回来，必须自己冒出来。
+    let aList = [];
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-a/monitors") return false;
+      await route.fulfill({ json: aList });
+      return true;
+    }, "?rail=1");
+    await page.locator('.inspector-rail__tab[data-tab-id="info"]').waitFor();
+    await page.waitForTimeout(400);
+    assert.equal(
+      await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').count(),
+      0,
+      "前置条件：task-a 这会儿还没挂过哨兵",
+    );
+
+    await page.getByRole("button", { name: "切换任务" }).click();
+    await waitIds(page, "m-task-b");
+    aList = [monitor("m-task-a", "task-a")];
+    await page.getByRole("button", { name: "切换任务" }).click();
+    await waitIds(page, "m-task-a");
+    await page.waitForTimeout(300);
+
+    const tab = page.locator('.inspector-rail__tab[data-tab-id="monitors"]');
+    assert.equal(await tab.count(), 1, "切回来时它已经挂上哨兵了，这一格必须自己冒出来");
+    assert.equal(await tab.locator(".inspector-rail-icon--used").count(), 1, "冒出来就得带底色记号");
+    assert.equal(await tab.locator(".monitor-rail-icon--live").count(), 1, "那条还在跑，活信号也得在");
+    assert.equal(
+      await page.locator('.inspector-rail__tab[aria-selected="true"]').getAttribute("data-tab-id"),
+      "info",
+      "自己冒出来仍然不许抢焦点",
+    );
+    await page.close();
+  }
+
   // ── ③ 340px 下按钮不许被挤出面板 ───────────────────────────────────────────
   {
     const page = await open();
