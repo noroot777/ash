@@ -20,6 +20,8 @@ import { reviewRoundDir } from "./review-evidence.js";
 import { reviewRequestReference } from "./review-request-context.js";
 import { BROWSER_VERIFICATION_POLICY, BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
+import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
+import { verifyHistorySection } from "./review-history.js";
 import type { Workspace } from "./git.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -59,6 +61,9 @@ function verifyRules(evidenceDir: string): string {
     `看不见的改动（服务端逻辑、CLI、脚本、纯数据）**不需要截图就别截**，别为了凑证据补一张没有信息量的图。截了就放在 ${evidenceDir} 目录内\n` +
     `- 证据**只落盘，绝不 git add / commit 进仓库**（data/ 本就在 .gitignore 里，不要 -f 强加）：` +
     `验收界面直接从磁盘读证据，塞进 git 只会拿二进制文件污染被审分支的验收 diff\n\n` +
+    // 「这一轮要扫到什么程度」跟「报告怎么写」是两件事，但必须一起到场：只讲格式不讲
+    // 扫描义务，报告就会是一份格式完美的单条发现（`review-sweep.ts` 文件头的实测数据）。
+    REVIEW_SWEEP_PROTOCOL +
     REPORT_SUMMARY_FORMAT;
 }
 
@@ -81,13 +86,16 @@ export async function verifyProtocolFor(
   const evidenceDir = reviewRoundDir(target.id, round);
   const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
   const requirements = await reviewRequestReference(target, evidenceDir);
+  // 前面几轮报过的现象行（理由见 review-history.ts 文件头：会话可能被压缩，也可能是
+  // 手点的新一轮）。放在验证动作之前，让它先判「我这条是不是上面某条的第 N 个变体」。
+  const history = await verifyHistorySection(target.id, round);
   return `【自动验证 · 第 ${round} 轮】\n` +
     `这一轮不是继续做需求，而是**回过头验收你自己刚才的产物**。请切换成审查者的立场：` +
     `默认它有问题，去找出问题，而不是复述你做了什么。\n\n` +
     `验证对象：${target.id}\n${requirements}\n\n` +
     requiredChecks(target, station ?? target.workflowAt) +
     `先检查真实改动：项目仓库 ${repoPath}；你当前的工作目录就是被验产物所在的目录；` +
-    `比较基线 ${baseline}。先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
+    `比较基线 ${baseline}。先看 git status / git diff / 相关提交，再决定验证范围。${history}\n\n` +
     `${REVIEW_OVERWRITE_CHECK}\n\n` +
     verifyRules(evidenceDir) +
     `验证结束时，调用 report_stage(taskId="${target.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出本轮结论；` +
@@ -99,6 +107,7 @@ export function verifyReminderFor(taskId: string, round: number): string {
   const dir = reviewRoundDir(taskId, round);
   return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
+    REVIEW_SWEEP_REMINDER +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
     BROWSER_VERIFICATION_REMINDER +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
@@ -118,12 +127,13 @@ export async function reviewProtocolFor(
   const evidenceDir = reviewRoundDir(target.id, review.reviewRound);
   const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
   const requirements = await reviewRequestReference(target, evidenceDir);
+  const history = await verifyHistorySection(target.id, review.reviewRound);
   return `【审查任务 · 第 ${review.reviewRound} 轮】\n` +
     `审查对象：${target.id}\n${requirements}\n\n` +
     requiredChecks(target, review.reviewStep ?? target.workflowAt) +
     `先检查真实改动：项目仓库 ${repoPath}；被审工作目录 ${workspace.path}；` +
     `被审分支 ${workspace.branch ?? "(无 Git 分支)"}；比较基线 ${baseline}。` +
-    `先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
+    `先看 git status / git diff / 相关提交，再决定验证范围。${history}\n\n` +
     `${REVIEW_OVERWRITE_CHECK}\n\n` +
     verifyRules(evidenceDir) +
     `审查结束时，调用 report_stage(taskId="${target.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给被审任务下结论；` +
@@ -137,6 +147,7 @@ export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "rev
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
   return `审查提醒:这是第 ${review.reviewRound} 轮审查；必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
+    REVIEW_SWEEP_REMINDER +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
     BROWSER_VERIFICATION_REMINDER +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
@@ -160,7 +171,8 @@ export function repairPrompt(input: {
     (reviewTaskId
       ? `审查任务 ${reviewTaskId} 已给出 verify_failed。`
       : `第 ${round} 轮验证结论是 verify_failed。`) +
-    `请先完整读取 [report.md](${join(dir, "report.md")})，再按报告修复，不要扩大原任务边界。\n\n` +
+    `请先完整读取 [report.md](${join(dir, "report.md")})，再按报告修复，不要扩大原任务边界。\n` +
+    CLASS_REPAIR_NOTE + "\n" +
     (coverageGuard ? `${coverageGuard}\n\n` : "") +
     `证据目录：${dir}\n\n` +
     `修完必须调用 complete_task(taskId="${target.id}") 确认完成；` +

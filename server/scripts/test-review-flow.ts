@@ -10,6 +10,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 import {
+  assertCarriesSweepProtocol,
+  assertCarriesSweepReminder,
+  assertSweepRuleTable,
+} from "./review-sweep-rules.js";
+import {
   assertCarriesSummaryFormat,
   assertCarriesSummaryReminder,
   assertSummaryRuleTable,
@@ -298,6 +303,16 @@ assertSummaryRuleTable();
 assertCarriesSummaryFormat(reviewPrompt, "自动验证 prompt");
 assertCarriesSummaryReminder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
 assertCarriesSummaryReminder(
+  reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }),
+  "历史审查续跑提醒",
+);
+// 报告**形状**的契约（上面那几行）管不了「找到几条」：一份格式完美的单条发现照样全绿。
+// 扫描义务是另一份契约，同样只有一份源（`server/src/review-sweep.ts`），同样要核「原样
+// 包含那个常量」——它是把停机条件从「够判不通过了」改成「该扫的面扫完了」的唯一载体。
+assertSweepRuleTable();
+assertCarriesSweepProtocol(reviewPrompt, "自动验证 prompt");
+assertCarriesSweepReminder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
+assertCarriesSweepReminder(
   reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }),
   "历史审查续跑提醒",
 );

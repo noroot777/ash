@@ -49,6 +49,8 @@ import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "
 import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
+import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
+import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { id, now } from "./util.js";
 import type { Actor } from "./auth/context.js";
 import { canUseOwned } from "./auth/owned.js";
@@ -95,9 +97,15 @@ export async function freeReviewResumeOptions(taskId: string) {
 export async function freeReviewReminder(taskId: string): Promise<string> {
   const run = await reviewingRun(taskId);
   if (!run) return "";
+  // 中途提问后续跑那条路上，只有这条提醒还在重贴要求（崩掉重拉走 freeReviewResumeMessage，
+  // 两条路各带一份），所以报告格式和扫描义务两份契约都得在 —— 原先这里只有浏览器提醒，
+  // 而就地验证那侧的 `verifyReminderFor` 一直带着摘要契约：两个对称端点只做了一个。
   return `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
     BROWSER_VERIFICATION_REMINDER +
-    `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}；结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
+    `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}，` +
+    REPORT_SUMMARY_REMINDER +
+    REVIEW_SWEEP_REMINDER +
+    `结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
     `不要调用 complete_task 或 accept_task。`;
 }
 
