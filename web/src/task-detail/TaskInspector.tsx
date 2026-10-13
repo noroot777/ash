@@ -274,7 +274,10 @@ export function TaskInspector({
     if (!target) return;
     try {
       const placed = await placeTaskAfter(task.id, target);
-      notify(`已排在「${target.title || "未命名任务"}」之后，轮到它时自动开始`);
+      // 运行中的任务入队不打断当前回合,提示也不能说「轮到它时自动开始」——它已经在跑,
+      // 照抄待办文案会被读成「刚才那下把任务停了」。
+      const live = task.status === "running" || task.status === "queued";
+      notify(`已排在「${target.title || "未命名任务"}」之后${live ? "；当前运行不受影响" : "，轮到它时自动开始"}`);
       if (placed.tasks.length) onTasksSynced(placed.tasks);
       else onQueueChanged();
     } catch (reason) {
@@ -379,9 +382,12 @@ export function TaskInspector({
                   projectId: task.projectId,
                   excludeId: task.id,
                   subjectGroupId: task.groupId ?? null,
+                  subjectRunning: task.status === "running",
                 })}
                 onChange={(targetId) => void joinQueueAfter(targetId)} />
-              <p className="task-inspector-note">独立任务。选一个同组任务，等它跑完这个再自动开始。</p>
+              <p className="task-inspector-note">{task.status === "running"
+                ? "正在运行。入队不会打断它:它跑完后,排在它后面的任务自动开始。"
+                : "独立任务。选一个同组任务，等它跑完这个再自动开始。"}</p>
             </>
           ) : <p className="task-inspector-note">独立任务，不在任何队列中。</p>}
         </section>

@@ -3,16 +3,12 @@ import { join } from "node:path";
 import type {
   AgentType,
   GateAction,
-  QuestionItem,
   ScheduledMessage,
   ScheduledMessageMode,
   ScheduledMessageStatus,
   TaskStatus,
 } from "@ash/shared";
 import {
-  MAX_QUESTION_ITEMS,
-  MAX_QUESTION_OPTION_LEN,
-  MAX_QUESTION_OPTIONS,
   canSingleRun,
 } from "@ash/shared";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
@@ -33,20 +29,30 @@ import { mountTaskSteerRoutes } from "./task-steer.js";
 import { RUNS_DIR } from "./paths.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
+import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimTurn, confirmDone, releaseTurn, stopTask } from "./runs.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { replyToTask } from "./task-reply.js";
-import { answerTask } from "./task-answer.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
-import { setTaskQuestion } from "./task-question.js";
+import { mountTaskQuestionRoutes } from "./task-question-routes.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { readableRunPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { now } from "./util.js";
+
+// 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
+// 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
+
+// 起跑占位(/run、/fire、/retry 的最后一道)住在 queue-seat.ts 的 seatThenStart:整队
+// 检查与落 queued 在同一临界区里,且与消息补投扫描、重跑上一回合、定时到点、队列推进
+// 共用同一条认领链。路由前面那次 queueBlockers 只是无互斥的快速失败;seatThenStart
+// 才是权威认领 —— 检查到落库之间的 await 窗口里,并发的另一个入口(哪怕只占了任务级
+// 回合锁、状态还停在终态)刚认领的占位在链上立刻可见,整队在跑守卫不再被双双穿过
+// (第 6/7 轮审查)。
 
 export function mountTaskRunRoutes(api: Hono): void {
   mountTaskArchiveRoutes(api);
@@ -54,6 +60,7 @@ export function mountTaskRunRoutes(api: Hono): void {
   mountTaskScheduleRoutes(api);
   mountTaskSessionRoutes(api);
   mountTaskSteerRoutes(api);
+  mountTaskQuestionRoutes(api);
   const toScheduledMessage = (r: typeof scheduledMessages.$inferSelect): ScheduledMessage => ({
     ...r,
     attachments: JSON.parse(r.attachments),
@@ -107,7 +114,7 @@ api.post("/tasks/:id/run", async (c) => {
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
-      { error: "队列前面还有未完成的任务，先把它们处理完或把本任务移出队列", blockedBy },
+      { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy },
       409,
     );
   }
@@ -139,8 +146,16 @@ api.post("/tasks/:id/run", async (c) => {
     releaseTurn(taskId);
     return c.json({ error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }, 409);
   }
-  if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) }); return c.json({ started: true }, 202); }
-  void resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
+  // 起跑占位 + 启动:认领队列执行占位后才真正拉起(见 seatThenStart 顶注)。
+  const acting = ownerIdOf(actorOf(c));
+  const started = await seatThenStart(taskId, () =>
+    r.mode === "duet"
+      ? runDuet(taskId, { turnHeld: true, actingUserId: acting })
+      : resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: acting }));
+  if (!started.ok) {
+    releaseTurn(taskId);
+    return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
+  }
   return c.json({ started: true }, 202);
 });
 
@@ -176,7 +191,7 @@ api.post("/tasks/:id/fire", async (c) => {
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
-      { error: "队列前面还有未完成的任务，先把它们处理完或把本任务移出队列", blockedBy },
+      { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy },
       409,
     );
   }
@@ -189,8 +204,16 @@ api.post("/tasks/:id/fire", async (c) => {
     releaseTurn(taskId);
     return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
   }
-  if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) }); return c.json({ started: true, fresh: true }, 202); }
-  void runTask(taskId, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) }); // 全新一轮,永不 resume
+  // 起跑占位 + 启动,理由同 /run(检查与占位同临界区,堵并发双跑窗口)。
+  const firedBy = ownerIdOf(actorOf(c));
+  const fired = await seatThenStart(taskId, () =>
+    r.mode === "duet"
+      ? runDuet(taskId, { turnHeld: true, actingUserId: firedBy })
+      : runTask(taskId, { turnHeld: true, actingUserId: firedBy })); // 全新一轮,永不 resume
+  if (!fired.ok) {
+    releaseTurn(taskId);
+    return c.json({ error: queueClaimError(fired), blockedBy: fired.blockers }, 409);
+  }
   return c.json({ started: true, fresh: true }, 202);
 });
 
@@ -304,122 +327,6 @@ api.post("/tasks/:id/complete", async (c) => {
   // 续聊回合(followUpFrom 非空)确认完成 = 把任务推进到 done;正常回合就是 done。
   return c.json({ confirmed: true, willSettleAs: "done" });
 });
-
-// 提问(对称 /pause,§Team):agent 在执行中调用,写下「我被这个问题卡住了」。
-// 执行者:本回合自然退出后,settleTaskStatus 因 question 非空落 paused,且队列**不**
-// 自动续跑(pickNextLaunchable 挡住);问题即时投递给团队调度者,answer_question
-// 的答复会清空 question 并带着答复 resume 同一 CLI 会话。
-// 团队调度者自己也能调 → 界面上就是「调度者在等你答复」,答复喂回它的常驻会话。
-// 没人管也能用:任务停在 paused,问题留在 task.question 等用户答复。
-// 可选的 options = 单问题候选答案；questionItems = 一次并列问几个相关决策，每个
-// 问题有自己的 options。候选按钮只填入对应输入框，最终仍合成一段文本走 /answer。
-// 一次性任务只接受 running;常驻调度台例外(§Team):它的 status 会在 running/idle
-// 间切换,但能发出 ask_question 就说明这一轮活着,不能被 idle 挡掉。
-function normalizeQuestionOptions(raw: unknown, field: string): { options: string[] } | { error: string } {
-  if (raw === undefined) return { options: [] };
-  if (!Array.isArray(raw) || raw.some((o) => typeof o !== "string")) {
-    return { error: `${field} 必须是字符串数组` };
-  }
-  // trim + 去空 + 去重后落库；超限明确报错，不静默截断。
-  const options = [...new Set(raw.map((o) => o.trim()).filter(Boolean))];
-  if (options.length > MAX_QUESTION_OPTIONS) {
-    return { error: `${field} 最多 ${MAX_QUESTION_OPTIONS} 个候选答案，收到 ${options.length} 个` };
-  }
-  const tooLong = options.find((o) => o.length > MAX_QUESTION_OPTION_LEN);
-  if (tooLong) {
-    return {
-      error: `${field} 的单个候选答案不超过 ${MAX_QUESTION_OPTION_LEN} 字，展开说明请写进 question：「${tooLong.slice(0, 30)}…」`,
-    };
-  }
-  return { options };
-}
-
-function normalizeQuestionItems(raw: unknown): { items: QuestionItem[] | null } | { error: string } {
-  if (raw === undefined) return { items: null };
-  if (!Array.isArray(raw)) return { error: "questionItems 必须是问题数组" };
-  if (raw.length > MAX_QUESTION_ITEMS) {
-    return { error: `一次最多 ${MAX_QUESTION_ITEMS} 个问题，收到 ${raw.length} 个` };
-  }
-  const items: QuestionItem[] = [];
-  for (let i = 0; i < raw.length; i += 1) {
-    const item = raw[i];
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      return { error: `questionItems[${i}] 必须是 { question, options? }` };
-    }
-    const record = item as Record<string, unknown>;
-    if (typeof record.question !== "string" || !record.question.trim()) {
-      return { error: `questionItems[${i}].question 不能为空` };
-    }
-    const normalized = normalizeQuestionOptions(record.options, `questionItems[${i}].options`);
-    if ("error" in normalized) return normalized;
-    items.push({
-      question: record.question.trim(),
-      ...(normalized.options.length ? { options: normalized.options } : {}),
-    });
-  }
-  return { items: items.length ? items : null };
-}
-
-api.post("/tasks/:id/ask", async (c) => {
-  const taskId = c.req.param("id");
-  const b = await c.req
-    .json<{ question?: string; options?: unknown; questionItems?: unknown }>()
-    .catch(() => ({}) as { question?: string; options?: unknown; questionItems?: unknown });
-  const q = (b.question ?? "").trim();
-  if (!q) return c.json({ error: "question 不能为空" }, 400);
-  const normalizedOptions = normalizeQuestionOptions(b.options, "options");
-  if ("error" in normalizedOptions) return c.json({ error: normalizedOptions.error }, 400);
-  const normalizedItems = normalizeQuestionItems(b.questionItems);
-  if ("error" in normalizedItems) return c.json({ error: normalizedItems.error }, 400);
-  const opts = normalizedOptions.options;
-  const questionItems = normalizedItems.items;
-  if (questionItems && opts.length) {
-    return c.json({ error: "多问题请把候选答案放进各 questionItems[i].options，不要同时传顶层 options" }, 400);
-  }
-  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!r) return c.json({ error: "not found" }, 404);
-  if (r.mode !== "team" && r.status !== "running")
-    return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
-  const askToken = c.req.header("x-ash-turn-token");
-  if (r.mode !== "team" && r.activeTurnToken && askToken !== r.activeTurnToken) {
-    return c.json({
-      error: askToken
-        ? "提问来自已结束的回合，已拒绝写入当前会话"
-        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），提问已拒绝写入",
-    }, 409);
-  }
-  const askDirection = c.req.header("x-ash-direction-token");
-  if (r.mode !== "team" && r.activeDirectionToken && askDirection !== r.activeDirectionToken) {
-    return c.json({ error: askDirection
-      ? "提问的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 ask_question"
-      : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），提问已拒绝写入" }, 409);
-  }
-  const asked = await setTaskQuestion({
-    taskId,
-    question: q,
-    options: opts,
-    items: questionItems,
-    ...(r.mode === "team" ? {} : { currentTurn: {
-      token: r.activeTurnToken,
-      directionToken: r.activeDirectionToken,
-    } }),
-  });
-  if (!asked) return c.json({ error: "当前回合已经结束或已被引导，提问未写入" }, 409);
-  return c.json({
-    asked: true,
-    options: opts,
-    questionItems,
-    willSettleAs: r.mode === "team" ? "idle" : "paused",
-  });
-});
-
-// 答复一个提问暂停中的任务(调度者或用户都可调):清空 question,把答复作为
-// 消息 resume 它的 CLI 会话继续跑。提问回合还没结算完(running/queued)时拒绝
-// ——等它落 paused 再答,否则答复会被单飞锁静默丢掉。
-// 例外:常驻调度台(§Team)自己调 ask_question 问用户时,这道挡板不适用 —— 它正在
-// 说话时也接得住(continueTask → deliverToLead 先 interrupt 再写 stdin),跟
-// 「插话」走的是同一条路。挡住反而会让用户对着一个明明在线的调度台干等。
-api.post("/tasks/:id/answer", (c) => answerTask(c, c.req.param("id")));
 
 // ── §Team ───────────────────────────────────────────────────────────────────
 // 派活:调度者(mode:"team")调 MCP 的 dispatch 落到这里 —— 建 N 个执行者任务 + 一个
@@ -555,8 +462,16 @@ api.post("/tasks/:id/retry", async (c) => {
   // 就退回任务归属人,于是共享项目里 B 点「重试」烧的是 A 的 key、提交署 A 的名
   // (第 5 轮审查 P1)。
   const acting = ownerIdOf(actorOf(c));
-  if (r.mode === "duet") { void resumeDuet(taskId, { turnHeld: true, actingUserId: acting }); return c.json({ started: true }, 202); }
-  void resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting });
+  // 起跑占位 + 启动,同 /run:失败成员的重试也是一次执行,同队有人在跑/已占位时不得
+  // 再起第二个 —— 此前这里连队列检查都没有,是与第 7 轮审查同类的跨入口窗口。
+  const started = await seatThenStart(taskId, () =>
+    r.mode === "duet"
+      ? resumeDuet(taskId, { turnHeld: true, actingUserId: acting })
+      : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting }));
+  if (!started.ok) {
+    releaseTurn(taskId);
+    return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
+  }
   return c.json({ started: true }, 202);
 });
 

@@ -4,7 +4,8 @@ import { hasCliGoalHold } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { freezeStartingTurn, stopTask } from "./runs.js";
+import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
+import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 
 const MAX_PARALLEL = 4;
@@ -71,15 +72,146 @@ export async function advanceQueueFromTask(taskId: string): Promise<void> {
 //   - paused → 用 resumePrompt 续跑(resumeOrRunTask 内部按 status 分流)
 // 每次推进只启动 head 一项;它跑完触发 advanceQueueFromTask 再推下一个。
 export async function advanceQueue(queueId: string): Promise<void> {
-  const next = await pickNextLaunchable(queueId);
-  if (!next) return;
-  // 队列绑定到 group:组被暂停时允许编辑队列(保存排队关系),但不启动任何成员。
-  // 检查放在这里而不是各调用方 —— 建队列/插入/重排/移除/终态钩子全走本函数,
-  // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
-  // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
-  if (next.groupId && (await isPaused(next.groupId))) return;
-  await setQueued(next.id);
-  void resumeOrRunTask(next.id, { reason: "queue" });
+  // 「挑下一个」与「落 queued」收进队列认领临界区(queue-seat.ts,与手动运行/重跑/
+  // 消息补投同一条链):分开的话,读完成员快照到落库之间的 await 窗口里,另一个入口
+  // 刚认领的占位在这里看不见,按旧快照再拉起一个就是同队双跑(第 7 轮审查:跨入口
+  // 竞争)。临界区里只做挑选与占位,真正拉起(resumeOrRunTask)在链外。
+  const next = await serializeQueueClaims<typeof tasks.$inferSelect | "paused" | null>(async () => {
+    const rows = await queueMembers(queueId);
+    const candidate = selectNextInQueue(rows);
+    if (!candidate) {
+      // 挑不出人,而冻结源里有旁路/续聊回合(followUpFrom 非终态)的活跃回合:这次
+      // 让位会被它结算时的 quiet 恢复吞掉(setTaskStatus 的 quietAdvance),给它记一笔
+      // 欠账,结算恢复后补办(账本与互斥性见 queue-seat.ts)。真执行的 running 不记:
+      // 它自己的终态钩子会推进。
+      for (const t of rows) {
+        if (
+          (t.followUpFrom === "paused" || t.followUpFrom === "backlog")
+          && (t.status === "running" || t.status === "queued")
+        ) noteMissedAdvance(t.id, queueId);
+      }
+      return null;
+    }
+    // 队列绑定到 group:组被暂停时允许编辑队列(保存排队关系),但不启动任何成员。
+    // 检查放在这里而不是各调用方 —— 建队列/插入/重排/移除/终态钩子全走本函数,
+    // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
+    // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
+    if (candidate.groupId && (await isPaused(candidate.groupId))) return "paused";
+    // 观察空闲 ≠ 取得所有权:上一版先 isTurnClaimed 再 setQueued,检查与落位之间的
+    // await 窗口里 checkpoint 追问这类合法入口照样抢走回合 —— 推进把追问的 running
+    // 覆盖成 queued、续跑被旧 reply 占的锁挡回、追问结算恢复 paused,交接蒸发
+    // (第 5 轮审查确定性复现)。claimTurn 是同步的内存原子操作,在临界区里直接
+    // **认领**所有权:抢到才落 queued,续跑带 turnHeld 进场;抢不到(占用方多半是
+    // 刚进来的旁路追问)记账,等它 releaseTurn 后回调补办这次推进。
+    if (!claimTurn(candidate.id)) {
+      noteMissedAdvance(candidate.id, queueId);
+      return null;
+    }
+    // 认领与接管之间的每个异常出口都要收口:setQueued 一旦写失败(典型:并发写锁把
+    // busy timeout 耗尽),临界区异常外抛,下面的续跑与占位回收都装不上 —— 新认领的锁
+    // 就没人释放,任务从此 /run 一律 409「回合正在进行」,人工也救不回(第 6 轮审查:
+    // 真实 SQLite 写锁 7 秒注入,一次可恢复的超时变成永久停滞)。失败即释放锁、延迟
+    // 一拍记账重推:数据库恢复可写后自动续上这次交接。
+    try {
+      await setQueued(candidate.id);
+    } catch (err) {
+      releaseTurn(candidate.id);
+      console.error(`[ash] 队列推进占位写入失败(${candidate.id}),释放预认领并稍后补偿:`, err);
+      // 失败 ≠ 肯定没写入:setTaskStatus 写完 status 还要读 sessions 算用时再广播,
+      // UPDATE 已提交、附带 SELECT 才超时的话任务已经是 queued —— selectNextInQueue
+      // 会被这具遗留占位冻结,单纯重推救不回(第 7 轮审查:短暂锁故障后整队永久
+      // 「排队中」)。按持久结果补偿:延迟交给 reclaimStrandedSeat 守卫式收拾(queued
+      // 遗留就回滚,没写进去就只记账重推),它自己失败会再重试,数据库恢复后交接续上。
+      scheduleSeatReclaim(candidate.id, queueId, candidate.status as TaskStatus, 1_000);
+      return null;
+    }
+    return candidate;
+  });
+  if (next === "paused") return;
+  if (next && typeof next === "object") {
+    const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
+    void resumeOrRunTask(next.id, { reason: "queue", turnHeld: true })
+      .catch((err) => {
+        console.error(`[ash] 队列推进续跑(${next.id})失败:`, err);
+        // 接管前就抛了(读库/取指令那串 await):turnHeld 的锁还挂在我们头上 —— 占着
+        // 期间别的入口 claim 不进来,所以此刻还被占的锁必是这次认领的,由认领方收回。
+        // 接管后的异常由 continueTask 自己吸收并在 finally 释放,不会走到这里。
+        if (isTurnClaimed(next.id)) releaseTurn(next.id);
+      })
+      .finally(() => void reclaimStrandedSeat(next.id, queueId, prevStatus));
+    return;
+  }
+  if (!next) {
+    // 没有可启动的成员 ≠ 队里没事可做:失败成员的**执行型待发送回复**(排队期间暂存
+    // 的修改要求,见 pending-messages 的 execution)在等「整队无人在跑」才能投递。它的
+    // 任务已是终态,不会再有自己的结算钩子来救,只推自己的 flush 又只看发起任务 ——
+    // 这里是「队列刚空出来」这一事实的唯一权威时点,替队内成员推一把。按 position
+    // 顺序逐个入列:投递侧对每个成员走 claimQueueSeat 认领占位(queue-seat.ts),前一个
+    // 成员的 queued 先落库,后一个成员的判定才执行,所以**至多一个**被启动(第 6 轮
+    // 审查:并行扫描曾让两个失败成员同时恢复执行);无关成员在判定里是 no-op。
+    const members = await queueMembers(queueId);
+    const idle = members.filter((t) => !t.archived && t.mode === "single");
+    if (idle.length) {
+      void import("./pending-messages.js").then(({ deliverPendingMessages }) =>
+        Promise.all(idle.map((t) => deliverPendingMessages(t.id).catch(() => undefined))),
+      );
+    }
+    return;
+  }
+}
+
+// 续跑没接管占位的兜底:turnHeld 的锁被 enterTurn 退回(验收互斥、接力拒收),或占位
+// 写入半途而废(UPDATE 已提交、附带读取才失败)—— 任务停在 queued、回合又没人持有,
+// 不收拾就是永久「排队中」。守卫与 queue-seat 的 seat.release 同款:正常跑完的回合在
+// 这里全是 no-op(状态早被结算覆盖/锁被真实回合接管)。回滚用 quiet(回原样不是落位);
+// 重推延迟一拍 —— 互斥方(典型:验收)没有结束钩子来推队列,立刻重试只会原地打转。
+//
+// repush = 回收之后要不要记账重推队列,三档按**是谁欠下这次启动**选:
+//   "always"   队列推进自己的占位写失败:交接确实发生过、语义就是 resume-or-run,
+//              即使写入没提交也要记账,数据库恢复后由 advanceQueue 原样补办;
+//   "stranded" finally 的常规兜底(缺省):只有真收拾了 queued 遗留才记账 —— 正常
+//              结算的回合自有终态钩子,不额外多推;
+//   "never"    手动/扫描入口(/run、/fire、/retry、消息投递)的占位写失败:只回滚
+//              遗留,**绝不记账重推** —— advanceQueue 的补办是 resumeOrRunTask,会把
+//              /fire 的「全新一轮」偷换成续跑旧会话、消费掉检查点指令(第 ll7XKsu_ps0n
+//              链第 2 轮实测);这些入口各有自己的重试面(用户重点、扫描重投、定时
+//              不消费班次),失败就让原入口按原语义重来。
+// 导出供回归直调(触发它的真实路径是「UPDATE 提交后附带 SELECT 超时」,无法从测试
+// 外侧精确注入到两条语句之间)。
+export async function reclaimStrandedSeat(
+  taskId: string,
+  queueId: string,
+  prevStatus: TaskStatus,
+  opts?: { repush?: "always" | "stranded" | "never" },
+): Promise<void> {
+  const repush = opts?.repush ?? "stranded";
+  if (isTurnClaimed(taskId)) return;
+  try {
+    const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    const stranded = row?.status === "queued";
+    if (stranded) {
+      await setTaskStatus(taskId, prevStatus, prevStatus === "paused" ? { quietAdvance: true } : undefined);
+    }
+    if (repush === "never" || (repush === "stranded" && !stranded)) return;
+    const timer = setTimeout(() => noteMissedAdvance(taskId, queueId), 1_000);
+    timer.unref?.();
+  } catch (err) {
+    // 补偿自己也可能撞上还没放开的写锁:不放弃,退避后重试 —— 这正是「数据库恢复后
+    // 再补办交接」的那一等(第 7 轮审查:一次短暂锁故障不许变成永久停滞)。
+    console.error(`[ash] 队列占位补偿失败(${taskId}),5s 后重试:`, err);
+    scheduleSeatReclaim(taskId, queueId, prevStatus, 5_000, { repush });
+  }
+}
+
+function scheduleSeatReclaim(
+  taskId: string,
+  queueId: string,
+  prevStatus: TaskStatus,
+  delayMs: number,
+  opts?: { repush?: "always" | "stranded" | "never" },
+): void {
+  const timer = setTimeout(() => void reclaimStrandedSeat(taskId, queueId, prevStatus, opts ?? { repush: "always" }), delayMs);
+  timer.unref?.();
 }
 
 // selectNextInQueue 只需要这几列,写成结构类型,单测就能直接喂字面量。

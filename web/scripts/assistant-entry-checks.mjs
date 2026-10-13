@@ -250,7 +250,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   };
   const createAndCheckNoteLink = async noteId => {
     await page.getByRole("button", { name: /启动设置/u }).click();
-    await page.getByLabel("启动方式").selectOption("create");
+    await page.getByRole("radio", { name: "仅创建" }).click();
     const linkedResponse = page.waitForResponse(response => response.url().endsWith(`/api/notes/${noteId}`)
       && response.request().method() === "PATCH" && response.status() === 200);
     await page.getByRole("button", { name: "创建任务", exact: true }).click();

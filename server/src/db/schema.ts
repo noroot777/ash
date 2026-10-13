@@ -482,6 +482,11 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 投递时标 byBackend，让它在会话里显示成系统代写的一回合而不是冒充用户发言。
   origin: text("origin"),
   mode: text("mode").notNull().default("timed"), // timed | queued
+  // 执行意图:1 = 这条是任务**排队等轮次时**暂存的回复,投递它 = 开启任务的执行回合
+  // —— 整队在跑守卫与分组暂停都挡它,重投也不丢(第 xNb655YqYzcA 链第 5 轮:起跑失败
+  // 后的自动重投曾丢掉意图,借终态续聊豁免并行执行/穿透暂停)。0 = 普通消息(运行中
+  // 暂存的追问、定时消息、终态续聊),沿用原投递语义。
+  execution: integer("execution", { mode: "boolean" }).notNull().default(false),
   sendAt: text("send_at").notNull(), // timed=ISO 到期时间；queued=入队时刻（只用来排先后）
   status: text("status").notNull().default("pending"), // pending | sent | canceled
   createdAt: text("created_at").notNull(),
