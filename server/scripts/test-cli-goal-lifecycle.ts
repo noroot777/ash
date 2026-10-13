@@ -16,7 +16,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_UPLOADS_DIR = join(root, "uploads");
 delete process.env.ASH_ALLOW_REAL_AGENT;
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { agents, projects, tasks, groups, queueItems, scheduledMessages } = await import("../src/db/schema.js");
+const { agents, projects, tasks, groups, queueItems, scheduledMessages, sessions } = await import("../src/db/schema.js");
 const { replyToTask } = await import("../src/task-reply.js");
 const { continueTask } = await import("../src/orchestrator.js");
 const { CodexExecutor } = await import("../src/executors/codex.js");
@@ -87,6 +87,7 @@ try {
 
       const activeId = `${taskId}-active-goal`;
       await create(activeId, agentType, { status, goalTurn: true });
+      await db.insert(sessions).values({ id: `${activeId}-session`, taskId: activeId, role: "single", agentType, executor: `${agentType}@回归`, executorId: `${agentType}-fixture`, cwd: root, startedAt: at, turnStartedAt: at });
       await saveCliState(activeId, agentType, { profileId: `${agentType}-fixture`, ownerUserId: null, goal: { objective: "原目标不能被替换", status: "active" } });
       for (const command of [text, "/goal resume"]) {
         const rejected = await reply(activeId, command);

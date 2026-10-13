@@ -6,7 +6,9 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import { chromium } from "playwright-core";
+import { readCliState } from "@ash/shared/cli-commands";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "ash-goal-lifecycle-ui-"));
@@ -17,6 +19,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 delete process.env.ASH_ALLOW_REAL_AGENT;
 const { db, dbClient, ensureSchema } = await import("../../server/dist/db/index.js");
 const { appSettings, projects, tasks, agents, groups, queueItems, sessions } = await import("../../server/dist/db/schema.js");
+const { saveCliState } = await import("../../server/dist/task-cli-state.js");
 await ensureSchema();
 await mkdir(workspace);
 await mkdir(screenshots, { recursive: true });
@@ -26,7 +29,7 @@ await db.insert(projects).values({ id: "goal-ui", name: "目标生命周期验�
 for (const agentType of ["codex", "claude"]) {
   await db.insert(agents).values({ id: `${agentType}-ui`, name: `${agentType}@验证`, type: agentType, isDefault: true, extraArgs: "[]", configOverrides: "{}" });
   await db.insert(groups).values({ id: `${agentType}-group`, projectId: "goal-ui", name: `${agentType} 串行组`, mode: "serial", createdAt: at });
-  for (const [suffix, status, groupId] of [["busy", "backlog", null], ["A", "done", `${agentType}-group`], ["B", "backlog", `${agentType}-group`]]) {
+  for (const [suffix, status, groupId] of [["busy", "backlog", null], ["A", "done", `${agentType}-group`], ["B", "backlog", `${agentType}-group`], ["invited-busy", "paused", null]]) {
     await db.insert(tasks).values({
       id: `${agentType}-${suffix}`, projectId: "goal-ui", groupId, title: `${agentType} · ${suffix}`, body: "普通回合测试夹具",
       mode: "single", status, agentType, executorId: `${agentType}-ui`, useWorktree: false, autoTitle: false, createdAt: at, updatedAt: at,
@@ -34,6 +37,8 @@ for (const agentType of ["codex", "claude"]) {
   }
   await db.insert(queueItems).values([{ taskId: `${agentType}-A`, queueId: `${agentType}-queue`, position: 0, createdAt: at }, { taskId: `${agentType}-B`, queueId: `${agentType}-queue`, position: 1, createdAt: at }]);
   await db.insert(sessions).values({ id: `${agentType}-A-session`, taskId: `${agentType}-A`, role: "single", agentType, executor: agentType, executorId: `${agentType}-ui`, cliSessionId: `ui-${agentType}-A`, cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
+  await db.insert(sessions).values({ id: `${agentType}-invited-session`, taskId: `${agentType}-invited-busy`, role: "single", agentType, executor: agentType, executorId: `${agentType}-ui`, cliSessionId: `ui-${agentType}-invited`, cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
+  await saveCliState(`${agentType}-invited-busy`, agentType, { profileId: `${agentType}-ui`, ownerUserId: null, goal: { objective: `${agentType} 已停掉的旧目标`, status: "paused" } }, true);
 }
 dbClient.close();
 const listener = createServer();
@@ -61,6 +66,11 @@ const boot = `
       sessionId: options.sessionId || "ui-" + taskId, cliCommand: options.cliCommand,
       commandLine: "goal lifecycle UI fixture; no CLI/model",
       goal: options.cliState?.profileId === "codex-ui" ? () => goal : undefined,
+      command: options.cliState?.profileId === "codex-ui" ? async (command) => {
+        if (command.name !== "goal" || command.args !== "pause" || !goal) throw new Error("fixture only supports pausing a live goal");
+        goal.status = "paused";
+        return "目标：" + goal.objective + "；状态：已暂停";
+      } : undefined,
       goalStarted: () => !!goal,
       kill() { killed = true; },
       events: (async function* () {
@@ -96,6 +106,11 @@ const request = async (path) => {
   return response.json();
 };
 const invocations = async () => JSON.parse(`[${(await readFile(traceFile, "utf8")).trim().split("\n").join(",")}]`);
+const taskCliState = (taskId) => {
+  const connection = new DatabaseSync(join(root, "ash.db"), { readOnly: true });
+  try { return connection.prepare("SELECT cli_state FROM tasks WHERE id = ?").get(taskId).cli_state; }
+  finally { connection.close(); }
+};
 const waitForTask = async (taskId, predicate) => {
   const deadline = Date.now() + 20_000;
   while (true) {
@@ -116,8 +131,12 @@ try {
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  const send = async (taskId, text) => {
-    await page.getByRole("textbox", { name: "回复任务" }).fill(`${text} `);
+  const send = async (taskId, text, summon = null) => {
+    await page.getByRole("textbox", { name: "回复任务" }).fill(summon ? `${text} @${summon}` : `${text} `);
+    if (summon) {
+      await page.getByRole("option", { name: new RegExp(`@${summon}`) }).click();
+      await page.getByRole("listbox", { name: "可选模型" }).getByRole("option").first().click();
+    }
     const [response] = await Promise.all([
       page.waitForResponse((value) => value.url().endsWith(`/tasks/${taskId}/reply`) && value.request().method() === "POST"),
       page.getByRole("button", { name: /^(发送回复|排队发送，任务跑完自动发出)$/ }).click(),
@@ -180,6 +199,44 @@ try {
     assert.equal((await request(`tasks/${nextId}`)).status, "done");
     await page.screenshot({ path: join(screenshots, `lifecycle-${agentType}-terminal-goal-reload.png`), fullPage: true });
     console.log(`${agentType}: terminal goal reply preserves completion, next serial member actually runs, and both states survive reload: passed`);
+
+    const invitedId = `${agentType}-invited-busy`;
+    const invitedAgent = agentType === "codex" ? "claude" : "codex";
+    const invitedObjective = `${invitedAgent} 本轮召唤目标`;
+    await page.goto(`${base}/?project=goal-ui&task=${invitedId}`);
+    const invited = await send(invitedId, `/goal ${invitedObjective}`, invitedAgent);
+    assert.equal(invited.status(), 202);
+    assert.equal(invited.request().postDataJSON().agent, invitedAgent);
+    await page.getByText(`目标回合已启动：${invitedObjective}`, { exact: true }).waitFor();
+    const replaced = await send(invitedId, "/goal 不应替换活动目标");
+    assert.equal(replaced.status(), 409);
+    const replacementError = (await replaced.json()).error;
+    assert.ok(replacementError.includes(invitedObjective));
+    assert.doesNotMatch(replacementError, /已停掉的旧目标/);
+    assert.ok(replacementError.includes(`@${invitedAgent}`));
+    assert.ok(replacementError.includes(`${invitedAgent}-ui`));
+    await page.getByText(replacementError, { exact: true }).waitFor();
+    await page.screenshot({ path: join(screenshots, `lifecycle-${agentType}-invited-goal-rejected.png`), fullPage: true });
+    const wrongPause = await send(invitedId, "/goal pause");
+    assert.equal(wrongPause.status(), 409);
+    const routingError = (await wrongPause.json()).error;
+    assert.ok(routingError.includes(`@${invitedAgent}`));
+    assert.ok(routingError.includes(`${invitedAgent}-ui`));
+    assert.match(routingError, /\/goal pause/);
+    await page.getByText(routingError, { exact: true }).waitFor();
+    await page.screenshot({ path: join(screenshots, `lifecycle-${agentType}-invited-pause-routing.png`), fullPage: true });
+    const rightPause = await send(invitedId, "/goal pause", invitedAgent);
+    assert.equal(rightPause.status(), 200);
+    const pausedTask = await waitForTask(invitedId, (task) => task.status === "paused");
+    const storedState = taskCliState(invitedId);
+    assert.equal(readCliState(storedState, invitedAgent, `${invitedAgent}-ui`, null).goal?.status, "paused");
+    assert.equal(readCliState(storedState, agentType, `${agentType}-ui`, null).goal?.objective, `${agentType} 已停掉的旧目标`);
+    assert.equal(pausedTask.agentType, agentType);
+    assert.equal(pausedTask.executorId, `${agentType}-ui`);
+    await page.reload();
+    await page.getByText(`目标回合已启动：${invitedObjective}`, { exact: true }).waitFor();
+    await page.screenshot({ path: join(screenshots, `lifecycle-${agentType}-invited-goal-paused-reload.png`), fullPage: true });
+    console.log(`${agentType}: invited ${invitedAgent} objective and routing hints are accurate; following the summon hint pauses the active goal without changing the standing executor or old goal: passed`);
   }
   assert.deepEqual(pageErrors, []);
   console.log(`screenshots: ${screenshots}`);
