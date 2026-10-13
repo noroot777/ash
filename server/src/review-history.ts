@@ -30,9 +30,19 @@ const MAX_ITEMS = 24;
 /** 路径清单最多列几条（真实数据里最多的一个任务有 32 轮）。 */
 const MAX_PATHS = 8;
 
-/** 一组路径的公共目录；没有公共前缀时退回根。只用于「另有 N 份在这儿」那句话。 */
+/**
+ * 一组路径的公共目录；没有公共前缀时退回根。只用于「另有 N 份在这儿」那句话。
+ *
+ * 分隔符不许写死 `/`：`RUNS_DIR` 是 `join()` 拼的，Windows 上是反斜杠，按 `/` 切会整条切不开，
+ * 于是这句话退化成「另有 8 份没有列出，在 / 下」—— 一句指不到任何地方的指路（第 1 轮审查
+ * 用 win32 形状路径实测到的）。按两种分隔符一起切，再用这组路径自己用的那个拼回去。
+ * 这是纯字符串处理，没有平台分支，所以喂 win32 形状的字符串就能验到底（回归用例里有）。
+ */
 function commonDirectory(paths: string[]): string {
-  const split = paths.map((path) => path.split("/").slice(0, -1));
+  const separator = paths.some((path) => path.includes("\\")) && !paths.some((path) => path.includes("/"))
+    ? "\\"
+    : "/";
+  const split = paths.map((path) => path.split(/[\\/]/).slice(0, -1));
   const first = split[0] ?? [];
   let shared = first.length;
   for (const parts of split.slice(1)) {
@@ -40,7 +50,7 @@ function commonDirectory(paths: string[]): string {
     while (index < shared && index < parts.length && parts[index] === first[index]) index += 1;
     shared = index;
   }
-  return first.slice(0, shared).join("/") || "/";
+  return first.slice(0, shared).join(separator) || separator;
 }
 
 export interface PriorRound {
@@ -80,24 +90,48 @@ const NOISE = ["已验证", "验证记录", "浏览器", "清场", "截图", "�
 /**
  * 把围栏代码块整段剔掉。
  *
- * 必须剔：报告里会**原样引用报告格式的写法示例**（「你会遇到：保存后刚写的内容消失。」
- * 这种占位句），还会贴别的报告片段作证据。不剔的话这些示例会被当成真发现搬给下一轮 ——
- * 全库 1550 份里有 7 份命中、15 行假条目（`P5EH_BPGxLt-` 那条链占了 5 份）。
+ * 必须剔：报告里会**原样引用报告格式的写法示例**（「你会遇到：这里填现象」这种占位句），
+ * 还会贴别的报告片段作证据。不剔的话这些示例会被当成真发现搬给下一轮。
  *
- * 判据只认行首围栏（``` 或 ~~~），闭合要求同种记号：这是 Markdown 自己的规则，不猜缩进。
+ * **按 CommonMark 的围栏规则做，不许自己简化。**第一版只存了「围栏是哪种记号」，于是
+ * 两头都错（第 1 轮审查在真实报告 `P5EH_BPGxLt-/.../dB45LYOzuxnx/round-6/report.md:74`
+ * 上复现的）：
+ * - ````md 开栏、里面放一段 ```text 示例 —— 那三个反引号被当成闭栏，于是示例里的
+ *   「你会遇到：这里填现象」漏成了一条「历史发现」，真的进了新链第 1 轮任务书；
+ * - 反过来，长围栏合法闭合之后，那行闭栏又被当成新的开栏，**把后面真正的发现整段吞掉**。
+ *
+ * 所以这三条判据一条都不能省（CommonMark「fenced code blocks」）：
+ * ① 闭栏必须是**同一种**记号，且**不短于**开栏；
+ * ② 闭栏那一行记号后面**只能是空白** —— 带 info string 的只能是开栏；
+ * ③ 反引号开栏的 info string 里不许再出现反引号（否则它不是开栏）。
+ * 没闭合就一直到文件末尾，这也是 CommonMark 的规定。
+ *
+ * 为什么不直接用 Markdown 解析器（web 侧 `reviewReportSections.ts` 就是那么做的）：
+ * `mdast-util-from-markdown` 是 **web 工作区**的依赖，server 不能借用；而在 worktree 里
+ * `npm install` 会写到主仓的 node_modules 和 lockfile。所以这里按规则实现，预期值的独立
+ * 来源仍是那个解析器 —— 全库 1572 份报告跑过逐份对照（见 `review-history` 的回归用例）。
  */
 function withoutFences(lines: string[]): string[] {
   const kept: string[] = [];
-  let fence: string | null = null;
+  let open: { char: string; length: number } | null = null;
   for (const line of lines) {
-    const mark = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
-    if (mark) {
-      const token = mark[1]![0]!;
-      if (!fence) fence = token;
-      else if (fence === token) fence = null;
+    const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!fence) {
+      if (!open) kept.push(line);
       continue;
     }
-    if (!fence) kept.push(line);
+    const char = fence[1]![0]!;
+    const length = fence[1]!.length;
+    const rest = fence[2]!;
+    if (!open) {
+      // ③ 反引号开栏的 info string 里有反引号 → 这行不是开栏，是正文。
+      if (char === "`" && rest.includes("`")) kept.push(line);
+      else open = { char, length };
+      continue;
+    }
+    // ①② 同种记号、不短于开栏、后面只有空白 —— 三条都满足才是闭栏；否则它只是围栏里的
+    // 一行内容（照样丢）。
+    if (char === open.char && length >= open.length && rest.trim() === "") open = null;
   }
   return kept;
 }
@@ -244,10 +278,16 @@ export function priorFindingsSection(rounds: PriorRound[]): string {
   // 一起是假的：被省掉的恰恰是最早那几轮，路径一个都不在清单里。全库复演时 20 个有省略的
   // 任务里 19 个都在说这句假话（`CIelh82KHpJu` 省掉 28 条，列出的 6 份全是已内联的轮次）。
   // 假的指路比不指路更坏：审查者照着翻，翻到的是别的内容。
-  const silentPaths = [...new Set(silentRounds.map((round) => round.reportPath))];
+  // 判据是「**这一轮有没有条目被省掉**」，不是「整轮有没有条目」：某轮保住了第一条、省掉
+  // 第二三条时，它的报告路径同样是读不到那几条的唯一去处。只按「整轮无条目」算的话，第 1 轮
+  // 审查在真实数据上数出 15 个任务、72 个轮次的条目既没内联、路径也没列、还不触发目录兜底。
+  const keptTexts = new Set(kept);
+  const omittedRounds = rounds.filter((round) =>
+    entries.some((entry) => entry.round === round && !keptTexts.has(entry)));
+  const omittedPaths = [...new Set(omittedRounds.map((round) => round.reportPath))];
   const keptPaths = [...new Set(kept.map(({ round }) => round.reportPath))];
-  const paths = [...new Set([...silentPaths, ...keptPaths.slice(-MAX_PATHS)])].slice(0, MAX_PATHS);
-  const unlisted = silentPaths.filter((path) => !paths.includes(path));
+  const paths = [...new Set([...omittedPaths, ...keptPaths.slice(-MAX_PATHS)])].slice(0, MAX_PATHS);
+  const unlisted = omittedPaths.filter((path) => !paths.includes(path));
   const dropped = entries.length - kept.length;
   return `\n\n【这个任务此前报过的发现（${entries.length} 条，按轮次先后）】\n${body}\n` +
     (dropped > 0
@@ -255,7 +295,7 @@ export function priorFindingsSection(rounds: PriorRound[]): string {
         (silentRounds.length ? `，其中 ${labelList(silentRounds)} 一条都没列出` : "") +
         `，都在各轮报告里）\n`
       : "") +
-    `报告全文${silentRounds.length ? "（没有列出条目的那几轮排在最前）" : ""}：\n  ${paths.join("\n  ")}\n` +
+    `报告全文${omittedRounds.length ? "（有条目没列出的那几轮排在最前）" : ""}：\n  ${paths.join("\n  ")}\n` +
     (unlisted.length > 0
       // 连这几轮的路径都列不下时，说清还有几份、都在哪个目录下，而不是让它以为上面就是全部。
       ? `  另有 ${unlisted.length} 份没有列出，在 ${commonDirectory(unlisted)} 下\n`

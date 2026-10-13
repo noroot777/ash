@@ -132,6 +132,42 @@ try {
     "围栏里的带标记标题同样不算发现",
   );
 
+  // 围栏判据必须按 CommonMark 来，不许自己简化成「记号是哪种」。第 1 轮审查在真实报告
+  // `P5EH_BPGxLt-/.../dB45LYOzuxnx/round-6/report.md:74` 上复现了简化版的两头错：
+  // 长围栏里的短围栏被当成闭栏（示例漏成发现），闭栏又被当成新开栏（真发现被整段吞掉）。
+  // 预期值不是另写一份同样的简化算法，而是逐条按 CommonMark 的规则手写，并在全库 1553 份
+  // 报告上跟 web 侧那个真解析器（`mdast-util-from-markdown`）逐份对照过（0 份不一致）。
+  assert.deepEqual(
+    extractReportFindings([
+      "- 你会遇到：真发现在围栏之前。", "", "````md", "### 写法示例", "", "```text",
+      "你会遇到：这里填现象", "```", "````", "", "- 你会遇到：真发现在围栏之后。",
+    ].join("\n")),
+    ["真发现在围栏之前。", "真发现在围栏之后。"],
+    "长围栏包短围栏：短的不许当闭栏，合法闭合之后的真发现不许被吞",
+  );
+  assert.deepEqual(
+    extractReportFindings(["````", "内容", "```js 这行不是闭栏", "````",
+      "- 你会遇到：合法闭合之后的真发现。"].join("\n")),
+    ["合法闭合之后的真发现。"],
+    "闭栏那行记号后面只能是空白；带 info string 的不是闭栏",
+  );
+  assert.deepEqual(
+    extractReportFindings(["~~~~", "你会遇到：波浪号围栏里的示例", "~~~", "~~~~",
+      "- 你会遇到：真发现。"].join("\n")),
+    ["真发现。"],
+    "波浪号围栏同一套规则",
+  );
+  assert.deepEqual(
+    extractReportFindings(["- 你会遇到：真发现。", "```", "你会遇到：没闭合的围栏一直到末尾"].join("\n")),
+    ["真发现。"],
+    "没闭合的围栏吃到文件末尾（CommonMark 如此规定）",
+  );
+  assert.deepEqual(
+    extractReportFindings(["- 你会遇到：真发现。", "``` `inline` 反引号 info string 不是开栏"].join("\n")),
+    ["真发现。"],
+    "反引号开栏的 info string 里不许有反引号，否则那行只是正文",
+  );
+
   // 「你会遇到：」当行为空、内容写在下一行（真实报告里有这种写法）。
   assert.deepEqual(
     extractReportFindings("- 你会遇到：\n  打开页面后按钮是灰的。\n- 为什么：状态没同步。"),
@@ -223,6 +259,34 @@ try {
     listedPaths.includes("/data/runs/T/free-review/run-2/round-1/report.md")
       || /另有 \d+ 份/.test(listedPaths),
     "被取样掉的轮次要么路径在清单里，要么被「另有 N 份」兜住",
+  );
+
+  // ③ 判据是「这一轮有没有条目被省掉」，不是「整轮有没有条目」：保住第一条、省掉第二三条
+  //    的那几轮，报告路径同样是读不到那几条的唯一去处（真实数据上原先有 15 个任务、72 个
+  //    轮次既没内联、路径也没列、还不触发目录兜底）。
+  const partial = priorFindingsSection([
+    { label: "第 1 轮", conclusion: "verify_failed", reportPath: "/r/first.md",
+      findings: Array.from({ length: 20 }, (_, i) => `头轮现象 ${i + 1}`) },
+    { label: "第 2 轮", conclusion: "verify_failed", reportPath: "/r/second.md",
+      findings: ["尾轮现象 A", "尾轮现象 B", "尾轮现象 C", "尾轮现象 D", "尾轮现象 E", "尾轮现象 F"] },
+  ]);
+  assert.match(partial, /〕头轮现象 1$/m, "第 1 轮最严重那条要留住");
+  assert.match(partial, /另外 \d+ 条没有内联/, "被省掉的条数要说出来");
+  assert.ok(partial.includes("/r/first.md"), "第 1 轮有条目被省掉，它的报告路径必须列出来");
+
+  // Windows 形状路径：分隔符写死 `/` 会让兜底退化成「在 / 下」，一句指不到任何地方的指路。
+  // 纯字符串处理、没有平台分支，所以喂 win32 形状的字符串就验到底了（真机 192.168.1.187
+  // 第 1 轮审查时 EHOSTUNREACH，未做原生复演）。
+  const win = priorFindingsSection(Array.from({ length: 40 }, (_, index) => ({
+    label: `第 ${index + 1} 轮`,
+    conclusion: "verify_failed",
+    reportPath: `D:\\ai_workspace\\ash\\data\\runs\\T\\free-review\\run-${index + 1}\\round-1\\report.md`,
+    findings: [`现象 ${index + 1}`],
+  })));
+  assert.match(
+    win,
+    /另有 \d+ 份没有列出，在 D:\\ai_workspace\\ash\\data\\runs\\T\\free-review 下/,
+    "Windows 形状路径的公共目录要按反斜杠算，不许退化成「在 / 下」",
   );
 
   // ── ④ 真的被塞进了各条 prompt ───────────────────────────────────────────────
