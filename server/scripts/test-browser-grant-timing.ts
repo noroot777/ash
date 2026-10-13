@@ -184,6 +184,102 @@ assert.equal(teamRow?.status, "idle",
   "状态必须停在 idle —— 写回 running 的话,用户刷新页面看到的就是「我停过的团队还在跑」");
 ok("团队:开台途中点停止,不会再拉起调度台进程,状态停在 idle");
 
+// ── 用例 3b:停止**完成之后**另发的新指令,不许跟着被撤回的那台一起蒸发 ───────────
+// 停止把开台撤回了,但那台 promise 还挂在 opening 里:后来的新指令会排到它后面等,等来一个
+// TeamOpenHalted,于是既没开台、也没退回待发列表,却被当成送达 —— 输入框清空、刷新找不到
+// 原话,团队一直待命(第 5 轮审查 P1)。这里确定性地卡住第一次 prepareResume 造出那个窗口。
+const deferred = <T = void>() => {
+  let resolve!: (v: T) => void;
+  return { promise: new Promise<T>((r) => (resolve = r)), resolve };
+};
+const statusOf = async (taskId: string) =>
+  (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)?.status;
+const waitFor = async (what: string, fn: () => Promise<boolean>) => {
+  for (let i = 0; i < 300; i++) {
+    if (await fn()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.fail(`等不到:${what}`);
+};
+const newTeamTask = async (id: string) => {
+  await db.insert(tasks).values({
+    id, projectId: PROJECT, groupId: null, parentId: null, title: "team", body: "带团队", mode: "team",
+    status: "idle", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: null, executorId: null,
+    autoTitle: false, duet: null, team: null, scheduleId: null, createdAt: at, updatedAt: at,
+    useWorktree: false, worktreeBase: null, originTaskId: null,
+  });
+};
+
+const TEAM_RESEND = "grant-timing-team-resend";
+await newTeamTask(TEAM_RESEND);
+const NEW_MSG = "停止已经完成，现在继续读取下一页并总结";
+let firstPrepare = deferred();
+let holdFirst = deferred();
+let prepareCalls = 0;
+const prompts: string[] = [];
+ClaudeExecutor.prototype.prepareResume = async function stubPrepare() {
+  if (++prepareCalls === 1) {
+    firstPrepare.resolve();
+    await holdFirst.promise; // 开台卡在这里 = leads 还空、trackRun 还没发生的那一段
+  }
+};
+ClaudeExecutor.prototype.openResident = function stubResident(opts: { prompt: string }) {
+  prompts.push(opts.prompt);
+  return {
+    sessionId: `lead-${prompts.length}`, commandLine: "stub", send: () => true, kill() {}, close() {},
+    events: (async function* () { await new Promise(() => {}); })(), // 保持在线,状态停在 running
+  } as unknown as ReturnType<NonNullable<typeof realOpen>>;
+} as unknown as NonNullable<typeof realOpen>;
+
+const haltedOpen = team.startTeam(TEAM_RESEND);
+await firstPrepare.promise;
+assert.equal(team.teamIsLive(TEAM_RESEND), true, "前置条件:这时确实有一台正在开");
+await team.haltTeam(TEAM_RESEND);
+assert.equal(team.teamIsLive(TEAM_RESEND), false,
+  "停止之后,那台被撤回的开台不该还算在线 —— 算在线,新指令就会排到它后面");
+const resent = await team.deliverToLead(TEAM_RESEND, NEW_MSG);
+await waitFor("新的一台把状态写成 running", async () => (await statusOf(TEAM_RESEND)) === "running");
+holdFirst.resolve(); // 放行被撤回的那一台,让它走到闸前抛 TeamOpenHalted
+await haltedOpen;
+
+assert.equal(resent, true, "停止完成后另发的新指令应当重新开台");
+assert.equal(prompts.length, 1, "只该起一台:被撤回的那台一个进程都不许起");
+assert.ok(prompts[0].includes(NEW_MSG), "新指令必须真的进了这台调度台的首条 prompt");
+assert.equal(await statusOf(TEAM_RESEND), "running",
+  "被撤回的那台不许把新一台的 running 盖回 idle —— 那会变成「指令在跑、界面写着待命」");
+ok("团队:停止完成后另发的新指令会重新开台,原话真的送进去了");
+runs.stopTask(TEAM_RESEND);
+
+// ── 用例 3c:**排在**被撤回开台后面的那几条,不许谎报送达 ─────────────────────────
+// 上一条是「停止已经结束后才发的」,这一条是「已经在等那台开完了,停止才到」。它们一个字都
+// 没送出去:用户插话必须返回 false(上层据此退回待发送托盘),执行者汇报落进持久待送队列。
+const TEAM_QUEUED = "grant-timing-team-queued";
+await newTeamTask(TEAM_QUEUED);
+const { pendingInbound } = await import("../src/team/inbound-queue.js");
+firstPrepare = deferred();
+holdFirst = deferred();
+prepareCalls = 0;
+const queuedOpen = team.startTeam(TEAM_QUEUED);
+await firstPrepare.promise;
+const queuedUser = team.deliverToLead(TEAM_QUEUED, "我排在那台开台后面");
+const queuedInbound = team.sendInbound(TEAM_QUEUED, "执行者:第 3 项做完了");
+await new Promise((r) => setImmediate(r)); // 让这两条真的 await 到那台开台上
+await team.haltTeam(TEAM_QUEUED);
+holdFirst.resolve();
+await queuedOpen;
+await queuedInbound;
+
+assert.equal(await queuedUser, false,
+  "排在被撤回开台后面的用户插话:一个字都没送出去,不许报送达(上层据此标 sent,原话就蒸发了)");
+assert.equal(prompts.length, 1, "这一轮不该再起任何进程(上一条用例起的那台不算)");
+assert.deepEqual((await pendingInbound(TEAM_QUEUED)).map((r) => r.text), ["执行者:第 3 项做完了"],
+  "执行者汇报要落进持久待送队列,等下一台调度台认领 —— 它没有「退回托盘」那条路");
+assert.equal(await statusOf(TEAM_QUEUED), "idle", "没有新的一台,状态就该停在 idle");
+ok("团队:排在被撤回开台后面的消息,插话退回待发、汇报进持久队列,都不谎报送达");
+
+ClaudeExecutor.prototype.prepareResume = realPrepare;
+ClaudeExecutor.prototype.openResident = realOpen;
+
 // ── 用例 4:顺序不变量(防止下一次又把 await 插回窗口里)────────────────────────
 // 行为用例盯的是「现在对不对」,这一条盯的是「以后还对不对」:启动点前最后一次取消检查
 // 与 executor.run 之间,一个 await 都不许有。
@@ -216,7 +312,7 @@ const teamSrc = src("../src/team/session.ts");
 assert.match(teamSrc, /await ex\.prepareResume[\s\S]{0,400}?await browserGrantForProject\(/,
   "团队开台:授权要读在 prepareResume 之后,否则开台期间撤销拦不住");
 const teamGrantAt = teamSrc.indexOf("await browserGrantForProject(");
-const teamGateAt = teamSrc.indexOf("openingHalted.delete(taskId)", teamGrantAt);
+const teamGateAt = teamSrc.indexOf("if (cell.halted) throw new TeamOpenHalted();", teamGrantAt);
 const teamStartAt = teamSrc.indexOf("openResident({", teamGateAt);
 assert.ok(teamGrantAt > 0 && teamGateAt > teamGrantAt && teamStartAt > teamGateAt,
   "团队开台:必须是「读授权 → 消费停止标记 → 起进程」的顺序");

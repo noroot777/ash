@@ -71,20 +71,22 @@ const WORKSPACE_GONE_NOTE = (cwd: string) =>
 type Kind = "user" | "inbound" | "start";
 
 const leads = new Map<string, Lead>();
-const opening = new Map<string, Promise<Lead>>();
 /**
- * 开台**进行到一半**时收到的「停止全组」。
+ * 一次正在进行的开台。
  *
- * 开台要穿过好几个 await(worktree 准备、prepareResume、授权现读),这期间 `leads` 里还
- * 没有这台调度台、`trackRun` 也还没发生 —— `stopTask` 找不到任何可杀的东西,`haltTeam`
- * 只会把状态写成 idle,而开台随后照常起进程、`beginTurn` 又把状态写回 running:用户点了
- * 停止、页面刷新后却还是「运行中」(第 4 轮审查 P1)。
+ * `halted` = 这台开台**进行到一半**时收到了「停止全组」。开台要穿过好几个 await(worktree
+ * 准备、prepareResume、授权现读),这期间 `leads` 里还没有这台调度台、`trackRun` 也还没
+ * 发生 —— `stopTask` 找不到任何可杀的东西,`haltTeam` 只会把状态写成 idle,而开台随后照常
+ * 起进程、`beginTurn` 又把状态写回 running:用户点了停止、页面刷新后却还是「运行中」
+ * (第 4 轮审查 P1)。所以把那一次停止记在这里,由开台自己在**起进程之前**消费掉。
+ * `turn-freeze` 那套(freezeStartingTurn/abortIfFrozen)解的是同一类问题,但它要求回合已经
+ * claimTurn,而团队开台没有占回合,用不上。
  *
- * 所以把那一次停止记在这里,由开台自己在**起进程之前**消费掉。`turn-freeze` 那套
- * (freezeStartingTurn/abortIfFrozen)解的是同一类问题,但它要求回合已经 claimTurn,
- * 而团队开台没有占回合,用不上。
+ * 标记必须挂在**这一次**开台上,不能是一个按 taskId 的全局 Set:停止之后用户另发一句就会
+ * 开出新的一台,全局标记会被那台误消费,等于用户的新指令刚起步就被上一次的停止撤回。
  */
-const openingHalted = new Set<string>();
+type Opening = { halted: boolean; promise: Promise<Lead> };
+const opening = new Map<string, Opening>();
 
 /** 开台在起进程前被「停止全组」撤回 —— 这不是失败,是用户的停止真的生效了。 */
 class TeamOpenHalted extends Error {
@@ -140,9 +142,16 @@ export async function haltTeam(taskId: string): Promise<void> {
     lead.closingSaidRotated = !lead.cliSessionId;
     recordSystemTurn(lead, HALT_NOTE(!!lead.cliSessionId));
   }
-  // 正在开台(还没 trackRun,谁也杀不到)时,把这次停止记下来交给开台自己消费 ——
+  // 正在开台(还没 trackRun,谁也杀不到)时,把这次停止记在那一次开台上交给它自己消费 ——
   // 否则下面 stopTask 空转、状态写成 idle,开台却照样把进程拉起来并写回 running。
-  if (opening.has(taskId)) openingHalted.add(taskId);
+  // **并且立刻把它从 opening 里摘掉**:停止完成之后用户另发的新指令不该再排到这台已被撤回
+  // 的开台后面 —— 排上去的话它既没被送出,又因为 TeamOpenHalted 被当成送达,刷新页面连原话
+  // 都找不到(第 5 轮审查 P1)。摘掉之后,那条新指令会照常开出新的一台。
+  const inflight = opening.get(taskId);
+  if (inflight) {
+    inflight.halted = true;
+    opening.delete(taskId);
+  }
   stopTask(taskId); // 常驻 handle 已 trackRun → killChild 三层击杀
   const owned = await db.select().from(groups).where(eq(groups.ownerTaskId, taskId));
   for (const g of owned) await pauseGroup(g.id);
@@ -209,11 +218,15 @@ async function deliver(
       return true;
     }
     try {
-      lead = await inflight; // 别开第二个进程:等它开完,这条按普通消息送
+      lead = await inflight.promise; // 别开第二个进程:等它开完,这条按普通消息送
     } catch (err) {
       // 发起 open 的那条消息负责记录失败；定时消息还要把失败传回 scheduler，
       // 让 pending 明确落 canceled，而不是到点后静默消失。
       if (throwOnOpenFailure) throw err;
+      // 这台开台在起进程前被「停止全组」撤回了:它一个字都没送出去,而这条消息并不是发起
+      // 它的那一条(那条的原因由 reportOpenFailure 写回会话)。绝不能顺手报送达 —— 上层据此
+      // 标 sent,用户的话就凭空蒸发。
+      if (err instanceof TeamOpenHalted) return await strandedByHalt(taskId, text, kind);
       return true;
     }
   }
@@ -260,22 +273,48 @@ async function noteToLead(taskId: string, message: string): Promise<void> {
 
 // 开台失败:原因照上面的通道写回去,状态落回 idle —— 团队没有终态,开不起来就是待命。
 async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
+  const halted = err instanceof TeamOpenHalted;
+  // 撤回之后用户可能已经另发一句、新的一台正在起。那时「团队保持待命」是假话,状态更不能
+  // 被盖回 idle —— 用户看到的会是「刚发的指令跑起来了,界面却写着待命」。这一档索性什么都
+  // 不说:noteToLead 写的是**最近一条**调度台会话,也就是刚开那条,一句关于上一次开台的红色
+  // 说明插进去只会读成「新指令一上来就出错了」。停止本身在当时已经可见(状态落了 idle),
+  // 之后变回运行中是用户自己发的那句话的结果。
+  if (halted && teamIsLive(taskId)) return;
   // 被用户停止撤回的那一种照着「启动失败」报,会让他以为自己点坏了什么。
-  await noteToLead(taskId, err instanceof TeamOpenHalted
+  await noteToLead(taskId, halted
     ? "这次开台在启动调度台进程之前被「停止全组」撤回了，团队保持待命。"
     : `调度台启动失败：${err instanceof Error ? err.message : String(err)}`);
+  if (teamIsLive(taskId)) return; // 写说明这段时间里新的一台起来了,同上:别动它的状态
   await setTaskStatus(taskId, "idle");
 }
 
 function open(taskId: string, text: string, kind: Kind): Promise<Lead> {
-  const p = openLead(taskId, text, kind).finally(() => {
-    opening.delete(taskId);
-    // 开台在消费它之前就失败了(worktree 建不出来之类)时清掉,别让这次停止顺延到
-    // 下一次开台上去。
-    openingHalted.delete(taskId);
+  const cell = { halted: false } as Opening;
+  cell.promise = openLead(taskId, text, kind, cell).finally(() => {
+    // 只摘自己那条:被 haltTeam 撤回之后,opening 里可能已经换成了后来那一台。
+    if (opening.get(taskId) === cell) opening.delete(taskId);
   });
-  opening.set(taskId, p);
-  return p;
+  opening.set(taskId, cell);
+  return cell.promise;
+}
+
+/**
+ * 开台被「停止全组」撤回时,安置搭它顺风车的那条消息。返回值 = 它到底算不算被接住了。
+ *
+ * 用户插话:返回 false。上层(continueTask → /reply)据此把原话退回待发送托盘 —— 那是停止
+ * **完成之后**用户另发的新指令,不该跟着上一次被撤回的开台一起蒸发。
+ * 执行者汇报:它有自己的持久待送队列,落进去就行,下一台调度台 adoptInbound 时自动补送。
+ */
+async function strandedByHalt(taskId: string, text: string, kind: Kind): Promise<boolean> {
+  if (kind !== "inbound" || !text.trim()) return false;
+  try {
+    await enqueueInbound(taskId, text);
+  } catch (error) {
+    // 跟 queueInbound 同一口径:写不进去也别当场丢掉,退回进程内的最后一档(见 adoptInbound)。
+    console.error(`[ash] team enqueueInbound(${taskId}) failed:`, error);
+    unqueuedFallback.set(taskId, [...(unqueuedFallback.get(taskId) ?? []), text]);
+  }
+  return true;
 }
 
 /**
@@ -332,7 +371,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
 }
 
 // ── 开台 / 接回 ─────────────────────────────────────────────────────────────
-async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Lead> {
+async function openLead(taskId: string, rawText: string, kind: Kind, cell: Opening): Promise<Lead> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("task not found");
   if (task.mode !== "team") throw new Error("不是团队任务");
@@ -396,9 +435,9 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   // (同第 3 轮审查 P1 的续聊路径)。
   const browserGrant = await browserGrantForProject(project.id);
   // 开台前的最后一道闸:这一句之后到 openResident 之间不再有 await。上面那几个 await
-  // 期间可能来过「停止全组」,那时这台调度台还没出生、谁也杀不到它,停止只落在
-  // openingHalted 上 —— 不在这里消费掉,就会把用户已经停下的团队又拉起来。
-  if (openingHalted.delete(taskId)) throw new TeamOpenHalted();
+  // 期间可能来过「停止全组」,那时这台调度台还没出生、谁也杀不到它,停止只落在这一次开台
+  // 的 cell.halted 上 —— 不在这里消费掉,就会把用户已经停下的团队又拉起来。
+  if (cell.halted) throw new TeamOpenHalted();
   const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full", browserGrant);
 
   const turnStart = now();
