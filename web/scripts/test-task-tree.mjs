@@ -236,6 +236,15 @@ const agePreview = previewProjectTasks([
   task("old-live", "single"),
 ], [task("extra", "single", { updatedAt: "2026-08-08T00:00:00.000Z" })], Date.parse("2026-08-10T12:00:00.000Z"));
 assert.deepEqual(agePreview.visible.map((row) => row.id), ["recent-live"]);
-assert.deepEqual(agePreview.hidden.map((row) => row.id), ["extra", "old-live"], "年龄闸与补充任务合用按更新时间排序的隐藏区");
+assert.deepEqual(agePreview.hidden.map((row) => row.id), ["old-live", "extra"], "先揭示任务模式的年龄闸任务，再追加项目历史任务");
+const recentHistory = Array.from({ length: 420 }, (_, index) => task(`history-${index}`, "single", {
+  updatedAt: "2026-08-09T00:00:00.000Z",
+}));
+const deepPreview = previewProjectTasks([
+  task("recent-live", "single", { updatedAt: "2026-08-10T00:00:00.000Z" }),
+  ...Array.from({ length: 4 }, (_, index) => task(`aged-live-${index}`, "single")),
+], recentHistory, Date.parse("2026-08-10T12:00:00.000Z"));
+assert.deepEqual(deepPreview.hidden.slice(0, 4).map((row) => row.id), ["aged-live-0", "aged-live-1", "aged-live-2", "aged-live-3"]);
+assert.deepEqual(deepPreview.hidden.slice(4), recentHistory);
 
 console.log("task tree grouping tests passed");

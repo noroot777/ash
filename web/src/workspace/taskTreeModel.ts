@@ -200,8 +200,6 @@ export function previewProjectTasks<T extends TaskListItem>(
   const preview = previewTasksByAge(tasks, nowMs, keepVisible);
   return {
     visible: preview.visible,
-    hidden: extraTasks.length
-      ? orderedTopLevelTasks([...preview.hidden, ...extraTasks], { includeElsewhere: true })
-      : preview.hidden,
+    hidden: [...preview.hidden, ...extraTasks],
   };
 }

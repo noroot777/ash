@@ -23,7 +23,7 @@ import {
   type SpreadFilter,
   type WorkerIndex,
 } from "./useSidebarSpread.ts";
-import { buildTaskTree, groupTaskModeProjects, keepVisibleInPreview, orderedTopLevelTasks, previewProjectTasks, revealToIndex } from "./taskTreeModel.ts";
+import { buildTaskTree, groupTaskModeProjects, keepVisibleInPreview, orderedTopLevelTasks, previewProjectTasks, previewTasksByAge, revealToIndex } from "./taskTreeModel.ts";
 import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
 import { QueueDrawer } from "../task-detail/QueueDrawer.tsx";
@@ -141,7 +141,7 @@ function ScopedTaskTree({
     const selectedRootId = allTasks.find((task) => task.id === selectedTaskId)?.parentId ?? selectedTaskId;
     for (const entry of layout) {
       for (const group of entry.groups) {
-        const hidden = previewProjectTasks(group.tasks, group.extraTasks, Date.now(), keepVisible).hidden;
+        const hidden = previewTasksByAge(group.tasks, Date.now(), keepVisible).hidden;
         const index = hidden.findIndex((task) => task.id === selectedRootId);
         if (index >= 0) return { sectionKey: group.key, taskId: selectedTaskId, index, hiddenCount: hidden.length };
       }
@@ -220,7 +220,7 @@ function ScopedTaskTree({
         >
           <CaretRight size={9} weight="bold" aria-hidden="true" />
           <b>{name}</b>
-          <em>{group.tasks.length + group.extraTasks.length}</em>
+          <em>{group.tasks.length}</em>
         </button>
         {!groupCollapsed && renderRows(group, false)}
       </div>

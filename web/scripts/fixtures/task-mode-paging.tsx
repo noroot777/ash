@@ -10,6 +10,9 @@ import "../../src/styles/workspace.css";
 import "../../src/styles/task-tree.css";
 
 const now = Date.now();
+const params = new URLSearchParams(window.location.search);
+const regressions = params.has("regressions");
+const historyCount = regressions ? 420 : 45;
 const recent = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
 const projects: ProjectView[] = ["甲项目", "乙项目", "仅置顶项目", "空闲项目"].map((name, index) => ({
   id: `p${index + 1}`,
@@ -46,7 +49,8 @@ const tasks = [
   task("a-question", "p1", 3_000, { status: "paused", stage: null, question: "需要答复" }),
   task("b-live", "p2", 20, { status: "running", stage: null }),
   task("c-pin", "p3", 30, { status: "running", stage: null, pinnedAt: now }),
-  ...Array.from({ length: 45 }, (_, index) => task(`a-extra-${index + 1}`, "p1", index + 1, {
+  ...Array.from({ length: regressions ? 4 : 0 }, (_, index) => task(`a-aged-${index + 1}`, "p1", 3_000 + index, { status: "running" })),
+  ...Array.from({ length: historyCount }, (_, index) => task(`a-extra-${index + 1}`, "p1", index + 1, {
     ...(index === 0 ? { mode: "team", pinnedAt: now - 1 } : {}),
     ...(index === 1 ? { handoff: { direction: "out", pending: false, peer: "test", at: recent(1), git: "bundle" } } : {}),
   })),
@@ -58,8 +62,6 @@ const tasks = [
   task("archived", "p1", 1, { archived: true }),
   task("idle-only", "p4", 1),
 ];
-const scope = { kind: "tasks" } as const;
-const fallbackOrder = spreadVisibleTasks(tasks, scope, "all");
 const spread: SidebarSpread = {
   open: false,
   laidOut: false,
@@ -73,10 +75,13 @@ const spread: SidebarSpread = {
 };
 
 function TaskModePaging() {
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(params.get("task"));
+  const [taskMode, setTaskMode] = useState(params.get("scope") !== "project");
   const [paletteCount, setPaletteCount] = useState(0);
   const [onlyPinnedProject, setOnlyPinnedProject] = useState(false);
   const rows = onlyPinnedProject ? tasks.filter((item) => item.projectId === "p3") : tasks;
+  const scope = taskMode ? { kind: "tasks" } as const : { kind: "project", projectId: "p1" } as const;
+  const fallbackOrder = spreadVisibleTasks(rows, scope, "all");
   const onTask = (next: TaskListItem) => setSelectedTaskId(next.id);
   const navigate = useSidebarTaskNavigation({ tasks, fallbackOrder, selectedTaskId, selectedRemoteTaskId: null, onTask });
   useWorkspaceShortcuts({
@@ -99,8 +104,10 @@ function TaskModePaging() {
       <p data-testid="selected">{selectedTaskId ?? ""}</p>
       <p data-testid="palette-count">{paletteCount}</p>
       <button type="button" data-testid="clear-selection" onClick={() => setSelectedTaskId(null)}>清空选中</button>
-      <button type="button" data-testid="select-hidden" onClick={() => setSelectedTaskId("a-extra-45")}>选中隐藏任务</button>
+      <button type="button" data-testid="select-hidden" onClick={() => setSelectedTaskId(`a-extra-${historyCount}`)}>选中隐藏任务</button>
       <button type="button" data-testid="select-worker" onClick={() => setSelectedTaskId("a-worker-2")}>选中隐藏执行者</button>
+      <button type="button" data-testid="select-aged" onClick={() => setSelectedTaskId("a-aged-4")}>选中年龄闸任务</button>
+      <button type="button" data-testid="toggle-mode" onClick={() => setTaskMode((value) => !value)}>切换任务模式</button>
       <button type="button" data-testid="only-pinned-project" onClick={() => setOnlyPinnedProject(true)}>只看置顶项目</button>
       <aside className="workspace-sidebar" style={{ width: 320, height: 680, marginTop: 16 }}>
         <TaskTree
