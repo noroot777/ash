@@ -122,6 +122,7 @@ try {
   assert.equal((await prepareCliInvocation(await row("plan"), "codex", "继续讨论", "resolved-profile", null)).cliState.plan, true);
   assert.equal((await prepareCliInvocation(await row("plan"), "codex", "继续讨论", "another-profile", null)).cliState.plan, undefined);
   assert.equal(planUpdates.at(-1), false);
+  assert.equal(readCliState((await row("plan")).cliState, "codex", "resolved-profile", null).plan, true);
   assert.deepEqual(readCliState((await row("plan")).cliState, "codex", "resolved-profile", "other-owner"), {});
   await saveCliState("plan", "codex", { profileId: "resolved-profile", ownerUserId: null, plan: true, personality: "friendly", serviceTier: "priority" });
   await saveCliState("plan", "claude", { goal: { objective: "保留其他执行器的目标", status: "paused" } });

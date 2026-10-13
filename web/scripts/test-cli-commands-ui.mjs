@@ -16,7 +16,7 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 delete process.env.ASH_ALLOW_REAL_AGENT;
 const { db, dbClient, ensureSchema } = await import("../../server/dist/db/index.js");
-const { appSettings, projects, tasks, agents, sessions } = await import("../../server/dist/db/schema.js");
+const { appSettings, projects, tasks, agents, sessions, groups, queueItems } = await import("../../server/dist/db/schema.js");
 await ensureSchema();
 await mkdir(workspace);
 await mkdir(screenshots, { recursive: true });
@@ -24,6 +24,8 @@ const at = new Date().toISOString();
 await db.insert(appSettings).values({ key: "instanceMode", value: JSON.stringify("single") });
 await db.insert(projects).values({ id: "cli-ui", name: "原生命令验证", repoPath: workspace, useWorktreeDefault: false, createdAt: at });
 await db.insert(agents).values([{ id: "codex-ui", name: "codex@验证", type: "codex", isDefault: true, extraArgs: "[]", configOverrides: "{}" }, { id: "claude-ui", name: "claude@验证", type: "claude", isDefault: true, extraArgs: "[]", configOverrides: "{}" }]);
+await db.insert(agents).values({ id: "codex-ui-other", name: "codex@验证备用", type: "codex", extraArgs: "[]", configOverrides: "{}" });
+await db.insert(groups).values([{ id: "queue-ui", projectId: "cli-ui", name: "计划队列验证", mode: "serial", createdAt: at }, { id: "goal-ui", projectId: "cli-ui", name: "目标保护验证", mode: "parallel", createdAt: at }]);
 await db.insert(tasks).values([
   { id: "codex-ui-task", projectId: "cli-ui", title: "Codex 命令", body: "测试夹具", mode: "single", status: "paused", agentType: "codex", executorId: "codex-ui", autoTitle: false, createdAt: at, updatedAt: at },
   { id: "claude-ui-task", projectId: "cli-ui", title: "Claude 目标快照", body: "测试夹具", mode: "single", status: "done", agentType: "claude", executorId: "claude-ui", autoTitle: false, stage: "accepted", cliState: JSON.stringify({ claude: { profileId: "claude-ui", ownerUserId: null, goal: { objective: "验证目标命令", status: "paused" } } }), createdAt: at, updatedAt: at },
@@ -32,7 +34,11 @@ await db.insert(tasks).values([
   { id: "legacy-cli-task", projectId: "cli-ui", title: "Codex 老任务起跑失败", body: "/usage 看一下这个月的用量再决定", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", createdAt: at, updatedAt: at },
   { id: "legacy-claude-task", projectId: "cli-ui", title: "Claude 老任务起跑失败", body: "/plan 怎么做这个功能", mode: "single", status: "backlog", agentType: "claude", executorId: "claude-ui", createdAt: at, updatedAt: at },
   { id: "fresh-plan-task", projectId: "cli-ui", title: "计划模式重新运行", body: "开始实施测试夹具", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", cliState: JSON.stringify({ codex: { profileId: "codex-ui", ownerUserId: null, plan: true } }), createdAt: at, updatedAt: at },
+  { id: "queue-plan-task", projectId: "cli-ui", groupId: "queue-ui", title: "计划模式队列起跑", body: "开始实施队列任务", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", cliState: JSON.stringify({ codex: { profileId: "codex-ui", ownerUserId: null, plan: true } }), autoTitle: false, createdAt: at, updatedAt: at },
+  { id: "scoped-goal-task", projectId: "cli-ui", groupId: "goal-ui", title: "切换执行器保留目标", body: "保持目标与预算", mode: "single", status: "paused", agentType: "codex", executorId: "codex-ui", cliState: JSON.stringify({ codex: { profileId: "codex-ui", ownerUserId: null, goalHold: true, goal: { objective: "让 test/auth 全过", status: "budgetLimited", tokenBudget: 150, tokensUsed: 150 } } }), autoTitle: false, createdAt: at, updatedAt: at },
 ]);
+await db.insert(queueItems).values({ taskId: "queue-plan-task", queueId: "queue-ui", position: 0, createdAt: at });
+await db.insert(sessions).values({ id: "queue-plan-session", taskId: "queue-plan-task", role: "single", agentType: "codex", executor: "codex", executorId: "codex-ui", cliSessionId: "queue-thread", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
 await db.insert(sessions).values({ id: "claude-ui-session", taskId: "claude-ui-task", role: "single", agentType: "claude", executor: "claude", executorId: "claude-ui", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
 await db.insert(sessions).values({ id: "codex-ui-session", taskId: "codex-ui-task", role: "single", agentType: "codex", executor: "codex", executorId: "codex-ui", cliSessionId: "ui-plan-thread", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
 dbClient.close();
@@ -46,12 +52,14 @@ const boot = `
   const { CodexExecutor } = await import("./server/dist/executors/codex.js");
   CodexExecutor.prototype.runSteerable = function(options) {
     const sessionId = options.sessionId || "ui-" + options.env.ASH_TASK_ID;
+    const goal = options.cliState?.goal ? { ...options.cliState.goal, status: "budgetLimited" } : null;
     return {
       sessionId, cliCommand: options.cliCommand, commandLine: "UI fixture; no CLI or model request",
+      goal: () => goal, goalStarted: () => !!goal,
       kill() {},
       events: (async function* () {
         yield { kind: "session", cliSessionId: sessionId };
-        yield { kind: "text", text: options.cliState?.plan ? "测试执行器：只讨论计划" : "测试执行器：正常实施" };
+        yield { kind: "text", text: options.cliCommand?.name === "goal" && goal ? "目标：" + goal.objective + "；预算 " + goal.tokenBudget + "；已用 " + goal.tokensUsed : options.cliState?.plan ? "测试执行器：只讨论计划" : "测试执行器：正常实施" };
         yield { kind: "done", exitStatus: 0 };
       })(),
     };
@@ -165,6 +173,51 @@ try {
   assert.equal(await planNotice.count(), 0);
   await page.screenshot({ path: join(screenshots, "plan-mode-fresh-run.png"), fullPage: true });
 
+  await page.goto(`${base}/?project=cli-ui&task=queue-plan-task`);
+  await planNotice.waitFor();
+  const beforeQueue = await sessionEnds("queue-plan-task");
+  assert.equal((await fetch(`${base}/api/groups/queue-ui/run`, { method: "POST" })).status, 202);
+  const queuedTask = await idleTask("queue-plan-task", beforeQueue);
+  assert.equal(queuedTask.codexPlanMode, false);
+  assert.equal(queuedTask.status, "failed", "队列中的未确认执行不能冒充完成");
+  await planNotice.waitFor({ state: "hidden" });
+  await page.getByText("测试执行器：正常实施", { exact: true }).waitFor();
+  await page.reload();
+  await page.getByText("测试执行器：正常实施", { exact: true }).waitFor();
+  assert.equal(await planNotice.count(), 0);
+  await page.screenshot({ path: join(screenshots, "queue-execution-not-plan-done.png"), fullPage: true });
+
+  await page.goto(`${base}/?project=cli-ui&task=scoped-goal-task`);
+  const scopedReply = page.getByRole("textbox", { name: "回复任务" });
+  const sendScoped = async (text) => {
+    const previousEnds = await sessionEnds("scoped-goal-task");
+    await scopedReply.fill(`${text} `);
+    const response = page.waitForResponse((value) => value.url().endsWith("/tasks/scoped-goal-task/reply") && value.request().method() === "POST");
+    await page.getByRole("button", { name: "发送回复", exact: true }).click();
+    assert.equal((await response).status(), 202);
+    return idleTask("scoped-goal-task", previousEnds);
+  };
+  const beforeOtherProfile = await sessionEnds("scoped-goal-task");
+  const switched = await fetch(`${base}/api/tasks/scoped-goal-task/reply`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "换个执行器回复", agent: "codex", executorId: "codex-ui-other" }),
+  });
+  assert.equal(switched.status, 202);
+  await idleTask("scoped-goal-task", beforeOtherProfile);
+  const otherProfileSessions = await (await fetch(`${base}/api/tasks/scoped-goal-task/sessions`)).json();
+  assert.ok(otherProfileSessions.some((session) => session.executorId === "codex-ui-other"));
+  await page.getByText("测试执行器：正常实施", { exact: true }).waitFor();
+  assert.equal((await sendScoped("/goal resume")).status, "paused");
+  await page.getByText("目标：让 test/auth 全过；预算 150；已用 150", { exact: true }).waitFor();
+  await page.reload();
+  await page.getByText("目标：让 test/auth 全过；预算 150；已用 150", { exact: true }).waitFor();
+  const beforeHeldRun = [...await sessionEnds("scoped-goal-task")];
+  assert.equal((await fetch(`${base}/api/groups/goal-ui/run`, { method: "POST" })).status, 202);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.deepEqual([...await sessionEnds("scoped-goal-task")], beforeHeldRun);
+  assert.equal((await (await fetch(`${base}/api/tasks/scoped-goal-task`)).json()).status, "paused");
+  await page.screenshot({ path: join(screenshots, "goal-survives-profile-switch.png"), fullPage: true });
+
   await page.goto(`${base}/?project=cli-ui&task=team-ui-task`);
   const teamReply = page.getByPlaceholder("调度者待命中，说句话就接回同一会话…");
   await teamReply.fill("/");
@@ -226,6 +279,7 @@ try {
   console.log("native slash UI, agent/mode filtering, inline goal status without optimistic bubbles, durable reload: passed");
   console.log("creation validation reason, edited/legacy startup diagnostics, live display and durable reload: passed");
   console.log("plan mode live/reload notice, slash-only exit, fresh and resumable rerun reset: passed");
+  console.log("queued plan executes instead of falsely completing; profile switch/resume preserves budget and scheduler hold: passed");
   console.log(`screenshots: ${screenshots}`);
 } finally {
   await browser?.close();

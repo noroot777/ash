@@ -7,7 +7,7 @@ import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { nativeCommandRun, stopTask, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { preflightCliGoalResume, readCliState, renameCliTask, saveCliState } from "./task-cli-state.js";
+import { preflightCliGoalResume, readCliState, renameCliTask, resolvedCliState, saveCliState } from "./task-cli-state.js";
 import { formatClaudeGoal } from "./executors/claude-goal.js";
 import type { TaskReplyBody } from "./task-reply.js";
 import { enqueueMessage } from "./pending-messages.js";
@@ -27,7 +27,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
   if (!running) {
     await preflightCliGoalResume(task, agentType, command.text, body.agent ? body.executorId ?? null : task.executorId, userId);
     if (agentType === "claude" && command.name === "goal" && (!command.args || command.args === "pause")) {
-      const state = readCliState(task.cliState, agentType, body.executorId ?? task.executorId ?? undefined, userId);
+      const state = await resolvedCliState(task, agentType, body.agent ? body.executorId ?? null : task.executorId, userId);
       if (command.args && state.goal) { state.goal.status = "paused"; await saveCliState(task.id, agentType, state); }
       const text = formatClaudeGoal(state.goal ?? null);
       const recorded = await appendTaskTimeline(task.id, `${command.text}\n${text}`, { agentType });
@@ -46,7 +46,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
   const clear = command.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(command.args);
   if (agentType === "claude") {
     if (command.name !== "goal" || (command.args && command.args !== "pause" && !clear)) throw new Error("当前 Claude 原生通道不支持此命令");
-    const state = readCliState(task.cliState, agentType, session.executorId, session.runOwnerUserId);
+    const state = { ...readCliState(task.cliState, agentType, session.executorId, session.runOwnerUserId), profileId: session.executorId, ownerUserId: session.runOwnerUserId };
     if (command.args) {
       if (!state.goal || !task.goalTurn) throw new Error("当前回合没有正在执行的目标");
       state.goal = clear ? null : { ...state.goal, status: "paused" };
@@ -67,7 +67,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     if (!current.command) throw new Error("当前 Codex profile 使用 exec 回退通道，无法执行原生控制命令");
     text = await current.command(command);
     if (command.name === "goal") {
-      const state = readCliState(task.cliState, agentType, session.executorId, session.runOwnerUserId);
+      const state = { ...readCliState(task.cliState, agentType, session.executorId, session.runOwnerUserId), profileId: session.executorId, ownerUserId: session.runOwnerUserId };
       state.goal = current.goal?.() ?? null;
       if (task.goalTurn && (command.args === "pause" || clear)) state.goalHold = !clear;
       if (clear) { state.goal = null; delete state.goalStart; }

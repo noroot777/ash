@@ -304,7 +304,8 @@ export async function continueTask(
       ...owner,
     });
     if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
-    const resetPlan = opts.system === "run" || opts.system === "retry";
+    const preserveCliState = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
+    const resetPlan = !!opts.system && !preserveCliState;
     const planning = !resetPlan && !goalExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
     if (planning) {
       sideTurn = true;
@@ -469,8 +470,7 @@ export async function continueTask(
         );
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
-    const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan });
-    if (opts.sideTurn || task.verifyRound || freeReviewTurn) cli.cliState = { ...cli.cliState, plan: false };
+    const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan, preserveState: preserveCliState });
     // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 `trackRun` 之间不再有
     // await，暂停请求要么在这里被消费、要么之后才到——那时已有 handle 可杀。
     // freezeGuard 的启动路径（重试按钮、自由审查重跑）还会再查一遍库：它们的预检查离

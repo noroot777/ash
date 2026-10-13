@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import type { AgentEvent } from "@ash/shared";
-import { validateCliCommand } from "@ash/shared/cli-commands";
+import { hasCliGoalHold, validateCliCommand } from "@ash/shared/cli-commands";
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "ash-goal-live-")));
 process.env.ASH_DB = join(root, "ash.db");
@@ -132,6 +132,20 @@ try {
   assert.equal(readCliState((await task()).cliState, "codex").goalHold, true);
   assert.equal(await continueTask("live-task", "/goal"), true);
   assert.equal((await task()).status, "paused");
+  const savedGoal = readCliState((await task()).cliState, "codex", "second-profile", null);
+  const beforeReview = (await task()).cliState;
+  assert.equal(await continueTask("live-task", "另一个 profile 的审查旁路", { system: "run", sideTurn: true, agent: "codex", executorId: "first-profile" }), true);
+  assert.equal((await task()).cliState, beforeReview);
+  assert.doesNotMatch(lastUserInput, /本回合只讨论计划/);
+  assert.equal(await continueTask("live-task", "换回另一个 profile 讨论", { agent: "codex", executorId: "first-profile" }), true);
+  assert.deepEqual(readCliState((await task()).cliState, "codex", "second-profile", null), savedGoal);
+  assert.equal(hasCliGoalHold((await task()).cliState), true);
+  assert.equal(await continueTask("live-task", "/goal resume", { agent: "codex", executorId: "second-profile" }), true);
+  assert.equal(readCliState((await task()).cliState, "codex", "second-profile", null).goal?.objective, savedGoal.goal?.objective);
+  assert.equal(readCliState((await task()).cliState, "codex", "second-profile", null).goal?.tokenBudget, 150);
+  assert.ok(readCliState((await task()).cliState, "codex", "second-profile", null).goal!.tokensUsed! >= savedGoal.goal!.tokensUsed!);
+  assert.equal((await task()).status, "paused");
+  console.log("real Codex cross-profile reply/review preserves budget-limited goal and resumes its own scope: passed");
   const currentSession = async () => (await db.select().from(sessions).where(eq(sessions.taskId, "live-task")).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt)))[0]!;
   const originalSessionId = (await currentSession()).cliSessionId;
   assert.equal(await continueTask("live-task", "/new"), true);
@@ -163,7 +177,17 @@ try {
   assert.equal(await continueTask("restart-plan", "重试后开始实施", { system: "retry" }), true);
   assert.equal(readCliState((await restartTask()).cliState, "codex").plan, false);
   assert.doesNotMatch(lastUserInput, /本回合只讨论计划/);
+  for (const reason of ["queue", "group", "wake"] as const) {
+    assert.equal(await continueTask("restart-plan", "/plan"), true);
+    const beforeAutomatic = count;
+    await resumeOrRunTask("restart-plan", { reason });
+    assert.ok(count > beforeAutomatic, reason);
+    assert.equal(readCliState((await restartTask()).cliState, "codex").plan, false, reason);
+    assert.doesNotMatch(lastUserInput, /本回合只讨论计划/, reason);
+    assert.equal((await restartTask()).status, "failed", `${reason}: an unconfirmed real CLI turn must not settle done`);
+  }
   console.log("real ash fresh run, resumable run and retry exit stored plan mode: passed");
+  console.log("real CLI queue/group/wake resumptions exit stored plan mode and require completion: passed");
   console.log("real ash continuation: plan scope, side-turn isolation, native multi-turn goal, durable budget pause and inspection: passed");
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
