@@ -22,6 +22,7 @@ import { isSessionScopeNotice } from "../session-notice.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { consumeInbound } from "./inbound-queue.js";
+import type { PendingInbound } from "./inbound-queue.js";
 import {
   idleRotation,
   onFreshSession,
@@ -395,16 +396,25 @@ function retireLead(lead: Lead): void {
  * 拿不到回执就只能假定送到了,而两种常驻实现都会静默拒收:codex 在 `ended || closing`
  * 时直接返回,claude 在 stdin 已关时写不进去。抛错同样按「没收下」算 —— 一次注入失败不该
  * 掀掉整台调度台(理由同 persistOrReport),但更不能被当成送到了。
+ *
+ * **同一台按调用顺序串行**:这里要 await 一次读库(现读浏览器授权),没有这条链的话,回合
+ * 收尾那条合并汇报还卡在读授权上,用户插话就能抢先写进 stdin —— 调度者先看到「新要求」、
+ * 后看到本该在它之前的那份执行结果,上下文是倒的(第 7 链第 1 轮审查实测到这个顺序)。
  */
 async function sendToLead(lead: Lead, text: string): Promise<boolean> {
-  try {
-    // 授权现读:开台时带的是「已授权 x.com」,后续消息若还注入默认拒绝,调度台收到的
-    // 就是一对自相矛盾的指令(第 2 轮审查 P3)。同时这也让撤销对常驻调度台即时生效。
-    return lead.handle.send(withGlobalBrowserPolicy(text, "reminder", await browserGrantForTask(lead.taskId)));
-  } catch (error) {
-    console.error(`[ash] team send(${lead.taskId}) failed:`, error);
-    return false;
-  }
+  const sent = (lead.sending ?? Promise.resolve()).then(async () => {
+    try {
+      // 授权现读:开台时带的是「已授权 x.com」,后续消息若还注入默认拒绝,调度台收到的
+      // 就是一对自相矛盾的指令(第 2 轮审查 P3)。同时这也让撤销对常驻调度台即时生效。
+      return lead.handle.send(withGlobalBrowserPolicy(text, "reminder", await browserGrantForTask(lead.taskId)));
+    } catch (error) {
+      console.error(`[ash] team send(${lead.taskId}) failed:`, error);
+      return false;
+    }
+  });
+  // 链上只留「轮到下一个了」,不留成败 —— 一条没送成不该把后面的也拖成 rejected。
+  lead.sending = sent.then(() => undefined, () => undefined);
+  return sent;
 }
 
 function clearStatusRetry(lead: Lead): void {
@@ -486,7 +496,12 @@ async function endTurn(lead: Lead): Promise<void> {
   flushSessionNotices(lead);
   if (lead.pending.length) {
     await flushUnqueued(lead); // 上次写库被拒的那几条,趁这会儿补进队列
-    const batch = lead.pending;
+    // **快照,不是引用**。`sendToLead` 要 await(投递前现读浏览器授权),这期间调度台可能
+    // 又忙起来(用户插话)并收下新的执行者汇报,它们会追加进同一个 `lead.pending`。拿引用的
+    // 话,下面 `lead.pending = []` 把新来的一起清掉、`batch` 里的 seq 也把它们的行一并销账
+    // —— 一份从没交给调度者的执行结果就此永久消失,刷新、续聊、换台都找不回来
+    // (第 7 链第 1 轮审查 P1)。
+    const batch = [...lead.pending];
     const merged = batch.map((m) => m.text).join("\n\n---\n\n");
     const at = now();
     // 顺序是刻意的:**收下了才算送出去**。先销账、先落盘再 send 的话,send 一拒收
@@ -494,7 +509,9 @@ async function endTurn(lead: Lead): Promise<void> {
     // (2026-08-26 第 11 轮审查)。落盘同样要等收下之后:没送成还记一条「已投递」的
     // system turn,下一台真送成时同一份汇报在 .md 里就是两条。
     if (await sendToLead(lead, merged)) {
-      lead.pending = [];
+      // 只摘走这一批(按对象身份)。await 期间新来的留在队列里,下一次回合收尾照常送。
+      const sent = new Set<PendingInbound>(batch);
+      lead.pending = lead.pending.filter((m) => !sent.has(m));
       // 销账失败宁可重送不可丢:行还在就是下一台会再送一遍(.md 里会多一条),而删早了
       // 是永久消失。所以这里只上报,不回滚也不掀掉这台调度台。
       // seq=null 的压根没进过队列(写库被拒),没有账可销。
