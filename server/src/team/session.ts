@@ -44,7 +44,7 @@ import { appendSessionTrace, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
-import { browserGrantOf, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
+import { browserGrantForProject, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { announceSessionNote } from "../session-notice.js";
 import { latestTeamLeadSession } from "./session-selection.js";
@@ -357,9 +357,12 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const rawMessage = resuming
     ? LEAD_RESUMED + promptedText + (ws.fresh ? LEAD_WORKSPACE_RESET(ws.path) : "")
     : LEAD_PREAMBLE(taskId, cfg.worker) + objective + (promptedText ? `\n\n【新消息】${promptedText}` : "");
-  const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full", browserGrantOf(project));
   const runEnv = { ...(await runEnvForTask(taskId, cfg.lead)), ASH_TASK_ID: taskId };
   await ex.prepareResume?.({ cwd: ws.path, sessionId: prev?.cliSessionId ?? undefined, env: runEnv });
+  // 授权现读、且读在开台之前的最后一刻:正文(rawMessage)拼好之后还隔着 runEnv 和
+  // prepareResume 两个 await,在那边就把授权拼死的话,用户在开台期间收回授权拦不住
+  // (同第 3 轮审查 P1 的续聊路径)。
+  const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full", await browserGrantForProject(project.id));
 
   const turnStart = now();
   const sessId = resuming ? prev!.id : id();

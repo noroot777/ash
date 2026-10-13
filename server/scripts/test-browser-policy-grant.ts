@@ -136,7 +136,9 @@ assert.equal(await browserGrantForTask("不存在的任务"), null, "查不到�
 // 上一轮就是栽在这:纯函数做对了,prompt 侧一处没接,整条功能等于不存在。
 for (const [label, rel, expected] of [
   ["普通任务 fresh run + 插话", "../src/task-run.ts", 2],
-  ["续聊/召唤/计划回合", "../src/orchestrator.ts", 3],
+  // 2 而不是 3:planning 分支原本自己调一次,第 3 轮审查后与普通分支合并成同一个调用
+  // (正文先拼好、策略统一在起跑前贴),少一个调用点就少一处会漏贴的地方。
+  ["续聊/召唤/计划回合", "../src/orchestrator.ts", 2],
   ["团队调度台开台", "../src/team/session.ts", 1],
   ["重启接管续跑", "../src/reattach.ts", 1],
   // 下面两条是第 2 轮审查补上的:duet 每轮都拿不到授权,团队常驻投递则在开台说了

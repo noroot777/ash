@@ -35,7 +35,7 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { preflightCliGoalResume, prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
-import { browserGrantForProject, browserGrantOf, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
 import { isDiagnosticSession } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
@@ -330,8 +330,6 @@ export async function continueTask(
       await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status }).where(eq(tasks.id, taskId));
     }
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-    // 项目级浏览器授权:这里本来就是 async 入口,读一次带进下面三处注入(含同步的 prepare 闭包)。
-    const browserGrant = browserGrantOf(project);
 
     // A single task can now host several agents — one session line per agentType,
     // each invited via @-mention. Newest first.
@@ -471,28 +469,35 @@ export async function continueTask(
     // 原生命令必须**独占整条 prompt**:前面垫一个字它就退化成普通模型请求,压缩不会
     // 发生;后面跟的字则会被 CLI 整条丢弃,拼上去只是自欺(见 skills.ts NATIVE_COMMANDS)。
     // 浏览器策略那段同理 —— 它也是拼在正文外面的字。
-    const prompt = nativeCommand
+    // 这里只拼**正文**,浏览器策略留到起跑前最后一刻再贴(见下面 abortIfFrozen 上方):
+    // 这一句到 executor.run 之间隔着三个 await(runEnv / prepareResume / prepareCliInvocation),
+    // 在这里就把授权拼死,用户在启动期间收回授权就拦不住了 —— 撤销已落库,发出去的
+    // 第一条消息却还写着「已预先授权 x.com」(第 3 轮审查 P1)。
+    const promptBody = nativeCommand
       ? promptedUserTurnText
-      : planning ? withGlobalBrowserPolicy(`${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`, "reminder", browserGrant)
-      : withGlobalBrowserPolicy(
-          (invited ? COLLAB_INVITE : "") +
-          invitedTaskBrief(task.body, invited, verifying) +
-          (handoffNotice ? `${handoffNotice}\n\n` : "") +
-          peerNotice +
-          promptedUserTurnText +
-          (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
-          (followUpFrom
-            ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
-            : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
-          DIRECTION_PROTOCOL(directionToken) +
-          (reviewReminder ? `\n${reviewReminder}` : ""),
-          resuming ? "reminder" : "full",
-          browserGrant,
-        );
+      : planning ? `${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`
+      : (invited ? COLLAB_INVITE : "") +
+        invitedTaskBrief(task.body, invited, verifying) +
+        (handoffNotice ? `${handoffNotice}\n\n` : "") +
+        peerNotice +
+        promptedUserTurnText +
+        (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
+        (followUpFrom
+          ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
+          : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
+        DIRECTION_PROTOCOL(directionToken) +
+        (reviewReminder ? `\n${reviewReminder}` : "");
+    const promptLevel = planning || resuming ? "reminder" as const : "full" as const;
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
     const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null);
     if (opts.sideTurn || task.verifyRound || freeReviewTurn) cli.cliState = { ...cli.cliState, plan: false };
+    // 浏览器授权在这里**现读**:上面那份正文拼好之后又过了三个 await,期间用户可能已经
+    // 收回授权。读完紧接着就是最后一道闸,闸之后到 run 之间不再有 await,所以这是能拿到
+    // 的最新值。原生命令必须独占整条 prompt(理由见上),不贴策略。
+    const prompt = nativeCommand
+      ? promptBody
+      : withGlobalBrowserPolicy(promptBody, promptLevel, await browserGrantForProject(task.projectId));
     // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 `trackRun` 之间不再有
     // await，暂停请求要么在这里被消费、要么之后才到——那时已有 handle 可杀。
     // freezeGuard 的启动路径（重试按钮、自由审查重跑）还会再查一遍库：它们的预检查离

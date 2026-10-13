@@ -29,7 +29,7 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalResume, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
-import { browserGrantForProject, browserGrantOf, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -157,19 +157,19 @@ export async function runTask(
     // 同样要投:会话文件没随任务到货时,接过来的任务第一次跑走的正是这里(见
     // handoff-notice.ts;续跑那条路在 orchestrator.ts)。
     const handoffNotice = reviewTask ? "" : handoffNoticeFrom(task.handoff);
-    // 项目级浏览器授权。在这里取一次、闭包带进 prepare —— withGlobalBrowserPolicy 要保持
-    // 同步纯函数(nativeSteer.prepare 的签名就是同步的),读库放在本来就 async 的入口。
-    const browserGrant = browserGrantOf(project);
-    const prompt = withGlobalBrowserPolicy(
+    // 这里只拼正文,浏览器策略留到起跑前最后一刻(abortIfFrozen 上方)用现读的授权来贴 ——
+    // 这一句到 spawn 之间还隔着两个 await,在这里拼死授权的话,用户在启动期间收回授权就
+    // 拦不住了(同第 3 轮审查 P1 的续聊路径)。
+    const promptBody =
       AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + DIRECTION_PROTOCOL(directionToken) + teamPreamble + reviewProtocol +
       (handoffNotice ? `${handoffNotice}\n\n` : "") +
       peerNotice +
-      (autoTitle ? TITLE_HINT + objective : objective),
-      "full",
-      browserGrant,
-    );
+      (autoTitle ? TITLE_HINT + objective : objective);
     const cli = await prepareCliInvocation({ ...task, status: "running" }, agentType, commandText, profileId, runOwner ?? null);
     const runEnv = { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
+    // 授权现读:正文拼好之后又过了两个 await。读完紧接着就是最后一道闸,闸之后到 spawn
+    // 之间不再有 await,所以这是能拿到的最新值。
+    const prompt = withGlobalBrowserPolicy(promptBody, "full", await browserGrantForProject(task.projectId));
     // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 spawn 之间没有 await，
     // 所以「已 claim、还没 spawn」的窗口里收到的暂停请求一定在这里被消费。无人值守的
     // 启动(队列推进/恢复分组/上游唤醒,调用方传 freezeGuard)还要按持久事实复查 ——

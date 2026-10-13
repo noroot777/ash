@@ -313,7 +313,9 @@ assert.equal(withGlobalBrowserPolicy(reviewPrompt, "full"), reviewPrompt, "审�
 
 const globalPromptCallsites = [
   ["普通任务 fresh run", new URL("../src/task-run.ts", import.meta.url), 2],
-  ["普通任务续聊/召唤", new URL("../src/orchestrator.ts", import.meta.url), 3],
+  // 2 而不是 3:planning 与普通分支合并成了同一个调用点(第 3 轮审查:正文先拼、
+  // 策略留到起跑前用现读的授权贴)。两条路仍然都经过策略,只是不再各调一次。
+  ["普通任务续聊/召唤", new URL("../src/orchestrator.ts", import.meta.url), 2],
   ["团队调度台开台/接回", new URL("../src/team/session.ts", import.meta.url), 1],
   ["团队调度台消息注入", new URL("../src/team/session-consumer.ts", import.meta.url), 1],
   ["duet 讨论者", new URL("../src/duet/turn.ts", import.meta.url), 1],
