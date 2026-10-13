@@ -93,6 +93,7 @@ try {
     assert.match(wrongAgent, /活动执行器/);
     assert.match(wrongAgent, /active-profile/);
     assert.match(wrongAgent, /\/goal pause/);
+    if (activeAgent === "claude") assert.match(wrongAgent, /\/goal（查询）、\/goal pause 或 \/goal clear/);
     const wrongProfile = await rejection(await reply(taskId, "/goal pause", { agent: activeAgent, executorId: "configured-profile" }));
     assert.match(wrongProfile, /active-profile/);
     const wrongOwner = await rejection(await reply(taskId, "/goal pause", { agent: activeAgent, executorId: "active-profile" }, "other-owner"));
