@@ -74,6 +74,7 @@ export function backfillClaudeMonitors(taskId: string): Promise<number> {
 
 async function runBackfill(taskId: string): Promise<number> {
   let added = 0;
+  let missed = false;
   try {
     const rows = await db
       .select({ id: sessions.id, cliSessionId: sessions.cliSessionId, outPath: sessions.agentOutPath })
@@ -121,8 +122,12 @@ async function runBackfill(taskId: string): Promise<number> {
         snapshots.delete(taskId);
         noteMonitorRecovery(taskId, "update-missed", added > 0);
       }
+      missed = outcome.missed;
     }
-    if (!scan.truncated && !scan.failed) clearMonitorRecovery(taskId);
+    // **销账的条件是「这一轮什么都没剩下」**，三件事都要问：读到 EOF 了、没有读失败、
+    // 这一轮发出去的更新都落地了。少问最后一句的话，刚记下的 CAS miss 会被下一行当场
+    // 销掉（我自己第一版就是这么写的——⑨ 钉的就是它）。
+    if (!scan.truncated && !scan.failed && !missed) clearMonitorRecovery(taskId);
   } catch (e) {
     // 回填失败不该让面板打不开：这是补历史，不是主路径。但要留下线索，而且**部分成功的那些
     // 也要让别的页面看得到**：`added` 由 commitFound 每成功一行就回报一次（上一轮只在它

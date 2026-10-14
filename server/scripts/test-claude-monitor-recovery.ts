@@ -128,6 +128,25 @@ async function main(): Promise<void> {
     check(again?.timeoutMs === 90_000, "①反复迁移不会把回算出来的时长改坏", String(again?.timeoutMs));
   }
 
+  // ── ①b 两样证据都在、而**存储列是个过期的占位值**：对外必须给现算的那个 ───────
+  //
+  // 这一条单独钉「现算」本身。上一版对外是「读 expires_at + 几个开关判断」，于是任何一条
+  // 忘了同步那一列的写入路径都会把占位值漏出去（实测：期限从 unknown 升级那一刻，卡片
+  // 跨度 0ms）。现在少任何一半证据就只报时长，两半都在时值由二者算出——跟那一列写成什么
+  // 无关，所以这条拿一个**故意写错的**存储列来验。
+  {
+    const f = await fixture("computed-not-column");
+    const started = "2026-10-14T12:00:00.000Z";
+    await db.insert(monitors).values(legacyRow({
+      id: "row-stale-col", taskId: f.taskId, nativeId: "stalecol", cliSessionId: f.cli,
+      sourceLifetime: "bounded", lifetimeEvidence: "receipt", startEvidence: "observed",
+      timeoutMs: 90_000, startedAt: started, expiresAt: started, // ← 占位值没被同步
+    }) as never);
+    const dto = (await listMonitors(f.taskId)).find((m) => m.nativeId === "stalecol");
+    check(spanOf(dto) === 90_000, "①b对外给的是「起点 + 时长」现算的值，不是那一列里的占位值",
+      `${spanOf(dto)}ms`);
+  }
+
   // ── ② 存量 ash 行：改成现算之后期限不能凭空消失 ─────────────────────────────
   //
   // ash 自己的哨兵起点和时长本来都确定，但升级前的行只有 expires_at 没有 timeout_ms。
@@ -176,6 +195,12 @@ async function main(): Promise<void> {
     check(dto?.timeoutMs === 90_000, "③时长由回执补上了", String(dto?.timeoutMs));
     check(dto?.startedAt === observed, "③起点仍是实时观察到的那一刻（不被宽区间的回执时刻顶掉）", String(dto?.startedAt));
     check(spanOf(dto) === 90_000, "③期限由「已有的可信起点 + 新补的时长」算出来，不是开始即到期", `${spanOf(dto)}ms`);
+    // 库里那一列也要跟着对上。它已经不是对外契约（对外现算，见 ①b），但留着一个过期的
+    // 占位值会让排查时对不上账，而且下一个读列的人就会再栽一次——所以 merge 也得把
+    // 「本行自己已有的可信起点」算进去，而不是只认这一轮扫出来的锚点。
+    const stored = (await db.select().from(monitors).where(eq(monitors.id, "row-pending90"))).at(0);
+    check(stored?.expiresAt === new Date(Date.parse(observed) + 90_000).toISOString(),
+      "③存储列同步成了真到期时刻，不留过期占位值", String(stored?.expiresAt));
   }
 
   // ── ④ 写库队列积压：起点取**事件到达那一刻**，不是落库那一刻 ────────────────
@@ -305,10 +330,91 @@ async function main(): Promise<void> {
       `${rows.length} 条：${rows.map((r) => r.nativeId).join(",")}`);
   }
 
+  // ── ⑧ 条件更新**真的没命中**（CAS miss）：不许当成已提交 ────────────────────
+  //
+  // 来源终态只发一次。读到写之间隔着 await，期间另一个 writer 把状态改成了别的——这一发
+  // 更新就落空了。上一版把落空当成「写成功了」，于是那条事实永久消失（实测 casAtRace）。
+  // 这里用底层 client 把那次交错**做成确定的**：拦到 close 发出的那条 UPDATE，先把行改成
+  // 一个不在 CAS 允许集合里的状态，再让它执行 → 必然 0 行。
+  {
+    const f = await fixture("cas-miss");
+    const trace = new ClaudeMonitorTrace(f.cli);
+    callMonitor(trace, "miss1", new Date().toISOString());
+    trace.event({ type: "system", subtype: "task_started", task_id: "miss1",
+      tool_use_id: "tu-miss1", task_type: "local_bash", session_id: f.cli });
+    await settle(150);
+    const rowId = (await db.select().from(monitors).where(eq(monitors.nativeId, "miss1"))).at(0)?.id;
+    check(!!rowId, "⑧先有一行在盯着");
+
+    const realExecute = dbClient.execute.bind(dbClient);
+    let raced = false;
+    (dbClient as any).execute = async (stmt: any) => {
+      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+      if (!raced && /update\s+"?monitors"?/i.test(sql) && /"status"\s*=\s*\?/.test(sql) && /where/i.test(sql)) {
+        raced = true;
+        // 另一个 writer 抢先把它改成了 stopped（不在 close 的 CAS 允许集合里）。
+        await realExecute({ sql: `UPDATE monitors SET status='stopped' WHERE id=?`, args: [rowId!] } as never);
+      }
+      return realExecute(stmt);
+    };
+    trace.event({ type: "system", subtype: "task_notification", task_id: "miss1",
+      status: "completed", summary: "来源说它跑完了", session_id: f.cli });
+    await settle(200);
+    (dbClient as any).execute = realExecute;
+    check(raced, "⑧交错真的被做出来了");
+
+    const row = (await db.select().from(monitors).where(eq(monitors.nativeId, "miss1"))).at(0);
+    check(row?.status === "stopped", "⑧那一发更新确实没落到行上", String(row?.status));
+    const pending = monitorRecoveryOf(f.taskId);
+    check(pending?.reasons.includes("update-missed") === true,
+      "⑧落空的更新进了恢复账本，不当成已提交", JSON.stringify(pending));
+  }
+
+  // ── ⑨ 回填那一侧的 CAS miss：记了账**不许**被同一轮的「销账」当场抹掉 ──────────
+  //
+  // 销账的条件是「这一轮什么都没剩下」。只问「读到 EOF 了吗」的话，刚记下的 miss 会被
+  // 下一行当场销掉——我自己第一版就是这么写的，⑧ 走的是实时那条路，盖不住这一条。
+  {
+    const f = await fixture("merge-cas-miss");
+    write(f.file, [
+      { type: "system", subtype: "init", session_id: f.cli },
+      { type: "assistant", timestamp: "2026-10-14T01:00:05.000Z", message: { model: "m", content: [
+        { type: "tool_use", name: "Monitor", id: "tu-mm1", input: { command: "tail -F /tmp/m", description: "回填里落空", timeout_ms: 600_000 } },
+      ] } },
+      { type: "system", subtype: "task_started", task_id: "mm1", tool_use_id: "tu-mm1", task_type: "local_bash", session_id: f.cli },
+      { type: "system", subtype: "task_notification", task_id: "mm1", status: "completed", summary: "跑完了", session_id: f.cli },
+    ]);
+    // 先放一行 running 进去 → 回填走 mergeInto（更新）而不是插入。
+    await db.insert(monitors).values(legacyRow({
+      id: "row-mm1", taskId: f.taskId, nativeId: "mm1", cliSessionId: f.cli, description: "回填里落空",
+      status: "running",
+    }) as never);
+
+    const realExecute = dbClient.execute.bind(dbClient);
+    let raced = false;
+    (dbClient as any).execute = async (stmt: any) => {
+      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+      if (!raced && /update\s+"?monitors"?/i.test(sql) && /"status"\s*=\s*\?/.test(sql) && /where/i.test(sql)) {
+        raced = true;
+        await realExecute({ sql: `UPDATE monitors SET status='stopped' WHERE id=?`, args: ["row-mm1"] } as never);
+      }
+      return realExecute(stmt);
+    };
+    try {
+      await backfillClaudeMonitors(f.taskId);
+    } finally {
+      (dbClient as any).execute = realExecute;
+    }
+    check(raced, "⑨交错真的被做出来了");
+    const pending = monitorRecoveryOf(f.taskId);
+    check(pending?.reasons.includes("update-missed") === true,
+      "⑨回填里落空的更新留在账上（没被同一轮的销账抹掉）", JSON.stringify(pending));
+  }
+
   if (failures === 0) {
     console.log("✓ 内置 Monitor 的两样证据与恢复：存量回执行降级 / ash 存量行不倒退 / "
       + "已有可信起点 + 晚到时长 / 队列积压不污染起点 / 接管重放只报时长 / 终态行上照样补时长 / "
-      + "没落地的事实自动续推 均受回归保护");
+      + "没落地的事实自动续推 / 落空的条件更新不算已提交（实时与回填两侧）均受回归保护");
   }
 }
 

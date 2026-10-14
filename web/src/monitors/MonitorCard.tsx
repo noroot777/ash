@@ -31,9 +31,9 @@ function liveDeadline(monitor: TaskMonitor): string {
  * 时进位到「X 分 60 秒」——例如 119 600ms 显示成「1 分 60 秒」（第 6 轮审查不拦项）。
  */
 function formatSpan(ms: number): string {
-  if (ms % 3_600_000 === 0) return `${ms / 3_600_000} 小时`;
-  if (ms % 60_000 === 0) return `${ms / 60_000} 分钟`;
   const seconds = Math.round(ms / 1000);
+  if (seconds >= 3_600 && seconds % 3_600 === 0) return `${seconds / 3_600} 小时`;
+  if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60} 分钟`;
   if (seconds >= 60) return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
   return `${seconds} 秒`;
 }

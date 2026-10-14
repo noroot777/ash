@@ -28,6 +28,8 @@ const base: TaskMonitor = {
   exitCode: null,
   startedAt: "2026-08-25T10:00:00.000Z",
   expiresAt: "2026-08-25T12:00:00.000Z",
+  // 时长独立于起点：起点不确定时对外只有这一列（卡片改说「总共盯 X（起点不确定）」）。
+  timeoutMs: 7_200_000,
   endedAt: null,
   endedReason: null,
 };
@@ -44,9 +46,10 @@ const projected: TaskMonitor = {
 };
 
 
-function state(monitors: TaskMonitor[]): TaskMonitorsState {
+function state(monitors: TaskMonitor[], recovery: TaskMonitorsState["recovery"] = null): TaskMonitorsState {
   return {
     monitors,
+    recovery,
     stoppingIds: new Set(),
     error: null,
     ready: true,
@@ -58,6 +61,44 @@ function state(monitors: TaskMonitor[]): TaskMonitorsState {
 
 const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
   renderToStaticMarkup(<MonitorInspector monitors={state(monitors)} blockedReason={blockedReason} />);
+
+/** 面板 + 一份「还没读完」的恢复状态。 */
+const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
+  <MonitorInspector
+    monitors={state(monitors, { pending: true, reasons: ["scan-unfinished"], attempts: 2, exhausted: false })}
+    blockedReason={null}
+  />,
+);
+
+// ── 空面板有两种含义，不能说成同一句话 ──────────────────────────────────────
+//
+// 「这个任务确实没用过哨兵」和「历史还没读完，先给你看这些」要分开。混成一句时第二种会被
+// 当成第一种——而那正是整个功能起点那一幕的翻版（面板说没有，agent 说在等 Monitor 通知）。
+{
+  const empty = panel([]);
+  assert.match(empty, /这个任务上还没有哨兵/, "确实没有时就直说");
+  const pending = panelPending([]);
+  assert.doesNotMatch(pending, /这个任务上还没有哨兵/, "还没读完时不许说「没有哨兵」");
+  assert.match(pending, /历史/, "要说清是还没读完");
+  assert.match(pending, /还有历史没读完/, "而且说得出是哪一类（MONITOR_RECOVERY_LABEL）");
+  // 有卡片时同样要说：那份列表可能只是其中一部分。
+  assert.match(panelPending([projected]), /历史监听还没读完/, "有卡片时这条提示也要在");
+}
+
+// ── 时长的说法不能进位成「X 分 60 秒」 ──────────────────────────────────────
+//
+// 起点不确定时卡片改说「总共盯 X」。先拆分钟再对余数四舍五入的话，余数落在 59.5~60 秒
+// 之间就会写出「1 分 60 秒」（第 6 轮审查不拦项）。
+{
+  const spanOnly = renderToStaticMarkup(
+    <MonitorInspector
+      monitors={state([{ ...projected, expiresAt: null, timeoutMs: 119_600 }])}
+      blockedReason={null}
+    />,
+  );
+  assert.match(spanOnly, /总共盯 2 分钟（起点不确定）/, "119.6 秒说成「2 分钟」，不是「1 分 60 秒」");
+  assert.doesNotMatch(spanOnly, /60 秒/, "任何情况下都不该出现 60 秒");
+}
 
 // ── 手动表单的时长选项必须真的能兑现 ────────────────────────────────────────
 // 原来那张表把「2 小时 / 8 小时 / 24 小时」写死在前端，上限改掉之后整张失真：选「2 小时」

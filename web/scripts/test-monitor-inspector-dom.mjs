@@ -69,6 +69,11 @@ try {
       if (handler && await handler(route, path)) return;
       const list = /^\/api\/tasks\/([^/]+)\/monitors$/.exec(path);
       if (list) return route.fulfill({ json: [monitor(`m-${list[1]}`, list[1])] });
+      // 恢复状态是单独一条端点（见 server/src/monitor-routes.ts：不动列表的响应形状，
+      // 否则旧 dist 配新 server 会整格崩）。这里一律答「没有待恢复的」。
+      if (/^\/api\/tasks\/[^/]+\/monitors\/recovery$/.test(path)) {
+        return route.fulfill({ json: { pending: false, reasons: [], attempts: 0, exhausted: false } });
+      }
       const log = /^\/api\/monitors\/([^/]+)\/log$/.exec(path);
       if (log) return route.fulfill({ json: { lines: [`${"x".repeat(400)}`, "第二行"], truncated: false } });
       failures.push(`unexpected API request: ${path}`);
