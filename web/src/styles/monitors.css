@@ -9,6 +9,12 @@
 .monitor-inspector__add:hover { background: var(--raised); color: var(--ink); }
 .monitor-inspector__add[aria-expanded="true"] { border-color: color-mix(in lch, var(--accent) 45%, var(--line2)); background: color-mix(in lch, var(--accent) 10%, var(--panel)); color: var(--accent); }
 .monitor-inspector__error { margin: 0 0 9px; color: var(--red); font-size: 10.5px; line-height: 1.6; }
+/* 「还没读完」那一条：比报错轻（它不是错误，是在进行中），但要比正文显眼。 */
+.monitor-inspector__pending {
+  margin: 0 0 8px; padding: 6px 8px; border-radius: 6px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.1));
+  color: var(--muted); font-size: 10.5px; line-height: 1.6;
+}
 .monitor-inspector__empty { color: var(--faint); font-size: 10.5px; line-height: 1.7; }
 .monitor-inspector__empty > p { margin: 0 0 8px; }
 .monitor-inspector__empty > p:first-child { color: var(--muted); font-weight: 600; }

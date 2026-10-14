@@ -30,3 +30,22 @@ export function runsTiming(
   const liveSince = runs.find((r) => r.endedAt == null)?.turnStartedAt ?? null;
   return { activeMs, liveSince };
 }
+
+/**
+ * 往一张「按插入顺序淘汰」的 Map 里放一条，顺手把最老的挤掉。
+ *
+ * 给**缓冲用的**表用（没等到配对事实的孤儿事实、按任务存的扫描快照之类）：它们的键来自
+ * 来源侧，天然没有上限，而缺了淘汰就是一条长期运行的内存泄漏。JS 的 Map 保持插入顺序，
+ * 所以 `keys().next()` 就是最老的那条。
+ *
+ * 想让「用过的」活得久一点就先 `delete` 再 `set`（Map 会把它挪到末尾）。
+ */
+export function putCapped<K, V>(map: Map<K, V>, key: K, value: V, cap: number): void {
+  map.delete(key); // 已有就挪到末尾：重复写入的那条显然还活跃
+  map.set(key, value);
+  while (map.size > cap) {
+    const oldest = map.keys().next();
+    if (oldest.done) break;
+    map.delete(oldest.value);
+  }
+}

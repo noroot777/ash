@@ -34,11 +34,12 @@
 // 按 `description` 之类的内容去猜一律不行：两种后台任务的 description 长得一模一样。
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
-  claudeMonitorStatus, CLAUDE_MONITOR_ENDED_REASON, monitorStatusCorrectable,
-  parseMonitorStartReceipt, type MonitorLifetime,
+  claudeMonitorStatus, CLAUDE_MONITOR_ENDED_REASON, isMonitorStartEvidence, monitorExactExpiry,
+  monitorStatusCorrectable, parseMonitorStartReceipt, startAnchorTolerance, type MonitorLifetime,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
+import { noteMonitorRecovery, type MonitorRecoveryReason } from "./claude-monitor-recovery.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -156,6 +157,29 @@ export class ClaudeMonitorTrace {
    * 回执到了才找得到该更新哪一行。
    */
   private byToolUse = new Map<string, string>();
+  /**
+   * 来源侧**自己盖的**最后一个时刻（`assistant`/`user` 事件上的 `timestamp`）。
+   *
+   * 起点那一刻只有 ash 的墙上时钟可用——`system` 事件不带 timestamp（本机 2.1.283 实测：
+   * assistant 1592 条、user 877 条全带，system/stream_event 一条不带）。但「我现在读到了
+   * 这条事件」不等于「这件事刚刚发生」：**接管回来那一刻是从文件已消费位置之后接着读的**
+   * （见 executors/detached.ts），积压的事件会一口气涌进来，那时的 `Date.now()` 比真实起点
+   * 晚几分钟甚至几小时。
+   *
+   * 所以起点跟历史重建一样按**区间**判：下界取这个来源时刻（必然 ≤ 真实启动时刻，`tool_use`
+   * 块就在那条 assistant 事件里），上界取事件到达时刻（必然 ≥ 真实启动时刻），区间宽到超过
+   * 共用容差就说「起点不明」。实时与重建的证据档位不同，承诺相同。
+   */
+  private lastEventAt: string | null = null;
+  /**
+   * 后台任务 id → 它的起点区间有多宽（毫秒）。
+   *
+   * 落库那一刻还不知道生效时长（回执在 `task_started` 之后才到），只能先按最严的那把尺子
+   * （`startAnchorTolerance(null)` = 1 秒）判。回执带着真实时长到达时再用这个宽度复核一次
+   * ——容差是 `max(1 秒, 时长 × 1%)`，只会放宽，所以这一步只做单向升级，不会把已认定的
+   * 起点降级。进程重启丢了这张表只意味着「不升级」，方向是保守的。
+   */
+  private startGap = new Map<string, number>();
   /** 串行化写库：同一个后台任务的 started/notification 可能紧挨着到。 */
   private chain: Promise<unknown> = Promise.resolve();
   private cliSessionId = "";
@@ -212,7 +236,13 @@ export class ClaudeMonitorTrace {
         await job();
       }
     };
-    this.chain = this.chain.then(once, once).catch((e) => this.warn("记账重试后仍失败（历史回填会再补）", e));
+    this.chain = this.chain.then(once, once).catch((e) => {
+      this.warn("记账重试后仍失败，已留账等自动恢复", e);
+      // **事实已经从事件流里消费掉了**（pending/byToolUse 都删了，来源侧不会再发）。原来
+      // 这里只有一句「历史回填会再补」，而历史回填本身只在用户打开面板时才跑——留账交给
+      // 恢复账本自己退避重排（第 6 轮审查的类问题之一）。
+      void this.noteRecovery("write-failed");
+    });
   }
 
   /**
@@ -225,6 +255,20 @@ export class ClaudeMonitorTrace {
     if (this.warned >= 3) return;
     this.warned += 1;
     console.warn(`[ash] 内置 Monitor 投影${what}（session=${this.cliSessionId || "未知"}）:`, detail);
+  }
+
+  /**
+   * 把「有事实没确认落地」记到这条会话所属的 ash 任务上。
+   *
+   * 要查一次会话才知道 taskId——这条路只在真失败时才走，多查一次库换一条不丢的事实。
+   */
+  private async noteRecovery(reason: MonitorRecoveryReason): Promise<void> {
+    try {
+      const found = this.cliSessionId ? await locateSession(this.cliSessionId) : null;
+      if (found) noteMonitorRecovery(found.taskId, reason);
+    } catch {
+      /* 连会话都查不到就只剩上面那条日志；别让兜底路径自己再抛一次 */
+    }
   }
 
   /** 每个 tool_use 块都喂进来；只有 `Monitor` 会被记下。 */
@@ -262,7 +306,11 @@ export class ClaudeMonitorTrace {
 
   /** 每条 stream-json 事件都喂进来。 */
   event(ev: any): void {
-    if (!ev || ev.type !== "system") return;
+    if (!ev) return;
+    // **先吸收来源时刻，再按类型过滤**：带 timestamp 的是 assistant/user，而我们要认的
+    // task_started 是 system（不带）。过滤写在前面的话这条下界永远取不到（见 lastEventAt）。
+    if (typeof ev.timestamp === "string" && ev.timestamp) this.lastEventAt = ev.timestamp;
+    if (ev.type !== "system") return;
     if (ev.session_id && !this.cliSessionId) this.cliSessionId = str(ev.session_id);
     // 每条 system 事件都试一次：构造时没给身份的要在这里补上，上一次认领失败的要在这里重试
     // （`startReclaim` 自身幂等，已完成或正在跑时直接返回）。
@@ -277,9 +325,14 @@ export class ClaudeMonitorTrace {
         if (!call || !taskId) return;
         this.pending.delete(str(ev.tool_use_id));
         if (str(ev.tool_use_id)) this.byToolUse.set(str(ev.tool_use_id), taskId);
+        // **起点在这一行取，不在 open() 里取。** open 排在写库队列上，前面积压多久它就
+        // 晚多久——实测注入一个 2.2 秒的前序 job，起点就偏 2205ms，而那一行照旧标着
+        // 「亲眼看着它开始的」（第 6 轮审查 liveQueueDelay）。事件到达这一刻才是上界。
+        const seen = this.startAnchor();
         // 同步认领，再排队落库：准入与落库之间隔着一个 await，中间到达的终态必须认得出来。
         this.claimed.add(taskId);
-        this.queue(() => this.open(taskId, call));
+        this.startGap.set(taskId, seen.widthMs);
+        this.queue(() => this.open(taskId, call, seen));
         return;
       }
       case "task_notification": {
@@ -302,6 +355,22 @@ export class ClaudeMonitorTrace {
       }
       default:
     }
+  }
+
+  /**
+   * 事件到达这一刻能给出的起点锚点：时刻本体 + 这个区间有多宽。
+   *
+   * 宽度 = 到达时刻 − 来源盖的上一个时刻。实时流里它是「CLI 吐出那条 assistant 消息」到
+   * 「ash 的 readline 回调跑起来」之间那点开销（实测同量级的 tool_use→回执区间是
+   * 22~59ms）；接管积压重放时它等于那批事件积压了多久，于是自动落到容差之外。
+   */
+  private startAnchor(): { at: string; widthMs: number } {
+    const at = now();
+    const low = this.lastEventAt ? Date.parse(this.lastEventAt) : NaN;
+    // 来源一个时刻都没盖过（理论上不会：tool_use 块就在 assistant 事件里）→ 宽度未知，
+    // 当成不可信。宁可只报时长，不编时刻。
+    const widthMs = Number.isFinite(low) ? Math.abs(Date.parse(at) - low) : Number.POSITIVE_INFINITY;
+    return { at, widthMs };
   }
 
   /**
@@ -364,7 +433,9 @@ export class ClaudeMonitorTrace {
     return row?.id ?? null;
   }
 
-  private async open(nativeId: string, call: MonitorCall): Promise<void> {
+  private async open(
+    nativeId: string, call: MonitorCall, seen: { at: string; widthMs: number },
+  ): Promise<void> {
     const found = await locateSession(this.cliSessionId);
     if (!found) {
       // 认不出会话就落不了库。安静跳过是对的（不能因此拖垮事件流），但要留下线索——
@@ -383,7 +454,10 @@ export class ClaudeMonitorTrace {
       return;
     }
     const rowId = id();
-    const startedAt = now();
+    const startedAt = seen.at;
+    // 落库这一刻还不知道生效时长（回执后到），先按最严的那把尺子判；回执到了用
+    // `startGap` 里记的宽度复核一次（容差只会放宽，所以是单向升级）。
+    const startEvidence = seen.widthMs <= startAnchorTolerance(null) ? "observed" : null;
     await db.insert(monitors).values({
       id: rowId,
       taskId: found.taskId,
@@ -411,10 +485,9 @@ export class ClaudeMonitorTrace {
       cliSessionId: this.cliSessionId || null,
       sourceLifetime: "unknown",
       lifetimeEvidence: null, // 回执还没到；拿到了由 applyReceipt 写成 'receipt'
-      // **起点在这里是确定的**：ash 正看着 `task_started` 到达并立刻落库，不确定度只有流
-      // 传输那几毫秒。历史重建没有这个条件（system 事件不带 timestamp），所以那边只能用
-      // 区间推——两边的证据档位不同，但承诺相同：只有起点有依据才给精确到期时刻。
-      startEvidence: "observed",
+      // **不是无条件「亲眼所见」**：实时也要先问一句「这条事件是刚发生的，还是接管回来
+      // 积压重放的」。判据与历史重建同一把尺子（`startAnchorTolerance`），见 `lastEventAt`。
+      startEvidence,
       timeoutMs: null, // 回执才说得出时长
       // 起它的就是当下这一代 agent 进程。抄在行上，之后判死活才不会把下一回合的新进程
       // 当成它（第 4 轮审查实测 reusedSession）。
@@ -432,7 +505,19 @@ export class ClaudeMonitorTrace {
     const rowId = await this.locateRow(found.taskId, nativeId);
     if (!rowId) return;
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
-    if (!row || !monitorStatusCorrectable(row.status)) return;
+    // **不看状态**：回执带来的是时长和起点，跟这一行此刻是不是终态没有关系。原来这里有一道
+    // `monitorStatusCorrectable` 闸、WHERE 里又按状态过滤了一遍，于是「完成抢先于回执到达」
+    // 的那种（命令瞬间结束）时长永远补不上，卡片永远写着「期限未知」——跟历史回填那一侧
+    // 的 casAtRace 是同一个类问题，只是入口在实时这一边（第 6 轮审查）。
+    if (!row) return;
+    // **起点复核**：open 那一刻按最严的 1 秒判，现在知道真实时长了，容差是
+    // `max(1 秒, 时长 × 1%)`——只会放宽，所以这里只做「不可信 → 可信」的单向升级。
+    // 宽度表在内存里，丢了只意味着不升级（保守方向）。
+    const gap = this.startGap.get(nativeId);
+    const startEvidence = isMonitorStartEvidence(row.startEvidence)
+      ? row.startEvidence
+      : gap !== undefined && gap <= startAnchorTolerance(ms) ? "observed" : null;
+    this.startGap.delete(nativeId);
     await db.update(monitors).set({
       sourceLifetime: lifetime,
       // 期限是**回执**说的，这才是它可信的理由。旧版本推算出来的那些行这一列是 NULL，
@@ -440,16 +525,16 @@ export class ClaudeMonitorTrace {
       lifetimeEvidence: "receipt",
       // 时长单独记一列：起点不确定的那些行（历史重建）靠它显示「时长 X」。
       timeoutMs: ms,
-      // **起点不动**：这一行的起点是 open 那一刻实测的（`observed`），比回执时刻更接近真实
-      // 启动时刻。回执只负责时长——它的 timestamp 要等 PostToolUse hooks 跑完才生成。
-
-      // 有限期才改到期时刻；持续监听没有到期时刻可言，那一列留着当占位。
-      // （persistent 的回执本来就不带 ms，所以 `lifetime` 这一半此刻是冗余的——留着是因为
-      //  它表达的才是判据本身；真正把假期限挡在对外契约之外的是 toTaskMonitor 那一道。）
-      ...(lifetime === "bounded" && ms !== null
-        ? { expiresAt: new Date(Date.parse(row.startedAt) + ms).toISOString() }
-        : {}),
-    }).where(and(eq(monitors.id, rowId), inArray(monitors.status, ["running", "lost"])));
+      // **起点时刻不动**（它是 open 那一刻观察到的，比回执时刻更接近真实启动时刻——回执的
+      // timestamp 要等 PostToolUse hooks 跑完才生成），只有「算不算证据」这一列可能升级。
+      startEvidence,
+      // 到期列由「起点 + 时长」现算，算不出来就明确落回占位值。上一版只补时长、把占位值
+      // 留在那儿，于是期限从 unknown 升级那一刻卡片画出「开始即到期」（实测跨度 0ms，本该
+      // 90 秒；第 6 轮审查 pending-receipt）。对外那一道同样现算，见 toTaskMonitor。
+      expiresAt: monitorExactExpiry({
+        sourceLifetime: lifetime, startEvidence, startedAt: row.startedAt, timeoutMs: ms,
+      }) ?? row.startedAt,
+    }).where(eq(monitors.id, rowId));
     bus.publish({ type: "task.monitors", taskId: row.taskId });
   }
 
@@ -470,11 +555,16 @@ export class ClaudeMonitorTrace {
     // **条件更新**：WHERE 里再查一次旧状态，不是只按 id 写。读和写之间隔着 await，期间另一个
     // writer（回填的 merge / 死活裁决）可能已经落了一个来源终态；只按 id 写会把它覆盖掉。
     // 对称的 revive/bury 一开始就在 SQL 里带了这个条件，这两处之前漏了（第 5 轮审查指出）。
-    await db.update(monitors).set({
+    const result = await db.update(monitors).set({
       status,
       endedAt: now(),
       endedReason: summary || CLAUDE_MONITOR_ENDED_REASON[status as keyof typeof CLAUDE_MONITOR_ENDED_REASON] || null,
     }).where(and(eq(monitors.id, rowId), inArray(monitors.status, ["running", "lost"])));
+    // 条件更新 0 行 = 这条来源终态**没有**落地（期间别的 writer 改了状态）。来源侧不会重发，
+    // 所以要留账让回填那条路重读一次并重新裁决，不能就这么算了（第 6 轮审查的类问题）。
+    if (Number((result as { rowsAffected?: number } | null)?.rowsAffected ?? 0) === 0) {
+      noteMonitorRecovery(found.taskId, "update-missed");
+    }
     bus.publish({ type: "task.monitors", taskId: row.taskId });
   }
 

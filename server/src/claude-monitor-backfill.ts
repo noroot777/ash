@@ -16,25 +16,41 @@
 //
 //   来源说过的终态  >  ash 按来源死活的推断（running / lost）>  没有结局
 //
+// ③ **没确认落地的事实留账**（`claude-monitor-recovery.ts`）。扫描没读到 EOF、暂态写失败、
+//    条件更新 0 行，三条都不算「这一轮读完了」——记进待恢复账本并自动退避重排，而不是打一行
+//    日志等用户再开一次面板（第 6 轮审查：三条触发路径，同一个坑）。
+//
 // 「没读到某条事实」不等于「那条事实不成立」：没读到终态要先问来源还活不活，而不是直接判死。
 // 来源已经说过的终态不被重放改写（否则显示跟着扫描次数变），ash 自己的推断必须对纠正开放
 // （判据 `monitorStatusCorrectable`，与实时投影共用）。
 import { and, eq, inArray } from "drizzle-orm";
 import {
-  monitorStatusCorrectable, startAnchorTolerance, type MonitorStartEvidence,
+  isMonitorStartEvidence, monitorExactExpiry, monitorStatusCorrectable, startAnchorTolerance,
+  type MonitorStartEvidence,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
+import {
+  clearMonitorRecovery, noteMonitorRecovery, resetMonitorRecoveryBudget,
+} from "./claude-monitor-recovery.js";
 import { foundOf, newTaskScan, scanSession, type Found, type TaskScan } from "./claude-monitor-scan.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
-import { id, now } from "./util.js";
+import { id, now, putCapped } from "./util.js";
 
 /**
  * 每个任务的扫描快照。**不是「扫过就永不再扫」**——它记着每个文件读到第几字节，下次只读
  * 新增那一段（见 claude-monitor-scan.ts 的文件头）。
  */
 const snapshots = new Map<string, TaskScan>();
+/**
+ * 同时留多少个任务的扫描快照。超了挤掉**最久没用过的**那个（被挤掉只意味着下次从头重读，
+ * 不丢正确性）。
+ *
+ * 为什么要有上限：这张表按 taskId 存，而 taskId 是无界的——每打开一个历史任务就多一份
+ * 游标表，进程活着就一直留着（第 6 轮审查不拦项）。32 远大于一次会话里会翻看的任务数。
+ */
+const SNAPSHOT_CAP = 32;
 
 /** 正在跑的那次 → 它的 Promise。并发调用共享同一次工作，不重复读盘。 */
 const inflight = new Map<string, Promise<number>>();
@@ -48,6 +64,9 @@ export function backfillClaudeMonitors(taskId: string): Promise<number> {
   if (dbClient.closed) return Promise.resolve(0);
   const running = inflight.get(taskId);
   if (running) return running;
+  // 退避推到上限之后账是留着的、定时器是停的。真实请求（用户打开面板、SSE 重读）进来时
+  // 把预算还给它，否则那条账永远卡在「已停、且没人会再推」。
+  resetMonitorRecoveryBudget(taskId);
   const job = runBackfill(taskId).finally(() => inflight.delete(taskId));
   inflight.set(taskId, job);
   return job;
@@ -64,7 +83,7 @@ async function runBackfill(taskId: string): Promise<number> {
     // 快照跨调用复用，但**会话清单每次重查**：任务后来新增了会话，上一次的快照里没有它
     // （实测 noSessionThenNewSession：首次回填时任务还没有会话，之后新增 → 永远读不到）。
     const scan = snapshots.get(taskId) ?? newTaskScan();
-    snapshots.set(taskId, scan);
+    putCapped(snapshots, taskId, scan, SNAPSHOT_CAP); // 用过的挪到末尾 = 最久没用的先挤掉
     scan.truncated = false;
     scan.failed = false;
     scan.advanced = false;
@@ -79,17 +98,31 @@ async function runBackfill(taskId: string): Promise<number> {
         + `（${[...scan.foreign].join(", ")}），已按文件归属采用`);
     }
     if (scan.truncated || scan.failed) {
+      // **不是「下次打开面板继续」**：记进待恢复账本，由它退避重排自己往下推。游标已经
+      // 记下，所以每一次重推都真的往后读一段；`scan.advanced` 作为「有进展」喂给退避预算。
+      if (scan.truncated) noteMonitorRecovery(taskId, "scan-unfinished", scan.advanced);
+      if (scan.failed) noteMonitorRecovery(taskId, "scan-failed", scan.advanced);
       console.warn(`[ash] 内置 Monitor 历史回填这一轮没读完（task=${taskId}，`
         + `${scan.truncated ? "有文件读到了单次上限" : ""}${scan.truncated && scan.failed ? "，" : ""}`
-        + `${scan.failed ? "有文件读失败" : ""}），游标已记下，下次打开面板继续往后读`);
+        + `${scan.failed ? "有文件读失败" : ""}），游标已记下，已排自动续读`);
     }
 
     // **提交条件不只是「有新字节」。** 新回合会先创建一个空的 run 文件、过一会儿才输出，那一刻
     // 没有任何新增字节，但「上一代已经结束」这件事已经成立，必须落库（否则死活裁决退回「这条
     // 会话现在有活进程」，旧监听一直显示正在盯着——第 5 轮审查实测 emptyNewRun）。
     if (scan.advanced || scan.generationChanged) {
-      added = await commitFound(taskId, foundOf(scan), (n) => { added = n; });
+      const outcome = await commitFound(taskId, foundOf(scan), (n) => { added = n; });
+      added = outcome.added;
+      if (outcome.missed) {
+        // 条件更新 0 行 = 那次更新**没有**落地（读到写之间别的 writer 改了状态）。上一版
+        // 把它当成已提交，于是那条事实永久消失（实测 casAtRace）。记账 + 把快照丢掉：
+        // 下一轮从头重读，重新观察到同一条事实再裁决一次（那时 prior 是对方写的新状态，
+        // 多数情况下判定为「来源终态已成定局，不该改」→ 干净收场）。
+        snapshots.delete(taskId);
+        noteMonitorRecovery(taskId, "update-missed", added > 0);
+      }
     }
+    if (!scan.truncated && !scan.failed) clearMonitorRecovery(taskId);
   } catch (e) {
     // 回填失败不该让面板打不开：这是补历史，不是主路径。但要留下线索，而且**部分成功的那些
     // 也要让别的页面看得到**：`added` 由 commitFound 每成功一行就回报一次（上一轮只在它
@@ -97,7 +130,10 @@ async function runBackfill(taskId: string): Promise<number> {
     // ——第 5 轮审查不拦项 1）。
     console.warn(`[ash] 内置 Monitor 历史回填失败（task=${taskId}）:`, e);
     if (added) bus.publish({ type: "task.monitors", taskId });
-    snapshots.delete(taskId); // 失败的快照不留，下次从头建
+    snapshots.delete(taskId); // 失败的快照不留，下次从头建（游标归零，事实能被重新读到）
+    // 事实已经从文件里读出来过、却没确认落库。留账 + 自动重排：这一条上一版只有一句
+    // 「历史回填会再补」，而历史回填本身只在用户打开面板时才跑。
+    noteMonitorRecovery(taskId, "write-failed", added > 0);
     return added;
   }
 
@@ -137,23 +173,32 @@ const isUniqueConflict = (e: unknown): boolean =>
 
 type PriorRow = {
   id: string; nativeId: string | null; status: string;
-  cliSessionId: string | null; sourceLifetime: string; startedAt: string;
+  cliSessionId: string | null; sourceLifetime: string; startedAt: string; expiresAt: string;
   lifetimeEvidence: string | null; startEvidence: string | null; sourcePid: number | null;
+  timeoutMs: number | null;
 };
+
+/** `commitFound` 的结果：补了几行，以及**有没有没确认落地的更新**（要进恢复路径）。 */
+type CommitOutcome = { added: number; missed: boolean };
+
+/** 条件更新到底改没改到行。drizzle 把底层 client 的 `rowsAffected` 原样带出来。 */
+const rowsAffectedOf = (result: unknown): number =>
+  Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0);
 
 /** 把扫出来的结果落库：缺的插进去，已有的按事实优先级补齐/纠正。 */
 async function commitFound(
   taskId: string, items: Found[],
   /** 每成功一行就回报一次。写失败往外抛时，调用方靠它知道已经成功了几条。 */
   report: (added: number) => void,
-): Promise<number> {
-  if (!items.length) return 0;
+): Promise<CommitOutcome> {
+  if (!items.length) return { added: 0, missed: false };
   const existing = new Map((await db
     .select({
       id: monitors.id, nativeId: monitors.nativeId, status: monitors.status,
       cliSessionId: monitors.cliSessionId, sourceLifetime: monitors.sourceLifetime,
-      startedAt: monitors.startedAt, lifetimeEvidence: monitors.lifetimeEvidence,
-      startEvidence: monitors.startEvidence, sourcePid: monitors.sourcePid,
+      startedAt: monitors.startedAt, expiresAt: monitors.expiresAt,
+      lifetimeEvidence: monitors.lifetimeEvidence, startEvidence: monitors.startEvidence,
+      sourcePid: monitors.sourcePid, timeoutMs: monitors.timeoutMs,
     })
     .from(monitors)
     .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude"))))
@@ -163,6 +208,7 @@ async function commitFound(
   const probe = createLivenessProbe();
   let added = 0;
   let corrected = 0;
+  let missed = false;
 
   for (const item of items) {
     // 没读到终态有两种可能，差别正好相反：那一轮的进程早就没了（该写 lost），还是它**现在
@@ -179,7 +225,9 @@ async function commitFound(
     const prior = existing.get(item.nativeId);
 
     if (prior) {
-      if (await mergeInto(prior, item, status, endedReason)) {
+      const merged = await mergeInto(prior, item, status, endedReason);
+      if (merged.missed) missed = true;
+      if (merged.changed) {
         corrected += 1;
         // 纠正也要能通知出去：原来只在整个循环跑完之后 publish 一次，中途抛错就全丢了。
         bus.publish({ type: "task.monitors", taskId });
@@ -197,16 +245,32 @@ async function commitFound(
 
       existing.set(item.nativeId, {
         id: rowId, nativeId: item.nativeId, status, cliSessionId: item.cliSessionId,
-        sourceLifetime: item.lifetime, startedAt,
+        sourceLifetime: item.lifetime, startedAt, expiresAt: expiryColumn(item, startedAt, anchor),
         lifetimeEvidence: item.lifetime === "unknown" ? null : "receipt",
         startEvidence: anchor.evidence, sourcePid: item.staleRun ? 0 : null,
+        timeoutMs: item.expiresMs,
       });
     } catch (e) {
       if (!isUniqueConflict(e)) throw e; // 真写失败：往外抛，这一轮不算读完
     }
   }
-  return added;
+  return { added, missed };
 }
+
+/**
+ * `expires_at` 这一列该写什么。**它已经不是对外契约的一部分**——对外那个精确到期时刻由
+ * `monitorExactExpiry` 从「起点 + 时长」现算（见 shared/src/monitor.ts）。这一列是 NOT NULL
+ * 的，算不出来就回到占位值 `started_at`，顺便把升级前那些假时刻冲掉。
+ */
+const expiryColumn = (
+  item: Found, startedAt: string,
+  anchor: { startedAt: string | null; evidence: MonitorStartEvidence | null },
+): string => monitorExactExpiry({
+  sourceLifetime: item.lifetime,
+  startEvidence: anchor.evidence,
+  startedAt: anchor.startedAt ?? startedAt,
+  timeoutMs: item.expiresMs,
+}) ?? startedAt;
 
 /** 插一行历史投影。只读投影：没有 pid、没有日志文件（见 shared/monitor.ts 的两种来源）。 */
 async function insertFound(
@@ -227,11 +291,9 @@ async function insertFound(
     events: 0,
     exitCode: null,
     startedAt,
-    // 到期时刻 = 起点 + 时长，**两个都得有依据**。起点没依据时这一列存占位值，由
-    // toTaskMonitor 按 start_evidence 决定对外给不给（时长仍从 timeout_ms 吐出去）。
-    expiresAt: item.lifetime === "bounded" && item.expiresMs !== null && anchor.evidence
-      ? new Date(Date.parse(anchor.startedAt!) + item.expiresMs).toISOString()
-      : startedAt,
+    // 到期列与对外那一道**同一个算式**（`expiryColumn` → `monitorExactExpiry`）：两样证据
+    // 都在才算得出来，否则存占位值。
+    expiresAt: expiryColumn(item, startedAt, anchor),
     // 还在跑的没有结束时刻；结束了的用通知附近那条事件的时刻。都没有就留空——写 now()
     // （回填这一刻，可能是几天后）等于把读取时间冒充成来源完成时间。
     endedAt: status === "running" ? null : item.endedAt,
@@ -256,52 +318,85 @@ async function insertFound(
 /**
  * 已有行：按来源事实补齐/纠正，**不是「已有就永不更新」**。
  *
- * 四件事各自独立判断：
- * - **会话归属**：`cli_session_id` 为空的存量行补上，否则开机清扫和流收尾都认不出它。
- * - **结局**：只纠正 ash 自己推断的 `running`/`lost`；来源说过的终态不碰。
- * - **期限**：只认起手回执，且只在起点可信时落到期时刻；同时写上证据列。
- * - **起点**：拿到可信锚点就把它改对（旧行那个可能是 tool_use 或文件时刻的占位值）。
+ * ── 两组更新，判据完全不同（第 6 轮审查的类问题）────────────────────────────
+ *
+ * **① 独立元信息**（会话归属、代次结论、时长、起点、到期列）：跟这一行当前是什么状态**没有
+ * 关系**，无条件写。上一版把它们和状态塞进同一条带 CAS 的 UPDATE，于是「完成抢先到达」之后
+ * 时长永远补不上来——状态已经是终态，CAS 命中 0 行，整条 patch（含时长）一起丢掉，而那一行
+ * 对外永远显示「期限未知」（实测 casAtRace）。
+ *
+ * 并发安全靠的不是 CAS 而是**每一列的写入语义**：它们要么是同一条来源事实算出来的同一个值
+ * （幂等），要么是单向补齐（空 → 有）。最坏的交错是把实时投影刚写的 `observed` 起点换成同样
+ * 可信的 `receipt-window` 起点——两者都满足对外不变量，误差在共用容差之内。
+ *
+ * **② 状态**：只纠正 ash 自己推断的 `running`/`lost`，来源说过的终态不碰；**必须 CAS**
+ * （读到写之间隔着 await，期间实时投影可能已经落了真终态），而且**要看 CAS 有没有命中**
+ * ——0 行就是「这次更新没落地」，必须进恢复路径，不能当成已提交。
+ *
+ * ── 时长与起点是两件独立的事 ─────────────────────────────────────────────
+ *
+ * 旧判据把它们绑在一个 `if` 里：时长一旦「曾由回执证明过」，起点就再也不修了。于是升级前
+ * 写的那批行（时长真、起点是回执时刻、晚一分钟）永远留着那个错起点。现在分别判，各自看
+ * 各自的证据。
  */
 async function mergeInto(
   prior: PriorRow, item: Found, status: string, endedReason: string | null,
-): Promise<boolean> {
-  const patch: Record<string, unknown> = {};
-  if (!prior.cliSessionId && item.cliSessionId) patch.cliSessionId = item.cliSessionId;
+): Promise<{ changed: boolean; missed: boolean }> {
+  const meta: Record<string, unknown> = {};
+  if (!prior.cliSessionId && item.cliSessionId) meta.cliSessionId = item.cliSessionId;
   // 代次结论也要补到存量行上，否则下面的死活裁决仍会被新进程骗。
-  if (item.staleRun && prior.sourcePid === null) patch.sourcePid = 0;
-  if (item.status && prior.status !== status && monitorStatusCorrectable(prior.status)) {
-    patch.status = status;
-    patch.endedAt = item.endedAt;
-    patch.endedReason = endedReason;
-  }
-  // 期限：旧行可能写着一个由旧算法推出来的 bounded（`lifetime_evidence` 为空），那种也要被
-  // 回执纠正——不能只升级 unknown。时长和起点分别判，**与新插入路径同一套判据**（审查要求
-  // 实时与重建作相同承诺，所以这里也走 startAnchorOf，不另搞一套近似）。
-  const anchor = startAnchorOf(item);
+  if (item.staleRun && prior.sourcePid === null) meta.sourcePid = 0;
+
+  // ── 时长 ──
+  // 旧行可能写着一个由旧算法推出来的 bounded（`lifetime_evidence` 为空），那种也要被回执
+  // 纠正——不能只升级 unknown。已经被回执证明过的不再改写（同一条回执算出来也是同一个值）。
+  let lifetime = prior.sourceLifetime;
+  let timeoutMs = prior.timeoutMs;
   if (prior.lifetimeEvidence !== "receipt" && item.lifetime !== "unknown") {
     if (item.lifetime === "bounded" && item.expiresMs !== null) {
-      patch.sourceLifetime = "bounded";
-      patch.lifetimeEvidence = "receipt";
-      patch.timeoutMs = item.expiresMs;
-      // 起点有依据才落到期时刻；没依据就只记时长，卡片改说「时长 X」。
-      if (anchor.evidence) {
-        patch.startedAt = anchor.startedAt;
-        patch.expiresAt = new Date(Date.parse(anchor.startedAt!) + item.expiresMs).toISOString();
-        patch.startEvidence = anchor.evidence;
-      }
+      meta.sourceLifetime = lifetime = "bounded";
+      meta.lifetimeEvidence = "receipt";
+      meta.timeoutMs = timeoutMs = item.expiresMs;
     } else if (item.lifetime === "persistent") {
       // 持续监听不需要绝对起点——它根本没有到期时刻可言。
-      patch.sourceLifetime = "persistent";
-      patch.lifetimeEvidence = "receipt";
+      meta.sourceLifetime = lifetime = "persistent";
+      meta.lifetimeEvidence = "receipt";
     }
   }
-  if (!Object.keys(patch).length) return false;
-  // **条件更新**：只在状态还是我们读到的那个时才写。读到写之间隔着 await，期间实时投影的
-  // close 可能已经落了来源终态——只按 id 写会把它覆盖回去（第 5 轮审查指出 merge/close 两处
-  // 缺这道，而对称的 revive/bury 已经在 SQL 里带了）。
-  await db.update(monitors).set(patch)
-    .where(and(eq(monitors.id, prior.id), eq(monitors.status, prior.status)));
-  return true;
+
+  // ── 起点（与上面那一段无关）──
+  // **这一行自己已有的可信起点优先**：实时投影看着事件到达落的 `observed` 比任何事后推算
+  // 都准。只有它没有可信起点时才用这次扫描裁出来的区间锚点（判据与新插入路径同一套
+  // `startAnchorOf`，不另搞一套近似）。
+  const anchor = startAnchorOf(item);
+  let startedAt = prior.startedAt;
+  let startEvidence: string | null = prior.startEvidence;
+  if (!isMonitorStartEvidence(startEvidence) && anchor.evidence) {
+    meta.startedAt = startedAt = anchor.startedAt!;
+    meta.startEvidence = startEvidence = anchor.evidence;
+  }
+
+  // ── 到期列 ──
+  // 由上面两样**现算**。算不出来就回到占位值：期限从 unknown 升级那一刻，上一版只补时长、
+  // 把占位值留在那儿不动，于是卡片画出「开始即到期」（实测跨度 0ms，本该 90 秒）。现在
+  // 要么由可信起点算出真值，要么明确落回占位值，不存在「占位值被当成真值」的中间态。
+  const want = monitorExactExpiry({ sourceLifetime: lifetime, startEvidence, startedAt, timeoutMs })
+    ?? startedAt;
+  if (want !== prior.expiresAt) meta.expiresAt = want;
+
+  // ── 状态 ──
+  const stateChange = !!item.status && prior.status !== status && monitorStatusCorrectable(prior.status);
+  let missed = false;
+  if (Object.keys(meta).length) {
+    await db.update(monitors).set(meta).where(eq(monitors.id, prior.id));
+  }
+  if (stateChange) {
+    const result = await db.update(monitors)
+      .set({ status, endedAt: item.endedAt, endedReason })
+      .where(and(eq(monitors.id, prior.id), eq(monitors.status, prior.status)));
+    if (rowsAffectedOf(result) === 0) missed = true;
+  }
+  return { changed: Object.keys(meta).length > 0 || (stateChange && !missed), missed };
 }
 
 /**

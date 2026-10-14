@@ -488,16 +488,19 @@ async function main(): Promise<void> {
       "⑫(b) 没有任何信号时，兜底时限也能让否定结论作废", `${row2?.status}`);
   }
 
-  // ── ⑬ 终态写入必须是**条件更新**（WHERE 带旧状态），不是只按 id 写 ──────────
+  // ── ⑬ 两组更新**各用各的形状**：状态带 CAS，独立元信息不带 ──────────────────
   //
-  // 两个 writer（实时 close / 回填 merge）都是「先读状态、再写」。读和写之间隔着 await，期间
-  // 另一个 writer 可能已经落了一个来源终态——只按 id 写就会把它覆盖掉。对称的 revive/bury
-  // 一开始就在 SQL 里带了这个条件，close/merge 之前漏了（第 5 轮审查按代码推断指出）。
+  // 状态是「先读、再写」的单调更新：读写之间隔着 await，期间另一个 writer 可能已经落了来源
+  // 终态，只按 id 写会把它覆盖掉（第 5 轮审查按代码推断指出；对称的 revive/bury 一开始就带）。
+  //
+  // 但**独立元信息（时长、起点、会话归属、代次）跟状态无关，绝不能跟着状态一起 CAS**。上一版
+  // 把它们塞进同一条带 CAS 的 UPDATE，于是「完成抢先于回执到达」之后 CAS 命中 0 行，时长也
+  // 一起被丢掉，那一行永远显示「期限未知」（第 6 轮审查 casAtRace 实测）。
   //
   // **这里断言的是生成的 SQL 形状，不是并发行为**：同一个 Trace 的写操作全都串行在一条 queue
-  // 上，跨 writer 的覆盖需要真正的时序竞争，点注入（把 WHERE 改回只按 id）在当前测试里不会
-  // 变红。所以这条测的是「那个条件还在不在」，防止它被改回去；真并发下的正确性靠这个条件
-  // 本身成立，没有自然复现的回归。
+  // 上，跨 writer 的覆盖需要真正的时序竞争，点注入在当前测试里不会变红。所以这条测的是「两
+  // 种形状各自还在不在」，防止任何一边被改回去；真并发下的正确性靠条件本身成立。
+  // 「CAS 没命中要进恢复账本」那一条由 ⑭ 用真实竞争覆盖。
   {
     const f = await fixture("conditional-update", live.pid, live.startedAt);
     write(f.file(), [
@@ -537,9 +540,19 @@ async function main(): Promise<void> {
     check((await listMonitors(f.taskId)).at(0)?.status === "exited", "⑬这一轮确实走到了更新");
     const monitorUpdates = seen.filter((sql) => /update\s+"?monitors"?/i.test(sql));
     check(monitorUpdates.length > 0, "⑬捕获到了对 monitors 的 UPDATE", `${seen.length} 条`);
-    check(monitorUpdates.every((sql) => /"status"/.test(sql.split("where")[1] ?? "")),
-      "⑬每条 UPDATE 的 WHERE 里都带着旧状态条件，不是只按 id 写",
-      monitorUpdates.map((s) => (s.split("where")[1] ?? "").trim().slice(0, 90)).join(" | "));
+    const whereOf = (sql: string) => (sql.split(/\bwhere\b/i)[1] ?? "").trim();
+    // 改状态的那一条（SET 里有 status）必须带 CAS。
+    const stateUpdates = monitorUpdates.filter((sql) => /"status"\s*=/.test(sql.split(/\bwhere\b/i)[0] ?? ""));
+    check(stateUpdates.length > 0, "⑬这一轮里有改状态的 UPDATE", `${monitorUpdates.length} 条`);
+    check(stateUpdates.every((sql) => /"status"/.test(whereOf(sql))),
+      "⑬改状态的 UPDATE 在 WHERE 里带着旧状态条件，不是只按 id 写",
+      stateUpdates.map((s) => whereOf(s).slice(0, 90)).join(" | "));
+    // 只补元信息的那一条（SET 里没有 status）必须**不**带状态条件——否则终态行上时长补不进去。
+    const metaUpdates = monitorUpdates.filter((sql) => !/"status"\s*=/.test(sql.split(/\bwhere\b/i)[0] ?? ""));
+    check(metaUpdates.length > 0, "⑬这一轮里有只补元信息的 UPDATE（时长/起点/归属）", `${monitorUpdates.length} 条`);
+    check(metaUpdates.every((sql) => !/"status"/.test(whereOf(sql))),
+      "⑬补元信息的 UPDATE 不受状态条件约束（终态行上也要补得进去）",
+      metaUpdates.map((s) => whereOf(s).slice(0, 90)).join(" | "));
   }
 
   live.kill();

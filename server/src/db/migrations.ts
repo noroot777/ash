@@ -423,6 +423,49 @@ async function relaxUnfoundedClaudeMonitorLifetimes(client: Client): Promise<voi
   }
 }
 
+/**
+ * 存量 `bounded` 行回算 `timeout_ms`（**时长**），起点证据一律不动。
+ *
+ * 为什么非做不可：对外那个精确到期时刻改成由 `started_at + timeout_ms` 现算了（见
+ * `shared/src/monitor.ts` 的 `monitorExactExpiry`），而升级前的行只有 `expires_at` 没有
+ * `timeout_ms`。不补的话两类行会一起出事：
+ *
+ * - **ash 自己的哨兵**：起点和时长本来都确定，却因为少了时长列而不再显示期限（纯倒退）。
+ * - **claude 投影里时长曾被回执证明过的行**：旧算法拿**回执时刻**当起点，实测比真实起点晚
+ *   一分钟（第 6 轮审查 legacyReceipt：显示误差 60 秒），而旧判据凭「时长可信」就把这个
+ *   时刻放出去了。回算时长、**`start_evidence` 留空**，于是它降级成「总共盯 90 秒（起点
+ *   不确定）」——时长是真的，起点不编。
+ *
+ * 回算是**精确**的：那一列当初就是 `起点 + 时长` 写进去的，减回来就是时长本身。
+ *
+ * 幂等：`timeout_ms IS NULL` 是谓词，补完就再也匹配不上。**也不会反复降级正确数据**
+ * ——实时投影写的行要么 `source_lifetime='unknown'`（期限未知，不在范围内），要么时长列
+ * 已经有值（回执落过），两种都被谓词排除（`runDataMigrations` 没有版本表，每条迁移都得
+ * 自己对「每次启动都跑一遍」成立，教训见第 3 轮审查）。
+ */
+async function backfillMonitorTimeoutFromExpiry(client: Client): Promise<void> {
+  try {
+    // 用 SQL 选、用 JS 算：ISO-8601 带毫秒和 Z，julianday 的解析与浮点精度都得另外论证，
+    // 而这张表的行数本来就只有几十上百。字符串比较对同格式同时区的 ISO 串就是时间序。
+    const rows = await client.execute(
+      `SELECT id, started_at, expires_at FROM monitors
+       WHERE timeout_ms IS NULL AND source_lifetime='bounded' AND expires_at > started_at`,
+    );
+    for (const row of rows.rows) {
+      const ms = Date.parse(String(row.expires_at)) - Date.parse(String(row.started_at));
+      if (!Number.isFinite(ms) || ms <= 0) continue; // 占位值/脏数据：宁可不显示期限
+      await client.execute({
+        sql: `UPDATE monitors SET timeout_ms=:ms WHERE id=:id AND timeout_ms IS NULL`,
+        args: { ms, id: String(row.id) },
+      });
+    }
+  } catch (e) {
+    // 只吞「列/表还不存在」（新库在 DDL 之前跑到这里），真失败往外抛——理由同
+    // relaxUnfoundedClaudeMonitorLifetimes。
+    if (!/no such column|no such table/i.test((e as Error | null)?.message ?? "")) throw e;
+  }
+}
+
 export async function runDataMigrations(client: Client): Promise<void> {
   await widenWorkflowBuiltinIndex(client);
   await relaxDebateRoundIndex(client);
@@ -439,6 +482,9 @@ export async function runDataMigrations(client: Client): Promise<void> {
   }
   await reclaimOrphanOwnerGroups(client);
   await relaxUnfoundedClaudeMonitorLifetimes(client);
+  // 必须排在 relax 之后：那一步先把「时长没有依据」的行降成 unknown，这一步才只给真正
+  // 可信的时长回算列值。
+  await backfillMonitorTimeoutFromExpiry(client);
   // 事实没迁走的那几列留到下次启动:它们各自是唯一还认得出旧状态的证据。
   const keepColumns = new Set<string>();
   if (!mergeStatesMigrated) for (const column of MERGE_STATE_COLUMNS) keepColumns.add(column);

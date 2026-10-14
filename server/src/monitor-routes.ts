@@ -7,6 +7,7 @@ import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { getMonitor, listMonitors, readMonitorTail, startMonitor, stopMonitorChecked } from "./monitors.js";
 import { backfillClaudeMonitors } from "./claude-monitor-backfill.js";
+import { monitorRecoveryOf } from "./claude-monitor-recovery.js";
 
 export function mountMonitorRoutes(api: Hono): void {
   api.get("/tasks/:id/monitors", async (c) => {
@@ -17,6 +18,18 @@ export function mountMonitorRoutes(api: Hono): void {
     await backfillClaudeMonitors(taskId);
     return c.json(await listMonitors(taskId));
   });
+
+  /**
+   * 「这个任务还有没读完/没落地的监听事实吗」。
+   *
+   * **故意是单独一条**而不是并进上面那个列表：列表的响应形状是一个数组，改成对象会让**旧
+   * 的 web/dist 配新 server** 那一刻整格面板崩掉（live 读的是主仓 dist，和 server 的重启
+   * 节奏本来就不同步）。单独一条的话旧前端根本不会去问，新前端问不到就当「没有」。
+   */
+  api.get("/tasks/:id/monitors/recovery", (c) => c.json(
+    monitorRecoveryOf(c.req.param("id"))
+      ?? { pending: false, reasons: [], attempts: 0, exhausted: false },
+  ));
 
   api.post("/tasks/:id/monitors", async (c) => {
     const taskId = c.req.param("id");

@@ -4,7 +4,7 @@
 // server 重启都带不走它），代价就是「有个进程在后台跑着」这件事再没有别的地方看得见。
 // 只在 agent 的对话里说一句「已起哨兵」不算数——刷新页面后就什么都不剩了。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TaskMonitor } from "@ash/shared/monitor";
+import type { MonitorRecovery, TaskMonitor } from "@ash/shared/monitor";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 
@@ -34,6 +34,14 @@ export type TaskMonitorsState = ReturnType<typeof useTaskMonitors>;
 
 export function useTaskMonitors(taskId: string) {
   const [monitors, setMonitors] = useState<TaskMonitor[]>([]);
+  /**
+   * 「这份列表读完了没有」。
+   *
+   * 面板为空有两种**完全不同**的含义：这个任务确实没用过哨兵，和历史还没读完（扫描到了
+   * 单次字节上限、会话文件读失败、有记录没落库）。混成同一句「这个任务上还没有哨兵」时，
+   * 第二种会被当成第一种——而那正是整个功能起点那一幕的翻版（第 6 轮审查要求至少区分开）。
+   */
+  const [recovery, setRecovery] = useState<MonitorRecovery | null>(null);
   const [stoppingIds, setStoppingIds] = useState<ReadonlySet<string>>(() => new Set());
   /**
    * 报错连同**它是谁的、从哪来的**一起存。
@@ -88,9 +96,15 @@ export function useTaskMonitors(taskId: string) {
     const seq = ++stamp.current.seq;
     const mine = () => stamp.current.gen === gen && stamp.current.seq === seq;
     try {
-      const next = await api.taskMonitors(taskId);
+      // 两条一起问。恢复状态单独一条端点（理由见 monitor-routes.ts）；问不到就当「没有」
+      // ——新前端配旧 server 时那条还不存在，不该因此把整份列表也判成读失败。
+      const [next, pending] = await Promise.all([
+        api.taskMonitors(taskId),
+        api.monitorRecovery(taskId).catch((): null => null),
+      ]);
       if (!mine()) return;
       setMonitors(next);
+      setRecovery(pending?.pending ? pending : null);
       // 只收走自己那条。用户动作的回执不归它管——抹掉就等于那句话只闪了一下。
       setFailure((current) => (current?.kind === "list" ? null : current));
       setLoadedTaskId(taskId);
@@ -107,6 +121,7 @@ export function useTaskMonitors(taskId: string) {
     // 换任务：在途的那些请求当场作废，它们回来时已经不是「这个任务的列表」了。
     stamp.current = { gen: stamp.current.gen + 1, seq: 0, taskId };
     setMonitors([]);
+    setRecovery(null);
     setFailure(null);
     setStoppingIds(new Set());
     void reload();
@@ -170,6 +185,8 @@ export function useTaskMonitors(taskId: string) {
   const ready = loadedTaskId === taskId;
   return {
     monitors: ready ? monitors : [],
+    /** 还有没读完/没落地的事实（归属判据同列表：不是当前任务的一概当「还没读到」）。 */
+    recovery: ready ? recovery : null,
     stoppingIds,
     error: failure?.taskId === taskId ? failure.message : null,
     ready,

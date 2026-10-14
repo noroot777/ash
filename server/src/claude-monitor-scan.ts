@@ -26,10 +26,22 @@ import { open as openFile, readdir, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { claudeMonitorStatus, parseMonitorStartReceipt, type MonitorLifetime } from "@ash/shared/monitor";
 import { monitorStr as str, parseMonitorInput, type MonitorCall } from "./claude-monitors.js";
+import { putCapped } from "./util.js";
 
 /** 单次调用的读取上限。超了这一轮就停在这儿，游标记着，下次接着读。 */
 const MAX_SCAN_BYTES = 128 * 1024 * 1024;
 const CHUNK = 1 << 20;
+/**
+ * 孤儿事实（还配不上 Monitor 的回执/终态）各自最多缓冲这么多条，超了挤掉最老的。
+ *
+ * 为什么要有上限：缓冲的键来自来源侧，而**通知这一类不做 Monitor 过滤**（过滤发生在回溯
+ * 应用时），所以普通后台 Bash 的终态也会进来——实测一个任务 76 条 task_started 里 64 条是
+ * 它们。一条长会话跑下去没有任何上限，这张表就是一条慢速内存泄漏（第 6 轮审查不拦项）。
+ *
+ * 512 的依据：这些缓冲只用来跨「同一次扫描里的读取顺序差异」，实测同一轮里等着配对的最多
+ * 几十条。挤掉一条的代价是那个 Monitor 退回按来源死活推断状态，不是错误显示。
+ */
+const ORPHAN_CAP = 512;
 
 export type Found = {
   nativeId: string;
@@ -329,7 +341,7 @@ function consume(
         // 还不知道这条回执属于谁（它的 task_started 在某个还没读完的前文件里）。
         // **缓冲，不丢。** 等那条 Monitor 被读出来时回溯应用（见 orphanReceipts）。
         if (toolUseId && /Monitor started/i.test(raw)) {
-          session.orphanReceipts.set(toolUseId, { raw, at });
+          putCapped(session.orphanReceipts, toolUseId, { raw, at }, ORPHAN_CAP);
         }
         continue;
       }
@@ -373,9 +385,9 @@ function consume(
       // 同理：这条终态的 Monitor 还没被读出来。缓冲住，别当成「跟我们无关的后台任务」。
       // 注意这里**不**过滤是不是 Monitor 起的——过滤发生在回溯应用时（只有被认出来的
       // Monitor 才会去取它的缓冲），所以普通后台 Bash 的通知最多占一点内存，不会进投影。
-      session.orphanNotices.set(nativeId, {
+      putCapped(session.orphanNotices, nativeId, {
         status: claudeMonitorStatus(ev.status), summary: str(ev.summary), at: session.lastAt,
-      });
+      }, ORPHAN_CAP);
       return;
     }
     applyNotice(row, claudeMonitorStatus(ev.status), str(ev.summary), session.lastAt);

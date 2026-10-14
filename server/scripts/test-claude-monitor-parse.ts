@@ -28,6 +28,28 @@ const settle = () => new Promise((r) => setTimeout(r, 50));
 /** assistant 消息里的一个 tool_use 块。 */
 const toolUse = (name: string, input: unknown, id: string) => ({ name, input, id });
 
+/**
+ * 像 `claude-stream.ts` 那样喂一次工具调用：**先 `event()` 再 `toolUse()`**。
+ *
+ * 这个顺序不是风格问题。那条 assistant 事件上的 `timestamp` 是起点区间的**下界**（见
+ * claude-monitors.ts 的 `lastEventAt`），生产链路里每一行都先过 `event()`、之后才按块
+ * 调 `toolUse()`。真实流里 assistant/user 全带 timestamp（2026-10-14 实测 1592/877 条
+ * 无一例外），system 一条不带——夹具不带就等于在测一条生产里不存在的路。
+ *
+ * @param at 这条 assistant 事件的来源时刻。默认「刚刚」= 实时流；传一个很旧的值就是
+ *   「接管回来积压重放」那条路（见 ⑯）。
+ */
+const callMonitor = (
+  trace: InstanceType<typeof ClaudeMonitorTrace>,
+  input: Record<string, unknown>, toolUseId: string, at: string = now(),
+): void => {
+  trace.event({
+    type: "assistant", timestamp: at,
+    message: { content: [{ type: "tool_use", name: "Monitor", input, id: toolUseId }] },
+  });
+  trace.toolUse("Monitor", input, toolUseId);
+};
+
 async function main(): Promise<void> {
   const taskId = await makeTask();
   await db.insert(sessions).values({
@@ -38,10 +60,10 @@ async function main(): Promise<void> {
   const trace = new ClaudeMonitorTrace();
 
   // ① Monitor 起的 —— 应当被认领
-  trace.toolUse(...Object.values(toolUse("Monitor", {
+  callMonitor(trace, {
     command: 'until grep -qE "^(OK|FAILED)" /tmp/r4.log; do sleep 5; done; grep -E "^Ran " /tmp/r4.log',
     description: "最终全量回归结果", timeout_ms: 1_200_000,
-  }, "toolu_monitor_1")) as [string, unknown, string]);
+  }, "toolu_monitor_1");
   // ② 普通后台 Bash —— 同样是 local_bash，必须被排除
   trace.toolUse(...Object.values(toolUse("Bash", {
     command: "uv run python -m unittest discover -s tests", description: "跑全量回归", run_in_background: true,
@@ -81,7 +103,7 @@ async function main(): Promise<void> {
 
   // ④ 重放同一段：唯一索引 + 先查一次，不该重复落库
   const replay = new ClaudeMonitorTrace();
-  replay.toolUse("Monitor", { command: "until grep -q DONE /tmp/x; do sleep 5; done", description: "重放", timeout_ms: 600_000 }, "toolu_monitor_1");
+  callMonitor(replay, { command: "until grep -q DONE /tmp/x; do sleep 5; done", description: "重放", timeout_ms: 600_000 }, "toolu_monitor_1");
   replay.event({ type: "system", subtype: "task_started", task_id: "bvvsd32ii", tool_use_id: "toolu_monitor_1",
     description: "重放", task_type: "local_bash", session_id: CLI_SESSION });
   await settle();
@@ -90,7 +112,7 @@ async function main(): Promise<void> {
 
   // ⑤ agent 进程结束 → 还挂着 running 的投影落 lost
   const live = new ClaudeMonitorTrace();
-  live.toolUse("Monitor", { command: "tail -F /tmp/y", description: "还在盯着", timeout_ms: 600_000 }, "toolu_monitor_2");
+  callMonitor(live, { command: "tail -F /tmp/y", description: "还在盯着", timeout_ms: 600_000 }, "toolu_monitor_2");
   live.event({ type: "system", subtype: "task_started", task_id: "bnewlive1", tool_use_id: "toolu_monitor_2",
     description: "还在盯着", task_type: "local_bash", session_id: CLI_SESSION });
   await settle();
@@ -103,7 +125,7 @@ async function main(): Promise<void> {
 
   // ⑥ 认不出会话就安静跳过，不抛、不污染别的任务
   const orphan = new ClaudeMonitorTrace();
-  orphan.toolUse("Monitor", { command: "sleep 1", description: "孤儿", timeout_ms: 600_000 }, "toolu_monitor_3");
+  callMonitor(orphan, { command: "sleep 1", description: "孤儿", timeout_ms: 600_000 }, "toolu_monitor_3");
   orphan.event({ type: "system", subtype: "task_started", task_id: "borphan1", tool_use_id: "toolu_monitor_3",
     description: "孤儿", task_type: "local_bash", session_id: "unknown-session-id" });
   await settle();
@@ -112,7 +134,7 @@ async function main(): Promise<void> {
   // ⑦ 子智能体挂的 Monitor 同样要认（嵌套 assistant 带 parent_tool_use_id）
   const nested = new ClaudeMonitorTrace();
   nested.event({ type: "system", subtype: "init", session_id: CLI_SESSION });
-  nested.toolUse("Monitor", { command: "until grep -q SUB /tmp/s; do sleep 5; done", description: "子智能体的哨兵", timeout_ms: 600_000 }, "toolu_sub1");
+  callMonitor(nested, { command: "until grep -q SUB /tmp/s; do sleep 5; done", description: "子智能体的哨兵", timeout_ms: 600_000 }, "toolu_sub1");
   nested.event({ type: "system", subtype: "task_started", task_id: "bsubagent", tool_use_id: "toolu_sub1",
     description: "子智能体的哨兵", task_type: "local_bash", session_id: CLI_SESSION });
   await settle();
@@ -123,7 +145,7 @@ async function main(): Promise<void> {
   // ⑧ 来源报多久就记多久 —— 不能套 ash 的创建区间
   const secs = new ClaudeMonitorTrace();
   secs.event({ type: "system", subtype: "init", session_id: CLI_SESSION });
-  secs.toolUse("Monitor", { command: "sleep 1", description: "只盯 5 秒", timeout_ms: 5_000 }, "toolu_secs");
+  callMonitor(secs, { command: "sleep 1", description: "只盯 5 秒", timeout_ms: 5_000 }, "toolu_secs");
   secs.event({ type: "system", subtype: "task_started", task_id: "bsecs001", tool_use_id: "toolu_secs",
     description: "只盯 5 秒", task_type: "local_bash", session_id: CLI_SESSION });
   await settle();
@@ -197,7 +219,7 @@ async function main(): Promise<void> {
 
   // ⑬ 期限以**来源回执**为准，不是请求参数（claude 自己会钳）。
   const receipt = new ClaudeMonitorTrace(CLI_SESSION);
-  receipt.toolUse("Monitor", { command: "sleep 9999", description: "请求一小时", timeout_ms: 3_600_000 }, "toolu_rcpt");
+  callMonitor(receipt, { command: "sleep 9999", description: "请求一小时", timeout_ms: 3_600_000 }, "toolu_rcpt");
   receipt.event({ type: "system", subtype: "task_started", task_id: "brcpt001", tool_use_id: "toolu_rcpt",
     description: "请求一小时", task_type: "local_bash", session_id: CLI_SESSION });
   await settle();
@@ -214,7 +236,7 @@ async function main(): Promise<void> {
 
   // ⑭ persistent：没有到期时刻，不能编一个。
   const forever = new ClaudeMonitorTrace(CLI_SESSION);
-  forever.toolUse("Monitor", { command: "tail -F /tmp/z", description: "持续盯", timeout_ms: 600_000 }, "toolu_fv");
+  callMonitor(forever, { command: "tail -F /tmp/z", description: "持续盯", timeout_ms: 600_000 }, "toolu_fv");
   forever.event({ type: "system", subtype: "task_started", task_id: "bforever", tool_use_id: "toolu_fv",
     description: "持续盯", task_type: "local_bash", session_id: CLI_SESSION });
   await settle();
@@ -230,7 +252,7 @@ async function main(): Promise<void> {
   // 重启，所以推断错很正常——错了之后来源照常送来 completed，那时必须改回来。第 3 轮审查
   // 实测：卡片被误判成 lost 之后，真 completed 到了仍然是 lost，错误永久固化。
   const mis = new ClaudeMonitorTrace(CLI_SESSION);
-  mis.toolUse("Monitor", { command: "tail -F /tmp/mis", description: "被误判的", timeout_ms: 600_000 }, "toolu_mis");
+  callMonitor(mis, { command: "tail -F /tmp/mis", description: "被误判的", timeout_ms: 600_000 }, "toolu_mis");
   mis.event({ type: "system", subtype: "task_started", task_id: "bmis001", tool_use_id: "toolu_mis",
     description: "被误判的", task_type: "local_bash", session_id: CLI_SESSION });
   await settle();

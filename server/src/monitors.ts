@@ -25,6 +25,7 @@ import {
   monitorBlockedReason,
   normalizeMonitorTimeout,
   monitorMessageOrigin,
+  monitorExactExpiry,
   type MonitorStatus,
   type TaskMonitor,
 } from "@ash/shared/monitor";
@@ -67,20 +68,11 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
   events: r.events,
   exitCode: r.exitCode,
   startedAt: r.startedAt,
-  // 到期时刻 = 起点 + 时长，**两个都得有依据**才能吐出去。
-  //
-  // ① 期限有限（持续/未知时库里那一列是占位值，原样给出去就成了假情报——卡片会照它渲染
-  //    一句「盯到 X」，而来源侧根本没这么说）；
-  // ② 起点有依据（`start_evidence`）。历史重建里起点只是一个区间，区间宽到不能忽略时这一列
-  //    为空——那时仍然知道时长，由下面的 `timeoutMs` 吐出去，界面改说「时长 X」而不是编一个
-  //    时刻（第 5 轮审查：回执时刻会随 PostToolUse hooks 往后漂）。
-  //
-  // 存量行（两列都还没有值）按老规矩走 ①，否则升级后所有旧卡的期限会一起消失。
-  expiresAt: (r.sourceLifetime === "bounded" || !r.sourceLifetime)
-    && (r.startEvidence !== null || r.timeoutMs === null)
-    ? r.expiresAt
-    : null,
-  /** 时长独立于起点：起点不确定时这一列仍然有值。 */
+  // 到期时刻**现算，不读 `expires_at` 那一列**：判据与算式都在 `monitorExactExpiry` 里，
+  // 时长和起点各自的证据少一样就只给时长。为什么不能读列见那个函数的注释——`expires_at`
+  // 是 NOT NULL 列，期限未知时存的是占位值，而「读列 + 开关判断」漏过两类占位值。
+  expiresAt: monitorExactExpiry(r),
+  /** 时长独立于起点：起点不确定时这一列仍然有值，卡片改说「总共盯 X（起点不确定）」。 */
   timeoutMs: r.timeoutMs ?? null,
   endedAt: r.endedAt,
   endedReason: r.endedReason,
@@ -181,6 +173,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     if ("error" in spawned) return { ok: false, status: 409, error: spawned.error };
 
     const timeoutMs = normalizeMonitorTimeout(input.timeoutMs);
+    const startedAt = new Date();
     const row: Row = {
       id: monitorId,
       taskId: input.taskId,
@@ -194,8 +187,11 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       offset: 0,
       events: 0,
       exitCode: null,
-      startedAt: now(),
-      expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
+      // **同一个瞬间**算两列：分别取 Date.now() 会差 1ms，而对外那个到期时刻是
+      // `started_at + timeout_ms` 现算的（见 toTaskMonitor），差值会变成「库里写的」与
+      // 「卡片显示的」不一致。
+      startedAt: startedAt.toISOString(),
+      expiresAt: new Date(startedAt.getTime() + timeoutMs).toISOString(),
       endedAt: null,
       endedReason: null,
       ownerUserId: input.ownerUserId ?? null,

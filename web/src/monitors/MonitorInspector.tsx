@@ -5,6 +5,7 @@
 // 下的；而回复框上方那条带每多一行，输入区就矮一行。
 import { useMemo, useRef, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
+import { MONITOR_RECOVERY_LABEL } from "@ash/shared/monitor";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { MonitorCard } from "./MonitorCard.tsx";
@@ -81,10 +82,18 @@ export function MonitorInspector({
           }}
         />
       )}
+      {/* 「还没读完」要跟「确实没有」分开说：两者都是空面板，但该做的事完全不同（一个等
+          一下再看，一个根本没用过哨兵）。有卡片时也要说——那份列表可能只是其中一部分。 */}
+      {monitors.recovery?.pending && (
+        <p className="monitor-inspector__pending" role="status">
+          历史监听还没读完（{monitors.recovery.reasons.map((reason) => MONITOR_RECOVERY_LABEL[reason]).join("、")}），
+          正在自动继续{monitors.recovery.exhausted ? "；已重试多次仍未读完，重新打开这一格会再试" : ""}。
+        </p>
+      )}
       {rows.length === 0
         ? (
           <div className="monitor-inspector__empty">
-            <p>这个任务上还没有哨兵。</p>
+            <p>{monitors.recovery?.pending ? "历史还没读完，先给你看现有的（暂时一条也没有）。" : "这个任务上还没有哨兵。"}</p>
             <p>
               哨兵是一条绑在任务上的长跑命令，由 ash 自己起——不在智能体的进程树里，
               所以它的回合结束、会话结束、server 重启都带不走它。它每吐一行，就把这个任务唤醒一次。

@@ -68,6 +68,10 @@ async function main(): Promise<void> {
     { type: "system", subtype: "init", session_id: CLI_SESSION, tools: ["Monitor", "Bash"] },
     {
       type: "assistant",
+      // **真实流里每条 assistant/user 都带 timestamp**（2026-10-14 实测 1592/877 条无一
+      // 例外），而它是起点区间的下界——起点可信才给精确到期时刻（见 claude-monitors.ts
+      // 的 lastEventAt）。夹具不带就等于在测一条生产里不存在的路。
+      timestamp: new Date().toISOString(),
       message: {
         model: "claude-opus-5", content: [
           { type: "tool_use", name: "Monitor", id: "toolu_m1", input: { command: "until grep -q DONE /tmp/a; do sleep 5; done", description: "等回归结论", timeout_ms: 900_000 } },
@@ -78,7 +82,7 @@ async function main(): Promise<void> {
     { type: "system", subtype: "task_started", task_id: "bmon0001", tool_use_id: "toolu_m1", description: "等回归结论", task_type: "local_bash", session_id: CLI_SESSION },
     { type: "system", subtype: "task_started", task_id: "bbash001", tool_use_id: "toolu_b1", description: "跑测试", task_type: "local_bash", session_id: CLI_SESSION },
     // 起手回执：来源侧说出**生效**期限的地方（请求的是 15 分钟，来源给了 10 分钟）。
-    { type: "user", message: { role: "user", content: [
+    { type: "user", timestamp: new Date().toISOString(), message: { role: "user", content: [
       { type: "tool_result", tool_use_id: "toolu_m1", content: "Monitor started (task bmon0001, expires in 10m unless the source ends first)." },
     ] } },
     { type: "system", subtype: "task_notification", task_id: "bmon0001", tool_use_id: "toolu_m1", status: "completed", summary: "等回归结论", session_id: CLI_SESSION },

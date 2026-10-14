@@ -24,12 +24,18 @@ function liveDeadline(monitor: TaskMonitor): string {
   return "盯到什么时候由它自己定";
 }
 
-/** 把毫秒说成人话。只给上面那句用。 */
+/**
+ * 把毫秒说成人话。只给上面那句用。
+ *
+ * **先把总秒数取整，再拆分钟和秒**。反过来（先拆再对余数四舍五入）会在余数落在 59.5~60 秒
+ * 时进位到「X 分 60 秒」——例如 119 600ms 显示成「1 分 60 秒」（第 6 轮审查不拦项）。
+ */
 function formatSpan(ms: number): string {
   if (ms % 3_600_000 === 0) return `${ms / 3_600_000} 小时`;
   if (ms % 60_000 === 0) return `${ms / 60_000} 分钟`;
-  if (ms >= 60_000) return `${Math.floor(ms / 60_000)} 分 ${Math.round((ms % 60_000) / 1000)} 秒`;
-  return `${Math.round(ms / 1000)} 秒`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds >= 60) return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  return `${seconds} 秒`;
 }
 
 /** 展开着的那张卡每隔这么久重拉一次尾巴。只在「正在盯着」且「卡片是展开的」时才走。 */

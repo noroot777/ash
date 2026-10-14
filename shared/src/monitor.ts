@@ -153,6 +153,49 @@ export const MONITOR_START_EVIDENCE = ["observed", "receipt-window"] as const;
 export type MonitorStartEvidence = (typeof MONITOR_START_EVIDENCE)[number];
 
 /**
+ * 投影账本里「观察到了、还没确认落地」的那些事实 —— 对外契约。
+ *
+ * 这份投影的每一条事实都是**一次性**的（来源侧不会重发、游标读过就往前走），所以
+ * 「没确认落地」必须是一个能看见、能继续推进的状态，而不是一行日志。判据与自动推进在
+ * `server/src/claude-monitor-recovery.ts`，界面照 `MONITOR_RECOVERY_LABEL` 说人话。
+ *
+ * 为什么要让用户看见：面板为空有两种完全不同的含义——「这个任务确实没用过哨兵」和「还没
+ * 读完，先给你看这些」。混成同一句话时，第二种会被当成第一种（而这正是整个功能的起点
+ * 那一幕：面板说没有，agent 说在等 Monitor 通知）。
+ */
+export const MONITOR_RECOVERY_REASONS = [
+  "scan-unfinished", // 扫描没读到 EOF（单次字节上限）
+  "scan-failed",     // 会话文件读失败
+  "write-failed",    // 事实已消费，落库失败
+  "update-missed",   // 条件更新 0 行（并发改了状态）
+] as const;
+export type MonitorRecoveryReason = (typeof MONITOR_RECOVERY_REASONS)[number];
+
+export const MONITOR_RECOVERY_LABEL: Record<MonitorRecoveryReason, string> = {
+  "scan-unfinished": "还有历史没读完",
+  "scan-failed": "有会话文件读失败",
+  "write-failed": "有记录没写进库",
+  "update-missed": "有状态更新被并发改动挡下",
+};
+
+export type MonitorRecovery = {
+  /** 还有没确认落地的事实。 */
+  pending: boolean;
+  reasons: MonitorRecoveryReason[];
+  /** 已经自动重试了几次。 */
+  attempts: number;
+  /** 退避预算用完了：定时器停了，等下一次真实请求再推。 */
+  exhausted: boolean;
+};
+
+/**
+ * 这个值算不算「起点有依据」。白名单判定，不是 `!= null`——库里存着别的字符串时那是脏
+ * 数据，不是证据。实时、历史重建、对外 DTO 三处共用同一句判断。
+ */
+export const isMonitorStartEvidence = (value: unknown): value is MonitorStartEvidence =>
+  MONITOR_START_EVIDENCE.includes(value as MonitorStartEvidence);
+
+/**
  * 起点区间宽到什么程度就不能忽略。
  *
  * 规则：`max(1 秒, 期限 × 1%)`。两条都要——
@@ -163,6 +206,41 @@ export type MonitorStartEvidence = (typeof MONITOR_START_EVIDENCE)[number];
  */
 export const startAnchorTolerance = (timeoutMs: number | null): number =>
   Math.max(1_000, Math.round((timeoutMs ?? 0) * 0.01));
+
+/**
+ * 一条投影行能不能给出**精确到期时刻** —— 全系统唯一的出口。
+ *
+ * 不变量：**对外有精确到期时刻 ⇔ 生效时长和起点各有自己的可信证据，而且这个值确实是由
+ * 这两样算出来的。**
+ *
+ * 为什么必须「算」而不是「读那一列」：`expires_at` 在库里是 `NOT NULL`，所以期限还不知道
+ * 的那些行只能先存一个**占位值**（`started_at`）。只要对外这一步是「读列 + 几个开关判断」，
+ * 任何一条忘了同步的路径都会把占位值当成真到期时刻漏出去——第 6 轮审查实测到两条：
+ *
+ * - **升级前写的行**：时长由回执证明过（`lifetime_evidence='receipt'`），但起点用的是回执
+ *   时刻，比真实起点晚了整整一分钟，而旧判据凭「时长可信」就把它放出去了（误差 60 秒）。
+ * - **期限从 unknown 升级那一刻**：时长刚补上、`expires_at` 还是占位值，于是卡片上画出
+ *   「开始即到期」（实测跨度 0ms，本该是 90 秒）。
+ *
+ * 改成现算之后这两类都不可能发生：少任何一半证据就只报时长（`timeoutMs`），卡片说「总共
+ * 盯 X（起点不确定）」；两半都在时算出来的值一定自洽。占位列从此只是 ash 自己那半的
+ * 内部计时依据（`monitors.ts` 的到期定时器），再也不是对外契约的一部分。
+ */
+export function monitorExactExpiry(row: {
+  sourceLifetime: string | null;
+  startEvidence: string | null;
+  startedAt: string;
+  timeoutMs: number | null;
+}): string | null {
+  // 持续监听与未知期限本来就没有「到期时刻」可言；空串/null 是升级前的存量值，同样不算。
+  if (row.sourceLifetime !== "bounded") return null;
+  if (row.timeoutMs === null || !Number.isFinite(row.timeoutMs) || row.timeoutMs <= 0) return null;
+  // 起点证据只认白名单里那两档：库里存着别的字符串时，那不是「证据」，是脏数据。
+  if (!isMonitorStartEvidence(row.startEvidence)) return null;
+  const started = Date.parse(row.startedAt);
+  if (!Number.isFinite(started)) return null;
+  return new Date(started + row.timeoutMs).toISOString();
+}
 
 /**
  * 来源侧那个原生后台任务 id 的作用域契约 —— **解析时按会话分区，落库按任务去重**。
