@@ -390,9 +390,9 @@ export async function scanSession(
   // 前文件超 128 MiB 上限，后文件的 90 秒回执和 completed 当轮被读完并丢弃，此后三次回填都
   // 恢复不出 exited + bounded）。
   //
-  // 孤儿缓冲（`orphanReceipts`/`orphanNotices`）是第二道：同一文件内部的乱序、以及这一轮之前
-  // 已经被旧代码消费掉的情况，靠它兜住。两道都要有——顺序保证「别制造孤儿」，缓冲保证
-  // 「已经产生的孤儿不丢」。
+  // 迟到事实（`session.late`）是第二道：同一文件内部的乱序、以及这一轮之前已经被消费掉的
+  // 情况，靠它兜住。两道都要有——顺序保证「别制造迟到事实」，`late` 保证「已经产生的那些
+  // 在提交时当场裁决掉」（见文件头的检查点不变量）。
   let blocked = false;
   for (const file of files) {
     if (blocked) break;
