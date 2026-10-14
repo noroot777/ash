@@ -8,11 +8,14 @@ type ResetKey = string | number | null | undefined;
 export function ConversationScrollControls({
   scrollRef,
   resetKey,
+  tailKey,
 }: {
   scrollRef: RefObject<HTMLElement | null>;
   resetKey: ResetKey;
+  /** 会话内容版本(`contentVersion`),决定「多出要看的东西了要不要跟过去」。 */
+  tailKey: string | number;
 }) {
-  const { noteUserScrollIntent, resume } = useStickToBottom(scrollRef, resetKey);
+  const { noteUserScrollIntent, resume } = useStickToBottom(scrollRef, resetKey, tailKey);
   const { atTop, atBottom } = useScrollEdges(scrollRef, resetKey);
 
   const scrollToEdge = (target: "top" | "bottom") => {

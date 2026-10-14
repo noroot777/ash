@@ -15,6 +15,8 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
+import { contentVersion } from "../lib/useStickToBottom.ts";
+import { executionEventsSize } from "../task-detail/conversationContentSize.ts";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -114,6 +116,15 @@ function actionFor(task: Task): { kind: "run" | "retry" | "stop" | null; label: 
   if (task.status === "backlog" || task.status === "canceled" || task.status === "paused") return { kind: "run", label: task.status === "paused" ? "继续" : "运行" };
   return { kind: null, label: task.status === "done" ? "已完成" : task.status === "awaiting_review" ? "等待裁决" : task.status === "queued" ? "排队中" : "进行中" };
 }
+
+/* 一个回合里用户能读到多少字。跟会话流那张表同一条判据:正文、执行过程原文、结论与
+   提示都算,轮次/说话人/时刻/用时不算 —— 后者变化不代表屏幕上多了要读的东西。
+   `turn.events` 以前整个没算:duetState 的 appendExecutionEvent 会把连续思考拼进**已有
+   那条**的 detail,回合数和正文长度都一动不动(审查第 4 轮 F1)。 */
+const duetTurnSize = (turn: DuetTurn): number =>
+  (turn.text?.length ?? 0)
+  + executionEventsSize(turn.events)
+  + (turn.conclusion?.length ?? 0) + (turn.notice?.length ?? 0) + (turn.error?.length ?? 0);
 
 export function DuetView({
   task,
@@ -354,7 +365,12 @@ export function DuetView({
             {task.status === "failed" && <p className="duet-terminal is-error">本次讨论失败并停止</p>}
             {task.status === "canceled" && <p className="duet-terminal">讨论已取消</p>}
           </div>
-          <ConversationScrollControls scrollRef={scrollRef} resetKey={`${task.id}:${turns.length}`} />
+          {/* resetKey 只认「换了哪个任务」。以前它还混着 turns.length,于是每开一轮都被
+              当成换任务、无条件拽到底 —— 读历史读到一半就被打断(审查 B5)。新一轮该不该
+              跟,现在由下面这个内容版本说了算:贴着底就跟,在上面读历史就不动。 */}
+          <ConversationScrollControls scrollRef={scrollRef} resetKey={task.id}
+            tailKey={contentVersion(turns, duetTurnSize,
+              (turn) => `${turn.round}:${turn.speaker}:${turn.done ? 1 : 0}`)} />
         </div>
       </ImagePreviewGroup>
 

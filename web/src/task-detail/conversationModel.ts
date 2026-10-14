@@ -20,6 +20,8 @@ import {
 import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
 import { agentLabel, compactTurnText, latestTurnStart, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
 import { appendLiveTimeline } from "./conversationLiveTurns.ts";
+import { contentVersion } from "../lib/useStickToBottom.ts";
+import { conversationItemSize } from "./conversationContentSize.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
 // 分段那一族住在 conversationSegments:这里转出去,别处 import 的路径不用跟着改。
 export type { AgentAuxEvent, AgentContentSegment } from "./conversationSegments.ts";
@@ -103,6 +105,16 @@ export type ConversationItem =
     };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
+
+/* 这条会话的内容版本:贴底逻辑靠它区分「真来了新内容」和「界面只是闪了一下」。
+   规模走 `conversationItemSize` 那张逐字段登记表 —— 正文、思考与工具原文、附件全算,
+   身份/时刻/用量不算,新增字段编译不过。
+
+   求和是**全部条目**而不是只看最后一条:正在飞的那一轮常被末尾的旁注(「审查已预约」
+   那类)挡在后面,新文字由 appendAgentText 追加回前面那条气泡 —— 只盯最后一行就会
+   眼看着它长出屏幕也不跟。 */
+export const conversationTailKey = (items: readonly ConversationItem[]) =>
+  contentVersion(items, conversationItemSize, (item) => item.id);
 
 export type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
 type AgentItem = Extract<ConversationItem, { kind: "agent" }>;

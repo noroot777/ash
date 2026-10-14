@@ -5,7 +5,6 @@ import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { taskDurationInfo } from "../src/task-detail/utils.ts";
-import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
 import { sharedTeamParent } from "../src/review/reviewModel.ts";
 import { gateAllowsRevision, isOpenDuetGate, runCreatedHandoffFollowUps } from "../src/duet/handoffPolicy.ts";
 import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
@@ -418,24 +417,6 @@ try {
   assert.equal(durationInfo?.text, "10m 0s");
   assert.match(durationInfo?.title ?? "", /^结束 /);
   assert.equal(taskDurationInfo({ ...task, activeMs: null })?.label, "跨度");
-
-  // 用户从底部按住滚动条向上拖时，pointerdown 会建立 detaching user intent。
-  // 随后的 scroll 必须解除贴底；内容 resize/mutation 只能在 stuck=true 时补滚，
-  // 因而此状态会保持在历史位置，不被下一段流式输出抢回底部。
-  assert.equal(stickStateAfterScroll({
-    stuck: true,
-    nearBottom: false,
-    programmatic: false,
-    userDriven: true,
-    detaching: true,
-  }), false);
-  assert.equal(stickStateAfterScroll({
-    stuck: false,
-    nearBottom: false,
-    programmatic: false,
-    userDriven: false,
-    detaching: false,
-  }), false);
 
   const team = { id: "team-1", mode: "team", projectId: "project-1", title: "父团队" };
   const sharedWorker = { id: "worker-1", parentId: "team-1", useWorktree: false };

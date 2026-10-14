@@ -12,6 +12,7 @@ import { AssistantArchive } from "./AssistantArchive.tsx";
 import { AssistantSidebar } from "./AssistantSidebar.tsx";
 import { AssistantConversationTitle } from "./AssistantConversationTitle.tsx";
 import { AssistantScroll } from "./AssistantScroll.tsx";
+import { chatTailKey } from "../lib/chatTailKey.ts";
 import { AssistantKnowledge } from "./AssistantKnowledge.tsx";
 import { AssistantInfo } from "./AssistantInfo.tsx";
 import { useAssistantChat } from "./useAssistantChat.ts";
@@ -102,7 +103,7 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit, o
       message={`这段对话的全部消息和历史摘要会一起删除，无法恢复。正在进行的回复会先停止；对话中创建过的任务不受影响，仍留在任务列表里。${deleteError ? `\n\n${deleteError}` : ""}`}
       onConfirm={() => void removeConversation()} onClose={() => { if (!deleting) { setDeleteTarget(null); setDeleteError(""); } }} />}
     {archiveId ? <AssistantArchive key={archiveId} taskId={archiveId} onClose={() => setArchiveId(null)} /> : <>
-      <AssistantScroll conversationId={chat.room?.id ?? "assistant"} followMessages={!!chat.snapshot?.messages.length && !configure}>
+      <AssistantScroll conversationId={chat.room?.id ?? "assistant"} tailKey={chatTailKey(chat.snapshot?.messages)} followMessages={!!chat.snapshot?.messages.length && !configure}>
         {!configure && <div className="chat-welcome"><span className="chat-welcome-icon"><AssistantIcon size={32} filled /></span><h2>ash 助手，从一句话开始。</h2><p>问 ash 怎么用，找回一个任务，或搭好起手式。<br />直接发送，先说结论，只讲重点。</p>
           <div>{STARTERS.map(({ label, text }) => <button type="button" key={label} onClick={() => pickStarter(text)}>{label}</button>)}</div>
         </div>}

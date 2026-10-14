@@ -5,11 +5,12 @@ import type { TaskListItem } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import { ArrowDown, ArrowUpRight, CheckCircle, Hash, Lightning } from "@phosphor-icons/react";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import { chatTailKey } from "../lib/chatTailKey.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 
 export function ChatMessages({ snapshot, onTask, onMention }: { snapshot: ChatSnapshot; onTask: (task: TaskListItem) => void; onMention: (name: string) => void }) {
   const scroll = useRef<HTMLDivElement>(null);
-  const { resume } = useStickToBottom(scroll, snapshot.room.id);
+  const { resume } = useStickToBottom(scroll, snapshot.room.id, chatTailKey(snapshot.messages));
   // 已经贴底时没有「跳到最新」可跳，按钮只会挡住最后一条消息。
   const { atBottom } = useScrollEdges(scroll, snapshot.room.id);
   // resume() 只是把贴底意图设回来，真正的滚动要自己发起，否则要等下一条消息进来才跳。

@@ -7,7 +7,7 @@
 // 从 conversationModel 拆出来的一族:那边管「会话 → 气泡」,这里管「事件 → 段落」。
 import type { AgentEvent } from "@ash/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
-import { appendExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
+import { appendExecutionEvent, isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 
 // 「执行过程」块里的一行(工具 / 思考 / 异常)。形状与渲染都归 lib/executionTrace,
 // 普通任务、团队、辩论共用同一份 —— 这里只保留旧名字的别名。
@@ -19,6 +19,25 @@ export type AgentContentSegment = {
   events: AgentAuxEvent[];
   attachments: string[];
 };
+
+/**
+ * 这一段在正文里画得出东西吗 —— **正文布局的唯一口径**,直播分段、落盘重建、折叠展开
+ * 三条路都问这一个函数。
+ *
+ * 为什么需要它:子智能体往同一串 events 里塞的 activity / result / agent 通知和带
+ * parentId 的嵌套调用,渲染侧四个入口都先 filter 一道 `isVisibleExecutionEvent`,一个字
+ * 都不画。可它们仍会被切成**自己的一段**,于是正文后面多出一个空 `<section>` ——
+ * 空的也占 7px(`.task-agent-segment + .task-agent-segment`),scrollHeight 跟着涨,
+ * 贴底逻辑看见底边下移就把正在读的人拽到底(审查第 6 轮 F1)。
+ *
+ * 注意事件本身**不能丢**:子智能体抽屉的数据(`buildNativeWork`)就是从
+ * `segments[].events` 里提的。所以口径是「不让它单独成段」,不是「不要它」。
+ */
+export function segmentHasVisibleContent(segment: AgentContentSegment): boolean {
+  if (segment.markdown) return true;
+  if (segment.attachments.length) return true;
+  return segment.events.some(isVisibleExecutionEvent);
+}
 
 export type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TracedContentEntry = SessionTraceEntry & {
@@ -77,10 +96,21 @@ export function contentSegments(
 
   const segments: AgentContentSegment[] = [];
   let current: AgentContentSegment = { id: `${idPrefix}:0`, markdown: "", events: [], attachments: [] };
+  const newCurrent = () => ({ id: `${idPrefix}:${segments.length}`, markdown: "", events: [], attachments: [] });
   const pushCurrent = () => {
-    if (!current.markdown && !current.events.length && !current.attachments.length) return;
-    segments.push(current);
-    current = { id: `${idPrefix}:${segments.length}`, markdown: "", events: [], attachments: [] };
+    if (segmentHasVisibleContent(current)) {
+      segments.push(current);
+      current = newCurrent();
+      return;
+    }
+    /* 画不出东西的段不进正文布局 —— 空的也占 7px 间距。但事件**不能丢**:子智能体抽屉
+       的数据(buildNativeWork)就是从 segments[].events 里提的,所以并回上一段,而不是
+       直接 return 把它扔掉。还没有上一段就留在 current 里,等后面的内容进来同段;
+       一直等到最后也没有内容进来,由下面的收尾兜住(审查第 7 轮 B5)。 */
+    const previous = segments.at(-1);
+    if (!previous) return;
+    for (const event of current.events) previous.events = appendExecutionEvent(previous.events, event);
+    current = newCurrent();
   };
   for (const entry of entries) {
     if (entry.event.kind === "text") {
@@ -92,10 +122,20 @@ export function contentSegments(
       if (!current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
       continue;
     }
-    if (current.markdown) pushCurrent();
-    current.events = appendExecutionEvent(current.events, auxEvent(entry.event, entry.at));
+    const event = auxEvent(entry.event, entry.at);
+    // 画不出来的通知不另起一段(见 segmentHasVisibleContent):单独成段就是正文后面
+    // 那个空 section。事件照旧挂在当前段上,抽屉那边仍取得到。
+    if (current.markdown && isVisibleExecutionEvent(event)) pushCurrent();
+    current.events = appendExecutionEvent(current.events, event);
   }
   pushCurrent();
+  /* 收尾:**数据优先于布局**。整段 trace 里一个字都没有、只有画不出来的后台通知时,
+     上面那条「并回上一段」无处可并(压根没有上一段),事件就卡在 current 里 —— 直接
+     返回等于把子智能体那条线的 raw 记录丢了(审查第 7 轮 B5)。
+     所以这里原样留下这一段:它画不出东西,渲染侧的 segmentHasVisibleContent 不会给它
+     出 section,不占高度;而 buildNativeWork 仍从 segments[].events 里取得到数据。
+     分段函数只负责**保全记录**,"画不画"交给展示谓词 —— 两件事不该挤在一层。 */
+  if (current.events.length || current.attachments.length) segments.push(current);
 
   const structuredMarkdown = segments.map((segment) => segment.markdown).join("");
   if (structuredMarkdown.trim() === fallbackMarkdown.trim()) return segments;
