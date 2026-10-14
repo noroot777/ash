@@ -12,11 +12,24 @@ import { MONITOR_ENDED_LABEL } from "./useTaskMonitors.ts";
  * **不能无脑写 `盯到 ${expiresAt}`**：claude 内置 Monitor 的期限是来源侧说了算的，而它
  * 可能是持续监听（没有到期时刻），也可能回执还没到（我们还不知道）。编一个确定时刻出来，
  * 用户会当真——第 2 轮审查实测来源侧会把请求的 1 小时钳成 30 分钟甚至 10 分钟。
+ *
+ * 第四种情况是**知道盯多久、但不知道从哪一刻起算**（历史重建时起点只是一个区间，见
+ * shared/monitor.ts 的 MonitorStartEvidence）。那时说时长，不说时刻——上一版会按回执时刻
+ * 编一个，而回执要等 PostToolUse hooks 跑完才生成，期限跟着往后漂。
  */
 function liveDeadline(monitor: TaskMonitor): string {
   if (monitor.lifetime === "persistent") return "持续盯着（来源没设期限）";
-  if (monitor.lifetime === "unknown" || !monitor.expiresAt) return "盯到什么时候由它自己定";
-  return `盯到 ${formatInstant(monitor.expiresAt)}`;
+  if (monitor.expiresAt) return `盯到 ${formatInstant(monitor.expiresAt)}`;
+  if (monitor.lifetime === "bounded" && monitor.timeoutMs) return `总共盯 ${formatSpan(monitor.timeoutMs)}（起点不确定）`;
+  return "盯到什么时候由它自己定";
+}
+
+/** 把毫秒说成人话。只给上面那句用。 */
+function formatSpan(ms: number): string {
+  if (ms % 3_600_000 === 0) return `${ms / 3_600_000} 小时`;
+  if (ms % 60_000 === 0) return `${ms / 60_000} 分钟`;
+  if (ms >= 60_000) return `${Math.floor(ms / 60_000)} 分 ${Math.round((ms % 60_000) / 1000)} 秒`;
+  return `${Math.round(ms / 1000)} 秒`;
 }
 
 /** 展开着的那张卡每隔这么久重拉一次尾巴。只在「正在盯着」且「卡片是展开的」时才走。 */

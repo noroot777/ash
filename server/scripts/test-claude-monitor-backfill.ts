@@ -276,13 +276,16 @@ async function main(): Promise<void> {
         { type: "tool_use", name: "Monitor", id: "tuS", input: { command: "tail -F /tmp/s", description: "跨文件", timeout_ms: 600_000 } },
       ] } },
       { type: "system", subtype: "task_started", task_id: "bSpan", tool_use_id: "tuS", task_type: "local_bash", session_id: "cli-span" },
-    ].map((e) => JSON.stringify(e)).join("\n") + "\n");
-    const second = join(dir, "sessSpan-20261014T080000000Z.agent-out.jsonl");
-    writeFileSync(second, [
-      // 回执和终态都落在**下一回合**的文件里。
-      { type: "user", timestamp: "2026-10-14T08:00:01.000Z", message: { role: "user", content: [
+      { type: "user", timestamp: "2026-10-14T07:00:02.000Z", message: { role: "user", content: [
         { type: "tool_result", tool_use_id: "tuS", content: "Monitor started (task bSpan, expires in 29m 50s unless the source ends first)." },
       ] } },
+    ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const second = join(dir, "sessSpan-20261014T080000000Z.agent-out.jsonl");
+    // **终态**落在下一回合的文件里。回执不跨文件——它是工具返回值，必然和 tool_use 同一个
+    // 回合（实测 60 个真实回执与 tool_use 相差 22~59ms），放到下一回合反而是个假时序，
+    // 还会让起点区间宽达一小时、期限被正确地判成不可信。
+    writeFileSync(second, [
+      { type: "assistant", timestamp: "2026-10-14T08:00:00.000Z", message: { model: "m", content: [{ type: "text", text: "下一回合" }] } },
       { type: "system", subtype: "task_notification", task_id: "bSpan", status: "completed", summary: "跨文件跑完了", session_id: "cli-span" },
     ].map((e) => JSON.stringify(e)).join("\n") + "\n");
 
@@ -295,7 +298,7 @@ async function main(): Promise<void> {
     check(await backfillClaudeMonitors("t-span") === 1, "跨文件的那条补上了");
     const row = (await listMonitors("t-span")).at(0);
     check(row?.status === "exited", "后一个文件里的通知关联到了前一个文件里的 started", String(row?.status));
-    check(row?.endedAt === "2026-10-14T08:00:01.000Z", "结束时刻用通知附近那条事件的时刻，不是 now()", String(row?.endedAt));
+    check(row?.endedAt === "2026-10-14T08:00:00.000Z", "结束时刻用通知附近那条事件的时刻，不是 now()", String(row?.endedAt));
     const span2 = row?.expiresAt ? Date.parse(row.expiresAt) - Date.parse(row.startedAt) : -1;
     check(span2 === 1_790_000, "`29m 50s` 读成 1790 秒，不是 1740 秒", `${span2}ms`);
   }
@@ -330,8 +333,11 @@ async function main(): Promise<void> {
     check(await backfillClaudeMonitors("t-anchor") === 1, "照样补进来");
     const row = (await listMonitors("t-anchor")).at(0);
     check(row?.status === "exited", "终态照常落（那是来源说的事实）", String(row?.status));
-    check(row?.lifetime === "unknown", "读到了回执也不编到期时刻：起点不可信", String(row?.lifetime));
-    check(row?.expiresAt === null, "对外不给到期时刻", String(row?.expiresAt));
+    // 时长和起点是两件独立的事：读到回执就知道「盯 10 分钟」，但一条 timestamp 都没有时
+    // 起点无从确定，所以给得出时长、给不出到期时刻。
+    check(row?.lifetime === "bounded", "读到回执 → 时长已知", String(row?.lifetime));
+    check(row?.timeoutMs === 600_000, "时长就是回执说的 10 分钟", String(row?.timeoutMs));
+    check(row?.expiresAt === null, "但起点不可信 → 不编到期时刻", String(row?.expiresAt));
     check(row?.startedAt === "2026-10-14T11:00:00.000Z", "起点退回文件时刻，只作显示", String(row?.startedAt));
   }
   await fileTimeIsNotAnAnchor();

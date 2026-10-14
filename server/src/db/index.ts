@@ -133,7 +133,8 @@ export async function ensureSchema() {
       ended_at TEXT, ended_reason TEXT, owner_user_id TEXT,
       kind TEXT NOT NULL DEFAULT 'ash', native_id TEXT, cli_session_id TEXT,
       source_lifetime TEXT NOT NULL DEFAULT 'unknown',
-      lifetime_evidence TEXT, source_pid INTEGER, source_pid_started_at TEXT
+      lifetime_evidence TEXT, source_pid INTEGER, source_pid_started_at TEXT,
+      start_evidence TEXT, timeout_ms INTEGER
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -313,6 +314,11 @@ export async function ensureSchema() {
     // 起它的那一代 agent 进程。sessions 那两列每回合被覆盖,不能用来判历史投影的死活。
     "ALTER TABLE monitors ADD COLUMN source_pid INTEGER",
     "ALTER TABLE monitors ADD COLUMN source_pid_started_at TEXT",
+    // **起点**的证据,与 lifetime_evidence(时长的证据)分开记:回执能证明配置了多长,不能证明
+    // 消息 timestamp 就是计时器起点(计时器在工具返回前就起了,回执要等 PostToolUse hooks)。
+    "ALTER TABLE monitors ADD COLUMN start_evidence TEXT",
+    // 来源确认的时长。起点不确定时 expires_at 不可信,但时长仍然说得出来。
+    "ALTER TABLE monitors ADD COLUMN timeout_ms INTEGER",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
@@ -567,6 +573,8 @@ export async function ensureSchema() {
   try {
     await client.execute("UPDATE monitors SET source_lifetime='bounded' WHERE kind='ash' AND source_lifetime<>'bounded'");
     await client.execute("UPDATE monitors SET lifetime_evidence='self' WHERE kind='ash' AND lifetime_evidence IS NULL");
+    // ash 行的起点就是 ash 自己 spawn 那一刻,从来没有不确定性。
+    await client.execute("UPDATE monitors SET start_evidence='observed' WHERE kind='ash' AND start_evidence IS NULL");
   } catch {
     /* 列还不存在 */
   }

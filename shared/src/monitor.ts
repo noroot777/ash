@@ -124,25 +124,69 @@ const MONITOR_UNIT_MS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_00
  * 两轮才加——拿「有没有会话归属」当版本依据会把一批带归属的错期限漏掉（第 4 轮审查实测
  * legacyLifetimes：60 秒和假 5 分钟两行，迁移两次 + 完整回填后仍原样）。
  *
- * **能算到期时刻的前提是收到回执，而回执事件自带可信时刻**——所以这一档和「起点可信」天然
- * 是同一件事，不会出现「期限可信但起点不可信」的组合。
+ * **这一列只说时长，不说起点。** 上一版把两者当成同一件事（「能算到期时刻的前提是收到回执，
+ * 而回执自带可信时刻」），那是错的：回执能证明**配置了多长**，不能证明**消息上的 timestamp
+ * 就是计时器起点**——计时器在工具返回前就起了，而回执消息要等 PostToolUse hooks 跑完才构建
+ * （第 5 轮审查从 claude 2.1.283 二进制提取源码证实）。起点另有一列，见
+ * {@link MonitorStartEvidence}。
  */
 export const MONITOR_LIFETIME_EVIDENCE = ["receipt", "self"] as const;
 export type MonitorLifetimeEvidence = (typeof MONITOR_LIFETIME_EVIDENCE)[number];
 
 /**
- * 来源侧那个原生后台任务 id 的唯一性契约。
+ * **起点**的证据：凭什么说这个到期时刻的「起算点」是对的。
  *
- * 投影表的唯一索引是 `(task_id, native_id)`，它成立的前提是「同一个 ash 任务里，来源 id 不
- * 会撞」。这个前提**实测成立但不是来源侧承诺的**，所以写在这里：2026-10-14 扫过本机全部
- * `agent-out.jsonl`，1017 条 `task_started` 里 `local_bash` 的 id 形如 `b` + 8 位随机
- * base36（`blu5n05kp`），跨会话重复 0 个。
+ * 跟 {@link MONITOR_LIFETIME_EVIDENCE} 是两件独立的事——知道「盯 90 秒」不等于知道「从哪一刻
+ * 开始数」。到期时刻 = 起点 + 时长，两个都得有依据才能给出一个精确时刻。
  *
- * 反例也记一笔：`local_agent` 那种（`a` 前缀，子代理）同一个 id 出现过两次、挂在两个不同的
- * `tool_use_id` 上。我们只认 Monitor 起的 `local_bash`，碰不到它——但它正好说明不能把
- * 「来源 id 全局唯一」当成普适假设。所以解析侧的 `pending`/`byToolUse` 一律**按会话分区**，
- * 不跨会话共用（第 4 轮审查指出此前实现成了跨整个任务共用）。
+ * - `observed`：**实时**投影。ash 自己看着 `task_started` 事件到达并立刻落库，起点就是那一刻，
+ *   不确定度只有流传输那几毫秒。
+ * - `receipt-window`：**历史**重建。起点落在 `[tool_use, 回执]` 区间内（两端都是日志里真实
+ *   存在的时刻），而且区间窄到不影响显示。实测本机 60 个真实回执区间宽 22~59ms。
+ * - `null`：起点不明，或区间宽到不能忽略（例如 PostToolUse hooks 跑了很久）。这时**不给精确
+ *   到期时刻**，只报时长（`timeoutMs`）。
+ *
+ * 实时和历史的证据档位不同是因为**可用的证据本来就不同**，但两者作的承诺是同一个：只有起点
+ * 有依据时才给精确 `expiresAt`。
  */
+export const MONITOR_START_EVIDENCE = ["observed", "receipt-window"] as const;
+export type MonitorStartEvidence = (typeof MONITOR_START_EVIDENCE)[number];
+
+/**
+ * 起点区间宽到什么程度就不能忽略。
+ *
+ * 规则：`max(1 秒, 期限 × 1%)`。两条都要——
+ * - 绝对下限 1 秒：实测真实区间 22~59ms，1 秒已经很宽松，够吸收正常的调度抖动。
+ * - 相对 1%：60 分钟的哨兵差几秒无感，拿 1 秒的绝对尺子去卡它过于严苛。
+ *
+ * 判据写在 shared 是因为**实时和历史必须用同一把尺子**（审查的要求）。
+ */
+export const startAnchorTolerance = (timeoutMs: number | null): number =>
+  Math.max(1_000, Math.round((timeoutMs ?? 0) * 0.01));
+
+/**
+ * 来源侧那个原生后台任务 id 的作用域契约 —— **解析时按会话分区，落库按任务去重**。
+ *
+ * 两层不同，所以分别说清楚（上一版只声明了 `per-cli-session`，而持久层的唯一索引、回填的
+ * existing 表、查行都是按 `(task_id, native_id)`，声明和实现不一致；第 5 轮审查列为不拦项）：
+ *
+ * - **解析层按会话分区**（`per-cli-session`）：`pending`/`byToolUse` 的键来自来源事件，不同
+ *   会话各自一套，不互相串联。
+ * - **持久层按任务去重**（`per-task`）：唯一索引 `(task_id, native_id)`。它成立的前提是同一个
+ *   ash 任务里来源 id 不撞——这一点**实测成立但不是来源侧的承诺**：2026-10-14 扫过本机全部
+ *   `agent-out.jsonl`，1017 条 `task_started` 里 `local_bash` 的 id 形如 `b` + 8 位随机 base36
+ *   （`blu5n05kp`），跨会话重复 0 个。
+ *
+ * 反例记一笔：`local_agent` 那种（`a` 前缀，子代理）同一个 id 出现过两次、挂在两个不同的
+ * `tool_use_id` 上。我们只认 Monitor 起的 `local_bash`，碰不到它——但它正好说明「来源 id 全局
+ * 唯一」不能当普适假设，这也是解析层坚持按会话分区的理由。
+ *
+ * 两个来源真撞同一个 native id 时，落库会合并成一行（概率极低，未实测）。要彻底消除就得把
+ * 会话身份并进唯一索引；那是一次会影响存量数据的 schema 变更，目前的证据不足以支撑。
+ */
+export const NATIVE_MONITOR_ID_PARSE_SCOPE = "per-cli-session" as const;
+export const NATIVE_MONITOR_ID_PERSIST_SCOPE = "per-task" as const;
+/** @deprecated 用上面两个分别说清解析层和持久层——它们的作用域本来就不同。 */
 export const NATIVE_MONITOR_ID_SCOPE = "per-cli-session" as const;
 
 /**
@@ -192,10 +236,20 @@ export interface TaskMonitor {
   exitCode: number | null;
   startedAt: string;
   /**
-   * 到期时刻。**只有 `lifetime === "bounded"` 时非空**——持续监听没有到期时刻，期限未知时
-   * 编一个出来就是假的（卡片上那句「盯到 X」会被当真）。
+   * 到期时刻。**只有「期限有限」且「起点有依据」时才非空**。
+   *
+   * 持续监听没有到期时刻；期限未知时编一个出来就是假的；而「知道盯多久、但不知道从哪一刻
+   * 起算」这第三种情况同样不能给——那会让卡片上的「盯到 X」跟着 PostToolUse hooks 的耗时
+   * 漂移（见 {@link MonitorStartEvidence}）。这种情况下 `timeoutMs` 仍然有值，界面改说时长。
    */
   expiresAt: string | null;
+  /**
+   * 来源确认的**时长**（毫秒），与起点无关。
+   *
+   * 存在它是为了表达「知道盯多久，但起点不确定」：这时 `expiresAt` 为 null 而这一列有值，
+   * 界面说「时长 90 秒」而不是编一个时刻。`persistent`/`unknown` 恒为 null。
+   */
+  timeoutMs: number | null;
   endedAt: string | null;
   endedReason: string | null;
 }

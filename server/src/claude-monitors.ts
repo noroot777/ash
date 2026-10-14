@@ -123,10 +123,28 @@ export class ClaudeMonitorTrace {
    * 于是「先认领空名单、后回填插入、再来真 completed」这条顺序下通知被丢光，EOF 最后把它
    * 收成 lost 而不是来源报的 exited（第 4 轮审查实测 lateBackfill）。
    *
-   * 改成不命中时查一次库裁决。这一列记住「查过且确实不是我们的」，所以每个 id 最多查一次
-   * ——实测一个长任务里 76 条 task_started 有 64 条是普通后台 Bash，不能每条都查。
+   * 改成不命中时查一次库裁决，并把「查过且当时没命中」记在这里，避免对每条通知都查库
+   * ——实测一个长任务里 76 条 task_started 有 64 条是普通后台 Bash。
+   *
+   * **但这个否定结论必须能失效。** 「此刻库里没有这一行」不等于「它不是 Monitor」：回填可能
+   * 还没跑到，或者上一次写库失败了。永久否定会让那条通知之后即使行出现了也永远被短路掉
+   * （第 5 轮审查按代码推断指出）。
+   *
+   * 失效**两道都要**：
+   * - **精确信号**：`bus` 上的 `task.monitors`。投影行有任何增减都会发它（回填补行、实时
+   *   open 都算），正好就是「再查一次会有不同答案」的那一刻。响应是立即的。
+   * - **兜底时限**（`FOREIGN_MAX_MS`）：万一有哪条写入路径忘了 publish，否定结论也不该变成
+   *   永久的。只靠信号就是把正确性押在「每个 writer 都记得发事件」上。
+   *
+   * （一开始只做了 30 秒 TTL，自测里立刻发现回填补行是秒级内的事、那条通知仍被短路——时间
+   * 阈值本来就是猜测。但反过来只留信号也不够，所以两道并存，各补对方的短板。）
    */
-  private foreign = new Set<string>();
+  private foreign = new Map<string, number>();
+  /** 否定结论最多撑这么久（兜底，正常由 bus 信号提前作废）。 */
+  private static readonly FOREIGN_MAX_MS = 2_000;
+
+  /** 取消 bus 订阅。`finishAll` 里调用，别让实例跟着事件总线泄漏。 */
+  private unsubscribe: (() => void) | null = null;
   /** claude 的后台任务 id → ash 这边那一行的主键。只在队列里读写。 */
   private rows = new Map<string, string>();
   /**
@@ -166,10 +184,35 @@ export class ClaudeMonitorTrace {
       this.cliSessionId = cliSessionId;
       this.startReclaim();
     }
+    // 投影行一有增减就把否定缓存整批作废：那正是「再查一次会有不同答案」的时刻（见 `foreign`）。
+    // 不按 taskId 过滤——清掉只是让下一条通知多查一次库，而漏清会让事实永久丢掉。
+    this.unsubscribe = bus.subscribe((ev) => {
+      if (ev.type === "task.monitors" && this.foreign.size) this.foreign.clear();
+    });
   }
 
+  /**
+   * 串到写库链上，**失败重试一次**。
+   *
+   * 为什么要重试：这些 job 是「已经从事件流里消费掉的事实」——`tool_use`/`task_started` 一旦
+   * 处理过就从 `pending` 里删了，来源侧不会再发一遍。一次 SQLITE_BUSY 就只写一行日志的话，
+   * 那条投影在这个进程里再也没机会落库（第 5 轮审查按代码推断指出这一条）。
+   *
+   * 只重试一次、而且隔一小会儿：BUSY 这类争用通常瞬间就过去了；真的是逻辑错误时重试也救不
+   * 回来，继续往下拖反而会积压事件流。重试仍失败就留诊断——历史回填那条路还能把它补回来
+   * （文件一直在追加，游标式扫描会重读到这条事实）。
+   */
   private queue(job: () => Promise<void>): void {
-    this.chain = this.chain.then(job, job).catch((e) => this.warn("记账失败", e));
+    const once = async (): Promise<void> => {
+      try {
+        await job();
+      } catch (first) {
+        this.warn("记账失败，重试一次", first);
+        await new Promise((r) => setTimeout(r, 50));
+        await job();
+      }
+    };
+    this.chain = this.chain.then(once, once).catch((e) => this.warn("记账重试后仍失败（历史回填会再补）", e));
   }
 
   /**
@@ -246,7 +289,12 @@ export class ClaudeMonitorTrace {
         // **认领还没完成时不能直接丢**：接管回来的那一刻，上一轮的投影还在 DB 里躺着、
         // 还没读进 `claimed`，而来源侧的终态可能正好这时候到。这种情况下乐观排队，由
         // `close` 在队列里查一次库来裁决（认领完成之后 `claimed` 就是权威，不再查）。
-        if (!taskId || this.foreign.has(taskId)) return;
+        if (!taskId) return;
+        const deniedAt = this.foreign.get(taskId);
+        if (deniedAt !== undefined) {
+          if (Date.now() - deniedAt < ClaudeMonitorTrace.FOREIGN_MAX_MS) return;
+          this.foreign.delete(taskId); // 兜底时限到了，再查一次
+        }
         // 不在 `claimed` 里也要排队：权威是库，不是这一个实例的内存名单（见 `foreign`）。
         // `close` 里的 `locateRow` 查不到就把它记进 `foreign`，下次直接短路。
         this.queue(() => this.close(taskId, claudeMonitorStatus(ev.status), str(ev.summary)));
@@ -363,6 +411,11 @@ export class ClaudeMonitorTrace {
       cliSessionId: this.cliSessionId || null,
       sourceLifetime: "unknown",
       lifetimeEvidence: null, // 回执还没到；拿到了由 applyReceipt 写成 'receipt'
+      // **起点在这里是确定的**：ash 正看着 `task_started` 到达并立刻落库，不确定度只有流
+      // 传输那几毫秒。历史重建没有这个条件（system 事件不带 timestamp），所以那边只能用
+      // 区间推——两边的证据档位不同，但承诺相同：只有起点有依据才给精确到期时刻。
+      startEvidence: "observed",
+      timeoutMs: null, // 回执才说得出时长
       // 起它的就是当下这一代 agent 进程。抄在行上，之后判死活才不会把下一回合的新进程
       // 当成它（第 4 轮审查实测 reusedSession）。
       sourcePid: found.pid,
@@ -385,13 +438,18 @@ export class ClaudeMonitorTrace {
       // 期限是**回执**说的，这才是它可信的理由。旧版本推算出来的那些行这一列是 NULL，
       // 迁移据此纠正（见 shared/monitor.ts 的 MONITOR_LIFETIME_EVIDENCE）。
       lifetimeEvidence: "receipt",
+      // 时长单独记一列：起点不确定的那些行（历史重建）靠它显示「时长 X」。
+      timeoutMs: ms,
+      // **起点不动**：这一行的起点是 open 那一刻实测的（`observed`），比回执时刻更接近真实
+      // 启动时刻。回执只负责时长——它的 timestamp 要等 PostToolUse hooks 跑完才生成。
+
       // 有限期才改到期时刻；持续监听没有到期时刻可言，那一列留着当占位。
       // （persistent 的回执本来就不带 ms，所以 `lifetime` 这一半此刻是冗余的——留着是因为
       //  它表达的才是判据本身；真正把假期限挡在对外契约之外的是 toTaskMonitor 那一道。）
       ...(lifetime === "bounded" && ms !== null
         ? { expiresAt: new Date(Date.parse(row.startedAt) + ms).toISOString() }
         : {}),
-    }).where(eq(monitors.id, rowId));
+    }).where(and(eq(monitors.id, rowId), inArray(monitors.status, ["running", "lost"])));
     bus.publish({ type: "task.monitors", taskId: row.taskId });
   }
 
@@ -400,19 +458,23 @@ export class ClaudeMonitorTrace {
     if (!found) return;
     const rowId = await this.locateRow(found.taskId, nativeId);
     if (!rowId) {
-      // 库里也没有 = 这条后台任务不是 Monitor 起的（普通后台 Bash 占多数）。记下来，
-      // 它后续的事件就不必再查库了。
-      this.foreign.add(nativeId);
+      // 库里**暂时**没有。多数情况是这条后台任务不是 Monitor 起的（普通后台 Bash），
+      // 但也可能是回填还没跑到 / 上次写库失败了——所以这个结论会在投影行变化时整批作废
+      // （见 `foreign` 和构造函数里的订阅）。
+      this.foreign.set(nativeId, Date.now());
       return;
     }
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
     // `lost` 也要让路：那是 ash 推断的，来源侧后到的真终态是事实（见 monitorStatusCorrectable）。
     if (!row || !monitorStatusCorrectable(row.status)) return;
+    // **条件更新**：WHERE 里再查一次旧状态，不是只按 id 写。读和写之间隔着 await，期间另一个
+    // writer（回填的 merge / 死活裁决）可能已经落了一个来源终态；只按 id 写会把它覆盖掉。
+    // 对称的 revive/bury 一开始就在 SQL 里带了这个条件，这两处之前漏了（第 5 轮审查指出）。
     await db.update(monitors).set({
       status,
       endedAt: now(),
       endedReason: summary || CLAUDE_MONITOR_ENDED_REASON[status as keyof typeof CLAUDE_MONITOR_ENDED_REASON] || null,
-    }).where(eq(monitors.id, rowId));
+    }).where(and(eq(monitors.id, rowId), inArray(monitors.status, ["running", "lost"])));
     bus.publish({ type: "task.monitors", taskId: row.taskId });
   }
 
@@ -429,6 +491,9 @@ export class ClaudeMonitorTrace {
     this.pending.clear();
     this.claimed.clear();
     this.byToolUse.clear();
+    this.foreign.clear();
+    this.unsubscribe?.();
+    this.unsubscribe = null;
     const cliSessionId = this.cliSessionId;
     // **排队之后再查**：还排在队列里的 open/close 都没跑完，提前取会拿到一份残缺名单。
     this.queue(async () => {

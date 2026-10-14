@@ -67,9 +67,21 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
   events: r.events,
   exitCode: r.exitCode,
   startedAt: r.startedAt,
-  // 只有有限期的才给到期时刻。持续/未知时库里那一列是占位值，原样吐出去就成了假情报
-  // ——卡片会照它渲染一句「盯到 X」，而来源侧根本没这么说。
-  expiresAt: r.sourceLifetime === "bounded" || !r.sourceLifetime ? r.expiresAt : null,
+  // 到期时刻 = 起点 + 时长，**两个都得有依据**才能吐出去。
+  //
+  // ① 期限有限（持续/未知时库里那一列是占位值，原样给出去就成了假情报——卡片会照它渲染
+  //    一句「盯到 X」，而来源侧根本没这么说）；
+  // ② 起点有依据（`start_evidence`）。历史重建里起点只是一个区间，区间宽到不能忽略时这一列
+  //    为空——那时仍然知道时长，由下面的 `timeoutMs` 吐出去，界面改说「时长 X」而不是编一个
+  //    时刻（第 5 轮审查：回执时刻会随 PostToolUse hooks 往后漂）。
+  //
+  // 存量行（两列都还没有值）按老规矩走 ①，否则升级后所有旧卡的期限会一起消失。
+  expiresAt: (r.sourceLifetime === "bounded" || !r.sourceLifetime)
+    && (r.startEvidence !== null || r.timeoutMs === null)
+    ? r.expiresAt
+    : null,
+  /** 时长独立于起点：起点不确定时这一列仍然有值。 */
+  timeoutMs: r.timeoutMs ?? null,
   endedAt: r.endedAt,
   endedReason: r.endedReason,
 });
@@ -197,6 +209,9 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       lifetimeEvidence: "self",
       sourcePid: null,
       sourcePidStartedAt: null,
+      // ash 自己 spawn 的，起点就是这一刻，没有不确定性。
+      startEvidence: "observed",
+      timeoutMs,
     };
     try {
       await db.insert(monitors).values(row);

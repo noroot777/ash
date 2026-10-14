@@ -208,6 +208,23 @@ async function main(): Promise<void> {
     check((await listMonitors(f.taskId)).at(0)?.status === "lost", "⑤再回填一次也不会被复活");
   }
 
+  // ── ⑤b 新 run 文件**还是空的**（新回合刚建文件、还没输出）──────────────────
+  // 这一刻一个新字节都没有，但「上一代已经结束」已经成立。只看「有没有读到新内容」就提交
+  // 不了这个变化（第 5 轮审查实测 emptyNewRun：连续两次回填，旧行仍 running、source_pid
+  // 仍是 null）。⑤ 那组的第二个文件有一行 init，所以触发不到这条。
+  {
+    const f = await fixture("empty-new-run", live.pid, live.startedAt);
+    write(f.file("20261014T010000000Z"), startSeq(f.cli, "n-emptyrun", "上一代起的"));
+    await backfillClaudeMonitors(f.taskId);
+    check((await listMonitors(f.taskId)).at(0)?.status === "running", "⑤b 此刻来源还活着，是 running");
+    writeFileSync(f.file("20261014T020000000Z"), "");   // 新回合建了文件，零字节
+    await backfillClaudeMonitors(f.taskId);
+    const row = (await listMonitors(f.taskId)).at(0);
+    check(row?.status === "lost", "⑤b 空的新 run 文件也是「上一代已结束」的证据", String(row?.status));
+    const raw = (await db.select().from(monitors).where(eq(monitors.nativeId, "n-emptyrun"))).at(0);
+    check(raw?.sourcePid === 0, "⑤b 这个结论同样落了库", String(raw?.sourcePid));
+  }
+
   // ── ⑥ 旧版本算法推出来的期限要被纠正，**包括带会话归属的那些** ───────────────
   // 上一版拿 cli_session_id IS NULL 当版本依据，而那一列比 source_lifetime 早两轮就有了。
   {
@@ -250,29 +267,51 @@ async function main(): Promise<void> {
     check(raw90?.lifetimeEvidence === "receipt", "⑥纠正之后写上了证据，下次迁移不再降它", String(raw90?.lifetimeEvidence));
   }
 
-  // ── ⑦ 起点取**起手回执**那条事件的时刻，不是 tool_use 那条 ──────────────────
-  // 工具调用可能卡在权限确认上：模型发出调用和进程真正起来之间能差很久。
+  // ── ⑦ 起点是一个**区间**，宽到不能忽略时不编到期时刻 ───────────────────────
+  //
+  // 第 4 轮我在这里断言「起点用回执那条事件的时刻」，那个理解是错的：计时器在工具返回**前**
+  // 就起了，而回执消息要等 PostToolUse hooks 跑完才构建（第 5 轮审查从 claude 2.1.283 二进制
+  // 提取源码证实）。所以回执时刻只是真实起点的**上界**，tool_use 时刻是下界。
+  //
+  // 判据因此变成区间宽度：窄到可忽略就用上界给精确时刻，宽了就只报时长。
   {
-    const f = await fixture("anchor", live.pid, live.startedAt);
-    const toolUseAt = "2026-10-14T03:00:00.000Z";
-    const receiptAt = "2026-10-14T03:20:00.000Z";   // 等了 20 分钟才真正起来
-    write(f.file(), [
-      { type: "system", subtype: "init", session_id: f.cli },
-      { type: "assistant", timestamp: toolUseAt, message: { model: "m", content: [
-        { type: "tool_use", name: "Monitor", id: "tu-anchor", input: { command: "sleep 600", description: "等了很久才起来", timeout_ms: 600_000 } },
+    // (a) 延迟很大（hooks 跑了 20 分钟）：给不出到期时刻，但时长仍然说得出来。
+    const wide = await fixture("anchor-wide", live.pid, live.startedAt);
+    write(wide.file(), [
+      { type: "system", subtype: "init", session_id: wide.cli },
+      { type: "assistant", timestamp: "2026-10-14T03:00:00.000Z", message: { model: "m", content: [
+        { type: "tool_use", name: "Monitor", id: "tu-wide", input: { command: "sleep 600", description: "等了很久才起来", timeout_ms: 600_000 } },
       ] } },
-      { type: "system", subtype: "task_started", task_id: "n-anchor", tool_use_id: "tu-anchor", task_type: "local_bash", session_id: f.cli },
-      { type: "user", timestamp: receiptAt, message: { role: "user", content: [
-        { type: "tool_result", tool_use_id: "tu-anchor", content: "Monitor started (task n-anchor, expires in 1m 30s unless the source ends first)." },
+      { type: "system", subtype: "task_started", task_id: "n-wide", tool_use_id: "tu-wide", task_type: "local_bash", session_id: wide.cli },
+      { type: "user", timestamp: "2026-10-14T03:20:00.000Z", message: { role: "user", content: [
+        { type: "tool_result", tool_use_id: "tu-wide", content: "Monitor started (task n-wide, expires in 1m 30s unless the source ends first)." },
       ] } },
     ]);
-    await backfillClaudeMonitors(f.taskId);
-    const row = (await listMonitors(f.taskId)).at(0);
-    check(row?.startedAt === receiptAt, "⑦起点用回执那条事件的时刻", String(row?.startedAt));
-    const span = row?.expiresAt ? Date.parse(row.expiresAt) - Date.parse(row.startedAt) : -1;
-    check(span === 90_000, "⑦到期时刻按回执跨度算", `${span}ms`);
-    check(!!row?.expiresAt && Date.parse(row.expiresAt) > Date.parse(receiptAt),
-      "⑦到期时刻不早于启动时刻（按 tool_use 算会早 20 分钟）", String(row?.expiresAt));
+    await backfillClaudeMonitors(wide.taskId);
+    const w = (await listMonitors(wide.taskId)).at(0);
+    check(w?.lifetime === "bounded", "⑦(a) 读到回执 → 时长已知", String(w?.lifetime));
+    check(w?.timeoutMs === 90_000, "⑦(a) 时长就是回执说的 90 秒", String(w?.timeoutMs));
+    check(w?.expiresAt === null,
+      "⑦(a) 起点区间宽达 20 分钟 → 不编到期时刻（上一轮会按回执时刻编一个，偏晚 20 分钟）",
+      String(w?.expiresAt));
+
+    // (b) 对照：延迟是正常量级（实测真实回执与 tool_use 差 22~59ms）→ 照常给精确到期时刻。
+    const tight = await fixture("anchor-tight", live.pid, live.startedAt);
+    write(tight.file(), [
+      { type: "system", subtype: "init", session_id: tight.cli },
+      { type: "assistant", timestamp: "2026-10-14T03:00:00.000Z", message: { model: "m", content: [
+        { type: "tool_use", name: "Monitor", id: "tu-tight", input: { command: "sleep 600", description: "正常启动", timeout_ms: 600_000 } },
+      ] } },
+      { type: "system", subtype: "task_started", task_id: "n-tight", tool_use_id: "tu-tight", task_type: "local_bash", session_id: tight.cli },
+      { type: "user", timestamp: "2026-10-14T03:00:00.040Z", message: { role: "user", content: [
+        { type: "tool_result", tool_use_id: "tu-tight", content: "Monitor started (task n-tight, expires in 1m 30s unless the source ends first)." },
+      ] } },
+    ]);
+    await backfillClaudeMonitors(tight.taskId);
+    const t = (await listMonitors(tight.taskId)).at(0);
+    check(t?.startedAt === "2026-10-14T03:00:00.040Z", "⑦(b) 区间窄 → 起点取上界", String(t?.startedAt));
+    const tspan = t?.expiresAt ? Date.parse(t.expiresAt) - Date.parse(t.startedAt) : -1;
+    check(tspan === 90_000, "⑦(b) 到期时刻按 90 秒给出", `${tspan}ms`);
   }
 
   // ── ⑧ 回执**到达之前**就重启：期限不该永远停在未知 ────────────────────────
@@ -300,8 +339,10 @@ async function main(): Promise<void> {
     await backfillClaudeMonitors(f.taskId);
     const fixed = (await listMonitors(f.taskId)).at(0);
     check(fixed?.lifetime === "bounded", "⑧回执追加进历史后，期限从未知补了回来", String(fixed?.lifetime));
-    const span = fixed?.expiresAt ? Date.parse(fixed.expiresAt) - Date.parse(fixed.startedAt) : -1;
-    check(span === 90_000, "⑧补回来的跨度就是回执说的 90 秒", `${span}ms`);
+    // 这个夹具里 tool_use 在 01:00:05、回执追加在 01:05:00，起点区间宽近 5 分钟，所以补回来
+    // 的是**时长**而不是到期时刻——起点不确定就不编一个（见 ⑦）。
+    check(fixed?.timeoutMs === 90_000, "⑧补回来的时长就是回执说的 90 秒", String(fixed?.timeoutMs));
+    check(fixed?.expiresAt === null, "⑧起点区间太宽，不给到期时刻", String(fixed?.expiresAt));
   }
 
   // ── ⑨ 撞到单次读取上限之后，下一次要**接着往后读** ─────────────────────────
@@ -336,6 +377,171 @@ async function main(): Promise<void> {
       `found=${scan.foundOf(st).length}`);
   }
 
+  // ── ⑩ 跨文件因果：前一个文件没读完，后一个文件的事实不能被丢掉 ──────────────
+  //
+  // 第 5 轮审查实测的那一幕：前 run 文件超过单次上限、Monitor 的 task_started 在它尾部，而后
+  // run 文件里的回执和 completed 当轮就被读完并丢弃（关联不上任何 Monitor），游标还推到了尾。
+  // 于是第二轮读到 started 时，那两条事实再也不会来，卡片永远停在 lost + unknown。
+  //
+  // 两道防线各钉一条：顺序（别制造孤儿）+ 缓冲（已产生的孤儿不丢）。
+  {
+    const f = await fixture("cross-file", live.pid, live.startedAt);
+    const LIMIT = 50_000;
+    const filler = JSON.stringify({ type: "assistant", timestamp: "2026-10-14T01:00:00.000Z",
+      message: { model: "m", content: [{ type: "text", text: "x".repeat(900) }] } });
+    // 前文件：一堆填充 + 尾部才是 Monitor 的 tool_use/task_started（读不到上限之外）
+    writeFileSync(f.file("20261014T010000000Z"),
+      Array(120).fill(filler).join("\n") + "\n"
+      + startSeq(f.cli, "n-cross", "跨文件", "Monitor started (task n-cross, expires in 1m 30s unless the source ends first).")
+        .slice(1).map((e) => JSON.stringify(e)).join("\n") + "\n");
+    // 后文件：只有终态（回执跟 tool_use 同回合，所以放在前文件里）
+    writeFileSync(f.file("20261014T020000000Z"), [
+      { type: "assistant", timestamp: "2026-10-14T02:00:00.000Z", message: { model: "m", content: [{ type: "text", text: "下一回合" }] } },
+      { type: "system", subtype: "task_notification", task_id: "n-cross", status: "completed", summary: "跨文件跑完了", session_id: f.cli },
+    ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+
+    const scan = await import("../src/claude-monitor-scan.js");
+    const st = scan.newTaskScan();
+    // 第 1 轮：前文件撞上限，**后文件一个字节都不该读**（否则它的终态会变成孤儿被丢掉）。
+    await scan.scanSession(st, `s-${f.taskId}`, f.cli, f.file("20261014T010000000Z"), LIMIT);
+    const cursors = [...st.sessions.get(`s-${f.taskId}`)!.cursors.entries()];
+    const secondCursor = cursors.find(([path]) => path.includes("20261014T020000000Z"));
+    check(st.truncated, "⑩第 1 轮确实撞到了上限");
+    check(!secondCursor || secondCursor[1].offset === 0,
+      "⑩前文件没读完时，后文件不被抢先读掉", `后文件 offset=${secondCursor?.[1].offset}`);
+    // 续读到底
+    for (let i = 0; i < 12 && st.truncated; i++) {
+      st.truncated = false;
+      await scan.scanSession(st, `s-${f.taskId}`, f.cli, f.file("20261014T010000000Z"), LIMIT);
+    }
+    const found = scan.foundOf(st);
+    check(found.length === 1, "⑩最终认出了那条 Monitor", `found=${found.length}`);
+    check(found[0]?.status === "exited", "⑩后文件里的终态也拿到了，不是 lost", String(found[0]?.status));
+    check(found[0]?.lifetime === "bounded", "⑩前文件尾部的回执也拿到了", String(found[0]?.lifetime));
+  }
+
+  // ── ⑪ 孤儿缓冲：事实先到、它的 Monitor 后到，也不能丢 ──────────────────────
+  // 直接驱动扫描层：把终态写在**前面**，task_started 写在后面（模拟上一轮已被消费的情况）。
+  {
+    const f = await fixture("orphan", live.pid, live.startedAt);
+    writeFileSync(f.file(), [
+      { type: "assistant", timestamp: "2026-10-14T01:00:00.000Z", message: { model: "m", content: [{ type: "text", text: "先来的终态" }] } },
+      { type: "system", subtype: "task_notification", task_id: "n-orph", status: "completed", summary: "我先到了", session_id: f.cli },
+      ...startSeq(f.cli, "n-orph", "后到的 Monitor", "Monitor started (task n-orph, expires in 1m 30s unless the source ends first)."),
+    ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    await backfillClaudeMonitors(f.taskId);
+    const row = (await listMonitors(f.taskId)).at(0);
+    check(row?.status === "exited", "⑪先到的终态被缓冲住，Monitor 出现后回溯应用", String(row?.status));
+  }
+
+  // ── ⑫ 否定缓存不是永久的：此刻库里没有 ≠ 它不是 Monitor ──────────────────────
+  // close 查库没命中会记一笔「不是我们的」来省掉重复查库，但那只能短期有效——回填可能还没
+  // 跑到，或者上一次写库失败了。永久否定会让那条通知之后即使行出现了也永远被短路。
+  {
+    const f = await fixture("foreign-ttl", live.pid, live.startedAt);
+    const trace = new ClaudeMonitorTrace(f.cli);
+    await settle();
+    // 库里还没有这一行 → 这条通知查库不命中，被记入否定缓存
+    trace.event({ type: "system", subtype: "task_notification", task_id: "n-ttl", status: "completed",
+      summary: "行还没出现时就来了", session_id: f.cli });
+    await settle();
+    check((await listMonitors(f.taskId)).length === 0, "⑫此刻确实没有这一行");
+    // 行出现了（回填补的），同一条通知再来一次必须被收下
+    await db.insert(monitors).values({
+      id: "m-ttl", taskId: f.taskId, command: "sleep 600", description: "后来才出现", cwd: "",
+      status: "running", pid: null, pidStartedAt: null, logPath: "", offset: 0, events: 0, exitCode: null,
+      startedAt: now(), expiresAt: now(), endedAt: null, endedReason: null, ownerUserId: null,
+      kind: "claude", nativeId: "n-ttl", cliSessionId: f.cli, sourceLifetime: "unknown",
+      lifetimeEvidence: null, startEvidence: null, timeoutMs: null, sourcePid: null, sourcePidStartedAt: null,
+    });
+    // (a) 精确信号：行出现时生产路径（回填 / 实时 open）都会发 task.monitors。
+    const { bus } = await import("../src/bus.js");
+    bus.publish({ type: "task.monitors", taskId: f.taskId });
+    trace.event({ type: "system", subtype: "task_notification", task_id: "n-ttl", status: "completed",
+      summary: "这次该收下了", session_id: f.cli });
+    await settle();
+    const row = (await db.select().from(monitors).where(eq(monitors.id, "m-ttl"))).at(0);
+    check(row?.status === "exited",
+      "⑫(a) 投影行变化的信号让否定缓存立即作废", `${row?.status}（running = 被永久短路了）`);
+
+    // (b) 兜底：**不发**任何信号，光靠时限也要能恢复——否则正确性就押在「每个 writer 都
+    //     记得 publish」上了。
+    const f2 = await fixture("foreign-fallback", live.pid, live.startedAt);
+    const t2 = new ClaudeMonitorTrace(f2.cli);
+    await settle();
+    t2.event({ type: "system", subtype: "task_notification", task_id: "n-fb", status: "completed",
+      summary: "行还没出现", session_id: f2.cli });
+    await settle();
+    await db.insert(monitors).values({
+      id: "m-fb", taskId: f2.taskId, command: "sleep 600", description: "兜底", cwd: "",
+      status: "running", pid: null, pidStartedAt: null, logPath: "", offset: 0, events: 0, exitCode: null,
+      startedAt: now(), expiresAt: now(), endedAt: null, endedReason: null, ownerUserId: null,
+      kind: "claude", nativeId: "n-fb", cliSessionId: f2.cli, sourceLifetime: "unknown",
+      lifetimeEvidence: null, startEvidence: null, timeoutMs: null, sourcePid: null, sourcePidStartedAt: null,
+    });
+    await new Promise((r) => setTimeout(r, 2_100));   // 过兜底时限，不发任何 bus 信号
+    t2.event({ type: "system", subtype: "task_notification", task_id: "n-fb", status: "completed",
+      summary: "兜底之后该收下了", session_id: f2.cli });
+    await settle();
+    const row2 = (await db.select().from(monitors).where(eq(monitors.id, "m-fb"))).at(0);
+    check(row2?.status === "exited",
+      "⑫(b) 没有任何信号时，兜底时限也能让否定结论作废", `${row2?.status}`);
+  }
+
+  // ── ⑬ 终态写入必须是**条件更新**（WHERE 带旧状态），不是只按 id 写 ──────────
+  //
+  // 两个 writer（实时 close / 回填 merge）都是「先读状态、再写」。读和写之间隔着 await，期间
+  // 另一个 writer 可能已经落了一个来源终态——只按 id 写就会把它覆盖掉。对称的 revive/bury
+  // 一开始就在 SQL 里带了这个条件，close/merge 之前漏了（第 5 轮审查按代码推断指出）。
+  //
+  // **这里断言的是生成的 SQL 形状，不是并发行为**：同一个 Trace 的写操作全都串行在一条 queue
+  // 上，跨 writer 的覆盖需要真正的时序竞争，点注入（把 WHERE 改回只按 id）在当前测试里不会
+  // 变红。所以这条测的是「那个条件还在不在」，防止它被改回去；真并发下的正确性靠这个条件
+  // 本身成立，没有自然复现的回归。
+  {
+    const f = await fixture("conditional-update", live.pid, live.startedAt);
+    write(f.file(), [
+      ...startSeq(f.cli, "n-cond", "条件更新", "Monitor started (task n-cond, expires in 1m 30s unless the source ends first)."),
+      { type: "assistant", timestamp: "2026-10-14T01:00:07.000Z", message: { model: "m", content: [{ type: "text", text: "x" }] } },
+      { type: "system", subtype: "task_notification", task_id: "n-cond", status: "completed", summary: "好了", session_id: f.cli },
+    ]);
+    // 先放一行 running 进去，这样回填走的是 mergeInto（更新）而不是插入。
+    await db.insert(monitors).values({
+      id: "m-cond", taskId: f.taskId, command: "sleep 600", description: "条件更新", cwd: "",
+      status: "running", pid: null, pidStartedAt: null, logPath: "", offset: 0, events: 0, exitCode: null,
+      startedAt: "2026-10-14T01:00:05.000Z", expiresAt: "2026-10-14T01:00:05.000Z",
+      endedAt: null, endedReason: null, ownerUserId: null,
+      kind: "claude", nativeId: "n-cond", cliSessionId: f.cli, sourceLifetime: "unknown",
+      lifetimeEvidence: null, startEvidence: null, timeoutMs: null, sourcePid: null, sourcePidStartedAt: null,
+    });
+
+    const realUpdate = db.update.bind(db);
+    const seen: string[] = [];
+    (db as any).update = (table: unknown) => {
+      const q = realUpdate(table as never);
+      const realSet = q.set.bind(q);
+      (q as any).set = (values: unknown) => {
+        const w = realSet(values as never);
+        const realWhere = (w as any).where.bind(w);
+        (w as any).where = (cond: unknown) => {
+          const built = realWhere(cond);
+          try { seen.push(built.toSQL().sql); } catch { /* 拿不到 SQL 就不记 */ }
+          return built;
+        };
+        return w;
+      };
+      return q;
+    };
+    try { await backfillClaudeMonitors(f.taskId); } finally { (db as any).update = realUpdate; }
+
+    check((await listMonitors(f.taskId)).at(0)?.status === "exited", "⑬这一轮确实走到了更新");
+    const monitorUpdates = seen.filter((sql) => /update\s+"?monitors"?/i.test(sql));
+    check(monitorUpdates.length > 0, "⑬捕获到了对 monitors 的 UPDATE", `${seen.length} 条`);
+    check(monitorUpdates.every((sql) => /"status"/.test(sql.split("where")[1] ?? "")),
+      "⑬每条 UPDATE 的 WHERE 里都带着旧状态条件，不是只按 id 写",
+      monitorUpdates.map((s) => (s.split("where")[1] ?? "").trim().slice(0, 90)).join(" | "));
+  }
+
   live.kill();
   if (failures) {
     console.error(`\n${failures} 条断言未通过`);
@@ -343,7 +549,7 @@ async function main(): Promise<void> {
   } else {
     console.log("✓ 内置 Monitor 账本不变量：lost 行可被重建认领 / 晚到回填也收通知 / 已有行按来源死活双向纠正"
       + " / 缓存随文件增长与新会话失效 / 代次区分（新进程 ≠ 起它的那一代，结论持久化）"
-      + " / 带归属的旧期限按证据列纠正 / 起点取起手回执时刻 / 回执前重启后从历史补回期限 均受回归保护");
+      + " / 带归属的旧期限按证据列纠正 / 起点是区间（窄→精确时刻，宽→只报时长）/ 回执前重启后从历史补回时长 均受回归保护");
   }
 }
 

@@ -20,7 +20,9 @@
 // 来源已经说过的终态不被重放改写（否则显示跟着扫描次数变），ash 自己的推断必须对纠正开放
 // （判据 `monitorStatusCorrectable`，与实时投影共用）。
 import { and, eq, inArray } from "drizzle-orm";
-import { monitorStatusCorrectable, type MonitorLifetime } from "@ash/shared/monitor";
+import {
+  monitorStatusCorrectable, startAnchorTolerance, type MonitorStartEvidence,
+} from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
 import { foundOf, newTaskScan, scanSession, type Found, type TaskScan } from "./claude-monitor-scan.js";
@@ -66,6 +68,7 @@ async function runBackfill(taskId: string): Promise<number> {
     scan.truncated = false;
     scan.failed = false;
     scan.advanced = false;
+    scan.generationChanged = false;
 
     for (const session of rows) {
       if (!session.outPath) continue;
@@ -81,12 +84,17 @@ async function runBackfill(taskId: string): Promise<number> {
         + `${scan.failed ? "有文件读失败" : ""}），游标已记下，下次打开面板继续往后读`);
     }
 
-    // 有新内容才值得重新提交事实；没有也要往下走，因为死活要重新裁决。
-    if (scan.advanced) added = await commitFound(taskId, foundOf(scan));
+    // **提交条件不只是「有新字节」。** 新回合会先创建一个空的 run 文件、过一会儿才输出，那一刻
+    // 没有任何新增字节，但「上一代已经结束」这件事已经成立，必须落库（否则死活裁决退回「这条
+    // 会话现在有活进程」，旧监听一直显示正在盯着——第 5 轮审查实测 emptyNewRun）。
+    if (scan.advanced || scan.generationChanged) {
+      added = await commitFound(taskId, foundOf(scan), (n) => { added = n; });
+    }
   } catch (e) {
     // 回填失败不该让面板打不开：这是补历史，不是主路径。但要留下线索，而且**部分成功的那些
-    // 也要让别的页面看得到**——两个 publish 都在失败出口之后的话，已经提交的行要等下一次
-    // 动作才会出现在其它页面上（第 4 轮审查不拦项 3）。
+    // 也要让别的页面看得到**：`added` 由 commitFound 每成功一行就回报一次（上一轮只在它
+    // 整个返回后才赋值，所以第 1 行成功、第 2 行抛错时这里仍是 0，publish 到不了
+    // ——第 5 轮审查不拦项 1）。
     console.warn(`[ash] 内置 Monitor 历史回填失败（task=${taskId}）:`, e);
     if (added) bus.publish({ type: "task.monitors", taskId });
     snapshots.delete(taskId); // 失败的快照不留，下次从头建
@@ -102,6 +110,26 @@ async function runBackfill(taskId: string): Promise<number> {
   return added;
 }
 
+/**
+ * 从起点**区间**裁出一个可用的锚点。
+ *
+ * 真实起点落在 `[startedAtLow, startedAtHigh]` 之间（两端都是日志里真实存在的时刻，见
+ * `Found.startedAtLow` 的说明）。区间窄到不影响显示时，取上界当起点并给出精确到期时刻；
+ * 宽了就说「起点不明」——这时仍然知道时长，只是不编到期时刻。
+ *
+ * 为什么取**上界**而不是中点：上界是回执时刻，它是真实起点之后最近的一个确定事件。误差方向
+ * 一致（显示的到期略晚于真实），且有界——而区间已经被判定为可忽略宽度。
+ */
+function startAnchorOf(item: Found): { startedAt: string | null; evidence: MonitorStartEvidence | null } {
+  const { startedAtLow: low, startedAtHigh: high } = item;
+  if (!high) return { startedAt: null, evidence: null };   // 没有回执 ⇒ 期限本来也不知道
+  const width = low ? Math.abs(Date.parse(high) - Date.parse(low)) : Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(width) || width > startAnchorTolerance(item.expiresMs)) {
+    return { startedAt: null, evidence: null };
+  }
+  return { startedAt: high, evidence: "receipt-window" };
+}
+
 /** 这次插入撞的是唯一索引吗（= 别人刚补过同一条，幂等，不是错误）。 */
 const isUniqueConflict = (e: unknown): boolean =>
   (e as { errcode?: number } | null)?.errcode === 2067
@@ -110,18 +138,22 @@ const isUniqueConflict = (e: unknown): boolean =>
 type PriorRow = {
   id: string; nativeId: string | null; status: string;
   cliSessionId: string | null; sourceLifetime: string; startedAt: string;
-  lifetimeEvidence: string | null; sourcePid: number | null;
+  lifetimeEvidence: string | null; startEvidence: string | null; sourcePid: number | null;
 };
 
 /** 把扫出来的结果落库：缺的插进去，已有的按事实优先级补齐/纠正。 */
-async function commitFound(taskId: string, items: Found[]): Promise<number> {
+async function commitFound(
+  taskId: string, items: Found[],
+  /** 每成功一行就回报一次。写失败往外抛时，调用方靠它知道已经成功了几条。 */
+  report: (added: number) => void,
+): Promise<number> {
   if (!items.length) return 0;
   const existing = new Map((await db
     .select({
       id: monitors.id, nativeId: monitors.nativeId, status: monitors.status,
       cliSessionId: monitors.cliSessionId, sourceLifetime: monitors.sourceLifetime,
       startedAt: monitors.startedAt, lifetimeEvidence: monitors.lifetimeEvidence,
-      sourcePid: monitors.sourcePid,
+      startEvidence: monitors.startEvidence, sourcePid: monitors.sourcePid,
     })
     .from(monitors)
     .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude"))))
@@ -147,34 +179,39 @@ async function commitFound(taskId: string, items: Found[]): Promise<number> {
     const prior = existing.get(item.nativeId);
 
     if (prior) {
-      if (await mergeInto(prior, item, status, endedReason)) corrected += 1;
+      if (await mergeInto(prior, item, status, endedReason)) {
+        corrected += 1;
+        // 纠正也要能通知出去：原来只在整个循环跑完之后 publish 一次，中途抛错就全丢了。
+        bus.publish({ type: "task.monitors", taskId });
+      }
       continue;
     }
-    const startedAt = item.startedAt || now();
-    // **起点不可信就不编到期时刻。** 只有起手回执那条事件的时刻算真锚点（见 Found.startedAt）。
-    const trusted = item.startedAtFrom === "receipt";
-    const lifetime: MonitorLifetime = item.lifetime === "bounded" && !trusted ? "unknown" : item.lifetime;
+    const anchor = startAnchorOf(item);
+    // 起点拿不到就退回「这一轮 run 开始的时刻」当显示值——但那不参与期限计算。
+    const startedAt = anchor.startedAt ?? item.startedAtLow ?? item.fileStartedAt ?? now();
     const rowId = id();
     try {
-      await insertFound(rowId, taskId, item, status, endedReason, startedAt, lifetime, trusted);
+      await insertFound(rowId, taskId, item, status, endedReason, startedAt, anchor);
       added += 1;
+      report(added); // 中途抛错时，已成功的这些仍要被通知出去（见 runBackfill 的 catch）
+
       existing.set(item.nativeId, {
         id: rowId, nativeId: item.nativeId, status, cliSessionId: item.cliSessionId,
-        sourceLifetime: lifetime, startedAt, lifetimeEvidence: trusted ? "receipt" : null,
-        sourcePid: item.staleRun ? 0 : null,
+        sourceLifetime: item.lifetime, startedAt,
+        lifetimeEvidence: item.lifetime === "unknown" ? null : "receipt",
+        startEvidence: anchor.evidence, sourcePid: item.staleRun ? 0 : null,
       });
     } catch (e) {
       if (!isUniqueConflict(e)) throw e; // 真写失败：往外抛，这一轮不算读完
     }
   }
-  if (corrected) bus.publish({ type: "task.monitors", taskId });
   return added;
 }
 
 /** 插一行历史投影。只读投影：没有 pid、没有日志文件（见 shared/monitor.ts 的两种来源）。 */
 async function insertFound(
   rowId: string, taskId: string, item: Found, status: string, endedReason: string | null,
-  startedAt: string, lifetime: MonitorLifetime, trusted: boolean,
+  startedAt: string, anchor: { startedAt: string | null; evidence: MonitorStartEvidence | null },
 ): Promise<void> {
   await db.insert(monitors).values({
     id: rowId,
@@ -190,8 +227,10 @@ async function insertFound(
     events: 0,
     exitCode: null,
     startedAt,
-    expiresAt: lifetime === "bounded" && item.expiresMs !== null
-      ? new Date(Date.parse(startedAt) + item.expiresMs).toISOString()
+    // 到期时刻 = 起点 + 时长，**两个都得有依据**。起点没依据时这一列存占位值，由
+    // toTaskMonitor 按 start_evidence 决定对外给不给（时长仍从 timeout_ms 吐出去）。
+    expiresAt: item.lifetime === "bounded" && item.expiresMs !== null && anchor.evidence
+      ? new Date(Date.parse(anchor.startedAt!) + item.expiresMs).toISOString()
       : startedAt,
     // 还在跑的没有结束时刻；结束了的用通知附近那条事件的时刻。都没有就留空——写 now()
     // （回填这一刻，可能是几天后）等于把读取时间冒充成来源完成时间。
@@ -201,8 +240,11 @@ async function insertFound(
     kind: "claude",
     nativeId: item.nativeId,
     cliSessionId: item.cliSessionId,
-    sourceLifetime: lifetime,
-    lifetimeEvidence: trusted && lifetime !== "unknown" ? "receipt" : null,
+    // 时长和起点是两件事：读到回执就知道时长（evidence='receipt'），起点另说。
+    sourceLifetime: item.lifetime,
+    lifetimeEvidence: item.lifetime === "unknown" ? null : "receipt",
+    startEvidence: anchor.evidence,
+    timeoutMs: item.expiresMs,
     // 历史重建拿不到「起它的那一代进程」的 pid——`sessions` 那两列早被后续回合覆盖了。
     // 但**「那一代已经结束」这个结论是拿得到的**：它所在的 run 文件后面还有更新的 run。
     // 0 就是这个结论（见 db/schema.ts 的说明）；拿不到任何证据才留 null。
@@ -233,21 +275,32 @@ async function mergeInto(
     patch.endedReason = endedReason;
   }
   // 期限：旧行可能写着一个由旧算法推出来的 bounded（`lifetime_evidence` 为空），那种也要被
-  // 回执纠正——不能只升级 unknown（第 4 轮审查实测 legacyLifetimes）。
-  const trusted = item.startedAtFrom === "receipt" && !!item.startedAt;
+  // 回执纠正——不能只升级 unknown。时长和起点分别判，**与新插入路径同一套判据**（审查要求
+  // 实时与重建作相同承诺，所以这里也走 startAnchorOf，不另搞一套近似）。
+  const anchor = startAnchorOf(item);
   if (prior.lifetimeEvidence !== "receipt" && item.lifetime !== "unknown") {
-    if (item.lifetime === "bounded" && item.expiresMs !== null && trusted) {
+    if (item.lifetime === "bounded" && item.expiresMs !== null) {
       patch.sourceLifetime = "bounded";
-      patch.startedAt = item.startedAt;
-      patch.expiresAt = new Date(Date.parse(item.startedAt!) + item.expiresMs).toISOString();
       patch.lifetimeEvidence = "receipt";
+      patch.timeoutMs = item.expiresMs;
+      // 起点有依据才落到期时刻；没依据就只记时长，卡片改说「时长 X」。
+      if (anchor.evidence) {
+        patch.startedAt = anchor.startedAt;
+        patch.expiresAt = new Date(Date.parse(anchor.startedAt!) + item.expiresMs).toISOString();
+        patch.startEvidence = anchor.evidence;
+      }
     } else if (item.lifetime === "persistent") {
+      // 持续监听不需要绝对起点——它根本没有到期时刻可言。
       patch.sourceLifetime = "persistent";
       patch.lifetimeEvidence = "receipt";
     }
   }
   if (!Object.keys(patch).length) return false;
-  await db.update(monitors).set(patch).where(eq(monitors.id, prior.id));
+  // **条件更新**：只在状态还是我们读到的那个时才写。读到写之间隔着 await，期间实时投影的
+  // close 可能已经落了来源终态——只按 id 写会把它覆盖回去（第 5 轮审查指出 merge/close 两处
+  // 缺这道，而对称的 revive/bury 已经在 SQL 里带了）。
+  await db.update(monitors).set(patch)
+    .where(and(eq(monitors.id, prior.id), eq(monitors.status, prior.status)));
   return true;
 }
 

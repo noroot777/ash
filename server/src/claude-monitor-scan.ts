@@ -36,18 +36,28 @@ export type Found = {
   call: MonitorCall;
   cliSessionId: string | null;
   /**
-   * 起始时刻。**只有来自起手回执那条事件的才可信**（`startedAtFrom === "receipt"`）。
+   * ── 起点是一个**区间**，不是一个时刻 ────────────────────────────────────────
    *
-   * 为什么不能用 tool_use 那条 assistant 事件的时刻：工具调用可能卡在权限确认或调度上，
-   * 模型发出调用和进程真正起来之间能差很久（第 4 轮审查实测 timestampAnchor：tool_use 在
-   * 12:13、回执在 12:33，按前者算出来的到期时刻早了整整 20 分钟）。而起手回执是**启动之后
-   * 立刻**返回的，它那条事件的时刻就约等于真实启动时刻。
+   * 历史文件里没有任何一条事件能直接给出「计时器什么时候起的」：
+   * - `task_started` 是 system 事件，**不带 timestamp**（实测）。
+   * - `tool_use` 那条 assistant 事件的时刻在计时器之前（工具还可能卡在权限确认上）。
+   * - 起手回执那条事件的时刻在计时器之后：本机 claude 2.1.283 的源码里，到期 `setTimeout`
+   *   在工具返回**前**就设好了，而回执消息要等 `for await` 跑完 PostToolUse hooks 之后才由
+   *   `ke({…})` 构建，timestamp 取的是那一刻的 `new Date()`（第 5 轮审查从二进制提取，
+   *   sha256 d8cb1e5c…；我也核过 formatter 吐的是配置的 `timeoutMs`，不是扣掉 hooks 之后的
+   *   剩余时长）。
    *
-   * 这正好和「期限从哪来」重合：能算到期时刻的前提是收到回执，而回执自带可信时刻。所以不会
-   * 出现「知道期限但不知道起点」的组合。
+   * 所以真实起点必然落在 `[startedAtLow, startedAtHigh]` 之间，**区间宽度就是不确定度**。
+   * 上一版把上界当成「可信起点」，于是 hooks 一慢，到期时刻就跟着往后漂（审查实测延迟 20
+   * 分钟时 expiresAt 晚了 1,200,000ms）。
+   *
+   * 实测这个区间通常很窄：本机 60 个真实 Monitor 回执，`tool_use` → 回执全部在 22~59ms。
+   * 窄到可以忽略时才给精确到期时刻，宽了就只报时长（判据见 backfill 的 `startAnchorOf`）。
    */
-  startedAt: string | null;
-  startedAtFrom: "receipt" | "tool_use" | "file" | null;
+  startedAtLow: string | null;
+  startedAtHigh: string | null;
+  /** 两个界都没有时的兜底显示值（run 文件名上的时刻）。只作显示，不参与期限计算。 */
+  fileStartedAt: string | null;
   endedAt: string | null;
   lifetime: MonitorLifetime;
   expiresMs: number | null;
@@ -75,6 +85,19 @@ type SessionScan = {
   found: Map<string, Found>;
   cursors: Map<string, { size: number; offset: number }>;
   /**
+   * **还关联不上任何 Monitor 的回执**（tool_use_id → 回执原文 + 那条事件的时刻）。
+   *
+   * 为什么必须留着而不是丢掉：事件的因果顺序和**读取顺序**不是一回事。前一个 run 文件撞到
+   * 单次上限时，它尾部的 `task_started` 这一轮还没读到，而后一个 run 文件里那条回执已经被
+   * 读完、游标也推进到尾了 —— 丢掉就等于永久丢掉（第 5 轮审查实测 crossFileLimit：第二轮
+   * 读到了 started，回执和 completed 再也不会来，卡片永远停在 lost + unknown）。
+   *
+   * 所以改成缓冲：关联不上就先存着，等对应的 Monitor 在后续某一轮被读出来时回溯应用。
+   */
+  orphanReceipts: Map<string, { raw: string; at: string | null }>;
+  /** 同理，还关联不上任何 Monitor 的终态通知（nativeId → 状态 + 说明 + 时刻）。 */
+  orphanNotices: Map<string, { status: string; summary: string; at: string | null }>;
+  /**
    * 最近见到的事件时刻。
    *
    * 只用来给**结束时刻**兜底：`task_notification` 是 system 事件，自己不带 timestamp，而
@@ -95,16 +118,26 @@ export type TaskScan = {
   failed: boolean;
   /** 文件里出现过的、与期望不符的 session_id（只作诊断）。 */
   foreign: Set<string>;
-  /** 这一轮有没有读到新内容。没有就不必重新提交事实。 */
+  /** 这一轮有没有读到新内容。 */
   advanced: boolean;
+  /**
+   * 这一轮有没有**代次**变化（某条 Found 的 `staleRun` 翻转了）。
+   *
+   * 字节 offset 不是「来源版本」的全部：新回合会先创建一个空的 run 文件、过一会儿才输出。
+   * 那一刻没有任何新增字节，但「上一代已经结束」这件事已经成立。只看 `advanced` 就提交不了
+   * 这个变化，旧监听会一直显示「正在盯着」（第 5 轮审查实测 emptyNewRun）。
+   */
+  generationChanged: boolean;
 };
 
 export const newTaskScan = (): TaskScan => ({
-  sessions: new Map(), truncated: false, failed: false, foreign: new Set(), advanced: false,
+  sessions: new Map(), truncated: false, failed: false, foreign: new Set(),
+  advanced: false, generationChanged: false,
 });
 
 const newSessionScan = (): SessionScan => ({
-  pending: new Map(), byToolUse: new Map(), found: new Map(), cursors: new Map(), lastAt: null,
+  pending: new Map(), byToolUse: new Map(), found: new Map(), cursors: new Map(),
+  orphanReceipts: new Map(), orphanNotices: new Map(), lastAt: null,
 });
 
 /**
@@ -200,9 +233,29 @@ export async function scanSession(
     scan.sessions.set(sessionId, session);
   }
   const files = await streamFilesOf(sessionId, outPath);
+  // **按时间顺序读，前一个没读完就不读后面的。**
+  //
+  // 这些文件之间有因果关系：Monitor 在前一个 run 文件里起（tool_use/task_started），它的
+  // 回执和终态可能落在后一个 run 文件里。乱序消费的后果是后文件的事实关联不上任何 Monitor
+  // ——而它的游标已经推到尾，那些事实再也不会被读一次（第 5 轮审查实测 crossFileLimit：
+  // 前文件超 128 MiB 上限，后文件的 90 秒回执和 completed 当轮被读完并丢弃，此后三次回填都
+  // 恢复不出 exited + bounded）。
+  //
+  // 孤儿缓冲（`orphanReceipts`/`orphanNotices`）是第二道：同一文件内部的乱序、以及这一轮之前
+  // 已经被旧代码消费掉的情况，靠它兜住。两道都要有——顺序保证「别制造孤儿」，缓冲保证
+  // 「已经产生的孤儿不丢」。
+  let blocked = false;
   for (const file of files) {
+    if (blocked) break;
     let size = 0;
-    try { size = (await stat(file.path)).size; } catch { scan.failed = true; continue; }
+    try {
+      size = (await stat(file.path)).size;
+    } catch {
+      // stat 失败和撞上限是同一类「这个文件没读完」，后面的文件同样不能先读。
+      scan.failed = true;
+      blocked = true;
+      continue;
+    }
     const cursor = session.cursors.get(file.path) ?? { size: 0, offset: 0 };
     // 文件比上次短 = 被重写/截断过，之前的游标无意义，从头再来。
     if (size < cursor.offset) { cursor.offset = 0; cursor.size = 0; }
@@ -219,16 +272,24 @@ export async function scanSession(
     try {
       const { nextOffset, truncated } = await eachLine(file.path, cursor.offset, maxBytes, sink);
       if (nextOffset > cursor.offset) scan.advanced = true;
-      if (truncated) scan.truncated = true;
+      if (truncated) { scan.truncated = true; blocked = true; }
       session.cursors.set(file.path, { size, offset: nextOffset });
+      // 这个文件还没读到尾（撞上限）也算没读完——下一轮从游标接着读，后面的文件继续等。
+      if (nextOffset < size) blocked = true;
     } catch (e) {
       scan.failed = true;
+      blocked = true;
       console.warn(`[ash] 内置 Monitor 历史扫描读失败（${file.path}）:`, e);
     }
   }
   // **每轮重算**：新文件出现之后，之前那些 Found 的「那一代还在跑吗」答案会翻转。
+  // 翻转本身就是一条要提交的事实，哪怕这一轮一个新字节都没读到（见 TaskScan.generationChanged）。
   const latest = files.length ? files[files.length - 1]!.path : "";
-  for (const row of session.found.values()) row.staleRun = !!latest && row.filePath !== latest;
+  for (const row of session.found.values()) {
+    const stale = !!latest && row.filePath !== latest;
+    if (stale !== row.staleRun) scan.generationChanged = true;
+    row.staleRun = stale;
+  }
 }
 
 /** 一行 stream-json。认人判据见 `scanSession` 的说明。 */
@@ -256,21 +317,23 @@ function consume(
       const call = parseMonitorInput(block.input);
       if (call && str(block.id)) session.pending.set(str(block.id), { call, at });
     } else if (block.type === "tool_result") {
-      const nativeId = session.byToolUse.get(str(block.tool_use_id));
-      const row = nativeId ? session.found.get(nativeId) : undefined;
-      if (!row) continue;
+      const toolUseId = str(block.tool_use_id);
       const raw = typeof block.content === "string"
         ? block.content
         : Array.isArray(block.content)
           ? block.content.map((b: any) => (b && typeof b.text === "string" ? b.text : "")).join("\n")
           : "";
-      const receipt = parseMonitorStartReceipt(raw);
-      if (receipt.lifetime !== "unknown") {
-        row.lifetime = receipt.lifetime;
-        row.expiresMs = receipt.ms;
-        // 回执这条事件的时刻才是可信起点（见 Found.startedAt）。
-        if (at) { row.startedAt = at; row.startedAtFrom = "receipt"; }
+      const nativeId = session.byToolUse.get(toolUseId);
+      const row = nativeId ? session.found.get(nativeId) : undefined;
+      if (!row) {
+        // 还不知道这条回执属于谁（它的 task_started 在某个还没读完的前文件里）。
+        // **缓冲，不丢。** 等那条 Monitor 被读出来时回溯应用（见 orphanReceipts）。
+        if (toolUseId && /Monitor started/i.test(raw)) {
+          session.orphanReceipts.set(toolUseId, { raw, at });
+        }
+        continue;
       }
+      applyReceipt(row, raw, at);
     }
   }
 
@@ -284,20 +347,57 @@ function consume(
     session.found.set(nativeId, {
       nativeId, call: started.call,
       cliSessionId: evSession ?? expectSessionId,
-      // 先用 tool_use 那条的时刻占位（只作显示），回执到了再换成可信起点。
-      startedAt: started.at ?? fileStartedAt,
-      startedAtFrom: started.at ? "tool_use" : fileStartedAt ? "file" : null,
+      startedAtLow: started.at,
+      startedAtHigh: null,   // 回执到了才有上界
+      fileStartedAt,
       endedAt: null,
       lifetime: "unknown", expiresMs: null,
       status: null, endedReason: null,
       filePath, staleRun: false,
     });
-  } else if (ev.subtype === "task_notification" && session.found.has(nativeId)) {
+    // **回溯**：这条 Monitor 的回执/终态可能早就被读过了（后一个 run 文件先读完的情况）。
     const row = session.found.get(nativeId)!;
-    row.status = claudeMonitorStatus(ev.status);
-    row.endedReason = str(ev.summary) || null;
-    row.endedAt = session.lastAt ?? row.endedAt;
+    const pendingReceipt = session.orphanReceipts.get(str(ev.tool_use_id));
+    if (pendingReceipt) {
+      applyReceipt(row, pendingReceipt.raw, pendingReceipt.at);
+      session.orphanReceipts.delete(str(ev.tool_use_id));
+    }
+    const pendingNotice = session.orphanNotices.get(nativeId);
+    if (pendingNotice) {
+      applyNotice(row, pendingNotice.status, pendingNotice.summary, pendingNotice.at);
+      session.orphanNotices.delete(nativeId);
+    }
+  } else if (ev.subtype === "task_notification" && nativeId) {
+    const row = session.found.get(nativeId);
+    if (!row) {
+      // 同理：这条终态的 Monitor 还没被读出来。缓冲住，别当成「跟我们无关的后台任务」。
+      // 注意这里**不**过滤是不是 Monitor 起的——过滤发生在回溯应用时（只有被认出来的
+      // Monitor 才会去取它的缓冲），所以普通后台 Bash 的通知最多占一点内存，不会进投影。
+      session.orphanNotices.set(nativeId, {
+        status: claudeMonitorStatus(ev.status), summary: str(ev.summary), at: session.lastAt,
+      });
+      return;
+    }
+    applyNotice(row, claudeMonitorStatus(ev.status), str(ev.summary), session.lastAt);
   }
+}
+
+/** 把一条起手回执落到 Found 上。来源侧唯一说出**生效**期限的地方。 */
+function applyReceipt(row: Found, raw: string, at: string | null): void {
+  const receipt = parseMonitorStartReceipt(raw);
+  if (receipt.lifetime === "unknown") return;
+  row.lifetime = receipt.lifetime;
+  row.expiresMs = receipt.ms;
+  // 回执那条事件的时刻是真实起点的**上界**：计时器在工具返回前就起了，而这条消息要等
+  // PostToolUse hooks 跑完才构建（见 Found.startedAtHigh 的说明）。
+  row.startedAtHigh = at;
+}
+
+/** 把一条终态通知落到 Found 上。 */
+function applyNotice(row: Found, status: string, summary: string, at: string | null): void {
+  row.status = status;
+  row.endedReason = summary || null;
+  row.endedAt = at ?? row.endedAt;
 }
 
 /** 这一轮扫出来的全部结果（跨会话合并，键仍按会话分区保证不互相覆盖）。 */
