@@ -337,7 +337,7 @@ export class ClaudeMonitorTrace {
         const seen = this.startAnchor();
         // 同步认领，再排队落库：准入与落库之间隔着一个 await，中间到达的终态必须认得出来。
         this.claimed.add(taskId);
-        this.queue(() => this.open(taskId, call, seen));
+        this.queue(() => this.open(taskId, call, seen, str(ev.tool_use_id)));
         return;
       }
       case "task_notification": {
@@ -440,6 +440,9 @@ export class ClaudeMonitorTrace {
 
   private async open(
     nativeId: string, call: MonitorCall, seen: { at: string; widthMs: number },
+    /** 起它的那个 tool_use id。落到行上，历史侧才配得回它的起手回执（见
+     *  claude-monitor-commit.ts 的「检查点的两半」）。 */
+    toolUseId: string,
   ): Promise<void> {
     const found = await locateSession(this.cliSessionId);
     if (found) this.taskId = found.taskId; // 归属趁手记下（见 `taskId`）
@@ -486,6 +489,7 @@ export class ClaudeMonitorTrace {
       kind: "claude",
       nativeId,
       cliSessionId: this.cliSessionId || null,
+      toolUseId: toolUseId || null,
       sourceLifetime: "unknown",
       lifetimeEvidence: null, // 回执还没到；拿到了由 applyReceipt 写成 'receipt'
       // 档位是「实时看着它到达」，**但准不准由误差界说**：接管回来积压重放时这条事件可能

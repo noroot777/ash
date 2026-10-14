@@ -179,6 +179,27 @@ async function resolveSession(cliSessionId: string): Promise<void> {
 export const monitorRecoverySessionPending = (cliSessionId: string): boolean =>
   unattributed.has(cliSessionId);
 
+/**
+ * **真实请求把这些会话责任认到任务头上**（回填入口调用，参数是这个任务的全部 CLI 会话）。
+ *
+ * 为什么必须有这一步：按会话记的那份责任只能靠定时器自己查库解析归属，而阶梯推完就停
+ * （`armSession` 直接 return）。库在那之后才好起来、又没有新的成功投影事件时，它就永远
+ * 停在那儿——而普通 `resetMonitorRecoveryBudget` 只认按 taskId 存的那份，够不着它
+ * （第 9 轮审查不拦项 2）。
+ *
+ * 而回填入口**自己就知道归属**（它正在跑的就是那个任务），不必再查一次库：直接折进正常
+ * 账本，这一轮读完文件就会把事实重新读出来并销账。
+ */
+export function adoptSessionRecovery(taskId: string, cliSessionIds: readonly string[]): void {
+  for (const cliSessionId of cliSessionIds) {
+    const entry = unattributed.get(cliSessionId);
+    if (!entry) continue;
+    if (entry.timer) clearTimeout(entry.timer);
+    unattributed.delete(cliSessionId);
+    for (const reason of entry.reasons) noteMonitorRecovery(taskId, reason);
+  }
+}
+
 /** 现在还有待恢复事实的任务。给扫描快照的淘汰用：这些任务的游标不能被当普通缓存挤掉。 */
 export const monitorRecoveryTasks = (): ReadonlySet<string> => new Set(pending.keys());
 

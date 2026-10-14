@@ -106,9 +106,12 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
       blockedReason={null}
     />,
   );
-  assert.doesNotMatch(exhausted, /正在自动继续/, "停了就不许说还在自动继续");
-  assert.match(exhausted, /自动重试已停止/, "要说清自动重试已经停了");
-  assert.match(exhausted, /重新打开这一格会再试/, "并且说清怎么再推起来");
+  assert.doesNotMatch(exhausted, /正在自动继续/, "预算用完了就不许说「正在自动继续」");
+  assert.match(exhausted, /已重试多次仍没读完/, "要说清试了很多次还没读完");
+  assert.match(exhausted, /每次打开这一格都会再推一轮/, "并且说清它怎么继续");
+  // 反过来也不许把「已停止」说死：读这份状态的那次请求自己就把预算还回去、又推了一轮，
+  // 所以页面上「自动重试已停止」这句话在闭环里从来不成立（第 9 轮审查不拦项 3）。
+  assert.doesNotMatch(exhausted, /已停止/, "闭环里它不是停着的：别说成已停止");
   assert.doesNotMatch(exhausted, /这个任务上还没有哨兵/, "预算用完也不许谎称没用过");
 }
 

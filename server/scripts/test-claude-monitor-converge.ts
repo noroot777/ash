@@ -37,6 +37,7 @@ const [
   import("../src/bus.js"),
 ]);
 const { monitorRecoveryOf, monitorRecoverySessionPending, stopAllMonitorRecovery } = recovery;
+const LIMIT = 32_768; // 与上面的 ASH_MONITOR_SCAN_MAX_BYTES 同一个数
 const { newTaskScan, scanSession } = scan;
 const { monitors, projects, sessions, tasks } = schema;
 await ensureSchema();
@@ -92,6 +93,34 @@ const realMonitor = (cli: string, nativeId: string) => [
   ] } }),
   line({ type: "system", subtype: "task_notification", task_id: nativeId, status: "completed", summary: "等到了", session_id: cli }),
 ].join("");
+
+/**
+ * 用一条填充事件把 `body` 顶到正好 `target` 字节。
+ *
+ * 用来把**检查点**放在想要的那一行之间——单次上限是按字节算的，所以夹具得按字节对齐。
+ */
+function padTo(body: string, target: number): string {
+  const head = '{"type":"assistant","timestamp":"2026-10-15T01:00:00.000Z","message":{"content":[{"type":"text","text":"';
+  const tail = '"}]}}\n';
+  const need = target - body.length - head.length - tail.length;
+  if (need < 0) throw new Error(`夹具装不下：还差 ${-need} 字节`);
+  return body + head + "x".repeat(need) + tail;
+}
+
+/**
+ * 造一批「同样处于恢复中」的任务，用来把被测任务挤出快照表（软上限豁免恢复中的游标，
+ * 所以压力只能压到硬上限上）。返回一个「再顶一次」的函数。
+ */
+async function makeSqueeze(tag: string): Promise<() => Promise<void>> {
+  const ids: string[] = [];
+  for (let i = 0; i < 70; i += 1) {
+    const other = await fixture(`${tag}-filler${i}`);
+    writeFileSync(other.file, line({ type: "system", subtype: "init", session_id: other.cli }));
+    chmodSync(other.file, 0o000);
+    ids.push(other.taskId);
+  }
+  return async () => { for (const taskId of ids) await backfillClaudeMonitors(taskId); };
+}
 
 /** 自动推进会自己往下读；这里只是等它读完（或等到超时）。 */
 async function waitRecovered(taskId: string, tries = 300): Promise<void> {
@@ -359,11 +388,133 @@ async function main(): Promise<void> {
     off();
   }
 
+  // ── ⑦ 被挤掉之后**位置之前建立的关联**也要还在（第 9 轮审查实测的那一条）────────
+  //
+  // 上一版停好的只有 offset：前缀里建立的调用/回执/终态关联全丢。于是报告那个形状——一号
+  // 监听的调用+启动+回执在前缀、它的完成通知在后缀；二号的调用在前缀末尾、启动在后缀——
+  // 读完之后面板上是「一号仍在运行 + 二号整张卡不见」，刷新也不改，而恢复状态写着读完了。
+  //
+  // 检查点要两半一起成立（见 claude-monitor-commit.ts 文件头）：
+  // ① 位置只停在**没有悬着的关联**处（所以二号的调用会被重放到）；
+  // ② 位置之前那些已经成行的监听，后缀里的事实按 native_id / tool_use_id 配回去
+  //    （所以一号的完成通知落到了它那一行上）。
+  // 两半都在时，这一轮不需要「回头从零重读」那条兜底路（断言里一并钉住）。
+  {
+    const f = await fixture("checkpoint");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += line({ type: "assistant", timestamp: "2026-10-15T03:00:00.000Z", message: { content: [
+      { type: "tool_use", name: "Monitor", id: "tu-bfirst", input: { command: "sleep 1800", description: "一号监听", timeout_ms: 600_000 } },
+    ] } });
+    body += line({ type: "system", subtype: "task_started", task_id: "bfirst", tool_use_id: "tu-bfirst", task_type: "local_bash", session_id: f.cli });
+    body += line({ type: "user", timestamp: "2026-10-15T03:00:00.040Z", message: { content: [
+      { type: "tool_result", tool_use_id: "tu-bfirst", content: "Monitor started (task bfirst, expires in 1m 30s unless the source ends first)." },
+    ] } });
+    // 三号：调用和启动在前缀（所以它会成行），**回执落在后缀** —— 它只能靠
+    // tool_use_id 配回自己那一行（`monitors.tool_use_id`）。
+    body += line({ type: "assistant", timestamp: "2026-10-15T03:05:00.000Z", message: { content: [
+      { type: "tool_use", name: "Monitor", id: "tu-bthird", input: { command: "sleep 1800", description: "三号监听", timeout_ms: 600_000 } },
+    ] } });
+    body += line({ type: "system", subtype: "task_started", task_id: "bthird", tool_use_id: "tu-bthird", task_type: "local_bash", session_id: f.cli });
+    // 二号的**调用**正好压在单次上限上，它的启动事件在下一行 —— 检查点落在两者之间。
+    const call2 = line({ type: "assistant", timestamp: "2026-10-15T03:10:00.000Z", message: { content: [
+      { type: "tool_use", name: "Monitor", id: "tu-bsecond", input: { command: "sleep 1800", description: "二号监听", timeout_ms: 600_000 } },
+    ] } });
+    body = padTo(body, LIMIT - call2.length) + call2;
+    check(body.length === LIMIT, "⑦夹具把二号的调用正好顶在单次上限上", `${body.length}/${LIMIT}`);
+    body += line({ type: "system", subtype: "task_started", task_id: "bsecond", tool_use_id: "tu-bsecond", task_type: "local_bash", session_id: f.cli });
+    body += line({ type: "user", timestamp: "2026-10-15T03:10:00.040Z", message: { content: [
+      { type: "tool_result", tool_use_id: "tu-bsecond", content: "Monitor started (task bsecond, expires in 1m 30s unless the source ends first)." },
+    ] } });
+    body += line({ type: "user", timestamp: "2026-10-15T03:05:00.040Z", message: { content: [
+      { type: "tool_result", tool_use_id: "tu-bthird", content: "Monitor started (task bthird, expires in 1m 30s unless the source ends first)." },
+    ] } });
+    body += line({ type: "system", subtype: "task_notification", task_id: "bfirst", status: "completed", summary: "来源确认完成", session_id: f.cli });
+    body += line({ type: "system", subtype: "task_notification", task_id: "bsecond", status: "completed", summary: "来源确认完成", session_id: f.cli });
+    writeFileSync(f.file, body);
+
+    await backfillClaudeMonitors(f.taskId); // 第一轮：读到上限，一号已成行
+    const first = await listMonitors(f.taskId);
+    check(first.length === 2 && first.every((r) => r.nativeId !== "bsecond"),
+      "⑦第一轮读到一号三号（二号的启动还在后缀）",
+      `${first.length} 条：${first.map((r) => r.nativeId).join(",")}`);
+    const squeeze = await makeSqueeze("cp");
+    await squeeze();
+    check(monitorScanTracked(f.taskId) === false, "⑦配对状态确实被硬上限挤掉了");
+
+    // 往下读完。期间盯着恢复原因：检查点够用时不该出现「回头重读」那一支。
+    const seen = new Set<string>();
+    for (let i = 0; i < 40; i += 1) {
+      for (const r of monitorRecoveryOf(f.taskId)?.reasons ?? []) seen.add(r);
+      if ((await listMonitors(f.taskId)).length >= 3 && !monitorRecoveryOf(f.taskId)) break;
+      await backfillClaudeMonitors(f.taskId);
+      await settle(20);
+    }
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 3, "⑦三张卡都在（二号的调用被重放到了）",
+      `${rows.length} 条：${rows.map((r) => r.nativeId).join(",")}`);
+    const byId = new Map(rows.map((r) => [r.nativeId, r]));
+    check(byId.get("bfirst")?.status === "exited",
+      "⑦一号的完成通知配回了它那一行（不是永远 running/lost）", String(byId.get("bfirst")?.status));
+    check(byId.get("bsecond")?.status === "exited", "⑦二号也带着来源报的终态", String(byId.get("bsecond")?.status));
+    check(byId.get("bfirst")?.timeoutMs === 90_000 && byId.get("bsecond")?.timeoutMs === 90_000,
+      "⑦两条的时长都来自来源回执",
+      `${byId.get("bfirst")?.timeoutMs}/${byId.get("bsecond")?.timeoutMs}`);
+    // 三号的回执落在检查点之后，而它的 tool_use→native 关联已经随配对状态被丢掉：
+    // 只有「行上记着 tool_use_id」这条通道能把它配回去。
+    check(byId.get("bthird")?.timeoutMs === 90_000,
+      "⑦三号的回执按 tool_use_id 配回了它那一行", String(byId.get("bthird")?.timeoutMs));
+    check(!seen.has("checkpoint-incomplete"),
+      "⑦检查点够用：没走「回头从零重读」那条兜底路", [...seen].join(","));
+    check(monitorRecoveryOf(f.taskId) === null, "⑦并且销了账",
+      JSON.stringify(monitorRecoveryOf(f.taskId)));
+  }
+
+  // ── ⑧ 被淘汰的「不是 Monitor」结论：退成孤儿时不许销账，回头重读把结论拿回来 ────────
+  //
+  // 报告点名的同类位置：`notMonitorTools`/`confirmedForeign` 是**结论**，它随配对状态一起
+  // 被丢掉，而前缀已经越过——于是普通后台 Bash 的迟到通知又退成孤儿，没有重新获取那个结论
+  // 的通道。这里的契约不是「结论要存起来」，而是**配不上的事实不许当成读完了**：回到一个
+  // 确定可重放的位置（从零）重读一遍，结论自然回来，然后才干净销账。
+  {
+    const f = await fixture("foreign-late");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += line({ type: "assistant", timestamp: "2026-10-15T04:00:00.000Z", message: { content: [
+      { type: "tool_use", name: "Bash", id: "tb-late", input: { command: "pytest -q", run_in_background: true } },
+    ] } });
+    body += line({ type: "system", subtype: "task_started", task_id: "blate", tool_use_id: "tb-late", task_type: "local_bash", session_id: f.cli });
+    // 它的终态通知落在检查点之后。
+    body = padTo(body, LIMIT);
+    body += line({ type: "system", subtype: "task_notification", task_id: "blate", status: "completed", summary: "跑完了", session_id: f.cli });
+    body += realMonitor(f.cli, "breal01"); // 后面还有一个真 Monitor，必须照样补出来
+    writeFileSync(f.file, body);
+
+    await backfillClaudeMonitors(f.taskId);
+    const squeeze = await makeSqueeze("fl");
+    await squeeze();
+    check(monitorScanTracked(f.taskId) === false, "⑧结论连同配对状态被挤掉了");
+
+    const seen = new Set<string>();
+    for (let i = 0; i < 40; i += 1) {
+      for (const r of monitorRecoveryOf(f.taskId)?.reasons ?? []) seen.add(r);
+      if ((await listMonitors(f.taskId)).length >= 1 && !monitorRecoveryOf(f.taskId)) break;
+      await backfillClaudeMonitors(f.taskId);
+      await settle(20);
+    }
+    check(seen.has("checkpoint-incomplete"),
+      "⑧配不上的事实没有被当成读完（留了账、回头重读）", [...seen].join(","));
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 1 && rows[0]?.nativeId === "breal01",
+      "⑧普通 Bash 没留下假卡，真 Monitor 照样补出来", `${rows.length} 条：${rows.map((r) => r.nativeId).join(",")}`);
+    check(monitorRecoveryOf(f.taskId) === null, "⑧最终干净销账（不是永远 pending）",
+      JSON.stringify(monitorRecoveryOf(f.taskId)));
+  }
+
   if (failures === 0) {
     console.log("✓ 内置 Monitor 恢复的收敛性：普通后台 Bash 不占缓冲（末尾 Monitor 读得到）/ "
       + "真乱序满缓冲时背压不丢事实且预算真在耗 / 首次归属查询失败也不丢责任（库好了自动补）/ "
       + "每轮都被硬上限挤掉也从原位继续 / 丢过游标后的重读不算进展 / "
-      + "预算耗尽会留账并推给前端 均受回归保护");
+      + "预算耗尽会留账并推给前端 / 挤掉配对状态后位置之前的关联仍成立 / "
+      + "配不上的事实不当成读完 均受回归保护");
   }
 }
 

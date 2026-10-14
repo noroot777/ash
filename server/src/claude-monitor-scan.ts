@@ -93,6 +93,14 @@ export type Found = {
    */
   startedAtLow: string | null;
   startedAtHigh: string | null;
+  /**
+   * 起它的那个 tool_use id。
+   *
+   * 落到行上去（`monitors.tool_use_id`）：内存里的 `byToolUse` 在内存上限下会丢，丢了之后
+   * 后缀里的起手回执就配不上任何东西——而库里那一行记着它就能配上（见
+   * claude-monitor-commit.ts 的「检查点的两半」）。
+   */
+  toolUseId: string;
   /** 两个界都没有时的兜底显示值（run 文件名上的时刻）。只作显示，不参与期限计算。 */
   fileStartedAt: string | null;
   endedAt: string | null;
@@ -120,7 +128,18 @@ type SessionScan = {
   pending: Map<string, { call: MonitorCall; at: string | null }>;
   byToolUse: Map<string, string>;
   found: Map<string, Found>;
-  cursors: Map<string, { size: number; offset: number }>;
+  /**
+   * 每个文件读到第几字节（`offset`），以及**可重放到第几字节**（`safe`）。
+   *
+   * 两者的区别就是第 9 轮审查那条：`offset` 只说「读到这儿了」，它之前建立的配对关系
+   * （`pending`/`byToolUse`/`found`）全在内存里；内存上限把这些丢掉之后，从 `offset`
+   * 往后读就配不上任何东西，而扫描照旧读到文件尾、照旧销账。
+   *
+   * `safe` 是**那一刻没有任何悬着的关联**的位置（`pending`/两个孤儿缓冲都空）。从它往后
+   * 重放不会丢关联：之前起的 Monitor 都已经成行并提交，后缀的事实能按 native_id /
+   * tool_use_id 回到那些行上（见 claude-monitor-commit.ts）。被内存上限挤掉时停的是它。
+   */
+  cursors: Map<string, { size: number; offset: number; safe: number }>;
   /**
    * **还关联不上任何 Monitor 的回执**（tool_use_id → 回执原文 + 那条事件的时刻）。
    *
@@ -158,6 +177,14 @@ type SessionScan = {
    * **起始时刻不走这条**：那个只认起手回执那条事件的时刻，差一点都不行（见 Found.startedAt）。
    */
   lastAt: string | null;
+  /**
+   * 这条会话是**从停好的位置接着读**的（前缀在这一代扫描里没读过）。
+   *
+   * 用来判「读完一轮还配不上的事实能不能当成与我们无关」：没跳过前缀时，这种事实的
+   * `task_started` 必然已经读过且不是 Monitor，所以它确实与我们无关；跳过了前缀就不能
+   * 这么推断——那时要回到一个确定可重放的位置重读，而不是销账（第 9 轮审查）。
+   */
+  resumedFromCheckpoint: boolean;
 };
 
 /** 一个任务的扫描快照（进程内缓存）。 */
@@ -204,8 +231,18 @@ export const newTaskScan = (): TaskScan => ({
 const newSessionScan = (): SessionScan => ({
   pending: new Map(), byToolUse: new Map(), found: new Map(), cursors: new Map(),
   orphanReceipts: new Map(), orphanNotices: new Map(), lastAt: null,
-  notMonitorTools: new Set(), confirmedForeign: new Set(),
+  notMonitorTools: new Set(), confirmedForeign: new Set(), resumedFromCheckpoint: false,
 });
+
+/**
+ * 现在这一刻可不可以当成**可重放位置**：没有任何悬着的关联。
+ *
+ * `found` 不在判据里——它那一份记忆在库里（每一轮都提交），后缀的事实能按 native_id /
+ * tool_use_id 配回去。悬着的是这三样：等 `task_started` 的调用、等 Monitor 的回执、
+ * 等 Monitor 的终态通知。它们只在内存里，丢了就是真丢了。
+ */
+const replayable = (session: SessionScan): boolean =>
+  session.pending.size === 0 && session.orphanReceipts.size === 0 && session.orphanNotices.size === 0;
 
 /**
  * 一条会话**全部**的 stdout 文件，按时间排好。
@@ -249,6 +286,8 @@ async function eachLine(
   path: string, start: number, maxBytes: number,
   /** 返回 false = **这一行没消费掉**，就停在它前面（游标不越过它）。 */
   onLine: (line: string) => boolean,
+  /** 这一行消费完了，它末尾在文件里的绝对位置。调用方据此记可重放位置（见 cursor.safe）。 */
+  afterLine: (offsetAfter: number) => void,
 ): Promise<{ nextOffset: number; truncated: boolean; stopped: boolean }> {
   const fh = await openFile(path, "r");
   try {
@@ -274,6 +313,7 @@ async function eachLine(
         // 来源不会重发的事实（见 ORPHAN_CAP 的背压说明）。
         if (!keepGoing) return { nextOffset: base + lineStart, truncated: false, stopped: true };
         from = nl + 1;
+        afterLine(base + from);
       }
       carry = Buffer.from(data.subarray(from)); // 复制：data 可能指向复用的 buf
       offset += bytesRead;
@@ -309,11 +349,6 @@ export async function scanSession(
   let session = scan.sessions.get(sessionId);
   if (!session) {
     session = newSessionScan();
-    // 继承停好的读取位置（见 TaskScan.parkedCursors）。路径唯一，所以整张表倒进来即可，
-    // 这条会话只会去读属于它自己的那几个文件。
-    if (scan.parkedCursors) {
-      for (const [path, cursor] of scan.parkedCursors) session.cursors.set(path, { ...cursor });
-    }
     scan.sessions.set(sessionId, session);
   }
   const files = await streamFilesOf(sessionId, outPath);
@@ -340,26 +375,41 @@ export async function scanSession(
       blocked = true;
       continue;
     }
-    const cursor = session.cursors.get(file.path) ?? { size: 0, offset: 0 };
+    // 停好的位置**惰性取**：一个任务的 parked 表是它全部会话文件的并集，整张倒进每条会话
+    // 的桶里就按会话数把它复制了一遍（第 9 轮审查不拦项 4）。路径本来就唯一，按需查即可。
+    const parked = scan.parkedCursors?.get(file.path);
+    if (parked && !session.cursors.has(file.path)) {
+      session.cursors.set(file.path, { ...parked, safe: parked.offset });
+      // 停好的位置本身是可重放的，但**前缀在这一代没读过**：读完一轮还配不上的事实不能
+      // 据此当成「与我们无关」（见 SessionScan.resumedFromCheckpoint）。
+      if (parked.offset > 0) session.resumedFromCheckpoint = true;
+    }
+    const cursor = session.cursors.get(file.path) ?? { size: 0, offset: 0, safe: 0 };
     // 文件比上次短 = 被重写/截断过，之前的游标无意义，从头再来。
-    if (size < cursor.offset) { cursor.offset = 0; cursor.size = 0; }
+    if (size < cursor.offset) { cursor.offset = 0; cursor.size = 0; cursor.safe = 0; }
     // **判据是「读到文件尾了没有」，不是「文件有没有变大」。** 写成 `size === cursor.size`
     // 会在撞到单次上限之后卡死：文件大小没变、游标还停在半路，于是后半截永远读不到
     // （本轮自测：第 1 轮 offset=99134/409154 truncated=true，第 2 轮仍是 99134 就停了）。
     // 空文件也走这一支（0 >= 0），它本来就没东西可读。
     if (cursor.offset >= size) {
-      session.cursors.set(file.path, { size, offset: cursor.offset });
+      // 已经读到尾的文件：这一刻没有悬着的关联，它的可重放位置就是尾部。
+      const safe = replayable(session) ? Math.max(cursor.safe, cursor.offset) : cursor.safe;
+      session.cursors.set(file.path, { size, offset: cursor.offset, safe });
       continue;
     }
 
     const sink = (line: string) => consume(scan, session!, line, cliSessionId, file.startedAt, file.path);
+    // 每消费完一行就问一次「现在可重放吗」：可以就把可重放位置推到这一行末尾。
+    // 悬着关联的那一段不推——被挤掉时停在那儿才能把那段重放回来。
+    let safe = replayable(session) ? Math.max(cursor.safe, cursor.offset) : cursor.safe;
+    const mark = (at: number) => { if (replayable(session!)) safe = at; };
     try {
-      const { nextOffset, truncated, stopped } = await eachLine(file.path, cursor.offset, maxBytes, sink);
+      const { nextOffset, truncated, stopped } = await eachLine(file.path, cursor.offset, maxBytes, sink, mark);
       if (nextOffset > cursor.offset) scan.advanced = true;
       if (truncated) { scan.truncated = true; blocked = true; }
       // 背压停下来了：游标停在那条还没消费的事实之前，这一轮和后面的文件都不算读完。
       if (stopped) { scan.orphanOverflow = true; blocked = true; }
-      session.cursors.set(file.path, { size, offset: nextOffset });
+      session.cursors.set(file.path, { size, offset: nextOffset, safe: Math.min(safe, nextOffset) });
       // 这个文件还没读到尾（撞上限）也算没读完——下一轮从游标接着读，后面的文件继续等。
       if (nextOffset < size) blocked = true;
     } catch (e) {
@@ -453,7 +503,7 @@ function consume(
     session.pending.delete(str(ev.tool_use_id));
     session.byToolUse.set(str(ev.tool_use_id), nativeId);
     session.found.set(nativeId, {
-      nativeId, call: started.call,
+      nativeId, call: started.call, toolUseId: str(ev.tool_use_id),
       cliSessionId: evSession ?? expectSessionId,
       startedAtLow: started.at,
       startedAtHigh: null,   // 回执到了才有上界
@@ -515,4 +565,54 @@ export function foundOf(scan: TaskScan): Found[] {
   const all: Found[] = [];
   for (const session of scan.sessions.values()) all.push(...session.found.values());
   return all;
+}
+
+/**
+ * **读过了、却还配不上内存状态**的一次性事实（检查点的另一半，见 claude-monitor-commit.ts）。
+ *
+ * 正常情况下它们在等后面某个文件里的 `task_started`（跨文件乱序，第 5 轮审查）。但内存上限
+ * 把配对状态挤掉之后，它们等的那条 `task_started` 已经在前缀里读过了、再也不会来——那时只有
+ * 一条路：拿**已提交的行**配。所以这里把它们交出去，由提交那一侧按 native_id / tool_use_id
+ * 回到行上。配不上的留在缓冲里，下一轮还有机会。
+ */
+export type LateFact =
+  | { kind: "receipt"; toolUseId: string; raw: string; at: string | null }
+  | { kind: "notice"; nativeId: string; status: string; summary: string; at: string | null };
+
+export function lateFactsOf(scan: TaskScan): LateFact[] {
+  const out: LateFact[] = [];
+  for (const session of scan.sessions.values()) {
+    for (const [toolUseId, r] of session.orphanReceipts) {
+      out.push({ kind: "receipt", toolUseId, raw: r.raw, at: r.at });
+    }
+    for (const [nativeId, n] of session.orphanNotices) {
+      out.push({ kind: "notice", nativeId, status: n.status, summary: n.summary, at: n.at });
+    }
+  }
+  return out;
+}
+
+/** 这些事实已经有归宿了（配上了、或已证明与我们无关）：从缓冲里销掉。 */
+export function dropLateFacts(scan: TaskScan, facts: LateFact[]): void {
+  for (const session of scan.sessions.values()) {
+    for (const fact of facts) {
+      if (fact.kind === "receipt") session.orphanReceipts.delete(fact.toolUseId);
+      else session.orphanNotices.delete(fact.nativeId);
+    }
+  }
+}
+
+/** 还有几条配不上的一次性事实悬着。销账前必须问它（第 9 轮审查）。 */
+export function strandedFacts(scan: TaskScan): number {
+  let n = 0;
+  for (const session of scan.sessions.values()) {
+    n += session.orphanReceipts.size + session.orphanNotices.size;
+  }
+  return n;
+}
+
+/** 这一轮有没有会话是从停好的位置接着读的（= 有前缀在这一代没读过）。 */
+export function resumedFromCheckpoint(scan: TaskScan): boolean {
+  for (const session of scan.sessions.values()) if (session.resumedFromCheckpoint) return true;
+  return false;
 }

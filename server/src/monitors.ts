@@ -198,6 +198,8 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       kind: "ash",
       nativeId: null,
       cliSessionId: null,
+      // 只有 claude 投影才有「起它的那个 tool_use」。
+      toolUseId: null,
       // ash 自己起的：期限是它自己定的，当然知道。
       sourceLifetime: "bounded",
       // ash 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，

@@ -87,10 +87,13 @@ export function MonitorInspector({
       {monitors.recovery?.pending && (
         <p className="monitor-inspector__pending" role="status">
           历史监听还没读完（{monitors.recovery.reasons.map((reason) => MONITOR_RECOVERY_LABEL[reason]).join("、")}），
-          {/* 重试预算用完之后**不能再说「正在自动继续」**——那时定时器已经停了，等的是下一次
-              真实请求（第 8 轮审查不拦项 1）。 */}
+          {/* 重试预算用完之后**不能再说「正在自动继续」**——那时定时器已经停了（第 8 轮审查
+              不拦项 1）。但也不能说成「已停止」:读这份状态本身就是一次真实请求，它顺手
+              把预算还回去又推了一轮（面板开着时每约 9 分钟自己再走一遍阶梯，是有意的）。
+              所以这里只说那两件**都成立**的事实:试了很多次还没读完，而每次打开都会再推
+              一轮（第 9 轮审查不拦项 3:文案与重试策略要对齐）。 */}
           {monitors.recovery.exhausted
-            ? "已重试多次仍未读完，自动重试已停止；重新打开这一格会再试。"
+            ? "已重试多次仍没读完；每次打开这一格都会再推一轮。"
             : "正在自动继续。"}
         </p>
       )}

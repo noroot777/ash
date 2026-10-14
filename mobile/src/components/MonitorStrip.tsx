@@ -24,33 +24,45 @@ import { useTheme, radius, fonts } from "@/lib/theme";
 export function MonitorStrip({ taskId, visible }: { taskId: string; visible: boolean }) {
   const theme = useTheme();
   const [monitors, setMonitors] = useState<TaskMonitor[]>([]);
-  const [stopping, setStopping] = useState<string | null>(null);
   /**
-   * 「这份列表是哪个任务的、是第几次读」——**在途请求的归属判据**。
+   * 正在停的是**哪个任务的哪一条**。
    *
-   * 清掉 state 和 interval 不等于让在途的请求作废：A 任务读得慢时切到 B，B 先返回、A 随后
-   * 回来就会把 B 的列表盖掉，而那张卡上还带着能按的「停掉」（第 8 轮审查按代码推断；Web
-   * 那边早有 gen/seq 判据，手机这边没有）。停止操作 finally 里那次收尾 reload 同理。
+   * 只记 id 不行：切走再切回来（同一个组件实例被复用）时，上一次操作的收尾认不出自己该不该
+   * 清，于是按钮一直灰着（第 9 轮审查实测同一实例 A→B→A 复用，按钮永久 disabled）。
    */
-  const stamp = useRef({ gen: 0, taskId: "" });
+  const [stopping, setStopping] = useState<{ taskId: string; id: string } | null>(null);
+  /**
+   * 「这份列表是哪个任务的、是第几代、是第几发请求」——**在途请求的归属判据**。
+   *
+   * 清掉 state 和 interval 不等于让在途的请求作废：
+   * - 代次 `gen` + `taskId`：A 任务读得慢时切到 B，B 先返回、A 随后回来会把 B 的列表盖掉，
+   *   而那张卡上还带着能按的「停掉」（第 8 轮审查）。
+   * - 请求序号 `seq`：**同一个任务内部**也会乱序。停掉之后那一发 reload 返回空列表，旧那发
+   *   轮询随后回来又把 running 画回去，卡片连停止按钮一起复活（第 9 轮审查实测）。判据是
+   *   「我出门之后有没有发过更新的一发」，有就丢掉自己这份（最后发出的那一发说话）。
+   */
+  const stamp = useRef({ gen: 0, taskId: "", seq: 0 });
 
   const reload = useCallback(async () => {
     const gen = stamp.current.gen;
+    const seq = (stamp.current.seq += 1);
     try {
       const next = await api.taskMonitors(taskId);
-      // 回来得太晚（已经切到别的任务 / 又发起了新一轮）就丢掉，别往新任务上画旧数据。
+      // 回来得太晚（已经切到别的任务 / 之后又发过更新的一发）就丢掉，别往新任务上画旧数据、
+      // 也别用旧快照盖掉新结果。
       if (stamp.current.gen !== gen || stamp.current.taskId !== taskId) return;
+      if (stamp.current.seq !== seq) return;
       setMonitors(next);
     } catch { /* 这一条不值得打断对话 */ }
   }, [taskId]);
 
   useEffect(() => {
     if (!visible) {
-      stamp.current = { gen: stamp.current.gen + 1, taskId: "" };
+      stamp.current = { ...stamp.current, gen: stamp.current.gen + 1, taskId: "" };
       return;
     }
     // 切任务/重新可见：代次 +1，在途的那些回来时已经不是「这一屏的列表」了。
-    stamp.current = { gen: stamp.current.gen + 1, taskId };
+    stamp.current = { ...stamp.current, gen: stamp.current.gen + 1, taskId };
     setMonitors([]);
     void reload();
     const timer = setInterval(() => void reload(), 10_000);
@@ -71,13 +83,16 @@ export function MonitorStrip({ taskId, visible }: { taskId: string; visible: boo
           // 它的「正在停」也不该按住新任务的卡（判据与上面同一套）。
           const gen = stamp.current.gen;
           const mine = () => stamp.current.gen === gen && stamp.current.taskId === taskId;
-          setStopping(monitor.id);
+          setStopping({ taskId, id: monitor.id });
           void api.stopMonitor(monitor.id, "手机端停止")
             .catch((e) => { if (mine()) Alert.alert("停不掉", e instanceof Error ? e.message : String(e)); })
             .finally(() => {
-              if (!mine()) return;
-              setStopping(null);
-              void reload();
+              // **操作状态无条件结束**：它只属于这一次操作，过期了也得自己收。按归属判据
+              // 提前 return 的那一版，在同一实例被复用时把按钮永久按住了（第 9 轮审查）。
+              // 认的是「这是不是我当初按下的那一条」，不是「现在还是不是这个任务」。
+              setStopping((cur) => (cur && cur.taskId === taskId && cur.id === monitor.id ? null : cur));
+              // 列表只画给当前这一屏：切走之后那一发收尾 reload 不该落到新任务上。
+              if (mine()) void reload();
             });
         },
       },
@@ -107,7 +122,7 @@ export function MonitorStrip({ taskId, visible }: { taskId: string; visible: boo
                 <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{monitor.events} 条</Text>
                 <Pressable
                   onPress={() => stop(monitor)}
-                  disabled={stopping === monitor.id}
+                  disabled={stopping?.taskId === taskId && stopping.id === monitor.id}
                   hitSlop={4}
                   accessibilityRole="button"
                   accessibilityLabel={`停掉哨兵「${monitor.description}」`}
