@@ -93,7 +93,15 @@ export function MonitorInspector({
       {rows.length === 0
         ? (
           <div className="monitor-inspector__empty">
-            <p>{monitors.recovery?.pending ? "历史还没读完，先给你看现有的（暂时一条也没有）。" : "这个任务上还没有哨兵。"}</p>
+            {/* 三种空态分开说：还没读完 / **不知道**（恢复状态自己都没读到）/ 确实没有。
+                第三句是一句很强的断言（「这个任务没用过哨兵」），拿不到依据时不许说它。 */}
+            <p>
+              {monitors.recovery?.pending
+                ? "历史还没读完，先给你看现有的（暂时一条也没有）。"
+                : monitors.recovery === null
+                  ? "读不到这个任务的监听恢复状态，所以还不能说它没用过哨兵。"
+                  : "这个任务上还没有哨兵。"}
+            </p>
             <p>
               哨兵是一条绑在任务上的长跑命令，由 ash 自己起——不在智能体的进程树里，
               所以它的回合结束、会话结束、server 重启都带不走它。它每吐一行，就把这个任务唤醒一次。

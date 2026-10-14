@@ -74,6 +74,9 @@ const legacyRow = (over: Record<string, unknown>) => ({
   startedAt: now(), expiresAt: now(), endedAt: null, endedReason: null, ownerUserId: null,
   kind: "claude", nativeId: null, cliSessionId: null, sourceLifetime: "unknown",
   lifetimeEvidence: null, startEvidence: null, timeoutMs: null, sourcePid: null, sourcePidStartedAt: null,
+  // **默认不带误差界** —— 这就是升级前那些行的形状：起点档位可能写着 'observed'，但没有
+  // 任何能重验它的东西（见 shared 的 monitorStartTrusted）。需要「可信起点」的用例显式给。
+  startAnchorWidthMs: null,
   ...over,
 });
 
@@ -140,6 +143,7 @@ async function main(): Promise<void> {
     await db.insert(monitors).values(legacyRow({
       id: "row-stale-col", taskId: f.taskId, nativeId: "stalecol", cliSessionId: f.cli,
       sourceLifetime: "bounded", lifetimeEvidence: "receipt", startEvidence: "observed",
+      startAnchorWidthMs: 40, // 实时锚点，误差 40ms（真实量级 22~59ms）→ 起点可信
       timeoutMs: 90_000, startedAt: started, expiresAt: started, // ← 占位值没被同步
     }) as never);
     const dto = (await listMonitors(f.taskId)).find((m) => m.nativeId === "stalecol");
@@ -159,7 +163,9 @@ async function main(): Promise<void> {
       sourceLifetime: "bounded", lifetimeEvidence: "self", startEvidence: "observed", timeoutMs: null,
       startedAt: started, expiresAt: new Date(Date.parse(started) + 300_000).toISOString(),
     }) as never);
-    await runDataMigrations(dbClient as never);
+    // 走**完整升级路径**（DDL 的 post-ALTER 补误差界 0 + 数据迁移回算时长），不是只跑迁移：
+    // ash 行那两样证据分别由两段补齐，少任何一段这一行都会丢掉期限。
+    await ensureSchema();
     const dto = (await listMonitors(f.taskId)).find((m) => m.id === "row-legacy-ash");
     check(dto?.timeoutMs === 300_000, "②ash 存量行的时长被回算出来", String(dto?.timeoutMs));
     check(spanOf(dto) === 300_000, "②它的期限没有因为改成现算而消失", `${spanOf(dto)}ms`);
@@ -177,7 +183,9 @@ async function main(): Promise<void> {
     await db.insert(monitors).values(legacyRow({
       id: "row-pending90", taskId: f.taskId, nativeId: "pending90", cliSessionId: f.cli,
       description: "回执前重启", sourceLifetime: "unknown", lifetimeEvidence: null,
-      startEvidence: "observed", timeoutMs: null, startedAt: observed, expiresAt: observed,
+      // 实时投影写下的锚点 + 误差界（新代码一律两样一起写）。
+      startEvidence: "observed", startAnchorWidthMs: 5,
+      timeoutMs: null, startedAt: observed, expiresAt: observed,
     }) as never);
     // 历史里：起手事件 + 一分钟后才到的回执（区间 60 秒 ≫ 容差）。
     write(f.file, [
@@ -254,7 +262,10 @@ async function main(): Promise<void> {
       tool_use_id: "tu-backlog1", task_type: "local_bash", session_id: f.cli });
     await settle(120);
     const row = (await db.select().from(monitors).where(eq(monitors.nativeId, "backlog1"))).at(0);
-    check(row?.startEvidence === null, "⑤积压重放：起点没有可界定误差的锚点 → 不标 observed", String(row?.startEvidence));
+    // 档位照实记（它确实是「看着事件到达」取的），**可信与否由误差界说话**：积压了 7 分钟，
+    // 宽度远超容差。写入侧不替读取方下结论，判定在读的时候算（容差随时长放宽）。
+    check((row?.startAnchorWidthMs ?? 0) > 60_000,
+      "⑤积压重放：误差界如实记下了那几分钟", String(row?.startAnchorWidthMs));
     trace.toolResult("tu-backlog1", "Monitor started (task backlog1, expires in 30m unless the source ends first).");
     await settle(120);
     const dto = (await listMonitors(f.taskId)).find((m) => m.nativeId === "backlog1");

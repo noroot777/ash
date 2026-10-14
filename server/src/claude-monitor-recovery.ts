@@ -21,6 +21,7 @@
 //   哨兵」。用户/SSE 下一次真的来读时预算重置（`resetMonitorRecoveryBudget`）。
 // - **定时器一律 unref**。这是兜底路径，不许拖着进程不让退（测试脚本尤其）。
 import type { MonitorRecovery, MonitorRecoveryReason } from "@ash/shared/monitor";
+import { bus } from "./bus.js";
 import { dbClient } from "./db/index.js";
 
 export type { MonitorRecoveryReason } from "@ash/shared/monitor";
@@ -47,10 +48,16 @@ export function noteMonitorRecovery(
   taskId: string, reason: MonitorRecoveryReason, progress = false,
 ): void {
   const entry = pending.get(taskId) ?? { reasons: new Set<MonitorRecoveryReason>(), attempts: 0, timer: null };
+  const changed = !entry.reasons.has(reason);
   entry.reasons.add(reason);
   if (progress) entry.attempts = 0;
   pending.set(taskId, entry);
   arm(taskId, entry);
+  // **状态变化要推出去。** 前端只订阅 `task.monitors`，而「文件一直读不开」这种情况根本
+  // 不产生行变化——没有这一句，第一次打开时拿到的 `pending:false` 会永远留在页面上，面板
+  // 一直写着「这个任务上还没有哨兵」（第 7 轮审查用真实页面复现）。
+  // 只在**可见状态真的变了**的时候推：每秒重试一次、原因不变时不该把前端也拖着重读。
+  if (changed) bus.publish({ type: "task.monitors", taskId });
 }
 
 /** 这一轮干净跑完了：销账、撤定时器。 */
@@ -59,6 +66,8 @@ export function clearMonitorRecovery(taskId: string): void {
   if (!entry) return;
   if (entry.timer) clearTimeout(entry.timer);
   pending.delete(taskId);
+  // 反方向同样要推：读完了而这一轮没有新增/纠正任何行时，页面上那句「还没读完」也得撤。
+  bus.publish({ type: "task.monitors", taskId });
 }
 
 /** 对外（HTTP → 面板）：这个任务现在有没有待恢复的事实。 */
@@ -84,6 +93,9 @@ export function resetMonitorRecoveryBudget(taskId: string): void {
   if (!entry || entry.timer) return;
   entry.attempts = 0;
 }
+
+/** 现在还有待恢复事实的任务。给扫描快照的淘汰用：这些任务的游标不能被当普通缓存挤掉。 */
+export const monitorRecoveryTasks = (): ReadonlySet<string> => new Set(pending.keys());
 
 /** 测试与关库时用：撤掉全部定时器（`unref` 过，但别留着在后面乱跑）。 */
 export function stopAllMonitorRecovery(): void {
@@ -113,7 +125,9 @@ async function drive(taskId: string): Promise<void> {
     // **动态 import**：回填那一侧要用这个文件记账，这一侧要调回填去推进——静态互引会成环。
     // 动态 import 只在真要推进的那一刻解析，模块初始化顺序上不构成循环。
     const { backfillClaudeMonitors } = await import("./claude-monitor-backfill.js");
-    await backfillClaudeMonitors(taskId);
+    // **自己推进不算「外部真实请求」**：公共入口会把退避预算还原，于是每次失败都排回第一
+    // 档 1 秒、永远到不了后面的档位和 exhausted（第 7 轮审查实测 4 次间隔全是 ~1003ms）。
+    await backfillClaudeMonitors(taskId, { external: false });
     // 销账与否由那一轮自己判：干净跑完它会 clear，又出问题会再 note（并重排）。
   } catch (e) {
     console.warn(`[ash] 内置 Monitor 待恢复事实自动推进失败（task=${taskId}）:`, e);

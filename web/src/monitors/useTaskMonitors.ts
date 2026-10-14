@@ -5,7 +5,7 @@
 // 只在 agent 的对话里说一句「已起哨兵」不算数——刷新页面后就什么都不剩了。
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MonitorRecovery, TaskMonitor } from "@ash/shared/monitor";
-import { api } from "../lib/api.ts";
+import { ApiError, api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 
 export const MONITOR_ENDED_LABEL: Record<string, string> = {
@@ -37,9 +37,13 @@ export function useTaskMonitors(taskId: string) {
   /**
    * 「这份列表读完了没有」。
    *
-   * 面板为空有两种**完全不同**的含义：这个任务确实没用过哨兵，和历史还没读完（扫描到了
-   * 单次字节上限、会话文件读失败、有记录没落库）。混成同一句「这个任务上还没有哨兵」时，
-   * 第二种会被当成第一种——而那正是整个功能起点那一幕的翻版（第 6 轮审查要求至少区分开）。
+   * 面板为空有**三种**完全不同的含义，一种都不能混进另一种（第 6 轮要求分开前两种，第 7 轮
+   * 实测第三种被当成了第二种）：
+   *
+   * ① 还没读完（`recovery.pending`）——扫描撞上单次上限、会话文件读不开、有记录没落库……
+   * ② 确实没用过哨兵（`recovery` 非空且 `pending:false`）；
+   * ③ **不知道**（`recovery === null`）——这份状态自己都没读到。把它当成 ② 就又把「未确认」
+   *    说成了「没有」，而这正是整个功能起点那一幕。
    */
   const [recovery, setRecovery] = useState<MonitorRecovery | null>(null);
   const [stoppingIds, setStoppingIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -96,15 +100,26 @@ export function useTaskMonitors(taskId: string) {
     const seq = ++stamp.current.seq;
     const mine = () => stamp.current.gen === gen && stamp.current.seq === seq;
     try {
-      // 两条一起问。恢复状态单独一条端点（理由见 monitor-routes.ts）；问不到就当「没有」
-      // ——新前端配旧 server 时那条还不存在，不该因此把整份列表也判成读失败。
+      // 两条一起问。恢复状态单独一条端点（理由见 monitor-routes.ts），服务端那一侧会等同
+      // 一次回填跑完，所以两份响应反映同一轮扫描。
+      //
+      // **只有 404 才算「这个服务端没有这个概念」**（新前端配旧 server）。其它失败是「不
+      // 知道」，必须如实留成 null——上一版一律 catch 成 null 并当作 `pending:false`，等于
+      // 把暂态读失败说成「确实没有待恢复的」（第 7 轮审查）。
       const [next, pending] = await Promise.all([
         api.taskMonitors(taskId),
-        api.monitorRecovery(taskId).catch((): null => null),
+        api.monitorRecovery(taskId).then(
+          (value): MonitorRecovery | null => value,
+          (reason): MonitorRecovery | null => (
+            reason instanceof ApiError && reason.status === 404
+              ? { pending: false, reasons: [], attempts: 0, exhausted: false }
+              : null
+          ),
+        ),
       ]);
       if (!mine()) return;
       setMonitors(next);
-      setRecovery(pending?.pending ? pending : null);
+      setRecovery(pending);
       // 只收走自己那条。用户动作的回执不归它管——抹掉就等于那句话只闪了一下。
       setFailure((current) => (current?.kind === "list" ? null : current));
       setLoadedTaskId(taskId);
@@ -185,7 +200,10 @@ export function useTaskMonitors(taskId: string) {
   const ready = loadedTaskId === taskId;
   return {
     monitors: ready ? monitors : [],
-    /** 还有没读完/没落地的事实（归属判据同列表：不是当前任务的一概当「还没读到」）。 */
+    /**
+     * 恢复状态：`pending:true` = 还没读完；`pending:false` = 确实没有待恢复的；
+     * **`null` = 不知道**（这一份自己都没读到）。归属判据同列表。
+     */
     recovery: ready ? recovery : null,
     stoppingIds,
     error: failure?.taskId === taskId ? failure.message : null,

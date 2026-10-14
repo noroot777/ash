@@ -34,8 +34,8 @@
 // 按 `description` 之类的内容去猜一律不行：两种后台任务的 description 长得一模一样。
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
-  claudeMonitorStatus, CLAUDE_MONITOR_ENDED_REASON, isMonitorStartEvidence, monitorExactExpiry,
-  monitorStatusCorrectable, parseMonitorStartReceipt, startAnchorTolerance, type MonitorLifetime,
+  claudeMonitorStatus, CLAUDE_MONITOR_ENDED_REASON, monitorExactExpiry,
+  monitorStatusCorrectable, parseMonitorStartReceipt, type MonitorLifetime,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
@@ -172,14 +172,14 @@ export class ClaudeMonitorTrace {
    */
   private lastEventAt: string | null = null;
   /**
-   * 后台任务 id → 它的起点区间有多宽（毫秒）。
+   * 这条会话属于哪个 ash 任务。**正常跑的时候就记下来**，别等到出事才去查。
    *
-   * 落库那一刻还不知道生效时长（回执在 `task_started` 之后才到），只能先按最严的那把尺子
-   * （`startAnchorTolerance(null)` = 1 秒）判。回执带着真实时长到达时再用这个宽度复核一次
-   * ——容差是 `max(1 秒, 时长 × 1%)`，只会放宽，所以这一步只做单向升级，不会把已认定的
-   * 起点降级。进程重启丢了这张表只意味着「不升级」，方向是保守的。
+   * 出事那条路是「写库两次都失败了，现在要把这件事记进恢复账本」——而记账需要 taskId。
+   * 上一版在那一刻才去查 `locateSession`，可磁盘/权限这类故障通常还没好，这一查照样失败，
+   * 于是 catch 一兜：既没有待恢复任务、也没有重试定时器，一次性事实就这么没了（第 7 轮
+   * 审查按代码推断）。恢复责任本身不能押在「再查一次同一个失败资源」上。
    */
-  private startGap = new Map<string, number>();
+  private taskId = "";
   /** 串行化写库：同一个后台任务的 started/notification 可能紧挨着到。 */
   private chain: Promise<unknown> = Promise.resolve();
   private cliSessionId = "";
@@ -263,6 +263,12 @@ export class ClaudeMonitorTrace {
    * 要查一次会话才知道 taskId——这条路只在真失败时才走，多查一次库换一条不丢的事实。
    */
   private async noteRecovery(reason: MonitorRecoveryReason): Promise<void> {
+    // 先用正常跑的时候记下的归属（见 `taskId`）。只有一次都没成功过时才退回查库——那种
+    // 情况下本来也没有任何一条事实落过地。
+    if (this.taskId) {
+      noteMonitorRecovery(this.taskId, reason);
+      return;
+    }
     try {
       const found = this.cliSessionId ? await locateSession(this.cliSessionId) : null;
       if (found) noteMonitorRecovery(found.taskId, reason);
@@ -331,7 +337,6 @@ export class ClaudeMonitorTrace {
         const seen = this.startAnchor();
         // 同步认领，再排队落库：准入与落库之间隔着一个 await，中间到达的终态必须认得出来。
         this.claimed.add(taskId);
-        this.startGap.set(taskId, seen.widthMs);
         this.queue(() => this.open(taskId, call, seen));
         return;
       }
@@ -437,6 +442,7 @@ export class ClaudeMonitorTrace {
     nativeId: string, call: MonitorCall, seen: { at: string; widthMs: number },
   ): Promise<void> {
     const found = await locateSession(this.cliSessionId);
+    if (found) this.taskId = found.taskId; // 归属趁手记下（见 `taskId`）
     if (!found) {
       // 认不出会话就落不了库。安静跳过是对的（不能因此拖垮事件流），但要留下线索——
       // 否则用户看到的是「agent 说挂上了，面板永远空着」，而日志里什么都没有。
@@ -455,9 +461,6 @@ export class ClaudeMonitorTrace {
     }
     const rowId = id();
     const startedAt = seen.at;
-    // 落库这一刻还不知道生效时长（回执后到），先按最严的那把尺子判；回执到了用
-    // `startGap` 里记的宽度复核一次（容差只会放宽，所以是单向升级）。
-    const startEvidence = seen.widthMs <= startAnchorTolerance(null) ? "observed" : null;
     await db.insert(monitors).values({
       id: rowId,
       taskId: found.taskId,
@@ -485,9 +488,11 @@ export class ClaudeMonitorTrace {
       cliSessionId: this.cliSessionId || null,
       sourceLifetime: "unknown",
       lifetimeEvidence: null, // 回执还没到；拿到了由 applyReceipt 写成 'receipt'
-      // **不是无条件「亲眼所见」**：实时也要先问一句「这条事件是刚发生的，还是接管回来
-      // 积压重放的」。判据与历史重建同一把尺子（`startAnchorTolerance`），见 `lastEventAt`。
-      startEvidence,
+      // 档位是「实时看着它到达」，**但准不准由误差界说**：接管回来积压重放时这条事件可能
+      // 已经旧了几分钟，宽度会自己落到容差之外（见 `lastEventAt`）。判定放在读的时候算，
+      // 所以这里只如实记下「锚点哪来的 + 最远差多少」，不在写入侧替读取方下结论。
+      startEvidence: "observed",
+      startAnchorWidthMs: Number.isFinite(seen.widthMs) ? Math.round(seen.widthMs) : null,
       timeoutMs: null, // 回执才说得出时长
       // 起它的就是当下这一代 agent 进程。抄在行上，之后判死活才不会把下一回合的新进程
       // 当成它（第 4 轮审查实测 reusedSession）。
@@ -502,6 +507,7 @@ export class ClaudeMonitorTrace {
   private async applyReceipt(nativeId: string, lifetime: MonitorLifetime, ms: number | null): Promise<void> {
     const found = await locateSession(this.cliSessionId);
     if (!found) return;
+    this.taskId = found.taskId;
     const rowId = await this.locateRow(found.taskId, nativeId);
     if (!rowId) return;
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
@@ -510,14 +516,6 @@ export class ClaudeMonitorTrace {
     // 的那种（命令瞬间结束）时长永远补不上，卡片永远写着「期限未知」——跟历史回填那一侧
     // 的 casAtRace 是同一个类问题，只是入口在实时这一边（第 6 轮审查）。
     if (!row) return;
-    // **起点复核**：open 那一刻按最严的 1 秒判，现在知道真实时长了，容差是
-    // `max(1 秒, 时长 × 1%)`——只会放宽，所以这里只做「不可信 → 可信」的单向升级。
-    // 宽度表在内存里，丢了只意味着不升级（保守方向）。
-    const gap = this.startGap.get(nativeId);
-    const startEvidence = isMonitorStartEvidence(row.startEvidence)
-      ? row.startEvidence
-      : gap !== undefined && gap <= startAnchorTolerance(ms) ? "observed" : null;
-    this.startGap.delete(nativeId);
     await db.update(monitors).set({
       sourceLifetime: lifetime,
       // 期限是**回执**说的，这才是它可信的理由。旧版本推算出来的那些行这一列是 NULL，
@@ -525,14 +523,15 @@ export class ClaudeMonitorTrace {
       lifetimeEvidence: "receipt",
       // 时长单独记一列：起点不确定的那些行（历史重建）靠它显示「时长 X」。
       timeoutMs: ms,
-      // **起点时刻不动**（它是 open 那一刻观察到的，比回执时刻更接近真实启动时刻——回执的
-      // timestamp 要等 PostToolUse hooks 跑完才生成），只有「算不算证据」这一列可能升级。
-      startEvidence,
-      // 到期列由「起点 + 时长」现算，算不出来就明确落回占位值。上一版只补时长、把占位值
-      // 留在那儿，于是期限从 unknown 升级那一刻卡片画出「开始即到期」（实测跨度 0ms，本该
-      // 90 秒；第 6 轮审查 pending-receipt）。对外那一道同样现算，见 toTaskMonitor。
+      // **起点那两列一个都不动**：锚点和它的误差界是 open 那一刻如实记下的事实，回执只负责
+      // 时长。起点够不够准由读取方拿「误差界 vs 容差」现算（容差随时长放宽，所以同一行拿到
+      // 真实时长之后可能自己就从「不可信」变成「可信」，不需要在这里改任何一列）。
+      //
+      // 到期列同样现算，算不出来就明确落回占位值。上一版只补时长、把占位值留在那儿，于是
+      // 期限从 unknown 升级那一刻卡片画出「开始即到期」（第 6 轮审查 pending-receipt）。
       expiresAt: monitorExactExpiry({
-        sourceLifetime: lifetime, startEvidence, startedAt: row.startedAt, timeoutMs: ms,
+        sourceLifetime: lifetime, startEvidence: row.startEvidence,
+        startAnchorWidthMs: row.startAnchorWidthMs, startedAt: row.startedAt, timeoutMs: ms,
       }) ?? row.startedAt,
     }).where(eq(monitors.id, rowId));
     bus.publish({ type: "task.monitors", taskId: row.taskId });
@@ -541,6 +540,7 @@ export class ClaudeMonitorTrace {
   private async close(nativeId: string, status: string, summary: string): Promise<void> {
     const found = await locateSession(this.cliSessionId);
     if (!found) return;
+    this.taskId = found.taskId;
     const rowId = await this.locateRow(found.taskId, nativeId);
     if (!rowId) {
       // 库里**暂时**没有。多数情况是这条后台任务不是 Monitor 起的（普通后台 Bash），

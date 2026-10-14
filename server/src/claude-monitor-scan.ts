@@ -39,7 +39,12 @@ const CHUNK = 1 << 20;
  * 它们。一条长会话跑下去没有任何上限，这张表就是一条慢速内存泄漏（第 6 轮审查不拦项）。
  *
  * 512 的依据：这些缓冲只用来跨「同一次扫描里的读取顺序差异」，实测同一轮里等着配对的最多
- * 几十条。挤掉一条的代价是那个 Monitor 退回按来源死活推断状态，不是错误显示。
+ * 几十条。
+ *
+ * **挤掉一条不许是静默的**：缓冲里装的是一次性事实（来源侧不会重发），游标已经越过它了，
+ * 丢掉就等于那个 Monitor 永远只剩推断状态。所以溢出会置 `orphanOverflow`，由回填那一侧
+ * 丢掉快照、留账、从头重读那一段（第 7 轮审查不拦项 2：「淘汰不会造成错误显示」这句注释
+ * 不能当成来源契约）。
  */
 const ORPHAN_CAP = 512;
 
@@ -128,6 +133,13 @@ export type TaskScan = {
   truncated: boolean;
   /** 这一轮有文件读失败。 */
   failed: boolean;
+  /**
+   * 还没配对的一次性事实被挤出了缓冲（见 `ORPHAN_CAP`）。
+   *
+   * 这一轮的读取结果因此**可能不全**：游标越过了那条事实，而它再也不会被重发。调用方要把
+   * 快照丢掉、留账、重读那一段，不能当成普通缓存淘汰。
+   */
+  orphanOverflow: boolean;
   /** 文件里出现过的、与期望不符的 session_id（只作诊断）。 */
   foreign: Set<string>;
   /** 这一轮有没有读到新内容。 */
@@ -144,7 +156,7 @@ export type TaskScan = {
 
 export const newTaskScan = (): TaskScan => ({
   sessions: new Map(), truncated: false, failed: false, foreign: new Set(),
-  advanced: false, generationChanged: false,
+  advanced: false, generationChanged: false, orphanOverflow: false,
 });
 
 const newSessionScan = (): SessionScan => ({
@@ -341,7 +353,9 @@ function consume(
         // 还不知道这条回执属于谁（它的 task_started 在某个还没读完的前文件里）。
         // **缓冲，不丢。** 等那条 Monitor 被读出来时回溯应用（见 orphanReceipts）。
         if (toolUseId && /Monitor started/i.test(raw)) {
-          putCapped(session.orphanReceipts, toolUseId, { raw, at }, ORPHAN_CAP);
+          if (putCapped(session.orphanReceipts, toolUseId, { raw, at }, ORPHAN_CAP)) {
+            scan.orphanOverflow = true;
+          }
         }
         continue;
       }
@@ -385,9 +399,11 @@ function consume(
       // 同理：这条终态的 Monitor 还没被读出来。缓冲住，别当成「跟我们无关的后台任务」。
       // 注意这里**不**过滤是不是 Monitor 起的——过滤发生在回溯应用时（只有被认出来的
       // Monitor 才会去取它的缓冲），所以普通后台 Bash 的通知最多占一点内存，不会进投影。
-      putCapped(session.orphanNotices, nativeId, {
+      if (putCapped(session.orphanNotices, nativeId, {
         status: claudeMonitorStatus(ev.status), summary: str(ev.summary), at: session.lastAt,
-      }, ORPHAN_CAP);
+      }, ORPHAN_CAP)) {
+        scan.orphanOverflow = true;
+      }
       return;
     }
     applyNotice(row, claudeMonitorStatus(ev.status), str(ev.summary), session.lastAt);

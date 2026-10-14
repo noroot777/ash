@@ -205,8 +205,10 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       lifetimeEvidence: "self",
       sourcePid: null,
       sourcePidStartedAt: null,
-      // ash 自己 spawn 的，起点就是这一刻，没有不确定性。
+      // ash 自己 spawn 的，起点就是这一刻，没有不确定性 —— 误差界 0。两列成对写：少了误差界
+      // 这一行就「无法重验」，对外会丢掉期限（见 shared 的 monitorStartTrusted）。
       startEvidence: "observed",
+      startAnchorWidthMs: 0,
       timeoutMs,
     };
     try {

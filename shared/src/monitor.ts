@@ -164,10 +164,12 @@ export type MonitorStartEvidence = (typeof MONITOR_START_EVIDENCE)[number];
  * 那一幕：面板说没有，agent 说在等 Monitor 通知）。
  */
 export const MONITOR_RECOVERY_REASONS = [
-  "scan-unfinished", // 扫描没读到 EOF（单次字节上限）
-  "scan-failed",     // 会话文件读失败
-  "write-failed",    // 事实已消费，落库失败
-  "update-missed",   // 条件更新 0 行（并发改了状态）
+  "scan-unfinished",  // 扫描没读到 EOF（单次字节上限）
+  "scan-failed",      // 会话文件读失败
+  "write-failed",     // 事实已消费，落库失败
+  "update-missed",    // 条件更新 0 行（并发改了状态）
+  "liveness-failed",  // 死活裁决失败（扫描读完了不等于纠正做完了）
+  "orphan-overflow",  // 还没配对的一次性事实被挤出缓冲，得重读那一段
 ] as const;
 export type MonitorRecoveryReason = (typeof MONITOR_RECOVERY_REASONS)[number];
 
@@ -176,10 +178,18 @@ export const MONITOR_RECOVERY_LABEL: Record<MonitorRecoveryReason, string> = {
   "scan-failed": "有会话文件读失败",
   "write-failed": "有记录没写进库",
   "update-missed": "有状态更新被并发改动挡下",
+  "liveness-failed": "有存活状态没核对完",
+  "orphan-overflow": "有乱序事实要重读",
 };
 
 export type MonitorRecovery = {
-  /** 还有没确认落地的事实。 */
+  /**
+   * 还有没确认落地的事实。
+   *
+   * **注意第三态**：前端拿不到这份状态时（暂态读失败）既不是 true 也不是 false，而是
+   * 「不知道」——把它当 false 就又把「未确认」说成了「没有」。那一档在前端用 `null`
+   * 表示（见 web/src/monitors/useTaskMonitors.ts 的 recovery）。
+   */
   pending: boolean;
   reasons: MonitorRecoveryReason[];
   /** 已经自动重试了几次。 */
@@ -189,8 +199,13 @@ export type MonitorRecovery = {
 };
 
 /**
- * 这个值算不算「起点有依据」。白名单判定，不是 `!= null`——库里存着别的字符串时那是脏
- * 数据，不是证据。实时、历史重建、对外 DTO 三处共用同一句判断。
+ * 这个字符串是不是**已知的那两档来源**。白名单判定，不是 `!= null`——库里存着别的字符串
+ * 时那是脏数据。
+ *
+ * **注意它只回答「这个锚点是哪来的」，不回答「它准不准」。** 判「准不准」要用
+ * {@link monitorStartTrusted}：那需要一个能重验的误差界，而这个字符串给不出来（第 7 轮
+ * 审查：旧实时投影把队列延迟后的落库时刻也写成 `observed`，实测偏 2205ms，而光看字符串
+ * 分不出它和新代码写的那种）。
  */
 export const isMonitorStartEvidence = (value: unknown): value is MonitorStartEvidence =>
   MONITOR_START_EVIDENCE.includes(value as MonitorStartEvidence);
@@ -206,6 +221,39 @@ export const isMonitorStartEvidence = (value: unknown): value is MonitorStartEvi
  */
 export const startAnchorTolerance = (timeoutMs: number | null): number =>
   Math.max(1_000, Math.round((timeoutMs ?? 0) * 0.01));
+
+/**
+ * 这一行的**起点算不算可信** —— 全系统唯一的判据。
+ *
+ * 要两样东西，缺一不可：
+ * - **来源档位**（`start_evidence`）：这个锚点是实时看着事件到达取的，还是从历史区间裁的。
+ * - **误差界**（`start_anchor_width_ms`）：那个锚点离真实起点最远可能差多少毫秒。
+ *
+ * 为什么光有档位不够：那是一个**结论字符串**，存进去之后谁也无法重验。第 6 轮之前的实时
+ * 投影在写库队列积压 2.2 秒之后才取时刻，照样标 `observed`——第 6 轮把取点提前了，但库里
+ * 已经躺着的那些旧行还是同一个字符串，于是「修好了新写入、修不到旧数据」（第 7 轮审查用
+ * 第 6 轮真实注入得到的旧行形状复现：对外到期时刻仍晚 2205ms）。
+ *
+ * 改成「档位 + 误差界」之后两类自动分开，不需要拿版本号去猜，也不需要每次启动无区别地把
+ * 正确的观测一起清掉：
+ * - 新代码写的行一律带宽度（实时是 `[来源时刻, 到达时刻]`，历史是 `[tool_use, 回执]`），
+ *   宽度在容差内就照常给精确时刻；
+ * - 旧行这一列是 `null`——**没有误差界 = 无法重验 = 不可信**，于是只报时长。
+ * - ash 自己起的哨兵宽度是 0（进程就是它 spawn 的，起点没有不确定性），一条不受影响。
+ *
+ * 容差随时长放宽（见 {@link startAnchorTolerance}），所以同一行在拿到真实时长之后可能从
+ * 「不可信」升级成「可信」——判定放在**读的时候**算，就不必在写入侧为此留一张内存表。
+ */
+export function monitorStartTrusted(row: {
+  startEvidence: string | null;
+  startAnchorWidthMs: number | null;
+  timeoutMs: number | null;
+}): boolean {
+  if (!isMonitorStartEvidence(row.startEvidence)) return false;
+  const width = row.startAnchorWidthMs;
+  if (width === null || !Number.isFinite(width) || width < 0) return false;
+  return width <= startAnchorTolerance(row.timeoutMs);
+}
 
 /**
  * 一条投影行能不能给出**精确到期时刻** —— 全系统唯一的出口。
@@ -225,18 +273,22 @@ export const startAnchorTolerance = (timeoutMs: number | null): number =>
  * 改成现算之后这两类都不可能发生：少任何一半证据就只报时长（`timeoutMs`），卡片说「总共
  * 盯 X（起点不确定）」；两半都在时算出来的值一定自洽。占位列从此只是 ash 自己那半的
  * 内部计时依据（`monitors.ts` 的到期定时器），再也不是对外契约的一部分。
+ *
+ * 「起点有证据」这一半由 {@link monitorStartTrusted} 判——它要的是**可重验的误差界**，不是
+ * 一个结论字符串（第 7 轮审查：旧行的 `observed` 无法重验）。
  */
 export function monitorExactExpiry(row: {
   sourceLifetime: string | null;
   startEvidence: string | null;
+  startAnchorWidthMs: number | null;
   startedAt: string;
   timeoutMs: number | null;
 }): string | null {
   // 持续监听与未知期限本来就没有「到期时刻」可言；空串/null 是升级前的存量值，同样不算。
   if (row.sourceLifetime !== "bounded") return null;
   if (row.timeoutMs === null || !Number.isFinite(row.timeoutMs) || row.timeoutMs <= 0) return null;
-  // 起点证据只认白名单里那两档：库里存着别的字符串时，那不是「证据」，是脏数据。
-  if (!isMonitorStartEvidence(row.startEvidence)) return null;
+  // 起点要「来源档位 + 可重验的误差界」都在，且误差在容差之内。
+  if (!monitorStartTrusted(row)) return null;
   const started = Date.parse(row.startedAt);
   if (!Number.isFinite(started)) return null;
   return new Date(started + row.timeoutMs).toISOString();

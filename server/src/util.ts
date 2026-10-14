@@ -40,12 +40,17 @@ export function runsTiming(
  *
  * 想让「用过的」活得久一点就先 `delete` 再 `set`（Map 会把它挪到末尾）。
  */
-export function putCapped<K, V>(map: Map<K, V>, key: K, value: V, cap: number): void {
+export function putCapped<K, V>(map: Map<K, V>, key: K, value: V, cap: number): boolean {
   map.delete(key); // 已有就挪到末尾：重复写入的那条显然还活跃
   map.set(key, value);
+  let evicted = false;
   while (map.size > cap) {
     const oldest = map.keys().next();
     if (oldest.done) break;
     map.delete(oldest.value);
+    evicted = true;
   }
+  // **返回「挤掉过东西吗」**：缓存可以无声淘汰，一次性事实不行——调用方得有机会把那一段
+  // 重读回来（第 7 轮审查：孤儿事实缓冲满了会静默丢掉来源终态）。
+  return evicted;
 }

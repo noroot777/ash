@@ -319,6 +319,8 @@ export async function ensureSchema() {
     "ALTER TABLE monitors ADD COLUMN start_evidence TEXT",
     // 来源确认的时长。起点不确定时 expires_at 不可信,但时长仍然说得出来。
     "ALTER TABLE monitors ADD COLUMN timeout_ms INTEGER",
+    // 起点锚点的误差界。存量行一律 NULL = 无法重验 ⇒ 对外只给时长（见 schema-monitors.ts）。
+    "ALTER TABLE monitors ADD COLUMN start_anchor_width_ms INTEGER",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
@@ -573,8 +575,11 @@ export async function ensureSchema() {
   try {
     await client.execute("UPDATE monitors SET source_lifetime='bounded' WHERE kind='ash' AND source_lifetime<>'bounded'");
     await client.execute("UPDATE monitors SET lifetime_evidence='self' WHERE kind='ash' AND lifetime_evidence IS NULL");
-    // ash 行的起点就是 ash 自己 spawn 那一刻,从来没有不确定性。
+    // ash 行的起点就是 ash 自己 spawn 那一刻,从来没有不确定性 —— 档位 'observed'、误差界 0。
+    // **这两句必须成对**:只补档位不补误差界的话,存量 ash 行会因为「无法重验」而丢掉期限
+    // (第 7 轮把起点判据从结论字符串换成了可重验的误差界)。
     await client.execute("UPDATE monitors SET start_evidence='observed' WHERE kind='ash' AND start_evidence IS NULL");
+    await client.execute("UPDATE monitors SET start_anchor_width_ms=0 WHERE kind='ash' AND start_anchor_width_ms IS NULL");
   } catch {
     /* 列还不存在 */
   }

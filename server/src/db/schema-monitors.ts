@@ -65,10 +65,17 @@ export const monitors = sqliteTable("monitors", {
   sourcePid: integer("source_pid"),
   sourcePidStartedAt: text("source_pid_started_at"),
   // **起点**的证据,跟 lifetime_evidence(时长的证据)是两件独立的事:知道「盯 90 秒」不等于
-  // 知道「从哪一刻开始数」。'observed' = 实时看着 task_started 到达;'receipt-window' = 历史
-  // 重建,起点落在 [tool_use, 回执] 区间且区间够窄;NULL = 起点不明,**不给精确到期时刻**。
+  // 知道「从哪一刻开始数」。这一列只说**锚点是哪来的**:'observed' = 实时看着 task_started
+  // 到达;'receipt-window' = 历史重建,起点落在 [tool_use, 回执] 区间内;NULL = 起点不明。
   // 语义见 shared/src/monitor.ts 的 MonitorStartEvidence。
   startEvidence: text("start_evidence"),
+  // 那个锚点离真实起点**最远可能差多少毫秒** —— 起点可信与否的另一半,缺了它上面那一列
+  // 只是个无法重验的结论字符串(第 7 轮审查:旧实时投影在写库队列积压 2.2 秒之后取的时刻
+  // 同样标着 'observed',光看字符串分不出它和新代码写的那种)。
+  //   实时 = [来源盖的上一个时刻, 事件到达时刻] 的宽度;历史 = [tool_use, 回执] 的宽度;
+  //   ash 自己起的 = 0(进程就是它 spawn 的);NULL = 无法重验 ⇒ **不给精确到期时刻**。
+  // 判定在 shared 的 monitorStartTrusted(容差随时长放宽,所以在**读**的时候算)。
+  startAnchorWidthMs: integer("start_anchor_width_ms"),
   // 来源确认的时长(毫秒),与起点无关。用来表达「知道盯多久、但起点不确定」——那时
   // expires_at 不可信,但这一列仍然能告诉用户「盯 90 秒」。
   timeoutMs: integer("timeout_ms"),
