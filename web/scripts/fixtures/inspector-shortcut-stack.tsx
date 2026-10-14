@@ -19,8 +19,12 @@ const populatedItems = buildConversationItems([{ session, output: "fixture", tra
 ] }], [session], []);
 const panel = (name: string) => () => <p data-panel={name}>{name}</p>;
 const outerBase: InspectorDescriptor<Context>[] = [
-  { id: "subagents", title: "子智能体", shortcut: "s", icon: <Robot size={14} />, defaultOpen: true, render: panel("outer-subagents") },
-  { id: "outer-info", title: "外层信息", shortcut: "i", icon: <Robot size={14} />, render: panel("outer-info") },
+  // defaultOpen 故意不写：这一格走「用过才浮现」，开合由 useSubagents 翻（见 inspector/usedTabs.tsx）。
+  { id: "subagents", title: "子智能体", shortcut: "s", icon: <Robot size={14} />, render: panel("outer-subagents") },
+  // 得有一格真·默认开着，否则 defaultState 的兜底（没有任何 defaultOpen 就开第一格）会
+  // 把子智能体顶上图标条，测的就不是「用过才浮现」了——真实的 TASK_INSPECTORS 里信息、
+  // 文件那几格都默认开着，兜底永远轮不到。
+  { id: "outer-info", title: "外层信息", shortcut: "i", icon: <Robot size={14} />, defaultOpen: true, render: panel("outer-info") },
   { id: "outer-extra", title: "外层专属", shortcut: "e", icon: <Robot size={14} />, render: panel("outer-extra") },
 ];
 
@@ -64,6 +68,15 @@ const activate = async (key: InspectorShortcutKey) => {
 };
 const active = (host: string) => document.querySelector(`[data-host="${host}"] [role="tab"][aria-selected="true"]`)?.getAttribute("data-tab-id") ?? null;
 const hasTab = (host: string, id: string) => !!document.querySelector(`[data-host="${host}"] [role="tab"][data-tab-id="${id}"]`);
+/** 「+」菜单里列着哪几格——没上图标条的那几格只能从这儿找到，所以它不能漏人。 */
+const menuTitles = async (host: string) => {
+  const root = document.querySelector(`[data-host="${host}"]`)!;
+  const add = root.querySelector<HTMLButtonElement>(".inspector-host__add")!;
+  await act(async () => add.click());
+  const titles = Array.from(root.querySelectorAll(".inspector-host__menu-title")).map((node) => node.textContent);
+  await act(async () => add.click());
+  return titles;
+};
 const visible = (host: string) => !!document.querySelector(`[data-host="${host}"] .inspector-host`);
 const panelVisible = (name: string) => !!document.querySelector(`[data-panel="${name}"]`);
 const expect = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
@@ -73,11 +86,16 @@ async function run() {
   await act(async () => root.render(<StrictMode><App /></StrictMode>));
   expect(hasInspectorShortcutTarget(), "outer should register on mount");
 
-  // 没派过子智能体、记录也读全了：那一格根本不该存在，快捷键自然也开不出东西来。
-  expect(!hasTab("outer", "subagents"), "subagents tab must be absent without subagents");
-  expect(!await activate("s"), "I S should do nothing while the subagents tab is absent");
+  // 没派过子智能体、记录也读全了：那一格不往图标条上冒，但它**仍然存在**——「+」菜单和
+  // I S 都得找得到。上一版是整格摘掉，结果用户翻遍菜单也找不到「子智能体」。
+  expect(!hasTab("outer", "subagents"), "subagents tab must stay off the rail without subagents");
+  expect((await menuTitles("outer")).includes("子智能体"), "the + menu must still list 子智能体 when unused");
+  expect(await activate("s"), "I S must still open the subagents panel on demand");
+  expect(active("outer") === "subagents", "I S should open subagents even when unused");
+  expect(await activate("i"), "outer should handle i");
+  expect(active("outer") === "outer-info", "outer should settle back on its info panel");
 
-  // 真派出子智能体之后它自己冒出来（默认面板），但不抢当前焦点。
+  // 真派出子智能体之后它自己冒出来，但不抢当前焦点。
   const focusedBefore = active("outer");
   await click("agent-on");
   expect(hasTab("outer", "subagents"), "subagents tab should appear once a subagent exists");
@@ -85,11 +103,11 @@ async function run() {
   expect(await activate("s"), "outer should handle s");
   expect(active("outer") === "subagents", "outer should open subagents");
 
-  // 子智能体又没了（记录重取后读不到）：那一格随之收掉，焦点退回别处。
-  await click("agent-off");
-  expect(!hasTab("outer", "subagents"), "subagents tab should disappear again");
-  expect(active("outer") !== "subagents", "focus must leave the removed tab");
+  // 子智能体又没了（记录重取后读不到）：已经冒出来的那一格留在条上——面板本来就一直都在，
+  // 开过就归用户自己关，没必要在记录抖一下的时候把人正看着的东西抽走。
   expect(await activate("i"), "outer should handle i");
+  await click("agent-off");
+  expect(hasTab("outer", "subagents"), "an already-opened subagents tab should stay put");
   expect(active("outer") === "outer-info", "outer should settle on its info panel");
 
   await click("drawer-on");

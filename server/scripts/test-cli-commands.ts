@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
-import { cliCommandCatalog, cliCommandsForMode, goalRequest, hasCliGoalHold, isGoalExecution, parseCliCommand, validateCliCommand, type CliCommand, type CliGoal } from "@ash/shared/cli-commands";
+import { cliCommandCatalog, cliCommandsForMode, goalRequest, hasCliGoalHold, isGoalExecution, isGoalRecovery, parseCliCommand, validateCliCommand, type CliCommand, type CliGoal } from "@ash/shared/cli-commands";
 import { CodexNativeCommands, redactCommandData } from "../src/executors/codex-native-commands.js";
 import { claudeGoalInvocation, cleanupClaudeGoalContext, formatClaudeGoal } from "../src/executors/claude-goal.js";
 
@@ -13,6 +13,11 @@ const { CodexExecutor } = await import("../src/executors/codex.js");
 const command = (text: string, agent = "codex") => validateCliCommand(agent, text)!;
 try {
   assert.equal(parseCliCommand("codex", "说明 /goal 做完"), null);
+  for (const agent of ["codex", "claude"]) {
+    assert.equal(isGoalRecovery(command("/goal 新目标", agent)), false);
+    assert.equal(isGoalRecovery(command("/goal resume", agent)), true);
+    assert.equal(isGoalRecovery(command("/goal resume --scope original", agent)), true);
+  }
   assert.equal(parseCliCommand("codex", "/unknown skill"), null);
   assert.equal(validateCliCommand("codex", "/constructor"), null);
   assert.equal(validateCliCommand("claude", "/toString"), null);

@@ -141,6 +141,7 @@ try {
   assert.equal(reasoningEfforts.at(-1), "high");
   assert.equal(readCliState((await task()).cliState, "codex").plan, undefined);
   const beforeGoal = count;
+  await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, "live-task"));
   assert.equal(await continueTask("live-task", "/goal 自动推进直到预算用完 --budget 150"), true);
   assert.ok(count >= beforeGoal + 2);
   assert.ok(reasoningEfforts.slice(beforeGoal).every((effort) => effort === "high"), JSON.stringify(reasoningEfforts.slice(beforeGoal)));
@@ -172,6 +173,16 @@ try {
   await db.update(agents).set({ isDefault: false }).where(eq(agents.id, "first-profile"));
   await db.update(agents).set({ isDefault: true }).where(eq(agents.id, "second-profile"));
   console.log("real Codex default/explicit profile drift recovers the original thread and budget without changing standing configuration: passed");
+  await db.insert(tasks).values({ id: "terminal-goal-task", projectId: "live-project", title: "terminal goal", body: "已完成任务的目标续聊", mode: "single", agentType: "codex", status: "done", autoTitle: false, useWorktree: false, createdAt: at, updatedAt: at });
+  const beforeTerminalGoal = count;
+  assert.equal(await continueTask("terminal-goal-task", "/goal 后续覆盖率目标 --budget 150"), true);
+  const terminalGoalTask = (await db.select().from(tasks).where(eq(tasks.id, "terminal-goal-task")))[0]!;
+  assert.ok(count >= beforeTerminalGoal + 2);
+  assert.equal(terminalGoalTask.status, "done");
+  assert.equal(terminalGoalTask.followUpFrom, null);
+  assert.equal(readCliState(terminalGoalTask.cliState, "codex").goal?.status, "budgetLimited");
+  assert.equal(hasCliGoalHold(terminalGoalTask.cliState), false);
+  console.log("real Codex terminal goal follow-up preserves done and its native budget snapshot without reclaiming a queue hold: passed");
   const currentSession = async () => (await db.select().from(sessions).where(eq(sessions.taskId, "live-task")).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt)))[0]!;
   const parentSessionId = (await currentSession()).cliSessionId;
   const beforeFork = count;

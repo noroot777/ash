@@ -1,6 +1,6 @@
 import type { AgentType, ScheduledMessage, TaskStatus } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
-import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
+import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@ash/shared/cli-commands";
 import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { db } from "./db/index.js";
@@ -67,6 +67,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
   const goalCommand = parseCliCommand(b.agent ?? (r.agentType as AgentType) ?? "claude", b.text ?? "");
   const goalExecution = !isTeam && isGoalExecution(goalCommand);
+  const goalRecovery = !isTeam && isGoalRecovery(goalCommand);
   const goalControl = !isTeam && goalCommand?.name === "goal" && !goalExecution;
   // checkpoint 追问:paused 且带 resumePrompt 的任务,非执行回合的用户回复一律是
   // 「怎么样了」式旁路续聊(orchestrator 的 checkpointFollowUp 同判据)——结算用
@@ -80,7 +81,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   // (deliveryVerdict 同口径)送达。普通终态续聊是 followUpFrom 旁路,不占队列。
   const executionReply =
     !isTeam && !checkpointFollowUp && !goalControl &&
-    (goalExecution || r.status === "paused" || r.status === "backlog");
+    (goalRecovery || r.status === "paused" || r.status === "backlog");
   const queueWhileWaiting = executionReply && (await queueBlockers(taskId)).length > 0;
   if (b.sendAt || queueWhileRunning || queueWhileWaiting) {
     let when = new Date();
@@ -103,7 +104,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
       // 排队等轮次时暂存的回复 = 执行型:投递它就是任务的执行回合,整队守卫与分组
       // 暂停都要挡,失败重投也不丢意图(schema 的 execution 注释)。普通运行中追问
       // 与定时提醒不是——它们落地是续聊/到点提醒,照旧旁路。
-      execution: goalExecution || (queueWhileWaiting && !b.sendAt),
+      execution: goalRecovery || (queueWhileWaiting && !b.sendAt),
       sendAt: when,
     });
     return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);

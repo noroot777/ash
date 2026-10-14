@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import type { AgentType, TaskStatus } from "@ash/shared";
-import { readCliState, type CliSessionState } from "@ash/shared/cli-commands";
+import { hasCliGoalHold, readCliState, type CliSessionState } from "@ash/shared/cli-commands";
 import type { RunOpts } from "../src/executors/types.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
@@ -24,7 +24,7 @@ const { cliGoalScopeSelector } = await import("../src/task-cli-goal-scopes.js");
 const { replyToTask } = await import("../src/task-reply.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { continueTask } = await import("../src/orchestrator.js");
-const { deliverPendingMessages } = await import("../src/pending-messages.js");
+const { deliverPendingMessages, enqueueMessage, handDuePendingMessageToRun } = await import("../src/pending-messages.js");
 const { claimQueueSeat } = await import("../src/queue-seat.js");
 const { queueBlockers } = await import("../src/queues.js");
 const { claimTurn, isTurnClaimed, releaseTurn, stopTask } = await import("../src/runs.js");
@@ -134,6 +134,62 @@ try {
       { id: `${agentType}-old`, name: `${agentType}@原目标`, type: agentType, isDefault: true },
       { id: `${agentType}-new`, name: `${agentType}@新默认`, type: agentType, isDefault: false },
     ]);
+    for (const status of ["done", "failed", "canceled"] as const) for (const delivery of ["immediate", "timed", "legacy", "handoff"] as const) {
+      const taskId = `${agentType}-new-${status}-${delivery}`;
+      const siblingId = await createPair(taskId, agentType, status, delivery === "handoff" ? "done" : "running");
+      const text = `/goal 新的后续目标${agentType === "codex" ? " --budget 150" : ""}`;
+      holding.add(taskId);
+      let messageId: string | undefined;
+      let handoff: Promise<boolean> | undefined;
+      if (delivery === "immediate" || delivery === "timed") {
+        const response = await reply(taskId, text, delivery === "timed" ? { sendAt: new Date(Date.now() + 60_000).toISOString() } : {});
+        assert.equal(response.status, 202);
+        const result = await response.json();
+        if (delivery === "immediate") assert.equal(result.started, true);
+        else {
+          assert.equal(result.scheduled, true);
+          assert.equal(result.message.execution, false);
+          messageId = result.message.id;
+          await db.update(scheduledMessages).set({ sendAt: at }).where(eq(scheduledMessages.id, messageId!));
+          await deliverPendingMessages(taskId);
+        }
+      } else {
+        const message = await enqueueMessage({ taskId, text, agent: agentType, execution: true });
+        messageId = message.id;
+        if (delivery === "legacy") await deliverPendingMessages(taskId);
+        else {
+          await db.update(groups).set({ paused: true }).where(eq(groups.id, taskId));
+          assert.equal(claimTurn(taskId), true);
+          const claim = await claimQueueSeat(taskId);
+          assert.equal(claim.ok, true);
+          if (!claim.ok) assert.fail("handoff queue seat unavailable");
+          const seat = claim.seat;
+          assert.equal(seat?.prevStatus, status);
+          handoff = handDuePendingMessageToRun(taskId, { turnHeld: true, freezeGuard: false, goalStartFrom: status })
+            .finally(async () => { await seat?.release(); });
+        }
+      }
+      const started = await active(taskId);
+      assert.equal(started.followUpFrom, status, `${delivery}: new terminal goal preserves its original status`);
+      assert.deepEqual(await queueBlockers(siblingId), [], `${delivery}: a new goal cannot reclaim the completed task's queue seat`);
+      finishers.get(taskId)!();
+      if (handoff) assert.equal(await handoff, true);
+      const completed = await settled(taskId, status);
+      assert.equal(completed.followUpFrom, null);
+      assert.equal(completed.goalTurn, false);
+      assert.equal(hasCliGoalHold(completed.cliState), false);
+      const snapshot = readCliState(completed.cliState, agentType);
+      assert.equal(snapshot.goal?.objective, "新的后续目标");
+      assert.equal(snapshot.goal?.tokensUsed, 50);
+      if (agentType === "codex") assert.equal(snapshot.goal?.tokenBudget, 150);
+      if (messageId) {
+        const message = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, messageId)))[0]!;
+        assert.equal(message.status, "sent");
+        assert.equal(message.execution, false, `${delivery}: new goal cannot retain a legacy recovery flag`);
+        assert.equal(message.deliveringSince, null);
+      }
+    }
+    console.log(`${agentType}: immediate, timed, legacy and run-handoff new terminal goals preserve completion and never acquire a recovery hold: passed`);
     for (const pinned of [false, true]) for (const scoped of [false, true]) {
       const taskId = `${agentType}-stopped-${pinned}-${scoped}`;
       const siblingId = await createPair(taskId, agentType, "backlog", "backlog");

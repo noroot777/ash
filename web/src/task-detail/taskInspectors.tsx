@@ -51,6 +51,9 @@ export interface TaskInspectorContext {
 // 不作数）。排法是「看任务本身 → 看它改了什么 → 跟它一起干活」：
 // 信息 · 文件 · 生成物 · 改动 · 子智能体 · 侧聊 · 工作流 · 审查 · 预览指正 · 哨兵。
 // 每一格都带快捷键（`I` 加面板名首字母），键位表在 inspector/shortcuts.ts。
+//
+// 子智能体和哨兵这两格的 `defaultOpen` 是动态的（见 inspector/usedTabs.tsx）：全部面板一直
+// 都在「+」菜单里，这两格只有本任务真用过时才自己冒到图标条上。
 export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
   {
     id: "info",
@@ -111,12 +114,11 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     ),
   },
   {
-    // 这一格由 useSubagents 按「这个任务到底有没有派出子智能体」决定在不在：没有就整格不给，
-    // 免得图标条上常年挂着一个点进去必然是空的面板。
+    // 「用过才浮现」：开合由 useSubagents 按「这个任务到底有没有派出子智能体」翻（所以这里
+    // 不写 defaultOpen）。派过才自己冒到图标条上并带底色，没派过就留在「+」菜单和 I S 里。
     id: "subagents",
     title: "子智能体",
     icon: <Robot size={14} />,
-    defaultOpen: true,
     shortcut: "s",
     render: (context) => <NativeWorkInspector {...context.nativeWork} />,
   },
@@ -157,13 +159,12 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     render: (context) => <PreviewWorkspaceEntry onOpen={context.onOpenPreview} />,
   },
   {
-    // 跟其它几格一样默认开着：哨兵不只是「agent 挂了什么」的回看面板，人也会想自己挂一个，
-    // 而这一格就是手动起哨兵唯一的入口——藏到「+」菜单里等于让人先知道它在那儿才找得到。
-    // 没有哨兵时空态自己会解释这是什么（见 MonitorInspector），不是一片空白。
+    // 和子智能体同一条「用过才浮现」：开合由 useMonitorInspector 按「这个任务挂过哨兵没有」
+    // 翻（所以这里不写 defaultOpen）。它仍然是手动起哨兵唯一的入口，所以可以不默认开着、
+    // 但绝不能整格不给——「+」菜单和 I M 永远找得到它，空态里那段话解释这是什么。
     id: "monitors",
     title: "哨兵",
     icon: <Pulse size={14} />,
-    defaultOpen: true,
     shortcut: "m",
     render: (context) => (
       <MonitorInspector monitors={context.monitors} blockedReason={monitorBlockedReason(context.task)} />

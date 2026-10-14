@@ -5,11 +5,22 @@
 // 重投、扫描那些带共享状态的机器仍在 pending-messages.ts。
 import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
+import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@ash/shared/cli-commands";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
+
+export function pendingExecutionIntent(
+  message: Pick<Row, "agent" | "text" | "execution">,
+  task: Pick<typeof tasks.$inferSelect, "mode" | "status" | "agentType"> | null,
+): boolean {
+  const command = task?.mode === "single" ? parseCliCommand(message.agent ?? task.agentType ?? "claude", message.text) : null;
+  return isGoalExecution(command)
+    ? isGoalRecovery(command) || !["done", "failed", "canceled"].includes(task!.status)
+    : message.execution;
+}
 
 // 判定所需的最小任务形状,写成结构类型,单测就能直接喂字面量。
 // queueBlocked = 这个任务在队列里且还没轮到(queueBlockers 非空)。只对 paused/

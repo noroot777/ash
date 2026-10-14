@@ -97,6 +97,9 @@ export function parseCliCommand(agentType: string, text: string): CliCommand | n
 export function isGoalExecution(command: CliCommand | null): boolean {
   return command?.name === "goal" && !!command.args && !/^(pause|clear|stop|off|reset|none|cancel|budget|--scopes)(?:\s|$)/.test(command.args);
 }
+export function isGoalRecovery(command: CliCommand | null): boolean {
+  return command?.name === "goal" && command.args === "resume";
+}
 export function goalRequest(command: CliCommand, agentType: AgentType): { objective?: string; status?: CliGoal["status"]; tokenBudget?: number } {
   if (command.args === "resume") return { status: "active" };
   if (command.args === "pause") return { status: "paused" };

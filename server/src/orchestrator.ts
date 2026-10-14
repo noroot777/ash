@@ -2,6 +2,7 @@ import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
+import { isGoalRecovery } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -276,14 +277,17 @@ export async function continueTask(
     if (sideTurn && sessionRole === "single") reclaimTurn(taskId, nativeCommand ? "native" : "side");
     // 「这一回合是任务的执行」:system(后端代写的续跑)或 executionTurn(让位交接
     // 把用户回复当启动输入)。只影响续聊判定,输入来源各自另算(见 opts.executionTurn)。
-    const execution = !!opts.system || !!opts.executionTurn;
+    const execution = !!opts.system || !!opts.executionTurn || isGoalRecovery(slash);
     const checkpointFollowUp = !execution && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
-    const followUpFrom = goalExecution ? null : sideTurn
-      ? (task.status === "running" || task.status === "queued" ? null : task.status)
-      : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
-        ? task.status
-        : null;
+    const goalPriorStatus = opts.goalStartFrom ?? task.status;
+    const followUpFrom = goalExecution
+      ? !isGoalRecovery(slash) && !opts.system && ["done", "failed", "canceled"].includes(goalPriorStatus) ? goalPriorStatus : null
+      : sideTurn
+        ? (task.status === "running" || task.status === "queued" ? null : task.status)
+        : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
+          ? task.status
+          : null;
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
     // nativeTurn 落库而不是只留在内存里:结算钩子跟这里可能不在同一个进程(重启后由
     // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。

@@ -14,7 +14,9 @@
 .monitor-inspector__empty > p:first-child { color: var(--muted); font-weight: 600; }
 .monitor-inspector__list { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 
-/* 图标条上那颗：有哨兵在盯着时常亮，不做动画——它会一直在那儿，闪起来就成了噪音。 */
+/* 图标条上那颗：有哨兵在盯着时常亮，不做动画——它会一直在那儿，闪起来就成了噪音。
+   这一格挂过哨兵就带 `inspector-rail-icon--used` 的底色（见 inspector.css），两层信号各说
+   各的：底色说「这个任务挂过」，这里的常亮说「此刻还有在烧回合的」。 */
 .monitor-rail-icon--live { color: var(--accent); }
 
 .monitor-card { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); padding: 9px 10px; }

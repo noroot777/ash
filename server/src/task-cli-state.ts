@@ -140,7 +140,7 @@ export async function persistRunGoal(taskId: string, agentType: AgentType, handl
     const session = recorded.find((entry) => entry.role === "single" && entry.agentType === agentType && entry.executorId === (state.profileId ?? null) && entry.runOwnerUserId === (state.ownerUserId ?? null));
     if (session?.cliSessionId) state.goalSessionId = session.cliSessionId;
   }
-  state.goalHold = !!goal && (!!stopped || exitStatus !== 0 || !task.completeConfirmedAt);
+  state.goalHold = !!goal && !["done", "failed", "canceled"].includes(task.followUpFrom ?? "") && (!!stopped || exitStatus !== 0 || !task.completeConfirmedAt);
   if (!goal) { delete state.goalSessionId; await saveCliState(taskId, agentType, { ...state, goal: null }); return; }
   const status = stopped ? "paused" : handle.goal ? (exitStatus !== 0 && goal.status === "active" ? "blocked" : goal.status)
     : task.completeConfirmedAt && exitStatus === 0 ? "complete" : "paused";
@@ -153,7 +153,7 @@ export async function interruptCliGoal(task: typeof tasks.$inferSelect, agentTyp
   if (!task.goalTurn) return false;
   if (!(started ?? !state.goalStart) || !state.goal) { await restoreCliGoalStart(task, agentType as AgentType, state); return false; }
   delete state.goalStart;
-  await saveCliState(task.id, agentType, { ...state, goalHold: true, goal: { ...state.goal, status: "blocked" } });
+  await saveCliState(task.id, agentType, { ...state, goalHold: !["done", "failed", "canceled"].includes(task.followUpFrom ?? ""), goal: { ...state.goal, status: "blocked" } });
   await db.update(tasks).set({ goalTurn: false }).where(eq(tasks.id, task.id));
   return true;
 }

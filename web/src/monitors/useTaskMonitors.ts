@@ -26,7 +26,36 @@ export type TaskMonitorsState = ReturnType<typeof useTaskMonitors>;
 export function useTaskMonitors(taskId: string) {
   const [monitors, setMonitors] = useState<TaskMonitor[]>([]);
   const [stoppingIds, setStoppingIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [error, setError] = useState<string | null>(null);
+  /**
+   * 报错连同**它是谁的、从哪来的**一起存。
+   *
+   * 归属（`taskId`）不能借用列表那把闸：列表的 `ready` 回答的是「这个任务有没有哨兵」，
+   * 而创建/停止的失败是用户**刚刚按下去**的动作的回执，跟列表读没读完没有半点关系。
+   * 借用的后果是慢网下点「起一个哨兵」失败后一片安静——按钮已解锁、草稿还在，用户只会
+   * 以为自己没点到（第 2 轮审查实测）。
+   *
+   * 来源（`kind`）决定谁能清掉它：列表重读成功只收走自己那条「读列表失败」，不许顺手把
+   * 用户动作的回执也抹了——那种抹法会让报错只闪一下，慢网下往往闪都来不及。
+   */
+  const [failure, setFailure] = useState<{ taskId: string; kind: "list" | "action"; message: string } | null>(null);
+  // 挂 useCallback 并进下面几个回调的依赖表：它闭包里带着 `taskId`，漏进依赖表的话
+  // 那几个记忆化回调会攥着上一个任务的那份，报错就贴到别人身上去了。
+  const failed = useCallback((kind: "list" | "action", reason: unknown) => setFailure({
+    taskId,
+    kind,
+    message: reason instanceof Error ? reason.message : String(reason),
+  }), [taskId]);
+  /**
+   * 这份列表**是哪个任务的**。`setMonitors([])` 是 effect 做的，而 effect 跑在渲染之后：
+   * 切任务那一帧，渲染读到的还是上一个任务的列表。平时顶多闪一下旧卡片，但这一帧恰好
+   * 是 InspectorHost 按新 contextKey 重挂的那一帧——它据此算出的 `defaultOpen` 会被
+   * `defaultState` 写进 openTabs、被 `knownTabIds` 记成「这一格出现过」，两样都没有撤销
+   * 路径，本任务真实的应答回来也纠正不了（第 1 轮审查实测：上一个任务挂着哨兵就会给
+   * 从没用过的任务凭空多一格并存进 localStorage；反过来，离开期间才挂上哨兵的任务切
+   * 回来时那一格再也不冒出来）。所以归属必须在**渲染返回那一层**判，跟 useConversation
+   * 的 `loadedTaskId` 同一套：不属于当前任务的数据一概当「还没读到」。
+   */
+  const [loadedTaskId, setLoadedTaskId] = useState<string | null>(null);
   /**
    * 「现在是哪个任务、这是它的第几次读取」。
    *
@@ -53,18 +82,23 @@ export function useTaskMonitors(taskId: string) {
       const next = await api.taskMonitors(taskId);
       if (!mine()) return;
       setMonitors(next);
-      setError(null);
+      // 只收走自己那条。用户动作的回执不归它管——抹掉就等于那句话只闪了一下。
+      setFailure((current) => (current?.kind === "list" ? null : current));
+      setLoadedTaskId(taskId);
     } catch (reason) {
       if (!mine()) return;
-      setError(reason instanceof Error ? reason.message : String(reason));
+      failed("list", reason);
+      // 读失败也算「这一轮读完了」：`ready` 说的是「这一轮有没有结束」而不是「有没有成功」
+      // （跟 useConversation 同义）。少了这句，读失败的任务会永远停在「还没读到」。
+      setLoadedTaskId(taskId);
     }
-  }, [taskId]);
+  }, [failed, taskId]);
 
   useEffect(() => {
     // 换任务：在途的那些请求当场作废，它们回来时已经不是「这个任务的列表」了。
     stamp.current = { gen: stamp.current.gen + 1, seq: 0, taskId };
     setMonitors([]);
-    setError(null);
+    setFailure(null);
     setStoppingIds(new Set());
     void reload();
   }, [reload, taskId]);
@@ -78,13 +112,13 @@ export function useTaskMonitors(taskId: string) {
   const stop = useCallback(async (monitorId: string) => {
     const gen = stamp.current.gen;
     setStoppingIds((current) => new Set(current).add(monitorId));
-    setError(null);
+    setFailure(null);
     try {
       await api.stopMonitor(monitorId);
       await reload();
     } catch (reason) {
       // 切走之后才回来的失败不要往新任务的面板上贴：那句报错说的是上一个任务的事。
-      if (stamp.current.gen === gen) setError(reason instanceof Error ? reason.message : String(reason));
+      if (stamp.current.gen === gen) failed("action", reason);
     } finally {
       setStoppingIds((current) => {
         const next = new Set(current);
@@ -92,7 +126,7 @@ export function useTaskMonitors(taskId: string) {
         return next;
       });
     }
-  }, [reload]);
+  }, [failed, reload]);
 
   /**
    * 手动起一个。成功返回 true，失败把原因留在 `error` 上——表单据此决定要不要收起来。
@@ -110,16 +144,28 @@ export function useTaskMonitors(taskId: string) {
   const start = useCallback(async (input: StartMonitorInput): Promise<boolean> => {
     const gen = stamp.current.gen;
     const mine = () => stamp.current.gen === gen;
-    setError(null);
+    setFailure(null);
     try {
       await api.startMonitor(taskId, input);
       await reload();
       return mine();
     } catch (reason) {
-      if (mine()) setError(reason instanceof Error ? reason.message : String(reason));
+      if (mine()) failed("action", reason);
       return false;
     }
-  }, [reload, taskId]);
+  }, [failed, reload, taskId]);
 
-  return { monitors, stoppingIds, error, start, stop, reload };
+  // 列表和报错各判各的归属：列表问「读到的是不是当前任务的」（没读到就按空给，别拿上一个
+  // 任务的列表去回答「这个任务有没有哨兵」——图标条的显隐就是照着这个问题走的）；报错只问
+  // 「这句话是不是说当前任务的」，不等列表。
+  const ready = loadedTaskId === taskId;
+  return {
+    monitors: ready ? monitors : [],
+    stoppingIds,
+    error: failure?.taskId === taskId ? failure.message : null,
+    ready,
+    start,
+    stop,
+    reload,
+  };
 }

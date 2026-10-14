@@ -48,7 +48,7 @@ try {
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   const failures = [];
 
-  const open = async (handler) => {
+  const open = async (handler, query = "") => {
     const page = await browser.newPage();
     page.setDefaultTimeout(5000);
     page.on("pageerror", (error) => failures.push(error.message));
@@ -70,7 +70,7 @@ try {
       failures.push(`unexpected API request: ${path}`);
       await route.fulfill({ status: 500, json: { error: "unexpected request" } });
     });
-    await page.goto(`${origin}/scripts/fixtures/monitor-inspector.html`);
+    await page.goto(`${origin}/scripts/fixtures/monitor-inspector.html${query}`);
     return page;
   };
   const idsOf = (page) => page.getByTestId("ids").textContent();
@@ -78,6 +78,120 @@ try {
     (want) => document.querySelector('[data-testid="ids"]')?.textContent === want,
     value,
   );
+
+  // ── 「用过才浮现」落到图标条上：没挂过不上条、挂过带底色 ────────────────────
+  // 底色是 CSS 的 `:has(.inspector-rail-icon--used)` 给的，类名两边一错位就悄悄没了，
+  // 而「少一层淡底色」这种事看快照、读代码都发现不了，只能量计算样式。
+  {
+    // ① 这个任务一个哨兵都没挂过：不上图标条，但必须留在「+」菜单里——上一版的子智能体
+    //    就是整格摘掉，结果用户翻遍菜单也找不到它。
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-a/monitors") return false;
+      await route.fulfill({ json: [] });
+      return true;
+    }, "?rail=1");
+    await page.locator('.inspector-rail__tab[data-tab-id="info"]').waitFor();
+    await page.waitForTimeout(200);
+    assert.equal(
+      await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').count(),
+      0,
+      "没挂过哨兵的任务，这一格不该占着图标条",
+    );
+    await page.getByRole("button", { name: "切换 Inspector 面板" }).click();
+    assert.equal(
+      await page.locator('.inspector-host__menu .inspector-host__menu-title', { hasText: "哨兵" }).count(),
+      1,
+      "没挂过也得留在「+」菜单里：手动起哨兵只有这一个入口",
+    );
+    await page.close();
+  }
+  {
+    // ② 挂过哨兵：自己冒到图标条上（不抢焦点），并带底色。
+    const page = await open(undefined, "?rail=1");
+    const tab = page.locator('.inspector-rail__tab[data-tab-id="monitors"]');
+    await tab.waitFor();
+    assert.equal(
+      await page.locator('.inspector-rail__tab[aria-selected="true"]').getAttribute("data-tab-id"),
+      "info",
+      "自己冒出来的那一格不许抢当前焦点",
+    );
+    const paint = await page.evaluate(() => {
+      const bg = (id) => getComputedStyle(document.querySelector(`.inspector-rail__tab[data-tab-id="${id}"]`)).backgroundColor;
+      return {
+        monitors: bg("monitors"),
+        info: bg("info"),
+        marked: !!document.querySelector('.inspector-rail__tab[data-tab-id="monitors"] .inspector-rail-icon--used'),
+      };
+    });
+    assert.ok(paint.marked, "图标上要带 inspector-rail-icon--used——底色全靠它选中");
+    assert.notEqual(paint.monitors, paint.info, `用过的那一格要有底色，现在和别的格一样是 ${paint.monitors}`);
+    assert.doesNotMatch(paint.monitors, /rgba\(0, 0, 0, 0\)|transparent/, "底色不能是透明");
+    await page.close();
+  }
+
+  // ── 切任务那一帧的归属：图标条的显隐不许吃上一个任务的哨兵列表 ───────────────
+  // `useMonitorInspector` 挂在 InspectorHost 之外，而 Host 自己按 contextKey 重挂。切任务
+  // 时列表 state 只在 effect 里清空，于是**新 Host 的第一次渲染**读到的还是上一个任务的
+  // 列表——它据此算出的 `defaultOpen` 会被 `defaultState` 写进 openTabs、被 `knownTabIds`
+  // 记成「这一格出现过」，而那两样都没有撤销路径：本任务真实的应答回来也纠正不了。
+  // 两个方向各错一次，都只在**跨任务**时出现，所以上面那些单任务用例一个都看不见。
+  {
+    // 方向一：上一个任务挂着哨兵 → 切到从没用过哨兵的任务，不该凭空多一格（还会被存下来）。
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-b/monitors") return false;
+      await route.fulfill({ json: [] });
+      return true;
+    }, "?rail=1");
+    await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').waitFor();
+    await page.getByRole("button", { name: "切换任务" }).click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="task"]')?.textContent === "task-b");
+    await page.waitForTimeout(400);
+    assert.equal(
+      await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').count(),
+      0,
+      "切到从没挂过哨兵的任务，图标条不该留着上一个任务带来的那一格",
+    );
+    assert.doesNotMatch(
+      String(await page.evaluate(() => window.localStorage.getItem("ash:inspector:task:task-b"))),
+      /"monitors"/,
+      "那一格还会被存进 openTabs：刷新之后它仍然在，错得更久",
+    );
+    await page.close();
+  }
+  {
+    // 方向二：先看一个没哨兵的任务 → 去别处 → 它期间挂上了哨兵 → 切回来，必须自己冒出来。
+    let aList = [];
+    const page = await open(async (route, path) => {
+      if (path !== "/api/tasks/task-a/monitors") return false;
+      await route.fulfill({ json: aList });
+      return true;
+    }, "?rail=1");
+    await page.locator('.inspector-rail__tab[data-tab-id="info"]').waitFor();
+    await page.waitForTimeout(400);
+    assert.equal(
+      await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').count(),
+      0,
+      "前置条件：task-a 这会儿还没挂过哨兵",
+    );
+
+    await page.getByRole("button", { name: "切换任务" }).click();
+    await waitIds(page, "m-task-b");
+    aList = [monitor("m-task-a", "task-a")];
+    await page.getByRole("button", { name: "切换任务" }).click();
+    await waitIds(page, "m-task-a");
+    await page.waitForTimeout(300);
+
+    const tab = page.locator('.inspector-rail__tab[data-tab-id="monitors"]');
+    assert.equal(await tab.count(), 1, "切回来时它已经挂上哨兵了，这一格必须自己冒出来");
+    assert.equal(await tab.locator(".inspector-rail-icon--used").count(), 1, "冒出来就得带底色记号");
+    assert.equal(await tab.locator(".monitor-rail-icon--live").count(), 1, "那条还在跑，活信号也得在");
+    assert.equal(
+      await page.locator('.inspector-rail__tab[aria-selected="true"]').getAttribute("data-tab-id"),
+      "info",
+      "自己冒出来仍然不许抢焦点",
+    );
+    await page.close();
+  }
 
   // ── ③ 340px 下按钮不许被挤出面板 ───────────────────────────────────────────
   {
@@ -290,6 +404,52 @@ try {
     assert.equal(await page.locator(".monitor-composer").count(), 1, "当前任务的表单不该被上一个任务的成功回调收走");
     assert.equal(await draft.inputValue(), text, "没提交过的草稿一个字都不该丢");
     assert.equal(await idsOf(page), "m-task-b", "列表也还是当前任务的");
+    await page.close();
+  }
+
+  // ── 首次列表还在路上，创建就失败了：那句报错必须当场露面，而且别被列表读完抹掉 ──
+  // 列表的归属闸（ready）管的是「这个任务有没有哨兵」，**不该连报错一起管**：创建是用户
+  // 刚刚按下去的动作，它的失败跟列表读没读完没有半点关系。把两件事绑在一起的后果是
+  // 慢网下点「起一个哨兵」失败后一片安静（第 2 轮审查实测），而按钮已经解锁、草稿还在,
+  // 用户只会以为自己没点到。
+  {
+    let releaseList;
+    const held = new Promise((resolve) => { releaseList = resolve; });
+    pending.push(() => releaseList());
+    const page = await open(async (route, path) => {
+      if (path === "/api/tasks/task-a/monitors" && route.request().method() === "POST") {
+        await route.fulfill({ status: 500, json: { error: "回归注入：创建哨兵失败" } });
+        return true;
+      }
+      if (path !== "/api/tasks/task-a/monitors") return false;
+      await held;
+      await route.fulfill({ json: [] }).catch(() => undefined);
+      return true;
+    });
+
+    // 列表还卡着，先手动起一个——它会失败。
+    await page.getByRole("button", { name: "手动起一个哨兵" }).click();
+    const draft = page.locator(".monitor-composer textarea");
+    const text = "printf 'never runs'";
+    await draft.fill(text);
+    const submit = page.getByRole("button", { name: "起一个哨兵", exact: true });
+    await submit.click();
+
+    const alert = page.locator(".monitor-inspector__error");
+    await alert.waitFor({ timeout: 5000 });
+    assert.match(await alert.innerText(), /创建哨兵失败/, "创建失败就得当场说出来，别等列表读完");
+    assert.equal(await submit.isDisabled(), false, "提交按钮已经解锁了：这会儿没提示等于什么都没发生");
+    assert.equal(await draft.inputValue(), text, "失败不该把草稿冲掉");
+
+    // 列表这才读完（而且是成功的空列表）：它不该把刚才那句报错抹掉。
+    releaseList();
+    await waitIds(page, "");
+    await page.waitForTimeout(300);
+    assert.equal(
+      await page.locator(".monitor-inspector__error").count(),
+      1,
+      "列表读完了就把用户那次失败的回执抹掉，等于让它只闪一下",
+    );
     await page.close();
   }
 
