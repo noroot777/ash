@@ -192,6 +192,11 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       cliSessionId: null,
       // ash 自己起的：期限是它自己定的，当然知道。
       sourceLifetime: "bounded",
+      // ash 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，
+      // 代次由 pid/pidStartedAt 两列（上面）记着，不走 claude 投影那套来源代次。
+      lifetimeEvidence: "self",
+      sourcePid: null,
+      sourcePidStartedAt: null,
     };
     try {
       await db.insert(monitors).values(row);

@@ -73,14 +73,26 @@ export function parseMonitorInput(input: unknown): MonitorCall | null {
   return { command, description };
 }
 
-/** cli 会话 id → ash 的任务 id + 工作目录。 */
-async function locateSession(cliSessionId: string): Promise<{ taskId: string; cwd: string } | null> {
+/**
+ * cli 会话 id → ash 的任务 id、工作目录，以及**当代** agent 进程身份。
+ *
+ * 带上 pid 是因为 `sessions` 那两列每回合都被下一轮覆盖：投影必须在落库那一刻把「起它的
+ * 是哪一代」抄下来，事后再问 `sessions` 问到的已经是别人了（见 monitors.source_pid 的说明）。
+ */
+async function locateSession(cliSessionId: string): Promise<
+  { taskId: string; cwd: string; pid: number | null; pidStartedAt: string | null } | null
+> {
   if (!cliSessionId || dbClient.closed) return null;
   const row = (await db
-    .select({ taskId: sessions.taskId, cwd: sessions.cwd })
+    .select({
+      taskId: sessions.taskId, cwd: sessions.cwd,
+      pid: sessions.agentPid, pidStartedAt: sessions.agentStartedAt,
+    })
     .from(sessions)
     .where(eq(sessions.cliSessionId, cliSessionId))).at(0);
-  return row ? { taskId: row.taskId, cwd: row.cwd ?? "" } : null;
+  return row
+    ? { taskId: row.taskId, cwd: row.cwd ?? "", pid: row.pid ?? null, pidStartedAt: row.pidStartedAt ?? null }
+    : null;
 }
 
 /**
@@ -103,6 +115,18 @@ export class ClaudeMonitorTrace {
    * exited，实际 lost）。
    */
   private claimed = new Set<string>();
+  /**
+   * 查过库、确认**不是**本任务投影的后台任务 id（普通后台 Bash 之类）。
+   *
+   * `claimed` 只是快路径：命中就处理，**不命中不能直接丢**——回填可能刚刚往库里补了一行
+   * （GET 触发，不经过这个实例），或者上一轮留下的行这一轮还没认回来。原来不命中就 return，
+   * 于是「先认领空名单、后回填插入、再来真 completed」这条顺序下通知被丢光，EOF 最后把它
+   * 收成 lost 而不是来源报的 exited（第 4 轮审查实测 lateBackfill）。
+   *
+   * 改成不命中时查一次库裁决。这一列记住「查过且确实不是我们的」，所以每个 id 最多查一次
+   * ——实测一个长任务里 76 条 task_started 有 64 条是普通后台 Bash，不能每条都查。
+   */
+  private foreign = new Set<string>();
   /** claude 的后台任务 id → ash 这边那一行的主键。只在队列里读写。 */
   private rows = new Map<string, string>();
   /**
@@ -222,8 +246,9 @@ export class ClaudeMonitorTrace {
         // **认领还没完成时不能直接丢**：接管回来的那一刻，上一轮的投影还在 DB 里躺着、
         // 还没读进 `claimed`，而来源侧的终态可能正好这时候到。这种情况下乐观排队，由
         // `close` 在队列里查一次库来裁决（认领完成之后 `claimed` 就是权威，不再查）。
-        if (!taskId) return;
-        if (this.reclaim === "done" && !this.claimed.has(taskId)) return;
+        if (!taskId || this.foreign.has(taskId)) return;
+        // 不在 `claimed` 里也要排队：权威是库，不是这一个实例的内存名单（见 `foreign`）。
+        // `close` 里的 `locateRow` 查不到就把它记进 `foreign`，下次直接短路。
         this.queue(() => this.close(taskId, claudeMonitorStatus(ev.status), str(ev.summary)));
         return;
       }
@@ -242,12 +267,15 @@ export class ClaudeMonitorTrace {
     const cliSessionId = this.cliSessionId;
     const job = (async () => {
       if (dbClient.closed || !cliSessionId) return;
+      // **`lost` 也要认回来。** 那是 ash 推断的死亡，可能判错了（agent 活得过 ash 重启），
+      // 来源侧后续照常报完成。只认 running 的话，这些行连 `close` 都到不了，而 `close` 里
+      // 那条「lost 让位于来源事实」的规则就永远用不上（第 4 轮审查实测 lostReclaim）。
       const rows = await db
         .select({ id: monitors.id, nativeId: monitors.nativeId })
         .from(monitors)
         .where(and(
           eq(monitors.kind, "claude"),
-          eq(monitors.status, "running"),
+          inArray(monitors.status, ["running", "lost"]),
           eq(monitors.cliSessionId, cliSessionId),
           isNotNull(monitors.nativeId),
         ));
@@ -334,6 +362,11 @@ export class ClaudeMonitorTrace {
       nativeId,
       cliSessionId: this.cliSessionId || null,
       sourceLifetime: "unknown",
+      lifetimeEvidence: null, // 回执还没到；拿到了由 applyReceipt 写成 'receipt'
+      // 起它的就是当下这一代 agent 进程。抄在行上，之后判死活才不会把下一回合的新进程
+      // 当成它（第 4 轮审查实测 reusedSession）。
+      sourcePid: found.pid,
+      sourcePidStartedAt: found.pidStartedAt,
     });
     this.rows.set(nativeId, rowId);
     bus.publish({ type: "task.monitors", taskId: found.taskId });
@@ -349,6 +382,9 @@ export class ClaudeMonitorTrace {
     if (!row || !monitorStatusCorrectable(row.status)) return;
     await db.update(monitors).set({
       sourceLifetime: lifetime,
+      // 期限是**回执**说的，这才是它可信的理由。旧版本推算出来的那些行这一列是 NULL，
+      // 迁移据此纠正（见 shared/monitor.ts 的 MONITOR_LIFETIME_EVIDENCE）。
+      lifetimeEvidence: "receipt",
       // 有限期才改到期时刻；持续监听没有到期时刻可言，那一列留着当占位。
       // （persistent 的回执本来就不带 ms，所以 `lifetime` 这一半此刻是冗余的——留着是因为
       //  它表达的才是判据本身；真正把假期限挡在对外契约之外的是 toTaskMonitor 那一道。）
@@ -363,7 +399,12 @@ export class ClaudeMonitorTrace {
     const found = await locateSession(this.cliSessionId);
     if (!found) return;
     const rowId = await this.locateRow(found.taskId, nativeId);
-    if (!rowId) return;
+    if (!rowId) {
+      // 库里也没有 = 这条后台任务不是 Monitor 起的（普通后台 Bash 占多数）。记下来，
+      // 它后续的事件就不必再查库了。
+      this.foreign.add(nativeId);
+      return;
+    }
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
     // `lost` 也要让路：那是 ash 推断的，来源侧后到的真终态是事实（见 monitorStatusCorrectable）。
     if (!row || !monitorStatusCorrectable(row.status)) return;
@@ -436,6 +477,8 @@ export async function loseDeadClaudeMonitors(): Promise<{ kept: number; lost: nu
       id: monitors.id,
       taskId: monitors.taskId,
       cliSessionId: monitors.cliSessionId,
+      sourcePid: monitors.sourcePid,
+      sourcePidStartedAt: monitors.sourcePidStartedAt,
     })
     .from(monitors)
     .where(and(eq(monitors.kind, "claude"), eq(monitors.status, "running")));
@@ -448,7 +491,7 @@ export async function loseDeadClaudeMonitors(): Promise<{ kept: number; lost: nu
   const dead: { id: string; taskId: string }[] = [];
   let kept = 0;
   for (const row of rows) {
-    const live = await probe.sourceAlive(row.cliSessionId, row.taskId);
+    const live = await probe.sourceAlive(row);
     if (live) kept += 1;
     else dead.push({ id: row.id, taskId: row.taskId });
   }

@@ -691,4 +691,18 @@ export const monitors = sqliteTable("monitors", {
   // expires_at 本身保持 NOT NULL(SQLite 改约束要重建表),非 bounded 时存占位值,由
   // toTaskMonitor 按这一列决定对外给不给 —— 对外契约里它是可空的。
   sourceLifetime: text("source_lifetime").notNull().default("bounded"),
+  // **期限是怎么来的** —— 不是「它是不是 bounded」,而是「凭什么说它 bounded」。
+  // 'receipt' = 来源回执明说的（唯一可信来源）;NULL = 旧版本算法推出来的,不可信。
+  // 为什么必须单独记而不能靠别的列推断:`cli_session_id` 从本功能第一个提交(579e58dc)
+  // 就有,`source_lifetime` 到第 2 轮(af4ea0e2)才加,两者不同批 —— 拿「有没有归属」当
+  // 「期限可不可信」的版本依据是错的(第 4 轮审查用 git show 核出这处事实错误)。这一列
+  // 是新加的,所以旧行必然 NULL,这才是可靠的版本判据。
+  lifetimeEvidence: text("lifetime_evidence"),
+  // **起这个 Monitor 的那一代 agent 进程**。`sessions` 的 agent_pid/agent_started_at 每
+  // 回合都被下一轮覆盖,所以「这条会话现在有活进程」不等于「起它的那一代还活着」:上一轮
+  // 的进程早死了、同一 CLI 会话的新进程还在跑时,历史投影会被判成 running(第 4 轮审查
+  // 实测 reusedSession)。存下当代身份,存活判断才问得准。NULL = 代次不明(历史回填时
+  // sessions 那两列已被覆盖),判死活退回会话/任务那一层。
+  sourcePid: integer("source_pid"),
+  sourcePidStartedAt: text("source_pid_started_at"),
 });

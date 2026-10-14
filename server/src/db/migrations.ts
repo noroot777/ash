@@ -392,30 +392,34 @@ async function relaxDebateRoundIndex(client: Client): Promise<void> {
   }
 }
 
-// 「声称来源确认过期限,却连来源是谁都不知道」的 claude 投影,把期限降回 unknown。
+// 把**旧版本算法推算出来**的 claude 投影期限降回 unknown。
 //
-// `source_lifetime` 列早期的 ALTER 默认值是 'bounded'(已改成 'unknown',见 db/index.ts
-// 那一行的说明),所以在**那之前**升级过的库里,存量 claude 行被一律填成「来源确认过期限」
-// ——而它们的 `expires_at` 是拿 Monitor 入参那个 `timeout_ms`(请求值)算的。claude 会
-// `Math.min(请求值, 10 或 30 分钟)`,哪一档由账号 feature flag 决定,所以请求值不是事实,
-// 卡片上那句「盯到 X」没有依据。
+// 判据是 `lifetime_evidence IS NULL`:那一列是第 4 轮才加的,所以旧行必然为 NULL,而新代码
+// 落 bounded 时一定同时写 'receipt'(来源回执明说的)。于是「谁的期限没有事实依据」这个问题
+// 有了确定答案,不必去猜。
 //
-// 判据取 `cli_session_id IS NULL`:会话归属列和 source_lifetime 是同一批加的,早期代码
-// 不写它,所以缺归属正好认出这批行。更要紧的是这个判据**不会误伤**——有归属的正确 bounded
-// 行一条都不碰,而缺归属的行无论新旧,期限都同样没有事实基础(连去问哪条会话都不知道)。
+// **上一版的判据是错的**:它用 `cli_session_id IS NULL`,理由写的是「归属列和 source_lifetime
+// 同一批加入,早期代码不写它」—— 这条事实不成立。第 4 轮审查用 `git show` 核出:归属列在本
+// 功能第一个提交 `579e58dc` 就有,`source_lifetime` 到第 2 轮 `af4ea0e2` 才加。所以那批**带
+// 归属的**错期限行一条都没被纠正(实测 legacyLifetimes:一行 60 秒、一行假 5 分钟的持续监听,
+// 迁移跑两次 + 完整回填之后仍然原样显示「盯到 …」)。
 //
-// 真实期限不会就此丢失:下次打开那个任务的哨兵面板,历史回填会重读来源回执把它升回
-// bounded,顺手把归属也补上(claude-monitor-backfill 的 mergeInto)。
+// 降级不会丢真实期限:下次打开那个任务的哨兵面板,历史回填会重读来源回执把它升回去,并写上
+// 'receipt'(claude-monitor-backfill 的 mergeInto)。已经带 'receipt' 的新行一条都不碰 ——
+// 不为了修旧行去破坏已经正确的记录。
 //
-// 幂等:降过之后不再匹配(source_lifetime 已不是 'bounded');列不存在时报错被吞。
+// 幂等:降过之后 source_lifetime 不再是 'bounded',不会重复匹配。
 async function relaxUnfoundedClaudeMonitorLifetimes(client: Client): Promise<void> {
   try {
     await client.execute(
       `UPDATE monitors SET source_lifetime='unknown'
-       WHERE kind='claude' AND source_lifetime='bounded' AND cli_session_id IS NULL`,
+       WHERE kind='claude' AND source_lifetime<>'unknown' AND lifetime_evidence IS NULL`,
     );
-  } catch {
-    /* 列还不存在 */
+  } catch (e) {
+    // **只吞「列还不存在」**(新库在 DDL 之前跑到这里)。原来 catch 是空的,于是权限、
+    // SQLITE_BUSY/FULL 这些真失败也被当成「列没有」静静放过,旧假期限留在库里而且没人知道
+    // (第 4 轮审查按代码推断指出)。真失败往外抛,由 runDataMigrations 的调用方处理。
+    if (!/no such column|no such table/i.test((e as Error | null)?.message ?? "")) throw e;
   }
 }
 

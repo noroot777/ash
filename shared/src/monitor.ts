@@ -110,6 +110,42 @@ export function parseMonitorStartReceipt(text: string): { lifetime: MonitorLifet
 const MONITOR_UNIT_MS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
 
 /**
+ * 期限的**证据**：凭什么说这个 `expiresAt` 是真的。
+ *
+ * 这不是 `MonitorLifetime` 的重复——那一列说「是不是有限期」，这一列说「这个判断立不立得住」。
+ * 两者必须分开记，因为**纠正旧数据时唯一可用的判据是证据，不是结论**：一行写着 `bounded`
+ * 可能来自来源回执（对），也可能来自某个旧版本拿请求值算的（错），结论本身分不开它们。
+ *
+ * - `receipt`：来源回执明说的（`parseMonitorStartReceipt` 读出来的）。claude 投影唯一的可信档。
+ * - `self`：ash 自己起的哨兵——期限是 ash 定的，进程也是 ash 起的，不存在"来源说了算"的问题。
+ * - `null`：旧版本算法推出来的，或还没拿到回执。不可信，对外不给到期时刻。
+ *
+ * 为什么不能用别的列代替：`cli_session_id` 从本功能第一个提交就有，`source_lifetime` 要晚
+ * 两轮才加——拿「有没有会话归属」当版本依据会把一批带归属的错期限漏掉（第 4 轮审查实测
+ * legacyLifetimes：60 秒和假 5 分钟两行，迁移两次 + 完整回填后仍原样）。
+ *
+ * **能算到期时刻的前提是收到回执，而回执事件自带可信时刻**——所以这一档和「起点可信」天然
+ * 是同一件事，不会出现「期限可信但起点不可信」的组合。
+ */
+export const MONITOR_LIFETIME_EVIDENCE = ["receipt", "self"] as const;
+export type MonitorLifetimeEvidence = (typeof MONITOR_LIFETIME_EVIDENCE)[number];
+
+/**
+ * 来源侧那个原生后台任务 id 的唯一性契约。
+ *
+ * 投影表的唯一索引是 `(task_id, native_id)`，它成立的前提是「同一个 ash 任务里，来源 id 不
+ * 会撞」。这个前提**实测成立但不是来源侧承诺的**，所以写在这里：2026-10-14 扫过本机全部
+ * `agent-out.jsonl`，1017 条 `task_started` 里 `local_bash` 的 id 形如 `b` + 8 位随机
+ * base36（`blu5n05kp`），跨会话重复 0 个。
+ *
+ * 反例也记一笔：`local_agent` 那种（`a` 前缀，子代理）同一个 id 出现过两次、挂在两个不同的
+ * `tool_use_id` 上。我们只认 Monitor 起的 `local_bash`，碰不到它——但它正好说明不能把
+ * 「来源 id 全局唯一」当成普适假设。所以解析侧的 `pending`/`byToolUse` 一律**按会话分区**，
+ * 不跨会话共用（第 4 轮审查指出此前实现成了跨整个任务共用）。
+ */
+export const NATIVE_MONITOR_ID_SCOPE = "per-cli-session" as const;
+
+/**
  * 这一行当前的状态，**能不能被来源侧后到的事实改写**。
  *
  * 投影里的状态有两种出身，优先级不对等：

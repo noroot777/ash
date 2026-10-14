@@ -132,7 +132,8 @@ export async function ensureSchema() {
       started_at TEXT NOT NULL, expires_at TEXT NOT NULL,
       ended_at TEXT, ended_reason TEXT, owner_user_id TEXT,
       kind TEXT NOT NULL DEFAULT 'ash', native_id TEXT, cli_session_id TEXT,
-      source_lifetime TEXT NOT NULL DEFAULT 'unknown'
+      source_lifetime TEXT NOT NULL DEFAULT 'unknown',
+      lifetime_evidence TEXT, source_pid INTEGER, source_pid_started_at TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -306,6 +307,12 @@ export async function ensureSchema() {
     // 填 'bounded' 等于声称「来源确认过这个期限」，把编出来的时刻变成事实。ash 自己起的
     // 哨兵期限确实是自己定的，由紧随其后的那条 UPDATE 刷回 'bounded'（见下）。
     "ALTER TABLE monitors ADD COLUMN source_lifetime TEXT NOT NULL DEFAULT 'unknown'",
+    // 期限的**证据**,不是期限本身。新列 ⇒ 旧行必然 NULL,这才是「哪些期限由旧算法推出来」
+    // 的可靠版本判据(原来拿 cli_session_id IS NULL 当依据,而那一列更早就有了)。
+    "ALTER TABLE monitors ADD COLUMN lifetime_evidence TEXT",
+    // 起它的那一代 agent 进程。sessions 那两列每回合被覆盖,不能用来判历史投影的死活。
+    "ALTER TABLE monitors ADD COLUMN source_pid INTEGER",
+    "ALTER TABLE monitors ADD COLUMN source_pid_started_at TEXT",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
@@ -555,9 +562,11 @@ export async function ensureSchema() {
     console.warn("[ash] monitors_native 索引创建失败,忽略:", e);
   }
   // ash 自己起的哨兵期限是它自己定的,`bounded` 对它恒成立 —— 上面那个 ALTER 为了不给
-  // claude 投影编期限把默认值设成了 'unknown',这里把 ash 那半刷回来。幂等。
+  // claude 投影编期限把默认值设成了 'unknown',这里把 ash 那半刷回来；证据列同理补 'self'
+  // （新列对存量行一律 NULL,而 NULL 的语义是「旧算法推的、不可信」,对 ash 行不成立）。幂等。
   try {
     await client.execute("UPDATE monitors SET source_lifetime='bounded' WHERE kind='ash' AND source_lifetime<>'bounded'");
+    await client.execute("UPDATE monitors SET lifetime_evidence='self' WHERE kind='ash' AND lifetime_evidence IS NULL");
   } catch {
     /* 列还不存在 */
   }

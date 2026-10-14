@@ -105,7 +105,9 @@ async function main(): Promise<void> {
   const first = rows.find((r) => r.nativeId === "bh001");
   check(first?.status === "exited", "有终态的按终态补", String(first?.status));
   check(first?.lifetime === "bounded", "回执里的期限也补上了", String(first?.lifetime));
-  check(first?.startedAt === "2026-10-14T01:00:05.000Z", "起点用事件自报的时刻", String(first?.startedAt));
+  // 起点取**起手回执**那条事件的时刻（01:00:06），不是 tool_use 那条（01:00:05）：工具调用
+  // 可能卡在权限确认上，两者能差很久，而回执是启动后立刻返回的。
+  check(first?.startedAt === "2026-10-14T01:00:06.000Z", "起点用起手回执那条事件的时刻", String(first?.startedAt));
   const span = first?.expiresAt ? Date.parse(first.expiresAt) - Date.parse(first.startedAt) : -1;
   check(Math.abs(span - 600_000) < 2_000, "期限按回执的 10 分钟，不是请求的 15 分钟", `${span}ms`);
 
