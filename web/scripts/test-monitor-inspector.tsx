@@ -18,6 +18,7 @@ const base: TaskMonitor = {
   // 整份夹具的断言全部对不上——这两个字段是必填契约的一部分，不是可选装饰。
   kind: "ash",
   nativeId: null,
+  lifetime: "bounded",
   command: "tail -F build.log | grep --line-buffered ERROR",
   description: "盯构建日志",
   cwd: "/repo",
@@ -41,6 +42,7 @@ const projected: TaskMonitor = {
   pid: null,
   events: 0,
 };
+
 
 function state(monitors: TaskMonitor[]): TaskMonitorsState {
   return {
@@ -100,6 +102,22 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
   assert.doesNotMatch(html, /停掉哨兵/, "ash 停不掉它，就不该画一个注定失败的停止按钮");
   assert.doesNotMatch(html, /条事件/, "事件数 ash 根本数不到，画出来只会被读成「过滤写错了」");
   assert.doesNotMatch(html, /看它的输出/, "它的输出进了智能体自己的会话，ash 这边没有日志可看");
+}
+
+// ── 「盯到什么时候」必须如实 ────────────────────────────────────────────────
+// claude 内置 Monitor 的期限是来源侧说了算的：它可能持续盯着（没有到期时刻），也可能回执
+// 还没到（我们还不知道）。无脑写一句「盯到 X」用户会当真——第 2 轮审查实测来源侧会把请求
+// 的 1 小时钳成 30 分钟甚至 10 分钟。
+{
+  const bounded = panel([{ ...projected, lifetime: "bounded", expiresAt: "2026-08-25T12:00:00.000Z" }]);
+  assert.match(bounded, /盯到/, "有来源回执的照常给出到期时刻");
+
+  const persistent = panel([{ ...projected, lifetime: "persistent", expiresAt: null }]);
+  assert.match(persistent, /持续盯着/, "持续监听要说清它没有到期时刻");
+  assert.doesNotMatch(persistent, /盯到 20/, "持续监听不能编一个到期时刻出来");
+
+  const unknown = panel([{ ...projected, lifetime: "unknown", expiresAt: null }]);
+  assert.doesNotMatch(unknown, /盯到 20/, "期限未知时更不能编——编出来的那个会被当真");
 }
 
 // 两种混排时各画各的，不会互相串味。

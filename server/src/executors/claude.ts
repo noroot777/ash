@@ -202,7 +202,7 @@ export class ClaudeExecutor implements AgentExecutor {
     child.on("close", goal.cleanup);
     child.on("close", settings.cleanup);
     let goalStarted = false;
-    const events = cleanupWithEvents(parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settings.cleanup), settings.cleanup);
+    const events = cleanupWithEvents(parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settings.cleanup, undefined, sessionId), settings.cleanup);
     return {
       cliCommand: opts.cliCommand,
       goalStarted: () => goalStarted,
@@ -263,7 +263,10 @@ export class ClaudeExecutor implements AgentExecutor {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
       events: cleanupWithEvents(
-        parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settingsCleanup),
+        // **接管必须把会话身份传下去**：这条流是从已消费的 offset 之后接着读的，`init`
+        // 早在上一轮消费掉了，内置 Monitor 的投影靠「等下一条 system 事件」永远认领不回来
+        // （见 claude-monitors.ts 构造函数）。
+        parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settingsCleanup, undefined, opts.sessionId),
         settingsCleanup,
       ),
       kill: () => child.kill(),
@@ -311,7 +314,8 @@ export class ClaudeExecutor implements AgentExecutor {
       sessionId,
       commandLine,
       events: cleanupWithEvents(
-        parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow(), settingsCleanup),
+        // 同 attach：可引导流接管回来时同样没有新的 init。
+        parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow(), settingsCleanup, undefined, sessionId),
         settingsCleanup,
       ),
       send: (text: string) => {

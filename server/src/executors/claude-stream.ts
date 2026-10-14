@@ -32,6 +32,10 @@ export async function* parseClaudeStream(
   compactWindow: number | null = null,
   onInitialized: () => void = () => {},
   waitNoticeMs = 5 * 60_000,
+  // 这条流属于哪条 CLI 会话。**接管路径必须传**：接管是从已消费的 offset 之后接着读的,
+  // `init` 早在上一轮就消费掉了,不会再来一次,靠等 system 事件设身份会一直等不到
+  // (见 ../claude-monitors.ts 构造函数的说明)。新开的流可以不传,init 会带来。
+  cliSessionId?: string,
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -72,7 +76,7 @@ export async function* parseClaudeStream(
   // claude 自带 `Monitor` 工具的只读投影（见 ../claude-monitors.ts）。放在这一层的理由：
   // 认人要同时看 tool_use 块（工具名）和 system 事件（后台任务生命周期），只有这里两样
   // 都流过。整条链 fire-and-forget，记账失败不影响事件流。
-  const claudeMonitors = new ClaudeMonitorTrace();
+  const claudeMonitors = new ClaudeMonitorTrace(cliSessionId);
 
   const rl = createInterface({ input: child.stdout! });
 
@@ -143,6 +147,7 @@ export async function* parseClaudeStream(
         // 明明已经挂上了——跟主智能体那条路是同一个毛病，只是入口在这个分支里。
         // 注意这个分支**会提前 return**，所以必须在这儿接，不能指望下面那段顶层处理。
         if (block.type === "tool_use") claudeMonitors.toolUse(block.name, block.input, block.id);
+        if (block.type === "tool_result") claudeMonitors.toolResult(block.tool_use_id, block.content);
         if (block.type === "tool_result") {
           for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         } else if (block.type === "text" && typeof block.text === "string") {
@@ -285,6 +290,9 @@ export async function* parseClaudeStream(
       flushText();
       for (const block of ev.message.content) {
         if (block?.type !== "tool_result") continue;
+        // 起手回执里那句 `expires in 20m` 是来源侧唯一说出**生效**期限的地方（入参那个
+        // timeout_ms 只是请求值，claude 会自己钳）。见 claude-monitors.ts 的 toolResult。
+        claudeMonitors.toolResult(block.tool_use_id, block.content);
         const activity = nativeWork.result(block.tool_use_id, block.content, block.is_error === true);
         if (activity) push(activity);
         for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });

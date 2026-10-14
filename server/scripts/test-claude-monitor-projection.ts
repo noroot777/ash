@@ -119,7 +119,10 @@ async function main(): Promise<void> {
   });
   const deadRow = await projectClaudeMonitor(sweepTask, "bitsgone", "running", deadSession);
 
-  // ③ 没记来源会话的存量行：无从判断，按「认不回来」收掉。
+  // ③ 没记来源会话的存量行（`cli_session_id` 上线前落的）：**「不知道」不等于「已经死了」**。
+  // 这个任务名下还有活着的 claude agent，所以来源多半还在，留着。
+  // 上一轮这里断言的是「缺凭据一律 lost」——那是把错误假设写进了测试（第 2 轮审查实测
+  // sourceAlive=true 却被标 lost，升级之后一批还活着的旧投影会被一次性误判）。
   const legacyRow = await projectClaudeMonitor(sweepTask, "blegacy", "running", null);
 
   const liveAsh = await startMonitor({ taskId: sweepTask, command: "sleep 30", description: "ash 的不该被它碰" });
@@ -131,8 +134,21 @@ async function main(): Promise<void> {
   check(dead?.status === "lost", "来源 agent 确实没了的落 lost", String(dead?.status));
   check(/进程已经不在/.test(dead?.endedReason ?? ""), "结束原因说的是来源进程，不是 ash 自己重启", dead?.endedReason ?? "");
   const legacy = (await db.select().from(monitors).where(eq(monitors.id, legacyRow))).at(0);
-  check(legacy?.status === "lost", "没记来源会话的存量行也收掉（无从认领）", String(legacy?.status));
-  check(sweep.kept >= 1 && sweep.lost >= 2, "统计分别报出留了几个、收了几个", JSON.stringify(sweep));
+  check(legacy?.status === "running", "缺来源凭据但任务还有活 agent → 留着（未知不等于已死）",
+    `实际 ${legacy?.status}（lost = 又在拿「不知道」当「已经死了」）`);
+  check(sweep.kept >= 2 && sweep.lost >= 1, "统计分别报出留了几个、收了几个", JSON.stringify(sweep));
+
+  // ④ 同样缺凭据，但任务名下一个活着的 claude agent 都没有 → 这才算确实没了。
+  const goneTask = await makeTask();
+  await db.insert(sessions).values({
+    id: "sess-gone", taskId: goneTask, role: "single", agentType: "claude", executor: "claude@test",
+    cliSessionId: "cli-gone", cwd: "/tmp", startedAt: now(),
+    agentPid: 2_147_483_601, agentStartedAt: "Mon Jan  1 00:00:00 2001",
+  });
+  const goneRow = await projectClaudeMonitor(goneTask, "bgone", "running", null);
+  await loseDeadClaudeMonitors();
+  const gone = (await db.select().from(monitors).where(eq(monitors.id, goneRow))).at(0);
+  check(gone?.status === "lost", "缺凭据且任务里没有活着的 agent → 确实收掉", String(gone?.status));
 
   if (liveAsh.ok) {
     const ashRow = (await db.select().from(monitors).where(eq(monitors.id, liveAsh.monitor.id))).at(0);

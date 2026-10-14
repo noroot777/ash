@@ -38,7 +38,7 @@ const CLI_SESSION = "fa1256cd-7a30-409a-8014-c9dd8ed96cf5";
 const now = () => new Date().toISOString();
 
 /** 把若干行 stream-json 交给一个真子进程吐出来，喂给 parseClaudeStream 读完。 */
-async function drain(lines: unknown[]): Promise<void> {
+async function drain(lines: unknown[], cliSessionId?: string): Promise<void> {
   const script = join(root, `stub-${Math.random().toString(36).slice(2, 8)}.mjs`);
   writeFileSync(
     script,
@@ -46,7 +46,9 @@ async function drain(lines: unknown[]): Promise<void> {
   );
   const child = spawn(process.execPath, [script], { stdio: ["pipe", "pipe", "pipe"] });
   child.stdin?.end();
-  for await (const _ of parseClaudeStream(child as any)) { /* 事件本身这份测试不关心 */ }
+  for await (const _ of parseClaudeStream(child as any, undefined, "claude", undefined, null, () => {}, 5 * 60_000, cliSessionId)) {
+    /* 事件本身这份测试不关心 */
+  }
 }
 
 async function main(): Promise<void> {
@@ -75,6 +77,10 @@ async function main(): Promise<void> {
     },
     { type: "system", subtype: "task_started", task_id: "bmon0001", tool_use_id: "toolu_m1", description: "等回归结论", task_type: "local_bash", session_id: CLI_SESSION },
     { type: "system", subtype: "task_started", task_id: "bbash001", tool_use_id: "toolu_b1", description: "跑测试", task_type: "local_bash", session_id: CLI_SESSION },
+    // 起手回执：来源侧说出**生效**期限的地方（请求的是 15 分钟，来源给了 10 分钟）。
+    { type: "user", message: { role: "user", content: [
+      { type: "tool_result", tool_use_id: "toolu_m1", content: "Monitor started (task bmon0001, expires in 10m unless the source ends first)." },
+    ] } },
     { type: "system", subtype: "task_notification", task_id: "bmon0001", tool_use_id: "toolu_m1", status: "completed", summary: "等回归结论", session_id: CLI_SESSION },
     { type: "result", subtype: "success", is_error: false, session_id: CLI_SESSION, num_turns: 1, result: "done" },
   ]);
@@ -86,6 +92,9 @@ async function main(): Promise<void> {
   check(rows[0]?.kind === "claude", "kind=claude");
   check(rows[0]?.description === "等回归结论", "说明来自 Monitor 的入参", String(rows[0]?.description));
   check(rows[0]?.status === "exited", "completed → exited", String(rows[0]?.status));
+  const span = rows[0] ? Date.parse(rows[0].expiresAt) - Date.parse(rows[0].startedAt) : -1;
+  check(rows[0]?.sourceLifetime === "bounded", "回执把期限从未知升级成有限期", String(rows[0]?.sourceLifetime));
+  check(Math.abs(span - 600_000) < 2_000, "期限按回执的 10 分钟，不是请求的 15 分钟", `${span}ms`);
 
   // 另一条：起了但没等到终态，进程就结束了 → finishAll 应当把它收成 lost。
   await drain([
@@ -126,11 +135,12 @@ async function main(): Promise<void> {
   // ── 接管那条路：上一轮的投影还挂着 running，新开的流必须认回来再收它的终态。
   await db.update(monitors).set({ status: "running", endedAt: null, endedReason: null })
     .where(eq(monitors.nativeId, "bsub0001"));
+  // **不重放 init**：真实接管是从已消费的 offset 之后接着读的，上一轮的 init 不会再来。
+  // 身份靠 parseClaudeStream 的 cliSessionId 参数传进来（attach 路径就是这么调的）。
   await drain([
-    { type: "system", subtype: "init", session_id: CLI_SESSION },
     { type: "system", subtype: "task_notification", task_id: "bsub0001", status: "completed", summary: "子智能体的哨兵跑完了", session_id: CLI_SESSION },
     { type: "result", subtype: "success", is_error: false, session_id: CLI_SESSION, num_turns: 1, result: "done" },
-  ]);
+  ], CLI_SESSION);
   await new Promise((r) => setTimeout(r, 250));
   const afterReclaim = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsub0001"))).at(0);
   check(afterReclaim?.status === "exited", "接管后的新流认回上一轮的投影并落了终态",

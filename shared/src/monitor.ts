@@ -32,6 +32,47 @@ export type MonitorStatus = (typeof MONITOR_STATUSES)[number];
 export const MONITOR_KINDS = ["ash", "claude"] as const;
 export type MonitorKind = (typeof MONITOR_KINDS)[number];
 
+/**
+ * 这个哨兵**盯到什么时候**——三态，不是一个「到期时刻」就能表达的。
+ *
+ * ash 自己起的恒为 `bounded`：期限是它自己定的，当然知道。但 claude 内置 Monitor 的期限
+ * 是**来源侧说了算**，而 ash 只是转述：
+ * - `bounded`：来源明确回执了有效期（`expiresAt` 可信）。
+ * - `persistent`：来源说它不设会话内超时（持续盯着），没有到期时刻。
+ * - `unknown`：还没拿到回执，或者回执里没提期限。
+ *
+ * 为什么必须有 `unknown` 这一档：claude 的回执（tool_result 里那句 `expires in 20m`）
+ * **在 `task_started` 之后才到**（实测顺序 tool_use → task_started → tool_result），所以
+ * 投影刚落库那一刻我们确实不知道。更要命的是来源侧会**自己钳**——请求 1 小时、实际可能
+ * 只给 30 分钟或 10 分钟（第 2 轮审查从本机 claude 2.1.283 的归一化函数实测到两个分支）。
+ * 拿请求参数冒充生效期限，卡片上那句「盯到 X」就是编的。不知道就说不知道。
+ */
+export const MONITOR_LIFETIMES = ["bounded", "persistent", "unknown"] as const;
+export type MonitorLifetime = (typeof MONITOR_LIFETIMES)[number];
+
+/**
+ * 从 claude 起 Monitor 的回执里读**实际生效**的期限。
+ *
+ * 回执长这样：`Monitor started (task bvvsd32ii, expires in 20m unless the source ends
+ * first; ...)`。这是来源侧唯一一处说出生效值的地方——它已经把请求值钳过了，所以它才是
+ * 事实，`timeout_ms` 只是我们请求了什么。
+ *
+ * 认不出来一律返回 `unknown` 而不是退回请求值：两者不同的那种情况（来源钳了）恰恰是这个
+ * 函数存在的全部理由，退回去等于白做。
+ */
+export function parseMonitorStartReceipt(text: string): { lifetime: MonitorLifetime; ms: number | null } {
+  if (!/Monitor started/i.test(text)) return { lifetime: "unknown", ms: null };
+  // 没有到期、明说持续盯着的那种。
+  if (/\bpersistent\b/i.test(text) && !/expires in/i.test(text)) return { lifetime: "persistent", ms: null };
+  const m = /expires in\s+(\d+(?:\.\d+)?)\s*(ms|s|m|h)\b/i.exec(text);
+  if (!m) return { lifetime: "unknown", ms: null };
+  const value = Number(m[1]);
+  if (!Number.isFinite(value) || value <= 0) return { lifetime: "unknown", ms: null };
+  const unit = m[2]!.toLowerCase();
+  const scale = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
+  return { lifetime: "bounded", ms: Math.round(value * scale) };
+}
+
 /** 能不能从 ash 这边停掉它。`claude` 那种的进程在 agent 进程树里，ash 够不着。 */
 export const canStopMonitor = (kind: MonitorKind) => kind === "ash";
 /** 有没有日志文件可以回看尾巴。只有 ash 自己起的才有。 */
@@ -47,6 +88,8 @@ export interface TaskMonitor {
    * `ash` 那种恒为 null：它的 `id` 就是唯一那一个。
    */
   nativeId: string | null;
+  /** 盯到什么时候：有限期 / 持续 / 还不知道。见 {@link MonitorLifetime}。 */
+  lifetime: MonitorLifetime;
   /** 原样交给用户 shell 执行的命令行。 */
   command: string;
   /** 一句话说明，会出现在每条事件的抬头和界面上。 */
@@ -60,7 +103,11 @@ export interface TaskMonitor {
   /** 命令自己退出时的退出码；跨 server 重启接回来的那种拿不到，记 null。 */
   exitCode: number | null;
   startedAt: string;
-  expiresAt: string;
+  /**
+   * 到期时刻。**只有 `lifetime === "bounded"` 时非空**——持续监听没有到期时刻，期限未知时
+   * 编一个出来就是假的（卡片上那句「盯到 X」会被当真）。
+   */
+  expiresAt: string | null;
   endedAt: string | null;
   endedReason: string | null;
 }

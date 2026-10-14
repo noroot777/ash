@@ -686,4 +686,9 @@ export const monitors = sqliteTable("monitors", {
   // agent 进程活得过 ash 重启(detached),重启后新建的解析器必须靠它把这些行认回来,否则
   // 来源侧后续的终态通知会因为「没认领过」被丢掉,卡片永远停在旧状态。
   cliSessionId: text("cli_session_id"),
+  // 盯到什么时候:bounded(expires_at 可信) / persistent(持续,无到期) / unknown(还没拿到
+  // 来源回执)。'ash' 那种恒为 bounded。语义见 shared/src/monitor.ts 的 MonitorLifetime。
+  // expires_at 本身保持 NOT NULL(SQLite 改约束要重建表),非 bounded 时存占位值,由
+  // toTaskMonitor 按这一列决定对外给不给 —— 对外契约里它是可空的。
+  sourceLifetime: text("source_lifetime").notNull().default("bounded"),
 });

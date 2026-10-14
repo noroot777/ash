@@ -60,9 +60,11 @@ async function main(): Promise<void> {
   check(mon?.status === "running", "起手状态是 running", String(mon?.status));
   check(mon?.command.includes("until grep"), "命令原文来自 Monitor 的入参", mon?.command ?? "");
   check(mon?.cwd === "/tmp/wt", "工作目录取自会话", String(mon?.cwd));
-  // 30 分钟上限（已与 claude 对齐）：1_200_000ms 在区间内，应原样生效。
-  const span = mon ? Date.parse(mon.expiresAt) - Date.parse(mon.startedAt) : 0;
-  check(Math.abs(span - 1_200_000) < 2_000, "到期时刻按 timeout_ms 算", `${span}ms`);
+  // **请求参数不是生效期限**：claude 自己会钳，还有 persistent 模式。回执（tool_result）
+  // 在 task_started 之后才到，所以这一刻只能是「未知」，对外也不给到期时刻。
+  // 上一轮这里断言的是「到期时刻按 timeout_ms 算」——那正是第 2 轮审查指出的错误判据。
+  check(mon?.lifetime === "unknown", "回执还没到：期限是未知，不拿请求值冒充", String(mon?.lifetime));
+  check(mon?.expiresAt === null, "未知期限对外不给到期时刻", String(mon?.expiresAt));
 
   // ③ 终态：只收自己认领过的那条
   trace.event({ type: "system", subtype: "task_notification", task_id: "bkmzsumfy", tool_use_id: "toolu_bash_1",
@@ -124,9 +126,11 @@ async function main(): Promise<void> {
   secs.event({ type: "system", subtype: "task_started", task_id: "bsecs001", tool_use_id: "toolu_secs",
     description: "只盯 5 秒", task_type: "local_bash", session_id: CLI_SESSION });
   await settle();
+  secs.toolResult("toolu_secs", "Monitor started (task bsecs001, expires in 5s unless the source ends first).");
+  await settle();
   const quick = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsecs001"))).at(0);
   const quickSpan = quick ? Date.parse(quick.expiresAt) - Date.parse(quick.startedAt) : -1;
-  check(Math.abs(quickSpan - 5_000) < 1_500, "来源说 5 秒就记 5 秒，不抬到 ash 的下限", `${quickSpan}ms`);
+  check(Math.abs(quickSpan - 5_000) < 1_500, "来源回执说 5 秒就记 5 秒，不抬到 ash 的下限", `${quickSpan}ms`);
 
   // ⑨ 接管回来：新 trace 必须把上一轮的投影认回来，否则终态通知会被当成「不是我的」丢掉
   const reclaimTrace = new ClaudeMonitorTrace();
@@ -139,11 +143,92 @@ async function main(): Promise<void> {
   check(reclaimed?.status === "exited", "接管后的新 trace 认回了上一轮的投影，终态落得下去",
     `实际 ${reclaimed?.status}（running = 认领关系没恢复，通知被丢了）`);
 
+  // ⑩ **真实接管：没有新的 init**。接管是从已消费的 offset 之后接着读的，上一轮的 init
+  // 早就消费掉了。靠「等下一条 system 事件设身份」在这条路上永远等不到——我上一轮的回归
+  // 每次都重发 init，恰好把它盖住了（第 2 轮审查实测）。身份改成构造时传入。
+  await db.update(monitors).set({ status: "running", endedAt: null }).where(eq(monitors.nativeId, "bsubagent"));
+  const resumed = new ClaudeMonitorTrace(CLI_SESSION);   // 不发 init
+  await settle();
+  resumed.event({ type: "system", subtype: "task_notification", task_id: "bsubagent",
+    status: "stopped", summary: "接管后才收到的终态", session_id: CLI_SESSION });
+  await settle();
+  const afterResume = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsubagent"))).at(0);
+  check(afterResume?.status === "stopped", "没有 init 的接管流照样认回上一轮并落终态",
+    `实际 ${afterResume?.status}（没变 = 身份没传进来，认领压根没发生）`);
+
+  // ⑪ **进程结束时按持久归属收尾，不按内存账本**。接管流从没认领过某一行时，finishAll
+  // 原来查不到它，于是进程都结束了卡片还写着「正在盯着」（第 2 轮审查实测）。
+  await db.update(monitors).set({ status: "running", endedAt: null }).where(eq(monitors.nativeId, "bsubagent"));
+  const quiet = new ClaudeMonitorTrace(CLI_SESSION);
+  quiet.finishAll();                       // 一条事件都没喂过
+  await settle();
+  const afterQuiet = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsubagent"))).at(0);
+  check(afterQuiet?.status === "lost", "一条事件都没收到的接管流，结束时照样把本会话的投影收干净",
+    `实际 ${afterQuiet?.status}（running = finishAll 还在只看内存 rows）`);
+
+  // ⑫ **认领失败不能变成权威空账本**。注入一次读失败，随后的有效通知仍要落得下去。
+  {
+    const original = db.select.bind(db);
+    let injected = 0;
+    (db as any).select = (...args: any[]) => {
+      // 只打第一次 reclaim 的那条查询（它选的就是 id + nativeId 两列）。同步抛即可：
+      // 调用点在 async 函数体内，会原样变成那个 promise 的 rejection。
+      const fields = args[0];
+      if (injected === 0 && fields && "nativeId" in fields && "id" in fields && Object.keys(fields).length === 2) {
+        injected += 1;
+        throw new Error("INJECTED_SQLITE_BUSY");
+      }
+      return original(...(args as []));
+    };
+    await db.update(monitors).set({ status: "running", endedAt: null }).where(eq(monitors.nativeId, "bsubagent"));
+    const flaky = new ClaudeMonitorTrace(CLI_SESSION);
+    await settle();
+    flaky.event({ type: "system", subtype: "task_notification", task_id: "bsubagent",
+      status: "completed", summary: "读失败之后仍然有效的通知", session_id: CLI_SESSION });
+    await settle();
+    await settle();
+    (db as any).select = original;
+    check(injected === 1, "确实注入了一次读失败", `injected=${injected}`);
+    const afterFlaky = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsubagent"))).at(0);
+    check(afterFlaky?.status === "exited", "一次认领读失败之后，来源的有效通知照样落得下去",
+      `实际 ${afterFlaky?.status}（running = 失败被当成「认领完成且账本为空」，通知被永久丢弃）`);
+  }
+
+  // ⑬ 期限以**来源回执**为准，不是请求参数（claude 自己会钳）。
+  const receipt = new ClaudeMonitorTrace(CLI_SESSION);
+  receipt.toolUse("Monitor", { command: "sleep 9999", description: "请求一小时", timeout_ms: 3_600_000 }, "toolu_rcpt");
+  receipt.event({ type: "system", subtype: "task_started", task_id: "brcpt001", tool_use_id: "toolu_rcpt",
+    description: "请求一小时", task_type: "local_bash", session_id: CLI_SESSION });
+  await settle();
+  const beforeReceipt = (await db.select().from(monitors).where(eq(monitors.nativeId, "brcpt001"))).at(0);
+  check(beforeReceipt?.sourceLifetime === "unknown", "回执还没到时期限是「未知」，不拿请求值冒充",
+    String(beforeReceipt?.sourceLifetime));
+  // 来源把一小时钳成了 30 分钟 —— 这才是事实。
+  receipt.toolResult("toolu_rcpt", "Monitor started (task brcpt001, expires in 30m unless the source ends first).");
+  await settle();
+  const afterReceipt = (await db.select().from(monitors).where(eq(monitors.nativeId, "brcpt001"))).at(0);
+  const receiptSpan = afterReceipt ? Date.parse(afterReceipt.expiresAt) - Date.parse(afterReceipt.startedAt) : -1;
+  check(afterReceipt?.sourceLifetime === "bounded", "拿到回执后升级成有限期", String(afterReceipt?.sourceLifetime));
+  check(Math.abs(receiptSpan - 1_800_000) < 2_000, "期限按回执的 30 分钟，不是请求的 60 分钟", `${receiptSpan}ms`);
+
+  // ⑭ persistent：没有到期时刻，不能编一个。
+  const forever = new ClaudeMonitorTrace(CLI_SESSION);
+  forever.toolUse("Monitor", { command: "tail -F /tmp/z", description: "持续盯", timeout_ms: 600_000 }, "toolu_fv");
+  forever.event({ type: "system", subtype: "task_started", task_id: "bforever", tool_use_id: "toolu_fv",
+    description: "持续盯", task_type: "local_bash", session_id: CLI_SESSION });
+  await settle();
+  forever.toolResult("toolu_fv", "Monitor started (task bforever, persistent; it will keep running).");
+  await settle();
+  const fv = (await db.select().from(monitors).where(eq(monitors.nativeId, "bforever"))).at(0);
+  check(fv?.sourceLifetime === "persistent", "persistent 回执落成持续监听", String(fv?.sourceLifetime));
+  const fvDto = (await listMonitors(taskId)).find((m) => m.nativeId === "bforever");
+  check(fvDto?.expiresAt === null, "持续监听对外不给到期时刻（给了就是假的）", String(fvDto?.expiresAt));
+
   if (failures) {
     console.error(`\n${failures} 条断言未通过`);
     process.exitCode = 1;
   } else {
-    console.log("✓ claude 内置 Monitor 认人：Monitor 与普通后台 Bash 分得开 / 入参与会话落位 / 终态 / 重放幂等 / 进程结束落 lost / 孤儿安静跳过 / 子智能体同样认 / 来源时长如实记 / 接管后认回上一轮 均受回归保护");
+    console.log("✓ claude 内置 Monitor 认人：识别与归属 / 终态 / 幂等 / 子智能体 / 无 init 的接管认回 / 持久归属收尾 / 认领失败可重试 / 期限以来源回执为准(含 persistent) 均受回归保护");
   }
 }
 

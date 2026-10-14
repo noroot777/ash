@@ -6,6 +6,19 @@ import { api } from "../lib/api.ts";
 import { formatInstant } from "../task-detail/utils.ts";
 import { MONITOR_ENDED_LABEL } from "./useTaskMonitors.ts";
 
+/**
+ * 还在盯着的那张卡，右上角那句「盯到什么时候」。
+ *
+ * **不能无脑写 `盯到 ${expiresAt}`**：claude 内置 Monitor 的期限是来源侧说了算的，而它
+ * 可能是持续监听（没有到期时刻），也可能回执还没到（我们还不知道）。编一个确定时刻出来，
+ * 用户会当真——第 2 轮审查实测来源侧会把请求的 1 小时钳成 30 分钟甚至 10 分钟。
+ */
+function liveDeadline(monitor: TaskMonitor): string {
+  if (monitor.lifetime === "persistent") return "持续盯着（来源没设期限）";
+  if (monitor.lifetime === "unknown" || !monitor.expiresAt) return "盯到什么时候由它自己定";
+  return `盯到 ${formatInstant(monitor.expiresAt)}`;
+}
+
 /** 展开着的那张卡每隔这么久重拉一次尾巴。只在「正在盯着」且「卡片是展开的」时才走。 */
 const LOG_POLL_MS = 2500;
 
@@ -106,9 +119,7 @@ export function MonitorCard({
           </>
         )}
         <span>
-          {live
-            ? `盯到 ${formatInstant(monitor.expiresAt)}`
-            : `${endedLabel}${monitor.exitCode === null ? "" : `（退出码 ${monitor.exitCode}）`}`}
+          {live ? liveDeadline(monitor) : `${endedLabel}${monitor.exitCode === null ? "" : `（退出码 ${monitor.exitCode}）`}`}
         </span>
         {monitor.pid !== null && (
           <>

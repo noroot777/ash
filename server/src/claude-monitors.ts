@@ -34,7 +34,7 @@
 // 按 `description` 之类的内容去猜一律不行：两种后台任务的 description 长得一模一样。
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
-  claudeMonitorStatus, CLAUDE_MONITOR_ENDED_REASON, MONITOR_DEFAULT_TIMEOUT_MS, sourceMonitorTimeout,
+  claudeMonitorStatus, CLAUDE_MONITOR_ENDED_REASON, parseMonitorStartReceipt, type MonitorLifetime,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
@@ -43,9 +43,10 @@ import { isSameProcess } from "./proc.js";
 import { id, now } from "./util.js";
 
 /** 一个内置 Monitor 的入参，从它的 tool_use 块上摘下来。 */
-type MonitorCall = { command: string; description: string; timeoutMs: number; timeoutReported: boolean };
+export type MonitorCall = { command: string; description: string };
 
-const str = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+export const monitorStr = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+const str = monitorStr;
 
 /**
  * 从 `Monitor` 工具的入参里取命令与说明。
@@ -53,7 +54,7 @@ const str = (value: unknown): string => (typeof value === "string" ? value.trim(
  * `ws` 那种（WebSocket 源）没有 `command`，用 url 顶上去——否则面板上会出现一张命令为空
  * 的卡，而「它在盯什么」正是这张卡唯一要回答的问题。
  */
-function parseMonitorInput(input: unknown): MonitorCall | null {
+export function parseMonitorInput(input: unknown): MonitorCall | null {
   let parsed: unknown = input;
   if (typeof parsed === "string") {
     try { parsed = JSON.parse(parsed); } catch { return null; }
@@ -64,12 +65,11 @@ function parseMonitorInput(input: unknown): MonitorCall | null {
   const command = str(fields.command) || (ws ? `ws: ${str(ws.url)}` : "");
   if (!command) return null;
   const description = str(fields.description) || command;
-  // **用来源侧报的原值**，不要套 ash 的创建区间（`normalizeMonitorTimeout`）。那一个是
-  // 「ash 自己起哨兵允许多久」的策略，这里要转述的是「claude 说它要盯多久」的事实；拿策略
-  // 去钳事实，卡片上就会出现一个与来源不符的到期时刻（claude 盯 5 秒、ash 写成 60 秒后）。
-  // 来源没报就退回缺省，并记下来——那是「我们不知道」，不是「它就是这么久」。
-  const reported = sourceMonitorTimeout(fields.timeout_ms);
-  return { command, description, timeoutMs: reported ?? MONITOR_DEFAULT_TIMEOUT_MS, timeoutReported: reported !== null };
+  // **入参里的 `timeout_ms` 一律不取**。那是「我们请求了多久」，不是「来源给了多久」：
+  // claude 自己会钳（实测本机 2.1.283 的归一化函数有 30 分钟和 10 分钟两个分支），还有
+  // 不设会话内超时的 persistent 模式。生效期限只认起手回执里那句 `expires in …`，它在
+  // `task_started` **之后**才到，所以投影先落 `unknown`，拿到回执再升级（见 toolResult）。
+  return { command, description };
 }
 
 /** cli 会话 id → ash 的任务 id + 工作目录。 */
@@ -104,6 +104,15 @@ export class ClaudeMonitorTrace {
   private claimed = new Set<string>();
   /** claude 的后台任务 id → ash 这边那一行的主键。只在队列里读写。 */
   private rows = new Map<string, string>();
+  /**
+   * tool_use_id → claude 的后台任务 id。
+   *
+   * 起手回执（`Monitor started (… expires in 20m …)`）是一条 **tool_result**，只带
+   * `tool_use_id`；而投影是按后台任务 id 记的。实测到达顺序是
+   * tool_use → task_started → tool_result，所以 `task_started` 到的时候把这对关系记下来，
+   * 回执到了才找得到该更新哪一行。
+   */
+  private byToolUse = new Map<string, string>();
   /** 串行化写库：同一个后台任务的 started/notification 可能紧挨着到。 */
   private chain: Promise<unknown> = Promise.resolve();
   private cliSessionId = "";
@@ -119,6 +128,20 @@ export class ClaudeMonitorTrace {
    * 三态：null = 还没开始；Promise = 正在认；"done" = 认完了，此后 `claimed` 就是权威。
    */
   private reclaim: Promise<void> | "done" | null = null;
+
+  /**
+   * @param cliSessionId 这条流属于哪条 CLI 会话。**接管路径必须传**：真实接管是从已消费的
+   * offset 之后接着读的，`init` 早在上一轮就消费掉了，不会再来一次。靠「等下一条 system
+   * 事件来设身份」会一直等不到，于是认领不发生、`finishAll` 收不到那些行，进程结束后卡片
+   * 永远停在 running（第 2 轮审查用真实 detached 接管复现；我上一轮的回归每次都重发 init，
+   * 恰好把这条路盖住了）。
+   */
+  constructor(cliSessionId?: string) {
+    if (cliSessionId) {
+      this.cliSessionId = cliSessionId;
+      this.startReclaim();
+    }
+  }
 
   private queue(job: () => Promise<void>): void {
     this.chain = this.chain.then(job, job).catch((e) => this.warn("记账失败", e));
@@ -145,13 +168,37 @@ export class ClaudeMonitorTrace {
     this.pending.set(callId, call);
   }
 
+  /**
+   * 起手回执（tool_result）。**来源侧唯一说出生效期限的地方**。
+   *
+   * 为什么不用 `Monitor` 入参里的 `timeout_ms`：那是请求值。claude 自己会钳（本机
+   * 2.1.283 的归一化函数实测有 30 分钟 / 10 分钟两个分支），还有不设会话内超时的
+   * persistent 模式。拿请求值当生效值，卡片上那句「盯到 X」在被钳的会话里就是编的
+   * （第 2 轮审查实测：请求 1 小时、bounded 分支实际只给 30 或 10 分钟）。
+   */
+  toolResult(toolUseId: unknown, content: unknown): void {
+    const callId = str(toolUseId);
+    const nativeId = callId ? this.byToolUse.get(callId) : undefined;
+    if (!nativeId) return;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.map((b: any) => (b && typeof b === "object" && typeof b.text === "string" ? b.text : "")).join("\n")
+        : "";
+    if (!text) return;
+    const receipt = parseMonitorStartReceipt(text);
+    if (receipt.lifetime === "unknown") return; // 认不出来就保持「未知」，别编一个
+    this.byToolUse.delete(callId);
+    this.queue(() => this.applyReceipt(nativeId, receipt.lifetime, receipt.ms));
+  }
+
   /** 每条 stream-json 事件都喂进来。 */
   event(ev: any): void {
     if (!ev || ev.type !== "system") return;
-    if (ev.session_id && !this.cliSessionId) {
-      this.cliSessionId = str(ev.session_id);
-      this.startReclaim();
-    }
+    if (ev.session_id && !this.cliSessionId) this.cliSessionId = str(ev.session_id);
+    // 每条 system 事件都试一次：构造时没给身份的要在这里补上，上一次认领失败的要在这里重试
+    // （`startReclaim` 自身幂等，已完成或正在跑时直接返回）。
+    if (this.cliSessionId) this.startReclaim();
     const taskId = str(ev.task_id);
     switch (ev.subtype) {
       case "task_started": {
@@ -161,6 +208,7 @@ export class ClaudeMonitorTrace {
         const call = this.pending.get(str(ev.tool_use_id));
         if (!call || !taskId) return;
         this.pending.delete(str(ev.tool_use_id));
+        if (str(ev.tool_use_id)) this.byToolUse.set(str(ev.tool_use_id), taskId);
         // 同步认领，再排队落库：准入与落库之间隔着一个 await，中间到达的终态必须认得出来。
         this.claimed.add(taskId);
         this.queue(() => this.open(taskId, call));
@@ -207,11 +255,23 @@ export class ClaudeMonitorTrace {
         this.rows.set(row.nativeId, row.id);
         this.claimed.add(row.nativeId);
       }
-    })().catch(() => {});
+    })();
+    // 防 unhandled rejection：真正的处理在下面的 queue 里（`await job` 能照常拿到失败），
+    // 但 handler 要等队列轮到它才 attach，中间那一拍足够 Node 报一条 unhandled。
+    job.catch(() => {});
     this.reclaim = job;
     this.queue(async () => {
-      await job;
-      this.reclaim = "done";
+      try {
+        await job;
+        this.reclaim = "done";
+      } catch (e) {
+        // **认领失败不能变成权威空账本。** 原来这里 catch 掉就标 done，于是一次 SQLITE_BUSY
+        // 之后，来源侧后续每一条有效通知都因为「claimed 里没有它」被永久丢弃（第 2 轮审查
+        // 注入一次读失败即复现）。留在未完成态：下一条事件会再试一次，期间 close 走查库那
+        // 条路自己裁决，一条都不会丢。
+        this.reclaim = null;
+        this.warn("认领上一轮的投影失败，下一条事件会重试", e);
+      }
     });
   }
 
@@ -263,16 +323,39 @@ export class ClaudeMonitorTrace {
       events: 0,
       exitCode: null,
       startedAt,
-      expiresAt: new Date(Date.parse(startedAt) + call.timeoutMs).toISOString(),
+      // 占位：此刻还不知道来源给了多久（回执在 task_started 之后才到）。`sourceLifetime`
+      // 标着 unknown，`toTaskMonitor` 据此根本不会把这一列吐出去。
+      expiresAt: startedAt,
       endedAt: null,
       endedReason: null,
       ownerUserId: null,
       kind: "claude",
       nativeId,
       cliSessionId: this.cliSessionId || null,
+      sourceLifetime: "unknown",
     });
     this.rows.set(nativeId, rowId);
     bus.publish({ type: "task.monitors", taskId: found.taskId });
+  }
+
+  /** 把来源回执落到那一行上：期限从「未知」升级成有限期或持续。 */
+  private async applyReceipt(nativeId: string, lifetime: MonitorLifetime, ms: number | null): Promise<void> {
+    const found = await locateSession(this.cliSessionId);
+    if (!found) return;
+    const rowId = await this.locateRow(found.taskId, nativeId);
+    if (!rowId) return;
+    const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
+    if (!row || row.status !== "running") return;
+    await db.update(monitors).set({
+      sourceLifetime: lifetime,
+      // 有限期才改到期时刻；持续监听没有到期时刻可言，那一列留着当占位。
+      // （persistent 的回执本来就不带 ms，所以 `lifetime` 这一半此刻是冗余的——留着是因为
+      //  它表达的才是判据本身；真正把假期限挡在对外契约之外的是 toTaskMonitor 那一道。）
+      ...(lifetime === "bounded" && ms !== null
+        ? { expiresAt: new Date(Date.parse(row.startedAt) + ms).toISOString() }
+        : {}),
+    }).where(eq(monitors.id, rowId));
+    bus.publish({ type: "task.monitors", taskId: row.taskId });
   }
 
   private async close(nativeId: string, status: string, summary: string): Promise<void> {
@@ -302,17 +385,25 @@ export class ClaudeMonitorTrace {
   finishAll(): void {
     this.pending.clear();
     this.claimed.clear();
-    // **排队之后再取 `rows`**：同步取的话，还排在队列里的 open/close 都没跑完，取到的是
-    // 一份残缺名单——刚起的那几条投影会被漏在 running 上，成了永远不会收尾的僵尸卡。
+    this.byToolUse.clear();
+    const cliSessionId = this.cliSessionId;
+    // **排队之后再查**：还排在队列里的 open/close 都没跑完，提前取会拿到一份残缺名单。
     this.queue(async () => {
       if (dbClient.closed) return;
-      const ids = [...this.rows.values()];
       this.rows.clear();
-      if (!ids.length) return;
+      // **按持久归属查，不按内存账本。** 内存里只有本实例亲手认领过的那些；接管回来却
+      // 一直没触发认领的行（真实接管不重放 init）永远不在这张名单里，于是进程都结束了
+      // 卡片还写着「正在盯着」，要等下一次开机清扫才可能纠正（第 2 轮审查实测）。
+      // 会话身份是这条流的持久归属，拿它查才查得全。
+      if (!cliSessionId) return;
       const live = await db
         .select({ id: monitors.id, taskId: monitors.taskId })
         .from(monitors)
-        .where(and(inArray(monitors.id, ids), eq(monitors.status, "running")));
+        .where(and(
+          eq(monitors.kind, "claude"),
+          eq(monitors.status, "running"),
+          eq(monitors.cliSessionId, cliSessionId),
+        ));
       if (!live.length) return;
       await db.update(monitors).set({
         status: "lost",
@@ -358,25 +449,50 @@ export async function loseDeadClaudeMonitors(): Promise<{ kept: number; lost: nu
 
   // 会话的 agent 进程还在不在。一条会话上可能挂着好几个投影，查一次就够。
   const alive = new Map<string, boolean>();
+  const anyLive = (rows: { pid: number | null; startedAt: string | null }[]): boolean =>
+    rows.some((r) => !!r.pid && isSameProcess(r.pid, r.startedAt ?? null));
+
   const sessionAlive = async (cliSessionId: string | null): Promise<boolean> => {
-    // 没记来源会话的（这一列上线之前落的存量行）无从判断死活。当成「已不在」是诚实的：
-    // 没有凭据就认不回来，留着 running 只会是一张永远不会再更新的卡。
     if (!cliSessionId) return false;
     const cached = alive.get(cliSessionId);
     if (cached !== undefined) return cached;
-    const session = (await db
+    const rows = await db
       .select({ pid: sessions.agentPid, startedAt: sessions.agentStartedAt })
       .from(sessions)
-      .where(eq(sessions.cliSessionId, cliSessionId))).at(0);
-    const live = !!session?.pid && isSameProcess(session.pid, session.startedAt ?? null);
+      .where(eq(sessions.cliSessionId, cliSessionId));
+    const live = anyLive(rows);
     alive.set(cliSessionId, live);
+    return live;
+  };
+
+  /**
+   * 没记来源会话的存量行（`cli_session_id` 这一列上线之前落的）怎么判。
+   *
+   * **「不知道」不等于「已经死了」。** 原来直接判死，于是升级之后，那些来源 agent 明明还
+   * 在跑的旧投影会被一次性标成「进程已不在」（第 2 轮审查实测 sourceAlive=true 却被标
+   * lost）。退一步按**任务**反查：这个任务名下只要还有活着的 claude agent，就说明来源还
+   * 在，留着；整个任务都没有活着的 agent 了，才算确实没了。
+   */
+  const taskAlive = new Map<string, boolean>();
+  const taskStillRunning = async (taskId: string): Promise<boolean> => {
+    const cached = taskAlive.get(taskId);
+    if (cached !== undefined) return cached;
+    const rows = await db
+      .select({ pid: sessions.agentPid, startedAt: sessions.agentStartedAt })
+      .from(sessions)
+      .where(and(eq(sessions.taskId, taskId), eq(sessions.agentType, "claude")));
+    const live = anyLive(rows);
+    taskAlive.set(taskId, live);
     return live;
   };
 
   const dead: { id: string; taskId: string }[] = [];
   let kept = 0;
   for (const row of rows) {
-    if (await sessionAlive(row.cliSessionId)) kept += 1;
+    const live = row.cliSessionId
+      ? await sessionAlive(row.cliSessionId)
+      : await taskStillRunning(row.taskId); // 缺凭据：按任务兜底，别直接判死
+    if (live) kept += 1;
     else dead.push({ id: row.id, taskId: row.taskId });
   }
   if (dead.length) {

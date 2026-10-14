@@ -6,9 +6,17 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { getMonitor, listMonitors, readMonitorTail, startMonitor, stopMonitorChecked } from "./monitors.js";
+import { backfillClaudeMonitors } from "./claude-monitor-backfill.js";
 
 export function mountMonitorRoutes(api: Hono): void {
-  api.get("/tasks/:id/monitors", async (c) => c.json(await listMonitors(c.req.param("id"))));
+  api.get("/tasks/:id/monitors", async (c) => {
+    const taskId = c.req.param("id");
+    // 先补历史再列：升级之前跑过的内置 Monitor 只存在于会话的 stdout 文件里，不补的话
+    // 用户打开老任务仍是「这个任务上还没有哨兵」——而这正是整个功能的起点那一幕。
+    // 按需、每进程每任务一次、幂等（见 claude-monitor-backfill.ts）。
+    await backfillClaudeMonitors(taskId);
+    return c.json(await listMonitors(taskId));
+  });
 
   api.post("/tasks/:id/monitors", async (c) => {
     const taskId = c.req.param("id");

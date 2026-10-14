@@ -28,6 +28,7 @@ const monitor = (id, taskId, over = {}) => ({
   // 出身：缺了它卡片按只读投影渲染，后面找「看它的输出」会直接超时。
   kind: "ash",
   nativeId: null,
+  lifetime: "bounded",
   pid: 4242,
   events: 3,
   exitCode: null,

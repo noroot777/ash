@@ -58,6 +58,7 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
   taskId: r.taskId,
   kind: (r.kind === "claude" ? "claude" : "ash"),
   nativeId: r.nativeId,
+  lifetime: (r.sourceLifetime === "persistent" || r.sourceLifetime === "unknown" ? r.sourceLifetime : "bounded"),
   command: r.command,
   description: r.description,
   cwd: r.cwd,
@@ -66,7 +67,9 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
   events: r.events,
   exitCode: r.exitCode,
   startedAt: r.startedAt,
-  expiresAt: r.expiresAt,
+  // 只有有限期的才给到期时刻。持续/未知时库里那一列是占位值，原样吐出去就成了假情报
+  // ——卡片会照它渲染一句「盯到 X」，而来源侧根本没这么说。
+  expiresAt: r.sourceLifetime === "bounded" || !r.sourceLifetime ? r.expiresAt : null,
   endedAt: r.endedAt,
   endedReason: r.endedReason,
 });
@@ -187,6 +190,8 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       kind: "ash",
       nativeId: null,
       cliSessionId: null,
+      // ash 自己起的：期限是它自己定的，当然知道。
+      sourceLifetime: "bounded",
     };
     try {
       await db.insert(monitors).values(row);
