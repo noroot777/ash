@@ -26,10 +26,19 @@ import { open as openFile, readdir, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { claudeMonitorStatus, parseMonitorStartReceipt, type MonitorLifetime } from "@ash/shared/monitor";
 import { monitorStr as str, parseMonitorInput, type MonitorCall } from "./claude-monitors.js";
-import { putCapped } from "./util.js";
+import { addCapped } from "./util.js";
 
-/** 单次调用的读取上限。超了这一轮就停在这儿，游标记着，下次接着读。 */
-const MAX_SCAN_BYTES = 128 * 1024 * 1024;
+/**
+ * 单次调用的读取上限。超了这一轮就停在这儿，游标记着，下次接着读。
+ *
+ * `ASH_MONITOR_SCAN_MAX_BYTES` 只给回归用：128 MiB 的夹具没法写进测试里，而「多轮才读完
+ * 一个固定输入、最终要收敛」恰恰是这条路最该钉住的性质（第 8 轮审查实测的不收敛就发生在
+ * 截限 + 缓冲满这个组合上）。不设就是 128 MiB。
+ */
+const MAX_SCAN_BYTES = (() => {
+  const raw = Number(process.env.ASH_MONITOR_SCAN_MAX_BYTES);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 128 * 1024 * 1024;
+})();
 const CHUNK = 1 << 20;
 /**
  * 孤儿事实（还配不上 Monitor 的回执/终态）各自最多缓冲这么多条，超了挤掉最老的。
@@ -41,12 +50,23 @@ const CHUNK = 1 << 20;
  * 512 的依据：这些缓冲只用来跨「同一次扫描里的读取顺序差异」，实测同一轮里等着配对的最多
  * 几十条。
  *
- * **挤掉一条不许是静默的**：缓冲里装的是一次性事实（来源侧不会重发），游标已经越过它了，
- * 丢掉就等于那个 Monitor 永远只剩推断状态。所以溢出会置 `orphanOverflow`，由回填那一侧
- * 丢掉快照、留账、从头重读那一段（第 7 轮审查不拦项 2：「淘汰不会造成错误显示」这句注释
- * 不能当成来源契约）。
+ * **满了不是「挤掉最老的」，是背压**：缓冲里装的是一次性事实（来源侧不会重发）。挤掉它
+ * 等于永久丢失；而「丢掉整个任务的游标、下一轮从零重读」又不收敛——输入没变就会再次顶满，
+ * 于是永远读不到末尾（第 8 轮审查用 142MB 合法日志实测，真实页面 0 张卡）。
+ *
+ * 所以满了就**停在那一行之前**：游标不越过它，这一轮按「没读完」记账，下一轮从它重新开始。
+ * 事实一条不丢，前缀也不会被反复重读。配合上面 `notMonitorTools`/`confirmedForeign` 把
+ * 「确认不是 Monitor」的那一大类根本不放进来，正常日志压根碰不到这个边界。
  */
 const ORPHAN_CAP = 512;
+/**
+ * 「这个 id 确认不是 Monitor」这类结论各自最多记这么多。
+ *
+ * 比孤儿缓冲宽得多，因为它正是用来**替代**缓冲的：一条长会话里普通后台 Bash 可以有成百
+ * 上千个（实测 76 条 task_started 里 64 条是它们）。挤掉一条的代价也完全不同——结论可以
+ * 重新推导（下一次那条通知再退回缓冲），而缓冲里装的是一次性事实。
+ */
+const FOREIGN_CAP = 4_096;
 
 export type Found = {
   nativeId: string;
@@ -115,6 +135,20 @@ type SessionScan = {
   /** 同理，还关联不上任何 Monitor 的终态通知（nativeId → 状态 + 说明 + 时刻）。 */
   orphanNotices: Map<string, { status: string; summary: string; at: string | null }>;
   /**
+   * **已经确认不是 Monitor 起的**那些 tool_use / 后台任务 id。
+   *
+   * 「还没配上」和「确认跟我们无关」是两件事，上一版混成了一件：普通后台 Bash
+   * （`run_in_background`）的 tool_use 块被直接丢掉，于是它的 `task_started`
+   * 认不出来、它的终态通知只能进孤儿缓冲一直占着——而实测一个任务 76 条 task_started
+   * 里 64 条是它们。513 条顺序完全正常的 Bash 生命周期就能把缓冲顶满，然后整个任务的
+   * 游标被丢掉、下一轮从零重读、再次顶满，**永远读不到末尾那个真 Monitor**（第 8 轮
+   * 审查用 142MB 合法日志实测，真实页面 0 张卡）。
+   *
+   * 记下这个结论之后，这类通知当场就能丢，根本不进缓冲。
+   */
+  notMonitorTools: Set<string>;
+  confirmedForeign: Set<string>;
+  /**
    * 最近见到的事件时刻。
    *
    * 只用来给**结束时刻**兜底：`task_notification` 是 system 事件，自己不带 timestamp，而
@@ -152,16 +186,25 @@ export type TaskScan = {
    * 这个变化，旧监听会一直显示「正在盯着」（第 5 轮审查实测 emptyNewRun）。
    */
   generationChanged: boolean;
+  /**
+   * 上一份快照被内存上限挤掉时**停好的读取位置**（文件路径 → 游标）。
+   *
+   * 配对状态（`found`/孤儿缓冲）可以重建，读取位置不能丢——丢了就从零重读，而单次只读
+   * 128 MiB，「Monitor 在末尾」的大任务永远读不到它（见 claude-monitor-backfill.ts 的
+   * `parked`）。新建会话桶时从这里取。
+   */
+  parkedCursors: Map<string, { size: number; offset: number }> | null;
 };
 
 export const newTaskScan = (): TaskScan => ({
   sessions: new Map(), truncated: false, failed: false, foreign: new Set(),
-  advanced: false, generationChanged: false, orphanOverflow: false,
+  advanced: false, generationChanged: false, orphanOverflow: false, parkedCursors: null,
 });
 
 const newSessionScan = (): SessionScan => ({
   pending: new Map(), byToolUse: new Map(), found: new Map(), cursors: new Map(),
   orphanReceipts: new Map(), orphanNotices: new Map(), lastAt: null,
+  notMonitorTools: new Set(), confirmedForeign: new Set(),
 });
 
 /**
@@ -203,8 +246,10 @@ export function timestampOf(fileName: string): string | null {
  * 重读。
  */
 async function eachLine(
-  path: string, start: number, maxBytes: number, onLine: (line: string) => void,
-): Promise<{ nextOffset: number; truncated: boolean }> {
+  path: string, start: number, maxBytes: number,
+  /** 返回 false = **这一行没消费掉**，就停在它前面（游标不越过它）。 */
+  onLine: (line: string) => boolean,
+): Promise<{ nextOffset: number; truncated: boolean; stopped: boolean }> {
   const fh = await openFile(path, "r");
   try {
     let offset = start;
@@ -214,6 +259,8 @@ async function eachLine(
       const buf = Buffer.allocUnsafe(want);
       const { bytesRead } = await fh.read(buf, 0, want, offset);
       if (!bytesRead) break;
+      // data[0] 在文件里的绝对位置：carry 来自上一轮、在 offset 之前。
+      const base = offset - carry.length;
       const data = carry.length
         ? Buffer.concat([carry, buf.subarray(0, bytesRead)])
         : buf.subarray(0, bytesRead);
@@ -221,13 +268,21 @@ async function eachLine(
       for (;;) {
         const nl = data.indexOf(0x0a, from);
         if (nl < 0) break;
-        onLine(data.subarray(from, nl).toString("utf8"));
+        const lineStart = from;
+        const keepGoing = onLine(data.subarray(from, nl).toString("utf8"));
+        // **消费不了就把游标停在这一行之前**，下一轮从它重新开始。越过去就等于丢掉一条
+        // 来源不会重发的事实（见 ORPHAN_CAP 的背压说明）。
+        if (!keepGoing) return { nextOffset: base + lineStart, truncated: false, stopped: true };
         from = nl + 1;
       }
       carry = Buffer.from(data.subarray(from)); // 复制：data 可能指向复用的 buf
       offset += bytesRead;
     }
-    return { nextOffset: offset - carry.length, truncated: offset - start >= maxBytes };
+    return {
+      nextOffset: offset - carry.length,
+      truncated: offset - start >= maxBytes,
+      stopped: false,
+    };
   } finally {
     await fh.close();
   }
@@ -254,6 +309,11 @@ export async function scanSession(
   let session = scan.sessions.get(sessionId);
   if (!session) {
     session = newSessionScan();
+    // 继承停好的读取位置（见 TaskScan.parkedCursors）。路径唯一，所以整张表倒进来即可，
+    // 这条会话只会去读属于它自己的那几个文件。
+    if (scan.parkedCursors) {
+      for (const [path, cursor] of scan.parkedCursors) session.cursors.set(path, { ...cursor });
+    }
     scan.sessions.set(sessionId, session);
   }
   const files = await streamFilesOf(sessionId, outPath);
@@ -294,9 +354,11 @@ export async function scanSession(
 
     const sink = (line: string) => consume(scan, session!, line, cliSessionId, file.startedAt, file.path);
     try {
-      const { nextOffset, truncated } = await eachLine(file.path, cursor.offset, maxBytes, sink);
+      const { nextOffset, truncated, stopped } = await eachLine(file.path, cursor.offset, maxBytes, sink);
       if (nextOffset > cursor.offset) scan.advanced = true;
       if (truncated) { scan.truncated = true; blocked = true; }
+      // 背压停下来了：游标停在那条还没消费的事实之前，这一轮和后面的文件都不算读完。
+      if (stopped) { scan.orphanOverflow = true; blocked = true; }
       session.cursors.set(file.path, { size, offset: nextOffset });
       // 这个文件还没读到尾（撞上限）也算没读完——下一轮从游标接着读，后面的文件继续等。
       if (nextOffset < size) blocked = true;
@@ -316,16 +378,24 @@ export async function scanSession(
   }
 }
 
+/**
+ * 这条新事实放不进去了吗（满了、而且它还不在里面）。
+ *
+ * 已经在里面的那条照旧覆盖——它不是新事实，重读同一行时会走到这里。
+ */
+const full = (buffer: Map<string, unknown>, key: string): boolean =>
+  buffer.size >= ORPHAN_CAP && !buffer.has(key);
+
 /** 一行 stream-json。认人判据见 `scanSession` 的说明。 */
 function consume(
   scan: TaskScan, session: SessionScan, line: string,
   expectSessionId: string | null, fileStartedAt: string | null, filePath: string,
-): void {
+): boolean {
   const text = line.trim();
-  if (!text || text[0] !== "{") return;
+  if (!text || text[0] !== "{") return true;
   let ev: any;
-  try { ev = JSON.parse(text); } catch { return; }
-  if (ev.type === "stream_event") return;
+  try { ev = JSON.parse(text); } catch { return true; }
+  if (ev.type === "stream_event") return true;
   const at = eventTime(ev);
   if (at) session.lastAt = at;
 
@@ -340,6 +410,10 @@ function consume(
     if (block.type === "tool_use" && str(block.name) === "Monitor") {
       const call = parseMonitorInput(block.input);
       if (call && str(block.id)) session.pending.set(str(block.id), { call, at });
+    } else if (block.type === "tool_use" && str(block.name)) {
+      // **不是 Monitor 这个结论也要留下来**（见 notMonitorTools）：丢掉它，这个工具起的
+      // 后台任务就只能当成「还没配上的事实」一直占着孤儿缓冲。
+      if (str(block.id)) addCapped(session.notMonitorTools, str(block.id), FOREIGN_CAP);
     } else if (block.type === "tool_result") {
       const toolUseId = str(block.tool_use_id);
       const raw = typeof block.content === "string"
@@ -353,9 +427,10 @@ function consume(
         // 还不知道这条回执属于谁（它的 task_started 在某个还没读完的前文件里）。
         // **缓冲，不丢。** 等那条 Monitor 被读出来时回溯应用（见 orphanReceipts）。
         if (toolUseId && /Monitor started/i.test(raw)) {
-          if (putCapped(session.orphanReceipts, toolUseId, { raw, at }, ORPHAN_CAP)) {
-            scan.orphanOverflow = true;
-          }
+          // 不是 Monitor 起的那些工具回执连进来的机会都没有（上面的分支已经把它们记成
+          // notMonitorTools），所以这里满了就是真的乱序事实太多 → 背压。
+          if (full(session.orphanReceipts, toolUseId)) return false;
+          session.orphanReceipts.set(toolUseId, { raw, at });
         }
         continue;
       }
@@ -363,11 +438,18 @@ function consume(
     }
   }
 
-  if (ev.type !== "system") return;
+  if (ev.type !== "system") return true;
   const nativeId = str(ev.task_id);
   if (ev.subtype === "task_started") {
     const started = session.pending.get(str(ev.tool_use_id));
-    if (!started || !nativeId) return;
+    if (!started || !nativeId) {
+      // 起它的那个 tool_use 我们见过、而且确认不是 Monitor → 把这个后台任务 id 也记成
+      // 「与我们无关」，它后面的通知就不必再进孤儿缓冲了。
+      if (nativeId && session.notMonitorTools.has(str(ev.tool_use_id))) {
+        addCapped(session.confirmedForeign, nativeId, FOREIGN_CAP);
+      }
+      return true;
+    }
     session.pending.delete(str(ev.tool_use_id));
     session.byToolUse.set(str(ev.tool_use_id), nativeId);
     session.found.set(nativeId, {
@@ -396,18 +478,18 @@ function consume(
   } else if (ev.subtype === "task_notification" && nativeId) {
     const row = session.found.get(nativeId);
     if (!row) {
-      // 同理：这条终态的 Monitor 还没被读出来。缓冲住，别当成「跟我们无关的后台任务」。
-      // 注意这里**不**过滤是不是 Monitor 起的——过滤发生在回溯应用时（只有被认出来的
-      // Monitor 才会去取它的缓冲），所以普通后台 Bash 的通知最多占一点内存，不会进投影。
-      if (putCapped(session.orphanNotices, nativeId, {
+      // **已经确认与我们无关的，当场丢**（普通后台 Bash 的终态）。只有「可能是 Monitor、
+      // 只是它的 task_started 还在某个没读完的前文件里」才需要缓冲。
+      if (session.confirmedForeign.has(nativeId)) return true;
+      if (full(session.orphanNotices, nativeId)) return false; // 背压，见 ORPHAN_CAP
+      session.orphanNotices.set(nativeId, {
         status: claudeMonitorStatus(ev.status), summary: str(ev.summary), at: session.lastAt,
-      }, ORPHAN_CAP)) {
-        scan.orphanOverflow = true;
-      }
-      return;
+      });
+      return true;
     }
     applyNotice(row, claudeMonitorStatus(ev.status), str(ev.summary), session.lastAt);
   }
+  return true;
 }
 
 /** 把一条起手回执落到 Found 上。来源侧唯一说出**生效**期限的地方。 */

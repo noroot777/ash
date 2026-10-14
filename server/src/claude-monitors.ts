@@ -39,7 +39,9 @@ import {
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
-import { noteMonitorRecovery, type MonitorRecoveryReason } from "./claude-monitor-recovery.js";
+import {
+  noteMonitorRecovery, noteMonitorRecoveryBySession, type MonitorRecoveryReason,
+} from "./claude-monitor-recovery.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -241,7 +243,7 @@ export class ClaudeMonitorTrace {
       // **事实已经从事件流里消费掉了**（pending/byToolUse 都删了，来源侧不会再发）。原来
       // 这里只有一句「历史回填会再补」，而历史回填本身只在用户打开面板时才跑——留账交给
       // 恢复账本自己退避重排（第 6 轮审查的类问题之一）。
-      void this.noteRecovery("write-failed");
+      this.noteRecovery("write-failed");
     });
   }
 
@@ -262,19 +264,17 @@ export class ClaudeMonitorTrace {
    *
    * 要查一次会话才知道 taskId——这条路只在真失败时才走，多查一次库换一条不丢的事实。
    */
-  private async noteRecovery(reason: MonitorRecoveryReason): Promise<void> {
-    // 先用正常跑的时候记下的归属（见 `taskId`）。只有一次都没成功过时才退回查库——那种
-    // 情况下本来也没有任何一条事实落过地。
+  private noteRecovery(reason: MonitorRecoveryReason): void {
+    // 先用正常跑的时候记下的归属（见 `taskId`）。
     if (this.taskId) {
       noteMonitorRecovery(this.taskId, reason);
       return;
     }
-    try {
-      const found = this.cliSessionId ? await locateSession(this.cliSessionId) : null;
-      if (found) noteMonitorRecovery(found.taskId, reason);
-    } catch {
-      /* 连会话都查不到就只剩上面那条日志；别让兜底路径自己再抛一次 */
-    }
+    // **一次都没查成功过**（第一条 Monitor 就撞上库故障，或接管实例还没查过）。这时不能
+    // 再去查同一个正在失败的资源——上一版就是这么做的，于是 catch 一兜，责任凭空消失，
+    // 而来源事实早已消费完（第 8 轮审查实测 firstLookup）。改成挂在**这条流自己的身份**
+    // 上：CLI 会话 id 不用查库就有，等库好了由恢复账本自己解析成 taskId。
+    noteMonitorRecoveryBySession(this.cliSessionId, reason);
   }
 
   /** 每个 tool_use 块都喂进来；只有 `Monitor` 会被记下。 */

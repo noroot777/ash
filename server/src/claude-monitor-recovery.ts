@@ -21,8 +21,10 @@
 //   哨兵」。用户/SSE 下一次真的来读时预算重置（`resetMonitorRecoveryBudget`）。
 // - **定时器一律 unref**。这是兜底路径，不许拖着进程不让退（测试脚本尤其）。
 import type { MonitorRecovery, MonitorRecoveryReason } from "@ash/shared/monitor";
+import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
-import { dbClient } from "./db/index.js";
+import { db, dbClient } from "./db/index.js";
+import { sessions } from "./db/schema.js";
 
 export type { MonitorRecoveryReason } from "@ash/shared/monitor";
 
@@ -94,6 +96,75 @@ export function resetMonitorRecoveryBudget(taskId: string): void {
   entry.attempts = 0;
 }
 
+/**
+ * **还没认到任务头上**的恢复责任（CLI 会话 id → 原因）。
+ *
+ * 为什么需要这一档：实时投影记账需要 taskId，而它来自查 `sessions`。如果连第一次查询都
+ * 失败（磁盘/权限/SQLITE_BUSY），上一版就只能 catch 一兜——而那一刻来源事实**已经消费掉
+ * 了**（tool_use/task_started/回执/完成都读过了），于是既没有待恢复任务、也没有重试定时器，
+ * 故障恢复之后也不会自己补出来（第 8 轮审查实测）。
+ *
+ * CLI 会话 id 是这条流**自己的身份**，不用查库就有。所以先按它记账，等库好了再解析成
+ * taskId、折进正常账本。
+ */
+const unattributed = new Map<string, { reasons: Set<MonitorRecoveryReason>; attempts: number; timer: NodeJS.Timeout | null }>();
+
+/**
+ * 记下一条**还不知道属于哪个任务**的恢复责任。身份用 CLI 会话 id（流自己的身份，不查库）。
+ */
+export function noteMonitorRecoveryBySession(
+  cliSessionId: string, reason: MonitorRecoveryReason,
+): void {
+  if (!cliSessionId) return; // 连会话身份都没有：这条流还没认出自己，没有可挂的锚
+  const entry = unattributed.get(cliSessionId)
+    ?? { reasons: new Set<MonitorRecoveryReason>(), attempts: 0, timer: null };
+  entry.reasons.add(reason);
+  unattributed.set(cliSessionId, entry);
+  armSession(cliSessionId, entry);
+}
+
+function armSession(cliSessionId: string, entry: { reasons: Set<MonitorRecoveryReason>; attempts: number; timer: NodeJS.Timeout | null }): void {
+  if (entry.timer) return;
+  if (entry.attempts >= BACKOFF_MS.length) return; // 解析不出来就先留着，等下一次真实请求
+  const delay = BACKOFF_MS[entry.attempts]!;
+  entry.attempts += 1;
+  const timer = setTimeout(() => {
+    entry.timer = null;
+    void resolveSession(cliSessionId);
+  }, delay);
+  timer.unref?.();
+  entry.timer = timer;
+}
+
+/** 库好了吗：解析得出 taskId 就折进正常账本（那边会把事实重新读回来）。 */
+async function resolveSession(cliSessionId: string): Promise<void> {
+  const entry = unattributed.get(cliSessionId);
+  if (!entry) return;
+  if (dbClient.closed) {
+    unattributed.delete(cliSessionId);
+    return;
+  }
+  try {
+    const row = (await db
+      .select({ taskId: sessions.taskId })
+      .from(sessions)
+      .where(and(eq(sessions.cliSessionId, cliSessionId), eq(sessions.agentType, "claude")))).at(0);
+    if (!row) {
+      armSession(cliSessionId, entry); // 会话行可能还没写进去，再等一轮
+      return;
+    }
+    unattributed.delete(cliSessionId);
+    for (const reason of entry.reasons) noteMonitorRecovery(row.taskId, reason);
+  } catch (e) {
+    console.warn(`[ash] 内置 Monitor 待恢复责任还认不到任务上（session=${cliSessionId}）:`, e);
+    armSession(cliSessionId, entry);
+  }
+}
+
+/** 这条会话名下还有没有「认不到任务上」的责任（给回归用）。 */
+export const monitorRecoverySessionPending = (cliSessionId: string): boolean =>
+  unattributed.has(cliSessionId);
+
 /** 现在还有待恢复事实的任务。给扫描快照的淘汰用：这些任务的游标不能被当普通缓存挤掉。 */
 export const monitorRecoveryTasks = (): ReadonlySet<string> => new Set(pending.keys());
 
@@ -101,11 +172,23 @@ export const monitorRecoveryTasks = (): ReadonlySet<string> => new Set(pending.k
 export function stopAllMonitorRecovery(): void {
   for (const entry of pending.values()) if (entry.timer) clearTimeout(entry.timer);
   pending.clear();
+  for (const entry of unattributed.values()) if (entry.timer) clearTimeout(entry.timer);
+  unattributed.clear();
 }
 
 function arm(taskId: string, entry: Entry): void {
   if (entry.timer) return;                        // 已经排着了，别排第二个
-  if (entry.attempts >= BACKOFF_MS.length) return; // 预算用完：账留着，定时器不排
+  if (entry.attempts >= BACKOFF_MS.length) {
+    // **预算用完也是一次可见的状态变化**：账留着、定时器不排，而面板得把「正在自动继续」
+    // 改口成「已停止自动重试」。不推的话用户看到的永远是上一次的 exhausted=false
+    // （第 8 轮审查不拦项 1）。
+    //
+    // 这不会变成紧循环：面板收到之后那次重读确实会把预算还回去（`resetMonitorRecoveryBudget`
+    // 只在定时器已停时才还），但接下来要再走完整条阶梯（1+2+5+15+30+60+120+300 秒 ≈ 9 分钟）
+    // 才会回到这里。面板开着时每 9 分钟自己再试一轮，是想要的行为。
+    bus.publish({ type: "task.monitors", taskId });
+    return;
+  }
   const delay = BACKOFF_MS[entry.attempts]!;
   entry.attempts += 1;
   const timer = setTimeout(() => {

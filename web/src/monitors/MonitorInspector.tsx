@@ -87,7 +87,11 @@ export function MonitorInspector({
       {monitors.recovery?.pending && (
         <p className="monitor-inspector__pending" role="status">
           历史监听还没读完（{monitors.recovery.reasons.map((reason) => MONITOR_RECOVERY_LABEL[reason]).join("、")}），
-          正在自动继续{monitors.recovery.exhausted ? "；已重试多次仍未读完，重新打开这一格会再试" : ""}。
+          {/* 重试预算用完之后**不能再说「正在自动继续」**——那时定时器已经停了，等的是下一次
+              真实请求（第 8 轮审查不拦项 1）。 */}
+          {monitors.recovery.exhausted
+            ? "已重试多次仍未读完，自动重试已停止；重新打开这一格会再试。"
+            : "正在自动继续。"}
         </p>
       )}
       {rows.length === 0

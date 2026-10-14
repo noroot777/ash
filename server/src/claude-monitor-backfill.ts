@@ -56,14 +56,39 @@ const SNAPSHOT_CAP = 32;
  * 那已经不是缓存问题了——挤掉最老的并留一行日志，总比无界增长好。
  */
 const SNAPSHOT_HARD_CAP = 64;
+/**
+ * 被硬上限挤掉的任务，**只留下它读到哪儿**。
+ *
+ * 一份快照里的重东西是 `found`/`pending`/孤儿缓冲，而「读到第几字节」只是每个文件几十字节。
+ * 所以内存上限该淘汰的是前者，不是后者：位置一丢，下一轮就从零重读，而单次只读 128 MiB
+ * ——「超过上限、Monitor 在末尾」的任务会反复重读同一段前缀、永远读不到末尾（第 8 轮审查
+ * 指出把阈值从 32 抬到 64 并不改变这一点）。
+ *
+ * 这张表只存位置，所以可以给一个宽得多的上限；真要越界也只是退回「从头重读」，而不是把
+ * 「还没读完」这件事本身忘掉（那条账在恢复账本里，跟这里无关）。
+ */
+const parked = new Map<string, Map<string, { size: number; offset: number }>>();
+const PARKED_CAP = 512;
+
+/** 新建扫描状态，但**继承之前停好的读取位置**（见 `parked`）。 */
+function adoptParkedCursors(taskId: string): TaskScan {
+  const scan = newTaskScan();
+  const saved = parked.get(taskId);
+  if (!saved) return scan;
+  parked.delete(taskId);
+  // 位置按文件路径存（路径本来就唯一），`scanSession` 新建会话桶时会从这里取。
+  scan.parkedCursors = saved;
+  return scan;
+}
 
 /**
- * 记下这个任务的扫描快照，并按「最久没用的先挤掉」淘汰——**但正在恢复中的游标不挤**。
+ * 记下这个任务的扫描快照，并按「最久没用的先挤掉」淘汰——**但正在恢复中的游标不挤**，
+ * 真要挤也只挤掉重的那部分、把读取位置停好（`parked`）。
  *
- * 为什么要豁免：快照里记着「这个文件读到第几字节」。被挤掉之后下一轮 `newTaskScan()` 从零
- * 开始，而单次只读 128 MiB，于是「超过上限、Monitor 在末尾」的那种任务会反复重读同一段
- * 前缀、永远到不了末尾；更糟的是 `advanced` 只说明「相对这一轮的新游标读过字节」，看起来
- * 还一直在前进（第 7 轮审查按控制流推断）。恢复中的游标是**还没完成的责任**，不是缓存。
+ * 为什么要豁免：快照里记着「这个文件读到第几字节」。被挤掉之后下一轮从零开始，而单次只读
+ * 128 MiB，于是「超过上限、Monitor 在末尾」的那种任务会反复重读同一段前缀、永远到不了
+ * 末尾；更糟的是 `advanced` 只说明「相对这一轮的新游标读过字节」，看起来还一直在前进
+ * （第 7 轮审查按控制流推断，第 8 轮指出硬上限这一支仍是原来的行为）。
  */
 function rememberScan(taskId: string, scan: TaskScan): void {
   snapshots.delete(taskId);
@@ -75,13 +100,31 @@ function rememberScan(taskId: string, scan: TaskScan): void {
     if (key === taskId || protectedTasks.has(key)) continue; // 还没读完的不动
     snapshots.delete(key);
   }
-  // 全都在恢复中：按硬上限兜底，并说清为什么——这时重读代价是真实存在的。
+  // 全都在恢复中：按硬上限兜底，但**位置要停好**（只丢可重建的那部分）。
   while (snapshots.size > SNAPSHOT_HARD_CAP) {
     const oldest = snapshots.keys().next();
     if (oldest.done || oldest.value === taskId) break;
+    const victim = snapshots.get(oldest.value);
     snapshots.delete(oldest.value);
+    if (victim) parkCursors(oldest.value, victim);
     console.warn(`[ash] 内置 Monitor 扫描快照超过硬上限（${SNAPSHOT_HARD_CAP}），`
-      + `挤掉还在恢复中的 task=${oldest.value} 的游标，它下次要从头重读`);
+      + `task=${oldest.value} 的配对状态已丢弃，读取位置已停好，下一轮从原位继续`);
+  }
+}
+
+/** 把一份快照里的读取位置抠出来留着（见 `parked`）。 */
+function parkCursors(taskId: string, scan: TaskScan): void {
+  const cursors = new Map<string, { size: number; offset: number }>();
+  for (const session of scan.sessions.values()) {
+    for (const [path, cursor] of session.cursors) cursors.set(path, { ...cursor });
+  }
+  if (!cursors.size) return;
+  parked.delete(taskId);
+  parked.set(taskId, cursors);
+  while (parked.size > PARKED_CAP) {
+    const oldest = parked.keys().next();
+    if (oldest.done) break;
+    parked.delete(oldest.value);
   }
 }
 
@@ -90,6 +133,22 @@ const inflight = new Map<string, Promise<number>>();
 
 /** 这个任务的扫描游标还在不在（只给回归用：验「恢复中的游标没被挤掉」）。 */
 export const monitorScanTracked = (taskId: string): boolean => snapshots.has(taskId);
+
+/**
+ * 「上一轮把这个任务的游标丢了」。
+ *
+ * 丢游标之后的那一轮必然「读到新字节」（它在重读已经读过的前缀），拿这个当**进展**会让
+ * 退避预算永远清零，于是每秒重读一个大文件、永远到不了 exhausted（第 8 轮审查指出的对称
+ * 错误）。进展要绑定**确认落地的事实**或**单调往前的位置**，不是「这一轮读了字节」。
+ */
+const rewound = new Set<string>();
+
+/** 丢掉这个任务的扫描游标，并记下「下一轮是重读、不算进展」。 */
+function discardScan(taskId: string): void {
+  snapshots.delete(taskId);
+  parked.delete(taskId);
+  rewound.add(taskId);
+}
 
 /**
  * 把一个任务的内置 Monitor 补进投影表，并纠正已有记录。
@@ -130,7 +189,10 @@ async function runBackfill(taskId: string): Promise<number> {
 
     // 快照跨调用复用，但**会话清单每次重查**：任务后来新增了会话，上一次的快照里没有它
     // （实测 noSessionThenNewSession：首次回填时任务还没有会话，之后新增 → 永远读不到）。
-    const scan = snapshots.get(taskId) ?? newTaskScan();
+    // 这一轮是不是在重读（上一轮把游标丢了）。读之前就要取，取完立刻销掉：它只影响这一轮
+    // 的进展判定。
+    const reread = rewound.delete(taskId);
+    const scan = snapshots.get(taskId) ?? adoptParkedCursors(taskId);
     rememberScan(taskId, scan);
     scan.truncated = false;
     scan.failed = false;
@@ -150,22 +212,24 @@ async function runBackfill(taskId: string): Promise<number> {
       // **不是「下次打开面板继续」**：记进待恢复账本，由它退避重排自己往下推。游标已经
       // 记下，所以每一次重推都真的往后读一段；`scan.advanced` 作为「有进展」喂给退避预算。
       unread = true;
-      if (scan.truncated) noteMonitorRecovery(taskId, "scan-unfinished", scan.advanced);
-      if (scan.failed) noteMonitorRecovery(taskId, "scan-failed", scan.advanced);
+      // 重读那一轮的「读到新字节」不算进展（见 `rewound`）。
+      const progressed = scan.advanced && !reread;
+      if (scan.truncated) noteMonitorRecovery(taskId, "scan-unfinished", progressed);
+      if (scan.failed) noteMonitorRecovery(taskId, "scan-failed", progressed);
       console.warn(`[ash] 内置 Monitor 历史回填这一轮没读完（task=${taskId}，`
         + `${scan.truncated ? "有文件读到了单次上限" : ""}${scan.truncated && scan.failed ? "，" : ""}`
         + `${scan.failed ? "有文件读失败" : ""}），游标已记下，已排自动续读`);
     }
 
-    // 孤儿事实被挤出缓冲：这一轮的读取结果可能不全（游标越过了一条一次性事实，而来源不会
-    // 重发）。丢掉快照让下一轮从头重读，并留账——**进展一律按 false 记**：重读必然"读到新
-    // 字节"，拿它当进展会让退避预算永远清零、每秒重读一个大文件（见不拦项 1 的同款陷阱）。
+    // 乱序事实把缓冲占满了 → 扫描**背压**停下，游标停在那条还没消费的事实之前（见
+    // claude-monitor-scan.ts 的 ORPHAN_CAP）。所以这里**不丢游标**：丢了就是从零重读同一段
+    // 前缀，而输入没变就会再次占满 —— 那条路不收敛，实测 142MB 日志下永远读不到末尾的
+    // Monitor（第 8 轮审查）。留账等下一轮从那一行继续。
     if (scan.orphanOverflow) {
       unread = true;
-      snapshots.delete(taskId);
-      noteMonitorRecovery(taskId, "orphan-overflow", false);
-      console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 还没配对的事实超过缓冲上限，`
-        + `这一轮结果可能不全，已丢弃游标等重读`);
+      noteMonitorRecovery(taskId, "orphan-overflow", scan.advanced && !reread);
+      console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 还没配对的事实占满了缓冲，`
+        + `游标停在那一条之前，下一轮从它继续`);
     }
 
     // **提交条件不只是「有新字节」。** 新回合会先创建一个空的 run 文件、过一会儿才输出，那一刻
@@ -179,7 +243,7 @@ async function runBackfill(taskId: string): Promise<number> {
         // 把它当成已提交，于是那条事实永久消失（实测 casAtRace）。记账 + 把快照丢掉：
         // 下一轮从头重读，重新观察到同一条事实再裁决一次（那时 prior 是对方写的新状态，
         // 多数情况下判定为「来源终态已成定局，不该改」→ 干净收场）。
-        snapshots.delete(taskId);
+        discardScan(taskId);
         noteMonitorRecovery(taskId, "update-missed", added > 0);
       }
       missed = outcome.missed;
@@ -191,7 +255,7 @@ async function runBackfill(taskId: string): Promise<number> {
     // ——第 5 轮审查不拦项 1）。
     console.warn(`[ash] 内置 Monitor 历史回填失败（task=${taskId}）:`, e);
     if (added) bus.publish({ type: "task.monitors", taskId });
-    snapshots.delete(taskId); // 失败的快照不留，下次从头建（游标归零，事实能被重新读到）
+    discardScan(taskId); // 失败的快照不留，下次从头建（游标归零，事实能被重新读到）
     // 事实已经从文件里读出来过、却没确认落库。留账 + 自动重排：这一条上一版只有一句
     // 「历史回填会再补」，而历史回填本身只在用户打开面板时才跑。
     noteMonitorRecovery(taskId, "write-failed", added > 0);
