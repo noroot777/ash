@@ -24,6 +24,32 @@ const isNearBottom = (element: HTMLElement, threshold: number) =>
 const maxScrollTop = (element: HTMLElement) =>
   Math.max(0, element.scrollHeight - element.clientHeight);
 
+/* 这一批 DOM 变更有没有往会话末尾添东西。判据是「新节点的底边落在最后一屏内」而不是
+   「它是不是最后一个子元素」—— 会话流的末尾常年挂着尾巴组件(问题补档、footer),新回复
+   是插在它**前面**的;反过来往顶上补历史也会往同一个容器里塞节点,那个不能跟。 */
+function mutationsAppendTail(element: HTMLElement, records: MutationRecord[]): boolean {
+  // 容器内容坐标系:节点底边 - contentTop 就是它在 scrollHeight 里的位置。
+  const contentTop = element.getBoundingClientRect().top - element.scrollTop;
+  const lastScreenFrom = element.scrollHeight - element.clientHeight;
+  const touchesTail = (node: Node | null | undefined) => {
+    const target = node instanceof HTMLElement ? node : node?.parentElement ?? null;
+    if (!target || !element.contains(target)) return false;
+    return target.getBoundingClientRect().bottom - contentTop >= lastScreenFrom;
+  };
+  for (const record of records) {
+    // 最后一条自己在逐字长(流式输出)。
+    if (record.type === "characterData") {
+      if (touchesTail(record.target)) return true;
+      continue;
+    }
+    if (record.type !== "childList") continue;
+    for (const node of record.addedNodes) {
+      if (touchesTail(node)) return true;
+    }
+  }
+  return false;
+}
+
 const cancelFrameRef = (ref: { current: number }) => {
   if (!ref.current) return;
   cancelAnimationFrame(ref.current);
@@ -69,23 +95,29 @@ export function stickStateAfterScroll({
   return nearBottom ? true : stuck;
 }
 
-/* 一次贴底机会到底要不要动 scrollTop。贴底只为一件事服务:底边往下跑了(来了新内容、
-   容器被回复框挤矮),把视口跟着带下去。除此之外每一次 `scrollTo` 都只剩一个效果 ——
-   把人从他自己停的位置拽到最底,而那恰恰是用户没要的那一跳。 */
+/* 一次贴底机会到底要不要动 scrollTop。贴底只为一件事服务:会话尾部多出了要看的东西,
+   把视口跟着带下去。除此之外每一次 `scrollTo` 都只剩一个效果 —— 把人从他自己停的位置
+   拽到最底,而那恰恰是用户没要的那一跳。 */
 export function shouldStickToBottom({
   stuck,
+  tailAppended,
   previousMax,
   currentMax,
   distance,
 }: {
   stuck: boolean;
+  /** 这一批变更往会话末尾添了东西(新回复,或最后一条还在逐字长)。 */
+  tailAppended: boolean;
   previousMax: number;
   currentMax: number;
   distance: number;
 }): boolean {
   if (!stuck) return false;
-  // 底边没往下跑:气泡换个 class、工具栏亮一下都会惊动 observer,那些不该动用户的位置。
-  if (currentMax <= previousMax) return false;
+  /* 尾部来了新东西就跟,**不看总高度**。列表按最近 N 条截断时(群聊/侧聊/助手都是
+     最近 500 条),追加一条的同时最老那条被删掉,总高可能纹丝不动甚至变短 —— 那恰恰
+     是最该跟过去的一帧,拿「总高涨没涨」当唯一判据会把它整个漏掉。
+     尾部没动时才退回看底边:容器被回复框挤矮、上方内容长高,也都该跟。 */
+  if (!tailAppended && currentMax <= previousMax) return false;
   // 已经贴着底了,这一句 `scrollTo` 看着是空操作,其实会把浏览器手头那段滚轮平滑动画
   // 拦腰掐断 —— 滚到快见底时画面「啪」地一跳就是这么来的。
   return distance > BOTTOM_EPSILON;
@@ -105,6 +137,7 @@ export function useStickToBottom(
   const frameRef = useRef(0);
   const clearProgrammaticFrameRef = useRef(0);
   const lastMaxScrollRef = useRef(-1);
+  const tailAppendedRef = useRef(false);
 
   const markProgrammaticScrollSettled = useCallback(() => {
     cancelFrameRef(clearProgrammaticFrameRef);
@@ -138,11 +171,14 @@ export function useStickToBottom(
       if (!element) return;
       const previousMax = lastMaxScrollRef.current;
       const currentMax = maxScrollTop(element);
-      // 基准在判 stuck 之前就先记下,用户在上面读历史的那一段也照样跟着内容长 ——
+      const tailAppended = tailAppendedRef.current;
+      // 两个基准都在判 stuck 之前就先清,用户在上面读历史的那一段也照样跟着内容走 ——
       // 否则他滚回底部时积压的那一大截会被当成「刚长出来的」,又是平白一跳。
       lastMaxScrollRef.current = currentMax;
+      tailAppendedRef.current = false;
       if (!shouldStickToBottom({
         stuck: stuckRef.current,
+        tailAppended,
         previousMax,
         currentMax,
         distance: distanceFromBottom(element),
@@ -205,6 +241,7 @@ export function useStickToBottom(
     stuckRef.current = true;
     // 换任务要的是「落在最新一条」,不是「跟随增长」—— 清掉基准让这一次无条件过闸。
     lastMaxScrollRef.current = -1;
+    tailAppendedRef.current = false;
     scheduleStick();
   }, [resetKey, scheduleStick]);
 
@@ -217,7 +254,8 @@ export function useStickToBottom(
       updateObservedContent();
       scheduleStick();
     });
-    const mutationObserver = new MutationObserver(() => {
+    const mutationObserver = new MutationObserver((records) => {
+      if (mutationsAppendTail(element, records)) tailAppendedRef.current = true;
       updateObservedContent();
       scheduleStick();
     });
@@ -292,6 +330,7 @@ export function useStickToBottom(
     userScrollIntentRef.current = false;
     detachingUserIntentRef.current = false;
     scrollbarDragRef.current = false;
+    tailAppendedRef.current = false;
   }, []);
 
   return {

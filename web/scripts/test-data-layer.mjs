@@ -437,18 +437,27 @@ try {
     detaching: false,
   }), false);
 
-  // 贴底的第二道闸:要不要真的动 scrollTop。用户手滚到离底 40px 停住,底边没往下跑,
-  // 这时候再 scrollTo 就是把他从停的位置拽到最底 —— 那一跳正是「快到底时画面突然蹦
-  // 一下」的来源,必须闸住。
-  assert.equal(shouldStickToBottom({ stuck: true, previousMax: 5000, currentMax: 5000, distance: 40 }), false);
+  // 贴底的第二道闸:要不要真的动 scrollTop。用户手滚到离底 40px 停住,尾部没来新东西、
+  // 底边也没往下跑,这时候再 scrollTo 就是把他从停的位置拽到最底 —— 那一跳正是「快到底
+  // 时画面突然蹦一下」的来源,必须闸住。
+  const stick = (over) => shouldStickToBottom({ stuck: true, tailAppended: false, previousMax: 5000, currentMax: 5000, distance: 40, ...over });
+  assert.equal(stick({}), false);
   // 来了新内容(底边往下跑了)才跟过去,这是贴底唯一该做的事。
-  assert.equal(shouldStickToBottom({ stuck: true, previousMax: 5000, currentMax: 5200, distance: 240 }), true);
+  assert.equal(stick({ currentMax: 5200, distance: 240 }), true);
   // 容器被回复框挤矮同样让底边往下跑,也要跟。
-  assert.equal(shouldStickToBottom({ stuck: true, previousMax: 5000, currentMax: 5120, distance: 120 }), true);
+  assert.equal(stick({ currentMax: 5120, distance: 120 }), true);
   // 人在上面读历史时一律不跟。
-  assert.equal(shouldStickToBottom({ stuck: false, previousMax: 5000, currentMax: 5200, distance: 900 }), false);
+  assert.equal(stick({ stuck: false, currentMax: 5200, distance: 900 }), false);
   // 已经贴着底了就别再发一次 scrollTo:那会把浏览器正在跑的平滑滚动掐断。
-  assert.equal(shouldStickToBottom({ stuck: true, previousMax: 5000, currentMax: 5200, distance: 0 }), false);
+  assert.equal(stick({ currentMax: 5200, distance: 0 }), false);
+  // 群聊/侧聊/助手只留最近 500 条:追加一条的同时最老那条被删掉,总高**纹丝不动**甚至
+  // 变短。这一帧恰恰最该跟过去,只看总高会把新回复整个漏在屏幕下面(审查 F1)。
+  assert.equal(stick({ tailAppended: true, distance: 79 }), true);
+  assert.equal(stick({ tailAppended: true, currentMax: 4977, distance: 56 }), true);
+  // 尾部来了新东西,但人在上面读历史 —— 仍然不跟。
+  assert.equal(stick({ stuck: false, tailAppended: true, distance: 79 }), false);
+  // 往顶上补历史不算尾部来新东西,底边也没往下跑时不跟。
+  assert.equal(stick({ tailAppended: false, distance: 79 }), false);
 
   const team = { id: "team-1", mode: "team", projectId: "project-1", title: "父团队" };
   const sharedWorker = { id: "worker-1", parentId: "team-1", useWorktree: false };
