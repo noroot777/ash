@@ -7,6 +7,9 @@
 import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { chatTailKey } from "../../src/lib/chatTailKey.ts";
+import { appendExecutionEvent } from "../../src/lib/executionTrace.ts";
+import { conversationItemSize } from "../../src/task-detail/conversationContentSize.ts";
+import type { AgentContentSegment } from "../../src/task-detail/conversationSegments.ts";
 import { useStickToBottom } from "../../src/lib/useStickToBottom.ts";
 
 type Message = { id: string; body: string; status: string };
@@ -24,9 +27,16 @@ const seed = (count: number): Message[] => Array.from({ length: count }, (_, ind
 function Feed() {
   const scroll = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState(() => seed(60));
+  const [thinking, setThinking] = useState(() => [{ kind: "thinking" as const, label: "思考过程", detail: "开始想" }]);
   // 复制按钮那一类反馈:正文一个字没变,只有这颗按钮的文字/图标在换。
   const [copied, setCopied] = useState(false);
-  const { resume } = useStickToBottom(scroll, "fixture", chatTailKey(messages));
+  /* 版本 = 消息那一路 + 这一段执行过程的可读规模。后者走产品自己的
+     `conversationItemSize`,测的是产品的契约,不是测里另写一份。 */
+  const segment: AgentContentSegment = { id: "seg", markdown: "", events: thinking, attachments: [] };
+  const thinkingSize = conversationItemSize({
+    kind: "agent", id: "active", sessionId: "s", label: "agent", markdown: "", segments: [segment],
+  });
+  const { resume } = useStickToBottom(scroll, "fixture", `${chatTailKey(messages)}:${thinkingSize}`);
 
   return <div>
     <div
@@ -42,6 +52,11 @@ function Feed() {
           {copied ? <svg data-testid="feedback-icon" width="12" height="12" /> : null}
         </span>}
       </p>)}
+      {/* 正在飞的那一轮的「执行过程」,压在最后:固定高度、字在同一行里接着写,
+          所以内容变了而外框不长高 —— 还原「等高更新」这个形状。 */}
+      <pre data-testid="thinking-block" style={{ height: 40, margin: 0, overflow: "hidden" }}>
+        {thinking.map((event) => event.detail).join("")}
+      </pre>
     </div>
 
     <button type="button" data-testid="copy-feedback" onClick={() => setCopied((value) => !value)}>
@@ -82,6 +97,12 @@ function Feed() {
       return next;
     })}>
       给旁注前面那条续写
+    </button>
+    {/* 展开的「执行过程」里思考在逐字长 —— 真实 producer 把增量拼进**已有那条** event
+        的 detail(appendExecutionEvent),条数、正文长度、段落个数全都一动不动。 */}
+    <button type="button" data-testid="stream-thinking" onClick={() => setThinking((events) =>
+      appendExecutionEvent(events, { kind: "thinking", label: "思考过程", detail: "续" }))}>
+      收到下一段思考
     </button>
     <button type="button" data-testid="resume" onClick={() => resume()}>恢复跟随</button>
   </div>;

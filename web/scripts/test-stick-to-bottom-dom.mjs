@@ -115,7 +115,16 @@ try {
   await press("copy-feedback");
   assert.equal((await metrics()).top, beforeAsideCopy.top, "末尾有旁注时，反馈恢复又把人拽走了");
 
-  // ⑧ 人往上读历史：新消息一律不许打扰。
+  /* ⑧ 新内容也不一定是「正文」：展开的执行过程里，思考原文在同一行里接着写 ——
+     真实 producer 把增量拼进**已有那条** event 的 detail（appendExecutionEvent），
+     条数、正文长度、段落个数、总高全都一动不动。仍要跟（审查第 4 轮 F1）。 */
+  const beforeThinking = await parkByWheel(40);
+  await press("stream-thinking");
+  const afterThinking = await metrics();
+  assert.equal(afterThinking.height, beforeThinking.height, "夹具假设有误：思考续写改变了内容高度");
+  assert.equal(afterThinking.distance, 0, "执行过程里的思考在长，视口却没跟");
+
+  // ⑨ 人往上读历史：新消息一律不许打扰。
   await feed.hover();
   for (let index = 0; index < 6; index++) await page.mouse.wheel(0, -120);
   await flush();
@@ -126,7 +135,7 @@ try {
   await press("copy-feedback");
   assert.equal((await metrics()).top, reading.top, "读历史时被复制反馈拽走");
 
-  // ⑨ 显式「回到底部」之后，跟随恢复。
+  // ⑩ 显式「回到底部」之后，跟随恢复。
   await press("resume");
   await feed.evaluate((element) => element.scrollTo({ top: element.scrollHeight, behavior: "auto" }));
   await flush();

@@ -7,6 +7,7 @@ import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import type { NativeWorkItem } from "./nativeWorkModel.ts";
 import { NATIVE_WORK_NO_ASSIGNMENT } from "./nativeWorkModel.ts";
 import { nativeAgentSegments } from "./nativeAgentSegments.ts";
+import { segmentContentSize } from "./conversationContentSize.ts";
 import { NativeWorkHeadline } from "./NativeWorkMeta.tsx";
 
 // 住在左侧抽屉里（见 components/SideDrawer.tsx）：返回列表靠抽屉自己那颗关闭按钮、
@@ -45,7 +46,11 @@ export function NativeAgentConversation({ row, statusLabel, error, onRetry }: {
           {running && <p className="native-agent__live" role="status"><span className="task-execution-pulse" aria-hidden="true" />执行中，内容实时更新</p>}
         </div>
         <ConversationScrollControls scrollRef={scroll} resetKey={row.id}
-          tailKey={`${segments.length}:${row.activity?.length ?? 0}:${row.message?.length ?? 0}:${row.result?.length ?? 0}:${row.status}`} />
+          /* 按**归一化之后**的 segments 算,不按原始 activity 条数:同一个附件被重复通知时
+             nativeAgentSegments 会去重,渲染数据一个像素没变 —— 那就不该算成新内容把人
+             拽到底(审查 B6)。 */
+          tailKey={`${segments.length}:${segments.reduce((total, segment) => total + segmentContentSize(segment), 0)}`
+            + `:${row.message?.length ?? 0}:${row.result?.length ?? 0}:${row.status}`} />
       </div>
     </ImagePreviewGroup>
   </div>;

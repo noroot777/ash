@@ -7,6 +7,8 @@
 //   不让贴底逻辑自己去 DOM 上猜（猜过一版，复制按钮闪一下就把人拽到底了）。
 import assert from "node:assert/strict";
 import { contentVersion, shouldStickToBottom, stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
+import { conversationItemSize } from "../src/task-detail/conversationContentSize.ts";
+import { appendExecutionEvent } from "../src/lib/executionTrace.ts";
 
 // 用户从底部按住滚动条向上拖时，pointerdown 会建立 detaching user intent。
 // 随后的 scroll 必须解除贴底；内容 resize/mutation 只能在 stuck=true 时补滚，
@@ -80,3 +82,40 @@ assert.equal(chatKey(behind), chatKey([msg("m1", "一"), msg("m2", "二"), aside
 assert.notEqual(chatKey([msg("m1", "一")]), chatKey([msg("m1", "一", "running")]));
 
 console.log("贴底判据回归验证通过");
+
+/* 「用户能读到多少字」这张表:算什么、不算什么。漏算一处,那一处的新输出就会长出屏幕
+   而没人跟;多算一处(时刻、用量这类角标),界面闪一下就会把读到一半的人拽到底。 */
+const agent = (over) => ({
+  kind: "agent", id: "a1", sessionId: "s1", label: "codex", markdown: "", segments: [], ...over,
+});
+const seg = (over) => ({ id: "g1", markdown: "", events: [], attachments: [], ...over });
+
+// 正文在长 —— 算。
+assert.ok(conversationItemSize(agent({ markdown: "一二" })) > conversationItemSize(agent({ markdown: "一" })));
+/* 思考原文在长 —— 也算。真实 producer 把连续思考拼进**已有那条** event 的 detail,
+   条数、正文长度、段落个数全都不变(审查第 4 轮 F1)。 */
+const thinkingOnce = appendExecutionEvent([], { kind: "thinking", label: "思考过程", detail: "想" });
+const thinkingTwice = appendExecutionEvent(thinkingOnce, { kind: "thinking", label: "思考过程", detail: "续" });
+assert.equal(thinkingTwice.length, thinkingOnce.length, "前提变了:连续思考不再合并进同一条");
+assert.ok(conversationItemSize(agent({ segments: [seg({ events: thinkingTwice })] }))
+  > conversationItemSize(agent({ segments: [seg({ events: thinkingOnce })] })));
+// 工具详情、附件 —— 都算。
+assert.ok(conversationItemSize(agent({ segments: [seg({ events: [{ kind: "tool", label: "bash", detail: "ls -la" }] })] }))
+  > conversationItemSize(agent({ segments: [seg({ events: [{ kind: "tool", label: "bash" }] })] })));
+assert.ok(conversationItemSize(agent({ segments: [seg({ attachments: ["/a.png"] })] }))
+  > conversationItemSize(agent({ segments: [seg()] })));
+// 时刻、用量、折叠状态、会话元信息 —— 都不算:它们一变就跟,等于让角标刷新把人拽到底。
+const body = { markdown: "正文", segments: [seg({ markdown: "正文" })] };
+const quiet = conversationItemSize(agent(body));
+for (const noise of [
+  { at: "2026-10-14T00:00:00Z" }, { endedAt: "2026-10-14T00:01:00Z" }, { continuation: true },
+  { usage: { input: 10, output: 20 } }, { sessionUsage: { input: 99, output: 99 } },
+  { sessionContext: { used: 1, limit: 2 } }, { showSessionMeta: true }, { interrupted: true },
+]) assert.equal(conversationItemSize(agent({ ...body, ...noise })), quiet, `这个字段不该算进可读规模:${Object.keys(noise)[0]}`);
+// 事件行的时刻同理不算,正文算。
+const note = (over) => ({ kind: "event", id: "e1", text: "审查已预约", ...over });
+assert.equal(conversationItemSize(note({ at: "2026-10-14T00:00:00Z" })), conversationItemSize(note()));
+assert.ok(conversationItemSize(note({ text: "审查已预约了" })) > conversationItemSize(note()));
+// 用户消息:正文和附件都算。
+const said = (over) => ({ kind: "user", id: "u1", text: "问题", attachments: [], ...over });
+assert.ok(conversationItemSize(said({ attachments: ["/a.png"] })) > conversationItemSize(said()));
