@@ -4,6 +4,7 @@ import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import type { ConversationItem } from "./conversationModel.ts";
+import { conversationTailKey } from "./conversationModel.ts";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
@@ -398,7 +399,7 @@ export function ConversationFeed({
           {historyReady && <QuestionHistoryRemainder messages={items.flatMap((item) => item.kind === "user" ? [item.text] : [])} />}
           {footer}
         </div>
-        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} />
       </div>
       {dock && <div className="task-question-dock">{dock}</div>}
     </ImagePreviewGroup>

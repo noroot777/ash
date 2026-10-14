@@ -7,6 +7,7 @@ import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import { chatTailKey } from "../lib/chatTailKey.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 import { SideChatComposer } from "./SideChatComposer.tsx";
 import { SideChatHeadControls } from "./SideChatHeadControls.tsx";
@@ -42,7 +43,7 @@ function SideMessage({ message }: { message: ChatMessage }) {
 export function SideChatPane({ task }: { task: Task }) {
   const chat = useSideChat(task.id);
   const scroll = useRef<HTMLDivElement>(null);
-  const { resume } = useStickToBottom(scroll, chat.room?.id ?? task.id);
+  const { resume } = useStickToBottom(scroll, chat.room?.id ?? task.id, chatTailKey(chat.snapshot?.messages));
   const { atBottom } = useScrollEdges(scroll, chat.room?.id ?? task.id);
   return <section className="side-chat-pane" aria-label="任务侧聊">
     <SideChatHeadControls chat={chat} />

@@ -15,6 +15,7 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
+import { tailKeyOf } from "../lib/useStickToBottom.ts";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -354,7 +355,8 @@ export function DuetView({
             {task.status === "failed" && <p className="duet-terminal is-error">本次讨论失败并停止</p>}
             {task.status === "canceled" && <p className="duet-terminal">讨论已取消</p>}
           </div>
-          <ConversationScrollControls scrollRef={scrollRef} resetKey={`${task.id}:${turns.length}`} />
+          <ConversationScrollControls scrollRef={scrollRef} resetKey={`${task.id}:${turns.length}`}
+            tailKey={tailKeyOf(turns, (turn) => `${turn.round}:${turn.speaker}:${turn.text?.length ?? 0}:${turn.done ? 1 : 0}`)} />
         </div>
       </ImagePreviewGroup>
 

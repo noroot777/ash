@@ -44,7 +44,8 @@ export function NativeAgentConversation({ row, statusLabel, error, onRetry }: {
           {finalResult && <section><h4>返回结果</h4><MarkdownBody text={finalResult} /></section>}
           {running && <p className="native-agent__live" role="status"><span className="task-execution-pulse" aria-hidden="true" />执行中，内容实时更新</p>}
         </div>
-        <ConversationScrollControls scrollRef={scroll} resetKey={row.id} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={row.id}
+          tailKey={`${segments.length}:${row.activity?.length ?? 0}:${row.message?.length ?? 0}:${row.result?.length ?? 0}:${row.status}`} />
       </div>
     </ImagePreviewGroup>
   </div>;

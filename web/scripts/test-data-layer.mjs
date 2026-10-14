@@ -5,7 +5,6 @@ import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { taskDurationInfo } from "../src/task-detail/utils.ts";
-import { shouldStickToBottom, stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
 import { sharedTeamParent } from "../src/review/reviewModel.ts";
 import { gateAllowsRevision, isOpenDuetGate, runCreatedHandoffFollowUps } from "../src/duet/handoffPolicy.ts";
 import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
@@ -418,46 +417,6 @@ try {
   assert.equal(durationInfo?.text, "10m 0s");
   assert.match(durationInfo?.title ?? "", /^结束 /);
   assert.equal(taskDurationInfo({ ...task, activeMs: null })?.label, "跨度");
-
-  // 用户从底部按住滚动条向上拖时，pointerdown 会建立 detaching user intent。
-  // 随后的 scroll 必须解除贴底；内容 resize/mutation 只能在 stuck=true 时补滚，
-  // 因而此状态会保持在历史位置，不被下一段流式输出抢回底部。
-  assert.equal(stickStateAfterScroll({
-    stuck: true,
-    nearBottom: false,
-    programmatic: false,
-    userDriven: true,
-    detaching: true,
-  }), false);
-  assert.equal(stickStateAfterScroll({
-    stuck: false,
-    nearBottom: false,
-    programmatic: false,
-    userDriven: false,
-    detaching: false,
-  }), false);
-
-  // 贴底的第二道闸:要不要真的动 scrollTop。用户手滚到离底 40px 停住,尾部没来新东西、
-  // 底边也没往下跑,这时候再 scrollTo 就是把他从停的位置拽到最底 —— 那一跳正是「快到底
-  // 时画面突然蹦一下」的来源,必须闸住。
-  const stick = (over) => shouldStickToBottom({ stuck: true, tailAppended: false, previousMax: 5000, currentMax: 5000, distance: 40, ...over });
-  assert.equal(stick({}), false);
-  // 来了新内容(底边往下跑了)才跟过去,这是贴底唯一该做的事。
-  assert.equal(stick({ currentMax: 5200, distance: 240 }), true);
-  // 容器被回复框挤矮同样让底边往下跑,也要跟。
-  assert.equal(stick({ currentMax: 5120, distance: 120 }), true);
-  // 人在上面读历史时一律不跟。
-  assert.equal(stick({ stuck: false, currentMax: 5200, distance: 900 }), false);
-  // 已经贴着底了就别再发一次 scrollTo:那会把浏览器正在跑的平滑滚动掐断。
-  assert.equal(stick({ currentMax: 5200, distance: 0 }), false);
-  // 群聊/侧聊/助手只留最近 500 条:追加一条的同时最老那条被删掉,总高**纹丝不动**甚至
-  // 变短。这一帧恰恰最该跟过去,只看总高会把新回复整个漏在屏幕下面(审查 F1)。
-  assert.equal(stick({ tailAppended: true, distance: 79 }), true);
-  assert.equal(stick({ tailAppended: true, currentMax: 4977, distance: 56 }), true);
-  // 尾部来了新东西,但人在上面读历史 —— 仍然不跟。
-  assert.equal(stick({ stuck: false, tailAppended: true, distance: 79 }), false);
-  // 往顶上补历史不算尾部来新东西,底边也没往下跑时不跟。
-  assert.equal(stick({ tailAppended: false, distance: 79 }), false);
 
   const team = { id: "team-1", mode: "team", projectId: "project-1", title: "父团队" };
   const sharedWorker = { id: "worker-1", parentId: "team-1", useWorktree: false };

@@ -24,30 +24,16 @@ const isNearBottom = (element: HTMLElement, threshold: number) =>
 const maxScrollTop = (element: HTMLElement) =>
   Math.max(0, element.scrollHeight - element.clientHeight);
 
-/* 这一批 DOM 变更有没有往会话末尾添东西。判据是「新节点的底边落在最后一屏内」而不是
-   「它是不是最后一个子元素」—— 会话流的末尾常年挂着尾巴组件(问题补档、footer),新回复
-   是插在它**前面**的;反过来往顶上补历史也会往同一个容器里塞节点,那个不能跟。 */
-function mutationsAppendTail(element: HTMLElement, records: MutationRecord[]): boolean {
-  // 容器内容坐标系:节点底边 - contentTop 就是它在 scrollHeight 里的位置。
-  const contentTop = element.getBoundingClientRect().top - element.scrollTop;
-  const lastScreenFrom = element.scrollHeight - element.clientHeight;
-  const touchesTail = (node: Node | null | undefined) => {
-    const target = node instanceof HTMLElement ? node : node?.parentElement ?? null;
-    if (!target || !element.contains(target)) return false;
-    return target.getBoundingClientRect().bottom - contentTop >= lastScreenFrom;
-  };
-  for (const record of records) {
-    // 最后一条自己在逐字长(流式输出)。
-    if (record.type === "characterData") {
-      if (touchesTail(record.target)) return true;
-      continue;
-    }
-    if (record.type !== "childList") continue;
-    for (const node of record.addedNodes) {
-      if (touchesTail(node)) return true;
-    }
-  }
-  return false;
+/* 会话尾部的指纹:一共几条 + 最后一条是谁 + 它的正文长到哪儿了。三者任一变化才算
+   「末尾多了要看的东西」。
+
+   这个数必须由**拿着会话数据的人**算,不能让贴底逻辑自己去 DOM 上猜 —— 猜过一版:
+   把「最后一屏内出现的文字/节点变化」当成新回复。可是复制按钮点一下变「已复制」、
+   1600ms 后再变回来,账目数字刷新,图标换一张,全都是最后一屏里不改变高度的 DOM 变化,
+   于是读到一半的人被一次次拽到底。几何位置证明不了语义。 */
+export function tailKeyOf<T>(items: readonly T[], mark: (item: T) => string | number): string {
+  const last = items.at(-1);
+  return last === undefined ? `${items.length}` : `${items.length}:${mark(last)}`;
 }
 
 const cancelFrameRef = (ref: { current: number }) => {
@@ -126,6 +112,9 @@ export function shouldStickToBottom({
 export function useStickToBottom(
   scrollRef: RefObject<HTMLElement | null>,
   resetKey: string | number | null | undefined,
+  /** 会话尾部指纹,见 `tailKeyOf`。变了才算「末尾多了要看的东西」。必填:七处消费
+      表面漏传哪一个都该当场编译不过,而不是悄悄退化成不跟随。 */
+  tailKey: string | number,
   threshold = STICK_TO_BOTTOM_THRESHOLD,
 ) {
   const stuckRef = useRef(true);
@@ -138,6 +127,7 @@ export function useStickToBottom(
   const clearProgrammaticFrameRef = useRef(0);
   const lastMaxScrollRef = useRef(-1);
   const tailAppendedRef = useRef(false);
+  const lastTailKeyRef = useRef<string | number | null>(null);
 
   const markProgrammaticScrollSettled = useCallback(() => {
     cancelFrameRef(clearProgrammaticFrameRef);
@@ -242,8 +232,17 @@ export function useStickToBottom(
     // 换任务要的是「落在最新一条」,不是「跟随增长」—— 清掉基准让这一次无条件过闸。
     lastMaxScrollRef.current = -1;
     tailAppendedRef.current = false;
+    lastTailKeyRef.current = null;
     scheduleStick();
   }, [resetKey, scheduleStick]);
+
+  useEffect(() => {
+    if (lastTailKeyRef.current !== null && lastTailKeyRef.current !== tailKey) {
+      tailAppendedRef.current = true;
+      scheduleStick();
+    }
+    lastTailKeyRef.current = tailKey;
+  }, [scheduleStick, tailKey]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -254,8 +253,7 @@ export function useStickToBottom(
       updateObservedContent();
       scheduleStick();
     });
-    const mutationObserver = new MutationObserver((records) => {
-      if (mutationsAppendTail(element, records)) tailAppendedRef.current = true;
+    const mutationObserver = new MutationObserver(() => {
       updateObservedContent();
       scheduleStick();
     });
@@ -331,6 +329,7 @@ export function useStickToBottom(
     detachingUserIntentRef.current = false;
     scrollbarDragRef.current = false;
     tailAppendedRef.current = false;
+    lastTailKeyRef.current = null;
   }, []);
 
   return {

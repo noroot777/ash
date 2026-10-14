@@ -5,6 +5,7 @@ import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display"
 import type { Batch } from "@ash/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
+import { tailKeyOf } from "../lib/useStickToBottom.ts";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
@@ -167,6 +168,13 @@ function BatchCard({
   );
 }
 
+/* 团队这条流里混着两种行:会话条目和派活卡片。两种都算「末尾多了要看的东西」,
+   所以指纹取 row.key 再加上会话正文的长度(派活卡片没有正文,只认它的 key)。 */
+const teamTailKey = (rows: readonly TeamFeedRow[]) => tailKeyOf(rows, (row) =>
+  row.kind === "conv"
+    ? `${row.key}:${row.item.kind === "agent" ? row.item.markdown.length : row.item.text.length}`
+    : row.key);
+
 export function TeamFeed({
   task,
   rows,
@@ -255,7 +263,7 @@ export function TeamFeed({
           {historyReady && <QuestionHistoryRemainder messages={rows.flatMap((row) => row.kind === "conv" && row.item.kind === "user" ? [row.item.text] : [])} />}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>
-        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={teamTailKey(rows)} />
       </div>
     </ImagePreviewGroup>
     </QuestionHistoryProvider>

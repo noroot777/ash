@@ -1,0 +1,70 @@
+// 贴底逻辑的夹具:一个长会话 + 几颗按钮,分别制造「真来了新内容」和「只是界面闪一下」
+// 两类 DOM 变化。跑法:npm -w web run test:stick-to-bottom
+//
+// 夹具刻意**不**渲染真实的会话组件:要钉的是 useStickToBottom 认不认得出这两类变化,
+// 混进真实气泡只会把失败原因摊到一堆不相干的渲染里。消息形状照搬群聊那一种(id/body/
+// status),指纹也走产品自己的 chatTailKey —— 测的是产品算的那个数,不是测里另写一份。
+import { useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { chatTailKey } from "../../src/lib/chatTailKey.ts";
+import { useStickToBottom } from "../../src/lib/useStickToBottom.ts";
+
+type Message = { id: string; body: string; status: string };
+
+const seed = (count: number): Message[] => Array.from({ length: count }, (_, index) => ({
+  id: `m${index + 1}`,
+  body: `第 ${index + 1} 条消息`,
+  status: "ok",
+}));
+
+function Feed() {
+  const scroll = useRef<HTMLDivElement>(null);
+  const [messages, setMessages] = useState(() => seed(60));
+  // 复制按钮那一类反馈:正文一个字没变,只有这颗按钮的文字/图标在换。
+  const [copied, setCopied] = useState(false);
+  const { resume } = useStickToBottom(scroll, "fixture", chatTailKey(messages));
+
+  return <div>
+    <div
+      ref={scroll}
+      id="feed"
+      style={{ height: 300, overflowY: "auto", border: "1px solid #ccc", padding: 8 }}
+    >
+      {messages.map((message) => <p key={message.id} style={{ height: 40, margin: 0 }}>
+        {message.body}
+        {/* 最后一条尾巴上挂着反馈按钮 —— 它的变化落在最后一屏内,正是误判过的位置。 */}
+        {message.id === messages.at(-1)?.id && <span data-testid="feedback">
+          {copied ? "已复制" : "复制这条回复"}
+          {copied ? <svg data-testid="feedback-icon" width="12" height="12" /> : null}
+        </span>}
+      </p>)}
+    </div>
+
+    <button type="button" data-testid="copy-feedback" onClick={() => setCopied((value) => !value)}>
+      翻转复制反馈
+    </button>
+    <button type="button" data-testid="append" onClick={() => setMessages((list) => [
+      ...list,
+      { id: `m${list.length + 1}`, body: `第 ${list.length + 1} 条消息`, status: "ok" },
+    ])}>
+      来一条新消息
+    </button>
+    {/* 最近 N 条轮换:追加一条的同时把最老那条挤掉,条数和总高都不变。 */}
+    <button type="button" data-testid="rollover" onClick={() => setMessages((list) => [
+      ...list.slice(1),
+      { id: `m${Number(list.at(-1)!.id.slice(1)) + 1}`, body: `第 ${list.length + 1} 条消息`, status: "ok" },
+    ])}>
+      轮换一条
+    </button>
+    {/* 流式输出:同一条消息在逐字变长,条数不变。 */}
+    <button type="button" data-testid="stream" onClick={() => setMessages((list) => [
+      ...list.slice(0, -1),
+      { ...list.at(-1)!, body: `${list.at(-1)!.body}续` },
+    ])}>
+      最后一条续写
+    </button>
+    <button type="button" data-testid="resume" onClick={() => resume()}>恢复跟随</button>
+  </div>;
+}
+
+createRoot(document.getElementById("root")!).render(<Feed />);

@@ -20,6 +20,7 @@ import {
 import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
 import { agentLabel, compactTurnText, latestTurnStart, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
 import { appendLiveTimeline } from "./conversationLiveTurns.ts";
+import { tailKeyOf } from "../lib/useStickToBottom.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
 // 分段那一族住在 conversationSegments:这里转出去,别处 import 的路径不用跟着改。
 export type { AgentAuxEvent, AgentContentSegment } from "./conversationSegments.ts";
@@ -103,6 +104,12 @@ export type ConversationItem =
     };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
+
+/* 这条会话的尾部指纹:贴底逻辑靠它区分「真来了新内容」和「界面只是闪了一下」。
+   正文字段按 kind 分:agent 的是 markdown,user / event 的是 text —— 流式输出时
+   最后一条在逐字变长,长度跟着走,所以同一条回复一边长一边也能跟。 */
+export const conversationTailKey = (items: readonly ConversationItem[]) =>
+  tailKeyOf(items, (item) => `${item.id}:${item.kind === "agent" ? item.markdown.length : item.text.length}`);
 
 export type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
 type AgentItem = Extract<ConversationItem, { kind: "agent" }>;
