@@ -144,6 +144,10 @@ export async function resolveExecutorFor(opts: ExecutorResolveOpts): Promise<Age
   return (await resolveExecutorWithProfile(opts)).executor;
 }
 
+export async function resolveExecutorProfileId(opts: ExecutorResolveOpts): Promise<string | null> {
+  return (await pickProfile(opts)).profile?.id ?? null;
+}
+
 async function build(
   profile: AgentRow | null,
   type: AgentType,

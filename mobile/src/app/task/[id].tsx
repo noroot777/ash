@@ -56,6 +56,10 @@ export default function TaskDetail() {
   const [lines, setLines] = useState<LogLine[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [input, setInput] = useState("");
+  const [commandResult, setCommandResult] = useState<{ taskId: string; text: string } | null>(null);
+  const currentTaskId = useRef(id);
+  currentTaskId.current = id;
+  useEffect(() => setCommandResult(null), [id]);
   const [pending, setPending] = useState<ScheduledMessage[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   // 下拉刷新的计数器：会话/任务列表由本屏自己重拉，审查区块是独立组件、拉的是另一个
@@ -83,6 +87,7 @@ export default function TaskDetail() {
     for (const { s, out } of withOut.filter(({ out }) => out.trim())) {
       all.push(...snapshotToLogLines(out, s.id, s.agentType));
     }
+    if (currentTaskId.current !== id) return;
     setLines(all);
     setSessions(ss);
   }, [id]);
@@ -279,6 +284,7 @@ export default function TaskDetail() {
   const send = async (sendAt?: Date) => {
     const text = input.trim();
     if (!text) return;
+    setCommandResult(null);
     // 定时发送：排到待发列表，到点由调度器投递。对 running 任务也允许（后端明确允许）。
     if (sendAt) {
       if (sendAt.getTime() <= Date.now()) {
@@ -308,6 +314,13 @@ export default function TaskDetail() {
     }
     try {
       const r = await api.replyTask(id, text);
+      if (currentTaskId.current !== id) return;
+      if (r.command) {
+        if (!r.recorded && r.text) setCommandResult({ taskId: id, text: r.text });
+        loadConv().catch(() => {});
+        refreshAll().catch(() => {});
+        return;
+      }
       // 按结果分支:任务刚好在这一刻起跑时,前端判断会落后于后端。
       if (r?.scheduled) {
         if (r.message) setPending((ps) => [...ps, r.message!].sort((a, b) => a.sendAt.localeCompare(b.sendAt)));
@@ -428,13 +441,18 @@ export default function TaskDetail() {
 
         {/* Conversation (polled from the session .md) */}
         <Conversation lines={lines} sessions={sessions} taskEndedAt={task.endedAt} />
+        {commandResult?.taskId === id ? (
+          <View accessibilityLabel="命令结果" testID="reply-command-result" style={{ backgroundColor: theme.panel, borderRadius: radius.md, borderWidth: 1, borderColor: theme.line, padding: 12 }}>
+            <MarkdownText value={commandResult.text} />
+          </View>
+        ) : null}
 
         {/* ask_question answer flow stays separate from ordinary conversation replies. */}
         {task.question ? (
           <QuestionCard task={task} cardRef={questionRef} onFocusInput={revealQuestion} />
         ) : null}
 
-        {lines.length === 0 && !task.question ? (
+        {lines.length === 0 && !task.question && commandResult?.taskId !== id ? (
           <Text style={{ color: theme.faint, fontSize: 13, textAlign: "center", paddingTop: 20 }}>
             还没有输出 — 点上方「{action.label}」开始
           </Text>

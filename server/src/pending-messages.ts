@@ -33,10 +33,11 @@ import { scheduledMessages, tasks, groups } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
 import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
-import { whenTurnIdle } from "./runs.js";
+import { taskStartStatus } from "./task-start-status.js";
+import { releaseTurn, whenTurnIdle } from "./runs.js";
 import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
-import { deliveryOptions, deliveryVerdict, isDueForDelivery, monitorWakeGuard } from "./pending-verdict.js";
+import { deliveryOptions, deliveryVerdict, isDueForDelivery, monitorWakeGuard, pendingExecutionIntent } from "./pending-verdict.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { id, now } from "./util.js";
@@ -361,6 +362,11 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       // 自激循环(第 6 轮审查:目录不修复时 2 秒 24 次失败)。
       if (retryBlocked(m.id, at.getTime())) continue;
       const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0) ?? null;
+      const execution = pendingExecutionIntent(m, t);
+      if (execution !== m.execution) {
+        await db.update(scheduledMessages).set({ execution }).where(and(eq(scheduledMessages.id, m.id), eq(scheduledMessages.status, "pending")));
+        m.execution = execution;
+      }
       // checkpoint 追问经待发送路径投递(定时发送、第一句还在回答时自动排队的第二句)
       // 时,与直接回复同判据旁路(task-reply.ts / orchestrator 的 checkpointFollowUp):
       // paused+resumePrompt 任务上的非执行型消息,投递是续聊不是执行 —— 占位会把
@@ -520,21 +526,21 @@ export async function handDuePendingMessageToRun(
   if (!due) return false;
   const claimed = await beginDelivery(due.id);
   if (!claimed) return true; // 另一个触发源刚抢走:由它开回合
-  // 一旦被交接认领为**任务执行输入**,这个转换就要在启动前持久化(第 6 轮审查:
-  // 运行中暂存的追问 execution=0,轮到时经这里交接,起跑失败后重投仍按首次发送时的
-  // 终态续聊分类放行,与同队在跑成员并行执行)。失败与重启后的重试都沿用这个意图;
-  // 真正的终态续聊从不经过本函数,不受影响。
-  if (!due.execution) {
-    await db.update(scheduledMessages).set({ execution: true }).where(eq(scheduledMessages.id, due.id));
-    due.execution = true;
-  }
   inFlight.add(taskId);
   lastFiredAt.set(taskId, Date.now());
   const queuedAt = Date.now();
   const dueAt = markDue(due.id, queuedAt);
   const busyMs = settleBusyAgain(due.id, queuedAt);
   let delivered = false;
+  let handedOff = false;
   try {
+    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0) ?? null;
+    const execution = pendingExecutionIntent({ ...due, execution: true }, task && { ...task, status: taskStartStatus(task) });
+    if (due.execution !== execution) {
+      await db.update(scheduledMessages).set({ execution }).where(eq(scheduledMessages.id, due.id));
+      due.execution = execution;
+    }
+    handedOff = true;
     const started = await continueTask(taskId, due.text, {
       // 消息登记的执行器配置与发送者身份优先(与扫描投递同口径);消息没登记归属时
       // 才算到这次启动的发起人头上。
@@ -543,7 +549,7 @@ export async function handDuePendingMessageToRun(
       // 执行意图与输入来源分开表示(第 4 轮审查):这一回合是任务的执行(终态重试
       // 不走续聊语义),但输入是真实用户回复 —— 原文/附件照常进会话记录与后续追问,
       // 不能带 system 标记把它记成一句「〔系统〕继续」。
-      executionTurn: true,
+      executionTurn: execution,
       // 冻结核查:启动来源与回合所有权分开看(第 6 轮审查:队列推进带 turnHeld 后,
       // 这里把 turnHeld 误当「手动运行」,自动交接穿透了分组暂停)。调用方(task-resume)
       // 按来源显式给 freezeGuard;没给的旧调用按原判据降级 —— 手动运行/重试(turnHeld)
@@ -568,6 +574,7 @@ export async function handDuePendingMessageToRun(
     return true;
   } catch (error) {
     if (delivered) return true; // 已进会话之后才炸的是运行事故,不是未送达
+    if (!handedOff && opts.turnHeld) releaseTurn(taskId);
     const detail = error instanceof Error ? error.message : String(error);
     await cancelPendingMessage(due, `续跑失败：${detail}`).catch(() => {});
     return true;

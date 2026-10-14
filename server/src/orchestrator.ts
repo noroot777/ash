@@ -2,6 +2,7 @@ import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
+import { isGoalRecovery } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -29,11 +30,12 @@ import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
 import { recoverFailedTurnStart } from "./turn-start-failure.js";
-import { bindUploadsToTask } from "./uploads.js";
 import { freeReviewReminder } from "./free-workflow.js";
-import { nativeCliCommand, withSkillInvocation } from "./skills.js";
-import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
-import { preflightCliGoalResume, prepareCliInvocation, readCliState } from "./task-cli-state.js";
+import { withSkillInvocation } from "./skills.js";
+import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
+import { prepareContinuationEntry } from "./task-continuation-entry.js";
+import { cliGoalSessionCandidates } from "./task-cli-goal-scopes.js";
+import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
@@ -181,19 +183,8 @@ export async function continueTask(
   // 任务的执行,也不是「新指令」。这一轮必须当旁路回合(下面的 sideTurn),否则「压一下
   // 上下文」既会被打成 failed,也会顺手把已验收的牌子摘掉——旁路回合不拍工作目录快照,
   // 没有任何基线能把摘掉的牌子挂回去,压一次就永久丢掉一次验收。
-  const head = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  // 这一轮带的附件跟着任务走进项目轴(uploads.ts)。放在最前面:团队调度台那条路
-  // 在下面就 return 了,放后面等于团队任务的附件永远挂不上归属。
-  // `actingUserId` 是「谁点的这一轮」—— 后端路径(队列推进、定时投递)不传,那时附件
-  // 早在真人发起的那一步登记过了,这里再走一遍只是补空位。
-  await bindUploadsToTask(opts.attachments, taskId, opts.actingUserId ?? null);
-  const nativeCommand = nativeCliCommand(
-    opts.agent ?? (head?.agentType as AgentType) ?? "claude",
-    userText,
-  );
-  const slash = parseCliCommand(opts.agent ?? (head?.agentType as AgentType) ?? "claude", userText);
-  const goalExecution = isGoalExecution(slash);
-  if (head) await preflightCliGoalResume(head, opts.agent ?? (head.agentType as AgentType) ?? "claude", userText, opts.agent ? opts.executorId ?? null : head.executorId, opts.actingUserId ?? head.ownerUserId);
+  const { head, nativeCommand, slash, goalExecution, options } = await prepareContinuationEntry(taskId, userText, opts);
+  opts = options;
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
   // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的
@@ -240,7 +231,8 @@ export async function continueTask(
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
   const agentType = opts.agent ?? (head?.agentType as AgentType) ?? "claude";
   let handle: RunHandle | undefined;
-  let goalStartFrom: TaskStatus | null = null;
+  const priorStatus = head ? taskStartStatus(head) : null;
+  let goalStartFrom: TaskStatus | null = goalExecution && priorStatus && !["running", "queued"].includes(priorStatus) ? priorStatus : null;
   // 同 runTask：基线降级在解析工作目录那一刻就落了库，说明却写在 spawn 之后，所以这两件
   // 事挂在 try 外面，失败那条路才补得上（见 base-fallback-notice.ts）。
   let baseFallback: Workspace["baseFallback"];
@@ -251,7 +243,8 @@ export async function continueTask(
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
     if (task.mode !== "single") throw new Error("reply is for single tasks");
-    if (goalExecution && !["running", "queued"].includes(task.status)) goalStartFrom = task.status as TaskStatus;
+    const startStatus = taskStartStatus(task);
+    goalStartFrom = goalExecution && !["running", "queued"].includes(startStatus) ? startStatus : null;
 
     const agent = opts.agent ?? (task.agentType as AgentType) ?? "claude";
     // 对话框里 @ 出来的那一步是**显式选择**（智能体 + 执行器 + 模型 + 思考强度），这一回合
@@ -286,11 +279,12 @@ export async function continueTask(
     if (sideTurn && sessionRole === "single") reclaimTurn(taskId, nativeCommand ? "native" : "side");
     // 「这一回合是任务的执行」:system(后端代写的续跑)或 executionTurn(让位交接
     // 把用户回复当启动输入)。只影响续聊判定,输入来源各自另算(见 opts.executionTurn)。
-    const execution = !!opts.system || !!opts.executionTurn;
+    const execution = !!opts.system || !!opts.executionTurn || isGoalRecovery(slash);
     const checkpointFollowUp = !execution && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
-    const followUpFrom = goalExecution && !["done", "failed", "canceled"].includes(task.status)
-      ? null
+    const goalPriorStatus = startStatus;
+    const followUpFrom = goalExecution
+      ? !isGoalRecovery(slash) && !opts.system && ["done", "failed", "canceled"].includes(goalPriorStatus) ? goalPriorStatus : null
       : sideTurn
         ? (task.status === "running" || task.status === "queued" ? null : task.status)
         : !execution && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
@@ -356,7 +350,7 @@ export async function continueTask(
       ? []
       : opts.resumeSessionId
         ? all.filter((s) => s.id === opts.resumeSessionId)
-        : all.filter((s) => s.agentType === agent && s.role === sessionRole);
+        : cliGoalSessionCandidates(task, agent, profileId, runOwner, slash, all.filter((session) => session.agentType === agent && session.role === sessionRole));
     let prev: typeof all[number] | undefined;
     for (const s of candidates) {
       if (await resumableHere(s)) { prev = s; break; }
@@ -692,6 +686,7 @@ export async function continueTask(
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);
+    if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
   // 落到时间线/状态上)。返回 false 的只有两类「一个字没送出去」:被单飞锁挡回,和

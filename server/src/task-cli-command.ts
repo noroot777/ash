@@ -5,12 +5,15 @@ import type { Context } from "hono";
 import { ownerIdOf, actorOf } from "./auth/context.js";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
-import { nativeCommandRun, stopTask, whenTurnIdle } from "./runs.js";
+import { claimTurn, nativeCommandRun, releaseTurn, stopTask, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { preflightCliGoalResume, readCliState, renameCliTask, resolvedCliState, saveCliState } from "./task-cli-state.js";
+import { preflightCliGoalCommand, readCliState, renameCliTask, resolvedCliState, saveCliState } from "./task-cli-state.js";
 import { formatClaudeGoal } from "./executors/claude-goal.js";
 import type { TaskReplyBody } from "./task-reply.js";
 import { enqueueMessage } from "./pending-messages.js";
+import { cliGoalScopeLabel, cliGoalScopeSelector, cliGoalScopes, formatCliGoalScopes, runnableCliGoalScope, selectCliGoalScope } from "./task-cli-goal-scopes.js";
+import { publishTaskUpdated } from "./task-store.js";
+import { advanceQueueFromTask } from "./scheduler.js";
 
 const LIVE_COMMANDS = new Set(["goal", "status", "usage", "mcp", "ps", "stop", "debug-config", "hooks", "apps", "plugins", "rename"]);
 
@@ -21,11 +24,55 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
   if (body.annotationBatchId || body.attachments?.length) throw new Error("原生命令不接受附件或页面批注，请单独发送");
   if (task.mode !== "single" && !(agentType === "claude" && command.name === "compact")) throw new Error("这些原生命令仅支持普通单任务；团队调度台请使用原有派活通道");
   if (isGoalExecution(command) && (task.verifyRound || task.reviewOf)) throw new Error("验证或审查回合不能启动持续目标，请在普通执行任务中使用 /goal");
-  if (body.sendAt) return null;
   const running = task.status === "running" || task.status === "queued";
   const userId = ownerIdOf(actorOf(c));
+  const clear = command.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(command.args);
+  if (body.sendAt && command.name === "goal" && (command.goalScope || command.args === "--scopes")) throw new Error("目标作用域查询与显式选择不支持定时，请直接发送斜杠命令");
+  if (command.name === "goal" && command.args === "--scopes") {
+    const text = await formatCliGoalScopes(task, userId);
+    const recorded = await appendTaskTimeline(task.id, `${command.text}\n${text}`, { agentType });
+    return c.json({ started: false, command: true, text, recorded });
+  }
   if (!running) {
-    await preflightCliGoalResume(task, agentType, command.text, body.agent ? body.executorId ?? null : task.executorId, userId);
+    const executorId = body.agent ? body.executorId ?? null : task.executorId;
+    const target = clear || (command.name === "goal" && command.args === "resume") ? await selectCliGoalScope(task, agentType, executorId, userId, command.goalScope, clear) : null;
+    if (clear) {
+      const scope = target;
+      if (scope && !await runnableCliGoalScope(scope, userId)) {
+        if (body.sendAt) throw new Error(`原执行器已不可用，请直接发送 /goal clear --scope ${scope.selector} 清除保存的目标`);
+        if (!claimTurn(task.id, "native")) throw new Error("当前回合正在启动或收尾，请稍后再清除目标");
+        try {
+          const [fresh] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+          if (!fresh || ["running", "queued"].includes(fresh.status)) throw new Error("任务状态已改变，请稍后再清除目标");
+          const selected = await selectCliGoalScope(fresh, agentType, executorId, userId, scope.selector, true);
+          const state = { ...selected!.state, goal: null, goalHold: false };
+          delete state.goalStart;
+          delete state.goalClearStart;
+          delete state.goalSessionId;
+          await saveCliState(task.id, scope.agentType, state);
+          await publishTaskUpdated(task.id);
+          const [updated] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+          const text = `已保存目标已清除，暂停标记已释放；原执行器不可用，未调用其 CLI。\n作用域：${await cliGoalScopeLabel(scope)}\n任务、历史及其他作用域保持不变。\n${await formatCliGoalScopes(updated!, userId)}`;
+          const recorded = await appendTaskTimeline(task.id, `${text}\n命令：${command.text}`, { agentType: scope.agentType });
+          return c.json({ started: false, command: true, text, recorded });
+        } finally {
+          releaseTurn(task.id);
+          void advanceQueueFromTask(task.id).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
+        }
+      }
+    }
+    const route = await preflightCliGoalCommand(task, agentType, command.text, executorId, userId);
+    if (route) Object.assign(body, route);
+    if (target) body.text = `/goal ${command.args} --scope ${target.selector}`;
+    if (body.sendAt) return null;
+    if (command.name === "goal" && !command.args && cliGoalScopes(task).length) {
+      const state = await resolvedCliState(task, agentType, executorId, userId);
+      if (!state.goal) {
+        const text = `当前没有目标（当前执行器作用域）。使用 /goal --scopes 查看作用域。\n${await formatCliGoalScopes(task, userId)}`;
+        const recorded = await appendTaskTimeline(task.id, `${command.text}\n${text}`, { agentType });
+        return c.json({ started: false, command: true, text, recorded });
+      }
+    }
     if (agentType === "claude" && command.name === "goal" && (!command.args || command.args === "pause")) {
       const state = await resolvedCliState(task, agentType, body.agent ? body.executorId ?? null : task.executorId, userId);
       if (command.args && state.goal) { state.goal.status = "paused"; await saveCliState(task.id, agentType, state); }
@@ -35,6 +82,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     }
     return null;
   }
+  if (body.sendAt) return null;
   if (!LIVE_COMMANDS.has(command.name)) return null;
   if (isGoalExecution(command) && !task.goalTurn) return null;
   const current = nativeCommandRun(task.id);
@@ -47,8 +95,8 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
   if (!current || !session) throw new Error("当前回合正在启动或收尾，请稍后再发送原生命令");
   if (session.agentType !== agentType || (body.executorId && session.executorId !== body.executorId)) throw new Error(`原生命令必须发给当前正在运行的执行器；请${target}再发送${session.agentType === "claude" ? " /goal（查询）、/goal pause 或 /goal clear" : ` ${command.text}`}。`);
   if (session.runOwnerUserId !== userId && (session.runOwnerUserId || userId)) throw new Error("只有当前回合的发起人可以操作其原生执行通道");
+  if (command.goalScope && command.goalScope !== cliGoalScopeSelector(agentType, { profileId: session.executorId, ownerUserId: session.runOwnerUserId })) throw new Error("显式目标作用域不是当前运行的作用域；先暂停当前回合再选择其他目标");
   let text: string;
-  const clear = command.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(command.args);
   if (agentType === "claude") {
     if (command.name !== "goal" || (command.args && command.args !== "pause" && !clear)) throw new Error("当前 Claude 原生通道不支持此命令");
     const state = { ...readCliState(task.cliState, agentType, session.executorId, session.runOwnerUserId), profileId: session.executorId, ownerUserId: session.runOwnerUserId };
@@ -62,7 +110,8 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
       if (clear) whenTurnIdle(task.id, () => {
         void import("./orchestrator.js").then(async ({ continueTask }) => {
           const route = { agent: agentType, executorId: session.executorId, actingUserId: userId };
-          if (!await continueTask(task.id, "/goal clear", route)) await enqueueMessage({ taskId: task.id, text: "/goal clear", ...route, ownerUserId: userId });
+          const text = `/goal clear --scope ${cliGoalScopeSelector(agentType, state)}`;
+          if (!await continueTask(task.id, text, route)) await enqueueMessage({ taskId: task.id, text, ...route, ownerUserId: userId });
         })
           .catch((error) => appendTaskTimeline(task.id, `原生目标清除失败：${String(error)}；请再次 /goal clear`, { agentType }));
       });

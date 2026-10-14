@@ -175,7 +175,7 @@ function makeSeat(taskId: string, prevStatus: string): QueueSeat {
 // 回滚占位,别让任务卡在 queued(真跑起来了 release 是 no-op)。
 export async function seatThenStart(
   taskId: string,
-  start: () => Promise<unknown>,
+  start: (seat: QueueSeat | null) => Promise<unknown>,
 ): Promise<{ ok: true } | { ok: false; blockers: string[]; transient?: boolean }> {
   let claim: QueueSeatClaim;
   try {
@@ -189,7 +189,7 @@ export async function seatThenStart(
   }
   if (!claim.ok) return claim;
   const seat = claim.seat;
-  void start()
+  void start(seat)
     .catch((err) => console.error(`[ash] 任务 ${taskId} 启动异常:`, err))
     .finally(() => { if (seat) void seat.release(); });
   return { ok: true };

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { chromium } from "playwright-core";
-import { readCliState } from "@ash/shared/cli-commands";
+import { hasCliGoalHold, readCliState } from "@ash/shared/cli-commands";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "ash-goal-lifecycle-ui-"));
@@ -29,7 +29,7 @@ await db.insert(projects).values({ id: "goal-ui", name: "目标生命周期验�
 for (const agentType of ["codex", "claude"]) {
   await db.insert(agents).values({ id: `${agentType}-ui`, name: `${agentType}@验证`, type: agentType, isDefault: true, extraArgs: "[]", configOverrides: "{}" });
   await db.insert(groups).values({ id: `${agentType}-group`, projectId: "goal-ui", name: `${agentType} 串行组`, mode: "serial", createdAt: at });
-  for (const [suffix, status, groupId] of [["busy", "backlog", null], ["A", "done", `${agentType}-group`], ["B", "backlog", `${agentType}-group`], ["invited-busy", "paused", null]]) {
+  for (const [suffix, status, groupId] of [["busy", "backlog", null], ["A", "done", `${agentType}-group`], ["B", "backlog", `${agentType}-group`], ["invited-busy", "paused", null], ["recovery-busy", "canceled", `${agentType}-group`], ["blocker-busy", "backlog", `${agentType}-group`]]) {
     await db.insert(tasks).values({
       id: `${agentType}-${suffix}`, projectId: "goal-ui", groupId, title: `${agentType} · ${suffix}`, body: "普通回合测试夹具",
       mode: "single", status, agentType, executorId: `${agentType}-ui`, useWorktree: false, autoTitle: false, createdAt: at, updatedAt: at,
@@ -39,6 +39,10 @@ for (const agentType of ["codex", "claude"]) {
   await db.insert(sessions).values({ id: `${agentType}-A-session`, taskId: `${agentType}-A`, role: "single", agentType, executor: agentType, executorId: `${agentType}-ui`, cliSessionId: `ui-${agentType}-A`, cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
   await db.insert(sessions).values({ id: `${agentType}-invited-session`, taskId: `${agentType}-invited-busy`, role: "single", agentType, executor: agentType, executorId: `${agentType}-ui`, cliSessionId: `ui-${agentType}-invited`, cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
   await saveCliState(`${agentType}-invited-busy`, agentType, { profileId: `${agentType}-ui`, ownerUserId: null, goal: { objective: `${agentType} 已停掉的旧目标`, status: "paused" } }, true);
+  const recoveryId = `${agentType}-recovery-busy`;
+  await db.insert(queueItems).values([{ taskId: recoveryId, queueId: `${agentType}-recovery-queue`, position: 0, createdAt: at }, { taskId: `${agentType}-blocker-busy`, queueId: `${agentType}-recovery-queue`, position: 1, createdAt: at }]);
+  await db.insert(sessions).values({ id: `${recoveryId}-session`, taskId: recoveryId, role: "single", agentType, executor: agentType, executorId: `${agentType}-ui`, cliSessionId: `ui-${recoveryId}`, cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
+  await saveCliState(recoveryId, agentType, { profileId: `${agentType}-ui`, ownerUserId: null, goalSessionId: `ui-${recoveryId}`, goalHold: true, goal: { objective: `${agentType} 已中断的原目标`, status: "paused", tokensUsed: 70, ...(agentType === "codex" ? { tokenBudget: 150 } : {}) } }, true);
 }
 dbClient.close();
 const listener = createServer();
@@ -237,6 +241,52 @@ try {
     await page.getByText(`目标回合已启动：${invitedObjective}`, { exact: true }).waitFor();
     await page.screenshot({ path: join(screenshots, `lifecycle-${agentType}-invited-goal-paused-reload.png`), fullPage: true });
     console.log(`${agentType}: invited ${invitedAgent} objective and routing hints are accurate; following the summon hint pauses the active goal without changing the standing executor or old goal: passed`);
+
+    const recoveryId = `${agentType}-recovery-busy`;
+    const blockerId = `${agentType}-blocker-busy`;
+    await page.goto(`${base}/?project=goal-ui&task=${blockerId}`);
+    const [blockerStarted] = await Promise.all([
+      page.waitForResponse((value) => value.url().endsWith(`/tasks/${blockerId}/run`) && value.request().method() === "POST"),
+      page.getByRole("button", { name: "运行", exact: true }).click(),
+    ]);
+    assert.equal(blockerStarted.status(), 202);
+    await page.getByText(`普通回合已启动：${blockerId}`, { exact: true }).waitFor();
+    await page.goto(`${base}/?project=goal-ui&task=${recoveryId}`);
+    const resumeResponse = await send(recoveryId, "/goal resume");
+    assert.equal(resumeResponse.status(), 202);
+    const queuedRecovery = await resumeResponse.json();
+    assert.equal(queuedRecovery.scheduled, true);
+    assert.equal(queuedRecovery.message.execution, true);
+    assert.equal((await request(`tasks/${recoveryId}`)).status, "canceled");
+    assert.equal((await request(`tasks/${blockerId}`)).status, "running");
+    assert.equal((await invocations()).filter((entry) => entry.taskId === recoveryId).length, 0);
+    await page.reload();
+    await page.locator('[aria-label="待发送消息"]').getByText(queuedRecovery.message.text, { exact: true }).waitFor();
+    await page.getByRole("button", { name: "查看队列 · 2 个任务", exact: true }).click();
+    await page.getByText("running", { exact: true }).first().waitFor();
+    assert.equal(await page.getByText("running", { exact: true }).count(), 1);
+    assert.equal(await page.getByText("canceled", { exact: true }).count(), 1);
+    await page.screenshot({ path: join(screenshots, `lifecycle-${agentType}-recovery-waits-queue.png`), fullPage: true });
+    await writeFile(join(root, `${blockerId}.ordinary-release`), "finish");
+    await waitForTask(blockerId, (task) => task.status === "done");
+    await waitForTask(recoveryId, (task) => task.status === "running");
+    await page.reload();
+    await page.getByText(`目标回合已启动：${agentType} 已中断的原目标`, { exact: false }).last().waitFor();
+    const resumedInvocations = (await invocations()).filter((entry) => entry.taskId === recoveryId);
+    assert.equal(resumedInvocations.length, 1);
+    const invocation = resumedInvocations[0];
+    assert.equal(invocation.cliCommand.args, "resume");
+    assert.equal(invocation.goal.objective, `${agentType} 已中断的原目标`);
+    assert.equal(invocation.goal.tokensUsed, 70);
+    if (agentType === "codex") assert.equal(invocation.goal.tokenBudget, 150);
+    assert.equal(readCliState(taskCliState(recoveryId), agentType).goalSessionId, `ui-${recoveryId}`);
+    assert.equal((await request(`tasks/${recoveryId}/scheduled-messages`)).length, 0);
+    assert.deepEqual((await request(`queues/${agentType}-recovery-queue`)).items.map((item) => item.status), ["running", "done"]);
+    await page.screenshot({ path: join(screenshots, `lifecycle-${agentType}-recovery-after-release.png`), fullPage: true });
+    await writeFile(join(root, `${recoveryId}.goal-release`), "finish");
+    await waitForTask(recoveryId, (task) => task.status === "paused");
+    assert.equal(hasCliGoalHold(taskCliState(recoveryId)), true);
+    console.log(`${agentType}: terminal resume waits for its running sibling, survives reload, restores original usage/session and retains unfinished-goal protection: passed`);
   }
   assert.deepEqual(pageErrors, []);
   console.log(`screenshots: ${screenshots}`);

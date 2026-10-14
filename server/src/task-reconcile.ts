@@ -38,6 +38,10 @@ export async function reconcileInterrupted(): Promise<void> {
   const others = orphaned.filter((t) => t.mode !== "team");
   for (const t of others) {
     let back = (t.followUpFrom as TaskStatus | null) ?? (t.goalTurn ? "paused" : "failed");
+    if (t.nativeTurn && !t.goalTurn) {
+      const [session] = await db.select().from(sessions).where(eq(sessions.taskId, t.id)).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt));
+      await interruptCliGoal(t, session?.agentType ?? t.agentType ?? "claude");
+    }
     if (t.goalTurn) {
       const [session] = await db.select().from(sessions).where(eq(sessions.taskId, t.id)).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt));
       const held = await interruptCliGoal(t, session?.agentType ?? t.agentType ?? "claude");

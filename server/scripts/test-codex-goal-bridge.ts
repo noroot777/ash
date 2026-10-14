@@ -156,6 +156,20 @@ try {
   assert.equal(inspected.events.some((event) => event.kind === "context"), false);
   assert.equal(inspected.events.some((event) => event.kind === "error"), false);
   assert.equal(inspected.events.some((event) => event.kind === "session"), false);
+  const snapshot: CliGoal = { objective: "保存的旧目标", status: "budgetLimited", tokenBudget: 150, tokensUsed: 150 };
+  for (const nativeGoal of [null, { ...snapshot, objective: "其他目标", status: "active" as const }]) for (const text of ["/goal", "/goal pause"]) {
+    const observing = new GoalServer();
+    observing.goal = nativeGoal;
+    const observed = run(observing, text, { profileId: "old-profile", ownerUserId: null, goal: snapshot, goalHold: true });
+    await observed.consumed;
+    assert.equal(observed.events.some((event) => event.kind === "error"), false);
+    assert.equal(observed.events.find((event) => event.kind === "done")?.exitStatus, 0);
+    assert.match(observed.events.filter((event) => event.kind === "text").map((event) => event.text).join(""), /保存的旧目标[\s\S]*150 \/ 150[\s\S]*原生会话里/);
+    assert.deepEqual(observed.handle.goal?.(), snapshot);
+    assert.equal(observed.handle.goalStarted?.(), false);
+    assert.equal(observing.requests.some((request) => ["thread/goal/set", "thread/goal/clear", "turn/start", "turn/interrupt"].includes(request.method)), false);
+    assert.deepEqual(observing.goal, nativeGoal);
+  }
   for (const name of ["new", "clear"]) {
     const resetting = new GoalServer();
     const reset = openCodexAppServer({ bin: "codex", args: [], cwd: root, prompt: `/${name}`, sessionId: "source", cliCommand: validateCliCommand("codex", `/${name}`)!, startProcess: () => resetting as unknown as ChildProcess });

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import type { AgentEvent } from "@ash/shared";
-import { hasCliGoalHold, validateCliCommand } from "@ash/shared/cli-commands";
+import { hasCliGoalHold, validateCliCommand, type CliSessionState } from "@ash/shared/cli-commands";
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "ash-goal-live-")));
 process.env.ASH_DB = join(root, "ash.db");
@@ -62,6 +62,36 @@ try {
   console.log(`real Codex /goal completed ${count} locally mocked turns and stopped at its native token budget`);
   let sessionId = events.find((event) => event.kind === "session")?.cliSessionId;
   assert.ok(sessionId);
+  const goalThreadId = sessionId;
+  const nativeGoal = handle.goal?.();
+  const snapshot = { ...nativeGoal!, objective: "ash 保存的另一个目标", status: "paused" as const };
+  async function inspectGoal(text: string, cliState: CliSessionState) {
+    const modelCalls = count;
+    const inspected = executor.runSteerable({ cwd: workspace, sessionId: goalThreadId, prompt: text, cliCommand: validateCliCommand("codex", text)!, cliState, env: { CODEX_HOME: home } });
+    const observed: AgentEvent[] = [];
+    const timeout = setTimeout(() => inspected.kill(), 15_000);
+    try { for await (const event of inspected.events) observed.push(event); }
+    finally { clearTimeout(timeout); await inspected.cleanup?.(); }
+    assert.equal(observed.some((event) => event.kind === "error"), false, JSON.stringify(observed));
+    assert.equal(observed.find((event) => event.kind === "done")?.exitStatus, 0);
+    assert.equal(inspected.goalStarted?.(), false);
+    assert.equal(count, modelCalls, "query/pause controls must not call the local model");
+    return { goal: inspected.goal?.(), text: observed.filter((event) => event.kind === "text").map((event) => event.text).join("") };
+  }
+  for (const text of ["/goal", "/goal pause"]) {
+    const observed = await inspectGoal(text, { profileId: "snapshot-profile", ownerUserId: null, goal: snapshot, goalHold: true });
+    assert.deepEqual(observed.goal, snapshot);
+    assert.match(observed.text, /ash 保存的另一个目标[\s\S]*原生会话里的目标与保存快照不一致/);
+  }
+  const noSnapshot = await inspectGoal("/goal pause", { profileId: "empty-scope", ownerUserId: null });
+  assert.equal(noSnapshot.goal, null);
+  assert.match(noSnapshot.text, /当前没有目标[\s\S]*原生会话属于其他目标/);
+  const preservedGoal = await inspectGoal("/goal", {});
+  assert.equal(preservedGoal.goal?.objective, nativeGoal?.objective);
+  assert.equal(preservedGoal.goal?.tokenBudget, nativeGoal?.tokenBudget);
+  assert.equal(preservedGoal.goal?.tokensUsed, nativeGoal?.tokensUsed);
+  assert.equal(preservedGoal.goal?.status, nativeGoal?.status);
+  console.log("real Codex mismatched/empty-scope query and pause return truthful snapshots without model calls or native goal/budget/usage mutation: passed");
   for (const invocation of [{ prompt: "普通测试回合", plan: false }, { prompt: "计划状态下的测试回合", plan: true }, { prompt: "/plan 分析测试夹具", plan: true }]) {
     const before = reasoningEfforts.length;
     const run = executor.runSteerable({ cwd: workspace, prompt: invocation.prompt, cliCommand: validateCliCommand("codex", invocation.prompt) ?? undefined, cliState: { plan: invocation.plan }, sessionId, env: { CODEX_HOME: home } });
@@ -159,12 +189,20 @@ try {
   assert.equal(await continueTask("live-task", "换回另一个 profile 讨论", { agent: "codex", executorId: "first-profile" }), true);
   assert.deepEqual(readCliState((await task()).cliState, "codex", "second-profile", null), savedGoal);
   assert.equal(hasCliGoalHold((await task()).cliState), true);
-  assert.equal(await continueTask("live-task", "/goal resume", { agent: "codex", executorId: "second-profile" }), true);
+  assert.equal(await continueTask("live-task", "/goal resume", { agent: "codex", executorId: "first-profile" }), true);
   assert.equal(readCliState((await task()).cliState, "codex", "second-profile", null).goal?.objective, savedGoal.goal?.objective);
   assert.equal(readCliState((await task()).cliState, "codex", "second-profile", null).goal?.tokenBudget, 150);
   assert.ok(readCliState((await task()).cliState, "codex", "second-profile", null).goal!.tokensUsed! >= savedGoal.goal!.tokensUsed!);
   assert.equal((await task()).status, "paused");
-  console.log("real Codex cross-profile reply/review preserves budget-limited goal and resumes its own scope: passed");
+  await db.update(agents).set({ isDefault: false }).where(eq(agents.id, "second-profile"));
+  await db.update(agents).set({ isDefault: true }).where(eq(agents.id, "first-profile"));
+  assert.equal(await continueTask("live-task", "/goal resume"), true);
+  assert.equal(readCliState((await task()).cliState, "codex", "second-profile", null).goalSessionId, savedGoal.goalSessionId);
+  assert.equal(readCliState((await task()).cliState, "codex", "second-profile", null).goal?.tokenBudget, 150);
+  assert.equal((await task()).executorId, null);
+  await db.update(agents).set({ isDefault: false }).where(eq(agents.id, "first-profile"));
+  await db.update(agents).set({ isDefault: true }).where(eq(agents.id, "second-profile"));
+  console.log("real Codex default/explicit profile drift recovers the original thread and budget without changing standing configuration: passed");
   await db.insert(tasks).values({ id: "terminal-goal-task", projectId: "live-project", title: "terminal goal", body: "已完成任务的目标续聊", mode: "single", agentType: "codex", status: "done", autoTitle: false, useWorktree: false, createdAt: at, updatedAt: at });
   const beforeTerminalGoal = count;
   assert.equal(await continueTask("terminal-goal-task", "/goal 后续覆盖率目标 --budget 150"), true);

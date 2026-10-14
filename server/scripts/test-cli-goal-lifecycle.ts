@@ -125,11 +125,12 @@ try {
     await create(resumedId, agentType);
     await saveCliState(resumedId, agentType, { profileId: `${agentType}-fixture`, ownerUserId: null, goalHold: false, goal: { objective: "恢复终态续聊目标", status: "paused", ...(agentType === "codex" ? { tokenBudget: 150, tokensUsed: 70 } : {}) } });
     assert.equal(await continueTask(resumedId, "/goal resume"), true);
-    assert.equal((await row(resumedId)).status, "done");
-    assert.equal(hasCliGoalHold((await row(resumedId)).cliState), false);
+    assert.equal((await row(resumedId)).status, "paused");
+    assert.equal(hasCliGoalHold((await row(resumedId)).cliState), true);
+    assert.equal((await row(resumedId)).followUpFrom, null);
     assert.equal(readCliState((await row(resumedId)).cliState, agentType).goal?.objective, "恢复终态续聊目标");
     if (agentType === "codex") assert.equal(invocations.get(resumedId)?.cliState?.goal?.tokensUsed, 70);
-    console.log(`${agentType}: resuming a terminal follow-up goal preserves its scope and prior usage without reclaiming a queue hold: passed`);
+    console.log(`${agentType}: resuming a terminal goal is task recovery and preserves its scope, usage and scheduler hold: passed`);
 
     const pausedId = `${agentType}-paused-execution`;
     await create(pausedId, agentType, { status: "paused" });
