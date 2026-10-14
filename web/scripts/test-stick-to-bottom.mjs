@@ -3,10 +3,10 @@
 // 两个判据各管一头：
 // - `stickStateAfterScroll`：这一次滚动之后，接下来还跟不跟。
 // - `shouldStickToBottom`：这一次机会要不要真的动 scrollTop。
-// - `tailKeyOf`：「末尾多了要看的东西」这个信号怎么算 —— 由拿着会话数据的人算，
+// - `contentVersion`：「多出要看的东西了」这个信号怎么算 —— 由拿着会话数据的人算，
 //   不让贴底逻辑自己去 DOM 上猜（猜过一版，复制按钮闪一下就把人拽到底了）。
 import assert from "node:assert/strict";
-import { shouldStickToBottom, stickStateAfterScroll, tailKeyOf } from "../src/lib/useStickToBottom.ts";
+import { contentVersion, shouldStickToBottom, stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
 
 // 用户从底部按住滚动条向上拖时，pointerdown 会建立 detaching user intent。
 // 随后的 scroll 必须解除贴底；内容 resize/mutation 只能在 stuck=true 时补滚，
@@ -52,7 +52,7 @@ assert.equal(stick({ tailAppended: false, distance: 79 }), false);
    界面反馈(复制按钮变「已复制」、账目数字刷新、图标换一张)不碰这三样,
    所以读到一半的人不会被拽到底 —— 这正是审查 F2 复现的那一类。 */
 const msg = (id, body, status = "ok") => ({ id, body, status });
-const chatKey = (list) => tailKeyOf(list, (m) => `${m.id}:${m.body.length}:${m.status}`);
+const chatKey = (list) => contentVersion(list, (m) => m.body.length, (m) => `${m.id}:${m.status}`);
 const base = [msg("m1", "一"), msg("m2", "二")];
 // 同一批消息、同样的正文 —— 不管界面怎么闪,指纹必须稳。
 assert.equal(chatKey(base), chatKey([msg("m1", "一"), msg("m2", "二")]));
@@ -69,5 +69,14 @@ assert.notEqual(chatKey(base), chatKey(rolled));
 // 空列表不炸,且与「只有一条」区分得开。
 assert.equal(chatKey([]), chatKey([]));
 assert.notEqual(chatKey([]), chatKey([msg("m1", "")]));
+/* 新内容不一定在最后一行:正在飞的那一轮常被末尾的旁注挡在后面,新文字追加回**前面**
+   那条气泡。最后一条一个字没动、条数也没变 —— 只看最后一行就会漏掉(审查第 3 轮 F1)。 */
+const aside = msg("aside", "审查已预约", "note");
+const behind = [msg("m1", "一"), msg("m2", "二"), aside];
+assert.notEqual(chatKey(behind), chatKey([msg("m1", "一"), msg("m2", "二续"), aside]));
+// 连最后一条带旁注一起没动的「界面闪一下」,仍然必须稳。
+assert.equal(chatKey(behind), chatKey([msg("m1", "一"), msg("m2", "二"), aside]));
+// 最后一条收口(status 变)也要推进 —— 它换的是身份不是长度。
+assert.notEqual(chatKey([msg("m1", "一")]), chatKey([msg("m1", "一", "running")]));
 
 console.log("贴底判据回归验证通过");

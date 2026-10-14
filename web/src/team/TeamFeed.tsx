@@ -5,7 +5,7 @@ import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display"
 import type { Batch } from "@ash/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
-import { tailKeyOf } from "../lib/useStickToBottom.ts";
+import { contentVersion } from "../lib/useStickToBottom.ts";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
@@ -168,12 +168,15 @@ function BatchCard({
   );
 }
 
-/* 团队这条流里混着两种行:会话条目和派活卡片。两种都算「末尾多了要看的东西」,
-   所以指纹取 row.key 再加上会话正文的长度(派活卡片没有正文,只认它的 key)。 */
-const teamTailKey = (rows: readonly TeamFeedRow[]) => tailKeyOf(rows, (row) =>
-  row.kind === "conv"
-    ? `${row.key}:${row.item.kind === "agent" ? row.item.markdown.length : row.item.text.length}`
-    : row.key);
+/* 团队这条流里混着两种行:会话条目和派活卡片。两种都算「多出要看的东西」,所以规模
+   取全部会话正文求和(派活卡片没有正文,只靠条数和身份推动),身份取最后一行的 key。
+   求和而不是只看最后一行:派活卡片常年压在末尾,前面那条执行者回复还在长。 */
+const teamTailKey = (rows: readonly TeamFeedRow[]) => contentVersion(
+  rows,
+  (row) => row.kind !== "conv" ? 0
+    : row.item.kind === "agent" ? row.item.markdown.length + row.item.segments.length : row.item.text.length,
+  (row) => row.key,
+);
 
 export function TeamFeed({
   task,

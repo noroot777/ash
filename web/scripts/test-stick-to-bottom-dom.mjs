@@ -98,7 +98,24 @@ try {
   assert.equal(afterRoll.height, beforeRoll.height, "夹具假设有误：轮换改变了内容高度");
   assert.equal(afterRoll.distance, 0, "等高轮换时新回复被漏在屏幕下面");
 
-  // ⑥ 人往上读历史：新消息一律不许打扰。
+  /* ⑥ 新内容不一定在最后一行：末尾压着一条旁注（「审查已预约」那类），正在飞的那一轮
+     在它**前面**，新文字被追加回前面那条气泡。最后一行一个字没动、总高也没变，但屏幕
+     上确实多了要看的东西 —— 必须跟（审查第 3 轮 F1）。 */
+  await press("pin-aside");
+  const beforeBehind = await parkByWheel(40);
+  await press("stream-behind-aside");
+  const afterBehind = await metrics();
+  assert.equal(afterBehind.height, beforeBehind.height, "夹具假设有误：非末条续写改变了内容高度");
+  assert.equal(afterBehind.distance, 0, "被旁注挡在后面的回复在长，视口却没跟");
+
+  // ⑦ 旁注还压在末尾时，复制反馈仍然不许动位置（别为了修 ⑥ 把 F2 放回来）。
+  const beforeAsideCopy = await parkByWheel(40);
+  await press("copy-feedback");
+  assert.equal((await metrics()).top, beforeAsideCopy.top, "末尾有旁注时，复制反馈又把人拽走了");
+  await press("copy-feedback");
+  assert.equal((await metrics()).top, beforeAsideCopy.top, "末尾有旁注时，反馈恢复又把人拽走了");
+
+  // ⑧ 人往上读历史：新消息一律不许打扰。
   await feed.hover();
   for (let index = 0; index < 6; index++) await page.mouse.wheel(0, -120);
   await flush();
@@ -109,7 +126,7 @@ try {
   await press("copy-feedback");
   assert.equal((await metrics()).top, reading.top, "读历史时被复制反馈拽走");
 
-  // ⑦ 显式「回到底部」之后，跟随恢复。
+  // ⑨ 显式「回到底部」之后，跟随恢复。
   await press("resume");
   await feed.evaluate((element) => element.scrollTo({ top: element.scrollHeight, behavior: "auto" }));
   await flush();

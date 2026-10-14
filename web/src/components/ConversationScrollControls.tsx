@@ -12,7 +12,7 @@ export function ConversationScrollControls({
 }: {
   scrollRef: RefObject<HTMLElement | null>;
   resetKey: ResetKey;
-  /** 会话尾部指纹(`tailKeyOf`),决定「来了新内容要不要跟过去」。 */
+  /** 会话内容版本(`contentVersion`),决定「多出要看的东西了要不要跟过去」。 */
   tailKey: string | number;
 }) {
   const { noteUserScrollIntent, resume } = useStickToBottom(scrollRef, resetKey, tailKey);

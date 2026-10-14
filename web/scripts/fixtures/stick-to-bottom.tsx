@@ -11,6 +11,10 @@ import { useStickToBottom } from "../../src/lib/useStickToBottom.ts";
 
 type Message = { id: string; body: string; status: string };
 
+/* 末尾那条旁注(「审查已预约」那类)不是回复,它只是压在最后。正在飞的那一轮在它**前面**,
+   新文字由会话合并追加回前面那条气泡 —— 夹具要还原的就是这个形状。 */
+const ASIDE: Message = { id: "aside", body: "审查已预约", status: "note" };
+
 const seed = (count: number): Message[] => Array.from({ length: count }, (_, index) => ({
   id: `m${index + 1}`,
   body: `第 ${index + 1} 条消息`,
@@ -62,6 +66,22 @@ function Feed() {
       { ...list.at(-1)!, body: `${list.at(-1)!.body}续` },
     ])}>
       最后一条续写
+    </button>
+    {/* 末尾压一条旁注,然后给**它前面**那条回复追加文字:屏幕上确实多了东西,
+        但最后一行一个字没动,总高也可以不变(同一行里接着写)。 */}
+    <button type="button" data-testid="pin-aside" onClick={() => setMessages((list) => (
+      list.at(-1)?.id === ASIDE.id ? list : [...list, ASIDE]
+    ))}>
+      末尾压一条旁注
+    </button>
+    <button type="button" data-testid="stream-behind-aside" onClick={() => setMessages((list) => {
+      const target = list.findLastIndex((message) => message.id !== ASIDE.id);
+      if (target < 0) return list;
+      const next = [...list];
+      next[target] = { ...next[target]!, body: `${next[target]!.body}续` };
+      return next;
+    })}>
+      给旁注前面那条续写
     </button>
     <button type="button" data-testid="resume" onClick={() => resume()}>恢复跟随</button>
   </div>;

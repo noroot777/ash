@@ -24,16 +24,31 @@ const isNearBottom = (element: HTMLElement, threshold: number) =>
 const maxScrollTop = (element: HTMLElement) =>
   Math.max(0, element.scrollHeight - element.clientHeight);
 
-/* 会话尾部的指纹:一共几条 + 最后一条是谁 + 它的正文长到哪儿了。三者任一变化才算
-   「末尾多了要看的东西」。
+/* 这条会话的内容版本:屏幕上多没多出要看的东西。三个分量各挡一类,缺一类就漏:
+
+   - `items.length` —— 来了新条目。
+   - 最后一条的身份 —— 最近 N 条轮换(群聊/侧聊/助手只留 500 条)时,追加一条的同时
+     最老那条被挤掉,条数和总长都可能纹丝不动,只有最后一条换了人。
+   - **全部**正文的总规模 —— 新文字不一定落在最后一行。真实的会话合并会跨过末尾的
+     旁注(「审查已预约」那类),把新文字追加回**前面**那条还没结束的回复
+     (conversationLiveTurns.ts 的 appendAgentText);只盯最后一行,这段正文长出屏幕
+     也没人跟。
 
    这个数必须由**拿着会话数据的人**算,不能让贴底逻辑自己去 DOM 上猜 —— 猜过一版:
    把「最后一屏内出现的文字/节点变化」当成新回复。可是复制按钮点一下变「已复制」、
    1600ms 后再变回来,账目数字刷新,图标换一张,全都是最后一屏里不改变高度的 DOM 变化,
    于是读到一半的人被一次次拽到底。几何位置证明不了语义。 */
-export function tailKeyOf<T>(items: readonly T[], mark: (item: T) => string | number): string {
+export function contentVersion<T>(
+  items: readonly T[],
+  /** 这一条的正文规模。只要它在长,就算「多出要看的东西」,不管它排在第几。 */
+  size: (item: T) => number,
+  /** 这一条是谁。只取最后一条,用来认出「条数没变但整体往前挪了一格」。 */
+  identity: (item: T) => string,
+): string {
+  let total = 0;
+  for (const item of items) total += size(item);
   const last = items.at(-1);
-  return last === undefined ? `${items.length}` : `${items.length}:${mark(last)}`;
+  return `${items.length}:${last === undefined ? "" : identity(last)}:${total}`;
 }
 
 const cancelFrameRef = (ref: { current: number }) => {
@@ -112,7 +127,7 @@ export function shouldStickToBottom({
 export function useStickToBottom(
   scrollRef: RefObject<HTMLElement | null>,
   resetKey: string | number | null | undefined,
-  /** 会话尾部指纹,见 `tailKeyOf`。变了才算「末尾多了要看的东西」。必填:七处消费
+  /** 会话内容版本,见 `contentVersion`。变了才算「多出要看的东西」。必填:七处消费
       表面漏传哪一个都该当场编译不过,而不是悄悄退化成不跟随。 */
   tailKey: string | number,
   threshold = STICK_TO_BOTTOM_THRESHOLD,
