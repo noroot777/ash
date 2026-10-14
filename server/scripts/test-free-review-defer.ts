@@ -179,6 +179,14 @@ try {
   assert.ok(derived.body.includes(freeReviewEvidenceDir("f-defer", plain.runId, 1)), "body 里要带证据目录");
   assert.ok(derived.body.includes("第 2、3 条成立"), "body 里要带执行者逐条给出的越界依据");
   assert.ok(derived.body.includes("f-defer"), "body 里要指明原任务");
+  // body **不许替那几条意见归因**。它原先写死成「多半是那一轮修复自己引入的衍生问题」，
+  // 可越界有三种形态（内容无关 / 基线既有 / 衍生问题），前两种跟「修复引入」毫无关系 ——
+  // 2026-10-14 真实转出的那一条就是「基线上本来就有、落在两个与任务无关的脚本里」，
+  // 身上却挂着一句错的因果。真正的理由在执行者逐条写的那段里（上一条断言钉着）。
+  for (const guess of ["衍生问题", "多半是", "改→引入→再被打回"]) {
+    assert.ok(!derived.body.includes(guess),
+      `body 不许写死越界成因「${guess}」：三种形态里有两种跟「修复引入」无关，写死一种就是给接手的人一句错的因果`);
+  }
   // 裁定要点必须跟着搬进新任务：它是**用户**写的话（多半是「转走，但按这个方案做」），
   // 留在原任务上的话，真正干这几条活的人一个字都看不到。
   assert.ok(derived.body.includes("这几条连同上一轮那个 helper 一起重写，别只补空值检查。"),

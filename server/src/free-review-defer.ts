@@ -54,9 +54,12 @@ function bodyOf(
   const report = freeReviewReportPath(source.id, run.id, round.round);
   const dir = freeReviewEvidenceDir(source.id, run.id, round.round);
   return `承接任务「${source.title}」第 ${round.round} 轮审查里的几条意见。\n\n` +
-    `这些意见**审查者说得对、依据也可复现**，只是它们超出了原任务的边界（多半是那一轮\n` +
-    `修复自己引入的衍生问题），所以用户裁定把它们从原任务挪出来单独做，而不是让原任务\n` +
-    `继续「改→引入→再被打回」。原任务不需要你动，也不要重新打开它。\n\n` +
+    // 不在这里替那几条意见归因（原先写死成「多半是那一轮修复自己引入的衍生问题」）：越界
+    // 有三种形态，无关模块和基线既有这两种跟「修复引入」毫无关系，写死一种会让接手的人
+    // 拿着一句错的因果去读报告。真正的理由在下面执行者逐条写的那一段里，照它读就够了。
+    `这些意见**审查者说得对、依据也可复现**，只是它们偏离了原任务要做的那件事，所以用户\n` +
+    `裁定把它们从原任务挪出来单独做，而不是让原任务一路改到自己的边界之外。\n` +
+    `原任务不需要你动，也不要重新打开它。\n\n` +
     `原任务：${source.id}\n审查链：${run.id} · 第 ${round.round} 轮（审查者：${run.reviewerName}）\n` +
     `审查报告：[report.md](${report})\n证据目录：${dir}\n` +
     (round.reviewedCommit ? `被审查的那一版：${round.reviewedCommit}\n` : "") +

@@ -36,7 +36,7 @@ try {
     reconcileFreeReviewDebates, settleDebateTurn, sideOfSeq, startFreeReviewDebate,
     submitDebateStatement, totalSegments,
   } = await import("../src/free-review-debate.js");
-  const { freeManualRepairPrompt } = await import("../src/free-review-prompts.js");
+  const { freeManualRepairPrompt, freeRepairPrompt } = await import("../src/free-review-prompts.js");
   const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
 
   await ensureSchema();
@@ -334,6 +334,39 @@ try {
   const bare = await freeManualRepairPrompt("d-closing", closingRun, { disputeUpheld: true });
   assert.ok(!bare.includes("辩论收尾发言"), "没辩过就不该出现收尾那一节");
   assert.ok(!bare.includes("裁定时写给你的要点"), "没写要点就不该出现要点那一节");
+
+  // ── 转出那条出路的三种形态：这里**必须**按措辞断言，不是按状态 ──────────────
+  //
+  // 这条出路的判据是用户 2026-09-24 的原话「如果偏离了主任务的内容的话就开启一个新的
+  // 任务」，可它最初只落了「衍生问题」一种形态（建任务那一步被换成了当时手里唯一的
+  // 实例），之后一路忠实复制，直到 2026-10-14 撞上真实案例：执行者面前是一条「基线上
+  // 就有、落在两个与任务无关的脚本里」的意见，`deferReason` 的格子要它填「是哪一轮的
+  // 哪次改动引入的」，它填不进去，于是照改。所以三种形态逐一钉住——少掉任何一种，
+  // 执行者就会把「不是我上一轮改出来的」读成「属于本任务」，而这一步不会有任何运行期
+  // 行为报错：链照跑、报告照落盘，只是那一型意见永远转不出去。
+  for (const [source, text] of [
+    ["自动修复交接", await freeRepairPrompt("d-closing", closingRun)],
+    ["轮数用尽后的手动修复交接", await freeManualRepairPrompt("d-closing", closingRun)],
+  ] as const) {
+    for (const shape of ["内容无关", "基线既有", "衍生问题"]) {
+      assert.ok(text.includes(shape), `${source} 必须列出越界形态「${shape}」——缺一种它就只认剩下的`);
+    }
+    assert.ok(
+      text.includes("**「不是我上一轮改出来的」不等于「属于本任务」**"),
+      `${source} 必须堵掉那句反向误读：前两种形态恰恰都不是执行者改出来的`,
+    );
+    assert.ok(
+      text.includes("按实际那一种写"),
+      `${source} 的 deferReason 字段说明不许只给一种填法——写死一种等于把另两种挡在门外`,
+    );
+    assert.ok(
+      text.includes("也**不自动等于界内**"),
+      `${source} 必须写明「这是类问题」不自动等于界内，否则类问题口径会把这条出路吃掉`,
+    );
+  }
+  // 用户已经裁定「维持审查意见、接着改」那一趟不给这条出路——这是现有语义，顺带钉住，
+  // 免得上面那圈断言被人改成「所有修复提示都得带三种形态」。
+  assert.ok(!bare.includes("内容无关"), "裁定维持原意见后不再提供转出口径");
 
   console.log("free review dispute ok");} catch (error) {
   failure = error;
