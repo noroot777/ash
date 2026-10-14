@@ -68,8 +68,15 @@ type Found = {
   call: MonitorCall;
   /** 事件里自报的会话身份，优先于 `sessions` 表那一列（旧行那一列可能是空的）。 */
   cliSessionId: string | null;
-  /** 真实起始时刻：`task_started` 之前最近一条带 timestamp 的事件。拿不到就 null。 */
+  /**
+   * 起始时刻。两种来源，**可信度不同**：
+   * - `event`：`task_started` 之前最近一条自报 timestamp 的事件（秒级误差），可以拿来算期限。
+   * - `file`：退回 run 文件名上的时刻。那是**这一轮进程开始**的时刻，不是 Monitor 开始的
+   *   时刻——agent 可能先干了 20 分钟活才挂上一个 10 分钟的哨兵。拿它当锚点算出来的「盯到
+   *   X」会早得离谱，所以这一档只用于显示，不参与期限计算。
+   */
   startedAt: string | null;
+  startedAtFrom: "event" | "file" | null;
   /** 终态附近最近一条带 timestamp 的事件。 */
   endedAt: string | null;
   lifetime: MonitorLifetime;
@@ -141,7 +148,8 @@ async function scanStream(
   // 时间锚点：`system` 事件不带 timestamp，但它前后几行的 assistant/user 带（实测 task_started
   // 与最近一条的行距是 5~20 行，秒级误差）。拿它当近似，总比拿「回填运行的这一刻」好——
   // 那可能是几天以后。
-  let seenAt: string | null = fileStartedAt;
+  // 真锚点只认事件自报的 timestamp。文件名那个时刻只是兜底显示值，见 Found.startedAtFrom。
+  let seenAt: string | null = null;
 
   const stream = createReadStream(path, { encoding: "utf8", end: MAX_SCAN_BYTES });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
@@ -193,7 +201,8 @@ async function scanStream(
         scan.found.set(nativeId, {
           nativeId, call,
           cliSessionId: evSession ?? expectSessionId,
-          startedAt: seenAt,
+          startedAt: seenAt ?? fileStartedAt,
+          startedAtFrom: seenAt ? "event" : fileStartedAt ? "file" : null,
           endedAt: null,
           lifetime: "unknown", expiresMs: null,
           status: null, endedReason: null,
@@ -316,8 +325,10 @@ async function commitFound(taskId: string, items: Found[]): Promise<number> {
     }
     const startedAt = item.startedAt || now();
     // **真起始时刻不明就不编到期时刻。** 期限是相对起点算的，起点本身是猜的时候，那句
-    // 「盯到 X」没有事实基础——降一档说「不知道」。
-    const trustStart = !!item.startedAt;
+    // 「盯到 X」没有事实基础——降一档说「不知道」。只有事件自报的 timestamp 算真锚点：
+    // 文件名上那个时刻是整轮进程的开始，Monitor 可能在它之后很久才挂上（报告原话：
+    // 「不能用 run 时间制造精确到期时刻」）。
+    const trustStart = item.startedAtFrom === "event";
     const lifetime: MonitorLifetime = item.lifetime === "bounded" && !trustStart ? "unknown" : item.lifetime;
     const rowId = id();
     try {
@@ -361,7 +372,9 @@ async function insertFound(
       ? new Date(Date.parse(startedAt) + item.expiresMs).toISOString()
       : startedAt,
     // 还在跑的没有结束时刻；结束了的用通知附近那条事件的时刻，不用「回填这一刻」。
-    endedAt: status === "running" ? null : item.endedAt ?? startedAt,
+    // 还在跑的没有结束时刻；结束了的用通知附近那条事件的时刻。连那个都没有就留空——
+    // 写 `now()`（回填这一刻，可能是几天后）等于把读取时间冒充成来源完成时间。
+    endedAt: status === "running" ? null : item.endedAt,
     endedReason,
     ownerUserId: null,
     kind: "claude",
@@ -394,13 +407,19 @@ async function mergeInto(
   if (!prior.cliSessionId && item.cliSessionId) patch.cliSessionId = item.cliSessionId;
   if (item.status && prior.status !== status && monitorStatusCorrectable(prior.status)) {
     patch.status = status;
-    patch.endedAt = item.endedAt ?? now();
+    patch.endedAt = item.endedAt; // 没有来源时刻就留空，别拿「回填这一刻」冒充
     patch.endedReason = endedReason;
   }
   if (prior.sourceLifetime === "unknown" && item.lifetime !== "unknown") {
-    patch.sourceLifetime = item.lifetime;
-    if (item.lifetime === "bounded" && item.expiresMs !== null) {
-      patch.expiresAt = new Date(Date.parse(prior.startedAt) + item.expiresMs).toISOString();
+    // 有限期要落到期时刻，前提是起点可信。已有行的 startedAt 可能本身就是兜底值，所以
+    // 优先用这次从事件里读到的真锚点；两边都不可信时只升级到 persistent/不动期限。
+    const anchor = item.startedAtFrom === "event" ? item.startedAt : null;
+    if (item.lifetime === "bounded" && item.expiresMs !== null && anchor) {
+      patch.sourceLifetime = "bounded";
+      patch.startedAt = anchor;
+      patch.expiresAt = new Date(Date.parse(anchor) + item.expiresMs).toISOString();
+    } else if (item.lifetime === "persistent") {
+      patch.sourceLifetime = "persistent";
     }
   }
   if (!Object.keys(patch).length) return false;

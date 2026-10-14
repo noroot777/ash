@@ -62,13 +62,13 @@ async function main(): Promise<void> {
   // 第 1 个文件：一个 Monitor（带回执）+ 一个普通后台 Bash。
   writeStream("20261014T010000000Z", [
     { type: "system", subtype: "init", session_id: CLI },
-    { type: "assistant", message: { model: "m", content: [
+    { type: "assistant", timestamp: "2026-10-14T01:00:05.000Z", message: { model: "m", content: [
       { type: "tool_use", name: "Monitor", id: "tu1", input: { command: "until grep -q OK /tmp/a; do sleep 5; done", description: "第一轮的哨兵", timeout_ms: 900_000 } },
       { type: "tool_use", name: "Bash", id: "tb1", input: { command: "pytest -q", run_in_background: true } },
     ] } },
     { type: "system", subtype: "task_started", task_id: "bh001", tool_use_id: "tu1", task_type: "local_bash", session_id: CLI },
     { type: "system", subtype: "task_started", task_id: "bbash1", tool_use_id: "tb1", task_type: "local_bash", session_id: CLI },
-    { type: "user", message: { role: "user", content: [
+    { type: "user", timestamp: "2026-10-14T01:00:06.000Z", message: { role: "user", content: [
       { type: "tool_result", tool_use_id: "tu1", content: "Monitor started (task bh001, expires in 10m unless the source ends first)." },
     ] } },
     { type: "system", subtype: "task_notification", task_id: "bh001", tool_use_id: "tu1", status: "completed", summary: "第一轮跑完了", session_id: CLI },
@@ -105,6 +105,7 @@ async function main(): Promise<void> {
   const first = rows.find((r) => r.nativeId === "bh001");
   check(first?.status === "exited", "有终态的按终态补", String(first?.status));
   check(first?.lifetime === "bounded", "回执里的期限也补上了", String(first?.lifetime));
+  check(first?.startedAt === "2026-10-14T01:00:05.000Z", "起点用事件自报的时刻", String(first?.startedAt));
   const span = first?.expiresAt ? Date.parse(first.expiresAt) - Date.parse(first.startedAt) : -1;
   check(Math.abs(span - 600_000) < 2_000, "期限按回执的 10 分钟，不是请求的 15 分钟", `${span}ms`);
 
@@ -298,6 +299,41 @@ async function main(): Promise<void> {
   }
   await acrossFiles();
 
+  // ── ⑥b 没有事件时刻、只有 run 文件名上那个时刻 → 不编到期时刻 ────────────────
+  // 文件名上的时刻是**这一轮进程开始**的时刻，不是 Monitor 开始的时刻：agent 可能先干了
+  // 20 分钟活才挂上一个 10 分钟的哨兵，拿它当锚点算出来的「盯到 X」会早得离谱。报告原话是
+  // 「历史缺乏真实监听起点时应保留未知，不能用 run 时间制造精确到期时刻」。
+  async function fileTimeIsNotAnAnchor(): Promise<void> {
+    const dir = join(root, "runs", "t-anchor");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "sessAnc-20261014T110000000Z.agent-out.jsonl");
+    writeFileSync(path, [
+      // 刻意一条 timestamp 都不给（旧版本的 CLI 输出、或日志被改写过）。
+      { type: "system", subtype: "init", session_id: "cli-anc" },
+      { type: "assistant", message: { model: "m", content: [
+        { type: "tool_use", name: "Monitor", id: "tuA", input: { command: "tail -F /tmp/a", description: "没有时间锚点", timeout_ms: 600_000 } },
+      ] } },
+      { type: "system", subtype: "task_started", task_id: "bAnc", tool_use_id: "tuA", task_type: "local_bash", session_id: "cli-anc" },
+      { type: "user", message: { role: "user", content: [
+        { type: "tool_result", tool_use_id: "tuA", content: "Monitor started (task bAnc, expires in 10m unless the source ends first)." },
+      ] } },
+      { type: "system", subtype: "task_notification", task_id: "bAnc", status: "completed", summary: "好了", session_id: "cli-anc" },
+    ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    await db.insert(tasks).values({ id: "t-anchor", projectId: "p", title: "没有锚点", body: "", status: "done",
+      agentType: "claude", mode: "single", createdAt: now(), updatedAt: now() });
+    await db.insert(sessions).values({
+      id: "sessAnc", taskId: "t-anchor", role: "single", agentType: "claude", executor: "claude@x",
+      cliSessionId: "cli-anc", cwd: root, startedAt: now(), agentOutPath: path,
+    });
+    check(await backfillClaudeMonitors("t-anchor") === 1, "照样补进来");
+    const row = (await listMonitors("t-anchor")).at(0);
+    check(row?.status === "exited", "终态照常落（那是来源说的事实）", String(row?.status));
+    check(row?.lifetime === "unknown", "读到了回执也不编到期时刻：起点不可信", String(row?.lifetime));
+    check(row?.expiresAt === null, "对外不给到期时刻", String(row?.expiresAt));
+    check(row?.startedAt === "2026-10-14T11:00:00.000Z", "起点退回文件时刻，只作显示", String(row?.startedAt));
+  }
+  await fileTimeIsNotAnAnchor();
+
   // ── ⑦ 写失败：不能当成「唯一索引撞上了」静静忽略，也不能记成「扫过了」────────────
   // 前一版 catch 里是空的，于是一次 SQLITE_BUSY 之后那张卡永久消失，日志里一个字都没有，
   // 而且因为「扫过了」在扫描一开始就记下，本进程内再也不会重试（第 3 轮审查实测
@@ -399,7 +435,7 @@ async function main(): Promise<void> {
   } else {
     console.log("✓ 内置 Monitor 历史回填：扫同会话全部文件 / 排除普通后台 Bash / 终态与回执期限"
       + " / 没终态时按来源死活定 running|lost / 会话 id 含 `-`（两种坏法）/ 补存量行归属与纠正推断"
-      + " / 跨文件关联 / 真实时间锚点 / 写失败不吞且可重试 / 并发共享 / 幂等 均受回归保护");
+      + " / 跨文件关联 / 真实时间锚点（文件时刻不算锚点）/ 写失败不吞且可重试 / 并发共享 / 幂等 均受回归保护");
   }
 }
 
