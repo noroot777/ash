@@ -16,7 +16,7 @@ import {
 } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { contentVersion } from "../lib/useStickToBottom.ts";
-import { executionEventSize } from "../task-detail/conversationContentSize.ts";
+import { executionEventsSize } from "../task-detail/conversationContentSize.ts";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -123,7 +123,7 @@ function actionFor(task: Task): { kind: "run" | "retry" | "stop" | null; label: 
    那条**的 detail,回合数和正文长度都一动不动(审查第 4 轮 F1)。 */
 const duetTurnSize = (turn: DuetTurn): number =>
   (turn.text?.length ?? 0)
-  + turn.events.reduce((total, event) => total + executionEventSize(event), 0)
+  + executionEventsSize(turn.events)
   + (turn.conclusion?.length ?? 0) + (turn.notice?.length ?? 0) + (turn.error?.length ?? 0);
 
 export function DuetView({

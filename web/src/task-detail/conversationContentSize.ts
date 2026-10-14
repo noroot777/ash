@@ -16,6 +16,7 @@
  *   - 不算：身份、时刻、用量、折叠状态、会话元信息 —— 它们要么不渲染，要么渲染成不随
  *     阅读推进的角标。把它们算进来，复制按钮闪一下、账目数字刷新就会把人拽到底。
  */
+import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import type { ExecutionEvent } from "../lib/executionTrace.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -53,13 +54,27 @@ const EXECUTION_EVENT_SIZE: SizeTable<ExecutionEvent> = {
 };
 const EXECUTION_EVENT_KEYS = Object.keys(EXECUTION_EVENT_SIZE) as (keyof ExecutionEvent)[];
 
+/* 一条执行过程贡献多少可读的字。**不渲染的就是 0**:子智能体那条线会往同一串 events 里
+   塞 activity / result / agent 通知,以及带 parentId 的嵌套调用 —— 它们在这个表面上压根
+   不画出来(ExecutionTrace 的三个入口都先 filter 一道 `isVisibleExecutionEvent`),屏幕上
+   一个字没变,算进规模就成了「没有新文字也自己跳到底」(审查第 5 轮 F1)。
+
+   这道闸按**单条**设,不设在底下那个求和上:这样不论谁拿着一条 event 来问「它算多少字」,
+   答案都跟屏幕一致;只拦聚合入口的话,下一个人新开一个单条调用点就绕过去了。
+
+   注意闸只挡**不进 DOM** 的那些。用户自己把「执行过程」折起来不算:那些字还在 DOM 里、
+   展开就能读,折叠期间来的新思考仍要推进版本,否则第 4 轮那条又会回来。 */
 export const executionEventSize = (event: ExecutionEvent): number =>
-  sized(EXECUTION_EVENT_SIZE, EXECUTION_EVENT_KEYS, event);
+  isVisibleExecutionEvent(event) ? sized(EXECUTION_EVENT_SIZE, EXECUTION_EVENT_KEYS, event) : 0;
+
+/** 一串执行过程里有多少可读的字。 */
+export const executionEventsSize = (events: readonly ExecutionEvent[]): number =>
+  sum(events, executionEventSize);
 
 const SEGMENT_SIZE: SizeTable<AgentContentSegment> = {
   id: () => 0,
   markdown: (value) => value.length,
-  events: (value) => sum(value, executionEventSize),
+  events: executionEventsSize,
   attachments: (value) => value.length,
 };
 const SEGMENT_KEYS = Object.keys(SEGMENT_SIZE) as (keyof AgentContentSegment)[];

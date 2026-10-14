@@ -22,6 +22,20 @@ export function NativeAgentConversation({ row, statusLabel, error, onRetry }: {
   const pending = row.status === "pending";
   const finalResult = segments.length > 0 && (row.status === "completed" || row.status === "failed")
     && row.result && !segments.map((segment) => segment.markdown).join("").includes(row.result) ? row.result : null;
+  /* 这一屏到底显示了多少字。两条规矩:
+     ① 按**归一化之后**的 segments 算,不按原始 activity 条数 —— 同一个附件被重复通知时
+        nativeAgentSegments 会去重,渲染数据一个像素没变,那就不该算成新内容(审查 B6);
+     ② 只算**这一帧真渲染出来的那个分支** —— 下面 segments 在场时走 AgentTurnBody,
+        message/result 那两段根本不画出来;把不画的字算进去,子智能体在后台更新 message
+        就会把正在读的人拽到底(审查第 5 轮 F1)。 */
+  const nativeTailKey = [
+    segments.length,
+    segments.reduce((total, segment) => total + segmentContentSize(segment), 0),
+    segments.length > 0 ? 0 : (row.message?.length ?? 0) + (row.result?.length ?? 0),
+    finalResult?.length ?? 0,
+    row.description?.length ?? 0,
+    row.status,
+  ].join(":");
   return <div className="native-agent" aria-label="子智能体执行详情">
     <header className="native-agent__header">
       <div className="native-agent__heading"><span className="native-agent__avatar"><Robot size={19} aria-hidden="true" /></span>
@@ -45,12 +59,7 @@ export function NativeAgentConversation({ row, statusLabel, error, onRetry }: {
           {finalResult && <section><h4>返回结果</h4><MarkdownBody text={finalResult} /></section>}
           {running && <p className="native-agent__live" role="status"><span className="task-execution-pulse" aria-hidden="true" />执行中，内容实时更新</p>}
         </div>
-        <ConversationScrollControls scrollRef={scroll} resetKey={row.id}
-          /* 按**归一化之后**的 segments 算,不按原始 activity 条数:同一个附件被重复通知时
-             nativeAgentSegments 会去重,渲染数据一个像素没变 —— 那就不该算成新内容把人
-             拽到底(审查 B6)。 */
-          tailKey={`${segments.length}:${segments.reduce((total, segment) => total + segmentContentSize(segment), 0)}`
-            + `:${row.message?.length ?? 0}:${row.result?.length ?? 0}:${row.status}`} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={row.id} tailKey={nativeTailKey} />
       </div>
     </ImagePreviewGroup>
   </div>;

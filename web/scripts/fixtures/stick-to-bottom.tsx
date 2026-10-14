@@ -7,6 +7,8 @@
 import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { chatTailKey } from "../../src/lib/chatTailKey.ts";
+import { isVisibleExecutionEvent } from "@ash/shared/native-work";
+import type { ExecutionEvent } from "../../src/lib/executionTrace.ts";
 import { appendExecutionEvent } from "../../src/lib/executionTrace.ts";
 import { conversationItemSize } from "../../src/task-detail/conversationContentSize.ts";
 import type { AgentContentSegment } from "../../src/task-detail/conversationSegments.ts";
@@ -27,7 +29,7 @@ const seed = (count: number): Message[] => Array.from({ length: count }, (_, ind
 function Feed() {
   const scroll = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState(() => seed(60));
-  const [thinking, setThinking] = useState(() => [{ kind: "thinking" as const, label: "思考过程", detail: "开始想" }]);
+  const [thinking, setThinking] = useState<ExecutionEvent[]>(() => [{ kind: "thinking", label: "思考过程", detail: "开始想" }]);
   // 复制按钮那一类反馈:正文一个字没变,只有这颗按钮的文字/图标在换。
   const [copied, setCopied] = useState(false);
   /* 版本 = 消息那一路 + 这一段执行过程的可读规模。后者走产品自己的
@@ -55,7 +57,7 @@ function Feed() {
       {/* 正在飞的那一轮的「执行过程」,压在最后:固定高度、字在同一行里接着写,
           所以内容变了而外框不长高 —— 还原「等高更新」这个形状。 */}
       <pre data-testid="thinking-block" style={{ height: 40, margin: 0, overflow: "hidden" }}>
-        {thinking.map((event) => event.detail).join("")}
+        {thinking.filter(isVisibleExecutionEvent).map((event) => event.detail).join("")}
       </pre>
     </div>
 
@@ -103,6 +105,13 @@ function Feed() {
     <button type="button" data-testid="stream-thinking" onClick={() => setThinking((events) =>
       appendExecutionEvent(events, { kind: "thinking", label: "思考过程", detail: "续" }))}>
       收到下一段思考
+    </button>
+    {/* 子智能体往同一串 events 里塞的通知:主对话一个字都不画出来
+        (ExecutionTrace 先 filter 一道 isVisibleExecutionEvent)。 */}
+    <button type="button" data-testid="hidden-notice" onClick={() => setThinking((events) => [...events,
+      { kind: "tool" as const, label: "Agent", detail: "子任务进展",
+        nativeWork: { type: "activity" as const, id: "child", event: { kind: "text" as const, text: "子任务正文" } } }])}>
+      来一条不渲染的子智能体通知
     </button>
     <button type="button" data-testid="resume" onClick={() => resume()}>恢复跟随</button>
   </div>;

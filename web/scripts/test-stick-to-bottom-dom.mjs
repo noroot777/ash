@@ -124,7 +124,22 @@ try {
   assert.equal(afterThinking.height, beforeThinking.height, "夹具假设有误：思考续写改变了内容高度");
   assert.equal(afterThinking.distance, 0, "执行过程里的思考在长，视口却没跟");
 
-  // ⑨ 人往上读历史：新消息一律不许打扰。
+  /* ⑨ 屏幕上一个字都没多出来时，一个像素都不许动：子智能体往同一串 events 里塞的
+     activity / result / agent 通知，主对话压根不渲染（ExecutionTrace 先 filter 一道）。
+     把它们算成新内容，就是「没有新文字却自己跳到底」（审查第 5 轮 F1）。 */
+  const beforeHidden = await parkByWheel(40);
+  const textBefore = await feed.evaluate((element) => element.innerText);
+  await press("hidden-notice");
+  const afterHidden = await metrics();
+  assert.equal(await feed.evaluate((element) => element.innerText), textBefore, "夹具假设有误：这条通知改变了屏幕上的字");
+  assert.equal(afterHidden.height, beforeHidden.height, "夹具假设有误：这条通知改变了内容高度");
+  assert.equal(afterHidden.top, beforeHidden.top, "屏幕没有变化，却被拽到底了");
+
+  // ⑩ 紧接着来一段真思考 —— 该跟。上一步的闸没有把真内容一起挡掉。
+  await press("stream-thinking");
+  assert.equal((await metrics()).distance, 0, "挡掉隐藏通知之后，真思考反而不跟了");
+
+  // ⑪ 人往上读历史：新消息一律不许打扰。
   await feed.hover();
   for (let index = 0; index < 6; index++) await page.mouse.wheel(0, -120);
   await flush();
@@ -135,7 +150,7 @@ try {
   await press("copy-feedback");
   assert.equal((await metrics()).top, reading.top, "读历史时被复制反馈拽走");
 
-  // ⑩ 显式「回到底部」之后，跟随恢复。
+  // ⑫ 显式「回到底部」之后，跟随恢复。
   await press("resume");
   await feed.evaluate((element) => element.scrollTo({ top: element.scrollHeight, behavior: "auto" }));
   await flush();

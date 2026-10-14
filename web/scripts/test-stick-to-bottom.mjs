@@ -7,7 +7,7 @@
 //   不让贴底逻辑自己去 DOM 上猜（猜过一版，复制按钮闪一下就把人拽到底了）。
 import assert from "node:assert/strict";
 import { contentVersion, shouldStickToBottom, stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
-import { conversationItemSize } from "../src/task-detail/conversationContentSize.ts";
+import { conversationItemSize, executionEventSize } from "../src/task-detail/conversationContentSize.ts";
 import { appendExecutionEvent } from "../src/lib/executionTrace.ts";
 
 // 用户从底部按住滚动条向上拖时，pointerdown 会建立 detaching user intent。
@@ -81,7 +81,6 @@ assert.equal(chatKey(behind), chatKey([msg("m1", "一"), msg("m2", "二"), aside
 // 最后一条收口(status 变)也要推进 —— 它换的是身份不是长度。
 assert.notEqual(chatKey([msg("m1", "一")]), chatKey([msg("m1", "一", "running")]));
 
-console.log("贴底判据回归验证通过");
 
 /* 「用户能读到多少字」这张表:算什么、不算什么。漏算一处,那一处的新输出就会长出屏幕
    而没人跟;多算一处(时刻、用量这类角标),界面闪一下就会把读到一半的人拽到底。 */
@@ -119,3 +118,43 @@ assert.ok(conversationItemSize(note({ text: "审查已预约了" })) > conversat
 // 用户消息:正文和附件都算。
 const said = (over) => ({ kind: "user", id: "u1", text: "问题", attachments: [], ...over });
 assert.ok(conversationItemSize(said({ attachments: ["/a.png"] })) > conversationItemSize(said()));
+
+/* 「这个表面会不会把它画出来」这道闸。子智能体那条线会往同一串 events 里塞
+   activity / result / agent 通知和带 parentId 的嵌套调用,主对话一个字都不渲染
+   (ExecutionTrace 三个入口都先 filter 一道)。算进规模就成了「屏幕没变化却自己跳到底」
+   —— 审查第 5 轮 F1。 */
+const toolEvent = (over) => ({ kind: "tool", label: "Agent", detail: "子任务进展", ...over });
+const visibleOnly = conversationItemSize(agent({ segments: [seg({ events: [toolEvent()] })] }));
+for (const hidden of [
+  { type: "activity", id: "child", event: { kind: "text", text: "子任务正文" } },
+  { type: "result", id: "child", result: "子任务结果", failed: false },
+  { type: "agent", id: "child", title: "子智能体", status: "running" },
+  // 嵌套调用:有 parentId 的那条也不渲染。
+  { type: "call", id: "child", parentId: "parent", name: "Agent", input: {} },
+]) {
+  const withHidden = conversationItemSize(agent({
+    segments: [seg({ events: [toolEvent(), toolEvent({ nativeWork: hidden })] })],
+  }));
+  assert.equal(withHidden, visibleOnly, `不渲染的通知不该推进版本:${hidden.type}${hidden.parentId ? "(嵌套)" : ""}`);
+}
+// 顶层调用那一行是真画出来的 —— 它要算。
+assert.ok(conversationItemSize(agent({
+  segments: [seg({ events: [toolEvent(), toolEvent({ nativeWork: { type: "call", id: "child", name: "Agent", input: {} } })] })],
+})) > visibleOnly);
+/* 同一道闸按**单条**问也得是这个答案:闸只拦聚合入口的话,下一个人新开一个单条调用点
+   就绕过去了,所以这里直接问单条函数。 */
+for (const hidden of [
+  { type: "activity", id: "child", event: { kind: "text", text: "子任务正文" } },
+  { type: "result", id: "child", result: "子任务结果", failed: false },
+  { type: "agent", id: "child", title: "子智能体", status: "running" },
+  { type: "call", id: "child", parentId: "parent", name: "Agent", input: {} },
+]) assert.equal(executionEventSize(toolEvent({ nativeWork: hidden })), 0,
+  `单条问也得是 0:${hidden.type}${hidden.parentId ? "(嵌套)" : ""}`);
+assert.ok(executionEventSize(toolEvent()) > 0, "画得出来的那条,单条问不该是 0");
+/* 这道闸只挡不进 DOM 的那些:用户把「执行过程」折起来时,思考原文仍在 DOM 里、
+   展开就能读,折叠期间来的新思考照样要推进(否则第 4 轮那条就回来了)。 */
+const folded = appendExecutionEvent([{ kind: "thinking", label: "思考过程", detail: "想" }],
+  { kind: "thinking", label: "思考过程", detail: "续" });
+assert.ok(conversationItemSize(agent({ segments: [seg({ events: folded })] }))
+  > conversationItemSize(agent({ segments: [seg({ events: [{ kind: "thinking", label: "思考过程", detail: "想" }] })] })));
+console.log("贴底判据回归验证通过(判据纯函数 + 可读规模契约)");
