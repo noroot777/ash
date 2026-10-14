@@ -59,8 +59,14 @@ function state(monitors: TaskMonitor[], recovery: TaskMonitorsState["recovery"] 
   };
 }
 
+/** 默认是「已确认没有待恢复的事实」——`null` 是另一回事（见下面的第三态）。 */
 const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
-  renderToStaticMarkup(<MonitorInspector monitors={state(monitors)} blockedReason={blockedReason} />);
+  renderToStaticMarkup(
+    <MonitorInspector
+      monitors={state(monitors, { pending: false, reasons: [], attempts: 0, exhausted: false })}
+      blockedReason={blockedReason}
+    />,
+  );
 
 /** 面板 + 一份「还没读完」的恢复状态。 */
 const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
@@ -77,6 +83,13 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
 {
   const empty = panel([]);
   assert.match(empty, /这个任务上还没有哨兵/, "确实没有时就直说");
+  // **第三态：不知道。** 恢复状态自己都没读到（暂态读失败）时，「这个任务没用过哨兵」是
+  // 一句没有依据的强断言——那正是整个功能起点那一幕（第 7 轮审查）。
+  const unknown = renderToStaticMarkup(
+    <MonitorInspector monitors={state([], null)} blockedReason={null} />,
+  );
+  assert.doesNotMatch(unknown, /这个任务上还没有哨兵/, "拿不到恢复状态时不许断言「没用过」");
+  assert.match(unknown, /读不到这个任务的监听恢复状态/, "要如实说读不到");
   const pending = panelPending([]);
   assert.doesNotMatch(pending, /这个任务上还没有哨兵/, "还没读完时不许说「没有哨兵」");
   assert.match(pending, /历史/, "要说清是还没读完");

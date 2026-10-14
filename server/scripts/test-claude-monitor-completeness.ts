@@ -9,7 +9,7 @@
 // · 起点标着 observed ⇒ 以为它准（而那是个无法重验的结论字符串，旧行里就有偏 2.2 秒的）。
 //
 // 所以这份测试盯的是**「完成」的定义**和**「证据」的可重验性**。
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -34,6 +34,14 @@ const [
   import("@ash/shared/monitor"),
 ]);
 const { monitorRecoveryOf, stopAllMonitorRecovery } = recovery;
+// 真实路由：④ 要验的是「列表与恢复状态两条端点反映同一轮扫描」，那是路由层的承诺，
+// 在测试里复刻一遍路由体就等于没测它（第一版就是这么写的，把路由改回纯内存读也不变红）。
+const { Hono } = await import("hono");
+const { mountMonitorRoutes } = await import("../src/monitor-routes.js");
+const api = new Hono();
+mountMonitorRoutes(api);
+const app = new Hono();
+app.route("/api", api);
 const { monitorExactExpiry, monitorStartTrusted } = shared;
 const { monitors, projects, sessions, tasks } = schema;
 await ensureSchema();
@@ -204,12 +212,34 @@ async function main(): Promise<void> {
       await backfillClaudeMonitors(f.taskId);
       await settle(50);
       check(seen.length === before, "③原因没变时不重复推送", `${before} → ${seen.length}`);
-      // 读得开了 → 销账也要推一次，否则页面上那句「还没读完」撤不掉。
+      // 读得开了 → 补出那一行（这一下的事件来自「新增了行」）。
       chmodSync(f.file, 0o644);
       await backfillClaudeMonitors(f.taskId);
       await settle(50);
       check(monitorRecoveryOf(f.taskId) === null, "③修好后账销了");
-      check(seen.length > before, "③销账也发了事件（反方向同样要能撤）", `${before} → ${seen.length}`);
+      check((await listMonitors(f.taskId)).length === 1, "③并且把那一行补出来了");
+
+      // **再来一轮「只销账、没有任何行变化」**（第 7 轮审查的反方向，报告标注为未实测——
+      // 这里把它实测掉）。两步：
+      // ① 追加一行**与 Monitor 无关**的内容再 chmod 000。追加是必须的：游标已经读到文件
+      //    末尾了，不长新字节的话扫描根本不会去打开它（那是对的行为），也就撞不出读失败。
+      // ② 改回可读 → 这一轮读到的只是那行噪声，库里一行都不会变，于是事件只能来自销账。
+      appendFileSync(f.file, JSON.stringify({
+        type: "system", subtype: "task_notification", task_id: "bplain-bash",
+        status: "completed", summary: "普通后台 Bash，不进投影", session_id: f.cli,
+      }) + "\n");
+      chmodSync(f.file, 0o000);
+      await backfillClaudeMonitors(f.taskId);
+      await settle(50);
+      check(monitorRecoveryOf(f.taskId)?.pending === true, "③又读不开了 → 重新留账");
+      const quiet = seen.length;
+      chmodSync(f.file, 0o644);
+      await backfillClaudeMonitors(f.taskId);
+      await settle(50);
+      check(monitorRecoveryOf(f.taskId) === null, "③第二轮也销了账");
+      check((await listMonitors(f.taskId)).length === 1, "③而且这一轮一行都没变");
+      check(seen.length > quiet,
+        "③所以这个事件只能来自销账本身（反方向同样要能撤）", `${quiet} → ${seen.length}`);
     } finally {
       off();
       chmodSync(f.file, 0o644);
@@ -226,17 +256,14 @@ async function main(): Promise<void> {
     write(f.file, startSeq(f.cli, "round1"));
     chmodSync(f.file, 0o000);
     try {
+      // **走真实路由**，不是在测试里复刻路由体——两条端点的一致性正是路由那一层的承诺。
       // 和前端一样并行发起，而且**恢复那条先发**（最坏顺序）。
-      const [pending, rows] = await Promise.all([
-        (async () => {
-          await backfillClaudeMonitors(f.taskId); // 路由里就是这一句（见 monitor-routes.ts）
-          return monitorRecoveryOf(f.taskId);
-        })(),
-        (async () => {
-          await backfillClaudeMonitors(f.taskId);
-          return listMonitors(f.taskId);
-        })(),
+      const [pendingRes, listRes] = await Promise.all([
+        app.request(`/api/tasks/${f.taskId}/monitors/recovery`),
+        app.request(`/api/tasks/${f.taskId}/monitors`),
       ]);
+      const pending = await pendingRes.json() as { pending?: boolean; reasons?: string[] };
+      const rows = await listRes.json() as unknown[];
       check(rows.length === 0, "④这一轮列表确实是空的（文件读不开）", `${rows.length} 条`);
       check(pending?.pending === true,
         "④同一时刻的恢复状态是 pending —— 两份快照对得上，页面不会说「没有哨兵」",
