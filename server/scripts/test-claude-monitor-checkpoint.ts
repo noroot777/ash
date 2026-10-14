@@ -318,6 +318,11 @@ async function main(): Promise<void> {
       body += call(f.cli, "tu-bgen", "上一代起的监听", "2026-10-15T06:00:00.000Z");
       body += started(f.cli, "tu-bgen", "bgen");
       body += receipt("tu-bgen", "bgen", "2026-10-15T06:00:00.040Z");
+      // **夹具必须撑过单次上限**：读完就销账的任务，软上限（32）直接把快照丢掉、根本不会去
+      // 「停好位置」，于是下一轮从零重读、内存里那份 `found` 又回来了 —— 这一组就测不到「前缀
+      // 已跳过、found 是空的」那条路（本轮自测：注入「代次只认内存」照样全绿，加了 debug 打印
+      // 才看出 parked 是空的）。撑过上限 ⇒ 留账 ⇒ 软上限豁免它 ⇒ 压力落到硬上限那一支。
+      body = padTo(body, LIMIT + 2_000);
       writeFileSync(f.file, body);
 
       await backfillClaudeMonitors(f.taskId);
@@ -327,6 +332,8 @@ async function main(): Promise<void> {
       const first = (await db.select().from(monitors).where(eq(monitors.nativeId, "bgen"))).at(0);
       check(first?.sourceRun === f.file, "④行上记着它起在哪个 run 文件里", String(first?.sourceRun));
 
+      check(monitorRecoveryOf(f.taskId)?.pending === true,
+        "④第一轮没读完（所以软上限会豁免它，压力落到会停好位置的那一支）");
       const squeeze = await makeSqueeze("ge");
       await squeeze();
       check(monitorScanTracked(f.taskId) === false, "④配对状态被挤掉了（found 现在是空的）");
@@ -339,11 +346,16 @@ async function main(): Promise<void> {
       const raw = (await db.select().from(monitors).where(eq(monitors.nativeId, "bgen"))).at(0);
       check(raw?.sourcePid === 0, "④这个结论落了库（下一轮不必再算一遍）", String(raw?.sourcePid));
 
+      const after = (await db.select().from(monitors).where(eq(monitors.nativeId, "bgen"))).at(0);
+      check(after?.sourceRun === f.file,
+        "④判死靠的是行上那一列和这一轮的文件清单（不是内存里的 found）", String(after?.sourceRun));
+
       // 对照：同样的活进程、同样被挤掉，但**没有**新 run ⇒ 必须仍是 running。
       const ctl = await fixture("generation-control", live.pid, live.startedAt);
       writeFileSync(ctl.file, body.replaceAll(f.cli, ctl.cli).replaceAll("bgen", "bctl"));
       await backfillClaudeMonitors(ctl.taskId);
       await squeeze();
+      check(monitorScanTracked(ctl.taskId) === false, "④对照组同样被挤掉了");
       await backfillClaudeMonitors(ctl.taskId);
       check((await listMonitors(ctl.taskId)).at(0)?.status === "running",
         "④对照组（没有新 run）仍是 running —— 上面那条不是「一挤就判死」",
