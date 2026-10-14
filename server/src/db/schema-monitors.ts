@@ -69,6 +69,19 @@ export const monitors = sqliteTable("monitors", {
   // sessions 那两列已被覆盖),判死活退回会话/任务那一层。
   sourcePid: integer("source_pid"),
   sourcePidStartedAt: text("source_pid_started_at"),
+  // **起它的那个 run 文件**(绝对路径)。代次结论的持久化依据:每个 run 文件对应一次 agent
+  // 进程启动(executors/detached.ts 的 runPaths),所以「这一行的 run 不是这条会话最新的那个」
+  // = 起它的那一代进程必然已经退出。
+  //   为什么不能只靠内存里重算:扫描状态会被内存上限丢掉,那时 found 是空的,「后来又起过
+  // 新一轮」这件事就没人算得出来 —— 新回合的空 run 文件一出现,旧监听反而会被当前会话的
+  // 新进程证明成「还在盯着」(第 10 轮审查用生产服务 + 真页面实测)。NULL = 存量行,退回
+  // source_pid / 会话那一层。
+  sourceRun: text("source_run"),
+  // 起点区间的**下界**:发起它的那条 assistant 事件(tool_use)的时刻。
+  //   起点是个区间 [tool_use, 起手回执](见 claude-monitor-scan.ts 的 Found.startedAtLow)。
+  // 上界由回执给出,而回执可能落在后缀里、等配对状态被挤掉之后才读到 —— 那时若没存下界,
+  // 就只能放弃精确到期时刻(第 10 轮审查不拦项 1)。存下它,迟到回执仍能重建出那个窄区间。
+  startLowAt: text("start_low_at"),
   // **起点**的证据,跟 lifetime_evidence(时长的证据)是两件独立的事:知道「盯 90 秒」不等于
   // 知道「从哪一刻开始数」。这一列只说**锚点是哪来的**:'observed' = 实时看着 task_started
   // 到达;'receipt-window' = 历史重建,起点落在 [tool_use, 回执] 区间内;NULL = 起点不明。

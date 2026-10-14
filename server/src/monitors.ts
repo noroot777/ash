@@ -200,6 +200,10 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       cliSessionId: null,
       // 只有 claude 投影才有「起它的那个 tool_use」。
       toolUseId: null,
+      // 代次结论与起点下界都是 claude 投影那一侧的事：ash 自己 spawn 的进程有真 pid，
+      // 起点就是 spawn 那一刻（见 schema-monitors.ts）。
+      sourceRun: null,
+      startLowAt: null,
       // ash 自己起的：期限是它自己定的，当然知道。
       sourceLifetime: "bounded",
       // ash 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，

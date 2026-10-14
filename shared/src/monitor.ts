@@ -169,7 +169,7 @@ export const MONITOR_RECOVERY_REASONS = [
   "write-failed",     // 事实已消费，落库失败
   "update-missed",    // 条件更新 0 行（并发改了状态）
   "liveness-failed",  // 死活裁决失败（扫描读完了不等于纠正做完了）
-  "orphan-overflow",  // 还没配对的一次性事实被挤出缓冲，得重读那一段
+  "orphan-overflow",  // 这一轮要裁决的迟到事实顶到单轮上限，剩下的分到后面几轮
   // 读过的事实既配不上内存状态、也配不上库里已提交的行，而这一轮的读取位置跳过了那段
   // 前缀（见 server/src/claude-monitor-commit.ts 的「检查点的两半」）。不许当成读完了：
   // 回到一个确定可重放的位置重读一遍。
@@ -183,8 +183,8 @@ export const MONITOR_RECOVERY_LABEL: Record<MonitorRecoveryReason, string> = {
   "write-failed": "有记录没写进库",
   "update-missed": "有状态更新被并发改动挡下",
   "liveness-failed": "有存活状态没核对完",
-  "orphan-overflow": "有乱序事实要重读",
-  "checkpoint-incomplete": "有事实还配不上，正在回头重读",
+  "orphan-overflow": "迟到的事实较多，正在分批补",
+  "checkpoint-incomplete": "有回执还配不上，正在回头重读",
 };
 
 export type MonitorRecovery = {

@@ -21,16 +21,26 @@ import { useTheme, radius, fonts } from "@/lib/theme";
  *
  * 跟这一屏其它东西一样走轮询，不开实时通道（mobile 的既定取舍）。
  */
+/** 「哪个任务的哪一条」——进行中操作的键（见 `stopping`）。 */
+const stopKey = (taskId: string, id: string) => `${taskId}\n${id}`;
+
 export function MonitorStrip({ taskId, visible }: { taskId: string; visible: boolean }) {
   const theme = useTheme();
   const [monitors, setMonitors] = useState<TaskMonitor[]>([]);
   /**
-   * 正在停的是**哪个任务的哪一条**。
+   * 正在停的那些卡：`任务\n哨兵 id` → **这一发操作的序号**。
    *
-   * 只记 id 不行：切走再切回来（同一个组件实例被复用）时，上一次操作的收尾认不出自己该不该
-   * 清，于是按钮一直灰着（第 9 轮审查实测同一实例 A→B→A 复用，按钮永久 disabled）。
+   * 三层身份，少一层就有一个口子：
+   * - 带 `taskId`：切走再切回来（同一个组件实例被复用）时，上一次操作的收尾要认得出自己该不该
+   *   清，否则按钮一直灰着（第 9 轮审查实测同一实例 A→B→A 复用，按钮永久 disabled）。
+   * - **一卡一格**（而不是全组件一个槽）：交替停两张卡时，后一发会把前一发的「正在停」挤掉，
+   *   前一张卡当场又可按（第 10 轮审查不拦项 2）。
+   * - **每发一个序号**：同一张卡停过两次时，先出门那一发的收尾不能把后一发的状态收掉
+   *   （停止 API 幂等，所以这不会改错状态，但按钮会提前解除）。
    */
-  const [stopping, setStopping] = useState<{ taskId: string; id: string } | null>(null);
+  const [stopping, setStopping] = useState<Record<string, number>>({});
+  /** 操作序号发号器：只要求组件内单调递增。 */
+  const ops = useRef(0);
   /**
    * 「这份列表是哪个任务的、是第几代、是第几发请求」——**在途请求的归属判据**。
    *
@@ -83,14 +93,21 @@ export function MonitorStrip({ taskId, visible }: { taskId: string; visible: boo
           // 它的「正在停」也不该按住新任务的卡（判据与上面同一套）。
           const gen = stamp.current.gen;
           const mine = () => stamp.current.gen === gen && stamp.current.taskId === taskId;
-          setStopping({ taskId, id: monitor.id });
+          const key = stopKey(taskId, monitor.id);
+          const op = (ops.current += 1);
+          setStopping((cur) => ({ ...cur, [key]: op }));
           void api.stopMonitor(monitor.id, "手机端停止")
             .catch((e) => { if (mine()) Alert.alert("停不掉", e instanceof Error ? e.message : String(e)); })
             .finally(() => {
               // **操作状态无条件结束**：它只属于这一次操作，过期了也得自己收。按归属判据
               // 提前 return 的那一版，在同一实例被复用时把按钮永久按住了（第 9 轮审查）。
-              // 认的是「这是不是我当初按下的那一条」，不是「现在还是不是这个任务」。
-              setStopping((cur) => (cur && cur.taskId === taskId && cur.id === monitor.id ? null : cur));
+              // 认的是「这是不是我这一发按下的那一条」——所以比的是序号，不是「现在还是不是
+              // 这个任务」，也不是「现在有没有别的操作在跑」。
+              setStopping((cur) => {
+                if (cur[key] !== op) return cur;  // 已经被更新的一发接管了，不替它收
+                const { [key]: _done, ...rest } = cur;
+                return rest;
+              });
               // 列表只画给当前这一屏：切走之后那一发收尾 reload 不该落到新任务上。
               if (mine()) void reload();
             });
@@ -122,7 +139,7 @@ export function MonitorStrip({ taskId, visible }: { taskId: string; visible: boo
                 <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{monitor.events} 条</Text>
                 <Pressable
                   onPress={() => stop(monitor)}
-                  disabled={stopping?.taskId === taskId && stopping.id === monitor.id}
+                  disabled={stopping[stopKey(taskId, monitor.id)] !== undefined}
                   hitSlop={4}
                   accessibilityRole="button"
                   accessibilityLabel={`停掉哨兵「${monitor.description}」`}

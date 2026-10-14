@@ -83,18 +83,22 @@ export function parseMonitorInput(input: unknown): MonitorCall | null {
  * 是哪一代」抄下来，事后再问 `sessions` 问到的已经是别人了（见 monitors.source_pid 的说明）。
  */
 async function locateSession(cliSessionId: string): Promise<
-  { taskId: string; cwd: string; pid: number | null; pidStartedAt: string | null } | null
+  { taskId: string; cwd: string; pid: number | null; pidStartedAt: string | null; outPath: string } | null
 > {
   if (!cliSessionId || dbClient.closed) return null;
   const row = (await db
     .select({
       taskId: sessions.taskId, cwd: sessions.cwd,
       pid: sessions.agentPid, pidStartedAt: sessions.agentStartedAt,
+      outPath: sessions.agentOutPath,
     })
     .from(sessions)
     .where(eq(sessions.cliSessionId, cliSessionId))).at(0);
   return row
-    ? { taskId: row.taskId, cwd: row.cwd ?? "", pid: row.pid ?? null, pidStartedAt: row.pidStartedAt ?? null }
+    ? {
+      taskId: row.taskId, cwd: row.cwd ?? "", pid: row.pid ?? null,
+      pidStartedAt: row.pidStartedAt ?? null, outPath: row.outPath ?? "",
+    }
     : null;
 }
 
@@ -502,6 +506,11 @@ export class ClaudeMonitorTrace {
       // 当成它（第 4 轮审查实测 reusedSession）。
       sourcePid: found.pid,
       sourcePidStartedAt: found.pidStartedAt,
+      // 起它的就是当下这一代 run 文件。pid 已经够判死活了，但两边写同一套列，历史侧的代次
+      // 裁决（claude-monitor-backfill.ts 的 reconcileLiveness）才不必对实时行网开一面。
+      sourceRun: found.outPath || null,
+      // 起点的下界：实时投影自己就看着它到达，锚点是 `observed`，所以下界就是那一刻。
+      startLowAt: startedAt,
     });
     this.rows.set(nativeId, rowId);
     bus.publish({ type: "task.monitors", taskId: found.taskId });

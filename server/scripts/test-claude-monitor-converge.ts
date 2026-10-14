@@ -131,13 +131,13 @@ async function main(): Promise<void> {
     check(rows[0]?.timeoutMs === 90_000, "①和来源回执说的时长", String(rows[0]?.timeoutMs));
   }
 
-  // ── ② 真·乱序事实占满缓冲：背压，不丢事实、不重读前缀 ───────────────────────
+  // ── ② 一轮里要裁决的事实太多：背压，不丢事实、不重读前缀 ─────────────────────
   //
-  // 600 条**回执在前、task_started 永远不来**的 Monitor 事实（现实里不会这样，但这是缓冲
-  // 真正满的唯一途径）。契约三条：缓冲满了就停在那一行之前、游标不越过它、下一轮不重读
-  // 前缀（而不是「挤掉最老的那条一次性事实」）。
+  // 600 条**回执在前、task_started 永远不来**的 Monitor 事实（现实里不会这样，但这是单轮通道
+  // 真正顶满的唯一途径）。契约三条：顶满了就停在那一行之前、游标不越过它、下一轮不重读前缀
+  // （而不是「挤掉最老的那条一次性事实」）。
   //
-  // 这一条直接调扫描层并给一个很大的单次上限：否则先撞的是字节上限，测不到缓冲这一支。
+  // 这一条直接调扫描层并给一个很大的单次上限：否则先撞的是字节上限，测不到这一支。
   {
     const f = await fixture("real-disorder");
     let body = line({ type: "system", subtype: "init", session_id: f.cli });
@@ -156,14 +156,20 @@ async function main(): Promise<void> {
     await scanSession(scanState, `s-${f.taskId}`, f.cli, f.file, big);
     const first = [...scanState.sessions.values()][0]!;
     const cursor1 = first.cursors.get(f.file)!;
-    check(scanState.orphanOverflow === true, "②缓冲满了 → 置 orphanOverflow（背压）");
+    check(scanState.lateOverflow === true, "②单轮通道顶满了 → 置 lateOverflow（背压）");
     check(cursor1.offset < body.length,
       "②游标停在那条还没消费的事实之前（没读到文件尾）", `${cursor1.offset}/${body.length}`);
-    check(first.orphanReceipts.size === 512, "②缓冲停在上限上，没有挤掉任何一条", String(first.orphanReceipts.size));
+    check(first.late.length === 512, "②通道停在上限上，没有挤掉任何一条", String(first.late.length));
+    // 这 600 条调用都还悬着（`task_started` 永远不来），所以**可重放位置不许越过第一条**：
+    // 入参只在那一行上，越过去这些 Monitor 就再也认不出来了。
+    const park = scan.parkableCursors(scanState).get(f.file)!;
+    check(park.offset < cursor1.offset && park.offset > 0,
+      "②可重放位置停在第一条还悬着的调用之前（不是「读到哪儿」）",
+      `停好 ${park.offset} / 读到 ${park.read}`);
 
-    // 再扫一轮：缓冲还是满的 → 停在同一个位置，**不重读前缀**。
+    // 再扫一轮：通道还是满的 → 停在同一个位置，**不重读前缀**。
     scanState.advanced = false;
-    scanState.orphanOverflow = false;
+    scanState.lateOverflow = false;
     await scanSession(scanState, `s-${f.taskId}`, f.cli, f.file, big);
     const cursor2 = first.cursors.get(f.file)!;
     check(cursor2.offset === cursor1.offset, "②下一轮停在同一位置", `${cursor1.offset} → ${cursor2.offset}`);

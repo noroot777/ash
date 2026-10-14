@@ -135,7 +135,8 @@ export async function ensureSchema() {
       source_lifetime TEXT NOT NULL DEFAULT 'unknown',
       lifetime_evidence TEXT, source_pid INTEGER, source_pid_started_at TEXT,
       start_evidence TEXT, timeout_ms INTEGER,
-      start_anchor_width_ms INTEGER, tool_use_id TEXT
+      start_anchor_width_ms INTEGER, tool_use_id TEXT,
+      source_run TEXT, start_low_at TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -325,6 +326,9 @@ export async function ensureSchema() {
     // 起它的那个 tool_use id。检查点的另一半:位置之前的配对关系靠它从库里重建
     // （见 claude-monitor-commit.ts 的文件头）。存量行 NULL，读到回执时顺手补上。
     "ALTER TABLE monitors ADD COLUMN tool_use_id TEXT",
+    // 代次结论与起点下界的持久化依据(见 schema-monitors.ts)。存量行一律 NULL。
+    "ALTER TABLE monitors ADD COLUMN source_run TEXT",
+    "ALTER TABLE monitors ADD COLUMN start_low_at TEXT",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",

@@ -20,8 +20,15 @@
 //    配不上内存状态的事实，可以按 `native_id`（终态通知）和 `tool_use_id`（起手回执）
 //    回到那一行上去——这也是 `monitors.tool_use_id` 这一列存在的唯一理由。
 //
-// 两半都不成立的那种（连库里也没有、前缀这一代又没读过）不许销账：回到一个确定可重放的
-// 位置（从零）并留账，让它自己再读一遍。
+// 于是**配不上内存状态的事实一定裁得清**（行序严格因果，见扫描层文件头）：
+//
+//   - 库里有那一行 → 配回去
+//   - 库里也没有   → 它不是 Monitor 起的（普通后台 Bash 的通知），丢掉
+//   - **只有一种裁不清**：存量行连 `tool_use_id` 都没有（这一列是后加的），而这一代扫描又跳过
+//     过前缀 —— 那时一条起手回执配不上任何行，却不能断言它与我们无关。这一条交回调用方 →
+//     回到从零重放一遍，那一遍会把存量行的 `tool_use_id` 补上，下一轮就落进上面两支。
+//     没跳过前缀的那一代里，同样配不上就是真的无关（否则无限重读），见
+//     `CommitOutcome.undecidable` 与扫描层的 `SessionScan.skippedPrefix`。
 import { and, eq } from "drizzle-orm";
 import {
   claudeMonitorStatus, monitorExactExpiry, monitorStartTrusted, monitorStatusCorrectable,
@@ -72,13 +79,66 @@ type PriorRow = {
   cliSessionId: string | null; sourceLifetime: string; startedAt: string; expiresAt: string;
   lifetimeEvidence: string | null; startEvidence: string | null; sourcePid: number | null;
   timeoutMs: number | null; startAnchorWidthMs: number | null; toolUseId: string | null;
+  sourceRun: string | null; startLowAt: string | null;
 };
+
+/**
+ * 库里这一批行，**按 native_id / tool_use_id 建索引**。
+ *
+ * 为什么是数组而不是单行：`native_id` 的唯一性由来源侧保证，而来源侧没有承诺跨 CLI 会话唯一
+ * （实测 1017 条 `task_started` 里跨会话重复 0 个，但 `local_agent` 那种出现过同 id 挂两个
+ * tool_use）。所以这里不假设「一个 id 一行」，而是按会话挑（见 `pick`）。
+ */
+type RowIndex = {
+  byNative: Map<string, PriorRow[]>;
+  byToolUse: Map<string, PriorRow[]>;
+  /** 有没有行连 `tool_use_id` 都没记（存量行）。起手回执配不上时的唯一「裁不清」。 */
+  anyMissingToolUse: boolean;
+};
+
+/**
+ * 同一个 id 底下有多行时挑哪一行：**先认会话身份，再退到没有归属的存量行**。
+ *
+ * 只有一行时就用它：持久身份目前是 `(task_id, native_id)`（唯一索引 `monitors_native`），所以
+ * 「一个 id 一行」是当下的事实，没有歧义可挑 —— 这一层是**给以后留的**：真要给同一任务的两条
+ * CLI 会话分家（第 10 轮审查不拦项 3），改索引之后这里不必再动，也不会出现「把 A 会话的事实
+ * 写到 B 会话那一行上」。挑不出来宁可让这条事实暂时没归宿，也不写错行。
+ */
+function pick(rows: PriorRow[] | undefined, cliSessionId: string | null): PriorRow | undefined {
+  if (!rows?.length) return undefined;
+  if (rows.length === 1) return rows[0];
+  return rows.find((r) => r.cliSessionId === cliSessionId) ?? rows.find((r) => !r.cliSessionId);
+}
+
+function indexRows(rows: PriorRow[]): RowIndex {
+  const index: RowIndex = { byNative: new Map(), byToolUse: new Map(), anyMissingToolUse: false };
+  for (const row of rows) {
+    if (row.nativeId) {
+      const list = index.byNative.get(row.nativeId) ?? [];
+      list.push(row);
+      index.byNative.set(row.nativeId, list);
+    }
+    if (row.toolUseId) {
+      const list = index.byToolUse.get(row.toolUseId) ?? [];
+      list.push(row);
+      index.byToolUse.set(row.toolUseId, list);
+    } else index.anyMissingToolUse = true;
+  }
+  return index;
+}
 
 /**
  * 这一轮提交的结果：补了几行、**有没有没确认落地的更新**（要进恢复路径），
  * 以及哪些迟到事实配上了已提交的行（调用方据此把它们从孤儿缓冲里销掉）。
  */
-export type CommitOutcome = { added: number; missed: boolean; resolved: LateFact[] };
+export type CommitOutcome = {
+  added: number;
+  missed: boolean;
+  /** 配到了行上的迟到事实。 */
+  resolved: LateFact[];
+  /** 库里没有、但也**不能断言与我们无关**的（存量行缺 `tool_use_id`）：得回头重放一遍。 */
+  undecidable: LateFact[];
+};
 
 /** 条件更新到底改没改到行。drizzle 把底层 client 的 `rowsAffected` 原样带出来。 */
 const rowsAffectedOf = (result: unknown): number =>
@@ -96,8 +156,10 @@ export async function commitRound(
   /** 每成功一行就回报一次。写失败往外抛时，调用方靠它知道已经成功了几条。 */
   report: (added: number) => void,
 ): Promise<CommitOutcome> {
-  if (!items.length && !late.length) return { added: 0, missed: false, resolved: [] };
-  const existing = new Map((await db
+  if (!items.length && !late.length) {
+    return { added: 0, missed: false, resolved: [], undecidable: [] };
+  }
+  const index = indexRows(await db
     .select({
       id: monitors.id, nativeId: monitors.nativeId, status: monitors.status,
       cliSessionId: monitors.cliSessionId, sourceLifetime: monitors.sourceLifetime,
@@ -105,11 +167,10 @@ export async function commitRound(
       lifetimeEvidence: monitors.lifetimeEvidence, startEvidence: monitors.startEvidence,
       sourcePid: monitors.sourcePid, timeoutMs: monitors.timeoutMs,
       startAnchorWidthMs: monitors.startAnchorWidthMs, toolUseId: monitors.toolUseId,
+      sourceRun: monitors.sourceRun, startLowAt: monitors.startLowAt,
     })
     .from(monitors)
-    .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude"))))
-    .filter((r) => !!r.nativeId)
-    .map((r) => [r.nativeId as string, r]));
+    .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude"))));
 
   const probe = createLivenessProbe();
   let added = 0;
@@ -128,7 +189,7 @@ export async function commitRound(
     const status = item.status ?? (alive ? "running" : "lost");
     const endedReason = item.endedReason
       ?? (item.status ? null : alive ? null : "历史记录里没有它的结局（那一轮的进程早已结束）");
-    const prior = existing.get(item.nativeId);
+    const prior = pick(index.byNative.get(item.nativeId), item.cliSessionId);
 
     if (prior) {
       const merged = await mergeInto(prior, item, status, endedReason);
@@ -149,22 +210,32 @@ export async function commitRound(
       added += 1;
       report(added); // 中途抛错时，已成功的这些仍要被通知出去（见 runBackfill 的 catch）
 
-      existing.set(item.nativeId, {
+      // 这一轮刚插的也要进索引：同一轮里读到的迟到事实（比如同一个文件里回执排在
+      // `task_started` 前面的那种）就是靠它配回来的。
+      addToIndex(index, {
         id: rowId, nativeId: item.nativeId, status, cliSessionId: item.cliSessionId,
         sourceLifetime: item.lifetime, startedAt, expiresAt: expiryColumn(item, startedAt, anchor),
         lifetimeEvidence: item.lifetime === "unknown" ? null : "receipt",
         startEvidence: anchor.evidence, sourcePid: item.staleRun ? 0 : null,
         timeoutMs: item.expiresMs, startAnchorWidthMs: anchor.widthMs,
         toolUseId: item.toolUseId || null,
+        sourceRun: item.filePath || null, startLowAt: item.startedAtLow,
       });
     } catch (e) {
       if (!isUniqueConflict(e)) throw e; // 真写失败：往外抛，这一轮不算读完
     }
   }
 
-  const late2 = await applyLateFacts(taskId, late, existing);
+  const late2 = await applyLateFacts(taskId, late, index);
   if (late2.missed) missed = true;
-  return { added, missed, resolved: late2.resolved };
+  return { added, missed, resolved: late2.resolved, undecidable: late2.undecidable };
+}
+
+/** 把一行塞进索引（新插的那些也要能被同一轮的迟到事实配到）。 */
+function addToIndex(index: RowIndex, row: PriorRow): void {
+  if (row.nativeId) index.byNative.set(row.nativeId, [...(index.byNative.get(row.nativeId) ?? []), row]);
+  if (row.toolUseId) index.byToolUse.set(row.toolUseId, [...(index.byToolUse.get(row.toolUseId) ?? []), row]);
+  else index.anyMissingToolUse = true;
 }
 
 /**
@@ -174,23 +245,33 @@ export async function commitRound(
  * 起手回执按 `tool_use_id`、终态通知按 `native_id` 都能回到那一行去。走的是和正常提交
  * 同一条 `mergeInto`——元信息无条件写、状态走 CAS 且看命中行数，来源说过的终态不被改写。
  *
- * 配不上的（库里也没有这一条）原样留着：调用方会判这一轮是不是跳过过前缀，决定重读还是
- * 当成与我们无关。
+ * 配不上的分两种，差别就是**能不能断言「与我们无关」**：
+ * - 终态通知：能。它的 `task_started` 必然在它之前（行序严格因果），而那之前的内容都有归宿，
+ *   所以库里没有这一条 = 它不是 Monitor 起的。调用方丢掉即可。
+ * - 起手回执：只有在**所有行都记着 `tool_use_id`** 时才能。存量行那一列是空的，它配不上任何
+ *   东西却可能正属于某一行 —— 这种交回调用方（`undecidable`），由它回头重放一遍把那一列补上。
  */
 async function applyLateFacts(
-  taskId: string, late: LateFact[], existing: Map<string, PriorRow>,
-): Promise<{ resolved: LateFact[]; missed: boolean }> {
-  if (!late.length) return { resolved: [], missed: false };
-  const byToolUse = new Map<string, PriorRow>();
-  for (const row of existing.values()) if (row.toolUseId) byToolUse.set(row.toolUseId, row);
+  taskId: string, late: LateFact[], index: RowIndex,
+): Promise<{ resolved: LateFact[]; undecidable: LateFact[]; missed: boolean }> {
+  if (!late.length) return { resolved: [], undecidable: [], missed: false };
 
   const resolved: LateFact[] = [];
+  const undecidable: LateFact[] = [];
   let missed = false;
   for (const fact of late) {
     const prior = fact.kind === "receipt"
-      ? byToolUse.get(fact.toolUseId)
-      : existing.get(fact.nativeId);
-    if (!prior || !prior.nativeId) continue;
+      ? pick(index.byToolUse.get(fact.toolUseId), fact.cliSessionId)
+      : pick(index.byNative.get(fact.nativeId), fact.cliSessionId);
+    if (!prior || !prior.nativeId) {
+      // 只有「这一代跳过过前缀」才值得回头重放：没跳过就说明它之前的内容这一代全读过了，
+      // 再读一遍还是配不上 —— 那时必须断定并丢掉，否则就是无限重读（见扫描层的
+      // `SessionScan.skippedPrefix`）。
+      if (fact.kind === "receipt" && index.anyMissingToolUse && fact.skippedPrefix) {
+        undecidable.push(fact);
+      }
+      continue;
+    }
     const item = lateItem(prior, fact);
     if (!item) continue;
     const merged = await mergeInto(prior, item, item.status ?? prior.status, item.endedReason);
@@ -198,15 +279,14 @@ async function applyLateFacts(
     if (merged.changed) bus.publish({ type: "task.monitors", taskId });
     resolved.push(fact);
   }
-  return { resolved, missed };
+  return { resolved, undecidable, missed };
 }
 
 /**
  * 把一条迟到事实包成 `Found` 的形状，好走同一条 `mergeInto`。
  *
- * **只带这条事实自己能证明的东西**：回执证明时长，通知证明终态。起点一律不带（没有区间就
- * 算不出锚点，`mergeInto` 自然不动起点那几列），代次也不带（`staleRun: false` ⇒ 不会凭空
- * 给存量行写上「那一代已结束」这个结论）。
+ * **只带这条事实自己能证明的东西**：回执证明时长和起点上界，通知证明终态。代次不带
+ * （`staleRun: false` ⇒ 不会凭空给存量行写上「那一代已结束」这个结论）。
  */
 function lateItem(prior: PriorRow, fact: LateFact): Found | null {
   const base: Found = {
@@ -221,7 +301,13 @@ function lateItem(prior: PriorRow, fact: LateFact): Found | null {
   if (fact.kind === "receipt") {
     const receipt = parseMonitorStartReceipt(fact.raw);
     if (receipt.lifetime === "unknown") return null;
-    return { ...base, lifetime: receipt.lifetime as MonitorLifetime, expiresMs: receipt.ms };
+    // **起点区间能重建**：下界是行上存着的调用时刻（`start_low_at`），上界就是这条回执自己的
+    // 时刻。两端都在才算得出锚点，缺下界时 `startAnchorOf` 自己会退回「起点不明」——所以这里
+    // 照实给，不编（第 10 轮审查不拦项 1：上一版一律置空，窄区间再也重建不出来）。
+    return {
+      ...base, lifetime: receipt.lifetime as MonitorLifetime, expiresMs: receipt.ms,
+      startedAtLow: prior.startLowAt, startedAtHigh: fact.at,
+    };
   }
   const status = claudeMonitorStatus(fact.status);
   return { ...base, status, endedAt: fact.at, endedReason: fact.summary || null };
@@ -285,6 +371,11 @@ async function insertFound(
     // 0 就是这个结论（见 db/schema.ts 的说明）；拿不到任何证据才留 null。
     sourcePid: item.staleRun ? 0 : null,
     sourcePidStartedAt: null,
+    // **代次结论的持久化依据**：`found` 会被内存上限淘汰，而「它起在哪个 run 文件里」记在行上
+    // 就永远算得出「后来又起过新一轮没有」（见 claude-monitor-backfill.ts 的 reconcileLiveness）。
+    sourceRun: item.filePath || null,
+    // 起点区间的下界。迟到回执靠它重建那个窄区间（见 lateItem）。
+    startLowAt: item.startedAtLow,
   });
 }
 
@@ -320,6 +411,9 @@ async function mergeInto(
   // 存量行（升级前写的、以及实时投影在这一列存在之前落的）要顺手补上：缺了它，这一行
   // 在配对状态被挤掉之后就配不回自己的起手回执（见文件头的检查点说明）。
   if (!prior.toolUseId && item.toolUseId) meta.toolUseId = item.toolUseId;
+  // 同理：这两列也是后加的，存量行读到一次就顺手补上（代次结论 + 起点区间的下界）。
+  if (!prior.sourceRun && item.filePath) meta.sourceRun = item.filePath;
+  if (!prior.startLowAt && item.startedAtLow) meta.startLowAt = item.startedAtLow;
   // 代次结论也要补到存量行上，否则下面的死活裁决仍会被新进程骗。
   if (item.staleRun && prior.sourcePid === null) meta.sourcePid = 0;
 

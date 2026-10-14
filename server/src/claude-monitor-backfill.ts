@@ -32,8 +32,8 @@ import {
 } from "./claude-monitor-recovery.js";
 import { commitRound } from "./claude-monitor-commit.js";
 import {
-  dropLateFacts, foundOf, lateFactsOf, newTaskScan, resumedFromCheckpoint, scanSession,
-  strandedFacts, type TaskScan,
+  clearLateFacts, foundOf, lateFactsOf, newTaskScan, parkableCursors, scanSession,
+  type LateFact, type TaskScan,
 } from "./claude-monitor-scan.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
@@ -125,13 +125,19 @@ function rememberScan(taskId: string, scan: TaskScan): void {
  * 预算清零（同第 8 轮那条对称错误，见 `rewound`）。
  */
 function parkCursors(taskId: string, scan: TaskScan): void {
+  // **没确认提交过就不许停在半路**（检查点不变量，见 claude-monitor-scan.ts 文件头）：这一轮
+  // 读过的字节还没落库时，位置之前那段既不在内存里、也不在库里，从它往后读再也拼不回来。
+  // 那种情况只有一条安全的路：整份丢掉，下一轮从零重放（代价是重读，不是错误显示）。
+  //
+  // 按现在的调用序其实到不了这一支（提交没落地的那几条路都会先 `discardScan`，快照根本不在表
+  // 里），它是这条不变量的**硬闸**：留着是为了下一次改动绕不过去，不是因为有哪条回归打在它
+  // 身上。
+  if (!scan.committedThrough) { discardScan(taskId); return; }
   const cursors = new Map<string, { size: number; offset: number }>();
   let rolledBack = false;
-  for (const session of scan.sessions.values()) {
-    for (const [path, cursor] of session.cursors) {
-      cursors.set(path, { size: cursor.size, offset: cursor.safe });
-      if (cursor.safe < cursor.offset) rolledBack = true;
-    }
+  for (const [path, cursor] of parkableCursors(scan)) {
+    cursors.set(path, { size: cursor.size, offset: cursor.offset });
+    if (cursor.offset < cursor.read) rolledBack = true;
   }
   if (!cursors.size) return;
   if (rolledBack) rewound.add(taskId);
@@ -200,6 +206,9 @@ async function runBackfill(taskId: string): Promise<number> {
   // 之后，而扫描结果是在 try 里拿到的。
   let missed = false;
   let unread = false;
+  // 这一轮看到的 run 文件清单（**死活裁决在 try 之外**，所以要在外层）。它和行上的
+  // `source_run` 一起回答「起它的那一代 run 结束了没有」——不依赖任何会被淘汰的内存状态。
+  let runFiles: { all: Set<string>; latest: Set<string> } = { all: new Set(), latest: new Set() };
   try {
     const rows = await db
       .select({ id: sessions.id, cliSessionId: sessions.cliSessionId, outPath: sessions.agentOutPath })
@@ -222,12 +231,14 @@ async function runBackfill(taskId: string): Promise<number> {
     scan.failed = false;
     scan.advanced = false;
     scan.generationChanged = false;
-    scan.orphanOverflow = false;
+    scan.lateOverflow = false;
 
+    scan.runFiles = { all: new Set(), latest: new Set() };
     for (const session of rows) {
       if (!session.outPath) continue;
       await scanSession(scan, session.id, session.cliSessionId, session.outPath);
     }
+    runFiles = scan.runFiles;
     if (scan.foreign.size) {
       console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 的文件里出现了别的会话身份`
         + `（${[...scan.foreign].join(", ")}），已按文件归属采用`);
@@ -249,11 +260,11 @@ async function runBackfill(taskId: string): Promise<number> {
     // claude-monitor-scan.ts 的 ORPHAN_CAP）。所以这里**不丢游标**：丢了就是从零重读同一段
     // 前缀，而输入没变就会再次占满 —— 那条路不收敛，实测 142MB 日志下永远读不到末尾的
     // Monitor（第 8 轮审查）。留账等下一轮从那一行继续。
-    if (scan.orphanOverflow) {
+    if (scan.lateOverflow) {
       unread = true;
       noteMonitorRecovery(taskId, "orphan-overflow", scan.advanced && !reread);
-      console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 还没配对的事实占满了缓冲，`
-        + `游标停在那一条之前，下一轮从它继续`);
+      console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 这一轮要裁决的迟到事实顶到了`
+        + `单轮上限，游标停在那一条之前，下一轮从它继续`);
     }
 
     // **提交条件不只是「有新字节」。** 新回合会先创建一个空的 run 文件、过一会儿才输出，那一刻
@@ -262,10 +273,14 @@ async function runBackfill(taskId: string): Promise<number> {
     // 迟到事实（读过了、配不上内存状态）也要交出去配一遍：配对状态被内存上限挤掉之后，
     // 这一轮读到的可能全是「前缀里那些 Monitor 的回执和终态」（第 9 轮审查）。
     const late = lateFactsOf(scan);
+    let undecidable: LateFact[] = [];
     if (scan.advanced || scan.generationChanged || late.length) {
       const outcome = await commitRound(taskId, foundOf(scan), late, (n) => { added = n; });
       added = outcome.added;
-      dropLateFacts(scan, outcome.resolved); // 配上了的从缓冲里销掉，别再占着
+      undecidable = outcome.undecidable;
+      // 裁完的就从通道里清掉（配上了的已经落到行上，配不上的已证明与我们无关）。裁不清的
+      // 留着：下一轮重放之后那些存量行会补上 `tool_use_id`，届时就配得上了。
+      clearLateFacts(scan, undecidable);
       if (outcome.missed) {
         // 条件更新 0 行 = 那次更新**没有**落地（读到写之间别的 writer 改了状态）。上一版
         // 把它当成已提交，于是那条事实永久消失（实测 casAtRace）。记账 + 把快照丢掉：
@@ -273,34 +288,31 @@ async function runBackfill(taskId: string): Promise<number> {
         // 多数情况下判定为「来源终态已成定局，不该改」→ 干净收场）。
         discardScan(taskId);
         noteMonitorRecovery(taskId, "update-missed", added > 0);
+      } else {
+        // **这一轮消费过的都确认落库了** ⇒ 位置可以停在半路了（见 parkCursors）。
+        scan.committedThrough = true;
       }
       missed = outcome.missed;
+    } else {
+      // 一个新字节都没读、也没有迟到事实 ⇒ 这份状态消费过的内容还是上一轮那些，结论不变。
+      scan.committedThrough = true;
     }
 
-    // ── 销账前最后一问：**还有配不上的一次性事实吗** ─────────────────────────────
+    // ── 销账前最后一问：**还有裁不清的一次性事实吗** ─────────────────────────────
     //
-    // 读到文件尾不等于「什么都没剩下」。这一轮的读取位置可能跳过了一整段前缀（被内存上限
-    // 挤掉时停好的位置），那段里建立的关联既不在内存里、又没落到库里时，后缀的事实就配不上
-    // 任何东西——上一版照旧销账，于是面板显示一张漏掉的卡 + 一条写着 running 的已完成监听，
-    // 刷新也不会变（第 9 轮审查用生产服务 + 真页面实测）。
+    // 只剩一种裁不清：存量行连 `tool_use_id` 都没记（这一列是后加的），于是后缀里的那条起手
+    // 回执配不上任何行，却也不能断言它与我们无关。回到一个**确定可重放**的位置（从零）并
+    // 留账：重放一遍会把那些存量行的 `tool_use_id` 补上，下一轮这条回执就配得上了。
     //
-    // 两种收场，判据是**这一代有没有跳过前缀**：
-    // - 没跳过：这些事实的 `task_started` 必然已经读过且不是 Monitor ⇒ 它们确实与我们
-    //   无关（普通后台 Bash 的终态通知、以及「不是 Monitor」的结论被 4096 容量淘汰之后
-    //   重新退成孤儿的那些）。销掉，正常收尾。
-    // - 跳过了：不能这么推断。回到一个**确定可重放**的位置（从零）并留账，让它自己再读
-    //   一遍——重放一遍一定能把关联重建出来，而且下一轮就落进上面那一支。
-    const stranded = strandedFacts(scan);
-    if (stranded && !unread) {
-      if (resumedFromCheckpoint(scan)) {
-        unread = true;
-        discardScan(taskId);
-        noteMonitorRecovery(taskId, "checkpoint-incomplete", false);
-        console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 有 ${stranded} 条读过的事实`
-          + `既配不上内存状态、也配不上已提交的行，而这一轮跳过了前缀 —— 已回到可重放位置重读`);
-      } else {
-        dropLateFacts(scan, lateFactsOf(scan));
-      }
+    // 其余两种在提交层当场就裁完了（配回行 / 证明与我们无关），不占内存也不钉位置——上一版
+    // 靠「这一代有没有跳过前缀」来决定销不销账，而跳过前缀是常态，于是固定输入永远读不完
+    // （第 10 轮审查实测 24 轮同点停滞）。
+    if (undecidable.length && !unread) {
+      unread = true;
+      discardScan(taskId);
+      noteMonitorRecovery(taskId, "checkpoint-incomplete", false);
+      console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 有 ${undecidable.length} 条起手回执`
+        + `配不上任何已提交的行，而库里还有没记 tool_use_id 的存量行 —— 已回到可重放位置重读`);
     }
   } catch (e) {
     // 回填失败不该让面板打不开：这是补历史，不是主路径。但要留下线索，而且**部分成功的那些
@@ -321,7 +333,7 @@ async function runBackfill(taskId: string): Promise<number> {
   // 一条事件都没发，要等人再调一次回填才变 lost（第 7 轮审查 livenessWriteFailure）。
   let reconciled = true;
   try {
-    if (await reconcileLiveness(taskId)) bus.publish({ type: "task.monitors", taskId });
+    if (await reconcileLiveness(taskId, runFiles)) bus.publish({ type: "task.monitors", taskId });
   } catch (e) {
     console.warn(`[ash] 内置 Monitor 死活裁决失败（task=${taskId}）:`, e);
     reconciled = false;
@@ -346,11 +358,16 @@ async function runBackfill(taskId: string): Promise<number> {
  * （常态）根本不会走到它，而进程的死活随时在变（实测 existingLiveness 两个方向都卡住）。
  * 来源已经给过终态的行不在此列 —— 那是事实，不是推断。
  */
-async function reconcileLiveness(taskId: string): Promise<boolean> {
+async function reconcileLiveness(
+  taskId: string,
+  /** 这一轮看到的 run 文件（见 TaskScan.runFiles）。代次结论由它和行上的 `source_run` 现算。 */
+  runFiles: { all: Set<string>; latest: Set<string> },
+): Promise<boolean> {
   const rows = await db
     .select({
       id: monitors.id, status: monitors.status, cliSessionId: monitors.cliSessionId,
       taskId: monitors.taskId, sourcePid: monitors.sourcePid, sourcePidStartedAt: monitors.sourcePidStartedAt,
+      sourceRun: monitors.sourceRun,
     })
     .from(monitors)
     .where(and(
@@ -363,10 +380,29 @@ async function reconcileLiveness(taskId: string): Promise<boolean> {
   const probe = createLivenessProbe();
   const revive: string[] = [];
   const bury: string[] = [];
+  /** 这一轮新判明「那一代 run 已经结束」的行：结论要落到列上，别每轮重算（也给开机清扫用）。 */
+  const stale: string[] = [];
   for (const row of rows) {
-    const alive = await probe.sourceAlive(row);
+    // ── 代次：**认文件，不认内存** ───────────────────────────────────────────────
+    //
+    // 这一行起在哪个 run 文件里是记在列上的（`source_run`），而「这条会话最新的 run 是哪个」
+    // 这一轮刚列过。两样一比就知道「后来又起过新一轮没有」——不需要 `found` 还在内存里。
+    //
+    // 为什么非这样不可：配对状态被内存上限挤掉之后，`found` 是空的，代次翻转无从算起；而新
+    // 回合会先创建一个**空的** run 文件，于是旧监听会被「这条会话现在有活进程」证明成「还在
+    // 盯着」——拿下一代人的凭据给上一代续命（第 10 轮审查用生产服务 + 真页面实测）。
+    //
+    // 只在「这一行的 run 文件这一轮确实列到了」时才下这个结论：列不到（文件被删、目录换了）
+    // 说明我们没有权威清单，那就不猜，退回下面按 pid / 会话判。
+    const outdated = !!row.sourceRun && runFiles.all.has(row.sourceRun) && !runFiles.latest.has(row.sourceRun);
+    if (outdated && row.sourcePid !== 0) stale.push(row.id);
+    const alive = outdated ? false : await probe.sourceAlive(row);
     if (alive && row.status === "lost") revive.push(row.id);
     else if (!alive && row.status === "running") bury.push(row.id);
+  }
+  if (stale.length) {
+    // 0 不是缺省值而是明确结论：「起它的那一代 run 之后又起过新的 run」（见 db/schema.ts）。
+    await db.update(monitors).set({ sourcePid: 0 }).where(inArray(monitors.id, stale));
   }
   if (revive.length) {
     await db.update(monitors)
@@ -378,5 +414,5 @@ async function reconcileLiveness(taskId: string): Promise<boolean> {
       .set({ status: "lost", endedAt: now(), endedReason: "起它的那个智能体进程已经不在了" })
       .where(and(inArray(monitors.id, bury), eq(monitors.status, "running")));
   }
-  return revive.length + bury.length > 0;
+  return revive.length + bury.length + stale.length > 0;
 }
