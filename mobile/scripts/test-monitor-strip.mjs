@@ -1,4 +1,4 @@
-// 手机端哨兵条的**请求与操作状态生命周期**（第 9 轮审查实测的两条）。
+// 手机端哨兵条的**请求与操作状态生命周期**（第 9、10 轮审查实测的四条）。
 //
 // 这两条都只在「同一个组件实例被复用」和「同一任务内部响应乱序」时出现，用真实组件 +
 // 真实 React hooks 才看得见（只把原生壳 View/Text/Pressable/Alert、图标和 API 传输换成
@@ -10,6 +10,11 @@
 // ② **旧那发轮询不许把停掉的卡画回来**：停掉之后那一发 reload 返回空列表，先前挂起的轮询
 //    随后回来又把 running 画回去，卡片连停止按钮一起复活。判据是请求序号（最后发出的说话），
 //    跟 Web 那边的 seq 同一套。
+// ③ **一卡一格**：交替停同一屏上的两条哨兵，后一发不许把前一发的「正在停」挤掉——那会让
+//    前一张卡当场又可按（第 10 轮审查不拦项 2）。判据是「哪个任务的哪一条」，不是全组件一
+//    个槽。
+// ④ **每发一个序号**：同一条哨兵上两发停止请求在飞时（确认框连点两下），先出门那一发的收尾
+//    不许放开按钮——它只认「这是不是我按下的那一发」。
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -28,7 +33,7 @@ const bundle = await esbuild.build({
       import React, { useState } from "react";
       import { createRoot } from "react-dom/client";
       import { MonitorStrip } from "${repo}mobile/src/components/MonitorStrip.tsx";
-      window.mock = { alerts: [], lists: {}, polls: [], deferredPoll: false, pollResolve: null, stopResolve: null, stopReject: null };
+      window.mock = { alerts: [], lists: {}, polls: [], deferredPoll: false, pollResolve: null, stops: [], stopResolve: null, stopReject: null };
       for (const taskId of ["A", "B"]) {
         window.mock.lists[taskId] = [{ id: "mon-" + taskId, taskId, kind: "ash", status: "running", description: "任务" + taskId + "的监听", events: 1 }];
       }
@@ -70,7 +75,10 @@ const bundle = await esbuild.build({
             taskMonitors: (taskId) => window.mock.deferredPoll
               ? new Promise((resolve) => { window.mock.pollResolve = resolve; window.mock.deferredPoll = false; })
               : Promise.resolve(window.mock.lists[taskId]),
-            stopMonitor: () => new Promise((resolve, reject) => { window.mock.stopResolve = resolve; window.mock.stopReject = reject; }),
+            stopMonitor: () => new Promise((resolve, reject) => {
+              window.mock.stops.push({ resolve, reject });
+              window.mock.stopResolve = resolve; window.mock.stopReject = reject;
+            }),
           };`,
         }[args.path],
       }));
@@ -89,11 +97,18 @@ try {
   await page.setContent('<html lang="zh"><meta charset="utf-8"><body><div id="app"></div></body></html>');
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
   const stopA = page.getByRole("button", { name: "停掉哨兵「任务A的监听」" });
+  /** 按下「停掉」并走完确认框，等按钮真的灰下去（= 这一发请求已经出门）。 */
+  const confirmStop = async (button, label) => {
+    await button.click();
+    await page.evaluate(() => window.mock.alerts.at(-1)[2][1].onPress());
+    await page.waitForFunction(
+      (name) => document.querySelector(`button[aria-label="${name}"]`)?.disabled === true,
+      label,
+    );
+  };
 
   // ── ① 同一实例复用：过期的停止操作自己收尾，不许把按钮永久按住 ──────────────
-  await stopA.click();
-  await page.evaluate(() => window.mock.alerts.at(-1)[2][1].onPress());
-  await page.waitForFunction(() => document.querySelector('button[aria-label="停掉哨兵「任务A的监听」"]')?.disabled === true);
+  await confirmStop(stopA, "停掉哨兵「任务A的监听」");
   await page.getByRole("button", { name: "切B", exact: true }).click();
   await page.getByRole("button", { name: "停掉哨兵「任务B的监听」" }).waitFor();
   await page.getByRole("button", { name: "切A", exact: true }).click();
@@ -108,9 +123,7 @@ try {
 
   // ── ② 停掉之后，先前挂起的那发轮询不许把卡画回来 ────────────────────────────
   await page.evaluate(() => { window.mock.deferredPoll = true; window.mock.polls.at(-1)(); });
-  await stopA.click();
-  await page.evaluate(() => window.mock.alerts.at(-1)[2][1].onPress());
-  await page.waitForFunction(() => document.querySelector('button[aria-label="停掉哨兵「任务A的监听」"]')?.disabled === true);
+  await confirmStop(stopA, "停掉哨兵「任务A的监听」");
   await page.evaluate(() => { window.mock.lists.A = []; window.mock.stopResolve(); });
   await page.waitForTimeout(100);
   assert.equal(await stopA.count(), 0, "停掉之后那一发 reload 返回空列表，卡片该消失");
@@ -119,9 +132,40 @@ try {
   ]));
   await page.waitForTimeout(100);
   assert.equal(await stopA.count(), 0, "旧那发轮询回来不该把已经停掉的卡画回去（请求序号认最后发出的那一发）");
+  // ── ③ 一卡一格：交替停两条哨兵，后一发不许把前一发的「正在停」挤掉 ─────────────
+  await page.evaluate(() => {
+    window.mock.lists.A = [
+      { id: "mon-A", taskId: "A", kind: "ash", status: "running", description: "任务A的监听", events: 1 },
+      { id: "mon-A2", taskId: "A", kind: "ash", status: "running", description: "任务A的第二条", events: 1 },
+    ];
+    window.mock.stops = [];
+  });
+  await page.getByRole("button", { name: "重新挂载", exact: true }).click();
+  const stopA2 = page.getByRole("button", { name: "停掉哨兵「任务A的第二条」" });
+  await stopA2.waitFor();
+  await confirmStop(stopA, "停掉哨兵「任务A的监听」");
+  await confirmStop(stopA2, "停掉哨兵「任务A的第二条」");
+  assert.equal(await stopA.isDisabled(), true, "停了第二条不该把第一条放开（一卡一格，不是全组件一个槽）");
+  await page.evaluate(() => window.mock.stops[1].reject(new Error("受控网络失败")));
+  await page.waitForFunction(() => document.querySelector('button[aria-label="停掉哨兵「任务A的第二条」"]')?.disabled === false);
+  assert.equal(await stopA.isDisabled(), true, "第二条收尾只清自己那一格，第一条还在飞不该被放开");
+  await page.evaluate(() => window.mock.stops[0].reject(new Error("受控网络失败")));
+  await page.waitForFunction(() => document.querySelector('button[aria-label="停掉哨兵「任务A的监听」"]')?.disabled === false);
+
+  // ── ④ 每发一个序号：同一条上两发请求，先出门那一发的收尾不许放开按钮 ───────────
+  await page.evaluate(() => { window.mock.stops = []; });
+  await stopA.click();
+  await page.evaluate(() => { const press = window.mock.alerts.at(-1)[2][1].onPress; press(); press(); });
+  await page.waitForFunction(() => window.mock.stops.length === 2);
+  await page.evaluate(() => window.mock.stops[0].reject(new Error("受控网络失败")));
+  await page.waitForTimeout(100);
+  assert.equal(await stopA.isDisabled(), true, "同一条上两发请求：较早那发收尾不许放开按钮（认的是哪一发，不只是哪一条）");
+  await page.evaluate(() => window.mock.stops[1].resolve());
+  await page.waitForFunction(() => document.querySelector('button[aria-label="停掉哨兵「任务A的监听」"]')?.disabled === false);
+
   assert.deepEqual(errors, [], "组件不该抛错");
 } finally {
   await context.close();
   await browser.close();
 }
-console.log("✓ 手机哨兵条：过期的停止操作自己收尾（按钮不会永久灰着）/ 旧轮询不会把停掉的卡画回来");
+console.log("✓ 手机哨兵条：过期的停止操作自己收尾 / 旧轮询不会把停掉的卡画回来 / 停止标记认得出「哪一张卡的哪一发」");
