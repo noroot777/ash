@@ -676,4 +676,10 @@ export const monitors = sqliteTable("monitors", {
   endedReason: text("ended_reason"),
   // 谁起的这个哨兵(多人模式)。停它、看它都按任务归属判权,这一列只做记账。
   ownerUserId: text("owner_user_id"),
+  // 出身:'ash' = ash server 自己起的进程(全功能);'claude' = claude CLI 内置 Monitor 的
+  // **只读投影**(停不掉、无日志、随 agent 进程消失)。语义见 shared/src/monitor.ts 文件头。
+  // 所有「接管进程/杀进程/读日志」的查询都必须按它过滤,否则会拿 pid=null 的投影行去认进程。
+  kind: text("kind").notNull().default("ash"),
+  // 来源侧的原生 id(claude 的后台任务 id,形如 b69ym4qzv)。'ash' 那种恒为 null。
+  nativeId: text("native_id"),
 });

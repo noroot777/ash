@@ -5,7 +5,7 @@ import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS } from "@ash/shared/moni
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { getMonitor, listMonitors, readMonitorTail, startMonitor, stopMonitor } from "./monitors.js";
+import { getMonitor, listMonitors, readMonitorTail, startMonitor, stopMonitorChecked } from "./monitors.js";
 
 export function mountMonitorRoutes(api: Hono): void {
   api.get("/tasks/:id/monitors", async (c) => c.json(await listMonitors(c.req.param("id"))));
@@ -58,7 +58,10 @@ export function mountMonitorRoutes(api: Hono): void {
     if (!existing) return c.json({ error: "哨兵不存在" }, 404);
     const task = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, existing.taskId))).at(0);
     if (!task) return c.json({ error: "哨兵所属任务已不存在" }, 404);
-    const monitor = await stopMonitor(monitorId, body.reason?.trim() || "被停掉了");
-    return c.json({ monitor });
+    // claude 内置 Monitor 的投影停不掉，原因要原样传出去——前端不给那种卡渲染停止按钮，
+    // 这一道是给 API 直调和旧前端的（静默成功比报错坏得多：进程还在跑，界面却写着已停止）。
+    const result = await stopMonitorChecked(monitorId, body.reason?.trim() || "被停掉了");
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ monitor: result.monitor });
   });
 }

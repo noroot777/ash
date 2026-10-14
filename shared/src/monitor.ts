@@ -8,13 +8,45 @@
 //
 // 一条事件 = 唤醒任务一次 = 真金白银的一个模型回合。所以这里的上限不是防御性冗余，
 // 而是功能的一部分：批量合并、单批行数上限、总事件上限，三道都写在下面。
+//
+// ── 两种来源（`kind`）─────────────────────────────────────────────────────────
+//
+// 面板上并排显示的哨兵有两种出身，能力**不对等**，所以 `kind` 不是装饰性标签，是读这份
+// 结构时必须先看的一列：
+//
+// - `ash`：上面说的那种，ash server 自己起的进程。全套都有——停得掉、看得到日志尾巴、
+//   跨回合/会话/重启都活着。
+// - `claude`：claude CLI 自带的 `Monitor` 工具起的，**进程在 agent 自己的进程树里**。
+//   ash 只是从 stream-json 里把它认出来并记账，是一份**只读投影**：停不掉（`TaskStop`
+//   是 claude 进程内的工具，ash 没有手柄）、没有日志文件、agent 进程一死它就跟着没了。
+//
+// 为什么还要记它：不记的话，agent 在对话里说一句「已挂 Monitor，等通知」，而哨兵面板
+// 空空如也——用户翻遍界面也对不上账，只能得出「这功能坏了」。2026-10-14 实测的那个任务
+// 挂了 12 个内置 Monitor、ash 一个都不知道，用户的第一反应正是「为什么 inspector 里没
+// 东西」。只读也比没有强，前提是**界面必须如实说明它只读**（见 MonitorCard）。
 
 export const MONITOR_STATUSES = ["running", "stopped", "expired", "exited", "lost"] as const;
 export type MonitorStatus = (typeof MONITOR_STATUSES)[number];
 
+/** 哨兵的出身。能力差异见文件头那一段——`claude` 那种是只读投影。 */
+export const MONITOR_KINDS = ["ash", "claude"] as const;
+export type MonitorKind = (typeof MONITOR_KINDS)[number];
+
+/** 能不能从 ash 这边停掉它。`claude` 那种的进程在 agent 进程树里，ash 够不着。 */
+export const canStopMonitor = (kind: MonitorKind) => kind === "ash";
+/** 有没有日志文件可以回看尾巴。只有 ash 自己起的才有。 */
+export const hasMonitorLog = (kind: MonitorKind) => kind === "ash";
+
 export interface TaskMonitor {
   id: string;
   taskId: string;
+  /** 出身。读这份结构的任何一处都要先看它——两种的能力不对等。 */
+  kind: MonitorKind;
+  /**
+   * 来源侧的原生 id（`claude` 那种是 claude 的后台任务 id，形如 `b69ym4qzv`）。
+   * `ash` 那种恒为 null：它的 `id` 就是唯一那一个。
+   */
+  nativeId: string | null;
   /** 原样交给用户 shell 执行的命令行。 */
   command: string;
   /** 一句话说明，会出现在每条事件的抬头和界面上。 */
@@ -38,10 +70,23 @@ export function isMonitorLive(status: MonitorStatus): boolean {
   return status === "running";
 }
 
-/** 默认盯 2 小时——哨兵存在的理由就是那种「要跑两小时」的活。 */
-export const MONITOR_DEFAULT_TIMEOUT_MS = 2 * 60 * 60_000;
+/**
+ * 时长：**与 claude 内置 `Monitor` 对齐**（用户 2026-10-14 指定）。
+ *
+ * 两种哨兵并排显示在同一个面板里，时长语义就不该各说各话——一个缺省 2 小时、另一个缺省
+ * 5 分钟，用户看两张卡上的「还剩多久」会得出互相矛盾的预期。claude 那边是缺省 5 分钟、
+ * 超过 30 分钟一律钳到 30 分钟，这里照搬。
+ *
+ * 取舍要说清楚：ash 哨兵原本能盯 24 小时，这是它相对内置 Monitor 的硬优势之一（进程不在
+ * agent 进程树里，本来就撑得住）。对齐之后那条优势缩到 30 分钟，更长的活得靠「到期续挂」。
+ * 换来的是两种卡的时间读数可以直接相互比较。要改回去只动下面这两个常量。
+ *
+ * 下限保持 60 秒：claude 那边允许到 1 秒，但 ash 这头要 spawn 进程 + 起 tail 轮询，1 秒的
+ * 哨兵基本在起来之前就过期了，给出来只是个坑。
+ */
+export const MONITOR_DEFAULT_TIMEOUT_MS = 5 * 60_000;
 export const MONITOR_MIN_TIMEOUT_MS = 60_000;
-export const MONITOR_MAX_TIMEOUT_MS = 24 * 60 * 60_000;
+export const MONITOR_MAX_TIMEOUT_MS = 30 * 60_000;
 
 /** 攒多久算一批。tail 轮询本身就是这个量级，再大就拖慢「有事马上知道」的手感。 */
 export const MONITOR_BATCH_MS = 300;
@@ -107,3 +152,38 @@ export function monitorBlockedReason(
 export const monitorMessageOrigin = (monitorId: string) => `monitor:${monitorId}`;
 export const monitorIdFromOrigin = (origin: string | null | undefined): string | null =>
   origin?.startsWith("monitor:") ? origin.slice("monitor:".length) : null;
+
+/**
+ * claude 后台任务的状态 → 哨兵状态。
+ *
+ * claude 侧的取值来自 `system/task_notification` 的 `status`，实测见过 `completed`
+ * （命令自己跑完）和 `stopped`（被 `TaskStop` 停掉）。拿不准的一律当 `exited` 收口而不是
+ * 留在 `running`：面板上一个永远「正在盯着」的僵尸条目，比一个状态说得略粗的存档更误导人。
+ */
+export function claudeMonitorStatus(status: unknown): MonitorStatus {
+  switch (String(status ?? "").toLowerCase()) {
+    case "stopped":
+    case "canceled":
+    case "cancelled":
+    case "killed":
+      return "stopped";
+    case "timeout":
+    case "timed_out":
+    case "expired":
+      return "expired";
+    case "running":
+    case "in_progress":
+    case "pending":
+      return "running";
+    default:
+      return "exited";
+  }
+}
+
+/** claude 内置 Monitor 的结束原因文案，按状态给。 */
+export const CLAUDE_MONITOR_ENDED_REASON: Partial<Record<MonitorStatus, string>> = {
+  exited: "命令自己跑完了（claude 侧报的完成）",
+  stopped: "被 claude 自己停掉了（TaskStop）",
+  expired: "盯满了 claude 侧约定的时长",
+  lost: "agent 进程已经不在了，它跟着一起没了",
+};

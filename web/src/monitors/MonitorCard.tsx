@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CaretRight, Pulse, SpinnerGap, StopCircle } from "@phosphor-icons/react";
-import type { TaskMonitor } from "@ash/shared/monitor";
+import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@ash/shared/monitor";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { formatInstant } from "../task-detail/utils.ts";
@@ -45,6 +45,12 @@ function useMonitorLog(monitorId: string, open: boolean, live: boolean) {
  * 「看它的输出」是这张卡相对于一行摘要的全部意义：事件数只说明推了几次，而「0 条事件」
  * 既可能是命令还没开始吐，也可能是过滤条件写错了把什么都滤没了——这两件事的处理方式相反，
  * 不看原始输出分不出来。
+ *
+ * **两种出身的卡不一样，而且差别必须看得见**（`kind`，语义见 shared/src/monitor.ts）：
+ * claude 自带 `Monitor` 起的那种是一份只读投影，停不掉、没有日志、agent 进程一死就没。
+ * 所以那种卡不渲染停止按钮、不渲染「看它的输出」，并明写一句它是谁起的、为什么只能看。
+ * 把两种画成一模一样是这张卡最容易犯的错：用户会去点一个不存在的停止按钮，或者把
+ * 「0 条事件」读成「过滤写错了」——而那种卡的事件数 ash 根本数不到。
  */
 export function MonitorCard({
   monitor,
@@ -57,7 +63,11 @@ export function MonitorCard({
 }) {
   const [open, setOpen] = useState(false);
   const live = monitor.status === "running";
-  const log = useMonitorLog(monitor.id, open, live);
+  const stoppable = canStopMonitor(monitor.kind);
+  const logged = hasMonitorLog(monitor.kind);
+  // 只读投影没有日志可拉，连请求都不要发：那条路在服务端是按 kind 短路的，发过去只会
+  // 拿回一个空数组，白白每 2.5 秒一次。
+  const log = useMonitorLog(monitor.id, open && logged, live);
   const stopTip = useHoverTip();
   const endedLabel = MONITOR_ENDED_LABEL[monitor.status] ?? monitor.status;
   // 结束原因常常就是那句状态标签本身（命令自己跑完了 / 盯满时长），一字不差时只说一遍。
@@ -68,7 +78,8 @@ export function MonitorCard({
       <header>
         <Pulse size={13} weight={live ? "fill" : "regular"} aria-hidden="true" />
         <b>{monitor.description}</b>
-        {live && (
+        {monitor.kind === "claude" && <span className="monitor-card__origin">claude 自带</span>}
+        {live && stoppable && (
           <>
             <button
               type="button"
@@ -86,8 +97,14 @@ export function MonitorCard({
       </header>
       <code className="monitor-card__command">{monitor.command}</code>
       <p className="monitor-card__meta">
-        <span>{monitor.events} 条事件</span>
-        <span aria-hidden="true">·</span>
+        {/* 事件数只有 ash 自己起的那种数得准：claude 把事件直接注回它自己的会话，
+            ash 看不到几条，显示一个恒为 0 的「0 条事件」只会被读成「过滤写错了」。 */}
+        {logged && (
+          <>
+            <span>{monitor.events} 条事件</span>
+            <span aria-hidden="true">·</span>
+          </>
+        )}
         <span>
           {live
             ? `盯到 ${formatInstant(monitor.expiresAt)}`
@@ -102,16 +119,24 @@ export function MonitorCard({
       </p>
       {reason && <p className="monitor-card__reason">{reason}</p>}
       <p className="monitor-card__cwd">{monitor.cwd}</p>
-      <button
-        type="button"
-        className={`monitor-card__toggle${open ? " is-open" : ""}`}
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <CaretRight size={11} weight="bold" aria-hidden="true" />
-        看它的输出
-      </button>
-      {open && (
+      {!logged && (
+        <p className="monitor-card__readonly">
+          这是智能体自己起的 Monitor，ash 只能看不能停——它的进程在智能体的进程树里，
+          输出也直接进了它自己的会话。{live ? "智能体的这一轮结束时它会跟着消失。" : ""}
+        </p>
+      )}
+      {logged && (
+        <button
+          type="button"
+          className={`monitor-card__toggle${open ? " is-open" : ""}`}
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <CaretRight size={11} weight="bold" aria-hidden="true" />
+          看它的输出
+        </button>
+      )}
+      {open && logged && (
         <div className="monitor-card__log">
           {log.error && <p role="alert">{log.error}</p>}
           {!log.error && log.lines === null && <p>读取中…</p>}

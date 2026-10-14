@@ -130,7 +130,8 @@ export async function ensureSchema() {
       log_path TEXT NOT NULL, read_offset INTEGER NOT NULL DEFAULT 0,
       events INTEGER NOT NULL DEFAULT 0, exit_code INTEGER,
       started_at TEXT NOT NULL, expires_at TEXT NOT NULL,
-      ended_at TEXT, ended_reason TEXT, owner_user_id TEXT
+      ended_at TEXT, ended_reason TEXT, owner_user_id TEXT,
+      kind TEXT NOT NULL DEFAULT 'ash', native_id TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -296,6 +297,8 @@ export async function ensureSchema() {
   // Run-timing columns (added later). Each ALTER is independent + tolerant so a
   // DB created before any one of them still upgrades cleanly.
   for (const sql of [
+    "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
+    "ALTER TABLE monitors ADD COLUMN native_id TEXT",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
@@ -528,6 +531,21 @@ export async function ensureSchema() {
     } catch {
       /* column already exists */
     }
+  }
+  // **必须排在上面那串容错 ALTER 之后**：这条索引引用 `native_id`，而老库那一列是靠
+  // ALTER 补上的。放进上面的建表块里会要了命——`CREATE TABLE IF NOT EXISTS` 对已存在的
+  // 表什么都不做（不补列），索引紧接着引用一个还不存在的列，整个 executeMultiple 抛出，
+  // ensureSchema 崩掉 = 整台 ash 起不来。2026-10-14 在真实库副本上实测到这一条。
+  //
+  // 索引本身的用途：claude 内置 Monitor 的投影按 (task_id, native_id) 认人，同一个后台
+  // 任务的 task_started / task_notification 要 upsert 成同一行；唯一性同时挡住重放同一段
+  // stream 时的重复落库（回归 test-claude-monitor-parse.ts「重放幂等」钉的就是它）。
+  try {
+    await client.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS monitors_native ON monitors(task_id, native_id) WHERE native_id IS NOT NULL",
+    );
+  } catch (e) {
+    console.warn("[ash] monitors_native 索引创建失败,忽略:", e);
   }
   await ensureChatSchema(client);
   // DDL 到此为止。剩下那一半(一次性数据搬运 + 退役字段/表清理)在 `migrations.ts`。

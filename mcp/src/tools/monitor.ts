@@ -7,6 +7,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  MONITOR_DEFAULT_TIMEOUT_MS,
   MONITOR_MAX_EVENTS,
   MONITOR_MAX_PER_TASK,
   MONITOR_MAX_TIMEOUT_MS,
@@ -14,7 +15,7 @@ import {
 } from "@ash/shared/monitor";
 import { call, fail, ok } from "../runtime.js";
 
-const hours = (ms: number) => `${Math.round(ms / 3_600_000)} 小时`;
+const minutes = (ms: number) => `${Math.round(ms / 60_000)} 分钟`;
 
 export function registerMonitorTools(server: McpServer): void {
 server.registerTool(
@@ -26,14 +27,14 @@ server.registerTool(
       "**什么时候用它**：你要等的事情以「分钟~小时」计，而且过程中会往某处写进展——跑批、训练、长构建、爬取、转码、轮询一个外部状态。典型手法是让命令自己做过滤：`tail -F build.log | grep --line-buffered -E '^\\[DONE\\]|ERROR'`。**什么时候不用**：几秒内就能出结果的命令（直接跑完它）；需要你立刻看全文的（直接读文件）。\n\n" +
       "**命令就是过滤器，这是最重要的一条**：每一行事件都会唤醒任务跑一个真实回合，花的是真钱。所以别 `tail -F` 整份日志，要 grep 到「你真会据此做事」的那几行。管道每一级都得逐行冲刷（`grep --line-buffered`、`awk` 里 `fflush()`；`head` 做不到，别用）。同时**别只匹配成功**：只 grep 成功标记的哨兵在崩溃、卡死、异常退出时一声不吭，而「安静」和「还在跑」长得一模一样——把失败特征（`Traceback|ERROR|FAILED|Killed`）一起写进交替分支里。\n\n" +
       "**起了哨兵的那一轮，用 pause_task 收尾，不要用 complete_task**：任务一落 done/failed/canceled，它名下的哨兵会被系统一并停掉（哨兵唯一的出口就是唤醒这个任务，任务都结束了再留着只会白烧回合）。pause_task 的 resumePrompt 写清「被哨兵叫醒后该干什么」。\n\n" +
-      `**上限**：一个任务同时最多 ${MONITOR_MAX_PER_TASK} 个哨兵；单个哨兵推够 ${MONITOR_MAX_EVENTS} 条事件自动停（到顶会明确告诉你）；timeoutMs 在 ${MONITOR_MIN_TIMEOUT_MS / 1000} 秒到 ${hours(MONITOR_MAX_TIMEOUT_MS)} 之间，缺省 2 小时，到点进程被杀掉并推一条收尾事件。\n\n` +
+      `**上限**：一个任务同时最多 ${MONITOR_MAX_PER_TASK} 个哨兵；单个哨兵推够 ${MONITOR_MAX_EVENTS} 条事件自动停（到顶会明确告诉你）；timeoutMs 在 ${MONITOR_MIN_TIMEOUT_MS / 1000} 秒到 ${minutes(MONITOR_MAX_TIMEOUT_MS)} 之间，缺省 ${minutes(MONITOR_DEFAULT_TIMEOUT_MS)}，到点进程被杀掉并推一条收尾事件。要盯更久就在到期事件里重挂一个。\n\n` +
       "**它活得比你这一轮久**：进程由 ash 起、输出落文件，你的回合结束、会话结束、ash 重启都不会把它带走。所以不需要自己 `fork + setsid` 或 `nohup` —— 那样起的进程 ash 看不见也停不掉，留下的是没人认领的僵尸。",
     inputSchema: {
       taskId: z.string().describe("要挂哨兵的任务 id（通常就是你自己，任务 prompt 前言里有）"),
       command: z.string().min(1).describe("交给 shell 跑的长跑命令。它自己负责过滤：只吐你真会据此做事的行，成功与失败特征都要覆盖"),
       description: z.string().optional().describe("一句话说明你在盯什么（会出现在每条事件的抬头和界面上）。省略则用命令本身"),
       cwd: z.string().optional().describe("工作目录。缺省＝这个任务自己的工作目录"),
-      timeoutMs: z.number().optional().describe(`盯多久（毫秒），缺省 2 小时，上限 ${hours(MONITOR_MAX_TIMEOUT_MS)}。到点杀掉进程并推一条收尾事件`),
+      timeoutMs: z.number().optional().describe(`盯多久（毫秒），缺省 ${minutes(MONITOR_DEFAULT_TIMEOUT_MS)}，上限 ${minutes(MONITOR_MAX_TIMEOUT_MS)}。到点杀掉进程并推一条收尾事件`),
     },
   },
   async ({ taskId, command, description, cwd, timeoutMs }) => {
