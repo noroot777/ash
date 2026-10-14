@@ -109,7 +109,11 @@ console.log("✓ Claude 部分写失败会停止残缺 resident，不再让任�
 const deliveryOrder: string[] = [];
 const orderedHandle = {
   kill: () => {},
-  steer: async (text: string) => { deliveryOrder.push(`steer:${text}`); },
+  // 正文可以是惰性函数(SteerText):真执行器在**写 stdin 的那一刻**才调它定稿,好让浏览器
+  // 授权这类东西读到最新值。假执行器照同一规矩来,否则测的就不是生产那条路。
+  steer: async (text: string | (() => string | Promise<string>)) => {
+    deliveryOrder.push(`steer:${typeof text === "function" ? await text() : text}`);
+  },
 };
 runs.trackRun("native-delivery-order", orderedHandle);
 runs.bindNativeSteer("native-delivery-order", orderedHandle, {

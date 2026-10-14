@@ -34,7 +34,12 @@ let judgeMode = "auto";
 const judgedSources: string[] = [];
 /** 每一轮真正喂给侧聊的当前用户消息，用例拿它核对附件块有没有拼进 prompt。 */
 const sources: string[] = [];
-const native = { kill: () => { kills++; }, steer: async (text: string) => { delivered.push(text); } };
+const native = {
+  kill: () => { kills++; },
+  steer: async (text: string | (() => string | Promise<string>)) => {
+    delivered.push(typeof text === "function" ? await text() : text);
+  },
+};
 const plain = { kill: () => { kills++; } };
 function bind(enabled: boolean) {
   runs.untrackRun("parent", enabled ? plain : native);

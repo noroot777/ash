@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
 import { cliHostEnv } from "./cli-env.js";
-import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
+import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts, SteerText } from "./types.js";
 import { spawnControllableForRun, spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, shq, killChild, redactSecrets, failedChild } from "./spawn.js";
 import { relayRoot } from "../llm.js";
@@ -62,6 +62,10 @@ function cleanupWithEvents(events: AsyncIterable<AgentEvent>, cleanup: () => voi
 }
 
 cleanupStaleRuntimeSettings();
+
+/** steer 正文定稿:给的是函数就现在调它(见 types.ts 的 SteerText —— 这一刻才读授权)。 */
+const resolveSteerText = async (text: SteerText): Promise<string> =>
+  typeof text === "function" ? await text() : text;
 
 // Drives the real `claude` CLI in headless stream-json mode.
 export class ClaudeExecutor implements AgentExecutor {
@@ -324,7 +328,7 @@ export class ClaudeExecutor implements AgentExecutor {
         resident.interruptPending = true;
         child.stdin?.write(resident.request().line);
       },
-      steer: async (text: string, onInterrupted, beforeSend) => {
+      steer: async (text: SteerText, onInterrupted, beforeSend) => {
         resident.interruptPending = true;
         const request = resident.request();
         const ack = resident.waitFor(request.requestId);
@@ -335,7 +339,10 @@ export class ClaudeExecutor implements AgentExecutor {
           onInterrupted?.();
           await ack.promise;
           await beforeSend?.();
-          await writeChecked(userLine(text));
+          // **正文在这里才定稿**。上面等 ACK 最多 2 秒,用户完全可能在这几秒里收回浏览器
+          // 授权 —— 在等待之前就把正文拼死的话,撤销的 PATCH 都已经 200 了,这条还没写进
+          // stdin 的消息仍写着「本项目已预先授权 x.com」(第 8 链第 1 轮审查 P1)。
+          await writeChecked(userLine(await resolveSteerText(text)));
         } catch (error) {
           ack.cancel();
           // interrupt 尚未写出时才撤销；一旦写出，CLI 会产生一个 turnEnd，消费层必须
@@ -410,7 +417,7 @@ export function singleRunFromResident(
     commandLine: resident.commandLine,
     events,
     detached,
-    async steer(text: string, beforeSend) {
+    async steer(text: SteerText, beforeSend) {
       if (!accepting) throw new Error("Claude 当前回合已经结束");
       intermediateEnds += 1;
       let interrupted = false;
@@ -419,7 +426,7 @@ export function singleRunFromResident(
         else {
           resident.interrupt();
           interrupted = true;
-          resident.send(text);
+          resident.send(await resolveSteerText(text));
         }
       } catch (error) {
         if (!interrupted) intermediateEnds = Math.max(0, intermediateEnds - 1);

@@ -411,6 +411,74 @@ ClaudeExecutor.prototype.prepareResume = realPrepare;
 ClaudeExecutor.prototype.runSteerable = realRunSteerable;
 ok("启动末段撤销授权:续聊与 fresh run 两条入口的首条消息都不再带它");
 
+// ── 用例 3f:等打断回执的那两秒里收回授权,插话正文不许还写着已授权 ─────────────────
+// 原生插话(claude 的 steer)要先写 interrupt、**等一个 control_response**(上限 2 秒),
+// ACK 回来、跑完发送前清理,才把新 user 消息写进 stdin。正文如果在等待之前就拼死,用户在
+// 那几秒里收回授权(PATCH 都已经 200、现读也已经是 null)照样拦不住 —— 这条还没发出去的
+// 消息仍宣布「本项目已预先授权 x.com」(第 8 链第 1 轮审查 P1)。
+// 注入点就是 interrupt 落到 stdin 的那一刻:确定性地卡在 ACK 之前撤销,不靠 sleep。
+const { EventEmitter } = await import("node:events");
+const { PassThrough, Writable } = await import("node:stream");
+
+assert.deepEqual((await setDomains(["x.com"])).browserCdpDomains, ["x.com"], "前置条件:插话之前是已授权的");
+const STEER_TASK = "grant-steer-ack";
+let interruptRequestId = "";
+let steeredText = "";
+const interruptWritten = deferred();
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const child: any = new EventEmitter();
+child.stdout = new PassThrough();
+child.stderr = new PassThrough();
+child.exitCode = null;
+child.signalCode = null;
+child.kill = () => { child.stdout.end(); child.stderr.end(); child.emit("close", 0, null); return true; };
+child.stdin = new Writable({
+  write(chunk: Buffer, _enc: string, done: () => void) {
+    const message = JSON.parse(String(chunk));
+    if (message.type === "control_request") {
+      interruptRequestId = message.request_id;
+      interruptWritten.resolve();
+    } else if (message.type === "user") {
+      const content = message.message.content;
+      steeredText = typeof content === "string"
+        ? content
+        : content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n");
+    }
+    done();
+  },
+});
+const steerHandle = new ClaudeExecutor().attach(child, {
+  sessionId: "grant-steer-session", commandLine: "claude --input-format stream-json",
+});
+/* eslint-enable @typescript-eslint/no-explicit-any */
+const draining = (async () => { for await (const event of steerHandle.events) void event; })();
+runs.trackRun(STEER_TASK, steerHandle);
+runs.bindNativeSteer(STEER_TASK, steerHandle, {
+  agentType: "claude",
+  // 生产里这一段长一模一样(task-run / orchestrator / reattach 三处 nativeSteer.prepare)。
+  prepare: async (text: string) => policy.withGlobalBrowserPolicy(text, "reminder", await policy.browserGrantForProject(PROJECT)),
+  record: () => {},
+});
+const reservation = runs.reserveNativeSteerTask(STEER_TASK);
+assert.equal(reservation.kind, "native", "前置条件:这台 handle 支持原生插话");
+const steerDelivery = reservation.kind === "native"
+  ? reservation.deliver("继续抓取下一页", at)
+  : Promise.resolve();
+await interruptWritten.promise;                    // interrupt 已经写出,还在等 ACK
+assert.deepEqual((await setDomains([])).browserCdpDomains, [], "用户在等 ACK 的这几秒里收回了授权");
+assert.equal(await policy.browserGrantForProject(PROJECT), null, "前置条件:撤销已经落库");
+child.stdout.write(`${JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: interruptRequestId } })}\n`);
+await steerDelivery;
+
+assert.ok(steeredText.includes("继续抓取下一页"), "前置条件:这条插话确实写进了 stdin");
+assert.doesNotMatch(steeredText, /已由用户预先授权|本项目已预先授权/,
+  "等 ACK 期间撤销的授权,不许出现在之后才发出去的那条插话里");
+assert.ok(!steeredText.includes("x.com"), "撤销掉的站点名也不许留在正文里");
+runs.untrackRun(STEER_TASK, steerHandle);
+child.kill();
+await draining;
+ok("原生插话:等打断回执期间收回授权,随后发出的正文按新授权走");
+
 // ── 用例 4:顺序不变量(防止下一次又把 await 插回窗口里)────────────────────────
 // 行为用例盯的是「现在对不对」,这一条盯的是「以后还对不对」:启动点前最后一次取消检查
 // 与 executor.run 之间,一个 await 都不许有。

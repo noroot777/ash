@@ -25,6 +25,14 @@ export interface RunOpts {
 // event stream. The orchestrator records sessionId/commandLine for traceability
 // before/while consuming the stream. `kill` terminates the
 // underlying subprocess (manual stop) — the stream then ends like a normal exit.
+/**
+ * 原生引导的正文。给函数 = **惰性**:等打断回执、跑完发送前清理之后,真正要写进 stdin 的
+ * 那一刻才定稿。浏览器授权这类「用户随时可能在这几秒里改掉」的东西必须走这条路 —— 固定在
+ * 等 ACK 之前的话,撤销的 PATCH 都已经 200 了,这条还没发出去的消息仍宣布「本项目已预先
+ * 授权」(第 8 链第 1 轮审查 P1)。
+ */
+export type SteerText = string | (() => string | Promise<string>);
+
 export interface RunHandle {
   cliCommand?: CliCommand;
   sessionId: string;
@@ -33,7 +41,7 @@ export interface RunHandle {
   kill(): void;
   // 单飞当前回合的原生引导通道。存在时调用方把新 user 消息送进同一个活动回合，
   // 不结束任务、不释放单飞锁；回合自然结束后这根通道随 RunHandle 一起关闭。
-  steer?(text: string, beforeSend?: () => void | Promise<void>): Promise<void>;
+  steer?(text: SteerText, beforeSend?: () => void | Promise<void>): Promise<void>;
   command?(command: CliCommand): Promise<string>;
   goal?(): CliGoal | null;
   goalStarted?(): boolean;
@@ -80,7 +88,7 @@ export interface ResidentHandle {
   interrupt(): void;
   /** 单飞原生引导可选的可确认写入；至少保证 interrupt 与新消息都被 stdin 接受。 */
   steer?(
-    text: string,
+    text: SteerText,
     onInterrupted?: () => void,
     beforeSend?: () => void | Promise<void>,
   ): Promise<void>;
