@@ -96,6 +96,20 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
   assert.match(pending, /还有历史没读完/, "而且说得出是哪一类（MONITOR_RECOVERY_LABEL）");
   // 有卡片时同样要说：那份列表可能只是其中一部分。
   assert.match(panelPending([projected]), /历史监听还没读完/, "有卡片时这条提示也要在");
+  assert.match(pending, /正在自动继续/, "还在推的时候就说正在推");
+
+  // **预算用完之后不能再说「正在自动继续」**：那时定时器已经停了，等的是下一次真实请求
+  // （第 8 轮审查不拦项 1）。
+  const exhausted = renderToStaticMarkup(
+    <MonitorInspector
+      monitors={state([], { pending: true, reasons: ["scan-failed"], attempts: 8, exhausted: true })}
+      blockedReason={null}
+    />,
+  );
+  assert.doesNotMatch(exhausted, /正在自动继续/, "停了就不许说还在自动继续");
+  assert.match(exhausted, /自动重试已停止/, "要说清自动重试已经停了");
+  assert.match(exhausted, /重新打开这一格会再试/, "并且说清怎么再推起来");
+  assert.doesNotMatch(exhausted, /这个任务上还没有哨兵/, "预算用完也不许谎称没用过");
 }
 
 // ── 时长的说法不能进位成「X 分 60 秒」 ──────────────────────────────────────

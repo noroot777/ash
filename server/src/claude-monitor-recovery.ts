@@ -28,8 +28,22 @@ import { sessions } from "./db/schema.js";
 
 export type { MonitorRecoveryReason } from "@ash/shared/monitor";
 
-/** 退避阶梯。头两档短（扫描上限这种每推一次都真的往前读了一段），越往后越稀。 */
-const BACKOFF_MS = [1_000, 2_000, 5_000, 15_000, 30_000, 60_000, 120_000, 300_000] as const;
+/**
+ * 退避阶梯。头两档短（扫描上限这种每推一次都真的往前读了一段），越往后越稀。
+ *
+ * `ASH_MONITOR_BACKOFF_MS`（毫秒逗号列表）只给回归用：整条阶梯跑完要 1+2+5+15+30+60+120+300
+ * ≈ 9 分钟，「预算耗尽那一刻要推一次状态」「耗尽之后真实请求能把它重新推起来」这两条在
+ * 默认阶梯下没有能跑进测试的复现路径（第 7 轮审查当时只能写进注释）。生产不设这个变量。
+ */
+const BACKOFF_MS: readonly number[] = parseBackoff(process.env.ASH_MONITOR_BACKOFF_MS)
+  ?? [1_000, 2_000, 5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+
+function parseBackoff(raw: string | undefined): number[] | null {
+  if (!raw) return null;
+  const ms = raw.split(",").map((x) => Number(x.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return ms.length ? ms : null;
+}
 
 type Entry = {
   reasons: Set<MonitorRecoveryReason>;

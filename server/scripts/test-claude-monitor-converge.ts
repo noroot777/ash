@@ -18,11 +18,14 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 // 单次只读 32 KiB：几十 KB 的夹具就能复现「截限 + 多轮续读」，不必写 128 MiB 的文件。
 process.env.ASH_MONITOR_SCAN_MAX_BYTES = "32768";
+// 退避阶梯压到 8 × 60ms：默认阶梯整条跑完 ≈ 9 分钟，「多轮才读完」和「预算耗尽」两件事就
+// 都没法在测试里跑。档位数（8）保持一致，耗尽需要的次数才跟生产一样。
+process.env.ASH_MONITOR_BACKOFF_MS = "60,60,60,60,60,60,60,60";
 requireTmpDb("monitor-converge");
 
 const [
   { db, ensureSchema, dbClient }, schema, { ClaudeMonitorTrace }, { backfillClaudeMonitors, monitorScanTracked },
-  recovery, { listMonitors }, scan,
+  recovery, { listMonitors }, scan, { bus },
 ] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
@@ -31,6 +34,7 @@ const [
   import("../src/claude-monitor-recovery.js"),
   import("../src/monitors.js"),
   import("../src/claude-monitor-scan.js"),
+  import("../src/bus.js"),
 ]);
 const { monitorRecoveryOf, monitorRecoverySessionPending, stopAllMonitorRecovery } = recovery;
 const { newTaskScan, scanSession } = scan;
@@ -101,13 +105,17 @@ async function main(): Promise<void> {
   //
   // 报告实测的就是这个形状（513 组 Bash + 末尾 Monitor，142MB）。关键不是文件大，而是
   // ①「Bash 的终态通知不该占着孤儿缓冲」②「截限之后下一轮要从游标继续，而不是从零重读」。
+  //
+  // **组数必须顶过 ORPHAN_CAP（512）**：150 组时缓冲根本填不满，于是「普通 Bash 不占缓冲」
+  // 这条断言是免费的——把 notMonitorTools/confirmedForeign 两处删掉，测试照样绿。
   {
     const f = await fixture("bash-prefix");
     let body = line({ type: "system", subtype: "init", session_id: f.cli });
-    for (let i = 0; i < 150; i += 1) body += plainBash(f.cli, i);
+    for (let i = 0; i < 600; i += 1) body += plainBash(f.cli, i);
     body += realMonitor(f.cli, "btail001");
     writeFileSync(f.file, body);
-    console.log(`  ① 夹具 ${body.length} 字节、150 组普通 Bash + 末尾真 Monitor，单次上限 32 KiB`);
+    console.log(`  ① 夹具 ${body.length} 字节、600 组普通 Bash（> 缓冲上限 512）`
+      + ` + 末尾真 Monitor，单次上限 32 KiB`);
 
     await backfillClaudeMonitors(f.taskId);
     // 第一轮必然没读完（远超 8 KiB）——这正是报告里「首次为空」的那一刻。
@@ -117,7 +125,7 @@ async function main(): Promise<void> {
       "①固定输入最终读完并销账（不是永远 pending）", JSON.stringify(monitorRecoveryOf(f.taskId)));
     const rows = await listMonitors(f.taskId);
     check(rows.length === 1 && rows[0]?.nativeId === "btail001",
-      "①末尾那个真 Monitor 补出来了（150 组 Bash 没把它挡住）",
+      "①末尾那个真 Monitor 补出来了（600 组 Bash 没把它挡住）",
       `${rows.length} 条：${rows.map((r) => r.nativeId).join(",")}`);
     check(rows[0]?.status === "exited", "①而且带着来源报的终态", String(rows[0]?.status));
     check(rows[0]?.timeoutMs === 90_000, "①和来源回执说的时长", String(rows[0]?.timeoutMs));
@@ -221,43 +229,141 @@ async function main(): Promise<void> {
   // 「阈值从 32 抬到 64」并不改变结论：同时有 65 个没读完的任务轮转时，被挤掉的那个下一轮
   // 从零重读，永远到不了末尾（第 8 轮审查按控制流推断）。现在只丢可重建的配对状态，位置
   // 停好（`parked`）。
+  //
+  // **压力要每一轮都在**：挤一次只损失一轮的进度，之后照样读完——那样测不出区别。所以这里
+  // 让 70 个「文件读不开」的任务一直处于恢复中（软上限豁免它们 → 压力全压到硬上限上），
+  // 每读一轮就把它们全推一遍，于是被测任务**每一轮都被挤出去**。位置停好才收敛。
   {
     const big = await fixture("hard-cap");
     let body = line({ type: "system", subtype: "init", session_id: big.cli });
     for (let i = 0; i < 150; i += 1) body += plainBash(big.cli, i);
     body += realMonitor(big.cli, "bcap001");
     writeFileSync(big.file, body);
-    await backfillClaudeMonitors(big.taskId); // 第一轮：撞 32 KiB 上限，游标停在半路
-    check(monitorRecoveryOf(big.taskId)?.pending === true, "④这个任务还没读完");
-    const firstRound = (await listMonitors(big.taskId)).length;
-    check(firstRound === 0, "④第一轮还没读到末尾那个 Monitor", `${firstRound} 条`);
 
-    // 70 个**同样处于恢复中**的任务（文件读不开 → 立刻 pending，而且扫描很便宜）。
-    // 只有它们都在恢复中，软上限的豁免才会把压力推到硬上限上。
-    const fillers: string[] = [];
+    // 70 个同样处于恢复中的任务（文件读不开 → 立刻 pending，而且扫描很便宜）。
+    const fillers: { taskId: string; file: string }[] = [];
     for (let i = 0; i < 70; i += 1) {
       const other = await fixture(`cap-filler${i}`);
       writeFileSync(other.file, line({ type: "system", subtype: "init", session_id: other.cli }));
       chmodSync(other.file, 0o000);
-      fillers.push(other.file);
-      await backfillClaudeMonitors(other.taskId);
+      fillers.push({ taskId: other.taskId, file: other.file });
     }
-    check(monitorScanTracked(big.taskId) === false, "④它确实被挤出了快照表（硬上限生效）");
-    for (const path of fillers) chmodSync(path, 0o644); // 让填充任务自己销账，别一直刷
+    const squeeze = async () => {
+      for (const f of fillers) await backfillClaudeMonitors(f.taskId);
+    };
 
-    // 位置停好了 → 继续读就能到末尾；位置丢了就会反复重读前 32 KiB、永远读不完。
-    await waitRecovered(big.taskId);
+    await backfillClaudeMonitors(big.taskId); // 第一轮：撞 32 KiB 上限，游标停在半路
+    check(monitorRecoveryOf(big.taskId)?.pending === true, "④这个任务还没读完");
+    check((await listMonitors(big.taskId)).length === 0,
+      "④第一轮还没读到末尾那个 Monitor", `${(await listMonitors(big.taskId)).length} 条`);
+    await squeeze();
+    check(monitorScanTracked(big.taskId) === false, "④它确实被挤出了快照表（硬上限生效）");
+
+    let rounds = 1;
+    for (; rounds < 12 && (await listMonitors(big.taskId)).length === 0; rounds += 1) {
+      await backfillClaudeMonitors(big.taskId);
+      await squeeze(); // 每一轮都重新顶满，被测任务又被挤出去
+    }
     const rows = await listMonitors(big.taskId);
     check(rows.length === 1 && rows[0]?.nativeId === "bcap001",
-      "④被挤掉之后仍然从原位继续、最终读到末尾那个 Monitor",
-      `${rows.length} 条：${rows.map((r) => r.nativeId).join(",")}`);
-    check(monitorRecoveryOf(big.taskId) === null, "④并且销了账");
+      "④每一轮都被挤掉，仍然从原位继续、最终读到末尾那个 Monitor",
+      `${rounds} 轮后 ${rows.length} 条：${rows.map((r) => r.nativeId).join(",")}`);
+    for (const f of fillers) chmodSync(f.file, 0o644); // 让填充任务自己销账，别一直刷
+    await waitRecovered(big.taskId);
+    check(monitorRecoveryOf(big.taskId) === null, "④并且销了账",
+      JSON.stringify(monitorRecoveryOf(big.taskId)));
+  }
+
+  // ── ⑤ 丢过游标的那一轮：「读到新字节」不算进展，退避预算要照常往下走 ──────────────
+  //
+  // 对称错误：CAS miss / 写失败这两条路会把游标丢掉，而丢完的下一轮必然「读到新字节」（它在
+  // 重读已经读过的前缀）。拿它当进展就会把预算清零——于是每秒重读一个大文件、永远到不了
+  // exhausted（第 8 轮审查指出）。进展得绑定单调往前的位置或确认落地的事实。
+  //
+  // 怎么验：让**每一轮都以丢游标收场**（写库一直失败），于是每一轮都是重读。契约成立时退避
+  // 阶梯照常往下走（1→2→5s，4.6 秒内能数到第 3 档）；把 `!reread` 去掉就变成每秒清零重排
+  // 第一档，永远停在 1。
+  {
+    const f = await fixture("rewound");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += realMonitor(f.cli, "brew001");
+    for (let i = 0; i < 150; i += 1) body += plainBash(f.cli, i); // 远超 32 KiB → 每轮都截限
+    writeFileSync(f.file, body);
+
+    // 写库一直失败 → 每轮都走 catch：事实读过了却没落库，游标被丢掉（下一轮从零重读）。
+    // 只拦这个任务的语句，别影响还在恢复中的 ②。
+    const realExecute = dbClient.execute.bind(dbClient);
+    let hit = 0;
+    (dbClient as any).execute = async (stmt: any) => {
+      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+      const args = JSON.stringify(stmt?.args ?? []);
+      if (/monitors/i.test(sql) && args.includes(f.taskId)) {
+        hit += 1;
+        throw new Error("INJECTED_WRITE_FAILURE");
+      }
+      return realExecute(stmt);
+    };
+    await backfillClaudeMonitors(f.taskId);
+    check(hit > 0, "⑤注入真的打到了写库那一步", `${hit} 次`);
+    const a1 = monitorRecoveryOf(f.taskId)?.attempts ?? -1;
+    check(a1 === 1, "⑤第一轮排了第一档重试", String(a1));
+
+    // 之后每一轮都是重读，预算必须继续往下耗（压短后的阶梯：每档 60ms）。
+    await settle(500);
+    const a2 = monitorRecoveryOf(f.taskId)?.attempts ?? -1;
+    check(a2 >= 3, "⑤重读那几轮不算进展（预算真的在往下耗，不是每轮清零重排第一档）",
+      `${a1} → ${a2}`);
+
+    // 故障结束：丢游标丢的只是位置，事实还在文件里 —— 重新读一遍就补回来。
+    // （读库也得等注入撤了再读：listMonitors 自己会被同一条注入打中。）
+    (dbClient as any).execute = realExecute;
+    check((await listMonitors(f.taskId)).length === 0, "⑤故障期间一行都没落库");
+    for (let i = 0; i < 12 && (await listMonitors(f.taskId)).length === 0; i += 1) {
+      await backfillClaudeMonitors(f.taskId);
+    }
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 1 && rows[0]?.nativeId === "brew001",
+      "⑤故障结束后那条事实被重新读到了（丢游标没丢事实）", `${rows.length} 条`);
+  }
+
+  // ── ⑥ 预算耗尽：账留着、状态推出去、下一次真实请求能把它重新推起来 ──────────────
+  //
+  // 一直失败的那种（文件权限坏了）推到上限就停，但**账不能销**——面板据此显示「还有历史没
+  // 读完」，而不是谎称「这个任务没用过哨兵」。耗尽本身是一次可见状态变化（exhausted 从 false
+  // 变 true），不推的话用户看到的永远是「正在自动继续」（第 8 轮审查不拦项 1）。
+  {
+    const f = await fixture("exhaust");
+    writeFileSync(f.file, line({ type: "system", subtype: "init", session_id: f.cli }));
+    chmodSync(f.file, 0o000); // 永远读不开 → 每轮都失败、永远没有进展
+
+    let published = 0;
+    const off = bus.subscribe((ev: any) => {
+      if (ev.type === "task.monitors" && ev.taskId === f.taskId) published += 1;
+    });
+    await backfillClaudeMonitors(f.taskId);
+    const after1 = published;
+    // 8 档 × 60ms，留足余量
+    for (let i = 0; i < 60 && monitorRecoveryOf(f.taskId)?.exhausted !== true; i += 1) await settle(50);
+    const state = monitorRecoveryOf(f.taskId);
+    check(state?.exhausted === true, "⑥推到上限就停下定时器", JSON.stringify(state));
+    check(state?.pending === true && state.reasons.includes("scan-failed"),
+      "⑥但账留着（不会谎称这个任务没用过哨兵）", JSON.stringify(state));
+    check(published > after1, "⑥耗尽这件事推给了前端（exhausted 从 false 变 true）",
+      `${after1} → ${published}`);
+
+    // 下一次真实请求（用户打开面板）把预算还回去，并且真的重新推起来。
+    chmodSync(f.file, 0o644);
+    await backfillClaudeMonitors(f.taskId);
+    check(monitorRecoveryOf(f.taskId) === null, "⑥真实请求重新推起来之后读完了、销了账",
+      JSON.stringify(monitorRecoveryOf(f.taskId)));
+    off();
   }
 
   if (failures === 0) {
     console.log("✓ 内置 Monitor 恢复的收敛性：普通后台 Bash 不占缓冲（末尾 Monitor 读得到）/ "
       + "真乱序满缓冲时背压不丢事实且预算真在耗 / 首次归属查询失败也不丢责任（库好了自动补）/ "
-      + "内存硬上限挤掉快照后读取位置仍停在原位 均受回归保护");
+      + "每轮都被硬上限挤掉也从原位继续 / 丢过游标后的重读不算进展 / "
+      + "预算耗尽会留账并推给前端 均受回归保护");
   }
 }
 
