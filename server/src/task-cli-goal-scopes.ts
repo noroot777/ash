@@ -46,7 +46,10 @@ export async function formatCliGoalScopes(task: TaskRow, ownerUserId: string | n
       lines.push("其他发起人的目标；仅原发起人可以恢复或清除，目标内容未展示。");
       continue;
     }
-    lines.push(formatGoal(scope.state.goal ?? null), `恢复：/goal resume --scope ${scope.selector}`, `清除：/goal clear --scope ${scope.selector}`);
+    lines.push(formatGoal(scope.state.goal ?? null));
+    if (await runnableCliGoalScope(scope, ownerUserId)) lines.push(`恢复：/goal resume --scope ${scope.selector}`);
+    else lines.push("原执行器已不可用（已删除、类型变更，或内置执行器已被默认执行器替代）；此作用域不能恢复，但可直接清除并解锁。");
+    lines.push(`清除：/goal clear --scope ${scope.selector}`);
   }
   return lines.join("\n");
 }

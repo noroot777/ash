@@ -9,6 +9,7 @@ import { reviewTurnInFlight } from "./review-turn.js";
 import { now, runsTiming } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { previewStopFailure } from "./preview-process-stop.js";
+import { recordTaskStatus } from "./task-start-status.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -86,6 +87,7 @@ async function writeTaskStatus(
   }
 
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
+  recordTaskStatus(cur, status);
   if (TERMINAL.includes(status)) {
     // 任务自己结束了,它名下的哨兵一并停掉。哨兵唯一的出口就是「唤醒这个任务」,任务都
     // 结束了还留着它,只会在某个深夜把一个已经 done 的任务重新叫起来跑一轮。要让哨兵

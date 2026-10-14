@@ -27,6 +27,8 @@ const { continueTask } = await import("../src/orchestrator.js");
 const { deliverPendingMessages, enqueueMessage, handDuePendingMessageToRun } = await import("../src/pending-messages.js");
 const { claimQueueSeat } = await import("../src/queue-seat.js");
 const { queueBlockers } = await import("../src/queues.js");
+const { setTaskStatus } = await import("../src/status.js");
+const { taskStartStatus } = await import("../src/task-start-status.js");
 const { claimTurn, isTurnClaimed, releaseTurn, stopTask } = await import("../src/runs.js");
 await ensureSchema();
 
@@ -134,6 +136,49 @@ try {
       { id: `${agentType}-old`, name: `${agentType}@原目标`, type: agentType, isDefault: true },
       { id: `${agentType}-new`, name: `${agentType}@新默认`, type: agentType, isDefault: false },
     ]);
+    for (const status of ["done", "failed", "canceled"] as const) for (const path of ["run", "retry-turn", "direct"] as const) for (const phase of ["success", "prepare", "run"] as const) {
+      if (path === "retry-turn" && status !== "done") continue;
+      if (path === "run" && status === "done") continue;
+      const taskId = `${agentType}-origin-${status}-${path}-${phase}`;
+      const siblingId = await createPair(taskId, agentType, status, "done");
+      const saved = await seed(taskId, agentType, false);
+      await db.update(sessions).set({ executorId: null, exitStatus: 1 }).where(eq(sessions.taskId, taskId));
+      const message = await enqueueMessage({ taskId, text: "/goal 托盘里的新目标", agent: agentType, execution: true });
+      holding.add(taskId);
+      if (phase !== "success") failStarts.set(taskId, phase);
+      let direct: Promise<boolean> | undefined;
+      if (path !== "direct") {
+        const endpoint = path === "retry-turn" ? path : status === "failed" ? "retry" : "run";
+        const response = await request(`/tasks/${taskId}/${endpoint}`);
+        const result = await response.json();
+        assert.equal(response.status, 202, JSON.stringify(result));
+        if (path === "retry-turn") assert.equal(result.mode, "resume");
+      } else {
+        assert.equal(claimTurn(taskId), true);
+        await setTaskStatus(taskId, "queued");
+        assert.equal(taskStartStatus(await row(taskId)), status);
+        direct = handDuePendingMessageToRun(taskId, { turnHeld: true, freezeGuard: false });
+      }
+      if (phase === "success") {
+        const running = await active(taskId);
+        assert.equal(running.followUpFrom, status);
+        assert.equal(invocations.get(taskId)![0]!.cliState!.goalStart!.previousStatus, status);
+        assert.deepEqual(await queueBlockers(siblingId), [], "terminal new goals do not borrow an execution seat");
+        finishers.get(taskId)!();
+      } else await waitFor(taskId, () => (failures.get(taskId) ?? 0) > 0 && !isTurnClaimed(taskId));
+      if (direct) assert.equal(await direct, true);
+      const restored = await settled(taskId, status);
+      assert.equal(restored.followUpFrom, null);
+      assert.equal(hasCliGoalHold(restored.cliState), false);
+      assert.deepEqual(await queueBlockers(siblingId), []);
+      const after = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, message.id)))[0]!;
+      assert.equal(after.execution, false);
+      assert.equal(after.status, phase === "success" ? "sent" : "pending");
+      assert.equal(after.deliveringSince, null);
+      if (phase !== "success") assert.deepEqual(readCliState(restored.cliState, agentType, saved.profileId, null), saved);
+      await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, message.id));
+    }
+    console.log(`${agentType}: retry-turn and direct queue starts derive terminal status centrally, including both startup rollback phases: passed`);
     for (const status of ["done", "failed", "canceled"] as const) for (const delivery of ["immediate", "timed", "legacy", "handoff"] as const) {
       const taskId = `${agentType}-new-${status}-${delivery}`;
       const siblingId = await createPair(taskId, agentType, status, delivery === "handoff" ? "done" : "running");
@@ -165,7 +210,7 @@ try {
           if (!claim.ok) assert.fail("handoff queue seat unavailable");
           const seat = claim.seat;
           assert.equal(seat?.prevStatus, status);
-          handoff = handDuePendingMessageToRun(taskId, { turnHeld: true, freezeGuard: false, goalStartFrom: status })
+          handoff = handDuePendingMessageToRun(taskId, { turnHeld: true, freezeGuard: false })
             .finally(async () => { await seat?.release(); });
         }
       }

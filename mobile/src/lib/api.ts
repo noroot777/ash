@@ -216,7 +216,7 @@ export const api = {
     id: string,
     text: string,
     opts?: { agent?: AgentType; sendAt?: string },
-  ): Promise<{ started?: boolean; scheduled?: boolean; message?: ScheduledMessage }> =>
+  ): Promise<{ started?: boolean; scheduled?: boolean; message?: ScheduledMessage; command?: boolean; text?: string; recorded?: boolean }> =>
     req(`/tasks/${id}/reply`, { method: "POST", body: JSON.stringify({ text, ...opts }) }).then(j),
   // ask_question 的专用答复通道：清空待答问题并恢复同一个 CLI 会话。
   answer: (id: string, answer: string): Promise<{ answered: true; resumed: true }> =>

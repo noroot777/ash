@@ -1,4 +1,4 @@
-import type { AgentType, ScheduledMessage, TaskStatus } from "@ash/shared";
+import type { AgentType, ScheduledMessage } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
 import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@ash/shared/cli-commands";
 import { eq } from "drizzle-orm";
@@ -149,7 +149,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
       return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
     }
     const seat = claim.seat;
-    void continueTask(taskId, text, { ...route, goalStartFrom: seat?.prevStatus as TaskStatus | undefined })
+    void continueTask(taskId, text, route)
       .then(async (started) => {
         // 回合被别的执行抢占:原话退回托盘,仍按执行型等队列位置,不按续聊放行。
         if (!started) await stash();

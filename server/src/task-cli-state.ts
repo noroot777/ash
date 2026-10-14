@@ -1,5 +1,5 @@
 import { desc, eq, sql } from "drizzle-orm";
-import type { AgentType, TaskStatus } from "@ash/shared";
+import type { AgentType } from "@ash/shared";
 import { cliStateScopeKey, goalRequest, hasCliGoalHold, isGoalExecution, readCliState, readCliStateScopes, validateCliCommand, type CliCommand, type CliSessionState } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
@@ -8,6 +8,7 @@ import type { StopSettle } from "./runs.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
 import { cliGoalRoute, cliGoalScopeSelector, currentCliGoalProfile, selectCliGoalScope } from "./task-cli-goal-scopes.js";
+import { taskStartStatus } from "./task-start-status.js";
 
 export { readCliState };
 
@@ -56,7 +57,7 @@ async function resetCliPlanModes(taskId: string): Promise<void> {
     ELSE ${tasks.cliState} END` }).where(eq(tasks.id, taskId));
 }
 
-export async function prepareCliInvocation(task: typeof tasks.$inferSelect, agentType: AgentType, text: string, profileId: string | null, ownerUserId: string | null, options: { resetPlan?: boolean; preserveState?: boolean; previousStatus?: TaskStatus } = {}) {
+export async function prepareCliInvocation(task: typeof tasks.$inferSelect, agentType: AgentType, text: string, profileId: string | null, ownerUserId: string | null, options: { resetPlan?: boolean; preserveState?: boolean } = {}) {
   const cliCommand = validateCliCommand(agentType, text);
   const previousState = readCliState(task.cliState, agentType, profileId, ownerUserId);
   const cliState = { ...previousState, profileId, ownerUserId };
@@ -68,7 +69,8 @@ export async function prepareCliInvocation(task: typeof tasks.$inferSelect, agen
   if (options.resetPlan) { await resetCliPlanModes(task.id); cliState.plan = false; }
   if (isGoalExecution(cliCommand)) {
     delete cliState.goalClearStart;
-    cliState.goalStart = { previousStatus: options.previousStatus ?? (hasCliGoalHold(task.cliState) && ["running", "queued"].includes(task.status) ? "paused" : task.status), previousGoal: cliState.goal ?? null, previousHold: cliState.goalHold ?? false, ...(cliState.goalSessionId ? { previousSessionId: cliState.goalSessionId } : {}) };
+    const previousStatus = taskStartStatus(task);
+    cliState.goalStart = { previousStatus: hasCliGoalHold(task.cliState) && ["running", "queued"].includes(previousStatus) ? "paused" : previousStatus, previousGoal: cliState.goal ?? null, previousHold: cliState.goalHold ?? false, ...(cliState.goalSessionId ? { previousSessionId: cliState.goalSessionId } : {}) };
     if (cliCommand?.args !== "resume") delete cliState.goalSessionId;
   }
   if (!cliCommand || isGoalExecution(cliCommand)) cliState.goalHold = false;

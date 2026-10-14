@@ -35,6 +35,7 @@ import { withSkillInvocation } from "./skills.js";
 import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { prepareContinuationEntry } from "./task-continuation-entry.js";
 import { cliGoalSessionCandidates } from "./task-cli-goal-scopes.js";
+import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
@@ -111,7 +112,6 @@ export async function continueTask(
      * 二者绑死:让位交接只能二选一,要么用户原文不进会话记录,要么终态重试被误当续聊。
      */
     executionTurn?: boolean;
-    goalStartFrom?: TaskStatus;
     /** 旁路回合结束后恢复进入旁路前的任务状态。 */
     sideTurn?: boolean;
     sessionRole?: Extract<SessionRole, "single" | "reviewer">; freshSession?: boolean;
@@ -231,7 +231,8 @@ export async function continueTask(
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
   const agentType = opts.agent ?? (head?.agentType as AgentType) ?? "claude";
   let handle: RunHandle | undefined;
-  let goalStartFrom: TaskStatus | null = goalExecution ? opts.goalStartFrom ?? null : null;
+  const priorStatus = head ? taskStartStatus(head) : null;
+  let goalStartFrom: TaskStatus | null = goalExecution && priorStatus && !["running", "queued"].includes(priorStatus) ? priorStatus : null;
   // 同 runTask：基线降级在解析工作目录那一刻就落了库，说明却写在 spawn 之后，所以这两件
   // 事挂在 try 外面，失败那条路才补得上（见 base-fallback-notice.ts）。
   let baseFallback: Workspace["baseFallback"];
@@ -242,7 +243,8 @@ export async function continueTask(
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
     if (task.mode !== "single") throw new Error("reply is for single tasks");
-    if (goalExecution && !["running", "queued"].includes(task.status)) goalStartFrom ??= task.status as TaskStatus;
+    const startStatus = taskStartStatus(task);
+    goalStartFrom = goalExecution && !["running", "queued"].includes(startStatus) ? startStatus : null;
 
     const agent = opts.agent ?? (task.agentType as AgentType) ?? "claude";
     // 对话框里 @ 出来的那一步是**显式选择**（智能体 + 执行器 + 模型 + 思考强度），这一回合
@@ -280,7 +282,7 @@ export async function continueTask(
     const execution = !!opts.system || !!opts.executionTurn || isGoalRecovery(slash);
     const checkpointFollowUp = !execution && !opts.byBackend
       && task.status === "paused" && !!task.resumePrompt;
-    const goalPriorStatus = opts.goalStartFrom ?? task.status;
+    const goalPriorStatus = startStatus;
     const followUpFrom = goalExecution
       ? !isGoalRecovery(slash) && !opts.system && ["done", "failed", "canceled"].includes(goalPriorStatus) ? goalPriorStatus : null
       : sideTurn
@@ -484,7 +486,7 @@ export async function continueTask(
         );
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
-    const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan, preserveState: preserveCliState, previousStatus: goalStartFrom ?? undefined });
+    const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan, preserveState: preserveCliState });
     // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 `trackRun` 之间不再有
     // await，暂停请求要么在这里被消费、要么之后才到——那时已有 handle 可杀。
     // freezeGuard 的启动路径（重试按钮、自由审查重跑）还会再查一遍库：它们的预检查离

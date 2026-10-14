@@ -119,6 +119,11 @@ export function validateCliCommand(agentType: string, text: string): CliCommand 
   if (name && Object.hasOwn(CODEX_COMMANDS, name) && !Object.hasOwn(cliCommandCatalog(agentType), name)) throw new CliCommandValidationError(`当前执行器的 ash 通道不支持 /${name}`);
   const command = parseCliCommand(agentType, text);
   if (!command) return null;
+  const flags = command.name === "goal" ? ["--scopes", "--budget"] : command.name === "review" ? ["--base", "--commit"] : [];
+  if (["goal", "plan", "review"].includes(command.name) && command.args.startsWith("-") && !flags.includes(command.args.split(/\s/, 1)[0]!)) {
+    throw new CliCommandValidationError(`/${command.name} 不支持这个参数。${cliCommandCatalog(agentType)[command.name]}`);
+  }
+  if (command.name === "goal" && command.args === "scopes") throw new CliCommandValidationError("查看目标作用域使用 /goal --scopes；scopes 不会作为新目标覆盖已有目标");
   if (command.name === "goal" && /^--scopes\s/.test(command.args)) throw new CliCommandValidationError("查看目标作用域使用 /goal --scopes，不接受额外参数");
   if (command.name === "goal" && /^(pause|resume|clear|stop|off|reset|none|cancel)\s/.test(command.args)) throw new CliCommandValidationError("目标控制命令不接受额外参数；调整预算使用 /goal budget 正整数");
   if (command.name === "goal" && /^budget(?:\s|$)/.test(command.args) && !/^budget\s+\S+$/.test(command.args)) throw new CliCommandValidationError("调整预算使用 /goal budget 正整数");

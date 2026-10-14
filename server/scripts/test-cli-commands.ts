@@ -37,7 +37,15 @@ try {
     assert.equal(isGoalExecution(selected), true);
     assert.equal(command("/goal clear --scope claude:encoded-scope", agent).args, "clear");
     for (const text of ["/goal --scopes extra", "/goal resume --scope", "/goal resume --scope id extra", "/goal pause --scope id"]) assert.throws(() => command(text, agent));
+    for (const text of ["/goal --scope", "/goal --scope codex:encoded-scope", "/goal -scopes", "/goal --scopes=1", "/goal --unknown", "/goal scopes"]) assert.throws(() => command(text, agent), /\/goal/);
   }
+  for (const text of ["/plan --off", "/plan -off", "/plan --future", "/review --bas main", "/review -base main", "/review --unknown"]) assert.throws(() => command(text), /不支持这个参数/);
+  assert.equal(command("/plan off").args, "off");
+  assert.equal(command("/plan 列出步骤").args, "列出步骤");
+  assert.equal(command("/review --base main").args, "--base main");
+  assert.equal(command("/review --commit abc123").args, "--commit abc123");
+  assert.equal(command("/review 检查边界").args, "检查边界");
+  assert.deepEqual(goalRequest(command("/goal --budget 400 通过所有测试"), "codex"), { objective: "通过所有测试", status: "active", tokenBudget: 400 });
   assert.equal(isGoalExecution(command("/goal pause")), false);
   assert.equal(isGoalExecution(command("/goal budget 400")), false);
   assert.deepEqual(goalRequest(command("/goal 通过所有测试 --budget 400"), "codex"), { objective: "通过所有测试", status: "active", tokenBudget: 400 });

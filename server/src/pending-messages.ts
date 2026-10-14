@@ -26,13 +26,14 @@
 // docs/incidents.md「排队消息凭空消失」)。做法是把「有人正在送」拆成一个**独立的租约字段**
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
-import type { AgentType, ScheduledMessageMode, TaskStatus } from "@ash/shared";
+import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks, groups } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
 import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
+import { taskStartStatus } from "./task-start-status.js";
 import { releaseTurn, whenTurnIdle } from "./runs.js";
 import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
@@ -283,7 +284,6 @@ async function deliverWhenIdle(
     // 已经往同一行后面追加了新的事件(见 beginDelivery 的注释)。
     const started = await continueTask(message.taskId, claimed.text, {
       ...options,
-      goalStartFrom: seat?.prevStatus as TaskStatus | undefined,
       ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
       onDelivered: async () => {
         delivered = true;
@@ -502,7 +502,7 @@ export function flushPendingForTask(taskId: string): void {
 // 调用方不要再开别的回合;false = 没有可交接的消息,照常走默认输入。
 export async function handDuePendingMessageToRun(
   taskId: string,
-  opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null; goalStartFrom?: TaskStatus } = {},
+  opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null } = {},
 ): Promise<boolean> {
   if (dbClient.closed) return false;
   // 已有投递在途:它自己会开回合,这里再开默认「继续」就是同一任务两路起跑。
@@ -535,7 +535,7 @@ export async function handDuePendingMessageToRun(
   let handedOff = false;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0) ?? null;
-    const execution = pendingExecutionIntent({ ...due, execution: true }, task && { ...task, status: opts.goalStartFrom ?? task.status });
+    const execution = pendingExecutionIntent({ ...due, execution: true }, task && { ...task, status: taskStartStatus(task) });
     if (due.execution !== execution) {
       await db.update(scheduledMessages).set({ execution }).where(eq(scheduledMessages.id, due.id));
       due.execution = execution;
@@ -556,7 +556,6 @@ export async function handDuePendingMessageToRun(
       // 是用户显式动作,不加闸,与隔壁 RESUME/fresh 路径保持一致。
       freezeGuard: opts.freezeGuard ?? !opts.turnHeld,
       turnHeld: opts.turnHeld,
-      goalStartFrom: opts.goalStartFrom,
       onDelivered: async () => {
         delivered = true;
         const sentAt = Date.now();

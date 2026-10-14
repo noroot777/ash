@@ -106,6 +106,20 @@ try {
       { id: `${agentType}-old`, name: `${agentType}@原目标`, type: agentType, isDefault: false },
       { id: `${agentType}-new`, name: `${agentType}@新默认`, type: agentType, isDefault: true },
     ]);
+    const typoTask = `${agentType}-goal-typos`;
+    await create(typoTask, agentType);
+    await seed(typoTask, agentType);
+    const beforeTypo = await row(typoTask);
+    for (const text of ["/goal --scope", "/goal --scope codex:encoded-scope", "/goal -scopes", "/goal --scopes=1", "/goal scopes", ...(agentType === "codex" ? ["/plan --off", "/plan -off", "/review --bas main"] : [])]) {
+      const rejected = await reply(typoTask, text);
+      assert.equal(rejected.status, 409);
+      assert.match((await rejected.json()).error, /\/goal|不支持这个参数/);
+      assert.deepEqual(await row(typoTask), beforeTypo, "mistyped flags must not change goals, budgets, usage, holds or task state");
+      assert.equal(invocations.has(typoTask), false);
+      await assert.rejects(prepareCliInvocation(await row(typoTask), agentType, text, `${agentType}-old`, null));
+      assert.deepEqual(await row(typoTask), beforeTypo);
+    }
+    console.log(`${agentType}: unknown goal/plan/review flags are rejected before any state mutation or model turn: passed`);
     for (const route of ["default", "explicit", "run", "queue", "legacy", "same"] as const) {
       const taskId = `${agentType}-ordinary-${route}`;
       const executorId = route === "same" ? `${agentType}-old` : route === "explicit" ? `${agentType}-old` : null;
@@ -381,6 +395,29 @@ try {
   assert.equal(invocations.get("legacy")![0]!.cliState?.profileId, legacy.profileId);
   assert.equal(readCliState((await row("legacy")).cliState, "codex", legacy.profileId, null).goal?.tokenBudget, 150);
   await create("legacy-builtin", "codex", { cliState: JSON.stringify({ codex: { goal, goalHold: true } }) });
+  for (const scenario of ["deleted", "changed-type", "legacy-builtin", "runnable"] as const) {
+    const taskId = scenario === "changed-type" ? "changed-type" : scenario === "runnable" ? "runnable-hint" : scenario;
+    if (scenario === "changed-type") {
+      await db.insert(agents).values({ id: "changed-profile", name: "类型已改变", type: "claude" });
+      await create(taskId, "codex");
+      await saveCliState(taskId, "codex", { profileId: "changed-profile", ownerUserId: null, goal, goalHold: true });
+    } else if (scenario === "runnable") {
+      await create(taskId, "codex");
+      await seed(taskId, "codex");
+    } else if (scenario === "deleted") {
+      await saveCliState(taskId, "claude", deleted, true);
+    }
+    const beforeHint = await row(taskId);
+    const hint = await (await reply(taskId, "/goal --scopes")).json();
+    assert.match(hint.text, /清除：\/goal clear --scope/);
+    if (scenario === "runnable") assert.match(hint.text, /恢复：\/goal resume --scope/);
+    else {
+      assert.doesNotMatch(hint.text, /恢复：\/goal resume/);
+      assert.match(hint.text, /原执行器已不可用[\s\S]*不能恢复/);
+    }
+    assert.equal((await row(taskId)).cliState, beforeHint.cliState);
+    if (scenario === "deleted") await saveCliState(taskId, "claude", { ...deleted, goal: null, goalHold: false });
+  }
   assert.equal((await reply("legacy-builtin", "/goal resume")).status, 409, "an old built-in scope is not silently moved into the newly registered default profile");
   assert.equal((await reply("legacy-builtin", "/goal clear")).status, 200);
   assert.equal(hasCliGoalHold((await row("legacy-builtin")).cliState), false);

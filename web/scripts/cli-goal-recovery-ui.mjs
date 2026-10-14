@@ -87,6 +87,15 @@ export async function runGoalRecoveryUi({ page, base, screenshots, sessionEnds, 
   assert.equal(await localResult.count(), 0, "an old task's delayed command result must not leak into the selected task");
 
   await page.goto(`${base}/?project=cli-ui&task=goal-drift-ui`);
+  const beforeTypos = await (await fetch(`${base}/api/tasks/goal-drift-ui`)).json();
+  const callsBeforeTypos = (await readInvocations()).length;
+  for (const text of ["/goal --scope", "/goal --scope codex:mistyped", "/goal -scopes", "/goal --scopes=1", "/goal scopes", "/plan --off", "/plan -off", "/review --bas main"]) {
+    const rejected = await send("goal-drift-ui", text, 409);
+    assert.match(rejected.error, /\/goal|不支持这个参数/);
+    assert.deepEqual(await (await fetch(`${base}/api/tasks/goal-drift-ui`)).json(), beforeTypos);
+  }
+  assert.equal((await readInvocations()).length, callsBeforeTypos);
+  await page.screenshot({ path: join(screenshots, "goal-typo-rejected.png"), fullPage: true });
   const discovery = await send("goal-drift-ui", "/goal --scopes", 200);
   assert.equal(discovery.recorded, true);
   assert.equal(await localResult.count(), 0, "recorded command output appears only in the timeline");
@@ -130,6 +139,11 @@ export async function runGoalRecoveryUi({ page, base, screenshots, sessionEnds, 
   assert.equal((await (await fetch(`${base}/api/tasks/goal-multiple-ui`)).json()).status, "paused", "scope controls do not falsely complete a task");
 
   await page.goto(`${base}/?project=cli-ui&task=goal-deleted-ui`);
+  const deletedHint = await send("goal-deleted-ui", "/goal --scopes", 200);
+  assert.doesNotMatch(deletedHint.text, /恢复：\/goal resume/);
+  assert.match(deletedHint.text, /不能恢复[\s\S]*清除：\/goal clear --scope/);
+  assert.match(await expandNotice(/不能恢复/), /不能恢复/);
+  await page.screenshot({ path: join(screenshots, "goal-unavailable-clear-only.png"), fullPage: true });
   const unavailable = await send("goal-deleted-ui", "/goal resume", 409);
   assert.match(unavailable.error, /目标仍保存在[\s\S]*deleted-goal-profile[\s\S]*clear --scope/);
   const cleared = await send("goal-deleted-ui", `/goal clear --scope codex:${scopeKey("deleted-goal-profile")}`, 200);
