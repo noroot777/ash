@@ -5,7 +5,7 @@ import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { taskDurationInfo } from "../src/task-detail/utils.ts";
-import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
+import { shouldStickToBottom, stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
 import { sharedTeamParent } from "../src/review/reviewModel.ts";
 import { gateAllowsRevision, isOpenDuetGate, runCreatedHandoffFollowUps } from "../src/duet/handoffPolicy.ts";
 import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
@@ -436,6 +436,19 @@ try {
     userDriven: false,
     detaching: false,
   }), false);
+
+  // 贴底的第二道闸:要不要真的动 scrollTop。用户手滚到离底 40px 停住,底边没往下跑,
+  // 这时候再 scrollTo 就是把他从停的位置拽到最底 —— 那一跳正是「快到底时画面突然蹦
+  // 一下」的来源,必须闸住。
+  assert.equal(shouldStickToBottom({ stuck: true, previousMax: 5000, currentMax: 5000, distance: 40 }), false);
+  // 来了新内容(底边往下跑了)才跟过去,这是贴底唯一该做的事。
+  assert.equal(shouldStickToBottom({ stuck: true, previousMax: 5000, currentMax: 5200, distance: 240 }), true);
+  // 容器被回复框挤矮同样让底边往下跑,也要跟。
+  assert.equal(shouldStickToBottom({ stuck: true, previousMax: 5000, currentMax: 5120, distance: 120 }), true);
+  // 人在上面读历史时一律不跟。
+  assert.equal(shouldStickToBottom({ stuck: false, previousMax: 5000, currentMax: 5200, distance: 900 }), false);
+  // 已经贴着底了就别再发一次 scrollTo:那会把浏览器正在跑的平滑滚动掐断。
+  assert.equal(shouldStickToBottom({ stuck: true, previousMax: 5000, currentMax: 5200, distance: 0 }), false);
 
   const team = { id: "team-1", mode: "team", projectId: "project-1", title: "父团队" };
   const sharedWorker = { id: "worker-1", parentId: "team-1", useWorktree: false };
