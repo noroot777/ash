@@ -360,7 +360,7 @@ const globalPromptCallsites = [
   // 策略留到起跑前用现读的授权贴)。两条路仍然都经过策略,只是不再各调一次。
   ["普通任务续聊/召唤", new URL("../src/orchestrator.ts", import.meta.url), 2],
   ["团队调度台开台/接回", new URL("../src/team/session.ts", import.meta.url), 1],
-  ["团队调度台消息注入", new URL("../src/team/session-consumer.ts", import.meta.url), 1],
+  ["团队调度台消息注入", new URL("../src/team/lead-delivery.ts", import.meta.url), 1],
   ["duet 讨论者", new URL("../src/duet/turn.ts", import.meta.url), 1],
 ] as const;
 for (const [source, file, expected] of globalPromptCallsites) {
@@ -370,18 +370,27 @@ for (const [source, file, expected] of globalPromptCallsites) {
 // 调度台的注入只数得清「一共几处调用」是不够的:真正要钉的是**只有一道门**。
 // 用户插话、执行者汇报、回合末合并投递原本各自 handle.send 一次,漏贴一处就是一条
 // 绕过策略的路;现在一律走 sendToLead,策略贴在那里面。
-const teamSessionSource = readSource(new URL("../src/team/session-consumer.ts", import.meta.url));
+const teamDeliverySource = readSource(new URL("../src/team/lead-delivery.ts", import.meta.url));
 assert.match(
-  teamSessionSource,
-  /function sendToLead\([\s\S]{0,700}?withGlobalBrowserPolicy\(text, "reminder", await browserGrantForTask\(/,
+  teamDeliverySource,
+  /function sendToLead\([\s\S]{0,900}?withGlobalBrowserPolicy\(text, "reminder", await browserGrantForTask\(/,
   "sendToLead 必须在注入前贴上全局浏览器策略,且带上**现读**的项目授权 —— " +
   "开台说了「已授权」、后续投递又注入默认拒绝的话,调度台收到的是一对自相矛盾的指令",
 );
-assert.equal(
-  [...teamSessionSource.matchAll(/\.handle\.send\(/g)].length,
-  1,
-  "调度台的 stdin 注入只能走 sendToLead 那一处 —— 多一处裸 handle.send 就是一条绕过全局浏览器策略的路",
-);
+// 投递口搬进 lead-delivery.ts 之后,「只有一道门」要连着两个文件一起数:消费循环与
+// session.ts 都不许再出现裸 handle.send,全部 stdin 注入只能从投递口过。
+for (const [label, rel] of [
+  ["投递口", "../src/team/lead-delivery.ts"],
+  ["事件消费循环", "../src/team/session-consumer.ts"],
+  ["投递分流", "../src/team/session.ts"],
+] as const) {
+  const text = readSource(new URL(rel, import.meta.url));
+  assert.equal(
+    [...text.matchAll(/\.handle\.send\(/g)].length,
+    rel.endsWith("lead-delivery.ts") ? 1 : 0,
+    `${label}:调度台的 stdin 注入只能走 sendToLead 那一处 —— 多一处裸 handle.send 就是一条绕过全局浏览器策略的路`,
+  );
+}
 const requestContext = readFileSync(join(base, "request-context.md"), "utf8");
 assert.match(requestContext, /path target \/grill-me/);
 assert.match(requestContext, /原始需求里点名 \/grill-me/, "需求文件不能为了避免误触而删掉验收信息");

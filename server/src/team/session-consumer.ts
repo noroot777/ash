@@ -20,8 +20,8 @@ import { noteAgentEventUpload } from "../uploads.js";
 import type { SessionTraceEvent } from "../transcript.js";
 import { isSessionScopeNotice } from "../session-notice.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
-import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { consumeInbound } from "./inbound-queue.js";
+import { sendToLead } from "./lead-delivery.js";
 import type { PendingInbound } from "./inbound-queue.js";
 import {
   idleRotation,
@@ -390,33 +390,6 @@ function retireLead(lead: Lead): void {
   out.end();
 }
 
-/**
- * 把一条消息交给这台调度台的进程,**返回它收下了没有**(见 ResidentHandle.send)。
- *
- * 拿不到回执就只能假定送到了,而两种常驻实现都会静默拒收:codex 在 `ended || closing`
- * 时直接返回,claude 在 stdin 已关时写不进去。抛错同样按「没收下」算 —— 一次注入失败不该
- * 掀掉整台调度台(理由同 persistOrReport),但更不能被当成送到了。
- *
- * **同一台按调用顺序串行**:这里要 await 一次读库(现读浏览器授权),没有这条链的话,回合
- * 收尾那条合并汇报还卡在读授权上,用户插话就能抢先写进 stdin —— 调度者先看到「新要求」、
- * 后看到本该在它之前的那份执行结果,上下文是倒的(第 7 链第 1 轮审查实测到这个顺序)。
- */
-async function sendToLead(lead: Lead, text: string): Promise<boolean> {
-  const sent = (lead.sending ?? Promise.resolve()).then(async () => {
-    try {
-      // 授权现读:开台时带的是「已授权 x.com」,后续消息若还注入默认拒绝,调度台收到的
-      // 就是一对自相矛盾的指令(第 2 轮审查 P3)。同时这也让撤销对常驻调度台即时生效。
-      return lead.handle.send(withGlobalBrowserPolicy(text, "reminder", await browserGrantForTask(lead.taskId)));
-    } catch (error) {
-      console.error(`[ash] team send(${lead.taskId}) failed:`, error);
-      return false;
-    }
-  });
-  // 链上只留「轮到下一个了」,不留成败 —— 一条没送成不该把后面的也拖成 rejected。
-  lead.sending = sent.then(() => undefined, () => undefined);
-  return sent;
-}
-
 function clearStatusRetry(lead: Lead): void {
   if (lead.statusTimer) clearTimeout(lead.statusTimer);
   lead.statusTimer = null;
@@ -508,7 +481,7 @@ async function endTurn(lead: Lead): Promise<void> {
     // (进程正在收尾)这批汇报就再也没人送得出去了 —— 下一台健康调度台永远等不到
     // (2026-08-26 第 11 轮审查)。落盘同样要等收下之后:没送成还记一条「已投递」的
     // system turn,下一台真送成时同一份汇报在 .md 里就是两条。
-    if (await sendToLead(lead, merged)) {
+    if ((await sendToLead(lead, merged)).sent) {
       // 只摘走这一批(按对象身份)。await 期间新来的留在队列里,下一次回合收尾照常送。
       const sent = new Set<PendingInbound>(batch);
       lead.pending = lead.pending.filter((m) => !sent.has(m));
@@ -693,6 +666,5 @@ function armIdle(lead: Lead): void {
     recordSystemTurn,
     reportLeadFailure,
     retireLead,
-    sendToLead,
   };
 }

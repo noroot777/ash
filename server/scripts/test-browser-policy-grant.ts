@@ -140,7 +140,7 @@ for (const [label, rel, expected] of [
   // 下面两条是第 2 轮审查补上的:duet 每轮都拿不到授权,团队常驻投递则在开台说了
   // 「已授权」之后又注入默认拒绝 —— 一对自相矛盾的指令比一致地不授权更糟。
   ["duet 每一轮发言", "../src/duet/turn.ts", 1],
-  ["团队常驻消息投递", "../src/team/session-consumer.ts", 1],
+  ["团队常驻消息投递", "../src/team/lead-delivery.ts", 1],
 ] as const) {
   const src = readFileSync(new URL(rel, import.meta.url), "utf8");
   const calls = [...src.matchAll(/withGlobalBrowserPolicy\(/g)];
