@@ -106,11 +106,44 @@ async function main(): Promise<void> {
   await settle();
   check((await db.select().from(monitors).where(eq(monitors.nativeId, "borphan1"))).length === 0, "认不出会话就不落库");
 
+  // ⑦ 子智能体挂的 Monitor 同样要认（嵌套 assistant 带 parent_tool_use_id）
+  const nested = new ClaudeMonitorTrace();
+  nested.event({ type: "system", subtype: "init", session_id: CLI_SESSION });
+  nested.toolUse("Monitor", { command: "until grep -q SUB /tmp/s; do sleep 5; done", description: "子智能体的哨兵", timeout_ms: 600_000 }, "toolu_sub1");
+  nested.event({ type: "system", subtype: "task_started", task_id: "bsubagent", tool_use_id: "toolu_sub1",
+    description: "子智能体的哨兵", task_type: "local_bash", session_id: CLI_SESSION });
+  await settle();
+  const sub = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsubagent"))).at(0);
+  check(sub !== undefined, "子智能体挂的 Monitor 也认领（接线在 claude-stream 的嵌套分支）");
+  check(sub?.taskId === taskId, "子智能体的哨兵归属到同一个 ash 任务", String(sub?.taskId));
+
+  // ⑧ 来源报多久就记多久 —— 不能套 ash 的创建区间
+  const secs = new ClaudeMonitorTrace();
+  secs.event({ type: "system", subtype: "init", session_id: CLI_SESSION });
+  secs.toolUse("Monitor", { command: "sleep 1", description: "只盯 5 秒", timeout_ms: 5_000 }, "toolu_secs");
+  secs.event({ type: "system", subtype: "task_started", task_id: "bsecs001", tool_use_id: "toolu_secs",
+    description: "只盯 5 秒", task_type: "local_bash", session_id: CLI_SESSION });
+  await settle();
+  const quick = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsecs001"))).at(0);
+  const quickSpan = quick ? Date.parse(quick.expiresAt) - Date.parse(quick.startedAt) : -1;
+  check(Math.abs(quickSpan - 5_000) < 1_500, "来源说 5 秒就记 5 秒，不抬到 ash 的下限", `${quickSpan}ms`);
+
+  // ⑨ 接管回来：新 trace 必须把上一轮的投影认回来，否则终态通知会被当成「不是我的」丢掉
+  const reclaimTrace = new ClaudeMonitorTrace();
+  reclaimTrace.event({ type: "system", subtype: "init", session_id: CLI_SESSION });
+  await settle();
+  reclaimTrace.event({ type: "system", subtype: "task_notification", task_id: "bsubagent",
+    status: "completed", summary: "子智能体的哨兵跑完了", session_id: CLI_SESSION });
+  await settle();
+  const reclaimed = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsubagent"))).at(0);
+  check(reclaimed?.status === "exited", "接管后的新 trace 认回了上一轮的投影，终态落得下去",
+    `实际 ${reclaimed?.status}（running = 认领关系没恢复，通知被丢了）`);
+
   if (failures) {
     console.error(`\n${failures} 条断言未通过`);
     process.exitCode = 1;
   } else {
-    console.log("✓ claude 内置 Monitor 认人：Monitor 与普通后台 Bash 分得开 / 入参与会话落位 / 终态 / 重放幂等 / 进程结束落 lost / 孤儿安静跳过 均受回归保护");
+    console.log("✓ claude 内置 Monitor 认人：Monitor 与普通后台 Bash 分得开 / 入参与会话落位 / 终态 / 重放幂等 / 进程结束落 lost / 孤儿安静跳过 / 子智能体同样认 / 来源时长如实记 / 接管后认回上一轮 均受回归保护");
   }
 }
 

@@ -682,4 +682,8 @@ export const monitors = sqliteTable("monitors", {
   kind: text("kind").notNull().default("ash"),
   // 来源侧的原生 id(claude 的后台任务 id,形如 b69ym4qzv)。'ash' 那种恒为 null。
   nativeId: text("native_id"),
+  // 这条投影是哪条 CLI 会话报上来的('ash' 那种恒为 null)。**它是重启后认领关系的唯一凭据**:
+  // agent 进程活得过 ash 重启(detached),重启后新建的解析器必须靠它把这些行认回来,否则
+  // 来源侧后续的终态通知会因为「没认领过」被丢掉,卡片永远停在旧状态。
+  cliSessionId: text("cli_session_id"),
 });

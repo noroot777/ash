@@ -122,7 +122,7 @@ export function MonitorCard({
       {!logged && (
         <p className="monitor-card__readonly">
           这是智能体自己起的 Monitor，ash 只能看不能停——它的进程在智能体的进程树里，
-          输出也直接进了它自己的会话。{live ? "智能体的这一轮结束时它会跟着消失。" : ""}
+          输出也直接进了它自己的会话。{live ? "起它的那个智能体进程结束时，它会跟着消失。" : ""}
         </p>
       )}
       {logged && (

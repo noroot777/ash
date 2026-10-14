@@ -12,12 +12,13 @@
 // 认人那一侧（哪些 local_bash 是 Monitor 起的）用真实录下的 stream 回放验证，见
 // test-claude-monitor-parse.ts。
 import {
-  db, monitors, listMonitors, makeTask, now, reattachMonitors, startMonitor, teardown,
+  db, monitors, sessions, listMonitors, makeTask, now, reattachMonitors, startMonitor, teardown,
 } from "./monitors-fixture.js";
+import { inspectProcess } from "../src/proc.js";
 import { and, eq } from "drizzle-orm";
 
 const { stopMonitorChecked, readMonitorTail } = await import("../src/monitors.js");
-const { loseOrphanClaudeMonitors } = await import("../src/claude-monitors.js");
+const { loseDeadClaudeMonitors } = await import("../src/claude-monitors.js");
 
 let failures = 0;
 const check = (ok: boolean, label: string, detail = "") => {
@@ -30,14 +31,16 @@ const check = (ok: boolean, label: string, detail = "") => {
 let projected = 0;
 
 /** 手写一行 claude 投影，模拟 ClaudeMonitorTrace 落的库。 */
-async function projectClaudeMonitor(taskId: string, nativeId: string, status = "running"): Promise<string> {
+async function projectClaudeMonitor(
+  taskId: string, nativeId: string, status = "running", cliSessionId: string | null = null,
+): Promise<string> {
   const id = `cm-${++projected}`;
   await db.insert(monitors).values({
     id, taskId, command: `until grep -q DONE /tmp/x; do sleep 5; done`,
     description: `内置 Monitor ${nativeId}`, cwd: "/tmp",
     status, pid: null, pidStartedAt: null, logPath: "", offset: 0, events: 0, exitCode: null,
     startedAt: now(), expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
-    endedAt: null, endedReason: null, ownerUserId: null, kind: "claude", nativeId,
+    endedAt: null, endedReason: null, ownerUserId: null, kind: "claude", nativeId, cliSessionId,
   });
   return id;
 }
@@ -91,23 +94,46 @@ async function main(): Promise<void> {
   check(underQuota.ok, "4 个投影之后 ash 照样起得了哨兵", underQuota.ok ? "" : underQuota.error);
   if (underQuota.ok) await stopMonitorChecked(underQuota.monitor.id);
 
-  // ── 开机收拾上一轮留下的投影 ──────────────────────────────────────────────
-  // 这些行没有 pid，reattach 按 kind 整批跳过了它们；没人收的话重启一次就永久留下
-  // 一张「正在盯着」的僵尸卡（真机实测到的就是这个）。
-  const orphanTask = await makeTask();
-  const orphan = await projectClaudeMonitor(orphanTask, "borphaned");
-  const liveAsh = await startMonitor({ taskId: orphanTask, command: "sleep 30", description: "ash 的不该被它碰" });
-  // 它是**全库**扫描（开机那一刻的语义就是「把所有没人认领的都收了」），所以先数一下
-  // 此刻到底有几个待收，再跟返回值对账——钉死绝对数的话，以后往这份测试里加一个用例
-  // 就会无故变红。
-  const due = (await db.select().from(monitors).where(and(eq(monitors.kind, "claude"), eq(monitors.status, "running")))).length;
-  const swept = await loseOrphanClaudeMonitors();
-  check(swept === due && due > 0, "把所有还挂着 running 的投影都收了，一个不漏", `待收 ${due} 个，实收 ${swept} 个`);
-  check((await db.select().from(monitors).where(and(eq(monitors.kind, "claude"), eq(monitors.status, "running")))).length === 0,
-    "收完之后没有投影还挂在 running 上");
-  const sweptRow = (await db.select().from(monitors).where(eq(monitors.id, orphan))).at(0);
-  check(sweptRow?.status === "lost", "遗留投影落 lost，不再冒充还在盯", String(sweptRow?.status));
-  check(/接不回来|重启/.test(sweptRow?.endedReason ?? ""), "结束原因说明了它为什么失联", sweptRow?.endedReason ?? "");
+  // ── 开机这一轮：按**来源进程死活**裁决，不是「本进程账本里没有就算死」 ──────────
+  //
+  // agent 活得过 ash 重启（detached）。无条件把 running 的投影标 lost，用户看到的就是
+  // 「任务还在输出、哨兵却说进程已不在」——第 1 轮审查用真实 detached 接管复现过，这里
+  // 用「会话的 agent_pid 还是不是当初那个进程」把两边都钉住。
+  const sweepTask = await makeTask();
+
+  // ① 来源还活着：会话记着**本测试进程自己的 pid**，它当然还在 → 必须留着。
+  const aliveSession = "cli-alive";
+  await db.insert(sessions).values({
+    id: "sess-alive", taskId: sweepTask, role: "single", agentType: "claude", executor: "claude@test",
+    cliSessionId: aliveSession, cwd: "/tmp", startedAt: now(),
+    agentPid: process.pid, agentStartedAt: inspectProcess(process.pid)?.startedAt ?? null,
+  });
+  const keptRow = await projectClaudeMonitor(sweepTask, "bstillalive", "running", aliveSession);
+
+  // ② 来源确实没了：一个不可能存在的 pid。
+  const deadSession = "cli-dead";
+  await db.insert(sessions).values({
+    id: "sess-dead", taskId: sweepTask, role: "single", agentType: "claude", executor: "claude@test",
+    cliSessionId: deadSession, cwd: "/tmp", startedAt: now(),
+    agentPid: 2_147_483_600, agentStartedAt: "Mon Jan  1 00:00:00 2001",
+  });
+  const deadRow = await projectClaudeMonitor(sweepTask, "bitsgone", "running", deadSession);
+
+  // ③ 没记来源会话的存量行：无从判断，按「认不回来」收掉。
+  const legacyRow = await projectClaudeMonitor(sweepTask, "blegacy", "running", null);
+
+  const liveAsh = await startMonitor({ taskId: sweepTask, command: "sleep 30", description: "ash 的不该被它碰" });
+  const sweep = await loseDeadClaudeMonitors();
+
+  const kept = (await db.select().from(monitors).where(eq(monitors.id, keptRow))).at(0);
+  check(kept?.status === "running", "来源 agent 还活着的投影留着不动", `实际 ${kept?.status}（lost = 又在拿本地账本当死活判据）`);
+  const dead = (await db.select().from(monitors).where(eq(monitors.id, deadRow))).at(0);
+  check(dead?.status === "lost", "来源 agent 确实没了的落 lost", String(dead?.status));
+  check(/进程已经不在/.test(dead?.endedReason ?? ""), "结束原因说的是来源进程，不是 ash 自己重启", dead?.endedReason ?? "");
+  const legacy = (await db.select().from(monitors).where(eq(monitors.id, legacyRow))).at(0);
+  check(legacy?.status === "lost", "没记来源会话的存量行也收掉（无从认领）", String(legacy?.status));
+  check(sweep.kept >= 1 && sweep.lost >= 2, "统计分别报出留了几个、收了几个", JSON.stringify(sweep));
+
   if (liveAsh.ok) {
     const ashRow = (await db.select().from(monitors).where(eq(monitors.id, liveAsh.monitor.id))).at(0);
     check(ashRow?.status === "running", "ash 自己的哨兵不受这轮收拾影响", String(ashRow?.status));

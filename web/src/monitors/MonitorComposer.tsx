@@ -1,14 +1,11 @@
 import { useState } from "react";
 import { SpinnerGap } from "@phosphor-icons/react";
-import { MONITOR_DEFAULT_TIMEOUT_MS } from "@ash/shared/monitor";
+import { MONITOR_DEFAULT_TIMEOUT_MS, monitorDurationOptions } from "@ash/shared/monitor";
 import type { StartMonitorInput } from "./useTaskMonitors.ts";
 
-const DURATIONS: { label: string; ms: number }[] = [
-  { label: "30 分钟", ms: 30 * 60_000 },
-  { label: "2 小时", ms: MONITOR_DEFAULT_TIMEOUT_MS },
-  { label: "8 小时", ms: 8 * 60 * 60_000 },
-  { label: "24 小时", ms: 24 * 60 * 60_000 },
-];
+// **从共享常量推导，不要在这里另列一张表**：写死的那版在时长上限改掉之后整张失真
+// （选「2 小时」实际只盯 5 分钟，而且提交值恰好等于缺省值，连「已钳到边界」的回执都没有）。
+const DURATIONS = monitorDurationOptions();
 
 /**
  * 手动起一个哨兵。

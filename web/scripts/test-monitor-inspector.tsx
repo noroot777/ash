@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { TaskMonitor } from "@ash/shared/monitor";
+import {
+  MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS,
+  monitorDurationOptions, normalizeMonitorTimeout, type TaskMonitor,
+} from "@ash/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
@@ -11,6 +14,10 @@ import type { TaskMonitorsState } from "../src/monitors/useTaskMonitors.ts";
 const base: TaskMonitor = {
   id: "m1",
   taskId: "task",
+  // 出身。缺了它卡片会按「只读投影」渲染（没有停止按钮、没有事件数、没有「看它的输出」），
+  // 整份夹具的断言全部对不上——这两个字段是必填契约的一部分，不是可选装饰。
+  kind: "ash",
+  nativeId: null,
   command: "tail -F build.log | grep --line-buffered ERROR",
   description: "盯构建日志",
   cwd: "/repo",
@@ -22,6 +29,17 @@ const base: TaskMonitor = {
   expiresAt: "2026-08-25T12:00:00.000Z",
   endedAt: null,
   endedReason: null,
+};
+
+/** claude 内置 Monitor 的只读投影：另一种出身，能力和上面那种不一样。 */
+const projected: TaskMonitor = {
+  ...base,
+  id: "m-claude",
+  kind: "claude",
+  nativeId: "b69ym4qzv",
+  description: "最终全量回归结果",
+  pid: null,
+  events: 0,
 };
 
 function state(monitors: TaskMonitor[]): TaskMonitorsState {
@@ -39,6 +57,24 @@ function state(monitors: TaskMonitor[]): TaskMonitorsState {
 const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
   renderToStaticMarkup(<MonitorInspector monitors={state(monitors)} blockedReason={blockedReason} />);
 
+// ── 手动表单的时长选项必须真的能兑现 ────────────────────────────────────────
+// 原来那张表把「2 小时 / 8 小时 / 24 小时」写死在前端，上限改掉之后整张失真：选「2 小时」
+// 实际只盯 5 分钟，而且提交值恰好等于缺省值，连「已钳到边界」的回执都没有，用户完全无从
+// 察觉（第 1 轮审查实测三个选项错两个）。所以这里钉的是**选项与服务端边界同源**。
+{
+  const options = monitorDurationOptions();
+  assert.ok(options.length > 0, "总得给得出选项");
+  for (const option of options) {
+    assert.ok(
+      option.ms >= MONITOR_MIN_TIMEOUT_MS && option.ms <= MONITOR_MAX_TIMEOUT_MS,
+      `选项「${option.label}」(${option.ms}ms) 落在服务端会钳掉的区间外——用户选了也兑现不了`,
+    );
+    assert.equal(option.ms, normalizeMonitorTimeout(option.ms), `选项「${option.label}」会被服务端改写`);
+  }
+  assert.ok(options.some((o) => o.ms === MONITOR_DEFAULT_TIMEOUT_MS), "缺省时长必须在选项里");
+  assert.ok(options.some((o) => o.ms === MONITOR_MAX_TIMEOUT_MS), "上限也该给得出来");
+}
+
 // ── 在盯的那个必须给得出「停」，并把花掉的回合数摆在明面上 ────────────────────
 // 哨兵的进程是故意脱离 ash 的：agent 的回合、会话、甚至 server 重启都带不走它。代价
 // 就是「后台有个进程在跑、每吐一行烧一个回合」这件事再没有第二个地方看得见。所以这一条
@@ -50,6 +86,28 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
   assert.match(html, /停掉哨兵“盯构建日志”/, "在盯的哨兵必须给得出停止入口");
   assert.match(html, /grep --line-buffered ERROR/, "命令原文是判断「它到底在盯什么」的唯一依据");
   assert.match(html, /看它的输出/, "能回看原始输出才分得出「还没吐」和「过滤条件写错了」");
+}
+
+// ── 两种出身的卡不一样，而且差别必须看得见 ──────────────────────────────────
+// claude 自带 Monitor 的投影是只读的：进程在智能体自己的进程树里，ash 停不掉、拿不到日志、
+// 也数不到事件数。画成和 ash 哨兵一样的后果是用户去点一个注定失败的停止按钮，再把恒为 0
+// 的事件数读成「我的过滤条件写错了」。
+{
+  const html = panel([projected]);
+  assert.match(html, /最终全量回归结果/, "投影的说明照样要露在外面");
+  assert.match(html, /claude 自带/, "出身要标出来——两种卡在列表里是混排的");
+  assert.match(html, /只能看不能停/, "要解释清楚它为什么没有停止按钮");
+  assert.doesNotMatch(html, /停掉哨兵/, "ash 停不掉它，就不该画一个注定失败的停止按钮");
+  assert.doesNotMatch(html, /条事件/, "事件数 ash 根本数不到，画出来只会被读成「过滤写错了」");
+  assert.doesNotMatch(html, /看它的输出/, "它的输出进了智能体自己的会话，ash 这边没有日志可看");
+}
+
+// 两种混排时各画各的，不会互相串味。
+{
+  const html = panel([base, projected]);
+  assert.match(html, /停掉哨兵“盯构建日志”/, "混排时 ash 那张照常给停止入口");
+  assert.match(html, /claude 自带/, "混排时投影那张照常标出身");
+  assert.equal(html.match(/停掉哨兵/g)?.length, 1, "两张卡里只有 ash 那张有停止按钮");
 }
 
 // ── 已结束的如实说明结局，并且不再给停止入口 ─────────────────────────────────

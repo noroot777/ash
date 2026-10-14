@@ -163,14 +163,17 @@ async function initializeServer() {
     if (monitorRecovery?.attached || monitorRecovery?.lost) {
       console.log(`[ash] 哨兵：接回 ${monitorRecovery.attached} 个，${monitorRecovery.lost} 个进程已不在`);
     }
-    // claude 自带 Monitor 的投影没有 pid，上面那一步按 kind 整批跳过了它们。不在这儿收口
-    // 的话，重启一次就永久留下几张「正在盯着」的僵尸卡（见 claude-monitors.ts 的说明）。
-    const { loseOrphanClaudeMonitors } = await import("./claude-monitors.js");
-    const orphanMonitors = await loseOrphanClaudeMonitors().catch((err) => {
+    // claude 自带 Monitor 的投影没有 pid，上面那一步按 kind 整批跳过了它们，得单独判一次。
+    // **必须排在 reattachRunningTasks 之后**：它按「来源 agent 进程还在不在」裁决，而那些
+    // 进程正是上面那一步接回来的；提前跑会把一批还活着的投影误判成死的。
+    const { loseDeadClaudeMonitors } = await import("./claude-monitors.js");
+    const claudeMonitorSweep = await loseDeadClaudeMonitors().catch((err) => {
       console.error("[ash] 内置 Monitor 投影收尾失败（不影响启动）:", err);
-      return 0;
+      return { kept: 0, lost: 0 };
     });
-    if (orphanMonitors) console.log(`[ash] 内置 Monitor 投影：${orphanMonitors} 个随上一轮会话失联，已标记`);
+    if (claudeMonitorSweep.kept || claudeMonitorSweep.lost) {
+      console.log(`[ash] 内置 Monitor 投影：${claudeMonitorSweep.kept} 个来源仍在跑，${claudeMonitorSweep.lost} 个来源已不在`);
+    }
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
     // 收拾死在投递链上的 reviewing run（详见 free-workflow.ts reconcileFreeReviews）。
     const { reconcileFreeReviews } = await import("./free-workflow.js");

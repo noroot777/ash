@@ -186,6 +186,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       ownerUserId: input.ownerUserId ?? null,
       kind: "ash",
       nativeId: null,
+      cliSessionId: null,
     };
     try {
       await db.insert(monitors).values(row);

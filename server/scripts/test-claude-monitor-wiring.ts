@@ -105,11 +105,42 @@ async function main(): Promise<void> {
   check(orphan !== undefined, "第二条也落了库");
   check(orphan?.status === "lost", "流结束时还在跑的投影被收成 lost，不留僵尸卡", String(orphan?.status));
 
+  // ── 子智能体那条路：嵌套 assistant 带 parent_tool_use_id，走的是 parser 里另一个分支
+  // （而且那个分支**提前 return**）。只接顶层的话，子智能体挂的哨兵一条都不会出现。
+  await drain([
+    { type: "system", subtype: "init", session_id: CLI_SESSION },
+    {
+      type: "assistant", parent_tool_use_id: "toolu_parent",
+      message: { model: "claude-opus-5", content: [
+        { type: "tool_use", name: "Monitor", id: "toolu_sub", input: { command: "until grep -q SUB /tmp/s; do sleep 5; done", description: "子智能体的哨兵", timeout_ms: 600_000 } },
+      ] },
+    },
+    { type: "system", subtype: "task_started", task_id: "bsub0001", tool_use_id: "toolu_sub", description: "子智能体的哨兵", task_type: "local_bash", session_id: CLI_SESSION },
+    { type: "result", subtype: "success", is_error: false, session_id: CLI_SESSION, num_turns: 1, result: "done" },
+  ]);
+  await new Promise((r) => setTimeout(r, 200));
+  const subRow = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsub0001"))).at(0);
+  check(subRow !== undefined, "子智能体挂的 Monitor 也接上了（嵌套分支）");
+  check(subRow?.taskId === "t1", "归属到同一个 ash 任务", String(subRow?.taskId));
+
+  // ── 接管那条路：上一轮的投影还挂着 running，新开的流必须认回来再收它的终态。
+  await db.update(monitors).set({ status: "running", endedAt: null, endedReason: null })
+    .where(eq(monitors.nativeId, "bsub0001"));
+  await drain([
+    { type: "system", subtype: "init", session_id: CLI_SESSION },
+    { type: "system", subtype: "task_notification", task_id: "bsub0001", status: "completed", summary: "子智能体的哨兵跑完了", session_id: CLI_SESSION },
+    { type: "result", subtype: "success", is_error: false, session_id: CLI_SESSION, num_turns: 1, result: "done" },
+  ]);
+  await new Promise((r) => setTimeout(r, 250));
+  const afterReclaim = (await db.select().from(monitors).where(eq(monitors.nativeId, "bsub0001"))).at(0);
+  check(afterReclaim?.status === "exited", "接管后的新流认回上一轮的投影并落了终态",
+    `实际 ${afterReclaim?.status}（running/lost = 认领关系没恢复）`);
+
   if (failures) {
     console.error(`\n${failures} 条断言未通过`);
     process.exitCode = 1;
   } else {
-    console.log("✓ claude 内置 Monitor 接线：parseClaudeStream 真的把 tool_use / 生命周期事件 / 流收尾都喂到了投影层");
+    console.log("✓ claude 内置 Monitor 接线：parseClaudeStream 把顶层/嵌套 tool_use、生命周期事件、流收尾都喂到了投影层，接管后能认回上一轮");
   }
 }
 

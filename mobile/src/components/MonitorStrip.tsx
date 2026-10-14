@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { TaskMonitor } from "@ash/shared/monitor";
+import { canStopMonitor, type TaskMonitor } from "@ash/shared/monitor";
 import { api } from "@/lib/api";
 import { useTheme, radius, fonts } from "@/lib/theme";
 
@@ -13,6 +13,11 @@ import { useTheme, radius, fonts } from "@/lib/theme";
  * 桌面前才按得到，中间这段时间它一直在烧。
  *
  * 起哨兵没有手动入口：那是 agent 在自己回合里做的决定。
+ *
+ * **两种来源要分开画**（`kind`，语义见 shared/src/monitor.ts）：列表 API 同时返回 ash 自己
+ * 起的和 claude 内置 Monitor 的只读投影。后者 ash 停不掉（进程在智能体自己的进程树里），
+ * 事件数也数不到（恒为 0）。不分流的话，手机上会给一张投影卡画出停止按钮和「0 条」——
+ * 按下去只会弹一句「停不掉」，而那条哨兵照跑不误。**别展示一个注定失败的操作。**
  *
  * 跟这一屏其它东西一样走轮询，不开实时通道（mobile 的既定取舍）。
  */
@@ -69,17 +74,26 @@ export function MonitorStrip({ taskId, visible }: { taskId: string; visible: boo
         >
           <Ionicons name="pulse-outline" size={13} color={theme.accent} />
           <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>{monitor.description}</Text>
-          <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{monitor.events} 条</Text>
-          <Pressable
-            onPress={() => stop(monitor)}
-            disabled={stopping === monitor.id}
-            hitSlop={4}
-            accessibilityRole="button"
-            accessibilityLabel={`停掉哨兵「${monitor.description}」`}
-            style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
-          >
-            <Ionicons name="stop-circle-outline" size={17} color={theme.faint} />
-          </Pressable>
+          {canStopMonitor(monitor.kind)
+            ? (
+              <>
+                <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{monitor.events} 条</Text>
+                <Pressable
+                  onPress={() => stop(monitor)}
+                  disabled={stopping === monitor.id}
+                  hitSlop={4}
+                  accessibilityRole="button"
+                  accessibilityLabel={`停掉哨兵「${monitor.description}」`}
+                  style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
+                >
+                  <Ionicons name="stop-circle-outline" size={17} color={theme.faint} />
+                </Pressable>
+              </>
+            )
+            : (
+              // 只读投影：标明来源，不画事件数（ash 数不到）、不画停止按钮（ash 停不掉）。
+              <Text style={{ color: theme.faint, fontSize: 11 }}>智能体自带 · 只能看</Text>
+            )}
         </View>
       ))}
     </>

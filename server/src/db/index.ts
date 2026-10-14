@@ -131,7 +131,7 @@ export async function ensureSchema() {
       events INTEGER NOT NULL DEFAULT 0, exit_code INTEGER,
       started_at TEXT NOT NULL, expires_at TEXT NOT NULL,
       ended_at TEXT, ended_reason TEXT, owner_user_id TEXT,
-      kind TEXT NOT NULL DEFAULT 'ash', native_id TEXT
+      kind TEXT NOT NULL DEFAULT 'ash', native_id TEXT, cli_session_id TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -299,6 +299,7 @@ export async function ensureSchema() {
   for (const sql of [
     "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
     "ALTER TABLE monitors ADD COLUMN native_id TEXT",
+    "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",

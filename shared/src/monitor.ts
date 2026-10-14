@@ -81,12 +81,43 @@ export function isMonitorLive(status: MonitorStatus): boolean {
  * agent 进程树里，本来就撑得住）。对齐之后那条优势缩到 30 分钟，更长的活得靠「到期续挂」。
  * 换来的是两种卡的时间读数可以直接相互比较。要改回去只动下面这两个常量。
  *
- * 下限保持 60 秒：claude 那边允许到 1 秒，但 ash 这头要 spawn 进程 + 起 tail 轮询，1 秒的
- * 哨兵基本在起来之前就过期了，给出来只是个坑。
+ * 下限同样对齐到 1 秒（本机 claude 2.1.283 的 Monitor schema 两个模式都是 1000ms）。
+ * 一开始留的 60 秒是「ash 要 spawn 进程 + 起 tail，1 秒的哨兵没意义」——但那是**建议**
+ * 不是**边界**，拿它当硬下限会让 ash 连「claude 挂得出来的那种哨兵」都挂不了，而用户要的
+ * 就是两边能力一致。短得没意义的时长由调用方自己负责。
  */
 export const MONITOR_DEFAULT_TIMEOUT_MS = 5 * 60_000;
-export const MONITOR_MIN_TIMEOUT_MS = 60_000;
+export const MONITOR_MIN_TIMEOUT_MS = 1_000;
 export const MONITOR_MAX_TIMEOUT_MS = 30 * 60_000;
+
+/**
+ * 手动表单的时长选项。**从上面那几个常量推导，不另列一张硬编码表**。
+ *
+ * 这是一处类问题的根因：原来那张表把「2 小时 / 8 小时 / 24 小时」写死在前端，常量一改就
+ * 整张表失真——用户选「2 小时」实际只盯 5 分钟，而且因为提交值恰好等于缺省值，连「已钳到
+ * 边界」的回执都不会有，完全无从察觉（第 1 轮审查实测三个选项错两个、第三个靠巧合对上）。
+ * 推导出来之后，改上面的常量这里自动跟着走。
+ *
+ * 取值规则：缺省必须在列、上限必须在列，中间按常用档位取那些落在 [min, max] 区间内的。
+ */
+export function monitorDurationOptions(): { label: string; ms: number }[] {
+  const label = (ms: number): string => {
+    if (ms % 3_600_000 === 0) return `${ms / 3_600_000} 小时`;
+    if (ms % 60_000 === 0) return `${ms / 60_000} 分钟`;
+    return `${Math.round(ms / 1000)} 秒`;
+  };
+  const candidates = [
+    60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000, 30 * 60_000,
+    60 * 60_000, 2 * 60 * 60_000, 8 * 60 * 60_000, 24 * 60 * 60_000,
+    MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS,
+  ];
+  const seen = new Set<number>();
+  return candidates
+    .filter((ms) => ms >= MONITOR_MIN_TIMEOUT_MS && ms <= MONITOR_MAX_TIMEOUT_MS)
+    .filter((ms) => (seen.has(ms) ? false : (seen.add(ms), true)))
+    .sort((a, b) => a - b)
+    .map((ms) => ({ label: label(ms), ms }));
+}
 
 /** 攒多久算一批。tail 轮询本身就是这个量级，再大就拖慢「有事马上知道」的手感。 */
 export const MONITOR_BATCH_MS = 300;
@@ -187,3 +218,19 @@ export const CLAUDE_MONITOR_ENDED_REASON: Partial<Record<MonitorStatus, string>>
   expired: "盯满了 claude 侧约定的时长",
   lost: "agent 进程已经不在了，它跟着一起没了",
 };
+
+/**
+ * **来源侧**报的时长 → 投影的有效期。
+ *
+ * 和 `normalizeMonitorTimeout` 的区别是这份代码里最容易搞错的一处：那一个是「ash 自己要
+ * 起一个哨兵，允许多久」——是一条**创建策略**；这一个是「claude 那边说它要盯多久」——是
+ * 一条**既成事实**。拿创建策略去钳来源事实，卡片上就会显示一个与来源侧不符的到期时刻
+ * （claude 盯 5 秒，ash 按自己的下限写成 60 秒后到期）。投影的职责是如实转述，不是裁决。
+ *
+ * 所以这里只做「是不是个正数」这一道校验，不钳到 ash 的区间里。拿不到就返回 null，由调用
+ * 方决定怎么表示「来源没说」，而不是替它编一个。
+ */
+export function sourceMonitorTimeout(ms: unknown): number | null {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return null;
+  return Math.round(ms);
+}

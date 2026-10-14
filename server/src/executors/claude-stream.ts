@@ -138,6 +138,11 @@ export async function* parseClaudeStream(
       const images = childImages.get(ev.parent_tool_use_id) ?? new Set<string>();
       childImages.set(ev.parent_tool_use_id, images);
       for (const block of Array.isArray(ev.message?.content) ? ev.message.content : []) {
+        // 子智能体挂的 Monitor 同样要认：它跑在同一条 CLI 会话、同一个 ash 任务上，
+        // 盯的也是同一份活。漏接的话面板会说「这个任务上还没有哨兵」，而 agent 那边
+        // 明明已经挂上了——跟主智能体那条路是同一个毛病，只是入口在这个分支里。
+        // 注意这个分支**会提前 return**，所以必须在这儿接，不能指望下面那段顶层处理。
+        if (block.type === "tool_use") claudeMonitors.toolUse(block.name, block.input, block.id);
         if (block.type === "tool_result") {
           for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         } else if (block.type === "text" && typeof block.text === "string") {
