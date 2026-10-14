@@ -102,23 +102,28 @@ export function stickStateAfterScroll({
 export function shouldStickToBottom({
   stuck,
   tailAppended,
-  previousMax,
-  currentMax,
+  previousDistance,
   distance,
 }: {
   stuck: boolean;
   /** 这一批变更往会话末尾添了东西(新回复,或最后一条还在逐字长)。 */
   tailAppended: boolean;
-  previousMax: number;
-  currentMax: number;
+  /** 按**上一次量到的**底边算,用户现在离底多远 —— 也就是「底边还没动之前他在哪」。 */
+  previousDistance: number;
   distance: number;
 }): boolean {
   if (!stuck) return false;
-  /* 尾部来了新东西就跟,**不看总高度**。列表按最近 N 条截断时(群聊/侧聊/助手都是
-     最近 500 条),追加一条的同时最老那条被删掉,总高可能纹丝不动甚至变短 —— 那恰恰
-     是最该跟过去的一帧,拿「总高涨没涨」当唯一判据会把它整个漏掉。
-     尾部没动时才退回看底边:容器被回复框挤矮、上方内容长高,也都该跟。 */
-  if (!tailAppended && currentMax <= previousMax) return false;
+  /* 尾部来了新东西就跟,**不看几何**。列表按最近 N 条截断时(群聊/侧聊/助手都是最近
+     500 条),追加一条的同时最老那条被删掉,总高可能纹丝不动甚至变短 —— 那恰恰是最该
+     跟过去的一帧,拿「总高涨没涨」当判据会把它整个漏掉。
+
+     没有新可读内容时,问的**不是**「底边有没有下移」,而是「**他刚才是不是就贴着底**」:
+       - 贴着底(0) —— 保持贴底。回复框把视口挤矮、图片加载完占位变大,都该继续贴着。
+       - 离底几十像素 —— 他在读。底边因为任何原因往下跑了都不许动他的位置。
+     栽在前一版判据上的就是后者:隐藏通知在正文后留一个空段,高度 +7px,底边一下移就
+     被当成「有新东西」,把停在离底 79px 的人拽到底(审查第 6 轮 F1)。「几何变了」从来
+     证明不了「多了能读的东西」—— 和当初不该拿 DOM 变化猜新内容是同一个错。 */
+  if (!tailAppended && previousDistance > BOTTOM_EPSILON) return false;
   // 已经贴着底了,这一句 `scrollTo` 看着是空操作,其实会把浏览器手头那段滚轮平滑动画
   // 拦腰掐断 —— 滚到快见底时画面「啪」地一跳就是这么来的。
   return distance > BOTTOM_EPSILON;
@@ -184,8 +189,8 @@ export function useStickToBottom(
       if (!shouldStickToBottom({
         stuck: stuckRef.current,
         tailAppended,
-        previousMax,
-        currentMax,
+        // 基准为 -1 = 还没量过(首屏、刚换任务):算出来是负数,天然过闸,落到最新一条。
+        previousDistance: previousMax - element.scrollTop,
         distance: distanceFromBottom(element),
       })) return;
       scrollToBottom();

@@ -5,7 +5,7 @@ import type { ContextUsage, Session } from "@ash/shared";
 import { addUsage } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import { isVerifyNote, noteTone } from "./conversationNotes.ts";
-import { appendExecutionEvent } from "../lib/executionTrace.ts";
+import { appendExecutionEvent, isVisibleExecutionEvent } from "../lib/executionTrace.ts";
 import { reviewerKey, reviewerKeyOf, reviewerOf } from "./conversationReviewer.ts";
 import type { AgentContentSegment, AgentTraceEvent } from "./conversationSegments.ts";
 import { auxEvent } from "./conversationSegments.ts";
@@ -69,13 +69,18 @@ function appendAgentText(agent: AgentItem, text: string): void {
 
 function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
   let segment = currentSegment(agent);
-  if (segment.markdown) {
+  const normalized = auxEvent(event);
+  /* 正文之后另起一段,只为**画得出来**的那一步(口径见 segmentHasVisibleContent)。
+     子智能体的后台通知在这个表面一个字都不画,给它单独开一段就是在正文后面留一个空
+     section —— 空的也占 7px,总高一涨,正在读的人就被贴底逻辑拽到底(审查第 6 轮 F1)。
+     事件仍挂在当前段上:抽屉的数据是从 segments[].events 里提的。 */
+  if (segment.markdown && isVisibleExecutionEvent(normalized)) {
     segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [] };
     agent.segments.push(segment);
   }
   // 相邻思考合并成一行(见 appendExecutionEvent)：直播这一路一条 thinking 事件就是一小块
   // 增量，逐条成行的话长思考会刷出成百上千行。
-  segment.events = appendExecutionEvent(segment.events, auxEvent(event));
+  segment.events = appendExecutionEvent(segment.events, normalized);
 }
 
 function appendAgentAttachment(agent: AgentItem, path: string): void {

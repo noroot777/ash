@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { contentVersion, shouldStickToBottom, stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
 import { conversationItemSize, executionEventSize } from "../src/task-detail/conversationContentSize.ts";
 import { appendExecutionEvent } from "../src/lib/executionTrace.ts";
+import { contentSegments, segmentHasVisibleContent } from "../src/task-detail/conversationSegments.ts";
 
 // 用户从底部按住滚动条向上拖时，pointerdown 会建立 detaching user intent。
 // 随后的 scroll 必须解除贴底；内容 resize/mutation 只能在 stuck=true 时补滚，
@@ -31,24 +32,37 @@ assert.equal(stickStateAfterScroll({
 // 贴底的第二道闸:要不要真的动 scrollTop。用户手滚到离底 40px 停住,尾部没来新东西、
 // 底边也没往下跑,这时候再 scrollTo 就是把他从停的位置拽到最底 —— 那一跳正是「快到底
 // 时画面突然蹦一下」的来源,必须闸住。
-const stick = (over) => shouldStickToBottom({ stuck: true, tailAppended: false, previousMax: 5000, currentMax: 5000, distance: 40, ...over });
+const stick = (over) => shouldStickToBottom({ stuck: true, tailAppended: false, previousDistance: 40, distance: 40, ...over });
 assert.equal(stick({}), false);
-// 来了新内容(底边往下跑了)才跟过去,这是贴底唯一该做的事。
-assert.equal(stick({ currentMax: 5200, distance: 240 }), true);
-// 容器被回复框挤矮同样让底边往下跑,也要跟。
-assert.equal(stick({ currentMax: 5120, distance: 120 }), true);
+// 尾部来了新东西才跟过去,这是贴底唯一该做的事。
+assert.equal(stick({ tailAppended: true, distance: 240 }), true);
 // 人在上面读历史时一律不跟。
-assert.equal(stick({ stuck: false, currentMax: 5200, distance: 900 }), false);
+assert.equal(stick({ stuck: false, tailAppended: true, distance: 900 }), false);
 // 已经贴着底了就别再发一次 scrollTo:那会把浏览器正在跑的平滑滚动掐断。
-assert.equal(stick({ currentMax: 5200, distance: 0 }), false);
+assert.equal(stick({ tailAppended: true, distance: 0 }), false);
 // 群聊/侧聊/助手只留最近 500 条:追加一条的同时最老那条被删掉,总高**纹丝不动**甚至
 // 变短。这一帧恰恰最该跟过去,只看总高会把新回复整个漏在屏幕下面(审查 F1)。
 assert.equal(stick({ tailAppended: true, distance: 79 }), true);
-assert.equal(stick({ tailAppended: true, currentMax: 4977, distance: 56 }), true);
+assert.equal(stick({ tailAppended: true, previousDistance: 79, distance: 56 }), true);
 // 尾部来了新东西,但人在上面读历史 —— 仍然不跟。
 assert.equal(stick({ stuck: false, tailAppended: true, distance: 79 }), false);
-// 往顶上补历史不算尾部来新东西,底边也没往下跑时不跟。
-assert.equal(stick({ tailAppended: false, distance: 79 }), false);
+
+/* 没有新可读内容时,判据是「**他刚才是不是就贴着底**」,不是「底边有没有下移」。
+
+   ① 他贴着底(previousDistance 0):底边因为任何原因往下跑了,都要把他继续带在底部 ——
+      回复框把视口挤矮、图片加载完占位变大,都是这一支。 */
+assert.equal(stick({ previousDistance: 0, distance: 80 }), true);
+assert.equal(stick({ previousDistance: 1, distance: 120 }), true);
+/* ② 他离底几十像素,正在读:底边往下跑多少都不许动他 —— 隐藏通知在正文后留一个空段,
+      高度 +7px,就是这么把人拽到底的(审查第 6 轮 F1)。 */
+assert.equal(stick({ previousDistance: 79, distance: 86 }), false);
+assert.equal(stick({ previousDistance: 40, distance: 47 }), false);
+// 他离底很近但还没到(容差之内)仍按贴底算:高 DPI 下这个差值常带零点几 px 残留。
+assert.equal(stick({ previousDistance: 2, distance: 40 }), true);
+// 基准为 -1 = 还没量过(首屏、刚换任务):无条件落到最新一条。
+assert.equal(stick({ previousDistance: -1, distance: 3200 }), true);
+// 往顶上补历史不算尾部来新东西,他又不在底部时不跟。
+assert.equal(stick({ tailAppended: false, previousDistance: 79, distance: 79 }), false);
 
 /* 尾部指纹:它是「末尾多了要看的东西」的唯一来源,由拿着会话数据的人算。
    界面反馈(复制按钮变「已复制」、账目数字刷新、图标换一张)不碰这三样,
@@ -157,4 +171,37 @@ const folded = appendExecutionEvent([{ kind: "thinking", label: "思考过程", 
   { kind: "thinking", label: "思考过程", detail: "续" });
 assert.ok(conversationItemSize(agent({ segments: [seg({ events: folded })] }))
   > conversationItemSize(agent({ segments: [seg({ events: [{ kind: "thinking", label: "思考过程", detail: "想" }] })] })));
+/* 分段布局:**空段就是高度**。
+   画不出东西的通知如果单独成一段,正文后面就多一个空 `<section>` —— 空的也占 7px
+   (`.task-agent-segment + .task-agent-segment`),scrollHeight 跟着涨。前一版判据看见
+   底边下移就当「有新东西」,把停在离底 79px 的人拽到底(审查第 6 轮 F1)。
+   所以根因在这一层:不让纯通知单独成段。事件本身仍要留着 —— 子智能体抽屉的数据
+   (buildNativeWork)就是从 segments[].events 里提的。 */
+const traceEntry = (event) => ({ at: "2026-10-14T09:00:00Z", event });
+const hiddenNotice = {
+  kind: "tool", name: "Agent", detail: "子任务进展",
+  nativeWork: { type: "activity", id: "child", event: { kind: "text", text: "子任务正文" } },
+};
+const afterBody = (event) => contentSegments(
+  [traceEntry({ kind: "text", text: "说完的正文" }), traceEntry(event)],
+  "说完的正文",
+  "turn",
+);
+// 正文之后来一条画不出来的通知:仍然只有一段,事件挂在这一段上没丢。
+const noticeOnly = afterBody(hiddenNotice);
+assert.equal(noticeOnly.length, 1, "画不出东西的通知不该另起一段");
+assert.equal(noticeOnly[0].markdown, "说完的正文");
+assert.equal(noticeOnly[0].events.length, 1, "事件本身不能丢:抽屉的数据就从这里提");
+// 正文之后来一条真工具调用:照旧切段,这一层没把真内容一起挡掉。
+assert.equal(afterBody({ kind: "tool", name: "Bash", detail: "ls -la" }).length, 2, "真工具调用仍要另起一段");
+// 思考也是画得出来的。
+assert.equal(afterBody({ kind: "thinking", text: "再想一下" }).length, 2);
+// 谓词本身:三类可见内容各算一类,只剩隐藏通知就是「画不出东西」。
+const seg2 = (over) => ({ id: "s", markdown: "", events: [], attachments: [], ...over });
+assert.equal(segmentHasVisibleContent(seg2({ events: [{ kind: "tool", label: "Agent", detail: "进展", nativeWork: hiddenNotice.nativeWork }] })), false);
+assert.equal(segmentHasVisibleContent(seg2({ markdown: "字" })), true);
+assert.equal(segmentHasVisibleContent(seg2({ attachments: ["/a.png"] })), true);
+assert.equal(segmentHasVisibleContent(seg2({ events: [{ kind: "thinking", label: "思考过程", detail: "想" }] })), true);
+assert.equal(segmentHasVisibleContent(seg2()), false, "空段就是空段");
+
 console.log("贴底判据回归验证通过(判据纯函数 + 可读规模契约)");

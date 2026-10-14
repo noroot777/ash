@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { AgentContentSegment } from "../task-detail/conversationModel.ts";
+import { segmentHasVisibleContent } from "../task-detail/conversationSegments.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { turnLayout } from "../task-detail/turnFold.ts";
 import { MarkdownBody } from "./MarkdownBody.tsx";
@@ -37,7 +38,9 @@ function ProcessFold({ segments }: { segments: AgentContentSegment[] }) {
         <ExecutionSummaryLine events={events} running={false} />
       </summary>
       <div className="task-turn-process-body">
-        {segments.map((segment) => (
+        {/* 画不出东西的段不出 section:空的也占 7px 间距(见 segmentHasVisibleContent)。
+            summary 的计数照旧用全部 events —— 它自己会过滤。 */}
+        {segments.filter(segmentHasVisibleContent).map((segment) => (
           <section className="task-agent-segment" key={segment.id}>
             <ExecutionEventList events={segment.events} />
             <SegmentBody segment={segment} />
@@ -64,15 +67,18 @@ export function AgentTurnBody({
   // 动作：它会把已经说出口、已经露在外面的正文一并收进过程块，跑的中途干这件事，用户
   // 正读的内容说没就没。这一回合收口那一下才折，位置从此不再变。
   const { process, conclusion } = turnLayout(segments, { live: running });
+  /* 两条路径都按同一口径筛:段里画不出东西就不出 section。分段层已经不给纯通知单独开段,
+     这里仍要兜一道 —— alignedSegments 会按 .md 重算每段正文,某一段可能被重算成空。 */
+  const visible = conclusion.filter(segmentHasVisibleContent);
   return (
     <>
-      {!!process.length && <ProcessFold segments={process} />}
-      {conclusion.map((segment, index) => (
+      {process.some(segmentHasVisibleContent) && <ProcessFold segments={process} />}
+      {visible.map((segment, index) => (
         <section className="task-agent-segment" key={segment.id}>
           {/* 平铺那条路径（跑着的时候、以及折不出结论的回合）逐段折事件，跟原来一样。 */}
           <ExecutionDetails
             events={segment.events}
-            running={running && index === conclusion.length - 1}
+            running={running && index === visible.length - 1}
           />
           <SegmentBody segment={segment} />
         </section>
