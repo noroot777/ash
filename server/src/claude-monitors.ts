@@ -87,7 +87,17 @@ async function locateSession(cliSessionId: string): Promise<{ taskId: string; cw
 export class ClaudeMonitorTrace {
   /** tool_use_id → 那次 Monitor 调用的入参。等它的 task_started 来认领。 */
   private pending = new Map<string, MonitorCall>();
-  /** claude 的后台任务 id → ash 这边那一行的主键。 */
+  /**
+   * 认领过的 claude 后台任务 id。**同步**记，`task_started` 一到就进来。
+   *
+   * 不能拿下面那个 `rows` 当准入判据：它是在 `open()` 里落库之后才写的，而 `open()` 排在
+   * 队列里跑。命令瞬间结束时（`until` 的条件一上来就满足），`task_notification` 紧跟着
+   * `task_started` 到达，那一刻 `rows` 还是空的 → 终态被当成「不是我的」丢掉 → 这条投影
+   * 一直挂着 running，最后被 `finishAll` 收成 lost。接线回归实测到的就是这个（期望
+   * exited，实际 lost）。
+   */
+  private claimed = new Set<string>();
+  /** claude 的后台任务 id → ash 这边那一行的主键。只在队列里读写。 */
   private rows = new Map<string, string>();
   /** 串行化写库：同一个后台任务的 started/notification 可能紧挨着到。 */
   private chain: Promise<unknown> = Promise.resolve();
@@ -119,12 +129,15 @@ export class ClaudeMonitorTrace {
         const call = this.pending.get(str(ev.tool_use_id));
         if (!call || !taskId) return;
         this.pending.delete(str(ev.tool_use_id));
+        // 同步认领，再排队落库：准入与落库之间隔着一个 await，中间到达的终态必须认得出来。
+        this.claimed.add(taskId);
         this.queue(() => this.open(taskId, call));
         return;
       }
       case "task_notification": {
-        // 只管我们认领过的那些；别的后台任务的通知一概不碰。
-        if (!taskId || !this.rows.has(taskId)) return;
+        // 只管我们认领过的那些；别的后台任务的通知一概不碰。判据用同步的 `claimed`
+        // 而不是 `rows`——理由见 `claimed` 的注释。排进同一条队列，落库顺序天然在 open 之后。
+        if (!taskId || !this.claimed.has(taskId)) return;
         this.queue(() => this.close(taskId, claudeMonitorStatus(ev.status), str(ev.summary)));
         return;
       }
@@ -197,12 +210,15 @@ export class ClaudeMonitorTrace {
    * 投影没有 pid，唯一可靠的死亡信号就是「它所属的 agent 进程结束了」，也就是这里。
    */
   finishAll(): void {
-    const ids = [...this.rows.values()];
-    this.rows.clear();
     this.pending.clear();
-    if (!ids.length) return;
+    this.claimed.clear();
+    // **排队之后再取 `rows`**：同步取的话，还排在队列里的 open/close 都没跑完，取到的是
+    // 一份残缺名单——刚起的那几条投影会被漏在 running 上，成了永远不会收尾的僵尸卡。
     this.queue(async () => {
       if (dbClient.closed) return;
+      const ids = [...this.rows.values()];
+      this.rows.clear();
+      if (!ids.length) return;
       const live = await db
         .select({ id: monitors.id, taskId: monitors.taskId })
         .from(monitors)
