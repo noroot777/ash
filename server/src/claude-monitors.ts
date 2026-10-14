@@ -233,3 +233,37 @@ export class ClaudeMonitorTrace {
     });
   }
 }
+
+/**
+ * 开机收拾上一个 server 留下的 claude 投影。
+ *
+ * 这些行没有 pid，`reattachMonitors` 按 `kind` 把它们整批跳过了（它只认 ash 自己起的
+ * 进程），于是没有任何人会去动它们——重启一次就永久挂在 `running` 上，面板里留着一张
+ * 「正在盯着」的僵尸卡，而它盯的那件事早就没了下文。
+ *
+ * 落 `lost` 是**诚实**而不是保守：认领这条投影的 `ClaudeMonitorTrace` 实例随上一个
+ * server 进程一起没了，那条 stream 再也接不回来。哪怕 agent 进程侥幸活过了重启，ash
+ * 这一侧也收不到它后续的任何事件——卡片上的状态从此只会是过期信息。`lost` 的措辞
+ * （「进程已不在」）正是这个意思。
+ *
+ * 与 `ClaudeMonitorTrace.finishAll()` 的分工：那边管「agent 进程正常结束」这条常规路径，
+ * 这边只兜「ash 自己重启了，上一轮的账没人认领」这一种。
+ */
+export async function loseOrphanClaudeMonitors(): Promise<number> {
+  if (dbClient.closed) return 0;
+  const orphans = await db
+    .select({ id: monitors.id, taskId: monitors.taskId })
+    .from(monitors)
+    .where(and(eq(monitors.kind, "claude"), eq(monitors.status, "running")));
+  if (!orphans.length) return 0;
+  await db.update(monitors).set({
+    status: "lost",
+    endedAt: now(),
+    endedReason: "ash 重启了，这条内置 Monitor 的来源会话再也接不回来",
+  }).where(and(
+    inArray(monitors.id, orphans.map((r) => r.id)),
+    eq(monitors.status, "running"),
+  ));
+  for (const taskId of new Set(orphans.map((r) => r.taskId))) bus.publish({ type: "task.monitors", taskId });
+  return orphans.length;
+}

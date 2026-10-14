@@ -14,9 +14,10 @@
 import {
   db, monitors, listMonitors, makeTask, now, reattachMonitors, startMonitor, teardown,
 } from "./monitors-fixture.js";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 const { stopMonitorChecked, readMonitorTail } = await import("../src/monitors.js");
+const { loseOrphanClaudeMonitors } = await import("../src/claude-monitors.js");
 
 let failures = 0;
 const check = (ok: boolean, label: string, detail = "") => {
@@ -89,6 +90,29 @@ async function main(): Promise<void> {
   const underQuota = await startMonitor({ taskId: quotaTask, command: "sleep 30", description: "配额不该被投影占掉" });
   check(underQuota.ok, "4 个投影之后 ash 照样起得了哨兵", underQuota.ok ? "" : underQuota.error);
   if (underQuota.ok) await stopMonitorChecked(underQuota.monitor.id);
+
+  // ── 开机收拾上一轮留下的投影 ──────────────────────────────────────────────
+  // 这些行没有 pid，reattach 按 kind 整批跳过了它们；没人收的话重启一次就永久留下
+  // 一张「正在盯着」的僵尸卡（真机实测到的就是这个）。
+  const orphanTask = await makeTask();
+  const orphan = await projectClaudeMonitor(orphanTask, "borphaned");
+  const liveAsh = await startMonitor({ taskId: orphanTask, command: "sleep 30", description: "ash 的不该被它碰" });
+  // 它是**全库**扫描（开机那一刻的语义就是「把所有没人认领的都收了」），所以先数一下
+  // 此刻到底有几个待收，再跟返回值对账——钉死绝对数的话，以后往这份测试里加一个用例
+  // 就会无故变红。
+  const due = (await db.select().from(monitors).where(and(eq(monitors.kind, "claude"), eq(monitors.status, "running")))).length;
+  const swept = await loseOrphanClaudeMonitors();
+  check(swept === due && due > 0, "把所有还挂着 running 的投影都收了，一个不漏", `待收 ${due} 个，实收 ${swept} 个`);
+  check((await db.select().from(monitors).where(and(eq(monitors.kind, "claude"), eq(monitors.status, "running")))).length === 0,
+    "收完之后没有投影还挂在 running 上");
+  const sweptRow = (await db.select().from(monitors).where(eq(monitors.id, orphan))).at(0);
+  check(sweptRow?.status === "lost", "遗留投影落 lost，不再冒充还在盯", String(sweptRow?.status));
+  check(/接不回来|重启/.test(sweptRow?.endedReason ?? ""), "结束原因说明了它为什么失联", sweptRow?.endedReason ?? "");
+  if (liveAsh.ok) {
+    const ashRow = (await db.select().from(monitors).where(eq(monitors.id, liveAsh.monitor.id))).at(0);
+    check(ashRow?.status === "running", "ash 自己的哨兵不受这轮收拾影响", String(ashRow?.status));
+    await stopMonitorChecked(liveAsh.monitor.id);
+  }
 
   if (failures) {
     console.error(`\n${failures} 条断言未通过`);

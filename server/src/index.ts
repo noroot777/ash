@@ -163,6 +163,14 @@ async function initializeServer() {
     if (monitorRecovery?.attached || monitorRecovery?.lost) {
       console.log(`[ash] 哨兵：接回 ${monitorRecovery.attached} 个，${monitorRecovery.lost} 个进程已不在`);
     }
+    // claude 自带 Monitor 的投影没有 pid，上面那一步按 kind 整批跳过了它们。不在这儿收口
+    // 的话，重启一次就永久留下几张「正在盯着」的僵尸卡（见 claude-monitors.ts 的说明）。
+    const { loseOrphanClaudeMonitors } = await import("./claude-monitors.js");
+    const orphanMonitors = await loseOrphanClaudeMonitors().catch((err) => {
+      console.error("[ash] 内置 Monitor 投影收尾失败（不影响启动）:", err);
+      return 0;
+    });
+    if (orphanMonitors) console.log(`[ash] 内置 Monitor 投影：${orphanMonitors} 个随上一轮会话失联，已标记`);
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
     // 收拾死在投递链上的 reviewing run（详见 free-workflow.ts reconcileFreeReviews）。
     const { reconcileFreeReviews } = await import("./free-workflow.js");
