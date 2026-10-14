@@ -19,11 +19,6 @@ const distanceFromBottom = (element: HTMLElement) =>
 const isNearBottom = (element: HTMLElement, threshold: number) =>
   distanceFromBottom(element) <= threshold;
 
-/* 贴底要跟的是这个数而不是 scrollHeight:内容长高、容器被回复框挤矮,两种都让底边往
-   下跑,都该跟;而气泡上换个 class、工具栏亮一下不改变它,就不该动用户的滚动位置。 */
-const maxScrollTop = (element: HTMLElement) =>
-  Math.max(0, element.scrollHeight - element.clientHeight);
-
 /* 这条会话的内容版本:屏幕上多没多出要看的东西。三个分量各挡一类,缺一类就漏:
 
    - `items.length` —— 来了新条目。
@@ -101,29 +96,37 @@ export function stickStateAfterScroll({
    拽到最底,而那恰恰是用户没要的那一跳。 */
 export function shouldStickToBottom({
   stuck,
+  forced,
   tailAppended,
-  previousDistance,
+  atBottom,
   distance,
 }: {
   stuck: boolean;
+  /** 首屏 / 刚换任务:要的是「落在最新一条」,与平时的跟随判据无关。 */
+  forced: boolean;
   /** 这一批变更往会话末尾添了东西(新回复,或最后一条还在逐字长)。 */
   tailAppended: boolean;
-  /** 按**上一次量到的**底边算,用户现在离底多远 —— 也就是「底边还没动之前他在哪」。 */
-  previousDistance: number;
+  /** 读者**最近一次挪位置之后**在不在底部。由 scroll 事件记,不是现算的几何。 */
+  atBottom: boolean;
   distance: number;
 }): boolean {
+  if (forced) return distance > BOTTOM_EPSILON;
   if (!stuck) return false;
   /* 尾部来了新东西就跟,**不看几何**。列表按最近 N 条截断时(群聊/侧聊/助手都是最近
      500 条),追加一条的同时最老那条被删掉,总高可能纹丝不动甚至变短 —— 那恰恰是最该
      跟过去的一帧,拿「总高涨没涨」当判据会把它整个漏掉。
 
-     没有新可读内容时,问的**不是**「底边有没有下移」,而是「**他刚才是不是就贴着底**」:
-       - 贴着底(0) —— 保持贴底。回复框把视口挤矮、图片加载完占位变大,都该继续贴着。
-       - 离底几十像素 —— 他在读。底边因为任何原因往下跑了都不许动他的位置。
-     栽在前一版判据上的就是后者:隐藏通知在正文后留一个空段,高度 +7px,底边一下移就
-     被当成「有新东西」,把停在离底 79px 的人拽到底(审查第 6 轮 F1)。「几何变了」从来
-     证明不了「多了能读的东西」—— 和当初不该拿 DOM 变化猜新内容是同一个错。 */
-  if (!tailAppended && previousDistance > BOTTOM_EPSILON) return false;
+     没有新可读内容时,唯一允许动位置的情形是「读者本来就贴着底」—— 那叫保持贴底,
+     不叫抢位置。这个状态必须是**记下来的**,不能拿几何去推:
+       - 推过一版「`previousMax - scrollTop`」,结果把变化**前**的底边和浏览器已经调整
+         **后**的 scrollTop 配成一对。图片加载完,原生 scroll anchoring 先把 scrollTop
+         加了 399px 把阅读位置保住,这个式子却算出 -320,负数被当成「原来贴底」,于是
+         又补一次回底,把停在离底 79px 的人拽完那 79px(审查第 7 轮 F1)。
+       - 那个负数还同时兼着「首屏哨兵」,两种意思挤在一个量上,根本分不开 —— 所以
+         首屏/换任务改走显式的 `forced`。
+     读者的位置只有他自己(或浏览器锚定)挪 scrollTop 时才变,内容长高不算他挪位置,
+     所以 `atBottom` 由 scroll 事件维护,`scheduleStick` 只读不算。 */
+  if (!tailAppended && !atBottom) return false;
   // 已经贴着底了,这一句 `scrollTo` 看着是空操作,其实会把浏览器手头那段滚轮平滑动画
   // 拦腰掐断 —— 滚到快见底时画面「啪」地一跳就是这么来的。
   return distance > BOTTOM_EPSILON;
@@ -145,7 +148,11 @@ export function useStickToBottom(
   const scrollbarDragRef = useRef(false);
   const frameRef = useRef(0);
   const clearProgrammaticFrameRef = useRef(0);
-  const lastMaxScrollRef = useRef(-1);
+  /* 读者最近一次挪位置之后在不在底部。只在 scroll 事件里写(他自己滚、浏览器锚定补位、
+     以及我们自己的 scrollTo 都会派发),内容长高不碰它 —— 那是内容变了,不是他挪了。 */
+  const atBottomRef = useRef(true);
+  /** 首屏 / 换任务这一次无条件落到最新一条,用掉即清。 */
+  const forceStickRef = useRef(true);
   const tailAppendedRef = useRef(false);
   const lastTailKeyRef = useRef<string | number | null>(null);
 
@@ -167,7 +174,6 @@ export function useStickToBottom(
   const scrollToBottom = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
-    lastMaxScrollRef.current = maxScrollTop(element);
     programmaticScrollRef.current = true;
     element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
     markProgrammaticScrollSettled();
@@ -179,18 +185,22 @@ export function useStickToBottom(
       frameRef.current = 0;
       const element = scrollRef.current;
       if (!element) return;
-      const previousMax = lastMaxScrollRef.current;
-      const currentMax = maxScrollTop(element);
+      /* 容器此刻没有布局 —— 它所在的面板被 `display:none` 藏起来了,几何全是 0,判不出
+         任何东西。这时**不能把信号消费掉**:藏着的时候来的新消息,信号会在这一次空转里
+         被吃光,面板切回来反而不跟了。原地留着,等恢复可见时 ResizeObserver 再叫一次。
+         (旧的几何判据靠「底边从 0 涨回来」在恢复那一下又跟了一次,把这个洞遮住了。) */
+      if (!element.clientHeight && !element.scrollHeight) return;
       const tailAppended = tailAppendedRef.current;
-      // 两个基准都在判 stuck 之前就先清,用户在上面读历史的那一段也照样跟着内容走 ——
-      // 否则他滚回底部时积压的那一大截会被当成「刚长出来的」,又是平白一跳。
-      lastMaxScrollRef.current = currentMax;
+      const forced = forceStickRef.current;
+      // 两个一次性信号都在判 stuck 之前就先清,用户在上面读历史的那一段也照样跟着内容
+      // 走 —— 否则他滚回底部时积压的那一大截会被当成「刚长出来的」,又是平白一跳。
       tailAppendedRef.current = false;
+      forceStickRef.current = false;
       if (!shouldStickToBottom({
         stuck: stuckRef.current,
+        forced,
         tailAppended,
-        // 基准为 -1 = 还没量过(首屏、刚换任务):算出来是负数,天然过闸,落到最新一条。
-        previousDistance: previousMax - element.scrollTop,
+        atBottom: atBottomRef.current,
         distance: distanceFromBottom(element),
       })) return;
       scrollToBottom();
@@ -229,7 +239,11 @@ export function useStickToBottom(
   const onScroll = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
-    const nearBottom = isNearBottom(element, threshold);
+    const distance = distanceFromBottom(element);
+    const nearBottom = distance <= threshold;
+    /* 读者的位置只在这儿记。scrollTop 变了才算他(或浏览器锚定)换了位置 —— 内容长高
+       不派发 scroll,也就不该改这个状态,「他在底部」的意图要一直留着。 */
+    atBottomRef.current = distance <= BOTTOM_EPSILON;
     const userDriven = userScrollIntentRef.current || scrollbarDragRef.current;
     stuckRef.current = stickStateAfterScroll({
       stuck: stuckRef.current,
@@ -249,8 +263,9 @@ export function useStickToBottom(
 
   useEffect(() => {
     stuckRef.current = true;
-    // 换任务要的是「落在最新一条」,不是「跟随增长」—— 清掉基准让这一次无条件过闸。
-    lastMaxScrollRef.current = -1;
+    // 换任务要的是「落在最新一条」,不是「跟随增长」—— 走显式的一次性放行,不靠几何。
+    forceStickRef.current = true;
+    atBottomRef.current = true;
     tailAppendedRef.current = false;
     lastTailKeyRef.current = null;
     scheduleStick();
@@ -349,6 +364,7 @@ export function useStickToBottom(
     detachingUserIntentRef.current = false;
     scrollbarDragRef.current = false;
     tailAppendedRef.current = false;
+    forceStickRef.current = false;
     lastTailKeyRef.current = null;
   }, []);
 

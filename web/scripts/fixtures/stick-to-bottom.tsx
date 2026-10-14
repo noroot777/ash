@@ -32,6 +32,11 @@ function Feed() {
   const [thinking, setThinking] = useState<ExecutionEvent[]>(() => [{ kind: "thinking", label: "思考过程", detail: "开始想" }]);
   // 复制按钮那一类反馈:正文一个字没变,只有这颗按钮的文字/图标在换。
   const [copied, setCopied] = useState(false);
+  /* 会话上方一张图片加载完 —— 占位从 0 长到 400px。内容长在**视口上方**,浏览器原生
+     scroll anchoring 会同步把 scrollTop 补上同样的量,阅读位置本来是保住的。 */
+  const [imageLoaded, setImageLoaded] = useState(false);
+  // 整个面板被藏起来(切到别的任务/面板):容器此刻没有布局,几何全是 0。
+  const [hidden, setHidden] = useState(false);
   /* 版本 = 消息那一路 + 这一段执行过程的可读规模。后者走产品自己的
      `conversationItemSize`,测的是产品的契约,不是测里另写一份。 */
   const segment: AgentContentSegment = { id: "seg", markdown: "", events: thinking, attachments: [] };
@@ -44,8 +49,10 @@ function Feed() {
     <div
       ref={scroll}
       id="feed"
-      style={{ height: 300, overflowY: "auto", border: "1px solid #ccc", padding: 8 }}
+      style={{ height: 300, overflowY: "auto", border: "1px solid #ccc", padding: 8, display: hidden ? "none" : "block" }}
     >
+      {/* 会话顶上那张图:加载完就从 0 长到 400px,内容长在视口上方。 */}
+      <div data-testid="top-image" style={{ height: imageLoaded ? 400 : 0 }} />
       {messages.map((message) => <p key={message.id} style={{ height: 40, margin: 0 }}>
         {message.body}
         {/* 最后一条尾巴上挂着反馈按钮 —— 它的变化落在最后一屏内,正是误判过的位置。 */}
@@ -112,6 +119,12 @@ function Feed() {
       { kind: "tool" as const, label: "Agent", detail: "子任务进展",
         nativeWork: { type: "activity" as const, id: "child", event: { kind: "text" as const, text: "子任务正文" } } }])}>
       来一条不渲染的子智能体通知
+    </button>
+    <button type="button" data-testid="load-top-image" onClick={() => setImageLoaded(true)}>
+      上方图片加载完
+    </button>
+    <button type="button" data-testid="toggle-hidden" onClick={() => setHidden((value) => !value)}>
+      藏起这个面板 / 切回来
     </button>
     <button type="button" data-testid="resume" onClick={() => resume()}>恢复跟随</button>
   </div>;

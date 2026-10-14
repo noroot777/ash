@@ -157,6 +157,27 @@ try {
   await press("append");
   assert.equal((await metrics()).distance, 0, "显式回到底部后，跟随没有恢复");
 
+  /* ⑬ 会话**上方**的图片加载完:浏览器原生 scroll anchoring 会把 scrollTop 补上同样的
+     量,阅读位置本来就是保住的 —— 这时再补一次回底,就是把人剩下那几十像素也滚完
+     (审查第 7 轮 F1)。栽在这儿的判据是拿「变化前的底边」减「锚定后的 scrollTop」,
+     两个不同时刻的数配成一对,算出负数当成「原来贴底」。 */
+  await press("resume");
+  await feed.evaluate((element) => element.scrollTo({ top: element.scrollHeight, behavior: "auto" }));
+  await flush();
+  const beforeImage = await parkByWheel(40);
+  await press("load-top-image");
+  const afterImage = await metrics();
+  assert.ok(afterImage.height > beforeImage.height, "夹具假设有误:上方图片没有让内容长高");
+  assert.equal(afterImage.distance, beforeImage.distance, "上方图片加载完,阅读位置被多滚了一段");
+
+  /* ⑭ 面板被藏起来的时候来了新消息:容器此刻没有布局(几何全是 0),判不出任何东西,
+     这一帧**不能把「来了新东西」这个信号消费掉** —— 否则切回来反而不跟了。 */
+  await press("toggle-hidden");
+  await press("append");
+  await press("toggle-hidden");
+  await flush();
+  assert.equal((await metrics()).distance, 0, "藏着的时候来的新消息,切回来没有跟过去");
+
   assert.deepEqual(errors, [], "页面抛了异常");
   console.log("stick-to-bottom DOM regression passed");
 } finally {

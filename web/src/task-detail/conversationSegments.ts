@@ -105,7 +105,8 @@ export function contentSegments(
     }
     /* 画不出东西的段不进正文布局 —— 空的也占 7px 间距。但事件**不能丢**:子智能体抽屉
        的数据(buildNativeWork)就是从 segments[].events 里提的,所以并回上一段,而不是
-       直接 return 把它扔掉。还没有上一段就留在 current 里,等后面的内容进来同段。 */
+       直接 return 把它扔掉。还没有上一段就留在 current 里,等后面的内容进来同段;
+       一直等到最后也没有内容进来,由下面的收尾兜住(审查第 7 轮 B5)。 */
     const previous = segments.at(-1);
     if (!previous) return;
     for (const event of current.events) previous.events = appendExecutionEvent(previous.events, event);
@@ -128,6 +129,13 @@ export function contentSegments(
     current.events = appendExecutionEvent(current.events, event);
   }
   pushCurrent();
+  /* 收尾:**数据优先于布局**。整段 trace 里一个字都没有、只有画不出来的后台通知时,
+     上面那条「并回上一段」无处可并(压根没有上一段),事件就卡在 current 里 —— 直接
+     返回等于把子智能体那条线的 raw 记录丢了(审查第 7 轮 B5)。
+     所以这里原样留下这一段:它画不出东西,渲染侧的 segmentHasVisibleContent 不会给它
+     出 section,不占高度;而 buildNativeWork 仍从 segments[].events 里取得到数据。
+     分段函数只负责**保全记录**,"画不画"交给展示谓词 —— 两件事不该挤在一层。 */
+  if (current.events.length || current.attachments.length) segments.push(current);
 
   const structuredMarkdown = segments.map((segment) => segment.markdown).join("");
   if (structuredMarkdown.trim() === fallbackMarkdown.trim()) return segments;

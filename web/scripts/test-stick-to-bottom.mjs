@@ -32,7 +32,7 @@ assert.equal(stickStateAfterScroll({
 // 贴底的第二道闸:要不要真的动 scrollTop。用户手滚到离底 40px 停住,尾部没来新东西、
 // 底边也没往下跑,这时候再 scrollTo 就是把他从停的位置拽到最底 —— 那一跳正是「快到底
 // 时画面突然蹦一下」的来源,必须闸住。
-const stick = (over) => shouldStickToBottom({ stuck: true, tailAppended: false, previousDistance: 40, distance: 40, ...over });
+const stick = (over) => shouldStickToBottom({ stuck: true, forced: false, tailAppended: false, atBottom: false, distance: 40, ...over });
 assert.equal(stick({}), false);
 // 尾部来了新东西才跟过去,这是贴底唯一该做的事。
 assert.equal(stick({ tailAppended: true, distance: 240 }), true);
@@ -43,26 +43,30 @@ assert.equal(stick({ tailAppended: true, distance: 0 }), false);
 // 群聊/侧聊/助手只留最近 500 条:追加一条的同时最老那条被删掉,总高**纹丝不动**甚至
 // 变短。这一帧恰恰最该跟过去,只看总高会把新回复整个漏在屏幕下面(审查 F1)。
 assert.equal(stick({ tailAppended: true, distance: 79 }), true);
-assert.equal(stick({ tailAppended: true, previousDistance: 79, distance: 56 }), true);
+assert.equal(stick({ tailAppended: true, distance: 56 }), true);
 // 尾部来了新东西,但人在上面读历史 —— 仍然不跟。
 assert.equal(stick({ stuck: false, tailAppended: true, distance: 79 }), false);
 
-/* 没有新可读内容时,判据是「**他刚才是不是就贴着底**」,不是「底边有没有下移」。
+/* 没有新可读内容时,唯一允许动位置的情形是「读者本来就贴着底」——
+   而这个状态必须是**记下来的**,不能拿几何去推(见 shouldStickToBottom 的注释)。
 
-   ① 他贴着底(previousDistance 0):底边因为任何原因往下跑了,都要把他继续带在底部 ——
-      回复框把视口挤矮、图片加载完占位变大,都是这一支。 */
-assert.equal(stick({ previousDistance: 0, distance: 80 }), true);
-assert.equal(stick({ previousDistance: 1, distance: 120 }), true);
-/* ② 他离底几十像素,正在读:底边往下跑多少都不许动他 —— 隐藏通知在正文后留一个空段,
-      高度 +7px,就是这么把人拽到底的(审查第 6 轮 F1)。 */
-assert.equal(stick({ previousDistance: 79, distance: 86 }), false);
-assert.equal(stick({ previousDistance: 40, distance: 47 }), false);
-// 他离底很近但还没到(容差之内)仍按贴底算:高 DPI 下这个差值常带零点几 px 残留。
-assert.equal(stick({ previousDistance: 2, distance: 40 }), true);
-// 基准为 -1 = 还没量过(首屏、刚换任务):无条件落到最新一条。
-assert.equal(stick({ previousDistance: -1, distance: 3200 }), true);
+   ① 他贴着底:底边因为任何原因往下跑了,都要把他继续带在底部 —— 回复框把视口挤矮、
+      图片加载完占位变大,都是这一支。 */
+assert.equal(stick({ atBottom: true, distance: 80 }), true);
+assert.equal(stick({ atBottom: true, distance: 399 }), true);
+/* ② 他离底几十像素,正在读:底边往下跑多少都不许动他。两类都栽在这儿过 ——
+      隐藏通知在正文后留空段让高度 +7px(第 6 轮 F1);图片加载后浏览器锚定已经把
+      scrollTop 补了 +399px、阅读位置本来没动,旧式子却算出负数当成「原来贴底」,
+      又补一次回底(第 7 轮 F1)。 */
+assert.equal(stick({ atBottom: false, distance: 86 }), false);
+assert.equal(stick({ atBottom: false, distance: 79 }), false);
+assert.equal(stick({ atBottom: false, distance: 478 }), false);
+// 首屏 / 换任务是显式的一次性放行,不跟「他在哪」纠缠 —— 旧版把这件事混在同一个
+// 负数里,两种意思分不开。
+assert.equal(stick({ forced: true, stuck: false, atBottom: false, distance: 3200 }), true);
+assert.equal(stick({ forced: true, distance: 0 }), false, "首屏已经在底部就别再发一次 scrollTo");
 // 往顶上补历史不算尾部来新东西,他又不在底部时不跟。
-assert.equal(stick({ tailAppended: false, previousDistance: 79, distance: 79 }), false);
+assert.equal(stick({ tailAppended: false, atBottom: false, distance: 79 }), false);
 
 /* 尾部指纹:它是「末尾多了要看的东西」的唯一来源,由拿着会话数据的人算。
    界面反馈(复制按钮变「已复制」、账目数字刷新、图标换一张)不碰这三样,
@@ -203,5 +207,21 @@ assert.equal(segmentHasVisibleContent(seg2({ markdown: "字" })), true);
 assert.equal(segmentHasVisibleContent(seg2({ attachments: ["/a.png"] })), true);
 assert.equal(segmentHasVisibleContent(seg2({ events: [{ kind: "thinking", label: "思考过程", detail: "想" }] })), true);
 assert.equal(segmentHasVisibleContent(seg2()), false, "空段就是空段");
+
+/* 布局过滤**不许吃掉数据**。整段 trace 里一个字都没有、只有画不出来的后台通知时,
+   「不另起一段」和「并回上一段」两条都无处落地(压根没有上一段),事件一度就卡在局部
+   变量里被直接丢掉 —— 子智能体那条线的 raw 记录没了(审查第 7 轮 B5)。
+   分段函数只负责保全记录;画不画交给展示谓词。空 text 在通知前后都要成立。 */
+for (const [label, trace] of [
+  ["通知在后", [traceEntry({ kind: "text", text: "" }), traceEntry(hiddenNotice)]],
+  ["通知在前", [traceEntry(hiddenNotice), traceEntry({ kind: "text", text: "" })]],
+]) {
+  const kept = contentSegments(trace, "", "turn");
+  const events = kept.flatMap((segment) => segment.events);
+  assert.equal(events.length, 1, `${label}:空正文把子智能体的 raw 记录丢了`);
+  assert.equal(events[0].nativeWork?.type, "activity", `${label}:留下的不是那条通知`);
+  // 它仍然画不出东西 —— 渲染侧不会给它出 section,所以不占高度。
+  assert.ok(kept.every((segment) => !segmentHasVisibleContent(segment)), `${label}:这一段不该被当成有内容`);
+}
 
 console.log("贴底判据回归验证通过(判据纯函数 + 可读规模契约)");
