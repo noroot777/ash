@@ -44,6 +44,7 @@
 .task-upload-error,
 .task-reply-error { width: 100%; margin: 0; color: var(--red); font-size: 10.5px; }
 .task-reply-error { margin-bottom: 5px; }
+.task-reply-command-result { max-height: 240px; overflow: auto; margin: 0 0 8px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; background: var(--panel); color: var(--ink); font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-reply-command-menu,
 .task-reply-mention-menu,
 .task-reply-inline-panel {

@@ -90,8 +90,8 @@ export async function cliGoalRoute(scope: CliGoalScope, ownerUserId: string | nu
 }
 
 export function cliGoalSessionCandidates(task: TaskRow, agentType: AgentType, profileId: string | null, ownerUserId: string | null, command: CliCommand | null, candidates: (typeof sessions.$inferSelect)[]) {
+  if (command?.name !== "goal" || (isGoalExecution(command) && command.args !== "resume")) return candidates;
   const exact = candidates.filter((session) => session.executorId === profileId || !session.executorId);
-  if (command?.name !== "goal" || (isGoalExecution(command) && command.args !== "resume")) return exact;
   const ordered = [...exact.filter((session) => session.cliSessionId), ...exact.filter((session) => !session.cliSessionId)];
   const state = readCliState(task.cliState, agentType, profileId, ownerUserId);
   if (state.goalSessionId) return candidates.filter((session) => session.cliSessionId === state.goalSessionId);

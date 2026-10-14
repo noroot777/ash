@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
-import { goalRecoveryFixtures, goalRecoverySessions, runGoalRecoveryUi } from "./cli-goal-recovery-ui.mjs";
+import { goalRecoveryFixtures, goalRecoverySessions, runGoalRecoveryUi, seedGoalRecoveryTranscripts } from "./cli-goal-recovery-ui.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "ash-cli-ui-"));
 const workspace = join(root, "workspace");
@@ -44,6 +44,7 @@ await db.insert(tasks).values([
 ]);
 await db.insert(queueItems).values({ taskId: "queue-plan-task", queueId: "queue-ui", position: 0, createdAt: at });
 await db.insert(sessions).values(goalRecoverySessions(at, workspace));
+await seedGoalRecoveryTranscripts(root);
 await db.insert(sessions).values({ id: "queue-plan-session", taskId: "queue-plan-task", role: "single", agentType: "codex", executor: "codex", executorId: "codex-ui", cliSessionId: "queue-thread", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
 await db.insert(sessions).values({ id: "claude-ui-session", taskId: "claude-ui-task", role: "single", agentType: "claude", executor: "claude", executorId: "claude-ui", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
 await db.insert(sessions).values({ id: "codex-ui-session", taskId: "codex-ui-task", role: "single", agentType: "codex", executor: "codex", executorId: "codex-ui", cliSessionId: "ui-plan-thread", cwd: workspace, startedAt: at, endedAt: at, exitStatus: 0 });
@@ -61,16 +62,19 @@ const boot = `
   const { ClaudeExecutor } = await import("./server/dist/executors/claude.js");
   const { CodexNativeCommands } = await import("./server/dist/executors/codex-native-commands.js");
   function fixture(options) {
-    appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.ASH_TASK_ID, turnToken: options.env.ASH_TURN_TOKEN, cliState: options.cliState, cliCommand: options.cliCommand }) + "\\n");
+    appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ taskId: options.env.ASH_TASK_ID, turnToken: options.env.ASH_TURN_TOKEN, sessionId: options.sessionId, cliState: options.cliState, cliCommand: options.cliCommand }) + "\\n");
     const sessionId = (options.cliCommand?.name === "fork" ? "fork-" : "") + (options.sessionId || "ui-" + options.env.ASH_TASK_ID);
     let goal = options.cliState?.goal ? { ...options.cliState.goal, status: "budgetLimited" } : null;
-    const goalStarted = !!goal;
+    const snapshotMismatch = options.env.ASH_TASK_ID.startsWith("goal-snapshot-");
+    if (snapshotMismatch) goal = options.env.ASH_TASK_ID.endsWith("missing") ? null : { objective: "另一个原生目标", status: "active", tokenBudget: 300, tokensUsed: 12 };
+    const goalStarted = !snapshotMismatch && !!goal;
     const liveGoal = goal?.objective === "等待实时目标控制";
     if (liveGoal) goal.status = "active";
     let finish;
     const interrupted = new Promise((resolve) => { finish = resolve; });
     const notices = [];
     const native = new CodexNativeCommands({ threadId: () => sessionId, turnId: () => "", model: () => "fixture", cwd: options.cwd, prompt: "", state: options.cliState, push: (event) => notices.push(event), request: async (method, params) => {
+      if (snapshotMismatch && method !== "thread/goal/get") throw new Error("query/pause must not modify a mismatched native goal");
       if (method === "thread/goal/clear") goal = null;
       if (method === "thread/goal/set") {
         const changes = { ...params };
@@ -81,11 +85,18 @@ const boot = `
     } });
     return {
       sessionId, cliCommand: options.cliCommand, commandLine: "UI fixture; no CLI or model request",
-      goal: liveGoal && options.env.ASH_TASK_ID === "live-claude-goal" ? undefined : () => goal, goalStarted: () => goalStarted,
+      goal: liveGoal && options.env.ASH_TASK_ID === "live-claude-goal" ? undefined : () => snapshotMismatch ? native.goal : goal, goalStarted: () => goalStarted,
       command: (command) => native.control(command),
       kill() { finish(); },
       events: (async function* () {
         yield { kind: "session", cliSessionId: sessionId };
+        if (snapshotMismatch) {
+          await native.prepare(options.cliCommand);
+          await native.start(options.cliCommand);
+          for (const event of notices) yield event;
+          yield { kind: "done", exitStatus: 0 };
+          return;
+        }
         if (options.env.ASH_TASK_ID === "ordinary-ui-task" && options.sessionId) {
           native.notification("thread/goal/cleared", { threadId: sessionId });
         }
@@ -609,7 +620,7 @@ try {
     assert.equal(recorded[0].cliSessionId, null);
     assert.equal(recorded[0].exitStatus, 1);
   }
-  await runGoalRecoveryUi({ page, base, screenshots, sessionEnds, idleTask });
+  await runGoalRecoveryUi({ page, base, screenshots, sessionEnds, idleTask, readInvocations: async () => (await readFile(traceFile, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) });
   assert.deepEqual(pageErrors, []);
   console.log("ordinary Codex fresh task and two resumed replies have no phantom goal notices live or after reload: passed");
   console.log("native slash UI, agent/mode filtering, inline goal status without optimistic bubbles, durable reload: passed");

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
+import { parseCliCommand } from "@ash/shared/cli-commands";
 import { ArrowUp, Clock, SpinnerGap, X } from "@phosphor-icons/react";
 import {
   ScheduledMessageTray,
@@ -100,6 +101,9 @@ export function ReplyBox({
   const setValue = draft.setText;
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [commandResult, setCommandResult] = useState<{ taskId: string; text: string } | null>(null);
+  const currentTaskId = useRef(task.id);
+  currentTaskId.current = task.id;
   const [commandIndex, setCommandIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
   // 一次性召唤：正文里 `@某个智能体` 选出来的「就这一句由谁跑」。只随这一次 reply
@@ -145,7 +149,9 @@ export function ReplyBox({
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
   const queueing = task.status === "running" || task.status === "queued";
-  const disabled = task.mode !== "single" || task.archived || (!hasConversation && !queueing);
+  const cliCommand = parseCliCommand(target?.agent ?? standing.config.agentType, value);
+  const scopeDiscovery = cliCommand?.name === "goal" && cliCommand.args === "--scopes";
+  const disabled = task.mode !== "single" || task.archived || (!hasConversation && !queueing && !scopeDiscovery);
   const inputDisabled = disabled && !command;
   const reason = task.mode !== "single"
     ? "请在对应的团队或讨论页面继续操作"
@@ -170,6 +176,7 @@ export function ReplyBox({
   useEffect(() => {
     resetComposerState();
     setSendError(null);
+    setCommandResult(null);
   }, [task.id]);
 
   // 会话里选中一段话点「添加到对话」时，浮条要把光标送回这个输入框（见 replyQuote.ts）。
@@ -374,6 +381,7 @@ export function ReplyBox({
     if (disabled || sending || uploads.uploading || (!annotation && !value.trim() && !uploads.attachments.length)) return false;
     setSending(true);
     setSendError(null);
+    setCommandResult(null);
     // 发出去的是这一份。成功后只在草稿**逐字还是这一份**时才清掉；动过就整份留着，
     // 绝不去猜哪一段是刚发出去的（见 withdrawDraft.ts 的 clearSentDraft）。
     const draftAtSend = value;
@@ -403,6 +411,7 @@ export function ReplyBox({
       );
       if (result === null) return false; // 用户主动取消：什么都别清
       if ("scheduled" in result) scheduled.add(result.message);
+      if ("command" in result && !result.recorded && currentTaskId.current === task.id) setCommandResult({ taskId: task.id, text: result.text });
       if (!annotation) {
         setValue((current) => clearSentDraft(current, draftAtSend));
         draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
@@ -524,6 +533,7 @@ export function ReplyBox({
         onCancel={uploads.cancel}
       />
       {sendError && <p className="task-reply-error">{sendError}</p>}
+      {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
       <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />

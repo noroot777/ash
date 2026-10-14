@@ -126,23 +126,36 @@ try {
   await idle.control(command("/goal"));
 
   const savedGoal: CliGoal = { objective: "原作用域目标", status: "paused", tokenBudget: 150, tokensUsed: 150 };
-  for (const nativeGoal of [{ ...savedGoal, objective: "另一个目标" }, { ...savedGoal, tokenBudget: 300 }, { ...savedGoal, tokensUsed: 149 }]) {
+  for (const nativeGoal of [null, { ...savedGoal, objective: "另一个目标", status: "active" as const }, { ...savedGoal, tokenBudget: 300 }, { ...savedGoal, tokensUsed: 149 }]) {
     const guardedCalls: string[] = [];
     const guarded = new CodexNativeCommands({
       threadId: () => "guarded", turnId: () => "", model: () => "model", cwd: root, prompt: "", state: { goal: savedGoal, goalHold: true }, push() {},
       request: async (method) => { guardedCalls.push(method); return { goal: nativeGoal }; },
     });
-    for (const text of ["/goal resume", "/goal", "/goal pause", "/goal budget 300"]) {
+    for (const text of ["/goal resume", "/goal budget 300"]) {
       guardedCalls.length = 0;
       await assert.rejects(guarded.prepare(command(text)), /作用域|快照/);
       assert.deepEqual(guardedCalls, ["thread/goal/get"], "mismatched goals must never issue model, setter or pause calls");
     }
+    for (const text of ["/goal", "/goal pause"]) {
+      guardedCalls.length = 0;
+      await guarded.prepare(command(text));
+      assert.match(await guarded.control(command(text)), /原作用域目标[\s\S]*150 \/ 150[\s\S]*原生会话里[\s\S]*保存快照/);
+      assert.deepEqual(guarded.goal, savedGoal);
+      assert.equal(guarded.goalStarted, false);
+      guarded.notification("thread/goal/updated", { goal: { ...savedGoal, tokenBudget: 999 } });
+      guarded.notification("thread/goal/cleared", {});
+      assert.deepEqual(guarded.goal, savedGoal, "unrelated native notifications cannot overwrite the displayed or persisted snapshot");
+      assert.deepEqual(guardedCalls, ["thread/goal/get"], "snapshot query/pause must not mutate or interrupt another native goal");
+    }
     guardedCalls.length = 0;
     await guarded.prepare(command("/goal clear"));
-    assert.match(await guarded.control(command("/goal clear")), /原生会话属于其他目标/);
-    assert.deepEqual(guardedCalls, ["thread/goal/get"], "selected snapshot cleanup must not clear another native goal's budget or usage");
+    if (nativeGoal) {
+      assert.match(await guarded.control(command("/goal clear")), /原生会话属于其他目标/);
+      assert.deepEqual(guardedCalls, ["thread/goal/get"], "selected snapshot cleanup must not clear another native goal's budget or usage");
+    }
   }
-  for (const text of ["/goal pause", "/goal budget 300", "/goal clear"]) {
+  for (const text of ["/goal", "/goal pause", "/goal budget 300", "/goal clear"]) {
     const noSavedGoal = new CodexNativeCommands({
       threadId: () => "unsaved", turnId: () => "", model: () => "model", cwd: root, prompt: "", state: { profileId: "cleared-scope", ownerUserId: null }, push() {},
       request: async (method) => { assert.equal(method, "thread/goal/get"); return { goal: savedGoal }; },
@@ -150,7 +163,12 @@ try {
     if (text === "/goal clear") {
       await noSavedGoal.prepare(command(text));
       assert.match(await noSavedGoal.control(command(text)), /未清除其目标、预算或已用量/);
-    } else await assert.rejects(noSavedGoal.prepare(command(text)), /未改变目标、预算或已用量/);
+    } else if (text === "/goal budget 300") await assert.rejects(noSavedGoal.prepare(command(text)), /未改变目标、预算或已用量/);
+    else {
+      await noSavedGoal.prepare(command(text));
+      assert.match(await noSavedGoal.control(command(text)), /当前没有目标[\s\S]*原生会话属于其他目标/);
+      assert.equal(noSavedGoal.goal, null);
+    }
   }
   const matching = new CodexNativeCommands({
     threadId: () => "matching", turnId: () => "", model: () => "model", cwd: root, prompt: "", state: { goal: savedGoal }, push() {},
@@ -159,6 +177,26 @@ try {
   await matching.prepare(command("/goal resume"));
   assert.equal(matching.goal?.tokenBudget, 150);
   assert.equal(matching.goal?.tokensUsed, 160);
+  const matchingCalls: string[] = [];
+  let activeGoal: CliGoal = { ...savedGoal, status: "active", tokensUsed: 160 };
+  const matchingControl = new CodexNativeCommands({
+    threadId: () => "matching-control", turnId: () => "other-turn", model: () => "model", cwd: root, prompt: "", state: { goal: savedGoal }, push() {},
+    request: async (method, params) => {
+      matchingCalls.push(method);
+      if (method === "thread/goal/set") activeGoal = { ...activeGoal, ...params };
+      return { goal: activeGoal };
+    },
+  });
+  await matchingControl.prepare(command("/goal"));
+  assert.match(await matchingControl.control(command("/goal")), /运行中[\s\S]*160 \/ 150/);
+  assert.deepEqual(matchingCalls, ["thread/goal/get", "thread/goal/get"], "matching query remains read-only");
+  matchingCalls.length = 0;
+  await matchingControl.prepare(command("/goal pause"));
+  assert.match(await matchingControl.control(command("/goal pause")), /已暂停[\s\S]*160 \/ 150/);
+  assert.deepEqual(matchingCalls, ["thread/goal/get", "thread/goal/set"], "matching pause only changes the native status, without a model turn");
+  const missingGoal = new CodexNativeCommands({ threadId: () => "missing", turnId: () => "", model: () => "model", cwd: root, prompt: "", push() {}, request: async (method) => { assert.equal(method, "thread/goal/get"); return { goal: null }; } });
+  await missingGoal.prepare(command("/goal pause"));
+  assert.match(await missingGoal.control(command("/goal pause")), /当前没有目标/);
   const standalone = new CodexNativeCommands({
     threadId: () => "standalone", turnId: () => "", model: () => "model", cwd: root, prompt: "", state: { plan: false }, push() {},
     request: async (method, params) => ({ goal: method === "thread/goal/set" ? { ...savedGoal, ...params } : savedGoal }),

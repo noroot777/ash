@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { hasCliGoalHold, readCliState, type CliGoal } from "@ash/shared/cli-commands";
 import type { RunOpts } from "../src/executors/types.js";
+import { CodexNativeCommands } from "../src/executors/codex-native-commands.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-goal-recovery-"));
@@ -24,6 +25,8 @@ const { replyToTask } = await import("../src/task-reply.js");
 const { mountGroupRoutes } = await import("../src/group-routes.js");
 const { continueTask } = await import("../src/orchestrator.js");
 const { runTask } = await import("../src/task-run.js");
+const { resumeOrRunTask } = await import("../src/task-resume.js");
+const { CROSS_OWNER_SESSION_NOTE } = await import("../src/session-notice.js");
 const { advanceQueueFromTask, runGroup, selectNextInQueue } = await import("../src/scheduler.js");
 const { isTurnClaimed } = await import("../src/runs.js");
 const { setActor } = await import("../src/auth/context.js");
@@ -34,6 +37,8 @@ const at = new Date().toISOString();
 const goal: CliGoal = { objective: "恢复原目标且保留预算", status: "budgetLimited", tokenBudget: 150, tokensUsed: 150, timeUsedSeconds: 21 };
 const invocations = new Map<string, RunOpts[]>();
 const failStarts = new Set<string>();
+const nativeGoals = new Map<string, CliGoal | null>();
+const nativeCalls = new Map<string, string[]>();
 const originalCodex = CodexExecutor.prototype.runSteerable;
 const originalClaude = ClaudeExecutor.prototype.runSteerable;
 const fixtureRun: typeof originalCodex = function (options) {
@@ -42,13 +47,22 @@ const fixtureRun: typeof originalCodex = function (options) {
   if (failStarts.has(taskId)) throw new Error("fixture startup failure after scoped preparation");
   const saved = options.cliState?.goal;
   const reported = saved && options.cliCommand?.args.startsWith("budget ") ? { ...saved, tokenBudget: Number(options.cliCommand.args.slice(7)) } : saved;
+  const output: import("@ash/shared").AgentEvent[] = [];
+  const native = nativeGoals.has(taskId) ? new CodexNativeCommands({
+    threadId: () => options.sessionId!, turnId: () => "unrelated-turn", model: () => "fixture", cwd: options.cwd, prompt: "", state: options.cliState, push: (event) => output.push(event),
+    request: async (method) => { nativeCalls.set(taskId, [...nativeCalls.get(taskId) ?? [], method]); return { goal: nativeGoals.get(taskId) }; },
+  }) : null;
   return {
     sessionId: options.sessionId ?? `${taskId}-native`, commandLine: "scope recovery fixture; no CLI/model", cliCommand: options.cliCommand,
-    goal: () => reported ? { ...reported, status: "paused" as const } : null,
+    goal: () => native ? native.goal : reported ? { ...reported, status: "paused" as const } : null,
     goalStarted: () => options.cliCommand?.args === "resume", kill() {},
     events: (async function* () {
       yield { kind: "session" as const, cliSessionId: options.sessionId ?? `${taskId}-native` };
-      yield { kind: "text" as const, text: options.cliCommand?.args === "clear" ? "目标已清除" : "fixture turn" };
+      if (native) {
+        await native.prepare(options.cliCommand);
+        assert.equal((await native.start(options.cliCommand!)).immediate, true);
+        yield* output;
+      } else yield { kind: "text" as const, text: options.cliCommand?.args === "clear" ? "目标已清除" : "fixture turn" };
       yield { kind: "done" as const, exitStatus: 0 };
     })(),
   };
@@ -92,6 +106,34 @@ try {
       { id: `${agentType}-old`, name: `${agentType}@原目标`, type: agentType, isDefault: false },
       { id: `${agentType}-new`, name: `${agentType}@新默认`, type: agentType, isDefault: true },
     ]);
+    for (const route of ["default", "explicit", "run", "queue", "legacy", "same"] as const) {
+      const taskId = `${agentType}-ordinary-${route}`;
+      const executorId = route === "same" ? `${agentType}-old` : route === "explicit" ? `${agentType}-old` : null;
+      await create(taskId, agentType, { executorId });
+      await db.insert(sessions).values({ id: `${taskId}-history`, taskId, role: "single", agentType, executor: agentType, executorId: route === "legacy" ? null : `${agentType}-old`, runOwnerUserId: null, cliConfigDir: "", cliSessionId: `${taskId}-thread`, cwd: root, startedAt: at, turnStartedAt: at, endedAt: at, exitStatus: 0 });
+      if (route === "run") await resumeOrRunTask(taskId, { reason: "run" });
+      else if (route === "queue") {
+        await db.insert(groups).values({ id: taskId, projectId: "project", name: taskId, mode: "serial", createdAt: at });
+        await db.update(tasks).set({ groupId: taskId }).where(eq(tasks.id, taskId));
+        await db.insert(queueItems).values({ taskId, queueId: taskId, position: 0, createdAt: at });
+        await runGroup(taskId);
+      } else assert.equal((await reply(taskId, "刚才那段你做完了吗？", route === "explicit" ? { agent: agentType, executorId: `${agentType}-new` } : {})).status, 202);
+      await settled(taskId);
+      assert.equal(invocations.get(taskId)![0]!.sessionId, `${taskId}-thread`, `${route} must resume history despite profile drift`);
+      assert.equal(invocations.get(taskId)![0]!.cliState?.profileId, route === "same" ? `${agentType}-old` : `${agentType}-new`);
+      assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, taskId))).length, 1);
+    }
+    for (const inaccessible of ["owner", "config"] as const) {
+      const taskId = `${agentType}-inaccessible-${inaccessible}`;
+      await create(taskId, agentType);
+      await db.insert(sessions).values({ id: `${taskId}-history`, taskId, role: "single", agentType, executor: agentType, executorId: `${agentType}-old`, runOwnerUserId: inaccessible === "owner" ? "other-owner" : null, cliConfigDir: inaccessible === "config" ? join(root, "old-config") : null, cliSessionId: `${taskId}-thread`, cwd: root, startedAt: at, turnStartedAt: at, endedAt: at, exitStatus: 0 });
+      assert.equal((await reply(taskId, "继续回答", { agent: agentType, executorId: `${agentType}-new` })).status, 202);
+      await settled(taskId);
+      assert.equal(invocations.get(taskId)![0]!.sessionId ?? null, null);
+      assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, taskId))).length, 2);
+      assert.ok(readFileSync(join(root, "runs", taskId, `${taskId}-history.md`), "utf8").includes(CROSS_OWNER_SESSION_NOTE));
+    }
+    console.log(`${agentType}: ordinary/default/explicit/run/queue profile drift keeps history; inaccessible owner/config sessions keep persistent notices: passed`);
     for (const pinned of [false, true]) {
       const taskId = `${agentType}-${pinned ? "explicit" : "default"}-drift`;
       await create(taskId, agentType, { executorId: pinned ? `${agentType}-new` : null });
@@ -149,6 +191,40 @@ try {
     assert.deepEqual(readCliState((await row(abandoned)).cliState, agentType, abandonedHeld.profileId, null), abandonedHeld, "a lost clear process restores the hold after server restart");
     console.log(`${agentType}: failed cross-scope startup restores original budget/usage/hold and preserves other owners: passed`);
   }
+
+  await create("no-session-discovery", "codex", { status: "backlog" });
+  const beforeDiscovery = await row("no-session-discovery");
+  const emptyDiscovery = await (await reply("no-session-discovery", "/goal --scopes")).json();
+  assert.equal(emptyDiscovery.recorded, false);
+  assert.match(emptyDiscovery.text, /没有已保存的目标/);
+  assert.deepEqual(await row("no-session-discovery"), beforeDiscovery);
+  assert.equal(invocations.has("no-session-discovery"), false);
+  assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, "no-session-discovery"))).length, 0);
+
+  for (const saved of [true, false]) for (const present of [true, false]) for (const text of ["/goal", "/goal pause"]) {
+    const taskId = `snapshot-${saved}-${present}-${text.endsWith("pause") ? "pause" : "query"}`;
+    await create(taskId, "codex", { executorId: "codex-new" });
+    if (saved) await seed(taskId, "codex", null, "codex-new");
+    else await db.insert(sessions).values({ id: `${taskId}-old`, taskId, role: "single", agentType: "codex", executor: "codex", executorId: "codex-new", cliSessionId: `${taskId}-original-native`, cwd: root, startedAt: at, turnStartedAt: at, endedAt: at, exitStatus: 0 });
+    nativeGoals.set(taskId, present ? { ...goal, objective: "另一个原生目标", status: "active" } : null);
+    assert.equal((await reply(taskId, text)).status, 202);
+    const result = await settled(taskId);
+    assert.equal(result.status, "paused");
+    assert.equal(result.goalTurn, false);
+    assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, taskId)))[0]!.exitStatus, 0);
+    assert.deepEqual(nativeCalls.get(taskId), ["thread/goal/get"]);
+    const state = readCliState(result.cliState, "codex", "codex-new", null);
+    assert.deepEqual(state.goal ?? null, saved ? { ...goal, status: text === "/goal pause" ? "paused" : goal.status } : null);
+    assert.equal(state.goalHold ?? false, saved);
+    let transcript = "";
+    for (let attempt = 0; attempt < 100 && !transcript.includes("原生会话"); attempt++) {
+      await delay(10);
+      transcript = readFileSync(join(root, "runs", taskId, `${taskId}-old.md`), "utf8");
+    }
+    assert.match(transcript, /原生会话/);
+    assert.doesNotMatch(transcript, /起跑失败|启动失败/);
+  }
+  console.log("no-session discovery is model-free; snapshot query/pause mismatch completes normally without changing native goals or releasing holds: passed");
 
   const budgetTaskId = "codex-explicit-drift";
   await db.insert(sessions).values({ id: "budget-newer-wrong-session", taskId: budgetTaskId, role: "single", agentType: "codex", executor: "codex", executorId: "codex-old", cliSessionId: "another-goal-native", cwd: root, startedAt: at, turnStartedAt: new Date(Date.now() + 2000).toISOString(), endedAt: at });
