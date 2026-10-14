@@ -37,6 +37,9 @@ try {
     submitDebateStatement, totalSegments,
   } = await import("../src/free-review-debate.js");
   const { freeManualRepairPrompt, freeRepairPrompt } = await import("../src/free-review-prompts.js");
+  const {
+    CLASS_PROBLEM_BOUNDARY, DEFER_BOUNDARY_CRITERION, DEFER_REASON_FIELD_GUIDE,
+  } = await import("@ash/shared/free-workflow");
   const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
 
   await ensureSchema();
@@ -335,38 +338,73 @@ try {
   assert.ok(!bare.includes("辩论收尾发言"), "没辩过就不该出现收尾那一节");
   assert.ok(!bare.includes("裁定时写给你的要点"), "没写要点就不该出现要点那一节");
 
-  // ── 转出那条出路的三种形态：这里**必须**按措辞断言，不是按状态 ──────────────
+  // ── 转出那条出路的判据：这里**必须**按措辞断言，不是按状态 ────────────────────
   //
-  // 这条出路的判据是用户 2026-09-24 的原话「如果偏离了主任务的内容的话就开启一个新的
-  // 任务」，可它最初只落了「衍生问题」一种形态（建任务那一步被换成了当时手里唯一的
-  // 实例），之后一路忠实复制，直到 2026-10-14 撞上真实案例：执行者面前是一条「基线上
-  // 就有、落在两个与任务无关的脚本里」的意见，`deferReason` 的格子要它填「是哪一轮的
-  // 哪次改动引入的」，它填不进去，于是照改。所以三种形态逐一钉住——少掉任何一种，
-  // 执行者就会把「不是我上一轮改出来的」读成「属于本任务」，而这一步不会有任何运行期
-  // 行为报错：链照跑、报告照落盘，只是那一型意见永远转不出去。
+  // 判据是用户 2026-09-24 的原话「如果偏离了主任务的内容的话就开启一个新的任务」，可它
+  // 最初只落了「衍生问题」一种形态（建任务那一步被换成了当时手里唯一的实例），之后一路
+  // 忠实复制，直到 2026-10-14 撞上真实案例：执行者面前是一条「基线上就有、落在两个与
+  // 任务无关的脚本里」的意见，`deferReason` 的格子要它填「是哪一轮的哪次改动引入的」，
+  // 它填不进去，于是照改。这一步不会有任何运行期行为报错：链照跑、报告照落盘，只是那
+  // 一型意见永远转不出去——所以判据只能靠措辞钉。
+  //
+  // 钉的是**那一份共享源原样出现**，不是几个同名词碰巧都在：判据有两个运行时表面（修复
+  // 交接消息、MCP 工具注册元数据），各自手写时就漂过一次。
+  const toolConfig = await (async () => {
+    const { registerTaskTurnTools } = await import("../../mcp/src/tools/task-turn.js");
+    const registered = new Map<string, { description?: string; inputSchema?: Record<string, { description?: string }> }>();
+    registerTaskTurnTools({
+      registerTool(name: string, configuration: never) { registered.set(name, configuration); },
+    } as never);
+    const found = registered.get("dispute_review");
+    assert.ok(found, "dispute_review 必须真的注册出来——元数据断言只有拿到注册结果才算数");
+    return found;
+  })();
   for (const [source, text] of [
     ["自动修复交接", await freeRepairPrompt("d-closing", closingRun)],
     ["轮数用尽后的手动修复交接", await freeManualRepairPrompt("d-closing", closingRun)],
+    // 真正注册给执行者的工具说明：执行者**两边都读得到**，只改 server 消息一端解决不了
+    // 「指引互相打架」。这一条是第 1 轮审查 F1 实测出来的漏洞。
+    ["dispute_review 工具说明", toolConfig.description ?? ""],
   ] as const) {
-    for (const shape of ["内容无关", "基线既有", "衍生问题"]) {
-      assert.ok(text.includes(shape), `${source} 必须列出越界形态「${shape}」——缺一种它就只认剩下的`);
+    assert.ok(
+      text.includes(DEFER_BOUNDARY_CRITERION),
+      `${source} 必须原样带上那份共享判据（三种形态 + 反向误读防线），不是碰巧出现几个同名词`,
+    );
+    assert.ok(
+      text.includes(DEFER_REASON_FIELD_GUIDE),
+      `${source} 必须原样带上 deferReason 的填法——写死成一种形态的填空等于把另两种挡在门外`,
+    );
+    assert.ok(
+      text.includes(CLASS_PROBLEM_BOUNDARY),
+      `${source} 必须原样带上类问题的边界口径，否则「类问题」标签会替掉内容判断`,
+    );
+    for (const stale of ["为什么越界(是哪一轮的哪次改动引入的)", "多半是本轮修复引入的衍生问题"]) {
+      assert.ok(!text.includes(stale), `${source} 不许残留旧的单一形态措辞「${stale}」`);
     }
+  }
+  // 工具的 deferReason 字段说明同样走共享源：字段说明是执行者填那个格子时离得最近的一句。
+  assert.ok(
+    (toolConfig.inputSchema?.deferReason?.description ?? "").includes(DEFER_REASON_FIELD_GUIDE),
+    "dispute_review 的 deferReason 字段说明必须原样带上共享填法",
+  );
+  // 「根因本身也在界外」这一型要能读出来：只豁免「无关模块的同类实例」时，整条落在别人
+  // 管线里的类问题仍会被判成界内（第 1 轮审查 F2）。
+  assert.match(
+    CLASS_PROBLEM_BOUNDARY,
+    /根因\*\*本身\*\*也落在与本任务目标无关的模块[^]*?整条意见都不属于本任务/,
+    "类问题口径必须覆盖「根因本身也在界外 → 整条转出」，不能只豁免外围实例",
+  );
+  // 这段口径被预设/旧验证那条线共用，那边没有 dispute_review —— 不许写死 free 的出口
+  // （第 1 轮审查 N1）。
+  for (const exit of ["dispute_review", "deferReason", "ask_question"]) {
     assert.ok(
-      text.includes("**「不是我上一轮改出来的」不等于「属于本任务」**"),
-      `${source} 必须堵掉那句反向误读：前两种形态恰恰都不是执行者改出来的`,
-    );
-    assert.ok(
-      text.includes("按实际那一种写"),
-      `${source} 的 deferReason 字段说明不许只给一种填法——写死一种等于把另两种挡在门外`,
-    );
-    assert.ok(
-      text.includes("也**不自动等于界内**"),
-      `${source} 必须写明「这是类问题」不自动等于界内，否则类问题口径会把这条出路吃掉`,
+      !CLASS_PROBLEM_BOUNDARY.includes(exit),
+      `共享的类问题口径里不许写死出口「${exit}」：它被没有这个出口的回合共用，会变成一句指不到东西的话`,
     );
   }
   // 用户已经裁定「维持审查意见、接着改」那一趟不给这条出路——这是现有语义，顺带钉住，
   // 免得上面那圈断言被人改成「所有修复提示都得带三种形态」。
-  assert.ok(!bare.includes("内容无关"), "裁定维持原意见后不再提供转出口径");
+  assert.ok(!bare.includes(DEFER_BOUNDARY_CRITERION), "裁定维持原意见后不再提供转出口径");
 
   console.log("free review dispute ok");} catch (error) {
   failure = error;

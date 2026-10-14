@@ -6,6 +6,9 @@ import { freeReviewEvidenceDir, freeReviewReportPath } from "./free-review-files
 import { reviewRequestReference } from "./review-request-context.js";
 import { settledRulingsFor } from "./free-review-settled.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
+import {
+  CLASS_PROBLEM_BOUNDARY, DEFER_BOUNDARY_CRITERION, DEFER_REASON_FIELD_GUIDE,
+} from "@ash/shared/free-workflow";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { freeReviewHistorySection } from "./review-history.js";
 
@@ -106,19 +109,20 @@ export function freeReviewResumeMessage(task: TaskRow, run: ReviewRunRow, round:
  *   就照改。
  *
  * 判据是用户 2026-09-24 的原话：**「如果偏离了主任务的内容的话就开启一个新的任务」**。
- * 所以三种形态必须**并列全列出来**，一条都不许省：
- * - **内容无关**：落点在与任务目标无关的模块 / 不碰本任务要改的那条链路
- * - **基线既有**：缺陷在开工起点那一版上就存在，本任务只是被动适配到它
- * - **衍生问题**：上一轮按意见改了，这一轮报的是那次改动带出来的新问题
+ * 判据本体、`deferReason` 的填法、类问题的边界各只有一份源，在
+ * `@ash/shared/free-workflow`（`DEFER_BOUNDARY_CRITERION` / `DEFER_REASON_FIELD_GUIDE` /
+ * `CLASS_PROBLEM_BOUNDARY`）—— 因为同一段话还有第二个运行时表面：MCP 工具 `dispute_review`
+ * 注册时的 description 与字段说明。那两处各自手写时就漂过一次：server 这侧已经改成三种
+ * 形态，工具说明仍要求「为什么越界(是哪一轮的哪次改动引入的)」，执行者两边都读得到。
  *
- * 为什么必须三条并列、还得有回归钉着（`test-free-review-dispute.ts` 的三型探针）：这条
- * 出路最初只写了「衍生问题」一种形态——建任务那一步把用户给的「内容偏离」换成了当时手里
- * 唯一的实例（那条 10 轮链的后 9 轮恰好全是衍生问题），之后实现、字段说明、模块注释、
+ * 为什么必须三条形态并列、还得有回归钉着注册后的实际元数据（`test-free-review-dispute.ts`）：
+ * 这条出路最初只写了「衍生问题」一种形态——建任务那一步把用户给的「内容偏离」换成了当时
+ * 手里唯一的实例（那条 10 轮链的后 9 轮恰好全是衍生问题），之后实现、字段说明、模块注释、
  * 派生任务 body 模板逐层忠实复制，三周后真实案例撞上来：执行者看着一条「基线上本来就有、
  * 落在两个与任务无关的脚本里」的意见，`deferReason` 的格子要它填「是哪一轮的哪次改动
  * 引入的」——答案是谁都没引入，于是它填不进去，只能照改。更糟的是它在第 2 轮会话里把
  * 这个推理写了出来：「这不是上一轮改动引入的……**属于本任务边界** —— 照改」，判据被
- * 读成了反的。所以字段说明写「按实际那一种写」而不是只给一种形态的填空。
+ * 读成了反的。
  */
 function disputeOption(taskId: string): string {
   return `\n\n如果报告里有**你认为不成立**的意见（读错了代码、依据不可复现），或者那是一处` +
@@ -129,21 +133,14 @@ function disputeOption(taskId: string): string {
     `- 驳回之后**不要**调用 complete_task：这一轮停在「等用户裁定」，不是完成。\n` +
     `- 默认仍然是照报告修复；驳回是例外，拿不出具体依据就不要用。\n` +
     `\n还有**第三种情况**，别把它塞进上面两条里：某条意见**技术上成立、依据也可复现**，` +
-    `但它**与本任务要做的那件事无关**。判据只有一句：**偏离了本任务的内容就该转出去**。` +
-    `三种形态都算，不是只有最后一种：\n` +
-    `- **内容无关**：它的落点在与本任务目标无关的模块，不碰本任务要改的那条链路；\n` +
-    `- **基线既有**：这个缺陷在开工起点那一版上就存在，本任务只是被动适配到它（它更宽、` +
-    `或者本任务对那几个文件只改了几行跟随性的适配）；\n` +
-    `- **衍生问题**：上一轮你按意见改了，这一轮报告的是那次改动带出来的新问题。\n` +
-    `**「不是我上一轮改出来的」不等于「属于本任务」**——前两种形态恰恰都不是你改出来的。` +
+    `但它**与本任务要做的那件事无关**。` + DEFER_BOUNDARY_CRITERION + `\n` +
     `照改会让这条链没有终点（改→引入→再被打回，或者一路改进别人的模块），说「依据不可复现」` +
     `又是撒谎。正确做法是在**同一次** dispute_review 里多传一个` +
-    ` deferReason="逐条写清：哪几条 + 为什么它不属于本任务（无关模块 / 基线即有 / 哪一轮的哪次改动引入的，按实际那一种写，` +
-    `能指到文件、基线 commit、diff 行数就指）+ 建议的独立任务范围"，` +
+    ` deferReason="${DEFER_REASON_FIELD_GUIDE}"，` +
     `由用户裁定要不要把它们转成一个独立任务。\n` +
-    `- 报告写着「这是类问题」也**不自动等于界内**：类问题的**根因层级**在界内（该在哪一层加` +
-    `不变量就在哪一层加），但那个类的实例落在与本任务目标无关的模块时，**那些实例仍可按边界` +
-    `提出转出**——把根因修在本任务自己的链路上，无关模块的同类实例写进 deferReason。\n` +
+    // 类问题那一段自带列表，塞进 `- ` 条目里会让它的子条目跳出父条目；单独成段。
+    `\n报告写着「这是类问题」也**不自动等于界内**。` + CLASS_PROBLEM_BOUNDARY +
+    `\n这一段里说「不属于本任务」的那些，就是写进 deferReason 的那些。\n\n` +
     `- reason 和 deferReason **可以同时给**：reason 装「不成立」的那几条，deferReason 装「成立但越界」的那几条；` +
     `只提转出时 reason 可以不填（别在「哪条不成立」那一栏里编一句你自己都不认的话）。\n` +
     `- 认可、且确实属于本任务的那几条，仍然是**在调用之前就先改掉并验证**。\n` +
