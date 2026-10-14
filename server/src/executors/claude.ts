@@ -6,7 +6,8 @@ import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
 import { cliHostEnv } from "./cli-env.js";
-import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts, SteerText } from "./types.js";
+import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
+import { resolveSteerText, type SteerText } from "./steer-text.js";
 import { spawnControllableForRun, spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, shq, killChild, redactSecrets, failedChild } from "./spawn.js";
 import { relayRoot } from "../llm.js";
@@ -62,10 +63,6 @@ function cleanupWithEvents(events: AsyncIterable<AgentEvent>, cleanup: () => voi
 }
 
 cleanupStaleRuntimeSettings();
-
-/** steer 正文定稿:给的是函数就现在调它(见 types.ts 的 SteerText —— 这一刻才读授权)。 */
-const resolveSteerText = async (text: SteerText): Promise<string> =>
-  typeof text === "function" ? await text() : text;
 
 // Drives the real `claude` CLI in headless stream-json mode.
 export class ClaudeExecutor implements AgentExecutor {

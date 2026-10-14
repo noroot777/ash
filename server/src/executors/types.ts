@@ -3,6 +3,10 @@ import type { AgentEvent, AgentType } from "@ash/shared";
 import type { RunTracePaths } from "./diagnostics.js";
 import type { DetachedPaths } from "./detached.js";
 import type { CliCommand, CliGoal, CliSessionState } from "@ash/shared/cli-commands";
+// 惰性正文的类型与它配套的解析函数住在一起,见 steer-text.ts 的文件头。
+import type { SteerText } from "./steer-text.js";
+
+export type { SteerText };
 
 export interface RunOpts {
   prompt: string;
@@ -25,14 +29,6 @@ export interface RunOpts {
 // event stream. The orchestrator records sessionId/commandLine for traceability
 // before/while consuming the stream. `kill` terminates the
 // underlying subprocess (manual stop) — the stream then ends like a normal exit.
-/**
- * 原生引导的正文。给函数 = **惰性**:等打断回执、跑完发送前清理之后,真正要写进 stdin 的
- * 那一刻才定稿。浏览器授权这类「用户随时可能在这几秒里改掉」的东西必须走这条路 —— 固定在
- * 等 ACK 之前的话,撤销的 PATCH 都已经 200 了,这条还没发出去的消息仍宣布「本项目已预先
- * 授权」(第 8 链第 1 轮审查 P1)。
- */
-export type SteerText = string | (() => string | Promise<string>);
-
 export interface RunHandle {
   cliCommand?: CliCommand;
   sessionId: string;
