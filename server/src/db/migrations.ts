@@ -392,6 +392,33 @@ async function relaxDebateRoundIndex(client: Client): Promise<void> {
   }
 }
 
+// 「声称来源确认过期限,却连来源是谁都不知道」的 claude 投影,把期限降回 unknown。
+//
+// `source_lifetime` 列早期的 ALTER 默认值是 'bounded'(已改成 'unknown',见 db/index.ts
+// 那一行的说明),所以在**那之前**升级过的库里,存量 claude 行被一律填成「来源确认过期限」
+// ——而它们的 `expires_at` 是拿 Monitor 入参那个 `timeout_ms`(请求值)算的。claude 会
+// `Math.min(请求值, 10 或 30 分钟)`,哪一档由账号 feature flag 决定,所以请求值不是事实,
+// 卡片上那句「盯到 X」没有依据。
+//
+// 判据取 `cli_session_id IS NULL`:会话归属列和 source_lifetime 是同一批加的,早期代码
+// 不写它,所以缺归属正好认出这批行。更要紧的是这个判据**不会误伤**——有归属的正确 bounded
+// 行一条都不碰,而缺归属的行无论新旧,期限都同样没有事实基础(连去问哪条会话都不知道)。
+//
+// 真实期限不会就此丢失:下次打开那个任务的哨兵面板,历史回填会重读来源回执把它升回
+// bounded,顺手把归属也补上(claude-monitor-backfill 的 mergeInto)。
+//
+// 幂等:降过之后不再匹配(source_lifetime 已不是 'bounded');列不存在时报错被吞。
+async function relaxUnfoundedClaudeMonitorLifetimes(client: Client): Promise<void> {
+  try {
+    await client.execute(
+      `UPDATE monitors SET source_lifetime='unknown'
+       WHERE kind='claude' AND source_lifetime='bounded' AND cli_session_id IS NULL`,
+    );
+  } catch {
+    /* 列还不存在 */
+  }
+}
+
 export async function runDataMigrations(client: Client): Promise<void> {
   await widenWorkflowBuiltinIndex(client);
   await relaxDebateRoundIndex(client);
@@ -407,6 +434,7 @@ export async function runDataMigrations(client: Client): Promise<void> {
     console.warn("[ash] 已验收任务遗留预约清理失败,忽略:", e);
   }
   await reclaimOrphanOwnerGroups(client);
+  await relaxUnfoundedClaudeMonitorLifetimes(client);
   // 事实没迁走的那几列留到下次启动:它们各自是唯一还认得出旧状态的证据。
   const keepColumns = new Set<string>();
   if (!mergeStatesMigrated) for (const column of MERGE_STATE_COLUMNS) keepColumns.add(column);

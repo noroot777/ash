@@ -34,12 +34,13 @@
 // 按 `description` 之类的内容去猜一律不行：两种后台任务的 description 长得一模一样。
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
-  claudeMonitorStatus, CLAUDE_MONITOR_ENDED_REASON, parseMonitorStartReceipt, type MonitorLifetime,
+  claudeMonitorStatus, CLAUDE_MONITOR_ENDED_REASON, monitorStatusCorrectable,
+  parseMonitorStartReceipt, type MonitorLifetime,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
+import { createLivenessProbe } from "./claude-monitor-liveness.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
-import { isSameProcess } from "./proc.js";
 import { id, now } from "./util.js";
 
 /** 一个内置 Monitor 的入参，从它的 tool_use 块上摘下来。 */
@@ -345,7 +346,7 @@ export class ClaudeMonitorTrace {
     const rowId = await this.locateRow(found.taskId, nativeId);
     if (!rowId) return;
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
-    if (!row || row.status !== "running") return;
+    if (!row || !monitorStatusCorrectable(row.status)) return;
     await db.update(monitors).set({
       sourceLifetime: lifetime,
       // 有限期才改到期时刻；持续监听没有到期时刻可言，那一列留着当占位。
@@ -364,7 +365,8 @@ export class ClaudeMonitorTrace {
     const rowId = await this.locateRow(found.taskId, nativeId);
     if (!rowId) return;
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
-    if (!row || row.status !== "running") return;
+    // `lost` 也要让路：那是 ash 推断的，来源侧后到的真终态是事实（见 monitorStatusCorrectable）。
+    if (!row || !monitorStatusCorrectable(row.status)) return;
     await db.update(monitors).set({
       status,
       endedAt: now(),
@@ -419,18 +421,10 @@ export class ClaudeMonitorTrace {
  * 开机收拾上一个 server 留下的 claude 投影 —— **只收来源进程确实已经不在的那些**。
  *
  * 这些行没有 pid，`reattachMonitors` 按 `kind` 把它们整批跳过了（它只认 ash 自己起的
- * 进程），所以必须有人来管；但判据不能是「本进程的账本里没有它」。
- *
- * **agent 活得过 ash 重启**（detached，见 executors/detached.ts）：ash 起来之后
- * `reattachRunningTasks` 把它接回来，任务继续跑、Monitor 继续盯。无条件把 running 的投影
- * 标成 lost，用户看到的就是「任务还在输出、哨兵却说进程已不在」，而且来源侧后来真的报完成
- * 时也不会改回来——第 1 轮审查用真实 detached 接管 + 真实子进程复现了这一幕。
- *
- * 所以判据改成**来源进程的死活**，与 ash 哨兵那边同构（那边比 pid + 启动时刻，这边比它
- * 所属会话的 agent 进程）：
- * - 会话还在、agent 进程还是当初那个 → 留着 running，让接回来的 trace 继续认领它
- *   （`ClaudeMonitorTrace` 建起来就会 reclaim，见那边的说明）。
- * - 会话没了、或 agent 进程确实不在（pid 对不上、或压根没记 pid）→ 落 lost。
+ * 进程），所以必须有人来管；但判据不能是「本进程的账本里没有它」—— **agent 活得过 ash
+ * 重启**（detached，见 executors/detached.ts），无条件标 lost 会让用户看到「任务还在输出、
+ * 哨兵却说进程已不在」。判据本体和它栽过的三次跟头都在 `claude-monitor-liveness.ts`，
+ * 那边是回填与这里共用的唯一一份。
  *
  * 与 `finishAll()` 的分工：那边管「agent 进程正常结束」的常规路径，这边只兜「ash 自己重启
  * 了，得重新判一次谁还活着」。
@@ -447,51 +441,14 @@ export async function loseDeadClaudeMonitors(): Promise<{ kept: number; lost: nu
     .where(and(eq(monitors.kind, "claude"), eq(monitors.status, "running")));
   if (!rows.length) return { kept: 0, lost: 0 };
 
-  // 会话的 agent 进程还在不在。一条会话上可能挂着好几个投影，查一次就够。
-  const alive = new Map<string, boolean>();
-  const anyLive = (rows: { pid: number | null; startedAt: string | null }[]): boolean =>
-    rows.some((r) => !!r.pid && isSameProcess(r.pid, r.startedAt ?? null));
-
-  const sessionAlive = async (cliSessionId: string | null): Promise<boolean> => {
-    if (!cliSessionId) return false;
-    const cached = alive.get(cliSessionId);
-    if (cached !== undefined) return cached;
-    const rows = await db
-      .select({ pid: sessions.agentPid, startedAt: sessions.agentStartedAt })
-      .from(sessions)
-      .where(eq(sessions.cliSessionId, cliSessionId));
-    const live = anyLive(rows);
-    alive.set(cliSessionId, live);
-    return live;
-  };
-
-  /**
-   * 没记来源会话的存量行（`cli_session_id` 这一列上线之前落的）怎么判。
-   *
-   * **「不知道」不等于「已经死了」。** 原来直接判死，于是升级之后，那些来源 agent 明明还
-   * 在跑的旧投影会被一次性标成「进程已不在」（第 2 轮审查实测 sourceAlive=true 却被标
-   * lost）。退一步按**任务**反查：这个任务名下只要还有活着的 claude agent，就说明来源还
-   * 在，留着；整个任务都没有活着的 agent 了，才算确实没了。
-   */
-  const taskAlive = new Map<string, boolean>();
-  const taskStillRunning = async (taskId: string): Promise<boolean> => {
-    const cached = taskAlive.get(taskId);
-    if (cached !== undefined) return cached;
-    const rows = await db
-      .select({ pid: sessions.agentPid, startedAt: sessions.agentStartedAt })
-      .from(sessions)
-      .where(and(eq(sessions.taskId, taskId), eq(sessions.agentType, "claude")));
-    const live = anyLive(rows);
-    taskAlive.set(taskId, live);
-    return live;
-  };
+  // 存活判据只有一份，住在 claude-monitor-liveness.ts——回填那边问的是同一个问题
+  // （「历史里没读到终态，是早就没了还是现在还在盯着」），两处必须给出同一个答案。
+  const probe = createLivenessProbe();
 
   const dead: { id: string; taskId: string }[] = [];
   let kept = 0;
   for (const row of rows) {
-    const live = row.cliSessionId
-      ? await sessionAlive(row.cliSessionId)
-      : await taskStillRunning(row.taskId); // 缺凭据：按任务兜底，别直接判死
+    const live = await probe.sourceAlive(row.cliSessionId, row.taskId);
     if (live) kept += 1;
     else dead.push({ id: row.id, taskId: row.taskId });
   }

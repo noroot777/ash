@@ -53,25 +53,77 @@ export type MonitorLifetime = (typeof MONITOR_LIFETIMES)[number];
 /**
  * 从 claude 起 Monitor 的回执里读**实际生效**的期限。
  *
- * 回执长这样：`Monitor started (task bvvsd32ii, expires in 20m unless the source ends
- * first; ...)`。这是来源侧唯一一处说出生效值的地方——它已经把请求值钳过了，所以它才是
- * 事实，`timeout_ms` 只是我们请求了什么。
+ * 回执由来源侧这段代码拼出来（本机 claude 2.1.283 的 `mapToolResultToToolResultBlockParam`
+ * 原文，三个分支互斥）：
  *
- * 认不出来一律返回 `unknown` 而不是退回请求值：两者不同的那种情况（来源钳了）恰恰是这个
- * 函数存在的全部理由，退回去等于白做。
+ * ```js
+ * let r = e.persistent ? "persistent — runs until TaskStop or session end"
+ *   : eX() ? `expires in ${Zt(e.timeoutMs,{hideTrailingZeros:!0})} unless the source ends first; …`
+ *   : `timeout ${e.timeoutMs}ms`;
+ * ```
+ *
+ * 三个分支都得认，而且 `e.timeoutMs` 已经是**钳过的生效值**（`Math.min(请求值, 10 或 30
+ * 分钟)`，哪一档由账号 feature flag 决定），所以回执才是事实，入参那个 `timeout_ms` 只是
+ * 我们请求了什么。认不出来一律 `unknown` 而不是退回请求值：两者不同的那种情况（来源钳了）
+ * 恰恰是这个函数存在的全部理由。
+ *
+ * ── 为什么不能只取第一个「值+单位」────────────────────────────────────────────
+ *
+ * `expires in` 那段走的是 `Zt()`，一个**多段**时长 formatter：
+ *
+ * ```js
+ * if(o>0){ if(c&&s===0) return`${o}m`; return`${o}m ${s}s` }   // c = hideTrailingZeros
+ * ```
+ *
+ * 也就是说 90 秒印成 `1m 30s`、1790 秒印成 `29m 50s`。只匹配首个数值单位对会把它们读成
+ * 1 分钟和 29 分钟——卡片上少掉的那几十秒正好落在用户最关心的「还剩多久」上（第 3 轮审查
+ * 实测三组：90s→少 30s、1790s→少 50s、3599s→少 59s）。所以这里**把整串求和**。
+ *
+ * 求和的范围必须锚在 `expires in` 之后那一串连续的「值+单位」上，不能对全文做全局匹配：
+ * 后台任务 id 形如 `b12m34`，全局扫会把里面的 `12m` 当成时长吃进来。
  */
 export function parseMonitorStartReceipt(text: string): { lifetime: MonitorLifetime; ms: number | null } {
   if (!/Monitor started/i.test(text)) return { lifetime: "unknown", ms: null };
-  // 没有到期、明说持续盯着的那种。
+  // ① 不设会话内超时，盯到 TaskStop 或会话结束。
   if (/\bpersistent\b/i.test(text) && !/expires in/i.test(text)) return { lifetime: "persistent", ms: null };
-  const m = /expires in\s+(\d+(?:\.\d+)?)\s*(ms|s|m|h)\b/i.exec(text);
-  if (!m) return { lifetime: "unknown", ms: null };
-  const value = Number(m[1]);
-  if (!Number.isFinite(value) || value <= 0) return { lifetime: "unknown", ms: null };
-  const unit = m[2]!.toLowerCase();
-  const scale = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
-  return { lifetime: "bounded", ms: Math.round(value * scale) };
+  // ② `expires in 29m 50s unless …`：一串空格分隔的值+单位，遇到散文自然终止。
+  const span = /expires in\s+((?:\d+(?:\.\d+)?\s*(?:ms|s|m|h|d)\b[\s,]*)+)/i.exec(text);
+  if (span) {
+    let total = 0;
+    for (const part of span[1]!.matchAll(/(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)\b/gi)) {
+      const value = Number(part[1]);
+      if (!Number.isFinite(value)) return { lifetime: "unknown", ms: null };
+      total += value * MONITOR_UNIT_MS[part[2]!.toLowerCase() as keyof typeof MONITOR_UNIT_MS];
+    }
+    return total > 0 ? { lifetime: "bounded", ms: Math.round(total) } : { lifetime: "unknown", ms: null };
+  }
+  // ③ `timeout 90000ms`：feature flag 关掉时的那一支。原始毫秒，同样是生效值。
+  const plain = /\btimeout\s+(\d+)\s*ms\b/i.exec(text);
+  if (plain) {
+    const ms = Number(plain[1]);
+    if (Number.isFinite(ms) && ms > 0) return { lifetime: "bounded", ms };
+  }
+  return { lifetime: "unknown", ms: null };
 }
+
+/** `Zt()` 印得出的单位。小时/天在 Monitor 的量级上用不到，认它们是零成本的鲁棒性。 */
+const MONITOR_UNIT_MS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
+
+/**
+ * 这一行当前的状态，**能不能被来源侧后到的事实改写**。
+ *
+ * 投影里的状态有两种出身，优先级不对等：
+ * - **来源事实**：`stopped` / `exited` / `expired` 都是来源侧的 `task_notification` 说出来
+ *   的。它们不该被改写——流被重放、resume 后 CLI 重发，都不该把已成定局的结局翻过来。
+ * - **ash 推断**：`lost` 是**我们猜的**（流断了、ash 重启后判来源进程已不在）。猜错很正常：
+ *   agent 活得过 ash 重启，一次误判之后来源侧可能照常送来 `completed`。
+ *
+ * 所以 `lost` 必须对纠正开放。原来 `close` 只认 `running`，于是「先被误判 lost、来源后来报
+ * 完成」的那条路上，错误被永久固化（第 3 轮审查实测：来源还活着的卡片写着 lost，真 completed
+ * 到了仍是 lost）。`running` 当然也开放——那是还没有结局。
+ */
+export const monitorStatusCorrectable = (status: string): boolean =>
+  status === "running" || status === "lost";
 
 /** 能不能从 ash 这边停掉它。`claude` 那种的进程在 agent 进程树里，ash 够不着。 */
 export const canStopMonitor = (kind: MonitorKind) => kind === "ash";
@@ -121,21 +173,41 @@ export function isMonitorLive(status: MonitorStatus): boolean {
  * 时长：**与 claude 内置 `Monitor` 对齐**（用户 2026-10-14 指定）。
  *
  * 两种哨兵并排显示在同一个面板里，时长语义就不该各说各话——一个缺省 2 小时、另一个缺省
- * 5 分钟，用户看两张卡上的「还剩多久」会得出互相矛盾的预期。claude 那边是缺省 5 分钟、
- * 超过 30 分钟一律钳到 30 分钟，这里照搬。
+ * 5 分钟，用户看两张卡上的「还剩多久」会得出互相矛盾的预期。
  *
- * 取舍要说清楚：ash 哨兵原本能盯 24 小时，这是它相对内置 Monitor 的硬优势之一（进程不在
- * agent 进程树里，本来就撑得住）。对齐之后那条优势缩到 30 分钟，更长的活得靠「到期续挂」。
- * 换来的是两种卡的时间读数可以直接相互比较。要改回去只动下面这两个常量。
+ * ── 对齐到哪一层：claude 的上限是**两层**，这里对齐的是 schema 那层 ──────────────
  *
- * 下限同样对齐到 1 秒（本机 claude 2.1.283 的 Monitor schema 两个模式都是 1000ms）。
- * 一开始留的 60 秒是「ash 要 spawn 进程 + 起 tail，1 秒的哨兵没意义」——但那是**建议**
- * 不是**边界**，拿它当硬下限会让 ash 连「claude 挂得出来的那种哨兵」都挂不了，而用户要的
- * 就是两边能力一致。短得没意义的时长由调用方自己负责。
+ * 本机 claude 2.1.283 的 Monitor 常量原文：
+ *
+ * ```js
+ * var Bat=300000, QHt=3600000, o=1800000, r=600000;
+ * function xLe(){ return PUe() ? r : o }                      // 运行时软钳
+ * timeout_ms: C().min(1000).max(QHt, `timeout_ms must be ≤ ${QHt}`).optional().default(Bat)
+ * ```
+ *
+ * - **schema 硬上限 `QHt` = 60 分钟**：超过它参数校验直接报错，这个工具**接受**的最大值。
+ *   静态常量，不随账号变。
+ * - **运行时软钳 `xLe()` = 10 或 30 分钟**：由 `PUe()` 这个 feature flag 决定哪一档，
+ *   在 `Math.min(请求值, xLe())` 里生效。**因账号而异**，而且来源侧钳完会在回执里如实说。
+ *
+ * 对齐取前者。取软钳是错的（前两轮我取了 30 分钟 = `o` 那一档，第 3 轮审查三次指出）：
+ * 那个值跟着别人的 feature flag 变，ash 这边没有可靠的探测手段，拿它当自己的硬边界等于
+ * 把一个猜测写进契约。「claude 支持多长」问的是它**肯接受**多长，那就是 60 分钟。
+ *
+ * 软钳不跟还有一层理由：ash 哨兵的进程不在 agent 进程树里，本来就撑得住，钳不钳是来源侧
+ * 的服务端策略，不是能力边界。来源侧真钳了，`parseMonitorStartReceipt` 会从回执里读到生效
+ * 值，投影卡显示的仍是事实——两种卡的读数照样能相互比较。
+ *
+ * 取舍仍要说清：ash 哨兵原本能盯 24 小时，对齐之后缩到 60 分钟，更长的活得靠「到期续挂」。
+ * 要改回去只动下面这三个常量。
+ *
+ * 下限同样对齐到 1 秒（`min(1000)`）。一开始留的 60 秒是「ash 要 spawn 进程 + 起 tail，
+ * 1 秒的哨兵没意义」——但那是**建议**不是**边界**，拿它当硬下限会让 ash 连「claude 挂得
+ * 出来的那种哨兵」都挂不了，而用户要的就是两边能力一致。
  */
 export const MONITOR_DEFAULT_TIMEOUT_MS = 5 * 60_000;
 export const MONITOR_MIN_TIMEOUT_MS = 1_000;
-export const MONITOR_MAX_TIMEOUT_MS = 30 * 60_000;
+export const MONITOR_MAX_TIMEOUT_MS = 60 * 60_000;
 
 /**
  * 手动表单的时长选项。**从上面那几个常量推导，不另列一张硬编码表**。

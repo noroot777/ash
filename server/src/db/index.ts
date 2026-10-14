@@ -132,7 +132,7 @@ export async function ensureSchema() {
       started_at TEXT NOT NULL, expires_at TEXT NOT NULL,
       ended_at TEXT, ended_reason TEXT, owner_user_id TEXT,
       kind TEXT NOT NULL DEFAULT 'ash', native_id TEXT, cli_session_id TEXT,
-      source_lifetime TEXT NOT NULL DEFAULT 'bounded'
+      source_lifetime TEXT NOT NULL DEFAULT 'unknown'
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -301,7 +301,11 @@ export async function ensureSchema() {
     "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
     "ALTER TABLE monitors ADD COLUMN native_id TEXT",
     "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",
-    "ALTER TABLE monitors ADD COLUMN source_lifetime TEXT NOT NULL DEFAULT 'bounded'",
+    // 默认值是 'unknown' 而**不是** 'bounded'：加列那一刻的存量行里，claude 投影的
+    // expires_at 是拿 Monitor 入参那个 timeout_ms（请求值）算的，来源侧真钳了就是错的。
+    // 填 'bounded' 等于声称「来源确认过这个期限」，把编出来的时刻变成事实。ash 自己起的
+    // 哨兵期限确实是自己定的，由紧随其后的那条 UPDATE 刷回 'bounded'（见下）。
+    "ALTER TABLE monitors ADD COLUMN source_lifetime TEXT NOT NULL DEFAULT 'unknown'",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
@@ -549,6 +553,13 @@ export async function ensureSchema() {
     );
   } catch (e) {
     console.warn("[ash] monitors_native 索引创建失败,忽略:", e);
+  }
+  // ash 自己起的哨兵期限是它自己定的,`bounded` 对它恒成立 —— 上面那个 ALTER 为了不给
+  // claude 投影编期限把默认值设成了 'unknown',这里把 ash 那半刷回来。幂等。
+  try {
+    await client.execute("UPDATE monitors SET source_lifetime='bounded' WHERE kind='ash' AND source_lifetime<>'bounded'");
+  } catch {
+    /* 列还不存在 */
   }
   await ensureChatSchema(client);
   // DDL 到此为止。剩下那一半(一次性数据搬运 + 退役字段/表清理)在 `migrations.ts`。

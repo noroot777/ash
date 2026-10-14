@@ -10,6 +10,7 @@
 // 内嵌而不是去读 data/runs：那些文件会被 run-logs-gc 回收，依赖它们的测试迟早变成
 // 「跳过」而没人发现。
 import { eq } from "drizzle-orm";
+import { parseMonitorStartReceipt } from "@ash/shared/monitor";
 import { db, makeTask, now, sessions, monitors, listMonitors, teardown } from "./monitors-fixture.js";
 
 const { ClaudeMonitorTrace } = await import("../src/claude-monitors.js");
@@ -224,11 +225,61 @@ async function main(): Promise<void> {
   const fvDto = (await listMonitors(taskId)).find((m) => m.nativeId === "bforever");
   check(fvDto?.expiresAt === null, "持续监听对外不给到期时刻（给了就是假的）", String(fvDto?.expiresAt));
 
+  // ⑮ **误判过的 lost 要能被来源事实纠正。**
+  // `lost` 是 ash 推断的（流断了、重启后判来源已不在），不是来源说的。agent 活得过 ash
+  // 重启，所以推断错很正常——错了之后来源照常送来 completed，那时必须改回来。第 3 轮审查
+  // 实测：卡片被误判成 lost 之后，真 completed 到了仍然是 lost，错误永久固化。
+  const mis = new ClaudeMonitorTrace(CLI_SESSION);
+  mis.toolUse("Monitor", { command: "tail -F /tmp/mis", description: "被误判的", timeout_ms: 600_000 }, "toolu_mis");
+  mis.event({ type: "system", subtype: "task_started", task_id: "bmis001", tool_use_id: "toolu_mis",
+    description: "被误判的", task_type: "local_bash", session_id: CLI_SESSION });
+  await settle();
+  // 模拟一次误判（开机清扫把来源判死了，而其实它还在）。
+  await db.update(monitors).set({ status: "lost", endedAt: now(), endedReason: "推断：进程已不在" })
+    .where(eq(monitors.nativeId, "bmis001"));
+  mis.event({ type: "system", subtype: "task_notification", task_id: "bmis001", status: "completed",
+    summary: "其实我跑完了", session_id: CLI_SESSION });
+  await settle();
+  const fixed = (await db.select().from(monitors).where(eq(monitors.nativeId, "bmis001"))).at(0);
+  check(fixed?.status === "exited", "被误判成 lost 的，来源报完成时纠正回来", String(fixed?.status));
+  check(fixed?.endedReason === "其实我跑完了", "结束说明也跟着换成来源说的", String(fixed?.endedReason));
+
+  // 反过来：来源**已经说过**的终态不该被重放翻案（否则显示跟着扫描次数变）。
+  // 用 `stopped` 而不是 `failed`——后者和 `completed` 一样映射成 `exited`，断言会免费通过。
+  mis.event({ type: "system", subtype: "task_notification", task_id: "bmis001", status: "stopped",
+    summary: "重放的旧事件", session_id: CLI_SESSION });
+  await settle();
+  const kept = (await db.select().from(monitors).where(eq(monitors.nativeId, "bmis001"))).at(0);
+  check(kept?.status === "exited", "来源已定的终态不被重放改写", String(kept?.status));
+
+  // ⑯ **复合时长**：来源侧那个 formatter 是多段的（`Zt()`，本机 claude 2.1.283），
+  // 90 秒印成 `1m 30s`。只取首个数值单位对会读成 60 秒，少掉的那半正好落在用户最关心的
+  // 「还剩多久」上（第 3 轮审查实测 90s/1790s/3599s 分别少 30s/50s/59s）。
+  for (const [text, want, label] of [
+    ["expires in 1m 30s unless the source ends first", 90_000, "1m 30s → 90 秒"],
+    ["expires in 29m 50s unless the source ends first", 1_790_000, "29m 50s → 1790 秒"],
+    ["expires in 59m 59s unless the source ends first", 3_599_000, "59m 59s → 3599 秒"],
+    ["expires in 1h 30m 20s unless the source ends first", 5_420_000, "1h 30m 20s → 5420 秒"],
+    ["expires in 30m unless the source ends first", 1_800_000, "整分仍然对"],
+    ["expires in 45s unless the source ends first", 45_000, "不足一分钟那支"],
+    // feature flag 关掉时走的第三支：`timeout ${timeoutMs}ms`，同样是钳过的生效值。
+    ["timeout 90000ms", 90_000, "timeout 90000ms 这一支也认"],
+  ] as const) {
+    const got = parseMonitorStartReceipt(`Monitor started (task b12m34, ${text}).`);
+    check(got.lifetime === "bounded" && got.ms === want, `回执期限：${label}`,
+      `${got.lifetime}/${got.ms}（应为 bounded/${want}）`);
+  }
+  // 后台任务 id 里带「数值+单位」的诱饵不能被当成时长吃掉。
+  check(parseMonitorStartReceipt("Monitor started (task b12m34, persistent — runs until TaskStop or session end).").lifetime === "persistent",
+    "persistent 分支不被 id 里的 `12m` 带偏");
+  check(parseMonitorStartReceipt("Bash started in background with id b12m34").lifetime === "unknown",
+    "不是 Monitor 回执的一概不认");
+
   if (failures) {
     console.error(`\n${failures} 条断言未通过`);
     process.exitCode = 1;
   } else {
-    console.log("✓ claude 内置 Monitor 认人：识别与归属 / 终态 / 幂等 / 子智能体 / 无 init 的接管认回 / 持久归属收尾 / 认领失败可重试 / 期限以来源回执为准(含 persistent) 均受回归保护");
+    console.log("✓ claude 内置 Monitor 认人：识别与归属 / 终态 / 幂等 / 子智能体 / 无 init 的接管认回 / 持久归属收尾 / 认领失败可重试 / 期限以来源回执为准(含 persistent、复合时长、timeout 那一支) / 误判的 lost 可被来源事实纠正且已定终态不翻案 均受回归保护");
   }
 }
 
