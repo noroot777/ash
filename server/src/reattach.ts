@@ -19,7 +19,7 @@ import { IS_WINDOWS } from "./platform.js";
 import { findMcpChannelHolders } from "./mcp-holders.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { withSkillInvocation } from "./skills.js";
-import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
@@ -161,9 +161,11 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         cliSessionId: sess.cliSessionId ?? "",
         autoTitle: false, role: sess.role as SessionRole, // 标题在被打断之前那一段就已经解析过了
         nativeSteer: {
-          prepare: (text) => withGlobalBrowserPolicy(
+          // 接回的会话同样现读:重启不该把一份过期授权一直带下去。
+          prepare: async (text) => withGlobalBrowserPolicy(
             withSkillInvocation({ agentType: sess.agentType as AgentType, cwd: sess.cwd ?? "", text, userId: task.ownerUserId }),
             "reminder",
+            await browserGrantForProject(task.projectId),
           ),
           record: (text, at) => recordUserConversationTurn({
             taskId: task.id, sessionId: sess.id, role: sess.role as SessionRole,

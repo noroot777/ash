@@ -1,4 +1,5 @@
 import type { AgentType } from "@ash/shared";
+import type { SteerText } from "./executors/types.js";
 import type { CliCommand, CliGoal } from "@ash/shared/cli-commands";
 
 // Registry of in-flight agent subprocesses, keyed by task, so a running task can
@@ -10,7 +11,7 @@ import type { CliCommand, CliGoal } from "@ash/shared/cli-commands";
 
 export interface Killable {
   kill(): void;
-  steer?(text: string, beforeSend?: () => void | Promise<void>): Promise<void>;
+  steer?(text: SteerText, beforeSend?: () => void | Promise<void>): Promise<void>;
   command?(command: CliCommand): Promise<string>;
   goal?(): CliGoal | null;
 }
@@ -22,9 +23,9 @@ export type StopSettle = "canceled" | "paused";
 const handles = new Map<string, Set<Killable>>();
 const stopping = new Map<string, StopSettle>();
 type NativeSteerTarget = {
-  handle: Killable & { steer(text: string, beforeSend?: () => void | Promise<void>): Promise<void> };
+  handle: Killable & { steer(text: SteerText, beforeSend?: () => void | Promise<void>): Promise<void> };
   agentType: AgentType;
-  prepare(text: string): string;
+  prepare(text: string): string | Promise<string>;
   beforeDeliver?(at: string): void | Promise<void>;
   record(text: string, at: string): void;
 };
@@ -74,14 +75,14 @@ export function bindNativeSteer(
   handle: Killable,
   input: {
     agentType: AgentType;
-    prepare?(text: string): string;
+    prepare?(text: string): string | Promise<string>;
     beforeDeliver?(at: string): void | Promise<void>;
     record(text: string, at: string): void;
   },
 ): void {
   if (!handle.steer || !handles.get(taskId)?.has(handle)) return;
   nativeSteerTargets.set(taskId, {
-    handle: handle as Killable & { steer(text: string, beforeSend?: () => void | Promise<void>): Promise<void> },
+    handle: handle as Killable & { steer(text: SteerText, beforeSend?: () => void | Promise<void>): Promise<void> },
     agentType: input.agentType,
     prepare: input.prepare ?? ((text) => text),
     beforeDeliver: input.beforeDeliver,
@@ -126,7 +127,11 @@ export function reserveNativeSteerTask(taskId: string): NativeSteerReservation {
           throw new Error("当前活动回合已经结束");
         }
         await target.beforeDeliver?.(at);
-        await target.handle.steer(target.prepare(opts?.promptText ?? text), opts?.beforeSend);
+        // prepare **惰性传进去**:它要现读浏览器授权,而 steer 还要等一个最多 2 秒的打断
+        // 回执。在这里就把正文拼死的话,用户在那几秒里收回授权(PATCH 都 200 了)也拦不住,
+        // 这条还没写进 stdin 的消息照样宣布「已预先授权」(第 8 链第 1 轮审查 P1)。
+        // 执行器保证它在 ACK 与发送前清理都跑完之后、写 stdin 之前才调用。
+        await target.handle.steer(() => target.prepare(opts?.promptText ?? text), opts?.beforeSend);
         // provider 已确认收到以后，消息就已经是真实投递；实时广播失败不能把它退回队列
         // 再投一次，否则同一句会进入模型两遍。
         try { target.record(text, at); } catch (error) {

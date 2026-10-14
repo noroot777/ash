@@ -30,6 +30,9 @@ export interface Project {
   // 分支的工作区并暂存，目标分支 ref 一动不动，提交与否由人自己决定。这是**项目默认**，
   // 每次验收都能单独覆盖（验收确认框里那个勾）。
   acceptCommit: boolean;
+  // 本项目的任务可以用用户已登录的 Chrome **只读**哪些站点（裸主机名，含子域）。
+  // 空数组 = 不授权，也是默认值；取舍见本文件末尾 normalizeBrowserCdpDomains。
+  browserCdpDomains: string[];
   createdAt: string;
 }
 
@@ -140,4 +143,67 @@ export interface Group {
   // 它的成员都是那个任务的执行者。分组管理界面不列它 —— 用户在团队视图里看。
   ownerTaskId?: string | null;
   createdAt: string;
+}
+
+// ── 浏览器登录态授权(2026-10-13)───────────────────────────────────────────────
+// 「这个项目的任务可以用用户已登录的 Chrome 去读哪些站点」。空数组 = 不授权,也是默认值。
+//
+// 为什么是**域名列表**而不是「开关 + 白名单」两个字段:两个字段能摆出「开关开着但白名单
+// 空」这种没有归宿的状态,读侧还得替它决定算开还是算关。一个列表把开关和范围压成同一件
+// 事 —— 非空即授权,内容即范围。
+//
+// 为什么住在**项目**这一层:跟 useWorktreeDefault 同类 —— 「允许用登录态读 x.com」是这个
+// 项目自己的性质(它就是干这个的),不是「我这个人喜欢怎样」。放全局等于对所有项目敞开。
+export const MAX_BROWSER_CDP_DOMAINS = 20;
+
+/**
+ * 归一化用户填的域名白名单。宽进严出:允许粘 URL、带协议、带路径、带端口、大小写混写,
+ * 出门一律是裸小写主机名。认不出形状的整条丢掉 —— 一条进不了白名单只是少放行一个站点,
+ * 而一条脏数据混进去,匹配时就可能把**别的**站点也当成已授权。
+ */
+export function normalizeBrowserCdpDomains(input: unknown): string[] {
+  // 一行文本(用户在输入框里敲的)按常见分隔符拆开;**数组项不拆** —— 数组是调用方给的
+  // 结构化输入,一项就是一条,含空格就是形状不对,拆开反而会把 "a b.com" 悄悄变成授权
+  // b.com。严出优先:少放行一个站点无所谓,多放行一个就是把登录态交给了别人。
+  const tokens = typeof input === "string" ? input.split(/[\s,，、]+/)
+    : Array.isArray(input) ? input.filter((value): value is string => typeof value === "string")
+    : [];
+  const out: string[] = [];
+  for (const token of tokens) {
+    const host = browserCdpHostOf(token);
+    if (!host || out.includes(host)) continue;
+    out.push(host);
+    if (out.length >= MAX_BROWSER_CDP_DOMAINS) break;
+  }
+  return out;
+}
+
+/**
+ * 一条输入里的主机名,认不出就是 null。
+ *
+ * **必须走标准 URL 解析**,不要自己按顺序剥 `@` / `?` / `#`:剥错一步就会授权到别的站点。
+ * 曾经的写法是「先删 @ 及其左边,再删查询串」,于是
+ * `https://x.com?contact=user@weibo.com` 被解析成 weibo.com —— 用户以为授权了 x.com,
+ * 实际把自己的微博登录态交了出去。这类错误没有声音,必须靠解析器而不是正则来挡。
+ */
+export function browserCdpHostOf(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const text = input.trim();
+  if (!text) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`;
+  let host: string;
+  try { host = new URL(withScheme).hostname; } catch { return null; }
+  host = host.toLowerCase().replace(/\.+$/, "");
+  // 只认得出「至少两段、每段合法」的主机名。单段(localhost)、IP、IPv6 方括号一律不收:
+  // 登录态场景里它们没有意义,而它们恰好是最容易误放行的形状。
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) return null;
+  if (/^\d+(\.\d+)+$/.test(host)) return null;
+  if (host.length > 253) return null;
+  return host;
+}
+
+/** 一个主机名是否落在白名单里。授权 `x.com` 连带授权它的子域,但不连带 `notx.com`。 */
+export function browserCdpDomainAllowed(host: string, allowed: readonly string[]): boolean {
+  const h = host.trim().toLowerCase().replace(/\.+$/, "");
+  return allowed.some((d) => h === d || h.endsWith(`.${d}`));
 }

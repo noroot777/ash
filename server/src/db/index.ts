@@ -490,6 +490,8 @@ export async function ensureSchema() {
     "ALTER TABLE projects ADD COLUMN commands_config TEXT",
     // 验收合并完落不落提交（1 = 老行为，落提交）。见 db/schema.ts 同名列。
     "ALTER TABLE projects ADD COLUMN accept_commit INTEGER NOT NULL DEFAULT 1",
+    // 项目级浏览器登录态授权白名单（JSON 字符串数组）。空/null = 不授权,是默认。
+    "ALTER TABLE projects ADD COLUMN browser_cdp_domains TEXT",
     // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────
     // 归属列。全部可空:自用模式下恒为 null,转多人时由向导一次性实名化成初始管理员。
     "ALTER TABLE tasks ADD COLUMN owner_user_id TEXT",

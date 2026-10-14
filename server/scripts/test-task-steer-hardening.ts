@@ -347,7 +347,9 @@ try {
   let recordedTurn = "";
   const attachmentHandle = {
     kill: () => { attachmentKills += 1; },
-    steer: async (text: string) => { steeredPrompt = text; },
+    steer: async (text: string | (() => string | Promise<string>)) => {
+      steeredPrompt = typeof text === "function" ? await text() : text;
+    },
   };
   runs.trackRun("native-attachment", attachmentHandle);
   runs.bindNativeSteer("native-attachment", attachmentHandle, {

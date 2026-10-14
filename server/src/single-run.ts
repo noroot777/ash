@@ -281,7 +281,7 @@ export async function consumeSingleRun(a: {
   autoTitle: boolean;
   role?: SessionRole;
   nativeSteer?: {
-    prepare?(text: string): string;
+    prepare?(text: string): string | Promise<string>;
     record(text: string, at: string): void;
   };
 }): Promise<void> {

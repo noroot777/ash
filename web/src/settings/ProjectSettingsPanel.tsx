@@ -10,6 +10,7 @@ import { ProjectGitSettings } from "./ProjectGitSettings.tsx";
 import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
 import { ProjectPreviewSettings } from "./ProjectPreviewSettings.tsx";
 import { ProjectCommandsSettings } from "./ProjectCommandsSettings.tsx";
+import { ProjectBrowserAccessSettings } from "./ProjectBrowserAccessSettings.tsx";
 
 // 改名 / 改目录 / 默认起手式 / 删除项目都是**项目设置**,按权限表只给项目管理员与实例
 // 管理员(§四)。后端本来就会 403,但把必然失败的控件摆在成员面前,他只会以为是自己点坏了
@@ -160,6 +161,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
       </div></section>
       <ProjectPreviewSettings key={project.id} project={project} onUpdated={onUpdated} notify={notify} />
       <ProjectCommandsSettings key={`commands-${project.id}`} project={project} onUpdated={onUpdated} notify={notify} />
+      <ProjectBrowserAccessSettings key={`browser-${project.id}`} project={project} onUpdated={onUpdated} notify={notify} canManage={canManage} />
       <section className="settings-section"><h2>验收</h2><div className="settings-card">
         <div className="settings-row">
           <div>

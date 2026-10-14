@@ -20,8 +20,9 @@ import { noteAgentEventUpload } from "../uploads.js";
 import type { SessionTraceEvent } from "../transcript.js";
 import { isSessionScopeNotice } from "../session-notice.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
-import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { consumeInbound } from "./inbound-queue.js";
+import { sendToLead } from "./lead-delivery.js";
+import type { PendingInbound } from "./inbound-queue.js";
 import {
   idleRotation,
   onFreshSession,
@@ -389,22 +390,6 @@ function retireLead(lead: Lead): void {
   out.end();
 }
 
-/**
- * 把一条消息交给这台调度台的进程,**返回它收下了没有**(见 ResidentHandle.send)。
- *
- * 拿不到回执就只能假定送到了,而两种常驻实现都会静默拒收:codex 在 `ended || closing`
- * 时直接返回,claude 在 stdin 已关时写不进去。抛错同样按「没收下」算 —— 一次注入失败不该
- * 掀掉整台调度台(理由同 persistOrReport),但更不能被当成送到了。
- */
-function sendToLead(lead: Lead, text: string): boolean {
-  try {
-    return lead.handle.send(withGlobalBrowserPolicy(text, "reminder"));
-  } catch (error) {
-    console.error(`[ash] team send(${lead.taskId}) failed:`, error);
-    return false;
-  }
-}
-
 function clearStatusRetry(lead: Lead): void {
   if (lead.statusTimer) clearTimeout(lead.statusTimer);
   lead.statusTimer = null;
@@ -484,15 +469,22 @@ async function endTurn(lead: Lead): Promise<void> {
   flushSessionNotices(lead);
   if (lead.pending.length) {
     await flushUnqueued(lead); // 上次写库被拒的那几条,趁这会儿补进队列
-    const batch = lead.pending;
+    // **快照,不是引用**。`sendToLead` 要 await(投递前现读浏览器授权),这期间调度台可能
+    // 又忙起来(用户插话)并收下新的执行者汇报,它们会追加进同一个 `lead.pending`。拿引用的
+    // 话,下面 `lead.pending = []` 把新来的一起清掉、`batch` 里的 seq 也把它们的行一并销账
+    // —— 一份从没交给调度者的执行结果就此永久消失,刷新、续聊、换台都找不回来
+    // (第 7 链第 1 轮审查 P1)。
+    const batch = [...lead.pending];
     const merged = batch.map((m) => m.text).join("\n\n---\n\n");
     const at = now();
     // 顺序是刻意的:**收下了才算送出去**。先销账、先落盘再 send 的话,send 一拒收
     // (进程正在收尾)这批汇报就再也没人送得出去了 —— 下一台健康调度台永远等不到
     // (2026-08-26 第 11 轮审查)。落盘同样要等收下之后:没送成还记一条「已投递」的
     // system turn,下一台真送成时同一份汇报在 .md 里就是两条。
-    if (sendToLead(lead, merged)) {
-      lead.pending = [];
+    if ((await sendToLead(lead, merged)).sent) {
+      // 只摘走这一批(按对象身份)。await 期间新来的留在队列里,下一次回合收尾照常送。
+      const sent = new Set<PendingInbound>(batch);
+      lead.pending = lead.pending.filter((m) => !sent.has(m));
       // 销账失败宁可重送不可丢:行还在就是下一台会再送一遍(.md 里会多一条),而删早了
       // 是永久消失。所以这里只上报,不回滚也不掀掉这台调度台。
       // seq=null 的压根没进过队列(写库被拒),没有账可销。
@@ -674,6 +666,5 @@ function armIdle(lead: Lead): void {
     recordSystemTurn,
     reportLeadFailure,
     retireLead,
-    sendToLead,
   };
 }

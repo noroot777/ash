@@ -1,0 +1,76 @@
+/* 项目设置「浏览器登录态」节(ProjectBrowserAccessSettings.tsx)。 */
+
+/* .settings-card 自己不带内边距(一向由里面的 .settings-row 给),这一节没有 .settings-row,
+   所以三块各自补上 —— 左右一律 16px,跟同页其它卡片的文字起始位置对齐。少了它,内容会
+   整块贴死卡片内沿,textarea 的边框和卡片边框几乎重合,看着就是撑破了。 */
+.browser-access__intro {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px 16px 10px;
+}
+.browser-access__intro small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.browser-access__intro code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--raised);
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+.browser-access__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 16px;
+}
+/* 边框/圆角/底色跟 .settings-field input 同一套 —— 不自带的话它在卡片上是一块完全
+   没有边界的透明区域,只有获得焦点时才看得出哪里能打字。 */
+.browser-access__field textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--canvas);
+  padding: 8px 10px;
+  outline: 0;
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.browser-access__field textarea:focus {
+  border-color: var(--accent);
+}
+
+/* 「将保存为」「当前已授权」里是一串域名,合法域名可以长到 253 字符且不含空格,
+   不给断行规则就会整条撑出卡片、被 .settings-card 的 overflow:hidden 裁掉 ——
+   用户看不到自己到底授权了什么(第 2 轮审查 P4)。 */
+.browser-access__field small {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.browser-access__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 16px 14px;
+}
+.browser-access__foot small {
+  color: var(--muted);
+  font-size: 12px;
+}
+/* 名单非空 = 这个项目现在真的能用你的登录态,值得比普通说明更显眼一点。 */
+.browser-access__active {
+  color: var(--ink);
+  font-weight: 600;
+}

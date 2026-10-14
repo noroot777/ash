@@ -28,7 +28,7 @@ import {
 } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
-import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
+import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
@@ -171,11 +171,16 @@ export async function runTurn(args: {
   }
   const runEnv = await runEnvForOwner(args.runOwner, executor.type);
   await executor.prepareResume?.({ cwd, sessionId: resumeCliId || undefined, env: runEnv });
+  // 浏览器授权必须在最后一次取消检查**之前**读完 —— 这一句之后到 executor.run 之间不能
+  // 再有任何 await。把 await 塞进 run 的参数表达式里,停止请求就会落进那个窗口:stopTask
+  // 返回 true、已有执行器也被杀了,这一轮却照样起了一个新的(第 3 轮审查 P2,我自己上一轮
+  // 接线时引入的)。同一条不变量也管着下面那句 isCanceling。
+  const browserGrant = await browserGrantForTask(taskId);
   // 版本读取与持久说明之间有 await；这期间收到停止请求也不能再起下一轮。
   if (isCanceling(taskId)) throw new CanceledRun();
   const turnStart = now();
   const handle = executor.run({
-    prompt: withGlobalBrowserPolicy(prompt, resumeCliId ? "reminder" : "full"),
+    prompt: withGlobalBrowserPolicy(prompt, resumeCliId ? "reminder" : "full", browserGrant),
     cwd,
     sessionId: resumeCliId || undefined,
     // 个人 CLI 配置目录 + git 署名(§八)。

@@ -3,6 +3,10 @@ import type { AgentEvent, AgentType } from "@ash/shared";
 import type { RunTracePaths } from "./diagnostics.js";
 import type { DetachedPaths } from "./detached.js";
 import type { CliCommand, CliGoal, CliSessionState } from "@ash/shared/cli-commands";
+// 惰性正文的类型与它配套的解析函数住在一起,见 steer-text.ts 的文件头。
+import type { SteerText } from "./steer-text.js";
+
+export type { SteerText };
 
 export interface RunOpts {
   prompt: string;
@@ -33,7 +37,7 @@ export interface RunHandle {
   kill(): void;
   // 单飞当前回合的原生引导通道。存在时调用方把新 user 消息送进同一个活动回合，
   // 不结束任务、不释放单飞锁；回合自然结束后这根通道随 RunHandle 一起关闭。
-  steer?(text: string, beforeSend?: () => void | Promise<void>): Promise<void>;
+  steer?(text: SteerText, beforeSend?: () => void | Promise<void>): Promise<void>;
   command?(command: CliCommand): Promise<string>;
   goal?(): CliGoal | null;
   goalStarted?(): boolean;
@@ -80,7 +84,7 @@ export interface ResidentHandle {
   interrupt(): void;
   /** 单飞原生引导可选的可确认写入；至少保证 interrupt 与新消息都被 stdin 接受。 */
   steer?(
-    text: string,
+    text: SteerText,
     onInterrupted?: () => void,
     beforeSend?: () => void | Promise<void>,
   ): Promise<void>;

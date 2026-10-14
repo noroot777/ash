@@ -109,7 +109,11 @@ console.log("✓ Claude 部分写失败会停止残缺 resident，不再让任�
 const deliveryOrder: string[] = [];
 const orderedHandle = {
   kill: () => {},
-  steer: async (text: string) => { deliveryOrder.push(`steer:${text}`); },
+  // 正文可以是惰性函数(SteerText):真执行器在**写 stdin 的那一刻**才调它定稿,好让浏览器
+  // 授权这类东西读到最新值。假执行器照同一规矩来,否则测的就不是生产那条路。
+  steer: async (text: string | (() => string | Promise<string>)) => {
+    deliveryOrder.push(`steer:${typeof text === "function" ? await text() : text}`);
+  },
 };
 runs.trackRun("native-delivery-order", orderedHandle);
 runs.bindNativeSteer("native-delivery-order", orderedHandle, {
@@ -207,6 +211,14 @@ class FakeAppServer extends EventEmitter {
         } });
       });
     } else if (message.method === "turn/steer") {
+      // 照真实 codex-cli 0.153.4 的协议校验:input[0].text 必填。假服务器放宽这一条,
+      // 就会替生产掩盖「执行器把惰性正文函数原样 JSON.stringify(函数被丢掉)」这类缺陷
+      // —— 2026-10-14 第 2 轮审查正是这么漏过去的(见 executors/steer-text.ts)。
+      const steered = message.params?.input?.[0];
+      if (typeof steered?.text !== "string" || !steered.text) {
+        this.send({ id: message.id, error: { code: -32600, message: "Invalid request: missing field `text`" } });
+        return;
+      }
       this.send({ id: message.id, result: { turnId: "codex-turn" } });
       queueMicrotask(() => {
         this.send({ method: "item/agentMessage/delta", params: {
@@ -247,14 +259,36 @@ const consuming = (async () => { for await (const event of codex.events) codexEv
 for (let i = 0; !fake.requests.some((request) => request.method === "turn/start") && i < 100; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 1));
 }
-await codex.steer!("NEW");
+// 贯穿链:从**真实投递入口**(runs.reserveNativeSteerTask().deliver)一路打到**真实 Codex
+// 执行器**。两端各自测过不算数 —— 公共入口改成惰性正文那一轮,假 handle 的用例和真执行器
+// 的用例全绿,中间 codex 漏了解析,真实 CLI 回 `missing field text`(同上注释)。
+let codexPrepared = 0;
+let codexPreparedBeforeWire = false;
+runs.trackRun("native-codex-wire", codex);
+runs.bindNativeSteer("native-codex-wire", codex, {
+  agentType: "codex",
+  prepare: (text) => {
+    codexPrepared += 1;
+    // 定稿必须发生在请求写出之前,否则现读授权这类东西读的是旧值。
+    codexPreparedBeforeWire = !fake.requests.some((request) => request.method === "turn/steer");
+    return `已授权 x.com\n\n${text}`;
+  },
+  record: () => {},
+});
+const codexReservation = runs.reserveNativeSteerTask("native-codex-wire");
+assert.equal(codexReservation.kind, "native", "绑定了原生管子的 Codex 回合必须能预约引导");
+if (codexReservation.kind === "native") await codexReservation.deliver("NEW", new Date().toISOString());
+runs.untrackRun("native-codex-wire", codex);
 await consuming;
 const steer = fake.requests.find((request) => request.method === "turn/steer")!;
 assert.equal(fake.requests.filter((request) => request.method === "thread/start").length, 1,
   "Codex 引导不得启动第二个 App Server/thread");
 assert.equal(steer.params.threadId, "codex-thread");
 assert.equal(steer.params.expectedTurnId, "codex-turn");
-assert.equal(steer.params.input[0].text, "NEW");
+assert.equal(codexPrepared, 1, "真实投递入口交给 Codex 的惰性正文必须被解析恰好一次");
+assert.ok(codexPreparedBeforeWire, "正文要在写出 turn/steer 之前才定稿");
+assert.equal(steer.params.input[0].text, "已授权 x.com\n\nNEW",
+  "Codex 必须把解析后的正文装进 input[0].text,而不是原样序列化正文函数");
 assert.equal(codexEvents.filter((event) => event.kind === "done").length, 1);
 assert.equal(codexEvents.find((event) => event.kind === "done")?.exitStatus, 0);
 assert.equal(codexEvents.filter((event) => event.kind === "text").map((event) => event.text).join(""), "NEW\n\n");

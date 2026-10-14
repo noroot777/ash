@@ -15,6 +15,7 @@ import {
 import { detachedInfo, spawnControllableForRun, type DetachedPaths } from "./detached.js";
 import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
 import type { RunHandle } from "./types.js";
+import { resolveSteerText, type SteerText } from "./steer-text.js";
 import { findArchivedRollout, findRollout, readCodexContext } from "./codex-rollout.js";
 import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from "./codex-session-archive.js";
 import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
@@ -549,16 +550,24 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     events,
     detached: detachedInfo(child),
     cleanup: () => cleanupAfterRun(child),
-    steer(text: string) {
+    steer(text: SteerText) {
       const operation = steerTail.then(async () => {
         await ready;
+        if (finished || settling || stopRequested) throw new Error("Codex 当前回合已经结束");
+        if (!threadId || !turnId) throw new Error("Codex App Server 重连后缺少当前 thread/turn 标识");
+        // 正文到这里才定稿(SteerText 可以是惰性函数,见 steer-text.ts):它要现读浏览器授权,
+        // 而上面 steerTail 排队 + await ready 可能已经过去一段时间。**漏掉这一步**的后果不是
+        // 「授权旧了」而是整条路断掉 —— 函数会被 JSON.stringify 丢掉,请求少了必填的 text,
+        // 真实 CLI 回 `Invalid request: missing field text`(第 8 链第 2 轮审查 P1)。
+        const body = await resolveSteerText(text);
+        // 定稿本身也是一次 await:排在它之后再复查一遍,别把新正文送进已经收尾的回合。
         if (finished || settling || stopRequested) throw new Error("Codex 当前回合已经结束");
         if (!threadId || !turnId) throw new Error("Codex App Server 重连后缺少当前 thread/turn 标识");
         const startVersion = turnStartVersion;
         const result = await request("turn/steer", {
           threadId,
           expectedTurnId: turnId,
-          input: textInput(text),
+          input: textInput(body),
         });
         if (turnStartVersion === startVersion) turnId = result.turnId ?? turnId;
       });

@@ -122,7 +122,12 @@ try {
   await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, queued.id));
   assert.equal((await snapshot("side-room")).messages.find((row) => row.forward)?.forward?.status, "canceled");
   const delivered: string[] = [];
-  const native = { kill: () => { kills++; }, steer: async (text: string) => { delivered.push(text); } };
+  const native = {
+    kill: () => { kills++; },
+    steer: async (text: string | (() => string | Promise<string>)) => {
+      delivered.push(typeof text === "function" ? await text() : text);
+    },
+  };
   runs.untrackRun("parent", handle); runs.trackRun("parent", native);
   runs.bindNativeSteer("parent", native, { agentType: "codex", record: (text) => { assert.match(text, /来自侧聊/); } });
   await send("把结论告诉主任务，以后都按这个来", "user-native");

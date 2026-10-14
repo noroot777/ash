@@ -17,6 +17,8 @@ export interface Lead {
   handle: ResidentHandle;
   out: Writable;
   busy: boolean;
+  /** 投递串行链(见 session-consumer.ts 的 sendToLead):保证同一台的 send 按调用顺序落地。 */
+  sending?: Promise<void>;
   turnStart: string | null;
   pending: PendingInbound[];
   notices: { text: string; at: string; level?: "notice" }[];
