@@ -174,6 +174,14 @@ export const monitorScanCursors = sqliteTable("monitor_scan_cursors", {
    * resume 换号之后旧号就没了，拿它当「这个任务只有一个来源」的依据是错的（第 6 轮审查 N2）。
    */
   source: text("source"),
+  /**
+   * 这份位置是**哪一代投影身份语义**下确认的（`MONITOR_IDENTITY_SEMANTICS`，旧行 NULL=第一代）。
+   *
+   * 「位置之前的内容都有归宿」这个结论依赖当时那代的认行判据与唯一键：键变细之后，旧语义下
+   * 被挡掉的行并不会自己补回来，而位置还说着「读完了」（第 9 轮审查 N2）。记下版本，受影响
+   * 的位置就能被一次性交回去重放（判据见 claude-monitor-identity.ts 的 `staleSemantics`）。
+   */
+  semantics: integer("semantics"),
 }, (t) => ({
   // 跟 bootstrap DDL 一模一样（db/index.ts）；两条建库路径的唯一性契约必须同一个。
   pk: primaryKey({ columns: [t.taskId, t.path] }),

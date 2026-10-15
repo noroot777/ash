@@ -10,7 +10,7 @@
 // ② 认行同理：无归属的那一行要有**可重验的同来源证据**才认得下来（`matchBySource`，实时与
 //    历史共用）。「库里只有这一行」不算证据 —— 那只说明恢复进度走到哪儿了，不说明别的会话
 //    没有同号监听（第 5 轮审查 N2）。
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
@@ -30,7 +30,7 @@ const [
   import("../src/claude-monitor-identity.js"),
   import("../src/monitors.js"),
 ]);
-const { monitorPendingCalls, monitors, projects, sessions, tasks } = schema;
+const { monitorPendingCalls, monitorScanCursors, monitors, projects, sessions, tasks } = schema;
 await ensureSchema();
 
 let failures = 0;
@@ -200,6 +200,9 @@ async function main(): Promise<void> {
   // 再两遍：来源**一次都没报**，以及只有最后那条通知才报（第 8 轮审查 N2）。
   await unknownSourcesEachGetACard(false);
   await unknownSourcesEachGetACard(true);
+  // ⑥ 那是「从零读」这一侧。存量那一侧（旧语义下已经确认过位置的）见下面两组。
+  await staleCursorsReplayOnce();
+  await freshCursorsAreNotReread();
 
   // 收尾：库里那两条任务的卡各是各的（没被上面的判据串掉）。
   check((await listMonitors("t-settle")).length === 1, "③甲的旧投影自己那张卡还在");
@@ -210,6 +213,7 @@ async function main(): Promise<void> {
       + " / 同一条 ash 会话换过号时两个历史来源各是各的（只有 init 行带来源、"
       + "甚至分几轮才读完也一样）"
       + " / 来源一次都没报时两个 run 文件也各有各的卡（持久身份按 run 分）"
+      + " / 身份语义升级后旧位置重放一遍把漏掉的卡补回来（只作废真受影响的那些）"
       + " 均受回归保护");
   }
   process.exit(failures ? 1 : 0);
@@ -360,6 +364,122 @@ async function twoHistoricalSources(repeatSource: boolean, window = 0): Promise<
   check(rows.some((r) => r.cliSessionId === "cli-new" && r.status === "exited"),
     `④${tag}：新来源有自己的卡，终态也在`,
     rows.map((r) => `${r.cliSessionId}:${r.status}`).join(","));
+}
+
+/**
+ * **旧语义下确认的读取位置要交回去重放一遍**（第 9 轮审查 N2）。
+ *
+ * 播种的是上一轮实测会形成的那个状态：旧身份键把两个未知来源的同号监听挤在同一个空串上
+ * ⇒ 只留下第一张卡，而两个文件的位置都已经推到了末尾。第 8 轮把键改细只解决了「今后的
+ * 写入资格」—— 存量那张漏掉的卡不会自己回来：位置还说着「读完了」，于是刷新多少次都补不
+ * 出来。所以位置要记下自己是哪一代语义确认的，升级之后把受影响的那些作废一次。
+ */
+async function staleCursorsReplayOnce(): Promise<void> {
+  const { backfillClaudeMonitors, forgetTaskMonitorScan } = await import("../src/claude-monitor-backfill.js");
+  const { MONITOR_IDENTITY_SEMANTICS } = await import("../src/claude-monitor-identity.js");
+  const taskId = "t-semantics-replay";
+  const dir = join(root, "runs", taskId);
+  mkdirSync(dir, { recursive: true });
+  const sessionKey = "sessstale";
+  const runOf = (stamp: string) => join(dir, `${sessionKey}-${stamp}.agent-out.jsonl`);
+  const oldRun = runOf("20261014T000000000Z");
+  const newRun = runOf("20261015T000000000Z");
+  const ev = (o: unknown) => JSON.stringify(o) + "\n";
+  // 两个 run 文件各有一条同号监听，从头到尾**一次都没报 session_id**（来源未知那种形状）。
+  const story = (tu: string) =>
+    ev({ type: "assistant", timestamp: "2026-10-14T00:00:01.000Z", message: { model: "m", content: [
+      { type: "tool_use", name: "Monitor", id: tu,
+        input: { command: `tail -F /tmp/${tu}`, description: `${tu} 的监听`, timeout_ms: 600_000 } },
+    ] } })
+    + ev({ type: "system", subtype: "task_started", task_id: "bstale", tool_use_id: tu,
+      task_type: "local_bash" })
+    + ev({ type: "system", subtype: "task_notification", task_id: "bstale", status: "completed",
+      summary: "跑完了" });
+  writeFileSync(oldRun, story("tu-old"));
+  writeFileSync(newRun, story("tu-new"));
+
+  await db.insert(tasks).values({ id: taskId, projectId: "p", title: "旧语义位置", body: "",
+    status: "running", agentType: "claude", mode: "single", createdAt: now(), updatedAt: now() });
+  await db.insert(sessions).values({
+    id: sessionKey, taskId, role: "single", agentType: "claude", executor: "claude@x",
+    cliSessionId: null, cwd: root, startedAt: now(), agentOutPath: newRun,
+  });
+  // 旧算法留下的那一张卡（只有第一个 run 的那条进了库）。
+  await db.insert(monitors).values({
+    id: "m-stale-first", taskId, command: "tail -F /tmp/tu-old", description: "tu-old 的监听",
+    cwd: root, status: "exited", pid: null, pidStartedAt: null, logPath: "", offset: 0, events: 0,
+    exitCode: null, startedAt: now(), expiresAt: now(), endedAt: now(), endedReason: null,
+    ownerUserId: null, kind: "claude", nativeId: "bstale", cliSessionId: null,
+    toolUseId: "tu-old", sourceLifetime: "unknown", sourceRun: oldRun,
+  });
+  // 两个文件的位置都已经推到末尾，而且是**旧语义**下确认的（`semantics` 为空 = 第一代）。
+  for (const path of [oldRun, newRun]) {
+    await db.insert(monitorScanCursors).values({
+      taskId, path, fileSize: statSync(path).size, readOffset: statSync(path).size,
+      probe: 0, gaps: "[]", source: null, semantics: null,
+    });
+  }
+
+  await backfillClaudeMonitors(taskId);
+  const rows = await db.select().from(monitors).where(eq(monitors.taskId, taskId));
+  check(rows.length === 2, "⑥旧语义的位置被作废重放，当年挡掉的那张卡补回来了",
+    `${rows.length} 张：${rows.map((r) => `${r.toolUseId}/${r.status}`).join(" , ")}`);
+  check(rows.some((r) => r.toolUseId === "tu-new" && r.sourceRun === newRun),
+    "⑥补回来的那张记着自己的 run 和 tool_use",
+    rows.map((r) => `${r.toolUseId}/${String(r.sourceRun).slice(-30)}`).join(" , "));
+  // **重放只发生一次**：位置带着当前版本号重新落了盘，所以下一轮照常接着用。
+  const saved = await db.select().from(monitorScanCursors)
+    .where(eq(monitorScanCursors.taskId, taskId));
+  check(saved.length === 2 && saved.every((c) => c.semantics === MONITOR_IDENTITY_SEMANTICS
+    && c.readOffset === c.fileSize),
+    "⑥重放完的位置记下了当前语义版本（不会每轮都全量重读）",
+    saved.map((c) => `${c.semantics}:${c.readOffset}/${c.fileSize}`).join(" , "));
+  forgetTaskMonitorScan(taskId);
+  await backfillClaudeMonitors(taskId);
+  const after = await db.select().from(monitors).where(eq(monitors.taskId, taskId));
+  check(after.length === 2, "⑥再读一轮还是两张（重放是幂等的，不会越补越多）", `${after.length} 张`);
+}
+
+/**
+ * 对照：位置记着**已知来源**时，旧版本号不许让它白重读一遍。
+ *
+ * 已知来源的行在旧键 `COALESCE(cli_session_id,'')` 和新键 `COALESCE(cli_session_id,'run:…')`
+ * 下算出来是同一个值 —— 旧语义一行都没挡掉，位置依然有效。「版本旧就全部作废」的做法会把
+ * 每个任务的历史日志重读一遍（生产里是上百 MB），而这里一张卡都不缺。
+ */
+async function freshCursorsAreNotReread(): Promise<void> {
+  const { backfillClaudeMonitors } = await import("../src/claude-monitor-backfill.js");
+  const taskId = "t-semantics-keep";
+  const dir = join(root, "runs", taskId);
+  mkdirSync(dir, { recursive: true });
+  const sessionKey = "sesskeep";
+  const runFile = join(dir, `${sessionKey}-20261015T000000000Z.agent-out.jsonl`);
+  const ev = (o: unknown) => JSON.stringify(o) + "\n";
+  writeFileSync(runFile,
+    ev({ type: "system", subtype: "init", session_id: "cli-keep" })
+    + ev({ type: "assistant", timestamp: "2026-10-15T00:00:01.000Z", message: { model: "m", content: [
+      { type: "tool_use", name: "Monitor", id: "tu-keep",
+        input: { command: "tail -F /tmp/keep", description: "已经读过的那条", timeout_ms: 600_000 } },
+    ] } })
+    + ev({ type: "system", subtype: "task_started", task_id: "bkeep", tool_use_id: "tu-keep",
+      task_type: "local_bash", session_id: "cli-keep" }));
+
+  await db.insert(tasks).values({ id: taskId, projectId: "p", title: "已知来源的位置", body: "",
+    status: "running", agentType: "claude", mode: "single", createdAt: now(), updatedAt: now() });
+  await db.insert(sessions).values({
+    id: sessionKey, taskId, role: "single", agentType: "claude", executor: "claude@x",
+    cliSessionId: "cli-keep", cwd: root, startedAt: now(), agentOutPath: runFile,
+  });
+  // 旧语义确认的位置，但**来源是已知的** ⇒ 照常接着用（库里一张卡都没有，重读了就会冒出来）。
+  await db.insert(monitorScanCursors).values({
+    taskId, path: runFile, fileSize: statSync(runFile).size, readOffset: statSync(runFile).size,
+    probe: 0, gaps: "[]", source: "cli-keep", semantics: null,
+  });
+
+  await backfillClaudeMonitors(taskId);
+  const rows = await db.select().from(monitors).where(eq(monitors.taskId, taskId));
+  check(rows.length === 0, "⑥(b) 来源已知的旧位置照常采用（没有白重读一遍历史）",
+    `${rows.length} 张：${rows.map((r) => String(r.toolUseId)).join(",")}`);
 }
 
 try {

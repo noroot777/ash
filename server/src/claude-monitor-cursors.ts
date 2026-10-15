@@ -18,6 +18,7 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitorScanCursors } from "./db/schema.js";
+import { MONITOR_IDENTITY_SEMANTICS, staleSemantics } from "./claude-monitor-identity.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 
 /**
@@ -68,12 +69,26 @@ const batches = <T>(items: readonly T[]): T[][] => {
   return out;
 };
 
-/** 这个任务上次读到哪儿了（没有记录就 null —— 从零开始读）。 */
+/**
+ * 这个任务上次读到哪儿了（没有记录就 null —— 从零开始读）。
+ *
+ * **旧语义下确认的位置不许采用**（第 9 轮审查 N2）：位置说的是「它之前的内容都有归宿」，
+ * 而那个结论只在当时那一代投影身份语义下成立。身份键变细之后，旧语义里被唯一键挡掉的行
+ * 并不会自己补回来 —— 位置却还说着「读完了」，于是那张漏掉的卡再也不会被重新发现。
+ * 受影响的那些（判据见 `staleSemantics`：只认来源未知的那些文件）这里直接不接回去，
+ * 等于**那个文件重放一遍**；读完之后它会带着当前版本号重新落盘，所以重放只发生一次。
+ */
 export async function loadScanCursors(taskId: string): Promise<Map<string, ScanCursor> | null> {
   const rows = await db.select().from(monitorScanCursors)
     .where(eq(monitorScanCursors.taskId, taskId));
   if (!rows.length) return null;
-  return new Map(rows.map((row) => [row.path, {
+  const usable = rows.filter((row) => !staleSemantics(row));
+  if (usable.length < rows.length) {
+    console.warn(`[ash] 内置 Monitor 历史扫描：task=${taskId} 有 ${rows.length - usable.length}`
+      + ` 个 run 文件的读取位置是旧身份语义下确认的（来源未知），这一轮重放一遍`);
+  }
+  if (!usable.length) return null;
+  return new Map(usable.map((row) => [row.path, {
     size: row.fileSize, offset: row.readOffset,
     probe: row.probe, gaps: parseGaps(row.gaps), source: row.source,
   }]));
@@ -91,6 +106,9 @@ export async function saveScanCursors(
   const rows = [...cursors].map(([path, cursor]) => ({
     taskId, path, fileSize: cursor.size, readOffset: cursor.offset,
     probe: cursor.probe, gaps: JSON.stringify(cursor.gaps), source: cursor.source,
+    // 这一轮是在**当前**这代身份语义下确认的。下次语义再变（键变细、判据变严），这些位置
+    // 就能被按版本号分辨出来、交回去重放（见 `loadScanCursors` 与 `staleSemantics`）。
+    semantics: MONITOR_IDENTITY_SEMANTICS,
   }));
   for (const batch of batches(rows)) {
     // 落库资格跟 upsert 同批（见 claude-monitor-write.ts）：任务在这一轮里被删完的话，
@@ -101,6 +119,7 @@ export async function saveScanCursors(
         set: {
           fileSize: sql`excluded.file_size`, readOffset: sql`excluded.read_offset`,
           probe: sql`excluded.probe`, gaps: sql`excluded.gaps`, source: sql`excluded.source`,
+          semantics: sql`excluded.semantics`,
         },
       }),
       db.delete(monitorScanCursors).where(orphanRows(monitorScanCursors, taskId)),
