@@ -138,6 +138,46 @@ const rowsAffectedOf = (result: unknown): number =>
   Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0);
 
 /**
+ * 这一轮的**消费账**：索引、有没有事实没落地、往哪儿发通知。
+ *
+ * ── 为什么要把它拎出来（第 9 轮审查 F1 的类问题）──────────────────────────────
+ *
+ * 「这条事实消费过了」只有一个判据：**它已经被某一行已提交的状态包含**。
+ * 「库里存在一个同身份的容器」不是 —— 身份相同只证明那一行是这条监听，不证明这一次读到的
+ * 终态/时长/起点已经写进去了。
+ *
+ * 原来三条合并路各有一套成功标准：正常已有行走 `mergeInto`（事实优先级 + 状态 CAS + 落空
+ * 留账 + 当场通知）、迟到事实也走它，而**撞键找到的那一行只被加进索引就算消费**。于是实时
+ * 投影在「查索引」和「插入」之间插进同一条监听时（两步之间隔着 await，不是互斥操作），这一
+ * 轮读到的完成与期限一个字都没落库，位置却照旧推到文件末尾、恢复责任也一起清掉：面板从此
+ * 停在「进程已不在」，反复打开和刷新都不纠正（第 9 轮审查用生产服务 + 真页面实测）。
+ *
+ * 现在合并只有 `absorb` 这一个出口，新加一条合并路也绕不过这套记账。
+ */
+type Round = {
+  taskId: string;
+  index: RowIndex;
+  /** 有过条件更新落空吗（= 这一轮不许算读完，见 `CommitOutcome.missed`）。 */
+  missed: boolean;
+};
+
+/**
+ * 把一条事实合并进**已有的那一行**，并按同一套规则记账。
+ *
+ * 事实优先级与状态 CAS 由 `mergeInto` 负责；落空就留账（调用方据此回退位置、重读一遍）；
+ * 真改动了就当场通知。合并结果同时写回索引里那一行（`mergeInto` 就地更新），所以这一轮
+ * 后面的事实挑中它时看到的是**合并之后**的状态，不是读索引那一刻的旧快照。
+ */
+async function absorb(
+  round: Round, row: PriorRow, item: Found, status: string, endedReason: string | null,
+): Promise<void> {
+  const merged = await mergeInto(row, item, status, endedReason);
+  if (merged.missed) round.missed = true;
+  // 纠正也要能通知出去：原来只在整个循环跑完之后 publish 一次，中途抛错就全丢了。
+  if (merged.changed) bus.publish({ type: "task.monitors", taskId: round.taskId });
+}
+
+/**
  * 把这一轮的结果落库：缺的插进去，已有的按事实优先级补齐/纠正，**再把配不上内存状态的
  * 迟到事实配到已提交的行上**。
  *
@@ -171,9 +211,9 @@ export async function commitRound(
     !!mine && sources.complete && sources.ids.size === 1 && sources.ids.has(mine);
 
   const probe = createLivenessProbe();
+  // 这一轮的消费账：三条合并路（正常已有行、撞键找到的行、迟到事实）共用它（见 `absorb`）。
+  const round: Round = { taskId, index, missed: false };
   let added = 0;
-  let corrected = 0;
-  let missed = false;
 
   for (const item of items) {
     // 没读到终态有两种可能，差别正好相反：那一轮的进程早就没了（该写 lost），还是它**现在
@@ -195,13 +235,7 @@ export async function commitRound(
     });
 
     if (prior) {
-      const merged = await mergeInto(prior, item, status, endedReason);
-      if (merged.missed) missed = true;
-      if (merged.changed) {
-        corrected += 1;
-        // 纠正也要能通知出去：原来只在整个循环跑完之后 publish 一次，中途抛错就全丢了。
-        bus.publish({ type: "task.monitors", taskId });
-      }
+      await absorb(round, prior, item, status, endedReason);
       continue;
     }
     const anchor = startAnchorOf(item);
@@ -228,14 +262,17 @@ export async function commitRound(
       if (!isUniqueConflict(e)) throw e; // 真写失败：往外抛，这一轮不算读完
       // 撞唯一键 ≠ 已经有归宿：核对过那一行确实是这条监听才算数（见 `conflictHome`）。
       const home = await conflictHome(taskId, item);
-      if (!home) { missed = true; continue; }
-      addToIndex(index, home);           // 这一轮的迟到事实还要靠它配回去
+      if (!home) { round.missed = true; continue; }
+      // **找到归宿只是找到了容器**：这一次读到的终态/时长/起点必须真的合并进去，而且只有
+      // 条件更新确实命中才算消费掉 —— 否则位置一推进它们就永久消失（第 9 轮审查 F1）。
+      // 走的是和正常已有行同一个出口。
+      await absorb(round, home, item, status, endedReason);
+      addToIndex(index, home);           // 这一轮的迟到事实还要靠它配回去（已是合并后的状态）
     }
   }
 
-  const late2 = await applyLateFacts(taskId, late, index, soleSourceOf);
-  if (late2.missed) missed = true;
-  return { added, missed, resolved: late2.resolved, undecidable: late2.undecidable };
+  const late2 = await applyLateFacts(round, late, soleSourceOf);
+  return { added, missed: round.missed, resolved: late2.resolved, undecidable: late2.undecidable };
 }
 
 /** 读一行已有投影要的那些列（建索引、查冲突归宿共用一份，别让两处漂移）。 */
@@ -289,14 +326,14 @@ function addToIndex(index: RowIndex, row: PriorRow): void {
  *   东西却可能正属于某一行 —— 这种交回调用方（`undecidable`），由它回头重放一遍把那一列补上。
  */
 async function applyLateFacts(
-  taskId: string, late: LateFact[], index: RowIndex,
+  round: Round, late: LateFact[],
   soleSourceOf: (cliSessionId: string | null) => boolean,
-): Promise<{ resolved: LateFact[]; undecidable: LateFact[]; missed: boolean }> {
-  if (!late.length) return { resolved: [], undecidable: [], missed: false };
+): Promise<{ resolved: LateFact[]; undecidable: LateFact[] }> {
+  if (!late.length) return { resolved: [], undecidable: [] };
 
+  const index = round.index;
   const resolved: LateFact[] = [];
   const undecidable: LateFact[] = [];
-  let missed = false;
   for (const fact of late) {
     // 迟到事实也带着它的 run 文件（`fact.sourceRun`）：无归属的行照样要有证据才认得下来，
     // 配不上就留着 —— 回执那一支有 `undecidable` 的重放路把它带回来。
@@ -318,12 +355,11 @@ async function applyLateFacts(
     }
     const item = lateItem(prior, fact);
     if (!item) continue;
-    const merged = await mergeInto(prior, item, item.status ?? prior.status, item.endedReason);
-    if (merged.missed) missed = true;
-    if (merged.changed) bus.publish({ type: "task.monitors", taskId });
+    // 同一个出口：事实优先级、CAS、落空留账、通知都在那儿（见 `absorb`）。
+    await absorb(round, prior, item, item.status ?? prior.status, item.endedReason);
     resolved.push(fact);
   }
-  return { resolved, undecidable, missed };
+  return { resolved, undecidable };
 }
 
 /**
@@ -525,5 +561,12 @@ async function mergeInto(
       .where(and(eq(monitors.id, prior.id), eq(monitors.status, prior.status)));
     if (rowsAffectedOf(result) === 0) missed = true;
   }
+  // **索引里的那一行跟着走**：这一轮后面的事实（同一个文件里排在后面的回执/通知）挑中它时，
+  // 看到的必须是合并之后的状态。留着读索引那一刻的旧快照，它就会拿旧状态去做 CAS —— 命中
+  // 0 行的含义是「这次更新没落地」，于是一轮明明都写成功了却被判成未确认、白重读一遍。
+  // 这一步是把不变量补齐（事实落地 ⇒ 索引与它一致），不是在修一个复现过的现象：目前同一轮里
+  // 配得上内存状态的事实不会再进 `late` 通道，所以两条路还撞不到同一行。
+  Object.assign(prior, meta);
+  if (stateChange && !missed) prior.status = status;
   return { changed: Object.keys(meta).length > 0 || (stateChange && !missed), missed };
 }

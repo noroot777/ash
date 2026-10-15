@@ -29,6 +29,8 @@ import {
 import { edgeGroups } from "./monitor-checkpoint-edges.js";
 import { deleteAtomicGroups } from "./monitor-delete-atomic.js";
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 async function main(): Promise<void> {
   await db.insert(projects).values({ id: "p", name: "p", repoPath: root, createdAt: now() });
 
@@ -418,6 +420,91 @@ async function main(): Promise<void> {
   }
 
 
+  // ── ⑨ 撞键找到归宿 ⇒ 这一次的事实必须真的合并进去（第 9 轮审查 F1）────────────────
+  //
+  // 「查索引」和「插入」之间隔着 await，不是互斥操作：实时投影可以在这中间把同一条监听的
+  // **启动**落了库。于是历史这一次的插入撞唯一键 —— 而撞键分支原先只核对「那一行确实是这条
+  // 监听」就把它加进索引、继续往下走。身份对得上不等于**这一次读到的事实已经在那一行里**：
+  // 完成状态、来源给的时长、起点证据一个字都没写进去，位置却照旧推到文件末尾、恢复责任也
+  // 一起清掉。审查用生产服务 + 真页面实测到的就是这个：卡片停在「进程已不在」，反复打开和
+  // 刷新都不纠正，只有显式作废读取位置重放才会变回「命令自己跑完了」。
+  {
+    const f = await fixture("conflict-home");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-bhome", "撞键那条监听", "2026-10-15T09:00:00.000Z");
+    body += started(f.cli, "tu-bhome", "bhome");
+    body += receipt("tu-bhome", "bhome", "2026-10-15T09:00:00.040Z");
+    body += notice(f.cli, "bhome");            // 完成 + 90 秒时长都在这一轮里读到
+    writeFileSync(f.file, body);
+
+    // 竞争顺序是**固定**的，不靠抢：先占住一笔别人的事务 —— 历史这一轮的索引查询照常跑完
+    // （读不排队，读到空结果），插入则排在这笔事务后面。趁它排队时把实时投影那一行写进去
+    // （形状照 claude-monitors.ts 的 `open`：running、期限未知、起点是 observed），这笔事务
+    // 一提交，排队的那次插入必然撞上它。
+    const live = db.insert(monitors).values({
+      id: "m-live-home", taskId: f.taskId, command: "sleep 1800", description: "撞键那条监听",
+      cwd: root, status: "running", pid: null, pidStartedAt: null, logPath: "", offset: 0,
+      events: 0, exitCode: null, startedAt: "2026-10-15T09:00:00.020Z",
+      expiresAt: "2026-10-15T09:00:00.020Z", endedAt: null, endedReason: null, ownerUserId: null,
+      kind: "claude", nativeId: "bhome", cliSessionId: f.cli, toolUseId: "tu-bhome",
+      sourceLifetime: "unknown", lifetimeEvidence: null, startEvidence: "observed",
+      startAnchorWidthMs: 20, timeoutMs: null, sourcePid: null, sourcePidStartedAt: null,
+      sourceRun: f.file, startLowAt: "2026-10-15T09:00:00.020Z",
+    }).toSQL();
+
+    // 撞键到底有没有发生,要**量出来**:没撞上的话下面那几条断言会在正常已有行那条路上免费
+    // 通过(实时那一行早于索引查询落库),整组就成了假通过。
+    let conflicts = 0;
+    const realBatch = dbClient.batch.bind(dbClient);
+    (dbClient as any).batch = async (stmts: any[], mode?: any) => {
+      try {
+        return await realBatch(stmts, mode);
+      } catch (e) {
+        if (/UNIQUE constraint failed/i.test(String((e as Error)?.message ?? ""))) conflicts += 1;
+        throw e;
+      }
+    };
+    const tx = await dbClient.transaction();
+    try {
+      const job = backfillClaudeMonitors(f.taskId);     // 不能 await：它的插入要等这笔事务
+      await sleep(20);
+      await tx.execute({ sql: live.sql, args: live.params as never[] });
+      await tx.commit();
+      const added = await job;
+      check(added === 0, "⑨这一轮没补出新行（那条监听实时那边已经有行了）", `added=${added}`);
+    } finally {
+      (dbClient as any).batch = realBatch;
+    }
+    check(conflicts === 1, "⑨前提：历史插入真的撞上了实时投影刚写的那一行", `${conflicts} 次`);
+
+    const rows = (await listMonitors(f.taskId)).filter((r) => r.kind === "claude");
+    check(rows.length === 1, "⑨一条监听一张卡（撞键没变成两行）", `${rows.length} 张`);
+    const row = rows[0];
+    check(row?.status === "exited", "⑨**这一次读到的完成状态合并进去了**", String(row?.status));
+    check(row?.timeoutMs === 90_000 && row?.lifetime === "bounded",
+      "⑨来源给的时长也合并进去了（卡片不再是「期限未知」）",
+      `${row?.lifetime}/${row?.timeoutMs}`);
+    check(!!row?.expiresAt && Date.parse(row!.expiresAt!) - Date.parse(row!.startedAt) === 90_000,
+      "⑨到期时刻跟着一起算对了（不是「开始即到期」的占位值）",
+      `${row?.startedAt} → ${row?.expiresAt}`);
+    check(!!row?.endedAt, "⑨结束时刻跟着终态一起落了", String(row?.endedAt));
+    // 位置已经推到文件末尾：丢掉内存快照再读也不会重放。**还是完成态**才说明那几条事实是
+    // 在上面那一轮真的落了库，而不是靠下一轮重读才补回来的（反例在这里停在 running/unknown，
+    // 刷新多少次都不变）。
+    const { forgetTaskMonitorScan } = await import("../src/claude-monitor-backfill.js");
+    for (let i = 0; i < 3; i += 1) {
+      forgetTaskMonitorScan(f.taskId);
+      await backfillClaudeMonitors(f.taskId);
+    }
+    const cold = (await listMonitors(f.taskId)).filter((r) => r.kind === "claude");
+    check(cold.length === 1 && cold[0]?.status === "exited" && cold[0]?.timeoutMs === 90_000,
+      "⑨丢快照冷读三遍（位置在末尾、不重放）卡片还是完成 + 90 秒",
+      `${cold.length} 张 ${cold[0]?.status}/${cold[0]?.timeoutMs}`);
+    check(monitorRecoveryOf(f.taskId)?.pending !== true,
+      "⑨而且这一轮是干净收场（事实落地了才允许销账）",
+      JSON.stringify(monitorRecoveryOf(f.taskId)?.reasons ?? []));
+  }
+
   await edgeGroups();
   await deleteAtomicGroups();
 
@@ -433,7 +520,7 @@ async function main(): Promise<void> {
       + "作废失败的位置不会被接着用 / 跳掉的完成通知留账且窗口够大时补回来 / "
       + "文件是否封存按 run 判 / 删除期里来的那一轮也不许写 / 补偿清理失败留责任且启动期兜底 / "
       + "删除失败后仍在的任务卡回得来 / 一个文件的多个缺口都留着 / 换行搜索进度落盘 / "
-      + "别人的事务回滚带不走写成功的卡 "
+      + "别人的事务回滚带不走写成功的卡 / 撞键找到的归宿也要吸收这一次的事实 "
       + "均受回归保护");
   }
 }
