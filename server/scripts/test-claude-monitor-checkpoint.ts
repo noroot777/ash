@@ -100,6 +100,9 @@ const plainBash = (cli: string, n: number) => [
  * **必须按字节算**：扫描的单次上限和游标都是字节，而夹具里有中文描述（一个字 3 字节）。
  * 按字符串长度算的那一版把检查点挪到了前一行之前，于是「停好的位置」正好等于「可重放
  * 位置」，整组断言变成免费的（本轮自测用 debug 才看出来）。
+ *
+ * 填充是**一条**事件，所以 `target` 超过一个窗口时它本身就装不进窗口、会被整条跳过
+ * （见 ⑨）。要跨窗口的夹具用 `padLines`。
  */
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
 
@@ -565,13 +568,68 @@ async function main(): Promise<void> {
     check(left.length === 0, "⑧配上之后未决表就销账了", left.map((r) => r.toolUseId).join(","));
   }
 
+
+  // ── ⑨ 一条**比读取窗口还长**的记录不许把整个文件卡死 ───────────────────────────
+  //
+  // 窗口内一个换行都没有 ⇒ 位置零进展，下一轮同样的输入同样读不出换行：这个文件之后的内容
+  // 和后面所有 run 文件永远读不到（第 11 轮审查 N3 的上半；本轮自测时 ⑦⑧ 的第一版夹具正好
+  // 造出了这一条，两组都停在第一个窗口里）。那条记录在这个窗口下无论如何都解析不了，所以
+  // 跳过它、位置继续往前 —— 丢一条事件，换这个文件剩下的部分都读得到。
+  {
+    const f = await fixture("oversized-record");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    // 一条 1.5 个窗口长的文本事件（合法 JSON，就是太长）
+    body += line({ type: "assistant", timestamp: "2026-10-15T09:00:00.000Z",
+      message: { content: [{ type: "text", text: "y".repeat(LIMIT + LIMIT / 2) }] } });
+    const tailAt = bytes(body);
+    body += call(f.cli, "tu-bover", "超长记录后面的哨兵", "2026-10-15T09:10:00.000Z");
+    body += started(f.cli, "tu-bover", "bover");
+    body += receipt("tu-bover", "bover", "2026-10-15T09:10:00.040Z");
+    body += notice(f.cli, "bover");
+    writeFileSync(f.file, body);
+    check(tailAt > LIMIT, "⑨夹具里那条记录确实比窗口长", `${tailAt} > ${LIMIT}`);
+
+    let rounds = 0;
+    for (; rounds < 6; rounds += 1) {
+      await backfillClaudeMonitors(f.taskId);
+      if ((await listMonitors(f.taskId)).length) break;
+    }
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 1 && rows[0]?.nativeId === "bover",
+      "⑨跳过那条超长记录之后，它后面的 Monitor 读到了",
+      `${rounds + 1} 轮后 ${rows.length} 条`);
+    check(rows[0]?.status === "exited", "⑨终态也在", String(rows[0]?.status));
+    check(rounds + 1 <= 3, "⑨而且没有反复重读同一段", `${rounds + 1} 轮`);
+    check(!monitorRecoveryOf(f.taskId), "⑨账销了（不是永远「还没读完」）",
+      JSON.stringify(monitorRecoveryOf(f.taskId)));
+  }
+
+
+  // ── ⑩ 删任务时未决行也要跟着走（没有别的入口能清它）─────────────────────────────
+  {
+    const f = await fixture("delete-cascade");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-bleft", "只剩调用的那条", "2026-10-15T10:00:00.000Z");
+    writeFileSync(f.file, body);
+    await backfillClaudeMonitors(f.taskId);
+    const before = await db.select().from(schema.monitorPendingCalls)
+      .where(eq(schema.monitorPendingCalls.taskId, f.taskId));
+    check(before.length === 1, "⑩先确认库里真有一条未决行", String(before.length));
+    const { deleteTaskAssociations } = await import("../src/task-delete-routes.js");
+    await deleteTaskAssociations(f.taskId);
+    const after = await db.select().from(schema.monitorPendingCalls)
+      .where(eq(schema.monitorPendingCalls.taskId, f.taskId));
+    check(after.length === 0, "⑩删任务把它一起带走了", String(after.length));
+  }
+
   if (failures === 0) {
     console.log("✓ 内置 Monitor 的检查点：位置只停在可重放处（被跳过的调用会重放）/ "
       + "位置之前已成行的按 native_id 与 tool_use_id 配回去 / "
       + "配不上的当场裁决（位置照常前进）/ 每轮都被挤掉的固定输入按窗口数收敛 / "
       + "跳过前缀后新起的 run 仍把旧监听判死 / 迟到回执重建窄区间 / "
       + "唯一裁不清的那种重放一遍就收手 / "
-      + "起不来的调用不钉位置、跨窗口的调用靠落盘接回来 均受回归保护");
+      + "起不来的调用不钉位置、跨窗口的调用靠落盘接回来 / "
+      + "装不进窗口的那条记录跳过而不是卡死 / 删任务连未决行一起带走 均受回归保护");
   }
 }
 

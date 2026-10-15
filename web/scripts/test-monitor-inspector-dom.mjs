@@ -509,8 +509,53 @@ try {
     await page.close();
   }
 
+  // ── 断线重连之后必须重新对账：事件流没有历史回放 ───────────────────────────
+  // 断线期间起的哨兵、结束的哨兵、变化的恢复状态，服务端一条都不会补发（SSE 只订阅当前
+  // bus、不带事件 id）。所以「又连上了」不能当成「这份快照还完整」——上一版把
+  // useServerEvents 返回的连接状态整个丢掉，页面停在旧列表上，手动刷新才对得上
+  // （第 11 轮审查用真实 EventSource 自动重连实测：open 次数增加、请求数一条没多）。
+  {
+    let listCalls = 0;
+    let recoveryCalls = 0;
+    const rows = [["m-task-a", "task-a"]];
+    const page = await open(async (route, path) => {
+      if (path === "/api/tasks/task-a/monitors" && route.request().method() === "GET") {
+        listCalls += 1;
+        await route.fulfill({ json: rows.map(([id, task]) => monitor(id, task)) });
+        return true;
+      }
+      if (path === "/api/tasks/task-a/monitors/recovery") {
+        recoveryCalls += 1;
+        await route.fulfill({ json: { pending: false, reasons: [], attempts: 0, exhausted: false } });
+        return true;
+      }
+      return false;
+    });
+    await waitIds(page, "m-task-a");
+    await page.waitForFunction(() => window.__sources.length > 0);
+    await page.waitForTimeout(200);
+    const before = { listCalls, recoveryCalls };
+
+    // 断线期间服务端那边又起了一条（页面收不到任何事件）。
+    rows.push(["m-task-a-late", "task-a"]);
+    await page.waitForTimeout(150);
+    assert.equal(await idsOf(page), "m-task-a", "没有事件、没有重连，页面当然还是旧列表");
+
+    // 原生 EventSource 的重连就是在同一个对象上再发一次 open（中间先 error）。两步分开发：
+    // 真实断线之间隔着秒级，而同一个 task 里 false→true 会被 React 合批成「没变过」。
+    await page.evaluate(() => { for (const source of window.__sources) source.onerror?.({}); });
+    await page.waitForTimeout(80);
+    await page.evaluate(() => { for (const source of window.__sources) source.onopen?.({}); });
+    await waitIds(page, "m-task-a,m-task-a-late");
+    assert.ok(
+      listCalls > before.listCalls && recoveryCalls > before.recoveryCalls,
+      `重连后要把列表和恢复状态都重读一遍（列表 ${before.listCalls}→${listCalls}、恢复 ${before.recoveryCalls}→${recoveryCalls}）`,
+    );
+    await page.close();
+  }
+
   assert.deepEqual(failures, []);
-  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task/form results never land");
+  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task/form results never land, reconnects re-read the snapshot");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();

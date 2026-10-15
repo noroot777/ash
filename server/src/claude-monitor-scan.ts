@@ -336,7 +336,7 @@ async function eachLine(
   path: string, start: number, maxBytes: number,
   /** 返回 false = **这一行没消费掉**，就停在它前面（游标不越过它）。 */
   onLine: (line: string) => boolean,
-): Promise<{ nextOffset: number; truncated: boolean; stopped: boolean }> {
+): Promise<{ nextOffset: number; truncated: boolean; stopped: boolean; skipped: number }> {
   const fh = await openFile(path, "r");
   try {
     let offset = start;
@@ -359,19 +359,54 @@ async function eachLine(
         const keepGoing = onLine(data.subarray(from, nl).toString("utf8"));
         // **消费不了就把游标停在这一行之前**，下一轮从它重新开始。越过去就等于丢掉一条
         // 来源不会重发的事实（见 `LATE_CAP` 的背压说明）。
-        if (!keepGoing) return { nextOffset: base + lineStart, truncated: false, stopped: true };
+        if (!keepGoing) {
+          return { nextOffset: base + lineStart, truncated: false, stopped: true, skipped: 0 };
+        }
         from = nl + 1;
       }
       carry = Buffer.from(data.subarray(from)); // 复制：data 可能指向复用的 buf
       offset += bytesRead;
     }
+    // ── 一条比窗口还长的记录：**跳过它**，别让位置零进展 ────────────────────────
+    //
+    // 窗口内一个换行都没有 ⇒ 这一轮 `nextOffset` 等于起点，下一轮同样的输入同样读不出换行，
+    // 于是这个文件之后的内容（以及后面所有 run 文件，见 `blocked`）永远读不到。而那条记录
+    // 本身在这个窗口下**无论如何都解析不了**（要整条缓冲起来才行），所以跳过它是唯一能往前
+    // 的选择：丢一条事件，换这个文件剩下的部分都能读到。
+    //
+    // 只在「确实找到了它的结尾」时才跳。读到文件尾还没有换行是另一回事：那多半是**正在被
+    // 追加的半行**，跳过去就等于把它写完之后的内容一起丢掉 —— 那时照旧停在原地（账上仍记
+    // 着「没读完」，见 scanSession）。
+    if (offset - carry.length <= start && offset - start >= maxBytes) {
+      const end = await nextNewline(fh, offset);
+      if (end !== null) return { nextOffset: end, truncated: true, stopped: false, skipped: end - start };
+    }
     return {
       nextOffset: offset - carry.length,
       truncated: offset - start >= maxBytes,
       stopped: false,
+      skipped: 0,
     };
   } finally {
     await fh.close();
+  }
+}
+
+/**
+ * 从 `from` 往后找下一个换行，返回它**之后**那一字节的位置；一直到文件尾都没有就 null。
+ *
+ * 只给「一条记录比窗口还长」那一支用（见 `eachLine`）：只扫不缓冲，所以多长的记录都不会把
+ * 内存顶起来。
+ */
+async function nextNewline(fh: Awaited<ReturnType<typeof openFile>>, from: number): Promise<number | null> {
+  let offset = from;
+  const buf = Buffer.allocUnsafe(CHUNK);
+  for (;;) {
+    const { bytesRead } = await fh.read(buf, 0, CHUNK, offset);
+    if (!bytesRead) return null;
+    const nl = buf.subarray(0, bytesRead).indexOf(0x0a);
+    if (nl >= 0) return offset + nl + 1;
+    offset += bytesRead;
   }
 }
 
@@ -456,7 +491,11 @@ export async function scanSession(
     const sink = (line: string) =>
       consume(scan, session!, line, cliSessionId, file.startedAt, file.path, sessionId);
     try {
-      const { nextOffset, truncated, stopped } = await eachLine(file.path, cursor.offset, maxBytes, sink);
+      const { nextOffset, truncated, stopped, skipped } = await eachLine(file.path, cursor.offset, maxBytes, sink);
+      if (skipped) {
+        console.warn(`[ash] 内置 Monitor 历史扫描跳过一条装不进读取窗口的记录`
+          + `（${file.path} 第 ${cursor.offset} 字节起 ${skipped} 字节 > 上限 ${maxBytes}）`);
+      }
       if (nextOffset > cursor.offset) {
         scan.advanced = true;
         // 读到了新字节 ⇒ 这些事实还没确认落库，位置暂时不许停在半路（见 committedThrough）。

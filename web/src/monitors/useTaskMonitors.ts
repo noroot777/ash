@@ -143,10 +143,28 @@ export function useTaskMonitors(taskId: string) {
   }, [reload, taskId]);
 
   // 权威信号只有服务端这一条：起了、推了一批、结束了，都发 task.monitors。
-  useServerEvents((event) => {
+  const connected = useServerEvents((event) => {
     if (event.type !== "task.monitors" || event.taskId !== taskId) return;
     void reload();
   });
+
+  /**
+   * **每次连上都重新对账一遍**（第 11 轮审查 F2）。
+   *
+   * 「又连上了」不等于「这份快照还完整」：事件流没有历史回放（server/src/routes.ts 只订阅
+   * 当前 bus、不带事件 id、没有 Last-Event-ID），断线期间起的哨兵、结束的哨兵、变化的恢复
+   * 状态一条都补不回来，于是页面停在旧列表上，手动刷新才对得上（审查用真实 EventSource
+   * 断线重连 + 真页面实测：open 次数增加、请求数一条没多、卡片数不变）。
+   *
+   * 首次连上也要对一次：挂载时那一发列表请求和事件流的建立是并发的，中间那段的事件同样
+   * 没人接。重读走的是同一套 gen/seq 保护，旧响应盖不了新的。
+   */
+  const linked = useRef(connected);
+  useEffect(() => {
+    const was = linked.current;
+    linked.current = connected;
+    if (connected && !was) void reload();
+  }, [connected, reload]);
 
   const stop = useCallback(async (monitorId: string) => {
     const gen = stamp.current.gen;
