@@ -15,11 +15,20 @@
 //   - **悬着的调用**由这张表独立恢复，不受内存上限和读取窗口影响
 //   - 「`task_started` 配不上任何调用 ⇒ 那个工具不是 Monitor」这条推理照旧成立，因为悬着的
 //     调用一定在（内存里或这张表里），不再依赖「位置没越过它」
+//
+// ── 一条调用的身份是 (任务, ash 会话, **来源**, tool_use 号) ───────────────────
+//
+// 来源那一维不能省：一条 ash 会话跨好几个 run 文件（每回合一个），而 tool_use 号只在**一条
+// CLI 会话**内唯一。省掉它的后果在这张表上特别重，因为这里存的是**入参的唯一出处**，不是
+// 可以重算的缓存 —— 两轮撞号时，一边是「第二条根本插不进来」（唯一键吞掉），一边是「新一轮
+// 成行把旧一轮那条删了」（销账条件太粗），两边都让旧那张卡永久消失，而读取位置照常被确认成
+// 「读完了」。判据本体在 `claude-monitor-identity.ts`，这里只许调它。
 import { and, eq, inArray } from "drizzle-orm";
 import type { MonitorCall } from "./claude-monitors.js";
+import { matchBySource, type SourceRow } from "./claude-monitor-identity.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 import { db } from "./db/index.js";
-import { monitorPendingCalls, monitors, sessions } from "./db/schema.js";
+import { monitorPendingCalls, monitors } from "./db/schema.js";
 
 /**
  * 一条语句最多带多少行（或多少个 id）。
@@ -44,11 +53,55 @@ export type PendingCall = {
   call: MonitorCall;
   /** 那条 assistant 事件的时刻 = 起点区间的下界。 */
   at: string | null;
-  sourceRun: string | null;
+  /**
+   * **调用发生时**那一行报的 CLI 身份（认不出来就是 null —— 不是通配符）。
+   *
+   * 不是 `sessions.cli_session_id`：那个只记得**当前**那一个，resume 之后旧 run 文件里的
+   * 调用会跟着改姓（见文件头的身份说明）。
+   */
+  cliSessionId: string | null;
+  /** 读到它的那个 run 文件。未知归属**唯一**能自证的凭据，也是持久键的一维。 */
+  sourceRun: string;
 };
 
-/** 已经完结、该从表里销掉的调用（配上了 `task_started`，或确证起不来）。 */
-export type ClearedCall = { sessionKey: string; toolUseId: string };
+/**
+ * 已经完结、该从表里销掉的调用（配上了 `task_started`，或确证起不来）。
+ *
+ * 三样都要：会话、**来源**、tool_use 号。少了来源那一维，一轮的销账就会把另一轮同号的那条
+ * 一起删掉 —— 而那一行是它入参的唯一出处（见文件头）。
+ */
+export type ClearedCall = { sessionKey: string; sourceRun: string; toolUseId: string };
+
+/**
+ * 按 (会话, 来源, tool_use) 删除 —— **删除条件就是持久键本身**。
+ *
+ * 按会话 + 号删（不带来源）等于把同一条 ash 会话里另一个 run 文件的同号调用也带走；只按号
+ * 删还会跨会话。两种都试过，后果一样：那条调用唯一的恢复依据消失，它那张卡再也出不来。
+ */
+async function deleteCalls(taskId: string, calls: readonly ClearedCall[]): Promise<void> {
+  const groups = new Map<string, { sessionKey: string; sourceRun: string; ids: string[] }>();
+  for (const item of calls) {
+    const key = `${item.sessionKey}\u0000${item.sourceRun}`;
+    const slot = groups.get(key) ?? { sessionKey: item.sessionKey, sourceRun: item.sourceRun, ids: [] };
+    slot.ids.push(item.toolUseId);
+    groups.set(key, slot);
+  }
+  for (const slot of groups.values()) {
+    for (const batch of batches(slot.ids)) {
+      await db.delete(monitorPendingCalls).where(and(
+        eq(monitorPendingCalls.taskId, taskId),
+        eq(monitorPendingCalls.sessionKey, slot.sessionKey),
+        eq(monitorPendingCalls.sourceRun, slot.sourceRun),
+        inArray(monitorPendingCalls.toolUseId, batch),
+      ));
+    }
+  }
+}
+
+/** 库里那一行（销账判据只问这几列）。 */
+type PendingRow = {
+  sessionKey: string; toolUseId: string; cliSessionId: string | null; sourceRun: string;
+};
 
 /** 按会话分桶（`scanSession` 新建会话桶时取它）。 */
 export async function loadPendingCalls(taskId: string): Promise<Map<string, PendingCall[]>> {
@@ -60,50 +113,45 @@ export async function loadPendingCalls(taskId: string): Promise<Map<string, Pend
   // 那一笔删除没落地（提交成功、紧接着写失败）。留着不会让显示出错，但会一直被读回来 ——
   // 就地清掉，免得越积越多。
   //
-  // **「同一个 tool_use_id」要连来源会话一起问。** 这张表按 (task, ash 会话, tool_use) 分区，
-  // 而投影行记的是 **CLI** 会话，两个命名空间不一样，所以先用 `sessions` 把它们对上。只按
-  // tool_use_id 判的话，甲会话里已经成行的那条，会把乙会话里还悬着的同号调用一起销掉——
-  // 入参的唯一出处就这么没了，乙那张卡再也出不来（第 13 轮审查 N1）。
-  // **空归属不是通配符。** 两边都没有归属时按「都不知道」对上（键里都是空串），但「我这条
-  // 有来源、库里那条没有」说明不了它们是同一条 —— 那时不许销账（第 14 轮审查 N2 实测：一条
-  // 无归属的旧投影把另一条会话里还悬着的同号调用销了,那条调用唯一的恢复依据就此消失,它那
-  // 张卡再也出不来）。代价只是这一行会被反复读回来(留着不会让显示出错,见上),比毁掉恢复
-  // 依据便宜得多:宁可留着未决责任,也不拿一条证明不了的证据销账。
-  const cliOf = new Map((await db
-    .select({ id: sessions.id, cliSessionId: sessions.cliSessionId })
-    .from(sessions)
-    .where(eq(sessions.taskId, taskId)))
-    .map((row) => [row.id, row.cliSessionId] as const));
-  const settled = new Set((await db
-    .select({ toolUseId: monitors.toolUseId, cliSessionId: monitors.cliSessionId })
+  // **「同一个 tool_use_id」要连来源一起问，而且用的是和认行同一个判据**
+  // （`matchBySource`，见 claude-monitor-identity.ts）：
+  //   - 来源对得上（两边都知道且相等）⇒ 就是它，照常销账；
+  //   - 对不上时只认**能被证明是我的**：库里那一行记的 `source_run` 跟我这条一样（一个 run
+  //     文件 = 一次进程启动），而且它的归属不与我矛盾。
+  //
+  // 三条都不成立就**不许销账**。此前这里是另一套判据：拿**当前** `sessions.cli_session_id`
+  // 反推旧调用的归属（resume 之后它换号，旧调用就跟着改姓），再把两个 NULL 拼成同一个空串
+  // （两个「不知道」被当成同一个来源）。实测后果：同一个 tool_use 号在两轮之间撞上时，新一轮
+  // 成行把旧一轮还悬着的那条删了，而那一行是它入参的唯一出处 —— 旧卡永久缺一张，读取位置却
+  // 照常被确认成「读完了」（新一轮第 1 轮审查 F1）。
+  //
+  // 代价只是这一行会被反复读回来（留着不会让显示出错，见上），比毁掉恢复依据便宜得多：宁可
+  // 留着未决责任，也不拿一条证明不了的证据销账。连 `source_run` 都没有的存量行从此谁也证明
+  // 不了，于是永远留着 —— 键上每个 (会话, 来源, 号) 至多一行，有界。
+  const byTool = new Map<string, SourceRow[]>();
+  for (const row of await db
+    .select({
+      toolUseId: monitors.toolUseId,
+      cliSessionId: monitors.cliSessionId,
+      sourceRun: monitors.sourceRun,
+    })
     .from(monitors)
-    .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude"))))
-    .filter((row): row is { toolUseId: string; cliSessionId: string | null } => !!row.toolUseId)
-    .map((row) => `${row.cliSessionId ?? ""}\u0000${row.toolUseId}`));
-  const isSettled = (row: { sessionKey: string; toolUseId: string }): boolean =>
-    settled.has(`${cliOf.get(row.sessionKey) ?? ""}\u0000${row.toolUseId}`);
-  // 删除也按会话分区：跨会话删等于把乙那条一起带走。
-  const stale = new Map<string, string[]>();
-  for (const row of rows) {
-    if (!isSettled(row)) continue;
-    stale.set(row.sessionKey, [...(stale.get(row.sessionKey) ?? []), row.toolUseId]);
+    .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude")))) {
+    if (!row.toolUseId) continue;
+    byTool.set(row.toolUseId, [...(byTool.get(row.toolUseId) ?? []), row]);
   }
-  for (const [sessionKey, ids] of stale) {
-    for (const batch of batches(ids)) {
-      await db.delete(monitorPendingCalls).where(and(
-        eq(monitorPendingCalls.taskId, taskId),
-        eq(monitorPendingCalls.sessionKey, sessionKey),
-        inArray(monitorPendingCalls.toolUseId, batch),
-      ));
-    }
-  }
+  const isSettled = (row: PendingRow): boolean =>
+    !!matchBySource(byTool.get(row.toolUseId) ?? [], {
+      cliSessionId: row.cliSessionId, sourceRun: row.sourceRun,
+    });
+  await deleteCalls(taskId, rows.filter(isSettled));
   for (const row of rows) {
     if (isSettled(row)) continue;
     const bucket = out.get(row.sessionKey) ?? [];
     bucket.push({
       sessionKey: row.sessionKey, toolUseId: row.toolUseId,
       call: { command: row.command, description: row.description },
-      at: row.at, sourceRun: row.sourceRun,
+      at: row.at, cliSessionId: row.cliSessionId, sourceRun: row.sourceRun,
     });
     out.set(row.sessionKey, bucket);
   }
@@ -116,26 +164,18 @@ export async function loadPendingCalls(taskId: string): Promise<Map<string, Pend
  * **只在确认提交之后调用**（见 `TaskScan.committedThrough`）：没提交的那几条路会回退读取
  * 位置、把那些行重新读一遍，这时落盘只会留下一份马上又会被重建的拷贝。
  *
- * 写入用 `onConflictDoNothing`：同一个 `tool_use_id` 的内容来自同一行不变的日志，重复读到
- * 它（文件被重写、位置回退）时没有任何字段需要更新。它靠的是 `(task_id, session_key,
+ * 写入用 `onConflictDoNothing`：同一条调用的内容来自同一行不变的日志，重复读到它（文件被
+ * 重写、位置回退）时没有任何字段需要更新。它靠的是 `(task_id, session_key, source_run,
  * tool_use_id)` 这个唯一键 —— **两条建库路径都得有**（见 db/schema-monitors.ts）。
+ *
+ * **来源必须在键里。** 少了它，两个 run 文件里的同号调用争同一个键：第二条被
+ * `onConflictDoNothing` 吞掉，它的入参于是只剩下别人那一份，而那一份一销账就什么都不剩了
+ * （新一轮第 1 轮审查 F1）。
  */
 export async function syncPendingCalls(
   taskId: string, pending: readonly PendingCall[], cleared: readonly ClearedCall[],
 ): Promise<void> {
-  const bySession = new Map<string, string[]>();
-  for (const item of cleared) {
-    bySession.set(item.sessionKey, [...(bySession.get(item.sessionKey) ?? []), item.toolUseId]);
-  }
-  for (const [sessionKey, ids] of bySession) {
-    for (const batch of batches(ids)) {
-      await db.delete(monitorPendingCalls).where(and(
-        eq(monitorPendingCalls.taskId, taskId),
-        eq(monitorPendingCalls.sessionKey, sessionKey),
-        inArray(monitorPendingCalls.toolUseId, batch),
-      ));
-    }
-  }
+  await deleteCalls(taskId, cleared);
   for (const batch of batches(pending)) {
     // 落库资格跟插入同批（见 claude-monitor-write.ts）：门闸只在进入这个函数时问过一次。
     await writeIfTaskAlive(
@@ -143,7 +183,7 @@ export async function syncPendingCalls(
         .values(batch.map((item) => ({
           taskId, sessionKey: item.sessionKey, toolUseId: item.toolUseId,
           command: item.call.command, description: item.call.description,
-          at: item.at, sourceRun: item.sourceRun,
+          at: item.at, cliSessionId: item.cliSessionId, sourceRun: item.sourceRun,
         })))
         .onConflictDoNothing(),
       db.delete(monitorPendingCalls).where(orphanRows(monitorPendingCalls, taskId)),

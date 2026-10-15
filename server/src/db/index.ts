@@ -142,8 +142,8 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS monitor_pending_calls (
       task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
       command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-      at TEXT, source_run TEXT,
-      PRIMARY KEY (task_id, session_key, tool_use_id)
+      at TEXT, source_run TEXT NOT NULL DEFAULT '', cli_session_id TEXT,
+      PRIMARY KEY (task_id, session_key, source_run, tool_use_id)
     );
     CREATE TABLE IF NOT EXISTS monitor_scan_cursors (
       task_id TEXT NOT NULL, path TEXT NOT NULL,
@@ -325,6 +325,9 @@ export async function ensureSchema() {
     // 这份位置是哪一代消费语义下确认的（第 9/10 轮审查）。旧行 NULL = 第一代,没有当代戳的
     // 一律重放一遍 —— 旧代确认掉的事实（被键挤掉的卡、没合并的终态）只能靠重读补回来。
     "ALTER TABLE monitor_scan_cursors ADD COLUMN semantics INTEGER",
+    // 调用发生时那一行报的 CLI 身份。旧行 NULL = 当初没记,那时只能靠 source_run 自证来源
+    // (键的重建在 migrations.ts 的 repairPendingCallKey —— SQLite 改不了主键)。
+    "ALTER TABLE monitor_pending_calls ADD COLUMN cli_session_id TEXT",
     "ALTER TABLE monitors ADD COLUMN native_id TEXT",
     "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",
     // 默认值是 'unknown' 而**不是** 'bounded'：加列那一刻的存量行里，claude 投影的

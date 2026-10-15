@@ -27,7 +27,8 @@ import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
  *   被某一行**已提交**的状态包含（或者作为悬着的调用落在未决表里）。
  *
  * 所以这个号**不只管唯一键**：认行判据（`claude-monitor-identity.ts` 的 `matchBySource`）、
- * 持久唯一键（`monitors_native_source`）、以及「一条事实怎样才算消费掉」（
+ * 持久唯一键（`monitors_native_source`、`monitor_pending_calls` 的主键）、未决调用的配对与
+ * 销账判据（`claude-monitor-pending.ts`），以及「一条事实怎样才算消费掉」（
  * `claude-monitor-commit.ts` 的 `absorb`/`mergeInto`）任何一样改了，旧位置的那句承诺就不再
  * 成立 —— **这个数就要加一**。
  *
@@ -44,13 +45,18 @@ import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
  *   当成「这一段事实当时都正确入库了」，于是上面两种存量错误在已知来源的任务上不会自愈，
  *   还可能把没核验过的旧前缀重新盖成 2（第 10 轮审查 F1 用 `git archive` 跑真旧代码生成库、
  *   再用当前代码升级实测）。**2 这个戳本身因此不可信**，一并作废。
- * - `3`：当代。只有这一代的代码盖的戳才算数。
+ * - `3`：键和合并路都对了，**但未决调用那一条链还是另一套判据**：它拿当前
+ *   `sessions.cli_session_id` 反推旧调用的归属、把两个「来源未知」当成同源，于是两轮撞同一个
+ *   tool_use 号时，新一轮成行把旧一轮还悬着的那条调用销了账 —— 那一行是它入参的唯一出处，
+ *   旧卡从此永久缺一张，而这一代照常给那个前缀盖上「读完了」的戳（新一轮第 1 轮审查 F1）。
+ *   所以 3 这个戳同样不可信，一并作废。
+ * - `4`：当代。只有这一代的代码盖的戳才算数。
  *
  * 成本是**一次性**的：被作废的位置等于那个文件从零重放一遍，而重放照常受单轮字节上限约束、
  * 读到哪儿就带着当代版本号落盘（见 `saveScanCursors`），下一轮接着往后读 —— 不是每次请求
  * 都全量重读历史。
  */
-export const MONITOR_CHECKPOINT_SEMANTICS = 3;
+export const MONITOR_CHECKPOINT_SEMANTICS = 4;
 
 /** 这份位置是**当代**确认的吗（只有它才可以被接回来往后读）。 */
 const confirmedUnderCurrent = (cursor: { semantics: number | null }): boolean =>

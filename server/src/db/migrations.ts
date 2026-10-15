@@ -471,32 +471,52 @@ async function backfillMonitorTimeoutFromExpiry(client: Client): Promise<void> {
 }
 
 /**
- * 未决调用表的唯一键补齐（2026-10-15）。
+ * 未决调用表的**键重建**（2026-10-15）。
  *
- * 这张表的 bootstrap DDL 自带 `PRIMARY KEY(task_id, session_key, tool_use_id)`，但**声明式
- * 建库那条路**（`npm -w server run db:push`）在加上 Drizzle 侧的 primaryKey 之前建出来的表
- * 没有任何唯一约束 —— 而 `CREATE TABLE IF NOT EXISTS` 不会回头给它补。那种库上
- * `onConflictDoNothing` 防不住重复，每一轮同步都能再插一条一样的（第 13 轮审查 N4 实测）。
+ * 这张表的身份是 `(task_id, session_key, source_run, tool_use_id)` —— 来源那一维非有不可：
+ * 一条 ash 会话跨好几个 run 文件，而 tool_use 号只在一条 CLI 会话内唯一，撞号时少了来源就
+ * 只能存下一条，另一条的入参（唯一出处）就此不存在（判据见
+ * `server/src/claude-monitor-pending.ts`）。
  *
- * SQLite 不能给已有表加主键，所以补的是**等价的唯一索引**：先按三列去重（同一条调用的内容
- * 来自同一行不变的日志，留哪一条都一样），再建索引。新库上这一步是空转（主键在，索引只是
- * 多一个同列索引）。
+ * 两种旧库都要接上来：
+ *   - 声明式路径（`npm -w server run db:push`）在加上 Drizzle 侧 primaryKey 之前建的表 ——
+ *     **没有任何唯一约束**，`onConflictDoNothing` 防不住重复，每轮同步都能再插一条（第 13
+ *     轮审查 N4 实测）；
+ *   - 上一代 bootstrap DDL 建的表 —— 主键是更粗的三列。
+ *
+ * SQLite 既不能加主键也不能改主键，所以这里**重建整张表**（`CREATE TABLE IF NOT EXISTS` 不会
+ * 回头改已有表）。搬运时来源不明的行填空串：那种行从此谁也证明不了同源，于是不会被销账 ——
+ * 保守的那一边（毁掉入参是永久的，留着未决责任只是多读一行）。已经是当代键的库上空转。
  */
+const PENDING_CALL_KEY = ["task_id", "session_key", "source_run", "tool_use_id"];
+
 async function repairPendingCallKey(client: Client): Promise<void> {
   try {
     const info = await client.execute("PRAGMA table_info(monitor_pending_calls)");
     if (!info.rows.length) return;                                   // 表还没建
-    if (info.rows.some((row: any) => Number(row.pk) > 0)) return;    // 新库:主键已经在
-    await client.execute(
-      `DELETE FROM monitor_pending_calls WHERE rowid NOT IN (
-         SELECT MIN(rowid) FROM monitor_pending_calls GROUP BY task_id, session_key, tool_use_id)`,
-    );
-    await client.execute(
-      `CREATE UNIQUE INDEX IF NOT EXISTS monitor_pending_calls_key
-         ON monitor_pending_calls (task_id, session_key, tool_use_id)`,
-    );
+    const names = info.rows.map((row: any) => String(row.name));
+    const key = info.rows.filter((row: any) => Number(row.pk) > 0)
+      .sort((a: any, b: any) => Number(a.pk) - Number(b.pk))
+      .map((row: any) => String(row.name));
+    if (key.join(",") === PENDING_CALL_KEY.join(",")) return;        // 已经是当代键
+    // 归属那一列可能已经由容错 ALTER 补上了（db/index.ts），也可能这是更老的库 —— 两种都搬。
+    const owner = names.includes("cli_session_id") ? "cli_session_id" : "NULL";
+    await client.execute("DROP TABLE IF EXISTS monitor_pending_calls_rekey");
+    await client.execute(`CREATE TABLE monitor_pending_calls_rekey (
+      task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+      command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      at TEXT, source_run TEXT NOT NULL DEFAULT '', cli_session_id TEXT,
+      PRIMARY KEY (task_id, session_key, source_run, tool_use_id))`);
+    // `OR IGNORE` 顺带去重：同一条调用的内容来自同一行不变的日志，留哪一条都一样。
+    await client.execute(`INSERT OR IGNORE INTO monitor_pending_calls_rekey
+      (task_id, session_key, tool_use_id, command, description, at, source_run, cli_session_id)
+      SELECT task_id, session_key, tool_use_id, command, description, at,
+             COALESCE(source_run, ''), ${owner}
+        FROM monitor_pending_calls`);
+    await client.execute("DROP TABLE monitor_pending_calls");
+    await client.execute("ALTER TABLE monitor_pending_calls_rekey RENAME TO monitor_pending_calls");
   } catch (e) {
-    console.warn("[ash] 未决调用表唯一键补齐失败,忽略:", e);
+    console.warn("[ash] 未决调用表键重建失败,忽略:", e);
   }
 }
 

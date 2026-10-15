@@ -9,6 +9,45 @@ import type { MonitorLifetime } from "@ash/shared/monitor";
 import type { MonitorCall } from "./claude-monitors.js";
 import type { ClearedCall, PendingCall } from "./claude-monitor-pending.js";
 import type { ScanCursor } from "./claude-monitor-cursors.js";
+import {
+  matchBySource, sameSource, type SourceEvidence, type SourceRow,
+} from "./claude-monitor-identity.js";
+
+/**
+ * ── 按来源分区的多值桶 ─────────────────────────────────────────────────────────
+ *
+ * 键是**来源侧**给的 id（`tool_use_id`），而来源侧只承诺它在一条 CLI 会话内唯一 —— 同一个
+ * 任务上先后两轮（续聊、接管、重试）各自编号，撞号是允许的。所以一个 id 底下可以同时挂着
+ * 好几条，各属各的来源；取的时候拿手上的来源凭据去认（`matchBySource`，和认 Monitor 行、
+ * 和库里的唯一键同一个判据）。
+ *
+ * 上一版是 `Map<id, 单条>`：后读到的直接**覆盖**先读到的。对 `pending` 来说覆盖掉的是一条
+ * 调用的入参（唯一出处），对 `byToolUse` 来说是把乙的回执落到甲那一行上。
+ */
+export type SourceBucket<T extends SourceRow> = Map<string, T[]>;
+
+/** 放进桶里；**同一个来源**的那条就地换掉（同一行被重读时不许堆成两条）。 */
+export function putBySource<T extends SourceRow>(bucket: SourceBucket<T>, id: string, item: T): void {
+  const list = bucket.get(id) ?? [];
+  const at = list.findIndex((other) => sameSource(other, item));
+  if (at >= 0) list[at] = item;
+  else list.push(item);
+  bucket.set(id, list);
+}
+
+/** 按来源凭据认出「属于我这一条」；认不出就 `undefined`（证明不了就不认，见那个判据）。 */
+export function findBySource<T extends SourceRow>(
+  bucket: SourceBucket<T>, id: string, evidence: SourceEvidence,
+): T | undefined {
+  return matchBySource(bucket.get(id) ?? [], evidence);
+}
+
+/** 按**对象身份**拿掉一条（同一个 id 底下别的来源那几条一律不动）。 */
+export function dropBySource<T extends SourceRow>(bucket: SourceBucket<T>, id: string, item: T): void {
+  const left = (bucket.get(id) ?? []).filter((other) => other !== item);
+  if (left.length) bucket.set(id, left);
+  else bucket.delete(id);
+}
 
 export type Found = {
   nativeId: string;
@@ -64,6 +103,30 @@ export type Found = {
   staleRun: boolean;
 };
 
+/** 一条还悬着的调用（读到了 `tool_use`、还没配上 `task_started`）。 */
+export type PendingEntry = {
+  call: MonitorCall;
+  /** 那条 assistant 事件的时刻 = 起点区间的下界。 */
+  at: string | null;
+  /**
+   * 调用发生的那一刻、那一行报的 CLI 身份（认不出来就是 null —— **不是通配符**）。
+   *
+   * 拿**当前** `sessions.cli_session_id` 反推是错的：resume 之后它换号，旧 run 文件里的调用
+   * 会跟着改姓，于是新一轮成行就把旧一轮那条销了账（新一轮第 1 轮审查 F1）。
+   */
+  cliSessionId: string | null;
+  /** 读到它的那个 run 文件 —— 未知归属**唯一**能自证的凭据，也是持久键的一维。 */
+  sourceRun: string;
+};
+
+/** `tool_use_id` → `found` 里的键，带上它属于哪个来源（见 `SourceBucket`）。 */
+export type FoundLink = {
+  cliSessionId: string | null;
+  sourceRun: string;
+  /** `foundKey(来源, native_id)`。 */
+  found: string;
+};
+
 /** 一条会话的扫描状态。跨它的全部 run 文件、跨多次增量调用存活。 */
 export type SessionScan = {
   /**
@@ -72,10 +135,13 @@ export type SessionScan = {
    * 入参只存在于 `tool_use` 那一行，而身份要等 `task_started` 才有，所以这段「悬着」的状态
    * 必须活过读取窗口和内存上限 —— 它**落盘**（`claude-monitor-pending.ts`），新建会话桶时
    * 从那里恢复。读取位置不再为它让路。
+   *
+   * **按来源分区**（见 `SourceBucket`）：一条 ash 会话跨好几个 run 文件，tool_use 号只在一条
+   * CLI 会话内唯一，两轮撞号时单值桶会让新一轮的调用覆盖旧一轮那条的入参。
    */
-  pending: Map<string, { call: MonitorCall; at: string | null; sourceRun: string | null }>;
-  /** tool_use_id → 它在 `found` 里的键。**不是 native_id**（见 `foundKey`）。 */
-  byToolUse: Map<string, string>;
+  pending: SourceBucket<PendingEntry>;
+  /** tool_use_id → 它在 `found` 里的键。**不是 native_id**（见 `foundKey`）；同样按来源分区。 */
+  byToolUse: SourceBucket<FoundLink>;
   /** 键是 `foundKey(来源会话, native_id)`，不是裸 native_id（见那个函数）。 */
   found: Map<string, Found>;
   /** 每个文件读到第几字节（外加边界搜索进度与缺口证据，见 `ScanCursor`）。 */
@@ -274,8 +340,15 @@ export function sourceSetOf(scan: TaskScan): { complete: boolean; ids: Set<strin
 export function pendingCallsOf(scan: TaskScan): PendingCall[] {
   const out: PendingCall[] = [];
   for (const [sessionKey, session] of scan.sessions) {
-    for (const [toolUseId, item] of session.pending) {
-      out.push({ sessionKey, toolUseId, call: item.call, at: item.at, sourceRun: item.sourceRun });
+    for (const [toolUseId, items] of session.pending) {
+      // 一个 tool_use 号底下可以挂着好几条（各属各的来源）：**一条都不许漏**，落盘的键里
+      // 有来源那一维，它们在库里各占一行。
+      for (const item of items) {
+        out.push({
+          sessionKey, toolUseId, call: item.call, at: item.at,
+          cliSessionId: item.cliSessionId, sourceRun: item.sourceRun,
+        });
+      }
     }
   }
   return out;

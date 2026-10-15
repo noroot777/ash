@@ -12,6 +12,14 @@
 // 未知来源那一半于是在四处各留了一个通配口子（第 14 轮审查 N2 在其中两处实测到后果：一条
 // 无归属的旧投影把另一条会话里还悬着的同号调用销了账，那条调用唯一的恢复依据就此消失）。
 // 一个判据四份实现，修一次就只能修一处——所以它搬到这里，调用点只许调它。
+//
+// **「只许调它」包括未决调用那一整条链**（新一轮第 1 轮审查 F1）：`pending`/`byToolUse` 的
+// 配对、`monitor_pending_calls` 的唯一键、销账的删除条件原先是另一套判据 —— 拿**当前**
+// `sessions.cli_session_id` 反推旧调用的归属，再把两个 NULL 当成同一个来源。于是同一个
+// tool_use 号在两轮之间撞上时，新一轮成行就把旧一轮还悬着的那条调用删了，而那一行是它入参
+// 的唯一出处：旧卡永久缺一张，读取位置照常被确认成「读完了」（实测三组：tool 号不同 → 2 张
+// 卡；号相同且两边来源各自明确 → 旧卡消失；号相同且两边来源都未知、run 文件不同 → 同样
+// 消失）。改一处判据就得连着它们一起改，所以**键和判据都从这里拿**。
 export type SourceRow = {
   cliSessionId: string | null;
   /** 这一行是读哪个 run 文件读出来的 / 起它的那一代 run(存量行上是空的)。 */
@@ -51,6 +59,37 @@ export type SourceEvidence = {
  * 受影响的位置交回去重放。不加那个数的后果实测过两次:挤掉的卡、没合并的终态,升级之后
  * 刷新多少次都不会自愈(第 8/9/10 轮审查)。
  */
+
+/**
+ * 这份来源凭据的**可比较形式**:认得出会话就是会话号,认不出就是那个 run 文件(一个文件 =
+ * 一次进程启动 = 一个 CLI 会话)。两样都没有 ⇒ `null`,它**不与任何东西相等**。
+ *
+ * 跟 `monitors_native_source` 那条唯一索引里的 `COALESCE(cli_session_id,'run:'||source_run)`
+ * 是同一个表达式 —— 内存里的分区键和库里的唯一键必须说的是同一件事,否则「内存里分开了、
+ * 库里还挤在一个键上」(或者反过来)就是又一个出口。
+ */
+export function sourceKeyOf(row: SourceRow): string | null {
+  const cli = row.cliSessionId || null;
+  if (cli) return cli;
+  const run = row.sourceRun || null;
+  return run ? `run:${run}` : null;
+}
+
+/**
+ * 这两份凭据指的是**同一个来源**吗(对称判据,用来认「这是同一条记录的另一次读到」)。
+ *
+ * 跟 `matchBySource` 的区别是对称:那个回答的是「手上这份证据能不能认领那一行」(一边是
+ * 证据、一边是候选,所以未知那一侧可以被另一侧的 run 证明);这个回答的是「这两条该不该合成
+ * 一条」。**两个未知不算同一个来源** —— 那只是两个未知。
+ */
+export function sameSource(a: SourceRow, b: SourceRow): boolean {
+  const runA = a.sourceRun || null;
+  const runB = b.sourceRun || null;
+  // run 文件是最细也最硬的凭据:同一个文件就是同一次进程启动,会话号再怎么变都不影响。
+  if (runA && runB) return runA === runB;
+  const cli = a.cliSessionId || null;
+  return !!cli && cli === (b.cliSessionId || null);
+}
 
 /**
  * 从同一个 id 底下的那几行里挑出「属于我这条会话的那一行」;挑不出就 `undefined`。

@@ -12,6 +12,11 @@
 //   更新跟来源空不空毫无关系。于是上面两种存量错误在**已知来源**的任务上照旧不自愈，还
 //   可能把没核验过的旧前缀重新盖成 v2。
 //
+// - 第 3 代（`492e2a75`）：位置的采用规则也对了，**但未决调用那条链还是另一套身份判据** ——
+//   它拿当前 `sessions.cli_session_id` 反推旧调用的归属、把两个「来源未知」当成同源。两轮
+//   撞同一个 tool_use 号时，新一轮成行就把旧一轮还悬着的那条调用销了账，而那一行是它入参的
+//   唯一出处 ⇒ 旧卡永久缺失，这一代照常给那个前缀盖上「读完了」。
+//
 // 所以判据收成一句：**只接回带当代戳的位置**，其余的那个文件从零重放一遍（见
 // claude-monitor-cursors.ts 的 `MONITOR_CHECKPOINT_SEMANTICS`）。这份测试把两种存量错误
 // 各钉一遍，再钉两条反向约束：带当代戳的不许白重读，这一轮没读到的文件不许被盖戳。
@@ -51,17 +56,21 @@ async function main(): Promise<void> {
   //    两个戳各来一遍：第 1 代（NULL）和「采用规则还错着」的第 2 代 —— v2 的戳同样不可信。
   await legacyLostStatus(null);
   await legacyLostStatus(2);
+  // 每一代作废的戳都要有一遍：v3 盖的戳同样不可信（它也能确认一个少卡的前缀），所以这里
+  // 跟着 CURRENT 走 —— **当代号一加，上一代就自动进这个清单**。
+  for (let stamp = 3; stamp < CURRENT; stamp += 1) await legacyLostStatus(stamp);
   // ② 旧粗身份把**整张卡**挤掉了。两种形状：来源从头到尾没报过，以及只有最后那条通知报了
   //    （后者正是上一版放过的那种 —— 位置的 source 非空，而更早的行当时并没有归属）。
   await legacyDroppedCard(false);
   await legacyDroppedCard(true);
+  await legacyDroppedCard(false, CURRENT - 1);
   // ③④ 反向约束：别把「全部作废」当成修法。
   await currentStampIsAdopted();
   await unreadFileIsNotStamped();
 
   if (failureCount() === 0) {
     console.log("✓ 内置 Monitor 的跨语义升级：没有当代戳的位置一律重放（旧代丢掉的终态补回来、"
-      + "被挤掉的卡补回来，来源已知/晚到身份/从未报过三种形状都一样，v2 的戳也不例外）/ "
+      + "被挤掉的卡补回来，来源已知/晚到身份/从未报过三种形状都一样，上一代的戳也不例外）/ "
       + "带当代戳的位置照常接着读（不每次全量重读）/ "
       + "这一轮没读到的文件不会被盖上当代戳 均受回归保护");
   }
@@ -117,9 +126,10 @@ async function legacyLostStatus(stamp: number | null): Promise<void> {
  * `onlyNoticeCarries=true` 是上一版明确放过的那种：位置的 `source` 非空（最后那条通知报了
  * 身份），可当年的启动记录读到时还没有任何归属 —— 「来源非空 ⇒ 当时都正确入库」不成立。
  */
-async function legacyDroppedCard(onlyNoticeCarries: boolean): Promise<void> {
-  const tag = onlyNoticeCarries ? "只有通知报了来源" : "来源从未报过";
-  const f = await fixture(`legacy-card-${onlyNoticeCarries}`);
+async function legacyDroppedCard(onlyNoticeCarries: boolean, stamp: number | null = null): Promise<void> {
+  const tag = `${onlyNoticeCarries ? "只有通知报了来源" : "来源从未报过"}`
+    + `${stamp === null ? "" : `·v${stamp} 的戳`}`;
+  const f = await fixture(`legacy-card-${onlyNoticeCarries}-${stamp ?? "null"}`);
   const oldRun = f.runFile("20261014T000000000Z");
   const newRun = f.runFile("20261015T000000000Z");
   const ev = (o: unknown) => JSON.stringify(o) + "\n";
@@ -143,7 +153,7 @@ async function legacyDroppedCard(onlyNoticeCarries: boolean): Promise<void> {
     toolUseId: "tu-a", sourceLifetime: "unknown", sourceRun: oldRun,
   });
   const source = onlyNoticeCarries ? "cli-late" : null;
-  for (const path of [oldRun, newRun]) await seedCursor(f.taskId, path, source, null);
+  for (const path of [oldRun, newRun]) await seedCursor(f.taskId, path, source, stamp);
 
   await backfillClaudeMonitors(f.taskId);
   const rows = await db.select().from(monitors).where(eq(monitors.taskId, f.taskId));

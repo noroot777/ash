@@ -15,13 +15,19 @@
 // 顺带解决了 128 MiB 上限那条：超限不再是「永远只能读前缀」，而是这一轮读到上限为止、
 // offset 停在那里，下次打开面板继续往后读。
 //
-// ── 按会话分区 ────────────────────────────────────────────────────────────────
+// ── 按会话分区，**桶里再按来源分区** ──────────────────────────────────────────
 //
 // `pending`/`byToolUse` 的键是来源侧的 `tool_use_id` / 后台任务 id。上一版为了「跨文件关联
 // 事件」把它们做成了**跨整个任务**共用，那是实现过头了：要跨的是同一条会话的多个 run 文件，
 // 不是不同会话。实测 1017 条 task_started 里 `local_bash` 的 id 跨会话重复 0 个，但
 // `local_agent` 那种出现过同 id 挂两个 tool_use 的情况 —— 来源侧并没有承诺全局唯一，所以
 // 按会话分区（见 shared/monitor.ts 的 NATIVE_MONITOR_ID_SCOPE）。
+//
+// 一条 ash 会话**跨好几个 run 文件**（每回合一个），而来源侧的编号只在**一条 CLI 会话**内
+// 唯一。所以会话桶里还得再分一层：同一个 tool_use 号底下可以挂着好几条，各属各的来源，取
+// 的时候拿手上的来源凭据去认（`SourceBucket` + `matchBySource`，和认 Monitor 行、和库里的
+// 唯一键同一个判据）。单值桶的后果是后读到的覆盖先读到的 —— 对 `pending` 来说覆盖掉的正是
+// 一条调用入参的唯一出处（新一轮第 1 轮审查 F1）。
 //
 // ── 检查点：位置 + 已提交的行，两样合起来才算「读到哪儿」──────────────────────────
 //
@@ -62,8 +68,10 @@ import { eachLine, scanWindowBytes, streamFilesOf } from "./claude-monitor-read.
 // 「扫描」就是一个模块，拆文件是本文件内部的事。
 export * from "./claude-monitor-scan-state.js";
 import {
-  newSessionScan, type Found, type SessionScan, type TaskScan,
+  dropBySource, findBySource, newSessionScan, putBySource,
+  type Found, type SessionScan, type TaskScan,
 } from "./claude-monitor-scan-state.js";
+import { sourceKeyOf } from "./claude-monitor-identity.js";
 
 /**
  * 一轮里最多交出去多少条「配不上内存状态」的事实（见 `SessionScan.late`）。
@@ -110,7 +118,9 @@ export async function scanSession(
     // 悬着的调用从库里接回来（见 TaskScan.restoredPending）：读取窗口切在 `tool_use` 和
     // `task_started` 之间、或者上一份快照被内存上限挤掉时，靠这一步续上，位置不必回退。
     for (const item of scan.restoredPending?.get(sessionId) ?? []) {
-      session.pending.set(item.toolUseId, { call: item.call, at: item.at, sourceRun: item.sourceRun });
+      putBySource(session.pending, item.toolUseId, {
+        call: item.call, at: item.at, cliSessionId: item.cliSessionId, sourceRun: item.sourceRun,
+      });
     }
   }
   const files = await streamFilesOf(sessionId, outPath);
@@ -263,7 +273,7 @@ export async function scanSession(
  * 把两个文件里的同号监听又合回一张卡(第 7 轮审查 N2)。
  */
 const foundKey = (owner: string | null, sourceRun: string, nativeId: string): string =>
-  `${owner ?? `run:${sourceRun}`}\u0000${nativeId}`;
+  `${sourceKeyOf({ cliSessionId: owner, sourceRun }) ?? ""}\u0000${nativeId}`;
 
 /** 这一轮交出去的迟到事实已经顶到单轮上限了吗（见 `LATE_CAP`，满了就背压）。 */
 const lateFull = (session: SessionScan): boolean => session.late.length >= LATE_CAP;
@@ -301,6 +311,14 @@ function consume(
   // 就**留未知** —— 由认领那一层按可重验的证据决定（claude-monitor-identity.ts）。
   if (evSession) scan.fileSources.set(filePath, evSession);
   const owner = evSession ?? scan.fileSources.get(filePath) ?? null;
+  /**
+   * 这一行手上的来源凭据。配对（未决调用、回执→行）全按它认，跟认 Monitor 行、跟库里的
+   * 唯一键同一个判据（`claude-monitor-identity.ts`）。
+   *
+   * 两样都给：归属认得出来就按归属，认不出来时 `run` 文件仍然自证得了 —— 同一个文件里前
+   * 半截没报 session_id、后半截报了（只有 init 行带），两半还是配得上。
+   */
+  const evidence = { cliSessionId: owner, sourceRun: filePath };
 
   const content = Array.isArray(ev.message?.content) ? ev.message.content : [];
   for (const block of content) {
@@ -309,7 +327,7 @@ function consume(
       const call = parseMonitorInput(block.input);
       // 入参只在这一行上，所以这条「悬着的调用」要落盘（见 `SessionScan.pending`）。
       if (call && str(block.id)) {
-        session.pending.set(str(block.id), { call, at, sourceRun: filePath });
+        putBySource(session.pending, str(block.id), { call, at, cliSessionId: owner, sourceRun: filePath });
       }
     } else if (block.type === "tool_result") {
       const toolUseId = str(block.tool_use_id);
@@ -318,8 +336,8 @@ function consume(
         : Array.isArray(block.content)
           ? block.content.map((b: any) => (b && typeof b.text === "string" ? b.text : "")).join("\n")
           : "";
-      const key = session.byToolUse.get(toolUseId);
-      const row = key ? session.found.get(key) : undefined;
+      const link = findBySource(session.byToolUse, toolUseId, evidence);
+      const row = link ? session.found.get(link.found) : undefined;
       // ── 回执配得上一条**还悬着的调用**、而它自己又没说「起成了」 ⇒ 这次调用没起来 ──
       //
       // 行序是严格因果的（见文件头）：起成了的 Monitor 一定先有 `task_started`，那时这条调用
@@ -330,10 +348,13 @@ function consume(
       // 合取：配不上 `task_started`，且这条回执自己不是一份**起手回执**（`parseMonitorStart‑
       // Receipt` 认不出期限 ⇒ 它没说「盯到 X」）。认得出的那种留给提交层去配已提交的行 ——
       // 那是配对状态被挤掉之后的正常情形，不是失败。
-      if (!row && toolUseId && parseMonitorStartReceipt(raw).lifetime === "unknown"
-        && session.pending.delete(toolUseId)) {
-        session.cleared.push({ sessionKey, toolUseId });
-        continue;
+      if (!row && toolUseId && parseMonitorStartReceipt(raw).lifetime === "unknown") {
+        const dead = findBySource(session.pending, toolUseId, evidence);
+        if (dead) {
+          dropBySource(session.pending, toolUseId, dead);
+          session.cleared.push({ sessionKey, sourceRun: dead.sourceRun, toolUseId });
+          continue;
+        }
       }
       if (!row) {
         // 配不上内存状态：**交给提交层裁决**（库里有那一行就配回去，没有就是与我们无关）。
@@ -355,18 +376,23 @@ function consume(
   if (ev.type !== "system") return true;
   const nativeId = str(ev.task_id);
   if (ev.subtype === "task_started") {
-    const started = session.pending.get(str(ev.tool_use_id));
+    const toolUseId = str(ev.tool_use_id);
+    const started = findBySource(session.pending, toolUseId, evidence);
     // **配不上 = 它不是 Monitor 起的。** 行序是严格因果的（见文件头），而一条还悬着的
     // Monitor 调用一定在手上（内存里，或者从 `monitor_pending_calls` 接回来的）—— 所以
     // 「这一行的调用我们没见过」只有一种解释：那个工具不是 Monitor。于是不必再维护「这个 id
     // 不是 Monitor」的结论集合（那是一张会被容量淘汰的内存表，淘汰之后它的通知就退成永远
     // 配不上的孤儿）。
     if (!started || !nativeId) return true;
-    session.pending.delete(str(ev.tool_use_id));
-    session.cleared.push({ sessionKey, toolUseId: str(ev.tool_use_id) });
-    session.byToolUse.set(str(ev.tool_use_id), foundKey(owner, filePath, nativeId));
+    dropBySource(session.pending, toolUseId, started);
+    // 销账也带着来源：库里那条按 (会话, 来源, tool_use) 分区，少一维就把另一轮的同号调用
+    // 一起删了 —— 那是它入参的唯一出处（见 claude-monitor-pending.ts）。
+    session.cleared.push({ sessionKey, sourceRun: started.sourceRun, toolUseId });
+    putBySource(session.byToolUse, toolUseId, {
+      cliSessionId: owner, sourceRun: filePath, found: foundKey(owner, filePath, nativeId),
+    });
     session.found.set(foundKey(owner, filePath, nativeId), {
-      nativeId, call: started.call, toolUseId: str(ev.tool_use_id),
+      nativeId, call: started.call, toolUseId,
       cliSessionId: owner,
       startedAtLow: started.at,
       startedAtHigh: null,   // 回执到了才有上界

@@ -126,14 +126,33 @@ export const monitorPendingCalls = sqliteTable("monitor_pending_calls", {
   description: text("description").notNull().default(""),
   /** 那条 assistant 事件的时刻 = 起点区间的下界（见 monitors.start_low_at）。 */
   at: text("at"),
-  /** 在哪个 run 文件里读到的。只作诊断。 */
-  sourceRun: text("source_run"),
+  /**
+   * **在哪个 run 文件里读到的 —— 来源凭据本体，不是诊断字段。**
+   *
+   * 一个 run 文件 = 一次 agent 进程启动 = 一个 CLI 会话，所以它是「这条调用属于哪个来源」
+   * 唯一能自证的东西（`claude-monitor-identity.ts`）。NOT NULL：它是唯一键的一维，而
+   * SQLite 的 PRIMARY KEY 列允许 NULL —— 允许了就等于两条「来源不明」又挤在同一个键上。
+   * 迁移上来的存量行填空串 = 来源不明，那种行谁也证明不了，于是永远不会被销账。
+   */
+  sourceRun: text("source_run").notNull().default(""),
+  /**
+   * 调用发生时那一行报的 CLI 身份（认不出来就 NULL，**不是通配符**）。
+   *
+   * 为什么不用当前 `sessions.cli_session_id` 反推：那一列只记得**当前**那个会话号，resume
+   * 之后旧 run 文件里的调用会跟着改姓，于是新一轮成行就把旧一轮还悬着的那条销了账 —— 那是
+   * 它入参的唯一出处（新一轮第 1 轮审查 F1 实测旧卡永久消失）。
+   */
+  cliSessionId: text("cli_session_id"),
 }, (t) => ({
   // **唯一键要跟 bootstrap 那条 DDL 一模一样**（db/index.ts 的 `CREATE TABLE IF NOT EXISTS`）。
   // 声明式路径（`npm -w server run db:push`）只认这里：少了它，push 建出来的表没有任何唯一
   // 约束，`syncPendingCalls` 的 `onConflictDoNothing` 于是防不住重复 —— 每轮同步都能再插一条
   // 一样的（第 12 轮审查 N4，用构建产物 drizzle-kit export 实测该表没有主键）。
-  pk: primaryKey({ columns: [t.taskId, t.sessionKey, t.toolUseId] }),
+  //
+  // **来源在键里**：两个 run 文件里的同号调用必须各占一行。少了那一维，第二条被
+  // `onConflictDoNothing` 吞掉，它的入参就只剩别人那一份；旧库的键由
+  // `db/migrations.ts` 的 `repairPendingCallKey` 重建上来（SQLite 改不了主键）。
+  pk: primaryKey({ columns: [t.taskId, t.sessionKey, t.sourceRun, t.toolUseId] }),
 }));
 
 // ── 历史扫描读到哪儿了 ────────────────────────────────────────────────────────

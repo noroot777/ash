@@ -103,7 +103,8 @@ export async function deleteAtomicGroups(): Promise<void> {
     }], [], () => {});
     await syncPendingCalls(taskId, [{
       sessionKey: `s-${taskId}`, toolUseId: "tu-zombie2",
-      call: { command: "sleep 1", description: "悬着的调用" }, at: now(), sourceRun: f.file,
+      call: { command: "sleep 1", description: "悬着的调用" }, at: now(),
+      cliSessionId: f.cli, sourceRun: f.file,
     }], []);
     await saveScanCursors(taskId, new Map([[f.file, { size: 10, offset: 10, probe: 0, gaps: [] }]]));
 

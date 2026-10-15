@@ -313,19 +313,23 @@ export function monitorExactExpiry(row: {
  * 两层不同，所以分别说清楚（上一版只声明了 `per-cli-session`，而持久层的唯一索引、回填的
  * existing 表、查行都是按 `(task_id, native_id)`，声明和实现不一致；第 5 轮审查列为不拦项）：
  *
- * - **解析层按会话分区**（`per-cli-session`）：`pending`/`byToolUse` 的键来自来源事件，不同
- *   会话各自一套，不互相串联。
- * - **持久层按任务去重**（`per-task`）：唯一索引 `(task_id, native_id)`。它成立的前提是同一个
- *   ash 任务里来源 id 不撞——这一点**实测成立但不是来源侧的承诺**：2026-10-14 扫过本机全部
- *   `agent-out.jsonl`，1017 条 `task_started` 里 `local_bash` 的 id 形如 `b` + 8 位随机 base36
- *   （`blu5n05kp`），跨会话重复 0 个。
+ * - **解析层按会话 + 来源分区**（`per-cli-session`）：`pending`/`byToolUse` 的键来自来源事件，
+ *   不同 ash 会话各自一套；而一条 ash 会话跨好几个 run 文件，所以桶里还按**来源**（CLI 会话
+ *   号，认不出来时是那个 run 文件）再分一层 —— 不同来源的同号调用各占一条，不互相覆盖
+ *   （判据在 server/src/claude-monitor-identity.ts，未决调用的落盘键同一维）。
+ * - **持久层按任务 + 来源去重**（`per-task`）：唯一索引
+ *   `(task_id, COALESCE(cli_session_id,'run:'||source_run), native_id)`。原先是
+ *   `(task_id, native_id)`，它的前提是同一个 ash 任务里来源 id 不撞 —— 那一点**实测成立但
+ *   不是来源侧的承诺**：2026-10-14 扫过本机全部 `agent-out.jsonl`，1017 条 `task_started` 里
+ *   `local_bash` 的 id 形如 `b` + 8 位随机 base36（`blu5n05kp`），跨会话重复 0 个；但来源侧
+ *   只承诺会话内唯一，所以现在来源那一维进了键（第 13 轮审查 N1）。
  *
  * 反例记一笔：`local_agent` 那种（`a` 前缀，子代理）同一个 id 出现过两次、挂在两个不同的
  * `tool_use_id` 上。我们只认 Monitor 起的 `local_bash`，碰不到它——但它正好说明「来源 id 全局
  * 唯一」不能当普适假设，这也是解析层坚持按会话分区的理由。
  *
- * 两个来源真撞同一个 native id 时，落库会合并成一行（概率极低，未实测）。要彻底消除就得把
- * 会话身份并进唯一索引；那是一次会影响存量数据的 schema 变更，目前的证据不足以支撑。
+ * 这也是为什么**不能拿「号撞了」当成「是同一条」**：持久事实（卡片、调用入参）一旦按更粗的
+ * 身份合并或销账，丢掉的东西没有任何重建路径。
  */
 export const NATIVE_MONITOR_ID_PARSE_SCOPE = "per-cli-session" as const;
 export const NATIVE_MONITOR_ID_PERSIST_SCOPE = "per-task" as const;
