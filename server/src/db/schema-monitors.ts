@@ -5,7 +5,7 @@
 // 项目约定的 700 行上限（全局 CLAUDE.md），这次正好拆出来。
 //
 // `schema.ts` 原样转发 `monitors`，所有 `from "./db/schema.js"` 的导入不受影响。
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 // 哨兵（Monitor）：一条绑在任务上的长跑命令，由 **ash server** 起、不在 agent 进程树里，
 // stdout 每一行就是一条事件（语义与上限见 shared/src/monitor.ts）。
@@ -128,4 +128,10 @@ export const monitorPendingCalls = sqliteTable("monitor_pending_calls", {
   at: text("at"),
   /** 在哪个 run 文件里读到的。只作诊断。 */
   sourceRun: text("source_run"),
-});
+}, (t) => ({
+  // **唯一键要跟 bootstrap 那条 DDL 一模一样**（db/index.ts 的 `CREATE TABLE IF NOT EXISTS`）。
+  // 声明式路径（`npm -w server run db:push`）只认这里：少了它，push 建出来的表没有任何唯一
+  // 约束，`syncPendingCalls` 的 `onConflictDoNothing` 于是防不住重复 —— 每轮同步都能再插一条
+  // 一样的（第 12 轮审查 N4，用构建产物 drizzle-kit export 实测该表没有主键）。
+  pk: primaryKey({ columns: [t.taskId, t.sessionKey, t.toolUseId] }),
+}));

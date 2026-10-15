@@ -620,6 +620,16 @@ async function main(): Promise<void> {
     const after = await db.select().from(schema.monitorPendingCalls)
       .where(eq(schema.monitorPendingCalls.taskId, f.taskId));
     check(after.length === 0, "⑩删任务把它一起带走了", String(after.length));
+    // **再读一轮**：删除只清了库的话，按 taskId 缓着的那份扫描状态还留着上一轮悬着的调用，
+    // 这一轮提交完就会把它重新插回去 —— 一条再也没有入口能清的孤儿行（第 12 轮审查 N5）。
+    // 删除那一侧要连扫描状态、位置、恢复责任一起作废。
+    await backfillClaudeMonitors(f.taskId);
+    const revived = await db.select().from(schema.monitorPendingCalls)
+      .where(eq(schema.monitorPendingCalls.taskId, f.taskId));
+    check(revived.length === 0, "⑩删完之后再读一轮，旧桶里那条不会被写回来",
+      JSON.stringify(revived));
+    check(monitorRecoveryOf(f.taskId) === null, "⑩删除也把它的恢复责任作废了（不会一直自动重推）",
+      JSON.stringify(monitorRecoveryOf(f.taskId)));
   }
 
   if (failures === 0) {
@@ -629,7 +639,7 @@ async function main(): Promise<void> {
       + "跳过前缀后新起的 run 仍把旧监听判死 / 迟到回执重建窄区间 / "
       + "唯一裁不清的那种重放一遍就收手 / "
       + "起不来的调用不钉位置、跨窗口的调用靠落盘接回来 / "
-      + "装不进窗口的那条记录跳过而不是卡死 / 删任务连未决行一起带走 均受回归保护");
+      + "装不进窗口的那条记录跳过而不是卡死 / 删任务连未决行和扫描状态一起带走 均受回归保护");
   }
 }
 

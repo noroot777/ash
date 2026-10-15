@@ -205,6 +205,24 @@ const inflight = new Map<string, Promise<number>>();
 export const monitorScanTracked = (taskId: string): boolean => snapshots.has(taskId);
 
 /**
+ * 这个任务被删了：扫描状态、位置、恢复责任**一起作废**。
+ *
+ * 为什么非有不可：库删干净了，而这几张内存表是按 taskId 存的，没人通知它们。残留下来的后果
+ * 不是「多占几十字节」——复用的那份快照里还留着上一轮悬着的调用，下一次有人读这个任务
+ * （已经打开的页面、在途请求、恢复账本的自动重推）就会把它们**重新插回库里**，成为再也没有
+ * 任何入口能清的孤儿行（第 12 轮审查 N5）。
+ *
+ * 单任务删、子任务删、项目删都合流到 `deleteTaskAssociations`，所以只有这一个调用点。
+ */
+export function forgetTaskMonitorScan(taskId: string): void {
+  snapshots.delete(taskId);
+  parked.delete(taskId);
+  rewound.delete(taskId);
+  evictWhenIdle.delete(taskId);
+  clearMonitorRecovery(taskId);
+}
+
+/**
  * 这个任务的检查点位置（只给回归用：验「在途被挤掉之后位置照旧单调往前」）。
  *
  * 快照被挤掉之后外面就看不到位置了，而「位置有没有归零」恰恰是这条路最该钉住的性质 ——
@@ -298,6 +316,12 @@ async function runBackfill(taskId: string): Promise<number> {
     // 上限挤掉，也可能这是第一次读这个任务。只给**新建的会话桶**倒进去，复用的桶里那份才是
     // 权威（它可能已经比库里新）。
     scan.restoredPending = await loadPendingCalls(taskId);
+    // **这一轮查不到的会话，它那份桶一律作废。** 复用的快照里可能还留着上一轮悬着的调用，而
+    // 会话行已经没了（任务被删、会话被清）——照常走下去会在提交后把它们重新写回库里，成为
+    // 没有任何入口能清的孤儿行（第 12 轮审查 N5）。删除那一侧也会主动作废整份快照
+    // （`forgetTaskMonitorScan`），这一步兜住「删除发生在这一轮的某个 await 里」。
+    const live = new Set(rows.map((r) => r.id));
+    for (const key of [...scan.sessions.keys()]) if (!live.has(key)) scan.sessions.delete(key);
     for (const session of rows) {
       if (!session.outPath) continue;
       await scanSession(scan, session.id, session.cliSessionId, session.outPath);

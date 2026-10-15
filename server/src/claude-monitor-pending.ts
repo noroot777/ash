@@ -20,6 +20,22 @@ import type { MonitorCall } from "./claude-monitors.js";
 import { db } from "./db/index.js";
 import { monitorPendingCalls, monitors } from "./db/schema.js";
 
+/**
+ * 一条语句最多带多少行（或多少个 id）。
+ *
+ * sqlite 的绑定变量有上限（本机 node:sqlite 是 250000，别的平台构建出来的不一定一样），
+ * 而这张表的行数虽然天然有界，界在「每个 run 文件至多一条长期悬着的」——历史很长的任务
+ * 总 run 数没有硬上限。顶爆的后果不是一行写不进去，而是**整轮 discard + 留账，下一轮重读
+ * 又攒出同样大的一批**，永远过不去（第 12 轮审查 N6）。分批写的代价只是多几条语句。
+ */
+const BATCH = 200;
+
+const batches = <T>(items: readonly T[]): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += BATCH) out.push(items.slice(i, i + BATCH));
+  return out;
+};
+
 export type PendingCall = {
   /** 读到它的那条 ash 会话 id（`pending` 按会话分区）。 */
   sessionKey: string;
@@ -49,10 +65,10 @@ export async function loadPendingCalls(taskId: string): Promise<Map<string, Pend
     .map((row) => row.toolUseId)
     .filter((value): value is string => !!value));
   const stale = rows.filter((row) => settled.has(row.toolUseId)).map((row) => row.toolUseId);
-  if (stale.length) {
+  for (const batch of batches(stale)) {
     await db.delete(monitorPendingCalls).where(and(
       eq(monitorPendingCalls.taskId, taskId),
-      inArray(monitorPendingCalls.toolUseId, stale),
+      inArray(monitorPendingCalls.toolUseId, batch),
     ));
   }
   for (const row of rows) {
@@ -75,7 +91,8 @@ export async function loadPendingCalls(taskId: string): Promise<Map<string, Pend
  * 位置、把那些行重新读一遍，这时落盘只会留下一份马上又会被重建的拷贝。
  *
  * 写入用 `onConflictDoNothing`：同一个 `tool_use_id` 的内容来自同一行不变的日志，重复读到
- * 它（文件被重写、位置回退）时没有任何字段需要更新。
+ * 它（文件被重写、位置回退）时没有任何字段需要更新。它靠的是 `(task_id, session_key,
+ * tool_use_id)` 这个唯一键 —— **两条建库路径都得有**（见 db/schema-monitors.ts）。
  */
 export async function syncPendingCalls(
   taskId: string, pending: readonly PendingCall[], cleared: readonly ClearedCall[],
@@ -85,18 +102,21 @@ export async function syncPendingCalls(
     bySession.set(item.sessionKey, [...(bySession.get(item.sessionKey) ?? []), item.toolUseId]);
   }
   for (const [sessionKey, ids] of bySession) {
-    await db.delete(monitorPendingCalls).where(and(
-      eq(monitorPendingCalls.taskId, taskId),
-      eq(monitorPendingCalls.sessionKey, sessionKey),
-      inArray(monitorPendingCalls.toolUseId, ids),
-    ));
+    for (const batch of batches(ids)) {
+      await db.delete(monitorPendingCalls).where(and(
+        eq(monitorPendingCalls.taskId, taskId),
+        eq(monitorPendingCalls.sessionKey, sessionKey),
+        inArray(monitorPendingCalls.toolUseId, batch),
+      ));
+    }
   }
-  if (!pending.length) return;
-  await db.insert(monitorPendingCalls)
-    .values(pending.map((item) => ({
-      taskId, sessionKey: item.sessionKey, toolUseId: item.toolUseId,
-      command: item.call.command, description: item.call.description,
-      at: item.at, sourceRun: item.sourceRun,
-    })))
-    .onConflictDoNothing();
+  for (const batch of batches(pending)) {
+    await db.insert(monitorPendingCalls)
+      .values(batch.map((item) => ({
+        taskId, sessionKey: item.sessionKey, toolUseId: item.toolUseId,
+        command: item.call.command, description: item.call.description,
+        at: item.at, sourceRun: item.sourceRun,
+      })))
+      .onConflictDoNothing();
+  }
 }
