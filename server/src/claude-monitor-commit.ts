@@ -38,6 +38,7 @@ import {
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
+import { matchBySource } from "./claude-monitor-identity.js";
 import type { Found, LateFact } from "./claude-monitor-scan.js";
 import { db } from "./db/index.js";
 import { monitors } from "./db/schema.js";
@@ -97,21 +98,9 @@ type RowIndex = {
   anyMissingToolUse: boolean;
 };
 
-/**
- * 同一个 id 底下有多行时挑哪一行：**先认会话身份，再退到没有归属的存量行**。
- *
- * **只有一行也要问一句归属。** 上一版在这里短路了（「唯一索引保证一个 id 一行，没有歧义可
- * 挑」），而那个前提本身就是要修的东西：持久身份现在是 `(task_id, cli_session_id, native_id)`
- * （唯一索引 `monitors_native_session`），同一个任务上两条 CLI 会话撞同一个 id 是允许的。
- * 短路的后果是「库里碰巧只有乙那一行」时把甲的事实写到乙身上 —— 一条事实宁可暂时没归宿
- * （下一轮重读还在），也不写错行（第 13 轮审查 N1）。
- *
- * 没有归属的存量行仍然收：`cli_session_id` 是后加的列，老行上一律为空。
- */
-function pick(rows: PriorRow[] | undefined, cliSessionId: string | null): PriorRow | undefined {
-  if (!rows?.length) return undefined;
-  return rows.find((r) => r.cliSessionId === cliSessionId) ?? rows.find((r) => !r.cliSessionId);
-}
+/** 同一个 id 底下有多行时挑哪一行：判据在 `claude-monitor-identity.ts`，这里只是转一手。 */
+const pick = (rows: PriorRow[] | undefined, cliSessionId: string | null): PriorRow | undefined =>
+  matchBySource(rows ?? [], cliSessionId);
 
 function indexRows(rows: PriorRow[]): RowIndex {
   const index: RowIndex = { byNative: new Map(), byToolUse: new Map(), anyMissingToolUse: false };
@@ -410,6 +399,8 @@ async function mergeInto(
   prior: PriorRow, item: Found, status: string, endedReason: string | null,
 ): Promise<{ changed: boolean; missed: boolean }> {
   const meta: Record<string, unknown> = {};
+  // 认领归属：能走到这儿说明这条无归属的行是**唯一候选**（`matchBySource` 的规矩②），
+  // 认领因此有唯一证据背书；说不清是谁的那些行根本挑不出来，也就谈不上认领。
   if (!prior.cliSessionId && item.cliSessionId) meta.cliSessionId = item.cliSessionId;
   // 存量行（升级前写的、以及实时投影在这一列存在之前落的）要顺手补上：缺了它，这一行
   // 在配对状态被挤掉之后就配不回自己的起手回执（见文件头的检查点说明）。

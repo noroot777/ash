@@ -39,6 +39,7 @@ import {
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
+import { matchBySource } from "./claude-monitor-identity.js";
 import {
   noteMonitorRecovery, noteMonitorRecoveryBySession, type MonitorRecoveryReason,
 } from "./claude-monitor-recovery.js";
@@ -441,7 +442,7 @@ export class ClaudeMonitorTrace {
    *
    * **身份是 (taskId, 来源会话, nativeId)，不是 (taskId, nativeId)。** native_id 只在一条 CLI
    * 会话内唯一，同一个任务上先后两条会话撞同一个 id 时，少了会话这一维就会把乙的通知写到
-   * 甲那一行上（第 13 轮审查 N1）。`cli_session_id` 为空的是存量行，仍然认——那一列是后加的。
+   * 甲那一行上（第 13 轮审查 N1）。挑哪一行的判据在 `claude-monitor-identity.ts`。
    */
   private async locateRow(taskId: string, nativeId: string): Promise<string | null> {
     const cached = this.rows.get(nativeId);
@@ -450,7 +451,7 @@ export class ClaudeMonitorTrace {
       .select({ id: monitors.id, cliSessionId: monitors.cliSessionId })
       .from(monitors)
       .where(and(eq(monitors.taskId, taskId), eq(monitors.nativeId, nativeId), eq(monitors.kind, "claude")));
-    const row = rows.find((r) => r.cliSessionId === this.cliSessionId) ?? rows.find((r) => !r.cliSessionId);
+    const row = matchBySource(rows, this.cliSessionId);
     if (row) this.rows.set(nativeId, row.id);
     return row?.id ?? null;
   }
@@ -476,8 +477,7 @@ export class ClaudeMonitorTrace {
       .select({ id: monitors.id, cliSessionId: monitors.cliSessionId })
       .from(monitors)
       .where(and(eq(monitors.taskId, found.taskId), eq(monitors.nativeId, nativeId)));
-    const existing = candidates.find((r) => r.cliSessionId === this.cliSessionId)
-      ?? candidates.find((r) => !r.cliSessionId);
+    const existing = matchBySource(candidates, this.cliSessionId);
     if (existing) {
       this.rows.set(nativeId, existing.id);
       return;

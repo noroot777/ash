@@ -63,7 +63,11 @@ export async function loadPendingCalls(taskId: string): Promise<Map<string, Pend
   // 而投影行记的是 **CLI** 会话，两个命名空间不一样，所以先用 `sessions` 把它们对上。只按
   // tool_use_id 判的话，甲会话里已经成行的那条，会把乙会话里还悬着的同号调用一起销掉——
   // 入参的唯一出处就这么没了，乙那张卡再也出不来（第 13 轮审查 N1）。
-  // 存量行（`cli_session_id` 为空）仍然认：那一列是后加的，老行上没有归属可比。
+  // **空归属不是通配符。** 两边都没有归属时按「都不知道」对上（键里都是空串），但「我这条
+  // 有来源、库里那条没有」说明不了它们是同一条 —— 那时不许销账（第 14 轮审查 N2 实测：一条
+  // 无归属的旧投影把另一条会话里还悬着的同号调用销了,那条调用唯一的恢复依据就此消失,它那
+  // 张卡再也出不来）。代价只是这一行会被反复读回来(留着不会让显示出错,见上),比毁掉恢复
+  // 依据便宜得多:宁可留着未决责任,也不拿一条证明不了的证据销账。
   const cliOf = new Map((await db
     .select({ id: sessions.id, cliSessionId: sessions.cliSessionId })
     .from(sessions)
@@ -76,8 +80,7 @@ export async function loadPendingCalls(taskId: string): Promise<Map<string, Pend
     .filter((row): row is { toolUseId: string; cliSessionId: string | null } => !!row.toolUseId)
     .map((row) => `${row.cliSessionId ?? ""}\u0000${row.toolUseId}`));
   const isSettled = (row: { sessionKey: string; toolUseId: string }): boolean =>
-    settled.has(`${cliOf.get(row.sessionKey) ?? ""}\u0000${row.toolUseId}`)
-    || settled.has(`\u0000${row.toolUseId}`);   // 没有归属的存量行
+    settled.has(`${cliOf.get(row.sessionKey) ?? ""}\u0000${row.toolUseId}`);
   // 删除也按会话分区：跨会话删等于把乙那条一起带走。
   const stale = new Map<string, string[]>();
   for (const row of rows) {
