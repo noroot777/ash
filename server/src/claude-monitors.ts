@@ -40,6 +40,7 @@ import {
 import { bus } from "./bus.js";
 import { matchBySource } from "./claude-monitor-identity.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
+import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 import {
   noteMonitorRecovery, noteMonitorRecoveryBySession, type MonitorRecoveryReason,
 } from "./claude-monitor-recovery.js";
@@ -496,7 +497,9 @@ export class ClaudeMonitorTrace {
     }
     const rowId = id();
     const startedAt = seen.at;
-    await db.insert(monitors).values({
+    // 落库资格跟插入在同一个批里（见 claude-monitor-write.ts）:上面那道门闸之后还隔着
+    // 两次 await,任务在这中间删完的话,这一行就成了没人清得掉的孤儿。
+    await writeIfTaskAlive(db.insert(monitors).values({
       id: rowId,
       taskId: found.taskId,
       command: call.command,
@@ -539,7 +542,7 @@ export class ClaudeMonitorTrace {
       sourceRun: found.outPath || null,
       // 起点的下界：实时投影自己就看着它到达，锚点是 `observed`，所以下界就是那一刻。
       startLowAt: startedAt,
-    });
+    }), db.delete(monitors).where(orphanRows(monitors, found.taskId)));
     this.rows.set(nativeId, rowId);
     bus.publish({ type: "task.monitors", taskId: found.taskId });
   }

@@ -39,6 +39,7 @@ import {
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
 import { matchBySource, type SourceEvidence } from "./claude-monitor-identity.js";
+import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 import type { Found, LateFact } from "./claude-monitor-scan.js";
 import { db } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
@@ -344,7 +345,9 @@ async function insertFound(
   rowId: string, taskId: string, item: Found, status: string, endedReason: string | null,
   startedAt: string, anchor: Anchor,
 ): Promise<void> {
-  await db.insert(monitors).values({
+  // 落库资格跟插入同批（见 claude-monitor-write.ts）：调用方在轮次开头问过门闸，但那之后
+  // 隔着整整一轮的 await，任务在这中间删完的话这一行就是孤儿。
+  await writeIfTaskAlive(db.insert(monitors).values({
     id: rowId,
     taskId,
     command: item.call.command,
@@ -389,7 +392,7 @@ async function insertFound(
     sourceRun: item.filePath || null,
     // 起点区间的下界。迟到回执靠它重建那个窄区间（见 lateItem）。
     startLowAt: item.startedAtLow,
-  });
+  }), db.delete(monitors).where(orphanRows(monitors, taskId)));
 }
 
 /**

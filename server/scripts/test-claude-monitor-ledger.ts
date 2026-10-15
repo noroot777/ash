@@ -569,6 +569,10 @@ async function main(): Promise<void> {
     await dbClient.execute(`CREATE TABLE monitor_pending_calls (
       task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
       command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', at TEXT, source_run TEXT)`);
+    // 任务行要真的有：落库资格现在跟写同一个批（claude-monitor-write.ts），任务不在 =
+    // 这些行是孤儿、当场被收走。以前这个夹具省掉了它，靠的是「没人验证归属」。
+    await db.insert(tasks).values({ id: "t-legacy-pending", projectId: "p", title: "旧未决表", body: "",
+      status: "running", agentType: "claude", mode: "single", createdAt: now(), updatedAt: now() });
     const dup = ["t-legacy-pending", "s-legacy", "tu-dup", "sleep 600", "重复了两条", null, null];
     await dbClient.execute({ sql: "INSERT INTO monitor_pending_calls VALUES (?,?,?,?,?,?,?)", args: dup });
     await dbClient.execute({ sql: "INSERT INTO monitor_pending_calls VALUES (?,?,?,?,?,?,?)", args: dup });

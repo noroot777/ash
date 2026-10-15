@@ -239,14 +239,22 @@ export async function edgeGroups(): Promise<void> {
     check(first > 0, "⑬第一轮确实落了一个位置", String(first));
 
     // 第二轮:提交写失败(走回退) + 作废位置也失败(F1 的组合)。
+    //
+    // **两条路都要堵**:落库资格跟写同批之后(第 6 轮审查 F1),插入走的是 `batch` 而不是
+    // `execute` —— 只堵 execute 的话这一轮会悄悄成功,这组断言就测了个寂寞。
+    const down = { on: true };
+    const hits = (sql: string) => down.on
+      && /insert into "monitors"|delete from "monitor_scan_cursors"/i.test(sql);
+    const sqlOf = (stmt: any) => typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
     const real = dbClient.execute.bind(dbClient);
-    let down = true;
+    const realBatch = dbClient.batch.bind(dbClient);
     (dbClient as any).execute = async (stmt: any) => {
-      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
-      if (down && /insert into "monitors"|delete from "monitor_scan_cursors"/i.test(sql)) {
-        throw new Error("INJECTED_DB_DOWN");
-      }
+      if (hits(sqlOf(stmt))) throw new Error("INJECTED_DB_DOWN");
       return real(stmt);
+    };
+    (dbClient as any).batch = async (stmts: any[], mode?: any) => {
+      if (stmts.some((stmt) => hits(sqlOf(stmt)))) throw new Error("INJECTED_DB_DOWN");
+      return realBatch(stmts, mode);
     };
     try {
       await backfillClaudeMonitors(f.taskId);
@@ -254,7 +262,11 @@ export async function edgeGroups(): Promise<void> {
         JSON.stringify(monitorRecoveryOf(f.taskId)));
       check((await cursorsOf()).length > 0,
         "⑬而且库里那份位置确实没删掉(清理失败了)");
-    } finally { down = false; (dbClient as any).execute = real; }
+    } finally {
+      down.on = false;
+      (dbClient as any).execute = real;
+      (dbClient as any).batch = realBatch;
+    }
 
     // 第三轮:数据库好了。那份位置是**作废过的**,不许当成已确认位置接着往后读。
     await backfillClaudeMonitors(f.taskId);
@@ -338,10 +350,11 @@ export async function edgeGroups(): Promise<void> {
 
   // ── ⑯ 删除期是一段,不是一个瞬间:期间新来的扫描一样不许写 ───────────────────────
   //
-  // `deleteTaskCompletely` 从停哨兵到删会话行有十几条语句、每条都 await。卡在「monitors
-  // 已删、sessions 还没删」那一刻进来一个新请求,它读得到旧会话 —— 上一版靠「开工时取一次
-  // 删除代次」判资格,而那个代次已经是删除之后的值,于是这一轮不认为自己被撤销过,把行又写
-  // 回去(第 14 轮审查 N3)。门闸是任务级的、覆盖整个删除期,所以这一轮连读都不读。
+  // 删除的**库操作**现在是一个原子批,里面插不进别人(第 6 轮审查 F1);但删除这件事仍然是
+  // 一段时间 —— 批之前还要停哨兵、收旁聊、删 git ref,每一步都 await。卡在那一段里进来一个
+  // 新请求时,库看上去**完全正常**(任务、会话、投影行一个没少),所以挡住它的只能是门闸。
+  // 上一版靠「开工时取一次删除代次」判资格,而那个代次已经是删除之后的值,于是这一轮不认为
+  // 自己被撤销过,把行又写回去(第 14 轮审查 N3)。门闸是任务级的、覆盖整个删除期。
   {
     const f = await fixture("delete-window");
     let body = line({ type: "system", subtype: "init", session_id: f.cli });
@@ -358,8 +371,8 @@ export async function edgeGroups(): Promise<void> {
     let paused = false;
     (dbClient as any).execute = async (stmt: any) => {
       const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
-      // 卡在「会话行就要被删」之前:此刻 monitors 已经删完,会话还在。
-      if (!paused && /delete from "sessions"/i.test(sql)) {
+      // 卡在原子批**之前**那一段(收旁聊是它的第一步):此刻库里一行都还没删。
+      if (!paused && /from "chat_rooms"/i.test(sql)) {
         paused = true;
         reached();
         await barrier;
@@ -373,7 +386,6 @@ export async function edgeGroups(): Promise<void> {
     const added = await backfillClaudeMonitors(f.taskId);
     resume();
     await deleting;
-    await db.delete(tasks).where(eq(tasks.id, f.taskId));
     (dbClient as any).execute = real;
 
     check(added === 0, "⑯删除期里来的那一轮一行都没写", `added=${added}`);
@@ -461,15 +473,15 @@ export async function edgeGroups(): Promise<void> {
       "⑰而且是真删掉了");
   }
 
-  // ── ⑱ 删除失败、任务还在:闸必须打开,卡要回得来 ────────────────────────────────
+  // ── ⑱ 删除失败、任务还在:**什么都没删掉**,闸也必须打开 ────────────────────────
   //
   // 第 5 轮审查用真实页面复现:删一个旧任务时注入一次 pending DELETE 失败(它发生在 monitors
   // 已删之后),请求 500、任务仍在列表里,而它原来看得到的那张卡此后再也打不开 —— 列表连续
   // 5 次都是 `200 []`,恢复责任 null,刷新、反复切回来都一样。根因是闸只记「进程内记得删除
   // 过」,没有跟删除的**结果**绑定:删一半失败,任务还在,闸却永远关着。
   //
-  // 开闸还不够:删除是半路停的(monitors 没了、读取位置还停在那些行之后),所以收口还要把
-  // 可重建资格一起恢复 —— 这一组两件事都钉。
+  // 第 6 轮审查把它推到了根上:只开闸不够,因为删一半的状态本身就不该存在 —— 删除的库操作
+  // 是一个原子批,失败就整批回滚。这一组钉的是「失败之后一行都没少」,外加闸照常打开。
   {
     const { isTaskRevoked, pendingPurges } = await import("../src/claude-monitor-revoked.js");
     const f = await fixture("failed-delete");
@@ -487,20 +499,31 @@ export async function edgeGroups(): Promise<void> {
       .where(eq(schema.monitorScanCursors.taskId, f.taskId))).length) > 0,
       "⑱而且读取位置已经停在那些行之后(删一半之后它会挡住重读)");
 
-    const real = dbClient.execute.bind(dbClient);
+    // 注入打在**原子批**上:删除的全部语句都在那里面跑(第 6 轮审查 F1)。
+    const realBatch = dbClient.batch.bind(dbClient);
     let down = true;
-    (dbClient as any).execute = async (stmt: any) => {
-      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+    (dbClient as any).batch = async (stmts: any[], mode?: any) => {
+      const sql = stmts.map((stmt) => typeof stmt === "string" ? stmt : String(stmt?.sql ?? "")).join(";");
       if (down && /delete from "monitor_pending_calls"/i.test(sql)) throw new Error("INJECTED_DELETE_FAILURE");
-      return real(stmt);
+      return realBatch(stmts, mode);
     };
     const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
     let threw = false;
     try { await deleteTaskCompletely(f.taskId); } catch { threw = true; }
     down = false;
-    (dbClient as any).execute = real;
+    (dbClient as any).batch = realBatch;
 
     check(threw, "⑱删除确实失败了(请求会 500)");
+    // **整批回滚**:卡、会话、读取位置一个都不许少 —— 不是「还能重建」,是根本没动过。
+    check((await listMonitors(f.taskId)).length === 1,
+      "⑱那张卡当场就还在(不必等重建)", `${(await listMonitors(f.taskId)).length} 条`);
+    check((await db.select().from(sessions).where(eq(sessions.taskId, f.taskId))).length === 1,
+      "⑱会话行也还在(内置 Monitor 的重建依据)");
+    // 读取位置是**故意**被作废的(收口那一步):删除期里可能有在途的一轮把位置推过去了,
+    // 而它的行因为没有落库资格并没写进来。重读一遍是这件事唯一说得清的收法。
+    check((await db.select().from(schema.monitorScanCursors)
+      .where(eq(schema.monitorScanCursors.taskId, f.taskId))).length === 0,
+      "⑱读取位置被作废了(在途那一轮可能已经把它推过去)");
     check((await db.select().from(tasks).where(eq(tasks.id, f.taskId))).length === 1,
       "⑱任务还在(所以用户还能点开它)");
     check(!isTaskRevoked(f.taskId), "⑱闸打开了(删除没删成,不许永久封住一个还在的任务)");
@@ -527,15 +550,20 @@ export async function edgeGroups(): Promise<void> {
     writeFileSync(f.file, body);
 
     const real = dbClient.execute.bind(dbClient);
+    const realBatch = dbClient.batch.bind(dbClient);
     let reached!: () => void;
     let resume!: () => void;
     const selected = new Promise<void>((r) => { reached = r; });
     const barrier = new Promise<void>((r) => { resume = r; });
     let paused = false;
     let down = true;
+    (dbClient as any).batch = async (stmts: any[], mode?: any) => {
+      const sql = stmts.map((stmt) => typeof stmt === "string" ? stmt : String(stmt?.sql ?? "")).join(";");
+      if (down && /delete from "monitor_pending_calls"/i.test(sql)) throw new Error("INJECTED_DELETE_FAILURE");
+      return realBatch(stmts, mode);
+    };
     (dbClient as any).execute = async (stmt: any) => {
       const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
-      if (down && /delete from "monitor_pending_calls"/i.test(sql)) throw new Error("INJECTED_DELETE_FAILURE");
       const result = await real(stmt);
       if (!paused && /from "sessions"/i.test(sql) && JSON.stringify(stmt?.args ?? []).includes(f.taskId)) {
         paused = true;
@@ -552,6 +580,7 @@ export async function edgeGroups(): Promise<void> {
     await job;
     down = false;
     (dbClient as any).execute = real;
+    (dbClient as any).batch = realBatch;
 
     check(threw && (await db.select().from(tasks).where(eq(tasks.id, f.taskId))).length === 1,
       "⑱(b) 删除失败了,任务还在");

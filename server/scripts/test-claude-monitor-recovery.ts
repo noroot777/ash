@@ -317,7 +317,9 @@ async function main(): Promise<void> {
     (db as any).insert = (table: unknown) => {
       if (boom > 0 && (table as any) === monitors) {
         boom -= 1;
-        return { values: async () => { throw new Error("INJECTED_SQLITE_BUSY"); } };
+        // 同步抛：这条插入现在交给 `db.batch` 执行（落库资格与它同批），造语句这一步抛
+        // 出来才算「这次写没发生」。
+        return { values: () => { throw new Error("INJECTED_SQLITE_BUSY"); } };
       }
       return (realInsert as any)(table);
     };

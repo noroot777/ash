@@ -17,6 +17,7 @@
 //     调用一定在（内存里或这张表里），不再依赖「位置没越过它」
 import { and, eq, inArray } from "drizzle-orm";
 import type { MonitorCall } from "./claude-monitors.js";
+import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 import { db } from "./db/index.js";
 import { monitorPendingCalls, monitors, sessions } from "./db/schema.js";
 
@@ -136,12 +137,16 @@ export async function syncPendingCalls(
     }
   }
   for (const batch of batches(pending)) {
-    await db.insert(monitorPendingCalls)
-      .values(batch.map((item) => ({
-        taskId, sessionKey: item.sessionKey, toolUseId: item.toolUseId,
-        command: item.call.command, description: item.call.description,
-        at: item.at, sourceRun: item.sourceRun,
-      })))
-      .onConflictDoNothing();
+    // 落库资格跟插入同批（见 claude-monitor-write.ts）：门闸只在进入这个函数时问过一次。
+    await writeIfTaskAlive(
+      db.insert(monitorPendingCalls)
+        .values(batch.map((item) => ({
+          taskId, sessionKey: item.sessionKey, toolUseId: item.toolUseId,
+          command: item.call.command, description: item.call.description,
+          at: item.at, sourceRun: item.sourceRun,
+        })))
+        .onConflictDoNothing(),
+      db.delete(monitorPendingCalls).where(orphanRows(monitorPendingCalls, taskId)),
+    );
   }
 }

@@ -18,6 +18,7 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitorScanCursors } from "./db/schema.js";
+import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 
 /**
  * 一个 run 文件读到哪儿了。三件事**分开记**，别混成一个数(第 14 轮审查 N1)：
@@ -84,13 +85,18 @@ export async function saveScanCursors(
     probe: cursor.probe, gaps: JSON.stringify(cursor.gaps),
   }));
   for (const batch of batches(rows)) {
-    await db.insert(monitorScanCursors).values(batch).onConflictDoUpdate({
-      target: [monitorScanCursors.taskId, monitorScanCursors.path],
-      set: {
-        fileSize: sql`excluded.file_size`, readOffset: sql`excluded.read_offset`,
-        probe: sql`excluded.probe`, gaps: sql`excluded.gaps`,
-      },
-    });
+    // 落库资格跟 upsert 同批（见 claude-monitor-write.ts）：任务在这一轮里被删完的话，
+    // 这些位置行会变成没人清得掉的孤儿，而且下一次同名任务复活还会被它们带偏。
+    await writeIfTaskAlive(
+      db.insert(monitorScanCursors).values(batch).onConflictDoUpdate({
+        target: [monitorScanCursors.taskId, monitorScanCursors.path],
+        set: {
+          fileSize: sql`excluded.file_size`, readOffset: sql`excluded.read_offset`,
+          probe: sql`excluded.probe`, gaps: sql`excluded.gaps`,
+        },
+      }),
+      db.delete(monitorScanCursors).where(orphanRows(monitorScanCursors, taskId)),
+    );
   }
 }
 
@@ -101,5 +107,13 @@ export async function saveScanCursors(
  * 那时位置之前那段既不在内存里也不在库里，从它往后读再也拼不回来，只能重读一遍。
  */
 export async function clearScanCursors(taskId: string): Promise<void> {
-  await db.delete(monitorScanCursors).where(eq(monitorScanCursors.taskId, taskId));
+  await clearScanCursorsStatement(taskId);
+}
+
+/**
+ * 同一条删除，但只**造**出来不执行 —— 删任务那条路要把它和其余删除放进同一个原子批
+ * （见 task-delete-routes.ts 的 `deleteTaskCompletely`），所以语句本体留在这里一份。
+ */
+export function clearScanCursorsStatement(taskId: string) {
+  return db.delete(monitorScanCursors).where(eq(monitorScanCursors.taskId, taskId));
 }

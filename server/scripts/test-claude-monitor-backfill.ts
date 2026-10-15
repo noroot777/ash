@@ -367,12 +367,15 @@ async function main(): Promise<void> {
     });
 
     // 注入一次写失败：**不是**唯一索引冲突，所以必须被当成真失败。
+    // 同步抛而不是返回一个 rejected promise：这条插入现在是交给 `db.batch` 去执行的
+    // （落库资格与它同批，见 claude-monitor-write.ts），造语句这一步抛出来才是「这次写没
+    // 发生」，返回 rejected promise 则谁都没 await 它。
     const realInsert = db.insert.bind(db);
     let injected = 0;
     (db as any).insert = (table: unknown) => {
       if (table === monitors && injected === 0) {
         injected += 1;
-        return { values: async () => { throw Object.assign(new Error("INJECTED_SQLITE_BUSY"), { errcode: 5 }); } };
+        return { values: () => { throw Object.assign(new Error("INJECTED_SQLITE_BUSY"), { errcode: 5 }); } };
       }
       return realInsert(table as never);
     };

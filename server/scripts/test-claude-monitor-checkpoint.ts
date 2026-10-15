@@ -27,6 +27,7 @@ import {
   call, started, receipt, notice, makeSqueeze, driveUntil,
 } from "./monitor-checkpoint-harness.js";
 import { edgeGroups } from "./monitor-checkpoint-edges.js";
+import { deleteAtomicGroups } from "./monitor-delete-atomic.js";
 
 async function main(): Promise<void> {
   await db.insert(projects).values({ id: "p", name: "p", repoPath: root, createdAt: now() });
@@ -418,6 +419,7 @@ async function main(): Promise<void> {
 
 
   await edgeGroups();
+  await deleteAtomicGroups();
 
   if (failureCount() === 0) {
     console.log("✓ 内置 Monitor 的检查点：位置只停在可重放处（被跳过的调用会重放）/ "
