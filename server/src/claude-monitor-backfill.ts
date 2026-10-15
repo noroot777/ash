@@ -41,7 +41,8 @@ import {
 import { db, dbClient } from "./db/index.js";
 import { monitorPendingCalls, monitorScanCursors, monitors, sessions, tasks } from "./db/schema.js";
 import {
-  beginTaskRevocation, isTaskRevoked, notePurgeDone, notePurgeFailed,
+  beginTaskRevocation, confirmTaskRevocation, isTaskDeleted, isTaskRevoked,
+  notePurgeDone, notePurgeFailed, releaseTaskRevocation,
 } from "./claude-monitor-revoked.js";
 import { isSameProcess } from "./proc.js";
 import { now } from "./util.js";
@@ -163,11 +164,11 @@ export const monitorScanTracked = (taskId: string): boolean => snapshots.has(tas
  * （已经打开的页面、在途请求、恢复账本的自动重推）就会把它们**重新插回库里**，成为再也没有
  * 任何入口能清的孤儿行（第 12 轮审查 N5）。
  *
- * 单任务删、子任务删、项目删都合流到 `deleteTaskAssociations`，所以只有这一个调用点；落盘的
+ * 单任务删、子任务删、项目删都合流到 `deleteTaskCompletely`，所以只有这一个调用点；落盘的
  * 那两张表（位置、未决调用）在那边跟着一起删。
  */
 export function revokeTaskMonitors(taskId: string): void {
-  // **第一件事是关闸**（`deleteTaskAssociations` 也因此必须在第一条 DELETE 之前调它）：
+  // **第一件事是关闸**（`deleteTaskCompletely` 也因此必须在第一条 DELETE 之前调它）：
   // 删除不是一个瞬间，而四个 writer 的落库资格要在**整个删除期**都不成立 —— 判据和理由
   // 见 claude-monitor-revoked.ts（第 14 轮审查 N3）。
   beginTaskRevocation(taskId);
@@ -204,6 +205,14 @@ const needsPurge = new Set<string>();
  * 行再也没有入口能清（任务都没了）。
  */
 async function purgeRevokedTask(taskId: string): Promise<void> {
+  // **补偿只针对确认删除的任务。** 删除失败、任务还在的时候走到这里就是在删用户还看得见的
+  // 数据（第 5 轮审查 F1 的另一半）。`settleTaskRevocation` 已经把这种情况的责任摘掉了，
+  // 这一道是硬闸：顺序再变也不会误伤。
+  if (!isTaskDeleted(taskId)) {
+    needsPurge.delete(taskId);
+    notePurgeDone(taskId);
+    return;
+  }
   try {
     await db.delete(monitors).where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude")));
     await db.delete(monitorPendingCalls).where(eq(monitorPendingCalls.taskId, taskId));
@@ -220,6 +229,43 @@ async function purgeRevokedTask(taskId: string): Promise<void> {
     console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 删除后的残留清理失败，已排重试:`, e);
     notePurgeFailed(taskId, purgeRevokedTask);
   }
+}
+
+/**
+ * 删除流程收口：**按「任务行还在不在」决定那道闸是关死还是打开**（第 5 轮审查 F1）。
+ *
+ * 删除可能在任何一条语句上失败，而失败之后任务**还在**：它还在列表里、用户还能点开。
+ * 这时候闸必须打开，否则回填入口早退、恢复责任也不登记 —— 列表永远返回空数组，账面还
+ * 显示「读完了」，刷新多少次都一样（审查用真实页面复现：注入一次 pending DELETE 失败，
+ * 原来看得到的那张卡此后再也打不开）。
+ *
+ * 开闸还不够：删除是半路停的，`monitors` 可能已经删了而 `monitor_scan_cursors` 还停在
+ * 那些行之后 —— 照那个位置往下读，被删掉的那一段永远不会再被读到。所以**连可重建资格一起
+ * 恢复**：丢掉进程内状态、作废读取位置（清不掉就记进 `staleCursors`，下一轮也不会采用它）。
+ *
+ * 这个函数由 `deleteTaskCompletely` 的 finally 调用 —— 删除的全部语句（含任务行本身）都在
+ * 它里面，所以「行还在不在」在这一刻才是**删除的结果**，而不是中间态。
+ */
+export async function settleTaskRevocation(taskId: string): Promise<void> {
+  let alive = true;
+  try {
+    alive = !!(await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).length;
+  } catch (e) {
+    // 连「它还在不在」都查不出来：按**还在**处理。把一个仍存在的任务永久封死是用户看得见
+    // 的损坏；反过来多开一会儿闸，最坏也只是几行孤儿，启动期清扫会收。
+    console.warn(`[ash] 内置 Monitor：task=${taskId} 删除后核对任务是否还在失败，按「还在」放开闸:`, e);
+    alive = true;
+  }
+  if (!alive) {
+    confirmTaskRevocation(taskId);
+    return;
+  }
+  // 还在：开闸 + 恢复可重建资格；补偿清理一律取消（绝不许清一个还活着的任务的数据）。
+  needsPurge.delete(taskId);
+  notePurgeDone(taskId);
+  forgetTaskMonitorScan(taskId);
+  await clearCursorsSafely(taskId);
+  releaseTaskRevocation(taskId);
 }
 
 /**

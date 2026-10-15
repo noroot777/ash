@@ -40,6 +40,7 @@ import {
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
 import { matchBySource } from "./claude-monitor-identity.js";
+import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import {
   noteMonitorRecovery, noteMonitorRecoveryBySession, type MonitorRecoveryReason,
 } from "./claude-monitor-recovery.js";
@@ -464,6 +465,10 @@ export class ClaudeMonitorTrace {
   ): Promise<void> {
     const found = await locateSession(this.cliSessionId);
     if (found) this.taskId = found.taskId; // 归属趁手记下（见 `taskId`）
+    // 这个任务正在删/已经删了：实时这一侧也要问一句落库资格。它不在回填的 inflight 里，
+    // 那份 finally 的补偿够不着它（第 5 轮审查 F1 指出的 writer 盲点）。查到会话之后、写
+    // 之前问，窗口缩到一条语句；真有漏网的由启动期孤儿清扫收（sweepOrphanClaudeMonitors）。
+    if (found && isTaskRevoked(found.taskId)) return;
     if (!found) {
       // 认不出会话就落不了库。安静跳过是对的（不能因此拖垮事件流），但要留下线索——
       // 否则用户看到的是「agent 说挂上了，面板永远空着」，而日志里什么都没有。
@@ -537,6 +542,7 @@ export class ClaudeMonitorTrace {
     const found = await locateSession(this.cliSessionId);
     if (!found) return;
     this.taskId = found.taskId;
+    if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
     const rowId = await this.locateRow(found.taskId, nativeId);
     if (!rowId) return;
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
@@ -570,6 +576,7 @@ export class ClaudeMonitorTrace {
     const found = await locateSession(this.cliSessionId);
     if (!found) return;
     this.taskId = found.taskId;
+    if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
     const rowId = await this.locateRow(found.taskId, nativeId);
     if (!rowId) {
       // 库里**暂时**没有。多数情况是这条后台任务不是 Monitor 起的（普通后台 Bash），

@@ -71,8 +71,8 @@ export async function edgeGroups(): Promise<void> {
     const before = await db.select().from(schema.monitorPendingCalls)
       .where(eq(schema.monitorPendingCalls.taskId, f.taskId));
     check(before.length === 1, "⑩先确认库里真有一条未决行", String(before.length));
-    const { deleteTaskAssociations } = await import("../src/task-delete-routes.js");
-    await deleteTaskAssociations(f.taskId);
+    const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
+    await deleteTaskCompletely(f.taskId);
     const after = await db.select().from(schema.monitorPendingCalls)
       .where(eq(schema.monitorPendingCalls.taskId, f.taskId));
     check(after.length === 0, "⑩删任务把它一起带走了", String(after.length));
@@ -122,9 +122,9 @@ export async function edgeGroups(): Promise<void> {
     };
     const job = backfillClaudeMonitors(f.taskId);
     await selected;
-    const { deleteTaskAssociations } = await import("../src/task-delete-routes.js");
+    const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
     try {
-      await deleteTaskAssociations(f.taskId);
+      await deleteTaskCompletely(f.taskId);
       await db.delete(tasks).where(eq(tasks.id, f.taskId));
     } finally { resume(); }
     await job;
@@ -338,7 +338,7 @@ export async function edgeGroups(): Promise<void> {
 
   // ── ⑯ 删除期是一段,不是一个瞬间:期间新来的扫描一样不许写 ───────────────────────
   //
-  // `deleteTaskAssociations` 从停哨兵到删会话行有十几条语句、每条都 await。卡在「monitors
+  // `deleteTaskCompletely` 从停哨兵到删会话行有十几条语句、每条都 await。卡在「monitors
   // 已删、sessions 还没删」那一刻进来一个新请求,它读得到旧会话 —— 上一版靠「开工时取一次
   // 删除代次」判资格,而那个代次已经是删除之后的值,于是这一轮不认为自己被撤销过,把行又写
   // 回去(第 14 轮审查 N3)。门闸是任务级的、覆盖整个删除期,所以这一轮连读都不读。
@@ -366,8 +366,8 @@ export async function edgeGroups(): Promise<void> {
       }
       return real(stmt);
     };
-    const { deleteTaskAssociations } = await import("../src/task-delete-routes.js");
-    const deleting = deleteTaskAssociations(f.taskId);
+    const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
+    const deleting = deleteTaskCompletely(f.taskId);
     await atGap;
     // 删除期里来的那一轮:会话还查得到,但它没有落库资格。
     const added = await backfillClaudeMonitors(f.taskId);
@@ -424,9 +424,9 @@ export async function edgeGroups(): Promise<void> {
     };
     const job = backfillClaudeMonitors(f.taskId);
     await selected;
-    const { deleteTaskAssociations } = await import("../src/task-delete-routes.js");
+    const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
     try {
-      await deleteTaskAssociations(f.taskId);
+      await deleteTaskCompletely(f.taskId);
       await db.delete(tasks).where(eq(tasks.id, f.taskId));
     } finally { resume(); }
     await job;
@@ -459,5 +459,109 @@ export async function edgeGroups(): Promise<void> {
       JSON.stringify(swept));
     check((await db.select().from(monitors).where(eq(monitors.taskId, "t-gone-forever"))).length === 0,
       "⑰而且是真删掉了");
+  }
+
+  // ── ⑱ 删除失败、任务还在:闸必须打开,卡要回得来 ────────────────────────────────
+  //
+  // 第 5 轮审查用真实页面复现:删一个旧任务时注入一次 pending DELETE 失败(它发生在 monitors
+  // 已删之后),请求 500、任务仍在列表里,而它原来看得到的那张卡此后再也打不开 —— 列表连续
+  // 5 次都是 `200 []`,恢复责任 null,刷新、反复切回来都一样。根因是闸只记「进程内记得删除
+  // 过」,没有跟删除的**结果**绑定:删一半失败,任务还在,闸却永远关着。
+  //
+  // 开闸还不够:删除是半路停的(monitors 没了、读取位置还停在那些行之后),所以收口还要把
+  // 可重建资格一起恢复 —— 这一组两件事都钉。
+  {
+    const { isTaskRevoked, pendingPurges } = await import("../src/claude-monitor-revoked.js");
+    const f = await fixture("failed-delete");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-failed", "删除失败之后还要看得到的那条", "2026-10-15T20:00:00.000Z");
+    body += started(f.cli, "tu-failed", "bfailed");
+    body += receipt("tu-failed", "bfailed", "2026-10-15T20:00:00.040Z");
+    body += notice(f.cli, "bfailed");
+    writeFileSync(f.file, body);
+    await backfillClaudeMonitors(f.taskId);
+    const before = await listMonitors(f.taskId);
+    check(before.length === 1 && before[0]?.status === "exited",
+      "⑱删之前那张卡是看得到的", `${before.length} 条 / ${before[0]?.status}`);
+    check(((await db.select().from(schema.monitorScanCursors)
+      .where(eq(schema.monitorScanCursors.taskId, f.taskId))).length) > 0,
+      "⑱而且读取位置已经停在那些行之后(删一半之后它会挡住重读)");
+
+    const real = dbClient.execute.bind(dbClient);
+    let down = true;
+    (dbClient as any).execute = async (stmt: any) => {
+      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+      if (down && /delete from "monitor_pending_calls"/i.test(sql)) throw new Error("INJECTED_DELETE_FAILURE");
+      return real(stmt);
+    };
+    const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
+    let threw = false;
+    try { await deleteTaskCompletely(f.taskId); } catch { threw = true; }
+    down = false;
+    (dbClient as any).execute = real;
+
+    check(threw, "⑱删除确实失败了(请求会 500)");
+    check((await db.select().from(tasks).where(eq(tasks.id, f.taskId))).length === 1,
+      "⑱任务还在(所以用户还能点开它)");
+    check(!isTaskRevoked(f.taskId), "⑱闸打开了(删除没删成,不许永久封住一个还在的任务)");
+    check(!pendingPurges().includes(f.taskId),
+      "⑱也没给它留补偿清理责任(补偿只能针对确认删掉的任务)", pendingPurges().join(",") || "(空)");
+
+    await backfillClaudeMonitors(f.taskId);
+    const after = await listMonitors(f.taskId);
+    check(after.length === 1 && after[0]?.status === "exited",
+      "⑱再打开时那张卡自己回来了(可重建资格被恢复:位置作废、从头重读)",
+      `${after.length} 条 / ${after[0]?.status}`);
+    await deleteTaskCompletely(f.taskId);
+  }
+
+  // ── ⑱(b) 同一件事撞上在途那一轮:补偿不许把一个还活着的任务清掉 ──────────────────
+  {
+    const { isTaskRevoked, pendingPurges } = await import("../src/claude-monitor-revoked.js");
+    const f = await fixture("failed-delete-inflight");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-fdi", "在途时删除失败", "2026-10-15T21:00:00.000Z");
+    body += started(f.cli, "tu-fdi", "bfdi");
+    body += receipt("tu-fdi", "bfdi", "2026-10-15T21:00:00.040Z");
+    body += notice(f.cli, "bfdi");
+    writeFileSync(f.file, body);
+
+    const real = dbClient.execute.bind(dbClient);
+    let reached!: () => void;
+    let resume!: () => void;
+    const selected = new Promise<void>((r) => { reached = r; });
+    const barrier = new Promise<void>((r) => { resume = r; });
+    let paused = false;
+    let down = true;
+    (dbClient as any).execute = async (stmt: any) => {
+      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+      if (down && /delete from "monitor_pending_calls"/i.test(sql)) throw new Error("INJECTED_DELETE_FAILURE");
+      const result = await real(stmt);
+      if (!paused && /from "sessions"/i.test(sql) && JSON.stringify(stmt?.args ?? []).includes(f.taskId)) {
+        paused = true;
+        reached();
+        await barrier;
+      }
+      return result;
+    };
+    const job = backfillClaudeMonitors(f.taskId);
+    await selected;   // 这一轮在途:删除会给它记一笔补偿责任
+    const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
+    let threw = false;
+    try { await deleteTaskCompletely(f.taskId); } catch { threw = true; } finally { resume(); }
+    await job;
+    down = false;
+    (dbClient as any).execute = real;
+
+    check(threw && (await db.select().from(tasks).where(eq(tasks.id, f.taskId))).length === 1,
+      "⑱(b) 删除失败了,任务还在");
+    check(!isTaskRevoked(f.taskId) && !pendingPurges().includes(f.taskId),
+      "⑱(b) 闸开了,补偿责任也撤了(它还活着,不是「确认删掉的任务」)",
+      `${isTaskRevoked(f.taskId)} / ${pendingPurges().join(",") || "(空)"}`);
+    await backfillClaudeMonitors(f.taskId);
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 1 && rows[0]?.status === "exited",
+      "⑱(b) 它的数据没被补偿清理顺手清掉,卡照样回得来", `${rows.length} 条 / ${rows[0]?.status}`);
+    await deleteTaskCompletely(f.taskId);
   }
 }

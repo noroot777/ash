@@ -2,14 +2,14 @@
 //
 // 从 task-routes.ts 拆出来,是因为那份文件已经顶到 700 行上限,而「删除」是其中自洽度
 // 最高的一块:它跟建任务、改任务不共用任何局部状态,只靠 `mountTaskDeleteRoutes(api)`
-// 挂回去。`deleteTaskAssociations` 跟着一起搬——项目删除那条路(project-routes.ts)也
+// 挂回去。`deleteTaskCompletely` 跟着一起搬——项目删除那条路(project-routes.ts)也
 // 调它,留在建任务那份文件里只会让人以为它跟建任务有关。
 import type { TaskWorkspaceDiscardResult } from "@ash/shared";
 import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
-import { revokeTaskMonitors } from "./claude-monitor-backfill.js";
+import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
 import { clearScanCursors } from "./claude-monitor-cursors.js";
 import { stopMonitorsForTask } from "./monitors.js";
 import { deleteTaskSideChats } from "./chat/lifecycle.js";
@@ -18,10 +18,24 @@ import { taskBusyRejection } from "./task-busy.js";
 import { withRepoLock } from "./repo-lock.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 
-// 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
-// 随手记回链。没有 FK cascade,只删任务行会留下孤儿——审查实测:等答复的审查在任务
-// 删除后永远停在 reviewing,答复消息永远 pending(投递时任务已不存在)。
-export async function deleteTaskAssociations(taskId: string): Promise<void> {
+// 删一个任务:关联状态 + 任务行本身,**一个出口**。自由审查链(run/round)、预约槽、事件、
+// 排队/定时消息、随手记回链都要一起收。没有 FK cascade,只删任务行会留下孤儿——审查实测:
+// 等答复的审查在任务删除后永远停在 reviewing,答复消息永远 pending(投递时任务已不存在)。
+//
+// **任务行的删除从调用方搬进来了**(第 5 轮审查 F1):内置 Monitor 的删除门闸要按「删完之后
+// 任务行还在不在」收口(`settleTaskRevocation`),而调用方各自删行时,这个函数的 finally 永远
+// 看到「行还在」—— 要么永远关着闸(任务还在却再也打不开它的监听),要么永远开着(删干净了还
+// 在写孤儿)。两种都错,所以删除的全部语句必须在同一个出口里。
+export async function deleteTaskCompletely(taskId: string): Promise<void> {
+  try {
+    await deleteTaskRows(taskId);
+  } finally {
+    // 删成了还是删一半失败,由它按「任务行还在不在」收口(见 claude-monitor-backfill.ts)。
+    await settleTaskRevocation(taskId);
+  }
+}
+
+async function deleteTaskRows(taskId: string): Promise<void> {
   await deleteTaskSideChats(taskId);
   await deleteTaskBranchRefs(taskId);
   await db.delete(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, taskId));
@@ -64,6 +78,7 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
   // 团队派活自建的内部组（groups.owner_task_id=本任务）：GET /groups 默认过滤掉它们，
   // 留下来就是永远不可见也没入口清理的孤儿（审查实测：删 lead 后两个内部组原样保留）。
   await db.delete(groups).where(eq(groups.ownerTaskId, taskId));
+  await db.delete(tasks).where(eq(tasks.id, taskId));
 }
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支
@@ -97,8 +112,7 @@ api.delete("/tasks/:id", async (c) => {
   // 数据库里查无此任务的孤儿资源，leftover 检测（按父任务 id）也看不到（审查实测）。
   const childCleanups: (TaskWorkspaceDiscardResult & { taskId: string })[] = [];
   for (const child of children) {
-    await deleteTaskAssociations(child.id);
-    await db.delete(tasks).where(eq(tasks.id, child.id));
+    await deleteTaskCompletely(child.id);
     if (project && child.useWorktree && (wantWorktree || wantBranch)) {
       childCleanups.push({
         taskId: child.id,
@@ -110,8 +124,7 @@ api.delete("/tasks/:id", async (c) => {
       });
     }
   }
-  await deleteTaskAssociations(tid);
-  await db.delete(tasks).where(eq(tasks.id, tid));
+  await deleteTaskCompletely(tid);
   let cleanup: TaskWorkspaceDiscardResult | null = null;
   if (project && (wantWorktree || wantBranch)) {
     cleanup = await discardTaskWorkspace(project.repoPath, tid, {
