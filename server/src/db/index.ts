@@ -322,8 +322,8 @@ export async function ensureSchema() {
     // 这个文件报的 CLI 身份:来源**全集**的持久依据(第 6 轮审查 N2)。旧行 NULL = 还没读到过,
     // 那时「只有我这一个来源」证明不了,于是不认领无归属的存量行 —— 保守的那一边。
     "ALTER TABLE monitor_scan_cursors ADD COLUMN source TEXT",
-    // 这份位置是哪一代投影身份语义下确认的（第 9 轮审查 N2）。旧行 NULL = 第一代,未知来源
-    // 的那些会被交回去重放一遍 —— 身份键变细之前被挡掉的行只能靠这一次重读补回来。
+    // 这份位置是哪一代消费语义下确认的（第 9/10 轮审查）。旧行 NULL = 第一代,没有当代戳的
+    // 一律重放一遍 —— 旧代确认掉的事实（被键挤掉的卡、没合并的终态）只能靠重读补回来。
     "ALTER TABLE monitor_scan_cursors ADD COLUMN semantics INTEGER",
     "ALTER TABLE monitors ADD COLUMN native_id TEXT",
     "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",

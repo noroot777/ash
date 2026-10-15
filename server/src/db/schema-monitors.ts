@@ -175,11 +175,11 @@ export const monitorScanCursors = sqliteTable("monitor_scan_cursors", {
    */
   source: text("source"),
   /**
-   * 这份位置是**哪一代投影身份语义**下确认的（`MONITOR_IDENTITY_SEMANTICS`，旧行 NULL=第一代）。
+   * 这份位置是**哪一代消费语义**下确认的（`MONITOR_CHECKPOINT_SEMANTICS`，旧行 NULL=第一代）。
    *
-   * 「位置之前的内容都有归宿」这个结论依赖当时那代的认行判据与唯一键：键变细之后，旧语义下
-   * 被挡掉的行并不会自己补回来，而位置还说着「读完了」（第 9 轮审查 N2）。记下版本，受影响
-   * 的位置就能被一次性交回去重放（判据见 claude-monitor-identity.ts 的 `staleSemantics`）。
+   * 「位置之前的事实都已落库」这句承诺依赖当时那一代的认行判据、唯一键**和合并/消费规则**：
+   * 任何一样改了，旧位置就不再可信（实测后果：被挤掉的卡、没合并进去的终态，升级后刷新也
+   * 不自愈 —— 第 8/9/10 轮审查）。只有带当代戳的位置才接着用，其余的那个文件重放一遍。
    */
   semantics: integer("semantics"),
 }, (t) => ({

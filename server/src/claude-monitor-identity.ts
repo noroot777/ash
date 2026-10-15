@@ -43,43 +43,14 @@ export type SourceEvidence = {
 };
 
 /**
- * **投影身份语义的版本号**。
+ * ── 改了下面这两条规矩,记得去把**消费语义的版本号**加一 ───────────────────────────
  *
- * 认行判据（下面那两条规矩）和持久唯一键（`monitors_native_source`，db/index.ts）是同一代
- * 语义的两面：判据决定「这一行是不是它」，唯一键决定「这一行能不能落进库」。读取位置
- * （`monitor_scan_cursors`）记的是「这一段事实都有归宿了」，而**那个结论只在它当时那一代
- * 语义下成立** —— 所以位置必须跟着记下自己是哪一代确认的（`monitor_scan_cursors.semantics`）。
- *
- * 为什么：第 8 轮之前未知归属的行全挤在同一个空串键上，两个 run 文件里的同号监听于是只留得
- * 下第一张卡，而两个文件的位置照旧推到了末尾。第 8 轮把键改细了，新读到的输入从此两张卡都
- * 在 —— **但存量数据不会自己好**：旧语义下「已读完」的结论仍被无条件信任，那张漏掉的卡再也
- * 不会被重新发现（第 9 轮审查 N2 用真实旧库 + 两次 `ensureSchema()` 实测）。
- *
- * 所以改了认行判据或唯一键 ⇒ **这个数加一**，受影响的位置会被交回去重放一遍。
- *
- * - `1`：`(task_id, COALESCE(cli_session_id,''), native_id)` —— 未知归属挤在一个键上；
- * - `2`：`(task_id, COALESCE(cli_session_id,'run:'||source_run), native_id)` —— 未知归属按
- *   run 文件分（第 8 轮审查 N2）。
+ * 认行判据和持久唯一键(`monitors_native_source`)是同一代语义的两面。读取位置落盘时带着
+ * 那一代的版本号(`claude-monitor-cursors.ts` 的 `MONITOR_CHECKPOINT_SEMANTICS`),它承诺的
+ * 是「位置之前的事实都已经按那一代的规矩落了库」—— 判据一改,旧位置的承诺就不成立,得把
+ * 受影响的位置交回去重放。不加那个数的后果实测过两次:挤掉的卡、没合并的终态,升级之后
+ * 刷新多少次都不会自愈(第 8/9/10 轮审查)。
  */
-export const MONITOR_IDENTITY_SEMANTICS = 2;
-
-/**
- * 这份读取位置是在**可能漏过行**的旧语义下确认的吗（⇒ 不许采用，那个文件重放一遍）。
- *
- * 判据只认**真的受影响**的那些，不是「版本旧就全部作废」：
- *
- * - 位置记着**已知来源**（`source` 非空）⇒ 这个文件里的行一律带归属，旧键 `COALESCE(cli,'')`
- *   和新键 `COALESCE(cli,'run:…')` 对它们算出来是同一个值 —— 旧语义一行都没挡掉，位置照常
- *   采用，不必重读；
- * - 位置的来源**未知**（`source` 为空，含 `source` 这一列还不存在时落的行）⇒ 那个文件里的行
- *   当年可能正撞在同一个空串键上被挡掉，位置却推到了末尾。只有这些交回去重放。
- *
- * 重放是**一次性**的：这一轮读完之后位置会带着当前版本号重新落盘（见 `saveScanCursors`），
- * 不会每次请求都全量重读。
- */
-export function staleSemantics(cursor: { semantics: number | null; source: string | null }): boolean {
-  return (cursor.semantics ?? 1) < MONITOR_IDENTITY_SEMANTICS && !cursor.source;
-}
 
 /**
  * 从同一个 id 底下的那几行里挑出「属于我这条会话的那一行」;挑不出就 `undefined`。

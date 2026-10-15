@@ -18,8 +18,43 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitorScanCursors } from "./db/schema.js";
-import { MONITOR_IDENTITY_SEMANTICS, staleSemantics } from "./claude-monitor-identity.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
+
+/**
+ * **这一代「消费语义」的版本号** —— 一份读取位置的戳，承诺的是：
+ *
+ *   它之前读过的每一条事实，都已经按**当前这一代**的身份判据与合并/消费规则，
+ *   被某一行**已提交**的状态包含（或者作为悬着的调用落在未决表里）。
+ *
+ * 所以这个号**不只管唯一键**：认行判据（`claude-monitor-identity.ts` 的 `matchBySource`）、
+ * 持久唯一键（`monitors_native_source`）、以及「一条事实怎样才算消费掉」（
+ * `claude-monitor-commit.ts` 的 `absorb`/`mergeInto`）任何一样改了，旧位置的那句承诺就不再
+ * 成立 —— **这个数就要加一**。
+ *
+ * 为什么只能重放、不能「验一验」：丢掉的事实是**压根没写进去**的那种（一张卡不存在、一个
+ * 终态从来没落库）。库里现有的行证明不了「还少了什么」，当前索引建得起来、同身份的容器
+ * 存在、文件最后报过来源 —— 这三样都不是证据。要知道少了什么，只有把那段日志重读一遍。
+ *
+ * 各代之间的差别（都实测过存量后果）：
+ *
+ * - `1`：唯一键 `(task_id, COALESCE(cli_session_id,''), native_id)` —— 未知归属的行全挤在一个
+ *   空串键上，两个 run 文件里的同号监听只留得下第一张卡（第 8 轮审查 N2）；而且撞键之后
+ *   只要身份对得上就算消费，这一次读到的终态/时长一个字都没合并进去（第 9 轮审查 F1）。
+ * - `2`：键改细、三条合并路也统一了，**但采用旧位置的规则是错的**：它拿「文件最后报过来源」
+ *   当成「这一段事实当时都正确入库了」，于是上面两种存量错误在已知来源的任务上不会自愈，
+ *   还可能把没核验过的旧前缀重新盖成 2（第 10 轮审查 F1 用 `git archive` 跑真旧代码生成库、
+ *   再用当前代码升级实测）。**2 这个戳本身因此不可信**，一并作废。
+ * - `3`：当代。只有这一代的代码盖的戳才算数。
+ *
+ * 成本是**一次性**的：被作废的位置等于那个文件从零重放一遍，而重放照常受单轮字节上限约束、
+ * 读到哪儿就带着当代版本号落盘（见 `saveScanCursors`），下一轮接着往后读 —— 不是每次请求
+ * 都全量重读历史。
+ */
+export const MONITOR_CHECKPOINT_SEMANTICS = 3;
+
+/** 这份位置是**当代**确认的吗（只有它才可以被接回来往后读）。 */
+const confirmedUnderCurrent = (cursor: { semantics: number | null }): boolean =>
+  (cursor.semantics ?? 1) >= MONITOR_CHECKPOINT_SEMANTICS;
 
 /**
  * 一个 run 文件读到哪儿了。三件事**分开记**，别混成一个数(第 14 轮审查 N1)：
@@ -72,20 +107,26 @@ const batches = <T>(items: readonly T[]): T[][] => {
 /**
  * 这个任务上次读到哪儿了（没有记录就 null —— 从零开始读）。
  *
- * **旧语义下确认的位置不许采用**（第 9 轮审查 N2）：位置说的是「它之前的内容都有归宿」，
- * 而那个结论只在当时那一代投影身份语义下成立。身份键变细之后，旧语义里被唯一键挡掉的行
- * 并不会自己补回来 —— 位置却还说着「读完了」，于是那张漏掉的卡再也不会被重新发现。
- * 受影响的那些（判据见 `staleSemantics`：只认来源未知的那些文件）这里直接不接回去，
- * 等于**那个文件重放一遍**；读完之后它会带着当前版本号重新落盘，所以重放只发生一次。
+ * **只接回当代确认过的位置**（见 `MONITOR_CHECKPOINT_SEMANTICS`）：一份位置说的是「它之前的
+ * 事实都已经按当代规则落了库」，而旧代的那句话已经被实测证伪两次（挤掉的卡、没合并的终态）。
+ * 别的位置一律不接 —— 那个文件从零重放一遍，这一轮读到哪儿就带着当代版本号重新落盘。
+ *
+ * 判据是「有没有当代的戳」，**不是**「来源空不空」：来源非空只说明文件里某一处报过身份，
+ * 既不证明更早那些启动记录当时带过身份，也不证明每一次状态/时长更新都真的落进了行里
+ * （第 10 轮审查 F1 两个形状都用真旧代码跑出来过）。能接回来的理由只有一个：**那段是这一代
+ * 代码自己确认的**。
+ *
+ * 内存里的 `ScanCursor` 因此不必再带版本号 —— 接回来的一律是当代的。
  */
 export async function loadScanCursors(taskId: string): Promise<Map<string, ScanCursor> | null> {
   const rows = await db.select().from(monitorScanCursors)
     .where(eq(monitorScanCursors.taskId, taskId));
   if (!rows.length) return null;
-  const usable = rows.filter((row) => !staleSemantics(row));
+  const usable = rows.filter(confirmedUnderCurrent);
   if (usable.length < rows.length) {
     console.warn(`[ash] 内置 Monitor 历史扫描：task=${taskId} 有 ${rows.length - usable.length}`
-      + ` 个 run 文件的读取位置是旧身份语义下确认的（来源未知），这一轮重放一遍`);
+      + ` 个 run 文件的读取位置是旧消费语义下确认的（当代为 v${MONITOR_CHECKPOINT_SEMANTICS}），`
+      + `这些文件重放一遍`);
   }
   if (!usable.length) return null;
   return new Map(usable.map((row) => [row.path, {
@@ -106,9 +147,11 @@ export async function saveScanCursors(
   const rows = [...cursors].map(([path, cursor]) => ({
     taskId, path, fileSize: cursor.size, readOffset: cursor.offset,
     probe: cursor.probe, gaps: JSON.stringify(cursor.gaps), source: cursor.source,
-    // 这一轮是在**当前**这代身份语义下确认的。下次语义再变（键变细、判据变严），这些位置
-    // 就能被按版本号分辨出来、交回去重放（见 `loadScanCursors` 与 `staleSemantics`）。
-    semantics: MONITOR_IDENTITY_SEMANTICS,
+    // 盖当代的戳。**盖得起这个戳的前提是上面那句承诺成立**：能进到这里的位置只有两种
+    // 来源 —— 这一轮从零读过的，或者本来就带着当代戳被接回来、再往后读的（见
+    // `loadScanCursors` 与 `cursorsOf`）。没核验过的旧前缀进不到这儿，所以不会被晋升
+    // （第 10 轮审查 F1 的后一半）。
+    semantics: MONITOR_CHECKPOINT_SEMANTICS,
   }));
   for (const batch of batches(rows)) {
     // 落库资格跟 upsert 同批（见 claude-monitor-write.ts）：任务在这一轮里被删完的话，
