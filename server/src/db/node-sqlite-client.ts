@@ -88,6 +88,9 @@ export interface ResultSet {
   lastInsertRowid: bigint | undefined;
 }
 
+/** 一笔记在账上的长事务：`settled` 在它收尾时 resolve，等待者靠它被叫醒。 */
+type TxHandle = { settled: Promise<void>; finish: () => void };
+
 export interface Transaction {
   execute(stmt: InStatement): Promise<ResultSet>;
   commit(): Promise<void>;
@@ -201,8 +204,15 @@ class NodeSqliteClient implements Client {
    *
    * 记上账之后判据就有归属了：**自己**那笔事务里的语句走 `Transaction.execute`，直接跑；
    * 别人那笔一律先等它收尾，绝不借道。
+   *
+   * **「判空」和「登记」必须是同一拍**（见 `whenIdle`）。上一版把它们拆成了两步（先
+   * `await awaitOpenTx()`、回来之后才 `this.openTx = mine`），于是同一次收尾唤醒的两个
+   * 申请者会**同时**判到空：第一个 BEGIN 成功，第二个覆盖账目、BEGIN 报「事务里不能再开
+   * 事务」、又按自己的名义把账清掉 —— 连接里明明还有第一笔的事务，账上却没有归属，后面的
+   * 根写于是照常借道进去、拿着「成功」被第一笔的回滚带走（第 8 轮审查实测：完成通知已经
+   * 读到了，卡片却一直写「进程已不在」，刷新也不纠正）。
    */
-  private openTx: { settled: Promise<void>; finish: () => void } | null = null;
+  private openTx: TxHandle | null = null;
   private txWaitMs: number;
 
   constructor(config: ClientConfig) {
@@ -215,28 +225,59 @@ class NodeSqliteClient implements Client {
     this.txWaitMs = config.txWaitMs ?? TX_WAIT_MS;
   }
 
-  /** 等别人那笔长事务收尾。醒了要**重新判**一次：同时在等的可能有好几个。 */
-  private async awaitOpenTx(): Promise<void> {
-    while (this.openTx) {
+  /**
+   * 连接**空闲**吗：账上没人占着，SQLite 自己也不在事务里。
+   *
+   * 两样必须同时成立。「账上没人、连接却还在事务里」是账和现实对不上的那种状态（COMMIT
+   * 抛错之后可能出现），这种时候谁都不许动手 —— 借道进去的写会被别人的回滚带走。
+   */
+  private idle(): boolean {
+    return !this.openTx && !this.db.isTransaction;
+  }
+
+  /**
+   * 空闲时**同步**把事情做掉；不空闲就等，醒了**重新判**。
+   *
+   * 「判空 + 动手」中间不许有 await —— 这是整条不变量的命门，理由见 `openTx`。所有要
+   * 独占连接的入口（开事务、写 execute、整块 DDL、原子批）都从这里走，于是它们彼此之间
+   * 也是互斥的：同一次唤醒放出来好几个申请者时，第一个在自己那一拍里把事办了，其余的回到
+   * 循环重新判，不会两个一起动手。
+   */
+  private async whenIdle<T>(run: () => T): Promise<T> {
+    const deadline = Date.now() + this.txWaitMs;
+    for (;;) {
+      if (this.idle()) return run();
+      await this.waitForIdle(deadline);
+    }
+  }
+
+  /** 等「当前这笔」收尾一次（或等到上限就报错）。 */
+  private async waitForIdle(deadline: number): Promise<void> {
+    const left = deadline - Date.now();
+    const busy = new Error(`数据库正在提交其它操作，等了 ${this.txWaitMs}ms 仍没结束，请重试`);
+    if (left <= 0) throw busy;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // 这个定时器**不 unref**：它是唯一会把等待者唤醒的东西，unref 之后进程在「只剩这一个
+    // 等待」时会直接退出，等待者连那句超时都收不到（实测跑回归时 Node 当场退出）。等到了
+    // 就在 finally 里清掉，正常路径不会留下任何悬着的定时器。
+    const expiry = new Promise<"expired">((resolve) => {
+      timer = setTimeout(() => resolve("expired"), left);
+    });
+    try {
+      // 有归属就等它收尾（它一结束就叫醒我）；账上没人却还在事务里的时候没人会叫我，
+      // 只能按时间等、下一轮重新判 —— 但**绝不**因此认为可以动手。
       const waiting = this.openTx;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      // 这个定时器**不 unref**：它是唯一会把等待者唤醒的东西，unref 之后进程在「只剩这一个
-      // 等待」时会直接退出，等待者连那句超时都收不到（实测跑回归时 Node 当场退出）。等到了
-      // 就在 finally 里清掉，正常路径不会留下任何悬着的定时器。
-      const expiry = new Promise<"expired">((resolve) => {
-        timer = setTimeout(() => resolve("expired"), this.txWaitMs);
-      });
-      try {
-        const who = await Promise.race([waiting.settled.then(() => "settled" as const), expiry]);
-        if (who === "expired") throw new Error(`数据库正在提交其它操作，等了 ${this.txWaitMs}ms 仍没结束，请重试`);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+      const who = waiting
+        ? await Promise.race([waiting.settled.then(() => "settled" as const), expiry])
+        : await expiry;
+      if (who === "expired") throw busy;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
   /** 这笔事务收尾了：从账上摘掉（只摘自己那笔）并叫醒在等的人。 */
-  private releaseTx(tx: { settled: Promise<void>; finish: () => void }): void {
+  private releaseTx(tx: TxHandle): void {
     if (this.openTx === tx) this.openTx = null;
     tx.finish();
   }
@@ -313,33 +354,63 @@ class NodeSqliteClient implements Client {
     // **写不许借别人的事务**（见 `openTx`）：那笔一回滚，这条写就跟着没了，而调用方拿到的
     // 是成功。读照常放过去 —— 它顶多看到那笔事务还没提交的中间状态（一条连接本来就是这个
     // 语义），而把每个并发 GET 都堵在别人的事务后面，代价比那个大得多。
-    if (this.openTx && isWrite(stmt)) await this.awaitOpenTx();
-    return this.runSync(stmt);
+    if (!isWrite(stmt)) return this.runSync(stmt);
+    return this.whenIdle(() => this.runSync(stmt));
   }
 
   async executeMultiple(sql: string): Promise<void> {
-    if (this.openTx) await this.awaitOpenTx(); // 整块 DDL 更不能落进别人的事务
-    this.cache.clear(); // 这条路上跑的是整块 DDL，缓存里的旧语句没必要留
-    this.db.exec(sql);
+    // 整块 DDL 更不能落进别人的事务。
+    await this.whenIdle(() => {
+      this.cache.clear(); // 这条路上跑的是整块 DDL，缓存里的旧语句没必要留
+      this.db.exec(sql);
+    });
   }
 
   async transaction(mode: TransactionMode = "write"): Promise<Transaction> {
     // 两笔长事务不能并排开在同一条连接上：第二个 BEGIN 当场报错，而任一方 ROLLBACK 会把
-    // 另一方的写一起抹掉。所以先等前一笔收尾，再把这一笔记上账。
-    await this.awaitOpenTx();
+    // 另一方的写一起抹掉。所以先等前一笔收尾 —— 判空与登记在 `whenIdle` 的同一拍里。
+    return this.whenIdle(() => this.beginOwned(mode));
+  }
+
+  /** 开一笔**记在账上**的事务。只在 `whenIdle` 判到空闲的那一拍里调用。 */
+  private beginOwned(mode: TransactionMode): Transaction {
     let finish!: () => void;
-    const mine = { settled: new Promise<void>((resolve) => { finish = resolve; }), finish: () => finish() };
-    // **记账与 BEGIN 同一拍**（中间没有 await），所以不存在「已经 BEGIN 了、账上还没有」的
-    // 缝隙 —— 上一版 `batch` 正是在 `await this.transaction()` 的那个缝里被别人挤进来的。
+    const mine: TxHandle = {
+      settled: new Promise<void>((resolve) => { finish = resolve; }), finish: () => finish(),
+    };
     this.openTx = mine;
     try {
       // write 用 IMMEDIATE：一上来就拿写锁，避免读事务中途升级撞上 SQLITE_BUSY。
       this.db.exec(mode === "write" ? "BEGIN IMMEDIATE" : "BEGIN DEFERRED");
     } catch (e) {
-      this.releaseTx(mine);
+      this.releaseTx(mine);   // BEGIN 没成 ⇒ 连接没被我占住，账要摘干净
       throw e;
     }
     let done = false;
+    /**
+     * 收尾一次：**只有数据库确实退出事务之后才摘账**。
+     *
+     * COMMIT 抛错不代表事务已经结束（延迟约束就是这样失败的）。上一版在 exec 之前就把
+     * `done` 置了 true、又在 finally 里无条件摘账，于是：连接里还开着事务、账上却没人，
+     * 后来的根写借道进去被确认成功；而调用方想补一次 `rollback()` 时，`done` 又让它直接
+     * 返回 —— 那条写最终被别人的回滚抹掉（第 8 轮审查）。所以句柄要留着能再用，直到
+     * `isTransaction` 真的变 false。
+     *
+     * ROLLBACK 也失败、连接仍卡在事务里时：账**继续留着**。那是诚实的状态 —— 后面的写会
+     * 等到上限然后报错，而不是悄悄挤进一笔没人收尾的事务。
+     */
+    const settle = (sql: string, swallow: boolean): void => {
+      try {
+        this.db.exec(sql);
+      } catch (e) {
+        if (!swallow) throw e;
+      } finally {
+        if (!this.db.isTransaction) {
+          done = true;
+          this.releaseTx(mine);
+        }
+      }
+    };
     return {
       // 自己这笔事务里的语句：直接跑，不走写闸（闸挡的就是「别人的」）。
       execute: async (stmt: InStatement): Promise<ResultSet> => {
@@ -348,18 +419,15 @@ class NodeSqliteClient implements Client {
       },
       commit: async (): Promise<void> => {
         if (done) return;
-        done = true;
-        try { this.db.exec("COMMIT"); } finally { this.releaseTx(mine); }
+        settle("COMMIT", false);
       },
       rollback: async (): Promise<void> => {
         if (done) return;
-        done = true;
-        try { this.db.exec("ROLLBACK"); } finally { this.releaseTx(mine); }
+        settle("ROLLBACK", false);
       },
       close: (): void => {
         if (done) return;
-        done = true;
-        try { this.db.exec("ROLLBACK"); } catch { /* 已经不在事务里了 */ } finally { this.releaseTx(mine); }
+        settle("ROLLBACK", true);
       },
     };
   }
@@ -368,7 +436,8 @@ class NodeSqliteClient implements Client {
     // Delivery receipts need their own committed transaction before a response can acknowledge them.
     // Joining an unrelated async transaction would allow a later rollback to erase an acknowledged message.
     // 这条路**不等**：回执类写的调用方要的是立刻把重试责任收回去（页面上那句「草稿仍保留」）。
-    if (this.openTx || this.db.isTransaction) throw new Error("数据库正在提交其它操作，请重试；草稿仍保留");
+    // 判空与动手同一拍：下面一路同步到 COMMIT，中间没有 await。
+    if (!this.idle()) throw new Error("数据库正在提交其它操作，请重试；草稿仍保留");
     return this.exclusive(stmts);
   }
 
@@ -379,8 +448,7 @@ class NodeSqliteClient implements Client {
     //
     // 一律 IMMEDIATE（不再看 `_mode`）：库里的 batch 调用点全是写批，一上来拿锁免得中途升级
     // 撞 SQLITE_BUSY；真正的只读批走 `execute`。
-    await this.awaitOpenTx();
-    return this.exclusive(stmts);
+    return this.whenIdle(() => this.exclusive(stmts));
   }
 
   /** drizzle 的 migrator 走这条；本仓库用 `drizzle-kit push`，留着只为接口完整。 */

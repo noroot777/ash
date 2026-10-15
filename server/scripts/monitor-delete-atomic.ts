@@ -19,7 +19,7 @@
 // `test-db-tx-ownership.ts`);这一组验的是生产路径上真的接住了。
 //
 // 单独成文件是 700 行上限(同 monitor-checkpoint-edges.ts 的理由)。
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import {
   db, dbClient, schema, sessions, monitors, tasks,
@@ -124,6 +124,7 @@ async function writeSurvivesForeignRollback(
   deleteTaskCompletely: (taskId: string) => Promise<void>,
 ): Promise<void> {
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  const { forgetTaskMonitorScan } = await import("../src/claude-monitor-backfill.js");
 
   // ── ㉓(a) 别人开着一笔长事务时回填：卡不许落进那笔事务 ─────────────────────────
   {
@@ -147,6 +148,36 @@ async function writeSurvivesForeignRollback(
     await backfillClaudeMonitors(f.taskId);
     check((await listMonitors(f.taskId)).filter((r) => r.kind === "claude").length === 1,
       "㉓(a)再读一轮（位置已到末尾、不会重放）卡依然在");
+  }
+
+  // ── ㉓(c) **改已有卡片**那条路同样算数（不是只有插入） ────────────────────────
+  //
+  // 第 8 轮审查复现的就是这一条：完成通知已经读到了，`mergeInto` 的 UPDATE 返回 rowsAffected=1
+  // ——却落在别人那笔事务里，被它的回滚带走；检查点按「写成功了」推到了文件末尾，于是卡片
+  // 永远停在「进程已不在」，刷新也不纠正。
+  {
+    const f = await cardFixture("foreign-tx-update", false);   // 先回填一张还没有结局的卡
+    await backfillClaudeMonitors(f.taskId);
+    const before = (await listMonitors(f.taskId)).find((r) => r.kind === "claude");
+    check(before?.status === "lost", "㉓(c)前提：先有一张还没读到结局的卡", String(before?.status));
+
+    appendFileSync(f.file, notice(f.cli, "b-foreign-tx-update"));   // 来源确认它跑完了
+    const other = await fixture("foreign-tx-update-owner");
+    const tx = await dbClient.transaction();
+    await tx.execute({ sql: `UPDATE tasks SET title = ? WHERE id = ?`, args: ["别人那笔", other.taskId] });
+    const job = backfillClaudeMonitors(f.taskId);
+    await sleep(20);
+    await tx.rollback();
+    await job;
+
+    const updated = (await listMonitors(f.taskId)).find((r) => r.kind === "claude");
+    check(updated?.status === "exited", "㉓(c)**完成状态没被别人的回滚带走**", String(updated?.status));
+    // 位置已经到文件末尾，丢掉内存快照再读也不会重放 —— 还是 exited 才说明那次 UPDATE 真提交了。
+    forgetTaskMonitorScan(f.taskId);
+    await backfillClaudeMonitors(f.taskId);
+    const reread = (await listMonitors(f.taskId)).find((r) => r.kind === "claude");
+    check(reread?.status === "exited", "㉓(c)丢快照重读（位置在末尾、不重放）依然是完成",
+      String(reread?.status));
   }
 
   // ── ㉓(b) 「成功写 + 失败删除」相邻下发，两个次序都试 ──────────────────────────
@@ -179,14 +210,14 @@ async function writeSurvivesForeignRollback(
   }
 }
 
-/** 一个只有内置 Monitor 那张卡的任务（真文件回填出来的）。 */
-async function cardFixture(name: string) {
+/** 一个只有内置 Monitor 那张卡的任务（真文件回填出来的）。`done=false` 时还没有完成通知。 */
+async function cardFixture(name: string, done = true) {
   const f = await fixture(name);
   let body = line({ type: "system", subtype: "init", session_id: f.cli });
   body += call(f.cli, `tu-${name}`, `${name} 的监听`, "2026-10-15T23:00:00.000Z");
   body += started(f.cli, `tu-${name}`, `b-${name}`);
   body += receipt(`tu-${name}`, `b-${name}`, "2026-10-15T23:00:00.040Z");
-  body += notice(f.cli, `b-${name}`);
+  if (done) body += notice(f.cli, `b-${name}`);
   writeFileSync(f.file, body);
   return f;
 }
