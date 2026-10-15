@@ -23,6 +23,7 @@
 import type { MonitorRecovery, MonitorRecoveryReason } from "@ash/shared/monitor";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
+import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
 import { sessions } from "./db/schema.js";
 
@@ -63,6 +64,9 @@ const pending = new Map<string, Entry>();
 export function noteMonitorRecovery(
   taskId: string, reason: MonitorRecoveryReason, progress = false,
 ): void {
+  // 提交资格（见 claude-monitor-revoked.ts）：任务删了就不记账，否则定时器一直去推一个
+  // 不存在的任务，前端那一格也会亮着「还有没读完的」。
+  if (isTaskRevoked(taskId)) return;
   const entry = pending.get(taskId) ?? { reasons: new Set<MonitorRecoveryReason>(), attempts: 0, timer: null };
   const changed = !entry.reasons.has(reason);
   entry.reasons.add(reason);

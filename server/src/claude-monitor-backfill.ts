@@ -39,7 +39,10 @@ import {
   newTaskScan, pendingCallsOf, scanSession, type LateFact, type TaskScan,
 } from "./claude-monitor-scan.js";
 import { db, dbClient } from "./db/index.js";
-import { monitorPendingCalls, monitors, sessions } from "./db/schema.js";
+import { monitorPendingCalls, monitorScanCursors, monitors, sessions, tasks } from "./db/schema.js";
+import {
+  beginTaskRevocation, isTaskRevoked, notePurgeDone, notePurgeFailed,
+} from "./claude-monitor-revoked.js";
 import { isSameProcess } from "./proc.js";
 import { now } from "./util.js";
 
@@ -163,25 +166,35 @@ export const monitorScanTracked = (taskId: string): boolean => snapshots.has(tas
  * 单任务删、子任务删、项目删都合流到 `deleteTaskAssociations`，所以只有这一个调用点；落盘的
  * 那两张表（位置、未决调用）在那边跟着一起删。
  */
+export function revokeTaskMonitors(taskId: string): void {
+  // **第一件事是关闸**（`deleteTaskAssociations` 也因此必须在第一条 DELETE 之前调它）：
+  // 删除不是一个瞬间，而四个 writer 的落库资格要在**整个删除期**都不成立 —— 判据和理由
+  // 见 claude-monitor-revoked.ts（第 14 轮审查 N3）。
+  beginTaskRevocation(taskId);
+  forgetTaskMonitorScan(taskId);
+  // **在途的那一轮还要补偿。** 它的会话清单、配对状态、悬着的调用都是删除之前读到的事实，
+  // 而提交是一行一行写的：闸关上之前可能已经写出去了几行 —— 投影行、未决行、位置各留一条
+  // 谁也清不掉的孤儿（第 13 轮审查 N2 用屏障实测：删除当刻三张表都是 0，旧扫描跑完又各回来
+  // 一条）。那一轮结束时清一遍（见 `purgeRevokedTask`）。
+  if (inflight.has(taskId)) needsPurge.add(taskId);
+}
+
+/**
+ * 把这个任务**进程内**的扫描状态扔掉（位置、未决调用都在库里，所以这只是丢缓存）。
+ *
+ * **它不含「不许再写」的意思**：重启、内存上限、回归里模拟「进程内什么都不剩」都走它，那些
+ * 场景之后还要照常读照常写。删除要的是另一件事 —— 见 `revokeTaskMonitors`。
+ */
 export function forgetTaskMonitorScan(taskId: string): void {
   snapshots.delete(taskId);
   rewound.delete(taskId);
   evictWhenIdle.delete(taskId);
+  staleCursors.delete(taskId);
   clearMonitorRecovery(taskId);
-  // **在途的那一轮也要作废。** 它的会话清单、配对状态、悬着的调用都是删除之前读到的事实，
-  // 照常走下去就会在删完之后把它们写回去 —— 投影行、未决行、位置各留一条谁也清不掉的孤儿
-  // （第 13 轮审查 N2 用屏障实测：删除当刻三张表都是 0，旧扫描跑完又各回来一条）。
-  // 从 Map 里删掉对象撤不回别人已经持有的引用，所以改用**代次**：那一轮结束时对一次号。
-  if (inflight.has(taskId)) revocations.set(taskId, revocationOf(taskId) + 1);
 }
 
-/**
- * 「这个任务在某一轮进行中被删过几次」。
- *
- * 只在**有在途回合**时才记，并由那一回合自己销掉，所以它不会随删除次数无界增长。
- */
-const revocations = new Map<string, number>();
-const revocationOf = (taskId: string): number => revocations.get(taskId) ?? 0;
+/** 这一轮结束时要补偿清理的任务（删除撞上了在途回合）。 */
+const needsPurge = new Set<string>();
 
 /**
  * 这一轮跑的是一个已经被删掉的任务：**把它这一轮可能写下的东西全撤掉**。
@@ -198,9 +211,47 @@ async function purgeRevokedTask(taskId: string): Promise<void> {
     // **恢复责任也得作废。** 删除那一侧已经清过一次，但这一轮在它之后还会记账（读到上限、
     // 文件读失败……都在扫描里写），留下来就是定时器一直去推一个不存在的任务。
     clearMonitorRecovery(taskId);
+    needsPurge.delete(taskId);
+    notePurgeDone(taskId);
   } catch (e) {
-    console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 删除后的残留清理失败:`, e);
+    // **清理失败不许只打一行 warn。** 任务已经没了,以后没有任何入口会再来清它 —— 留一笔
+    // 可推进的清理责任:退避重试几次,全试完还不行就留着,由启动期的孤儿清扫收掉
+    // （`sweepOrphanClaudeMonitors`，第 14 轮审查 N3）。
+    console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 删除后的残留清理失败，已排重试:`, e);
+    notePurgeFailed(taskId, purgeRevokedTask);
   }
+}
+
+/**
+ * 启动期的孤儿清扫：**任务都不在了的那些 claude 投影 / 未决调用 / 读取位置**。
+ *
+ * 为什么非有不可：上面那条补偿是进程内的（重试阶梯 + `pendingPurges`），进程在重试做完之前
+ * 没了就断了。这些表没有 FK cascade，也没有任何用户入口能看到它们（卡挂在一个已经不存在的
+ * 任务上），所以漏掉就是永久的脏数据。按「`task_id` 在 `tasks` 里没有对应行」判，跟删除路径
+ * 的顺序无关 —— 删除期那一瞬的交错写进来的行，下次启动一定会被它收掉。
+ */
+export async function sweepOrphanClaudeMonitors(): Promise<{ monitors: number; pending: number; cursors: number }> {
+  const live = new Set((await db.select({ id: tasks.id }).from(tasks)).map((r) => r.id));
+  const countOf = async <T extends { taskId: string }>(rows: T[]): Promise<string[]> =>
+    [...new Set(rows.map((r) => r.taskId).filter((id) => !live.has(id)))];
+  const deadMonitors = await countOf(await db.select({ taskId: monitors.taskId })
+    .from(monitors).where(eq(monitors.kind, "claude")));
+  const deadPending = await countOf(await db.select({ taskId: monitorPendingCalls.taskId })
+    .from(monitorPendingCalls));
+  const deadCursors = await countOf(await db.select({ taskId: monitorScanCursors.taskId })
+    .from(monitorScanCursors));
+  for (const taskId of deadMonitors) {
+    await db.delete(monitors).where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude")));
+  }
+  for (const taskId of deadPending) {
+    await db.delete(monitorPendingCalls).where(eq(monitorPendingCalls.taskId, taskId));
+  }
+  for (const taskId of deadCursors) await clearScanCursors(taskId);
+  for (const taskId of [...deadMonitors, ...deadPending, ...deadCursors]) {
+    clearMonitorRecovery(taskId);
+    notePurgeDone(taskId);
+  }
+  return { monitors: deadMonitors.length, pending: deadPending.length, cursors: deadCursors.length };
 }
 
 /**
@@ -274,6 +325,9 @@ export function backfillClaudeMonitors(
   opts: { external?: boolean } = {},
 ): Promise<number> {
   if (dbClient.closed) return Promise.resolve(0);
+  // **删掉的任务连读都不读。** 删除期内新来的请求如果照常开工，它读到的会话可能还没被删到
+  // （删除是十几条语句），而写出去的行此后没有任何入口能清（第 14 轮审查 N3）。
+  if (isTaskRevoked(taskId)) return Promise.resolve(0);
   const running = inflight.get(taskId);
   if (running) return running;
   // 退避推到上限之后账是留着的、定时器是停的。真实请求进来时把预算还给它，否则那条账
@@ -290,12 +344,14 @@ export function backfillClaudeMonitors(
       return 0;
     })
     .finally(async () => {
+      // **补偿清理排在最前。** 它没做完之前这个任务不算空闲：还在 `inflight` 里，所以后来
+      // 的调用方 await 的是同一个 job（包含清理），不会在清理中途看到半删的状态。顺序反过来
+      // 的话，先从 Map 里摘掉、再 await 清理，中间那一段里新来的扫描看不到任何「这个任务被
+      // 删过」的痕迹（第 14 轮审查 N3）—— 现在那一段由门闸兜住，而顺序也一并理顺。
+      if (needsPurge.has(taskId)) await purgeRevokedTask(taskId);
       inflight.delete(taskId);
       // 在途期间被选中淘汰的，到这里才真正让位（位置已经落库，这一步只丢配对状态）。
-      // 它跟上面那行 delete 在同一个微任务里，中间没有别人插进来的机会（唯一接班者）。
       if (evictWhenIdle.delete(taskId)) evictScan(taskId);
-      // 这一轮进行中任务被删了：把它这一轮可能写下的行撤掉（见 purgeRevokedTask）。
-      if (revocations.delete(taskId)) await purgeRevokedTask(taskId);
     });
   inflight.set(taskId, job);
   return job;
@@ -303,9 +359,6 @@ export function backfillClaudeMonitors(
 
 async function runBackfill(taskId: string): Promise<number> {
   let added = 0;
-  /** 这一轮开工时的删除代次。中途对不上 = 任务被删了，这一轮的结果一律不许写出去。 */
-  const epoch = revocationOf(taskId);
-  const revoked = (): boolean => revocationOf(taskId) !== epoch;
   // 这一轮有没有剩下「没确认完成」的事实。**四样都在外层**：销账的判断发生在死活裁决
   // 之后，而扫描结果是在 try 里拿到的。
   let missed = false;
@@ -411,7 +464,7 @@ async function runBackfill(taskId: string): Promise<number> {
     // 这一轮读到的可能全是「前缀里那些 Monitor 的回执和终态」（第 9 轮审查）。
     // **写之前先问一句「这个任务还在不在」。** 从查到会话到这里中间有好几个 await，任务可能
     // 已经被删干净了（见 forgetTaskMonitorScan）；这一轮手里的全是删除之前的事实。
-    if (revoked()) {
+    if (isTaskRevoked(taskId)) {
       console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 在这一轮进行中被删除，本轮结果作废`);
       return added;
     }

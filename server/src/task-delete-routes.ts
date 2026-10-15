@@ -9,7 +9,7 @@ import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
-import { forgetTaskMonitorScan } from "./claude-monitor-backfill.js";
+import { revokeTaskMonitors } from "./claude-monitor-backfill.js";
 import { clearScanCursors } from "./claude-monitor-cursors.js";
 import { stopMonitorsForTask } from "./monitors.js";
 import { deleteTaskSideChats } from "./chat/lifecycle.js";
@@ -42,6 +42,11 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
   await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
   // 哨兵:**先把进程停了再删行**。顺序反过来就再也没人知道那个 pid 是谁的,它会一直
   // 跑到机器重启为止 —— 这是整个功能最容易留下的垃圾(进程本来就是故意脱离 ash 的)。
+  // **这一行必须排在所有删除之前。** 它做两件事:关掉内置 Monitor 那四个 writer 的落库资格
+  // (门闸,覆盖整个删除期),以及作废进程内缓着的扫描状态/恢复责任 —— 不关闸的话,下一次有人
+  // 读这个任务(已经打开的页面、在途请求、账本的自动重推)就会把旧桶里悬着的调用重新写回去,
+  // 成为再也没有入口能清的孤儿行(见 claude-monitor-revoked.ts 文件头)。
+  revokeTaskMonitors(taskId);
   await stopMonitorsForTask(taskId, "任务已删除").catch(() => {});
   await db.delete(monitors).where(eq(monitors.taskId, taskId));
   // 还没配上 `task_started` 的那几条调用（见 claude-monitor-pending.ts）：任务都删了，
@@ -49,9 +54,6 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
   await db.delete(monitorPendingCalls).where(eq(monitorPendingCalls.taskId, taskId));
   // 历史扫描读到哪儿了（见 claude-monitor-cursors.ts）：任务都没了，这几行再没人会用。
   await clearScanCursors(taskId);
-  // 库删干净了还不够：历史回填那边按 taskId 缓着扫描状态和恢复责任，不作废的话下一次有人
-  // 读这个任务就会把旧桶里悬着的调用重新写回去（见 forgetTaskMonitorScan）。
-  forgetTaskMonitorScan(taskId);
   await db.delete(teamInbound).where(eq(teamInbound.taskId, taskId)); // 调度台还没送出的入站消息
   await db.delete(noteTasks).where(eq(noteTasks.taskId, taskId));
   // 会话行、定时计划、队列位也一起收：孤儿 cron 每个 tick 都会被扫到再查不到任务，

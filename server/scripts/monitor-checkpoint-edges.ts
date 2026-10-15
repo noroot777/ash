@@ -336,4 +336,128 @@ export async function edgeGroups(): Promise<void> {
     proc.kill();
   }
 
+  // ── ⑯ 删除期是一段,不是一个瞬间:期间新来的扫描一样不许写 ───────────────────────
+  //
+  // `deleteTaskAssociations` 从停哨兵到删会话行有十几条语句、每条都 await。卡在「monitors
+  // 已删、sessions 还没删」那一刻进来一个新请求,它读得到旧会话 —— 上一版靠「开工时取一次
+  // 删除代次」判资格,而那个代次已经是删除之后的值,于是这一轮不认为自己被撤销过,把行又写
+  // 回去(第 14 轮审查 N3)。门闸是任务级的、覆盖整个删除期,所以这一轮连读都不读。
+  {
+    const f = await fixture("delete-window");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-window", "删除期里被读到的那条", "2026-10-15T18:00:00.000Z");
+    body += started(f.cli, "tu-window", "bwindow");
+    body += notice(f.cli, "bwindow");
+    writeFileSync(f.file, body);
+
+    const real = dbClient.execute.bind(dbClient);
+    let reached!: () => void;
+    let resume!: () => void;
+    const atGap = new Promise<void>((r) => { reached = r; });
+    const barrier = new Promise<void>((r) => { resume = r; });
+    let paused = false;
+    (dbClient as any).execute = async (stmt: any) => {
+      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+      // 卡在「会话行就要被删」之前:此刻 monitors 已经删完,会话还在。
+      if (!paused && /delete from "sessions"/i.test(sql)) {
+        paused = true;
+        reached();
+        await barrier;
+      }
+      return real(stmt);
+    };
+    const { deleteTaskAssociations } = await import("../src/task-delete-routes.js");
+    const deleting = deleteTaskAssociations(f.taskId);
+    await atGap;
+    // 删除期里来的那一轮:会话还查得到,但它没有落库资格。
+    const added = await backfillClaudeMonitors(f.taskId);
+    resume();
+    await deleting;
+    await db.delete(tasks).where(eq(tasks.id, f.taskId));
+    (dbClient as any).execute = real;
+
+    check(added === 0, "⑯删除期里来的那一轮一行都没写", `added=${added}`);
+    const leftovers = (await db.select().from(monitors).where(eq(monitors.taskId, f.taskId))).length
+      + (await db.select().from(schema.monitorPendingCalls)
+        .where(eq(schema.monitorPendingCalls.taskId, f.taskId))).length
+      + (await db.select().from(schema.monitorScanCursors)
+        .where(eq(schema.monitorScanCursors.taskId, f.taskId))).length;
+    check(leftovers === 0, "⑯三张表都没留下孤儿行", `${leftovers} 行`);
+    check(monitorRecoveryOf(f.taskId) === null, "⑯也没给它留恢复责任",
+      JSON.stringify(monitorRecoveryOf(f.taskId)));
+  }
+
+  // ── ⑰ 补偿清理自己失败:留一笔推得动的清理责任,另有启动期兜底 ────────────────────
+  //
+  // 上一版只打一行 warn。任务已经没了,以后没有任何入口会再来清它 —— 孤儿行永久留着
+  // (第 14 轮审查 N3)。
+  {
+    const { pendingPurges } = await import("../src/claude-monitor-revoked.js");
+    const { sweepOrphanClaudeMonitors } = await import("../src/claude-monitor-backfill.js");
+    const f = await fixture("purge-failed");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-purge", "补偿要清掉的那条", "2026-10-15T19:00:00.000Z");
+    body += started(f.cli, "tu-purge", "bpurge");
+    body += notice(f.cli, "bpurge");
+    writeFileSync(f.file, body);
+
+    const real = dbClient.execute.bind(dbClient);
+    let reached!: () => void;
+    let resume!: () => void;
+    const selected = new Promise<void>((r) => { reached = r; });
+    const barrier = new Promise<void>((r) => { resume = r; });
+    let paused = false;
+    let purgeDown = true;
+    (dbClient as any).execute = async (stmt: any) => {
+      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+      // 只打补偿清理那一条 DELETE(它按 kind 过滤;删除路径自己那条不带 kind,不能连坐)。
+      if (purgeDown && /delete from "monitors"/i.test(sql) && /"kind"/.test(sql)) {
+        throw new Error("INJECTED_PURGE_FAILURE");
+      }
+      const result = await real(stmt);
+      if (!paused && /from "sessions"/i.test(sql) && JSON.stringify(stmt?.args ?? []).includes(f.taskId)) {
+        paused = true;
+        reached();
+        await barrier;
+      }
+      return result;
+    };
+    const job = backfillClaudeMonitors(f.taskId);
+    await selected;
+    const { deleteTaskAssociations } = await import("../src/task-delete-routes.js");
+    try {
+      await deleteTaskAssociations(f.taskId);
+      await db.delete(tasks).where(eq(tasks.id, f.taskId));
+    } finally { resume(); }
+    await job;
+    check(pendingPurges().includes(f.taskId),
+      "⑰补偿清理失败 ⇒ 留下了一笔清理责任（不是只打一行 warn）", pendingPurges().join(",") || "(空)");
+
+    // 故障撤掉:退避阶梯第一档 1s,自己就把它清了。
+    purgeDown = false;
+    for (let i = 0; i < 20 && pendingPurges().includes(f.taskId); i += 1) {
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    (dbClient as any).execute = real;
+    check(!pendingPurges().includes(f.taskId), "⑰故障撤掉之后它自己重试成功并销账",
+      pendingPurges().join(",") || "(空)");
+
+    // 启动期的孤儿清扫是第二道(进程在重试做完之前没了就靠它)。
+    await db.insert(monitors).values({
+      id: "m-orphan", taskId: "t-gone-forever", command: "tail -f x.log", description: "孤儿",
+      cwd: "", status: "running", pid: null, pidStartedAt: null, logPath: "", offset: 0, events: 0,
+      exitCode: null, startedAt: new Date().toISOString(), expiresAt: new Date().toISOString(),
+      endedAt: null, endedReason: null, ownerUserId: null, kind: "claude", nativeId: "borphan",
+      cliSessionId: "cli-gone", sourceLifetime: "unknown",
+    });
+    await db.insert(schema.monitorScanCursors).values({
+      taskId: "t-gone-forever", path: "/nowhere.jsonl", fileSize: 1, readOffset: 1,
+      probe: 0, gapFrom: 0, gapNeed: 0,
+    });
+    const swept = await sweepOrphanClaudeMonitors();
+    check(swept.monitors === 1 && swept.cursors === 1, "⑰启动期清扫把任务已不在的残留收掉了",
+      JSON.stringify(swept));
+    check((await db.select().from(monitors).where(eq(monitors.taskId, "t-gone-forever"))).length === 0,
+      "⑰而且是真删掉了");
+  }
 }
