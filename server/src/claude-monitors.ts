@@ -480,7 +480,7 @@ export class ClaudeMonitorTrace {
       return;
     }
     // 同一个 native_id 重复开（流被重放、resume 后 CLI 重发）就不再插一行。唯一索引
-    // monitors_native_session 是最后一道，这里先查一次省掉一次必然失败的插入。
+    // monitors_native_source 是最后一道，这里先查一次省掉一次必然失败的插入。
     // 同样要带上来源会话：另一条会话的同号监听是**另一条**监听，不是这一条的重放。
     const candidates = await db
       .select({

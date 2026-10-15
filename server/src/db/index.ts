@@ -595,15 +595,26 @@ export async function ensureSchema() {
   // id 时，旧的 (task_id, native_id) 会把乙的事实 upsert 到甲那一行上：一张卡串两条监听，
   // 另一张干脆不出现（第 13 轮审查 N1）。cli_session_id 为空的是存量行，COALESCE 成空串让
   // 它们彼此之间仍然互斥（旧索引保证过的那部分唯一性一点不丢）。
+  //
+  // **来源不一定是个 CLI 会话号,也可以是「哪个 run 文件」。** 历史文件里有一类记录从头到尾
+  // 不报 session_id,这时归属只能留未知(claude-monitor-scan.ts)。按 COALESCE(cli,'') 建
+  // 身份的话,两个 run 文件里的同号监听又争同一个唯一键:第二张卡插不进去,而读取位置照常
+  // 推到末尾 —— 那张卡再也不会出现(第 8 轮审查 N2)。所以未知归属时拿 `source_run` 顶上:
+  // 一个 run 文件 = 一次进程启动 = 一个 CLI 会话,这是手上仅有、也足够的身份依据。
+  //
+  // 新键比旧键**更细**(已知归属的行一模一样,未知归属的行从「挤在同一个空串」变成按 run
+  // 分开),所以存量库一定建得起来,不会因为老数据撞键而失败。
   try {
     await client.execute(
-      "CREATE UNIQUE INDEX IF NOT EXISTS monitors_native_session"
-      + " ON monitors(task_id, COALESCE(cli_session_id,''), native_id) WHERE native_id IS NOT NULL",
+      "CREATE UNIQUE INDEX IF NOT EXISTS monitors_native_source"
+      + " ON monitors(task_id, COALESCE(cli_session_id, 'run:' || COALESCE(source_run,'')), native_id)"
+      + " WHERE native_id IS NOT NULL",
     );
-    // 旧的窄索引必须**拆掉**：留着它就还在按 (task_id, native_id) 拦,上面那条等于没加。
+    // 旧的那两条必须**拆掉**：留着任何一条,它都还在按更粗的身份拦,上面这条等于没加。
+    await client.execute("DROP INDEX IF EXISTS monitors_native_session");
     await client.execute("DROP INDEX IF EXISTS monitors_native");
   } catch (e) {
-    console.warn("[ash] monitors_native_session 索引创建失败,忽略:", e);
+    console.warn("[ash] monitors_native_source 索引创建失败,忽略:", e);
   }
   // ash 自己起的哨兵期限是它自己定的,`bounded` 对它恒成立 —— 上面那个 ALTER 为了不给
   // claude 投影编期限把默认值设成了 'unknown',这里把 ash 那半刷回来；证据列同理补 'self'

@@ -197,6 +197,9 @@ async function main(): Promise<void> {
   await twoHistoricalSources(true);
   await twoHistoricalSources(false);
   await twoHistoricalSources(false, 300);
+  // 再两遍：来源**一次都没报**，以及只有最后那条通知才报（第 8 轮审查 N2）。
+  await unknownSourcesEachGetACard(false);
+  await unknownSourcesEachGetACard(true);
 
   // 收尾：库里那两条任务的卡各是各的（没被上面的判据串掉）。
   check((await listMonitors("t-settle")).length === 1, "③甲的旧投影自己那张卡还在");
@@ -206,9 +209,66 @@ async function main(): Promise<void> {
       + " / 同来源照常销账 / 存量行按 run 文件升级 / 认不下来就另起一行"
       + " / 同一条 ash 会话换过号时两个历史来源各是各的（只有 init 行带来源、"
       + "甚至分几轮才读完也一样）"
+      + " / 来源一次都没报时两个 run 文件也各有各的卡（持久身份按 run 分）"
       + " 均受回归保护");
   }
   process.exit(failures ? 1 : 0);
+}
+
+/**
+ * 来源**完全未知**时，两个 run 文件的同号监听仍然各有各的卡。
+ *
+ * 持久身份原先是 `(task_id, COALESCE(cli_session_id,''), native_id)`：归属认不出来的行全挤
+ * 在同一个空串上，于是第二张卡插不进去（唯一冲突被当成「已经有归宿了」），而读取位置照常
+ * 推到文件末尾 —— 那张卡再也不会出现（第 8 轮审查 N2）。现在未知归属按 `source_run` 入键。
+ *
+ * `onlyNoticeCarries=true` 是另一种形状：前面都不报，只有最后那条完成通知报了 session_id。
+ */
+async function unknownSourcesEachGetACard(onlyNoticeCarries: boolean): Promise<void> {
+  const { backfillClaudeMonitors } = await import("../src/claude-monitor-backfill.js");
+  const tag = onlyNoticeCarries ? "只有通知带来源" : "来源一次都没报";
+  const suffix = onlyNoticeCarries ? "-notice-only" : "-no-source";
+  const taskId = `t-unknown${suffix}`;
+  const dir = join(root, "runs", taskId);
+  mkdirSync(dir, { recursive: true });
+  const sessionKey = `sessunknown${suffix}`;
+  const runOf = (stamp: string) => join(dir, `${sessionKey}-${stamp}.agent-out.jsonl`);
+  const oldRun = runOf("20261014T000000000Z");
+  const newRun = runOf("20261015T000000000Z");
+  const ev = (o: unknown) => JSON.stringify(o) + "\n";
+  const story = (tu: string, done: boolean) =>
+    ev({ type: "assistant", timestamp: "2026-10-14T00:00:01.000Z", message: { model: "m", content: [
+      { type: "tool_use", name: "Monitor", id: tu,
+        input: { command: `tail -F /tmp/${tu}`, description: `${tu} 的监听`, timeout_ms: 600_000 } },
+    ] } })
+    + ev({ type: "system", subtype: "task_started", task_id: "bshared", tool_use_id: tu,
+      task_type: "local_bash" })
+    + (done
+      ? ev({ type: "system", subtype: "task_notification", task_id: "bshared", status: "completed",
+        summary: "跑完了", ...(onlyNoticeCarries ? { session_id: "cli-late" } : {}) })
+      : "");
+  writeFileSync(oldRun, story("tu-a", false));
+  writeFileSync(newRun, story("tu-b", true));
+
+  await db.insert(tasks).values({ id: taskId, projectId: "p", title: `无来源（${tag}）`, body: "",
+    status: "running", agentType: "claude", mode: "single", createdAt: now(), updatedAt: now() });
+  await db.insert(sessions).values({
+    id: sessionKey, taskId, role: "single", agentType: "claude", executor: "claude@x",
+    cliSessionId: null, cwd: root, startedAt: now(), agentOutPath: newRun,
+  });
+
+  await backfillClaudeMonitors(taskId);
+  const rows = await db.select().from(monitors).where(eq(monitors.taskId, taskId));
+  check(rows.length === 2, `⑤${tag}：两个 run 文件各有各的卡（不是第二张被唯一键挡掉）`,
+    rows.map((r) => `${r.sourceRun?.slice(-30)}/${r.toolUseId}/${r.status}`).join(" , "));
+  check(new Set(rows.map((r) => r.sourceRun)).size === 2,
+    `⑤${tag}：两张卡记着各自的 run 文件`, rows.map((r) => String(r.sourceRun)).join(","));
+  const fresh = rows.find((r) => r.sourceRun === newRun);
+  check(fresh?.status === "exited" && fresh?.toolUseId === "tu-b",
+    `⑤${tag}：带完成通知那一轮是它自己的卡收到终态`, `${fresh?.status} / ${fresh?.toolUseId}`);
+  const stale = rows.find((r) => r.sourceRun === oldRun);
+  check(stale?.status !== "exited" && stale?.toolUseId === "tu-a",
+    `⑤${tag}：另一轮没被那条终态改写`, `${stale?.status} / ${stale?.toolUseId}`);
 }
 
 /**

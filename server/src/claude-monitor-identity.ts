@@ -1,7 +1,9 @@
 // 「库里这一行是不是那条监听」—— **归属判据只有这一个地方**。
 //
-// 持久身份是 `(task_id, cli_session_id, native_id)`（唯一索引 `monitors_native_session`）：
-// 同一个任务上两条 CLI 会话撞同一个 native_id 是允许的，所以认行必须带上来源会话。
+// 持久身份是 `(task_id, 来源, native_id)`（唯一索引 `monitors_native_source`）：同一个任务上
+// 两条 CLI 会话撞同一个 native_id 是允许的，所以认行必须带上来源。「来源」优先是 CLI 会话号，
+// 认不出来时是**那个 run 文件**（索引里 `COALESCE(cli_session_id, 'run:'||source_run)`，见
+// db/index.ts）—— 一个 run 文件 = 一次进程启动 = 一个 CLI 会话。
 // 而 `cli_session_id` 为空的是**存量行**（这一列是后加的），空的意思是「不知道是谁的」，
 // **不是「跟谁都相等」**。
 //

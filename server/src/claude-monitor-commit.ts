@@ -30,7 +30,7 @@
 //     回到从零重放一遍，那一遍会把存量行的 `tool_use_id` 补上，下一轮就落进上面两支。
 //     没跳过前缀的那一代里，同样配不上就是真的无关（否则无限重读），见
 //     `CommitOutcome.undecidable` 与扫描层的 `SessionScan.skippedPrefix`。
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import {
   claudeMonitorStatus, monitorExactExpiry, monitorStartTrusted, monitorStatusCorrectable,
   parseMonitorStartReceipt, startAnchorTolerance,
@@ -159,15 +159,7 @@ export async function commitRound(
     return { added: 0, missed: false, resolved: [], undecidable: [] };
   }
   const index = indexRows(await db
-    .select({
-      id: monitors.id, nativeId: monitors.nativeId, status: monitors.status,
-      cliSessionId: monitors.cliSessionId, sourceLifetime: monitors.sourceLifetime,
-      startedAt: monitors.startedAt, expiresAt: monitors.expiresAt,
-      lifetimeEvidence: monitors.lifetimeEvidence, startEvidence: monitors.startEvidence,
-      sourcePid: monitors.sourcePid, timeoutMs: monitors.timeoutMs,
-      startAnchorWidthMs: monitors.startAnchorWidthMs, toolUseId: monitors.toolUseId,
-      sourceRun: monitors.sourceRun, startLowAt: monitors.startLowAt,
-    })
+    .select(PRIOR_COLUMNS)
     .from(monitors)
     .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude"))));
 
@@ -234,12 +226,46 @@ export async function commitRound(
       });
     } catch (e) {
       if (!isUniqueConflict(e)) throw e; // 真写失败：往外抛，这一轮不算读完
+      // 撞唯一键 ≠ 已经有归宿：核对过那一行确实是这条监听才算数（见 `conflictHome`）。
+      const home = await conflictHome(taskId, item);
+      if (!home) { missed = true; continue; }
+      addToIndex(index, home);           // 这一轮的迟到事实还要靠它配回去
     }
   }
 
   const late2 = await applyLateFacts(taskId, late, index, soleSourceOf);
   if (late2.missed) missed = true;
   return { added, missed, resolved: late2.resolved, undecidable: late2.undecidable };
+}
+
+/** 读一行已有投影要的那些列（建索引、查冲突归宿共用一份，别让两处漂移）。 */
+const PRIOR_COLUMNS = {
+  id: monitors.id, nativeId: monitors.nativeId, status: monitors.status,
+  cliSessionId: monitors.cliSessionId, sourceLifetime: monitors.sourceLifetime,
+  startedAt: monitors.startedAt, expiresAt: monitors.expiresAt,
+  lifetimeEvidence: monitors.lifetimeEvidence, startEvidence: monitors.startEvidence,
+  sourcePid: monitors.sourcePid, timeoutMs: monitors.timeoutMs,
+  startAnchorWidthMs: monitors.startAnchorWidthMs, toolUseId: monitors.toolUseId,
+  sourceRun: monitors.sourceRun, startLowAt: monitors.startLowAt,
+};
+
+/**
+ * 插入撞了唯一键：库里**那一行到底是不是这条监听**。
+ *
+ * 唯一键是 `(task_id, 来源, native_id)`（db/index.ts 的 `monitors_native_source`），所以
+ * 撞键通常就意味着「同一条监听已经有归宿了」—— 但那是推论，不是证据：真去把那一行捞出来、
+ * 按同一套身份判据核对上了才算数。捞不到就说明这条事实**没有归宿**，这一轮不能算读完
+ * （第 8 轮审查 N2：撞键被当成成功归宿，第二张卡没落库，位置却走到了文件末尾）。
+ */
+async function conflictHome(taskId: string, item: Found): Promise<PriorRow | undefined> {
+  const sameSource = item.cliSessionId
+    ? eq(monitors.cliSessionId, item.cliSessionId)
+    : and(isNull(monitors.cliSessionId), eq(monitors.sourceRun, item.filePath));
+  const rows = await db.select(PRIOR_COLUMNS).from(monitors).where(and(
+    eq(monitors.taskId, taskId), eq(monitors.kind, "claude"),
+    eq(monitors.nativeId, item.nativeId), sameSource,
+  ));
+  return rows.at(0);
 }
 
 /** 把一行塞进索引（新插的那些也要能被同一轮的迟到事实配到）。 */
