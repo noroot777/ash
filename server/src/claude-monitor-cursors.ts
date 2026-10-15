@@ -19,6 +19,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitorScanCursors } from "./db/schema.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
+import { pendingCallKeyBlocker, pendingCallKeyLive } from "./db/schema-readiness.js";
 
 /**
  * **这一代「消费语义」的版本号** —— 一份读取位置的戳，承诺的是：
@@ -50,13 +51,18 @@ import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
  *   tool_use 号时，新一轮成行把旧一轮还悬着的那条调用销了账 —— 那一行是它入参的唯一出处，
  *   旧卡从此永久缺一张，而这一代照常给那个前缀盖上「读完了」的戳（新一轮第 1 轮审查 F1）。
  *   所以 3 这个戳同样不可信，一并作废。
- * - `4`：当代。只有这一代的代码盖的戳才算数。
+ * - `4`：未决调用那条链也统一了，**但发布这一代语义的前置条件没核验**：换键的迁移失败只打
+ *   一句 warn，启动照常继续，旧三列键的库于是一边吞掉同号不同来源的调用、一边照常给前缀盖
+ *   上 4 的戳；下一次启动真的迁成功了也不会重放（新一轮第 2 轮审查 F1 两种失败各有实测）。
+ *   所以 4 这个戳同样不可信，一并作废 —— 当代的戳只在**真实 schema 核验通过**时才盖得起来
+ *   （`db/schema-readiness.ts`，判据落在 `saveScanCursors`）。
+ * - `5`：当代。只有这一代的代码盖的戳才算数。
  *
  * 成本是**一次性**的：被作废的位置等于那个文件从零重放一遍，而重放照常受单轮字节上限约束、
  * 读到哪儿就带着当代版本号落盘（见 `saveScanCursors`），下一轮接着往后读 —— 不是每次请求
  * 都全量重读历史。
  */
-export const MONITOR_CHECKPOINT_SEMANTICS = 4;
+export const MONITOR_CHECKPOINT_SEMANTICS = 5;
 
 /** 这份位置是**当代**确认的吗（只有它才可以被接回来往后读）。 */
 const confirmedUnderCurrent = (cursor: { semantics: number | null }): boolean =>
@@ -146,10 +152,26 @@ export async function loadScanCursors(taskId: string): Promise<Map<string, ScanC
  *
  * upsert 而不是「先删后插」：中间那一瞬如果进程没了，位置就凭空消失了（代价是从零重读）。
  * 这一步只认这一轮真的读过的文件，没动过的行原样留着。
+ *
+ * 返回「这一份位置落盘了没有」：**没落盘不是小事**，调用方据此回退、留恢复责任（见
+ * `saveCheckpoint`）—— 位置是这一轮「读完了」的唯一凭据，默默跳过它等于悄悄声称读完了。
  */
 export async function saveScanCursors(
   taskId: string, cursors: ReadonlyMap<string, ScanCursor>,
-): Promise<void> {
+): Promise<boolean> {
+  // **当代语义没发布出去，就不许盖当代的戳。** 判据是运行期核验过的真实 schema，不是
+  // 「迁移函数返回了」也不是编译期声明（理由与两种失败的实测见 db/schema-readiness.ts）。
+  // 旧三列键的库上，同号不同来源的两条调用只存得下一条 —— 那一行是它入参的唯一出处，
+  // 位置一确认就再也读不回来了（新一轮第 2 轮审查 F1）。
+  //
+  // 反过来，**接回旧位置不受这一条约束**（`loadScanCursors` 照常接）：带当代戳的位置只可能
+  // 由核验通过的那几轮盖出来，它承诺的前缀照旧成立；这一轮没盖上的那一段下一轮重读一遍。
+  if (!pendingCallKeyLive()) {
+    console.warn(`[ash] 内置 Monitor 历史扫描：task=${taskId} 的读取位置这一轮不落盘 ——`
+      + `持久身份键还没核验成当代形状（${pendingCallKeyBlocker()}）。这一轮读到的卡照常`
+      + `显示，位置留在原地，下一轮重读同一段`);
+    return false;
+  }
   const rows = [...cursors].map(([path, cursor]) => ({
     taskId, path, fileSize: cursor.size, readOffset: cursor.offset,
     probe: cursor.probe, gaps: JSON.stringify(cursor.gaps), source: cursor.source,
@@ -174,6 +196,7 @@ export async function saveScanCursors(
       db.delete(monitorScanCursors).where(orphanRows(monitorScanCursors, taskId)),
     );
   }
+  return true;
 }
 
 /**

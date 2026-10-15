@@ -8,9 +8,17 @@
 // 这份测试盯**升级路径**：两种旧形状的表都要被重建成当代键，而且重建之后同号不同来源的两条
 // 存得下、销账只带走指名那一条。判据本体在 `server/src/claude-monitor-pending.ts`，新库那条
 // 路（bootstrap DDL）由 `test-claude-monitor-identity.ts` 的 ⑥(b) 盯着。
+//
+// **失败路径占了后半截**（新一轮第 2 轮审查 F1）：换表撞上别的写者、上一次中断在「原表已删、
+// 改名还没成」那一瞬、接回搬运表这一批自己也失败 —— 三种都不许留下半成品，更不许让上层按
+// 当代语义确认读取位置（`db/schema-readiness.ts` + `claude-monitor-cursors.ts` 的
+// `saveScanCursors`）。夹具用的是真的第二个 SQLite 写者，不伪造异常、不替换迁移实现。
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { eq } from "drizzle-orm";
+import type { InStatement } from "../src/db/node-sqlite-client.js";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-pending-key-"));
@@ -18,11 +26,15 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitor-pending-key");
 
-const [{ db, ensureSchema, dbClient }, schema] = await Promise.all([
+const [{ db, ensureSchema, dbClient }, schema, readiness, cursors] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
+  import("../src/db/schema-readiness.js"),
+  import("../src/claude-monitor-cursors.js"),
 ]);
 const { projects, tasks } = schema;
+const { pendingCallKeyLive, pendingCallKeyBlocker } = readiness;
+const { saveScanCursors, MONITOR_CHECKPOINT_SEMANTICS: CURRENT } = cursors;
 await ensureSchema();
 
 let failures = 0;
@@ -32,6 +44,190 @@ const check = (ok: boolean, label: string, detail = "") => {
   console.error(`✗ ${label}${detail ? ` —— ${detail}` : ""}`);
 };
 const now = () => new Date().toISOString();
+
+/** 当代形状（跟 bootstrap DDL / 迁移里那份一致）。 */
+const currentShape = (table: string) => `CREATE TABLE ${table} (
+  task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+  command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+  at TEXT, source_run TEXT NOT NULL DEFAULT '', cli_session_id TEXT,
+  PRIMARY KEY (task_id, session_key, source_run, tool_use_id))`;
+
+/** 这张表**现在**的主键（运行期事实，判据只认它）。 */
+const keyOf = async (table: string): Promise<string> => {
+  const info = await dbClient.execute(`PRAGMA table_info(${table})`);
+  return info.rows.filter((r: any) => Number(r.pk) > 0)
+    .sort((a: any, b: any) => Number(a.pk) - Number(b.pk))
+    .map((r: any) => String(r.name)).join(",");
+};
+
+const tableExists = async (table: string): Promise<boolean> => (await dbClient.execute({
+  sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", args: [table],
+})).rows.length > 0;
+
+// ── ⑮ 换表撞上别的写者：原表原样留着，当代语义一个字都不许发布 ───────────────────
+//
+// 上一版把换表拆成五条独立 `execute`，中间任何一条失败都留下半成品库，而启动照常成功：
+// 旧三列键继续承接当代写入（同号不同来源的第二条被冲突吞掉），读取位置却照常被确认成
+// 「读完了」—— 下一次启动真的迁成功也不会重放，因为那个前缀已经带着当代戳（新一轮第 2 轮
+// 审查 F1 实测 A：全新进程、升级成功，那张卡仍然是 0）。
+//
+// 这里用**真的第二个 SQLite 写者**撞那一批（不伪造异常、不替换迁移实现），钉三件事：
+// 整批回滚（原表和它的行原样在、不留半成品搬运表）、当代键没发布、**位置不落盘**。
+async function rekeyFailureKeepsOldTable(): Promise<void> {
+  const taskKey = "t-rekey-locked";
+  await db.insert(tasks).values({ id: taskKey, projectId: "p", title: "换表撞锁", body: "",
+    status: "running", agentType: "claude", mode: "single", createdAt: now(), updatedAt: now() });
+  await dbClient.execute("DROP TABLE IF EXISTS monitor_pending_calls");
+  await dbClient.execute("DROP TABLE IF EXISTS monitor_pending_calls_rekey");
+  await dbClient.execute(`CREATE TABLE monitor_pending_calls (
+    task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+    command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', at TEXT, source_run TEXT,
+    PRIMARY KEY (task_id, session_key, tool_use_id))`);
+  await dbClient.execute({ sql: "INSERT INTO monitor_pending_calls VALUES (?,?,?,?,?,?,?)",
+    args: [taskKey, "s-old", "tu-locked", "tail -F build.log", "入参的唯一出处", null, "/runs/a.jsonl"] });
+  // 等锁等到超时不是这条测试要观察的东西（生产默认等得更久）：缩到 25ms 只为让它快点失败。
+  await dbClient.execute("PRAGMA busy_timeout = 25");
+
+  const locker = new DatabaseSync(String(process.env.ASH_DB));
+  const realBatch = dbClient.batch.bind(dbClient);
+  let locked = false;
+  (dbClient as { batch: unknown }).batch = async (stmts: InStatement[], mode?: unknown) => {
+    const sql = [...stmts].map((s) => (typeof s === "string" ? s : s.sql)).join(";");
+    if (locked || !sql.includes("monitor_pending_calls_rekey")) return realBatch(stmts, mode as never);
+    locked = true;
+    locker.exec("BEGIN IMMEDIATE");   // 真的第二个写者：BEGIN IMMEDIATE 当场拿走写锁
+    try { return await realBatch(stmts, mode as never); } finally { locker.exec("ROLLBACK"); }
+  };
+  try { await ensureSchema(); } finally {
+    (dbClient as { batch: unknown }).batch = realBatch;
+    locker.close();
+  }
+
+  // 这一条同时钉住**换表是一个原子批**：夹具挂在 `batch` 上，拆成多条 `execute` 就撞不到锁。
+  check(locked, "⑮ 换表作为一个原子批交出去（夹具在那一批上撞到了写锁）");
+  check(await keyOf("monitor_pending_calls") === "task_id,session_key,tool_use_id",
+    "⑮ 换表失败 ⇒ 整批回滚,原表原样留着", await keyOf("monitor_pending_calls"));
+  const kept = await dbClient.execute("SELECT COUNT(*) AS n FROM monitor_pending_calls");
+  check(Number((kept.rows[0] as any).n) === 1, "⑮ 原表里那条入参还在");
+  check(!(await tableExists("monitor_pending_calls_rekey")), "⑮ 没留下半成品搬运表");
+  check(!pendingCallKeyLive(), "⑮ 迁移没成 ⇒ 当代持久键没发布出去");
+
+  // **这才是「永久少一张卡」的那个出口**：旧键的库上盖不出当代戳。
+  const spot = new Map([[join(root, "a.jsonl"),
+    { size: 10, offset: 10, probe: 0, gaps: [], source: null }]]);
+  check(await saveScanCursors(taskKey, spot) === false, "⑮ 读取位置这一轮不落盘（返回 false）");
+  check((await db.select().from(schema.monitorScanCursors)
+    .where(eq(schema.monitorScanCursors.taskId, taskKey))).length === 0,
+    "⑮ 库里一条位置也没有（没给旧键的库盖上当代戳）");
+
+  // 下一次启动没人占锁 ⇒ 当场迁成功、当代语义发布、位置也盖得起戳了。
+  await ensureSchema();
+  check(pendingCallKeyLive(), "⑮ 下次启动迁成功 ⇒ 当代键发布出去了");
+  check(await keyOf("monitor_pending_calls") === "task_id,session_key,source_run,tool_use_id",
+    "⑮ 键重建成了当代四列", await keyOf("monitor_pending_calls"));
+  check(await saveScanCursors(taskKey, spot) === true, "⑮ 这一轮位置落盘了");
+  const stamped = await db.select().from(schema.monitorScanCursors)
+    .where(eq(schema.monitorScanCursors.taskId, taskKey));
+  check(stamped.length === 1 && stamped[0]?.semantics === CURRENT,
+    "⑮ 盖的是当代戳", JSON.stringify(stamped.map((r) => r.semantics)));
+}
+
+// ── ⑯ 上一次换表中断在「原表已删、改名还没成」：搬运表里的事实必须接回来 ──────────
+//
+// 那一瞬之后正式表不存在；下一次 bootstrap 的 `CREATE TABLE IF NOT EXISTS` 会建出一张**空的
+// 当代键表**，于是只看「键已经是当代」就返回的迁移把带着事实的搬运表永远留在一边（新一轮
+// 第 2 轮审查 F1 实测 B：`strandedPending=1`、`visiblePending=0`）。两种落点各跑一遍。
+async function interruptedRekeyIsAdopted(): Promise<void> {
+  // 两种落点：bootstrap 已经把空的当代表建回来了（真实升级入口 `ensureSchema`），以及
+  // **连 bootstrap 都没兜住**、正式表压根不存在（直接跑 `runDataMigrations` —— 接回搬运表
+  // 这件事不许依赖「先有人把表建出来」，那一步自己也可能失败）。
+  const { runDataMigrations } = await import("../src/db/migrations.js");
+  const phases = [
+    { label: "正式表还没建回来", seedMain: false, upgrade: () => runDataMigrations(dbClient) },
+    { label: "bootstrap 建出了空的当代表", seedMain: true, upgrade: () => ensureSchema() },
+  ];
+  for (const { label, seedMain, upgrade } of phases) {
+    await dbClient.execute("DROP TABLE IF EXISTS monitor_pending_calls");
+    await dbClient.execute("DROP TABLE IF EXISTS monitor_pending_calls_rekey");
+    await dbClient.execute(currentShape("monitor_pending_calls_rekey"));
+    await dbClient.execute({ sql: `INSERT INTO monitor_pending_calls_rekey
+      (task_id, session_key, tool_use_id, command, description, at, source_run, cli_session_id)
+      VALUES (?,?,?,?,?,?,?,?)`,
+      args: ["t-rekey-locked", "s-mid", "tu-stranded", "sleep 900", "搬到一半", null, "/runs/b.jsonl", null] });
+    if (seedMain) await dbClient.execute(currentShape("monitor_pending_calls"));
+
+    await upgrade();
+
+    check(pendingCallKeyLive(), `⑯ ${label}：接回来之后当代键才算发布`, pendingCallKeyBlocker());
+    check(!(await tableExists("monitor_pending_calls_rekey")),
+      `⑯ ${label}：搬运表没留在一边`);
+    const adopted = (await db.select().from(schema.monitorPendingCalls))
+      .filter((r) => r.toolUseId === "tu-stranded");
+    check(adopted.length === 1 && adopted[0]?.command === "sleep 900",
+      `⑯ ${label}：搬运表里那条入参在正式表里查得到`, JSON.stringify(adopted));
+  }
+
+  // 另一边：正式表还在、还是旧键 ⇒ 搬运表只是上一次没搬完的**残缺拷贝**，原表才是事实的
+  // 出处。丢掉拷贝、按原表重建，别把拷贝当成要接回来的事实。
+  await dbClient.execute("DROP TABLE IF EXISTS monitor_pending_calls");
+  await dbClient.execute("DROP TABLE IF EXISTS monitor_pending_calls_rekey");
+  await dbClient.execute(`CREATE TABLE monitor_pending_calls (
+    task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+    command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', at TEXT, source_run TEXT,
+    PRIMARY KEY (task_id, session_key, tool_use_id))`);
+  await dbClient.execute({ sql: "INSERT INTO monitor_pending_calls VALUES (?,?,?,?,?,?,?)",
+    args: ["t-rekey-locked", "s-live", "tu-live", "sleep 1", "原表才是出处", null, "/runs/c.jsonl"] });
+  await dbClient.execute(currentShape("monitor_pending_calls_rekey"));
+  await ensureSchema();
+  check(pendingCallKeyLive(), "⑯ 残缺拷贝丢掉、按原表重建之后当代键发布", pendingCallKeyBlocker());
+  const live = (await db.select().from(schema.monitorPendingCalls))
+    .filter((r) => r.toolUseId === "tu-live");
+  check(live.length === 1, "⑯ 原表那条入参跟着重建活下来了", JSON.stringify(live));
+}
+
+// ── ⑰ 接不回来的那一次：事实留在搬运表里，当代语义照样不许发布 ─────────────────────
+//
+// 「正式表的键已经是当代」证明不了「上次搬到临时表的事实已经入正式表」。这一组让接回去那一批
+// 也撞上写锁：两边都不许丢（搬运表原样在），而当代键不许发布（否则位置一确认，那批事实就
+// 再也没有入口了）。
+async function strandedStagingWithholdsSemantics(): Promise<void> {
+  await dbClient.execute("DROP TABLE IF EXISTS monitor_pending_calls");
+  await dbClient.execute("DROP TABLE IF EXISTS monitor_pending_calls_rekey");
+  await dbClient.execute(currentShape("monitor_pending_calls"));
+  await dbClient.execute(currentShape("monitor_pending_calls_rekey"));
+  await dbClient.execute({ sql: `INSERT INTO monitor_pending_calls_rekey
+    (task_id, session_key, tool_use_id, command, description, at, source_run, cli_session_id)
+    VALUES (?,?,?,?,?,?,?,?)`,
+    args: ["t-rekey-locked", "s-mid", "tu-stuck", "sleep 42", "接不回来", null, "/runs/d.jsonl", null] });
+  await dbClient.execute("PRAGMA busy_timeout = 25");
+
+  const locker = new DatabaseSync(String(process.env.ASH_DB));
+  const realBatch = dbClient.batch.bind(dbClient);
+  let locked = false;
+  (dbClient as { batch: unknown }).batch = async (stmts: InStatement[], mode?: unknown) => {
+    const sql = [...stmts].map((s) => (typeof s === "string" ? s : s.sql)).join(";");
+    if (locked || !sql.includes("monitor_pending_calls_rekey")) return realBatch(stmts, mode as never);
+    locked = true;
+    locker.exec("BEGIN IMMEDIATE");
+    try { return await realBatch(stmts, mode as never); } finally { locker.exec("ROLLBACK"); }
+  };
+  try { await ensureSchema(); } finally {
+    (dbClient as { batch: unknown }).batch = realBatch;
+    locker.close();
+  }
+
+  check(locked, "⑰ 接回搬运表也是一个原子批（夹具在那一批上撞到了写锁）");
+  check(!pendingCallKeyLive(), "⑰ 搬运表还在 ⇒ 当代键不许发布（键已是当代也不算）");
+  const stranded = await dbClient.execute("SELECT COUNT(*) AS n FROM monitor_pending_calls_rekey");
+  check(Number((stranded.rows[0] as any).n) === 1, "⑰ 那条事实原样留在搬运表里（没被丢掉）");
+  await ensureSchema();   // 下一次启动没人占锁
+  check(pendingCallKeyLive() && !(await tableExists("monitor_pending_calls_rekey")),
+    "⑰ 下次启动把它接回去了,当代键随后发布", pendingCallKeyBlocker());
+  const rescued = (await db.select().from(schema.monitorPendingCalls))
+    .filter((r) => r.toolUseId === "tu-stuck");
+  check(rescued.length === 1 && rescued[0]?.command === "sleep 42",
+    "⑰ 那条入参最终在正式表里查得到", JSON.stringify(rescued));
+}
 
 async function main(): Promise<void> {
   await db.insert(projects).values({ id: "p", name: "p", repoPath: root, createdAt: now() });
@@ -115,10 +311,15 @@ async function main(): Promise<void> {
   }
 
 
+  await rekeyFailureKeepsOldTable();
+  await interruptedRekeyIsAdopted();
+  await strandedStagingWithholdsSemantics();
+
   if (failures === 0) {
     console.log("✓ 内置 Monitor 未决调用表的键：两种旧形状（没有键、更粗的三列键）升级时都"
-      + "重建成当代四列键并去重 / 同号不同来源的两条存得下 / 销账只带走指名那一条"
-      + " 均受回归保护");
+      + "重建成当代四列键并去重 / 同号不同来源的两条存得下 / 销账只带走指名那一条 /"
+      + "换表撞锁时整批回滚且当代语义与读取位置都不发布 / 中断在半路的搬运表两种落点都接得"
+      + "回来、接不回来就继续不发布 均受回归保护");
   }
   process.exit(failures ? 1 : 0);
 }

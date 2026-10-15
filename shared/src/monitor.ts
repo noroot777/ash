@@ -180,6 +180,9 @@ export const MONITOR_RECOVERY_REASONS = [
   // 有一条记录比单次读取窗口还长,已经整条跳过(见 claude-monitor-read.ts)。那一条里要是
   // 带着 Monitor 的入参或回执,这一轮的事实就是缺的——缺口要说出来,不能静悄悄销账。
   "record-skipped",
+  // 库的持久身份键还没核验成当代形状(换键的迁移失败了,见 server/src/db/schema-readiness.ts)。
+  // 事实照常读、照常显示,但「这一段读完了」不许落盘——旧键会吞掉同号不同来源的调用。
+  "schema-unready",
 ] as const;
 export type MonitorRecoveryReason = (typeof MONITOR_RECOVERY_REASONS)[number];
 
@@ -193,6 +196,7 @@ export const MONITOR_RECOVERY_LABEL: Record<MonitorRecoveryReason, string> = {
   "checkpoint-incomplete": "有回执还配不上，正在回头重读",
   "tail-incomplete": "最后一行还没写完，稍后再读",
   "record-skipped": "有一条记录过长已跳过，事实可能不全",
+  "schema-unready": "数据库还没升级完，进度先不记",
 };
 
 export type MonitorRecovery = {

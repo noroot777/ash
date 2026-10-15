@@ -10,6 +10,7 @@
 //
 // 入口只有一个:`runDataMigrations(client)`,由 `ensureSchema()` 在 DDL 之后调用。
 import type { Client } from "./node-sqlite-client.js";
+import { markPendingCallKey, pendingCallKeyBlocker, pendingCallKeyLive } from "./schema-readiness.js";
 import { dropRetiredTables } from "./retired-schema.js";
 
 async function widenWorkflowBuiltinIndex(client: Client): Promise<void> {
@@ -487,36 +488,126 @@ async function backfillMonitorTimeoutFromExpiry(client: Client): Promise<void> {
  * SQLite 既不能加主键也不能改主键，所以这里**重建整张表**（`CREATE TABLE IF NOT EXISTS` 不会
  * 回头改已有表）。搬运时来源不明的行填空串：那种行从此谁也证明不了同源，于是不会被销账 ——
  * 保守的那一边（毁掉入参是永久的，留着未决责任只是多读一行）。已经是当代键的库上空转。
+ *
+ * **失败路径和成功路径一样要紧**（新一轮第 2 轮审查 F1，两种失败各有实测）：
+ *
+ *   ① 五条独立 `execute` 换表，中间任何一条失败都留下半成品库，而启动照常成功 —— 旧三列键
+ *      继续承接当代写入，一条调用被冲突吞掉，位置却照常被确认成「读完了」；下次启动迁成功
+ *      也不重放，因为前缀已经带着当代戳。→ 整个换表收进**一个原子批**（`client.batch`：
+ *      BEGIN 到 COMMIT 之间没有缝，失败整批回滚、原表原样留着）。
+ *   ② 失败发生在「原表已删、改名还没成」之后：正式表不存在，下一次 bootstrap 的
+ *      `CREATE TABLE IF NOT EXISTS` 建出一张**空的当代键表**，而光看「键已经是当代」就返回
+ *      的迁移把带着事实的搬运表永远留在一边。→ 开头先 `adoptInterruptedRekey` 收尾。
+ *
+ * 还有第三件事：**结论要核验、不能推断**。走到最后一步再读一次真实形状（`PRAGMA`），只有
+ * 它说得对才允许上层按当代语义对外确认事实（见 `db/schema-readiness.ts`）。
  */
 const PENDING_CALL_KEY = ["task_id", "session_key", "source_run", "tool_use_id"];
+const PENDING_CALLS = "monitor_pending_calls";
+const PENDING_CALLS_STAGING = "monitor_pending_calls_rekey";
+const PENDING_CALL_COLUMNS =
+  "task_id, session_key, tool_use_id, command, description, at, source_run, cli_session_id";
+const createPendingCalls = (table: string) => `CREATE TABLE ${table} (
+  task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+  command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+  at TEXT, source_run TEXT NOT NULL DEFAULT '', cli_session_id TEXT,
+  PRIMARY KEY (task_id, session_key, source_run, tool_use_id))`;
+
+type TableShape = { exists: boolean; columns: string[]; key: string[] };
+
+/** 这张表**现在**长什么样（运行期事实，不是 drizzle 里的声明）。 */
+async function shapeOf(client: Client, table: string): Promise<TableShape> {
+  const info = await client.execute(`PRAGMA table_info(${table})`);
+  return {
+    exists: info.rows.length > 0,
+    columns: info.rows.map((row: any) => String(row.name)),
+    key: info.rows.filter((row: any) => Number(row.pk) > 0)
+      .sort((a: any, b: any) => Number(a.pk) - Number(b.pk))
+      .map((row: any) => String(row.name)),
+  };
+}
+
+const isCurrentPendingShape = (shape: TableShape): boolean =>
+  shape.key.join(",") === PENDING_CALL_KEY.join(",") && shape.columns.includes("cli_session_id");
+
+/**
+ * 上一次换表中断在半路：**把搬运表里的事实接回去**。
+ *
+ * 怎么分清中断在哪一边：**正式表还在、而且还是旧键** ⇒ 中断在删原表之前，事实都还在原表
+ * 身上，搬运表只是一份残缺拷贝 —— 丢掉它，下面重搬一遍。其余情况（正式表不存在，或者已经
+ * 是当代键的空表 —— 多半是 bootstrap 随后建出来的那张）都说明事实在搬运表里，并回去。
+ *
+ * 并表一句 `CREATE TABLE IF NOT EXISTS` 打头，于是「正式表不存在」和「正式表是空的当代表」
+ * 收成同一条路：不必依赖 bootstrap 先把表建出来（它自己也可能失败），也不留一条平时跑不到
+ * 的分支。`OR IGNORE`：撞键的留哪一条都一样（同一行日志的同一次调用）。
+ *
+ * 整段走原子批：并表失败就整批回滚，搬运表原样留在原地等下一次启动，不会出现「两边都半截」
+ * 的第三种状态；而这一次没接回来的事实由核验那一步兜住（当代语义不发布）。
+ */
+async function adoptInterruptedRekey(client: Client): Promise<void> {
+  const staging = await shapeOf(client, PENDING_CALLS_STAGING);
+  if (!staging.exists) return;
+  const main = await shapeOf(client, PENDING_CALLS);
+  if (main.exists && !isCurrentPendingShape(main)) {
+    await client.execute(`DROP TABLE IF EXISTS ${PENDING_CALLS_STAGING}`);
+    return;
+  }
+  console.warn("[ash] 未决调用表:上一次键重建中断在半路,正在把"
+    + ` ${PENDING_CALLS_STAGING} 里的行接回正式表`);
+  await client.batch([
+    createPendingCalls(PENDING_CALLS).replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
+    `INSERT OR IGNORE INTO ${PENDING_CALLS} (${PENDING_CALL_COLUMNS})
+       SELECT ${PENDING_CALL_COLUMNS} FROM ${PENDING_CALLS_STAGING}`,
+    `DROP TABLE ${PENDING_CALLS_STAGING}`,
+  ]);
+}
 
 async function repairPendingCallKey(client: Client): Promise<void> {
+  // 先把结论清掉:这一轮核验通过之前,上层一律按「当代语义还没发布」办事。
+  markPendingCallKey(false, "这一轮核验还没跑完");
   try {
-    const info = await client.execute("PRAGMA table_info(monitor_pending_calls)");
-    if (!info.rows.length) return;                                   // 表还没建
-    const names = info.rows.map((row: any) => String(row.name));
-    const key = info.rows.filter((row: any) => Number(row.pk) > 0)
-      .sort((a: any, b: any) => Number(a.pk) - Number(b.pk))
-      .map((row: any) => String(row.name));
-    if (key.join(",") === PENDING_CALL_KEY.join(",")) return;        // 已经是当代键
-    // 归属那一列可能已经由容错 ALTER 补上了（db/index.ts），也可能这是更老的库 —— 两种都搬。
-    const owner = names.includes("cli_session_id") ? "cli_session_id" : "NULL";
-    await client.execute("DROP TABLE IF EXISTS monitor_pending_calls_rekey");
-    await client.execute(`CREATE TABLE monitor_pending_calls_rekey (
-      task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
-      command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-      at TEXT, source_run TEXT NOT NULL DEFAULT '', cli_session_id TEXT,
-      PRIMARY KEY (task_id, session_key, source_run, tool_use_id))`);
-    // `OR IGNORE` 顺带去重：同一条调用的内容来自同一行不变的日志，留哪一条都一样。
-    await client.execute(`INSERT OR IGNORE INTO monitor_pending_calls_rekey
-      (task_id, session_key, tool_use_id, command, description, at, source_run, cli_session_id)
-      SELECT task_id, session_key, tool_use_id, command, description, at,
-             COALESCE(source_run, ''), ${owner}
-        FROM monitor_pending_calls`);
-    await client.execute("DROP TABLE monitor_pending_calls");
-    await client.execute("ALTER TABLE monitor_pending_calls_rekey RENAME TO monitor_pending_calls");
+    await adoptInterruptedRekey(client);
+    const main = await shapeOf(client, PENDING_CALLS);
+    if (main.exists && !isCurrentPendingShape(main)) {
+      // 归属那一列可能已经由容错 ALTER 补上了（db/index.ts），也可能这是更老的库 —— 两种都搬。
+      const owner = main.columns.includes("cli_session_id") ? "cli_session_id" : "NULL";
+      // **一个原子批**（理由见上面的 ①）。`DROP TABLE IF EXISTS` 留在批内第一句:上一步
+      // 丢掉残缺拷贝之后它一般是空转,但同一批里重建一次是幂等的,也省掉一次往返。
+      await client.batch([
+        `DROP TABLE IF EXISTS ${PENDING_CALLS_STAGING}`,
+        createPendingCalls(PENDING_CALLS_STAGING),
+        // `OR IGNORE` 顺带去重：同一条调用的内容来自同一行不变的日志，留哪一条都一样。
+        `INSERT OR IGNORE INTO ${PENDING_CALLS_STAGING} (${PENDING_CALL_COLUMNS})
+           SELECT task_id, session_key, tool_use_id, command, description, at,
+                  COALESCE(source_run, ''), ${owner}
+             FROM ${PENDING_CALLS}`,
+        `DROP TABLE ${PENDING_CALLS}`,
+        `ALTER TABLE ${PENDING_CALLS_STAGING} RENAME TO ${PENDING_CALLS}`,
+      ]);
+    }
+    // **结论只认真实形状。** 上面每一步都可能失败而只留下一句 warn,所以「可以按当代持久键
+    // 对外确认事实」这句话必须由这一次 PRAGMA 说出口 —— 包括「搬运表清掉了没有」:它还在
+    // 就说明有一批事实没有入口（实测 B）。
+    //
+    // 搬运表那一问是**硬闸**:现在每条留下它的路都会先抛异常(上面那个 catch 已经把结论
+    // 落成 false),所以没有哪条回归打在它身上。留着是为了下一次改动绕不过去 —— 判据是
+    // 「键已是当代」推不出「上次搬走的事实已经回来了」,不是某一次实测。
+    const after = await shapeOf(client, PENDING_CALLS);
+    const leftover = await shapeOf(client, PENDING_CALLS_STAGING);
+    if (!after.exists) markPendingCallKey(false, `${PENDING_CALLS} 这张表不存在`);
+    else if (!isCurrentPendingShape(after)) {
+      markPendingCallKey(false, `持久键还是 (${after.key.join(", ") || "没有键"})`);
+    } else if (leftover.exists) markPendingCallKey(false, `还有没接回去的 ${PENDING_CALLS_STAGING}`);
+    else markPendingCallKey(true);
   } catch (e) {
+    markPendingCallKey(false, String((e as Error | null)?.message ?? e));
     console.warn("[ash] 未决调用表键重建失败,忽略:", e);
+  }
+  // 失败不抛（同本文件所有迁移）：整台 ash 不该被一张表挡住启动。代价由
+  // `schema-readiness.ts` 那个标记承担 —— 内置 Monitor 这一轮不确认读取位置,下一轮重读。
+  if (!pendingCallKeyLive()) {
+    console.warn(`[ash] 未决调用表的持久键没核验通过（${pendingCallKeyBlocker()}）：`
+      + "内置 Monitor 的历史读取位置这一轮不会落盘,升级成功之后自己补齐");
   }
 }
 

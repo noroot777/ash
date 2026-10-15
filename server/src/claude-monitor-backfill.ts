@@ -147,7 +147,17 @@ async function saveCheckpoint(taskId: string, scan: TaskScan): Promise<void> {
   if (!scan.committedThrough) { await discardScan(taskId); return; }
   const cursors = cursorsOf(scan);
   if (!cursors.size) return;
-  await saveScanCursors(taskId, cursors);
+  if (await saveScanCursors(taskId, cursors)) return;
+  // **位置没落盘 = 这一段没有「读完了」的凭据**，不许当成落盘过（唯一会走到这儿的原因是
+  // 库的持久身份键还没核验成当代形状，见 db/schema-readiness.ts）。这一轮读到的事实已经
+  // 提交、面板上照常显示；要回退的只有「读到哪儿了」这句话。
+  //
+  // 库里那份旧位置**不清**：它是上一次核验通过时盖的戳，承诺的前缀照旧成立，清掉只会让
+  // 每一轮都从零重读（而这正是第 11/12/13 轮审查那个停滞判据）。丢掉的是内存那份 ——
+  // 下一轮从库里那个位置重读这一段，等迁移成功它自己就补齐了。
+  snapshots.delete(taskId);
+  rewound.add(taskId);
+  noteMonitorRecovery(taskId, "schema-unready", false);
 }
 
 /** 正在跑的那次 → 它的 Promise。并发调用共享同一次工作，不重复读盘。 */
