@@ -11,7 +11,7 @@
 // 固定输入，`blast` 一次都没出现；第 8～10 轮是同一类的前几个实例）。
 //
 // 落盘之后分工干净：
-//   - **位置**只管单调往前（`claude-monitor-backfill.ts` 的 `parkCursors`）
+//   - **位置**只管单调往前（`claude-monitor-backfill.ts` 的 `checkpointCursors`）
 //   - **悬着的调用**由这张表独立恢复，不受内存上限和读取窗口影响
 //   - 「`task_started` 配不上任何调用 ⇒ 那个工具不是 Monitor」这条推理照旧成立，因为悬着的
 //     调用一定在（内存里或这张表里），不再依赖「位置没越过它」

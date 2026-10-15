@@ -31,7 +31,7 @@
 //   **绝不从某个位置开始读，除非它之前的内容都「有归宿」** —— 要么这一代读过（还在内存里），
 //   要么已经成行落库（已提交）。
 //
-// 谁守：`parkCursors` 只停在上一轮**确认提交过**的位置，其余情况一律从 0 重读；而「位置之前
+// 谁守：`checkpointCursors` 只停在上一轮**确认提交过**的位置，其余情况一律从 0 重读；而「位置之前
 // 那条还悬着的调用」不靠位置来保，它**落盘**（`claude-monitor-pending.ts`）。
 //
 // 上一版是靠位置保的 —— 可重放位置绝不越过一条悬着的调用。那条路在**永远不会完结的调用**上
@@ -52,24 +52,12 @@
 // 从「库里有没有这一行」重新推出来，而那两样都是会被容量淘汰的内存状态 —— 淘汰之后通知退成
 // 孤儿、把可重放位置永久钉死在那儿，固定输入于是永远读不完（第 10 轮审查实测：连续 24 轮硬
 // 淘汰，读取窗口一动不动，末尾那个 Monitor 始终缺卡）。
-import { open as openFile, readdir, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { stat } from "node:fs/promises";
 import { claudeMonitorStatus, parseMonitorStartReceipt, type MonitorLifetime } from "@ash/shared/monitor";
 import { monitorStr as str, parseMonitorInput, type MonitorCall } from "./claude-monitors.js";
 import type { ClearedCall, PendingCall } from "./claude-monitor-pending.js";
+import { eachLine, MAX_SCAN_BYTES, streamFilesOf } from "./claude-monitor-read.js";
 
-/**
- * 单次调用的读取上限。超了这一轮就停在这儿，游标记着，下次接着读。
- *
- * `ASH_MONITOR_SCAN_MAX_BYTES` 只给回归用：128 MiB 的夹具没法写进测试里，而「多轮才读完
- * 一个固定输入、最终要收敛」恰恰是这条路最该钉住的性质（第 8 轮审查实测的不收敛就发生在
- * 截限 + 缓冲满这个组合上）。不设就是 128 MiB。
- */
-const MAX_SCAN_BYTES = (() => {
-  const raw = Number(process.env.ASH_MONITOR_SCAN_MAX_BYTES);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 128 * 1024 * 1024;
-})();
-const CHUNK = 1 << 20;
 /**
  * 一轮里最多交出去多少条「配不上内存状态」的事实（见 `SessionScan.late`）。
  *
@@ -213,7 +201,7 @@ export type TaskScan = {
   /**
    * **这份扫描状态消费过的内容，都已经确认落库了吗**（检查点的另一半，见文件头）。
    *
-   * 只有它成立时，`parkCursors` 才可以把读取位置停在半路；否则位置之前那段既不在内存里、
+   * 只有它成立时，`checkpointCursors` 才可以把读取位置停在半路；否则位置之前那段既不在内存里、
    * 也不在库里，从它往后读就再也拼不回来。读到新字节时置 false，提交确认后由
    * claude-monitor-backfill.ts 置回 true。
    */
@@ -267,6 +255,11 @@ const newSessionScan = (): SessionScan => ({
  */
 export function parkableCursors(scan: TaskScan): Map<string, { size: number; offset: number }> {
   const out = new Map<string, { size: number; offset: number }>();
+  // **先铺上还没惰性接进来的那些。** 会话桶是读到那个文件时才建的（见 `scanSession`），所以
+  // 一份刚接过位置、还没读到任何文件的快照，`sessions` 是空的 —— 只看 `sessions` 就等于把上
+  // 一次确认过的位置扔掉（第 12 轮审查 F1：并发淘汰下每轮都从零重读）。
+  for (const [path, cursor] of scan.parkedCursors ?? []) out.set(path, { ...cursor });
+  // 读过的覆盖上去：桶里那份是从 `parkedCursors` 接的，只会更靠后（见 `scanSession`）。
   for (const session of scan.sessions.values()) {
     for (const [path, cursor] of session.cursors) out.set(path, { ...cursor });
   }
@@ -292,122 +285,6 @@ export function clearedCallsOf(scan: TaskScan): ClearedCall[] {
 /** 销账落地之后清空账页（没落地就留着，下一轮再销一次）。 */
 export function clearPendingLedger(scan: TaskScan): void {
   for (const session of scan.sessions.values()) session.cleared.length = 0;
-}
-
-/**
- * 一条会话**全部**的 stdout 文件，按时间排好。
- *
- * `sessions.agent_out_path` 只记着最后一次 run 的那一个（每回合覆盖），而内置 Monitor 多半
- * 起在中间某一轮 —— 实测用户那个任务字段指向第 6 个文件，12 个 Monitor 全在前 5 个里。
- * 落盘约定是 `<sessionId>-<时间戳>.agent-out.jsonl`（executors/detached.ts 的 `runPaths`），
- * 所以**拿 `sessions.id` 当前缀**，不从文件名去猜（会话 id 是可含 `-` 的 nanoid）。
- */
-export async function streamFilesOf(
-  sessionId: string, outPath: string,
-): Promise<{ path: string; startedAt: string | null }[]> {
-  const dir = dirname(outPath);
-  let entries: string[] = [];
-  try { entries = await readdir(dir); } catch { return [{ path: outPath, startedAt: null }]; }
-  const files = entries
-    .filter((f) => f.startsWith(`${sessionId}-`) && f.endsWith(".agent-out.jsonl"))
-    .sort()
-    .map((f) => ({ path: join(dir, f), startedAt: timestampOf(f) }));
-  return files.length ? files : [{ path: outPath, startedAt: null }];
-}
-
-/** 从 `<id>-20261014T063919165Z.agent-out.jsonl` 里把那个时间戳还原成 ISO。认不出就 null。 */
-export function timestampOf(fileName: string): string | null {
-  const m = /-(\d{8})T(\d{6})(\d{3})Z\./.exec(fileName);
-  if (!m) return null;
-  const [, date, time, ms] = m;
-  const iso = `${date!.slice(0, 4)}-${date!.slice(4, 6)}-${date!.slice(6, 8)}T`
-    + `${time!.slice(0, 2)}:${time!.slice(2, 4)}:${time!.slice(4, 6)}.${ms}Z`;
-  return Number.isNaN(Date.parse(iso)) ? null : iso;
-}
-
-/**
- * 从 `start` 读到文件尾（或读满 `maxBytes`），逐行回调，返回新游标。
- *
- * **游标只停在完整行的边界上。** 按字节续读时，上一轮很可能正好停在某一行中间（文件还在被
- * 追加）。从半行开始解析会把那条事件整条丢掉，所以残留的不完整尾巴不消费，下次从它的起点
- * 重读。
- */
-async function eachLine(
-  path: string, start: number, maxBytes: number,
-  /** 返回 false = **这一行没消费掉**，就停在它前面（游标不越过它）。 */
-  onLine: (line: string) => boolean,
-): Promise<{ nextOffset: number; truncated: boolean; stopped: boolean; skipped: number }> {
-  const fh = await openFile(path, "r");
-  try {
-    let offset = start;
-    let carry = Buffer.alloc(0);
-    while (offset - start < maxBytes) {
-      const want = Math.min(CHUNK, maxBytes - (offset - start));
-      const buf = Buffer.allocUnsafe(want);
-      const { bytesRead } = await fh.read(buf, 0, want, offset);
-      if (!bytesRead) break;
-      // data[0] 在文件里的绝对位置：carry 来自上一轮、在 offset 之前。
-      const base = offset - carry.length;
-      const data = carry.length
-        ? Buffer.concat([carry, buf.subarray(0, bytesRead)])
-        : buf.subarray(0, bytesRead);
-      let from = 0;
-      for (;;) {
-        const nl = data.indexOf(0x0a, from);
-        if (nl < 0) break;
-        const lineStart = from;
-        const keepGoing = onLine(data.subarray(from, nl).toString("utf8"));
-        // **消费不了就把游标停在这一行之前**，下一轮从它重新开始。越过去就等于丢掉一条
-        // 来源不会重发的事实（见 `LATE_CAP` 的背压说明）。
-        if (!keepGoing) {
-          return { nextOffset: base + lineStart, truncated: false, stopped: true, skipped: 0 };
-        }
-        from = nl + 1;
-      }
-      carry = Buffer.from(data.subarray(from)); // 复制：data 可能指向复用的 buf
-      offset += bytesRead;
-    }
-    // ── 一条比窗口还长的记录：**跳过它**，别让位置零进展 ────────────────────────
-    //
-    // 窗口内一个换行都没有 ⇒ 这一轮 `nextOffset` 等于起点，下一轮同样的输入同样读不出换行，
-    // 于是这个文件之后的内容（以及后面所有 run 文件，见 `blocked`）永远读不到。而那条记录
-    // 本身在这个窗口下**无论如何都解析不了**（要整条缓冲起来才行），所以跳过它是唯一能往前
-    // 的选择：丢一条事件，换这个文件剩下的部分都能读到。
-    //
-    // 只在「确实找到了它的结尾」时才跳。读到文件尾还没有换行是另一回事：那多半是**正在被
-    // 追加的半行**，跳过去就等于把它写完之后的内容一起丢掉 —— 那时照旧停在原地（账上仍记
-    // 着「没读完」，见 scanSession）。
-    if (offset - carry.length <= start && offset - start >= maxBytes) {
-      const end = await nextNewline(fh, offset);
-      if (end !== null) return { nextOffset: end, truncated: true, stopped: false, skipped: end - start };
-    }
-    return {
-      nextOffset: offset - carry.length,
-      truncated: offset - start >= maxBytes,
-      stopped: false,
-      skipped: 0,
-    };
-  } finally {
-    await fh.close();
-  }
-}
-
-/**
- * 从 `from` 往后找下一个换行，返回它**之后**那一字节的位置；一直到文件尾都没有就 null。
- *
- * 只给「一条记录比窗口还长」那一支用（见 `eachLine`）：只扫不缓冲，所以多长的记录都不会把
- * 内存顶起来。
- */
-async function nextNewline(fh: Awaited<ReturnType<typeof openFile>>, from: number): Promise<number | null> {
-  let offset = from;
-  const buf = Buffer.allocUnsafe(CHUNK);
-  for (;;) {
-    const { bytesRead } = await fh.read(buf, 0, CHUNK, offset);
-    if (!bytesRead) return null;
-    const nl = buf.subarray(0, bytesRead).indexOf(0x0a);
-    if (nl >= 0) return offset + nl + 1;
-    offset += bytesRead;
-  }
 }
 
 /** 事件自报的时刻。只有 `assistant` / `user` 带（`system` 不带，实测）。 */
@@ -469,7 +346,7 @@ export async function scanSession(
     // 停好的位置**惰性取**：一个任务的 parked 表是它全部会话文件的并集，整张倒进每条会话
     // 的桶里就按会话数把它复制了一遍（第 9 轮审查不拦项 4）。路径本来就唯一，按需查即可。
     //
-    // 采纳它是安全的：`parkCursors` 只停「可重放 + 已确认提交」的位置，所以它之前的内容都有
+    // 采纳它是安全的：`checkpointCursors` 只停「可重放 + 已确认提交」的位置，所以它之前的内容都有
     // 归宿（见文件头的检查点不变量）。
     const parked = scan.parkedCursors?.get(file.path);
     if (parked && !session.cursors.has(file.path)) {

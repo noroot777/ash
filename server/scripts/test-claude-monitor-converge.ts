@@ -24,7 +24,7 @@ process.env.ASH_MONITOR_BACKOFF_MS = "60,60,60,60,60,60,60,60";
 requireTmpDb("monitor-converge");
 
 const [
-  { db, ensureSchema, dbClient }, schema, { ClaudeMonitorTrace }, { backfillClaudeMonitors, monitorScanTracked },
+  { db, ensureSchema, dbClient }, schema, { ClaudeMonitorTrace }, { backfillClaudeMonitors, monitorCheckpointOf, monitorScanTracked },
   recovery, { listMonitors }, scan, { bus },
 ] = await Promise.all([
   import("../src/db/index.js"),
@@ -106,7 +106,7 @@ async function main(): Promise<void> {
   // 报告实测的就是这个形状（513 组 Bash + 末尾 Monitor，142MB）。关键不是文件大，而是
   // ①「Bash 的终态通知不该占着孤儿缓冲」②「截限之后下一轮要从游标继续，而不是从零重读」。
   //
-  // **组数必须顶过 ORPHAN_CAP（512）**：150 组时缓冲根本填不满，于是「普通 Bash 不占缓冲」
+  // **组数必须顶过 LATE_CAP（512）**：150 组时缓冲根本填不满，于是「普通 Bash 不占缓冲」
   // 这条断言是免费的——把 notMonitorTools/confirmedForeign 两处删掉，测试照样绿。
   {
     const f = await fixture("bash-prefix");
@@ -268,6 +268,11 @@ async function main(): Promise<void> {
 
     await backfillClaudeMonitors(big.taskId); // 第一轮：撞 32 KiB 上限，游标停在半路
     check(monitorRecoveryOf(big.taskId)?.pending === true, "④这个任务还没读完");
+    // **位置不等被挤掉才留**：提交确认之后当场进检查点表，于是它的存活不依赖「这份运行中的
+    // 对象还在不在 LRU」——被挤掉可以发生在本轮任何一个 await 处（第 12 轮审查 F1）。
+    check(monitorScanTracked(big.taskId) === true && monitorCheckpointOf(big.taskId) !== null,
+      "④这一轮确认提交之后，位置同时在内存快照和检查点表里（不是只等被挤掉时才停）",
+      `快照 ${monitorScanTracked(big.taskId)} / 检查点 ${JSON.stringify([...(monitorCheckpointOf(big.taskId)?.values() ?? [])])}`);
     check((await listMonitors(big.taskId)).length === 0,
       "④第一轮还没读到末尾那个 Monitor", `${(await listMonitors(big.taskId)).length} 条`);
     await squeeze();
@@ -373,11 +378,70 @@ async function main(): Promise<void> {
     off();
   }
 
+  // ── ⑦ 并发：别的任务在这一轮的 await 里把它挤掉 ──────────────────────────────────
+  //
+  // ④ 是「扫完一轮、再被挤掉」。真实请求不排队：两条 GET 合流到同一个回填，多个任务同时补
+  // 历史时，**淘汰发生在被测任务自己这一轮的某个 await 处**（登记快照、读未决调用、枚举文件、
+  // 读盘、提交，每一处都是）。那一刻会话桶可能还没建（位置是惰性接入的），于是「挤掉时把位置
+  // 抠出来」抠到的是空表，已确认的位置就此消失、下一轮从零重读 —— 固定输入永远读不到末尾
+  // （第 12 轮审查 F1 实测：`Promise.all` 一次 67 个任务，连续 12 轮只读到第一个窗口）。
+  //
+  // 契约：**在途的不在别人手里拆**（记下来，等它自己这一轮结束时让位），于是整轮都有唯一
+  // 接班者——跑的时候位置在这份对象上，结束时位置进检查点表。断言盯着位置本身，不只盯
+  // 「最终读到了末尾」：后者在单窗口夹具上是免费的。
+  {
+    const target = await fixture("inflight-evict");
+    let body = line({ type: "system", subtype: "init", session_id: target.cli });
+    for (let i = 0; i < 150; i += 1) body += plainBash(target.cli, i); // 远超 32 KiB → 要好几轮
+    body += realMonitor(target.cli, "binf001");
+    writeFileSync(target.file, body);
+
+    // 同 ④：70 个永远读不开的任务一直处于恢复中（软上限豁免它们），压力全压到硬上限上。
+    const fillers: { taskId: string; file: string }[] = [];
+    for (let i = 0; i < 70; i += 1) {
+      const other = await fixture(`inflight-filler${i}`);
+      writeFileSync(other.file, line({ type: "system", subtype: "init", session_id: other.cli }));
+      chmodSync(other.file, 0o000);
+      fillers.push({ taskId: other.taskId, file: other.file });
+    }
+    /** **同时**开跑（不是「读完再施压」）：淘汰因此落在被测任务这一轮的 await 里。 */
+    const concurrent = () => Promise.all([
+      backfillClaudeMonitors(target.taskId),
+      ...fillers.map((f) => backfillClaudeMonitors(f.taskId)),
+    ]);
+    const checkpointAt = () => {
+      const cursors = [...(monitorCheckpointOf(target.taskId)?.values() ?? [])];
+      return cursors.reduce((max, c) => Math.max(max, c.offset), -1);
+    };
+
+    let rounds = 0;
+    let last = -1;
+    for (; rounds < 12 && (await listMonitors(target.taskId)).length === 0; rounds += 1) {
+      await concurrent();
+      check(monitorScanTracked(target.taskId) === false,
+        "⑦在途被选中淘汰的，到它自己这一轮结束时才让位（让了）", `第 ${rounds + 1} 轮`);
+      const offset = checkpointAt();
+      check(offset > last, "⑦位置每轮都往前（在途被挤掉也不归零）",
+        `第 ${rounds + 1} 轮：${last} → ${offset}`);
+      last = offset;
+    }
+    const rows = await listMonitors(target.taskId);
+    check(rows.length === 1 && rows[0]?.nativeId === "binf001",
+      "⑦并发淘汰下仍然读到末尾那个 Monitor",
+      `${rounds} 轮后 ${rows.length} 条：${rows.map((r) => r.nativeId).join(",")}`);
+    check(rows[0]?.status === "exited", "⑦带着来源报的终态（不是一直写着正在盯着）",
+      String(rows[0]?.status));
+    for (const f of fillers) chmodSync(f.file, 0o644); // 让填充任务自己销账，别一直刷
+    await waitRecovered(target.taskId);
+    check(monitorRecoveryOf(target.taskId) === null, "⑦并且销了账",
+      JSON.stringify(monitorRecoveryOf(target.taskId)));
+  }
+
   if (failures === 0) {
     console.log("✓ 内置 Monitor 恢复的收敛性：普通后台 Bash 不占缓冲（末尾 Monitor 读得到）/ "
       + "真乱序满缓冲时背压不丢事实且预算真在耗 / 首次归属查询失败也不丢责任（库好了自动补）/ "
       + "每轮都被硬上限挤掉也从原位继续 / 丢过游标后的重读不算进展 / "
-      + "预算耗尽会留账并推给前端 均受回归保护");
+      + "预算耗尽会留账并推给前端 / 并发在途淘汰下位置单调往前 均受回归保护");
   }
 }
 

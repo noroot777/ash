@@ -4,7 +4,8 @@
 // 通知」，而哨兵面板写着「这个任务上还没有哨兵」。实时投影只能管**之后**发生的事——对那个
 // 触发需求的任务本身，以及所有升级前跑过的任务，面板仍然是空的。
 //
-// 文件枚举、增量读取和事件认人都在 `claude-monitor-scan.ts`；这个文件只管两件事：
+// 按字节读盘在 `claude-monitor-read.ts`，文件枚举和事件认人在 `claude-monitor-scan.ts`；
+// 这个文件只管两件事：
 //
 // ① **提交扫出来的事实**（`commitFound`）。缺的插进去，已有的按事实优先级补齐/纠正。
 // ② **重新裁决已有行的死活**（`reconcileLiveness`）。这一步**不依赖文件有没有新内容**——
@@ -59,7 +60,7 @@ const SNAPSHOT_CAP = 32;
  */
 const SNAPSHOT_HARD_CAP = 64;
 /**
- * 被硬上限挤掉的任务，**只留下它读到哪儿**。
+ * **检查点表：每个任务读到哪儿**（配对状态可以丢，这个不能丢）。
  *
  * 一份快照里的重东西是 `found`/`pending`/孤儿缓冲，而「读到第几字节」只是每个文件几十字节。
  * 所以内存上限该淘汰的是前者，不是后者：位置一丢，下一轮就从零重读，而单次只读 128 MiB
@@ -68,6 +69,10 @@ const SNAPSHOT_HARD_CAP = 64;
  *
  * 这张表只存位置，所以可以给一个宽得多的上限；真要越界也只是退回「从头重读」，而不是把
  * 「还没读完」这件事本身忘掉（那条账在恢复账本里，跟这里无关）。
+ *
+ * **它是位置的归属，不是快照之间的交接槽**：每轮提交确认之后就往这里写一条，被挤掉时也写
+ * 一条，接管时只读不取。位置于是不再依赖「那份运行中的对象还在不在 LRU 里」（第 12 轮审查
+ * F1：并发淘汰下，取走式交接会让已确认的位置在某个 await 处凭空消失）。
  */
 const parked = new Map<string, Map<string, { size: number; offset: number }>>();
 const PARKED_CAP = 512;
@@ -77,7 +82,14 @@ function adoptParkedCursors(taskId: string): TaskScan {
   const scan = newTaskScan();
   const saved = parked.get(taskId);
   if (!saved) return scan;
+  // **不从 `parked` 里取走**，只把「最近用过」刷新一下。
+  //
+  // 取走就等于「这个位置此刻只活在这份运行中对象上」，而这份对象在整轮的每个 await 处都可能
+  // 被别的任务的并发回填挤掉 —— 挤的那一刻会话桶可能还没建（位置是惰性接入的），于是
+  // `parkableCursors` 交出空表、已确认的位置就此消失，下一轮从零重读（第 12 轮审查 F1 实测：
+  // `Promise.all` 一次 67 个任务，连续 12 轮每轮都只读到第一个窗口）。
   parked.delete(taskId);
+  parked.set(taskId, saved);
   // 位置按文件路径存（路径本来就唯一），`scanSession` 新建会话桶时会从这里取。
   scan.parkedCursors = saved;
   return scan;
@@ -100,28 +112,56 @@ function rememberScan(taskId: string, scan: TaskScan): void {
   for (const key of [...snapshots.keys()]) {
     if (snapshots.size <= SNAPSHOT_CAP) return;
     if (key === taskId || protectedTasks.has(key)) continue; // 还没读完的不动
-    const victim = snapshots.get(key);
-    snapshots.delete(key);
     // **位置也要停好**，跟硬上限那一支一个待遇（第 11 轮审查的类问题）。读完一个任务的历史
     // 之后它就不再受保护，于是常规淘汰把位置一起扔掉 —— 下一次打开它又从 0 读起，几百 MB
     // 的历史得重走一遍 128 MiB 的阶梯（实测：销账之后每隔几轮又报一次 scan-unfinished，
     // 位置在 0 和 EOF 之间来回）。位置只有几十字节，没有任何理由跟着配对状态一起丢。
-    if (victim) parkCursors(key, victim);
+    evictScan(key);
   }
   // 全都在恢复中：按硬上限兜底，但**位置要停好**（只丢可重建的那部分）。
-  while (snapshots.size > SNAPSHOT_HARD_CAP) {
-    const oldest = snapshots.keys().next();
-    if (oldest.done || oldest.value === taskId) break;
-    const victim = snapshots.get(oldest.value);
-    snapshots.delete(oldest.value);
-    if (victim) parkCursors(oldest.value, victim);
+  for (const key of [...snapshots.keys()]) {
+    if (snapshots.size <= SNAPSHOT_HARD_CAP) break;
+    if (key === taskId) continue;
+    if (!evictScan(key)) continue; // 在途的只记账，由它自己让位
     console.warn(`[ash] 内置 Monitor 扫描快照超过硬上限（${SNAPSHOT_HARD_CAP}），`
-      + `task=${oldest.value} 的配对状态已丢弃，读取位置已停好，下一轮从原位继续`);
+      + `task=${key} 的配对状态已丢弃，读取位置已停好，下一轮从原位继续`);
   }
 }
 
 /**
- * 把一份快照里的读取位置抠出来留着（见 `parked`）。
+ * 在途扫描被选中淘汰：**记在这里，等它自己这一轮跑完再让位**。
+ *
+ * 为什么不能当场挤掉：那份对象此刻正在 await 里往前读，它读过的字节还没落库。当场挤掉只有
+ * 两个结局 —— 要么走 `checkpointCursors` 的硬闸整份 discard（位置归零），要么停一个「会话桶
+ * 还没建、位置还没惰性接入」的空表；而它后来推进并提交的结果再也没人保存。于是并发压力下
+ * 每一轮都从同一个窗口重读，末尾的 Monitor 永远读不到（第 12 轮审查 F1）。
+ *
+ * 延后到它自己结束时让位，整轮就有了**唯一接班者**：跑的时候位置在这份对象上，结束时位置
+ * 进 `parked`，两者之间没有空档。代价是淘汰会迟一点生效——上限因此可能被同时在途的任务数
+ * 短暂顶高（它受并发请求数封顶，不是无界的 taskId）。
+ */
+const evictWhenIdle = new Set<string>();
+
+/**
+ * 把一个任务的快照挤出去，位置停进 `parked`。
+ *
+ * 返回「这次真的挤掉了没有」：在途的不挤（见 `evictWhenIdle`），调用方据此决定要不要再找
+ * 下一个牺牲者、要不要打那行日志。
+ */
+function evictScan(taskId: string): boolean {
+  if (inflight.has(taskId)) { evictWhenIdle.add(taskId); return false; }
+  const victim = snapshots.get(taskId);
+  if (!victim) return false;
+  snapshots.delete(taskId);
+  checkpointCursors(taskId, victim);
+  return true;
+}
+
+/**
+ * 把这份快照**已确认提交**的读取位置写进检查点表（见 `parked`）。
+ *
+ * 两处调用，同一个不变量：这一轮提交确认之后（位置的归属交给 `parked`，不再只靠这份随时会
+ * 被挤掉的对象），以及这份快照被挤出去时（配对状态丢掉、位置留下）。
  *
  * **位置照原样停住、不往回退**：位置之前那段里唯一只存在于内存的东西是「还悬着的调用」，
  * 而它已经落盘了（`claude-monitor-pending.ts`），下一轮新建会话桶时接回来。
@@ -130,7 +170,7 @@ function rememberScan(taskId: string, scan: TaskScan): void {
  * ——启动被拒、进程在那一行之后被杀 —— 于是每轮重读同一个窗口，末尾的 Monitor 永远读不到
  * （第 11 轮审查实测 12 轮停滞；回退这件事本身也不算进展，见 `rewound`）。
  */
-function parkCursors(taskId: string, scan: TaskScan): void {
+function checkpointCursors(taskId: string, scan: TaskScan): void {
   // **没确认提交过就不许停在半路**（检查点不变量，见 claude-monitor-scan.ts 文件头）：这一轮
   // 读过的字节还没落库时，位置之前那段既不在内存里、也不在库里，从它往后读再也拼不回来。
   // 那种情况只有一条安全的路：整份丢掉，下一轮从零重放（代价是重读，不是错误显示）。
@@ -140,6 +180,9 @@ function parkCursors(taskId: string, scan: TaskScan): void {
   // 身上。
   if (!scan.committedThrough) { discardScan(taskId); return; }
   const cursors = parkableCursors(scan);
+  // 一个位置都没有（这份快照还没读到任何文件）⇒ **留着已有的那条**。清掉它等于把上一次确认
+  // 过的位置扔了，下一轮从零重读（第 12 轮审查 F1 的另一半：早期被淘汰时这里原本直接 return，
+  // 而接管时已经把 `parked` 里那条取走了）。
   if (!cursors.size) return;
   parked.delete(taskId);
   parked.set(taskId, cursors);
@@ -148,7 +191,9 @@ function parkCursors(taskId: string, scan: TaskScan): void {
     if (oldest.done) break;
     // 位置表也满了：这一条只能丢。丢位置 = 下一轮从零重放（不丢正确性），但**那一轮同样是
     // 重读**，不能当成进展（第 9 轮审查点名的同类位置）。
-    rewound.add(oldest.value);
+    // 内存里那份快照还在的话位置并没丢，就不该记成回退（现在每轮提交都会往这张表写一条，
+    // 这一支因此也会碰到「位置其实还在」的情况）。
+    if (!snapshots.has(oldest.value)) rewound.add(oldest.value);
     parked.delete(oldest.value);
   }
 }
@@ -158,6 +203,16 @@ const inflight = new Map<string, Promise<number>>();
 
 /** 这个任务的扫描游标还在不在（只给回归用：验「恢复中的游标没被挤掉」）。 */
 export const monitorScanTracked = (taskId: string): boolean => snapshots.has(taskId);
+
+/**
+ * 这个任务的检查点位置（只给回归用：验「在途被挤掉之后位置照旧单调往前」）。
+ *
+ * 快照被挤掉之后外面就看不到位置了，而「位置有没有归零」恰恰是这条路最该钉住的性质 ——
+ * 只断言「最终读到了末尾」的话，位置每轮归零、靠单窗口读完的夹具照样绿（第 12 轮审查 F1）。
+ */
+export const monitorCheckpointOf = (
+  taskId: string,
+): ReadonlyMap<string, { size: number; offset: number }> | null => parked.get(taskId) ?? null;
 
 /**
  * 「上一轮把这个任务的游标丢了」。
@@ -195,7 +250,12 @@ export function backfillClaudeMonitors(
   // 退避推到上限之后账是留着的、定时器是停的。真实请求进来时把预算还给它，否则那条账
   // 永远卡在「已停、且没人会再推」。
   if (opts.external !== false) resetMonitorRecoveryBudget(taskId);
-  const job = runBackfill(taskId).finally(() => inflight.delete(taskId));
+  const job = runBackfill(taskId).finally(() => {
+    inflight.delete(taskId);
+    // 在途期间被选中淘汰的，到这里才真正让位：先把位置停进检查点表，再把快照挤出去。
+    // 这两步跟上面那行 delete 在同一个微任务里，中间没有别人插进来的机会（唯一接班者）。
+    if (evictWhenIdle.delete(taskId)) evictScan(taskId);
+  });
   inflight.set(taskId, job);
   return job;
 }
@@ -261,7 +321,7 @@ async function runBackfill(taskId: string): Promise<number> {
     }
 
     // 乱序事实把缓冲占满了 → 扫描**背压**停下，游标停在那条还没消费的事实之前（见
-    // claude-monitor-scan.ts 的 ORPHAN_CAP）。所以这里**不丢游标**：丢了就是从零重读同一段
+    // claude-monitor-scan.ts 的 LATE_CAP）。所以这里**不丢游标**：丢了就是从零重读同一段
     // 前缀，而输入没变就会再次占满 —— 那条路不收敛，实测 142MB 日志下永远读不到末尾的
     // Monitor（第 8 轮审查）。留账等下一轮从那一行继续。
     if (scan.lateOverflow) {
@@ -293,7 +353,7 @@ async function runBackfill(taskId: string): Promise<number> {
         discardScan(taskId);
         noteMonitorRecovery(taskId, "update-missed", added > 0);
       } else {
-        // **这一轮消费过的都确认落库了** ⇒ 位置可以停在半路了（见 parkCursors）。
+        // **这一轮消费过的都确认落库了** ⇒ 位置可以停在半路了（见 checkpointCursors）。
         scan.committedThrough = true;
       }
       missed = outcome.missed;
@@ -306,10 +366,14 @@ async function runBackfill(taskId: string): Promise<number> {
     //
     // 顺序要紧：**只有确认提交之后才落**。没提交的那几条路会回退位置、把那些行重新读一遍，
     // 这时落盘只是留下一份马上又会被重建的拷贝。反过来，位置之所以可以不回退，正是因为这一
-    // 步成立（见 parkCursors）。
+    // 步成立（见 checkpointCursors）。
     if (scan.committedThrough) {
       await syncPendingCalls(taskId, pendingCallsOf(scan), clearedCallsOf(scan));
       clearPendingLedger(scan);
+      // **位置也要当场交还检查点表**，不等被挤掉那一刻（见 checkpointCursors）：这一轮的事实
+      // 已经确认落库，位置之前的内容全都有归宿了。只留在这份快照上的话，它被挤掉时就只剩
+      // 「挤的那一刻能抠出什么」——而挤可以发生在本轮任何一个 await 处（第 12 轮审查 F1）。
+      checkpointCursors(taskId, scan);
     }
 
     // ── 销账前最后一问：**还有裁不清的一次性事实吗** ─────────────────────────────
