@@ -27,7 +27,7 @@
     "test:singleton": "tsx scripts/test-singleton.ts",
     "test:detached": "tsx scripts/test-detached-survival.ts && tsx scripts/test-controllable-detached.ts",
     "test:reattach": "tsx scripts/test-reattach.ts",
-    "test:monitors": "tsx scripts/test-monitors.ts && tsx scripts/test-monitor-races.ts && tsx scripts/test-claude-monitor-projection.ts && tsx scripts/test-claude-monitor-parse.ts && tsx scripts/test-claude-monitor-wiring.ts && tsx scripts/test-claude-monitor-backfill.ts && tsx scripts/test-claude-monitor-ledger.ts && tsx scripts/test-claude-monitor-recovery.ts && tsx scripts/test-claude-monitor-identity.ts && tsx scripts/test-claude-monitor-completeness.ts && tsx scripts/test-claude-monitor-converge.ts && tsx scripts/test-claude-monitor-checkpoint.ts",
+    "test:monitors": "tsx scripts/test-db-tx-ownership.ts && tsx scripts/test-monitors.ts && tsx scripts/test-monitor-races.ts && tsx scripts/test-claude-monitor-projection.ts && tsx scripts/test-claude-monitor-parse.ts && tsx scripts/test-claude-monitor-wiring.ts && tsx scripts/test-claude-monitor-backfill.ts && tsx scripts/test-claude-monitor-ledger.ts && tsx scripts/test-claude-monitor-recovery.ts && tsx scripts/test-claude-monitor-identity.ts && tsx scripts/test-claude-monitor-completeness.ts && tsx scripts/test-claude-monitor-converge.ts && tsx scripts/test-claude-monitor-checkpoint.ts",
     "test:queue": "tsx scripts/test-queue-order.ts",
     "test:search": "tsx scripts/test-search-query.ts",
     "test:search-scan": "tsx scripts/test-search-scan.ts",
@@ -177,7 +177,8 @@
     "test:page-annotation-batches": "tsx scripts/test-page-annotation-batches.ts && tsx scripts/test-preview-annotation.ts",
     "test:annotation-batches": "tsx scripts/test-page-annotation-batches.ts",
     "test:preview-workspace": "tsx scripts/test-preview-workspace.ts",
-    "test:monitor-races": "tsx scripts/test-monitor-races.ts"
+    "test:monitor-races": "tsx scripts/test-monitor-races.ts",
+    "test:db-tx": "tsx scripts/test-db-tx-ownership.ts"
   },
   "dependencies": {
     "@ash/shared": "*",

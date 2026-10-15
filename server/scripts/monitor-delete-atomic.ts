@@ -8,6 +8,16 @@
 //   ㉑ 失败退出时,现存任务的卡和它的全部重建依据**一行不少**(删除的库操作是一个原子批);
 //   ㉒ 成功删除之后,**没有哪个旧 writer 还能把行写回去**(落库资格跟写同一个批里)。
 //
+// 第 7 轮审查的 F1 接着指出:上面那两句的前提——「一个批要么全成要么全不成」——在**并发**下
+// 原先并不成立。全进程共用一条连接,而上一版的 `batch` 只要看见连接「正在某个事务里」就借道
+// 跑,于是删任务那一批失败时连**另一个任务**刚写好的卡一起回滚,写方却拿到了成功、照常把读取
+// 位置推到了文件末尾 —— 那张卡此后刷新也补不回来。所以这里再加一句:
+//
+//   ㉓ 别人的事务回滚不许带走**这个任务**已经写成功的卡(写成功 ⇒ 位置可以放心推进)。
+//
+// 判据本身归在数据库层(`src/db/node-sqlite-client.ts` 的 `openTx`,回归见
+// `test-db-tx-ownership.ts`);这一组验的是生产路径上真的接住了。
+//
 // 单独成文件是 700 行上限(同 monitor-checkpoint-edges.ts 的理由)。
 import { writeFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
@@ -105,6 +115,80 @@ export async function deleteAtomicGroups(): Promise<void> {
     check(leftover === 0, "㉒三个 writer 谁都没把行写回已经删掉的任务上",
       `${leftover} 行（commitRound 报了 added=${out.added}）`);
   }
+
+  await writeSurvivesForeignRollback(deleteTaskCompletely);
+}
+
+/** ㉓ 别人那笔事务（或那次失败的删除）回滚时，这个任务写成功的卡必须还在。 */
+async function writeSurvivesForeignRollback(
+  deleteTaskCompletely: (taskId: string) => Promise<void>,
+): Promise<void> {
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  // ── ㉓(a) 别人开着一笔长事务时回填：卡不许落进那笔事务 ─────────────────────────
+  {
+    const f = await cardFixture("foreign-tx");
+    const other = await fixture("foreign-tx-owner");
+    const tx = await dbClient.transaction();
+    await tx.execute({ sql: `UPDATE tasks SET title = ? WHERE id = ?`, args: ["别人那笔事务改的", other.taskId] });
+    // 不能 await 回填：它的写会**等**这笔事务收尾（等不到才报错）。这正是要钉的行为。
+    const job = backfillClaudeMonitors(f.taskId);
+    await sleep(20);
+    await tx.rollback();
+    const added = await job;
+    check(added === 1, "㉓(a)回填照常补出那张卡", `added=${added}`);
+    const title = (await db.select({ t: tasks.title }).from(tasks).where(eq(tasks.id, other.taskId))).at(0)?.t;
+    check(title === "foreign-tx-owner", "㉓(a)前提：别人那笔事务真的回滚了", String(title));
+    const after = await listMonitors(f.taskId);
+    check(after.filter((r) => r.kind === "claude").length === 1,
+      "㉓(a)**那张卡没被别人的回滚带走**", `${after.length} 张`);
+    // 位置已经推到文件末尾，所以「再读一遍」什么也不会重放 —— 卡还在才说明它是真提交了
+    // （上一版这里是 0 张，而且刷新多少次都补不回来）。
+    await backfillClaudeMonitors(f.taskId);
+    check((await listMonitors(f.taskId)).filter((r) => r.kind === "claude").length === 1,
+      "㉓(a)再读一轮（位置已到末尾、不会重放）卡依然在");
+  }
+
+  // ── ㉓(b) 「成功写 + 失败删除」相邻下发，两个次序都试 ──────────────────────────
+  const realBatch = dbClient.batch.bind(dbClient);
+  (dbClient as any).batch = async (stmts: any[], mode?: any) =>
+    isDeleteBatch(stmts) ? realBatch([...stmts, BOOM], mode) : realBatch(stmts, mode);
+  try {
+    for (const deleteFirst of [true, false]) {
+      const tag = deleteFirst ? "删在前" : "写在前";
+      const doomed = await deleteFixture(`adjacent-doomed-${deleteFirst}`);
+      const writer = await cardFixture(`adjacent-writer-${deleteFirst}`);
+      const del = () => deleteTaskCompletely(doomed.taskId);
+      const write = () => backfillClaudeMonitors(writer.taskId);
+      const settled = await Promise.allSettled(deleteFirst ? [del(), write()] : [write(), del()]);
+      const [delResult, writeResult] = deleteFirst ? [settled[0]!, settled[1]!] : [settled[1]!, settled[0]!];
+      check(delResult.status === "rejected", `㉓(b)${tag}：那次删除失败了`);
+      check(writeResult.status === "fulfilled" && writeResult.value === 1,
+        `㉓(b)${tag}：另一个任务的回填成功`, JSON.stringify(writeResult.status));
+      check((await listMonitors(writer.taskId)).filter((r) => r.kind === "claude").length === 1,
+        `㉓(b)${tag}：**它的卡没被失败的删除带走**`);
+      await backfillClaudeMonitors(writer.taskId);
+      check((await listMonitors(writer.taskId)).filter((r) => r.kind === "claude").length === 1,
+        `㉓(b)${tag}：再读一轮卡依然在`);
+      const left = await listMonitors(doomed.taskId);
+      check(left.length === 2 && (await db.select().from(tasks).where(eq(tasks.id, doomed.taskId))).length === 1,
+        `㉓(b)${tag}：被删那个任务也一行没少（整批回滚）`, `${left.length} 张`);
+    }
+  } finally {
+    (dbClient as any).batch = realBatch;
+  }
+}
+
+/** 一个只有内置 Monitor 那张卡的任务（真文件回填出来的）。 */
+async function cardFixture(name: string) {
+  const f = await fixture(name);
+  let body = line({ type: "system", subtype: "init", session_id: f.cli });
+  body += call(f.cli, `tu-${name}`, `${name} 的监听`, "2026-10-15T23:00:00.000Z");
+  body += started(f.cli, `tu-${name}`, `b-${name}`);
+  body += receipt(`tu-${name}`, `b-${name}`, "2026-10-15T23:00:00.040Z");
+  body += notice(f.cli, `b-${name}`);
+  writeFileSync(f.file, body);
+  return f;
 }
 
 /** 一个「用过两种监听」的任务：一张内置 Monitor 的卡（从真文件回填）+ 一张 ash 自管的历史卡。 */

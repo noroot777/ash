@@ -111,6 +111,12 @@ export interface ClientConfig {
   url: string;
   /** 忙等超时（毫秒）。默认 5s：预览播种会在 server 跑着的时候开第二条连接读主库。 */
   timeout?: number;
+  /**
+   * 等「这条连接上别人那笔长事务」收尾的上限（毫秒），默认 `TX_WAIT_MS`。
+   *
+   * 生产不传。回归要验「等不到就报错、不是挂死」，总不能真等 5 秒。
+   */
+  txWaitMs?: number;
   readOnly?: boolean;
 }
 
@@ -165,10 +171,39 @@ function buildRow(names: readonly string[], values: readonly unknown[]): Row {
 const STMT_CACHE_MAX = 512;
 const CACHEABLE = /^\s*(?:select|insert|update|delete|with)\b/i;
 
+/**
+ * 「别人那笔长事务」最多等多久（毫秒）。
+ *
+ * 真实的长事务体清一色只跑 SQL（`db.transaction(async tx => …)`，几条到几千条同步语句），
+ * 所以正常等待是亚毫秒级，这个数不是给它们留的余量 —— 它是**死等的上限**：万一有人在事务
+ * 里拿根 `db` 写（那条路会等自己收尾），或者有谁把事务开着跑完了一整个 HTTP 请求，到点报错
+ * 比永远挂住好。挂住过的东西查起来是「任务永久卡住」，报错至少说得出一句人话。
+ */
+const TX_WAIT_MS = 5000;
+
+/** 这条语句要不要写库。读（select/pragma/explain）之外一律按写算 —— 多等一会儿是小事。 */
+const isWrite = (stmt: InStatement): boolean =>
+  !/^\s*(?:select|pragma|explain)\b/i.test(typeof stmt === "string" ? stmt : stmt.sql);
+
 class NodeSqliteClient implements Client {
   private db: Db;
   private cache = new Map<string, StatementSync>();
   closed = false;
+  /**
+   * 这条连接上**正开着的那笔长事务**（`transaction()` 开的那种：BEGIN 和 COMMIT 之间隔着
+   * 调用方的 await）。
+   *
+   * 为什么非记不可：**全进程共用一条连接**，所以连接「正在某笔事务里」的时候，任何别的语句
+   * 都会落进那笔事务 —— 它回滚时把别人的写一起抹掉，而别人早就拿到了 fulfilled。上一版的
+   * `batch` 只问 `db.isTransaction`（事务是谁的一概不问）就借道跑，于是删任务那一批中途失败
+   * 时，连另一个任务刚写好的监听卡片一起回滚，写方却按「成功」推进了读取位置、再也不会重放
+   * （第 7 轮审查实测：另一任务的卡片刷新也补不回来）。
+   *
+   * 记上账之后判据就有归属了：**自己**那笔事务里的语句走 `Transaction.execute`，直接跑；
+   * 别人那笔一律先等它收尾，绝不借道。
+   */
+  private openTx: { settled: Promise<void>; finish: () => void } | null = null;
+  private txWaitMs: number;
 
   constructor(config: ClientConfig) {
     this.db = new DatabaseSync(toPath(config.url), {
@@ -177,6 +212,55 @@ class NodeSqliteClient implements Client {
       timeout: config.timeout ?? 5000,
       readOnly: config.readOnly ?? false,
     });
+    this.txWaitMs = config.txWaitMs ?? TX_WAIT_MS;
+  }
+
+  /** 等别人那笔长事务收尾。醒了要**重新判**一次：同时在等的可能有好几个。 */
+  private async awaitOpenTx(): Promise<void> {
+    while (this.openTx) {
+      const waiting = this.openTx;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      // 这个定时器**不 unref**：它是唯一会把等待者唤醒的东西，unref 之后进程在「只剩这一个
+      // 等待」时会直接退出，等待者连那句超时都收不到（实测跑回归时 Node 当场退出）。等到了
+      // 就在 finally 里清掉，正常路径不会留下任何悬着的定时器。
+      const expiry = new Promise<"expired">((resolve) => {
+        timer = setTimeout(() => resolve("expired"), this.txWaitMs);
+      });
+      try {
+        const who = await Promise.race([waiting.settled.then(() => "settled" as const), expiry]);
+        if (who === "expired") throw new Error(`数据库正在提交其它操作，等了 ${this.txWaitMs}ms 仍没结束，请重试`);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+  }
+
+  /** 这笔事务收尾了：从账上摘掉（只摘自己那笔）并叫醒在等的人。 */
+  private releaseTx(tx: { settled: Promise<void>; finish: () => void }): void {
+    if (this.openTx === tx) this.openTx = null;
+    tx.finish();
+  }
+
+  /**
+   * **真正独占的原子批**：BEGIN 到 COMMIT 之间一个 await 都没有。
+   *
+   * `node:sqlite` 是同步内核，所以这一整段跑在一拍里 —— 别人既插不进语句、也不可能看见
+   * 半成品状态。于是「调用返回成功」= 「这一批已经自己提交了」，这是 `writeIfTaskAlive`
+   * 那类「写了才敢推进读取位置」的调用方唯一需要的那条保证（见 claude-monitor-write.ts）。
+   */
+  private exclusive(stmts: readonly InStatement[]): ResultSet[] {
+    // 走到这里还在事务里只有一种可能：有人绕过了 `openTx` 记账。宁可报错也不借道。
+    if (this.db.isTransaction) throw new Error("数据库正在提交其它操作，请重试");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const out = stmts.map((s) => this.runSync(s));
+      this.db.exec("COMMIT");
+      return out;
+    } catch (e) {
+      // COMMIT 自己失败时可能已经不在事务里了，ROLLBACK 的二次报错不许盖掉真因。
+      try { this.db.exec("ROLLBACK"); } catch { /* 已经不在事务里 */ }
+      throw e;
+    }
   }
 
   private prepare(sql: string): StatementSync {
@@ -226,19 +310,38 @@ class NodeSqliteClient implements Client {
   }
 
   async execute(stmt: InStatement): Promise<ResultSet> {
+    // **写不许借别人的事务**（见 `openTx`）：那笔一回滚，这条写就跟着没了，而调用方拿到的
+    // 是成功。读照常放过去 —— 它顶多看到那笔事务还没提交的中间状态（一条连接本来就是这个
+    // 语义），而把每个并发 GET 都堵在别人的事务后面，代价比那个大得多。
+    if (this.openTx && isWrite(stmt)) await this.awaitOpenTx();
     return this.runSync(stmt);
   }
 
   async executeMultiple(sql: string): Promise<void> {
+    if (this.openTx) await this.awaitOpenTx(); // 整块 DDL 更不能落进别人的事务
     this.cache.clear(); // 这条路上跑的是整块 DDL，缓存里的旧语句没必要留
     this.db.exec(sql);
   }
 
   async transaction(mode: TransactionMode = "write"): Promise<Transaction> {
-    // write 用 IMMEDIATE：一上来就拿写锁，避免读事务中途升级撞上 SQLITE_BUSY。
-    this.db.exec(mode === "write" ? "BEGIN IMMEDIATE" : "BEGIN DEFERRED");
+    // 两笔长事务不能并排开在同一条连接上：第二个 BEGIN 当场报错，而任一方 ROLLBACK 会把
+    // 另一方的写一起抹掉。所以先等前一笔收尾，再把这一笔记上账。
+    await this.awaitOpenTx();
+    let finish!: () => void;
+    const mine = { settled: new Promise<void>((resolve) => { finish = resolve; }), finish: () => finish() };
+    // **记账与 BEGIN 同一拍**（中间没有 await），所以不存在「已经 BEGIN 了、账上还没有」的
+    // 缝隙 —— 上一版 `batch` 正是在 `await this.transaction()` 的那个缝里被别人挤进来的。
+    this.openTx = mine;
+    try {
+      // write 用 IMMEDIATE：一上来就拿写锁，避免读事务中途升级撞上 SQLITE_BUSY。
+      this.db.exec(mode === "write" ? "BEGIN IMMEDIATE" : "BEGIN DEFERRED");
+    } catch (e) {
+      this.releaseTx(mine);
+      throw e;
+    }
     let done = false;
     return {
+      // 自己这笔事务里的语句：直接跑，不走写闸（闸挡的就是「别人的」）。
       execute: async (stmt: InStatement): Promise<ResultSet> => {
         if (done) throw new Error("事务已经结束了，不能再执行语句");
         return this.runSync(stmt);
@@ -246,17 +349,17 @@ class NodeSqliteClient implements Client {
       commit: async (): Promise<void> => {
         if (done) return;
         done = true;
-        this.db.exec("COMMIT");
+        try { this.db.exec("COMMIT"); } finally { this.releaseTx(mine); }
       },
       rollback: async (): Promise<void> => {
         if (done) return;
         done = true;
-        this.db.exec("ROLLBACK");
+        try { this.db.exec("ROLLBACK"); } finally { this.releaseTx(mine); }
       },
       close: (): void => {
         if (done) return;
         done = true;
-        try { this.db.exec("ROLLBACK"); } catch { /* 已经不在事务里了 */ }
+        try { this.db.exec("ROLLBACK"); } catch { /* 已经不在事务里了 */ } finally { this.releaseTx(mine); }
       },
     };
   }
@@ -264,31 +367,20 @@ class NodeSqliteClient implements Client {
   async atomicBatch(stmts: readonly InStatement[]): Promise<ResultSet[]> {
     // Delivery receipts need their own committed transaction before a response can acknowledge them.
     // Joining an unrelated async transaction would allow a later rollback to erase an acknowledged message.
-    if (this.db.isTransaction) throw new Error("数据库正在提交其它操作，请重试；草稿仍保留");
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const results = stmts.map((stmt) => this.runSync(stmt));
-      this.db.exec("COMMIT");
-      return results;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    // 这条路**不等**：回执类写的调用方要的是立刻把重试责任收回去（页面上那句「草稿仍保留」）。
+    if (this.openTx || this.db.isTransaction) throw new Error("数据库正在提交其它操作，请重试；草稿仍保留");
+    return this.exclusive(stmts);
   }
 
-  async batch(stmts: readonly InStatement[], mode: TransactionMode = "deferred"): Promise<ResultSet[]> {
+  async batch(stmts: readonly InStatement[], _mode: TransactionMode = "deferred"): Promise<ResultSet[]> {
     if (!stmts.length) return [];
-    // 已经在事务里（drizzle 的 db.transaction 内部再 batch）就别嵌套 BEGIN，直接跑。
-    if (this.db.isTransaction) return stmts.map((s) => this.runSync(s));
-    const tx = await this.transaction(mode);
-    try {
-      const out = stmts.map((s) => this.runSync(s));
-      await tx.commit();
-      return out;
-    } catch (e) {
-      await tx.rollback();
-      throw e;
-    }
+    // **一律自己 BEGIN，绝不借别人的事务**（见 `openTx`）：借道时这一批的命运就挂在别人身上，
+    // 而调用方已经按成功往下走了。等不到就把错抛回去 —— 调用方据此留重试责任、不推进位置。
+    //
+    // 一律 IMMEDIATE（不再看 `_mode`）：库里的 batch 调用点全是写批，一上来拿锁免得中途升级
+    // 撞 SQLITE_BUSY；真正的只读批走 `execute`。
+    await this.awaitOpenTx();
+    return this.exclusive(stmts);
   }
 
   /** drizzle 的 migrator 走这条；本仓库用 `drizzle-kit push`，留着只为接口完整。 */
@@ -304,6 +396,9 @@ class NodeSqliteClient implements Client {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    // 连接都没了，在等事务收尾的那些人得被叫醒（它们随后会从 node:sqlite 得到「库已关」），
+    // 否则就是干等到 TX_WAIT_MS 才报一句不相干的超时。
+    if (this.openTx) this.releaseTx(this.openTx);
     this.cache.clear();
     this.db.close();
   }
