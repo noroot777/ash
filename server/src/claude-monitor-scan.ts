@@ -57,7 +57,8 @@ import { stat } from "node:fs/promises";
 import { claudeMonitorStatus, parseMonitorStartReceipt, type MonitorLifetime } from "@ash/shared/monitor";
 import { monitorStr as str, parseMonitorInput, type MonitorCall } from "./claude-monitors.js";
 import type { ClearedCall, PendingCall } from "./claude-monitor-pending.js";
-import { eachLine, MAX_SCAN_BYTES, streamFilesOf } from "./claude-monitor-read.js";
+import type { ScanCursor } from "./claude-monitor-cursors.js";
+import { eachLine, scanWindowBytes, streamFilesOf } from "./claude-monitor-read.js";
 
 /**
  * 一轮里最多交出去多少条「配不上内存状态」的事实（见 `SessionScan.late`）。
@@ -137,8 +138,8 @@ type SessionScan = {
   pending: Map<string, { call: MonitorCall; at: string | null; sourceRun: string | null }>;
   byToolUse: Map<string, string>;
   found: Map<string, Found>;
-  /** 每个文件读到第几字节。单调往前，只被「这一轮没读完」挡住。 */
-  cursors: Map<string, { size: number; offset: number }>;
+  /** 每个文件读到第几字节（外加边界搜索进度与缺口证据，见 `ScanCursor`）。 */
+  cursors: Map<string, ScanCursor>;
   /**
    * 这一轮**完结掉**的调用：配上了 `task_started`（成了 `found` 里的一行），或者确证起不来。
    *
@@ -199,6 +200,10 @@ export type TaskScan = {
    *
    * 跳是必须的（不跳就零进展、整个文件之后的内容都读不到），但跳掉的那条里可能带着 Monitor
    * 的入参或回执。缺口要说出来，不能静悄悄按「这一轮读全了」收尾。
+   *
+   * **它不是「这一轮」的标志位**：缺口的证据跟着游标落盘（`ScanCursor.gapFrom/gapNeed`），
+   * 只要还没弥补，之后每一轮都照样置起来。否则跳过的下一轮一干净，提示就没了，而那条事实
+   * 永远没回来 —— 面板上是一张永远 `lost` 的卡，却写着「都读全了」（第 14 轮审查 N1 实测）。
    */
   skippedRecord: boolean;
   /** 文件里出现过的、与期望不符的 session_id（只作诊断）。 */
@@ -238,7 +243,7 @@ export type TaskScan = {
    * （第 13 轮审查：内存表总有上限，上限一到挤掉的可能正是那个还没读完的任务）。
    * 新建会话桶时从这里取。
    */
-  restoredCursors: Map<string, { size: number; offset: number }> | null;
+  restoredCursors: Map<string, ScanCursor> | null;
   /**
    * 落盘的未决调用（见 `claude-monitor-pending.ts`），按 ash 会话分桶。
    *
@@ -268,8 +273,8 @@ const newSessionScan = (): SessionScan => ({
  * 落盘了（见文件头）。上一版退到「最后一个没有悬着关联的位置」，于是一条永远不会完结的调用
  * 就把位置钉死，固定输入每轮重读同一个窗口（第 11 轮审查实测）。
  */
-export function cursorsOf(scan: TaskScan): Map<string, { size: number; offset: number }> {
-  const out = new Map<string, { size: number; offset: number }>();
+export function cursorsOf(scan: TaskScan): Map<string, ScanCursor> {
+  const out = new Map<string, ScanCursor>();
   // **先铺上还没惰性接进来的那些。** 会话桶是读到那个文件时才建的（见 `scanSession`），所以
   // 一份刚接过位置、还没读到任何文件的快照，`sessions` 是空的 —— 只看 `sessions` 就等于把上
   // 一次确认过的位置扔掉（第 12 轮审查 F1：并发淘汰下每轮都从零重读）。
@@ -318,7 +323,7 @@ function eventTime(ev: any): string | null {
 export async function scanSession(
   scan: TaskScan, sessionId: string, cliSessionId: string | null, outPath: string,
   /** 单次读取上限。只有回归测试会传小值——128 MiB 的夹具没法写进测试里。 */
-  maxBytes: number = MAX_SCAN_BYTES,
+  maxBytes: number = scanWindowBytes(),
   /**
    * 这条会话**现在还有活着的 agent 进程**吗（见 TaskScan.partialTail）。
    *
@@ -376,30 +381,62 @@ export async function scanSession(
       session.cursors.set(file.path, { ...restored });
       if (restored.offset > 0) session.skippedPrefix = true;  // 见 SessionScan.skippedPrefix
     }
-    const cursor = session.cursors.get(file.path) ?? { size: 0, offset: 0 };
-    // 文件比上次短 = 被重写/截断过，之前的游标无意义，从头再来。
-    if (size < cursor.offset) { cursor.offset = 0; cursor.size = 0; }
+    const cursor: ScanCursor = session.cursors.get(file.path)
+      ?? { size: 0, offset: 0, probe: 0, gapFrom: 0, gapNeed: 0 };
+    // 文件比上次短 = 被重写/截断过，之前的游标无意义，从头再来（缺口证据也跟着作废：它说的
+    // 是旧内容里的某一段，新内容里没有对应的东西）。
+    if (size < cursor.offset) {
+      cursor.offset = 0; cursor.size = 0; cursor.probe = 0; cursor.gapFrom = 0; cursor.gapNeed = 0;
+    }
+    // ── 永久缺口：**窗口够大的那一轮回去补，补不了就一直留着账** ────────────────
+    //
+    // 跳过一条装不进窗口的记录之后，那条事实只剩这份证据了。它跟着游标落盘，所以下一轮
+    // 干净扫描清不掉它（第 14 轮审查 N1：实测跳过的是一条完成通知，第 3 轮起账面干净，
+    // 而那张卡永远停在 `lost`）。读取窗口是可配的（生产 128 MiB，回归 32 KiB），哪一轮
+    // 的窗口装得下它，就把位置退回去重读一遍——重读是幂等的（按 native_id/tool_use_id 配回）。
+    if (cursor.gapNeed) {
+      if (maxBytes >= cursor.gapNeed && cursor.gapFrom < size) {
+        cursor.offset = cursor.gapFrom;
+        cursor.probe = 0; cursor.gapFrom = 0; cursor.gapNeed = 0;
+        console.warn(`[ash] 内置 Monitor 历史扫描回去补上一条之前跳过的记录`
+          + `（${file.path} 第 ${cursor.offset} 字节起，当前窗口 ${maxBytes}）`);
+      } else {
+        scan.skippedRecord = true;
+      }
+    }
     // **判据是「读到文件尾了没有」，不是「文件有没有变大」。** 写成 `size === cursor.size`
     // 会在撞到单次上限之后卡死：文件大小没变、游标还停在半路，于是后半截永远读不到
     // （本轮自测：第 1 轮 offset=99134/409154 truncated=true，第 2 轮仍是 99134 就停了）。
     // 空文件也走这一支（0 >= 0），它本来就没东西可读。
     if (cursor.offset >= size) {
-      session.cursors.set(file.path, { size, offset: cursor.offset });
+      session.cursors.set(file.path, { ...cursor, size });
       continue;
     }
 
     const sink = (line: string) =>
       consume(scan, session!, line, cliSessionId, file.startedAt, file.path, sessionId);
+    /** 这个文件**还在被写**吗：只有活着的会话的最后一个 run 文件算（见下面的半行判据）。 */
+    const fileLive = sessionLive && file.path === files[files.length - 1]!.path;
     try {
-      const { nextOffset, truncated, stopped, skipped, tail } = await eachLine(file.path, cursor.offset, maxBytes, sink);
+      const readFrom = cursor.offset;
+      const { nextOffset, truncated, stopped, skipped, tail, probe } =
+        await eachLine(file.path, readFrom, maxBytes, sink, cursor.probe);
+      cursor.probe = probe;
       if (skipped) {
+        // 缺口落在游标上一起落盘（上面那一段负责把它补回来）。
+        cursor.gapFrom = readFrom;
+        cursor.gapNeed = skipped;
         scan.skippedRecord = true;
         console.warn(`[ash] 内置 Monitor 历史扫描跳过一条装不进读取窗口的记录`
-          + `（${file.path} 第 ${cursor.offset} 字节起 ${skipped} 字节 > 上限 ${maxBytes}）`);
+          + `（${file.path} 第 ${readFrom} 字节起 ${skipped} 字节 > 上限 ${maxBytes}）`);
       }
-      // 末尾那截没有换行符：这一轮没把这个文件读全（见 TaskScan.partialTail）。活着的会话
-      // 正在往里写,那是常态、不记账;已经结束的那条里这半行是永久的,必须留账。
-      if (tail && !sessionLive) { scan.partialTail = true; blocked = true; }
+      // 末尾那截没有换行符：这一轮没把这个文件读全（见 TaskScan.partialTail）。正在被写的
+      // 那个文件里这是常态、不记账；**封存的文件里这半行是永久的**，必须留账。
+      //
+      // 判据按 run 文件给，不是整条会话：会话活着只说明**最后那个** run 文件还在被追加，
+      // 之前那些早就封存了。用会话存活代替文件封存的话，旧文件的半行会照样把后面的文件挡住
+      // （下面 `nextOffset < size` 那一支），账上却什么都没有 —— 停滞且无声（第 14 轮审查 N1）。
+      if (tail && !fileLive) { scan.partialTail = true; blocked = true; }
       if (nextOffset > cursor.offset) {
         scan.advanced = true;
         // 读到了新字节 ⇒ 这些事实还没确认落库，位置暂时不许停在半路（见 committedThrough）。
@@ -408,7 +445,7 @@ export async function scanSession(
       if (truncated) { scan.truncated = true; blocked = true; }
       // 背压停下来了：游标停在那条还没消费的事实之前，这一轮和后面的文件都不算读完。
       if (stopped) { scan.lateOverflow = true; blocked = true; }
-      session.cursors.set(file.path, { size, offset: nextOffset });
+      session.cursors.set(file.path, { ...cursor, size, offset: nextOffset });
       // 这个文件还没读到尾（撞上限）也算没读完——下一轮从游标接着读，后面的文件继续等。
       if (nextOffset < size) blocked = true;
     } catch (e) {

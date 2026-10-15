@@ -19,8 +19,22 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitorScanCursors } from "./db/schema.js";
 
-/** 一个 run 文件读到哪儿了：`size` 是上次读到它时的大小（变小 = 被重写，位置作废）。 */
-export type ScanCursor = { size: number; offset: number };
+/**
+ * 一个 run 文件读到哪儿了。三件事**分开记**，别混成一个数(第 14 轮审查 N1)：
+ *
+ * - `offset`：**可续读位置** —— 它之前的内容都有归宿，下一轮从这儿接着读；
+ * - `probe`：**边界搜索进度** —— 一条比窗口还长的记录,找它的结尾找到哪儿了。没有它的话
+ *   「单轮工作预算」就变成了永久的可读性上限：每一轮都从同一个区间重扫同样的预算、同样
+ *   找不到,这个文件之后的内容再也读不到;
+ * - `gapFrom`/`gapNeed`：**永久缺口证据** —— 跳过的那条记录在哪、补上它要多大的窗口。
+ *   它跟着游标一起落盘,所以「跳过了一条事实」不会随下一轮干净扫描被清掉;等哪一轮的窗口
+ *   够大了(生产 128 MiB,或者换了配置),回到 `gapFrom` 重读一遍,缺口才算弥补。
+ *
+ * `size` 是上次读到它时的大小（变小 = 被重写，位置作废）。
+ */
+export type ScanCursor = {
+  size: number; offset: number; probe: number; gapFrom: number; gapNeed: number;
+};
 
 /** 一条语句最多带多少行（理由同 claude-monitor-pending.ts 的 `BATCH`）。 */
 const BATCH = 200;
@@ -36,7 +50,10 @@ export async function loadScanCursors(taskId: string): Promise<Map<string, ScanC
   const rows = await db.select().from(monitorScanCursors)
     .where(eq(monitorScanCursors.taskId, taskId));
   if (!rows.length) return null;
-  return new Map(rows.map((row) => [row.path, { size: row.fileSize, offset: row.readOffset }]));
+  return new Map(rows.map((row) => [row.path, {
+    size: row.fileSize, offset: row.readOffset,
+    probe: row.probe, gapFrom: row.gapFrom, gapNeed: row.gapNeed,
+  }]));
 }
 
 /**
@@ -50,11 +67,15 @@ export async function saveScanCursors(
 ): Promise<void> {
   const rows = [...cursors].map(([path, cursor]) => ({
     taskId, path, fileSize: cursor.size, readOffset: cursor.offset,
+    probe: cursor.probe, gapFrom: cursor.gapFrom, gapNeed: cursor.gapNeed,
   }));
   for (const batch of batches(rows)) {
     await db.insert(monitorScanCursors).values(batch).onConflictDoUpdate({
       target: [monitorScanCursors.taskId, monitorScanCursors.path],
-      set: { fileSize: sql`excluded.file_size`, readOffset: sql`excluded.read_offset` },
+      set: {
+        fileSize: sql`excluded.file_size`, readOffset: sql`excluded.read_offset`,
+        probe: sql`excluded.probe`, gapFrom: sql`excluded.gap_from`, gapNeed: sql`excluded.gap_need`,
+      },
     });
   }
 }

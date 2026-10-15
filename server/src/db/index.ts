@@ -148,6 +148,8 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS monitor_scan_cursors (
       task_id TEXT NOT NULL, path TEXT NOT NULL,
       file_size INTEGER NOT NULL DEFAULT 0, read_offset INTEGER NOT NULL DEFAULT 0,
+      probe INTEGER NOT NULL DEFAULT 0,
+      gap_from INTEGER NOT NULL DEFAULT 0, gap_need INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (task_id, path)
     );
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -314,6 +316,10 @@ export async function ensureSchema() {
   // DB created before any one of them still upgrades cleanly.
   for (const sql of [
     "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
+    // 读取层的两份独立状态(第 14 轮审查 N1):可续读位置 probe、永久缺口 gap_from/gap_need。
+    "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE monitor_scan_cursors ADD COLUMN gap_from INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE monitor_scan_cursors ADD COLUMN gap_need INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE monitors ADD COLUMN native_id TEXT",
     "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",
     // 默认值是 'unknown' 而**不是** 'bounded'：加列那一刻的存量行里，claude 投影的
