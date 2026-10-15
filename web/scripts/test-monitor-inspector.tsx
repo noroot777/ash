@@ -3,7 +3,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS,
-  monitorDurationOptions, normalizeMonitorTimeout, type TaskMonitor,
+  canStopMonitor, monitorDurationOptions, normalizeMonitorDto, normalizeMonitorTimeout,
+  type TaskMonitor,
 } from "@ash/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
@@ -360,4 +361,24 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   assert.doesNotMatch(hook, /setStarting|starting,/, "「正在创建中」不该按任务存——那样取消重开后新表单会被旧请求按住");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停");
+// ── 旧后端发来的 DTO 没有 kind：两端都要在入口补上，否则本来能停的卡变只读 ──────
+//
+// 能力判据写的是 `kind === "ash"`，字段缺失时「能停」「有日志」同时为 false。前端先更新、
+// 后端还没更新的那段混合部署里，旧后端只会发 ash 哨兵，所以补 "ash" 是确定的（第 13 轮
+// 审查 N5）。这里一半测函数本身，一半守住两端入口真的调了它——补了不用等于没补。
+{
+  const legacy = { ...base, kind: undefined } as unknown as TaskMonitor;
+  assert.equal(normalizeMonitorDto(legacy).kind, "ash", "缺 kind 的旧 DTO 要归一成 ash");
+  assert.ok(canStopMonitor(normalizeMonitorDto(legacy).kind), "归一之后它又停得掉了");
+  assert.equal(normalizeMonitorDto(projected).kind, "claude", "带 kind 的不许被改写");
+  assert.match(panel([normalizeMonitorDto(legacy)]), /停掉哨兵/, "归一后的旧 DTO 照常画出停止入口");
+  assert.doesNotMatch(panel([legacy]), /停掉哨兵/, "没归一就是只读——这正是要修的那一幕");
+
+  for (const file of ["../src/lib/apiMonitors.ts", "../../mobile/src/lib/api.ts"] as const) {
+    const source = readSource(new URL(file, import.meta.url));
+    const list = source.slice(source.indexOf("taskMonitors:"), source.indexOf("stopMonitor:"));
+    assert.match(list, /normalizeMonitorDto/, `${file} 的哨兵列表入口要归一旧 DTO`);
+  }
+}
+
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一");

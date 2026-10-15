@@ -340,6 +340,17 @@ export const NATIVE_MONITOR_ID_SCOPE = "per-cli-session" as const;
 export const monitorStatusCorrectable = (status: string): boolean =>
   status === "running" || status === "lost";
 
+/**
+ * 旧后端发来的 DTO 归一：`kind` 这一列是跟着「两种来源」一起加的,之前的 ash 哨兵没有它。
+ *
+ * 为什么要在入口补:下面两个能力判据都写的 `=== "ash"`,字段缺失时两个都是 false ——
+ * **本来能停、能看日志的那张卡会变成只读且没有输出入口**(第 12/13 轮审查 N5)。前端先更新、
+ * 后端还没更新的那段混合部署里只会出这一种 DTO:旧后端只有 ash 哨兵,所以缺省补 "ash" 是
+ * 确定的,不是猜。恢复端点那边已有 404 兼容,这份 DTO 的同类兼容就在这里。
+ */
+export const normalizeMonitorDto = <T extends { kind?: MonitorKind }>(row: T): T =>
+  (row.kind ? row : { ...row, kind: "ash" as const });
+
 /** 能不能从 ash 这边停掉它。`claude` 那种的进程在 agent 进程树里，ash 够不着。 */
 export const canStopMonitor = (kind: MonitorKind) => kind === "ash";
 /** 有没有日志文件可以回看尾巴。只有 ash 自己起的才有。 */
