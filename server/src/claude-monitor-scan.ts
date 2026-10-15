@@ -153,6 +153,9 @@ export async function scanSession(
     }
     const cursor: ScanCursor = session.cursors.get(file.path)
       ?? { size: 0, offset: 0, probe: 0, gaps: [], source: null };
+    // **落盘的来源先灌回内存**：`consume` 判归属时只认 `fileSources`（见那里的说明），而从
+    // 半路接着读的那一轮读不到文件开头那条 init 行 —— 来源就在游标上，灌回去才用得上。
+    if (cursor.source && !scan.fileSources.has(file.path)) scan.fileSources.set(file.path, cursor.source);
     // 文件比上次短 = 被重写/截断过，之前的游标无意义，从头再来（缺口证据也跟着作废：它说的
     // 是旧内容里的某一段，新内容里没有对应的东西）。
     if (size < cursor.offset) {
@@ -249,13 +252,18 @@ export async function scanSession(
 }
 
 /**
- * `found` 的键:**(来源 CLI 会话, native_id)**,不是裸 native_id。
+ * `found` 的键:**(来源, native_id)**,不是裸 native_id。
  *
  * native_id 只在一条 CLI 会话内唯一(来源侧没有承诺跨会话唯一,见 claude-monitor-commit.ts
  * 的 `RowIndex`),而同一条 ash 会话 resume 之后换号,一个任务的文件里就会同时有两个来源。
  * 按裸 id 存的后果是后读到的那一条**覆盖**先读到的:两条监听合成一张卡(第 6 轮审查 N2)。
+ *
+ * 来源**认不出来**的时候按 **run 文件**分区:一个 run 文件 = 一次进程启动 = 一个 CLI 会话,
+ * 所以「同一个文件」是手上仅有、却也足够的分区依据。都塞进同一个空桶才是错的 —— 那等于
+ * 把两个文件里的同号监听又合回一张卡(第 7 轮审查 N2)。
  */
-const foundKey = (owner: string | null, nativeId: string): string => `${owner ?? ""}\u0000${nativeId}`;
+const foundKey = (owner: string | null, sourceRun: string, nativeId: string): string =>
+  `${owner ?? `run:${sourceRun}`}\u0000${nativeId}`;
 
 /** 这一轮交出去的迟到事实已经顶到单轮上限了吗（见 `LATE_CAP`，满了就背压）。 */
 const lateFull = (session: SessionScan): boolean => session.late.length >= LATE_CAP;
@@ -284,9 +292,15 @@ function consume(
   // 旧号。拿当前值去归一的后果是把两轮的监听合成一条 —— 审查实测同一条 ash 会话的
   // cli-old/cli-new 各有一个同号监听，旧卡被新一轮的终态改写、新来源根本没有自己的卡。
   // 实时投影那一侧用的也是**流里报的那个** session_id（claude-monitors.ts 的 `event`），
-  // 所以这么取两侧才真是同一个值。文件里没报的时候才退回 `sessions` 上那个。
-  const owner = evSession ?? expectSessionId;
+  // 所以这么取两侧才真是同一个值。
+  //
+  // 这一行自己没报的时候退回**这个 run 文件已经被证实的来源**（文件开头那条 init 行报的，
+  // 或者跟着游标落盘的那个），而**不是**退回 `sessions.cli_session_id`：后者是当前身份，
+  // resume 之后旧 run 文件的事实会被它改姓，于是旧卡又被合进新一轮（第 7 轮审查 N2 实测：
+  // 只有 init 行带 session_id、后续记录不带时，两轮监听只剩 cli-new 一张卡）。两样都没有
+  // 就**留未知** —— 由认领那一层按可重验的证据决定（claude-monitor-identity.ts）。
   if (evSession) scan.fileSources.set(filePath, evSession);
+  const owner = evSession ?? scan.fileSources.get(filePath) ?? null;
 
   const content = Array.isArray(ev.message?.content) ? ev.message.content : [];
   for (const block of content) {
@@ -350,8 +364,8 @@ function consume(
     if (!started || !nativeId) return true;
     session.pending.delete(str(ev.tool_use_id));
     session.cleared.push({ sessionKey, toolUseId: str(ev.tool_use_id) });
-    session.byToolUse.set(str(ev.tool_use_id), foundKey(owner, nativeId));
-    session.found.set(foundKey(owner, nativeId), {
+    session.byToolUse.set(str(ev.tool_use_id), foundKey(owner, filePath, nativeId));
+    session.found.set(foundKey(owner, filePath, nativeId), {
       nativeId, call: started.call, toolUseId: str(ev.tool_use_id),
       cliSessionId: owner,
       startedAtLow: started.at,
@@ -363,7 +377,7 @@ function consume(
       filePath, staleRun: false,
     });
   } else if (ev.subtype === "task_notification" && nativeId) {
-    const row = session.found.get(foundKey(owner, nativeId));
+    const row = session.found.get(foundKey(owner, filePath, nativeId));
     if (!row) {
       // 同上：配不上内存状态的终态通知交给提交层裁决。实测一个任务 76 条 task_started 里
       // 64 条是普通后台 Bash，它们全从这儿过 —— 当轮就被丢掉，不占内存、不钉位置。
@@ -397,4 +411,3 @@ function applyNotice(row: Found, status: string, summary: string, at: string | n
   row.endedReason = summary || null;
   row.endedAt = at ?? row.endedAt;
 }
-
