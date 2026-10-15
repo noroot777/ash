@@ -206,6 +206,14 @@ export type TaskScan = {
    * 永远没回来 —— 面板上是一张永远 `lost` 的卡，却写着「都读全了」（第 14 轮审查 N1 实测）。
    */
   skippedRecord: boolean;
+  /**
+   * 这一轮有没有改动**任何**读取位置状态（offset / probe / 缺口全集）。
+   *
+   * 落盘条件原先只看 `advanced`（offset 往前了）。换行边界搜索只推进 `probe`、不推进
+   * offset，于是「预算用完、下轮接着找」这件事只活在内存里：缓存一丢或进程一重启，搜索
+   * 又从同一处开始，后面的内容仍然读不到（第 5 轮审查 N1 按代码推断的那一条）。
+   */
+  cursorsDirty: boolean;
   /** 文件里出现过的、与期望不符的 session_id（只作诊断）。 */
   foreign: Set<string>;
   /** 这一轮有没有读到新内容。 */
@@ -256,7 +264,7 @@ export type TaskScan = {
 export const newTaskScan = (): TaskScan => ({
   sessions: new Map(), truncated: false, failed: false, foreign: new Set(),
   advanced: false, generationChanged: false, lateOverflow: false, restoredCursors: null,
-  partialTail: false, skippedRecord: false,
+  partialTail: false, skippedRecord: false, cursorsDirty: false,
   restoredPending: null,
   committedThrough: true, runFiles: { all: new Set(), latest: new Set() },
 });
@@ -382,11 +390,12 @@ export async function scanSession(
       if (restored.offset > 0) session.skippedPrefix = true;  // 见 SessionScan.skippedPrefix
     }
     const cursor: ScanCursor = session.cursors.get(file.path)
-      ?? { size: 0, offset: 0, probe: 0, gapFrom: 0, gapNeed: 0 };
+      ?? { size: 0, offset: 0, probe: 0, gaps: [] };
     // 文件比上次短 = 被重写/截断过，之前的游标无意义，从头再来（缺口证据也跟着作废：它说的
     // 是旧内容里的某一段，新内容里没有对应的东西）。
     if (size < cursor.offset) {
-      cursor.offset = 0; cursor.size = 0; cursor.probe = 0; cursor.gapFrom = 0; cursor.gapNeed = 0;
+      cursor.offset = 0; cursor.size = 0; cursor.probe = 0; cursor.gaps = [];
+      scan.cursorsDirty = true;
     }
     // ── 永久缺口：**窗口够大的那一轮回去补，补不了就一直留着账** ────────────────
     //
@@ -394,15 +403,20 @@ export async function scanSession(
     // 干净扫描清不掉它（第 14 轮审查 N1：实测跳过的是一条完成通知，第 3 轮起账面干净，
     // 而那张卡永远停在 `lost`）。读取窗口是可配的（生产 128 MiB，回归 32 KiB），哪一轮
     // 的窗口装得下它，就把位置退回去重读一遍——重读是幂等的（按 native_id/tool_use_id 配回）。
-    if (cursor.gapNeed) {
-      if (maxBytes >= cursor.gapNeed && cursor.gapFrom < size) {
-        cursor.offset = cursor.gapFrom;
-        cursor.probe = 0; cursor.gapFrom = 0; cursor.gapNeed = 0;
-        console.warn(`[ash] 内置 Monitor 历史扫描回去补上一条之前跳过的记录`
-          + `（${file.path} 第 ${cursor.offset} 字节起，当前窗口 ${maxBytes}）`);
-      } else {
-        scan.skippedRecord = true;
+    if (cursor.gaps.length) {
+      // 从**最靠前**那个补得上的缺口开始重读:它后面那些缺口会在这一趟里被重新走一遍,
+      // 所以先把 >= 这个位置的记录全扔掉(还是补不上的会被重新记上),免得补上了账还留着。
+      const fillable = [...cursor.gaps].sort((a, b) => a.from - b.from)
+        .find((gap) => maxBytes >= gap.need && gap.from < size);
+      if (fillable) {
+        cursor.offset = fillable.from;
+        cursor.probe = 0;
+        cursor.gaps = cursor.gaps.filter((gap) => gap.from < fillable.from);
+        scan.cursorsDirty = true;
+        console.warn(`[ash] 内置 Monitor 历史扫描回去补上之前跳过的记录`
+          + `（${file.path} 第 ${fillable.from} 字节起，当前窗口 ${maxBytes}）`);
       }
+      if (cursor.gaps.length) scan.skippedRecord = true;
     }
     // **判据是「读到文件尾了没有」，不是「文件有没有变大」。** 写成 `size === cursor.size`
     // 会在撞到单次上限之后卡死：文件大小没变、游标还停在半路，于是后半截永远读不到
@@ -421,11 +435,15 @@ export async function scanSession(
       const readFrom = cursor.offset;
       const { nextOffset, truncated, stopped, skipped, tail, probe } =
         await eachLine(file.path, readFrom, maxBytes, sink, cursor.probe);
+      if (cursor.probe !== probe) scan.cursorsDirty = true;
       cursor.probe = probe;
       if (skipped) {
-        // 缺口落在游标上一起落盘（上面那一段负责把它补回来）。
-        cursor.gapFrom = readFrom;
-        cursor.gapNeed = skipped;
+        // 缺口落在游标上一起落盘（上面那一段负责把它补回来）。**一个文件可以有好几个**，
+        // 所以是往全集里加一项，不是覆盖单槽（第 5 轮审查 N1：第二条把第一条顶掉了）。
+        if (!cursor.gaps.some((gap) => gap.from === readFrom)) {
+          cursor.gaps = [...cursor.gaps, { from: readFrom, need: skipped }];
+          scan.cursorsDirty = true;
+        }
         scan.skippedRecord = true;
         console.warn(`[ash] 内置 Monitor 历史扫描跳过一条装不进读取窗口的记录`
           + `（${file.path} 第 ${readFrom} 字节起 ${skipped} 字节 > 上限 ${maxBytes}）`);
@@ -439,6 +457,7 @@ export async function scanSession(
       if (tail && !fileLive) { scan.partialTail = true; blocked = true; }
       if (nextOffset > cursor.offset) {
         scan.advanced = true;
+        scan.cursorsDirty = true;
         // 读到了新字节 ⇒ 这些事实还没确认落库，位置暂时不许停在半路（见 committedThrough）。
         scan.committedThrough = false;
       }

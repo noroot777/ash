@@ -564,4 +564,73 @@ export async function edgeGroups(): Promise<void> {
       "⑱(b) 它的数据没被补偿清理顺手清掉,卡照样回得来", `${rows.length} 条 / ${rows[0]?.status}`);
     await deleteTaskCompletely(f.taskId);
   }
+
+  // ── ⑲ 一个文件里跳过**两条**记录:两份缺口证据都要留着 ──────────────────────────
+  //
+  // 第 5 轮审查实测:同一个文件里两条完成通知都超过窗口,第二条跳过时把第一条的证据顶掉了
+  // —— 窗口后来变大只把第二张卡补成 exited,第一张永远 lost,而账面已经干净。单槽不够,
+  // 缺口得是全集。
+  {
+    const f = await fixture("two-gaps");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    for (const [tag, pad] of [["g1", LIMIT + 4096], ["g2", LIMIT + 8192]] as const) {
+      body += call(f.cli, `tu-${tag}`, `超长通知 ${tag}`, "2026-10-15T22:00:00.000Z");
+      body += started(f.cli, `tu-${tag}`, `b${tag}`);
+      body += receipt(`tu-${tag}`, `b${tag}`, "2026-10-15T22:00:00.040Z");
+      body += line({ type: "system", subtype: "task_notification", task_id: `b${tag}`,
+        status: "completed", summary: "x".repeat(pad), session_id: f.cli });
+    }
+    writeFileSync(f.file, body);
+    for (let i = 0; i < 6; i += 1) await backfillClaudeMonitors(f.taskId);
+    const before = await listMonitors(f.taskId);
+    check(before.length === 2 && before.every((row) => row.status !== "exited"),
+      "⑲两条完成通知都被跳过,两张卡都还不是 exited",
+      before.map((row) => `${row.nativeId}:${row.status}`).join(","));
+    check((monitorRecoveryOf(f.taskId)?.reasons ?? []).includes("record-skipped"),
+      "⑲账上说得出有记录没读到", JSON.stringify(monitorRecoveryOf(f.taskId)));
+
+    const saved = process.env.ASH_MONITOR_SCAN_MAX_BYTES;
+    process.env.ASH_MONITOR_SCAN_MAX_BYTES = String(LIMIT * 8);
+    try {
+      for (let i = 0; i < 3; i += 1) await backfillClaudeMonitors(f.taskId);
+      const after = await listMonitors(f.taskId);
+      check(after.length === 2 && after.every((row) => row.status === "exited"),
+        "⑲窗口变大之后**两张**都补回了终态(第一份证据没被第二条顶掉)",
+        after.map((row) => `${row.nativeId}:${row.status}`).join(","));
+      check(monitorRecoveryOf(f.taskId) === null, "⑲两个缺口都补上了才销账",
+        JSON.stringify(monitorRecoveryOf(f.taskId)));
+    } finally {
+      if (saved === undefined) delete process.env.ASH_MONITOR_SCAN_MAX_BYTES;
+      else process.env.ASH_MONITOR_SCAN_MAX_BYTES = saved;
+    }
+  }
+
+  // ── ⑳ 换行边界的搜索进度也要落盘(光推进 probe、offset 没动的那种轮次)──────────
+  //
+  // 落盘条件原先只看「offset 往前了」。超过单轮预算的记录,每一轮只把 probe 往前挪一截、
+  // offset 原地不动 —— 那几轮的进度于是只活在内存里:缓存一丢(淘汰/重启)搜索就从同一处
+  // 重新开始,这个文件后面的内容永远读不到(第 5 轮审查 N1 按代码推断的那一条)。
+  {
+    const { forgetTaskMonitorScan } = await import("../src/claude-monitor-backfill.js");
+    const f = await fixture("probe-persist");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += line({ type: "assistant", timestamp: "2026-10-15T23:00:00.000Z",
+      message: { content: [{ type: "text", text: "z".repeat(LIMIT * 5) }] } });
+    body += call(f.cli, "tu-probe", "预算之外的哨兵", "2026-10-15T23:10:00.000Z");
+    body += started(f.cli, "tu-probe", "bprobe");
+    body += notice(f.cli, "bprobe");
+    writeFileSync(f.file, body);
+
+    let probeSaved = 0;
+    for (let i = 0; i < 6 && (await listMonitors(f.taskId)).length === 0; i += 1) {
+      await backfillClaudeMonitors(f.taskId);
+      forgetTaskMonitorScan(f.taskId);   // 每轮之间把进程内状态全丢掉
+      probeSaved = Math.max(probeSaved, (await db.select().from(schema.monitorScanCursors)
+        .where(eq(schema.monitorScanCursors.taskId, f.taskId))).at(0)?.probe ?? 0);
+    }
+    check(probeSaved > 0, "⑳搜索进度确实落了库(不是只在内存里)", `probe=${probeSaved}`);
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 1 && rows[0]?.status === "exited",
+      "⑳所以丢光内存也照样一轮轮往前找,后面的内容读得到", `${rows.length} 条 / ${rows[0]?.status}`);
+  }
 }

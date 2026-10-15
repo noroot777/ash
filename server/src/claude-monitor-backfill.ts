@@ -450,6 +450,7 @@ async function runBackfill(taskId: string): Promise<number> {
     scan.lateOverflow = false;
     scan.partialTail = false;
     scan.skippedRecord = false;
+    scan.cursorsDirty = false;
 
     scan.runFiles = { all: new Set(), latest: new Set() };
     // 悬着的调用（读到了 `tool_use`、还没配上 `task_started`）每轮都取一次：快照可能刚被内存
@@ -551,7 +552,7 @@ async function runBackfill(taskId: string): Promise<number> {
       // **位置也当场落盘**：这一轮的事实已经确认落库，位置之前的内容全都有归宿了。只留在
       // 内存里的话，它的存活就取决于「哪张缓存还记得它」——而那张缓存总有上限，上限一到被
       // 挤掉的可能正是这个还没读完的任务（第 11/12/13 轮审查同一个判据的三个出口）。
-      if (scan.advanced) await saveCheckpoint(taskId, scan);
+      if (scan.cursorsDirty) await saveCheckpoint(taskId, scan);
     }
 
     // ── 销账前最后一问：**还有裁不清的一次性事实吗** ─────────────────────────────

@@ -158,10 +158,14 @@ export const monitorScanCursors = sqliteTable("monitor_scan_cursors", {
   readOffset: integer("read_offset").notNull().default(0),
   /** 找「下一个换行」找到哪一字节了(绝对位置,0=没有在找)。见 claude-monitor-read.ts 的预算。 */
   probe: integer("probe").notNull().default(0),
-  /** 永久缺口:被跳过的那条超长记录从哪一字节起(0=没有缺口)。见 claude-monitor-scan.ts。 */
-  gapFrom: integer("gap_from").notNull().default(0),
-  /** 补上这个缺口需要多大的读取窗口。窗口够大的那一轮回去重读,缺口才算弥补。 */
-  gapNeed: integer("gap_need").notNull().default(0),
+  /**
+   * 永久缺口**全集**:`[{from,need},…]` 的 JSON(默认 `[]`)。被跳过的每一条超长记录各占
+   * 一项:它从哪一字节起、补上它需要多大的读取窗口。
+   *
+   * **不能是单槽**:一个文件里跳过第二条记录时,单槽会把第一条的证据顶掉 —— 窗口后来变大
+   * 只补回第二条,第一张卡永远停在 lost,而账面已经干净(第 5 轮审查 N1 实测)。
+   */
+  gaps: text("gaps").notNull().default("[]"),
 }, (t) => ({
   // 跟 bootstrap DDL 一模一样（db/index.ts）；两条建库路径的唯一性契约必须同一个。
   pk: primaryKey({ columns: [t.taskId, t.path] }),

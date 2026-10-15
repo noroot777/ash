@@ -184,6 +184,10 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   // 本身,见 removeSshExecutorProfiles。
   { table: "agents", column: "target", why: "ssh 执行器已移除,执行位置永远是本机" },
   { table: "sessions", column: "target", why: "ssh 执行器已移除,执行位置永远是本机" },
+  // 单槽缺口(gap_from/gap_need)改成全集 gaps(JSON 数组):一个文件可能跳过不止一条记录,
+  // 单槽会被后一条顶掉。这两列只在未合并的分支上存在过,没有值得迁走的事实。
+  { table: "monitor_scan_cursors", column: "gap_from", why: "缺口改为 gaps 全集" },
+  { table: "monitor_scan_cursors", column: "gap_need", why: "缺口改为 gaps 全集" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。

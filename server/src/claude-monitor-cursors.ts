@@ -26,15 +26,29 @@ import { monitorScanCursors } from "./db/schema.js";
  * - `probe`：**边界搜索进度** —— 一条比窗口还长的记录,找它的结尾找到哪儿了。没有它的话
  *   「单轮工作预算」就变成了永久的可读性上限：每一轮都从同一个区间重扫同样的预算、同样
  *   找不到,这个文件之后的内容再也读不到;
- * - `gapFrom`/`gapNeed`：**永久缺口证据** —— 跳过的那条记录在哪、补上它要多大的窗口。
+ * - `gaps`：**永久缺口证据的全集** —— 被跳过的每一条记录在哪、补上它要多大的窗口。
  *   它跟着游标一起落盘,所以「跳过了一条事实」不会随下一轮干净扫描被清掉;等哪一轮的窗口
- *   够大了(生产 128 MiB,或者换了配置),回到 `gapFrom` 重读一遍,缺口才算弥补。
+ *   够大了(生产 128 MiB,或者换了配置),回到那一项的 `from` 重读一遍,这一项才销掉。
+ *   **是全集不是单槽**:同一个文件可能跳过好几条,单槽会被后一条顶掉(第 5 轮审查 N1)。
  *
  * `size` 是上次读到它时的大小（变小 = 被重写，位置作废）。
  */
+export type ScanGap = { from: number; need: number };
 export type ScanCursor = {
-  size: number; offset: number; probe: number; gapFrom: number; gapNeed: number;
+  size: number; offset: number; probe: number; gaps: ScanGap[];
 };
+
+/** 落盘的 `gaps` 列解析回来。坏数据按「没有缺口」处理（它只是证据，不该让整轮读不下去）。 */
+function parseGaps(raw: string): ScanGap[] {
+  try {
+    const parsed: unknown = JSON.parse(raw || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((g): g is ScanGap => !!g && typeof g === "object"
+        && Number.isFinite((g as ScanGap).from) && Number.isFinite((g as ScanGap).need))
+      .map((g) => ({ from: g.from, need: g.need }));
+  } catch { return []; }
+}
 
 /** 一条语句最多带多少行（理由同 claude-monitor-pending.ts 的 `BATCH`）。 */
 const BATCH = 200;
@@ -52,7 +66,7 @@ export async function loadScanCursors(taskId: string): Promise<Map<string, ScanC
   if (!rows.length) return null;
   return new Map(rows.map((row) => [row.path, {
     size: row.fileSize, offset: row.readOffset,
-    probe: row.probe, gapFrom: row.gapFrom, gapNeed: row.gapNeed,
+    probe: row.probe, gaps: parseGaps(row.gaps),
   }]));
 }
 
@@ -67,14 +81,14 @@ export async function saveScanCursors(
 ): Promise<void> {
   const rows = [...cursors].map(([path, cursor]) => ({
     taskId, path, fileSize: cursor.size, readOffset: cursor.offset,
-    probe: cursor.probe, gapFrom: cursor.gapFrom, gapNeed: cursor.gapNeed,
+    probe: cursor.probe, gaps: JSON.stringify(cursor.gaps),
   }));
   for (const batch of batches(rows)) {
     await db.insert(monitorScanCursors).values(batch).onConflictDoUpdate({
       target: [monitorScanCursors.taskId, monitorScanCursors.path],
       set: {
         fileSize: sql`excluded.file_size`, readOffset: sql`excluded.read_offset`,
-        probe: sql`excluded.probe`, gapFrom: sql`excluded.gap_from`, gapNeed: sql`excluded.gap_need`,
+        probe: sql`excluded.probe`, gaps: sql`excluded.gaps`,
       },
     });
   }
