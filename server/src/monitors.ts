@@ -25,6 +25,7 @@ import {
   monitorBlockedReason,
   normalizeMonitorTimeout,
   monitorMessageOrigin,
+  monitorExactExpiry,
   type MonitorStatus,
   type TaskMonitor,
 } from "@ash/shared/monitor";
@@ -40,9 +41,25 @@ import { id, now } from "./util.js";
 
 type Row = typeof monitors.$inferSelect;
 
+/**
+ * 「这一行是 ash 自己起的进程吗」——**所有碰进程、碰日志的查询都必须带上它**。
+ *
+ * 表里混着 claude 内置 Monitor 的只读投影（`kind='claude'`，见 shared/src/monitor.ts
+ * 文件头）：那些行 `pid` 是 null、`log_path` 是空串。漏掉这道过滤的后果按调用点各不相同，
+ * 但没有一个是良性的——`reattachMonitors` 会拿 null pid 去 `isSameProcess` 然后把一堆
+ * 投影行判成 `lost`（它们明明还在 agent 那边跑着）；`liveMonitorsOf` 会让投影行占掉
+ * 每任务 4 个的创建配额；`stopMonitorsForTask` 会对着它们空跑一遍 finish。
+ *
+ * 唯一**不带**这道过滤的是 `listMonitors` / `getMonitor`：面板要的就是两种一起。
+ */
+const isAshKind = eq(monitors.kind, "ash");
+
 export const toTaskMonitor = (r: Row): TaskMonitor => ({
   id: r.id,
   taskId: r.taskId,
+  kind: (r.kind === "claude" ? "claude" : "ash"),
+  nativeId: r.nativeId,
+  lifetime: (r.sourceLifetime === "persistent" || r.sourceLifetime === "unknown" ? r.sourceLifetime : "bounded"),
   command: r.command,
   description: r.description,
   cwd: r.cwd,
@@ -51,7 +68,12 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
   events: r.events,
   exitCode: r.exitCode,
   startedAt: r.startedAt,
-  expiresAt: r.expiresAt,
+  // 到期时刻**现算，不读 `expires_at` 那一列**：判据与算式都在 `monitorExactExpiry` 里，
+  // 时长和起点各自的证据少一样就只给时长。为什么不能读列见那个函数的注释——`expires_at`
+  // 是 NOT NULL 列，期限未知时存的是占位值，而「读列 + 开关判断」漏过两类占位值。
+  expiresAt: monitorExactExpiry(r),
+  /** 时长独立于起点：起点不确定时这一列仍然有值，卡片改说「总共盯 X（起点不确定）」。 */
+  timeoutMs: r.timeoutMs ?? null,
   endedAt: r.endedAt,
   endedReason: r.endedReason,
 });
@@ -151,6 +173,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     if ("error" in spawned) return { ok: false, status: 409, error: spawned.error };
 
     const timeoutMs = normalizeMonitorTimeout(input.timeoutMs);
+    const startedAt = new Date();
     const row: Row = {
       id: monitorId,
       taskId: input.taskId,
@@ -164,11 +187,35 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       offset: 0,
       events: 0,
       exitCode: null,
-      startedAt: now(),
-      expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
+      // **同一个瞬间**算两列：分别取 Date.now() 会差 1ms，而对外那个到期时刻是
+      // `started_at + timeout_ms` 现算的（见 toTaskMonitor），差值会变成「库里写的」与
+      // 「卡片显示的」不一致。
+      startedAt: startedAt.toISOString(),
+      expiresAt: new Date(startedAt.getTime() + timeoutMs).toISOString(),
       endedAt: null,
       endedReason: null,
       ownerUserId: input.ownerUserId ?? null,
+      kind: "ash",
+      nativeId: null,
+      cliSessionId: null,
+      // 只有 claude 投影才有「起它的那个 tool_use」。
+      toolUseId: null,
+      // 代次结论与起点下界都是 claude 投影那一侧的事：ash 自己 spawn 的进程有真 pid，
+      // 起点就是 spawn 那一刻（见 schema-monitors.ts）。
+      sourceRun: null,
+      startLowAt: null,
+      // ash 自己起的：期限是它自己定的，当然知道。
+      sourceLifetime: "bounded",
+      // ash 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，
+      // 代次由 pid/pidStartedAt 两列（上面）记着，不走 claude 投影那套来源代次。
+      lifetimeEvidence: "self",
+      sourcePid: null,
+      sourcePidStartedAt: null,
+      // ash 自己 spawn 的，起点就是这一刻，没有不确定性 —— 误差界 0。两列成对写：少了误差界
+      // 这一行就「无法重验」，对外会丢掉期限（见 shared 的 monitorStartTrusted）。
+      startEvidence: "observed",
+      startAnchorWidthMs: 0,
+      timeoutMs,
     };
     try {
       await db.insert(monitors).values(row);
@@ -405,9 +452,37 @@ async function finish(
   if (notify) await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`);
 }
 
+export type StopMonitorResult =
+  | { ok: true; monitor: TaskMonitor }
+  | { ok: false; status: 404 | 409; error: string };
+
+/**
+ * 停一个哨兵。
+ *
+ * claude 内置 Monitor 的投影行**一律拒绝**而不是静默忽略：它的进程在 agent 自己的进程树
+ * 里，`TaskStop` 是 claude 进程内的工具，ash 没有任何手柄够得着。假装停掉（把状态改成
+ * stopped 就返回）比报错坏得多——那个进程还在那边跑着、还会继续唤醒任务，而界面上写着
+ * 「已停止」，用户再也不会回头看它。前端据此根本不给 claude 那种卡渲染停止按钮，这里是
+ * 第二道闸（API 直调、旧前端）。
+ */
+export async function stopMonitorChecked(monitorId: string, reason = "被停掉了"): Promise<StopMonitorResult> {
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+  if (!row) return { ok: false, status: 404, error: "哨兵不存在" };
+  if (row.kind === "claude") {
+    return {
+      ok: false,
+      status: 409,
+      error: "这是 claude 自己起的 Monitor，ash 只能看不能停——它的进程在智能体的进程树里。要停只能让智能体自己 TaskStop，或者停掉整个任务。",
+    };
+  }
+  const monitor = await stopMonitor(monitorId, reason);
+  return monitor ? { ok: true, monitor } : { ok: false, status: 404, error: "哨兵不存在" };
+}
+
 export async function stopMonitor(monitorId: string, reason = "被停掉了"): Promise<TaskMonitor | null> {
   const before = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   if (!before) return null;
+  if (before.kind === "claude") return toTaskMonitor(before);
   if (before.status !== "running") return toTaskMonitor(before);
   // 用户/agent 主动停的不回推收尾事件：他就是为了不再被它叫醒才点的停。但已经攒在缓冲里
   // 的行要照常推完——那是已经发生的事实，而且任务还活着，收得下。
@@ -435,7 +510,7 @@ export async function stopMonitorsForTask(taskId: string, reason: string): Promi
 }
 
 async function stopMonitorsForTaskLocked(taskId: string, reason: string): Promise<number> {
-  const all = await db.select({ id: monitors.id }).from(monitors).where(eq(monitors.taskId, taskId));
+  const all = await db.select({ id: monitors.id }).from(monitors).where(and(eq(monitors.taskId, taskId), isAshKind));
   const live = await liveMonitorsOf(taskId);
   for (const m of live) await finish(m.id, "stopped", reason, null, { notify: false, keepBuffered: false });
   // 收尾只清得掉**还在缓冲里**的行。已经开始推的那一批不受影响：它手里拿着自己的
@@ -475,8 +550,14 @@ async function cancelPendingMonitorEvents(taskId: string): Promise<void> {
   publishPendingMessages(taskId);
 }
 
+/**
+ * 这个任务名下**ash 自己起的**、还在跑的哨兵。用于创建配额与任务结束时的连坐停止。
+ *
+ * 只数 ash 那种：claude 的投影行既不占 ash 的进程资源、也不是 ash 停得掉的，让它们占配额
+ * 会出现「agent 挂了 4 个内置 Monitor，于是 ash 这边一个哨兵都起不了」这种莫名其妙的拒绝。
+ */
 async function liveMonitorsOf(taskId: string): Promise<Row[]> {
-  return db.select().from(monitors).where(and(eq(monitors.taskId, taskId), eq(monitors.status, "running")));
+  return db.select().from(monitors).where(and(eq(monitors.taskId, taskId), eq(monitors.status, "running"), isAshKind));
 }
 
 export async function listMonitors(taskId: string): Promise<TaskMonitor[]> {
@@ -502,6 +583,9 @@ export async function readMonitorTail(
 ): Promise<{ lines: string[]; truncated: boolean } | null> {
   const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   if (!row) return null;
+  // claude 那种没有日志文件：它的输出进了 agent 自己的会话，ash 这边一个字节都没有。
+  // 返回空而不是读 `logPath`（空串）——后者会变成一次对仓库根目录的读取尝试。
+  if (row.kind === "claude") return { lines: [], truncated: false };
   const limit = Math.min(MONITOR_TAIL_MAX_LINES, Math.max(1, Math.round(maxLines)));
   const tail = readLogTail(row.logPath, MONITOR_TAIL_MAX_BYTES);
   return tail.lines.length > limit
@@ -556,7 +640,10 @@ async function finishOffline(
  * 「进程不在了」说的是这一刻，不是说它这段时间什么都没干。
  */
 export async function reattachMonitors(): Promise<{ attached: number; lost: number }> {
-  const rows = await db.select().from(monitors).where(eq(monitors.status, "running"));
+  // 只认 ash 自己起的：claude 的投影行没有 pid，拿去 isSameProcess 必然认不出来，会被
+  // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
+  // `loseClaudeMonitorsOfSession` 在 agent 进程真的结束时统一收口。
+  const rows = await db.select().from(monitors).where(and(eq(monitors.status, "running"), isAshKind));
   let attached = 0;
   let lost = 0;
   for (const row of rows) {

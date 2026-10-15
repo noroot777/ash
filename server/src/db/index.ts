@@ -130,9 +130,28 @@ export async function ensureSchema() {
       log_path TEXT NOT NULL, read_offset INTEGER NOT NULL DEFAULT 0,
       events INTEGER NOT NULL DEFAULT 0, exit_code INTEGER,
       started_at TEXT NOT NULL, expires_at TEXT NOT NULL,
-      ended_at TEXT, ended_reason TEXT, owner_user_id TEXT
+      ended_at TEXT, ended_reason TEXT, owner_user_id TEXT,
+      kind TEXT NOT NULL DEFAULT 'ash', native_id TEXT, cli_session_id TEXT,
+      source_lifetime TEXT NOT NULL DEFAULT 'unknown',
+      lifetime_evidence TEXT, source_pid INTEGER, source_pid_started_at TEXT,
+      start_evidence TEXT, timeout_ms INTEGER,
+      start_anchor_width_ms INTEGER, tool_use_id TEXT,
+      source_run TEXT, start_low_at TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
+    CREATE TABLE IF NOT EXISTS monitor_pending_calls (
+      task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+      command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      at TEXT, source_run TEXT NOT NULL DEFAULT '', cli_session_id TEXT,
+      PRIMARY KEY (task_id, session_key, source_run, tool_use_id)
+    );
+    CREATE TABLE IF NOT EXISTS monitor_scan_cursors (
+      task_id TEXT NOT NULL, path TEXT NOT NULL,
+      file_size INTEGER NOT NULL DEFAULT 0, read_offset INTEGER NOT NULL DEFAULT 0,
+      probe INTEGER NOT NULL DEFAULT 0, gaps TEXT NOT NULL DEFAULT '[]',
+      source TEXT, semantics INTEGER,
+      PRIMARY KEY (task_id, path)
+    );
     CREATE TABLE IF NOT EXISTS llm_providers (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
       protocol TEXT NOT NULL DEFAULT 'openai', base_url TEXT NOT NULL,
@@ -296,6 +315,45 @@ export async function ensureSchema() {
   // Run-timing columns (added later). Each ALTER is independent + tolerant so a
   // DB created before any one of them still upgrades cleanly.
   for (const sql of [
+    "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
+    // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
+    "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE monitor_scan_cursors ADD COLUMN gaps TEXT NOT NULL DEFAULT '[]'",
+    // 这个文件报的 CLI 身份:来源**全集**的持久依据(第 6 轮审查 N2)。旧行 NULL = 还没读到过,
+    // 那时「只有我这一个来源」证明不了,于是不认领无归属的存量行 —— 保守的那一边。
+    "ALTER TABLE monitor_scan_cursors ADD COLUMN source TEXT",
+    // 这份位置是哪一代消费语义下确认的（第 9/10 轮审查）。旧行 NULL = 第一代,没有当代戳的
+    // 一律重放一遍 —— 旧代确认掉的事实（被键挤掉的卡、没合并的终态）只能靠重读补回来。
+    "ALTER TABLE monitor_scan_cursors ADD COLUMN semantics INTEGER",
+    // 调用发生时那一行报的 CLI 身份。旧行 NULL = 当初没记,那时只能靠 source_run 自证来源
+    // (键的重建在 migrations.ts 的 repairPendingCallKey —— SQLite 改不了主键)。
+    "ALTER TABLE monitor_pending_calls ADD COLUMN cli_session_id TEXT",
+    "ALTER TABLE monitors ADD COLUMN native_id TEXT",
+    "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",
+    // 默认值是 'unknown' 而**不是** 'bounded'：加列那一刻的存量行里，claude 投影的
+    // expires_at 是拿 Monitor 入参那个 timeout_ms（请求值）算的，来源侧真钳了就是错的。
+    // 填 'bounded' 等于声称「来源确认过这个期限」，把编出来的时刻变成事实。ash 自己起的
+    // 哨兵期限确实是自己定的，由紧随其后的那条 UPDATE 刷回 'bounded'（见下）。
+    "ALTER TABLE monitors ADD COLUMN source_lifetime TEXT NOT NULL DEFAULT 'unknown'",
+    // 期限的**证据**,不是期限本身。新列 ⇒ 旧行必然 NULL,这才是「哪些期限由旧算法推出来」
+    // 的可靠版本判据(原来拿 cli_session_id IS NULL 当依据,而那一列更早就有了)。
+    "ALTER TABLE monitors ADD COLUMN lifetime_evidence TEXT",
+    // 起它的那一代 agent 进程。sessions 那两列每回合被覆盖,不能用来判历史投影的死活。
+    "ALTER TABLE monitors ADD COLUMN source_pid INTEGER",
+    "ALTER TABLE monitors ADD COLUMN source_pid_started_at TEXT",
+    // **起点**的证据,与 lifetime_evidence(时长的证据)分开记:回执能证明配置了多长,不能证明
+    // 消息 timestamp 就是计时器起点(计时器在工具返回前就起了,回执要等 PostToolUse hooks)。
+    "ALTER TABLE monitors ADD COLUMN start_evidence TEXT",
+    // 来源确认的时长。起点不确定时 expires_at 不可信,但时长仍然说得出来。
+    "ALTER TABLE monitors ADD COLUMN timeout_ms INTEGER",
+    // 起点锚点的误差界。存量行一律 NULL = 无法重验 ⇒ 对外只给时长（见 schema-monitors.ts）。
+    "ALTER TABLE monitors ADD COLUMN start_anchor_width_ms INTEGER",
+    // 起它的那个 tool_use id。检查点的另一半:位置之前的配对关系靠它从库里重建
+    // （见 claude-monitor-commit.ts 的文件头）。存量行 NULL，读到回执时顺手补上。
+    "ALTER TABLE monitors ADD COLUMN tool_use_id TEXT",
+    // 代次结论与起点下界的持久化依据(见 schema-monitors.ts)。存量行一律 NULL。
+    "ALTER TABLE monitors ADD COLUMN source_run TEXT",
+    "ALTER TABLE monitors ADD COLUMN start_low_at TEXT",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
@@ -528,6 +586,55 @@ export async function ensureSchema() {
     } catch {
       /* column already exists */
     }
+  }
+  // **必须排在上面那串容错 ALTER 之后**：这条索引引用 `native_id`，而老库那一列是靠
+  // ALTER 补上的。放进上面的建表块里会要了命——`CREATE TABLE IF NOT EXISTS` 对已存在的
+  // 表什么都不做（不补列），索引紧接着引用一个还不存在的列，整个 executeMultiple 抛出，
+  // ensureSchema 崩掉 = 整台 ash 起不来。2026-10-14 在真实库副本上实测到这一条。
+  //
+  // 索引本身的用途：claude 内置 Monitor 的投影按 native_id 认人，同一个后台任务的
+  // task_started / task_notification 要 upsert 成同一行；唯一性同时挡住重放同一段 stream
+  // 时的重复落库（回归 test-claude-monitor-parse.ts「重放幂等」钉的就是它）。
+  //
+  // **身份里必须带上来源会话。** native_id 的唯一性由来源侧保证，而来源侧只承诺在一条 CLI
+  // 会话内唯一 —— 同一个任务上先后两条 claude 会话（续聊、接管、重试）各自编号，撞上同一个
+  // id 时，旧的 (task_id, native_id) 会把乙的事实 upsert 到甲那一行上：一张卡串两条监听，
+  // 另一张干脆不出现（第 13 轮审查 N1）。cli_session_id 为空的是存量行，COALESCE 成空串让
+  // 它们彼此之间仍然互斥（旧索引保证过的那部分唯一性一点不丢）。
+  //
+  // **来源不一定是个 CLI 会话号,也可以是「哪个 run 文件」。** 历史文件里有一类记录从头到尾
+  // 不报 session_id,这时归属只能留未知(claude-monitor-scan.ts)。按 COALESCE(cli,'') 建
+  // 身份的话,两个 run 文件里的同号监听又争同一个唯一键:第二张卡插不进去,而读取位置照常
+  // 推到末尾 —— 那张卡再也不会出现(第 8 轮审查 N2)。所以未知归属时拿 `source_run` 顶上:
+  // 一个 run 文件 = 一次进程启动 = 一个 CLI 会话,这是手上仅有、也足够的身份依据。
+  //
+  // 新键比旧键**更细**(已知归属的行一模一样,未知归属的行从「挤在同一个空串」变成按 run
+  // 分开),所以存量库一定建得起来,不会因为老数据撞键而失败。
+  try {
+    await client.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS monitors_native_source"
+      + " ON monitors(task_id, COALESCE(cli_session_id, 'run:' || COALESCE(source_run,'')), native_id)"
+      + " WHERE native_id IS NOT NULL",
+    );
+    // 旧的那两条必须**拆掉**：留着任何一条,它都还在按更粗的身份拦,上面这条等于没加。
+    await client.execute("DROP INDEX IF EXISTS monitors_native_session");
+    await client.execute("DROP INDEX IF EXISTS monitors_native");
+  } catch (e) {
+    console.warn("[ash] monitors_native_source 索引创建失败,忽略:", e);
+  }
+  // ash 自己起的哨兵期限是它自己定的,`bounded` 对它恒成立 —— 上面那个 ALTER 为了不给
+  // claude 投影编期限把默认值设成了 'unknown',这里把 ash 那半刷回来；证据列同理补 'self'
+  // （新列对存量行一律 NULL,而 NULL 的语义是「旧算法推的、不可信」,对 ash 行不成立）。幂等。
+  try {
+    await client.execute("UPDATE monitors SET source_lifetime='bounded' WHERE kind='ash' AND source_lifetime<>'bounded'");
+    await client.execute("UPDATE monitors SET lifetime_evidence='self' WHERE kind='ash' AND lifetime_evidence IS NULL");
+    // ash 行的起点就是 ash 自己 spawn 那一刻,从来没有不确定性 —— 档位 'observed'、误差界 0。
+    // **这两句必须成对**:只补档位不补误差界的话,存量 ash 行会因为「无法重验」而丢掉期限
+    // (第 7 轮把起点判据从结论字符串换成了可重验的误差界)。
+    await client.execute("UPDATE monitors SET start_evidence='observed' WHERE kind='ash' AND start_evidence IS NULL");
+    await client.execute("UPDATE monitors SET start_anchor_width_ms=0 WHERE kind='ash' AND start_anchor_width_ms IS NULL");
+  } catch {
+    /* 列还不存在 */
   }
   await ensureChatSchema(client);
   // DDL 到此为止。剩下那一半(一次性数据搬运 + 退役字段/表清理)在 `migrations.ts`。

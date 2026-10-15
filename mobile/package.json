@@ -45,7 +45,8 @@
     "lint": "expo lint",
     "test:cli-capability": "node --experimental-strip-types scripts/test-cli-capability.mjs",
     "test:web-smoke": "node scripts/test-web-smoke.mjs",
-    "test:reply-command-ui": "node scripts/test-reply-command-ui.mjs"
+    "test:reply-command-ui": "node scripts/test-reply-command-ui.mjs",
+    "test:monitor-strip": "node scripts/test-monitor-strip.mjs"
   },
   "private": true
 }

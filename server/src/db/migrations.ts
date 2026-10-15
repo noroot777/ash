@@ -10,6 +10,7 @@
 //
 // 入口只有一个:`runDataMigrations(client)`,由 `ensureSchema()` 在 DDL 之后调用。
 import type { Client } from "./node-sqlite-client.js";
+import { markPendingCallKey, pendingCallKeyBlocker, pendingCallKeyLive } from "./schema-readiness.js";
 import { dropRetiredTables } from "./retired-schema.js";
 
 async function widenWorkflowBuiltinIndex(client: Client): Promise<void> {
@@ -184,6 +185,10 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   // 本身,见 removeSshExecutorProfiles。
   { table: "agents", column: "target", why: "ssh 执行器已移除,执行位置永远是本机" },
   { table: "sessions", column: "target", why: "ssh 执行器已移除,执行位置永远是本机" },
+  // 单槽缺口(gap_from/gap_need)改成全集 gaps(JSON 数组):一个文件可能跳过不止一条记录,
+  // 单槽会被后一条顶掉。这两列只在未合并的分支上存在过,没有值得迁走的事实。
+  { table: "monitor_scan_cursors", column: "gap_from", why: "缺口改为 gaps 全集" },
+  { table: "monitor_scan_cursors", column: "gap_need", why: "缺口改为 gaps 全集" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。
@@ -392,6 +397,220 @@ async function relaxDebateRoundIndex(client: Client): Promise<void> {
   }
 }
 
+// 把**旧版本算法推算出来**的 claude 投影期限降回 unknown。
+//
+// 判据是 `lifetime_evidence IS NULL`:那一列是第 4 轮才加的,所以旧行必然为 NULL,而新代码
+// 落 bounded 时一定同时写 'receipt'(来源回执明说的)。于是「谁的期限没有事实依据」这个问题
+// 有了确定答案,不必去猜。
+//
+// **上一版的判据是错的**:它用 `cli_session_id IS NULL`,理由写的是「归属列和 source_lifetime
+// 同一批加入,早期代码不写它」—— 这条事实不成立。第 4 轮审查用 `git show` 核出:归属列在本
+// 功能第一个提交 `579e58dc` 就有,`source_lifetime` 到第 2 轮 `af4ea0e2` 才加。所以那批**带
+// 归属的**错期限行一条都没被纠正(实测 legacyLifetimes:一行 60 秒、一行假 5 分钟的持续监听,
+// 迁移跑两次 + 完整回填之后仍然原样显示「盯到 …」)。
+//
+// 降级不会丢真实期限:下次打开那个任务的哨兵面板,历史回填会重读来源回执把它升回去,并写上
+// 'receipt'(claude-monitor-backfill 的 mergeInto)。已经带 'receipt' 的新行一条都不碰 ——
+// 不为了修旧行去破坏已经正确的记录。
+//
+// 幂等:降过之后 source_lifetime 不再是 'bounded',不会重复匹配。
+async function relaxUnfoundedClaudeMonitorLifetimes(client: Client): Promise<void> {
+  try {
+    await client.execute(
+      `UPDATE monitors SET source_lifetime='unknown'
+       WHERE kind='claude' AND source_lifetime<>'unknown' AND lifetime_evidence IS NULL`,
+    );
+  } catch (e) {
+    // **只吞「列还不存在」**(新库在 DDL 之前跑到这里)。原来 catch 是空的,于是权限、
+    // SQLITE_BUSY/FULL 这些真失败也被当成「列没有」静静放过,旧假期限留在库里而且没人知道
+    // (第 4 轮审查按代码推断指出)。真失败往外抛,由 runDataMigrations 的调用方处理。
+    if (!/no such column|no such table/i.test((e as Error | null)?.message ?? "")) throw e;
+  }
+}
+
+/**
+ * 存量 `bounded` 行回算 `timeout_ms`（**时长**），起点证据一律不动。
+ *
+ * 为什么非做不可：对外那个精确到期时刻改成由 `started_at + timeout_ms` 现算了（见
+ * `shared/src/monitor.ts` 的 `monitorExactExpiry`），而升级前的行只有 `expires_at` 没有
+ * `timeout_ms`。不补的话两类行会一起出事：
+ *
+ * - **ash 自己的哨兵**：起点和时长本来都确定，却因为少了时长列而不再显示期限（纯倒退）。
+ * - **claude 投影里时长曾被回执证明过的行**：旧算法拿**回执时刻**当起点，实测比真实起点晚
+ *   一分钟（第 6 轮审查 legacyReceipt：显示误差 60 秒），而旧判据凭「时长可信」就把这个
+ *   时刻放出去了。回算时长、**`start_evidence` 留空**，于是它降级成「总共盯 90 秒（起点
+ *   不确定）」——时长是真的，起点不编。
+ *
+ * 回算是**精确**的：那一列当初就是 `起点 + 时长` 写进去的，减回来就是时长本身。
+ *
+ * 幂等：`timeout_ms IS NULL` 是谓词，补完就再也匹配不上。**也不会反复降级正确数据**
+ * ——实时投影写的行要么 `source_lifetime='unknown'`（期限未知，不在范围内），要么时长列
+ * 已经有值（回执落过），两种都被谓词排除（`runDataMigrations` 没有版本表，每条迁移都得
+ * 自己对「每次启动都跑一遍」成立，教训见第 3 轮审查）。
+ */
+async function backfillMonitorTimeoutFromExpiry(client: Client): Promise<void> {
+  try {
+    // 用 SQL 选、用 JS 算：ISO-8601 带毫秒和 Z，julianday 的解析与浮点精度都得另外论证，
+    // 而这张表的行数本来就只有几十上百。字符串比较对同格式同时区的 ISO 串就是时间序。
+    const rows = await client.execute(
+      `SELECT id, started_at, expires_at FROM monitors
+       WHERE timeout_ms IS NULL AND source_lifetime='bounded' AND expires_at > started_at`,
+    );
+    for (const row of rows.rows) {
+      const ms = Date.parse(String(row.expires_at)) - Date.parse(String(row.started_at));
+      if (!Number.isFinite(ms) || ms <= 0) continue; // 占位值/脏数据：宁可不显示期限
+      await client.execute({
+        sql: `UPDATE monitors SET timeout_ms=:ms WHERE id=:id AND timeout_ms IS NULL`,
+        args: { ms, id: String(row.id) },
+      });
+    }
+  } catch (e) {
+    // 只吞「列/表还不存在」（新库在 DDL 之前跑到这里），真失败往外抛——理由同
+    // relaxUnfoundedClaudeMonitorLifetimes。
+    if (!/no such column|no such table/i.test((e as Error | null)?.message ?? "")) throw e;
+  }
+}
+
+/**
+ * 未决调用表的**键重建**（2026-10-15）。
+ *
+ * 这张表的身份是 `(task_id, session_key, source_run, tool_use_id)` —— 来源那一维非有不可：
+ * 一条 ash 会话跨好几个 run 文件，而 tool_use 号只在一条 CLI 会话内唯一，撞号时少了来源就
+ * 只能存下一条，另一条的入参（唯一出处）就此不存在（判据见
+ * `server/src/claude-monitor-pending.ts`）。
+ *
+ * 两种旧库都要接上来：
+ *   - 声明式路径（`npm -w server run db:push`）在加上 Drizzle 侧 primaryKey 之前建的表 ——
+ *     **没有任何唯一约束**，`onConflictDoNothing` 防不住重复，每轮同步都能再插一条（第 13
+ *     轮审查 N4 实测）；
+ *   - 上一代 bootstrap DDL 建的表 —— 主键是更粗的三列。
+ *
+ * SQLite 既不能加主键也不能改主键，所以这里**重建整张表**（`CREATE TABLE IF NOT EXISTS` 不会
+ * 回头改已有表）。搬运时来源不明的行填空串：那种行从此谁也证明不了同源，于是不会被销账 ——
+ * 保守的那一边（毁掉入参是永久的，留着未决责任只是多读一行）。已经是当代键的库上空转。
+ *
+ * **失败路径和成功路径一样要紧**（新一轮第 2 轮审查 F1，两种失败各有实测）：
+ *
+ *   ① 五条独立 `execute` 换表，中间任何一条失败都留下半成品库，而启动照常成功 —— 旧三列键
+ *      继续承接当代写入，一条调用被冲突吞掉，位置却照常被确认成「读完了」；下次启动迁成功
+ *      也不重放，因为前缀已经带着当代戳。→ 整个换表收进**一个原子批**（`client.batch`：
+ *      BEGIN 到 COMMIT 之间没有缝，失败整批回滚、原表原样留着）。
+ *   ② 失败发生在「原表已删、改名还没成」之后：正式表不存在，下一次 bootstrap 的
+ *      `CREATE TABLE IF NOT EXISTS` 建出一张**空的当代键表**，而光看「键已经是当代」就返回
+ *      的迁移把带着事实的搬运表永远留在一边。→ 开头先 `adoptInterruptedRekey` 收尾。
+ *
+ * 还有第三件事：**结论要核验、不能推断**。走到最后一步再读一次真实形状（`PRAGMA`），只有
+ * 它说得对才允许上层按当代语义对外确认事实（见 `db/schema-readiness.ts`）。
+ */
+const PENDING_CALL_KEY = ["task_id", "session_key", "source_run", "tool_use_id"];
+const PENDING_CALLS = "monitor_pending_calls";
+const PENDING_CALLS_STAGING = "monitor_pending_calls_rekey";
+const PENDING_CALL_COLUMNS =
+  "task_id, session_key, tool_use_id, command, description, at, source_run, cli_session_id";
+const createPendingCalls = (table: string) => `CREATE TABLE ${table} (
+  task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+  command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+  at TEXT, source_run TEXT NOT NULL DEFAULT '', cli_session_id TEXT,
+  PRIMARY KEY (task_id, session_key, source_run, tool_use_id))`;
+
+type TableShape = { exists: boolean; columns: string[]; key: string[] };
+
+/** 这张表**现在**长什么样（运行期事实，不是 drizzle 里的声明）。 */
+async function shapeOf(client: Client, table: string): Promise<TableShape> {
+  const info = await client.execute(`PRAGMA table_info(${table})`);
+  return {
+    exists: info.rows.length > 0,
+    columns: info.rows.map((row: any) => String(row.name)),
+    key: info.rows.filter((row: any) => Number(row.pk) > 0)
+      .sort((a: any, b: any) => Number(a.pk) - Number(b.pk))
+      .map((row: any) => String(row.name)),
+  };
+}
+
+const isCurrentPendingShape = (shape: TableShape): boolean =>
+  shape.key.join(",") === PENDING_CALL_KEY.join(",") && shape.columns.includes("cli_session_id");
+
+/**
+ * 上一次换表中断在半路：**把搬运表里的事实接回去**。
+ *
+ * 怎么分清中断在哪一边：**正式表还在、而且还是旧键** ⇒ 中断在删原表之前，事实都还在原表
+ * 身上，搬运表只是一份残缺拷贝 —— 丢掉它，下面重搬一遍。其余情况（正式表不存在，或者已经
+ * 是当代键的空表 —— 多半是 bootstrap 随后建出来的那张）都说明事实在搬运表里，并回去。
+ *
+ * 并表一句 `CREATE TABLE IF NOT EXISTS` 打头，于是「正式表不存在」和「正式表是空的当代表」
+ * 收成同一条路：不必依赖 bootstrap 先把表建出来（它自己也可能失败），也不留一条平时跑不到
+ * 的分支。`OR IGNORE`：撞键的留哪一条都一样（同一行日志的同一次调用）。
+ *
+ * 整段走原子批：并表失败就整批回滚，搬运表原样留在原地等下一次启动，不会出现「两边都半截」
+ * 的第三种状态；而这一次没接回来的事实由核验那一步兜住（当代语义不发布）。
+ */
+async function adoptInterruptedRekey(client: Client): Promise<void> {
+  const staging = await shapeOf(client, PENDING_CALLS_STAGING);
+  if (!staging.exists) return;
+  const main = await shapeOf(client, PENDING_CALLS);
+  if (main.exists && !isCurrentPendingShape(main)) {
+    await client.execute(`DROP TABLE IF EXISTS ${PENDING_CALLS_STAGING}`);
+    return;
+  }
+  console.warn("[ash] 未决调用表:上一次键重建中断在半路,正在把"
+    + ` ${PENDING_CALLS_STAGING} 里的行接回正式表`);
+  await client.batch([
+    createPendingCalls(PENDING_CALLS).replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
+    `INSERT OR IGNORE INTO ${PENDING_CALLS} (${PENDING_CALL_COLUMNS})
+       SELECT ${PENDING_CALL_COLUMNS} FROM ${PENDING_CALLS_STAGING}`,
+    `DROP TABLE ${PENDING_CALLS_STAGING}`,
+  ]);
+}
+
+async function repairPendingCallKey(client: Client): Promise<void> {
+  // 先把结论清掉:这一轮核验通过之前,上层一律按「当代语义还没发布」办事。
+  markPendingCallKey(false, "这一轮核验还没跑完");
+  try {
+    await adoptInterruptedRekey(client);
+    const main = await shapeOf(client, PENDING_CALLS);
+    if (main.exists && !isCurrentPendingShape(main)) {
+      // 归属那一列可能已经由容错 ALTER 补上了（db/index.ts），也可能这是更老的库 —— 两种都搬。
+      const owner = main.columns.includes("cli_session_id") ? "cli_session_id" : "NULL";
+      // **一个原子批**（理由见上面的 ①）。`DROP TABLE IF EXISTS` 留在批内第一句:上一步
+      // 丢掉残缺拷贝之后它一般是空转,但同一批里重建一次是幂等的,也省掉一次往返。
+      await client.batch([
+        `DROP TABLE IF EXISTS ${PENDING_CALLS_STAGING}`,
+        createPendingCalls(PENDING_CALLS_STAGING),
+        // `OR IGNORE` 顺带去重：同一条调用的内容来自同一行不变的日志，留哪一条都一样。
+        `INSERT OR IGNORE INTO ${PENDING_CALLS_STAGING} (${PENDING_CALL_COLUMNS})
+           SELECT task_id, session_key, tool_use_id, command, description, at,
+                  COALESCE(source_run, ''), ${owner}
+             FROM ${PENDING_CALLS}`,
+        `DROP TABLE ${PENDING_CALLS}`,
+        `ALTER TABLE ${PENDING_CALLS_STAGING} RENAME TO ${PENDING_CALLS}`,
+      ]);
+    }
+    // **结论只认真实形状。** 上面每一步都可能失败而只留下一句 warn,所以「可以按当代持久键
+    // 对外确认事实」这句话必须由这一次 PRAGMA 说出口 —— 包括「搬运表清掉了没有」:它还在
+    // 就说明有一批事实没有入口（实测 B）。
+    //
+    // 搬运表那一问是**硬闸**:现在每条留下它的路都会先抛异常(上面那个 catch 已经把结论
+    // 落成 false),所以没有哪条回归打在它身上。留着是为了下一次改动绕不过去 —— 判据是
+    // 「键已是当代」推不出「上次搬走的事实已经回来了」,不是某一次实测。
+    const after = await shapeOf(client, PENDING_CALLS);
+    const leftover = await shapeOf(client, PENDING_CALLS_STAGING);
+    if (!after.exists) markPendingCallKey(false, `${PENDING_CALLS} 这张表不存在`);
+    else if (!isCurrentPendingShape(after)) {
+      markPendingCallKey(false, `持久键还是 (${after.key.join(", ") || "没有键"})`);
+    } else if (leftover.exists) markPendingCallKey(false, `还有没接回去的 ${PENDING_CALLS_STAGING}`);
+    else markPendingCallKey(true);
+  } catch (e) {
+    markPendingCallKey(false, String((e as Error | null)?.message ?? e));
+    console.warn("[ash] 未决调用表键重建失败,忽略:", e);
+  }
+  // 失败不抛（同本文件所有迁移）：整台 ash 不该被一张表挡住启动。代价由
+  // `schema-readiness.ts` 那个标记承担 —— 内置 Monitor 这一轮不确认读取位置,下一轮重读。
+  if (!pendingCallKeyLive()) {
+    console.warn(`[ash] 未决调用表的持久键没核验通过（${pendingCallKeyBlocker()}）：`
+      + "内置 Monitor 的历史读取位置这一轮不会落盘,升级成功之后自己补齐");
+  }
+}
+
 export async function runDataMigrations(client: Client): Promise<void> {
   await widenWorkflowBuiltinIndex(client);
   await relaxDebateRoundIndex(client);
@@ -407,6 +626,11 @@ export async function runDataMigrations(client: Client): Promise<void> {
     console.warn("[ash] 已验收任务遗留预约清理失败,忽略:", e);
   }
   await reclaimOrphanOwnerGroups(client);
+  await repairPendingCallKey(client);
+  await relaxUnfoundedClaudeMonitorLifetimes(client);
+  // 必须排在 relax 之后：那一步先把「时长没有依据」的行降成 unknown，这一步才只给真正
+  // 可信的时长回算列值。
+  await backfillMonitorTimeoutFromExpiry(client);
   // 事实没迁走的那几列留到下次启动:它们各自是唯一还认得出旧状态的证据。
   const keepColumns = new Set<string>();
   if (!mergeStatesMigrated) for (const column of MERGE_STATE_COLUMNS) keepColumns.add(column);

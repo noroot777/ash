@@ -9,6 +9,12 @@
 .monitor-inspector__add:hover { background: var(--raised); color: var(--ink); }
 .monitor-inspector__add[aria-expanded="true"] { border-color: color-mix(in lch, var(--accent) 45%, var(--line2)); background: color-mix(in lch, var(--accent) 10%, var(--panel)); color: var(--accent); }
 .monitor-inspector__error { margin: 0 0 9px; color: var(--red); font-size: 10.5px; line-height: 1.6; }
+/* 「还没读完」那一条：比报错轻（它不是错误，是在进行中），但要比正文显眼。 */
+.monitor-inspector__pending {
+  margin: 0 0 8px; padding: 6px 8px; border-radius: 6px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.1));
+  color: var(--muted); font-size: 10.5px; line-height: 1.6;
+}
 .monitor-inspector__empty { color: var(--faint); font-size: 10.5px; line-height: 1.7; }
 .monitor-inspector__empty > p { margin: 0 0 8px; }
 .monitor-inspector__empty > p:first-child { color: var(--muted); font-weight: 600; }
@@ -34,6 +40,10 @@
 .monitor-card__command { display: block; overflow-wrap: anywhere; margin-top: 7px; border-radius: 6px; background: var(--overlay); padding: 5px 7px; color: var(--muted); font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9.5px; line-height: 1.6; white-space: pre-wrap; }
 .monitor-card__meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 5px; margin: 7px 0 0; color: var(--faint); font-size: 9.5px; }
 .monitor-card__reason { margin: 5px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
+/* claude 自带 Monitor 的只读投影：出身标签 + 那句「只能看不能停」的说明。
+   标签压在标题旁边而不是另起一行——两种卡在列表里是混排的，出身必须一眼看见。 */
+.monitor-card__origin { flex: none; padding: 1px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--faint); font-size: 8.5px; line-height: 1.5; white-space: nowrap; }
+.monitor-card__readonly { margin: 5px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; opacity: .9; }
 .monitor-card__cwd { min-width: 0; max-width: 100%; overflow: hidden; margin: 3px 0 0; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; opacity: .8; }
 .monitor-card__toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; border: 0; border-radius: 6px; background: transparent; padding: 2px 4px 2px 0; color: var(--muted); font-size: 10px; }
 .monitor-card__toggle:hover { color: var(--ink); }

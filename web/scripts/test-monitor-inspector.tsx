@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { TaskMonitor } from "@ash/shared/monitor";
+import {
+  MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS,
+  canStopMonitor, monitorDurationOptions, normalizeMonitorDto, normalizeMonitorTimeout,
+  type TaskMonitor,
+} from "@ash/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
@@ -11,6 +15,11 @@ import type { TaskMonitorsState } from "../src/monitors/useTaskMonitors.ts";
 const base: TaskMonitor = {
   id: "m1",
   taskId: "task",
+  // 出身。缺了它卡片会按「只读投影」渲染（没有停止按钮、没有事件数、没有「看它的输出」），
+  // 整份夹具的断言全部对不上——这两个字段是必填契约的一部分，不是可选装饰。
+  kind: "ash",
+  nativeId: null,
+  lifetime: "bounded",
   command: "tail -F build.log | grep --line-buffered ERROR",
   description: "盯构建日志",
   cwd: "/repo",
@@ -20,13 +29,28 @@ const base: TaskMonitor = {
   exitCode: null,
   startedAt: "2026-08-25T10:00:00.000Z",
   expiresAt: "2026-08-25T12:00:00.000Z",
+  // 时长独立于起点：起点不确定时对外只有这一列（卡片改说「总共盯 X（起点不确定）」）。
+  timeoutMs: 7_200_000,
   endedAt: null,
   endedReason: null,
 };
 
-function state(monitors: TaskMonitor[]): TaskMonitorsState {
+/** claude 内置 Monitor 的只读投影：另一种出身，能力和上面那种不一样。 */
+const projected: TaskMonitor = {
+  ...base,
+  id: "m-claude",
+  kind: "claude",
+  nativeId: "b69ym4qzv",
+  description: "最终全量回归结果",
+  pid: null,
+  events: 0,
+};
+
+
+function state(monitors: TaskMonitor[], recovery: TaskMonitorsState["recovery"] = null): TaskMonitorsState {
   return {
     monitors,
+    recovery,
     stoppingIds: new Set(),
     error: null,
     ready: true,
@@ -36,8 +60,94 @@ function state(monitors: TaskMonitor[]): TaskMonitorsState {
   };
 }
 
+/** 默认是「已确认没有待恢复的事实」——`null` 是另一回事（见下面的第三态）。 */
 const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
-  renderToStaticMarkup(<MonitorInspector monitors={state(monitors)} blockedReason={blockedReason} />);
+  renderToStaticMarkup(
+    <MonitorInspector
+      monitors={state(monitors, { pending: false, reasons: [], attempts: 0, exhausted: false })}
+      blockedReason={blockedReason}
+    />,
+  );
+
+/** 面板 + 一份「还没读完」的恢复状态。 */
+const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
+  <MonitorInspector
+    monitors={state(monitors, { pending: true, reasons: ["scan-unfinished"], attempts: 2, exhausted: false })}
+    blockedReason={null}
+  />,
+);
+
+// ── 空面板有两种含义，不能说成同一句话 ──────────────────────────────────────
+//
+// 「这个任务确实没用过哨兵」和「历史还没读完，先给你看这些」要分开。混成一句时第二种会被
+// 当成第一种——而那正是整个功能起点那一幕的翻版（面板说没有，agent 说在等 Monitor 通知）。
+{
+  const empty = panel([]);
+  assert.match(empty, /这个任务上还没有哨兵/, "确实没有时就直说");
+  // **第三态：不知道。** 恢复状态自己都没读到（暂态读失败）时，「这个任务没用过哨兵」是
+  // 一句没有依据的强断言——那正是整个功能起点那一幕（第 7 轮审查）。
+  const unknown = renderToStaticMarkup(
+    <MonitorInspector monitors={state([], null)} blockedReason={null} />,
+  );
+  assert.doesNotMatch(unknown, /这个任务上还没有哨兵/, "拿不到恢复状态时不许断言「没用过」");
+  assert.match(unknown, /读不到这个任务的监听恢复状态/, "要如实说读不到");
+  const pending = panelPending([]);
+  assert.doesNotMatch(pending, /这个任务上还没有哨兵/, "还没读完时不许说「没有哨兵」");
+  assert.match(pending, /历史/, "要说清是还没读完");
+  assert.match(pending, /还有历史没读完/, "而且说得出是哪一类（MONITOR_RECOVERY_LABEL）");
+  // 有卡片时同样要说：那份列表可能只是其中一部分。
+  assert.match(panelPending([projected]), /历史监听还没读完/, "有卡片时这条提示也要在");
+  assert.match(pending, /正在自动继续/, "还在推的时候就说正在推");
+
+  // **预算用完之后不能再说「正在自动继续」**：那时定时器已经停了，等的是下一次真实请求
+  // （第 8 轮审查不拦项 1）。
+  const exhausted = renderToStaticMarkup(
+    <MonitorInspector
+      monitors={state([], { pending: true, reasons: ["scan-failed"], attempts: 8, exhausted: true })}
+      blockedReason={null}
+    />,
+  );
+  assert.doesNotMatch(exhausted, /正在自动继续/, "预算用完了就不许说「正在自动继续」");
+  assert.match(exhausted, /已重试多次仍没读完/, "要说清试了很多次还没读完");
+  assert.match(exhausted, /每次打开这一格都会再推一轮/, "并且说清它怎么继续");
+  // 反过来也不许把「已停止」说死：读这份状态的那次请求自己就把预算还回去、又推了一轮，
+  // 所以页面上「自动重试已停止」这句话在闭环里从来不成立（第 9 轮审查不拦项 3）。
+  assert.doesNotMatch(exhausted, /已停止/, "闭环里它不是停着的：别说成已停止");
+  assert.doesNotMatch(exhausted, /这个任务上还没有哨兵/, "预算用完也不许谎称没用过");
+}
+
+// ── 时长的说法不能进位成「X 分 60 秒」 ──────────────────────────────────────
+//
+// 起点不确定时卡片改说「总共盯 X」。先拆分钟再对余数四舍五入的话，余数落在 59.5~60 秒
+// 之间就会写出「1 分 60 秒」（第 6 轮审查不拦项）。
+{
+  const spanOnly = renderToStaticMarkup(
+    <MonitorInspector
+      monitors={state([{ ...projected, expiresAt: null, timeoutMs: 119_600 }])}
+      blockedReason={null}
+    />,
+  );
+  assert.match(spanOnly, /总共盯 2 分钟（起点不确定）/, "119.6 秒说成「2 分钟」，不是「1 分 60 秒」");
+  assert.doesNotMatch(spanOnly, /60 秒/, "任何情况下都不该出现 60 秒");
+}
+
+// ── 手动表单的时长选项必须真的能兑现 ────────────────────────────────────────
+// 原来那张表把「2 小时 / 8 小时 / 24 小时」写死在前端，上限改掉之后整张失真：选「2 小时」
+// 实际只盯 5 分钟，而且提交值恰好等于缺省值，连「已钳到边界」的回执都没有，用户完全无从
+// 察觉（第 1 轮审查实测三个选项错两个）。所以这里钉的是**选项与服务端边界同源**。
+{
+  const options = monitorDurationOptions();
+  assert.ok(options.length > 0, "总得给得出选项");
+  for (const option of options) {
+    assert.ok(
+      option.ms >= MONITOR_MIN_TIMEOUT_MS && option.ms <= MONITOR_MAX_TIMEOUT_MS,
+      `选项「${option.label}」(${option.ms}ms) 落在服务端会钳掉的区间外——用户选了也兑现不了`,
+    );
+    assert.equal(option.ms, normalizeMonitorTimeout(option.ms), `选项「${option.label}」会被服务端改写`);
+  }
+  assert.ok(options.some((o) => o.ms === MONITOR_DEFAULT_TIMEOUT_MS), "缺省时长必须在选项里");
+  assert.ok(options.some((o) => o.ms === MONITOR_MAX_TIMEOUT_MS), "上限也该给得出来");
+}
 
 // ── 在盯的那个必须给得出「停」，并把花掉的回合数摆在明面上 ────────────────────
 // 哨兵的进程是故意脱离 ash 的：agent 的回合、会话、甚至 server 重启都带不走它。代价
@@ -50,6 +160,44 @@ const panel = (monitors: TaskMonitor[], blockedReason: string | null = null) =>
   assert.match(html, /停掉哨兵“盯构建日志”/, "在盯的哨兵必须给得出停止入口");
   assert.match(html, /grep --line-buffered ERROR/, "命令原文是判断「它到底在盯什么」的唯一依据");
   assert.match(html, /看它的输出/, "能回看原始输出才分得出「还没吐」和「过滤条件写错了」");
+}
+
+// ── 两种出身的卡不一样，而且差别必须看得见 ──────────────────────────────────
+// claude 自带 Monitor 的投影是只读的：进程在智能体自己的进程树里，ash 停不掉、拿不到日志、
+// 也数不到事件数。画成和 ash 哨兵一样的后果是用户去点一个注定失败的停止按钮，再把恒为 0
+// 的事件数读成「我的过滤条件写错了」。
+{
+  const html = panel([projected]);
+  assert.match(html, /最终全量回归结果/, "投影的说明照样要露在外面");
+  assert.match(html, /claude 自带/, "出身要标出来——两种卡在列表里是混排的");
+  assert.match(html, /只能看不能停/, "要解释清楚它为什么没有停止按钮");
+  assert.doesNotMatch(html, /停掉哨兵/, "ash 停不掉它，就不该画一个注定失败的停止按钮");
+  assert.doesNotMatch(html, /条事件/, "事件数 ash 根本数不到，画出来只会被读成「过滤写错了」");
+  assert.doesNotMatch(html, /看它的输出/, "它的输出进了智能体自己的会话，ash 这边没有日志可看");
+}
+
+// ── 「盯到什么时候」必须如实 ────────────────────────────────────────────────
+// claude 内置 Monitor 的期限是来源侧说了算的：它可能持续盯着（没有到期时刻），也可能回执
+// 还没到（我们还不知道）。无脑写一句「盯到 X」用户会当真——第 2 轮审查实测来源侧会把请求
+// 的 1 小时钳成 30 分钟甚至 10 分钟。
+{
+  const bounded = panel([{ ...projected, lifetime: "bounded", expiresAt: "2026-08-25T12:00:00.000Z" }]);
+  assert.match(bounded, /盯到/, "有来源回执的照常给出到期时刻");
+
+  const persistent = panel([{ ...projected, lifetime: "persistent", expiresAt: null }]);
+  assert.match(persistent, /持续盯着/, "持续监听要说清它没有到期时刻");
+  assert.doesNotMatch(persistent, /盯到 20/, "持续监听不能编一个到期时刻出来");
+
+  const unknown = panel([{ ...projected, lifetime: "unknown", expiresAt: null }]);
+  assert.doesNotMatch(unknown, /盯到 20/, "期限未知时更不能编——编出来的那个会被当真");
+}
+
+// 两种混排时各画各的，不会互相串味。
+{
+  const html = panel([base, projected]);
+  assert.match(html, /停掉哨兵“盯构建日志”/, "混排时 ash 那张照常给停止入口");
+  assert.match(html, /claude 自带/, "混排时投影那张照常标出身");
+  assert.equal(html.match(/停掉哨兵/g)?.length, 1, "两张卡里只有 ash 那张有停止按钮");
 }
 
 // ── 已结束的如实说明结局，并且不再给停止入口 ─────────────────────────────────
@@ -213,4 +361,24 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   assert.doesNotMatch(hook, /setStarting|starting,/, "「正在创建中」不该按任务存——那样取消重开后新表单会被旧请求按住");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停");
+// ── 旧后端发来的 DTO 没有 kind：两端都要在入口补上，否则本来能停的卡变只读 ──────
+//
+// 能力判据写的是 `kind === "ash"`，字段缺失时「能停」「有日志」同时为 false。前端先更新、
+// 后端还没更新的那段混合部署里，旧后端只会发 ash 哨兵，所以补 "ash" 是确定的（第 13 轮
+// 审查 N5）。这里一半测函数本身，一半守住两端入口真的调了它——补了不用等于没补。
+{
+  const legacy = { ...base, kind: undefined } as unknown as TaskMonitor;
+  assert.equal(normalizeMonitorDto(legacy).kind, "ash", "缺 kind 的旧 DTO 要归一成 ash");
+  assert.ok(canStopMonitor(normalizeMonitorDto(legacy).kind), "归一之后它又停得掉了");
+  assert.equal(normalizeMonitorDto(projected).kind, "claude", "带 kind 的不许被改写");
+  assert.match(panel([normalizeMonitorDto(legacy)]), /停掉哨兵/, "归一后的旧 DTO 照常画出停止入口");
+  assert.doesNotMatch(panel([legacy]), /停掉哨兵/, "没归一就是只读——这正是要修的那一幕");
+
+  for (const file of ["../src/lib/apiMonitors.ts", "../../mobile/src/lib/api.ts"] as const) {
+    const source = readSource(new URL(file, import.meta.url));
+    const list = source.slice(source.indexOf("taskMonitors:"), source.indexOf("stopMonitor:"));
+    assert.match(list, /normalizeMonitorDto/, `${file} 的哨兵列表入口要归一旧 DTO`);
+  }
+}
+
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一");

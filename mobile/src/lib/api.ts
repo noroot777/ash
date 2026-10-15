@@ -26,6 +26,7 @@ import type {
 } from "@ash/shared";
 import type { AuthState } from "@ash/shared/multiuser";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
+import { normalizeMonitorDto } from "@ash/shared/monitor";
 import type { TaskMonitor } from "@ash/shared/monitor";
 import { getApiKey, getBaseURL } from "./config";
 
@@ -247,10 +248,12 @@ export const api = {
 
   // —— 哨兵（挂在任务上的长跑命令，stdout 每一行唤醒任务一次）——
   // 手机上只看和停：起哨兵是 agent 在回合里做的事，没有手动起的入口。
+  // 旧后端的 DTO 没有 kind,能力判据会把本来能停的卡画成只读 —— 入口补齐(见 normalizeMonitorDto)。
   taskMonitors: (taskId: string): Promise<TaskMonitor[]> =>
-    req(`/tasks/${taskId}/monitors`).then(j),
+    req(`/tasks/${taskId}/monitors`).then(j).then((rows: TaskMonitor[]) => rows.map(normalizeMonitorDto)),
   stopMonitor: (monitorId: string, reason?: string): Promise<{ monitor: TaskMonitor | null }> =>
-    req(`/monitors/${monitorId}/stop`, { method: "POST", body: JSON.stringify({ reason }) }).then(j),
+    req(`/monitors/${monitorId}/stop`, { method: "POST", body: JSON.stringify({ reason }) }).then(j)
+      .then((r: { monitor: TaskMonitor | null }) => ({ monitor: r.monitor ? normalizeMonitorDto(r.monitor) : null })),
 
   sessions: (taskId: string): Promise<Session[]> => req(`/tasks/${taskId}/sessions`).then(j),
   sessionOutput: (id: string): Promise<string> => req(`/sessions/${id}/output`).then((r) => r.text()),

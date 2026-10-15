@@ -14,6 +14,8 @@ import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import { ClaudeControlBridge } from "./claude-control.js";
+import { ClaudeMonitorTrace } from "../claude-monitors.js";
+import { runOriginOfChild } from "../claude-monitor-origin.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
@@ -31,6 +33,10 @@ export async function* parseClaudeStream(
   compactWindow: number | null = null,
   onInitialized: () => void = () => {},
   waitNoticeMs = 5 * 60_000,
+  // 这条流属于哪条 CLI 会话。**接管路径必须传**：接管是从已消费的 offset 之后接着读的,
+  // `init` 早在上一轮就消费掉了,不会再来一次,靠等 system 事件设身份会一直等不到
+  // (见 ../claude-monitors.ts 构造函数的说明)。新开的流可以不传,init 会带来。
+  cliSessionId?: string,
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -68,6 +74,15 @@ export async function* parseClaudeStream(
   const seenImages = new Set<string>();
   const childImages = new Map<string, Set<string>>();
   const nativeWork = new NativeWorkTrace();
+  // claude 自带 `Monitor` 工具的只读投影（见 ../claude-monitors.ts）。放在这一层的理由：
+  // 认人要同时看 tool_use 块（工具名）和 system 事件（后台任务生命周期），只有这里两样
+  // 都流过。整条链 fire-and-forget，记账失败不影响事件流。
+  //
+  // **来源身份在这里就绑定**：这条 stdout 就是那个 agent 进程写的，它的那组落盘路径就是
+  // 这一代的 run 文件 —— 两样都从 child 直接拿，不经过 `sessions` 那几列（每回合被下一轮
+  // 覆盖，落库排在队列上，晚一步读到的就是下一代人的凭据，于是上一轮早结束的监听被新进程
+  // 续命成「正在盯着」；整段在 ../claude-monitor-origin.ts 的文件头）。
+  const claudeMonitors = new ClaudeMonitorTrace(cliSessionId, runOriginOfChild(child));
 
   const rl = createInterface({ input: child.stdout! });
 
@@ -128,10 +143,17 @@ export async function* parseClaudeStream(
       awaitingSince = null;
     }
     for (const activity of nativeWork.claudeMessage(ev)) push(activity);
+    claudeMonitors.event(ev);
     if (ev.parent_tool_use_id) {
       const images = childImages.get(ev.parent_tool_use_id) ?? new Set<string>();
       childImages.set(ev.parent_tool_use_id, images);
       for (const block of Array.isArray(ev.message?.content) ? ev.message.content : []) {
+        // 子智能体挂的 Monitor 同样要认：它跑在同一条 CLI 会话、同一个 ash 任务上，
+        // 盯的也是同一份活。漏接的话面板会说「这个任务上还没有哨兵」，而 agent 那边
+        // 明明已经挂上了——跟主智能体那条路是同一个毛病，只是入口在这个分支里。
+        // 注意这个分支**会提前 return**，所以必须在这儿接，不能指望下面那段顶层处理。
+        if (block.type === "tool_use") claudeMonitors.toolUse(block.name, block.input, block.id);
+        if (block.type === "tool_result") claudeMonitors.toolResult(block.tool_use_id, block.content);
         if (block.type === "tool_result") {
           for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         } else if (block.type === "text" && typeof block.text === "string") {
@@ -257,8 +279,13 @@ export async function* parseClaudeStream(
         if (block.type === "text") {
           hadText = true; // 真模型的 text 已经由 deltas 流过 —— 不要再 push 一遍
           if (synthetic && block.text) push({ kind: "text", text: block.text });
-        } else if (block.type === "tool_use") push(nativeWork.call(block.name, block.input, block.id)
-          ?? { kind: "tool", name: block.name, detail: shortJson(block.input) });
+        } else if (block.type === "tool_use") {
+          // Monitor 的入参只有这儿有：system/task_started 只带 tool_use_id，要靠它回指
+          // 才分得清「内置 Monitor」和「普通后台 Bash」。
+          claudeMonitors.toolUse(block.name, block.input, block.id);
+          push(nativeWork.call(block.name, block.input, block.id)
+            ?? { kind: "tool", name: block.name, detail: shortJson(block.input) });
+        }
       }
       if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload
       for (const block of ev.message.content) {
@@ -269,6 +296,9 @@ export async function* parseClaudeStream(
       flushText();
       for (const block of ev.message.content) {
         if (block?.type !== "tool_result") continue;
+        // 起手回执里那句 `expires in 20m` 是来源侧唯一说出**生效**期限的地方（入参那个
+        // timeout_ms 只是请求值，claude 会自己钳）。见 claude-monitors.ts 的 toolResult。
+        claudeMonitors.toolResult(block.tool_use_id, block.content);
         const activity = nativeWork.result(block.tool_use_id, block.content, block.is_error === true);
         if (activity) push(activity);
         for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
@@ -393,5 +423,12 @@ export async function* parseClaudeStream(
     }
   } finally {
     clearInterval(waitTimer);
+    // agent 进程结束 = 它名下的内置 Monitor 全都跟着没了（它们本来就在这棵进程树里）。
+    // 不收尾的话面板上会永远留着几张「正在盯着」的僵尸卡。
+    //
+    // **等它记完**：收尾排在投影自己的写库队列上，不等的话这条流都返回了、队列里还压着
+    // 这一代的 open/close，而外面紧跟着就是下一轮的会话更新（新一轮第 1 轮审查点名的同类
+    // 收尾位置）。这个 await 不会抛、也不会挂（见 ClaudeMonitorTrace.finishAll）。
+    await claudeMonitors.finishAll();
   }
 }

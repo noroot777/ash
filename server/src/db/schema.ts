@@ -648,32 +648,5 @@ export const handoffLocalKeyRevisions = sqliteTable("handoff_local_key_revisions
   revision: text("revision").notNull(),
 });
 
-// 哨兵（Monitor）：一条绑在任务上的长跑命令，由 **ash server** 起、不在 agent 进程树里，
-// stdout 每一行就是一条事件（语义与上限见 shared/src/monitor.ts）。
-//
-// 为什么必须落库而不是只放内存:它的全部意义就是「活得比一个回合久」。进程脱离了 ash
-// (detached + 输出落文件,跟 executors/detached.ts 同一招),所以 server 重启后要靠
-// 库里这几列把它认回来 —— pid 会被复用,认人的判据是 pid + 进程启动时刻一起对上
-// (proc.ts 的 isSameProcess),读到哪一字节则靠 `offset`,重启期间产出的行一条不漏。
-export const monitors = sqliteTable("monitors", {
-  id: text("id").primaryKey(),
-  taskId: text("task_id").notNull(),
-  command: text("command").notNull(),
-  description: text("description").notNull().default(""),
-  cwd: text("cwd").notNull(),
-  status: text("status").notNull().default("running"), // MonitorStatus
-  pid: integer("pid"),
-  // ps 的 lstart 原文。只有 pid 对上**而且**这个也对上,才算还是当初那个进程。
-  pidStartedAt: text("pid_started_at"),
-  logPath: text("log_path").notNull(),
-  // 已经读进来并推送过的字节位置。重启后从这里接着读。
-  offset: integer("read_offset").notNull().default(0),
-  events: integer("events").notNull().default(0),
-  exitCode: integer("exit_code"),
-  startedAt: text("started_at").notNull(),
-  expiresAt: text("expires_at").notNull(),
-  endedAt: text("ended_at"),
-  endedReason: text("ended_reason"),
-  // 谁起的这个哨兵(多人模式)。停它、看它都按任务归属判权,这一列只做记账。
-  ownerUserId: text("owner_user_id"),
-});
+// 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
+export { monitors, monitorPendingCalls, monitorScanCursors } from "./schema-monitors.js";

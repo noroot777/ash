@@ -5,6 +5,7 @@
 // 下的；而回复框上方那条带每多一行，输入区就矮一行。
 import { useMemo, useRef, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
+import { MONITOR_RECOVERY_LABEL } from "@ash/shared/monitor";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { MonitorCard } from "./MonitorCard.tsx";
@@ -81,13 +82,42 @@ export function MonitorInspector({
           }}
         />
       )}
+      {/* 「还没读完」要跟「确实没有」分开说：两者都是空面板，但该做的事完全不同（一个等
+          一下再看，一个根本没用过哨兵）。有卡片时也要说——那份列表可能只是其中一部分。 */}
+      {monitors.recovery?.pending && (
+        <p className="monitor-inspector__pending" role="status">
+          历史监听还没读完（{monitors.recovery.reasons.map((reason) => MONITOR_RECOVERY_LABEL[reason]).join("、")}），
+          {/* 重试预算用完之后**不能再说「正在自动继续」**——那时定时器已经停了（第 8 轮审查
+              不拦项 1）。但也不能说成「已停止」:读这份状态本身就是一次真实请求，它顺手
+              把预算还回去又推了一轮（面板开着时每约 9 分钟自己再走一遍阶梯，是有意的）。
+              所以这里只说那两件**都成立**的事实:试了很多次还没读完，而每次打开都会再推
+              一轮（第 9 轮审查不拦项 3:文案与重试策略要对齐）。 */}
+          {monitors.recovery.exhausted
+            ? "已重试多次仍没读完；每次打开这一格都会再推一轮。"
+            : "正在自动继续。"}
+        </p>
+      )}
       {rows.length === 0
         ? (
           <div className="monitor-inspector__empty">
-            <p>这个任务上还没有哨兵。</p>
+            {/* 三种空态分开说：还没读完 / **不知道**（恢复状态自己都没读到）/ 确实没有。
+                第三句是一句很强的断言（「这个任务没用过哨兵」），拿不到依据时不许说它。 */}
+            <p>
+              {monitors.recovery?.pending
+                ? "历史还没读完，先给你看现有的（暂时一条也没有）。"
+                : monitors.recovery === null
+                  ? "读不到这个任务的监听恢复状态，所以还不能说它没用过哨兵。"
+                  : "这个任务上还没有哨兵。"}
+            </p>
             <p>
               哨兵是一条绑在任务上的长跑命令，由 ash 自己起——不在智能体的进程树里，
               所以它的回合结束、会话结束、server 重启都带不走它。它每吐一行，就把这个任务唤醒一次。
+            </p>
+            {/* 两种来源都要说到：claude 执行器几乎必然用它自带的那个（CLI 的提示词把长等待
+                主动往那边引），用户在这儿只写 start_monitor 的话，会以为面板漏了东西。 */}
+            <p>
+              智能体用 claude 自带的 Monitor 起的，这里也会列出来，但只能看不能停——
+              那种的进程在智能体自己的进程树里。
             </p>
             {canStart && <p>智能体可以自己挂（MCP 工具 start_monitor），你也可以从上面那个 + 手动起一个。</p>}
           </div>

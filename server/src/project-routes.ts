@@ -19,7 +19,7 @@ import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
 import { branchDeletionRejection } from "./task-branch-plan.js";
 import { withRepoLock } from "./repo-lock.js";
-import { deleteTaskAssociations } from "./task-delete-routes.js";
+import { deleteTaskCompletely } from "./task-delete-routes.js";
 import { isTaskBusy, taskBusyRejection } from "./task-busy.js";
 import { terminalSessions } from "./terminal.js";
 import { findWorkflow } from "./workflows.js";
@@ -347,10 +347,12 @@ export function mountProjectRoutes(api: Hono): void {
       for (const t of ptasks) {
         // 与单任务 DELETE 同一份级联（审查链/预约/事件/消息/会话/计划/队列位），不留
         // reconcile 收不掉的孤儿（state/event/message/queue item 都没有自愈入口）。
-        await deleteTaskAssociations(t.id);
+        await deleteTaskCompletely(t.id);
         rmSync(join(RUNS_DIR, t.id), { recursive: true, force: true });
         rmSync(join(DATA_DIR, "scratch", t.id), { recursive: true, force: true });
       }
+      // 逐个删过了（`deleteTaskCompletely` 连任务行一起删），这一条是兜底：
+      // 上面那轮开始之后才建出来的任务行也一并收掉。
       await db.delete(tasks).where(eq(tasks.projectId, pid));
       await db.delete(groups).where(eq(groups.projectId, pid));
       const projectNotes = await db.select({ id: notes.id }).from(notes).where(eq(notes.projectId, pid));

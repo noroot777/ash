@@ -21,6 +21,7 @@ requireTmpDb("monitors");
 
 export const [
   { db, ensureSchema }, schema, monitorsModule, status, { isPidAlive }, pending, { continueTask }, runs, taskRoutes,
+  { stopAllMonitorRecovery },
 ] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
@@ -31,6 +32,7 @@ export const [
   import("../src/orchestrator.js"),
   import("../src/runs.js"),
   import("../src/task-routes.js"),
+  import("../src/claude-monitor-recovery.js"),
 ]);
 export const { mountTaskRoutes } = taskRoutes;
 export const { startMonitor, stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachMonitors, detachAllMonitors } =
@@ -79,6 +81,9 @@ export const pendingOf = (taskId: string) =>
 /** 收尾：哨兵全撒手（不杀——它们本来就该活过 ash）、放锁、删临时目录。 */
 export async function teardown(): Promise<void> {
   detachAllMonitors();
+  // 待恢复账本的退避定时器是 unref 过的（不会拖住进程），但留着会在后续用例里继续重试
+  // 刷日志——注入过读写失败的用例必然留下几条账。
+  stopAllMonitorRecovery();
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }

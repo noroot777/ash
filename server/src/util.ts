@@ -30,3 +30,24 @@ export function runsTiming(
   const liveSince = runs.find((r) => r.endedAt == null)?.turnStartedAt ?? null;
   return { activeMs, liveSince };
 }
+
+/**
+ * 往一张「按插入顺序淘汰」的 Set 里记一个**可重新推导的结论**，顺手把最老的挤掉。
+ *
+ * 给判定缓存用（例如「这个 tool_use 不是 Monitor」）：键来自来源侧，天然没有上限，而缺了
+ * 淘汰就是一条长期运行的内存泄漏。JS 的 Set 保持插入顺序，所以 `values().next()` 就是最老
+ * 的那条；想让「用过的」活得久一点就先 `delete` 再 `add`（下面就是这么做的）。
+ *
+ * **装一次性事实的缓冲不能用这个。** 那种东西来源侧不会重发，挤掉就是永久丢失；满了必须
+ * 背压（停下来等它被消化），而不是淘汰——判据和经过见
+ * `claude-monitor-scan.ts` 的 `LATE_CAP`。
+ */
+export function addCapped<T>(set: Set<T>, value: T, cap: number): void {
+  set.delete(value);
+  set.add(value);
+  while (set.size > cap) {
+    const oldest = set.values().next();
+    if (oldest.done) break;
+    set.delete(oldest.value);
+  }
+}
