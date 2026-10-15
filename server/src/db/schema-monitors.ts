@@ -166,6 +166,14 @@ export const monitorScanCursors = sqliteTable("monitor_scan_cursors", {
    * 只补回第二条,第一张卡永远停在 lost,而账面已经干净(第 5 轮审查 N1 实测)。
    */
   gaps: text("gaps").notNull().default("[]"),
+  /**
+   * 这个文件里报的 CLI 会话身份（`session_id`，没读到过就 NULL）。
+   *
+   * 一个 run 文件只由一次 agent 进程启动写出，所以它就是「这一段事实属于哪个来源」的可重验
+   * 证据。记在这里是为了让**全集**活过内存淘汰：`sessions.cli_session_id` 只记得当前那一个，
+   * resume 换号之后旧号就没了，拿它当「这个任务只有一个来源」的依据是错的（第 6 轮审查 N2）。
+   */
+  source: text("source"),
 }, (t) => ({
   // 跟 bootstrap DDL 一模一样（db/index.ts）；两条建库路径的唯一性契约必须同一个。
   pk: primaryKey({ columns: [t.taskId, t.path] }),

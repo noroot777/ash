@@ -37,6 +37,14 @@ import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 export type ScanGap = { from: number; need: number };
 export type ScanCursor = {
   size: number; offset: number; probe: number; gaps: ScanGap[];
+  /**
+   * 这个文件里报的 CLI 会话身份（没读到过就 null）。
+   *
+   * 一个 run 文件 = 一次 agent 进程启动 = 一个 CLI 会话，所以它是「这个任务历史上有过哪几个
+   * 来源」唯一可重验的依据（`sessions.cli_session_id` 只记得当前那个，resume 后旧号被覆盖）。
+   * 用处见 claude-monitor-scan.ts 的 `sourceSetOf`。
+   */
+  source: string | null;
 };
 
 /** 落盘的 `gaps` 列解析回来。坏数据按「没有缺口」处理（它只是证据，不该让整轮读不下去）。 */
@@ -67,7 +75,7 @@ export async function loadScanCursors(taskId: string): Promise<Map<string, ScanC
   if (!rows.length) return null;
   return new Map(rows.map((row) => [row.path, {
     size: row.fileSize, offset: row.readOffset,
-    probe: row.probe, gaps: parseGaps(row.gaps),
+    probe: row.probe, gaps: parseGaps(row.gaps), source: row.source,
   }]));
 }
 
@@ -82,7 +90,7 @@ export async function saveScanCursors(
 ): Promise<void> {
   const rows = [...cursors].map(([path, cursor]) => ({
     taskId, path, fileSize: cursor.size, readOffset: cursor.offset,
-    probe: cursor.probe, gaps: JSON.stringify(cursor.gaps),
+    probe: cursor.probe, gaps: JSON.stringify(cursor.gaps), source: cursor.source,
   }));
   for (const batch of batches(rows)) {
     // 落库资格跟 upsert 同批（见 claude-monitor-write.ts）：任务在这一轮里被删完的话，
@@ -92,7 +100,7 @@ export async function saveScanCursors(
         target: [monitorScanCursors.taskId, monitorScanCursors.path],
         set: {
           fileSize: sql`excluded.file_size`, readOffset: sql`excluded.read_offset`,
-          probe: sql`excluded.probe`, gaps: sql`excluded.gaps`,
+          probe: sql`excluded.probe`, gaps: sql`excluded.gaps`, source: sql`excluded.source`,
         },
       }),
       db.delete(monitorScanCursors).where(orphanRows(monitorScanCursors, taskId)),

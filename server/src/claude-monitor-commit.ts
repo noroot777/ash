@@ -42,7 +42,7 @@ import { matchBySource, type SourceEvidence } from "./claude-monitor-identity.js
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 import type { Found, LateFact } from "./claude-monitor-scan.js";
 import { db } from "./db/index.js";
-import { monitors, sessions } from "./db/schema.js";
+import { monitors } from "./db/schema.js";
 import { id, now } from "./util.js";
 
 /**
@@ -148,6 +148,12 @@ export async function commitRound(
   taskId: string, items: Found[], late: LateFact[],
   /** 每成功一行就回报一次。写失败往外抛时，调用方靠它知道已经成功了几条。 */
   report: (added: number) => void,
+  /**
+   * 这个任务历史上有过哪几个 CLI 来源、清单全不全（`sourceSetOf`）。
+   *
+   * 缺省是「不全」——证明不了「只有我一个来源」，于是无归属的存量行一律不认领（保守的那一边）。
+   */
+  sources: { complete: boolean; ids: Set<string> } = { complete: false, ids: new Set() },
 ): Promise<CommitOutcome> {
   if (!items.length && !late.length) {
     return { added: 0, missed: false, resolved: [], undecidable: [] };
@@ -165,14 +171,12 @@ export async function commitRound(
     .from(monitors)
     .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude"))));
 
-  // 来源全集：无归属的存量行（连 run 都没记）只有在「这个任务只有我这一条 claude 会话」时
-  // 才认得回来。问 `sessions` 而不是数投影行 —— 后者只是恢复进度（见 SourceEvidence）。
-  const claudeSessions = await db
-    .select({ cliSessionId: sessions.cliSessionId })
-    .from(sessions)
-    .where(and(eq(sessions.taskId, taskId), eq(sessions.agentType, "claude")));
+  // 来源全集：无归属的存量行（连 run 都没记）只有在「这个任务历史上只有我这一个来源」时才
+  // 认得回来。全集由**每个 run 文件自己报的 session_id** 给出（`sourceSetOf`，跟着游标落盘）：
+  // 问 `sessions.cli_session_id` 是错的 —— 那一列只记得当前那一个，同一条 ash 会话 resume
+  // 换号之后旧号就被覆盖了，于是「只有一行 ⇒ 只有一个来源」这个推理不成立（第 6 轮审查 N2）。
   const soleSourceOf = (mine: string | null): boolean =>
-    !!mine && claudeSessions.length === 1 && claudeSessions[0]!.cliSessionId === mine;
+    !!mine && sources.complete && sources.ids.size === 1 && sources.ids.has(mine);
 
   const probe = createLivenessProbe();
   let added = 0;

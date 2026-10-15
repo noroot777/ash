@@ -10,7 +10,7 @@
 // ② 认行同理：无归属的那一行要有**可重验的同来源证据**才认得下来（`matchBySource`，实时与
 //    历史共用）。「库里只有这一行」不算证据 —— 那只说明恢复进度走到哪儿了，不说明别的会话
 //    没有同号监听（第 5 轮审查 N2）。
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
@@ -185,14 +185,84 @@ async function main(): Promise<void> {
     check((await listMonitors(taskId)).length === 2, "②(b) 两张卡并存，各是各的");
   }
 
+  // ── ④ 同一条 ash 会话的**两个历史 CLI 身份**：两张卡，不是一张 ───────────────────
+  //
+  // resume 之后 CLI 换号，`sessions.cli_session_id` 只留得下最新那个。上一版把所有旧 run 文件
+  // 里的事实都归一到这个当前值，`found` 又只按 native_id 存 —— 于是同一条 ash 会话里 cli-old
+  // 和 cli-new 各有一个同号监听时，两条合成一条：审查实测只剩旧那一张卡，描述还是旧的，
+  // cli_session_id/tool_use_id/status 却全变成了新一轮的（第 6 轮审查 N2）。
+  await twoHistoricalSources();
+
   // 收尾：库里那两条任务的卡各是各的（没被上面的判据串掉）。
   check((await listMonitors("t-settle")).length === 1, "③甲的旧投影自己那张卡还在");
 
   if (failures === 0) {
     console.log("✓ 内置 Monitor 的归属判据：空归属不当通配符（销账与认行都要可重验的同来源证据）"
-      + " / 同来源照常销账 / 存量行按 run 文件升级 / 认不下来就另起一行 均受回归保护");
+      + " / 同来源照常销账 / 存量行按 run 文件升级 / 认不下来就另起一行"
+      + " / 同一条 ash 会话换过号时两个历史来源各是各的 均受回归保护");
   }
   process.exit(failures ? 1 : 0);
+}
+
+async function twoHistoricalSources(): Promise<void> {
+  const { backfillClaudeMonitors } = await import("../src/claude-monitor-backfill.js");
+  const taskId = "t-history";
+  const dir = join(root, "runs", taskId);
+  mkdirSync(dir, { recursive: true });
+  const runOf = (stamp: string) => join(dir, `sesshist-${stamp}.agent-out.jsonl`);
+  const oldRun = runOf("20261014T000000000Z");
+  const newRun = runOf("20261015T000000000Z");
+  const ev = (o: unknown) => JSON.stringify(o) + "\n";
+  const story = (cli: string, tu: string, done: boolean) =>
+    ev({ type: "system", subtype: "init", session_id: cli })
+    + ev({ type: "assistant", timestamp: "2026-10-14T00:00:01.000Z", message: { model: "m", content: [
+      { type: "tool_use", name: "Monitor", id: tu,
+        input: { command: `tail -F /tmp/${tu}`, description: `${cli} 的监听`, timeout_ms: 600_000 } },
+    ] } })
+    + ev({ type: "system", subtype: "task_started", task_id: "bshared", tool_use_id: tu,
+      task_type: "local_bash", session_id: cli })
+    + (done
+      ? ev({ type: "system", subtype: "task_notification", task_id: "bshared",
+        status: "completed", summary: "新这一轮跑完了", session_id: cli })
+      : "");
+  writeFileSync(oldRun, story("cli-old", "tu-old", false));
+  writeFileSync(newRun, story("cli-new", "tu-new", true));
+
+  await db.insert(tasks).values({ id: taskId, projectId: "p", title: "换过号", body: "", status: "running",
+    agentType: "claude", mode: "single", createdAt: now(), updatedAt: now() });
+  // 一条 ash 会话，两代 run 文件；库里只记得**当前**那个 cli 身份。
+  await db.insert(sessions).values({
+    id: "sesshist", taskId, role: "single", agentType: "claude", executor: "claude@x",
+    cliSessionId: "cli-new", cwd: root, startedAt: now(), agentOutPath: newRun,
+  });
+  // 旧来源那张卡（升级前落下的：没有归属，但记着自己是从哪个 run 读出来的）。
+  await db.insert(monitors).values({
+    id: "m-old", taskId, command: "tail -F /tmp/tu-old", description: "cli-old 的监听", cwd: root,
+    status: "running", pid: null, pidStartedAt: null, logPath: "", offset: 0, events: 0,
+    exitCode: null, startedAt: now(), expiresAt: now(), endedAt: null, endedReason: null,
+    ownerUserId: null, kind: "claude", nativeId: "bshared", cliSessionId: null,
+    toolUseId: null, sourceLifetime: "unknown", sourceRun: oldRun,
+  });
+
+  await backfillClaudeMonitors(taskId);
+  const rows = await db.select().from(monitors).where(eq(monitors.taskId, taskId));
+  check(rows.length === 2, "④两个历史来源 ⇒ 两张卡（不是合成一张）",
+    rows.map((r) => `${r.cliSessionId}/${r.toolUseId}/${r.status}`).join(" , "));
+  const old = rows.find((r) => r.id === "m-old");
+  check(old?.status !== "exited" && old?.toolUseId !== "tu-new",
+    "④旧那张卡没有被新一轮的事实改写", `${old?.status} / ${old?.toolUseId} / ${old?.cliSessionId}`);
+  check(old?.cliSessionId === "cli-old",
+    "④而且它被**它自己那个 run** 认领了（归属补成 cli-old，不是当前的 cli-new）",
+    String(old?.cliSessionId));
+  // **每张卡的三样东西必须是同一个来源的**：归属、起它的那个 tool_use、它的描述。
+  // 合成一张的那种坏法正是在这里露馅：旧卡的描述配上新一轮的 tool_use 和终态。
+  const shape = rows
+    .map((r) => `${r.cliSessionId}|${r.toolUseId}|${r.description}`).sort().join(" , ");
+  check(shape === "cli-new|tu-new|cli-new 的监听 , cli-old|tu-old|cli-old 的监听",
+    "④两张卡各自的归属/tool_use/描述都来自同一个来源（没有张冠李戴）", shape);
+  check(rows.some((r) => r.cliSessionId === "cli-new" && r.status === "exited"),
+    "④新来源有自己的卡，终态也在",
+    rows.map((r) => `${r.cliSessionId}:${r.status}`).join(","));
 }
 
 try {

@@ -149,6 +149,7 @@ export async function ensureSchema() {
       task_id TEXT NOT NULL, path TEXT NOT NULL,
       file_size INTEGER NOT NULL DEFAULT 0, read_offset INTEGER NOT NULL DEFAULT 0,
       probe INTEGER NOT NULL DEFAULT 0, gaps TEXT NOT NULL DEFAULT '[]',
+      source TEXT,
       PRIMARY KEY (task_id, path)
     );
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -318,6 +319,9 @@ export async function ensureSchema() {
     // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
     "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE monitor_scan_cursors ADD COLUMN gaps TEXT NOT NULL DEFAULT '[]'",
+    // 这个文件报的 CLI 身份:来源**全集**的持久依据(第 6 轮审查 N2)。旧行 NULL = 还没读到过,
+    // 那时「只有我这一个来源」证明不了,于是不认领无归属的存量行 —— 保守的那一边。
+    "ALTER TABLE monitor_scan_cursors ADD COLUMN source TEXT",
     "ALTER TABLE monitors ADD COLUMN native_id TEXT",
     "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",
     // 默认值是 'unknown' 而**不是** 'bounded'：加列那一刻的存量行里，claude 投影的

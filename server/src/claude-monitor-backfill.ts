@@ -36,7 +36,7 @@ import { clearScanCursors, loadScanCursors, saveScanCursors, type ScanCursor } f
 import { loadPendingCalls, syncPendingCalls } from "./claude-monitor-pending.js";
 import {
   clearedCallsOf, clearLateFacts, clearPendingLedger, cursorsOf, foundOf, lateFactsOf,
-  newTaskScan, pendingCallsOf, scanSession, type LateFact, type TaskScan,
+  newTaskScan, pendingCallsOf, scanSession, sourceSetOf, type LateFact, type TaskScan,
 } from "./claude-monitor-scan.js";
 import { db, dbClient } from "./db/index.js";
 import { monitorPendingCalls, monitorScanCursors, monitors, sessions, tasks } from "./db/schema.js";
@@ -518,7 +518,8 @@ async function runBackfill(taskId: string): Promise<number> {
     const late = lateFactsOf(scan);
     let undecidable: LateFact[] = [];
     if (scan.advanced || scan.generationChanged || late.length) {
-      const outcome = await commitRound(taskId, foundOf(scan), late, (n) => { added = n; });
+      const outcome = await commitRound(taskId, foundOf(scan), late, (n) => { added = n; },
+        sourceSetOf(scan));
       added = outcome.added;
       undecidable = outcome.undecidable;
       // 裁完的就从通道里清掉（配上了的已经落到行上，配不上的已证明与我们无关）。裁不清的
