@@ -301,7 +301,13 @@ export class ClaudeMonitorTrace {
   toolResult(toolUseId: unknown, content: unknown): void {
     const callId = str(toolUseId);
     const nativeId = callId ? this.byToolUse.get(callId) : undefined;
-    if (!nativeId) return;
+    if (!nativeId) {
+      // 回执配不上 `task_started` ⇒ 这次调用压根没起来（启动被拒、入参校验失败）。那条悬着
+      // 的调用当场清掉，别留到 `finishAll` ——判据是「配不上」而不是回执里的错误文案，与历史
+      // 扫描同一套（见 claude-monitor-scan.ts 的同一处；第 11 轮审查点名的对称位置）。
+      if (callId) this.pending.delete(callId);
+      return;
+    }
     const text = typeof content === "string"
       ? content
       : Array.isArray(content)

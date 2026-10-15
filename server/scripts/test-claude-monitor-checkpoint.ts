@@ -5,10 +5,13 @@
 // 的回执/终态通知配不上任何东西，而扫描照旧读到文件尾、照旧销账——面板上是一张漏掉的卡 +
 // 一条写着 running 的已完成监听，刷新也不改（审查用生产服务 + 真页面实测）。
 //
-// 这份测试钉的是修好之后的两半（见 server/src/claude-monitor-commit.ts 文件头）：
-// ① 位置只停在**没有悬着的关联**处（`cursor.safe`），所以被跳过的调用会被重放到；
+// 这份测试钉的是修好之后的几半（见 server/src/claude-monitor-commit.ts 文件头）：
+// ① 还没成行的那条调用由 `monitor_pending_calls` **独立恢复**，所以位置只管单调往前；
 // ② 位置之前已经成行的那些，后缀的事实按 `native_id` / `tool_use_id` 配回那一行；
 // ③ 两半都配不上时**不许销账**：回到确定可重放的位置（从零）重读，然后才干净收尾。
+//
+// ①那一条第 11 轮审查之前是靠「位置绝不越过一条还悬着的调用」做的，于是一条**永远不会完结**
+// 的调用（启动被拒、进程在那一行之后被杀）就把位置钉死了 —— 见 ⑦⑧ 两组。
 //
 // 为什么单独一个脚本：这几条要在「制造内存压力」和「往下读」之间精确卡一刀，而自动推进的
 // 退避定时器会抢在压力构造之前把文件读完（本轮自测：加了 debug 才发现 converge 里这两组是
@@ -99,6 +102,23 @@ const plainBash = (cli: string, n: number) => [
  * 位置」，整组断言变成免费的（本轮自测用 debug 才看出来）。
  */
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
+
+/**
+ * 用**一串**填充事件把 `body` 顶过 `target` 字节。
+ *
+ * 跟 `padTo` 的区别只在「一条还是多条」，但这件事很要紧：单次读取窗口是按字节切的，**一条
+ * 比窗口还长的记录现在读不过去**（见扫描层 `eachLine`：窗口内找不到换行 ⇒ 这一轮零进展）。
+ * 要跨窗口的夹具必须用这个，否则测的是「超长记录卡住」而不是「跨窗口续读」（本轮自测：
+ * ⑦⑧ 第一版用 padTo 造了一条 37 KiB 的行，于是两组都停在第一个窗口里）。
+ */
+function padLines(body: string, target: number): string {
+  let out = body;
+  while (bytes(out) < target) {
+    out += line({ type: "assistant", timestamp: "2026-10-15T01:00:00.000Z",
+      message: { content: [{ type: "text", text: "x".repeat(400) }] } });
+  }
+  return out;
+}
 
 function padTo(body: string, target: number): string {
   const head = '{"type":"assistant","timestamp":"2026-10-15T01:00:00.000Z","message":{"content":[{"type":"text","text":"';
@@ -444,12 +464,114 @@ async function main(): Promise<void> {
     }
   }
 
+
+  // ── ⑦ **起不来的那条调用**不许把位置钉死（第 11 轮审查那条阻塞项的形状）───────────
+  //
+  // 开头一条 Monitor 调用**启动被拒**：有 `is_error` 回执、永远不会有 `task_started`。上一版
+  // 的可重放位置「绝不越过一条还悬着的调用」，于是它永久悬着、位置每轮退回它之前，读取窗口
+  // 一动不动 —— 已完成的一号一直写着 running，末尾的二号永远不出现（审查用导出的生产回填
+  // + 真页面确定性复现 12 轮）。
+  //
+  // 判据必须是「配不上 task_started 且这条回执没说起成了」，**不是回执里的错误文案**：
+  // 换一句措辞就漏一类。所以这一组的回执文本刻意不含任何 Monitor 字样。
+  {
+    const f = await fixture("rejected-call");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-bad", "起不来的那个", "2026-10-15T07:00:00.000Z");
+    body += line({ type: "user", timestamp: "2026-10-15T07:00:00.030Z", message: { content: [
+      { type: "tool_result", tool_use_id: "tu-bad", is_error: true, content: "Error: command not permitted" },
+    ] } });
+    body += call(f.cli, "tu-bfirst", "一号监听", "2026-10-15T07:01:00.000Z");
+    body += started(f.cli, "tu-bfirst", "bfirst");
+    body += receipt("tu-bfirst", "bfirst", "2026-10-15T07:01:00.040Z");
+    body = padLines(body, LIMIT + 5_000);                // 一号的完成通知落到第二个窗口
+    body += notice(f.cli, "bfirst");
+    body += call(f.cli, "tu-blast", "末尾的二号监听", "2026-10-15T07:30:00.000Z");
+    body += started(f.cli, "tu-blast", "blast");
+    body += receipt("tu-blast", "blast", "2026-10-15T07:30:00.040Z");
+    body += notice(f.cli, "blast");
+    writeFileSync(f.file, body);
+
+    const squeeze = await makeSqueeze("rj");
+    const seen = new Set<string>();
+    let rounds = 0;
+    for (; rounds < 12; rounds += 1) {
+      await backfillClaudeMonitors(f.taskId);
+      for (const r of monitorRecoveryOf(f.taskId)?.reasons ?? []) seen.add(r);
+      if ((await listMonitors(f.taskId)).length >= 2 && !monitorRecoveryOf(f.taskId)) break;
+      await squeeze();                                   // 每一轮都把配对状态挤掉
+      check(monitorScanTracked(f.taskId) === false, "⑦每一轮都确实被挤出了快照表");
+    }
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 2 && rows.some((r) => r.nativeId === "blast"),
+      "⑦起不来的那条调用没把位置钉住，末尾的二号读到了",
+      `${rounds + 1} 轮后 ${rows.length} 条：${rows.map((r) => `${r.nativeId}/${r.status}`).join(",")}`);
+    check(rows.every((r) => r.status === "exited"),
+      "⑦两条都带着来源说的终态（不再有一条永远 running）",
+      rows.map((r) => `${r.nativeId}/${r.status}`).join(","));
+    check(rounds + 1 <= 5, "⑦而且是按窗口数收敛的", `${rounds + 1} 轮`);
+    check(!monitorRecoveryOf(f.taskId), "⑦账也销了", JSON.stringify(monitorRecoveryOf(f.taskId)));
+    check(!seen.has("checkpoint-incomplete"), "⑦一路上没走「回头从零重读」那条兜底路", [...seen].join(","));
+    const left = await db.select().from(schema.monitorPendingCalls)
+      .where(eq(schema.monitorPendingCalls.taskId, f.taskId));
+    check(left.length === 0, "⑦起不来的那条调用也从未决表里销掉了（不是永远留着）",
+      left.map((r) => r.toolUseId).join(","));
+  }
+
+  // ── ⑧ 跨窗口 + 跨淘汰的调用：**入参靠落盘接回来**，不靠把位置退回那一行 ───────────
+  //
+  // 一条 Monitor 调用在第一个窗口里，它的 `task_started` 在后面的窗口里，而每一轮都把配对
+  // 状态挤掉。位置不回退之后，这条调用的入参（命令、说明）只能来自 `monitor_pending_calls`
+  // ——落盘这一步要是没做，`task_started` 就配不上任何调用、按「那个工具不是 Monitor」被
+  // 丢掉，这张卡永远不出现。
+  {
+    const f = await fixture("hanging-call");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-bhang", "跨窗口的那个哨兵", "2026-10-15T08:00:00.000Z");
+    body = padLines(body, LIMIT + 5_000);                // 启动行落到第二个窗口
+    body += started(f.cli, "tu-bhang", "bhang");
+    body += receipt("tu-bhang", "bhang", "2026-10-15T08:00:00.050Z");
+    body += notice(f.cli, "bhang");
+    writeFileSync(f.file, body);
+
+    const squeeze = await makeSqueeze("hg");
+    await backfillClaudeMonitors(f.taskId);
+    const parkedCall = await db.select().from(schema.monitorPendingCalls)
+      .where(eq(schema.monitorPendingCalls.taskId, f.taskId));
+    check(parkedCall.length === 1 && parkedCall[0]?.command === "sleep 1800"
+      && parkedCall[0]?.description === "跨窗口的那个哨兵",
+      "⑧第一轮把那条悬着的调用连入参一起落了盘",
+      JSON.stringify(parkedCall.map((r) => [r.toolUseId, r.command, r.description])));
+    const seen = new Set<string>();
+    let rounds = 0;
+    for (; rounds < 12; rounds += 1) {
+      await squeeze();                                   // 配对状态（含内存里的 pending）丢掉
+      check(monitorScanTracked(f.taskId) === false, "⑧每一轮都确实被挤出了快照表");
+      await backfillClaudeMonitors(f.taskId);
+      for (const r of monitorRecoveryOf(f.taskId)?.reasons ?? []) seen.add(r);
+      if ((await listMonitors(f.taskId)).length) break;
+    }
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 1 && rows[0]?.nativeId === "bhang",
+      "⑧跨淘汰之后仍然成行（入参从未决表接回来的）",
+      `${rounds + 1} 轮后 ${rows.length} 条：${rows.map((r) => r.nativeId).join(",")}`);
+    check(rows[0]?.description === "跨窗口的那个哨兵" && rows[0]?.command === "sleep 1800",
+      "⑧而且入参是原样的（不是编的占位）", `${rows[0]?.command} / ${rows[0]?.description}`);
+    check(rows[0]?.status === "exited" && rows[0]?.timeoutMs === 90_000,
+      "⑧终态与来源说的时长都在", `${rows[0]?.status}/${rows[0]?.timeoutMs}`);
+    check(rounds + 1 <= 4, "⑧按窗口数收敛", `${rounds + 1} 轮`);
+    const left = await db.select().from(schema.monitorPendingCalls)
+      .where(eq(schema.monitorPendingCalls.taskId, f.taskId));
+    check(left.length === 0, "⑧配上之后未决表就销账了", left.map((r) => r.toolUseId).join(","));
+  }
+
   if (failures === 0) {
     console.log("✓ 内置 Monitor 的检查点：位置只停在可重放处（被跳过的调用会重放）/ "
       + "位置之前已成行的按 native_id 与 tool_use_id 配回去 / "
       + "配不上的当场裁决（位置照常前进）/ 每轮都被挤掉的固定输入按窗口数收敛 / "
       + "跳过前缀后新起的 run 仍把旧监听判死 / 迟到回执重建窄区间 / "
-      + "唯一裁不清的那种重放一遍就收手 均受回归保护");
+      + "唯一裁不清的那种重放一遍就收手 / "
+      + "起不来的调用不钉位置、跨窗口的调用靠落盘接回来 均受回归保护");
   }
 }
 

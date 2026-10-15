@@ -31,8 +31,13 @@
 //   **绝不从某个位置开始读，除非它之前的内容都「有归宿」** —— 要么这一代读过（还在内存里），
 //   要么已经成行落库（已提交）。
 //
-// 谁守：`parkCursors` 只停在 `safeOffsetOf`（不越过一条还悬着的调用）且上一轮确认提交过的
-// 位置，其余情况一律从 0 重读。
+// 谁守：`parkCursors` 只停在上一轮**确认提交过**的位置，其余情况一律从 0 重读；而「位置之前
+// 那条还悬着的调用」不靠位置来保，它**落盘**（`claude-monitor-pending.ts`）。
+//
+// 上一版是靠位置保的 —— 可重放位置绝不越过一条悬着的调用。那条路在**永远不会完结的调用**上
+// 失效：启动被拒（有 `is_error` 回执、没有 `task_started`）、进程在那一行之后被杀（连回执都
+// 没有），于是位置被永久钉在那儿，每轮重读同一个窗口，末尾的 Monitor 永远读不到（第 11 轮
+// 审查实测 12 轮停滞）。落盘之后位置只管单调往前，两件事各归各管。
 //
 // 这条不变量值钱，是因为来源侧的行序是**严格因果**的（实测用户那个任务的 17 个 run 文件：
 // `tool_use` → `task_started` 84/84 顺序、`task_started` → `tool_result` 12/12、
@@ -51,6 +56,7 @@ import { open as openFile, readdir, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { claudeMonitorStatus, parseMonitorStartReceipt, type MonitorLifetime } from "@ash/shared/monitor";
 import { monitorStr as str, parseMonitorInput, type MonitorCall } from "./claude-monitors.js";
+import type { ClearedCall, PendingCall } from "./claude-monitor-pending.js";
 
 /**
  * 单次调用的读取上限。超了这一轮就停在这儿，游标记着，下次接着读。
@@ -133,17 +139,24 @@ export type Found = {
 /** 一条会话的扫描状态。跨它的全部 run 文件、跨多次增量调用存活。 */
 type SessionScan = {
   /**
-   * tool_use_id → 入参 + 那条 assistant 事件的时刻（只作显示占位，见 Found.startedAtLow）
-   * + **这一行在文件里的位置**。
+   * tool_use_id → 入参 + 那条 assistant 事件的时刻（起点区间的下界，见 Found.startedAtLow）。
    *
-   * 位置是用来钉住可重放位置的：调用的入参（命令、说明）只存在于这一行，`task_started` 还没
-   * 读到就还没有行可落 —— 所以可重放位置绝不越过一条还悬着的调用（见 `safeOffsetOf`）。
+   * 入参只存在于 `tool_use` 那一行，而身份要等 `task_started` 才有，所以这段「悬着」的状态
+   * 必须活过读取窗口和内存上限 —— 它**落盘**（`claude-monitor-pending.ts`），新建会话桶时
+   * 从那里恢复。读取位置不再为它让路。
    */
-  pending: Map<string, { call: MonitorCall; at: string | null; path: string; offset: number }>;
+  pending: Map<string, { call: MonitorCall; at: string | null; sourceRun: string | null }>;
   byToolUse: Map<string, string>;
   found: Map<string, Found>;
-  /** 每个文件读到第几字节。**可重放位置不存**，由 `safeOffsetOf` 从它和 `pending` 现算。 */
+  /** 每个文件读到第几字节。单调往前，只被「这一轮没读完」挡住。 */
   cursors: Map<string, { size: number; offset: number }>;
+  /**
+   * 这一轮**完结掉**的调用：配上了 `task_started`（成了 `found` 里的一行），或者确证起不来。
+   *
+   * 提交确认之后交给 `claude-monitor-pending.ts` 销账。留在这儿而不是当场写库，是因为
+   * 「写库」这件事只有在**这一轮的事实确认落地**之后才算成立（见 `committedThrough`）。
+   */
+  cleared: ClearedCall[];
   /**
    * 这一轮读到、却配不上内存状态的一次性事实（见文件头的检查点说明）。
    *
@@ -222,51 +235,63 @@ export type TaskScan = {
    * `parked`）。新建会话桶时从这里取。
    */
   parkedCursors: Map<string, { size: number; offset: number }> | null;
+  /**
+   * 落盘的未决调用（见 `claude-monitor-pending.ts`），按 ash 会话分桶。
+   *
+   * 新建会话桶时倒进 `pending`：读取窗口切在 `tool_use` 和 `task_started` 之间、或者配对状态
+   * 被内存上限挤掉时，靠它把那条悬着的调用接回来，而不是靠把读取位置退回那一行。
+   */
+  restoredPending: Map<string, PendingCall[]> | null;
 };
 
 export const newTaskScan = (): TaskScan => ({
   sessions: new Map(), truncated: false, failed: false, foreign: new Set(),
   advanced: false, generationChanged: false, lateOverflow: false, parkedCursors: null,
+  restoredPending: null,
   committedThrough: true, runFiles: { all: new Set(), latest: new Set() },
 });
 
 const newSessionScan = (): SessionScan => ({
   pending: new Map(), byToolUse: new Map(), found: new Map(), cursors: new Map(),
-  late: [], skippedPrefix: false, lastAt: null,
+  cleared: [], late: [], skippedPrefix: false, lastAt: null,
 });
 
 /**
- * 这个文件的**可重放位置**：从它往后重读不会丢掉任何关联。
+ * 这份扫描状态该**停好的读取位置**（文件 → 读到哪儿）。
  *
- * 判据只剩一条 —— 不越过一条还悬着的调用（`pending`）：它的入参只在那一行上，而 `task_started`
- * 还没读到，所以还没有任何行可落。其余一次性事实都另有归宿：已经成行的在库里，配不上的当轮
- * 就被裁决掉（见文件头）。
+ * 给 claude-monitor-backfill.ts 的 `parked` 用：配对状态马上要被丢掉，位置照原样停住 ——
+ * 位置之前那段里**唯一**只存在于内存的东西是悬着的调用，而它已经落盘了（见文件头）。
  *
- * 上一版的判据是「三个缓冲全空」，而那些缓冲里装的恰恰是**可裁决**的事实：一条普通后台 Bash
- * 的迟到通知就能把位置永久钉死，固定输入永远读不完（第 10 轮审查实测 24 轮同点停滞）。
+ * 所以这里不再往回退。上一版退到「最后一个没有悬着关联的位置」，于是一条永远不会完结的调用
+ * 就把位置钉死，固定输入每轮重读同一个窗口（第 11 轮审查实测）。
  */
-export function safeOffsetOf(session: SessionScan, path: string): number {
-  let safe = session.cursors.get(path)?.offset ?? 0;
-  for (const item of session.pending.values()) {
-    if (item.path === path && item.offset < safe) safe = item.offset;
+export function parkableCursors(scan: TaskScan): Map<string, { size: number; offset: number }> {
+  const out = new Map<string, { size: number; offset: number }>();
+  for (const session of scan.sessions.values()) {
+    for (const [path, cursor] of session.cursors) out.set(path, { ...cursor });
   }
-  return safe;
+  return out;
 }
 
-/**
- * 这份扫描状态该**停好的读取位置**（文件 → 位置 + 它这一轮实际读到哪儿）。
- *
- * 给 claude-monitor-backfill.ts 的 `parked` 用：配对状态马上要被丢掉，位置得停在可重放处，
- * 而「退回去」这件事本身不算进展（`read > offset` 就是退回了，调用方据此不给退避预算记功）。
- */
-export function parkableCursors(scan: TaskScan): Map<string, { size: number; offset: number; read: number }> {
-  const out = new Map<string, { size: number; offset: number; read: number }>();
-  for (const session of scan.sessions.values()) {
-    for (const [path, cursor] of session.cursors) {
-      out.set(path, { size: cursor.size, offset: safeOffsetOf(session, path), read: cursor.offset });
+/** 这一轮还悬着的调用（落盘用，见 `claude-monitor-pending.ts`）。 */
+export function pendingCallsOf(scan: TaskScan): PendingCall[] {
+  const out: PendingCall[] = [];
+  for (const [sessionKey, session] of scan.sessions) {
+    for (const [toolUseId, item] of session.pending) {
+      out.push({ sessionKey, toolUseId, call: item.call, at: item.at, sourceRun: item.sourceRun });
     }
   }
   return out;
+}
+
+/** 这一轮完结掉的调用（销账用，见 `SessionScan.cleared`）。 */
+export function clearedCallsOf(scan: TaskScan): ClearedCall[] {
+  return [...scan.sessions].flatMap(([, session]) => session.cleared);
+}
+
+/** 销账落地之后清空账页（没落地就留着，下一轮再销一次）。 */
+export function clearPendingLedger(scan: TaskScan): void {
+  for (const session of scan.sessions.values()) session.cleared.length = 0;
 }
 
 /**
@@ -309,12 +334,8 @@ export function timestampOf(fileName: string): string | null {
  */
 async function eachLine(
   path: string, start: number, maxBytes: number,
-  /**
-   * 返回 false = **这一行没消费掉**，就停在它前面（游标不越过它）。
-   *
-   * 第二个参数是这一行在文件里的起点，用来钉住可重放位置（见 `safeOffsetOf`）。
-   */
-  onLine: (line: string, offsetBefore: number) => boolean,
+  /** 返回 false = **这一行没消费掉**，就停在它前面（游标不越过它）。 */
+  onLine: (line: string) => boolean,
 ): Promise<{ nextOffset: number; truncated: boolean; stopped: boolean }> {
   const fh = await openFile(path, "r");
   try {
@@ -335,7 +356,7 @@ async function eachLine(
         const nl = data.indexOf(0x0a, from);
         if (nl < 0) break;
         const lineStart = from;
-        const keepGoing = onLine(data.subarray(from, nl).toString("utf8"), base + lineStart);
+        const keepGoing = onLine(data.subarray(from, nl).toString("utf8"));
         // **消费不了就把游标停在这一行之前**，下一轮从它重新开始。越过去就等于丢掉一条
         // 来源不会重发的事实（见 `LATE_CAP` 的背压说明）。
         if (!keepGoing) return { nextOffset: base + lineStart, truncated: false, stopped: true };
@@ -376,6 +397,11 @@ export async function scanSession(
   if (!session) {
     session = newSessionScan();
     scan.sessions.set(sessionId, session);
+    // 悬着的调用从库里接回来（见 TaskScan.restoredPending）：读取窗口切在 `tool_use` 和
+    // `task_started` 之间、或者上一份快照被内存上限挤掉时，靠这一步续上，位置不必回退。
+    for (const item of scan.restoredPending?.get(sessionId) ?? []) {
+      session.pending.set(item.toolUseId, { call: item.call, at: item.at, sourceRun: item.sourceRun });
+    }
   }
   const files = await streamFilesOf(sessionId, outPath);
   // 文件清单本身就是「代次」这件事的权威依据（见 TaskScan.runFiles）：它和行上的 `source_run`
@@ -427,8 +453,8 @@ export async function scanSession(
       continue;
     }
 
-    const sink = (line: string, offsetBefore: number) =>
-      consume(scan, session!, line, offsetBefore, cliSessionId, file.startedAt, file.path, sessionId);
+    const sink = (line: string) =>
+      consume(scan, session!, line, cliSessionId, file.startedAt, file.path, sessionId);
     try {
       const { nextOffset, truncated, stopped } = await eachLine(file.path, cursor.offset, maxBytes, sink);
       if (nextOffset > cursor.offset) {
@@ -464,8 +490,6 @@ const lateFull = (session: SessionScan): boolean => session.late.length >= LATE_
 /** 一行 stream-json。认人判据见 `scanSession` 的说明。 */
 function consume(
   scan: TaskScan, session: SessionScan, line: string,
-  /** 这一行在文件里的起点（钉可重放位置用，见 `safeOffsetOf`）。 */
-  offsetBefore: number,
   expectSessionId: string | null, fileStartedAt: string | null, filePath: string,
   /** 读到它的那条 ash 会话（迟到事实销账要按会话分区，见 `LateFact.sessionKey`）。 */
   sessionKey: string,
@@ -492,9 +516,9 @@ function consume(
     if (!block || typeof block !== "object") continue;
     if (block.type === "tool_use" && str(block.name) === "Monitor") {
       const call = parseMonitorInput(block.input);
-      // 位置一起记下：入参只在这一行上，可重放位置不许越过它（见 `safeOffsetOf`）。
+      // 入参只在这一行上，所以这条「悬着的调用」要落盘（见 `SessionScan.pending`）。
       if (call && str(block.id)) {
-        session.pending.set(str(block.id), { call, at, path: filePath, offset: offsetBefore });
+        session.pending.set(str(block.id), { call, at, sourceRun: filePath });
       }
     } else if (block.type === "tool_result") {
       const toolUseId = str(block.tool_use_id);
@@ -505,6 +529,21 @@ function consume(
           : "";
       const nativeId = session.byToolUse.get(toolUseId);
       const row = nativeId ? session.found.get(nativeId) : undefined;
+      // ── 回执配得上一条**还悬着的调用**、而它自己又没说「起成了」 ⇒ 这次调用没起来 ──
+      //
+      // 行序是严格因果的（见文件头）：起成了的 Monitor 一定先有 `task_started`，那时这条调用
+      // 就从 `pending` 里挪走了。所以回执还能在 `pending` 里找到它，只有一种解释 —— 它压根
+      // 没起来（启动被拒、入参校验失败、起之前被取消）。当场完结，别让它永远悬着。
+      //
+      // **判据不是回执里的错误文案**（换一句措辞就漏一类，第 11 轮审查点名），而是两件事的
+      // 合取：配不上 `task_started`，且这条回执自己不是一份**起手回执**（`parseMonitorStart‑
+      // Receipt` 认不出期限 ⇒ 它没说「盯到 X」）。认得出的那种留给提交层去配已提交的行 ——
+      // 那是配对状态被挤掉之后的正常情形，不是失败。
+      if (!row && toolUseId && parseMonitorStartReceipt(raw).lifetime === "unknown"
+        && session.pending.delete(toolUseId)) {
+        session.cleared.push({ sessionKey, toolUseId });
+        continue;
+      }
       if (!row) {
         // 配不上内存状态：**交给提交层裁决**（库里有那一行就配回去，没有就是与我们无关）。
         // 普通后台 Bash 的回执写的是 "Running in background"，连交的必要都没有。
@@ -526,11 +565,13 @@ function consume(
   if (ev.subtype === "task_started") {
     const started = session.pending.get(str(ev.tool_use_id));
     // **配不上 = 它不是 Monitor 起的。** 行序是严格因果的（见文件头），而一条还悬着的
-    // Monitor 调用会把可重放位置钉在它之前 —— 所以「这一行的调用我们没见过」只有一种解释：
-    // 那个工具不是 Monitor。于是不必再维护「这个 id 不是 Monitor」的结论集合（那是一张会被
-    // 容量淘汰的内存表，淘汰之后它的通知就退成永远配不上的孤儿）。
+    // Monitor 调用一定在手上（内存里，或者从 `monitor_pending_calls` 接回来的）—— 所以
+    // 「这一行的调用我们没见过」只有一种解释：那个工具不是 Monitor。于是不必再维护「这个 id
+    // 不是 Monitor」的结论集合（那是一张会被容量淘汰的内存表，淘汰之后它的通知就退成永远
+    // 配不上的孤儿）。
     if (!started || !nativeId) return true;
     session.pending.delete(str(ev.tool_use_id));
+    session.cleared.push({ sessionKey, toolUseId: str(ev.tool_use_id) });
     session.byToolUse.set(str(ev.tool_use_id), nativeId);
     session.found.set(nativeId, {
       nativeId, call: started.call, toolUseId: str(ev.tool_use_id),

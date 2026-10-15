@@ -139,6 +139,12 @@ export async function ensureSchema() {
       source_run TEXT, start_low_at TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
+    CREATE TABLE IF NOT EXISTS monitor_pending_calls (
+      task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+      command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      at TEXT, source_run TEXT,
+      PRIMARY KEY (task_id, session_key, tool_use_id)
+    );
     CREATE TABLE IF NOT EXISTS llm_providers (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
       protocol TEXT NOT NULL DEFAULT 'openai', base_url TEXT NOT NULL,

@@ -98,3 +98,34 @@ export const monitors = sqliteTable("monitors", {
   // expires_at 不可信,但这一列仍然能告诉用户「盯 90 秒」。
   timeoutMs: integer("timeout_ms"),
 });
+
+// ── 还没配上 `task_started` 的 Monitor 调用 ────────────────────────────────────
+//
+// 一条内置 Monitor 的**入参只存在于 `tool_use` 那一行**（命令、说明），而它的身份
+// (`task_id`) 要等下一行 `task_started` 才有 —— 中间这段「悬着」的状态必须活过：
+//
+// ① **读取窗口切在两行之间**（单次 128 MiB 上限），下一轮才读到 `task_started`；
+// ② **扫描快照被内存上限挤掉**（claude-monitor-backfill.ts 的 `SNAPSHOT_HARD_CAP`）。
+//
+// 上一版把它放在内存里，靠「读取位置绝不越过一条还悬着的调用」来保证能重放那一行。那个
+// 办法在**调用根本不会有 `task_started`** 时失效：启动被拒（`is_error` 回执）、进程在回合
+// 中途被杀（连回执都没有），于是位置被永久钉在那一行之前，每轮重读同一个窗口、末尾的
+// Monitor 永远读不到（第 11 轮审查实测 12 轮停滞；第 8～10 轮是同一类的前几个实例）。
+//
+// 所以改成**落盘**：位置只管单调往前，悬着的调用由这张表独立恢复。配上 `task_started`
+// （成了 `monitors` 里的一行）或者确证起不来（回执配不上 `task_started`）就删掉。
+//
+// 行数天然有界：每条 Monitor 调用在同一回合内必有 `task_started` 或回执，真正长期悬着的
+// 只有「进程在那一行之后被杀」这一种，每个 run 文件至多一条。
+export const monitorPendingCalls = sqliteTable("monitor_pending_calls", {
+  taskId: text("task_id").notNull(),
+  /** 读到它的那条 **ash 会话** id（`pending` 按会话分区，见 shared/monitor.ts 的身份作用域）。 */
+  sessionKey: text("session_key").notNull(),
+  toolUseId: text("tool_use_id").notNull(),
+  command: text("command").notNull(),
+  description: text("description").notNull().default(""),
+  /** 那条 assistant 事件的时刻 = 起点区间的下界（见 monitors.start_low_at）。 */
+  at: text("at"),
+  /** 在哪个 run 文件里读到的。只作诊断。 */
+  sourceRun: text("source_run"),
+});

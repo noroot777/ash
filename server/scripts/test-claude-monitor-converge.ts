@@ -160,12 +160,15 @@ async function main(): Promise<void> {
     check(cursor1.offset < body.length,
       "②游标停在那条还没消费的事实之前（没读到文件尾）", `${cursor1.offset}/${body.length}`);
     check(first.late.length === 512, "②通道停在上限上，没有挤掉任何一条", String(first.late.length));
-    // 这 600 条调用都还悬着（`task_started` 永远不来），所以**可重放位置不许越过第一条**：
-    // 入参只在那一行上，越过去这些 Monitor 就再也认不出来了。
+    // 这 600 条调用都还悬着（`task_started` 永远不来）。**位置不为它们让路**：入参由
+    // `monitor_pending_calls` 保着（见 claude-monitor-pending.ts）。让路的那一版会被一条
+    // 永远不会完结的调用把位置钉死（第 11 轮审查实测 12 轮停滞）。
     const park = scan.parkableCursors(scanState).get(f.file)!;
-    check(park.offset < cursor1.offset && park.offset > 0,
-      "②可重放位置停在第一条还悬着的调用之前（不是「读到哪儿」）",
-      `停好 ${park.offset} / 读到 ${park.read}`);
+    check(park.offset === cursor1.offset, "②停好的位置就是读到的位置（不往回退）",
+      `停好 ${park.offset} / 读到 ${cursor1.offset}`);
+    check(scan.pendingCallsOf(scanState).length >= 512,
+      "②而那些悬着的调用交出来落盘了（位置不回退的前提）",
+      String(scan.pendingCallsOf(scanState).length));
 
     // 再扫一轮：通道还是满的 → 停在同一个位置，**不重读前缀**。
     scanState.advanced = false;
@@ -182,6 +185,11 @@ async function main(): Promise<void> {
     check(monitorScanTracked(f.taskId) === true, "②游标留着（没被丢掉从零重读）");
     check((await listMonitors(f.taskId)).length === 0,
       "②一条错误的行都没写出去（没有凭空出现的 unknown 卡）");
+    const parkedCalls = await db.select().from(schema.monitorPendingCalls)
+      .where(eq(schema.monitorPendingCalls.taskId, f.taskId));
+    check(parkedCalls.length > 0 && parkedCalls.every((r) => !!r.command),
+      "②回填这一侧把悬着的调用连入参一起落了盘（下一轮不靠重读那一行）",
+      `${parkedCalls.length} 条`);
   }
 
   // ── ③ 第一次归属查询就失败：责任挂在会话身份上，库好了自己补出来 ───────────────

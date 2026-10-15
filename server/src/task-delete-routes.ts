@@ -8,7 +8,7 @@ import type { TaskWorkspaceDiscardResult } from "@ash/shared";
 import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
+import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
 import { stopMonitorsForTask } from "./monitors.js";
 import { deleteTaskSideChats } from "./chat/lifecycle.js";
 import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
@@ -42,6 +42,9 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
   // 跑到机器重启为止 —— 这是整个功能最容易留下的垃圾(进程本来就是故意脱离 ash 的)。
   await stopMonitorsForTask(taskId, "任务已删除").catch(() => {});
   await db.delete(monitors).where(eq(monitors.taskId, taskId));
+  // 还没配上 `task_started` 的那几条调用（见 claude-monitor-pending.ts）：任务都删了，
+  // 它们再也不会被配上，留下就是没有任何入口能清的孤儿行。
+  await db.delete(monitorPendingCalls).where(eq(monitorPendingCalls.taskId, taskId));
   await db.delete(teamInbound).where(eq(teamInbound.taskId, taskId)); // 调度台还没送出的入站消息
   await db.delete(noteTasks).where(eq(noteTasks.taskId, taskId));
   // 会话行、定时计划、队列位也一起收：孤儿 cron 每个 tick 都会被扫到再查不到任务，

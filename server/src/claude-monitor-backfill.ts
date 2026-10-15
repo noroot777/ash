@@ -31,9 +31,10 @@ import {
   resetMonitorRecoveryBudget,
 } from "./claude-monitor-recovery.js";
 import { commitRound } from "./claude-monitor-commit.js";
+import { loadPendingCalls, syncPendingCalls } from "./claude-monitor-pending.js";
 import {
-  clearLateFacts, foundOf, lateFactsOf, newTaskScan, parkableCursors, scanSession,
-  type LateFact, type TaskScan,
+  clearedCallsOf, clearLateFacts, clearPendingLedger, foundOf, lateFactsOf, newTaskScan,
+  parkableCursors, pendingCallsOf, scanSession, type LateFact, type TaskScan,
 } from "./claude-monitor-scan.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, sessions } from "./db/schema.js";
@@ -99,7 +100,13 @@ function rememberScan(taskId: string, scan: TaskScan): void {
   for (const key of [...snapshots.keys()]) {
     if (snapshots.size <= SNAPSHOT_CAP) return;
     if (key === taskId || protectedTasks.has(key)) continue; // 还没读完的不动
+    const victim = snapshots.get(key);
     snapshots.delete(key);
+    // **位置也要停好**，跟硬上限那一支一个待遇（第 11 轮审查的类问题）。读完一个任务的历史
+    // 之后它就不再受保护，于是常规淘汰把位置一起扔掉 —— 下一次打开它又从 0 读起，几百 MB
+    // 的历史得重走一遍 128 MiB 的阶梯（实测：销账之后每隔几轮又报一次 scan-unfinished，
+    // 位置在 0 和 EOF 之间来回）。位置只有几十字节，没有任何理由跟着配对状态一起丢。
+    if (victim) parkCursors(key, victim);
   }
   // 全都在恢复中：按硬上限兜底，但**位置要停好**（只丢可重建的那部分）。
   while (snapshots.size > SNAPSHOT_HARD_CAP) {
@@ -116,13 +123,12 @@ function rememberScan(taskId: string, scan: TaskScan): void {
 /**
  * 把一份快照里的读取位置抠出来留着（见 `parked`）。
  *
- * **停的是「可重放位置」而不是「读到哪儿」**（第 9 轮审查的类问题）：配对状态马上就要被
- * 丢掉，而 `offset` 之前那段前缀里建立的关联只在内存里。`cursor.safe` 是那条会话最后一次
- * 「没有任何悬着的关联」的位置，从它往后重放不会丢关联（见 claude-monitor-scan.ts 的
- * `cursors` 说明）。
+ * **位置照原样停住、不往回退**：位置之前那段里唯一只存在于内存的东西是「还悬着的调用」，
+ * 而它已经落盘了（`claude-monitor-pending.ts`），下一轮新建会话桶时接回来。
  *
- * 往回退这件事本身**不算进展**：下一轮会重读 `safe → offset` 这一段，拿它当进展就会把退避
- * 预算清零（同第 8 轮那条对称错误，见 `rewound`）。
+ * 上一版停的是「最后一个没有悬着关联的位置」。那条路在**永远不会完结的调用**上会把位置钉死
+ * ——启动被拒、进程在那一行之后被杀 —— 于是每轮重读同一个窗口，末尾的 Monitor 永远读不到
+ * （第 11 轮审查实测 12 轮停滞；回退这件事本身也不算进展，见 `rewound`）。
  */
 function parkCursors(taskId: string, scan: TaskScan): void {
   // **没确认提交过就不许停在半路**（检查点不变量，见 claude-monitor-scan.ts 文件头）：这一轮
@@ -133,14 +139,8 @@ function parkCursors(taskId: string, scan: TaskScan): void {
   // 里），它是这条不变量的**硬闸**：留着是为了下一次改动绕不过去，不是因为有哪条回归打在它
   // 身上。
   if (!scan.committedThrough) { discardScan(taskId); return; }
-  const cursors = new Map<string, { size: number; offset: number }>();
-  let rolledBack = false;
-  for (const [path, cursor] of parkableCursors(scan)) {
-    cursors.set(path, { size: cursor.size, offset: cursor.offset });
-    if (cursor.offset < cursor.read) rolledBack = true;
-  }
+  const cursors = parkableCursors(scan);
   if (!cursors.size) return;
-  if (rolledBack) rewound.add(taskId);
   parked.delete(taskId);
   parked.set(taskId, cursors);
   while (parked.size > PARKED_CAP) {
@@ -234,6 +234,10 @@ async function runBackfill(taskId: string): Promise<number> {
     scan.lateOverflow = false;
 
     scan.runFiles = { all: new Set(), latest: new Set() };
+    // 悬着的调用（读到了 `tool_use`、还没配上 `task_started`）每轮都取一次：快照可能刚被内存
+    // 上限挤掉，也可能这是第一次读这个任务。只给**新建的会话桶**倒进去，复用的桶里那份才是
+    // 权威（它可能已经比库里新）。
+    scan.restoredPending = await loadPendingCalls(taskId);
     for (const session of rows) {
       if (!session.outPath) continue;
       await scanSession(scan, session.id, session.cliSessionId, session.outPath);
@@ -296,6 +300,16 @@ async function runBackfill(taskId: string): Promise<number> {
     } else {
       // 一个新字节都没读、也没有迟到事实 ⇒ 这份状态消费过的内容还是上一轮那些，结论不变。
       scan.committedThrough = true;
+    }
+
+    // ── 未决调用落盘（检查点的第三半：位置、已提交的行，以及**还没成行的那一条**）────
+    //
+    // 顺序要紧：**只有确认提交之后才落**。没提交的那几条路会回退位置、把那些行重新读一遍，
+    // 这时落盘只是留下一份马上又会被重建的拷贝。反过来，位置之所以可以不回退，正是因为这一
+    // 步成立（见 parkCursors）。
+    if (scan.committedThrough) {
+      await syncPendingCalls(taskId, pendingCallsOf(scan), clearedCallsOf(scan));
+      clearPendingLedger(scan);
     }
 
     // ── 销账前最后一问：**还有裁不清的一次性事实吗** ─────────────────────────────
