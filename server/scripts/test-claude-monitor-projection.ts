@@ -18,7 +18,7 @@ import { inspectProcess } from "../src/proc.js";
 import { and, eq } from "drizzle-orm";
 
 const { stopMonitorChecked, readMonitorTail } = await import("../src/monitors.js");
-const { loseDeadClaudeMonitors } = await import("../src/claude-monitors.js");
+const { loseDeadClaudeMonitors } = await import("../src/claude-monitor-startup.js");
 
 let failures = 0;
 const check = (ok: boolean, label: string, detail = "") => {

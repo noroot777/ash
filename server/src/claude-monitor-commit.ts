@@ -38,10 +38,10 @@ import {
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
-import { matchBySource } from "./claude-monitor-identity.js";
+import { matchBySource, type SourceEvidence } from "./claude-monitor-identity.js";
 import type { Found, LateFact } from "./claude-monitor-scan.js";
 import { db } from "./db/index.js";
-import { monitors } from "./db/schema.js";
+import { monitors, sessions } from "./db/schema.js";
 import { id, now } from "./util.js";
 
 /**
@@ -99,8 +99,8 @@ type RowIndex = {
 };
 
 /** 同一个 id 底下有多行时挑哪一行：判据在 `claude-monitor-identity.ts`，这里只是转一手。 */
-const pick = (rows: PriorRow[] | undefined, cliSessionId: string | null): PriorRow | undefined =>
-  matchBySource(rows ?? [], cliSessionId);
+const pick = (rows: PriorRow[] | undefined, evidence: SourceEvidence): PriorRow | undefined =>
+  matchBySource(rows ?? [], evidence);
 
 function indexRows(rows: PriorRow[]): RowIndex {
   const index: RowIndex = { byNative: new Map(), byToolUse: new Map(), anyMissingToolUse: false };
@@ -164,6 +164,15 @@ export async function commitRound(
     .from(monitors)
     .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude"))));
 
+  // 来源全集：无归属的存量行（连 run 都没记）只有在「这个任务只有我这一条 claude 会话」时
+  // 才认得回来。问 `sessions` 而不是数投影行 —— 后者只是恢复进度（见 SourceEvidence）。
+  const claudeSessions = await db
+    .select({ cliSessionId: sessions.cliSessionId })
+    .from(sessions)
+    .where(and(eq(sessions.taskId, taskId), eq(sessions.agentType, "claude")));
+  const soleSourceOf = (mine: string | null): boolean =>
+    !!mine && claudeSessions.length === 1 && claudeSessions[0]!.cliSessionId === mine;
+
   const probe = createLivenessProbe();
   let added = 0;
   let corrected = 0;
@@ -181,7 +190,12 @@ export async function commitRound(
     const status = item.status ?? (alive ? "running" : "lost");
     const endedReason = item.endedReason
       ?? (item.status ? null : alive ? null : "历史记录里没有它的结局（那一轮的进程早已结束）");
-    const prior = pick(index.byNative.get(item.nativeId), item.cliSessionId);
+    // 证据跟着事实一起给：**这条事实是从哪个 run 文件读出来的**。存量行（没有归属）只能靠
+    // 它被认下来，证明不了就另起一行而不是改别人的（见 claude-monitor-identity.ts）。
+    const prior = pick(index.byNative.get(item.nativeId), {
+      cliSessionId: item.cliSessionId, sourceRun: item.filePath,
+      soleSource: soleSourceOf(item.cliSessionId),
+    });
 
     if (prior) {
       const merged = await mergeInto(prior, item, status, endedReason);
@@ -218,7 +232,7 @@ export async function commitRound(
     }
   }
 
-  const late2 = await applyLateFacts(taskId, late, index);
+  const late2 = await applyLateFacts(taskId, late, index, soleSourceOf);
   if (late2.missed) missed = true;
   return { added, missed, resolved: late2.resolved, undecidable: late2.undecidable };
 }
@@ -245,6 +259,7 @@ function addToIndex(index: RowIndex, row: PriorRow): void {
  */
 async function applyLateFacts(
   taskId: string, late: LateFact[], index: RowIndex,
+  soleSourceOf: (cliSessionId: string | null) => boolean,
 ): Promise<{ resolved: LateFact[]; undecidable: LateFact[]; missed: boolean }> {
   if (!late.length) return { resolved: [], undecidable: [], missed: false };
 
@@ -252,9 +267,15 @@ async function applyLateFacts(
   const undecidable: LateFact[] = [];
   let missed = false;
   for (const fact of late) {
+    // 迟到事实也带着它的 run 文件（`fact.sourceRun`）：无归属的行照样要有证据才认得下来，
+    // 配不上就留着 —— 回执那一支有 `undecidable` 的重放路把它带回来。
+    const evidence = {
+      cliSessionId: fact.cliSessionId, sourceRun: fact.sourceRun,
+      soleSource: soleSourceOf(fact.cliSessionId),
+    };
     const prior = fact.kind === "receipt"
-      ? pick(index.byToolUse.get(fact.toolUseId), fact.cliSessionId)
-      : pick(index.byNative.get(fact.nativeId), fact.cliSessionId);
+      ? pick(index.byToolUse.get(fact.toolUseId), evidence)
+      : pick(index.byNative.get(fact.nativeId), evidence);
     if (!prior || !prior.nativeId) {
       // 只有「这一代跳过过前缀」才值得回头重放：没跳过就说明它之前的内容这一代全读过了，
       // 再读一遍还是配不上 —— 那时必须断定并丢掉，否则就是无限重读（见扫描层的
@@ -399,8 +420,8 @@ async function mergeInto(
   prior: PriorRow, item: Found, status: string, endedReason: string | null,
 ): Promise<{ changed: boolean; missed: boolean }> {
   const meta: Record<string, unknown> = {};
-  // 认领归属：能走到这儿说明这条无归属的行是**唯一候选**（`matchBySource` 的规矩②），
-  // 认领因此有唯一证据背书；说不清是谁的那些行根本挑不出来，也就谈不上认领。
+  // 认领归属：能走到这儿说明这条无归属的行**被证明是我的**（`matchBySource` 的规矩②：
+  // 同一个 run 文件），认领因此有证据背书；证明不了的那些行根本挑不出来。
   if (!prior.cliSessionId && item.cliSessionId) meta.cliSessionId = item.cliSessionId;
   // 存量行（升级前写的、以及实时投影在这一列存在之前落的）要顺手补上：缺了它，这一行
   // 在配对状态被挤掉之后就配不回自己的起手回执（见文件头的检查点说明）。

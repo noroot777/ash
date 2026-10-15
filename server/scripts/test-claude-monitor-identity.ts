@@ -7,7 +7,9 @@
 //
 // 这份测试盯两件事：
 // ① 销账要有同来源的证据，证明不了就留着未决责任（`loadPendingCalls`）；
-// ② 认行同理：说不清是谁的那一行不许被另一条会话认走（`matchBySource`，实时与历史共用）。
+// ② 认行同理：无归属的那一行要有**可重验的同来源证据**才认得下来（`matchBySource`，实时与
+//    历史共用）。「库里只有这一行」不算证据 —— 那只说明恢复进度走到哪儿了，不说明别的会话
+//    没有同号监听（第 5 轮审查 N2）。
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -104,31 +106,91 @@ async function main(): Promise<void> {
     check(left.length === 0, "①(b) 而且是就地清掉，不会越积越多", `${left.length} 行`);
   }
 
-  // ── ② 认行：唯一候选才认，说不清是谁的不认 ──────────────────────────────────
+  // ── ② 认行：要有可重验的同来源证据（第 5 轮审查 N2）─────────────────────────
   //
-  // 四个认行的地方（实时 locate、open 的重复判定、历史 pick、销账）现在共用这一个判据，
-  // 所以这里直接打在判据本身上。
+  // 四个认行的地方（实时 locate、open 的重复判定、历史 pick、迟到事实）现在共用这一个判据，
+  // 所以这里直接打在判据本身上。证据只有一样：**同一个 run 文件**（文件名带会话 id，一个
+  // 文件只由一次进程启动写出）。「库里只有这一行」不是证据 —— 那只是恢复进度。
   {
-    const legacy = { id: "m-legacy", cliSessionId: null };
-    const mine = { id: "m-mine", cliSessionId: "cli-b" };
-    const other = { id: "m-other", cliSessionId: "cli-a" };
-    check(matchBySource([mine, legacy], "cli-b")?.id === "m-mine", "②同来源优先");
-    check(matchBySource([legacy], "cli-b")?.id === "m-legacy",
-      "②唯一候选且它没有归属 ⇒ 认（存量行的升级路径）");
-    check(matchBySource([legacy, other], "cli-b") === undefined,
-      "②还有别的候选时，那条空归属的行说不清是谁的 ⇒ 不认",
-      JSON.stringify(matchBySource([legacy, other], "cli-b")));
-    check(matchBySource([other], "cli-b") === undefined, "②别人的行一律不认");
-    check(matchBySource([legacy], null)?.id === "m-legacy", "②两边都不知道时按「都不知道」对上");
-    check(matchBySource([], "cli-b") === undefined, "②没有候选就是没有");
+    const runA = join(root, "runs", "s-a-20261015T000000000Z.agent-out.jsonl");
+    const runB = join(root, "runs", "s-b-20261015T010000000Z.agent-out.jsonl");
+    const legacy = { id: "m-legacy", cliSessionId: null, sourceRun: runA };
+    const mine = { id: "m-mine", cliSessionId: "cli-b", sourceRun: runB };
+    const other = { id: "m-other", cliSessionId: "cli-a", sourceRun: runA };
+    const mineOf = (sourceRun: string) => ({ cliSessionId: "cli-b", sourceRun });
+    check(matchBySource([mine, legacy], mineOf(runB))?.id === "m-mine", "②同来源优先");
+    check(matchBySource([legacy], mineOf(runB)) === undefined,
+      "②唯一候选不是证据：甲的无归属旧行不许被乙认走",
+      JSON.stringify(matchBySource([legacy], mineOf(runB))));
+    check(matchBySource([legacy], mineOf(runA))?.id === "m-legacy",
+      "②同一个 run 文件 ⇒ 认（存量行的升级路径仍在）");
+    check(matchBySource([legacy, other], mineOf(runB)) === undefined,
+      "②还有别的候选时同样要证据，没有就不认",
+      JSON.stringify(matchBySource([legacy, other], mineOf(runB))));
+    check(matchBySource([other], mineOf(runA)) === undefined,
+      "②别人的行一律不认（run 对上也不行：它的归属跟我矛盾）");
+    check(matchBySource([legacy], { cliSessionId: null, sourceRun: "" }) === undefined,
+      "②两边都不知道也不是证据（两个未知不等于同一个来源）");
+    check(matchBySource([legacy], { cliSessionId: null, sourceRun: runA })?.id === "m-legacy",
+      "②连自己是谁都不知道时，run 对得上照样认");
+    check(matchBySource([], mineOf(runB)) === undefined, "②没有候选就是没有");
+    // 另一条证据：**来源全集**里只有我（来自 `sessions`，不是投影库里的行数）。升级前落下的
+    // 那些行连 run 都没记，这是它们唯一还能被认回来的依据（第 3 轮审查：不认 = 永远 running）。
+    const old = { id: "m-old", cliSessionId: null, sourceRun: null };
+    check(matchBySource([old], { ...mineOf(runB), soleSource: true })?.id === "m-old",
+      "②来源全集里只有我 ⇒ 无归属的行就是我的（存量行不至于永远 running）");
+    check(matchBySource([old], mineOf(runB)) === undefined,
+      "②同一行，没有来源全集这个前提就不认");
+    check(matchBySource([other], { ...mineOf(runB), soleSource: true }) === undefined,
+      "②全集只有我也只管无归属的行，别人署名的照样不认");
+  }
+
+  // ── ②(b) 落到行为上：乙另起一行，甲那张卡一个字不动 ────────────────────────────
+  //
+  // 判据改在共享层，但毁掉的是两张卡，所以反例要打在库上：甲的无归属旧投影是库里**唯一**
+  // 的同号候选，乙读到自己的同号监听时，不许认走它（认走 = 甲的卡被乙的终态改写、乙自己
+  // 那张再也插不进来）。
+  {
+    const taskId = "t-claim";
+    const runJia = join(root, "runs", "s-jia-20261014T000000000Z.agent-out.jsonl");
+    const runYi = join(root, "runs", "s-yi-20261015T020000000Z.agent-out.jsonl");
+    await db.insert(tasks).values({ id: taskId, projectId: "p", title: "t", body: "", status: "running",
+      agentType: "claude", mode: "single", createdAt: now(), updatedAt: now() });
+    // 两条来源都在：所以「来源全集里只有我」这条路也不成立，甲那一行谁都证明不了是自己的。
+    for (const [sid, cli, out] of [["s-jia", "cli-jia", runJia], ["s-yi", "cli-yi", runYi]]) {
+      await db.insert(sessions).values({
+        id: sid!, taskId, role: "single", agentType: "claude", executor: "claude@x",
+        cliSessionId: cli!, cwd: root, startedAt: now(), agentOutPath: out!,
+      });
+    }
+    await db.insert(monitors).values({
+      id: "m-jia", taskId, command: "tail -f jia.log", description: "甲的旧投影", cwd: root,
+      status: "running", pid: null, pidStartedAt: null, logPath: "", offset: 0, events: 0,
+      exitCode: null, startedAt: now(), expiresAt: now(), endedAt: null, endedReason: null,
+      ownerUserId: null, kind: "claude", nativeId: "bshared", cliSessionId: null,
+      toolUseId: null, sourceLifetime: "unknown", sourceRun: runJia,
+    });
+    const { commitRound } = await import("../src/claude-monitor-commit.js");
+    const outcome = await commitRound(taskId, [{
+      nativeId: "bshared", toolUseId: "tu-yi", call: { command: "tail -f yi.log", description: "乙的监听" },
+      cliSessionId: "cli-yi", startedAtLow: now(), startedAtHigh: null, fileStartedAt: now(),
+      endedAt: now(), lifetime: "unknown", expiresMs: null,
+      status: "completed", endedReason: null, filePath: runYi, staleRun: false,
+    }], [], () => {});
+    check(outcome.added === 1, "②(b) 乙另起一行（没有认走甲的）", `added=${outcome.added}`);
+    const jia = (await db.select().from(monitors).where(eq(monitors.id, "m-jia"))).at(0);
+    check(jia?.status === "running" && jia?.cliSessionId === null && jia?.toolUseId === null,
+      "②(b) 甲那张卡一个字没动",
+      `${jia?.status} / ${jia?.cliSessionId} / ${jia?.toolUseId}`);
+    check((await listMonitors(taskId)).length === 2, "②(b) 两张卡并存，各是各的");
   }
 
   // 收尾：库里那两条任务的卡各是各的（没被上面的判据串掉）。
   check((await listMonitors("t-settle")).length === 1, "③甲的旧投影自己那张卡还在");
 
   if (failures === 0) {
-    console.log("✓ 内置 Monitor 的归属判据：空归属不当通配符（销账要同来源证据、认行要唯一候选）"
-      + " / 同来源照常销账 / 存量行的升级路径仍在 均受回归保护");
+    console.log("✓ 内置 Monitor 的归属判据：空归属不当通配符（销账与认行都要可重验的同来源证据）"
+      + " / 同来源照常销账 / 存量行按 run 文件升级 / 认不下来就另起一行 均受回归保护");
   }
   process.exit(failures ? 1 : 0);
 }

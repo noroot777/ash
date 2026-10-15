@@ -550,7 +550,8 @@ function consume(
           if (lateFull(session)) return false; // 背压，见 `LATE_CAP`
           session.late.push({
             kind: "receipt", toolUseId, raw, at,
-            sessionKey, cliSessionId: owner, skippedPrefix: session.skippedPrefix,
+            sessionKey, cliSessionId: owner, sourceRun: filePath,
+            skippedPrefix: session.skippedPrefix,
           });
         }
         continue;
@@ -591,7 +592,8 @@ function consume(
       if (lateFull(session)) return false; // 背压，见 `LATE_CAP`
       session.late.push({
         kind: "notice", nativeId, status: claudeMonitorStatus(ev.status), summary: str(ev.summary),
-        at: session.lastAt, sessionKey, cliSessionId: owner, skippedPrefix: session.skippedPrefix,
+        at: session.lastAt, sessionKey, cliSessionId: owner, sourceRun: filePath,
+        skippedPrefix: session.skippedPrefix,
       });
       return true;
     }
@@ -639,6 +641,8 @@ export type LateFact = {
   sessionKey: string;
   /** 它所属的 CLI 会话身份（= `sessions.cli_session_id`）。配行时按它分区。 */
   cliSessionId: string | null;
+  /** 读到它的那个 run 文件。**无归属的行只能靠它被认下来**（见 claude-monitor-identity.ts）。 */
+  sourceRun: string;
   /** 读到它的那一代扫描跳过过前缀吗（见 `SessionScan.skippedPrefix`）。 */
   skippedPrefix: boolean;
 } & (

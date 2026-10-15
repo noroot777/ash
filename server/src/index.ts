@@ -177,7 +177,7 @@ async function initializeServer() {
       console.log(`[ash] 内置 Monitor 孤儿清扫：投影 ${orphans.monitors} 个任务，`
         + `未决 ${orphans.pending} 个，位置 ${orphans.cursors} 个`);
     }
-    const { loseDeadClaudeMonitors } = await import("./claude-monitors.js");
+    const { loseDeadClaudeMonitors } = await import("./claude-monitor-startup.js");
     const claudeMonitorSweep = await loseDeadClaudeMonitors().catch((err) => {
       console.error("[ash] 内置 Monitor 投影收尾失败（不影响启动）:", err);
       return { kept: 0, lost: 0 };

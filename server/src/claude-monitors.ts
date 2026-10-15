@@ -38,7 +38,6 @@ import {
   monitorStatusCorrectable, parseMonitorStartReceipt, type MonitorLifetime,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
-import { createLivenessProbe } from "./claude-monitor-liveness.js";
 import { matchBySource } from "./claude-monitor-identity.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import {
@@ -445,14 +444,18 @@ export class ClaudeMonitorTrace {
    * 会话内唯一，同一个任务上先后两条会话撞同一个 id 时，少了会话这一维就会把乙的通知写到
    * 甲那一行上（第 13 轮审查 N1）。挑哪一行的判据在 `claude-monitor-identity.ts`。
    */
-  private async locateRow(taskId: string, nativeId: string): Promise<string | null> {
+  private async locateRow(taskId: string, nativeId: string, sourceRun: string): Promise<string | null> {
     const cached = this.rows.get(nativeId);
     if (cached) return cached;
     const rows = await db
-      .select({ id: monitors.id, cliSessionId: monitors.cliSessionId })
+      .select({
+        id: monitors.id, cliSessionId: monitors.cliSessionId, sourceRun: monitors.sourceRun,
+      })
       .from(monitors)
       .where(and(eq(monitors.taskId, taskId), eq(monitors.nativeId, nativeId), eq(monitors.kind, "claude")));
-    const row = matchBySource(rows, this.cliSessionId);
+    // 证据是**这一代的 run 文件**(调用方手里的 `found.outPath`):native_id 不是证据，它只在
+    // 一条 CLI 会话内唯一(见 claude-monitor-identity.ts)。
+    const row = matchBySource(rows, { cliSessionId: this.cliSessionId, sourceRun });
     if (row) this.rows.set(nativeId, row.id);
     return row?.id ?? null;
   }
@@ -479,10 +482,14 @@ export class ClaudeMonitorTrace {
     // monitors_native_session 是最后一道，这里先查一次省掉一次必然失败的插入。
     // 同样要带上来源会话：另一条会话的同号监听是**另一条**监听，不是这一条的重放。
     const candidates = await db
-      .select({ id: monitors.id, cliSessionId: monitors.cliSessionId })
+      .select({
+        id: monitors.id, cliSessionId: monitors.cliSessionId, sourceRun: monitors.sourceRun,
+      })
       .from(monitors)
       .where(and(eq(monitors.taskId, found.taskId), eq(monitors.nativeId, nativeId)));
-    const existing = matchBySource(candidates, this.cliSessionId);
+    const existing = matchBySource(candidates, {
+      cliSessionId: this.cliSessionId, sourceRun: found.outPath,
+    });
     if (existing) {
       this.rows.set(nativeId, existing.id);
       return;
@@ -543,7 +550,7 @@ export class ClaudeMonitorTrace {
     if (!found) return;
     this.taskId = found.taskId;
     if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
-    const rowId = await this.locateRow(found.taskId, nativeId);
+    const rowId = await this.locateRow(found.taskId, nativeId, found.outPath);
     if (!rowId) return;
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
     // **不看状态**：回执带来的是时长和起点，跟这一行此刻是不是终态没有关系。原来这里有一道
@@ -577,7 +584,7 @@ export class ClaudeMonitorTrace {
     if (!found) return;
     this.taskId = found.taskId;
     if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
-    const rowId = await this.locateRow(found.taskId, nativeId);
+    const rowId = await this.locateRow(found.taskId, nativeId, found.outPath);
     if (!rowId) {
       // 库里**暂时**没有。多数情况是这条后台任务不是 Monitor 起的（普通后台 Bash），
       // 但也可能是回填还没跑到 / 上次写库失败了——所以这个结论会在投影行变化时整批作废
@@ -647,55 +654,4 @@ export class ClaudeMonitorTrace {
       for (const taskId of new Set(live.map((r) => r.taskId))) bus.publish({ type: "task.monitors", taskId });
     });
   }
-}
-
-/**
- * 开机收拾上一个 server 留下的 claude 投影 —— **只收来源进程确实已经不在的那些**。
- *
- * 这些行没有 pid，`reattachMonitors` 按 `kind` 把它们整批跳过了（它只认 ash 自己起的
- * 进程），所以必须有人来管；但判据不能是「本进程的账本里没有它」—— **agent 活得过 ash
- * 重启**（detached，见 executors/detached.ts），无条件标 lost 会让用户看到「任务还在输出、
- * 哨兵却说进程已不在」。判据本体和它栽过的三次跟头都在 `claude-monitor-liveness.ts`，
- * 那边是回填与这里共用的唯一一份。
- *
- * 与 `finishAll()` 的分工：那边管「agent 进程正常结束」的常规路径，这边只兜「ash 自己重启
- * 了，得重新判一次谁还活着」。
- */
-export async function loseDeadClaudeMonitors(): Promise<{ kept: number; lost: number }> {
-  if (dbClient.closed) return { kept: 0, lost: 0 };
-  const rows = await db
-    .select({
-      id: monitors.id,
-      taskId: monitors.taskId,
-      cliSessionId: monitors.cliSessionId,
-      sourcePid: monitors.sourcePid,
-      sourcePidStartedAt: monitors.sourcePidStartedAt,
-    })
-    .from(monitors)
-    .where(and(eq(monitors.kind, "claude"), eq(monitors.status, "running")));
-  if (!rows.length) return { kept: 0, lost: 0 };
-
-  // 存活判据只有一份，住在 claude-monitor-liveness.ts——回填那边问的是同一个问题
-  // （「历史里没读到终态，是早就没了还是现在还在盯着」），两处必须给出同一个答案。
-  const probe = createLivenessProbe();
-
-  const dead: { id: string; taskId: string }[] = [];
-  let kept = 0;
-  for (const row of rows) {
-    const live = await probe.sourceAlive(row);
-    if (live) kept += 1;
-    else dead.push({ id: row.id, taskId: row.taskId });
-  }
-  if (dead.length) {
-    await db.update(monitors).set({
-      status: "lost",
-      endedAt: now(),
-      endedReason: "起它的那个智能体进程已经不在了（ash 重启后确认）",
-    }).where(and(
-      inArray(monitors.id, dead.map((r) => r.id)),
-      eq(monitors.status, "running"),
-    ));
-    for (const taskId of new Set(dead.map((r) => r.taskId))) bus.publish({ type: "task.monitors", taskId });
-  }
-  return { kept, lost: dead.length };
 }
