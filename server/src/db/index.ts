@@ -578,15 +578,24 @@ export async function ensureSchema() {
   // 表什么都不做（不补列），索引紧接着引用一个还不存在的列，整个 executeMultiple 抛出，
   // ensureSchema 崩掉 = 整台 ash 起不来。2026-10-14 在真实库副本上实测到这一条。
   //
-  // 索引本身的用途：claude 内置 Monitor 的投影按 (task_id, native_id) 认人，同一个后台
-  // 任务的 task_started / task_notification 要 upsert 成同一行；唯一性同时挡住重放同一段
-  // stream 时的重复落库（回归 test-claude-monitor-parse.ts「重放幂等」钉的就是它）。
+  // 索引本身的用途：claude 内置 Monitor 的投影按 native_id 认人，同一个后台任务的
+  // task_started / task_notification 要 upsert 成同一行；唯一性同时挡住重放同一段 stream
+  // 时的重复落库（回归 test-claude-monitor-parse.ts「重放幂等」钉的就是它）。
+  //
+  // **身份里必须带上来源会话。** native_id 的唯一性由来源侧保证，而来源侧只承诺在一条 CLI
+  // 会话内唯一 —— 同一个任务上先后两条 claude 会话（续聊、接管、重试）各自编号，撞上同一个
+  // id 时，旧的 (task_id, native_id) 会把乙的事实 upsert 到甲那一行上：一张卡串两条监听，
+  // 另一张干脆不出现（第 13 轮审查 N1）。cli_session_id 为空的是存量行，COALESCE 成空串让
+  // 它们彼此之间仍然互斥（旧索引保证过的那部分唯一性一点不丢）。
   try {
     await client.execute(
-      "CREATE UNIQUE INDEX IF NOT EXISTS monitors_native ON monitors(task_id, native_id) WHERE native_id IS NOT NULL",
+      "CREATE UNIQUE INDEX IF NOT EXISTS monitors_native_session"
+      + " ON monitors(task_id, COALESCE(cli_session_id,''), native_id) WHERE native_id IS NOT NULL",
     );
+    // 旧的窄索引必须**拆掉**：留着它就还在按 (task_id, native_id) 拦,上面那条等于没加。
+    await client.execute("DROP INDEX IF EXISTS monitors_native");
   } catch (e) {
-    console.warn("[ash] monitors_native 索引创建失败,忽略:", e);
+    console.warn("[ash] monitors_native_session 索引创建失败,忽略:", e);
   }
   // ash 自己起的哨兵期限是它自己定的,`bounded` 对它恒成立 —— 上面那个 ALTER 为了不给
   // claude 投影编期限把默认值设成了 'unknown',这里把 ash 那半刷回来；证据列同理补 'self'

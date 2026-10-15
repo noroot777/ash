@@ -276,8 +276,15 @@ async function main(): Promise<void> {
       `快照 ${monitorScanTracked(big.taskId)} / 落盘 ${JSON.stringify([...(saved?.values() ?? [])])}`);
     check((await listMonitors(big.taskId)).length === 0,
       "④第一轮还没读到末尾那个 Monitor", `${(await listMonitors(big.taskId)).length} 条`);
-    await squeeze();
-    check(monitorScanTracked(big.taskId) === false, "④它确实被挤出了快照表（硬上限生效）");
+    // 退避阶梯在这份测试里只有 60ms，定时器随时可能替被测任务再跑一轮、把它放回快照表
+    // （偶发,8 次里见过 1 次）。要确认的是「硬上限真的把它挤得出去」,不是「挤完之后没人
+    // 再碰它」—— 所以再顶几轮,看它有没有被挤出去过。
+    let evicted = false;
+    for (let i = 0; i < 3 && !evicted; i += 1) {
+      await squeeze();
+      evicted = monitorScanTracked(big.taskId) === false;
+    }
+    check(evicted, "④它确实被挤出了快照表（硬上限生效）");
 
     let rounds = 1;
     for (; rounds < 12 && (await listMonitors(big.taskId)).length === 0; rounds += 1) {

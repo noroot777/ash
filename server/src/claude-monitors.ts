@@ -436,14 +436,21 @@ export class ClaudeMonitorTrace {
     });
   }
 
-  /** 按 (taskId, nativeId) 把投影行找出来。内存里没有就查库——接管回来的那些只在库里。 */
+  /**
+   * 把投影行找出来。内存里没有就查库——接管回来的那些只在库里。
+   *
+   * **身份是 (taskId, 来源会话, nativeId)，不是 (taskId, nativeId)。** native_id 只在一条 CLI
+   * 会话内唯一，同一个任务上先后两条会话撞同一个 id 时，少了会话这一维就会把乙的通知写到
+   * 甲那一行上（第 13 轮审查 N1）。`cli_session_id` 为空的是存量行，仍然认——那一列是后加的。
+   */
   private async locateRow(taskId: string, nativeId: string): Promise<string | null> {
     const cached = this.rows.get(nativeId);
     if (cached) return cached;
-    const row = (await db
-      .select({ id: monitors.id })
+    const rows = await db
+      .select({ id: monitors.id, cliSessionId: monitors.cliSessionId })
       .from(monitors)
-      .where(and(eq(monitors.taskId, taskId), eq(monitors.nativeId, nativeId), eq(monitors.kind, "claude")))).at(0);
+      .where(and(eq(monitors.taskId, taskId), eq(monitors.nativeId, nativeId), eq(monitors.kind, "claude")));
+    const row = rows.find((r) => r.cliSessionId === this.cliSessionId) ?? rows.find((r) => !r.cliSessionId);
     if (row) this.rows.set(nativeId, row.id);
     return row?.id ?? null;
   }
@@ -463,11 +470,14 @@ export class ClaudeMonitorTrace {
       return;
     }
     // 同一个 native_id 重复开（流被重放、resume 后 CLI 重发）就不再插一行。唯一索引
-    // monitors_native 是最后一道，这里先查一次省掉一次必然失败的插入。
-    const existing = (await db
-      .select({ id: monitors.id })
+    // monitors_native_session 是最后一道，这里先查一次省掉一次必然失败的插入。
+    // 同样要带上来源会话：另一条会话的同号监听是**另一条**监听，不是这一条的重放。
+    const candidates = await db
+      .select({ id: monitors.id, cliSessionId: monitors.cliSessionId })
       .from(monitors)
-      .where(and(eq(monitors.taskId, found.taskId), eq(monitors.nativeId, nativeId)))).at(0);
+      .where(and(eq(monitors.taskId, found.taskId), eq(monitors.nativeId, nativeId)));
+    const existing = candidates.find((r) => r.cliSessionId === this.cliSessionId)
+      ?? candidates.find((r) => !r.cliSessionId);
     if (existing) {
       this.rows.set(nativeId, existing.id);
       return;

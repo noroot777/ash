@@ -100,14 +100,16 @@ type RowIndex = {
 /**
  * 同一个 id 底下有多行时挑哪一行：**先认会话身份，再退到没有归属的存量行**。
  *
- * 只有一行时就用它：持久身份目前是 `(task_id, native_id)`（唯一索引 `monitors_native`），所以
- * 「一个 id 一行」是当下的事实，没有歧义可挑 —— 这一层是**给以后留的**：真要给同一任务的两条
- * CLI 会话分家（第 10 轮审查不拦项 3），改索引之后这里不必再动，也不会出现「把 A 会话的事实
- * 写到 B 会话那一行上」。挑不出来宁可让这条事实暂时没归宿，也不写错行。
+ * **只有一行也要问一句归属。** 上一版在这里短路了（「唯一索引保证一个 id 一行，没有歧义可
+ * 挑」），而那个前提本身就是要修的东西：持久身份现在是 `(task_id, cli_session_id, native_id)`
+ * （唯一索引 `monitors_native_session`），同一个任务上两条 CLI 会话撞同一个 id 是允许的。
+ * 短路的后果是「库里碰巧只有乙那一行」时把甲的事实写到乙身上 —— 一条事实宁可暂时没归宿
+ * （下一轮重读还在），也不写错行（第 13 轮审查 N1）。
+ *
+ * 没有归属的存量行仍然收：`cli_session_id` 是后加的列，老行上一律为空。
  */
 function pick(rows: PriorRow[] | undefined, cliSessionId: string | null): PriorRow | undefined {
   if (!rows?.length) return undefined;
-  if (rows.length === 1) return rows[0];
   return rows.find((r) => r.cliSessionId === cliSessionId) ?? rows.find((r) => !r.cliSessionId);
 }
 

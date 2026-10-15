@@ -18,7 +18,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { MonitorCall } from "./claude-monitors.js";
 import { db } from "./db/index.js";
-import { monitorPendingCalls, monitors } from "./db/schema.js";
+import { monitorPendingCalls, monitors, sessions } from "./db/schema.js";
 
 /**
  * 一条语句最多带多少行（或多少个 id）。
@@ -58,21 +58,43 @@ export async function loadPendingCalls(taskId: string): Promise<Map<string, Pend
   // **自愈**：已经成行的那些（库里有同一个 `tool_use_id` 的 Monitor）早就配上了，只是当初
   // 那一笔删除没落地（提交成功、紧接着写失败）。留着不会让显示出错，但会一直被读回来 ——
   // 就地清掉，免得越积越多。
+  //
+  // **「同一个 tool_use_id」要连来源会话一起问。** 这张表按 (task, ash 会话, tool_use) 分区，
+  // 而投影行记的是 **CLI** 会话，两个命名空间不一样，所以先用 `sessions` 把它们对上。只按
+  // tool_use_id 判的话，甲会话里已经成行的那条，会把乙会话里还悬着的同号调用一起销掉——
+  // 入参的唯一出处就这么没了，乙那张卡再也出不来（第 13 轮审查 N1）。
+  // 存量行（`cli_session_id` 为空）仍然认：那一列是后加的，老行上没有归属可比。
+  const cliOf = new Map((await db
+    .select({ id: sessions.id, cliSessionId: sessions.cliSessionId })
+    .from(sessions)
+    .where(eq(sessions.taskId, taskId)))
+    .map((row) => [row.id, row.cliSessionId] as const));
   const settled = new Set((await db
-    .select({ toolUseId: monitors.toolUseId })
+    .select({ toolUseId: monitors.toolUseId, cliSessionId: monitors.cliSessionId })
     .from(monitors)
     .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "claude"))))
-    .map((row) => row.toolUseId)
-    .filter((value): value is string => !!value));
-  const stale = rows.filter((row) => settled.has(row.toolUseId)).map((row) => row.toolUseId);
-  for (const batch of batches(stale)) {
-    await db.delete(monitorPendingCalls).where(and(
-      eq(monitorPendingCalls.taskId, taskId),
-      inArray(monitorPendingCalls.toolUseId, batch),
-    ));
+    .filter((row): row is { toolUseId: string; cliSessionId: string | null } => !!row.toolUseId)
+    .map((row) => `${row.cliSessionId ?? ""}\u0000${row.toolUseId}`));
+  const isSettled = (row: { sessionKey: string; toolUseId: string }): boolean =>
+    settled.has(`${cliOf.get(row.sessionKey) ?? ""}\u0000${row.toolUseId}`)
+    || settled.has(`\u0000${row.toolUseId}`);   // 没有归属的存量行
+  // 删除也按会话分区：跨会话删等于把乙那条一起带走。
+  const stale = new Map<string, string[]>();
+  for (const row of rows) {
+    if (!isSettled(row)) continue;
+    stale.set(row.sessionKey, [...(stale.get(row.sessionKey) ?? []), row.toolUseId]);
+  }
+  for (const [sessionKey, ids] of stale) {
+    for (const batch of batches(ids)) {
+      await db.delete(monitorPendingCalls).where(and(
+        eq(monitorPendingCalls.taskId, taskId),
+        eq(monitorPendingCalls.sessionKey, sessionKey),
+        inArray(monitorPendingCalls.toolUseId, batch),
+      ));
+    }
   }
   for (const row of rows) {
-    if (settled.has(row.toolUseId)) continue;
+    if (isSettled(row)) continue;
     const bucket = out.get(row.sessionKey) ?? [];
     bucket.push({
       sessionKey: row.sessionKey, toolUseId: row.toolUseId,

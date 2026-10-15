@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-ledger-"));
@@ -19,7 +19,7 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitor-ledger");
 
-const [{ db, ensureSchema, dbClient }, schema, { ClaudeMonitorTrace }, { backfillClaudeMonitors }, { listMonitors }, { inspectProcess }] =
+const [{ db, ensureSchema, dbClient }, schema, { ClaudeMonitorTrace }, { backfillClaudeMonitors, forgetTaskMonitorScan }, { listMonitors }, { inspectProcess }] =
   await Promise.all([
     import("../src/db/index.js"),
     import("../src/db/schema.js"),
@@ -595,6 +595,77 @@ async function main(): Promise<void> {
       "⑭补齐之后再同步两轮也只有一条", String(after.filter((r) => r.toolUseId === "tu-dup").length));
   }
 
+  // ── ⑮ 一个任务两条 CLI 会话撞同一个编号：各是各的，事实不许串过去 ──────────────
+  //
+  // native_id / tool_use_id 的唯一性由来源侧保证,而来源侧只承诺**在一条会话内**唯一。同一个
+  // 任务上先后两条 claude 会话(续聊、接管、重试)各自编号,撞号是允许的。身份少了「哪条会话」
+  // 这一维时:持久唯一索引只让其中一张卡存在,配对把乙的事实写到甲那一行,未决表里乙那条还
+  // 悬着的调用被甲的同号行当成「已经成行」清掉(第 13 轮审查 N1)。
+  {
+    const f = await fixture("same-native", live.pid, live.startedAt);  // 会话甲
+    const cliB = `${f.cli}-b`;
+    const fileB = join(f.dir, `s2-${f.taskId}-20261014T020000000Z.agent-out.jsonl`);
+    await db.insert(sessions).values({
+      id: `s2-${f.taskId}`, taskId: f.taskId, role: "single", agentType: "claude", executor: "claude@x",
+      cliSessionId: cliB, cwd: root, startedAt: now(), agentOutPath: fileB,
+      agentPid: live.pid, agentStartedAt: live.startedAt,
+    });
+    // 甲:同号监听跑完了。外加一条**只有调用**的 tu-hang(乙那边也会用同一个号)。
+    write(f.file(), [
+      ...startSeq(f.cli, "n-twin", "甲的监听", "Monitor started (task n-twin, expires in 1m 30s unless the source ends first)."),
+      { type: "system", subtype: "task_notification", task_id: "n-twin", status: "completed", summary: "甲跑完了", session_id: f.cli },
+      { type: "assistant", timestamp: "2026-10-14T01:00:08.000Z", message: { model: "m", content: [
+        { type: "tool_use", name: "Monitor", id: "tu-hang", input: { command: "sleep 1", description: "甲这条起来了", timeout_ms: 600_000 } },
+      ] } },
+      { type: "system", subtype: "task_started", task_id: "n-hang-a", tool_use_id: "tu-hang", task_type: "local_bash", session_id: f.cli },
+    ]);
+    // 乙:同一个 native_id 还在跑;同一个 tool_use_id 还悬着(没有 task_started)。
+    write(fileB, [
+      ...startSeq(cliB, "n-twin", "乙的监听", "Monitor started (task n-twin, expires in 1m 30s unless the source ends first)."),
+      { type: "assistant", timestamp: "2026-10-14T02:00:08.000Z", message: { model: "m", content: [
+        { type: "tool_use", name: "Monitor", id: "tu-hang", input: { command: "sleep 2", description: "乙这条还悬着", timeout_ms: 600_000 } },
+      ] } },
+    ]);
+    await backfillClaudeMonitors(f.taskId);
+    // **再读一轮,而且先把进程内状态抹掉**:未决表的自愈(「库里已经有同号的行了 ⇒ 这条早就
+    // 配上了」)发生在每一轮开头读表的时候;进程内还缓着那条调用时,它当轮又会被写回去,误清
+    // 看不出来。位置在库里,所以这一轮不会重读那几行——乙的入参真就只剩未决表这一份了。
+    forgetTaskMonitorScan(f.taskId);
+    await backfillClaudeMonitors(f.taskId);
+
+    const twins = (await listMonitors(f.taskId)).filter((r) => r.nativeId === "n-twin");
+    check(twins.length === 2, "⑮同号的两条监听各占一行,不是挤成一张卡",
+      `${twins.length} 行:${twins.map((r) => r.description).join(" / ")}`);
+    const a = twins.find((r) => r.description === "甲的监听");
+    const b = twins.find((r) => r.description === "乙的监听");
+    check(a?.status === "exited", "⑮甲的完成通知落在甲那一行", String(a?.status));
+    check(b?.status === "running", "⑮没有把甲的终态套到乙身上", String(b?.status));
+    const hanging = await db.select().from(schema.monitorPendingCalls)
+      .where(and(eq(schema.monitorPendingCalls.taskId, f.taskId),
+        eq(schema.monitorPendingCalls.toolUseId, "tu-hang")));
+    check(hanging.length === 1 && hanging[0]?.sessionKey === `s2-${f.taskId}`,
+      "⑮乙那条还悬着的调用没被甲的同号行当成「已经成行」清掉",
+      JSON.stringify(hanging.map((r) => r.sessionKey)));
+
+    // 实时那一侧同一个判据:两条流各自开同一个号,不许认成同一行(locateRow / open 的查库
+    // 回退原来只按 task+native 找,接管回来的行只在库里,内存缓存挡不住它)。
+    const traceA = new ClaudeMonitorTrace(f.cli);
+    const traceB = new ClaudeMonitorTrace(cliB);
+    await settle();
+    for (const [trace, cli, tag] of [[traceA, f.cli, "甲"], [traceB, cliB, "乙"]] as const) {
+      // 入参走 toolUse()（流里那条 assistant 由 claude-stream 拆开再喂进来），身份走 event()。
+      trace.toolUse("Monitor", { command: "sleep 600", description: `${tag}实时`, timeout_ms: 600_000 }, `tu-rt-${tag}`);
+      trace.event({ type: "system", subtype: "task_started", task_id: "n-rt", tool_use_id: `tu-rt-${tag}`,
+        task_type: "local_bash", session_id: cli });
+      // **等甲那一行真的落库再让乙开**：同一拍里两条都还没写进去,谁查库都查不到对方,
+      // 「查库那一步问没问会话」就测不出来了(本轮自测:点注入去掉归属判断,这组仍然绿)。
+      await settle();
+    }
+    const rt = (await listMonitors(f.taskId)).filter((r) => r.nativeId === "n-rt");
+    check(rt.length === 2, "⑮实时投影也给两条会话各开一行",
+      `${rt.length} 行:${rt.map((r) => r.description).join(" / ")}`);
+  }
+
   live.kill();
   if (failures) {
     console.error(`\n${failures} 条断言未通过`);
@@ -603,7 +674,7 @@ async function main(): Promise<void> {
     console.log("✓ 内置 Monitor 账本不变量：lost 行可被重建认领 / 晚到回填也收通知 / 已有行按来源死活双向纠正"
       + " / 缓存随文件增长与新会话失效 / 代次区分（新进程 ≠ 起它的那一代，结论持久化）"
       + " / 带归属的旧期限按证据列纠正 / 起点是区间（窄→精确时刻，宽→只报时长）/ 回执前重启后从历史补回时长"
-      + " / 旧库的未决表升级时补齐唯一键并去重 均受回归保护");
+      + " / 旧库的未决表升级时补齐唯一键并去重 / 同任务两条会话撞同号时各是各的 均受回归保护");
   }
 }
 
