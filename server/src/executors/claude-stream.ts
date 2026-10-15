@@ -15,6 +15,7 @@ import { calibrateSkills } from "../skills.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
+import { runOriginOfChild } from "../claude-monitor-origin.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
@@ -76,7 +77,12 @@ export async function* parseClaudeStream(
   // claude 自带 `Monitor` 工具的只读投影（见 ../claude-monitors.ts）。放在这一层的理由：
   // 认人要同时看 tool_use 块（工具名）和 system 事件（后台任务生命周期），只有这里两样
   // 都流过。整条链 fire-and-forget，记账失败不影响事件流。
-  const claudeMonitors = new ClaudeMonitorTrace(cliSessionId);
+  //
+  // **来源身份在这里就绑定**：这条 stdout 就是那个 agent 进程写的，它的那组落盘路径就是
+  // 这一代的 run 文件 —— 两样都从 child 直接拿，不经过 `sessions` 那几列（每回合被下一轮
+  // 覆盖，落库排在队列上，晚一步读到的就是下一代人的凭据，于是上一轮早结束的监听被新进程
+  // 续命成「正在盯着」；整段在 ../claude-monitor-origin.ts 的文件头）。
+  const claudeMonitors = new ClaudeMonitorTrace(cliSessionId, runOriginOfChild(child));
 
   const rl = createInterface({ input: child.stdout! });
 
@@ -419,6 +425,10 @@ export async function* parseClaudeStream(
     clearInterval(waitTimer);
     // agent 进程结束 = 它名下的内置 Monitor 全都跟着没了（它们本来就在这棵进程树里）。
     // 不收尾的话面板上会永远留着几张「正在盯着」的僵尸卡。
-    claudeMonitors.finishAll();
+    //
+    // **等它记完**：收尾排在投影自己的写库队列上，不等的话这条流都返回了、队列里还压着
+    // 这一代的 open/close，而外面紧跟着就是下一轮的会话更新（新一轮第 1 轮审查点名的同类
+    // 收尾位置）。这个 await 不会抛、也不会挂（见 ClaudeMonitorTrace.finishAll）。
+    await claudeMonitors.finishAll();
   }
 }

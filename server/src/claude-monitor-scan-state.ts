@@ -6,7 +6,7 @@
 //
 // 不变量与判据的说明都在 `claude-monitor-scan.ts` 的文件头，这里不复述。
 import type { MonitorLifetime } from "@ash/shared/monitor";
-import type { MonitorCall } from "./claude-monitors.js";
+import type { MonitorCall } from "./claude-monitor-call.js";
 import type { ClearedCall, PendingCall } from "./claude-monitor-pending.js";
 import type { ScanCursor } from "./claude-monitor-cursors.js";
 import {

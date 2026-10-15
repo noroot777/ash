@@ -495,11 +495,31 @@ async function mergeInto(
   // 存量行（升级前写的、以及实时投影在这一列存在之前落的）要顺手补上：缺了它，这一行
   // 在配对状态被挤掉之后就配不回自己的起手回执（见文件头的检查点说明）。
   if (!prior.toolUseId && item.toolUseId) meta.toolUseId = item.toolUseId;
-  // 同理：这两列也是后加的，存量行读到一次就顺手补上（代次结论 + 起点区间的下界）。
-  if (!prior.sourceRun && item.filePath) meta.sourceRun = item.filePath;
+  // 同理：这两列也是后加的，存量行读到一次就顺手补上（起点区间的下界）。
   if (!prior.startLowAt && item.startedAtLow) meta.startLowAt = item.startedAtLow;
-  // 代次结论也要补到存量行上，否则下面的死活裁决仍会被新进程骗。
-  if (item.staleRun && prior.sourcePid === null) meta.sourcePid = 0;
+
+  // ── 来源（代次凭据）：**补空之外还要纠错** ──────────────────────────────────
+  //
+  // 「这条调用起在哪个 run 文件里」这件事，历史侧是**读出来的**：它的 `tool_use` 和
+  // `task_started` 就躺在 `item.filePath` 里。而行上那一列可能是实时投影落库那一刻从
+  // `sessions` 抄的 —— 那几列每回合被下一轮覆盖，抄晚了就抄成了下一代人的 run 和 pid，
+  // 于是死活裁决看到「这一行的 run 就是最新的、它的 pid 真活着」，把早就结束的旧卡续命成
+  // 「正在盯着」，刷新和反复回填都不自愈（新一轮第 1 轮审查 F1 实测）。绑定层已经不会再写错
+  // （见 claude-monitor-origin.ts），**但库里那些已经写错的行只能靠这条路纠回来**。
+  //
+  // 纠错要**同一次调用**的硬证据：`tool_use_id` 对得上才算。`native_id` 只承诺一条 CLI 会话
+  // 内唯一，两代之间撞号时按会话挑中的那一行未必就是这一条（见 claude-monitor-identity.ts）；
+  // 证明不了就退回老规矩「只补空」—— 写到错的那一行上是永久的。
+  const sameCall = !!item.toolUseId && prior.toolUseId === item.toolUseId;
+  const wrongRun = !!prior.sourceRun && prior.sourceRun !== item.filePath;
+  if (item.filePath && (!prior.sourceRun || (sameCall && wrongRun))) meta.sourceRun = item.filePath;
+  // 代次结论：存量行要补上，**纠正来源的那些行要连 pid 一起换掉** —— 它记的是另一代的进程，
+  // 留着就还会继续骗死活裁决。那一代真实的 pid 历史文件里没有（`sessions` 早被覆盖），但
+  // 「它那一代 run 之后又起过新的」这个结论算得出来，算不出来就落回「代次不明」。
+  const fixOrigin = meta.sourceRun !== undefined && wrongRun && sameCall;
+  if (item.staleRun && (prior.sourcePid === null || fixOrigin)) meta.sourcePid = 0;
+  else if (fixOrigin) meta.sourcePid = null;
+  if (fixOrigin) meta.sourcePidStartedAt = null;
 
   // ── 时长 ──
   // 旧行可能写着一个由旧算法推出来的 bounded（`lifetime_evidence` 为空），那种也要被回执

@@ -24,7 +24,7 @@
 // 成行把旧一轮那条删了」（销账条件太粗），两边都让旧那张卡永久消失，而读取位置照常被确认成
 // 「读完了」。判据本体在 `claude-monitor-identity.ts`，这里只许调它。
 import { and, eq, inArray } from "drizzle-orm";
-import type { MonitorCall } from "./claude-monitors.js";
+import type { MonitorCall } from "./claude-monitor-call.js";
 import { matchBySource, type SourceRow } from "./claude-monitor-identity.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 import { db } from "./db/index.js";

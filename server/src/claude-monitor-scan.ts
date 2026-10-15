@@ -61,7 +61,7 @@
 // 淘汰，读取窗口一动不动，末尾那个 Monitor 始终缺卡）。
 import { stat } from "node:fs/promises";
 import { claudeMonitorStatus, parseMonitorStartReceipt } from "@ash/shared/monitor";
-import { monitorStr as str, parseMonitorInput } from "./claude-monitors.js";
+import { monitorStr as str, parseMonitorInput } from "./claude-monitor-call.js";
 import type { ScanCursor } from "./claude-monitor-cursors.js";
 import { eachLine, scanWindowBytes, streamFilesOf } from "./claude-monitor-read.js";
 // 状态容器与访问器分在隔壁（见那个文件的头部）。这里整条转发出去：对调用方来说

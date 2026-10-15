@@ -67,6 +67,9 @@ export const monitors = sqliteTable("monitors", {
   // 的进程早死了、同一 CLI 会话的新进程还在跑时,历史投影会被判成 running(第 4 轮审查
   // 实测 reusedSession)。存下当代身份,存活判断才问得准。NULL = 代次不明(历史回填时
   // sessions 那两列已被覆盖),判死活退回会话/任务那一层。
+  //   这两列由**流的来源绑定层**在流开始那一刻抄下来(claude-monitor-origin.ts):落库那一刻
+  // 再去问 `sessions` 读到的已经可能是下一代(写库是排队的),那样写出来的代次凭据会反过来
+  // 给旧监听续命(新一轮第 1 轮审查 F1 实测)。
   sourcePid: integer("source_pid"),
   sourcePidStartedAt: text("source_pid_started_at"),
   // **起它的那个 run 文件**(绝对路径)。代次结论的持久化依据:每个 run 文件对应一次 agent

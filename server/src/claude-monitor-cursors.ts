@@ -56,13 +56,20 @@ import { pendingCallKeyBlocker, pendingCallKeyLive } from "./db/schema-readiness
  *   上 4 的戳；下一次启动真的迁成功了也不会重放（新一轮第 2 轮审查 F1 两种失败各有实测）。
  *   所以 4 这个戳同样不可信，一并作废 —— 当代的戳只在**真实 schema 核验通过**时才盖得起来
  *   （`db/schema-readiness.ts`，判据落在 `saveScanCursors`）。
- * - `5`：当代。只有这一代的代码盖的戳才算数。
+ * - `5`：发布条件核验上了，**但代次凭据本身可能是错的**：实时投影在落库那一刻才去问
+ *   `sessions`，而那几列每回合被下一轮覆盖 —— 上一轮的监听排在写库队列上刚轮到落库时，
+ *   抄到的是下一代人的 pid 和 run 文件；历史合并那一侧又只肯补空、不肯纠正非空的来源。于是
+ *   那些行永远写着别人的代次，死活裁决拿新进程给旧卡续命，而这一代照常给前缀盖上「读完了」
+ *   的戳（新一轮第 1 轮审查 F1 用真实两代进程 + 生产服务 + 真页面实测）。所以 5 这个戳同样
+ *   不可信，一并作废 —— 重放之后，旧 run 文件里那条调用的事实会把写错的来源纠回来
+ *   （`claude-monitor-commit.ts` 的 `mergeInto`，判据是 `tool_use_id` 对得上）。
+ * - `6`：当代。只有这一代的代码盖的戳才算数。
  *
  * 成本是**一次性**的：被作废的位置等于那个文件从零重放一遍，而重放照常受单轮字节上限约束、
  * 读到哪儿就带着当代版本号落盘（见 `saveScanCursors`），下一轮接着往后读 —— 不是每次请求
  * 都全量重读历史。
  */
-export const MONITOR_CHECKPOINT_SEMANTICS = 5;
+export const MONITOR_CHECKPOINT_SEMANTICS = 6;
 
 /** 这份位置是**当代**确认的吗（只有它才可以被接回来往后读）。 */
 const confirmedUnderCurrent = (cursor: { semantics: number | null }): boolean =>

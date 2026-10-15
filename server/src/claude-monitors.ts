@@ -32,77 +32,25 @@
 // 所以这里要先攒 `tool_use_id → Monitor 的入参`，`task_started` 到了才认得出来。
 //
 // 按 `description` 之类的内容去猜一律不行：两种后台任务的 description 长得一模一样。
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import {
   claudeMonitorStatus, CLAUDE_MONITOR_ENDED_REASON, monitorExactExpiry,
   monitorStatusCorrectable, parseMonitorStartReceipt, type MonitorLifetime,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
+import { monitorStr as str, parseMonitorInput, type MonitorCall } from "./claude-monitor-call.js";
 import { matchBySource } from "./claude-monitor-identity.js";
+import {
+  hasRunOrigin, locateSession, runOriginOfSession, UNKNOWN_RUN_ORIGIN, type MonitorRunOrigin,
+} from "./claude-monitor-origin.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 import {
   noteMonitorRecovery, noteMonitorRecoveryBySession, type MonitorRecoveryReason,
 } from "./claude-monitor-recovery.js";
 import { db, dbClient } from "./db/index.js";
-import { monitors, sessions } from "./db/schema.js";
+import { monitors } from "./db/schema.js";
 import { id, now } from "./util.js";
-
-/** 一个内置 Monitor 的入参，从它的 tool_use 块上摘下来。 */
-export type MonitorCall = { command: string; description: string };
-
-export const monitorStr = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
-const str = monitorStr;
-
-/**
- * 从 `Monitor` 工具的入参里取命令与说明。
- *
- * `ws` 那种（WebSocket 源）没有 `command`，用 url 顶上去——否则面板上会出现一张命令为空
- * 的卡，而「它在盯什么」正是这张卡唯一要回答的问题。
- */
-export function parseMonitorInput(input: unknown): MonitorCall | null {
-  let parsed: unknown = input;
-  if (typeof parsed === "string") {
-    try { parsed = JSON.parse(parsed); } catch { return null; }
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const fields = parsed as Record<string, unknown>;
-  const ws = fields.ws && typeof fields.ws === "object" ? fields.ws as Record<string, unknown> : null;
-  const command = str(fields.command) || (ws ? `ws: ${str(ws.url)}` : "");
-  if (!command) return null;
-  const description = str(fields.description) || command;
-  // **入参里的 `timeout_ms` 一律不取**。那是「我们请求了多久」，不是「来源给了多久」：
-  // claude 自己会钳（实测本机 2.1.283 的归一化函数有 30 分钟和 10 分钟两个分支），还有
-  // 不设会话内超时的 persistent 模式。生效期限只认起手回执里那句 `expires in …`，它在
-  // `task_started` **之后**才到，所以投影先落 `unknown`，拿到回执再升级（见 toolResult）。
-  return { command, description };
-}
-
-/**
- * cli 会话 id → ash 的任务 id、工作目录，以及**当代** agent 进程身份。
- *
- * 带上 pid 是因为 `sessions` 那两列每回合都被下一轮覆盖：投影必须在落库那一刻把「起它的
- * 是哪一代」抄下来，事后再问 `sessions` 问到的已经是别人了（见 monitors.source_pid 的说明）。
- */
-async function locateSession(cliSessionId: string): Promise<
-  { taskId: string; cwd: string; pid: number | null; pidStartedAt: string | null; outPath: string } | null
-> {
-  if (!cliSessionId || dbClient.closed) return null;
-  const row = (await db
-    .select({
-      taskId: sessions.taskId, cwd: sessions.cwd,
-      pid: sessions.agentPid, pidStartedAt: sessions.agentStartedAt,
-      outPath: sessions.agentOutPath,
-    })
-    .from(sessions)
-    .where(eq(sessions.cliSessionId, cliSessionId))).at(0);
-  return row
-    ? {
-      taskId: row.taskId, cwd: row.cwd ?? "", pid: row.pid ?? null,
-      pidStartedAt: row.pidStartedAt ?? null, outPath: row.outPath ?? "",
-    }
-    : null;
-}
 
 /**
  * 一条 claude 会话上的内置 Monitor 账本。**每个 stream 一个实例**（`tool_use_id` 只在
@@ -192,6 +140,18 @@ export class ClaudeMonitorTrace {
   private chain: Promise<unknown> = Promise.resolve();
   private cliSessionId = "";
   /**
+   * 这条流的来源身份（起这些监听的是哪一代进程、哪个 run 文件）。
+   *
+   * **绑定一次，之后落库/收尾/认行全用它**。为什么不能在落库那一刻去问 `sessions`：那三列
+   * 每回合被下一轮覆盖，而落库排在队列上 —— 晚到的那一下读到的是下一代人的凭据，旧监听于是
+   * 被新进程续命（整段来龙去脉在 `claude-monitor-origin.ts` 的文件头）。
+   */
+  private origin: MonitorRunOrigin | null = null;
+  /** 没有显式来源时那一次会话读（**构造那一刻**发起的，不是落库那一刻）。 */
+  private originFreeze: Promise<void> | null = null;
+  /** 那次读最多给两回机会：构造时会话行还没写出来的话，第一次必然查不到。 */
+  private originReads = 0;
+  /**
    * 本会话遗留的投影有没有认回来。
    *
    * **agent 进程活得过 ash 重启**（detached），重启后 `reattachRunningTasks` 把它接回来、
@@ -210,11 +170,17 @@ export class ClaudeMonitorTrace {
    * 事件来设身份」会一直等不到，于是认领不发生、`finishAll` 收不到那些行，进程结束后卡片
    * 永远停在 running（第 2 轮审查用真实 detached 接管复现；我上一轮的回归每次都重发 init，
    * 恰好把这条路盖住了）。
+   * @param origin 这条流的来源身份（哪一代进程 / 哪个 run 文件起的这些监听）。**生产路径
+   * 一律传**：它由 child 自己给出（`runOriginOfChild`），不经过任何会被下一轮覆盖的列。不传
+   * 就退到「构造那一刻查一次会话并冻住」那条路（见 `freezeOrigin`）。
    */
-  constructor(cliSessionId?: string) {
+  constructor(cliSessionId?: string, origin?: MonitorRunOrigin) {
+    // 流自带的最硬：这条 stdout 就是那个进程写的。两样都空 = 其实没给（合成的失败 child）。
+    if (hasRunOrigin(origin)) this.origin = { ...origin! };
     if (cliSessionId) {
       this.cliSessionId = cliSessionId;
       this.startReclaim();
+      this.freezeOrigin();
     }
     // 投影行一有增减就把否定缓存整批作废：那正是「再查一次会有不同答案」的时刻（见 `foreign`）。
     // 不按 taskId 过滤——清掉只是让下一条通知多查一次库，而漏清会让事实永久丢掉。
@@ -283,6 +249,37 @@ export class ClaudeMonitorTrace {
     noteMonitorRecoveryBySession(this.cliSessionId, reason);
   }
 
+  /**
+   * 没有显式来源时的退路：**构造这一刻**查一次会话，把那一代的凭据冻在实例上。
+   *
+   * 为什么非得是这一刻：会话行那三列每回合被下一轮整组覆盖，而落库排在队列上（前面积压
+   * 多久就晚多久）。晚一步读到的是下一代人的凭据，于是上一轮早就结束的监听写上新一代的
+   * pid 和 run 文件，死活裁决照着它把旧卡续命成「正在盯着」，刷新也不自愈（整段在
+   * `claude-monitor-origin.ts` 的文件头）。构造这一刻还在本代人手里。
+   *
+   * 读不到就**不冻**（会话行还没写出来）：`runOrigin` 会再给一次机会，之后按「没有凭据」
+   * 落库 —— 绝不改成落库那一刻现查。
+   */
+  private freezeOrigin(): void {
+    if (this.origin || this.originFreeze || this.originReads >= 2 || !this.cliSessionId) return;
+    this.originReads += 1;
+    const done = () => { this.originFreeze = null; };
+    this.originFreeze = locateSession(this.cliSessionId).then((home) => {
+      if (home) this.origin ??= runOriginOfSession(home);
+      done();
+    }, done);
+  }
+
+  /** 这条流的来源身份。拿不到就是「没有凭据」（NULL 落库，死活裁决退回会话那一层）。 */
+  private async runOrigin(): Promise<MonitorRunOrigin> {
+    if (!this.origin && this.originFreeze) await this.originFreeze;
+    if (!this.origin) {
+      this.freezeOrigin();
+      if (this.originFreeze) await this.originFreeze;
+    }
+    return this.origin ?? UNKNOWN_RUN_ORIGIN;
+  }
+
   /** 每个 tool_use 块都喂进来；只有 `Monitor` 会被记下。 */
   toolUse(name: unknown, input: unknown, toolUseId: unknown): void {
     if (str(name) !== "Monitor") return;
@@ -332,7 +329,9 @@ export class ClaudeMonitorTrace {
     if (ev.session_id && !this.cliSessionId) this.cliSessionId = str(ev.session_id);
     // 每条 system 事件都试一次：构造时没给身份的要在这里补上，上一次认领失败的要在这里重试
     // （`startReclaim` 自身幂等，已完成或正在跑时直接返回）。
-    if (this.cliSessionId) this.startReclaim();
+    // 来源也一起：构造时还不知道是哪条会话的实例，`init` 这一刻是它最早能绑定的时机 ——
+    // 仍然远早于落库（`freezeOrigin` 同样幂等）。
+    if (this.cliSessionId) { this.startReclaim(); this.freezeOrigin(); }
     const taskId = str(ev.task_id);
     switch (ev.subtype) {
       case "task_started": {
@@ -454,8 +453,9 @@ export class ClaudeMonitorTrace {
       })
       .from(monitors)
       .where(and(eq(monitors.taskId, taskId), eq(monitors.nativeId, nativeId), eq(monitors.kind, "claude")));
-    // 证据是**这一代的 run 文件**(调用方手里的 `found.outPath`):native_id 不是证据，它只在
-    // 一条 CLI 会话内唯一(见 claude-monitor-identity.ts)。
+    // 证据是**这条流绑定下来的那个 run 文件**(调用方手里的 `runOrigin()`):native_id 不是
+    // 证据，它只在一条 CLI 会话内唯一(见 claude-monitor-identity.ts)。拿 `sessions` 当下那一
+    // 列当证据是错的 —— 那是下一代人的 run(见 claude-monitor-origin.ts 的文件头)。
     const row = matchBySource(rows, { cliSessionId: this.cliSessionId, sourceRun });
     if (row) this.rows.set(nativeId, row.id);
     return row?.id ?? null;
@@ -467,6 +467,9 @@ export class ClaudeMonitorTrace {
      *  claude-monitor-commit.ts 的「检查点的两半」）。 */
     toolUseId: string,
   ): Promise<void> {
+    // 代次凭据**先取**（多数情况下已经冻好、同步返回）：它和下面那道落库资格门闸之间不能
+    // 再插一个 await，否则又把「查到会话之后、写之前问」那个窗口拉开了。
+    const origin = await this.runOrigin();
     const found = await locateSession(this.cliSessionId);
     if (found) this.taskId = found.taskId; // 归属趁手记下（见 `taskId`）
     // 这个任务正在删/已经删了：实时这一侧也要问一句落库资格。它不在回填的 inflight 里，
@@ -489,7 +492,7 @@ export class ClaudeMonitorTrace {
       .from(monitors)
       .where(and(eq(monitors.taskId, found.taskId), eq(monitors.nativeId, nativeId)));
     const existing = matchBySource(candidates, {
-      cliSessionId: this.cliSessionId, sourceRun: found.outPath,
+      cliSessionId: this.cliSessionId, sourceRun: origin.runPath,
     });
     if (existing) {
       this.rows.set(nativeId, existing.id);
@@ -533,13 +536,16 @@ export class ClaudeMonitorTrace {
       startEvidence: "observed",
       startAnchorWidthMs: Number.isFinite(seen.widthMs) ? Math.round(seen.widthMs) : null,
       timeoutMs: null, // 回执才说得出时长
-      // 起它的就是当下这一代 agent 进程。抄在行上，之后判死活才不会把下一回合的新进程
-      // 当成它（第 4 轮审查实测 reusedSession）。
-      sourcePid: found.pid,
-      sourcePidStartedAt: found.pidStartedAt,
-      // 起它的就是当下这一代 run 文件。pid 已经够判死活了，但两边写同一套列，历史侧的代次
-      // 裁决（claude-monitor-backfill.ts 的 reconcileLiveness）才不必对实时行网开一面。
-      sourceRun: found.outPath || null,
+      // 起它的就是**这条流绑定下来的那一代** agent 进程。抄在行上，之后判死活才不会把下一
+      // 回合的新进程当成它（第 4 轮审查实测 reusedSession）。
+      //   凭据取自 `runOrigin()` 而不是此刻的 `sessions`：后者每回合被下一轮覆盖，而这一行
+      // 可能是上一代的监听排在队列上刚轮到落库（新一轮第 1 轮审查 F1 实测：旧监听写上了新
+      // 一代的 pid 和 run，于是死活裁决拿新进程给它续命，刷新也不自愈）。
+      sourcePid: origin.pid,
+      sourcePidStartedAt: origin.pidStartedAt,
+      // 同一份凭据里的 run 文件。pid 已经够判死活了，但两边写同一套列，历史侧的代次裁决
+      // （claude-monitor-reconcile.ts 的 reconcileLiveness）才不必对实时行网开一面。
+      sourceRun: origin.runPath || null,
       // 起点的下界：实时投影自己就看着它到达，锚点是 `observed`，所以下界就是那一刻。
       startLowAt: startedAt,
     }), db.delete(monitors).where(orphanRows(monitors, found.taskId)));
@@ -549,11 +555,13 @@ export class ClaudeMonitorTrace {
 
   /** 把来源回执落到那一行上：期限从「未知」升级成有限期或持续。 */
   private async applyReceipt(nativeId: string, lifetime: MonitorLifetime, ms: number | null): Promise<void> {
+    const origin = await this.runOrigin();
     const found = await locateSession(this.cliSessionId);
     if (!found) return;
     this.taskId = found.taskId;
     if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
-    const rowId = await this.locateRow(found.taskId, nativeId, found.outPath);
+    // 认行的来源证据同样只认绑定下来的那一代（`sessions` 当下那一列已经是下一代人的）。
+    const rowId = await this.locateRow(found.taskId, nativeId, origin.runPath);
     if (!rowId) return;
     const row = (await db.select().from(monitors).where(eq(monitors.id, rowId))).at(0);
     // **不看状态**：回执带来的是时长和起点，跟这一行此刻是不是终态没有关系。原来这里有一道
@@ -583,11 +591,12 @@ export class ClaudeMonitorTrace {
   }
 
   private async close(nativeId: string, status: string, summary: string): Promise<void> {
+    const origin = await this.runOrigin();
     const found = await locateSession(this.cliSessionId);
     if (!found) return;
     this.taskId = found.taskId;
     if (isTaskRevoked(found.taskId)) return;   // 落库资格，同 `open`
-    const rowId = await this.locateRow(found.taskId, nativeId, found.outPath);
+    const rowId = await this.locateRow(found.taskId, nativeId, origin.runPath);
     if (!rowId) {
       // 库里**暂时**没有。多数情况是这条后台任务不是 Monitor 起的（普通后台 Bash），
       // 但也可能是回填还没跑到 / 上次写库失败了——所以这个结论会在投影行变化时整批作废
@@ -615,15 +624,20 @@ export class ClaudeMonitorTrace {
   }
 
   /**
-   * agent 进程结束了：把这条会话名下还挂着 `running` 的投影全部落 `lost`。
+   * agent 进程结束了：把**这一代**名下还挂着 `running` 的投影落 `lost`。
    *
    * 不收这个尾的话，面板上会永远留着几张「正在盯着」的卡，而那些进程早就随 agent 一起
    * 没了——这正是 ash 哨兵当初要解决的问题，不该在投影这一侧原样复刻一遍。
    *
    * 注意这跟 `reattachMonitors` 的分工：那边只认 `kind='ash'`（有 pid 可以验），claude 的
    * 投影没有 pid，唯一可靠的死亡信号就是「它所属的 agent 进程结束了」，也就是这里。
+   *
+   * **返回值是「这一摊记完了」**：调用方（`executors/claude-stream.ts` 的 finally）等它一下，
+   * 流结束那一刻投影就已经落定；不等的话收尾还排在队列里，而外面那一轮的会话更新随时可能
+   * 先落地（同一类问题的另一个出口，新一轮第 1 轮审查点名）。底层驱动是同步的，队列自身
+   * 又吞掉全部异常（见 `queue`），所以这个 await 不会把事件流拖住，也不会抛。
    */
-  finishAll(): void {
+  finishAll(): Promise<void> {
     this.pending.clear();
     this.claimed.clear();
     this.byToolUse.clear();
@@ -640,6 +654,16 @@ export class ClaudeMonitorTrace {
       // 卡片还写着「正在盯着」，要等下一次开机清扫才可能纠正（第 2 轮审查实测）。
       // 会话身份是这条流的持久归属，拿它查才查得全。
       if (!cliSessionId) return;
+      // **但只收自己这一代的尾。** 同一条 CLI 会话会跨好几代进程（resume 后号不变），
+      // 把别的代次一起收掉就是拿这一代的死亡给上一代下结论 —— 方向上虽然同样是「判死」，
+      // 凭据却是错的，而错凭据两个方向都会用（这一代还活着时同样会把旧卡续命，那就是 F1）。
+      // 判据和落库那一侧同一份：**证明不了是别人的就算我的** —— `source_run` 为空的是存量行
+      // 和没有落盘文件的会话（Windows、常驻），它们只可能归我；明确记着另一个 run 的才排除。
+      // 自己都没有 run 凭据时（`runPath` 为空）回到老语义：整条会话一起收。
+      const origin = await this.runOrigin();
+      const mine = origin.runPath
+        ? or(isNull(monitors.sourceRun), eq(monitors.sourceRun, origin.runPath))
+        : undefined;
       const live = await db
         .select({ id: monitors.id, taskId: monitors.taskId })
         .from(monitors)
@@ -647,6 +671,7 @@ export class ClaudeMonitorTrace {
           eq(monitors.kind, "claude"),
           eq(monitors.status, "running"),
           eq(monitors.cliSessionId, cliSessionId),
+          mine,
         ));
       if (!live.length) return;
       await db.update(monitors).set({
@@ -656,5 +681,7 @@ export class ClaudeMonitorTrace {
       }).where(and(inArray(monitors.id, live.map((r) => r.id)), eq(monitors.status, "running")));
       for (const taskId of new Set(live.map((r) => r.taskId))) bus.publish({ type: "task.monitors", taskId });
     });
+    // 队列永不 reject（`queue` 的 catch 兜住并留账），所以这里原样交出去就行。
+    return this.chain.then(() => undefined);
   }
 }
