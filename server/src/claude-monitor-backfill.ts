@@ -24,12 +24,12 @@
 // 「没读到某条事实」不等于「那条事实不成立」：没读到终态要先问来源还活不活，而不是直接判死。
 // 来源已经说过的终态不被重放改写（否则显示跟着扫描次数变），ash 自己的推断必须对纠正开放
 // （判据 `monitorStatusCorrectable`，与实时投影共用）。
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
-import { createLivenessProbe } from "./claude-monitor-liveness.js";
+import { reconcileLiveness } from "./claude-monitor-reconcile.js";
 import {
-  adoptSessionRecovery, clearMonitorRecovery, monitorRecoveryTasks, noteMonitorRecovery,
-  resetMonitorRecoveryBudget,
+  adoptSessionRecovery, clearMonitorRecovery, dropMonitorRecoveryReason, monitorRecoveryTasks,
+  noteMonitorRecovery, resetMonitorRecoveryBudget,
 } from "./claude-monitor-recovery.js";
 import { commitRound } from "./claude-monitor-commit.js";
 import { clearScanCursors, loadScanCursors, saveScanCursors, type ScanCursor } from "./claude-monitor-cursors.js";
@@ -45,7 +45,6 @@ import {
   notePurgeDone, notePurgeFailed, releaseTaskRevocation,
 } from "./claude-monitor-revoked.js";
 import { isSameProcess } from "./proc.js";
-import { now } from "./util.js";
 
 /**
  * 每个任务的扫描快照。**不是「扫过就永不再扫」**——它记着每个文件读到第几字节，下次只读
@@ -137,17 +136,21 @@ function evictScan(taskId: string): boolean {
  * ——启动被拒、进程在那一行之后被杀 —— 于是每轮重读同一个窗口，末尾的 Monitor 永远读不到
  * （第 11 轮审查实测 12 轮停滞；回退这件事本身也不算进展，见 `rewound`）。
  */
-async function saveCheckpoint(taskId: string, scan: TaskScan): Promise<void> {
+async function saveCheckpoint(taskId: string, scan: TaskScan): Promise<boolean> {
   // **没确认提交过就不许停在半路**（检查点不变量，见 claude-monitor-scan.ts 文件头）：这一轮
   // 读过的字节还没落库时，位置之前那段既不在内存里、也不在库里，从它往后读再也拼不回来。
   // 那种情况只有一条安全的路：位置清掉，下一轮从零重放（代价是重读，不是错误显示）。
   //
   // 按现在的调用序其实到不了这一支（提交没落地的那几条路都会先 `discardScan`），它是这条
   // 不变量的**硬闸**：留着是为了下一次改动绕不过去，不是因为有哪条回归打在它身上。
-  if (!scan.committedThrough) { await discardScan(taskId); return; }
+  if (!scan.committedThrough) { await discardScan(taskId); return false; }
   const cursors = cursorsOf(scan);
-  if (!cursors.size) return;
-  if (await saveScanCursors(taskId, cursors)) return;
+  if (!cursors.size) return true;              // 这一轮没有要确认的位置
+  if (await saveScanCursors(taskId, cursors)) {
+    // 位置确认得了 ⇒ 「库还没升级到位」这条已经不成立，别让它挂在面板上（原因集是累加的）。
+    dropMonitorRecoveryReason(taskId, "schema-unready");
+    return true;
+  }
   // **位置没落盘 = 这一段没有「读完了」的凭据**，不许当成落盘过（唯一会走到这儿的原因是
   // 库的持久身份键还没核验成当代形状，见 db/schema-readiness.ts）。这一轮读到的事实已经
   // 提交、面板上照常显示；要回退的只有「读到哪儿了」这句话。
@@ -155,9 +158,15 @@ async function saveCheckpoint(taskId: string, scan: TaskScan): Promise<void> {
   // 库里那份旧位置**不清**：它是上一次核验通过时盖的戳，承诺的前缀照旧成立，清掉只会让
   // 每一轮都从零重读（而这正是第 11/12/13 轮审查那个停滞判据）。丢掉的是内存那份 ——
   // 下一轮从库里那个位置重读这一段，等迁移成功它自己就补齐了。
+  //
+  // 为什么连内存那份也不留着往前读：留着的话，这一段里**只存在于内存**的悬着调用就没有落盘
+  // 凭据（旧键会吞掉同号不同来源的那一条）。等 schema 修好、某一轮把位置盖上戳时，那个前缀
+  // 里就混着一条从来没入库的事实 —— 又回到「确认了一个少卡的前缀」。
   snapshots.delete(taskId);
   rewound.add(taskId);
   noteMonitorRecovery(taskId, "schema-unready", false);
+  // **这一轮没完成**，由调用方并进完成判据（见 runBackfill 里 `cursorsDirty` 那一支）。
+  return false;
 }
 
 /** 正在跑的那次 → 它的 Promise。并发调用共享同一次工作，不重复读盘。 */
@@ -563,7 +572,13 @@ async function runBackfill(taskId: string): Promise<number> {
       // **位置也当场落盘**：这一轮的事实已经确认落库，位置之前的内容全都有归宿了。只留在
       // 内存里的话，它的存活就取决于「哪张缓存还记得它」——而那张缓存总有上限，上限一到被
       // 挤掉的可能正是这个还没读完的任务（第 11/12/13 轮审查同一个判据的三个出口）。
-      if (scan.cursorsDirty) await saveCheckpoint(taskId, scan);
+      // **拒绝要并进这一轮的完成判据。** 位置没落盘 = 这一段没有「读完了」的凭据，跟「读到
+      // 上限」「末尾半行」是同一类未完成，必须一样挡住销账：否则刚登记的恢复责任在这一轮
+      // 末尾就被 `clearMonitorRecovery` 清掉，而登记和清账各发一条 `task.monitors`，前端
+      // 收到就再 GET 一次、再登记再清 —— 真实页面上 1.3 秒 402 次 GET，面板还什么都不说
+      // （第 3 轮审查 F1 实测）。退避由恢复账本管，通知只在原因真的变了时发（见
+      // claude-monitor-recovery.ts 的 `changed`）。
+      if (scan.cursorsDirty && !(await saveCheckpoint(taskId, scan))) unread = true;
     }
 
     // ── 销账前最后一问：**还有裁不清的一次性事实吗** ─────────────────────────────
@@ -615,75 +630,4 @@ async function runBackfill(taskId: string): Promise<number> {
   if (!unread && !missed && reconciled) clearMonitorRecovery(taskId);
   if (added) bus.publish({ type: "task.monitors", taskId });
   return added;
-}
-
-
-/**
- * 重新裁决这个任务已有投影行的死活，**与文件有没有新内容无关**。
- *
- * 两个方向都要纠正：
- * - 写着 `lost`、而起它的来源其实还活着 → 回到 `running`（上一次判错了）。
- * - 写着 `running`、而来源已经没了 → 落 `lost`。
- *
- * 为什么不能并进 `mergeInto`：那条路要求「这一轮扫到了这条 Monitor」。文件没有新内容时
- * （常态）根本不会走到它，而进程的死活随时在变（实测 existingLiveness 两个方向都卡住）。
- * 来源已经给过终态的行不在此列 —— 那是事实，不是推断。
- */
-async function reconcileLiveness(
-  taskId: string,
-  /** 这一轮看到的 run 文件（见 TaskScan.runFiles）。代次结论由它和行上的 `source_run` 现算。 */
-  runFiles: { all: Set<string>; latest: Set<string> },
-): Promise<boolean> {
-  const rows = await db
-    .select({
-      id: monitors.id, status: monitors.status, cliSessionId: monitors.cliSessionId,
-      taskId: monitors.taskId, sourcePid: monitors.sourcePid, sourcePidStartedAt: monitors.sourcePidStartedAt,
-      sourceRun: monitors.sourceRun,
-    })
-    .from(monitors)
-    .where(and(
-      eq(monitors.taskId, taskId),
-      eq(monitors.kind, "claude"),
-      inArray(monitors.status, ["running", "lost"]),
-    ));
-  if (!rows.length) return false;
-
-  const probe = createLivenessProbe();
-  const revive: string[] = [];
-  const bury: string[] = [];
-  /** 这一轮新判明「那一代 run 已经结束」的行：结论要落到列上，别每轮重算（也给开机清扫用）。 */
-  const stale: string[] = [];
-  for (const row of rows) {
-    // ── 代次：**认文件，不认内存** ───────────────────────────────────────────────
-    //
-    // 这一行起在哪个 run 文件里是记在列上的（`source_run`），而「这条会话最新的 run 是哪个」
-    // 这一轮刚列过。两样一比就知道「后来又起过新一轮没有」——不需要 `found` 还在内存里。
-    //
-    // 为什么非这样不可：配对状态被内存上限挤掉之后，`found` 是空的，代次翻转无从算起；而新
-    // 回合会先创建一个**空的** run 文件，于是旧监听会被「这条会话现在有活进程」证明成「还在
-    // 盯着」——拿下一代人的凭据给上一代续命（第 10 轮审查用生产服务 + 真页面实测）。
-    //
-    // 只在「这一行的 run 文件这一轮确实列到了」时才下这个结论：列不到（文件被删、目录换了）
-    // 说明我们没有权威清单，那就不猜，退回下面按 pid / 会话判。
-    const outdated = !!row.sourceRun && runFiles.all.has(row.sourceRun) && !runFiles.latest.has(row.sourceRun);
-    if (outdated && row.sourcePid !== 0) stale.push(row.id);
-    const alive = outdated ? false : await probe.sourceAlive(row);
-    if (alive && row.status === "lost") revive.push(row.id);
-    else if (!alive && row.status === "running") bury.push(row.id);
-  }
-  if (stale.length) {
-    // 0 不是缺省值而是明确结论：「起它的那一代 run 之后又起过新的 run」（见 db/schema.ts）。
-    await db.update(monitors).set({ sourcePid: 0 }).where(inArray(monitors.id, stale));
-  }
-  if (revive.length) {
-    await db.update(monitors)
-      .set({ status: "running", endedAt: null, endedReason: null })
-      .where(and(inArray(monitors.id, revive), eq(monitors.status, "lost")));
-  }
-  if (bury.length) {
-    await db.update(monitors)
-      .set({ status: "lost", endedAt: now(), endedReason: "起它的那个智能体进程已经不在了" })
-      .where(and(inArray(monitors.id, bury), eq(monitors.status, "running")));
-  }
-  return revive.length + bury.length + stale.length > 0;
 }

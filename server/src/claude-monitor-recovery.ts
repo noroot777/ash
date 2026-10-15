@@ -80,6 +80,21 @@ export function noteMonitorRecovery(
   if (changed) bus.publish({ type: "task.monitors", taskId });
 }
 
+/**
+ * **这一条原因已经不成立了**：只摘它，别碰别的。
+ *
+ * 为什么要有这一步：原因集是累加的，而有些原因会自己退场 —— 升级修好之后
+ * `schema-unready` 就不再成立，但这个任务可能仍然「没读完」（长文件），于是整份账不该销。
+ * 没有这一步，面板会一直写着「数据库还没升级完」直到那个任务某一轮彻底读完（第 3 轮审查
+ * F1 的后一半）。摘空了就等于这一轮什么都没剩下，照常销账。
+ */
+export function dropMonitorRecoveryReason(taskId: string, reason: MonitorRecoveryReason): void {
+  const entry = pending.get(taskId);
+  if (!entry || !entry.reasons.delete(reason)) return;   // 没记过这条 ⇒ 什么都不用做
+  if (!entry.reasons.size) { clearMonitorRecovery(taskId); return; }
+  bus.publish({ type: "task.monitors", taskId });        // 可见状态真的变了
+}
+
 /** 这一轮干净跑完了：销账、撤定时器。 */
 export function clearMonitorRecovery(taskId: string): void {
   const entry = pending.get(taskId);
