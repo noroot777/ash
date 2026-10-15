@@ -19,7 +19,7 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitor-ledger");
 
-const [{ db, ensureSchema }, schema, { ClaudeMonitorTrace }, { backfillClaudeMonitors }, { listMonitors }, { inspectProcess }] =
+const [{ db, ensureSchema, dbClient }, schema, { ClaudeMonitorTrace }, { backfillClaudeMonitors }, { listMonitors }, { inspectProcess }] =
   await Promise.all([
     import("../src/db/index.js"),
     import("../src/db/schema.js"),
@@ -555,6 +555,46 @@ async function main(): Promise<void> {
       metaUpdates.map((s) => whereOf(s).slice(0, 90)).join(" | "));
   }
 
+  // ── ⑭ 旧库的未决表没有唯一键：升级时**补齐并去重**，别让它一直重复插 ────────────
+  //
+  // 这张表的唯一性在两条建库路径上各写一遍：`db/index.ts` 的 bootstrap DDL（新库）和
+  // `schema-monitors.ts` 的 `primaryKey()`（声明式 `db:push`）。第 12 轮补的是后者，但
+  // **已经按旧声明建出来的库升级上来还是没有主键**——`onConflictDoNothing` 没有冲突目标
+  // 可撞，于是每轮同步都能再插一条一模一样的（第 13 轮审查 N4，用构建产物实测重复 2 条）。
+  // 所以升级路径上要有一道幂等修复：先去重、再补唯一索引。
+  {
+    const { syncPendingCalls } = await import("../src/claude-monitor-pending.js");
+    // 复刻旧声明式路径建出来的那张表：列一模一样,就是没有 PRIMARY KEY。
+    await dbClient.execute("DROP TABLE IF EXISTS monitor_pending_calls");
+    await dbClient.execute(`CREATE TABLE monitor_pending_calls (
+      task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+      command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', at TEXT, source_run TEXT)`);
+    const dup = ["t-legacy-pending", "s-legacy", "tu-dup", "sleep 600", "重复了两条", null, null];
+    await dbClient.execute({ sql: "INSERT INTO monitor_pending_calls VALUES (?,?,?,?,?,?,?)", args: dup });
+    await dbClient.execute({ sql: "INSERT INTO monitor_pending_calls VALUES (?,?,?,?,?,?,?)", args: dup });
+    await dbClient.execute({ sql: "INSERT INTO monitor_pending_calls VALUES (?,?,?,?,?,?,?)",
+      args: ["t-legacy-pending", "s-legacy", "tu-other", "sleep 1", "另一条,不许被去重带走", null, null] });
+
+    await ensureSchema();   // ← 升级就发生在这里
+
+    const left = await db.select().from(schema.monitorPendingCalls);
+    check(left.filter((r) => r.toolUseId === "tu-dup").length === 1,
+      "⑭升级时把重复的那条去掉了,只留一条", JSON.stringify(left.map((r) => r.toolUseId)));
+    check(left.filter((r) => r.toolUseId === "tu-other").length === 1,
+      "⑭不同 tool_use_id 的那条没被去重带走");
+    const idx = await dbClient.execute("PRAGMA index_list(monitor_pending_calls)");
+    check(idx.rows.some((r: any) => Number(r.unique) === 1),
+      "⑭唯一约束补上了（旧库从此也撞得到冲突）", JSON.stringify(idx.rows.map((r: any) => r.name)));
+
+    // 真正要防住的后果:再同步一次不会又多一条。
+    const again = { sessionKey: "s-legacy", toolUseId: "tu-dup", call: { command: "sleep 600", description: "重复了两条" }, at: null, sourceRun: null };
+    await syncPendingCalls("t-legacy-pending", [again], []);
+    await syncPendingCalls("t-legacy-pending", [again], []);
+    const after = await db.select().from(schema.monitorPendingCalls);
+    check(after.filter((r) => r.toolUseId === "tu-dup").length === 1,
+      "⑭补齐之后再同步两轮也只有一条", String(after.filter((r) => r.toolUseId === "tu-dup").length));
+  }
+
   live.kill();
   if (failures) {
     console.error(`\n${failures} 条断言未通过`);
@@ -562,7 +602,8 @@ async function main(): Promise<void> {
   } else {
     console.log("✓ 内置 Monitor 账本不变量：lost 行可被重建认领 / 晚到回填也收通知 / 已有行按来源死活双向纠正"
       + " / 缓存随文件增长与新会话失效 / 代次区分（新进程 ≠ 起它的那一代，结论持久化）"
-      + " / 带归属的旧期限按证据列纠正 / 起点是区间（窄→精确时刻，宽→只报时长）/ 回执前重启后从历史补回时长 均受回归保护");
+      + " / 带归属的旧期限按证据列纠正 / 起点是区间（窄→精确时刻，宽→只报时长）/ 回执前重启后从历史补回时长"
+      + " / 旧库的未决表升级时补齐唯一键并去重 均受回归保护");
   }
 }
 

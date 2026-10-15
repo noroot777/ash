@@ -466,6 +466,36 @@ async function backfillMonitorTimeoutFromExpiry(client: Client): Promise<void> {
   }
 }
 
+/**
+ * 未决调用表的唯一键补齐（2026-10-15）。
+ *
+ * 这张表的 bootstrap DDL 自带 `PRIMARY KEY(task_id, session_key, tool_use_id)`，但**声明式
+ * 建库那条路**（`npm -w server run db:push`）在加上 Drizzle 侧的 primaryKey 之前建出来的表
+ * 没有任何唯一约束 —— 而 `CREATE TABLE IF NOT EXISTS` 不会回头给它补。那种库上
+ * `onConflictDoNothing` 防不住重复，每一轮同步都能再插一条一样的（第 13 轮审查 N4 实测）。
+ *
+ * SQLite 不能给已有表加主键，所以补的是**等价的唯一索引**：先按三列去重（同一条调用的内容
+ * 来自同一行不变的日志，留哪一条都一样），再建索引。新库上这一步是空转（主键在，索引只是
+ * 多一个同列索引）。
+ */
+async function repairPendingCallKey(client: Client): Promise<void> {
+  try {
+    const info = await client.execute("PRAGMA table_info(monitor_pending_calls)");
+    if (!info.rows.length) return;                                   // 表还没建
+    if (info.rows.some((row: any) => Number(row.pk) > 0)) return;    // 新库:主键已经在
+    await client.execute(
+      `DELETE FROM monitor_pending_calls WHERE rowid NOT IN (
+         SELECT MIN(rowid) FROM monitor_pending_calls GROUP BY task_id, session_key, tool_use_id)`,
+    );
+    await client.execute(
+      `CREATE UNIQUE INDEX IF NOT EXISTS monitor_pending_calls_key
+         ON monitor_pending_calls (task_id, session_key, tool_use_id)`,
+    );
+  } catch (e) {
+    console.warn("[ash] 未决调用表唯一键补齐失败,忽略:", e);
+  }
+}
+
 export async function runDataMigrations(client: Client): Promise<void> {
   await widenWorkflowBuiltinIndex(client);
   await relaxDebateRoundIndex(client);
@@ -481,6 +511,7 @@ export async function runDataMigrations(client: Client): Promise<void> {
     console.warn("[ash] 已验收任务遗留预约清理失败,忽略:", e);
   }
   await reclaimOrphanOwnerGroups(client);
+  await repairPendingCallKey(client);
   await relaxUnfoundedClaudeMonitorLifetimes(client);
   // 必须排在 relax 之后：那一步先把「时长没有依据」的行降成 unknown，这一步才只给真正
   // 可信的时长回算列值。
