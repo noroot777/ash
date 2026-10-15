@@ -649,4 +649,4 @@ export const handoffLocalKeyRevisions = sqliteTable("handoff_local_key_revisions
 });
 
 // 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
-export { monitors, monitorPendingCalls } from "./schema-monitors.js";
+export { monitors, monitorPendingCalls, monitorScanCursors } from "./schema-monitors.js";

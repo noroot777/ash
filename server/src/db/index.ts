@@ -145,6 +145,11 @@ export async function ensureSchema() {
       at TEXT, source_run TEXT,
       PRIMARY KEY (task_id, session_key, tool_use_id)
     );
+    CREATE TABLE IF NOT EXISTS monitor_scan_cursors (
+      task_id TEXT NOT NULL, path TEXT NOT NULL,
+      file_size INTEGER NOT NULL DEFAULT 0, read_offset INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (task_id, path)
+    );
     CREATE TABLE IF NOT EXISTS llm_providers (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
       protocol TEXT NOT NULL DEFAULT 'openai', base_url TEXT NOT NULL,

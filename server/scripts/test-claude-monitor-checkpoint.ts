@@ -17,168 +17,15 @@
 // 退避定时器会抢在压力构造之前把文件读完（本轮自测：加了 debug 才发现 converge 里这两组是
 // **假通过**——定时器先读完了，检查点那条路一次都没走到）。所以这里把退避阶梯拉到 10 分钟，
 // 整份测试自己手动驱动每一轮。
-import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync, writeFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
-import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
-
-const root = mkdtempSync(join(tmpdir(), "ash-mon-checkpoint-"));
-process.env.ASH_DB = join(root, "ash.db");
-process.env.ASH_RUNS_DIR = join(root, "runs");
-/** 单次只读 32 KiB：检查点要卡在某两行之间，而上限是按字节算的。 */
-const LIMIT = 32_768;
-process.env.ASH_MONITOR_SCAN_MAX_BYTES = String(LIMIT);
-// **退避阶梯拉长到 10 分钟**：这份测试要自己控制每一轮的时机，不许定时器插队（见文件头）。
-process.env.ASH_MONITOR_BACKOFF_MS = "600000,600000";
-requireTmpDb("monitor-checkpoint");
-
-const [
-  { db, ensureSchema, dbClient }, schema, { backfillClaudeMonitors, monitorScanTracked },
-  recovery, { listMonitors }, { inspectProcess },
-] = await Promise.all([
-  import("../src/db/index.js"),
-  import("../src/db/schema.js"),
-  import("../src/claude-monitor-backfill.js"),
-  import("../src/claude-monitor-recovery.js"),
-  import("../src/monitors.js"),
-  import("../src/proc.js"),
-]);
-const { monitorRecoveryOf, stopAllMonitorRecovery } = recovery;
-const { monitors, projects, sessions, tasks } = schema;
-await ensureSchema();
-
-let failures = 0;
-const check = (ok: boolean, label: string, detail = "") => {
-  if (ok) return;
-  failures += 1;
-  console.error(`✗ ${label}${detail ? ` —— ${detail}` : ""}`);
-};
-const now = () => new Date().toISOString();
-const line = (ev: unknown) => JSON.stringify(ev) + "\n";
-
-/** 一个**真的活着**的进程，以及它真实的启动时刻（代次那几组要证明「不是退回判死」）。 */
-function liveProcess(): { pid: number; startedAt: string | null; kill: () => void } {
-  const child = spawn("sleep", ["600"], { stdio: "ignore" });
-  const pid = child.pid!;
-  return { pid, startedAt: inspectProcess(pid)?.startedAt ?? null, kill: () => child.kill("SIGTERM") };
-}
-
-let seq = 0;
-async function fixture(name: string, pid: number | null = null, pidStartedAt: string | null = null) {
-  const taskId = `t-${name}-${seq++}`;
-  const cli = `cli-${taskId}`;
-  const dir = join(root, "runs", taskId);
-  mkdirSync(dir, { recursive: true });
-  const runFile = (stamp = "20261015T010000000Z") => join(dir, `s-${taskId}-${stamp}.agent-out.jsonl`);
-  await db.insert(tasks).values({ id: taskId, projectId: "p", title: name, body: "", status: "running",
-    agentType: "claude", mode: "single", createdAt: now(), updatedAt: now() });
-  await db.insert(sessions).values({
-    id: `s-${taskId}`, taskId, role: "single", agentType: "claude", executor: "claude@x",
-    cliSessionId: cli, cwd: root, startedAt: now(),
-    agentOutPath: runFile(), agentPid: pid, agentStartedAt: pidStartedAt,
-  });
-  return { taskId, cli, file: runFile(), runFile };
-}
-
-/** 一组**完整、顺序正常**的普通后台 Bash 生命周期（调用 → 开始 → 回执 → 完成）。 */
-const plainBash = (cli: string, n: number) => [
-  line({ type: "assistant", timestamp: "2026-10-15T05:00:00.000Z", message: { content: [
-    { type: "tool_use", name: "Bash", id: `tb${n}`, input: { command: `pytest -q shard${n}`, run_in_background: true } },
-  ] } }),
-  line({ type: "system", subtype: "task_started", task_id: `bbash${n}`, tool_use_id: `tb${n}`, task_type: "local_bash", session_id: cli }),
-  line({ type: "user", timestamp: "2026-10-15T05:00:01.000Z", message: { content: [
-    { type: "tool_result", tool_use_id: `tb${n}`, content: `Running in background (bbash${n})` },
-  ] } }),
-  line({ type: "system", subtype: "task_notification", task_id: `bbash${n}`, status: "completed", summary: "跑完了", session_id: cli }),
-].join("");
-
-/**
- * 用一条填充事件把 `body` 顶到正好 `target` **字节**（检查点要落在指定两行之间）。
- *
- * **必须按字节算**：扫描的单次上限和游标都是字节，而夹具里有中文描述（一个字 3 字节）。
- * 按字符串长度算的那一版把检查点挪到了前一行之前，于是「停好的位置」正好等于「可重放
- * 位置」，整组断言变成免费的（本轮自测用 debug 才看出来）。
- *
- * 填充是**一条**事件，所以 `target` 超过一个窗口时它本身就装不进窗口、会被整条跳过
- * （见 ⑨）。要跨窗口的夹具用 `padLines`。
- */
-const bytes = (text: string) => Buffer.byteLength(text, "utf8");
-
-/**
- * 用**一串**填充事件把 `body` 顶过 `target` 字节。
- *
- * 跟 `padTo` 的区别只在「一条还是多条」，但这件事很要紧：单次读取窗口是按字节切的，**一条
- * 比窗口还长的记录现在读不过去**（见扫描层 `eachLine`：窗口内找不到换行 ⇒ 这一轮零进展）。
- * 要跨窗口的夹具必须用这个，否则测的是「超长记录卡住」而不是「跨窗口续读」（本轮自测：
- * ⑦⑧ 第一版用 padTo 造了一条 37 KiB 的行，于是两组都停在第一个窗口里）。
- */
-function padLines(body: string, target: number): string {
-  let out = body;
-  while (bytes(out) < target) {
-    out += line({ type: "assistant", timestamp: "2026-10-15T01:00:00.000Z",
-      message: { content: [{ type: "text", text: "x".repeat(400) }] } });
-  }
-  return out;
-}
-
-function padTo(body: string, target: number): string {
-  const head = '{"type":"assistant","timestamp":"2026-10-15T01:00:00.000Z","message":{"content":[{"type":"text","text":"';
-  const tail = '"}]}}\n';
-  const need = target - bytes(body) - bytes(head) - bytes(tail);
-  if (need < 0) throw new Error(`夹具装不下：还差 ${-need} 字节`);
-  return body + head + "x".repeat(need) + tail;  // 填充只用 ASCII，字节数 = 字符数
-}
-
-/** 一个 Monitor 的调用 + 启动 + 回执（可分段放，用来把检查点卡在中间）。 */
-const call = (cli: string, tu: string, desc: string, at: string) => line({
-  type: "assistant", timestamp: at, message: { content: [
-    { type: "tool_use", name: "Monitor", id: tu, input: { command: "sleep 1800", description: desc, timeout_ms: 600_000 } },
-  ] },
-});
-const started = (cli: string, tu: string, native: string) => line({
-  type: "system", subtype: "task_started", task_id: native, tool_use_id: tu,
-  task_type: "local_bash", session_id: cli,
-});
-const receipt = (tu: string, native: string, at: string) => line({
-  type: "user", timestamp: at, message: { content: [
-    { type: "tool_result", tool_use_id: tu, content: `Monitor started (task ${native}, expires in 1m 30s unless the source ends first).` },
-  ] },
-});
-const notice = (cli: string, native: string) => line({
-  type: "system", subtype: "task_notification", task_id: native,
-  status: "completed", summary: "来源确认完成", session_id: cli,
-});
-
-/**
- * 造一批「同样处于恢复中」的任务，把被测任务挤出快照表。
- *
- * 软上限豁免恢复中的游标，所以压力只能压到硬上限（64）上——那一支正是「只停好位置、丢掉
- * 配对状态」的入口。
- */
-async function makeSqueeze(tag: string): Promise<() => Promise<void>> {
-  const ids: string[] = [];
-  for (let i = 0; i < 70; i += 1) {
-    const other = await fixture(`${tag}-filler${i}`);
-    writeFileSync(other.file, line({ type: "system", subtype: "init", session_id: other.cli }));
-    chmodSync(other.file, 0o000); // 读不开 → 立刻 pending（恢复中），而且扫描很便宜
-    ids.push(other.taskId);
-  }
-  return async () => { for (const taskId of ids) await backfillClaudeMonitors(taskId); };
-}
-
-/** 手动往下读，顺便记下期间出现过哪些恢复原因。 */
-async function driveUntil(taskId: string, done: () => Promise<boolean>, seen: Set<string>): Promise<number> {
-  let rounds = 0;
-  for (; rounds < 20; rounds += 1) {
-    for (const r of monitorRecoveryOf(taskId)?.reasons ?? []) seen.add(r);
-    if (await done()) break;
-    await backfillClaudeMonitors(taskId);
-  }
-  for (const r of monitorRecoveryOf(taskId)?.reasons ?? []) seen.add(r);
-  return rounds;
-}
+import {
+  LIMIT, root, db, dbClient, schema, monitors, projects, sessions, tasks,
+  backfillClaudeMonitors, monitorScanTracked, monitorRecoveryOf, stopAllMonitorRecovery,
+  listMonitors, releaseTmpDb, check, failureCount,
+  now, line, liveProcess, fixture, plainBash, bytes, padLines, padTo,
+  call, started, receipt, notice, makeSqueeze, driveUntil,
+} from "./monitor-checkpoint-harness.js";
 
 async function main(): Promise<void> {
   await db.insert(projects).values({ id: "p", name: "p", repoPath: root, createdAt: now() });
@@ -632,14 +479,71 @@ async function main(): Promise<void> {
       JSON.stringify(monitorRecoveryOf(f.taskId)));
   }
 
-  if (failures === 0) {
+  // ── ⑪ 删除撞上正在跑的那一轮：旧扫描不许把删掉的东西写回来 ─────────────────────
+  //
+  // ⑩ 是「先删完、再读一轮」。真实请求不排队：删除可以正好落在某一轮的 await 里——那一轮
+  // 的会话清单、配对状态、悬着的调用全是删除之前读到的事实，照常写下去就是投影行、未决行、
+  // 读取位置各留一条**再也没有入口能清**的孤儿（任务都没了，面板上根本看不到它）。
+  // 第 13 轮审查用屏障实测：删除当刻三张表都是 0，旧扫描跑完又各回来一条。
+  //
+  // 这里用同一个屏障复现：卡在「会话查完、还没交还给扫描」那一刻执行真正的删除入口。
+  {
+    const f = await fixture("delete-inflight");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-inflight", "删除撞上的那条", "2026-10-15T11:00:00.000Z");
+    body += started(f.cli, "tu-inflight", "binflight");
+    body += padLines("", LIMIT * 2); // 两个窗口：这一轮读不完，会留账也会落位置
+    writeFileSync(f.file, body);
+
+    const real = dbClient.execute.bind(dbClient);
+    let reached!: () => void;
+    let resume!: () => void;
+    const selected = new Promise<void>((r) => { reached = r; });
+    const barrier = new Promise<void>((r) => { resume = r; });
+    let paused = false;
+    (dbClient as any).execute = async (stmt: any) => {
+      const result = await real(stmt);
+      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+      if (!paused && /from "sessions"/i.test(sql) && JSON.stringify(stmt?.args ?? []).includes(f.taskId)) {
+        paused = true;
+        reached();
+        await barrier;
+      }
+      return result;
+    };
+    const job = backfillClaudeMonitors(f.taskId);
+    await selected;
+    const { deleteTaskAssociations } = await import("../src/task-delete-routes.js");
+    try {
+      await deleteTaskAssociations(f.taskId);
+      await db.delete(tasks).where(eq(tasks.id, f.taskId));
+    } finally { resume(); }
+    await job;
+    (dbClient as any).execute = real;
+
+    const leftovers = {
+      monitors: (await db.select().from(monitors).where(eq(monitors.taskId, f.taskId))).length,
+      pending: (await db.select().from(schema.monitorPendingCalls)
+        .where(eq(schema.monitorPendingCalls.taskId, f.taskId))).length,
+      cursors: (await db.select().from(schema.monitorScanCursors)
+        .where(eq(schema.monitorScanCursors.taskId, f.taskId))).length,
+    };
+    check(leftovers.monitors === 0 && leftovers.pending === 0 && leftovers.cursors === 0,
+      "⑪删除撞上在途的那一轮，三张表都没留下孤儿行", JSON.stringify(leftovers));
+    check(monitorRecoveryOf(f.taskId) === null,
+      "⑪也没给一个已经删掉的任务留恢复责任（否则定时器会一直推它）",
+      JSON.stringify(monitorRecoveryOf(f.taskId)));
+  }
+
+  if (failureCount() === 0) {
     console.log("✓ 内置 Monitor 的检查点：位置只停在可重放处（被跳过的调用会重放）/ "
       + "位置之前已成行的按 native_id 与 tool_use_id 配回去 / "
       + "配不上的当场裁决（位置照常前进）/ 每轮都被挤掉的固定输入按窗口数收敛 / "
       + "跳过前缀后新起的 run 仍把旧监听判死 / 迟到回执重建窄区间 / "
       + "唯一裁不清的那种重放一遍就收手 / "
       + "起不来的调用不钉位置、跨窗口的调用靠落盘接回来 / "
-      + "装不进窗口的那条记录跳过而不是卡死 / 删任务连未决行和扫描状态一起带走 均受回归保护");
+      + "装不进窗口的那条记录跳过而不是卡死 / 删任务连未决行和扫描状态一起带走 / "
+      + "删除撞上在途那一轮也不留孤儿行 均受回归保护");
   }
 }
 
@@ -650,4 +554,4 @@ try {
   releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }
-process.exit(failures === 0 ? 0 : 1);
+process.exit(failureCount() === 0 ? 0 : 1);

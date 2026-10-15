@@ -135,3 +135,28 @@ export const monitorPendingCalls = sqliteTable("monitor_pending_calls", {
   // 一样的（第 12 轮审查 N4，用构建产物 drizzle-kit export 实测该表没有主键）。
   pk: primaryKey({ columns: [t.taskId, t.sessionKey, t.toolUseId] }),
 }));
+
+// ── 历史扫描读到哪儿了 ────────────────────────────────────────────────────────
+//
+// **这是检查点本体，不是缓存。** 「这个文件读到第几字节」决定了下一轮从哪儿接着读，而
+// 它之前那段内容的归宿是「已经成行落库」+「悬着的调用落在上面那张表里」——位置一丢就得
+// 从零重读，单次只读 128 MiB，于是「历史很长、Monitor 在末尾」的任务永远读不到它。
+//
+// 为什么非落盘不可：位置原先住在进程内的两张表里（扫描快照 LRU、再后面兜底的位置表），
+// 两张都有容量上限。上限一到，**还没读完的那个任务**的位置就被别的任务挤掉，固定输入在
+// 持续压力下永远停在同一个前缀（第 11、12、13 轮审查连续三次都栽在同一个判据上，只是
+// 丢位置的出口每轮换一个）。落了盘就没有「哪张内存表还记得它」这回事了，顺带连 server
+// 重启也不必从零重读。
+//
+// 行数有界：每个任务 × 每个 run 文件一行，任务删除时一起收（task-delete-routes.ts）。
+export const monitorScanCursors = sqliteTable("monitor_scan_cursors", {
+  taskId: text("task_id").notNull(),
+  /** run 文件的绝对路径（`<sessionId>-<时间戳>.agent-out.jsonl`）。 */
+  path: text("path").notNull(),
+  /** 上一次读到它时它有多大。比这还小 = 文件被重写过，位置作废从头读（见 scanSession）。 */
+  fileSize: integer("file_size").notNull().default(0),
+  readOffset: integer("read_offset").notNull().default(0),
+}, (t) => ({
+  // 跟 bootstrap DDL 一模一样（db/index.ts）；两条建库路径的唯一性契约必须同一个。
+  pk: primaryKey({ columns: [t.taskId, t.path] }),
+}));

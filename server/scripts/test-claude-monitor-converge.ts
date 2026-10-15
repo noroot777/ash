@@ -24,7 +24,7 @@ process.env.ASH_MONITOR_BACKOFF_MS = "60,60,60,60,60,60,60,60";
 requireTmpDb("monitor-converge");
 
 const [
-  { db, ensureSchema, dbClient }, schema, { ClaudeMonitorTrace }, { backfillClaudeMonitors, monitorCheckpointOf, monitorScanTracked },
+  { db, ensureSchema, dbClient }, schema, { ClaudeMonitorTrace }, { backfillClaudeMonitors, forgetTaskMonitorScan, monitorCheckpointOf, monitorScanTracked },
   recovery, { listMonitors }, scan, { bus },
 ] = await Promise.all([
   import("../src/db/index.js"),
@@ -163,7 +163,7 @@ async function main(): Promise<void> {
     // 这 600 条调用都还悬着（`task_started` 永远不来）。**位置不为它们让路**：入参由
     // `monitor_pending_calls` 保着（见 claude-monitor-pending.ts）。让路的那一版会被一条
     // 永远不会完结的调用把位置钉死（第 11 轮审查实测 12 轮停滞）。
-    const park = scan.parkableCursors(scanState).get(f.file)!;
+    const park = scan.cursorsOf(scanState).get(f.file)!;
     check(park.offset === cursor1.offset, "②停好的位置就是读到的位置（不往回退）",
       `停好 ${park.offset} / 读到 ${cursor1.offset}`);
     check(scan.pendingCallsOf(scanState).length >= 512,
@@ -270,9 +270,10 @@ async function main(): Promise<void> {
     check(monitorRecoveryOf(big.taskId)?.pending === true, "④这个任务还没读完");
     // **位置不等被挤掉才留**：提交确认之后当场进检查点表，于是它的存活不依赖「这份运行中的
     // 对象还在不在 LRU」——被挤掉可以发生在本轮任何一个 await 处（第 12 轮审查 F1）。
-    check(monitorScanTracked(big.taskId) === true && monitorCheckpointOf(big.taskId) !== null,
-      "④这一轮确认提交之后，位置同时在内存快照和检查点表里（不是只等被挤掉时才停）",
-      `快照 ${monitorScanTracked(big.taskId)} / 检查点 ${JSON.stringify([...(monitorCheckpointOf(big.taskId)?.values() ?? [])])}`);
+    const saved = await monitorCheckpointOf(big.taskId);
+    check(monitorScanTracked(big.taskId) === true && !!saved?.size,
+      "④这一轮确认提交之后，位置已经落库（不是只等被挤掉时才停在内存里）",
+      `快照 ${monitorScanTracked(big.taskId)} / 落盘 ${JSON.stringify([...(saved?.values() ?? [])])}`);
     check((await listMonitors(big.taskId)).length === 0,
       "④第一轮还没读到末尾那个 Monitor", `${(await listMonitors(big.taskId)).length} 条`);
     await squeeze();
@@ -409,8 +410,8 @@ async function main(): Promise<void> {
       backfillClaudeMonitors(target.taskId),
       ...fillers.map((f) => backfillClaudeMonitors(f.taskId)),
     ]);
-    const checkpointAt = () => {
-      const cursors = [...(monitorCheckpointOf(target.taskId)?.values() ?? [])];
+    const checkpointAt = async () => {
+      const cursors = [...((await monitorCheckpointOf(target.taskId))?.values() ?? [])];
       return cursors.reduce((max, c) => Math.max(max, c.offset), -1);
     };
 
@@ -420,7 +421,7 @@ async function main(): Promise<void> {
       await concurrent();
       check(monitorScanTracked(target.taskId) === false,
         "⑦在途被选中淘汰的，到它自己这一轮结束时才让位（让了）", `第 ${rounds + 1} 轮`);
-      const offset = checkpointAt();
+      const offset = await checkpointAt();
       check(offset > last, "⑦位置每轮都往前（在途被挤掉也不归零）",
         `第 ${rounds + 1} 轮：${last} → ${offset}`);
       last = offset;
@@ -437,11 +438,51 @@ async function main(): Promise<void> {
       JSON.stringify(monitorRecoveryOf(target.taskId)));
   }
 
+  // ── ⑧ 进程内状态整个丢掉：位置照样从库里接回来 ───────────────────────────────
+  //
+  // ④⑦ 盯的是「别的任务把它挤掉」，而每一版修复都只是**换一张内存表**来存位置：可重放位置
+  // → 快照之外的位置表 → 给那张表加容量。第三版在「512 个还没读完的任务轮一圈」时照样被挤
+  // 掉（第 13 轮审查实测：10 轮里目标位置恒为 32756，末尾那张卡始终不出现）。
+  //
+  // 所以判据不该是「哪张缓存还记得它」，而是**位置根本不住在内存里**。这一组把进程内状态
+  // 整个抹掉（`forgetTaskMonitorScan` 清的正是快照、重读标记、让位记号和恢复账本，不碰库），
+  // 它等价于任意一种缓存淘汰，也等价于 server 重启那一刻。位置在库里，于是照样一轮一个窗口
+  // 往前走。
+  {
+    const f = await fixture("durable-checkpoint");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    for (let i = 0; i < 150; i += 1) body += plainBash(f.cli, i); // 远超 32 KiB → 要好几轮
+    body += realMonitor(f.cli, "bdur001");
+    writeFileSync(f.file, body);
+
+    let rounds = 0;
+    let last = -1;
+    for (; rounds < 12 && (await listMonitors(f.taskId)).length === 0; rounds += 1) {
+      await backfillClaudeMonitors(f.taskId);
+      const saved = await monitorCheckpointOf(f.taskId);
+      const offset = [...(saved?.values() ?? [])].reduce((max, c) => Math.max(max, c.offset), -1);
+      check(offset > last, "⑧位置每轮都往前（它在库里，不靠任何缓存）",
+        `第 ${rounds + 1} 轮：${last} → ${offset}`);
+      last = offset;
+      forgetTaskMonitorScan(f.taskId); // 进程内状态全抹掉 ≈ 任意缓存淘汰 / server 重启
+      check(monitorScanTracked(f.taskId) === false, "⑧内存里确实什么都没剩");
+    }
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 1 && rows[0]?.nativeId === "bdur001",
+      "⑧每一轮内存都被清空，仍然读到末尾那个 Monitor",
+      `${rounds} 轮后 ${rows.length} 条：${rows.map((r) => r.nativeId).join(",")}`);
+    check(rows[0]?.status === "exited", "⑧带着来源报的终态", String(rows[0]?.status));
+    await waitRecovered(f.taskId);
+    check(monitorRecoveryOf(f.taskId) === null, "⑧并且销了账",
+      JSON.stringify(monitorRecoveryOf(f.taskId)));
+  }
+
   if (failures === 0) {
     console.log("✓ 内置 Monitor 恢复的收敛性：普通后台 Bash 不占缓冲（末尾 Monitor 读得到）/ "
       + "真乱序满缓冲时背压不丢事实且预算真在耗 / 首次归属查询失败也不丢责任（库好了自动补）/ "
       + "每轮都被硬上限挤掉也从原位继续 / 丢过游标后的重读不算进展 / "
-      + "预算耗尽会留账并推给前端 / 并发在途淘汰下位置单调往前 均受回归保护");
+      + "预算耗尽会留账并推给前端 / 并发在途淘汰下位置单调往前 / "
+      + "进程内状态全丢也能从库里接着读 均受回归保护");
   }
 }
 

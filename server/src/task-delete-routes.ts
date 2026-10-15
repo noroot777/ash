@@ -10,6 +10,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
 import { forgetTaskMonitorScan } from "./claude-monitor-backfill.js";
+import { clearScanCursors } from "./claude-monitor-cursors.js";
 import { stopMonitorsForTask } from "./monitors.js";
 import { deleteTaskSideChats } from "./chat/lifecycle.js";
 import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
@@ -46,8 +47,10 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
   // 还没配上 `task_started` 的那几条调用（见 claude-monitor-pending.ts）：任务都删了，
   // 它们再也不会被配上，留下就是没有任何入口能清的孤儿行。
   await db.delete(monitorPendingCalls).where(eq(monitorPendingCalls.taskId, taskId));
-  // 库删干净了还不够：历史回填那边按 taskId 缓着扫描状态、读取位置和恢复责任，不作废的话
-  // 下一次有人读这个任务就会把旧桶里悬着的调用重新写回去（见 forgetTaskMonitorScan）。
+  // 历史扫描读到哪儿了（见 claude-monitor-cursors.ts）：任务都没了，这几行再没人会用。
+  await clearScanCursors(taskId);
+  // 库删干净了还不够：历史回填那边按 taskId 缓着扫描状态和恢复责任，不作废的话下一次有人
+  // 读这个任务就会把旧桶里悬着的调用重新写回去（见 forgetTaskMonitorScan）。
   forgetTaskMonitorScan(taskId);
   await db.delete(teamInbound).where(eq(teamInbound.taskId, taskId)); // 调度台还没送出的入站消息
   await db.delete(noteTasks).where(eq(noteTasks.taskId, taskId));

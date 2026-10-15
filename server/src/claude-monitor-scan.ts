@@ -31,8 +31,9 @@
 //   **绝不从某个位置开始读，除非它之前的内容都「有归宿」** —— 要么这一代读过（还在内存里），
 //   要么已经成行落库（已提交）。
 //
-// 谁守：`checkpointCursors` 只停在上一轮**确认提交过**的位置，其余情况一律从 0 重读；而「位置之前
-// 那条还悬着的调用」不靠位置来保，它**落盘**（`claude-monitor-pending.ts`）。
+// 谁守：落盘的位置只会是上一轮**确认提交过**的那个（backfill 的 `saveCheckpoint`），其余情况
+// 一律从 0 重读；而「位置之前那条还悬着的调用」不靠位置来保，它也落盘
+// （`claude-monitor-pending.ts`）。两样都在库里，于是「读到哪儿」这件事不依赖任何缓存命中。
 //
 // 上一版是靠位置保的 —— 可重放位置绝不越过一条悬着的调用。那条路在**永远不会完结的调用**上
 // 失效：启动被拒（有 `is_error` 回执、没有 `task_started`）、进程在那一行之后被杀（连回执都
@@ -216,13 +217,14 @@ export type TaskScan = {
    */
   runFiles: { all: Set<string>; latest: Set<string> };
   /**
-   * 上一份快照被内存上限挤掉时**停好的读取位置**（文件路径 → 游标）。
+   * 从库里接回来的**读取位置**（文件路径 → 游标，见 `claude-monitor-cursors.ts`）。
    *
-   * 配对状态（`found`/孤儿缓冲）可以重建，读取位置不能丢——丢了就从零重读，而单次只读
-   * 128 MiB，「Monitor 在末尾」的大任务永远读不到它（见 claude-monitor-backfill.ts 的
-   * `parked`）。新建会话桶时从这里取。
+   * 配对状态（`found`/迟到事实通道）可以重建，读取位置不能丢——丢了就从零重读，而单次只读
+   * 128 MiB，「Monitor 在末尾」的大任务永远读不到它。所以它不跟着任何内存缓存一起生灭
+   * （第 13 轮审查：内存表总有上限，上限一到挤掉的可能正是那个还没读完的任务）。
+   * 新建会话桶时从这里取。
    */
-  parkedCursors: Map<string, { size: number; offset: number }> | null;
+  restoredCursors: Map<string, { size: number; offset: number }> | null;
   /**
    * 落盘的未决调用（见 `claude-monitor-pending.ts`），按 ash 会话分桶。
    *
@@ -234,7 +236,7 @@ export type TaskScan = {
 
 export const newTaskScan = (): TaskScan => ({
   sessions: new Map(), truncated: false, failed: false, foreign: new Set(),
-  advanced: false, generationChanged: false, lateOverflow: false, parkedCursors: null,
+  advanced: false, generationChanged: false, lateOverflow: false, restoredCursors: null,
   restoredPending: null,
   committedThrough: true, runFiles: { all: new Set(), latest: new Set() },
 });
@@ -245,21 +247,19 @@ const newSessionScan = (): SessionScan => ({
 });
 
 /**
- * 这份扫描状态该**停好的读取位置**（文件 → 读到哪儿）。
+ * 这份扫描状态**读到哪儿了**（文件 → 游标），交给落盘层记下来。
  *
- * 给 claude-monitor-backfill.ts 的 `parked` 用：配对状态马上要被丢掉，位置照原样停住 ——
- * 位置之前那段里**唯一**只存在于内存的东西是悬着的调用，而它已经落盘了（见文件头）。
- *
- * 所以这里不再往回退。上一版退到「最后一个没有悬着关联的位置」，于是一条永远不会完结的调用
+ * 位置照原样往前、不往回退：位置之前那段里**唯一**只存在于内存的东西是悬着的调用，而它已经
+ * 落盘了（见文件头）。上一版退到「最后一个没有悬着关联的位置」，于是一条永远不会完结的调用
  * 就把位置钉死，固定输入每轮重读同一个窗口（第 11 轮审查实测）。
  */
-export function parkableCursors(scan: TaskScan): Map<string, { size: number; offset: number }> {
+export function cursorsOf(scan: TaskScan): Map<string, { size: number; offset: number }> {
   const out = new Map<string, { size: number; offset: number }>();
   // **先铺上还没惰性接进来的那些。** 会话桶是读到那个文件时才建的（见 `scanSession`），所以
   // 一份刚接过位置、还没读到任何文件的快照，`sessions` 是空的 —— 只看 `sessions` 就等于把上
   // 一次确认过的位置扔掉（第 12 轮审查 F1：并发淘汰下每轮都从零重读）。
-  for (const [path, cursor] of scan.parkedCursors ?? []) out.set(path, { ...cursor });
-  // 读过的覆盖上去：桶里那份是从 `parkedCursors` 接的，只会更靠后（见 `scanSession`）。
+  for (const [path, cursor] of scan.restoredCursors ?? []) out.set(path, { ...cursor });
+  // 读过的覆盖上去：桶里那份是从 `restoredCursors` 接的，只会更靠后（见 `scanSession`）。
   for (const session of scan.sessions.values()) {
     for (const [path, cursor] of session.cursors) out.set(path, { ...cursor });
   }
@@ -343,15 +343,15 @@ export async function scanSession(
       blocked = true;
       continue;
     }
-    // 停好的位置**惰性取**：一个任务的 parked 表是它全部会话文件的并集，整张倒进每条会话
-    // 的桶里就按会话数把它复制了一遍（第 9 轮审查不拦项 4）。路径本来就唯一，按需查即可。
+    // 接回来的位置**惰性取**：那张表是这个任务全部会话文件的并集，整张倒进每条会话的桶里
+    // 就按会话数把它复制了一遍（第 9 轮审查不拦项 4）。路径本来就唯一，按需查即可。
     //
-    // 采纳它是安全的：`checkpointCursors` 只停「可重放 + 已确认提交」的位置，所以它之前的内容都有
-    // 归宿（见文件头的检查点不变量）。
-    const parked = scan.parkedCursors?.get(file.path);
-    if (parked && !session.cursors.has(file.path)) {
-      session.cursors.set(file.path, { ...parked });
-      if (parked.offset > 0) session.skippedPrefix = true;  // 见 SessionScan.skippedPrefix
+    // 采纳它是安全的：落盘的只会是「可重放 + 已确认提交」的位置（backfill 的 saveCheckpoint），
+    // 所以它之前的内容都有归宿（见文件头的检查点不变量）。
+    const restored = scan.restoredCursors?.get(file.path);
+    if (restored && !session.cursors.has(file.path)) {
+      session.cursors.set(file.path, { ...restored });
+      if (restored.offset > 0) session.skippedPrefix = true;  // 见 SessionScan.skippedPrefix
     }
     const cursor = session.cursors.get(file.path) ?? { size: 0, offset: 0 };
     // 文件比上次短 = 被重写/截断过，之前的游标无意义，从头再来。
