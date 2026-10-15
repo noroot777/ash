@@ -40,6 +40,7 @@ import {
 } from "./claude-monitor-scan.js";
 import { db, dbClient } from "./db/index.js";
 import { monitorPendingCalls, monitors, sessions } from "./db/schema.js";
+import { isSameProcess } from "./proc.js";
 import { now } from "./util.js";
 
 /**
@@ -273,7 +274,11 @@ async function runBackfill(taskId: string): Promise<number> {
   let runFiles: { all: Set<string>; latest: Set<string> } = { all: new Set(), latest: new Set() };
   try {
     const rows = await db
-      .select({ id: sessions.id, cliSessionId: sessions.cliSessionId, outPath: sessions.agentOutPath })
+      .select({
+        id: sessions.id, cliSessionId: sessions.cliSessionId, outPath: sessions.agentOutPath,
+        // 只为判「文件尾那半行是正在被写、还是永久缺了」（见 scanSession 的 sessionLive）。
+        agentPid: sessions.agentPid, agentStartedAt: sessions.agentStartedAt,
+      })
       .from(sessions)
       .where(and(eq(sessions.taskId, taskId), eq(sessions.agentType, "claude")));
 
@@ -315,7 +320,8 @@ async function runBackfill(taskId: string): Promise<number> {
     for (const key of [...scan.sessions.keys()]) if (!live.has(key)) scan.sessions.delete(key);
     for (const session of rows) {
       if (!session.outPath) continue;
-      await scanSession(scan, session.id, session.cliSessionId, session.outPath);
+      const live = !!session.agentPid && isSameProcess(session.agentPid, session.agentStartedAt ?? null);
+      await scanSession(scan, session.id, session.cliSessionId, session.outPath, undefined, live);
     }
     runFiles = scan.runFiles;
     if (scan.foreign.size) {

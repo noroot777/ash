@@ -319,6 +319,14 @@ export async function scanSession(
   scan: TaskScan, sessionId: string, cliSessionId: string | null, outPath: string,
   /** 单次读取上限。只有回归测试会传小值——128 MiB 的夹具没法写进测试里。 */
   maxBytes: number = MAX_SCAN_BYTES,
+  /**
+   * 这条会话**现在还有活着的 agent 进程**吗（见 TaskScan.partialTail）。
+   *
+   * 只影响「文件尾是半行」怎么记：活着的那条正在被追加,半行下一刻就完整了,记成「没读完」
+   * 会让退避定时器每秒重扫一个还在写的文件,而且每轮都读到新字节、预算永远清零。缺省按
+   * **不活**算(更保守:宁可多留一次账)。
+   */
+  sessionLive = false,
 ): Promise<void> {
   let session = scan.sessions.get(sessionId);
   if (!session) {
@@ -389,8 +397,9 @@ export async function scanSession(
         console.warn(`[ash] 内置 Monitor 历史扫描跳过一条装不进读取窗口的记录`
           + `（${file.path} 第 ${cursor.offset} 字节起 ${skipped} 字节 > 上限 ${maxBytes}）`);
       }
-      // 末尾那截没有换行符：这一轮没把这个文件读全（见 TaskScan.partialTail）。
-      if (tail) { scan.partialTail = true; blocked = true; }
+      // 末尾那截没有换行符：这一轮没把这个文件读全（见 TaskScan.partialTail）。活着的会话
+      // 正在往里写,那是常态、不记账;已经结束的那条里这半行是永久的,必须留账。
+      if (tail && !sessionLive) { scan.partialTail = true; blocked = true; }
       if (nextOffset > cursor.offset) {
         scan.advanced = true;
         // 读到了新字节 ⇒ 这些事实还没确认落库，位置暂时不许停在半路（见 committedThrough）。

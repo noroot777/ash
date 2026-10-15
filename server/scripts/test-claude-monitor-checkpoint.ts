@@ -572,6 +572,22 @@ async function main(): Promise<void> {
       JSON.stringify(monitorRecoveryOf(f.taskId)));
   }
   {
+    // (c) 对照:会话**还活着**时,半行是常态——不记账。记了就是让退避定时器每秒重扫一个
+    // 正在被写的文件,而且每轮都读到新字节、退避预算永远清零(那正是第 8 轮审查修过的病)。
+    const proc = liveProcess();
+    const f = await fixture("live-tail", proc.pid, proc.startedAt);
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-blive", "活着的会话", "2026-10-15T12:30:00.000Z");
+    body += started(f.cli, "tu-blive", "blive");
+    body += line({ type: "assistant", timestamp: "2026-10-15T12:30:01.000Z",
+      message: { content: [{ type: "text", text: "写了一半" }] } }).trimEnd();
+    writeFileSync(f.file, body);
+    await backfillClaudeMonitors(f.taskId);
+    check(monitorRecoveryOf(f.taskId) === null,
+      "⑫(c) 会话还活着时那半行是常态,不留账", JSON.stringify(monitorRecoveryOf(f.taskId)));
+    proc.kill();
+  }
+  {
     // (b) 找换行也有工作预算:比预算还长就不再往下扫。
     //
     // **代价是明说的**:超出预算的那条记录不再被跳过,这个文件就停在它前面(下面断言它后面
