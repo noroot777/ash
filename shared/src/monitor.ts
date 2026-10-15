@@ -174,6 +174,12 @@ export const MONITOR_RECOVERY_REASONS = [
   // 前缀（见 server/src/claude-monitor-commit.ts 的「检查点的两半」）。不许当成读完了：
   // 回到一个确定可重放的位置重读一遍。
   "checkpoint-incomplete",
+  // 文件末尾有半行(没有换行符)。多半是正在被追加,下一轮就完整了;但**已经结束的文件**里
+  // 这半行是永久的,而它可能正是最后一条完成通知。不许当成读完了:留账、按退避再读。
+  "tail-incomplete",
+  // 有一条记录比单次读取窗口还长,已经整条跳过(见 claude-monitor-read.ts)。那一条里要是
+  // 带着 Monitor 的入参或回执,这一轮的事实就是缺的——缺口要说出来,不能静悄悄销账。
+  "record-skipped",
 ] as const;
 export type MonitorRecoveryReason = (typeof MONITOR_RECOVERY_REASONS)[number];
 
@@ -185,6 +191,8 @@ export const MONITOR_RECOVERY_LABEL: Record<MonitorRecoveryReason, string> = {
   "liveness-failed": "有存活状态没核对完",
   "orphan-overflow": "迟到的事实较多，正在分批补",
   "checkpoint-incomplete": "有回执还配不上，正在回头重读",
+  "tail-incomplete": "最后一行还没写完，稍后再读",
+  "record-skipped": "有一条记录过长已跳过，事实可能不全",
 };
 
 export type MonitorRecovery = {

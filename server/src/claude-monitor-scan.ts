@@ -187,6 +187,20 @@ export type TaskScan = {
    * 游标停在那一条之前，所以**事实一条没丢**，只是这一轮没读完：调用方留账、下一轮从它继续。
    */
   lateOverflow: boolean;
+  /**
+   * 这一轮有文件的末尾是**半行**（没有换行符）。
+   *
+   * 多半是正在被追加，下一轮就完整了；但已经结束的文件里这半行是永久的，而它可能正是最后
+   * 一条完成通知。两种都不许当成「读完了」——留账、按退避再读（第 13 轮审查 N3）。
+   */
+  partialTail: boolean;
+  /**
+   * 这一轮跳过了一条**比读取窗口还长**的记录（见 claude-monitor-read.ts）。
+   *
+   * 跳是必须的（不跳就零进展、整个文件之后的内容都读不到），但跳掉的那条里可能带着 Monitor
+   * 的入参或回执。缺口要说出来，不能静悄悄按「这一轮读全了」收尾。
+   */
+  skippedRecord: boolean;
   /** 文件里出现过的、与期望不符的 session_id（只作诊断）。 */
   foreign: Set<string>;
   /** 这一轮有没有读到新内容。 */
@@ -237,6 +251,7 @@ export type TaskScan = {
 export const newTaskScan = (): TaskScan => ({
   sessions: new Map(), truncated: false, failed: false, foreign: new Set(),
   advanced: false, generationChanged: false, lateOverflow: false, restoredCursors: null,
+  partialTail: false, skippedRecord: false,
   restoredPending: null,
   committedThrough: true, runFiles: { all: new Set(), latest: new Set() },
 });
@@ -368,11 +383,14 @@ export async function scanSession(
     const sink = (line: string) =>
       consume(scan, session!, line, cliSessionId, file.startedAt, file.path, sessionId);
     try {
-      const { nextOffset, truncated, stopped, skipped } = await eachLine(file.path, cursor.offset, maxBytes, sink);
+      const { nextOffset, truncated, stopped, skipped, tail } = await eachLine(file.path, cursor.offset, maxBytes, sink);
       if (skipped) {
+        scan.skippedRecord = true;
         console.warn(`[ash] 内置 Monitor 历史扫描跳过一条装不进读取窗口的记录`
           + `（${file.path} 第 ${cursor.offset} 字节起 ${skipped} 字节 > 上限 ${maxBytes}）`);
       }
+      // 末尾那截没有换行符：这一轮没把这个文件读全（见 TaskScan.partialTail）。
+      if (tail) { scan.partialTail = true; blocked = true; }
       if (nextOffset > cursor.offset) {
         scan.advanced = true;
         // 读到了新字节 ⇒ 这些事实还没确认落库，位置暂时不许停在半路（见 committedThrough）。

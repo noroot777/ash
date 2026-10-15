@@ -437,10 +437,17 @@ async function main(): Promise<void> {
     check(tailAt > LIMIT, "⑨夹具里那条记录确实比窗口长", `${tailAt} > ${LIMIT}`);
 
     let rounds = 0;
+    const seen = new Set<string>();
     for (; rounds < 6; rounds += 1) {
       await backfillClaudeMonitors(f.taskId);
+      for (const r of monitorRecoveryOf(f.taskId)?.reasons ?? []) seen.add(r);
       if ((await listMonitors(f.taskId)).length) break;
     }
+    // 跳掉的那条里**可能**带着 Monitor 的入参或回执,所以跳的那一轮不许按「读全了」收尾:
+    // 账上要说得出这个缺口(第 13 轮审查 N3)。缺口本身补不回来——那条记录在这个窗口下无论
+    // 如何都解析不了。
+    check(seen.has("record-skipped"), "⑨跳过那一轮账上说得出「有记录被跳过」",
+      [...seen].join(",") || "(账本一直是空的)");
     const rows = await listMonitors(f.taskId);
     check(rows.length === 1 && rows[0]?.nativeId === "bover",
       "⑨跳过那条超长记录之后，它后面的 Monitor 读到了",
@@ -535,6 +542,56 @@ async function main(): Promise<void> {
       JSON.stringify(monitorRecoveryOf(f.taskId)));
   }
 
+  // ── ⑫ 末行没写完 / 一条比预算还长：**不许当成读完了** ──────────────────────────
+  //
+  // 这两条是第 13 轮审查 N3 的另外两半。共同形状仍是老问题:「我手上没有这条事实」被当成
+  // 「这条事实不成立」—— 位置停在半行之前是对的,错在之后一声不吭地销账,于是最后一条完成
+  // 通知要等用户自己再打开一次面板才会被读到。
+  {
+    // (a) 文件尾是半行:这一轮读不到它,但账上要留着。
+    const f = await fixture("partial-tail");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += call(f.cli, "tu-btail", "末行还没写完", "2026-10-15T12:00:00.000Z");
+    body += started(f.cli, "tu-btail", "btail");
+    body += receipt("tu-btail", "btail", "2026-10-15T12:00:00.040Z");
+    // 完成通知**只写了一半**(没有换行符)——正在被追加的文件就长这样。
+    const tail = line({ type: "system", subtype: "task_notification", task_id: "btail",
+      status: "completed", summary: "来源确认完成", session_id: f.cli }).trimEnd();
+    writeFileSync(f.file, body + tail);
+    await backfillClaudeMonitors(f.taskId);
+    check((monitorRecoveryOf(f.taskId)?.reasons ?? []).includes("tail-incomplete"),
+      "⑫(a) 末行没写完 → 账上留着未读提示",
+      JSON.stringify(monitorRecoveryOf(f.taskId)));
+    check((await listMonitors(f.taskId)).length === 1, "⑫(a) 半行之前那条照常读到了");
+
+    writeFileSync(f.file, body + tail + "\n");   // 写完它
+    await backfillClaudeMonitors(f.taskId);
+    check((await listMonitors(f.taskId)).at(0)?.status === "exited",
+      "⑫(a) 写完之后那条终态读到了", String((await listMonitors(f.taskId)).at(0)?.status));
+    check(monitorRecoveryOf(f.taskId) === null, "⑫(a) 这时才销账",
+      JSON.stringify(monitorRecoveryOf(f.taskId)));
+  }
+  {
+    // (b) 找换行也有工作预算:比预算还长就不再往下扫。
+    //
+    // **代价是明说的**:超出预算的那条记录不再被跳过,这个文件就停在它前面(下面断言它后面
+    // 的 Monitor 读不到)。换来的是每轮工作量有上限——没有预算时,一条很长且还没写完的尾行
+    // 会让每一次请求都把文件从那里一路扫到尾、扫完还是零进展。生产窗口 128 MiB ⇒ 预算
+    // 512 MiB,一条真实日志行到不了那个量级;⑨ 的 1.5 倍窗口仍在预算内,照常跳过。
+    const f = await fixture("beyond-budget");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body += line({ type: "assistant", timestamp: "2026-10-15T13:00:00.000Z",
+      message: { content: [{ type: "text", text: "z".repeat(LIMIT * 5) }] } });
+    body += call(f.cli, "tu-bbudget", "预算之外的哨兵", "2026-10-15T13:10:00.000Z");
+    body += started(f.cli, "tu-bbudget", "bbudget");
+    writeFileSync(f.file, body);
+    for (let i = 0; i < 4; i += 1) await backfillClaudeMonitors(f.taskId);
+    check((await listMonitors(f.taskId)).length === 0,
+      "⑫(b) 比预算还长的那条不再被跳过(所以它后面的也读不到——这是预算的代价)");
+    check((monitorRecoveryOf(f.taskId)?.reasons ?? []).includes("scan-unfinished"),
+      "⑫(b) 而且照实说「还没读完」,不是静悄悄销账", JSON.stringify(monitorRecoveryOf(f.taskId)));
+  }
+
   if (failureCount() === 0) {
     console.log("✓ 内置 Monitor 的检查点：位置只停在可重放处（被跳过的调用会重放）/ "
       + "位置之前已成行的按 native_id 与 tool_use_id 配回去 / "
@@ -543,7 +600,7 @@ async function main(): Promise<void> {
       + "唯一裁不清的那种重放一遍就收手 / "
       + "起不来的调用不钉位置、跨窗口的调用靠落盘接回来 / "
       + "装不进窗口的那条记录跳过而不是卡死 / 删任务连未决行和扫描状态一起带走 / "
-      + "删除撞上在途那一轮也不留孤儿行 均受回归保护");
+      + "删除撞上在途那一轮也不留孤儿行 / 末行没写完与超预算记录都照实留账 均受回归保护");
   }
 }
 

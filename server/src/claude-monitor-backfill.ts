@@ -299,6 +299,8 @@ async function runBackfill(taskId: string): Promise<number> {
     scan.advanced = false;
     scan.generationChanged = false;
     scan.lateOverflow = false;
+    scan.partialTail = false;
+    scan.skippedRecord = false;
 
     scan.runFiles = { all: new Set(), latest: new Set() };
     // 悬着的调用（读到了 `tool_use`、还没配上 `task_started`）每轮都取一次：快照可能刚被内存
@@ -320,17 +322,24 @@ async function runBackfill(taskId: string): Promise<number> {
       console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 的文件里出现了别的会话身份`
         + `（${[...scan.foreign].join(", ")}），已按文件归属采用`);
     }
-    if (scan.truncated || scan.failed) {
+    // **这一轮没读全的四种样子**，一条都不能漏：读到上限、读失败、末尾是半行、跳过了一条
+    // 装不下的记录。漏掉任何一种就是把「未确认」当成「已完成」——账本一清，后面只能等用户
+    // 自己再打开一次面板（第 13 轮审查 N3：后两种原先连提示都不留）。
+    const incomplete = ([
+      [scan.truncated, "scan-unfinished", "有文件读到了单次上限"],
+      [scan.failed, "scan-failed", "有文件读失败"],
+      [scan.partialTail, "tail-incomplete", "有文件末尾是半行"],
+      [scan.skippedRecord, "record-skipped", "跳过了一条装不进窗口的记录"],
+    ] as const).filter(([hit]) => hit);
+    if (incomplete.length) {
       // **不是「下次打开面板继续」**：记进待恢复账本，由它退避重排自己往下推。游标已经
       // 记下，所以每一次重推都真的往后读一段；`scan.advanced` 作为「有进展」喂给退避预算。
       unread = true;
       // 重读那一轮的「读到新字节」不算进展（见 `rewound`）。
       const progressed = scan.advanced && !reread;
-      if (scan.truncated) noteMonitorRecovery(taskId, "scan-unfinished", progressed);
-      if (scan.failed) noteMonitorRecovery(taskId, "scan-failed", progressed);
+      for (const [, reason] of incomplete) noteMonitorRecovery(taskId, reason, progressed);
       console.warn(`[ash] 内置 Monitor 历史回填这一轮没读完（task=${taskId}，`
-        + `${scan.truncated ? "有文件读到了单次上限" : ""}${scan.truncated && scan.failed ? "，" : ""}`
-        + `${scan.failed ? "有文件读失败" : ""}），游标已记下，已排自动续读`);
+        + `${incomplete.map(([, , label]) => label).join("，")}），游标已记下，已排自动续读`);
     }
 
     // 乱序事实把缓冲占满了 → 扫描**背压**停下，游标停在那条还没消费的事实之前（见

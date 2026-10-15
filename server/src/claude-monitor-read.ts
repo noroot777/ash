@@ -64,20 +64,34 @@ export function timestampOf(fileName: string): string | null {
  * 追加）。从半行开始解析会把那条事件整条丢掉，所以残留的不完整尾巴不消费，下次从它的起点
  * 重读。
  */
+export type EachLineResult = {
+  nextOffset: number;
+  /** 读满了单次窗口（或跳过了一条装不下的记录），这个文件还没读完。 */
+  truncated: boolean;
+  /** 调用方说「这一行我没消费」，游标停在它前面。 */
+  stopped: boolean;
+  /** 跳过的那条超长记录有多少字节（0 = 没跳过）。 */
+  skipped: number;
+  /** 文件尾部**没有换行符**的那截有多少字节（0 = 正好停在行边界上）。 */
+  tail: number;
+};
+
 export async function eachLine(
   path: string, start: number, maxBytes: number,
   /** 返回 false = **这一行没消费掉**，就停在它前面（游标不越过它）。 */
   onLine: (line: string) => boolean,
-): Promise<{ nextOffset: number; truncated: boolean; stopped: boolean; skipped: number }> {
+): Promise<EachLineResult> {
   const fh = await openFile(path, "r");
   try {
     let offset = start;
     let carry = Buffer.alloc(0);
+    /** 循环是**读到文件尾**出来的,还是读满窗口出来的。残尾的含义全看这个。 */
+    let atEof = false;
     while (offset - start < maxBytes) {
       const want = Math.min(CHUNK, maxBytes - (offset - start));
       const buf = Buffer.allocUnsafe(want);
       const { bytesRead } = await fh.read(buf, 0, want, offset);
-      if (!bytesRead) break;
+      if (!bytesRead) { atEof = true; break; }
       // data[0] 在文件里的绝对位置：carry 来自上一轮、在 offset 之前。
       const base = offset - carry.length;
       const data = carry.length
@@ -92,7 +106,7 @@ export async function eachLine(
         // **消费不了就把游标停在这一行之前**，下一轮从它重新开始。越过去就等于丢掉一条
         // 来源不会重发的事实（见 `LATE_CAP` 的背压说明）。
         if (!keepGoing) {
-          return { nextOffset: base + lineStart, truncated: false, stopped: true, skipped: 0 };
+          return { nextOffset: base + lineStart, truncated: false, stopped: true, skipped: 0, tail: 0 };
         }
         from = nl + 1;
       }
@@ -110,14 +124,19 @@ export async function eachLine(
     // 追加的半行**，跳过去就等于把它写完之后的内容一起丢掉 —— 那时照旧停在原地（账上仍记
     // 着「没读完」，见 scanSession）。
     if (offset - carry.length <= start && offset - start >= maxBytes) {
-      const end = await nextNewline(fh, offset);
-      if (end !== null) return { nextOffset: end, truncated: true, stopped: false, skipped: end - start };
+      const end = await nextNewline(fh, offset, maxBytes * NEWLINE_BUDGET);
+      if (end !== null) {
+        return { nextOffset: end, truncated: true, stopped: false, skipped: end - start, tail: 0 };
+      }
     }
     return {
       nextOffset: offset - carry.length,
       truncated: offset - start >= maxBytes,
       stopped: false,
       skipped: 0,
+      // **只有读到文件尾出来的残尾才叫残尾。** 读满窗口时手里剩的那截只是「还没读」,下一轮
+      // 从它接着读;而文件尾的那截没有换行符,要么正在被写,要么这个文件就这样结束了。
+      tail: atEof ? carry.length : 0,
     };
   } finally {
     await fh.close();
@@ -125,19 +144,28 @@ export async function eachLine(
 }
 
 /**
- * 从 `from` 往后找下一个换行，返回它**之后**那一字节的位置；一直到文件尾都没有就 null。
+ * 从 `from` 往后找下一个换行，返回它**之后**那一字节的位置；找不到（或超出预算）就 null。
  *
  * 只给「一条记录比窗口还长」那一支用（见 `eachLine`）：只扫不缓冲，所以多长的记录都不会把
  * 内存顶起来。
+ *
+ * **预算是干活量的闸**：没有它时,一条很长且**还没写完**的尾行会让每一次请求都把文件从这里
+ * 一路扫到尾（而且扫完还是 null,零进展）—— 文件多大就白读多少,每轮一次（第 13 轮审查 N3）。
+ * 预算按读取窗口的倍数给：窗口装不下的记录已经是异常形状,给它窗口的 4 倍去找结尾足够宽,
+ * 超了就当这一轮没找到——账上照旧记着「没读完」,下一轮再说。
  */
-async function nextNewline(fh: Awaited<ReturnType<typeof openFile>>, from: number): Promise<number | null> {
+const NEWLINE_BUDGET = 4;
+async function nextNewline(
+  fh: Awaited<ReturnType<typeof openFile>>, from: number, budget: number,
+): Promise<number | null> {
   let offset = from;
   const buf = Buffer.allocUnsafe(CHUNK);
-  for (;;) {
-    const { bytesRead } = await fh.read(buf, 0, CHUNK, offset);
+  while (offset - from < budget) {
+    const { bytesRead } = await fh.read(buf, 0, Math.min(CHUNK, budget - (offset - from)), offset);
     if (!bytesRead) return null;
     const nl = buf.subarray(0, bytesRead).indexOf(0x0a);
     if (nl >= 0) return offset + nl + 1;
     offset += bytesRead;
   }
+  return null;
 }
