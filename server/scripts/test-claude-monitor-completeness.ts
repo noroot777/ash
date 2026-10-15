@@ -351,10 +351,48 @@ async function main(): Promise<void> {
       "⑦挤掉一次性事实时留了账，不是静默丢弃", JSON.stringify(pending));
   }
 
+  // ── ⑧ 数据库短暂不可用:**回退路径自己也会失败**,责任不许跟着一起丢 ──────────────
+  //
+  // 回填失败时要做两件事:登记恢复责任、把这一轮的位置作废。上一版的顺序是「先作废、再
+  // 登记」,而作废现在也走数据库 —— 同一段故障里它照样抛,于是第二次异常直接越过了登记:
+  // 路由吃一个 500、账本是空的、没有任何人会再试一次。用户看到的是「打开旧任务报个错,
+  // 之后一直没有卡片,手动刷新才出来」(第 14 轮审查 F1,用真实页面复现)。
+  {
+    const f = await fixture("db-flap");
+    write(f.file, [
+      ...startSeq(f.cli, "bflap", "Monitor started (task bflap, expires in 1m 30s unless the source ends first)."),
+      { type: "system", subtype: "task_notification", task_id: "bflap", status: "completed",
+        summary: "跑完了", session_id: f.cli },
+    ]);
+    const real = dbClient.execute.bind(dbClient);
+    let down = true;
+    (dbClient as any).execute = async (stmt: any) => {
+      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+      // **同一段故障同时打中「查会话」和「回退时清位置」**——这正是 F1 的形状。
+      if (down && /from "sessions"|monitor_scan_cursors/i.test(sql)) throw new Error("INJECTED_DB_DOWN");
+      return real(stmt);
+    };
+    try {
+      const res = await app.request(`/api/tasks/${f.taskId}/monitors`);
+      check(res.status === 200, "⑧数据库连着失败时列表端点仍然答得出来,不是 500", String(res.status));
+      check(monitorRecoveryOf(f.taskId)?.pending === true,
+        "⑧而且责任留下来了(清理失败不许把它一起吞掉)", JSON.stringify(monitorRecoveryOf(f.taskId)));
+      down = false;   // 故障撤掉。**这之后不再手动调回填**:要验的就是它自己会不会补上
+      await settle(2_500);
+    } finally {
+      (dbClient as any).execute = real;
+    }
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 1 && rows[0]?.status === "exited",
+      "⑧故障一撤掉它自己就补了出来(用户不必手动刷新)",
+      `${rows.length} 条:${rows.map((r) => r.status).join(",")}`);
+  }
+
   if (failures === 0) {
     console.log("✓ 内置 Monitor 的「完成」定义与证据可重验：旧 observed 降级且可被窄锚点纠正 / "
       + "死活裁决失败留账并自动补上 / 恢复状态变化双向推送且不刷屏 / 两条端点同一轮 / "
-      + "持续失败时退避真的在走 / 恢复中的游标不被挤掉 / 孤儿溢出不静默丢弃 均受回归保护");
+      + "持续失败时退避真的在走 / 恢复中的游标不被挤掉 / 孤儿溢出不静默丢弃 / "
+      + "回退路径自己失败时责任照样留下并自动补上 均受回归保护");
   }
 }
 

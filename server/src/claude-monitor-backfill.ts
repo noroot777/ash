@@ -221,11 +221,42 @@ export const monitorCheckpointOf = (taskId: string): Promise<Map<string, ScanCur
  */
 const rewound = new Set<string>();
 
-/** 丢掉这个任务的扫描游标，并记下「下一轮是重读、不算进展」。 */
+/**
+ * 「库里那份位置已经作废、但还没删掉」。
+ *
+ * 清位置要走数据库,而**要清位置的时机多半正是数据库刚出过问题的时候**。清不掉不能当作
+ * 「那就先接着用吧」:那份位置对应的事实没确认落库,照它往后读就是把那一段整个跳过。所以
+ * 记在这儿,下一轮先重试清理,清不掉就**这一轮也不采用它**(从零读,代价只是重读)。
+ */
+const staleCursors = new Set<string>();
+
+/**
+ * 把这个任务落盘的位置清掉。**绝不抛**——调用它的地方全是「已经出错、正在回退」的路径,
+ * 在那里再抛一次会把更要紧的事(登记恢复责任)整个越过去(第 14 轮审查 F1)。
+ */
+async function clearCursorsSafely(taskId: string): Promise<boolean> {
+  try {
+    await clearScanCursors(taskId);
+    staleCursors.delete(taskId);
+    return true;
+  } catch (e) {
+    staleCursors.add(taskId);
+    console.warn(`[ash] 内置 Monitor 历史回填：task=${taskId} 作废读取位置失败,`
+      + `这一份位置已标记为不可用,下一轮会先重试清理:`, e);
+    return false;
+  }
+}
+
+/**
+ * 丢掉这个任务的扫描游标，并记下「下一轮是重读、不算进展」。
+ *
+ * **内存那半截先做完、而且永远做得成**:它才是「下一轮要重放」这件事的凭据。落盘那半截
+ * best-effort,失败了由 `staleCursors` 兜住(见上)。
+ */
 async function discardScan(taskId: string): Promise<void> {
   snapshots.delete(taskId);
   rewound.add(taskId);
-  await clearScanCursors(taskId);
+  await clearCursorsSafely(taskId);
 }
 
 /**
@@ -248,14 +279,24 @@ export function backfillClaudeMonitors(
   // 退避推到上限之后账是留着的、定时器是停的。真实请求进来时把预算还给它，否则那条账
   // 永远卡在「已停、且没人会再推」。
   if (opts.external !== false) resetMonitorRecoveryBudget(taskId);
-  const job = runBackfill(taskId).finally(async () => {
-    inflight.delete(taskId);
-    // 在途期间被选中淘汰的，到这里才真正让位（位置已经落库，这一步只丢配对状态）。
-    // 它跟上面那行 delete 在同一个微任务里，中间没有别人插进来的机会（唯一接班者）。
-    if (evictWhenIdle.delete(taskId)) evictScan(taskId);
-    // 这一轮进行中任务被删了：把它这一轮可能写下的行撤掉（见 purgeRevokedTask）。
-    if (revocations.delete(taskId)) await purgeRevokedTask(taskId);
-  });
+  const job = runBackfill(taskId)
+    // **最外面这一层是不变量,不是保险丝**:`backfillClaudeMonitors` 对调用方的承诺是「这一轮
+    // 要么做完、要么留下一笔能自己往前推的责任」,两个读取端点(monitor-routes.ts)都直接
+    // `await` 它。里面那个 catch 漏掉任何一条出口,后果都是同一个:路由 500、责任没登记、
+    // 没有任何人会再试一次 —— 稳定连接上的旧任务此后只能靠用户手动刷新(第 14 轮审查 F1)。
+    .catch((e) => {
+      console.warn(`[ash] 内置 Monitor 历史回填出现没被兜住的失败（task=${taskId}）:`, e);
+      noteMonitorRecovery(taskId, "write-failed", false);
+      return 0;
+    })
+    .finally(async () => {
+      inflight.delete(taskId);
+      // 在途期间被选中淘汰的，到这里才真正让位（位置已经落库，这一步只丢配对状态）。
+      // 它跟上面那行 delete 在同一个微任务里，中间没有别人插进来的机会（唯一接班者）。
+      if (evictWhenIdle.delete(taskId)) evictScan(taskId);
+      // 这一轮进行中任务被删了：把它这一轮可能写下的行撤掉（见 purgeRevokedTask）。
+      if (revocations.delete(taskId)) await purgeRevokedTask(taskId);
+    });
   inflight.set(taskId, job);
   return job;
 }
@@ -296,7 +337,11 @@ async function runBackfill(taskId: string): Promise<number> {
     if (!scan) {
       // 没有现成快照（第一次读、或者配对状态被挤掉了）：位置从库里接回来，配对状态重建。
       scan = newTaskScan();
-      scan.restoredCursors = await loadScanCursors(taskId);
+      // **上一轮说过这份位置作废了。** 先重试清理;清不掉也绝不采用它——它对应的事实没有
+      // 确认落库,照它往后读等于把那一段永久跳过(第 14 轮审查 F1)。
+      scan.restoredCursors = staleCursors.has(taskId)
+        ? (await clearCursorsSafely(taskId), null)
+        : await loadScanCursors(taskId);
     }
     rememberScan(taskId, scan);
     scan.truncated = false;
@@ -433,10 +478,13 @@ async function runBackfill(taskId: string): Promise<number> {
     // ——第 5 轮审查不拦项 1）。
     console.warn(`[ash] 内置 Monitor 历史回填失败（task=${taskId}）:`, e);
     if (added) bus.publish({ type: "task.monitors", taskId });
-    await discardScan(taskId); // 失败的快照不留，下次从头建（位置归零，事实能被重新读到）
+    // **责任先登记,清理随后。** 顺序是硬要求,不是风格:清理自己也走数据库,同一段故障里它
+    // 照样会抛,而原来的顺序让第二次异常直接越过了这一行 —— 整轮 Promise 抛到路由、页面吃
+    // 一个 500,此后既没有恢复责任也没有人重试,用户只能手动刷新(第 14 轮审查 F1 实测)。
     // 事实已经从文件里读出来过、却没确认落库。留账 + 自动重排：这一条上一版只有一句
     // 「历史回填会再补」，而历史回填本身只在用户打开面板时才跑。
     noteMonitorRecovery(taskId, "write-failed", added > 0);
+    await discardScan(taskId); // 失败的快照不留，下次从头建（位置归零，事实能被重新读到）
     return added;
   }
 

@@ -608,6 +608,57 @@ async function main(): Promise<void> {
       "⑫(b) 而且照实说「还没读完」,不是静悄悄销账", JSON.stringify(monitorRecoveryOf(f.taskId)));
   }
 
+  // ── ⑬ 作废位置失败时:**那份位置不许接着用** ───────────────────────────────────
+  //
+  // 回退路径(读失败、裁不清要重放)要做两件事:登记责任、把库里那份位置作废。位置作废走的是
+  // 数据库,而要作废的时机多半正是数据库刚出过问题的时候。清不掉就当「那就接着用」的话,这
+  // 一轮本来要重读的那一段被永久跳过 —— 比没清更糟(第 14 轮审查 F1 的后半句)。
+  {
+    const f = await fixture("stale-cursor");
+    let body = line({ type: "system", subtype: "init", session_id: f.cli });
+    body = padLines(body, LIMIT + 1024);              // 第一轮只读得完第一个窗口
+    body += call(f.cli, "tu-bstale", "第二个窗口里的哨兵", "2026-10-15T14:00:00.000Z");
+    body += started(f.cli, "tu-bstale", "bstale");
+    body += notice(f.cli, "bstale");
+    writeFileSync(f.file, body);
+
+    await backfillClaudeMonitors(f.taskId);
+    const cursorsOf = async () => await db.select().from(schema.monitorScanCursors)
+      .where(eq(schema.monitorScanCursors.taskId, f.taskId));
+    const first = (await cursorsOf())[0]?.readOffset ?? 0;
+    check(first > 0, "⑬第一轮确实落了一个位置", String(first));
+
+    // 第二轮:提交写失败(走回退) + 作废位置也失败(F1 的组合)。
+    const real = dbClient.execute.bind(dbClient);
+    let down = true;
+    (dbClient as any).execute = async (stmt: any) => {
+      const sql = typeof stmt === "string" ? stmt : String(stmt?.sql ?? "");
+      if (down && /insert into "monitors"|delete from "monitor_scan_cursors"/i.test(sql)) {
+        throw new Error("INJECTED_DB_DOWN");
+      }
+      return real(stmt);
+    };
+    try {
+      await backfillClaudeMonitors(f.taskId);
+      check(monitorRecoveryOf(f.taskId)?.pending === true, "⑬失败这一轮留下了责任",
+        JSON.stringify(monitorRecoveryOf(f.taskId)));
+      check((await cursorsOf()).length > 0,
+        "⑬而且库里那份位置确实没删掉(清理失败了)");
+    } finally { down = false; (dbClient as any).execute = real; }
+
+    // 第三轮:数据库好了。那份位置是**作废过的**,不许当成已确认位置接着往后读。
+    await backfillClaudeMonitors(f.taskId);
+    const after = (await cursorsOf())[0]?.readOffset ?? 0;
+    check(after <= LIMIT, "⑬作废过的位置没被接着用,这一轮从零重读", `${first} → ${after}`);
+    let rounds = 0;
+    for (; rounds < 6 && (await listMonitors(f.taskId)).length === 0; rounds += 1) {
+      await backfillClaudeMonitors(f.taskId);
+    }
+    const rows = await listMonitors(f.taskId);
+    check(rows.length === 1 && rows[0]?.status === "exited",
+      "⑬重读之后第二个窗口里那条照样读得到", `${rows.length} 条`);
+  }
+
   if (failureCount() === 0) {
     console.log("✓ 内置 Monitor 的检查点：位置只停在可重放处（被跳过的调用会重放）/ "
       + "位置之前已成行的按 native_id 与 tool_use_id 配回去 / "
@@ -616,7 +667,8 @@ async function main(): Promise<void> {
       + "唯一裁不清的那种重放一遍就收手 / "
       + "起不来的调用不钉位置、跨窗口的调用靠落盘接回来 / "
       + "装不进窗口的那条记录跳过而不是卡死 / 删任务连未决行和扫描状态一起带走 / "
-      + "删除撞上在途那一轮也不留孤儿行 / 末行没写完与超预算记录都照实留账 均受回归保护");
+      + "删除撞上在途那一轮也不留孤儿行 / 末行没写完与超预算记录都照实留账 / "
+      + "作废失败的位置不会被接着用 均受回归保护");
   }
 }
 
