@@ -83,7 +83,10 @@ export function useTaskArtifacts(taskId: string) {
     try {
       const next = await api.taskArtifacts(taskId);
       if (epoch !== generation.current) return;
-      setResult(next);
+      // 字段在这儿补齐默认值：这两个是后加的，而前端是单独构建、单独刷新的——页面已经是
+      // 新版、服务端还没重启的那个窗口里，旧响应里没有 `incomplete`，渲染时 `.map` 直接
+      // 把整块炸掉（第 2 轮审查 N3）。补默认比在每个用到的地方各写一次 `?? []` 可靠。
+      setResult({ ...next, scope: next.scope ?? "shared", incomplete: next.incomplete ?? [] });
       setError(null);
     } catch (reason) {
       if (epoch !== generation.current) return;

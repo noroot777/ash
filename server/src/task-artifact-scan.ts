@@ -97,7 +97,10 @@ export async function insideBrowserProfile(
 ): Promise<boolean> {
   const parts = rel.split("/").filter(Boolean);
   // 最后一段可能是文件名；多问一层目录不会错（文件名不会同时有 Local State 和 Default）。
-  for (let depth = parts.length; depth > 0; depth -= 1) {
+  // `depth === 0` 是**工作目录自己**：它本身就是个 profile 目录（用户把任务目录开在
+  // `Chrome/User Data/` 里）时，祖先只查到 `Default` 就停了，根上那两个标志一次都没问过，
+  // 扩展图标照样进产物（第 2 轮审查 N2）。单文件入口和目录入口都走这个函数，一起覆盖。
+  for (let depth = parts.length; depth >= 0; depth -= 1) {
     const dir = parts.slice(0, depth).join("/");
     let hit = cache.get(dir);
     if (hit === undefined) {

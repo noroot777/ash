@@ -16,7 +16,7 @@ import { existsSync } from "node:fs";
 import { db } from "./db/index.js";
 import {
   freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
-  projects, scheduledMessages, schedules, sessions, tasks,
+  projects, scheduledMessages, schedules, sessionTurns, sessions, tasks,
 } from "./db/schema.js";
 import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, writeUploads } from "./handoff-uploads.js";
@@ -454,6 +454,12 @@ async function importValidated(
         // 会话、计划和 pending 消息确实随 manifest 迁移，只替换这三类；已发送/取消的
         // 本机消息仍是本机历史，不能和未迁移的自由工作流关联一起误删。
         await tx.delete(sessions).where(eq(sessions.taskId, m.task.id));
+        // 回合区间挂在会话行上，会话让位它必须一起让位：manifest 原样带着会话 id 回来，
+        // 本机那几行旧区间会直接挂到对端的会话上，产物归属读到的就是**另一台机器上那段
+        // 时间**，混进来的东西还说不出是哪儿来的（第 2 轮审查 F1）。
+        // 刻意不往 manifest 里加这张表：跨机协议改格式要兼顾旧版对端，而少了它只是归属
+        // 精度降级（读端按会话寿命估并在面板上明说），不是错的归属。
+        await tx.delete(sessionTurns).where(eq(sessionTurns.taskId, m.task.id));
         await tx.delete(schedules).where(eq(schedules.taskId, m.task.id));
         await tx.delete(scheduledMessages).where(and(
           eq(scheduledMessages.taskId, m.task.id),

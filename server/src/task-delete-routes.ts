@@ -8,7 +8,7 @@ import type { TaskWorkspaceDiscardResult } from "@ash/shared";
 import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
+import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
 import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
 import { clearScanCursorsStatement } from "./claude-monitor-cursors.js";
 import { stopMonitorsForTask } from "./monitors.js";
@@ -85,6 +85,7 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     // 会话行、定时计划、队列位也一起收：孤儿 cron 每个 tick 都会被扫到再查不到任务，
     // 队列残位会顶住后续推进（审查实测：删除后 sessionRows/scheduleRows 各剩 1）。
     db.delete(sessions).where(eq(sessions.taskId, taskId)),
+    db.delete(sessionTurns).where(eq(sessionTurns.taskId, taskId)),
     db.delete(schedules).where(eq(schedules.taskId, taskId)),
     db.delete(queueItems).where(eq(queueItems.taskId, taskId)),
     // 团队派活自建的内部组（groups.owner_task_id=本任务）：GET /groups 默认过滤掉它们，

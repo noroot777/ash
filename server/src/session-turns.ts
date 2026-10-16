@@ -1,8 +1,6 @@
-import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { sessionTurns } from "./db/schema.js";
 import { id } from "./util.js";
-
 // 回合区间的**写入端**。读取端在 `task-artifact-scope.ts`（产物归属），表的语义写在
 // `db/schema.ts` 的 `sessionTurns` 上，这里不复述。
 //
@@ -10,7 +8,6 @@ import { id } from "./util.js";
 // 收尾（`single-run.ts`、`duet/turn.ts`、`team/session-consumer.ts`），同一件事落三份
 // 就会漂移——其中一条忘了写，那类任务的产物归属就静默退回「按 session 寿命」，而那是
 // 看不出来的（面板只是多列几个别人的东西）。
-
 /**
  * 记下「这一回合从 X 跑到 Y，干活的目录是 Z」。
  *
@@ -40,9 +37,4 @@ export async function recordTurnSpan(input: {
   } catch (error) {
     console.warn(`[ash] 回合区间没落盘（产物归属降级为按会话寿命认）: ${String(error)}`);
   }
-}
-
-/** 这条会话已经落账的回合区间，按时间升序。 */
-export async function turnSpansOfSession(sessionId: string) {
-  return db.select().from(sessionTurns).where(eq(sessionTurns.sessionId, sessionId));
 }

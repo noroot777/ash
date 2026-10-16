@@ -56,6 +56,9 @@ export const SNAPSHOT_TABLES = [
   "notes",
   "note_tasks",
   "sessions",
+  // 每个回合的区间。只搬 sessions 不搬它，预览里每条会话都变成「没有逐回合记录」的老行，
+  // 产物归属退回按整条会话寿命估（第 2 轮审查 F1）。
+  "session_turns",
   // sessions 的 Codex 总账要靠这份累计基线继续求差；只搬前者不搬后者，预览里一续聊
   // 就会把整条线程累计值再加一次。
   "usage_cumulative_snapshots",

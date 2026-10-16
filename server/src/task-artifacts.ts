@@ -97,15 +97,29 @@ export async function readTaskArtifacts(
   // git 两档不过扫描护栏（`skipsDirPath` 那张表）：那是**扫文件系统时**的护栏（依赖树、
   // 构建缓存、别人的 worktree 里本来就塞满图片），而 git 认识的路径已经自带归属证据——
   // 一份真被提交进 `coverage/` 的报告该列出来，不该被护栏误伤。
-  const origins = new Map<string, ArtifactOrigin>();
+  /**
+   * 每条路径**攒下它的全部证据**，不是先到先得。
+   *
+   * 原来这里是「第一个来源赢，后面的丢掉」：`git status` 先跑，于是一条**自己已经提交过**
+   * 的产物只要现在又有别人的未提交改动，就只剩 `working` 这一个来源；而 `working` 是按
+   * mtime 筛的，别人那次改动的时间当然不在自己的运行区间里——整条路径于是从面板上消失，
+   * 文件明明还在（第 2 轮审查 F3）。弱证据不能把已经成立的强证据盖掉：攒齐再判。
+   */
+  const evidence = new Map<string, Set<ArtifactOrigin>>();
   const remember = (path: string, origin: ArtifactOrigin) => {
-    if (path && kindOf(path) && !origins.has(path)) origins.set(path, origin);
+    if (!path || !kindOf(path)) return;
+    const seen = evidence.get(path);
+    if (seen) seen.add(origin);
+    else evidence.set(path, new Set([origin]));
   };
 
   const scope = task ? await resolveArtifactScope(task, root) : null;
   const exclusive = scope?.exclusive ?? false;
   const windows = scope?.windows ?? [];
   problems.push(...(scope?.problems ?? []));
+  // 回合记录缺了哪几段：面板必须说出来。缺记录既不能当成「这段时间它一直在跑」（串台），
+  // 也不能当成「它没跑过」（漏报），只能当成「这段算不准」并明说（第 2 轮审查 F1）。
+  incomplete.push(...(scope?.gaps ?? []));
   // 有没有「这个文件归它」的证据可用：目录独占算一种，跑过（有区间）算另一种。按时间认的
   // 那几档都要过这道门槛；任务分支的 diff 不用，它自己就是证据（见下）。
   const hasEvidence = exclusive || windows.length > 0;
@@ -162,6 +176,9 @@ export async function readTaskArtifacts(
           if (byTime.truncated) {
             incomplete.push("它跑过的某一段里提交太多，已提交那一档只回看了最近的一批");
           }
+          if (byTime.dateWalk) {
+            incomplete.push("这台机器的 git 偏老，已提交那一档按提交日期截断遍历，历史日期乱序时可能漏掉几条");
+          }
           if (byTime.skippedWindows > 0) {
             incomplete.push(`它跑过的区间太多，已提交那一档只查了最近的几段（跳过 ${byTime.skippedWindows} 段）`);
           }
@@ -184,21 +201,27 @@ export async function readTaskArtifacts(
     }
   }
 
-  const candidates = new Map<string, ArtifactOrigin>(origins);
-  for (const path of scanned) if (!candidates.has(path)) candidates.set(path, "ignored");
+  for (const path of scanned) remember(path, "ignored");
 
   // 并发 stat：候选可能有上千个，一个个串着问，面板每 8 秒就白等一轮。
-  const stated = await Promise.all([...candidates].map(async ([path, origin]) => {
+  const stated = await Promise.all([...evidence].map(async ([path, origins]) => {
     const info = await stat(join(root.path, path)).catch(() => null);
-    return { path, origin, info };
+    return { path, origins, info };
   }));
 
   const artifacts: TaskArtifact[] = [];
-  for (const { path, origin, info } of stated) {
+  for (const { path, origins, info } of stated) {
     if (!info || !info.isFile()) continue; // 已删除 / 已改名的旧路径
     const mtimeMs = Number.isFinite(info.mtimeMs) ? info.mtimeMs : null;
-    // 共享工作区里，时间是唯一的归属线索；独占目录和 committed 那一档各自已有更强的证据。
-    if (!exclusive && origin !== "committed" && !withinWindows(mtimeMs, windows)) continue;
+    // 归属成立有两条独立的路：**提交证据**（它的提交动过这条路径）本身就是确定的，不吃时间；
+    // 工作区改动和被忽略的文件只有「在这个目录里 + 时间对得上」这一条线索，共享目录上必须筛。
+    const committedProof = origins.has("committed");
+    if (!committedProof && !exclusive && !withinWindows(mtimeMs, windows)) continue;
+    // 标签说的是**它现在是什么状态**：有未提交的改动就显示工作区改动（哪怕归属是提交证明
+    // 下来的），否则按最强的那条证据。
+    const origin: ArtifactOrigin = origins.has("working")
+      ? "working"
+      : (committedProof ? "committed" : "ignored");
     artifacts.push({
       path,
       name: basename(path),

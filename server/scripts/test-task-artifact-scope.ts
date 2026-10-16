@@ -12,9 +12,10 @@
 // 跑：npm -w server run test:artifact-scope
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-artifact-scope-"));
@@ -114,13 +115,38 @@ try {
   );
   assert.equal(resumed.scope, "shared");
 
-  // 没有回合记录的老会话（这张表建立之前的行）只能退回整条寿命：宽，但不能漏。
+  // 没有回合记录的老会话（这张表建立之前的行）只能退回整条寿命：宽，但不能漏——而且**必须
+  // 说出来**。缺记录既不能当成「这段时间它一直在跑」（那就串图），也不能当成「它没跑过」
+  // （那就整页空着），只能当成「这段算不准」并在面板上明说（第 2 轮审查 F1）。
   await addTask("LegacyTask01");
   await addSession("s-legacy", "LegacyTask01", shared, 0, 250);
   const legacy = await read("LegacyTask01");
   assert.equal(
     originOf(legacy, "output/间隔期别人做的.png"), "ignored",
     "没有回合记录时退回会话寿命（刻意从宽：老数据宁可多认，不能把它自己的产物漏掉）",
+  );
+  assert.ok(
+    legacy.incomplete.some((line) => line.includes("没有逐回合记录")),
+    "退回会话寿命这件事必须披露：面板上得看出来「这几段算不准」",
+  );
+  assert.deepEqual(resumed.incomplete, [], "记录齐全的续聊不该白说一句「算不准」");
+
+  // 最后一个回合没落账（异常退出、被停、写库失败都这样）：会话行上的 turn_started_at 比
+  // 所有落账记录都晚，这个缺口要补出来并披露。读成「没跑过」会把那一回合真做出来的东西
+  // 静默滤掉，面板空着还什么都不说（第 2 轮审查 F1）。
+  await addTask("CutShort001");
+  await addSession("s-cut", "CutShort001", shared, 500, 530, { turnStartedAt: iso(520) });
+  await addTurn("t-cut-1", "s-cut", "CutShort001", shared, 500, 510);
+  write(shared, "output/末回合做出来的.png");
+  touch(shared, "output/末回合做出来的.png", at(525));
+  const cutShort = await read("CutShort001");
+  assert.equal(
+    originOf(cutShort, "output/末回合做出来的.png"), "ignored",
+    "末回合没留下记录,不等于那一回合没跑过——它的产物不能被静默滤掉",
+  );
+  assert.ok(
+    cutShort.incomplete.some((line) => line.includes("最后一个回合没留下记录")),
+    "这一段是估出来的,面板上要说明",
   );
 
   // ── F2：一次都没跑过的任务,不该有任何产物 ──────────────────────────────────
@@ -245,6 +271,90 @@ try {
     "回合结束不等于它所属的后台工作结束——哨兵的生命周期要算进去",
   );
 
+  // ── F2：团队执行者共用领队的工作区,不能个个都说自己独占 ──────────────────────
+  // 一个领队底下几个执行者默认都在领队那份 worktree 里干活。`isolatedWorkspaceOwner` 给
+  // 它们的 owner 是**领队**，那只证明隔离于项目主仓,不证明隔离于兄弟执行者——按目录独占判,
+  // 三页会显示同样的三张图,「按任务区分」在团队上整个失效(第 2 轮审查 F2)。
+  const crewRoot = join(shared, ".worktrees", "LeadWithCrew");
+  git(shared, ["worktree", "add", "-q", "-b", "ash/LeadWithCrew", crewRoot, "main"]);
+  await addTask("LeadWithCrew", { mode: "team", useWorktree: true, status: "done" });
+  await addSession("s-crew-lead", "LeadWithCrew", crewRoot, 600, 760, { turnStartedAt: iso(740) });
+  await addTurn("t-crew-lead", "s-crew-lead", "LeadWithCrew", crewRoot, 740, 760);
+  for (const [id, from, to] of [["CrewA000001", 600, 610], ["CrewB000001", 700, 710]] as const) {
+    await addTask(id, { parentId: "LeadWithCrew", useWorktree: false });
+    await addSession(`s-${id}`, id, crewRoot, from, to);
+    await addTurn(`t-${id}`, `s-${id}`, id, crewRoot, from, to);
+  }
+  write(crewRoot, "output/A 先画的蓝图.png");
+  touch(crewRoot, "output/A 先画的蓝图.png", at(605));
+  write(crewRoot, "output/B 两小时后画的红图.png");
+  touch(crewRoot, "output/B 两小时后画的红图.png", at(705));
+  const crewRootArg = {
+    path: crewRoot, branch: "ash/LeadWithCrew", gitRepo: true, source: "worktree" as const,
+    repo: shared, projectId: "p",
+  };
+  const crewA = await read("CrewA000001", crewRootArg);
+  const crewB = await read("CrewB000001", crewRootArg);
+  assert.equal(crewA.scope, "shared", "跟着领队目录干活的执行者不独占那个目录");
+  assert.equal(originOf(crewA, "output/A 先画的蓝图.png"), "ignored", "A 看得到自己画的");
+  assert.equal(
+    originOf(crewA, "output/B 两小时后画的红图.png"), null,
+    "A 不该看到兄弟执行者两小时后画的——共用领队目录不是独占证据",
+  );
+  assert.equal(originOf(crewB, "output/B 两小时后画的红图.png"), "ignored", "B 看得到自己画的");
+  assert.equal(originOf(crewB, "output/A 先画的蓝图.png"), null, "B 也不该看到 A 画的");
+  // 领队那一页的语义本来就是整组汇总：它独占那个目录，两张都该在。
+  const lead = await read("LeadWithCrew", crewRootArg);
+  assert.equal(lead.scope, "exclusive");
+  assert.equal(originOf(lead, "output/A 先画的蓝图.png"), "ignored", "领队页面汇总整组");
+  assert.equal(originOf(lead, "output/B 两小时后画的红图.png"), "ignored", "领队页面汇总整组");
+
+  // ── F2 的另一半：路径别名不能把同一个目录判成两个 ────────────────────────────
+  // macOS 的 /var、/tmp 都是软链。会话记 `/var/…`、git 报 `/private/var/…` 时纯字符串比较
+  // 会把独占目录降级成共享、重新吃上时间上限，第 1 轮 F3 修好的延迟产物又漏回去。
+  await addTask("AliasTask01", { useWorktree: true });
+  const aliasRoot = join(shared, ".worktrees", "AliasTask01");
+  git(shared, ["worktree", "add", "-q", "-b", "ash/AliasTask01", aliasRoot, "main"]);
+  await addSession("s-alias", "AliasTask01", aliasRoot, 800, 810);
+  await addTurn("t-alias", "s-alias", "AliasTask01", aliasRoot, 800, 810);
+  write(aliasRoot, "output/收尾很久之后渲染出来的.png");
+  touch(aliasRoot, "output/收尾很久之后渲染出来的.png", at(900));
+  // 真实的错位长这样：`repo` 是 git 报出来的(走过真身,macOS 上带 /private),而 `path` 来自
+  // 会话 cwd(原样记下来的,不带)。纯字符串比 `<repo>/.worktrees/<id>` 跟 `path`,同一个目录
+  // 会被判成两个。
+  const aliased = await read("AliasTask01", {
+    path: aliasRoot, branch: "ash/AliasTask01", gitRepo: true,
+    source: "worktree" as const, repo: realpathSync(shared), projectId: "p",
+  });
+  assert.notEqual(realpathSync(shared), shared, "这条用例要靠 /var → /private/var 这个软链才有意义");
+  assert.equal(aliased.scope, "exclusive", "软链别名指的是同一个目录，独占判据不能被它骗过去");
+  assert.equal(
+    originOf(aliased, "output/收尾很久之后渲染出来的.png"), "ignored",
+    "独占目录不设时间上限：别名判错会让它重新吃上限,延迟产物又漏掉",
+  );
+
+  // ── N2：工作目录**自己**就是浏览器 profile ───────────────────────────────────
+  const profileRoot = join(stage, "profile-root");
+  initRepo(profileRoot, ["*.png", ""].join("\n"));
+  write(profileRoot, "Local State", "{}");
+  write(profileRoot, "Default/Preferences", "{}");
+  write(profileRoot, "Default/Extensions/abc/icon_16.png");
+  touch(profileRoot, "Default/Extensions/abc/icon_16.png", at(305));
+  git(profileRoot, ["add", "-A"]);
+  git(profileRoot, ["commit", "-qm", "profile"], { GIT_AUTHOR_DATE: iso(-600), GIT_COMMITTER_DATE: iso(-600) });
+  await db.insert(projects).values({ id: "p-profile", name: "profile", repoPath: profileRoot, createdAt: iso(0) });
+  await addTask("ProfileRoot1", { projectId: "p-profile" });
+  await addSession("s-profile", "ProfileRoot1", profileRoot, 300, 310);
+  await addTurn("t-profile", "s-profile", "ProfileRoot1", profileRoot, 300, 310);
+  const atProfile = await read("ProfileRoot1", {
+    path: profileRoot, branch: "main", gitRepo: true, source: "repo" as const,
+    repo: profileRoot, projectId: "p-profile",
+  });
+  assert.equal(
+    originOf(atProfile, "Default/Extensions/abc/icon_16.png"), null,
+    "工作目录自己就是 profile 时,祖先查到 Default 就停了——根上那两个标志也得问",
+  );
+
   // ── N4 的另一半：worktree 已经被删、面板降级到主仓展示时,那段区间还得认 ───────
   // 进程的 cwd 只证明它在哪儿启动，不证明它只往那儿写：有的流水线写死了绝对路径，cwd 在
   // worktree、产物落主仓；worktree 事后被删掉更是必然对不上。把 cwd 核对收紧到「同一个
@@ -281,9 +391,52 @@ try {
     "分支 diff 自带归属不等于整个目录都归它：按时间认的那几档照样要有区间",
   );
 
+  // ── N4：committer date 沿历史不单调时,`--since` 的遍历剪枝会把区间内的提交整条剪掉 ──
+  // rebase、cherry-pick、改过系统时间都会让日期回拨。`--since` 是遍历边界，碰到更早的提交
+  // 就停；于是祖先里真正落在运行区间里的那条提交一个字都出不来，而且不触发任何额度提示，
+  // 跟「本来就没有」长得一模一样。`--since-as-filter`（git 2.37+）把它降级成输出过滤器。
+  let sinceAsFilter = true;
+  try {
+    git(shared, ["log", "--since-as-filter=1970-01-01", "--max-count=0"]);
+  } catch {
+    sinceAsFilter = false;
+  }
+  await addTask("OutOfOrder1");
+  await addSession("s-ooo", "OutOfOrder1", shared, 1200, 1210);
+  await addTurn("t-ooo", "s-ooo", "OutOfOrder1", shared, 1200, 1210);
+  write(shared, "art/区间内提交的.png");
+  git(shared, ["add", "art/区间内提交的.png"]);
+  git(shared, ["commit", "-qm", "区间内"], { GIT_AUTHOR_DATE: iso(1205), GIT_COMMITTER_DATE: iso(1205) });
+  write(shared, "art/日期回拨到更早的.png");
+  git(shared, ["add", "art/日期回拨到更早的.png"]);
+  git(shared, ["commit", "-qm", "日期回拨"], { GIT_AUTHOR_DATE: iso(-900), GIT_COMMITTER_DATE: iso(-900) });
+  const outOfOrder = await read("OutOfOrder1");
+  if (sinceAsFilter) {
+    assert.equal(
+      originOf(outOfOrder, "art/区间内提交的.png"), "committed",
+      "后一个提交把日期回拨到区间之前,也不该把区间内的提交整条剪掉",
+    );
+  } else {
+    assert.ok(
+      outOfOrder.incomplete.some((line) => line.includes("按提交日期截断遍历")),
+      "这台机器的 git 不支持 --since-as-filter,那就必须如实说这一档可能漏",
+    );
+  }
+
+  // ── N5：新表要进任务删除的原子批 ────────────────────────────────────────────
+  // 不进去就会攒下无主的回合行：建删几轮之后，库里全是没人认领的区间。
+  const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
+  await deleteTaskCompletely("CutShort001");
+  assert.deepEqual(
+    await db.select().from(sessionTurns).where(eq(sessionTurns.taskId, "CutShort001")), [],
+    "任务删掉之后不该留下它的回合记录",
+  );
+
   console.log("✓ artifact scope: 续聊区间按回合落账、没跑过就没有产物、独占目录不吃时间、提交按段取数");
   console.log("✓ artifact scope: 特殊文件名、profile 深路径入口、venv 边界、上游异地区间、哨兵生命周期");
   console.log("✓ artifact scope: 同仓异目录(worktree 已删)的区间要认、任务分支 diff 不吃时间门槛");
+  console.log("✓ artifact scope: 团队执行者各看各的/领队汇总、软链别名同目录、工作目录自己是 profile");
+  console.log(`✓ artifact scope: 提交日期回拨不剪掉区间内的提交（--since-as-filter ${sinceAsFilter ? "可用" : "不可用,已披露"}）、删任务清掉回合记录`);
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

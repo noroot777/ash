@@ -286,7 +286,58 @@ try {
   const running = await readShared("ShareRunning4");
   assert.equal(originOf(running, "output/正在写.png"), "ignored", "在飞的任务，刚落盘的东西必须立刻出现");
 
+  // ── F3：别人后来动了同一个文件,不能把它从原任务的清单上抹掉 ──────────────────
+  // `art/海报.png` 是 ShareFirst01 自己在运行区间里提交的，归属已经成立。此刻另一个任务
+  // 改了它但还没提交：`git status` 先把这条路径登记成 working，而 working 是按 mtime 筛的,
+  // 别人那次改动的时间当然不在原任务的区间里——整条路径于是从面板上消失,文件却还在
+  // （第 2 轮审查 F3）。弱证据不许盖掉已经成立的强证据。
+  writeIn(shared, "art/海报.png", Buffer.concat([png, Buffer.from([1, 2, 3])]));
+  touchAtIn(shared, "art/海报.png", new Date(T1.getTime() + 90 * 60 * 1000));
+  // 归属（在不在清单上）和当前状态（显示成哪一档）是两件事：路径必须留着，而标签照实说
+  // 「它现在有未提交的改动」。
+  const afterOthersEdit = await readShared("ShareFirst01");
+  assert.equal(
+    originOf(afterOthersEdit, "art/海报.png"), "working",
+    "自己提交过的产物,不能因为别人后来又改了它就从清单上消失(标签照实说它现在有未提交改动)",
+  );
+  // 暂存之后 git status 的那一档换了个位置，判据不能跟着变。
+  gitIn(shared, ["add", "art/海报.png"]);
+  const afterStage = await readShared("ShareFirst01");
+  assert.ok(
+    originOf(afterStage, "art/海报.png"), "暂存与未暂存是同一件事：归属看的是提交证据,不是当前改动状态",
+  );
+  // 而**没有**提交证据的路径仍然只能靠时间：别人改的、自己没提交过的,照样不算它的。
+  writeIn(shared, "draft/别人改的草稿.png");
+  touchAtIn(shared, "draft/别人改的草稿.png", new Date(T1.getTime() + 90 * 60 * 1000));
+  const strangerEdit = await readShared("ShareFirst01");
+  assert.equal(
+    originOf(strangerEdit, "draft/别人改的草稿.png"), null,
+    "没有提交证据兜底的工作区改动,仍然要落在它的运行区间里",
+  );
+
+  // ── N1：文件名真的以换行开头,也不能被协议换行的处理顺手改写 ──────────────────
+  // 两个都提交进同一个提交：`\n开头的海报.png` 排在前（紧跟提交头，前面带着 git 插进来的
+  // 那个协议换行）、`zz-另一张.png` 排在后。要剥的只有协议那一个换行，文件名自己带的那个
+  // 得留着——无条件剥掉每个 token 的全部前导换行，两种位置都会被改写成查不到的路径。
+  const newlineNames = ["\n开头的海报.png", "\n排在后面的.png"];
+  for (const name of newlineNames) writeIn(shared, name);
+  writeIn(shared, "zz-另一张.png");
+  gitIn(shared, ["add", "-A", "--", ...newlineNames, "zz-另一张.png"]);
+  gitIn(shared, ["commit", "-qm", "换行开头的文件名"], {
+    GIT_AUTHOR_DATE: iso(new Date(T0.getTime() + 3 * 60 * 1000)),
+    GIT_COMMITTER_DATE: iso(new Date(T0.getTime() + 3 * 60 * 1000)),
+  });
+  const withNewline = await readShared("ShareFirst01");
+  for (const name of newlineNames) {
+    assert.equal(
+      originOf(withNewline, name), "committed",
+      `以换行开头的文件名要原样认出来（${JSON.stringify(name)}）：协议换行只在提交头后面那一条路径前面出现一次`,
+    );
+  }
+  assert.equal(originOf(withNewline, "zz-另一张.png"), "committed", "同一个提交里的普通文件名照常");
+
   console.log("✓ task artifacts: committed/working/ignored 三档、仓库原有物免疫 mtime、依赖树与过期产物排除、删除即消失");
+  console.log("✓ task artifacts: 别人后来的改动不抹掉自己已提交的产物(暂存/未暂存)、以换行开头的文件名照样认");
   console.log("✓ task artifacts: 共享工作区按运行区间认人——窗口有上限、别人的 worktree 排除、两个任务两份清单、审查跟到被审、在飞的开放到现在");
 } finally {
   // ASH_DB 落在舞台目录里,Windows 上不先松开就删不掉(见 tmp-db.ts)。

@@ -535,6 +535,12 @@ async function closeLead(
   releasePending(lead);
   const endIso = now();
   const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
+  // 进程没走 `endTurn` 就没了（异常退出、被停、被回收），手上这个回合还开着：它的区间得
+  // 在这儿补一行。不补就只剩「会话结束了、最后一个回合没有记录」，产物归属读到那个缺口
+  // 只能按会话寿命估，那一回合真做出来的东西要么被滤掉要么混进别人的（第 2 轮审查 F1）。
+  if (lead.turnStart) {
+    await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: lead.turnStart, endedAt: endIso });
+  }
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
   // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。
   // 退出码 0 也要求上:正常收尾的回合不该因为正文里出现过这句话就丢掉会话。
