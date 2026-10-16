@@ -169,6 +169,12 @@ export async function claudeMonitorHookDecision(
  * 比这宽。连不上 ash 时退化成放行（回到这个功能上线前的状态），比让一份带未知字段的
  * settings 被整个拒掉强 —— 后者会连 fastMode、供应商路由一起带走。
  */
+/**
+ * 这条回调的路径。**一个常量两处用**:这里拼给 CLI 的 URL,以及 index.ts 上那道失败兜底
+ * 中间件装在哪 —— 两边漂了的话兜底就悄悄落在一条没人走的路径上(monitor-hook-failsafe.ts)。
+ */
+export const MONITOR_HOOK_PATH = "/api/hooks/claude-monitor";
+
 export function monitorRedirectHook(resident: boolean): Record<string, unknown> {
   if (resident) return {};
   const port = currentListeningPort() ?? 4317;
@@ -180,7 +186,7 @@ export function monitorRedirectHook(resident: boolean): Record<string, unknown> 
           hooks: [
             {
               type: "http",
-              url: `http://127.0.0.1:${port}/api/hooks/claude-monitor`,
+              url: `http://127.0.0.1:${port}${MONITOR_HOOK_PATH}`,
               // 本机一跳，起个进程就回。给 15s 是留余量：真超时了 CLI 会丢弃输出、不表态，
               // 那就等于放行 —— 所以这个数宁可宽一点。
               timeout: 15,

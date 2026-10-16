@@ -17,7 +17,9 @@ import { eq } from "drizzle-orm";
 import { MONITOR_MAX_TIMEOUT_MS } from "@ash/shared/monitor";
 import { db, monitors, tasks, stopMonitor, makeTask, teardown } from "./monitors-fixture.js";
 
+const { Hono } = await import("hono");
 const { claudeMonitorHookDecision, monitorRedirectHook } = await import("../src/claude-monitor-hook.js");
+const { mountMonitorRoutes } = await import("../src/monitor-routes.js");
 
 /** hook 发过来的那一份 PreToolUse 事件。只写我们读的那几个字段。 */
 const event = (toolInput: Record<string, unknown>, toolName = "Monitor") => ({
@@ -159,8 +161,6 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
 // 在那一步：自用模式的 authGate 直接给 SINGLE_ACTOR，端点要是只看 actor.kind==="agent"
 // 就永远取不到任务。这一段打的是真端点，中间件照自用模式那一档装。
 {
-  const { Hono } = await import("hono");
-  const { mountMonitorRoutes } = await import("../src/monitor-routes.js");
   const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
 
   const api = new Hono();
@@ -244,6 +244,113 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     );
   }
 
+  // ── ⑪ 多人模式：**鉴权链**上的异常同样不许变成放行 ────────────────────────
+  //
+  // 第 2 轮审查 F3：路由回调里的 try 包不住 `authGate()` —— 它排在路由之前，多人模式下
+  // 先去查 `agentActor` 的回合凭据，那一步也查库。抛异常时 Hono 默认回 HTTP 500，而非
+  // 2xx 在 http hook 的契约里等于放行（实测证据：`{"status":500,"body":"Internal Server
+  // Error"}`）。所以兜底得是一道**排在身份闸之前**的中间件。
+  {
+    const { authGate } = await import("../src/auth/middleware.js");
+    const { guardMonitorHook } = await import("../src/monitor-hook-failsafe.js");
+    const { MONITOR_HOOK_PATH } = await import("../src/claude-monitor-hook.js");
+    const { writeSystemSetting } = await import("../src/app-settings.js");
+    const { readFileSync } = await import("node:fs");
+
+    // **生产装配点本身也要钉住**：这一段测的是「包起来之后对不对」，而包没包是另一件事
+    // —— 漏了那一层，下面全绿而线上照旧 500→放行。顺序不必另测：包成装饰器之后只有一个
+    // 注册点，「排错位置」那种形状根本写不出来（monitor-hook-failsafe.ts）。
+    const indexSrc = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+    assert.match(indexSrc, /app\.use\("\*",\s*guardMonitorHook\(authGate\(\)\)\)/,
+      "index.ts 必须用 guardMonitorHook 把身份闸包起来（F3）");
+
+    const guarded = new Hono();
+    guarded.use("*", guardMonitorHook(authGate()));
+    const guardedApi = new Hono();
+    mountMonitorRoutes(guardedApi);
+    guarded.route("/api", guardedApi);
+
+    const multiTask = await makeTask();
+    await db.update(tasks).set({ activeTurnToken: "TURN-OK" }).where(eq(tasks.id, multiTask));
+    await writeSystemSetting("instanceMode", "multi");
+    try {
+      const hit = (body: unknown) => guarded.request(MONITOR_HOOK_PATH, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-ash-source-task-id": multiTask,
+          "x-ash-turn-token": "TURN-OK",
+        },
+        body: JSON.stringify(body),
+      });
+      // 先预热模式缓存：authGate 第一个请求会查 app_settings，那一问不该被下面的注入打中。
+      const warm = await hit(event({ command: "sleep 39", description: "预热" }));
+      assert.equal(warm.status, 200, "多人模式下带着回合凭据的正常请求本来就该成功");
+      for (const row of await db.select().from(monitors).where(eq(monitors.taskId, multiTask))) {
+        await stopMonitor(row.id, "测试收尾");
+      }
+      // 停掉不等于删行（停了的行照旧留着给面板看），所以后面数的是**增量**。
+      const baseline = (await db.select().from(monitors).where(eq(monitors.taskId, multiTask))).length;
+      assert.equal(baseline, 1, "预热那一条真的挂上了，才说明这条链路本来是通的");
+
+      // 精确注入：只让 `agentActor` 那一问（投影形状 {owner, turn}）失败。
+      let armed = true;
+      const before = db.select;
+      db.select = ((fields?: Record<string, unknown>) => {
+        if (armed && fields && "owner" in fields && "turn" in fields) {
+          armed = false;
+          throw new Error("INJECTED_AGENT_ACTOR_READ_FAIL");
+        }
+        return (before as (f?: unknown) => unknown).call(db, fields);
+      }) as typeof db.select;
+      let response;
+      try {
+        response = await hit(event({ command: "sleep 40", description: "鉴权链出错" }));
+      } finally {
+        db.select = before;
+      }
+      assert.equal(armed, false, "注入没命中就说明这条出路没被走到，断言会变成空测");
+      assert.equal(response.status, 200,
+        "鉴权链出错时也必须回 200：非 2xx 会被 CLI 当成 non-blocking error = 放行（F3）");
+      const body = await response.json() as
+        { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
+      assert.equal(body.hookSpecificOutput?.permissionDecision, "deny",
+        "鉴权链出错时也要明确拒掉原生 Monitor（F3）");
+      assert.match(body.hookSpecificOutput?.permissionDecisionReason ?? "", /start_monitor/,
+        "并且告诉它怎么自己补上");
+      assert.equal(
+        (await db.select().from(monitors).where(eq(monitors.taskId, multiTask))).length, baseline,
+        "兜底收口不代表替它挂上了：一条哨兵都不该多出来",
+      );
+
+      // 未登录（没有任何可用身份）→ 401 也要收口成 deny：**不放行、也不代办**。
+      const anon = await guarded.request(MONITOR_HOOK_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(event({ command: "sleep 41", description: "没身份" })),
+      });
+      assert.equal(anon.status, 200, "401 在这条路径上同样等于放行，必须收口成决定");
+      const anonBody = await anon.json() as
+        { hookSpecificOutput?: { permissionDecision?: string } };
+      assert.equal(anonBody.hookSpecificOutput?.permissionDecision, "deny",
+        "没有身份时拒掉原工具是安全的那一边");
+      assert.equal(
+        (await db.select().from(monitors).where(eq(monitors.taskId, multiTask))).length, baseline,
+        "更不许借兜底绕过鉴权替它挂哨兵（F3）",
+      );
+
+      // 不是 Monitor 的调用，兜底一个字都不说（它可能是别的工具，拦下来会把 agent 废掉）。
+      const otherTool = await guarded.request(MONITOR_HOOK_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(event({ command: "ls" }, "Bash")),
+      });
+      assert.equal(otherTool.status, 401, "非 Monitor 的请求照旧由鉴权链自己回答，兜底不插手");
+    } finally {
+      await writeSystemSetting("instanceMode", "single");
+    }
+  }
+
   // 不是 Monitor 的调用照旧不表态 —— 上面那条「出错也要 deny」不能把这一条带歪。
   const notMonitor = await app.request("/api/hooks/claude-monitor", {
     method: "POST",
@@ -254,4 +361,4 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
 }
 
 await teardown();
-console.log("Monitor 改道：别的工具不碰 / 正常那条真起哨兵并要求 pause_task 收尾 / 描述空了拿命令顶上 / ws 拦住并指路 / 没身份也不放行 / 闸拒如实转达 / 超界钳住且说出来 / 一次性回合挂常驻不挂 / 自用模式也认得出回合身份且 token 不对不代办 / 身份解析与代办出错都明确拒绝而不是放行 均受回归保护");
+console.log("Monitor 改道：别的工具不碰 / 正常那条真起哨兵并要求 pause_task 收尾 / 描述空了拿命令顶上 / ws 拦住并指路 / 没身份也不放行 / 闸拒如实转达 / 超界钳住且说出来 / 一次性回合挂常驻不挂 / 自用模式也认得出回合身份且 token 不对不代办 / 身份解析与代办出错都明确拒绝而不是放行 / 多人模式鉴权链出错与未登录也收口成拒绝且不代办 均受回归保护");

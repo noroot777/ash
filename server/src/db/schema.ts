@@ -499,6 +499,16 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 真的落进会话之后才写，所以 sent 永远意味着「用户刷新后看得见」。租约是内存态的
   // 持久投影：进程一换就作废（开机 reclaimStaleDeliveries 全清），那条消息回到待发送。
   deliveringSince: text("delivering_since"),
+  // 这条消息已经把 `tasks.resume_prompt` 那段续跑交代**接走了**,值就是那一段原文,正文
+  // 末尾带着它(见 monitor-session.ts 的 monitorWakeCheckpoint)。
+  //
+  // 为什么要这一列:哨兵叫醒的那一轮要把 agent 自己留下的交代一起喂回去,而「先从任务行
+  // 取走、没送出去再回填」只把那段话留在一个内存闭包里 —— 取走成功、送达之前进程一换
+  // (崩溃/重启),开机只清投递租约,重投的是原始事件正文,再去读任务行也已经空了:那段
+  // 交代两边都不在(第 2 轮审查 F4)。写在这里 = 跟取走同一个批里落盘,于是重投认得出
+  // 「正文里已经带着它了」(幂等)、回填失败也不丢(下一次投递照旧带着它走)、送达之后
+  // 这一行就是那段交代被谁消费掉的记录。
+  checkpointTaken: text("checkpoint_taken"),
 });
 
 // Queue items: ordered list of tasks where each task waits for the one

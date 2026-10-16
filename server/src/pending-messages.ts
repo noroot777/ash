@@ -37,8 +37,8 @@ import { taskStartStatus } from "./task-start-status.js";
 import { releaseTurn, whenTurnIdle } from "./runs.js";
 import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
-import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
-import { monitorEventReviewActive, monitorWakeCheckpoint } from "./monitor-session.js";
+import { monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorEventSourceState, monitorWakeCheckpoint } from "./monitor-session.js";
 import { deliveryOptions, deliveryVerdict, isDueForDelivery, monitorWakeGuard, pendingExecutionIntent } from "./pending-verdict.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -106,6 +106,8 @@ export function pendingMessageRow(input: {
     createdAt: now(),
     sentAt: null,
     deliveringSince: null,
+    // 新消息没接走任何交代（接走发生在投递那一刻，见 monitorWakeCheckpoint）。
+    checkpointTaken: null,
   };
 }
 
@@ -288,9 +290,11 @@ async function deliverWhenIdle(
     // 正文用 `claimed.text` 而不是 `message.text`:等回合退干净的这段时间里,哨兵可能
     // 已经往同一行后面追加了新的事件(见 beginDelivery 的注释)。
     // 哨兵叫醒的这一轮还要带上 agent 当初 pause 时留给自己的那段交代(monitorWakeCheckpoint
-    // 会就地把它取走,下面每一条「没送出去」的出路都必须回填)。
+    // 会就地把它取走、并把合并后的正文落进这条消息,下面每一条「没送出去」的出路都必须回填)。
+    // 传 `claimed` 而不是 `message`:要的是**带租约那一刻**的正文与账本列(等回合退干净的
+    // 这段时间里哨兵可能又往同一行追加过事件)。
     try {
-      checkpoint = await monitorWakeCheckpoint(message);
+      checkpoint = await monitorWakeCheckpoint(claimed);
     } catch (error) {
       // **读交代失败不能变成取消**:那是准备阶段的一次临时故障(库忙),而取消是「这条事件
       // 永远送不出去了」的意思 —— 一次读错就把本该重试的唤醒永久吞掉(第 1 轮审查 F4
@@ -299,7 +303,7 @@ async function deliverWhenIdle(
       scheduleRedelivery(message, `读取续跑交代失败，原文退回待发送：${error instanceof Error ? error.message : String(error)}`);
       return;
     }
-    const started = await continueTask(message.taskId, claimed.text + (checkpoint?.append ?? ""), {
+    const started = await continueTask(message.taskId, checkpoint?.text ?? claimed.text, {
       ...options,
       ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
       onDelivered: async () => {
@@ -332,8 +336,10 @@ async function deliverWhenIdle(
     const detail = error instanceof Error ? error.message : String(error);
     await cancelPendingMessage(message, `续跑失败：${detail}`).catch(() => {});
   } finally {
-    // 一个字都没送出去 = 那段交代白取了,原样放回去(CAS,agent 中途写了新的一段就不动它)。
-    // 放在 finally 是因为「没送达」有好几条出路:闸拒、起跑失败、回合被抢、半路抛异常。
+    // 一个字都没送出去 = 那段交代白取了,原样放回去(任务行 + 这条消息的正文/账本两半一起,
+    // 见 restoreCheckpoint)。放在 finally 是因为「没送达」有好几条出路:闸拒、起跑失败、
+    // 回合被抢、半路抛异常。退不动它自己会出声并留时间线,所以这里的 catch 只是兜底 ——
+    // 收尾路径上再抛一次异常会把上面那些判断一起带走。
     if (!delivered && checkpoint) await checkpoint.restore().catch(() => {});
     inFlight.delete(message.taskId);
     // 占位落空的兜底:这一次没送达(租约被抢、消息被取消、回合被验收互斥挡回而
@@ -404,13 +410,14 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         t != null && t.mode === "single" && m.execution && t.groupId
           ? !!(await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0)?.paused
           : false;
-      // 「**起它的那次**审查还在进行」只在**哨兵事件撞上终态任务**时才查：审查跑在已经
-      // done 的任务上,不查的话审查者挂的哨兵醒来就在这儿被取消掉(见 pending-verdict 的
-      // `reviewing`)。其余情况一次库都不多查 —— 这是投递扫描的热路径。
-      const reviewing = t != null && monitorIdFromOrigin(m.origin) !== null && monitorBlockedReason(t) !== null
-        ? await monitorEventReviewActive(m.origin)
-        : false;
-      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, reviewing } : null, at);
+      // 「**起它的那次、那一轮**审查现在是什么状态」——只对哨兵事件查,但**无条件查**,
+      // 不按任务状态短路:来源失效是这条消息自己的资格,而审查完全可以跑在一个 paused
+      // 任务上、它收尾时也不触发任何终态清理(第 2 轮审查 F5)。只多这一次库查,而且只在
+      // 托盘里真有哨兵事件时才发生。
+      const monitorSource = t != null && monitorIdFromOrigin(m.origin) !== null
+        ? await monitorEventSourceState(m.origin)
+        : undefined;
+      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource } : null, at);
       if (verdict.action === "wait") {
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。
@@ -445,13 +452,13 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         let checkpoint: Awaited<ReturnType<typeof monitorWakeCheckpoint>> = null;
         try {
           try {
-            checkpoint = await monitorWakeCheckpoint(m);
+            checkpoint = await monitorWakeCheckpoint(claimed);
           } catch (error) {
             await abortDelivery(m);
             scheduleRedelivery(m, `读取续跑交代失败，原文退回待发送：${error instanceof Error ? error.message : String(error)}`);
             continue;
           }
-          const started = await continueTask(m.taskId, claimed.text + (checkpoint?.append ?? ""), {
+          const started = await continueTask(m.taskId, checkpoint?.text ?? claimed.text, {
             ...options,
             ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
             throwOnTeamUnavailable: true,
@@ -478,7 +485,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
           const detail = reason instanceof Error ? reason.message : String(reason);
           await cancelPendingMessage(m, `调度台不可用：${detail}`);
         } finally {
-          // 同单任务:一个字都没送出去就把取走的那段交代放回去(见那一处的注释)。
+          // 同单任务:一个字都没送出去就把取走的那段交代放回去(两半一起,见那一处的注释)。
           if (!delivered && checkpoint) await checkpoint.restore().catch(() => {});
         }
       } else {

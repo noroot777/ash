@@ -131,6 +131,17 @@ export const monitors = sqliteTable("monitors", {
    * NULL = 不是审查挂的(执行者自己挂的),或存量行 —— 一律按任务状态走老规矩。
    */
   sourceReviewRun: text("source_review_run"),
+  /**
+   * 起它的是**那次审查的第几轮**(`free_review_runs.current_round`)。
+   *
+   * `run.id` 不够:一次审查未通过时链会自动续轮 —— `nextRound` 把**同一个** run 的
+   * current_round 加 1、status 从 stopped 推回 reviewing。于是第 1 轮挂的哨兵、它那条
+   * 还没送出去的结果,会在第 2 轮被判成「来源仍有效」而送进新一轮的会话:新一轮的审查
+   * 者收到的是上一轮等的那件事的结果(第 2 轮审查 F5 指出的轮次身份)。
+   *
+   * NULL = 存量行 —— 只按 run 判,也就是这一列加上之前的行为。
+   */
+  sourceReviewRound: integer("source_review_round"),
 });
 
 // ── 还没配上 `task_started` 的 Monitor 调用 ────────────────────────────────────

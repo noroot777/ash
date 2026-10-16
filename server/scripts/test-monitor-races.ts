@@ -214,9 +214,9 @@ import {
   );
 
   // 收尾那一侧的边界也钉一下:只清缓冲不等在途,那条缝就一直在。
-  const monitorsSrc = readSource(join(HERE, "../src/monitors.ts"));
+  const reclaimSrc = readSource(join(HERE, "../src/monitor-reclaim.ts"));
   assert.match(
-    monitorsSrc,
+    reclaimSrc,
     /for \(const m of all\) await serialize\(m\.id/,
     "连坐停止必须把每条哨兵自己的队列排空——轮到那个空活,才说明在途那一批已经写完",
   );

@@ -130,22 +130,23 @@ async function addSession(
   assert.equal(row.sourceReviewRun, "rev-1", "靠审查豁免挂上的哨兵要记住是哪一次审查放它进来的");
   // 出口（pushToTask）与唤醒前最后一道（monitorWakeGuard）用的是同一个判据函数,而且问的是
   // **起它的那一次**审查还在不在,不是「这个任务上有没有任意一条在跑」。
-  assert.equal(await monitorWakeGate(view, "rev-1"), null, "审查进行中，哨兵事件的出口也要放行");
-  assert.ok(await monitorWakeGate(view, "rev-别的一次") !== null,
+  assert.equal(await monitorWakeGate(view, { reviewRun: "rev-1" }), null, "审查进行中，哨兵事件的出口也要放行");
+  assert.ok(await monitorWakeGate(view, { reviewRun: "rev-别的一次" }) !== null,
     "别的审查在跑不等于这条哨兵还该唤醒任务");
 
   // 归档不吃这条豁免：任务都被收走了，审查链也没有续下去的地方。
-  assert.ok(await monitorWakeGate({ ...view, archived: true }, "rev-1") !== null,
+  assert.ok(await monitorWakeGate({ ...view, archived: true }, { reviewRun: "rev-1" }) !== null,
     "归档任务上，审查在跑也不放行");
 
-  // 投递那一层同理：reviewing 为真时不许当成「任务都结束了还醒什么」取消掉。
+  // 投递那一层同理：来源审查还在跑（`monitorSource: "live"`）时，不许当成「任务都结束了
+  // 还醒什么」取消掉；而它一旦失效（`stale`），终态与否都要作废（见 pending-verdict）。
   const message = { mode: "queued", sendAt: now(), origin: `monitor:${monitorId}` };
   const taskView = { mode: "single", status: "done", archived: false };
   assert.notEqual(
-    deliveryVerdict(message, { ...taskView, reviewing: true }, new Date()).action, "cancel",
+    deliveryVerdict(message, { ...taskView, monitorSource: "live" }, new Date()).action, "cancel",
     "审查进行中，哨兵事件不该在投递口被取消");
   assert.equal(
-    deliveryVerdict(message, { ...taskView, reviewing: false }, new Date()).action, "cancel",
+    deliveryVerdict(message, { ...taskView, monitorSource: "stale" }, new Date()).action, "cancel",
     "审查结束之后，终态任务上的哨兵事件照旧取消");
 
   // 收尾：先让审查「结束」,再停哨兵 —— 这样它的收尾事件在出口被丢掉,不会在拆台子的同时
@@ -167,28 +168,42 @@ async function addSession(
 // 整排按钮都被那条门禁灰掉)。
 {
   const taskId = await makeTask({ status: "paused" });
-  await db.update(tasks).set({ resumePrompt: "套件绿了就接着做 tts 那一段" }).where(eq(tasks.id, taskId));
+  const checkpoint = "套件绿了就接着做 tts 那一段";
+  await db.update(tasks).set({ resumePrompt: checkpoint }).where(eq(tasks.id, taskId));
+  const msg = {
+    id: "msg-wake-role", taskId, text: "【哨兵】SUITE_GREEN",
+    origin: "monitor:m-1", checkpointTaken: null as string | null,
+  };
+  await db.insert(schema.scheduledMessages).values({
+    ...msg, attachments: "[]", mode: "queued", status: "pending", sendAt: now(), createdAt: now(),
+  });
+  const taskRow = async () => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
 
-  assert.equal(await monitorWakeCheckpoint({ taskId, origin: null }), null,
+  assert.equal(await monitorWakeCheckpoint({ ...msg, origin: null }), null,
     "不是哨兵推的消息,检查点不归它消费");
 
-  const hit = await monitorWakeCheckpoint({ taskId, origin: "monitor:m-1" });
+  const hit = await monitorWakeCheckpoint(msg);
   assert.ok(hit, "哨兵事件 + 任务挂着交代,就该带上它");
-  assert.match(hit.append, /套件绿了就接着做 tts 那一段/, "交代原文要拼进这一轮的输入");
+  assert.match(hit.text, /套件绿了就接着做 tts 那一段/, "交代原文要拼进这一轮的输入");
+  assert.match(hit.text, /SUITE_GREEN/, "事件本身当然也还在");
 
   // **就地取走**（CAS）：留到「送达之后」才清的话，清不掉的那一次没有任何人会再来补 ——
   // 消息已 sent、交代还在，任务做完了仍被结算判成 paused（第 1 轮审查 F4 第 3 种）。
-  const after = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  assert.equal(after?.resumePrompt, null, "读到就该取走,否则任务永远「在等续跑」");
+  assert.equal((await taskRow())?.resumePrompt, null, "读到就该取走,否则任务永远「在等续跑」");
 
-  assert.equal(await monitorWakeCheckpoint({ taskId, origin: "monitor:m-1" }), null,
-    "已经取走了就没有第二次");
+  assert.equal(await monitorWakeCheckpoint(msg), null,
+    "已经取走了就没有第二次（拿着那份过期投影再来也不行）");
 
   // 一个字都没送出去时要放回原位（投递侧在未送达的每条出路上调它）。
   await hit.restore();
-  const restored = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  assert.equal(restored?.resumePrompt, "套件绿了就接着做 tts 那一段",
+  assert.equal((await taskRow())?.resumePrompt, checkpoint,
     "没送出去就得把交代放回去,清了不回写就是永久丢失");
+
+  // 落账那一半落不下去时,取走也不许生效:否则那段交代只活在返回值这个内存字符串里
+  // （第 2 轮审查 F4 要消掉的正是这个形状）。
+  assert.equal(await monitorWakeCheckpoint({ ...msg, id: "msg-不存在" }), null,
+    "消息行都不在了,这一轮不带交代");
+  assert.equal((await taskRow())?.resumePrompt, checkpoint, "更不许把它从任务行上取走");
 }
 
 // ── ⑧ 「预约审查还在等什么」要说得出口 ───────────────────────────────────────

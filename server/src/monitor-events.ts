@@ -40,7 +40,9 @@ export async function pushToTask(row: Row, text: string): Promise<boolean> {
     .select({ id: tasks.id, status: tasks.status, archived: tasks.archived })
     .from(tasks)
     .where(eq(tasks.id, row.taskId))).at(0);
-  if (!task || await monitorWakeGate(task, row.sourceReviewRun) !== null) return false;
+  if (!task || await monitorWakeGate(task, {
+    reviewRun: row.sourceReviewRun, reviewRound: row.sourceReviewRound,
+  }) !== null) return false;
 
   const origin = monitorMessageOrigin(row.id);
   const existing = (await db
@@ -92,7 +94,7 @@ export async function mergeOrEnqueueMonitorEvent(
     // 只带角色的话 `continueTask` 会按任务自己的 agentType 解析,新建一条 claude 的 reviewer
     // 会话,原审查上下文一个字都接不上(第 1 轮审查 F2 实测)。从哨兵记下的那次 run 上取,
     // 不猜「最新那条审查」。
-    const executor = await monitorWakeExecutor(row.sourceReviewRun);
+    const executor = await monitorWakeExecutor(row.sourceReviewRun, row.sourceReviewRound);
     await enqueueMessage({
       taskId: row.taskId, text, origin: monitorMessageOrigin(row.id),
       ownerUserId: row.ownerUserId, sessionRole: row.sourceRole,
@@ -128,6 +130,9 @@ export async function cancelPendingMonitorEvents(
   scope: { keep?: string[]; only?: string[] } = {},
 ): Promise<void> {
   if (dbClient.closed) return;
+  // **显式给了空的 `only` = 没有要作废的**,不是「那就收全部」:下面 `only` 为空时会退回
+  // 「这个任务名下所有哨兵事件」那条宽口径,调用方筛完一轮恰好筛空时就会误伤别人的。
+  if (scope.only && scope.only.length === 0) return;
   const origins = {
     keep: (scope.keep ?? []).map(monitorMessageOrigin),
     only: (scope.only ?? []).map(monitorMessageOrigin),

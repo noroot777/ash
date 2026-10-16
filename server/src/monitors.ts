@@ -31,8 +31,8 @@ import { db, dbClient } from "./db/index.js";
 import { monitors, projects, sessions, tasks } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
 import { monitorLogPath, readLogTail, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
-import { cancelPendingMonitorEvents, pushToTask } from "./monitor-events.js";
-import { isReviewRunActive, monitorSourceGate } from "./monitor-session.js";
+import { pushToTask } from "./monitor-events.js";
+import { monitorSourceGate } from "./monitor-session.js";
 import { isSameProcess, inspectProcess } from "./proc.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
@@ -50,7 +50,9 @@ type Row = typeof monitors.$inferSelect;
  *
  * 唯一**不带**这道过滤的是 `listMonitors` / `getMonitor`：面板要的就是两种一起。
  */
-const isAshKind = eq(monitors.kind, "ash");
+// 回收层(monitor-reclaim.ts)跟这里是同一摊账,所以这三样对它公开:哪些行算 ash 自己的、
+// 每条哨兵自己的那条队列、以及「把一条哨兵收尾」。它只做资格判断,不另起一套运行时。
+export const isAshKind = eq(monitors.kind, "ash");
 
 export const toTaskMonitor = (r: Row): TaskMonitor => ({
   id: r.id,
@@ -91,7 +93,7 @@ const runtimes = new Map<string, Runtime>();
 /** 同一个哨兵的推送串行化：两批事件同时落库会把 offset / events 互相写回去。 */
 const chains = new Map<string, Promise<unknown>>();
 
-function serialize<T>(monitorId: string, job: () => Promise<T>): Promise<T> {
+export function serialize<T>(monitorId: string, job: () => Promise<T>): Promise<T> {
   const prev = chains.get(monitorId) ?? Promise.resolve();
   const next = prev.then(job, job);
   chains.set(monitorId, next.catch(() => {}));
@@ -212,6 +214,10 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       // **它的命跟着哪次审查走**：非空 = 任务终态连坐清理要放过它、事件出口按那次审查
       // 是否还在判、唤醒时按那次审查的执行器续跑（见 schema-monitors.ts）。
       sourceReviewRun: source.reviewRun,
+      // **哪一轮**：`nextRound` 复用同一个 run.id（只是把 current_round 加一、状态推回
+      // reviewing），所以只记 runId 的话，上一轮遗留的哨兵会被下一轮当成自己的输入重新
+      // 解释（见 schema-monitors.ts）。
+      sourceReviewRound: source.reviewRound,
       // ash 自己起的：期限是它自己定的，当然知道。
       sourceLifetime: "bounded",
       // ash 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，
@@ -351,7 +357,7 @@ async function flushBuffer(monitorId: string, rtOverride?: Runtime): Promise<voi
  * `notify=false` 用在「任务自己已经结束了」那一路：那时候再推一条收尾事件就等于把一个
  * 已经 done 的任务重新叫起来跑一轮，纯属倒忙。
  */
-async function finish(
+export async function finish(
   monitorId: string,
   status: Exclude<MonitorStatus, "running">,
   reason: string,
@@ -435,90 +441,6 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
   return toTaskMonitor(after ?? before);
 }
 
-/**
- * 把一个任务名下还活着的哨兵全停掉。调用点是任务**自己**结束的那一刻（落 done/failed/
- * canceled、归档、删除）。
- *
- * 为什么任务一结束就连坐：哨兵唯一的出口是「唤醒这个任务」，任务都结束了，它再醒来也只是
- * 花钱。要让哨兵继续盯，这一轮该用 pause_task 收尾而不是 complete_task —— 这句话同时写在
- * MCP 工具的说明里，是 agent 做选择时唯一能看到的判据。
- *
- * **跟创建走同一条 `task:<id>` 队列**：不排队的话「正在创建」和「任务刚结束」会并发——
- * 创建那边数完活着的哨兵、起完进程、还没插库，连坐这边已经扫完了一遍，于是新起的那个
- * 谁也没停，它会一直跑到自己结束或到期，而它推的每一条都被终态挡回（第 2 轮审查第 3 条
- * 要求一并护住的那个窗口）。排上队之后两种顺序都收口：连坐先跑 → 创建在锁里读到终态、
- * 直接拒；创建先跑 → 连坐看得见那一行、照常停它。
- */
-export async function stopMonitorsForTask(taskId: string, reason: string): Promise<number> {
-  return serialize(`task:${taskId}`, () => stopMonitorsForTaskLocked(taskId, reason));
-}
-
-async function stopMonitorsForTaskLocked(taskId: string, reason: string): Promise<number> {
-  const all = await db.select({ id: monitors.id }).from(monitors).where(and(eq(monitors.taskId, taskId), isAshKind));
-  const live = await liveMonitorsOf(taskId);
-  // **任务终态 ≠ 审查结束**。自由工作流的审查是旁路回合：它跑的时候任务被写成 running，
-  // 回合一退出又被恢复成原来的 done —— 于是这个函数紧接着就被叫起来。照着终态一刀切,
-  // 审查者刚按提示挂好的哨兵会在同一瞬间被停掉、待发事件一并作废,而审查链还停在
-  // reviewing 等一个永远不会到的唤醒(第 1 轮审查 F1 实测:pause 成功、monitorStatus
-  // =stopped、reviewStatus=reviewing、resumePrompt 还留着)。
-  //
-  // 所以判据不是任务状态,而是**起它的那次审查还在不在**(创建、出口、唤醒三处同一份
-  // 判据,见 monitor-session.ts)。那次审查自己收尾时由 `stopMonitorsForReviewRun` 来收,
-  // 哨兵不会因此漏在后台。
-  const kept: string[] = [];
-  const doomed: typeof live = [];
-  for (const m of live) {
-    if (m.sourceReviewRun && await isReviewRunActive(m.sourceReviewRun)) kept.push(m.id);
-    else doomed.push(m);
-  }
-  for (const m of doomed) await finish(m.id, "stopped", reason, null, { notify: false, keepBuffered: false });
-  // 收尾只清得掉**还在缓冲里**的行。已经开始推的那一批不受影响：它手里拿着自己的
-  // `lines`、也早就过了状态闸，落库会发生在清理之后——于是作废那一步扫不到它，它排进
-  // 队列、把一个已经 done 的任务重新叫起来（第 3 轮审查实测：done → running → done）。
-  // 所以先往每条哨兵自己的队列尾上排一个空活并等它轮到：轮到了就说明那一批已经写完。
-  for (const m of all) await serialize(m.id, async () => {});
-  // 停掉进程还不够：这一刻**已经排在待发队列里**的哨兵事件同样会把任务重新拉起来。
-  // 留下来的那几条例外:它们的事件正是审查在等的东西,跟着任务终态作废就等于白留。
-  await cancelPendingMonitorEvents(taskId, { keep: kept });
-  return doomed.length;
-}
-
-/**
- * 一次审查收尾了，把**属于它**的哨兵收回来。
- *
- * 跟任务终态那条连坐是一对：那边放过了「还在进行的审查」名下的哨兵（见上），所以这边必须
- * 在那次审查真正结束时补上这一刀 —— 否则审查链都收尾了，它挂的哨兵还在后台盯着，推的每
- * 一条又都被出口闸拒回，纯属空烧（最多烧到自己到期）。
- *
- * 审查落终态的写点有好几处（`free-workflow.ts` 的三种结局、`free-review-round.ts` 的启动
- * 失败），所以这个函数按 **runId** 收而不是按任务收：调用方只需要知道「哪一次审查结束了」。
- */
-export async function stopMonitorsForReviewRun(runId: string, reason: string): Promise<number> {
-  const rows = await db
-    .select({ id: monitors.id, taskId: monitors.taskId })
-    .from(monitors)
-    .where(and(eq(monitors.sourceReviewRun, runId), eq(monitors.status, "running"), isAshKind));
-  let stopped = 0;
-  for (const row of rows) {
-    // 跟创建/连坐同一条 `task:<id>` 队列：不排队的话正在创建的那个会漏掉（理由同 stopMonitorsForTask）。
-    await serialize(`task:${row.taskId}`, async () => {
-      await finish(row.id, "stopped", reason, null, { notify: false, keepBuffered: false });
-      stopped += 1;
-    });
-    // 等这条哨兵自己的队列排空，那一批正在写的事件才算落完（理由同上）。
-    await serialize(row.id, async () => {});
-    await cancelPendingMonitorEvents(row.taskId, { only: [row.id] });
-  }
-  return stopped;
-}
-
-
-/**
- * 这个任务名下**ash 自己起的**、还在跑的哨兵。用于创建配额与任务结束时的连坐停止。
- *
- * 只数 ash 那种：claude 的投影行既不占 ash 的进程资源、也不是 ash 停得掉的，让它们占配额
- * 会出现「agent 挂了 4 个内置 Monitor，于是 ash 这边一个哨兵都起不了」这种莫名其妙的拒绝。
- */
 async function liveMonitorsOf(taskId: string): Promise<Row[]> {
   return db.select().from(monitors).where(and(eq(monitors.taskId, taskId), eq(monitors.status, "running"), isAshKind));
 }

@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
 import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@ash/shared/cli-commands";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
-import { monitorEventSourceReview, monitorWakeGate } from "./monitor-session.js";
+import { monitorEventSource, monitorWakeGate, type MonitorSourceState } from "./monitor-session.js";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 
@@ -36,17 +36,17 @@ export type DeliveryTaskView = {
   /** 所在分组已被用户暂停(groups.paused,持久事实)。 */
   groupPaused?: boolean;
   /**
-   * **这条哨兵事件的来源审查**还在进行(`free_review_runs.status='reviewing'`)。
+   * **这条哨兵事件的来源审查**现在是什么状态(由调用方查好填进来,纯函数本身不碰库)。
    *
-   * 终态任务的哨兵事件默认一律取消,但审查跑在已经 done 的任务上 —— 审查者挂的哨兵醒来
-   * 时,任务状态仍然是 done。不认这一条就等于:审查者好不容易挂上的哨兵,事件在出口被
-   * 当成「任务都结束了还醒什么」取消掉(见 shared 的 `activeReview`)。
-   *
-   * 问的是**起它的那一次**审查,不是「这个任务上有没有任意一条在跑」:后者会把上一轮遗留
-   * 的事件重新解释成新一轮审查的输入(第 1 轮审查 F2 列的同类实例)。由调用方在**被状态
-   * 拦下来时**才查一次库填进来(`monitorEventReviewActive`),纯函数本身不碰库。
+   * - `live` = 起它的那次审查、那一轮还在进行。终态任务上也要放行 —— 审查是旁路回合,
+   *   跑在一个已经 done 的任务上,不认这一条就等于把审查者好不容易挂上的哨兵的结果按
+   *   「任务都结束了还醒什么」取消掉(见 shared 的 `activeReview`)。
+   * - `stale` = 有来源审查,但它已经收尾(或已经续到下一轮)。**无条件取消**,与任务此刻
+   *   什么状态无关:那是这条消息自己的资格,paused 任务上派的审查收了尾同样要作废它的
+   *   遗留结果(第 2 轮审查 F5 实测路径)。
+   * - `none` = 执行者自己挂的哨兵,照任务状态老规矩。
    */
-  reviewing?: boolean;
+  monitorSource?: MonitorSourceState;
 };
 export type DeliveryMessageView = { mode: string; sendAt: string; execution?: boolean; origin?: string | null };
 export type DeliveryVerdict =
@@ -80,9 +80,13 @@ export function deliveryVerdict(
   //
   // 真人排的队列消息恰恰相反：终态正是它该发的时候（「下次醒来处理」就是他排它的意思）。
   // 所以只认 `origin` 是哨兵的那些，判据与创建入口同一份（`monitorBlockedReason`）。
-  if (monitorIdFromOrigin(message.origin) !== null
-    && monitorBlockedReason(task, { activeReview: task.reviewing }) !== null)
-    return { action: "cancel", reason: "任务已经结束，这条哨兵事件不再唤醒它" };
+  if (monitorIdFromOrigin(message.origin) !== null) {
+    // 来源失效先判,且不看任务状态(见 `monitorSource` 的注释)。
+    if (task.monitorSource === "stale")
+      return { action: "cancel", reason: "起这个哨兵的那次审查已经结束，它的事件不再唤醒任务" };
+    if (monitorBlockedReason(task, { activeReview: task.monitorSource === "live" }) !== null)
+      return { action: "cancel", reason: "任务已经结束，这条哨兵事件不再唤醒它" };
+  }
   if (!isDueForDelivery(message, at)) return { action: "wait" };
   // 常驻调度台(team)正在说话时也接得住,所以只有单任务需要等它闲下来。
   if (task.mode === "single" && (task.status === "running" || task.status === "queued"))
@@ -156,7 +160,8 @@ export function monitorWakeGuard(message: Row): (() => Promise<string | null>) |
     if (!task) return "任务不存在";
     // 审查进行中的豁免跟别处同一份（`monitorWakeGate`）：这一道闸守的是「租约抢下之后、
     // 真正续跑之前」那个窗口，判据跟创建入口分家就等于没防。**按这条哨兵自己记下的那次
-    // 审查问**，所以要多读一次哨兵行 —— 排在 tasks 那一问之后，上面那条注入才照旧命中。
-    return monitorWakeGate({ id: message.taskId, ...task }, await monitorEventSourceReview(message.origin));
+    // 审查与那一轮问**，所以要多读一次哨兵行 —— 排在 tasks 那一问之后，上面那条注入
+    // 才照旧命中。
+    return monitorWakeGate({ id: message.taskId, ...task }, await monitorEventSource(message.origin));
   };
 }

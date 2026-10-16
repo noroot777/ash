@@ -11,7 +11,7 @@ import { db } from "./db/index.js";
 import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
 import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
 import { clearScanCursorsStatement } from "./claude-monitor-cursors.js";
-import { stopMonitorsForTask } from "./monitors.js";
+import { stopMonitorsForTask } from "./monitor-reclaim.js";
 import { deleteTaskSideChats } from "./chat/lifecycle.js";
 import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
 import { taskBusyRejection } from "./task-busy.js";
@@ -55,7 +55,10 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 跑到机器重启为止 —— 这是整个功能最容易留下的垃圾(进程本来就是故意脱离 ash 的)。
   // 上面那行 `revokeTaskMonitors` 必须排在所有删除之前:它关掉内置 Monitor 那四个 writer
   // 的落库资格(门闸,覆盖整个删除期),并作废进程内缓着的扫描状态/恢复责任。
-  await stopMonitorsForTask(taskId, "任务已删除").catch(() => {});
+  // `destroy`：用户要求这个任务的一切就此结束，审查还在进行也不留 —— 下面那一批删除紧接着
+  // 就把 pid 这个唯一线索一起带走（见 monitors.ts 的 MonitorStopIntent）。
+  await stopMonitorsForTask(taskId, "任务已删除", "destroy")
+    .catch((err) => console.error(`[ash] stopMonitorsForTask(${taskId}, destroy) failed:`, err));
 
   // ── 批本体:全删或全不删 ─────────────────────────────────────────────────────
   const runs = db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)

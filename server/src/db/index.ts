@@ -121,7 +121,7 @@ export async function ensureSchema() {
       attachments TEXT NOT NULL DEFAULT '[]', agent TEXT,
       executor_id TEXT, model TEXT, mode TEXT NOT NULL DEFAULT 'timed', send_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT,
-      delivering_since TEXT
+      delivering_since TEXT, checkpoint_taken TEXT
     );
     CREATE TABLE IF NOT EXISTS monitors (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, command TEXT NOT NULL,
@@ -137,7 +137,7 @@ export async function ensureSchema() {
       start_evidence TEXT, timeout_ms INTEGER,
       start_anchor_width_ms INTEGER, tool_use_id TEXT,
       source_run TEXT, start_low_at TEXT, source_role TEXT,
-      source_review_run TEXT
+      source_review_run TEXT, source_review_round INTEGER
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_pending_calls (
@@ -362,6 +362,14 @@ export async function ensureSchema() {
     // 的审查者」——而任务终态清理、事件出口、唤醒配置三处都要后者(见 schema-monitors.ts
     // 的 source_review_run)。存量行 NULL。
     "ALTER TABLE monitors ADD COLUMN source_review_run TEXT",
+    // 起它的是那次审查的**第几轮**。run.id 跨轮复用(nextRound 把同一个 run 的
+    // current_round 加 1、status 推回 reviewing),所以只有 runId 不是跨轮隔离证明:
+    // 第 1 轮遗留的事件会在第 2 轮被重新解释成有效输入。存量行 NULL = 只按 run 判。
+    "ALTER TABLE monitors ADD COLUMN source_review_round INTEGER",
+    // 这条消息已经把任务行上那段续跑交代**接走了**,正文里带着它(见 schema.ts 的
+    // checkpoint_taken)。持久账本:取走只写在内存里的话,送达之前进程一换,那段交代
+    // 就两边都不在了(第 2 轮审查 F4)。存量行 NULL。
+    "ALTER TABLE scheduled_messages ADD COLUMN checkpoint_taken TEXT",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",

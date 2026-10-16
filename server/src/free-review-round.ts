@@ -80,7 +80,7 @@ export async function cleanupAcceptedMergeRun(run: ReviewRunRow): Promise<void> 
  * 漏下的哨兵仍有自己的到期时间，而它推的事件会被出口闸按「来源审查已结束」拒掉。
  */
 export async function stopReviewRunMonitors(runId: string, reason: string): Promise<number> {
-  return await import("./monitors.js")
+  return await import("./monitor-reclaim.js")
     .then(({ stopMonitorsForReviewRun }) => stopMonitorsForReviewRun(runId, reason))
     .catch((error) => {
       console.error(`[ash] stopMonitorsForReviewRun(${runId}) failed:`, error);

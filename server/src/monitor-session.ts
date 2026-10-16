@@ -17,12 +17,14 @@
 // 它必须在流开始那一刻冻住身份,见 claude-monitor-origin.ts 的文件头。)
 //
 // pid 会被复用,所以判死活跟别处同一份:pid + 进程启动时刻一起对上(`isSameProcess`)。
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db, dbClient } from "./db/index.js";
-import { freeReviewRuns, monitors, sessions, tasks } from "./db/schema.js";
+import { freeReviewRuns, monitors, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { isSameProcess } from "./proc.js";
-import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
+import { announceResumePrompt } from "./task-resume-prompt.js";
+import { appendTaskTimeline } from "./task-timeline.js";
+import { now } from "./util.js";
 
 /** 能带进 `continueTask` 的那两种角色。别的(团队、duet)不表达,退回默认。 */
 const WAKEABLE_ROLES = new Set(["single", "reviewer"]);
@@ -45,13 +47,14 @@ const REVIEW_FINISHED = "起这个哨兵的那次审查已经结束，它的事�
  */
 export async function monitorSourceGate(
   task: { id: string; status: string; archived?: boolean | null },
-): Promise<{ blocked: string | null; role: string | null; reviewRun: string | null }> {
+): Promise<{ blocked: string | null; role: string | null; reviewRun: string | null; reviewRound: number | null }> {
   const blocked = monitorBlockedReason(task);
   // 归档不吃审查豁免(任务都收柜子了,审查链也没有续下去的地方),也就不必查任何东西。
-  if (task.archived) return { blocked, role: null, reviewRun: null };
+  if (task.archived) return { blocked, role: null, reviewRun: null, reviewRound: null };
   const live = await liveSessionRole(task.id);
   // 被状态拦下来时一定要查(那是豁免的唯一依据);活会话是审查者时也要查(要记住是哪次)。
-  const reviewRun = blocked || live === "reviewer" ? await reviewingRunId(task.id) : null;
+  const review = blocked || live === "reviewer" ? await reviewingRun(task.id) : null;
+  const reviewRun = review?.id ?? null;
   // **认不出活会话、任务又处于终态**：那就是「审查者按提示 pause 了一轮等外部结果，这会儿
   // 用户在面板上又补挂一个哨兵」——此刻一个 agent 进程都没有，活会话那条线索问不出东西，
   // 而它能挂上来本身就说明是那次审查豁免放它进来的。不认这一条，它会以默认的 `single`
@@ -62,6 +65,8 @@ export async function monitorSourceGate(
     role,
     // 执行者自己挂的哨兵不绑审查:它的命跟着任务走,审查结束与它无关。
     reviewRun: role === "reviewer" ? reviewRun : null,
+    // 轮次一起记:run.id 跨轮复用,只有它认不出「这是上一轮遗留的」(见 schema 注释)。
+    reviewRound: role === "reviewer" ? review?.round ?? null : null,
   };
 }
 
@@ -69,18 +74,31 @@ export async function monitorSourceGate(
  * 事件出口（`pushToTask`）与唤醒前最后一道闸（`monitorWakeGuard`）共用的那一份：
  * **这一条**哨兵现在还能不能唤醒任务。
  *
- * 判据是「起它的那次审查还在不在」，不是「这个任务上有没有任意一条审查在跑」。后者会把
- * 上一轮遗留的事件重新解释成新一轮审查的输入（第 1 轮审查 F2 列的同类实例），而两轮之间
- * 该不该唤醒的答案本来就可能不同。
+ * ── 来源资格**无条件**先问，跟任务此刻什么状态无关 ──────────────────────────────
+ *
+ * 「起它的那次审查还在不在」是**这条事件自己的资格**，不是只在任务终态时才需要的一条额外
+ * 豁免。按状态短路（非终态就直接放行）会漏掉一整条可触发路径：在一个 paused 任务上派审
+ * （入口允许）→ 审查期间哨兵输出并退出、通知排队 → 审查给出结论、旁路回合把任务恢复成
+ * paused → 任务没进终态，终态清理压根不跑 → 那条属于**已结束审查**的通知照旧投递，又
+ * 启动一轮 reviewer 回合（第 2 轮审查 F5）。
+ *
+ * 轮次一起核：`run.id` 跨轮复用（`nextRound` 把同一个 run 推回 reviewing 并把轮次加 1），
+ * 只有 runId 认不出「这是上一轮遗留的结果」。
+ *
+ * 归档是唯一一条压过来源资格的：任务都被收走了，审查链也没有续下去的地方。
  */
 export async function monitorWakeGate(
   task: { id: string; status: string; archived?: boolean | null },
-  sourceReviewRun: string | null,
+  // `null` = 这条哨兵没有记下来源(执行者自己挂的,或行已经不在了):照终态老规矩。
+  source: { reviewRun: string | null; reviewRound?: number | null } | null,
 ): Promise<string | null> {
-  const blocked = monitorBlockedReason(task);
-  if (!blocked || task.archived) return blocked;
-  if (!sourceReviewRun) return blocked;              // 执行者挂的:照终态老规矩
-  return await isReviewRunActive(sourceReviewRun) ? null : REVIEW_FINISHED;
+  if (task.archived) return monitorBlockedReason({ ...task, archived: true });
+  if (source?.reviewRun) {
+    return await isReviewSourceActive(source.reviewRun, source.reviewRound ?? null)
+      ? null
+      : REVIEW_FINISHED;
+  }
+  return monitorBlockedReason(task);                 // 执行者挂的:照终态老规矩
 }
 
 /** 起哨兵这一刻,活着的那条会话是什么角色。`null` = 认不出来(没有活会话、角色不在上面
@@ -98,51 +116,63 @@ async function liveSessionRole(taskId: string): Promise<string | null> {
   return roles.size === 1 ? [...roles][0]! : null;
 }
 
-/** 这个任务上**正在进行**的那次自由工作流审查（`reviewing` 是持久状态）。 */
-async function reviewingRunId(taskId: string): Promise<string | null> {
+/** 这个任务上**正在进行**的那次自由工作流审查（`reviewing` 是持久状态）与它的轮次。 */
+async function reviewingRun(taskId: string): Promise<{ id: string; round: number } | null> {
   if (dbClient.closed) return null;
   const rows = await db
-    .select({ id: freeReviewRuns.id })
+    .select({ id: freeReviewRuns.id, round: freeReviewRuns.currentRound })
     .from(freeReviewRuns)
     .where(and(eq(freeReviewRuns.taskId, taskId), eq(freeReviewRuns.status, "reviewing")));
-  return rows.at(0)?.id ?? null;
-}
-
-/** **这一次**审查还在进行吗。 */
-export async function isReviewRunActive(runId: string): Promise<boolean> {
-  if (dbClient.closed) return false;
-  const rows = await db
-    .select({ status: freeReviewRuns.status })
-    .from(freeReviewRuns)
-    .where(eq(freeReviewRuns.id, runId));
-  return rows.at(0)?.status === "reviewing";
+  return rows.at(0) ?? null;
 }
 
 /**
- * 这条**哨兵事件**的来源审查还在进行吗（投递扫描那一层的豁免）。
+ * **这一次、这一轮**审查还在进行吗。
  *
- * 投递判定本体是纯函数（`deliveryVerdict`，单测直接喂字面量），不碰库；所以「来源审查还在
- * 不在」这件事由扫描侧查好了填进去。查的是**这条事件所属哨兵**记下的那次 run，不是「这个
- * 任务上有没有任意一条 reviewing」——后者会把上一轮遗留的事件当成新一轮的输入。
+ * `round` 为 null（存量行）时只按 run 判 —— 那是这一列加上之前的行为。给了轮次就必须
+ * 对上：同一个 run 续到下一轮时，上一轮遗留的结果不再是有效输入（见 schema 的
+ * `source_review_round`）。
  */
-export async function monitorEventReviewActive(origin: string | null): Promise<boolean> {
-  const monitorId = monitorIdFromOrigin(origin);
-  if (!monitorId || dbClient.closed) return false;
+export async function isReviewSourceActive(runId: string, round: number | null): Promise<boolean> {
+  if (dbClient.closed) return false;
   const run = (await db
-    .select({ sourceReviewRun: monitors.sourceReviewRun })
-    .from(monitors)
-    .where(eq(monitors.id, monitorId))).at(0)?.sourceReviewRun;
-  return run ? await isReviewRunActive(run) : false;
+    .select({ status: freeReviewRuns.status, round: freeReviewRuns.currentRound })
+    .from(freeReviewRuns)
+    .where(eq(freeReviewRuns.id, runId))).at(0);
+  if (run?.status !== "reviewing") return false;
+  return round === null || run.round === round;
 }
 
-/** 这条哨兵事件所属哨兵记下的来源审查（`null` = 执行者自己挂的，或哨兵行已经没了）。 */
-export async function monitorEventSourceReview(origin: string | null): Promise<string | null> {
+/** 一条哨兵事件的来源资格。`none` = 执行者自己挂的（按任务状态老规矩）。 */
+export type MonitorSourceState = "live" | "stale" | "none";
+
+/**
+ * 这条**哨兵事件**的来源审查现在是什么状态（投递扫描那一层问的那一句）。
+ *
+ * 投递判定本体是纯函数（`deliveryVerdict`，单测直接喂字面量），不碰库；所以这件事由扫描侧
+ * 查好了填进去。查的是**这条事件所属哨兵**记下的那次 run 与那一轮，不是「这个任务上有没有
+ * 任意一条 reviewing」——后者会把上一轮遗留的事件当成新一轮的输入。
+ *
+ * **无条件查，不按任务状态短路**：来源失效是这条消息自己的资格问题，`paused` 任务上派的
+ * 审查收了尾同样要作废它的遗留结果（第 2 轮审查 F5）。
+ */
+export async function monitorEventSourceState(origin: string | null): Promise<MonitorSourceState> {
+  const source = await monitorEventSource(origin);
+  if (!source?.reviewRun) return "none";
+  return await isReviewSourceActive(source.reviewRun, source.reviewRound) ? "live" : "stale";
+}
+
+/** 这条哨兵事件所属哨兵记下的来源审查与轮次（`null` = 执行者自己挂的，或哨兵行已经没了）。 */
+export async function monitorEventSource(
+  origin: string | null,
+): Promise<{ reviewRun: string | null; reviewRound: number | null } | null> {
   const monitorId = monitorIdFromOrigin(origin);
   if (!monitorId || dbClient.closed) return null;
-  return (await db
-    .select({ sourceReviewRun: monitors.sourceReviewRun })
+  const row = (await db
+    .select({ reviewRun: monitors.sourceReviewRun, reviewRound: monitors.sourceReviewRound })
     .from(monitors)
-    .where(eq(monitors.id, monitorId))).at(0)?.sourceReviewRun ?? null;
+    .where(eq(monitors.id, monitorId))).at(0);
+  return row ?? null;
 }
 
 /**
@@ -158,11 +188,13 @@ export async function monitorEventSourceReview(origin: string | null): Promise<s
  */
 export async function monitorWakeExecutor(
   sourceReviewRun: string | null,
+  sourceReviewRound: number | null = null,
 ): Promise<{ agent: string; executorId: string | null; model: string | null; reasoningEffort: string | null } | null> {
   if (!sourceReviewRun || dbClient.closed) return null;
   const run = (await db
     .select({
       status: freeReviewRuns.status,
+      round: freeReviewRuns.currentRound,
       agentType: freeReviewRuns.agentType,
       executorId: freeReviewRuns.executorId,
       model: freeReviewRuns.model,
@@ -171,6 +203,7 @@ export async function monitorWakeExecutor(
     .from(freeReviewRuns)
     .where(eq(freeReviewRuns.id, sourceReviewRun))).at(0);
   if (!run || run.status !== "reviewing") return null;
+  if (sourceReviewRound !== null && run.round !== sourceReviewRound) return null;
   return {
     agent: run.agentType,
     executorId: run.executorId,
@@ -204,21 +237,88 @@ export async function monitorWakeExecutor(
  * `restore`，没有 `consume` —— 调用方必须在未送达的每条出路上回填（见两处投递点）。
  */
 export async function monitorWakeCheckpoint(
-  message: { taskId: string; origin: string | null },
-): Promise<{ append: string; restore: () => Promise<void> } | null> {
+  message: { id: string; taskId: string; origin: string | null; text: string; checkpointTaken: string | null },
+): Promise<{ text: string; restore: () => Promise<void> } | null> {
   if (dbClient.closed || monitorIdFromOrigin(message.origin) === null) return null;
+  // **重投**(上一次取走之后一个字没送出去,或者进程直接没了):交代已经写在这条消息的正文
+  // 末尾,账本列记着是哪一段。不再取第二次、也不再追加第二遍 —— 正文就是当时那一份。
+  if (message.checkpointTaken) {
+    const held = message.checkpointTaken;
+    return { text: message.text, restore: () => restoreCheckpoint(message, held) };
+  }
   const checkpoint = (await db
     .select({ resumePrompt: tasks.resumePrompt })
     .from(tasks)
     .where(eq(tasks.id, message.taskId))).at(0)?.resumePrompt;
   if (!checkpoint) return null;
-  // CAS 取走:读到之后到这里之间隔着 await,另一路(真人续跑、手点运行)可能刚好取走了同
-  // 一段。抢不到就当这一轮没有交代可带 —— 那段话已经被别人喂出去了,再喂一遍就是重复。
-  if (!await takeResumePrompt(message.taskId, checkpoint)) return null;
-  return {
-    append: `\n\n【你当初留下的续跑交代】${checkpoint}`,
-    restore: async () => { await restoreResumePrompt(message.taskId, checkpoint); },
-  };
+  const text = message.text + checkpointNote(checkpoint);
+  // **取走和落账在同一个批里**:`db.batch` 在一个 BEGIN…COMMIT 里同步跑完,中间没有 await,
+  // 也就没有「清了任务行、账还没落」的缝(为什么不用 transaction 见 claude-monitor-write.ts
+  // 的文件头)。缝里崩一次的代价就是那段交代两边都不在 —— 第 2 轮审查 F4。
+  const [taken, logged] = await db.batch([
+    // CAS 取走:只清掉上面读到的那一段(agent 中途换了新的一段就不动它)。
+    db.update(tasks).set({ resumePrompt: null, updatedAt: now() })
+      .where(and(eq(tasks.id, message.taskId), eq(tasks.resumePrompt, checkpoint)))
+      .returning({ id: tasks.id }),
+    db.update(scheduledMessages).set({ text, checkpointTaken: checkpoint })
+      .where(and(eq(scheduledMessages.id, message.id), isNull(scheduledMessages.checkpointTaken)))
+      .returning({ id: scheduledMessages.id }),
+  ]);
+  // **两半同生共死**。各自落空的理由不同,后果是同一个:
+  // - 取走落空 = 读到之后、批跑到之前,另一路(真人续跑、手点运行)刚好取走了同一段。那段话
+  //   已经被别人喂出去了,再喂一遍就是重复。
+  // - 落账落空 = 这条消息已经不是那个样子了(被取消删掉、或者已经接走过别的一段)。只取不
+  //   落账的话,那段交代就只活在返回值这个内存字符串里 —— 正是 F4 要消掉的形状。
+  if (!taken.length || !logged.length) {
+    if (taken.length) {
+      await db.update(tasks).set({ resumePrompt: checkpoint, updatedAt: now() })
+        .where(and(eq(tasks.id, message.taskId), isNull(tasks.resumePrompt)));
+    }
+    if (logged.length) {
+      await db.update(scheduledMessages).set({ text: message.text, checkpointTaken: null })
+        .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.checkpointTaken, checkpoint)));
+    }
+    return null;
+  }
+  await announceResumePrompt(message.taskId);
+  return { text, restore: () => restoreCheckpoint(message, checkpoint) };
+}
+
+/** 交代带在正文末尾的样子。取走和回填共用这一份,否则回填时剥不干净。 */
+const checkpointNote = (checkpoint: string) => `\n\n【你当初留下的续跑交代】${checkpoint}`;
+
+/**
+ * 一个字都没送出去 ⇒ 那段交代白取了，**两半一起退**：任务行上原样填回（CAS，agent 中途
+ * 写了新的一段就不动它），消息正文退回原话、账本清空（于是下一次投递可以重新取一次）。
+ *
+ * 退不动也不丢：交代仍然写在这条消息的正文里、账本列也还指着它，下一次投递走的是上面那条
+ * 重投分支，照旧带着它走。所以这里失败的唯一后果是「任务行上那一格暂时空着」—— 静默吞掉
+ * 就等于谁也不知道这件事（两处调用点原来都是 `.catch(() => {})`，第 2 轮审查 F4），所以
+ * 出声留一条时间线。
+ */
+async function restoreCheckpoint(
+  message: { id: string; taskId: string; text: string },
+  checkpoint: string,
+): Promise<void> {
+  const note = checkpointNote(checkpoint);
+  const original = message.text.endsWith(note) ? message.text.slice(0, -note.length) : message.text;
+  try {
+    const [restored] = await db.batch([
+      db.update(tasks).set({ resumePrompt: checkpoint, updatedAt: now() })
+        .where(and(eq(tasks.id, message.taskId), isNull(tasks.resumePrompt)))
+        .returning({ id: tasks.id }),
+      db.update(scheduledMessages).set({ text: original, checkpointTaken: null })
+        .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.checkpointTaken, checkpoint))),
+    ]);
+    if (restored.length) await announceResumePrompt(message.taskId);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`[ash] 续跑交代回填失败 ${message.taskId}:`, error);
+    await appendTaskTimeline(
+      message.taskId,
+      `续跑交代没能放回任务行（${detail}）。它仍留在那条待发送的哨兵事件里，下一次投递会带着它走。`,
+    ).catch(() => {});
+  }
 }
 
 export async function liveMonitorSummary(
