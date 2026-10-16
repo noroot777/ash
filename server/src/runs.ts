@@ -14,6 +14,8 @@ export interface Killable {
   steer?(text: SteerText, beforeSend?: () => void | Promise<void>): Promise<void>;
   command?(command: CliCommand): Promise<string>;
   goal?(): CliGoal | null;
+  /** 事件流结束后回收 CLI 甩出去的后台后代（RunHandle / ResidentHandle 上的同名方法）。 */
+  cleanup?(): Promise<void>;
 }
 
 // 被杀回合的结算落位:手动停 → canceled(队列把它当离队);分组暂停 → paused
@@ -63,6 +65,35 @@ export function untrackRun(taskId: string, h: Killable): void {
   if (!set) return;
   set.delete(h);
   if (!set.size) handles.delete(taskId);
+}
+
+/**
+ * 起跑途中失败,而这个 handle **还没有人消费**:杀掉进程 + 注销登记,两件事一起做。
+ *
+ * 为什么必须一起 —— 初始化段（落库、建日志目录、开写流、组装调度台）抛出来的那一刻,CLI
+ * 进程**已经起了**（`executor.run` / `openResident` 都是当场 spawn,不是惰性）,而这一轮的
+ * 消费循环永远不会开始,没有任何 finally 会来收它:
+ *   · 只注销 → `isRunning` 对了,可那个 CLI 还在跑。没人读它的输出,而停止按钮看的就是这份
+ *     集合,于是谁也杀不到它 —— 一个无主进程在用户的工作目录里继续烧真额度。
+ *   · 只杀不注销 → 进程走了,集合里的 handle 还在,`isRunning` 便永远判真:任务明明空着,
+ *     界面上停止按钮却亮着,`stopTask` 返回 true 又什么都没停（第 8 轮审查 N1）。
+ * `cleanup` 一并调:CLI 甩出去的后台后代平时由消费循环的 finally 回收（见 single-run.ts）,
+ * 这条路上没有那道 finally。
+ *
+ * **只对还在册的 handle 动手**,所以可以无脑挂在 finally 上:已经被消费循环注销过的那些
+ * （正常收尾、流抛错、被停）一律跳过,不会去 kill 一个早就自己退了的 pid。
+ */
+export function discardStartingRun(taskId: string, h: Killable): void {
+  if (!handles.get(taskId)?.has(h)) return;
+  untrackRun(taskId, h);
+  try {
+    h.kill();
+  } catch {
+    /* best effort */
+  }
+  void h.cleanup?.().catch((error) => {
+    console.warn(`[ash] 起跑失败后回收 ${taskId} 的 CLI 后代失败:`, error);
+  });
 }
 
 /**

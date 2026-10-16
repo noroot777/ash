@@ -7,9 +7,10 @@ import { createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import type { AgentType, SessionRole } from "@ash/shared";
+import type { RunHandle } from "./executors/types.js";
 import { db } from "./db/index.js";
 import { agents, tasks, sessions } from "./db/schema.js";
-import { claimTurn, releaseTurn, trackRun, untrackRun } from "./runs.js";
+import { claimTurn, discardStartingRun, releaseTurn, trackRun, untrackRun } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
@@ -125,6 +126,11 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
     });
     if (!child) continue; // 它已经不在了 → 交给 reconcileInterrupted
 
+    // 这两样都声明在 try **之外**:接管半路失败时,失败出口得够得着它们才还得回去（原先
+    // 都在 try 里面,于是那条 catch 既撤不掉句柄登记、也还不回回合锁 —— 第 8 轮审查 N1
+    // 的同类窗口）。
+    let handle: RunHandle | null = null;
+    let claimedTurn = false;
     try {
       const profile = (await db.select({ id: agents.id }).from(agents).where(eq(agents.name, sess.executor))).at(0);
       const ex = await resolveExecutorFor({
@@ -137,7 +143,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         child.kill();
         continue; // 该执行器不支持接管：别让进程失联地跑着，停掉按中断处理
       }
-      const handle = ex.attach(child, {
+      handle = ex.attach(child, {
         sessionId: sess.cliSessionId ?? "",
         commandLine: sess.commandLine ?? "",
         // 那一轮的 CLI 产物写在会话行记下的那个配置目录里(老行回落到按归属人现算)。
@@ -152,7 +158,10 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       markTurnActive({ sessionId: sess.id, taskId: task.id, startedAt: sess.turnStartedAt ?? sess.startedAt });
       // 接管也要恢复 turn 的运行时身份：report_stage 只认 turnRole（claimTurn 落下的），
       // 不恢复的话接回的 reviewer 交卷必被拒，一条本可有结论的审查被错杀成异常失败。
-      const claimedTurn = claimTurn(task.id, sess.role);
+      claimedTurn = claimTurn(task.id, sess.role);
+      // 消费循环与它的 finally 要的是**这一次**接到的那个句柄(上面那个 let 为了让失败出口
+      // 够得着它才声明在 try 外面,类型上是可空的)。
+      const adoptedHandle = handle;
       const out = createWriteStream(join(RUNS_DIR, task.id, `${sess.id}.md`), { flags: "a" });
       // 不 await：多个任务并行接管，各自跑各自的（跟正常运行时一样）。
       void consumeSingleRun({
@@ -161,7 +170,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         agentType: sess.agentType as AgentType,
         ex,
         cwd: sess.cwd ?? "",
-        handle,
+        handle: adoptedHandle,
         out,
         turnStart: sess.turnStartedAt ?? sess.startedAt,
         cliSessionId: sess.cliSessionId ?? "",
@@ -181,7 +190,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       })
         .catch((err) => console.error(`[ash] 接管 ${task.id} 的消费循环出错:`, err))
         .finally(() => {
-          untrackRun(task.id, handle);
+          untrackRun(task.id, adoptedHandle);
           if (claimedTurn) releaseTurn(task.id);
           // 接回的这条消费循环结束了（正常收尾、抛错、被停都走这里）：活动登记跟着撤,
           // 否则一条接回后崩掉的会话会一直被读端当成「还在写」（第 6 轮审查必须修 1）。
@@ -193,6 +202,13 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       adopted.delete(task.id);
       // 登记在 trackRun 之后、这段 try 里面,所以接管半路失败同样要撤（必须修 1 的同类出口）。
       closeSessionTurns(sess.id);
+      // 句柄登记与回合锁同理,而且这两样漏了更狠:前者让 `isRunning` 永远判真（停止按钮亮着
+      // 却什么都停不了）,后者让这个任务在本进程里**再也起不来**（claimTurn 一直占着）。
+      // 接管失败就按中断处理,进程一起收掉 —— 同上面 `!ex.attach` 那一支的口径:别让它失联
+      // 地跑着（第 8 轮审查 N1）。
+      if (handle) discardStartingRun(task.id, handle);
+      else child.kill();
+      if (claimedTurn) releaseTurn(task.id);
     }
   }
   return adopted;

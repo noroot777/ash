@@ -482,6 +482,15 @@ const resumeSame = async (taskId: string, text: string) => {
     assert.equal(active(String(row.id)).size, 0,
       "初始化抛出来也要撤掉「正在跑」的身份——留着它,任务重跑时这条会话就从老起点开到无穷");
   }
+  // 同一个窗口上压着**两样**登记,另一样是执行器句柄(`trackRun` 那份,停止按钮看的就是它)。
+  // 修复前它只在消费循环那道 finally 里撤,初始化一抛就永远留在集合里:任务明明已经不在跑了,
+  // `isRunning` 还一直判真 —— 界面上停止按钮亮着,`stopTask` 返回 true 又什么都没停,而那两个
+  // 假 CLI 谁也杀不到(第 8 轮审查 N1)。
+  const { isRunning, stopTask } = await import("../src/runs.js");
+  assert.equal(isRunning("TiDuetIn0001"), false,
+    "初始化抛出之后句柄登记还在册——任务空着,界面上却显示它正在跑、还能被停止");
+  assert.equal(stopTask("TiDuetIn0001"), false,
+    "这个任务名下已经没有进程了,停止不该宣称自己停下了什么(更不该去 kill 一个已经自己退了的 pid)");
 
   // 修好位置、隔开运行另一项画图任务,再重跑原讨论（报告里的时序）。
   rmSync(join(runsDir, "TiDuetIn0001"));
@@ -541,6 +550,6 @@ const resumeSame = async (taskId: string, text: string) => {
   assert.deepEqual(activeRegistrySize(), idle, "closeSessionTurns 这条路也要对称回收");
 }
 
-console.log("✓ turn identity: fresh run 记上计数、两种缺口都认且披露、整批失败留下持久标记、在飞不误报、崩过的老会话不复活、同一身份只计一次、升级历史不抵扣（含下界为 0 的）、重复行不顶替、异常收尾不留假活动身份、未确认的开始意图不被后来成功的一轮抹掉、讨论初始化抛出也不留无主的活动身份、注销后内存登记对称回收");
+console.log("✓ turn identity: fresh run 记上计数、两种缺口都认且披露、整批失败留下持久标记、在飞不误报、崩过的老会话不复活、同一身份只计一次、升级历史不抵扣（含下界为 0 的）、重复行不顶替、异常收尾不留假活动身份、未确认的开始意图不被后来成功的一轮抹掉、讨论初始化抛出也不留无主的活动身份(活动身份与执行器句柄两样都撤)、注销后内存登记对称回收");
 await dbClient.close();
 releaseTmpDb();

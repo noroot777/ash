@@ -18,7 +18,7 @@ import { closeSessionTurns, freshTurnFields, openTurn, recordTurnSpan, resumedTu
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
-import { trackRun, untrackRun, isCanceling, CanceledRun } from "../runs.js";
+import { trackRun, untrackRun, discardStartingRun, isCanceling, CanceledRun } from "../runs.js";
 import type { AgentExecutor } from "../executors/types.js";
 import {
   LOST_SESSION_PATCH,
@@ -201,44 +201,48 @@ export async function runTurn(args: {
   let cliId = handle.sessionId;
 
   const rowId = reuseRowId ?? id();
-  if (!reuseRowId) {
-    await db.insert(sessions).values({
-      id: rowId,
-      taskId,
-      role,
-      agentType: executor.type,
-      // 开新行和复用旧行共用同一份「随执行器/工作目录走」的列,免得两条分支各写各的、
-      // 时间一长只有一边跟得上(finding 6 就是这么来的)。
-      ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir),
-      worktreePath: args.branch ? cwd : null,
-      branch: args.branch ?? null,
-      cliSessionId: cliId,
-      startedAt: turnStart,
-      ...freshTurnFields(turnStart),
-      activeMs: 0,
-      exitStatus: null,
-    });
-  } else {
-    // Resuming the same session row for a new turn (e.g. after a gate the
-    // user took a while to resolve): stamp this turn's start and clear the prior
-    // end, so the gate wait is excluded from execution time.
-    await db
-      .update(sessions)
-      .set({
-        ...resumedTurnFields(turnStart),
-        ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir),
-      })
-      .where(eq(sessions.id, rowId));
-  }
-  // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
-  await openTurn({ sessionId: rowId, taskId, cwd, startedAt: turnStart });
-  // **从这里到函数末尾是这个回合身份的作用域**：登记在上面那句 openTurn 里拿到,所以
-  // 保护必须从拿到的那一刻开始,而不是从消费循环开始。原先 try 开在下面的事件循环处,
-  // 中间那段初始化（建日志目录、开写流）抛出来就绕过了注销:任务重跑时读端把这条老会话
-  // 的残留登记当成「从那个老起点一直在写」,停顿期间别的任务做的东西全被收进它的清单,
-  // 还不标 approx（第 7 轮审查必须修 1）。全部出口都在这道 finally 下面:初始化抛、消费
-  // 抛、收尾写库抛、被停(CanceledRun)、正常 return。
+  // **从这里到函数末尾是这一轮两样登记的作用域** —— 执行器句柄（上面那句 `trackRun`）与
+  // 回合身份（下面那句 `openTurn`）。两样都必须从**拿到的那一刻**罩到函数末尾,而不是从消费
+  // 循环开始:中间这段初始化（落库、建日志目录、开写流）抛出来时 CLI 已经起了,而这一轮的消费
+  // 循环永远不会开始 —— 没有任何人会来收这两样东西。
+  //   · 回合身份残留 → 任务重跑时读端把这条老会话当成「从那个老起点一直在写」,停顿期间别的
+  //     任务做的东西全被收进它的清单,还不标 approx（第 7 轮审查必须修 1）。
+  //   · 句柄登记残留 → `isRunning` 永远判真:任务明明空着,停止按钮却亮着、`stopTask` 返回
+  //     true 又什么都没停（第 8 轮审查 N1）。
+  // 全部出口都在这道 finally 下面:初始化抛、消费抛、收尾写库抛、被停(CanceledRun)、正常
+  // return。
   try {
+    if (!reuseRowId) {
+      await db.insert(sessions).values({
+        id: rowId,
+        taskId,
+        role,
+        agentType: executor.type,
+        // 开新行和复用旧行共用同一份「随执行器/工作目录走」的列,免得两条分支各写各的、
+        // 时间一长只有一边跟得上(finding 6 就是这么来的)。
+        ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir),
+        worktreePath: args.branch ? cwd : null,
+        branch: args.branch ?? null,
+        cliSessionId: cliId,
+        startedAt: turnStart,
+        ...freshTurnFields(turnStart),
+        activeMs: 0,
+        exitStatus: null,
+      });
+    } else {
+      // Resuming the same session row for a new turn (e.g. after a gate the
+      // user took a while to resolve): stamp this turn's start and clear the prior
+      // end, so the gate wait is excluded from execution time.
+      await db
+        .update(sessions)
+        .set({
+          ...resumedTurnFields(turnStart),
+          ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir),
+        })
+        .where(eq(sessions.id, rowId));
+    }
+    // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
+    await openTurn({ sessionId: rowId, taskId, cwd, startedAt: turnStart });
 
     recordTurnStart({ type: "duet.progress", taskId, round, speaker, phase: "start", startedAt: turnStart });
     if (versionReplacementNotice) {
@@ -394,5 +398,9 @@ export async function runTurn(args: {
     // 这一次 runTurn 结束了 = 这条会话名下不再有回合在写。幂等:正常路径上消费循环那道
     // finally 已经注销过一次（那一刻就确定不再写盘了,早撤比晚撤准）。
     closeSessionTurns(rowId);
+    // 句柄还在册 = 这一轮压根没进消费循环（上面那段初始化就抛了）:那个 CLI 没人读它的输出、
+    // 也没人杀得到它,连进程一起收掉。正常路径上消费循环那道 finally 早撤过,这里自动跳过
+    // （不会去 kill 一个已经自己退了的 pid,见 runs.ts 的 discardStartingRun）。
+    discardStartingRun(taskId, handle);
   }
 }

@@ -343,5 +343,32 @@ assert.equal(followUp.reviewCheckMode, runA.checkMode, "续轮必须覆盖残留
 assert.equal(followUp.reviewRetryLimit, runA.retryLimit, "续轮必须覆盖残留的重试上限");
 assert.equal(followUp.reviewNote, null, "续轮必须清掉残留的预约备注");
 
+// ── ⑭ 起跑途中丢弃一个还没人消费的句柄:杀和注销必须成对（第 8 轮审查 N1）──────────
+// 初始化段（落库、建日志目录、组装调度台）抛出来时,CLI 已经 spawn 了而消费循环永远不会
+// 开始。只撤登记 → 留一个没人读、没人杀得到的无主进程；只杀不撤 → `isRunning` 永远判真,
+// 停止按钮亮着、`stopTask` 返回 true 又什么都没停。两样必须一起做,而且只许对**还在册**
+// 的句柄做（消费循环正常收尾时已经撤过,再 kill 一次打的可能是别人复用的那个 pid）。
+{
+  const { trackRun, untrackRun, discardStartingRun, isRunning, stopTask } = await import("../src/runs.js");
+  let killed = 0;
+  let cleaned = 0;
+  const handle = { kill: () => { killed++; }, cleanup: async () => { cleaned++; } };
+  trackRun("t-handle-scope", handle);
+  assert.equal(isRunning("t-handle-scope"), true, "这一步的前提:句柄确实登记进去了");
+  discardStartingRun("t-handle-scope", handle);
+  assert.equal(isRunning("t-handle-scope"), false, "初始化抛出之后句柄必须撤出集合,否则任务空着也一直判在跑");
+  assert.equal(killed, 1, "那个没人消费的 CLI 也得收掉——只撤登记就留下一个谁都杀不到的无主进程");
+  assert.equal(cleaned, 1, "后台后代平时靠消费循环的 finally 回收,这条路上没有那道 finally");
+  assert.equal(stopTask("t-handle-scope"), false, "名下已经没有进程了,停止不该宣称自己停下了什么");
+  discardStartingRun("t-handle-scope", handle);
+  assert.equal(killed, 1, "不在册的句柄不许再杀一次(那个 pid 可能已经被系统分给别人了)");
+  // 消费循环注销过的那些:外层 finally 再丢一次必须是空转（duet 的正常收尾就是这条路）。
+  trackRun("t-handle-scope", handle);
+  untrackRun("t-handle-scope", handle);
+  discardStartingRun("t-handle-scope", handle);
+  assert.equal(killed, 1, "已经被消费循环撤掉的句柄,外层兜底不许对它动手");
+  assert.equal(isRunning("t-handle-scope"), false, "这一步的收尾:集合里不留东西给后面的用例");
+}
+
 console.log("turn-ownership regressions ok");
 process.exit(0);
