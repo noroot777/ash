@@ -14,7 +14,7 @@
 //    生命周期意图,不靠 reason 那段自由文本猜(第 2 轮审查 F2)。
 // ④ **撤销是一段时间,不是一个瞬间**,而且**「停止函数正常返回」不等于资源已经回收**。
 //    不变量是:**销毁持久身份之前,每一条要么已确认退出、要么回收责任已经可靠落盘**。
-//    那一圈(落责任 → 发信号 → 确认退出 → 销账)**住在运行时收尾层**(`monitors.ts` 的
+//    那一圈(落责任 → 发信号 → 追到线索空 → 收档)**住在运行时收尾层**(`monitors.ts` 的
 //    `finish`),不在这个文件里 —— 装在这边的包装函数上时,用户点停、到期、推满上限、启动
 //    接回判无出口、创建后登记失败全都绕过了它(第 5 轮审查 F1)。
 //    所以这一侧只剩两件事:
@@ -30,7 +30,10 @@ import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRuns, monitors } from "./db/schema.js";
 import { cancelPendingMonitorEvents } from "./monitor-events.js";
-import { heldReclaimDebts, reclaimMonitorProcess, reclaimState, settleReclaim } from "./monitor-reclaim-debts.js";
+import {
+  archiveTracelessIdentity, heldReclaimDebts, reclaimMonitorProcess, settleReclaim,
+} from "./monitor-reclaim-debts.js";
+import { reclaimState } from "./monitor-reclaim-evidence.js";
 import { isReviewSourceActive } from "./monitor-session.js";
 import { finish, isAshKind, serialize } from "./monitors.js";
 
@@ -85,7 +88,7 @@ async function stopMonitorsForTaskLocked(
     .select({
       id: monitors.id, taskId: monitors.taskId, status: monitors.status,
       pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
-      // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-debts 的 `MonitorUnit`)。
+      // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-evidence 的 `MonitorUnit`)。
       unitToken: monitors.unitToken,
       sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
     })
@@ -114,7 +117,7 @@ async function stopMonitorsForTaskLocked(
     if (spared) kept.push(m.id);
     else if (m.status === "running") doomed.push(m);
   }
-  // 停:一行失败也不能把后面几行一起带走。「落责任 → 发信号 → 确认退出 → 销账」那一圈由
+  // 停:一行失败也不能把后面几行一起带走。「落责任 → 发信号 → 追到线索空 → 收档」那一圈由
   // `finish` 自己走(见文件头第 ④ 条),所以这里只数停了几条。
   let stopped = 0;
   for (const m of doomed) if (await signalStop(m, reason, intent)) stopped += 1;
@@ -175,7 +178,14 @@ async function accountForLiveProcesses(
   // 「还收不干净」就得核对 —— 判据是 `reclaimState` 的那四档不确定,**不是**「卡片是不是
   // running」。`unknown`(ps 这一问自己失败了)也在里面:它恰恰是最该留责任的一档,原来却被
   // 当成「没什么可收」放行了(第 6 轮审查 F1 实测的那条路)。
-  const risky = rows.filter((r) => r.pid !== null && reclaimState(r.pid, r.pidStartedAt, r) !== "gone");
+  const withPid = rows.filter((r): r is MonitorRow & { pid: number } => r.pid !== null);
+  const risky = withPid.filter((r) => reclaimState(r.pid, r.pidStartedAt, r) !== "traceless");
+  // **追不到线索的那几条也要留下一行档**(第 13 轮审查 F1-B):它们起过进程,而「线索追空」
+  // 不等于「整项退出已证明」—— 后代能同时甩掉记号和进程组。这一侧原来把它们整条跳过,于是
+  // 删除把哨兵行连任务一起带走之后,那条可能还在跑的命令再也没有任何可定位身份
+  // (审查实测 `R1_RESOURCE_FALSE_GONE`:taskRows=0、monitorRows=0、debtRows=0、命令仍活)。
+  // 留档是幂等的,也不发任何信号。
+  await Promise.all(withPid.filter((r) => !risky.includes(r)).map((r) => archiveTracelessIdentity(r)));
   if (!risky.length) return;
   const held = await heldReclaimDebts(risky.map((r) => r.id));
   const unaccounted: MonitorRow[] = [];
@@ -229,7 +239,7 @@ export async function stopMonitorsForReviewRun(runId: string, reason: string): P
       .select({
         id: monitors.id, taskId: monitors.taskId, status: monitors.status,
         pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
-        // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-debts 的 `MonitorUnit`)。
+        // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-evidence 的 `MonitorUnit`)。
         unitToken: monitors.unitToken,
       })
       .from(monitors)
@@ -270,13 +280,13 @@ export async function reclaimUnconfirmedStops(): Promise<number> {
     .select({
       id: monitors.id, taskId: monitors.taskId, status: monitors.status,
       pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
-      // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-debts 的 `MonitorUnit`)。
+      // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-evidence 的 `MonitorUnit`)。
       unitToken: monitors.unitToken,
     })
     .from(monitors)
     .where(and(isAshKind, isNotNull(monitors.pid), ne(monitors.status, "running")));
   // 先用最便宜的那一问(`kill(-pgid, 0)`)把绝大多数历史行筛掉,ps 只对组还活着的那几条问。
-  const live = rows.filter((r) => reclaimState(r.pid!, r.pidStartedAt, r) !== "gone");
+  const live = rows.filter((r) => reclaimState(r.pid!, r.pidStartedAt, r) !== "traceless");
   if (!live.length) return 0;
   console.error(`[ash] 开机发现 ${live.length} 条「已停止但进程组还活着」的哨兵，按责任重收一遍`);
   await accountForLiveProcesses(live, "上一辈子把它停了，但退出从没被确认", { fatal: false });

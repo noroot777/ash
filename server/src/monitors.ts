@@ -15,7 +15,7 @@
 //
 // ③ **这个文件是真正拥有哨兵进程的那一层**,所以「回收责任」这一圈归它走:凡是把一条哨兵
 //    写成非运行态的地方(用户点停、到期、推满上限、命令自己退出、启动接回判无出口、创建
-//    后登记失败),都必须先落责任、再发信号、确认退出才销账。只装在删除/审查收尾那两个
+//    后登记失败),都必须先落责任、再发信号、追到线索空才收档。只装在删除/审查收尾那两个
 //    包装函数里是不够的 —— 其余每一条停止路径都会绕过它(第 5 轮审查 F1,现场见
 //    monitor-reclaim-debts.ts 文件头)。
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -34,7 +34,8 @@ import {
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, tasks } from "./db/schema.js";
-import { reclaimMonitorProcess, reclaimState, settleReclaim } from "./monitor-reclaim-debts.js";
+import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
+import { reclaimState } from "./monitor-reclaim-evidence.js";
 import { clearSpawnIdentity, readLogTail, readSpawnIdentity, tailLines, type Tailer } from "./monitor-spawn.js";
 import { IS_WINDOWS } from "./platform.js";
 import { processStartedNear } from "./proc.js";
@@ -115,6 +116,21 @@ export const publish = (taskId: string) => bus.publish({ type: "task.monitors", 
 
 // ── 盯 ───────────────────────────────────────────────────────────────────────
 
+/**
+ * **放后台跑的那种收尾**:定时器、探活、推满上限、进程自己退出 —— 四条都没有调用方在等
+ * 它的结果,所以**它的失败只能进日志**。
+ *
+ * 不接住的话就是一个没人管的 rejection:Node 默认把那个当致命错误,于是「一次收尾里的某笔
+ * 读写失败」会把整个 ash 带下去。撞上关库是最常见的一种(判出结束的那一刻 ash 可能正在退出,
+ * 实测:审查生命周期那份回归在 teardown 之后收到一条 `database is not open`)。
+ */
+function settleInBackground(
+  monitorId: string, status: Exclude<MonitorStatus, "running">, reason: string, code: number | null,
+): void {
+  void finish(monitorId, status, reason, code)
+    .catch((e) => console.error(`[ash] 后台收尾失败 monitor=${monitorId}（${reason}）:`, e));
+}
+
 export function attach(row: Row, onExit?: (cb: (code: number | null) => void) => void): void {
   if (runtimes.has(row.id)) return;
   // rt 先成形、tail 后挂：tail 的回调必须闭包引用**这一个** rt，不能回头去查注册表。
@@ -144,13 +160,13 @@ export function attach(row: Row, onExit?: (cb: (code: number | null) => void) =>
 
   const remaining = Math.max(0, new Date(row.expiresAt).getTime() - Date.now());
   const expiry = setTimeout(() => {
-    void finish(row.id, "expired", `盯满了约定的时长（${row.expiresAt}）`, null);
+    settleInBackground(row.id, "expired", `盯满了约定的时长（${row.expiresAt}）`, null);
   }, remaining);
   (expiry as { unref?: () => void }).unref?.();
   rt.timers.push(expiry);
 
   if (onExit) {
-    onExit((code) => void finish(row.id, "exited", "命令自己跑完了", code));
+    onExit((code) => settleInBackground(row.id, "exited", "命令自己跑完了", code));
   } else {
     // 接管路径没有 ChildProcess,只能自己探活。pid 会被复用,所以必须连启动时刻一起认 ——
     // 但**「问不出来」不是「已经退了」**:ps 短暂不可用时身份这一问答不出东西,照它收尾就会
@@ -159,10 +175,12 @@ export function attach(row: Row, onExit?: (cb: (code: number | null) => void) =>
     // `processIdentity` 那一份(一次快照、纯比较),不是某个布尔的假值(第 7 轮审查 F1)。
     const liveness = setInterval(() => {
       const state = reclaimState(row.pid ?? 0, row.pidStartedAt, row);
-      if (state === "gone") {
-        void finish(row.id, "exited", "命令已经不在了（server 重启期间跑完的，拿不到退出码）", null);
+      if (state === "traceless") {
+        settleInBackground(row.id, "exited",
+          "命令已经不在了（server 重启期间跑完的，拿不到退出码）", null);
       } else if (state === "not-ours") {
-        void finish(row.id, "exited", "这个号现在是另一个进程了（原命令在停服期间结束，拿不到退出码）", null);
+        settleInBackground(row.id, "exited",
+          "这个号现在是另一个进程了（原命令在停服期间结束，拿不到退出码）", null);
       }
     }, 2000);
     (liveness as { unref?: () => void }).unref?.();
@@ -220,7 +238,7 @@ async function flushBuffer(monitorId: string, rtOverride?: Runtime): Promise<voi
   if (events >= MONITOR_MAX_EVENTS) {
     // **不能 await**：这里正跑在 `serialize(monitorId, …)` 的队列里，而 finish 收尾时
     // 还要往同一条队列里排一次最后的 flush。await 它就是等自己后面那一位，当场死锁。
-    void finish(monitorId, "stopped", `推够了 ${MONITOR_MAX_EVENTS} 条事件自动停——每条事件都要唤醒任务跑一轮，再盯下去就是白烧回合。真要继续，换一条过滤更紧的命令重起一个`, null);
+    settleInBackground(monitorId, "stopped", `推够了 ${MONITOR_MAX_EVENTS} 条事件自动停——每条事件都要唤醒任务跑一轮，再盯下去就是白烧回合。真要继续，换一条过滤更紧的命令重起一个`, null);
   }
 }
 
@@ -281,7 +299,7 @@ export async function finish(
   const total = (await db.select({ events: monitors.events }).from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
   await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（共推送 ${total} 条事件）`);
   if (notify) await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`);
-  // **确认退出放在最后**:状态、时间线、通知都已落定,这一步只负责「能销的账销掉」。
+  // **追线索放在最后**:状态、时间线、通知都已落定,这一步只负责「能收的档收掉」。
   // 它会等到补刀生效(有界,见 `confirmReclaimed`)—— 于是这个函数返回时,要么进程确认不在了,
   // 要么责任稳稳地留在账本上。
   //
@@ -295,13 +313,13 @@ export async function finish(
       + `（哨兵行还留着它的身份，开机会再问一遍）`,
     );
   }
-  // 身份边条**只在确认收干净之后**才撤。
+  // 身份边条**只在线索追空之后**才撤(`closed`)。
   //
   // 它不只是「pid 空着那一档的兜底」:当这一行的 `pid_started_at` 还空着时,边条里那个时间锚
   // 是**唯一**能把身份补全的东西(见 monitor-reclaim-debts 的 `completeIdentity`)。责任还欠着
   // 就把它删掉,等于把「这一刻 ps 答不出来」永久固化成「这条永远证不出身份」:之后既不敢下刀,
   // 也销不掉账(第 10 轮审查 F2-B)。确认退出之后它才真的没用了。
-  if (row.kind === "ash" && row.logPath && verdict === "reclaimed") clearSpawnIdentity(row.logPath);
+  if (row.kind === "ash" && row.logPath && verdict === "closed") clearSpawnIdentity(row.logPath);
 }
 
 export type StopMonitorResult =
@@ -371,7 +389,10 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
     // 已经不是运行态了。**但「卡片上写着停了」不等于那个进程真的没了**:win32 那一侧没有
     // 放行闸(见 monitor-spawn.ts),① 的取消标记落下时命令可能已经开工。所以这里按**资源
     // 责任**再核一遍而不是看状态就返回 —— 这正是前几轮反复钉的那条判据。
-    if (row.pid && reclaimState(row.pid, row.pidStartedAt, row) !== "gone") {
+    // 追空的那一档这里什么都不做:没有落点可打,而**身份还在这一行上**(命令、pid、记号),
+    // 没有任何东西正在消失。留档发生在身份真要被销毁的那一刻 —— 删除/归档走的
+    // `accountForLiveProcesses`(第 13 轮审查 F1-B,见 monitor-reclaim.ts)。
+    if (row.pid && reclaimState(row.pid, row.pidStartedAt, row) !== "traceless") {
       const outcome = await reclaimMonitorProcess(row, `${reason}（创建期取消后补收）`, { fresh: true });
       if (await settleReclaim(outcome) === "unaccounted") {
         console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
@@ -537,7 +558,7 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
     // `processIdentity` 一次快照里)。
     // **pid 是空的**:那是创建协议留下的意图行 —— 身份先落库、进程后起、pid 回填(见
     // monitor-create.ts 文件头)。重启后还能看见它,说明 ash 恰好死在「落了身份」和「回填
-    // pid」之间。这一档**既不能按 `gone` 一笔带过,也不能冒充已经收干净**:
+    // pid」之间。这一档**既不能按「线索追空」一笔带过,也不能冒充已经收干净**:
     //  · POSIX:命令从未开工 —— 它停在放行闸前等 ash 写一个字节,ash 一死写端就关了,壳
     //    读到 EOF 在 exec 之前自己退掉(exit 97)。所以这条行可以干净地判掉。
     //  · win32:那一侧没有闸(`cmd.exe` 里没有可靠的「从第 3 号句柄读一行」写法),命令可能
@@ -583,7 +604,7 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       attach(row);
       attached += 1;
     } else {
-      // 剩下三档各有各的说法,**不能共用一句话**:`gone` 真的退了;`not-ours` 这个号现在是
+      // 剩下三档各有各的说法,**不能共用一句话**:`traceless` 线索追空了;`not-ours` 这个号现在是
       // 别人的(原来那个退没退证明不了);`ours-orphans` 组长退了、组里还有后代。后两档都要
       // 先把回收责任记下来 —— `fresh: false`,隔了一次重启不敢对孤儿组下刀,这个号可能已经
       // 被别人当组长用过(判据见 reclaimMonitorProcess 那张表)。
@@ -599,12 +620,12 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       if (verdict === "unaccounted") {
         console.error(`[ash] 接回时既没确认退出、回收责任也没落库 monitor=${row.id} pid=${row.pid}`);
       }
-      const owing = verdict === "reclaimed"
-        ? "；原进程随后已确认退出"
+      const owing = verdict === "closed"
+        ? "；原进程的线索随后都追空了"
         : verdict === "owed"
           ? "；原进程退出未确认，已记下回收责任（开机会再收一次）"
           : "；原进程退出未确认，而回收责任尚未保存（见 server 日志里的 pid，仍在重试落盘）";
-      await finishOffline(row, "lost", state === "gone"
+      await finishOffline(row, "lost", state === "traceless"
         ? "server 重启后这个进程已经不在了（它在停服期间跑完的，拿不到退出码）"
         : state === "not-ours"
           ? `server 重启后这个号已经是另一个进程了（原命令在停服期间结束，拿不到退出码）${owing}`

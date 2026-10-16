@@ -1,0 +1,277 @@
+// **一项哨兵资源此刻在哪一档、这一刀能打到谁** —— 资源证明与发信号的那份契约。
+//
+// 契约有两面,它们是同一个不变量的两个方向(第 13 轮审查 F1):**不许杀别人的东西**,
+// 也**不许把自己的残留说成零**。所以这一层只做三件事,再往上的账本(monitor-reclaim-debts.ts)
+// 和各个收尾入口都只能通过它拿到「可以动手」的授权:
+//
+//  ① 判档(`reclaimEvidence`):每一档只声称那一问真的答出来的东西;
+//  ② 给落点(`shootProvenUnit`):只打**这一刻证明过**属于这一次创建的那几个进程;
+//  ③ 说「追不下去了」(`isTracelessState` / `confirmTraceless`):它**不等于**「整项退出已证明」。
+//
+// ── 归属只认「这一次创建独有的那条记号」(第 12 轮审查 F1)─────────────────────────
+//
+// 组长死了不等于这一组空了(spawn.ts 的补刀注释说的是同一件事:外层 shell 老老实实退了,
+// 它派生的那个忽略 TERM 的东西还留在组里)。但「组里还有人」证明不了**那些人是谁的** ——
+// 组号就是当初那个 pid,它会被复用。前两版在这里先用「`pid_started_at` 非空」、再用「成员的
+// 命令行包含记录的命令原文」当归属证据,两样都不是身份:同一条命令可以合法地创建两次,前缀
+// 还会撞(记录 `sleep 1`、现存 `sleep 120` ⇒ 包含判断认作自己的后代,实测被杀的是审查自己起
+// 的测试组)。
+//
+// 现在的凭证是 `ASH_MONITOR_UNIT=<记号>`:起进程之前就随意图行落库,并作为环境变量种进那个
+// 壳 —— 环境随 exec 继承、后代各自带一份,所以它跨 exec、跨组长死亡、跨 server 重启都认得
+// 回来(判定 `reclaimEvidence`,扫描 monitor-unit-scan.ts 的 `liveMonitorUnitsSync`)。两问一次答完:
+//   · 带着记号的进程还在 ⇒ 归属已证明,**下刀只打这几个**;
+//   · 一个都不在(POSIX 上还要加「组也空了」,防命令自己 `env -i` 清掉环境)⇒ **能追的线索
+//     到此为止**(`traceless`)。注意它不是「整项退出已证明」—— 下一节说的就是这件事;
+//   · 问不出来(win32 读不到别的进程的环境块、ps 失败、存量行没有记号)⇒ 退回根自己那一份
+//     代次证据;根也退了就什么都不许声称 —— 记责任、留身份、不收档。
+//
+
+// ── 「证不出整项退出」要照实说(第 13 轮审查 F1-B)──────────────────────────────
+//
+// 上一版把「记号找不着 + 原进程组也空了」这一档叫 `gone`,并据此**把责任行删掉**。审查实测
+// 那是假的:一条后代可以在同一刻甩掉两条线索 —— `spawn(..., {detached:true, env:{PATH}})`
+// 之后它既不带记号(环境被换掉)也不在原组里(`setsid` 自建会话),而它好好地活着
+// (`R1_RESOURCE_FALSE_GONE`:`rootAlive=false`、`oldGroupAlive=false`、`escapedAlive=true`、
+// `debtRows=0`、`taskRows=0`)。
+//
+// 本轮把 POSIX 上所有能当「成员身份」的通道都量了一遍,想找一个**真正拥有整项资源的管理者**:
+// 环境变量随 `spawn({env})` 甩掉;进程组/会话随 `detached` 甩掉;多继承一个 fd ——
+// Node 起子进程时 libuv 会把 ≥3 号 fd 丢掉(`sh`→`node` 还留着,`node` 再起的孙子就没了);
+// macOS 的 responsible-pid 要 root(`launchctl procinfo` 报 "requires root privileges");
+// Linux cgroup 要委派;kqueue 的 `NOTE_TRACK` 要原生代码。**结论:这个平台上拿不到那个管理者**。
+//
+// 所以这一档改名叫 `traceless` —— 「能追的线索到此为止」,它只授权**收档**(`closed_at`),
+// 不授权删行:留下的那一行是这次创建最后的可定位身份(命令、pid、记号、为什么追不下去)。
+// 唯一真的证明过的那一档在别处:命令**从未开工**(放行闸没开),见 monitor-create.ts。
+//
+// ── 每一次信号都要有**当代**的证据(第 13 轮审查 F1-C)────────────────────────────
+//
+// 一次取证不是永久授权:闭包里存一个裸 pid、两秒后直接补刀,这两秒里那个进程可以退出、
+// 号可以被别人接手。所以 `killProvenUnit` 的补刀、`settleDebt` 的债务重收都要 `fresh` 再
+// 取一次证,只对仍然证明得出来的落点动手;一个都证不出就什么都不发。
+import { IS_WINDOWS, isPidAlive, isProcessGroupAlive, killOne, killTree } from "./platform.js";
+import { processIdentity, processUnitEvidence } from "./proc.js";
+
+/**
+ * 这一条此刻处在哪一档。**每一档只声称那一问真的答出来的东西。**
+ *
+ * **六档,每一档对应一个真的问出了结果的问题**(带记号的进程还有吗 / 根还在吗 / 这个号上是谁):
+ * - `traceless` = 根已经退了,**而且每一条线索都答出来、都是空的**。它是能收档的那一档,但
+ *   **不是「整项退出已证明」**:后代甩得掉记号也甩得掉进程组,所以这一档只销「追踪」,不销
+ *   责任 —— 行留着、盖上追到此为止的戳(第 13 轮审查 F1-B,理由见 `isTracelessState`)。
+ * - `ours-alive` = 还在,而且组长身份对得上 —— 可以接着杀。
+ * - `ours-orphans` = **组长已经不在了,组里还有人**。那几个只可能是我们的后代:组长这个 pid
+ *   现在是空的(`kill(pid,0)` 报 ESRCH),没有别人能当这一组的组长;而外人要加进来得
+ *   `setpgid` 到同一个会话里去,那个会话的头正是这条哨兵自己。所以这一档**在刚刚还拥有它的
+ *   那一层**可以放心杀(`finish`),隔了一次重启就不行了 —— 见 monitor-reclaim-debts.ts 的
+ *   `reclaimMonitorProcess` 的 `fresh`。
+ * - `not-ours` = 这个号现在是**另一个**进程(ps 答出来了,启动时刻**确实**对不上;locale 不同
+ *   由 `processIdentity` 在同一份快照上的时间戳比较兜住,不会被误报成这一档)。不许杀 —— 那是别人的进程。
+ *
+ * 剩下这三档**都不许据此收档**(也都不许下刀):
+ * - `unknown` = **身份这一问自己失败了**:`kill(pid,0)` 说它活着,ps 却什么都答不出来
+ *   (`inspectProcess` 把「不存在」和「ps 不可用」都返回 null)。拿它当「已经退了」就是把
+ *   最后那一份责任丢掉(第 4 轮审查 F1),拿它当「不是我们的」就是在界面上撒谎
+ *   (第 6 轮审查 F1)。
+ * - `unverifiable` = **当初没记下启动时刻**,所以这一问**无从比对**:能证明的只有「这个号
+ *   上现在有进程」。这一档必须跟 `ours-alive` 分开 —— 第 9 轮审查 F3:存量行(或任何一条
+ *   `pid_started_at` 为空的行)原来会走到 `same` → `ours-alive` → **发击杀信号**,而那条
+ *   路上「看见一个进程活着」被当成了「已证明有权回收它」。原命令早已跑完、号被系统复用时,
+ *   下刀打的就是别人的进程(接回、清扫、重复停止三条路都消费这一档)。
+ * - `not-ours` 同样不许收档:我们能证明的只有「这个号上现在是别人」,证明不了**原来那个**
+ *   已经退出 —— 它可能带着后代留在这一组里,只是组长的号被别人占了。三档的区别只在于
+ *   **记下来的理由**和日志措辞,不在于要不要负责(`stateNote` 按档各说一句)。
+ */
+export type ReclaimState =
+  | "traceless" | "ours-alive" | "ours-orphans" | "not-ours" | "unverifiable" | "unknown";
+
+/**
+ * 「线索都答出来了,而且都是空的」—— **这一档可以收档,但它不叫「整项退出已证明」**
+ * (第 13 轮审查 F1-B)。
+ *
+ * 为什么只能到这一步:POSIX 上没有任何一条线索是后代**甩不掉**的 —— 环境可以 `env -i` 清掉
+ * (本轮实测),进程组/会话可以 `setsid` 离开(本轮实测),额外的继承 fd 在 libuv 起子进程时
+ * 就被关掉(本轮实测:`node` 起的孙子进程拿不到 fd 3),macOS 的 responsible-pid 要 root
+ * (本轮实测 `launchctl procinfo` 拒绝),Linux 的 cgroup 要委派、kqueue 的 `NOTE_TRACK` 要
+ * 原生扩展。所以「真正掌握整项资源的管理者」在当前平台能力下拿不到,而**缺少线索不等于
+ * 没有后代**。
+ *
+ * 于是收档这件事按它的真实含义来做:责任行**不删**,只盖上「追到这里为止」的戳
+ * (`closed_at`),措辞也只说我们查到的那些 —— 不再声称确认退出(见 `closeReclaimDebt`)。
+ */
+export const isTracelessState = (state: ReclaimState): boolean => state === "traceless";
+
+/**
+ * 身份这一问的三种答案 —— **判定本体不在这里,在 `proc.ts` 的 `processIdentity`**:
+ * 一次 ps 快照、纯比较、三档结果。这一层只把它的三档换成这一摊的说法。
+ *
+ * **不许在这一层再问一次**。上一版这里是「原文不等就再调一次 `isSameProcess` 兼容
+ * locale」:第一次查成功、第二次查失败时,那个 false 被读成确证的「是别人」,于是
+ * `unqueryable` 这一档被悄悄吃掉 —— 一条还在跑的哨兵因此被接回判成 `lost`,随后被按债
+ * 杀掉(第 7 轮审查 F1)。「问不出来」必须一路保留到调用方,消费者各补一次重试只会把
+ * 同一个错换个地方犯。
+ *
+ * **只在 `kill(pid,0)` 已经说它活着时调**,所以 `unqueryable` 只剩一种解释:ps
+ * (或 Windows 上那段 PowerShell)自己没答出来。
+ *
+ * `unverifiable`(当初没记启动时刻)**单独传上去**,不许折进 `ours`:见 `ReclaimState` 那一档。
+ */
+function identityOf(
+  pid: number, recorded: string | null,
+): "ours" | "theirs" | "unverifiable" | "unqueryable" {
+  const verdict = processIdentity(pid, recorded);
+  if (verdict === "same") return "ours";
+  if (verdict === "different") return "theirs";
+  return verdict === "unverifiable" ? "unverifiable" : "unqueryable";
+}
+
+/** 身份那一问的四档 → 这一摊的档位。**只有 `ours` 这一档敢下刀。** */
+const stateOfIdentity = (who: ReturnType<typeof identityOf>): ReclaimState =>
+  who === "ours" ? "ours-alive"
+    : who === "theirs" ? "not-ours"
+      : who === "unverifiable" ? "unverifiable" : "unknown";
+
+/**
+ * 判这一档要拿的东西:**这一次创建独有的资源记号**,外加命令原文(只用于日志和存量行的
+ * 时间锚核对,**不作归属凭证** —— 第 12 轮审查 F1-A)。
+ *
+ * 整行(`monitors` 的行、债表的行)都满足这个形状,所以调用方直接把行传进来就行。
+ */
+export type MonitorUnit = {
+  /**
+   * **必填**(可以是 null:存量行就没有)。写成必填是刻意的:它是归属与整项退出的唯一凭证,
+   * 可选的话,一个漏选这一列的 `select` 就会静悄悄把每一行都降级成「证不出」——
+   * 查询少一列不该表现成「这些资源都收不掉了」,那种漏法通读发现不了(第 12 轮审查 F1)。
+   */
+  unitToken: string | null;
+  /** 命令原文:只用于日志与存量行的时间锚核对,**不作归属凭证**。 */
+  command?: string | null;
+};
+
+/** 判完这一档手里有的全部东西:档位,以及**已经证明属于这次创建的那几个进程**。 */
+export type ReclaimEvidence = {
+  state: ReclaimState;
+  /** 下刀的落点。只有 `ours-*` 这两档非空,而且只在记号证明得出来时非空。 */
+  unitPids: number[];
+};
+
+/**
+ * **这一项资源此刻在哪一档** —— 归属只认那条记号,整项退出要全部线索都答出来。
+ *
+ * 判的顺序就是证据的强弱顺序:
+ *
+ * ① **记号这一问**(`processUnitEvidence`,只读环境段):带着它的进程还在不在。
+ *    还在 ⇒ 归属已证明,`unitPids` 就是那几个。根(记录的那个 pid)也在里面且活着就是
+ *    `ours-alive`(可以打整组,覆盖这一刻之后新派生的后代);根已经不在就是 `ours-orphans`,
+ *    这一档**下刀只打证明过的那几个成员**:这个号此刻可能已经是别人的组长。
+ *
+ * ② **根自己那一代**:记号找不着或答不出来时,根还活着的话它的代次仍然可判
+ *    (`processIdentity`:pid + 启动时刻)。这一档照旧可判、可下刀。
+ *
+ * ③ **根也已经退了** —— 这时才轮到「整项退出」这一问,而它要求**每条线索都答出来**:
+ *    · 记号这一问没答出来(win32 读不到别的进程的环境块、ps/`/proc` 失败、存量行没有记号
+ *      且组里还有人)⇒ `unknown` / `unverifiable`:什么都不许声称;
+ *    · 记号找不着、进程组也空了 ⇒ `traceless`。**注意它的含义**:是「线索追到这里为止」,
+ *      不是「整项资源退出已证明」—— 后代可以同时清掉环境并自己建组(第 13 轮审查 F1-B 实测)。
+ *      所以这一档只允许收档,不允许把责任行删掉(见 `isTracelessState`、`closeReclaimDebt`)。
+ *
+ * `fresh` = 这次取证要用来发信号:授权必须是当代的,不许来自 400ms 的旧快照
+ * (第 13 轮审查 F1-C)。
+ */
+export function reclaimEvidence(
+  pid: number, pidStartedAt: string | null, unit: MonitorUnit, opts: { fresh?: boolean } = {},
+): ReclaimEvidence {
+  const evidence = processUnitEvidence(unit.unitToken, opts);
+  if (evidence.verdict === "ours") {
+    const leaderHeld = isPidAlive(pid) && evidence.pids.includes(pid);
+    return { state: leaderHeld ? "ours-alive" : "ours-orphans", unitPids: evidence.pids };
+  }
+  if (isPidAlive(pid)) return { state: stateOfIdentity(identityOf(pid, pidStartedAt)), unitPids: [] };
+  // 根已经不在了。
+  if (evidence.verdict === "unprovable") {
+    // 存量行(没有记号)在 POSIX 上还剩进程组这一条线索:组空了也只是「线索到此为止」。
+    if (!unit.unitToken && !IS_WINDOWS) {
+      return { state: isProcessGroupAlive(pid) ? "unverifiable" : "traceless", unitPids: [] };
+    }
+    return { state: "unknown", unitPids: [] };
+  }
+  if (!IS_WINDOWS && isProcessGroupAlive(pid)) return { state: "unverifiable", unitPids: [] };
+  return { state: "traceless", unitPids: [] };
+}
+
+/** 只问档位的那些调用方(探活、过滤、日志)用这个投影;要下刀的必须用 `reclaimEvidence`。 */
+export function reclaimState(pid: number, pidStartedAt: string | null, unit: MonitorUnit): ReclaimState {
+  return reclaimEvidence(pid, pidStartedAt, unit).state;
+}
+
+/**
+ * 下刀的落点:**只打这一刻证明过属于这一次创建的那些进程**。
+ *
+ * · 根自己带着记号、而且还活着 ⇒ 打整组(`killTree`:组信号覆盖「这一刻之后它又派生出来的」
+ *   那些,逐个打成员覆盖不到)。它活着就说明这个组号不可能已经是别人的。
+ * · 根已经不在(孤儿后代)⇒ **逐个打证明过的成员本身**,绝不打组:成员的 pgid 是那个已经死掉
+ *   的根的号,`kill(-member)` 打的是「组号恰好等于这个成员 pid」的另一组
+ *   (第 12 轮审查 F1-A 实测被杀掉的就是那种组)。
+ * · 存量行(没有记号)走到 `ours-alive` 时 `unitPids` 是空的,落点仍是组 —— 那一档的归属由
+ *   根自己的 pid + 启动时刻证明,跟旧版逐字一致。
+ *
+ * **补刀那一下重新取证**(第 13 轮审查 F1-C):上一版的 +2 秒闭包握着裸 pid 就直接 SIGKILL,
+ * 等于把一次性的授权存成了永久授权 —— 两秒里那个进程可以退出、号可以被别人接手。所以这里
+ * 到点先 `fresh` 再问一遍,**只对仍然证明得出来的落点补刀**;一个都证不出就什么都不发。
+ * 也因此这一层不再借用 `executors/spawn.ts` 的 `killByPid`:它的 +2 秒那一刀是无条件的。
+ */
+export function killProvenUnit(
+  pid: number, pidStartedAt: string | null, unit: MonitorUnit, evidence: ReclaimEvidence,
+): void {
+  shootProvenUnit(pid, evidence, "SIGTERM");
+  const t = setTimeout(() => {
+    // 重新取证:这两秒里谁退了、号被谁接手了,只有现在问才算数。
+    const again = reclaimEvidence(pid, pidStartedAt, unit, { fresh: true });
+    if (again.state !== "ours-alive" && again.state !== "ours-orphans") return;
+    shootProvenUnit(pid, again, "SIGKILL");
+  }, 2_000);
+  (t as { unref?: () => void }).unref?.();
+}
+
+/** 发这一刀:组信号只在「根自己证明过、而且还活着」时发,否则只打证明过的成员本身。 */
+export function shootProvenUnit(pid: number, evidence: ReclaimEvidence, sig: NodeJS.Signals): void {
+  if (evidence.state === "ours-alive" && (!evidence.unitPids.length || evidence.unitPids.includes(pid))) {
+    killTree(pid, sig);
+    return;
+  }
+  for (const member of evidence.unitPids) killOne(member, sig);
+}
+
+/**
+ * 有界地等**线索都空掉**。补刀在 +2 秒,所以默认等到 3 秒 —— 覆盖「优雅退出 + 补刀生效」,
+ * 又不会把任务结算无限期吊在这里。
+ *
+ * 返回 false 不是失败,是「这一刻还收不了档」:责任已经落盘,接着由梯子和启动期清扫推。
+ * 返回 true 也**不是**「整项退出已证明」(见 `isTracelessState`):是「能追的线索都追空了」。
+ */
+export async function confirmTraceless(
+  pid: number, pidStartedAt: string | null, deadlineMs: number, unit: MonitorUnit,
+): Promise<boolean> {
+  const until = Date.now() + deadlineMs;
+  for (;;) {
+    if (isTracelessState(reclaimState(pid, pidStartedAt, unit))) return true;
+    if (Date.now() >= until) return false;
+    // **这一发不能 unref**:我们正在 await 它。unref 掉的话,当它是事件循环里唯一的待办时
+    // 进程会直接退出 —— 等待本身就没了(实测:测试进程报 unsettled top-level await)。
+    // 梯子那一侧相反,那是后台重试,必须 unref。
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+/** 落在账本上的那句「为什么还没收掉」。按档说清楚,别让人事后分不出是哪一种不确定。 */
+export function stateNote(state: ReclaimState): string {
+  if (state === "traceless")
+    return "根已退出，记号与原进程组都已空 —— 能追的线索到此为止（整项退出本平台证不出，见 isTracelessState）";
+  if (state === "ours-alive") return "还活着";
+  if (state === "ours-orphans") return "起它的那个进程已退、这次创建的后代还在(记号认得出来)";
+  if (state === "not-ours") return "这个号现在是另一个进程，原进程退出无法确认";
+  if (state === "unverifiable")
+    return "这个号上/这一组里还有进程，但证不出它属于这一次创建（没有资源记号或当初没记下启动时刻，不敢下刀）";
+  return "资源记号这一问答不出来（Windows 读不到别的进程的环境块，或 ps 不可用），判不出归属，也证不出整项退出";
+}

@@ -74,7 +74,10 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
   assert.equal(row.description, "等全量 unittest 跑完");
   assert.equal(row.status, "running");
 
-  assert.match(reason, new RegExp(`monitorId=${row.id}\\b`), `reason 里要带上 monitorId，实际：${reason}`);
+  // **不许用 `\b` 收尾**(第 13 轮审查 N1):随机 id 可以以 `-` 结尾(实测撞到过 `e2CuHkKLlL--`),
+  // 而 `-` 不是单词字符 ⇒ 后面必须紧跟一个单词字符才匹配,于是这一句会在那种 id 上假失败。
+  // 判据本来就是「这段文字出现过」,直接按子串问。
+  assert.ok(reason.includes(`monitorId=${row.id}`), `reason 里要带上 monitorId，实际：${reason}`);
   // 这一句是整件事的落点:哨兵挂上了而回合就这么结束的话,任务不会停在那儿等。
   assert.match(reason, /pause_task/, `reason 必须说「这一轮用 pause_task 收尾」，实际：${reason}`);
   await stopMonitor(row.id, "测试收尾");
@@ -207,7 +210,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     .hookSpecificOutput.permissionDecisionReason;
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0);
   assert.ok(row, "自用模式下也要真替它挂上哨兵");
-  assert.match(okReason, new RegExp(`monitorId=${row.id}\\b`), `实际：${okReason}`);
+  assert.ok(okReason.includes(`monitorId=${row.id}`), `实际：${okReason}`);   // 同上:别用 `\b`
   await stopMonitor(row.id, "测试收尾");
 
   // 反过来：token 对不上就不许代办。不然这个端点等于「谁报一个 taskId 就替谁挂」。

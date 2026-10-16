@@ -5,14 +5,15 @@
 // 使用方:
 //  · singleton.ts —— 锁文件里那个 pid 还是不是当初拿锁的 server
 //  · executors/detached.ts —— 重启后接管时,DB 里记的 agent pid 还是不是那个 agent
-//  · 哨兵那一摊(monitor-reclaim-debts.ts)—— 「这个号上还是不是我们起的那个命令」
+//  · 哨兵那一摊(monitor-reclaim-evidence.ts)—— 「这个号上还是不是我们起的那个命令」
 //
 // 「怎么问操作系统」在 platform.ts,这里只管「问到之后怎么判」。
 //
 // **判定只有一份,而且只查一次**(`processIdentity`):答案是三档,「问不出来」是独立的一档。
 // 折成布尔的那一份(`isSameProcess`)只是它的投影,给只需要是/否的两个老使用方用 ——
 // 谁都不许在投影之外再补一次查询,理由见 `processIdentity` 的注释。
-import { inspectProcessSync, liveMonitorUnitsSync } from "./platform.js";
+import { liveMonitorUnitsSync } from "./monitor-unit-scan.js";
+import { inspectProcessSync } from "./platform.js";
 
 export type ProcessInfo = {
   pid: number;
@@ -103,34 +104,41 @@ export function isSameProcess(pid: number, expectedStartedAt?: string | null): b
 }
 
 /**
- * 「**这一项资源**现在还在不在」—— 整项退出与归属,同一问一次答完。
+ * 「**带着这一次创建的记号的进程,现在还有没有**」——归属这一问,一次答完。
  *
- * 问的不是进程组,是**这一次创建自己的那条记号**(`MONITOR_UNIT_ENV`,见 platform.ts):
- * 它随环境被整棵树继承,所以组长退掉之后还留在后台的后代仍然自证身份;它每次创建新生成,
- * 所以认不到别人身上。
- *
- * 上一版这一问是「组里有没有成员的命令行包含我们记下的命令原文」,那不是身份(第 12 轮审查
- * F1-A 实测):命令原文可以合法地重复,前缀还会撞 —— 记录 `sleep 1`、现存 `sleep 120`,包含
- * 判断就认作自己的后代,于是一条 2001 年启动时刻的历史行拿到了杀整组的资格。
+ * 问的不是进程组,也不是命令原文,是**这一次创建自己的那条记号**(`MONITOR_UNIT_ENV`,
+ * 见 monitor-unit-scan.ts):它随环境被整棵树继承,所以组长退掉之后还留在后台的后代仍然自证身份;
+ * 它每次创建新生成,所以认不到别人身上。记号**只从环境段读**,argv 里的同名文字不算
+ * (第 13 轮审查 F1-A:审查起的一个诊断进程只因参数里写了这段文字就被杀)。
  *
  * 三档,每一档只说那一问真的答出来的东西:
  *  · `ours` —— 还有带着记号的进程活着,**而且它们是谁都已经知道**(pids 就是下刀的落点);
- *  · `gone` —— 这些记号一个都不在了 = **整项资源退出的证明**。调用方据此销账;
- *  · `unprovable` —— 没有记号(存量行)、或者这一问自己答不出来(win32 读不到别的进程的环境
- *    块、POSIX 上 ps/`/proc` 失败)。两样都不许冒充另外两档:不销账、不下刀,留一笔责任。
+ *  · `none` —— 这些记号一个都没找到,**而且这一遍是问全了的**(扫描的 `complete`)。它仍然
+ *    不是「整项资源退出已证明」:后代可以把环境清掉、也可以自己 `setsid` 离开原组,那时它既不
+ *    带记号也不在组里(第 13 轮审查 F1-B)。够不够收档由上层按**全部线索**判(见
+ *    monitor-reclaim-evidence 的 `traceless`),这里只说记号这一问;
+ *  · `unprovable` —— 没有记号(存量行)、这一问自己答不出来(win32 读不到别的进程的环境块、
+ *    POSIX 上 ps/`/proc` 失败),**或者这一遍没问全**(有活着的进程判不了:环境读不出来、
+ *    argv 与环境切不开)。「没问全」时「一个都没有」这句话不成立 —— 不许冒充 `none`。
+ *
+ * `fresh` = 这次取证要用来发信号 ⇒ 不许复用备忘里的旧快照(第 13 轮审查 F1-C)。
  */
 export type UnitEvidence =
   | { verdict: "ours"; pids: number[] }
-  | { verdict: "gone" }
+  | { verdict: "none" }
   | { verdict: "unprovable" };
 
-export function processUnitEvidence(unitToken?: string | null): UnitEvidence {
+export function processUnitEvidence(
+  unitToken?: string | null, opts: { fresh?: boolean } = {},
+): UnitEvidence {
   const token = unitToken?.trim();
   if (!token) return { verdict: "unprovable" };
-  const units = liveMonitorUnitsSync();
-  if (!units) return { verdict: "unprovable" };   // 问不出来 ≠ 没有
-  const pids = units.get(token) ?? [];
-  return pids.length ? { verdict: "ours", pids } : { verdict: "gone" };
+  const scan = liveMonitorUnitsSync(opts);
+  if (!scan) return { verdict: "unprovable" };    // 问不出来 ≠ 没有
+  const pids = scan.units.get(token) ?? [];
+  if (pids.length) return { verdict: "ours", pids };
+  // 找不到:只有**问全了**才敢说「一个都没有」。
+  return scan.complete ? { verdict: "none" } : { verdict: "unprovable" };
 }
 
 /**

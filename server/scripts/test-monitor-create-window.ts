@@ -29,7 +29,9 @@ import {
   reattachMonitors, reviewInFlight, root, runs, schema, sleep, startMonitor, stopMonitor,
   teardown, until,
 } from "./monitors-fixture.js";
-import { dbClient, debtRow, marker, psCount, withPsOutage } from "./monitor-create-fixture.js";
+import {
+  assertDebtClosed, dbClient, marker, psCount, withPsOutage,
+} from "./monitor-create-fixture.js";
 import { inspectProcess } from "../src/proc.js";
 
 const { handoverRecoverable, monitorSpawnIdentityPath, spawnMonitor } = await import("../src/monitor-spawn.js");
@@ -450,8 +452,8 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
   const row = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
   const res = await abandonRegistration(row, "台子：根已经先退了", spawned);
   assert.equal(res.ok, false, "撤销就是撤销");
-  await until("**后代也被收掉了** —— 不许只凭根的 exit 就销账", async () => psCount(token) === 0);
-  assert.equal(await debtRow(monId), undefined, "真收干净了才销账");
+  await until("**后代也被收掉了** —— 不许只凭根的 exit 就说收干净", async () => psCount(token) === 0);
+  await assertDebtClosed(monId, "后代收掉、线索追空之后才收档");
 }
 
 // ── ⑭ **补偿自己失败时也得有人接管**(第 10 轮审查 F3)──────────────────────────────

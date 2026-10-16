@@ -84,7 +84,7 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     db.delete(monitors).where(eq(monitors.taskId, taskId)),
     // **`monitor_reclaim_debts` 刻意不在这里。** 那张表记的是「这个 pid 该停、但没停掉」,
     // 它的全部意义就是活得比任务久 —— 跟着任务一起删等于把唯一线索再丢一次(第 3 轮审查
-    // F1)。销账只有一个出口:进程确认不在了(monitor-reclaim-debts.ts 的清扫)。
+    // F1)。收档只有一个出口:能追的线索都追空了(monitor-reclaim-debts.ts 的清扫)。
     // 还没配上 `task_started` 的那几条调用（见 claude-monitor-pending.ts）：任务都删了，
     // 它们再也不会被配上，留下就是没有任何入口能清的孤儿行。
     db.delete(monitorPendingCalls).where(eq(monitorPendingCalls.taskId, taskId)),

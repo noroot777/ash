@@ -6,7 +6,7 @@
 // 等价说法:身份没落库 ⇒ 那条命令一个字都没跑过。它不是讲究,是第 7 轮审查 F3 实测的那一幕
 // 的根:原来的顺序是「先 spawn,再 insert」——
 //   1. 命令已经独立跑起来了,ash 才去登记;
-//   2. 登记失败时只能**事后**追它(落责任 → 发信号 → 确认退出 → 销账);
+//   2. 登记失败时只能**事后**追它(落责任 → 发信号 → 追到线索空 → 收档);
 //   3. 而当身份查询那一刻也不可用、责任表又写不进去时(两张表都被注入写失败),那个进程的
 //      唯一线索只剩 `scheduleReclaimPersist` 的内存参数 —— unref 定时器,活不过服务退出;
 //   4. 重启恢复只枚举 monitors 和债表,两张表都没有它:命令还在后台跑着,谁都再也找不到它。
@@ -208,14 +208,17 @@ async function releaseProcess(row: Row, reason: string, handle?: SpawnHandle): P
     handle.kill();
     // **根退了不等于整项资源退了**(第 11 轮审查 F1-B)。`waitExit` 证明的是这个 ChildProcess
     // (壳的根)走了;命令一旦开工过,它派生的后台进程不随根退出而消失 —— win32 没有闸,
-    // ③ 之前就可能开工,而那一侧 `taskkill /T` 也只在根还活着时走得通那棵树。所以只有
-    // 「命令从未开工」这一档敢当场销账:那时壳底下什么都没有,根的 exit 就是全部。
-    // 开工过的一律落到下面的回收圈 —— 它按**当前归属证据**判(整棵树带着的那条资源记号,
-    // 见 proc.ts 的 `processUnitEvidence`),证得出就收掉,证不出就留责任,绝不冒充收干净。
+    // ③ 之前就可能开工,而那一侧 `taskkill /T` 也只在根还活着时走得通那棵树。
+    //
+    // 所以只有「命令从未开工」这一档敢当场说「收干净了」:那时壳底下什么都没有,根的 exit
+    // 就是全部 —— **这是整个系统里唯一真的证明过整项不存在的一档**(`reclaimed`,见
+    // `ReclaimVerdict`)。开过工的一律落到下面的回收圈,它最多到 `closed`(能追的线索追空),
+    // 两者的措辞必须分开(第 13 轮审查 F1-B)。回收圈按**当前归属证据**判(整棵树带着的那条
+    // 资源记号,见 proc.ts 的 `processUnitEvidence`),证得出就收掉,证不出就留责任。
     if (await handle.waitExit(2_000) && !handle.commandMayHaveStarted()) return "reclaimed";
   }
   // 句柄没等到(或压根没有句柄:启动恢复那一侧)⇒ 照旧走完整的回收圈:落责任 → 发信号 →
-  // 确认退出 → 销账。身份不全时那一圈不会下刀(proc.ts 的 `unverifiable`),但责任一定留下来。
+  // 追到线索空 → 收档。身份不全时那一圈不会下刀(proc.ts 的 `unverifiable`),但责任一定留下来。
   return await settleReclaim(await reclaimMonitorProcess(row, reason, { fresh: true }));
 }
 
@@ -233,8 +236,8 @@ async function releaseProcess(row: Row, reason: string, handle?: SpawnHandle): P
  *       删掉(命令从未开工,界面上跟没点过一样),收不干净就写成 `lost` 并**照实说**是哪一档。
  *       上一版这一支是「一个字都不碰」,于是「来源那一轮已经过去」这类撤销会留下一条永远
  *       running、永远没人管的行 —— 跟 F2 要消掉的那一幕一模一样;
- *  ③ 说那句话 —— 三档分开(`reclaimed` / `owed` / `unaccounted`),**哪一档都不许说成「已回收」**
- *    (第 9 轮审查 N2:上一版把「责任也没落库」也说成「回收责任已记下」)。
+ *  ③ 说那句话 —— 四档分开(`reclaimed` / `closed` / `owed` / `unaccounted`),**只有真的证明过
+ *    的那一档才许说「已回收」**(第 9 轮审查 N2 + 第 13 轮审查 F1-B:线索追空 ≠ 证明退出)。
  */
 async function abortRegistration(
   row: Row,
@@ -255,14 +258,16 @@ async function abortRegistration(
   } catch (e) {
     console.error(`[ash] 哨兵创建没走完,收进程这一步自己抛了 monitor=${row.id} pid=${row.pid}:`, detail(e));
   }
-  if (verdict !== "reclaimed") {
+  if (verdict === "owed" || verdict === "unaccounted") {
     console.error(
       `[ash] 哨兵创建没走完,进程未确认退出 monitor=${row.id} pid=${row.pid}（${verdict}）：${why}`,
     );
   }
-  const note = verdict === "owed"
-    ? "进程还没确认退出，回收责任已记下（开机会再收一次）"
-    : "进程还没确认退出，而回收责任也没能落库（见 server 日志里的 pid，仍在重试落盘）";
+  const note = verdict === "closed"
+    ? "能追的线索都追空了（整项退出本平台证不出，责任行留了档）"
+    : verdict === "owed"
+      ? "进程还没确认退出，回收责任已记下（开机会再收一次）"
+      : "进程还没确认退出，而回收责任也没能落库（见 server 日志里的 pid，仍在重试落盘）";
   // 「这一行归别人」只有一种判据:它已经不是 running —— 而那条判据**写在收口那两笔的 WHERE 里**
   // (`settleIntentRow`),不再先 `select` 一次自己判。两个原因:
   //  · 那一次裸读抛出去的话,整个收口连带被跳过,留下一条 running、无人接管、也没有重试者的行
@@ -271,6 +276,8 @@ async function abortRegistration(
   // 改到 0 行 = 这一行已经归别人(用户点出来的「已停止」、删除流程的中间态),正是我们该什么都
   // 不碰的那一档;改到 1 行 = 它是我们自己那条意图行,而且再也不会有人来接管它(没放行 ⇒ 没
   // attach ⇒ 没到期定时器),所以必须当场落定。
+  // `drop` 只给**真的证明过**的那一档(命令从未开工):界面上跟没点过一样。线索追空
+  // (`closed`)的那一档命令开过工 —— 照实写成 `lost` 并说明追到哪里。
   const settle: IntentSettlement = verdict === "reclaimed"
     ? { kind: "drop" }
     // 行上那句话要说清**是哪一种没走完**:自己的失败(pid 没记下来)跟被撤销读起来不一样。
@@ -288,7 +295,9 @@ async function abortRegistration(
   }
   const tail = verdict === "reclaimed"
     ? (kind === "failed" ? "，已回收它的进程" : "，那条命令没有开工")
-    : (kind === "failed" ? `，${note}` : `，那条命令没有开工；但${note}`);
+    // **撤销那一支不许顺口说「命令没有开工」**:走到这里就说明「它从未开工」没能证明
+    // (句柄没等到退出,或者命令已经开过工),照实说成「证不出」—— 第 13 轮审查 F1-B。
+    : (kind === "failed" ? `，${note}` : `，命令开没开工证不出；${note}`);
   return {
     ok: false,
     status: 409,

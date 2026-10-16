@@ -7,8 +7,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
-import { db, isPidAlive, root, schema } from "./monitors-fixture.js";
+import { isPidAlive, root } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
 
 
@@ -16,8 +15,8 @@ import { inspectProcess } from "../src/proc.js";
 // 只有 +2 秒那把 SIGKILL 才收得掉它。(同一招在 test-project-commands.ts 里也用着)
 export const STUBBORN = "trap '' TERM HUP INT; while :; do sleep 0.2; done";
 
-export const debtRow = async (monId: string) => (await db.select().from(schema.monitorReclaimDebts)
-  .where(eq(schema.monitorReclaimDebts.monitorId, monId))).at(0);
+// 债表那一行、以及「追空了该长什么样」那句断言,都在根台子上(两处抄一遍就会漂)。
+export { assertDebtClosed, debtRow } from "./monitors-fixture.js";
 
 /**
  * 让「身份这一问」在一段时间里真的失败:PATH 前置一个退出码 1 的 `ps`。

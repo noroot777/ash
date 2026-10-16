@@ -29,6 +29,11 @@ type Row = typeof monitors.$inferSelect;
  * 带着投递租约的那一行不能碰 —— 它正在被送进会话，改它等于改一句已经出口的话。
  */
 export async function pushToTask(row: Row, text: string): Promise<boolean> {
+  // **库关了就什么都送不出去**:ash 退出时会关库,而这一侧的调用方有几个是「放后台跑」的
+  // (探活那一问判出结束之后的 `void finish`),所以这一刻完全可能撞上关库。那时这里不该抛
+  // —— 抛出去就是一个没人接的 rejection,把正在退出的进程变成异常退出。
+  // 丢的那几行不会真丢:读取位置只在消息落库之后才推进,所以重启接回时会从同一处再读一遍。
+  if (dbClient.closed) return false;
   // 任务自己已经结束/归档了就不再往它头上排事件——排了就是在某个深夜把一个 done 的任务
   // 重新叫起来跑一轮（第 1 轮审查实测：总线真实走了 done → running → done）。这道判断
   // 放在**唯一出口**上而不是散在调用点：收尾路径有五条（过期 / 自己退出 / 被停 / 推满

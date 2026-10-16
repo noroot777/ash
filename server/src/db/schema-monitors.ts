@@ -25,7 +25,7 @@ export const monitors = sqliteTable("monitors", {
   // ps 的 lstart 原文。只有 pid 对上**而且**这个也对上,才算还是当初那个进程。
   pidStartedAt: text("pid_started_at"),
   /**
-   * **这一次创建独有的资源记号**(`ASH_MONITOR_UNIT`,见 platform.ts 的 `MONITOR_UNIT_ENV`)。
+   * **这一次创建独有的资源记号**(`ASH_MONITOR_UNIT`,见 monitor-unit-scan.ts 的 `MONITOR_UNIT_ENV`)。
    *
    * 它是「这些进程属于这一次创建」的凭证:起进程之前就随意图行落库(所以跨重启认得回来),
    * 并且作为环境变量种进那个壳 —— 环境随 exec 继承、后代各自带一份,所以组长死了之后留在
@@ -303,6 +303,19 @@ export const monitorReclaimDebts = sqliteTable("monitor_reclaim_debts", {
   unitToken: text("unit_token"),
   /** 当初为什么要停它(删除/归档/审查结束/任务终态)。 */
   reason: text("reason").notNull().default(""),
+  /**
+   * **追到这里为止的时刻**(第 13 轮审查 F1-B)。空 = 还在追。
+   *
+   * 非空**不等于「整项资源退出已证明」**,只等于「能追的线索都答出来、都空了」:根的代次
+   * 已经不在,带着记号的进程一个都找不着,原进程组也空了。POSIX 上后代甩得掉记号(`env -i`)
+   * 也甩得掉进程组(`setsid`),所以那件事当前平台证不出 —— 这一行因此**不删**,只盖戳:
+   * 它是这次创建最后的可定位身份(命令、pid、记号、追不下去的理由都在行上)。
+   *
+   * 收过档的行不再重试、不再发信号、开机也不再报警(见 `sweepMonitorReclaimDebts`)。
+   */
+  closedAt: text("closed_at"),
+  /** 收档那一刻,线索停在哪一档(`stateNote` 那句话)。 */
+  closedNote: text("closed_note"),
   /** 停不掉的那次报了什么。 */
   lastError: text("last_error"),
   attempts: integer("attempts").notNull().default(0),

@@ -180,7 +180,7 @@ async function initializeServer() {
       return null;
     });
     if (debts?.settled || debts?.left) {
-      console.log(`[ash] 哨兵回收责任：销账 ${debts.settled} 笔，仍收不掉 ${debts.left} 笔`);
+      console.log(`[ash] 哨兵回收责任：收档 ${debts.settled} 笔，仍收不掉 ${debts.left} 笔`);
     }
     // claude 自带 Monitor 的投影没有 pid，上面那一步按 kind 整批跳过了它们，得单独判一次。
     // **必须排在 reattachRunningTasks 之后**：它按「来源 agent 进程还在不在」裁决，而那些

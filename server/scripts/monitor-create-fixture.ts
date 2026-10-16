@@ -12,14 +12,13 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
-import { db, root, schema } from "./monitors-fixture.js";
+import { root } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
 
 export const { dbClient } = await import("../src/db/index.js");
 
-export const debtRow = async (monId: string) => (await db.select().from(schema.monitorReclaimDebts)
-  .where(eq(schema.monitorReclaimDebts.monitorId, monId))).at(0);
+// 债表那一行、以及「追空了该长什么样」那句断言,都在根台子上(两处抄一遍就会漂)。
+export { assertDebtClosed, debtRow } from "./monitors-fixture.js";
 
 /**
  * 「现在有几个进程的命令行里带着这个记号」。

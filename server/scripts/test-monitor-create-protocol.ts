@@ -1,7 +1,7 @@
 // **命令开工 ⇒ 身份已经可恢复。** 等价说法:身份没落库 ⇒ 那条命令一个字都没跑过。
 //
 // 第 7 轮审查 F3 的现场:原来的顺序是「先 spawn 再 insert」—— 命令已经独立跑起来了 ash 才去
-// 登记,登记失败时只能事后追(落责任 → 发信号 → 确认退出 → 销账)。而当身份查询那一刻也不可用、
+// 登记,登记失败时只能事后追(落责任 → 发信号 → 追到线索空 → 收档)。而当身份查询那一刻也不可用、
 // 责任表又写不进去时,那个进程的唯一线索只剩 `scheduleReclaimPersist` 的内存参数(unref 定时器,
 // 活不过服务退出);重启恢复只枚举 monitors 和债表,两张表都没有它 —— 命令还在后台跑着,谁都
 // 再也找不到它。「以后定时再保存」不构成资源交接,所以修法不是多兜一层,而是**换顺序**:
@@ -115,10 +115,11 @@ const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.
   const debt = await debtRow(monId);
   assert.ok(debt, "回收责任落盘(不是只放在内存定时器里)");
   assert.equal(debt.pid, pid);
-  // ps 恢复之后,紧随其后的那一圈清扫自己把账销掉 —— 这才是「责任已记下」该兑现的东西。
-  await until("清扫把账销掉", async () => {
+  // ps 恢复之后,紧随其后的那一圈清扫自己把它收掉、把档收上 —— 这才是「责任已记下」该兑现
+  // 的东西。注意收档不是删行:那一行留着当最后的身份(第 13 轮审查 F1-B)。
+  await until("清扫把它收掉并收档", async () => {
     await sweepMonitorReclaimDebts();
-    return !(await debtRow(monId));
+    return !!(await debtRow(monId))?.closedAt;
   }, 20_000);
   assert.equal(isPidAlive(pid), false, "而那个顽固进程最终真的被收掉了");
 }

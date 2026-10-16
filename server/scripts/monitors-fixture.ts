@@ -162,6 +162,23 @@ export async function insertMonitorRow(
   return id;
 }
 
+/** 债表那一行（一条哨兵至多一行，见 `noteReclaimDebt` 的 `onConflictDoUpdate`）。 */
+export const debtRow = async (monId: string) => (await db.select().from(schema.monitorReclaimDebts)
+  .where(eq(schema.monitorReclaimDebts.monitorId, monId))).at(0);
+
+/**
+ * 「线索追空」那一档该长什么样：**行留着 + 盖上收档戳**，而不是把行删掉（第 13 轮审查 F1-B）。
+ *
+ * 为什么写成断言而不是一个取数：删行等于声称「整项资源已经退出」，那件事在当前平台能力下
+ * 证不出来——留下的这一行是这次创建最后的可定位身份（命令、pid、记号、为什么追不下去）。
+ * 三份回归盯的是同一件事，所以这句话只写一遍。
+ */
+export async function assertDebtClosed(monId: string, what: string): Promise<void> {
+  const row = await debtRow(monId);
+  if (!row) throw new Error(`${what}：责任行不许删——它是这次创建最后的可定位身份`);
+  if (!row.closedAt) throw new Error(`${what}：追空了就要盖收档戳（closed_at），之后不再追它`);
+}
+
 export const pendingOf = (taskId: string) =>
   db.select().from(scheduledMessages).where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
 

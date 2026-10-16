@@ -50,7 +50,7 @@
 // 所以这里把 `ASH_MONITOR_UNIT=<记号>` 种进那个壳的环境:环境随 `exec` 继承、后代各自带一
 // 份,于是**组长死了之后留在后台的那些仍然自证身份**(它们的 argv 早就换成别的程序了)。
 // 记号本身在起进程之前就随意图行落库,所以跨重启也认得回来。判定在 proc.ts
-// (`processUnitEvidence`),扫描在 platform.ts(`liveMonitorUnitsSync`)。
+// (`processUnitEvidence`),扫描在 monitor-unit-scan.ts(`liveMonitorUnitsSync`)。
 //
 // ── 交接必须可恢复，否则这次创建就该拒（第 10 轮审查 F2-C）────────────────────────
 //
@@ -63,7 +63,8 @@ import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentBaseEnv } from "./executors/spawn.js";
-import { IS_WINDOWS, MONITOR_UNIT_ENV, invalidateMonitorUnitScan, killTree, userShellLaunch } from "./platform.js";
+import { MONITOR_UNIT_ENV, invalidateMonitorUnitScan } from "./monitor-unit-scan.js";
+import { IS_WINDOWS, killTree, userShellLaunch } from "./platform.js";
 import { RUNS_DIR } from "./paths.js";
 
 /** 输出落在任务自己的 run 目录下，跟会话正文、trace 同一处，归档清理不必另记一份路径。 */
@@ -138,7 +139,7 @@ export type SpawnedMonitor = {
    * 它回答的是一个资源问题:**根进程退出算不算整项资源退出**。命令从未开工 ⇒ 壳底下什么都
    * 没有,根的 `exit` 就是全部;开工过 ⇒ 它可能已经派生了后台进程,那些进程不随根退出而消失,
    * 根的 `exit` 只证明根走了(第 11 轮审查 F1-B)。所以创建期的撤销要按这一问分档:前者敢当场
-   * 销账,后者一律交回收圈按**当前归属证据**处理(见 monitor-create.ts 的 `releaseProcess`)。
+   * 判收干净,后者一律交回收圈按**当前归属证据**处理(见 monitor-create.ts 的 `releaseProcess`)。
    */
   commandMayHaveStarted: () => boolean;
   /**
@@ -238,7 +239,7 @@ export function spawnMonitor(
     }
     child.unref();
     // **资源扫描立刻作废**:比这个进程还老的一次扫描里没有它的记号,而那会被读成「整项资源
-    // 已退出」(见 platform.ts 的 `invalidateMonitorUnitScan`)。
+    // 已退出」(见 monitor-unit-scan.ts 的 `invalidateMonitorUnitScan`)。
     invalidateMonitorUnitScan();
     // **身份边条:这里到 return 之间一个 await 都没有**(见文件头)。写失败不致命 —— 它是
     // 「库还没写进去」那一档的兜底,所以只出声,不把一次正常创建搞失败。
@@ -296,7 +297,7 @@ export function spawnMonitor(
         // **根已经退了就不在这里下刀**:那时组号(POSIX)或那个 pid(win32)随时可能被复用,
         // 句柄证明的是「那个根曾经是我们的」,不是「这个号现在还是我们的」。那一档的收尾交给
         // 回收层按当前归属证据判(proc.ts 的 `processUnitEvidence`:整棵树带着的那条记号),
-        // 调用方也不许据此销账(第 11 轮审查 F1-A/F1-B、第 12 轮 F1 同一条判据)。
+        // 调用方也不许据此判收干净(第 11 轮审查 F1-A/F1-B、第 12 轮 F1 同一条判据)。
         if (settled) return;
         try { killTree(child.pid!, "SIGKILL"); } catch { /* 已经空了 */ }
         try { child.kill("SIGKILL"); } catch { /* 它已经没了 */ }

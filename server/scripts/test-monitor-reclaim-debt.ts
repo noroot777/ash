@@ -26,7 +26,7 @@ import {
   db, insertMonitorRow, isPidAlive, makeTask, monitors, reattachMonitors, reviewInFlight,
   detachAllMonitors, root, schema, startMonitor, stopMonitor, tasks, teardown, until,
 } from "./monitors-fixture.js";
-import { STUBBORN, debtRow, withPsOutage } from "./monitor-reclaim-fixture.js";
+import { STUBBORN, assertDebtClosed, debtRow, withPsOutage } from "./monitor-reclaim-fixture.js";
 import { inspectProcess } from "../src/proc.js";
 
 const { stopMonitorsForTask, reclaimUnconfirmedStops } = await import("../src/monitor-reclaim.js");
@@ -34,7 +34,8 @@ const { monitorWakeGate } = await import("../src/monitor-session.js");
 const { beginTaskRevocation, isTaskRevoked, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
-const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await import("../src/platform.js");
+const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
+const { invalidateMonitorUnitScan } = await import("../src/monitor-unit-scan.js");
 
 // ── ⑨ 撤销是一段时间:撤销期不许再创建、停不掉必须留下回收责任（第 3 轮审查 F1）──────
 //
@@ -80,8 +81,9 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
 }
 
 {
-  // ⑩-1 **正常停止也要走「落责任 → 发信号 → 确认退出 → 销账」这一圈**(第 4 轮审查 F1)。
-  // 收干净了就不留垃圾:返回时进程确认不在了,债表上一条也没有。
+  // ⑩-1 **正常停止也要走「落责任 → 发信号 → 追到线索空 → 收档」这一圈**(第 4 轮审查 F1)。
+  // 追空了就收档:返回时进程确认不在了,那一行**留着并盖上收档戳**(第 13 轮审查 F1-B:
+  // 删行等于声称整项退出已证明,而那件事在这个平台上证不出来)。
   const taskId = await makeTask({ status: "running" });
   const started = await startMonitor({ taskId, command: "sleep 120", description: "正常收掉的" });
   assert.equal(started.ok, true);
@@ -89,17 +91,15 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
   await stopMonitorsForTask(taskId, "任务已删除", "destroy");
   assert.equal(isPidAlive(row.pid!), false,
     "`stopMonitorsForTask` 返回时必须已经确认退出 —— 发完信号就返回的话,补刀那两秒里 server 一退出它就永远留下了（F1）");
-  assert.equal((await db.select().from(schema.monitorReclaimDebts)
-    .where(eq(schema.monitorReclaimDebts.monitorId, row.id))).length, 0,
-    "确认收干净了就销账,不留垃圾行");
+  await assertDebtClosed(row.id, "追到线索空就收档");
 }
 
 {
-  // ⑩-2 **确认不了退出 ⇒ 责任留下来**,而且只认「确认它不在了」才销账。
+  // ⑩-2 **追不空线索 ⇒ 责任留下来**,而且只认「能追的线索都追空了」才收档。
   //
   // 这里的现场是「身份问不出来」:进程组里明明有人,而 `pid_started_at` 对不上(locale 变了、
-  // pid 被复用、ps 不可用都会这样)。那时既不敢杀(杀错人不可逆),更不许销账 —— 旧写法拿
-  // `isSameProcess=false` 直接销账,等于把最后一份责任丢掉(第 4 轮审查 F1 的并条之一)。
+  // pid 被复用、ps 不可用都会这样)。那时既不敢杀(杀错人不可逆),更不许收档 —— 旧写法拿
+  // `isSameProcess=false` 直接销账删行,等于把最后一份责任丢掉(第 4 轮审查 F1 的并条之一)。
   const taskId = await makeTask({ status: "done" });
   const stray = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
   stray.unref();
@@ -121,17 +121,17 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
   assert.equal((await db.select().from(monitors).where(eq(monitors.taskId, taskId))).length, 0, "哨兵行跟着任务没了");
   assert.ok(await debtOf(), "回收责任必须活过任务删除（跟着删等于把唯一线索再丢一次）");
 
-  // 开机清扫:身份还是问不出来 ⇒ 照旧不杀、不销账。
+  // 开机清扫:身份还是问不出来 ⇒ 照旧不杀、不收档。
   await sweepMonitorReclaimDebts();
-  assert.ok(await debtOf(), "「查不出身份」不等于「它已经退了」,不许据此销账");
+  assert.ok(await debtOf(), "「查不出身份」不等于「它已经退了」,不许据此收档");
   assert.equal(isPidAlive(pid), true, "也不许在身份不明时下刀");
 
-  // 身份又对上了(ps 恢复 / 换回原 locale):这才轮到补杀 + 销账。
+  // 身份又对上了(ps 恢复 / 换回原 locale):这才轮到补杀 + 收档。
   await db.update(schema.monitorReclaimDebts).set({ pidStartedAt: realStartedAt })
     .where(eq(schema.monitorReclaimDebts.monitorId, monId));
   await sweepMonitorReclaimDebts();
   assert.equal(isPidAlive(pid), false, "认出来了就必须把它收掉（SIGKILL,不再等第二个两秒）");
-  assert.equal(await debtOf(), undefined, "确认不在了才销账");
+  await assertDebtClosed(monId, "追到线索空才收档");
 }
 
 {
@@ -151,7 +151,7 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
     "责任没落盘、退出也没确认时,不许把 pid 这最后一份线索连任务一起抹掉");
   db.insert = originalInsert;
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, taskId))).length, 1, "任务行必须还在（可重试）");
-  // 库恢复之后那一笔要**自己补记上**:落盘失败挂的是补记梯子,不是销账梯子 —— 销账梯子读
+  // 库恢复之后那一笔要**自己补记上**:落盘失败挂的是补记梯子,不是收档梯子 —— 收档梯子读
   // 债表,读到空就当「别人已经销了」返回成功,一笔从没落盘的责任正好被它静静吃掉。
   const monId = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!.id;
   await until("库恢复后回收责任要补记上", async () => await debtRow(monId) !== undefined);
@@ -201,7 +201,7 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
 {
   // ⑩-5 **这一圈归运行时收尾层,不归包装函数**(第 5 轮审查 F1)。
   //
-  // 第 4 轮把「落责任 → 发信号 → 确认退出 → 销账」装在了删除/审查收尾那两个入口上,于是
+  // 第 4 轮把「落责任 → 发信号 → 追到线索空 → 收档」装在了删除/审查收尾那两个入口上,于是
   // 用户点停、到期、推满上限、启动接回判无出口、创建后登记失败全都绕过了它:发完信号就写
   // stopped 返回 —— 紧接着删除、重启,这个进程就永远留在后台了(审查实测:先点停再删除,
   // taskRows=0、monitors=[]、debtRows=0、命令仍活)。
@@ -218,7 +218,7 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
   await stopping;
   assert.equal(isProcessGroupAlive(row.pid!), false,
     "点停这条路也要等到确认退出才返回（补刀在 +2 秒,`confirmReclaimed` 等它）");
-  assert.equal(await debtRow(row.id), undefined, "确认收干净了才销账,不留垃圾行");
+  await assertDebtClosed(row.id, "追到线索空才收档");
 }
 
 {
@@ -237,7 +237,7 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
   await deleteTaskCompletely(taskId);
   assert.equal(isProcessGroupAlive(pid), false,
     "「已停止」只说明有人发过信号,不说明它退了。删除必须按责任核对全部归属行（第 5 轮审查 F1）");
-  assert.equal(await debtRow(monId), undefined, "确认收掉了就不留账");
+  await assertDebtClosed(monId, "收掉之后收档");
 }
 
 {
@@ -277,7 +277,7 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
   });
   leader.unref();
   // 生产里这一步由 `spawnMonitor` 做:起完就把上一次全表扫描作废,否则读到的可能是这个进程
-  // 存在之前的那份快照 ⇒ 记号找不着 ⇒ 判出一个假的「整项已退」(见 platform.ts)。
+  // 存在之前的那份快照 ⇒ 记号找不着 ⇒ 判出一个假的「整项已退」(见 monitor-unit-scan.ts)。
   invalidateMonitorUnitScan();
   const pid = leader.pid!;
   await until("根还活着时记下它的启动时刻", async () => !!inspectProcess(pid)?.startedAt);
@@ -290,7 +290,7 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
   await stopMonitorsForTask(taskId, "任务已删除", "destroy");
   assert.equal(isProcessGroupAlive(pid), false,
     "根已经不在了,带着这条记号的后代是证明过的「我们的」—— 收尾时必须把它们一起收掉");
-  assert.equal(await debtRow(monId), undefined, "确认整项资源空了才销账");
+  await assertDebtClosed(monId, "带记号的后代都收掉、线索追空之后才收档");
 }
 
 {
@@ -307,7 +307,7 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
 
   await reclaimUnconfirmedStops();
   assert.equal(isProcessGroupAlive(pid), false, "开机这一遍要把它收掉（身份对得上,敢下刀）");
-  assert.equal(await debtRow(monId), undefined, "收干净了就不留账");
+  await assertDebtClosed(monId, "收干净之后收档");
 }
 
 {
@@ -337,10 +337,10 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
     assert.ok(await debtRow(row.id), "任务行、哨兵行都没了,责任是这个进程最后的线索");
   });
 
-  // ps 恢复 = 下一次开机。这一刻才第一次能判出身份,于是补杀 + 销账。
+  // ps 恢复 = 下一次开机。这一刻才第一次能判出身份,于是补杀 + 收档。
   await sweepMonitorReclaimDebts();
   assert.equal(isProcessGroupAlive(row.pid!), false, "ps 恢复后开机清扫必须把它收掉");
-  assert.equal(await debtRow(row.id), undefined, "确认收干净了才销账");
+  await assertDebtClosed(row.id, "ps 恢复、补杀之后才收档");
 }
 
 {
@@ -367,7 +367,7 @@ const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await impor
 
   await sweepMonitorReclaimDebts();
   assert.equal(isProcessGroupAlive(pid), false, "ps 恢复后开机清扫把它收掉");
-  assert.equal(await debtRow(monId), undefined, "确认收干净了才销账");
+  await assertDebtClosed(monId, "ps 恢复、补杀之后才收档");
 }
 
 {
