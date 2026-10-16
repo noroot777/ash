@@ -16,6 +16,7 @@ import { formatSize } from "./fileModel.ts";
 import {
   ARTIFACT_ORIGIN_HINT,
   ARTIFACT_ORIGIN_LABEL,
+  ARTIFACT_SCOPE_NOTE,
   formatArtifactTime,
   groupArtifacts,
   useTaskArtifacts,
@@ -111,6 +112,10 @@ export function ArtifactsInspector({
       {/* 服务端那份 error 是「某一路线索没读成」，另外两路通常还有东西，所以它跟上面
           那条整块失败不是一回事：照常把列表铺出来，只在上面压一条提示。 */}
       {result?.error && <p className="artifacts__notice" role="status">{result.error}</p>}
+      {/* 「读成了但没读完」必须单独说：空清单和「它什么都没做出来」在面板上长得一样。 */}
+      {result?.incomplete.map((reason) => (
+        <p key={reason} className="artifacts__notice" role="status">{reason}</p>
+      ))}
 
       {loading && !result && <p className="artifacts__state"><SpinnerGap size={14} aria-hidden="true" />正在扫描…</p>}
 
@@ -181,6 +186,11 @@ export function ArtifactsInspector({
       ))}
 
       {result?.truncated && <p className="artifacts__notice">产物太多，只列出了最近的一批</p>}
+
+      {/* 整份清单凭什么算这个任务的：共享目录下它只是候选，这句不能省。 */}
+      {result && artifacts.length > 0 && ARTIFACT_SCOPE_NOTE[result.scope] && (
+        <p className="artifacts__notice is-scope">{ARTIFACT_SCOPE_NOTE[result.scope]}</p>
+      )}
 
       {/* 角标上那三个词得有个地方解释一次——「未纳入版本管理」光看字面说不出它凭什么
           算这个任务的产物。放底下：认得的人扫一眼就过去了。 */}

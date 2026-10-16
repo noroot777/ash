@@ -9,6 +9,7 @@ import type { AgentEvent, AgentType, SessionRole, TaskStatus } from "@ash/shared
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
+import { recordTurnSpan } from "./session-turns.js";
 import { scanForTitle } from "./auto-title.js";
 import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
@@ -549,6 +550,9 @@ export async function consumeSingleRun(a: {
       ...(dropSession ? LOST_SESSION_PATCH : {}),
     })
     .where(eq(sessions.id, sessId));
+  // 这一回合的区间单独落一行：产物归属要的是「它在写这个目录」的那几段，而上面那行
+  // 会话记录跨回合复用，只留得下最后一次收尾时刻（`db/schema.ts` 的 sessionTurns）。
+  await recordTurnSpan({ sessionId: sessId, taskId, cwd: a.cwd, startedAt: a.turnStart, endedAt: endIso });
   if (steered) {
     // 「引导会话」只截断旧回合：任务仍是 running，新消息已持有 scheduled_messages
     // 投递租约，并排在 releaseTurn 后用同一 cliSessionId 续送。这里若走普通 settle，

@@ -4,6 +4,7 @@ import type { AgentEvent } from "@ash/shared";
 import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
+import { recordTurnSpan } from "../session-turns.js";
 import { bus } from "../bus.js";
 import { now } from "../util.js";
 import { setTaskStatus } from "../status.js";
@@ -454,7 +455,8 @@ async function beginTurn(lead: Lead, at = now()): Promise<void> {
 // 否则落 idle(待命)并起空闲回收计时。
 async function endTurn(lead: Lead): Promise<void> {
   const endIso = now();
-  const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
+  const turnStart = lead.turnStart;
+  const spent = turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(turnStart)) : 0;
   lead.busy = false;
   lead.turnStart = null;
   // 写库失败绝不能把下面整段收尾一起带走 —— writeTurnEnd、旁注落盘、待送消息、落 idle
@@ -465,6 +467,8 @@ async function endTurn(lead: Lead): Promise<void> {
     { endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}` },
     endIso,
   );
+  // 这一回合的区间（产物归属按它认人，不按会话寿命——常驻调度台那一行从开台活到收工）。
+  await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: turnStart, endedAt: endIso });
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead);
   if (lead.pending.length) {

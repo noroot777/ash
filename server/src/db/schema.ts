@@ -445,6 +445,38 @@ export const sessions = sqliteTable("sessions", {
   contextWindowEstimated: integer("context_window_estimated", { mode: "boolean" }),
 });
 
+/**
+ * 一个**回合**真正在跑的那一段，以及它跑在哪个目录。
+ *
+ * `sessions` 行是跨回合复用的（续聊只刷新 `turn_started_at`、清 `ended_at`），所以它只说得
+ * 出「这条会话第一次建立」和「最后一个回合什么时候结束」——中间空了四个钟头还是一秒没停，
+ * 从那一行上分不出来。而产物归属要的恰恰是「它在写这个目录」的那几段：拿 session 寿命当
+ * 运行区间，一个续过聊的任务会把两次运行之间**别的任务**做出来的东西全收进自己名下
+ * （第 1 轮审查 F1）。`active_ms` 也救不了：它只给出各回合的总时长，给不出位置。
+ *
+ * 只在回合**收尾**时追加一行，纯增量、不动任何既有列的语义；写失败只记日志、绝不影响
+ * 结算——那时归属精度降级回「按 session 寿命」，也就是这张表出现之前的行为。
+ *
+ * `cwd` 记的是**那一回合实际的工作目录**：任务换过目录之后，旧目录上的区间不该再算进新
+ * 目录的归属（第 1 轮审查 N4）。
+ */
+export const sessionTurns = sqliteTable(
+  "session_turns",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id").notNull(),
+    taskId: text("task_id").notNull(),
+    /** 这一回合实际的工作目录；null = 当时取不到（极老的行）。 */
+    cwd: text("cwd"),
+    startedAt: text("started_at").notNull(),
+    endedAt: text("ended_at").notNull(),
+  },
+  (t) => ({
+    taskIdx: index("session_turns_task_idx").on(t.taskId, t.startedAt),
+    sessionIdx: index("session_turns_session_idx").on(t.sessionId, t.startedAt),
+  }),
+);
+
 export const schedules = sqliteTable("schedules", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull(),

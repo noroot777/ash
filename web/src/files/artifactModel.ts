@@ -33,7 +33,19 @@ export const ARTIFACT_ORIGIN_HINT: Record<TaskArtifact["origin"], string> = {
   // 共享主仓的任务（useWorktree=false）压根没有一条属于它的分支，那一档退回「运行区间
   // 里的提交」——两种认法的精度不同，角标上不说清楚就会被当成同一回事。
   committed: "已经提交：有任务分支时按那条分支认，共享主仓的任务按运行区间里的提交认",
-  ignored: "被 .gitignore 挡着，按「任务在跑的那几段时间里写的」认出来",
+  ignored: "被 .gitignore 挡着，不在版本管理里",
+};
+
+/**
+ * 整份清单**凭什么算这个任务的**。
+ *
+ * 两档的精度差一个数量级，不能让用户自己猜：独占 worktree 是目录级隔离，清单是确定的；
+ * 共享主仓只能按「它在跑的那几段时间」认，同一段时间里并行跑的任务物理上分不开，那是
+ * **候选**。界面不说这一句，用户就会把候选当确定（第 1 轮审查 N6）。
+ */
+export const ARTIFACT_SCOPE_NOTE: Record<TaskArtifactsResult["scope"], string | null> = {
+  exclusive: null, // 独占目录：不必解释，清单就是它做的
+  shared: "这个任务和别人共用一个工作目录，下面是按它运行的那几段时间认出来的；同一段时间里并行跑的任务可能互相串。",
 };
 
 export function groupArtifacts(artifacts: readonly TaskArtifact[]): ArtifactGroup[] {

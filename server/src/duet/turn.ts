@@ -14,6 +14,7 @@ import { eq, sql } from "drizzle-orm";
 import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
+import { recordTurnSpan } from "../session-turns.js";
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
@@ -354,6 +355,8 @@ export async function runTurn(args: {
       ...(dropSession ? LOST_SESSION_PATCH : {}),
     })
     .where(eq(sessions.id, rowId));
+  // 这一回合的区间（产物归属按它认人，不按会话寿命——会话行跨回合复用）。
+  await recordTurnSpan({ sessionId: rowId, taskId, cwd, startedAt: turnStart, endedAt: endIso });
   // Persist the turn so a reloaded duet can rebuild its timeline (no live
   // events). Includes errors and non-fatal notices so reload preserves the same meaning as live SSE.
   try {

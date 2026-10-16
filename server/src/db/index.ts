@@ -123,6 +123,16 @@ export async function ensureSchema() {
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT,
       delivering_since TEXT
     );
+    CREATE TABLE IF NOT EXISTS session_turns (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      cwd TEXT,
+      started_at TEXT NOT NULL,
+      ended_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS session_turns_task_idx ON session_turns(task_id, started_at);
+    CREATE INDEX IF NOT EXISTS session_turns_session_idx ON session_turns(session_id, started_at);
     CREATE TABLE IF NOT EXISTS monitors (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, command TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '', cwd TEXT NOT NULL,

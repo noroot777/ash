@@ -55,11 +55,15 @@ try {
   git("config", "core.hooksPath", join(stage, "hooks"));
 
   // ── 基线：仓库本来就有的东西，一个都不该被认成产物 ────────────────────────
+  // 基线提交要**落在任务开跑之前**：共享工作区上没有任务分支，已提交那一档只能按「落在
+  // 运行区间里的提交」认，而一个此刻才做的基线提交当然落在「此刻开跑」的区间里。真实
+  // 仓库的基线是几个月前的事，fixture 得照这个来，否则测的是一个不存在的场景。
+  const baseDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   write(".gitignore", "output/\nnode_modules/\n*.tmp.png\n");
   write("assets/仓库原有.png");
   write("src/app.ts", "export const x = 1;\n");
   git("add", ".");
-  git("commit", "-qm", "base");
+  gitIn(repo, ["commit", "-qm", "base"], { GIT_AUTHOR_DATE: baseDate, GIT_COMMITTER_DATE: baseDate });
 
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, sessions, tasks } = await import("../src/db/schema.js");
@@ -171,7 +175,7 @@ try {
   initRepo(shared, "output/\nnode_modules/\n");
   writeIn(shared, "art/底图.png");
   gitIn(shared, ["add", "."]);
-  gitIn(shared, ["commit", "-qm", "base"]);
+  gitIn(shared, ["commit", "-qm", "base"], { GIT_AUTHOR_DATE: baseDate, GIT_COMMITTER_DATE: baseDate });
 
   const T0 = new Date(Date.now() - 3 * 60 * 60 * 1000);   // 第一个任务：3 小时前跑的
   const T0End = new Date(T0.getTime() + 10 * 60 * 1000);

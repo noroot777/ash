@@ -8,6 +8,8 @@
 .artifacts__state { display:flex; align-items:center; gap:6px; margin:6px 0; color:var(--faint); font-size:10.5px; }
 .artifacts__state.is-error { color:var(--red); }
 .artifacts__notice { margin:6px 0 0; border:1px solid color-mix(in lch,var(--amber) 28%,var(--line)); border-radius:7px; background:color-mix(in lch,var(--amber) 7%,var(--panel)); padding:6px 8px; color:var(--amber); font-size:10px; line-height:1.6; }
+/* 归属说明不是警告：它只解释「凭什么算这个任务的」，用琥珀色会抢掉真正的提示。 */
+.artifacts__notice.is-scope { border-color:var(--line); background:var(--panel); color:var(--muted); }
 
 .artifacts__empty { display:flex; flex-direction:column; align-items:center; gap:6px; margin-top:22px; padding:0 14px; text-align:center; }
 .artifacts__empty > svg { color:var(--faint); opacity:.65; }
