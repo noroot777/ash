@@ -3,7 +3,7 @@ import { CaretRight, Pulse, SpinnerGap, StopCircle } from "@phosphor-icons/react
 import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@ash/shared/monitor";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
-import { liveDeadline } from "./monitorCopy.ts";
+import { claudeMonitorEpilogue, liveDeadline } from "./monitorCopy.ts";
 import { MONITOR_ENDED_LABEL } from "./useTaskMonitors.ts";
 
 /** 展开着的那张卡每隔这么久重拉一次尾巴。只在「正在盯着」且「卡片是展开的」时才走。 */
@@ -133,10 +133,11 @@ export function MonitorCard({
           {/* 结束之后这句话要换一半：光一个「已停止」读起来像「等到了然后停了」，而实测
               绝大多数是回合一结束就被 CLI 成批收走，它盯的那件事当时还在跑（整段实测行序
               在 server/src/claude-monitor-reaped.ts 的文件头）。用户来这张卡上找的正是
-              「那它为什么没叫醒谁」——必须在这儿答，不能只留一个状态词。 */}
+              「那它为什么没叫醒谁」——必须在这儿答，不能只留一个状态词，也不能把四种结束
+              方式说成同一种（第 4 轮审查 N1，措辞在 monitorCopy.ts）。 */}
           {live
             ? "起它的那个智能体进程结束时，它会跟着消失。"
-            : "它的通知只注回那个会话，而那个会话已经随进程结束——所以它没有、也不会唤醒任务。要跨回合等一件事，用 ash 自己的哨兵。"}
+            : claudeMonitorEpilogue(monitor.status)}
         </p>
       )}
       {logged && (

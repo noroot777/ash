@@ -176,6 +176,28 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
   assert.doesNotMatch(html, /看它的输出/, "它的输出进了智能体自己的会话，ash 这边没有日志可看");
 }
 
+// ── 结束之后那半句要分档说 ──────────────────────────────────────────────────
+// 用户来这张卡上找的是「那它为什么没叫醒谁」。四种结束方式说成同一句就会把事实说错：
+// 真实页面上抓到的样本是 `exited`（命令自己跑完了），却显示「那个会话已经随进程结束」
+// （第 4 轮审查 N1）。结论（不会唤醒任务）对每一档都一样，理由不一样。
+{
+  const exited = panel([{ ...projected, status: "exited", endedAt: "2026-08-25T11:00:00.000Z" }]);
+  // 断言要挑**只有这半句才有**的词:`命令自己跑完了` 同时是 CLAUDE_MONITOR_ENDED_REASON
+  // 里那条结束原因,拿它当判据的话,这半句说错了也照样能过(写第一版时就栽在这儿)。
+  assert.match(exited, /就没人看见它/, "exited 要说清「它跑完了，但那一轮可能已经没人在看」");
+  assert.doesNotMatch(exited, /没命等到结果/, "跑完了就不是「没命等」");
+  assert.doesNotMatch(exited, /没有任何去处/, "也不是「进程没了」那一档");
+  assert.match(exited, /不会唤醒任务/, "但结论照旧要说出来——这才是用户要的那个答案");
+
+  const lost = panel([{ ...projected, status: "lost", endedAt: "2026-08-25T11:00:00.000Z" }]);
+  assert.match(lost, /没有任何去处/, "lost 才是「进程没了，它的通知无处可去」");
+  assert.doesNotMatch(lost, /就没人看见它/, "别把失效说成跑完了");
+
+  const stopped = panel([{ ...projected, status: "stopped", endedAt: "2026-08-25T11:00:00.000Z" }]);
+  assert.match(stopped, /没命等到结果/, "被停掉/盯满的那两档是「还在等，但已经没命等了」");
+  assert.match(stopped, /ash 自己的哨兵/, "每一档都要给出能跨回合等的那条路");
+}
+
 // ── 「盯到什么时候」必须如实 ────────────────────────────────────────────────
 // claude 内置 Monitor 的期限是来源侧说了算的：它可能持续盯着（没有到期时刻），也可能回执
 // 还没到（我们还不知道）。无脑写一句「盯到 X」用户会当真——第 2 轮审查实测来源侧会把请求

@@ -36,3 +36,21 @@ function formatSpan(ms: number): string {
   if (seconds >= 60) return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
   return `${seconds} 秒`;
 }
+
+/**
+ * claude 投影**结束之后**那半句。要答的是「那它为什么没叫醒谁」,所以必须按它**是怎么结束
+ * 的**分开说。
+ *
+ * 统一说成「那个会话已经随进程结束」对 `exited` 是错的 —— 那一档是「命令自己跑完了（claude
+ * 侧报的完成）」,而真实页面上抓到的样本恰恰是它（第 4 轮审查 N1）。那种情况下会话未必已经
+ * 没了:回合还在跑,智能体自己就看见了那条完成通知;回合已经结束,它才没人看见。两种都不会
+ * 唤醒任务 —— 这一句无论哪一档都成立,也是用户真正要的那个答案。
+ */
+export function claudeMonitorEpilogue(status: TaskMonitor["status"]): string {
+  const tail = "——所以它没有、也不会唤醒任务。要跨回合等一件事，用 ash 自己的哨兵。";
+  if (status === "exited")
+    return `它盯的命令自己跑完了，而那条完成通知只注回智能体自己的会话：那一轮要是已经结束，就没人看见它${tail}`;
+  if (status === "lost")
+    return `起它的那个智能体进程已经不在了，它的通知没有任何去处${tail}`;
+  return `它的通知只注回那个会话，而它已经没命等到结果了${tail}`;
+}

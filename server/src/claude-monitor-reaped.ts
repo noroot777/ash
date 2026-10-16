@@ -98,27 +98,46 @@ export async function reapClaudeMonitors(
     for (const taskId of new Set(live.map((r) => r.taskId))) bus.publish({ type: "task.monitors", taskId });
   }
 
+  // 状态一起查:这一轮里**自己跑完的**和**被收走的**不能说成同一件事(第 4 轮审查 N1)。
   const all = await db
-    .select({ taskId: monitors.taskId })
+    .select({ taskId: monitors.taskId, status: monitors.status })
     .from(monitors)
     .where(and(ours, noticeScope(origin, openedAt)));
   if (!all.length) return;
-  const byTask = new Map<string, number>();
-  for (const row of all) byTask.set(row.taskId, (byTask.get(row.taskId) ?? 0) + 1);
-  for (const [taskId, count] of byTask) {
+  const byTask = new Map<string, { total: number; finished: number }>();
+  for (const row of all) {
+    const entry = byTask.get(row.taskId) ?? { total: 0, finished: 0 };
+    entry.total += 1;
+    // `exited` 是唯一能说「它等到了/跑完了」的一档。`stopped` 说不清(CLI 那边 TaskStop 和
+    // 回合收尾共用同一个词,见 CLAUDE_MONITOR_ENDED_REASON 那段实测),所以不算进来。
+    if (row.status === "exited") entry.finished += 1;
+    byTask.set(row.taskId, entry);
+  }
+  for (const [taskId, tally] of byTask) {
     if (isTaskRevoked(taskId)) continue;
-    await appendTaskTimeline(taskId, reapedNotice(count), { sessionId: await sessionOf(cliSessionId, taskId) });
+    await appendTaskTimeline(taskId, reapedNotice(tally), { sessionId: await sessionOf(cliSessionId, taskId) });
   }
 }
 
 /**
  * 时间线上那句话。**要回答的是「它们停了，为什么没人被唤醒」**，所以三件事缺一不可：
- * 这一轮起了几个、它们现在全失效了、以及想跨回合等事情该走哪条路。
+ * 这一轮起了几个、它们各自是怎么结束的、以及想跨回合等事情该走哪条路。
+ *
+ * 中间那件事不能一刀切成「全部失效」:`exited` 那一档是命令真的跑完了，说成失效就是把事实
+ * 说错(第 4 轮审查 N1)。但**结论对两档都一样**——通知只注回智能体自己的会话，任务不会被
+ * 唤醒；跑完了也只是「它自己可能看见了」，回合已经结束的话连它也没看见。
  */
-const reapedNotice = (count: number): string =>
-  `本轮智能体自己起了 ${count} 个内置 Monitor，回合结束时已全部失效——`
-  + `它们的通知只注回智能体自己的会话（那个会话已经随进程结束），从来不会唤醒任务。`
-  + `要跨回合等一件事，得用 ash 的哨兵（start_monitor）并用 pause_task 收尾这一轮。`;
+const reapedNotice = (tally: { total: number; finished: number }): string => {
+  const { total, finished } = tally;
+  const how = finished === 0
+    ? "回合结束时已全部失效"
+    : finished === total
+      ? "都在这一轮里自己跑完了"
+      : `其中 ${finished} 个自己跑完了、剩下 ${total - finished} 个在回合结束时已经失效`;
+  return `本轮智能体自己起了 ${total} 个内置 Monitor，${how}——`
+    + `它们的通知只注回智能体自己的会话（回合一结束，连它自己也看不到了），从来不会唤醒任务。`
+    + `要跨回合等一件事，得用 ash 的哨兵（start_monitor）并用 pause_task 收尾这一轮。`;
+};
 
 /**
  * 这条说明该落在哪条会话的时间线上。

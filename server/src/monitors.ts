@@ -32,7 +32,7 @@ import { monitors, projects, sessions, tasks } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
 import { monitorLogPath, readLogTail, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
 import { pushToTask } from "./monitor-events.js";
-import { isReviewSourceActive, monitorSourceGate } from "./monitor-session.js";
+import { monitorSourceGate, monitorWakeGate } from "./monitor-session.js";
 import { isSameProcess, inspectProcess } from "./proc.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
@@ -524,11 +524,25 @@ async function finishOffline(
  * 认不出来的（进程没了、或 pid 被别人复用了）落 `lost`，但**落之前先把它留下的输出读完**：
  * 「进程不在了」说的是这一刻，不是说它这段时间什么都没干。
  *
- * **接回也是一道资格判断,不只是认人**(第 3 轮审查 F1):审查结束已经落库、而回收那一刀
- * 还没落下去就崩了的话,照着「同代还活着 + 没到期」接回来的是一个**已经失去来源资格**的
- * 命令 —— 它推的每一条都会被出口闸拒回,一直烧到自己到期。启动恢复问的是跟创建、出口同
- * 一份资格(见 monitor-session.ts)。
+ * **接回也是一道资格判断,不只是认人**(第 3、4 轮审查 F1):事实已经落库、而回收那一刀还
+ * 没落下去就崩了的话,照着「同代还活着 + 没到期」接回来的是一个**已经没有出口**的命令 ——
+ * 它推的每一条都会被出口闸拒回,一直烧到自己到期。所以这里问的就是出口那一份资格本身
+ * (`monitorWakeGate`:归档、任务终态、来源审查那一轮还在不在),而不是挨个补某一种 reason。
  */
+/**
+ * 这一行**现在**还有出口吗 —— 跟创建、事件出口共用 `monitorWakeGate`(见 monitor-session.ts)。
+ *
+ * 任务行都没了是另一回事:那是删除中途崩了的残留,接回来谁也叫不醒。
+ */
+async function reattachBlockedReason(row: Row): Promise<string | null> {
+  const task = (await db
+    .select({ id: tasks.id, status: tasks.status, archived: tasks.archived })
+    .from(tasks)
+    .where(eq(tasks.id, row.taskId))).at(0);
+  if (!task) return "它的任务已经不在了";
+  return monitorWakeGate(task, { reviewRun: row.sourceReviewRun, reviewRound: row.sourceReviewRound });
+}
+
 export async function reattachMonitors(): Promise<{ attached: number; lost: number }> {
   // 只认 ash 自己起的：claude 的投影行没有 pid，拿去 isSameProcess 必然认不出来，会被
   // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
@@ -538,11 +552,13 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
   let lost = 0;
   for (const row of rows) {
     if (row.pid && isSameProcess(row.pid, row.pidStartedAt)) {
-      // 起它的那次审查(那一轮)已经收尾 ⇒ 它没有出口了,接回来只是继续烧。先接上再收尾:
-      // attach 把 tail 建起来,finish 的 drain 才读得到停服期间那一段,也由它负责杀进程。
-      if (row.sourceReviewRun && !await isReviewSourceActive(row.sourceReviewRun, row.sourceReviewRound)) {
+      // 它还有出口吗(归档 / 任务终态 / 起它的那次审查那一轮还在不在)。没有就收掉,别接回来
+      // 继续烧。先接上再收尾:attach 把 tail 建起来,finish 的 drain 才读得到停服期间那一段,
+      // 也由它负责杀进程。
+      const blocked = await reattachBlockedReason(row);
+      if (blocked) {
         attach(row);
-        await finish(row.id, "stopped", "起这个哨兵的那次审查在 server 重启期间已经结束", null);
+        await finish(row.id, "stopped", `${blocked}（server 重启期间发生的）`, null);
         lost += 1;
         continue;
       }

@@ -362,24 +362,33 @@ async function restoreCheckpoint(
   message: { id: string; taskId: string },
   checkpoint: string,
 ): Promise<void> {
-  // 同样是互为条件的一对:填回任务行的前提是「账本已经清掉」(①先跑)。
-  const ledgerReleased = exists(db.select({ one: sql`1` }).from(scheduledMessages)
-    .where(and(eq(scheduledMessages.id, message.id), isNull(scheduledMessages.checkpointTaken))));
+  // **归属判据只有一条,两条语句共用它**:这笔账此刻还记在这条消息上、而且没有别人正在送它。
+  //
+  // 原来填回任务行问的是「账本现在空着」。那句话在「另一份更新的 restore 已经归还、那一段又
+  // 已经被真人续跑消费掉」之后同样成立 —— 于是一个过期的 restore 能把它凭空复活
+  // (第 4 轮审查 N3 函数层实测 `N3_FUNCTION_STALE_RESTORE_RESURRECTS`)。「账本空着」证明
+  // 不了「是我清的」,只有「账本还写着我这一段」才是归属本体。
+  const ledgerOurs = and(
+    eq(scheduledMessages.id, message.id),
+    eq(scheduledMessages.checkpointTaken, checkpoint),
+    isNull(scheduledMessages.deliveringSince),
+    ne(scheduledMessages.status, "sent"),
+  );
   try {
-    const [cleared, restored] = await db.batch([
-      db.update(scheduledMessages).set({ checkpointTaken: null })
-        .where(and(
-          eq(scheduledMessages.id, message.id),
-          eq(scheduledMessages.checkpointTaken, checkpoint),
-          isNull(scheduledMessages.deliveringSince),
-          ne(scheduledMessages.status, "sent"),
-        ))
-        .returning({ id: scheduledMessages.id }),
+    const [restored, cleared] = await db.batch([
+      // 先填回(此刻账本还写着我们这一段),再清账 —— 顺序反过来,下面那个 EXISTS 就只能看到
+      // 被自己清空的账本,又退回「空着 = 是我清的」那个推不出来的结论。
       // CAS:只填回自己腾出的那个空。agent 中途写了新的一段就不动它——那一段才是最新交代,
       // 下一次投递会取它。
       db.update(tasks).set({ resumePrompt: checkpoint, updatedAt: now() })
-        .where(and(eq(tasks.id, message.taskId), isNull(tasks.resumePrompt), ledgerReleased))
+        .where(and(
+          eq(tasks.id, message.taskId),
+          isNull(tasks.resumePrompt),
+          exists(db.select({ one: sql`1` }).from(scheduledMessages).where(ledgerOurs)),
+        ))
         .returning({ id: tasks.id }),
+      db.update(scheduledMessages).set({ checkpointTaken: null }).where(ledgerOurs)
+        .returning({ id: scheduledMessages.id }),
     ]);
     if (!cleared.length) return; // 这笔账已经不归我们了(别人接手/已送出),什么都不做
     if (restored.length) await announceResumePrompt(message.taskId);

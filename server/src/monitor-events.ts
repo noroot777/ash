@@ -62,10 +62,16 @@ export async function pushToTask(row: Row, text: string): Promise<boolean> {
 /**
  * 「追加进那一行」还是「另起一条」。
  *
- * 合并那一发是一次 CAS（条件就是「租约还空着」），**它可以合法地落空**：上面查到这一行
+ * 合并那一发是一次 CAS（条件是「这一行还在等投递」），**它可以合法地落空**：上面查到这一行
  * 之后、这里改到它之前，投递方完全可能刚好抢走租约。落空就必须另起一条新消息，不能当成
  * 改成功了 —— 那一批行既没进任何一条消息、位置还会跟着前进，于是整批进展静默消失
  * （第 2 轮审查实测：events=2、read_offset 已越过第二条，而消息里只有第一条）。
+ *
+ * **判据是「状态 + 租约」两件,不是只看租约。** 租约空着有两种:还没开始送,以及**已经送完
+ * 或已被取消**（`markSent`/取消都会把 `delivering_since` 清掉）。只看租约的话,迟到的那条
+ * 事件会被追加进一条再也不会投递的消息里 —— 调用方还以为合并成功了,于是这批进展同样静默
+ * 消失。这个判据在本任务开工基线（`0c6d7f3d` 的 `monitors.ts`）上就是只看租约的,第 4 轮
+ * 审查把它作为基线风险挑出来（N4）;合并函数这一轮正好搬到这里,顺手把第二个条件补上。
  *
  * **单独成一个函数是为了让那个窗口能被测到**：`existing` 由调用方传进来，于是回归测试
  * 可以先查出这一行、再真的抢走租约、然后拿着那份**已经过期**的 `existing` 调它 —— 这正
@@ -80,7 +86,11 @@ export async function mergeOrEnqueueMonitorEvent(
     ? await db
       .update(scheduledMessages)
       .set({ text: mergeMonitorEventText(existing.text, text) })
-      .where(and(eq(scheduledMessages.id, existing.id), isNull(scheduledMessages.deliveringSince)))
+      .where(and(
+        eq(scheduledMessages.id, existing.id),
+        eq(scheduledMessages.status, "pending"),
+        isNull(scheduledMessages.deliveringSince),
+      ))
       .returning({ id: scheduledMessages.id })
     : [];
   if (merged.length > 0) {
