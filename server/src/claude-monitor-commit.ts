@@ -32,9 +32,9 @@
 //     `CommitOutcome.undecidable` 与扫描层的 `SessionScan.skippedPrefix`。
 import { and, eq, isNull } from "drizzle-orm";
 import {
-  claudeMonitorStatus, monitorExactExpiry, monitorStartTrusted, monitorStatusCorrectable,
-  parseMonitorStartReceipt, startAnchorTolerance,
-  type MonitorLifetime, type MonitorStartEvidence,
+  claudeMonitorEndedReason, claudeMonitorStatus, monitorExactExpiry, monitorStartTrusted,
+  monitorStatusCorrectable, parseMonitorStartReceipt, startAnchorTolerance,
+  type MonitorLifetime, type MonitorStartEvidence, type MonitorStatus,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
@@ -78,7 +78,7 @@ const isUniqueConflict = (e: unknown): boolean =>
   || /UNIQUE constraint failed/i.test((e as Error | null)?.message ?? "");
 
 type PriorRow = {
-  id: string; nativeId: string | null; status: string;
+  id: string; nativeId: string | null; status: string; description: string;
   cliSessionId: string | null; sourceLifetime: string; startedAt: string; expiresAt: string;
   lifetimeEvidence: string | null; startEvidence: string | null; sourcePid: number | null;
   timeoutMs: number | null; startAnchorWidthMs: number | null; toolUseId: string | null;
@@ -225,8 +225,11 @@ export async function commitRound(
       ? false
       : await probe.sourceAlive({ cliSessionId: item.cliSessionId, taskId });
     const status = item.status ?? (alive ? "running" : "lost");
-    const endedReason = item.endedReason
-      ?? (item.status ? null : alive ? null : "历史记录里没有它的结局（那一轮的进程早已结束）");
+    // 文案归一跟实时那条路同一个函数（见 `claudeMonitorEndedReason`）。没读到终态的那种
+    // 另说：那不是来源给的结局，是我们自己的推断。
+    const endedReason = item.status
+      ? claudeMonitorEndedReason(item.status as MonitorStatus, item.endedReason, item.call.description)
+      : alive ? null : "历史记录里没有它的结局（那一轮的进程早已结束）";
     // 证据跟着事实一起给：**这条事实是从哪个 run 文件读出来的**。存量行（没有归属）只能靠
     // 它被认下来，证明不了就另起一行而不是改别人的（见 claude-monitor-identity.ts）。
     const prior = pick(index.byNative.get(item.nativeId), {
@@ -251,6 +254,7 @@ export async function commitRound(
       // `task_started` 前面的那种）就是靠它配回来的。
       addToIndex(index, {
         id: rowId, nativeId: item.nativeId, status, cliSessionId: item.cliSessionId,
+        description: item.call.description,
         sourceLifetime: item.lifetime, startedAt, expiresAt: expiryColumn(item, startedAt, anchor),
         lifetimeEvidence: item.lifetime === "unknown" ? null : "receipt",
         startEvidence: anchor.evidence, sourcePid: item.staleRun ? 0 : null,
@@ -278,6 +282,9 @@ export async function commitRound(
 /** 读一行已有投影要的那些列（建索引、查冲突归宿共用一份，别让两处漂移）。 */
 const PRIOR_COLUMNS = {
   id: monitors.id, nativeId: monitors.nativeId, status: monitors.status,
+  // 终态文案要拿它跟来源 summary 比一比（`claudeMonitorEndedReason`）：成批收尾时来源填的
+  // 就是描述本身，不比就会在卡片上复读一遍描述，把「它其实是被收走的」盖掉。
+  description: monitors.description,
   cliSessionId: monitors.cliSessionId, sourceLifetime: monitors.sourceLifetime,
   startedAt: monitors.startedAt, expiresAt: monitors.expiresAt,
   lifetimeEvidence: monitors.lifetimeEvidence, startEvidence: monitors.startEvidence,
@@ -356,7 +363,12 @@ async function applyLateFacts(
     const item = lateItem(prior, fact);
     if (!item) continue;
     // 同一个出口：事实优先级、CAS、落空留账、通知都在那儿（见 `absorb`）。
-    await absorb(round, prior, item, item.status ?? prior.status, item.endedReason);
+    // 描述取库里那一行的 —— 迟到事实自己没带入参（`lateItem` 的 `call` 是空的）。
+    const status = item.status ?? prior.status;
+    const reason = item.status
+      ? claudeMonitorEndedReason(status as MonitorStatus, item.endedReason, prior.description)
+      : item.endedReason;
+    await absorb(round, prior, item, status, reason);
     resolved.push(fact);
   }
   return { resolved, undecidable };

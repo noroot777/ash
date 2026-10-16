@@ -32,10 +32,11 @@
 // 所以这里要先攒 `tool_use_id → Monitor 的入参`，`task_started` 到了才认得出来。
 //
 // 按 `description` 之类的内容去猜一律不行：两种后台任务的 description 长得一模一样。
-import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
-  claudeMonitorStatus, CLAUDE_MONITOR_ENDED_REASON, monitorExactExpiry,
-  monitorStatusCorrectable, parseMonitorStartReceipt, type MonitorLifetime,
+  claudeMonitorEndedReason, claudeMonitorStatus, monitorExactExpiry,
+  monitorStatusCorrectable, parseMonitorStartReceipt,
+  type MonitorLifetime, type MonitorStatus,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { monitorStr as str, parseMonitorInput, type MonitorCall } from "./claude-monitor-call.js";
@@ -43,6 +44,7 @@ import { matchBySource } from "./claude-monitor-identity.js";
 import {
   hasRunOrigin, locateSession, runOriginOfSession, UNKNOWN_RUN_ORIGIN, type MonitorRunOrigin,
 } from "./claude-monitor-origin.js";
+import { reapClaudeMonitors } from "./claude-monitor-reaped.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { orphanRows, writeIfTaskAlive } from "./claude-monitor-write.js";
 import {
@@ -163,6 +165,13 @@ export class ClaudeMonitorTrace {
    * 三态：null = 还没开始；Promise = 正在认；"done" = 认完了，此后 `claimed` 就是权威。
    */
   private reclaim: Promise<void> | "done" | null = null;
+
+  /**
+   * 这条流**开始**的时刻。没有 run 凭据的会话（Windows、常驻）靠它圈出「这一轮起的那些」
+   * 来收尾（见 claude-monitor-reaped.ts 的 `generationOf`）——绝不改成收尾那一刻现查
+   * `sessions`：那几列每回合被下一轮覆盖，读到的会是下一代人的凭据。
+   */
+  private readonly openedAt = now();
 
   /**
    * @param cliSessionId 这条流属于哪条 CLI 会话。**接管路径必须传**：真实接管是从已消费的
@@ -613,7 +622,10 @@ export class ClaudeMonitorTrace {
     const result = await db.update(monitors).set({
       status,
       endedAt: now(),
-      endedReason: summary || CLAUDE_MONITOR_ENDED_REASON[status as keyof typeof CLAUDE_MONITOR_ENDED_REASON] || null,
+      // **文案归一在一处**（`claudeMonitorEndedReason`）：来源侧回合收尾成批停止时，summary
+      // 填的就是那条描述本身，原样写进去卡片就变成「已停止 / <描述>」——两行都没说出它其实
+      // 是被收走的（见那个函数的实测行序）。历史回填那条路同样调它。
+      endedReason: claudeMonitorEndedReason(status as MonitorStatus, summary, row.description),
     }).where(and(eq(monitors.id, rowId), inArray(monitors.status, ["running", "lost"])));
     // 条件更新 0 行 = 这条来源终态**没有**落地（期间别的 writer 改了状态）。来源侧不会重发，
     // 所以要留账让回填那条路重读一次并重新裁决，不能就这么算了（第 6 轮审查的类问题）。
@@ -653,33 +665,11 @@ export class ClaudeMonitorTrace {
       // 一直没触发认领的行（真实接管不重放 init）永远不在这张名单里，于是进程都结束了
       // 卡片还写着「正在盯着」，要等下一次开机清扫才可能纠正（第 2 轮审查实测）。
       // 会话身份是这条流的持久归属，拿它查才查得全。
+      //
+      // 收尾本体连同「这一轮的监听全没了」那条时间线都在 `claude-monitor-reaped.ts`：
+      // 只收自己这一代、以及为什么非记一笔不可，都写在那个文件头上。
       if (!cliSessionId) return;
-      // **但只收自己这一代的尾。** 同一条 CLI 会话会跨好几代进程（resume 后号不变），
-      // 把别的代次一起收掉就是拿这一代的死亡给上一代下结论 —— 方向上虽然同样是「判死」，
-      // 凭据却是错的，而错凭据两个方向都会用（这一代还活着时同样会把旧卡续命，那就是 F1）。
-      // 判据和落库那一侧同一份：**证明不了是别人的就算我的** —— `source_run` 为空的是存量行
-      // 和没有落盘文件的会话（Windows、常驻），它们只可能归我；明确记着另一个 run 的才排除。
-      // 自己都没有 run 凭据时（`runPath` 为空）回到老语义：整条会话一起收。
-      const origin = await this.runOrigin();
-      const mine = origin.runPath
-        ? or(isNull(monitors.sourceRun), eq(monitors.sourceRun, origin.runPath))
-        : undefined;
-      const live = await db
-        .select({ id: monitors.id, taskId: monitors.taskId })
-        .from(monitors)
-        .where(and(
-          eq(monitors.kind, "claude"),
-          eq(monitors.status, "running"),
-          eq(monitors.cliSessionId, cliSessionId),
-          mine,
-        ));
-      if (!live.length) return;
-      await db.update(monitors).set({
-        status: "lost",
-        endedAt: now(),
-        endedReason: CLAUDE_MONITOR_ENDED_REASON.lost ?? null,
-      }).where(and(inArray(monitors.id, live.map((r) => r.id)), eq(monitors.status, "running")));
-      for (const taskId of new Set(live.map((r) => r.taskId))) bus.publish({ type: "task.monitors", taskId });
+      await reapClaudeMonitors(cliSessionId, await this.runOrigin(), this.openedAt);
     });
     // 队列永不 reject（`queue` 的 catch 兜住并留账），所以这里原样交出去就行。
     return this.chain.then(() => undefined);
