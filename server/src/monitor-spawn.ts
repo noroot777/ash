@@ -7,11 +7,31 @@
 //   ② **输出写文件、不给它任何管道** —— 唯一真正的生死绑定是 stdout 匿名管道：ash 一死
 //      读端关闭，它下次往 stdout 写就吃 SIGPIPE 当场毙命。换成文件这条绑定就断了。
 // 再加一个 `unref()`，ash 自己的事件循环也不会被它吊着不退。
+//
+// ── 放行闸：**命令开工之前，身份必须已经落库**（第 7 轮审查 F3）─────────────────
+//
+// 「起进程」和「把它记下来」是两件事，顺序决定了失败时会不会留下无主资源。原来是先 spawn
+// 再 insert：登记失败时命令已经独立跑了几十毫秒，只能事后去追（落责任、发信号、确认退出），
+// 而当身份查询也不可用、责任表又写不进去时，那个进程的唯一线索只剩一个 unref 定时器的内存
+// 参数 —— 进程一退它就没了，重启恢复只枚举 monitors 和债表，两张表都没有它（实测：命令还
+// 活着，三处全空）。
+//
+// 所以 spawn 出来的壳**先停在一道闸前面**：它第一件事是从 fd 3 读一行，读到才 exec 用户的
+// 命令。ash 只有在身份行（含 pid）落库之后才写那一行。于是：
+//   · 登记失败 ⇒ 不放行 ⇒ 用户的命令**从未开工**，没有任何需要回收的外部资源；
+//   · ash 在放行前自己没了 ⇒ 写端随进程关闭 ⇒ 壳读到 EOF ⇒ 自己退出，同上；
+//   · 放行之后 ⇒ 身份早已在库里，照旧由接回/债表那一圈兜。
+// 壳是我们自己拼的一行 `sh`，不会 trap 信号，所以不放行时那一刀必中。
+//
+// **win32 没有这道闸**：`cmd.exe` 里没有可靠的「从第 3 号句柄读一行」写法，硬凑出来的
+// `for /l` + `if exist` 轮询要把用户命令嵌进括号里（命令里一个 `)` 就炸）。那一侧只保留
+// 「先落行、再 spawn、再回填 pid」的顺序，残余窗口写在 monitor-create.ts 里。**未在
+// Windows 真机验证**（约定见根 AGENTS.md）。
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentBaseEnv } from "./executors/spawn.js";
-import { userShellLaunch } from "./platform.js";
+import { IS_WINDOWS, userShellLaunch } from "./platform.js";
 import { RUNS_DIR } from "./paths.js";
 
 /** 输出落在任务自己的 run 目录下，跟会话正文、trace 同一处，归档清理不必另记一份路径。 */
@@ -23,7 +43,20 @@ export type SpawnedMonitor = {
   pid: number;
   /** 命令自己跑完时回调一次（仅限本进程起的那次；跨 server 重启接回来的拿不到）。 */
   onExit: (cb: (code: number | null) => void) => void;
+  /**
+   * **让用户的命令开工**。只有身份已经落库的那条路径才许调（见文件头的放行闸）。
+   * win32 上是空操作：那一侧没有闸，命令在 spawn 的那一刻就已经在跑了。
+   */
+  release: () => void;
+  /**
+   * **这次不放行**：关掉写端让壳自己退出（它还没 exec 用户的命令），调用方随后照旧走回收圈
+   * 兜一刀。POSIX 上这意味着用户的命令一行都没跑过。
+   */
+  abandon: () => void;
 };
+
+/** 放行闸的那段壳前缀：先从 fd 3 读一行，读不到（ash 没了）就退出，绝不执行用户的命令。 */
+const GATE_PREFIX = "IFS= read -r __ash_go <&3 || exit 97; exec 3<&-; ";
 
 export function spawnMonitor(opts: { command: string; cwd: string; logPath: string }): SpawnedMonitor | { error: string } {
   // 工作目录先自己判一句。它失效是**最常见**的一种失败（项目目录被移走、旧任务的
@@ -42,14 +75,18 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
     return { error: `建不了哨兵日志文件 ${opts.logPath}：${e instanceof Error ? e.message : String(e)}` };
   }
   try {
-    const launch = userShellLaunch(opts.command);
-    // stdin 给 ignore 而不是继承：哨兵命令不该有机会去读 ash 的标准输入。
+    // 闸只装在 POSIX 那一侧（见文件头）。拼在**命令前面**而不是包一层括号：用户的命令原样
+    // 跟在后面，它自己的引号、换行、`&&` 的语义一个字都不变。
+    const gated = !IS_WINDOWS;
+    const launch = userShellLaunch(gated ? `${GATE_PREFIX}${opts.command}` : opts.command);
+    // stdin 给 ignore 而不是继承：哨兵命令不该有机会去读 ash 的标准输入（闸走的是 fd 3，
+    // 所以用户的命令拿到的 stdin 仍然是 /dev/null）。
     // stdout/stderr 都指向同一个 fd —— 合流是刻意的，命令自己报的错也该成为事件。
     const child = spawn(launch.file, launch.args, {
       cwd: opts.cwd,
       env: agentBaseEnv(),
       detached: true,
-      stdio: ["ignore", fd, fd],
+      stdio: gated ? ["ignore", fd, fd, "pipe"] : ["ignore", fd, fd],
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
     });
     // `error` 必须**此刻**就挂上，不能等调用方 `onExit` 时再挂：spawn 的失败是异步报的
@@ -69,8 +106,20 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
       return { error: `哨兵起不来：${opts.command}` };
     }
     child.unref();
+    // 闸的写端：**也要 unref**，不然 ash 的事件循环会被这个 pipe 吊着不退（`child.unref()`
+    // 只管进程句柄，stdio 流是另一个 handle）。
+    const gate = (child.stdio as Array<{ write?: (chunk: string) => void; end?: () => void; destroy?: () => void; unref?: () => void } | null>)[3];
+    gate?.unref?.();
     return {
       pid: child.pid,
+      release: () => {
+        if (!gate?.write) return;      // win32：没有闸，命令早就在跑了
+        try { gate.write("go\n"); gate.end?.(); } catch { /* 它已经没了：那就是没放行 */ }
+      },
+      abandon: () => {
+        // 关掉写端 = 壳那边读到 EOF = 它在 exec 之前就退出。调用方仍会补一刀兜底。
+        try { gate?.destroy?.(); } catch { /* 已经关了 */ }
+      },
       onExit: (cb) => {
         forward = cb;
         child.on("exit", (code, signal) => cb(code ?? (signal ? null : 0)));

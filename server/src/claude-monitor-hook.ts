@@ -36,7 +36,7 @@
 // 活着，会话循环在，内置 Monitor 真能唤醒它自己——那时它不是坏的，拦它才是错的。
 import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS } from "@ash/shared/monitor";
 import { currentListeningPort } from "./listening-port.js";
-import { startMonitor } from "./monitors.js";
+import { startMonitor } from "./monitor-create.js";
 
 /** 内置 Monitor 的工具名。matcher 只含字母，按精确串匹配（见 hooks 文档的 matcher 语法）。 */
 const MONITOR_TOOL = "Monitor";

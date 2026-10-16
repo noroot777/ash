@@ -6,7 +6,8 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { agentActor } from "./auth/middleware.js";
-import { getMonitor, listMonitors, readMonitorTail, startMonitor, stopMonitorChecked } from "./monitors.js";
+import { startMonitor } from "./monitor-create.js";
+import { getMonitor, listMonitors, readMonitorTail, stopMonitorChecked } from "./monitors.js";
 import type { MonitorCaller } from "./monitor-session.js";
 import {
   claudeMonitorHookDecision,

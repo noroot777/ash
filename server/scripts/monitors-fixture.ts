@@ -20,12 +20,13 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitors");
 
 export const [
-  { db, ensureSchema }, schema, monitorsModule, monitorEvents, status, { isPidAlive }, pending, { continueTask }, runs,
-  taskRoutes, { stopAllMonitorRecovery }, { inspectProcess },
+  { db, ensureSchema }, schema, monitorsModule, createModule, monitorEvents, status, { isPidAlive }, pending,
+  { continueTask }, runs, taskRoutes, { stopAllMonitorRecovery }, { inspectProcess },
 ] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/monitors.js"),
+  import("../src/monitor-create.js"),
   import("../src/monitor-events.js"),
   import("../src/status.js"),
   import("../src/platform.js"),
@@ -48,8 +49,9 @@ export const { stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachM
  * —— 例如 `caller: { kind: "turn" }` 配 `claimTurn(taskId, "reviewer")`(审查回合里挂的),
  * 或 `{ kind: "unverified" }`(回连凭据对不上)。
  */
-export const startMonitor: typeof monitorsModule.startMonitor = (input) =>
-  monitorsModule.startMonitor({ caller: { kind: "external" }, ...input });
+type StartInput = Parameters<typeof createModule.startMonitor>[0];
+export const startMonitor = (input: Omit<StartInput, "caller"> & { caller?: StartInput["caller"] }) =>
+  createModule.startMonitor({ ...input, caller: input.caller ?? { kind: "external" } });
 export const { monitors, projects, scheduledMessages, sessions, tasks } = schema;
 
 await ensureSchema();

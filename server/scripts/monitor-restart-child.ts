@@ -9,7 +9,8 @@ import { writeFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db/index.js";
 import { monitors } from "../src/db/schema.js";
-import { reattachMonitors, startMonitor } from "../src/monitors.js";
+import { startMonitor } from "../src/monitor-create.js";
+import { reattachMonitors } from "../src/monitors.js";
 
 const [mode, taskId, stateFile, command] = process.argv.slice(2);
 // 保活：monitors.ts 里的定时器全 unref 了（真 server 由 HTTP 监听撑着事件循环，

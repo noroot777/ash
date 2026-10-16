@@ -1,6 +1,7 @@
-// 哨兵（Monitor）的运行时：起、盯、推、停，以及 server 重启后把它们认回来。
-// 语义和上限在 shared/src/monitor.ts，进程与 tail 在 monitor-spawn.ts，HTTP 在
-// monitor-routes.ts；这里只管编排。
+// 哨兵（Monitor）的运行时：盯、推、停，以及 server 重启后把它们认回来。
+// 语义和上限在 shared/src/monitor.ts，进程与放行闸在 monitor-spawn.ts，**创建协议**
+// （先落身份、再起进程、回填 pid、放行）在 monitor-create.ts，HTTP 在 monitor-routes.ts；
+// 这里只管编排。
 //
 // 两条贯穿全文件的设计：
 //
@@ -23,27 +24,25 @@ import {
   MONITOR_MAX_EVENTS,
   MONITOR_MAX_LINE_CHARS,
   MONITOR_MAX_LINES_PER_PUSH,
-  MONITOR_MAX_PER_TASK,
   MONITOR_TAIL_DEFAULT_LINES,
   MONITOR_TAIL_MAX_BYTES,
   MONITOR_TAIL_MAX_LINES,
-  normalizeMonitorTimeout,
   monitorExactExpiry,
   type MonitorStatus,
   type TaskMonitor,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
-import { monitors, projects, sessions, tasks } from "./db/schema.js";
+import { monitors, tasks } from "./db/schema.js";
 import { reclaimMonitorProcess, reclaimState, settleReclaim } from "./monitor-reclaim-debts.js";
-import { monitorLogPath, readLogTail, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
+import { readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
+import { IS_WINDOWS } from "./platform.js";
 import { pushToTask } from "./monitor-events.js";
-import { monitorSourceGate, monitorWakeGate, type MonitorCaller } from "./monitor-session.js";
-import { inspectProcess } from "./proc.js";
+import { monitorWakeGate } from "./monitor-session.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { id, now } from "./util.js";
+import { now } from "./util.js";
 
-type Row = typeof monitors.$inferSelect;
+export type Row = typeof monitors.$inferSelect;
 
 /**
  * 「这一行是 ash 自己起的进程吗」——**所有碰进程、碰日志的查询都必须带上它**。
@@ -58,6 +57,11 @@ type Row = typeof monitors.$inferSelect;
  */
 // 回收层(monitor-reclaim.ts)跟这里是同一摊账,所以这三样对它公开:哪些行算 ash 自己的、
 // 每条哨兵自己的那条队列、以及「把一条哨兵收尾」。它只做资格判断,不另起一套运行时。
+//
+// **创建层(monitor-create.ts)也从这里取运行时**:`serialize`(按任务排的那条创建队列)、
+// `liveMonitorsOf`(配额)、`attach`(把 tail 和定时器挂起来)、`publish`、`toTaskMonitor`、
+// `Row`。它拆出去只是因为「创建协议」那一段(先落身份、再起进程、回填 pid、放行)自己就是一
+// 整件事,而这个文件已经顶到行数上限 —— 运行时仍然只有这一份。
 export const isAshKind = eq(monitors.kind, "ash");
 
 export const toTaskMonitor = (r: Row): TaskMonitor => ({
@@ -106,176 +110,11 @@ export function serialize<T>(monitorId: string, job: () => Promise<T>): Promise<
   return next;
 }
 
-const publish = (taskId: string) => bus.publish({ type: "task.monitors", taskId });
-
-// ── 起 ───────────────────────────────────────────────────────────────────────
-
-export type StartMonitorInput = {
-  taskId: string;
-  command: string;
-  description?: string;
-  cwd?: string | null;
-  timeoutMs?: number;
-  ownerUserId?: string | null;
-  /**
-   * **这次创建是谁发起的**,由入口核验后交上来(见 `monitor-session.ts` 的 `MonitorCaller`)。
-   * 必填:哨兵唯一的出口是「唤醒这个任务」,而唤醒哪条会话由来源决定 —— 让它可缺省就等于
-   * 默许「不知道就按执行者算」,那正是第 7 轮审查 F2 要消掉的那一种静默(审查者挂的哨兵
-   * 把实现者叫起来烧一个回合,审查那条会话继续等不到人)。
-   */
-  caller: MonitorCaller;
-};
-
-/** 哨兵在哪儿跑：显式指定 > 任务最近一条会话的工作目录 > 项目仓库目录。 */
-async function resolveCwd(taskId: string, explicit?: string | null): Promise<string | null> {
-  if (explicit?.trim()) return explicit.trim();
-  const session = (await db
-    .select({ cwd: sessions.cwd })
-    .from(sessions)
-    .where(eq(sessions.taskId, taskId))
-    .orderBy(desc(sessions.startedAt))).find((s) => s.cwd);
-  if (session?.cwd) return session.cwd;
-  const task = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task?.projectId) return null;
-  const project = (await db.select({ repoPath: projects.repoPath }).from(projects).where(eq(projects.id, task.projectId))).at(0);
-  return project?.repoPath ?? null;
-}
-
-export type StartMonitorResult =
-  | { ok: true; monitor: TaskMonitor }
-  /** `needsWakeTarget` = 拒绝的理由是「说不清醒来叫谁」:调用方指定一个唤醒目标就能再来。 */
-  | { ok: false; status: 400 | 404 | 409; error: string; needsWakeTarget?: true };
-
-const text = (value: unknown): string | null => (typeof value === "string" ? value.trim() : null);
-
-/**
- * 起一个哨兵。
- *
- * **整段按任务串行**：「数一数在跑几个」和「插进去一条」之间隔着 spawn 和好几个 await，
- * 并发打进来时每一个都在别人落库之前数完了数，于是六个请求能一起过 4 个的闸、真的起六个
- * 长跑进程（第 1 轮审查实测 successfulStarts=6）。既有的 `serialize` 按 monitorId 排队，
- * 护不到「还没有 id」的创建期，所以这里按 `task:<id>` 另排一条队。
- */
-export async function startMonitor(input: StartMonitorInput): Promise<StartMonitorResult> {
-  // 参数一律在**起进程之前**校验并规范化。顺序反过来的话，一个 description: 7 就能让
-  // trim 抛在 spawn 之后：进程已经脱离 ash 跑起来了，记录却没落，于是它既不在列表里、
-  // 也没有到期定时器，谁都停不掉（第 1 轮审查复现：HTTP 500 + 一个无主的 shell 还活着）。
-  const command = text(input.command);
-  if (!command) return { ok: false, status: 400, error: "command 不能为空" };
-  if (input.description !== undefined && input.description !== null && text(input.description) === null)
-    return { ok: false, status: 400, error: "description 必须是字符串" };
-  if (input.cwd !== undefined && input.cwd !== null && text(input.cwd) === null)
-    return { ok: false, status: 400, error: "cwd 必须是字符串" };
-  const description = text(input.description) || command;
-
-  return serialize(`task:${input.taskId}`, async () => {
-    const task = (await db.select().from(tasks).where(eq(tasks.id, input.taskId))).at(0);
-    if (!task) return { ok: false, status: 404, error: "任务不存在" };
-    // 入口与出口同一份判据（创建问 `monitorSourceGate`、出口问 `monitorWakeGate`，两者
-    // 共用 shared 的 `monitorBlockedReason`）。只判归档、不判终态的话，已完成的任务上照样
-    // 起得来一个真进程，而 `pushToTask` 会把它推的每一条都按终态拒掉——命令在后台烧着，
-    // 任务永远不醒（第 2 轮审查实测）。
-    // 那一份判据里还含着「审查还在进行」这条豁免：审查跑在已经 done 的任务上，不豁免的话
-    // 审查者一个哨兵都挂不上。它同时回答「是谁挂的、属于哪次审查」——按**入口核验过的调用
-    // 来源**判，不是按「此刻哪个 agent 进程还活着」猜（见 monitor-session.ts 文件头）。
-    const source = await monitorSourceGate(task, input.caller);
-    if (source.blocked) {
-      return { ok: false, status: 409, error: source.blocked, ...(source.needsWake ? { needsWakeTarget: true as const } : {}) };
-    }
-
-    const live = await liveMonitorsOf(input.taskId);
-    if (live.length >= MONITOR_MAX_PER_TASK)
-      return { ok: false, status: 409, error: `这个任务已经有 ${live.length} 个哨兵在盯了（上限 ${MONITOR_MAX_PER_TASK}），先停掉一个` };
-
-    const cwd = await resolveCwd(input.taskId, input.cwd);
-    if (!cwd) return { ok: false, status: 409, error: "定位不到工作目录，显式传 cwd" };
-
-    const monitorId = id();
-    const logPath = monitorLogPath(input.taskId, monitorId);
-    const spawned = spawnMonitor({ command, cwd, logPath });
-    if ("error" in spawned) return { ok: false, status: 409, error: spawned.error };
-
-    const timeoutMs = normalizeMonitorTimeout(input.timeoutMs);
-    const startedAt = new Date();
-    const row: Row = {
-      id: monitorId,
-      taskId: input.taskId,
-      command,
-      description,
-      cwd,
-      status: "running",
-      pid: spawned.pid,
-      pidStartedAt: inspectProcess(spawned.pid)?.startedAt ?? null,
-      logPath,
-      offset: 0,
-      events: 0,
-      exitCode: null,
-      // **同一个瞬间**算两列：分别取 Date.now() 会差 1ms，而对外那个到期时刻是
-      // `started_at + timeout_ms` 现算的（见 toTaskMonitor），差值会变成「库里写的」与
-      // 「卡片显示的」不一致。
-      startedAt: startedAt.toISOString(),
-      expiresAt: new Date(startedAt.getTime() + timeoutMs).toISOString(),
-      endedAt: null,
-      endedReason: null,
-      ownerUserId: input.ownerUserId ?? null,
-      kind: "ash",
-      nativeId: null,
-      cliSessionId: null,
-      // 只有 claude 投影才有「起它的那个 tool_use」。
-      toolUseId: null,
-      // 代次结论与起点下界都是 claude 投影那一侧的事：ash 自己 spawn 的进程有真 pid，
-      // 起点就是 spawn 那一刻（见 schema-monitors.ts）。
-      sourceRun: null,
-      startLowAt: null,
-      // **哨兵醒来时该叫哪条会话**：审查是旁路回合，跑在自己那条 reviewer 会话上。认不出
-      // 来就留 NULL = 按老样子叫执行者（见 monitor-session.ts）。
-      sourceRole: source.role,
-      // **它的命跟着哪次审查走**：非空 = 任务终态连坐清理要放过它、事件出口按那次审查
-      // 是否还在判、唤醒时按那次审查的执行器续跑（见 schema-monitors.ts）。
-      sourceReviewRun: source.reviewRun,
-      // **哪一轮**：`nextRound` 复用同一个 run.id（只是把 current_round 加一、状态推回
-      // reviewing），所以只记 runId 的话，上一轮遗留的哨兵会被下一轮当成自己的输入重新
-      // 解释（见 schema-monitors.ts）。
-      sourceReviewRound: source.reviewRound,
-      // ash 自己起的：期限是它自己定的，当然知道。
-      sourceLifetime: "bounded",
-      // ash 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，
-      // 代次由 pid/pidStartedAt 两列（上面）记着，不走 claude 投影那套来源代次。
-      lifetimeEvidence: "self",
-      sourcePid: null,
-      sourcePidStartedAt: null,
-      // ash 自己 spawn 的，起点就是这一刻，没有不确定性 —— 误差界 0。两列成对写：少了误差界
-      // 这一行就「无法重验」，对外会丢掉期限（见 shared 的 monitorStartTrusted）。
-      startEvidence: "observed",
-      startAnchorWidthMs: 0,
-      timeoutMs,
-    };
-    try {
-      await db.insert(monitors).values(row);
-    } catch (e) {
-      // 登记失败就把刚起的进程收回来：留着它就是一个谁都看不见、也停不掉的后台命令。
-      // 走的是跟 `finish` 同一圈(落责任 → 发信号 → 确认退出 → 销账):这一行没进库,
-      // **责任表是它唯一的线索**,少了这一笔就等于谁都不知道它存在过。
-      const verdict = await settleReclaim(
-        await reclaimMonitorProcess(row, "哨兵登记失败，进程一并收回", { fresh: true }),
-      );
-      // **三种结果各说各的**。`unaccounted` 时这个进程既没有身份行、也没有责任行,只剩
-      // 这句话和日志 —— 不许冒充「已记下」(第 6 轮审查 F1)。
-      const tail = verdict === "reclaimed" ? "已回收它的进程"
-        : verdict === "owed" ? "进程还没确认退出，回收责任已记下（开机会再收一次）"
-        : "**进程可能还在后台跑着，而回收责任也没能落库**（见 server 日志里的 pid，必要时手工收掉）";
-      return { ok: false, status: 409, error: `哨兵登记失败，${tail}：${e instanceof Error ? e.message : String(e)}` };
-    }
-    attach(row, spawned.onExit);
-    publish(row.taskId);
-    await appendTaskTimeline(row.taskId, `哨兵已起：${row.description}（${command}）`);
-    return { ok: true, monitor: toTaskMonitor(row) };
-  });
-}
+export const publish = (taskId: string) => bus.publish({ type: "task.monitors", taskId });
 
 // ── 盯 ───────────────────────────────────────────────────────────────────────
 
-function attach(row: Row, onExit?: (cb: (code: number | null) => void) => void): void {
+export function attach(row: Row, onExit?: (cb: (code: number | null) => void) => void): void {
   if (runtimes.has(row.id)) return;
   // rt 先成形、tail 后挂：tail 的回调必须闭包引用**这一个** rt，不能回头去查注册表。
   // 查注册表的写法有个安静的洞——`finish` 为了防重入会先把自己摘出注册表，再 drain
@@ -495,7 +334,7 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
   return toTaskMonitor(after ?? before);
 }
 
-async function liveMonitorsOf(taskId: string): Promise<Row[]> {
+export async function liveMonitorsOf(taskId: string): Promise<Row[]> {
   return db.select().from(monitors).where(and(eq(monitors.taskId, taskId), eq(monitors.status, "running"), isAshKind));
 }
 
@@ -612,7 +451,22 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
     // 既在界面上撒谎,又让它从此无法叫停。同一个错还有第二种犯法:身份比较自己去补一次
     // 查询,**第二次**失败时被写成确证的 `not-ours`(第 7 轮审查 F1,现在判定收在
     // `processIdentity` 一次快照里)。
-    const state = row.pid ? reclaimState(row.pid, row.pidStartedAt) : "gone";
+    // **pid 是空的**:那是创建协议留下的意图行 —— 身份先落库、进程后起、pid 回填(见
+    // monitor-create.ts 文件头)。重启后还能看见它,说明 ash 恰好死在「落了身份」和「回填
+    // pid」之间。这一档**既不能按 `gone` 一笔带过,也不能冒充已经收干净**:
+    //  · POSIX:命令从未开工 —— 它停在放行闸前等 ash 写一个字节,ash 一死写端就关了,壳
+    //    读到 EOF 在 exec 之前自己退掉(exit 97)。所以这条行可以干净地判掉。
+    //  · win32:那一侧没有闸(`cmd.exe` 里没有可靠的「从第 3 号句柄读一行」写法),命令可能
+    //    已经在跑,而我们手里没有任何 pid 可以去认它 —— 照实说成「认不回来」。**未在
+    //    Windows 真机验证**(根 AGENTS.md)。
+    if (!row.pid) {
+      await finishOffline(row, "lost", IS_WINDOWS
+        ? "server 重启后认不回它了：起进程时没来得及记下 pid，这台机器上没有放行闸，那条命令可能还在后台跑着（日志路径见这一行）"
+        : "server 重启后判定它没有真正开工：起进程时没来得及记下 pid，命令停在放行闸前面就退了");
+      lost += 1;
+      continue;
+    }
+    const state = reclaimState(row.pid, row.pidStartedAt);
     if (state === "ours-alive" || state === "unknown") {
       // 它还有出口吗(归档 / 任务终态 / 起它的那次审查那一轮还在不在)。没有就收掉,别接回来
       // 继续烧。先接上再收尾:attach 把 tail 建起来,finish 的 drain 才读得到停服期间那一段,
@@ -639,16 +493,25 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       // 先把回收责任记下来 —— `fresh: false`,隔了一次重启不敢对孤儿组下刀,这个号可能已经
       // 被别人当组长用过(判据见 reclaimMonitorProcess 那张表)。
       const outcome = await reclaimMonitorProcess(row, "server 重启后它的身份对不上", { fresh: false });
+      // **先拿到最终 verdict,再写文案。** 这里不等补刀(deadline 0:只问一次状态,别把开机
+      // 吊住),所以把它提到写卡片之前不会让启动变慢 —— 但顺序反过来就会写下一句假话:上一版
+      // 无论结果是什么都先把「已记下回收责任」写进卡片,而债表写失败(`unaccounted`)时那句话
+      // 只在 server 日志里被纠正过,卡片上那句肯定会一直留着(第 7 轮审查 N1)。责任落盘之后
+      // 的推进交给紧随其后的 `reclaimUnconfirmedStops` / `sweepMonitorReclaimDebts` 和梯子。
+      const verdict = await settleReclaim(outcome, 0);
+      if (verdict === "unaccounted") {
+        console.error(`[ash] 接回时既没确认退出、回收责任也没落库 monitor=${row.id} pid=${row.pid}`);
+      }
+      const owing = verdict === "reclaimed"
+        ? "；原进程随后已确认退出"
+        : verdict === "owed"
+          ? "；原进程退出未确认，已记下回收责任（开机会再收一次）"
+          : "；原进程退出未确认，而回收责任尚未保存（见 server 日志里的 pid，仍在重试落盘）";
       await finishOffline(row, "lost", state === "gone"
         ? "server 重启后这个进程已经不在了（它在停服期间跑完的，拿不到退出码）"
         : state === "not-ours"
-          ? "server 重启后这个号已经是另一个进程了（原命令在停服期间结束，拿不到退出码）；原进程退出未确认，已记下回收责任"
-          : "server 重启后它的组长已经退出、组里还有后代（拿不到退出码），已记下回收责任，开机会再收一次");
-      // 这里不等补刀(启动期要一行一行过,别把开机吊住):责任已落盘,交给紧随其后的
-      // `reclaimUnconfirmedStops` / `sweepMonitorReclaimDebts` 和梯子。
-      if (await settleReclaim(outcome, 0) === "unaccounted") {
-        console.error(`[ash] 接回时既没确认退出、回收责任也没落库 monitor=${row.id} pid=${row.pid}`);
-      }
+          ? `server 重启后这个号已经是另一个进程了（原命令在停服期间结束，拿不到退出码）${owing}`
+          : `server 重启后它的组长已经退出、组里还有后代（拿不到退出码）${owing}`);
       lost += 1;
     }
   }

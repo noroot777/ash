@@ -15,7 +15,9 @@
 //    声称:不许写「这个进程已经不在了」,更不许据此放弃回收责任(第 6 轮审查 F1 实测:接回写
 //    lost → 删除放行 → 任务/哨兵/债表三处全空,命令还在后台跑着)。「确认是另一个进程」是
 //    另一档,两者必须分别测。
-// ⑤ **身份这一问只许查一次,而且三档都要带回来。** 判定在 `proc.ts` 的 `processIdentity`:
+// ⑤ **说法要跟事实同步**:接回时那句「已记下回收责任」必须由最终 verdict 决定。先写肯定、
+//    再在 server 日志里纠正不算纠正 —— 卡片上那句话会一直留着(第 7 轮审查 N1)。
+// ⑥ **身份这一问只许查一次,而且三档都要带回来。** 判定在 `proc.ts` 的 `processIdentity`:
 //    `ps -o lstart` 跟随 locale,原文不等**不等于**不是同一个进程。上一版在原文不等时又查了
 //    一次 ps 去兼容 locale,第二次恰好失败就被写成确证的「这个号现在是别人」—— 一条还在跑的
 //    哨兵因此被接回判成 lost、随后按债杀掉(第 7 轮审查 F1)。
@@ -36,6 +38,7 @@ const { beginTaskRevocation, isTaskRevoked, releaseTaskRevocation } = await impo
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { reclaimState, sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
+const { dbClient } = await import("../src/db/index.js");
 
 // 忽略 TERM 的命令:壳自己 trap 掉,每轮重起一个 sleep —— TERM 打到整组时组里始终有人,
 // 只有 +2 秒那把 SIGKILL 才收得掉它。(同一招在 test-project-commands.ts 里也用着)
@@ -522,5 +525,48 @@ const zhLstart = (lstart: string): string => {
   assert.equal(isProcessGroupAlive(pid), false, "点停才收掉它");
 }
 
+// ── ⑫ 卡片上那句话由**最终 verdict**决定,不是「先写肯定、再在日志里纠正」(第 7 轮审查 N1)──
+//
+// 接回判出 `not-ours`/`ours-orphans` 时,上一版无论回收结果是什么都先把「已记下回收责任」写进
+// 卡片,只有 `unaccounted` 那一档在 server 日志里被纠正过 —— 于是债表其实一个字都没写进去,
+// 而卡片上那句肯定会一直留着(刷新页面也还在)。这跟前几轮那些洞是同一个形状:**把一次没做成
+// 的事说成已经做成**。
+{
+  const taskId = await makeTask({ status: "running" });
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "接回时责任落不下来的" });
+  assert.equal(started.ok, true);
+  const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+  const pid = row.pid!;
+  // 把记录的启动时刻挪**一秒**(格式仍然合法、仍然解析得出)⇒ 接回时判成 `not-ours`:这个号上
+  // 现在是别人,原来那个退没退证明不了。`fresh:false` 这一档不许下刀,所以进程留着,正好。
+  const shifted = row.pidStartedAt!.replace(/(\d{2}):(\d{2}):(\d{2})/,
+    (_m, h, mi, se) => `${h}:${mi}:${String((Number(se) + 1) % 60).padStart(2, "0")}`);
+  assert.notEqual(shifted, row.pidStartedAt, "台子前提:换成了另一个时刻");
+  await db.update(monitors).set({ pidStartedAt: shifted }).where(eq(monitors.id, row.id));
+  assert.equal(reclaimState(pid, shifted), "not-ours", "台子前提:这一档确实是 not-ours");
+  detachAllMonitors();   // = server 进程没了
+
+  // 债表这一刻写不进去(真触发器,不替换产品里的任何函数)⇒ verdict = unaccounted。
+  await dbClient.execute("CREATE TRIGGER fixture_block_debt BEFORE INSERT ON monitor_reclaim_debts"
+    + " BEGIN SELECT RAISE(ABORT, 'INJECTED_DEBT_INSERT_FAILURE'); END");
+  try {
+    await reattachMonitors();
+  } finally {
+    await dbClient.execute("DROP TRIGGER IF EXISTS fixture_block_debt");
+  }
+  const after = (await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)!;
+  assert.equal(after.status, "lost");
+  assert.equal(await debtRow(row.id), undefined, "台子前提:这一轮责任确实一个字都没落进去");
+  assert.match(after.endedReason ?? "", /回收责任尚未保存/,
+    "卡片上要照实说「还没保存」—— 只在 server 日志里纠正等于没纠正(刷新页面那句肯定还在)");
+  assert.doesNotMatch(after.endedReason ?? "", /已记下回收责任/,
+    "**不许**在责任没落盘的时候说它已经记下了");
+
+  // 清场:这一档不下刀,所以进程还活着 —— 台子自己收掉它,别让它活过这次测试。
+  killTree(pid, "SIGKILL");
+  await until("顽固进程被收掉", async () => !isProcessGroupAlive(pid));
+  await db.delete(schema.monitorReclaimDebts).where(eq(schema.monitorReclaimDebts.monitorId, row.id));
+}
+
 await teardown();
-console.log("✓ 撤销期不许创建 / 枚举失败整笔不走 / 停止返回前确认退出或留下持久回收责任 / 接回问同一份出口资格 / 点停也走记责那一圈 / 删除按资源责任核对而非卡片状态 / 另一个进程与问不出来分档记责、都不下刀 / 组长退出按整组收 / 开机重收「已停止但没确认退出」/ ps 不可用时接回不撒谎、删除不丢责任、恢复后收掉 / 落盘失败走补记梯子 / 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」");
+console.log("✓ 撤销期不许创建 / 枚举失败整笔不走 / 停止返回前确认退出或留下持久回收责任 / 接回问同一份出口资格 / 点停也走记责那一圈 / 删除按资源责任核对而非卡片状态 / 另一个进程与问不出来分档记责、都不下刀 / 组长退出按整组收 / 开机重收「已停止但没确认退出」/ ps 不可用时接回不撒谎、删除不丢责任、恢复后收掉 / 落盘失败走补记梯子 / 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说");
