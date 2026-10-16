@@ -35,7 +35,7 @@ import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, tasks } from "./db/schema.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
-import { reclaimState } from "./monitor-reclaim-evidence.js";
+import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
 import { clearSpawnIdentity, readLogTail, readSpawnIdentity, tailLines, type Tailer } from "./monitor-spawn.js";
 import { IS_WINDOWS } from "./platform.js";
 import { processStartedNear } from "./proc.js";
@@ -283,13 +283,12 @@ export async function finish(
   if (dbClient.closed) return;
   const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   if (!row || row.status !== "running") return;
-  // **回收这个进程的责任从这里起**(见文件头第 ③ 条)。`fresh: true` 的依据就是上面那一行
-  // 判断:这一行此刻还是 running,进程是我们自己起的或刚接回的,所以「组长死了、组里还有人」
-  // 这一档也敢下刀 —— 那几个只可能是它的后代。
+  // **回收这个进程的责任从这里起**(见文件头第 ③ 条)。下刀资格由取证层按档位判,这一层
+  // 不再传「刚刚还在我们手上吗」那个开关(第 14 轮审查 F1:四个入口共用同一份判据)。
   //
   // 记账排在**改状态之前**:顺序一反,中间崩一下这一行就成了「显示已停止、责任没人认、
   // pid 线索下一步就被删除抹掉」(第 4、5 轮审查 F1 都是这个现场)。
-  const outcome = await reclaimMonitorProcess(row, reason, { fresh: true });
+  const outcome = await reclaimMonitorProcess(row, reason);
   await db
     .update(monitors)
     .set({ status, endedAt: now(), endedReason: reason, exitCode })
@@ -393,7 +392,7 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
     // 没有任何东西正在消失。留档发生在身份真要被销毁的那一刻 —— 删除/归档走的
     // `accountForLiveProcesses`(第 13 轮审查 F1-B,见 monitor-reclaim.ts)。
     if (row.pid && reclaimState(row.pid, row.pidStartedAt, row) !== "traceless") {
-      const outcome = await reclaimMonitorProcess(row, `${reason}（创建期取消后补收）`, { fresh: true });
+      const outcome = await reclaimMonitorProcess(row, `${reason}（创建期取消后补收）`);
       if (await settleReclaim(outcome) === "unaccounted") {
         console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
       }
@@ -604,13 +603,11 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       attach(row);
       attached += 1;
     } else {
-      // 剩下三档各有各的说法,**不能共用一句话**:`traceless` 线索追空了;`not-ours` 这个号现在是
-      // 别人的(原来那个退没退证明不了);`ours-orphans` 组长退了、组里还有后代。后两档都要
-      // 先把回收责任记下来 —— `fresh: false`,隔了一次重启不敢对孤儿组下刀,这个号可能已经
-      // 被别人当组长用过(判据见 reclaimMonitorProcess 那张表)。
-      const outcome = await reclaimMonitorProcess(
-        { ...row, pid: row.pid! }, "server 重启后它的身份对不上", { fresh: false },
-      );
+        // 剩下几档各有各的说法,**不能共用一句话**(措辞见 `offlineReason`):`traceless` 线索追空
+      // 了;`not-ours` 这个号现在是别人的(原来那个退没退证明不了);`suspected` 文本里还看得见
+      // 这次创建的记号、但证不出在谁身上;`ours-orphans` 组长退了、组里还有后代。除了第一档
+      // 都要先把回收责任记下来(判据见 reclaimMonitorProcess 那张表)。
+      const outcome = await reclaimMonitorProcess({ ...row, pid: row.pid! }, "server 重启后它的身份对不上");
       // **先拿到最终 verdict,再写文案。** 这里不等补刀(deadline 0:只问一次状态,别把开机
       // 吊住),所以把它提到写卡片之前不会让启动变慢 —— 但顺序反过来就会写下一句假话:上一版
       // 无论结果是什么都先把「已记下回收责任」写进卡片,而债表写失败(`unaccounted`)时那句话
@@ -625,15 +622,27 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
         : verdict === "owed"
           ? "；原进程退出未确认，已记下回收责任（开机会再收一次）"
           : "；原进程退出未确认，而回收责任尚未保存（见 server 日志里的 pid，仍在重试落盘）";
-      await finishOffline(row, "lost", state === "traceless"
-        ? "server 重启后这个进程已经不在了（它在停服期间跑完的，拿不到退出码）"
-        : state === "not-ours"
-          ? `server 重启后这个号已经是另一个进程了（原命令在停服期间结束，拿不到退出码）${owing}`
-          : `server 重启后它的组长已经退出、组里还有后代（拿不到退出码）${owing}`);
+      await finishOffline(row, "lost", offlineReason(state, owing));
       lost += 1;
     }
   }
   return { attached, lost };
+}
+
+/**
+ * 接回时判不回来的那几档,各自那一句话。**分开写**是因为它们是不同的事实,而这句话会留在
+ * 卡片上(第 7 轮审查 N1:卡片上的话不许被 server 日志「纠正」)。
+ */
+function offlineReason(state: ReclaimState, owing: string): string {
+  if (state === "traceless") return "server 重启后这个进程已经不在了（它在停服期间跑完的，拿不到退出码）";
+  if (state === "not-ours") {
+    return `server 重启后这个号已经是另一个进程了（原命令在停服期间结束，拿不到退出码）${owing}`;
+  }
+  if (state === "suspected") {
+    return "server 重启后这个号已经不在了，但进程表里还看得见这次创建的资源记号"
+      + `（这台机器只拿得到无边界的 ps 展示文本，证不出它在哪个进程里，所以不敢下刀）${owing}`;
+  }
+  return `server 重启后它的组长已经退出、组里还有后代（拿不到退出码）${owing}`;
 }
 
 /** 只给测试用：把内存里的 tail/定时器全撤了，进程不动。 */

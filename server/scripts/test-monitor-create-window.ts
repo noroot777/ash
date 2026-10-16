@@ -20,7 +20,7 @@
 // ⑭⑯ **补偿自己失败时也得有人接管**(第 10 轮审查 F3、第 12 轮审查 F3):收尾那几笔读写一样会
 //    抛,而抛出去就连收口一起跳过,留下一条 running、无人接管、也没有重试者的行。
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
@@ -30,9 +30,10 @@ import {
   teardown, until,
 } from "./monitors-fixture.js";
 import {
-  assertDebtClosed, dbClient, marker, psCount, withPsOutage,
+  assertDebtClosed, dbClient, debtRow, marker, psCount, withPsOutage,
 } from "./monitor-create-fixture.js";
 import { inspectProcess } from "../src/proc.js";
+import { monitorUnitProofGrade } from "../src/monitor-unit-scan.js";
 
 const { handoverRecoverable, monitorSpawnIdentityPath, spawnMonitor } = await import("../src/monitor-spawn.js");
 const { abandonRegistration } = await import("../src/monitor-create.js");
@@ -425,7 +426,10 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
 //
 // 修在判据这一层:只有「命令从未开工」才敢把根的 exit 当整项资源的证明;开工过的一律交回收圈
 // 按**当前归属证据**处理(整棵树带着的那条资源记号,proc.ts 的 `processUnitEvidence`)——
-// 于是这里的后代真的会被收掉,而不是被一句「已回收」抹掉。
+// 于是这里的后代要么真的被收掉,要么留下一笔「证不出、还在跑」的责任,**绝不会被一句「已回收」
+// 抹掉**。哪一种取决于这台机器上记号这一问答得有多实(第 14 轮审查 F1):真实环境项读得出来
+// (Linux)⇒ 收掉;只拿得到无边界的 ps 展示文本(macOS)⇒ 那段文字签不出杀进程的凭证,所以
+// 照实留责任、不下刀(见 monitor-unit-scan.ts 的 `UnitProofGrade`)。
 {
   const taskId = await makeTask();
   const logPath = join(root, `rooted-${process.pid}.log`);
@@ -452,8 +456,20 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
   const row = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
   const res = await abandonRegistration(row, "台子：根已经先退了", spawned);
   assert.equal(res.ok, false, "撤销就是撤销");
-  await until("**后代也被收掉了** —— 不许只凭根的 exit 就说收干净", async () => psCount(token) === 0);
-  await assertDebtClosed(monId, "后代收掉、线索追空之后才收档");
+  if (monitorUnitProofGrade() === "exact") {
+    await until("**后代也被收掉了** —— 不许只凭根的 exit 就说收干净", async () => psCount(token) === 0);
+    await assertDebtClosed(monId, "后代收掉、线索追空之后才收档");
+  } else {
+    // 这台机器上这一问只答得出「看得见这段文字」。**绝不许就此当成收干净** —— 责任留着、
+    // 不收档,账上写清是哪一种不确定。
+    assert.ok(psCount(token) >= 1, "台子前提:那个后代确实还在跑");
+    const owed = await debtRow(monId);
+    assert.ok(owed, "照记责任:根的 exit 证明不了整项退出,而这一刻证不出归属");
+    assert.equal(owed.closedAt, null, "不许收档:线索还看得见");
+    assert.match(owed.reason, /证不出|记号/, "账上要写清是哪一种不确定");
+    execFileSync("pkill", ["-f", token], { stdio: "ignore" });   // 产品收不掉它,台子自己清
+    await until("后代被台子收掉", async () => psCount(token) === 0);
+  }
 }
 
 // ── ⑭ **补偿自己失败时也得有人接管**(第 10 轮审查 F3)──────────────────────────────

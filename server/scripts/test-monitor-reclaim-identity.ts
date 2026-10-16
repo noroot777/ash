@@ -11,17 +11,23 @@
 //    之后又从这条路绕回了下刀资格;另一面是**补全机会不许丢**:接回那一刻 ps 不可用时只回填
 //    了 pid、启动时刻留空,而那之后再没有人会去读身份边条,于是「这一刻问不出来」被永久固化成
 //    「这条永远证不出身份」。锚(边条 + 债上那一列)和重试要一起留着。
-// ⑧-7…⑧-10 **归属不能从混合 argv 文本推断,而「线索追空」只授权收档**(第 13 轮审查 F1):
-//    `ps -E` 把环境没有分隔符地接在 argv 后面,所以只认整行正则时两面都错 —— 参数里带着这段
-//    文字的陌生进程被当成我们的后代挨刀(⑧-7,审查实测),而 argv 里一段同名文字会遮住环境里
-//    真正的记号、让自己的后代认不出来(⑧-8)。两面是同一个解析歧义,修法是真的把两段切开。
-//    后代还能**同时**甩掉记号和进程组(⑧-9 实测):那一刻三条线索都空,但那只说明「追不下去
-//    了」,所以只许收档、责任行必须活过删除与清扫 —— 它是这次创建最后的可定位身份。每一次
-//    信号也都要有当代的证据:晚两秒那一刀到点先重新取证,证不出就一刀都不发(⑧-10)。
+// ⑧-7…⑧-12 **记号这一问答得有多实,决定它能签发什么**(第 13、14 两轮审查 F1)。`ps -E` 把
+//    环境无分隔地接在 argv 后面,第 13 轮按「两次快照相减切出环境段」修了一版,第 14 轮实测
+//    那仍然不够:**环境段自己也没有边界**,别的变量的**值**里写着 `ASH_MONITOR_UNIT=<记号>`
+//    就足以让一个毫不相干的进程挨刀(⑧-11,审查实测 `risk.log:1`)。
+//    所以证据分两档(`monitorUnitProofGrade`):Linux 的 `/proc/<pid>/environ` 是 NUL 分隔的
+//    真实环境项 ⇒ `exact`,可以签发下刀凭证;macOS 只有展示文本 ⇒ `ambiguous`,**只授权
+//    「不许说已经没了」**。两档下这几条的事实不同,台子就照各自的事实钉 —— 不拿一档的结论
+//    去冒充另一档(⑧-4、⑧-5、⑧-7、⑧-8、⑩-8 都按 grade 分支)。
+//    后代还能**同时**甩掉记号和进程组(⑧-9 实测):那一刻所有线索都空,但那只说明「追不下去
+//    了」,所以只许收档、责任行必须活过删除与清扫 —— 它是这次创建最后的可定位身份;而**留档
+//    自己失败时不许放行销毁**(⑧-12,第 14 轮审查 F2 实测)。每一次信号也都要有当代的证据:
+//    晚两秒那一刀到点先重新取证,证不出就一刀都不发(⑧-10)。
 // ⑧-3…⑧-6 **凭证只能是每次创建独有的那条资源记号**(第 12 轮审查 F1)。时刻对不上、命令原文
 //    对得上(整串相等、或者记录的是实际命令的前缀)——这些**一律不构成归属**,两次创建完全
-//    可以合法地跑同一条命令;反过来,记号认得出来的后代**隔了一次重启也照收**(`fresh` 那把
-//    锁只管「没有记号」那一种)。整项退出同样只认记号:根退了、进程组也空了,带记号的后代仍
+//    可以合法地跑同一条命令;反过来,**真实环境项**里认得出来的后代**隔了一次重启也照收**
+//    (第 14 轮去掉了那把 `fresh` 锁:它唯一还想收口的「存量行孤儿组」在取证层根本到不了
+//    可下刀的那一档)。整项退出同样只认记号:根退了、进程组也空了,带记号的后代仍
 //    可能在另一个会话里跑着(⑧-5),而命令自己把环境清掉时记号问不着、那也不等于它退了
 //    (⑧-6)—— POSIX 上「线索追空」(`traceless`)要两份独立证据,而且它**只授权收档,不授权
 //    删掉最后那行身份**(第 13 轮审查 F1-B)。
@@ -44,15 +50,25 @@ import {
 } from "./monitors-fixture.js";
 import { STUBBORN, assertDebtClosed, debtRow, withPsOutage } from "./monitor-reclaim-fixture.js";
 import { inspectProcess, processUnitEvidence } from "../src/proc.js";
+import { monitorUnitProofGrade } from "../src/monitor-unit-scan.js";
 import { monitorSpawnIdentityPath } from "../src/monitor-spawn.js";
 
 const { stopMonitorsForTask } = await import("../src/monitor-reclaim.js");
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 const { killProvenUnit, reclaimState } = await import("../src/monitor-reclaim-evidence.js");
-const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
+const { isProcessGroupAlive, killOne, killTree } = await import("../src/platform.js");
 const { invalidateMonitorUnitScan } = await import("../src/monitor-unit-scan.js");
 const { dbClient } = await import("../src/db/index.js");
+
+/**
+ * **这台机器上记号这一问能不能签发下刀凭证**(见 monitor-unit-scan.ts 的 `UnitProofGrade`)。
+ *
+ * `exact`(Linux)= 真实环境项读得出来 ⇒ 认得出自己的孤儿后代,也收得掉;
+ * `ambiguous`(macOS)= 只有无边界展示文本 ⇒ 只证得出「可能还有残留」,照实留责任、不下刀。
+ * 两档都要钉:**不许在 macOS 上假装有 Linux 的结论,也不许因为 macOS 收不掉就不要那条能力。**
+ */
+const EXACT_MARKS = monitorUnitProofGrade() === "exact";
 
 /**
  * 另一副台子:**ps 答得出来,但每一次调用都记一笔**,而且可以切成「奇数次正常、偶数次失败」
@@ -339,14 +355,29 @@ const zhLstart = (lstart: string): string => {
   const pid = leader.pid!;
   await until("组长退干净、带记号的后代还在", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
   assert.equal(reclaimState(pid, "Mon Jan  1 00:00:00 2001", { unitToken, command: "毫不相干" }),
-    "ours-orphans", "记号认得出来 ⇒ 归属已证明,对不上的时刻和命令都不参与这一判");
+    EXACT_MARKS ? "ours-orphans" : "suspected",
+    EXACT_MARKS
+      ? "真实环境项里读到记号 ⇒ 归属已证明,对不上的时刻和命令都不参与这一判"
+      : "只有展示文本 ⇒ 只到「看得见这次创建的记号」这一档:不敢下刀,但绝不许当成已经退出");
 
-  // `status: "stopped"` ⇒ 这一行走的是 `fresh: false`(见 monitor-reclaim.ts 的 `fresh` 注释)。
   const monId = await insertMonitorRow(taskId, { status: "stopped", pid, pidStartedAt: null, unitToken });
   await stopMonitorsForTask(taskId, "任务已删除", "destroy");
-  await until("带记号的后代被收掉（TERM 之后两秒那把 KILL）", async () => !isProcessGroupAlive(pid), 20_000);
-  await sweepMonitorReclaimDebts();   // 线索追空可能慢到上一步之后,收档由梯子补上
-  await assertDebtClosed(monId, "带记号的后代收掉、线索追空之后才收档");
+  if (EXACT_MARKS) {
+    await until("带记号的后代被收掉（TERM 之后两秒那把 KILL）", async () => !isProcessGroupAlive(pid), 20_000);
+    await sweepMonitorReclaimDebts();   // 线索追空可能慢到上一步之后,收档由梯子补上
+    await assertDebtClosed(monId, "带记号的后代收掉、线索追空之后才收档");
+  } else {
+    // **这是本平台的真实边界,照实钉住**(第 14 轮审查 F1):展示文本签不出杀进程的凭证,
+    // 所以这一档只能留责任 —— 而责任和身份一个都不许少,也不许盖上「追到此为止」的戳。
+    assert.equal(isProcessGroupAlive(pid), true, "证不出归属 ⇒ 一刀都不许下");
+    await sweepMonitorReclaimDebts();
+    const debt = await debtRow(monId);
+    assert.ok(debt, "照记责任:证不出归属恰恰最该留责任");
+    assert.equal(debt.closedAt, null, "而且不许收档:线索还看得见,远没有追空");
+    assert.match(debt.reason, /证不出|记号/, "账上要说清是哪一种不确定");
+    killTree(pid, "SIGKILL");   // 产品收不掉它,台子自己清
+    await until("后代被台子收掉", async () => !isProcessGroupAlive(pid));
+  }
 }
 
 {
@@ -370,17 +401,26 @@ const zhLstart = (lstart: string): string => {
   const escaped = Number(readFileSync(childPidFile, "utf8"));
   assert.equal(isPidAlive(escaped), true, "台子前提:跑掉的那条后代还活着");
 
-  assert.equal(reclaimState(pid, null, { unitToken }), "ours-orphans",
-    "记号还答得出来 ⇒ 整项资源没退,绝不许落到「线索已空」(收档 + 撤锚就是从这里出去的)");
+  assert.equal(reclaimState(pid, null, { unitToken }), EXACT_MARKS ? "ours-orphans" : "suspected",
+    "记号还看得见 ⇒ 整项资源没退,绝不许落到「线索已空」(收档 + 撤锚就是从这里出去的)");
   // 同一幕里的**存量行**只能看到「号没了、组也空了」—— 这正是记号补上的那一块,照实钉住。
   assert.equal(reclaimState(pid, null, { unitToken: null }), "traceless",
     "没有记号时这一幕确实判不出区别:它说明的是存量行的盲区,不是这一档可以放过有记号的行");
 
   const monId = await insertMonitorRow(taskId, { status: "stopped", pid, pidStartedAt: null, unitToken });
   await stopMonitorsForTask(taskId, "任务已删除", "destroy");
-  await until("跑掉的后代也要被收掉", async () => !isPidAlive(escaped), 20_000);
-  await sweepMonitorReclaimDebts();
-  await assertDebtClosed(monId, "跑掉的后代收掉之后才收档");
+  if (EXACT_MARKS) {
+    await until("跑掉的后代也要被收掉", async () => !isPidAlive(escaped), 20_000);
+    await sweepMonitorReclaimDebts();
+    await assertDebtClosed(monId, "跑掉的后代收掉之后才收档");
+  } else {
+    assert.equal(isPidAlive(escaped), true, "展示文本签不出下刀凭证 ⇒ 一刀都不许下");
+    await sweepMonitorReclaimDebts();
+    const debt = await debtRow(monId);
+    assert.ok(debt && !debt.closedAt, "责任留着、不收档:它是这条命令唯一还能被找到的方式");
+    killOne(escaped, "SIGKILL");   // 产品收不掉它,台子自己清
+    await until("跑掉的后代被台子收掉", async () => !isPidAlive(escaped));
+  }
 }
 
 {
@@ -393,9 +433,10 @@ const zhLstart = (lstart: string): string => {
   //    `actualEnvironmentContainsUnit=false`、`evidence={"verdict":"ours"}`、
   //    `foreignAliveAfter=false`)。
   //
-  //    修法不是「再加一条字符串排除规则」,而是**真的把两段切开**:先取带环境的快照,再取
-  //    只有 argv 的那份,argv 文本逐字是前者的前缀 ⇒ 相减就是环境段,记号只在环境段上找
-  //    (见 monitor-unit-scan.ts 的 `scanViaPs`)。
+  //    第 13 轮的修法是「把两段切开」(两次快照相减);第 14 轮实测环境段自己也没有边界,所以
+  //    现在按**证据等级**分:`exact`(真实环境项)这一档 argv 里的文字一个字都不算 ⇒ 这一问
+  //    答「没找到」;`ambiguous`(只有展示文本)这一档照实答「看得见」⇒ `suspected`。
+  //    **两档的共同结论是同一句:一刀都不许下。**
   const taskId = await makeTask({ status: "done" });
   const unitToken = `unit-argvtext-${process.pid}-${Date.now()}`;
   // 记号**只**出现在那个陌生进程的参数里:环境被换成只有 PATH 的一份。
@@ -408,10 +449,13 @@ const zhLstart = (lstart: string): string => {
   const pid = stranger.pid!;
   await until("陌生进程起来了、它的组长也退干净了",
     async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
-  assert.equal(processUnitEvidence(unitToken, { fresh: true }).verdict, "none",
-    "**argv 段里的记号一个字都不算** —— 这一问必须答「没找到」");
-  assert.equal(reclaimState(pid, null, { unitToken }), "unverifiable",
-    "于是这一幕只能落在「证不出」:组里有人,但证不出他们是这一次创建的");
+  assert.equal(processUnitEvidence(unitToken, { fresh: true }).verdict,
+    EXACT_MARKS ? "none" : "suspected",
+    EXACT_MARKS
+      ? "**argv 段里的记号一个字都不算** —— 真实环境项里没有这一项,这一问必须答「没找到」"
+      : "展示文本切不出真实环境项 ⇒ 只能答「看得见」,**而它不是凭证**");
+  assert.equal(reclaimState(pid, null, { unitToken }), EXACT_MARKS ? "unverifiable" : "suspected",
+    "两档都只能落在「证不出」:有进程在,但证不出他们是这一次创建的");
 
   // 端到端走审查实测的那个入口:对一条非运行态的行再点一次停止。
   const monId = await insertMonitorRow(taskId, {
@@ -432,8 +476,8 @@ const zhLstart = (lstart: string): string => {
   //
   //    上一版那条正则取的是整行里**第一个**匹配,而 argv 排在环境前面 —— 所以只要命令的参数
   //    里有一段 `ASH_MONITOR_UNIT=...`,自己的后代就会被读成「另一个记号的成员」,这一次创建
-  //    于是「一个成员都找不到」⇒ 假的「线索已空」。两面是同一个解析歧义,所以也由同一个修法
-  //    (切出环境段)一起钉住。
+  //    于是「一个成员都找不到」⇒ 假的「线索已空」。这一半由「一行里出现几次全收」(全局匹配)
+  //    修掉,两档都成立;「假记号算不算成员」那一半由证据等级分档(第 14 轮审查 F1)。
   const unitToken = `unit-realenv-${process.pid}-${Date.now()}`;
   const decoy = `unit-decoy-${process.pid}-${Date.now()}`;
   const leader = spawn(
@@ -445,10 +489,17 @@ const zhLstart = (lstart: string): string => {
   const pid = leader.pid!;
   await until("组长退干净、带真记号的后代还在",
     async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
-  assert.equal(reclaimState(pid, null, { unitToken }), "ours-orphans",
+  // **两档共同的那一条**:真记号不许被假的遮住(上一版那条正则只取整行第一个匹配,假记号
+  // 排在前面就把真的吃掉了 —— 现在是全局匹配,一行里出现几次全收)。
+  assert.notEqual(processUnitEvidence(unitToken, { fresh: true }).verdict, "none",
     "**环境里的真记号必须认得出来** —— argv 里那段假的不许把它遮住");
-  assert.equal(processUnitEvidence(decoy, { fresh: true }).verdict, "none",
-    "而那段假记号自己一个成员都不算:它在 argv 段里");
+  assert.equal(reclaimState(pid, null, { unitToken }), EXACT_MARKS ? "ours-orphans" : "suspected",
+    "真记号认出来之后:精确档可以下刀,展示文本档只到「证不出」");
+  assert.equal(processUnitEvidence(decoy, { fresh: true }).verdict,
+    EXACT_MARKS ? "none" : "suspected",
+    EXACT_MARKS
+      ? "而那段假记号在真实环境项里一个成员都不算:它只出现在 argv 里"
+      : "展示文本档里假记号也只能算「看得见」—— 它同样签不出任何凭证");
 
   killTree(pid, "SIGKILL");   // 测试自己收场
   await until("后代被收掉", async () => !isProcessGroupAlive(pid));
@@ -531,16 +582,15 @@ const zhLstart = (lstart: string): string => {
   //    它那一刀是无条件的)。两秒里那个进程可以退出、它的号可以被别人接手 —— 于是一次性的
   //    授权被存成了永久授权。现在到点先 `fresh` 重新取证,**证不出就一刀都不发**。
   //
-  //    现场:一个陌生组(组长已退、组里还有人),拿一个谁都对不上的记号去走这条补刀路径。
-  //    第一刀按传进来的证据发(`unitPids` 为空 ⇒ 什么都不发),补刀那一下重新取证只能得到
-  //    「证不出」⇒ 同样什么都不发。整三秒之后那一组必须一个不少。
+  //    现在连第一刀都由这个入口自己取证(第 14 轮审查 F1:外面不许把快照攒着跨 `await` 再
+  //    传进来)。现场:一个陌生组(组长已退、组里还有人),拿一个谁都对不上的记号走这条路 ——
+  //    两刀各自取证,各自只能得到「证不出」⇒ 一刀都不发。整三秒之后那一组必须一个不少。
   const stranger = spawn("sh", ["-lc", `(${STUBBORN}) & exit 0`], { detached: true, stdio: "ignore" });
   stranger.unref();
   const pid = stranger.pid!;
   await until("陌生组起来了、组长退干净", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
 
-  killProvenUnit(pid, null, { unitToken: `unit-nobody-${pid}` },
-    { state: "ours-orphans", unitPids: [] });
+  killProvenUnit(pid, null, { unitToken: `unit-nobody-${pid}` });
   await new Promise((r) => setTimeout(r, 3_000));   // 跨过 +2 秒那一刀
   assert.equal(isProcessGroupAlive(pid), true,
     "**没有当代证据就一刀都不发** —— 补刀不许拿闭包里的裸 pid 当永久授权");
@@ -613,4 +663,4 @@ const zhLstart = (lstart: string): string => {
 }
 
 await teardown();
-console.log("✓ 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说 / 身份不全只留「证不出」:记责、不下刀,补全后才收 / 孤儿组没代次、或者只有一个对不上的旧时刻都不下刀 / 陌生组的命令同名、前缀、完全不同都不下刀 / 带记号的孤儿后代隔了重启也照收 / 根退组空但后代带记号时不许收档 / argv 里的记号文字既不授权下刀也不遮住环境里的真记号 / 环境被清掉只留「证不出」/ 追空只收档、责任行活过删除与清扫 / 补刀没有当代证据就一刀不发 / 锚与边条留到收档,恢复后补全身份才动手 均受回归保护");
+console.log("✓ 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说 / 身份不全只留「证不出」:记责、不下刀,补全后才收 / 孤儿组没代次、或者只有一个对不上的旧时刻都不下刀 / 陌生组的命令同名、前缀、完全不同都不下刀 / 带记号的孤儿后代:真实环境项那一档隔了重启也照收,只有展示文本那一档留责任不下刀 / argv 里的记号文字既不授权下刀也不遮住环境里的真记号 / 环境被清掉只留「证不出」/ 追空只收档、责任行活过删除与清扫 / 补刀没有当代证据就一刀不发 / 锚与边条留到收档,恢复后补全身份才动手 均受回归保护");

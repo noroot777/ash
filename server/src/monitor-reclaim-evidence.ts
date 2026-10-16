@@ -45,13 +45,31 @@
 // 不授权删行:留下的那一行是这次创建最后的可定位身份(命令、pid、记号、为什么追不下去)。
 // 唯一真的证明过的那一档在别处:命令**从未开工**(放行闸没开),见 monitor-create.ts。
 //
-// ── 每一次信号都要有**当代**的证据(第 13 轮审查 F1-C)────────────────────────────
+// ── 每一次信号都要有**当代**的证据(第 13 轮审查 F1-C、第 14 轮审查 F1)─────────────
 //
 // 一次取证不是永久授权:闭包里存一个裸 pid、两秒后直接补刀,这两秒里那个进程可以退出、
-// 号可以被别人接手。所以 `killProvenUnit` 的补刀、`settleDebt` 的债务重收都要 `fresh` 再
-// 取一次证,只对仍然证明得出来的落点动手;一个都证不出就什么都不发。
-import { IS_WINDOWS, isPidAlive, isProcessGroupAlive, killOne, killTree } from "./platform.js";
-import { processIdentity, processUnitEvidence } from "./proc.js";
+// 号可以被别人接手。所以**发信号的入口自己取证**(`killProvenUnit`、`shootProvenUnitNow`):
+// 取证和下刀在同一个同步段里完成,外面不许把一份 `ReclaimEvidence` 攒着跨 `await` 再传进来
+// (上一版就是那样:fresh 取证 → await 落债 → 拿原快照下刀)。
+//
+// 真要跨等待的只有一样 —— TERM 之后两秒那一刀。那一下的落点是**第一刀那一刻记下的成员名单,
+// 连代次一起**(`HeldMember`):到点先拿 pid + 启动时刻核一遍,代次变了就说明这个号已经不是
+// 它了,一刀都不发。这样「两秒里 pid 不会被复用」这种推断就完全不必出现在授权链里。
+//
+// ── 归属凭证分「真实环境项」和「展示文本」两档(第 14 轮审查 F1)────────────────────
+//
+// 记号这条线索在两个平台上**答得实不实不一样**(实测见 monitor-unit-scan.ts 的
+// `MONITOR_UNIT_ENV`):Linux 的 `/proc/<pid>/environ` 是 NUL 分隔的真实环境项,精确可答;
+// macOS 的 `ps -E` 只给无边界展示文本,**任何变量的值里都能包含 `ASH_MONITOR_UNIT=<记号>`
+// 这段文字**,审查据此让一个毫不相干的诊断进程挨了刀。
+//
+// 所以这一层把两档分开:`ours`(真实环境项)签发下刀凭证;`suspected`(只看见文字)只授权
+// 「不许说已经没了」。macOS 上因此**少了一项能力**:跨重启认回「甩掉进程组、但还带着记号的
+// 后代」做不到了 —— 那一档照实落 `suspected`:留责任、留身份、如实说证不出,不下刀。
+import {
+  IS_WINDOWS, isPidAlive, isProcessGroupAlive, killOne, killTree, processGroupMembersSync,
+} from "./platform.js";
+import { processIdentity, processUnitEvidence, type UnitMember } from "./proc.js";
 
 /**
  * 这一条此刻处在哪一档。**每一档只声称那一问真的答出来的东西。**
@@ -69,7 +87,11 @@ import { processIdentity, processUnitEvidence } from "./proc.js";
  * - `not-ours` = 这个号现在是**另一个**进程(ps 答出来了,启动时刻**确实**对不上;locale 不同
  *   由 `processIdentity` 在同一份快照上的时间戳比较兜住,不会被误报成这一档)。不许杀 —— 那是别人的进程。
  *
- * 剩下这三档**都不许据此收档**(也都不许下刀):
+ * 剩下这四档**都不许据此收档**(也都不许下刀):
+ * - `suspected` = **进程表的展示文本里看得见这次创建的记号,但这个平台切不出真实环境项边界**
+ *   (macOS 的 `ps -E`,见 monitor-unit-scan.ts 的实测)。那段文字可能来自某个变量的值、也可能
+ *   来自 argv,所以它证不出「谁是我们的」——**但它足以推翻「已经没了」**。于是这一档是最保守
+ *   的那一种:不下刀、不收档、责任留着、账上写明是哪一种不确定(第 14 轮审查 F1)。
  * - `unknown` = **身份这一问自己失败了**:`kill(pid,0)` 说它活着,ps 却什么都答不出来
  *   (`inspectProcess` 把「不存在」和「ps 不可用」都返回 null)。拿它当「已经退了」就是把
  *   最后那一份责任丢掉(第 4 轮审查 F1),拿它当「不是我们的」就是在界面上撒谎
@@ -84,7 +106,8 @@ import { processIdentity, processUnitEvidence } from "./proc.js";
  *   **记下来的理由**和日志措辞,不在于要不要负责(`stateNote` 按档各说一句)。
  */
 export type ReclaimState =
-  | "traceless" | "ours-alive" | "ours-orphans" | "not-ours" | "unverifiable" | "unknown";
+  | "traceless" | "ours-alive" | "ours-orphans"
+  | "not-ours" | "suspected" | "unverifiable" | "unknown";
 
 /**
  * 「线索都答出来了,而且都是空的」—— **这一档可以收档,但它不叫「整项退出已证明」**
@@ -149,11 +172,17 @@ export type MonitorUnit = {
   command?: string | null;
 };
 
-/** 判完这一档手里有的全部东西:档位,以及**已经证明属于这次创建的那几个进程**。 */
+/** 判完这一档手里有的全部东西:档位,以及**已经证明属于这次创建的那几个成员(带代次)**。 */
 export type ReclaimEvidence = {
   state: ReclaimState;
-  /** 下刀的落点。只有 `ours-*` 这两档非空,而且只在记号证明得出来时非空。 */
-  unitPids: number[];
+  /**
+   * 下刀的落点。**只有「真实环境项里读到记号」那一档非空**(`ours-*`)—— 展示文本那一档
+   * (`suspected`)一个落点都不给,存量行(没有记号)走到 `ours-alive` 时也是空的,那一档的
+   * 归属由根自己的 pid + 启动时刻证明,落点是整组。
+   *
+   * 每个成员都带着**代次**:这份证据一旦跨过 `await` 就要先核代次再发信号(见 `shootHeld`)。
+   */
+  members: UnitMember[];
 };
 
 /**
@@ -161,15 +190,16 @@ export type ReclaimEvidence = {
  *
  * 判的顺序就是证据的强弱顺序:
  *
- * ① **记号这一问**(`processUnitEvidence`,只读环境段):带着它的进程还在不在。
- *    还在 ⇒ 归属已证明,`unitPids` 就是那几个。根(记录的那个 pid)也在里面且活着就是
- *    `ours-alive`(可以打整组,覆盖这一刻之后新派生的后代);根已经不在就是 `ours-orphans`,
- *    这一档**下刀只打证明过的那几个成员**:这个号此刻可能已经是别人的组长。
+ * ① **记号这一问**(`processUnitEvidence`):真实环境项里读到了(`ours`)⇒ 归属已证明,
+ *    `members` 就是那几个。根(记录的那个 pid)也在里面且活着就是 `ours-alive`(可以打整组,
+ *    覆盖这一刻之后新派生的后代);根已经不在就是 `ours-orphans`,这一档**下刀只打证明过的
+ *    那几个成员**:这个号此刻可能已经是别人的组长。
  *
- * ② **根自己那一代**:记号找不着或答不出来时,根还活着的话它的代次仍然可判
+ * ② **根自己那一代**:记号找不着、只看见文字、或者答不出来时,根还活着的话它的代次仍然可判
  *    (`processIdentity`:pid + 启动时刻)。这一档照旧可判、可下刀。
  *
  * ③ **根也已经退了** —— 这时才轮到「整项退出」这一问,而它要求**每条线索都答出来**:
+ *    · 展示文本里看得见记号(`suspected`)⇒ 证不出谁是我们的,但足以推翻「已经没了」;
  *    · 记号这一问没答出来(win32 读不到别的进程的环境块、ps/`/proc` 失败、存量行没有记号
  *      且组里还有人)⇒ `unknown` / `unverifiable`:什么都不许声称;
  *    · 记号找不着、进程组也空了 ⇒ `traceless`。**注意它的含义**:是「线索追到这里为止」,
@@ -177,70 +207,120 @@ export type ReclaimEvidence = {
  *      所以这一档只允许收档,不允许把责任行删掉(见 `isTracelessState`、`closeReclaimDebt`)。
  *
  * `fresh` = 这次取证要用来发信号:授权必须是当代的,不许来自 400ms 的旧快照
- * (第 13 轮审查 F1-C)。
+ * (第 13 轮审查 F1-C)。**要发信号的调用方不要自己拿这个函数的结果去发** —— 用
+ * `killProvenUnit` / `shootProvenUnitNow`,它们自己取证,证据不出同步段。
  */
 export function reclaimEvidence(
   pid: number, pidStartedAt: string | null, unit: MonitorUnit, opts: { fresh?: boolean } = {},
 ): ReclaimEvidence {
   const evidence = processUnitEvidence(unit.unitToken, opts);
   if (evidence.verdict === "ours") {
-    const leaderHeld = isPidAlive(pid) && evidence.pids.includes(pid);
-    return { state: leaderHeld ? "ours-alive" : "ours-orphans", unitPids: evidence.pids };
+    const leaderHeld = isPidAlive(pid) && evidence.members.some((m) => m.pid === pid);
+    return { state: leaderHeld ? "ours-alive" : "ours-orphans", members: evidence.members };
   }
-  if (isPidAlive(pid)) return { state: stateOfIdentity(identityOf(pid, pidStartedAt)), unitPids: [] };
+  if (isPidAlive(pid)) return { state: stateOfIdentity(identityOf(pid, pidStartedAt)), members: [] };
   // 根已经不在了。
+  if (evidence.verdict === "suspected") {
+    // 文本里还看得见这次创建的记号。证不出是哪个进程(所以不下刀),但**也绝不许收档**。
+    return { state: "suspected", members: [] };
+  }
   if (evidence.verdict === "unprovable") {
     // 存量行(没有记号)在 POSIX 上还剩进程组这一条线索:组空了也只是「线索到此为止」。
     if (!unit.unitToken && !IS_WINDOWS) {
-      return { state: isProcessGroupAlive(pid) ? "unverifiable" : "traceless", unitPids: [] };
+      return { state: isProcessGroupAlive(pid) ? "unverifiable" : "traceless", members: [] };
     }
-    return { state: "unknown", unitPids: [] };
+    return { state: "unknown", members: [] };
   }
-  if (!IS_WINDOWS && isProcessGroupAlive(pid)) return { state: "unverifiable", unitPids: [] };
-  return { state: "traceless", unitPids: [] };
+  if (!IS_WINDOWS && isProcessGroupAlive(pid)) return { state: "unverifiable", members: [] };
+  return { state: "traceless", members: [] };
 }
 
-/** 只问档位的那些调用方(探活、过滤、日志)用这个投影;要下刀的必须用 `reclaimEvidence`。 */
+/** 只问档位的那些调用方(探活、过滤、日志)用这个投影;要下刀的用下面那两个入口。 */
 export function reclaimState(pid: number, pidStartedAt: string | null, unit: MonitorUnit): ReclaimState {
   return reclaimEvidence(pid, pidStartedAt, unit).state;
 }
 
+/** 这一档敢不敢下刀。**只有归属已证明的那两档敢**,其余五档一刀都不发。 */
+const canShoot = (state: ReclaimState): boolean => state === "ours-alive" || state === "ours-orphans";
+
 /**
- * 下刀的落点:**只打这一刻证明过属于这一次创建的那些进程**。
+ * 下刀:**TERM,两秒后再确认一遍补 KILL** —— 两刀各自有自己的当代证据。
  *
- * · 根自己带着记号、而且还活着 ⇒ 打整组(`killTree`:组信号覆盖「这一刻之后它又派生出来的」
- *   那些,逐个打成员覆盖不到)。它活着就说明这个组号不可能已经是别人的。
+ * · 第一刀前自己 `fresh` 取证(不接外面攒着的快照:上一版那条路是「取证 → await 落债 → 拿原
+ *   快照下刀」,数据库等待期间成员可以退出、号可以被接手,第 14 轮审查 F1 指的就是这一下);
+ * · 组长自己证明过、而且还活着 ⇒ 打整组(`killTree`:组信号覆盖「这一刻之后它又派生出来的」
+ *   那些),同时把**这一组的成员连代次一起记下来**(`processGroupMembersSync`);
  * · 根已经不在(孤儿后代)⇒ **逐个打证明过的成员本身**,绝不打组:成员的 pgid 是那个已经死掉
- *   的根的号,`kill(-member)` 打的是「组号恰好等于这个成员 pid」的另一组
- *   (第 12 轮审查 F1-A 实测被杀掉的就是那种组)。
- * · 存量行(没有记号)走到 `ours-alive` 时 `unitPids` 是空的,落点仍是组 —— 那一档的归属由
- *   根自己的 pid + 启动时刻证明,跟旧版逐字一致。
+ *   的根的号,`kill(-member)` 打的是「组号恰好等于这个成员 pid」的另一组(第 12 轮审查 F1-A
+ *   实测被杀掉的就是那种组);
+ * · 两秒后那一刀:**先重新取证**(覆盖这两秒里新派生的),再把第一刀那会儿记下的成员名单
+ *   拿代次核一遍补上 —— 外层壳被 TERM 收走之后,组里那个忽略 TERM 的后代正是这样收掉的
+ *   (`executors/spawn.ts` 的补刀注释说的是同一件事)。**代次对不上就一刀都不发**。
  *
- * **补刀那一下重新取证**(第 13 轮审查 F1-C):上一版的 +2 秒闭包握着裸 pid 就直接 SIGKILL,
- * 等于把一次性的授权存成了永久授权 —— 两秒里那个进程可以退出、号可以被别人接手。所以这里
- * 到点先 `fresh` 再问一遍,**只对仍然证明得出来的落点补刀**;一个都证不出就什么都不发。
- * 也因此这一层不再借用 `executors/spawn.ts` 的 `killByPid`:它的 +2 秒那一刀是无条件的。
+ * 也因此这一层不借用 `executors/spawn.ts` 的 `killByPid`:它的 +2 秒那一刀是无条件的。
  */
-export function killProvenUnit(
-  pid: number, pidStartedAt: string | null, unit: MonitorUnit, evidence: ReclaimEvidence,
-): void {
-  shootProvenUnit(pid, evidence, "SIGTERM");
+export function killProvenUnit(pid: number, pidStartedAt: string | null, unit: MonitorUnit): void {
+  const first = reclaimEvidence(pid, pidStartedAt, unit, { fresh: true });
+  if (!canShoot(first.state)) return;
+  // 组长活着 ⇒ 这一组的成员都是它的(外人只能从同一个会话里 setpgid 进来,而那个会话的头
+  // 正是这条哨兵)。名单留给两秒后那一刀,所以必须连代次一起拿。
+  const held: UnitMember[] = first.state === "ours-alive"
+    ? processGroupMembersSync(pid) ?? first.members
+    : first.members;
+  shootProvenUnit(pid, first, "SIGTERM");
   const t = setTimeout(() => {
-    // 重新取证:这两秒里谁退了、号被谁接手了,只有现在问才算数。
+    // 重新取证:这两秒里谁退了、号被谁接手了、又新派生了谁,只有现在问才算数。
     const again = reclaimEvidence(pid, pidStartedAt, unit, { fresh: true });
-    if (again.state !== "ours-alive" && again.state !== "ours-orphans") return;
-    shootProvenUnit(pid, again, "SIGKILL");
+    if (canShoot(again.state)) shootProvenUnit(pid, again, "SIGKILL");
+    // 再补上第一刀那会儿的成员:它们的归属在那一刻证明过,**代次没变才打**。
+    const done = new Set(again.members.map((m) => m.pid));
+    if (again.state === "ours-alive") done.add(pid);
+    shootHeld(held.filter((m) => !done.has(m.pid)), "SIGKILL");
   }, 2_000);
   (t as { unref?: () => void }).unref?.();
 }
 
-/** 发这一刀:组信号只在「根自己证明过、而且还活着」时发,否则只打证明过的成员本身。 */
-export function shootProvenUnit(pid: number, evidence: ReclaimEvidence, sig: NodeJS.Signals): void {
-  if (evidence.state === "ours-alive" && (!evidence.unitPids.length || evidence.unitPids.includes(pid))) {
+/**
+ * 只发一刀,**自己取证**。给「第一刀早就发过了、现在只想补一把 SIGKILL」的那条路用
+ * (债务重收:见 monitor-reclaim-debts.ts 的 `settleDebt`)。返回这一刀有没有发出去。
+ *
+ * 为什么不让调用方传证据进来:那条路上取证和下刀之间隔着 `completeIdentity` 等几次 `await`
+ * (第 14 轮审查 F1)。取证留在这个函数里,就没有「可跨等待复用的裸 pid」这种东西了。
+ */
+export function shootProvenUnitNow(
+  pid: number, pidStartedAt: string | null, unit: MonitorUnit, sig: NodeJS.Signals,
+): boolean {
+  const evidence = reclaimEvidence(pid, pidStartedAt, unit, { fresh: true });
+  if (!canShoot(evidence.state)) return false;
+  shootProvenUnit(pid, evidence, sig);
+  return true;
+}
+
+/**
+ * 发这一刀。**只许拿同一个同步段里刚取到的证据调**(所以不导出):组信号只在「根自己证明过、
+ * 而且还活着」时发,否则只打证明过的成员本身。
+ */
+function shootProvenUnit(pid: number, evidence: ReclaimEvidence, sig: NodeJS.Signals): void {
+  if (evidence.state === "ours-alive" && (!evidence.members.length || evidence.members.some((m) => m.pid === pid))) {
     killTree(pid, sig);
     return;
   }
-  for (const member of evidence.unitPids) killOne(member, sig);
+  for (const member of evidence.members) killOne(member.pid, sig);
+}
+
+/**
+ * 发给**之前那一刻记下的成员**:每一个都先拿代次核过才打。
+ *
+ * 这是「跨等待」唯一允许的下刀形状(第 14 轮审查 F1):归属在记下它的那一刻证明过,而
+ * `pid + 启动时刻` 相等说明这个号上还是同一代那个进程。核不出代次(当初没拿到启动时刻、
+ * 或者现在 ps 答不出来)一律不发 —— 宁可漏收,也不碰一个证不出身份的号。
+ */
+function shootHeld(held: UnitMember[], sig: NodeJS.Signals): void {
+  for (const member of held) {
+    if (!member.startedAt) continue;
+    if (processIdentity(member.pid, member.startedAt) !== "same") continue;
+    killOne(member.pid, sig);
+  }
 }
 
 /**
@@ -271,6 +351,9 @@ export function stateNote(state: ReclaimState): string {
   if (state === "ours-alive") return "还活着";
   if (state === "ours-orphans") return "起它的那个进程已退、这次创建的后代还在(记号认得出来)";
   if (state === "not-ours") return "这个号现在是另一个进程，原进程退出无法确认";
+  if (state === "suspected")
+    return "进程表里还看得见这次创建的资源记号，但这台机器上只拿得到无边界的展示文本（ps -E 把 argv 和环境拼在一起），"
+      + "证不出它在哪个进程的真实环境里 —— 所以不敢下刀，也绝不当成已经退出（见 monitor-unit-scan.ts 的 UnitProofGrade）";
   if (state === "unverifiable")
     return "这个号上/这一组里还有进程，但证不出它属于这一次创建（没有资源记号或当初没记下启动时刻，不敢下刀）";
   return "资源记号这一问答不出来（Windows 读不到别的进程的环境块，或 ps 不可用），判不出归属，也证不出整项退出";

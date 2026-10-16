@@ -50,15 +50,30 @@
 //    `unaccounted`(该留责任却没留下来)三者互斥,空值不再同时表示「没什么可收」和
 //    「不敢判断」。每个调用点都得把第三种当失败处理 —— 销毁身份那条路整笔中止,其余至少
 //    出声并继续重试落盘。
+//
+// ── 「追空了」和「记下来了」是两件事(第 14 轮审查 F2)─────────────────────────────
+//
+// 第 13 轮把「线索追空」这一档改成了收档留行,但**留档失败被吞掉了**:插入只 `catch` 一句
+// 日志,而追空这一支无论记没记下来都返回 `closed`。于是审查用一条只拒绝这张表的真实 SQLite
+// trigger 注入失败,销毁前核对拿到 `closed`、照样放行,任务和哨兵行一起删掉,后代仍在跑 ——
+// `risk.log:33`:`escapedAliveAfterDeleteAndSweep=true`、`taskRows/monitorRows/debtRows` 全 0。
+//
+// 所以这一层现在分得很清:
+//  · `traceless` 是**资源观测**(能追的线索都空了);
+//  · `accounted` 是**持久记录事实**(账本上有没有这条创建的身份);
+//  · 两者**不许再合成一个 `closed`**。记不下来就返回 `unaccounted`,由调用方按自己的后果
+//    决定 —— 销毁身份那条路整笔中止(行留着、任务留着),普通收尾出声 + 继续重试落盘。
+// 写进去之后还要**回读确认**(`ensureIdentityArchived`):插入那一步报成功也可能被约束/触发器
+// 悄悄挡掉,而这一行是最后一份可定位身份。
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { monitorReclaimDebts, monitors } from "./db/schema.js";
 import {
-  confirmTraceless, isTracelessState, killProvenUnit, reclaimEvidence, reclaimState,
-  shootProvenUnit, stateNote, type MonitorUnit,
+  confirmTraceless, isTracelessState, killProvenUnit, reclaimState,
+  shootProvenUnitNow, stateNote, type MonitorUnit,
 } from "./monitor-reclaim-evidence.js";
 import { clearSpawnIdentity, readSpawnIdentity } from "./monitor-spawn.js";
-import { inspectProcess, processStartedNear, processUnitEvidence } from "./proc.js";
+import { processStartedNear, processUnitEvidence } from "./proc.js";
 import { now } from "./util.js";
 
 /** 进程内的重试梯子。跟 claude 投影那边的补偿清理同一个形状(claude-monitor-revoked.ts)。 */
@@ -130,14 +145,32 @@ async function closeDebtAndAnchor(monitorId: string, note: string): Promise<void
  *
  * `closed_at` 非空的行**不再重试、不再发信号、开机也不再报警** —— 它已经没有可下刀的落点了,
  * 留着是为了「这件事发生过」有据可查,而不是为了继续追。
+ *
+ * 返回「戳盖上了没有」。**它跟「身份在不在」是两档,不许混成一个返回值**(第 14 轮审查 F2):
+ * 戳没盖上时**行还在**(最后一份身份没有消失),所以不算 `unaccounted` —— 这一行会以「还欠着」
+ * 的样子留在表上,梯子和开机清扫下一遍重判出 `traceless` 再把戳补上。
  */
-export async function closeReclaimDebt(monitorId: string, note: string): Promise<void> {
-  if (dbClient.closed) return;
-  await db.update(monitorReclaimDebts)
-    .set({ closedAt: now(), closedNote: note })
-    .where(eq(monitorReclaimDebts.monitorId, monitorId))
-    .catch((err) => console.error(`[ash] 回收责任收档失败 ${monitorId}:`, err));
+export async function closeReclaimDebt(monitorId: string, note: string): Promise<boolean> {
+  if (dbClient.closed) return false;
+  try {
+    // **只盖还没盖过的那一行**:戳是「追到这里为止」的时刻,反复刷新等于把它改成「最后一次
+    // 看了一眼」—— 这一句让所有入口都可以无条件调它(幂等)。
+    await db.update(monitorReclaimDebts)
+      .set({ closedAt: now(), closedNote: note })
+      .where(and(eq(monitorReclaimDebts.monitorId, monitorId), isNull(monitorReclaimDebts.closedAt)));
+    return true;
+  } catch (err) {
+    console.error(`[ash] 回收责任收档失败 ${monitorId}（行还在，下一遍清扫会把戳补上）:`, err);
+    scheduleReclaimRetry(monitorId);
+    return false;
+  }
 }
+
+/**
+ * 持久身份这一问的三档(第 14 轮审查 F2)。**`existing` 和 `written` 的后果一样**(盘上有一份
+ * 可定位身份),分开只为日志说得清;`failed` 是唯一会拦下销毁的那一档。
+ */
+export type IdentityArchive = "existing" | "written" | "failed";
 
 /**
  * **留档**:这一行追不到任何线索了,但它**起过进程** —— 把最后一份可定位身份存下来(直接
@@ -146,25 +179,66 @@ export async function closeReclaimDebt(monitorId: string, note: string): Promise
  * 为什么必须有这一步(第 13 轮审查 F1-B 的残留一半):`traceless` 只说明「线索到此为止」,
  * 而后代能同时甩掉记号和进程组 —— 那时**哨兵行自己**是最后一份身份,可是删除紧接着就把它
  * 连任务一起带走,于是 `taskRows=0`、`monitorRows=0`、`debtRows=0`,那条可能还在跑的命令
- * 从此谁都找不到(审查实测 `R1_RESOURCE_FALSE_GONE` 就是这一幕)。核对那一侧原来把这一档
- * 整条跳过(「没什么可收」),所以它一行都不留。
+ * 从此谁都找不到(审查实测 `R1_RESOURCE_FALSE_GONE` 就是这一幕)。
  *
  * **幂等**:已经有行就一个字都不动(`onConflictDoNothing`)—— 不许把还欠着的那一行盖成收档,
  * 也不该反复刷新戳。
+ *
+ * **写完要回读**(第 14 轮审查 F2):`failed` 必须真的表示「盘上没有这份身份」,所以不能只看
+ * 插入有没有抛 —— 审查用一条只拒绝这张表的真实 SQLite trigger 注入过失败,而上一版把异常
+ * `catch` 成一句日志、返回 `void`,销毁前核对因此拦不下删除(`risk.log:33`)。
  */
 export async function archiveTracelessIdentity(m: {
   id: string; taskId: string; pid: number; pidStartedAt: string | null;
   command: string; unitToken: string | null;
-}): Promise<void> {
-  if (dbClient.closed) return;
+}): Promise<IdentityArchive> {
   const note = stateNote("traceless");
-  await db.insert(monitorReclaimDebts).values({
+  return ensureIdentityArchived({
     monitorId: m.id, taskId: m.taskId, pid: m.pid, pidStartedAt: m.pidStartedAt,
     spawnAnchorMs: null, unitToken: m.unitToken, command: m.command,
-    reason: `身份销毁前留档（${note}）`, lastError: null, attempts: 0,
-    createdAt: now(), lastAttemptAt: null, closedAt: now(), closedNote: note,
-  }).onConflictDoNothing({ target: monitorReclaimDebts.monitorId })
-    .catch((err) => console.error(`[ash] 哨兵身份留档失败 ${m.id}:`, err));
+    reason: `身份销毁前留档（${note}）`,
+  }, note);
+}
+
+/**
+ * 「账本上**现在**有没有这条创建的持久身份」—— 留档、追空收档、补记梯子**共用的那一个事实**
+ * (第 14 轮审查 F2:四个入口不许各自判一遍)。
+ *
+ * `closeNote` 非空 = 这一笔生下来就是收档态(线索已经追空,没有可下刀的落点)。
+ */
+async function ensureIdentityArchived(
+  debt: DebtInput, closeNote: string | null,
+): Promise<IdentityArchive> {
+  if (dbClient.closed) return "failed";   // 库都关了 ⇒ 没有任何持久交接发生
+  try {
+    const before = (await db.select({ monitorId: monitorReclaimDebts.monitorId })
+      .from(monitorReclaimDebts)
+      .where(eq(monitorReclaimDebts.monitorId, debt.monitorId))).at(0);
+    if (before) {
+      // 身份已经在盘上(可能还欠着):线索这一刻追空了就把戳补上。戳盖不上**不算身份消失**
+      // ——那一行还在,`closeReclaimDebt` 自己会出声并挂上重试(第 14 轮审查 F2:有行/无行是
+      // 两档,不许混成一个返回值)。
+      if (closeNote) await closeReclaimDebt(debt.monitorId, closeNote);
+      return "existing";
+    }
+    await db.insert(monitorReclaimDebts).values({
+      monitorId: debt.monitorId, taskId: debt.taskId, pid: debt.pid,
+      pidStartedAt: debt.pidStartedAt, spawnAnchorMs: debt.spawnAnchorMs ?? null,
+      unitToken: debt.unitToken, command: debt.command, reason: debt.reason,
+      lastError: null, attempts: 0, createdAt: now(), lastAttemptAt: null,
+      closedAt: closeNote ? now() : null, closedNote: closeNote,
+    }).onConflictDoNothing({ target: monitorReclaimDebts.monitorId });
+    // **回读**:插入报成功不等于行在盘上(触发器/约束可以悄悄挡掉),而这是最后一份身份。
+    const after = (await db.select({ monitorId: monitorReclaimDebts.monitorId })
+      .from(monitorReclaimDebts)
+      .where(eq(monitorReclaimDebts.monitorId, debt.monitorId))).at(0);
+    if (after) return "written";
+    console.error(`[ash] 哨兵身份留档写进去了又读不回来 monitor=${debt.monitorId} pid=${debt.pid}`);
+    return "failed";
+  } catch (err) {
+    console.error(`[ash] 哨兵身份留档失败 monitor=${debt.monitorId} pid=${debt.pid}:`, err);
+    return "failed";
+  }
 }
 
 /** 落了账就把梯子挂上:多数残留是「补刀还没到」,一秒后再看一眼就能收档。 */
@@ -225,19 +299,21 @@ export type ReclaimOutcome =
  * 两秒后一把 `unref` 的补刀(`killProvenUnit`),server 在这两秒里退出它就永远不会落下 ——
  * 责任先落盘,那一笔才活得过进程退出。
  *
- * `fresh` 答的是**「这个进程组刚刚还在我们手上吗」**,它**只**决定 `ours-orphans` 这一档敢不敢
- * 下刀。证据是「这一行此刻还是 running」:单实例锁保证同时只有一个 server 在写这张表,所以
- * 还没被写成终态的行要么是本进程正拿着的,要么是上一个 server 崩在那儿的 —— 而开机时
- * `reattachMonitors` / `reclaimUnconfirmedStops` 都排在任何删除之前,会先把后者重判一遍。
+ * **下刀资格只看档位,不看调用点**(第 14 轮审查 F1 的「不要在四个入口分别打补丁」):
  *
- * | 档 | fresh=true(运行时收尾) | fresh=false(删除核对、启动扫描) |
- * |---|---|---|
- * | `traceless` | 旧账盖戳收档(**不删**)→ `closed` | 同左 |
- * | `ours-alive` | 记责任 + 杀 | 记责任 + 杀(身份对得上,隔多久都是我们的) |
- * | `ours-orphans` | 记责任 + 杀(组长刚死,组里剩的只能是它的后代) | 记责任、**不杀**(隔了一次重启,pid 可能已经被别人当组长用过) |
- * | `not-ours` | 记责任、不杀(那是别人的进程) | 同左 |
- * | `unverifiable` | 记责任、不杀(没记启动时刻,证不出代次) | 同左 —— **第 9 轮加的就是这一格**:原来它折进 `ours-alive` 就杀 |
- * | `unknown` | 记责任、不杀(身份问不出来) | 同左 —— **第 6 轮改的就是这一格**:原来它在这一列直接返回空 |
+ * | 档 | 做什么 |
+ * |---|---|
+ * | `traceless` | 留档盖戳(**不删行**)→ `closed`;记不下来 → `unaccounted` |
+ * | `ours-alive` | 记责任 + 杀(根自己的代次对得上,隔多久都是我们的) |
+ * | `ours-orphans` | 记责任 + 杀 —— 这一档**只由真实环境项里的记号产生**,后代各自带着这一次创建的那条记号,跨几次重启都认得回来(第 12 轮审查 F1-A) |
+ * | `not-ours` | 记责任、不杀(那是别人的进程) |
+ * | `suspected` | 记责任、不杀 —— 展示文本里看得见记号,证不出在谁身上(第 14 轮审查 F1) |
+ * | `unverifiable` | 记责任、不杀(没记启动时刻,证不出代次) —— **第 9 轮加的就是这一格** |
+ * | `unknown` | 记责任、不杀(记号这一问自己失败了) —— **第 6 轮改的就是这一格** |
+ *
+ * 上一版这里还有一个 `fresh` 开关(「这一组刚刚还在我们手上吗」)用来收口孤儿档。它已经没有
+ * 适用面了:存量行(没有记号)在 `reclaimEvidence` 里根本到不了 `ours-orphans`,而带记号的
+ * 孤儿后代本来就不靠「刚刚」证明归属。留着只会让四个入口各传一个不同的值。
  */
 /**
  * **身份不全时,用时间锚把它补全** —— 一次查询失败不许把这条记录永久降级。
@@ -258,11 +334,13 @@ async function completeIdentity(m: {
   const side = m.logPath ? readSpawnIdentity(m.logPath) : null;
   const anchorMs = side?.pid === m.pid ? side.spawnedAtMs : m.spawnAnchorMs ?? null;
   if (m.pidStartedAt) return { pidStartedAt: m.pidStartedAt, anchorMs };
-  // **记号在手就不必靠时间锚**:带着这一次创建的记号、而且就是这个号 ⇒ 身份已经证明,
-  // 把 ps 这一刻报的启动时刻记下来即可(锚那条路是给没有记号的存量行留的)。
+  // **记号在手就不必靠时间锚**:在**真实环境项**里读到这一次创建的记号、而且就是这个号 ⇒
+  // 身份已经证明,那一问交出来的代次直接记下来即可(锚那条路是给没有记号的存量行留的)。
+  // 只认 `ours`:展示文本那一档(`suspected`)证不出这一项真在不在,拿它补身份等于拿一段
+  // 可能来自别人的文字给这个号签发代次(第 14 轮审查 F1)。
   const proven = processUnitEvidence(m.unitToken);
-  const byUnit = proven.verdict === "ours" && proven.pids.includes(m.pid)
-    ? inspectProcess(m.pid)?.startedAt ?? null
+  const byUnit = proven.verdict === "ours"
+    ? proven.members.find((member) => member.pid === m.pid)?.startedAt ?? null
     : null;
   if (!byUnit && anchorMs === null) return { pidStartedAt: null, anchorMs };
   // 命令原文一起交过去:时间邻近单独不足以认下一个号(见 proc.ts 的 `processStartedNear`)。
@@ -292,7 +370,6 @@ export async function reclaimMonitorProcess(
     logPath?: string | null;
   },
   reason: string,
-  opts: { fresh: boolean },
 ): Promise<ReclaimOutcome> {
   const pid = m.pid;
   if (pid === null) return { state: "closed" }; // claude 投影行:没有进程,也没有责任
@@ -300,9 +377,11 @@ export async function reclaimMonitorProcess(
   const identity = await completeIdentity({ ...m, pid });
   const pidStartedAt = identity.pidStartedAt;
   const unit: MonitorUnit = { unitToken: m.unitToken, command: m.command };
-  // **这次取证要用来发信号,所以不许吃旧快照**(第 13 轮审查 F1-C)。
-  const evidence = reclaimEvidence(pid, pidStartedAt, unit, { fresh: true });
-  const state = evidence.state;
+  // **判档吃备忘、发信号自己 fresh**(第 14 轮审查 F1):这一问要走两遍全表 `ps -E`(本机
+  // 约 160ms),而判档这一份只决定「记什么、该不该动手」—— 备忘最多 400ms,而唯一能造出
+  // 「资源存在但扫描里没有」的动作(起进程)会当场把它作废。真正需要当代证据的是下刀那一刻,
+  // 那由 `killProvenUnit` 自己重新取证(上一版把这一份快照攒着跨过落库 `await` 再传下去)。
+  const state = reclaimState(pid, pidStartedAt, unit);
   const debt: DebtInput = {
     monitorId: m.id, taskId: m.taskId, pid, pidStartedAt,
     // 身份还没补全就把锚一起留下:哨兵行和边条都可能先没了,之后这笔债是唯一的线索。
@@ -314,19 +393,19 @@ export async function reclaimMonitorProcess(
     // **线索追到这里为止 ⇒ 留行、盖戳,不删**(第 13 轮审查 F1-B):删掉就等于声称整项退出
     // 已经证明,而那件事在当前平台能力下证不出来(理由见 `isTracelessState`)。
     //
-    // 这一笔记不下来时**不算 `unaccounted`**:这一档没有任何可下刀的落点,拿一行记录写不进去
-    // 去中止删除,只会把一次正常收尾卡住 —— 出声,然后照常收档。
-    if (await noteReclaimDebt(debt)) await closeReclaimDebt(m.id, stateNote(state));
-    else console.error(`[ash] 收档记录落不下来 monitor=${m.id} pid=${pid}（${stateNote(state)}）`);
-    return { state: "closed" };
+    // **记不下来就不是 `closed`**(第 14 轮审查 F2):上一版这里出一句日志照样返回 `closed`,
+    // 于是销毁前核对拿到「没什么要负责的」、把任务和哨兵行一起删掉,而那条命令可能还在跑
+    // (`risk.log:33`)。「线索追空」是资源观测,「身份在盘上」是持久记录 —— 两件事。
+    // 调用方按自己的后果决定:销毁身份那条路整笔中止,普通收尾出声 + 继续重试落盘。
+    if (await ensureIdentityArchived(debt, stateNote(state)) !== "failed") return { state: "closed" };
+    console.error(`[ash] 收档记录落不下来 monitor=${m.id} pid=${pid}（${stateNote(state)}）`);
+    return { state: "unaccounted", debt };
   }
   const accounted = await noteReclaimDebt(debt);
-  // **孤儿档的 `fresh` 只管「没有记号」那一种**:记号证明得出来时,这些后代是谁的已经不是
-  // 推断了(它们各自带着这一次创建的那条记号),隔几次重启都一样 —— 那正是记号要解决的事。
-  // 没有记号的存量行照旧按 `fresh` 收口:刚刚还在我们手上才敢打那一组。
-  if (state === "ours-alive" || (state === "ours-orphans" && (opts.fresh || evidence.unitPids.length > 0))) {
-    killProvenUnit(pid, pidStartedAt, unit, evidence);
-  }
+  // **下刀之前重新取证**:上面那一份判完之后隔着一次落库 `await`,数据库等待期间成员可以
+  // 退出、号可以被别人接手(第 14 轮审查 F1)。`killProvenUnit` 自己 `fresh` 取一遍,所以
+  // 这里只决定「这一档该不该动手」,不把快照传下去。
+  if (state === "ours-alive" || state === "ours-orphans") killProvenUnit(pid, pidStartedAt, unit);
   if (!accounted) return { state: "unaccounted", debt };
   return {
     state: "owed",
@@ -360,10 +439,18 @@ export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000)
   if (outcome.state === "closed") return "closed";
   if (outcome.state === "unaccounted") {
     const { debt } = outcome;
-    // 库可能只是忙了一下:再看一遍线索,空了就收档,没空就立刻重试落盘,仍然不行才往上报。
+    // 库可能只是忙了一下:再看一遍线索,空了就补留档,没空就立刻重试落盘,仍然不行才往上报。
+    //
+    // **追空了也要先把身份留住**(第 14 轮审查 F2):上一版这里无论补记成不成都返回 `closed`
+    // —— 于是「该留责任却没留下来」被一句「线索追空了」洗掉,销毁前核对再也拦不下删除。
     if (await confirmTraceless(debt.pid, debt.pidStartedAt, deadlineMs, debt)) {
-      if (await noteReclaimDebt(debt)) await closeReclaimDebt(debt.monitorId, stateNote("traceless"));
-      return "closed";
+      if (await ensureIdentityArchived(debt, stateNote("traceless")) !== "failed") return "closed";
+      console.error(
+        `[ash] 线索已追空,但最后一份身份留不下来 monitor=${debt.monitorId} pid=${debt.pid}`
+        + ` 命令：${debt.command} —— 继续重试落盘`,
+      );
+      scheduleReclaimPersist(debt);
+      return "unaccounted";
     }
     if (await noteReclaimDebt(debt)) {
       scheduleReclaimRetry(debt.monitorId);
@@ -400,8 +487,11 @@ function scheduleReclaimPersist(debt: DebtInput, step = 0): void {
   const timer = setTimeout(() => {
     void (async () => {
       // 线索已经空了也要把这一笔补上:它是「这件事发生过」的唯一记录(只是补完就收档)。
+      // **补不上就接着爬梯子**(第 14 轮审查 F2):上一版这一支无论成不成都 `return`,于是
+      // 「追空」成了停止重试的理由 —— 而这一档恰恰是身份只剩这一行的那一档。
       if (isTracelessState(reclaimState(debt.pid, debt.pidStartedAt, debt))) {
-        if (await noteReclaimDebt(debt)) await closeReclaimDebt(debt.monitorId, stateNote("traceless"));
+        if (await ensureIdentityArchived(debt, stateNote("traceless")) !== "failed") return;
+        scheduleReclaimPersist(debt, step + 1);
         return;
       }
       if (await noteReclaimDebt(debt)) {
@@ -448,24 +538,22 @@ async function settleDebt(monitorId: string): Promise<boolean> {
     command: debt.command, unitToken: debt.unitToken, spawnAnchorMs: debt.spawnAnchorMs,
   });
   debt = { ...debt, pidStartedAt };
-  // 这一圈也会发信号 ⇒ 重新取证(第 13 轮审查 F1-C:债务重收不许吃旧快照)。
-  const evidence = reclaimEvidence(debt.pid, debt.pidStartedAt, debt, { fresh: true });
-  const state = evidence.state;
+  // 判档吃备忘,发信号那一刀由 `shootProvenUnitNow` 自己 fresh 取证(同 `reclaimMonitorProcess`)。
+  const state = reclaimState(debt.pid, debt.pidStartedAt, debt);
   if (isTracelessState(state)) {
     await closeDebtAndAnchor(monitorId, stateNote(state));
     return true;
   }
-  // **`ours-orphans` 在这里也能收 —— 只要记号证明得出来**:上一版这一档隔了一次重启就被判成
-  // 「跟别人拿这个号当过组长分不开」,于是永远留在账上。记号没有这个问题(它跟着后代自己走),
-  // 而且落点是那几个成员而不是整组(见 `killProvenUnit`)。没有记号的存量行仍然只记不杀。
-  if (state === "ours-alive" || (state === "ours-orphans" && evidence.unitPids.length > 0)) {
+  // **`ours-orphans` 在这里也能收**:这一档只由**真实环境项里的记号**产生,后代各自带着这一次
+  // 创建的那条记号,隔几次重启都认得回来(上一版这一档被判成「跟别人拿这个号当过组长分不开」,
+  // 于是永远留在账上)。落点是那几个成员而不是整组(见 `killProvenUnit`)。
+  if (state === "ours-alive" || state === "ours-orphans") {
     // 第一刀由落账那一侧发过了(TERM + 两秒后 KILL)。还在就说明那条路没走完(多半是 server
     // 在补刀之前退了),所以这里直接上 SIGKILL,不再等第二个两秒。
     //
-    // 落点跟 `killProvenUnit` 同一个判据:**组长自己证明过、而且还活着**才发组信号(它活着,
-    // 这个组号就不可能已经是别人的);否则只打证明过的那几个成员各自 —— 成员的 pgid 是那个
-    // 已经死掉的组长的号,发组信号打的是别人(第 12 轮审查 F1-A 实测被杀的就是那种组)。
-    shootProvenUnit(debt.pid, evidence, "SIGKILL");
+    // **这一刀自己重新取证**(第 14 轮审查 F1):上面那一份判完之后隔着 `completeIdentity` 等
+    // 几次 `await`,拿它当授权就是把一次性的凭证存成了跨等待可复用的裸 pid 数组。
+    shootProvenUnitNow(debt.pid, debt.pidStartedAt, debt, "SIGKILL");
     if (await confirmTraceless(debt.pid, debt.pidStartedAt, 1_000, debt)) {
       await closeDebtAndAnchor(monitorId, stateNote("traceless"));
       console.error(`[ash] 回收责任已收档 monitor=${monitorId} pid=${debt.pid}（补杀成功,线索已空）`);
@@ -473,9 +561,8 @@ async function settleDebt(monitorId: string): Promise<boolean> {
     }
   }
   // 剩下四档都是**不敢杀、也不敢收档**:
-  //  · `ours-orphans` **且没有记号** —— 组长已死、组里还有人,但隔了一次重启就跟「别人拿这个
-  //    号当过组长」分不开(同一个判据见 `reclaimMonitorProcess` 的 `fresh`);记号证明得出来的
-  //    那一种上面已经收掉了;
+  //  · `suspected` —— 展示文本里还看得见这次创建的记号,但这台机器上切不出真实环境项边界,
+  //    证不出它在谁身上(第 14 轮审查 F1);记号读得精确的那一种上面已经收掉了;
   //  · `not-ours` —— 这个号现在是别人的,而**原来那个**退没退证明不了(它可能带着后代还在
   //    这一组里,只是组长的号被占了);
   //  · `unverifiable` —— 当初没记启动时刻,这个号上现在有人也证不出是不是它(第 9 轮 F3);

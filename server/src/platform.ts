@@ -280,6 +280,42 @@ export function killOne(pid: number, sig: NodeJS.Signals): void {
 // 「资源单位」那条记号(`ASH_MONITOR_UNIT`)的扫描搬到了 monitor-unit-scan.ts:它要读进程表、
 // 切 argv 与环境、还带一份备忘,是独立的一摊事,而这里只回答「怎么问操作系统」。
 //
+/**
+ * 这一组里现在有哪些成员,**各自带着代次**(pid + 启动时刻)。
+ *
+ * 只在「组长此刻证明过、而且还活着」时问得有意义:那时这一组的成员只可能是它的后代 ——
+ * 组号就是组长的 pid(它活着,这个号不可能同时是别人的),而外人要加进来得 `setpgid` 到同一个
+ * 会话里去,那个会话的头正是这条哨兵自己。所以这一份名单就是「整项资源此刻的成员」。
+ *
+ * 为什么要连启动时刻一起拿:名单是要**留到下一刀**用的(TERM 之后两秒那一下,组长可能已经
+ * 退了)。两秒里一个成员可以退出、它的号可以被别人接手 —— 发信号之前拿代次再核一遍,就不必
+ * 靠「pid 不会这么快被复用」这种推断(第 14 轮审查 F1:取证结构要保留成员代次)。
+ *
+ * 查不到(ps 不可用 / Windows 没有进程组)返回 null,**不要读成「这一组空了」**。
+ */
+export function processGroupMembersSync(pgid: number): { pid: number; startedAt: string | null }[] | null {
+  if (IS_WINDOWS || !Number.isInteger(pgid) || pgid <= 1) return null;
+  let out: string;
+  try {
+    out = execFileSync("ps", ["-A", "-o", "pid=", "-o", "pgid=", "-o", "lstart=", "-ww"], {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, LC_ALL: "C", LANG: "C" },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return null;
+  }
+  const members: { pid: number; startedAt: string | null }[] = [];
+  for (const line of out.split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (!m || Number(m[2]) !== pgid) continue;
+    const startedAt = m[3]!.trim();
+    members.push({ pid: Number(m[1]), startedAt: startedAt || null });
+  }
+  return members;
+}
+
 export function isProcessGroupAlive(pid: number): boolean {
   if (IS_WINDOWS || !Number.isInteger(pid) || pid <= 1) return false;
   try { process.kill(-pid, 0); return true; }

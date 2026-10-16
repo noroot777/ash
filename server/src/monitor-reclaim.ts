@@ -168,9 +168,11 @@ async function signalStop(
  * 信号,不说明它退了(第 5 轮审查 F1:先点停再删除,行是 stopped、命令仍活、债表为空,
  * 删除照状态过滤就整条跳过了它)。
  *
- * `fatal`(= 销毁持久身份那条路)时,连责任都落不下来就把整笔操作抛回去:删除失败可重试,
- * 留下一个谁都找不到的后台进程不可逆 —— 跟枚举失败那一条同一个判据。审查收尾那一侧不销毁
- * 身份(行还在、启动期还会再问一遍),所以只出声不抛。
+ * `fatal`(= 销毁持久身份那条路)时,**只要有一条没拿到持久交接就把整笔操作抛回去**:删除失败
+ * 可重试,留下一个谁都找不到的后台进程不可逆 —— 跟枚举失败那一条同一个判据。两种都算:
+ * 该留的责任落不下来,以及**线索追空那几条的最后一份身份留不下来**(第 14 轮审查 F2 实测:
+ * 留档失败只记日志、追空分支照样返回 `closed`,于是任务和哨兵行一起被删掉,后代仍在跑)。
+ * 审查收尾那一侧不销毁身份(行还在、启动期还会再问一遍),所以只出声不抛。
  */
 async function accountForLiveProcesses(
   rows: MonitorRow[], reason: string, opts: { fatal: boolean },
@@ -179,32 +181,67 @@ async function accountForLiveProcesses(
   // running」。`unknown`(ps 这一问自己失败了)也在里面:它恰恰是最该留责任的一档,原来却被
   // 当成「没什么可收」放行了(第 6 轮审查 F1 实测的那条路)。
   const withPid = rows.filter((r): r is MonitorRow & { pid: number } => r.pid !== null);
-  const risky = withPid.filter((r) => reclaimState(r.pid, r.pidStartedAt, r) !== "traceless");
+  const judged = withPid.map((r) => ({ row: r, traceless: reclaimState(r.pid, r.pidStartedAt, r) === "traceless" }));
+  const risky = judged.filter((j) => !j.traceless).map((j) => j.row);
   // **追不到线索的那几条也要留下一行档**(第 13 轮审查 F1-B):它们起过进程,而「线索追空」
   // 不等于「整项退出已证明」—— 后代能同时甩掉记号和进程组。这一侧原来把它们整条跳过,于是
   // 删除把哨兵行连任务一起带走之后,那条可能还在跑的命令再也没有任何可定位身份
   // (审查实测 `R1_RESOURCE_FALSE_GONE`:taskRows=0、monitorRows=0、debtRows=0、命令仍活)。
   // 留档是幂等的,也不发任何信号。
-  await Promise.all(withPid.filter((r) => !risky.includes(r)).map((r) => archiveTracelessIdentity(r)));
-  if (!risky.length) return;
-  const held = await heldReclaimDebts(risky.map((r) => r.id));
+  //
+  // **留档的结果必须核**(第 14 轮审查 F2):写不进去就等于没有持久交接,而这一侧正是身份
+  // 真要消失的那一刻 —— 下面按 `fatal` 把它和「责任落不下来」一起抛回去。
+  const lostIdentity: MonitorRow[] = [];
+  await Promise.all(judged.filter((j) => j.traceless).map(async (j) => {
+    if (await archiveTracelessIdentity(j.row) === "failed") lostIdentity.push(j.row);
+  }));
   const unaccounted: MonitorRow[] = [];
+  if (!risky.length) return finishAccounting(unaccounted, lostIdentity, opts);
+  const held = await heldReclaimDebts(risky.map((r) => r.id));
   // 并行:它们互不相干,而这段等待发生在 `task:<id>` 锁里面,顺序等会把删除吊很久。
   await Promise.all(risky.map(async (r) => {
     if (held.has(r.id)) return; // 已经有人负责了 —— 那正是不变量允许的另一半
-    // **`fresh` 按这一行自己的状态算**,不是按调用点算:还在 running 的那条,进程刚刚还在我们
-    // 手上(`finish` 失败才会落到这里),孤儿组那一档敢下刀;已经非运行态的那条可能是上一辈子
-    // 停下来的,那一档只记责任(判据见 reclaimMonitorProcess 那张表)。两种都**一定会记责任**。
-    const outcome = await reclaimMonitorProcess(r, reason, { fresh: r.status === "running" });
+    // 下刀资格只看档位(判据见 reclaimMonitorProcess 那张表),不看这一行是不是 running ——
+    // 第 14 轮把那个 `fresh` 开关去掉了:它唯一还想收口的「存量行孤儿组」在取证层根本到不了
+    // 可下刀的那一档。无论哪一档,这里都**一定会记责任**。
+    const outcome = await reclaimMonitorProcess(r, reason);
     // 确认退出要**等到补刀生效**(默认 3 秒,见 confirmReclaimed):并行等,所以这一整批只花
     // 一个窗口。不等的话「收掉了几条」就只是「发出去几刀」,跟第 4 轮那版一个毛病。
     if (await settleReclaim(outcome) === "unaccounted") unaccounted.push(r);
   }));
-  if (!unaccounted.length || !opts.fatal) return;
-  throw new Error(
-    `有 ${unaccounted.length} 个哨兵进程既没确认退出、回收责任也没能落库`
-    + `（pid ${unaccounted.map((r) => r.pid).join("、")}），不能销毁它们的身份记录。请重试。`,
-  );
+  return finishAccounting(unaccounted, lostIdentity, opts);
+}
+
+/**
+ * 核对的收口:**账本上没拿到持久交接的那几条,决定整笔操作的生死**。
+ *
+ * 两种各说一句(第 14 轮审查 F2:不要把「有行/无行」混成一句话):
+ *  · `unaccounted` —— 该留的回收责任落不下来(进程还在/证不出,而账上没人认);
+ *  · `lostIdentity` —— 线索追空、但最后一份身份留不下来(行要被删,之后谁都找不到它)。
+ */
+function finishAccounting(
+  unaccounted: MonitorRow[], lostIdentity: MonitorRow[], opts: { fatal: boolean },
+): void {
+  const pids = (rows: MonitorRow[]) => rows.map((r) => r.pid).join("、");
+  if (!opts.fatal) {
+    // 审查收尾那一侧:身份不销毁(哨兵行还在),所以只出声 —— 开机清扫会再问一遍。
+    if (lostIdentity.length) {
+      console.error(
+        `[ash] 有 ${lostIdentity.length} 条哨兵的最后身份没能留档（pid ${pids(lostIdentity)}）`
+        + `，哨兵行还在，开机会再问一遍`,
+      );
+    }
+    return;
+  }
+  if (!unaccounted.length && !lostIdentity.length) return;
+  const parts: string[] = [];
+  if (unaccounted.length) {
+    parts.push(`${unaccounted.length} 个既没确认退出、回收责任也没能落库（pid ${pids(unaccounted)}）`);
+  }
+  if (lostIdentity.length) {
+    parts.push(`${lostIdentity.length} 个线索已追空、但最后一份身份没能留档（pid ${pids(lostIdentity)}）`);
+  }
+  throw new Error(`有哨兵进程：${parts.join("；")}，不能销毁它们的身份记录。请重试。`);
 }
 
 /**

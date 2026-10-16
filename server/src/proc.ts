@@ -107,24 +107,38 @@ export function isSameProcess(pid: number, expectedStartedAt?: string | null): b
  * 「**带着这一次创建的记号的进程,现在还有没有**」——归属这一问,一次答完。
  *
  * 问的不是进程组,也不是命令原文,是**这一次创建自己的那条记号**(`MONITOR_UNIT_ENV`,
- * 见 monitor-unit-scan.ts):它随环境被整棵树继承,所以组长退掉之后还留在后台的后代仍然自证身份;
- * 它每次创建新生成,所以认不到别人身上。记号**只从环境段读**,argv 里的同名文字不算
- * (第 13 轮审查 F1-A:审查起的一个诊断进程只因参数里写了这段文字就被杀)。
+ * 见 monitor-unit-scan.ts):它随环境被整棵树继承,所以组长退掉之后还留在后台的后代仍然自证
+ * 身份;它每次创建新生成,所以认不到别人身上。
  *
- * 三档,每一档只说那一问真的答出来的东西:
- *  · `ours` —— 还有带着记号的进程活着,**而且它们是谁都已经知道**(pids 就是下刀的落点);
- *  · `none` —— 这些记号一个都没找到,**而且这一遍是问全了的**(扫描的 `complete`)。它仍然
- *    不是「整项资源退出已证明」:后代可以把环境清掉、也可以自己 `setsid` 离开原组,那时它既不
- *    带记号也不在组里(第 13 轮审查 F1-B)。够不够收档由上层按**全部线索**判(见
- *    monitor-reclaim-evidence 的 `traceless`),这里只说记号这一问;
+ * **但读到这段文字和「真有这一项」是两件事,所以答案分四档**(第 14 轮审查 F1 实测:一个只在
+ * 另一个变量的**值**里写了 `ASH_MONITOR_UNIT=<记号>` 的诊断进程被当成我们的后代挨了刀):
+ *
+ *  · `ours` —— **真实环境项**里就有这一项(只有 Linux 的 `/proc/<pid>/environ` 给得出这份
+ *    精确边界),而且它们是谁都已经知道:`members` 带着各自的**代次**(pid + 启动时刻),
+ *    那是下刀的落点,也是跨等待不许复用裸 pid 的那道闸;
+ *  · `suspected` —— 进程表的**展示文本**里看得见这段文字,但这个平台切不出真实环境项边界
+ *    (macOS 的 `ps -E` 把 argv 和环境无分隔地拼在一起,环境各项之间也只有空格)。这一档
+ *    **只授权「不许说已经没了」,不授权下刀** —— 文本匹配只有「没有」这一个方向是可靠的;
+ *  · `none` —— 这些记号一个都没找到,**而且这一遍是问全了的**(扫描的 `complete`)。真实环境项
+ *    必然出现在文本里,所以两个平台上这一档都成立。它仍然不是「整项资源退出已证明」:后代
+ *    可以把环境清掉、也可以自己 `setsid` 离开原组,那时它既不带记号也不在组里(第 13 轮审查
+ *    F1-B)。够不够收档由上层按**全部线索**判(见 monitor-reclaim-evidence 的 `traceless`),
+ *    这里只说记号这一问;
  *  · `unprovable` —— 没有记号(存量行)、这一问自己答不出来(win32 读不到别的进程的环境块、
- *    POSIX 上 ps/`/proc` 失败),**或者这一遍没问全**(有活着的进程判不了:环境读不出来、
- *    argv 与环境切不开)。「没问全」时「一个都没有」这句话不成立 —— 不许冒充 `none`。
+ *    POSIX 上 ps/`/proc` 失败),**或者这一遍没问全**(有活着的进程判不了:环境读不出来)。
+ *    「没问全」时「一个都没有」这句话不成立 —— 不许冒充 `none`。
  *
  * `fresh` = 这次取证要用来发信号 ⇒ 不许复用备忘里的旧快照(第 13 轮审查 F1-C)。
  */
+export type UnitMember = {
+  pid: number;
+  /** 这一刻 ps 报的启动时刻 —— **代次**。发信号之前要拿它再核一遍(见 `killProvenUnit`)。 */
+  startedAt: string | null;
+};
+
 export type UnitEvidence =
-  | { verdict: "ours"; pids: number[] }
+  | { verdict: "ours"; members: UnitMember[] }
+  | { verdict: "suspected"; pids: number[] }
   | { verdict: "none" }
   | { verdict: "unprovable" };
 
@@ -135,8 +149,17 @@ export function processUnitEvidence(
   if (!token) return { verdict: "unprovable" };
   const scan = liveMonitorUnitsSync(opts);
   if (!scan) return { verdict: "unprovable" };    // 问不出来 ≠ 没有
-  const pids = scan.units.get(token) ?? [];
-  if (pids.length) return { verdict: "ours", pids };
+  const pids = scan.marks.get(token) ?? [];
+  if (pids.length) {
+    // 展示文本那一档**到此为止**:看得见不等于有这一项,所以不往下给落点(见上面 `suspected`)。
+    if (scan.grade === "ambiguous") return { verdict: "suspected", pids };
+    // 真实环境项这一档才给落点,而且**每个成员连代次一起交出去**:下一刀可能发生在几次 await
+    // 之后,那时只认代次没变的那几个(第 14 轮审查 F1:不许给下层一份可跨等待复用的裸 pid)。
+    return {
+      verdict: "ours",
+      members: pids.map((pid) => ({ pid, startedAt: inspectProcess(pid)?.startedAt ?? null })),
+    };
+  }
   // 找不到:只有**问全了**才敢说「一个都没有」。
   return scan.complete ? { verdict: "none" } : { verdict: "unprovable" };
 }

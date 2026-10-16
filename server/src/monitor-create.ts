@@ -219,7 +219,7 @@ async function releaseProcess(row: Row, reason: string, handle?: SpawnHandle): P
   }
   // 句柄没等到(或压根没有句柄:启动恢复那一侧)⇒ 照旧走完整的回收圈:落责任 → 发信号 →
   // 追到线索空 → 收档。身份不全时那一圈不会下刀(proc.ts 的 `unverifiable`),但责任一定留下来。
-  return await settleReclaim(await reclaimMonitorProcess(row, reason, { fresh: true }));
+  return await settleReclaim(await reclaimMonitorProcess(row, reason));
 }
 
 /**

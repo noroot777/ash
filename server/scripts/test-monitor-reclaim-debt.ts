@@ -35,7 +35,7 @@ const { beginTaskRevocation, isTaskRevoked, releaseTaskRevocation } = await impo
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
-const { invalidateMonitorUnitScan } = await import("../src/monitor-unit-scan.js");
+const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../src/monitor-unit-scan.js");
 
 // ── ⑨ 撤销是一段时间:撤销期不许再创建、停不掉必须留下回收责任（第 3 轮审查 F1）──────
 //
@@ -288,9 +288,28 @@ const { invalidateMonitorUnitScan } = await import("../src/monitor-unit-scan.js"
   });
 
   await stopMonitorsForTask(taskId, "任务已删除", "destroy");
-  assert.equal(isProcessGroupAlive(pid), false,
-    "根已经不在了,带着这条记号的后代是证明过的「我们的」—— 收尾时必须把它们一起收掉");
-  await assertDebtClosed(monId, "带记号的后代都收掉、线索追空之后才收档");
+  if (monitorUnitProofGrade() === "exact") {
+    // 真实环境项读得出来(Linux 的 `/proc/<pid>/environ` 是 NUL 分隔的)⇒ 这些后代是**证明过**
+    // 的「我们的」,隔多久都认得回来,所以收尾时必须把它们一起收掉。
+    assert.equal(isProcessGroupAlive(pid), false,
+      "根已经不在了,带着这条记号的后代是证明过的「我们的」—— 收尾时必须把它们一起收掉");
+    await assertDebtClosed(monId, "带记号的后代都收掉、线索追空之后才收档");
+  } else {
+    // **这台机器只拿得到无边界的 ps 展示文本**(第 14 轮审查 F1 实测:别的变量的值里写着这段
+    // 文字就够让陌生进程挨刀),所以记号这一问在这里只能答「看得见」—— 它推翻「已经退出」,
+    // 但签不出杀进程的凭证。照实钉住:一刀不下、责任留着、不收档。
+    //
+    // 注意**不是这一类残留都收不掉了**:根还活着那一刻的停止照旧按整组收(⑬-3 钉的就是那条
+    // 路 —— 第一刀那会儿把成员连代次一起记下来,两秒后核代次再补刀)。这里是「根早就死了、
+    // 我们从没见过它活着」的那一种。
+    assert.equal(isProcessGroupAlive(pid), true, "展示文本签不出下刀凭证 ⇒ 一刀都不许下");
+    const debt = await debtRow(monId);
+    assert.ok(debt, "照记责任:证不出归属恰恰最该留责任");
+    assert.equal(debt.closedAt, null, "也不许收档:线索还看得见,远没有追空");
+    assert.match(debt.reason, /证不出|记号/, "账上要写清是哪一种不确定");
+    killTree(pid, "SIGKILL");   // 产品收不掉它,台子自己清
+    await until("后代被台子收掉", async () => !isProcessGroupAlive(pid));
+  }
 }
 
 {
