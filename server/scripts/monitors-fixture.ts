@@ -58,19 +58,21 @@ const monitorSession = await import("../src/monitor-session.js");
 
 /**
  * 「这次调用来自本任务当前这一回合」的那一份 caller —— 真入口交上来的就是这种形状:带着
- * **被核验的那一轮**(令牌 + 那一刻的角色),落库处还会核对一遍它仍然有效(见 monitor-session.ts
- * 的 `VerifiedTurn`)。
+ * **这一轮的身份**(令牌 + 角色 + 它为哪一次审查而起),落库处还会核对一遍它仍然有效
+ * (见 monitor-session.ts 的 `VerifiedTurn`)。
  *
- * 回合本身由调用方先 `runs.claimTurn` 占好(角色从那里取);令牌这里顺手落库 —— 生产里它由
- * orchestrator 每起一轮换一个,台子上只要「有一个、而且对得上」。
- *
- * **审查代次也在这一刻抓**(`verifiedTurn` 自己去查正在进行的那次 run):所以要测 reviewer
- * 来源的用例必须先 `reviewInFlight(...)` 把那次审查摆上 —— 没有审查在进行的 reviewer 回合
- * 现在是**拒**(第 9 轮审查 F1 第 4 条),不再绑成「reviewer + 空来源」。
+ * 用法跟生产对齐,两步:
+ *  ① 调用方先占回合 —— `runs.claimTurn(taskId, 角色, 审查来源)`。**审查来源由占位方交代**
+ *    (生产里是 free-review-round 的 `reviewSource`):要测 reviewer 来源就得
+ *    `reviewInFlight(...)` 摆一次审查,再把 `{ run, round }` 交进 claim。没有审查的
+ *    reviewer 回合是**拒**(第 9 轮审查 F1),绑不上审查代次的 reviewer 回合也是拒;
+ *  ② 这里把令牌同时落库、绑到那一份回合身份上 —— 跟 orchestrator 写
+ *    `active_turn_token` 的同一处调 `bindTurnToken` 一个意思(第 10 轮审查 F1)。
  */
 export async function inTurnCaller(taskId: string, token = `turn-${taskId}`) {
   await db.update(tasks).set({ activeTurnToken: token }).where(eq(tasks.id, taskId));
-  return monitorSession.turnCaller(await monitorSession.verifiedTurn(taskId, token));
+  runs.bindTurnToken(taskId, token);
+  return monitorSession.turnCaller(monitorSession.verifiedTurn(taskId, token));
 }
 
 await ensureSchema();

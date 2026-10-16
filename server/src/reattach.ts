@@ -5,11 +5,11 @@
 // 不 import 这里（它靠 runs.ts 的 isRunning 就能知道谁被接管了，不需要回引）。
 import { createWriteStream } from "node:fs";
 import { join } from "node:path";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { AgentType, SessionRole } from "@ash/shared";
 import { db } from "./db/index.js";
-import { agents, tasks, sessions } from "./db/schema.js";
-import { claimTurn, releaseTurn, trackRun, untrackRun } from "./runs.js";
+import { agents, freeReviewRuns, tasks, sessions } from "./db/schema.js";
+import { claimTurn, releaseTurn, trackRun, untrackRun, bindTurnToken } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
@@ -146,7 +146,21 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       adopted.add(task.id);
       // 接管也要恢复 turn 的运行时身份：report_stage 只认 turnRole（claimTurn 落下的），
       // 不恢复的话接回的 reviewer 交卷必被拒，一条本可有结论的审查被错杀成异常失败。
-      const claimedTurn = claimTurn(task.id, sess.role);
+      //
+      // **令牌和审查来源一起恢复**:接回的 agent 手里拿的还是上一轮那个 `ASH_TURN_TOKEN`,
+      // 它挂哨兵时要靠「内存这一轮 = 库里那个令牌」才核验得过(见 runs.ts `bindTurnToken`)。
+      // 审查来源在这一刻按库里**正在进行**的那次审查认:启动期是串行的,没有派审交接在飞,
+      // 所以这一问不会落到第 10 轮审查 F1 那个窗口里。
+      const restoredReview = sess.role === "reviewer"
+        ? (await db.select({ id: freeReviewRuns.id, round: freeReviewRuns.currentRound })
+          .from(freeReviewRuns)
+          .where(and(eq(freeReviewRuns.taskId, task.id), eq(freeReviewRuns.status, "reviewing")))).at(0) ?? null
+        : null;
+      const claimedTurn = claimTurn(
+        task.id, sess.role,
+        restoredReview ? { run: restoredReview.id, round: restoredReview.round } : null,
+      );
+      if (claimedTurn && task.activeTurnToken) bindTurnToken(task.id, task.activeTurnToken);
       const out = createWriteStream(join(RUNS_DIR, task.id, `${sess.id}.md`), { flags: "a" });
       // 不 await：多个任务并行接管，各自跑各自的（跟正常运行时一样）。
       void consumeSingleRun({

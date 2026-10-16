@@ -165,6 +165,10 @@ export async function launchReviewRound(
     model: run.model,
     reasoningEffort: run.reasoningEffort,
     sessionRole: "reviewer",
+    // **这一轮是为哪一次审查的哪一轮起的** —— 由这里交代,因为只有这里手里同时握着 run
+    // 和轮次。创建入口过后只能查「现在是哪一次」,而那两者在派审交接期不是同一个
+    // (第 10 轮审查 F1:旧审查者提交的哨兵被绑到新派的审查者上)。
+    reviewSource: { run: run.id, round: run.currentRound },
     freshSession: !opts.retry && (run.currentRound === 1 || run.targetKind === "accepted_merge"),
     resumeSessionId: opts.resumeSessionId,
     cwd,

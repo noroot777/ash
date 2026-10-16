@@ -24,6 +24,11 @@
 // (`processStartedNear`,见 monitors.ts 的 `reattachMonitors`)。剩下的差别只有「闸」本身:
 // win32 上命令可能在身份落库之前就开工,**这条差别未在 Windows 真机验证**(约定见根 AGENTS.md)。
 //
+// 而那个边条自己也会写不下来(盘满、目录权限)。两样都没有时,那条命令可能已经开工而**重启后
+// 谁都再也定位不到它** —— 这正是 ① 换顺序要消掉的那一幕,只是从「库」挪到了「闸与边条」。所以
+// 交接可不可恢复由 spawn 层显式答(`handoverRecoverable`),答不出是就**拒这次创建**:就地拿
+// 句柄收掉它、照实说。POSIX 恒有闸,所以这一档只可能在 win32 出现(第 10 轮审查 F2-C)。
+//
 // ── 不变量:**起了进程 ⇒ 这段生命周期只有一个出口**(第 9 轮审查 F2)─────────────────
 //
 // ②(spawn 成功)到 ⑥(运行时接管完成)之间的每一个 await 都可能抛,而抛出去的那一刻:进程
@@ -53,7 +58,7 @@ import {
   CALLER_EXPIRED, isReviewSourceActive, monitorSourceGate, REVIEW_SOURCE_GONE,
   type MonitorCaller,
 } from "./monitor-session.js";
-import { monitorLogPath, spawnMonitor, type SpawnedMonitor } from "./monitor-spawn.js";
+import { clearSpawnIdentity, monitorLogPath, spawnMonitor, type SpawnedMonitor } from "./monitor-spawn.js";
 import {
   attach, liveMonitorsOf, publish, serialize, toTaskMonitor, type Row,
 } from "./monitors.js";
@@ -109,13 +114,76 @@ const detail = (e: unknown): string => (e instanceof Error ? e.message : String(
  *
  * 删不掉也不致命 —— 它的 pid 是空的,接回那一侧按身份边条/「没能记下 pid」单独收口。
  */
+async function deleteIntent(monitorId: string): Promise<void> {
+  await db.delete(monitors)
+    .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running")));
+}
+
+/**
+ * 同一笔,**失败只出声** —— 给所有权边界**之前**那几条出口用(spawn 还没成功,没有进程、没有
+ * 任何要交接的东西,这一行留着也只是脏数据)。边界之内那一条必须落定,所以走
+ * `settleIntentRow` + 重试阶梯,不走这里(第 10 轮审查 F3)。
+ */
 async function dropIntent(monitorId: string): Promise<void> {
   try {
-    await db.delete(monitors)
-      .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running")));
+    await deleteIntent(monitorId);
   } catch (e) {
     console.error(`[ash] 哨兵登记行清不掉 monitor=${monitorId}（它没有 pid，启动恢复会把它判掉）:`, detail(e));
   }
+}
+
+/**
+ * 创建没走完时**那一行的结局**:要么删掉(进程确认收干净了,界面上跟没点过一样),要么写成
+ * `lost` 并照实说是哪一档。两笔都带 `status='running'` 条件 —— 所以它**幂等**,也因此可以重试。
+ */
+type IntentSettlement = { kind: "drop" } | { kind: "lost"; reason: string };
+
+async function settleIntentRow(row: Row, settle: IntentSettlement): Promise<void> {
+  if (settle.kind === "drop") {
+    await deleteIntent(row.id);
+    // 进程确认退了,身份边条这才真的没用了(欠着责任时它是补全身份的唯一线索,见
+    // monitors.ts 的 `finish`;第 10 轮审查 N1 说的是同一条判据)。
+    clearSpawnIdentity(row.logPath);
+    return;
+  }
+  await db.update(monitors)
+    .set({ status: "lost", endedAt: now(), endedReason: settle.reason })
+    .where(and(eq(monitors.id, row.id), eq(monitors.status, "running")));
+}
+
+// 落不下去时的重试间隔。跟回收那一侧(monitor-reclaim-debts.ts 的 `LADDER_MS`)同一个形状:
+// unref 定时器,不吊住进程退出。
+const INTENT_LADDER_MS = [1_000, 5_000, 20_000];
+
+/**
+ * **补偿自己失败时也得有个接管者**(第 10 轮审查 F3)。
+ *
+ * 收口那一笔写不进库(DB 一瞬不可用、磁盘满)时,库里留下的是一条 `running` 行:没有 tail、
+ * 没有到期定时器、没有退出回调 —— 它不会产生任何结束事件,而上一版在这里只有一次裸写(更早
+ * 一版甚至是一次裸读),抛出去就**既没人接管、也没人重试**,那行会一直挂到有人手动清。
+ *
+ * 所以排一个阶梯重试。它的**兜底不是这个定时器**(unref,活不过进程退出),而是开机接回
+ * (`reattachMonitors`:pid 空着的 running 行按「没能记下 pid」收口)—— 阶梯只是让这件事不用
+ * 等到下次重启。阶梯跑完还没成就把这件事**说清**,不假装收了。
+ */
+function scheduleIntentSettle(row: Row, settle: IntentSettlement, attempt = 0): void {
+  const delay = INTENT_LADDER_MS[attempt];
+  if (delay === undefined) {
+    console.error(
+      `[ash] 哨兵 ${row.id} 创建失败的收口始终落不进库，这一行会一直写着 running（pid=${row.pid}），`
+      + "下一次开机接回会把它判掉",
+    );
+    return;
+  }
+  const timer = setTimeout(() => {
+    void settleIntentRow(row, settle)
+      .then(() => { publish(row.taskId); })
+      .catch((e) => {
+        console.error(`[ash] 哨兵 ${row.id} 创建失败的收口第 ${attempt + 1} 次还是落不进库:`, detail(e));
+        scheduleIntentSettle(row, settle, attempt + 1);
+      });
+  }, delay);
+  timer.unref?.();
 }
 
 /** 创建期能动手的那一面句柄:**所有权由它本身证明**,不经过 pid 身份判定(见文件头)。 */
@@ -160,39 +228,49 @@ async function abortRegistration(
   why: string,
   opts: { handle?: SpawnHandle; announced?: boolean } = {},
 ): Promise<StartMonitorResult> {
-  const verdict = await releaseProcess(
-    row,
-    kind === "failed" ? "哨兵的 pid 没能记下来，进程一并收回" : `${why}（放行前撤销，命令未开工）`,
-    opts.handle,
-  );
+  // **收进程这一步自己也会抛**(回收圈里每一笔读写都可能):抛出去的后果跟它失败的后果不一样
+  // —— 失败只是「没确认退出」,抛出去则连下面的收口一起跳过,于是留下一条没人管的 running 行。
+  // 所以这里按「最坏那一档」兜住(第 10 轮审查 F3 的同类项),绝不让它带走整个收尾。
+  let verdict: ReclaimVerdict = "unaccounted";
+  try {
+    verdict = await releaseProcess(
+      row,
+      kind === "failed" ? "哨兵的 pid 没能记下来，进程一并收回" : `${why}（放行前撤销，命令未开工）`,
+      opts.handle,
+    );
+  } catch (e) {
+    console.error(`[ash] 哨兵创建没走完,收进程这一步自己抛了 monitor=${row.id} pid=${row.pid}:`, detail(e));
+  }
   if (verdict !== "reclaimed") {
     console.error(
       `[ash] 哨兵创建没走完,进程未确认退出 monitor=${row.id} pid=${row.pid}（${verdict}）：${why}`,
     );
   }
-  const current = (await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0);
-  // 「这一行归别人」只有一种判据:它已经不是 running。此刻还是 running 的只能是我们自己那条
-  // 意图行 —— 上膛(`armRow`)也要求 running,而上了膛就走不到这里。
-  const mine = !current || current.status === "running";
   const note = verdict === "owed"
     ? "进程还没确认退出，回收责任已记下（开机会再收一次）"
     : "进程还没确认退出，而回收责任也没能落库（见 server 日志里的 pid，仍在重试落盘）";
-  if (mine && current) {
-    if (verdict === "reclaimed") {
-      await dropIntent(row.id);
-    } else {
-      // 行上那句话要说清**是哪一种没走完**:自己的失败(pid 没记下来)跟被撤销读起来不一样。
-      const reason = kind === "failed" ? `没能记下它的 pid：${why}。${note}` : `创建没走完：${why}。${note}`;
-      try {
-        await db.update(monitors)
-          .set({ status: "lost", endedAt: now(), endedReason: reason })
-          .where(and(eq(monitors.id, row.id), eq(monitors.status, "running")));
-      } catch (inner) {
-        console.error(`[ash] 哨兵 ${row.id} 的结局也写不进库:`, detail(inner));
-      }
-    }
-    publish(row.taskId);
+  // 「这一行归别人」只有一种判据:它已经不是 running —— 而那条判据**写在收口那两笔的 WHERE 里**
+  // (`settleIntentRow`),不再先 `select` 一次自己判。两个原因:
+  //  · 那一次裸读抛出去的话,整个收口连带被跳过,留下一条 running、无人接管、也没有重试者的行
+  //    (第 10 轮审查 F3 实测 `stored.status=running` + `commandStarted=false` + `pending=[]`);
+  //  · 读完再判中间还有一道缝,用户正在这一刻点停时,判据按 SQL 走才是原子的。
+  // 改到 0 行 = 这一行已经归别人(用户点出来的「已停止」、删除流程的中间态),正是我们该什么都
+  // 不碰的那一档;改到 1 行 = 它是我们自己那条意图行,而且再也不会有人来接管它(没放行 ⇒ 没
+  // attach ⇒ 没到期定时器),所以必须当场落定。
+  const settle: IntentSettlement = verdict === "reclaimed"
+    ? { kind: "drop" }
+    // 行上那句话要说清**是哪一种没走完**:自己的失败(pid 没记下来)跟被撤销读起来不一样。
+    : {
+      kind: "lost",
+      reason: kind === "failed" ? `没能记下它的 pid：${why}。${note}` : `创建没走完：${why}。${note}`,
+    };
+  try {
+    await settleIntentRow(row, settle);
+  } catch (e) {
+    console.error(`[ash] 哨兵 ${row.id} 的创建失败状态没能落进库,已排重试:`, detail(e));
+    scheduleIntentSettle(row, settle);
   }
+  publish(row.taskId);
   // 时间线上先写过一句「哨兵已起」时必须留一句更正 —— 不然看时间线的人只会看到「起了」,
   // 而那条命令其实一个字都没跑。
   if (opts.announced) {
@@ -446,6 +524,21 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     let handed = false;
     let announced = false;    // 时间线上那句「哨兵已起」写出去了吗(失败时要追一句更正)
     try {
+      // ③-0 **交接要可恢复**。闸和身份边条两样都没有时(只可能是 win32 + 边条写失败),这条
+      //      命令可能已经开工,而 ash 这一刻要是没了就再没有东西能定位它 —— 重启枚举的是
+      //      monitors(pid 还空着)和边条(没写成),两边都指不到那个进程。带着这种交接放行等于
+      //      把「以后谁都收不掉它」写进系统,所以拒(第 10 轮审查 F2-C;判据在 spawn 层的
+      //      `handoverRecoverable`)。要收的那个进程由**句柄**证明所有权,不经过 pid 那条路。
+      if (!spawned.recoverable) {
+        // pid 照旧落到那一行上:它是此刻唯一的线索(启动时刻留空 = 如实记「无从比对」)。
+        await noteProcessClue(row, null);
+        return await abandonRegistration(
+          row,
+          "这次开工交接恢复不了（这一侧没有放行闸，身份边条也写不下来），ash 一重启就再也定位不到它，所以不放行",
+          spawned,
+        );
+      }
+
       // ③ **身份要齐**。只有号没有代次 = 跨代认不回来,也就不许开工(见文件头第三条不变量)。
       const startedAt = await completeIdentity(spawned.pid);
       if (!startedAt) {

@@ -21,11 +21,16 @@
 // ⑥ **身份不全不许开工 / pid 空着的行要能被身份边条按代次认回来**(第 9 轮审查 F3)。
 // ⑦ **来源那一轮过去了就不上膛**(第 9 轮审查 F1):上膛是一条原子语句,它同时证明「行还
 //    running」「还是那一轮」「绑的那次审查还在那一轮上」—— 不是在每个新发现的 await 前补读。
+// ⑧ **交接恢复不了就拒,收进程要收整棵树**(第 10 轮审查 F2-C):闸和身份边条**两样都没有**时,
+//    那条命令可能已经开工而重启后谁都定位不到它 —— 这一档只有「拒」一个正确答案。反过来只少
+//    一样(POSIX 上边条写不下来)不致命,照旧放行,把一次正常创建搞失败同样是错。
+// ⑨ **补偿自己失败时也得有人接管**(第 10 轮审查 F3):收尾那几笔读写一样会抛,而抛出去就连
+//    收口一起跳过,留下一条 running、无人接管、也没有重试者的行。
 // ④ **闸本身的两面**:写端关闭(= ash 在放行前没了)⇒ 壳在 exec 之前退出(97),命令从未开工;
 //    放行 ⇒ 命令照常跑起来。少了后半句,一个「永远不放行」的实现也能骗过前三条。
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import {
@@ -36,7 +41,7 @@ import {
 import { inspectProcess } from "../src/proc.js";
 
 const { dbClient } = await import("../src/db/index.js");
-const { monitorSpawnIdentityPath, spawnMonitor } = await import("../src/monitor-spawn.js");
+const { handoverRecoverable, monitorSpawnIdentityPath, spawnMonitor } = await import("../src/monitor-spawn.js");
 const { abandonRegistration } = await import("../src/monitor-create.js");
 const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 const { beginTaskRevocation, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
@@ -285,6 +290,34 @@ function failNextArm(): { restore: () => void } {
   return { restore: () => { (dbClient as { execute: typeof real }).execute = real; } };
 }
 
+/**
+ * 先让**上膛**抛一次,再让**收口那一笔**抛一次 —— 然后就放手。
+ *
+ * 为的是第 10 轮审查 F3 那一幕:上一版收尾里是一次裸读 + 一次裸写,抛出去就既没人接管、也没人
+ * 重试。所以这里要的不是「收尾能不能成功」,而是**它失败之后那一行最终有没有落定**。
+ */
+function failArmThenSettle(): { restore: () => void; settleFailed: () => boolean } {
+  const real = dbClient.execute.bind(dbClient);
+  let stage: "arm" | "settle" | "done" = "arm";
+  (dbClient as { execute: typeof real }).execute = (async (statement: unknown) => {
+    const sql = typeof statement === "string" ? statement : String((statement as { sql?: string })?.sql ?? "");
+    if (stage === "arm" && /^update "monitors" set "pid"/i.test(sql)) {
+      stage = "settle";
+      throw new Error("INJECTED_ARM_WRITE_FAILURE");
+    }
+    // 收口只有这两笔:确认收干净了就删掉那一行,收不干净就写成 lost。
+    if (stage === "settle" && /^(delete from "monitors"|update "monitors" set "status")/i.test(sql)) {
+      stage = "done";
+      throw new Error("INJECTED_SETTLE_WRITE_FAILURE");
+    }
+    return real(statement as Parameters<typeof real>[0]);
+  }) as typeof real;
+  return {
+    restore: () => { (dbClient as { execute: typeof real }).execute = real; },
+    settleFailed: () => stage === "done",
+  };
+}
+
 // ⑥ **创建期点停:页面说停了,后台就不许随后才开工。**
 //
 // 上一版的现场:点停读到一条 pid 还空着的运行行 → 回收层按「没有待收资源」放过 → 写成
@@ -452,7 +485,8 @@ function failNextArm(): { restore: () => void } {
 {
   const taskId = await makeTask();
   await reviewInFlight(taskId, "run-arm-round", { round: 1 });
-  runs.claimTurn(taskId, "reviewer");
+  // 审查来源由**占位方**交代(生产里是 free-review-round 的 `reviewSource`)。
+  runs.claimTurn(taskId, "reviewer", { run: "run-arm-round", round: 1 });
   const caller = await inTurnCaller(taskId);
   const m = marker();
   const paused = pausePidBackfill();
@@ -525,5 +559,85 @@ function failNextArm(): { restore: () => void } {
   assert.equal(isPidAlive(process.pid), true, "**绝不许去碰那个进程** —— 它不是我们的");
 }
 
-console.log("✓ 创建协议：登记失败什么都没起 / 回填失败不放行且命令从未开工 / 问不出身份时不冒充收干净 / 闸的两面 / pid 空着的行照实接回或按代次认回来 / 创建期点停与撤销都不放行 / 壳先退了也恰好结算一次 / 起壳之后每个失败出口都有人收尾 / 身份不全不放行 / 来源那一轮过去了就不上膛 均受回归保护");
+// ── ⑬ **交接要可恢复,收进程要收整棵树**(第 10 轮审查 F2-C)─────────────────────────
+//
+// 「可恢复」是两条路的或:有闸(命令还没开工,撒手即无残留)或者身份边条落了盘(认得回代次)。
+// 两条都没有时命令可能在跑而谁都定位不到它 —— 那一档只有「拒」一个正确答案。
+{
+  // 1) 判据本身。它是这一条不变量的全部内容,所以先把真值表钉死。
+  assert.equal(handoverRecoverable({ gated: true, identitySaved: true }), true);
+  assert.equal(handoverRecoverable({ gated: true, identitySaved: false }), true,
+    "有闸 ⇒ 命令还没开工:边条写不下来也没有需要定位的残留");
+  assert.equal(handoverRecoverable({ gated: false, identitySaved: true }), true,
+    "没有闸但记下了代次 ⇒ 重启后按代次认得回来");
+  assert.equal(handoverRecoverable({ gated: false, identitySaved: false }), false,
+    "**两样都没有 ⇒ 命令可能在跑而谁都收不掉它**,这一次创建必须被拒");
+
+  // 2) 边条写不下来是真会发生的一档(盘满、那个路径被占)。POSIX 上闸兜着,所以这一次创建
+  //    照旧该成功 —— 拿一个不致命的失败去毁一次正常创建同样是错。这里把写失败做成确定性的:
+  //    边条要落的那个路径上先摆一个目录,`writeFileSync` 必然 EISDIR。
+  const logPath = join(root, `handover-${process.pid}.log`);
+  mkdirSync(monitorSpawnIdentityPath(logPath), { recursive: true });
+  const token = `ash-handover-probe-${process.pid}`;
+  const touched = join(root, `${token}.touched`);
+  // 后代用 `( … ) &` 起:那个子壳跟父壳**同一份 argv**,所以 `pgrep -f` 数得到它 —— 于是
+  // 「只打根进程」和「打整组/整棵树」两种实现在下面那句断言上分得开。
+  const spawned = spawnMonitor({
+    command: `: ${token}; touch '${touched}'; ( while :; do sleep 0.2; done ) & while :; do sleep 0.2; done`,
+    cwd: root,
+    logPath,
+  });
+  assert.ok(!("error" in spawned), `台子前提:起得起来（${"error" in spawned ? spawned.error : ""}）`);
+  if ("error" in spawned) throw new Error(spawned.error);
+  assert.equal(statSync(monitorSpawnIdentityPath(logPath)).isDirectory(), true,
+    "台子前提:边条那一笔真的写失败了(路径上还是那个目录)");
+  assert.equal(spawned.recoverable, true, "POSIX 上闸恒在 ⇒ 边条写不下来也照旧可恢复,不该拒");
+  spawned.release();
+  await until("命令照常开工了 —— 边条写失败不致命", async () => existsSync(touched));
+  await until("后代也起来了(台子前提)", async () => psCount(token) >= 2);
+
+  // 3) **根进程退出不证明这条命令结束了**:句柄这一刀要覆盖它派生的后代。
+  spawned.kill();
+  await until("**整棵树/整组一起没了**", async () => psCount(token) === 0);
+
+  // win32 那两条 —— 没有闸时边条写失败就拒、`taskkill /T` 收整棵树 —— 在 macOS 上跑不到
+  // (`gated` 恒为真)。所以这里只钉判据和 POSIX 那一面,win32 一侧仍是**未在真机验证**的代码
+  // (根 AGENTS.md:那台机器现在连不上)。
+}
+
+// ── ⑭ **补偿自己失败时也得有人接管**(第 10 轮审查 F3)──────────────────────────────
+//
+// 上一版的收尾里先有一次裸读、再有一次裸写。读抛出去 ⇒ 下面的收口整段被跳过;写抛出去 ⇒ 只
+// 在日志里留一句。两种都留下同一样东西:一条 `running` 行,没有 tail、没有到期定时器、没有退出
+// 回调 —— 它不会产生任何结束事件,而**也没有任何人会再来重试**(实测 `stored.status=running`
+// + `commandStarted=false` + `pending=[]`)。
+//
+// 所以钉的不是「收尾会不会失败」,而是**失败之后那一行最终有没有落定**。
+{
+  const taskId = await makeTask();
+  const m = marker();
+  const injected = failArmThenSettle();
+  let created: Awaited<ReturnType<typeof startMonitor>>;
+  try {
+    created = await startMonitor({ taskId, command: m.command, description: "连收口都写不进库的" });
+  } finally {
+    injected.restore();
+  }
+  assert.equal(created.ok, false, "交接没走完就不许报成功");
+  assert.equal(injected.settleFailed(), true, "台子前提:收口那一笔真的被打掉了一次");
+  const stuck = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0);
+  assert.equal(stuck?.status, "running", "台子前提:这一刻库里就是那条没人管的 running 行");
+  await sleep(300);
+  assert.equal(existsSync(m.path), false, "**没放行 ⇒ 命令一个字都没跑过**");
+  await until("闸前那个壳照旧被收掉", async () => psCount(m.token) === 0);
+  // 重试阶梯第一级 1s。兜底仍然是开机接回,阶梯只是让这件事不用等到下次重启。
+  await until(
+    "那一行最终被收口 —— 补偿失败也有接管者",
+    async () => (await db.select().from(monitors)
+      .where(and(eq(monitors.taskId, taskId), eq(monitors.status, "running")))).length === 0,
+    6_000,
+  );
+}
+
+console.log("✓ 创建协议：登记失败什么都没起 / 回填失败不放行且命令从未开工 / 问不出身份时不冒充收干净 / 闸的两面 / pid 空着的行照实接回或按代次认回来 / 创建期点停与撤销都不放行 / 壳先退了也恰好结算一次 / 起壳之后每个失败出口都有人收尾 / 身份不全不放行 / 来源那一轮过去了就不上膛 / 交接恢复不了才拒、恢复得了就不许拒 / 句柄这一刀收整棵树 / 收口自己失败也有人重试 均受回归保护");
 await teardown();

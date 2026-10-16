@@ -17,6 +17,11 @@
 //    另一档,两者必须分别测。
 // ⑤ **说法要跟事实同步**:接回时那句「已记下回收责任」必须由最终 verdict 决定。先写肯定、
 //    再在 server 日志里纠正不算纠正 —— 卡片上那句话会一直留着(第 7 轮审查 N1)。
+// ⑧ **身份不全有两面,回收资格和补全机会都要照顾到**(第 10 轮审查 F2):孤儿组(组长已退、
+//    组里还有后代)上一版不看代次就直接算「我们的」⇒ `fresh` 下发组击杀 —— 活根那条路被拒掉
+//    之后又从这条路绕回了下刀资格;另一面是**补全机会不许丢**:接回那一刻 ps 不可用时只回填
+//    了 pid、启动时刻留空,而那之后再没有人会去读身份边条,于是「这一刻问不出来」被永久固化成
+//    「这条永远证不出身份」。锚(边条 + 债上那一列)和重试要一起留着。
 // ⑦ **身份不全不等于有权回收。** `pid_started_at` 为空的行(存量行,或 pid 回填那一刻 ps 恰好
 //    答不出启动时刻的行)原来在 `processIdentity` 里走到 `same` —— 「没什么可比对的,那就是同
 //    一个」⇒ `ours-alive` ⇒ 下刀。那条路上**「这个号上有进程活着」被当成了「已证明有权回收
@@ -27,7 +32,7 @@
 //    哨兵因此被接回判成 lost、随后按债杀掉(第 7 轮审查 F1)。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import {
@@ -35,6 +40,7 @@ import {
   detachAllMonitors, root, schema, startMonitor, stopMonitor, tasks, teardown, until,
 } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
+import { monitorSpawnIdentityPath } from "../src/monitor-spawn.js";
 
 const { stopMonitorsForTask, reclaimUnconfirmedStops } = await import("../src/monitor-reclaim.js");
 const { monitorWakeGate } = await import("../src/monitor-session.js");
@@ -351,11 +357,16 @@ const zhLstart = (lstart: string): string => {
   // ⑩-8 **组长退出不等于整组后代已退出**。命令自己跑完、重启探活都是按组长身份判结束的,
   // 而外层壳退了、它派生的那个还留在组里才是最常见的泄漏形态。收尾那一层要按**整组**收。
   const taskId = await makeTask({ status: "done" });
-  const leader = spawn("sh", ["-lc", `(${STUBBORN}) & exit 0`], { detached: true, stdio: "ignore" });
+  // 组长故意多活一小会儿:**启动时刻要在它还活着的时候记下来** —— 生产里这一列正是创建那一刻
+  // 落的(那时组长当然活着),所以孤儿组这一档手里**有**可验证的代次,敢按整组收。等它死了再去
+  // 问 ps 必然拿到 null,那是另一档(证不出代次 ⇒ 不下刀,见 ⑦-2)。
+  const leader = spawn("sh", ["-lc", `(${STUBBORN}) & sleep 0.4; exit 0`], { detached: true, stdio: "ignore" });
   leader.unref();
   const pid = leader.pid!;
+  await until("组长还活着时记下它的启动时刻", async () => !!inspectProcess(pid)?.startedAt);
+  const leaderStartedAt = inspectProcess(pid)!.startedAt;
   await until("组长退干净、后代还在组里", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
-  const monId = await insertMonitorRow(taskId, { pid, pidStartedAt: inspectProcess(pid)?.startedAt ?? null });
+  const monId = await insertMonitorRow(taskId, { pid, pidStartedAt: leaderStartedAt });
 
   await stopMonitorsForTask(taskId, "任务已删除", "destroy");
   assert.equal(isProcessGroupAlive(pid), false,
@@ -603,5 +614,65 @@ const zhLstart = (lstart: string): string => {
   assert.equal(await debtRow(monId), undefined, "确认收干净了才销账");
 }
 
+{
+  // ⑧-1 **孤儿组也要有可验证的代次**(第 10 轮审查 F2-A)。
+  //    组长已退、组里还有后代,而这一行没记下代次 —— 这一刻我们手里什么都证不出来:组号就是
+  //    当初那个 pid,老组退干净、同号被另一组复用且新组长先退出时,长得跟这一幕一模一样。
+  //    上一版这一档直接回 `ours-orphans`,而它在 `fresh` 下是**发组击杀信号**的。
+  const taskId = await makeTask({ status: "done" });
+  const leader = spawn("sh", ["-lc", `(${STUBBORN}) & exit 0`], { detached: true, stdio: "ignore" });
+  leader.unref();
+  const pid = leader.pid!;
+  await until("组长退干净、后代还在组里", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
+  assert.equal(reclaimState(pid, null), "unverifiable",
+    "组长已退 + 没记代次 ⇒ 证不出这一组是不是我们的,不许落到 ours-orphans 那一档");
+
+  const monId = await insertMonitorRow(taskId, { status: "stopped", pid, pidStartedAt: null });
+  await stopMonitorsForTask(taskId, "任务已删除", "destroy");
+  assert.equal(isProcessGroupAlive(pid), true, "**一刀都不许下** —— 这个号可能已经被别人当过组长");
+  const debt = await debtRow(monId);
+  assert.ok(debt, "照记责任:证不出身份恰恰最该留责任");
+  assert.match(debt.reason, /证不出/, "账上说清是「证不出代次」,不是「组长已退、组里还有后代」");
+
+  killTree(pid, "SIGKILL");   // 测试自己收场
+  await until("后代被收掉", async () => !isProcessGroupAlive(pid));
+  await db.delete(schema.monitorReclaimDebts).where(eq(schema.monitorReclaimDebts.monitorId, monId));
+}
+
+{
+  // ⑧-2 **一次查询失败不许把这条行永久降级**(第 10 轮审查 F2-B)。
+  //
+  //    现场:行上 pid 在、启动时刻空着(接回那一刻 ps 恰好不可用,只回填得了 pid),而这段时间
+  //    ps 仍然问不出来 ⇒ 停它只能记责任、不敢下刀。关键是**此刻留下的东西够不够让以后补全**:
+  //    身份边条不许撤(欠着责任时它是唯一的时间锚),债上也要带一份锚(行和边条都可能先没了)。
+  //    上一版两样都没有:边条在落终态时无条件撤掉、债表没有锚列,于是这条行永久停在
+  //    `unverifiable` —— 既不敢杀,也销不掉账。
+  const taskId = await makeTask({ status: "running" });
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "身份要靠锚补全的" });
+  assert.equal(started.ok, true);
+  const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+  const side = monitorSpawnIdentityPath(row.logPath);
+  assert.ok(existsSync(side), "台子前提:身份边条在盘上");
+  await db.update(monitors).set({ pidStartedAt: null }).where(eq(monitors.id, row.id));
+
+  await withPsOutage(row.pid!, async () => {
+    await stopMonitor(row.id, "用户点停");
+  });
+  assert.equal(isProcessGroupAlive(row.pid!), true, "这段时间证不出身份 ⇒ 不下刀");
+  const owed = await debtRow(row.id);
+  assert.ok(owed, "责任记下来了");
+  assert.equal(owed.pidStartedAt, null, "身份确实还没补全");
+  assert.ok(owed.spawnAnchorMs, "**锚要留在债上** —— 哨兵行和边条都可能先没了,那之后只剩这一笔");
+  assert.ok(existsSync(side), "**欠着责任就不许撤掉边条** —— 它是补全身份的唯一线索");
+
+  // ps 恢复 = 下一次开机清扫:这一刻第一次补得出身份 ⇒ 这才轮到补杀 + 销账。
+  await sweepMonitorReclaimDebts();
+  await until("补全身份之后才收掉它", async () => !isProcessGroupAlive(row.pid!));
+  assert.equal(await debtRow(row.id), undefined, "确认收干净了才销账");
+  assert.ok((await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)?.pidStartedAt,
+    "补回来的身份要落库,不是只在内存里用一次");
+  assert.equal(existsSync(side), false, "销账之后边条才真的没用了");
+}
+
 await teardown();
-console.log("✓ 撤销期不许创建 / 枚举失败整笔不走 / 停止返回前确认退出或留下持久回收责任 / 接回问同一份出口资格 / 点停也走记责那一圈 / 删除按资源责任核对而非卡片状态 / 另一个进程与问不出来分档记责、都不下刀 / 组长退出按整组收 / 开机重收「已停止但没确认退出」/ ps 不可用时接回不撒谎、删除不丢责任、恢复后收掉 / 落盘失败走补记梯子 / 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说 / 身份不全只留「证不出」:记责、不下刀,补全后才收");
+console.log("✓ 撤销期不许创建 / 枚举失败整笔不走 / 停止返回前确认退出或留下持久回收责任 / 接回问同一份出口资格 / 点停也走记责那一圈 / 删除按资源责任核对而非卡片状态 / 另一个进程与问不出来分档记责、都不下刀 / 组长退出按整组收 / 开机重收「已停止但没确认退出」/ ps 不可用时接回不撒谎、删除不丢责任、恢复后收掉 / 落盘失败走补记梯子 / 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说 / 身份不全只留「证不出」:记责、不下刀,补全后才收 / 孤儿组没代次也不下刀 / 锚与边条留到销账,恢复后补全身份才动手");

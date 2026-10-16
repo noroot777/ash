@@ -36,7 +36,7 @@ import { MONITOR_WAKE_TARGETS, monitorBlockedReason, monitorIdFromOrigin } from 
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
 import { freeReviewRuns, monitors, scheduledMessages, tasks } from "./db/schema.js";
-import { turnRole } from "./runs.js";
+import { turnIdentity } from "./runs.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -64,10 +64,19 @@ export type VerifiedTurn = {
   taskId: string;
   /** 那一轮的令牌(`tasks.active_turn_token`,每起一轮换一个,见 orchestrator.ts)。 */
   token: string;
-  /** 核验那一刻这一轮的角色(`turnRole` 的运行时事实)。null = 这一轮没表达角色。 */
+  /** 这一轮的角色(来自回合身份本身)。null = 没认出这一轮,或这一轮没表达角色。 */
   role: string | null;
-  /** 核验那一刻这个任务上正在进行的那次审查与轮次。null = 那一刻没有审查在进行。 */
+  /** 这一轮**为哪一次审查的哪一轮**而起(同一份回合身份里的那一项)。 */
   review: { run: string; round: number } | null;
+  /**
+   * **内存里这一轮认得这个令牌** —— 也就是说令牌、角色、审查代次出自同一份回合身份
+   * (runs.ts 的 `TurnIdentity`),不是拼起来的。
+   *
+   * false 有且只有一种解释:这个令牌代表的那一轮**此刻已经不是这个任务正在跑的那一轮**
+   * (它已经结束,或者派审占位已经接手)。那就必须拒 —— 第 10 轮审查 F1 实测过「按现在是
+   * 哪次审查」顺下去的后果:旧审查者提交的哨兵落在新派的审查者名下,原审查没有任何后续。
+   */
+  bound: boolean;
 };
 
 /**
@@ -83,14 +92,28 @@ export type MonitorCaller =
   | { kind: "unverified" };
 
 /**
- * 入口核验通过之后,把「是哪一轮」连角色、连审查代次一起留存下来。
+ * 入口核验通过之后,把「是哪一轮」整份取下来。
  *
- * **三样都在同一刻抓**:之后的每一步只拿它们去核对,不再问「现在是谁、现在是哪一轮审查」。
+ * **一次同步读,一份对象**(`turnIdentity`):令牌、角色、审查代次都出自回合身份本身,
+ * 这里一个 await 都没有,也就没有任何可以插进来的窗口。
+ *
+ * 上一版是「同步读角色 + `await` 现查『现在是哪次审查』」。那不是「一次抓全」,是把两份
+ * 不同时刻的事实拼成一份来源:第 10 轮审查 F1 实测,旧审查结束、新审查(换了审查者)刚写
+ * 进库而新令牌还没落下的那一瞬,一条由**原审查者**提交的请求被绑到了**新审查**上 ——
+ * HTTP 200、命令照跑、投递参数从 codex 变成 claude,原审查者等不到任何结果。
+ * 审查代次现在由派审那一侧在占位时交代(见 free-review-round.ts 的 `reviewSource`),
+ * 查不查「现在是哪一次」都不再影响这次创建的来源。
  */
-export async function verifiedTurn(taskId: string, token: string): Promise<VerifiedTurn> {
-  const role = turnRole(taskId);
-  const review = await reviewingRun(taskId);
-  return { taskId, token, role, review: review ? { run: review.id, round: review.round } : null };
+export function verifiedTurn(taskId: string, token: string): VerifiedTurn {
+  const held = turnIdentity(taskId);
+  const bound = !!held && held.token === token;
+  return {
+    taskId,
+    token,
+    bound,
+    role: bound ? held!.role : null,
+    review: bound ? held!.review : null,
+  };
 }
 
 /** 同上,直接给创建入口用的那一层。 */
@@ -205,8 +228,16 @@ export async function monitorSourceGate(
   // 对上之后用的是**被核验那一刻的角色**,不回头再问一次 `turnRole`:同一轮的回合锁可能已经
   // 放了(审查者挂完哨兵就按提示 pause 收尾这一轮,而哨兵本来就是为了以后叫醒它才挂的),
   // 这时现读会得到 null、把一个明明知道是谁提交的请求退回「说不清叫谁」。
+  //
+  // 两问都要:
+  //  · `bound` —— 抓来源那一刻,**内存里这一轮认不认这个令牌**(runs.ts `TurnIdentity`)。
+  //    不认就是「这个令牌代表的那一轮已经不是现在这一轮」:它已经收尾,或者派审占位接手了
+  //    (第 10 轮审查 F1 那个窗口);
+  //  · 库里那个令牌 —— 排队期间任务换了一轮的话,这一问才看得见(创建要在 `task:<id>`
+  //    队列里排,排到它时事实可能已经变了)。
   if (caller.kind === "turn"
-    && (caller.taskId !== task.id || !task.activeTurnToken || task.activeTurnToken !== caller.token)) {
+    && (!caller.bound || caller.taskId !== task.id
+      || !task.activeTurnToken || task.activeTurnToken !== caller.token)) {
     return { blocked: CALLER_EXPIRED, role: null, reviewRun: null, reviewRound: null };
   }
   const turn = caller.kind === "turn" ? caller.role : null;

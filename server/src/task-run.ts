@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -105,6 +105,8 @@ export async function runTask(
       .update(tasks)
       .set({ followUpFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
+    // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
+    bindTurnToken(taskId, turnToken);
     await setTaskStatus(taskId, "running");
     // 已验收任务被 fresh 重跑（Cron 到点 / fire）：旧「已验收」牌子当场摘掉——新一版
     // 产出不能躲在旧牌子下继续改（enterHumanGate 见 merged 会静默放行；审查实测：

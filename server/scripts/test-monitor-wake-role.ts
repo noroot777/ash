@@ -53,7 +53,7 @@ const byUser: MonitorCaller = { kind: "external" };
   // **reviewer 回合却没有审查在进行**这一档现在是拒 —— 它绑出来的是「reviewer + 空来源」,
   // 出口按普通任务判、唤醒时丢掉审查者的执行器配置(第 9 轮审查 F1 第 4 条)。
   await reviewInFlight(taskId, "run-wake-role");
-  runs.claimTurn(taskId, "reviewer");
+  runs.claimTurn(taskId, "reviewer", { run: "run-wake-role", round: 1 });
 
   assert.equal(await sourceRole(taskId, await inTurn(taskId)), "reviewer",
     "这次调用来自本任务当前这一回合,而这一回合是审查者 —— 来源就该认成 reviewer");
@@ -138,12 +138,20 @@ const byUser: MonitorCaller = { kind: "external" };
   assert.equal(await sourceRole(team, await inTurn(team)), null, "不在 single/reviewer 之列的角色不表达");
   assert.equal((await sourceGate(team, await inTurn(team))).blocked, null, "但照旧挂得上");
 
-  // ⑤-f 自报是回合、此刻却没有回合在跑(回合锁已经放了,例如收尾之后补挂)⇒ 跟 ⑤-b 同档:
-  //   凭据证明了「是这个任务的 agent」,证明不了「是哪条会话」。
+  // ⑤-f 自报是回合、**抓来源那一刻却没有回合在跑** ⇒ 拒,而且拒的是「那一轮已经不在了」。
+  //
+  //   凭据只证明了「是这个任务的 agent」。而来源必须出自一份**活着的回合身份**:令牌、角色、
+  //   审查代次三样要么来自同一份 `TurnIdentity`,要么这次调用就代表不了任何一轮
+  //   (第 10 轮审查 F1)。上一版这一档退成「说不清叫谁、指定一个再来」,可对 agent 那条路
+  //   `wake` 根本不参与判定(权威角色优先),那句出路是条死路。
+  //   生产里这一档也只有一种来法:那一轮真的过去了 —— 回合锁是在 agent 进程退出之后才放的,
+  //   所以任何还能发出来的 MCP 调用,它的回合必然还占着(重启接回那一侧由 reattach 重新绑)。
   const settled = await makeTask({ status: "paused" });
   await reviewInFlight(settled, "run-settled");
   const stale = await sourceGate(settled, await inTurn(settled), "paused");
-  assert.match(stale.blocked ?? "", /没说清哨兵醒来该叫谁/, "没有回合在跑就没有权威角色");
+  assert.match(stale.blocked ?? "", /那一轮已经结束了|换了一轮/, "没有活着的回合身份就不许代表任何一轮");
+  assert.equal(stale.role, null);
+  assert.equal(stale.reviewRun, null, "更不许顺手绑上「现在正在进行的那次审查」");
 
   // ⑤-f(对照)**核验那一刻有回合**,排到它时那一轮的锁已经放了 ⇒ 照旧按那一轮的角色挂。
   //   这跟 ⑤-f 是两件事:那边是「提交时就没有回合」(谁提交的无从得知),这边是「提交时是
@@ -151,7 +159,7 @@ const byUser: MonitorCaller = { kind: "external" };
   //   所以角色取**被核验那一刻**的,不回头再问一次 `turnRole`(那会得到 null)。
   const handedOff = await makeTask({ status: "paused" });
   await reviewInFlight(handedOff, "run-handed-off");
-  runs.claimTurn(handedOff, "reviewer");
+  runs.claimTurn(handedOff, "reviewer", { run: "run-handed-off", round: 1 });
   const reviewerCaller = await inTurn(handedOff);
   runs.releaseTurn(handedOff);                    // 审查者 pause 收尾了这一轮(令牌还没清)
   const kept = await sourceGate(handedOff, reviewerCaller, "paused");
@@ -359,9 +367,12 @@ const byUser: MonitorCaller = { kind: "external" };
 
   // ⑨-a agent 在自己回合里调:凭据对上 ⇒ 角色取运行时事实(`turnRole`),不查会话、不碰 ps。
   const inTurnTask = await makeTask();                   // running ⇒ 事件只排队,不会真拉 agent
-  await db.update(tasks).set({ activeTurnToken: "TURN-OK" }).where(eq(tasks.id, inTurnTask));
   await reviewInFlight(inTurnTask, "run-entry");
-  runs.claimTurn(inTurnTask, "reviewer");
+  runs.claimTurn(inTurnTask, "reviewer", { run: "run-entry", round: 1 });
+  // 令牌**两处一起落**:库里一份(落库处核对的那份)+ 绑到这一轮的回合身份上。生产里这两笔
+  // 就在同一处(orchestrator 写 `active_turn_token` 紧跟 `bindTurnToken`,第 10 轮审查 F1)。
+  await db.update(tasks).set({ activeTurnToken: "TURN-OK" }).where(eq(tasks.id, inTurnTask));
+  runs.bindTurnToken(inTurnTask, "TURN-OK");
   const ok = await post(
     inTurnTask,
     { command: "sleep 30", description: "审查者挂的" },
@@ -421,8 +432,9 @@ const byUser: MonitorCaller = { kind: "external" };
   // 拒绝是有出路的(新回合里重挂一次),换绑没有任何人能发现 —— 所以这一档必须拒。
   const stale = await makeTask();
   await reviewInFlight(stale, "run-stale");
-  runs.claimTurn(stale, "reviewer");
+  runs.claimTurn(stale, "reviewer", { run: "run-stale", round: 1 });
   await db.update(tasks).set({ activeTurnToken: "OLD-REVIEW-TURN" }).where(eq(tasks.id, stale));
+  runs.bindTurnToken(stale, "OLD-REVIEW-TURN");
   let openQueue!: () => void;
   const held = serialize(`task:${stale}`, () => new Promise<void>((r) => { openQueue = r; }));
   const submitted = post(
@@ -439,6 +451,7 @@ const byUser: MonitorCaller = { kind: "external" };
   runs.releaseTurn(stale);
   runs.claimTurn(stale, "single");
   await db.update(tasks).set({ activeTurnToken: "NEW-IMPL-TURN" }).where(eq(tasks.id, stale));
+  runs.bindTurnToken(stale, "NEW-IMPL-TURN");
   openQueue();
   await held;
   const expired = await submitted;
@@ -459,8 +472,9 @@ const byUser: MonitorCaller = { kind: "external" };
   // token 可能还对得上,光核令牌拦不住它。
   const bumped = await makeTask();
   await reviewInFlight(bumped, "run-bumped", { round: 1 });
-  runs.claimTurn(bumped, "reviewer");
+  runs.claimTurn(bumped, "reviewer", { run: "run-bumped", round: 1 });
   await db.update(tasks).set({ activeTurnToken: "ROUND-1-TURN" }).where(eq(tasks.id, bumped));
+  runs.bindTurnToken(bumped, "ROUND-1-TURN");
   let openBumped!: () => void;
   const heldBumped = serialize(`task:${bumped}`, () => new Promise<void>((r) => { openBumped = r; }));
   const fromRound1 = post(
@@ -489,8 +503,9 @@ const byUser: MonitorCaller = { kind: "external" };
   //   空来源在出口按普通任务判、唤醒时丢掉审查者的执行器配置(同 ⑤-i)。
   const settledRun = await makeTask();
   await reviewInFlight(settledRun, "run-settling", { round: 1 });
-  runs.claimTurn(settledRun, "reviewer");
+  runs.claimTurn(settledRun, "reviewer", { run: "run-settling", round: 1 });
   await db.update(tasks).set({ activeTurnToken: "SETTLING-TURN" }).where(eq(tasks.id, settledRun));
+  runs.bindTurnToken(settledRun, "SETTLING-TURN");
   let openSettling!: () => void;
   const heldSettling = serialize(`task:${settledRun}`, () => new Promise<void>((r) => { openSettling = r; }));
   const duringSettle = post(

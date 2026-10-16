@@ -142,7 +142,7 @@ export async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (
       monitor_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
-      pid INTEGER NOT NULL, pid_started_at TEXT,
+      pid INTEGER NOT NULL, pid_started_at TEXT, spawn_anchor_ms INTEGER,
       command TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
       last_error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL, last_attempt_at TEXT
@@ -336,6 +336,9 @@ export async function ensureSchema() {
     // 调用发生时那一行报的 CLI 身份。旧行 NULL = 当初没记,那时只能靠 source_run 自证来源
     // (键的重建在 migrations.ts 的 repairPendingCallKey —— SQLite 改不了主键)。
     "ALTER TABLE monitor_pending_calls ADD COLUMN cli_session_id TEXT",
+    // 身份还没补全时,把「那一刻 spawn 的」这个时间锚留在债上:哨兵行和身份边条都可能先没了,
+    // 而缺了锚,一次查询失败就被永久固化成「这条证不出身份」(第 10 轮审查 F2-B)。
+    "ALTER TABLE monitor_reclaim_debts ADD COLUMN spawn_anchor_ms INTEGER",
     "ALTER TABLE monitors ADD COLUMN native_id TEXT",
     "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",
     // 默认值是 'unknown' 而**不是** 'bounded'：加列那一刻的存量行里，claude 投影的

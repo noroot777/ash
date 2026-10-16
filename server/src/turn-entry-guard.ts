@@ -16,6 +16,7 @@
 // 「送完要还的那把锁」当返回值交出去。两个入口的判据(验收互斥、唤醒资格、读失败的退避
 // 语义)必须逐字一致 —— 分家一次就是第 6 轮审查那两条:单飞这侧全部修好,团队那侧照旧。
 import { claimTurn, claimWakeTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import type { TurnReview } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 
@@ -29,6 +30,11 @@ export type TurnEntryInput = {
   turnHeld?: boolean;
   /** 「这个任务此刻还能不能被这条消息叫醒」——占住位之后才问（见 orchestrator 的 opts）。 */
   wakeGuard?: () => Promise<string | null>;
+  /**
+   * 这一轮**为哪一次审查的哪一轮**而起（派审那一侧才知道，见 runs.ts 的 `TurnIdentity`）。
+   * 普通回合不传。它跟着回合身份一起落，创建来源核验只读这一份，不再现查「现在是哪次审查」。
+   */
+  reviewSource?: TurnReview | null;
 };
 
 export async function enterTurn(input: TurnEntryInput): Promise<boolean> {
@@ -42,8 +48,8 @@ export async function enterTurn(input: TurnEntryInput): Promise<boolean> {
   // 抢不到 = 这个任务此刻正跑着别的回合，这一句话没送出去。调用方必须知道。
   // turnHeld 那条路用真实身份接管——只读预检查代替不了原子所有权（审查实测：两个并发
   // 启动双双 202）。
-  if (input.turnHeld) reclaimTurn(taskId, input.sessionRole);
-  else if (!claimTurn(taskId, input.sessionRole)) return false;
+  if (input.turnHeld) reclaimTurn(taskId, input.sessionRole, input.reviewSource);
+  else if (!claimTurn(taskId, input.sessionRole, input.reviewSource ?? null)) return false;
 
   // 验收互斥：**先占己锁（turn），再查彼锁（acceptance），两步之间没有 await**——
   // acceptTask 那边是镜像（beginAccepting 先占，acceptanceGuard 再查 isTurnClaimed）。

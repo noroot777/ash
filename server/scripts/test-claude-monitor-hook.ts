@@ -15,7 +15,8 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { MONITOR_MAX_TIMEOUT_MS } from "@ash/shared/monitor";
-import { db, inTurnCaller, monitors, tasks, stopMonitor, makeTask, teardown } from "./monitors-fixture.js";
+import { db, inTurnCaller, monitors, tasks, stopMonitor, makeTask, teardown, runs,
+} from "./monitors-fixture.js";
 
 const { Hono } = await import("hono");
 const { claudeMonitorHookDecision, monitorRedirectHook } = await import("../src/claude-monitor-hook.js");
@@ -34,6 +35,9 @@ const event = (toolInput: Record<string, unknown>, toolName = "Monitor") => ({
  * 里的令牌,见 monitor-routes.ts)。内置 Monitor 的 hook 一定发生在那条会话自己的回合里。
  */
 const turnOf = async (taskId: string) => {
+  // 回合要**真占一个**:来源身份(令牌 + 角色 + 审查代次)住在那份回合记录上,没有回合就
+  // 没有任何一轮能被代表(第 10 轮审查 F1)。hook 本来就只发生在那条会话自己的回合里。
+  if (!runs.isTurnClaimed(taskId)) runs.claimTurn(taskId, "single");
   const caller = await inTurnCaller(taskId);
   return caller.kind === "turn" ? caller : null;
 };
@@ -190,7 +194,11 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
   });
 
   const taskId = await makeTask();
+  // 真实现场:这一轮既在库里有令牌,也在内存里有一份回合身份(生产里两笔同处落下,
+  // 见 orchestrator 的 `bindTurnToken`)。
+  runs.claimTurn(taskId, "single");
   await db.update(tasks).set({ activeTurnToken: "TURN-OK" }).where(eq(tasks.id, taskId));
+  runs.bindTurnToken(taskId, "TURN-OK");
 
   const ok = await post(taskId, "TURN-OK", "sleep 36");
   // 非 2xx 会被 claude 当成 non-blocking error —— 那等于**放行**，正是这个 hook 要堵的。
@@ -204,7 +212,9 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
 
   // 反过来：token 对不上就不许代办。不然这个端点等于「谁报一个 taskId 就替谁挂」。
   const other = await makeTask();
+  runs.claimTurn(other, "single");
   await db.update(tasks).set({ activeTurnToken: "TURN-OK" }).where(eq(tasks.id, other));
+  runs.bindTurnToken(other, "TURN-OK");
   const bad = await post(other, "TURN-WRONG", "sleep 37");
   assert.equal(bad.status, 200);
   const badReason = (await bad.json() as { hookSpecificOutput: { permissionDecisionReason: string } })
@@ -280,7 +290,9 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     guarded.route("/api", guardedApi);
 
     const multiTask = await makeTask();
+    runs.claimTurn(multiTask, "single");
     await db.update(tasks).set({ activeTurnToken: "TURN-OK" }).where(eq(tasks.id, multiTask));
+    runs.bindTurnToken(multiTask, "TURN-OK");
     await writeSystemSetting("instanceMode", "multi");
     try {
       const hit = (body: unknown) => guarded.request(MONITOR_HOOK_PATH, {

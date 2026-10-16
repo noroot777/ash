@@ -42,11 +42,19 @@
 //
 // 它在 POSIX 上是多余的（闸已经保证命令没开工），但**代码一份、两边同一条路**：平台差异
 // 只剩「有没有闸」这一处，不再多出一条只有 Windows 走的恢复分支。
+//
+// ── 交接必须可恢复，否则这次创建就该拒（第 10 轮审查 F2-C）────────────────────────
+//
+// 上面两件事（闸、边条）各自会失败，而**失败的后果取决于另一件在不在**：边条写不下来时，
+// POSIX 还有闸兜着（命令没开工，撒手即无残留）；win32 两样都没有时，命令可能已经在后台跑
+// 着，而重启后没有任何东西能定位它。所以「这次交接可不可恢复」是一个要**显式回答**的问题
+// （`handoverRecoverable`），答不出是就拒这次创建 —— 带着一个找不回来的进程放行，等于把
+// 「以后谁都收不掉它」写进系统。判据住在这一层（只有这里知道闸装没装、边条写没写成）。
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentBaseEnv } from "./executors/spawn.js";
-import { IS_WINDOWS, userShellLaunch } from "./platform.js";
+import { IS_WINDOWS, killTree, userShellLaunch } from "./platform.js";
 import { RUNS_DIR } from "./paths.js";
 
 /** 输出落在任务自己的 run 目录下，跟会话正文、trace 同一处，归档清理不必另记一份路径。 */
@@ -59,6 +67,20 @@ export const monitorSpawnIdentityPath = (logPath: string): string => `${logPath}
 
 /** 边条里记的那两样：**这次 spawn 的 pid**，和 spawn 返回的那一刻（时间锚，见文件头）。 */
 export type SpawnIdentity = { pid: number; spawnedAtMs: number };
+
+/**
+ * **这一次交接可不可恢复** —— ash 要是在「回填 pid」之前整个没了,还有没有东西能定位那个进程。
+ *
+ * 两条路任一条成立就够:
+ *  · `gated` —— 装了放行闸(POSIX):命令还没开工,ash 一死写端就关、壳在 exec 之前自退,
+ *    不存在需要定位的残留;
+ *  · `identitySaved` —— 身份边条落盘了:命令可能已经开工,但重启后按代次认得回来。
+ *
+ * 两条都不成立(win32 + 边条写失败)⇒ 命令可能在后台跑着而我们手里什么都没有。这一档只有一个
+ * 正确答案:**拒这次创建**(第 10 轮审查 F2-C)。
+ */
+export const handoverRecoverable = (p: { gated: boolean; identitySaved: boolean }): boolean =>
+  p.gated || p.identitySaved;
 
 /** 读回那份边条。坏了/没了一律 null —— 调用方按「没有身份可用」走诚实的那一支。 */
 export function readSpawnIdentity(logPath: string): SpawnIdentity | null {
@@ -83,6 +105,11 @@ export function clearSpawnIdentity(logPath: string): void {
 
 export type SpawnedMonitor = {
   pid: number;
+  /**
+   * **这一次交接可不可恢复**(`handoverRecoverable` 的结论)。false = 命令可能已经开工,而
+   * ash 要是现在没了就再没有东西能定位它 —— 创建层必须据此拒掉这次创建(第 10 轮审查 F2-C)。
+   */
+  recoverable: boolean;
   /** 命令自己跑完时回调一次（仅限本进程起的那次；跨 server 重启接回来的拿不到）。 */
   onExit: (cb: (code: number | null) => void) => void;
   /**
@@ -182,12 +209,16 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
     child.unref();
     // **身份边条:这里到 return 之间一个 await 都没有**(见文件头)。写失败不致命 —— 它是
     // 「库还没写进去」那一档的兜底,所以只出声,不把一次正常创建搞失败。
+    let identitySaved = false;
     try {
       writeFileSync(
         monitorSpawnIdentityPath(opts.logPath),
         JSON.stringify({ pid: child.pid, spawnedAtMs: Date.now() } satisfies SpawnIdentity),
       );
+      identitySaved = true;
     } catch (e) {
+      // 写失败**不一定**致命:有闸的那一侧命令还没开工。致不致命由 `handoverRecoverable` 判,
+      // 创建层据此决定放行还是拒(第 10 轮审查 F2-C)。
       console.error(`[ash] 哨兵身份边条写不下来 ${monitorSpawnIdentityPath(opts.logPath)}:`, e);
     }
     // 闸的写端：**也要 unref**，不然 ash 的事件循环会被这个 pipe 吊着不退（`child.unref()`
@@ -202,6 +233,7 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
     gate?.on?.("error", () => { /* 壳已经没了 = 这次没放行,调用方照旧走回收圈 */ });
     return {
       pid: child.pid,
+      recoverable: handoverRecoverable({ gated, identitySaved }),
       release: () => {
         if (!gate?.write) return;      // win32：没有闸，命令早就在跑了
         try { gate.write("go\n"); gate.end?.(); } catch { /* 它已经没了：那就是没放行 */ }
@@ -217,11 +249,13 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
         subscribers.add(cb);
       },
       kill: () => {
-        // 句柄这一侧:`child.kill()` 打的是这个 ChildProcess 自己。`detached` 的壳自成进程组,
-        // 所以连它派生的后代一起要靠组信号 —— 组号就是 pid,而**这里的所有权由句柄证明**,
-        // 不必再去问 ps 的启动时刻(第 9 轮审查 F3:身份不全时 pid 那条路不许下刀)。
+        // **要覆盖它派生的后代,不能只打根进程**:根进程退出不证明这条命令结束了
+        // (第 10 轮审查 F2-C)。`killTree` 两边各走各的 —— POSIX 打组信号(组号就是 pid,
+        // 因为壳是 `detached` 的),win32 打 `taskkill /T` 那棵树(跟 ash 收 agent 进程树用的
+        // 是同一个函数)。**win32 这一侧未在真机验证**(根 AGENTS.md:那台机器现在连不上)。
+        // 所有权在这里由**句柄**证明,不必去问 ps 的启动时刻(第 9 轮审查 F3)。
         if (settled) return;
-        try { if (!IS_WINDOWS) process.kill(-child.pid!, "SIGKILL"); } catch { /* 组已经空了 */ }
+        try { killTree(child.pid!, "SIGKILL"); } catch { /* 已经空了 */ }
         try { child.kill("SIGKILL"); } catch { /* 它已经没了 */ }
       },
       waitExit: (deadlineMs: number) => new Promise<boolean>((resolve) => {

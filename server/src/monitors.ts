@@ -277,9 +277,6 @@ export async function finish(
     .set({ status, endedAt: now(), endedReason: reason, exitCode })
     .where(eq(monitors.id, monitorId));
   publish(row.taskId);
-  // 这一条已经落了终态:身份边条再也不会被读(它只服务「行还 running 而 pid 空着」那一档),
-  // 撤掉它免得在 run 目录里攒一堆没用的小文件。撤不掉无所谓(见 `clearSpawnIdentity`)。
-  if (row.kind === "ash" && row.logPath) clearSpawnIdentity(row.logPath);
   const code = exitCode === null ? "" : `，退出码 ${exitCode}`;
   const total = (await db.select({ events: monitors.events }).from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
   await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（共推送 ${total} 条事件）`);
@@ -291,12 +288,20 @@ export async function finish(
   // 第三种(`unaccounted`:库写不进去)这里只能出声:**身份还在**(这一行没被删,pid 和启动
   // 时刻都还在上面),开机时 `reclaimUnconfirmedStops` 会按非运行态把它重问一遍。真正不能
   // 放过它的是**销毁身份**那条路 —— 那边整笔中止(见 monitor-reclaim.ts)。
-  if (await settleReclaim(outcome) === "unaccounted") {
+  const verdict = await settleReclaim(outcome);
+  if (verdict === "unaccounted") {
     console.error(
       `[ash] 哨兵收尾时既没确认退出、回收责任也没落库 monitor=${monitorId} pid=${row.pid}`
       + `（哨兵行还留着它的身份，开机会再问一遍）`,
     );
   }
+  // 身份边条**只在确认收干净之后**才撤。
+  //
+  // 它不只是「pid 空着那一档的兜底」:当这一行的 `pid_started_at` 还空着时,边条里那个时间锚
+  // 是**唯一**能把身份补全的东西(见 monitor-reclaim-debts 的 `completeIdentity`)。责任还欠着
+  // 就把它删掉,等于把「这一刻 ps 答不出来」永久固化成「这条永远证不出身份」:之后既不敢下刀,
+  // 也销不掉账(第 10 轮审查 F2-B)。确认退出之后它才真的没用了。
+  if (row.kind === "ash" && row.logPath && verdict === "reclaimed") clearSpawnIdentity(row.logPath);
 }
 
 export type StopMonitorResult =
@@ -498,7 +503,9 @@ async function reattachBlockedReason(row: Row): Promise<string | null> {
 async function adoptSpawnIdentity(row: Row): Promise<Row | null> {
   const side = readSpawnIdentity(row.logPath);
   if (!side) return null;
-  const { verdict, startedAt } = processStartedNear(side.pid, side.spawnedAtMs);
+  // 命令原文一起交过去:±2 秒是个窗口,原进程结束、号在窗口内被复用时时间锚照样成立
+  // (第 10 轮审查 F2-C)。壳的 argv 里带着命令原文,对不上就一律不认。
+  const { verdict, startedAt } = processStartedNear(side.pid, side.spawnedAtMs, 2_000, row.command);
   if (verdict === "different") return null;
   const adopted: Row = { ...row, pid: side.pid, pidStartedAt: startedAt };
   try {

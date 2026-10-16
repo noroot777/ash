@@ -52,12 +52,13 @@
 //    `unaccounted`(该留责任却没留下来)三者互斥,空值不再同时表示「没什么可收」和
 //    「不敢判断」。每个调用点都得把第三种当失败处理 —— 销毁身份那条路整笔中止,其余至少
 //    出声并继续重试落盘。
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
-import { monitorReclaimDebts } from "./db/schema.js";
+import { monitorReclaimDebts, monitors } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
+import { clearSpawnIdentity, readSpawnIdentity } from "./monitor-spawn.js";
 import { IS_WINDOWS, isPidAlive, isProcessGroupAlive, killTree } from "./platform.js";
-import { processIdentity } from "./proc.js";
+import { processIdentity, processStartedNear } from "./proc.js";
 import { now } from "./util.js";
 
 /**
@@ -129,7 +130,13 @@ export function reclaimState(pid: number, pidStartedAt: string | null): ReclaimS
     if (!isProcessGroupAlive(pid)) return "gone";
     // 组里有人。组长还在吗 —— 这一问要用 `kill(pid,0)` 而不是 ps:ps 失败时 null 会被
     // 当成「组长已退」,于是一整组陌生进程被说成我们的后代。
-    if (!isPidAlive(pid)) return "ours-orphans";
+    //
+    // **组长已退也要有可验证的代次才算我们的**(第 10 轮审查 F2-A)。上一版这一档不看
+    // `pidStartedAt` 就直接回 `ours-orphans`,而那一档在 `fresh` 下是**发组击杀信号**的 ——
+    // 于是「当初没记下启动时刻」的行(存量行、回填那一刻 ps 不可用的行)从活根那条路被拒掉之后,
+    // 又从这条路绕回了下刀资格:组号就是当初那个 pid,老组退干净、同号被另一组复用且新组长
+    // 先退出时,我们手里没有任何东西能证明这一组是自己的后代。证不出就留「不知道」。
+    if (!isPidAlive(pid)) return pidStartedAt ? "ours-orphans" : "unverifiable";
     return stateOfIdentity(identityOf(pid, pidStartedAt));
   }
   // win32 没有进程组这回事,`killTree` 打的是 `taskkill /T` 那棵树,能问的只有这个 pid 本身。
@@ -173,6 +180,7 @@ const pending = new Set<string>();
  */
 export async function noteReclaimDebt(debt: {
   monitorId: string; taskId: string; pid: number; pidStartedAt: string | null;
+  spawnAnchorMs?: number | null;
   command: string; reason: string; error?: unknown;
 }): Promise<boolean> {
   if (dbClient.closed) return false;
@@ -182,11 +190,18 @@ export async function noteReclaimDebt(debt: {
     // 同一条反复欠账只占一行:覆盖的是「最近一次为什么还没收掉」,attempts 由清扫侧累加。
     await db.insert(monitorReclaimDebts).values({
       monitorId: debt.monitorId, taskId: debt.taskId, pid: debt.pid,
-      pidStartedAt: debt.pidStartedAt, command: debt.command, reason: debt.reason,
+      pidStartedAt: debt.pidStartedAt, spawnAnchorMs: debt.spawnAnchorMs ?? null,
+      command: debt.command, reason: debt.reason,
       lastError: detail, attempts: 0, createdAt: now(), lastAttemptAt: null,
     }).onConflictDoUpdate({
       target: monitorReclaimDebts.monitorId,
-      set: { lastError: detail, reason: debt.reason },
+      // 身份/锚只在「这一次知道得更多」时才覆盖:撞键的那一行可能是上一次留下的,
+      // 把已知的启动时刻盖成 null 等于把证据擦掉(同一条判据见 claude 投影那边的撞键吸收)。
+      set: {
+        lastError: detail, reason: debt.reason,
+        ...(debt.pidStartedAt ? { pidStartedAt: debt.pidStartedAt } : {}),
+        ...(debt.spawnAnchorMs ? { spawnAnchorMs: debt.spawnAnchorMs } : {}),
+      },
     });
     return true;
   } catch (error) {
@@ -194,6 +209,19 @@ export async function noteReclaimDebt(debt: {
     console.error(`[ash] 回收责任落库失败 monitor=${debt.monitorId} pid=${debt.pid}:`, error);
     return false;
   }
+}
+
+/**
+ * 销账 + 把时间锚也撤掉:**这个进程的责任到此结束**,边条唯一的用途(补全身份)也就没了。
+ *
+ * 只给清扫梯子这一侧用 —— `finish` 那一侧自己按 verdict 决定撤不撤(它手里就有 logPath)。
+ */
+async function clearDebtAndAnchor(monitorId: string): Promise<void> {
+  await clearReclaimDebt(monitorId);
+  if (dbClient.closed) return;
+  const logPath = (await db.select({ logPath: monitors.logPath }).from(monitors)
+    .where(eq(monitors.id, monitorId))).at(0)?.logPath;
+  if (logPath) clearSpawnIdentity(logPath);
 }
 
 /** 销账:**只有确认它不在了**才调这里(见 `reclaimState`)。 */
@@ -227,6 +255,7 @@ export type ReclaimTicket = {
 /** 需要补记的那一笔(落盘失败时原样带着,供重试)。 */
 type DebtInput = {
   monitorId: string; taskId: string; pid: number; pidStartedAt: string | null;
+  spawnAnchorMs?: number | null;
   command: string; reason: string;
 };
 
@@ -266,26 +295,70 @@ export type ReclaimOutcome =
  * | `unverifiable` | 记责任、不杀(没记启动时刻,证不出代次) | 同左 —— **第 9 轮加的就是这一格**:原来它折进 `ours-alive` 就杀 |
  * | `unknown` | 记责任、不杀(身份问不出来) | 同左 —— **第 6 轮改的就是这一格**:原来它在这一列直接返回空 |
  */
+/**
+ * **身份不全时,用时间锚把它补全** —— 一次查询失败不许把这条记录永久降级。
+ *
+ * 锚有两个来处(谁在就用谁):哨兵行旁边那份身份边条(`spawn` 返回 pid 那一刻写的),或者这笔
+ * 债上自己带的那一份。补得上就当场落库(行 + 债都补),补不上就照旧留「不知道」。
+ *
+ * 为什么必须有这一步(第 10 轮审气 F2-B):接回那一侧在 ps 恰好不可用时只回填了 pid、启动时刻
+ * 留空,而**那之后再没有人会去读身份边条**(认领只发生在 pid 为空的行上),探活也只会拿现有的
+ * 残缺身份反复问同一个问题 —— 于是这条行永久停在 `unverifiable`:停它只会记债、下不了刀,
+ * 销不掉账。查询恢复之后本该能证出身份,证据却没人再去取。
+ */
+async function completeIdentity(m: {
+  id: string; pid: number; pidStartedAt: string | null; command: string;
+  logPath?: string | null; spawnAnchorMs?: number | null;
+}): Promise<{ pidStartedAt: string | null; anchorMs: number | null }> {
+  const side = m.logPath ? readSpawnIdentity(m.logPath) : null;
+  const anchorMs = side?.pid === m.pid ? side.spawnedAtMs : m.spawnAnchorMs ?? null;
+  if (m.pidStartedAt || anchorMs === null) return { pidStartedAt: m.pidStartedAt, anchorMs };
+  // 命令原文一起交过去:时间邻近单独不足以认下一个号(见 proc.ts 的 `processStartedNear`)。
+  const { verdict, startedAt } = processStartedNear(m.pid, anchorMs, 2_000, m.command);
+  if (verdict !== "same" || !startedAt) return { pidStartedAt: null, anchorMs };
+  if (!dbClient.closed) {
+    await Promise.all([
+      db.update(monitors).set({ pidStartedAt: startedAt })
+        .where(and(eq(monitors.id, m.id), eq(monitors.pid, m.pid), isNull(monitors.pidStartedAt)))
+        .catch((e) => console.error(`[ash] 哨兵身份补全写不进库 monitor=${m.id}:`, e)),
+      db.update(monitorReclaimDebts).set({ pidStartedAt: startedAt })
+        .where(and(eq(monitorReclaimDebts.monitorId, m.id), isNull(monitorReclaimDebts.pidStartedAt)))
+        .catch(() => { /* 这一笔还没落盘,下面记账时会带上补全后的身份 */ }),
+    ]);
+  }
+  return { pidStartedAt: startedAt, anchorMs };
+}
+
 export async function reclaimMonitorProcess(
-  m: { id: string; taskId: string; pid: number | null; pidStartedAt: string | null; command: string },
+  m: {
+    id: string; taskId: string; pid: number | null; pidStartedAt: string | null; command: string;
+    /** 身份边条就在它旁边:身份不全时靠它补全(见 `completeIdentity`)。 */
+    logPath?: string | null;
+  },
   reason: string,
   opts: { fresh: boolean },
 ): Promise<ReclaimOutcome> {
-  if (m.pid === null) return { state: "settled" }; // claude 投影行:没有进程,也没有责任
-  const state = reclaimState(m.pid, m.pidStartedAt);
+  const pid = m.pid;
+  if (pid === null) return { state: "settled" }; // claude 投影行:没有进程,也没有责任
+  // **先补身份再判档**:补得上就按完整身份走(该杀的杀、该销的销),补不上才落到「不知道」。
+  const identity = await completeIdentity({ ...m, pid });
+  const pidStartedAt = identity.pidStartedAt;
+  const state = reclaimState(pid, pidStartedAt);
   if (isReclaimedState(state)) {
     // 顺手把上辈子留下的那笔销掉:这是唯一能确认「它真的不在了」的时刻。
     await clearReclaimDebt(m.id);
     return { state: "settled" };
   }
   const debt: DebtInput = {
-    monitorId: m.id, taskId: m.taskId, pid: m.pid, pidStartedAt: m.pidStartedAt,
+    monitorId: m.id, taskId: m.taskId, pid, pidStartedAt,
+    // 身份还没补全就把锚一起留下:哨兵行和边条都可能先没了,之后这笔债是唯一的线索。
+    spawnAnchorMs: pidStartedAt ? null : identity.anchorMs,
     command: m.command, reason: `${reason}（${stateNote(state)}）`,
   };
   const accounted = await noteReclaimDebt(debt);
-  if (state === "ours-alive" || (state === "ours-orphans" && opts.fresh)) killByPid(m.pid);
+  if (state === "ours-alive" || (state === "ours-orphans" && opts.fresh)) killByPid(pid);
   if (!accounted) return { state: "unaccounted", debt };
-  return { state: "owed", ticket: { monitorId: m.id, pid: m.pid, pidStartedAt: m.pidStartedAt } };
+  return { state: "owed", ticket: { monitorId: m.id, pid, pidStartedAt } };
 }
 
 /** 落在账本上的那句「为什么还没收掉」。按档说清楚,别让人事后分不出是哪一种不确定。 */
@@ -294,7 +367,7 @@ function stateNote(state: ReclaimState): string {
   if (state === "ours-orphans") return "组长已退、组里还有后代";
   if (state === "not-ours") return "这个号现在是另一个进程，原进程退出无法确认";
   if (state === "unverifiable")
-    return "这个号上有进程，但当初没记下启动时刻，证不出是不是原来那个（不敢下刀）";
+    return "这个号上还有进程，但当初没记下启动时刻，证不出是不是原来那一个/那一组（不敢下刀）";
   return "进程查询不可用，判不出身份";
 }
 
@@ -375,14 +448,20 @@ export async function heldReclaimDebts(monitorIds: string[]): Promise<Set<string
 /** 推一笔。true = 这一笔结了(确认不在了,或者再也认不出它);false = 还欠着。 */
 async function settleDebt(monitorId: string): Promise<boolean> {
   if (dbClient.closed) return false;
-  const debt = (await db.select().from(monitorReclaimDebts)
+  let debt = (await db.select().from(monitorReclaimDebts)
     .where(eq(monitorReclaimDebts.monitorId, monitorId))).at(0);
   // 读到空只有一种正当解释:**确认退出之后有人销了它**。一笔从没落盘的责任绝不能走到
   // 这条梯子上来 —— 那会被这一句当成「结了」(所以落盘失败走的是补记梯子,见 settleReclaim)。
   if (!debt) return true;
+  // 这一刻可能正是第一次问得出身份(ps 恢复了、或者当初那一笔就没记全)。补得上才轮到下刀。
+  const { pidStartedAt } = await completeIdentity({
+    id: debt.monitorId, pid: debt.pid, pidStartedAt: debt.pidStartedAt,
+    command: debt.command, spawnAnchorMs: debt.spawnAnchorMs,
+  });
+  debt = { ...debt, pidStartedAt };
   const state = reclaimState(debt.pid, debt.pidStartedAt);
   if (isReclaimedState(state)) {
-    await clearReclaimDebt(monitorId);
+    await clearDebtAndAnchor(monitorId);
     return true;
   }
   if (state === "ours-alive") {
@@ -394,7 +473,7 @@ async function settleDebt(monitorId: string): Promise<boolean> {
     // 开机再问一遍,不下刀 —— 杀错人不可逆(同一个判据见 `reclaimMonitorProcess` 的 `fresh`)。
     killTree(debt.pid, "SIGKILL");
     if (await confirmReclaimed(debt.pid, debt.pidStartedAt, 1_000)) {
-      await clearReclaimDebt(monitorId);
+      await clearDebtAndAnchor(monitorId);
       console.error(`[ash] 回收责任已销账 monitor=${monitorId} pid=${debt.pid}（补杀成功）`);
       return true;
     }

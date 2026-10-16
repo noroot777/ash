@@ -115,12 +115,19 @@ export function isSameProcess(pid: number, expectedStartedAt?: string | null): b
  * `toleranceMs` 的来历:`ps -o lstart` 的精度是秒,spawn 到写盘之间还隔着几毫秒,所以 ±2 秒
  * 是「同一次 spawn」的合理界。超出这个界的只有两种:这个号已经被复用(`different`),或者
  * 根本不是那次 spawn 留下的。
+ *
+ * **时间邻近单独不足以授权破坏性操作**(第 10 轮审查 F2-C):±2 秒是个窗口,原进程结束、这个
+ * 号在窗口内被复用时它照样成立。所以调用方该交什么就交什么 —— `expectCommand` 给了就必须在
+ * 这一刻的命令行里原样出现(哨兵的壳是 `sh -lc "<闸><命令原文>"`,命令原文在 argv 里),
+ * 对不上一律按 `different` 处理:宁可说「认不回来」,也不拿一个窗口巧合去碰别人的进程。
  */
 export function processStartedNear(
-  pid: number, anchorMs: number, toleranceMs = 2_000,
+  pid: number, anchorMs: number, toleranceMs = 2_000, expectCommand?: string | null,
 ): { verdict: ProcessIdentity; startedAt: string | null } {
   const info = inspectProcess(pid);
   if (!info || info.startedAtMs === null) return { verdict: "unqueryable", startedAt: null };
+  const want = expectCommand?.trim();
+  if (want && !(info.command ?? "").includes(want)) return { verdict: "different", startedAt: null };
   // **同一份快照里把启动时刻一起交出去**:认下来的调用方正要把它存成这条记录的代次,
   // 让它再查一次就等于在两份快照之间留一道缝(同一条理由见 `processIdentity` 的注释)。
   return Math.abs(info.startedAtMs - anchorMs) <= toleranceMs

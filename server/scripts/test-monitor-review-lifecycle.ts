@@ -59,7 +59,7 @@ async function reviewInFlight(
 // ── ① 审查回合退出、任务恢复终态：哨兵与它的待发事件都要留着 ───────────────────
 {
   const taskId = await makeTask();
-  runs.claimTurn(taskId, "reviewer");
+  runs.claimTurn(taskId, "reviewer", { run: "run-keep", round: 1 });
   await db.update(tasks).set({
     workflowMode: "free", followUpFrom: "done",
     activeTurnToken: "tok", activeDirectionToken: "dir",

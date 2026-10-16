@@ -271,6 +271,15 @@ export const monitorReclaimDebts = sqliteTable("monitor_reclaim_debts", {
   /** 认人的那一对:pid 会被复用,少了启动时刻就可能杀掉同号的无辜进程。 */
   pid: integer("pid").notNull(),
   pidStartedAt: text("pid_started_at"),
+  /**
+   * `pid_started_at` 还空着时,**把身份补全所需要的那个时间锚**留在这一笔上
+   * (`spawn` 返回 pid 的那一刻,见 monitor-spawn 的身份边条)。
+   *
+   * 为什么债上也要留一份:哨兵行和它的身份边条都可能先没了(任务被删、正常收尾清掉边条),
+   * 而那之后这笔债就是这个进程唯一的线索。缺了锚,「这一刻 ps 答不出来」会被永久固化成
+   * 「这条永远证不出身份」—— 既不敢下刀,也销不掉账(第 10 轮审查 F2-B)。
+   */
+  spawnAnchorMs: integer("spawn_anchor_ms"),
   /** 命令原文:清扫时打在日志里,否则没人看得出那个 pid 当初在干什么。 */
   command: text("command").notNull().default(""),
   /** 当初为什么要停它(删除/归档/审查结束/任务终态)。 */

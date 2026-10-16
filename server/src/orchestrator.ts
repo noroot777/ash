@@ -8,7 +8,8 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, untrackRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn } from "./runs.js";
+import type { TurnReview } from "./runs.js";
 import { consumeSingleRun } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -115,6 +116,12 @@ export async function continueTask(
     /** 旁路回合结束后恢复进入旁路前的任务状态。 */
     sideTurn?: boolean;
     sessionRole?: Extract<SessionRole, "single" | "reviewer">; freshSession?: boolean;
+    /**
+     * 这一轮**为哪一次审查的哪一轮**而起(只有派审那一侧说得出,见 runs.ts `TurnIdentity`)。
+     * 它跟着回合身份一起落:哨兵创建的来源核验只读这一份,不再现查「现在是哪一次审查」——
+     * 那条现查在派审交接期会把旧审查的请求绑到新审查上(第 10 轮审查 F1)。
+     */
+    reviewSource?: TurnReview | null;
     /** 内部旁路回合可钉在一个准确工作目录（例如验收快照的 detached worktree）。 */
     cwd?: string;
     /**
@@ -226,6 +233,7 @@ export async function continueTask(
     handoff: head?.handoff,
     turnHeld: opts.turnHeld,
     wakeGuard: opts.wakeGuard,
+    reviewSource: opts.reviewSource,
   })) return false;
   // catch 那边署名用的就是它：出错时 task 可能压根没读出来，所以按 head 的快照兜底，
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
@@ -299,6 +307,9 @@ export async function continueTask(
       .update(tasks)
       .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
+    // 令牌落库的同一处把它绑到这一轮的运行时身份上:来源核验要的是「库里的令牌」和
+    // 「内存里这一轮」是同一件事,而不是两份各自独立的读(见 runs.ts `bindTurnToken`)。
+    bindTurnToken(taskId, turnToken);
 
     // 续聊/重跑同样按**这一回合是谁点的**解析执行器(§八)。跨人时降级到本人的默认
     // 执行器,并把这次降级写进时间线 —— 换执行器可能换模型档位,产出会变,不能静默。
