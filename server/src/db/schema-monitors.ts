@@ -100,6 +100,18 @@ export const monitors = sqliteTable("monitors", {
   // 来源确认的时长(毫秒),与起点无关。用来表达「知道盯多久、但起点不确定」——那时
   // expires_at 不可信,但这一列仍然能告诉用户「盯 90 秒」。
   timeoutMs: integer("timeout_ms"),
+  /**
+   * **这个哨兵是哪条会话起的**(`sessions.role`:`single`=执行者 / `reviewer`=审查者)。
+   *
+   * 哨兵唯一的出口是「唤醒这个任务」,而一个任务同时可以有两条会话 —— 审查是**旁路回合**,
+   * 跑在自己那条 `reviewer` 会话上。少了这一列,事件入队时填不出 `scheduled_messages
+   * .session_role`,投递就按默认的 `single` 走:**审查者挂的哨兵醒来时叫的是执行者**。
+   * 那一轮既续不上审查(审查链还停在 reviewing 等它续跑),又凭空让执行者跑了一轮。
+   *
+   * NULL = 当初没记的存量行,或者起它的那一刻认不出活跃会话 —— 退回默认的 `single`,
+   * 也就是这一列加上之前的老行为。
+   */
+  sourceRole: text("source_role"),
 });
 
 // ── 还没配上 `task_started` 的 Monitor 调用 ────────────────────────────────────

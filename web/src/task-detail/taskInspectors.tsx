@@ -16,6 +16,7 @@ import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.ts
 import { SideChatPane } from "../side-chat/SideChatPane.tsx";
 import { monitorBlockedReason } from "@ash/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
+import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 
 export interface TaskInspectorContext {
@@ -45,6 +46,31 @@ export interface TaskInspectorContext {
   onOpenScmDiff: (target: ScmDiffTarget) => void;
 
   notify: Notify;
+}
+
+/**
+ * 哨兵那一格外面这一层只为一件事：**审查进行中的终态任务，哨兵其实是挂得上的**。
+ *
+ * 自由工作流的审查是旁路回合，跑在一个**已经 done 的任务**上（终态原样不动），而它要等的
+ * 那件事（跑一遍全量测试）恰恰最需要哨兵——服务端的 `monitorTaskGate` 因此对「这个任务上
+ * 有一条 `reviewing` 的审查」放行。少了这一层，面板会一边写着「任务已经结束」一边把起哨兵
+ * 的按钮灰掉，跟后端的真实判据相反。
+ *
+ * 只在**真会被状态挡住**的任务上订阅自由工作流状态（终态、未归档）：其余状态压根碰不到
+ * 那道闸，白搭一条 2.5s 轮询。归档不吃这条豁免（任务都被收走了，审查链也没有续下去的
+ * 地方），所以那种情况也不订阅。
+ */
+function MonitorInspectorPane({ context }: { context: TaskInspectorContext }) {
+  const { task } = context;
+  const mayExempt = !task.archived && monitorBlockedReason(task) !== null && task.workflowMode !== "preset";
+  const { state } = useFreeWorkflowState(task.id, mayExempt);
+  const activeReview = (state?.reviews ?? []).some((run) => run.status === "reviewing");
+  return (
+    <MonitorInspector
+      monitors={context.monitors}
+      blockedReason={monitorBlockedReason(task, { activeReview })}
+    />
+  );
 }
 
 // 图标条的顺序就是这个数组的顺序（`orderedValidTabs` 按它归位，localStorage 里存的次序
@@ -166,9 +192,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     title: "哨兵",
     icon: <Pulse size={14} />,
     shortcut: "m",
-    render: (context) => (
-      <MonitorInspector monitors={context.monitors} blockedReason={monitorBlockedReason(context.task)} />
-    ),
+    render: (context) => <MonitorInspectorPane context={context} />,
   },
 ];
 

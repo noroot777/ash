@@ -24,6 +24,11 @@
 // 空空如也——用户翻遍界面也对不上账，只能得出「这功能坏了」。2026-10-14 实测的那个任务
 // 挂了 12 个内置 Monitor、ash 一个都不知道，用户的第一反应正是「为什么 inspector 里没
 // 东西」。只读也比没有强，前提是**界面必须如实说明它只读**（见 MonitorCard）。
+//
+// **`claude` 这一种现在只会是存量**：2026-10-16 起拉起 claude 时直接 `--disallowedTools
+// Monitor`（见 executors/claude.ts 那段注释），新回合里 agent 唯一能挂的就是 ash 这种。
+// 投影、回填、收尾那一整套仍然留着，因为老任务的会话文件里还有它们——翻开 2026-10-16
+// 之前的任务，面板得答得出「那 12 个 Monitor 后来怎么了」。
 
 export const MONITOR_STATUSES = ["running", "stopped", "expired", "exited", "lost"] as const;
 export type MonitorStatus = (typeof MONITOR_STATUSES)[number];
@@ -538,14 +543,36 @@ export function mergeMonitorEventText(existing: string, incoming: string): strin
  *
  * 终态的那三种和归档分开说：归档是「这个任务收进柜子了」，终态是「它跑完了」——后者
  * 重新跑起来就又能挂，措辞得给出这条出路。
+ *
+ * ── `activeReview`：任务跑完了，但**审查这件事还没完** ────────────────────────
+ *
+ * 自由工作流的审查是在一个**已经 done 的任务**上跑的旁路回合（终态原样不动）。所以光看
+ * `status` 的话，审查者连一个哨兵都挂不上：它要等的那件事（跑一遍全量测试）恰恰是最需要
+ * 哨兵的那种。实测后果是它退而求其次用了 claude 内置的 `Monitor`——那个活不过这一回合，
+ * 于是说完「套件结束会叫我」就再也没有下文（Bp2LkwfRO37A 第 2 轮审查）。
+ *
+ * 判据给的是「有没有一条正在进行的审查」，而不是「这一刻是不是审查回合」：哨兵的事件要在
+ * **下一个**回合才送达，那时审查者已经 pause 住了、没有任何回合在跑——按后者判会在最关键
+ * 的那一刻拒掉它。归档不吃这条豁免：那是「收进柜子了」，跟做没做完无关。
  */
 const MONITOR_BLOCKING_STATUSES = new Set(["done", "failed", "canceled"]);
 
+/**
+ * 「这个任务现在能不能挂哨兵 / 哨兵的事件还能不能唤醒它」——创建入口、事件出口、唤醒前
+ * 最后一道闸共用这一份判据（三处分家就等于没防）。
+ *
+ * `activeReview` = 这个任务上有一条**正在进行**的审查。自由工作流的审查是旁路回合，跑在
+ * 一个已经 done 的任务上，而它要等的那件事恰恰最需要哨兵；只看 status 的话审查者一个都挂
+ * 不上（2026-10-16 实测：于是它退而求其次用了活不过这一回合的内置 Monitor）。服务端由
+ * `monitorTaskGate` 在被状态拦下来时才查一次库填进来。**归档不吃这条豁免**：任务都被收走
+ * 了，审查链也没有续下去的地方。
+ */
 export function monitorBlockedReason(
   task: { status: string; archived?: boolean | null },
+  opts?: { activeReview?: boolean },
 ): string | null {
   if (task.archived) return "任务已归档，不能再挂哨兵";
-  if (MONITOR_BLOCKING_STATUSES.has(task.status))
+  if (MONITOR_BLOCKING_STATUSES.has(task.status) && !opts?.activeReview)
     return "任务已经结束，哨兵的输出不会再唤醒它——要盯新的活，先让这个任务重新跑起来";
   return null;
 }

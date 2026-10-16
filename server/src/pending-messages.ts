@@ -37,6 +37,8 @@ import { taskStartStatus } from "./task-start-status.js";
 import { releaseTurn, whenTurnIdle } from "./runs.js";
 import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
+import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
+import { hasActiveReview, monitorWakeCheckpoint } from "./monitor-session.js";
 import { deliveryOptions, deliveryVerdict, isDueForDelivery, monitorWakeGuard, pendingExecutionIntent } from "./pending-verdict.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -282,13 +284,17 @@ async function deliverWhenIdle(
     // 没送出去,退回队列等下一次触发。
     // 正文用 `claimed.text` 而不是 `message.text`:等回合退干净的这段时间里,哨兵可能
     // 已经往同一行后面追加了新的事件(见 beginDelivery 的注释)。
-    const started = await continueTask(message.taskId, claimed.text, {
+    // 哨兵叫醒的这一轮还要带上 agent 当初 pause 时留给自己的那段交代(monitorWakeCheckpoint)。
+    const checkpoint = await monitorWakeCheckpoint(message);
+    const started = await continueTask(message.taskId, claimed.text + (checkpoint?.append ?? ""), {
       ...options,
       ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
       onDelivered: async () => {
         delivered = true;
         const at = Date.now();
         await markSent(message);
+        // 确认送进会话之后才取走:起跑失败时那段交代要原样留着给下一次重投。
+        await checkpoint?.consume();
         noteDeliveryTiming(message.taskId, { ...spans, idleAt, at });
       },
     });
@@ -384,7 +390,13 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         t != null && t.mode === "single" && m.execution && t.groupId
           ? !!(await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0)?.paused
           : false;
-      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused } : null, at);
+      // 「审查还在进行」只在**哨兵事件撞上终态任务**时才查：审查跑在已经 done 的任务上,
+      // 不查的话审查者挂的哨兵醒来就在这儿被取消掉(见 pending-verdict 的 `reviewing`)。
+      // 其余情况一次库都不多查 —— 这是投递扫描的热路径。
+      const reviewing = t != null && monitorIdFromOrigin(m.origin) !== null && monitorBlockedReason(t) !== null
+        ? await hasActiveReview(m.taskId)
+        : false;
+      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, reviewing } : null, at);
       if (verdict.action === "wait") {
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。
@@ -412,8 +424,10 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         let delivered = false;
         let refused: string | null = null;
         const guard = monitorWakeGuard(m);
+        // 同单任务那条路:哨兵叫醒时把 pause 时留下的交代一起喂回去,送达后才取走。
+        const checkpoint = await monitorWakeCheckpoint(m);
         try {
-          const started = await continueTask(m.taskId, claimed.text, {
+          const started = await continueTask(m.taskId, claimed.text + (checkpoint?.append ?? ""), {
             ...options,
             ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
             throwOnTeamUnavailable: true,
@@ -421,6 +435,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
               delivered = true;
               const at = Date.now();
               await markSent(m);
+              await checkpoint?.consume();
               // 调度台是常驻的,没有「等回合退干净」这一段,所以两个时间点同一个值。
               noteDeliveryTiming(m.taskId, { dueAt, busyMs, queuedAt, idleAt: queuedAt, at });
             },

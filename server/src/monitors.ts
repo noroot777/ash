@@ -22,7 +22,6 @@ import {
   MONITOR_TAIL_MAX_BYTES,
   MONITOR_TAIL_MAX_LINES,
   mergeMonitorEventText,
-  monitorBlockedReason,
   normalizeMonitorTimeout,
   monitorMessageOrigin,
   monitorExactExpiry,
@@ -34,6 +33,7 @@ import { db, dbClient } from "./db/index.js";
 import { monitors, projects, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
 import { monitorLogPath, readLogTail, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
+import { monitorSourceRole, monitorTaskGate } from "./monitor-session.js";
 import { enqueueMessage, flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
 import { isSameProcess, inspectProcess } from "./proc.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -154,10 +154,12 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
   return serialize(`task:${input.taskId}`, async () => {
     const task = (await db.select().from(tasks).where(eq(tasks.id, input.taskId))).at(0);
     if (!task) return { ok: false, status: 404, error: "任务不存在" };
-    // 入口与出口同一份判据（`monitorBlockedReason`）。只判归档、不判终态的话，已完成的
+    // 入口与出口同一份判据（`monitorTaskGate`）。只判归档、不判终态的话，已完成的
     // 任务上照样起得来一个真进程，而 `pushToTask` 会把它推的每一条都按终态拒掉——命令
     // 在后台烧着，任务永远不醒（第 2 轮审查实测）。
-    const blocked = monitorBlockedReason(task);
+    // 那一份判据里还含着「审查还在进行」这条豁免：审查跑在已经 done 的任务上，不豁免的话
+    // 审查者一个哨兵都挂不上（见 monitor-session.ts）。
+    const blocked = await monitorTaskGate(task);
     if (blocked) return { ok: false, status: 409, error: blocked };
 
     const live = await liveMonitorsOf(input.taskId);
@@ -204,6 +206,9 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       // 起点就是 spawn 那一刻（见 schema-monitors.ts）。
       sourceRun: null,
       startLowAt: null,
+      // **哨兵醒来时该叫哪条会话**：审查是旁路回合，跑在自己那条 reviewer 会话上。认不出
+      // 来就留 NULL = 按老样子叫执行者（见 monitor-session.ts）。
+      sourceRole: await monitorSourceRole(input.taskId),
       // ash 自己起的：期限是它自己定的，当然知道。
       sourceLifetime: "bounded",
       // ash 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，
@@ -347,11 +352,14 @@ async function pushToTask(row: Row, text: string): Promise<boolean> {
   // 重新叫起来跑一轮（第 1 轮审查实测：总线真实走了 done → running → done）。这道判断
   // 放在**唯一出口**上而不是散在调用点：收尾路径有五条（过期 / 自己退出 / 被停 / 推满
   // 上限 / 重启后补读），逐条去加漏一条就等于没防。
+  // 投影里**故意带上 id**（`row.taskId` 本来就在手上）：`monitorWakeGuard` 那一问是按
+  // 「谁按 {status, archived} 两字段读 tasks」被回归精确注入的（test-monitor-races ㉒），
+  // 这一处跟它撞同一个形状就会把那条注入骗走，让别人的用例静默变成空测。
   const task = (await db
-    .select({ status: tasks.status, archived: tasks.archived })
+    .select({ id: tasks.id, status: tasks.status, archived: tasks.archived })
     .from(tasks)
     .where(eq(tasks.id, row.taskId))).at(0);
-  if (!task || monitorBlockedReason(task) !== null) return false;
+  if (!task || await monitorTaskGate(task) !== null) return false;
 
   const origin = monitorMessageOrigin(row.id);
   const existing = (await db
@@ -395,7 +403,13 @@ export async function mergeOrEnqueueMonitorEvent(
   if (merged.length > 0) {
     publishPendingMessages(row.taskId);
   } else {
-    await enqueueMessage({ taskId: row.taskId, text, origin: monitorMessageOrigin(row.id), ownerUserId: row.ownerUserId });
+    // **角色跟着哨兵行走,不在投递那一刻现查**:那时起它的那条会话早就不在跑了,查活进程
+    // 只会得到下一代人(或者什么都没有)。记在行上,审查者挂的哨兵醒来时才叫得回审查会话
+    // ——否则默认的 `single` 会把执行者叫起来跑一轮,而审查链还停在 reviewing 等它续跑。
+    await enqueueMessage({
+      taskId: row.taskId, text, origin: monitorMessageOrigin(row.id),
+      ownerUserId: row.ownerUserId, sessionRole: row.sourceRole,
+    });
   }
 }
 

@@ -136,7 +136,7 @@ export async function ensureSchema() {
       lifetime_evidence TEXT, source_pid INTEGER, source_pid_started_at TEXT,
       start_evidence TEXT, timeout_ms INTEGER,
       start_anchor_width_ms INTEGER, tool_use_id TEXT,
-      source_run TEXT, start_low_at TEXT
+      source_run TEXT, start_low_at TEXT, source_role TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_pending_calls (
@@ -354,6 +354,9 @@ export async function ensureSchema() {
     // 代次结论与起点下界的持久化依据(见 schema-monitors.ts)。存量行一律 NULL。
     "ALTER TABLE monitors ADD COLUMN source_run TEXT",
     "ALTER TABLE monitors ADD COLUMN start_low_at TEXT",
+    // 起它的那条会话的角色。审查是旁路回合,跑在自己那条 reviewer 会话上 —— 少了它,
+    // 审查者挂的哨兵醒来时叫的是执行者(见 schema-monitors.ts 的 source_role)。
+    "ALTER TABLE monitors ADD COLUMN source_role TEXT",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",

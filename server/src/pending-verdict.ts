@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
 import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@ash/shared/cli-commands";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorTaskGate } from "./monitor-session.js";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 
@@ -34,6 +35,16 @@ export type DeliveryTaskView = {
   queueBlocked?: boolean;
   /** 所在分组已被用户暂停(groups.paused,持久事实)。 */
   groupPaused?: boolean;
+  /**
+   * 这个任务上有一条**正在进行**的审查(`free_review_runs.status='reviewing'`)。
+   *
+   * 终态任务的哨兵事件默认一律取消,但审查跑在已经 done 的任务上 —— 审查者挂的哨兵醒来
+   * 时,任务状态仍然是 done。不认这一条就等于:审查者好不容易挂上的哨兵,事件在出口被
+   * 当成「任务都结束了还醒什么」取消掉(见 shared 的 `activeReview`)。
+   *
+   * 由调用方在**被状态拦下来时**才查一次库填进来,纯函数本身不碰库。
+   */
+  reviewing?: boolean;
 };
 export type DeliveryMessageView = { mode: string; sendAt: string; execution?: boolean; origin?: string | null };
 export type DeliveryVerdict =
@@ -67,7 +78,8 @@ export function deliveryVerdict(
   //
   // 真人排的队列消息恰恰相反：终态正是它该发的时候（「下次醒来处理」就是他排它的意思）。
   // 所以只认 `origin` 是哨兵的那些，判据与创建入口同一份（`monitorBlockedReason`）。
-  if (monitorIdFromOrigin(message.origin) !== null && monitorBlockedReason(task) !== null)
+  if (monitorIdFromOrigin(message.origin) !== null
+    && monitorBlockedReason(task, { activeReview: task.reviewing }) !== null)
     return { action: "cancel", reason: "任务已经结束，这条哨兵事件不再唤醒它" };
   if (!isDueForDelivery(message, at)) return { action: "wait" };
   // 常驻调度台(team)正在说话时也接得住,所以只有单任务需要等它闲下来。
@@ -132,11 +144,16 @@ export function deliveryOptions(m: Row) {
 export function monitorWakeGuard(message: Row): (() => Promise<string | null>) | undefined {
   if (monitorIdFromOrigin(message.origin) === null) return undefined;
   return async () => {
+    // 投影**故意只有这两个字段**：回归用「谁按 {status, archived} 两字段读 tasks」来精确
+    // 认出这一问并只拒它一次（test-monitor-races ㉒ 的注入）。taskId 本来就在手上，没必要
+    // 从库里再读一遍 —— 多带一个 id 就会让那条注入静默落空，变成一段空测。
     const task = (await db
       .select({ status: tasks.status, archived: tasks.archived })
       .from(tasks)
       .where(eq(tasks.id, message.taskId))).at(0);
     if (!task) return "任务不存在";
-    return monitorBlockedReason(task);
+    // 审查进行中的豁免跟别处同一份（`monitorTaskGate`）：这一道闸守的是「租约抢下之后、
+    // 真正续跑之前」那个窗口，判据跟创建入口分家就等于没防。
+    return monitorTaskGate({ id: message.taskId, ...task });
   };
 }
