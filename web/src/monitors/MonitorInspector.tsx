@@ -96,6 +96,7 @@ export function MonitorInspector({
           // 重开就是一张新表单：代号一换，上一张的草稿不会被继承过来。
           key={form}
           busy={submitting === form}
+          needsWakeTarget={monitors.needsWakeTarget}
           onCancel={() => setForm(null)}
           onSubmit={(input) => {
             const mine = form;

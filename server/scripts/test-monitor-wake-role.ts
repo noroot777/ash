@@ -7,46 +7,46 @@
 // 不记来源的后果很安静:审查者挂的哨兵醒来时叫的是**执行者**——那一轮既续不上审查(审查链
 // 还停在 reviewing 等它续跑),又凭空让执行者跑了一轮。用户 2026-10-16 问的「审查应该停在
 // 这等唤醒」的后半截就是它:停住了,醒来却叫错了人,看上去还是「审查没续上」。
+//
+// **来源不靠「此刻哪个 agent 进程还活着」猜**(第 7 轮审查 F2):那一版在 ps 抽一下、审查者
+// 已经 pause、或者两条会话都查得到活时一律判不出角色,然后静默按默认叫执行者。现在创建入口
+// 必须交上一份**已核验**的来源(`MonitorCaller`),角色取**运行时事实** `turnRole`;两截都答
+// 不出来时要么由调用方显式指定唤醒目标,要么拒绝这次创建 —— 所以这一份也钉「拒」的那几条。
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import {
-  db, monitors, root, schema, sessions, tasks, makeTask, now, pendingOf, startMonitor, stopMonitor, until, teardown,
+  db, monitors, reviewInFlight, root, runs, schema, tasks, makeTask, now, pendingOf,
+  startMonitor, stopMonitor, until, teardown,
 } from "./monitors-fixture.js";
-import { inspectProcess } from "../src/proc.js";
+import type { MonitorCaller } from "../src/monitor-session.js";
 
 const { monitorSourceGate, monitorWakeCheckpoint, monitorWakeGate } = await import("../src/monitor-session.js");
-
-/** 「起哨兵这一刻,活着的那条会话是什么角色」——创建闸顺带回答的那一问。 */
-const sourceRole = async (taskId: string, status = "running"): Promise<string | null> =>
-  (await monitorSourceGate({ id: taskId, status, archived: false })).role;
 const { deliveryOptions, deliveryVerdict } = await import("../src/pending-verdict.js");
 
-/** 一个**活着的**进程身份:本进程自己。pid 会被复用,所以启动时刻必须一起给。 */
-const livePid = { pid: process.pid, startedAt: inspectProcess(process.pid)?.startedAt ?? null };
-/** 一个**早就没了**的进程身份。pid 极大 = 系统里不会有,启动时刻也对不上。 */
-const deadPid = { pid: 999_999, startedAt: "Thu Jan  1 00:00:00 1970" };
+/** 「这个哨兵是谁挂的」——创建闸顺带回答的那一问。来源由调用方交上来(入口已核验)。 */
+const sourceGate = (taskId: string, caller: MonitorCaller, status = "running") =>
+  monitorSourceGate({ id: taskId, status, archived: false }, caller);
+const sourceRole = async (taskId: string, caller: MonitorCaller, status = "running"): Promise<string | null> =>
+  (await sourceGate(taskId, caller, status)).role;
 
-async function addSession(
-  id: string, taskId: string, role: string, who: { pid: number; startedAt: string | null },
-): Promise<void> {
-  await db.insert(sessions).values({
-    id, taskId, role, agentType: "claude", executor: "claude@test",
-    cwd: root, startedAt: now(), agentPid: who.pid, agentStartedAt: who.startedAt,
-  });
-}
+/** agent 在自己回合里调的那一路:回合凭据已核验,角色由 `claimTurn` 落下的运行时事实给。 */
+const inTurn: MonitorCaller = { kind: "turn" };
+/** 人在界面上点的那一路(或别的任务的 agent):它不是这个任务的任何一条会话。 */
+const byUser: MonitorCaller = { kind: "external" };
 
 // ── ① 审查回合里起的哨兵:来源认成 reviewer ──────────────────────────────────
 {
   const taskId = await makeTask();
-  // 执行者那条会话的进程**上一轮就结束了**(这正是审查旁路回合跑起来时的真实样子)。
-  await addSession("s-impl", taskId, "single", deadPid);
-  await addSession("s-review", taskId, "reviewer", livePid);
+  // 审查是**旁路回合**:它跑起来的时候,回合锁上记着的角色就是 reviewer(`claimTurn` 落的,
+  // 审查结论的归属检查 `report_stage` 读的也是这一份)。台子**占到底不放**:放锁会把
+  // `continueWhenIdle` 排的回调放出去,那就真去拉一个 agent 了。
+  runs.claimTurn(taskId, "reviewer");
 
-  assert.equal(await sourceRole(taskId), "reviewer",
-    "起哨兵这一刻活着的是审查会话,来源就该认成 reviewer");
+  assert.equal(await sourceRole(taskId, inTurn), "reviewer",
+    "这次调用来自本任务当前这一回合,而这一回合是审查者 —— 来源就该认成 reviewer");
 
   const started = await startMonitor({
-    taskId, command: 'echo "套件跑完了"', description: "等套件", timeoutMs: 60_000,
+    taskId, command: 'echo "套件跑完了"', description: "等套件", timeoutMs: 60_000, caller: inTurn,
   });
   assert.ok(started.ok, `哨兵应该起得来：${started.ok ? "" : started.error}`);
   const monitorId = started.ok ? started.monitor.id : "";
@@ -73,27 +73,75 @@ async function addSession(
 // ── ④ 执行回合里起的:还是老样子 ─────────────────────────────────────────────
 {
   const taskId = await makeTask();
-  await addSession("s-impl-2", taskId, "single", livePid);
-  assert.equal(await sourceRole(taskId), "single", "执行回合里起的就认执行者");
+  runs.claimTurn(taskId, "single");
+  assert.equal(await sourceRole(taskId, inTurn), "single", "执行回合里起的就认执行者");
 }
 
-// ── ⑤ 认不出来时**退回默认**,不猜 ───────────────────────────────────────────
+// ── ⑤ 答不出来时**不许静默当执行者**:要么说清,要么拒 ───────────────────────────
+//
+// 旧版这里把「退回默认」写成期望:没有活会话、两条都活着、ps 抽一下 —— 一律当执行者挂上去,
+// 然后那条通知真的会把实现者叫起来烧一个回合(第 7 轮审查 F2)。「不知道」和「确定地不表达」
+// 是两件事,下面逐条分开钉。
 {
-  // 一条活会话都没有(所有进程都结束了)。
-  const idle = await makeTask();
-  await addSession("s-idle", idle, "single", deadPid);
-  assert.equal(await sourceRole(idle), null, "没有活会话就说不知道");
+  // ⑤-a 这个任务上没有审查在进行 ⇒ 只有执行者一条线,按默认走**不构成猜测**。
+  const plain = await makeTask();
+  assert.equal(await sourceRole(plain, byUser), null, "没有第二条线时,默认就是唯一的答案");
+  assert.equal((await sourceGate(plain, byUser)).blocked, null, "所以它照旧挂得上");
 
-  // 两条都活着:分不清是谁调的 start_monitor,猜一个还不如退回默认。
-  const both = await makeTask();
-  await addSession("s-both-1", both, "single", livePid);
-  await addSession("s-both-2", both, "reviewer", livePid);
-  assert.equal(await sourceRole(both), null, "两条会话都活着时不许猜");
+  // ⑤-b 非终态任务 + 审查在进行 + 没人说清 ⇒ **拒**,并告诉调用方「指定一个再来」。
+  //   这一档恰恰是审查者按提示 pause 了一轮等外部结果、用户在面板上补挂一个哨兵的样子:
+  //   一个 agent 进程都没有,靠活进程永远判不出来,而猜错的两种后果都不便宜。
+  const paused = await makeTask({ status: "paused" });
+  await reviewInFlight(paused, "run-ambiguous");
+  const ambiguous = await sourceGate(paused, byUser, "paused");
+  assert.match(ambiguous.blocked ?? "", /没说清哨兵醒来该叫谁/, "说不清要叫谁时必须拒");
+  assert.equal(ambiguous.needsWake, true, "而且要让入口把「指定一个」这件事回给调用方");
+  assert.equal(ambiguous.role, null, "更不许顺手记一个角色");
+  const refused = await startMonitor({
+    taskId: paused, command: "sleep 30", description: "说不清叫谁的", caller: byUser,
+  });
+  assert.equal(refused.ok, false, "创建入口也要拒 —— 不是记个默认角色就放进去");
+  assert.equal(refused.ok === false && refused.needsWakeTarget, true, "拒的理由要能被前端识别");
 
-  // 团队/duet 那些角色不在可唤醒的两种里,同样退回默认。
+  // ⑤-c 调用方说清了 ⇒ 按它绑,连轮次一起记。
+  const picked = await sourceGate(paused, { kind: "external", wake: "reviewer" }, "paused");
+  assert.equal(picked.blocked, null, "指定之后就挂得上");
+  assert.equal(picked.role, "reviewer");
+  assert.equal(picked.reviewRun, "run-ambiguous", "绑到那次审查上");
+  assert.equal(picked.reviewRound, 1, "轮次一起记:run.id 跨轮复用,只有它认得出上一轮的遗留");
+
+  // ⑤-d 自报了回合身份却核验不过 ⇒ **不是任何人**,不许退回默认。
+  const bad = await sourceGate(plain, { kind: "unverified" });
+  assert.match(bad.blocked ?? "", /回合凭据对不上/, "核验失败要拒,而不是当成执行者");
+  assert.equal(bad.role, null);
+
+  // ⑤-e 回合角色不在可唤醒的两种里(团队、duet、SCM 预占)⇒ 这是**确定的**「不表达」,
+  //   照老样子退回默认 —— 它跟「不知道」不是一回事。
   const team = await makeTask({ mode: "team" });
-  await addSession("s-lead", team, "lead", livePid);
-  assert.equal(await sourceRole(team), null, "不在 single/reviewer 之列的角色不表达");
+  runs.claimTurn(team, "lead");
+  assert.equal(await sourceRole(team, inTurn), null, "不在 single/reviewer 之列的角色不表达");
+  assert.equal((await sourceGate(team, inTurn)).blocked, null, "但照旧挂得上");
+
+  // ⑤-f 自报是回合、此刻却没有回合在跑(回合锁已经放了,例如收尾之后补挂)⇒ 跟 ⑤-b 同档:
+  //   凭据证明了「是这个任务的 agent」,证明不了「是哪条会话」。
+  const settled = await makeTask({ status: "paused" });
+  await reviewInFlight(settled, "run-settled");
+  const stale = await sourceGate(settled, inTurn, "paused");
+  assert.match(stale.blocked ?? "", /没说清哨兵醒来该叫谁/, "没有回合在跑就没有权威角色");
+
+  // ⑤-g 显式指定了「叫实现者」却是终态任务 ⇒ 拒。审查豁免只对绑到审查上的那一种成立,
+  //   否则挂出来的是一个注定在出口被拦掉、永远唤不醒谁的哨兵。
+  const done = await makeTask({ status: "done" });
+  await reviewInFlight(done, "run-done-task");
+  const pointless = await sourceGate(done, { kind: "external", wake: "single" }, "done");
+  assert.match(pointless.blocked ?? "", /任务已经结束/, "终态任务上叫实现者没有出路");
+  // 同一个任务上不指定 ⇒ 唯一有出路的归属就是那次审查(它能挂上来就是审查豁免放它进来的)。
+  assert.equal(await sourceRole(done, byUser, "done"), "reviewer",
+    "终态 + 审查在跑:那次审查是唯一有出路的归属,这不是猜");
+
+  // ⑤-h 指定了「叫审查」却没有审查在进行 ⇒ 拒,别记一个绑不上的角色。
+  const noReview = await sourceGate(plain, { kind: "external", wake: "reviewer" });
+  assert.match(noReview.blocked ?? "", /没有正在进行的审查/, "绑不上的审查不许记");
 }
 
 // ── ⑥ 审查进行中：终态任务上照样挂得上 ──────────────────────────────────────
@@ -103,7 +151,6 @@ async function addSession(
 // 后果就是它退而求其次用了 claude 内置的 Monitor，那个活不过这一回合（Bp2LkwfRO37A）。
 {
   const taskId = await makeTask({ status: "done" });
-  await addSession("s-rev-done", taskId, "reviewer", livePid);
   const view = { id: taskId, status: "done", archived: false };
 
   // 没有审查在跑：照旧拒 —— 这条豁免只给「审查这件事还没完」，不是把终态闸拆了。
@@ -243,5 +290,87 @@ async function addSession(
   assert.match(reason, /等全量 unittest 跑完/, "还要说出它在盯什么,否则用户仍然不知道在等什么");
 }
 
+// ── ⑨ 创建入口:来源由**请求自己**交上来,核验在入口做 ─────────────────────────────
+//
+// 上面那些打的是闸函数,钉不住「来源从哪儿来」。而 F2 的现场恰恰在那一步:自用模式的
+// authGate 直接给 SINGLE_ACTOR,端点只看 actor 的话永远取不到回合身份 —— 于是每一次手动
+// 创建都成了「谁都不是」,再被静默当成执行者。这一段打的是真端点,中间件照自用模式那一档装。
+{
+  const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
+  const { mountMonitorRoutes } = await import("../src/monitor-routes.js");
+  const { Hono } = await import("hono");
+
+  const api = new Hono();
+  api.use("*", async (c, next) => { setActor(c, SINGLE_ACTOR); await next(); });
+  mountMonitorRoutes(api);
+  const app = new Hono();
+  app.route("/api", api);
+  const post = (taskId: string, body: Record<string, unknown>, headers: Record<string, string> = {}) =>
+    app.request(`/api/tasks/${taskId}/monitors`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+  const rowOf = async (taskId: string) =>
+    (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+
+  // ⑨-a agent 在自己回合里调:凭据对上 ⇒ 角色取运行时事实(`turnRole`),不查会话、不碰 ps。
+  const inTurnTask = await makeTask();                   // running ⇒ 事件只排队,不会真拉 agent
+  await db.update(tasks).set({ activeTurnToken: "TURN-OK" }).where(eq(tasks.id, inTurnTask));
+  await reviewInFlight(inTurnTask, "run-entry");
+  runs.claimTurn(inTurnTask, "reviewer");
+  const ok = await post(
+    inTurnTask,
+    { command: "sleep 30", description: "审查者挂的" },
+    { "x-ash-source-task-id": inTurnTask, "x-ash-turn-token": "TURN-OK" },
+  );
+  assert.equal(ok.status, 200, "凭据对上就该挂得上");
+  const okRow = await rowOf(inTurnTask);
+  assert.equal(okRow.sourceRole, "reviewer", "来源 = 本任务当前这一回合的角色");
+  assert.equal(okRow.sourceReviewRun, "run-entry", "连它属于哪次审查一起记");
+  await db.update(schema.freeReviewRuns).set({ status: "done" })
+    .where(eq(schema.freeReviewRuns.id, "run-entry"));   // 收尾事件在出口被丢掉,不触发真投递
+  await stopMonitor(okRow.id, "测试收尾");
+
+  // ⑨-b 自报了回合身份、凭据对不上 ⇒ 拒。**不许退回默认**:那等于「谁报一个 taskId 就替谁
+  //   挂」,而且挂出来的那条会去叫实现者。
+  const bad = await post(
+    inTurnTask,
+    { command: "sleep 30" },
+    { "x-ash-source-task-id": inTurnTask, "x-ash-turn-token": "TURN-WRONG" },
+  );
+  assert.equal(bad.status, 409);
+  assert.match((await bad.json() as { error: string }).error, /回合凭据对不上/);
+
+  // ⑨-c 人在界面上点(没有任何凭据头)+ 非终态 + 审查在进行 ⇒ 409 **且带着出路**:
+  //   指定一个唤醒目标,同一个请求就能成。只回一句错误文案的话,手动挂哨兵在这种任务上
+  //   就是死胡同 —— 「拒绝歧义」不等于「拒绝这件事」。
+  const manual = await makeTask({ status: "paused" });
+  await reviewInFlight(manual, "run-manual");
+  const asked = await post(manual, { command: "sleep 30", description: "用户补挂的" });
+  assert.equal(asked.status, 409);
+  assert.equal((await asked.json() as { needsWakeTarget?: boolean }).needsWakeTarget, true,
+    "这一档要让前端认出来「还没说清叫谁」,才长得出那个二选一");
+  assert.equal((await db.select().from(monitors).where(eq(monitors.taskId, manual))).length, 0,
+    "被拒的那一次一行都不许留");
+
+  const picked = await post(manual, { command: "sleep 30", description: "用户补挂的", wake: "reviewer" });
+  assert.equal(picked.status, 200, "指定之后就该挂得上");
+  const pickedRow = await rowOf(manual);
+  assert.equal(pickedRow.sourceRole, "reviewer");
+  assert.equal(pickedRow.sourceReviewRun, "run-manual");
+  assert.equal(pickedRow.sourceReviewRound, 1, "轮次一起记");
+
+  // ⑨-d 唤醒目标拼错 ⇒ 当场 400。静默当「没指定」会退回 ⑨-c 那句 409,用户看到的是一个
+  //   点了没反应的选项,而真正的原因是值不对。
+  const typo = await post(manual, { command: "sleep 30", wake: "reviewr" });
+  assert.equal(typo.status, 400);
+  assert.match((await typo.json() as { error: string }).error, /wake 只能是/);
+
+  await db.update(schema.freeReviewRuns).set({ status: "done" })
+    .where(eq(schema.freeReviewRuns.id, "run-manual"));
+  await stopMonitor(pickedRow.id, "测试收尾");
+}
+
 await teardown();
-console.log("✓ 哨兵与审查：醒来叫审查会话 / 角色跟着行走到投递参数 / 认不出来退回默认 / 审查进行中终态任务上挂得上 / 叫醒时带回 pause 留下的交代 / 预约审查说得出在等哪几个哨兵");
+console.log("✓ 哨兵与审查：醒来叫审查会话 / 角色跟着行走到投递参数 / 来源答不出来时要么说清要么拒、不静默当执行者 / 审查进行中终态任务上挂得上 / 叫醒时带回 pause 留下的交代 / 预约审查说得出在等哪几个哨兵 / 创建入口核验回合凭据、歧义带着出路拒");

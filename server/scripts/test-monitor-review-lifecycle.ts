@@ -67,7 +67,9 @@ async function reviewInFlight(
   await reviewInFlight(taskId, { runId: "run-keep" });
 
   const started = await startMonitor({
+    // 审查回合里挂的:来源 = 本任务当前这一回合(上面 `claimTurn` 落的 reviewer)。
     taskId, command: "sleep 120", description: "审查等外部套件", timeoutMs: 180_000,
+    caller: { kind: "turn" },
   });
   assert.ok(started.ok, `审查进行中就该挂得上：${started.ok ? "" : started.error}`);
   const monitorId = started.ok ? started.monitor.id : "";
@@ -122,6 +124,7 @@ async function reviewInFlight(
   });
   const started = await startMonitor({
     taskId, command: "printf 'READY\\n'", description: "审查者的事件", timeoutMs: 60_000,
+    caller: { kind: "external", wake: "reviewer" },   // 审查者挂的(台子没占回合锁,显式说清)
   });
   assert.ok(started.ok, `起不来：${started.ok ? "" : started.error}`);
   const monitorId = started.ok ? started.monitor.id : "";
@@ -142,25 +145,23 @@ async function reviewInFlight(
 
 // ── ④ 审查停在那儿等（一个 agent 进程都没有）时手动补挂的哨兵 ───────────────────
 //
-// 审查者按提示 pause 了一轮等外部结果，这会儿用户在面板上又补挂一个哨兵。那一刻活会话这条
-// 线索问不出东西（没有进程），但它能挂上来本身就说明是那次审查豁免放它进来的 —— 不认这
-// 一条，它会以默认的 `single` 入队，把**实现者**叫起来跑一轮（F2 列的同类实例）。
+// 审查者按提示 pause 了一轮等外部结果，这会儿用户在面板上又补挂一个哨兵。那一刻**没有任何
+// 回合在跑**，权威角色问不出来；但任务是终态、审查还在进行，它能挂上来本身就说明是那次审查
+// 豁免放它进来的 —— 于是那次审查是唯一有出路的归属（第 1 轮审查 F2 第 3 条）。不认这一条，
+// 它会以默认的 `single` 入队，把**实现者**叫起来跑一轮。
 {
   const taskId = await makeTask({ status: "done" });
   await reviewInFlight(taskId, { runId: "run-waiting", live: false });
-  const gate = await monitorSourceGate({ id: taskId, status: "done", archived: false });
+  const gate = await monitorSourceGate({ id: taskId, status: "done", archived: false }, { kind: "external" });
   assert.equal(gate.blocked, null, "审查还在进行，终态任务上照样挂得上");
-  assert.equal(gate.role, "reviewer", "没有活进程也要认出这是审查在等（F2）");
+  assert.equal(gate.role, "reviewer", "没有任何回合在跑也要认出这是审查在等（F2）");
   assert.equal(gate.reviewRun, "run-waiting", "并且记住是哪一次审查");
 
-  // 执行者自己挂的不绑审查：它的命跟着任务走。
+  // 执行者自己挂的不绑审查：它的命跟着任务走。来源是**执行回合**这件事由回合锁作证，
+  // 不再靠「哪条会话的进程还活着」猜（第 7 轮审查 F2）。
   const plain = await makeTask();
-  await db.insert(sessions).values({
-    id: "s-plain", taskId: plain, role: "single", agentType: "claude", executor: "claude@test",
-    cwd: root, startedAt: now(), agentPid: process.pid,
-    agentStartedAt: inspectProcess(process.pid)?.startedAt ?? null,
-  });
-  const plainGate = await monitorSourceGate({ id: plain, status: "running", archived: false });
+  runs.claimTurn(plain, "single");
+  const plainGate = await monitorSourceGate({ id: plain, status: "running", archived: false }, { kind: "turn" });
   assert.equal(plainGate.role, "single");
   assert.equal(plainGate.reviewRun, null, "执行者挂的哨兵不该绑在某次审查上");
 }

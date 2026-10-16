@@ -8,27 +8,65 @@
 // reviewing 等它续跑,见 free-workflow.ts 的 `task.question || task.resumePrompt` 守卫),
 // 又凭空让执行者跑了一轮。用户 2026-10-16 问的「审查应该停在这等唤醒」的后半截就是它。
 //
-// ── 判据:**此刻还活着的那条会话** ──────────────────────────────────────────────
+// ── 判据:**调用方自报、服务端核验过的那一份身份** ──────────────────────────────
 //
-// `start_monitor` 是 agent 在自己回合里调的 MCP 工具,所以调用发生的这一刻,它那条会话的
-// agent 进程必然活着,而别的会话上一轮的进程早已退出。`sessions.agent_pid` 每回合被下一轮
-// 覆盖这件事在这里**不是问题**:我们查的就是当代,当场查当场写,中间没有写库队列。
-// (对比 claude 投影那一侧——那边是流事件排队落库,晚一步读到的就是下一代人的凭据,所以
-// 它必须在流开始那一刻冻住身份,见 claude-monitor-origin.ts 的文件头。)
+// 曾经的判据是「此刻还活着的那条会话」:`start_monitor` 是 agent 在自己回合里调的,所以把
+// `sessions.agent_pid` 逐条问一遍活死,活着那条的 role 就当成调用者。它错在**「有哪个活进程」
+// 证明不了「现在是谁在调」**,而失手的代价是静默的:
+//   · 进程查询这一刻不可用(ps 抽一下)⇒ 一条都判不出活 ⇒ 角色为空 ⇒ 按默认叫**执行者**,
+//     审查那条会话继续等不到人,执行者凭空烧一个回合(第 7 轮审查 F2 实测 role 与轮次全丢);
+//   · 审查者按提示 pause 了一轮等外部结果 ⇒ 一个 agent 进程都没有 ⇒ 同上;
+//   · 两条会话都查得到活 ⇒ 分不清 ⇒ 同上。
 //
-// pid 会被复用,所以判死活跟别处同一份:pid + 进程启动时刻一起对上(`isSameProcess`)。
+// 现在的判据有两截,都不猜:
+//   ① **这次调用是不是本任务当前这一回合**——`x-ash-source-task-id` + `x-ash-turn-token`
+//      对上 `tasks.active_turn_token`(agent 回连那条既有通道,`auth/middleware.ts`),由创建
+//      入口核验后以 `MonitorCaller` 交上来;
+//   ② **这一回合是什么角色**——`turnRole()`,`claimTurn` 落下的**运行时事实**(审查结论的
+//      归属检查 `report_stage` 读的也是它)。
+// 两截都答不出来时**一律不静默当执行者**:要么由调用方显式指定唤醒目标,要么拒绝这次创建。
 import { and, eq, exists, isNull, ne, sql } from "drizzle-orm";
-import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
+import { MONITOR_WAKE_TARGETS, monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
-import { freeReviewRuns, monitors, scheduledMessages, sessions, tasks } from "./db/schema.js";
-import { isSameProcess } from "./proc.js";
+import { freeReviewRuns, monitors, scheduledMessages, tasks } from "./db/schema.js";
+import { turnRole } from "./runs.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
-/** 能带进 `continueTask` 的那两种角色。别的(团队、duet)不表达,退回默认。 */
-const WAKEABLE_ROLES = new Set(["single", "reviewer"]);
+/** 能带进 `continueTask` 的那两种角色(两端共用一份,见 shared)。别的(团队、duet)不表达,退回默认。 */
+const WAKEABLE_ROLES = new Set<string>(MONITOR_WAKE_TARGETS);
+
+/**
+ * 创建入口必须交上来的那一份:**这次调用是谁发起的**。核验在入口做(那里才有请求头),
+ * 这里只按已核验的结论判归属 —— 两件事分开是为了让「怎么证明身份」只有一处实现。
+ */
+export type MonitorCaller =
+  /** agent 在**这个任务**自己的回合里调的,回合凭据已核验。角色由 `turnRole` 给(运行时事实)。 */
+  | { kind: "turn" }
+  /** 不是这个任务的任何一条会话:人在界面上点的,或另一个任务的 agent。`wake` = 显式指定的唤醒目标。 */
+  | { kind: "external"; wake?: string | null }
+  /** 自报了回合身份、核验没过(token 过期 / 对不上 / 指的是别的任务)。**不许当作任何人**。 */
+  | { kind: "unverified" };
+
+/** 回合凭据对不上。不能退回默认 —— 那等于让一次失败的核验生成一条会叫醒执行者的通知。 */
+const CALLER_UNVERIFIED =
+  "这次创建带的回合凭据对不上（任务或令牌已经不是当前这一轮），说不清是谁要挂这个哨兵，所以不挂";
+
+/**
+ * 说不清要唤醒谁。**这一档必须拒**:猜错的两种后果都不便宜 —— 猜执行者会凭空烧一个回合、
+ * 审查那条会话继续等不到人;猜审查者会把一条本该叫实现者的通知投进一条正在收尾的审查。
+ */
+const WAKE_AMBIGUOUS =
+  "这个任务上有一次审查正在进行，而这次创建没说清哨兵醒来该叫谁（实现者还是那次审查）——"
+  + "指定一个再挂，或者在起它的那个回合里挂";
+
+/** 显式指定的唤醒目标。只认能带进 `continueTask` 的那两种,别的一律当没说。 */
+const normalizeWake = (wake: string | null | undefined): string | null => {
+  const value = (wake ?? "").trim();
+  return WAKEABLE_ROLES.has(value) ? value : null;
+};
 
 /** 整个任务正在被删掉。措辞跟终态/审查那两条分开:这一条没有任何出路。 */
 const TASK_REVOKED = "这个任务正在被删除，不能再挂哨兵、也不再唤醒它";
@@ -47,11 +85,31 @@ const REVIEW_FINISHED = "起这个哨兵的那次审查已经结束，它的事�
  *
  * 自由工作流的审查跑在一个已经 done 的任务上（旁路回合，终态原样不动），光看状态会把
  * 审查者要挂的哨兵全拒掉 —— 而那恰恰是最需要哨兵的场景（见 shared 里 `activeReview`）。
- * **只有被状态拦下来时才去查审查**：绝大多数调用在任务还活着时发生，那时一次库都不多查。
+ *
+ * ── 归属：权威的那一份优先,剩下的宁拒不猜 ─────────────────────────────────────
+ *
+ * 判据见文件头。按确定性从高到低:
+ *   ① 本任务当前回合的角色(`turnRole`)—— 运行时事实,直接用;
+ *   ② 回合角色不在可唤醒的两种里(团队、duet、SCM 预占)—— 这是**确定的**「不表达」,照老样子
+ *      退回默认,它跟「不知道」是两件事;
+ *   ③ 调用方显式指定(`wake`)—— 人在界面上点的那一路,由他说清;
+ *   ④ 这个任务上没有审查在进行 —— 唯一一条线就是执行者,不存在歧义;
+ *   ⑤ 任务已经落终态而审查还在跑 —— 它能挂上来本身就说明是那次审查豁免放它进来的,
+ *      唯一有出路的归属就是那次审查(第 1 轮审查 F2 第 3 条:审查者 pause 一轮等外部结果,
+ *      这会儿用户在面板上补挂一个);
+ *   ⑥ 都不是 ⇒ **拒**(`WAKE_AMBIGUOUS`),并让入口把「要你指定」这件事回给调用方。
  */
 export async function monitorSourceGate(
   task: { id: string; status: string; archived?: boolean | null },
-): Promise<{ blocked: string | null; role: string | null; reviewRun: string | null; reviewRound: number | null }> {
+  caller: MonitorCaller,
+): Promise<{
+  blocked: string | null;
+  role: string | null;
+  reviewRun: string | null;
+  reviewRound: number | null;
+  /** 真为「拒绝的理由是说不清叫谁」:入口据此告诉调用方「指定一个再来」。 */
+  needsWake?: true;
+}> {
   // **撤销期一律拒,而且不吃审查豁免**(第 3 轮审查 F1)。删除不是一个瞬间:从关闸到任务行
   // 真的没了之间有十几条语句,而「停完一遍哨兵」只证明那一刻扫干净了。这中间放一个新哨兵
   // 进来,它会被紧随其后的删除批次连行带 pid 一起抹掉 —— 进程却还在后台跑着,谁都再找不到
@@ -64,23 +122,48 @@ export async function monitorSourceGate(
   const blocked = monitorBlockedReason(task);
   // 归档不吃审查豁免(任务都收柜子了,审查链也没有续下去的地方),也就不必查任何东西。
   if (task.archived) return { blocked, role: null, reviewRun: null, reviewRound: null };
-  const live = await liveSessionRole(task.id);
-  // 被状态拦下来时一定要查(那是豁免的唯一依据);活会话是审查者时也要查(要记住是哪次)。
-  const review = blocked || live === "reviewer" ? await reviewingRun(task.id) : null;
+  // 核验没过 ⇒ 这次调用不属于任何人。**不许退回默认**:那正是「未知静默变成执行者」。
+  if (caller.kind === "unverified") {
+    return { blocked: CALLER_UNVERIFIED, role: null, reviewRun: null, reviewRound: null };
+  }
+  const turn = caller.kind === "turn" ? turnRole(task.id) : null;
+  // 被状态拦下来时一定要查(那是豁免的唯一依据);回合是审查者时也要查(要记住是哪次);
+  // 没有权威角色时也要查 —— 「有没有审查在进行」正是歧义判定的依据。
+  const review = blocked || turn === "reviewer" || turn === null ? await reviewingRun(task.id) : null;
   const reviewRun = review?.id ?? null;
-  // **认不出活会话、任务又处于终态**：那就是「审查者按提示 pause 了一轮等外部结果，这会儿
-  // 用户在面板上又补挂一个哨兵」——此刻一个 agent 进程都没有，活会话那条线索问不出东西，
-  // 而它能挂上来本身就说明是那次审查豁免放它进来的。不认这一条，它会以默认的 `single`
-  // 入队，把**实现者**叫起来跑一轮，审查那条会话继续等不到人（第 1 轮审查 F2 第 3 条）。
-  const role = live ?? (blocked && reviewRun ? "reviewer" : null);
-  return {
-    blocked: blocked && reviewRun ? null : blocked,
+  // 审查豁免:它放行的是「挂得上」,不是「叫谁」。
+  const unblocked = blocked && reviewRun ? null : blocked;
+  const bind = (role: string | null) => ({
+    blocked: unblocked,
     role,
     // 执行者自己挂的哨兵不绑审查:它的命跟着任务走,审查结束与它无关。
     reviewRun: role === "reviewer" ? reviewRun : null,
     // 轮次一起记:run.id 跨轮复用,只有它认不出「这是上一轮遗留的」(见 schema 注释)。
     reviewRound: role === "reviewer" ? review?.round ?? null : null,
-  };
+  });
+
+  // ①② 当前回合的角色是运行时事实。不在可唤醒的两种里 = 确定地不表达,退回默认。
+  if (turn) return bind(WAKEABLE_ROLES.has(turn) ? turn : null);
+
+  // ③ 调用方说清了要叫谁。
+  const wake = caller.kind === "external" ? normalizeWake(caller.wake) : null;
+  if (wake === "reviewer" && !reviewRun) {
+    return {
+      blocked: "这个任务上没有正在进行的审查，这个哨兵绑不到审查上",
+      role: null, reviewRun: null, reviewRound: null,
+    };
+  }
+  // 终态任务上指定「叫实现者」没有出路:事件到了出口照样会被终态拦掉(`monitorWakeGate`),
+  // 等于挂一个注定不会唤醒任何人的哨兵。审查豁免只对绑到审查上的那一种成立。
+  if (wake === "single" && blocked) return { blocked, role: null, reviewRun: null, reviewRound: null };
+  if (wake) return bind(wake);
+
+  // ④ 没有审查在进行:这个任务只有执行者一条线,按默认走不构成猜测。
+  if (!reviewRun) return bind(null);
+  // ⑤ 终态 + 审查在跑:能挂上来就是那次审查放它进来的,唯一有出路的归属就是它。
+  if (blocked) return bind("reviewer");
+  // ⑥ 非终态 + 审查在跑 + 没人说清 ⇒ 拒。
+  return { blocked: WAKE_AMBIGUOUS, role: null, reviewRun: null, reviewRound: null, needsWake: true };
 }
 
 /**
@@ -115,21 +198,6 @@ export async function monitorWakeGate(
       : REVIEW_FINISHED;
   }
   return monitorBlockedReason(task);                 // 执行者挂的:照终态老规矩
-}
-
-/** 起哨兵这一刻,活着的那条会话是什么角色。`null` = 认不出来(没有活会话、角色不在上面
- * 那两种、或者同时活着好几条):**宁可按老样子叫执行者,也不猜一个会把审查链带偏的角色**
- * —— 猜错时那一轮会在错误的会话上烧一个真回合,而且审查仍然醒不过来。 */
-async function liveSessionRole(taskId: string): Promise<string | null> {
-  if (dbClient.closed) return null;
-  const rows = await db
-    .select({ role: sessions.role, pid: sessions.agentPid, startedAt: sessions.agentStartedAt })
-    .from(sessions)
-    .where(eq(sessions.taskId, taskId));
-  const live = rows.filter((r) => !!r.pid && isSameProcess(r.pid, r.startedAt ?? null));
-  const roles = new Set(live.map((r) => r.role).filter((role) => WAKEABLE_ROLES.has(role)));
-  // 两条都活着时分不清是谁调的——那种情况下猜一个还不如退回默认(见函数头)。
-  return roles.size === 1 ? [...roles][0]! : null;
 }
 
 /** 这个任务上**正在进行**的那次自由工作流审查（`reviewing` 是持久状态）与它的轮次。 */

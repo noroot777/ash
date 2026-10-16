@@ -571,6 +571,21 @@ export function mergeMonitorEventText(existing: string, incoming: string): strin
  * **下一个**回合才送达，那时审查者已经 pause 住了、没有任何回合在跑——按后者判会在最关键
  * 的那一刻拒掉它。归档不吃这条豁免：那是「收进柜子了」，跟做没做完无关。
  */
+/**
+ * **哨兵醒来叫谁**:执行者那条会话(`single`),还是起它的那次审查(`reviewer`)。
+ *
+ * 两端共用一份:服务端据它判创建请求里显式指定的唤醒目标合不合法(`monitor-session.ts`),
+ * 前端据它渲染「说不清叫谁」时那个二选一(`MonitorComposer`)。各写一份的话,前端能提交一个
+ * 后端不认的值,而后端只会回一句「没说清」—— 用户看到的是一个点了没反应的选项。
+ */
+export type MonitorWakeTarget = "single" | "reviewer";
+export const MONITOR_WAKE_TARGETS: readonly MonitorWakeTarget[] = ["single", "reviewer"];
+/** 这两种在界面上怎么说。 */
+export const MONITOR_WAKE_LABEL: Record<MonitorWakeTarget, string> = {
+  single: "实现者",
+  reviewer: "这次审查",
+};
+
 const MONITOR_BLOCKING_STATUSES = new Set(["done", "failed", "canceled"]);
 
 /**

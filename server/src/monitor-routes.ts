@@ -1,12 +1,13 @@
 // 哨兵的 HTTP 面。真正的编排在 monitors.ts，这里只做入参校验和权限归属。
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS } from "@ash/shared/monitor";
+import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS, MONITOR_WAKE_TARGETS } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { agentActor } from "./auth/middleware.js";
 import { getMonitor, listMonitors, readMonitorTail, startMonitor, stopMonitorChecked } from "./monitors.js";
+import type { MonitorCaller } from "./monitor-session.js";
 import {
   claudeMonitorHookDecision,
   isMonitorHookCall,
@@ -15,6 +16,29 @@ import {
 } from "./claude-monitor-hook.js";
 import { backfillClaudeMonitors } from "./claude-monitor-backfill.js";
 import { monitorRecoveryOf } from "./claude-monitor-recovery.js";
+
+/**
+ * **这次创建请求是谁发起的** —— 核验在这里做,判归属在 `monitorSourceGate`(见那边的文件头)。
+ *
+ * 三种结论:
+ *  · `turn` —— 回连凭据对上了**这个任务**当前这一轮(`agentActor` 同时校验 taskId 和 token),
+ *    于是角色可以取运行时事实 `turnRole`,不必猜「哪个 agent 进程还活着」;
+ *  · `unverified` —— 自报了回合身份却核验不过(令牌过期/对不上)。它既不是人、也不是任何
+ *    一条会话,**不许退回默认**;
+ *  · `external` —— 人在界面上点的,或另一个任务的 agent(团队调度台往执行者任务上挂)。它不是
+ *    这个任务的会话,所以归属要么由 `wake` 说清,要么由那边的 ④⑤ 两条无歧义规则定。
+ *
+ * **自用模式下 actor 恒是 `SINGLE_ACTOR`**(authGate 一行不拦,`agentActor` 那条路根本不走),
+ * 所以这里要自己再问一次 —— 跟 hook 端点同一个理由,判据仍只有 `agentActor` 那一份。
+ */
+async function callerOf(c: Context, taskId: string, wake?: string | null): Promise<MonitorCaller> {
+  const actor = actorOf(c);
+  const agent = actor.kind === "agent" ? actor : await agentActor(c);
+  if (agent?.taskId === taskId) return { kind: "turn" };
+  const claimed = !!(c.req.header("x-ash-source-task-id")?.trim() || c.req.header("x-ash-turn-token")?.trim());
+  if (!agent && claimed) return { kind: "unverified" };
+  return { kind: "external", wake };
+}
 
 export function mountMonitorRoutes(api: Hono): void {
   api.get("/tasks/:id/monitors", async (c) => {
@@ -49,7 +73,7 @@ export function mountMonitorRoutes(api: Hono): void {
 
   api.post("/tasks/:id/monitors", async (c) => {
     const taskId = c.req.param("id");
-    type StartBody = { command?: string; description?: string; cwd?: string; timeoutMs?: number };
+    type StartBody = { command?: string; description?: string; cwd?: string; timeoutMs?: number; wake?: string };
     const body = await c.req.json<StartBody>().catch((): StartBody => ({}));
     if (typeof body.command !== "string" || !body.command.trim())
       return c.json({ error: "command 不能为空" }, 400);
@@ -61,6 +85,10 @@ export function mountMonitorRoutes(api: Hono): void {
       return c.json({ error: "cwd 必须是字符串" }, 400);
     if (body.timeoutMs !== undefined && (typeof body.timeoutMs !== "number" || !Number.isFinite(body.timeoutMs)))
       return c.json({ error: "timeoutMs 必须是毫秒数" }, 400);
+    // 唤醒目标认不出来时**当场 400**，不能静默当「没指定」：那会退回「说不清叫谁」那句
+    // 409，用户看到的是一个点了没反应的选项，而真正的原因是值拼错了。
+    if (body.wake !== undefined && !MONITOR_WAKE_TARGETS.includes(body.wake as never))
+      return c.json({ error: `wake 只能是 ${MONITOR_WAKE_TARGETS.join(" / ")}` }, 400);
     // 越界不报错只钳住（normalizeMonitorTimeout），但得让调用方知道自己写的没生效。
     const clamped =
       body.timeoutMs !== undefined && (body.timeoutMs < MONITOR_MIN_TIMEOUT_MS || body.timeoutMs > MONITOR_MAX_TIMEOUT_MS);
@@ -71,8 +99,16 @@ export function mountMonitorRoutes(api: Hono): void {
       cwd: body.cwd,
       timeoutMs: body.timeoutMs,
       ownerUserId: ownerIdOf(actorOf(c)),
+      caller: await callerOf(c, taskId, body.wake),
     });
-    if (!result.ok) return c.json({ error: result.error }, result.status);
+    // 「说不清醒来叫谁」这一档要**原样带出去**：前端据它在表单上让人指定一个再提交。只回
+    // 一句错误文案的话，手动挂哨兵在这种任务上就成了一条没有出路的死胡同。
+    if (!result.ok) {
+      return c.json(
+        { error: result.error, ...(result.needsWakeTarget ? { needsWakeTarget: true } : {}) },
+        result.status,
+      );
+    }
     return c.json({ monitor: result.monitor, ...(clamped ? { notice: "timeoutMs 超出允许区间，已钳到边界" } : {}) });
   });
 

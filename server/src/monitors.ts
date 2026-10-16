@@ -38,7 +38,7 @@ import { monitors, projects, sessions, tasks } from "./db/schema.js";
 import { reclaimMonitorProcess, reclaimState, settleReclaim } from "./monitor-reclaim-debts.js";
 import { monitorLogPath, readLogTail, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
 import { pushToTask } from "./monitor-events.js";
-import { monitorSourceGate, monitorWakeGate } from "./monitor-session.js";
+import { monitorSourceGate, monitorWakeGate, type MonitorCaller } from "./monitor-session.js";
 import { inspectProcess } from "./proc.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
@@ -117,6 +117,13 @@ export type StartMonitorInput = {
   cwd?: string | null;
   timeoutMs?: number;
   ownerUserId?: string | null;
+  /**
+   * **这次创建是谁发起的**,由入口核验后交上来(见 `monitor-session.ts` 的 `MonitorCaller`)。
+   * 必填:哨兵唯一的出口是「唤醒这个任务」,而唤醒哪条会话由来源决定 —— 让它可缺省就等于
+   * 默许「不知道就按执行者算」,那正是第 7 轮审查 F2 要消掉的那一种静默(审查者挂的哨兵
+   * 把实现者叫起来烧一个回合,审查那条会话继续等不到人)。
+   */
+  caller: MonitorCaller;
 };
 
 /** 哨兵在哪儿跑：显式指定 > 任务最近一条会话的工作目录 > 项目仓库目录。 */
@@ -134,7 +141,10 @@ async function resolveCwd(taskId: string, explicit?: string | null): Promise<str
   return project?.repoPath ?? null;
 }
 
-export type StartMonitorResult = { ok: true; monitor: TaskMonitor } | { ok: false; status: 400 | 404 | 409; error: string };
+export type StartMonitorResult =
+  | { ok: true; monitor: TaskMonitor }
+  /** `needsWakeTarget` = 拒绝的理由是「说不清醒来叫谁」:调用方指定一个唤醒目标就能再来。 */
+  | { ok: false; status: 400 | 404 | 409; error: string; needsWakeTarget?: true };
 
 const text = (value: unknown): string | null => (typeof value === "string" ? value.trim() : null);
 
@@ -166,9 +176,12 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     // 起得来一个真进程，而 `pushToTask` 会把它推的每一条都按终态拒掉——命令在后台烧着，
     // 任务永远不醒（第 2 轮审查实测）。
     // 那一份判据里还含着「审查还在进行」这条豁免：审查跑在已经 done 的任务上，不豁免的话
-    // 审查者一个哨兵都挂不上。它同时回答「是谁挂的、属于哪次审查」（见 monitor-session.ts）。
-    const source = await monitorSourceGate(task);
-    if (source.blocked) return { ok: false, status: 409, error: source.blocked };
+    // 审查者一个哨兵都挂不上。它同时回答「是谁挂的、属于哪次审查」——按**入口核验过的调用
+    // 来源**判，不是按「此刻哪个 agent 进程还活着」猜（见 monitor-session.ts 文件头）。
+    const source = await monitorSourceGate(task, input.caller);
+    if (source.blocked) {
+      return { ok: false, status: 409, error: source.blocked, ...(source.needsWake ? { needsWakeTarget: true as const } : {}) };
+    }
 
     const live = await liveMonitorsOf(input.taskId);
     if (live.length >= MONITOR_MAX_PER_TASK)

@@ -53,6 +53,7 @@ function state(monitors: TaskMonitor[], recovery: TaskMonitorsState["recovery"] 
     recovery,
     stoppingIds: new Set(),
     error: null,
+    needsWakeTarget: false,
     ready: true,
     start: async () => true,
     stop: async () => undefined,

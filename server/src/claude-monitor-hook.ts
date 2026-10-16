@@ -141,6 +141,10 @@ export async function claudeMonitorHookDecision(
     cwd: typeof input.cwd === "string" && input.cwd ? input.cwd : undefined,
     timeoutMs,
     ownerUserId,
+    // 来源:**这个 taskId 是回连凭据核验出来的**(路由那一侧 `agentActor`,拿不到就上面
+    // 已经 deny 了),而内置 Monitor 的 hook 一定发生在那条会话自己的回合里 —— 所以这是
+    // 「本任务当前这一回合」,角色由 `turnRole` 给(见 monitor-session.ts 文件头)。
+    caller: { kind: "turn" },
   });
 
   if (!result.ok) {

@@ -37,8 +37,19 @@ export const [
   import("../src/proc.js"),
 ]);
 export const { mountTaskRoutes } = taskRoutes;
-export const { startMonitor, stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachMonitors, detachAllMonitors } =
+export const { stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachMonitors, detachAllMonitors } =
   monitorsModule;
+
+/**
+ * `startMonitor` 的台子版:**来源缺省当「人在界面上点的」**(`external`)。
+ *
+ * 真入口的 `caller` 是必填的(创建契约要携带可信来源,见 monitor-session.ts),这里给一个
+ * 缺省只是为了让几十个不关心来源的用例不必各写一遍。要测来源归属的用例**必须自己显式传**
+ * —— 例如 `caller: { kind: "turn" }` 配 `claimTurn(taskId, "reviewer")`(审查回合里挂的),
+ * 或 `{ kind: "unverified" }`(回连凭据对不上)。
+ */
+export const startMonitor: typeof monitorsModule.startMonitor = (input) =>
+  monitorsModule.startMonitor({ caller: { kind: "external" }, ...input });
 export const { monitors, projects, scheduledMessages, sessions, tasks } = schema;
 
 await ensureSchema();

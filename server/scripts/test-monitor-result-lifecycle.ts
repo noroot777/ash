@@ -43,6 +43,9 @@ const { takeResumePrompt } = await import("../src/task-resume-prompt.js");
   await reviewInFlight(taskId, "run-exited");
   const started = await startMonitor({
     taskId, command: "printf 'SUITE_DONE\\n'", description: "审查等套件", timeoutMs: 60_000,
+    // 任务还在跑、同时有一次审查在进行 ⇒ 来源必须说清(没有回合锁可读的台子就显式指定),
+    // 否则创建入口会按「说不清叫谁」拒掉(第 7 轮审查 F2)。
+    caller: { kind: "external", wake: "reviewer" },
   });
   assert.ok(started.ok, `审查进行中就该挂得上：${started.ok ? "" : started.error}`);
   const monitorId = started.ok ? started.monitor.id : "";
@@ -81,6 +84,7 @@ const { takeResumePrompt } = await import("../src/task-resume-prompt.js");
     await reviewInFlight(taskId, `run-${intent}`);
     const started = await startMonitor({
       taskId, command: "sleep 120", description: "审查等外部结果", timeoutMs: 180_000,
+      caller: { kind: "external", wake: "reviewer" },   // 审查者挂的(见 ① 那条注释)
     });
     assert.ok(started.ok, `起不来：${started.ok ? "" : started.error}`);
     const row = (await db.select().from(monitors).where(eq(monitors.id, started.ok ? started.monitor.id : ""))).at(0)!;

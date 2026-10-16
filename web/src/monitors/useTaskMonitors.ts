@@ -4,7 +4,7 @@
 // server 重启都带不走它），代价就是「有个进程在后台跑着」这件事再没有别的地方看得见。
 // 只在 agent 的对话里说一句「已起哨兵」不算数——刷新页面后就什么都不剩了。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MonitorRecovery, TaskMonitor } from "@ash/shared/monitor";
+import type { MonitorRecovery, MonitorWakeTarget, TaskMonitor } from "@ash/shared/monitor";
 import { ApiError, api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 
@@ -28,6 +28,12 @@ export interface StartMonitorInput {
   command: string;
   description?: string;
   timeoutMs?: number;
+  /**
+   * **醒来叫谁**。平时不填:服务端按已核验的调用来源自己判(见 server 的 monitor-session.ts)。
+   * 只有它回「说不清叫谁」(`needsWakeTarget`)时才要带 —— 那是「这个任务上有一次审查正在
+   * 进行，而手动挂的哨兵不属于任何一条会话」那一幕,只能由人说清。
+   */
+  wake?: MonitorWakeTarget;
 }
 
 export type TaskMonitorsState = ReturnType<typeof useTaskMonitors>;
@@ -58,13 +64,24 @@ export function useTaskMonitors(taskId: string) {
    * 来源（`kind`）决定谁能清掉它：列表重读成功只收走自己那条「读列表失败」，不许顺手把
    * 用户动作的回执也抹了——那种抹法会让报错只闪一下，慢网下往往闪都来不及。
    */
-  const [failure, setFailure] = useState<{ taskId: string; kind: "list" | "action"; message: string } | null>(null);
+  const [failure, setFailure] = useState<{
+    taskId: string;
+    kind: "list" | "action";
+    message: string;
+    /** 服务端说「说不清这个哨兵醒来该叫谁」:表单据它长出那个二选一(见 `needsWakeTarget`)。 */
+    needsWake?: boolean;
+  } | null>(null);
   // 挂 useCallback 并进下面几个回调的依赖表：它闭包里带着 `taskId`，漏进依赖表的话
   // 那几个记忆化回调会攥着上一个任务的那份，报错就贴到别人身上去了。
   const failed = useCallback((kind: "list" | "action", reason: unknown) => setFailure({
     taskId,
     kind,
     message: reason instanceof Error ? reason.message : String(reason),
+    // 这一条拒绝**有出路**:它不是「挂不了」,是「还没说清叫谁」。把这个事实带出去,表单
+    // 才能长出那个二选一 —— 只回一句错误文案的话,手动挂哨兵在这种任务上就成了死胡同。
+    needsWake: reason instanceof ApiError
+      && typeof reason.body === "object" && reason.body !== null
+      && "needsWakeTarget" in reason.body && reason.body.needsWakeTarget === true,
   }), [taskId]);
   /**
    * 这份列表**是哪个任务的**。`setMonitors([])` 是 effect 做的，而 effect 跑在渲染之后：
@@ -225,6 +242,8 @@ export function useTaskMonitors(taskId: string) {
     recovery: ready ? recovery : null,
     stoppingIds,
     error: failure?.taskId === taskId ? failure.message : null,
+    /** 真 = 上一次提交被「说不清叫谁」拒了:表单要让人指定一个唤醒目标再来。 */
+    needsWakeTarget: failure?.taskId === taskId && failure.kind === "action" && !!failure.needsWake,
     ready,
     start,
     stop,
