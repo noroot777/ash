@@ -15,7 +15,7 @@ import {
   scheduledMessages,
   tasks,
 } from "./db/schema.js";
-import { armFollowUpFreeReview, clearReservationForDispatch, disarmFreeReviewReservation, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
+import { armFollowUpFreeReview, clearReservationForDispatch, disarmFreeReviewReservation, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview } from "./free-review-reservations.js";
 import {
   checkMode,
   overrideLabel,
@@ -294,7 +294,15 @@ export async function handleFreeWorkflowSettlement(
   if (await settleDebateTurn(taskId, turnOk)) return true;
   const run = await reviewingRun(taskId);
   if (role !== "reviewer") {
-    if (task.question || task.resumePrompt) return true;
+    if (task.question || task.resumePrompt) {
+      // 等待态照旧不消费预约,但**必须把「在等什么」留下来**:这一条 return 原先一句话都
+      // 不写,于是界面上只剩一个亮着的「已预约审查」而审查迟迟不开始,用户只能得出「预约
+      // 坏了」。挂着活哨兵时尤其要说清 —— 那是 agent 自己安排的等待(start_monitor +
+      // pause_task),事件回来才会续跑,预约审查本来就该等它把结果带回来再看
+      // (用户 2026-10-16 指出:执行者起了哨兵,预约的审查也该等着)。
+      await noteReservationStillWaiting(taskId, await reservationWaitReason(task));
+      return true;
+    }
     // 存在 reviewing run 说明有一条审查在排队等这个回合结束（并发派审）：不结算它、
     // 也不消费预约（审查在跑时消费预约会双开）。
     if (run) return true;

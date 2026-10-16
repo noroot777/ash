@@ -393,6 +393,14 @@ export interface TaskMonitor {
   command: string;
   /** 一句话说明，会出现在每条事件的抬头和界面上。 */
   description: string;
+  /**
+   * **起它的那条会话是谁**（`single`=执行者 / `reviewer`=审查者）；null = 认不出来或存量行。
+   *
+   * 界面要用它分辨「这是审查者在等一件事」还是「执行者在等」—— 同样一条「在等哨兵」，
+   * 落在哪条会话上决定了醒来之后会发生什么（续审查 vs 续实现）。投递侧用的是库里那一列
+   * （`monitors.source_role` → `scheduled_messages.session_role`），这里只是把它说给用户听。
+   */
+  sourceRole: "single" | "reviewer" | null;
   cwd: string;
   status: MonitorStatus;
   /** 进程组组长的 pid；重启后靠 pid + 启动时刻一起认人（pid 会被复用）。 */

@@ -73,3 +73,20 @@
 .monitor-composer__actions button:disabled { cursor: not-allowed; opacity: .48; }
 /* 不能挂哨兵时那一句：说清为什么，而不是让「+」凭空消失。 */
 .monitor-inspector__blocked { margin: 0 0 9px; border-left: 2px solid var(--line2); padding-left: 8px; color: var(--faint); font-size: 10px; line-height: 1.6; }
+
+/* ── 会话区底部那条「在等哨兵」(MonitorWaitCard) ──────────────────────────────
+   跟提问卡同一个落点(task-question-dock),所以外形也跟它一脉:一张窄卡、顶部一行抬头、
+   下面摊开要点。颜色借 --accent 的低饱和版 —— 它表达的是「正在等一件会自己回来的事」,
+   不是警告,不该跟红色的故障条抢眼睛。 */
+.monitor-wait { min-width: 0; border: 1px solid color-mix(in lch, var(--accent) 26%, var(--line)); border-radius: 10px; background: color-mix(in lch, var(--accent) 4%, var(--panel)); padding: 9px 11px; }
+.monitor-wait > header { display: flex; align-items: center; gap: 7px; color: var(--accent); }
+.monitor-wait > header > b { color: var(--ink); font-size: 11.5px; font-weight: 650; }
+.monitor-wait__open { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; border: 0; border-radius: 6px; background: transparent; padding: 2px 4px; color: var(--muted); font-size: 10px; }
+.monitor-wait__open:hover { background: var(--raised); color: var(--ink); }
+.monitor-wait__list { display: grid; gap: 3px; margin: 7px 0 0; padding: 0; list-style: none; }
+.monitor-wait__list > li { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
+.monitor-wait__what { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-wait__when { margin-left: auto; color: var(--faint); font-size: 9.5px; white-space: nowrap; }
+.monitor-wait__note { margin: 8px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.65; }
+/* 交代原文是 agent 对自己说的话,排成引文好跟说明本身分开。 */
+.monitor-wait__note q { color: var(--muted); quotes: "「" "」"; }

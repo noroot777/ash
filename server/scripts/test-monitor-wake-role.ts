@@ -178,5 +178,42 @@ async function addSession(
     "已经取走了就没有第二次");
 }
 
+// ── ⑧ 「预约审查还在等什么」要说得出口 ───────────────────────────────────────
+//
+// 执行者起了哨兵、用 pause_task 停在检查点时,预约审查本来就不该开跑(它要看的是这件事
+// 落地之后的工作区)。但等待态那条路原先一个字都不写,界面上只剩一个亮着的「已预约审查」
+// 而审查迟迟不开始 —— 用户只能得出「预约坏了」(用户 2026-10-16 指出)。
+{
+  const taskId = await makeTask({ status: "paused" });
+  const { reservationWaitReason } = await import("../src/free-review-reservations.js");
+  const { liveMonitorSummary } = await import("../src/monitor-session.js");
+
+  assert.match(
+    await reservationWaitReason({ id: taskId, resumePrompt: "等套件" }),
+    /检查点/, "没挂哨兵时说的是「停在检查点等续跑」");
+  assert.match(
+    await reservationWaitReason({ id: taskId, question: "选哪个方案？" }),
+    /答复/, "挂着提问时说的是「等你答复」");
+
+  const row = (id: string, description: string, status: string) => ({
+    id, taskId, kind: "ash", command: "sleep 30", description, cwd: root, status,
+    logPath: `${root}/${id}.log`, readOffset: 0, events: 0,
+    startedAt: now(), expiresAt: now(), sourceLifetime: "bounded",
+  });
+  await db.insert(monitors).values([
+    row("mw-1", "等全量 unittest 跑完", "running"),
+    row("mw-2", "等 web 产物构建出来", "running"),
+    // 已经结束的不算「在等」,内置 Monitor 的只读投影也不算（它唤不醒任何人）。
+    { ...row("mw-3", "早就停了的那个", "exited") },
+    { ...row("mw-4", "claude 自带的那个", "running"), kind: "claude" },
+  ]);
+
+  const live = await liveMonitorSummary(taskId);
+  assert.equal(live.count, 2, "只数还在盯着的 ash 哨兵");
+  const reason = await reservationWaitReason({ id: taskId, resumePrompt: "等套件" });
+  assert.match(reason, /2 个哨兵/, "等待原因里要说清在等几个哨兵");
+  assert.match(reason, /等全量 unittest 跑完/, "还要说出它在盯什么,否则用户仍然不知道在等什么");
+}
+
 await teardown();
-console.log("✓ 哨兵与审查：醒来叫审查会话 / 角色跟着行走到投递参数 / 认不出来退回默认 / 审查进行中终态任务上挂得上 / 叫醒时带回 pause 留下的交代");
+console.log("✓ 哨兵与审查：醒来叫审查会话 / 角色跟着行走到投递参数 / 认不出来退回默认 / 审查进行中终态任务上挂得上 / 叫醒时带回 pause 留下的交代 / 预约审查说得出在等哪几个哨兵");

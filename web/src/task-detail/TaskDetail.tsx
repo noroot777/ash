@@ -6,6 +6,7 @@ import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display"
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { useSubagents } from "./useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
+import { MonitorWaitCard } from "../monitors/MonitorWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
 import { FolderViewer } from "../files/FolderViewer.tsx";
@@ -116,6 +117,13 @@ export function TaskDetail({
   });
   // 哨兵那一格：数据在这一层拉（看的是别的面板时也要知道有几个在盯着，图标条上那点活信号靠它）。
   const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
+  // 会话区那张等待卡只认**ash 自己起的、还在盯着的**那几个：claude 内置 Monitor 的只读
+  // 投影就算还显示 running 也唤不醒任何人（它的通知只注回那条已经结束的会话），把它算
+  // 进「在等」就是让用户等一件不会来的事。那种卡的真相写在 inspector 里（MonitorCard）。
+  const liveMonitors = useMemo(
+    () => monitorTab.monitors.monitors.filter((m) => m.kind === "ash" && m.status === "running"),
+    [monitorTab.monitors.monitors],
+  );
   const inspectors = monitorTab.inspectors;
   // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
@@ -494,14 +502,27 @@ export function TaskDetail({
                     reviewRetryable={freeReviewRetryable(free.state?.reviews)}
                     reviews={free.state?.reviews}
                     onOpenReviewPanel={() => openTab("review")}
-                    dock={task.question ? (
-                      <QuestionCard
-                        task={task}
-                        onAnswer={async (answer, input) => {
-                          await api.answerTask(task.id, answer, input);
-                          notify("已发送答复，任务正在续跑");
-                        }}
-                      />
+                    // 会话区底部的常驻卡。两张可以同时在：提问要人答，哨兵会自己回来——
+                    // 任务完全可能一边等答复一边挂着哨兵，这时少显示哪一张都是在瞒。
+                    dock={task.question || liveMonitors.length ? (
+                      <>
+                        {task.question && (
+                          <QuestionCard
+                            task={task}
+                            onAnswer={async (answer, input) => {
+                              await api.answerTask(task.id, answer, input);
+                              notify("已发送答复，任务正在续跑");
+                            }}
+                          />
+                        )}
+                        <MonitorWaitCard
+                          monitors={liveMonitors}
+                          status={task.status}
+                          resumePrompt={task.resumePrompt ?? null}
+                          reviewArmed={!!free.state?.reviewReservation.armed}
+                          onOpenPanel={() => openTab("monitors")}
+                        />
+                      </>
                     ) : undefined}
                   />
                   </ConversationSelection>

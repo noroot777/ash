@@ -61,6 +61,7 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
   nativeId: r.nativeId,
   lifetime: (r.sourceLifetime === "persistent" || r.sourceLifetime === "unknown" ? r.sourceLifetime : "bounded"),
   command: r.command,
+  sourceRole: r.sourceRole === "reviewer" ? "reviewer" : r.sourceRole === "single" ? "single" : null,
   description: r.description,
   cwd: r.cwd,
   status: r.status as MonitorStatus,

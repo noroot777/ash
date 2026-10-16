@@ -20,7 +20,7 @@
 import { and, eq } from "drizzle-orm";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db, dbClient } from "./db/index.js";
-import { freeReviewRuns, sessions, tasks } from "./db/schema.js";
+import { freeReviewRuns, monitors, sessions, tasks } from "./db/schema.js";
 import { isSameProcess } from "./proc.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
 
@@ -101,5 +101,32 @@ export async function monitorWakeCheckpoint(
   return {
     append: `\n\n【你当初留下的续跑交代】${checkpoint}`,
     consume: async () => { await takeResumePrompt(message.taskId, checkpoint); },
+  };
+}
+
+/**
+ * 这个任务上**还在盯着**的 ash 哨兵（只要一份摘要：时间线与界面文案用）。
+ *
+ * 不走 `monitors.ts` 的 `liveMonitorsOf` 是为了不把 free-workflow → monitors → pending
+ * 那条 import 链连成环；判据（`status='running'` 且 `kind='ash'`）与那边同一份，内置
+ * Monitor 的只读投影不算（它活不过 agent 自己那一轮，等它等不到东西）。
+ */
+export async function liveMonitorSummary(
+  taskId: string,
+): Promise<{ count: number; labels: string[] }> {
+  if (dbClient.closed) return { count: 0, labels: [] };
+  const rows = await db
+    .select({ description: monitors.description, command: monitors.command })
+    .from(monitors)
+    .where(and(
+      eq(monitors.taskId, taskId),
+      eq(monitors.status, "running"),
+      eq(monitors.kind, "ash"),
+    ));
+  return {
+    count: rows.length,
+    // 描述是 agent 自己写的「我在盯什么」,没写就退回命令原文 —— 两个都空的行不该存在,
+    // 但真遇上也不要在时间线里留一个空括号。
+    labels: rows.map((r) => (r.description ?? "").trim() || r.command.trim()).filter(Boolean).slice(0, 3),
   };
 }
