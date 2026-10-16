@@ -20,77 +20,13 @@
 // **不是**「在原生 Linux 内核上压出了 pid 复用」—— 后者这台机器做不到,报告里也照实写。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import filesystem from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
 import { isPidAlive, isProcessGroupAlive, killTree } from "../src/platform.js";
 import { processUnitEvidence } from "../src/proc.js";
 import { processGenerationSync, processGroupMembersSync } from "../src/process-generation.js";
-import { invalidateMonitorUnitScan } from "../src/monitor-unit-scan.js";
 import { killProvenUnit, reclaimState } from "../src/monitor-reclaim-evidence.js";
+import { counters, install, restore, type FakeAnswers } from "./fake-proc-fixture.js";
 
-/** 这一遍扫描里,被造出来的那个「Linux 进程」该怎么回答。 */
-type FakeAnswers = {
-  /** 第 n 次读 `environ` 时,环境里有哪些记号(1 起算;空数组 = 一条都没有)。 */
-  tokensOnEnvRead: (n: number) => string[];
-  /** 第 n 次读 `stat` 时,这个号上是哪一代(`null` = 这一问失败);1 起算。 */
-  genOnStatRead: (n: number) => string | null;
-};
-
-const real = {
-  existsSync: filesystem.existsSync,
-  readFileSync: filesystem.readFileSync,
-  readdirSync: filesystem.readdirSync,
-};
-let counters = { env: 0, stat: 0, readdir: 0 };
-
-/**
- * `/proc/<pid>/stat`:右括号之后必须有 20 项,第 20 项(整体第 22 项)是 `starttime`,
- * 第 3 项(整体第 5 项)是 `pgrp`。`comm` 故意带空格和括号 —— 产品那边按 `lastIndexOf(")")`
- * 切,这里就把那条路一起走到。
- */
-const statText = (pid: number, pgrp: number, gen: string) =>
-  `${pid} (fake proc) ${["S", "1", String(pgrp), "1", "0", "-1", "4194304",
-    "0", "0", "0", "0", "0", "0", "0", "0", "20", "0", "1", "0", gen,
-    // starttime 之后真实的 stat 还有三十来项(vsize/rss/…),照着留几项:**不让被测代码
-    // 依赖「我们要的那一项正好在行尾」**。
-    "4358144", "277", "18446744073709551615"].join(" ")}\n`;
-
-function install(pid: number, answers: FakeAnswers): void {
-  counters = { env: 0, stat: 0, readdir: 0 };
-  filesystem.existsSync = ((path: any) =>
-    path === "/proc/self/environ" || real.existsSync(path)) as typeof filesystem.existsSync;
-  filesystem.readdirSync = ((path: any, ...rest: any[]) => {
-    if (path !== "/proc") return (real.readdirSync as any)(path, ...rest);
-    counters.readdir += 1;
-    return [String(pid)];
-  }) as typeof filesystem.readdirSync;
-  filesystem.readFileSync = ((path: any, ...rest: any[]) => {
-    if (path === `/proc/${pid}/environ`) {
-      counters.env += 1;
-      const items = ["PATH=/usr/bin", "HOME=/root"];
-      for (const mark of answers.tokensOnEnvRead(counters.env)) items.push(`ASH_MONITOR_UNIT=${mark}`);
-      return `${items.join("\0")}\0`;
-    }
-    if (path === `/proc/${pid}/stat`) {
-      counters.stat += 1;
-      const gen = answers.genOnStatRead(counters.stat);
-      if (!gen) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-      return statText(pid, pid, gen);
-    }
-    return (real.readFileSync as any)(path, ...rest);
-  }) as typeof filesystem.readFileSync;
-  syncBuiltinESMExports();
-  invalidateMonitorUnitScan();
-}
-
-function restore(): void {
-  filesystem.existsSync = real.existsSync;
-  filesystem.readFileSync = real.readFileSync;
-  filesystem.readdirSync = real.readdirSync;
-  syncBuiltinESMExports();
-  invalidateMonitorUnitScan();
-}
 
 /** 一个真的活着、自成进程组的旁观者:下面每一条都拿它当「可能挨刀的那一个」。 */
 function bystander(): number {
@@ -198,13 +134,18 @@ try {
   }
 
   {
-    // ⑭-5 **根在「枚举组成员」那一问期间没了/换了代 ⇒ 不发组信号**。成员名单本身就是一次
-    //     全表查询,同步 JS 不冻结别的进程 —— 所以授权不能沿用查询之前那一份。
-    //     这里把代次在**第三次** `readdir("/proc")`(即那次组成员查询)之后改掉。
+    // ⑭-5 **根在「枚举组成员」那一问期间换了代 ⇒ 组信号不发,而那份名单也不许留到补刀**。
+    //     成员名单本身就是一次全表查询,同步 JS 不冻结别的进程 —— 所以授权不能沿用查询之前
+    //     那一份。这里把代次在**第三次** `readdir("/proc")`(即那次组成员查询)之后改掉。
+    //
+    //     **台子要保持到两秒后那一刀结束**(第 16 轮审查 F1-A 指出上一版就差这一下):
+    //     上一版等待之前就 `restore()` 了,于是补刀时拿模拟的 `j:999` 跟恢复后的 macOS
+    //     `t:<启动时刻>` 比,不相等是必然的 —— 测试通过,却没检验「陌生进程一直稳定保持在
+    //     新代次」这个真正的反例。审查用同一形状实测到:第一刀安全,第二刀真实 SIGKILL。
     const pid = born();
     const token = `gen-root-vanished-${process.pid}`;
     const answers: FakeAnswers = {
-      tokensOnEnvRead: () => [token],
+      tokensOnEnvRead: () => (counters.readdir >= 3 ? [] : [token]),
       genOnStatRead: () => (counters.readdir >= 3 ? "999" : "111"),
     };
     install(pid, answers);
@@ -213,10 +154,14 @@ try {
     install(pid, answers);
     killProvenUnit(pid, null, { unitToken: token });
     assert.ok(counters.readdir >= 3, "台子前提:组成员那一问真的发生过");
+    await delay(600);
+    assert.equal(isPidAlive(pid), true, "第一刀:根在查询期间换了代 ⇒ 组信号不许发出去");
+    // 台子一直开着,这个号从查询那一刻起稳定在 `j:999`:名单里的代次核得过,
+    // **唯一拦住这一刀的只能是「这份名单从来没拿到过归属授权」**。
+    await delay(2_200);
+    const aliveAfterDelayed = isPidAlive(pid);
     restore();
-    // 两秒后那一刀也要等过去:名单是查询之后拿的(j:999),代次照样核不过。
-    await delay(2_600);
-    assert.equal(isPidAlive(pid), true, "根在查询期间换了代 ⇒ 组信号不许发出去");
+    assert.equal(aliveAfterDelayed, true, "两秒后那一刀:未经原根重核的候选名单不许当落点");
   }
 
   {

@@ -18,14 +18,23 @@
 //     一句日志、追空分支照样返回 `closed`,于是销毁前核对放行,任务行、哨兵行、债行同时为 0,
 //     而那条命令可能还在后台跑着。现在三档分开(`existing`/`written`/`failed`),销毁那条路只要
 //     有一条没拿到持久交接就整笔抛回去 —— **任务和身份都留着,用户再点一次即可**。
+//
+// ⑬-4/⑬-5 **强凭证被拒绝之后不许退回弱判据**(第 16 轮审查 F1-B)。「这个号已经不是记号
+//     证明过的那一代了」是**反证**,不是「这次没拿到值」。上一版两处身份恢复都只看有没有拿到
+//     值,拿不到就退回「时间邻近 + 命令包含」—— 于是一个在那两秒窗口里起来、命令文本又恰好
+//     对得上的陌生进程被授信,它真实的启动时刻被写成旧哨兵的身份,随后按这条身份被关掉
+//     (`identity-fallback.log`:`persistedStartedAt` 就是新进程的启动时刻、
+//     `diagnosticAliveAfter=false`)。两处共用同一条规矩:反证 ⇒ 什么都不补、什么都不认。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import {
   db, insertMonitorRow, isPidAlive, makeTask, monitors, schema, startMonitor, stopMonitor,
   tasks, teardown, until,
 } from "./monitors-fixture.js";
 import { STUBBORN, debtRow } from "./monitor-reclaim-fixture.js";
+import { install as fakeProc, restore as realProc, type FakeAnswers } from "./fake-proc-fixture.js";
 import { processUnitEvidence } from "../src/proc.js";
 import { monitorUnitProofGrade } from "../src/monitor-unit-scan.js";
 
@@ -33,9 +42,12 @@ const { stopMonitorsForTask } = await import("../src/monitor-reclaim.js");
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 const { reclaimState } = await import("../src/monitor-reclaim-evidence.js");
-const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
+const { isProcessGroupAlive, killTree, inspectProcessSync } = await import("../src/platform.js");
 const { invalidateMonitorUnitScan } = await import("../src/monitor-unit-scan.js");
 const { dbClient } = await import("../src/db/index.js");
+const { monitorSpawnIdentityPath } = await import("../src/monitor-spawn.js");
+const { reclaimMonitorProcess } = await import("../src/monitor-reclaim-debts.js");
+const { reattachMonitors } = await import("../src/monitors.js");
 
 const EXACT_MARKS = monitorUnitProofGrade() === "exact";
 
@@ -170,5 +182,87 @@ async function deadPid(): Promise<number> {
   assert.ok(debt?.closedAt, "整项都收干净、线索追空之后才收档");
 }
 
+{
+  // ⑬-4 **记号证明过的那一代已经换掉 ⇒ 身份一个字都不许补**(第 16 轮审查 F1-B 实测的那条路)。
+  //     台子:库里这一行 `pid_started_at` 还空着、边条上有时间锚;记号那一问先在 `j:111` 这一
+  //     代上证明过这个号,随后这个号变成 `j:999` —— 现实里就是「原进程退了、号被别人接手」
+  //     (所以记号也跟着没了)。而那个接手的陌生进程**真的**在两秒窗口里起来、命令文本**真的**
+  //     包含记录的那一段:弱判据这一刻完全成立,所以这一条测的就是「反证有没有压住弱判据」。
+  const taskId = await makeTask({ status: "done" });
+  const unitToken = `unit-disproved-${process.pid}-${Date.now()}`;
+  const stranger = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true, stdio: "ignore", env: { PATH: process.env.PATH! },
+  });
+  stranger.unref();
+  const pid = stranger.pid!;
+  const anchorMs = Date.now();
+  const monId = await insertMonitorRow(taskId, {
+    status: "stopped", pid, pidStartedAt: null, command: process.execPath, unitToken,
+  });
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
+  writeFileSync(monitorSpawnIdentityPath(row.logPath!), JSON.stringify({ pid, spawnedAtMs: anchorMs }));
+  const realStartedAt = inspectProcessSync(pid)?.startedAt ?? null;
+  assert.ok(realStartedAt, "台子前提:那个陌生进程此刻真的在跑,ps 认得它");
+  fakeProc(pid, {
+    // 前两次(那一遍 fresh 扫描的两趟)读到记号;之后记号就没了 —— 跟换代同时发生。
+    tokensOnEnvRead: (n) => (n <= 2 ? [unitToken] : []),
+    // 那一遍扫描每趟夹两次 stat,两趟共四次;第五次起换代。
+    genOnStatRead: (n) => (n <= 4 ? "111" : "999"),
+  });
+  assert.deepEqual(processUnitEvidence(unitToken, { fresh: true }), {
+    verdict: "ours", members: [{ pid, gen: "j:111" }],
+  }, "台子前提:记号那一问先在 j:111 这一代上证明过这个号");
+  const outcome = await reclaimMonitorProcess(
+    { ...row, command: row.command, logPath: row.logPath },
+    "审查:换代恰好发生在身份换算当口",
+  );
+  // 台子留到延迟信号的窗口过完再撤(fake-proc-fixture.ts 纪律 ②)。
+  await new Promise((done) => setTimeout(done, 2_500));
+  const aliveAfter = isPidAlive(pid);
+  realProc();
+  const after = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
+  assert.equal(after.pidStartedAt, null, "反证之后不许靠时间锚给这个号补一份身份");
+  assert.notEqual(after.pidStartedAt, realStartedAt, "更不许把陌生进程真实的启动时刻写成旧哨兵的身份");
+  assert.equal((await debtRow(monId))?.pidStartedAt ?? null, null, "债表那一份同样不许补");
+  assert.notEqual(outcome.state, "closed", "身份补不上不等于线索追空,责任要留在表上");
+  assert.equal(aliveAfter, true, "认不出身份就不许动手:陌生进程不能挨刀");
+  killTree(pid, "SIGKILL");
+}
+
+{
+  // ⑬-5 **边条认领走同一条规矩**(同一条不变量的第二个消费点)。台子:一行 pid 还空着的意图行
+  //     —— ash 恰好死在「落了身份」和「回填 pid」之间;边条指着一个刚起来的陌生进程,时间锚
+  //     与命令文本都对得上。而记号那一问是**精确可答**的那一档,它的回答是「这个号上没有这条
+  //     记号」:那是反证,不是「问不出来」,所以这一行只能照实判成认不回来。
+  const taskId = await makeTask();
+  const unitToken = `unit-adopt-disproved-${process.pid}-${Date.now()}`;
+  const stranger = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true, stdio: "ignore", env: { PATH: process.env.PATH! },
+  });
+  stranger.unref();
+  const pid = stranger.pid!;
+  const monId = await insertMonitorRow(taskId, {
+    status: "running", pidStartedAt: null, command: process.execPath, unitToken,
+  });
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
+  assert.equal(row.pid, null, "台子前提:这一行的 pid 还空着");
+  writeFileSync(monitorSpawnIdentityPath(row.logPath!), JSON.stringify({ pid, spawnedAtMs: Date.now() }));
+  // 这一遍扫描只看得见这一个号,它身上没有任何记号 ⇒ 「这条记号不在任何活着的号上」。
+  await dbClient.execute(`UPDATE monitors SET status = 'stopped' WHERE id <> '${monId}'`);
+  fakeProc(pid, { tokensOnEnvRead: () => [], genOnStatRead: () => "111" });
+  const result = await reattachMonitors();
+  await new Promise((done) => setTimeout(done, 2_500));
+  const aliveAfter = isPidAlive(pid);
+  realProc();
+  const adopted = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
+  assert.equal(adopted.pid, null, "反证之后不许把这个号认成这条哨兵的身份");
+  assert.equal(adopted.pidStartedAt, null, "也不许给它补一份启动时刻");
+  assert.equal(result.attached, 0, "更不许把它当成接回来了");
+  assert.equal(adopted.status, "lost", "照实写掉:认不回来");
+  assert.equal(aliveAfter, true, "陌生进程不许被这一行牵连");
+  killTree(pid, "SIGKILL");
+}
+
 await teardown();
-console.log("✓ 另一个变量值里的记号文字既不签发凭证也不让陌生进程挨刀（两种证据等级各按自己的事实判）/ 销毁前留档失败时任务与身份都保留、删除整笔失败，故障撤掉后留档真的落盘 / 第一刀记下的成员名单带代次，两秒后核代次再补刀，忽略 TERM 的后代照样收掉 均受回归保护");
+
+console.log("✓ 另一个变量值里的记号文字既不签发凭证也不让陌生进程挨刀（两种证据等级各按自己的事实判）/ 销毁前留档失败时任务与身份都保留、删除整笔失败，故障撤掉后留档真的落盘 / 第一刀记下的成员名单带代次，两秒后核代次再补刀，忽略 TERM 的后代照样收掉 / 记号证明过的那一代已换掉时，实时回收与边条认领都不许退回时间锚把陌生进程认成旧身份 均受回归保护");

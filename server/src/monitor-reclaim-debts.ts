@@ -348,10 +348,19 @@ async function completeIdentity(m: {
   // 否则就是把别人那一代的启动时刻写成这个号的身份,之后所有「还是不是它」都跟着错
   // (第 15 轮审查 F1 点出的同类消费点)。
   const byUnit = member ? startedAtOfGeneration(member.pid, member.gen) : null;
-  if (!byUnit && anchorMs === null) return { pidStartedAt: null, anchorMs };
+  // **强凭证被拒绝之后不许再退回弱判据**(第 16 轮审查 F1-B):`changed` 是**反证** ——
+  // 「这个号已经不是记号证明过的那一代了」。上一版只看「有没有拿到值」,于是反证之后照样走
+  // 时间邻近 + 命令包含那条路:新进程在两秒窗口里起来、命令文本又恰好包含记录的那一段时,
+  // 它真实的启动时刻被写成旧哨兵的身份,随后按这条身份被关掉(实测
+  // `identity-fallback.log`:`persistedStartedAt` 就是新进程的启动时刻、`diagnosticAliveAfter=false`)。
+  // 「这一刻问不出来」(`unqueryable`)不是反证,照旧可以走锚那条路 —— 第 10 轮 F2-B 要的
+  // 就是「查询恢复之后还能把身份补上」。
+  if (byUnit?.outcome === "changed") return { pidStartedAt: null, anchorMs };
+  const provenStartedAt = byUnit?.outcome === "proven" ? byUnit.startedAt : null;
+  if (!provenStartedAt && anchorMs === null) return { pidStartedAt: null, anchorMs };
   // 命令原文一起交过去:时间邻近单独不足以认下一个号(见 proc.ts 的 `processStartedNear`)。
-  const { verdict, startedAt } = byUnit
-    ? { verdict: "same" as const, startedAt: byUnit }
+  const { verdict, startedAt } = provenStartedAt
+    ? { verdict: "same" as const, startedAt: provenStartedAt }
     : processStartedNear(m.pid, anchorMs!, 2_000, m.command);
   if (verdict !== "same" || !startedAt) return { pidStartedAt: null, anchorMs };
   if (!dbClient.closed) {

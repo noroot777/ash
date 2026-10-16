@@ -277,23 +277,52 @@ const canShoot = (state: ReclaimState): boolean => state === "ours-alive" || sta
 export function killProvenUnit(pid: number, pidStartedAt: string | null, unit: MonitorUnit): void {
   const first = reclaimEvidence(pid, pidStartedAt, unit, { fresh: true });
   if (!canShoot(first.state)) return;
-  // 组长活着 ⇒ 这一组的成员都是它的(外人只能从同一个会话里 setpgid 进来,而那个会话的头
-  // 正是这条哨兵)。名单留给两秒后那一刀,所以必须连代次一起拿、而且代次要跟「它在这一组里」
-  // 同源(见 process-generation.ts)。
-  const held: ProcessMember[] = first.state === "ours-alive"
-    ? processGroupMembersSync(pid) ?? first.members
-    : first.members;
+  // 名单要留给两秒后那一刀,所以这里拿的必须是**已证明归属**的那一份,不是「组里恰好有这几个
+  // 号」的候选快照(见 `provenGroupMembers`)。
+  const held = provenGroupMembers(pid, pidStartedAt, first);
   shootProvenUnit(pid, pidStartedAt, first, "SIGTERM");
   const t = setTimeout(() => {
     // 重新取证:这两秒里谁退了、号被谁接手了、又新派生了谁,只有现在问才算数。
     const again = reclaimEvidence(pid, pidStartedAt, unit, { fresh: true });
     if (canShoot(again.state)) shootProvenUnit(pid, pidStartedAt, again, "SIGKILL");
     // 再补上第一刀那会儿的成员:它们的归属在那一刻证明过,**代次没变才打**。
+    // **这里不要求原根现在还活着** —— 第一刀就是来结束它的,而它名下那个忽略 TERM 的后代
+    // 正是靠这一下收掉的(`test-monitor-unit-proof.ts` ⑬-3 钉的就是这条)。
     const done = new Set(again.members.map((m) => m.pid));
     if (again.state === "ours-alive") done.add(pid);
-    shootMembers(held.filter((m) => !done.has(m.pid)), "SIGKILL");
+    shootMembers({ ...held, members: held.members.filter((m) => !done.has(m.pid)) }, "SIGKILL");
   }, 2_000);
   (t as { unref?: () => void }).unref?.();
+}
+
+/**
+ * **候选名单 → 已证明归属的成员**:组枚举自己就是一次全表查询,查完必须重核授权它的那个根。
+ *
+ * 第 16 轮审查 F1-A 实测的那一刀:上一版把 `processGroupMembersSync` 的返回值直接当成
+ * 「第一刀那一刻证明过归属的成员」留给两秒后那一下。但那份名单的归属凭证**只有一个** ——
+ * 「组号就是还活着的原根的 pid」。查询期间原根退出并换代时,拿回来的名单可以整份属于**另一组**
+ * (新的那个同号进程的组)。那一轮第一刀是安全的(`rootStillProven` 发现根换了代,没打整组),
+ * 可两秒后 `shootMembers` 只核「它还是不是名单里那一代」—— 陌生进程从查询到补刀一直稳定在
+ * 自己那一代,于是核对通过、挨了真实的 SIGKILL(`held-generation.log`:
+ * `aliveAfterFirstShot=true`、`aliveAfterDelayedShot=false`、`exitSignal=SIGKILL`)。
+ *
+ * 所以这里把两件事分开:
+ *  · **候选事实** = 「这几个号此刻的 pgid 等于它」—— 它本身不是归属;
+ *  · **已证明归属** = 候选 + 「查询前后原根都还是授权这一档的那一代」。查询之后重核不过就
+ *    **整份丢掉候选**,只留真实环境项独立证明过的那几个(`evidence.members`)。
+ */
+function provenGroupMembers(
+  pid: number, pidStartedAt: string | null, evidence: ReclaimEvidence,
+): ProvenMembers {
+  if (evidence.state !== "ours-alive") {
+    // 孤儿那一档没有「活着的原根」这个凭证,落点只能是记号独立证明过的那几个。
+    return { authorizedBy: "unit-mark", members: evidence.members };
+  }
+  const candidates = processGroupMembersSync(pid);
+  if (!candidates || !rootStillProven(pid, pidStartedAt, evidence)) {
+    return { authorizedBy: "unit-mark", members: evidence.members };
+  }
+  return { authorizedBy: "group-of-proven-root", members: candidates };
 }
 
 /**
@@ -350,18 +379,33 @@ function shootProvenUnit(
     killTree(pid, sig);
     return;
   }
-  shootMembers(evidence.members, sig);
+  // 这几个各自在真实环境项里被证明过,归属不依赖那个已经换代的根。
+  shootMembers({ authorizedBy: "unit-mark", members: evidence.members }, sig);
 }
+
+/**
+ * **可以当落点的那一份名单** —— 类型上就跟「候选快照」分开(第 16 轮审查 F1-A)。
+ *
+ * 构造它的只有 `provenGroupMembers` 一条路,所以「组里恰好有这几个号」永远到不了
+ * `shootMembers`。`authorizedBy` 记的是这份名单的归属凭证是哪一条:
+ *  · `unit-mark` —— 每个成员各自在真实环境项里被证明过;
+ *  · `group-of-proven-root` —— 组号属于「查询前后都还是那一代」的原根。
+ */
+type ProvenMembers = {
+  authorizedBy: "unit-mark" | "group-of-proven-root";
+  members: ProcessMember[];
+};
 
 /**
  * 发给**证明过的那几个成员**:每一个都先拿代次核过才打。
  *
- * 这是唯一允许的下刀形状(第 14、15 两轮审查 F1):归属在读到记号的那一刻证明过,而代次戳
- * 相等说明这个号上还是同一代那个进程。跨不跨 `await` 都走这一条 —— 「刚取的证据不必重核」
- * 这种例外一旦留着,就又有一条路会把别人那一代当成自己的落点。
+ * 这是唯一允许的下刀形状(第 14、15、16 三轮审查 F1):归属在证明它的那一刻成立(`ProvenMembers`
+ * 的 `authorizedBy`),而代次戳相等说明这个号上还是同一代那个进程。**两个条件都要**:
+ * 只核代次不问归属,就是第 16 轮 F1-A 那一刀(陌生进程的代次当然一直稳定);只问归属不核代次,
+ * 就是第 15 轮 F1 那一刀。跨不跨 `await` 都走这一条。
  */
-function shootMembers(members: ProcessMember[], sig: NodeJS.Signals): void {
-  for (const member of members) {
+function shootMembers(proven: ProvenMembers, sig: NodeJS.Signals): void {
+  for (const member of proven.members) {
     if (!stillSameGeneration(member)) continue;
     killOne(member.pid, sig);
   }

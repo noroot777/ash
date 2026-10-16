@@ -33,7 +33,7 @@
 //    戳在 macOS 上的作用是**让「还是同一代」这句话有个依据**,不是把它升格成精确身份。
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
-import { IS_WINDOWS, inspectProcessSync } from "./platform.js";
+import { IS_WINDOWS, inspectProcessSync, isPidAlive } from "./platform.js";
 
 /** 一个号上这一代的戳(带问法标签,见文件头)。**只做相等比较,不要解析它的内容。** */
 export type ProcessGeneration = string;
@@ -95,19 +95,61 @@ export function processGenerationSync(pid: number): ProcessGeneration | null {
 }
 
 /**
+ * 换算这一问的三种答案。**「问不出来」和「已经换代」必须分开**(第 16 轮审查 F1-B)。
+ *
+ * 上一版这里只返回 `string | null`,于是调用方把 `null` 一律读成「这次没拿到值」,接着退回
+ * 时间邻近 + 命令包含那条弱判据 —— 而 `null` 的其中一种含义恰恰是**「已经证明这个号换代了」**。
+ * 实测后果:强凭证明确拒绝之后,新进程被弱判据重新授信,它真实的启动时刻被写成旧哨兵的身份,
+ * 随后按这条身份被关掉(`identity-fallback.log`:`explicitConversionResult=null`、
+ * `persistedStartedAt` 等于新进程的真实启动时刻、`diagnosticAliveAfter=false`)。
+ *
+ * 所以这一问答三档,调用方必须分别处理:
+ *  · `proven` —— 同一代,启动时刻可以落库;
+ *  · `changed` —— **反证**:这个号已经不是那一代了(或者那一代已经不在了)。
+ *    **不许再退回任何弱判据** —— 反证不能被「有个时间锚点」洗掉;
+ *  · `unqueryable` —— 这一刻问不出来(ps 不可用,或者两次读数走了不同问法所以比不出来)。
+ *    既不是证明也不是反证:调用方可以照旧走它原来的后备路,恢复之后再问。
+ */
+export type GenerationStartedAt =
+  | { outcome: "proven"; startedAt: string }
+  | { outcome: "changed" }
+  | { outcome: "unqueryable" };
+
+/** 戳的问法标签(`j:` / `t:`):不同问法之间比不出相等,那是「问不出来」,不是「换代了」。 */
+const generationTag = (gen: ProcessGeneration): string => gen.slice(0, gen.indexOf(":") + 1);
+
+/**
  * 把「这一代」换算成**可落库的启动时刻文本**:读 `ps` 之前之后各核一次代次戳。
  *
  * 为什么要夹:数据库里那一列(`monitors.pid_started_at`)存的是 `ps` 的 lstart 文本,而
  * Linux 上代次戳是节拍数 —— 这是**两份读数**。中间换了代就等于把别人那一代的启动时刻写成
  * 这个号的身份,后面所有「还是不是它」的判断都会跟着错(第 15 轮审查 F1 的同类消费点)。
  *
- * 换不出来返回 `null`:调用方照旧留「不知道」,不许退回时间邻近那条路。
+ * 拒绝的**理由**一起交出去(见 `GenerationStartedAt`):调用方据此决定「还能不能退回别的
+ * 判据」—— 这正是第 16 轮审查 F1-B 的那条缝。
  */
-export function startedAtOfGeneration(pid: number, gen: ProcessGeneration): string | null {
-  if (processGenerationSync(pid) !== gen) return null;
+export function startedAtOfGeneration(pid: number, gen: ProcessGeneration): GenerationStartedAt {
+  const before = currentGeneration(pid, gen);
+  if (before.outcome !== "proven") return before;
   const startedAt = inspectProcessSync(pid)?.startedAt?.trim() || null;
-  if (!startedAt) return null;
-  return processGenerationSync(pid) === gen ? startedAt : null;
+  if (!startedAt) return { outcome: "unqueryable" };
+  const after = currentGeneration(pid, gen);
+  return after.outcome === "proven" ? { outcome: "proven", startedAt } : after;
+}
+
+/** 这一刻这个号上是不是 `gen` 那一代 —— 三档,理由分开(见 `GenerationStartedAt`)。 */
+function currentGeneration(
+  pid: number, gen: ProcessGeneration,
+): { outcome: "proven" } | { outcome: "changed" } | { outcome: "unqueryable" } {
+  const current = processGenerationSync(pid);
+  // 问不出来有两种:那一代已经不在这个号上了(进程没了)是**反证**;它还活着、只是这一刻
+  // 读不出代次(ps 不可用)只能算「问不出来」。
+  if (current === null) return isPidAlive(pid) ? { outcome: "unqueryable" } : { outcome: "changed" };
+  if (current === gen) return { outcome: "proven" };
+  // 两份读数走了不同问法(`/proc` 这一刻读不到、退回了 `ps`)⇒ 比不出来,不是反证。
+  return generationTag(current) === generationTag(gen)
+    ? { outcome: "changed" }
+    : { outcome: "unqueryable" };
 }
 
 /**

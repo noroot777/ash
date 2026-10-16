@@ -36,9 +36,10 @@ import { db, dbClient } from "./db/index.js";
 import { monitors, tasks } from "./db/schema.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
+import { adoptSpawnIdentity } from "./monitor-adopt.js";
 import { clearSpawnIdentity, readLogTail, readSpawnIdentity, tailLines, type Tailer } from "./monitor-spawn.js";
 import { IS_WINDOWS } from "./platform.js";
-import { processStartedNear } from "./proc.js";
+
 import { pushToTask } from "./monitor-events.js";
 import { monitorWakeGate } from "./monitor-session.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -503,41 +504,7 @@ async function reattachBlockedReason(row: Row): Promise<string | null> {
   return monitorWakeGate(task, { reviewRun: row.sourceReviewRun, reviewRound: row.sourceReviewRound });
 }
 
-/**
- * **pid 还空着的那一行:拿身份边条把它认回来**(第 9 轮审查 F3)。
- *
- * 边条是 `spawn` 一返回就同步写下的 `{pid, 那一刻}`(见 monitor-spawn.ts 文件头):ash 恰好
- * 死在「落了身份」和「回填 pid」之间时,库里只剩一行没有 pid 的记录 —— 而 win32 那一侧没有
- * 放行闸,命令可能已经在跑。上一版到这里只能说一句「认不回来」,留下 id、命令、日志路径,
- * 却**没有任何能用来定位那个进程的身份**(审查原话)。
- *
- * 认的判据是**代次**,不是存在性:`processStartedNear` 比的是「这个号上的进程是不是大约在
- * 那一刻起来的」。三档各有出路:
- *  · `same` ⇒ 连启动时刻一起回填,这一行从此跟正常接回的一样能停、能收、能记责任;
- *  · `unqueryable`(ps 这一刻不可用)⇒ **只回填 pid**,启动时刻留空 —— 写一个猜的进去就是把
- *    「无从比对」伪造成「已验证」,而那正是第 9 轮 F3 的那条判据。它随后落在 `unverifiable`
- *    档上:看得见、停得掉、记得下责任,但谁都不许据此下刀;
- *  · `different` ⇒ 这个号现在是另一个进程。一个号同时只能有一个进程,所以**当初那个壳一定
- *    不在了** —— 不认,由调用方照实写掉。
- */
-async function adoptSpawnIdentity(row: Row): Promise<Row | null> {
-  const side = readSpawnIdentity(row.logPath);
-  if (!side) return null;
-  // 命令原文一起交过去:±2 秒是个窗口,原进程结束、号在窗口内被复用时时间锚照样成立
-  // (第 10 轮审查 F2-C)。壳的 argv 里带着命令原文,对不上就一律不认。
-  const { verdict, startedAt } = processStartedNear(side.pid, side.spawnedAtMs, 2_000, row.command);
-  if (verdict === "different") return null;
-  const adopted: Row = { ...row, pid: side.pid, pidStartedAt: startedAt };
-  try {
-    await db.update(monitors)
-      .set({ pid: adopted.pid, pidStartedAt: adopted.pidStartedAt })
-      .where(and(eq(monitors.id, row.id), eq(monitors.status, "running"), isNull(monitors.pid)));
-  } catch (e) {
-    // 回填不进去也要继续:本进程这一轮照旧按这份身份收尾/接回,比当它不存在强。
-    console.error(`[ash] 哨兵身份边条认回来了但写不进库 monitor=${row.id} pid=${side.pid}:`, e);
-  }
-  return adopted;
-}
+
 
 export async function reattachMonitors(): Promise<{ attached: number; lost: number }> {
   // 只认 ash 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
