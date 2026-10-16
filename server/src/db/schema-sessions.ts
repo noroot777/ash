@@ -128,8 +128,9 @@ export const sessions = sqliteTable("sessions", {
    * 为什么不能用「`turns_base` 大于 0」代替它：迁移那一刻一行回合记录都没有的老会话回填
    * 出来的下界正好是 0，跟「升级后新建、确定没有历史」长得一模一样，于是那种会话的未知
    * 历史被当成了「确定没有」（第 5 轮审查必须修 2.2）。这一列还兼作迁移的**幂等标记**：
-   * 新建会话在 insert 时就把 base/approx 都写上，所以回填只认 `turns_base IS NULL`，
-   * 每次启动重跑都不会动到升级后的计数。
+   * 新建会话在 insert 时就把 base/approx 都写上，所以回填只认 `turns_base_approx IS NULL`，
+   * 每次启动重跑都不会动到升级后的计数。（判据**不是** `turns_base IS NULL`——上一版的
+   * `freshTurnFields` 已经会写 `turns_base: 0` 却没有这一列，理由见 `migrate-session-turns.ts`。）
    */
   turnsBaseApprox: integer("turns_base_approx", { mode: "boolean" }),
   // ── 解绑重启（executors/detached.ts）────────────────────────────────────

@@ -9,7 +9,7 @@
 // 假 CLI 只写文件、吐几行 JSONL 就退出，不调模型、不花钱。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, utimesSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
@@ -453,6 +453,94 @@ const resumeSame = async (taskId: string, text: string) => {
     "库恢复之后,欠着的那笔要在下一次开回合时补成持久标记（别一直只活在内存里）");
 }
 
-console.log("✓ turn identity: fresh run 记上计数、两种缺口都认且披露、整批失败留下持久标记、在飞不误报、崩过的老会话不复活、同一身份只计一次、升级历史不抵扣（含下界为 0 的）、重复行不顶替、异常收尾不留假活动身份、未确认的开始意图不被后来成功的一轮抹掉");
+// ── ⑫ 讨论(duet)初始化就抛：别留下一个谁都不会来注销的活动身份（第 7 轮审查必须修 1）──
+{
+  const root = initRepo("duet-setup");
+  await addTask("TiDuetIn0001", root, "讨论初始化失败不留假活动身份", {
+    mode: "duet",
+    // 一轮就收、不开人工闸：这条用例要的是**起跑那一段**,不是讨论本身(开着闸它会停在
+    // 等人拍板那儿永远不返回)。
+    duet: JSON.stringify({ topic: "随便聊一轮就够", voiceA: "codex", voiceB: "codex", maxRounds: 1, gateG1: "off" }),
+  });
+  // **真实的初始化失败**：讨论的日志目录该在的位置先放一个普通文件,`mkdirSync(runDir)` 当场
+  // 抛 EEXIST。那一句在 runTurn 里排在 `openTurn` **之后**、消费循环的 try **之前**,所以它
+  // 正好打在「身份已经拿到、保护还没开始」那个窗口上（第 7 轮报告的复现用的就是这一手）。
+  const runsDir = process.env.ASH_RUNS_DIR as string;
+  writeFileSync(join(runsDir, "TiDuetIn0001"), "占住这个位置,让建日志目录那一步真的抛");
+  const { runDuet } = await import("../src/duet/index.js");
+  const { activeTurnStarts: active } = await import("../src/session-turns.js");
+  await runDuet("TiDuetIn0001");
+  const crashed = (await dbClient.execute(
+    "SELECT id, ended_at FROM sessions WHERE task_id='TiDuetIn0001'",
+  )).rows;
+  assert(crashed.length > 0, "这一步的前提：讨论者的会话行已经落库了（身份就是在那之后拿的）");
+  assert(crashed.every((row) => row.ended_at === null),
+    "这一步的前提：初始化就抛了,这几行压根没走到收尾（真实的未知不伪造成已收尾）");
+  // 修复前：两位讨论者各留一个活动身份,而 runTurn 的 finally 开得太晚、外层 duet/index 的
+  // finally 只还回合锁,没有任何人会来注销它们。
+  for (const row of crashed) {
+    assert.equal(active(String(row.id)).size, 0,
+      "初始化抛出来也要撤掉「正在跑」的身份——留着它,任务重跑时这条会话就从老起点开到无穷");
+  }
+
+  // 修好位置、隔开运行另一项画图任务,再重跑原讨论（报告里的时序）。
+  rmSync(join(runsDir, "TiDuetIn0001"));
+  // 先等第一次那两个假 CLI 把该写的写完再拍快照:它们在初始化抛出之前就已经 spawn 了,
+  // 写盘比抛出晚一点,算进「中间那张」会把断言钉在错误的文件上。
+  await settle();
+  const outputs = () => {
+    try { return readdirSync(join(root, "output")); } catch { return [] as string[]; }
+  };
+  const before = new Set(outputs());
+  await addTask("TiDuetOth0001", root, "停顿期间的另一项任务");
+  await runTask("TiDuetOth0001");
+  await settle();
+  const middle = outputs().filter((name) => !before.has(name));
+  assert.equal(middle.length, 1, `中间那项任务应该只画一张,实际：${JSON.stringify(middle)}`);
+  const middlePath = `output/${middle[0]}`;
+  await runDuet("TiDuetIn0001");
+  for (const row of crashed) {
+    assert.equal(active(String(row.id)).size, 0, "重跑开的是新会话,崩过那两条不该被重新登记成活动");
+  }
+  // 这一步的前提:报告是在**重跑正在跑着**的时候读的清单,而这条脚本读不到那个瞬间——
+  // `running` 就是真实入口起跑时写的那个状态（runDuet 的第一句 setStatus）,这里只把那一刻
+  // 摆出来。被断言的是读端怎么解释「老会话未收口 + 任务在飞」,不是状态本身。
+  await dbClient.execute("UPDATE tasks SET status='running' WHERE id='TiDuetIn0001'");
+  const listed = await listing(root, "TiDuetIn0001");
+  // 修复前：残留登记 + 任务在飞 ⇒ 老会话被判 live,从那个老起点一路开到无穷,中间那张图被
+  // 当成实测证据收进清单,`incomplete` 一个字都没有。
+  assert(listed.incomplete.some((note) => note.includes("没留下收尾时刻")),
+    `崩掉那两轮的未知要照实说出来,实际提示：${JSON.stringify(listed.incomplete)}`);
+  if (paths(listed).includes(middlePath)) {
+    assert(listed.incomplete.some((note) => note.includes("按估出来的时间段")),
+      `中间那张图只能算候选、不能冒充实测,实际提示：${JSON.stringify(listed.incomplete)}`);
+  }
+}
+
+// ── ⑬ 注销之后内存登记要对称收回（第 7 轮审查 N1）──────────────────────────────
+{
+  const { openTurn, recordTurnSpan: close, closeSessionTurns, activeRegistrySize } = await import("../src/session-turns.js");
+  const idle = activeRegistrySize();
+  await db.insert(sessions).values({
+    id: "session-reclaim", taskId: "TiReclaim0001", role: "single", agentType: "codex", executor: "fixture",
+    cwd: stage, startedAt: stamp(0), endedAt: null, turnStartedAt: stamp(0),
+    turnsBase: 0, turnsBaseApprox: false, activeMs: 0, exitStatus: null,
+  });
+  await openTurn({ sessionId: "session-reclaim", taskId: "TiReclaim0001", cwd: stage, startedAt: stamp(0) });
+  const busy = activeRegistrySize();
+  assert.equal(busy.sessions, idle.sessions + 1, "这一步的前提：登记确实进去了");
+  assert.equal(busy.tasks, idle.tasks + 1, "这一步的前提：任务那张反向索引也进去了");
+  // 正常收尾走的是 recordTurnSpan（它只知道一个起点,拿不到 taskId）——反向索引的回收必须
+  // 在这条路上就发生,否则只有 closeTaskTurns 会删,而 duet/team 两条路压根不走它。
+  await close({ sessionId: "session-reclaim", taskId: "TiReclaim0001", cwd: stage, startedAt: stamp(0), endedAt: stamp(1) });
+  assert.deepEqual(activeRegistrySize(), idle,
+    "最后一个身份注销之后,会话和任务两张表都要收回去（跑过的 id 不许永久留在内存里）");
+  // 另一条注销路径（消费循环结束那种）同样要收干净。
+  await openTurn({ sessionId: "session-reclaim", taskId: "TiReclaim0001", cwd: stage, startedAt: stamp(5) });
+  closeSessionTurns("session-reclaim");
+  assert.deepEqual(activeRegistrySize(), idle, "closeSessionTurns 这条路也要对称回收");
+}
+
+console.log("✓ turn identity: fresh run 记上计数、两种缺口都认且披露、整批失败留下持久标记、在飞不误报、崩过的老会话不复活、同一身份只计一次、升级历史不抵扣（含下界为 0 的）、重复行不顶替、异常收尾不留假活动身份、未确认的开始意图不被后来成功的一轮抹掉、讨论初始化抛出也不留无主的活动身份、注销后内存登记对称回收");
 await dbClient.close();
 releaseTmpDb();

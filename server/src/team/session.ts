@@ -510,13 +510,6 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
       exitStatus: null,
     });
   }
-  // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
-  // 下面那句 `beginTurn(lead, turnStart)` 会用**同一个起点**再开一次——那是同一个回合身份,
-  // 所以第二次既不插行也不加数（`openTurn` 的幂等条件就是身份）。第 4 轮把加数放在字段
-  // helper 里时这里是实打实加了两次,于是团队的第一个回合永远报「缺一个回合记录」
-  //（第 5 轮审查必须修 2.1）。
-  await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
-
   const lead: Lead = {
     taskId,
     sessId,
@@ -541,6 +534,18 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     closing: null,
   };
   attachLead(lead);
+  // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
+  // 下面那句 `beginTurn(lead, turnStart)` 会用**同一个起点**再开一次——那是同一个回合身份,
+  // 所以第二次既不插行也不加数（`openTurn` 的幂等条件就是身份）。第 4 轮把加数放在字段
+  // helper 里时这里是实打实加了两次,于是团队的第一个回合永远报「缺一个回合记录」
+  //（第 5 轮审查必须修 2.1）。
+  //
+  // **位置讲究**：这个回合身份的所有者是这台调度台本身（它活得比 openLead 这次调用长,注销
+  // 由 endTurn/closeLead/retireLead 做),所以必须**先把所有者挂上线、再去拿身份**。反过来
+  // 写（原先的顺序:先 openTurn,再组装 lead、再 attachLead）的话,中间那段组装只要抛一次
+  // 就留下一个谁都不会来注销的活动身份——读端会把这条会话当成「从那个起点一直在写」
+  //（第 7 轮审查必须修 1 的同类入口）。
+  await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
   // 运行按钮带来的首个任务 prompt 不另记 turn；用户亲自发来的消息无论是否顺手
   // 打开了调度台，都必须成为可持久、可实时同步的一条 user turn。
   if (kind === "user") recordUserConversationTurn({ taskId, sessionId: sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at: turnStart });

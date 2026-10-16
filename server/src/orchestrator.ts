@@ -8,6 +8,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { closeTaskTurns, freshTurnFields, openTurn, resumedTurnFields } from "./session-turns.js";
+import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun } from "./single-run.js";
@@ -55,12 +56,9 @@ import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "./session-version-guard.js";
 import { announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "./session-notice.js";
 
-// Why a task is being (re)started — only used to label the resume; all reasons
-// behave the same (resume if there's a resumable session, else fresh). Note: a
-// scheduled cron fire is NOT here — it always starts a fresh run via runTask
-// (schedules.ts), so it never resumes. `wake` = an upstream task just settled
-// done and the settle hook is auto-resuming this paused dependent.
-export type ResumeReason = "group" | "run" | "retry" | "wake" | "queue";
+// 这一回合的**调用契约**(连 ResumeReason 一起)住在 task-continue-options.ts；这里原样
+// 再导出，调用方（task-resume、runs 那几处）不用跟着改导入路径。
+export type { ContinueTaskOptions, ResumeReason } from "./task-continue-options.js";
 
 async function setStatus(
   taskId: string,
@@ -97,88 +95,7 @@ export { runTask } from "./task-run.js";
 export async function continueTask(
   taskId: string,
   userText: string,
-  opts: {
-    agent?: AgentType;
-    executorId?: string | null;
-    model?: string | null;
-    reasoningEffort?: string | null;
-    attachments?: string[];
-    system?: ResumeReason;
-    /**
-     * 「执行意图」与「输入来源」分开表示(第 xNb655YqYzcA 链第 4 轮):这一回合是
-     * **任务的执行**(让位交接/手动运行/重试把到期的用户回复当启动输入),所以终态
-     * 任务不走续聊语义(followUpFrom 不护旧终态,队列照常占位)——这一点与 system
-     * 同口径;但输入是**真实用户消息**,落盘记录、工作目录基线、检查点消费、失败时
-     * 的未送达交代全按用户消息走——这一点与 system 相反。只给 system 一个标记时,
-     * 二者绑死:让位交接只能二选一,要么用户原文不进会话记录,要么终态重试被误当续聊。
-     */
-    executionTurn?: boolean;
-    /** 旁路回合结束后恢复进入旁路前的任务状态。 */
-    sideTurn?: boolean;
-    sessionRole?: Extract<SessionRole, "single" | "reviewer">; freshSession?: boolean;
-    /** 内部旁路回合可钉在一个准确工作目录（例如验收快照的 detached worktree）。 */
-    cwd?: string;
-    /**
-     * 指名续**这一条**会话行（而不是按 agentType+role 现挑）。给「重跑上一回合」用：
-     * 那条路的硬要求就是落回崩掉的那一条会话，挑错人 = 换个人重说一遍。
-     * 行已不存在时退回新开会话（读它的调用方刚读过库，正常不会发生）。
-     */
-    resumeSessionId?: string;
-    /**
-     * 这一轮的字是**后端代写**的（验证打回的报告、验收冲突的交接说明），但它必须占一个
-     * 真人回合 —— 带 system 会被当成「系统续跑」，followUpFrom 就护不住任务原来的终态。
-     * 于是落盘时标一位 by:"system"，让读端（Inspector 的「后续追问」、侧边栏铺开那一列）
-     * 能把它跟我自己打的字分开。默认 false = 真人发的。
-     */
-    byBackend?: boolean;
-    /**
-     * **这一回合是谁点的**(多人模式)。共享项目里 B 可以在 A 的任务上回复/重跑/派审,
-     * 而那一轮烧的是 B 自己的 key —— 所以执行器、供应商、个人 CLI 环境与 git 署名
-     * 全部按 B 解析,而不是按 `tasks.ownerUserId`(§八「共享项目里的跨人操作」)。
-     *
-     * **只有真人发起的路径传它**:调度器、队列推进、上游唤醒、团队派活这些后端路径
-     * 不传,它们照旧按任务归属人跑 —— 那才是「这个任务是谁的活」。
-     */
-    actingUserId?: string | null;
-    /**
-     * 调用方已在入口**原子占住** turn（claimTurn 成功后传 true）：这里不再抢锁，用
-     * sessionRole 接管（reclaimTurn）并照常在 finally 释放。入口占位是并发双 202 谎报
-     * 的唯一解——只读预检查后的任何 await 间隙都可能被另一次启动抢先。
-     */
-    turnHeld?: boolean;
-    /**
-     * 起跑前再查一遍冻结事实（分组暂停 / 任务被删或归档），命中就在 spawn 之前撤回。
-     *
-     * 给「预检查离 spawn 很远」的启动路径开：重试按钮、自由审查重跑 —— 它们从只读预检查
-     * 到真正拉起 CLI 之间隔着权威重读、执行器解析、工作目录准备、上一条输入的读取，中途
-     * 还会把回合锁交接一次。普通续聊不开：在一个排队中/分组暂停的任务上发消息本来就允许，
-     * 那不是被冻结的启动（说明见 turn-freeze.ts）。
-     */
-    freezeGuard?: boolean;
-    /**
-     * 「用户这句话已经**落盘**了」的回调 —— 在原话作为一个真人回合写进会话之后立刻调，
-     * 不等这一轮跑完（`continueTask` 要等整轮结束才 resolve，那时早过了）。
-     *
-     * 给排队/定时消息用：它们要在这一刻、而不是更早，才把库里那条标成 sent。早一步标，
-     * 进程死在中间就是「托盘里没了、会话里也没有」——用户那句话凭空蒸发
-     * （见 docs/incidents.md「排队消息凭空消失」）。
-     */
-    onDelivered?: () => void | Promise<unknown>;
-    /**
-     * 「这个任务此刻还能不能被**这条消息**叫醒」——**占住回合之后**再问一次，返回理由
-     * 字符串就撤回这一轮（返回 false，一个字都不送）。
-     *
-     * 给哨兵事件用。它的资格判定原本只发生在投递扫描那一层，可抢到投递租约与真正起这
-     * 一轮之间还隔着「等当前回合退干净」：那段时间里用户完全可以把任务标成完成，而租约
-     * 不是送达 —— 于是一条尚未进会话的事件照样把一个已经 done 的任务拉回 running、多烧
-     * 一轮会话（第 4 轮审查实测：总线真的走了 paused → done → running → done）。
-     *
-     * 只在这条路上开：真人排的队列消息在终态上走的是相反语义（「下次醒来处理」就是他排
-     * 它的意思），给它挂这道闸等于把他的话吞了。
-     */
-    wakeGuard?: () => Promise<string | null>;
-    throwOnTeamUnavailable?: boolean;
-  } = {},
+  opts: ContinueTaskOptions = {},
 ): Promise<boolean> {
   // 这条消息是不是 CLI 原生命令(`/compact`):整条归 CLI 本地执行,不进模型 —— 它既不是
   // 任务的执行,也不是「新指令」。这一轮必须当旁路回合(下面的 sideTurn),否则「压一下

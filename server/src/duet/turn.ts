@@ -232,155 +232,167 @@ export async function runTurn(args: {
   }
   // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
   await openTurn({ sessionId: rowId, taskId, cwd, startedAt: turnStart });
-
-  recordTurnStart({ type: "duet.progress", taskId, round, speaker, phase: "start", startedAt: turnStart });
-  if (versionReplacementNotice) {
-    bus.publish({
-      type: "agent.event", taskId, sessionId: rowId, role, agentType: executor.type,
-      event: { kind: "system", text: versionReplacementNotice, at: now() },
-    });
-  }
-
-  const runDir = join(RUNS_DIR, taskId);
-  mkdirSync(runDir, { recursive: true });
-  const out = createWriteStream(join(runDir, `${rowId}.md`), { flags: "a" });
-  // 这条流在**整个回合**里一直开着(CLI 跑多久它开多久)。stream 上没人听的 'error'
-  // 会直接掀掉进程,而 transcript 写不进去(盘满、worktree 被删、目录没权限)不该连累
-  // 这一轮的结算 —— 先接住,回合末尾统一记一笔。
-  let outFailure: unknown = null;
-  out.on("error", (e) => { outFailure ??= e; });
-  out.write(`\n\n### 第 ${round} 轮 · ${speaker}\n`);
-
-  let text = "";
-  let exit = 0;
-  let errorMsg: string | undefined;
-  let noticeMsg = versionReplacementNotice;
-  // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
-  // executors/session-lost.ts）。duet 有自己的会话行与自己的
-  // 结算,不经过 single-run.ts —— 漏掉这里,duet 任务会一直 --resume 同一个死 id:
-  // 库里那份喂下一次 /retry,返回值里那份喂本次运行的后续轮次,两处都要清。
-  let sessionFault: SessionResumeFault | null = null;
-  // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
-  const trace: TurnTraceEvent[] = [];
-  const TRACE_CAP = 200;
+  // **从这里到函数末尾是这个回合身份的作用域**：登记在上面那句 openTurn 里拿到,所以
+  // 保护必须从拿到的那一刻开始,而不是从消费循环开始。原先 try 开在下面的事件循环处,
+  // 中间那段初始化（建日志目录、开写流）抛出来就绕过了注销:任务重跑时读端把这条老会话
+  // 的残留登记当成「从那个老起点一直在写」,停顿期间别的任务做的东西全被收进它的清单,
+  // 还不标 approx（第 7 轮审查必须修 1）。全部出口都在这道 finally 下面:初始化抛、消费
+  // 抛、收尾写库抛、被停(CanceledRun)、正常 return。
   try {
-    for await (const event of handle.events) {
-      const sessionNotice = isSessionScopeNotice(event);
-      const emittedEvent = event.kind === "usage"
-        ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
-        : event;
-      const publishedEvent = event.kind === "error" && sessionNotice
-        ? { kind: "system" as const, text: event.message, at: now() }
-        : emittedEvent;
-      bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event: publishedEvent });
-      if (event.kind === "session" && event.cliSessionId !== cliId) {
-        cliId = event.cliSessionId;
-        await db
-          .update(sessions)
-          .set({ cliSessionId: cliId, ...executor.resumeFields(cwd, cliId) })
-          .where(eq(sessions.id, rowId));
-      } else if (event.kind === "text") {
-        text += event.text;
-        out.write(event.text + "\n");
-      } else if (event.kind === "tool") {
-        if (isVisibleExecutionEvent(event) && trace.length < TRACE_CAP) trace.push({ kind: "tool", label: event.name, detail: event.detail });
-      } else if (event.kind === "thinking") {
-        if (trace.length < TRACE_CAP) trace.push({ kind: "thinking", label: "思考过程", detail: event.text });
-        out.write("〔思考〕" + event.text + "\n");
-      } else if (event.kind === "system") {
-        noticeMsg = `${noticeMsg ?? ""}\n${event.text}`.trim();
-        out.write("⚠ " + event.text + "\n");
-      } else if (event.kind === "error") {
-        sessionFault = mergeSessionResumeFault(sessionFault, event.message);
-        if (sessionNotice) {
-          noticeMsg = `${noticeMsg ?? ""}\n${event.message}`.trim();
-          out.write("⚠ " + event.message + "\n");
-        } else {
-          errorMsg = `${errorMsg ?? ""}\n${event.message}`.trim();
-          out.write("✕ " + event.message + "\n");
-        }
-      } else if (event.kind === "context") {
-        await setSessionContext(rowId, event.context);
-      } else if (event.kind === "done") {
-        exit = event.exitStatus;
-      }
+
+    recordTurnStart({ type: "duet.progress", taskId, round, speaker, phase: "start", startedAt: turnStart });
+    if (versionReplacementNotice) {
+      bus.publish({
+        type: "agent.event", taskId, sessionId: rowId, role, agentType: executor.type,
+        event: { kind: "system", text: versionReplacementNotice, at: now() },
+      });
     }
+
+    const runDir = join(RUNS_DIR, taskId);
+    mkdirSync(runDir, { recursive: true });
+    const out = createWriteStream(join(runDir, `${rowId}.md`), { flags: "a" });
+    // 这条流在**整个回合**里一直开着(CLI 跑多久它开多久)。stream 上没人听的 'error'
+    // 会直接掀掉进程,而 transcript 写不进去(盘满、worktree 被删、目录没权限)不该连累
+    // 这一轮的结算 —— 先接住,回合末尾统一记一笔。
+    let outFailure: unknown = null;
+    out.on("error", (e) => { outFailure ??= e; });
+    out.write(`\n\n### 第 ${round} 轮 · ${speaker}\n`);
+
+    let text = "";
+    let exit = 0;
+    let errorMsg: string | undefined;
+    let noticeMsg = versionReplacementNotice;
+    // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
+    // executors/session-lost.ts）。duet 有自己的会话行与自己的
+    // 结算,不经过 single-run.ts —— 漏掉这里,duet 任务会一直 --resume 同一个死 id:
+    // 库里那份喂下一次 /retry,返回值里那份喂本次运行的后续轮次,两处都要清。
+    let sessionFault: SessionResumeFault | null = null;
+    // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
+    const trace: TurnTraceEvent[] = [];
+    const TRACE_CAP = 200;
+    try {
+      for await (const event of handle.events) {
+        const sessionNotice = isSessionScopeNotice(event);
+        const emittedEvent = event.kind === "usage"
+          ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
+          : event;
+        const publishedEvent = event.kind === "error" && sessionNotice
+          ? { kind: "system" as const, text: event.message, at: now() }
+          : emittedEvent;
+        bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event: publishedEvent });
+        if (event.kind === "session" && event.cliSessionId !== cliId) {
+          cliId = event.cliSessionId;
+          await db
+            .update(sessions)
+            .set({ cliSessionId: cliId, ...executor.resumeFields(cwd, cliId) })
+            .where(eq(sessions.id, rowId));
+        } else if (event.kind === "text") {
+          text += event.text;
+          out.write(event.text + "\n");
+        } else if (event.kind === "tool") {
+          if (isVisibleExecutionEvent(event) && trace.length < TRACE_CAP) trace.push({ kind: "tool", label: event.name, detail: event.detail });
+        } else if (event.kind === "thinking") {
+          if (trace.length < TRACE_CAP) trace.push({ kind: "thinking", label: "思考过程", detail: event.text });
+          out.write("〔思考〕" + event.text + "\n");
+        } else if (event.kind === "system") {
+          noticeMsg = `${noticeMsg ?? ""}\n${event.text}`.trim();
+          out.write("⚠ " + event.text + "\n");
+        } else if (event.kind === "error") {
+          sessionFault = mergeSessionResumeFault(sessionFault, event.message);
+          if (sessionNotice) {
+            noticeMsg = `${noticeMsg ?? ""}\n${event.message}`.trim();
+            out.write("⚠ " + event.message + "\n");
+          } else {
+            errorMsg = `${errorMsg ?? ""}\n${event.message}`.trim();
+            out.write("✕ " + event.message + "\n");
+          }
+        } else if (event.kind === "context") {
+          await setSessionContext(rowId, event.context);
+        } else if (event.kind === "done") {
+          exit = event.exitStatus;
+        }
+      }
+    } finally {
+      untrackRun(taskId, handle);
+      // 消费循环结束 = 这一轮不再写盘,**这一刻**就撤:后面那些收尾写库再慢再失败,读端
+      // 也不会把这条会话继续当成「还在写」（第 6 轮审查必须修 1）。保证由外面那道 finally
+      // 给（它盖住全部出口),这里只是把窗口收窄到真实的「还在写」那一段。
+      closeSessionTurns(rowId);
+    }
+
+    let raised = RAISE_RE.test(text);
+    let agrees = raised && AGREE_RE.test(text);
+    let conclusion = text.match(CONC_RE)?.[1]?.trim().slice(0, 140) || undefined;
+    // 提问轮:讨论者按 prompt 不写 [可收敛]。若它进入本轮前本就已收敛,一次澄清提问不该让它
+    // "放下手"——继承既有收敛状态，否则 isConsensus 会被一次提问打回为"未达成一致"。
+    if (args.inherit && !raised) {
+      raised = args.inherit.raised;
+      agrees = args.inherit.agrees;
+      conclusion = args.inherit.conclusion;
+    }
+    // A voice turn that exits cleanly but says nothing is degenerate (e.g. a
+    // resume that returned no text) — treat it as a failure so the duet stops
+    // instead of feeding emptiness to the opponent.
+    const isVoice = role === "voiceA" || role === "voiceB";
+    if (!errorMsg && exit === 0 && isVoice && !text.trim()) {
+      errorMsg = `${executor.type} 本轮没有产出任何内容（空回复），可能是会话恢复异常`;
+    }
+    const endIso = now();
+    const durationMs = Math.max(0, Date.parse(endIso) - Date.parse(turnStart));
+    // CLI 否认或判定 poisoned：清掉失效 id 和由它派生的恢复命令，并把这件事写进本轮通知。
+    // 会话轮换本身不等于本轮失败：Codex 可能已经 exit 0 且产出了完整正文，若塞进 error，
+    // duet 的 failed() 会错误中止整场讨论。
+    const dropSession = shouldDropSession(sessionFault, exit);
+    if (dropSession) {
+      const note = sessionResumeFaultNote(sessionFault!);
+      noticeMsg = `${noticeMsg ?? ""}\n${note}`.trim();
+      out.write("⚠ " + note + "\n");
+      bus.publish({
+        type: "agent.event", taskId, sessionId: rowId, role,
+        event: { kind: "system", text: note, at: now() },
+      });
+    }
+    // 关流放在**所有** out.write 之后。写已 end 的流不是静默丢弃,是 stream 上一个没人听的
+    // 'error' 事件('ERR_STREAM_WRITE_AFTER_END'),会当场把整个 server 打崩 —— 而且只在
+    // 会话失效这条冷路径上崩,正常跑一百遍都碰不到。(第 1 轮审查 P1)
+    out.end();
+    // `end()` 只是「我不写了」,不等于落盘 —— 文件可能连 open 都还没完成。必须等它真结束
+    // 再返回:调用方拿到结果后随时会去读这份 transcript,而在那之前流才 open 失败的话,那个
+    // 'error' 就成了回合之外的一颗雷,炸在谁头上全看时序(第 2 轮审查 P2:测试删掉 runs
+    // 目录后进程被它打掉,断言明明全过了还是 exit 1)。
+    await finished(out).catch(() => { /* 具体原因在 outFailure 里,下面统一报 */ });
+    if (outFailure) console.warn(`[ash] duet 这一轮的 transcript 没写成 (${rowId}):`, outFailure);
+    await db
+      .update(sessions)
+      .set({
+        exitStatus: exit,
+        endedAt: endIso,
+        activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${durationMs}`,
+        ...(dropSession ? LOST_SESSION_PATCH : {}),
+      })
+      .where(eq(sessions.id, rowId));
+    // 这一回合的区间（产物归属按它认人，不按会话寿命——会话行跨回合复用）。
+    await recordTurnSpan({ sessionId: rowId, taskId, cwd, startedAt: turnStart, endedAt: endIso });
+    // Persist the turn so a reloaded duet can rebuild its timeline (no live
+    // events). Includes errors and non-fatal notices so reload preserves the same meaning as live SSE.
+    try {
+      appendFileSync(
+        join(runDir, "transcript.jsonl"),
+        JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, notice: noticeMsg, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
+      );
+    } catch {
+      /* best effort */
+    }
+    bus.publish({ type: "duet.progress", taskId, round, speaker, phase: "end", raisedHand: raised, at: endIso, startedAt: turnStart, durationMs });
+    // A manual stop killed this turn's subprocess → unwind to canceled (the top of
+    // each entry point catches CanceledRun).
+    if (isCanceling(taskId)) throw new CanceledRun();
+    // cliId 清成空串,调用方的 `resumeCliId: ... || undefined` 就会退化成「开新会话」——
+    // 本次运行的后续轮次也不会再拿这个死 id 去 --resume。
+    return { rowId, cliId: dropSession ? "" : cliId, text, raised, agrees, conclusion, exit, error: errorMsg, notice: noticeMsg };
   } finally {
-    untrackRun(taskId, handle);
-    // 消费循环结束 = 这一轮不再写盘。注销不能等到下面那句 `recordTurnSpan`：中间的会话
-    // UPDATE 抛了就跳过它,残留的活动登记会让读端把这条会话当成「还在写」（第 6 轮审查
-    // 必须修 1）。幂等,正常路径上收尾那边会再注销一次。
+    // 这一次 runTurn 结束了 = 这条会话名下不再有回合在写。幂等:正常路径上消费循环那道
+    // finally 已经注销过一次（那一刻就确定不再写盘了,早撤比晚撤准）。
     closeSessionTurns(rowId);
   }
-
-  let raised = RAISE_RE.test(text);
-  let agrees = raised && AGREE_RE.test(text);
-  let conclusion = text.match(CONC_RE)?.[1]?.trim().slice(0, 140) || undefined;
-  // 提问轮:讨论者按 prompt 不写 [可收敛]。若它进入本轮前本就已收敛,一次澄清提问不该让它
-  // "放下手"——继承既有收敛状态，否则 isConsensus 会被一次提问打回为"未达成一致"。
-  if (args.inherit && !raised) {
-    raised = args.inherit.raised;
-    agrees = args.inherit.agrees;
-    conclusion = args.inherit.conclusion;
-  }
-  // A voice turn that exits cleanly but says nothing is degenerate (e.g. a
-  // resume that returned no text) — treat it as a failure so the duet stops
-  // instead of feeding emptiness to the opponent.
-  const isVoice = role === "voiceA" || role === "voiceB";
-  if (!errorMsg && exit === 0 && isVoice && !text.trim()) {
-    errorMsg = `${executor.type} 本轮没有产出任何内容（空回复），可能是会话恢复异常`;
-  }
-  const endIso = now();
-  const durationMs = Math.max(0, Date.parse(endIso) - Date.parse(turnStart));
-  // CLI 否认或判定 poisoned：清掉失效 id 和由它派生的恢复命令，并把这件事写进本轮通知。
-  // 会话轮换本身不等于本轮失败：Codex 可能已经 exit 0 且产出了完整正文，若塞进 error，
-  // duet 的 failed() 会错误中止整场讨论。
-  const dropSession = shouldDropSession(sessionFault, exit);
-  if (dropSession) {
-    const note = sessionResumeFaultNote(sessionFault!);
-    noticeMsg = `${noticeMsg ?? ""}\n${note}`.trim();
-    out.write("⚠ " + note + "\n");
-    bus.publish({
-      type: "agent.event", taskId, sessionId: rowId, role,
-      event: { kind: "system", text: note, at: now() },
-    });
-  }
-  // 关流放在**所有** out.write 之后。写已 end 的流不是静默丢弃,是 stream 上一个没人听的
-  // 'error' 事件('ERR_STREAM_WRITE_AFTER_END'),会当场把整个 server 打崩 —— 而且只在
-  // 会话失效这条冷路径上崩,正常跑一百遍都碰不到。(第 1 轮审查 P1)
-  out.end();
-  // `end()` 只是「我不写了」,不等于落盘 —— 文件可能连 open 都还没完成。必须等它真结束
-  // 再返回:调用方拿到结果后随时会去读这份 transcript,而在那之前流才 open 失败的话,那个
-  // 'error' 就成了回合之外的一颗雷,炸在谁头上全看时序(第 2 轮审查 P2:测试删掉 runs
-  // 目录后进程被它打掉,断言明明全过了还是 exit 1)。
-  await finished(out).catch(() => { /* 具体原因在 outFailure 里,下面统一报 */ });
-  if (outFailure) console.warn(`[ash] duet 这一轮的 transcript 没写成 (${rowId}):`, outFailure);
-  await db
-    .update(sessions)
-    .set({
-      exitStatus: exit,
-      endedAt: endIso,
-      activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${durationMs}`,
-      ...(dropSession ? LOST_SESSION_PATCH : {}),
-    })
-    .where(eq(sessions.id, rowId));
-  // 这一回合的区间（产物归属按它认人，不按会话寿命——会话行跨回合复用）。
-  await recordTurnSpan({ sessionId: rowId, taskId, cwd, startedAt: turnStart, endedAt: endIso });
-  // Persist the turn so a reloaded duet can rebuild its timeline (no live
-  // events). Includes errors and non-fatal notices so reload preserves the same meaning as live SSE.
-  try {
-    appendFileSync(
-      join(runDir, "transcript.jsonl"),
-      JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, notice: noticeMsg, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
-    );
-  } catch {
-    /* best effort */
-  }
-  bus.publish({ type: "duet.progress", taskId, round, speaker, phase: "end", raisedHand: raised, at: endIso, startedAt: turnStart, durationMs });
-  // A manual stop killed this turn's subprocess → unwind to canceled (the top of
-  // each entry point catches CanceledRun).
-  if (isCanceling(taskId)) throw new CanceledRun();
-  // cliId 清成空串,调用方的 `resumeCliId: ... || undefined` 就会退化成「开新会话」——
-  // 本次运行的后续轮次也不会再拿这个死 id 去 --resume。
-  return { rowId, cliId: dropSession ? "" : cliId, text, raised, agrees, conclusion, exit, error: errorMsg, notice: noticeMsg };
 }

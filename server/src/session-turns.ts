@@ -49,9 +49,31 @@ import { id } from "./util.js";
  * 老起点一路开到无穷,中间歇着的几个钟头里别人做的东西全被认成它的,还不标 approx
  * （第 6 轮审查必须修 1）。所以 `closeSessionTurns` / `closeTaskTurns` 挂在各入口的
  * `finally` 和收尾函数的**开头**（不等写库成功),三条单飞/duet/team 的路都走得到。
+ *
+ * **怎么判一处新入口有没有做对**（第 7 轮审查必须修 1）：每个登记都必须有**恰好一个所有者
+ * 作用域**,而所有者的每一个出口都注销。所有者只有两种形态,别混着用：
+ *   • **登记它的那次函数调用**（单飞 `task-run`/`orchestrator`、`duet/turn` 的一轮发言、
+ *     `reattach` 的那次接管）——那就必须有一道 `try/finally` **从拿到身份的那一刻**罩到
+ *     函数末尾。只罩住消费循环是不够的:中间那段初始化（建目录、开写流）抛出来就绕过去了,
+ *     duet 的 F1 就是这么漏的。
+ *   • **一个活得比调用更长的对象**（团队那台 `Lead`:注销在 `endTurn`/`closeLead`/
+ *     `retireLead`）——这种情况下**先把所有者挂上线,再去拿身份**。顺序反了,中间那段组装
+ *     一抛就留下一个谁都不会来注销的登记,而这种泄漏在测试里是哑的（面板只是多列几个
+ *     别人的东西）。
  */
-const activeTurns = new Map<string, Set<string>>();
-/** `task_id` → 它名下登记过活动身份的会话。只为 `closeTaskTurns` 服务（finally 里只拿得到 taskId）。 */
+const activeTurns = new Map<string, { taskId: string; starts: Set<string> }>();
+/**
+ * `task_id` → 它名下**此刻**有活动身份的会话。只为 `closeTaskTurns` 服务（各入口的 finally
+ * 里只拿得到 taskId）。
+ *
+ * 跟着活动集合一起**对称回收**：一条会话的最后一个身份注销掉时,它从这张表里一并删掉,任务
+ * 名下空了就把任务条目也删掉。所以这张表的大小等于「当下真的在跑的会话数」,不随进程跑过
+ * 多少任务增长。不对称的那一版只有 `closeTaskTurns` 会删,而 duet 走 `closeSessionTurns`、
+ * 团队走 `clearTurnActive`,两条路都不碰它:一个长命进程跑过的每条会话 id 都会永久留下,
+ * 任务后来删掉也不回收（第 7 轮审查 N1）。`activeTurns` 里存 `taskId` 就是为了让
+ * `clearTurnActive` 这种拿不到 taskId 的注销也能做这件事——一条会话行只属于一个任务,
+ * 登记时那个 taskId 就是权威值。
+ */
 const sessionsByTask = new Map<string, Set<string>>();
 /**
  * 每条会话**已经关闭到哪个起点**（含）。
@@ -76,11 +98,20 @@ export function markTurnActive(input: {
   const closed = closedThrough.get(sessionId);
   if (closed && startedAt <= closed) return; // 迟到：这个作用域已经退出了
   const seen = activeTurns.get(sessionId);
-  if (seen) seen.add(startedAt);
-  else activeTurns.set(sessionId, new Set([startedAt]));
+  if (seen) seen.starts.add(startedAt);
+  else activeTurns.set(sessionId, { taskId, starts: new Set([startedAt]) });
   const peers = sessionsByTask.get(taskId);
   if (peers) peers.add(sessionId);
   else sessionsByTask.set(taskId, new Set([sessionId]));
+}
+
+/** 这条会话不再有任何活动身份:两张表一起摘干净（登记那两步的镜像,见 `sessionsByTask`）。 */
+function forgetSession(sessionId: string, taskId: string): void {
+  activeTurns.delete(sessionId);
+  const peers = sessionsByTask.get(taskId);
+  if (!peers) return;
+  peers.delete(sessionId);
+  if (!peers.size) sessionsByTask.delete(taskId);
 }
 
 /** 记下「这条会话关闭到这一刻为止」，并顺手给内存封顶。 */
@@ -103,8 +134,8 @@ export function clearTurnActive(sessionId: string, startedAt: string | null | un
   rememberClosed(sessionId, startedAt);
   const seen = activeTurns.get(sessionId);
   if (!seen) return;
-  seen.delete(startedAt);
-  if (!seen.size) activeTurns.delete(sessionId);
+  seen.starts.delete(startedAt);
+  if (!seen.starts.size) forgetSession(sessionId, seen.taskId);
 }
 
 /**
@@ -116,7 +147,7 @@ export function clearTurnActive(sessionId: string, startedAt: string | null | un
  */
 export function closeSessionTurns(sessionId: string): void {
   const seen = activeTurns.get(sessionId);
-  if (seen) for (const at of [...seen]) clearTurnActive(sessionId, at);
+  if (seen) for (const at of [...seen.starts]) clearTurnActive(sessionId, at);
   else {
     // 没有活动身份也要留下「已关闭」的水位,否则迟到的开始事件照样能把它登记回来。
     const now = new Date().toISOString();
@@ -138,9 +169,18 @@ export function closeTaskTurns(taskId: string): void {
   sessionsByTask.delete(taskId);
 }
 
+/**
+ * 内存登记此刻占着多少条目（会话数 / 任务数）。只读探针,给回归测试钉住「空了就对称回收」
+ * 这条不变量——这两张表都只代表「当下真的在跑的那些回合」,跑过的会话 id 不许留在里面
+ * （第 7 轮审查 N1）。
+ */
+export function activeRegistrySize(): { sessions: number; tasks: number } {
+  return { sessions: activeTurns.size, tasks: sessionsByTask.size };
+}
+
 /** 这条会话此刻正在跑的回合起点。空集 = 它名下没有任何回合在跑（读端据此不给 live）。 */
 export function activeTurnStarts(sessionId: string): ReadonlySet<string> {
-  return activeTurns.get(sessionId) ?? EMPTY_STARTS;
+  return activeTurns.get(sessionId)?.starts ?? EMPTY_STARTS;
 }
 
 const EMPTY_STARTS: ReadonlySet<string> = new Set<string>();
@@ -194,7 +234,9 @@ async function flushUnconfirmed(sessionId: string): Promise<void> {
  *
  * **不含计数**：那是 `openTurn` 的事（同一批里加，条件是身份还不存在）。这里只声明
  * 「这条会话没有升级前的未知历史」——`turns_base_approx = 0` 同时兼作迁移的幂等标记，
- * 回填只认 `turns_base IS NULL`。
+ * 回填只认 `turns_base_approx IS NULL`（**不是** `turns_base IS NULL`：上一版就已经会写
+ * `turns_base: 0` 了,照 base 判会把那一版不可信的计数当成已回填过,理由写在
+ * `db/migrate-session-turns.ts` 的回填 SQL 上）。
  */
 export const freshTurnFields = (at: string) => ({
   turnStartedAt: at,

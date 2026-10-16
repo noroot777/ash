@@ -89,7 +89,7 @@ try {
   assert.equal(midVersion.turns_started, null, "上一版的计数口径不参与本版对账");
   assert.equal(Number(midVersion.turns_base_approx), 1, "NULL approx 不等于 false：那一版的账不可信（必须修 2 历史边界）");
 
-  // 幂等：`ensureSchema` 每次启动都跑,而回填这次会扫**所有** `turns_base IS NULL` 的行——
+  // 幂等：`ensureSchema` 每次启动都跑,而回填这次会扫**所有** `turns_base_approx IS NULL` 的行——
   // 升级之后新建的会话（insert 时就写了 base/approx）必须一个字都不被它动到,否则每次重启
   // 都把本版的真实计数清成 NULL,对账这一道从此形同虚设。
   await dbClient.execute(
@@ -99,7 +99,7 @@ try {
   await ensureSchema();
   assert.equal(Number((await dbClient.execute("SELECT COUNT(*) c FROM session_turns")).rows[0].c), 6, "再跑一次仍是六行");
   const again = await sessionRow("s1");
-  assert.equal(Number(again.turns_base), 2, "基数不被二次回填改写（判据是「turns_base 还是 NULL」，所以只会做一次）");
+  assert.equal(Number(again.turns_base), 2, "基数不被二次回填改写（判据是「turns_base_approx 还是 NULL」，所以只会做一次）");
   assert.equal(Number(again.turns_base_approx), 1, "「算不准」这个标记也不该被改掉");
   const fresh = await sessionRow("s3");
   assert.equal(Number(fresh.turns_started), 3, "升级后新建的会话,它的计数不许被回填清掉");
