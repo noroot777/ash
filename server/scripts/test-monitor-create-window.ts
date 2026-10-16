@@ -16,8 +16,8 @@
 // ⑬ **交接恢复不了就拒,收进程要收整棵树**(第 10 轮审查 F2-C):闸和身份边条**两样都没有**时,
 //    那条命令可能已经开工而重启后谁都定位不到它 —— 这一档只有「拒」一个正确答案。反过来只少
 //    一样(POSIX 上边条写不下来)不致命,照旧放行,把一次正常创建搞失败同样是错。
-// ⑮ **根进程退出不等于整项资源退出**(第 11 轮审查 F1-B)。
-// ⑭⑯ **补偿自己失败时也得有人接管**(第 10 轮审查 F3、第 11 轮审查 F3):收尾那几笔读写一样会
+// ⑮ **根进程退出不等于整项资源退出**(第 12 轮审查 F1-B)。
+// ⑭⑯ **补偿自己失败时也得有人接管**(第 10 轮审查 F3、第 12 轮审查 F3):收尾那几笔读写一样会
 //    抛,而抛出去就连收口一起跳过,留下一条 running、无人接管、也没有重试者的行。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -414,7 +414,7 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
   // (根 AGENTS.md:那台机器现在连不上)。
 }
 
-// ── ⑮ **根进程退出不等于整项资源退出**(本轮审查 F1-B)───────────────────────────────
+// ── ⑮ **根进程退出不等于整项资源退出**(第 11 轮审查 F1-B)───────────────────────────────
 //
 // 句柄只知道**这个 ChildProcess**(壳的根)的结局。命令一旦开工过,它派生的后台进程不随根
 // 退出而消失 —— 而上一版的撤销是「`waitExit` 为真 ⇒ reclaimed」:根先退的那一刻 `kill()` 因为
@@ -422,16 +422,19 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
 // 那些后代从此没有任何所有权记录。win32 更是常态(那一侧没有闸,③ 之前命令就可能开工)。
 //
 // 修在判据这一层:只有「命令从未开工」才敢把根的 exit 当整项资源的证明;开工过的一律交回收圈
-// 按**当前归属证据**处理(组成员的 argv,proc.ts 的 `processGroupOwnership`)—— 于是这里的后代
-// 真的会被收掉,而不是被一句「已回收」抹掉。
+// 按**当前归属证据**处理(整棵树带着的那条资源记号,proc.ts 的 `processUnitEvidence`)——
+// 于是这里的后代真的会被收掉,而不是被一句「已回收」抹掉。
 {
   const taskId = await makeTask();
   const logPath = join(root, `rooted-${process.pid}.log`);
   const token = `ash-rooted-probe-${process.pid}`;
+  // 资源记号跟生产同源:创建入口在起进程之前生成它、随意图行落库,再种进环境(这里就是
+  // 下面那条 `unitToken`)。后代的 argv 早就不含这条命令了,认得出它们全靠这个记号。
+  const unitToken = `unit-rooted-${process.pid}-${Date.now()}`;
   // 开工 → 派生一个后台进程 → 根自己退出。`sleep 0.6` 给的是「趁根还活着把启动时刻记下来」
   // 的窗口(生产里这一列正是创建那一刻落的)。
   const command = `: ${token}; ( while :; do sleep 0.2; done ) & sleep 0.6; exit 0`;
-  const spawned = spawnMonitor({ command, cwd: root, logPath });
+  const spawned = spawnMonitor({ command, cwd: root, logPath, unitToken });
   assert.ok(!("error" in spawned), "台子前提:起得起来");
   if ("error" in spawned) throw new Error(spawned.error);
   spawned.release();
@@ -441,7 +444,9 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
   await until("根自己退了、后代还在组里", async () => !isPidAlive(spawned.pid) && psCount(token) >= 1);
 
   // 这一刻撤销这次创建:句柄手里只有根的结局(`settled` 已经为真)。
-  const monId = await insertMonitorRow(taskId, { pid: spawned.pid, pidStartedAt: startedAt, command });
+  const monId = await insertMonitorRow(taskId, {
+    pid: spawned.pid, pidStartedAt: startedAt, command, unitToken,
+  });
   const row = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
   const res = await abandonRegistration(row, "台子：根已经先退了", spawned);
   assert.equal(res.ok, false, "撤销就是撤销");
@@ -483,7 +488,7 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
   );
 }
 
-// ── ⑯ **起进程失败那两条出口,收口一样要有人重试**(本轮审查 F3)─────────────────────
+// ── ⑯ **起进程失败那两条出口,收口一样要有人重试**(第 11 轮审查 F3)─────────────────────
 //
 // 登记行是在**起进程之前**插进去的,所以 spawn 失败那一刻库里已经有一条 running 行 —— 而它
 // 没有 tail、没有到期定时器、没有退出回调。上一版这两条出口走的是「捕获异常、只记一行日志」:

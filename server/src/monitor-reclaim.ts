@@ -85,6 +85,8 @@ async function stopMonitorsForTaskLocked(
     .select({
       id: monitors.id, taskId: monitors.taskId, status: monitors.status,
       pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
+      // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-debts 的 `MonitorUnit`)。
+      unitToken: monitors.unitToken,
       sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
     })
     .from(monitors)
@@ -137,7 +139,7 @@ async function stopMonitorsForTaskLocked(
 
 type MonitorRow = {
   id: string; taskId: string; status: string;
-  pid: number | null; pidStartedAt: string | null; command: string;
+  pid: number | null; pidStartedAt: string | null; command: string; unitToken: string | null;
 };
 
 /** 停一条。返回「这一刀发出去了吗」;回收责任那一圈在 `finish` 里面(见文件头第 ④ 条)。 */
@@ -173,7 +175,7 @@ async function accountForLiveProcesses(
   // 「还收不干净」就得核对 —— 判据是 `reclaimState` 的那四档不确定,**不是**「卡片是不是
   // running」。`unknown`(ps 这一问自己失败了)也在里面:它恰恰是最该留责任的一档,原来却被
   // 当成「没什么可收」放行了(第 6 轮审查 F1 实测的那条路)。
-  const risky = rows.filter((r) => r.pid !== null && reclaimState(r.pid, r.pidStartedAt, r.command) !== "gone");
+  const risky = rows.filter((r) => r.pid !== null && reclaimState(r.pid, r.pidStartedAt, r) !== "gone");
   if (!risky.length) return;
   const held = await heldReclaimDebts(risky.map((r) => r.id));
   const unaccounted: MonitorRow[] = [];
@@ -227,6 +229,8 @@ export async function stopMonitorsForReviewRun(runId: string, reason: string): P
       .select({
         id: monitors.id, taskId: monitors.taskId, status: monitors.status,
         pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
+        // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-debts 的 `MonitorUnit`)。
+        unitToken: monitors.unitToken,
       })
       .from(monitors)
       .where(and(eq(monitors.sourceReviewRun, runId), isAshKind));
@@ -266,11 +270,13 @@ export async function reclaimUnconfirmedStops(): Promise<number> {
     .select({
       id: monitors.id, taskId: monitors.taskId, status: monitors.status,
       pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
+      // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-debts 的 `MonitorUnit`)。
+      unitToken: monitors.unitToken,
     })
     .from(monitors)
     .where(and(isAshKind, isNotNull(monitors.pid), ne(monitors.status, "running")));
   // 先用最便宜的那一问(`kill(-pgid, 0)`)把绝大多数历史行筛掉,ps 只对组还活着的那几条问。
-  const live = rows.filter((r) => reclaimState(r.pid!, r.pidStartedAt, r.command) !== "gone");
+  const live = rows.filter((r) => reclaimState(r.pid!, r.pidStartedAt, r) !== "gone");
   if (!live.length) return 0;
   console.error(`[ash] 开机发现 ${live.length} 条「已停止但进程组还活着」的哨兵，按责任重收一遍`);
   await accountForLiveProcesses(live, "上一辈子把它停了，但退出从没被确认", { fatal: false });

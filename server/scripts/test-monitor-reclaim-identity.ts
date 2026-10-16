@@ -11,6 +11,12 @@
 //    之后又从这条路绕回了下刀资格;另一面是**补全机会不许丢**:接回那一刻 ps 不可用时只回填
 //    了 pid、启动时刻留空,而那之后再没有人会去读身份边条,于是「这一刻问不出来」被永久固化成
 //    「这条永远证不出身份」。锚(边条 + 债上那一列)和重试要一起留着。
+// ⑧-3…⑧-6 **凭证只能是每次创建独有的那条资源记号**(第 12 轮审查 F1)。时刻对不上、命令原文
+//    对得上(整串相等、或者记录的是实际命令的前缀)——这些**一律不构成归属**,两次创建完全
+//    可以合法地跑同一条命令;反过来,记号认得出来的后代**隔了一次重启也照收**(`fresh` 那把
+//    锁只管「没有记号」那一种)。整项退出同样只认记号:根退了、进程组也空了,带记号的后代仍
+//    可能在另一个会话里跑着(⑧-5),而命令自己把环境清掉时记号问不着、那也不等于它退了
+//    (⑧-6)—— POSIX 上 `gone` 要两份独立证据。
 // ⑦ **身份不全不等于有权回收。** `pid_started_at` 为空的行(存量行,或 pid 回填那一刻 ps 恰好
 //    答不出启动时刻的行)原来在 `processIdentity` 里走到 `same` —— 「没什么可比对的,那就是同
 //    一个」⇒ `ours-alive` ⇒ 下刀。那条路上**「这个号上有进程活着」被当成了「已证明有权回收
@@ -35,7 +41,7 @@ import { monitorSpawnIdentityPath } from "../src/monitor-spawn.js";
 const { stopMonitorsForTask } = await import("../src/monitor-reclaim.js");
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { reclaimState, sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
-const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
+const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await import("../src/platform.js");
 const { dbClient } = await import("../src/db/index.js");
 
 /**
@@ -94,23 +100,26 @@ const zhLstart = (lstart: string): string => {
   assert.equal(started.ok, true);
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
   const pid = row.pid!;
-  // 把库里那一列换成**中文写法的同一秒**(= 旧 server 留下的存量行)。
+  // 把库里那一列换成**中文写法的同一秒**(= 旧 server 留下的存量行)。记号那一列一起清掉:
+  // 旧 server 根本不记它,而**有记号的行由记号直接判归属,走不到 locale 比较这一步**——
+  // 留着它这一节就变成在考记号,locale 这条路反而没人钉了。
   const zh = zhLstart(row.pidStartedAt!);
   assert.notEqual(zh, row.pidStartedAt, "台子前提:两串原文确实不相等");
-  await db.update(monitors).set({ pidStartedAt: zh }).where(eq(monitors.id, row.id));
+  await db.update(monitors).set({ pidStartedAt: zh, unitToken: null }).where(eq(monitors.id, row.id));
+  const legacy = { unitToken: null, command: row.command };   // 存量行:只有 pid + 启动时刻
 
   // ⑪-1 原文不等但指向同一秒 ⇒ 还是我们的那个;而且**整个判定只查一次 ps**。
   //
   // 「只查一次」是这一条的要点,不是性能讲究:在确证分支里再调一次会吞掉失败信息的查询,
   // 正是 F1 的根。它只有在这里被钉住,下一个人才不会又在消费者那边补一次重试。
   await withCountedPs("count", async () => {
-    assert.equal(reclaimState(pid, zh), "ours-alive", "locale 不同不是「这个号现在是另一个进程」");
+    assert.equal(reclaimState(pid, zh, legacy), "ours-alive", "locale 不同不是「这个号现在是另一个进程」");
     assert.equal(psCallCount(), 1, "身份判定只许查一次 —— 补第二次查询就是 F1 的根");
   });
 
   // ⑪-2 **第二次查询失败不许改写身份**:奇数次正常、偶数次失败的间歇性故障现场。
   await withCountedPs("flaky", async () => {
-    assert.equal(reclaimState(pid, zh), "ours-alive",
+    assert.equal(reclaimState(pid, zh, legacy), "ours-alive",
       "第一次就已经答出来了;再查一次、那一次恰好失败,不构成「这个号现在是别人」");
   });
 
@@ -132,7 +141,7 @@ const zhLstart = (lstart: string): string => {
   // 把一次失败当成确证的事实(跟 F1 是同一个错,只是失败发生在还原那一步而不是查询那一步)。
   await db.update(monitors).set({ pidStartedAt: "这不是任何 locale 的 lstart" })
     .where(eq(monitors.id, row.id));
-  assert.equal(reclaimState(pid, "这不是任何 locale 的 lstart"), "unknown",
+  assert.equal(reclaimState(pid, "这不是任何 locale 的 lstart", legacy), "unknown",
     "比不出来是 `unknown` 那一档:留责任、不下刀,而不是确证的 `not-ours`");
 
   // 收尾前把那一列改回去:`unknown` 这一档**不许下刀**(所以点停收不掉它,见 ⑩-11),
@@ -159,8 +168,10 @@ const zhLstart = (lstart: string): string => {
   const shifted = row.pidStartedAt!.replace(/(\d{2}):(\d{2}):(\d{2})/,
     (_m, h, mi, se) => `${h}:${mi}:${String((Number(se) + 1) % 60).padStart(2, "0")}`);
   assert.notEqual(shifted, row.pidStartedAt, "台子前提:换成了另一个时刻");
-  await db.update(monitors).set({ pidStartedAt: shifted }).where(eq(monitors.id, row.id));
-  assert.equal(reclaimState(pid, shifted), "not-ours", "台子前提:这一档确实是 not-ours");
+  // 记号一起清掉:`not-ours` 只可能落在**存量行**上 —— 带着记号的行归属是证得出来的,
+  // 一个对不上的时刻改不了它(那正是上一轮 F1-A 要的:时刻和命令都不是凭证)。
+  await db.update(monitors).set({ pidStartedAt: shifted, unitToken: null }).where(eq(monitors.id, row.id));
+  assert.equal(reclaimState(pid, shifted, { unitToken: null }), "not-ours", "台子前提:这一档确实是 not-ours");
   detachAllMonitors();   // = server 进程没了
 
   // 债表这一刻写不进去(真触发器,不替换产品里的任何函数)⇒ verdict = unaccounted。
@@ -194,7 +205,7 @@ const zhLstart = (lstart: string): string => {
   stranger.unref();
   const pid = stranger.pid!;
   await until("旁路进程起来了", async () => isProcessGroupAlive(pid));
-  assert.equal(reclaimState(pid, null), "unverifiable",
+  assert.equal(reclaimState(pid, null, { unitToken: null }), "unverifiable",
     "「号上有进程、但当初没记启动时刻」必须自成一档 —— 折进 ours-alive 就是拿「存在」当「所有权」");
 
   const monId = await insertMonitorRow(taskId, { status: "stopped", pid, pidStartedAt: null });
@@ -226,7 +237,7 @@ const zhLstart = (lstart: string): string => {
   leader.unref();
   const pid = leader.pid!;
   await until("组长退干净、后代还在组里", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
-  assert.equal(reclaimState(pid, null), "unverifiable",
+  assert.equal(reclaimState(pid, null, { unitToken: null }), "unverifiable",
     "组长已退 + 没记代次 ⇒ 证不出这一组是不是我们的,不许落到 ours-orphans 那一档");
 
   const monId = await insertMonitorRow(taskId, { status: "stopped", pid, pidStartedAt: null });
@@ -242,38 +253,152 @@ const zhLstart = (lstart: string): string => {
 }
 
 {
-  // ⑧-3 **「那一列非空」不是归属证据**(本轮审查 F1-A)。
+  // ⑧-3 **命令原文(整串也好、前缀也好)不是归属凭证**(第 12 轮审查 F1-A)。
   //
-  //    现场照审查的复现摆:组长已退、组里还有后代,而行上**有**一个启动时刻 —— 只是它早就
-  //    对不上了(那个时刻属于已经不在的组长,组里没有任何活着的东西能跟它对上)。第 10 轮
-  //    在这一档加的条件只是「这一列非空」,于是一条历史行照旧拿到了杀整组的资格:实测
-  //    `recordedStart="Mon Jan  1 00:00:00 2001"` → `classified="ours-orphans"` →
-  //    审查自己的测试组当场被杀(`testGroupAliveAfter=false`)。
+  //    现场照审查的复现摆:组长已退、组里还有**陌生**后代,而行上**有**一个启动时刻 ——
+  //    只是它早就对不上了(那个时刻属于已经不在的组长)。第 10 轮在这一档加的条件只是
+  //    「这一列非空」,于是一条历史行照旧拿到了杀整组的资格;本轮第一版把判据换成「命令
+  //    原文出现在成员的 argv 里」,实测照样误伤:记录 `command="sleep 1"`、组里跑着
+  //    `sleep 120`,`includes` 当场认亲 → `ours-orphans` → `fresh` 下发组击杀,审查自己
+  //    的测试组被杀(`foreignChildAliveAfter=false`)。
   //
-  //    判据换成成员自己带着的证据:命令原文出现在它的 argv 里。对不上就是「证不出」——
-  //    记责任、一刀都不许下。
+  //    **命令原文是要干的活,不是凭证** —— 两次创建完全可以合法地跑同一条命令,所以整串
+  //    相等也不算。凭证只能是**每次创建独有、起进程之前就落库**的那条资源记号
+  //    (`ASH_MONITOR_UNIT`,见 `proc.ts` 的 `processUnitEvidence`)。下面把三种命令关系
+  //    一次钉齐:完全不同 / 记录是实际命令的前缀 / 一模一样 —— 都必须是「证不出」。
   const taskId = await makeTask({ status: "done" });
-  const stranger = spawn("sh", ["-lc", `(${STUBBORN}) & exit 0`], { detached: true, stdio: "ignore" });
-  stranger.unref();
-  const pid = stranger.pid!;
-  await until("组长退干净、组里还有陌生后代", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
   const stale = "Mon Jan  1 00:00:00 2001";
-  assert.equal(reclaimState(pid, stale, "sleep 120"), "unverifiable",
-    "旧启动时刻 + 命令原文对不上 ⇒ 证不出这一组是我们的,不许落到「可以下刀」那一档");
-  assert.equal(reclaimState(pid, inspectProcess(process.pid)?.startedAt ?? null, "sleep 120"), "unverifiable",
-    "换一个「像样」的时刻也一样 —— 时刻不是归属证据,证据得由活着的成员自己带着");
+  const relations: Array<{ what: string; recorded: string }> = [
+    { what: "完全不同的命令", recorded: "ash-identity-probe-毫不相干" },
+    { what: "记录的命令是实际命令的前缀", recorded: "sleep 3" },   // 审查实测用的那一组
+    { what: "两边命令一模一样", recorded: "sleep 300" },
+  ];
+  for (const rel of relations) {
+    const stranger = spawn("sh", ["-lc", "(sleep 300) & exit 0"], { detached: true, stdio: "ignore" });
+    stranger.unref();
+    const pid = stranger.pid!;
+    await until("组长退干净、组里还有陌生后代", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
 
-  // 重复点停一条历史行走的就是这一档(`stopMonitor` 对非运行态行仍按 fresh 核账)。
-  const monId = await insertMonitorRow(taskId, { status: "stopped", pid, pidStartedAt: stale });
-  await stopMonitor(monId, "再点一次停止");
-  assert.equal(isProcessGroupAlive(pid), true, "**一刀都不许下** —— 这一组可能根本不是我们的");
-  const debt = await debtRow(monId);
-  assert.ok(debt, "照记责任:证不出身份恰恰最该留责任");
-  assert.match(debt.reason, /证不出/, "账上说清是「证不出」,不是「组长已退、组里还有后代」");
+    // 存量行(没有记号):命令怎么像都只能是「证不出」。
+    assert.equal(reclaimState(pid, stale, { unitToken: null, command: rel.recorded }), "unverifiable",
+      `${rel.what}:存量行上没有凭证,不许落到「可以下刀」那一档`);
+    assert.equal(
+      reclaimState(pid, inspectProcess(process.pid)?.startedAt ?? null,
+        { unitToken: null, command: rel.recorded }), "unverifiable",
+      `${rel.what}:换一个「像样」的时刻也一样 —— 时刻和命令都不是归属凭证`);
+    // 带记号的行:记号在这一组里一个都找不着 ⇒ 既不许认亲,也不许据此销账(组里还有人,
+    // 而命令自己把环境清掉时同样问不出记号,见 ⑧-6)。
+    assert.equal(reclaimState(pid, stale, { unitToken: `unit-nobody-${pid}`, command: rel.recorded }),
+      "unverifiable", `${rel.what}:记号对不上就是证不出,不许当成「整项已退」`);
+
+    // 端到端:重复点停一条历史行走的就是这一档(`stopMonitor` 对非运行态行仍按 fresh 核账
+    // —— 那正是审查实测触发误杀的入口)。
+    const monId = await insertMonitorRow(taskId, {
+      status: "stopped", pid, pidStartedAt: stale, command: rel.recorded,
+    });
+    await stopMonitor(monId, "再点一次停止");
+    assert.equal(isProcessGroupAlive(pid), true, `${rel.what}:**一刀都不许下** —— 这一组根本不是我们的`);
+    const debt = await debtRow(monId);
+    assert.ok(debt, "照记责任:证不出归属恰恰最该留责任");
+    assert.match(debt.reason, /证不出/, "账上说清是「证不出」,不是「组长已退、组里还有后代」");
+
+    killTree(pid, "SIGKILL");   // 测试自己收场
+    await until("陌生后代被收掉", async () => !isProcessGroupAlive(pid));
+    await db.delete(schema.monitorReclaimDebts).where(eq(schema.monitorReclaimDebts.monitorId, monId));
+  }
+}
+
+{
+  // ⑧-4 **记号证明得出来的孤儿后代:隔了一次重启也照收**(第 12 轮审查 F1-A 的另一面)。
+  //
+  //    上面三条钉的是「不许误杀」,这一条钉的是**不许因此收不了自己的活**:后代各自带着
+  //    这一次创建的那条记号,它们是谁的不是推断出来的,所以 `fresh` 那把锁(「刚刚还在我们
+  //    手上才敢打」)在这一档不再适用 —— 删除核对、开机清扫这些 `fresh:false` 的入口必须
+  //    真能把它们收掉。下刀落点是**证明过的那几个成员各自**,不是组:这个组号此刻可能已经
+  //    是别人的组长了。
+  const taskId = await makeTask({ status: "done" });
+  const unitToken = `unit-orphan-${process.pid}-${Date.now()}`;
+  const leader = spawn("sh", ["-lc", `(${STUBBORN}) & exit 0`],
+    { detached: true, stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: unitToken } });
+  leader.unref();
+  // 生产里**只有 `spawnMonitor` 会凭空造出一个带记号的进程**,它起完就作废那份扫描备忘
+  // (见 platform.ts 的 `invalidateMonitorUnitScan`:备忘只敢把「还活着」留旧,不敢把
+  // 「已经没了」留旧)。台子这几行是在替它起进程,所以同样要作废一次 —— 否则读到的可能是
+  // 这个进程存在之前的那份快照,判出一个假的 `gone`。
+  invalidateMonitorUnitScan();
+  const pid = leader.pid!;
+  await until("组长退干净、带记号的后代还在", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
+  assert.equal(reclaimState(pid, "Mon Jan  1 00:00:00 2001", { unitToken, command: "毫不相干" }),
+    "ours-orphans", "记号认得出来 ⇒ 归属已证明,对不上的时刻和命令都不参与这一判");
+
+  // `status: "stopped"` ⇒ 这一行走的是 `fresh: false`(见 monitor-reclaim.ts 的 `fresh` 注释)。
+  const monId = await insertMonitorRow(taskId, { status: "stopped", pid, pidStartedAt: null, unitToken });
+  await stopMonitorsForTask(taskId, "任务已删除", "destroy");
+  await until("带记号的后代被收掉（TERM 之后两秒那把 KILL）", async () => !isProcessGroupAlive(pid), 20_000);
+  await sweepMonitorReclaimDebts();   // 确认退出可能慢到上一步之后,销账由梯子补上
+  assert.equal(await debtRow(monId), undefined, "整项退出证明得出来之后才销账");
+}
+
+{
+  // ⑧-5 **根退了、组也空了,不等于整项资源退出**(第 12 轮审查 F1-B 的 POSIX 一侧)。
+  //
+  //    后代自己 `setsid` 跑掉(这里用 Node 的 `detached: true` 造这一幕,`sleep` 进了自己的
+  //    会话),于是记录的那个号上既没有进程、整组也空了 —— 只看这两样会得出「已经收干净」,
+  //    而那条 `sleep` 带着这一次创建的记号好好地活着。创建失败补偿据此销账 + 删掉最后一行
+  //    身份,就再没有人能找到它(F1-B 在 win32 上的同一个形状)。
+  const taskId = await makeTask({ status: "done" });
+  const unitToken = `unit-escaped-${process.pid}-${Date.now()}`;
+  const childPidFile = join(root, `escaped-${Date.now()}.pid`);
+  const escape = "const{spawn}=require('child_process');const c=spawn('sleep',['300'],"
+    + "{detached:true,stdio:'ignore'});require('fs').writeFileSync(process.argv[1],String(c.pid));c.unref();";
+  const leader = spawn(process.execPath, ["-e", escape, childPidFile],
+    { detached: true, stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: unitToken } });
+  leader.unref();
+  invalidateMonitorUnitScan();   // 同上:台子在替 `spawnMonitor` 起进程
+  const pid = leader.pid!;
+  await until("根退干净、组也空了", async () => !isPidAlive(pid) && !isProcessGroupAlive(pid) && existsSync(childPidFile));
+  const escaped = Number(readFileSync(childPidFile, "utf8"));
+  assert.equal(isPidAlive(escaped), true, "台子前提:跑掉的那条后代还活着");
+
+  assert.equal(reclaimState(pid, null, { unitToken }), "ours-orphans",
+    "记号还答得出来 ⇒ 整项资源没退,绝不许落到 `gone`(销账 + 删身份就是从这里出去的)");
+  // 同一幕里的**存量行**只能看到「号没了、组也空了」—— 这正是记号补上的那一块,照实钉住。
+  assert.equal(reclaimState(pid, null, { unitToken: null }), "gone",
+    "没有记号时这一幕确实判不出区别:它说明的是存量行的盲区,不是这一档可以放过有记号的行");
+
+  const monId = await insertMonitorRow(taskId, { status: "stopped", pid, pidStartedAt: null, unitToken });
+  await stopMonitorsForTask(taskId, "任务已删除", "destroy");
+  await until("跑掉的后代也要被收掉", async () => !isPidAlive(escaped), 20_000);
+  await sweepMonitorReclaimDebts();
+  assert.equal(await debtRow(monId), undefined, "后代确认退出之后才销账");
+}
+
+{
+  // ⑧-6 **命令自己把环境清掉 ⇒ 记号问不着,但那不等于它退了**。
+  //
+  //    `env -i` 之后的后代不再带记号。只认记号就会把这一幕判成「整项已退」并销账,而组里
+  //    明明还有人 —— 所以 POSIX 上 `gone` 要**两份**独立证据:记号一个都找不着,且进程组也
+  //    空了。少一份就是「证不出」:记责任、不销账、一刀都不许下。
+  const taskId = await makeTask({ status: "done" });
+  const unitToken = `unit-scrubbed-${process.pid}-${Date.now()}`;
+  const leader = spawn("sh", ["-lc", "(env -i sleep 300) & exit 0"],
+    { detached: true, stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: unitToken } });
+  leader.unref();
+  invalidateMonitorUnitScan();   // 同上
+  const pid = leader.pid!;
+  await until("组长退干净、不带记号的后代还在", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
+  assert.equal(reclaimState(pid, null, { unitToken }), "unverifiable",
+    "记号问不着 + 组里还有人 ⇒ 证不出整项退出,不许销账");
+
+  const monId = await insertMonitorRow(taskId, { status: "stopped", pid, pidStartedAt: null, unitToken });
+  await stopMonitorsForTask(taskId, "任务已删除", "destroy");
+  assert.equal(isProcessGroupAlive(pid), true, "**一刀都不许下** —— 证不出这些后代是不是这一次创建的");
+  assert.ok(await debtRow(monId), "责任留在表上,等下一次开机再问");
 
   killTree(pid, "SIGKILL");   // 测试自己收场
-  await until("陌生后代被收掉", async () => !isProcessGroupAlive(pid));
-  await db.delete(schema.monitorReclaimDebts).where(eq(schema.monitorReclaimDebts.monitorId, monId));
+  await until("后代被收掉", async () => !isProcessGroupAlive(pid));
+  await sweepMonitorReclaimDebts();
+  assert.equal(await debtRow(monId), undefined, "两份证据都空了才销账");
 }
 
 {
@@ -312,4 +437,4 @@ const zhLstart = (lstart: string): string => {
 }
 
 await teardown();
-console.log("✓ 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说 / 身份不全只留「证不出」:记责、不下刀,补全后才收 / 孤儿组没代次、或者只有一个对不上的旧时刻都不下刀 / 锚与边条留到销账,恢复后补全身份才动手 均受回归保护");
+console.log("✓ 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说 / 身份不全只留「证不出」:记责、不下刀,补全后才收 / 孤儿组没代次、或者只有一个对不上的旧时刻都不下刀 / 陌生组的命令同名、前缀、完全不同都不下刀 / 带记号的孤儿后代隔了重启也照收 / 根退组空但后代带记号时不许销账 / 环境被清掉只留「证不出」/ 锚与边条留到销账,恢复后补全身份才动手 均受回归保护");

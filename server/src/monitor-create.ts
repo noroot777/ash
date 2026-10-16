@@ -181,7 +181,7 @@ function scheduleIntentSettle(row: Row, settle: IntentSettlement, attempt = 0): 
  * 登记之后的**每一条**失败出口都走它 —— 包括起进程失败那两条(spawn 同步抛、spawn 返回
  * error)。那两条上一版走的是「捕获异常、只记一行日志」的旧函数:一次 SQLite 抖动就留下
  * 一条永久 `running` 的登记行,没有 tail、没有到期定时器、没有退出回调,到期也不会有结果,
- * 攒满四条就再也创建不了哨兵 —— 而要恢复只能重启服务(本轮审查 F3 实测
+ * 攒满四条就再也创建不了哨兵 —— 而要恢复只能重启服务(第 11 轮审查 F3 实测
  * `afterDeadline=[{status:"running",pid:null}]`)。「拿到句柄之后才有人重试」不是个合理的
  * 边界:那一行是在**起进程之前**就插进去的。
  */
@@ -206,12 +206,12 @@ async function releaseProcess(row: Row, reason: string, handle?: SpawnHandle): P
     //    那个 ChildProcess 的结局本身。于是「ps 不可用」或「身份没记全」都不妨碍这一档。
     handle.abandon();
     handle.kill();
-    // **根退了不等于整项资源退了**(本轮审查 F1-B)。`waitExit` 证明的是这个 ChildProcess
+    // **根退了不等于整项资源退了**(第 11 轮审查 F1-B)。`waitExit` 证明的是这个 ChildProcess
     // (壳的根)走了;命令一旦开工过,它派生的后台进程不随根退出而消失 —— win32 没有闸,
     // ③ 之前就可能开工,而那一侧 `taskkill /T` 也只在根还活着时走得通那棵树。所以只有
     // 「命令从未开工」这一档敢当场销账:那时壳底下什么都没有,根的 exit 就是全部。
-    // 开工过的一律落到下面的回收圈 —— 它按**当前归属证据**判(组成员的 argv,见
-    // proc.ts 的 `processGroupOwnership`),证得出就收掉,证不出就留责任,绝不冒充收干净。
+    // 开工过的一律落到下面的回收圈 —— 它按**当前归属证据**判(整棵树带着的那条资源记号,
+    // 见 proc.ts 的 `processUnitEvidence`),证得出就收掉,证不出就留责任,绝不冒充收干净。
     if (await handle.waitExit(2_000) && !handle.commandMayHaveStarted()) return "reclaimed";
   }
   // 句柄没等到(或压根没有句柄:启动恢复那一侧)⇒ 照旧走完整的回收圈:落责任 → 发信号 →
@@ -440,6 +440,11 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
 
     const monitorId = id();
     const logPath = monitorLogPath(input.taskId, monitorId);
+    // **这一次创建独有的资源记号**:它随环境种进那个壳,整棵树都带着它(见 platform.ts 的
+    // `MONITOR_UNIT_ENV`)。生成在**插意图行之前**,所以它跟 pid 不一样 —— 从第一条语句起就
+    // 已经落库、跨重启认得回来,而不是靠事后回填。归属与整项退出这两问都只认它
+    // (第 12 轮审查 F1:命令原文不是凭证)。
+    const unitToken = `${monitorId}.${id()}`;
     const timeoutMs = normalizeMonitorTimeout(input.timeoutMs);
     const startedAt = new Date();
     const intent: Row = {
@@ -452,6 +457,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       // **这两列先空着**：进程还没起，而身份行必须先落（见文件头的创建协议）。③ 回填。
       pid: null,
       pidStartedAt: null,
+      unitToken,
       logPath,
       offset: 0,
       events: 0,
@@ -513,7 +519,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     // 还占着每个任务 4 个的名额(第 8 轮审查 F3 的同类项)。
     let spawned: ReturnType<typeof spawnMonitor>;
     try {
-      spawned = spawnMonitor({ command, cwd, logPath });
+      spawned = spawnMonitor({ command, cwd, logPath, unitToken });
     } catch (e) {
       // 起不起来都一样要**落定**这一行:它是在起进程之前就插进去的,没人会来接管它
       // (没有 attach、没有到期定时器)。删不掉就排重试,不是记一行日志就算完(F3)。

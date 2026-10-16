@@ -17,6 +17,7 @@
 //    并在各自调用点写明降级后剩什么。
 
 import { execFile, execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -277,41 +278,110 @@ export function killOne(pid: number, sig: NodeJS.Signals): void {
   }
 }
 
+// ── 资源单位:哨兵这一次创建独有的那条记号 ───────────────────────────────────────
+
 /**
- * 这个 pid 还活着吗。
- * `process.kill(pid, 0)` 在 Windows 上是 libuv 明确支持的存活探测(uv__kill 对
- * signum 0 直接 return 0,不会 TerminateProcess),所以两个平台同一条实现;
- * EPERM = 进程在、只是没权限看。
+ * 环境变量名:**这一次哨兵创建独有的资源记号**。
+ *
+ * 为什么是「环境里的一条记号」而不是命令原文(第 12 轮审查 F1-A):命令是要干的活,不是凭证。
+ * 同一条命令可以合法地被创建两次,前缀还会撞 —— 记录的是 `sleep 1`、现存的是 `sleep 120`,
+ * 包含判断照样认作自己的后代(实测:一条写着 2001 年启动时刻的历史行据此杀掉了审查自己起的
+ * 测试组)。换成全串相等也不够,因为两次创建可以合法地跑完全一样的命令。
+ *
+ * 记号这一份满足「资源身份」该有的三条:
+ *  · **每次创建独有** —— 随机生成,撞不上别人;
+ *  · **跟着整项资源走** —— 环境随 `exec` 继承,后代各自带一份,所以组长死了之后还留在后台的
+ *    那些仍然自证身份(而它们的 argv 早就换成别的程序了);
+ *  · **跨重启可恢复** —— 起进程之前就随意图行落库(`monitors.unit_token`),债表上也留一份。
+ *
+ * 它的边界也要如实说:命令自己把环境清掉(`env -i`)时后代就不再带记号 —— 那一刻只能落
+ * 「证不出」,所以 POSIX 上「整项退出」要**记号和进程组两份证据同时为空**才算(见 proc.ts)。
  */
+export const MONITOR_UNIT_ENV = "ASH_MONITOR_UNIT";
+
+/** 进程表这一问的事实精度:同一瞬间问两遍没有意义,所以一次扫描在这个窗口里复用。 */
+const UNIT_SCAN_TTL_MS = 400;
+let unitScan: { at: number; units: Map<string, number[]> | null } | null = null;
+
 /**
- * **这一组里现在都有谁** —— pid + 启动时刻 + 完整命令行,POSIX 专有。
+ * **起了新进程就把上一次扫描作废。**
  *
- * 用在「组长已经退了、组里还有人」那一档上:那一刻 `kill(-pgid, 0)` 只能证明**存在**,
- * 证明不了这一组是不是我们起的那一代(组号就是当初那个 pid,它会被复用)。要判归属就只能
- * 把成员本身问出来,再由上层按证据判(见 proc.ts 的 `processGroupOwnership`)。
+ * 缓存只会朝一个方向出错,而那个方向是致命的:一次**比某项资源还老**的扫描里当然没有它的
+ * 记号,于是「整项资源已退出」被当场判成立 ⇒ 销账、还一刀都不发(实测:正常停止那一档因此
+ * 返回时进程还活着)。反方向(扫描比现实旧、还把已经退掉的算活着)只会多等一轮,安全。
  *
- * win32 没有进程组这回事(`killTree` 打的是 `taskkill /T` 那棵树),一律空数组 ——
- * **这里不新增任何跨平台断言**(没有真机实证之前不冒充;约定见根 AGENTS.md)。
- * 问不出来(ps 不可用)同样是空数组:上层把「空」当作「证不出」,不当作「组是空的」。
+ * 唯一能产出「资源存在但扫描里没有」的动作就是起进程,所以作废点只有一个 ——
+ * `spawnMonitor` 拿到 pid 之后。
  */
-export function processGroupMembersSync(
-  pgid: number,
-): Array<{ pid: number; startedAt: string | null; command: string | null }> {
-  if (IS_WINDOWS || !Number.isInteger(pgid) || pgid <= 1) return [];
+export function invalidateMonitorUnitScan(): void {
+  unitScan = null;
+}
+
+/**
+ * **现在活着的进程里带着记号的那些**:`记号 → pid[]`。
+ *
+ * `null` = **这一问自己答不出来**(win32 读不到别的进程的环境块;POSIX 上 ps / `/proc` 失败),
+ * 它跟空 Map 是两件事:空 Map 才是「这些记号对应的资源都退了」。调用方必须把 `null` 当
+ * 「证不出」—— 不许据此销账,也不许据此下刀(第 12 轮审查 F1 的判据)。
+ *
+ * **一次扫全表、所有记号一起带回来**:回收那一圈会对一批行各问一次,按行各扫一次就是 N 次
+ * 全表 ps(本机一次约 90ms / 2.5MB)。结果在 `UNIT_SCAN_TTL_MS` 内复用,所以
+ * `confirmReclaimed` 那个 50ms 的轮询也只会落到几次真实扫描上。
+ */
+export function liveMonitorUnitsSync(): Map<string, number[]> | null {
+  const at = Date.now();
+  if (unitScan && at - unitScan.at < UNIT_SCAN_TTL_MS) return unitScan.units;
+  const units = scanMonitorUnits();
+  unitScan = { at, units };
+  return units;
+}
+
+function scanMonitorUnits(): Map<string, number[]> | null {
+  // win32:读另一个进程的环境块要 ReadProcessMemory 那一套,没有零依赖等价物(`wmic`/
+  // `Get-CimInstance` 只给命令行)。所以这一侧一律「问不出来」——
+  // **不在 macOS 上替 Windows 编一个结论**(约定见根 AGENTS.md)。
+  if (IS_WINDOWS) return null;
+  const units = new Map<string, number[]>();
+  const add = (token: string, pid: number) => {
+    if (!token || !Number.isInteger(pid) || pid <= 0) return;
+    const list = units.get(token);
+    if (list) list.push(pid);
+    else units.set(token, [pid]);
+  };
+  // Linux:`/proc/<pid>/environ` 是权威且便宜的那一份(`ps` 的 BSD 风格 `e` 在 procps 上
+  // 跟 macOS 的 `-E` 不是同一个开关)。读不到的条目跳过 —— 别人家 uid 的进程我们本来也
+  // 管不着,而哨兵的后代一定同 uid(除非命令自己 setuid,那一档只会让我们更保守)。
+  if (existsSync("/proc/self/environ")) {
+    let entries: string[];
+    try { entries = readdirSync("/proc"); } catch { return null; }
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      let raw: string;
+      try { raw = readFileSync(`/proc/${entry}/environ`, "utf8"); } catch { continue; }
+      const hit = raw.split("\0").find((kv) => kv.startsWith(`${MONITOR_UNIT_ENV}=`));
+      if (hit) add(hit.slice(MONITOR_UNIT_ENV.length + 1), Number(entry));
+    }
+    return units;
+  }
   try {
-    const out = execFileSync("ps", ["-g", String(pgid), "-o", "pid=", "-o", "lstart=", "-o", "command=", "-ww"], {
+    // macOS:`ps -E` 把环境接在命令行后面(同 uid 的进程才看得到,正是我们要的那些)。
+    // **maxBuffer 必须给够**:全表带环境在本机就是 2.5MB,默认 1MB 会让这一问变成「失败」。
+    const out = execFileSync("ps", ["-A", "-E", "-ww", "-o", "pid=", "-o", "command="], {
       encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
       env: { ...process.env, LC_ALL: "C", LANG: "C" },
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return out.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
-      // `pid lstart(固定 24 字符) command`
-      const m = /^(\d+)\s+(.{24})\s+(.*)$/.exec(line);
-      if (!m) return { pid: Number(line.split(/\s+/)[0]) || 0, startedAt: null, command: null };
-      return { pid: Number(m[1]), startedAt: m[2]!.trim(), command: m[3]!.trim() };
-    }).filter((row) => row.pid > 0);
+    const mark = new RegExp(`(?:^|\\s)${MONITOR_UNIT_ENV}=(\\S+)`);
+    for (const line of out.split("\n")) {
+      const pid = /^\s*(\d+)\s/.exec(line);
+      if (!pid) continue;
+      const token = mark.exec(line);
+      if (token) add(token[1]!, Number(pid[1]));
+    }
+    return units;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -321,6 +391,12 @@ export function isProcessGroupAlive(pid: number): boolean {
   catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 
+/**
+ * 这个 pid 还活着吗。
+ * `process.kill(pid, 0)` 在 Windows 上是 libuv 明确支持的存活探测(uv__kill 对
+ * signum 0 直接 return 0,不会 TerminateProcess),所以两个平台同一条实现;
+ * EPERM = 进程在、只是没权限看。
+ */
 export function isPidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {

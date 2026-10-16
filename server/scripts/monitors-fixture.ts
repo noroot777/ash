@@ -136,12 +136,13 @@ export async function reviewInFlight(
  */
 export async function insertMonitorRow(
   taskId: string,
-  // `command` 要跟那个进程**真的在跑的那条**一致:孤儿组那一档的归属证据就是命令原文出现在
-  // 组成员的 argv 里(生产里行上那一列正是交给 `sh -lc` 的那段字,见 proc.ts 的
-  // `processGroupOwnership`)。摆一个对不上的字符串 = 摆一个「证不出归属」的现场。
+  // `unitToken` 要跟那个进程**真的带着的那条记号**一致(生产里它在起进程之前就随意图行落库,
+  // 并作为 `ASH_MONITOR_UNIT` 种进环境,见 proc.ts 的 `processUnitEvidence`):给对了就是
+  // 「归属已证明」的现场,不给或给错就是「证不出归属」的现场 —— 后者只许记责任、不许下刀。
+  // `command` 只进日志和存量行的时间锚核对,**不是归属凭证**。
   opts: {
     reviewRun?: string; round?: number; status?: string; pid?: number; pidStartedAt?: string | null;
-    command?: string;
+    command?: string; unitToken?: string | null;
   } = {},
 ): Promise<string> {
   const id = uniq("mon");
@@ -156,6 +157,7 @@ export async function insertMonitorRow(
     sourceReviewRound: opts.round ?? null, sourceLifetime: "bounded", lifetimeEvidence: "self",
     sourcePid: null, sourcePidStartedAt: null, startEvidence: "observed",
     startAnchorWidthMs: 0, timeoutMs: 600_000,
+    unitToken: opts.unitToken ?? null,
   });
   return id;
 }

@@ -34,7 +34,7 @@ const { monitorWakeGate } = await import("../src/monitor-session.js");
 const { beginTaskRevocation, isTaskRevoked, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
-const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
+const { invalidateMonitorUnitScan, isProcessGroupAlive, killTree } = await import("../src/platform.js");
 
 // ── ⑨ 撤销是一段时间:撤销期不许再创建、停不掉必须留下回收责任（第 3 轮审查 F1）──────
 //
@@ -264,27 +264,33 @@ const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
 }
 
 {
-  // ⑩-8 **组长退出不等于整组后代已退出**。命令自己跑完、重启探活都是按组长身份判结束的,
-  // 而外层壳退了、它派生的那个还留在组里才是最常见的泄漏形态。收尾那一层要按**整组**收。
+  // ⑩-8 **起它的那个进程退出不等于整项资源已退出**。命令自己跑完、重启探活都是按根的身份判
+  // 结束的,而外层壳退了、它派生的那个还活着才是最常见的泄漏形态。收尾那一层要按**整项资源**
+  // 收,而「哪些算这一项」只认这一次创建独有的那条记号(第 12 轮审查 F1)。
   const taskId = await makeTask({ status: "done" });
-  // 组长故意多活一小会儿:**启动时刻要在它还活着的时候记下来** —— 生产里这一列正是创建那一刻
-  // 落的(那时组长当然活着),所以孤儿组这一档手里**有**可验证的代次,敢按整组收。等它死了再去
-  // 问 ps 必然拿到 null,那是另一档(证不出代次 ⇒ 不下刀,见 ⑦-2)。
+  // 记号跟生产同源:创建入口在起进程之前生成它、随行落库,再作为 `ASH_MONITOR_UNIT` 种进环境
+  // —— 环境随 exec 继承,所以根死了之后留下的后代仍然自证身份(它们的 argv 可能早就变了)。
+  const unitToken = `unit-orphan-${process.pid}-${Date.now()}`;
   const leaderCommand = `(${STUBBORN}) & sleep 0.4; exit 0`;
-  const leader = spawn("sh", ["-lc", leaderCommand], { detached: true, stdio: "ignore" });
+  const leader = spawn("sh", ["-lc", leaderCommand], {
+    detached: true, stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: unitToken },
+  });
   leader.unref();
+  // 生产里这一步由 `spawnMonitor` 做:起完就把上一次全表扫描作废,否则读到的可能是这个进程
+  // 存在之前的那份快照 ⇒ 记号找不着 ⇒ 判出一个假的「整项已退」(见 platform.ts)。
+  invalidateMonitorUnitScan();
   const pid = leader.pid!;
-  await until("组长还活着时记下它的启动时刻", async () => !!inspectProcess(pid)?.startedAt);
+  await until("根还活着时记下它的启动时刻", async () => !!inspectProcess(pid)?.startedAt);
   const leaderStartedAt = inspectProcess(pid)!.startedAt;
-  await until("组长退干净、后代还在组里", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
-  // **行上记的命令原文必须是真的那一条**:孤儿组的归属就靠它 —— 组里剩的那个子壳跟组长
-  // 共享同一份 argv,所以认得出来(本轮审查 F1-A)。生产里这一列就是交给 `sh -lc` 的那段字。
-  const monId = await insertMonitorRow(taskId, { pid, pidStartedAt: leaderStartedAt, command: leaderCommand });
+  await until("根退干净、后代还活着", async () => !isPidAlive(pid) && isProcessGroupAlive(pid));
+  const monId = await insertMonitorRow(taskId, {
+    pid, pidStartedAt: leaderStartedAt, command: leaderCommand, unitToken,
+  });
 
   await stopMonitorsForTask(taskId, "任务已删除", "destroy");
   assert.equal(isProcessGroupAlive(pid), false,
-    "组长已经不在了,组里剩的只能是它的后代（这个号现在是空的,没人能当这一组的组长）—— 收尾时必须把它们一起收掉");
-  assert.equal(await debtRow(monId), undefined, "确认整组空了才销账");
+    "根已经不在了,带着这条记号的后代是证明过的「我们的」—— 收尾时必须把它们一起收掉");
+  assert.equal(await debtRow(monId), undefined, "确认整项资源空了才销账");
 }
 
 {
@@ -322,8 +328,8 @@ const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
       "ps 问不出身份时不许声称「这个进程已经不在了」—— 它还在跑,而这句话会让用户再也不回头看它");
     const debt = await debtRow(row.id);
     assert.ok(debt, "问不出身份恰恰是最该留责任的一档（第 5 轮这里直接返回空,删除据此把唯一线索抹掉）");
-    assert.match(debt.reason, /判不出身份|查询不可用/, "账上写清这一档是「问不出来」,不是「别人的进程」");
-    assert.equal(isProcessGroupAlive(row.pid!), true, "问不出身份就不许下刀 —— 这个号可能已经是别人的");
+    assert.match(debt.reason, /判不出归属|答不出来/, "账上写清这一档是「问不出来」,不是「别人的进程」");
+    assert.equal(isProcessGroupAlive(row.pid!), true, "问不出归属就不许下刀 —— 这个号可能已经是别人的");
 
     // 删除:责任已经在册 ⇒ 允许销毁身份,但那一笔必须活过删除。
     await deleteTaskCompletely(taskId);

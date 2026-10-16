@@ -24,6 +24,19 @@ export const monitors = sqliteTable("monitors", {
   pid: integer("pid"),
   // ps 的 lstart 原文。只有 pid 对上**而且**这个也对上,才算还是当初那个进程。
   pidStartedAt: text("pid_started_at"),
+  /**
+   * **这一次创建独有的资源记号**(`ASH_MONITOR_UNIT`,见 platform.ts 的 `MONITOR_UNIT_ENV`)。
+   *
+   * 它是「这些进程属于这一次创建」的凭证:起进程之前就随意图行落库(所以跨重启认得回来),
+   * 并且作为环境变量种进那个壳 —— 环境随 exec 继承、后代各自带一份,所以组长死了之后留在
+   * 后台的后代仍然自证身份。
+   *
+   * 为什么不是命令原文(第 12 轮审查 F1-A):命令是「要干的活」,不是凭证。同一条命令可以合法
+   * 地被创建两次,前缀也会撞(记录 `sleep 1`、现存 `sleep 120`,包含判断照样认作自己的后代
+   * —— 实测里一条历史行据此杀掉了审查自己起的测试组)。存量行一律 NULL ⇒ 对孤儿组一律只能
+   * 落「证不出」。
+   */
+  unitToken: text("unit_token"),
   logPath: text("log_path").notNull(),
   // 已经读进来并推送过的字节位置。重启后从这里接着读。
   offset: integer("read_offset").notNull().default(0),
@@ -155,7 +168,7 @@ export const monitors = sqliteTable("monitors", {
 // 上一版把它放在内存里，靠「读取位置绝不越过一条还悬着的调用」来保证能重放那一行。那个
 // 办法在**调用根本不会有 `task_started`** 时失效：启动被拒（`is_error` 回执）、进程在回合
 // 中途被杀（连回执都没有），于是位置被永久钉在那一行之前，每轮重读同一个窗口、末尾的
-// Monitor 永远读不到（第 11 轮审查实测 12 轮停滞；第 8～10 轮是同一类的前几个实例）。
+// Monitor 永远读不到（第 12 轮审查实测 12 轮停滞；第 8～10 轮是同一类的前几个实例）。
 //
 // 所以改成**落盘**：位置只管单调往前，悬着的调用由这张表独立恢复。配上 `task_started`
 // （成了 `monitors` 里的一行）或者确证起不来（回执配不上 `task_started`）就删掉。
@@ -280,8 +293,14 @@ export const monitorReclaimDebts = sqliteTable("monitor_reclaim_debts", {
    * 「这条永远证不出身份」—— 既不敢下刀,也销不掉账(第 10 轮审查 F2-B)。
    */
   spawnAnchorMs: integer("spawn_anchor_ms"),
-  /** 命令原文:清扫时打在日志里,否则没人看得出那个 pid 当初在干什么。 */
+  /** 命令原文:清扫时打在日志里,否则没人看得出那个 pid 当初在干什么。**不作归属凭证**。 */
   command: text("command").notNull().default(""),
+  /**
+   * 那条资源记号(见 monitors.unit_token)。**债上必须自己留一份**:哨兵行可能先没了
+   * (任务被删),而清扫这一侧要证明「这一项资源退没退」只能靠它 —— 缺了它,孤儿后代既不敢
+   * 收、也销不掉账(第 12 轮审查 F1)。
+   */
+  unitToken: text("unit_token"),
   /** 当初为什么要停它(删除/归档/审查结束/任务终态)。 */
   reason: text("reason").notNull().default(""),
   /** 停不掉的那次报了什么。 */

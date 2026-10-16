@@ -12,7 +12,7 @@
 // **判定只有一份,而且只查一次**(`processIdentity`):答案是三档,「问不出来」是独立的一档。
 // 折成布尔的那一份(`isSameProcess`)只是它的投影,给只需要是/否的两个老使用方用 ——
 // 谁都不许在投影之外再补一次查询,理由见 `processIdentity` 的注释。
-import { inspectProcessSync, processGroupMembersSync } from "./platform.js";
+import { inspectProcessSync, liveMonitorUnitsSync } from "./platform.js";
 
 export type ProcessInfo = {
   pid: number;
@@ -103,28 +103,34 @@ export function isSameProcess(pid: number, expectedStartedAt?: string | null): b
 }
 
 /**
- * 「这一**组**现在还是不是我们那一代」——**组长已经退了**的那一档。
+ * 「**这一项资源**现在还在不在」—— 整项退出与归属,同一问一次答完。
  *
- * 那一刻 `kill(-pgid, 0)` 只能证明组里有人。它证明不了归属:组号就是当初那个 pid,老组退
- * 干净、同号被另一个 detached 组复用、而新组长也先退出时,长得跟「我们的后代还在」一模一样
- * (本轮审查 F1-A 实测:一条写着明显不匹配启动时刻的历史行,照旧拿到了杀整组的资格,测试组
- * 当场被杀)。**「字段非空」不是证据** —— 那个时刻属于已经不在的组长,没有任何活着的东西
- * 能跟它对上。
+ * 问的不是进程组,是**这一次创建自己的那条记号**(`MONITOR_UNIT_ENV`,见 platform.ts):
+ * 它随环境被整棵树继承,所以组长退掉之后还留在后台的后代仍然自证身份;它每次创建新生成,
+ * 所以认不到别人身上。
  *
- * 所以这一问只认**成员自己带着的证据**:它的命令行里有没有我们记下的那条命令原文。哨兵的壳
- * 是 `sh -lc "<闸><命令原文>"`,它 fork 出来的子壳共享同一份 argv —— 组长退掉之后还留在组里
- * 的后代,只要还是那个壳的分身就认得出来。
+ * 上一版这一问是「组里有没有成员的命令行包含我们记下的命令原文」,那不是身份(第 12 轮审查
+ * F1-A 实测):命令原文可以合法地重复,前缀还会撞 —— 记录 `sleep 1`、现存 `sleep 120`,包含
+ * 判断就认作自己的后代,于是一条 2001 年启动时刻的历史行拿到了杀整组的资格。
  *
- * 认不出来一律 `"unprovable"`(调用方据此记责任、不下刀),包括:ps 不可用(空数组)、
- * 没给比对物、组里只剩 exec 成别的程序的孙子进程。宁可留一笔「证不出」,也不拿一个号去
- * 碰别人的整组进程 —— 那是不可逆的、而且外溢到用户的其它工作。
+ * 三档,每一档只说那一问真的答出来的东西:
+ *  · `ours` —— 还有带着记号的进程活着,**而且它们是谁都已经知道**(pids 就是下刀的落点);
+ *  · `gone` —— 这些记号一个都不在了 = **整项资源退出的证明**。调用方据此销账;
+ *  · `unprovable` —— 没有记号(存量行)、或者这一问自己答不出来(win32 读不到别的进程的环境
+ *    块、POSIX 上 ps/`/proc` 失败)。两样都不许冒充另外两档:不销账、不下刀,留一笔责任。
  */
-export function processGroupOwnership(pgid: number, expectCommand?: string | null): "ours" | "unprovable" {
-  const want = expectCommand?.trim();
-  if (!want) return "unprovable";
-  return processGroupMembersSync(pgid).some((m) => (m.command ?? "").includes(want))
-    ? "ours"
-    : "unprovable";
+export type UnitEvidence =
+  | { verdict: "ours"; pids: number[] }
+  | { verdict: "gone" }
+  | { verdict: "unprovable" };
+
+export function processUnitEvidence(unitToken?: string | null): UnitEvidence {
+  const token = unitToken?.trim();
+  if (!token) return { verdict: "unprovable" };
+  const units = liveMonitorUnitsSync();
+  if (!units) return { verdict: "unprovable" };   // 问不出来 ≠ 没有
+  const pids = units.get(token) ?? [];
+  return pids.length ? { verdict: "ours", pids } : { verdict: "gone" };
 }
 
 /**

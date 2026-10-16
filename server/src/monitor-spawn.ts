@@ -43,6 +43,15 @@
 // 它在 POSIX 上是多余的（闸已经保证命令没开工），但**代码一份、两边同一条路**：平台差异
 // 只剩「有没有闸」这一处，不再多出一条只有 Windows 走的恢复分支。
 //
+// ── 资源单位的身份:**这一次创建独有的一条记号,种在环境里**(第 12 轮审查 F1)────────
+//
+// 「这些进程属于这一次创建」要有凭证,而命令原文不是 —— 它是要干的活:同一条命令可以合法
+// 地被创建两次,前缀还会撞(记录 `sleep 1`、现存 `sleep 120`,包含判断照样认作自己的后代)。
+// 所以这里把 `ASH_MONITOR_UNIT=<记号>` 种进那个壳的环境:环境随 `exec` 继承、后代各自带一
+// 份,于是**组长死了之后留在后台的那些仍然自证身份**(它们的 argv 早就换成别的程序了)。
+// 记号本身在起进程之前就随意图行落库,所以跨重启也认得回来。判定在 proc.ts
+// (`processUnitEvidence`),扫描在 platform.ts(`liveMonitorUnitsSync`)。
+//
 // ── 交接必须可恢复，否则这次创建就该拒（第 10 轮审查 F2-C）────────────────────────
 //
 // 上面两件事（闸、边条）各自会失败，而**失败的后果取决于另一件在不在**：边条写不下来时，
@@ -54,7 +63,7 @@ import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentBaseEnv } from "./executors/spawn.js";
-import { IS_WINDOWS, killTree, userShellLaunch } from "./platform.js";
+import { IS_WINDOWS, MONITOR_UNIT_ENV, invalidateMonitorUnitScan, killTree, userShellLaunch } from "./platform.js";
 import { RUNS_DIR } from "./paths.js";
 
 /** 输出落在任务自己的 run 目录下，跟会话正文、trace 同一处，归档清理不必另记一份路径。 */
@@ -128,7 +137,7 @@ export type SpawnedMonitor = {
    *
    * 它回答的是一个资源问题:**根进程退出算不算整项资源退出**。命令从未开工 ⇒ 壳底下什么都
    * 没有,根的 `exit` 就是全部;开工过 ⇒ 它可能已经派生了后台进程,那些进程不随根退出而消失,
-   * 根的 `exit` 只证明根走了(本轮审查 F1-B)。所以创建期的撤销要按这一问分档:前者敢当场
+   * 根的 `exit` 只证明根走了(第 11 轮审查 F1-B)。所以创建期的撤销要按这一问分档:前者敢当场
    * 销账,后者一律交回收圈按**当前归属证据**处理(见 monitor-create.ts 的 `releaseProcess`)。
    */
   commandMayHaveStarted: () => boolean;
@@ -154,7 +163,10 @@ export type SpawnedMonitor = {
 /** 放行闸的那段壳前缀：先从 fd 3 读一行，读不到（ash 没了）就退出，绝不执行用户的命令。 */
 const GATE_PREFIX = "IFS= read -r __ash_go <&3 || exit 97; exec 3<&-; ";
 
-export function spawnMonitor(opts: { command: string; cwd: string; logPath: string }): SpawnedMonitor | { error: string } {
+export function spawnMonitor(
+  /** `unitToken` = 这一次创建独有的资源记号(见文件头)。缺省只出现在测试台子上。 */
+  opts: { command: string; cwd: string; logPath: string; unitToken?: string | null },
+): SpawnedMonitor | { error: string } {
   // 工作目录先自己判一句。它失效是**最常见**的一种失败（项目目录被移走、旧任务的
   // worktree 被清掉），而 `spawn` 对坏 cwd 的报错是**异步**的：那条路在下面要靠两道
   // 防线才接得住，没必要为一个一句话就能判出来的情况去赌那两道。
@@ -185,7 +197,8 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
     // stdout/stderr 都指向同一个 fd —— 合流是刻意的，命令自己报的错也该成为事件。
     const child = spawn(launch.file, launch.args, {
       cwd: opts.cwd,
-      env: agentBaseEnv(),
+      // 记号跟着环境走 —— 这是整棵树唯一的身份凭证(见文件头)。
+      env: opts.unitToken ? { ...agentBaseEnv(), [MONITOR_UNIT_ENV]: opts.unitToken } : agentBaseEnv(),
       detached: true,
       stdio: gated ? ["ignore", fd, fd, "pipe"] : ["ignore", fd, fd],
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
@@ -224,6 +237,9 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
       return { error: `哨兵起不来：${opts.command}` };
     }
     child.unref();
+    // **资源扫描立刻作废**:比这个进程还老的一次扫描里没有它的记号,而那会被读成「整项资源
+    // 已退出」(见 platform.ts 的 `invalidateMonitorUnitScan`)。
+    invalidateMonitorUnitScan();
     // **身份边条:这里到 return 之间一个 await 都没有**(见文件头)。写失败不致命 —— 它是
     // 「库还没写进去」那一档的兜底,所以只出声,不把一次正常创建搞失败。
     let identitySaved = false;
@@ -255,7 +271,7 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
         if (!gate?.write) return;      // win32：没有闸，命令早就在跑了
         // **先记下「放行过」,再去写**:写失败只说明这一次没放行成功,而那一刻命令是否已经
         // 开工我们并不知道(对端可能刚好读到了那一行就死了)。记在前面 = 宁可按「可能开工过」
-        // 保守处理,也不把一条可能有后代的命令当成「什么都没起」(本轮审查 F1-B)。
+        // 保守处理,也不把一条可能有后代的命令当成「什么都没起」(第 11 轮审查 F1-B)。
         released = true;
         try { gate.write("go\n"); gate.end?.(); } catch { /* 它已经没了：那就是没放行 */ }
       },
@@ -279,8 +295,8 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
         //
         // **根已经退了就不在这里下刀**:那时组号(POSIX)或那个 pid(win32)随时可能被复用,
         // 句柄证明的是「那个根曾经是我们的」,不是「这个号现在还是我们的」。那一档的收尾交给
-        // 回收层按当前归属证据判(proc.ts 的 `processGroupOwnership`),调用方也不许据此销账
-        // (本轮审查 F1-A/F1-B 同一条判据)。
+        // 回收层按当前归属证据判(proc.ts 的 `processUnitEvidence`:整棵树带着的那条记号),
+        // 调用方也不许据此销账(第 11 轮审查 F1-A/F1-B、第 12 轮 F1 同一条判据)。
         if (settled) return;
         try { killTree(child.pid!, "SIGKILL"); } catch { /* 已经空了 */ }
         try { child.kill("SIGKILL"); } catch { /* 它已经没了 */ }
