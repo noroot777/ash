@@ -4,6 +4,7 @@ import { monitors } from "./db/schema-monitors.js";
 import { sessionTurns, sessions } from "./db/schema.js";
 import type { WorkspaceRoot } from "./file-browser.js";
 import type { PathLens } from "./task-artifact-paths.js";
+import { activeTurnStarts } from "./session-turns.js";
 
 // 「它什么时候在写这个目录」——共享工作区上唯一能把任务分开的线索。归属证据的另一档
 // （目录独占）和入口在 `task-artifact-scope.ts`。
@@ -130,7 +131,9 @@ export async function runWindows(
       endedAt: sessions.endedAt,
       turnStartedAt: sessions.turnStartedAt,
       turnsStarted: sessions.turnsStarted,
+      turnsLost: sessions.turnsLost,
       turnsBase: sessions.turnsBase,
+      turnsBaseApprox: sessions.turnsBaseApprox,
       activeMs: sessions.activeMs,
     }).from(sessions).where(inArray(sessions.taskId, ids)),
     db.select().from(sessionTurns).where(inArray(sessionTurns.taskId, ids)).orderBy(asc(sessionTurns.startedAt)),
@@ -232,7 +235,18 @@ export async function runWindows(
     const start = Date.parse(row.startedAt ?? "");
     if (!Number.isFinite(start)) continue;
     const recorded = turnsBySession.get(row.id) ?? [];
-    const live = !row.endedAt && inFlight.has(row.taskId);
+    // **「还在写」要按回合身份认，不能按任务状态推**。库里「开始了没收口」下面压着两种
+    // 完全相反的情况：正在写，和当初崩了没来得及收口。任务后来又跑起来时 `running` 对两者
+    // 都成立——于是一条崩过的老会话会从它那个老起点一路开到无穷，把中间歇着的这段时间里
+    // 别人做的东西全认成自己的，连那句「算不准」都一起消失（第 5 轮审查必须修 1）。
+    // 活动身份只有写端知道（`session-turns.ts` 的内存登记，进程重启即清空），重启后接回
+    // 仍在跑的 agent 会重新登记。同一任务名下没登记的未收口身份一律留在「未知」那一档。
+    const activeStarts = activeTurnStarts(row.id);
+    const live = !row.endedAt && inFlight.has(row.taskId) && activeStarts.size > 0;
+    const liveFrom = [...activeStarts]
+      .map((at) => Date.parse(at))
+      .filter((at) => Number.isFinite(at))
+      .sort((a, b) => a - b)[0];
     const ended = Date.parse(row.endedAt ?? "");
     const turnStart = Date.parse(row.turnStartedAt ?? "");
     if (verdict === "stale") counts.stale += 1;
@@ -245,8 +259,10 @@ export async function runWindows(
     };
 
     if (live) {
-      // 还在飞：从这一回合的起点开到无穷。它正在写，之后出现的东西只会是它写的。
-      spans.push({ start: Number.isFinite(turnStart) ? turnStart : start, end: Number.POSITIVE_INFINITY });
+      // 还在飞：从**正在跑的那个回合**的起点开到无穷（多角色的 duet 各有自己的会话行，所以
+      // 这里取它自己登记在册的最早那个起点）。它正在写，之后出现的东西只会是它写的。
+      const from = Number.isFinite(liveFrom) ? liveFrom : (Number.isFinite(turnStart) ? turnStart : start);
+      spans.push({ start: from, end: Number.POSITIVE_INFINITY });
     }
     if (!recorded.length) {
       // 一条回合记录都没有。**不能**把这解释成「它一直在跑」（中间歇的几个钟头里别人做的
@@ -277,7 +293,9 @@ export async function runWindows(
       if (!Number.isFinite(openAt)) continue;
       // 正在跑的那一轮：它本来就还没收口,不是「写失败」。live 那一支已经把区间开到无穷,
       // 这里只要别把它数成缺口（第 4 轮审查 N1：健康的在飞回合被当成写入失败）。
-      if (live && Number.isFinite(turnStart) && Math.abs(openAt - turnStart) <= TURN_SKEW_MS) continue;
+      // **按身份比,不按时刻比**：登记在册的才是正在跑的那个,同一条会话上别的未收口身份
+      // （上一次崩掉留下的）照样要算缺口（第 5 轮审查必须修 1）。
+      if (activeStarts.has(turn.startedAt)) continue;
       // 开了没收口,又不是在飞：收尾那一下没写成。末端取**下一个回合的起点**（那一刻它
       // 肯定已经停了）,没有下一轮就按会话收尾时刻、再不行才兜底。这一段是估的,标 approx。
       const next = allStarts.filter((at) => at > openAt + TURN_SKEW_MS).sort((a, b) => a - b)[0];
@@ -289,10 +307,19 @@ export async function runWindows(
     }
     // 升级前的那段历史：`turns_base` 是**下界**（迁移那一刻数得出来的行数）,升级前写失败的
     // 回合没留下行、谁也数不出来。所以它照实说一句「那之前缺没缺不知道」,而不是假装完整。
-    if ((row.turnsBase ?? 0) > 0) counts.upgraded += 1;
+    // 判据是 `turns_base_approx` 而不是「base 大于 0」：迁移那一刻一行记录都没有的老会话
+    // 回填出来的下界正好是 0,跟「升级后新建、确定没有历史」长得一模一样,照 base 判就把
+    // 那种会话的未知历史说成了「确定没有」（第 5 轮审查必须修 2.2）。
+    if (row.turnsBaseApprox) counts.upgraded += 1;
     // 在飞那一轮不必在这里另行扣除：它的开始行早就落了,`starts` 和 `expected` 两边都含它。
     const expected = row.turnsStarted == null ? null : (row.turnsBase ?? 0) + row.turnsStarted;
-    const missing = expected == null ? 0 : Math.max(0, expected - (seen?.starts.size ?? 0));
+    // 两种缺口加在一起：
+    //   • 对账差 —— 计数说开过 N 轮,表里只有 M 个身份（有人绕过写入端改表,或者唯一索引
+    //     没建上时的重复行被去重后反而少了）；
+    //   • `turns_lost` —— 开回合那一批整个没写成。行和计数同批写之后两边同生共死,对账在
+    //     这种情形下一点痕迹都看不出来,只有写端自己记的这一笔算得上证据（必须修 2.3）。
+    const missing = (expected == null ? 0 : Math.max(0, expected - (seen?.starts.size ?? 0)))
+      + (row.turnsLost ?? 0);
     if (missing > 0) {
       // 缺的是哪几段无从得知，只能把整条寿命算成宽的那一档并说出来。
       counts.missing += missing;

@@ -10,8 +10,9 @@
 //      判据就架在它上面。SQLite 改不了列约束,只能重建表。
 //   ② 同一 (session_id, started_at) 的重复行去掉,然后才建得上唯一索引 —— 先建索引会在
 //      有重复数据的库上直接抛,而这里抛出去等于整台 ash 起不来。
-//   ③ `turns_base` 回填成「迁移那一刻已知的历史回合数」。只认两列都还是 NULL 的行(= 真
-//      正的升级前老行),所以天然只做一次：升级后新建的会话在 insert 时就写了值。
+//   ③ `turns_base` 回填成「迁移那一刻已知的历史回合数」,并标明那是下界。只认 `turns_base`
+//      还是 NULL 的行(= 没经过本版的行),所以天然只做一次：升级后新建的会话在 insert 时就
+//      把 base/approx 写上了。详见 `backfillTurnsBase` 的注释。
 import type { Client } from "./node-sqlite-client.js";
 
 const TABLE_DDL = `CREATE TABLE session_turns_rebuilt (
@@ -74,12 +75,36 @@ async function dedupeTurnRows(client: Client): Promise<void> {
   );
 }
 
-/** 升级前已知的历史回合数。**只认两列都还是 NULL 的行**,所以只会做一次。 */
+/**
+ * 把「升级之前的历史」收进 `turns_base`,并明说那是个**下界**。
+ *
+ * 判据是 `turns_base IS NULL` 一条,不再附加 `turns_started IS NULL`。原先多那一条的想法是
+ * 「`turns_started` 有值就说明它已经在新口径下记账了」,但那个值是**上一版**写出来的,口径
+ * 跟现在不是一回事（上一版漏了起跑入口、又会重复加数）。于是 `turns_started=2` 配两行回合
+ * 记录这种形状被当成完整,一个偏小的旧计数就能把真缺口整个抵掉,面板上一句话都不说
+ * （第 5 轮审查必须修 2.2）。
+ *
+ * 所以这里对**每一条还没经过本版的会话行**做三件事：
+ *   ① `turns_base` 取「现有行数」和「旧计数」里**大的那个**——两边都只是下界,取大的那个
+ *      离真相近一点,而且绝不会反过来把真缺口抵成负数（读端那边还有一道 `max(0, …)`）；
+ *   ② `turns_base_approx = 1` —— 照实说「升级前缺没缺记录无从得知」。**不能靠「base 大于 0」
+ *      代替**：迁移那一刻一行记录都没有的老会话回填出来正好是 0,跟升级后新建的行长得一样；
+ *   ③ `turns_started = NULL` —— 旧口径的计数不参与本版对账。读端见 null 就只按逐行事实和
+ *      这条「升级前算不准」披露,不拿它去做减法。
+ *
+ * 幂等：新建会话在 insert 时就把 `turns_base`/`turns_base_approx` 写上（`freshTurnFields`）,
+ * 所以 `turns_base IS NULL` 只对真正没经过本版的行成立,每次启动重跑都不会动到新计数。
+ */
 async function backfillTurnsBase(client: Client): Promise<void> {
   await client.execute(
-    `UPDATE sessions SET turns_base = (
-       SELECT COUNT(*) FROM session_turns t WHERE t.session_id = sessions.id
-     ) WHERE turns_base IS NULL AND turns_started IS NULL`,
+    `UPDATE sessions SET
+       turns_base = MAX(
+         COALESCE(turns_started, 0),
+         (SELECT COUNT(*) FROM session_turns t WHERE t.session_id = sessions.id)
+       ),
+       turns_base_approx = 1,
+       turns_started = NULL
+     WHERE turns_base IS NULL`,
   );
 }
 

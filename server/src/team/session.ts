@@ -511,6 +511,10 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     });
   }
   // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
+  // 下面那句 `beginTurn(lead, turnStart)` 会用**同一个起点**再开一次——那是同一个回合身份,
+  // 所以第二次既不插行也不加数（`openTurn` 的幂等条件就是身份）。第 4 轮把加数放在字段
+  // helper 里时这里是实打实加了两次,于是团队的第一个回合永远报「缺一个回合记录」
+  //（第 5 轮审查必须修 2.1）。
   await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
 
   const lead: Lead = {

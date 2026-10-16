@@ -442,10 +442,20 @@ function flushSessionNotices(lead: Lead): void {
 async function beginTurn(lead: Lead, at = now()): Promise<void> {
   lead.busy = true;
   lead.turnStart = at;
-  await updateOwnSession(lead, "回合开始状态", { ...resumedTurnFields(at) }, at);
-  // 这一路的 session 写入会被捕获后继续（`updateOwnSession` 不抛），所以开始行照样要落：
-  // 计数那一道写没成时,它就是唯一的「开过这一轮」的证据（第 4 轮审查「同类失败分支」）。
-  await openTurn({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at });
+  // **返回值不能丢**：这一路的 session 写入是被捕获后继续的（`updateOwnSession` 不抛），
+  // 丢掉它就等于把「写成功」当默认（第 5 轮审查必须修 2.3）。
+  const stamped = await updateOwnSession(lead, "回合开始状态", { ...resumedTurnFields(at) }, at);
+  if (!stamped && !lead.retired) {
+    // 会话行上的回合起点没刷上。第一手证据是下面那行回合记录,所以照落;产物面板判「还在
+    // 写」用的是内存里登记的活动身份、区间起点也从那儿取,都不靠这一列,所以这里只报一句。
+    console.warn(`[ash] 团队 ${lead.taskId} 的回合起点没写进会话行（产物区间按逐回合记录算）`);
+  }
+  // 摘牌的台一个字都不写（同 `updateOwnSession` 顶部那道闸）：旧台晚到的事件要是落下一行
+  // 回合记录,接管那条会话的新台名下就凭空多出一段运行区间,把那期间别人的产出收进来。
+  if (!lead.retired) {
+    // 开始行照样要落：它是「开过这一轮」的第一手证据,计数那一道跟它同批写（见 session-turns.ts）。
+    await openTurn({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at });
+  }
   traceLead(lead, at, {
     kind: "run",
     model: lead.model,

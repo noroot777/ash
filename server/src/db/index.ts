@@ -109,7 +109,8 @@ export async function ensureSchema() {
       agent_type TEXT NOT NULL, executor TEXT NOT NULL,
       worktree_path TEXT, branch TEXT, cwd TEXT, cli_session_id TEXT, resume_command TEXT,
       command_line TEXT, started_at TEXT NOT NULL, ended_at TEXT, exit_status INTEGER,
-      active_ms INTEGER, turn_started_at TEXT, turns_started INTEGER
+      active_ms INTEGER, turn_started_at TEXT, turns_started INTEGER,
+      turns_lost INTEGER, turns_base INTEGER, turns_base_approx INTEGER
     );
     CREATE TABLE IF NOT EXISTS schedules (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -382,6 +383,8 @@ export async function ensureSchema() {
     // 回合计数：产物归属据它判断「有没有回合没落账」（见 schema 上的注释）。
     "ALTER TABLE sessions ADD COLUMN turns_started INTEGER",
     "ALTER TABLE sessions ADD COLUMN turns_base INTEGER",
+    "ALTER TABLE sessions ADD COLUMN turns_base_approx INTEGER",
+    "ALTER TABLE sessions ADD COLUMN turns_lost INTEGER",
     "ALTER TABLE tasks ADD COLUMN use_worktree INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
     "ALTER TABLE tasks ADD COLUMN worktree_start_commit TEXT",
