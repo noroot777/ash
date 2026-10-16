@@ -11,12 +11,18 @@
 // ③ **这一圈归运行时收尾层(`finish`),不归删除/审查收尾那两个包装函数。** 装在包装函数上时,
 //    用户点停、到期、推满上限、启动接回判无出口、创建后登记失败全都绕过了它(第 5 轮审查 F1)。
 //    配套的两条判据:删除按**资源责任**核对而不是按卡片状态;组长退出不等于整组后代已退出。
+// ④ **「问不出来」不是「已经退了」。** `ps` 短暂不可用时,身份这一问失败 —— 那一刻什么都不许
+//    声称:不许写「这个进程已经不在了」,更不许据此放弃回收责任(第 6 轮审查 F1 实测:接回写
+//    lost → 删除放行 → 任务/哨兵/债表三处全空,命令还在后台跑着)。「确认是另一个进程」是
+//    另一档,两者必须分别测。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import {
   db, insertMonitorRow, isPidAlive, makeTask, monitors, reattachMonitors, reviewInFlight,
-  detachAllMonitors, schema, startMonitor, stopMonitor, tasks, teardown, until,
+  detachAllMonitors, root, schema, startMonitor, stopMonitor, tasks, teardown, until,
 } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
 
@@ -26,6 +32,36 @@ const { beginTaskRevocation, isTaskRevoked, releaseTaskRevocation } = await impo
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
+
+// 忽略 TERM 的命令:壳自己 trap 掉,每轮重起一个 sleep —— TERM 打到整组时组里始终有人,
+// 只有 +2 秒那把 SIGKILL 才收得掉它。(同一招在 test-project-commands.ts 里也用着)
+const STUBBORN = "trap '' TERM HUP INT; while :; do sleep 0.2; done";
+
+const debtRow = async (monId: string) => (await db.select().from(schema.monitorReclaimDebts)
+  .where(eq(schema.monitorReclaimDebts.monitorId, monId))).at(0);
+
+/**
+ * 让「身份这一问」在一段时间里真的失败:PATH 前置一个退出码 1 的 `ps`。
+ *
+ * 不替换产品里的任何函数 —— `inspectProcessSync` 就是 `execFileSync("ps", …)` 带着
+ * `process.env`,所以这是真实的故障现场(审查的复现脚本用的也是这一招)。`kill(pid,0)` 和
+ * `kill(-pgid,0)` 不走 ps,所以「它还活着吗」照旧问得出来 —— 这正是两档能分开的依据。
+ */
+const brokenBin = join(root, "broken-bin");
+mkdirSync(brokenBin, { recursive: true });
+writeFileSync(join(brokenBin, "ps"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+async function withPsOutage(pid: number, body: () => Promise<void>): Promise<void> {
+  const real = process.env.PATH ?? "";
+  process.env.PATH = `${brokenBin}:${real}`;
+  try {
+    assert.equal(inspectProcess(pid), null, "台子前提:这段时间 ps 真的问不出来");
+    assert.equal(isPidAlive(pid), true, "台子前提:而它确实还活着（kill(pid,0) 不走 ps）");
+    await body();
+  } finally {
+    process.env.PATH = real;
+  }
+}
+
 
 // ── ⑨ 撤销是一段时间:撤销期不许再创建、停不掉必须留下回收责任（第 3 轮审查 F1）──────
 //
@@ -142,6 +178,10 @@ const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
     "责任没落盘、退出也没确认时,不许把 pid 这最后一份线索连任务一起抹掉");
   db.insert = originalInsert;
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, taskId))).length, 1, "任务行必须还在（可重试）");
+  // 库恢复之后那一笔要**自己补记上**:落盘失败挂的是补记梯子,不是销账梯子 —— 销账梯子读
+  // 债表,读到空就当「别人已经销了」返回成功,一笔从没落盘的责任正好被它静静吃掉。
+  const monId = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!.id;
+  await until("库恢复后回收责任要补记上", async () => await debtRow(monId) !== undefined);
   killTree(pid, "SIGKILL"); // 测试自己收场
   await until("收掉旁路进程", async () => !isPidAlive(pid));
 }
@@ -184,13 +224,6 @@ const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
     "任务已经终态、它的输出再也唤不醒谁,重启不许接回来继续烧（接回与创建、出口同一份资格）");
   assert.equal(isPidAlive(row.pid!), false, "同上:接回那条停止路径也要确认退出才返回");
 }
-
-// 忽略 TERM 的命令:壳自己 trap 掉,每轮重起一个 sleep —— TERM 打到整组时组里始终有人,
-// 只有 +2 秒那把 SIGKILL 才收得掉它。(同一招在 test-project-commands.ts 里也用着)
-const STUBBORN = "trap '' TERM HUP INT; while :; do sleep 0.2; done";
-
-const debtRow = async (monId: string) => (await db.select().from(schema.monitorReclaimDebts)
-  .where(eq(schema.monitorReclaimDebts.monitorId, monId))).at(0);
 
 {
   // ⑩-5 **这一圈归运行时收尾层,不归包装函数**(第 5 轮审查 F1)。
@@ -235,11 +268,11 @@ const debtRow = async (monId: string) => (await db.select().from(schema.monitorR
 }
 
 {
-  // ⑩-7 **认不出身份的那一档,删除时不记账也不下刀**(跟上一条配对的反面)。
+  // ⑩-7 **「这个号现在是另一个进程」也要留责任**,只是不许下刀(第 6 轮审查 F1)。
   //
-  // 这一行可能是上一辈子停下来的,`pid_started_at` 对不上就说明这个号可能已经是别人的了 ——
-  // 下刀不可逆,而记一笔永远销不掉的账只会把账本变成噪音。所以只出声。`running` 的行不走
-  // 这一档:那时进程是我们自己起的,照旧记责任（⑩-2）。
+  // 第 5 轮这里写的是「认不出来就不记账」,理由是「没有证据说这一组是我们的」。那个理由只
+  // 够支撑**不下刀**:ps 答出来的是「这个号上现在是别人」,证明不了**原来那个**已经退出 ——
+  // 它可能带着后代留在这一组里,只是组长的号被占了。所以责任照记,账上写清是哪一档。
   const taskId = await makeTask({ status: "done" });
   const stray = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
   stray.unref();
@@ -249,8 +282,10 @@ const debtRow = async (monId: string) => (await db.select().from(schema.monitorR
   });
   await deleteTaskCompletely(taskId);
   assert.equal(isPidAlive(pid), true, "身份对不上就不敢杀 —— 那个号可能已经是别人的了");
-  assert.equal(await debtRow(monId), undefined,
-    "也不记账:没有任何证据说这一组是我们的,记下来就是一笔永远销不掉的账");
+  const debt = await debtRow(monId);
+  assert.ok(debt, "但责任一定要留下:能证明的只有「这个号现在是别人」,证不了原来那个已经退了");
+  assert.match(debt.reason, /另一个进程/,
+    "账上要写清是哪一种不确定 —— 跟「ps 问不出来」混成一句,事后就分不出该怎么收了");
   killTree(pid, "SIGKILL"); // 测试自己收场
   await until("收掉旁路进程", async () => !isPidAlive(pid));
 }
@@ -288,5 +323,96 @@ const debtRow = async (monId: string) => (await db.select().from(schema.monitorR
   assert.equal(await debtRow(monId), undefined, "收干净了就不留账");
 }
 
+{
+  // ⑩-10 **ps 短暂不可用的那条路**(第 6 轮审查 F1 实测的那一条,端到端):
+  // 接回 → 删除 → 重启清扫,三步都在「身份问不出来」的前提下必须守住不变量。
+  const taskId = await makeTask({ status: "running" });
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "查询不可用时收尾的" });
+  assert.equal(started.ok, true);
+  const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+  // 任务已经落终态 ⇒ 接回时会判它没有出口、当场收掉它(⑩-4 那条路),这次叠加 ps 不可用。
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, taskId));
+  detachAllMonitors(); // = server 进程没了,哨兵进程照旧活着
+
+  await withPsOutage(row.pid!, async () => {
+    await reattachMonitors();
+    const after = (await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)!;
+    assert.doesNotMatch(after.endedReason ?? "", /已经不在了/,
+      "ps 问不出身份时不许声称「这个进程已经不在了」—— 它还在跑,而这句话会让用户再也不回头看它");
+    const debt = await debtRow(row.id);
+    assert.ok(debt, "问不出身份恰恰是最该留责任的一档（第 5 轮这里直接返回空,删除据此把唯一线索抹掉）");
+    assert.match(debt.reason, /判不出身份|查询不可用/, "账上写清这一档是「问不出来」,不是「别人的进程」");
+    assert.equal(isProcessGroupAlive(row.pid!), true, "问不出身份就不许下刀 —— 这个号可能已经是别人的");
+
+    // 删除:责任已经在册 ⇒ 允许销毁身份,但那一笔必须活过删除。
+    await deleteTaskCompletely(taskId);
+    assert.equal((await db.select().from(monitors).where(eq(monitors.taskId, taskId))).length, 0, "哨兵行跟着任务没了");
+    assert.ok(await debtRow(row.id), "任务行、哨兵行都没了,责任是这个进程最后的线索");
+  });
+
+  // ps 恢复 = 下一次开机。这一刻才第一次能判出身份,于是补杀 + 销账。
+  await sweepMonitorReclaimDebts();
+  assert.equal(isProcessGroupAlive(row.pid!), false, "ps 恢复后开机清扫必须把它收掉");
+  assert.equal(await debtRow(row.id), undefined, "确认收干净了才销账");
+}
+
+{
+  // ⑩-11 **删除核对那一侧的「问不出来」**:行已经非运行态、账本上还没人认它,偏偏这一刻
+  // ps 又不可用。第 5 轮这一格是「不记也不杀」(理由是「没有证据说这一组是我们的」)——
+  // 可那是**唯一**能留下线索的时刻,删除紧接着就把哨兵行连 pid 一起抹掉(第 6 轮审查 F1)。
+  const taskId = await makeTask({ status: "done" });
+  const stray = spawn("sh", ["-lc", STUBBORN], { detached: true, stdio: "ignore" });
+  stray.unref();
+  const pid = stray.pid!;
+  await until("旁路进程起来了", async () => isProcessGroupAlive(pid));
+  const monId = await insertMonitorRow(taskId, {
+    status: "stopped", pid, pidStartedAt: inspectProcess(pid)?.startedAt ?? null,
+  });
+  assert.equal(await debtRow(monId), undefined, "现场前提:账本上还没人认它");
+
+  await withPsOutage(pid, async () => {
+    await deleteTaskCompletely(taskId);
+    const debt = await debtRow(monId);
+    assert.ok(debt, "删除之前问不出身份时,责任必须落下来 —— 这一行马上就没了,之后谁都查不到它");
+    assert.equal(debt.pid, pid, "责任上带着 pid");
+    assert.equal(isProcessGroupAlive(pid), true, "身份问不出来就不许下刀");
+  });
+
+  await sweepMonitorReclaimDebts();
+  assert.equal(isProcessGroupAlive(pid), false, "ps 恢复后开机清扫把它收掉");
+  assert.equal(await debtRow(monId), undefined, "确认收干净了才销账");
+}
+
+{
+  // ⑩-12 **接回时问不出身份 ⇒ 照旧接回来,不许写成「它已经不在了」**。
+  //
+  // 这一档上我们什么都不知道,所以什么都不许声称:行留在 running、界面上还能点停、日志
+  // 继续收;ps 恢复之后探活那一问会自己判出结果。原来按 `isSameProcess` 一刀切,ps 一抽
+  // 就把一条还活着的哨兵写成终态 —— 既撒谎,又让它从此无法叫停。
+  const taskId = await makeTask({ status: "running" }); // 任务还在跑 ⇒ 出口是通的
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "查询不可用时接回的" });
+  assert.equal(started.ok, true);
+  const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+  detachAllMonitors(); // = server 进程没了
+
+  await withPsOutage(row.pid!, async () => {
+    const recovery = await reattachMonitors();
+    assert.equal(recovery.attached, 1, "问不出身份 ≠ 它不在了:这一条要接回来");
+    const after = (await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)!;
+    assert.equal(after.status, "running", "不许在这一档上落终态");
+    // 探活那一问也归同一个判据:每两秒问一次,问不出来就等下一次,不许据此收尾。
+    await new Promise((r) => setTimeout(r, 2600));
+    const probed = (await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)!;
+    assert.equal(probed.status, "running",
+      "探活问不出身份时不许收尾 —— 那会在卡片上写「命令已经不在了」,而它还在跑");
+  });
+
+  // ps 恢复:它确实还是我们那个,所以照旧在跑;点停才收掉它。
+  const alive = (await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)!;
+  assert.equal(alive.status, "running", "ps 恢复后认出来还是它,照旧在盯");
+  await stopMonitor(row.id, "测试收尾");
+  assert.equal(isProcessGroupAlive(row.pid!), false, "点停要确认退出");
+}
+
 await teardown();
-console.log("✓ 撤销期不许创建 / 枚举失败整笔不走 / 停止返回前确认退出或留下持久回收责任 / 接回问同一份出口资格 / 点停也走记责那一圈 / 删除按资源责任核对而非卡片状态 / 认不出身份不记不杀 / 组长退出按整组收 / 开机重收「已停止但没确认退出」");
+console.log("✓ 撤销期不许创建 / 枚举失败整笔不走 / 停止返回前确认退出或留下持久回收责任 / 接回问同一份出口资格 / 点停也走记责那一圈 / 删除按资源责任核对而非卡片状态 / 另一个进程与问不出来分档记责、都不下刀 / 组长退出按整组收 / 开机重收「已停止但没确认退出」/ ps 不可用时接回不撒谎、删除不丢责任、恢复后收掉 / 落盘失败走补记梯子");

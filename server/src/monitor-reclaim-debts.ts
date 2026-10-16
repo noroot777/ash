@@ -33,44 +33,89 @@
 // `monitors.ts` 的 `finish`,它调 `reclaimMonitorProcess` + `settleReclaim`(见下)。回收层
 // 只剩两件事:判资格,以及**销毁持久身份之前按责任核对一遍**(不看卡片状态,见
 // monitor-reclaim.ts 的 `accountForLiveProcesses`)。
+//
+// ── 「问不出来」不是「已经退了」(第 6 轮审查 F1)────────────────────────────────
+//
+// 第 5 轮把「身份对不上」和「这一问本身失败了」挤进同一个 `unknown`,又让非运行态的那条路
+// **不记责任直接返回 null** —— 于是 `ps` 短暂不可用的那几秒里:启动接回把行写成 `lost` 并
+// 声称「这个进程已经不在了」,紧接着的删除拿到同一个 null、核对直接放行,任务行、哨兵行、
+// 债表三处同时为空,而那个命令还在后台跑着,之后谁也找不回它(审查用「PATH 前置一个退出码
+// 1 的 ps」实测:`AFTER_REATTACH_OUTAGE debtRows=0` → `BEFORE_SERVER_EXIT taskRows=0` →
+// `AFTER_RECOVERY alive=true`)。
+//
+// 两条修法,都在这一层:
+//
+// ① **状态分四档可判 + 两档不可判**(见 `ReclaimState`)。`gone` 用 `kill(-pgid,0)` 判、
+//    「组长还在吗」用 `kill(pid,0)` 判、身份用 ps 判 —— 哪一问失败就只污染它自己那一档,
+//    不再冒充别的结论。
+// ② **返回值必须是全的**(见 `ReclaimOutcome`):`settled`(确认退出)/`owed`(责任已落盘)/
+//    `unaccounted`(该留责任却没留下来)三者互斥,空值不再同时表示「没什么可收」和
+//    「不敢判断」。每个调用点都得把第三种当失败处理 —— 销毁身份那条路整笔中止,其余至少
+//    出声并继续重试落盘。
 import { eq, inArray } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { monitorReclaimDebts } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
 import { IS_WINDOWS, isPidAlive, isProcessGroupAlive, killTree } from "./platform.js";
-import { isSameProcess } from "./proc.js";
+import { inspectProcess, isSameProcess } from "./proc.js";
 import { now } from "./util.js";
 
 /**
- * 这一条此刻处在哪一档。**只在能肯定的时候说 `gone`。**
+ * 这一条此刻处在哪一档。**每一档只声称那一问真的答出来的东西。**
  *
- * - `gone` = 确认收干净了(POSIX:整组已空)。只有这一档能销账。
+ * **五档,每一档对应一个真的问出了结果的问题**(整组还有人吗 / 组长还在吗 / 这个号上是谁):
+ * - `gone` = 确认收干净了(POSIX:整组已空)。**只有这一档能销账。**
  * - `ours-alive` = 还在,而且组长身份对得上 —— 可以接着杀。
  * - `ours-orphans` = **组长已经不在了,组里还有人**。那几个只可能是我们的后代:组长这个 pid
  *   现在是空的(`kill(pid,0)` 报 ESRCH),没有别人能当这一组的组长;而外人要加进来得
  *   `setpgid` 到同一个会话里去,那个会话的头正是这条哨兵自己。所以这一档**在刚刚还拥有它的
  *   那一层**可以放心杀(`finish`),隔了一次重启就不行了 —— 见 `reclaimMonitorProcess` 的
  *   `fresh`。
- * - `unknown` = 问不出来(ps 不可用、组里有人但组长身份对不上/pid 被复用)。既不敢杀也
- *   **不许销账**:`inspectProcess` 把「不存在」和「查不到」都返回 null,拿它当「已经退了」
- *   就是把最后那一份责任丢掉(第 4 轮审查 F1 的并条之一)。
+ * - `not-ours` = 这个号现在是**另一个**进程(ps 答出来了,启动时刻对不上;locale 不同由
+ *   `isSameProcess` 的时间戳比较兜住)。不许杀 —— 那是别人的进程。
+ *
+ * 剩下这两档**都不许据此销账**(也都不许下刀):
+ * - `unknown` = **身份这一问自己失败了**:`kill(pid,0)` 说它活着,ps 却什么都答不出来
+ *   (`inspectProcess` 把「不存在」和「ps 不可用」都返回 null)。拿它当「已经退了」就是把
+ *   最后那一份责任丢掉(第 4 轮审查 F1),拿它当「不是我们的」就是在界面上撒谎
+ *   (第 6 轮审查 F1)。
+ * - `not-ours` 同样不销账:我们能证明的只有「这个号上现在是别人」,证明不了**原来那个**
+ *   已经退出 —— 它可能带着后代留在这一组里,只是组长的号被别人占了。两档的区别只在于
+ *   **记下来的理由**和日志措辞,不在于要不要负责(`settleDebt` 会按档说清楚)。
  */
-export type ReclaimState = "gone" | "ours-alive" | "ours-orphans" | "unknown";
+export type ReclaimState = "gone" | "ours-alive" | "ours-orphans" | "not-ours" | "unknown";
+
+/** 这一档是「确认收干净了」吗 —— **只有它能销账**。 */
+const isReclaimedState = (state: ReclaimState): boolean => state === "gone";
+
+/**
+ * 身份这一问的三种答案。**只在 `kill(pid,0)` 已经说它活着时调**,所以 `inspectProcess`
+ * 返回 null 只剩一种解释:ps(或 Windows 上那段 PowerShell)自己没答出来。
+ */
+function identityOf(pid: number, recorded: string | null): "ours" | "theirs" | "unqueryable" {
+  const info = inspectProcess(pid);
+  if (!info) return "unqueryable";
+  // 没记启动时刻的行只能退化成存在性检查 —— 跟 `isSameProcess` 同一个让步,理由在那里。
+  if (!recorded || info.startedAt === recorded) return "ours";
+  // 原文不等还有一种可能:两边 locale 不同。让 `isSameProcess` 把两边还原成时间戳再比。
+  return isSameProcess(pid, recorded) ? "ours" : "theirs";
+}
 
 export function reclaimState(pid: number, pidStartedAt: string | null): ReclaimState {
   if (!IS_WINDOWS) {
     if (!isProcessGroupAlive(pid)) return "gone";
-    // 组里有人。组长还在吗 —— 这一问要用 `kill(pid,0)` 而不是 ps:`inspectProcess` 把
-    // 「不存在」和「ps 坏了」都返回 null,拿它判「组长已退」会在 ps 不可用时把一整组陌生
-    // 进程说成我们的后代。
+    // 组里有人。组长还在吗 —— 这一问要用 `kill(pid,0)` 而不是 ps:ps 失败时 null 会被
+    // 当成「组长已退」,于是一整组陌生进程被说成我们的后代。
     if (!isPidAlive(pid)) return "ours-orphans";
-    return isSameProcess(pid, pidStartedAt) ? "ours-alive" : "unknown";
+    const who = identityOf(pid, pidStartedAt);
+    return who === "ours" ? "ours-alive" : who === "theirs" ? "not-ours" : "unknown";
   }
-  // win32 没有进程组这回事,`killTree` 打的是 `taskkill /T` 那棵树,能问的只有这个 pid 本身
-  // —— 跟这几列原来的判据完全一样,**这里不新增任何跨平台断言**(没有 Windows 真机实证
-  // 之前不冒充;约定见根 AGENTS.md)。
-  if (isSameProcess(pid, pidStartedAt)) return "ours-alive";
-  return isPidAlive(pid) ? "unknown" : "gone";
+  // win32 没有进程组这回事,`killTree` 打的是 `taskkill /T` 那棵树,能问的只有这个 pid 本身。
+  // 用的还是原来那两个原语(pid 存活 + 身份),只是把「问不出来」从「身份对不上」里拆了出来
+  // —— **这里不新增任何跨平台断言**(没有 Windows 真机实证之前不冒充;约定见根 AGENTS.md)。
+  if (!isPidAlive(pid)) return "gone";
+  const who = identityOf(pid, pidStartedAt);
+  return who === "ours" ? "ours-alive" : who === "theirs" ? "not-ours" : "unknown";
 }
 
 /**
@@ -84,7 +129,7 @@ export async function confirmReclaimed(
 ): Promise<boolean> {
   const until = Date.now() + deadlineMs;
   for (;;) {
-    if (reclaimState(pid, pidStartedAt) === "gone") return true;
+    if (isReclaimedState(reclaimState(pid, pidStartedAt))) return true;
     if (Date.now() >= until) return false;
     // **这一发不能 unref**:我们正在 await 它。unref 掉的话,当它是事件循环里唯一的待办时
     // 进程会直接退出 —— 等待本身就没了(实测:测试进程报 unsettled top-level await)。
@@ -151,76 +196,147 @@ export function scheduleReclaimRetry(monitorId: string, step = 0): void {
   (timer as { unref?: () => void }).unref?.();
 }
 
-/** 这一笔回收已经启动了:谁的、朝哪个 pid 发的刀、责任有没有落下来。 */
+/** 一笔已经落盘的回收责任:谁的、朝哪个 pid 发的刀。 */
 export type ReclaimTicket = {
   monitorId: string;
   pid: number;
   pidStartedAt: string | null;
-  /** false = **连责任都没落盘**。销毁持久身份那条路要据此整笔中止(见 monitor-reclaim.ts)。 */
-  accounted: boolean;
 };
+
+/** 需要补记的那一笔(落盘失败时原样带着,供重试)。 */
+type DebtInput = {
+  monitorId: string; taskId: string; pid: number; pidStartedAt: string | null;
+  command: string; reason: string;
+};
+
+/**
+ * 回收这一刀的结果。**三者互斥、没有第四种**(第 6 轮审查 F1:空值不许同时表示「没什么可收」
+ * 和「不敢判断」):
+ *
+ * - `settled` = 这一刻确认它不在了(或压根没有进程:claude 投影行)。没有责任要留。
+ * - `owed` = 还在 / 判不出来,**责任已经可靠落盘**。之后由确认阶段销账,或留给梯子与开机清扫。
+ * - `unaccounted` = **该留责任、却没留下来**(库写不进去)。调用方必须当失败处理:销毁持久
+ *   身份那条路整笔中止,其余路径至少出声 + 继续重试落盘。
+ */
+export type ReclaimOutcome =
+  | { state: "settled" }
+  | { state: "owed"; ticket: ReclaimTicket }
+  | { state: "unaccounted"; debt: DebtInput };
 
 /**
  * **落责任 → 发信号**:一条哨兵的回收只能从这里开始。
  *
- * 调用点是**运行时收尾层**(`monitors.ts` 的 `finish`,以及创建后登记失败那一支),外加删除
- * 之前按责任核对的那一遍。顺序只有这一个对:`killByPid` 是 SIGTERM + 两秒后一把 `unref`
- * 的补刀,server 在这两秒里退出它就永远不会落下 —— 责任先落盘,那一笔才活得过进程退出。
+ * 调用点是**运行时收尾层**(`monitors.ts` 的 `finish`、创建后登记失败、启动接回认不出身份
+ * 那几支),外加删除/审查收尾之前按责任核对的那一遍。顺序只有这一个对:`killByPid` 是
+ * SIGTERM + 两秒后一把 `unref` 的补刀,server 在这两秒里退出它就永远不会落下 —— 责任先
+ * 落盘,那一笔才活得过进程退出。
  *
- * 返回 null = 这一刻确认它不在了(或者压根没有进程:claude 投影行),没什么要回收的。
+ * `fresh` 答的是**「这个进程组刚刚还在我们手上吗」**,它**只**决定 `ours-orphans` 这一档敢不敢
+ * 下刀。证据是「这一行此刻还是 running」:单实例锁保证同时只有一个 server 在写这张表,所以
+ * 还没被写成终态的行要么是本进程正拿着的,要么是上一个 server 崩在那儿的 —— 而开机时
+ * `reattachMonitors` / `reclaimUnconfirmedStops` 都排在任何删除之前,会先把后者重判一遍。
  *
- * `fresh` 答的是**「这个进程组刚刚还在我们手上吗」**,它只决定 `ours-orphans` 这一档敢不敢
- * 下刀:
- *
- * | 档 | fresh=true(运行时收尾:这一行此刻还是 running,进程是我们自己起/接回的) | fresh=false(删除核对、启动扫描:这一行可能是上辈子的) |
+ * | 档 | fresh=true(运行时收尾) | fresh=false(删除核对、启动扫描) |
  * |---|---|---|
- * | `gone` | 销掉旧账,返回 null | 同左 |
+ * | `gone` | 销掉旧账 → `settled` | 同左 |
  * | `ours-alive` | 记责任 + 杀 | 记责任 + 杀(身份对得上,隔多久都是我们的) |
- * | `ours-orphans` | 记责任 + 杀(组长刚死,组里剩的只能是它的后代) | **记责任、不杀**(隔了一次重启,pid 可能已经被别人当组长用过了) |
- * | `unknown` | 记责任、不杀(身份问不出来) | **不记也不杀**:没有任何证据说这一组是我们的,记下来就是一笔永远销不掉的账 |
+ * | `ours-orphans` | 记责任 + 杀(组长刚死,组里剩的只能是它的后代) | 记责任、**不杀**(隔了一次重启,pid 可能已经被别人当组长用过) |
+ * | `not-ours` | 记责任、不杀(那是别人的进程) | 同左 |
+ * | `unknown` | 记责任、不杀(身份问不出来) | 同左 —— **第 6 轮改的就是这一格**:原来它在这一列直接返回空 |
  */
 export async function reclaimMonitorProcess(
   m: { id: string; taskId: string; pid: number | null; pidStartedAt: string | null; command: string },
   reason: string,
   opts: { fresh: boolean },
-): Promise<ReclaimTicket | null> {
-  if (m.pid === null) return null; // claude 内置 Monitor 的投影行:没有进程,也没有责任
+): Promise<ReclaimOutcome> {
+  if (m.pid === null) return { state: "settled" }; // claude 投影行:没有进程,也没有责任
   const state = reclaimState(m.pid, m.pidStartedAt);
-  if (state === "gone") {
+  if (isReclaimedState(state)) {
     // 顺手把上辈子留下的那笔销掉:这是唯一能确认「它真的不在了」的时刻。
     await clearReclaimDebt(m.id);
-    return null;
+    return { state: "settled" };
   }
-  if (state === "unknown" && !opts.fresh) {
-    console.error(
-      `[ash] 认不出这个哨兵进程,不记责任也不下刀 monitor=${m.id} pid=${m.pid}（${reason}）`,
-    );
-    return null;
-  }
-  const accounted = await noteReclaimDebt({
+  const debt: DebtInput = {
     monitorId: m.id, taskId: m.taskId, pid: m.pid, pidStartedAt: m.pidStartedAt,
-    command: m.command, reason,
-  });
+    command: m.command, reason: `${reason}（${stateNote(state)}）`,
+  };
+  const accounted = await noteReclaimDebt(debt);
   if (state === "ours-alive" || (state === "ours-orphans" && opts.fresh)) killByPid(m.pid);
-  return { monitorId: m.id, pid: m.pid, pidStartedAt: m.pidStartedAt, accounted };
+  if (!accounted) return { state: "unaccounted", debt };
+  return { state: "owed", ticket: { monitorId: m.id, pid: m.pid, pidStartedAt: m.pidStartedAt } };
 }
+
+/** 落在账本上的那句「为什么还没收掉」。按档说清楚,别让人事后分不出是哪一种不确定。 */
+function stateNote(state: ReclaimState): string {
+  if (state === "ours-alive") return "还活着";
+  if (state === "ours-orphans") return "组长已退、组里还有后代";
+  if (state === "not-ours") return "这个号现在是另一个进程，原进程退出无法确认";
+  return "进程查询不可用，判不出身份";
+}
+
+/** 这一轮回收到底落到哪一档。调用方**必须**把 `unaccounted` 当失败处理。 */
+export type ReclaimVerdict = "reclaimed" | "owed" | "unaccounted";
 
 /**
  * **确认退出 → 销账**:确认不了就把责任留在表上并挂梯子 —— 那正是不变量允许的另一半。
  *
  * 跟 `reclaimMonitorProcess` 成对使用,中间可以插别的事(`finish` 就把状态落库、时间线、
  * 回推事件排在这两步之间:记账和状态要先落定,确认退出是慢的那一步)。
+ *
+ * `unaccounted` 这一支**不许挂销账梯子**:那条梯子读的是债表,读到空就当「别人已经销了」
+ * 返回成功 —— 一笔从没落盘的责任正好会被它静静吃掉(第 6 轮审查 F1 的并条之一)。它要挂的
+ * 是**补记梯子**。
  */
-export async function settleReclaim(ticket: ReclaimTicket, deadlineMs = 3_000): Promise<boolean> {
+export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000): Promise<ReclaimVerdict> {
+  if (outcome.state === "settled") return "reclaimed";
+  if (outcome.state === "unaccounted") {
+    const { debt } = outcome;
+    // 库可能只是忙了一下:再确认一遍退出,没退就立刻重试落盘,仍然不行才往上报。
+    if (await confirmReclaimed(debt.pid, debt.pidStartedAt, deadlineMs)) return "reclaimed";
+    if (await noteReclaimDebt(debt)) {
+      scheduleReclaimRetry(debt.monitorId);
+      return "owed";
+    }
+    console.error(
+      `[ash] **回收责任落不下来、退出也确认不了** monitor=${debt.monitorId} pid=${debt.pid}`
+      + ` 命令：${debt.command}（${debt.reason}）—— 继续重试落盘`,
+    );
+    scheduleReclaimPersist(debt);
+    return "unaccounted";
+  }
+  const { ticket } = outcome;
   if (await confirmReclaimed(ticket.pid, ticket.pidStartedAt, deadlineMs)) {
     await clearReclaimDebt(ticket.monitorId);
-    return true;
+    return "reclaimed";
   }
   console.error(
     `[ash] 哨兵进程还没确认退出,回收责任留在表上 monitor=${ticket.monitorId} pid=${ticket.pid}`,
   );
   scheduleReclaimRetry(ticket.monitorId);
-  return false;
+  return "owed";
+}
+
+/**
+ * 补记梯子:责任**连盘都没落上**时唯一还能做的事。
+ *
+ * 跟销账梯子分开是因为两者的判据相反:那条问「它退了吗」,这条问「这一笔记下来了吗」。
+ * 进程内重试当然活不过退出 —— 所以调用方该失败的照样要失败(删除整笔中止);这条只是给
+ * 「库忙了一下」留一条自愈的路。
+ */
+function scheduleReclaimPersist(debt: DebtInput, step = 0): void {
+  if (step >= LADDER_MS.length) return;
+  const timer = setTimeout(() => {
+    void (async () => {
+      if (isReclaimedState(reclaimState(debt.pid, debt.pidStartedAt))) return;
+      if (await noteReclaimDebt(debt)) {
+        console.error(`[ash] 回收责任补记成功 monitor=${debt.monitorId} pid=${debt.pid}`);
+        scheduleReclaimRetry(debt.monitorId);
+        return;
+      }
+      scheduleReclaimPersist(debt, step + 1);
+    })();
+  }, LADDER_MS[step]);
+  (timer as { unref?: () => void }).unref?.();
 }
 
 /** 这几条里，**此刻已经有人在账本上负责**的是哪些。 */
@@ -237,9 +353,11 @@ async function settleDebt(monitorId: string): Promise<boolean> {
   if (dbClient.closed) return false;
   const debt = (await db.select().from(monitorReclaimDebts)
     .where(eq(monitorReclaimDebts.monitorId, monitorId))).at(0);
-  if (!debt) return true; // 别人已经销了
+  // 读到空只有一种正当解释:**确认退出之后有人销了它**。一笔从没落盘的责任绝不能走到
+  // 这条梯子上来 —— 那会被这一句当成「结了」(所以落盘失败走的是补记梯子,见 settleReclaim)。
+  if (!debt) return true;
   const state = reclaimState(debt.pid, debt.pidStartedAt);
-  if (state === "gone") {
+  if (isReclaimedState(state)) {
     await clearReclaimDebt(monitorId);
     return true;
   }
@@ -257,11 +375,16 @@ async function settleDebt(monitorId: string): Promise<boolean> {
       return true;
     }
   }
-  // `unknown` / `ours-orphans`:组里有人,身份却对不上(pid 被复用 / ps 问不出来),或者组长
-  // 已经死了、认不出剩下的是谁的后代。**不敢杀也不销账** ——
-  // 杀错人不可逆,而丢掉这一笔就等于再也没人知道这件事。留着,每次开机再问一遍。
+  // 剩下三档都是**不敢杀、也不敢销账**:
+  //  · `ours-orphans` —— 组长已死、组里还有人,但隔了一次重启就跟「别人拿这个号当过组长」
+  //    分不开(同一个判据见 `reclaimMonitorProcess` 的 `fresh`);
+  //  · `not-ours` —— 这个号现在是别人的,而**原来那个**退没退证明不了(它可能带着后代还在
+  //    这一组里,只是组长的号被占了);
+  //  · `unknown` —— ps 自己没答出来,什么都不许声称。
+  // 杀错人不可逆,而丢掉这一笔就等于再也没人知道这件事。留着,每次开机再问一遍 —— 账上
+  // 写清楚是哪一种不确定,别让人事后分不出来。
   await db.update(monitorReclaimDebts)
-    .set({ attempts: debt.attempts + 1, lastAttemptAt: now(), lastError: `回收未确认（${state}）` })
+    .set({ attempts: debt.attempts + 1, lastAttemptAt: now(), lastError: `回收未确认：${stateNote(state)}` })
     .where(eq(monitorReclaimDebts.monitorId, monitorId))
     .catch(() => {});
   return false;

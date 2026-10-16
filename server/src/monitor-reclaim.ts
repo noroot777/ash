@@ -170,6 +170,9 @@ async function signalStop(
 async function accountForLiveProcesses(
   rows: MonitorRow[], reason: string, opts: { fatal: boolean },
 ): Promise<void> {
+  // 「还收不干净」就得核对 —— 判据是 `reclaimState` 的那四档不确定,**不是**「卡片是不是
+  // running」。`unknown`(ps 这一问自己失败了)也在里面:它恰恰是最该留责任的一档,原来却被
+  // 当成「没什么可收」放行了(第 6 轮审查 F1 实测的那条路)。
   const risky = rows.filter((r) => r.pid !== null && reclaimState(r.pid, r.pidStartedAt) !== "gone");
   if (!risky.length) return;
   const held = await heldReclaimDebts(risky.map((r) => r.id));
@@ -178,14 +181,12 @@ async function accountForLiveProcesses(
   await Promise.all(risky.map(async (r) => {
     if (held.has(r.id)) return; // 已经有人负责了 —— 那正是不变量允许的另一半
     // **`fresh` 按这一行自己的状态算**,不是按调用点算:还在 running 的那条,进程刚刚还在我们
-    // 手上(`finish` 失败才会落到这里),身份问不出来也照旧记责任 —— 丢掉那一笔就是把唯一
-    // 线索扔了。已经非运行态的那条可能是上一辈子停下来的:「组长已死、组里还有人」跟「别人
-    // 拿这个号当过组长」分不开,「认不出来」更没有任何证据说它是我们的(见
-    // reclaimMonitorProcess 的那张表)。
-    const ticket = await reclaimMonitorProcess(r, reason, { fresh: r.status === "running" });
-    if (!ticket) return;
-    await settleReclaim(ticket);
-    if (!ticket.accounted && reclaimState(r.pid!, r.pidStartedAt) !== "gone") unaccounted.push(r);
+    // 手上(`finish` 失败才会落到这里),孤儿组那一档敢下刀;已经非运行态的那条可能是上一辈子
+    // 停下来的,那一档只记责任(判据见 reclaimMonitorProcess 那张表)。两种都**一定会记责任**。
+    const outcome = await reclaimMonitorProcess(r, reason, { fresh: r.status === "running" });
+    // 确认退出要**等到补刀生效**(默认 3 秒,见 confirmReclaimed):并行等,所以这一整批只花
+    // 一个窗口。不等的话「收掉了几条」就只是「发出去几刀」,跟第 4 轮那版一个毛病。
+    if (await settleReclaim(outcome) === "unaccounted") unaccounted.push(r);
   }));
   if (!unaccounted.length || !opts.fatal) return;
   throw new Error(
@@ -255,9 +256,8 @@ export async function stopMonitorsForReviewRun(runId: string, reason: string): P
  * 扫不到它。
  *
  * **只对身份对得上的那一档下刀**(`ours-alive`,见 `reclaimMonitorProcess` 的 `fresh`):隔了
- * 一次重启,「组长已死、组里还有人」跟「别人拿这个号当过组长」分不开,那一档只记责任。
- * 「认不出来」则一个字都不记 —— 否则每个 pid 恰好被复用的历史行都会在账本上留一笔永远
- * 销不掉的账。
+ * 一次重启,「组长已死、组里还有人」跟「别人拿这个号当过组长」分不开,那一档只记责任;
+ * 「认不出来」也一样 —— **记责任、不下刀**。
  *
  * 排在 `sweepMonitorReclaimDebts` **之前**:这里新记下的责任由它在同一次开机里接着推。
  */

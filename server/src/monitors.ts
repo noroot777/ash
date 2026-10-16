@@ -35,11 +35,11 @@ import {
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, projects, sessions, tasks } from "./db/schema.js";
-import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
+import { reclaimMonitorProcess, reclaimState, settleReclaim } from "./monitor-reclaim-debts.js";
 import { monitorLogPath, readLogTail, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
 import { pushToTask } from "./monitor-events.js";
 import { monitorSourceGate, monitorWakeGate } from "./monitor-session.js";
-import { isSameProcess, inspectProcess } from "./proc.js";
+import { inspectProcess } from "./proc.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
 
@@ -50,7 +50,7 @@ type Row = typeof monitors.$inferSelect;
  *
  * 表里混着 claude 内置 Monitor 的只读投影（`kind='claude'`，见 shared/src/monitor.ts
  * 文件头）：那些行 `pid` 是 null、`log_path` 是空串。漏掉这道过滤的后果按调用点各不相同，
- * 但没有一个是良性的——`reattachMonitors` 会拿 null pid 去 `isSameProcess` 然后把一堆
+ * 但没有一个是良性的——`reattachMonitors` 会拿 null pid 去问身份然后把一堆
  * 投影行判成 `lost`（它们明明还在 agent 那边跑着）；`liveMonitorsOf` 会让投影行占掉
  * 每任务 4 个的创建配额；`stopMonitorsForTask` 会对着它们空跑一遍 finish。
  *
@@ -243,9 +243,14 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       // 登记失败就把刚起的进程收回来：留着它就是一个谁都看不见、也停不掉的后台命令。
       // 走的是跟 `finish` 同一圈(落责任 → 发信号 → 确认退出 → 销账):这一行没进库,
       // **责任表是它唯一的线索**,少了这一笔就等于谁都不知道它存在过。
-      const ticket = await reclaimMonitorProcess(row, "哨兵登记失败，进程一并收回", { fresh: true });
-      const reclaimed = ticket === null || await settleReclaim(ticket);
-      const tail = reclaimed ? "已回收它的进程" : "进程还没确认退出，回收责任已记下（开机会再收一次）";
+      const verdict = await settleReclaim(
+        await reclaimMonitorProcess(row, "哨兵登记失败，进程一并收回", { fresh: true }),
+      );
+      // **三种结果各说各的**。`unaccounted` 时这个进程既没有身份行、也没有责任行,只剩
+      // 这句话和日志 —— 不许冒充「已记下」(第 6 轮审查 F1)。
+      const tail = verdict === "reclaimed" ? "已回收它的进程"
+        : verdict === "owed" ? "进程还没确认退出，回收责任已记下（开机会再收一次）"
+        : "**进程可能还在后台跑着，而回收责任也没能落库**（见 server 日志里的 pid，必要时手工收掉）";
       return { ok: false, status: 409, error: `哨兵登记失败，${tail}：${e instanceof Error ? e.message : String(e)}` };
     }
     attach(row, spawned.onExit);
@@ -294,10 +299,16 @@ function attach(row: Row, onExit?: (cb: (code: number | null) => void) => void):
   if (onExit) {
     onExit((code) => void finish(row.id, "exited", "命令自己跑完了", code));
   } else {
-    // 接管路径没有 ChildProcess，只能自己探活。pid 会被复用，所以必须连启动时刻一起认。
+    // 接管路径没有 ChildProcess,只能自己探活。pid 会被复用,所以必须连启动时刻一起认 ——
+    // 但**「问不出来」不是「已经退了」**:ps 短暂不可用时 `isSameProcess` 也返回 false,照它
+    // 收尾就会在界面上写一句「命令已经不在了」,而那个命令还在跑(第 6 轮审查 F1)。所以只有
+    // 能判出结果的那两档才收尾,`unknown` 就等下一个两秒再问。
     const liveness = setInterval(() => {
-      if (!isSameProcess(row.pid ?? 0, row.pidStartedAt)) {
+      const state = reclaimState(row.pid ?? 0, row.pidStartedAt);
+      if (state === "gone") {
         void finish(row.id, "exited", "命令已经不在了（server 重启期间跑完的，拿不到退出码）", null);
+      } else if (state === "not-ours") {
+        void finish(row.id, "exited", "这个号现在是另一个进程了（原命令在停服期间结束，拿不到退出码）", null);
       }
     }, 2000);
     (liveness as { unref?: () => void }).unref?.();
@@ -406,7 +417,7 @@ export async function finish(
   //
   // 记账排在**改状态之前**:顺序一反,中间崩一下这一行就成了「显示已停止、责任没人认、
   // pid 线索下一步就被删除抹掉」(第 4、5 轮审查 F1 都是这个现场)。
-  const ticket = await reclaimMonitorProcess(row, reason, { fresh: true });
+  const outcome = await reclaimMonitorProcess(row, reason, { fresh: true });
   await db
     .update(monitors)
     .set({ status, endedAt: now(), endedReason: reason, exitCode })
@@ -418,8 +429,17 @@ export async function finish(
   if (notify) await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`);
   // **确认退出放在最后**:状态、时间线、通知都已落定,这一步只负责「能销的账销掉」。
   // 它会等到补刀生效(有界,见 `confirmReclaimed`)—— 于是这个函数返回时,要么进程确认不在了,
-  // 要么责任稳稳地留在账本上。两者之外没有第三种出口。
-  if (ticket) await settleReclaim(ticket);
+  // 要么责任稳稳地留在账本上。
+  //
+  // 第三种(`unaccounted`:库写不进去)这里只能出声:**身份还在**(这一行没被删,pid 和启动
+  // 时刻都还在上面),开机时 `reclaimUnconfirmedStops` 会按非运行态把它重问一遍。真正不能
+  // 放过它的是**销毁身份**那条路 —— 那边整笔中止(见 monitor-reclaim.ts)。
+  if (await settleReclaim(outcome) === "unaccounted") {
+    console.error(
+      `[ash] 哨兵收尾时既没确认退出、回收责任也没落库 monitor=${monitorId} pid=${row.pid}`
+      + `（哨兵行还留着它的身份，开机会再问一遍）`,
+    );
+  }
 }
 
 export type StopMonitorResult =
@@ -564,14 +584,20 @@ async function reattachBlockedReason(row: Row): Promise<string | null> {
 }
 
 export async function reattachMonitors(): Promise<{ attached: number; lost: number }> {
-  // 只认 ash 自己起的：claude 的投影行没有 pid，拿去 isSameProcess 必然认不出来，会被
+  // 只认 ash 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
   // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
   // `loseClaudeMonitorsOfSession` 在 agent 进程真的结束时统一收口。
   const rows = await db.select().from(monitors).where(and(eq(monitors.status, "running"), isAshKind));
   let attached = 0;
   let lost = 0;
   for (const row of rows) {
-    if (row.pid && isSameProcess(row.pid, row.pidStartedAt)) {
+    // **「问不出来」要跟「它不在了」分开**(第 6 轮审查 F1)。`unknown` = ps 这一问自己失败
+    // 了,那就什么都不许声称:**照旧接回来**。这样它仍然在界面上、仍然能被点停、日志还在
+    // 收,而 ps 恢复之后探活那一问会自己把结果判出来(见 `attach` 里的 liveness)。原来这里
+    // 按 `isSameProcess` 一刀切,ps 短暂不可用就把一条还活着的哨兵写成「这个进程已经不在
+    // 了」—— 既在界面上撒谎,又让它从此无法叫停。
+    const state = row.pid ? reclaimState(row.pid, row.pidStartedAt) : "gone";
+    if (state === "ours-alive" || state === "unknown") {
       // 它还有出口吗(归档 / 任务终态 / 起它的那次审查那一轮还在不在)。没有就收掉,别接回来
       // 继续烧。先接上再收尾:attach 把 tail 建起来,finish 的 drain 才读得到停服期间那一段,
       // 也由它负责杀进程。
@@ -592,13 +618,21 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       attach(row);
       attached += 1;
     } else {
-      // 组长认不出来了。但「组长不在」不等于「这一组空了」:它派生的、忽略 TERM 的那个
-      // 可能还在组里跑着。所以这一支也要问一遍责任 —— `fresh: false`,隔了一次重启不敢
-      // 下刀(这个号可能已经被别人当组长用过),但认得出是我们的就把责任记下来,交给
-      // 启动期清扫和梯子(第 5 轮审查 F1 的同类位置)。
-      const ticket = await reclaimMonitorProcess(row, "server 重启后认不出它的组长了", { fresh: false });
-      await finishOffline(row, "lost", "server 重启后这个进程已经不在了（它在停服期间跑完的，拿不到退出码）");
-      if (ticket) await settleReclaim(ticket);
+      // 剩下三档各有各的说法,**不能共用一句话**:`gone` 真的退了;`not-ours` 这个号现在是
+      // 别人的(原来那个退没退证明不了);`ours-orphans` 组长退了、组里还有后代。后两档都要
+      // 先把回收责任记下来 —— `fresh: false`,隔了一次重启不敢对孤儿组下刀,这个号可能已经
+      // 被别人当组长用过(判据见 reclaimMonitorProcess 那张表)。
+      const outcome = await reclaimMonitorProcess(row, "server 重启后它的身份对不上", { fresh: false });
+      await finishOffline(row, "lost", state === "gone"
+        ? "server 重启后这个进程已经不在了（它在停服期间跑完的，拿不到退出码）"
+        : state === "not-ours"
+          ? "server 重启后这个号已经是另一个进程了（原命令在停服期间结束，拿不到退出码）；原进程退出未确认，已记下回收责任"
+          : "server 重启后它的组长已经退出、组里还有后代（拿不到退出码），已记下回收责任，开机会再收一次");
+      // 这里不等补刀(启动期要一行一行过,别把开机吊住):责任已落盘,交给紧随其后的
+      // `reclaimUnconfirmedStops` / `sweepMonitorReclaimDebts` 和梯子。
+      if (await settleReclaim(outcome, 0) === "unaccounted") {
+        console.error(`[ash] 接回时既没确认退出、回收责任也没落库 monitor=${row.id} pid=${row.pid}`);
+      }
       lost += 1;
     }
   }
