@@ -11,6 +11,7 @@ import {
 import { deleteEntry, readEntryOverview, type DeleteMode } from "./file-delete.js";
 import { trashCapability, TrashUnavailableError } from "./file-trash.js";
 import { openWithApp, probeOpeners, revealInFileManager } from "./openers/index.js";
+import { openInIde, probeIdes } from "./openers/ide.js";
 import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
 import { readFileGitStatus } from "./file-git-status.js";
 import { readTaskArtifacts } from "./task-artifacts.js";
@@ -25,8 +26,8 @@ import {
   workspaceReadOnlyReason,
 } from "./workspace-write-gate.js";
 
-// 任务文件浏览。绝大部分是只读视角 + 三个「交给本机去做」的动作（在文件夹中显示、
-// 用某个应用打开、拿原始字节预览），它们一个都不写工作区。
+// 任务文件浏览。绝大部分是只读视角 + 几个「交给本机去做」的动作（在文件夹中显示、
+// 用某个应用打开、用某个 IDE 打开、拿原始字节预览），它们一个都不写工作区。
 //
 // **唯一写工作区的是删除**（`DELETE /tasks/:id/file`）。它把两套东西叠在一起：
 //   • 「能不能动这个目录」的门禁与 scm 写操作完全同源——`workspace-write-gate.ts`
@@ -173,6 +174,36 @@ export function mountFileRoutes(api: Hono) {
       const target = await resolveTarget(root, body.path ?? "");
       await revealInFileManager(target.absPath);
       return c.json({ ok: true, absPath: target.absPath });
+    } catch (error) {
+      return c.json({ error: messageOf(error) }, statusOf(error) as 400);
+    }
+  });
+
+  /**
+   * 「本机装了哪些编程 IDE」。跟 `/file/openers` 分成两条,因为问的不是同一件事:那条问
+   * 「系统认为谁能打开这种文件」,对一个**文件夹**问出来的是访达和解压工具;IDE 是人定义
+   * 的类别,只能按清单去本机找(见 openers/ide-catalog.ts)。
+   *
+   * 不挂在任务下面:探测结果跟任务无关,整台机器一份。
+   */
+  api.get("/ides", async (c) => {
+    try {
+      return c.json(await probeIdes(c.req.query("refresh") === "1"));
+    } catch (error) {
+      return c.json({ error: messageOf(error) }, statusOf(error) as 400);
+    }
+  });
+
+  // 用某个 IDE 打开工作目录里的一个文件夹(`path` 为空就是工作目录本身)。`ideId` 只接受
+  // 清单里的 id,具体拉起哪条可执行文件由服务端自己查——不让调用方给路径。
+  api.post("/tasks/:id/file/open-in-ide", async (c) => {
+    const root = await rootFor(c.req.param("id"));
+    if (!root) return c.json({ error: "这个任务还没有可浏览的工作目录" }, 404);
+    try {
+      const body = await c.req.json().catch(() => ({})) as { path?: string; ideId?: string };
+      const target = await resolveTarget(root, body.path ?? "");
+      const { name } = await openInIde((body.ideId ?? "").trim(), target.absPath);
+      return c.json({ ok: true, absPath: target.absPath, name });
     } catch (error) {
       return c.json({ error: messageOf(error) }, statusOf(error) as 400);
     }

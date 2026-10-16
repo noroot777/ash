@@ -277,6 +277,20 @@ export type OpenerProbe = {
   note: string | null;
 };
 
+/** 本机装着的一个编程 IDE。`id` 来自服务端写死的清单（server/src/openers/ide-catalog.ts）。 */
+export type IdeApp = {
+  id: string;
+  name: string;
+  /** 在哪儿找到它的：.app 路径或可执行文件路径。 */
+  detail: string;
+};
+
+export type IdeProbe = {
+  platform: string;
+  ides: IdeApp[];
+  note: string | null;
+};
+
 // ── 生成物（产物面板）────────────────────────────────────────────────────────
 // 「这个任务做出来了什么可以直接看的东西」。判据、三路线索和它们各自的可信区间都在服务端
 // `task-artifacts.ts` 顶部，这里只是它的形状。
