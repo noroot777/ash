@@ -25,10 +25,25 @@
 //
 // **win32 没有这道闸**：`cmd.exe` 里没有可靠的「从第 3 号句柄读一行」写法，硬凑出来的
 // `for /l` + `if exist` 轮询要把用户命令嵌进括号里（命令里一个 `)` 就炸）。那一侧只保留
-// 「先落行、再 spawn、再回填 pid」的顺序，残余窗口写在 monitor-create.ts 里。**未在
-// Windows 真机验证**（约定见根 AGENTS.md）。
+// 「先落行、再 spawn、再回填 pid」的顺序。**未在 Windows 真机验证**（约定见根 AGENTS.md）。
+//
+// ── 身份边条：**pid 在任何一次 await 之前就已经在盘上**（第 9 轮审查 F3）────────────
+//
+// 闸管得住「命令什么时候开工」，管不住「ash 死在 spawn 和回填 pid 之间」这一档的 win32：
+// 那一侧命令已经在跑，而库里那行 pid 还空着 —— 重启只剩一条没有 pid 的行，说明、命令文字、
+// 日志路径都在，却**没有任何能用来找回那个进程的身份**（审查原话：「留下 id、命令和日志
+// 路径，不等于留下了能定位原进程的持久身份」）。
+//
+// 所以 `spawn` 一返回就**同步**把 `{pid, 这一刻}` 写到 `<日志>.spawn.json`：中间一个 await
+// 都没有，所以除了硬崩在这几行里，这份身份一定比命令的第一个字节先落盘。重启那一侧
+// (`reattachMonitors`) 拿它去认进程 —— 用的是 `processStartedNear`，**真的比代次**
+// （ps 的启动时刻 vs 这个锚，±2 秒），不是退化成「这个号上有人」。认下来就把 pid 回填进
+// 行里，这条哨兵从此跟正常接回的一样能停、能收、能记责任。
+//
+// 它在 POSIX 上是多余的（闸已经保证命令没开工），但**代码一份、两边同一条路**：平台差异
+// 只剩「有没有闸」这一处，不再多出一条只有 Windows 走的恢复分支。
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentBaseEnv } from "./executors/spawn.js";
 import { IS_WINDOWS, userShellLaunch } from "./platform.js";
@@ -39,10 +54,50 @@ export function monitorLogPath(taskId: string, monitorId: string): string {
   return join(RUNS_DIR, taskId, `monitor-${monitorId}.log`);
 }
 
+/** 身份边条的路径：跟日志同目录、同一个 monitorId，所以归档清理会把它一起带走。 */
+export const monitorSpawnIdentityPath = (logPath: string): string => `${logPath}.spawn.json`;
+
+/** 边条里记的那两样：**这次 spawn 的 pid**，和 spawn 返回的那一刻（时间锚，见文件头）。 */
+export type SpawnIdentity = { pid: number; spawnedAtMs: number };
+
+/** 读回那份边条。坏了/没了一律 null —— 调用方按「没有身份可用」走诚实的那一支。 */
+export function readSpawnIdentity(logPath: string): SpawnIdentity | null {
+  try {
+    const raw = JSON.parse(readFileSync(monitorSpawnIdentityPath(logPath), "utf8")) as unknown;
+    const o = raw as { pid?: unknown; spawnedAtMs?: unknown };
+    if (!Number.isInteger(o.pid) || (o.pid as number) <= 0) return null;
+    if (typeof o.spawnedAtMs !== "number" || !Number.isFinite(o.spawnedAtMs)) return null;
+    return { pid: o.pid as number, spawnedAtMs: o.spawnedAtMs };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 身份已经稳稳落在库里了,边条可以撤。**撤不掉也不要紧**:它只在「行还 running 而 pid 空着」
+ * 时才被读(见 `reattachMonitors`),那一刻库里那份才是权威。
+ */
+export function clearSpawnIdentity(logPath: string): void {
+  try { unlinkSync(monitorSpawnIdentityPath(logPath)); } catch { /* 没有就算了 */ }
+}
+
 export type SpawnedMonitor = {
   pid: number;
   /** 命令自己跑完时回调一次（仅限本进程起的那次；跨 server 重启接回来的拿不到）。 */
   onExit: (cb: (code: number | null) => void) => void;
+  /**
+   * **拿句柄杀它**,不经过 pid 身份判定。
+   *
+   * 创建期的撤销只能走这一条:那一刻 ash 手里**真的还握着这个 ChildProcess**,所有权是
+   * 句柄本身证明的 —— 而 pid 那条路要先问 ps 要启动时刻,ps 不可用(或还没问到)时按第 9 轮
+   * 审查 F3 的判据一律不许下刀。于是「身份记不全」这种失败里,句柄是唯一还能动手的凭据。
+   */
+  kill: () => void;
+  /**
+   * **拿句柄确认它退了**(有界等待)。同理:不查 ps、不比 pid,`exit` 事件本身就是证明。
+   * 返回 false = 这个期限内没等到,调用方照旧落回收责任。
+   */
+  waitExit: (deadlineMs: number) => Promise<boolean>;
   /**
    * **让用户的命令开工**。只有身份已经落库的那条路径才许调（见文件头的放行闸）。
    * win32 上是空操作：那一侧没有闸，命令在 spawn 的那一刻就已经在跑了。
@@ -107,11 +162,14 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
     //    (第 8 轮审查 F3 实测 `alive=false` 而 `row.status=running`)。放行闸管的是「用户的
     //    命令什么时候开工」,证明不了「这个 ChildProcess 还活着」。
     let settled: { code: number | null } | null = null;
-    let subscriber: ((code: number | null) => void) | null = null;
+    // **多订阅者**:运行时(`attach`)订一个,创建期撤销那条路要等退出确认(`waitExit`)也订一个。
+    // 上一版只存一个 subscriber,后挂的会把前一个顶掉 —— 两条路同时在场时必然丢一个。
+    const subscribers = new Set<(code: number | null) => void>();
     const settle = (code: number | null) => {
       if (settled) return;                 // 结局只认第一个:error 之后往往还跟一个 exit
       settled = { code };
-      subscriber?.(code);
+      for (const cb of subscribers) cb(code);
+      subscribers.clear();
     };
     child.on("error", () => settle(null));
     child.on("exit", (code, signal) => settle(code ?? (signal ? null : 0)));
@@ -122,6 +180,16 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
       return { error: `哨兵起不来：${opts.command}` };
     }
     child.unref();
+    // **身份边条:这里到 return 之间一个 await 都没有**(见文件头)。写失败不致命 —— 它是
+    // 「库还没写进去」那一档的兜底,所以只出声,不把一次正常创建搞失败。
+    try {
+      writeFileSync(
+        monitorSpawnIdentityPath(opts.logPath),
+        JSON.stringify({ pid: child.pid, spawnedAtMs: Date.now() } satisfies SpawnIdentity),
+      );
+    } catch (e) {
+      console.error(`[ash] 哨兵身份边条写不下来 ${monitorSpawnIdentityPath(opts.logPath)}:`, e);
+    }
     // 闸的写端：**也要 unref**，不然 ash 的事件循环会被这个 pipe 吊着不退（`child.unref()`
     // 只管进程句柄，stdio 流是另一个 handle）。
     const gate = (child.stdio as Array<{
@@ -143,11 +211,28 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
         try { gate?.destroy?.(); } catch { /* 已经关了 */ }
       },
       onExit: (cb) => {
-        subscriber = cb;
         // **晚订阅也必须拿到已经发生的结局**(见上面 `settled` 的注释)。同步叫回来是安全的:
         // 调用方 `attach` 在调这一步之前已经把运行时登记好了,而回调自己是 `void finish(...)`。
-        if (settled) cb(settled.code);
+        if (settled) { cb(settled.code); return; }
+        subscribers.add(cb);
       },
+      kill: () => {
+        // 句柄这一侧:`child.kill()` 打的是这个 ChildProcess 自己。`detached` 的壳自成进程组,
+        // 所以连它派生的后代一起要靠组信号 —— 组号就是 pid,而**这里的所有权由句柄证明**,
+        // 不必再去问 ps 的启动时刻(第 9 轮审查 F3:身份不全时 pid 那条路不许下刀)。
+        if (settled) return;
+        try { if (!IS_WINDOWS) process.kill(-child.pid!, "SIGKILL"); } catch { /* 组已经空了 */ }
+        try { child.kill("SIGKILL"); } catch { /* 它已经没了 */ }
+      },
+      waitExit: (deadlineMs: number) => new Promise<boolean>((resolve) => {
+        if (settled) { resolve(true); return; }
+        const done = () => { subscribers.delete(listener); clearTimeout(timer); };
+        const listener = () => { done(); resolve(true); };
+        // **这一发不能 unref**:调用方正在 await 它。unref 掉的话,当它是事件循环里唯一的
+        // 待办时进程直接退出 —— 等待本身就没了(同一条坑见 `confirmReclaimed` 的注释)。
+        const timer = setTimeout(() => { done(); resolve(false); }, deadlineMs);
+        subscribers.add(listener);
+      }),
     };
   } catch (e) {
     return { error: `哨兵起不来：${e instanceof Error ? e.message : String(e)}` };

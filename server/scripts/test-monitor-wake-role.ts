@@ -48,6 +48,11 @@ const byUser: MonitorCaller = { kind: "external" };
   // 审查是**旁路回合**:它跑起来的时候,回合锁上记着的角色就是 reviewer(`claimTurn` 落的,
   // 审查结论的归属检查 `report_stage` 读的也是这一份)。台子**占到底不放**:放锁会把
   // `continueWhenIdle` 排的回调放出去,那就真去拉一个 agent 了。
+  //
+  // 那次审查也必须真的在进行:来源在入口一次抓全(`verifiedTurn` 连 run/round 一起抓),而
+  // **reviewer 回合却没有审查在进行**这一档现在是拒 —— 它绑出来的是「reviewer + 空来源」,
+  // 出口按普通任务判、唤醒时丢掉审查者的执行器配置(第 9 轮审查 F1 第 4 条)。
+  await reviewInFlight(taskId, "run-wake-role");
   runs.claimTurn(taskId, "reviewer");
 
   assert.equal(await sourceRole(taskId, await inTurn(taskId)), "reviewer",
@@ -61,6 +66,8 @@ const byUser: MonitorCaller = { kind: "external" };
   const monitorId = started.ok ? started.monitor.id : "";
   const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
   assert.equal(row.sourceRole, "reviewer", "哨兵行要记下是哪条会话起的");
+  assert.equal(row.sourceReviewRun, "run-wake-role", "连它属于哪一次审查一起记");
+  assert.equal(row.sourceReviewRound, 1, "轮次一起记 —— run.id 跨轮复用");
 
   // ② 它推的事件,入队时必须带着这个角色 —— 否则投递按默认的 single 叫执行者。
   await until("事件入队", async () => (await pendingOf(taskId)).length > 0);
@@ -165,6 +172,19 @@ const byUser: MonitorCaller = { kind: "external" };
   // ⑤-h 指定了「叫审查」却没有审查在进行 ⇒ 拒,别记一个绑不上的角色。
   const noReview = await sourceGate(plain, { kind: "external", wake: "reviewer" });
   assert.match(noReview.blocked ?? "", /没有正在进行的审查/, "绑不上的审查不许记");
+
+  // ⑤-i **权威角色是审查者、却没有审查在进行 ⇒ 同样拒**(第 9 轮审查 F1 第 4 条)。
+  //   上一版这一档绑成「reviewer + 空来源」:空来源在事件出口按**普通任务**判资格,唤醒时
+  //   `monitorWakeExecutor` 返回 null —— 原审查者的执行器配置整份丢掉(典型是 codex 审
+  //   claude 写的代码,唤醒后另起一条 claude 的 reviewer 会话,上下文一个字都接不上)。
+  //   外部显式指定 reviewer 本来就是拒的(⑤-h),权威角色这一档没有理由比它宽松。
+  const orphanReviewer = await makeTask();
+  runs.claimTurn(orphanReviewer, "reviewer");
+  const noRun = await sourceGate(orphanReviewer, await inTurn(orphanReviewer));
+  assert.match(noRun.blocked ?? "", /不在进行/, "审查者回合却没有那次审查 ⇒ 拒,不绑空来源");
+  assert.equal(noRun.role, null, "更不许记一个绑不上的 reviewer");
+  assert.equal(noRun.reviewRun, null);
+  runs.releaseTurn(orphanReviewer);
 }
 
 // ── ⑥ 审查进行中：终态任务上照样挂得上 ──────────────────────────────────────
@@ -428,10 +448,75 @@ const byUser: MonitorCaller = { kind: "external" };
   assert.equal((await db.select().from(monitors).where(eq(monitors.taskId, stale))).length, 0,
     "**一行都不许留** —— 留一行就是换绑");
 
+  // ⑨-f **来源在入口一次抓全,落库只核验**(第 9 轮审查 F1)。
+  //
+  // 上一版只把 token 和角色带下去,审查代次留到落库处**现查** —— 于是一份来自第 1 轮的请求在
+  // 队列里等到第 2 轮开始,落库时被绑上 `round=2`:上一轮的结果就这样成了下一轮的输入(实测
+  // `originalRequest.reviewRound=1` → `monitor.source_review_round=2`,HTTP 还是 200,命令
+  // 照常开跑,真实 `pushToTask` 把它送进了第 2 轮的待发托盘)。
+  //
+  // **令牌故意不换**:这一档要单独钉的就是「审查代次」这一维 —— 同一条审查会话续到下一轮时
+  // token 可能还对得上,光核令牌拦不住它。
+  const bumped = await makeTask();
+  await reviewInFlight(bumped, "run-bumped", { round: 1 });
+  runs.claimTurn(bumped, "reviewer");
+  await db.update(tasks).set({ activeTurnToken: "ROUND-1-TURN" }).where(eq(tasks.id, bumped));
+  let openBumped!: () => void;
+  const heldBumped = serialize(`task:${bumped}`, () => new Promise<void>((r) => { openBumped = r; }));
+  const fromRound1 = post(
+    bumped,
+    { command: "sleep 30", description: "第 1 轮提交的" },
+    { "x-ash-source-task-id": bumped, "x-ash-turn-token": "ROUND-1-TURN" },
+  );
+  await until("第 1 轮那个请求在队列里等着", async () => {
+    await new Promise((r) => setTimeout(r, 50));
+    return (await db.select().from(monitors).where(eq(monitors.taskId, bumped))).length === 0;
+  });
+  // 审查推到第 2 轮(真实 `nextRound` 复用同一个 run,只把 current_round 加一)。
+  await db.update(schema.freeReviewRuns).set({ currentRound: 2 })
+    .where(eq(schema.freeReviewRuns.id, "run-bumped"));
+  openBumped();
+  await heldBumped;
+  const bumpedRes = await fromRound1;
+  assert.equal(bumpedRes.status, 409, "第 1 轮提交的请求不许在第 2 轮里成立");
+  assert.match((await bumpedRes.json() as { error: string }).error, /不在进行|下一轮/,
+    "措辞要说清是「那一轮过去了」,并给出路(在现在这一轮里重挂一次)");
+  assert.equal((await db.select().from(monitors).where(eq(monitors.taskId, bumped))).length, 0,
+    "**一行都不许留** —— 留一行就是把上一轮的结果送进下一轮");
+  runs.releaseTurn(bumped);
+
+  // ⑨-g 同一件事的另一面:排队期间那次审查**收尾**了 ⇒ 也拒,不许降成「reviewer + 空来源」。
+  //   空来源在出口按普通任务判、唤醒时丢掉审查者的执行器配置(同 ⑤-i)。
+  const settledRun = await makeTask();
+  await reviewInFlight(settledRun, "run-settling", { round: 1 });
+  runs.claimTurn(settledRun, "reviewer");
+  await db.update(tasks).set({ activeTurnToken: "SETTLING-TURN" }).where(eq(tasks.id, settledRun));
+  let openSettling!: () => void;
+  const heldSettling = serialize(`task:${settledRun}`, () => new Promise<void>((r) => { openSettling = r; }));
+  const duringSettle = post(
+    settledRun,
+    { command: "sleep 30", description: "审查收尾前提交的" },
+    { "x-ash-source-task-id": settledRun, "x-ash-turn-token": "SETTLING-TURN" },
+  );
+  await until("那个请求在队列里等着", async () => {
+    await new Promise((r) => setTimeout(r, 50));
+    return (await db.select().from(monitors).where(eq(monitors.taskId, settledRun))).length === 0;
+  });
+  await db.update(schema.freeReviewRuns).set({ status: "passed" })
+    .where(eq(schema.freeReviewRuns.id, "run-settling"));
+  openSettling();
+  await heldSettling;
+  const settledRes = await duringSettle;
+  assert.equal(settledRes.status, 409, "那次审查已经结束,它的哨兵也就没有出口了");
+  assert.match((await settledRes.json() as { error: string }).error, /不在进行/);
+  assert.equal((await db.select().from(monitors).where(eq(monitors.taskId, settledRun))).length, 0,
+    "不许留一条「reviewer + 空来源」的行");
+  runs.releaseTurn(settledRun);
+
   await db.update(schema.freeReviewRuns).set({ status: "done" })
     .where(eq(schema.freeReviewRuns.id, "run-manual"));
   await stopMonitor(pickedRow.id, "测试收尾");
 }
 
 await teardown();
-console.log("✓ 哨兵与审查：醒来叫审查会话 / 角色跟着行走到投递参数 / 来源答不出来时要么说清要么拒、不静默当执行者 / 审查进行中终态任务上挂得上 / 叫醒时带回 pause 留下的交代 / 预约审查说得出在等哪几个哨兵 / 创建入口核验回合凭据、歧义带着出路拒、排队期间换了一轮就拒不换绑");
+console.log("✓ 哨兵与审查：醒来叫审查会话 / 角色跟着行走到投递参数 / 来源答不出来时要么说清要么拒、不静默当执行者 / 审查进行中终态任务上挂得上 / 叫醒时带回 pause 留下的交代 / 预约审查说得出在等哪几个哨兵 / 创建入口核验回合凭据、歧义带着出路拒、排队期间换了一轮或审查推了一轮都拒不换绑");

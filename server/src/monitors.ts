@@ -35,8 +35,9 @@ import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, tasks } from "./db/schema.js";
 import { reclaimMonitorProcess, reclaimState, settleReclaim } from "./monitor-reclaim-debts.js";
-import { readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
+import { clearSpawnIdentity, readLogTail, readSpawnIdentity, tailLines, type Tailer } from "./monitor-spawn.js";
 import { IS_WINDOWS } from "./platform.js";
+import { processStartedNear } from "./proc.js";
 import { pushToTask } from "./monitor-events.js";
 import { monitorWakeGate } from "./monitor-session.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -276,6 +277,9 @@ export async function finish(
     .set({ status, endedAt: now(), endedReason: reason, exitCode })
     .where(eq(monitors.id, monitorId));
   publish(row.taskId);
+  // 这一条已经落了终态:身份边条再也不会被读(它只服务「行还 running 而 pid 空着」那一档),
+  // 撤掉它免得在 run 目录里攒一堆没用的小文件。撤不掉无所谓(见 `clearSpawnIdentity`)。
+  if (row.kind === "ash" && row.logPath) clearSpawnIdentity(row.logPath);
   const code = exitCode === null ? "" : `，退出码 ${exitCode}`;
   const total = (await db.select({ events: monitors.events }).from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
   await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（共推送 ${total} 条事件）`);
@@ -474,6 +478,40 @@ async function reattachBlockedReason(row: Row): Promise<string | null> {
   return monitorWakeGate(task, { reviewRun: row.sourceReviewRun, reviewRound: row.sourceReviewRound });
 }
 
+/**
+ * **pid 还空着的那一行:拿身份边条把它认回来**(第 9 轮审查 F3)。
+ *
+ * 边条是 `spawn` 一返回就同步写下的 `{pid, 那一刻}`(见 monitor-spawn.ts 文件头):ash 恰好
+ * 死在「落了身份」和「回填 pid」之间时,库里只剩一行没有 pid 的记录 —— 而 win32 那一侧没有
+ * 放行闸,命令可能已经在跑。上一版到这里只能说一句「认不回来」,留下 id、命令、日志路径,
+ * 却**没有任何能用来定位那个进程的身份**(审查原话)。
+ *
+ * 认的判据是**代次**,不是存在性:`processStartedNear` 比的是「这个号上的进程是不是大约在
+ * 那一刻起来的」。三档各有出路:
+ *  · `same` ⇒ 连启动时刻一起回填,这一行从此跟正常接回的一样能停、能收、能记责任;
+ *  · `unqueryable`(ps 这一刻不可用)⇒ **只回填 pid**,启动时刻留空 —— 写一个猜的进去就是把
+ *    「无从比对」伪造成「已验证」,而那正是第 9 轮 F3 的那条判据。它随后落在 `unverifiable`
+ *    档上:看得见、停得掉、记得下责任,但谁都不许据此下刀;
+ *  · `different` ⇒ 这个号现在是另一个进程。一个号同时只能有一个进程,所以**当初那个壳一定
+ *    不在了** —— 不认,由调用方照实写掉。
+ */
+async function adoptSpawnIdentity(row: Row): Promise<Row | null> {
+  const side = readSpawnIdentity(row.logPath);
+  if (!side) return null;
+  const { verdict, startedAt } = processStartedNear(side.pid, side.spawnedAtMs);
+  if (verdict === "different") return null;
+  const adopted: Row = { ...row, pid: side.pid, pidStartedAt: startedAt };
+  try {
+    await db.update(monitors)
+      .set({ pid: adopted.pid, pidStartedAt: adopted.pidStartedAt })
+      .where(and(eq(monitors.id, row.id), eq(monitors.status, "running"), isNull(monitors.pid)));
+  } catch (e) {
+    // 回填不进去也要继续:本进程这一轮照旧按这份身份收尾/接回,比当它不存在强。
+    console.error(`[ash] 哨兵身份边条认回来了但写不进库 monitor=${row.id} pid=${side.pid}:`, e);
+  }
+  return adopted;
+}
+
 export async function reattachMonitors(): Promise<{ attached: number; lost: number }> {
   // 只认 ash 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
   // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
@@ -481,7 +519,8 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
   const rows = await db.select().from(monitors).where(and(eq(monitors.status, "running"), isAshKind));
   let attached = 0;
   let lost = 0;
-  for (const row of rows) {
+  for (const stored of rows) {
+    let row = stored;
     // **「问不出来」要跟「它不在了」分开**(第 6 轮审查 F1)。`unknown` = ps 这一问自己失败
     // 了,那就什么都不许声称:**照旧接回来**。这样它仍然在界面上、仍然能被点停、日志还在
     // 收,而 ps 恢复之后探活那一问会自己把结果判出来(见 `attach` 里的 liveness)。原来这里
@@ -498,14 +537,25 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
     //    已经在跑,而我们手里没有任何 pid 可以去认它 —— 照实说成「认不回来」。**未在
     //    Windows 真机验证**(根 AGENTS.md)。
     if (!row.pid) {
-      await finishOffline(row, "lost", IS_WINDOWS
-        ? "server 重启后认不回它了：起进程时没来得及记下 pid，这台机器上没有放行闸，那条命令可能还在后台跑着（日志路径见这一行）"
-        : "server 重启后判定它没有真正开工：起进程时没来得及记下 pid，命令停在放行闸前面就退了");
-      lost += 1;
-      continue;
+      const adopted = await adoptSpawnIdentity(row);
+      if (!adopted) {
+        // 边条没有(写盘那一刻就崩了),或者它指的那个号现在是另一个进程 —— 两种都没有可用的
+        // 身份,照实说。**win32 和 POSIX 的事实不同**:那一侧没有闸,命令可能已经开工过。
+        const side = readSpawnIdentity(row.logPath);
+        const where = side ? `（身份边条记的 pid=${side.pid} 现在是另一个进程）` : "（连身份边条都没留下）";
+        await finishOffline(row, "lost", IS_WINDOWS
+          ? `server 重启后认不回它了：起进程时没来得及记下 pid${where}，这台机器上没有放行闸，当初那个壳已经不在、但它派生的命令可能还在后台跑着（日志路径见这一行）`
+          : `server 重启后判定它没有真正开工：起进程时没来得及记下 pid${where}，命令停在放行闸前面就退了`);
+        lost += 1;
+        continue;
+      }
+      row = adopted;   // 认回来了:下面按正常身份走(接回 / 收尾 / 记责任),不再有特殊分支
     }
-    const state = reclaimState(row.pid, row.pidStartedAt);
-    if (state === "ours-alive" || state === "unknown") {
+    const state = reclaimState(row.pid!, row.pidStartedAt);
+    // `unverifiable`(当初没记下启动时刻 / 边条认回来时 ps 不可用)跟 `unknown` 同一档处理:
+    // **什么都不许声称,所以照旧接回来**。它仍然在界面上、仍然能被点停、日志还在收,而
+    // 「不敢下刀」这件事由回收层那一侧保证(第 9 轮审查 F3)。写成 `lost` 反而是撒谎。
+    if (state === "ours-alive" || state === "unknown" || state === "unverifiable") {
       // 它还有出口吗(归档 / 任务终态 / 起它的那次审查那一轮还在不在)。没有就收掉,别接回来
       // 继续烧。先接上再收尾:attach 把 tail 建起来,finish 的 drain 才读得到停服期间那一段,
       // 也由它负责杀进程。
@@ -530,7 +580,9 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       // 别人的(原来那个退没退证明不了);`ours-orphans` 组长退了、组里还有后代。后两档都要
       // 先把回收责任记下来 —— `fresh: false`,隔了一次重启不敢对孤儿组下刀,这个号可能已经
       // 被别人当组长用过(判据见 reclaimMonitorProcess 那张表)。
-      const outcome = await reclaimMonitorProcess(row, "server 重启后它的身份对不上", { fresh: false });
+      const outcome = await reclaimMonitorProcess(
+        { ...row, pid: row.pid! }, "server 重启后它的身份对不上", { fresh: false },
+      );
       // **先拿到最终 verdict,再写文案。** 这里不等补刀(deadline 0:只问一次状态,别把开机
       // 吊住),所以把它提到写卡片之前不会让启动变慢 —— 但顺序反过来就会写下一句假话:上一版
       // 无论结果是什么都先把「已记下回收责任」写进卡片,而债表写失败(`unaccounted`)时那句话

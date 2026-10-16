@@ -23,10 +23,14 @@
 //      对上 `tasks.active_turn_token`(agent 回连那条既有通道,`auth/middleware.ts`),由创建
 //      入口核验后以 `MonitorCaller` 交上来;
 //   ② **这一回合是什么角色**——`turnRole()`,`claimTurn` 落下的**运行时事实**(审查结论的
-//      归属检查 `report_stage` 读的也是它)。
-// 两截都**绑在被核验的那一轮上**(`VerifiedTurn`),并在落库处再核对一遍它仍然有效:创建要
-// 排队,而「核验过」不等于「排到它的时候还是那一轮」(第 8 轮审查 F2)。
-// 两截都答不出来时**一律不静默当执行者**:要么由调用方显式指定唤醒目标,要么拒绝这次创建。
+//      归属检查 `report_stage` 读的也是它);
+//   ③ **它属于哪一次、哪一轮审查**——核验那一刻这个任务上正在进行的那次 run 与 round。
+// 三截都**绑在被核验的那一轮上**(`VerifiedTurn`),并在落库处再核对一遍它仍然有效:创建要
+// 排队,而「核验过」不等于「排到它的时候还是那一轮」(第 8 轮审查 F2)。**第 ③ 截是第 9 轮
+// 审查 F1 加的**:前一版只带 token 和角色,审查代次留到落库处**现查** —— 于是一份来自第 1
+// 轮的请求在队列里等到第 2 轮开始,落库时被绑上 `round=2`,上一轮的结果就这样成了下一轮的
+// 输入(实测 `originalRequest.reviewRound=1` → `monitor.source_review_round=2`)。
+// 三截都答不出来时**一律不静默当执行者**:要么由调用方显式指定唤醒目标,要么拒绝这次创建。
 import { and, eq, exists, isNull, ne, sql } from "drizzle-orm";
 import { MONITOR_WAKE_TARGETS, monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
@@ -48,7 +52,12 @@ const WAKEABLE_ROLES = new Set<string>(MONITOR_WAKE_TARGETS);
  * 那是**另一轮**的答案:第 8 轮审查 F2 实测一份审查者提交的请求在队列里等到审查回合结束、
  * 实现者回合接上,于是哨兵被换绑成 `single`,通知连那次审查的执行器都没带上。
  *
- * 所以把被核验的三样一起带下去,到落库处再核对一遍它们仍然有效。
+ * 所以把被核验的那几样一起带下去,到落库处再核对一遍它们仍然有效。
+ *
+ * **`review` 这一样不是可选项**(第 9 轮审查 F1):光有 token 和角色时,「属于哪一次审查的
+ * 哪一轮」只能在落库处现查,而那一问的答案是**那一刻**的审查,不是发请求那一刻的 —— 两者
+ * 不同的时候,一份旧请求就被绑成了新一轮的输入。所以来源在入口一次抓全,之后**只核验、
+ * 不重算**:核验失败就拒,拒绝有出路(在新的那一轮里重挂一次),换绑没有任何人能发现。
  */
 export type VerifiedTurn = {
   /** 核验通过的那条任务(请求头 `x-ash-source-task-id`)。 */
@@ -57,6 +66,8 @@ export type VerifiedTurn = {
   token: string;
   /** 核验那一刻这一轮的角色(`turnRole` 的运行时事实)。null = 这一轮没表达角色。 */
   role: string | null;
+  /** 核验那一刻这个任务上正在进行的那次审查与轮次。null = 那一刻没有审查在进行。 */
+  review: { run: string; round: number } | null;
 };
 
 /**
@@ -71,9 +82,15 @@ export type MonitorCaller =
   /** 自报了回合身份、核验没过(token 过期 / 对不上 / 指的是别的任务)。**不许当作任何人**。 */
   | { kind: "unverified" };
 
-/** 入口核验通过之后,把「是哪一轮」连角色一起留存下来。 */
-export function verifiedTurn(taskId: string, token: string): VerifiedTurn {
-  return { taskId, token, role: turnRole(taskId) };
+/**
+ * 入口核验通过之后,把「是哪一轮」连角色、连审查代次一起留存下来。
+ *
+ * **三样都在同一刻抓**:之后的每一步只拿它们去核对,不再问「现在是谁、现在是哪一轮审查」。
+ */
+export async function verifiedTurn(taskId: string, token: string): Promise<VerifiedTurn> {
+  const role = turnRole(taskId);
+  const review = await reviewingRun(taskId);
+  return { taskId, token, role, review: review ? { run: review.id, round: review.round } : null };
 }
 
 /** 同上,直接给创建入口用的那一层。 */
@@ -89,9 +106,22 @@ const CALLER_UNVERIFIED =
  * 这一档必须单独拒,不能顺势按「现在这一轮」办:那就是把一个旧审查的请求换绑到新的实现者
  * 回合上(第 8 轮审查 F2)。拒绝是有出路的 —— 新回合里重挂一次就是了,而换绑没有任何人能发现。
  */
-const CALLER_EXPIRED =
+export const CALLER_EXPIRED =
   "这次创建获准代表的那一轮已经结束了（排到它的时候任务已经换了一轮），不把旧请求换绑到当前回合——"
   + "在现在这一轮里重挂一次";
+
+/**
+ * 回合是审查者,但**它那一次审查已经不在进行了**(收尾了,或者已经进到下一轮)。
+ *
+ * 必须单独拒,不能像上一版那样绑成「reviewer + 空来源」(第 9 轮审查 F1 第 4 条):空来源在
+ * 事件出口会按**普通任务**判资格、唤醒时 `monitorWakeExecutor` 返回 null,于是原审查者的
+ * 执行器配置整份丢掉 —— 一条属于已结束审查的哨兵,要么把一条没人要的通知投给实现者,要么
+ * 用任务自己的执行器另起一条 reviewer 会话。外部显式指定 reviewer 那一档本来就是拒的
+ * (下面 ③),权威角色这一档没有理由比它宽松。
+ */
+export const REVIEW_SOURCE_GONE =
+  "起这次创建的那一轮审查已经不在进行了（已经收尾，或者已经进到下一轮）——"
+  + "这个哨兵绑不到它上面，它醒来也没有人该被叫起；在现在这一轮审查里重挂一次";
 
 /**
  * 说不清要唤醒谁。**这一档必须拒**:猜错的两种后果都不便宜 —— 猜执行者会凭空烧一个回合、
@@ -180,10 +210,25 @@ export async function monitorSourceGate(
     return { blocked: CALLER_EXPIRED, role: null, reviewRun: null, reviewRound: null };
   }
   const turn = caller.kind === "turn" ? caller.role : null;
-  // 被状态拦下来时一定要查(那是豁免的唯一依据);回合是审查者时也要查(要记住是哪次);
-  // 没有权威角色时也要查 —— 「有没有审查在进行」正是歧义判定的依据。
-  const review = blocked || turn === "reviewer" || turn === null ? await reviewingRun(task.id) : null;
+  // 被状态拦下来时一定要问(那是豁免的唯一依据);回合是审查者时也要问(要记住是哪次);
+  // 没有权威角色时也要问 —— 「有没有审查在进行」正是歧义判定的依据。
+  const asksReview = !!blocked || turn === "reviewer" || turn === null;
+  // **核验过的那一路只核验、不重查**(第 9 轮审查 F1)。两边问的是不同的问题:
+  //  · `turn` ——「入口抓下的那一次、那一轮,**现在还在进行吗**」。不在了就拒,不换成新的
+  //    那一次 —— 换绑就是把上一轮的结果送进下一轮,而且没有任何人能发现;
+  //  · `external` —— 人在界面上点的那一下代表的就是**现在**,所以现查才是对的。它绑下来的
+  //    那一轮随后还会在落库那一刻被原子复核一遍(见 monitor-create.ts 的 arm CAS)。
+  const review = caller.kind === "turn"
+    ? (asksReview && caller.review
+      && await isReviewSourceActive(caller.review.run, caller.review.round)
+        ? { id: caller.review.run, round: caller.review.round }
+        : null)
+    : (asksReview ? await reviewingRun(task.id) : null);
   const reviewRun = review?.id ?? null;
+  // 权威角色是审查者,而那一次审查已经不在了 ⇒ 拒(见 `REVIEW_SOURCE_GONE`)。
+  if (turn === "reviewer" && !reviewRun) {
+    return { blocked: REVIEW_SOURCE_GONE, role: null, reviewRun: null, reviewRound: null };
+  }
   // 审查豁免:它放行的是「挂得上」,不是「叫谁」。
   const unblocked = blocked && reviewRun ? null : blocked;
   const bind = (role: string | null) => ({

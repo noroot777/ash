@@ -14,6 +14,13 @@
 //    需要交接,所以收得干净(行删掉、无债),而不是留一个追不回来的后台进程。
 // ③ **收不干净时不许冒充收干净。** 同一个失败点上让身份查询也不可用:那一刻什么都证明不了,
 //    于是**身份行必须留着**(它是唯一线索)、回收责任必须落盘,措辞照实说。
+// ⑤ **起了进程之后的每一个失败出口都归同一个收尾**(第 9 轮审查 F2)。那一段里任何一次
+//    await 抛出来,进程都已经存在、行写着 running、运行时却还没接手 —— 不会到期、不会收尾、
+//    不会有任何结束事件,除了重启或人工再没人碰它(实测 `stored.status=running` +
+//    `shellAliveAfterDeadline=true`)。所以钉的是「整段兜住」,不是某一个已知会抛的函数。
+// ⑥ **身份不全不许开工 / pid 空着的行要能被身份边条按代次认回来**(第 9 轮审查 F3)。
+// ⑦ **来源那一轮过去了就不上膛**(第 9 轮审查 F1):上膛是一条原子语句,它同时证明「行还
+//    running」「还是那一轮」「绑的那次审查还在那一轮上」—— 不是在每个新发现的 await 前补读。
 // ④ **闸本身的两面**:写端关闭(= ash 在放行前没了)⇒ 壳在 exec 之前退出(97),命令从未开工;
 //    放行 ⇒ 命令照常跑起来。少了后半句,一个「永远不放行」的实现也能骗过前三条。
 import assert from "node:assert/strict";
@@ -22,13 +29,14 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import {
-  db, isPidAlive, makeTask, monitors, insertMonitorRow, reattachMonitors,
-  root, schema, sleep, startMonitor, stopMonitor, teardown, until,
+  db, detachAllMonitors, inTurnCaller, isPidAlive, makeTask, monitors, insertMonitorRow,
+  reattachMonitors, reviewInFlight, root, runs, schema, sleep, startMonitor, stopMonitor,
+  teardown, until,
 } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
 
 const { dbClient } = await import("../src/db/index.js");
-const { spawnMonitor } = await import("../src/monitor-spawn.js");
+const { monitorSpawnIdentityPath, spawnMonitor } = await import("../src/monitor-spawn.js");
 const { abandonRegistration } = await import("../src/monitor-create.js");
 const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 const { beginTaskRevocation, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
@@ -257,6 +265,26 @@ function pausePidBackfill(): { reached: Promise<void>; open: () => void; restore
   return { reached, open: openGate, restore: () => { (dbClient as { execute: typeof real }).execute = real; } };
 }
 
+/**
+ * 让**上膛那一条 UPDATE** 抛一次,然后立刻还原真实数据库。
+ *
+ * 跟 `pausePidBackfill` 是一对:那个把它停在边界上(测撤销),这个让它**抛**(测所有权边界)。
+ * 只抛一次 —— 收尾自己还要写库,把收尾也打掉就测不出「收尾到底做了什么」。
+ */
+function failNextArm(): { restore: () => void } {
+  const real = dbClient.execute.bind(dbClient);
+  let fired = false;
+  (dbClient as { execute: typeof real }).execute = (async (statement: unknown) => {
+    const sql = typeof statement === "string" ? statement : String((statement as { sql?: string })?.sql ?? "");
+    if (!fired && /^update "monitors" set "pid"/i.test(sql)) {
+      fired = true;
+      throw new Error("INJECTED_ARM_WRITE_FAILURE");
+    }
+    return real(statement as Parameters<typeof real>[0]);
+  }) as typeof real;
+  return { restore: () => { (dbClient as { execute: typeof real }).execute = real; } };
+}
+
 // ⑥ **创建期点停:页面说停了,后台就不许随后才开工。**
 //
 // 上一版的现场:点停读到一条 pid 还空着的运行行 → 回收层按「没有待收资源」放过 → 写成
@@ -320,9 +348,19 @@ function pausePidBackfill(): { reached: Promise<void>; open: () => void; restore
   assert.match(created.ok === false ? created.error : "", /已经开始删除/);
   await sleep(300);
   assert.equal(existsSync(m.path), false, "撤销之后命令不许开工");
-  const row = (await db.select().from(monitors).where(eq(monitors.id, intent.id))).at(0)!;
-  assert.ok(row.pid, "pid 留在行上:删除那一侧要按资源责任核对,空 pid 会被它当成「没东西要收」");
-  await until("闸前那个壳被收掉", async () => !isPidAlive(row.pid!));
+  // **这里钉的是那条不变量本身,不是某一种实现**:撤销之后要么已经确认没有资源留下(那就
+  // 连这条意图行一起撤掉,界面上跟没点过一样),要么身份必须留着(pid 在行上 —— 删除那一侧
+  // 按资源责任核对,空 pid 会被它当成「没东西要收」)。两者缺一不可、不许都不成立。
+  const row = (await db.select().from(monitors).where(eq(monitors.id, intent.id))).at(0);
+  if (row) {
+    assert.ok(row.pid, "行留着的那一档:pid 必须在上面,它是那个壳唯一的线索");
+    await until("闸前那个壳被收掉", async () => !isPidAlive(row.pid!));
+  } else {
+    assert.equal(psCount(m.token), 0, "行撤掉的那一档:前提是进程已经确认不在了(句柄等到了它的 exit)");
+    assert.equal((await db.select().from(schema.monitorReclaimDebts)
+      .where(eq(schema.monitorReclaimDebts.monitorId, intent.id))).length, 0,
+    "确认收干净了才许撤行,所以也不该留下回收责任");
+  }
 }
 
 // ⑧ **壳在挂上运行时之前就退了**:结局要被恰好结算一次,不许假装还在盯。
@@ -355,5 +393,137 @@ function pausePidBackfill(): { reached: Promise<void>; open: () => void; restore
     eq(monitors.status, "running")))).length === 0, "更不许继续占着名额");
 }
 
-console.log("✓ 创建协议：登记失败什么都没起 / 回填失败不放行且命令从未开工 / 问不出身份时不冒充收干净 / 闸的两面 / pid 空着的意图行照实接回 / 创建期点停与撤销都不放行 / 壳先退了也恰好结算一次 均受回归保护");
+
+// ── ⑨ **起壳之后的任何异常都归同一个收尾**(第 9 轮审查 F2)─────────────────────────
+//
+// 这里打的是上膛那一条 UPDATE:它在所有权边界**里面**,抛出来的那一刻进程已经存在、行写着
+// running、而运行时还没接手。上一版的边界只接住了 spawn 和回填两处失败,新加的那次读库漏在
+// 外面 —— 于是留下一条永远 running、没有 tail、没有到期定时器的行。
+//
+// 钉这一条等于钉那个 try/catch 本身:把它去掉,`startMonitor` 会直接抛出去(下面这个 await
+// 当场 reject),后面每一行都到不了。
+{
+  const taskId = await makeTask();
+  const m = marker();
+  const injected = failNextArm();
+  let created: Awaited<ReturnType<typeof startMonitor>>;
+  try {
+    created = await startMonitor({ taskId, command: m.command, description: "上膛就抛的" });
+  } finally {
+    injected.restore();
+  }
+  assert.equal(created.ok, false, "交接没走完就不许报成功");
+  assert.match(created.ok === false ? created.error : "", /中途出错/, "要说清是这一次创建自己没走完");
+  await sleep(300);
+  assert.equal(existsSync(m.path), false, "**没放行 ⇒ 命令一个字都没跑过**");
+  await until("闸前那个壳被收掉", async () => psCount(m.token) === 0);
+  const rows = await db.select().from(monitors).where(eq(monitors.taskId, taskId));
+  assert.equal(rows.filter((r) => r.status === "running").length, 0,
+    "**一条 running 却没人管的行都不许留** —— 它不会到期、不会收尾,还占着每任务 4 个的名额");
+}
+
+// ── ⑩ **身份问不全就不放行**(第 9 轮审查 F3-A)──────────────────────────────────
+//
+// 只有号、没有代次 = 跨代认不回来。上一版照旧回填、照旧放行,于是留下一行 `pid_started_at`
+// 为空的身份,而回收判据在那一档上退化成存在性检查 —— 原命令跑完、号被系统复用之后,接回/
+// 清扫/重复停止三条路都会拿着别人的进程当我们的下刀。
+//
+// 要收掉的那个壳由**句柄**证明所有权(ps 这会儿正不可用),所以这一档照样收得干净。
+{
+  const taskId = await makeTask();
+  const m = marker();
+  const refused = await withPsOutage(
+    () => startMonitor({ taskId, command: m.command, description: "身份问不全的" }),
+  );
+  assert.equal(refused.ok, false, "问不出启动时刻就不许放行");
+  assert.match(refused.ok === false ? refused.error : "", /启动时刻/, "要说清是哪一样问不出来");
+  await sleep(300);
+  assert.equal(existsSync(m.path), false, "命令一个字都没跑过");
+  await until("壳被句柄收掉(ps 不可用也收得掉)", async () => psCount(m.token) === 0);
+  const rows = await db.select().from(monitors).where(eq(monitors.taskId, taskId));
+  assert.equal(rows.filter((r) => r.status === "running").length, 0, "不许留一条没人管的 running 行");
+}
+
+// ── ⑪ **来源那一轮过去了就不上膛**(第 9 轮审查 F1)──────────────────────────────
+//
+// 来源在入口一次抓全(这次创建代表的是第 1 轮),排队期间审查推到第 2 轮。上膛那一条语句同时
+// 断言「绑的那次审查还在那一轮上」,所以它改到 0 行 —— 命令不开工,而不是被当成第 2 轮的输入
+// 挂上去(审查实测:请求来自 round 1,行上却写着 `source_review_round=2`,命令照常开跑)。
+{
+  const taskId = await makeTask();
+  await reviewInFlight(taskId, "run-arm-round", { round: 1 });
+  runs.claimTurn(taskId, "reviewer");
+  const caller = await inTurnCaller(taskId);
+  const m = marker();
+  const paused = pausePidBackfill();
+  const creating = startMonitor({ taskId, command: m.command, description: "第 1 轮提交的", caller });
+  await paused.reached;
+  const intent = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+  assert.equal(intent.sourceReviewRound, 1, "台子前提:来源绑的是入口抓到的那一轮");
+  // 审查推到第 2 轮(真实流程里 `nextRound` 复用同一个 run,只把 current_round 加一)。
+  await db.update(schema.freeReviewRuns).set({ currentRound: 2 })
+    .where(eq(schema.freeReviewRuns.id, "run-arm-round"));
+  paused.open();
+  const created = await creating;
+  paused.restore();
+  runs.releaseTurn(taskId);
+
+  assert.equal(created.ok, false, "上一轮提交的请求不许在新一轮里成立");
+  assert.match(created.ok === false ? created.error : "", /不在进行|下一轮/,
+    "措辞要说清是「那一轮过去了」,而不是凭据不对");
+  await sleep(300);
+  assert.equal(existsSync(m.path), false, "**没上膛 ⇒ 没放行 ⇒ 命令一个字都没跑**");
+  await until("闸前那个壳被收掉", async () => psCount(m.token) === 0);
+  const rows = await db.select().from(monitors).where(eq(monitors.taskId, taskId));
+  assert.equal(rows.filter((r) => r.status === "running").length, 0, "不许留一条没人管的 running 行");
+  assert.equal(rows.filter((r) => r.sourceReviewRound === 2).length, 0,
+    "**更不许把它改绑到第 2 轮** —— 那就是把上一轮的结果送进下一轮");
+}
+
+// ── ⑫ **pid 空着的行:身份边条按代次认回来**(第 9 轮审查 F3-B)───────────────────
+//
+// ash 死在「落了身份」和「回填 pid」之间时,库里只剩一行没有 pid 的记录。win32 那一侧没有放行
+// 闸,命令可能已经在跑 —— 而上一版到这里只能说一句「认不回来」:id、命令、日志路径都在,却没有
+// 任何能定位那个进程的身份。现在 `spawn` 一返回就同步写下 `{pid, 这一刻}`,接回那一侧拿它
+// **按代次**认(不是「这个号上有人」就算)。
+{
+  const taskId = await makeTask();
+  const m = marker();
+  const started = await startMonitor({ taskId, command: m.command, description: "要被重启打断的" });
+  assert.ok(started.ok, `正常创建应该成功：${started.ok ? "" : started.error}`);
+  const monitorId = started.ok ? started.monitor.id : "";
+  const armed = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.ok(armed.pid && armed.pidStartedAt, "台子前提:正常创建落下的是完整身份");
+  assert.ok(existsSync(monitorSpawnIdentityPath(armed.logPath)), "台子前提:身份边条也在盘上");
+  await until("命令真的开工了", async () => existsSync(m.path));
+
+  // 模拟「ash 恰好死在 spawn 和回填 pid 之间」:行回到 pid 空着的样子,运行时全撤掉。
+  detachAllMonitors();
+  await db.update(monitors).set({ pid: null, pidStartedAt: null }).where(eq(monitors.id, monitorId));
+  const { attached } = await reattachMonitors();
+  const back = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(back.pid, armed.pid, "身份边条按代次把那个 pid 认回来了");
+  assert.equal(back.pidStartedAt, armed.pidStartedAt, "启动时刻一起回填 —— 这才是**完整**身份");
+  assert.equal(back.status, "running", "认回来的不许被写成 lost");
+  assert.ok(attached >= 1, "它该算接回成功");
+  await stopMonitor(monitorId, "测试收尾");
+  await until("点停真的收掉了它", async () => psCount(m.token) === 0);
+
+  // 反面:边条指的那个号现在是**另一个进程**(锚差了几分钟)⇒ 一律不认,更不许去碰它。
+  const other = await makeTask();
+  const monId = await insertMonitorRow(other);
+  const row0 = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
+  writeFileSync(
+    monitorSpawnIdentityPath(row0.logPath),
+    JSON.stringify({ pid: process.pid, spawnedAtMs: Date.now() }),
+  );
+  await reattachMonitors();
+  const after = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
+  assert.equal(after.pid, null, "锚对不上就不认 —— 存在性不是身份");
+  assert.equal(after.status, "lost");
+  assert.match(after.endedReason ?? "", /现在是另一个进程/, "照实说它为什么认不回来");
+  assert.equal(isPidAlive(process.pid), true, "**绝不许去碰那个进程** —— 它不是我们的");
+}
+
+console.log("✓ 创建协议：登记失败什么都没起 / 回填失败不放行且命令从未开工 / 问不出身份时不冒充收干净 / 闸的两面 / pid 空着的行照实接回或按代次认回来 / 创建期点停与撤销都不放行 / 壳先退了也恰好结算一次 / 起壳之后每个失败出口都有人收尾 / 身份不全不放行 / 来源那一轮过去了就不上膛 均受回归保护");
 await teardown();

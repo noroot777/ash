@@ -17,6 +17,10 @@
 //    另一档,两者必须分别测。
 // ⑤ **说法要跟事实同步**:接回时那句「已记下回收责任」必须由最终 verdict 决定。先写肯定、
 //    再在 server 日志里纠正不算纠正 —— 卡片上那句话会一直留着(第 7 轮审查 N1)。
+// ⑦ **身份不全不等于有权回收。** `pid_started_at` 为空的行(存量行,或 pid 回填那一刻 ps 恰好
+//    答不出启动时刻的行)原来在 `processIdentity` 里走到 `same` —— 「没什么可比对的,那就是同
+//    一个」⇒ `ours-alive` ⇒ 下刀。那条路上**「这个号上有进程活着」被当成了「已证明有权回收
+//    它」**:原命令早已跑完、号被系统复用时,打的是别人的进程(第 9 轮审查 F3)。
 // ⑥ **身份这一问只许查一次,而且三档都要带回来。** 判定在 `proc.ts` 的 `processIdentity`:
 //    `ps -o lstart` 跟随 locale,原文不等**不等于**不是同一个进程。上一版在原文不等时又查了
 //    一次 ps 去兼容 locale,第二次恰好失败就被写成确证的「这个号现在是别人」—— 一条还在跑的
@@ -568,5 +572,36 @@ const zhLstart = (lstart: string): string => {
   await db.delete(schema.monitorReclaimDebts).where(eq(schema.monitorReclaimDebts.monitorId, row.id));
 }
 
+{
+  // ⑦ **身份不全不等于有权回收**(第 9 轮审查 F3-A,判定本体在 `proc.ts`:缺原代次时留
+  //    「证不出」而不是「就是同一个」)。现场:行上只记得一个号、没记启动时刻,而这个号上
+  //    现在确实有个顽固进程 —— 它不是我们起的。
+  const taskId = await makeTask({ status: "done" });
+  const stranger = spawn("sh", ["-lc", STUBBORN], { detached: true, stdio: "ignore" });
+  stranger.unref();
+  const pid = stranger.pid!;
+  await until("旁路进程起来了", async () => isProcessGroupAlive(pid));
+  assert.equal(reclaimState(pid, null), "unverifiable",
+    "「号上有进程、但当初没记启动时刻」必须自成一档 —— 折进 ours-alive 就是拿「存在」当「所有权」");
+
+  const monId = await insertMonitorRow(taskId, { status: "stopped", pid, pidStartedAt: null });
+  assert.equal(await debtRow(monId), undefined, "现场前提:账本上还没人认它");
+  await deleteTaskCompletely(taskId);
+  const debt = await debtRow(monId);
+  assert.ok(debt, "证不出身份恰恰最该留责任:这一行马上就没了,pid 是它最后的线索");
+  assert.equal(debt.pid, pid);
+  assert.match(debt.reason, /证不出|不敢下刀/,
+    "账上要写清这一档是「证不出是原来那个」—— 既不是「还活着」(那是在声称所有权)也不是「别人的」");
+  assert.equal(isProcessGroupAlive(pid), true, "**一刀都不许下**:证不出是原来那个就不许杀");
+
+  // 身份补全(例如运行时后来把真实启动时刻回填到了债上)= 这一刻第一次证得出 ⇒ 才轮到补杀销账。
+  await db.update(schema.monitorReclaimDebts)
+    .set({ pidStartedAt: inspectProcess(pid)?.startedAt ?? null })
+    .where(eq(schema.monitorReclaimDebts.monitorId, monId));
+  await sweepMonitorReclaimDebts();
+  assert.equal(isProcessGroupAlive(pid), false, "身份补全之后才收得掉它");
+  assert.equal(await debtRow(monId), undefined, "确认收干净了才销账");
+}
+
 await teardown();
-console.log("✓ 撤销期不许创建 / 枚举失败整笔不走 / 停止返回前确认退出或留下持久回收责任 / 接回问同一份出口资格 / 点停也走记责那一圈 / 删除按资源责任核对而非卡片状态 / 另一个进程与问不出来分档记责、都不下刀 / 组长退出按整组收 / 开机重收「已停止但没确认退出」/ ps 不可用时接回不撒谎、删除不丢责任、恢复后收掉 / 落盘失败走补记梯子 / 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说");
+console.log("✓ 撤销期不许创建 / 枚举失败整笔不走 / 停止返回前确认退出或留下持久回收责任 / 接回问同一份出口资格 / 点停也走记责那一圈 / 删除按资源责任核对而非卡片状态 / 另一个进程与问不出来分档记责、都不下刀 / 组长退出按整组收 / 开机重收「已停止但没确认退出」/ ps 不可用时接回不撒谎、删除不丢责任、恢复后收掉 / 落盘失败走补记梯子 / 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说 / 身份不全只留「证不出」:记责、不下刀,补全后才收");

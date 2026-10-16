@@ -49,20 +49,27 @@ export function inspectProcess(pid: number): ProcessInfo | null {
 }
 
 /**
- * 「这个 pid 还是当初那个进程吗」的三种答案。**「问不出来」是独立的一档**:它既不是
- * 「是别人」,也不是「它已经退了」。
+ * 「这个 pid 还是当初那个进程吗」的四种答案。**「问不出来」和「无从比对」各占一档**:
+ * 它们既不是「是别人」,也不是「它已经退了」。
  *
  * 折成布尔的代价不是理论上的:上一版这里只有 `isSameProcess`,而哨兵那一层在原文不相等时
  * 会**再调它一次**去兼容 locale —— 第一次查成功、第二次查失败(ps 这一刻不可用),返回的
  * false 就被读成确证的「这个号现在是别人」,于是一条还在跑的哨兵被接回判成 `lost`、随后
  * 被回收清扫按债杀掉(第 7 轮审查 F1 实测 `SECOND_QUERY_FAILURE {"answer":"not-ours"}`)。
+ *
+ * `unverifiable` 是第 9 轮审查 F3 加的那一档:**当初没记启动时刻**。那时这一问退化成
+ * 「这个号上现在有进程吗」,它证明得了存在、证明不了**代次** —— pid 会被复用,原命令跑完
+ * 之后这个号上的新进程照样满足存在性。老使用方(拿锁、接管 agent)要的本来就是存在性,所以
+ * 布尔投影 `isSameProcess` 把这一档照旧算 true;而**跨代回收**(哨兵那一摊)必须把它当
+ * 「不知道」——「看见一个进程活着」不等于「已证明有权回收它」(第 9 轮审查 F3)。
  */
-export type ProcessIdentity = "same" | "different" | "unqueryable";
+export type ProcessIdentity = "same" | "different" | "unverifiable" | "unqueryable";
 
 /**
  * 身份判定的单点:**一次 ps 快照,然后纯比较**。
  *
- * - `expectedStartedAt` 为空 ⇒ 调用方当初没记启动时刻,只能退化成存在性检查(查到就算对上)。
+ * - `expectedStartedAt` 为空 ⇒ 调用方当初没记启动时刻,**这一问比不出代次**(`unverifiable`,
+ *   见上面那一档)。查到了就算对上的旧写法在这里被拆开:存在性由调用方自己决定够不够用。
  * - 原文相等 ⇒ 对上。这是绝大多数情况的快路径。
  * - 原文不等 ⇒ **不等于不是同一个**:`ps -o lstart` 跟随 locale,旧 server 可能把
  *   「五 10月/ 16 17:50:16 2026」存进了 DB,而现在是 `LC_ALL=C` 的「Fri Oct 16 17:50:16 2026」。
@@ -74,7 +81,7 @@ export type ProcessIdentity = "same" | "different" | "unqueryable";
 export function processIdentity(pid: number, expectedStartedAt?: string | null): ProcessIdentity {
   const info = inspectProcess(pid);
   if (!info) return "unqueryable";
-  if (!expectedStartedAt) return "same";
+  if (!expectedStartedAt) return "unverifiable";
   if (info.startedAt === expectedStartedAt) return "same";
   const expectedMs = parseStartedAt(expectedStartedAt);
   if (expectedMs === null || info.startedAtMs === null) return "unqueryable";
@@ -82,12 +89,41 @@ export function processIdentity(pid: number, expectedStartedAt?: string | null):
 }
 
 /**
- * 上面那一份的布尔投影:`same` 为真,`different` 和 `unqueryable` 都为假 —— 跟这个函数
- * 原来的语义逐字一致(查不到一律按「不是」处理,宁可多做一次恢复)。
+ * 上面那一份的布尔投影:`same` 和 `unverifiable` 为真,`different` 和 `unqueryable` 为假
+ * —— 跟这个函数原来的语义**逐字一致**(查不到按「不是」处理、没记启动时刻就退化成存在性
+ * 检查)。使用方是拿锁(singleton)、接管 agent(detached/reattach)、claude 投影探活那几条:
+ * 它们问的就是存在性,而且各自的「判不出来」后果都是多做一次恢复,不是**杀一个进程**。
  *
- * **要区分「不是」和「问不出来」的调用方必须直接用 `processIdentity`**,不要在这个布尔
- * 外面自己补第二次查询。
+ * **要区分「不是」「问不出来」「无从比对」的调用方必须直接用 `processIdentity`**(哨兵的
+ * 跨代回收就是),不要在这个布尔外面自己补第二次查询。
  */
 export function isSameProcess(pid: number, expectedStartedAt?: string | null): boolean {
-  return processIdentity(pid, expectedStartedAt) === "same";
+  const verdict = processIdentity(pid, expectedStartedAt);
+  return verdict === "same" || verdict === "unverifiable";
+}
+
+/**
+ * 「这个号上的进程,是不是**大约在那一刻**起来的那一个」。
+ *
+ * 判据跟上面那一份是同一个(一次 ps 快照、纯比较),只是**比对物换成一个时间锚**:调用方
+ * 手里只有「我在这一刻 spawn 了它」,还没来得及问 ps 要启动时刻。
+ *
+ * 用在哨兵创建协议的恢复那一侧(第 9 轮审查 F3):`spawn` 返回 pid 的那一刻先把
+ * `{pid, 这一刻}` 同步写到盘上,所以就算 ash 在回填 pid 之前整个没了,重启后仍然能拿这个
+ * 锚去认它 —— **而且是真的认代次**,不是退化成「这个号上有人」。
+ *
+ * `toleranceMs` 的来历:`ps -o lstart` 的精度是秒,spawn 到写盘之间还隔着几毫秒,所以 ±2 秒
+ * 是「同一次 spawn」的合理界。超出这个界的只有两种:这个号已经被复用(`different`),或者
+ * 根本不是那次 spawn 留下的。
+ */
+export function processStartedNear(
+  pid: number, anchorMs: number, toleranceMs = 2_000,
+): { verdict: ProcessIdentity; startedAt: string | null } {
+  const info = inspectProcess(pid);
+  if (!info || info.startedAtMs === null) return { verdict: "unqueryable", startedAt: null };
+  // **同一份快照里把启动时刻一起交出去**:认下来的调用方正要把它存成这条记录的代次,
+  // 让它再查一次就等于在两份快照之间留一道缝(同一条理由见 `processIdentity` 的注释)。
+  return Math.abs(info.startedAtMs - anchorMs) <= toleranceMs
+    ? { verdict: "same", startedAt: info.startedAt }
+    : { verdict: "different", startedAt: null };
 }

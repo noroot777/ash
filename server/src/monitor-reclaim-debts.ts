@@ -74,16 +74,22 @@ import { now } from "./util.js";
  * - `not-ours` = 这个号现在是**另一个**进程(ps 答出来了,启动时刻**确实**对不上;locale 不同
  *   由 `processIdentity` 在同一份快照上的时间戳比较兜住,不会被误报成这一档)。不许杀 —— 那是别人的进程。
  *
- * 剩下这两档**都不许据此销账**(也都不许下刀):
+ * 剩下这三档**都不许据此销账**(也都不许下刀):
  * - `unknown` = **身份这一问自己失败了**:`kill(pid,0)` 说它活着,ps 却什么都答不出来
  *   (`inspectProcess` 把「不存在」和「ps 不可用」都返回 null)。拿它当「已经退了」就是把
  *   最后那一份责任丢掉(第 4 轮审查 F1),拿它当「不是我们的」就是在界面上撒谎
  *   (第 6 轮审查 F1)。
+ * - `unverifiable` = **当初没记下启动时刻**,所以这一问**无从比对**:能证明的只有「这个号
+ *   上现在有进程」。这一档必须跟 `ours-alive` 分开 —— 第 9 轮审查 F3:存量行(或任何一条
+ *   `pid_started_at` 为空的行)原来会走到 `same` → `ours-alive` → **发击杀信号**,而那条
+ *   路上「看见一个进程活着」被当成了「已证明有权回收它」。原命令早已跑完、号被系统复用时,
+ *   下刀打的就是别人的进程(接回、清扫、重复停止三条路都消费这一档)。
  * - `not-ours` 同样不销账:我们能证明的只有「这个号上现在是别人」,证明不了**原来那个**
- *   已经退出 —— 它可能带着后代留在这一组里,只是组长的号被别人占了。两档的区别只在于
+ *   已经退出 —— 它可能带着后代留在这一组里,只是组长的号被别人占了。三档的区别只在于
  *   **记下来的理由**和日志措辞,不在于要不要负责(`settleDebt` 会按档说清楚)。
  */
-export type ReclaimState = "gone" | "ours-alive" | "ours-orphans" | "not-ours" | "unknown";
+export type ReclaimState =
+  | "gone" | "ours-alive" | "ours-orphans" | "not-ours" | "unverifiable" | "unknown";
 
 /** 这一档是「确认收干净了」吗 —— **只有它能销账**。 */
 const isReclaimedState = (state: ReclaimState): boolean => state === "gone";
@@ -100,11 +106,23 @@ const isReclaimedState = (state: ReclaimState): boolean => state === "gone";
  *
  * **只在 `kill(pid,0)` 已经说它活着时调**,所以 `unqueryable` 只剩一种解释:ps
  * (或 Windows 上那段 PowerShell)自己没答出来。
+ *
+ * `unverifiable`(当初没记启动时刻)**单独传上去**,不许折进 `ours`:见 `ReclaimState` 那一档。
  */
-function identityOf(pid: number, recorded: string | null): "ours" | "theirs" | "unqueryable" {
+function identityOf(
+  pid: number, recorded: string | null,
+): "ours" | "theirs" | "unverifiable" | "unqueryable" {
   const verdict = processIdentity(pid, recorded);
-  return verdict === "same" ? "ours" : verdict === "different" ? "theirs" : "unqueryable";
+  if (verdict === "same") return "ours";
+  if (verdict === "different") return "theirs";
+  return verdict === "unverifiable" ? "unverifiable" : "unqueryable";
 }
+
+/** 身份那一问的四档 → 这一摊的档位。**只有 `ours` 这一档敢下刀。** */
+const stateOfIdentity = (who: ReturnType<typeof identityOf>): ReclaimState =>
+  who === "ours" ? "ours-alive"
+    : who === "theirs" ? "not-ours"
+      : who === "unverifiable" ? "unverifiable" : "unknown";
 
 export function reclaimState(pid: number, pidStartedAt: string | null): ReclaimState {
   if (!IS_WINDOWS) {
@@ -112,15 +130,13 @@ export function reclaimState(pid: number, pidStartedAt: string | null): ReclaimS
     // 组里有人。组长还在吗 —— 这一问要用 `kill(pid,0)` 而不是 ps:ps 失败时 null 会被
     // 当成「组长已退」,于是一整组陌生进程被说成我们的后代。
     if (!isPidAlive(pid)) return "ours-orphans";
-    const who = identityOf(pid, pidStartedAt);
-    return who === "ours" ? "ours-alive" : who === "theirs" ? "not-ours" : "unknown";
+    return stateOfIdentity(identityOf(pid, pidStartedAt));
   }
   // win32 没有进程组这回事,`killTree` 打的是 `taskkill /T` 那棵树,能问的只有这个 pid 本身。
   // 用的还是原来那两个原语(pid 存活 + 身份),只是把「问不出来」从「身份对不上」里拆了出来
   // —— **这里不新增任何跨平台断言**(没有 Windows 真机实证之前不冒充;约定见根 AGENTS.md)。
   if (!isPidAlive(pid)) return "gone";
-  const who = identityOf(pid, pidStartedAt);
-  return who === "ours" ? "ours-alive" : who === "theirs" ? "not-ours" : "unknown";
+  return stateOfIdentity(identityOf(pid, pidStartedAt));
 }
 
 /**
@@ -247,6 +263,7 @@ export type ReclaimOutcome =
  * | `ours-alive` | 记责任 + 杀 | 记责任 + 杀(身份对得上,隔多久都是我们的) |
  * | `ours-orphans` | 记责任 + 杀(组长刚死,组里剩的只能是它的后代) | 记责任、**不杀**(隔了一次重启,pid 可能已经被别人当组长用过) |
  * | `not-ours` | 记责任、不杀(那是别人的进程) | 同左 |
+ * | `unverifiable` | 记责任、不杀(没记启动时刻,证不出代次) | 同左 —— **第 9 轮加的就是这一格**:原来它折进 `ours-alive` 就杀 |
  * | `unknown` | 记责任、不杀(身份问不出来) | 同左 —— **第 6 轮改的就是这一格**:原来它在这一列直接返回空 |
  */
 export async function reclaimMonitorProcess(
@@ -276,6 +293,8 @@ function stateNote(state: ReclaimState): string {
   if (state === "ours-alive") return "还活着";
   if (state === "ours-orphans") return "组长已退、组里还有后代";
   if (state === "not-ours") return "这个号现在是另一个进程，原进程退出无法确认";
+  if (state === "unverifiable")
+    return "这个号上有进程，但当初没记下启动时刻，证不出是不是原来那个（不敢下刀）";
   return "进程查询不可用，判不出身份";
 }
 
@@ -380,11 +399,12 @@ async function settleDebt(monitorId: string): Promise<boolean> {
       return true;
     }
   }
-  // 剩下三档都是**不敢杀、也不敢销账**:
+  // 剩下四档都是**不敢杀、也不敢销账**:
   //  · `ours-orphans` —— 组长已死、组里还有人,但隔了一次重启就跟「别人拿这个号当过组长」
   //    分不开(同一个判据见 `reclaimMonitorProcess` 的 `fresh`);
   //  · `not-ours` —— 这个号现在是别人的,而**原来那个**退没退证明不了(它可能带着后代还在
   //    这一组里,只是组长的号被占了);
+  //  · `unverifiable` —— 当初没记启动时刻,这个号上现在有人也证不出是不是它(第 9 轮 F3);
   //  · `unknown` —— ps 自己没答出来,什么都不许声称。
   // 杀错人不可逆,而丢掉这一笔就等于再也没人知道这件事。留着,每次开机再问一遍 —— 账上
   // 写清楚是哪一种不确定,别让人事后分不出来。

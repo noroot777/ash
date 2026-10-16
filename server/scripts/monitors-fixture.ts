@@ -63,10 +63,14 @@ const monitorSession = await import("../src/monitor-session.js");
  *
  * 回合本身由调用方先 `runs.claimTurn` 占好(角色从那里取);令牌这里顺手落库 —— 生产里它由
  * orchestrator 每起一轮换一个,台子上只要「有一个、而且对得上」。
+ *
+ * **审查代次也在这一刻抓**(`verifiedTurn` 自己去查正在进行的那次 run):所以要测 reviewer
+ * 来源的用例必须先 `reviewInFlight(...)` 把那次审查摆上 —— 没有审查在进行的 reviewer 回合
+ * 现在是**拒**(第 9 轮审查 F1 第 4 条),不再绑成「reviewer + 空来源」。
  */
 export async function inTurnCaller(taskId: string, token = `turn-${taskId}`) {
   await db.update(tasks).set({ activeTurnToken: token }).where(eq(tasks.id, taskId));
-  return monitorSession.turnCaller(monitorSession.verifiedTurn(taskId, token));
+  return monitorSession.turnCaller(await monitorSession.verifiedTurn(taskId, token));
 }
 
 await ensureSchema();

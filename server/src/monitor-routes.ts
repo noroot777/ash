@@ -36,10 +36,11 @@ async function callerOf(c: Context, taskId: string, wake?: string | null): Promi
   const actor = actorOf(c);
   const agent = actor.kind === "agent" ? actor : await agentActor(c);
   const token = c.req.header("x-ash-turn-token")?.trim() ?? "";
-  // 核验通过时**带上被核验的那一轮**(令牌 + 此刻的角色),而不是只说一句「核验过了」:创建
-  // 要在 `task:<id>` 队列里排队,落库处会拿这三样再核对一遍(见 monitor-session.ts 的
-  // `VerifiedTurn`)。`agentActor` 比对的正是这个 header 里的令牌,所以两处说的是同一轮。
-  if (agent?.taskId === taskId && token) return turnCaller(verifiedTurn(taskId, token));
+  // 核验通过时**带上被核验的那一轮**(令牌 + 此刻的角色 + 此刻的审查代次),而不是只说一句
+  // 「核验过了」:创建要在 `task:<id>` 队列里排队,落库处会拿这几样再核对一遍(见
+  // monitor-session.ts 的 `VerifiedTurn`)。`agentActor` 比对的正是这个 header 里的令牌,
+  // 所以两处说的是同一轮。
+  if (agent?.taskId === taskId && token) return turnCaller(await verifiedTurn(taskId, token));
   const claimed = !!(c.req.header("x-ash-source-task-id")?.trim() || token);
   if (!agent && claimed) return { kind: "unverified" };
   return { kind: "external", wake };
@@ -158,7 +159,7 @@ export function mountMonitorRoutes(api: Hono): void {
       const actor = actorOf(c);
       const agent = actor.kind === "agent" ? actor : await agentActor(c);
       const hookToken = c.req.header("x-ash-turn-token")?.trim() ?? "";
-      const turn = agent?.taskId && hookToken ? verifiedTurn(agent.taskId, hookToken) : null;
+      const turn = agent?.taskId && hookToken ? await verifiedTurn(agent.taskId, hookToken) : null;
       const decision = await claudeMonitorHookDecision(input, turn, ownerIdOf(agent ?? actor));
       // 上面那一问已经确认是 Monitor 了，所以这里一定有决定；真拿到 null 也当内部异常
       // 处理，绝不空手放行。

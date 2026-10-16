@@ -12,6 +12,7 @@ import {
   MONITOR_MAX_PER_TASK,
   MONITOR_MAX_TIMEOUT_MS,
   MONITOR_MIN_TIMEOUT_MS,
+  MONITOR_WAKE_TARGETS,
 } from "@ash/shared/monitor";
 import { call, fail, ok } from "../runtime.js";
 
@@ -35,10 +36,16 @@ server.registerTool(
       description: z.string().optional().describe("一句话说明你在盯什么（会出现在每条事件的抬头和界面上）。省略则用命令本身"),
       cwd: z.string().optional().describe("工作目录。缺省＝这个任务自己的工作目录"),
       timeoutMs: z.number().optional().describe(`盯多久（毫秒），缺省 ${minutes(MONITOR_DEFAULT_TIMEOUT_MS)}，上限 ${minutes(MONITOR_MAX_TIMEOUT_MS)}。到点杀掉进程并推一条收尾事件`),
+      // 给自己挂哨兵时**不用管这个**：你在哪一轮里挂的，醒来就叫哪一轮（服务端按运行时事实判，
+      // 这个字段那时一律忽略）。它只为「往**别的**任务上挂」那一路留着 —— 那个任务上同时有一次
+      // 审查在进行时，服务端判不出该叫实现者还是那次审查，会带着「指定一个再挂」拒掉；没有这个
+      // 字段，那句出路就是一条死路（第 9 轮审查 N1）。
+      wake: z.enum(MONITOR_WAKE_TARGETS as unknown as [string, ...string[]]).optional()
+        .describe("往别的任务上挂、而那个任务上有审查在进行时，说清醒来叫谁：single=叫实现者 / reviewer=叫那次审查。给自己挂时不必传（按你当下这一轮判）"),
     },
   },
-  async ({ taskId, command, description, cwd, timeoutMs }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/monitors`, { command, description, cwd, timeoutMs })); }
+  async ({ taskId, command, description, cwd, timeoutMs, wake }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/monitors`, { command, description, cwd, timeoutMs, wake })); }
     catch (e) { return fail(e); }
   },
 );
