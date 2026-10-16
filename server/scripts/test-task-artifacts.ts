@@ -9,6 +9,7 @@
 // 图，mtime 比任务开跑还新，照样不算产物」。
 // 跑：npm -w server run test:task-artifacts
 import assert from "node:assert/strict";
+import { eq } from "drizzle-orm";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,14 +22,28 @@ requireTmpDb("task-artifacts");
 
 const repo = join(stage, "repo");
 const TASK_ID = "Art1FactTest";
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const write = (path: string, body: string | Buffer = png) => {
-  mkdirSync(join(repo, path, ".."), { recursive: true });
-  writeFileSync(join(repo, path), body);
+const gitIn = (root: string, args: string[], env: Record<string, string> = {}) =>
+  execFileSync("git", ["-C", root, ...args], { encoding: "utf8", env: { ...process.env, ...env } });
+const git = (...args: string[]) => gitIn(repo, args);
+const writeIn = (root: string, path: string, body: string | Buffer = png) => {
+  mkdirSync(join(root, path, ".."), { recursive: true });
+  writeFileSync(join(root, path), body);
 };
+const write = (path: string, body: string | Buffer = png) => writeIn(repo, path, body);
 /** 把某个文件的 mtime 挪到指定时刻——「任务开跑之前 / 之后写的」得能造出来。 */
-const touchAt = (path: string, at: Date) => utimesSync(join(repo, path), at, at);
+const touchAtIn = (root: string, path: string, at: Date) => utimesSync(join(root, path), at, at);
+const touchAt = (path: string, at: Date) => touchAtIn(repo, path, at);
+/** 一个刚初始化好、带忽略规则的仓库——共享工作区那一段要在自己的仓库里造场景。 */
+const initRepo = (root: string, ignore: string) => {
+  mkdirSync(root, { recursive: true });
+  gitIn(root, ["init", "-q", "-b", "main"]);
+  gitIn(root, ["config", "user.name", "Artifacts test"]);
+  gitIn(root, ["config", "user.email", "artifacts@example.test"]);
+  gitIn(root, ["config", "commit.gpgSign", "false"]);
+  gitIn(root, ["config", "core.hooksPath", join(stage, "hooks")]);
+  writeIn(root, ".gitignore", ignore);
+};
 
 try {
   mkdirSync(repo, { recursive: true });
@@ -145,7 +160,130 @@ try {
   assert.equal(fresh.since, null);
   assert(!fresh.artifacts.some((a) => a.origin === "ignored"), "没有开跑时刻就不敢认被忽略的文件");
 
+  // ── 共享工作区：各任务只认自己在跑的那几段 ────────────────────────────────
+  // `useWorktree=false` 的任务直接在项目主仓干活，同一个目录上先后（乃至同时）跑过的
+  // 任务都往那儿写东西。判据写成「开跑之后」时的症状不是少几个，而是**每个任务拿到
+  // 同一份清单**：实测 daily-report 上三个 6 月的任务各自都列出 400 条（撞上限），其中
+  // 395 条是另一个任务三个月后写进 `.worktrees/<它>/videos/` 的东西，而它们自己那几个
+  // 产物反倒被挤出去了。所以这一段钉三件事：窗口有上限、别人的 worktree 整个排除、
+  // 同一个目录上的两个任务拿到的是两份不同的清单。
+  const shared = join(stage, "shared");
+  initRepo(shared, "output/\nnode_modules/\n");
+  writeIn(shared, "art/底图.png");
+  gitIn(shared, ["add", "."]);
+  gitIn(shared, ["commit", "-qm", "base"]);
+
+  const T0 = new Date(Date.now() - 3 * 60 * 60 * 1000);   // 第一个任务：3 小时前跑的
+  const T0End = new Date(T0.getTime() + 10 * 60 * 1000);
+  const T1 = new Date(T0.getTime() + 2 * 60 * 60 * 1000); // 第二个任务：两小时之后才跑
+  const T1End = new Date(T1.getTime() + 10 * 60 * 1000);
+  const iso = (at: Date) => at.toISOString();
+  await db.insert(projects).values({ id: "p2", name: "shared", repoPath: shared, createdAt: iso(T0) });
+  const sharedTask = (id: string, startedAt: Date, endedAt: Date, extra: Record<string, unknown> = {}) => [
+    db.insert(tasks).values({
+      id, projectId: "p2", title: id, body: "-", mode: "single", status: "done",
+      agentType: "claude", useWorktree: false, createdAt: iso(startedAt), updatedAt: iso(endedAt),
+      ...extra,
+    }),
+    db.insert(sessions).values({
+      id: `s-${id}`, taskId: id, role: "main", agentType: "claude", executor: "claude",
+      cwd: shared, startedAt: iso(startedAt), endedAt: iso(endedAt), exitStatus: 0,
+    }),
+  ];
+  for (const step of [
+    ...sharedTask("ShareFirst01", T0, T0End),
+    ...sharedTask("ShareLater02", T1, T1End),
+    // 审查任务：自己那几分钟什么都没产出，要看的恰恰是被审任务做出来的东西。
+    ...sharedTask("ShareReview3", new Date(T1.getTime() + 30 * 60 * 1000), new Date(T1.getTime() + 40 * 60 * 1000), { reviewOf: "ShareFirst01" }),
+  ]) await step;
+
+  // 被忽略的那一档：三个时刻各一张，再加一张躺在别的任务 worktree 里的。
+  writeIn(shared, "output/第一趟.png");
+  touchAtIn(shared, "output/第一趟.png", new Date(T0.getTime() + 5 * 60 * 1000));
+  writeIn(shared, "output/第二趟.png");
+  touchAtIn(shared, "output/第二趟.png", new Date(T1.getTime() + 5 * 60 * 1000));
+  writeIn(shared, "output/开跑之前.png");
+  touchAtIn(shared, "output/开跑之前.png", new Date(T0.getTime() - 60 * 60 * 1000));
+  // `output/` 这条忽略规则没有前导斜杠，所以它也匹配 `.worktrees/<任务>/output/`——
+  // `git ls-files --ignored --directory` 会把那条深路径整个吐出来，只看 basename
+  // （`output`）的跳过判定一个字都挡不住。
+  writeIn(shared, ".worktrees/OtherTask001/output/别人的.png");
+  touchAtIn(shared, ".worktrees/OtherTask001/output/别人的.png", new Date(T0.getTime() + 5 * 60 * 1000));
+
+  // 浏览器自动化留下的 profile：里面成千上万个扩展图标确实都是「任务在跑的时候出现的」，
+  // 但一条都不是产出。认的是 `Local State` + `Default/` 这两样 Chrome 专有标志，不是目录名。
+  writeIn(shared, "output/x-browser-profile/Local State", "{}");
+  writeIn(shared, "output/x-browser-profile/Default/Extensions/icon_16.png");
+  touchAtIn(shared, "output/x-browser-profile/Default/Extensions/icon_16.png", new Date(T0.getTime() + 5 * 60 * 1000));
+
+  // 已提交的那一档：共享工作区上没有任何一条属于任务的分支（`source_branch_missing`），
+  // 只能退回「运行区间里的提交动过什么」。提交时刻由 committer date 决定。
+  writeIn(shared, "art/海报.png");
+  gitIn(shared, ["add", "."]);
+  gitIn(shared, ["commit", "-qm", "第一趟的海报"], {
+    GIT_AUTHOR_DATE: iso(new Date(T0.getTime() + 2 * 60 * 1000)),
+    GIT_COMMITTER_DATE: iso(new Date(T0.getTime() + 2 * 60 * 1000)),
+  });
+  writeIn(shared, "art/事后补的.png");
+  gitIn(shared, ["add", "."]);
+  gitIn(shared, ["commit", "-qm", "两个钟头以后才提交的"], {
+    GIT_AUTHOR_DATE: iso(new Date(T1.getTime() + 5 * 60 * 1000)),
+    GIT_COMMITTER_DATE: iso(new Date(T1.getTime() + 5 * 60 * 1000)),
+  });
+
+  const sharedRoot = { path: shared, branch: "main", gitRepo: true, source: "repo" as const, repo: shared, projectId: "p2" };
+  const readShared = async (id: string) => {
+    const got = await readTaskArtifacts(id, sharedRoot);
+    assert.equal(got.error, null, `${id} 的三路线索都该读得通`);
+    return got;
+  };
+
+  const first = await readShared("ShareFirst01");
+  assert.equal(originOf(first, "output/第一趟.png"), "ignored");
+  assert.equal(originOf(first, "art/海报.png"), "committed", "共享工作区没有任务分支，已提交的那一档只能按运行区间认");
+  assert.equal(
+    originOf(first, "output/第二趟.png"), null,
+    "任务收尾两小时之后才出现的文件不是它的产物——时间判据是个区间，不是一个下限",
+  );
+  assert.equal(originOf(first, "art/事后补的.png"), null, "运行区间之外的提交同理");
+  assert.equal(originOf(first, "output/开跑之前.png"), null);
+  assert.equal(
+    originOf(first, ".worktrees/OtherTask001/output/别人的.png"), null,
+    "别的任务的隔离工作区整个排除，时间再对得上也不是它的",
+  );
+  assert.equal(originOf(first, "art/底图.png"), null, "仓库本来就有的图仍然不算");
+  assert.equal(
+    originOf(first, "output/x-browser-profile/Default/Extensions/icon_16.png"), null,
+    "浏览器 profile 整棵不算产物——时间对得上，但那是扩展自带的图标",
+  );
+
+  const later = await readShared("ShareLater02");
+  assert.equal(originOf(later, "output/第二趟.png"), "ignored");
+  assert.equal(originOf(later, "art/事后补的.png"), "committed");
+  assert.equal(
+    originOf(later, "output/第一趟.png"), null,
+    "同一个共享目录上的两个任务必须拿到两份不同的清单",
+  );
+  assert.notDeepEqual(
+    first.artifacts.map((a) => a.path), later.artifacts.map((a) => a.path),
+    "两个任务的清单一模一样，就说明判据根本没在区分任务",
+  );
+
+  // 审查任务跟着被审任务的时间走：它自己那几分钟什么都没写，但要看的东西都在。
+  const review = await readShared("ShareReview3");
+  assert.equal(originOf(review, "output/第一趟.png"), "ignored", "审查任务要看的是被审任务做出来的东西");
+  assert.equal(originOf(review, "art/海报.png"), "committed");
+
+  // 还在飞的任务：收尾时刻无从得知，窗口必须开放到现在，否则 agent 正在写的东西全看不见。
+  for (const step of sharedTask("ShareRunning4", new Date(Date.now() - 60 * 1000), new Date())) await step;
+  await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "ShareRunning4"));
+  await db.update(sessions).set({ endedAt: null }).where(eq(sessions.id, "s-ShareRunning4"));
+  writeIn(shared, "output/正在写.png");
+  const running = await readShared("ShareRunning4");
+  assert.equal(originOf(running, "output/正在写.png"), "ignored", "在飞的任务，刚落盘的东西必须立刻出现");
+
   console.log("✓ task artifacts: committed/working/ignored 三档、仓库原有物免疫 mtime、依赖树与过期产物排除、删除即消失");
+  console.log("✓ task artifacts: 共享工作区按运行区间认人——窗口有上限、别人的 worktree 排除、两个任务两份清单、审查跟到被审、在飞的开放到现在");
 } finally {
   // ASH_DB 落在舞台目录里,Windows 上不先松开就删不掉(见 tmp-db.ts)。
   await releaseTmpDb();

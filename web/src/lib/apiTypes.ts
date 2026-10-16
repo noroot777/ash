@@ -301,7 +301,11 @@ export type TaskArtifactsResult = {
   root: FileWorkspaceRoot | null;
   artifacts: TaskArtifact[];
   truncated: boolean;
-  /** 被忽略那一档的时间下限（任务第一次开跑）。 */
+  /**
+   * 时间判据的起点（任务第一次开跑）；界面只用它判「跑过没有」。真正的判据是**任务在跑
+   * 的那几段**的并集，不是「这个时刻之后」——共享工作区上那两者差着整个项目史，判据本体
+   * 在服务端 `task-artifacts.ts`。
+   */
   since: string | null;
   /** 某一路线索读失败了。另外两路通常还有东西，所以不当致命错误。 */
   error: string | null;

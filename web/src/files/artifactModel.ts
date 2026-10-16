@@ -30,8 +30,10 @@ export const ARTIFACT_ORIGIN_LABEL: Record<TaskArtifact["origin"], string> = {
 /** 角标的悬浮解释——「未提交」三个字本身说不清它凭什么算这个任务的产物。 */
 export const ARTIFACT_ORIGIN_HINT: Record<TaskArtifact["origin"], string> = {
   working: "还在工作目录里，没有提交",
-  committed: "已经提交在这条任务分支上",
-  ignored: "被 .gitignore 挡着，按「任务开跑之后才写的」认出来",
+  // 共享主仓的任务（useWorktree=false）压根没有一条属于它的分支，那一档退回「运行区间
+  // 里的提交」——两种认法的精度不同，角标上不说清楚就会被当成同一回事。
+  committed: "已经提交：有任务分支时按那条分支认，共享主仓的任务按运行区间里的提交认",
+  ignored: "被 .gitignore 挡着，按「任务在跑的那几段时间里写的」认出来",
 };
 
 export function groupArtifacts(artifacts: readonly TaskArtifact[]): ArtifactGroup[] {
