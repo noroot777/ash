@@ -15,22 +15,30 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import {
-  db, monitors, reviewInFlight, root, runs, schema, tasks, makeTask, now, pendingOf,
+  db, inTurnCaller, monitors, reviewInFlight, root, runs, schema, tasks, makeTask, now, pendingOf,
   startMonitor, stopMonitor, until, teardown,
 } from "./monitors-fixture.js";
 import type { MonitorCaller } from "../src/monitor-session.js";
 
 const { monitorSourceGate, monitorWakeCheckpoint, monitorWakeGate } = await import("../src/monitor-session.js");
+const { serialize } = await import("../src/monitors.js");
 const { deliveryOptions, deliveryVerdict } = await import("../src/pending-verdict.js");
 
 /** 「这个哨兵是谁挂的」——创建闸顺带回答的那一问。来源由调用方交上来(入口已核验)。 */
-const sourceGate = (taskId: string, caller: MonitorCaller, status = "running") =>
-  monitorSourceGate({ id: taskId, status, archived: false }, caller);
+const sourceGate = async (taskId: string, caller: MonitorCaller, status = "running") => {
+  // `activeTurnToken` 要**读库里那一份**:落库处核对的就是它(排队结束后的事实),台子上
+  // 自己拼一个就等于把 F2 要钉的那一问绕过去了。
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  return monitorSourceGate({ id: taskId, status, archived: false, activeTurnToken: task?.activeTurnToken ?? null }, caller);
+};
 const sourceRole = async (taskId: string, caller: MonitorCaller, status = "running"): Promise<string | null> =>
   (await sourceGate(taskId, caller, status)).role;
 
-/** agent 在自己回合里调的那一路:回合凭据已核验,角色由 `claimTurn` 落下的运行时事实给。 */
-const inTurn: MonitorCaller = { kind: "turn" };
+/**
+ * agent 在自己回合里调的那一路:回合凭据已核验,**而且被核验的那一轮连令牌带角色一起带下去**
+ * (入口做的就是这件事,见 monitor-routes.ts 的 `callerOf`)。
+ */
+const inTurn = (taskId: string) => inTurnCaller(taskId);
 /** 人在界面上点的那一路(或别的任务的 agent):它不是这个任务的任何一条会话。 */
 const byUser: MonitorCaller = { kind: "external" };
 
@@ -42,11 +50,12 @@ const byUser: MonitorCaller = { kind: "external" };
   // `continueWhenIdle` 排的回调放出去,那就真去拉一个 agent 了。
   runs.claimTurn(taskId, "reviewer");
 
-  assert.equal(await sourceRole(taskId, inTurn), "reviewer",
+  assert.equal(await sourceRole(taskId, await inTurn(taskId)), "reviewer",
     "这次调用来自本任务当前这一回合,而这一回合是审查者 —— 来源就该认成 reviewer");
 
   const started = await startMonitor({
-    taskId, command: 'echo "套件跑完了"', description: "等套件", timeoutMs: 60_000, caller: inTurn,
+    taskId, command: 'echo "套件跑完了"', description: "等套件", timeoutMs: 60_000,
+    caller: await inTurn(taskId),
   });
   assert.ok(started.ok, `哨兵应该起得来：${started.ok ? "" : started.error}`);
   const monitorId = started.ok ? started.monitor.id : "";
@@ -74,7 +83,7 @@ const byUser: MonitorCaller = { kind: "external" };
 {
   const taskId = await makeTask();
   runs.claimTurn(taskId, "single");
-  assert.equal(await sourceRole(taskId, inTurn), "single", "执行回合里起的就认执行者");
+  assert.equal(await sourceRole(taskId, await inTurn(taskId)), "single", "执行回合里起的就认执行者");
 }
 
 // ── ⑤ 答不出来时**不许静默当执行者**:要么说清,要么拒 ───────────────────────────
@@ -119,15 +128,29 @@ const byUser: MonitorCaller = { kind: "external" };
   //   照老样子退回默认 —— 它跟「不知道」不是一回事。
   const team = await makeTask({ mode: "team" });
   runs.claimTurn(team, "lead");
-  assert.equal(await sourceRole(team, inTurn), null, "不在 single/reviewer 之列的角色不表达");
-  assert.equal((await sourceGate(team, inTurn)).blocked, null, "但照旧挂得上");
+  assert.equal(await sourceRole(team, await inTurn(team)), null, "不在 single/reviewer 之列的角色不表达");
+  assert.equal((await sourceGate(team, await inTurn(team))).blocked, null, "但照旧挂得上");
 
   // ⑤-f 自报是回合、此刻却没有回合在跑(回合锁已经放了,例如收尾之后补挂)⇒ 跟 ⑤-b 同档:
   //   凭据证明了「是这个任务的 agent」,证明不了「是哪条会话」。
   const settled = await makeTask({ status: "paused" });
   await reviewInFlight(settled, "run-settled");
-  const stale = await sourceGate(settled, inTurn, "paused");
+  const stale = await sourceGate(settled, await inTurn(settled), "paused");
   assert.match(stale.blocked ?? "", /没说清哨兵醒来该叫谁/, "没有回合在跑就没有权威角色");
+
+  // ⑤-f(对照)**核验那一刻有回合**,排到它时那一轮的锁已经放了 ⇒ 照旧按那一轮的角色挂。
+  //   这跟 ⑤-f 是两件事:那边是「提交时就没有回合」(谁提交的无从得知),这边是「提交时是
+  //   审查者,它随后按提示 pause 收尾了这一轮」—— 而哨兵本来就是为了以后叫醒它才挂的。
+  //   所以角色取**被核验那一刻**的,不回头再问一次 `turnRole`(那会得到 null)。
+  const handedOff = await makeTask({ status: "paused" });
+  await reviewInFlight(handedOff, "run-handed-off");
+  runs.claimTurn(handedOff, "reviewer");
+  const reviewerCaller = await inTurn(handedOff);
+  runs.releaseTurn(handedOff);                    // 审查者 pause 收尾了这一轮(令牌还没清)
+  const kept = await sourceGate(handedOff, reviewerCaller, "paused");
+  assert.equal(kept.blocked, null, "同一轮的令牌还对得上,就不该因为锁放了而拒");
+  assert.equal(kept.role, "reviewer", "角色取被核验那一刻的那一轮,不是「现在是谁」");
+  assert.equal(kept.reviewRun, "run-handed-off", "连它属于哪次审查一起记");
 
   // ⑤-g 显式指定了「叫实现者」却是终态任务 ⇒ 拒。审查豁免只对绑到审查上的那一种成立,
   //   否则挂出来的是一个注定在出口被拦掉、永远唤不醒谁的哨兵。
@@ -367,10 +390,48 @@ const byUser: MonitorCaller = { kind: "external" };
   assert.equal(typo.status, 400);
   assert.match((await typo.json() as { error: string }).error, /wake 只能是/);
 
+  // ⑨-e **核验过 ≠ 排到它的时候还是那一轮**(第 8 轮审查 F2)。
+  //
+  // 创建要在 `task:<id>` 队列里排队(前面可能有另一次创建、一次停止、一次删除)。上一版把
+  // 核验结论压成一个 `kind:"turn"`,落库时才现读「现在是谁」—— 于是一份**审查者**提交的
+  // 请求在队列里等到审查回合结束、实现者回合接上,就被解释成实现者的哨兵:行上
+  // `source_role=single`、审查那条会话继续等不到人,连那次审查的执行器都没进消息
+  // (实测 reviewer OLD → single NEW,HTTP 还是 200)。
+  //
+  // 拒绝是有出路的(新回合里重挂一次),换绑没有任何人能发现 —— 所以这一档必须拒。
+  const stale = await makeTask();
+  await reviewInFlight(stale, "run-stale");
+  runs.claimTurn(stale, "reviewer");
+  await db.update(tasks).set({ activeTurnToken: "OLD-REVIEW-TURN" }).where(eq(tasks.id, stale));
+  let openQueue!: () => void;
+  const held = serialize(`task:${stale}`, () => new Promise<void>((r) => { openQueue = r; }));
+  const submitted = post(
+    stale,
+    { command: "sleep 30", description: "旧审查回合提交的" },
+    { "x-ash-source-task-id": stale, "x-ash-turn-token": "OLD-REVIEW-TURN" },
+  );
+  // 它已经过了核验(入口那一问是一次库读),正卡在创建队列上 —— 一行还没落。
+  await until("旧请求在队列里等着", async () => {
+    await new Promise((r) => setTimeout(r, 50));
+    return (await db.select().from(monitors).where(eq(monitors.taskId, stale))).length === 0;
+  });
+  // 审查回合结束,实现者回合接上(真实流程里 orchestrator 每起一轮换一个令牌)。
+  runs.releaseTurn(stale);
+  runs.claimTurn(stale, "single");
+  await db.update(tasks).set({ activeTurnToken: "NEW-IMPL-TURN" }).where(eq(tasks.id, stale));
+  openQueue();
+  await held;
+  const expired = await submitted;
+  assert.equal(expired.status, 409, "那一轮已经结束了,不许顺势按「现在这一轮」挂上去");
+  assert.match((await expired.json() as { error: string }).error, /已经结束了/,
+    "措辞要说清是「那一轮过期了」,不是凭据对不上");
+  assert.equal((await db.select().from(monitors).where(eq(monitors.taskId, stale))).length, 0,
+    "**一行都不许留** —— 留一行就是换绑");
+
   await db.update(schema.freeReviewRuns).set({ status: "done" })
     .where(eq(schema.freeReviewRuns.id, "run-manual"));
   await stopMonitor(pickedRow.id, "测试收尾");
 }
 
 await teardown();
-console.log("✓ 哨兵与审查：醒来叫审查会话 / 角色跟着行走到投递参数 / 来源答不出来时要么说清要么拒、不静默当执行者 / 审查进行中终态任务上挂得上 / 叫醒时带回 pause 留下的交代 / 预约审查说得出在等哪几个哨兵 / 创建入口核验回合凭据、歧义带着出路拒");
+console.log("✓ 哨兵与审查：醒来叫审查会话 / 角色跟着行走到投递参数 / 来源答不出来时要么说清要么拒、不静默当执行者 / 审查进行中终态任务上挂得上 / 叫醒时带回 pause 留下的交代 / 预约审查说得出在等哪几个哨兵 / 创建入口核验回合凭据、歧义带着出路拒、排队期间换了一轮就拒不换绑");

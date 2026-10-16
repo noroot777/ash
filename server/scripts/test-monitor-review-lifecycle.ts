@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import {
-  db, monitors, pending, root, runs, schema, scheduledMessages, sessions, tasks,
+  db, inTurnCaller, monitors, pending, root, runs, schema, scheduledMessages, sessions, tasks,
   makeTask, now, pendingOf, startMonitor, until, teardown,
 } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
@@ -69,7 +69,7 @@ async function reviewInFlight(
   const started = await startMonitor({
     // 审查回合里挂的:来源 = 本任务当前这一回合(上面 `claimTurn` 落的 reviewer)。
     taskId, command: "sleep 120", description: "审查等外部套件", timeoutMs: 180_000,
-    caller: { kind: "turn" },
+    caller: await inTurnCaller(taskId, "tok"),   // 这个任务的回合令牌是上面那个 "tok"
   });
   assert.ok(started.ok, `审查进行中就该挂得上：${started.ok ? "" : started.error}`);
   const monitorId = started.ok ? started.monitor.id : "";
@@ -161,7 +161,9 @@ async function reviewInFlight(
   // 不再靠「哪条会话的进程还活着」猜（第 7 轮审查 F2）。
   const plain = await makeTask();
   runs.claimTurn(plain, "single");
-  const plainGate = await monitorSourceGate({ id: plain, status: "running", archived: false }, { kind: "turn" });
+  const plainTurn = await inTurnCaller(plain);
+  const plainGate = await monitorSourceGate(
+    { id: plain, status: "running", archived: false, activeTurnToken: `turn-${plain}` }, plainTurn);
   assert.equal(plainGate.role, "single");
   assert.equal(plainGate.reviewRun, null, "执行者挂的哨兵不该绑在某次审查上");
 }

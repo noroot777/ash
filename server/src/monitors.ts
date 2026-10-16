@@ -18,7 +18,7 @@
 //    后登记失败),都必须先落责任、再发信号、确认退出才销账。只装在删除/审查收尾那两个
 //    包装函数里是不够的 —— 其余每一条停止路径都会绕过它(第 5 轮审查 F1,现场见
 //    monitor-reclaim-debts.ts 文件头)。
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import {
   MONITOR_BATCH_MS,
   MONITOR_MAX_EVENTS,
@@ -322,16 +322,54 @@ export async function stopMonitorChecked(monitorId: string, reason = "被停掉�
   return monitor ? { ok: true, monitor } : { ok: false, status: 404, error: "哨兵不存在" };
 }
 
+/**
+ * 停一条哨兵。**它和创建共用 `task:<id>` 那条队列** —— 「停止」和「创建」是同一份资源所有权
+ * 协议的两端,不排同一条队就会各自看到半成品:
+ *
+ * 上一版这里完全不参加那条队列,于是一次点停可以恰好落在「身份已登记、pid 还没回填」那一瞬:
+ * 它读到 pid=null 的运行行 → 回收层按「没有待收资源」放过 → 写成 stopped 并**成功返回**,
+ * 而创建随后照旧放行,命令这才开工;再点停时状态已经不是 running,`finish` 第一行就返回 ——
+ * 页面写着已停止、进程活着、而且再也停不掉(第 8 轮审查 F1 实测 `aliveAfterSecondStop=true`)。
+ *
+ * 所以这里是两段:
+ *  ① 读到一条**pid 还空着的运行行** = 创建正在半空中。先把「我停过」落盘 —— 创建方在放行
+ *    之前会重读这一行(monitor-create.ts 的 ④),读到非 running 就不放行,命令一个字都不跑。
+ *  ② 再进那条队列。拿到的是创建已经收口之后的终局,按它该怎么停就怎么停。
+ */
 export async function stopMonitor(monitorId: string, reason = "被停掉了"): Promise<TaskMonitor | null> {
   const before = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   if (!before) return null;
   if (before.kind === "claude") return toTaskMonitor(before);
-  if (before.status !== "running") return toTaskMonitor(before);
-  // 用户/agent 主动停的不回推收尾事件：他就是为了不再被它叫醒才点的停。但已经攒在缓冲里
-  // 的行要照常推完——那是已经发生的事实，而且任务还活着，收得下。
-  await finish(monitorId, "stopped", reason, null, { notify: false });
-  const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
-  return toTaskMonitor(after ?? before);
+  // ① 创建还在半空中:**先落「我停过」**。条件更新(仍是 running 且 pid 仍空)避免跟同一瞬
+  //    完成的创建互相覆盖 —— 回填成功的那一侧会让这条更新一行都不动,于是走 ② 的正常停止。
+  if (before.status === "running" && before.pid === null) {
+    await db
+      .update(monitors)
+      .set({ status: "stopped", endedAt: now(), endedReason: reason })
+      .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running"), isNull(monitors.pid)));
+  }
+  // ② 进创建那条队列。**不排在队首插队**:创建只差几毫秒就收口,等它比跟它抢更便宜也更可证。
+  return serialize(`task:${before.taskId}`, async () => {
+    const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+    if (!row) return toTaskMonitor(before);
+    if (row.status === "running") {
+      // 用户/agent 主动停的不回推收尾事件：他就是为了不再被它叫醒才点的停。但已经攒在缓冲里
+      // 的行要照常推完——那是已经发生的事实，而且任务还活着，收得下。
+      await finish(monitorId, "stopped", reason, null, { notify: false });
+      const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+      return toTaskMonitor(after ?? row);
+    }
+    // 已经不是运行态了。**但「卡片上写着停了」不等于那个进程真的没了**:win32 那一侧没有
+    // 放行闸(见 monitor-spawn.ts),① 的取消标记落下时命令可能已经开工。所以这里按**资源
+    // 责任**再核一遍而不是看状态就返回 —— 这正是前几轮反复钉的那条判据。
+    if (row.pid && reclaimState(row.pid, row.pidStartedAt) !== "gone") {
+      const outcome = await reclaimMonitorProcess(row, `${reason}（创建期取消后补收）`, { fresh: true });
+      if (await settleReclaim(outcome) === "unaccounted") {
+        console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
+      }
+    }
+    return toTaskMonitor(row);
+  });
 }
 
 export async function liveMonitorsOf(taskId: string): Promise<Row[]> {

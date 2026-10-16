@@ -24,6 +24,8 @@
 //      入口核验后以 `MonitorCaller` 交上来;
 //   ② **这一回合是什么角色**——`turnRole()`,`claimTurn` 落下的**运行时事实**(审查结论的
 //      归属检查 `report_stage` 读的也是它)。
+// 两截都**绑在被核验的那一轮上**(`VerifiedTurn`),并在落库处再核对一遍它仍然有效:创建要
+// 排队,而「核验过」不等于「排到它的时候还是那一轮」(第 8 轮审查 F2)。
 // 两截都答不出来时**一律不静默当执行者**:要么由调用方显式指定唤醒目标,要么拒绝这次创建。
 import { and, eq, exists, isNull, ne, sql } from "drizzle-orm";
 import { MONITOR_WAKE_TARGETS, monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
@@ -39,20 +41,57 @@ import { now } from "./util.js";
 const WAKEABLE_ROLES = new Set<string>(MONITOR_WAKE_TARGETS);
 
 /**
+ * 核验通过的那一轮**本身**,不是「核验过」这个布尔。
+ *
+ * 创建会排队(`task:<id>`,前面可能有另一次创建、一次停止、一次删除),所以「入口核验」和
+ * 「落库」之间隔着真实的等待。只带一个 `kind:"turn"` 过去,落库时就只能现读「现在是谁」——
+ * 那是**另一轮**的答案:第 8 轮审查 F2 实测一份审查者提交的请求在队列里等到审查回合结束、
+ * 实现者回合接上,于是哨兵被换绑成 `single`,通知连那次审查的执行器都没带上。
+ *
+ * 所以把被核验的三样一起带下去,到落库处再核对一遍它们仍然有效。
+ */
+export type VerifiedTurn = {
+  /** 核验通过的那条任务(请求头 `x-ash-source-task-id`)。 */
+  taskId: string;
+  /** 那一轮的令牌(`tasks.active_turn_token`,每起一轮换一个,见 orchestrator.ts)。 */
+  token: string;
+  /** 核验那一刻这一轮的角色(`turnRole` 的运行时事实)。null = 这一轮没表达角色。 */
+  role: string | null;
+};
+
+/**
  * 创建入口必须交上来的那一份:**这次调用是谁发起的**。核验在入口做(那里才有请求头),
  * 这里只按已核验的结论判归属 —— 两件事分开是为了让「怎么证明身份」只有一处实现。
  */
 export type MonitorCaller =
-  /** agent 在**这个任务**自己的回合里调的,回合凭据已核验。角色由 `turnRole` 给(运行时事实)。 */
-  | { kind: "turn" }
+  /** agent 在**这个任务**自己的回合里调的,带着被核验的那一轮(见 `VerifiedTurn`)。 */
+  | ({ kind: "turn" } & VerifiedTurn)
   /** 不是这个任务的任何一条会话:人在界面上点的,或另一个任务的 agent。`wake` = 显式指定的唤醒目标。 */
   | { kind: "external"; wake?: string | null }
   /** 自报了回合身份、核验没过(token 过期 / 对不上 / 指的是别的任务)。**不许当作任何人**。 */
   | { kind: "unverified" };
 
+/** 入口核验通过之后,把「是哪一轮」连角色一起留存下来。 */
+export function verifiedTurn(taskId: string, token: string): VerifiedTurn {
+  return { taskId, token, role: turnRole(taskId) };
+}
+
+/** 同上,直接给创建入口用的那一层。 */
+export const turnCaller = (turn: VerifiedTurn): MonitorCaller => ({ kind: "turn", ...turn });
+
 /** 回合凭据对不上。不能退回默认 —— 那等于让一次失败的核验生成一条会叫醒执行者的通知。 */
 const CALLER_UNVERIFIED =
   "这次创建带的回合凭据对不上（任务或令牌已经不是当前这一轮），说不清是谁要挂这个哨兵，所以不挂";
+
+/**
+ * 核验是真的、但**排到它的时候那一轮已经不在了**。
+ *
+ * 这一档必须单独拒,不能顺势按「现在这一轮」办:那就是把一个旧审查的请求换绑到新的实现者
+ * 回合上(第 8 轮审查 F2)。拒绝是有出路的 —— 新回合里重挂一次就是了,而换绑没有任何人能发现。
+ */
+const CALLER_EXPIRED =
+  "这次创建获准代表的那一轮已经结束了（排到它的时候任务已经换了一轮），不把旧请求换绑到当前回合——"
+  + "在现在这一轮里重挂一次";
 
 /**
  * 说不清要唤醒谁。**这一档必须拒**:猜错的两种后果都不便宜 —— 猜执行者会凭空烧一个回合、
@@ -100,7 +139,8 @@ const REVIEW_FINISHED = "起这个哨兵的那次审查已经结束，它的事�
  *   ⑥ 都不是 ⇒ **拒**(`WAKE_AMBIGUOUS`),并让入口把「要你指定」这件事回给调用方。
  */
 export async function monitorSourceGate(
-  task: { id: string; status: string; archived?: boolean | null },
+  /** **必须是落库处(锁里)读到的那一份**:`activeTurnToken` 要跟排队结束后的事实一致。 */
+  task: { id: string; status: string; archived?: boolean | null; activeTurnToken?: string | null },
   caller: MonitorCaller,
 ): Promise<{
   blocked: string | null;
@@ -126,7 +166,20 @@ export async function monitorSourceGate(
   if (caller.kind === "unverified") {
     return { blocked: CALLER_UNVERIFIED, role: null, reviewRun: null, reviewRound: null };
   }
-  const turn = caller.kind === "turn" ? turnRole(task.id) : null;
+  // **先核对「那一轮此刻还在不在」,然后用那一轮的角色,而不是「现在是谁」。**
+  //
+  // 判据只有一条:令牌还是当初那一个。令牌每起一轮换一个(orchestrator.ts),所以令牌相等
+  // ⇔ 还是同一轮 ⇔ 还是同一条会话 —— 换代一发生令牌必然不同,这一问就拒掉了,不存在
+  // 「被解释成另一轮」的余地(第 8 轮审查 F2)。
+  //
+  // 对上之后用的是**被核验那一刻的角色**,不回头再问一次 `turnRole`:同一轮的回合锁可能已经
+  // 放了(审查者挂完哨兵就按提示 pause 收尾这一轮,而哨兵本来就是为了以后叫醒它才挂的),
+  // 这时现读会得到 null、把一个明明知道是谁提交的请求退回「说不清叫谁」。
+  if (caller.kind === "turn"
+    && (caller.taskId !== task.id || !task.activeTurnToken || task.activeTurnToken !== caller.token)) {
+    return { blocked: CALLER_EXPIRED, role: null, reviewRun: null, reviewRound: null };
+  }
+  const turn = caller.kind === "turn" ? caller.role : null;
   // 被状态拦下来时一定要查(那是豁免的唯一依据);回合是审查者时也要查(要记住是哪次);
   // 没有权威角色时也要查 —— 「有没有审查在进行」正是歧义判定的依据。
   const review = blocked || turn === "reviewer" || turn === null ? await reviewingRun(task.id) : null;

@@ -27,6 +27,7 @@ import { desc, eq } from "drizzle-orm";
 import { MONITOR_MAX_PER_TASK, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
 import { monitors, projects, sessions, tasks } from "./db/schema.js";
+import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { monitorSourceGate, type MonitorCaller } from "./monitor-session.js";
 import { monitorLogPath, spawnMonitor } from "./monitor-spawn.js";
@@ -122,6 +123,32 @@ export async function abandonRegistration(row: Row, cause: string): Promise<Star
   }
   publish(row.taskId);
   return { ok: false, status: 409, error: `哨兵登记失败，${note}：${cause}` };
+}
+
+/**
+ * **放行之前被撤销**(用户点停 / 任务开始删除 / 记录已经没了):命令一个字都没跑过,但那个壳
+ * 还在闸前面站着,所以照旧补一刀并走回收圈。
+ *
+ * 跟 `abandonRegistration` 的区别只有一条:**这里不碰那一行**。它上面写的是用户自己点出来
+ * 的「已停止」,或者删除流程的中间态 —— 把它改掉或删掉就等于把「我停过」这件事从界面上
+ * 抹掉(根 AGENTS.md:停止必须留下持久可见的状态)。
+ */
+async function cancelRegistration(row: Row, why: string): Promise<StartMonitorResult> {
+  const verdict = await settleReclaim(
+    await reclaimMonitorProcess(row, `${why}（放行前撤销，命令未开工）`, { fresh: true }),
+  );
+  if (verdict !== "reclaimed") {
+    // 收不干净:责任在账本上(`owed`)或连账本都没写上(`unaccounted`,那一档 settleReclaim
+    // 自己已经打到日志里并挂了补记梯子)。两档都不许说成「已经收掉了」。
+    console.error(`[ash] 哨兵放行前被撤销，进程未确认退出 monitor=${row.id} pid=${row.pid}（${verdict}）`);
+  }
+  return {
+    ok: false,
+    status: 409,
+    error: verdict === "reclaimed"
+      ? `${why}，那条命令没有开工`
+      : `${why}，那条命令没有开工；但它的壳还没确认退出，回收责任已记下`,
+  };
 }
 
 /**
@@ -234,7 +261,18 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     }
 
     // ② 起进程。POSIX 上它停在放行闸前面，还没 exec 用户的命令。
-    const spawned = spawnMonitor({ command, cwd, logPath });
+    //
+    // **同步抛出也要收尾**:这一层的契约是「要么给句柄、要么给一句话」(见 monitor-spawn.ts),
+    // 但契约靠调用方兜住才算数 —— 漏在外面的话,一个 `mkdirSync` 失败就会带着整个
+    // `startMonitor` 抛出去,留下一条 pid 永远空着的 running 行:没有 tail、没有到期定时器、
+    // 还占着每个任务 4 个的名额(第 8 轮审查 F3 的同类项)。
+    let spawned: ReturnType<typeof spawnMonitor>;
+    try {
+      spawned = spawnMonitor({ command, cwd, logPath });
+    } catch (e) {
+      await dropIntent(monitorId);
+      return { ok: false, status: 409, error: `哨兵起不来，那条命令一个字都没开始跑：${detail(e)}` };
+    }
     if ("error" in spawned) {
       await dropIntent(monitorId);
       return { ok: false, status: 409, error: spawned.error };
@@ -251,15 +289,38 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       return await abandonRegistration(row, detail(e));
     }
 
-    // ④ **先挂运行时、再放行**。顺序反过来有个安静的洞:`echo x` 这种瞬间跑完的命令会在
-    //    `attach` 之前就 exit,而 `exit` 事件只发一次 —— 之后注册的监听器永远收不到,这条
-    //    哨兵会以 running 的样子一直挂到超时。闸让这件事变得可控:挂的时候它还停在闸前面,
-    //    必然还活着。
+    // ④ **放行之前再核一次「这条命令现在还该不该开工」**。
+    //
+    // 身份齐全只是一半,另一半是「这条生命周期没被撤销」。创建是一段时间:①—③ 之间有真实的
+    // 等待,而撤销有两条不排这条队的路 ——
+    //  · 用户点停:`stopMonitor` 读到一条 pid 还空着的行时,会**先把「我停过」落盘**再进这条
+    //    队列(见 monitors.ts)。上一版这里拿本地那份 running 快照无条件放行:页面已经显示
+    //    停止、库里是 stopped,命令却随后才开工,而且再点停也停不下来(第 8 轮审查 F1 实测
+    //    `storedStatus=stopped` + `commandStarted=true` + `aliveAfterSecondStop=true`);
+    //  · 任务被删:`beginTaskRevocation` 是同步关闸、之后才去抢这条队列,所以入口那一问
+    //    (`monitorSourceGate` 的第一行)可能在关闸之前就过了。
+    // 读库那一份、不读本地快照:本地那份是 ① 写出去的,它答不出这中间发生过什么。
+    const fresh = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+    const revoked = isTaskRevoked(input.taskId);
+    if (!fresh || fresh.status !== "running" || revoked) {
+      spawned.abandon();   // 不放行:壳读到 EOF,在 exec 之前自己退出
+      return await cancelRegistration(row, !fresh
+        ? "创建还没完成，这条哨兵的记录已经没了"
+        : revoked
+          ? "创建还没完成，这个任务已经开始删除"
+          : `创建还没完成，这条哨兵已经被停掉了（${fresh.endedReason ?? "已停止"}）`);
+    }
+
+    // ⑤ **先挂运行时、再放行**。顺序反过来有个安静的洞:`echo x` 这种瞬间跑完的命令会在
+    //    `attach` 之前就 exit。那个洞现在由 spawn 层的一次性结局缓冲兜住(晚订阅也收得到),
+    //    但顺序照旧按「挂好再放行」排 —— 让「订阅不到」这件事连发生的机会都没有。
+    // 「已起」这一行排在 attach 之前:挂上运行时的那一刻结局可能**已经发生**(壳自己就退了,
+    // 一次性结局缓冲会当场把它结算成 exited),那时再写「已起」就排在「结束」后面了。
+    await appendTaskTimeline(row.taskId, `哨兵已起：${row.description}（${command}）`);
     attach(row, spawned.onExit);
-    // ⑤ 放行。命令从这一刻才真正开工,而它的身份在 ① 就已经可恢复了。
+    // ⑥ 放行。命令从这一刻才真正开工,而它的身份在 ① 就已经可恢复、撤销资格在 ④ 刚核过。
     spawned.release();
     publish(row.taskId);
-    await appendTaskTimeline(row.taskId, `哨兵已起：${row.description}（${command}）`);
     return { ok: true, monitor: toTaskMonitor(row) };
   });
 }

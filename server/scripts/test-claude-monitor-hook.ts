@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { MONITOR_MAX_TIMEOUT_MS } from "@ash/shared/monitor";
-import { db, monitors, tasks, stopMonitor, makeTask, teardown } from "./monitors-fixture.js";
+import { db, inTurnCaller, monitors, tasks, stopMonitor, makeTask, teardown } from "./monitors-fixture.js";
 
 const { Hono } = await import("hono");
 const { claudeMonitorHookDecision, monitorRedirectHook } = await import("../src/claude-monitor-hook.js");
@@ -29,6 +29,15 @@ const event = (toolInput: Record<string, unknown>, toolName = "Monitor") => ({
   tool_input: toolInput,
 });
 
+/**
+ * hook 那一侧交上来的那一份:**回连凭据核验出来的那一轮**(路由里是 `agentActor` + 请求头
+ * 里的令牌,见 monitor-routes.ts)。内置 Monitor 的 hook 一定发生在那条会话自己的回合里。
+ */
+const turnOf = async (taskId: string) => {
+  const caller = await inTurnCaller(taskId);
+  return caller.kind === "turn" ? caller : null;
+};
+
 const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>>): string => {
   assert.ok(decision, "这一条应该给出决定，实际是「不表态」——不表态会放行");
   assert.equal(decision.hookSpecificOutput.permissionDecision, "deny");
@@ -40,7 +49,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
 // matcher 已经筛过一道，但配置被改宽时这里必须兜住:把 Bash 拦下来会把整个 agent 废掉。
 {
   const taskId = await makeTask();
-  const decision = await claudeMonitorHookDecision(event({ command: "npm test" }, "Bash"), taskId, null);
+  const decision = await claudeMonitorHookDecision(event({ command: "npm test" }, "Bash"), await turnOf(taskId), null);
   assert.equal(decision, null, "不是 Monitor 调用就该不表态");
 }
 
@@ -49,7 +58,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
   const taskId = await makeTask();
   const reason = reasonOf(await claudeMonitorHookDecision(
     event({ command: "sleep 30", description: "等全量 unittest 跑完" }),
-    taskId,
+    await turnOf(taskId),
     null,
   ));
 
@@ -72,7 +81,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
 // 而不是让这次代办整个失败、把 agent 推回那条落空的路。
 {
   const taskId = await makeTask();
-  reasonOf(await claudeMonitorHookDecision(event({ command: "sleep 31" }), taskId, null));
+  reasonOf(await claudeMonitorHookDecision(event({ command: "sleep 31" }), await turnOf(taskId), null));
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0);
   assert.equal(row?.description, "sleep 31");
   if (row) await stopMonitor(row.id, "测试收尾");
@@ -83,7 +92,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
   const taskId = await makeTask();
   const reason = reasonOf(await claudeMonitorHookDecision(
     event({ ws: { url: "wss://example.com/stream" }, description: "等部署事件" }),
-    taskId,
+    await turnOf(taskId),
     null,
   ));
   assert.equal(
@@ -108,7 +117,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
 // 原样传给 agent:它读到「任务已经结束了」才会停下来,读到一句空话只会再试一次。
 {
   const taskId = await makeTask({ status: "done" });
-  const reason = reasonOf(await claudeMonitorHookDecision(event({ command: "sleep 33" }), taskId, null));
+  const reason = reasonOf(await claudeMonitorHookDecision(event({ command: "sleep 33" }), await turnOf(taskId), null));
   assert.equal(
     (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).length,
     0,
@@ -125,7 +134,7 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
   const taskId = await makeTask();
   const reason = reasonOf(await claudeMonitorHookDecision(
     event({ command: "sleep 34", description: "盯很久", timeout_ms: MONITOR_MAX_TIMEOUT_MS * 3 }),
-    taskId,
+    await turnOf(taskId),
     null,
   ));
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0);

@@ -54,6 +54,21 @@ export const startMonitor = (input: Omit<StartInput, "caller"> & { caller?: Star
   createModule.startMonitor({ ...input, caller: input.caller ?? { kind: "external" } });
 export const { monitors, projects, scheduledMessages, sessions, tasks } = schema;
 
+const monitorSession = await import("../src/monitor-session.js");
+
+/**
+ * 「这次调用来自本任务当前这一回合」的那一份 caller —— 真入口交上来的就是这种形状:带着
+ * **被核验的那一轮**(令牌 + 那一刻的角色),落库处还会核对一遍它仍然有效(见 monitor-session.ts
+ * 的 `VerifiedTurn`)。
+ *
+ * 回合本身由调用方先 `runs.claimTurn` 占好(角色从那里取);令牌这里顺手落库 —— 生产里它由
+ * orchestrator 每起一轮换一个,台子上只要「有一个、而且对得上」。
+ */
+export async function inTurnCaller(taskId: string, token = `turn-${taskId}`) {
+  await db.update(tasks).set({ activeTurnToken: token }).where(eq(tasks.id, taskId));
+  return monitorSession.turnCaller(monitorSession.verifiedTurn(taskId, token));
+}
+
 await ensureSchema();
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

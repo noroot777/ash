@@ -8,7 +8,7 @@ import { actorOf, ownerIdOf } from "./auth/context.js";
 import { agentActor } from "./auth/middleware.js";
 import { startMonitor } from "./monitor-create.js";
 import { getMonitor, listMonitors, readMonitorTail, stopMonitorChecked } from "./monitors.js";
-import type { MonitorCaller } from "./monitor-session.js";
+import { turnCaller, verifiedTurn, type MonitorCaller } from "./monitor-session.js";
 import {
   claudeMonitorHookDecision,
   isMonitorHookCall,
@@ -35,8 +35,12 @@ import { monitorRecoveryOf } from "./claude-monitor-recovery.js";
 async function callerOf(c: Context, taskId: string, wake?: string | null): Promise<MonitorCaller> {
   const actor = actorOf(c);
   const agent = actor.kind === "agent" ? actor : await agentActor(c);
-  if (agent?.taskId === taskId) return { kind: "turn" };
-  const claimed = !!(c.req.header("x-ash-source-task-id")?.trim() || c.req.header("x-ash-turn-token")?.trim());
+  const token = c.req.header("x-ash-turn-token")?.trim() ?? "";
+  // 核验通过时**带上被核验的那一轮**(令牌 + 此刻的角色),而不是只说一句「核验过了」:创建
+  // 要在 `task:<id>` 队列里排队,落库处会拿这三样再核对一遍(见 monitor-session.ts 的
+  // `VerifiedTurn`)。`agentActor` 比对的正是这个 header 里的令牌,所以两处说的是同一轮。
+  if (agent?.taskId === taskId && token) return turnCaller(verifiedTurn(taskId, token));
+  const claimed = !!(c.req.header("x-ash-source-task-id")?.trim() || token);
   if (!agent && claimed) return { kind: "unverified" };
   return { kind: "external", wake };
 }
@@ -153,7 +157,9 @@ export function mountMonitorRoutes(api: Hono): void {
       // 会让整个端点抛出去 → 非 2xx → 被 CLI 当成 non-blocking error → 放行（同上）。
       const actor = actorOf(c);
       const agent = actor.kind === "agent" ? actor : await agentActor(c);
-      const decision = await claudeMonitorHookDecision(input, agent?.taskId ?? null, ownerIdOf(agent ?? actor));
+      const hookToken = c.req.header("x-ash-turn-token")?.trim() ?? "";
+      const turn = agent?.taskId && hookToken ? verifiedTurn(agent.taskId, hookToken) : null;
+      const decision = await claudeMonitorHookDecision(input, turn, ownerIdOf(agent ?? actor));
       // 上面那一问已经确认是 Monitor 了，所以这里一定有决定；真拿到 null 也当内部异常
       // 处理，绝不空手放行。
       return c.json(decision ?? monitorHookInternalError("没能得出处置结论"));

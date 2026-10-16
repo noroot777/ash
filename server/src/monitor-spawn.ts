@@ -67,9 +67,14 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
   } catch {
     return { error: `哨兵的工作目录不在了：${opts.cwd}` };
   }
-  mkdirSync(dirname(opts.logPath), { recursive: true });
   let fd: number;
   try {
+    // **建目录和开文件在同一道错误边界里**。上一版 `mkdirSync` 在 try 外面:runs 目录那一段
+    // 路径上有个同名文件、或者权限不允许时它直接抛出整个函数 —— 而那时创建层已经把身份行
+    // 落好了,于是留下一条 pid 永远空着的 running 行:没有 tail、没有到期定时器、还占着每个
+    // 任务 4 个的名额,只能等人手动清(第 8 轮审查 F3 的同类项)。这一层的契约是
+    // **要么返回句柄、要么返回一句话**,不抛。
+    mkdirSync(dirname(opts.logPath), { recursive: true });
     fd = openSync(opts.logPath, "a");
   } catch (e) {
     return { error: `建不了哨兵日志文件 ${opts.logPath}：${e instanceof Error ? e.message : String(e)}` };
@@ -89,16 +94,27 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
       stdio: gated ? ["ignore", fd, fd, "pipe"] : ["ignore", fd, fd],
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
     });
-    // `error` 必须**此刻**就挂上，不能等调用方 `onExit` 时再挂：spawn 的失败是异步报的
-    // （坏 cwd 在 fork 之后才 chdir 失败），这一刻没有监听者的话 Node 把它升级成
-    // uncaughtException —— 整个 ash 当场退出，一次失败的创建把所有任务页一起带下线
-    // （第 2 轮审查实测：隔离服务退出码 143，日志 `uncaughtException: spawn sh ENOENT`）。
-    let failure: Error | null = null;
-    let forward: ((code: number | null) => void) | null = null;
-    child.on("error", (e) => {
-      failure = e;
-      forward?.(null);
-    });
+    // **结局只发生一次,所以这里把它存下来,而不是等订阅者来了再听。**
+    //
+    // 两个监听都必须**此刻**就挂上:
+    //  · `error` —— spawn 的失败是异步报的(坏 cwd 在 fork 之后才 chdir 失败),这一刻没有
+    //    监听者的话 Node 把它升级成 uncaughtException,整个 ash 当场退出,一次失败的创建把
+    //    所有任务页一起带下线(第 2 轮审查实测:退出码 143、`uncaughtException: spawn sh ENOENT`);
+    //  · `exit` —— 它是**一次性事件**。上一版在 `onExit(cb)` 里才 `child.on("exit")`,而
+    //    订阅发生在「回填 pid」这一次 await 之后:壳在那之前就退掉的话(命令有语法错误、
+    //    `sh` 解析完当场失败),那一次 exit 没有任何人听见,之后挂上的监听器永远不会再被叫 ——
+    //    于是一条已经死掉的哨兵在库里和界面上都写着 running,一直挂到约定的时长到期才收尾
+    //    (第 8 轮审查 F3 实测 `alive=false` 而 `row.status=running`)。放行闸管的是「用户的
+    //    命令什么时候开工」,证明不了「这个 ChildProcess 还活着」。
+    let settled: { code: number | null } | null = null;
+    let subscriber: ((code: number | null) => void) | null = null;
+    const settle = (code: number | null) => {
+      if (settled) return;                 // 结局只认第一个:error 之后往往还跟一个 exit
+      settled = { code };
+      subscriber?.(code);
+    };
+    child.on("error", () => settle(null));
+    child.on("exit", (code, signal) => settle(code ?? (signal ? null : 0)));
     if (!child.pid) {
       // **绝不能 `child.kill()`**：没有 pid 就没有进程可杀，这一步会走到
       // `uv_process_kill(0, SIGTERM)`，而 POSIX 的 `kill(0, …)` 是「发给自己所在的
@@ -108,8 +124,14 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
     child.unref();
     // 闸的写端：**也要 unref**，不然 ash 的事件循环会被这个 pipe 吊着不退（`child.unref()`
     // 只管进程句柄，stdio 流是另一个 handle）。
-    const gate = (child.stdio as Array<{ write?: (chunk: string) => void; end?: () => void; destroy?: () => void; unref?: () => void } | null>)[3];
+    const gate = (child.stdio as Array<{
+      write?: (chunk: string) => void; end?: () => void; destroy?: () => void; unref?: () => void;
+      on?: (event: string, cb: (e: unknown) => void) => void;
+    } | null>)[3];
     gate?.unref?.();
+    // 写端是一个 socket:对端先死时 EPIPE 是**'error' 事件**,不是 `write()` 的同步异常 ——
+    // 没人听就会升级成 uncaughtException。壳先退了只说明「没放行成」,不该把 ash 带走。
+    gate?.on?.("error", () => { /* 壳已经没了 = 这次没放行,调用方照旧走回收圈 */ });
     return {
       pid: child.pid,
       release: () => {
@@ -121,11 +143,10 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
         try { gate?.destroy?.(); } catch { /* 已经关了 */ }
       },
       onExit: (cb) => {
-        forward = cb;
-        child.on("exit", (code, signal) => cb(code ?? (signal ? null : 0)));
-        // 挂得比失败还晚（起进程和登记之间隔着一次 insert）：补叫一次，否则这个哨兵
-        // 会以 running 的样子一直挂到超时。
-        if (failure) cb(null);
+        subscriber = cb;
+        // **晚订阅也必须拿到已经发生的结局**(见上面 `settled` 的注释)。同步叫回来是安全的:
+        // 调用方 `attach` 在调这一步之前已经把运行时登记好了,而回调自己是 `void finish(...)`。
+        if (settled) cb(settled.code);
       },
     };
   } catch (e) {

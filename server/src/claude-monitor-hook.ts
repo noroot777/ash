@@ -37,6 +37,7 @@
 import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS } from "@ash/shared/monitor";
 import { currentListeningPort } from "./listening-port.js";
 import { startMonitor } from "./monitor-create.js";
+import { turnCaller, type VerifiedTurn } from "./monitor-session.js";
 
 /** 内置 Monitor 的工具名。matcher 只含字母，按精确串匹配（见 hooks 文档的 matcher 语法）。 */
 const MONITOR_TOOL = "Monitor";
@@ -97,13 +98,14 @@ export const isMonitorHookCall = (input: ClaudeMonitorHookInput | null | undefin
 /**
  * 这次 Monitor 调用该怎么处置。
  *
- * `taskId` 为空 = CLI 没把回合身份插进 header（老版本，或这根本不是 ash 拉起的 claude）。
+ * `turn` 为空 = CLI 没把回合身份插进 header（老版本，或这根本不是 ash 拉起的 claude）。
  * 那时仍然拦，但只能让它自己去挂：**一个都不放行**，因为放过去的监听照样活不过这一轮，
  * 而「拦住 + 说清怎么补」比「放行 + 到点没人叫醒」诚实。
  */
 export async function claudeMonitorHookDecision(
   input: ClaudeMonitorHookInput,
-  taskId: string | null,
+  /** 回连凭据核验出来的那一轮(路由那一侧 `agentActor`)。null = 这次请求里没有回合身份。 */
+  turn: VerifiedTurn | null,
   ownerUserId: string | null,
 ): Promise<ClaudeMonitorHookDecision | null> {
   // matcher 已经按工具名筛过一道，这里是第二道：配置被改宽了也不会误伤别的工具。
@@ -122,7 +124,7 @@ export async function claudeMonitorHookDecision(
     return deny(`${WHY_NOT_BUILTIN}${ws}${HOW_TO_DIY}`);
   }
 
-  if (!taskId) {
+  if (!turn) {
     return deny(`${WHY_NOT_BUILTIN}本想替你改挂成 ash 哨兵，但这次请求里没有回合身份，挂不了。${HOW_TO_DIY}`);
   }
 
@@ -135,7 +137,7 @@ export async function claudeMonitorHookDecision(
     && (timeoutMs < MONITOR_MIN_TIMEOUT_MS || timeoutMs > MONITOR_MAX_TIMEOUT_MS);
 
   const result = await startMonitor({
-    taskId,
+    taskId: turn.taskId,
     command,
     description: description || command,
     cwd: typeof input.cwd === "string" && input.cwd ? input.cwd : undefined,
@@ -143,8 +145,9 @@ export async function claudeMonitorHookDecision(
     ownerUserId,
     // 来源:**这个 taskId 是回连凭据核验出来的**(路由那一侧 `agentActor`,拿不到就上面
     // 已经 deny 了),而内置 Monitor 的 hook 一定发生在那条会话自己的回合里 —— 所以这是
-    // 「本任务当前这一回合」,角色由 `turnRole` 给(见 monitor-session.ts 文件头)。
-    caller: { kind: "turn" },
+    // 「本任务当前这一回合」。连**是哪一轮**一起交下去,落库处还要核对一遍它仍然有效
+    // (见 monitor-session.ts 的 `VerifiedTurn`)。
+    caller: turnCaller(turn),
   });
 
   if (!result.ok) {

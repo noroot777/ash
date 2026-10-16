@@ -20,10 +20,10 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   db, isPidAlive, makeTask, monitors, insertMonitorRow, reattachMonitors,
-  root, schema, startMonitor, teardown, until,
+  root, schema, sleep, startMonitor, stopMonitor, teardown, until,
 } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
 
@@ -31,6 +31,7 @@ const { dbClient } = await import("../src/db/index.js");
 const { spawnMonitor } = await import("../src/monitor-spawn.js");
 const { abandonRegistration } = await import("../src/monitor-create.js");
 const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
+const { beginTaskRevocation, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
 
 const debtRow = async (monId: string) => (await db.select().from(schema.monitorReclaimDebts)
   .where(eq(schema.monitorReclaimDebts.monitorId, monId))).at(0);
@@ -224,5 +225,135 @@ async function withPsOutage<T>(body: () => Promise<T>): Promise<T> {
     "没有 pid 就记不出回收责任,也不该假装记了一笔");
 }
 
+
+// ── ⑥⑦⑧ 创建是**一段时间**:这中间的撤销与结局都要被同一份协议接住(第 8 轮审查 F1/F3)──
+//
+// ①—⑤ 钉的是「身份先落库」。但创建不是一个瞬间:登记、起进程、回填 pid、放行之间都有真实的
+// 等待,而这中间会发生三件事 —— 用户点停、任务被删、壳自己退掉。前两件要让命令**不开工**,
+// 第三件要被**恰好结算一次**。下面三块逐个钉,共用一副把回填 pid 停在边界上的台子。
+
+/**
+ * 把「回填 pid」那一条 UPDATE 停在边界上。
+ *
+ * 真 SQL、真边界:只是让那一条语句晚一点执行,不伪造状态、不替换产品里的任何判断(审查的
+ * 复现脚本用的也是这一招)。
+ */
+function pausePidBackfill(): { reached: Promise<void>; open: () => void; restore: () => void } {
+  const real = dbClient.execute.bind(dbClient);
+  let signal!: () => void;
+  const reached = new Promise<void>((r) => { signal = r; });
+  let openGate!: () => void;
+  const gate = new Promise<void>((r) => { openGate = r; });
+  let paused = false;
+  (dbClient as { execute: typeof real }).execute = (async (statement: unknown) => {
+    const sql = typeof statement === "string" ? statement : String((statement as { sql?: string })?.sql ?? "");
+    if (!paused && /^update "monitors" set "pid"/i.test(sql)) {
+      paused = true;
+      signal();
+      await gate;
+    }
+    return real(statement as Parameters<typeof real>[0]);
+  }) as typeof real;
+  return { reached, open: openGate, restore: () => { (dbClient as { execute: typeof real }).execute = real; } };
+}
+
+// ⑥ **创建期点停:页面说停了,后台就不许随后才开工。**
+//
+// 上一版的现场:点停读到一条 pid 还空着的运行行 → 回收层按「没有待收资源」放过 → 写成
+// stopped 并成功返回;创建随后照旧放行,命令这才开工;再点停时状态已经不是 running,收尾函数
+// 第一行就返回 —— 页面写着已停止、进程活着、而且再也停不掉(实测 `aliveAfterSecondStop=true`)。
+{
+  const taskId = await makeTask();
+  const m = marker();
+  const paused = pausePidBackfill();
+  const creating = startMonitor({ taskId, command: m.command, description: "创建期被点停的" });
+  await paused.reached;
+  const intent = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+  assert.equal(intent.pid, null, "台子前提:此刻身份已登记、pid 还空着");
+  assert.equal(existsSync(m.path), false, "台子前提:命令还没开工");
+
+  // 点停。**它跟创建共用那条 `task:<id>` 队列**,所以这一步会一直等到创建收口 —— 先确认它
+  // 确实还没返回,再放开回填。
+  const stopping = stopMonitor(intent.id, "用户在创建期点的停");
+  let settled = false;
+  void stopping.then(() => { settled = true; });
+  await sleep(150);
+  assert.equal(settled, false, "停止要排进创建那条队列,不能在半成品上自己下结论");
+  paused.open();
+  const created = await creating;
+  const stopped = await stopping;
+  paused.restore();
+
+  assert.equal(created.ok, false, "创建期被撤销 ⇒ 这次创建就该如实失败");
+  assert.match(created.ok === false ? created.error : "", /已经被停掉了/);
+  assert.match(created.ok === false ? created.error : "", /没有开工/);
+  await sleep(300);
+  assert.equal(existsSync(m.path), false,
+    "**页面说停了,命令就一个字都不许跑** —— 放行之前要重读那一行,读到非 running 就不放行");
+  const row = (await db.select().from(monitors).where(eq(monitors.id, intent.id))).at(0)!;
+  assert.equal(row.status, "stopped", "用户点出来的「已停止」要留着(刷新页面还看得见)");
+  assert.equal(stopped?.status, "stopped", "停止也要如实回「已停止」");
+  assert.ok(row.pid, "pid 仍然落在那一行上 —— 它是那个壳的唯一线索");
+  await until("闸前那个壳被收掉", async () => !isPidAlive(row.pid!));
+  assert.equal((await db.select().from(schema.monitorReclaimDebts)
+    .where(eq(schema.monitorReclaimDebts.monitorId, intent.id))).length, 0, "确认退出了就不留责任");
+}
+
+// ⑦ **创建期任务被撤销(删除)**:同一条判据,另一条不排队的撤销路径。
+//
+// `beginTaskRevocation` 是同步关闸、之后才去抢 `task:<id>` 队列,所以入口那一问可能在关闸
+// 之前就过了 —— 放行之前必须再问一次。
+{
+  const taskId = await makeTask();
+  const m = marker();
+  const paused = pausePidBackfill();
+  const creating = startMonitor({ taskId, command: m.command, description: "创建期任务被删的" });
+  await paused.reached;
+  const intent = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+  beginTaskRevocation(taskId);
+  paused.open();
+  const created = await creating;
+  paused.restore();
+  releaseTaskRevocation(taskId);
+
+  assert.equal(created.ok, false);
+  assert.match(created.ok === false ? created.error : "", /已经开始删除/);
+  await sleep(300);
+  assert.equal(existsSync(m.path), false, "撤销之后命令不许开工");
+  const row = (await db.select().from(monitors).where(eq(monitors.id, intent.id))).at(0)!;
+  assert.ok(row.pid, "pid 留在行上:删除那一侧要按资源责任核对,空 pid 会被它当成「没东西要收」");
+  await until("闸前那个壳被收掉", async () => !isPidAlive(row.pid!));
+}
+
+// ⑧ **壳在挂上运行时之前就退了**:结局要被恰好结算一次,不许假装还在盯。
+//
+// 上一版把 `child.on("exit")` 挂在 `onExit(cb)` 里,而订阅发生在回填 pid 这一次 await 之后:
+// 命令有语法错误时壳在那之前就退掉了,那一次 exit 没有任何人听见,之后挂的监听器永远不会再
+// 被叫 —— 于是一条已经死掉的哨兵在库里和界面上都写着 running,一直挂到约定时长到期
+// (实测 `alive=false` 而 `row.status=running`、`exit_code=null`)。
+{
+  const taskId = await makeTask();
+  const paused = pausePidBackfill();
+  // `(` 过不了 sh 的语法检查:壳解析完当场失败,**在放行之前**就退了。
+  const creating = startMonitor({ taskId, command: "(", description: "语法就错的" });
+  await paused.reached;
+  await sleep(700);   // 让它确确实实先死掉,再放开回填
+  paused.open();
+  const created = await creating;
+  paused.restore();
+  assert.equal(created.ok, true, "进程起得来、身份也落得下:这次创建本身是成功的");
+  const monitorId = created.ok ? created.monitor.id : "";
+  await until("已经发生的结局被结算", async () => {
+    const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+    return row?.status === "exited";
+  }, 5_000);
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(row.status, "exited", "晚订阅也要收到已经发生的那次退出");
+  assert.equal(isPidAlive(row.pid!), false, "它确实已经不在了");
+  assert.ok((row.endedReason ?? "").length > 0, "结束原因要写上");
+  assert.ok((await db.select().from(monitors).where(and(eq(monitors.taskId, taskId),
+    eq(monitors.status, "running")))).length === 0, "更不许继续占着名额");
+}
+
+console.log("✓ 创建协议：登记失败什么都没起 / 回填失败不放行且命令从未开工 / 问不出身份时不冒充收干净 / 闸的两面 / pid 空着的意图行照实接回 / 创建期点停与撤销都不放行 / 壳先退了也恰好结算一次 均受回归保护");
 await teardown();
-console.log("✓ 创建协议：登记失败什么都没起 / 回填失败不放行且命令从未开工 / 问不出身份时不冒充收干净 / 闸的两面 / pid 空着的意图行照实接回 均受回归保护");
