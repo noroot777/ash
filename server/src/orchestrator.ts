@@ -7,7 +7,7 @@ import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
-import { freshTurnFields, openTurn, resumedTurnFields } from "./session-turns.js";
+import { closeTaskTurns, freshTurnFields, openTurn, resumedTurnFields } from "./session-turns.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun } from "./single-run.js";
@@ -690,6 +690,8 @@ export async function continueTask(
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);
+    // 同 task-run：全出口注销,不依赖走到收尾函数（第 6 轮审查必须修 1）。
+    closeTaskTurns(taskId);
     if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里

@@ -376,6 +376,83 @@ const resumeSame = async (taskId: string, text: string) => {
     `升级后那一轮账是对得上的,不该报成缺口,实际提示：${JSON.stringify(result.incomplete)}`);
 }
 
-console.log("✓ turn identity: fresh run 记上计数、两种缺口都认且披露、整批失败留下持久标记、在飞不误报、崩过的老会话不复活、同一身份只计一次、升级历史不抵扣（含下界为 0 的）、重复行不顶替");
+// ── ⑩ 结束时报错：图不能当场消失,重试也不能把中间别人做的东西当成实测（第 6 轮必须修 1）──
+{
+  const root = initRepo("end-failure");
+  await addTask("TiEndErr0001", root, "结束时报错不留假活动身份");
+  // 只拦「带收尾时刻的那次会话 UPDATE」:single-run 的收尾就卡在这里抛,于是**走不到**
+  // recordTurnSpan ——活动登记只挂在正常收尾上的话,这条会话从此一直是「还在写」。
+  await dbClient.executeMultiple(
+    "CREATE TRIGGER block_end BEFORE UPDATE ON sessions WHEN NEW.task_id='TiEndErr0001' AND NEW.ended_at IS NOT NULL BEGIN SELECT RAISE(ABORT,'injected'); END;",
+  );
+  await runTask("TiEndErr0001");
+  await dbClient.executeMultiple("DROP TRIGGER block_end;");
+  const sess = (await dbClient.execute(
+    "SELECT id, ended_at FROM sessions WHERE task_id='TiEndErr0001'",
+  )).rows[0];
+  assert.equal(sess.ended_at, null, "这一步的前提：收尾时刻确实没写进去（真实的对账不伪造它）");
+  // **全出口注销不变量**：收尾函数根本没跑完,活动身份也必须已经撤掉。这一条直接钉住
+  // 「注销不依赖走到 recordTurnSpan」,不靠下游别的机制兜底（第 6 轮审查必须修 1）。
+  const { activeTurnStarts } = await import("../src/session-turns.js");
+  assert.equal(activeTurnStarts(String(sess.id)).size, 0,
+    "结束时报错也要撤掉「正在跑」的身份——留着它,下次跑起来就从这个老起点开到无穷");
+  // 修复前这里是 `incomplete=[]` 且清单为空：残留的活动登记让读端跳过了未收尾告警,
+  // 那一轮既不出区间也不报未知,刚画好的图当场看不见。
+  const after = await listing(root, "TiEndErr0001");
+  assert(paths(after).includes("output/run-1.svg"), "异常收尾不能让这一轮刚做出来的图当场消失");
+  assert(after.incomplete.some((note) => note.includes("没留下收尾时刻")),
+    `异常收尾那一轮要照实说算不准,实际提示：${JSON.stringify(after.incomplete)}`);
+
+  // 中间另一项任务在**同一个目录**里画一张,然后重试原任务。
+  await settle();
+  await addTask("TiEndOth0001", root, "停顿期间的另一项任务");
+  await runTask("TiEndOth0001");
+  await settle();
+  await runTask("TiEndErr0001");
+  assert.equal(activeTurnStarts(String(sess.id)).size, 0, "重试开的是新会话,崩过那条不该被重新登记成活动");
+  const retried = await listing(root, "TiEndErr0001");
+  assert(paths(retried).includes("output/run-3.svg"), "重试这一轮自己做的当然算它的");
+  // 修复前：旧 session 的残留登记 + 任务重新 running ⇒ 它被当成 live,从那个老起点开到无穷
+  // 且不标 approx,中间那张图被当成实测证据收进来,提示还是空的。
+  assert(retried.incomplete.some((note) => note.includes("没留下收尾时刻")),
+    `崩过那一轮的未知不能因为重试就消失,实际提示：${JSON.stringify(retried.incomplete)}`);
+  if (paths(retried).includes("output/run-2.svg")) {
+    // 它落在「开了没收口」那段推断区间里,所以可以列出来——但只能作为候选,不能冒充实测。
+    assert(retried.incomplete.some((note) => note.includes("按估出来的时间段")),
+      `中间那张图只能算候选,实际提示：${JSON.stringify(retried.incomplete)}`);
+  }
+}
+
+// ── ⑪ 缺口标记本身也写不进去时,后来成功的一轮不能把它抹掉（第 6 轮审查必须修 2）────
+{
+  const root = initRepo("lost-then-ok");
+  await addTask("TiLost000001", root, "没确认的开始意图不能被忘掉");
+  await runTask("TiLost000001");
+  await settle();
+  // 两道一起拦：开始那一批整个回滚（身份和计数同生共死）,补 `turns_lost` 那一笔也失败。
+  // 这正是「只剩一句日志」的那条路——第 5 轮的实现到这里就把账忘了。
+  await dbClient.executeMultiple(`
+    CREATE TRIGGER block_turn_insert BEFORE INSERT ON session_turns WHEN NEW.task_id='TiLost000001' BEGIN SELECT RAISE(ABORT,'injected'); END;
+    CREATE TRIGGER block_lost BEFORE UPDATE ON sessions WHEN NEW.task_id='TiLost000001' AND NEW.turns_lost IS NOT NULL BEGIN SELECT RAISE(ABORT,'injected'); END;
+  `);
+  await resumeSame("TiLost000001", "第二轮");
+  const second = await listing(root, "TiLost000001");
+  assert(paths(second).includes("output/run-2.svg"), "第二轮做出来的图当场要能看见");
+  assert.equal((await sessionRow("TiLost000001")).turns_lost, null, "这一步的前提：连缺口标记都没写进库");
+  assert(second.incomplete.some((note) => note.includes("连开始都没在库里留下记录")),
+    `库里一个字都没有时,内存里那笔未确认的意图要算进缺口,实际提示：${JSON.stringify(second.incomplete)}`);
+  await dbClient.executeMultiple("DROP TRIGGER block_turn_insert; DROP TRIGGER block_lost;");
+  await settle();
+  await resumeSame("TiLost000001", "第三轮");
+  const third = await listing(root, "TiLost000001");
+  // 修复前：第三轮一落账,成功计数和成功身份数重新相等,图 2 从清单里消失且一个字都不说。
+  assert(paths(third).includes("output/run-2.svg"), "第三轮成功落账不能把第二轮的图抹掉");
+  assert(third.incomplete.some((note) => note.includes("连开始都没在库里留下记录")),
+    `缺口要照实说出来,实际提示：${JSON.stringify(third.incomplete)}`);
+  assert.equal(Number((await sessionRow("TiLost000001")).turns_lost), 1,
+    "库恢复之后,欠着的那笔要在下一次开回合时补成持久标记（别一直只活在内存里）");
+}
+
+console.log("✓ turn identity: fresh run 记上计数、两种缺口都认且披露、整批失败留下持久标记、在飞不误报、崩过的老会话不复活、同一身份只计一次、升级历史不抵扣（含下界为 0 的）、重复行不顶替、异常收尾不留假活动身份、未确认的开始意图不被后来成功的一轮抹掉");
 await dbClient.close();
 releaseTmpDb();

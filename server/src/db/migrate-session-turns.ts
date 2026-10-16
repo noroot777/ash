@@ -10,9 +10,9 @@
 //      判据就架在它上面。SQLite 改不了列约束,只能重建表。
 //   ② 同一 (session_id, started_at) 的重复行去掉,然后才建得上唯一索引 —— 先建索引会在
 //      有重复数据的库上直接抛,而这里抛出去等于整台 ash 起不来。
-//   ③ `turns_base` 回填成「迁移那一刻已知的历史回合数」,并标明那是下界。只认 `turns_base`
-//      还是 NULL 的行(= 没经过本版的行),所以天然只做一次：升级后新建的会话在 insert 时就
-//      把 base/approx 写上了。详见 `backfillTurnsBase` 的注释。
+//   ③ `turns_base` 回填成「迁移那一刻已知的历史回合数」,并标明那是下界。只认
+//      `turns_base_approx` 还是 NULL 的行(= 没经过本版写端的行),所以天然只做一次：升级后
+//      新建的会话在 insert 时把这一列写成 0。详见 `backfillTurnsBase` 的注释。
 import type { Client } from "./node-sqlite-client.js";
 
 const TABLE_DDL = `CREATE TABLE session_turns_rebuilt (
@@ -78,7 +78,13 @@ async function dedupeTurnRows(client: Client): Promise<void> {
 /**
  * 把「升级之前的历史」收进 `turns_base`,并明说那是个**下界**。
  *
- * 判据是 `turns_base IS NULL` 一条,不再附加 `turns_started IS NULL`。原先多那一条的想法是
+ * 判据是 `turns_base_approx IS NULL` 一条——**它才是「这条会话有没有经过本版写端」的标记**。
+ * 不能用 `turns_base IS NULL`：上一版（`0f89b2b8`）的 `freshTurnFields` 已经会写 `turns_base: 0`,
+ * 却没有这一列,于是那批行既不是 NULL base、也没有本版的原子写语义,照 base 判就被当成「已经
+ * 可信了」,它那个会漏入口、又会重复加数的旧计数从此永久参与精确对账（第 6 轮审查必须修 2 的
+ * 历史兼容边界：NULL approx 不等于 false）。
+ *
+ * 也不再附加 `turns_started IS NULL`。原先多那一条的想法是
  * 「`turns_started` 有值就说明它已经在新口径下记账了」,但那个值是**上一版**写出来的,口径
  * 跟现在不是一回事（上一版漏了起跑入口、又会重复加数）。于是 `turns_started=2` 配两行回合
  * 记录这种形状被当成完整,一个偏小的旧计数就能把真缺口整个抵掉,面板上一句话都不说
@@ -92,8 +98,9 @@ async function dedupeTurnRows(client: Client): Promise<void> {
  *   ③ `turns_started = NULL` —— 旧口径的计数不参与本版对账。读端见 null 就只按逐行事实和
  *      这条「升级前算不准」披露,不拿它去做减法。
  *
- * 幂等：新建会话在 insert 时就把 `turns_base`/`turns_base_approx` 写上（`freshTurnFields`）,
- * 所以 `turns_base IS NULL` 只对真正没经过本版的行成立,每次启动重跑都不会动到新计数。
+ * 幂等：本版新建的会话在 insert 时就把 `turns_base_approx` 写成 0（`freshTurnFields`）,迁移过
+ * 的行写成 1,所以「这一列还是 NULL」只对真正没经过本版写端的行成立,每次启动重跑都不会动到
+ * 新计数。
  */
 async function backfillTurnsBase(client: Client): Promise<void> {
   await client.execute(
@@ -104,7 +111,7 @@ async function backfillTurnsBase(client: Client): Promise<void> {
        ),
        turns_base_approx = 1,
        turns_started = NULL
-     WHERE turns_base IS NULL`,
+     WHERE turns_base_approx IS NULL`,
   );
 }
 

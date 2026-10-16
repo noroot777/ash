@@ -42,24 +42,100 @@ import { id } from "./util.js";
  *
  * 读端据此判 live：只有登记在册的身份才算还在写，同一个任务名下别的未收口身份一律留在
  * 「未知」那一档。重启后接回仍在跑的 agent（`reattach.ts`）会重新登记——那是真事实。
+ *
+ * **登记和注销是一对资源操作,注销必须覆盖全部出口**：只在正常收尾那条路上注销是不够的——
+ * 回合可能因为 stream 抛错、结算写库失败、被停、接回失败、调度台被换掉而根本走不到收尾
+ * 函数。残留的登记会让读端把一条早就死掉的会话当成「还在写」：任务下一次跑起来时它从那个
+ * 老起点一路开到无穷,中间歇着的几个钟头里别人做的东西全被认成它的,还不标 approx
+ * （第 6 轮审查必须修 1）。所以 `closeSessionTurns` / `closeTaskTurns` 挂在各入口的
+ * `finally` 和收尾函数的**开头**（不等写库成功),三条单飞/duet/team 的路都走得到。
  */
 const activeTurns = new Map<string, Set<string>>();
+/** `task_id` → 它名下登记过活动身份的会话。只为 `closeTaskTurns` 服务（finally 里只拿得到 taskId）。 */
+const sessionsByTask = new Map<string, Set<string>>();
+/**
+ * 每条会话**已经关闭到哪个起点**（含）。
+ *
+ * 作用是挡住「迟到的开始事件把一个已经退出的作用域重新登记成活动」：消费循环已经收尾、
+ * 调度台已经摘牌之后,仍可能有一个排在后面的异步回调去调 `openTurn`。回合起点在同一条
+ * 会话上单调递增,所以「起点不晚于已关闭到的那一刻」就是迟到的凭据。时钟回拨时这里会
+ * 多挡一次（退化成「不登记」= 读端照未知披露）,那是安全方向。
+ */
+const closedThrough = new Map<string, string>();
+/** 这几张表只在本进程生命周期内有意义;跑过几千条会话的长命进程别让它无限涨。 */
+const CLOSED_MEMORY_LIMIT = 4096;
 
-/** 登记「这条会话的这个回合正在跑」。 */
-export function markTurnActive(sessionId: string, startedAt: string | null | undefined): void {
+/** 登记「这条会话的这个回合正在跑」。已经关闭过的身份不再登记（迟到事件不许复活作用域）。 */
+export function markTurnActive(input: {
+  sessionId: string;
+  taskId: string;
+  startedAt: string | null | undefined;
+}): void {
+  const { sessionId, taskId, startedAt } = input;
   if (!startedAt) return;
+  const closed = closedThrough.get(sessionId);
+  if (closed && startedAt <= closed) return; // 迟到：这个作用域已经退出了
   const seen = activeTurns.get(sessionId);
   if (seen) seen.add(startedAt);
   else activeTurns.set(sessionId, new Set([startedAt]));
+  const peers = sessionsByTask.get(taskId);
+  if (peers) peers.add(sessionId);
+  else sessionsByTask.set(taskId, new Set([sessionId]));
+}
+
+/** 记下「这条会话关闭到这一刻为止」，并顺手给内存封顶。 */
+function rememberClosed(sessionId: string, startedAt: string): void {
+  const prev = closedThrough.get(sessionId);
+  if (!prev || startedAt > prev) closedThrough.set(sessionId, startedAt);
+  if (closedThrough.size <= CLOSED_MEMORY_LIMIT) return;
+  // 满了就从最早插入的那半开始丢（Map 保持插入序）。丢掉的只是「挡迟到事件」这层保险,
+  // 而那些会话早就不在跑了,真有迟到回调也进不来。
+  let drop = Math.floor(closedThrough.size / 2);
+  for (const key of closedThrough.keys()) {
+    if (drop-- <= 0) break;
+    if (!activeTurns.has(key)) closedThrough.delete(key);
+  }
 }
 
 /** 注销：收尾（或者确认不再跑）之后调。幂等——同一回合可能被收两次（接回、旧调度台）。 */
 export function clearTurnActive(sessionId: string, startedAt: string | null | undefined): void {
   if (!startedAt) return;
+  rememberClosed(sessionId, startedAt);
   const seen = activeTurns.get(sessionId);
   if (!seen) return;
   seen.delete(startedAt);
   if (!seen.size) activeTurns.delete(sessionId);
+}
+
+/**
+ * 这条会话名下**全部**活动身份一次注销。
+ *
+ * 用在「这条消费循环结束了」的地方（各入口的 finally、收尾函数开头、调度台摘牌/关台）：
+ * 那一刻不必知道具体是哪个回合,也不该依赖写库成功——会话都不在跑了,它名下不可能还有
+ * 回合在写。
+ */
+export function closeSessionTurns(sessionId: string): void {
+  const seen = activeTurns.get(sessionId);
+  if (seen) for (const at of [...seen]) clearTurnActive(sessionId, at);
+  else {
+    // 没有活动身份也要留下「已关闭」的水位,否则迟到的开始事件照样能把它登记回来。
+    const now = new Date().toISOString();
+    rememberClosed(sessionId, now);
+  }
+}
+
+/**
+ * 这个任务名下全部会话的活动身份一次注销。
+ *
+ * 各入口的 `finally` 只拿得到 `taskId`（`sessId` 声明在 try 里面）,而「这一次调用结束了」
+ * 恰好等于「这一轮不再有任何回合在写」——单飞/续聊一个任务同时只有一条会话在跑,duet 的
+ * 两个角色串行发言,团队调度台不走这两条路。
+ */
+export function closeTaskTurns(taskId: string): void {
+  const peers = sessionsByTask.get(taskId);
+  if (!peers) return;
+  for (const sessionId of [...peers]) closeSessionTurns(sessionId);
+  sessionsByTask.delete(taskId);
 }
 
 /** 这条会话此刻正在跑的回合起点。空集 = 它名下没有任何回合在跑（读端据此不给 live）。 */
@@ -68,6 +144,50 @@ export function activeTurnStarts(sessionId: string): ReadonlySet<string> {
 }
 
 const EMPTY_STARTS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * **没能落账的开始意图**：`session_id` → 那几个连一行都没写进去的回合起点。
+ *
+ * 为什么光靠库里的 `turns_lost` 不够：开始那一批整个回滚之后,补写这个标记的目标**还是刚刚
+ * 写失败的那个库**,它很可能一起失败——那就只剩一句日志。而下一轮一落账,成功计数和成功
+ * 身份数又重新相等,读端于是宣称完整,中间那一轮做出来的图被静默滤掉（第 6 轮审查必须修 2）。
+ *
+ * 所以未确认的意图先留在内存里：读端把它直接算进缺口（哪怕库里一个字都没有）,下一次开回合
+ * 时再试着补成持久的 `turns_lost`。库恢复了就补上,库一直不可写就一直按未知披露。进程同时
+ * 被杀且库从未写成那一笔才会真丢——那一档物理上没有别的办法,不装作记住了。
+ */
+const unconfirmed = new Map<string, Set<string>>();
+
+/** 这条会话有几个开始意图还没被确认落账（读端把它算进缺口）。 */
+export function unconfirmedTurns(sessionId: string): number {
+  return unconfirmed.get(sessionId)?.size ?? 0;
+}
+
+function rememberUnconfirmed(sessionId: string, startedAt: string): void {
+  const seen = unconfirmed.get(sessionId);
+  if (seen) seen.add(startedAt);
+  else unconfirmed.set(sessionId, new Set([startedAt]));
+}
+
+/**
+ * 把欠着的「漏了一轮」补成库里的 `turns_lost`。开回合时先试一次：库恢复了就不再依赖内存。
+ *
+ * 补成功才从内存移除,所以同一笔账**不会**两边各算一次（读端 = `turns_lost` + 内存未确认）。
+ */
+async function flushUnconfirmed(sessionId: string): Promise<void> {
+  const owed = unconfirmed.get(sessionId);
+  if (!owed?.size) return;
+  const count = owed.size;
+  try {
+    await db.update(sessions)
+      .set({ turnsLost: sql`COALESCE(${sessions.turnsLost}, 0) + ${count}` })
+      .where(eq(sessions.id, sessionId));
+    unconfirmed.delete(sessionId);
+  } catch (error) {
+    // 还是写不进去：账留在内存里,读端照样看得见缺口。
+    console.warn(`[ash] 欠着的 ${count} 笔「漏了一个回合」还没补进库（这一段按未知披露）: ${String(error)}`);
+  }
+}
 
 /**
  * 新建会话行时的回合字段。
@@ -111,7 +231,10 @@ export async function openTurn(input: {
   if (!input.startedAt) return;
   // 先登记活动身份：登记得比写库早一点没有坏处（读端还要求任务在 running/queued），
   // 反过来晚一点就有——那个窗口里面板会把正在写的这一轮算成「崩了没收口」。
-  markTurnActive(input.sessionId, input.startedAt);
+  markTurnActive({ sessionId: input.sessionId, taskId: input.taskId, startedAt: input.startedAt });
+  // 上一轮欠着的「漏了一个回合」在这里补：那时库正坏着,现在也许好了。放在新回合落账**之前**,
+  // 这样「后来成功的一轮」永远不会先把两个数凑相等再让欠账无声无息（第 6 轮审查必须修 2）。
+  await flushUnconfirmed(input.sessionId);
   const args = {
     row: id(),
     sid: input.sessionId,
@@ -139,7 +262,7 @@ export async function openTurn(input: {
       },
     ]);
   } catch (error) {
-    await noteTurnLost(input.sessionId, error);
+    await noteTurnLost(input.sessionId, input.startedAt, error);
   }
 }
 
@@ -147,18 +270,16 @@ export async function openTurn(input: {
  * 「这一轮整个没记上」记一笔。
  *
  * 这是**唯一**还知道刚才漏了一轮的地方：行和计数同批写,都失败时库里两个数仍然相等,对账
- * 一点痕迹都看不出来（第 5 轮审查必须修 2.3）。连这一笔都写不进去就只剩日志——库彻底不可
- * 写时没有别的办法,不装作记住了。
+ * 一点痕迹都看不出来（第 5 轮审查必须修 2.3）。而补这一笔的目标还是刚刚写失败的那个库,所以
+ * **先把意图记在内存里**（`unconfirmed`）再试持久化,写成了才把内存那笔划掉；没写成就留着,
+ * 读端照样把它算进缺口,下一次开回合时再试（第 6 轮审查必须修 2）。
  */
-async function noteTurnLost(sessionId: string, cause: unknown): Promise<void> {
+async function noteTurnLost(sessionId: string, startedAt: string, cause: unknown): Promise<void> {
   console.warn(`[ash] 回合开始没落盘（这一轮按缺口披露）: ${String(cause)}`);
-  try {
-    await db.update(sessions)
-      .set({ turnsLost: sql`COALESCE(${sessions.turnsLost}, 0) + 1` })
-      .where(eq(sessions.id, sessionId));
-  } catch (error) {
-    console.warn(`[ash] 连「漏了一个回合」都没记下来，这一段会被当成完整的: ${String(error)}`);
-  }
+  // **先记内存,再试库**。顺序反过来就又回到「补写也失败 = 只剩日志」那一步：那一笔账从此
+  // 没人记得,下一轮一落账两个数就重新相等（第 6 轮审查必须修 2）。
+  rememberUnconfirmed(sessionId, startedAt);
+  await flushUnconfirmed(sessionId);
 }
 
 /**

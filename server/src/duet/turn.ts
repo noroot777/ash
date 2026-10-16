@@ -14,7 +14,7 @@ import { eq, sql } from "drizzle-orm";
 import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
-import { freshTurnFields, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
+import { closeSessionTurns, freshTurnFields, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
@@ -307,6 +307,10 @@ export async function runTurn(args: {
     }
   } finally {
     untrackRun(taskId, handle);
+    // 消费循环结束 = 这一轮不再写盘。注销不能等到下面那句 `recordTurnSpan`：中间的会话
+    // UPDATE 抛了就跳过它,残留的活动登记会让读端把这条会话当成「还在写」（第 6 轮审查
+    // 必须修 1）。幂等,正常路径上收尾那边会再注销一次。
+    closeSessionTurns(rowId);
   }
 
   let raised = RAISE_RE.test(text);

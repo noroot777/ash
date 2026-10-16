@@ -21,7 +21,9 @@ try {
   await dbClient.executeMultiple(`
     CREATE TABLE sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT, agent_type TEXT, executor TEXT,
       cwd TEXT, started_at TEXT NOT NULL, ended_at TEXT, turn_started_at TEXT, active_ms INTEGER,
-      turns_started INTEGER);
+      -- 上一版（0f89b2b8）已经有 turns_started 和 turns_base 两列,但还没有 turns_base_approx。
+      -- 这就是「中间版本跑过真实任务」之后库里的样子,回填必须认得出它不可信。
+      turns_started INTEGER, turns_base INTEGER);
     CREATE TABLE session_turns (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, task_id TEXT NOT NULL,
       cwd TEXT, started_at TEXT NOT NULL, ended_at TEXT NOT NULL);
     INSERT INTO sessions (id, task_id, started_at) VALUES ('s1','t1','2026-10-01T00:00:00.000Z');
@@ -36,6 +38,13 @@ try {
       VALUES ('s2','t2','2026-10-02T00:00:00.000Z', 2);
     INSERT INTO session_turns VALUES ('d','s2','t2','/y','2026-10-02T00:00:00.000Z','2026-10-02T00:10:00.000Z');
     INSERT INTO session_turns VALUES ('e','s2','t2','/y','2026-10-02T01:00:00.000Z','2026-10-02T01:10:00.000Z');
+    -- 上一版 freshTurnFields 写出来的形状：base 已经是 0（非 NULL）、计数是它那个口径,
+    -- 但没有「这是下界吗」这一列。拿 base IS NULL 当判据就会把它当成「已经可信升级过了」,
+    -- 它那个会漏入口、又会重复加数的计数从此永久参与精确对账（第 6 轮审查必须修 2 的历史边界）。
+    INSERT INTO sessions (id, task_id, started_at, turns_started, turns_base)
+      VALUES ('s4','t4','2026-10-04T00:00:00.000Z', 2, 0);
+    INSERT INTO session_turns VALUES ('f','s4','t4','/z','2026-10-04T00:00:00.000Z','2026-10-04T00:10:00.000Z');
+    INSERT INTO session_turns VALUES ('g','s4','t4','/z','2026-10-04T02:00:00.000Z','2026-10-04T02:10:00.000Z');
   `);
 
   await ensureSchema();
@@ -74,6 +83,12 @@ try {
   assert.equal(legacyCounted.turns_started, null, "上一版的计数口径不参与本版对账");
   assert.equal(Number(legacyCounted.turns_base_approx), 1, "它的升级前历史照样算不准（必须修 2.2）");
 
+  // 上一版写出来的 base=0 / approx 缺列：判据必须是「approx 还是 NULL」而不是「base 还是 NULL」。
+  const midVersion = await sessionRow("s4");
+  assert.equal(Number(midVersion.turns_base), 2, "上一版的计数和行数里取大的那个作下界");
+  assert.equal(midVersion.turns_started, null, "上一版的计数口径不参与本版对账");
+  assert.equal(Number(midVersion.turns_base_approx), 1, "NULL approx 不等于 false：那一版的账不可信（必须修 2 历史边界）");
+
   // 幂等：`ensureSchema` 每次启动都跑,而回填这次会扫**所有** `turns_base IS NULL` 的行——
   // 升级之后新建的会话（insert 时就写了 base/approx）必须一个字都不被它动到,否则每次重启
   // 都把本版的真实计数清成 NULL,对账这一道从此形同虚设。
@@ -82,7 +97,7 @@ try {
        VALUES ('s3','t3','2026-10-03T00:00:00.000Z', 3, 0, 0)`,
   );
   await ensureSchema();
-  assert.equal(Number((await dbClient.execute("SELECT COUNT(*) c FROM session_turns")).rows[0].c), 4, "再跑一次仍是四行");
+  assert.equal(Number((await dbClient.execute("SELECT COUNT(*) c FROM session_turns")).rows[0].c), 6, "再跑一次仍是六行");
   const again = await sessionRow("s1");
   assert.equal(Number(again.turns_base), 2, "基数不被二次回填改写（判据是「turns_base 还是 NULL」，所以只会做一次）");
   assert.equal(Number(again.turns_base_approx), 1, "「算不准」这个标记也不该被改掉");
@@ -91,7 +106,7 @@ try {
   assert.equal(Number(fresh.turns_base), 0, "它没有升级前历史");
   assert.equal(Number(fresh.turns_base_approx), 0, "也不该被标成「算不准」");
 
-  console.log("✓ turn migration: ended_at 放开、重复回合去重、唯一索引建上、旧计数（含非 NULL 的）收成可披露的下界、本版计数不被回填动到、幂等");
+  console.log("✓ turn migration: ended_at 放开、重复回合去重、唯一索引建上、旧计数（含非 NULL base 的中间版本）收成可披露的下界、本版计数不被回填动到、幂等");
 } finally {
   await dbClient.close();
   await releaseTmpDb();

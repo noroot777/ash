@@ -4,8 +4,7 @@ import type { AgentEvent } from "@ash/shared";
 import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
-import { openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
-import { bus } from "../bus.js";
+import { clearTurnActive, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
 import { now } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { untrackRun, takeStopped } from "../runs.js";
@@ -16,9 +15,7 @@ import {
   sessionResumeFaultNote,
   shouldDropSession,
 } from "../executors/session-lost.js";
-import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
-import { noteAgentEventUpload } from "../uploads.js";
-import type { SessionTraceEvent } from "../transcript.js";
+import { writeRunError, writeTurnEnd } from "../transcript.js";
 import { isSessionScopeNotice } from "../session-notice.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
@@ -33,6 +30,15 @@ import {
   type RotationState,
 } from "./rotation-state.js";
 import type { Lead } from "./session-types.js";
+// 说话的三个出口（SSE / trace / .md）住在 lead-voice.ts,见那份顶部。
+import {
+  flushSessionNotices,
+  noteSessionNotice,
+  publish,
+  recordSystemTurn,
+  reportLeadFailure,
+  traceLead,
+} from "./lead-voice.js";
 
 const IDLE_MS = Number(process.env.ASH_TEAM_IDLE_MS ?? 30 * 60_000);
 const CLOSE_GRACE_MS = 10_000;
@@ -215,44 +221,8 @@ async function consume(lead: Lead): Promise<void> {
   await closeLead(lead, exitStatus, rotation, aborted);
 }
 
-function publish(lead: Lead, event: AgentEvent): void {
-  // 摘牌后一个字都不再广播:这条 sessionId 现在归接管的那台,用户正看着它说话,
-  // 收到旧进程的「执行异常结束/意外退出」只会当成新会话出了事(见 retireLead)。
-  if (lead.retired) return;
-  bus.publish({
-    type: "agent.event",
-    taskId: lead.taskId,
-    sessionId: lead.sessId,
-    role: "lead",
-    agentType: lead.agentType,
-    model: lead.model,
-    reasoningEffort: lead.reasoningEffort,
-    event,
-  });
-}
 
-// 执行过程面板那条流。跟 publish / lead.out 同一块牌子:摘牌之后这条 sessId 的 trace
-// 归接管的那台,旧进程晚到的事件不许再插进去(见 retireLead)。
-function traceLead(lead: Lead, turnStart: string, event: SessionTraceEvent, at?: string): void {
-  if (lead.retired) return;
-  // agent 产出的图归这个任务(uploads.ts)。单飞那条链的同一处在 single-run.ts 的
-  // persistTrace —— 两条链各走各的 trace 写入,改一处记得看另一处。
-  noteAgentEventUpload(lead.taskId, event);
-  appendSessionTrace(lead.taskId, lead.sessId, turnStart, event, at);
-}
 
-// 收尾链上的持久化失败:如实落到三处(.md / trace / SSE),然后**咽回去**。
-//
-// 常驻调度台跟一次性任务不一样 —— 它的每一次写库都跑在 consume 那条 for-await 里面。
-// 抛出去掀掉的不是一个回合,是整台调度台:closeLead 再也不会跑,于是 leads 里留着一台
-// 没人消费事件的**假在线**调度台(后续消息照送进去,一个字都不落盘也不广播),任务永远
-// 停在 running,攒下的轮换旁注烂在内存里 —— 只能靠重启恢复(2026-08-25 第 2 轮审查)。
-// 一次写库失败该丢的只是那一行状态,不是这台调度台。
-function reportLeadFailure(lead: Lead, message: string, at = now()): void {
-  writeRunError(lead.out, message);
-  traceLead(lead, lead.turnStart ?? at, { kind: "error", message }, at);
-  publish(lead, { kind: "error", message });
-}
 
 /** 跑一次写库;失败只上报不外抛,返回它成没成。**只能在 lead.out.end() 之前调**。 */
 async function persistOrReport(
@@ -374,6 +344,11 @@ async function setLeadStatus(lead: Lead, status: "running" | "idle", at = now())
 function retireLead(lead: Lead): void {
   if (lead.retired) return; // 摘过一次就够了:再摘一次时新台可能正说到一半,不能往共享 .md 里补写
   lead.retired = true;
+  // 摘牌 = 这台的作用域被换掉了,它手上那个回合从此不会再写盘,活动登记跟着撤
+  //（第 6 轮审查必须修 1:注销要覆盖「被替换」这个出口,不只正常收尾）。
+  // **只撤自己那一个起点**,不是整条会话：接管那条路会复用同一行,新台刚登记的起点不能被
+  // 晚到的旧收尾一起清掉（closeLead 的 superseded 分支就是这么进来的）。
+  clearTurnActive(lead.sessId, lead.turnStart);
   clearStatusRetry(lead);
   lead.wantedStatus = null;
   // 手上这批待送消息的**所有权**跟着牌子一起交出去(见 releasePending)。
@@ -415,29 +390,7 @@ function armStatusRetry(lead: Lead): void {
   lead.statusTimer = t;
 }
 
-// 入站消息(执行者汇报/提问、系统提示)记成 system turn:实时走 system 事件、
-// 刷新走 .md 的哨兵行,两边长得一样。
-function recordSystemTurn(lead: Lead, text: string, at = now()): void {
-  writeTurn(lead.out, { t: "system", agent: lead.agentType, text }, at);
-  publish(lead, { kind: "system", text, at });
-}
 
-// 会话轮换旁注:实时立刻播(用户正看着),落盘等 writeTurnEnd 之后由 flushSessionNotices
-// 补 —— 理由见 Lead.notices。摘牌之后一句都不再说:那条会话现在归接管的那台,这台既不
-// 该广播,攒下的也没有能落盘的地方(见 retireLead)。
-function noteSessionNotice(lead: Lead, text: string, at = now(), level?: "notice"): void {
-  if (lead.retired) return;
-  lead.notices.push({ text, at, level });
-  publish(lead, { kind: "system", text, at, ...(level ? { level } : {}) });
-}
-
-function flushSessionNotices(lead: Lead): void {
-  const notices = lead.notices;
-  lead.notices = [];
-  for (const notice of notices) {
-    writeTurn(lead.out, { t: "system", agent: lead.agentType, text: notice.text, level: notice.level }, notice.at);
-  }
-}
 
 async function beginTurn(lead: Lead, at = now()): Promise<void> {
   lead.busy = true;
@@ -472,6 +425,9 @@ async function endTurn(lead: Lead): Promise<void> {
   const spent = turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(turnStart)) : 0;
   lead.busy = false;
   lead.turnStart = null;
+  // 回合说完了就不再写盘,注销排在写库之前：下面那两次写都可能失败,失败时照样不能留一个
+  //「还在跑」的身份给读端（第 6 轮审查必须修 1）。
+  clearTurnActive(lead.sessId, turnStart);
   // 写库失败绝不能把下面整段收尾一起带走 —— writeTurnEnd、旁注落盘、待送消息、落 idle
   // 全在后面(理由见 persistOrReport)。丢的只是这一行用时统计。
   await updateOwnSession(
@@ -551,6 +507,8 @@ async function closeLead(
   // 进程没走 `endTurn` 就没了（异常退出、被停、被回收），手上这个回合还开着：它的区间得
   // 在这儿补一行。不补就只剩「会话结束了、最后一个回合没有记录」，产物归属读到那个缺口
   // 只能按会话寿命估，那一回合真做出来的东西要么被滤掉要么混进别人的（第 2 轮审查 F1）。
+  // 进程都没了,这个回合当然不在写了——撤登记排在补区间**之前**,补不进去也不留假活动身份。
+  clearTurnActive(lead.sessId, lead.turnStart);
   if (lead.turnStart) {
     await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: lead.turnStart, endedAt: endIso });
   }

@@ -9,7 +9,7 @@ import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
-import { freshTurnFields, openTurn } from "./session-turns.js";
+import { closeTaskTurns, freshTurnFields, openTurn } from "./session-turns.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
@@ -300,5 +300,10 @@ export async function runTask(
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);
+    // 这一次调用结束了 = 它名下不再有回合在写。**注销不能只挂在正常收尾那条路上**：
+    // stream 抛错、结算写库失败、被停都走不到 `recordTurnSpan`,残留的活动登记会让读端把这条
+    // 早就死掉的会话当成「还在写」,下次跑起来就从老起点开到无穷、把中间别人做的东西收进来
+    //（第 6 轮审查必须修 1）。幂等,正常路径上收尾时已经注销过了。
+    closeTaskTurns(taskId);
   }
 }

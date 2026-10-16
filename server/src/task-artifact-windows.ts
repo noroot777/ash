@@ -4,7 +4,7 @@ import { monitors } from "./db/schema-monitors.js";
 import { sessionTurns, sessions } from "./db/schema.js";
 import type { WorkspaceRoot } from "./file-browser.js";
 import type { PathLens } from "./task-artifact-paths.js";
-import { activeTurnStarts } from "./session-turns.js";
+import { activeTurnStarts, unconfirmedTurns } from "./session-turns.js";
 
 // 「它什么时候在写这个目录」——共享工作区上唯一能把任务分开的线索。归属证据的另一档
 // （目录独占）和入口在 `task-artifact-scope.ts`。
@@ -295,7 +295,10 @@ export async function runWindows(
       // 这里只要别把它数成缺口（第 4 轮审查 N1：健康的在飞回合被当成写入失败）。
       // **按身份比,不按时刻比**：登记在册的才是正在跑的那个,同一条会话上别的未收口身份
       // （上一次崩掉留下的）照样要算缺口（第 5 轮审查必须修 1）。
-      if (activeStarts.has(turn.startedAt)) continue;
+      // 还要**同时要求 live**：任务都不在飞了,再怎么登记在册也不可能还在写——那只能是注销
+      // 漏了某个出口留下的残影。少这个前缀的后果是异常收尾之后那一轮既不出区间（这里 continue
+      // 了）、也不报未知,它刚做出来的图当场从清单里消失（第 6 轮审查必须修 1 的前半）。
+      if (live && activeStarts.has(turn.startedAt)) continue;
       // 开了没收口,又不是在飞：收尾那一下没写成。末端取**下一个回合的起点**（那一刻它
       // 肯定已经停了）,没有下一轮就按会话收尾时刻、再不行才兜底。这一段是估的,标 approx。
       const next = allStarts.filter((at) => at > openAt + TURN_SKEW_MS).sort((a, b) => a - b)[0];
@@ -318,8 +321,13 @@ export async function runWindows(
     //     没建上时的重复行被去重后反而少了）；
     //   • `turns_lost` —— 开回合那一批整个没写成。行和计数同批写之后两边同生共死,对账在
     //     这种情形下一点痕迹都看不出来,只有写端自己记的这一笔算得上证据（必须修 2.3）。
+    //   • 还没确认落账的开始意图 —— 开始那一批整个回滚、补 `turns_lost` 那一笔**也**失败时,
+    //     库里两个数仍然相等,缺口一点痕迹都没有。那一刻唯一还记得的是写端自己的内存
+    //     （`unconfirmedTurns`）,所以这里把它一起算进来：库恢复后那笔会被补成持久的
+    //     `turns_lost`（补成功才从内存划掉,不会两边各算一次),库一直不可写就一直按未知
+    //     披露（第 6 轮审查必须修 2）。
     const missing = (expected == null ? 0 : Math.max(0, expected - (seen?.starts.size ?? 0)))
-      + (row.turnsLost ?? 0);
+      + (row.turnsLost ?? 0) + unconfirmedTurns(row.id);
     if (missing > 0) {
       // 缺的是哪几段无从得知，只能把整条寿命算成宽的那一档并说出来。
       counts.missing += missing;
