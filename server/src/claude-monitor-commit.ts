@@ -31,11 +31,8 @@
 //     没跳过前缀的那一代里，同样配不上就是真的无关（否则无限重读），见
 //     `CommitOutcome.undecidable` 与扫描层的 `SessionScan.skippedPrefix`。
 import { and, eq, isNull } from "drizzle-orm";
-import {
-  claudeMonitorEndedReason, claudeMonitorStatus, monitorExactExpiry, monitorStartTrusted,
-  monitorStatusCorrectable, parseMonitorStartReceipt, startAnchorTolerance,
-  type MonitorLifetime, type MonitorStartEvidence, type MonitorStatus,
-} from "@ash/shared/monitor";
+import { monitorExactExpiry, monitorStartTrusted, monitorStatusCorrectable, parseMonitorStartReceipt, startAnchorTolerance, type MonitorLifetime, type MonitorStartEvidence, type MonitorStatus } from "@ash/shared/monitor";
+import { claudeMonitorEndedReason, claudeMonitorStatus } from "@ash/shared/monitor-claude";
 import { bus } from "./bus.js";
 import { createLivenessProbe } from "./claude-monitor-liveness.js";
 import { matchBySource, type SourceEvidence } from "./claude-monitor-identity.js";

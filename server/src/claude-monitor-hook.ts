@@ -79,6 +79,22 @@ const deny = (reason: string): ClaudeMonitorHookDecision => ({
 });
 
 /**
+ * 代办这件事**自己炸了**时回的那一句。
+ *
+ * 为什么不能回「没有决定」：空对象在这个接口上的意思是不表态，而不表态 = 放行 —— 于是
+ * 一次临时的库错误（SQLITE_BUSY 之类）就让那个注定活不过这一轮的监听挂了上去，agent
+ * 照旧说「挂好了，结束会叫我」，这一轮结束后没有任何东西会叫它（第 1 轮审查 F3 实测：
+ * 注入一次查库异常，端点回 200 `{}`）。所以已经认出是 Monitor 的调用，只有两个出口：
+ * **代办成功并拒掉原工具**，或者**没能代办、明确拒掉并说清怎么补**。
+ */
+export const monitorHookInternalError = (detail: string): ClaudeMonitorHookDecision =>
+  deny(`${WHY_NOT_BUILTIN}本想替你改挂成 ash 哨兵，但 ash 这边处理这次请求时出错了（${detail}）。${HOW_TO_DIY}`);
+
+/** 这次 PreToolUse 事件是不是内置 `Monitor` 的调用。不是的话 ash 一律不表态。 */
+export const isMonitorHookCall = (input: ClaudeMonitorHookInput | null | undefined): boolean =>
+  input?.tool_name === MONITOR_TOOL;
+
+/**
  * 这次 Monitor 调用该怎么处置。
  *
  * `taskId` 为空 = CLI 没把回合身份插进 header（老版本，或这根本不是 ash 拉起的 claude）。

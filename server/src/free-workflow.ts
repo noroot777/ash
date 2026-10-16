@@ -42,6 +42,7 @@ import {
   launchReviewRound,
   nextRound,
   reviewingRun,
+  stopReviewRunMonitors,
 } from "./free-review-round.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
@@ -403,6 +404,7 @@ export async function handleFreeWorkflowSettlement(
   if (outcome === "failed") {
     await db.update(freeReviewRounds).set({ status: "error", endedAt: at }).where(eq(freeReviewRounds.id, round.id));
     await db.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at }).where(eq(freeReviewRuns.id, run.id));
+    await stopReviewRunMonitors(run.id, "这次审查已结束（未给出结论），它挂的哨兵一并收回");
     await appendTaskTimeline(taskId, run.targetKind === "accepted_merge"
       ? "合并结果审查未能正常给出结论；原任务保持已验收，可重新发起审查。"
       : `自由工作流第 ${run.currentRound} 轮审查未能正常给出结论，已停止自动链。`);
@@ -417,6 +419,7 @@ export async function handleFreeWorkflowSettlement(
   if (passed) {
     await db.update(freeReviewRuns).set({ status: "passed", updatedAt: at, finishedAt: at })
       .where(eq(freeReviewRuns.id, run.id));
+    await stopReviewRunMonitors(run.id, "这次审查已通过，它挂的哨兵一并收回");
     await appendTaskTimeline(taskId, run.targetKind === "accepted_merge"
       ? `合并结果审查通过（${run.reviewerName}）；原任务继续保持已验收。`
       : `自由工作流第 ${run.currentRound} 轮审查通过（${run.reviewerName}）。`);
@@ -428,6 +431,7 @@ export async function handleFreeWorkflowSettlement(
   // 未通过：run 一律落 stopped。链要不要自动续，看轮数——还有就发修复消息 + 挂续轮预约。
   await db.update(freeReviewRuns).set({ status: "stopped", updatedAt: at, finishedAt: at })
     .where(eq(freeReviewRuns.id, run.id));
+  await stopReviewRunMonitors(run.id, "这次审查已出结论，它挂的哨兵一并收回");
   if (run.targetKind === "accepted_merge") {
     await appendTaskTimeline(taskId, "合并结果审查未通过；原任务保持已验收，可从审查记录创建独立修复任务。");
     await cleanupAcceptedMergeRun(run);

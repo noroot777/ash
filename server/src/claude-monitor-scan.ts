@@ -60,7 +60,8 @@
 // 孤儿、把可重放位置永久钉死在那儿，固定输入于是永远读不完（第 10 轮审查实测：连续 24 轮硬
 // 淘汰，读取窗口一动不动，末尾那个 Monitor 始终缺卡）。
 import { stat } from "node:fs/promises";
-import { claudeMonitorStatus, parseMonitorStartReceipt } from "@ash/shared/monitor";
+import { parseMonitorStartReceipt } from "@ash/shared/monitor";
+import { claudeMonitorStatus } from "@ash/shared/monitor-claude";
 import { monitorStr as str, parseMonitorInput } from "./claude-monitor-call.js";
 import type { ScanCursor } from "./claude-monitor-cursors.js";
 import { eachLine, scanWindowBytes, streamFilesOf } from "./claude-monitor-read.js";

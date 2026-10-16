@@ -206,7 +206,52 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     "token 对不上就不该替它挂",
   );
   assert.match(badReason, /没有回合身份/, `实际：${badReason}`);
+
+  // ── ⑩ 内部出错时也**不许变成放行** ────────────────────────────────────────
+  //
+  // 这是第 1 轮审查 F3：异常曾被转成「没有决定」，而空对象在这个接口上的意思是不表态 ——
+  // claude 于是走它自己的流程，把那个注定活不过这一轮的监听挂上去。两处异常面都要测：
+  // 代办本体（startMonitor 查库）和**身份解析**（`agentActor` 也查库，它曾漏在 catch 外，
+  // 一次故障就能让整个端点抛出去 → 非 2xx → 同样是放行）。
+  const injected = await makeTask();
+  await db.update(tasks).set({ activeTurnToken: "TURN-OK" }).where(eq(tasks.id, injected));
+  const originalSelect = db.select;
+  for (const stage of ["身份解析", "代办本体"] as const) {
+    // 身份解析是这个端点的第一次查库，代办本体是之后那几次；用「第几次」把两处分开。
+    let calls = 0;
+    db.select = ((...args: unknown[]) => {
+      calls += 1;
+      if (stage === "身份解析" ? calls === 1 : calls > 1) throw new Error(`INJECTED_${stage}`);
+      return (originalSelect as (...a: unknown[]) => unknown).apply(db, args);
+    }) as typeof db.select;
+    let response;
+    try {
+      response = await post(injected, "TURN-OK", "sleep 38");
+    } finally {
+      db.select = originalSelect;
+    }
+    assert.equal(response.status, 200, `${stage}出错时也必须回 200，非 2xx 等于放行`);
+    const body = await response.json() as
+      { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
+    assert.notDeepEqual(body, {}, `${stage}出错时回空对象 = 不表态 = 放行原生 Monitor（F3）`);
+    assert.equal(body.hookSpecificOutput?.permissionDecision, "deny",
+      `${stage}出错时也要明确拒掉原工具`);
+    assert.match(body.hookSpecificOutput?.permissionDecisionReason ?? "", /start_monitor/,
+      `${stage}出错时要告诉它怎么自己补上，否则它只知道「被拒了」`);
+    assert.equal(
+      (await db.select().from(monitors).where(eq(monitors.taskId, injected))).length, 0,
+      `${stage}出错时不该留下半条哨兵`,
+    );
+  }
+
+  // 不是 Monitor 的调用照旧不表态 —— 上面那条「出错也要 deny」不能把这一条带歪。
+  const notMonitor = await app.request("/api/hooks/claude-monitor", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(event({ command: "ls" }, "Bash")),
+  });
+  assert.deepEqual(await notMonitor.json(), {}, "别的工具一律不表态");
 }
 
 await teardown();
-console.log("Monitor 改道：别的工具不碰 / 正常那条真起哨兵并要求 pause_task 收尾 / 描述空了拿命令顶上 / ws 拦住并指路 / 没身份也不放行 / 闸拒如实转达 / 超界钳住且说出来 / 一次性回合挂常驻不挂 / 自用模式也认得出回合身份且 token 不对不代办 均受回归保护");
+console.log("Monitor 改道：别的工具不碰 / 正常那条真起哨兵并要求 pause_task 收尾 / 描述空了拿命令顶上 / ws 拦住并指路 / 没身份也不放行 / 闸拒如实转达 / 超界钳住且说出来 / 一次性回合挂常驻不挂 / 自用模式也认得出回合身份且 token 不对不代办 / 身份解析与代办出错都明确拒绝而不是放行 均受回归保护");

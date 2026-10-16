@@ -11,7 +11,7 @@
 //
 // ② **一条事件 = 唤醒一次 = 一个真实的模型回合。** 所以合并是第一位的：同一个哨兵还没
 //    送出去的事件直接往那一行后面追加，agent 一次醒来看完全部；而不是一行一个回合。
-import { and, desc, eq, like, isNull } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import {
   MONITOR_BATCH_MS,
   MONITOR_MAX_EVENTS,
@@ -21,20 +21,18 @@ import {
   MONITOR_TAIL_DEFAULT_LINES,
   MONITOR_TAIL_MAX_BYTES,
   MONITOR_TAIL_MAX_LINES,
-  mergeMonitorEventText,
   normalizeMonitorTimeout,
-  monitorMessageOrigin,
   monitorExactExpiry,
   type MonitorStatus,
   type TaskMonitor,
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
-import { monitors, projects, scheduledMessages, sessions, tasks } from "./db/schema.js";
+import { monitors, projects, sessions, tasks } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
 import { monitorLogPath, readLogTail, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
-import { monitorSourceRole, monitorTaskGate } from "./monitor-session.js";
-import { enqueueMessage, flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
+import { cancelPendingMonitorEvents, pushToTask } from "./monitor-events.js";
+import { isReviewRunActive, monitorSourceGate } from "./monitor-session.js";
 import { isSameProcess, inspectProcess } from "./proc.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
@@ -155,13 +153,14 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
   return serialize(`task:${input.taskId}`, async () => {
     const task = (await db.select().from(tasks).where(eq(tasks.id, input.taskId))).at(0);
     if (!task) return { ok: false, status: 404, error: "任务不存在" };
-    // 入口与出口同一份判据（`monitorTaskGate`）。只判归档、不判终态的话，已完成的
-    // 任务上照样起得来一个真进程，而 `pushToTask` 会把它推的每一条都按终态拒掉——命令
-    // 在后台烧着，任务永远不醒（第 2 轮审查实测）。
+    // 入口与出口同一份判据（创建问 `monitorSourceGate`、出口问 `monitorWakeGate`，两者
+    // 共用 shared 的 `monitorBlockedReason`）。只判归档、不判终态的话，已完成的任务上照样
+    // 起得来一个真进程，而 `pushToTask` 会把它推的每一条都按终态拒掉——命令在后台烧着，
+    // 任务永远不醒（第 2 轮审查实测）。
     // 那一份判据里还含着「审查还在进行」这条豁免：审查跑在已经 done 的任务上，不豁免的话
-    // 审查者一个哨兵都挂不上（见 monitor-session.ts）。
-    const blocked = await monitorTaskGate(task);
-    if (blocked) return { ok: false, status: 409, error: blocked };
+    // 审查者一个哨兵都挂不上。它同时回答「是谁挂的、属于哪次审查」（见 monitor-session.ts）。
+    const source = await monitorSourceGate(task);
+    if (source.blocked) return { ok: false, status: 409, error: source.blocked };
 
     const live = await liveMonitorsOf(input.taskId);
     if (live.length >= MONITOR_MAX_PER_TASK)
@@ -209,7 +208,10 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       startLowAt: null,
       // **哨兵醒来时该叫哪条会话**：审查是旁路回合，跑在自己那条 reviewer 会话上。认不出
       // 来就留 NULL = 按老样子叫执行者（见 monitor-session.ts）。
-      sourceRole: await monitorSourceRole(input.taskId),
+      sourceRole: source.role,
+      // **它的命跟着哪次审查走**：非空 = 任务终态连坐清理要放过它、事件出口按那次审查
+      // 是否还在判、唤醒时按那次审查的执行器续跑（见 schema-monitors.ts）。
+      sourceReviewRun: source.reviewRun,
       // ash 自己起的：期限是它自己定的，当然知道。
       sourceLifetime: "bounded",
       // ash 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，
@@ -341,79 +343,6 @@ async function flushBuffer(monitorId: string, rtOverride?: Runtime): Promise<voi
   }
 }
 
-/**
- * 把一段事件文本送到任务头上。
- *
- * **先合并、再新建**：这个哨兵名下还有一条没送出去（也没人正在送）的消息时，直接往它后面
- * 追加。任务正忙的那几分钟里攒下的十几条事件于是只唤醒它一次；而不是排十几行、醒十几轮。
- * 带着投递租约的那一行不能碰 —— 它正在被送进会话，改它等于改一句已经出口的话。
- */
-async function pushToTask(row: Row, text: string): Promise<boolean> {
-  // 任务自己已经结束/归档了就不再往它头上排事件——排了就是在某个深夜把一个 done 的任务
-  // 重新叫起来跑一轮（第 1 轮审查实测：总线真实走了 done → running → done）。这道判断
-  // 放在**唯一出口**上而不是散在调用点：收尾路径有五条（过期 / 自己退出 / 被停 / 推满
-  // 上限 / 重启后补读），逐条去加漏一条就等于没防。
-  // 投影里**故意带上 id**（`row.taskId` 本来就在手上）：`monitorWakeGuard` 那一问是按
-  // 「谁按 {status, archived} 两字段读 tasks」被回归精确注入的（test-monitor-races ㉒），
-  // 这一处跟它撞同一个形状就会把那条注入骗走，让别人的用例静默变成空测。
-  const task = (await db
-    .select({ id: tasks.id, status: tasks.status, archived: tasks.archived })
-    .from(tasks)
-    .where(eq(tasks.id, row.taskId))).at(0);
-  if (!task || await monitorTaskGate(task) !== null) return false;
-
-  const origin = monitorMessageOrigin(row.id);
-  const existing = (await db
-    .select()
-    .from(scheduledMessages)
-    .where(and(
-      eq(scheduledMessages.taskId, row.taskId),
-      eq(scheduledMessages.origin, origin),
-      eq(scheduledMessages.status, "pending"),
-      isNull(scheduledMessages.deliveringSince),
-    ))).at(0) ?? null;
-  await mergeOrEnqueueMonitorEvent(row, text, existing);
-  flushPendingForTask(row.taskId);
-  return true;
-}
-
-/**
- * 「追加进那一行」还是「另起一条」。
- *
- * 合并那一发是一次 CAS（条件就是「租约还空着」），**它可以合法地落空**：上面查到这一行
- * 之后、这里改到它之前，投递方完全可能刚好抢走租约。落空就必须另起一条新消息，不能当成
- * 改成功了 —— 那一批行既没进任何一条消息、位置还会跟着前进，于是整批进展静默消失
- * （第 2 轮审查实测：events=2、read_offset 已越过第二条，而消息里只有第一条）。
- *
- * **单独成一个函数是为了让那个窗口能被测到**：`existing` 由调用方传进来，于是回归测试
- * 可以先查出这一行、再真的抢走租约、然后拿着那份**已经过期**的 `existing` 调它 —— 这正
- * 是竞态产生的那个现场，而且走的是生产代码本身，不需要往产线里埋测试钩子。
- */
-export async function mergeOrEnqueueMonitorEvent(
-  row: Row,
-  text: string,
-  existing: typeof scheduledMessages.$inferSelect | null,
-): Promise<void> {
-  const merged = existing
-    ? await db
-      .update(scheduledMessages)
-      .set({ text: mergeMonitorEventText(existing.text, text) })
-      .where(and(eq(scheduledMessages.id, existing.id), isNull(scheduledMessages.deliveringSince)))
-      .returning({ id: scheduledMessages.id })
-    : [];
-  if (merged.length > 0) {
-    publishPendingMessages(row.taskId);
-  } else {
-    // **角色跟着哨兵行走,不在投递那一刻现查**:那时起它的那条会话早就不在跑了,查活进程
-    // 只会得到下一代人(或者什么都没有)。记在行上,审查者挂的哨兵醒来时才叫得回审查会话
-    // ——否则默认的 `single` 会把执行者叫起来跑一轮,而审查链还停在 reviewing 等它续跑。
-    await enqueueMessage({
-      taskId: row.taskId, text, origin: monitorMessageOrigin(row.id),
-      ownerUserId: row.ownerUserId, sessionRole: row.sourceRole,
-    });
-  }
-}
-
 // ── 停 ───────────────────────────────────────────────────────────────────────
 
 /**
@@ -527,43 +456,62 @@ export async function stopMonitorsForTask(taskId: string, reason: string): Promi
 async function stopMonitorsForTaskLocked(taskId: string, reason: string): Promise<number> {
   const all = await db.select({ id: monitors.id }).from(monitors).where(and(eq(monitors.taskId, taskId), isAshKind));
   const live = await liveMonitorsOf(taskId);
-  for (const m of live) await finish(m.id, "stopped", reason, null, { notify: false, keepBuffered: false });
+  // **任务终态 ≠ 审查结束**。自由工作流的审查是旁路回合：它跑的时候任务被写成 running，
+  // 回合一退出又被恢复成原来的 done —— 于是这个函数紧接着就被叫起来。照着终态一刀切,
+  // 审查者刚按提示挂好的哨兵会在同一瞬间被停掉、待发事件一并作废,而审查链还停在
+  // reviewing 等一个永远不会到的唤醒(第 1 轮审查 F1 实测:pause 成功、monitorStatus
+  // =stopped、reviewStatus=reviewing、resumePrompt 还留着)。
+  //
+  // 所以判据不是任务状态,而是**起它的那次审查还在不在**(创建、出口、唤醒三处同一份
+  // 判据,见 monitor-session.ts)。那次审查自己收尾时由 `stopMonitorsForReviewRun` 来收,
+  // 哨兵不会因此漏在后台。
+  const kept: string[] = [];
+  const doomed: typeof live = [];
+  for (const m of live) {
+    if (m.sourceReviewRun && await isReviewRunActive(m.sourceReviewRun)) kept.push(m.id);
+    else doomed.push(m);
+  }
+  for (const m of doomed) await finish(m.id, "stopped", reason, null, { notify: false, keepBuffered: false });
   // 收尾只清得掉**还在缓冲里**的行。已经开始推的那一批不受影响：它手里拿着自己的
   // `lines`、也早就过了状态闸，落库会发生在清理之后——于是作废那一步扫不到它，它排进
   // 队列、把一个已经 done 的任务重新叫起来（第 3 轮审查实测：done → running → done）。
   // 所以先往每条哨兵自己的队列尾上排一个空活并等它轮到：轮到了就说明那一批已经写完。
   for (const m of all) await serialize(m.id, async () => {});
   // 停掉进程还不够：这一刻**已经排在待发队列里**的哨兵事件同样会把任务重新拉起来。
-  await cancelPendingMonitorEvents(taskId);
-  return live.length;
+  // 留下来的那几条例外:它们的事件正是审查在等的东西,跟着任务终态作废就等于白留。
+  await cancelPendingMonitorEvents(taskId, { keep: kept });
+  return doomed.length;
 }
 
 /**
- * 作废这个任务名下还没送出去的哨兵事件。
+ * 一次审查收尾了，把**属于它**的哨兵收回来。
  *
- * 只动 `origin` 是哨兵的那些。真人写的排队追问要原样留着——他排的时候就知道任务可能
- * 正要结束，那条消息的意思是「下次醒来处理」，替他取消等于把他的话吞了。
+ * 跟任务终态那条连坐是一对：那边放过了「还在进行的审查」名下的哨兵（见上），所以这边必须
+ * 在那次审查真正结束时补上这一刀 —— 否则审查链都收尾了，它挂的哨兵还在后台盯着，推的每
+ * 一条又都被出口闸拒回，纯属空烧（最多烧到自己到期）。
  *
- * **带着投递租约的那一行不碰，但「租约 ≠ 已送达」**：那一行归抢下它的那位投递者，由它在
- * 真正起这一轮的入口上按最新状态自己撤回并取消（`pending-messages.ts` 的 `monitorWakeGuard`
- * —— 第 4 轮审查指出的就是这个窗口：资格只在扫描那一层判过一次，租约抢下之后再没人问）。
- * 为什么不干脆在这里把它一起作废：`markSent` 的 CAS 条件是 `status='pending'`，这边先改成
- * canceled 的话，一条**已经进了会话**的事件会在时间线上留下一句「未发送，已取消」——比漏掉
- * 它更糟。所以这一行只有一个主人，就是正在送它的那位。
+ * 审查落终态的写点有好几处（`free-workflow.ts` 的三种结局、`free-review-round.ts` 的启动
+ * 失败），所以这个函数按 **runId** 收而不是按任务收：调用方只需要知道「哪一次审查结束了」。
  */
-async function cancelPendingMonitorEvents(taskId: string): Promise<void> {
-  if (dbClient.closed) return;
-  await db
-    .update(scheduledMessages)
-    .set({ status: "canceled", sentAt: null, deliveringSince: null })
-    .where(and(
-      eq(scheduledMessages.taskId, taskId),
-      eq(scheduledMessages.status, "pending"),
-      isNull(scheduledMessages.deliveringSince),
-      like(scheduledMessages.origin, "monitor:%"),
-    ));
-  publishPendingMessages(taskId);
+export async function stopMonitorsForReviewRun(runId: string, reason: string): Promise<number> {
+  const rows = await db
+    .select({ id: monitors.id, taskId: monitors.taskId })
+    .from(monitors)
+    .where(and(eq(monitors.sourceReviewRun, runId), eq(monitors.status, "running"), isAshKind));
+  let stopped = 0;
+  for (const row of rows) {
+    // 跟创建/连坐同一条 `task:<id>` 队列：不排队的话正在创建的那个会漏掉（理由同 stopMonitorsForTask）。
+    await serialize(`task:${row.taskId}`, async () => {
+      await finish(row.id, "stopped", reason, null, { notify: false, keepBuffered: false });
+      stopped += 1;
+    });
+    // 等这条哨兵自己的队列排空，那一批正在写的事件才算落完（理由同上）。
+    await serialize(row.id, async () => {});
+    await cancelPendingMonitorEvents(row.taskId, { only: [row.id] });
+  }
+  return stopped;
 }
+
 
 /**
  * 这个任务名下**ash 自己起的**、还在跑的哨兵。用于创建配额与任务结束时的连坐停止。

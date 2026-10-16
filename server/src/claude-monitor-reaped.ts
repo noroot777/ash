@@ -31,7 +31,7 @@
 // 这条是 `aside`（agent 看不见，见 task-timeline.ts 文件头），所以它只是说给用户听的记账，
 // 不构成对下一个 agent 的指令。
 import { and, desc, eq, gte, inArray, isNull, or } from "drizzle-orm";
-import { CLAUDE_MONITOR_ENDED_REASON } from "@ash/shared/monitor";
+import { CLAUDE_MONITOR_ENDED_REASON } from "@ash/shared/monitor-claude";
 import { bus } from "./bus.js";
 import type { MonitorRunOrigin } from "./claude-monitor-origin.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";

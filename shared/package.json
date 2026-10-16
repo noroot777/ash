@@ -6,7 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    "./cli-commands": { "types": "./src/cli-commands.ts", "default": "./src/cli-commands.ts" },
+    "./cli-commands": {
+      "types": "./src/cli-commands.ts",
+      "default": "./src/cli-commands.ts"
+    },
     "./page-annotation": {
       "types": "./src/page-annotation.ts",
       "default": "./src/page-annotation.ts"
@@ -158,6 +161,10 @@
     "./monitor": {
       "types": "./src/monitor.ts",
       "default": "./src/monitor.ts"
+    },
+    "./monitor-claude": {
+      "types": "./src/monitor-claude.ts",
+      "default": "./src/monitor-claude.ts"
     }
   },
   "scripts": {

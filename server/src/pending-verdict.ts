@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
 import { isGoalExecution, isGoalRecovery, parseCliCommand } from "@ash/shared/cli-commands";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
-import { monitorTaskGate } from "./monitor-session.js";
+import { monitorEventSourceReview, monitorWakeGate } from "./monitor-session.js";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 
@@ -36,13 +36,15 @@ export type DeliveryTaskView = {
   /** 所在分组已被用户暂停(groups.paused,持久事实)。 */
   groupPaused?: boolean;
   /**
-   * 这个任务上有一条**正在进行**的审查(`free_review_runs.status='reviewing'`)。
+   * **这条哨兵事件的来源审查**还在进行(`free_review_runs.status='reviewing'`)。
    *
    * 终态任务的哨兵事件默认一律取消,但审查跑在已经 done 的任务上 —— 审查者挂的哨兵醒来
    * 时,任务状态仍然是 done。不认这一条就等于:审查者好不容易挂上的哨兵,事件在出口被
    * 当成「任务都结束了还醒什么」取消掉(见 shared 的 `activeReview`)。
    *
-   * 由调用方在**被状态拦下来时**才查一次库填进来,纯函数本身不碰库。
+   * 问的是**起它的那一次**审查,不是「这个任务上有没有任意一条在跑」:后者会把上一轮遗留
+   * 的事件重新解释成新一轮审查的输入(第 1 轮审查 F2 列的同类实例)。由调用方在**被状态
+   * 拦下来时**才查一次库填进来(`monitorEventReviewActive`),纯函数本身不碰库。
    */
   reviewing?: boolean;
 };
@@ -152,8 +154,9 @@ export function monitorWakeGuard(message: Row): (() => Promise<string | null>) |
       .from(tasks)
       .where(eq(tasks.id, message.taskId))).at(0);
     if (!task) return "任务不存在";
-    // 审查进行中的豁免跟别处同一份（`monitorTaskGate`）：这一道闸守的是「租约抢下之后、
-    // 真正续跑之前」那个窗口，判据跟创建入口分家就等于没防。
-    return monitorTaskGate({ id: message.taskId, ...task });
+    // 审查进行中的豁免跟别处同一份（`monitorWakeGate`）：这一道闸守的是「租约抢下之后、
+    // 真正续跑之前」那个窗口，判据跟创建入口分家就等于没防。**按这条哨兵自己记下的那次
+    // 审查问**，所以要多读一次哨兵行 —— 排在 tasks 那一问之后，上面那条注入才照旧命中。
+    return monitorWakeGate({ id: message.taskId, ...task }, await monitorEventSourceReview(message.origin));
   };
 }

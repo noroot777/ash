@@ -7,7 +7,12 @@ import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { agentActor } from "./auth/middleware.js";
 import { getMonitor, listMonitors, readMonitorTail, startMonitor, stopMonitorChecked } from "./monitors.js";
-import { claudeMonitorHookDecision, type ClaudeMonitorHookInput } from "./claude-monitor-hook.js";
+import {
+  claudeMonitorHookDecision,
+  isMonitorHookCall,
+  monitorHookInternalError,
+  type ClaudeMonitorHookInput,
+} from "./claude-monitor-hook.js";
 import { backfillClaudeMonitors } from "./claude-monitor-backfill.js";
 import { monitorRecoveryOf } from "./claude-monitor-recovery.js";
 
@@ -97,20 +102,28 @@ export function mountMonitorRoutes(api: Hono): void {
    */
   api.post("/hooks/claude-monitor", async (c) => {
     const input = await c.req.json<ClaudeMonitorHookInput>().catch((): ClaudeMonitorHookInput => ({}));
-    // **自用模式下 actor 恒是 SINGLE_ACTOR**：那一档的 authGate 一行不拦，`agentActor`
-    // 这条路根本不走（auth/middleware.ts）。只看 actor 的话，「这次回调是哪条任务的哪
-    // 一轮」在自用模式下永远答不出来——而自用模式正是绝大多数实例的样子，代办会整个
-    // 失效、静默退化成「拦住了但没替你挂」。所以这里自己再问一次，判据复用那一份。
-    const actor = actorOf(c);
-    const agent = actor.kind === "agent" ? actor : await agentActor(c);
-    const decision = await claudeMonitorHookDecision(input, agent?.taskId ?? null, ownerIdOf(agent ?? actor))
-      // 自己炸了也不能变成放行：同上，非 2xx = 放行。
-      .catch((error: unknown) => {
-        console.error("[ash] Monitor 改道 hook 出错", error);
-        return null;
-      });
-    // null = 不表态（不是 Monitor 调用）。空对象就是「没有决定」，claude 走它自己的流程。
-    return c.json(decision ?? {});
+    // 不是 Monitor 就什么都不说（空对象 = 没有决定，claude 走它自己的流程）。这一问排在
+    // 最前面，是为了让下面那个 catch 只负责「Monitor 代办失败」这一种事：两件事共用一个
+    // `null` 的话，内部异常会借「不表态」那条路变成放行（第 1 轮审查 F3）。
+    if (!isMonitorHookCall(input)) return c.json({});
+    try {
+      // **自用模式下 actor 恒是 SINGLE_ACTOR**：那一档的 authGate 一行不拦，`agentActor`
+      // 这条路根本不走（auth/middleware.ts）。只看 actor 的话，「这次回调是哪条任务的哪
+      // 一轮」在自用模式下永远答不出来——而自用模式正是绝大多数实例的样子，代办会整个
+      // 失效、静默退化成「拦住了但没替你挂」。所以这里自己再问一次，判据复用那一份。
+      //
+      // **身份解析必须跟代办在同一个 try 里**：它也查库。漏在外面的话，一次身份查库故障
+      // 会让整个端点抛出去 → 非 2xx → 被 CLI 当成 non-blocking error → 放行（同上）。
+      const actor = actorOf(c);
+      const agent = actor.kind === "agent" ? actor : await agentActor(c);
+      const decision = await claudeMonitorHookDecision(input, agent?.taskId ?? null, ownerIdOf(agent ?? actor));
+      // 上面那一问已经确认是 Monitor 了，所以这里一定有决定；真拿到 null 也当内部异常
+      // 处理，绝不空手放行。
+      return c.json(decision ?? monitorHookInternalError("没能得出处置结论"));
+    } catch (error: unknown) {
+      console.error("[ash] Monitor 改道 hook 出错", error);
+      return c.json(monitorHookInternalError(error instanceof Error ? error.message : String(error)));
+    }
   });
 
   api.post("/monitors/:monitorId/stop", async (c) => {

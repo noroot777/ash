@@ -19,9 +19,7 @@
 // ③ 回合结束时在任务时间线上留一条合并说明——「停止/暂停必须留下持久可见的状态」
 //    （AGENTS.md）在这里同样成立：用户刷新页面后得能看出「这一轮它挂了几个、现在全没了」。
 import { db, makeTask, monitors, now, sessions, teardown } from "./monitors-fixture.js";
-import {
-  CLAUDE_MONITOR_ENDED_REASON, CLAUDE_MONITOR_REAPED_REASON, claudeMonitorEndedReason,
-} from "@ash/shared/monitor";
+import { CLAUDE_MONITOR_ENDED_REASON, CLAUDE_MONITOR_REAPED_REASON, claudeMonitorEndedReason } from "@ash/shared/monitor-claude";
 import { eq } from "drizzle-orm";
 
 const { ClaudeMonitorTrace } = await import("../src/claude-monitors.js");

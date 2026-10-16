@@ -65,12 +65,36 @@ export async function cleanupAcceptedMergeRun(run: ReviewRunRow): Promise<void> 
   }
 }
 
+/**
+ * 一次审查收尾了：把**它名下**的哨兵收回来。
+ *
+ * 跟任务终态那条连坐是一对。审查是旁路回合，回合退出时任务状态被恢复成原来的终态，
+ * `stopMonitorsForTask` 紧接着就跑 —— 那边刻意放过了「还在进行的审查」名下的哨兵（否则
+ * 审查者刚挂好的等待会被当场停掉，第 1 轮审查 F1），所以这一刀必须在审查真正结束时补上。
+ *
+ * 审查落终态的写点有四处（`handleFreeWorkflowSettlement` 的三种结局 + 下面的启动失败），
+ * 每一处结束后都调它；按 runId 收，调用方只需知道「哪一次审查结束了」。
+ *
+ * **动态 import**：`monitors.ts` → `pending-messages.ts` → 这一侧，静态引用会把环连起来
+ * （同 `status.ts` 的那一处）。收不回来只记日志：审查本身已经结算完了，不该被它拖住；
+ * 漏下的哨兵仍有自己的到期时间，而它推的事件会被出口闸按「来源审查已结束」拒掉。
+ */
+export async function stopReviewRunMonitors(runId: string, reason: string): Promise<number> {
+  return await import("./monitors.js")
+    .then(({ stopMonitorsForReviewRun }) => stopMonitorsForReviewRun(runId, reason))
+    .catch((error) => {
+      console.error(`[ash] stopMonitorsForReviewRun(${runId}) failed:`, error);
+      return 0;
+    });
+}
+
 export async function failReviewStart(run: ReviewRunRow, message: string): Promise<void> {
   const at = now();
   await db.update(freeReviewRounds).set({ status: "error", endedAt: at })
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
   await db.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at })
     .where(eq(freeReviewRuns.id, run.id));
+  await stopReviewRunMonitors(run.id, "这次审查启动失败，它挂的哨兵一并收回");
   await appendTaskTimeline(run.taskId, `${run.targetKind === "accepted_merge" ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`}审查启动失败：${message}`);
   await cleanupAcceptedMergeRun(run);
   bus.publish({ type: "task.review", taskId: run.taskId });

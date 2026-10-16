@@ -22,19 +22,71 @@ import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db, dbClient } from "./db/index.js";
 import { freeReviewRuns, monitors, sessions, tasks } from "./db/schema.js";
 import { isSameProcess } from "./proc.js";
-import { takeResumePrompt } from "./task-resume-prompt.js";
+import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
 
 /** 能带进 `continueTask` 的那两种角色。别的(团队、duet)不表达,退回默认。 */
 const WAKEABLE_ROLES = new Set(["single", "reviewer"]);
 
+/** 起它的那次审查已经收尾了。措辞跟终态那条分开:原因不同,出路也不同。 */
+const REVIEW_FINISHED = "起这个哨兵的那次审查已经结束，它的事件不再唤醒任务";
+
 /**
- * 起哨兵这一刻,活着的那条会话是什么角色。
+ * 「这个哨兵能不能挂上、它是谁挂的」——创建入口要的两件事，一次算完。
  *
- * `null` = 认不出来(没有活会话、角色不在上面那两种、或者同时活着好几条)。一律退回调用方
- * 的默认值,也就是这一列加上之前的老行为——**宁可按老样子叫执行者,也不猜一个会把审查链
- * 带偏的角色**:猜错时那一轮会在错误的会话上烧一个真回合,而且审查仍然醒不过来。
+ * 合成一个函数而不是两个，是因为它们本来就是同一个问题的两面：**终态任务上一个哨兵能挂
+ * 上，唯一的理由就是某一次审查还在进行**（见下面的豁免），那么它当然属于那一次审查。分开
+ * 算就会出现「靠审查豁免挂上、却没记住是哪次审查」——而后面三处都要那条身份(F1/F2)。
+ *
+ * ── 豁免：任务跑完了，但审查这件事还没完 ──────────────────────────────────────
+ *
+ * 自由工作流的审查跑在一个已经 done 的任务上（旁路回合，终态原样不动），光看状态会把
+ * 审查者要挂的哨兵全拒掉 —— 而那恰恰是最需要哨兵的场景（见 shared 里 `activeReview`）。
+ * **只有被状态拦下来时才去查审查**：绝大多数调用在任务还活着时发生，那时一次库都不多查。
  */
-export async function monitorSourceRole(taskId: string): Promise<string | null> {
+export async function monitorSourceGate(
+  task: { id: string; status: string; archived?: boolean | null },
+): Promise<{ blocked: string | null; role: string | null; reviewRun: string | null }> {
+  const blocked = monitorBlockedReason(task);
+  // 归档不吃审查豁免(任务都收柜子了,审查链也没有续下去的地方),也就不必查任何东西。
+  if (task.archived) return { blocked, role: null, reviewRun: null };
+  const live = await liveSessionRole(task.id);
+  // 被状态拦下来时一定要查(那是豁免的唯一依据);活会话是审查者时也要查(要记住是哪次)。
+  const reviewRun = blocked || live === "reviewer" ? await reviewingRunId(task.id) : null;
+  // **认不出活会话、任务又处于终态**：那就是「审查者按提示 pause 了一轮等外部结果，这会儿
+  // 用户在面板上又补挂一个哨兵」——此刻一个 agent 进程都没有，活会话那条线索问不出东西，
+  // 而它能挂上来本身就说明是那次审查豁免放它进来的。不认这一条，它会以默认的 `single`
+  // 入队，把**实现者**叫起来跑一轮，审查那条会话继续等不到人（第 1 轮审查 F2 第 3 条）。
+  const role = live ?? (blocked && reviewRun ? "reviewer" : null);
+  return {
+    blocked: blocked && reviewRun ? null : blocked,
+    role,
+    // 执行者自己挂的哨兵不绑审查:它的命跟着任务走,审查结束与它无关。
+    reviewRun: role === "reviewer" ? reviewRun : null,
+  };
+}
+
+/**
+ * 事件出口（`pushToTask`）与唤醒前最后一道闸（`monitorWakeGuard`）共用的那一份：
+ * **这一条**哨兵现在还能不能唤醒任务。
+ *
+ * 判据是「起它的那次审查还在不在」，不是「这个任务上有没有任意一条审查在跑」。后者会把
+ * 上一轮遗留的事件重新解释成新一轮审查的输入（第 1 轮审查 F2 列的同类实例），而两轮之间
+ * 该不该唤醒的答案本来就可能不同。
+ */
+export async function monitorWakeGate(
+  task: { id: string; status: string; archived?: boolean | null },
+  sourceReviewRun: string | null,
+): Promise<string | null> {
+  const blocked = monitorBlockedReason(task);
+  if (!blocked || task.archived) return blocked;
+  if (!sourceReviewRun) return blocked;              // 执行者挂的:照终态老规矩
+  return await isReviewRunActive(sourceReviewRun) ? null : REVIEW_FINISHED;
+}
+
+/** 起哨兵这一刻,活着的那条会话是什么角色。`null` = 认不出来(没有活会话、角色不在上面
+ * 那两种、或者同时活着好几条):**宁可按老样子叫执行者,也不猜一个会把审查链带偏的角色**
+ * —— 猜错时那一轮会在错误的会话上烧一个真回合,而且审查仍然醒不过来。 */
+async function liveSessionRole(taskId: string): Promise<string | null> {
   if (dbClient.closed) return null;
   const rows = await db
     .select({ role: sessions.role, pid: sessions.agentPid, startedAt: sessions.agentStartedAt })
@@ -46,31 +98,85 @@ export async function monitorSourceRole(taskId: string): Promise<string | null> 
   return roles.size === 1 ? [...roles][0]! : null;
 }
 
-/**
- * 「这个任务现在能不能用哨兵」——创建入口、推送出口、投递闸共用的那一份。
- *
- * 在 `monitorBlockedReason` 之上多问一句**审查还在不在进行**：自由工作流的审查跑在一个
- * 已经 done 的任务上（旁路回合，终态原样不动），光看状态会把审查者要挂的哨兵全拒掉 ——
- * 而那恰恰是最需要哨兵的场景（见 shared 里 `activeReview` 那段）。
- *
- * **只有被状态拦下来时才去查审查**：绝大多数调用在任务还活着时发生，那时一次库都不用多查。
- */
-export async function monitorTaskGate(
-  task: { id: string; status: string; archived?: boolean | null },
-): Promise<string | null> {
-  const blocked = monitorBlockedReason(task);
-  if (!blocked || task.archived) return blocked;      // 归档不吃审查豁免
-  return await hasActiveReview(task.id) ? null : blocked;
-}
-
-/** 这个任务上有没有一条**正在进行**的自由工作流审查（`reviewing` 是持久状态）。 */
-export async function hasActiveReview(taskId: string): Promise<boolean> {
-  if (dbClient.closed) return false;
+/** 这个任务上**正在进行**的那次自由工作流审查（`reviewing` 是持久状态）。 */
+async function reviewingRunId(taskId: string): Promise<string | null> {
+  if (dbClient.closed) return null;
   const rows = await db
     .select({ id: freeReviewRuns.id })
     .from(freeReviewRuns)
     .where(and(eq(freeReviewRuns.taskId, taskId), eq(freeReviewRuns.status, "reviewing")));
-  return rows.length > 0;
+  return rows.at(0)?.id ?? null;
+}
+
+/** **这一次**审查还在进行吗。 */
+export async function isReviewRunActive(runId: string): Promise<boolean> {
+  if (dbClient.closed) return false;
+  const rows = await db
+    .select({ status: freeReviewRuns.status })
+    .from(freeReviewRuns)
+    .where(eq(freeReviewRuns.id, runId));
+  return rows.at(0)?.status === "reviewing";
+}
+
+/**
+ * 这条**哨兵事件**的来源审查还在进行吗（投递扫描那一层的豁免）。
+ *
+ * 投递判定本体是纯函数（`deliveryVerdict`，单测直接喂字面量），不碰库；所以「来源审查还在
+ * 不在」这件事由扫描侧查好了填进去。查的是**这条事件所属哨兵**记下的那次 run，不是「这个
+ * 任务上有没有任意一条 reviewing」——后者会把上一轮遗留的事件当成新一轮的输入。
+ */
+export async function monitorEventReviewActive(origin: string | null): Promise<boolean> {
+  const monitorId = monitorIdFromOrigin(origin);
+  if (!monitorId || dbClient.closed) return false;
+  const run = (await db
+    .select({ sourceReviewRun: monitors.sourceReviewRun })
+    .from(monitors)
+    .where(eq(monitors.id, monitorId))).at(0)?.sourceReviewRun;
+  return run ? await isReviewRunActive(run) : false;
+}
+
+/** 这条哨兵事件所属哨兵记下的来源审查（`null` = 执行者自己挂的，或哨兵行已经没了）。 */
+export async function monitorEventSourceReview(origin: string | null): Promise<string | null> {
+  const monitorId = monitorIdFromOrigin(origin);
+  if (!monitorId || dbClient.closed) return null;
+  return (await db
+    .select({ sourceReviewRun: monitors.sourceReviewRun })
+    .from(monitors)
+    .where(eq(monitors.id, monitorId))).at(0)?.sourceReviewRun ?? null;
+}
+
+/**
+ * 唤醒这一轮该用谁的执行配置跑 —— **按哨兵自己记下的那次审查**取，不是按任务的常设配置。
+ *
+ * 审查者完全可以是另一个执行器、另一个模型（典型：codex 审 claude 写的代码）。只带一个
+ * `reviewer` 角色过去的话，`continueTask` 会按任务自己的 agentType 解析，于是**新建一条
+ * claude 的 reviewer 会话**，原审查者那条上下文一个字都接不上（第 1 轮审查 F2 实测：
+ * 任务 agent=claude、审查 agent=codex，唤醒后多出一条 claude reviewer）。
+ *
+ * `null` = 这条哨兵不属于任何审查（执行者自己挂的），按老规矩走任务配置。
+ * run 已经不在 reviewing = 来源过期，调用方按「不再唤醒」处理（出口闸会先拦下来）。
+ */
+export async function monitorWakeExecutor(
+  sourceReviewRun: string | null,
+): Promise<{ agent: string; executorId: string | null; model: string | null; reasoningEffort: string | null } | null> {
+  if (!sourceReviewRun || dbClient.closed) return null;
+  const run = (await db
+    .select({
+      status: freeReviewRuns.status,
+      agentType: freeReviewRuns.agentType,
+      executorId: freeReviewRuns.executorId,
+      model: freeReviewRuns.model,
+      reasoningEffort: freeReviewRuns.reasoningEffort,
+    })
+    .from(freeReviewRuns)
+    .where(eq(freeReviewRuns.id, sourceReviewRun))).at(0);
+  if (!run || run.status !== "reviewing") return null;
+  return {
+    agent: run.agentType,
+    executorId: run.executorId,
+    model: run.model,
+    reasoningEffort: run.reasoningEffort,
+  };
 }
 
 /**
@@ -85,32 +191,36 @@ export async function hasActiveReview(taskId: string): Promise<boolean> {
  *   按钮被那条门禁灰掉，`startFreeReview` 也一直 409（见 task-resume-prompt.ts 顶部）。
  *   审查者按说明 pause 一轮等套件，结论给完了任务还是卡着。
  *
- * 所以这一轮**既要喂、也要取走**：`append` 拼进这一次的输入，`consume` 在确认送达之后
- * 才调（起跑失败时原样留着，下一次重投还能用）。CAS 按读到的那段值比对，中途 agent 换了
- * 新的一段就不动它。
+ * ── 为什么是「先取走，没送出去再回填」而不是「送达后再取走」────────────────────
+ *
+ * 跟既有的检查点续跑同一套（`task-resume.ts`：`takeResumePrompt` → 起跑失败
+ * `restoreResumePrompt`）。送达后才取走的写法有一个修不掉的窗口：`markSent` 已经落库、
+ * 取走那一步却失败（库忙、进程正好被换掉），于是消息是 sent、交代还在 —— 没有任何人会
+ * 再来清它，任务做完了仍被结算判成 paused，工具条整排按钮继续灰着（第 1 轮审查 F4 第 3
+ * 种）。而那一步的失败又被 `onDelivered` 的 catch 当作记账错误吞掉，连日志都没有。
+ *
+ * 反过来「先取走」留下的窗口是「取走了但一个字没送出去」，那一种**有补偿**：`restore` 的
+ * CAS 只填回自己腾出的那个空，agent 中途写了新的一段就不动它。所以这里只提供 `take` 和
+ * `restore`，没有 `consume` —— 调用方必须在未送达的每条出路上回填（见两处投递点）。
  */
 export async function monitorWakeCheckpoint(
   message: { taskId: string; origin: string | null },
-): Promise<{ append: string; consume: () => Promise<void> } | null> {
+): Promise<{ append: string; restore: () => Promise<void> } | null> {
   if (dbClient.closed || monitorIdFromOrigin(message.origin) === null) return null;
   const checkpoint = (await db
     .select({ resumePrompt: tasks.resumePrompt })
     .from(tasks)
     .where(eq(tasks.id, message.taskId))).at(0)?.resumePrompt;
   if (!checkpoint) return null;
+  // CAS 取走:读到之后到这里之间隔着 await,另一路(真人续跑、手点运行)可能刚好取走了同
+  // 一段。抢不到就当这一轮没有交代可带 —— 那段话已经被别人喂出去了,再喂一遍就是重复。
+  if (!await takeResumePrompt(message.taskId, checkpoint)) return null;
   return {
     append: `\n\n【你当初留下的续跑交代】${checkpoint}`,
-    consume: async () => { await takeResumePrompt(message.taskId, checkpoint); },
+    restore: async () => { await restoreResumePrompt(message.taskId, checkpoint); },
   };
 }
 
-/**
- * 这个任务上**还在盯着**的 ash 哨兵（只要一份摘要：时间线与界面文案用）。
- *
- * 不走 `monitors.ts` 的 `liveMonitorsOf` 是为了不把 free-workflow → monitors → pending
- * 那条 import 链连成环；判据（`status='running'` 且 `kind='ash'`）与那边同一份，内置
- * Monitor 的只读投影不算（它活不过 agent 自己那一轮，等它等不到东西）。
- */
 export async function liveMonitorSummary(
   taskId: string,
 ): Promise<{ count: number; labels: string[] }> {

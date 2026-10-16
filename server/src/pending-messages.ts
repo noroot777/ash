@@ -38,7 +38,7 @@ import { releaseTurn, whenTurnIdle } from "./runs.js";
 import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
-import { hasActiveReview, monitorWakeCheckpoint } from "./monitor-session.js";
+import { monitorEventReviewActive, monitorWakeCheckpoint } from "./monitor-session.js";
 import { deliveryOptions, deliveryVerdict, isDueForDelivery, monitorWakeGuard, pendingExecutionIntent } from "./pending-verdict.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -269,6 +269,9 @@ async function deliverWhenIdle(
   let refused: string | null = null;
   const guard = monitorWakeGuard(message);
   const idleAt = Date.now();
+  // 这一轮带出去的续跑交代(已经从库里取走了)。一个字都没送出去时必须回填 —— 所以它声明
+  // 在 try 外面,catch 和 finally 都看得见。
+  let checkpoint: Awaited<ReturnType<typeof monitorWakeCheckpoint>> = null;
   try {
     // 等待期间它还是 pending,所以用户可能已经手动取消、另一个触发源也可能抢先
     // 送掉了。抢不到租约就什么都不做 —— 送它的那一位会自己记账。
@@ -284,8 +287,18 @@ async function deliverWhenIdle(
     // 没送出去,退回队列等下一次触发。
     // 正文用 `claimed.text` 而不是 `message.text`:等回合退干净的这段时间里,哨兵可能
     // 已经往同一行后面追加了新的事件(见 beginDelivery 的注释)。
-    // 哨兵叫醒的这一轮还要带上 agent 当初 pause 时留给自己的那段交代(monitorWakeCheckpoint)。
-    const checkpoint = await monitorWakeCheckpoint(message);
+    // 哨兵叫醒的这一轮还要带上 agent 当初 pause 时留给自己的那段交代(monitorWakeCheckpoint
+    // 会就地把它取走,下面每一条「没送出去」的出路都必须回填)。
+    try {
+      checkpoint = await monitorWakeCheckpoint(message);
+    } catch (error) {
+      // **读交代失败不能变成取消**:那是准备阶段的一次临时故障(库忙),而取消是「这条事件
+      // 永远送不出去了」的意思 —— 一次读错就把本该重试的唤醒永久吞掉(第 1 轮审查 F4
+      // 第 1 种)。归还租约、原文留在托盘等重投。
+      await abortDelivery(message);
+      scheduleRedelivery(message, `读取续跑交代失败，原文退回待发送：${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     const started = await continueTask(message.taskId, claimed.text + (checkpoint?.append ?? ""), {
       ...options,
       ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
@@ -293,8 +306,6 @@ async function deliverWhenIdle(
         delivered = true;
         const at = Date.now();
         await markSent(message);
-        // 确认送进会话之后才取走:起跑失败时那段交代要原样留着给下一次重投。
-        await checkpoint?.consume();
         noteDeliveryTiming(message.taskId, { ...spans, idleAt, at });
       },
     });
@@ -321,6 +332,9 @@ async function deliverWhenIdle(
     const detail = error instanceof Error ? error.message : String(error);
     await cancelPendingMessage(message, `续跑失败：${detail}`).catch(() => {});
   } finally {
+    // 一个字都没送出去 = 那段交代白取了,原样放回去(CAS,agent 中途写了新的一段就不动它)。
+    // 放在 finally 是因为「没送达」有好几条出路:闸拒、起跑失败、回合被抢、半路抛异常。
+    if (!delivered && checkpoint) await checkpoint.restore().catch(() => {});
     inFlight.delete(message.taskId);
     // 占位落空的兜底:这一次没送达(租约被抢、消息被取消、回合被验收互斥挡回而
     // continueTask 没有结算)时,任务可能还停在扫描侧认领的 queued 占位上。回滚的
@@ -390,11 +404,11 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         t != null && t.mode === "single" && m.execution && t.groupId
           ? !!(await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0)?.paused
           : false;
-      // 「审查还在进行」只在**哨兵事件撞上终态任务**时才查：审查跑在已经 done 的任务上,
-      // 不查的话审查者挂的哨兵醒来就在这儿被取消掉(见 pending-verdict 的 `reviewing`)。
-      // 其余情况一次库都不多查 —— 这是投递扫描的热路径。
+      // 「**起它的那次**审查还在进行」只在**哨兵事件撞上终态任务**时才查：审查跑在已经
+      // done 的任务上,不查的话审查者挂的哨兵醒来就在这儿被取消掉(见 pending-verdict 的
+      // `reviewing`)。其余情况一次库都不多查 —— 这是投递扫描的热路径。
       const reviewing = t != null && monitorIdFromOrigin(m.origin) !== null && monitorBlockedReason(t) !== null
-        ? await hasActiveReview(m.taskId)
+        ? await monitorEventReviewActive(m.origin)
         : false;
       const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, reviewing } : null, at);
       if (verdict.action === "wait") {
@@ -424,9 +438,19 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         let delivered = false;
         let refused: string | null = null;
         const guard = monitorWakeGuard(m);
-        // 同单任务那条路:哨兵叫醒时把 pause 时留下的交代一起喂回去,送达后才取走。
-        const checkpoint = await monitorWakeCheckpoint(m);
+        // 同单任务那条路:哨兵叫醒时把 pause 时留下的交代一起喂回去(就地取走,没送出去
+        // 再回填)。**读取必须在 try 里面**:漏在外面的话一次读错只会冒到最外层那个扫描
+        // 日志 catch,不走 abortDelivery —— 租约留在行上,后续扫描显式跳过有租约的行,
+        // 这条消息直到进程重启回收前再也不会被投递(第 1 轮审查 F4 第 2 种)。
+        let checkpoint: Awaited<ReturnType<typeof monitorWakeCheckpoint>> = null;
         try {
+          try {
+            checkpoint = await monitorWakeCheckpoint(m);
+          } catch (error) {
+            await abortDelivery(m);
+            scheduleRedelivery(m, `读取续跑交代失败，原文退回待发送：${error instanceof Error ? error.message : String(error)}`);
+            continue;
+          }
           const started = await continueTask(m.taskId, claimed.text + (checkpoint?.append ?? ""), {
             ...options,
             ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
@@ -435,7 +459,6 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
               delivered = true;
               const at = Date.now();
               await markSent(m);
-              await checkpoint?.consume();
               // 调度台是常驻的,没有「等回合退干净」这一段,所以两个时间点同一个值。
               noteDeliveryTiming(m.taskId, { dueAt, busyMs, queuedAt, idleAt: queuedAt, at });
             },
@@ -454,6 +477,9 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
           if (delivered) throw reason; // 已经进调度台了,不是「未发送」,交给外层日志
           const detail = reason instanceof Error ? reason.message : String(reason);
           await cancelPendingMessage(m, `调度台不可用：${detail}`);
+        } finally {
+          // 同单任务:一个字都没送出去就把取走的那段交代放回去(见那一处的注释)。
+          if (!delivered && checkpoint) await checkpoint.restore().catch(() => {});
         }
       } else {
         // 单任务必须等它**当前这一轮退干净**再送。两个触发源里的终态钩子

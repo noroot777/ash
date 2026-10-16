@@ -14,7 +14,11 @@ import {
 } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
 
-const { monitorSourceRole, monitorTaskGate, monitorWakeCheckpoint } = await import("../src/monitor-session.js");
+const { monitorSourceGate, monitorWakeCheckpoint, monitorWakeGate } = await import("../src/monitor-session.js");
+
+/** 「起哨兵这一刻,活着的那条会话是什么角色」——创建闸顺带回答的那一问。 */
+const sourceRole = async (taskId: string, status = "running"): Promise<string | null> =>
+  (await monitorSourceGate({ id: taskId, status, archived: false })).role;
 const { deliveryOptions, deliveryVerdict } = await import("../src/pending-verdict.js");
 
 /** 一个**活着的**进程身份:本进程自己。pid 会被复用,所以启动时刻必须一起给。 */
@@ -38,7 +42,7 @@ async function addSession(
   await addSession("s-impl", taskId, "single", deadPid);
   await addSession("s-review", taskId, "reviewer", livePid);
 
-  assert.equal(await monitorSourceRole(taskId), "reviewer",
+  assert.equal(await sourceRole(taskId), "reviewer",
     "起哨兵这一刻活着的是审查会话,来源就该认成 reviewer");
 
   const started = await startMonitor({
@@ -70,7 +74,7 @@ async function addSession(
 {
   const taskId = await makeTask();
   await addSession("s-impl-2", taskId, "single", livePid);
-  assert.equal(await monitorSourceRole(taskId), "single", "执行回合里起的就认执行者");
+  assert.equal(await sourceRole(taskId), "single", "执行回合里起的就认执行者");
 }
 
 // ── ⑤ 认不出来时**退回默认**,不猜 ───────────────────────────────────────────
@@ -78,18 +82,18 @@ async function addSession(
   // 一条活会话都没有(所有进程都结束了)。
   const idle = await makeTask();
   await addSession("s-idle", idle, "single", deadPid);
-  assert.equal(await monitorSourceRole(idle), null, "没有活会话就说不知道");
+  assert.equal(await sourceRole(idle), null, "没有活会话就说不知道");
 
   // 两条都活着:分不清是谁调的 start_monitor,猜一个还不如退回默认。
   const both = await makeTask();
   await addSession("s-both-1", both, "single", livePid);
   await addSession("s-both-2", both, "reviewer", livePid);
-  assert.equal(await monitorSourceRole(both), null, "两条会话都活着时不许猜");
+  assert.equal(await sourceRole(both), null, "两条会话都活着时不许猜");
 
   // 团队/duet 那些角色不在可唤醒的两种里,同样退回默认。
   const team = await makeTask({ mode: "team" });
   await addSession("s-lead", team, "lead", livePid);
-  assert.equal(await monitorSourceRole(team), null, "不在 single/reviewer 之列的角色不表达");
+  assert.equal(await sourceRole(team), null, "不在 single/reviewer 之列的角色不表达");
 }
 
 // ── ⑥ 审查进行中：终态任务上照样挂得上 ──────────────────────────────────────
@@ -106,7 +110,7 @@ async function addSession(
   const denied = await startMonitor({ taskId, command: 'echo "x"', description: "不该起得来" });
   assert.equal(denied.ok, false, "任务终态、又没有审查在跑时，哨兵仍然挂不上");
   assert.equal(denied.ok ? 0 : denied.status, 409, "拒绝要给 409");
-  assert.ok(await monitorTaskGate(view) !== null, "出口那道闸同理：没有审查就不放行");
+  assert.ok(await monitorWakeGate(view, null) !== null, "出口那道闸同理：没有审查就不放行");
 
   await db.insert(schema.freeReviewRuns).values({
     id: "rev-1", taskId, reviewerName: "claude@test", agentType: "claude",
@@ -122,11 +126,16 @@ async function addSession(
   });
   assert.ok(allowed.ok, `审查进行中就该挂得上：${allowed.ok ? "" : allowed.error}`);
   const monitorId = allowed.ok ? allowed.monitor.id : "";
-  // 出口（pushToTask）与唤醒前最后一道（monitorWakeGuard）用的是同一个判据函数。
-  assert.equal(await monitorTaskGate(view), null, "审查进行中，哨兵事件的出口也要放行");
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(row.sourceReviewRun, "rev-1", "靠审查豁免挂上的哨兵要记住是哪一次审查放它进来的");
+  // 出口（pushToTask）与唤醒前最后一道（monitorWakeGuard）用的是同一个判据函数,而且问的是
+  // **起它的那一次**审查还在不在,不是「这个任务上有没有任意一条在跑」。
+  assert.equal(await monitorWakeGate(view, "rev-1"), null, "审查进行中，哨兵事件的出口也要放行");
+  assert.ok(await monitorWakeGate(view, "rev-别的一次") !== null,
+    "别的审查在跑不等于这条哨兵还该唤醒任务");
 
   // 归档不吃这条豁免：任务都被收走了，审查链也没有续下去的地方。
-  assert.ok(await monitorTaskGate({ ...view, archived: true }) !== null,
+  assert.ok(await monitorWakeGate({ ...view, archived: true }, "rev-1") !== null,
     "归档任务上，审查在跑也不放行");
 
   // 投递那一层同理：reviewing 为真时不许当成「任务都结束了还醒什么」取消掉。
@@ -167,15 +176,19 @@ async function addSession(
   assert.ok(hit, "哨兵事件 + 任务挂着交代,就该带上它");
   assert.match(hit.append, /套件绿了就接着做 tts 那一段/, "交代原文要拼进这一轮的输入");
 
-  // 没送达就不取走:consume 要由投递侧在 onDelivered 里才调(这里只验「它确实会清」)。
-  const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  assert.equal(before?.resumePrompt, "套件绿了就接着做 tts 那一段", "读一下不该动库");
-  await hit.consume();
+  // **就地取走**（CAS）：留到「送达之后」才清的话，清不掉的那一次没有任何人会再来补 ——
+  // 消息已 sent、交代还在，任务做完了仍被结算判成 paused（第 1 轮审查 F4 第 3 种）。
   const after = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  assert.equal(after?.resumePrompt, null, "送达之后这段交代要取走,否则任务永远「在等续跑」");
+  assert.equal(after?.resumePrompt, null, "读到就该取走,否则任务永远「在等续跑」");
 
   assert.equal(await monitorWakeCheckpoint({ taskId, origin: "monitor:m-1" }), null,
     "已经取走了就没有第二次");
+
+  // 一个字都没送出去时要放回原位（投递侧在未送达的每条出路上调它）。
+  await hit.restore();
+  const restored = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  assert.equal(restored?.resumePrompt, "套件绿了就接着做 tts 那一段",
+    "没送出去就得把交代放回去,清了不回写就是永久丢失");
 }
 
 // ── ⑧ 「预约审查还在等什么」要说得出口 ───────────────────────────────────────

@@ -33,11 +33,8 @@
 //
 // 按 `description` 之类的内容去猜一律不行：两种后台任务的 description 长得一模一样。
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
-import {
-  claudeMonitorEndedReason, claudeMonitorStatus, monitorExactExpiry,
-  monitorStatusCorrectable, parseMonitorStartReceipt,
-  type MonitorLifetime, type MonitorStatus,
-} from "@ash/shared/monitor";
+import { monitorExactExpiry, monitorStatusCorrectable, parseMonitorStartReceipt, type MonitorLifetime, type MonitorStatus } from "@ash/shared/monitor";
+import { claudeMonitorEndedReason, claudeMonitorStatus } from "@ash/shared/monitor-claude";
 import { bus } from "./bus.js";
 import { monitorStr as str, parseMonitorInput, type MonitorCall } from "./claude-monitor-call.js";
 import { matchBySource } from "./claude-monitor-identity.js";
