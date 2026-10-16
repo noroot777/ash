@@ -300,9 +300,10 @@ function attach(row: Row, onExit?: (cb: (code: number | null) => void) => void):
     onExit((code) => void finish(row.id, "exited", "命令自己跑完了", code));
   } else {
     // 接管路径没有 ChildProcess,只能自己探活。pid 会被复用,所以必须连启动时刻一起认 ——
-    // 但**「问不出来」不是「已经退了」**:ps 短暂不可用时 `isSameProcess` 也返回 false,照它
-    // 收尾就会在界面上写一句「命令已经不在了」,而那个命令还在跑(第 6 轮审查 F1)。所以只有
-    // 能判出结果的那两档才收尾,`unknown` 就等下一个两秒再问。
+    // 但**「问不出来」不是「已经退了」**:ps 短暂不可用时身份这一问答不出东西,照它收尾就会
+    // 在界面上写一句「命令已经不在了」,而那个命令还在跑(第 6 轮审查 F1)。所以只有能判出
+    // 结果的那两档才收尾,`unknown` 就等下一个两秒再问 —— 而「判得出」的判据只有
+    // `processIdentity` 那一份(一次快照、纯比较),不是某个布尔的假值(第 7 轮审查 F1)。
     const liveness = setInterval(() => {
       const state = reclaimState(row.pid ?? 0, row.pidStartedAt);
       if (state === "gone") {
@@ -594,8 +595,10 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
     // **「问不出来」要跟「它不在了」分开**(第 6 轮审查 F1)。`unknown` = ps 这一问自己失败
     // 了,那就什么都不许声称:**照旧接回来**。这样它仍然在界面上、仍然能被点停、日志还在
     // 收,而 ps 恢复之后探活那一问会自己把结果判出来(见 `attach` 里的 liveness)。原来这里
-    // 按 `isSameProcess` 一刀切,ps 短暂不可用就把一条还活着的哨兵写成「这个进程已经不在
-    // 了」—— 既在界面上撒谎,又让它从此无法叫停。
+    // 按一个布尔一刀切,ps 短暂不可用就把一条还活着的哨兵写成「这个进程已经不在了」——
+    // 既在界面上撒谎,又让它从此无法叫停。同一个错还有第二种犯法:身份比较自己去补一次
+    // 查询,**第二次**失败时被写成确证的 `not-ours`(第 7 轮审查 F1,现在判定收在
+    // `processIdentity` 一次快照里)。
     const state = row.pid ? reclaimState(row.pid, row.pidStartedAt) : "gone";
     if (state === "ours-alive" || state === "unknown") {
       // 它还有出口吗(归档 / 任务终态 / 起它的那次审查那一轮还在不在)。没有就收掉,别接回来

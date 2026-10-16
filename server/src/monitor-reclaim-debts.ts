@@ -19,7 +19,7 @@
 //
 // 组长死了不等于这一组空了(spawn.ts 的补刀注释说的是同一件事:外层 shell 老老实实退了,
 // 它派生的那个忽略 TERM 的东西还留在组里)。POSIX 上唯一能覆盖后代的判据是
-// `kill(-pgid, 0)`,所以这里用 `isProcessGroupAlive`;pid 复用的风险仍由 `isSameProcess`
+// `kill(-pgid, 0)`,所以这里用 `isProcessGroupAlive`;pid 复用的风险仍由 `processIdentity`
 // 挡在**杀**那一侧(问得出身份才敢杀)。
 //
 // ── 这一圈归谁走:运行时收尾层(第 5 轮审查 F1)─────────────────────────────────
@@ -57,7 +57,7 @@ import { db, dbClient } from "./db/index.js";
 import { monitorReclaimDebts } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
 import { IS_WINDOWS, isPidAlive, isProcessGroupAlive, killTree } from "./platform.js";
-import { inspectProcess, isSameProcess } from "./proc.js";
+import { processIdentity } from "./proc.js";
 import { now } from "./util.js";
 
 /**
@@ -71,8 +71,8 @@ import { now } from "./util.js";
  *   `setpgid` 到同一个会话里去,那个会话的头正是这条哨兵自己。所以这一档**在刚刚还拥有它的
  *   那一层**可以放心杀(`finish`),隔了一次重启就不行了 —— 见 `reclaimMonitorProcess` 的
  *   `fresh`。
- * - `not-ours` = 这个号现在是**另一个**进程(ps 答出来了,启动时刻对不上;locale 不同由
- *   `isSameProcess` 的时间戳比较兜住)。不许杀 —— 那是别人的进程。
+ * - `not-ours` = 这个号现在是**另一个**进程(ps 答出来了,启动时刻**确实**对不上;locale 不同
+ *   由 `processIdentity` 在同一份快照上的时间戳比较兜住,不会被误报成这一档)。不许杀 —— 那是别人的进程。
  *
  * 剩下这两档**都不许据此销账**(也都不许下刀):
  * - `unknown` = **身份这一问自己失败了**:`kill(pid,0)` 说它活着,ps 却什么都答不出来
@@ -89,16 +89,21 @@ export type ReclaimState = "gone" | "ours-alive" | "ours-orphans" | "not-ours" |
 const isReclaimedState = (state: ReclaimState): boolean => state === "gone";
 
 /**
- * 身份这一问的三种答案。**只在 `kill(pid,0)` 已经说它活着时调**,所以 `inspectProcess`
- * 返回 null 只剩一种解释:ps(或 Windows 上那段 PowerShell)自己没答出来。
+ * 身份这一问的三种答案 —— **判定本体不在这里,在 `proc.ts` 的 `processIdentity`**:
+ * 一次 ps 快照、纯比较、三档结果。这一层只把它的三档换成这一摊的说法。
+ *
+ * **不许在这一层再问一次**。上一版这里是「原文不等就再调一次 `isSameProcess` 兼容
+ * locale」:第一次查成功、第二次查失败时,那个 false 被读成确证的「是别人」,于是
+ * `unqueryable` 这一档被悄悄吃掉 —— 一条还在跑的哨兵因此被接回判成 `lost`,随后被按债
+ * 杀掉(第 7 轮审查 F1)。「问不出来」必须一路保留到调用方,消费者各补一次重试只会把
+ * 同一个错换个地方犯。
+ *
+ * **只在 `kill(pid,0)` 已经说它活着时调**,所以 `unqueryable` 只剩一种解释:ps
+ * (或 Windows 上那段 PowerShell)自己没答出来。
  */
 function identityOf(pid: number, recorded: string | null): "ours" | "theirs" | "unqueryable" {
-  const info = inspectProcess(pid);
-  if (!info) return "unqueryable";
-  // 没记启动时刻的行只能退化成存在性检查 —— 跟 `isSameProcess` 同一个让步,理由在那里。
-  if (!recorded || info.startedAt === recorded) return "ours";
-  // 原文不等还有一种可能:两边 locale 不同。让 `isSameProcess` 把两边还原成时间戳再比。
-  return isSameProcess(pid, recorded) ? "ours" : "theirs";
+  const verdict = processIdentity(pid, recorded);
+  return verdict === "same" ? "ours" : verdict === "different" ? "theirs" : "unqueryable";
 }
 
 export function reclaimState(pid: number, pidStartedAt: string | null): ReclaimState {

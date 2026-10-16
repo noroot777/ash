@@ -15,9 +15,13 @@
 //    声称:不许写「这个进程已经不在了」,更不许据此放弃回收责任(第 6 轮审查 F1 实测:接回写
 //    lost → 删除放行 → 任务/哨兵/债表三处全空,命令还在后台跑着)。「确认是另一个进程」是
 //    另一档,两者必须分别测。
+// ⑤ **身份这一问只许查一次,而且三档都要带回来。** 判定在 `proc.ts` 的 `processIdentity`:
+//    `ps -o lstart` 跟随 locale,原文不等**不等于**不是同一个进程。上一版在原文不等时又查了
+//    一次 ps 去兼容 locale,第二次恰好失败就被写成确证的「这个号现在是别人」—— 一条还在跑的
+//    哨兵因此被接回判成 lost、随后按债杀掉(第 7 轮审查 F1)。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import {
@@ -30,7 +34,7 @@ const { stopMonitorsForTask, reclaimUnconfirmedStops } = await import("../src/mo
 const { monitorWakeGate } = await import("../src/monitor-session.js");
 const { beginTaskRevocation, isTaskRevoked, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
-const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
+const { reclaimState, sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 const { isProcessGroupAlive, killTree } = await import("../src/platform.js");
 
 // 忽略 TERM 的命令:壳自己 trap 掉,每轮重起一个 sleep —— TERM 打到整组时组里始终有人,
@@ -61,6 +65,52 @@ async function withPsOutage(pid: number, body: () => Promise<void>): Promise<voi
     process.env.PATH = real;
   }
 }
+
+/**
+ * 另一副台子:**ps 答得出来,但每一次调用都记一笔**,而且可以切成「奇数次正常、偶数次失败」
+ * 的间歇性故障(第 7 轮审查 F1 的复现脚本用的也是这一招)。
+ *
+ * 它回答的是另一个问题 —— 不是「这段时间问不出来」(`withPsOutage`),而是「**问了几次**、
+ * 第二次失败会不会被当成一个确证的答案」。同样不替换产品里的任何函数:包装器就叫 `ps`,
+ * 放在 PATH 最前面,真实的 `execFileSync("ps", …)` 打到的就是它。
+ */
+const flakyBin = join(root, "flaky-ps-bin");
+mkdirSync(flakyBin, { recursive: true });
+const psCalls = join(root, "ps-calls");
+const psMode = join(root, "ps-mode");
+writeFileSync(join(flakyBin, "ps"), `#!/bin/sh
+printf x >> "${psCalls}"
+if [ "$(cat "${psMode}" 2>/dev/null)" = "flaky" ]; then
+  n=$(wc -c < "${psCalls}" | tr -d ' ')
+  if [ $((n % 2)) -eq 0 ]; then exit 1; fi
+fi
+if [ -x /bin/ps ]; then exec /bin/ps "$@"; fi
+exec /usr/bin/ps "$@"
+`, { mode: 0o755 });
+const psCallCount = (): number => readFileSync(psCalls, "utf8").length;
+async function withCountedPs(mode: "count" | "flaky", body: () => Promise<void>): Promise<void> {
+  const real = process.env.PATH ?? "";
+  writeFileSync(psCalls, "");
+  writeFileSync(psMode, mode);
+  process.env.PATH = `${flakyBin}:${real}`;
+  try {
+    await body();
+  } finally {
+    process.env.PATH = real;
+  }
+}
+
+/**
+ * 同一秒的**中文 locale 写法** —— 旧 server(没有 `LC_ALL=C` 那一版)存进 DB 的就是这个样子,
+ * 而现在 `inspectProcessSync` 固定问出英文。两串原文不相等、指向同一秒,是代码**明确支持**
+ * 的历史兼容场景(见 `proc.ts` 的 `parseStartedAt`),不是假造一个错误身份。
+ */
+const zhLstart = (lstart: string): string => {
+  const d = new Date(Date.parse(lstart));
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${"日一二三四五六"[d.getDay()]} ${d.getMonth() + 1}月/ ${d.getDate()}`
+    + ` ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${d.getFullYear()}`;
+};
 
 
 // ── ⑨ 撤销是一段时间:撤销期不许再创建、停不掉必须留下回收责任（第 3 轮审查 F1）──────
@@ -414,5 +464,63 @@ async function withPsOutage(pid: number, body: () => Promise<void>): Promise<voi
   assert.equal(isProcessGroupAlive(row.pid!), false, "点停要确认退出");
 }
 
+// ── ⑪ 身份只许查一次:locale 不同 ≠ 另一个进程,第二次查询失败 ≠ 确证身份不符 ──────────
+//
+// 第 7 轮审查 F1。判定本体收在 `proc.ts` 的 `processIdentity`(一次快照 + 纯比较 + 三档),
+// 这三条钉的就是那三件事:判得对、只查一次、以及端到端不会因此杀掉一条活着的哨兵。
+{
+  const taskId = await makeTask({ status: "running" });   // 任务还在跑 ⇒ 出口是通的
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "记录是旧 locale 的" });
+  assert.equal(started.ok, true);
+  const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+  const pid = row.pid!;
+  // 把库里那一列换成**中文写法的同一秒**(= 旧 server 留下的存量行)。
+  const zh = zhLstart(row.pidStartedAt!);
+  assert.notEqual(zh, row.pidStartedAt, "台子前提:两串原文确实不相等");
+  await db.update(monitors).set({ pidStartedAt: zh }).where(eq(monitors.id, row.id));
+
+  // ⑪-1 原文不等但指向同一秒 ⇒ 还是我们的那个;而且**整个判定只查一次 ps**。
+  //
+  // 「只查一次」是这一条的要点,不是性能讲究:在确证分支里再调一次会吞掉失败信息的查询,
+  // 正是 F1 的根。它只有在这里被钉住,下一个人才不会又在消费者那边补一次重试。
+  await withCountedPs("count", async () => {
+    assert.equal(reclaimState(pid, zh), "ours-alive", "locale 不同不是「这个号现在是另一个进程」");
+    assert.equal(psCallCount(), 1, "身份判定只许查一次 —— 补第二次查询就是 F1 的根");
+  });
+
+  // ⑪-2 **第二次查询失败不许改写身份**:奇数次正常、偶数次失败的间歇性故障现场。
+  await withCountedPs("flaky", async () => {
+    assert.equal(reclaimState(pid, zh), "ours-alive",
+      "第一次就已经答出来了;再查一次、那一次恰好失败,不构成「这个号现在是别人」");
+  });
+
+  // ⑪-3 端到端:接回不许写 lost、不许留责任,随后的开机清扫更不许杀它。
+  detachAllMonitors();                                     // = server 进程没了
+  await withCountedPs("flaky", async () => {
+    const recovery = await reattachMonitors();
+    assert.equal(recovery.attached, 1, "它还是我们起的那个命令:接回来");
+    assert.equal(recovery.lost, 0, "一次查询故障不许把它说成已经没了");
+  });
+  const after = (await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)!;
+  assert.equal(after.status, "running", "不许写成 lost —— 那之后它就再也点不停了");
+  assert.equal(await debtRow(row.id), undefined, "没有要回收的责任:它好好地在盯着");
+  await sweepMonitorReclaimDebts();
+  assert.equal(isProcessGroupAlive(pid), true, "清扫绝不许碰一条还活着的哨兵");
+
+  // ⑪-4 **还原不出时间戳 ⇒ 这一次比不出来**,不是「不是同一个」。存量行里有一条记成了谁也
+  // 不认识的写法时,我们能证明的只有「问不出结果」—— 据此声称「这个号现在是别人」同样是在
+  // 把一次失败当成确证的事实(跟 F1 是同一个错,只是失败发生在还原那一步而不是查询那一步)。
+  await db.update(monitors).set({ pidStartedAt: "这不是任何 locale 的 lstart" })
+    .where(eq(monitors.id, row.id));
+  assert.equal(reclaimState(pid, "这不是任何 locale 的 lstart"), "unknown",
+    "比不出来是 `unknown` 那一档:留责任、不下刀,而不是确证的 `not-ours`");
+
+  // 收尾前把那一列改回去:`unknown` 这一档**不许下刀**(所以点停收不掉它,见 ⑩-11),
+  // 而这个进程确实是我们的,台子自己负责清场。
+  await db.update(monitors).set({ pidStartedAt: row.pidStartedAt }).where(eq(monitors.id, row.id));
+  await stopMonitor(row.id, "测试收尾");
+  assert.equal(isProcessGroupAlive(pid), false, "点停才收掉它");
+}
+
 await teardown();
-console.log("✓ 撤销期不许创建 / 枚举失败整笔不走 / 停止返回前确认退出或留下持久回收责任 / 接回问同一份出口资格 / 点停也走记责那一圈 / 删除按资源责任核对而非卡片状态 / 另一个进程与问不出来分档记责、都不下刀 / 组长退出按整组收 / 开机重收「已停止但没确认退出」/ ps 不可用时接回不撒谎、删除不丢责任、恢复后收掉 / 落盘失败走补记梯子");
+console.log("✓ 撤销期不许创建 / 枚举失败整笔不走 / 停止返回前确认退出或留下持久回收责任 / 接回问同一份出口资格 / 点停也走记责那一圈 / 删除按资源责任核对而非卡片状态 / 另一个进程与问不出来分档记责、都不下刀 / 组长退出按整组收 / 开机重收「已停止但没确认退出」/ ps 不可用时接回不撒谎、删除不丢责任、恢复后收掉 / 落盘失败走补记梯子 / 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」");
