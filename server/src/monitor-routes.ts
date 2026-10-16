@@ -5,7 +5,9 @@ import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS } from "@ash/shared/moni
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
+import { agentActor } from "./auth/middleware.js";
 import { getMonitor, listMonitors, readMonitorTail, startMonitor, stopMonitorChecked } from "./monitors.js";
+import { claudeMonitorHookDecision, type ClaudeMonitorHookInput } from "./claude-monitor-hook.js";
 import { backfillClaudeMonitors } from "./claude-monitor-backfill.js";
 import { monitorRecoveryOf } from "./claude-monitor-recovery.js";
 
@@ -79,6 +81,36 @@ export function mountMonitorRoutes(api: Hono): void {
     );
     if (!tail) return c.json({ error: "哨兵不存在" }, 404);
     return c.json(tail);
+  });
+
+  /**
+   * claude 的 PreToolUse hook 回调：agent 调内置 `Monitor` 时打到这儿（装配见
+   * `claude-monitor-hook.ts`，那儿也写着为什么要拦）。
+   *
+   * **一律回 200**。http hook 的契约是「2xx + JSON 才算一个决定」：非 2xx 会被当成
+   * non-blocking error，而那意味着**放行** —— 放过去的监听照样活不过这一轮，到点没人
+   * 叫醒，正是这个 hook 要堵的那一幕。所以出了什么事都用 reason 说出来，别用状态码。
+   *
+   * 身份走 agent 那条既有的通道（`x-ash-source-task-id` + `x-ash-turn-token`，见
+   * auth/middleware.ts）。认不出来时 actor 不是 agent，taskId 传 null：仍然拦，但只能
+   * 让它自己去挂。
+   */
+  api.post("/hooks/claude-monitor", async (c) => {
+    const input = await c.req.json<ClaudeMonitorHookInput>().catch((): ClaudeMonitorHookInput => ({}));
+    // **自用模式下 actor 恒是 SINGLE_ACTOR**：那一档的 authGate 一行不拦，`agentActor`
+    // 这条路根本不走（auth/middleware.ts）。只看 actor 的话，「这次回调是哪条任务的哪
+    // 一轮」在自用模式下永远答不出来——而自用模式正是绝大多数实例的样子，代办会整个
+    // 失效、静默退化成「拦住了但没替你挂」。所以这里自己再问一次，判据复用那一份。
+    const actor = actorOf(c);
+    const agent = actor.kind === "agent" ? actor : await agentActor(c);
+    const decision = await claudeMonitorHookDecision(input, agent?.taskId ?? null, ownerIdOf(agent ?? actor))
+      // 自己炸了也不能变成放行：同上，非 2xx = 放行。
+      .catch((error: unknown) => {
+        console.error("[ash] Monitor 改道 hook 出错", error);
+        return null;
+      });
+    // null = 不表态（不是 Monitor 调用）。空对象就是「没有决定」，claude 走它自己的流程。
+    return c.json(decision ?? {});
   });
 
   api.post("/monitors/:monitorId/stop", async (c) => {

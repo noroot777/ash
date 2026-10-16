@@ -11,6 +11,7 @@ import { resolveSteerText, type SteerText } from "./steer-text.js";
 import { spawnControllableForRun, spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, shq, killChild, redactSecrets, failedChild } from "./spawn.js";
 import { relayRoot } from "../llm.js";
+import { monitorRedirectHook } from "../claude-monitor-hook.js";
 import { anthropicContext1mBaseUrl, modelUsesContext1m, withContext1mSuffix } from "../anthropic-context-1m.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { parseClaudeStream } from "./claude-stream.js";
@@ -115,11 +116,17 @@ export class ClaudeExecutor implements AgentExecutor {
       : relayRoot(this.relay.baseUrl);
   }
 
-  /** fastMode、覆盖项、供应商路由与恢复参数共用一份 --settings；多份参数不合并。 */
-  private settingsPayload(cwd: string, model?: string, relayAuthToken?: string): Record<string, unknown> | null {
+  /** fastMode、覆盖项、供应商路由、Monitor 改道与恢复参数共用一份 --settings；多份参数不合并。 */
+  private settingsPayload(
+    cwd: string,
+    model?: string,
+    relayAuthToken?: string,
+    resident = false,
+  ): Record<string, unknown> | null {
     const settings = {
       ...(this.speed === "fast" ? { fastMode: true } : {}),
       ...cliConfigOverrideSettings(this.type, this.configOverrides, cliHostEnv(cwd)),
+      ...monitorRedirectHook(resident),
     } as Record<string, unknown>;
     const relayBaseUrl = this.relayBaseUrl(model);
     if (relayBaseUrl) {
@@ -164,8 +171,8 @@ export class ClaudeExecutor implements AgentExecutor {
     return env;
   }
 
-  private runtimeSettings(cwd: string, model?: string): RuntimeSettings {
-    const settings = this.settingsPayload(cwd, model, this.relay?.apiKey);
+  private runtimeSettings(cwd: string, model?: string, resident = false): RuntimeSettings {
+    const settings = this.settingsPayload(cwd, model, this.relay?.apiKey, resident);
     if (!settings) return { arg: null, cleanup: () => {} };
     if (!this.relay) return { arg: JSON.stringify(settings), cleanup: () => {} };
     const path = join(tmpdir(), `ash-claude-settings-${process.pid}-${randomUUID()}.json`);
@@ -227,7 +234,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const model = opts.model ?? this.model;
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
-      : this.runtimeSettings(opts.cwd, model);
+      : this.runtimeSettings(opts.cwd, model, true);
     const args = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError || settings.error
@@ -283,7 +290,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const model = opts.model ?? this.model;
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
-      : this.runtimeSettings(opts.cwd, model);
+      : this.runtimeSettings(opts.cwd, model, true);
     const args = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError || settings.error

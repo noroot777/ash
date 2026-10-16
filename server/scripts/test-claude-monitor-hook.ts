@@ -1,0 +1,212 @@
+// Monitor 改道的回归：agent 调 claude 内置 `Monitor` 时，ash 到底替它做了什么。
+//
+// 钉住的立论（装配与理由见 src/claude-monitor-hook.ts 文件头）：
+//
+//  ① 一个都不放行。内置 Monitor 在 `-p` 回合里活不过这一轮，放行等于让它等一件不会来
+//     的事 —— 所以连「代办失败」也必须是 deny，只是 reason 不同。
+//  ② 能代办的就真代办：同一条命令变成一条真的 ash 哨兵，monitorId 回给 agent。
+//  ③ 代办不了的要说清为什么、以及它自己该怎么挂（ws；没有回合身份；闸拒了）。
+//  ④ 每一条 deny 都要把「这一轮该用 pause_task 收尾」说出口——这是整件事的落点：
+//     哨兵挂上了而回合就这么结束的话，任务照样不会停在那儿等。
+//  ⑤ 常驻会话不挂这个 hook（那种模式下 CLI 进程一直活着，内置 Monitor 真能唤醒自己）。
+//  ⑥ **自用模式下也得认出是哪条任务的哪一轮**。这一条是实测抓出来的：那一档的 authGate
+//     一行不拦、直接 set 成 SINGLE_ACTOR，`agentActor` 根本不走，只看 actor 的话 taskId
+//     永远是 null —— 代办会在绝大多数实例上静默退化成「拦住了但没替你挂」。
+import assert from "node:assert/strict";
+import { eq } from "drizzle-orm";
+import { MONITOR_MAX_TIMEOUT_MS } from "@ash/shared/monitor";
+import { db, monitors, tasks, stopMonitor, makeTask, teardown } from "./monitors-fixture.js";
+
+const { claudeMonitorHookDecision, monitorRedirectHook } = await import("../src/claude-monitor-hook.js");
+
+/** hook 发过来的那一份 PreToolUse 事件。只写我们读的那几个字段。 */
+const event = (toolInput: Record<string, unknown>, toolName = "Monitor") => ({
+  hook_event_name: "PreToolUse",
+  tool_name: toolName,
+  cwd: process.cwd(),
+  tool_input: toolInput,
+});
+
+const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>>): string => {
+  assert.ok(decision, "这一条应该给出决定，实际是「不表态」——不表态会放行");
+  assert.equal(decision.hookSpecificOutput.permissionDecision, "deny");
+  assert.equal(decision.hookSpecificOutput.hookEventName, "PreToolUse");
+  return decision.hookSpecificOutput.permissionDecisionReason;
+};
+
+// ── ① 别的工具不碰 ───────────────────────────────────────────────────────────
+// matcher 已经筛过一道，但配置被改宽时这里必须兜住:把 Bash 拦下来会把整个 agent 废掉。
+{
+  const taskId = await makeTask();
+  const decision = await claudeMonitorHookDecision(event({ command: "npm test" }, "Bash"), taskId, null);
+  assert.equal(decision, null, "不是 Monitor 调用就该不表态");
+}
+
+// ── ② 正常那条：真起一条哨兵，把 monitorId 和 pause_task 一起回给它 ──────────
+{
+  const taskId = await makeTask();
+  const reason = reasonOf(await claudeMonitorHookDecision(
+    event({ command: "sleep 30", description: "等全量 unittest 跑完" }),
+    taskId,
+    null,
+  ));
+
+  const rows = await db.select().from(monitors).where(eq(monitors.taskId, taskId));
+  assert.equal(rows.length, 1, "应该替它起了一条真哨兵");
+  const row = rows[0]!;
+  assert.equal(row.kind, "ash", "代办出来的必须是 ash 自己起的那种——那才是能唤醒任务的");
+  assert.equal(row.command, "sleep 30", "命令要原样转过去");
+  assert.equal(row.description, "等全量 unittest 跑完");
+  assert.equal(row.status, "running");
+
+  assert.match(reason, new RegExp(`monitorId=${row.id}\\b`), `reason 里要带上 monitorId，实际：${reason}`);
+  // 这一句是整件事的落点:哨兵挂上了而回合就这么结束的话,任务不会停在那儿等。
+  assert.match(reason, /pause_task/, `reason 必须说「这一轮用 pause_task 收尾」，实际：${reason}`);
+  await stopMonitor(row.id, "测试收尾");
+}
+
+// ── ③ description 空着时拿命令顶上 ───────────────────────────────────────────
+// 起得来比「名字好看」要紧:描述是必填的(startMonitor 会校验),拿不到就用命令当描述,
+// 而不是让这次代办整个失败、把 agent 推回那条落空的路。
+{
+  const taskId = await makeTask();
+  reasonOf(await claudeMonitorHookDecision(event({ command: "sleep 31" }), taskId, null));
+  const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0);
+  assert.equal(row?.description, "sleep 31");
+  if (row) await stopMonitor(row.id, "测试收尾");
+}
+
+// ── ④ ws 那种代办不了：拦住，并说清该怎么自己包 ──────────────────────────────
+{
+  const taskId = await makeTask();
+  const reason = reasonOf(await claudeMonitorHookDecision(
+    event({ ws: { url: "wss://example.com/stream" }, description: "等部署事件" }),
+    taskId,
+    null,
+  ));
+  assert.equal(
+    (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).length,
+    0,
+    "ws 那种不该凭空起一条哨兵",
+  );
+  assert.match(reason, /WebSocket/, `要说清 ash 哨兵接不了 ws，实际：${reason}`);
+  assert.match(reason, /start_monitor/, `要告诉它自己该怎么挂，实际：${reason}`);
+}
+
+// ── ⑤ 没有回合身份：仍然拦，但只能让它自己挂 ─────────────────────────────────
+// CLI 老到不支持 header 插值时就是这一条。**不放行**:放过去的监听照样活不过这一轮。
+{
+  const reason = reasonOf(await claudeMonitorHookDecision(event({ command: "sleep 32" }), null, null));
+  assert.match(reason, /没有回合身份/, `要说清为什么没能代办，实际：${reason}`);
+  assert.match(reason, /start_monitor/, `要告诉它自己该怎么挂，实际：${reason}`);
+}
+
+// ── ⑥ 闸拒了也要如实转达，而不是静默放行 ─────────────────────────────────────
+// 终态任务上挂哨兵是没有意义的(它的输出不会唤醒任何人),创建闸因此一律拒。那条原因得
+// 原样传给 agent:它读到「任务已经结束了」才会停下来,读到一句空话只会再试一次。
+{
+  const taskId = await makeTask({ status: "done" });
+  const reason = reasonOf(await claudeMonitorHookDecision(event({ command: "sleep 33" }), taskId, null));
+  assert.equal(
+    (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).length,
+    0,
+    "闸拒了就不该有哨兵留下来",
+  );
+  assert.match(reason, /替你改挂成 ash 哨兵也没成/, `要说清代办失败，实际：${reason}`);
+  assert.match(reason, /start_monitor/, `要告诉它自己该怎么挂，实际：${reason}`);
+}
+
+// ── ⑦ timeout 超界：钳住，而且要说出来 ───────────────────────────────────────
+// 不说的话 agent 会按自己写的那个数去安排后面的事(「两小时后它会叫我」),而实际上一小时
+// 就到期了 —— 那是同一类「承诺在说出口时就不成立」的错。
+{
+  const taskId = await makeTask();
+  const reason = reasonOf(await claudeMonitorHookDecision(
+    event({ command: "sleep 34", description: "盯很久", timeout_ms: MONITOR_MAX_TIMEOUT_MS * 3 }),
+    taskId,
+    null,
+  ));
+  const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0);
+  assert.equal(row?.timeoutMs, MONITOR_MAX_TIMEOUT_MS, "超界要钳到上限");
+  assert.match(reason, /钳到边界/, `钳过就要说出来，实际：${reason}`);
+  if (row) await stopMonitor(row.id, "测试收尾");
+}
+
+// ── ⑧ 装配：一次性回合挂、常驻不挂 ───────────────────────────────────────────
+{
+  assert.deepEqual(monitorRedirectHook(true), {}, "常驻会话不挂这个 hook——那种模式下内置 Monitor 真能唤醒自己");
+
+  const payload = monitorRedirectHook(false) as {
+    hooks: { PreToolUse: { matcher: string; hooks: Record<string, unknown>[] }[] };
+  };
+  const group = payload.hooks.PreToolUse[0]!;
+  assert.equal(group.matcher, "Monitor", "matcher 要精确匹配内置 Monitor 这一个工具");
+  const handler = group.hooks[0]!;
+  assert.equal(handler.type, "http");
+  assert.match(String(handler.url), /^http:\/\/127\.0\.0\.1:\d+\/api\/hooks\/claude-monitor$/);
+  // 回合身份靠 CLI 的 header 插值,token 因此不进 argv。`allowedEnvVars` 漏一个,那个
+  // header 会被替换成空串 —— 代办会静默退化成「没有回合身份」那一档(⑤)。
+  assert.deepEqual(handler.headers, {
+    "x-ash-source-task-id": "$ASH_TASK_ID",
+    "x-ash-turn-token": "$ASH_TURN_TOKEN",
+  });
+  assert.deepEqual(handler.allowedEnvVars, ["ASH_TASK_ID", "ASH_TURN_TOKEN"]);
+}
+
+// ── ⑨ 端点层：自用模式下也要认出回合身份 ─────────────────────────────────────
+//
+// 上面那些是拿着 taskId 直接调判断函数，钉不住「taskId 从哪儿来」。而真实故障恰恰发生
+// 在那一步：自用模式的 authGate 直接给 SINGLE_ACTOR，端点要是只看 actor.kind==="agent"
+// 就永远取不到任务。这一段打的是真端点，中间件照自用模式那一档装。
+{
+  const { Hono } = await import("hono");
+  const { mountMonitorRoutes } = await import("../src/monitor-routes.js");
+  const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
+
+  const api = new Hono();
+  // 自用模式那一档逐字复刻：一行不拦，set 一个 SINGLE_ACTOR 就放行。
+  api.use("*", async (c, next) => { setActor(c, SINGLE_ACTOR); await next(); });
+  mountMonitorRoutes(api);
+  const app = new Hono();
+  app.route("/api", api);
+
+  const post = (taskId: string, token: string, command: string) => app.request("/api/hooks/claude-monitor", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-ash-source-task-id": taskId,
+      "x-ash-turn-token": token,
+    },
+    body: JSON.stringify(event({ command, description: "自用模式也要认出身份" })),
+  });
+
+  const taskId = await makeTask();
+  await db.update(tasks).set({ activeTurnToken: "TURN-OK" }).where(eq(tasks.id, taskId));
+
+  const ok = await post(taskId, "TURN-OK", "sleep 36");
+  // 非 2xx 会被 claude 当成 non-blocking error —— 那等于**放行**，正是这个 hook 要堵的。
+  assert.equal(ok.status, 200, "这个端点任何情况下都必须回 200，否则 claude 会放行这次调用");
+  const okReason = (await ok.json() as { hookSpecificOutput: { permissionDecisionReason: string } })
+    .hookSpecificOutput.permissionDecisionReason;
+  const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0);
+  assert.ok(row, "自用模式下也要真替它挂上哨兵");
+  assert.match(okReason, new RegExp(`monitorId=${row.id}\\b`), `实际：${okReason}`);
+  await stopMonitor(row.id, "测试收尾");
+
+  // 反过来：token 对不上就不许代办。不然这个端点等于「谁报一个 taskId 就替谁挂」。
+  const other = await makeTask();
+  await db.update(tasks).set({ activeTurnToken: "TURN-OK" }).where(eq(tasks.id, other));
+  const bad = await post(other, "TURN-WRONG", "sleep 37");
+  assert.equal(bad.status, 200);
+  const badReason = (await bad.json() as { hookSpecificOutput: { permissionDecisionReason: string } })
+    .hookSpecificOutput.permissionDecisionReason;
+  assert.equal(
+    (await db.select().from(monitors).where(eq(monitors.taskId, other))).length,
+    0,
+    "token 对不上就不该替它挂",
+  );
+  assert.match(badReason, /没有回合身份/, `实际：${badReason}`);
+}
+
+await teardown();
+console.log("Monitor 改道：别的工具不碰 / 正常那条真起哨兵并要求 pause_task 收尾 / 描述空了拿命令顶上 / ws 拦住并指路 / 没身份也不放行 / 闸拒如实转达 / 超界钳住且说出来 / 一次性回合挂常驻不挂 / 自用模式也认得出回合身份且 token 不对不代办 均受回归保护");

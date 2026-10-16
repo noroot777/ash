@@ -30,6 +30,13 @@
 // 「这个哨兵会叫醒任务」的预期套到一个只在那一轮里有效的监听上。所以面板按来源分段
 // （见 MonitorInspector），会话区那张「在等哨兵」只数 ash 那种、另起一行交代内置那几个
 // （见 MonitorWaitCard）。
+//
+// **`claude` 这一种今后只从两处来**：2026-10-16 起，一次性回合（`claude -p`，单飞任务和
+// 团队执行者都是）里 agent 调内置 Monitor 会被 PreToolUse hook 当场改道成一条 ash 哨兵
+// （见 server/src/claude-monitor-hook.ts），所以那条路上不再产生新的只读投影。仍会产生
+// 的是**常驻会话**（团队调度台，`--input-format stream-json`——那种模式下 CLI 进程一直
+// 活着，内置 Monitor 真能唤醒它自己，拦它才是错的），以及**历史**：改道之前跑过的任务，
+// 会话文件里还躺着它们，面板得答得出「那 12 个 Monitor 后来怎么了」。
 
 export const MONITOR_STATUSES = ["running", "stopped", "expired", "exited", "lost"] as const;
 export type MonitorStatus = (typeof MONITOR_STATUSES)[number];

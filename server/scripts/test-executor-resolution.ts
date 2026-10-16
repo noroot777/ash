@@ -99,6 +99,28 @@ try {
   claudeSpec.bins = originalClaudeBins;
 }
 
+// ── 拉起 claude 时,Monitor 改道的 hook 必须真的在命令行上 ───────────────────
+//
+// 上面那个文件(src/claude-monitor-hook.ts)把 hook 片段拼得再对,`--settings` 没带上它
+// 就一行都不生效 —— 而那条路的失败是**静默**的:agent 照常调内置 Monitor,照常说「挂上
+// 了」,照常没人被叫醒。所以这一条钉的是**命令行上真的带着它**,不是那个函数的返回值
+// (那一侧在 test-claude-monitor-hook.ts ⑧)。
+{
+  const originalBins = claudeSpec.bins;
+  claudeSpec.bins = ["node"];   // 不碰真 CLI:这里只看命令行怎么拼
+  try {
+    const ex = await resolveExecutorFor({ type: "claude" });
+    const handle = ex.run({ prompt: "probe", cwd: process.cwd() });
+    handle.kill();
+    assert.match(handle.commandLine, /--settings /,
+      `拉起 claude 必须带 --settings(Monitor 改道的 hook 从这儿进),实际命令行:${handle.commandLine}`);
+    assert.match(handle.commandLine, /\/api\/hooks\/claude-monitor/,
+      `--settings 里必须带着 Monitor 改道的 hook,实际命令行:${handle.commandLine}`);
+  } finally {
+    claudeSpec.bins = originalBins;
+  }
+}
+
 const genericType = AGENT_TYPES.find((t) => !CLI_SPEC_BY_KEY[t].factory);
 if (!genericType) throw new Error("目录里没有一个走 GenericCliExecutor 的 spec,这条用例失去意义");
 const spec = CLI_SPEC_BY_KEY[genericType];
