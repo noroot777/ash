@@ -378,21 +378,6 @@ export class ClaudeExecutor implements AgentExecutor {
     else args.push("--session-id", sessionId);
     if (model) args.push("--model", model);
     if (this.reasoningEffort) args.push("--effort", this.reasoningEffort);
-    // **内置 `Monitor` 一律关掉**(用户 2026-10-16 拍板)。哨兵这件事 ash 自己有一套,两套
-    // 并存只会让 agent 挑到活不过这一回合的那一套:
-    //
-    //   内置的进程在 agent 自己的进程树里,回合一结束 CLI 就成批收走,而它的通知只注回
-    //   那个已经没了的会话 —— ash 这边够不着任何唤醒通道。实测行序(Bp2LkwfRO37A 第 2 轮
-    //   审查):task_started → 「监听已挂上,套件结束会叫我」→ result → 立刻 stopped,套件
-    //   还在跑。那句承诺在说出口那一刻就不成立了,而审查轮因此停在「未给出结论」。
-    //
-    // ash 的 `mcp__harness__start_monitor` 把进程的归属上移一层(由 server 起,不在 agent
-    // 进程树里),跨回合/会话/重启都活着,配 `pause_task` 收尾这一轮才是能等到事的那条路。
-    // 工具清单里两个都在时,CLI 自己的提示词会把长等待往内置那边引,所以只能从这儿摘掉。
-    //
-    // `--disallowedTools` 实测(claude 2.1.283)只摘这一个:工具数 61 → 60,`TaskStop` 与
-    // ash 的 MCP 工具原样都在 —— 普通后台 Bash 照旧能用,停它的手柄也没丢。
-    args.push("--disallowedTools", "Monitor");
     // `--settings` 是 claude 优先级最高的一档配置(之上只剩企业策略文件),1.5x 加速档
     // 和「覆盖 CLI 自己的配置」都从这里进;装配在 settingsPayload() 里,恢复命令共用同
     // 一份。放在 extraArgs 之前:用户自带 --settings 时以他那份为准(设置页会警告本覆盖

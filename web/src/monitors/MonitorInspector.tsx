@@ -5,12 +5,21 @@
 // 下的；而回复框上方那条带每多一行，输入区就矮一行。
 import { useMemo, useRef, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
-import { MONITOR_RECOVERY_LABEL } from "@ash/shared/monitor";
+import { MONITOR_RECOVERY_LABEL, type MonitorKind, type TaskMonitor } from "@ash/shared/monitor";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { MonitorCard } from "./MonitorCard.tsx";
 import { MonitorComposer } from "./MonitorComposer.tsx";
 import type { TaskMonitorsState } from "./useTaskMonitors.ts";
+
+/**
+ * 分段的顺序与措辞。ash 那组排在前面：它是这一格的主角（能停、有日志、真的会唤醒任务），
+ * 内置那组是「也让你看得见」的旁证。
+ */
+const MONITOR_GROUPS: readonly { kind: MonitorKind; title: string; hint: string }[] = [
+  { kind: "ash", title: "ash 哨兵", hint: "进程由 ash 起，跨回合、跨重启都活着；能停、能看输出" },
+  { kind: "claude", title: "claude 内置 Monitor", hint: "只读投影：进程在智能体自己那一轮里，停不掉、没有日志，也不会唤醒任务" },
+];
 
 export function MonitorInspector({
   monitors,
@@ -40,12 +49,28 @@ export function MonitorInspector({
   const [form, setForm] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState<number | null>(null);
   const addTip = useHoverTip();
-  // 还在盯着的永远排在上面：结束的那几张是存档，正在烧回合的那几个才是要盯着看的。
-  // 同一档里按开始时间倒序（listMonitors 已经这么给了），所以只需要把 running 提上来。
-  const rows = useMemo(() => [
-    ...monitors.monitors.filter((monitor) => monitor.status === "running"),
-    ...monitors.monitors.filter((monitor) => monitor.status !== "running"),
-  ], [monitors.monitors]);
+  /**
+   * **按来源分段，不混排**（用户 2026-10-16 拍板）。
+   *
+   * 两种哨兵的能力不对等到了「同一个词指两件事」的地步：ash 那种的进程由 server 起、跨
+   * 回合活着、停得掉、有日志；claude 内置的那种是一份只读投影，agent 的进程一退就跟着
+   * 没了，ash 连停它的手柄都没有。混在一张列表里的后果不是「不够整齐」，而是用户会对着
+   * 一张 claude 的卡去找停止按钮，或者把「它会叫醒任务」的预期套到一个只在那一轮里有效
+   * 的监听上 —— 那正是 Bp2LkwfRO37A 里「监听已挂上、却没人被叫醒」那一幕的读图版本。
+   *
+   * 段内仍是「还在盯着的排在上面」：结束的那几张是存档，正在烧回合的才是要盯着看的。
+   * 同一档里按开始时间倒序（`listMonitors` 已经这么给了），所以只需要把 running 提上来。
+   */
+  const groups = useMemo(() => {
+    const live = (rows: readonly TaskMonitor[]) => [
+      ...rows.filter((monitor) => monitor.status === "running"),
+      ...rows.filter((monitor) => monitor.status !== "running"),
+    ];
+    return MONITOR_GROUPS
+      .map((group) => ({ ...group, rows: live(monitors.monitors.filter((m) => m.kind === group.kind)) }))
+      .filter((group) => group.rows.length > 0);
+  }, [monitors.monitors]);
+  const rows = useMemo(() => groups.flatMap((group) => group.rows), [groups]);
 
   return (
     <div className="monitor-inspector">
@@ -123,14 +148,26 @@ export function MonitorInspector({
           </div>
         )
         : (
-          <div className="monitor-inspector__list">
-            {rows.map((monitor) => (
-              <MonitorCard
-                key={monitor.id}
-                monitor={monitor}
-                stopping={monitors.stoppingIds.has(monitor.id)}
-                onStop={(monitorId) => void monitors.stop(monitorId)}
-              />
+          <div className="monitor-inspector__groups">
+            {groups.map((group) => (
+              <section key={group.kind} className="monitor-group">
+                {/* 段头一行把这一组是什么、能拿它怎么办说清楚。只有一组时也照样显示——
+                    那时它回答的是另一个问题：「为什么这几张卡没有停止按钮」。 */}
+                <h4 className="monitor-group__head">
+                  <span className="monitor-group__name">{group.title}</span>
+                  <span className="monitor-group__hint">{group.hint}</span>
+                </h4>
+                <div className="monitor-inspector__list">
+                  {group.rows.map((monitor) => (
+                    <MonitorCard
+                      key={monitor.id}
+                      monitor={monitor}
+                      stopping={monitors.stoppingIds.has(monitor.id)}
+                      onStop={(monitorId) => void monitors.stop(monitorId)}
+                    />
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         )}

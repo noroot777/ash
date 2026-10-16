@@ -99,30 +99,6 @@ try {
   claudeSpec.bins = originalClaudeBins;
 }
 
-// ── 内置 `Monitor` 必须是关着的（用户 2026-10-16 拍板）────────────────────────
-//
-// 哨兵这件事 ash 自己有一套（`mcp__harness__start_monitor`：进程由 server 起，跨回合/会话/
-// 重启都活着）。claude 内置的那个进程在 agent 自己的进程树里，回合一结束 CLI 就成批收走，
-// 而它的通知只注回那个已经没了的会话 —— ash 够不着任何唤醒通道。两套并存时，CLI 自己的
-// 提示词会把长等待往内置那边引：实测 agent 说完「监听已挂上，套件结束会叫我」就结束了
-// 回合，4 秒后监听被收走，审查轮因此停在「未给出结论」（Bp2LkwfRO37A 第 2 轮审查）。
-//
-// 所以这一条钉的是**命令行上真的带着那个开关**。`--disallowedTools` 的行为实测过
-// （claude 2.1.283）：工具清单 61 → 60，只摘 `Monitor`，`TaskStop` 与 ash 的 MCP 工具原样都在。
-{
-  const originalBins = claudeSpec.bins;
-  claudeSpec.bins = ["node"];   // 不碰真 CLI：这里只看命令行怎么拼
-  try {
-    const ex = await resolveExecutorFor({ type: "claude" });
-    const handle = ex.run({ prompt: "probe", cwd: process.cwd() });
-    handle.kill();
-    assert.match(handle.commandLine, /--disallowedTools Monitor\b/,
-      `拉起 claude 时必须关掉内置 Monitor，实际命令行：${handle.commandLine}`);
-  } finally {
-    claudeSpec.bins = originalBins;
-  }
-}
-
 const genericType = AGENT_TYPES.find((t) => !CLI_SPEC_BY_KEY[t].factory);
 if (!genericType) throw new Error("目录里没有一个走 GenericCliExecutor 的 spec,这条用例失去意义");
 const spec = CLI_SPEC_BY_KEY[genericType];

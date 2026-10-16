@@ -117,11 +117,16 @@ export function TaskDetail({
   });
   // 哨兵那一格：数据在这一层拉（看的是别的面板时也要知道有几个在盯着，图标条上那点活信号靠它）。
   const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
-  // 会话区那张等待卡只认**ash 自己起的、还在盯着的**那几个：claude 内置 Monitor 的只读
-  // 投影就算还显示 running 也唤不醒任何人（它的通知只注回那条已经结束的会话），把它算
-  // 进「在等」就是让用户等一件不会来的事。那种卡的真相写在 inspector 里（MonitorCard）。
+  // 会话区那张卡把两种来源**分开**数（同 MonitorInspector 的分段）：ash 那几个才是「在等」
+  // —— claude 内置 Monitor 的只读投影就算还显示 running 也唤不醒任何人（它的通知只注回那
+  // 条已经结束的会话）。但内置那几个也不能当不存在：agent 明明在对话里说了「已挂监听」，
+  // 卡片要替它说清那句话到底成不成立。
   const liveMonitors = useMemo(
     () => monitorTab.monitors.monitors.filter((m) => m.kind === "ash" && m.status === "running"),
+    [monitorTab.monitors.monitors],
+  );
+  const liveBuiltinCount = useMemo(
+    () => monitorTab.monitors.monitors.filter((m) => m.kind === "claude" && m.status === "running").length,
     [monitorTab.monitors.monitors],
   );
   const inspectors = monitorTab.inspectors;
@@ -504,7 +509,7 @@ export function TaskDetail({
                     onOpenReviewPanel={() => openTab("review")}
                     // 会话区底部的常驻卡。两张可以同时在：提问要人答，哨兵会自己回来——
                     // 任务完全可能一边等答复一边挂着哨兵，这时少显示哪一张都是在瞒。
-                    dock={task.question || liveMonitors.length ? (
+                    dock={task.question || liveMonitors.length || liveBuiltinCount ? (
                       <>
                         {task.question && (
                           <QuestionCard
@@ -517,6 +522,7 @@ export function TaskDetail({
                         )}
                         <MonitorWaitCard
                           monitors={liveMonitors}
+                          builtinCount={liveBuiltinCount}
                           status={task.status}
                           resumePrompt={task.resumePrompt ?? null}
                           reviewArmed={!!free.state?.reviewReservation.armed}

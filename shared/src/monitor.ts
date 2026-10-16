@@ -25,10 +25,11 @@
 // 挂了 12 个内置 Monitor、ash 一个都不知道，用户的第一反应正是「为什么 inspector 里没
 // 东西」。只读也比没有强，前提是**界面必须如实说明它只读**（见 MonitorCard）。
 //
-// **`claude` 这一种现在只会是存量**：2026-10-16 起拉起 claude 时直接 `--disallowedTools
-// Monitor`（见 executors/claude.ts 那段注释），新回合里 agent 唯一能挂的就是 ash 这种。
-// 投影、回填、收尾那一整套仍然留着，因为老任务的会话文件里还有它们——翻开 2026-10-16
-// 之前的任务，面板得答得出「那 12 个 Monitor 后来怎么了」。
+// **两种都要能看见，但界面上不许混在一起**（用户 2026-10-16 拍板）：它们的能力不对等到
+// 了「同一个词指两件事」的地步——混排时用户会对着一张 claude 的卡去找停止按钮，或者把
+// 「这个哨兵会叫醒任务」的预期套到一个只在那一轮里有效的监听上。所以面板按来源分段
+// （见 MonitorInspector），会话区那张「在等哨兵」只数 ash 那种、另起一行交代内置那几个
+// （见 MonitorWaitCard）。
 
 export const MONITOR_STATUSES = ["running", "stopped", "expired", "exited", "lost"] as const;
 export type MonitorStatus = (typeof MONITOR_STATUSES)[number];

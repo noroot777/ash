@@ -90,3 +90,16 @@
 .monitor-wait__note { margin: 8px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.65; }
 /* 交代原文是 agent 对自己说的话,排成引文好跟说明本身分开。 */
 .monitor-wait__note q { color: var(--muted); quotes: "「" "」"; }
+
+/* ── 按来源分段(MonitorInspector)──────────────────────────────────────────────
+   两种哨兵的能力不对等,混排会让用户对着一张只读卡去找停止按钮。段头做得轻:一行小字,
+   名字 + 一句「能拿它怎么办」,不抢卡片本身的位置。 */
+.monitor-inspector__groups { display: grid; gap: 12px; }
+.monitor-group__head { display: grid; gap: 1px; margin: 0 0 6px; }
+.monitor-group__name { color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .02em; }
+.monitor-group__hint { color: var(--faint); font-size: 9px; font-weight: 400; line-height: 1.5; }
+/* 只有内置 Monitor 在跑时：它不表达「正在等一件会回来的事」,所以不借 --accent 那套
+   «进行中» 的颜色,退到中性底色上 —— 卡片说的恰恰是「别指望它叫醒你」。 */
+.monitor-wait.is-builtin-only { border-color: var(--line); background: var(--panel); }
+.monitor-wait.is-builtin-only > header { color: var(--muted); }
+.monitor-wait__note code { border-radius: 4px; background: var(--overlay); padding: 0 3px; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9px; }
