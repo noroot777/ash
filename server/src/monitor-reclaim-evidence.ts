@@ -45,16 +45,23 @@
 // 不授权删行:留下的那一行是这次创建最后的可定位身份(命令、pid、记号、为什么追不下去)。
 // 唯一真的证明过的那一档在别处:命令**从未开工**(放行闸没开),见 monitor-create.ts。
 //
-// ── 每一次信号都要有**当代**的证据(第 13 轮审查 F1-C、第 14 轮审查 F1)─────────────
+// ── 每一次信号都要有**当代**的证据(第 13 轮 F1-C、第 14 轮 F1、第 15 轮 F1)──────────
 //
 // 一次取证不是永久授权:闭包里存一个裸 pid、两秒后直接补刀,这两秒里那个进程可以退出、
 // 号可以被别人接手。所以**发信号的入口自己取证**(`killProvenUnit`、`shootProvenUnitNow`):
 // 取证和下刀在同一个同步段里完成,外面不许把一份 `ReclaimEvidence` 攒着跨 `await` 再传进来
 // (上一版就是那样:fresh 取证 → await 落债 → 拿原快照下刀)。
 //
-// 真要跨等待的只有一样 —— TERM 之后两秒那一刀。那一下的落点是**第一刀那一刻记下的成员名单,
-// 连代次一起**(`HeldMember`):到点先拿 pid + 启动时刻核一遍,代次变了就说明这个号已经不是
-// 它了,一刀都不发。这样「两秒里 pid 不会被复用」这种推断就完全不必出现在授权链里。
+// **但「刚取的证据」也不等于「这一刀打得对」**,这是第 15 轮审查 F1:取证本身就包含几次耗时
+// 查询(两遍进程表、一次全表组成员),同步 JS 不冻结别的进程 —— 查完回来,刚才证明过的那个
+// 号可能已经换了代。所以这一层的规矩统一成一条:
+//
+//   **每一刀之前,拿「读到那个事实时的代次戳」重问一遍这个号**(`stillSameGeneration`、
+//   `rootStillProven`)—— 不分它是刚取的证据、跨了 `await` 的名单,还是组信号的根。
+//
+// 戳自己必须跟事实同源(读环境项那一次读数、枚举组成员那一次读数各自把代次带出来),
+// 实现与理由在 process-generation.ts。这样「两秒里 pid 不会被复用」「同步代码不会被插队」
+// 这类推断就完全不必出现在授权链里。
 //
 // ── 归属凭证分「真实环境项」和「展示文本」两档(第 14 轮审查 F1)────────────────────
 //
@@ -66,10 +73,11 @@
 // 所以这一层把两档分开:`ours`(真实环境项)签发下刀凭证;`suspected`(只看见文字)只授权
 // 「不许说已经没了」。macOS 上因此**少了一项能力**:跨重启认回「甩掉进程组、但还带着记号的
 // 后代」做不到了 —— 那一档照实落 `suspected`:留责任、留身份、如实说证不出,不下刀。
+import { IS_WINDOWS, isPidAlive, isProcessGroupAlive, killOne, killTree } from "./platform.js";
+import { processIdentity, processUnitEvidence } from "./proc.js";
 import {
-  IS_WINDOWS, isPidAlive, isProcessGroupAlive, killOne, killTree, processGroupMembersSync,
-} from "./platform.js";
-import { processIdentity, processUnitEvidence, type UnitMember } from "./proc.js";
+  processGenerationSync, processGroupMembersSync, type ProcessMember,
+} from "./process-generation.js";
 
 /**
  * 这一条此刻处在哪一档。**每一档只声称那一问真的答出来的东西。**
@@ -180,9 +188,12 @@ export type ReclaimEvidence = {
    * (`suspected`)一个落点都不给,存量行(没有记号)走到 `ours-alive` 时也是空的,那一档的
    * 归属由根自己的 pid + 启动时刻证明,落点是整组。
    *
-   * 每个成员都带着**代次**:这份证据一旦跨过 `await` 就要先核代次再发信号(见 `shootHeld`)。
+   * 每个成员都带着**代次**,而且那个代次是**读到记号的同一次读数**给出的
+   * (process-generation.ts)。**每一刀之前都要拿它再核一遍** —— 不只是跨过 `await` 的那一刀
+   * (第 15 轮审查 F1:上一版的代次是并集定下来之后补问的,等于把后来那一代的身份写给了
+   * 先前那个事实)。
    */
-  members: UnitMember[];
+  members: ProcessMember[];
 };
 
 /**
@@ -257,25 +268,30 @@ const canShoot = (state: ReclaimState): boolean => state === "ours-alive" || sta
  *   拿代次核一遍补上 —— 外层壳被 TERM 收走之后,组里那个忽略 TERM 的后代正是这样收掉的
  *   (`executors/spawn.ts` 的补刀注释说的是同一件事)。**代次对不上就一刀都不发**。
  *
+ * **成员名单那一问自己就是一次耗时查询**(`processGroupMembersSync` 要扫全表):同步 JS 不会
+ * 冻结别的进程,所以查完回来根可能已经退了、这个号可能已经被接手。所以组信号在
+ * `shootProvenUnit` 里**重新核一遍根**(第 15 轮审查 F1),而不是沿用查询之前那一份授权。
+ *
  * 也因此这一层不借用 `executors/spawn.ts` 的 `killByPid`:它的 +2 秒那一刀是无条件的。
  */
 export function killProvenUnit(pid: number, pidStartedAt: string | null, unit: MonitorUnit): void {
   const first = reclaimEvidence(pid, pidStartedAt, unit, { fresh: true });
   if (!canShoot(first.state)) return;
   // 组长活着 ⇒ 这一组的成员都是它的(外人只能从同一个会话里 setpgid 进来,而那个会话的头
-  // 正是这条哨兵)。名单留给两秒后那一刀,所以必须连代次一起拿。
-  const held: UnitMember[] = first.state === "ours-alive"
+  // 正是这条哨兵)。名单留给两秒后那一刀,所以必须连代次一起拿、而且代次要跟「它在这一组里」
+  // 同源(见 process-generation.ts)。
+  const held: ProcessMember[] = first.state === "ours-alive"
     ? processGroupMembersSync(pid) ?? first.members
     : first.members;
-  shootProvenUnit(pid, first, "SIGTERM");
+  shootProvenUnit(pid, pidStartedAt, first, "SIGTERM");
   const t = setTimeout(() => {
     // 重新取证:这两秒里谁退了、号被谁接手了、又新派生了谁,只有现在问才算数。
     const again = reclaimEvidence(pid, pidStartedAt, unit, { fresh: true });
-    if (canShoot(again.state)) shootProvenUnit(pid, again, "SIGKILL");
+    if (canShoot(again.state)) shootProvenUnit(pid, pidStartedAt, again, "SIGKILL");
     // 再补上第一刀那会儿的成员:它们的归属在那一刻证明过,**代次没变才打**。
     const done = new Set(again.members.map((m) => m.pid));
     if (again.state === "ours-alive") done.add(pid);
-    shootHeld(held.filter((m) => !done.has(m.pid)), "SIGKILL");
+    shootMembers(held.filter((m) => !done.has(m.pid)), "SIGKILL");
   }, 2_000);
   (t as { unref?: () => void }).unref?.();
 }
@@ -292,33 +308,61 @@ export function shootProvenUnitNow(
 ): boolean {
   const evidence = reclaimEvidence(pid, pidStartedAt, unit, { fresh: true });
   if (!canShoot(evidence.state)) return false;
-  shootProvenUnit(pid, evidence, sig);
+  shootProvenUnit(pid, pidStartedAt, evidence, sig);
   return true;
 }
 
 /**
- * 发这一刀。**只许拿同一个同步段里刚取到的证据调**(所以不导出):组信号只在「根自己证明过、
- * 而且还活着」时发,否则只打证明过的成员本身。
+ * **这一刻这个号上还是不是记下它时那一代** —— 每一刀之前都要过这一问(第 15 轮审查 F1)。
+ *
+ * 核的是扫描那一刻跟记号同源读到的那个戳(process-generation.ts),所以这一问真的在问
+ * 「我证明过的那一个还在不在」,而不是「这个号上现在有没有人」。核不出来(进程没了、
+ * 两种问法都失败、或者这一刻走了另一种问法)一律按「不是」处理:宁可漏收,也不碰一个
+ * 证不出代次的号。
  */
-function shootProvenUnit(pid: number, evidence: ReclaimEvidence, sig: NodeJS.Signals): void {
-  if (evidence.state === "ours-alive" && (!evidence.members.length || evidence.members.some((m) => m.pid === pid))) {
-    killTree(pid, sig);
-    return;
-  }
-  for (const member of evidence.members) killOne(member.pid, sig);
+const stillSameGeneration = (member: ProcessMember): boolean =>
+  processGenerationSync(member.pid) === member.gen;
+
+/**
+ * 根此刻还是不是**授权这一档时**那一个 —— 组信号(`killTree`)之前必须重问一遍。
+ *
+ * 两条授权路各自用自己的凭证重核,不许混用:
+ *  · 记号那一条 ⇒ 根在成员名单里,核它的代次戳;
+ *  · 存量行那一条(没有记号,`members` 为空)⇒ 核记录在案的 pid + 启动时刻。
+ */
+function rootStillProven(
+  pid: number, pidStartedAt: string | null, evidence: ReclaimEvidence,
+): boolean {
+  const member = evidence.members.find((m) => m.pid === pid);
+  if (member) return stillSameGeneration(member);
+  if (evidence.members.length) return false;      // 记号答出来了、根却不在名单里 ⇒ 不是它
+  return processIdentity(pid, pidStartedAt) === "same";
 }
 
 /**
- * 发给**之前那一刻记下的成员**:每一个都先拿代次核过才打。
- *
- * 这是「跨等待」唯一允许的下刀形状(第 14 轮审查 F1):归属在记下它的那一刻证明过,而
- * `pid + 启动时刻` 相等说明这个号上还是同一代那个进程。核不出代次(当初没拿到启动时刻、
- * 或者现在 ps 答不出来)一律不发 —— 宁可漏收,也不碰一个证不出身份的号。
+ * 发这一刀。**只许拿同一个同步段里刚取到的证据调**(所以不导出):组信号只在「根此刻重核
+ * 过、而且还活着」时发,否则只打证明过的成员本身 —— 而每个成员也各自重核代次。
  */
-function shootHeld(held: UnitMember[], sig: NodeJS.Signals): void {
-  for (const member of held) {
-    if (!member.startedAt) continue;
-    if (processIdentity(member.pid, member.startedAt) !== "same") continue;
+function shootProvenUnit(
+  pid: number, pidStartedAt: string | null, evidence: ReclaimEvidence, sig: NodeJS.Signals,
+): void {
+  if (evidence.state === "ours-alive" && rootStillProven(pid, pidStartedAt, evidence)) {
+    killTree(pid, sig);
+    return;
+  }
+  shootMembers(evidence.members, sig);
+}
+
+/**
+ * 发给**证明过的那几个成员**:每一个都先拿代次核过才打。
+ *
+ * 这是唯一允许的下刀形状(第 14、15 两轮审查 F1):归属在读到记号的那一刻证明过,而代次戳
+ * 相等说明这个号上还是同一代那个进程。跨不跨 `await` 都走这一条 —— 「刚取的证据不必重核」
+ * 这种例外一旦留着,就又有一条路会把别人那一代当成自己的落点。
+ */
+function shootMembers(members: ProcessMember[], sig: NodeJS.Signals): void {
+  for (const member of members) {
+    if (!stillSameGeneration(member)) continue;
     killOne(member.pid, sig);
   }
 }

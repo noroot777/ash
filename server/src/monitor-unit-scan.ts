@@ -18,6 +18,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { IS_WINDOWS } from "./platform.js";
+import { processGenerationSync, type ProcessGeneration, type ProcessMember } from "./process-generation.js";
 
 /**
  * 环境变量名:**这一次哨兵创建独有的资源记号**。
@@ -70,14 +71,36 @@ export type UnitProofGrade = "exact" | "ambiguous";
 
 /** 一项资源此刻被证明着的成员,以及**这一遍问全了没有**。 */
 export type MonitorUnitScan = {
-  /** 记号 → 这一遍在它名下读到的 pid(`grade` 决定这算凭证还是只算可疑)。 */
-  marks: Map<string, number[]>;
+  /**
+   * 记号 → 这一遍在它名下读到的成员,**每个都带着「读到这一项时它是哪一代」**
+   * (`grade` 决定这算凭证还是只算可疑)。
+   *
+   * 代次跟记号同源是硬要求(第 15 轮审查 F1):上一版这里是 `number[]`,代次留给调用方在
+   * 并集定下来**之后**补问一次 `ps` —— 那一问读到的是「现在这个号上是谁」,而不是「读到
+   * 记号的那一代」。号被接手时,新进程的启动时刻就被写成了前一个进程的归属证明。
+   */
+  marks: Map<string, ProcessMember[]>;
+  /**
+   * **看见了这个记号、却证不出它在哪一代**的那些记号(同一代的两次读数对不上,见
+   * `scanMonitorUnits`)。对这几个记号不许答「一个都没有」——我们确实看见过它。
+   *
+   * 为什么这一项**按记号单列、不并进 `complete`**:它说的是一个**具体记号**的不确定,
+   * 而 `complete` 说的是「有活着的进程整个判不了」(那种进程可以持有任何记号)。
+   * 混成一个布尔的代价实测得到过:macOS 上进程表只给展示文本,一个进程 `exec` 换掉 argv、
+   * 或者刚退成僵尸(`ps` 那一行变成 `(node)`、环境段整段消失)都会让它这一代的两次读数对不上
+   * —— 于是**别人家记号的一次文本变化**会把这一遍整体判成「没问全」,所有在收尾的哨兵都答
+   * 「证不出」、收不了档(`test-monitors.ts` ⑪ 实测:那条行应判 `lost`,却被接回成 `unknown`)。
+   */
+  unattributed: Set<string>;
   /** 这一遍的证据等级(见 `UnitProofGrade`)。 */
   grade: UnitProofGrade;
   /**
-   * `false` = 至少有一个活着的进程**没能判定**(同 uid 的环境读不出来)。那时「这个记号一个
-   * 成员都没找到」这句话**不成立**,调用方只能答「证不出」(见 proc.ts 的 `processUnitEvidence`)。
+   * `false` = 至少有一个活着的进程**整个没能判定**:同 uid 的环境读不出来,或者这份环境是
+   * 哪一代读到的证不出来。那种进程可以持有**任何**记号,所以「这个记号一个成员都没找到」
+   * 这句话对谁都不成立,调用方只能答「证不出」(见 proc.ts 的 `processUnitEvidence`)。
    * 已经找到的那些不受影响:每一个都是实打实的读数。
+   *
+   * 「看见了某个记号但证不出代次」是**另一件事**,按记号记在 `unattributed` 里。
    */
   complete: boolean;
 };
@@ -93,8 +116,13 @@ export function monitorUnitProofGrade(): UnitProofGrade | null {
   return existsSync("/proc/self/environ") ? "exact" : "ambiguous";
 }
 
-/** 一遍扫描里的一个进程:`marks` 为 null = 它活着,但环境读不出来。 */
-type PassRow = { pid: number; marks: string[] | null };
+/**
+ * 一遍扫描里的一个进程。
+ * · `marks` 为 null = 它活着,但环境读不出来;
+ * · `gen` 为 null = **这份环境是哪一代读到的证不出来**(代次问不出,或者读的前后换了代)
+ *   ⇒ 这一行作不了凭证,而且这一遍不算问全。
+ */
+type PassRow = { pid: number; gen: ProcessGeneration | null; marks: string[] | null };
 
 /** 进程表这一问的事实精度:同一瞬间问两遍没有意义,所以一次扫描在这个窗口里复用。 */
 const UNIT_SCAN_TTL_MS = 400;
@@ -150,16 +178,33 @@ function marksInText(text: string): string[] {
 }
 
 /**
- * **两遍,取并集** —— 「这一刻没有任何带记号的活进程」这句话只有这样才站得住。
+ * **一次扫描读两遍,按「同一个号的同一代」归堆** —— 两件事各由一条规矩管:
  *
- * 为什么一遍不够(第 14 轮审查 F1 的时效那一半):`ps`/`readdir` 都不是原子快照。一个带记号的
- * 成员可以在遍历还没走到它的槽位时派生一个另建组的后代(后代的槽位已经被走过了),然后自己
- * 退出 —— 两个都没进这一遍的名单,于是「一个都没找到」是假的。
+ * ── 为什么读两遍:「这一刻没有任何带记号的活进程」这句话要站得住 ──────────────────
  *
- * 为什么两遍就够:记号**只能从一个活着的带记号进程继承下来**(唯一的凭空来源是 `spawnMonitor`,
- * 它起完就作废备忘)。所以要骗过第二遍,那个后代得**自己**再完成一次同样的交错 —— 而它必须
- * 活到我们问完为止(否则它不是「还在跑的残留」),而**一个在整遍遍历期间都活着的进程一定会被
- * 列出来**。所以:第一遍漏掉的那个后代,第二遍一定在名单里。
+ * `ps`/`readdir` 都不是原子快照。一个带记号的成员可以在遍历还没走到它的槽位时派生一个另建组的
+ * 后代(后代的槽位已经被走过了),然后自己退出 —— 两个都没进这一遍的名单。读第二遍把这种
+ * 「刚好错过」的常见交错挡掉:记号只能从一个活着的带记号进程继承下来(唯一的凭空来源是
+ * `spawnMonitor`,它起完就作废备忘),而一个在整遍遍历期间都活着的进程一定会被列出来。
+ *
+ * **但两遍不是不变量**(第 15 轮审查 F1 指出的):第一遍漏过的那个后代可以在第二遍里再派生
+ * 下一代然后自己退出,最终的存活者不必从第二遍开始就存在。所以这个论证只是把窗口收窄,
+ * **不作为发信号证据的时效保证** —— 时效由代次绑定管(见下、以及 process-generation.ts)。
+ * 而「一个都没找到」这一档本来也只声称「线索追到这里为止」,不声称整项资源已经退出
+ * (`traceless`,见 monitor-reclaim-evidence.ts),所以这里不再为它加一道阻塞。
+ *
+ * ── 为什么按「号 + 代次」归堆,而不是把裸 pid 取并集 ───────────────────────────────
+ *
+ * 上一版的并集只合并数字 pid:第一遍在这个号上读到记号、第二遍这个号已经是另一代了,并集
+ * 照样留着它,于是下刀落到了接手这个号的陌生进程上(审查实测)。现在每一行自己带着
+ * 「这份环境是哪一代读到的」,归堆的键是 `pid:gen`,所以:
+ *
+ *  · 两遍读到**同一代**的同一个记号 ⇒ 这是一个成员(带代次交出去,信号前再核一遍);
+ *  · 第一遍有、第二遍这个号已换代 ⇒ 是**两堆**,旧那一堆的代次在发信号前核不过 ⇒ 不下刀;
+ *  · **同一代**两遍读出的环境项不一致 ⇒ 这两次读数里至少有一次不是这一代的(或者它中途
+ *    `exec` 换了环境:`exec` 不改 pid 也不改 starttime)。两种都证不出「这一项真在它环境里」,
+ *    所以这个记号在这一代上一律不算凭证,而且这一遍不算问全(审查注入的就是这一种:同一代、
+ *    一遍有一遍没有)。
  *
  * 代价是每次真实扫描两遍进程表(macOS 上 2×90ms,备忘让它在 400ms 内只发生一次)。
  */
@@ -169,23 +214,35 @@ function scanMonitorUnits(): MonitorUnitScan | null {
   // **不在 macOS 上替 Windows 编一个结论**(约定见根 AGENTS.md)。
   const grade = monitorUnitProofGrade();
   if (!grade) return null;
-  const exact = grade === "exact";
-  const readPass = exact ? passViaProc : passViaPs;
+  const readPass = grade === "exact" ? passViaProc : passViaPs;
   const first = readPass();
   const second = readPass();
   if (!first || !second) return null;
-  const marks = new Map<string, number[]>();
   let complete = true;
+  // 键是 `pid:gen` —— **同一个号的不同代是不同的堆**。
+  const perGeneration = new Map<string, { pid: number; gen: ProcessGeneration; reads: string[][] }>();
   for (const row of [...first, ...second]) {
-    if (row.marks === null) { complete = false; continue; }
-    for (const token of row.marks) {
-      if (!token) continue;
+    // 环境读不出来(同 uid 还活着)、或者这份环境证不出是哪一代 ⇒ 这一遍没问全。
+    if (row.marks === null || row.gen === null) { complete = false; continue; }
+    const key = `${row.pid}:${row.gen}`;
+    const seen = perGeneration.get(key);
+    if (seen) seen.reads.push(row.marks);
+    else perGeneration.set(key, { pid: row.pid, gen: row.gen, reads: [row.marks] });
+  }
+  const marks = new Map<string, ProcessMember[]>();
+  const unattributed = new Set<string>();
+  for (const { pid, gen, reads } of perGeneration.values()) {
+    const union = new Set(reads.flat().filter(Boolean));
+    for (const token of union) {
+      // **同一代的几次读数必须一致**:有一次没读到这一项,这一项就不算这一代的凭证 ——
+      // 但它仍然是「看见过」,所以按记号记下来,不许对它答「一个都没有」。
+      if (!reads.every((read) => read.includes(token))) { unattributed.add(token); continue; }
       const list = marks.get(token);
-      if (!list) marks.set(token, [row.pid]);
-      else if (!list.includes(row.pid)) list.push(row.pid);
+      if (!list) marks.set(token, [{ pid, gen }]);
+      else if (!list.some((m) => m.pid === pid && m.gen === gen)) list.push({ pid, gen });
     }
   }
-  return { marks, grade, complete };
+  return { marks, unattributed, grade, complete };
 }
 
 /**
@@ -209,6 +266,11 @@ function passViaProc(): PassRow[] | null {
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
     const pid = Number(entry);
+    // **把这一次环境读夹在两次代次读之间**(第 15 轮审查 F1):读到的这份环境是哪一代的,
+    // 只有这一次读数自己答得出来。前后两次戳相等 ⇒ 这份环境就是这一代的;不相等(或者有
+    // 一次问不出来)⇒ 这一行作不了凭证,而且这一遍不算问全 —— 事后再补问一次 `ps` 得到的是
+    // 「现在这个号上是谁」,那正是上一版把别人那一代的身份写进归属证明的那条缝。
+    const before = processGenerationSync(pid);
     let raw: string;
     try {
       raw = readFileSync(`/proc/${entry}/environ`, "utf8");
@@ -216,13 +278,14 @@ function passViaProc(): PassRow[] | null {
       let owner: number | null = null;
       try { owner = statSync(`/proc/${entry}`).uid; } catch { continue; }   // 已经退了 ⇒ 不是成员
       if (self !== null && owner !== self) continue;                        // 别人家的,管不着
-      rows.push({ pid, marks: null });                                      // 自己的、还活着、读不出来
+      rows.push({ pid, gen: before, marks: null });                         // 自己的、还活着、读不出来
       continue;
     }
+    const after = processGenerationSync(pid);
     const prefix = `${MONITOR_UNIT_ENV}=`;
     const marks = raw.split("\0").filter((item) => item.startsWith(prefix))
       .map((item) => item.slice(prefix.length));
-    rows.push({ pid, marks });
+    rows.push({ pid, gen: before && before === after ? before : null, marks });
   }
   return rows;
 }
@@ -243,7 +306,8 @@ function passViaPs(): PassRow[] | null {
   let out: string;
   try {
     // **maxBuffer 必须给够**:全表带环境在本机就是 2.5MB,默认 1MB 会让这一问变成「失败」。
-    out = execFileSync("ps", ["-A", "-E", "-ww", "-o", "pid=", "-o", "command="], {
+    // `lstart` 跟展示文本**取在同一行**:代次和记号必须同源(第 15 轮审查 F1)。
+    out = execFileSync("ps", ["-A", "-E", "-ww", "-o", "pid=", "-o", "lstart=", "-o", "command="], {
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
       env: { ...process.env, LC_ALL: "C", LANG: "C" },
@@ -254,9 +318,16 @@ function passViaPs(): PassRow[] | null {
   }
   const rows: PassRow[] = [];
   for (const line of out.split("\n")) {
-    const m = /^\s*(\d+)\s(.*)$/.exec(line);
+    // `-o lstart=` 是定宽 24 字符的 C locale 文本(`Sat Oct 17 06:20:45 2026`),后面才是
+    // 命令 + 环境那一大段展示文本。
+    const m = /^\s*(\d+)\s(.{24})\s+(.*)$/.exec(line);
     if (!m) continue;
-    rows.push({ pid: Number(m[1]), marks: marksInText(m[2]!) });
+    const startedAt = m[2]!.trim();
+    rows.push({
+      pid: Number(m[1]),
+      gen: startedAt ? `t:${startedAt}` : null,
+      marks: marksInText(m[3]!),
+    });
   }
   return rows;
 }

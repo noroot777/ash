@@ -14,6 +14,7 @@
 // 谁都不许在投影之外再补一次查询,理由见 `processIdentity` 的注释。
 import { liveMonitorUnitsSync } from "./monitor-unit-scan.js";
 import { inspectProcessSync } from "./platform.js";
+import type { ProcessMember } from "./process-generation.js";
 
 export type ProcessInfo = {
   pid: number;
@@ -114,8 +115,9 @@ export function isSameProcess(pid: number, expectedStartedAt?: string | null): b
  * 另一个变量的**值**里写了 `ASH_MONITOR_UNIT=<记号>` 的诊断进程被当成我们的后代挨了刀):
  *
  *  · `ours` —— **真实环境项**里就有这一项(只有 Linux 的 `/proc/<pid>/environ` 给得出这份
- *    精确边界),而且它们是谁都已经知道:`members` 带着各自的**代次**(pid + 启动时刻),
- *    那是下刀的落点,也是跨等待不许复用裸 pid 的那道闸;
+ *    精确边界),而且它们是谁都已经知道:`members` 带着各自的**代次**,而那个代次是
+ *    **读到这一项的同一次读数**给出的(process-generation.ts)。那是下刀的落点,也是
+ *    「跨等待不许复用裸 pid」的那道闸 —— 每一刀之前还要再核一遍这个戳;
  *  · `suspected` —— 进程表的**展示文本**里看得见这段文字,但这个平台切不出真实环境项边界
  *    (macOS 的 `ps -E` 把 argv 和环境无分隔地拼在一起,环境各项之间也只有空格)。这一档
  *    **只授权「不许说已经没了」,不授权下刀** —— 文本匹配只有「没有」这一个方向是可靠的;
@@ -130,14 +132,8 @@ export function isSameProcess(pid: number, expectedStartedAt?: string | null): b
  *
  * `fresh` = 这次取证要用来发信号 ⇒ 不许复用备忘里的旧快照(第 13 轮审查 F1-C)。
  */
-export type UnitMember = {
-  pid: number;
-  /** 这一刻 ps 报的启动时刻 —— **代次**。发信号之前要拿它再核一遍(见 `killProvenUnit`)。 */
-  startedAt: string | null;
-};
-
 export type UnitEvidence =
-  | { verdict: "ours"; members: UnitMember[] }
+  | { verdict: "ours"; members: ProcessMember[] }
   | { verdict: "suspected"; pids: number[] }
   | { verdict: "none" }
   | { verdict: "unprovable" };
@@ -149,19 +145,20 @@ export function processUnitEvidence(
   if (!token) return { verdict: "unprovable" };
   const scan = liveMonitorUnitsSync(opts);
   if (!scan) return { verdict: "unprovable" };    // 问不出来 ≠ 没有
-  const pids = scan.marks.get(token) ?? [];
-  if (pids.length) {
+  const holders = scan.marks.get(token) ?? [];
+  if (holders.length) {
     // 展示文本那一档**到此为止**:看得见不等于有这一项,所以不往下给落点(见上面 `suspected`)。
-    if (scan.grade === "ambiguous") return { verdict: "suspected", pids };
-    // 真实环境项这一档才给落点,而且**每个成员连代次一起交出去**:下一刀可能发生在几次 await
-    // 之后,那时只认代次没变的那几个(第 14 轮审查 F1:不许给下层一份可跨等待复用的裸 pid)。
-    return {
-      verdict: "ours",
-      members: pids.map((pid) => ({ pid, startedAt: inspectProcess(pid)?.startedAt ?? null })),
-    };
+    if (scan.grade === "ambiguous") return { verdict: "suspected", pids: holders.map((h) => h.pid) };
+    // 真实环境项这一档才给落点。**成员直接原样交出去** —— 代次是扫描那一刻跟记号同源读到的
+    // (见 monitor-unit-scan.ts);这里不许再补问一次 `ps` 把「现在这个号上是谁」拼上去,
+    // 那就是第 15 轮审查 F1 的那条缝。
+    return { verdict: "ours", members: holders };
   }
-  // 找不到:只有**问全了**才敢说「一个都没有」。
-  return scan.complete ? { verdict: "none" } : { verdict: "unprovable" };
+  // 找不到:只有**问全了、而且这个记号自己也没有「看见过却证不出代次」的读数**,才敢说
+  // 「一个都没有」(两种不确定各自独立,见 monitor-unit-scan.ts 的 `unattributed`)。
+  return scan.complete && !scan.unattributed.has(token)
+    ? { verdict: "none" }
+    : { verdict: "unprovable" };
 }
 
 /**

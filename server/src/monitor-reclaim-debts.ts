@@ -74,6 +74,7 @@ import {
 } from "./monitor-reclaim-evidence.js";
 import { clearSpawnIdentity, readSpawnIdentity } from "./monitor-spawn.js";
 import { processStartedNear, processUnitEvidence } from "./proc.js";
+import { startedAtOfGeneration } from "./process-generation.js";
 import { now } from "./util.js";
 
 /** 进程内的重试梯子。跟 claude 投影那边的补偿清理同一个形状(claude-monitor-revoked.ts)。 */
@@ -339,9 +340,14 @@ async function completeIdentity(m: {
   // 只认 `ours`:展示文本那一档(`suspected`)证不出这一项真在不在,拿它补身份等于拿一段
   // 可能来自别人的文字给这个号签发代次(第 14 轮审查 F1)。
   const proven = processUnitEvidence(m.unitToken);
-  const byUnit = proven.verdict === "ours"
-    ? proven.members.find((member) => member.pid === m.pid)?.startedAt ?? null
-    : null;
+  const member = proven.verdict === "ours"
+    ? proven.members.find((candidate) => candidate.pid === m.pid)
+    : undefined;
+  // 记号那一问交出来的代次是**内核实例戳**,而要落库的那一列存的是 `ps` 的启动时刻文本 ——
+  // 两份读数。所以换算夹在两次代次核对之间(`startedAtOfGeneration`):中间换了代就什么都不补。
+  // 否则就是把别人那一代的启动时刻写成这个号的身份,之后所有「还是不是它」都跟着错
+  // (第 15 轮审查 F1 点出的同类消费点)。
+  const byUnit = member ? startedAtOfGeneration(member.pid, member.gen) : null;
   if (!byUnit && anchorMs === null) return { pidStartedAt: null, anchorMs };
   // 命令原文一起交过去:时间邻近单独不足以认下一个号(见 proc.ts 的 `processStartedNear`)。
   const { verdict, startedAt } = byUnit
