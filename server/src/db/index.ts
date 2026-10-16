@@ -140,6 +140,13 @@ export async function ensureSchema() {
       source_review_run TEXT, source_review_round INTEGER
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
+    CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (
+      monitor_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
+      pid INTEGER NOT NULL, pid_started_at TEXT,
+      command TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
+      last_error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, last_attempt_at TEXT
+    );
     CREATE TABLE IF NOT EXISTS monitor_pending_calls (
       task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
       command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',

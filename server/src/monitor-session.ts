@@ -17,8 +17,9 @@
 // 它必须在流开始那一刻冻住身份,见 claude-monitor-origin.ts 的文件头。)
 //
 // pid 会被复用,所以判死活跟别处同一份:pid + 进程启动时刻一起对上(`isSameProcess`)。
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, exists, isNull, ne, sql } from "drizzle-orm";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
+import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
 import { freeReviewRuns, monitors, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { isSameProcess } from "./proc.js";
@@ -28,6 +29,9 @@ import { now } from "./util.js";
 
 /** 能带进 `continueTask` 的那两种角色。别的(团队、duet)不表达,退回默认。 */
 const WAKEABLE_ROLES = new Set(["single", "reviewer"]);
+
+/** 整个任务正在被删掉。措辞跟终态/审查那两条分开:这一条没有任何出路。 */
+const TASK_REVOKED = "这个任务正在被删除，不能再挂哨兵、也不再唤醒它";
 
 /** 起它的那次审查已经收尾了。措辞跟终态那条分开:原因不同,出路也不同。 */
 const REVIEW_FINISHED = "起这个哨兵的那次审查已经结束，它的事件不再唤醒任务";
@@ -48,6 +52,15 @@ const REVIEW_FINISHED = "起这个哨兵的那次审查已经结束，它的事�
 export async function monitorSourceGate(
   task: { id: string; status: string; archived?: boolean | null },
 ): Promise<{ blocked: string | null; role: string | null; reviewRun: string | null; reviewRound: number | null }> {
+  // **撤销期一律拒,而且不吃审查豁免**(第 3 轮审查 F1)。删除不是一个瞬间:从关闸到任务行
+  // 真的没了之间有十几条语句,而「停完一遍哨兵」只证明那一刻扫干净了。这中间放一个新哨兵
+  // 进来,它会被紧随其后的删除批次连行带 pid 一起抹掉 —— 进程却还在后台跑着,谁都再找不到
+  // 它(实测 `lateCreationAccepted=true` + `aliveAfterDelete=true`)。
+  //   判据跟内置 Monitor 那四个 writer 共用同一份(claude-monitor-revoked.ts):撤销的是
+  // **这个任务的整个生命周期**,跟是谁要写、写哪张表无关。
+  if (isTaskRevoked(task.id)) {
+    return { blocked: TASK_REVOKED, role: null, reviewRun: null, reviewRound: null };
+  }
   const blocked = monitorBlockedReason(task);
   // 归档不吃审查豁免(任务都收柜子了,审查链也没有续下去的地方),也就不必查任何东西。
   if (task.archived) return { blocked, role: null, reviewRun: null, reviewRound: null };
@@ -92,6 +105,9 @@ export async function monitorWakeGate(
   // `null` = 这条哨兵没有记下来源(执行者自己挂的,或行已经不在了):照终态老规矩。
   source: { reviewRun: string | null; reviewRound?: number | null } | null,
 ): Promise<string | null> {
+  // 同一份撤销资格(见创建那一侧)。任务正在被删,它的事件已经没有出口可言 —— 推出去只会
+  // 变成一条紧接着被删掉的待发消息,或者把一个马上就不存在的任务叫起来。
+  if (isTaskRevoked(task.id)) return TASK_REVOKED;
   if (task.archived) return monitorBlockedReason({ ...task, archived: true });
   if (source?.reviewRun) {
     return await isReviewSourceActive(source.reviewRun, source.reviewRound ?? null)
@@ -240,83 +256,139 @@ export async function monitorWakeCheckpoint(
   message: { id: string; taskId: string; origin: string | null; text: string; checkpointTaken: string | null },
 ): Promise<{ text: string; restore: () => Promise<void> } | null> {
   if (dbClient.closed || monitorIdFromOrigin(message.origin) === null) return null;
-  // **重投**(上一次取走之后一个字没送出去,或者进程直接没了):交代已经写在这条消息的正文
-  // 末尾,账本列记着是哪一段。不再取第二次、也不再追加第二遍 —— 正文就是当时那一份。
+  // **重投**(上一次取走了交代、却一个字没送出去:进程正好没了、送达报错):账本列记着是
+  // 哪一段,不再取第二次。拼接在内存里当场做,所以这一次带上的是**此刻**的事件正文——
+  // 期间合并进来的新事件一并带走,而不是上一次那一份快照。
   if (message.checkpointTaken) {
     const held = message.checkpointTaken;
-    return { text: message.text, restore: () => restoreCheckpoint(message, held) };
+    return { text: withCheckpoint(message.text, held), restore: () => restoreCheckpoint(message, held) };
   }
   const checkpoint = (await db
     .select({ resumePrompt: tasks.resumePrompt })
     .from(tasks)
     .where(eq(tasks.id, message.taskId))).at(0)?.resumePrompt;
   if (!checkpoint) return null;
-  const text = message.text + checkpointNote(checkpoint);
-  // **取走和落账在同一个批里**:`db.batch` 在一个 BEGIN…COMMIT 里同步跑完,中间没有 await,
-  // 也就没有「清了任务行、账还没落」的缝(为什么不用 transaction 见 claude-monitor-write.ts
-  // 的文件头)。缝里崩一次的代价就是那段交代两边都不在 —— 第 2 轮审查 F4。
-  const [taken, logged] = await db.batch([
-    // CAS 取走:只清掉上面读到的那一段(agent 中途换了新的一段就不动它)。
-    db.update(tasks).set({ resumePrompt: null, updatedAt: now() })
-      .where(and(eq(tasks.id, message.taskId), eq(tasks.resumePrompt, checkpoint)))
-      .returning({ id: tasks.id }),
-    db.update(scheduledMessages).set({ text, checkpointTaken: checkpoint })
-      .where(and(eq(scheduledMessages.id, message.id), isNull(scheduledMessages.checkpointTaken)))
+  // ── 取走:**两条语句互为对方的生效条件** ──────────────────────────────────────
+  //
+  // 一笔交代的转手是「任务行上腾空」+「这条消息认下这笔账」两半,少任何一半都是错的:
+  // - 只腾空不落账:那段话只活在返回值这个内存字符串里,进程一没就两边都查不到它(第 2 轮 F4);
+  // - 只落账不腾空:同一段交代会被喂两遍(任务行上它还在,下一条消息、真人续跑都会再取一次)。
+  //
+  // `db.batch` 是一个 BEGIN…COMMIT、中间没有 await,但**同批提交并不等于两条都命中**——
+  // 各自的 CAS 是各自判的,一条命中一条落空照样整批提交(第 3 轮审查 F3)。所以条件不能各写
+  // 各的,要互相引用:① 认账的前提是「任务行上那一段还在」,② 腾空的前提是「账已经认在这条
+  // 消息上」。①先跑,于是只有两种结局——都中(真的转手成功),或者都不中(库里一个字没动)。
+  // 不对称的回滚因此不在提交之后发生,而是**压根提交不出来**,下面那条只是个会出声的兜底。
+  const checkpointStillHere = exists(db.select({ one: sql`1` }).from(tasks)
+    .where(and(eq(tasks.id, message.taskId), eq(tasks.resumePrompt, checkpoint))));
+  const ledgerOurs = exists(db.select({ one: sql`1` }).from(scheduledMessages)
+    .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.checkpointTaken, checkpoint))));
+  const [logged, taken] = await db.batch([
+    db.update(scheduledMessages).set({ checkpointTaken: checkpoint })
+      .where(and(
+        eq(scheduledMessages.id, message.id),
+        isNull(scheduledMessages.checkpointTaken),
+        checkpointStillHere,
+      ))
       .returning({ id: scheduledMessages.id }),
+    db.update(tasks).set({ resumePrompt: null, updatedAt: now() })
+      .where(and(eq(tasks.id, message.taskId), eq(tasks.resumePrompt, checkpoint), ledgerOurs))
+      .returning({ id: tasks.id }),
   ]);
-  // **两半同生共死**。各自落空的理由不同,后果是同一个:
-  // - 取走落空 = 读到之后、批跑到之前,另一路(真人续跑、手点运行)刚好取走了同一段。那段话
-  //   已经被别人喂出去了,再喂一遍就是重复。
-  // - 落账落空 = 这条消息已经不是那个样子了(被取消删掉、或者已经接走过别的一段)。只取不
-  //   落账的话,那段交代就只活在返回值这个内存字符串里 —— 正是 F4 要消掉的形状。
-  if (!taken.length || !logged.length) {
-    if (taken.length) {
-      await db.update(tasks).set({ resumePrompt: checkpoint, updatedAt: now() })
-        .where(and(eq(tasks.id, message.taskId), isNull(tasks.resumePrompt)));
-    }
-    if (logged.length) {
-      await db.update(scheduledMessages).set({ text: message.text, checkpointTaken: null })
-        .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.checkpointTaken, checkpoint)));
-    }
+  if (!logged.length || !taken.length) {
+    // 都不中 = 读到之后、批跑到之前另一路(真人续跑、手点运行)先取走了同一段,或者这条消息
+    // 已经不是那个样子了。什么都没变,直接不带交代走。
+    // 单侧命中按上面的条件推不出来,真出现就是条件被改坏了:出声,并把那一侧退回去。
+    if (logged.length !== taken.length) await unwindHalfTake(message, checkpoint, logged.length > 0);
     return null;
   }
   await announceResumePrompt(message.taskId);
-  return { text, restore: () => restoreCheckpoint(message, checkpoint) };
+  return {
+    text: withCheckpoint(message.text, checkpoint),
+    restore: () => restoreCheckpoint(message, checkpoint),
+  };
 }
 
-/** 交代带在正文末尾的样子。取走和回填共用这一份,否则回填时剥不干净。 */
-const checkpointNote = (checkpoint: string) => `\n\n【你当初留下的续跑交代】${checkpoint}`;
+/**
+ * 交代**只持久在 `scheduled_messages.checkpoint_taken` 这一列**,喂出去的样子是送达前在内存
+ * 里拼的(第 3 轮审查 F2)。
+ *
+ * 曾经是反过来的——取走时把它拼进 `text` 落库,回填时按后缀把它剥掉。两个毛病:
+ * ① 剥的依据是「正文以这个后缀结尾」,而投递那一程里新事件会被合并追加到正文末尾,后缀就
+ *    不在末尾了,于是剥不掉(交代留在正文里)或者连带新事件一起被切掉;
+ * ② 回填整条 `text` 覆写,期间合并进来的事件直接没了。
+ * 现在正文归事件、交代归账本列,两者互不覆盖,拼接是纯函数。
+ */
+const withCheckpoint = (text: string, checkpoint: string) =>
+  `${text}\n\n【你当初留下的续跑交代】${checkpoint}`;
+
+/** 不该发生的单侧命中(见上)。退回那一侧,并且一定要出声。 */
+async function unwindHalfTake(
+  message: { id: string; taskId: string },
+  checkpoint: string,
+  loggedOnly: boolean,
+): Promise<void> {
+  console.error(
+    `[ash] 续跑交代转手出现单侧命中 ${message.taskId}/${message.id}(${loggedOnly ? "只落账" : "只腾空"}),`
+    + "这说明两条语句的互相引用被改坏了",
+  );
+  try {
+    if (loggedOnly) {
+      await db.update(scheduledMessages).set({ checkpointTaken: null })
+        .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.checkpointTaken, checkpoint)));
+    } else {
+      await db.update(tasks).set({ resumePrompt: checkpoint, updatedAt: now() })
+        .where(and(eq(tasks.id, message.taskId), isNull(tasks.resumePrompt)));
+    }
+  } catch (error) {
+    console.error(`[ash] 单侧命中退回也失败 ${message.taskId}:`, error);
+  }
+}
 
 /**
- * 一个字都没送出去 ⇒ 那段交代白取了，**两半一起退**：任务行上原样填回（CAS，agent 中途
- * 写了新的一段就不动它），消息正文退回原话、账本清空（于是下一次投递可以重新取一次）。
+ * 一个字都没送出去 ⇒ 那段交代白取了,**账本清空、任务行上填回**,于是下一次投递重新取一次。
  *
- * 退不动也不丢：交代仍然写在这条消息的正文里、账本列也还指着它，下一次投递走的是上面那条
- * 重投分支，照旧带着它走。所以这里失败的唯一后果是「任务行上那一格暂时空着」—— 静默吞掉
- * 就等于谁也不知道这件事（两处调用点原来都是 `.catch(() => {})`，第 2 轮审查 F4），所以
- * 出声留一条时间线。
+ * 回退**不碰正文**(交代从来没写进去),所以这一程里合并进来的新事件不可能被它覆盖。
+ *
+ * 另一半的资格是「这笔账此刻还归我们管」:账本列还指着这一段、而且**没有别人正在送它**
+ * (租约空着、还没 sent)。投递失败时租约已经由 `abortDelivery` 让出去了,期间被别人抢走就
+ * 轮不到我们退——那一位走的是上面的重投分支,它自己没送出去时会再退一次(第 3 轮审查 F2:
+ * 别在失去写入所有权之后回退)。
+ *
+ * 退不动也不丢:账本列还指着它,下一次投递照旧走重投分支带着它走。所以这里失败的唯一后果是
+ * 「任务行上那一格暂时空着」—— 静默吞掉就等于谁也不知道(第 2 轮审查 F4),所以留一条时间线。
  */
 async function restoreCheckpoint(
-  message: { id: string; taskId: string; text: string },
+  message: { id: string; taskId: string },
   checkpoint: string,
 ): Promise<void> {
-  const note = checkpointNote(checkpoint);
-  const original = message.text.endsWith(note) ? message.text.slice(0, -note.length) : message.text;
+  // 同样是互为条件的一对:填回任务行的前提是「账本已经清掉」(①先跑)。
+  const ledgerReleased = exists(db.select({ one: sql`1` }).from(scheduledMessages)
+    .where(and(eq(scheduledMessages.id, message.id), isNull(scheduledMessages.checkpointTaken))));
   try {
-    const [restored] = await db.batch([
+    const [cleared, restored] = await db.batch([
+      db.update(scheduledMessages).set({ checkpointTaken: null })
+        .where(and(
+          eq(scheduledMessages.id, message.id),
+          eq(scheduledMessages.checkpointTaken, checkpoint),
+          isNull(scheduledMessages.deliveringSince),
+          ne(scheduledMessages.status, "sent"),
+        ))
+        .returning({ id: scheduledMessages.id }),
+      // CAS:只填回自己腾出的那个空。agent 中途写了新的一段就不动它——那一段才是最新交代,
+      // 下一次投递会取它。
       db.update(tasks).set({ resumePrompt: checkpoint, updatedAt: now() })
-        .where(and(eq(tasks.id, message.taskId), isNull(tasks.resumePrompt)))
+        .where(and(eq(tasks.id, message.taskId), isNull(tasks.resumePrompt), ledgerReleased))
         .returning({ id: tasks.id }),
-      db.update(scheduledMessages).set({ text: original, checkpointTaken: null })
-        .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.checkpointTaken, checkpoint))),
     ]);
+    if (!cleared.length) return; // 这笔账已经不归我们了(别人接手/已送出),什么都不做
     if (restored.length) await announceResumePrompt(message.taskId);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.error(`[ash] 续跑交代回填失败 ${message.taskId}:`, error);
     await appendTaskTimeline(
       message.taskId,
-      `续跑交代没能放回任务行（${detail}）。它仍留在那条待发送的哨兵事件里，下一次投递会带着它走。`,
+      `续跑交代没能放回任务行（${detail}）。它仍记在那条待发送的哨兵事件的账本列上，下一次投递会带着它走。`,
     ).catch(() => {});
   }
 }

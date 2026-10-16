@@ -57,8 +57,12 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 的落库资格(门闸,覆盖整个删除期),并作废进程内缓着的扫描状态/恢复责任。
   // `destroy`：用户要求这个任务的一切就此结束，审查还在进行也不留 —— 下面那一批删除紧接着
   // 就把 pid 这个唯一线索一起带走（见 monitors.ts 的 MonitorStopIntent）。
-  await stopMonitorsForTask(taskId, "任务已删除", "destroy")
-    .catch((err) => console.error(`[ash] stopMonitorsForTask(${taskId}, destroy) failed:`, err));
+  //
+  // **这里不吞异常**(第 3 轮审查 F1)。逐条停失败由回收层自己兜(补杀 + 留下持久的回收
+  // 责任),抛到这里的只剩「连枚举都没成」—— 那时我们**压根不知道有几个进程在跑**,再往下
+  // 删就是把 pid 线索连同任务一起抹掉。删除失败是可重试的(闸由 `settleTaskRevocation` 按
+  // 「任务行还在」收口,用户再点一次即可),留下无主进程不可逆,所以这一笔宁可整个不做。
+  await stopMonitorsForTask(taskId, "任务已删除", "destroy");
 
   // ── 批本体:全删或全不删 ─────────────────────────────────────────────────────
   const runs = db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
@@ -78,6 +82,9 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     db.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId)),
     db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId)),
     db.delete(monitors).where(eq(monitors.taskId, taskId)),
+    // **`monitor_reclaim_debts` 刻意不在这里。** 那张表记的是「这个 pid 该停、但没停掉」,
+    // 它的全部意义就是活得比任务久 —— 跟着任务一起删等于把唯一线索再丢一次(第 3 轮审查
+    // F1)。销账只有一个出口:进程确认不在了(monitor-reclaim-debts.ts 的清扫)。
     // 还没配上 `task_started` 的那几条调用（见 claude-monitor-pending.ts）：任务都删了，
     // 它们再也不会被配上，留下就是没有任何入口能清的孤儿行。
     db.delete(monitorPendingCalls).where(eq(monitorPendingCalls.taskId, taskId)),

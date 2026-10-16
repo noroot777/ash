@@ -12,11 +12,16 @@
 //    审查(那一轮)还在不在」,不是任务此刻什么状态(第 1 轮审查 F1)。
 // ③ **「审查还在进行」推不出「用户仍然允许这个任务的资源继续存在」。** 所以入口要带显式的
 //    生命周期意图,不靠 reason 那段自由文本猜(第 2 轮审查 F2)。
+// ④ **撤销是一段时间,不是一个瞬间。** 「扫完一遍」不等于这一生命周期已经被撤销:这一刀可能
+//    落不下去,而调用方紧接着就销毁了 pid 这个唯一线索。所以停不掉的那一条必须留下**持久的
+//    回收责任**(monitor-reclaim-debts.ts),连枚举都失败时则**整笔不许往下走**(第 3 轮审查
+//    F1)。「不许再创建」是同一条不变量的另一半,在 monitor-session.ts 的资格闸里。
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRuns, monitors } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
 import { cancelPendingMonitorEvents } from "./monitor-events.js";
+import { noteReclaimDebt } from "./monitor-reclaim-debts.js";
 import { isReviewSourceActive } from "./monitor-session.js";
 import { finish, isAshKind, serialize } from "./monitors.js";
 import { isSameProcess } from "./proc.js";
@@ -71,6 +76,7 @@ async function stopMonitorsForTaskLocked(
   const all = await db
     .select({
       id: monitors.id, status: monitors.status, pid: monitors.pid, pidStartedAt: monitors.pidStartedAt,
+      command: monitors.command,
       sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
     })
     .from(monitors)
@@ -107,7 +113,7 @@ async function stopMonitorsForTaskLocked(
       // **这一刀必须尽力落下去**:destroy 的调用方紧接着就要删掉 pid,这是最后一次有线索
       // 能停掉这个进程。一行失败也不能把后面几行一起带走。
       console.error(`[ash] stop monitor ${m.id} (${intent}) failed:`, err);
-      if (m.pid && isSameProcess(m.pid, m.pidStartedAt)) killByPid(m.pid);
+      await reclaimDebtFor(m, taskId, reason, err);
     }
   }
   // 收尾只清得掉**还在缓冲里**的行。已经开始推的那一批不受影响：它手里拿着自己的
@@ -119,6 +125,33 @@ async function stopMonitorsForTaskLocked(
   // 留下来的那几条例外:它们的事件正是审查在等的东西,跟着任务终态作废就等于白留。
   await cancelPendingMonitorEvents(taskId, { keep: kept });
   return stopped;
+}
+
+/**
+ * 停止没能确认 ⇒ **补杀一次,仍然活着就把回收责任留下来**。
+ *
+ * 为什么不是「记一行日志就算了」:destroy 的调用方紧接着就把 `monitors` 这一行删掉,pid 和
+ * 启动时刻这对唯一线索随之消失 —— 之后没有任何入口能再找到那个进程(第 3 轮审查 F1 的
+ * `aliveAfterDelete`)。责任落在另一张不随任务删除的表上,由退避梯子和启动期清扫推(见
+ * monitor-reclaim-debts.ts)。
+ *
+ * pid 对不上同代就什么都不做:那个进程已经退了(或者那个号早被别人复用,杀它才是事故)。
+ */
+async function reclaimDebtFor(
+  m: { id: string; pid: number | null; pidStartedAt: string | null; command: string },
+  taskId: string, reason: string, error: unknown,
+): Promise<void> {
+  if (!m.pid || !isSameProcess(m.pid, m.pidStartedAt)) return; // 已经不在了/pid 被别人复用
+  // **先记账,再补杀**。两个顺序只有这一个对:
+  // - 反过来的话,记账之前这个进程(或整个 server)没了,那笔责任就谁也不知道了;
+  // - 「补杀成了」也不能靠紧接着的一次 ps 断言 —— SIGTERM 到进程真的退出之间有几毫秒,那
+  //   一问多半还看得见它,于是又变成「看运气记账」。
+  // 责任一律先落盘,由退避梯子/启动期清扫按「进程确认不在了」销账(幂等,见那个文件)。
+  await noteReclaimDebt({
+    monitorId: m.id, taskId, pid: m.pid, pidStartedAt: m.pidStartedAt,
+    command: m.command, reason, error,
+  }).catch((err) => console.error(`[ash] 落回收责任失败 ${m.id}:`, err));
+  killByPid(m.pid);
 }
 
 /**
@@ -150,7 +183,10 @@ export async function stopMonitorsForReviewRun(runId: string, reason: string): P
     // 锁之后两种顺序都收口：收尾先 → 创建在同一把锁里重读 run 状态、直接拒；创建先 →
     // 这里看得见那一行、照常停它。
     const rows = await db
-      .select({ id: monitors.id, status: monitors.status })
+      .select({
+        id: monitors.id, status: monitors.status, pid: monitors.pid,
+        pidStartedAt: monitors.pidStartedAt, command: monitors.command,
+      })
       .from(monitors)
       .where(and(eq(monitors.sourceReviewRun, runId), isAshKind));
     let stopped = 0;
@@ -160,6 +196,7 @@ export async function stopMonitorsForReviewRun(runId: string, reason: string): P
         stopped += 1;
       } catch (err) {
         console.error(`[ash] stop review monitor ${row.id} failed:`, err);
+        await reclaimDebtFor(row, run.taskId, reason, err);
       }
     }
     // 待发通知要按**全部归属行**收，不按「命令还活着」裁剪：命令早退出、结果还排在托盘里

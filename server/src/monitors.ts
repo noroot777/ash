@@ -32,7 +32,7 @@ import { monitors, projects, sessions, tasks } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
 import { monitorLogPath, readLogTail, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
 import { pushToTask } from "./monitor-events.js";
-import { monitorSourceGate } from "./monitor-session.js";
+import { isReviewSourceActive, monitorSourceGate } from "./monitor-session.js";
 import { isSameProcess, inspectProcess } from "./proc.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
@@ -523,6 +523,11 @@ async function finishOffline(
  *
  * 认不出来的（进程没了、或 pid 被别人复用了）落 `lost`，但**落之前先把它留下的输出读完**：
  * 「进程不在了」说的是这一刻，不是说它这段时间什么都没干。
+ *
+ * **接回也是一道资格判断,不只是认人**(第 3 轮审查 F1):审查结束已经落库、而回收那一刀
+ * 还没落下去就崩了的话,照着「同代还活着 + 没到期」接回来的是一个**已经失去来源资格**的
+ * 命令 —— 它推的每一条都会被出口闸拒回,一直烧到自己到期。启动恢复问的是跟创建、出口同
+ * 一份资格(见 monitor-session.ts)。
  */
 export async function reattachMonitors(): Promise<{ attached: number; lost: number }> {
   // 只认 ash 自己起的：claude 的投影行没有 pid，拿去 isSameProcess 必然认不出来，会被
@@ -533,6 +538,14 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
   let lost = 0;
   for (const row of rows) {
     if (row.pid && isSameProcess(row.pid, row.pidStartedAt)) {
+      // 起它的那次审查(那一轮)已经收尾 ⇒ 它没有出口了,接回来只是继续烧。先接上再收尾:
+      // attach 把 tail 建起来,finish 的 drain 才读得到停服期间那一段,也由它负责杀进程。
+      if (row.sourceReviewRun && !await isReviewSourceActive(row.sourceReviewRun, row.sourceReviewRound)) {
+        attach(row);
+        await finish(row.id, "stopped", "起这个哨兵的那次审查在 server 重启期间已经结束", null);
+        lost += 1;
+        continue;
+      }
       if (new Date(row.expiresAt).getTime() <= Date.now()) {
         // 先接上再收尾：attach 把 tail 建起来，finish 的 drain 才读得到停服期间那一段；
         // 它同时负责把这个还活着、但已经超时的进程杀掉。

@@ -250,3 +250,34 @@ export const monitorScanCursors = sqliteTable("monitor_scan_cursors", {
   // 跟 bootstrap DDL 一模一样（db/index.ts）；两条建库路径的唯一性契约必须同一个。
   pk: primaryKey({ columns: [t.taskId, t.path] }),
 }));
+
+// ── 没停掉的进程:**回收责任** ─────────────────────────────────────────────────
+//
+// 「已撤销的生命周期不许再有资源在跑」这条不变量,只靠 `stopMonitorsForTask` 那一刀是立不住
+// 的:那一刀可能落不下去(库忙、kill 被拒、pid 已经不是当初那个但命令其实还活着),而紧接着
+// 的删除批次会把 `monitors` 整个任务的行一起带走 —— **pid 这个唯一线索从此消失**,重启也认
+// 领不回来(第 3 轮审查 F1;归档那条路同样只记了日志)。
+//
+// 所以停不掉的那一条必须在**别的地方**留下身份和责任,而且这张表**不随任务一起删**:它的
+// 全部意义就是活得比那个任务久(所以 task-delete-routes.ts 的删除批次里刻意没有它,那边
+// 留了一条反向注释,别顺手补上)。
+//
+// 行数有界:只有「停止没能确认」的那几条进得来,销账(进程确认没了)就删行。
+export const monitorReclaimDebts = sqliteTable("monitor_reclaim_debts", {
+  /** 就用那条哨兵自己的 id:同一条反复欠账只占一行(ON CONFLICT 覆盖)。 */
+  monitorId: text("monitor_id").primaryKey(),
+  /** 只做记账和展示 —— 任务行可能已经没了,这一列不保证指向存在的任务。 */
+  taskId: text("task_id").notNull(),
+  /** 认人的那一对:pid 会被复用,少了启动时刻就可能杀掉同号的无辜进程。 */
+  pid: integer("pid").notNull(),
+  pidStartedAt: text("pid_started_at"),
+  /** 命令原文:清扫时打在日志里,否则没人看得出那个 pid 当初在干什么。 */
+  command: text("command").notNull().default(""),
+  /** 当初为什么要停它(删除/归档/审查结束/任务终态)。 */
+  reason: text("reason").notNull().default(""),
+  /** 停不掉的那次报了什么。 */
+  lastError: text("last_error"),
+  attempts: integer("attempts").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  lastAttemptAt: text("last_attempt_at"),
+});

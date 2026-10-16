@@ -19,7 +19,8 @@ import { readFileSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import {
   db, monitors, pending, root, schema, scheduledMessages, sessions, tasks,
-  isPidAlive, makeTask, now, pendingOf, sleep, startMonitor, until, teardown, uniq,
+  detachAllMonitors, isPidAlive, makeTask, now, pendingOf, reattachMonitors, sleep, startMonitor,
+  until, teardown, uniq,
 } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
 import { sessionTranscriptPath } from "../src/transcript.js";
@@ -28,6 +29,9 @@ import { queueBlockers } from "../src/queues.js";
 const { stopMonitorsForTask, stopMonitorsForReviewRun } = await import("../src/monitor-reclaim.js");
 const { monitorWakeGuard, deliveryVerdict } = await import("../src/pending-verdict.js");
 const { monitorEventSourceState, monitorWakeCheckpoint, monitorWakeGate } = await import("../src/monitor-session.js");
+const { beginTaskRevocation, isTaskRevoked, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
+const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
+const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 
 /** 一次正在进行的审查（默认第 1 轮）。 */
 async function reviewInFlight(
@@ -216,7 +220,7 @@ async function insertMonitorRow(
     "认不出来源的照老规矩走任务状态");
 }
 
-// ── ⑥ 取走的续跑交代落在持久账本上，重启/重投都接得住（F4）────────────────────
+// ── ⑥ 取走的续跑交代只持久在账本列上，重投/回退都不碰事件正文（F4 + 第 3 轮 F2/F3）──
 {
   const taskId = await makeTask({ status: "done" });
   const checkpoint = "套件完成后继续审查并交报告";
@@ -236,24 +240,53 @@ async function insertMonitorRow(
   assert.match(taken.text, /SUITE_DONE[\s\S]*套件完成后继续审查并交报告/, "喂回去的是事件 + 交代");
   assert.equal((await taskOf()).resumePrompt, null, "取走了");
   const ledger = await rowOf();
-  assert.equal(ledger.text, taken.text,
-    "取走的那一刻就要落进这条消息的正文：只留在内存里的话，送达之前进程一换就两边都不在（F4）");
-  assert.equal(ledger.checkpointTaken, checkpoint, "账本列记着接走的是哪一段");
+  assert.equal(ledger.checkpointTaken, checkpoint,
+    "取走的那一刻就要落进账本列：只留在内存里的话，送达之前进程一换就两边都不在（F4）");
+  assert.equal(ledger.text, "【哨兵】SUITE_DONE",
+    "交代不许写进事件正文：正文归事件、交代归账本列，两者不能互相覆盖（第 3 轮 F2）");
+
+  // 取走之后、送出去之前,又有新事件合并进这条消息(`mergeOrEnqueueMonitorEvent` 追加正文)。
+  await db.update(scheduledMessages).set({ text: `${ledger.text}\n【哨兵】MORE` })
+    .where(eq(scheduledMessages.id, msgId));
 
   // 「进程在这儿没了」：开机只清投递租约，重投读的是库里这一行。
   const again = await monitorWakeCheckpoint(await rowOf());
   assert.ok(again, "重投照旧带着它走");
-  assert.equal(again.text, ledger.text, "不许再追加第二遍（幂等）");
+  assert.match(again.text, /SUITE_DONE[\s\S]*MORE[\s\S]*套件完成后继续审查并交报告/,
+    "重投带上的是此刻的正文：期间合并进来的事件一并走，交代仍在末尾（第 3 轮 F2）");
+  assert.equal(again.text.split("【你当初留下的续跑交代】").length - 1, 1, "不许追加第二遍（幂等）");
   assert.equal((await taskOf()).resumePrompt, null, "更不许从任务行上再取一次");
 
-  // 一个字都没送出去：两半一起退回去。
+  // 别人正握着这条消息的投递租约 ⇒ 这笔账不归我们退(它自己走重投分支)。
+  await db.update(scheduledMessages).set({ deliveringSince: now() }).where(eq(scheduledMessages.id, msgId));
+  await again.restore();
+  assert.equal((await rowOf()).checkpointTaken, checkpoint, "租约在别人手上时不许动账本（第 3 轮 F2）");
+  assert.equal((await taskOf()).resumePrompt, null, "更不许把交代填回任务行（会被喂两遍）");
+  await db.update(scheduledMessages).set({ deliveringSince: null }).where(eq(scheduledMessages.id, msgId));
+
+  // 一个字都没送出去：两半一起退回去，正文原样不动。
   await again.restore();
   assert.equal((await taskOf()).resumePrompt, checkpoint, "任务行上原样填回");
   const reverted = await rowOf();
-  assert.equal(reverted.text, "【哨兵】SUITE_DONE", "消息正文退回原话");
+  assert.equal(reverted.text, "【哨兵】SUITE_DONE\n【哨兵】MORE",
+    "回退不碰正文：期间合并进来的事件不许被它覆盖（第 3 轮 F2）");
   assert.equal(reverted.checkpointTaken, null, "账本清空，下一次投递可以重新取一次");
 
-  // 两条消息同时来取：只能有一个拿到，落空的那个必须把账本那一半退干净。
+  // **陈旧快照**:拿着「账本列是空的」这份旧视图再来取一次,而库里这条消息早已认下别的一笔。
+  // 两条语句互为条件,所以这一次必须**一个字都不写**;各写各的 CAS 会出现「任务行被腾空、
+  // 账本没落」,只能靠提交之后的第二次写补回来(第 3 轮 F3)。
+  await db.update(scheduledMessages).set({ checkpointTaken: "上一笔别的交代" })
+    .where(eq(scheduledMessages.id, msgId));
+  const stamp = "2020-01-01T00:00:00.000Z"; // 一眼看得出「没被碰过」的时刻
+  await db.update(tasks).set({ resumePrompt: checkpoint, updatedAt: stamp }).where(eq(tasks.id, taskId));
+  const stale = await monitorWakeCheckpoint({ ...(await rowOf()), checkpointTaken: null });
+  assert.equal(stale, null, "取不到就不带交代走");
+  const untouched = await taskOf();
+  assert.equal(untouched.resumePrompt, checkpoint, "任务行上那一段必须还在");
+  assert.equal(untouched.updatedAt, stamp, "库里一个字都没动过（不是先腾空、提交后再补回来）");
+  await db.update(scheduledMessages).set({ checkpointTaken: null }).where(eq(scheduledMessages.id, msgId));
+
+  // 两条消息同时来取：只能有一个拿到，而且落空的那个两半一起落空（不许单侧命中）。
   const otherId = uniq("msg");
   await db.insert(scheduledMessages).values({
     id: otherId, taskId, text: "【哨兵】ANOTHER", attachments: "[]",
@@ -262,15 +295,19 @@ async function insertMonitorRow(
   });
   const rows = await db.select().from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
+  const complaints: string[] = [];
+  const realError = console.error;
+  console.error = (...args: unknown[]) => { complaints.push(args.map(String).join(" ")); };
   const both = await Promise.all(rows.map((r) => monitorWakeCheckpoint(r)));
+  console.error = realError;
   assert.equal(both.filter(Boolean).length, 1, "同一段交代只能被一条消息接走");
+  assert.deepEqual(complaints.filter((line) => line.includes("单侧命中")), [],
+    "落空的那条必须两半一起落空：单侧命中说明两条语句的互相引用没生效（第 3 轮 F3）");
   const after = await db.select().from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
   assert.equal(after.filter((r) => r.checkpointTaken !== null).length, 1, "账本上也只能有一笔");
   for (const r of after) {
-    if (r.checkpointTaken === null) {
-      assert.ok(!r.text.includes(checkpoint), "落空的那条不许把交代留在正文里（会喂第二遍）");
-    }
+    assert.ok(!r.text.includes(checkpoint), "交代一律不进正文（进了就会被喂第二遍）");
   }
 }
 
@@ -341,5 +378,107 @@ async function insertMonitorRow(
   assert.equal(msg.deliveringSince, null, "更不该带着租约卡住");
 }
 
+// ── ⑨ 撤销是一段时间:撤销期不许再创建、停不掉必须留下回收责任（第 3 轮审查 F1）──────
+//
+// 「扫完一遍哨兵」不等于这一生命周期已经被撤销。删除从关闸到任务行真的没了之间有十几条
+// 语句,而这中间 `startMonitor` 曾照旧返回成功 —— 新起的那条行被紧随其后的删除批次连 pid
+// 一起抹掉,进程却还在后台跑着(实测 lateCreationAccepted=true + aliveAfterDelete=true)。
+{
+  // ⑨-1 撤销期:创建与出口读同一份资格,而且**不吃审查豁免**。
+  const taskId = await makeTask({ status: "done" });
+  await reviewInFlight(taskId, "run-revoke"); // 审查还在进行 ⇒ 平时这是豁免放行的那一路
+  beginTaskRevocation(taskId);                // = `deleteTaskRows` 的第一条语句
+  const late = await startMonitor({ taskId, command: "sleep 120", description: "删除期补挂" });
+  assert.equal(late.ok, false, "撤销期不许再挂哨兵（删除批次会把它的 pid 线索一起抹掉）");
+  assert.equal(late.ok === false && late.status, 409);
+  assert.match(late.ok === false ? late.error : "", /正在被删除/);
+  const exit = await monitorWakeGate({ id: taskId, status: "done" }, { reviewRun: "run-revoke", reviewRound: 1 });
+  assert.match(exit ?? "", /正在被删除/, "出口也读同一份资格：任务马上就不存在了，推出去没有意义");
+
+  // 闸开了就照旧能挂 —— 证明拦住它的是撤销资格,不是别的门禁顺手拦的。
+  releaseTaskRevocation(taskId);
+  const ok = await startMonitor({ taskId, command: "sleep 120", description: "闸开之后" });
+  assert.equal(ok.ok, true, "撤销解除后照旧能挂（审查豁免仍然有效）");
+  await stopMonitorsForTask(taskId, "测试收尾", "destroy");
+}
+
+{
+  // ⑨-2 **连枚举都失败 ⇒ 整笔删除不许往下走**。那时根本不知道有几个进程在跑,再删就是把
+  // pid 线索连同任务一起抹掉;删除失败是可重试的,留下无主进程不可逆。
+  const taskId = await makeTask({ status: "done" });
+  const monId = await insertMonitorRow(taskId);
+  const original = db.select;
+  db.select = ((fields?: Record<string, unknown>) => {
+    if (fields && "sourceReviewRound" in fields) throw new Error("库忙：枚举失败");
+    return (original as (f?: unknown) => unknown).call(db, fields);
+  }) as typeof db.select;
+  await assert.rejects(() => deleteTaskCompletely(taskId), /枚举失败/,
+    "回收层枚举失败必须把删除整笔挡回去，而不是吞掉异常继续删行");
+  db.select = original;
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, taskId))).length, 1, "任务行必须还在");
+  assert.equal((await db.select().from(monitors).where(eq(monitors.id, monId))).length, 1, "哨兵行也必须还在");
+  assert.equal(isTaskRevoked(taskId), false,
+    "闸要按「任务行还在不在」收口：任务还在却一直关着，它的监听就再也写不进来了");
+}
+
+{
+  // ⑨-3 停止没能确认 ⇒ **持久的回收责任**(pid + 启动时刻 + 命令),而不是一行 console.error。
+  const taskId = await makeTask({ status: "running" });
+  const started = await startMonitor({ taskId, command: "sleep 120", description: "停不掉的那个" });
+  assert.equal(started.ok, true);
+  const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+  // 让 `finish` 在**杀进程之前**那一次读库上抛错:于是进程确定还活着,停止确定没完成。
+  const original = db.select;
+  db.select = ((fields?: Record<string, unknown>) => {
+    if (fields === undefined) { db.select = original; throw new Error("库忙：停不掉"); }
+    return (original as (f?: unknown) => unknown).call(db, fields);
+  }) as typeof db.select;
+  await stopMonitorsForTask(taskId, "任务已删除", "destroy"); // 逐条失败不许把整批带走
+  db.select = original;
+
+  const debt = (await db.select().from(schema.monitorReclaimDebts)
+    .where(eq(schema.monitorReclaimDebts.monitorId, row.id))).at(0);
+  assert.ok(debt, "停不掉就必须留下回收责任：删除批次紧接着抹掉 monitors 行，pid 线索从此只剩这一份");
+  assert.equal(debt.pid, row.pid, "责任上要带着 pid");
+  assert.equal(debt.pidStartedAt, row.pidStartedAt, "还要带着启动时刻（pid 会被复用，少了它就可能杀错人）");
+  assert.equal(debt.command, "sleep 120", "命令原文：否则没人看得出那个 pid 当初在干什么");
+  assert.match(debt.reason, /删除/);
+
+  // 任务行删掉也不许把责任一起删掉 —— 它的全部意义就是活得比那个任务久。
+  await deleteTaskCompletely(taskId);
+  assert.equal((await db.select().from(monitors).where(eq(monitors.taskId, taskId))).length, 0, "哨兵行跟着任务没了");
+  assert.equal((await db.select().from(schema.monitorReclaimDebts)
+    .where(eq(schema.monitorReclaimDebts.monitorId, row.id))).length, 1,
+    "回收责任必须活过任务删除（跟着删等于把唯一线索再丢一次）");
+
+  // 推一笔:进程确认不在了才销账(补杀已经在落账时发出,这里走的是启动期那条清扫)。
+  await until("回收责任销账", async () => {
+    await sweepMonitorReclaimDebts();
+    return !isPidAlive(row.pid!) && (await db.select().from(schema.monitorReclaimDebts)
+      .where(eq(schema.monitorReclaimDebts.monitorId, row.id))).length === 0;
+  });
+}
+
+{
+  // ⑨-4 **启动恢复也是一道资格判断**。审查结束已经落库、回收那一刀还没落下去 server 就没了:
+  // 照着「同代还活着 + 没到期」接回来的是一条已经失去出口的命令,它推的每一条都被出口闸拒
+  // 回,一直烧到自己到期。
+  const taskId = await makeTask({ status: "done" });
+  await reviewInFlight(taskId, "run-gone");
+  const started = await startMonitor({ taskId, command: "sleep 120", description: "审查者挂的" });
+  assert.equal(started.ok, true);
+  const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
+  assert.equal(row.sourceReviewRun, "run-gone", "审查者挂的哨兵要记下是哪次审查");
+  await db.update(schema.freeReviewRuns).set({ status: "passed" })
+    .where(eq(schema.freeReviewRuns.id, "run-gone"));
+
+  detachAllMonitors();            // = server 进程没了(哨兵进程本来就不跟着死)
+  await reattachMonitors();
+  const after = (await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)!;
+  assert.equal(after.status, "stopped",
+    "来源审查已经结束的，重启不许再接回来（接回要问跟创建、出口同一份资格）");
+  await until("接回时顺手把进程收掉", async () => !isPidAlive(row.pid!));
+}
+
 await teardown();
-console.log("✓ 结果的命不跟命令走：已退出哨兵的结果照旧保留 / 审查收尾一并作废 / 销毁任务没有审查豁免 / 收尾枚举在锁里 / 来源资格无条件核验含轮次 / 续跑交代落持久账本且幂等可退 / 扫描层与末端守卫各自独立问来源");
+console.log("✓ 结果的命不跟命令走：已退出哨兵的结果照旧保留 / 审查收尾一并作废 / 销毁任务没有审查豁免 / 收尾枚举在锁里 / 来源资格无条件核验含轮次 / 续跑交代落持久账本且幂等可退 / 扫描层与末端守卫各自独立问来源 / 撤销期不许创建、停不掉留持久回收责任、接回核验来源资格");

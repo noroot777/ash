@@ -164,6 +164,16 @@ async function initializeServer() {
     if (monitorRecovery?.attached || monitorRecovery?.lost) {
       console.log(`[ash] 哨兵：接回 ${monitorRecovery.attached} 个，${monitorRecovery.lost} 个进程已不在`);
     }
+    // 上一个 server 没能收掉的哨兵进程:停止失败时留下的**回收责任**,现在是最后一次机会
+    // (它们的任务多半已经被删掉了,`monitors` 里也没有行,所以接回那一步看不见它们)。
+    const { sweepMonitorReclaimDebts } = await import("./monitor-reclaim-debts.js");
+    const debts = await sweepMonitorReclaimDebts().catch((err) => {
+      console.error("[ash] 哨兵回收责任清扫失败（不影响启动）:", err);
+      return null;
+    });
+    if (debts?.settled || debts?.left) {
+      console.log(`[ash] 哨兵回收责任：销账 ${debts.settled} 笔，仍收不掉 ${debts.left} 笔`);
+    }
     // claude 自带 Monitor 的投影没有 pid，上面那一步按 kind 整批跳过了它们，得单独判一次。
     // **必须排在 reattachRunningTasks 之后**：它按「来源 agent 进程还在不在」裁决，而那些
     // 进程正是上面那一步接回来的；提前跑会把一批还活着的投影误判成死的。
