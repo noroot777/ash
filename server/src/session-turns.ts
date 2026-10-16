@@ -1,7 +1,7 @@
 import { db } from "./db/index.js";
 import { sessionTurns } from "./db/schema.js";
 import { id } from "./util.js";
-// 回合区间的**写入端**。读取端在 `task-artifact-scope.ts`（产物归属），表的语义写在
+// 回合区间的**写入端**。读取端在 `task-artifact-windows.ts`（产物归属按时间认人），表的语义写在
 // `db/schema.ts` 的 `sessionTurns` 上，这里不复述。
 //
 // 为什么单独一个文件而不是直接在各执行路径里 insert：single / duet / team 三条路各自

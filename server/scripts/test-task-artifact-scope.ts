@@ -1,4 +1,4 @@
-// 产物面板的**归属证据**（server/src/task-artifact-scope.ts）。
+// 产物面板的**归属证据**（server/src/task-artifact-{scope,windows,paths}.ts）。
 //
 // 上一个文件（test-task-artifacts.ts）钉的是「三档各自认得对不对」；这一个钉的是**凭什么
 // 算这个任务的**，也就是第 1 轮审查打回来的那四条：
