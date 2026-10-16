@@ -4,7 +4,8 @@ import type { AgentEvent } from "@ash/shared";
 import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
-import { clearTurnActive, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
+import { openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
+import { closeLeadTurns, holdTurn, releaseHeldTurns } from "./lead-turns.js";
 import { now } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { untrackRun, takeStopped } from "../runs.js";
@@ -344,11 +345,12 @@ async function setLeadStatus(lead: Lead, status: "running" | "idle", at = now())
 function retireLead(lead: Lead): void {
   if (lead.retired) return; // 摘过一次就够了:再摘一次时新台可能正说到一半,不能往共享 .md 里补写
   lead.retired = true;
-  // 摘牌 = 这台的作用域被换掉了,它手上那个回合从此不会再写盘,活动登记跟着撤
+  // 摘牌 = 这台的作用域被换掉了,它手上那些回合从此不会再写盘,活动登记跟着撤
   //（第 6 轮审查必须修 1:注销要覆盖「被替换」这个出口,不只正常收尾）。
-  // **只撤自己那一个起点**,不是整条会话：接管那条路会复用同一行,新台刚登记的起点不能被
-  // 晚到的旧收尾一起清掉（closeLead 的 superseded 分支就是这么进来的）。
-  clearTurnActive(lead.sessId, lead.turnStart);
+  // **只撤自己持有的那些**,不是整条会话：接管那条路会复用同一行,新台刚登记的起点不能被
+  // 晚到的旧收尾一起清掉（closeLead 的 superseded 分支就是这么进来的）。摘牌之后这台也不
+  // 再接受新的持有 —— 晚到的回调开出来的回合谁都不会来收（第 8 轮审查必须修 1）。
+  closeLeadTurns(lead);
   clearStatusRetry(lead);
   lead.wantedStatus = null;
   // 手上这批待送消息的**所有权**跟着牌子一起交出去(见 releasePending)。
@@ -393,8 +395,9 @@ function armStatusRetry(lead: Lead): void {
 
 
 async function beginTurn(lead: Lead, at = now()): Promise<void> {
-  lead.busy = true;
-  lead.turnStart = at;
+  // 状态与活动身份在同一个同步段里绑定,顺便放掉手上还攥着的别的起点（用户插话会在上一轮
+  // 还开着时就起新一轮）—— 判据与机制都在 lead-turns.ts。
+  holdTurn(lead, at);
   // **返回值不能丢**：这一路的 session 写入是被捕获后继续的（`updateOwnSession` 不抛），
   // 丢掉它就等于把「写成功」当默认（第 5 轮审查必须修 2.3）。
   const stamped = await updateOwnSession(lead, "回合开始状态", { ...resumedTurnFields(at) }, at);
@@ -426,8 +429,9 @@ async function endTurn(lead: Lead): Promise<void> {
   lead.busy = false;
   lead.turnStart = null;
   // 回合说完了就不再写盘,注销排在写库之前：下面那两次写都可能失败,失败时照样不能留一个
-  //「还在跑」的身份给读端（第 6 轮审查必须修 1）。
-  clearTurnActive(lead.sessId, turnStart);
+  //「还在跑」的身份给读端（第 6 轮审查必须修 1）。按**这台手上那一份集合**放,不按上面刚
+  // 清掉的 turnStart —— 那个字段会被下一轮覆盖,只认它就会漏掉被覆盖的那个（第 8 轮必须修 1）。
+  releaseHeldTurns(lead);
   // 写库失败绝不能把下面整段收尾一起带走 —— writeTurnEnd、旁注落盘、待送消息、落 idle
   // 全在后面(理由见 persistOrReport)。丢的只是这一行用时统计。
   await updateOwnSession(
@@ -508,7 +512,8 @@ async function closeLead(
   // 在这儿补一行。不补就只剩「会话结束了、最后一个回合没有记录」，产物归属读到那个缺口
   // 只能按会话寿命估，那一回合真做出来的东西要么被滤掉要么混进别人的（第 2 轮审查 F1）。
   // 进程都没了,这个回合当然不在写了——撤登记排在补区间**之前**,补不进去也不留假活动身份。
-  clearTurnActive(lead.sessId, lead.turnStart);
+  // 同 retireLead：按持有的那一份集合放,并且从此不再接受新的持有（第 8 轮审查必须修 1）。
+  closeLeadTurns(lead);
   if (lead.turnStart) {
     await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: lead.turnStart, endedAt: endIso });
   }

@@ -30,6 +30,7 @@ import { eq } from "drizzle-orm";
 import type { AgentType, TeamConfig } from "@ash/shared";
 import { TEAM_DEFAULTS } from "@ash/shared";
 import { freshTurnFields, openTurn, resumedTurnFields } from "../session-turns.js";
+import { holdTurn } from "./lead-turns.js";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions, groups } from "../db/schema.js";
 import { bus } from "../bus.js";
@@ -522,8 +523,11 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     cwd: ws.path,
     handle,
     out: createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" }),
-    busy: false,
-    turnStart: null,
+    // **开台本身就是一个回合的开始**：CLI 已经起来了,首轮 prompt 也随 spawn 送进去了,所以
+    // 这两个字段在构造时就是真相（原先写 false/null、指望后面那句 beginTurn 去补,见上面
+    // attachLead 那条）。`attachLead` 据此在开放消费之前把首轮身份持有住。
+    busy: true,
+    turnStart,
     pending: [],
     notices: [],
     pendingCredential: null,
@@ -540,11 +544,8 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   // helper 里时这里是实打实加了两次,于是团队的第一个回合永远报「缺一个回合记录」
   //（第 5 轮审查必须修 2.1）。
   //
-  // **位置讲究**：这个回合身份的所有者是这台调度台本身（它活得比 openLead 这次调用长,注销
-  // 由 endTurn/closeLead/retireLead 做),所以必须**先把所有者挂上线、再去拿身份**。反过来
-  // 写（原先的顺序:先 openTurn,再组装 lead、再 attachLead）的话,中间那段组装只要抛一次
-  // 就留下一个谁都不会来注销的活动身份——读端会把这条会话当成「从那个起点一直在写」
-  //（第 7 轮审查必须修 1 的同类入口）。
+  // 活动登记已经在 `attachLead` 里跟首轮状态一起绑好了（见 lead-turns.ts）,这里只剩「把这
+  // 一轮记进库」这一半:同一身份再开一次既不插行也不加数,写不成也只按缺口披露。
   await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
   // 运行按钮带来的首个任务 prompt 不另记 turn；用户亲自发来的消息无论是否顺手
   // 打开了调度台，都必须成为可持久、可实时同步的一条 user turn。
@@ -569,6 +570,10 @@ export function attachLead(lead: Lead): void {
   const previous = leads.get(lead.taskId);
   if (previous && previous !== lead) retireLead(previous);
   leads.set(lead.taskId, lead);
+  // **先持有回合身份,再开放事件消费** —— 这一句与下面那行之间不许有 await,理由与机制见
+  // team/lead-turns.ts 顶部（第 8 轮审查必须修 1）。放在这里而不是让各调用方自己记着调：
+  // `attachLead` 是「开放消费」的唯一入口,顺序在这里定死,新调用点不可能写反。
+  if (lead.turnStart) holdTurn(lead, lead.turnStart);
   void consume(lead).catch((err) => console.error(`[ash] team consume(${lead.taskId}) failed:`, err));
 }
 

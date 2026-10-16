@@ -461,6 +461,51 @@ try {
   );
   ok("待命时飘来的会话级旁注不算开工");
 
+  // ── ⑪ 用户插话覆盖回合起点:两个身份都得注销（第 8 轮审查必须修 1）─────────────────
+  // 为什么要一条业务级的:被覆盖掉的那个起点留在活动册上,看不出任何异常 —— 这台的 .md、
+  // 状态、trace 全是对的,库里也没有脏数据。只有在**下一次唤醒**时才现形:读端看到「这条
+  // 会话未收口 + 任务在飞 + 还登记着」,就从那个老起点一路开到无穷,把待命期间别的任务在
+  // 同一个目录里做的东西全算成这台的实测产物,连「算不准」都不说(第 8 轮审查 F1)。
+  {
+    const { deliverToLead } = await import("../src/team/session.js");
+    const { openTurn, activeTurnStarts } = await import("../src/session-turns.js");
+    const taskId = "task-turn-ownership";
+    const sessId = "sess-turn-ownership";
+    await seedTeamTask(taskId);
+    let letGo = () => {};
+    const gate = new Promise<void>((resolve) => { letGo = resolve; });
+    await startLead({
+      taskId,
+      sessId,
+      cliSessionId: "own-thread",
+      events: (async function* (): AsyncGenerator<AgentEvent> {
+        yield { kind: "text", text: "首轮说到一半。" };
+        await gate; // 卡住首轮,给插话一个确定的插入点(它必须落在上一轮还开着的时候)
+        yield { kind: "turnEnd" };
+        yield { kind: "done", exitStatus: 0 };
+      })(),
+    });
+    // openLead 对首轮做的另一半:把这一轮记进库。活动身份在 attachLead 里就持有了,所以
+    // 这一句之后在册的只能是这一个起点(见 team/lead-turns.ts)。
+    await openTurn({ sessionId: sessId, taskId, cwd: root, startedAt: at });
+    assert.deepEqual([...activeTurnStarts(sessId)], [at], "前置条件:首轮的身份确实在册");
+    assert.equal(await deliverToLead(taskId, "插一句:先看看另一个模块"), true, "前置条件:插话真进了调度台");
+    const deadline = Date.now() + 10_000;
+    const others = () => [...activeTurnStarts(sessId)].filter((start) => start !== at);
+    while (!others().length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    // 一台调度台就是一个 CLI 进程,**同时只可能有一个回合在跑**。修复前这里是两个:插话起的
+    // 新一轮把 lead.turnStart 覆盖掉了,首轮那个起点从此没有任何出口会提到它。
+    const during = [...activeTurnStarts(sessId)];
+    assert.equal(during.length, 1, `同一台同时只该有一个回合在册,实际：${JSON.stringify(during)}`);
+    assert.notEqual(during[0], at, "在跑的是插话起的那一轮,首轮已经被它打断了");
+    letGo();
+    while (teamIsLive(taskId) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(teamIsLive(taskId), false, "前置条件:这台已经收完台");
+    assert.deepEqual([...activeTurnStarts(sessId)], [],
+      "收完台还留着活动身份 —— 下一次唤醒就会把待命期间别人做的东西当成这台的实测产物");
+    ok("用户插话覆盖回合起点:同时只有一个在册,收完台一个不留");
+  }
+
   console.log("test:team-resilience core ok");
 } finally {
   healSessionWrites();
