@@ -121,7 +121,21 @@ export type SpawnedMonitor = {
    */
   kill: () => void;
   /**
-   * **拿句柄确认它退了**(有界等待)。同理:不查 ps、不比 pid,`exit` 事件本身就是证明。
+   * **这条命令有没有可能已经开工了。**
+   *
+   * true 的两种来由:① 已经放行(`release()` 调过);② 这一侧**没有闸**(win32)—— 那里命令在
+   * `spawn` 返回之前就可能跑起来了。
+   *
+   * 它回答的是一个资源问题:**根进程退出算不算整项资源退出**。命令从未开工 ⇒ 壳底下什么都
+   * 没有,根的 `exit` 就是全部;开工过 ⇒ 它可能已经派生了后台进程,那些进程不随根退出而消失,
+   * 根的 `exit` 只证明根走了(本轮审查 F1-B)。所以创建期的撤销要按这一问分档:前者敢当场
+   * 销账,后者一律交回收圈按**当前归属证据**处理(见 monitor-create.ts 的 `releaseProcess`)。
+   */
+  commandMayHaveStarted: () => boolean;
+  /**
+   * **拿句柄确认它退了**(有界等待)。注意它证明的是**这个 ChildProcess**(壳的根)退了 ——
+   * 不是「这条命令派生的一切都没了」。两者只有在命令从未开工时才等价,判据见
+   * `commandMayHaveStarted`。同理:不查 ps、不比 pid,`exit` 事件本身就是那一份证明。
    * 返回 false = 这个期限内没等到,调用方照旧落回收责任。
    */
   waitExit: (deadlineMs: number) => Promise<boolean>;
@@ -188,6 +202,9 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
     //    于是一条已经死掉的哨兵在库里和界面上都写着 running,一直挂到约定的时长到期才收尾
     //    (第 8 轮审查 F3 实测 `alive=false` 而 `row.status=running`)。放行闸管的是「用户的
     //    命令什么时候开工」,证明不了「这个 ChildProcess 还活着」。
+    // 放行过没有 —— `gated` 为假时(win32)命令在这一刻之前就可能已经跑起来了,所以那一侧
+    // 从头就算「可能开工过」(见 `commandMayHaveStarted`)。
+    let released = !gated;
     let settled: { code: number | null } | null = null;
     // **多订阅者**:运行时(`attach`)订一个,创建期撤销那条路要等退出确认(`waitExit`)也订一个。
     // 上一版只存一个 subscriber,后挂的会把前一个顶掉 —— 两条路同时在场时必然丢一个。
@@ -236,6 +253,10 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
       recoverable: handoverRecoverable({ gated, identitySaved }),
       release: () => {
         if (!gate?.write) return;      // win32：没有闸，命令早就在跑了
+        // **先记下「放行过」,再去写**:写失败只说明这一次没放行成功,而那一刻命令是否已经
+        // 开工我们并不知道(对端可能刚好读到了那一行就死了)。记在前面 = 宁可按「可能开工过」
+        // 保守处理,也不把一条可能有后代的命令当成「什么都没起」(本轮审查 F1-B)。
+        released = true;
         try { gate.write("go\n"); gate.end?.(); } catch { /* 它已经没了：那就是没放行 */ }
       },
       abandon: () => {
@@ -248,12 +269,18 @@ export function spawnMonitor(opts: { command: string; cwd: string; logPath: stri
         if (settled) { cb(settled.code); return; }
         subscribers.add(cb);
       },
+      commandMayHaveStarted: () => released,
       kill: () => {
         // **要覆盖它派生的后代,不能只打根进程**:根进程退出不证明这条命令结束了
         // (第 10 轮审查 F2-C)。`killTree` 两边各走各的 —— POSIX 打组信号(组号就是 pid,
         // 因为壳是 `detached` 的),win32 打 `taskkill /T` 那棵树(跟 ash 收 agent 进程树用的
         // 是同一个函数)。**win32 这一侧未在真机验证**(根 AGENTS.md:那台机器现在连不上)。
         // 所有权在这里由**句柄**证明,不必去问 ps 的启动时刻(第 9 轮审查 F3)。
+        //
+        // **根已经退了就不在这里下刀**:那时组号(POSIX)或那个 pid(win32)随时可能被复用,
+        // 句柄证明的是「那个根曾经是我们的」,不是「这个号现在还是我们的」。那一档的收尾交给
+        // 回收层按当前归属证据判(proc.ts 的 `processGroupOwnership`),调用方也不许据此销账
+        // (本轮审查 F1-A/F1-B 同一条判据)。
         if (settled) return;
         try { killTree(child.pid!, "SIGKILL"); } catch { /* 已经空了 */ }
         try { child.kill("SIGKILL"); } catch { /* 它已经没了 */ }

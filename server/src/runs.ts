@@ -359,6 +359,30 @@ export class CanceledRun extends Error {
 export type TurnReview = { run: string; round: number };
 export type TurnIdentity = { role: string; review: TurnReview | null; token: string | null };
 
+/**
+ * **起这一轮的人是谁、为哪一次审查而起** —— 一个对象,不是两个各自可缺的字段。
+ *
+ * 为什么是联合类型:上一版这两样在回合入口上是 `sessionRole?` 和 `reviewSource?` 两个独立
+ * 可选字段,于是「reviewer 但没带审查代次」是一个**类型上完全合法**的组合 —— 首次派审带了,
+ * 自动投递、手动恢复、答复提问三条恢复入口各自漏了,而漏掉的后果不是报错而是**静默降级**:
+ * 续起来的那一轮身份里 `review=null`,来源核验据此判「这次审查已经结束」,还活着的审查者
+ * 从此一条哨兵都挂不上(本轮审查 F2 实测 HTTP 409)。
+ *
+ * 所以 reviewer 这一支**必须**说出 review。确实不代表某一轮审查的 reviewer 回合(duet 研讨、
+ * 辩论)写 `"unbound"`:那是一句**显式**的「这一轮不绑任何审查」,读代码的人和编译器都看得见,
+ * 而且它换来的行为正是对的 —— 那种回合挂不上「本轮审查」的哨兵。
+ */
+export type TurnSource =
+  | { role: "single" }
+  | { role: "reviewer"; review: TurnReview | "unbound" };
+
+/** 回合身份里的角色。缺省(普通续聊)就是 `single`。 */
+export const turnSourceRole = (source?: TurnSource | null): string => source?.role ?? "single";
+
+/** 回合身份里绑定的那次审查。`"unbound"` 与不是 reviewer 都是 null。 */
+export const turnSourceReview = (source?: TurnSource | null): TurnReview | null =>
+  source && source.role === "reviewer" && source.review !== "unbound" ? source.review : null;
+
 const turns = new Map<string, TurnIdentity>();
 const afterTurn = new Map<string, Array<() => void>>();
 
@@ -557,7 +581,9 @@ export function whenTurnIdle(taskId: string, fn: () => void): void {
  * 表现是「什么都没发生」——就地验证轮起不来、打回重做的提示没人收。动态 import 是为了
  * 不让这个中立模块回头依赖 orchestrator（类型是纯类型引用，不构成运行时环）。
  */
-type ContinueOpts = Parameters<(typeof import("./orchestrator.js"))["continueTask"]>[2];
+// 入口参数的类型住在 `turn-continue-opts.ts`(只放类型,不放运行时 —— 这条链上的运行时
+// import 要留给那句 dynamic import)。
+type ContinueOpts = import("./turn-continue-opts.js").ContinueOpts;
 
 export function continueWhenIdle(
   taskId: string,
@@ -570,11 +596,11 @@ export function continueWhenIdle(
     // 话，异步 import 的间隙里同一释放点的后续 waiter 能同步抢锁——投递「not delivered」
     // 而调用方可能已提前写下状态（审查实测 3/3：dispatch 释放点被竞争 waiter 抢先，
     // 任务留在 stage=verifying 而验证从未启动）。
-    const role = (opts.sessionRole as string | undefined) ?? "single";
-    // **占位的那一刻就把「为哪一次审查而起」交代清楚**:派审那一侧此刻手里正握着 run 和
-    // 轮次,而创建入口过后只能查「现在是哪一次」—— 那两者在派审交接期并不是同一个
-    // (第 10 轮审查 F1)。
-    if (!claimTurn(taskId, role, (opts as { reviewSource?: TurnReview | null }).reviewSource ?? null)) {
+    // **占位的那一刻就把「谁起的、为哪一次审查而起」一起交代清楚**:派审那一侧此刻手里正握着
+    // run 和轮次,而创建入口过后只能查「现在是哪一次」—— 那两者在派审交接期并不是同一个
+    // (第 10 轮审查 F1)。两样同在一个 `TurnSource` 里,所以这里不可能只带到一半。
+    const source = (opts as { turnSource?: TurnSource | null }).turnSource ?? null;
+    if (!claimTurn(taskId, turnSourceRole(source), turnSourceReview(source))) {
       console.error(`[ash] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
       void onError?.("回合被其它执行抢占，消息未能投递");
       return;

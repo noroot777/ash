@@ -15,14 +15,18 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import {
-  db, inTurnCaller, monitors, reviewInFlight, root, runs, schema, tasks, makeTask, now, pendingOf,
-  startMonitor, stopMonitor, until, teardown,
+  db, inTurnCaller, insertMonitorRow, monitors, reviewInFlight, root, runs, schema, tasks, makeTask,
+  now, pendingOf, startMonitor, stopMonitor, until, teardown,
 } from "./monitors-fixture.js";
 import type { MonitorCaller } from "../src/monitor-session.js";
 
 const { monitorSourceGate, monitorWakeCheckpoint, monitorWakeGate } = await import("../src/monitor-session.js");
 const { serialize } = await import("../src/monitors.js");
 const { deliveryOptions, deliveryVerdict } = await import("../src/pending-verdict.js");
+const { freeReviewResumeOptions } = await import("../src/free-workflow.js");
+const { monitorTurnSource } = await import("../src/monitor-session.js");
+const { enqueueMessage } = await import("../src/pending-messages.js");
+const { enterTurn } = await import("../src/turn-entry-guard.js");
 
 /** 「这个哨兵是谁挂的」——创建闸顺带回答的那一问。来源由调用方交上来(入口已核验)。 */
 const sourceGate = async (taskId: string, caller: MonitorCaller, status = "running") => {
@@ -75,7 +79,11 @@ const byUser: MonitorCaller = { kind: "external" };
   assert.equal(queued!.origin, `monitor:${monitorId}`, "这条待发送消息应该是这个哨兵推的");
   assert.equal(queued!.sessionRole, "reviewer", "哨兵事件要叫醒起它的那条会话,不是默认的执行者");
   // ③ 投递参数拼装那一层也得把它带出去(continueTask 认的就是这个字段)。
-  assert.equal(deliveryOptions(queued!).sessionRole, "reviewer", "投递时要把角色传给 continueTask");
+  // 角色和「为哪一次审查的哪一轮」是**一个对象**(runs.ts 的 `TurnSource`):只带角色的那一版
+  // 会让续起来的审查者挂不上下一条哨兵(本轮审查 F2,下面 ⑫ 整块钉这件事)。
+  assert.deepEqual(deliveryOptions(queued!).turnSource,
+    { role: "reviewer", review: { run: "run-wake-role", round: 1 } },
+    "投递时要把回合身份整份传给 continueTask");
 
   // 等它自己跑完并把收尾事件也推完,再往下走:fixture 的 teardown 对哨兵是**撒手不杀**
   // （它们本来就该活过 ash）,这一步不等的话,收尾那一推会落在关库之后刷一串 stack trace。
@@ -533,5 +541,59 @@ const byUser: MonitorCaller = { kind: "external" };
   await stopMonitor(pickedRow.id, "测试收尾");
 }
 
+// ── ⑫ **把一条审查会话续起来,身份要带全**(本轮审查 F2)─────────────────────────────
+//
+// 首次派审带了「为哪一次审查的哪一轮」,而**三条恢复入口**(哨兵事件自动叫醒、手动恢复、
+// 答复审查者提问)各自只带了角色 —— 续起来的那一轮身份里 `review=null`,来源核验据此判
+// 「这次审查已经结束」:**还活着的审查者从此一条哨兵都挂不上**(实测 HTTP 409,照提示
+// 「在现在这一轮审查里重挂」也没用,因为它本来就在那一轮里)。
+//
+// 这一份钉三截:恢复路由带不带、投递参数还原得出来不、以及带着它续起来的回合挂不挂得上。
+// 注意**不许**用「现查最新那一轮」来消掉 409 —— 那正是第 9/10 轮审查的错投来源。
+{
+  const taskId = await makeTask();
+  await reviewInFlight(taskId, "run-resume-source", { round: 2 });
+
+  // ① 手动恢复与答复提问共用的那一份路由(task-resume / task-answer 都 spread 它)。
+  const resume = await freeReviewResumeOptions(taskId);
+  assert.deepEqual(resume?.turnSource, { role: "reviewer", review: { run: "run-resume-source", round: 2 } },
+    "恢复一条审查会话,必须把**正在恢复的那一轮**一起带上");
+
+  // ② 哨兵事件自动叫醒那一条:来源记在哨兵行上 → 原样落进待发消息 → 投递时还原成回合身份。
+  const monId = await insertMonitorRow(taskId, { reviewRun: "run-resume-source", round: 2 });
+  const monRow = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
+  await enqueueMessage({
+    taskId, text: "哨兵事件", origin: `monitor:${monId}`, turnSource: monitorTurnSource(monRow),
+  });
+  const queued = (await pendingOf(taskId)).at(0)!;
+  assert.equal(queued.sessionRole, "reviewer", "角色照旧落库");
+  assert.equal(queued.reviewRun, "run-resume-source", "**哪一次审查也要落库** —— 投递时不许现查");
+  assert.equal(queued.reviewRound, 2, "哪一轮同样落库:换轮之后这条消息不该被当成新一轮的输入");
+  assert.deepEqual(deliveryOptions(queued).turnSource,
+    { role: "reviewer", review: { run: "run-resume-source", round: 2 } },
+    "投递参数要把那一轮原样还原出来");
+
+  // ③ 带着这份身份续起来的回合,**挂得上下一条哨兵**。走生产那道入口闸(它才是把
+  //    `TurnSource` 翻译成回合身份的地方),然后照生产顺序绑令牌、再提交创建。
+  assert.equal(await enterTurn({ taskId, source: deliveryOptions(queued).turnSource! }), true,
+    "台子前提:这一轮起得来");
+  const resumed = runs.turnIdentity(taskId);
+  assert.deepEqual(resumed && { role: resumed.role, review: resumed.review },
+    { role: "reviewer", review: { run: "run-resume-source", round: 2 } },
+    "续起来的那一轮身份里,审查代次不许是 null");
+  const again = await startMonitor({
+    taskId, command: "sleep 300", description: "恢复之后再挂一条",
+    caller: await inTurnCaller(taskId, "resumed-turn"),
+  });
+  assert.equal(again.ok, true, `活着的审查者必须还挂得上哨兵：${again.ok ? "" : again.error}`);
+  const armed = (await db.select().from(monitors).where(eq(monitors.id, again.ok ? again.monitor.id : ""))).at(0)!;
+  assert.equal(armed.sourceReviewRun, "run-resume-source", "新挂的这条也绑在同一次审查上");
+  assert.equal(armed.sourceReviewRound, 2, "同一轮 —— 不是「现在最新那一轮」");
+  await stopMonitor(armed.id, "测试收尾");
+  runs.releaseTurn(taskId);
+  await db.update(schema.freeReviewRuns).set({ status: "done" })
+    .where(eq(schema.freeReviewRuns.id, "run-resume-source"));
+}
+
 await teardown();
-console.log("✓ 哨兵与审查：醒来叫审查会话 / 角色跟着行走到投递参数 / 来源答不出来时要么说清要么拒、不静默当执行者 / 审查进行中终态任务上挂得上 / 叫醒时带回 pause 留下的交代 / 预约审查说得出在等哪几个哨兵 / 创建入口核验回合凭据、歧义带着出路拒、排队期间换了一轮或审查推了一轮都拒不换绑");
+console.log("✓ 哨兵与审查：醒来叫审查会话 / 角色跟着行走到投递参数 / 来源答不出来时要么说清要么拒、不静默当执行者 / 审查进行中终态任务上挂得上 / 叫醒时带回 pause 留下的交代 / 预约审查说得出在等哪几个哨兵 / 创建入口核验回合凭据、歧义带着出路拒、排队期间换了一轮或审查推了一轮都拒不换绑 / 恢复一条审查会话时身份带全、续起来还挂得上哨兵");

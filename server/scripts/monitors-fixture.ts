@@ -136,11 +136,17 @@ export async function reviewInFlight(
  */
 export async function insertMonitorRow(
   taskId: string,
-  opts: { reviewRun?: string; round?: number; status?: string; pid?: number; pidStartedAt?: string | null } = {},
+  // `command` 要跟那个进程**真的在跑的那条**一致:孤儿组那一档的归属证据就是命令原文出现在
+  // 组成员的 argv 里(生产里行上那一列正是交给 `sh -lc` 的那段字,见 proc.ts 的
+  // `processGroupOwnership`)。摆一个对不上的字符串 = 摆一个「证不出归属」的现场。
+  opts: {
+    reviewRun?: string; round?: number; status?: string; pid?: number; pidStartedAt?: string | null;
+    command?: string;
+  } = {},
 ): Promise<string> {
   const id = uniq("mon");
   await db.insert(monitors).values({
-    id, taskId, command: "sleep 120", description: "站位", cwd: root,
+    id, taskId, command: opts.command ?? "sleep 120", description: "站位", cwd: root,
     status: opts.status ?? "running", pid: opts.pid ?? null, pidStartedAt: opts.pidStartedAt ?? null,
     logPath: `${root}/${id}.log`, offset: 0, events: 0, exitCode: null,
     startedAt: now(), expiresAt: new Date(Date.now() + 600_000).toISOString(),

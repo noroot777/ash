@@ -305,7 +305,7 @@ export async function resolveFreeReviewDispute(
   let repairError: string | null = null;
   if (resolution === "upheld") {
     try {
-      const { startManualFreeReviewRepair } = await import("./free-workflow.js");
+      const { startManualFreeReviewRepair } = await import("./free-review-manual-repair.js");
       await startManualFreeReviewRepair(taskId, { holdTurn: true });
     } catch (error) {
       repairError = error instanceof Error ? error.message : String(error);

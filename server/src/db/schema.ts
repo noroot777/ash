@@ -477,6 +477,13 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 时答案会落到这里排队——不存 role 的话投递会以 single 身份进实现会话，reviewer 永远
   // 收不到答案（审查实测复现）。null = 普通消息。
   sessionRole: text("session_role"),
+  // **这条消息续起来的那一轮审查是哪一次、哪一轮。** 只跟 session_role='reviewer' 一起有意义。
+  // 为什么要落库:投递可能发生在几分钟之后,那时「现在最新是哪一次审查」已经不一定是排它
+  // 那一刻的那一次(派审交接期尤其),而现查会把旧请求绑到新审查上(第 10 轮审查 F1)。
+  // 两列为空 = 这条消息没记下为哪一轮排的,它续起来的回合**不代表任何一轮审查**(显式的
+  // `"unbound"`,不是「就按最新那一轮算」;本轮审查 F2)。
+  reviewRun: text("review_run"),
+  reviewRound: integer("review_round"),
   // 这条消息是**谁发的**(多人模式)。投递时按它解析执行器/供应商/CLI 环境与 git 署名
   // —— 排队消息可能几分钟后才送出去,那时不能退回「任务归属人」:在别人的任务上排的
   // 队,烧的仍该是排队那个人自己的 key(§八)。null = 自用模式或存量行。

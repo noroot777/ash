@@ -283,6 +283,38 @@ export function killOne(pid: number, sig: NodeJS.Signals): void {
  * signum 0 直接 return 0,不会 TerminateProcess),所以两个平台同一条实现;
  * EPERM = 进程在、只是没权限看。
  */
+/**
+ * **这一组里现在都有谁** —— pid + 启动时刻 + 完整命令行,POSIX 专有。
+ *
+ * 用在「组长已经退了、组里还有人」那一档上:那一刻 `kill(-pgid, 0)` 只能证明**存在**,
+ * 证明不了这一组是不是我们起的那一代(组号就是当初那个 pid,它会被复用)。要判归属就只能
+ * 把成员本身问出来,再由上层按证据判(见 proc.ts 的 `processGroupOwnership`)。
+ *
+ * win32 没有进程组这回事(`killTree` 打的是 `taskkill /T` 那棵树),一律空数组 ——
+ * **这里不新增任何跨平台断言**(没有真机实证之前不冒充;约定见根 AGENTS.md)。
+ * 问不出来(ps 不可用)同样是空数组:上层把「空」当作「证不出」,不当作「组是空的」。
+ */
+export function processGroupMembersSync(
+  pgid: number,
+): Array<{ pid: number; startedAt: string | null; command: string | null }> {
+  if (IS_WINDOWS || !Number.isInteger(pgid) || pgid <= 1) return [];
+  try {
+    const out = execFileSync("ps", ["-g", String(pgid), "-o", "pid=", "-o", "lstart=", "-o", "command=", "-ww"], {
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C", LANG: "C" },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+      // `pid lstart(固定 24 字符) command`
+      const m = /^(\d+)\s+(.{24})\s+(.*)$/.exec(line);
+      if (!m) return { pid: Number(line.split(/\s+/)[0]) || 0, startedAt: null, command: null };
+      return { pid: Number(m[1]), startedAt: m[2]!.trim(), command: m[3]!.trim() };
+    }).filter((row) => row.pid > 0);
+  } catch {
+    return [];
+  }
+}
+
 export function isProcessGroupAlive(pid: number): boolean {
   if (IS_WINDOWS || !Number.isInteger(pid) || pid <= 1) return false;
   try { process.kill(-pid, 0); return true; }

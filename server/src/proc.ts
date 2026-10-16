@@ -12,7 +12,7 @@
 // **判定只有一份,而且只查一次**(`processIdentity`):答案是三档,「问不出来」是独立的一档。
 // 折成布尔的那一份(`isSameProcess`)只是它的投影,给只需要是/否的两个老使用方用 ——
 // 谁都不许在投影之外再补一次查询,理由见 `processIdentity` 的注释。
-import { inspectProcessSync } from "./platform.js";
+import { inspectProcessSync, processGroupMembersSync } from "./platform.js";
 
 export type ProcessInfo = {
   pid: number;
@@ -100,6 +100,31 @@ export function processIdentity(pid: number, expectedStartedAt?: string | null):
 export function isSameProcess(pid: number, expectedStartedAt?: string | null): boolean {
   const verdict = processIdentity(pid, expectedStartedAt);
   return verdict === "same" || verdict === "unverifiable";
+}
+
+/**
+ * 「这一**组**现在还是不是我们那一代」——**组长已经退了**的那一档。
+ *
+ * 那一刻 `kill(-pgid, 0)` 只能证明组里有人。它证明不了归属:组号就是当初那个 pid,老组退
+ * 干净、同号被另一个 detached 组复用、而新组长也先退出时,长得跟「我们的后代还在」一模一样
+ * (本轮审查 F1-A 实测:一条写着明显不匹配启动时刻的历史行,照旧拿到了杀整组的资格,测试组
+ * 当场被杀)。**「字段非空」不是证据** —— 那个时刻属于已经不在的组长,没有任何活着的东西
+ * 能跟它对上。
+ *
+ * 所以这一问只认**成员自己带着的证据**:它的命令行里有没有我们记下的那条命令原文。哨兵的壳
+ * 是 `sh -lc "<闸><命令原文>"`,它 fork 出来的子壳共享同一份 argv —— 组长退掉之后还留在组里
+ * 的后代,只要还是那个壳的分身就认得出来。
+ *
+ * 认不出来一律 `"unprovable"`(调用方据此记责任、不下刀),包括:ps 不可用(空数组)、
+ * 没给比对物、组里只剩 exec 成别的程序的孙子进程。宁可留一笔「证不出」,也不拿一个号去
+ * 碰别人的整组进程 —— 那是不可逆的、而且外溢到用户的其它工作。
+ */
+export function processGroupOwnership(pgid: number, expectCommand?: string | null): "ours" | "unprovable" {
+  const want = expectCommand?.trim();
+  if (!want) return "unprovable";
+  return processGroupMembersSync(pgid).some((m) => (m.command ?? "").includes(want))
+    ? "ours"
+    : "unprovable";
 }
 
 /**

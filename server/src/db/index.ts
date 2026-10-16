@@ -121,7 +121,8 @@ export async function ensureSchema() {
       attachments TEXT NOT NULL DEFAULT '[]', agent TEXT,
       executor_id TEXT, model TEXT, mode TEXT NOT NULL DEFAULT 'timed', send_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT,
-      delivering_since TEXT, checkpoint_taken TEXT
+      delivering_since TEXT, checkpoint_taken TEXT,
+      review_run TEXT, review_round INTEGER
     );
     CREATE TABLE IF NOT EXISTS monitors (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, command TEXT NOT NULL,
@@ -592,6 +593,10 @@ export async function ensureSchema() {
     // 不是按任务归属人 —— 共享项目里给别人的任务排一条回复,烧的是自己的 key。
     "ALTER TABLE scheduled_messages ADD COLUMN owner_user_id TEXT",
     "ALTER TABLE scheduled_messages ADD COLUMN execution INTEGER NOT NULL DEFAULT 0",
+    // 这条消息续起来的那一轮审查(run + 轮次)。存量行为空 = 不绑任何一轮,
+    // 投递时按显式的「不绑」处理,不退回「查最新那一轮」(本轮审查 F2)。
+    "ALTER TABLE scheduled_messages ADD COLUMN review_run TEXT",
+    "ALTER TABLE scheduled_messages ADD COLUMN review_round INTEGER",
     // 这一轮实际跑在谁名下(= 注入 CLAUDE_CONFIG_DIR/CODEX_HOME 的那个人)。接力搬会话
     // 文件按它找,不按任务归属人 —— 跨人回合两者不是一回事(见 db/schema.ts 同名列)。
     "ALTER TABLE sessions ADD COLUMN run_owner_user_id TEXT",

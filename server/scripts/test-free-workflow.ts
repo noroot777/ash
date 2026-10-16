@@ -618,8 +618,11 @@ try {
     id: "active-review-round-1", runId: "active-review", round: 1, status: "reviewing",
     conclusion: null, startedAt: reviewAt, endedAt: null,
   });
+  // 恢复一条审查会话要带的是**整份身份**:执行器 + 「正在恢复的那一轮」。少了后者,活着的
+  // 审查者再挂哨兵会被判成「这次审查已经结束」(本轮审查 F2)。
   assert.deepEqual(await freeReviewResumeOptions("free-task"), {
-    agent: "codex", executorId: "reviewer-executor", model: "gpt-review", reasoningEffort: "high", sessionRole: "reviewer",
+    agent: "codex", executorId: "reviewer-executor", model: "gpt-review", reasoningEffort: "high",
+    turnSource: { role: "reviewer", review: { run: "active-review", round: 1 } },
   });
 
   const evidence = join(root, "runs", "free-task", "free-review", "active-review", "round-1");

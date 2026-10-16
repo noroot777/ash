@@ -435,14 +435,19 @@ try {
   assert.equal(unreachableAccept.accepted, false, "目标分支不再包含已记录的合并结果时不得盖 accepted");
 
   // 排队消息要持久化回合身份：审查者提问期间排队的答复必须以 reviewer 身份送回。
+  // **身份是「角色 + 为哪一次审查的哪一轮」一整份**:只落角色的那一版,续起来的审查者挂不上
+  // 下一条哨兵(本轮审查 F2;那条链的回归在 test-monitor-wake-role ⑫)。
   const { enqueueMessage } = await import("../src/pending-messages.js");
   const { scheduledMessages } = await import("../src/db/schema.js");
   const queued = await enqueueMessage({
-    taskId: "free-stale-task", text: "【答复】继续", sessionRole: "reviewer",
+    taskId: "free-stale-task", text: "【答复】继续",
+    turnSource: { role: "reviewer", review: { run: "stale-run", round: 3 } },
   });
   const queuedRow = (await db.select().from(scheduledMessages)
     .where(eq(scheduledMessages.id, queued.id))).at(0);
-  assert.equal(queuedRow?.sessionRole, "reviewer", "排队消息必须把 sessionRole 落库，投递时才能恢复身份");
+  assert.equal(queuedRow?.sessionRole, "reviewer", "排队消息必须把角色落库，投递时才能恢复身份");
+  assert.equal(queuedRow?.reviewRun, "stale-run", "连「为哪一次审查」一起落库");
+  assert.equal(queuedRow?.reviewRound, 3, "轮次也要落 —— run.id 跨轮复用");
 
   // stateVersion 是修订号：task.review 事件驱动递增，同一毫秒内两份快照也分得出先后。
   const { freeWorkflowState } = await import("../src/free-workflow-state.js");

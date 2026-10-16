@@ -81,8 +81,13 @@ try {
   await applyFailPolicy(await row("wake-task"), step, "fixture failure", () => "自动唤醒修复");
   await assertExecution("wake-task");
   console.log("actual workflow fail-policy wake resets plan: passed");
-  for (const route of [{ sideTurn: true }, { sessionRole: "reviewer" as const }]) {
-    const taskId = route.sideTurn ? "side-task" : "review-task";
+  for (const route of [
+    { sideTurn: true },
+    // 审查者那一段:回合身份是「角色 + 为哪一次审查而起」一个对象(runs.ts `TurnSource`)。
+    // 这个用例只关心「reviewer 回合不动已存的计划」,跟哪一轮审查无关,所以显式写不绑。
+    { turnSource: { role: "reviewer", review: "unbound" } as const },
+  ]) {
+    const taskId = "sideTurn" in route ? "side-task" : "review-task";
     await create(taskId, { status: "done" });
     const before = (await row(taskId)).cliState;
     await continueTask(taskId, "旁路核对", { system: "run", agent: "codex", executorId: "reviewer-profile", ...route });

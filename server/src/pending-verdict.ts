@@ -117,7 +117,20 @@ export function deliveryOptions(m: Row) {
     executorId: m.executorId ?? null,
     model: m.model ?? null,
     reasoningEffort: m.reasoningEffort ?? null,
-    ...(m.sessionRole ? { sessionRole: m.sessionRole as "single" | "reviewer" } : {}),
+    // **回合身份照原样还原**:角色 + 它当初绑的那一次审查(见 schema 的 review_run 注释)。
+    // 两列为空的 reviewer 行(存量消息、排队时压根不在审查里的回复)还原成显式的
+    // `"unbound"` —— 不许在这里现查「现在是哪一次审查」补上去:投递离排队可能隔着几分钟,
+    // 那一查会把旧消息绑到新一轮审查上(第 10 轮审查 F1 的错投来源)。
+    ...(m.sessionRole === "reviewer"
+      ? {
+        turnSource: {
+          role: "reviewer" as const,
+          review: m.reviewRun ? { run: m.reviewRun, round: m.reviewRound ?? 1 } : ("unbound" as const),
+        },
+      }
+      : m.sessionRole
+        ? { turnSource: { role: "single" as const } }
+        : {}),
     // 排队/定时消息落地时,烧的仍是**当时排队那个人**的 key,不退回任务归属人。
     ...(m.ownerUserId ? { actingUserId: m.ownerUserId } : {}),
     // 执行型消息的意图跟着行走,重投也不丢(第 5 轮审查:首次交接传了 executionTurn,

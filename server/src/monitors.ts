@@ -158,7 +158,7 @@ export function attach(row: Row, onExit?: (cb: (code: number | null) => void) =>
     // 结果的那两档才收尾,`unknown` 就等下一个两秒再问 —— 而「判得出」的判据只有
     // `processIdentity` 那一份(一次快照、纯比较),不是某个布尔的假值(第 7 轮审查 F1)。
     const liveness = setInterval(() => {
-      const state = reclaimState(row.pid ?? 0, row.pidStartedAt);
+      const state = reclaimState(row.pid ?? 0, row.pidStartedAt, row.command);
       if (state === "gone") {
         void finish(row.id, "exited", "命令已经不在了（server 重启期间跑完的，拿不到退出码）", null);
       } else if (state === "not-ours") {
@@ -371,7 +371,7 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
     // 已经不是运行态了。**但「卡片上写着停了」不等于那个进程真的没了**:win32 那一侧没有
     // 放行闸(见 monitor-spawn.ts),① 的取消标记落下时命令可能已经开工。所以这里按**资源
     // 责任**再核一遍而不是看状态就返回 —— 这正是前几轮反复钉的那条判据。
-    if (row.pid && reclaimState(row.pid, row.pidStartedAt) !== "gone") {
+    if (row.pid && reclaimState(row.pid, row.pidStartedAt, row.command) !== "gone") {
       const outcome = await reclaimMonitorProcess(row, `${reason}（创建期取消后补收）`, { fresh: true });
       if (await settleReclaim(outcome) === "unaccounted") {
         console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
@@ -558,7 +558,7 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       }
       row = adopted;   // 认回来了:下面按正常身份走(接回 / 收尾 / 记责任),不再有特殊分支
     }
-    const state = reclaimState(row.pid!, row.pidStartedAt);
+    const state = reclaimState(row.pid!, row.pidStartedAt, row.command);
     // `unverifiable`(当初没记下启动时刻 / 边条认回来时 ps 不可用)跟 `unknown` 同一档处理:
     // **什么都不许声称,所以照旧接回来**。它仍然在界面上、仍然能被点停、日志还在收,而
     // 「不敢下刀」这件事由回收层那一侧保证(第 9 轮审查 F3)。写成 `lost` 反而是撒谎。

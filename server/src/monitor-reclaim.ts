@@ -173,7 +173,7 @@ async function accountForLiveProcesses(
   // 「还收不干净」就得核对 —— 判据是 `reclaimState` 的那四档不确定,**不是**「卡片是不是
   // running」。`unknown`(ps 这一问自己失败了)也在里面:它恰恰是最该留责任的一档,原来却被
   // 当成「没什么可收」放行了(第 6 轮审查 F1 实测的那条路)。
-  const risky = rows.filter((r) => r.pid !== null && reclaimState(r.pid, r.pidStartedAt) !== "gone");
+  const risky = rows.filter((r) => r.pid !== null && reclaimState(r.pid, r.pidStartedAt, r.command) !== "gone");
   if (!risky.length) return;
   const held = await heldReclaimDebts(risky.map((r) => r.id));
   const unaccounted: MonitorRow[] = [];
@@ -270,7 +270,7 @@ export async function reclaimUnconfirmedStops(): Promise<number> {
     .from(monitors)
     .where(and(isAshKind, isNotNull(monitors.pid), ne(monitors.status, "running")));
   // 先用最便宜的那一问(`kill(-pgid, 0)`)把绝大多数历史行筛掉,ps 只对组还活着的那几条问。
-  const live = rows.filter((r) => reclaimState(r.pid!, r.pidStartedAt) !== "gone");
+  const live = rows.filter((r) => reclaimState(r.pid!, r.pidStartedAt, r.command) !== "gone");
   if (!live.length) return 0;
   console.error(`[ash] 开机发现 ${live.length} 条「已停止但进程组还活着」的哨兵，按责任重收一遍`);
   await accountForLiveProcesses(live, "上一辈子把它停了，但退出从没被确认", { fatal: false });

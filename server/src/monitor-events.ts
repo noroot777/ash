@@ -16,7 +16,7 @@ import type { AgentType } from "@ash/shared";
 import { mergeMonitorEventText, monitorMessageOrigin } from "@ash/shared/monitor";
 import { db, dbClient } from "./db/index.js";
 import { monitors, scheduledMessages, tasks } from "./db/schema.js";
-import { monitorWakeExecutor, monitorWakeGate } from "./monitor-session.js";
+import { monitorTurnSource, monitorWakeExecutor, monitorWakeGate } from "./monitor-session.js";
 import { enqueueMessage, flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
 
 type Row = typeof monitors.$inferSelect;
@@ -107,7 +107,11 @@ export async function mergeOrEnqueueMonitorEvent(
     const executor = await monitorWakeExecutor(row.sourceReviewRun, row.sourceReviewRound);
     await enqueueMessage({
       taskId: row.taskId, text, origin: monitorMessageOrigin(row.id),
-      ownerUserId: row.ownerUserId, sessionRole: row.sourceRole,
+      ownerUserId: row.ownerUserId,
+      // **角色和「为哪一次审查的哪一轮」一起交出去**:两样都记在哨兵行上,所以投递那一刻
+      // 不必现查。只带角色的那一版会让续起来的审查者挂不上下一条哨兵 —— 身份里 review=null,
+      // 来源核验据此判「这次审查已经结束」(本轮审查 F2 实测 HTTP 409)。
+      turnSource: monitorTurnSource(row),
       ...(executor
         ? {
           agent: executor.agent as AgentType,

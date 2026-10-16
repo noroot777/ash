@@ -37,6 +37,7 @@ import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
 import { freeReviewRuns, monitors, scheduledMessages, tasks } from "./db/schema.js";
 import { turnIdentity } from "./runs.js";
+import type { TurnSource } from "./runs.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -386,6 +387,29 @@ export async function monitorEventSource(
     .from(monitors)
     .where(eq(monitors.id, monitorId))).at(0);
   return row ?? null;
+}
+
+/**
+ * **这条哨兵醒来时该以什么身份续跑**:角色 + 它当初绑的那一次审查的那一轮。
+ *
+ * 两样都在哨兵行上(`source_role` / `source_review_run` / `source_review_round`),所以这里
+ * 只是把它们拼成回合身份那一个对象(runs.ts 的 `TurnSource`),**不现查**「现在是哪一次审查」
+ * —— 投递可能发生在几分钟之后,那一查在派审交接期会把旧哨兵的事件绑到新审查上
+ * (第 10 轮审查 F1)。
+ *
+ * 审查者挂的哨兵却没记下代次(存量行)⇒ 显式的 `"unbound"`:它续起来的那一轮不代表任何
+ * 一轮审查。这跟「按最新那一轮算」是两件事,后者正是上面那条错投(本轮审查 F2)。
+ */
+export function monitorTurnSource(
+  row: { sourceRole: string | null; sourceReviewRun: string | null; sourceReviewRound: number | null },
+): TurnSource | null {
+  if (row.sourceRole !== "reviewer") return row.sourceRole ? { role: "single" } : null;
+  return {
+    role: "reviewer",
+    review: row.sourceReviewRun
+      ? { run: row.sourceReviewRun, round: row.sourceReviewRound ?? 1 }
+      : "unbound",
+  };
 }
 
 /**

@@ -119,18 +119,7 @@ async function deleteIntent(monitorId: string): Promise<void> {
     .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running")));
 }
 
-/**
- * 同一笔,**失败只出声** —— 给所有权边界**之前**那几条出口用(spawn 还没成功,没有进程、没有
- * 任何要交接的东西,这一行留着也只是脏数据)。边界之内那一条必须落定,所以走
- * `settleIntentRow` + 重试阶梯,不走这里(第 10 轮审查 F3)。
- */
-async function dropIntent(monitorId: string): Promise<void> {
-  try {
-    await deleteIntent(monitorId);
-  } catch (e) {
-    console.error(`[ash] 哨兵登记行清不掉 monitor=${monitorId}（它没有 pid，启动恢复会把它判掉）:`, detail(e));
-  }
-}
+
 
 /**
  * 创建没走完时**那一行的结局**:要么删掉(进程确认收干净了,界面上跟没点过一样),要么写成
@@ -186,8 +175,27 @@ function scheduleIntentSettle(row: Row, settle: IntentSettlement, attempt = 0): 
   timer.unref?.();
 }
 
+/**
+ * **收口的唯一入口**:落定这一行的结局,落不下去就排重试(`scheduleIntentSettle`)。
+ *
+ * 登记之后的**每一条**失败出口都走它 —— 包括起进程失败那两条(spawn 同步抛、spawn 返回
+ * error)。那两条上一版走的是「捕获异常、只记一行日志」的旧函数:一次 SQLite 抖动就留下
+ * 一条永久 `running` 的登记行,没有 tail、没有到期定时器、没有退出回调,到期也不会有结果,
+ * 攒满四条就再也创建不了哨兵 —— 而要恢复只能重启服务(本轮审查 F3 实测
+ * `afterDeadline=[{status:"running",pid:null}]`)。「拿到句柄之后才有人重试」不是个合理的
+ * 边界:那一行是在**起进程之前**就插进去的。
+ */
+async function settleIntent(row: Row, settle: IntentSettlement): Promise<void> {
+  try {
+    await settleIntentRow(row, settle);
+  } catch (e) {
+    console.error(`[ash] 哨兵 ${row.id} 的创建失败状态没能落进库,已排重试:`, detail(e));
+    scheduleIntentSettle(row, settle);
+  }
+}
+
 /** 创建期能动手的那一面句柄:**所有权由它本身证明**,不经过 pid 身份判定(见文件头)。 */
-type SpawnHandle = Pick<SpawnedMonitor, "abandon" | "kill" | "waitExit">;
+type SpawnHandle = Pick<SpawnedMonitor, "abandon" | "kill" | "waitExit" | "commandMayHaveStarted">;
 
 /** 拿句柄收掉它、并**等一个真的退出事件**。拿不到就落回 pid 那条回收圈。 */
 async function releaseProcess(row: Row, reason: string, handle?: SpawnHandle): Promise<ReclaimVerdict> {
@@ -198,7 +206,13 @@ async function releaseProcess(row: Row, reason: string, handle?: SpawnHandle): P
     //    那个 ChildProcess 的结局本身。于是「ps 不可用」或「身份没记全」都不妨碍这一档。
     handle.abandon();
     handle.kill();
-    if (await handle.waitExit(2_000)) return "reclaimed";
+    // **根退了不等于整项资源退了**(本轮审查 F1-B)。`waitExit` 证明的是这个 ChildProcess
+    // (壳的根)走了;命令一旦开工过,它派生的后台进程不随根退出而消失 —— win32 没有闸,
+    // ③ 之前就可能开工,而那一侧 `taskkill /T` 也只在根还活着时走得通那棵树。所以只有
+    // 「命令从未开工」这一档敢当场销账:那时壳底下什么都没有,根的 exit 就是全部。
+    // 开工过的一律落到下面的回收圈 —— 它按**当前归属证据**判(组成员的 argv,见
+    // proc.ts 的 `processGroupOwnership`),证得出就收掉,证不出就留责任,绝不冒充收干净。
+    if (await handle.waitExit(2_000) && !handle.commandMayHaveStarted()) return "reclaimed";
   }
   // 句柄没等到(或压根没有句柄:启动恢复那一侧)⇒ 照旧走完整的回收圈:落责任 → 发信号 →
   // 确认退出 → 销账。身份不全时那一圈不会下刀(proc.ts 的 `unverifiable`),但责任一定留下来。
@@ -264,12 +278,7 @@ async function abortRegistration(
       kind: "lost",
       reason: kind === "failed" ? `没能记下它的 pid：${why}。${note}` : `创建没走完：${why}。${note}`,
     };
-  try {
-    await settleIntentRow(row, settle);
-  } catch (e) {
-    console.error(`[ash] 哨兵 ${row.id} 的创建失败状态没能落进库,已排重试:`, detail(e));
-    scheduleIntentSettle(row, settle);
-  }
+  await settleIntent(row, settle);
   publish(row.taskId);
   // 时间线上先写过一句「哨兵已起」时必须留一句更正 —— 不然看时间线的人只会看到「起了」,
   // 而那条命令其实一个字都没跑。
@@ -506,11 +515,13 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     try {
       spawned = spawnMonitor({ command, cwd, logPath });
     } catch (e) {
-      await dropIntent(monitorId);
+      // 起不起来都一样要**落定**这一行:它是在起进程之前就插进去的,没人会来接管它
+      // (没有 attach、没有到期定时器)。删不掉就排重试,不是记一行日志就算完(F3)。
+      await settleIntent(intent, { kind: "drop" });
       return { ok: false, status: 409, error: `哨兵起不来，那条命令一个字都没开始跑：${detail(e)}` };
     }
     if ("error" in spawned) {
-      await dropIntent(monitorId);
+      await settleIntent(intent, { kind: "drop" });
       return { ok: false, status: 409, error: spawned.error };
     }
 

@@ -174,7 +174,11 @@ async function launchSegment(
         executorId: run.executorId,
         model: run.model,
         reasoningEffort: run.reasoningEffort,
-        sessionRole: "reviewer",
+        // **辩论段不代表任何一轮审查**:这条链此刻的状态是 debating,不是 reviewing。
+        // 所以这里显式写「不绑」—— 它换来的行为正是对的:这一轮挂不上「本轮审查」的
+        // 哨兵(来源核验会说那次审查已经不在进行)。写成某一轮才是撒谎(本轮审查 F2
+        // 的判据:reviewer 必须说出自己为哪一轮而起,包括说清自己不为任何一轮)。
+        turnSource: { role: "reviewer", review: "unbound" },
       }
     // 执行者那一段回到任务自己的会话（它的上文里就是这版代码怎么来的）。仍是旁路
     // 回合：任务的终态、验收阶段一律不动。

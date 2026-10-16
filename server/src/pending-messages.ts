@@ -34,7 +34,8 @@ import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
 import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
 import { taskStartStatus } from "./task-start-status.js";
-import { releaseTurn, whenTurnIdle } from "./runs.js";
+import { releaseTurn, turnSourceReview, whenTurnIdle } from "./runs.js";
+import type { TurnSource } from "./runs.js";
 import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
@@ -76,7 +77,13 @@ export function pendingMessageRow(input: {
   executorId?: string | null;
   model?: string | null;
   reasoningEffort?: string | null;
-  sessionRole?: string | null;
+  /**
+   * 投递这条消息时要恢复的**回合身份**(见 runs.ts 的 `TurnSource`):角色 + 为哪一次审查的
+   * 哪一轮。两样一起落库(`session_role` + `review_run`/`review_round`),所以投递那一刻不必
+   * 现查「现在是哪一次审查」—— 那条现查会把旧请求绑到新审查上(第 10 轮审查 F1),而只带角色
+   * 不带代次则会让续起来的审查者挂不上哨兵(本轮审查 F2)。
+   */
+  turnSource?: TurnSource | null;
   /** 谁发的这条(多人模式);投递时按它解析执行器与 CLI 环境。 */
   ownerUserId?: string | null;
   /** 不是真人写的那种消息的来源标记(`monitor:<id>`)。null = 用户自己发的。 */
@@ -96,7 +103,9 @@ export function pendingMessageRow(input: {
     executorId: input.executorId ?? null,
     model: input.model ?? null,
     reasoningEffort: input.reasoningEffort ?? null,
-    sessionRole: input.sessionRole ?? null,
+    sessionRole: input.turnSource ? input.turnSource.role : null,
+    reviewRun: turnSourceReview(input.turnSource)?.run ?? null,
+    reviewRound: turnSourceReview(input.turnSource)?.round ?? null,
     ownerUserId: input.ownerUserId ?? null,
     origin: input.origin ?? null,
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),

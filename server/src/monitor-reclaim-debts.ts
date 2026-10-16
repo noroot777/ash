@@ -58,7 +58,7 @@ import { monitorReclaimDebts, monitors } from "./db/schema.js";
 import { killByPid } from "./executors/spawn.js";
 import { clearSpawnIdentity, readSpawnIdentity } from "./monitor-spawn.js";
 import { IS_WINDOWS, isPidAlive, isProcessGroupAlive, killTree } from "./platform.js";
-import { processIdentity, processStartedNear } from "./proc.js";
+import { processGroupOwnership, processIdentity, processStartedNear } from "./proc.js";
 import { now } from "./util.js";
 
 /**
@@ -125,18 +125,28 @@ const stateOfIdentity = (who: ReturnType<typeof identityOf>): ReclaimState =>
     : who === "theirs" ? "not-ours"
       : who === "unverifiable" ? "unverifiable" : "unknown";
 
-export function reclaimState(pid: number, pidStartedAt: string | null): ReclaimState {
+/**
+ * `command` = 当初记下的命令原文。**组长已退那一档全靠它**(见下面那段注释):没有它就等于
+ * 没有任何当前证据,一律落到「证不出」。活根那一档不用它(身份由 pid + 启动时刻证明)。
+ */
+export function reclaimState(
+  pid: number, pidStartedAt: string | null, command?: string | null,
+): ReclaimState {
   if (!IS_WINDOWS) {
     if (!isProcessGroupAlive(pid)) return "gone";
     // 组里有人。组长还在吗 —— 这一问要用 `kill(pid,0)` 而不是 ps:ps 失败时 null 会被
     // 当成「组长已退」,于是一整组陌生进程被说成我们的后代。
     //
-    // **组长已退也要有可验证的代次才算我们的**(第 10 轮审查 F2-A)。上一版这一档不看
-    // `pidStartedAt` 就直接回 `ours-orphans`,而那一档在 `fresh` 下是**发组击杀信号**的 ——
-    // 于是「当初没记下启动时刻」的行(存量行、回填那一刻 ps 不可用的行)从活根那条路被拒掉之后,
-    // 又从这条路绕回了下刀资格:组号就是当初那个 pid,老组退干净、同号被另一组复用且新组长
-    // 先退出时,我们手里没有任何东西能证明这一组是自己的后代。证不出就留「不知道」。
-    if (!isPidAlive(pid)) return pidStartedAt ? "ours-orphans" : "unverifiable";
+    // **组长已退时,归属只能由还活着的成员自己证明**(本轮审查 F1-A)。
+    //
+    // 第 10 轮在这里加的条件是「`pidStartedAt` 非空」,那一步不够:那个时刻属于**已经不在的
+    // 组长**,组里没有任何活着的东西能跟它对上,所以它只是「当初记过一笔」,不是当前归属的
+    // 证据。实测里一条写着 `Mon Jan 1 00:00:00 2001` 的历史行照旧拿到了杀整组的资格,审查
+    // 的测试组当场被杀。判据换成成员自己带着的证据(命令原文出现在它的 argv 里,
+    // 见 proc.ts 的 `processGroupOwnership`),证不出就留「不知道」:记责任、不下刀。
+    if (!isPidAlive(pid)) {
+      return processGroupOwnership(pid, command) === "ours" ? "ours-orphans" : "unverifiable";
+    }
     return stateOfIdentity(identityOf(pid, pidStartedAt));
   }
   // win32 没有进程组这回事,`killTree` 打的是 `taskkill /T` 那棵树,能问的只有这个 pid 本身。
@@ -153,11 +163,11 @@ export function reclaimState(pid: number, pidStartedAt: string | null): ReclaimS
  * 返回 false 不是失败,是「这一刻还确认不了」:责任已经落盘,接着由梯子和启动期清扫推。
  */
 export async function confirmReclaimed(
-  pid: number, pidStartedAt: string | null, deadlineMs = 3_000,
+  pid: number, pidStartedAt: string | null, deadlineMs = 3_000, command?: string | null,
 ): Promise<boolean> {
   const until = Date.now() + deadlineMs;
   for (;;) {
-    if (isReclaimedState(reclaimState(pid, pidStartedAt))) return true;
+    if (isReclaimedState(reclaimState(pid, pidStartedAt, command))) return true;
     if (Date.now() >= until) return false;
     // **这一发不能 unref**:我们正在 await 它。unref 掉的话,当它是事件循环里唯一的待办时
     // 进程会直接退出 —— 等待本身就没了(实测:测试进程报 unsettled top-level await)。
@@ -250,6 +260,8 @@ export type ReclaimTicket = {
   monitorId: string;
   pid: number;
   pidStartedAt: string | null;
+  /** 命令原文:「组长已退、组里还有人」那一档的归属证据就是它(见 `reclaimState`)。 */
+  command: string;
 };
 
 /** 需要补记的那一笔(落盘失败时原样带着,供重试)。 */
@@ -343,7 +355,7 @@ export async function reclaimMonitorProcess(
   // **先补身份再判档**:补得上就按完整身份走(该杀的杀、该销的销),补不上才落到「不知道」。
   const identity = await completeIdentity({ ...m, pid });
   const pidStartedAt = identity.pidStartedAt;
-  const state = reclaimState(pid, pidStartedAt);
+  const state = reclaimState(pid, pidStartedAt, m.command);
   if (isReclaimedState(state)) {
     // 顺手把上辈子留下的那笔销掉:这是唯一能确认「它真的不在了」的时刻。
     await clearReclaimDebt(m.id);
@@ -358,7 +370,7 @@ export async function reclaimMonitorProcess(
   const accounted = await noteReclaimDebt(debt);
   if (state === "ours-alive" || (state === "ours-orphans" && opts.fresh)) killByPid(pid);
   if (!accounted) return { state: "unaccounted", debt };
-  return { state: "owed", ticket: { monitorId: m.id, pid, pidStartedAt } };
+  return { state: "owed", ticket: { monitorId: m.id, pid, pidStartedAt, command: m.command } };
 }
 
 /** 落在账本上的那句「为什么还没收掉」。按档说清楚,别让人事后分不出是哪一种不确定。 */
@@ -389,7 +401,7 @@ export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000)
   if (outcome.state === "unaccounted") {
     const { debt } = outcome;
     // 库可能只是忙了一下:再确认一遍退出,没退就立刻重试落盘,仍然不行才往上报。
-    if (await confirmReclaimed(debt.pid, debt.pidStartedAt, deadlineMs)) return "reclaimed";
+    if (await confirmReclaimed(debt.pid, debt.pidStartedAt, deadlineMs, debt.command)) return "reclaimed";
     if (await noteReclaimDebt(debt)) {
       scheduleReclaimRetry(debt.monitorId);
       return "owed";
@@ -402,7 +414,7 @@ export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000)
     return "unaccounted";
   }
   const { ticket } = outcome;
-  if (await confirmReclaimed(ticket.pid, ticket.pidStartedAt, deadlineMs)) {
+  if (await confirmReclaimed(ticket.pid, ticket.pidStartedAt, deadlineMs, ticket.command)) {
     await clearReclaimDebt(ticket.monitorId);
     return "reclaimed";
   }
@@ -424,7 +436,7 @@ function scheduleReclaimPersist(debt: DebtInput, step = 0): void {
   if (step >= LADDER_MS.length) return;
   const timer = setTimeout(() => {
     void (async () => {
-      if (isReclaimedState(reclaimState(debt.pid, debt.pidStartedAt))) return;
+      if (isReclaimedState(reclaimState(debt.pid, debt.pidStartedAt, debt.command))) return;
       if (await noteReclaimDebt(debt)) {
         console.error(`[ash] 回收责任补记成功 monitor=${debt.monitorId} pid=${debt.pid}`);
         scheduleReclaimRetry(debt.monitorId);
@@ -459,7 +471,7 @@ async function settleDebt(monitorId: string): Promise<boolean> {
     command: debt.command, spawnAnchorMs: debt.spawnAnchorMs,
   });
   debt = { ...debt, pidStartedAt };
-  const state = reclaimState(debt.pid, debt.pidStartedAt);
+  const state = reclaimState(debt.pid, debt.pidStartedAt, debt.command);
   if (isReclaimedState(state)) {
     await clearDebtAndAnchor(monitorId);
     return true;
@@ -472,7 +484,7 @@ async function settleDebt(monitorId: string): Promise<boolean> {
     // 组里有人)在隔了一次重启之后跟「别人拿这个号当过组长」长得一模一样。那一档留着每次
     // 开机再问一遍,不下刀 —— 杀错人不可逆(同一个判据见 `reclaimMonitorProcess` 的 `fresh`)。
     killTree(debt.pid, "SIGKILL");
-    if (await confirmReclaimed(debt.pid, debt.pidStartedAt, 1_000)) {
+    if (await confirmReclaimed(debt.pid, debt.pidStartedAt, 1_000, debt.command)) {
       await clearDebtAndAnchor(monitorId);
       console.error(`[ash] 回收责任已销账 monitor=${monitorId} pid=${debt.pid}（补杀成功）`);
       return true;
