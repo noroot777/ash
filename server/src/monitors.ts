@@ -11,6 +11,12 @@
 //
 // ② **一条事件 = 唤醒一次 = 一个真实的模型回合。** 所以合并是第一位的：同一个哨兵还没
 //    送出去的事件直接往那一行后面追加，agent 一次醒来看完全部；而不是一行一个回合。
+//
+// ③ **这个文件是真正拥有哨兵进程的那一层**,所以「回收责任」这一圈归它走:凡是把一条哨兵
+//    写成非运行态的地方(用户点停、到期、推满上限、命令自己退出、启动接回判无出口、创建
+//    后登记失败),都必须先落责任、再发信号、确认退出才销账。只装在删除/审查收尾那两个
+//    包装函数里是不够的 —— 其余每一条停止路径都会绕过它(第 5 轮审查 F1,现场见
+//    monitor-reclaim-debts.ts 文件头)。
 import { and, desc, eq } from "drizzle-orm";
 import {
   MONITOR_BATCH_MS,
@@ -29,7 +35,7 @@ import {
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, projects, sessions, tasks } from "./db/schema.js";
-import { killByPid } from "./executors/spawn.js";
+import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { monitorLogPath, readLogTail, spawnMonitor, tailLines, type Tailer } from "./monitor-spawn.js";
 import { pushToTask } from "./monitor-events.js";
 import { monitorSourceGate, monitorWakeGate } from "./monitor-session.js";
@@ -235,8 +241,12 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       await db.insert(monitors).values(row);
     } catch (e) {
       // 登记失败就把刚起的进程收回来：留着它就是一个谁都看不见、也停不掉的后台命令。
-      killByPid(spawned.pid);
-      return { ok: false, status: 409, error: `哨兵登记失败，已回收它的进程：${e instanceof Error ? e.message : String(e)}` };
+      // 走的是跟 `finish` 同一圈(落责任 → 发信号 → 确认退出 → 销账):这一行没进库,
+      // **责任表是它唯一的线索**,少了这一笔就等于谁都不知道它存在过。
+      const ticket = await reclaimMonitorProcess(row, "哨兵登记失败，进程一并收回", { fresh: true });
+      const reclaimed = ticket === null || await settleReclaim(ticket);
+      const tail = reclaimed ? "已回收它的进程" : "进程还没确认退出，回收责任已记下（开机会再收一次）";
+      return { ok: false, status: 409, error: `哨兵登记失败，${tail}：${e instanceof Error ? e.message : String(e)}` };
     }
     attach(row, spawned.onExit);
     publish(row.taskId);
@@ -390,7 +400,13 @@ export async function finish(
   if (dbClient.closed) return;
   const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   if (!row || row.status !== "running") return;
-  if (row.pid && isSameProcess(row.pid, row.pidStartedAt)) killByPid(row.pid);
+  // **回收这个进程的责任从这里起**(见文件头第 ③ 条)。`fresh: true` 的依据就是上面那一行
+  // 判断:这一行此刻还是 running,进程是我们自己起的或刚接回的,所以「组长死了、组里还有人」
+  // 这一档也敢下刀 —— 那几个只可能是它的后代。
+  //
+  // 记账排在**改状态之前**:顺序一反,中间崩一下这一行就成了「显示已停止、责任没人认、
+  // pid 线索下一步就被删除抹掉」(第 4、5 轮审查 F1 都是这个现场)。
+  const ticket = await reclaimMonitorProcess(row, reason, { fresh: true });
   await db
     .update(monitors)
     .set({ status, endedAt: now(), endedReason: reason, exitCode })
@@ -400,6 +416,10 @@ export async function finish(
   const total = (await db.select({ events: monitors.events }).from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
   await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（共推送 ${total} 条事件）`);
   if (notify) await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`);
+  // **确认退出放在最后**:状态、时间线、通知都已落定,这一步只负责「能销的账销掉」。
+  // 它会等到补刀生效(有界,见 `confirmReclaimed`)—— 于是这个函数返回时,要么进程确认不在了,
+  // 要么责任稳稳地留在账本上。两者之外没有第三种出口。
+  if (ticket) await settleReclaim(ticket);
 }
 
 export type StopMonitorResult =
@@ -572,7 +592,13 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       attach(row);
       attached += 1;
     } else {
+      // 组长认不出来了。但「组长不在」不等于「这一组空了」:它派生的、忽略 TERM 的那个
+      // 可能还在组里跑着。所以这一支也要问一遍责任 —— `fresh: false`,隔了一次重启不敢
+      // 下刀(这个号可能已经被别人当组长用过),但认得出是我们的就把责任记下来,交给
+      // 启动期清扫和梯子(第 5 轮审查 F1 的同类位置)。
+      const ticket = await reclaimMonitorProcess(row, "server 重启后认不出它的组长了", { fresh: false });
       await finishOffline(row, "lost", "server 重启后这个进程已经不在了（它在停服期间跑完的，拿不到退出码）");
+      if (ticket) await settleReclaim(ticket);
       lost += 1;
     }
   }

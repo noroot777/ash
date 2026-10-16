@@ -21,7 +21,7 @@ requireTmpDb("monitors");
 
 export const [
   { db, ensureSchema }, schema, monitorsModule, monitorEvents, status, { isPidAlive }, pending, { continueTask }, runs,
-  taskRoutes, { stopAllMonitorRecovery },
+  taskRoutes, { stopAllMonitorRecovery }, { inspectProcess },
 ] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
@@ -34,6 +34,7 @@ export const [
   import("../src/runs.js"),
   import("../src/task-routes.js"),
   import("../src/claude-monitor-recovery.js"),
+  import("../src/proc.js"),
 ]);
 export const { mountTaskRoutes } = taskRoutes;
 export const { startMonitor, stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachMonitors, detachAllMonitors } =
@@ -74,6 +75,49 @@ export async function makeTask(opts: { mode?: string; status?: string } = {}): P
     agentType: "claude", mode: opts.mode ?? "single", createdAt: now(), updatedAt: now(),
   });
   return taskId;
+}
+
+/** 一次正在进行的审查（默认第 1 轮）。 */
+export async function reviewInFlight(
+  taskId: string, runId: string, opts: { round?: number; live?: boolean } = {},
+): Promise<void> {
+  await db.insert(schema.freeReviewRuns).values({
+    id: runId, taskId, reviewerName: "审查者", agentType: "codex", checkMode: "logic",
+    status: "reviewing", currentRound: opts.round ?? 1, createdAt: now(), updatedAt: now(),
+  });
+  if (opts.live !== false) {
+    await db.insert(sessions).values({
+      id: `s-${runId}`, taskId, role: "reviewer", agentType: "codex", executor: "审查者",
+      cwd: root, startedAt: now(), agentPid: process.pid,
+      agentStartedAt: inspectProcess(process.pid)?.startedAt ?? null,
+    });
+  }
+}
+
+/**
+ * 直接插一条哨兵行。
+ *
+ * 用在「创建方已经在锁里登记成功」这个时刻上 —— 真正的 `startMonitor` 会去抢同一把
+ * `task:<id>` 锁，在测试里拿着锁调它就是自锁，所以这里用一条等价的行站它的位。
+ */
+export async function insertMonitorRow(
+  taskId: string,
+  opts: { reviewRun?: string; round?: number; status?: string; pid?: number; pidStartedAt?: string | null } = {},
+): Promise<string> {
+  const id = uniq("mon");
+  await db.insert(monitors).values({
+    id, taskId, command: "sleep 120", description: "站位", cwd: root,
+    status: opts.status ?? "running", pid: opts.pid ?? null, pidStartedAt: opts.pidStartedAt ?? null,
+    logPath: `${root}/${id}.log`, offset: 0, events: 0, exitCode: null,
+    startedAt: now(), expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    endedAt: null, endedReason: null, ownerUserId: null, kind: "ash",
+    nativeId: null, cliSessionId: null, toolUseId: null, sourceRun: null, startLowAt: null,
+    sourceRole: "reviewer", sourceReviewRun: opts.reviewRun ?? null,
+    sourceReviewRound: opts.round ?? null, sourceLifetime: "bounded", lifetimeEvidence: "self",
+    sourcePid: null, sourcePidStartedAt: null, startEvidence: "observed",
+    startAnchorWidthMs: 0, timeoutMs: 600_000,
+  });
+  return id;
 }
 
 export const pendingOf = (taskId: string) =>

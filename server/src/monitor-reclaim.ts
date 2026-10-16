@@ -13,22 +13,26 @@
 // ③ **「审查还在进行」推不出「用户仍然允许这个任务的资源继续存在」。** 所以入口要带显式的
 //    生命周期意图,不靠 reason 那段自由文本猜(第 2 轮审查 F2)。
 // ④ **撤销是一段时间,不是一个瞬间**,而且**「停止函数正常返回」不等于资源已经回收**。
-//    `finish` 发完信号就写停止态返回(SIGTERM + 两秒后那把 unref 的补刀),所以这一侧的不变量
-//    只能是:**销毁持久身份之前,每一条要么已确认退出、要么回收责任已经可靠落盘**。于是
-//    - 责任在**发信号之前**就落盘,确认退出之后才销账(monitor-reclaim-debts.ts);
-//    - 连责任都落不下、又确认不了退出时,销毁那条路(删除)整笔中止;
-//    - 连枚举都失败时同样整笔不许往下走(第 3、4 轮审查 F1)。
+//    不变量是:**销毁持久身份之前,每一条要么已确认退出、要么回收责任已经可靠落盘**。
+//    那一圈(落责任 → 发信号 → 确认退出 → 销账)**住在运行时收尾层**(`monitors.ts` 的
+//    `finish`),不在这个文件里 —— 装在这边的包装函数上时,用户点停、到期、推满上限、启动
+//    接回判无出口、创建后登记失败全都绕过了它(第 5 轮审查 F1)。
+//    所以这一侧只剩两件事:
+//    - `destroy` 之前**按资源责任核对一遍**(`accountForLiveProcesses`):判据是「这一行的
+//      进程组还活着吗」和「账本上有人认它吗」,**不是卡片状态是不是 running** —— 先点停再
+//      删除的那条路上,行早就是 stopped 了,照状态过滤等于整条跳过(审查实测:删除后
+//      debtRows=0、命令仍活);
+//    - 连责任都落不下、又确认不了退出时,销毁那条路(删除)整笔中止;连枚举都失败时同样
+//      整笔不许往下走(第 3、4 轮审查 F1)。
 //    「不许再创建」是同一条不变量的另一半,在 monitor-session.ts 的资格闸里;「重启之后谁来
 //    问一遍」在 `reattachMonitors`(按同一份出口资格)和启动期的债务清扫里。
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRuns, monitors } from "./db/schema.js";
-import { killByPid } from "./executors/spawn.js";
 import { cancelPendingMonitorEvents } from "./monitor-events.js";
-import { clearReclaimDebt, confirmReclaimed, noteReclaimDebt, reclaimState, scheduleReclaimRetry } from "./monitor-reclaim-debts.js";
+import { heldReclaimDebts, reclaimMonitorProcess, reclaimState, settleReclaim } from "./monitor-reclaim-debts.js";
 import { isReviewSourceActive } from "./monitor-session.js";
 import { finish, isAshKind, serialize } from "./monitors.js";
-import { isSameProcess } from "./proc.js";
 
 /**
  * **为什么来收**。回收入口不能靠 reason 那段自由文本猜语义：
@@ -79,8 +83,8 @@ async function stopMonitorsForTaskLocked(
   // 所属审查还有效,它就仍有消费价值。
   const all = await db
     .select({
-      id: monitors.id, status: monitors.status, pid: monitors.pid, pidStartedAt: monitors.pidStartedAt,
-      command: monitors.command,
+      id: monitors.id, taskId: monitors.taskId, status: monitors.status,
+      pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
       sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
     })
     .from(monitors)
@@ -108,30 +112,18 @@ async function stopMonitorsForTaskLocked(
     if (spared) kept.push(m.id);
     else if (m.status === "running") doomed.push(m);
   }
-  // 先落责任、再发信号、最后确认退出(见文件头第 ④ 条)。一行失败也不能把后面几行一起带走
-  // —— 但**责任落不下来**的那几条会在最后一起挡住销毁。
-  const owed: Owed[] = [];
-  const unaccounted: Owed[] = [];
+  // 停:一行失败也不能把后面几行一起带走。「落责任 → 发信号 → 确认退出 → 销账」那一圈由
+  // `finish` 自己走(见文件头第 ④ 条),所以这里只数停了几条。
   let stopped = 0;
-  for (const m of doomed) {
-    const verdict = await signalStop(m, taskId, reason, intent);
-    if (verdict.stopped) stopped += 1;
-    if (verdict.owed === "gone") continue;
-    const who = { id: m.id, pid: m.pid!, pidStartedAt: m.pidStartedAt };
-    (verdict.owed === "owed" ? owed : unaccounted).push(who);
-  }
-  // **确认退出**:并行等,一个窗口覆盖全部(不是每条各等一遍)。确认了就销账,确认不了就把
-  // 责任留在表上 —— 那正是不变量允许的另一半。
-  await settleOwed([...owed, ...unaccounted]);
-  // 连责任都没落下、又确认不了退出的那几条:销毁身份就是把最后的线索也抹掉。宁可删除整笔
-  // 失败(可重试),不留无主进程(不可逆)—— 跟枚举失败那一条同一个判据。
-  const lost = unaccounted.filter((o) => reclaimState(o.pid, o.pidStartedAt) !== "gone");
-  if (intent === "destroy" && lost.length) {
-    throw new Error(
-      `有 ${lost.length} 个哨兵进程既没确认退出、回收责任也没能落库（pid ${lost.map((o) => o.pid).join("、")}），`
-      + "不能销毁它们的身份记录。请重试。",
-    );
-  }
+  for (const m of doomed) if (await signalStop(m, reason, intent)) stopped += 1;
+  // **按资源责任核对一遍**,范围是「这一次不再允许它继续存在」的全部归属行 —— 不只是刚才
+  // 停掉的那几条:先点停再删除的那条路上,行早就不是 running 了(`doomed` 根本不含它),而它
+  // 的进程可能还在跑,旧版本停下来时又没留责任。照状态过滤等于整条跳过(第 5 轮审查 F1 实测)。
+  //
+  // **放过的那几条要原样放过**:它们是审查还在用的哨兵,正在跑着才是对的,拿回收那把尺子
+  // 去量它等于当场杀掉(`kept` 只在 `task-settled` 时非空,销毁那条路没有豁免)。
+  await accountForLiveProcesses(all.filter((m) => !kept.includes(m.id)), reason,
+    { fatal: intent === "destroy" });
   // 收尾只清得掉**还在缓冲里**的行。已经开始推的那一批不受影响：它手里拿着自己的
   // `lines`、也早就过了状态闸，落库会发生在清理之后——于是作废那一步扫不到它，它排进
   // 队列、把一个已经 done 的任务重新叫起来（第 3 轮审查实测：done → running → done）。
@@ -143,61 +135,63 @@ async function stopMonitorsForTaskLocked(
   return stopped;
 }
 
-type Owed = { id: string; pid: number; pidStartedAt: string | null };
+type MonitorRow = {
+  id: string; taskId: string; status: string;
+  pid: number | null; pidStartedAt: string | null; command: string;
+};
 
-/**
- * 停一条:**先把回收责任落盘,再发停止信号。**
- *
- * 顺序只有这一个对。`finish` 发完 SIGTERM 就写停止态返回,补刀是 `killByPid` 里那个
- * `unref` 的两秒定时器 —— server 在这两秒里退出它就永远不会落下。责任先落盘,那一笔才活得
- * 过进程退出;销毁身份(删除)紧接着抹掉 `monitors` 行时,pid 这对线索也只剩这一份
- * (第 4 轮审查 F1 实测:删除后立刻退出 ⇒ 进程还在、接回枚举不到、债表为空)。
- *
- * 返回值的 `owed`:
- * - `gone` = 发信号之前就确认不在了,没什么可回收的;
- * - `owed` = 责任已落盘(之后由确认阶段销账,或留给梯子/开机清扫);
- * - `unaccounted` = **连责任都没落下来**。调用方据此决定要不要让整笔销毁失败。
- */
+/** 停一条。返回「这一刀发出去了吗」;回收责任那一圈在 `finish` 里面(见文件头第 ④ 条)。 */
 async function signalStop(
-  m: { id: string; pid: number | null; pidStartedAt: string | null; command: string },
-  taskId: string, reason: string, intent: MonitorStopIntent | "review-finished",
-): Promise<{ stopped: boolean; owed: "gone" | "owed" | "unaccounted" }> {
-  // 「它还在吗」用的是覆盖整个进程组的那把尺子(组长退出不等于组空,见 monitor-reclaim-debts.ts)。
-  const live = m.pid !== null && reclaimState(m.pid, m.pidStartedAt) !== "gone";
-  const owed = live && await noteReclaimDebt({
-    monitorId: m.id, taskId, pid: m.pid!, pidStartedAt: m.pidStartedAt,
-    command: m.command, reason,
-  });
-  let stopped = false;
+  m: MonitorRow, reason: string, intent: MonitorStopIntent | "review-finished",
+): Promise<boolean> {
   try {
     await finish(m.id, "stopped", reason, null, { notify: false, keepBuffered: false });
-    stopped = true;
+    return true;
   } catch (err) {
-    // 停止动作本身失败(库忙、行被改走):`finish` 可能连杀进程那一步都没走到,自己补一刀。
-    // 身份对得上才敢杀 —— pid 会被复用。
+    // 停止动作本身失败(库忙、行被改走):`finish` 可能连记账那一步都没走到。这里不自己
+    // 补刀,交给紧接着的 `accountForLiveProcesses` —— 它按真实状态重判一遍,顺带把责任记上。
     console.error(`[ash] stop monitor ${m.id} (${intent}) failed:`, err);
-    if (m.pid && isSameProcess(m.pid, m.pidStartedAt)) killByPid(m.pid);
+    return false;
   }
-  if (!live) return { stopped, owed: "gone" };
-  return { stopped, owed: owed ? "owed" : "unaccounted" };
 }
 
 /**
- * 确认这几条真的退出了:**确认得了才销账**,确认不了就把责任留在表上并挂梯子。
+ * **按资源责任核对一遍**:这些行里凡是进程组还活着的,要么账本上已经有人认它,要么现在
+ * 就记上一笔并再发一刀。
  *
- * 并行等一个窗口而不是每条各等一遍:它们互不相干,而这段等待发生在 `task:<id>` 锁里面,
- * 顺序等会把任务结算吊得很久。
+ * 判据是**进程还在不在 + 账本上有没有人认**,不是卡片状态 —— 「已停止」只说明有人发过
+ * 信号,不说明它退了(第 5 轮审查 F1:先点停再删除,行是 stopped、命令仍活、债表为空,
+ * 删除照状态过滤就整条跳过了它)。
+ *
+ * `fatal`(= 销毁持久身份那条路)时,连责任都落不下来就把整笔操作抛回去:删除失败可重试,
+ * 留下一个谁都找不到的后台进程不可逆 —— 跟枚举失败那一条同一个判据。审查收尾那一侧不销毁
+ * 身份(行还在、启动期还会再问一遍),所以只出声不抛。
  */
-async function settleOwed(owed: Owed[]): Promise<void> {
-  if (!owed.length) return;
-  await Promise.all(owed.map(async (o) => {
-    if (await confirmReclaimed(o.pid, o.pidStartedAt)) {
-      await clearReclaimDebt(o.id);
-      return;
-    }
-    console.error(`[ash] 哨兵进程还没确认退出,回收责任留在表上 monitor=${o.id} pid=${o.pid}`);
-    scheduleReclaimRetry(o.id);
+async function accountForLiveProcesses(
+  rows: MonitorRow[], reason: string, opts: { fatal: boolean },
+): Promise<void> {
+  const risky = rows.filter((r) => r.pid !== null && reclaimState(r.pid, r.pidStartedAt) !== "gone");
+  if (!risky.length) return;
+  const held = await heldReclaimDebts(risky.map((r) => r.id));
+  const unaccounted: MonitorRow[] = [];
+  // 并行:它们互不相干,而这段等待发生在 `task:<id>` 锁里面,顺序等会把删除吊很久。
+  await Promise.all(risky.map(async (r) => {
+    if (held.has(r.id)) return; // 已经有人负责了 —— 那正是不变量允许的另一半
+    // **`fresh` 按这一行自己的状态算**,不是按调用点算:还在 running 的那条,进程刚刚还在我们
+    // 手上(`finish` 失败才会落到这里),身份问不出来也照旧记责任 —— 丢掉那一笔就是把唯一
+    // 线索扔了。已经非运行态的那条可能是上一辈子停下来的:「组长已死、组里还有人」跟「别人
+    // 拿这个号当过组长」分不开,「认不出来」更没有任何证据说它是我们的(见
+    // reclaimMonitorProcess 的那张表)。
+    const ticket = await reclaimMonitorProcess(r, reason, { fresh: r.status === "running" });
+    if (!ticket) return;
+    await settleReclaim(ticket);
+    if (!ticket.accounted && reclaimState(r.pid!, r.pidStartedAt) !== "gone") unaccounted.push(r);
   }));
+  if (!unaccounted.length || !opts.fatal) return;
+  throw new Error(
+    `有 ${unaccounted.length} 个哨兵进程既没确认退出、回收责任也没能落库`
+    + `（pid ${unaccounted.map((r) => r.pid).join("、")}），不能销毁它们的身份记录。请重试。`,
+  );
 }
 
 /**
@@ -230,21 +224,18 @@ export async function stopMonitorsForReviewRun(runId: string, reason: string): P
     // 这里看得见那一行、照常停它。
     const rows = await db
       .select({
-        id: monitors.id, status: monitors.status, pid: monitors.pid,
-        pidStartedAt: monitors.pidStartedAt, command: monitors.command,
+        id: monitors.id, taskId: monitors.taskId, status: monitors.status,
+        pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
       })
       .from(monitors)
       .where(and(eq(monitors.sourceReviewRun, runId), isAshKind));
-    // 跟任务侧同一条路:先落责任、再发信号、最后确认退出(见文件头第 ④ 条)。这一侧不销毁
-    // 身份(审查结束而已,行还在),所以责任落不下来时只出声,不往上抛。
-    const owed: Owed[] = [];
+    // 跟任务侧同一条路:`finish` 走记账那一圈,这边再按资源责任核对一遍(见文件头第 ④ 条)。
+    // 这一侧不销毁身份(审查结束而已,行还在),所以责任落不下来时只出声,不往上抛。
     let stopped = 0;
     for (const row of rows.filter((r) => r.status === "running")) {
-      const verdict = await signalStop(row, run.taskId, reason, "review-finished");
-      if (verdict.stopped) stopped += 1;
-      if (verdict.owed !== "gone") owed.push({ id: row.id, pid: row.pid!, pidStartedAt: row.pidStartedAt });
+      if (await signalStop(row, reason, "review-finished")) stopped += 1;
     }
-    await settleOwed(owed);
+    await accountForLiveProcesses(rows, reason, { fatal: false });
     // 待发通知要按**全部归属行**收，不按「命令还活着」裁剪：命令早退出、结果还排在托盘里
     // 等投递，正是审查者挂的哨兵最常见的形态。漏掉它们的话，审查都给了结论，旧结果还会
     // 把一条已经结束的审查重新叫起来跑一轮（第 2 轮审查 F5）。
@@ -253,4 +244,35 @@ export async function stopMonitorsForReviewRun(runId: string, reason: string): P
     }
     return stopped;
   });
+}
+
+/**
+ * 启动期:**「已停止」不等于「已退出」** —— 把非运行态的归属行也问一遍。
+ *
+ * `reattachMonitors` 只枚举还在 running 的行,`sweepMonitorReclaimDebts` 只认账本上已有的
+ * 那几笔。中间漏的正是第 5 轮审查实测的那条路:上一辈子有人把它停了(或者启动接回时判它
+ * 没出口而停了),信号发出去了、命令却没死,而旧版本停下来时又没留责任 —— 重启之后两边都
+ * 扫不到它。
+ *
+ * **只对身份对得上的那一档下刀**(`ours-alive`,见 `reclaimMonitorProcess` 的 `fresh`):隔了
+ * 一次重启,「组长已死、组里还有人」跟「别人拿这个号当过组长」分不开,那一档只记责任。
+ * 「认不出来」则一个字都不记 —— 否则每个 pid 恰好被复用的历史行都会在账本上留一笔永远
+ * 销不掉的账。
+ *
+ * 排在 `sweepMonitorReclaimDebts` **之前**:这里新记下的责任由它在同一次开机里接着推。
+ */
+export async function reclaimUnconfirmedStops(): Promise<number> {
+  const rows = await db
+    .select({
+      id: monitors.id, taskId: monitors.taskId, status: monitors.status,
+      pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
+    })
+    .from(monitors)
+    .where(and(isAshKind, isNotNull(monitors.pid), ne(monitors.status, "running")));
+  // 先用最便宜的那一问(`kill(-pgid, 0)`)把绝大多数历史行筛掉,ps 只对组还活着的那几条问。
+  const live = rows.filter((r) => reclaimState(r.pid!, r.pidStartedAt) !== "gone");
+  if (!live.length) return 0;
+  console.error(`[ash] 开机发现 ${live.length} 条「已停止但进程组还活着」的哨兵，按责任重收一遍`);
+  await accountForLiveProcesses(live, "上一辈子把它停了，但退出从没被确认", { fatal: false });
+  return live.length;
 }

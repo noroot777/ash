@@ -164,6 +164,14 @@ async function initializeServer() {
     if (monitorRecovery?.attached || monitorRecovery?.lost) {
       console.log(`[ash] 哨兵：接回 ${monitorRecovery.attached} 个，${monitorRecovery.lost} 个进程已不在`);
     }
+    // 「已停止」不等于「已退出」:上一辈子有人把它停了、信号发出去了、命令却没死,而那一版
+    // 的停止路径没留下责任 —— 接回只看 running、债务清扫只看账本,中间漏的就是这一类
+    // (第 5 轮审查 F1)。**排在债务清扫之前**:这里新记下的责任由它在同一次开机里接着推。
+    const { reclaimUnconfirmedStops } = await import("./monitor-reclaim.js");
+    await reclaimUnconfirmedStops().catch((err) => {
+      console.error("[ash] 「已停止但没确认退出」的哨兵重收失败（不影响启动）:", err);
+      return 0;
+    });
     // 上一个 server 没能收掉的哨兵进程:停止失败时留下的**回收责任**,现在是最后一次机会
     // (它们的任务多半已经被删掉了,`monitors` 里也没有行,所以接回那一步看不见它们)。
     const { sweepMonitorReclaimDebts } = await import("./monitor-reclaim-debts.js");
