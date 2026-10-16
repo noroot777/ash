@@ -9,6 +9,7 @@ import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
+import { freshTurnFields, openTurn } from "./session-turns.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
@@ -233,7 +234,10 @@ export async function runTask(
       ...ex.resumeFields(ws.path, cliSessionId),
       commandLine: handle.commandLine,
       startedAt: turnStart,
-      turnStartedAt: turnStart,
+      // 回合字段一律从 helper 取（见 session-turns.ts 顶部那段）：这一处原先只写了
+      // turnStartedAt，于是单飞任务——也就是绝大多数任务——的回合数永远从 0 起计，少计
+      // 的那一次正好抵掉后面真缺的那一轮（第 4 轮审查必须修 1 的根因）。
+      ...freshTurnFields(turnStart),
       activeMs: 0,
       exitStatus: null as number | null,
       // 重启后靠这几个字段找回并接管它。pid 为空 = 这一轮没走 detached
@@ -246,6 +250,8 @@ export async function runTask(
       agentOffset: 0,
     };
     await db.insert(sessions).values(sessRow);
+    // 回合开始就落一行：收尾那下写不成时,「开了没收口」才有据可查(光靠计数对不出位置)。
+    await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     const baseNote = baseFallbackNote(ws.baseFallback);

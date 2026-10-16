@@ -130,6 +130,7 @@ export async function runWindows(
       endedAt: sessions.endedAt,
       turnStartedAt: sessions.turnStartedAt,
       turnsStarted: sessions.turnsStarted,
+      turnsBase: sessions.turnsBase,
       activeMs: sessions.activeMs,
     }).from(sessions).where(inArray(sessions.taskId, ids)),
     db.select().from(sessionTurns).where(inArray(sessionTurns.taskId, ids)).orderBy(asc(sessionTurns.startedAt)),
@@ -172,7 +173,7 @@ export async function runWindows(
 
   const spans: RunWindow[] = [];
   /** 各类缺口各记一次数：面板上要说清楚「哪一段算不准」，但不能一条会话刷一行。 */
-  const counts = { stale: 0, legacy: 0, early: 0, lastTurn: 0, missing: 0 };
+  const counts = { stale: 0, legacy: 0, early: 0, lastTurn: 0, missing: 0, unsettled: 0, upgraded: 0, monitor: 0 };
 
   /**
    * 回合记录分两份收：
@@ -185,19 +186,26 @@ export async function runWindows(
    * 读成「这个目录上缺的历史」，于是凭空放宽一整段清单——完整性是会话自己的属性，跟我们
    * 正在看哪个目录无关（第 3 轮审查必须修 2 的同类位置）。
    */
-  const coverage = new Map<string, { count: number; earliest: number; latest: number }>();
+  const coverage = new Map<string, {
+    /** 回合身份（起点字符串）去重后的集合。**不是行数**：重复行不能当成「多跑了一轮」，
+     *  那正好能抵掉另一轮的真缺口（第 4 轮审查对 COUNT 口径的提醒）。 */
+    starts: Set<string>;
+    /** 开了、但库里没有收尾时刻的那些回合的起点（毫秒）。 */
+    open: number[];
+    earliest: number;
+    latest: number;
+  }>();
   const turnsBySession = new Map<string, typeof turnRows>();
   for (const turn of turnRows) {
     const at = Date.parse(turn.startedAt);
     const seen = coverage.get(turn.sessionId);
-    if (seen) {
-      seen.count += 1;
-      if (Number.isFinite(at)) {
-        seen.earliest = Math.min(seen.earliest, at);
-        seen.latest = Math.max(seen.latest, at);
-      }
-    } else {
-      coverage.set(turn.sessionId, { count: 1, earliest: at, latest: at });
+    const slot = seen ?? { starts: new Set<string>(), open: [], earliest: at, latest: at };
+    if (!seen) coverage.set(turn.sessionId, slot);
+    slot.starts.add(turn.startedAt);
+    if (!turn.endedAt && Number.isFinite(at)) slot.open.push(at);
+    if (Number.isFinite(at)) {
+      slot.earliest = Math.min(slot.earliest, at);
+      slot.latest = Math.max(slot.latest, at);
     }
     const verdict = await dirVerdict(turn.cwd);
     if (verdict === "elsewhere") continue;
@@ -205,7 +213,9 @@ export async function runWindows(
     if (list) list.push(turn);
     else turnsBySession.set(turn.sessionId, [turn]);
     const start = Date.parse(turn.startedAt);
-    const end = Date.parse(turn.endedAt);
+    const end = Date.parse(turn.endedAt ?? "");
+    // 没收口的那些在这里**不出区间**：它们要么正在跑（会话那一层已经开到无穷），要么是
+    // 真缺口（末端得看下一个回合从哪开始），两种都只有拿到整条会话才算得出来。
     if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
     if (verdict === "stale") counts.stale += 1;
     // 落账过的回合是实测区间：末端只给落定余量，不给那十分钟的推测（必须修 1）。
@@ -247,15 +257,42 @@ export async function runWindows(
       continue;
     }
 
-    // **回合记录全不全**：会话行上的 `turns_started` 是开过几个回合的权威计数（跟
-    // `turn_started_at` 同一次 update 写的，与 session_turns 的写成败无关）。落账的行数比它
-    // 少，就是中间缺了几轮——原先只核对两头（最早贴不贴着会话起点、最新等不等于
-    // turn_started_at），两头都对得上、中间缺一轮时后来成功的那条记录会把缺口盖掉，那一轮
-    // 做出来的东西被静默滤掉，面板空着还什么都不说（第 3 轮审查必须修 2）。
-    // 比的是**不过目录核对**的那份计数：完整性是会话自己的属性。
+    // **回合记录全不全**，两道判据,一手一二手：
+    //
+    //   第一手是**逐行事实**：回合一开始就落行、收尾补 `ended_at`,所以「开了没收口」在库里
+    //   明摆着,而且后来成功的那一轮抵消不掉它（第 4 轮审查必须修 1——原先只在收尾时插行,
+    //   写失败就什么痕迹都没有,下一轮一落账读端就再也看不出中间少过东西）。
+    //
+    //   第二道是**计数对账**,专管连开始那一行都没写进去的情形（库挂了、或者哪个起跑入口
+    //   漏了调 openTurn）：`turns_base + turns_started` 是开过几个回合,拿它跟去重后的回合
+    //   身份数比。比的是**不过目录核对**的那一份：完整性是会话自己的属性,跟我们正在看哪个
+    //   目录无关。`turns_started` 为 null = 升级前就在的老行,基数本来就不知道,**不对账**——
+    //   拿 0 去减它名下的历史行数会得出负数,把真缺口白白抵扣掉（第 4 轮审查「升级历史也会
+    //   抵消后续缺口」）,那种行只走 legacy 披露。
     const seen = coverage.get(row.id);
-    const expected = row.turnsStarted ?? 0;
-    const missing = Math.max(0, expected - (seen?.count ?? 0));
+    const allStarts = [...(seen?.starts ?? [])].map((at) => Date.parse(at)).filter(Number.isFinite);
+    for (const turn of recorded) {
+      if (turn.endedAt) continue;
+      const openAt = Date.parse(turn.startedAt);
+      if (!Number.isFinite(openAt)) continue;
+      // 正在跑的那一轮：它本来就还没收口,不是「写失败」。live 那一支已经把区间开到无穷,
+      // 这里只要别把它数成缺口（第 4 轮审查 N1：健康的在飞回合被当成写入失败）。
+      if (live && Number.isFinite(turnStart) && Math.abs(openAt - turnStart) <= TURN_SKEW_MS) continue;
+      // 开了没收口,又不是在飞：收尾那一下没写成。末端取**下一个回合的起点**（那一刻它
+      // 肯定已经停了）,没有下一轮就按会话收尾时刻、再不行才兜底。这一段是估的,标 approx。
+      const next = allStarts.filter((at) => at > openAt + TURN_SKEW_MS).sort((a, b) => a - b)[0];
+      const end = Number.isFinite(next)
+        ? next
+        : (Number.isFinite(ended) ? Math.max(ended + SETTLE_MS, openAt) : openAt + UNSETTLED_RUN_MS + TURN_GRACE_MS);
+      spans.push({ start: openAt, end: Math.max(end, openAt), approx: true });
+      counts.unsettled += 1;
+    }
+    // 升级前的那段历史：`turns_base` 是**下界**（迁移那一刻数得出来的行数）,升级前写失败的
+    // 回合没留下行、谁也数不出来。所以它照实说一句「那之前缺没缺不知道」,而不是假装完整。
+    if ((row.turnsBase ?? 0) > 0) counts.upgraded += 1;
+    // 在飞那一轮不必在这里另行扣除：它的开始行早就落了,`starts` 和 `expected` 两边都含它。
+    const expected = row.turnsStarted == null ? null : (row.turnsBase ?? 0) + row.turnsStarted;
+    const missing = expected == null ? 0 : Math.max(0, expected - (seen?.starts.size ?? 0));
     if (missing > 0) {
       // 缺的是哪几段无从得知，只能把整条寿命算成宽的那一档并说出来。
       counts.missing += missing;
@@ -300,10 +337,16 @@ export async function runWindows(
     // 推十分钟（必须修 1）。连收尾时刻都没有的（进程没了没来得及写）才退回到期时刻，那一段
     // 是估的，照实标宽。
     const settled = Number.isFinite(ended);
-    const end = row.status === "running" && !row.endedAt
+    // 还在盯着：区间开到无穷是**事实**（它这一刻确实在跑），不是估的。原先一律按「没有收尾
+    // 时刻」标 approx，于是正常运行中的后台产物被说成算不准，而这条路又没给出对应的提示，
+    // 面板上就出现「见上面那几条」却找不到上面那几条（第 4 轮审查 N2 的对称面）。
+    const watching = row.status === "running" && !row.endedAt;
+    const end = watching
       ? Number.POSITIVE_INFINITY
       : (settled ? ended + SETTLE_MS : (Number.isFinite(expires) ? expires : now) + TURN_GRACE_MS);
-    spans.push({ start, end: Math.max(end, start), approx: verdict === "stale" || !settled });
+    // 终态了却没留下收尾时刻（进程没了、没来得及写）：那一段是按到期时刻估的，得说出来。
+    if (!watching && !settled) counts.monitor += 1;
+    spans.push({ start, end: Math.max(end, start), approx: verdict === "stale" || (!settled && !watching) });
   }
 
   const gaps: string[] = [];
@@ -314,7 +357,16 @@ export async function runWindows(
     gaps.push(`有 ${counts.early} 段早期运行在逐回合记录之前，只能按整段会话算`);
   }
   if (counts.missing) {
-    gaps.push(`有 ${counts.missing} 次运行没在库里留下记录（写入失败或异常重启），只能把整段会话算进来`);
+    gaps.push(`有 ${counts.missing} 次运行连开始都没在库里留下记录（写入失败或异常重启），只能把整段会话算进来`);
+  }
+  if (counts.unsettled) {
+    gaps.push(`有 ${counts.unsettled} 次运行开始了却没留下收尾时刻（异常退出或写入失败），那一段只能估到下一次运行开始`);
+  }
+  if (counts.upgraded) {
+    gaps.push(`有 ${counts.upgraded} 段会话在逐回合记录升级之前就跑过，升级前那部分缺没缺记录无从得知`);
+  }
+  if (counts.monitor) {
+    gaps.push(`有 ${counts.monitor} 个后台任务（哨兵）没留下收尾时刻，那一段只能按它的到期时刻估`);
   }
   if (counts.lastTurn) {
     gaps.push(`有 ${counts.lastTurn} 次运行的最后一个回合没留下记录（异常收尾），那一段只能按会话收尾时刻估`);

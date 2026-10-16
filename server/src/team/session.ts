@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, TeamConfig } from "@ash/shared";
 import { TEAM_DEFAULTS } from "@ash/shared";
+import { freshTurnFields, openTurn, resumedTurnFields } from "../session-turns.js";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions, groups } from "../db/schema.js";
 import { bus } from "../bus.js";
@@ -476,8 +477,9 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     await db
       .update(sessions)
       .set({
-        turnStartedAt: turnStart,
-        endedAt: null,
+        // 回合三件套从 helper 取（见 session-turns.ts 顶部）。常驻调度台也是一个个回合
+        // 开出来的,漏了计数,它名下的产物归属就跟单飞一样会把真缺口抵扣掉。
+        ...resumedTurnFields(turnStart),
         exitStatus: null,
         commandLine: handle.commandLine,
         executor: ex.label,
@@ -503,11 +505,13 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
       ...ex.resumeFields(ws.path, cliSessionId),
       commandLine: handle.commandLine,
       startedAt: turnStart,
-      turnStartedAt: turnStart,
+      ...freshTurnFields(turnStart),
       activeMs: 0,
       exitStatus: null,
     });
   }
+  // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
+  await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
 
   const lead: Lead = {
     taskId,

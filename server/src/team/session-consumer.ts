@@ -4,7 +4,7 @@ import type { AgentEvent } from "@ash/shared";
 import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
-import { recordTurnSpan } from "../session-turns.js";
+import { openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
 import { bus } from "../bus.js";
 import { now } from "../util.js";
 import { setTaskStatus } from "../status.js";
@@ -442,12 +442,10 @@ function flushSessionNotices(lead: Lead): void {
 async function beginTurn(lead: Lead, at = now()): Promise<void> {
   lead.busy = true;
   lead.turnStart = at;
-  await updateOwnSession(lead, "回合开始状态", {
-    turnStartedAt: at,
-    // 回合计数（产物归属的完整性判据，见 schema 里 `turnsStarted` 的注释）。
-    turnsStarted: sql`COALESCE(${sessions.turnsStarted}, 0) + 1`,
-    endedAt: null,
-  }, at);
+  await updateOwnSession(lead, "回合开始状态", { ...resumedTurnFields(at) }, at);
+  // 这一路的 session 写入会被捕获后继续（`updateOwnSession` 不抛），所以开始行照样要落：
+  // 计数那一道写没成时,它就是唯一的「开过这一轮」的证据（第 4 轮审查「同类失败分支」）。
+  await openTurn({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at });
   traceLead(lead, at, {
     kind: "run",
     model: lead.model,

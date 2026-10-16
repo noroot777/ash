@@ -129,7 +129,10 @@ export async function ensureSchema() {
       task_id TEXT NOT NULL,
       cwd TEXT,
       started_at TEXT NOT NULL,
-      ended_at TEXT NOT NULL
+      -- 可空：null = 这一回合开始了还没收口（见 schema.ts 上那段注释）。唯一索引
+      -- （session_id, started_at）由 migrate-session-turns.ts 在去重之后建——老库里可能
+      -- 已经有重复行，在这里建会抛，而这一段抛出去就是整台 ash 起不来。
+      ended_at TEXT
     );
     CREATE INDEX IF NOT EXISTS session_turns_task_idx ON session_turns(task_id, started_at);
     CREATE INDEX IF NOT EXISTS session_turns_session_idx ON session_turns(session_id, started_at);
@@ -378,6 +381,7 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN turn_started_at TEXT",
     // 回合计数：产物归属据它判断「有没有回合没落账」（见 schema 上的注释）。
     "ALTER TABLE sessions ADD COLUMN turns_started INTEGER",
+    "ALTER TABLE sessions ADD COLUMN turns_base INTEGER",
     "ALTER TABLE tasks ADD COLUMN use_worktree INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
     "ALTER TABLE tasks ADD COLUMN worktree_start_commit TEXT",

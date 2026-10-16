@@ -243,6 +243,12 @@ try {
   };
 
   const first = await readShared("ShareFirst01");
+  // **估算档的强弱不能在「已提交」这个标签下丢掉**（第 4 轮审查 N2）：这条会话没有逐回合
+  // 记录，整段寿命都是估出来的，所以**两张**都只是候选——`art/海报.png` 是「那一段里有提交
+  // 动过它」，不是「它的任务分支里有这个提交」。原先 committed 一律当确定、不计数，于是面板
+  // 上只说「1 个是估的」，另一个凭着同一段估出来的区间冒充确定。
+  const guessedCount = Number(first.incomplete.find((n) => n.includes("按估出来的时间段"))?.match(/有 (\d+) 个/)?.[1]);
+  assert.equal(guessedCount, 2, `估算区间认进来的两张都要计数（含已提交那张）：${JSON.stringify(first.incomplete)}`);
   assert.equal(originOf(first, "output/第一趟.png"), "ignored");
   assert.equal(originOf(first, "art/海报.png"), "committed", "共享工作区没有任务分支，已提交的那一档只能按运行区间认");
   assert.equal(

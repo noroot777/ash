@@ -14,7 +14,7 @@ import { eq, sql } from "drizzle-orm";
 import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
-import { recordTurnSpan } from "../session-turns.js";
+import { freshTurnFields, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
@@ -214,8 +214,7 @@ export async function runTurn(args: {
       branch: args.branch ?? null,
       cliSessionId: cliId,
       startedAt: turnStart,
-      turnStartedAt: turnStart,
-      turnsStarted: 1, // 回合计数（产物归属的完整性判据，见 schema 里的注释）
+      ...freshTurnFields(turnStart),
       activeMs: 0,
       exitStatus: null,
     });
@@ -226,13 +225,13 @@ export async function runTurn(args: {
     await db
       .update(sessions)
       .set({
-        turnStartedAt: turnStart,
-        turnsStarted: sql`COALESCE(${sessions.turnsStarted}, 0) + 1`, // 同上
-        endedAt: null,
+        ...resumedTurnFields(turnStart),
         ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir),
       })
       .where(eq(sessions.id, rowId));
   }
+  // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
+  await openTurn({ sessionId: rowId, taskId, cwd, startedAt: turnStart });
 
   recordTurnStart({ type: "duet.progress", taskId, round, speaker, phase: "start", startedAt: turnStart });
   if (versionReplacementNotice) {

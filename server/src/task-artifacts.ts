@@ -107,6 +107,13 @@ export async function readTaskArtifacts(
    * 文件明明还在（第 2 轮审查 F3）。弱证据不能把已经成立的强证据盖掉：攒齐再判。
    */
   const evidence = new Map<string, Set<ArtifactOrigin>>();
+  /**
+   * 归属是**确定**的那些（不是靠估出来的时间段认的）：任务分支差异、精确区间里的提交。
+   *
+   * 跟 `evidence` 分开记,因为那张表记的是「它现在是什么状态」（工作区改动 / 已提交 /
+   * 被忽略），答不了「这条归属有多硬」——而面板要说的恰恰是后者（第 4 轮审查 N2）。
+   */
+  const proven = new Set<string>();
   const remember = (path: string, origin: ArtifactOrigin) => {
     if (!path || !kindOf(path)) return;
     const seen = evidence.get(path);
@@ -163,14 +170,20 @@ export async function readTaskArtifacts(
         // 到主仓展示时，这是唯一还拿得出来的证据，不能被上面那道时间门槛一起挡掉。
         for (const path of committed.paths) {
           const rel = relocate(path);
-          if (rel) remember(rel, "committed");
+          if (rel) { remember(rel, "committed"); proven.add(rel); }
         }
       } else if (windows.length) {
         // 没有属于它的分支（共享工作区）/ 目标分支被删：退回运行区间里的提交。这一档本身
         // 就是按时间认的，没有区间就无从认起。
         try {
           const byTime = await committedInWindows(root.path, windows);
-          for (const path of byTime.paths) {
+          // 精确区间里的提交是实测证据；估出来的区间里的只是候选，分开记，别让它冒充确定
+          // （第 4 轮审查 N2）。
+          for (const path of byTime.exact) {
+            const rel = relocate(path);
+            if (rel) { remember(rel, "committed"); proven.add(rel); }
+          }
+          for (const path of byTime.approx) {
             const rel = relocate(path);
             if (rel) remember(rel, "committed");
           }
@@ -219,11 +232,15 @@ export async function readTaskArtifacts(
     // 归属成立有两条独立的路：**提交证据**（它的提交动过这条路径）本身就是确定的，不吃时间；
     // 工作区改动和被忽略的文件只有「在这个目录里 + 时间对得上」这一条线索，共享目录上必须筛。
     const committedProof = origins.has("committed");
-    // 独占目录不吃时间；共享目录上要么有提交证据，要么时间对得上。靠**推断**出来的区间认
-    // 进来的那些单独数一笔：它们是候选，不能跟实测的混在一起不说话（第 3 轮审查必须修 1）。
+    // 独占目录不吃时间；共享目录上要么有提交证据，要么时间对得上。
+    //
+    // 分**确定**和**候选**两档,按它最强的那条证据算：目录独占、任务分支差异、精确区间里的
+    // 提交都是确定的；估出来的区间——不管是靠 mtime 落在里面,还是那一段里的提交——都只是
+    // 候选,要单独数一笔说出来（第 3 轮审查必须修 1、第 4 轮审查 N2）。
     const hit = exclusive ? "exact" : windowHit(mtimeMs, windows);
-    if (!committedProof && !hit) continue;
-    if (!committedProof && hit === "approx") guessed += 1;
+    const exactProof = exclusive || proven.has(path) || hit === "exact";
+    if (!exactProof && !committedProof && !hit) continue;
+    if (!exactProof) guessed += 1;
     // 标签说的是**它现在是什么状态**：有未提交的改动就显示工作区改动（哪怕归属是提交证明
     // 下来的），否则按最强的那条证据。
     const origin: ArtifactOrigin = origins.has("working")

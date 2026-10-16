@@ -408,16 +408,30 @@ export const sessions = sqliteTable("sessions", {
   activeMs: integer("active_ms"),
   turnStartedAt: text("turn_started_at"),
   /**
-   * 这条会话**一共开过几个回合**。产物归属的完整性就靠它：`session_turns` 里的行数比它
-   * 少，说明中间有回合没落账（写库失败、异常重启），那段时间算不准、必须在面板上说出来。
+   * 这条会话**开过几个回合**（本列出现之后的那些；之前的历史在 `turns_base` 里）。
    *
-   * 为什么计数记在**这一行**而不是靠 `session_turns` 自己：它和 `turn_started_at` 在同一次
-   * update 里写，与那张表的写成败无关。原来读端只核对「最早一条贴不贴着会话起点」「最新
-   * 一条等不等于 turn_started_at」——两头都对得上，中间照样可能缺一轮；后来成功落账的那
-   * 一条会把缺口盖掉，那一轮做出来的东西于是被静默滤掉（第 3 轮审查必须修 2）。
-   * null = 这一列出现之前的老行，那种行按原来的三条推断走。
+   * 完整性的**第一手证据不是它**，而是 `session_turns` 里那一行：回合一开始就落行、收尾
+   * 时按同一身份补上 `ended_at`，于是「开始了没收口」是一条**逐行事实**，后来成功的回合
+   * 抵消不掉（第 4 轮审查必须修 1）。这个计数是**第二道**，专管一种第一手证据也没有的
+   * 情形：连开始那一行都没写进去（库挂了、或者哪个起跑入口漏了调）。它和 `turn_started_at`
+   * 在同一次 update 里写，与那张表的写成败无关。
+   *
+   * null = 这一列出现之前就在的老行。那种行**不做计数对账**（基数本来就不知道，拿它减
+   * 历史行数会得出负数、把真缺口抵扣掉——第 4 轮审查「升级历史也会抵消后续缺口」），
+   * 只走 legacy 披露。
    */
   turnsStarted: integer("turns_started"),
+  /**
+   * 升级到 `turns_started` 之前，这条会话**已知**跑过几个回合（= 迁移那一刻它名下的
+   * `session_turns` 行数）。
+   *
+   * 为什么要单独一列而不是把历史行数并进 `turns_started`：那个数是**下界**不是真相——
+   * 升级前写失败的回合没留下行，谁也数不出来。并进去就等于宣称「升级前的历史是完整的」，
+   * 而那正是第 4 轮审查点出来不许做的事。分开记，读端才能把「升级前可能还缺」单独说出来，
+   * 同时又能让升级后的新回合照常对账（expected = base + started）。
+   * 0 = 这条会话是升级后才建的，没有未知历史。
+   */
+  turnsBase: integer("turns_base"),
   // ── 解绑重启（executors/detached.ts）────────────────────────────────────
   // 单飞任务的 agent 输出走文件而不是匿名管道，所以它活得过 server 重启。
   // 下面这组是重启后接管它所需的全部线索；常驻会话（团队调度台）不走这条路，
@@ -480,11 +494,27 @@ export const sessionTurns = sqliteTable(
     /** 这一回合实际的工作目录；null = 当时取不到（极老的行）。 */
     cwd: text("cwd"),
     startedAt: text("started_at").notNull(),
-    endedAt: text("ended_at").notNull(),
+    /**
+     * 收尾时刻。**null = 这一回合开始了、还没收口**——是「正在跑」或者「收尾那一下没写
+     * 成」，绝不是「没跑过」。
+     *
+     * 回合开始就落行、收尾再补这一列，是为了让「缺了一轮」变成一条**摆在库里的事实**：
+     * 原先只在收尾时插行，写失败就什么都没有，后来成功的一轮一落账，读端再也看不出中间
+     * 少过东西，那一轮做出来的图于是被静默滤掉（第 4 轮审查必须修 1）。
+     */
+    endedAt: text("ended_at"),
   },
   (t) => ({
     taskIdx: index("session_turns_task_idx").on(t.taskId, t.startedAt),
     sessionIdx: index("session_turns_session_idx").on(t.sessionId, t.startedAt),
+    /**
+     * **一个回合一行**：身份就是「哪条会话 + 哪一刻开的」。
+     *
+     * 收尾走的是「按这个身份补 ended_at」，所以重放一次收尾（接回、重试、旧调度台也来
+     * 收一次）只会更新同一行，不会多出一行来；少了这道唯一性，重复行会被当成「多跑了
+     * 一轮」，正好抵掉另一轮的真缺口（第 4 轮审查对 COUNT 口径的提醒）。
+     */
+    turnKey: uniqueIndex("session_turns_turn_key").on(t.sessionId, t.startedAt),
   }),
 );
 

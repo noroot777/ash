@@ -175,16 +175,26 @@ const supportsSinceAsFilter = (root: string): Promise<boolean> => {
   return sinceAsFilter;
 };
 
+/**
+ * 运行区间里的提交动过哪些路径。
+ *
+ * **按区间的强弱分两份返回**：精确区间（落账过的回合）里的提交是实打实的证据，估出来的区间
+ * （没有逐回合记录的老会话、缺了收尾的那一轮）里的只是候选。原先两者合成一份平面清单,调用
+ * 方一律记成「已提交 = 确定」,于是估算档的那几条既不计入「按估出来的时间段认的」计数、也不
+ * 在面板上说一句——目录独占、分支差异、精确时间、估算时间这四档强弱在这里一起丢了
+ * （第 4 轮审查 N2）。
+ */
 export async function committedInWindows(
   root: string,
   windows: readonly RunWindow[],
-): Promise<{ paths: string[]; truncated: boolean; skippedWindows: number; dateWalk: boolean }> {
-  if (!windows.length) return { paths: [], truncated: false, skippedWindows: 0, dateWalk: false };
+): Promise<{ exact: string[]; approx: string[]; truncated: boolean; skippedWindows: number; dateWalk: boolean }> {
+  if (!windows.length) return { exact: [], approx: [], truncated: false, skippedWindows: 0, dateWalk: false };
   const asFilter = await supportsSinceAsFilter(root);
   // 区间太多时保最近的几段：旧的那些对「它刚做出了什么」贡献最小。
   const ordered = [...windows].sort((a, b) => b.start - a.start);
   const picked = ordered.slice(0, MAX_WINDOW_QUERIES);
-  const paths = new Set<string>();
+  const exact = new Set<string>();
+  const approx = new Set<string>();
   let truncated = false;
 
   for (const window of picked) {
@@ -213,12 +223,14 @@ export async function committedInWindows(
       const token = afterHeader ? raw.replace(/^\r?\n/, "") : raw;
       afterHeader = false;
       if (!token) continue;
-      paths.add(token);
+      (window.approx ? approx : exact).add(token);
     }
     if (commits >= MAX_WINDOW_COMMITS) truncated = true;
   }
   return {
-    paths: [...paths],
+    exact: [...exact],
+    // 同一条路径在两档区间里都出现过,算强的那一档。
+    approx: [...approx].filter((path) => !exact.has(path)),
     truncated,
     skippedWindows: ordered.length - picked.length,
     dateWalk: !asFilter,

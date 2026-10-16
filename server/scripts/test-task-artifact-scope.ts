@@ -278,6 +278,40 @@ try {
     originOf(withMonitor, "output/哨兵停了之后出现的.png"), null,
     "哨兵已经记下了收尾时刻,那就是它的真实终点",
   );
+  // 终态了却没留下收尾时刻（进程没了、没来得及写）：那一段只能按到期时刻估,得有一句话
+  // 兜着——原先这一路标了 approx 却不给提示,面板上就出现「见上面那几条」却找不到上面那
+  // 几条（第 4 轮审查 N2 的对称面）。
+  await db.insert(monitors).values({
+    id: "m-lost", taskId: "WorkerTask01", command: "renderer", cwd: shared,
+    status: "lost", logPath: join(stage, "m2.log"),
+    startedAt: iso(820), expiresAt: iso(900), endedAt: null,
+  });
+  const withLostMonitor = await read("WorkerTask01");
+  assert(
+    withLostMonitor.incomplete.some((note) => note.includes("没留下收尾时刻")),
+    `哨兵没留下收尾时刻要照实说：${JSON.stringify(withLostMonitor.incomplete)}`,
+  );
+  // 还在盯着的那种不一样：区间开到现在是**事实**,不是估的,所以既不该标 approx、也不该
+  // 让它名下的产物被算成「按估出来的时间段认的」。
+  await addTask("WatchTask001", { status: "running" });
+  await addSession("s-watch", "WatchTask001", shared, 820, null, { turnStartedAt: iso(820), turnsStarted: 1 });
+  await addTurn("t-watch", "s-watch", "WatchTask001", shared, 820, 830);
+  await db.insert(monitors).values({
+    id: "m-watching", taskId: "WatchTask001", command: "renderer", cwd: shared,
+    status: "running", logPath: join(stage, "m3.log"),
+    startedAt: iso(820), expiresAt: iso(2000), endedAt: null,
+  });
+  write(shared, "output/盯着的哨兵刚写出来的.png");
+  touch(shared, "output/盯着的哨兵刚写出来的.png", at(1200));
+  const watching = await read("WatchTask001");
+  assert.equal(
+    originOf(watching, "output/盯着的哨兵刚写出来的.png"), "ignored",
+    "哨兵还在盯着,它这段时间写出来的东西就是它的",
+  );
+  assert(
+    !watching.incomplete.some((note) => note.includes("按估出来的时间段") || note.includes("没留下收尾时刻")),
+    `还在盯着的哨兵不是「算不准」：${JSON.stringify(watching.incomplete)}`,
+  );
 
   // ── F2：团队执行者共用领队的工作区,不能个个都说自己独占 ──────────────────────
   // 一个领队底下几个执行者默认都在领队那份 worktree 里干活。`isolatedWorkspaceOwner` 给

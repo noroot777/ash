@@ -179,7 +179,9 @@
     "test:annotation-batches": "tsx scripts/test-page-annotation-batches.ts",
     "test:preview-workspace": "tsx scripts/test-preview-workspace.ts",
     "test:monitor-races": "tsx scripts/test-monitor-races.ts",
-    "test:db-tx": "tsx scripts/test-db-tx-ownership.ts"
+    "test:db-tx": "tsx scripts/test-db-tx-ownership.ts",
+    "test:turn-identity": "tsx scripts/test-session-turn-identity.ts",
+    "test:turn-migration": "tsx scripts/test-session-turn-migration.ts"
   },
   "dependencies": {
     "@ash/shared": "*",
