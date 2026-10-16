@@ -12,7 +12,7 @@
 // 跑：npm -w server run test:artifact-scope
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -95,7 +95,7 @@ try {
   // 一条会话行跨回合复用：startedAt 停在第一次建立，endedAt 只记最后一次收尾。拿它当
   // 运行区间，中间空的那四个钟头会连成一片。真实区间来自 session_turns。
   await addTask("ResumeTask01");
-  await addSession("s-resume", "ResumeTask01", shared, 0, 250, { turnStartedAt: iso(240), activeMs: 20 * 60 * 1000 });
+  await addSession("s-resume", "ResumeTask01", shared, 0, 250, { turnStartedAt: iso(240), turnsStarted: 2, activeMs: 20 * 60 * 1000 });
   await addTurn("t-resume-1", "s-resume", "ResumeTask01", shared, 0, 10);
   await addTurn("t-resume-2", "s-resume", "ResumeTask01", shared, 240, 250);
 
@@ -265,10 +265,18 @@ try {
   });
   write(shared, "output/哨兵渲染出来的.png");
   touch(shared, "output/哨兵渲染出来的.png", at(870));
+  // 哨兵停了之后才出现的东西不算它的：那条记录自己写下了收尾时刻，那就是实测证据，不该
+  // 再往后推十分钟去吃别人的产出（第 3 轮审查必须修 1）。
+  write(shared, "output/哨兵停了之后出现的.png");
+  touch(shared, "output/哨兵停了之后出现的.png", at(885));
   const withMonitor = await read("WorkerTask01");
   assert.equal(
     originOf(withMonitor, "output/哨兵渲染出来的.png"), "ignored",
     "回合结束不等于它所属的后台工作结束——哨兵的生命周期要算进去",
+  );
+  assert.equal(
+    originOf(withMonitor, "output/哨兵停了之后出现的.png"), null,
+    "哨兵已经记下了收尾时刻,那就是它的真实终点",
   );
 
   // ── F2：团队执行者共用领队的工作区,不能个个都说自己独占 ──────────────────────
@@ -285,6 +293,13 @@ try {
     await addSession(`s-${id}`, id, crewRoot, from, to);
     await addTurn(`t-${id}`, `s-${id}`, id, crewRoot, from, to);
   }
+  // 第三个执行者**紧接着** A 收工一分钟后开工：这一段原先被「每个回合末端一律加十分钟」
+  // 吃掉，A 的清单里于是混进 C 的图，而两者压根没有并发（第 3 轮审查必须修 1）。
+  await addTask("CrewC000001", { parentId: "LeadWithCrew", useWorktree: false });
+  await addSession("s-CrewC000001", "CrewC000001", crewRoot, 611, 615, { turnsStarted: 1 });
+  await addTurn("t-CrewC000001", "s-CrewC000001", "CrewC000001", crewRoot, 611, 615);
+  write(crewRoot, "output/C 紧接着画的绿图.png");
+  touch(crewRoot, "output/C 紧接着画的绿图.png", at(612));
   write(crewRoot, "output/A 先画的蓝图.png");
   touch(crewRoot, "output/A 先画的蓝图.png", at(605));
   write(crewRoot, "output/B 两小时后画的红图.png");
@@ -303,6 +318,15 @@ try {
   );
   assert.equal(originOf(crewB, "output/B 两小时后画的红图.png"), "ignored", "B 看得到自己画的");
   assert.equal(originOf(crewB, "output/A 先画的蓝图.png"), null, "B 也不该看到 A 画的");
+  // 紧接着那一位：A 收工在 610、C 开工在 611，隔一分钟。
+  const crewC = await read("CrewC000001", crewRootArg);
+  assert.equal(originOf(crewC, "output/C 紧接着画的绿图.png"), "ignored", "C 看得到自己画的");
+  assert.equal(
+    originOf(crewA, "output/C 紧接着画的绿图.png"), null,
+    "A 收工一分钟后 C 才开工,两者没有并发:落账过的回合是实测区间,末端不该白给十分钟",
+  );
+  assert.equal(originOf(crewC, "output/A 先画的蓝图.png"), null, "C 也不该看到 A 画的");
+  assert.deepEqual(crewA.incomplete, [], "记录齐全、区间精确,不该有「算不准」的提示");
   // 领队那一页的语义本来就是整组汇总：它独占那个目录，两张都该在。
   const lead = await read("LeadWithCrew", crewRootArg);
   assert.equal(lead.scope, "exclusive");
@@ -319,14 +343,22 @@ try {
   await addTurn("t-alias", "s-alias", "AliasTask01", aliasRoot, 800, 810);
   write(aliasRoot, "output/收尾很久之后渲染出来的.png");
   touch(aliasRoot, "output/收尾很久之后渲染出来的.png", at(900));
-  // 真实的错位长这样：`repo` 是 git 报出来的(走过真身,macOS 上带 /private),而 `path` 来自
-  // 会话 cwd(原样记下来的,不带)。纯字符串比 `<repo>/.worktrees/<id>` 跟 `path`,同一个目录
-  // 会被判成两个。
+  // 真实的错位长这样：`repo` 是 git 报出来的（走过真身），而 `path` 来自会话 cwd（原样记下来
+  // 的）。纯字符串比 `<repo>/.worktrees/<id>` 跟 `path`，同一个目录会被判成两个。
+  //
+  // 这里**自己造一个软链**指向仓库，不去依赖宿主 TMPDIR 恰好是 `/var`→`/private/var` 那种
+  // 布局：TMPDIR 本来就是真实路径时（Linux 常见、macOS 也可以配），拿 `realpathSync(stage)`
+  // 跟原值比会相等，于是即便功能完全正确，整个用例也会失败（第 3 轮审查 N2）。
+  const sharedLink = join(stage, "shared-link");
+  symlinkSync(shared, sharedLink, "dir");
   const aliased = await read("AliasTask01", {
-    path: aliasRoot, branch: "ash/AliasTask01", gitRepo: true,
+    path: join(sharedLink, ".worktrees", "AliasTask01"), branch: "ash/AliasTask01", gitRepo: true,
     source: "worktree" as const, repo: realpathSync(shared), projectId: "p",
   });
-  assert.notEqual(realpathSync(shared), shared, "这条用例要靠 /var → /private/var 这个软链才有意义");
+  assert.notEqual(
+    join(sharedLink, ".worktrees", "AliasTask01"), aliasRoot,
+    "这条用例的前提：两个字符串不同、指向同一个目录（软链由夹具自己建，不靠宿主布局）",
+  );
   assert.equal(aliased.scope, "exclusive", "软链别名指的是同一个目录，独占判据不能被它骗过去");
   assert.equal(
     originOf(aliased, "output/收尾很久之后渲染出来的.png"), "ignored",
@@ -423,6 +455,72 @@ try {
     );
   }
 
+  // ── 必须修 2：中间那一轮没落账,不能被后来成功的那条记录盖掉 ──────────────────
+  // 三轮运行、第二轮的 `recordTurnSpan` 写失败：库里只剩第一和第三轮。两头都对得上
+  //（最早贴着会话起点、最新等于 turn_started_at），原先据此判「历史完整」，第二轮做出来的
+  // 东西于是被静默滤掉、面板空着还什么都不说。会话行上的 `turns_started` 才是权威计数。
+  await addTask("GapMid00001");
+  await addSession("s-gapmid", "GapMid00001", shared, 1000, 1250, { turnStartedAt: iso(1240), turnsStarted: 3 });
+  await addTurn("t-gapmid-1", "s-gapmid", "GapMid00001", shared, 1000, 1010);
+  await addTurn("t-gapmid-3", "s-gapmid", "GapMid00001", shared, 1240, 1250);
+  write(shared, "output/中间那轮做出来的.png");
+  touch(shared, "output/中间那轮做出来的.png", at(1125));
+  const gapMid = await read("GapMid00001");
+  assert.equal(
+    originOf(gapMid, "output/中间那轮做出来的.png"), "ignored",
+    "中间缺了一轮记录,那一轮的产物不能被静默滤掉",
+  );
+  assert.ok(
+    gapMid.incomplete.some((line) => line.includes("没在库里留下记录")),
+    "缺了几轮就说几轮:这段是按整条会话兜出来的,算不准要明说",
+  );
+  assert.ok(
+    gapMid.incomplete.some((line) => line.includes("按估出来的时间段认的")),
+    "靠推断区间认进来的条目要单独说一句:它们是候选,不能跟实测的混在一起不说话",
+  );
+
+  // 在飞的任务**照样要查**早期缺口：续聊一进来就跳过检查，历史上的不确定会凭空消失一阵。
+  await addTask("LiveEarly01", { status: "running" });
+  await addSession("s-liveearly", "LiveEarly01", shared, 1300, null, { turnStartedAt: iso(1400), turnsStarted: 2 });
+  await addTurn("t-liveearly", "s-liveearly", "LiveEarly01", shared, 1400, 1410);
+  const liveEarly = await read("LiveEarly01");
+  assert.ok(
+    liveEarly.incomplete.length > 0,
+    "在飞不等于历史清白:早期那段没有记录,仍然要说出来",
+  );
+
+  // 同一条会话**换过工作目录**（旧目录还在）：完整性是会话自己的属性，不能因为本目录上只
+  // 剩一条回合就当成「这个目录缺了历史」去放宽清单。
+  await addTask("MovedTask01");
+  const movedAway = join(shared, ".worktrees", "MovedTask01");
+  git(shared, ["worktree", "add", "-q", "-b", "ash/MovedTask01", movedAway, "main"]);
+  await addSession("s-moved", "MovedTask01", shared, 1500, 1560, { turnStartedAt: iso(1550), turnsStarted: 2 });
+  await addTurn("t-moved-1", "s-moved", "MovedTask01", movedAway, 1500, 1510);
+  await addTurn("t-moved-2", "s-moved", "MovedTask01", shared, 1550, 1560);
+  write(shared, "output/它在别处跑那会儿主仓里出现的.png");
+  touch(shared, "output/它在别处跑那会儿主仓里出现的.png", at(1520));
+  const moved = await read("MovedTask01");
+  assert.equal(
+    originOf(moved, "output/它在别处跑那会儿主仓里出现的.png"), null,
+    "那一回合在别的目录跑,这个目录上那会儿出现的东西不是它的",
+  );
+  assert.deepEqual(moved.incomplete, [], "回合一条不缺,只是有一条在别的目录——不是缺口");
+
+  // ── N1：同一进程内软链换了指向,不能沿用上一次的独占结论 ──────────────────────
+  const swing = join(stage, "swing");
+  symlinkSync(aliasRoot, swing, "dir");
+  const swingRoot = (branch: string) => ({
+    path: swing, branch, gitRepo: true, source: "worktree" as const,
+    repo: realpathSync(shared), projectId: "p",
+  });
+  assert.equal((await read("AliasTask01", swingRoot("ash/AliasTask01"))).scope, "exclusive");
+  rmSync(swing);
+  symlinkSync(shared, swing, "dir"); // 同一个字符串,现在指向共享主仓
+  assert.equal(
+    (await read("AliasTask01", swingRoot("main"))).scope, "shared",
+    "路径到真身的映射会变:独占凭据必须来自这一次解析,不能吃进程里缓存的旧答案",
+  );
+
   // ── N5：新表要进任务删除的原子批 ────────────────────────────────────────────
   // 不进去就会攒下无主的回合行：建删几轮之后，库里全是没人认领的区间。
   const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
@@ -436,6 +534,8 @@ try {
   console.log("✓ artifact scope: 特殊文件名、profile 深路径入口、venv 边界、上游异地区间、哨兵生命周期");
   console.log("✓ artifact scope: 同仓异目录(worktree 已删)的区间要认、任务分支 diff 不吃时间门槛");
   console.log("✓ artifact scope: 团队执行者各看各的/领队汇总、软链别名同目录、工作目录自己是 profile");
+  console.log("✓ artifact scope: 紧接着开工的执行者不串图、中间缺的那轮要认且披露、在飞也查早期缺口");
+  console.log("✓ artifact scope: 换过工作目录不算缺口、软链改指向后重新解析独占");
   console.log(`✓ artifact scope: 提交日期回拨不剪掉区间内的提交（--since-as-filter ${sinceAsFilter ? "可用" : "不可用,已披露"}）、删任务清掉回合记录`);
 } finally {
   await releaseTmpDb();

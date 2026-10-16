@@ -8,7 +8,8 @@ import type { WorkspaceRoot } from "./file-browser.js";
 import { readFileGitStatus } from "./file-git-status.js";
 import { taskBranchChangedPaths } from "./git-diff.js";
 import { kindOf, scanIgnoredArtifacts, type ArtifactKind } from "./task-artifact-scan.js";
-import { committedInWindows, resolveArtifactScope, withinWindows } from "./task-artifact-scope.js";
+import { committedInWindows, resolveArtifactScope } from "./task-artifact-scope.js";
+import { windowHit } from "./task-artifact-windows.js";
 
 // 「这个任务做出来的、值得看一眼的东西」——图片、网页、音视频、PDF。
 //
@@ -210,13 +211,19 @@ export async function readTaskArtifacts(
   }));
 
   const artifacts: TaskArtifact[] = [];
+  /** 靠推断区间认进来的条数——面板要单独说一句。 */
+  let guessed = 0;
   for (const { path, origins, info } of stated) {
     if (!info || !info.isFile()) continue; // 已删除 / 已改名的旧路径
     const mtimeMs = Number.isFinite(info.mtimeMs) ? info.mtimeMs : null;
     // 归属成立有两条独立的路：**提交证据**（它的提交动过这条路径）本身就是确定的，不吃时间；
     // 工作区改动和被忽略的文件只有「在这个目录里 + 时间对得上」这一条线索，共享目录上必须筛。
     const committedProof = origins.has("committed");
-    if (!committedProof && !exclusive && !withinWindows(mtimeMs, windows)) continue;
+    // 独占目录不吃时间；共享目录上要么有提交证据，要么时间对得上。靠**推断**出来的区间认
+    // 进来的那些单独数一笔：它们是候选，不能跟实测的混在一起不说话（第 3 轮审查必须修 1）。
+    const hit = exclusive ? "exact" : windowHit(mtimeMs, windows);
+    if (!committedProof && !hit) continue;
+    if (!committedProof && hit === "approx") guessed += 1;
     // 标签说的是**它现在是什么状态**：有未提交的改动就显示工作区改动（哪怕归属是提交证明
     // 下来的），否则按最强的那条证据。
     const origin: ArtifactOrigin = origins.has("working")
@@ -231,6 +238,10 @@ export async function readTaskArtifacts(
       mtime: mtimeMs === null ? null : new Date(mtimeMs).toISOString(),
       origin,
     });
+  }
+
+  if (guessed > 0) {
+    incomplete.push(`清单里有 ${guessed} 个是按估出来的时间段认的（见上面那几条），可能混进别人做的东西`);
   }
 
   // 新的排前面：面板要回答的是「它刚刚做出了什么」。

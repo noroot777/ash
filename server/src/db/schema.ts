@@ -407,6 +407,17 @@ export const sessions = sqliteTable("sessions", {
   // lifespan instead of a (wrong) execution time.
   activeMs: integer("active_ms"),
   turnStartedAt: text("turn_started_at"),
+  /**
+   * 这条会话**一共开过几个回合**。产物归属的完整性就靠它：`session_turns` 里的行数比它
+   * 少，说明中间有回合没落账（写库失败、异常重启），那段时间算不准、必须在面板上说出来。
+   *
+   * 为什么计数记在**这一行**而不是靠 `session_turns` 自己：它和 `turn_started_at` 在同一次
+   * update 里写，与那张表的写成败无关。原来读端只核对「最早一条贴不贴着会话起点」「最新
+   * 一条等不等于 turn_started_at」——两头都对得上，中间照样可能缺一轮；后来成功落账的那
+   * 一条会把缺口盖掉，那一轮做出来的东西于是被静默滤掉（第 3 轮审查必须修 2）。
+   * null = 这一列出现之前的老行，那种行按原来的三条推断走。
+   */
+  turnsStarted: integer("turns_started"),
   // ── 解绑重启（executors/detached.ts）────────────────────────────────────
   // 单飞任务的 agent 输出走文件而不是匿名管道，所以它活得过 server 重启。
   // 下面这组是重启后接管它所需的全部线索；常驻会话（团队调度台）不走这条路，

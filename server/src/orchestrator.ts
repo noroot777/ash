@@ -1,6 +1,6 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { isGoalRecovery } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
@@ -535,6 +535,10 @@ export async function continueTask(
         .update(sessions)
         .set({
           turnStartedAt: turnStart,
+          // 开了几个回合就记几次。产物归属拿它跟 `session_turns` 的行数比，少了就说明中间
+          // 有回合没落账、那段时间算不准（理由见 schema 里 `turnsStarted` 的注释）。记在
+          // 这一次 update 里是关键：它跟 turn_started_at 同生共死，与那张表的写成败无关。
+          turnsStarted: sql`COALESCE(${sessions.turnsStarted}, 0) + 1`,
           endedAt: null,
           exitStatus: null,
           commandLine: handle.commandLine,
@@ -590,6 +594,7 @@ export async function continueTask(
         commandLine: handle.commandLine,
         startedAt: turnStart,
         turnStartedAt: turnStart,
+        turnsStarted: 1, // 新开的会话行，这是它的第 1 个回合（同上）
         activeMs: 0,
         exitStatus: null,
         agentPid: handle.detached?.pid ?? null,

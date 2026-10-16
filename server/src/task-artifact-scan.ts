@@ -1,7 +1,7 @@
 import { access, readdir, stat } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { execFileText as exec } from "./exec.js";
-import { withinWindows, type RunWindow } from "./task-artifact-scope.js";
+import { withinWindows, type RunWindow } from "./task-artifact-windows.js";
 
 // 产物面板的**文件系统那一半**：哪些路径要整棵绕开、被忽略的条目按什么顺序扫、预算怎么
 // 花。归属证据在 `task-artifact-scope.ts`，三档合成在 `task-artifacts.ts`。

@@ -442,7 +442,12 @@ function flushSessionNotices(lead: Lead): void {
 async function beginTurn(lead: Lead, at = now()): Promise<void> {
   lead.busy = true;
   lead.turnStart = at;
-  await updateOwnSession(lead, "回合开始状态", { turnStartedAt: at, endedAt: null }, at);
+  await updateOwnSession(lead, "回合开始状态", {
+    turnStartedAt: at,
+    // 回合计数（产物归属的完整性判据，见 schema 里 `turnsStarted` 的注释）。
+    turnsStarted: sql`COALESCE(${sessions.turnsStarted}, 0) + 1`,
+    endedAt: null,
+  }, at);
   traceLead(lead, at, {
     kind: "run",
     model: lead.model,

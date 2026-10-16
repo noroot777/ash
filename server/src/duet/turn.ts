@@ -215,6 +215,7 @@ export async function runTurn(args: {
       cliSessionId: cliId,
       startedAt: turnStart,
       turnStartedAt: turnStart,
+      turnsStarted: 1, // 回合计数（产物归属的完整性判据，见 schema 里的注释）
       activeMs: 0,
       exitStatus: null,
     });
@@ -224,7 +225,12 @@ export async function runTurn(args: {
     // end, so the gate wait is excluded from execution time.
     await db
       .update(sessions)
-      .set({ turnStartedAt: turnStart, endedAt: null, ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir) })
+      .set({
+        turnStartedAt: turnStart,
+        turnsStarted: sql`COALESCE(${sessions.turnsStarted}, 0) + 1`, // 同上
+        endedAt: null,
+        ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir),
+      })
       .where(eq(sessions.id, rowId));
   }
 
