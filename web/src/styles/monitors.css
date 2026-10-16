@@ -74,22 +74,38 @@
 /* 不能挂哨兵时那一句：说清为什么，而不是让「+」凭空消失。 */
 .monitor-inspector__blocked { margin: 0 0 9px; border-left: 2px solid var(--line2); padding-left: 8px; color: var(--faint); font-size: 10px; line-height: 1.6; }
 
-/* ── 会话区底部那条「在等哨兵」(MonitorWaitCard) ──────────────────────────────
-   跟提问卡同一个落点(task-question-dock),所以外形也跟它一脉:一张窄卡、顶部一行抬头、
-   下面摊开要点。颜色借 --accent 的低饱和版 —— 它表达的是「正在等一件会自己回来的事」,
-   不是警告,不该跟红色的故障条抢眼睛。 */
-.monitor-wait { min-width: 0; border: 1px solid color-mix(in lch, var(--accent) 26%, var(--line)); border-radius: 10px; background: color-mix(in lch, var(--accent) 4%, var(--panel)); padding: 9px 11px; }
-.monitor-wait > header { display: flex; align-items: center; gap: 7px; color: var(--accent); }
-.monitor-wait > header > b { color: var(--ink); font-size: 11.5px; font-weight: 650; }
-.monitor-wait__open { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; border: 0; border-radius: 6px; background: transparent; padding: 2px 4px; color: var(--muted); font-size: 10px; }
-.monitor-wait__open:hover { background: var(--raised); color: var(--ink); }
-.monitor-wait__list { display: grid; gap: 3px; margin: 7px 0 0; padding: 0; list-style: none; }
+/* ── 回复框上方那条哨兵(MonitorWaitCard) ──────────────────────────────────────
+   它住在 .task-reply-rail 里,跟派审/预览那几颗按钮同一行。两态:
+     折叠 — 一条 26px 的横条,跟旁边的 rail 按钮等高,占满那一行的剩余宽度;
+     展开 — flex-basis 变 100%,被 rail 的 flex-wrap 挤到下一行独占,长成一张卡。
+   颜色借 --accent 的低饱和版 —— 它表达的是「正在等一件会自己回来的事」,不是警告,
+   不该跟红色的故障条抢眼睛。 */
+.monitor-wait { min-width: 0; flex: 1 1 220px; border: 1px solid color-mix(in lch, var(--accent) 26%, var(--line)); border-radius: 8px; background: color-mix(in lch, var(--accent) 4%, var(--panel)); }
+/* 展开 = 换行独占。放在折叠态那条右边会越写越窄,正文根本排不开。 */
+.monitor-wait.is-open { flex-basis: 100%; padding-bottom: 9px; }
+.monitor-wait__bar { display: flex; width: 100%; min-width: 0; height: 26px; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: transparent; padding: 0 8px; color: var(--accent); text-align: left; }
+.monitor-wait__bar:hover { background: color-mix(in lch, var(--accent) 9%, var(--panel)); }
+.monitor-wait__bar:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 48%, transparent); outline-offset: 1px; }
+.monitor-wait__bar > svg { flex: 0 0 auto; }
+.monitor-wait__bar > b { flex: 0 0 auto; color: var(--ink); font-size: 11px; font-weight: 650; letter-spacing: -.01em; }
+/* 摘要是这一行里唯一可长可短的东西,所以压缩和省略号都落在它身上:期限和箭头不许被挤掉。 */
+.monitor-wait__brief { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--muted); font-size: 10.5px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-wait__caret { flex: 0 0 auto; color: var(--faint); transition: transform .12s ease; }
+/* 展开后摘要就该让位:下面那份列表把每一条都写全了(各自的期限也在),条上再留一份
+   「头一个 + 期限」就是同一句话印两遍。只留标题——它此刻的作用是这张卡的抬头。 */
+.monitor-wait.is-open .monitor-wait__brief, .monitor-wait.is-open .monitor-wait__bar > .monitor-wait__when { display: none; }
+.monitor-wait.is-open .monitor-wait__bar > b { flex: 1 1 auto; }
+.monitor-wait.is-open .monitor-wait__caret { transform: rotate(180deg); }
+.monitor-wait__body { padding: 0 11px; }
+.monitor-wait__list { display: grid; gap: 3px; margin: 2px 0 0; padding: 0; list-style: none; }
 .monitor-wait__list > li { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
 .monitor-wait__what { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
-.monitor-wait__when { margin-left: auto; color: var(--faint); font-size: 9.5px; white-space: nowrap; }
+.monitor-wait__when { flex: 0 0 auto; margin-left: auto; color: var(--faint); font-size: 9.5px; font-weight: 400; white-space: nowrap; }
 .monitor-wait__note { margin: 8px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.65; }
 /* 交代原文是 agent 对自己说的话,排成引文好跟说明本身分开。 */
 .monitor-wait__note q { color: var(--muted); quotes: "「" "」"; }
+.monitor-wait__open { display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; border: 0; border-radius: 6px; background: transparent; padding: 2px 6px 2px 0; color: var(--muted); font-size: 10px; }
+.monitor-wait__open:hover { color: var(--ink); }
 
 /* ── 按来源分段(MonitorInspector)──────────────────────────────────────────────
    两种哨兵的能力不对等,混排会让用户对着一张只读卡去找停止按钮。段头做得轻:一行小字,
@@ -101,5 +117,6 @@
 /* 只有内置 Monitor 在跑时：它不表达「正在等一件会回来的事」,所以不借 --accent 那套
    «进行中» 的颜色,退到中性底色上 —— 卡片说的恰恰是「别指望它叫醒你」。 */
 .monitor-wait.is-builtin-only { border-color: var(--line); background: var(--panel); }
-.monitor-wait.is-builtin-only > header { color: var(--muted); }
+.monitor-wait.is-builtin-only .monitor-wait__bar { color: var(--muted); }
+.monitor-wait.is-builtin-only .monitor-wait__bar:hover { background: var(--raised); }
 .monitor-wait__note code { border-radius: 4px; background: var(--overlay); padding: 0 3px; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9px; }

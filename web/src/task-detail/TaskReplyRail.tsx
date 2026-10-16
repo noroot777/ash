@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Task } from "@ash/shared";
 import { PaperPlaneTilt } from "@phosphor-icons/react";
 import type { Notify } from "../lib/notify.ts";
@@ -10,6 +11,7 @@ export function TaskReplyRail({
   task,
   freeToolbar,
   canHandoff,
+  monitorWait,
   onHandoff,
   notify,
 }: {
@@ -18,6 +20,12 @@ export function TaskReplyRail({
   freeToolbar: boolean;
   /** 接力入口给不给：单飞、没归档、不在队列里、没接力出去(或还悬着)。 */
   canHandoff: boolean;
+  /**
+   * 哨兵那一条（折叠态；`MonitorWaitCard` 自己管展开）。落在这条 rail 上是因为它和这里
+   * 的按钮是同一类东西：**任务正跑着也得看得见**。展开后它靠 `flex-basis: 100%` 换到
+   * 下一行占满——那时它是一张卡，跟按钮挤在一行会两头都读不清。
+   */
+  monitorWait?: ReactNode;
   onHandoff: () => void;
   notify: Notify;
 }) {
@@ -33,6 +41,7 @@ export function TaskReplyRail({
           <span>{returning ? "移回..." : "接力到..."}</span>
         </button>
       )}
+      {monitorWait}
     </div>
   );
 }

@@ -507,28 +507,17 @@ export function TaskDetail({
                     reviewRetryable={freeReviewRetryable(free.state?.reviews)}
                     reviews={free.state?.reviews}
                     onOpenReviewPanel={() => openTab("review")}
-                    // 会话区底部的常驻卡。两张可以同时在：提问要人答，哨兵会自己回来——
-                    // 任务完全可能一边等答复一边挂着哨兵，这时少显示哪一张都是在瞒。
-                    dock={task.question || liveMonitors.length || liveBuiltinCount ? (
-                      <>
-                        {task.question && (
-                          <QuestionCard
-                            task={task}
-                            onAnswer={async (answer, input) => {
-                              await api.answerTask(task.id, answer, input);
-                              notify("已发送答复，任务正在续跑");
-                            }}
-                          />
-                        )}
-                        <MonitorWaitCard
-                          monitors={liveMonitors}
-                          builtinCount={liveBuiltinCount}
-                          status={task.status}
-                          resumePrompt={task.resumePrompt ?? null}
-                          reviewArmed={!!free.state?.reviewReservation.armed}
-                          onOpenPanel={() => openTab("monitors")}
-                        />
-                      </>
+                    // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条
+                    // 对话上下文里）；哨兵是「它自己会回来」，一行就够，落在回复框上方
+                    // 那条 rail 上（见下面的 monitorWait）。
+                    dock={task.question ? (
+                      <QuestionCard
+                        task={task}
+                        onAnswer={async (answer, input) => {
+                          await api.answerTask(task.id, answer, input);
+                          notify("已发送答复，任务正在续跑");
+                        }}
+                      />
                     ) : undefined}
                   />
                   </ConversationSelection>
@@ -537,12 +526,27 @@ export function TaskDetail({
                     task={task}
                     hasConversation={hasConversation}
                     conversationItems={conversation.items}
-                    topRail={freeToolbarVisible || canHandoff
+                    // 哨兵那一条也住这儿:它跟派审/预览是同一类东西——任务正跑着也得
+                    // 看得见。所以 rail 的显示条件要连它一起算,否则「只有哨兵、没有那
+                    // 几个按钮」的任务（归档的、预设工作流的）会整条消失。
+                    topRail={freeToolbarVisible || canHandoff || liveMonitors.length || liveBuiltinCount
                       ? (
                         <TaskReplyRail
                           task={task}
                           freeToolbar={freeToolbarVisible}
                           canHandoff={canHandoff}
+                          monitorWait={(
+                            <MonitorWaitCard
+                              // 切任务时折叠回去:上一个任务展开过,不代表这一个也该展开。
+                              key={task.id}
+                              monitors={liveMonitors}
+                              builtinCount={liveBuiltinCount}
+                              status={task.status}
+                              resumePrompt={task.resumePrompt ?? null}
+                              reviewArmed={!!free.state?.reviewReservation.armed}
+                              onOpenPanel={() => openTab("monitors")}
+                            />
+                          )}
                           onHandoff={() => onHandoff?.(task)}
                           notify={notify}
                         />
