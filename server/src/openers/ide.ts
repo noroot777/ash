@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { access, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { IS_WINDOWS, splitPathList } from "../platform.js";
 import { IDE_CATALOG, type IdeSpec } from "./ide-catalog.js";
 
@@ -54,28 +54,51 @@ async function isExecutableFile(path: string): Promise<boolean> {
   return await access(path, constants.X_OK).then(() => true, () => false);
 }
 
+type Env = Record<string, string | undefined>;
+
+/**
+ * PATH 上这条命令的候选文件名,按先后顺序。
+ *
+ * 跟实际的 stat 分开导出,是为了让 Windows 那半边能在**开发机上**测到:那边 `code` 实际
+ * 落地成 `code.cmd`,PATHEXT 漏了或者分隔符写成冒号,症状都只是「我的 IDE 没出现」,
+ * 在 macOS 上跑多少次都发现不了(跟 windows.ts 导出 registryScript 同一个理由)。
+ */
+export function commandCandidates(name: string, env: Env = process.env, windows = IS_WINDOWS): string[] {
+  const exts = windows
+    ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((ext) => ext.trim()).filter(Boolean)
+    : [""];
+  // PATH 的分隔符 Windows 是 `;`,别写死 `:`——那会把 `C:\\bin` 从盘符处切成两段。
+  const dirs = windows ? (env.PATH ?? "").split(";").filter(Boolean) : splitPathList(env.PATH);
+  // 拼接也按目标平台取,不跟着**当前**平台走:`node:path` 的 join 在 macOS 上是 posix 版,
+  // 拼出来是 `C:\\system32/code.EXE`。运行时跑在 Windows 上本来就是对的,但那样这段逻辑
+  // 就只能在 Windows 上验证——而它写错的症状只是「那边探不到 IDE」,没人查得到这里。
+  const joinPath = windows ? win32.join : join;
+  return dirs.flatMap((dir) => exts.map((ext) => joinPath(dir, name + ext)));
+}
+
 /** PATH 上找一条命令。Windows 按 PATHEXT 补后缀(`code` 实际是 `code.cmd`)。 */
 async function whichCommand(name: string): Promise<string | null> {
-  const exts = IS_WINDOWS
-    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
-    : [""];
-  for (const dir of splitPathList(process.env.PATH)) {
-    for (const ext of exts) {
-      const candidate = join(dir, name + ext);
-      if (await isExecutableFile(candidate)) return candidate;
-    }
+  for (const candidate of commandCandidates(name)) {
+    if (await isExecutableFile(candidate)) return candidate;
   }
   return null;
 }
 
-/** 把 `{LOCALAPPDATA}` 这类占位符换成真实目录;变量不存在就判定这条候选不可用。 */
-function expandWindowsBase(template: string): string | null {
+/**
+ * 把 `{LOCALAPPDATA}` 这类占位符换成真实目录;变量不存在就判定这条候选不可用
+ * (返回 null,而不是拼出一条带 `{LOCALAPPDATA}` 字面量的假路径去 stat)。
+ *
+ * `env` 可注入,同样是为了能在非 Windows 机器上测 —— 这段拼接错了只会表现成「探不到」。
+ */
+export function expandWindowsBase(template: string, env: Env = process.env): string | null {
   const bases: Record<string, string | undefined> = {
-    LOCALAPPDATA: process.env.LOCALAPPDATA,
-    APPDATA: process.env.APPDATA,
-    PROGRAMFILES: process.env.ProgramFiles ?? process.env.PROGRAMFILES,
-    PROGRAMFILESX86: process.env["ProgramFiles(x86)"] ?? process.env["PROGRAMFILES(X86)"],
-    USERPROFILE: process.env.USERPROFILE ?? homedir(),
+    LOCALAPPDATA: env.LOCALAPPDATA,
+    APPDATA: env.APPDATA,
+    // Windows 真实的变量名是 `ProgramFiles`(驼峰),而 `process.env` 在非 Windows 上
+    // 区分大小写,两种写法都认一下。
+    PROGRAMFILES: env.ProgramFiles ?? env.PROGRAMFILES,
+    PROGRAMFILESX86: env["ProgramFiles(x86)"] ?? env["PROGRAMFILES(X86)"],
+    USERPROFILE: env.USERPROFILE ?? homedir(),
   };
   let missing = false;
   const expanded = template.replace(/\{([A-Z0-9]+)\}/g, (whole, name: string) => {
@@ -86,6 +109,8 @@ function expandWindowsBase(template: string): string | null {
     }
     return value;
   });
+  // 清单里为了可读写的是正斜杠,Windows 的 API 大多也认,但拼出来的路径会在界面上原样
+  // 显示给用户看——那边的人只认 `\`。
   return missing ? null : expanded.replace(/\//g, "\\");
 }
 

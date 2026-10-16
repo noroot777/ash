@@ -7,7 +7,10 @@
 //   ② 路径仍然走 `resolveTarget`,越界 / 不存在照样拒;
 //   ③ 没有工作目录的任务 404;
 //   ④ 清单本身的形状:id 不重名、每条至少给了一种平台的线索 —— 少了的那条在任何机器上
-//      都永远探不到,而症状只是「我的 IDE 没出现」,没人会想到是清单写漏了。
+//      都永远探不到,而症状只是「我的 IDE 没出现」,没人会想到是清单写漏了;
+//   ⑤ Windows 那半边的路径拼接(PATHEXT、`;` 分隔、`{LOCALAPPDATA}` 展开)。这几条在
+//      macOS 上跑多少次都走不到,所以按 windows.ts 的老办法把纯函数导出来直接喂数据。
+//      **仍未真机验证的是 `cmd /c start` 那一步**(2026-10-16:192.168.1.187 不在网上)。
 //
 // 探测结果本身跟机器有关(这台装了什么),所以只断言形状不断言内容。
 //
@@ -30,6 +33,7 @@ const { projects, tasks } = await import("../src/db/schema.js");
 const { Hono } = await import("hono");
 const { api } = await import("../src/routes.js");
 const { IDE_CATALOG } = await import("../src/openers/ide-catalog.js");
+const { commandCandidates, expandWindowsBase } = await import("../src/openers/ide.js");
 
 await ensureSchema();
 const app = new Hono();
@@ -109,6 +113,60 @@ await check("macOS 那一列写的是 .app 名字，不是路径", () => {
     for (const app of spec.macApps ?? []) {
       assert.ok(app.endsWith(".app"), `${spec.id} 的 ${app} 不是 .app`);
       assert.ok(!app.includes("/"), `${spec.id} 的 ${app} 带了路径——扫描目录由 ide.ts 决定`);
+    }
+  }
+});
+
+// ── Windows 那半边的拼接（在 macOS 上也必须测得到） ────────────────────────
+const winEnv = {
+  PATHEXT: ".COM;.EXE;.BAT;.CMD",
+  PATH: "C:\\Windows\\system32;C:\\Users\\me\\AppData\\Local\\Programs\\cursor",
+  LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local",
+  ProgramFiles: "C:\\Program Files",
+  "ProgramFiles(x86)": "C:\\Program Files (x86)",
+};
+
+await check("Windows: PATH 按分号切，每个目录再按 PATHEXT 补后缀", () => {
+  const candidates = commandCandidates("code", winEnv, true);
+  assert.deepEqual(candidates.slice(0, 2), [
+    "C:\\Windows\\system32\\code.COM",
+    "C:\\Windows\\system32\\code.EXE",
+  ]);
+  assert.ok(
+    candidates.includes("C:\\Users\\me\\AppData\\Local\\Programs\\cursor\\code.CMD"),
+    "`code` 在 Windows 上实际是 code.cmd，漏了这一档等于在那边永远探不到 VS Code",
+  );
+  assert.equal(candidates.length, 8, "2 个目录 × 4 个后缀");
+});
+
+await check("非 Windows: 不补后缀，按冒号切", () => {
+  const candidates = commandCandidates("code", { PATH: "/usr/local/bin:/usr/bin" }, false);
+  assert.deepEqual(candidates, ["/usr/local/bin/code", "/usr/bin/code"]);
+});
+
+await check("Windows: 占位符展开成真实目录，正斜杠归一成反斜杠", () => {
+  assert.equal(
+    expandWindowsBase("{LOCALAPPDATA}/Programs/cursor/Cursor.exe", winEnv),
+    "C:\\Users\\me\\AppData\\Local\\Programs\\cursor\\Cursor.exe",
+  );
+  assert.equal(
+    expandWindowsBase("{PROGRAMFILESX86}/Microsoft VS Code/Code.exe", winEnv),
+    "C:\\Program Files (x86)\\Microsoft VS Code\\Code.exe",
+  );
+});
+
+await check("Windows: 变量不存在时判定这条候选不可用，不拼出带花括号的假路径", () => {
+  const expanded = expandWindowsBase("{LOCALAPPDATA}/Programs/x.exe", { PATHEXT: "", PATH: "" });
+  assert.equal(expanded, null);
+});
+
+await check("清单里 Windows 那一列用的占位符都是认得出来的那几个", () => {
+  const known = new Set(["LOCALAPPDATA", "APPDATA", "PROGRAMFILES", "PROGRAMFILESX86", "USERPROFILE"]);
+  for (const spec of IDE_CATALOG) {
+    for (const template of spec.windowsPaths ?? []) {
+      for (const [, name] of template.matchAll(/\{([A-Z0-9]+)\}/g)) {
+        assert.ok(known.has(name!), `${spec.id} 用了认不出的占位符 {${name}}，那条路径永远展不开`);
+      }
     }
   }
 });
