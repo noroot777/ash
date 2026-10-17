@@ -35,6 +35,7 @@ const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
 const { parseGrokModels } = await import("../src/executors/catalog/grok.js");
 const { parseCodexModels } = await import("../src/executors/catalog/codex.js");
 const { parsePiModels } = await import("../src/executors/catalog/pi.js");
+const { parseOpencodeModels } = await import("../src/executors/catalog/opencode.js");
 const { parseClaudeModelInfos } = await import("../src/executors/claude-model-probe.js");
 const { extractClaudeDocModels } = await import("../src/executors/claude-doc-models.js");
 const { catalogTtlMs, modelCatalogFor, modelCatalogs, normalizeModelList, resetModelCatalogCache } =
@@ -149,6 +150,31 @@ const CODEX_REAL = JSON.stringify({
   assert.ok(!parsed.models.some((m) => m.startsWith("provider/")), "pi:表头行不能被当成模型");
 }
 assert.deepEqual(parsePiModels("").models, [], "pi:空输出解析成空数组");
+
+{
+  const models = [
+    "opencode/beam-free",
+    "opencode/big-pickle",
+    "opencode/deepseek-v4.1-flash-free",
+    "opencode/glm-5.3-flash-free",
+    "opencode/longcat-2.5-preview-free",
+    "opencode/mimo-v2.6-flash-free",
+    "opencode/nemotron-3-ultra-free",
+    "opencode/nemotron-3.5-lightning-free",
+    "opencode/nemotron-3.5-super-vl-free",
+    "opencode/space-bunny-free",
+  ];
+  assert.deepEqual(parseOpencodeModels(`${models.join("\n")}\n`).models, models);
+  assert.deepEqual(
+    parseOpencodeModels("\x1b[32mopencode/big-pickle\x1b[0m\r\n  openrouter/openai/gpt-5.6  \r\n").models,
+    ["opencode/big-pickle", "openrouter/openai/gpt-5.6"],
+    "opencode:去掉 ANSI 与空白,保留带子路径的 provider/model",
+  );
+  for (const output of ["", "Please connect a provider", "opencode models [provider]", "https://opencode.ai/docs", "/tmp/models.json"]) {
+    assert.deepEqual(parseOpencodeModels(output).models, [], "opencode:空输出、提示语、用法与路径不能冒充模型");
+  }
+  assert.deepEqual(CLI_SPEC_BY_KEY.opencode.models?.args, ["models"], "opencode:模型查询使用只读清单命令");
+}
 
 // ── ② 去重保序 + 默认模型排首位 ─────────────────────────────────────────
 assert.deepEqual(
@@ -311,6 +337,25 @@ assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败�
     } else {
       assert.ok(catalog.error, "探测失败必须带上原因,否则界面只能显示一个假的实时清单");
       console.log(`· codex 装着但没探到清单(${catalog.error}),已降级到快照 —— 符合预期`);
+    }
+  }
+}
+
+{
+  const spec = CLI_SPEC_BY_KEY.opencode;
+  const installed = await probeBins(spec.bins, spec.fallbackVersionMatch);
+  if (!installed) {
+    console.log("· 本机没装 opencode,跳过真实探测断言");
+  } else {
+    const catalog = await modelCatalogFor("opencode", true);
+    assert.ok(catalog.available, "opencode:探到了 bin 就该报 available");
+    if (catalog.source === "probe") {
+      assert.ok(catalog.models.length > 0, "opencode:探测成功应给出非空清单");
+      assert.ok(catalog.models.every((model) => model.includes("/")), "opencode:候选保留 provider/model 完整 ID");
+      console.log(`· opencode ${catalog.cliVersion ?? "?"} 实探:${catalog.models.join(", ")}`);
+    } else {
+      assert.ok(catalog.error, "opencode:探测失败必须带上原因");
+      console.log(`· opencode 装着但没探到清单(${catalog.error}),已降级到快照`);
     }
   }
 }
@@ -499,6 +544,9 @@ assert.ok(catalogTtlMs(docsFallback) < catalogTtlMs(claudeDocs), "文档失败�
   const forced = await modelCatalogFor("grok", true);
   assert.equal(forced.skipped, MULTI_USER_HOST_CLI_MODELS_HIDDEN, "刷新也不问");
   assert.equal(forced.source, "preset", "刷新也只有快照");
+  const opencode = await modelCatalogFor("opencode", true);
+  assert.equal(opencode.skipped, MULTI_USER_HOST_CLI_MODELS_HIDDEN, "opencode:隔离模式刷新也不查询宿主 CLI");
+  assert.deepEqual(opencode.models, CLI_MODEL_PRESETS.opencode, "opencode:隔离模式不泄漏宿主模型目录");
   // 整份清单端点同样如此,而不是只有单个 type 那条路被堵上。
   for (const catalog of await modelCatalogs()) {
     assert.equal(catalog.source, "preset", `${catalog.type}:多人模式下不该有探测结果`);

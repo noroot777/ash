@@ -6,7 +6,7 @@ import type { CliParser, CliParserContext, CliSpec } from "./types.js";
 
 // 检测字段原样来自旧 detect.ts 的 KNOWN_CLIS。执行部分按 2026-07-30 的官方 docs
 // (opencode.ai/docs/cli)与 dev 分支源码(packages/opencode/src/cli/cmd/run.ts)校准,
-// **本机未装、未实测**,所以 untested 保留。
+// 执行回合仍未实测,所以 untested 保留;模型清单已在本机 v1.19.3 实测。
 export const opencodeSpec: CliSpec = {
   key: "opencode",
   name: "OpenCode",
@@ -40,6 +40,10 @@ export const opencodeSpec: CliSpec = {
     "对本 parser 无影响(不依赖 step_finish 收口),但会让 token/费用统计缺失;" +
     "③relay 故意没写:opencode 的自定义 provider 只能配在 opencode.json 的 provider.*.options.baseURL 里," +
     "没有「一个环境变量改 base url」的通道,拿半截配置去撞端点不如让它用自己的账号。",
+  models: {
+    args: ["models"],
+    parse: (stdout) => parseOpencodeModels(stdout),
+  },
   exec: {
     subcommand: ["run"],
     // --auto:自动批准未被显式拒绝的权限(不给它 = 工具调用全被 reject)。
@@ -58,6 +62,15 @@ export const opencodeSpec: CliSpec = {
     parser: (ctx) => opencodeEvents(ctx),
   },
 };
+
+export function parseOpencodeModels(stdout: string): { models: string[] } {
+  const models = stdout
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^[a-z0-9][\w.-]*(?:\/[a-z0-9][\w.:@+-]*)+$/i.test(line));
+  return { models };
+}
 
 /**
  * `opencode run --format json` 的 JSONL 解析。
