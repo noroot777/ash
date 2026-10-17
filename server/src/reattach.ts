@@ -21,6 +21,7 @@ import { recordUserConversationTurn } from "./conversation-turn.js";
 import { withSkillInvocation } from "./skills.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
+import { closeSessionTurns, markTurnActive } from "./session-turns.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -144,6 +145,11 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       });
       trackRun(task.id, handle);
       adopted.add(task.id);
+      // 接回的这一轮**真的还在跑**,把它的回合身份重新登记上（产物面板据此判「还在写」）。
+      // 进程内的活动登记随重启清空是刻意的：ash 重启后没有任何回合还在跑,库里那些「开始了
+      // 没收口」一律回到「未知」那一档。但接回成功是相反方向的新证据——这条会话这一刻确实
+      // 在写,不登记的话面板会把正在落盘的产物说成「算不准」（第 5 轮审查必须修 1 的对称面）。
+      markTurnActive({ sessionId: sess.id, taskId: task.id, startedAt: sess.turnStartedAt ?? sess.startedAt });
       // 接管也要恢复 turn 的运行时身份：report_stage 只认 turnRole（claimTurn 落下的），
       // 不恢复的话接回的 reviewer 交卷必被拒，一条本可有结论的审查被错杀成异常失败。
       const claimedTurn = claimTurn(task.id, sess.role);
@@ -177,11 +183,16 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         .finally(() => {
           untrackRun(task.id, handle);
           if (claimedTurn) releaseTurn(task.id);
+          // 接回的这条消费循环结束了（正常收尾、抛错、被停都走这里）：活动登记跟着撤,
+          // 否则一条接回后崩掉的会话会一直被读端当成「还在写」（第 6 轮审查必须修 1）。
+          closeSessionTurns(sess.id);
         });
       console.log(`[ash] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
     } catch (err) {
       console.error(`[ash] 接管 ${task.id} 失败:`, err);
       adopted.delete(task.id);
+      // 登记在 trackRun 之后、这段 try 里面,所以接管半路失败同样要撤（必须修 1 的同类出口）。
+      closeSessionTurns(sess.id);
     }
   }
   return adopted;

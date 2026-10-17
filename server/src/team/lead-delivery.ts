@@ -3,10 +3,19 @@
 // 串行、以及「打断与投递必须是同一个动作」,它们的理由都在下面那段注释里,跟事件消费循环
 // 放一起只会被淹掉(而且 session-consumer.ts 已经顶到 700 行上限)。
 import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
+import { nextTurnStart } from "../session-turns.js";
+import { holdTurn } from "./lead-turns.js";
 import type { Lead } from "./session-types.js";
 
-/** 一次投递的结果。`interrupted` 只对用户插话有意义:时间线上那句「已打断」靠它。 */
-export type LeadDelivery = { sent: boolean; interrupted: boolean };
+/**
+ * 一次投递的结果。
+ *
+ * `interrupted` 只对用户插话有意义:时间线上那句「已打断」靠它。
+ * `at` = 收下这条消息的那一刻,也就是**它开起来的那个回合的身份**(没收下就是 null)。调用方
+ * 必须拿它去 `beginTurn`,不能自己再取一次 `now()` —— 那会是**另一个**身份,于是同一轮在活动
+ * 册上登记两个起点,其中一个谁都不会来收。
+ */
+export type LeadDelivery = { sent: boolean; interrupted: boolean; at: string | null };
 
 /**
  * 把一条消息交给这台调度台的进程,**返回它收下了没有**(见 ResidentHandle.send)。
@@ -33,16 +42,26 @@ export async function sendToLead(lead: Lead, text: string, opts: { steer?: boole
       // 判据取在这里:读授权之后、写 stdin 之前,中间不再有 await。
       const interrupted = !!opts.steer && lead.busy;
       if (interrupted) lead.handle.interrupt();
+      // 身份从**身份层的分配器**拿,不是 `now()`：这条链上两条消息完全可能落在同一毫秒
+      // (读授权命中缓存时尤其容易),而墙钟毫秒一撞,队列、唯一键和活动册同时把两轮合成一轮
+      // —— 后开那一轮被前一轮的结束事件提前收口,它做出来的东西永久漏在清单外
+      // (第 2 轮审查 F1,机制见 session-turns.ts 的 nextTurnStart)。
+      const at = nextTurnStart(lead.sessId);
       const sent = lead.handle.send(message);
-      // 送进去了就等于一个回合已经开跑,记账**同步**跟上。调用方的 beginTurn 还隔着两次
-      // 写库,在那之前轮到链上下一条消息时,它读到的 busy 还是 false,就不会打断这个刚起的
-      // 回合。消费循环的 `!lead.busy && startsSelfTurn(event)` 兜得住「CLI 自己先吐了个
-      // 事件」的那一路,但那要碰运气 —— 这一行是不碰运气的那半。
-      if (sent) lead.busy = true;
-      return { sent, interrupted };
+      // 送进去了就等于一个回合已经开跑,**身份与状态一起在这儿落账**(holdTurn,见
+      // team/lead-turns.ts)。调用方的 beginTurn 还隔着两次写库,在那之前轮到链上下一条消息
+      // 时,它读到的 busy 还是 false,就不会打断这个刚起的回合;消费循环的
+      // `!lead.busy && startsSelfTurn(event)` 兜得住「CLI 自己先吐了个事件」的那一路,但那
+      // 要碰运气 —— 这一行是不碰运气的那半。
+      //
+      // 只置 busy 不持有身份是不够的(第 8 轮那一版):旧回合的 turnEnd 可能恰好落在这里和
+      // beginTurn 之间,那时队列里还没有这一轮,`releaseHeldTurn` 会把 busy 清回 false,消费
+      // 者于是对新回合的第一条输出另开一个起点 —— 真实起点(投入这一刻)就此丢掉。
+      if (sent) holdTurn(lead, at);
+      return { sent, interrupted, at: sent ? at : null };
     } catch (error) {
       console.error(`[ash] team send(${lead.taskId}) failed:`, error);
-      return { sent: false, interrupted: false };
+      return { sent: false, interrupted: false, at: null };
     }
   });
   // 链上只留「轮到下一个了」,不留成败 —— 一条没送成不该把后面的也拖成 rejected。

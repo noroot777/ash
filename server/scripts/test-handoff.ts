@@ -352,13 +352,19 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   const dstDb = createClient({ url: join(root, "target.db") });
   closeDstDb = () => dstDb.close();
   const dstSessions = (await dstDb.execute({
-    sql: "select id, cli_session_id as cli, cwd from sessions where task_id = ? order by started_at",
+    sql: `select id, cli_session_id as cli, cwd, turns_base as base, turns_base_approx as approx
+            from sessions where task_id = ? order by started_at`,
     args: [taskId],
-  })).rows as unknown as { id: string; cli: string | null; cwd: string }[];
+  })).rows as unknown as { id: string; cli: string | null; cwd: string; base: number | null; approx: number | null }[];
   assert.equal(dstSessions.length, 2);
   assert.equal(dstSessions[0]!.cli, cli1);
   assert.equal(dstSessions[1]!.cli, null, "文件没到货的会话 cliSessionId 必须置空,否则 --resume 会当场报错");
   assert.ok(dstSessions.every((s) => s.cwd === dstWs));
+  // 逐回合计数要**显式钉成「本机零历史」**,不许留 NULL。NULL 会被产物面板读成「逐回合记录
+  // 的升级那一步没跑成」（迁移明明跑成了,这条行只是从别的机器来的）,而且下一次启动的回填
+  // 会把同一条会话改说成「升级之前就跑过」—— 重启一次换一种说法（本轮审查第 4 条）。
+  assert.deepEqual(dstSessions.map((s) => [s.base, Number(s.approx)]), [[0, 0], [0, 0]],
+    `导入的会话行要带 turns_base=0 / approx=false,实际：${JSON.stringify(dstSessions)}`);
 
   // 待发送消息:对端新 id 原样落库,附件路径/本体一起到;源机原件取消留档且 sent_at
   // 保持 null(sent 只在原话真的进了会话之后才写)。定时计划落到对端并接上任务。

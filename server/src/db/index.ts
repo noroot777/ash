@@ -109,7 +109,8 @@ export async function ensureSchema() {
       agent_type TEXT NOT NULL, executor TEXT NOT NULL,
       worktree_path TEXT, branch TEXT, cwd TEXT, cli_session_id TEXT, resume_command TEXT,
       command_line TEXT, started_at TEXT NOT NULL, ended_at TEXT, exit_status INTEGER,
-      active_ms INTEGER, turn_started_at TEXT
+      active_ms INTEGER, turn_started_at TEXT, turns_started INTEGER,
+      turns_lost INTEGER, turns_base INTEGER, turns_base_approx INTEGER
     );
     CREATE TABLE IF NOT EXISTS schedules (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -123,6 +124,19 @@ export async function ensureSchema() {
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT,
       delivering_since TEXT
     );
+    CREATE TABLE IF NOT EXISTS session_turns (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      cwd TEXT,
+      started_at TEXT NOT NULL,
+      -- 可空：null = 这一回合开始了还没收口（见 schema.ts 上那段注释）。唯一索引
+      -- （session_id, started_at）由 migrate-session-turns.ts 在去重之后建——老库里可能
+      -- 已经有重复行，在这里建会抛，而这一段抛出去就是整台 ash 起不来。
+      ended_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS session_turns_task_idx ON session_turns(task_id, started_at);
+    CREATE INDEX IF NOT EXISTS session_turns_session_idx ON session_turns(session_id, started_at);
     CREATE TABLE IF NOT EXISTS monitors (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, command TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '', cwd TEXT NOT NULL,
@@ -366,6 +380,11 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN archived_at TEXT",
     "ALTER TABLE sessions ADD COLUMN active_ms INTEGER",
     "ALTER TABLE sessions ADD COLUMN turn_started_at TEXT",
+    // 回合计数：产物归属据它判断「有没有回合没落账」（见 schema 上的注释）。
+    "ALTER TABLE sessions ADD COLUMN turns_started INTEGER",
+    "ALTER TABLE sessions ADD COLUMN turns_base INTEGER",
+    "ALTER TABLE sessions ADD COLUMN turns_base_approx INTEGER",
+    "ALTER TABLE sessions ADD COLUMN turns_lost INTEGER",
     "ALTER TABLE tasks ADD COLUMN use_worktree INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
     "ALTER TABLE tasks ADD COLUMN worktree_start_commit TEXT",

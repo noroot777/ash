@@ -8,13 +8,14 @@ import type { TaskWorkspaceDiscardResult } from "@ash/shared";
 import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
+import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
 import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
 import { clearScanCursorsStatement } from "./claude-monitor-cursors.js";
 import { stopMonitorsForTask } from "./monitors.js";
 import { deleteTaskSideChats } from "./chat/lifecycle.js";
 import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
 import { taskBusyRejection } from "./task-busy.js";
+import { forgetTaskUnconfirmed } from "./session-turns.js";
 import { withRepoLock } from "./repo-lock.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 
@@ -85,6 +86,7 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     // 会话行、定时计划、队列位也一起收：孤儿 cron 每个 tick 都会被扫到再查不到任务，
     // 队列残位会顶住后续推进（审查实测：删除后 sessionRows/scheduleRows 各剩 1）。
     db.delete(sessions).where(eq(sessions.taskId, taskId)),
+    db.delete(sessionTurns).where(eq(sessionTurns.taskId, taskId)),
     db.delete(schedules).where(eq(schedules.taskId, taskId)),
     db.delete(queueItems).where(eq(queueItems.taskId, taskId)),
     // 团队派活自建的内部组（groups.owner_task_id=本任务）：GET /groups 默认过滤掉它们，
@@ -92,6 +94,11 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     db.delete(groups).where(eq(groups.ownerTaskId, taskId)),
     db.delete(tasks).where(eq(tasks.id, taskId)),
   ]);
+  // 库里的行删完了,写端内存里那几笔「没落账的开始意图」也得跟着走：它们本来只在「这条会话
+  // 又开一个回合」时才有人去补、去划掉（session-turns.ts 的 flushUnconfirmed）,任务都没了
+  // 就再也不会有那一下,留着就是长命进程里只增不减的无主条目（第 1 轮审查 N3）。
+  // **只在确实删除时清**:暂停、失败、停止一律不清 —— 那几笔还是有效证据。
+  forgetTaskUnconfirmed(taskId);
 }
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支

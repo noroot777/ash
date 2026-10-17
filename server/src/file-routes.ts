@@ -120,7 +120,12 @@ export function mountFileRoutes(api: Hono) {
   api.get("/tasks/:id/artifacts", async (c) => {
     const taskId = c.req.param("id");
     const root = await rootFor(taskId);
-    if (!root) return c.json({ root: null, artifacts: [], truncated: false, since: null, error: null });
+    if (!root) {
+      return c.json({
+        root: null, artifacts: [], truncated: false, since: null,
+        scope: "shared" as const, incomplete: [], error: null,
+      });
+    }
     try {
       return c.json({ root: publicRoot(root), ...await readTaskArtifacts(taskId, root) });
     } catch (error) {

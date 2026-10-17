@@ -9,6 +9,7 @@ import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
+import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn } from "./session-turns.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
@@ -187,8 +188,11 @@ export async function runTask(
     const freeze = takeFreeze(taskId, frozen);
     if (freeze) await abortFrozen(taskId, freeze);
     const prompt = withGlobalBrowserPolicy(promptBody, "full", browserGrant);
-    const turnStart = now();
     const sessId = id();
+    // 回合起点从身份层分配,不自己取 `now()`（见 session-turns.ts 的 nextTurnStart）：唯一性
+    // 是**会话级**不变量,八处起跑入口各自取时钟就各自碰运气。顺带让 trace/detach 的文件名
+    // （都由这个字符串派生）也跟着唯一。
+    const turnStart = nextTurnStart(sessId);
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
     // 解绑重启：输出落盘而不是走匿名管道，于是这个 agent 活得过 server 重启
@@ -233,7 +237,10 @@ export async function runTask(
       ...ex.resumeFields(ws.path, cliSessionId),
       commandLine: handle.commandLine,
       startedAt: turnStart,
-      turnStartedAt: turnStart,
+      // 回合字段一律从 helper 取（见 session-turns.ts 顶部那段）：这一处原先只写了
+      // turnStartedAt，于是单飞任务——也就是绝大多数任务——的回合数永远从 0 起计，少计
+      // 的那一次正好抵掉后面真缺的那一轮（第 4 轮审查必须修 1 的根因）。
+      ...freshTurnFields(turnStart),
       activeMs: 0,
       exitStatus: null as number | null,
       // 重启后靠这几个字段找回并接管它。pid 为空 = 这一轮没走 detached
@@ -246,6 +253,8 @@ export async function runTask(
       agentOffset: 0,
     };
     await db.insert(sessions).values(sessRow);
+    // 回合开始就落一行：收尾那下写不成时,「开了没收口」才有据可查(光靠计数对不出位置)。
+    await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     const baseNote = baseFallbackNote(ws.baseFallback);
@@ -294,5 +303,10 @@ export async function runTask(
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);
+    // 这一次调用结束了 = 它名下不再有回合在写。**注销不能只挂在正常收尾那条路上**：
+    // stream 抛错、结算写库失败、被停都走不到 `recordTurnSpan`,残留的活动登记会让读端把这条
+    // 早就死掉的会话当成「还在写」,下次跑起来就从老起点开到无穷、把中间别人做的东西收进来
+    //（第 6 轮审查必须修 1）。幂等,正常路径上收尾时已经注销过了。
+    closeTaskTurns(taskId);
   }
 }

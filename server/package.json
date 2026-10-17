@@ -152,6 +152,7 @@
     "test:skills": "tsx scripts/test-skills.ts",
     "test:file-browser": "tsx scripts/test-file-browser.ts",
     "test:task-artifacts": "tsx scripts/test-task-artifacts.ts",
+    "test:artifact-scope": "tsx scripts/test-task-artifact-scope.ts",
     "test:task-page": "tsx scripts/test-task-page.ts",
     "test:file-search": "tsx scripts/test-file-search.ts",
     "test:local-open": "tsx scripts/test-local-open.ts",
@@ -178,7 +179,10 @@
     "test:annotation-batches": "tsx scripts/test-page-annotation-batches.ts",
     "test:preview-workspace": "tsx scripts/test-preview-workspace.ts",
     "test:monitor-races": "tsx scripts/test-monitor-races.ts",
-    "test:db-tx": "tsx scripts/test-db-tx-ownership.ts"
+    "test:db-tx": "tsx scripts/test-db-tx-ownership.ts",
+    "test:turn-identity": "tsx scripts/test-session-turn-identity.ts && tsx scripts/test-team-turn-artifacts.ts",
+    "test:turn-migration": "tsx scripts/test-session-turn-migration.ts",
+    "test:turn-persist": "tsx scripts/test-session-turn-persist.ts"
   },
   "dependencies": {
     "@ash/shared": "*",
