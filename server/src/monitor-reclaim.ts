@@ -26,7 +26,7 @@
 //      整笔不许往下走(第 3、4 轮审查 F1)。
 //    「不许再创建」是同一条不变量的另一半,在 monitor-session.ts 的资格闸里;「重启之后谁来
 //    问一遍」在 `reattachMonitors`(按同一份出口资格)和启动期的债务清扫里。
-import { and, eq, isNotNull, ne } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRuns, monitors } from "./db/schema.js";
 import { cancelPendingMonitorEvents } from "./monitor-events.js";
@@ -34,6 +34,7 @@ import {
   archiveTracelessIdentity, heldReclaimDebts, reclaimMonitorProcess, settleReclaim,
 } from "./monitor-reclaim-debts.js";
 import { reclaimState } from "./monitor-reclaim-evidence.js";
+import { readSpawnIdentity } from "./monitor-spawn.js";
 import { isReviewSourceActive } from "./monitor-session.js";
 import { finish, isAshKind, serialize } from "./monitors.js";
 
@@ -90,6 +91,8 @@ async function stopMonitorsForTaskLocked(
       pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
       // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-evidence 的 `MonitorUnit`)。
       unitToken: monitors.unitToken,
+      // 身份边条就在它旁边:pid 还空着的创建意图行靠它认领(见 `reclaimMonitorProcess`)。
+      logPath: monitors.logPath,
       sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
     })
     .from(monitors)
@@ -143,6 +146,8 @@ async function stopMonitorsForTaskLocked(
 type MonitorRow = {
   id: string; taskId: string; status: string;
   pid: number | null; pidStartedAt: string | null; command: string; unitToken: string | null;
+  /** 身份边条的落点。pid 还空着时它是唯一的线索(第 19 轮审查 F2)。 */
+  logPath: string;
 };
 
 /** 停一条。返回「这一刀发出去了吗」;回收责任那一圈在 `finish` 里面(见文件头第 ④ 条)。 */
@@ -182,7 +187,14 @@ async function accountForLiveProcesses(
   // 当成「没什么可收」放行了(第 6 轮审查 F1 实测的那条路)。
   const withPid = rows.filter((r): r is MonitorRow & { pid: number } => r.pid !== null);
   const judged = withPid.map((r) => ({ row: r, traceless: reclaimState(r.pid, r.pidStartedAt, r) === "traceless" }));
-  const risky = judged.filter((j) => !j.traceless).map((j) => j.row);
+  // **pid 还空着的创建意图行是最该核的一档**(第 19 轮审查 F2):身份先落库、进程后起、pid
+  // 回填(见 monitor-create.ts),ash 死在中间时库里剩下的就是这个样子 —— 它的结局恰恰从没被
+  // 确认过。上一版这里一句 `r.pid !== null` 把它们整批滤掉,于是删除拿到「没什么要负责的」、
+  // 把任务和哨兵行一起带走,而那条命令可能还在跑(审查实测:taskRows=0、monitorRows=0、
+  // 债表空、诊断进程仍活)。判档和落点都交给 `reclaimMonitorProcess`:它先问一遍认领,真的
+  // 没有落点(claude 投影行 / 连边条都没留下)才返回 `closed`。
+  const intents = rows.filter((r) => r.pid === null);
+  const risky = [...judged.filter((j) => !j.traceless).map((j) => j.row), ...intents];
   // **追不到线索的那几条也要留下一行档**(第 13 轮审查 F1-B):它们起过进程,而「线索追空」
   // 不等于「整项退出已证明」—— 后代能同时甩掉记号和进程组。这一侧原来把它们整条跳过,于是
   // 删除把哨兵行连任务一起带走之后,那条可能还在跑的命令再也没有任何可定位身份
@@ -222,7 +234,7 @@ async function accountForLiveProcesses(
 function finishAccounting(
   unaccounted: MonitorRow[], lostIdentity: MonitorRow[], opts: { fatal: boolean },
 ): void {
-  const pids = (rows: MonitorRow[]) => rows.map((r) => r.pid).join("、");
+  const pids = (rows: MonitorRow[]) => rows.map((r) => r.pid ?? "（pid 还空着）").join("、");
   if (!opts.fatal) {
     // 审查收尾那一侧:身份不销毁(哨兵行还在),所以只出声 —— 开机清扫会再问一遍。
     if (lostIdentity.length) {
@@ -278,6 +290,8 @@ export async function stopMonitorsForReviewRun(runId: string, reason: string): P
         pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
         // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-evidence 的 `MonitorUnit`)。
         unitToken: monitors.unitToken,
+        // 身份边条就在它旁边:pid 还空着的创建意图行靠它认领(见 `reclaimMonitorProcess`)。
+        logPath: monitors.logPath,
       })
       .from(monitors)
       .where(and(eq(monitors.sourceReviewRun, runId), isAshKind));
@@ -319,13 +333,23 @@ export async function reclaimUnconfirmedStops(): Promise<number> {
       pid: monitors.pid, pidStartedAt: monitors.pidStartedAt, command: monitors.command,
       // 资源记号:归属与整项退出都只认它(见 monitor-reclaim-evidence 的 `MonitorUnit`)。
       unitToken: monitors.unitToken,
+      // 身份边条就在它旁边:pid 还空着的创建意图行靠它认领(见 `reclaimMonitorProcess`)。
+      logPath: monitors.logPath,
     })
     .from(monitors)
-    .where(and(isAshKind, isNotNull(monitors.pid), ne(monitors.status, "running")));
+    .where(and(isAshKind, ne(monitors.status, "running")));
   // 先用最便宜的那一问(`kill(-pgid, 0)`)把绝大多数历史行筛掉,ps 只对组还活着的那几条问。
-  const live = rows.filter((r) => reclaimState(r.pid!, r.pidStartedAt, r) !== "traceless");
+  //
+  // **pid 还空着的那几行按边条筛**(第 19 轮审查 F2):它们是创建意图行,结局从没被确认过
+  // (`settleIntentRow` 写 `lost` 时并不撤边条)。边条一旦认领成功、或者确认命令压根没开工就
+  // 被作废了(`clearSpawnIdentity`),所以「边条还在」这一问既便宜又正好圈住该再问一遍的那
+  // 一批 —— 历史上那些压根没起来的行一个都捞不进来。
+  const live = rows.filter((r) => (r.pid === null
+    ? readSpawnIdentity(r.logPath) !== null
+    : reclaimState(r.pid, r.pidStartedAt, r) !== "traceless"));
   if (!live.length) return 0;
-  console.error(`[ash] 开机发现 ${live.length} 条「已停止但进程组还活着」的哨兵，按责任重收一遍`);
+  console.error(`[ash] 开机发现 ${live.length} 条「停了但退出从没被确认」的哨兵（进程组还活着，`
+    + `或者 pid 还空着、创建意图没有结论），按责任重收一遍`);
   await accountForLiveProcesses(live, "上一辈子把它停了，但退出从没被确认", { fatal: false });
   return live.length;
 }

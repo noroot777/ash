@@ -24,7 +24,9 @@
 //   · 一个都不在(POSIX 上还要加「组也空了」,防命令自己 `env -i` 清掉环境)⇒ **能追的线索
 //     到此为止**(`traceless`)。注意它不是「整项退出已证明」—— 下一节说的就是这件事;
 //   · 问不出来(win32 读不到别的进程的环境块、ps 失败、存量行没有记号)⇒ 退回根自己那一份
-//     代次证据;根也退了就什么都不许声称 —— 记责任、留身份、不收档。
+//     代次证据,**而那一份要排他才算授权**(第 19 轮审查 F1:POSIX 的 `ps -o lstart` 只到秒,
+//     同一秒起来的两个进程读数逐字相同 —— 粗档要记号那一问给第二份独立证据,见
+//     `stateOfLiveRoot`);根也退了就什么都不许声称 —— 记责任、留身份、不收档。
 //
 
 // ── 「证不出整项退出」要照实说(第 13 轮审查 F1-B)──────────────────────────────
@@ -164,6 +166,53 @@ const stateOfIdentity = (who: ReturnType<typeof identityOf>): ReclaimState =>
       : who === "unverifiable" ? "unverifiable" : "unknown";
 
 /**
+ * **记录在案的那个启动时刻,能不能排他地认出一代**(第 19 轮审查 F1)。
+ *
+ * 「原文相等」和「已经证明是同一代」是两件事,而这一列的**精度跟着平台**:
+ *  · POSIX 的 `ps -o lstart` 只到**秒**(`platform.ts` 的 `inspectProcessSync`)—— 同一秒内
+ *    起来的两个进程读数逐字相同,所以它只是一条**粗判据**:反复比较同一个字符串不会让它变成
+ *    排他凭证(审查实测 `coarse-identity-risk.log`:两个自有诊断进程的 `lstart` 完全相同,
+ *    库里存着其中一个的读数,另一个占着那个号时整条停止链给它发了真实信号);
+ *  · win32 的 `CreationDate` 经 `ToString('o')` 带**秒以下**七位(`platform.ts` 的
+ *    `PS_PROCESS_SCRIPT`)⇒ 同一个号上先后两代不可能撞同一个读数 ⇒ 排他。
+ *
+ * 所以这一档只看**读数本身带不带秒以下精度**,不看平台常量:存量行里存的是哪个平台写的值,
+ * 它自己说得清。
+ */
+type RecordedGrade = "exclusive" | "coarse";
+
+const SUBSECOND_READING = /\d:\d{2}:\d{2}[.,]\d/;
+
+const recordedGrade = (recorded: string): RecordedGrade =>
+  SUBSECOND_READING.test(recorded) ? "exclusive" : "coarse";
+
+/**
+ * **根还活着时这一档是什么** —— 归属授权收在这一处(第 19 轮审查 F1)。
+ *
+ * 上一版这里只有一句 `stateOfIdentity(identityOf(pid, recorded))`:记号那一问答 `none`
+ * (这次的记号在任何活进程上都读不到)时照样回到「启动时刻原文相等 ⇒ `ours-alive` ⇒ 可以
+ * 下刀」,于是一条**秒级碰撞**就足以把信号发给别人的进程。
+ *
+ * 现在按凭证排他性分开:
+ *  · 记录在案的读数带秒以下精度(win32)⇒ **它自己就是排他凭证** ⇒ 照旧可下刀,连记号这一问
+ *    都不必答得出来(那一侧读不到别的进程的环境块,永远只能答「问不出来」);
+ *  · 粗档(POSIX 的秒级读数、以及任何旧平台写下的秒级值)⇒ 要**第二份独立证据**:
+ *     - `suspected`:这次的记号文字此刻在某个活进程上看得见 ⇒ 这次创建还有活着的部分 ⇒ 佐证;
+ *     - `none`:记号读不到了。两种读法——号被复用了、或者命令自己把环境清掉了(⑧-6)——
+ *       粗档分不出来 ⇒ **记责任、不下刀**;
+ *     - `unprovable`:这一问自己失败了,或者这是没有记号的存量行 ⇒ 什么佐证都没有 ⇒ 同上。
+ *
+ * 「不是它」(`theirs`)、「没记启动时刻」(`unverifiable`)、「ps 问不出来」(`unqueryable`)
+ * 三档原样传上去,一个字都没动。
+ */
+function stateOfLiveRoot(pid: number, recorded: string | null, mark: MarkVerdict): ReclaimState {
+  const who = identityOf(pid, recorded);
+  if (who !== "ours" || !recorded) return stateOfIdentity(who);
+  if (recordedGrade(recorded) === "exclusive") return "ours-alive";
+  return mark === "suspected" ? "ours-alive" : "unverifiable";
+}
+
+/**
  * 判这一档要拿的东西:**这一次创建独有的资源记号**,外加命令原文(只用于日志和存量行的
  * 时间锚核对,**不作归属凭证** —— 第 12 轮审查 F1-A)。
  *
@@ -180,9 +229,17 @@ export type MonitorUnit = {
   command?: string | null;
 };
 
+/** 记号那一问的原话。**每一刀之前的重核要用同一份**,不许换一条更宽的判据(见下)。 */
+type MarkVerdict = ReturnType<typeof processUnitEvidence>["verdict"];
+
 /** 判完这一档手里有的全部东西:档位,以及**已经证明属于这次创建的那几个成员(带代次)**。 */
 export type ReclaimEvidence = {
   state: ReclaimState;
+  /**
+   * 这一档是在记号那一问答出什么的时候判的。**下刀前重核时要拿它**(第 19 轮审查 F1):
+   * 重核只许是「这一刻还是不是那一代」的收紧,不许退回一条比授权时更宽的判据。
+   */
+  markVerdict: MarkVerdict;
   /**
    * 下刀的落点。**只有「真实环境项里读到记号」那一档非空**(`ours-*`)—— 展示文本那一档
    * (`suspected`)一个落点都不给,存量行(没有记号)走到 `ours-alive` 时也是空的,那一档的
@@ -207,7 +264,11 @@ export type ReclaimEvidence = {
  *    那几个成员**:这个号此刻可能已经是别人的组长。
  *
  * ② **根自己那一代**:记号找不着、只看见文字、或者答不出来时,根还活着的话它的代次仍然可判
- *    (`processIdentity`:pid + 启动时刻)。这一档照旧可判、可下刀。
+ *    (`processIdentity`:pid + 启动时刻)。**但「可判」不等于「排他」**(第 19 轮审查 F1):
+ *    记录在案的读数带秒以下精度(win32)才是排他凭证,POSIX 的秒级读数是粗档 —— 粗档只在
+ *    记号那一问给出第二份独立证据(`suspected`:这次的记号文字此刻还看得见)时才敢下刀,
+ *    `none`(读不到记号了)和 `unprovable`(问不出来 / 存量行没记号)一律记责任、不下刀。
+ *    判据收在 `stateOfLiveRoot`,下刀前的重核(`rootStillProven`)用的是同一份。
  *
  * ③ **根也已经退了** —— 这时才轮到「整项退出」这一问,而它要求**每条线索都答出来**:
  *    · 展示文本里看得见记号(`suspected`)⇒ 证不出谁是我们的,但足以推翻「已经没了」;
@@ -225,25 +286,44 @@ export function reclaimEvidence(
   pid: number, pidStartedAt: string | null, unit: MonitorUnit, opts: { fresh?: boolean } = {},
 ): ReclaimEvidence {
   const evidence = processUnitEvidence(unit.unitToken, opts);
+  const markVerdict = evidence.verdict;
   if (evidence.verdict === "ours") {
     const leaderHeld = isPidAlive(pid) && evidence.members.some((m) => m.pid === pid);
-    return { state: leaderHeld ? "ours-alive" : "ours-orphans", members: evidence.members };
+    return {
+      state: leaderHeld ? "ours-alive" : "ours-orphans", markVerdict, members: evidence.members,
+    };
   }
-  if (isPidAlive(pid)) return { state: stateOfIdentity(identityOf(pid, pidStartedAt)), members: [] };
+  // 根还活着。**「这个号上有进程、而且启动时刻原文相等」不等于排他地证明了归属**:判据收在
+  // `stateOfLiveRoot`(第 19 轮审查 F1),粗档要记号那一问给第二份独立证据。
+  if (isPidAlive(pid)) {
+    const state = stateOfLiveRoot(pid, pidStartedAt, markVerdict);
+    // **备忘里的一次失败不配当否决票**:判档吃的是最多 400ms 的旧快照(见上面 `fresh` 那段),
+    // 而 `unprovable` 的意思是「这一问自己没答出来」—— 把它当成「没有第二份证据」就等于让一次
+    // 失败的查询否决一次该做的回收(实测:删除那一圈恰好在 ps 不可用期间扫了一次,紧随其后的
+    // 开机清扫就据此一刀不发)。所以这一档**自己重问一遍**,再按答案判。
+    if (state === "unverifiable" && markVerdict === "unprovable" && unit.unitToken && !opts.fresh) {
+      return reclaimEvidence(pid, pidStartedAt, unit, { ...opts, fresh: true });
+    }
+    return { state, markVerdict, members: [] };
+  }
   // 根已经不在了。
   if (evidence.verdict === "suspected") {
     // 文本里还看得见这次创建的记号。证不出是哪个进程(所以不下刀),但**也绝不许收档**。
-    return { state: "suspected", members: [] };
+    return { state: "suspected", markVerdict, members: [] };
   }
   if (evidence.verdict === "unprovable") {
     // 存量行(没有记号)在 POSIX 上还剩进程组这一条线索:组空了也只是「线索到此为止」。
     if (!unit.unitToken && !IS_WINDOWS) {
-      return { state: isProcessGroupAlive(pid) ? "unverifiable" : "traceless", members: [] };
+      return {
+        state: isProcessGroupAlive(pid) ? "unverifiable" : "traceless", markVerdict, members: [],
+      };
     }
-    return { state: "unknown", members: [] };
+    return { state: "unknown", markVerdict, members: [] };
   }
-  if (!IS_WINDOWS && isProcessGroupAlive(pid)) return { state: "unverifiable", members: [] };
-  return { state: "traceless", members: [] };
+  if (!IS_WINDOWS && isProcessGroupAlive(pid)) {
+    return { state: "unverifiable", markVerdict, members: [] };
+  }
+  return { state: "traceless", markVerdict, members: [] };
 }
 
 /** 只问档位的那些调用方(探活、过滤、日志)用这个投影;要下刀的用下面那两个入口。 */
@@ -365,7 +445,10 @@ function rootStillProven(
   const member = evidence.members.find((m) => m.pid === pid);
   if (member) return stillSameGeneration(member);
   if (evidence.members.length) return false;      // 记号答出来了、根却不在名单里 ⇒ 不是它
-  return processIdentity(pid, pidStartedAt) === "same";
+  // 记号没给落点那一条(存量行、或记号这一问没答出来):重核**必须是授权时那份判据**
+  // (第 19 轮审查 F1)。上一版这里只比一次启动时刻原文 —— 于是粗档在下刀前又被重新授信了
+  // 一遍,`stateOfLiveRoot` 刚刚拒掉的东西在这里原地复活。
+  return stateOfLiveRoot(pid, pidStartedAt, evidence.markVerdict) === "ours-alive";
 }
 
 /**

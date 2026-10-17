@@ -126,11 +126,18 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   assert.ok(await debtOf(), "「查不出身份」不等于「它已经退了」,不许据此收档");
   assert.equal(isPidAlive(pid), true, "也不许在身份不明时下刀");
 
-  // 身份又对上了(ps 恢复 / 换回原 locale):这才轮到补杀 + 收档。
+  // 身份又对上了(ps 恢复 / 换回原 locale)。**但这是一条存量行(没有记号)**,而秒级读数是
+  // 粗判据:同一秒里起来的两个进程读数逐字相同,所以「对上了」证不出排他归属(第 19 轮审查
+  // F1 实测 `coarse-identity-risk.log`)。于是这一档的兑现方式是**责任留着、一刀不发** ——
+  // 带记号的行才补得出第二份独立证据(⑩-3/⑩-4 那两条走的就是那条路)。
   await db.update(schema.monitorReclaimDebts).set({ pidStartedAt: realStartedAt })
     .where(eq(schema.monitorReclaimDebts.monitorId, monId));
   await sweepMonitorReclaimDebts();
-  assert.equal(isPidAlive(pid), false, "认出来了就必须把它收掉（SIGKILL,不再等第二个两秒）");
+  assert.equal(isPidAlive(pid), true, "存量行的粗档认不出排他归属 ⇒ 补刀一律不发");
+  assert.ok(await debtOf(), "责任照旧留着:记号那一问哪天答得出来就哪天收它");
+  killTree(pid, "SIGKILL");                       // 台子自己清场
+  await until("台子把这个陌生进程收掉", async () => !isProcessGroupAlive(pid));
+  await sweepMonitorReclaimDebts();               // 线索真追空了,这一遍才收得了档
   await assertDebtClosed(monId, "追到线索空才收档");
 }
 
@@ -225,12 +232,19 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   // ⑩-6 **删除按资源责任核对,不按卡片状态**:行早就是 stopped、进程却还活着的那条路
   //(上一辈子停的、或者停到一半崩的),照状态过滤就整条跳过了它。
   const taskId = await makeTask({ status: "done" });
-  const stray = spawn("sh", ["-lc", STUBBORN], { detached: true, stdio: "ignore" });
+  // 这一条的现场是**我们自己**上一辈子停下来的那条哨兵,所以台子跟生产一样带着这次创建的
+  // 记号(`monitor-create.ts` 在起进程之前就种进环境):秒级读数只是粗判据,下刀要的第二份
+  // 独立证据正是它(第 19 轮审查 F1)。
+  const unitToken = `unit-stopped-${process.pid}-${Date.now()}`;
+  const stray = spawn("sh", ["-lc", STUBBORN], {
+    detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "", ASH_MONITOR_UNIT: unitToken },
+  });
   stray.unref();
+  invalidateMonitorUnitScan();
   const pid = stray.pid!;
   await until("旁路进程起来了", async () => isProcessGroupAlive(pid));
   const monId = await insertMonitorRow(taskId, {
-    status: "stopped", pid, pidStartedAt: inspectProcess(pid)?.startedAt ?? null,
+    status: "stopped", pid, pidStartedAt: inspectProcess(pid)?.startedAt ?? null, unitToken,
   });
   assert.equal(await debtRow(monId), undefined, "现场前提:账本上没人认它（旧版本停下来时不记责任）");
 
@@ -316,12 +330,19 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   // ⑩-9 **启动恢复也要覆盖「已停止但退出未确认」**:接回只枚举 running,债务清扫只认账本上
   // 已有的那几笔,中间漏的正是这一类(上一辈子停了它、信号发出去了、命令没死、又没留责任)。
   const taskId = await makeTask({ status: "done" });
-  const stray = spawn("sh", ["-lc", STUBBORN], { detached: true, stdio: "ignore" });
+  // 这一条的现场是**我们自己**上一辈子停下来的那条哨兵,所以台子跟生产一样带着这次创建的
+  // 记号(`monitor-create.ts` 在起进程之前就种进环境):秒级读数只是粗判据,下刀要的第二份
+  // 独立证据正是它(第 19 轮审查 F1)。
+  const unitToken = `unit-stopped-${process.pid}-${Date.now()}`;
+  const stray = spawn("sh", ["-lc", STUBBORN], {
+    detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "", ASH_MONITOR_UNIT: unitToken },
+  });
   stray.unref();
+  invalidateMonitorUnitScan();
   const pid = stray.pid!;
   await until("旁路进程起来了", async () => isProcessGroupAlive(pid));
   const monId = await insertMonitorRow(taskId, {
-    status: "stopped", pid, pidStartedAt: inspectProcess(pid)?.startedAt ?? null,
+    status: "stopped", pid, pidStartedAt: inspectProcess(pid)?.startedAt ?? null, unitToken,
   });
 
   await reclaimUnconfirmedStops();
@@ -367,12 +388,19 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   // ps 又不可用。第 5 轮这一格是「不记也不杀」(理由是「没有证据说这一组是我们的」)——
   // 可那是**唯一**能留下线索的时刻,删除紧接着就把哨兵行连 pid 一起抹掉(第 6 轮审查 F1)。
   const taskId = await makeTask({ status: "done" });
-  const stray = spawn("sh", ["-lc", STUBBORN], { detached: true, stdio: "ignore" });
+  // 这一条的现场是**我们自己**上一辈子停下来的那条哨兵,所以台子跟生产一样带着这次创建的
+  // 记号(`monitor-create.ts` 在起进程之前就种进环境):秒级读数只是粗判据,下刀要的第二份
+  // 独立证据正是它(第 19 轮审查 F1)。
+  const unitToken = `unit-stopped-${process.pid}-${Date.now()}`;
+  const stray = spawn("sh", ["-lc", STUBBORN], {
+    detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "", ASH_MONITOR_UNIT: unitToken },
+  });
   stray.unref();
+  invalidateMonitorUnitScan();
   const pid = stray.pid!;
   await until("旁路进程起来了", async () => isProcessGroupAlive(pid));
   const monId = await insertMonitorRow(taskId, {
-    status: "stopped", pid, pidStartedAt: inspectProcess(pid)?.startedAt ?? null,
+    status: "stopped", pid, pidStartedAt: inspectProcess(pid)?.startedAt ?? null, unitToken,
   });
   assert.equal(await debtRow(monId), undefined, "现场前提:账本上还没人认它");
 

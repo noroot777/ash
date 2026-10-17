@@ -72,6 +72,7 @@ import {
   confirmTraceless, isTracelessState, killProvenUnit, reclaimState,
   shootProvenUnitNow, stateNote, type MonitorUnit,
 } from "./monitor-reclaim-evidence.js";
+import { adoptSpawnIdentity } from "./monitor-adopt.js";
 import { authorizeRecoveredIdentity } from "./monitor-identity-authz.js";
 import { clearSpawnIdentity, readSpawnIdentity } from "./monitor-spawn.js";
 import { now } from "./util.js";
@@ -378,6 +379,30 @@ async function completeIdentity(m: {
   return { pidStartedAt: startedAt, anchorMs, disproved: authz.disprovedNow };
 }
 
+/**
+ * **pid 还空着的那一行:先问一遍认领,别直接当「没有责任」**(第 19 轮审查 F2)。
+ *
+ * 上一版这里一句 `if (pid === null) return { state: "closed" }` 把两件事混成了一件:claude 的
+ * 投影行(真的没有进程、也没有责任)和**创建意图行** —— 身份先落库、进程后起、pid 回填(见
+ * monitor-create.ts 文件头),ash 恰好死在中间时库里剩下的就是这个样子。于是点停、归档、删除
+ * 走到这里都拿到「没什么要负责的」,而那条命令可能正在跑(审查实测:任务行和哨兵行都删干净
+ * 了、债表为空,诊断进程仍然活着)。
+ *
+ * 认得下来就按认下来的号走(启动时刻由 `completeIdentity` 按同一份判据再问一次);认不下来时
+ * **边条上那个候选号仍然是唯一的落点线索**,带着它去记责任 —— 它拿不到启动时刻,所以一定落在
+ * `unverifiable` 档:记责任、留锚、留记号、一刀不发。两样都没有(连边条都没留下)才是真的
+ * `closed`。
+ */
+async function adoptIntentPid(m: {
+  id: string; command: string; unitToken: string | null; logPath?: string | null;
+}): Promise<number | null> {
+  if (!m.logPath) return null;
+  const adopted = await adoptSpawnIdentity({
+    id: m.id, logPath: m.logPath, unitToken: m.unitToken, command: m.command,
+  });
+  return adopted.identity?.pid ?? adopted.candidate?.pid ?? null;
+}
+
 export async function reclaimMonitorProcess(
   m: {
     id: string; taskId: string; pid: number | null; pidStartedAt: string | null; command: string;
@@ -388,8 +413,9 @@ export async function reclaimMonitorProcess(
   },
   reason: string,
 ): Promise<ReclaimOutcome> {
-  const pid = m.pid;
-  if (pid === null) return { state: "closed" }; // claude 投影行:没有进程,也没有责任
+  // **pid 还空着不等于没有责任**(第 19 轮审查 F2):先问一遍认领,见 `adoptIntentPid`。
+  const pid = m.pid ?? await adoptIntentPid(m);
+  if (pid === null) return { state: "closed" }; // 真的没有落点:claude 投影行 / 连身份边条都没留下
   // **先补身份再判档**:补得上就按完整身份走(该杀的杀、该销的销),补不上才落到「不知道」。
   const identity = await completeIdentity({ ...m, pid });
   const pidStartedAt = identity.pidStartedAt;

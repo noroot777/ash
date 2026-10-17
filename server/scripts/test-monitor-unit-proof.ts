@@ -492,6 +492,10 @@ async function deadPid(): Promise<number> {
   assert.equal(refused.pid, null, "**读不出来就什么都不认** —— 一次异常不许把落盘的反证洗掉");
   assert.equal(refused.pidStartedAt, null, "更不许给它补一份启动时刻");
   assert.equal(first.attached, 0, "也不算接回来了");
+  // 「这一刻核实不了」**不是终态**(第 19 轮审查 F2):行原样留着,下一次启动/点停/删除都会
+  // 再问一遍 —— 整条链的回归在 test-monitor-intent-handover.ts,这里只钉这一行的去处。
+  assert.equal(refused.status, "running", "读不出来 ⇒ 创建意图原样留着,不许落成一个再没人问的终态");
+  assert.equal(first.pending, 1, "它既不算接回来、也不算没了");
   assert.match(refused.endedReason ?? "", /核实不了|再问一遍/,
     "**措辞也不许撒谎**:核实不了就说核实不了,不许说成「这个号现在是另一个进程」");
   assert.ok((await debtRow(monId))?.identityDisprovedAt, "盘上那一笔原样留着");
@@ -511,8 +515,12 @@ async function deadPid(): Promise<number> {
   assert.equal(second.attached, 0, "同上");
 
   // 故障过去之后,同一条路照旧认得下这个号(只认号、不认启动时刻)。
-  await db.update(monitors).set({ status: "running" }).where(eq(monitors.id, mon2));
-  await dbClient.execute(`UPDATE monitors SET status = 'stopped' WHERE id <> '${mon2}'`);
+  //
+  // **台子一个字都不许帮它改**(第 19 轮审查 F2):上一版这里先 `UPDATE ... status='running'`
+  // 把行扳回来,等于用手工补上生产缺的那一步 —— 而缺的恰恰是「认不回来时不要把行写成终态」,
+  // 于是缺陷被台子遮住了。现在这一行本来就还是 running(见上面的 ⑬-9 断言)。
+  assert.equal((await db.select().from(monitors).where(eq(monitors.id, mon2))).at(0)!.status, "running",
+    "台子前提:上一遍没把它写成终态");
   const third = await reattachMonitors();
   await new Promise((done) => setTimeout(done, 2_500));
   const aliveAfter = isPidAlive(pid);
@@ -562,6 +570,73 @@ async function deadPid(): Promise<number> {
   killTree(pid3, "SIGKILL");
 }
 
+{
+  // ⑬-12 **秒级时刻相等不是排他凭证**(第 19 轮审查 F1 实测 `coarse-identity-risk.log`)。
+  //
+  //     上一版的最终授权是:根活着 + `pid_started_at` 原文相等 ⇒ `ours-alive` ⇒ 可以下刀,
+  //     **记号那一问答什么都不看**。而 POSIX 的 `ps -o lstart` 只到秒:审查起了两个自有诊断
+  //     进程,两者的 `lstart` 读数**逐字相同**;库里存着其中一个的读数、pid 指向另一个(模拟
+  //     那个号被复用),原进程退出后记号这一问答 `none` —— 产品真实的停止链照样给那个无关进程
+  //     发了 SIGKILL。注意这不是把新进程的时刻伪装成旧的:存的就是从原进程读到的值。
+  //
+  //     现在粗档要**第二份独立证据**:`suspected`(这次的记号文字此刻还看得见)才算;`none`
+  //     和「问不出来」一律记责任、不下刀。后半段顺带钉**存量行**(连记号都没有)的同一档。
+  const taskId = await makeTask({ status: "done" });
+  const unitToken = `unit-coarse-${process.pid}-${Date.now()}`;
+  const born = (marked: boolean) => spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true,
+    stdio: "ignore",
+    env: { PATH: process.env.PATH ?? "", ...(marked ? { ASH_MONITOR_UNIT: unitToken } : {}) },
+  });
+  // 两个背靠背起的进程,`lstart` 读数绝大多数时候落在同一秒;跨秒就重来(审查脚本同一招)。
+  let original = born(true); original.unref();
+  let stranger = born(false); stranger.unref();
+  let recorded = inspectProcessSync(original.pid!)?.startedAt ?? null;
+  for (let attempt = 0; attempt < 6 && recorded !== (inspectProcessSync(stranger.pid!)?.startedAt ?? null); attempt += 1) {
+    killTree(original.pid!, "SIGKILL");
+    killTree(stranger.pid!, "SIGKILL");
+    original = born(true); original.unref();
+    stranger = born(false); stranger.unref();
+    recorded = inspectProcessSync(original.pid!)?.startedAt ?? null;
+  }
+  const pid = stranger.pid!;
+  assert.ok(recorded, "台子前提:读得到启动时刻");
+  assert.equal(inspectProcessSync(pid)?.startedAt, recorded,
+    "台子前提:两个不同进程的 `lstart` 读数逐字相同(这正是粗档的含义)");
+  killTree(original.pid!, "SIGKILL");
+  await until("带记号的那个退了", async () => !isPidAlive(original.pid!));
+  invalidateMonitorUnitScan();
+  assert.deepEqual(processUnitEvidence(unitToken, { fresh: true }), { verdict: "none" },
+    "台子前提:这次的记号在任何活进程上都读不到了");
+
+  const monId = await insertMonitorRow(taskId, {
+    status: "stopped", pid, pidStartedAt: recorded, command: process.execPath, unitToken,
+  });
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
+  assert.equal(reclaimState(pid, recorded, row), "unverifiable",
+    "**粗档 + 记号读不到 ⇒ 记责任、不下刀**:秒级相等分不出「号被复用」和「命令自己清了环境」");
+  await stopMonitor(monId, "再点一次停止");
+  await new Promise((done) => setTimeout(done, 2_500));   // 产品自己那条 1 秒梯子也跑一遍
+  assert.equal(isPidAlive(pid), true, "**一刀都不许下** —— 那是别人的进程,只是撞了同一秒");
+  const owed = await debtRow(monId);
+  assert.ok(owed && !owed.closedAt, "照记责任、不收档");
+
+  // 后半段:**存量行**(没有记号)同样只到这一档 —— 它连第二份证据的来源都没有。
+  const legacyId = await insertMonitorRow(taskId, {
+    status: "stopped", pid, pidStartedAt: recorded, command: process.execPath, unitToken: null,
+  });
+  assert.equal(reclaimState(pid, recorded, { unitToken: null, command: process.execPath }),
+    "unverifiable", "存量行的秒级读数同样不授权:旧数据保留责任、不发信号");
+  await stopMonitor(legacyId, "再点一次停止");
+  await new Promise((done) => setTimeout(done, 2_500));
+  assert.equal(isPidAlive(pid), true, "存量行这一档也一刀不发");
+
+  killTree(pid, "SIGKILL");
+  await until("台子自己收场", async () => !isPidAlive(pid));
+  await db.delete(schema.monitorReclaimDebts).where(eq(schema.monitorReclaimDebts.monitorId, monId));
+  await db.delete(schema.monitorReclaimDebts).where(eq(schema.monitorReclaimDebts.monitorId, legacyId));
+}
+
 await teardown();
 
-console.log("✓ 另一个变量值里的记号文字既不签发凭证也不让陌生进程挨刀（两种证据等级各按自己的事实判）/ 销毁前留档失败时任务与身份都保留、删除整笔失败，故障撤掉后留档真的落盘 / 第一刀记下的成员名单带代次，两秒后核代次再补刀，忽略 TERM 的后代照样收掉 / 记号证明过的那一代已换掉时，实时回收与边条认领都不许退回时间锚把陌生进程认成旧身份 / 反证活过 settle、产品重试梯子与开机清扫，且只收走弱判据不封死强凭证 / 展示文本那一档就算时间锚贴着、命令也对得上，启动时刻既不落库也一刀不发 / 反证账本读不出来时这一轮什么都不认、措辞照实、也不替它记一笔反证，故障过去后只认号不认启动时刻 均受回归保护");
+console.log("✓ 另一个变量值里的记号文字既不签发凭证也不让陌生进程挨刀（两种证据等级各按自己的事实判）/ 销毁前留档失败时任务与身份都保留、删除整笔失败，故障撤掉后留档真的落盘 / 第一刀记下的成员名单带代次，两秒后核代次再补刀，忽略 TERM 的后代照样收掉 / 记号证明过的那一代已换掉时，实时回收与边条认领都不许退回时间锚把陌生进程认成旧身份 / 反证活过 settle、产品重试梯子与开机清扫，且只收走弱判据不封死强凭证 / 展示文本那一档就算时间锚贴着、命令也对得上，启动时刻既不落库也一刀不发 / 反证账本读不出来时这一轮什么都不认、措辞照实、也不替它记一笔反证，故障过去后只认号不认启动时刻 / 两个进程撞同一秒时粗档不授权下刀:记号读不到、存量行没记号都只记责任 均受回归保护");

@@ -33,6 +33,7 @@ import {
   blockInsert, blockPidBackfill, debtRow, healInsert, healPidBackfill, marker, psCount, withPsOutage,
 } from "./monitor-create-fixture.js";
 import { inspectProcess } from "../src/proc.js";
+import { invalidateMonitorUnitScan } from "../src/monitor-unit-scan.js";
 
 const { spawnMonitor } = await import("../src/monitor-spawn.js");
 const { abandonRegistration } = await import("../src/monitor-create.js");
@@ -93,13 +94,21 @@ const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.
 // SIGKILL 收得掉)配上真的 ps 不可用(PATH 前置一个退出码 1 的 `ps`),两样都不是替身。
 {
   const taskId = await makeTask();
+  // **台子要跟生产一样带着这一次创建的记号**(`monitor-create.ts` 在起进程之前就把它随意图行
+  // 落库、并种进那个壳的环境):秒级读数只是粗判据,补杀那一刀要的第二份独立证据正是它
+  // (第 19 轮审查 F1)。少种这一项的话这里考的就不是「回填失败这一支」,而是存量行。
+  const unitToken = `unit-backfill-${process.pid}-${Date.now()}`;
   const stubborn = spawn("sh", ["-lc", "trap '' TERM HUP INT; while :; do sleep 0.2; done"], {
     detached: true, stdio: "ignore",
+    env: { PATH: process.env.PATH ?? "", ASH_MONITOR_UNIT: unitToken },
   });
   stubborn.unref();
+  invalidateMonitorUnitScan();   // 台子在替 `spawnMonitor` 起进程
   const pid = stubborn.pid!;
   await until("顽固进程起来了", async () => isPidAlive(pid));
-  const monId = await insertMonitorRow(taskId, { pid, pidStartedAt: inspectProcess(pid)?.startedAt ?? null });
+  const monId = await insertMonitorRow(taskId, {
+    pid, pidStartedAt: inspectProcess(pid)?.startedAt ?? null, unitToken,
+  });
   const row = (await db.select().from(monitors).where(eq(monitors.id, monId))).at(0)!;
 
   const refused = await withPsOutage(() => abandonRegistration(row, "INJECTED_PID_BACKFILL_FAILURE"));

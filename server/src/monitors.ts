@@ -34,9 +34,9 @@ import {
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, tasks } from "./db/schema.js";
-import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
+import { reclaimMonitorProcess, settleReclaim, type ReclaimVerdict } from "./monitor-reclaim-debts.js";
 import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
-import { adoptSpawnIdentity } from "./monitor-adopt.js";
+import { adoptSpawnIdentity, notePendingIntent } from "./monitor-adopt.js";
 import { clearSpawnIdentity, readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
 import { IS_WINDOWS } from "./platform.js";
 
@@ -392,7 +392,10 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
     // 追空的那一档这里什么都不做:没有落点可打,而**身份还在这一行上**(命令、pid、记号),
     // 没有任何东西正在消失。留档发生在身份真要被销毁的那一刻 —— 删除/归档走的
     // `accountForLiveProcesses`(第 13 轮审查 F1-B,见 monitor-reclaim.ts)。
-    if (row.pid && reclaimState(row.pid, row.pidStartedAt, row) !== "traceless") {
+    // **pid 还空着的那一行也要走这一趟**(第 19 轮审查 F2):那是创建意图行(身份先落库、进程
+    // 后起、pid 回填),它的结局恰恰最没确认 —— 判据交给 `reclaimMonitorProcess`,它会先问
+    // 一遍认领、再按档位决定记责任还是收档,真的没有落点时才返回 `closed`。
+    if (row.pid === null || reclaimState(row.pid, row.pidStartedAt, row) !== "traceless") {
       const outcome = await reclaimMonitorProcess(row, `${reason}（创建期取消后补收）`);
       if (await settleReclaim(outcome) === "unaccounted") {
         console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
@@ -506,13 +509,26 @@ async function reattachBlockedReason(row: Row): Promise<string | null> {
 
 
 
-export async function reattachMonitors(): Promise<{ attached: number; lost: number }> {
+/** 「责任到底留下来了没有」那一句尾巴 —— 接回这两条路共用,措辞只有这一份。 */
+const owingNote = (verdict: ReclaimVerdict): string =>
+  verdict === "closed"
+    ? "；原进程的线索随后都追空了"
+    : verdict === "owed"
+      ? "；原进程退出未确认，已记下回收责任（开机会再收一次）"
+      : "；原进程退出未确认，而回收责任尚未保存（见 server 日志里的 pid，仍在重试落盘）";
+
+/**
+ * 接回的三档计数。`pending` 是**pid 还空着、这一刻又认不回来**的那几条:行原样留着
+ * (见 `notePendingIntent`),所以它既不算接回来了、也不算没了 —— 混进任何一边都是撒谎。
+ */
+export async function reattachMonitors(): Promise<{ attached: number; lost: number; pending: number }> {
   // 只认 ash 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
   // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
   // `loseClaudeMonitorsOfSession` 在 agent 进程真的结束时统一收口。
   const rows = await db.select().from(monitors).where(and(eq(monitors.status, "running"), isAshKind));
   let attached = 0;
   let lost = 0;
+  let pending = 0;
   for (const stored of rows) {
     let row = stored;
     // **「问不出来」要跟「它不在了」分开**(第 6 轮审查 F1)。`unknown` = ps 这一问自己失败
@@ -532,21 +548,41 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
     //    Windows 真机验证**(根 AGENTS.md)。
     if (!row.pid) {
       const adopted = await adoptSpawnIdentity(row);
-      if (!adopted.row) {
-        // 认不下来的几种事实由 `adoptSpawnIdentity` 带回来(`why` / `settled`),这里只负责措辞。
-        // `settled`:当初那个壳一定不在了(没留边条 / 反证过 / 那个号现在是另一个进程)——
-        // 这一档照旧按 **win32 与 POSIX 事实不同**分开说:那一侧没有闸,命令可能已经开工过。
-        // `settled: false`:只是**这一刻核实不了**(反证账本读不出来),一个字都不许说成「它不在
-        // 了」(第 6 轮审查 F1 的同一条:问不出来 ≠ 它不在了)。
-        await finishOffline(row, "lost", adopted.settled
-          ? (IS_WINDOWS
-            ? `server 重启后认不回它了：起进程时没来得及记下 pid${adopted.why}，这台机器上没有放行闸，当初那个壳已经不在、但它派生的命令可能还在后台跑着（日志路径见这一行）`
-            : `server 重启后判定它没有真正开工：起进程时没来得及记下 pid${adopted.why}，命令停在放行闸前面就退了`)
-          : `server 重启后这一刻认不回它：起进程时没来得及记下 pid${adopted.why}，所以一个信号都没发；下一次启动会再问一遍（日志路径见这一行）`);
+      // 认不下来的几种事实由 `adoptSpawnIdentity` 带回来(`why` / `settled` / `candidate`)。
+      // **`settled: false` 不是终态**(第 19 轮审查 F2):只是**这一刻核实不了**(反证账本读不
+      // 出来),一个字都不许说成「它不在了」(第 6 轮审查 F1 的同一条),**更不许把这一行写成
+      // 一个此后谁都不会再问第二遍的档** —— 创建意图原样留着,理由见 `notePendingIntent`。
+      if (!adopted.identity && !adopted.settled) {
+        await notePendingIntent(row, adopted.why);
+        pending += 1;
+        continue;
+      }
+      if (!adopted.identity) {
+        // `settled`:当初那个壳一定不在了(没留边条 / 反证过 / 那个号现在是另一个进程)。
+        // 这一档 **win32 与 POSIX 的事实不同**,措辞和责任都跟着分开:
+        //  · POSIX:放行闸证明命令压根没开工 ⇒ 干净判掉,顺手把边条作废 —— 留着它只会让后面
+        //    的层拿一个已经被反证的号去记一笔永远收不掉的责任;
+        //  · win32:那一侧没有闸,壳派生的命令可能还在跑,而边条上那个号是**唯一的落点线索**
+        //    ⇒ 责任照记(候选号拿不到启动时刻,所以落在 `unverifiable` 档:记责任、不下刀)。
+        //    **未在 Windows 真机验证**(根 AGENTS.md)。
+        let owing = "";
+        if (IS_WINDOWS && adopted.candidate) {
+          const outcome = await reclaimMonitorProcess(
+            { ...row, pid: adopted.candidate.pid, pidStartedAt: null },
+            "server 重启后只认得出身份边条上那个号",
+          );
+          owing = owingNote(await settleReclaim(outcome, 0));
+        } else {
+          clearSpawnIdentity(row.logPath);
+        }
+        await finishOffline(row, "lost", (IS_WINDOWS
+          ? `server 重启后认不回它了：起进程时没来得及记下 pid${adopted.why}，这台机器上没有放行闸，当初那个壳已经不在、但它派生的命令可能还在后台跑着（日志路径见这一行）`
+          : `server 重启后判定它没有真正开工：起进程时没来得及记下 pid${adopted.why}，命令停在放行闸前面就退了`) + owing);
         lost += 1;
         continue;
       }
-      row = adopted.row;   // 认回来了:下面按正常身份走(接回 / 收尾 / 记责任),不再有特殊分支
+      // 认回来了:下面按正常身份走(接回 / 收尾 / 记责任),不再有特殊分支。
+      row = { ...row, pid: adopted.identity.pid, pidStartedAt: adopted.identity.pidStartedAt };
     }
     const state = reclaimState(row.pid!, row.pidStartedAt, row);
     // `unverifiable`(当初没记下启动时刻 / 边条认回来时 ps 不可用)跟 `unknown` 同一档处理:
@@ -587,16 +623,11 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       if (verdict === "unaccounted") {
         console.error(`[ash] 接回时既没确认退出、回收责任也没落库 monitor=${row.id} pid=${row.pid}`);
       }
-      const owing = verdict === "closed"
-        ? "；原进程的线索随后都追空了"
-        : verdict === "owed"
-          ? "；原进程退出未确认，已记下回收责任（开机会再收一次）"
-          : "；原进程退出未确认，而回收责任尚未保存（见 server 日志里的 pid，仍在重试落盘）";
-      await finishOffline(row, "lost", offlineReason(state, owing));
+      await finishOffline(row, "lost", offlineReason(state, owingNote(verdict)));
       lost += 1;
     }
   }
-  return { attached, lost };
+  return { attached, lost, pending };
 }
 
 /**

@@ -138,14 +138,21 @@ const zhLstart = (lstart: string): string => {
   //
   // 「只查一次」是这一条的要点,不是性能讲究:在确证分支里再调一次会吞掉失败信息的查询,
   // 正是 F1 的根。它只有在这里被钉住,下一个人才不会又在消费者那边补一次重试。
+  //
+  // **这一节钉的是「判得对」,不是「可以下刀」**(第 19 轮审查 F1 改的就是后半句):存量行只有
+  // 秒级读数这一条粗判据,所以它落在 `unverifiable`(记责任、不下刀)而不是 `ours-alive`。
+  // 要紧的是它**不是** `not-ours` —— locale 不同仍然被认成同一个进程,否则接回就会把一条活着
+  // 的哨兵写成 lost(F1 的那条路)。
   await withCountedPs("count", async () => {
-    assert.equal(reclaimState(pid, zh, legacy), "ours-alive", "locale 不同不是「这个号现在是另一个进程」");
+    const state = reclaimState(pid, zh, legacy);
+    assert.notEqual(state, "not-ours", "locale 不同不是「这个号现在是另一个进程」");
+    assert.equal(state, "unverifiable", "但存量行的秒级读数只是粗判据:记责任、不下刀");
     assert.equal(psCallCount(), 1, "身份判定只许查一次 —— 补第二次查询就是 F1 的根");
   });
 
   // ⑪-2 **第二次查询失败不许改写身份**:奇数次正常、偶数次失败的间歇性故障现场。
   await withCountedPs("flaky", async () => {
-    assert.equal(reclaimState(pid, zh, legacy), "ours-alive",
+    assert.equal(reclaimState(pid, zh, legacy), "unverifiable",
       "第一次就已经答出来了;再查一次、那一次恰好失败,不构成「这个号现在是别人」");
   });
 
@@ -170,11 +177,14 @@ const zhLstart = (lstart: string): string => {
   assert.equal(reclaimState(pid, "这不是任何 locale 的 lstart", legacy), "unknown",
     "比不出来是 `unknown` 那一档:留责任、不下刀,而不是确证的 `not-ours`");
 
-  // 收尾前把那一列改回去:`unknown` 这一档**不许下刀**(所以点停收不掉它,见 ⑩-11),
-  // 而这个进程确实是我们的,台子自己负责清场。
+  // 收尾:把那一列改回去也收不掉它 —— 这一节整段都是**存量行**(记号那一列被清空了),而秒级
+  // 读数是粗判据(第 19 轮审查 F1)。点停照旧只记责任,进程由台子自己清场。
   await db.update(monitors).set({ pidStartedAt: row.pidStartedAt }).where(eq(monitors.id, row.id));
   await stopMonitor(row.id, "测试收尾");
-  assert.equal(isProcessGroupAlive(pid), false, "点停才收掉它");
+  assert.equal(isProcessGroupAlive(pid), true, "存量行点停只记责任:证不出排他归属就一刀不发");
+  assert.ok(await debtRow(row.id), "责任落在表上");
+  killTree(pid, "SIGKILL");
+  await until("台子自己把它收掉", async () => !isProcessGroupAlive(pid));
 }
 
 // ── ⑫ 卡片上那句话由**最终 verdict**决定,不是「先写肯定、再在日志里纠正」(第 7 轮审查 N1)──
@@ -244,13 +254,20 @@ const zhLstart = (lstart: string): string => {
     "账上要写清这一档是「证不出是原来那个」—— 既不是「还活着」(那是在声称所有权)也不是「别人的」");
   assert.equal(isProcessGroupAlive(pid), true, "**一刀都不许下**:证不出是原来那个就不许杀");
 
-  // 身份补全(例如运行时后来把真实启动时刻回填到了债上)= 这一刻第一次证得出 ⇒ 才轮到补杀收档。
+  // 把真实启动时刻回填到债上(= 运行时后来补了一次身份)。**这一行没有记号**,而秒级读数是
+  // 粗判据:同一秒里起来的两个进程读数逐字相同(第 19 轮审查 F1 实测 `coarse-identity-risk.log`
+  // ——按这条粗判据下刀的那一次,挨刀的是审查自己起的无关进程)。所以存量行补到这一步也只
+  // 到「责任留着」,一刀不发;带记号的行才补得出第二份独立证据(create-protocol ③ 走那条路)。
   await db.update(schema.monitorReclaimDebts)
     .set({ pidStartedAt: inspectProcess(pid)?.startedAt ?? null })
     .where(eq(schema.monitorReclaimDebts.monitorId, monId));
   await sweepMonitorReclaimDebts();
-  assert.equal(isProcessGroupAlive(pid), false, "身份补全之后才收得掉它");
-  await assertDebtClosed(monId, "补杀之后才收档");
+  assert.equal(isProcessGroupAlive(pid), true, "存量行的粗档认不出排他归属 ⇒ 补刀一律不发");
+  assert.ok(await debtRow(monId), "责任照旧留着");
+  killTree(pid, "SIGKILL");
+  await until("台子自己把这个陌生进程收掉", async () => !isProcessGroupAlive(pid));
+  await sweepMonitorReclaimDebts();                 // 线索真追空了,这一遍才收得了档
+  await assertDebtClosed(monId, "线索追空之后才收档");
 }
 
 {
