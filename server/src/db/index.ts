@@ -148,7 +148,8 @@ export async function ensureSchema() {
       command TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
       last_error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL, last_attempt_at TEXT,
-      unit_token TEXT, closed_at TEXT, closed_note TEXT
+      unit_token TEXT, closed_at TEXT, closed_note TEXT,
+      identity_disproved_at TEXT
     );
     CREATE TABLE IF NOT EXISTS monitor_pending_calls (
       task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
@@ -387,6 +388,10 @@ export async function ensureSchema() {
     // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。
     "ALTER TABLE monitor_reclaim_debts ADD COLUMN closed_at TEXT",
     "ALTER TABLE monitor_reclaim_debts ADD COLUMN closed_note TEXT",
+    // 「这个号已经被反证过」的戳 —— 反证不许在下一次尝试/另一个消费者/重启后退化成「未知」
+    // 再走时间锚那条弱判据(见 schema-monitors.ts 的 identity_disproved_at、第 17 轮审查 F1)。
+    // 存量行一律 NULL = 还没有过反证。
+    "ALTER TABLE monitor_reclaim_debts ADD COLUMN identity_disproved_at TEXT",
     // 这条消息已经把任务行上那段续跑交代**接走了**,正文里带着它(见 schema.ts 的
     // checkpoint_taken)。持久账本:取走只写在内存里的话,送达之前进程一换,那段交代
     // 就两边都不在了(第 2 轮审查 F4)。存量行 NULL。

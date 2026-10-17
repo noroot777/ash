@@ -72,9 +72,9 @@ import {
   confirmTraceless, isTracelessState, killProvenUnit, reclaimState,
   shootProvenUnitNow, stateNote, type MonitorUnit,
 } from "./monitor-reclaim-evidence.js";
+import { authorizeRecoveredIdentity } from "./monitor-identity-authz.js";
 import { clearSpawnIdentity, readSpawnIdentity } from "./monitor-spawn.js";
-import { processStartedNear, processUnitEvidence } from "./proc.js";
-import { startedAtOfGeneration } from "./process-generation.js";
+import { processStartedNear } from "./proc.js";
 import { now } from "./util.js";
 
 /** 进程内的重试梯子。跟 claude 投影那边的补偿清理同一个形状(claude-monitor-revoked.ts)。 */
@@ -99,6 +99,7 @@ export async function noteReclaimDebt(debt: DebtInput & { error?: unknown }): Pr
       monitorId: debt.monitorId, taskId: debt.taskId, pid: debt.pid,
       pidStartedAt: debt.pidStartedAt, spawnAnchorMs: debt.spawnAnchorMs ?? null,
       unitToken: debt.unitToken,
+      identityDisprovedAt: debt.identityDisproved ? now() : null,
       command: debt.command, reason: debt.reason,
       lastError: detail, attempts: 0, createdAt: now(), lastAttemptAt: null,
     }).onConflictDoUpdate({
@@ -114,6 +115,9 @@ export async function noteReclaimDebt(debt: DebtInput & { error?: unknown }): Pr
         ...(debt.pidStartedAt ? { pidStartedAt: debt.pidStartedAt } : {}),
         ...(debt.spawnAnchorMs ? { spawnAnchorMs: debt.spawnAnchorMs } : {}),
         ...(debt.unitToken ? { unitToken: debt.unitToken } : {}),
+        // **反证只许置上,不许抹掉**:它说的是「这个号不是这条记录的那个进程」,那件事不会
+        // 因为下一轮问不出来而变回未知(第 17 轮审查 F1)。
+        ...(debt.identityDisproved ? { identityDisprovedAt: now() } : {}),
       },
     });
     return true;
@@ -226,6 +230,7 @@ async function ensureIdentityArchived(
       monitorId: debt.monitorId, taskId: debt.taskId, pid: debt.pid,
       pidStartedAt: debt.pidStartedAt, spawnAnchorMs: debt.spawnAnchorMs ?? null,
       unitToken: debt.unitToken, command: debt.command, reason: debt.reason,
+      identityDisprovedAt: debt.identityDisproved ? now() : null,
       lastError: null, attempts: 0, createdAt: now(), lastAttemptAt: null,
       closedAt: closeNote ? now() : null, closedNote: closeNote,
     }).onConflictDoNothing({ target: monitorReclaimDebts.monitorId });
@@ -273,6 +278,11 @@ type DebtInput = {
   spawnAnchorMs?: number | null;
   /** 资源记号。**债上必须自己留一份**:哨兵行可能先没了,而这一笔是最后的凭证。 */
   unitToken: string | null;
+  /**
+   * 这个号已经被反证过(见 monitor-identity-authz.ts)。**跟着这一笔一起落盘**:行还没落盘
+   * 时反证戳那一句 UPDATE 影响 0 行,只有随插入带进去才活得过这一轮(第 17 轮审查 F1)。
+   */
+  identityDisproved?: boolean;
   command: string; reason: string;
 };
 
@@ -331,38 +341,27 @@ async function completeIdentity(m: {
   id: string; pid: number; pidStartedAt: string | null; command: string;
   unitToken: string | null;
   logPath?: string | null; spawnAnchorMs?: number | null;
-}): Promise<{ pidStartedAt: string | null; anchorMs: number | null }> {
+}): Promise<{ pidStartedAt: string | null; anchorMs: number | null; disproved: boolean }> {
   const side = m.logPath ? readSpawnIdentity(m.logPath) : null;
   const anchorMs = side?.pid === m.pid ? side.spawnedAtMs : m.spawnAnchorMs ?? null;
-  if (m.pidStartedAt) return { pidStartedAt: m.pidStartedAt, anchorMs };
-  // **记号在手就不必靠时间锚**:在**真实环境项**里读到这一次创建的记号、而且就是这个号 ⇒
-  // 身份已经证明,那一问交出来的代次直接记下来即可(锚那条路是给没有记号的存量行留的)。
-  // 只认 `ours`:展示文本那一档(`suspected`)证不出这一项真在不在,拿它补身份等于拿一段
-  // 可能来自别人的文字给这个号签发代次(第 14 轮审查 F1)。
-  const proven = processUnitEvidence(m.unitToken);
-  const member = proven.verdict === "ours"
-    ? proven.members.find((candidate) => candidate.pid === m.pid)
-    : undefined;
-  // 记号那一问交出来的代次是**内核实例戳**,而要落库的那一列存的是 `ps` 的启动时刻文本 ——
-  // 两份读数。所以换算夹在两次代次核对之间(`startedAtOfGeneration`):中间换了代就什么都不补。
-  // 否则就是把别人那一代的启动时刻写成这个号的身份,之后所有「还是不是它」都跟着错
-  // (第 15 轮审查 F1 点出的同类消费点)。
-  const byUnit = member ? startedAtOfGeneration(member.pid, member.gen) : null;
-  // **强凭证被拒绝之后不许再退回弱判据**(第 16 轮审查 F1-B):`changed` 是**反证** ——
-  // 「这个号已经不是记号证明过的那一代了」。上一版只看「有没有拿到值」,于是反证之后照样走
-  // 时间邻近 + 命令包含那条路:新进程在两秒窗口里起来、命令文本又恰好包含记录的那一段时,
-  // 它真实的启动时刻被写成旧哨兵的身份,随后按这条身份被关掉(实测
-  // `identity-fallback.log`:`persistedStartedAt` 就是新进程的启动时刻、`diagnosticAliveAfter=false`)。
-  // 「这一刻问不出来」(`unqueryable`)不是反证,照旧可以走锚那条路 —— 第 10 轮 F2-B 要的
-  // 就是「查询恢复之后还能把身份补上」。
-  if (byUnit?.outcome === "changed") return { pidStartedAt: null, anchorMs };
-  const provenStartedAt = byUnit?.outcome === "proven" ? byUnit.startedAt : null;
-  if (!provenStartedAt && anchorMs === null) return { pidStartedAt: null, anchorMs };
+  if (m.pidStartedAt) return { pidStartedAt: m.pidStartedAt, anchorMs, disproved: false };
+  // **政策只有一份**(第 17 轮审查 F1):「凭什么给这个号签身份」整套判据在
+  // `monitor-identity-authz.ts` —— 这一侧和重启后认领那一侧(`adoptSpawnIdentity`)共用它。
+  // 上一版这里只拦了代次 `changed`,`none` 和「`ours` 名单里没有这个号」都落回「没答出来」,
+  // 于是**首次拒绝之后的清扫和自动梯子照样走弱判据**:同号新进程在那两秒窗口里起来、命令
+  // 文本又恰好包含记录的那一段时,它真实的启动时刻被写成旧哨兵的身份,随后按这条身份收到
+  // 真实 SIGKILL(`round-7/refutation-retry.log`、`refutation-auto.log`)。
+  const authz = await authorizeRecoveredIdentity({ monitorId: m.id, pid: m.pid, unitToken: m.unitToken });
+  // `proven` 但换算没交出启动时刻:号是记号证明过的,**启动时刻等下一遍** —— 不许因为
+  // 「这一刻没拿到值」就回落到弱判据(那正是第 16 轮 F1-B 的犯法方式)。
+  const provenStartedAt = authz.strong.grade === "proven" ? authz.strong.startedAt : null;
+  const weak = !provenStartedAt && authz.weakAllowed && anchorMs !== null;
+  if (!provenStartedAt && !weak) return { pidStartedAt: null, anchorMs, disproved: authz.disproved };
   // 命令原文一起交过去:时间邻近单独不足以认下一个号(见 proc.ts 的 `processStartedNear`)。
   const { verdict, startedAt } = provenStartedAt
     ? { verdict: "same" as const, startedAt: provenStartedAt }
     : processStartedNear(m.pid, anchorMs!, 2_000, m.command);
-  if (verdict !== "same" || !startedAt) return { pidStartedAt: null, anchorMs };
+  if (verdict !== "same" || !startedAt) return { pidStartedAt: null, anchorMs, disproved: authz.disproved };
   if (!dbClient.closed) {
     await Promise.all([
       db.update(monitors).set({ pidStartedAt: startedAt })
@@ -373,7 +372,7 @@ async function completeIdentity(m: {
         .catch(() => { /* 这一笔还没落盘,下面记账时会带上补全后的身份 */ }),
     ]);
   }
-  return { pidStartedAt: startedAt, anchorMs };
+  return { pidStartedAt: startedAt, anchorMs, disproved: authz.disproved };
 }
 
 export async function reclaimMonitorProcess(
@@ -401,7 +400,7 @@ export async function reclaimMonitorProcess(
     monitorId: m.id, taskId: m.taskId, pid, pidStartedAt,
     // 身份还没补全就把锚一起留下:哨兵行和边条都可能先没了,之后这笔债是唯一的线索。
     spawnAnchorMs: pidStartedAt ? null : identity.anchorMs,
-    unitToken: m.unitToken,
+    unitToken: m.unitToken, identityDisproved: identity.disproved,
     command: m.command, reason: `${reason}（${stateNote(state)}）`,
   };
   if (isTracelessState(state)) {

@@ -6,9 +6,9 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import type { Row } from "./monitors.js";
+import { authorizeRecoveredIdentity } from "./monitor-identity-authz.js";
 import { readSpawnIdentity } from "./monitor-spawn.js";
-import { processStartedNear, processUnitEvidence } from "./proc.js";
-import { startedAtOfGeneration } from "./process-generation.js";
+import { processStartedNear } from "./proc.js";
 
 /**
  * **pid 还空着的那一行:拿身份边条把它认回来**(第 9 轮审查 F3)。
@@ -30,43 +30,28 @@ import { startedAtOfGeneration } from "./process-generation.js";
  * **时间锚这条弱判据的资格要先界定**(第 16 轮审查 F1-B 的同族入口):记号那一问能答出来时
  * 它更强,而且它的**反证不许被「手里有个时间锚」洗掉** —— 否则一个在那两秒窗口里起来、
  * 命令文本又恰好对得上的陌生进程会被认成这条哨兵的身份(F1-B 在另一个消费点实测到了这一刀)。
+ *
+ * 那套判据**不在这个文件里**:它和实时回收/债务恢复那一侧共用 `monitor-identity-authz.ts`
+ * 的 `authorizeRecoveredIdentity`(第 17 轮审查 F1 —— 上一版两边各写一份,`completeIdentity`
+ * 那一份漏了 `none` 和「名单里没有这个号」两种反证)。
  */
 export async function adoptSpawnIdentity(row: Row): Promise<Row | null> {
   const side = readSpawnIdentity(row.logPath);
   if (!side) return null;
-  const strong = strongIdentityFor(row, side.pid);
-  if (strong.verdict === "disproved") return null;
-  if (strong.verdict === "proven") return writeAdopted(row, side.pid, strong.startedAt);
+  const authz = await authorizeRecoveredIdentity({
+    monitorId: row.id, pid: side.pid, unitToken: row.unitToken,
+  });
+  // `proven`:号已证明。换算答不出启动时刻时只回填 pid —— 跟下面时间锚那一档的 `unqueryable`
+  // 同一个出路(落在 `unverifiable` 档上:看得见、停得掉、记得下责任,但谁都不许据此下刀)。
+  if (authz.strong.grade === "proven") return writeAdopted(row, side.pid, authz.strong.startedAt);
+  // 反证(含盘上记着的那一次)⇒ 不认,由调用方照实写掉。
+  if (!authz.weakAllowed) return null;
   // 记号这一问答不出来(存量行没有记号、只看得见展示文本、ps/`/proc` 失败)⇒ 照旧走时间锚。
   // 命令原文一起交过去:±2 秒是个窗口,原进程结束、号在窗口内被复用时时间锚照样成立
   // (第 10 轮审查 F2-C)。壳的 argv 里带着命令原文,对不上就一律不认。
   const { verdict, startedAt } = processStartedNear(side.pid, side.spawnedAtMs, 2_000, row.command);
   if (verdict === "different") return null;
   return writeAdopted(row, side.pid, startedAt);
-}
-
-/**
- * 记号那一问对「这个号是不是这条哨兵的壳」说了什么。**三档,反证单独一档。**
- *
- * 记号随 `exec` 继承,所以我们那个壳一定带着它:
- *  · `ours` 名单里有这个号 ⇒ 已证明(启动时刻再走一次夹核换算);
- *  · `ours` 名单里**没有**这个号 ⇒ 它不带这次创建的记号 ⇒ **反证**,不是我们的壳;
- *  · `none`(两个平台都可靠:真实环境项必然出现在文本里)⇒ 没有任何活进程带着这次创建的
- *    记号 ⇒ 那个壳已经不在了,这个号上现在是谁都与我们无关 ⇒ **反证**;
- *  · `suspected` / `unprovable` ⇒ 这一问没答出来,交回给时间锚那条路。
- */
-function strongIdentityFor(
-  row: Row, pid: number,
-): { verdict: "proven"; startedAt: string | null } | { verdict: "disproved" } | { verdict: "unanswered" } {
-  const proven = processUnitEvidence(row.unitToken);
-  if (proven.verdict === "none") return { verdict: "disproved" };
-  if (proven.verdict !== "ours") return { verdict: "unanswered" };
-  const member = proven.members.find((candidate) => candidate.pid === pid);
-  if (!member) return { verdict: "disproved" };
-  const converted = startedAtOfGeneration(member.pid, member.gen);
-  if (converted.outcome === "changed") return { verdict: "disproved" };
-  // `unqueryable`:号认下来,启动时刻留空 —— 跟下面时间锚那一档的 `unqueryable` 同一个出路。
-  return { verdict: "proven", startedAt: converted.outcome === "proven" ? converted.startedAt : null };
 }
 
 /** 认下来之后把 pid(和拿得到的启动时刻)回填进库。写不进去也要继续,见下。 */

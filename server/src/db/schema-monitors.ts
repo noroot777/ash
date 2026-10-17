@@ -316,6 +316,21 @@ export const monitorReclaimDebts = sqliteTable("monitor_reclaim_debts", {
   closedAt: text("closed_at"),
   /** 收档那一刻,线索停在哪一档(`stateNote` 那句话)。 */
   closedNote: text("closed_note"),
+  /**
+   * **这个号已经被反证过的时刻**(第 17 轮审查 F1)。空 = 还没有过反证。
+   *
+   * 反证 = 记号那一问明确答出「这个号不是(或已经不是)这条记录的那个进程」:`none`、`ours`
+   * 名单里没有它、代次 `changed`。它跟「这一刻问不出来」是两件事,而**只有后者**可以退回
+   * 时间锚 + 命令包含那条弱判据。
+   *
+   * 为什么要落盘:反证只活在一次函数调用的返回值里时,下一次尝试、另一个消费者、重启清扫
+   * 都会把它退化成「未知」再走弱判据 —— 实测后果是同号新进程的真实启动时刻被写成旧哨兵的
+   * 身份、随后按这条身份收到真实 SIGKILL(`round-7/refutation-auto.log`)。
+   *
+   * 非空**只收走弱判据,不封死强凭证**:真实带着这次记号的后代落到同一个号上时,记号那一问
+   * 仍然把它判成已证明 —— 那是它自己的独立证据(见 monitor-identity-authz.ts)。
+   */
+  identityDisprovedAt: text("identity_disproved_at"),
   /** 停不掉的那次报了什么。 */
   lastError: text("last_error"),
   attempts: integer("attempts").notNull().default(0),
