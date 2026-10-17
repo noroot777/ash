@@ -461,27 +461,36 @@ try {
   );
   ok("待命时飘来的会话级旁注不算开工");
 
-  // ── ⑪ 用户插话覆盖回合起点:两个身份都得注销（第 8 轮审查必须修 1）─────────────────
-  // 为什么要一条业务级的:被覆盖掉的那个起点留在活动册上,看不出任何异常 —— 这台的 .md、
-  // 状态、trace 全是对的,库里也没有脏数据。只有在**下一次唤醒**时才现形:读端看到「这条
-  // 会话未收口 + 任务在飞 + 还登记着」,就从那个老起点一路开到无穷,把待命期间别的任务在
-  // 同一个目录里做的东西全算成这台的实测产物,连「算不准」都不说(第 8 轮审查 F1)。
+  // ── ⑪ 插话与回合结束交错:结束事件只能关掉它自己那一轮（第 1 轮审查 F1）──────────
+  // 为什么要一条业务级的:这一路**一个故障都没有**。.md、状态、trace 全是对的,库里也没有脏
+  // 数据 —— 唯独插话起的那一轮被**上一轮的**结束事件提前收口(一个几毫秒的假区间),它真正
+  // 干活那一段落进两条记录之间的空洞,那一轮做出来的图从此永久漏在清单外,重新扫描和刷新
+  // 都找不回来。打断与结束天然是交错的:ash 先 interrupt 再 send(新一轮当场开跑),而被打断
+  // 那一轮的进程要再过一会儿才吐出它的 turnEnd —— 这条用例就卡在那个交错点上。
   {
     const { deliverToLead } = await import("../src/team/session.js");
     const { openTurn, activeTurnStarts } = await import("../src/session-turns.js");
     const taskId = "task-turn-ownership";
     const sessId = "sess-turn-ownership";
     await seedTeamTask(taskId);
-    let letGo = () => {};
-    const gate = new Promise<void>((resolve) => { letGo = resolve; });
+    const turnRows = async () => (await dbClient.execute(
+      `SELECT started_at, ended_at FROM session_turns WHERE session_id='${sessId}' ORDER BY started_at`,
+    )).rows as { started_at: string; ended_at: string | null }[];
+    const sessionRow = async () => (await db.select().from(sessions).where(eq(sessions.id, sessId))).at(0)!;
+    let letOldEnd = () => {};
+    let letNewEnd = () => {};
+    const oldEnded = new Promise<void>((resolve) => { letOldEnd = resolve; });
+    const newEnded = new Promise<void>((resolve) => { letNewEnd = resolve; });
     await startLead({
       taskId,
       sessId,
       cliSessionId: "own-thread",
       events: (async function* (): AsyncGenerator<AgentEvent> {
         yield { kind: "text", text: "首轮说到一半。" };
-        await gate; // 卡住首轮,给插话一个确定的插入点(它必须落在上一轮还开着的时候)
-        yield { kind: "turnEnd" };
+        await oldEnded;            // 插话必须落在首轮还开着的时候
+        yield { kind: "turnEnd" }; // 被打断那一轮退出时照样报一个结束(真实常驻泵就是这样)
+        await newEnded;            // 停在这里:看它到底关掉了哪一轮
+        yield { kind: "turnEnd" }; // 插话那一轮自己的结束
         yield { kind: "done", exitStatus: 0 };
       })(),
     });
@@ -493,17 +502,37 @@ try {
     const deadline = Date.now() + 10_000;
     const others = () => [...activeTurnStarts(sessId)].filter((start) => start !== at);
     while (!others().length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
-    // 一台调度台就是一个 CLI 进程,**同时只可能有一个回合在跑**。修复前这里是两个:插话起的
-    // 新一轮把 lead.turnStart 覆盖掉了,首轮那个起点从此没有任何出口会提到它。
-    const during = [...activeTurnStarts(sessId)];
-    assert.equal(during.length, 1, `同一台同时只该有一个回合在册,实际：${JSON.stringify(during)}`);
-    assert.notEqual(during[0], at, "在跑的是插话起的那一轮,首轮已经被它打断了");
-    letGo();
+    const second = others()[0];
+    assert(second, "插话起的那一轮要在投递口那一刻就持有自己的身份 —— 那是它真实的起点");
+    assert.deepEqual([...activeTurnStarts(sessId)].sort(), [at, second].sort(),
+      "打断与结束是交错的:旧回合还没报结束,两个身份同时在手");
+    // 旧回合报结束。它只能关掉**自己**那一轮 —— 按 lead.turnStart 结算的那一版在这里会把
+    // 刚开的新一轮一起收口、一起撤登记。
+    letOldEnd();
+    while (activeTurnStarts(sessId).has(at) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    assert.deepEqual([...activeTurnStarts(sessId)], [second],
+      "旧回合的结束事件把插话那一轮也撤了 —— 它接着做出来的东西会被当成「没人在写的时候出现的」");
+    const mid = await turnRows();
+    assert.equal(mid.find((row) => row.started_at === at)?.ended_at != null, true, "被打断那一轮要按自己的身份收口");
+    assert.equal(mid.find((row) => row.started_at === second)?.ended_at, null,
+      "插话那一轮还在跑,提前给它补上 ended_at 就等于把它之后落盘的东西全判到区间之外");
+    assert.equal((await sessionRow()).endedAt, null,
+      "手上还有回合在跑,会话行却标成已收尾 —— 读端那一道会据此否决正在跑的身份,区间夹回旧起点");
+    // 插话那一轮真正干活的那段时间(产物就落在这里面)。
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    letNewEnd();
     while (teamIsLive(taskId) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
     assert.equal(teamIsLive(taskId), false, "前置条件:这台已经收完台");
     assert.deepEqual([...activeTurnStarts(sessId)], [],
       "收完台还留着活动身份 —— 下一次唤醒就会把待命期间别人做的东西当成这台的实测产物");
-    ok("用户插话覆盖回合起点:同时只有一个在册,收完台一个不留");
+    const final = await turnRows();
+    assert.equal(final.length, 2, `两轮各一行,实际：${JSON.stringify(final)}`);
+    assert(final.every((row) => row.ended_at), `两轮都要收过口,实际：${JSON.stringify(final)}`);
+    const span = final.find((row) => row.started_at === second)!;
+    const covered = Date.parse(span.ended_at!) - Date.parse(span.started_at);
+    assert(covered >= 150,
+      `插话那一轮的区间只有 ${covered}ms —— 它被上一轮的结束事件提前收口了,中间落盘的东西全在区间外`);
+    ok("插话与回合结束交错:结束事件只关自己那一轮,新一轮的区间覆盖它真正在跑的那段");
   }
 
   console.log("test:team-resilience core ok");

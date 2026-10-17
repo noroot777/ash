@@ -34,10 +34,16 @@ export interface RunWindow {
   approx?: boolean;
 }
 
-/** `runWindows` 认人只要这两样，不必是整行 task。 */
+/**
+ * `runWindows` 认人只要一个 id，不必是整行 task。
+ *
+ * **刻意不要 `status`**：「这一刻还在写吗」只由写端的活动身份登记回答（`session-turns.ts` 的
+ * 内存册子，进程重启即清空）。任务状态是**二手的**——团队调度台的 `running` 要等一次写库，
+ * 失败还要重试，那个窗口里拿它当否决条件就会把一个已经登记在册、确实在写的回合判成不活动
+ * （第 1 轮审查 F3 的同类位置）。
+ */
 export interface RunOwner {
   id: string;
-  status: string;
 }
 
 /**
@@ -104,7 +110,7 @@ function mergeWindows(spans: RunWindow[]): RunWindow[] {
  *   2. 回合记录没覆盖到的早期（这张表建立之前就已经跑过的回合）→ 补 `[会话起点, 最早
  *      那条回合记录的起点]`。宽，但那段里真有它的产出，不能漏；
  *   3. 一条记录都没有 → 整条会话寿命（本表出现前的老行为）。
- * 还在飞的回合（`ended_at` 为空且任务在 running/queued）一律**开到无穷**：它正在写，之后
+ * 还在飞的回合（写端登记在册的那些身份）一律**开到无穷**：它正在写，之后
  * 出现的东西只会是它写的；拿 `Date.now()` 当硬上限反而会漏掉刚落盘的文件（mtime 是亚毫秒
  * 浮点、`Date.now()` 是整毫秒，同一毫秒内读就判在窗口外）。
  *
@@ -117,14 +123,10 @@ export async function runWindows(
   lens: PathLens,
 ): Promise<{ windows: RunWindow[]; gaps: string[] }> {
   const ids = owners.map((row) => row.id);
-  const inFlight = new Set(owners
-    .filter((row) => row.status === "running" || row.status === "queued")
-    .map((row) => row.id));
 
   const [sessionRows, turnRows, monitorRows] = await Promise.all([
     db.select({
       id: sessions.id,
-      taskId: sessions.taskId,
       cwd: sessions.cwd,
       worktreePath: sessions.worktreePath,
       startedAt: sessions.startedAt,
@@ -242,7 +244,14 @@ export async function runWindows(
     // 活动身份只有写端知道（`session-turns.ts` 的内存登记，进程重启即清空），重启后接回
     // 仍在跑的 agent 会重新登记。同一任务名下没登记的未收口身份一律留在「未知」那一档。
     const activeStarts = activeTurnStarts(row.id);
-    const live = !row.endedAt && inFlight.has(row.taskId) && activeStarts.size > 0;
+    // **活动身份是一手事实,不许被二手的持久状态否决**。原先这一行还要求会话行上
+    // `ended_at` 为空、任务在 running/queued —— 两样都是「写进去过」的快照：上一轮收尾写了
+    // `ended_at`,本轮 `beginTurn` 要把它清回 null（`resumedTurnFields`）,那一次 UPDATE 一
+    // 失败（库忙、触发器、权限）陈旧的收尾时刻就留在行上,于是正在写的这一轮被判成不活动、
+    // 还被算成「开了没收口」,上界夹到上一轮的收尾时刻附近——此后落盘的图当场从清单里消失,
+    // 面板反过来说「这次运行没有正常结束」（第 1 轮审查 F3）。登记在册则相反：它只在写端的
+    // 内存里,登记与注销成对且覆盖全部出口,进程一没了全部清空。所以这一刻谁在写,只问它。
+    const live = activeStarts.size > 0;
     const liveFrom = [...activeStarts]
       .map((at) => Date.parse(at))
       .filter((at) => Number.isFinite(at))

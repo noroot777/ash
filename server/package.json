@@ -180,7 +180,7 @@
     "test:preview-workspace": "tsx scripts/test-preview-workspace.ts",
     "test:monitor-races": "tsx scripts/test-monitor-races.ts",
     "test:db-tx": "tsx scripts/test-db-tx-ownership.ts",
-    "test:turn-identity": "tsx scripts/test-session-turn-identity.ts",
+    "test:turn-identity": "tsx scripts/test-session-turn-identity.ts && tsx scripts/test-team-turn-artifacts.ts",
     "test:turn-migration": "tsx scripts/test-session-turn-migration.ts"
   },
   "dependencies": {

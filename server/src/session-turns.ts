@@ -1,6 +1,6 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
-import { sessionTurns, sessions } from "./db/schema.js";
+import { sessionTurns } from "./db/schema.js";
 import { id } from "./util.js";
 // 回合区间的**写入端**。读取端在 `task-artifact-windows.ts`（产物归属按时间认人），表的语义写在
 // `db/schema-sessions.ts` 的 `sessionTurns` 上，这里不复述。
@@ -24,8 +24,10 @@ import { id } from "./util.js";
 //     被开两次（团队那边先 `openLead`、紧接着又用同一个 `turnStart` 调 `beginTurn`）只会
 //     计一次。第 4 轮把加数放在字段 helper 里,那条路上重复调用凭空多出一轮,于是那条会话
 //     永远报「缺一个回合记录」（第 5 轮审查必须修 2.1）。
-//   • 整批写失败时记一笔 `turns_lost`：行和计数同批写之后两边同生共死,对账再也看不出缺口,
-//     只有写端自己知道刚才漏了一轮（第 5 轮审查必须修 2.3）。
+//   • 整批写失败时**按身份**记一笔欠账：行和计数同批写之后两边同生共死,对账再也看不出缺口,
+//     只有写端自己知道刚才漏了一轮（第 5 轮审查必须修 2.3）。欠的是**那一行开始记录**,库
+//     一恢复就按同一个身份补上去——压成一个无身份的计数的话,同一个身份后来重试成功也消不掉
+//     它,读端只能继续把整条会话寿命算成宽的（第 1 轮审查 F2,见 `unconfirmed`）。
 //
 // 还有一件**只有写端知道**的事：这一刻到底哪些回合真的在跑。库里「开始了没收口」这一个
 // 事实下面压着两种完全相反的情况——正在写，和当初崩了没来得及收口。任务状态分不出它们
@@ -186,47 +188,59 @@ export function activeTurnStarts(sessionId: string): ReadonlySet<string> {
 const EMPTY_STARTS: ReadonlySet<string> = new Set<string>();
 
 /**
- * **没能落账的开始意图**：`session_id` → 那几个连一行都没写进去的回合起点。
+ * **没能落账的开始意图**：`session_id` → 那几个连一行都没写进去的回合**身份**（起点 → 它
+ * 当时的 task / cwd）。
  *
- * 为什么光靠库里的 `turns_lost` 不够：开始那一批整个回滚之后,补写这个标记的目标**还是刚刚
- * 写失败的那个库**,它很可能一起失败——那就只剩一句日志。而下一轮一落账,成功计数和成功
- * 身份数又重新相等,读端于是宣称完整,中间那一轮做出来的图被静默滤掉（第 6 轮审查必须修 2）。
+ * 为什么光靠库里那一笔标记不够：开始那一批整个回滚之后,补标记的目标**还是刚刚写失败的那个
+ * 库**,它很可能一起失败——那就只剩一句日志。而下一轮一落账,成功计数和成功身份数又重新
+ * 相等,读端于是宣称完整,中间那一轮做出来的图被静默滤掉（第 6 轮审查必须修 2）。所以未确认
+ * 的意图先留在内存里：读端把它直接算进缺口（哪怕库里一个字都没有）,下一次开回合时再试着
+ * 持久化。进程同时被杀且库从未写成那一笔才会真丢——那一档物理上没有别的办法,不装作记住了。
  *
- * 所以未确认的意图先留在内存里：读端把它直接算进缺口（哪怕库里一个字都没有）,下一次开回合
- * 时再试着补成持久的 `turns_lost`。库恢复了就补上,库一直不可写就一直按未知披露。进程同时
- * 被杀且库从未写成那一笔才会真丢——那一档物理上没有别的办法,不装作记住了。
+ * **为什么连 task / cwd 一起记下来**：要补的是**那一行开始记录本身**,不是一个「少了一轮」
+ * 的数字。原先 `flushUnconfirmed` 把这些意图压成 `sessions.turns_lost` 上的一个计数,身份就
+ * 此丢了——同一个身份后来重试成功（库恢复后的重试、团队那边先开台再 `beginTurn` 用的都是
+ * **同一个** `turnStart`）,那个计数还挂在那儿,读端照它把整条会话寿命算成宽的,两轮之间歇
+ * 着的那段时间里别人做的图又被收进来,面板还谎称「有一次连开始都没留下记录」（第 1 轮审查
+ * F2）。按身份补行就**不需要**「消账」这个动作：补上的那一行就是那一轮的记录,它和后来的
+ * 重试走同一个幂等批（`writeTurnStart`）,谁先成功都只留一行、只加一次数。补上之后那一轮
+ * 从「整段会话都算不准」升级成「开了没收口」——末端估到下一个回合起点,窄得多,照实标 approx。
  */
-const unconfirmed = new Map<string, Set<string>>();
+const unconfirmed = new Map<string, Map<string, { taskId: string; cwd: string | null }>>();
 
 /** 这条会话有几个开始意图还没被确认落账（读端把它算进缺口）。 */
 export function unconfirmedTurns(sessionId: string): number {
   return unconfirmed.get(sessionId)?.size ?? 0;
 }
 
-function rememberUnconfirmed(sessionId: string, startedAt: string): void {
+function rememberUnconfirmed(input: TurnStartInput): void {
+  const { sessionId, taskId, cwd, startedAt } = input;
+  const who = { taskId, cwd: cwd ?? null };
   const seen = unconfirmed.get(sessionId);
-  if (seen) seen.add(startedAt);
-  else unconfirmed.set(sessionId, new Set([startedAt]));
+  if (seen) seen.set(startedAt, who);
+  else unconfirmed.set(sessionId, new Map([[startedAt, who]]));
 }
 
 /**
- * 把欠着的「漏了一轮」补成库里的 `turns_lost`。开回合时先试一次：库恢复了就不再依赖内存。
+ * 把欠着的那几个身份补成真正的开始行。开回合时先试一次：库恢复了就不再依赖内存。
  *
- * 补成功才从内存移除,所以同一笔账**不会**两边各算一次（读端 = `turns_lost` + 内存未确认）。
+ * **逐个身份各自成败**：一个补成了就从内存划掉,剩下的留着下次再试。补成功才移除,所以同
+ * 一笔账不会两边各算一次（读端 = 库里的行 + 内存未确认）。
  */
 async function flushUnconfirmed(sessionId: string): Promise<void> {
   const owed = unconfirmed.get(sessionId);
   if (!owed?.size) return;
-  const count = owed.size;
-  try {
-    await db.update(sessions)
-      .set({ turnsLost: sql`COALESCE(${sessions.turnsLost}, 0) + ${count}` })
-      .where(eq(sessions.id, sessionId));
-    unconfirmed.delete(sessionId);
-  } catch (error) {
-    // 还是写不进去：账留在内存里,读端照样看得见缺口。
-    console.warn(`[ash] 欠着的 ${count} 笔「漏了一个回合」还没补进库（这一段按未知披露）: ${String(error)}`);
+  for (const [startedAt, who] of [...owed]) {
+    try {
+      await writeTurnStart({ sessionId, taskId: who.taskId, cwd: who.cwd, startedAt });
+    } catch (error) {
+      // 还是写不进去：这一笔和它后面那些都留在内存里,读端照样看得见缺口。
+      console.warn(`[ash] 欠着的 ${owed.size} 笔「漏了一个回合」还没补进库（这一段按未知披露）: ${String(error)}`);
+      return;
+    }
+    owed.delete(startedAt);
   }
+  unconfirmed.delete(sessionId);
 }
 
 /**
@@ -271,12 +285,41 @@ export async function openTurn(input: {
   startedAt: string | null | undefined;
 }): Promise<void> {
   if (!input.startedAt) return;
-  // 先登记活动身份：登记得比写库早一点没有坏处（读端还要求任务在 running/queued），
-  // 反过来晚一点就有——那个窗口里面板会把正在写的这一轮算成「崩了没收口」。
-  markTurnActive({ sessionId: input.sessionId, taskId: input.taskId, startedAt: input.startedAt });
-  // 上一轮欠着的「漏了一个回合」在这里补：那时库正坏着,现在也许好了。放在新回合落账**之前**,
-  // 这样「后来成功的一轮」永远不会先把两个数凑相等再让欠账无声无息（第 6 轮审查必须修 2）。
+  const startedAt = input.startedAt;
+  // 先登记活动身份：登记得比写库早一点没有坏处,反过来晚一点就有——那个窗口里面板会把
+  // 正在写的这一轮算成「崩了没收口」。
+  markTurnActive({ sessionId: input.sessionId, taskId: input.taskId, startedAt });
+  // 上一轮欠着的身份在这里补：那时库正坏着,现在也许好了。放在新回合落账**之前**,这样
+  // 「后来成功的一轮」永远不会先把两个数凑相等再让欠账无声无息（第 6 轮审查必须修 2）。
+  // 补的恰好是同一个身份时（库恢复后用同一个 `startedAt` 重试）这一步就把它落完了,下面
+  // 那个批成了空操作——两条路共用一个幂等批,所以谁先成功都只留一行、只加一次数。
   await flushUnconfirmed(input.sessionId);
+  try {
+    await writeTurnStart({ ...input, startedAt });
+  } catch (error) {
+    await noteTurnLost({ ...input, startedAt }, error);
+  }
+}
+
+/** 一个回合的身份,加上落这一行所需要的其余事实。 */
+type TurnStartInput = {
+  sessionId: string;
+  taskId: string;
+  cwd: string | null | undefined;
+  startedAt: string;
+};
+
+/**
+ * 「开过这一轮」的那一批写入：加计数 + 落开始行。**会抛**（调用方决定是记欠账还是重试）。
+ *
+ * **一个原子批,顺序不能换**：加数在前,它的 `NOT EXISTS` 问的是插入**之前**的状态；插在前
+ * 就永远加不上数了。两条同生共死,所以不存在「行写上了计数没加」这种中间态——那种中间态在
+ * 这里全是错的方向（计数偏小正好抵掉真缺口）。
+ *
+ * **幂等**：同一 (session_id, started_at) 再跑一次既不插行也不加数。补欠账、团队那边同起点
+ * 再开一次台、接回重试,走的都是这一个批。
+ */
+async function writeTurnStart(input: TurnStartInput): Promise<void> {
   const args = {
     row: id(),
     sid: input.sessionId,
@@ -284,44 +327,41 @@ export async function openTurn(input: {
     cwd: input.cwd ?? null,
     at: input.startedAt,
   };
-  try {
-    // **一个原子批,顺序不能换**：加数在前,它的 `NOT EXISTS` 问的是插入**之前**的状态；
-    // 插在前就永远加不上数了。两条同生共死,所以不存在「行写上了计数没加」这种中间态——
-    // 那种中间态在这里全是错的方向（计数偏小正好抵掉真缺口）。
-    await dbClient.batch([
-      {
-        sql: `UPDATE sessions SET turns_started = COALESCE(turns_started, 0) + 1
-                WHERE id = :sid
-                  AND NOT EXISTS (
-                    SELECT 1 FROM session_turns WHERE session_id = :sid AND started_at = :at
-                  )`,
-        args: { sid: args.sid, at: args.at },
-      },
-      {
-        sql: `INSERT OR IGNORE INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at)
-                VALUES (:row, :sid, :task, :cwd, :at, NULL)`,
-        args,
-      },
-    ]);
-  } catch (error) {
-    await noteTurnLost(input.sessionId, input.startedAt, error);
-  }
+  await dbClient.batch([
+    {
+      sql: `UPDATE sessions SET turns_started = COALESCE(turns_started, 0) + 1
+              WHERE id = :sid
+                AND NOT EXISTS (
+                  SELECT 1 FROM session_turns WHERE session_id = :sid AND started_at = :at
+                )`,
+      args: { sid: args.sid, at: args.at },
+    },
+    {
+      sql: `INSERT OR IGNORE INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at)
+              VALUES (:row, :sid, :task, :cwd, :at, NULL)`,
+      args,
+    },
+  ]);
 }
 
 /**
- * 「这一轮整个没记上」记一笔。
+ * 「这一轮整个没记上」记一笔 —— **按身份记,不是记一个数**。
  *
- * 这是**唯一**还知道刚才漏了一轮的地方：行和计数同批写,都失败时库里两个数仍然相等,对账
- * 一点痕迹都看不出来（第 5 轮审查必须修 2.3）。而补这一笔的目标还是刚刚写失败的那个库,所以
- * **先把意图记在内存里**（`unconfirmed`）再试持久化,写成了才把内存那笔划掉；没写成就留着,
+ * 这是唯一还知道刚才漏了一轮的地方：行和计数同批写,都失败时库里两个数仍然相等,对账一点
+ * 痕迹都看不出来（第 5 轮审查必须修 2.3）。而补这一笔的目标还是刚刚写失败的那个库,所以
+ * **先把身份记在内存里**（`unconfirmed`）再试持久化,写成了才把内存那笔划掉；没写成就留着,
  * 读端照样把它算进缺口,下一次开回合时再试（第 6 轮审查必须修 2）。
+ *
+ * 持久化的形式是**补那一行开始记录**,不是往 `sessions.turns_lost` 上加一个数：数字欠账没有
+ * 身份,同一个身份后来重试成功也消不掉它,读端只能继续把整条会话寿命算成宽的（第 1 轮审查
+ * F2,机制见 `unconfirmed` 的注释）。`turns_lost` 从此只是**旧版留下的只读历史**。
  */
-async function noteTurnLost(sessionId: string, startedAt: string, cause: unknown): Promise<void> {
+async function noteTurnLost(input: TurnStartInput, cause: unknown): Promise<void> {
   console.warn(`[ash] 回合开始没落盘（这一轮按缺口披露）: ${String(cause)}`);
   // **先记内存,再试库**。顺序反过来就又回到「补写也失败 = 只剩日志」那一步：那一笔账从此
   // 没人记得,下一轮一落账两个数就重新相等（第 6 轮审查必须修 2）。
-  rememberUnconfirmed(sessionId, startedAt);
-  await flushUnconfirmed(sessionId);
+  rememberUnconfirmed(input);
+  await flushUnconfirmed(input.sessionId);
 }
 
 /**

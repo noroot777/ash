@@ -5,7 +5,7 @@ import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shar
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
 import { openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
-import { closeLeadTurns, holdTurn, releaseHeldTurns } from "./lead-turns.js";
+import { closeLeadTurns, heldTurns, holdTurn, releaseHeldTurn } from "./lead-turns.js";
 import { now } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { untrackRun, takeStopped } from "../runs.js";
@@ -127,6 +127,10 @@ async function consume(lead: Lead): Promise<void> {
       // 也清空了。不在这儿补一个回合起点,后果有两层:trace 的 turnStartedAt 只能兜底成
       // 各自的 now(),一个回合在页面上碎成一串「1 工具」的空气泡(每条都没正文,用时还全
       // 按会话结束时刻倒推);空闲回收计时也还在跑,一台正在干活的调度台会被当成闲置收掉。
+      // 起点只能取**这一刻**(第一条输出)：自发回合没有投递口可问,上一轮收尾之后这个进程
+      // 压根没有回合在跑,也就不可能有它写出来的东西落在中间那段空档里 —— 所以「不早于真实
+      // 起点」的保守值在这里是安全的那个方向(漏一点,而不是把别人做的东西算进来)。有投入的
+      // 那几条路一律用投入那一刻的真实起点,见 beginTurn 的注释。
       if (!lead.busy && startsSelfTurn(event)) {
         clearIdle(lead);
         await beginTurn(lead);
@@ -394,9 +398,18 @@ function armStatusRetry(lead: Lead): void {
 
 
 
+/**
+ * 回合**开始**那一半的库侧动作。
+ *
+ * `at` 必须是**这一轮真正的身份**：走投递口那几条路（用户插话、执行者汇报、回合收尾的合并
+ * 汇报）要原样传 `sendToLead` 回来的 `at` —— 那一刻 `holdTurn` 已经把这个身份持有住了,这里
+ * 再取一次 `now()` 就等于同一轮登记两个起点,其中一个谁都不会来收。CLI 自发的那一轮没有投递
+ * 口可问,只能以第一条输出的时刻为起点（见 consume 里的补开回合）。
+ */
 async function beginTurn(lead: Lead, at = now()): Promise<void> {
-  // 状态与活动身份在同一个同步段里绑定,顺便放掉手上还攥着的别的起点（用户插话会在上一轮
-  // 还开着时就起新一轮）—— 判据与机制都在 lead-turns.ts。
+  // 状态与活动身份在同一个同步段里绑定;同一个身份重复持有是幂等的（openLead 先在
+  // attachLead 里持有首轮,紧接着这里又用同一个 turnStart 调一次）—— 判据与机制都在
+  // lead-turns.ts。
   holdTurn(lead, at);
   // **返回值不能丢**：这一路的 session 写入是被捕获后继续的（`updateOwnSession` 不抛），
   // 丢掉它就等于把「写成功」当默认（第 5 轮审查必须修 2.3）。
@@ -424,26 +437,35 @@ async function beginTurn(lead: Lead, at = now()): Promise<void> {
 // 否则落 idle(待命)并起空闲回收计时。
 async function endTurn(lead: Lead): Promise<void> {
   const endIso = now();
-  const turnStart = lead.turnStart;
+  // 执行器报的「一个回合说完了」关掉的是**队首**那一轮,不是 `lead.turnStart` 此刻写着的那个
+  // —— 用户插话会在上一轮还开着时就把下一轮投进去,照那个字段结算等于用旧回合的结束事件把
+  // 新回合提前收口（机制与后果见 lead-turns.ts 顶部,第 1 轮审查 F1）。注销排在写库之前：
+  // 下面那两次写都可能失败,失败时照样不能留一个「还在跑」的身份给读端（第 6 轮必须修 1）。
+  const turnStart = releaseHeldTurn(lead);
   const spent = turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(turnStart)) : 0;
-  lead.busy = false;
-  lead.turnStart = null;
-  // 回合说完了就不再写盘,注销排在写库之前：下面那两次写都可能失败,失败时照样不能留一个
-  //「还在跑」的身份给读端（第 6 轮审查必须修 1）。按**这台手上那一份集合**放,不按上面刚
-  // 清掉的 turnStart —— 那个字段会被下一轮覆盖,只认它就会漏掉被覆盖的那个（第 8 轮必须修 1）。
-  releaseHeldTurns(lead);
+  // 手上还攥着别的回合 = 插话那一轮还排着/跑着,这台**并没有空下来**。
+  const idleNow = !lead.busy;
   // 写库失败绝不能把下面整段收尾一起带走 —— writeTurnEnd、旁注落盘、待送消息、落 idle
   // 全在后面(理由见 persistOrReport)。丢的只是这一行用时统计。
   await updateOwnSession(
     lead,
     "回合收尾状态",
-    { endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}` },
+    {
+      // `ended_at` 说的是「这条会话此刻没有回合在跑」。手上还有回合时写上它,读端判「还在
+      // 写」的那一道就会被这个陈旧快照否决,正在跑的这一轮被算成「开了没收口」、区间夹到
+      // 旧起点附近,之后落盘的东西全被排除（同一条链的另一头是第 1 轮审查 F3）。
+      ...(idleNow ? { endedAt: endIso } : {}),
+      activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
+    },
     endIso,
   );
   // 这一回合的区间（产物归属按它认人，不按会话寿命——常驻调度台那一行从开台活到收工）。
   await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: turnStart, endedAt: endIso });
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead);
+  // 还有回合在手：攒着的执行者汇报等它真正空下来再合并送（省一轮模型调用本来就是这么来的）,
+  // 更不能落 idle 或起空闲回收计时 —— 一台正在干活的调度台会被当成闲置收掉。
+  if (!idleNow) return;
   if (lead.pending.length) {
     await flushUnqueued(lead); // 上次写库被拒的那几条,趁这会儿补进队列
     // **快照,不是引用**。`sendToLead` 要 await(投递前现读浏览器授权),这期间调度台可能
@@ -458,7 +480,8 @@ async function endTurn(lead: Lead): Promise<void> {
     // (进程正在收尾)这批汇报就再也没人送得出去了 —— 下一台健康调度台永远等不到
     // (2026-08-26 第 11 轮审查)。落盘同样要等收下之后:没送成还记一条「已投递」的
     // system turn,下一台真送成时同一份汇报在 .md 里就是两条。
-    if ((await sendToLead(lead, merged)).sent) {
+    const delivery = await sendToLead(lead, merged);
+    if (delivery.sent) {
       // 只摘走这一批(按对象身份)。await 期间新来的留在队列里,下一次回合收尾照常送。
       const sent = new Set<PendingInbound>(batch);
       lead.pending = lead.pending.filter((m) => !sent.has(m));
@@ -468,7 +491,9 @@ async function endTurn(lead: Lead): Promise<void> {
       const seqs = batch.map((m) => m.seq).filter((seq): seq is number => seq !== null);
       await persistOrReport(lead, "待送消息销账", () => consumeInbound(seqs), at);
       recordSystemTurn(lead, merged, at);
-      await beginTurn(lead, at);
+      // 身份用投递口那一刻的（`delivery.at`）：holdTurn 已经按它持有住了,这里另取一个
+      // `now()` 会让同一轮在活动册上留下两个起点。
+      await beginTurn(lead, delivery.at ?? at);
       return;
     }
     reportLeadFailure(lead, "攒着的执行者汇报没能送进调度台进程(它正在收尾),先留在待送队列里交给下一台接手的调度台。", at);
@@ -507,15 +532,21 @@ async function closeLead(
   // superseded 那一路 retireLead 已经交过,这里是空转。
   releasePending(lead);
   const endIso = now();
-  const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
+  // 手上可能攥着**好几个**回合：用户插话会在上一轮还开着时就起新一轮,而进程这会儿整个没了
+  // —— 每一个都得补上自己的区间,否则缺的那几轮只剩「会话结束了、最后一个回合没有记录」
+  // 那一个笼统缺口（第 1 轮审查 F1 的同一条链）。墙钟只按队首算:排在后面那些还没真跑过。
+  const open = heldTurns(lead);
+  // 摘牌的台 held 早被 retireLead 清空了,可它手上那一轮确实结束了（进程没了）—— 区间照补。
+  const closing = open.length ? open : (lead.turnStart ? [lead.turnStart] : []);
+  const spent = closing.length ? Math.max(0, Date.parse(endIso) - Date.parse(closing[0])) : 0;
   // 进程没走 `endTurn` 就没了（异常退出、被停、被回收），手上这个回合还开着：它的区间得
   // 在这儿补一行。不补就只剩「会话结束了、最后一个回合没有记录」，产物归属读到那个缺口
   // 只能按会话寿命估，那一回合真做出来的东西要么被滤掉要么混进别人的（第 2 轮审查 F1）。
   // 进程都没了,这个回合当然不在写了——撤登记排在补区间**之前**,补不进去也不留假活动身份。
   // 同 retireLead：按持有的那一份集合放,并且从此不再接受新的持有（第 8 轮审查必须修 1）。
   closeLeadTurns(lead);
-  if (lead.turnStart) {
-    await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: lead.turnStart, endedAt: endIso });
+  for (const startedAt of closing) {
+    await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt, endedAt: endIso });
   }
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
   // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。

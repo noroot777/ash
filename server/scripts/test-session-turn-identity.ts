@@ -149,20 +149,57 @@ const resumeSame = async (taskId: string, text: string) => {
   await dbClient.executeMultiple("DROP TRIGGER block_insert;");
   const second = await listing(root, "TiNoRow00001");
   assert(paths(second).includes("output/run-2.svg"), "第二轮做出来的图当场要能看见");
+  assert(second.incomplete.some((note) => note.includes("连开始都没在库里留下记录")),
+    `库还坏着、欠账只在内存里的那一刻,缺口就得照实说,实际提示：${JSON.stringify(second.incomplete)}`);
   await settle();
   await resumeSame("TiNoRow00001", "第三轮");
   const third = await listing(root, "TiNoRow00001");
   const blocked = await sessionRow("TiNoRow00001");
-  // 行和计数是**同一个原子批**（见 session-turns.ts）：第二轮那一批整个回滚,所以计数停在 2。
-  // 「刚才漏了一轮」这件事只有写端自己知道,它记在 turns_lost 上——两个数仍然相等,对账那一道
-  // 在这种情形下一点痕迹都看不出来（第 5 轮审查必须修 2.3）。
-  assert.equal(Number(blocked.turns_started), 2, "成功落账的是第一、第三轮");
-  assert.equal(Number(blocked.turns_lost), 1, "整批没写成的那一轮要留下持久标记,否则缺口在库里无迹可寻");
-  assert.equal((await turnRows("TiNoRow00001")).length, 2, "中间那轮一行都没写上");
+  // 行和计数是**同一个原子批**（见 session-turns.ts）：第二轮那一批整个回滚,那一刻只有写端
+  // 自己知道刚才漏了一轮,它**按身份**把这笔欠着（第 5 轮审查必须修 2.3）。库一恢复（第三轮
+  // 开回合时）就按同一个身份把那行开始记录补上去 —— 所以计数是 3、表里也是 3 行,中间那轮
+  // 从「整段会话都算不准」升级成「开了没收口」（第 1 轮审查 F2:压成一个无身份的数字的话,
+  // 同一个身份后来补齐也消不掉它,读端只能继续把整条寿命算宽）。
+  assert.equal(Number(blocked.turns_started), 3, "库恢复后那一轮的开始记录要按身份补回来");
+  assert.equal(blocked.turns_lost ?? 0, 0, "欠账补成了真正的开始行,不该再往那个无身份的计数上记一笔");
+  const rows = await turnRows("TiNoRow00001");
+  assert.equal(rows.length, 3, `三轮各有一行（中间那行是补的）,实际：${JSON.stringify(rows)}`);
+  assert.equal(rows.filter((row) => !row.ended_at).length, 1, "补回来的那一行只知道起点:它停在「开了没收口」");
   // 这就是报告里那条：第三轮正常落账后,第二轮的海报从清单里消失、还什么都不说。
   assert(paths(third).includes("output/run-2.svg"), "第三轮成功落账不能把第二轮的图抹掉");
-  assert(third.incomplete.some((note) => note.includes("连开始都没在库里留下记录")),
-    `缺口要照实说出来,实际提示：${JSON.stringify(third.incomplete)}`);
+  assert(third.incomplete.some((note) => note.includes("没留下收尾时刻")),
+    `补回来的那一轮缺的是收尾时刻,得照实说,实际提示：${JSON.stringify(third.incomplete)}`);
+}
+
+// ── ②' 欠账补齐之后不许再制造假缺口（第 1 轮审查 F2）────────────────────────────
+// 上一条验的是「缺口照实说」,这一条验的是**别多说**：按身份补齐之后,两段精确区间之间的
+// 停顿就是确定的「它没在跑」,那期间别的任务在同一个目录里做的东西必须排除。压成一个无身份
+// 的 `turns_lost` 数字时做不到这件事 —— 那个数字没人消得掉,读端只能把整条会话寿命算成宽的
+// 一段,停顿里的外来产物又被收进来,面板还谎称「有一次连开始都没留下记录」。
+{
+  const root = initRepo("recovered-identity");
+  await addTask("TiRecover0001", root, "欠账按身份补齐后不再扩大归属");
+  await runTask("TiRecover0001");
+  const firstEnd = Date.parse(String((await turnRows("TiRecover0001"))[0].ended_at));
+  await settle();
+  // 停顿里别的任务做的东西。mtime 显式钉在「第一轮收尾 + 落定余量」之后、第二轮开跑之前。
+  const foreign = join(root, "output", "other-task-in-break.svg");
+  writeFileSync(foreign, '<svg xmlns="http://www.w3.org/2000/svg"><text y="20">another task</text></svg>');
+  const foreignAt = (firstEnd + 2600) / 1000;
+  utimesSync(foreign, foreignAt, foreignAt);
+  await dbClient.executeMultiple(
+    "CREATE TRIGGER block_recover BEFORE INSERT ON session_turns WHEN NEW.task_id='TiRecover0001' BEGIN SELECT RAISE(ABORT,'injected'); END;",
+  );
+  await resumeSame("TiRecover0001", "第二轮(开始行写不进去)");
+  await dbClient.executeMultiple("DROP TRIGGER block_recover;");
+  await settle();
+  await resumeSame("TiRecover0001", "第三轮(库已恢复)");
+  const after = await listing(root, "TiRecover0001");
+  assert(paths(after).includes("output/run-2.svg"), "欠账那一轮做出来的图仍然是它的");
+  assert(!paths(after).includes("output/other-task-in-break.svg"),
+    `两轮之间歇着的那段时间里别人做的东西不该混进来,实际清单：${JSON.stringify(paths(after))}`);
+  assert(!after.incomplete.some((note) => note.includes("连开始都没在库里留下记录")),
+    `那一轮的开始记录已经补回来了,不该还报它缺,实际提示：${JSON.stringify(after.incomplete)}`);
 }
 
 // ── ③ 三轮、中间那轮「开始了没收口」：逐行事实,后来成功的一轮抵消不掉 ──────────
@@ -423,34 +460,43 @@ const resumeSame = async (taskId: string, text: string) => {
   }
 }
 
-// ── ⑪ 缺口标记本身也写不进去时,后来成功的一轮不能把它抹掉（第 6 轮审查必须修 2）────
+// ── ⑪ 欠账一直持久化不了时,后来成功的一轮不能把它抹掉（第 6 轮审查必须修 2）────────
 {
   const root = initRepo("lost-then-ok");
   await addTask("TiLost000001", root, "没确认的开始意图不能被忘掉");
   await runTask("TiLost000001");
   await settle();
-  // 两道一起拦：开始那一批整个回滚（身份和计数同生共死）,补 `turns_lost` 那一笔也失败。
-  // 这正是「只剩一句日志」的那条路——第 5 轮的实现到这里就把账忘了。
-  await dbClient.executeMultiple(`
-    CREATE TRIGGER block_turn_insert BEFORE INSERT ON session_turns WHEN NEW.task_id='TiLost000001' BEGIN SELECT RAISE(ABORT,'injected'); END;
-    CREATE TRIGGER block_lost BEFORE UPDATE ON sessions WHEN NEW.task_id='TiLost000001' AND NEW.turns_lost IS NOT NULL BEGIN SELECT RAISE(ABORT,'injected'); END;
-  `);
+  // 开始那一批整个回滚（身份和计数同生共死）。补账走的**也是**这个批（按身份补那行开始
+  // 记录,见 session-turns.ts）,所以拦住它就等于「连欠账都持久化不了」那条路 —— 第 5 轮的
+  // 实现到这里就只剩一句日志,把账忘了。
+  await dbClient.executeMultiple(
+    "CREATE TRIGGER block_turn_insert BEFORE INSERT ON session_turns WHEN NEW.task_id='TiLost000001' BEGIN SELECT RAISE(ABORT,'injected'); END;",
+  );
   await resumeSame("TiLost000001", "第二轮");
   const second = await listing(root, "TiLost000001");
   assert(paths(second).includes("output/run-2.svg"), "第二轮做出来的图当场要能看见");
-  assert.equal((await sessionRow("TiLost000001")).turns_lost, null, "这一步的前提：连缺口标记都没写进库");
+  assert.equal((await sessionRow("TiLost000001")).turns_lost, null, "这一步的前提：库里一个字都没有");
   assert(second.incomplete.some((note) => note.includes("连开始都没在库里留下记录")),
     `库里一个字都没有时,内存里那笔未确认的意图要算进缺口,实际提示：${JSON.stringify(second.incomplete)}`);
-  await dbClient.executeMultiple("DROP TRIGGER block_turn_insert; DROP TRIGGER block_lost;");
+  // 换一道**只对那一个身份**坏着的闸：第三轮自己照常落账,欠着的那一笔补不进去。这才是
+  // 「后来成功的一轮会不会把那笔账抹掉」的那个问题 —— 两边都通的话根本问不出来。
+  await dbClient.executeMultiple("DROP TRIGGER block_turn_insert;");
+  const owed = String((await dbClient.execute(
+    "SELECT turn_started_at FROM sessions WHERE task_id='TiLost000001'",
+  )).rows[0].turn_started_at);
+  await dbClient.executeMultiple(
+    `CREATE TRIGGER block_owed BEFORE INSERT ON session_turns WHEN NEW.started_at='${owed}' BEGIN SELECT RAISE(ABORT,'injected'); END;`,
+  );
   await settle();
   await resumeSame("TiLost000001", "第三轮");
   const third = await listing(root, "TiLost000001");
+  await dbClient.executeMultiple("DROP TRIGGER block_owed;");
   // 修复前：第三轮一落账,成功计数和成功身份数重新相等,图 2 从清单里消失且一个字都不说。
   assert(paths(third).includes("output/run-2.svg"), "第三轮成功落账不能把第二轮的图抹掉");
   assert(third.incomplete.some((note) => note.includes("连开始都没在库里留下记录")),
     `缺口要照实说出来,实际提示：${JSON.stringify(third.incomplete)}`);
-  assert.equal(Number((await sessionRow("TiLost000001")).turns_lost), 1,
-    "库恢复之后,欠着的那笔要在下一次开回合时补成持久标记（别一直只活在内存里）");
+  const rows = await turnRows("TiLost000001");
+  assert.equal(rows.length, 2, `补不进去的那一轮库里仍然一行都没有,实际：${JSON.stringify(rows)}`);
 }
 
 // ── ⑫ 讨论(duet)初始化就抛：别留下一个谁都不会来注销的活动身份（第 7 轮审查必须修 1）──
