@@ -29,7 +29,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, TeamConfig } from "@ash/shared";
 import { TEAM_DEFAULTS } from "@ash/shared";
-import { freshTurnFields, openTurn, resumedTurnFields } from "../session-turns.js";
+import { freshTurnFields, nextTurnStart, openTurn, resumedTurnFields } from "../session-turns.js";
 import { holdTurn } from "./lead-turns.js";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions, groups } from "../db/schema.js";
@@ -363,8 +363,10 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
     recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at });
     // 回合身份用**投递口那一刻**的（`turnAt`）：`sendToLead` 收下消息时就按它持有住了,这里
     // 另取一个时刻就等于同一轮登记两个起点,其中一个谁都不会来收（见 lead-delivery.ts）。
-    // 时间线上那条用户发言仍用 `at`（他说话的时刻,早于投递）。
-    void beginTurn(lead, turnAt ?? at);
+    // 时间线上那条用户发言仍用 `at`（他说话的时刻,早于投递）。取不到投递口那一刻时交给
+    // `beginTurn` 的默认值（身份层分配器),别回退到 `at` —— 它是直接 `now()` 来的,不保证在
+    // 这条会话上唯一（第 2 轮审查 F1）。
+    void beginTurn(lead, turnAt ?? undefined);
     return true;
   }
   if (lead.busy) {
@@ -384,7 +386,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
     return true;
   }
   recordSystemTurn(lead, text, at);
-  void beginTurn(lead, delivery.at ?? at); // 身份用投递口那一刻的,同上
+  void beginTurn(lead, delivery.at ?? undefined); // 身份用投递口那一刻的,同上
   return true;
 }
 
@@ -458,8 +460,10 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   if (cell.halted) throw new TeamOpenHalted();
   const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full", browserGrant);
 
-  const turnStart = now();
   const sessId = resuming ? prev!.id : id();
+  // 起点从身份层分配（见 session-turns.ts 的 nextTurnStart）：接回同一行会话时,这一轮的起点
+  // 必须严格晚于那条会话上已经见过的全部起点,否则队列和唯一键会把两轮合成一轮。
+  const turnStart = nextTurnStart(sessId);
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
   const handle = openResident({

@@ -7,7 +7,7 @@ import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
-import { closeTaskTurns, freshTurnFields, openTurn, resumedTurnFields } from "./session-turns.js";
+import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, resumedTurnFields } from "./session-turns.js";
 import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
@@ -417,8 +417,10 @@ export async function continueTask(
     if (freeze) await abortFrozen(taskId, freeze, { restorable: !!followUpFrom });
     // 原生命令必须独占整条 prompt(理由见上),不贴策略。
     const prompt = nativeCommand ? promptBody : withGlobalBrowserPolicy(promptBody, promptLevel, browserGrant);
-    const turnStart = now();
     const sessId = resuming ? prev!.id : id();
+    // 起点从身份层分配（同 task-run）。续聊复用同一行会话,所以这一轮的起点必须严格晚于那条
+    // 会话上已经见过的全部起点 —— 撞上就会被当成同一个回合身份,既不插行也不加数。
+    const turnStart = nextTurnStart(sessId);
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
     // 续聊/重试/队列推进/唤醒这一路也要解绑 —— 漏掉它等于只保护「全新起跑」的

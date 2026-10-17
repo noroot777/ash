@@ -3,7 +3,7 @@
 // 串行、以及「打断与投递必须是同一个动作」,它们的理由都在下面那段注释里,跟事件消费循环
 // 放一起只会被淹掉(而且 session-consumer.ts 已经顶到 700 行上限)。
 import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
-import { now } from "../util.js";
+import { nextTurnStart } from "../session-turns.js";
 import { holdTurn } from "./lead-turns.js";
 import type { Lead } from "./session-types.js";
 
@@ -42,7 +42,11 @@ export async function sendToLead(lead: Lead, text: string, opts: { steer?: boole
       // 判据取在这里:读授权之后、写 stdin 之前,中间不再有 await。
       const interrupted = !!opts.steer && lead.busy;
       if (interrupted) lead.handle.interrupt();
-      const at = now();
+      // 身份从**身份层的分配器**拿,不是 `now()`：这条链上两条消息完全可能落在同一毫秒
+      // (读授权命中缓存时尤其容易),而墙钟毫秒一撞,队列、唯一键和活动册同时把两轮合成一轮
+      // —— 后开那一轮被前一轮的结束事件提前收口,它做出来的东西永久漏在清单外
+      // (第 2 轮审查 F1,机制见 session-turns.ts 的 nextTurnStart)。
+      const at = nextTurnStart(lead.sessId);
       const sent = lead.handle.send(message);
       // 送进去了就等于一个回合已经开跑,**身份与状态一起在这儿落账**(holdTurn,见
       // team/lead-turns.ts)。调用方的 beginTurn 还隔着两次写库,在那之前轮到链上下一条消息

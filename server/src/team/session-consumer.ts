@@ -4,7 +4,7 @@ import type { AgentEvent } from "@ash/shared";
 import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
-import { openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
+import { nextTurnStart, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
 import { closeLeadTurns, heldTurns, holdTurn, releaseHeldTurn } from "./lead-turns.js";
 import { now } from "../util.js";
 import { setTaskStatus } from "../status.js";
@@ -21,6 +21,8 @@ import { isSessionScopeNotice } from "../session-notice.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
+// 会话行的写入口(摘牌闸、失败只上报)住在 lead-session-writes.ts,见那份顶部。
+import { persistOrReport, updateOwnSession } from "./lead-session-writes.js";
 import type { PendingInbound } from "./inbound-queue.js";
 import {
   idleRotation,
@@ -228,45 +230,6 @@ async function consume(lead: Lead): Promise<void> {
 
 
 
-
-/** 跑一次写库;失败只上报不外抛,返回它成没成。**只能在 lead.out.end() 之前调**。 */
-async function persistOrReport(
-  lead: Lead,
-  what: string,
-  run: () => PromiseLike<unknown>,
-  at = now(),
-): Promise<boolean> {
-  try {
-    await run();
-    return true;
-  } catch (error) {
-    console.error(`[ash] team ${what}(${lead.taskId}) persistence failed:`, error);
-    reportLeadFailure(lead, `${what}写入数据库失败：${error instanceof Error ? error.message : String(error)}`, at);
-    return false;
-  }
-}
-
-const sessionUpdate = () => db.update(sessions);
-type SessionPatch = Parameters<ReturnType<typeof sessionUpdate>["set"]>[0];
-
-/**
- * 这台调度台名下那条会话行的**唯一写入口**。
- *
- * 摘牌之后一个字都不写:接管那条路会复用同一行(openLead 的 resuming 分支),新台刚把
- * endedAt/exitStatus 清成 null 表示「这一段正在跑」。旧台晚到的 turnEnd 一写,在线的
- * 会话就被标成已结束,activeMs 还把两段重叠的墙钟时间重复计一遍(2026-08-26 第 9 轮
- * 审查)。**收口成一个函数是刻意的**:上一轮只在 closeLead 补了闸,beginTurn/endTurn
- * 就漏了,而漏哪一个都是同一个坏结果。
- *
- * 「查完到写进去之间又换了台」这个窗口不存在:retireLead 是同步的,只能从别的同步代码
- * 里跑(attachLead / deliver / closeLead);而这里从判断到 drizzle 把语句递给 node:sqlite
- * 中间没有 await,谁也插不进来。
- */
-async function updateOwnSession(lead: Lead, what: string, patch: SessionPatch, at = now()): Promise<boolean> {
-  if (lead.retired) return false;
-  return persistOrReport(lead, what, () => sessionUpdate().set(patch).where(eq(sessions.id, lead.sessId)), at);
-}
-
 /**
  * 把 CLI 报上来的新会话凭据补进库,**返回「这一次真的补上了」**。
  *
@@ -403,14 +366,26 @@ function armStatusRetry(lead: Lead): void {
  *
  * `at` 必须是**这一轮真正的身份**：走投递口那几条路（用户插话、执行者汇报、回合收尾的合并
  * 汇报）要原样传 `sendToLead` 回来的 `at` —— 那一刻 `holdTurn` 已经把这个身份持有住了,这里
- * 再取一次 `now()` 就等于同一轮登记两个起点,其中一个谁都不会来收。CLI 自发的那一轮没有投递
- * 口可问,只能以第一条输出的时刻为起点（见 consume 里的补开回合）。
+ * 再要一个新起点就等于同一轮登记两个,其中一个谁都不会来收。CLI 自发的那一轮没有投递口可问,
+ * 只能以第一条输出的时刻为起点（见 consume 里的补开回合）—— 但那个起点也得从身份层的分配器
+ * 拿：同一条会话上两个起点撞了毫秒,队列和唯一键会把两轮合成一轮（第 2 轮审查 F1）。
  */
-async function beginTurn(lead: Lead, at = now()): Promise<void> {
+async function beginTurn(lead: Lead, at = nextTurnStart(lead.sessId)): Promise<void> {
   // 状态与活动身份在同一个同步段里绑定;同一个身份重复持有是幂等的（openLead 先在
   // attachLead 里持有首轮,紧接着这里又用同一个 turnStart 调一次）—— 判据与机制都在
   // lead-turns.ts。
-  holdTurn(lead, at);
+  const owned = holdTurn(lead, at);
+  if (!owned) {
+    // **迟到的开始信息**：这个身份在所有权层已经终结（刚被 `turnEnd` 关掉,或者整台已经关了/
+    // 摘了牌）。开台那条路天生有这个窗口 —— 先持有首轮身份,再隔着两次写库才轮到这里,中间
+    // 完全可能已经收到首轮的结束事件。这时只补持久记录:那一行记录照落（开过就是开过,而且
+    // 按身份幂等）,但「这条会话正在跑」那组状态一个字都不许改 —— 重开一个已经终结的所有权
+    // 就是 F2:凭空多出来的队首会被下一次结束消耗,真正在跑的那一轮永远注销不掉。
+    if (!lead.retired) {
+      await openTurn({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at });
+    }
+    return;
+  }
   // **返回值不能丢**：这一路的 session 写入是被捕获后继续的（`updateOwnSession` 不抛），
   // 丢掉它就等于把「写成功」当默认（第 5 轮审查必须修 2.3）。
   const stamped = await updateOwnSession(lead, "回合开始状态", { ...resumedTurnFields(at) }, at);
@@ -491,9 +466,10 @@ async function endTurn(lead: Lead): Promise<void> {
       const seqs = batch.map((m) => m.seq).filter((seq): seq is number => seq !== null);
       await persistOrReport(lead, "待送消息销账", () => consumeInbound(seqs), at);
       recordSystemTurn(lead, merged, at);
-      // 身份用投递口那一刻的（`delivery.at`）：holdTurn 已经按它持有住了,这里另取一个
-      // `now()` 会让同一轮在活动册上留下两个起点。
-      await beginTurn(lead, delivery.at ?? at);
+      // 身份用投递口那一刻的（`delivery.at`）：holdTurn 已经按它持有住了,另要一个起点会让
+      // 同一轮在活动册上留下两个。取不到时交给 beginTurn 的默认值（身份层分配器),别回退到
+      // 上面那个 `at` —— 它是直接 `now()` 来的,不保证在这条会话上唯一。
+      await beginTurn(lead, delivery.at ?? undefined);
       return;
     }
     reportLeadFailure(lead, "攒着的执行者汇报没能送进调度台进程(它正在收尾),先留在待送队列里交给下一台接手的调度台。", at);

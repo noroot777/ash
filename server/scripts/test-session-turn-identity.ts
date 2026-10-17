@@ -230,11 +230,17 @@ const resumeSame = async (taskId: string, text: string) => {
   await addTask("TiLive000001", root, "正常继续运行中", { status: "running" });
   await db.insert(sessions).values({
     id: "session-TiLive000001", taskId: "TiLive000001", role: "single", agentType: "codex", executor: "fixture",
-    // 计数只算第一轮：第二轮那一笔由 `openTurn` 自己加（它跟那行回合记录同批写,见
-    // session-turns.ts）,这里种两个就等于替它多加了一次,反而凭空多出一个缺口。
-    cwd: root, startedAt: stamp(0), endedAt: null, turnStartedAt: stamp(120), turnsStarted: 1, turnsBase: 0,
+    // **一笔计数都别预种**：两轮各自由写端加（计数跟那行回合记录同批写,见 session-turns.ts
+    // —— 开始行那条路和收尾补插那条路共用同一个批）。替它们种一笔就等于多加了一次,反而
+    // 凭空多出一个缺口。
+    cwd: root, startedAt: stamp(0), endedAt: null, turnStartedAt: stamp(120), turnsStarted: 0, turnsBase: 0,
     activeMs: 30 * 60000, exitStatus: null,
   });
+  // 第一轮按生产那条路走完整两步（开始落行 → 收尾补 ended_at）。
+  {
+    const { openTurn: open } = await import("../src/session-turns.js");
+    await open({ sessionId: "session-TiLive000001", taskId: "TiLive000001", cwd: root, startedAt: stamp(0) });
+  }
   await recordTurnSpan({ sessionId: "session-TiLive000001", taskId: "TiLive000001", cwd: root, startedAt: stamp(0), endedAt: stamp(10) });
   // 第二轮正在跑：开始行落了、还没收口。
   const { openTurn } = await import("../src/session-turns.js");
@@ -288,8 +294,10 @@ const resumeSame = async (taskId: string, text: string) => {
   await addTask("TiDupes00001", root, "同一回合两行", { status: "failed" });
   await db.insert(sessions).values({
     id: "session-TiDupes00001", taskId: "TiDupes00001", role: "single", agentType: "codex", executor: "fixture",
+    // 只替**第二轮**预种那一笔：它的记录整条没写进去,所以没人会替它加。第一轮那一笔由下面
+    // 那次 `recordTurnSpan` 自己加（没有开始行 ⇒ 走补插分支,行与计数同批）。
     cwd: root, startedAt: stamp(0), endedAt: stamp(250), turnStartedAt: stamp(240),
-    turnsStarted: 2, turnsBase: 0, activeMs: 30 * 60000, exitStatus: 0,
+    turnsStarted: 1, turnsBase: 0, activeMs: 30 * 60000, exitStatus: 0,
   });
   await recordTurnSpan({ sessionId: "session-TiDupes00001", taskId: "TiDupes00001", cwd: root, startedAt: stamp(0), endedAt: stamp(10) });
   // 唯一索引先拦一道：同一个回合再收一次口（接回、重试、旧调度台也来收）只更新那一行。
@@ -587,6 +595,77 @@ const resumeSame = async (taskId: string, text: string) => {
   assert.deepEqual(activeRegistrySize(), idle, "closeSessionTurns 这条路也要对称回收");
 }
 
-console.log("✓ turn identity: fresh run 记上计数、两种缺口都认且披露、整批失败留下持久标记、在飞不误报、崩过的老会话不复活、同一身份只计一次、升级历史不抵扣（含下界为 0 的）、重复行不顶替、异常收尾不留假活动身份、未确认的开始意图不被后来成功的一轮抹掉、讨论初始化抛出也不留无主的活动身份、注销后内存登记对称回收");
+// ── ⑭ 回合起点必须唯一：墙钟毫秒不是身份（第 2 轮审查 F1）────────────────────────
+// 这一条钉的是**分配器本身**：同一条会话上同一毫秒要来两次、时钟回拨、别处见过的起点,三样
+// 都不许让它发出一个重复的身份。为什么非得在这一层钉死：队列（所有权层的 Set）、唯一键和
+// 活动册**都按起点认人**,起点一撞三样东西同时把两轮合成一轮 —— 后开那一轮被前一轮的结束
+// 事件当场收口,它做出来的东西永久漏在清单外（用户可见的那一半在 test-team-turn-artifacts）。
+{
+  const { nextTurnStart, markTurnActive, clearTurnActive, activeTurnStarts } = await import("../src/session-turns.js");
+  const sid = "session-alloc";
+  // 挑一个跟别的用例无关的未来时刻,免得跟这条脚本里真跑过的会话撞上。
+  const t0 = new Date(Date.now() + 5 * 60000).toISOString();
+  assert.equal(nextTurnStart(sid, t0), t0, "第一次就用调用方给的那一刻（时间仍然是区间数据）");
+  const t1 = nextTurnStart(sid, t0);
+  const t2 = nextTurnStart(sid, t0);
+  assert(t1 > t0 && t2 > t1, `同一毫秒再来两次必须各拿到自己的身份,实际：${t0} / ${t1} / ${t2}`);
+  // 墙钟回拨也不许回头：读端的区间判据全按起点排序（「下一个回合从哪开始」就是末端）,
+  // 回头一次就把两轮的先后读反了。
+  const back = nextTurnStart(sid, new Date(Date.parse(t0) - 5000).toISOString());
+  assert(back > t2, `时钟回拨之后分配出来的起点仍要严格递增,实际：${back}`);
+  // 别处见过的起点（`reattach` 从库里接回的那一个、各种重放）也要纳入水位 —— 否则重启后
+  // 分配器会把它再发一次,那一轮既不插行也不加数。
+  const seen = new Date(Date.parse(back) + 60000).toISOString();
+  assert.equal(markTurnActive({ sessionId: sid, taskId: "TiAlloc00001", startedAt: seen }), true,
+    "没关闭过的身份该收下");
+  assert(nextTurnStart(sid, seen) > seen, "登记过的起点不许被再发一次");
+  // 结束不可逆：关掉之后同一个身份不许再登记成活动。所有权层就是看这个返回值决定「入不入
+  // 队」,两份账因此同源（第 2 轮审查 F2 的判据层;团队那一侧的后果在 team-turn-artifacts）。
+  clearTurnActive(sid, seen);
+  assert.equal(markTurnActive({ sessionId: sid, taskId: "TiAlloc00001", startedAt: seen }), false,
+    "已经关掉的身份不许被迟到的开始信息重新登记成活动");
+  assert.deepEqual([...activeTurnStarts(sid)], [], "拒掉之后活动册上一个都不该留");
+}
+
+// ── ⑮ 开始一直失败、库恢复后**直接正常收尾**：补插出来的完整记录不是缺口（第 2 轮审查 F3）──
+// 跟 ②' 是同一个症状、**另一条恢复路线**：②' 走的是「同一身份再开一次回合」（`openTurn` 里
+// 那次 flush 把欠账补成开始行）,这一条走的是「收尾那下才发现开始行压根不在」—— `recordTurnSpan`
+// 一次补一行完整记录。只插行不记账的那一版,这条路上两行记录都已经完整,读端却还按
+// `missing>0` 把整条会话寿命算进候选区间:停工期间别的任务在同一个目录里做的图被收进来,
+// 面板还说「有一次连开始都没留下记录」。
+{
+  const root = initRepo("recovered-by-close");
+  await addTask("TiCloseRec01", root, "收尾补插的完整记录要同时落账");
+  await runTask("TiCloseRec01");
+  const firstEnd = Date.parse(String((await turnRows("TiCloseRec01"))[0].ended_at));
+  await settle();
+  // 停顿里别的任务做的东西。mtime 显式钉在「第一轮收尾 + 落定余量」之后、第二轮开跑之前。
+  const foreign = join(root, "output", "other-task-in-break.svg");
+  writeFileSync(foreign, '<svg xmlns="http://www.w3.org/2000/svg"><text y="20">another task</text></svg>');
+  const foreignAt = (firstEnd + 2600) / 1000;
+  utimesSync(foreign, foreignAt, foreignAt);
+  // **只拦「只知道起点」那一行**：开始那一批整个回滚（于是内存里欠着这个身份）,而收尾那下
+  // 补插的完整行照样能落 —— 这就是报告里那条恢复路线,不必等到下一次开回合。
+  await dbClient.executeMultiple(
+    `CREATE TRIGGER block_open_only BEFORE INSERT ON session_turns
+       WHEN NEW.task_id='TiCloseRec01' AND NEW.ended_at IS NULL BEGIN SELECT RAISE(ABORT,'injected'); END;`,
+  );
+  await resumeSame("TiCloseRec01", "第二轮(开始行写不进去,收尾那下补完整行)");
+  await dbClient.executeMultiple("DROP TRIGGER block_open_only;");
+  const rows = await turnRows("TiCloseRec01");
+  assert.equal(rows.length, 2, `两轮各有一行,实际：${JSON.stringify(rows)}`);
+  assert(rows.every((row) => row.ended_at), `两行都是完整记录（第二行是收尾那下补的）,实际：${JSON.stringify(rows)}`);
+  const row = await sessionRow("TiCloseRec01");
+  assert.equal(Number(row.turns_started), 2,
+    "补插那一行也要加计数——行与计数是同一件事的两面,只插行就等于把一笔已恢复的事实继续记成缺口");
+  const after = await listing(root, "TiCloseRec01");
+  assert(paths(after).includes("output/run-2.svg"), "第二轮做出来的图当然是它的");
+  assert(!paths(after).includes("output/other-task-in-break.svg"),
+    `两轮都已经有完整记录了,停顿期间别人做的东西不该再混进来,实际清单：${JSON.stringify(paths(after))}`);
+  assert.deepEqual(after.incomplete, [],
+    `两行记录都完整,面板不该还说缺,实际提示：${JSON.stringify(after.incomplete)}`);
+}
+
+console.log("✓ turn identity: fresh run 记上计数、两种缺口都认且披露、整批失败留下持久标记、在飞不误报、崩过的老会话不复活、同一身份只计一次、升级历史不抵扣（含下界为 0 的）、重复行不顶替、异常收尾不留假活动身份、未确认的开始意图不被后来成功的一轮抹掉、讨论初始化抛出也不留无主的活动身份、注销后内存登记对称回收、起点唯一且不可回头、结束不可逆、收尾补插的完整记录同时落账消账");
 await dbClient.close();
 releaseTmpDb();

@@ -14,7 +14,7 @@ import { eq, sql } from "drizzle-orm";
 import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
-import { closeSessionTurns, freshTurnFields, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
+import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
@@ -179,7 +179,10 @@ export async function runTurn(args: {
   const browserGrant = await browserGrantForTask(taskId);
   // 版本读取与持久说明之间有 await；这期间收到停止请求也不能再起下一轮。
   if (isCanceling(taskId)) throw new CanceledRun();
-  const turnStart = now();
+  // 会话行 id 先定下来（纯 `id()`,不碰库、不 await,所以不破坏「这一句之后到 run 之间全同步」
+  // 那条不变量）：起点要按它从身份层分配,见 session-turns.ts 的 nextTurnStart。
+  const rowId = reuseRowId ?? id();
+  const turnStart = nextTurnStart(rowId);
   const handle = executor.run({
     prompt: withGlobalBrowserPolicy(prompt, resumeCliId ? "reminder" : "full", browserGrant),
     cwd,
@@ -200,7 +203,6 @@ export async function runTurn(args: {
   trackRun(taskId, handle);
   let cliId = handle.sessionId;
 
-  const rowId = reuseRowId ?? id();
   if (!reuseRowId) {
     await db.insert(sessions).values({
       id: rowId,

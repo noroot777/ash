@@ -11,6 +11,10 @@
 //   ② 开始状态那次写库失败:活动身份已经登记在册,可会话行上还留着上一轮的 ended_at、任务
 //      状态也还没刷成 running。读端拿这两个二手快照去否决一手的活动身份,正在写的这一轮就被
 //      算成「崩了没收口」,区间夹回旧起点,此后落盘的图当场消失（第 1 轮 F3）。
+//   ③ 两条要求撞在同一毫秒:时间字符串不是身份,队列、唯一键和活动册同时把两轮合成一轮,
+//      后开那一轮被前一轮的结束事件提前收口 —— 它做好的海报永久漏在清单外（第 2 轮 F1）。
+//   ④ 一轮结束之后迟到的开始信息:把已经终结的身份重新排进队列,下一次结束就关错人 —— 真正
+//      刚结束的那一轮一直留在活动册上,读端把区间开到无穷,之后别人做的图全算成它的（第 2 轮 F2）。
 //
 // 跑:npm -w server run test:turn-identity（链在它后面）
 import assert from "node:assert/strict";
@@ -34,7 +38,9 @@ mkdirSync(process.env.ASH_RUNS_DIR, { recursive: true });
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
-const { freshTurnFields, openTurn, activeTurnStarts } = await import("../src/session-turns.js");
+const { freshTurnFields, nextTurnStart, openTurn, activeTurnStarts } = await import("../src/session-turns.js");
+const { heldTurns } = await import("../src/team/lead-turns.js");
+const { createSessionConsumer } = await import("../src/team/session-consumer.js");
 const { attachLead, deliverToLead, teamIsLive } = await import("../src/team/session.js");
 const { openCodexResident } = await import("../src/executors/codex-resident.js");
 const { readTaskArtifacts } = await import("../src/task-artifacts.js");
@@ -95,6 +101,41 @@ const listing = (taskId: string, root: string) => readTaskArtifacts(taskId, {
   path: root, repo: root, projectId: `project-${taskId}`, branch: "main", gitRepo: true, source: "session",
 } as never);
 const paths = (result: { artifacts: { path: string }[] }) => result.artifacts.map((a) => a.path).sort();
+
+/**
+ * 一个由测试**按条推事件**的常驻句柄。
+ *
+ * ③④ 要验的是「一个匿名 `turnEnd` 到底关掉哪一轮」,所以必须精确控制结束事件的个数和先后；
+ * 真实常驻泵（`openCodexResident`,用例 ① 用的就是它）只保证「一次被接受的投入对应一个
+ * turnEnd」,而那正是这两条用例的**前提**而不是被测对象。投递口、所有权层、记账层和读端
+ * 全是生产代码。
+ */
+function pushHandle() {
+  const queued: AgentEvent[] = [];
+  let wake = () => {};
+  const push = (event: AgentEvent) => { queued.push(event); wake(); };
+  const handle = {
+    sessionId: "fixture-thread",
+    commandLine: "fixture-codex",
+    events: (async function* (): AsyncGenerator<AgentEvent> {
+      for (;;) {
+        // 这里到 await 之间没有别的 await,所以「刚判过空就被推进来一条」这个窗口不存在。
+        if (!queued.length) await new Promise<void>((resolve) => { wake = resolve; });
+        while (queued.length) {
+          const event = queued.shift()!;
+          yield event;
+          if (event.kind === "done") return;
+        }
+      }
+    })(),
+    send: () => true,
+    interrupt: () => {},
+    dropSession: () => {},
+    close: () => push({ kind: "done", exitStatus: 0 }),
+    kill: () => push({ kind: "done", exitStatus: 0 }),
+  };
+  return { handle, push };
+}
 
 /** 手工组装一台调度台（生产路径是 openLead,它要解析项目与执行器,这里只要那台对象本身）。 */
 function lead(taskId: string, sessId: string, root: string, handle: unknown, turnStart: string) {
@@ -233,6 +274,112 @@ try {
     letLast();
     await until(() => !teamIsLive(taskId), "这台收完台");
     ok("开始状态写库失败:登记在册的那一轮照样算在写,它的产物不被排除");
+  }
+
+  // ── ③ 两条要求撞在同一毫秒：各占一个位置,各自一份独立生命周期（第 2 轮审查 F1）────────
+  {
+    const taskId = "team-artifacts-collide";
+    const sessId = "sess-collide";
+    const root = await seed("collide", taskId, sessId);
+    const { handle, push } = pushHandle();
+    const desk = lead(taskId, sessId, root, handle, openedAt);
+    attachLead(desk as never);
+    await openTurn({ sessionId: sessId, taskId, cwd: root, startedAt: openedAt });
+    // **怎么确定地复现「同一毫秒」**：把这条会话的分配水位推到一个还没到的时刻,于是接下来
+    // 两次投递都会发现 `now()` 不晚于水位 —— 跟两条消息真撞在同一毫秒时走的是同一个分支。
+    // （改全局时钟会把这条链上所有写库时刻一起钉死,反而测不出东西；审查那边是靠连发输入
+    // 自然撞上的,这里要的是每次都撞。）
+    const ahead = new Date(Date.now() + 500).toISOString();
+    nextTurnStart(sessId, ahead);
+    assert.equal(await deliverToLead(taskId, "先按第一条要求改"), true, "前置条件:第一条进了调度台");
+    assert.equal(await deliverToLead(taskId, "不对,按第二条要求画海报"), true, "前置条件:第二条进了调度台");
+    const held = heldTurns(desk as never);
+    assert.equal(held.length, 3, `首轮 + 两条要求 = 三份生命周期,实际：${JSON.stringify(held)}`);
+    assert.equal(new Set(held).size, 3, `三个身份必须互不相同,实际：${JSON.stringify(held)}`);
+    assert(held[1] > ahead && held[2] > ahead,
+      "投递口的起点必须是**身份层分配**的那个（严格晚于这条会话见过的全部起点）。直接取墙钟"
+      + `就会落在水位之前,两条消息同毫秒时还会撞成一个：${JSON.stringify(held)} / 水位 ${ahead}`);
+    assert.deepEqual([...activeTurnStarts(sessId)].sort(), [...held].sort(),
+      "队列和活动册是同一份账（一边收下一边拒掉,下一次结束就关错人）");
+    // 两个匿名 turnEnd：按 FIFO 关掉首轮和第一条要求那一轮。第二条要求那一轮还在跑。
+    push({ kind: "turnEnd" });
+    await until(() => activeTurnStarts(sessId).size === 2, "首轮收口");
+    push({ kind: "turnEnd" });
+    await until(() => activeTurnStarts(sessId).size === 1, "第一条要求那一轮收口");
+    assert.deepEqual([...activeTurnStarts(sessId)], [held[2]],
+      "还在跑的必须是第二条要求那一轮（起点一撞,这一轮就被前一轮的结束事件提前收口）");
+    // 落定余量之后才落盘：这张海报只可能靠第二条要求那一轮自己的区间被认出来。
+    await pause(3000);
+    writeFileSync(join(root, "output", "second-request.svg"), svg("second request"));
+    const during = await listing(taskId, root);
+    assert(paths(during).includes("output/second-request.svg"),
+      `第二条要求那一轮正在写,它刚做好的海报却不在清单里：${JSON.stringify(paths(during))} / ${JSON.stringify(during.incomplete)}`);
+    push({ kind: "turnEnd" });
+    await until(() => !activeTurnStarts(sessId).size, "第二条要求那一轮收口");
+    push({ kind: "done", exitStatus: 0 });
+    await until(() => !teamIsLive(taskId), "这台收完台");
+    const after = await listing(taskId, root);
+    assert.deepEqual(paths(after), ["output/second-request.svg"],
+      `收完台之后那张海报仍该在清单里,实际：${JSON.stringify(paths(after))}`);
+    assert.deepEqual(after.incomplete, [],
+      `三轮各有一行完整记录,面板不该说有缺口,实际：${JSON.stringify(after.incomplete)}`);
+    const rows = (await dbClient.execute(
+      `SELECT started_at, ended_at FROM session_turns WHERE session_id='${sessId}' ORDER BY started_at`,
+    )).rows;
+    assert.equal(rows.length, 3, `库里也要三行（唯一键同样按起点认人）,实际：${JSON.stringify(rows)}`);
+    assert(rows.every((row) => row.ended_at), `三行都该收过口,实际：${JSON.stringify(rows)}`);
+    ok("同一毫秒的两条要求:各自一份生命周期,后一轮的海报不漏列");
+  }
+
+  // ── ④ 结束之后迟到的开始信息：不许重开一个已经终结的所有权（第 2 轮审查 F2）──────────
+  {
+    const taskId = "team-artifacts-late-begin";
+    const sessId = "sess-late-begin";
+    const root = await seed("late-begin", taskId, sessId);
+    const { handle, push } = pushHandle();
+    const desk = lead(taskId, sessId, root, handle, openedAt);
+    attachLead(desk as never);
+    await openTurn({ sessionId: sessId, taskId, cwd: root, startedAt: openedAt });
+    // 首轮正常结束。生产里这一下完全可能落在开台那两次写库和它下面那句 `beginTurn` 之间
+    //（库忙一下就够了）—— 那就是「迟到的开始信息」的来路。
+    push({ kind: "turnEnd" });
+    await until(() => !activeTurnStarts(sessId).size, "首轮收口");
+    const settled = (await db.select().from(sessions).where(eq(sessions.id, sessId))).at(0)!;
+    assert(settled.endedAt, "前置条件:首轮的收尾时刻确实写在会话行上");
+    // 迟到的那一句 `beginTurn`,用的是**真正**从 `createSessionConsumer` 拿到的那一个（开台
+    // 路径调的就是它）。自己的 leads 映射里放着这台,免得它走进「已经被接管」那条岔路。
+    const consumer = createSessionConsumer({
+      leads: new Map([[taskId, desk]]) as never,
+      adoptInbound: async () => {},
+      flushUnqueued: async () => {},
+      releasePending: () => {},
+    });
+    await consumer.beginTurn(desk as never, openedAt);
+    assert.deepEqual(heldTurns(desk as never), [],
+      "已经结束的身份不许被迟到的开始信息重新排进队列（那个幽灵队首会把下一次结束吃掉）");
+    assert.deepEqual([...activeTurnStarts(sessId)], [], "也不许回到活动册");
+    assert.equal(desk.busy, false, "这台确实空着——迟到的开始信息不该把它说成在忙");
+    const again = (await db.select().from(sessions).where(eq(sessions.id, sessId))).at(0)!;
+    assert.equal(again.endedAt, settled.endedAt,
+      "迟到的开始信息只补持久记录,不许把会话行改回「正在跑」");
+    // 接着来真的一轮并让它正常结束：结束事件必须关掉**它**。
+    assert.equal(await deliverToLead(taskId, "接着画一张"), true, "前置条件:插话进了调度台");
+    const second = heldTurns(desk as never);
+    assert.equal(second.length, 1, `手上只该有刚投进去那一轮,实际：${JSON.stringify(second)}`);
+    push({ kind: "turnEnd" });
+    await until(() => !activeTurnStarts(sessId).size,
+      "第二轮的结束事件关掉它自己那一轮（幽灵队首一旦存在,被关掉的就是它,真正结束的这一轮会永远留在活动册上）");
+    // 它停工之后,别的任务在同一个目录里画一张。
+    await pause(2600);
+    writeFileSync(join(root, "output", "another-task.svg"), svg("another task"));
+    const after = await listing(taskId, root);
+    assert.deepEqual(paths(after), [],
+      `这台停工之后别人做的东西不该算成它的,实际清单：${JSON.stringify(paths(after))}`);
+    assert.deepEqual(after.incomplete, [],
+      `两轮都正常收了口,面板不该说有缺口,实际：${JSON.stringify(after.incomplete)}`);
+    push({ kind: "done", exitStatus: 0 });
+    await until(() => !teamIsLive(taskId), "这台收完台");
+    ok("结束之后迟到的开始信息:不重开所有权,下一次结束关的是它自己那一轮");
   }
 
   console.log("test:team-turn-artifacts ok");

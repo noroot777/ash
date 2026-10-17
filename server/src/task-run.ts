@@ -9,7 +9,7 @@ import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
-import { closeTaskTurns, freshTurnFields, openTurn } from "./session-turns.js";
+import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn } from "./session-turns.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
@@ -188,8 +188,11 @@ export async function runTask(
     const freeze = takeFreeze(taskId, frozen);
     if (freeze) await abortFrozen(taskId, freeze);
     const prompt = withGlobalBrowserPolicy(promptBody, "full", browserGrant);
-    const turnStart = now();
     const sessId = id();
+    // 回合起点从身份层分配,不自己取 `now()`（见 session-turns.ts 的 nextTurnStart）：唯一性
+    // 是**会话级**不变量,八处起跑入口各自取时钟就各自碰运气。顺带让 trace/detach 的文件名
+    // （都由这个字符串派生）也跟着唯一。
+    const turnStart = nextTurnStart(sessId);
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
     // 解绑重启：输出落盘而不是走匿名管道，于是这个 agent 活得过 server 重启

@@ -32,6 +32,16 @@
  *     对接下来的事件再补开一个回合。
  *   • **放手只认手上这一份集合**：既不认 `lead.turnStart` 那个随时会被下一轮覆盖的字段，也
  *     不整条会话一把清（接管那条路复用同一行会话，清整条会误伤新台刚登记的起点）。
+ *   • **结束不可逆,而且判据不在这一层**（`holdTurn` 的返回值）：一个身份被 `turnEnd` 关掉之后,
+ *     迟到的开始回调不许把它重新排进队列。这台自己记不住「哪些身份已经结束过」—— 队列里只有
+ *     还没结束的那些,弹出去就什么都不剩了,于是同一个回调再来一次又入队成功。所以判据交给
+ *     身份层那道已关闭水位（`markTurnActive` 的返回值）：两份账同源,这台只负责照它的答复办。
+ *     凭空多出来的那个幽灵队首会被下一次 `turnEnd` 消耗掉,而真正刚结束的那一轮则一直留在活动
+ *     册上,读端把区间从它的起点开到无穷,之后别的任务在同一个目录里做的东西全被算成它的
+ *     （第 2 轮审查 F2）。
+ *   • **起点由身份层分配**（`nextTurnStart`,见 `../session-turns.ts`）：投递口不自己取 `now()`。
+ *     两次投递撞在同一毫秒时,`Set<string>` 把两个位置合成一个,FIFO 的一对一前提当场不成立
+ *     （第 2 轮审查 F1）。
  */
 import { clearTurnActive, markTurnActive } from "../session-turns.js";
 import type { Lead } from "./session-types.js";
@@ -57,22 +67,31 @@ function adoptFront(lead: Lead): void {
  * 这台开始持有 `at` 这个回合身份 —— 投入的那一刻就调（`sendToLead` 收下消息之后、
  * `attachLead` 开放事件消费之前），**同一个同步段内**完成。
  *
- * 幂等：同一个身份重复持有不会变成两轮（`openLead` 先在 `attachLead` 里持有首轮，紧接着
- * `beginTurn` 又用同一个 `turnStart` 调一次）。
+ * 返回**真的收进手里了没有**。`false` 的两种情形,调用方都只许补持久记录、不许改「这条会话
+ * 正在跑」那组状态：
+ *   • 这台的作用域已经结束（关台/换台之后迟到的回调）；
+ *   • 这个身份已经被关掉过（身份层那道已关闭水位说的,见顶部第四条不变量）。
+ *
+ * 幂等：同一个身份重复持有不会变成两轮,而且照样答 `true`（`openLead` 先在 `attachLead` 里
+ * 持有首轮，紧接着 `beginTurn` 又用同一个 `turnStart` 调一次 —— 那是同一轮,它确实在手上）。
  */
-export function holdTurn(lead: Lead, at: string): void {
+export function holdTurn(lead: Lead, at: string): boolean {
   if (closedScopes.has(lead)) {
     // 作用域早退了（关台/换台之后迟到的回调）：身份一个都不许再登记 —— 那样开出来的回合
     // 谁都不会来收，读端会把它当成「从那个老起点一直在写」。但状态字段还得跟上：摘牌的
     // 台事件流仍在消费，`busy` 一直是假就会对它之后每一条事件各补开一个回合。
     lead.busy = true;
     lead.turnStart = at;
-    return;
+    return false;
   }
   const held = (lead.held ??= new Set<string>());
+  if (held.has(at)) return true; // 已经在手上：同一轮被开两次,不是新的一轮
+  // **先问身份层,再入队**。顺序反了就是 F2 那个形状：队列收下了、活动册拒了,两份账从此
+  // 不一致 —— 多出来的那个队首会被下一次结束消耗,真正在跑的那一轮永远注销不掉。
+  if (!markTurnActive({ sessionId: lead.sessId, taskId: lead.taskId, startedAt: at })) return false;
   held.add(at);
-  markTurnActive({ sessionId: lead.sessId, taskId: lead.taskId, startedAt: at });
   adoptFront(lead);
+  return true;
 }
 
 /**
