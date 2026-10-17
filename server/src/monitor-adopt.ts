@@ -2,7 +2,7 @@
 //
 // 拆出来的理由是行数(单文件 700 行的约定)加上它自己就是一个完整的判断:**哪一条判据有资格
 // 认下一个号**。它有两个消费点(重启接回、回收层那一侧的 pid 还空着的行),判据只有这一份。
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, like } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { authorizeRecoveredIdentity } from "./monitor-identity-authz.js";
@@ -134,6 +134,10 @@ export async function adoptSpawnIdentity(subject: AdoptSubject): Promise<AdoptOu
  *
  * **守的是「这一列还空着」,不是状态**(第 19 轮审查 F2):创建意图行在点停、归档、删除那几条
  * 路上也要认得回来,而那时它早就不是 running 了。这一句只填空,永远不会动一个已经有号的行。
+ *
+ * 所以**回填成功不等于拿到了继续监听的资格**(第 21 轮审查 F2)。这一句只负责把线索落在行上
+ * (否则那个号就彻底丢了,回收责任再没有落点);「还能不能接着盯」由调用方在停止/删除那条
+ * `task:<id>` 队列里重读状态之后自己判,「有没有人在盯」则一律问 `isSupervised`。
  */
 async function writeAdopted(
   subject: AdoptSubject, pid: number, startedAt: string | null,
@@ -168,15 +172,26 @@ async function writeAdopted(
  * 话写在 `ended_reason` 上:那一列是卡片上「原因」那一行,**running 的行也照样显示**
  * (web/src/monitors/MonitorCard.tsx),所以这件事刷新页面之后仍然看得出来。
  */
+/**
+ * 受阻那句话的**固定开头**。认回来之后要把它撤掉(见 `clearPendingIntentNote`),而撤的判据
+ * 只能是「这句话还是这一类」—— 不能见 `ended_reason` 非空就清,那一列也装着用户点停的理由。
+ */
+export const PENDING_NOTE_PREFIX = "server 重启后这一刻认不回它：";
+
 export async function notePendingIntent(
   subject: { id: string }, why: string, opts: { exhausted?: boolean } = {},
 ): Promise<string> {
   // 梯子还在问 / 梯子用尽,**话要分开说**(第 20 轮审查 F2):前者「正在自己重试」,后者只剩
   // 「等下一次启动、点停或删除」—— 把后者也写成「还会自己再问」就是在卡片上撒谎。
-  const note = `server 重启后这一刻认不回它：起进程时没来得及记下 pid${why}，所以一个信号都没发；`
+  //
+  // 两种都要说清**日志和期限另有人管**(第 21 轮审查 F1):上一版只说「等下一次启动」,而那
+  // 时连到期都没人管,于是这句话本身就是在承诺一件不会发生的事。
+  const note = `${PENDING_NOTE_PREFIX}起进程时没来得及记下 pid${why}，所以一个信号都没发；`
     + (opts.exhausted
-      ? "自动重问已经试到最后一档仍然认不回来，这条创建意图原样留着，下一次启动、点停或删除会再问一遍（日志路径见这一行）"
-      : "这条创建意图原样留着，ash 正在自己按间隔重问身份，认回来就接上日志和期限（日志路径见这一行）");
+      ? "自动重问已经试到最后一档仍然认不回来，这条创建意图原样留着（日志照常收、到点照常收尾），"
+        + "号要等下一次启动、点停或删除再问一遍（日志路径见这一行）"
+      : "这条创建意图原样留着：日志和期限已经有人接着管，ash 同时在按间隔重问身份，"
+        + "认回来就把这句话撤掉（日志路径见这一行）");
   try {
     await db.update(monitors).set({ endedReason: note })
       .where(and(eq(monitors.id, subject.id), eq(monitors.status, "running"), isNull(monitors.pid)));
@@ -185,4 +200,25 @@ export async function notePendingIntent(
   }
   console.error(`[ash] 哨兵这一刻认不回身份，创建意图原样留着 monitor=${subject.id}：${note}`);
   return note;
+}
+
+/**
+ * 号认回来了 ⇒ **把受阻那句话撤掉**(第 21 轮审查 N1)。
+ *
+ * 不撤的后果是页面上两句话互相打架:等待条已经恢复成「有事件会叫醒」,哨兵面板那一格还写着
+ * 「这一刻认不回它、正在重问」(审查实测 `ui-recovered-stale-note.png`)。
+ *
+ * 条件写得很窄:**只清这一类话、而且只清还在运行的行** —— 那一列同时装着用户点停的理由、
+ * 到期的说法,见 `PENDING_NOTE_PREFIX`。
+ */
+export async function clearPendingIntentNote(monitorId: string): Promise<void> {
+  try {
+    await db.update(monitors).set({ endedReason: null }).where(and(
+      eq(monitors.id, monitorId),
+      eq(monitors.status, "running"),
+      like(monitors.endedReason, `${PENDING_NOTE_PREFIX}%`),
+    ));
+  } catch (e) {
+    console.error(`[ash] 受阻说明撤不掉 monitor=${monitorId}:`, e);
+  }
 }

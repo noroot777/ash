@@ -554,8 +554,34 @@ try {
     await page.close();
   }
 
+  // ── 回复框上那条「在等哨兵」展开之后说了什么 ───────────────────────────────
+  // pid 还空着的那几条此刻没有任何东西在读它们的日志，所以「有事件时会把这条会话重新叫醒」
+  // 对它们必须收回（第 20 轮审查 F2）。这件事**只能点开才看得见**：正文默认不渲染，上一版
+  // 那条静态断言查的是折叠态，于是「不含这句话」在任何实现下都成立（第 21 轮审查 N2）。
+  // 所以这里一正一反两张台子：认回来的那条**必须**说得出这句话，没认回来的那条一个字都不许。
+  {
+    const bodyOf = async (mode) => {
+      const page = await open(undefined, `?wait=${mode}`);
+      await page.locator(".monitor-wait__bar").click();
+      const body = page.locator(".monitor-wait__body");
+      await body.waitFor();
+      const text = await body.innerText();
+      await page.close();
+      return text;
+    };
+
+    const claimed = await bodyOf("claimed");
+    assert.match(claimed, /重新叫醒/, "反向台子：认回来的哨兵本来就该说「会把这条会话重新叫醒」——这条不成立的话下面那条「不含」就是空话");
+    assert.match(claimed, /继续：接着做 tts 这一段/, "交代原文要照抄进正文");
+
+    const pending = await bodyOf("pending");
+    assert.doesNotMatch(pending, /重新叫醒/, "**pid 还空着时不许承诺「会被叫醒」** —— 用户据此以为等着就行");
+    assert.match(pending, /这一刻认不回它的进程/, "得说清它现在是什么处境");
+    assert.match(pending, /日志和期限已经有人接着管/, "受阻原因照抄：日志与期限有没有人管是用户唯一能据以决定等不等的事");
+  }
+
   assert.deepEqual(failures, []);
-  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task/form results never land, reconnects re-read the snapshot");
+  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task/form results never land, reconnects re-read the snapshot, the expanded wait card only promises a wake-up for monitors it actually claimed");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();

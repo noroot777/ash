@@ -25,7 +25,8 @@ import filesystem, { closeSync, openSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { eq } from "drizzle-orm";
 import {
-  db, detachAllMonitors, insertMonitorRow, isPidAlive, makeTask, monitors, tasks, teardown, until,
+  db, detachAllMonitors, insertMonitorRow, isPidAlive, makeTask, monitors, pendingOf, stopMonitor,
+  tasks, teardown, until,
 } from "./monitors-fixture.js";
 import { debtRow } from "./monitor-reclaim-fixture.js";
 import { processUnitEvidence } from "../src/proc.js";
@@ -36,7 +37,7 @@ const { reclaimUnconfirmedStops } = await import("../src/monitor-reclaim.js");
 const { killTree } = await import("../src/platform.js");
 const { dbClient } = await import("../src/db/index.js");
 const { monitorSpawnIdentityPath } = await import("../src/monitor-spawn.js");
-const { reattachMonitors } = await import("../src/monitors.js");
+const { finish, isSupervised, reattachMonitors, serialize } = await import("../src/monitors.js");
 
 /** 记号那一问在这台机器上答得有多实:Linux 读得到真实环境项(`exact`),macOS 只有展示文本。 */
 const EXACT_MARKS = monitorUnitProofGrade() === "exact";
@@ -134,6 +135,9 @@ try {
   const adopted = (await readRow(mon))!;
   assert.equal(adopted.pid, pid, "「它自己会再问一遍」不是一句空话");
   assert.equal(adopted.status, "running", "认回来之后它照旧在盯");
+  assert.equal(adopted.endedReason, null,
+    "**受阻那句话要跟着撤掉**(第 21 轮审查 N1):等待条已经恢复「有事件会叫醒」,面板还写着"
+    + "「这一刻认不回它、正在重问」就是两句话打架");
   if (!EXACT_MARKS) {
     assert.equal(adopted.pidStartedAt, null, "**只认号、不认启动时刻** —— 猜出来的身份不配当下刀凭证");
   }
@@ -291,11 +295,226 @@ try {
   assert.ok(debt7, "责任落在盘上(行删掉之后它是唯一的线索)");
   assert.equal(debt7!.pid, pid7, "落点是边条上那个号");
 
+  // ⑧ **认领可以有界,监听寿命不行**(第 21 轮审查 F1)。审查实测的现场:梯子是这一行唯一的
+  //    监督者,于是某一跳 await 抛错、或者五档问完仍认不回来,日志和期限就一起没人管了 ——
+  //    故障早就过去、结果早就写进日志、期限也过了,行还停在 `running/offset=0/events=0`,
+  //    待发 0 条。这里把边条**一直**读不出来(= 每一跳都认不回来)摆出来,钉的是:到期照样
+  //    收得掉、日志照样补读补推,而且**一个信号都不因此多发**。
+  const taskId8 = await makeTask({ status: "running" });
+  const token8 = `intent-lifetime-${process.pid}-${Date.now()}`;
+  const mon8 = await insertMonitorRow(taskId8, {
+    status: "running", pidStartedAt: null, command: process.execPath, unitToken: token8,
+  });
+  const row8 = (await readRow(mon8))!;
+  const fd8 = openSync(row8.logPath, "a");
+  const child8 = spawn(
+    process.execPath,
+    ["-e", 'setTimeout(() => console.log("READY_FROM_REAL_PROCESS"), 300); setInterval(() => {}, 1000)'],
+    { detached: true, stdio: ["ignore", fd8, fd8], env: { PATH: process.env.PATH!, ASH_MONITOR_UNIT: token8 } },
+  );
+  closeSync(fd8);
+  child8.unref();
+  invalidateMonitorUnitScan();
+  strays.push(child8.pid!);
+  writeFileSync(monitorSpawnIdentityPath(row8.logPath), JSON.stringify({ pid: child8.pid!, spawnedAtMs: Date.now() }));
+  await db.update(monitors)
+    .set({ timeoutMs: 2_500, expiresAt: new Date(Date.now() + 2_500).toISOString() })
+    .where(eq(monitors.id, mon8));
+  await dbClient.execute(`UPDATE monitors SET status = 'stopped' WHERE id <> '${mon8}'`);
+  const fault8 = failSidecarRead(monitorSpawnIdentityPath(row8.logPath));
+  try {
+    const first8 = await reattachMonitors();
+    assert.equal(first8.pending, 1, "台子前提:这一行落在「这一刻认不回来」那一档");
+    await until("**到期这件事不归认领管**：号一次都没认回来，期限照样有人兜住", async () => {
+      const row = await readRow(mon8);
+      return row?.status === "expired";
+    }, 25_000);
+    const expired = (await readRow(mon8))!;
+    assert.ok(fault8.reads() >= 2, "台子前提:启动那一问 + 梯子至少又问了一次,每次都读不出来");
+    assert.ok(expired.offset > 0 && expired.events > 0,
+      "日志照常补读补推 —— 结果已经在文件里,认不回号不是让它烂在那儿的理由");
+    assert.match(expired.endedReason ?? "", /盯满了约定的时长/, "到期就照实说到期");
+    assert.doesNotMatch(expired.endedReason ?? "", /一个信号都没发/,
+      "**不许凭上一份拒绝推断这一刻的事实**(第 21 轮审查 N3):到期那一问会重新取证,"
+      + "发没发信号只能按真实回收结果说 —— 所以这一句干脆不写进文案");
+    assert.equal(isPidAlive(child8.pid!), true, "认不回号 ⇒ 一个信号都不发(下刀资格在取证层)");
+  } finally { fault8.restore(); }
+
+  // ⑨ **后台认领不许越过已经完成的停止**(第 21 轮审查 F2)。审查实测:点停已经成功返回
+  //    (stopped、待发 0 条、理由是用户明确点停),在途的那次认领回调照旧把行写成 expired
+  //    并补推一条结束通知 —— 「await 之前读到的 running」被当成了「await 之后的所有权」。
+  const taskId9 = await makeTask({ status: "running" });
+  const token9 = `intent-stoprace-${process.pid}-${Date.now()}`;
+  const pid9 = markedProcess(token9);
+  const mon9 = await intentRow(taskId9, token9, pid9);
+  const [first9, injected9] = await withLedgerReadFailure(() => reattachMonitors());
+  assert.equal(injected9, 1);
+  assert.equal(first9.pending, 1, "台子前提:启动那一问被挡住,梯子挂上了");
+  // 把梯子下一跳**挂住**(不是失败):停在反证账本那一问的 await 上,好让点停插到中间 ——
+  // 这正是审查复现用的同一个位置。
+  let release: (() => void) | null = null;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let gated = 0;
+  const realExecute = dbClient.execute;
+  dbClient.execute = (async function (statement: unknown, ...rest: unknown[]) {
+    const sql = String(typeof statement === "string" ? statement : (statement as { sql?: string })?.sql);
+    if (gated === 0 && /^\s*select\s+"identity_disproved_at"\s+from/i.test(sql)) {
+      gated += 1;
+      await gate;
+    }
+    return (realExecute as (...a: unknown[]) => unknown).call(dbClient, statement, ...rest);
+  }) as typeof dbClient.execute;
+  try {
+    await until("梯子走到了被挂住的那一问", async () => gated === 1, 15_000);
+    // 点停:它的第一步(条件落「我停过」)**不排队**,所以这一步立刻落盘;第二步排在梯子后面。
+    const stopping = stopMonitor(mon9, "用户点停：不想再被它叫醒");
+    await until("点停的第一步已经落盘", async () => (await readRow(mon9))?.status === "stopped");
+    const before9 = (await pendingOf(taskId9)).length;
+    release!();
+    const stopped = await stopping;
+    // 排一个空活在同一条队列尾上:轮到它就说明梯子那一跳已经整跳跑完。
+    await serialize(`task:${taskId9}`, async () => {});
+    assert.equal(stopped?.status, "stopped", "点停的返回值就是最终事实");
+    const after9 = (await readRow(mon9))!;
+    assert.equal(after9.status, "stopped",
+      "**停止赢了就是赢了** —— 在途的旧回调不许把它改写成 expired");
+    assert.match(after9.endedReason ?? "", /用户点停/, "卡片上留的是用户点停那句话,不是到期");
+    assert.equal((await pendingOf(taskId9)).length, before9,
+      "**一条新通知都不许排出去**:用户点停就是为了不再被它叫醒");
+    assert.equal(isSupervised(mon9), false,
+      "**更不许把运行时重新接上去**:用户停掉的那一行不该再有 tail、期限和探活挂在它身上");
+  } finally {
+    dbClient.execute = realExecute;
+    if (release) release();
+  }
+
+  // ⑩ **梯子某一跳自己抛了错,身份这一问不许因此整条掐掉**(第 21 轮审查 F1 的另一半)。
+  //    上一版那个 catch 只打印一行日志 —— 库忙了一下、ps 抖了一下都会走到这里,而这一行的
+  //    号还没认回来。日志和期限现在另有人管(⑧),但「再问一遍」这件事也得接着做。
+  const taskId10 = await makeTask({ status: "running" });
+  const token10 = `intent-retry-throw-${process.pid}-${Date.now()}`;
+  const pid10 = markedProcess(token10);
+  const mon10 = await intentRow(taskId10, token10, pid10);
+  const [first10, injected10] = await withLedgerReadFailure(() => reattachMonitors());
+  assert.equal(injected10, 1);
+  assert.equal(first10.pending, 1, "台子前提:这一行落在「这一刻认不回来」那一档,梯子挂上了");
+  // 梯子第一档排在 1 秒后。把**它那一跳读这一行**打掉一次(启动那一遍已经跑完,所以下一条
+  // 读 monitors 的语句就是它)。
+  let thrown = 0;
+  const realExec10 = dbClient.execute;
+  dbClient.execute = (async function (statement: unknown, ...rest: unknown[]) {
+    const sql = String(typeof statement === "string" ? statement : (statement as { sql?: string })?.sql);
+    if (thrown === 0 && /^\s*select\b[\s\S]*from "monitors" where/i.test(sql)) {
+      thrown += 1;
+      dbClient.execute = realExec10;   // 只打一次:下一跳要读到真东西
+      throw new Error("fixture: transient monitors read failure inside the ladder");
+    }
+    return (realExec10 as (...a: unknown[]) => unknown).call(dbClient, statement, ...rest);
+  }) as typeof dbClient.execute;
+  // 探针自己**不许**撞上注入条件(它也读 monitors):改成不带 where 的全表读再在 JS 里挑,
+  // 否则这一次性故障会被台子自己的那一问吃掉,梯子那一跳反而读到真东西。
+  const scanRow = async (id: string) => (await db.select().from(monitors)).find((r) => r.id === id);
+  try {
+    await until("抛错之后还有下一跳，号最终被认回来", async () => (await scanRow(mon10))?.pid === pid10, 25_000);
+    assert.equal(thrown, 1, "台子前提:梯子那一跳真的抛了一次");
+  } finally { dbClient.execute = realExec10; }
+  assert.equal(isPidAlive(pid10), true, "这一圈里一个信号都没发");
+
+  // ⑪ **写掉那一刻用户点停了** —— 给 `finishOffline` 那条条件更新立一颗牙(第 21 轮审查 F2)。
+  //    判 lost 这一路把「这一行还是 running」读在 await 之前,真正的 UPDATE 和那条【哨兵结束】
+  //    通知都排在 await 之后;而点停的第一步**不排任何队**(见 stopMonitor 的 ①),所以它恰好
+  //    插得进这中间。上一版那条 UPDATE 无条件,于是用户点停的事实被改写成 lost,还补一条通知。
+  const taskId11 = await makeTask({ status: "running" });
+  const token11 = `intent-writeoff-stoprace-${process.pid}-${Date.now()}`;
+  const gone11 = markedProcess(token11);
+  killTree(gone11, "SIGKILL");
+  await until("台子先把 ⑪ 的进程收掉", async () => !isPidAlive(gone11));
+  invalidateMonitorUnitScan();
+  const mon11 = await intentRow(taskId11, token11, gone11);
+  // 只挂住「写掉」那一条 UPDATE:认它靠绑定参数里的 lost —— 点停落的是 stopped,不会被挂住。
+  let release11: (() => void) | null = null;
+  const gate11 = new Promise<void>((resolve) => { release11 = resolve; });
+  let gated11 = 0;
+  const realExec11 = dbClient.execute;
+  dbClient.execute = (async function (statement: unknown, ...rest: unknown[]) {
+    const sql = String(typeof statement === "string" ? statement : (statement as { sql?: string })?.sql);
+    const args = ((statement as { args?: unknown[] })?.args ?? []) as unknown[];
+    if (gated11 === 0 && /^\s*update\s+"monitors"\s+set/i.test(sql) && args.includes("lost")) {
+      gated11 += 1;
+      await gate11;
+    }
+    return (realExec11 as (...a: unknown[]) => unknown).call(dbClient, statement, ...rest);
+  }) as typeof dbClient.execute;
+  try {
+    const booting = reattachMonitors();
+    await until("写掉那一条 UPDATE 已经排在闸门上", async () => gated11 === 1, 15_000);
+    const before11 = (await pendingOf(taskId11)).length;
+    const stopping11 = stopMonitor(mon11, "用户点停：这条我自己处理");
+    await until("点停的第一步已经落盘", async () => (await readRow(mon11))?.status === "stopped");
+    release11!();
+    await booting;
+    await stopping11;
+    await serialize(`task:${taskId11}`, async () => {});
+    const after11 = (await readRow(mon11))!;
+    assert.equal(after11.status, "stopped",
+      "**停止赢了就是赢了** —— 在途的那次写掉不许把它改写成 lost");
+    assert.match(after11.endedReason ?? "", /用户点停/, "卡片上留的是用户点停那句话,不是「没有真正开工」");
+    assert.equal((await pendingOf(taskId11)).length, before11,
+      "**一条结束通知都不许补推**:用户点停就是为了不再被它叫醒");
+  } finally {
+    dbClient.execute = realExec11;
+    if (release11) release11();
+  }
+
+  // ⑫ **到期收尾走到一半,用户点停了** —— `finish` 那条路的同一颗牙(第 21 轮审查 F2 点名的
+  //    「判 expired 与输出/结束通知」)。它把「这一行还是 running」读在 `reclaimMonitorProcess`
+  //    之前,而那一步要问状态、下刀、等确认(有界,秒级);上一版紧随其后那条 UPDATE 无条件、
+  //    通知还排在它后面照推,于是点停的事实被改写成 expired 并补推一条【哨兵结束】。
+  const taskId12 = await makeTask({ status: "running" });
+  const token12 = `expire-stoprace-${process.pid}-${Date.now()}`;
+  const pid12 = markedProcess(token12);
+  const mon12 = await insertMonitorRow(taskId12, { pid: pid12, unitToken: token12 });
+  // 把收尾路上**记责任那一笔**挂住:它排在那条 UPDATE 之前,正是审查说的「await 之后」。
+  let release12: (() => void) | null = null;
+  const gate12 = new Promise<void>((resolve) => { release12 = resolve; });
+  let gated12 = 0;
+  const realExec12 = dbClient.execute;
+  dbClient.execute = (async function (statement: unknown, ...rest: unknown[]) {
+    const sql = String(typeof statement === "string" ? statement : (statement as { sql?: string })?.sql);
+    if (gated12 === 0 && /^\s*insert\s+into\s+"monitor_reclaim_debts"/i.test(sql)) {
+      gated12 += 1;
+      await gate12;
+    }
+    return (realExec12 as (...a: unknown[]) => unknown).call(dbClient, statement, ...rest);
+  }) as typeof dbClient.execute;
+  try {
+    const expiring = finish(mon12, "expired", "盯满了约定的时长（台子直接叫的）", null);
+    await until("到期收尾已经走到记责任那一笔", async () => gated12 === 1, 15_000);
+    const before12 = (await pendingOf(taskId12)).length;
+    // 点停整跳跑完:它自己那一趟记责任不被挂住(闸门只拦第一笔)。
+    const stopped12 = await stopMonitor(mon12, "用户点停：不想再被它叫醒");
+    assert.equal(stopped12?.status, "stopped", "台子前提:点停这一跳已经整跳落定");
+    release12!();
+    await expiring;
+    const after12 = (await readRow(mon12))!;
+    assert.equal(after12.status, "stopped",
+      "**停止赢了就是赢了** —— 在途的到期收尾不许把它改写成 expired");
+    assert.match(after12.endedReason ?? "", /用户点停/, "卡片上留的是用户点停那句话,不是「盯满了」");
+    assert.equal((await pendingOf(taskId12)).length, before12,
+      "**一条结束通知都不许补推**:点停那一路本来就不推,在途的到期更不该替它推一条");
+  } finally {
+    dbClient.execute = realExec12;
+    if (release12) release12();
+  }
+
   console.log(
     "✓ 创建意图的责任接管：认不回来时行原样留着且一刀不发 / 故障撤掉后 ash 自己认得回来、"
     + "接上日志与期限 / 问出反证就照实写掉 /"
     + " 删除前那一问问得到 pid 还空着的意图行、责任落盘才许删 / 开机清扫按边条把它重新问一遍 /"
-    + " 边条读不出来既不算没有边条也不算没有责任（接回、删除、开机三处同判）"
+    + " 边条读不出来既不算没有边条也不算没有责任（接回、删除、开机三处同判）/"
+    + " 认领有界而监听寿命不随它耗尽（号一次都没认回来也照样到期、照样补读）/"
+    + " 点停赢了之后在途的旧回调一个字都不写、一条通知都不推、更不重新接上运行时 /"
+    + " 重问那一跳自己抛错也还有下一跳 / 判掉那一刻点停插进来也不许改写它、不许补通知"
     + " 均受回归保护",
   );
 } finally {

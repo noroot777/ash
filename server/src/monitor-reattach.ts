@@ -10,17 +10,28 @@
 //  ③ **「这一刻认不回来」不是终态**:行原样留着,而且**这一次启动周期内自己还要再问**
 //     (第 19 轮审查 F2 留的那半件事、第 20 轮审查 F2):光留一行 running 不等于还在盯 ——
 //     tail 没接上、期限没人管、认领也没人再问,结果早就出来了界面还一直显示「在等」。
-//     所以 pending 这一档挂一条**有界的恢复梯子**(`schedulePendingAdopt`),故障过去就自己
-//     认回来、接上日志和期限;梯子用尽仍认不回来时把话写回卡片,等下一次启动/点停/删除。
+//  ④ **认领可以有界,监听寿命不行**(第 21 轮审查 F1)。上一版把两件事绑在同一条梯子上:
+//     梯子是这一行唯一的监督者,于是某一跳 await 抛错、或者五档问完仍认不回来,日志和期限
+//     就一起没人管了 —— 审查实测:故障早就过去、结果早就写进日志、期限也过了,行还停在
+//     `running/offset=0/events=0`,待发 0 条。所以现在**先接运行时(tail + 期限),再问身份**:
+//     `attach` 对 pid 还空着的行只装前两件(探活那一根要等号认回来才补,见 monitors.ts),
+//     梯子只负责「把号认回来」这一件,它停不停都不影响日志和到期。
+//  ⑤ **后台认领要参加同一份资源所有权协议**(第 21 轮审查 F2)。梯子跑在任意时刻,会跟用户
+//     点停、跟删除撞上:await 之前读到的 running 不是 await 之后的所有权。审查实测:点停
+//     已经成功返回(stopped、待发 0 条),在途的旧回调照旧把行写成 expired 并补推一条结束
+//     通知。所以每一跳都排进停止/创建/删除那同一条 `task:<id>` 队列,并在队列里重读 ——
+//     三个出口(接管 / 判掉 / 到期)一个都不许按旧行下结论。
 import { and, eq } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { monitors, tasks } from "./db/schema.js";
-import { adoptSpawnIdentity, notePendingIntent, type AdoptOutcome } from "./monitor-adopt.js";
+import {
+  adoptSpawnIdentity, clearPendingIntentNote, notePendingIntent, type AdoptOutcome,
+} from "./monitor-adopt.js";
 import { reclaimMonitorProcess, settleReclaim, type ReclaimVerdict } from "./monitor-reclaim-debts.js";
 import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
 import { monitorWakeGate } from "./monitor-session.js";
 import { clearSpawnIdentity } from "./monitor-spawn.js";
-import { attach, finish, finishOffline, isAshKind, type Row } from "./monitors.js";
+import { attach, finish, finishOffline, isAshKind, isSupervised, serialize, type Row } from "./monitors.js";
 import { IS_WINDOWS } from "./platform.js";
 
 /**
@@ -103,6 +114,10 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       // 挂一条有界的恢复梯子,见 `schedulePendingAdopt`。
       if (!adopted.identity && !adopted.settled) {
         await notePendingIntent(row, adopted.why);
+        // **先立监听,再问身份**(第 21 轮审查 F1):tail 和期限跟「认不认得回它的号」无关 ——
+        // 日志是我们自己的文件,期限是我们自己承诺的。探活那一根留到号认回来再补(`attach`
+        // 看 pid 那一列自己决定),所以这一步**一个信号都不多发**。
+        attach(row);
         schedulePendingAdopt(row.id);
         pending += 1;
         continue;
@@ -204,9 +219,12 @@ async function writeOffIntent(row: Row, adopted: AdoptRefused): Promise<void> {
 // ── 待认领意图的恢复梯子 ────────────────────────────────────────────────────
 
 /**
- * 重问身份的间隔。**有界**:故障多半是一瞬间的(一句 SELECT 失败、ps 这一刻不可用),所以前
- * 几档贴得很近;一直问不出来时拉开,最后一档之后就不再自己问 —— 把话写回卡片,等下一次启动、
- * 点停或删除(那几条路都会重新问一遍,见 monitor-reclaim 的枚举)。
+ * 重问**身份**的间隔。**有界**:故障多半是一瞬间的(一句 SELECT 失败、ps 这一刻不可用),所以
+ * 前几档贴得很近;一直问不出来时拉开,最后一档之后就不再自己问 —— 把话写回卡片,等下一次
+ * 启动、点停或删除(那几条路都会重新问一遍,见 monitor-reclaim 的枚举)。
+ *
+ * **有界只对「问号」这件事成立**(第 21 轮审查 F1):日志和期限不在这条梯子名下,它们从 pending
+ * 落下的那一刻就由运行时接走了,梯子问完五档也照样有人管到期。
  *
  * 跟回收那一侧的梯子(monitor-reclaim-debts 的 `LADDER_MS`)同一个形状:`unref` 定时器,不吊住
  * 进程退出。
@@ -221,11 +239,11 @@ export function stopPendingAdopts(): void {
 }
 
 /**
- * 给一条「这一刻认不回来」的创建意图挂上恢复接管者(第 20 轮审查 F2)。
+ * 给一条「这一刻认不回来」的创建意图排下一次**问身份**(第 20、21 轮审查 F2/F1)。
  *
- * 它负责的是**这一次启动周期内**的那件事:故障过去就自己把身份认回来、接上 tail 和期限;
- * 认定壳已经不在就照实写掉;**到了约定期限仍然认不回来就按到期收尾** —— 到期这件事不该等
- * 认领(日志里的输出照旧补读、补推,见 `finishOffline`),否则界面会一直停在「在等」。
+ * 它只负责一件事:**把号认回来**。日志和期限不在它名下 —— 那两件在 pending 落下的同一刻就
+ * 由运行时接走了(见上面 `reattachMonitors` 里的 `attach`),所以这条梯子停在哪一档、某一跳
+ * 有没有抛错,都不影响「结果送得到、到点收得掉」。
  *
  * **一个信号都不因此多发**:认领的判据一个字没松(`adoptSpawnIdentity` / `reclaimEvidence`),
  * 梯子只是把「再问一遍」这件事自动化。
@@ -237,59 +255,69 @@ export function schedulePendingAdopt(monitorId: string, step = 0): void {
     ladders.delete(monitorId);
     void retryPendingAdopt(monitorId, step).catch((e) => {
       console.error(`[ash] 待认领哨兵重问身份时自己出错 monitor=${monitorId}:`, e);
+      // **一次抛错不许把身份这一问整条掐掉**(第 21 轮审查 F1):库忙了一下、ps 抖了一下都
+      // 会走到这里,而这一行的号还没认回来。照档位往下排(仍然有界),到顶就停。
+      if (step + 1 < PENDING_LADDER_MS.length) schedulePendingAdopt(monitorId, step + 1);
     });
   }, PENDING_LADDER_MS[Math.min(step, PENDING_LADDER_MS.length - 1)]);
   (timer as { unref?: () => void }).unref?.();
   ladders.set(monitorId, timer);
 }
 
-async function retryPendingAdopt(monitorId: string, step: number): Promise<void> {
-  if (dbClient.closed) return;
-  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
-  // 别人已经处理过了(认回来了 / 被点停 / 被删掉)⇒ 梯子到此为止,不抢。
-  if (!row || row.status !== "running" || row.pid !== null) return;
-  const adopted = await adoptSpawnIdentity(row);
-  if (adopted.identity) {
-    await takeOver({ ...row, pid: adopted.identity.pid, pidStartedAt: adopted.identity.pidStartedAt });
-    return;
-  }
-  if (adopted.settled) {
-    await writeOffIntent(row, adopted);
-    return;
-  }
-  // 还是认不回来。**期限照常到**:到点就按到期收尾(输出补读补推、责任按档位留),否则这一行
-  // 会一直挂在「在等」上 —— 那正是审查实测到的现场。
-  if (new Date(row.expiresAt).getTime() <= Date.now()) {
-    await expirePendingIntent(row, adopted);
-    return;
-  }
-  if (step + 1 >= PENDING_LADDER_MS.length) {
-    await notePendingIntent(row, adopted.why, { exhausted: true });
-    return;
-  }
-  await notePendingIntent(row, adopted.why);
-  schedulePendingAdopt(monitorId, step + 1);
-}
+const readRow = async (monitorId: string): Promise<Row | undefined> =>
+  (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
 
 /**
- * 到期了、而这一刻仍然认不回它的进程。
- *
- * 两件事都要做,而且顺序不能反:**先按档位把责任留下**(有候选号就记在它身上 —— 它拿不到
- * 启动时刻,所以落在 `unverifiable` 档:记责任、不下刀;连候选号都没有时 `reclaimMonitorProcess`
- * 自己返回 `unaccounted`,行留着),**再**写终态 —— 反过来就成了「卡片说已到期、责任没人认」。
+ * 重问一次身份。**整跳都排在 `task:<id>` 那条队列里**,而且队列里重读 —— 停止、创建、删除
+ * 走的就是这一条队(见 monitors.ts 的 `stopMonitor`、monitor-reclaim.ts 的
+ * `stopMonitorsForTask`),第 21 轮审查 F2 实测的就是不排队的后果。
  */
-async function expirePendingIntent(row: Row, adopted: AdoptRefused): Promise<void> {
-  const outcome = await reclaimMonitorProcess(
-    adopted.candidate ? { ...row, pid: adopted.candidate.pid, pidStartedAt: null } : row,
-    "盯满了约定的时长，而这一刻认不回它的身份",
-  );
-  const verdict = await settleReclaim(outcome, 0);
-  if (verdict === "unaccounted") {
-    console.error(`[ash] 待认领哨兵到期:既认不回身份、责任也没落库 monitor=${row.id}`);
-  }
-  await finishOffline(row, "expired", `盯满了约定的时长（server 重启后这一刻认不回它的进程${adopted.why}，`
-    + `所以一个信号都没发${verdict === "owed" ? "，已记下回收责任" : verdict === "unaccounted" ? "，而回收责任尚未保存（见 server 日志）" : ""}；`
-    + `日志里已经产出的那几行照常补读补推）`);
+async function retryPendingAdopt(monitorId: string, step: number): Promise<void> {
+  if (dbClient.closed) return;
+  const before = await readRow(monitorId);
+  if (!before) return;   // 行已经被删掉了:梯子到此为止
+  await serialize(`task:${before.taskId}`, async () => {
+    if (dbClient.closed) return;
+    const row = await readRow(monitorId);
+    // 别人已经有结论了(点停、删除、到期收尾)⇒ **一个字都不写、一条通知都不推**。
+    if (!row || row.status !== "running") return;
+    if (row.pid !== null) {
+      // 号已经在列上了:上一跳认回来了,而接管那一步抛了错。**「列上有 pid」不等于「有人在
+      // 盯」**(第 21 轮审查 F1),所以这里按运行时判一次、把缺的那一份补上,然后收手。
+      if (!isSupervised(row.id)) attach(row);
+      return;
+    }
+    const adopted = await adoptSpawnIdentity(row);
+    // `adoptSpawnIdentity` 自己也 await 了库(账本、取证)。那几毫秒里点停可能已经走完 ——
+    // 所以**下结论之前再读一遍**,三个出口共用这一次重读。
+    const after = await readRow(monitorId);
+    if (!after || after.status !== "running") {
+      console.error(`[ash] 待认领哨兵的身份问出来了,但这一刻它已经有结局了 monitor=${monitorId}`
+        + `（状态 ${after?.status ?? "行已不在"}）：这一跳什么都不写`);
+      return;
+    }
+    if (adopted.identity) {
+      // 认回来了:受阻那句话跟着作废(第 21 轮审查 N1 —— 卡片上不许留一句「正在重问」),
+      // 然后走正常那一趟(接上探活、判出口资格、该收就收)。
+      await clearPendingIntentNote(monitorId);
+      await takeOver({
+        ...after, pid: adopted.identity.pid, pidStartedAt: adopted.identity.pidStartedAt,
+      });
+      return;
+    }
+    if (adopted.settled) {
+      await writeOffIntent(after, adopted);
+      return;
+    }
+    // 还是认不回来。**到期不在这里管**(第 21 轮审查 F1):运行时那一份期限定时器照常走,
+    // 到点由 `finish` 收尾(补读日志、按档位留责任、照实写文案)。
+    if (step + 1 >= PENDING_LADDER_MS.length) {
+      await notePendingIntent(after, adopted.why, { exhausted: true });
+      return;
+    }
+    await notePendingIntent(after, adopted.why);
+    schedulePendingAdopt(monitorId, step + 1);
+  });
 }
 
 /**

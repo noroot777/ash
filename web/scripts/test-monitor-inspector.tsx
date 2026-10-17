@@ -423,13 +423,13 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
       reviewArmed={false} onOpenPanel={() => undefined}
     />,
   );
-  // 折叠态不展开就看不到正文,所以这几条断言针对的是展开那一份(用 open 的那个分支:静态渲染
-  // 拿不到点击,这里直接渲染 body —— 用 `summary` 判定折叠行仍在)。
+  // 这里只管折叠态:正文**要点开才渲染**,静态渲染拿不到点击,所以「展开之后说了什么」一律
+  // 归 test-monitor-inspector-dom.mjs 的 `?wait=pending|claimed` 两张台子(第 21 轮审查 N2:
+  // 上一版在折叠态上断言「不含『重新叫醒』」,那在任何实现下都成立,等于什么都没查)。
   const shut = wait([stuck]);
   assert.match(shut, /在等 1 个哨兵/, "折叠那一行照旧:在等几个、等的是谁");
-
-  assert.doesNotMatch(wait([stuck]).replace(/[\s\S]*monitor-wait__body/, ""), /重新叫醒/,
-    "**pid 还空着时不许承诺「会被叫醒」** —— 用户据此以为等着就行");
+  assert.doesNotMatch(shut, /monitor-wait__body/,
+    "折叠态连正文都不渲染 —— 这一条钉住上面那句话的前提:正文的断言只能在真点击里做");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一，回复框上那条「在等」对还没认回来的哨兵不承诺叫醒");
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一，回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");
