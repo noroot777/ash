@@ -21,10 +21,11 @@
 //     也要重新问一遍。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import filesystem, { closeSync, openSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { eq } from "drizzle-orm";
 import {
-  db, insertMonitorRow, isPidAlive, makeTask, monitors, tasks, teardown, until,
+  db, detachAllMonitors, insertMonitorRow, isPidAlive, makeTask, monitors, tasks, teardown, until,
 } from "./monitors-fixture.js";
 import { debtRow } from "./monitor-reclaim-fixture.js";
 import { processUnitEvidence } from "../src/proc.js";
@@ -67,6 +68,28 @@ async function intentRow(taskId: string, unitToken: string, pid: number): Promis
   return id;
 }
 
+/**
+ * 让**某一个文件**的读抛 EIO(审查实测用的同一招),别的文件照常。
+ *
+ * `once: true` 时第一次读就自己把故障撤掉 —— 下一秒恢复梯子再问时读到的是真东西,这才量得出
+ * 「故障过去之后它自己得出了什么结论」。
+ */
+function failSidecarRead(path: string, opts: { once?: boolean } = {}): { reads: () => number; restore: () => void } {
+  const real = filesystem.readFileSync;
+  let reads = 0;
+  const restore = () => { filesystem.readFileSync = real; syncBuiltinESMExports(); };
+  filesystem.readFileSync = ((p: unknown, ...rest: unknown[]) => {
+    if (String(p) === path) {
+      reads += 1;
+      if (opts.once) restore();
+      throw Object.assign(new Error("fixture: transient sidecar read I/O error"), { code: "EIO" });
+    }
+    return (real as (...a: unknown[]) => unknown)(p, ...rest);
+  }) as typeof filesystem.readFileSync;
+  syncBuiltinESMExports();
+  return { reads: () => reads, restore };
+}
+
 /** 只让**那一句** SELECT 抛一次(审查实测用的同一招),别的语句照常。 */
 const withLedgerReadFailure = async <T>(run: () => Promise<T>): Promise<[T, number]> => {
   const original = dbClient.execute;
@@ -104,12 +127,13 @@ try {
     "这一刻不记回收债:债是补刀授权,而这一行的进程多半正常跑着");
   assert.equal(isPidAlive(pid), true, "候选号一个信号都不授权");
 
-  // ② 故障撤掉 ⇒ **同一条路自己认得回来**(台子一个字都不帮它改)。
-  const second = await reattachMonitors();
+  // ② 故障撤掉 ⇒ **ash 自己把它认回来**(第 20 轮审查 F2)。上一版这里是台子再跑一次
+  //    `reattachMonitors()`,那只能证明「下一次启动还会问」,证不出产品在这一次启动周期里
+  //    自己会问 —— 而审查实测到的正是后者:等 31 秒结果早就出来了,行还停在「在等」。
+  await until("恢复梯子自己把身份认回来", async () => (await readRow(mon))?.pid === pid, 20_000);
   const adopted = (await readRow(mon))!;
-  assert.equal(adopted.pid, pid, "「下一次启动会再问一遍」不是一句空话");
-  assert.deepEqual({ attached: second.attached, pending: second.pending }, { attached: 1, pending: 0 },
-    "这一遍照实算接回来了");
+  assert.equal(adopted.pid, pid, "「它自己会再问一遍」不是一句空话");
+  assert.equal(adopted.status, "running", "认回来之后它照旧在盯");
   if (!EXACT_MARKS) {
     assert.equal(adopted.pidStartedAt, null, "**只认号、不认启动时刻** —— 猜出来的身份不配当下刀凭证");
   }
@@ -153,12 +177,129 @@ try {
   assert.ok(await debtRow(mon3),
     "**pid 空着不等于没有责任**:上一版这一问按 `pid IS NOT NULL` 过滤,它一条都捞不到");
 
+  // ⑤ **接回来之后真的在盯**:tail 接上了、期限也有人管(第 20 轮审查 F2)。
+  //    审查实测的现场:日志里早就有结果、约定期限也过了,行却停在 `running/offset=0/events=0`,
+  //    一条待发消息都没有 —— 「保留运行态」被当成了「恢复了监听」。
+  const taskId5 = await makeTask({ status: "running" });
+  const token5 = `intent-supervise-${process.pid}-${Date.now()}`;
+  const mon5 = await insertMonitorRow(taskId5, {
+    status: "running", pidStartedAt: null, command: process.execPath, unitToken: token5,
+  });
+  const row5 = (await readRow(mon5))!;
+  // 被盯进程照生产的样子把输出写进这一行自己的日志文件。
+  const logFd = openSync(row5.logPath, "a");
+  const child5 = spawn(
+    process.execPath,
+    ["-e", 'setTimeout(() => console.log("READY_FROM_REAL_PROCESS"), 300); setInterval(() => {}, 1000)'],
+    { detached: true, stdio: ["ignore", logFd, logFd], env: { PATH: process.env.PATH!, ASH_MONITOR_UNIT: token5 } },
+  );
+  closeSync(logFd);
+  child5.unref();
+  invalidateMonitorUnitScan();
+  strays.push(child5.pid!);
+  writeFileSync(monitorSpawnIdentityPath(row5.logPath), JSON.stringify({ pid: child5.pid!, spawnedAtMs: Date.now() }));
+  // 期限贴近:梯子第一档(1 秒)认回来之后,到期这件事该由接上的运行时自己兜住。
+  await db.update(monitors)
+    .set({ timeoutMs: 2_500, expiresAt: new Date(Date.now() + 2_500).toISOString() })
+    .where(eq(monitors.id, mon5));
+  await dbClient.execute(`UPDATE monitors SET status = 'stopped' WHERE id <> '${mon5}'`);
+  const [first5, injected5] = await withLedgerReadFailure(() => reattachMonitors());
+  assert.equal(injected5, 1, "台子前提:那一句 SELECT 真的失败了一次");
+  assert.equal(first5.pending, 1, "台子前提:这一行落在「这一刻认不回来」那一档");
+  await until("到期这件事自己兜住了（不靠用户再重启一次）", async () => {
+    const row = await readRow(mon5);
+    return row?.status === "expired";
+  }, 25_000);
+  const supervised = (await readRow(mon5))!;
+  assert.ok(supervised.offset > 0, "**日志要真的被读过**:接回来不接 tail,等于结果永远到不了任务头上");
+  assert.ok(supervised.events > 0, "产出的那几行照常算事件");
+
+  // ⑥ 梯子问出来的是**反证**时,它照实把这一行写掉,不会无限「在等」。
+  const taskId6 = await makeTask({ status: "running" });
+  const token6 = `intent-disproved-${process.pid}-${Date.now()}`;
+  const gone = markedProcess(token6);
+  killTree(gone, "SIGKILL");
+  await until("台子先把它收掉", async () => !isPidAlive(gone));
+  invalidateMonitorUnitScan();
+  assert.equal(processUnitEvidence(token6, { fresh: true }).verdict, "none",
+    "台子前提:记号那一问现在是反证(这一次创建的记号在谁身上都找不到)");
+  const mon6 = await intentRow(taskId6, token6, gone);
+  // 故障源用「边条这一次读不出来」:记号那一问已经反证了这个号,反证账本那一句 SELECT
+  // 根本走不到(authorizeRecoveredIdentity 先问记号),拿它当故障源第一问就直接出结论了。
+  const fault6 = failSidecarRead(monitorSpawnIdentityPath((await readRow(mon6))!.logPath), { once: true });
+  const first6 = await reattachMonitors();
+  assert.equal(fault6.reads(), 1, "台子前提:那一个文件的读真的失败了一次");
+  assert.equal(first6.pending, 1, "台子前提:第一问被那次读失败挡住了");
+  await until("梯子拿到反证之后照实写掉", async () => {
+    const row = await readRow(mon6);
+    return row?.status === "lost";
+  }, 25_000);
+  assert.match((await readRow(mon6))!.endedReason ?? "", /反证|没有真正开工/,
+    "措辞照实:这一档是「那个号不是它」,不是「核实不了」");
+
+  // ⑦ **身份边条这一刻读不出来 ≠ 没有边条**(第 20 轮审查 F1)。审查实测:注入一次 EIO,
+  //    删除照样返回成功,任务行、哨兵行、债表同时为 0,而那条命令还在后台跑着。
+  const taskId7 = await makeTask({ status: "running" });
+  const token7 = `intent-unreadable-${process.pid}-${Date.now()}`;
+  const pid7 = markedProcess(token7);
+  const mon7 = await intentRow(taskId7, token7, pid7);
+  const row7 = (await readRow(mon7))!;
+  const sidecar7 = monitorSpawnIdentityPath(row7.logPath);
+  let eioReads = 0;
+  /** 这一段里那一个文件一直读不出来(⑥ 那边是只失败一次)。 */
+  const withSidecarEIO = async <T>(run: () => Promise<T>): Promise<T> => {
+    const fault = failSidecarRead(sidecar7);
+    try { return await run(); } finally { eioReads += fault.reads(); fault.restore(); }
+  };
+
+  // ⑦-a 接回:读不出来 ⇒ 落「这一刻认不回来」那一档,**不是** lost。
+  const first7 = await withSidecarEIO(() => reattachMonitors());
+  assert.ok(eioReads > 0, "台子前提:那一个文件的读真的失败了");
+  assert.equal(first7.pending, 1, "读不出来 ⇒ 什么都不许声称,行原样留着");
+  assert.match((await readRow(mon7))!.endedReason ?? "", /读不出来/, "措辞要说清是读不出来");
+  // 下面三关量的是**判据本身**(删除、开机清扫各自怎么读这一档),所以把恢复梯子摘掉 ——
+  // 故障一撤它 1 秒后就会把号认回来,那条路由 ②/⑥ 自己的台子负责。
+  detachAllMonitors();
+
+  // ⑦-b 删除:读不出来时**不许放行** —— 删除整笔中止,任务和行都留着。
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, taskId7));
+  await withSidecarEIO(async () => {
+    await assert.rejects(
+      () => deleteTaskCompletely(taskId7),
+      /不能销毁它们的身份记录/,
+      "**读失败不许被折成「没有责任」**:销毁前拿不到持久交接就要整笔中止（删除可以重试，"
+      + "留下一个谁都找不到的后台进程不可逆）",
+    );
+  });
+  assert.ok(await readRow(mon7), "行留着");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, taskId7))).length, 1, "任务也留着");
+  assert.equal(isPidAlive(pid7), true, "一个信号都没发");
+
+  // ⑦-c 开机清扫:非运行态 + pid 空 + 边条读不出来 ⇒ 照旧要被重新问一遍(上一版按
+  //      `readSpawnIdentity(...) !== null` 过滤,这一类行一条都捞不到)。
+  await db.update(monitors).set({ status: "lost" }).where(eq(monitors.id, mon7));
+  // 只留这一行给清扫去数 —— 前面几节留下的行也有「退出没确认」的,`>= 1` 那种写法无论这一行
+  // 有没有被看见都成立(实测:把过滤改回「边条读得出来才算」,那条断言照旧绿)。
+  await dbClient.execute(`DELETE FROM monitors WHERE id <> '${mon7}'`);
+  const swept = await withSidecarEIO(() => reclaimUnconfirmedStops());
+  assert.equal(swept, 1, "**读不出来也算「结局没确认」**:开机这一问必须看得见它");
+
+  // ⑦-d 故障过去 ⇒ 同一条删除路照旧走得通,而且责任真的落盘。
+  await deleteTaskCompletely(taskId7);
+  assert.equal(await readRow(mon7), undefined, "这一次行跟着任务删掉了");
+  const debt7 = await debtRow(mon7);
+  assert.ok(debt7, "责任落在盘上(行删掉之后它是唯一的线索)");
+  assert.equal(debt7!.pid, pid7, "落点是边条上那个号");
+
   console.log(
-    "✓ 创建意图的责任接管：认不回来时行原样留着且一刀不发 / 故障撤掉后启动自己认得回来 /"
-    + " 删除前那一问问得到 pid 还空着的意图行、责任落盘才许删 / 开机清扫按边条把它重新问一遍"
+    "✓ 创建意图的责任接管：认不回来时行原样留着且一刀不发 / 故障撤掉后 ash 自己认得回来、"
+    + "接上日志与期限 / 问出反证就照实写掉 /"
+    + " 删除前那一问问得到 pid 还空着的意图行、责任落盘才许删 / 开机清扫按边条把它重新问一遍 /"
+    + " 边条读不出来既不算没有边条也不算没有责任（接回、删除、开机三处同判）"
     + " 均受回归保护",
   );
 } finally {
+  detachAllMonitors();   // 连恢复梯子一起撤:库马上要关了,别让它醒过来对着关了的库发问
   for (const p of strays) if (isPidAlive(p)) killTree(p, "SIGKILL");
   for (const p of strays) await until(`台子收掉 pid=${p}`, async () => !isPidAlive(p)).catch(() => {});
   await teardown();

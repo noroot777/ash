@@ -109,6 +109,9 @@
 .monitor-wait__note { margin: 8px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.65; }
 /* 交代原文是 agent 对自己说的话,排成引文好跟说明本身分开。 */
 .monitor-wait__note q { color: var(--muted); quotes: "「" "」"; }
+/* 「这一刻认不回来」那一段:它是**受阻**,不是说明 —— 用边线把它从旁注里拎出来(灰到底的
+   小字里,用户要先看见这一句才知道「等着」等不来)。 */
+.monitor-wait__note--stuck { border-left: 1.5px solid color-mix(in lch, var(--amber) 45%, var(--line)); padding-left: 7px; color: var(--muted); }
 .monitor-wait__open { display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; border: 0; border-radius: 6px; background: transparent; padding: 2px 6px 2px 0; color: var(--muted); font-size: 10px; }
 .monitor-wait__open:hover { color: var(--ink); }
 

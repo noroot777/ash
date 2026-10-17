@@ -72,6 +72,7 @@ import {
   confirmTraceless, isTracelessState, killProvenUnit, reclaimState,
   shootProvenUnitNow, stateNote, type MonitorUnit,
 } from "./monitor-reclaim-evidence.js";
+import { IS_WINDOWS } from "./platform.js";
 import { adoptSpawnIdentity } from "./monitor-adopt.js";
 import { authorizeRecoveredIdentity } from "./monitor-identity-authz.js";
 import { clearSpawnIdentity, readSpawnIdentity } from "./monitor-spawn.js";
@@ -294,13 +295,15 @@ type DebtInput = {
  *   经空了。注意它不叫 `settled` 也不叫 `gone`(第 13 轮审查 F1-B):整项退出在当前平台证不出,
  *   所以责任行**留着并盖戳**,只是不再追了(见 `closeReclaimDebt`)。
  * - `owed` = 还在 / 判不出来,**责任已经可靠落盘**。之后由确认阶段收档,或留给梯子与开机清扫。
- * - `unaccounted` = **该留责任、却没留下来**(库写不进去)。调用方必须当失败处理:销毁持久
- *   身份那条路整笔中止,其余路径至少出声 + 继续重试落盘。
+ * - `unaccounted` = **该留责任、却没留下来**(库写不进去,或者连一个能记的落点都没拿到)。
+ *   调用方必须当失败处理:销毁持久身份那条路整笔中止,其余路径至少出声 + 继续重试落盘。
+ *   `debt: null` 是后一种(第 20 轮审查 F1):身份边条这一刻读不出来,手里没有 pid 可记 ——
+ *   持久交接就是**那一行本身**,所以没有可重试的落盘,只有「不许据此放行」。
  */
 export type ReclaimOutcome =
   | { state: "closed" }
   | { state: "owed"; ticket: ReclaimTicket }
-  | { state: "unaccounted"; debt: DebtInput };
+  | { state: "unaccounted"; debt: DebtInput | null };
 
 /**
  * **落责任 → 发信号**:一条哨兵的回收只能从这里开始。
@@ -344,7 +347,10 @@ async function completeIdentity(m: {
   unitToken: string | null;
   logPath?: string | null; spawnAnchorMs?: number | null;
 }): Promise<{ pidStartedAt: string | null; anchorMs: number | null; disproved: boolean }> {
-  const side = m.logPath ? readSpawnIdentity(m.logPath) : null;
+  const read = m.logPath ? readSpawnIdentity(m.logPath) : { kind: "absent" as const };
+  // 边条只在**读得出来、而且记的就是这个号**时当锚;读不出来就退回债上那一份(第 20 轮审查
+  // F1:读失败不许冒充「没有锚」,更不许冒充任何结局)。
+  const side = read.kind === "identity" ? read.identity : null;
   const anchorMs = side?.pid === m.pid ? side.spawnedAtMs : m.spawnAnchorMs ?? null;
   if (m.pidStartedAt) return { pidStartedAt: m.pidStartedAt, anchorMs, disproved: false };
   // **政策只有一份**(第 17 轮审查 F1):「凭什么给这个号签身份」整套判据在
@@ -395,12 +401,20 @@ async function completeIdentity(m: {
  */
 async function adoptIntentPid(m: {
   id: string; command: string; unitToken: string | null; logPath?: string | null;
-}): Promise<number | null> {
-  if (!m.logPath) return null;
+}): Promise<number | "none" | "held"> {
+  if (!m.logPath) return "none";   // claude 的投影行:没有边条、没有记号,也没有责任
   const adopted = await adoptSpawnIdentity({
     id: m.id, logPath: m.logPath, unitToken: m.unitToken, command: m.command,
   });
-  return adopted.identity?.pid ?? adopted.candidate?.pid ?? null;
+  const pid = adopted.identity?.pid ?? adopted.candidate?.pid;
+  if (pid !== undefined) return pid;
+  // **没拿到落点时,出路按「为什么没拿到」分**(第 20 轮审查 F1):
+  //  · 边条这一刻读不出来 ⇒ `held`:什么都没证明,这条创建意图只能原样留着;
+  //  · 边条确实不在 ⇒ POSIX 的放行闸证明命令没开工 ⇒ 真的没有责任;win32 没有闸,那一侧
+  //    一行活着的意图行本来一定带着边条(创建窗口在两条线索都没有时就地拒了这次创建,见
+  //    `handoverRecoverable`),所以这一档在那边只可能是边条被外力删了 —— 手里没有任何落点,
+  //    照旧不许声称「没有责任」。**未在 Windows 真机验证**(根 AGENTS.md)。
+  return adopted.refusal === "unreadable-identity" || IS_WINDOWS ? "held" : "none";
 }
 
 export async function reclaimMonitorProcess(
@@ -414,8 +428,14 @@ export async function reclaimMonitorProcess(
   reason: string,
 ): Promise<ReclaimOutcome> {
   // **pid 还空着不等于没有责任**(第 19 轮审查 F2):先问一遍认领,见 `adoptIntentPid`。
-  const pid = m.pid ?? await adoptIntentPid(m);
-  if (pid === null) return { state: "closed" }; // 真的没有落点:claude 投影行 / 连身份边条都没留下
+  const resolved = m.pid ?? await adoptIntentPid(m);
+  // **「没拿到落点」不许写成「没有责任」**(第 20 轮审查 F1):这一档连一个 pid 都记不下来,
+  // 于是这条创建意图的持久交接就只剩**这一行本身** —— 行、边条、记号都留着,销毁那条路按
+  // `unaccounted` 整笔中止(删除可以重试,留下一个谁都找不到的后台进程不可逆),别的路出声
+  // 并等下一次问(接回那边还挂着自动重试,见 monitor-reattach 的梯子)。
+  if (resolved === "held") return { state: "unaccounted", debt: null };
+  const pid = resolved === "none" ? null : resolved;
+  if (pid === null) return { state: "closed" }; // 真的没有落点:claude 投影行 / 命令确实没开工
   // **先补身份再判档**:补得上就按完整身份走(该杀的杀、该销的销),补不上才落到「不知道」。
   const identity = await completeIdentity({ ...m, pid });
   const pidStartedAt = identity.pidStartedAt;
@@ -481,6 +501,9 @@ export type ReclaimVerdict = "reclaimed" | "closed" | "owed" | "unaccounted";
 export async function settleReclaim(outcome: ReclaimOutcome, deadlineMs = 3_000): Promise<ReclaimVerdict> {
   if (outcome.state === "closed") return "closed";
   if (outcome.state === "unaccounted") {
+    // 连落点都没拿到的那一档(第 20 轮审查 F1):没有债可补、也没有线索可追 —— 这一行自己
+    // 就是交接,调用方照 `unaccounted` 处理(销毁整笔中止,其余出声)。
+    if (!outcome.debt) return "unaccounted";
     const { debt } = outcome;
     // 库可能只是忙了一下:再看一遍线索,空了就补留档,没空就立刻重试落盘,仍然不行才往上报。
     //

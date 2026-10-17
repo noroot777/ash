@@ -34,7 +34,7 @@ import {
   archiveTracelessIdentity, heldReclaimDebts, reclaimMonitorProcess, settleReclaim,
 } from "./monitor-reclaim-debts.js";
 import { reclaimState } from "./monitor-reclaim-evidence.js";
-import { readSpawnIdentity } from "./monitor-spawn.js";
+import { intentStillOpen } from "./monitor-adopt.js";
 import { isReviewSourceActive } from "./monitor-session.js";
 import { finish, isAshKind, serialize } from "./monitors.js";
 
@@ -234,12 +234,15 @@ async function accountForLiveProcesses(
 function finishAccounting(
   unaccounted: MonitorRow[], lostIdentity: MonitorRow[], opts: { fatal: boolean },
 ): void {
-  const pids = (rows: MonitorRow[]) => rows.map((r) => r.pid ?? "（pid 还空着）").join("、");
+  // pid 还空着的行也会落到这里(创建意图这一刻认不回来,第 20 轮审查 F1),所以逐条带各自的
+  // 说法 —— 外面统一套一个「pid …」会写出「pid （pid 还空着）」。
+  const pids = (rows: MonitorRow[]) =>
+    rows.map((r) => (r.pid === null ? "pid 还空着" : `pid ${r.pid}`)).join("、");
   if (!opts.fatal) {
     // 审查收尾那一侧:身份不销毁(哨兵行还在),所以只出声 —— 开机清扫会再问一遍。
     if (lostIdentity.length) {
       console.error(
-        `[ash] 有 ${lostIdentity.length} 条哨兵的最后身份没能留档（pid ${pids(lostIdentity)}）`
+        `[ash] 有 ${lostIdentity.length} 条哨兵的最后身份没能留档（${pids(lostIdentity)}）`
         + `，哨兵行还在，开机会再问一遍`,
       );
     }
@@ -248,10 +251,10 @@ function finishAccounting(
   if (!unaccounted.length && !lostIdentity.length) return;
   const parts: string[] = [];
   if (unaccounted.length) {
-    parts.push(`${unaccounted.length} 个既没确认退出、回收责任也没能落库（pid ${pids(unaccounted)}）`);
+    parts.push(`${unaccounted.length} 个既没确认退出、回收责任也没能落库（${pids(unaccounted)}）`);
   }
   if (lostIdentity.length) {
-    parts.push(`${lostIdentity.length} 个线索已追空、但最后一份身份没能留档（pid ${pids(lostIdentity)}）`);
+    parts.push(`${lostIdentity.length} 个线索已追空、但最后一份身份没能留档（${pids(lostIdentity)}）`);
   }
   throw new Error(`有哨兵进程：${parts.join("；")}，不能销毁它们的身份记录。请重试。`);
 }
@@ -341,11 +344,11 @@ export async function reclaimUnconfirmedStops(): Promise<number> {
   // 先用最便宜的那一问(`kill(-pgid, 0)`)把绝大多数历史行筛掉,ps 只对组还活着的那几条问。
   //
   // **pid 还空着的那几行按边条筛**(第 19 轮审查 F2):它们是创建意图行,结局从没被确认过
-  // (`settleIntentRow` 写 `lost` 时并不撤边条)。边条一旦认领成功、或者确认命令压根没开工就
-  // 被作废了(`clearSpawnIdentity`),所以「边条还在」这一问既便宜又正好圈住该再问一遍的那
-  // 一批 —— 历史上那些压根没起来的行一个都捞不进来。
+  // (`settleIntentRow` 写 `lost` 时并不撤边条)。判据在 `intentStillOpen` —— 跟回收层那一侧
+  // 同源,**读不出来也算没确认**(第 20 轮审查 F1:上一版这里一个 `!== null` 把 EIO 读成
+  // 「没有边条」,于是这一类行连开机这一问都捞不到)。
   const live = rows.filter((r) => (r.pid === null
-    ? readSpawnIdentity(r.logPath) !== null
+    ? intentStillOpen(r.logPath)
     : reclaimState(r.pid, r.pidStartedAt, r) !== "traceless"));
   if (!live.length) return 0;
   console.error(`[ash] 开机发现 ${live.length} 条「停了但退出从没被确认」的哨兵（进程组还活着，`

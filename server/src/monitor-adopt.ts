@@ -7,6 +7,7 @@ import { db } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { authorizeRecoveredIdentity } from "./monitor-identity-authz.js";
 import { readSpawnIdentity, type SpawnIdentity } from "./monitor-spawn.js";
+import { IS_WINDOWS } from "./platform.js";
 import { processStartedNear } from "./proc.js";
 
 /**
@@ -20,18 +21,46 @@ export type AdoptSubject = { id: string; logPath: string; unitToken: string | nu
 export type AdoptIdentity = { pid: number; pidStartedAt: string | null };
 
 /**
+ * 认不下来的**事实分档**(第 20 轮审查 F1)。`settled` 只答「当初那个壳还在不在」这半句,
+ * 答不出结局的那几档必须让调用方分得清是**哪一种**答不出来:
+ *  · `no-identity` —— 边条确实不在。POSIX 上这等于放行闸证明了命令没开工;win32 没有闸,
+ *    那一侧的创建窗口不许在「两条线索都没有」时留下行(见 monitor-spawn 的
+ *    `handoverRecoverable`:第 10 轮审查 F2-C 就地拒掉了这次创建),所以这一档在那边只可能
+ *    是边条被外力删了 —— 两边的出路不同,由调用方按平台挑;
+ *  · `unreadable-identity` —— 边条在那儿、这一刻读不出来(EIO / 内容坏了)。**不是事实**:
+ *    不许据此声称没开工,也不许据此声称没有责任;
+ *  · `disproved` / `different` —— 那个号不是它(反证 / 现在是另一个进程):壳一定不在了;
+ *  · `unverifiable` —— 反证账本这一刻读不出来,同样只是「核实不了」。
+ */
+export type AdoptRefusal =
+  | "no-identity" | "unreadable-identity" | "disproved" | "different" | "unverifiable";
+
+/**
  * 认领的结论。认不下来时带上**这一刻的事实**,措辞由调用方据此挑:
  *  · `settled: true` —— 当初那个壳一定不在了(没留边条 / 反证过 / 那个号现在是另一个进程);
- *  · `settled: false` —— 只是**这一刻核实不了**(反证账本读不出来),不许说成「它不在了」。
+ *  · `settled: false` —— 只是**这一刻核实不了**(边条或反证账本读不出来),不许说成「它不在了」。
  *
- * **两档都要把 `candidate` 带出来**(第 19 轮审查 F2):边条上记着的那个号虽然不配当发信号的
+ * **几档都要把 `candidate` 带出来**(第 19 轮审查 F2):边条上记着的那个号虽然不配当发信号的
  * 凭证,它仍然是这次创建**唯一的落点线索**。调用方拿它去记意图级责任 —— 丢掉它就等于让一条
  * 「结局还没确认」的创建意图彻底失忆(审查实测:行写成 lost、pid 空、债表空,命令还在跑)。
- * 没有边条时它是 `null`:那种行连线索都没有(claude 的投影行就落在这里)。
+ * 读不出边条时它是 `null` —— 那一档的出路由 `refusal` 决定,**不是**「没有责任」。
  */
 export type AdoptOutcome =
-  | { identity: AdoptIdentity; why?: undefined; settled?: undefined; candidate?: undefined }
-  | { identity: null; why: string; settled: boolean; candidate: SpawnIdentity | null };
+  | { identity: AdoptIdentity; why?: undefined; settled?: undefined; candidate?: undefined; refusal?: undefined }
+  | { identity: null; why: string; settled: boolean; candidate: SpawnIdentity | null; refusal: AdoptRefusal };
+
+/**
+ * 「这条创建意图的结局确认了吗」—— **便宜的那一问**(只读边条,不问 ps、不问账本)。
+ *
+ * 判据跟回收层的 `adoptIntentPid` 同源(第 20 轮审查 F1),所以只写一次:
+ *  · 读到边条、或者**这一刻读不出来** ⇒ 结局没确认,还得再问一遍;
+ *  · 边条确实不在 ⇒ POSIX 的放行闸证明命令压根没开工(边条一旦认领成功或确认退出就被
+ *    `clearSpawnIdentity` 撤掉,所以「不在」正好圈住那些已经有结论的行);win32 没有闸,
+ *    那一侧照旧不许把「不在」读成「没有责任」。
+ */
+export function intentStillOpen(logPath: string): boolean {
+  return readSpawnIdentity(logPath).kind !== "absent" || IS_WINDOWS;
+}
 
 /**
  * **pid 还空着的那一行:拿身份边条把它认回来**(第 9 轮审查 F3)。
@@ -59,8 +88,20 @@ export type AdoptOutcome =
  * 那一份漏了 `none` 和「名单里没有这个号」两种反证)。
  */
 export async function adoptSpawnIdentity(subject: AdoptSubject): Promise<AdoptOutcome> {
-  const side = readSpawnIdentity(subject.logPath);
-  if (!side) return { identity: null, why: "（连身份边条都没留下）", settled: true, candidate: null };
+  const read = readSpawnIdentity(subject.logPath);
+  // **「这一刻读不出来」和「它不在」不是一件事**(第 20 轮审查 F1)。读失败这一档:连
+  // `settled` 都不许给 —— 它既没证明壳不在了,也没证明命令没开工,所以调用方只能留着这条
+  // 创建意图、下一刻再问(接回那边挂自动重试,销毁那边不许据此放行)。
+  if (read.kind === "unreadable") {
+    return {
+      identity: null, settled: false, candidate: null, refusal: "unreadable-identity",
+      why: `（身份边条这一刻读不出来：${read.why}）`,
+    };
+  }
+  if (read.kind === "absent") {
+    return { identity: null, why: "（连身份边条都没留下）", settled: true, candidate: null, refusal: "no-identity" };
+  }
+  const side = read.identity;
   const authz = await authorizeRecoveredIdentity({
     monitorId: subject.id, pid: side.pid, unitToken: subject.unitToken,
   });
@@ -72,8 +113,8 @@ export async function adoptSpawnIdentity(subject: AdoptSubject): Promise<AdoptOu
   // 后者不许被措辞成前者,否则又是「问不出来被写成它不在了」(第 6 轮审查 F1)。
   if (authz.refuse) {
     return authz.ownership === "disproved"
-      ? { identity: null, why: `（身份边条记的 pid=${side.pid} 不是它：记号那一问反证过这个号）`, settled: true, candidate: side }
-      : { identity: null, why: `（身份边条记的 pid=${side.pid} 这一刻核实不了：反证记录读不出来）`, settled: false, candidate: side };
+      ? { identity: null, why: `（身份边条记的 pid=${side.pid} 不是它：记号那一问反证过这个号）`, settled: true, candidate: side, refusal: "disproved" }
+      : { identity: null, why: `（身份边条记的 pid=${side.pid} 这一刻核实不了：反证记录读不出来）`, settled: false, candidate: side, refusal: "unverifiable" };
   }
   // 剩下的是「归属证不出来」那一档(存量行没有记号、只看得见展示文本、ps/`/proc` 失败)。
   // **时间锚在这里只投否决票**(第 18 轮审查 F1):命令文本对不上、或者这个号上的进程明显不是
@@ -83,7 +124,7 @@ export async function adoptSpawnIdentity(subject: AdoptSubject): Promise<AdoptOu
   // 都没有,只剩 id、命令和日志路径。
   const { verdict } = processStartedNear(side.pid, side.spawnedAtMs, 2_000, subject.command);
   if (verdict === "different") {
-    return { identity: null, why: `（身份边条记的 pid=${side.pid} 现在是另一个进程）`, settled: true, candidate: side };
+    return { identity: null, why: `（身份边条记的 pid=${side.pid} 现在是另一个进程）`, settled: true, candidate: side, refusal: "different" };
   }
   return { identity: await writeAdopted(subject, side.pid, null) };
 }
@@ -127,9 +168,15 @@ async function writeAdopted(
  * 话写在 `ended_reason` 上:那一列是卡片上「原因」那一行,**running 的行也照样显示**
  * (web/src/monitors/MonitorCard.tsx),所以这件事刷新页面之后仍然看得出来。
  */
-export async function notePendingIntent(subject: { id: string }, why: string): Promise<string> {
-  const note = `server 重启后这一刻认不回它：起进程时没来得及记下 pid${why}`
-    + `，所以一个信号都没发；这条创建意图原样留着，下一次启动、点停或删除都会再问一遍（日志路径见这一行）`;
+export async function notePendingIntent(
+  subject: { id: string }, why: string, opts: { exhausted?: boolean } = {},
+): Promise<string> {
+  // 梯子还在问 / 梯子用尽,**话要分开说**(第 20 轮审查 F2):前者「正在自己重试」,后者只剩
+  // 「等下一次启动、点停或删除」—— 把后者也写成「还会自己再问」就是在卡片上撒谎。
+  const note = `server 重启后这一刻认不回它：起进程时没来得及记下 pid${why}，所以一个信号都没发；`
+    + (opts.exhausted
+      ? "自动重问已经试到最后一档仍然认不回来，这条创建意图原样留着，下一次启动、点停或删除会再问一遍（日志路径见这一行）"
+      : "这条创建意图原样留着，ash 正在自己按间隔重问身份，认回来就接上日志和期限（日志路径见这一行）");
   try {
     await db.update(monitors).set({ endedReason: note })
       .where(and(eq(monitors.id, subject.id), eq(monitors.status, "running"), isNull(monitors.pid)));

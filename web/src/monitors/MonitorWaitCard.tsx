@@ -50,6 +50,14 @@ export function MonitorWaitCard({
   // running/queued 的单飞任务一律判「等」）。这时说「会把会话叫醒」是错的：没人睡着。
   const busy = status === "running" || status === "queued";
   const reviewerOnly = monitors.every((monitor) => monitor.sourceRole === "reviewer");
+  // **pid 还空着的那几条此刻并没有在盯**：重启恰好打断了「落身份 → 起进程 → 回填 pid」那一步，
+  // ash 这一刻认不回它的进程（见 server/src/monitor-adopt.ts 的 `notePendingIntent`）。这件事
+  // 必须说出来：那几条的日志没人读、期限也要等认回来才有人管，而上面那句「有事件时会把这条
+  // 会话重新叫醒」对它们是假话 —— 用户据此以为只要等着就行（第 20 轮审查 F2）。原因照抄
+  // `endedReason`：措辞分「正在自己重问」和「重问到最后一档仍认不回来」两种，概括一下就把
+  // 后者说成了前者。
+  const unclaimed = monitors.filter((monitor) => monitor.pid === null && monitor.endedReason);
+  const allUnclaimed = unclaimed.length === monitors.length;
   // 折叠那一行只放**一眼要答的那句**：在等几个、头一个在盯什么、盯到什么时候。多于一个
   // 时只带头一个加「+N」——期限逐条不同，在一行里并排写出来只会互相干扰，展开有全的。
   const brief = builtinOnly
@@ -100,7 +108,10 @@ export function MonitorWaitCard({
               它的进程由 ash 自己起，活得过这一回合。
               {busy
                 ? <> 任务这一轮还在跑，事件会排着队等它空下来再送进会话。</>
-                : <>
+                : allUnclaimed
+                  // 全都还没认回来：一句「会叫醒」都不能说 —— 现在没有任何东西在读它们的日志。
+                  ? <> 不过见下：它{monitors.length > 1 ? "们" : ""}此刻还没被认回来。</>
+                  : <>
                   {" "}有事件时会把{reviewerOnly ? "审查那条会话" : "这条会话"}重新叫醒。
                   {resumePrompt
                     // 交代原文照抄：它是 agent 对**自己**说的话，概括一下就没用了（用户要判断的
@@ -108,12 +119,18 @@ export function MonitorWaitCard({
                     ? <> 醒来时它留的这段交代会一起喂回去：<q>{resumePrompt}</q></>
                     // 没留交代也不是故障，但得说清后果：醒来那一轮只有事件正文，别的全靠会话本身。
                     : <> 这一轮没留下续跑交代，醒来时它只会收到事件正文。</>}
-                </>}
+                  </>}
               {reviewArmed && <> 已预约的审查会等这件事落地、任务续跑结束之后再开始。</>}
               {/* 两种分开说：内置那几个不参与上面那句「会叫醒」，但不能当它不存在。 */}
               {builtinCount > 0 && (
                 <> 另有 {builtinCount} 个 claude 内置 Monitor 在智能体自己那一轮里跑着，它们不会唤醒任务。</>
               )}
+            </p>
+          )}
+          {unclaimed.length > 0 && (
+            <p className="monitor-wait__note monitor-wait__note--stuck">
+              其中 {unclaimed.length} 个 ash <b>这一刻认不回它的进程</b>：重启恰好打断了起进程那一步，
+              所以一个信号都没发、日志也还没人接着读。<q>{unclaimed[0].endedReason}</q>
             </p>
           )}
           <button type="button" className="monitor-wait__open" onClick={onOpenPanel}>

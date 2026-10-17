@@ -9,6 +9,7 @@ import {
 import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
+import { MonitorWaitCard } from "../src/monitors/MonitorWaitCard.tsx";
 import { withMonitorTab } from "../src/monitors/useMonitorInspector.tsx";
 import type { TaskMonitorsState } from "../src/monitors/useTaskMonitors.ts";
 
@@ -404,4 +405,31 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   }
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一");
+// ── 回复框上那条「在等哨兵」：pid 还空着的那几条不许被说成「等着就会被叫醒」 ────────
+//
+// 第 20 轮审查 F2:重启恰好打断了「落身份 → 起进程 → 回填 pid」那一步时,那一行是 running、
+// pid 空、`ended_reason` 上写着受阻原因(server/src/monitor-adopt.ts 的 `notePendingIntent`),
+// 而**此刻没有任何东西在读它的日志**。这张卡是用户离开这一页之前看到的最后一句话,所以
+// 「有事件时会把这条会话重新叫醒」对它必须收回,受阻原因照抄出来。
+{
+  const stuck: TaskMonitor = {
+    ...base, id: "m-stuck", pid: null, events: 0,
+    endedReason: "server 重启后这一刻认不回它：起进程时没来得及记下 pid（身份边条这一刻读不出来：读盘报错：EIO），"
+      + "所以一个信号都没发；这条创建意图原样留着，ash 正在自己按间隔重问身份，认回来就接上日志和期限（日志路径见这一行）",
+  };
+  const wait = (monitors: TaskMonitor[]) => renderToStaticMarkup(
+    <MonitorWaitCard
+      monitors={monitors} builtinCount={0} status="paused" resumePrompt={null}
+      reviewArmed={false} onOpenPanel={() => undefined}
+    />,
+  );
+  // 折叠态不展开就看不到正文,所以这几条断言针对的是展开那一份(用 open 的那个分支:静态渲染
+  // 拿不到点击,这里直接渲染 body —— 用 `summary` 判定折叠行仍在)。
+  const shut = wait([stuck]);
+  assert.match(shut, /在等 1 个哨兵/, "折叠那一行照旧:在等几个、等的是谁");
+
+  assert.doesNotMatch(wait([stuck]).replace(/[\s\S]*monitor-wait__body/, ""), /重新叫醒/,
+    "**pid 还空着时不许承诺「会被叫醒」** —— 用户据此以为等着就行");
+}
+
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一，回复框上那条「在等」对还没认回来的哨兵不承诺叫醒");

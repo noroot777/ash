@@ -94,16 +94,47 @@ export type SpawnIdentity = { pid: number; spawnedAtMs: number };
 export const handoverRecoverable = (p: { gated: boolean; identitySaved: boolean }): boolean =>
   p.gated || p.identitySaved;
 
-/** 读回那份边条。坏了/没了一律 null —— 调用方按「没有身份可用」走诚实的那一支。 */
-export function readSpawnIdentity(logPath: string): SpawnIdentity | null {
+/**
+ * 读边条这一问的**三档**(第 20 轮审查 F1)。
+ *
+ * 上一版「坏了/没了一律 null」把两件完全不同的事折成了一个值:**文件不在**(POSIX 的放行闸
+ * 证明命令没开工)和**这一刻读不出来**(EIO、内容坏了)。后者不证明任何结局,而下游一路把
+ * 它当成「没有身份、所以没有责任」:回收层返回 `closed`、销毁前核对放行,任务和哨兵行一起
+ * 删掉,那条命令还在后台跑(审查实测 `unreadable-sidecar.log`:注入一次 EIO,
+ * `tasks=0 monitors=0 debt=null diagnosticAlive=true`)。
+ *
+ * 所以这一问现在自己把三档说清楚,**不让消费者从 null 猜结局**:
+ *  · `identity` —— 读到了,内容也合法;
+ *  · `absent` —— 文件确实不在(`ENOENT`);
+ *  · `unreadable` —— 文件在那儿,但这一刻读不出来/解不出来。**一个字都不许当成事实**。
+ */
+export type SpawnIdentityRead =
+  | { kind: "identity"; identity: SpawnIdentity }
+  | { kind: "absent" }
+  | { kind: "unreadable"; why: string };
+
+export function readSpawnIdentity(logPath: string): SpawnIdentityRead {
+  let text: string;
   try {
-    const raw = JSON.parse(readFileSync(monitorSpawnIdentityPath(logPath), "utf8")) as unknown;
-    const o = raw as { pid?: unknown; spawnedAtMs?: unknown };
-    if (!Number.isInteger(o.pid) || (o.pid as number) <= 0) return null;
-    if (typeof o.spawnedAtMs !== "number" || !Number.isFinite(o.spawnedAtMs)) return null;
-    return { pid: o.pid as number, spawnedAtMs: o.spawnedAtMs };
-  } catch {
-    return null;
+    text = readFileSync(monitorSpawnIdentityPath(logPath), "utf8");
+  } catch (e) {
+    // `ENOENT` 是唯一能说「它不在」的错;别的(EIO、EACCES、EBUSY…)都只是这一刻读不出来。
+    if ((e as { code?: string } | null)?.code === "ENOENT") return { kind: "absent" };
+    return { kind: "unreadable", why: `读盘报错：${(e as Error)?.message ?? String(e)}` };
+  }
+  try {
+    const o = JSON.parse(text) as { pid?: unknown; spawnedAtMs?: unknown };
+    // 文件在、但内容不认识 ⇒ **也算读不出来**:它恰恰可能是「写到一半 ash 就没了」的样子,
+    // 那一刻命令往往已经起来了 —— 按「没留下边条」处理等于替它声称没开工。
+    if (!Number.isInteger(o.pid) || (o.pid as number) <= 0) {
+      return { kind: "unreadable", why: "内容里没有一个像样的 pid" };
+    }
+    if (typeof o.spawnedAtMs !== "number" || !Number.isFinite(o.spawnedAtMs)) {
+      return { kind: "unreadable", why: "内容里没有一个像样的时间锚" };
+    }
+    return { kind: "identity", identity: { pid: o.pid as number, spawnedAtMs: o.spawnedAtMs } };
+  } catch (e) {
+    return { kind: "unreadable", why: `内容解不出来：${(e as Error)?.message ?? String(e)}` };
   }
 }
 

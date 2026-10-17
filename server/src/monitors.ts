@@ -33,15 +33,13 @@ import {
 } from "@ash/shared/monitor";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
-import { monitors, tasks } from "./db/schema.js";
-import { reclaimMonitorProcess, settleReclaim, type ReclaimVerdict } from "./monitor-reclaim-debts.js";
-import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
-import { adoptSpawnIdentity, notePendingIntent } from "./monitor-adopt.js";
+import { monitors } from "./db/schema.js";
+import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
+import { reclaimState } from "./monitor-reclaim-evidence.js";
+import { stopPendingAdopts } from "./monitor-reattach.js";
 import { clearSpawnIdentity, readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
-import { IS_WINDOWS } from "./platform.js";
 
 import { pushToTask } from "./monitor-events.js";
-import { monitorWakeGate } from "./monitor-session.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -453,7 +451,7 @@ export async function readMonitorTail(
  *
  * 退出码确实拿不到，如实记 null —— 不拿 0 冒充跑成功了。
  */
-async function finishOffline(
+export async function finishOffline(
   row: Row,
   status: Exclude<MonitorStatus, "running">,
   reason: string,
@@ -480,174 +478,15 @@ async function finishOffline(
   await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）。${reason}`);
 }
 
-/**
- * 开机把上一个 server 留下的哨兵接回来。进程本来就没跟着死（这是整件事的全部意义），
- * 所以这里要做的只有两件：确认那个 pid 还是当初那个进程，然后从 `offset` 接着读。
- * 重启那几十秒里产出的行都还在文件里，一条不漏。
- *
- * 认不出来的（进程没了、或 pid 被别人复用了）落 `lost`，但**落之前先把它留下的输出读完**：
- * 「进程不在了」说的是这一刻，不是说它这段时间什么都没干。
- *
- * **接回也是一道资格判断,不只是认人**(第 3、4 轮审查 F1):事实已经落库、而回收那一刀还
- * 没落下去就崩了的话,照着「同代还活着 + 没到期」接回来的是一个**已经没有出口**的命令 ——
- * 它推的每一条都会被出口闸拒回,一直烧到自己到期。所以这里问的就是出口那一份资格本身
- * (`monitorWakeGate`:归档、任务终态、来源审查那一轮还在不在),而不是挨个补某一种 reason。
- */
-/**
- * 这一行**现在**还有出口吗 —— 跟创建、事件出口共用 `monitorWakeGate`(见 monitor-session.ts)。
- *
- * 任务行都没了是另一回事:那是删除中途崩了的残留,接回来谁也叫不醒。
- */
-async function reattachBlockedReason(row: Row): Promise<string | null> {
-  const task = (await db
-    .select({ id: tasks.id, status: tasks.status, archived: tasks.archived })
-    .from(tasks)
-    .where(eq(tasks.id, row.taskId))).at(0);
-  if (!task) return "它的任务已经不在了";
-  return monitorWakeGate(task, { reviewRun: row.sourceReviewRun, reviewRound: row.sourceReviewRound });
-}
-
-
-
-/** 「责任到底留下来了没有」那一句尾巴 —— 接回这两条路共用,措辞只有这一份。 */
-const owingNote = (verdict: ReclaimVerdict): string =>
-  verdict === "closed"
-    ? "；原进程的线索随后都追空了"
-    : verdict === "owed"
-      ? "；原进程退出未确认，已记下回收责任（开机会再收一次）"
-      : "；原进程退出未确认，而回收责任尚未保存（见 server 日志里的 pid，仍在重试落盘）";
-
-/**
- * 接回的三档计数。`pending` 是**pid 还空着、这一刻又认不回来**的那几条:行原样留着
- * (见 `notePendingIntent`),所以它既不算接回来了、也不算没了 —— 混进任何一边都是撒谎。
- */
-export async function reattachMonitors(): Promise<{ attached: number; lost: number; pending: number }> {
-  // 只认 ash 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
-  // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
-  // `loseClaudeMonitorsOfSession` 在 agent 进程真的结束时统一收口。
-  const rows = await db.select().from(monitors).where(and(eq(monitors.status, "running"), isAshKind));
-  let attached = 0;
-  let lost = 0;
-  let pending = 0;
-  for (const stored of rows) {
-    let row = stored;
-    // **「问不出来」要跟「它不在了」分开**(第 6 轮审查 F1)。`unknown` = ps 这一问自己失败
-    // 了,那就什么都不许声称:**照旧接回来**。这样它仍然在界面上、仍然能被点停、日志还在
-    // 收,而 ps 恢复之后探活那一问会自己把结果判出来(见 `attach` 里的 liveness)。原来这里
-    // 按一个布尔一刀切,ps 短暂不可用就把一条还活着的哨兵写成「这个进程已经不在了」——
-    // 既在界面上撒谎,又让它从此无法叫停。同一个错还有第二种犯法:身份比较自己去补一次
-    // 查询,**第二次**失败时被写成确证的 `not-ours`(第 7 轮审查 F1,现在判定收在
-    // `processIdentity` 一次快照里)。
-    // **pid 是空的**:那是创建协议留下的意图行 —— 身份先落库、进程后起、pid 回填(见
-    // monitor-create.ts 文件头)。重启后还能看见它,说明 ash 恰好死在「落了身份」和「回填
-    // pid」之间。这一档**既不能按「线索追空」一笔带过,也不能冒充已经收干净**:
-    //  · POSIX:命令从未开工 —— 它停在放行闸前等 ash 写一个字节,ash 一死写端就关了,壳
-    //    读到 EOF 在 exec 之前自己退掉(exit 97)。所以这条行可以干净地判掉。
-    //  · win32:那一侧没有闸(`cmd.exe` 里没有可靠的「从第 3 号句柄读一行」写法),命令可能
-    //    已经在跑,而我们手里没有任何 pid 可以去认它 —— 照实说成「认不回来」。**未在
-    //    Windows 真机验证**(根 AGENTS.md)。
-    if (!row.pid) {
-      const adopted = await adoptSpawnIdentity(row);
-      // 认不下来的几种事实由 `adoptSpawnIdentity` 带回来(`why` / `settled` / `candidate`)。
-      // **`settled: false` 不是终态**(第 19 轮审查 F2):只是**这一刻核实不了**(反证账本读不
-      // 出来),一个字都不许说成「它不在了」(第 6 轮审查 F1 的同一条),**更不许把这一行写成
-      // 一个此后谁都不会再问第二遍的档** —— 创建意图原样留着,理由见 `notePendingIntent`。
-      if (!adopted.identity && !adopted.settled) {
-        await notePendingIntent(row, adopted.why);
-        pending += 1;
-        continue;
-      }
-      if (!adopted.identity) {
-        // `settled`:当初那个壳一定不在了(没留边条 / 反证过 / 那个号现在是另一个进程)。
-        // 这一档 **win32 与 POSIX 的事实不同**,措辞和责任都跟着分开:
-        //  · POSIX:放行闸证明命令压根没开工 ⇒ 干净判掉,顺手把边条作废 —— 留着它只会让后面
-        //    的层拿一个已经被反证的号去记一笔永远收不掉的责任;
-        //  · win32:那一侧没有闸,壳派生的命令可能还在跑,而边条上那个号是**唯一的落点线索**
-        //    ⇒ 责任照记(候选号拿不到启动时刻,所以落在 `unverifiable` 档:记责任、不下刀)。
-        //    **未在 Windows 真机验证**(根 AGENTS.md)。
-        let owing = "";
-        if (IS_WINDOWS && adopted.candidate) {
-          const outcome = await reclaimMonitorProcess(
-            { ...row, pid: adopted.candidate.pid, pidStartedAt: null },
-            "server 重启后只认得出身份边条上那个号",
-          );
-          owing = owingNote(await settleReclaim(outcome, 0));
-        } else {
-          clearSpawnIdentity(row.logPath);
-        }
-        await finishOffline(row, "lost", (IS_WINDOWS
-          ? `server 重启后认不回它了：起进程时没来得及记下 pid${adopted.why}，这台机器上没有放行闸，当初那个壳已经不在、但它派生的命令可能还在后台跑着（日志路径见这一行）`
-          : `server 重启后判定它没有真正开工：起进程时没来得及记下 pid${adopted.why}，命令停在放行闸前面就退了`) + owing);
-        lost += 1;
-        continue;
-      }
-      // 认回来了:下面按正常身份走(接回 / 收尾 / 记责任),不再有特殊分支。
-      row = { ...row, pid: adopted.identity.pid, pidStartedAt: adopted.identity.pidStartedAt };
-    }
-    const state = reclaimState(row.pid!, row.pidStartedAt, row);
-    // `unverifiable`(当初没记下启动时刻 / 边条认回来时 ps 不可用)跟 `unknown` 同一档处理:
-    // **什么都不许声称,所以照旧接回来**。它仍然在界面上、仍然能被点停、日志还在收,而
-    // 「不敢下刀」这件事由回收层那一侧保证(第 9 轮审查 F3)。写成 `lost` 反而是撒谎。
-    if (state === "ours-alive" || state === "unknown" || state === "unverifiable") {
-      // 它还有出口吗(归档 / 任务终态 / 起它的那次审查那一轮还在不在)。没有就收掉,别接回来
-      // 继续烧。先接上再收尾:attach 把 tail 建起来,finish 的 drain 才读得到停服期间那一段,
-      // 也由它负责杀进程。
-      const blocked = await reattachBlockedReason(row);
-      if (blocked) {
-        attach(row);
-        await finish(row.id, "stopped", `${blocked}（server 重启期间发生的）`, null);
-        lost += 1;
-        continue;
-      }
-      if (new Date(row.expiresAt).getTime() <= Date.now()) {
-        // 先接上再收尾：attach 把 tail 建起来，finish 的 drain 才读得到停服期间那一段；
-        // 它同时负责把这个还活着、但已经超时的进程杀掉。
-        attach(row);
-        await finish(row.id, "expired", "盯满了约定的时长（server 重启期间到期）", null);
-        continue;
-      }
-      attach(row);
-      attached += 1;
-    } else {
-        // 剩下几档各有各的说法,**不能共用一句话**(措辞见 `offlineReason`):`traceless` 线索追空
-      // 了;`not-ours` 这个号现在是别人的(原来那个退没退证明不了);`suspected` 文本里还看得见
-      // 这次创建的记号、但证不出在谁身上;`ours-orphans` 组长退了、组里还有后代。除了第一档
-      // 都要先把回收责任记下来(判据见 reclaimMonitorProcess 那张表)。
-      const outcome = await reclaimMonitorProcess({ ...row, pid: row.pid! }, "server 重启后它的身份对不上");
-      // **先拿到最终 verdict,再写文案。** 这里不等补刀(deadline 0:只问一次状态,别把开机
-      // 吊住),所以把它提到写卡片之前不会让启动变慢 —— 但顺序反过来就会写下一句假话:上一版
-      // 无论结果是什么都先把「已记下回收责任」写进卡片,而债表写失败(`unaccounted`)时那句话
-      // 只在 server 日志里被纠正过,卡片上那句肯定会一直留着(第 7 轮审查 N1)。责任落盘之后
-      // 的推进交给紧随其后的 `reclaimUnconfirmedStops` / `sweepMonitorReclaimDebts` 和梯子。
-      const verdict = await settleReclaim(outcome, 0);
-      if (verdict === "unaccounted") {
-        console.error(`[ash] 接回时既没确认退出、回收责任也没落库 monitor=${row.id} pid=${row.pid}`);
-      }
-      await finishOffline(row, "lost", offlineReason(state, owingNote(verdict)));
-      lost += 1;
-    }
-  }
-  return { attached, lost, pending };
-}
-
-/**
- * 接回时判不回来的那几档,各自那一句话。**分开写**是因为它们是不同的事实,而这句话会留在
- * 卡片上(第 7 轮审查 N1:卡片上的话不许被 server 日志「纠正」)。
- */
-function offlineReason(state: ReclaimState, owing: string): string {
-  if (state === "traceless") return "server 重启后这个进程已经不在了（它在停服期间跑完的，拿不到退出码）";
-  if (state === "not-ours") {
-    return `server 重启后这个号已经是另一个进程了（原命令在停服期间结束，拿不到退出码）${owing}`;
-  }
-  if (state === "suspected") {
-    return "server 重启后这个号已经不在了，但进程表里还看得见这次创建的资源记号"
-      + `（这台机器只拿得到无边界的 ps 展示文本，证不出它在哪个进程里，所以不敢下刀）${owing}`;
-  }
-  return `server 重启后它的组长已经退出、组里还有后代（拿不到退出码）${owing}`;
-}
+// 接回那一摊搬去了 monitor-reattach.ts(单文件 700 行的约定)。**出口仍然只有这一个**:
+// index.ts、测试台子和重启子进程都按 `monitors.js` 的这个名字拿它。
+export { reattachMonitors } from "./monitor-reattach.js";
 
 /** 只给测试用：把内存里的 tail/定时器全撤了，进程不动。 */
 export function detachAllMonitors(): void {
+  // 待认领那几行的恢复梯子也要撤:它是 unref 的定时器,但测试里库会被关掉,让它醒过来只会
+  // 对着一个关了的库发问(第 20 轮审查 F2)。
+  stopPendingAdopts();
   for (const [, rt] of runtimes) {
     rt.closing = true;
     for (const t of rt.timers) { clearInterval(t); clearTimeout(t); }
