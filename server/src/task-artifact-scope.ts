@@ -217,11 +217,15 @@ export async function committedInWindows(
       `${asFilter ? "--since-as-filter" : "--since"}=${new Date(window.start).toISOString()}`,
       // 开着的那一段（还在写）不设上界：Infinity 塞进 Date 只会抛。
       ...(Number.isFinite(window.end) ? [`--until=${new Date(window.end).toISOString()}`] : []),
-      `--max-count=${MAX_WINDOW_COMMITS}`, "--name-only", "-z", "--format=%x00%H",
+      // 提交头前面那个 `%x01` 是**哨兵**:光靠「NUL 开场 + 40 位十六进制」认提交头,一个名字
+      // 恰好是 40 位十六进制、又躺在仓库根上的文件就会被认成提交号 —— 它自己从清单里消失,
+      // 后面那一串路径还会被当成它的（`afterHeader` 跟着错位剥一个换行）。路径里出现 0x01
+      // 这个控制字符在实践中不会发生,于是两类 token 从形状上就分得开（本轮审查不拦项）。
+      `--max-count=${MAX_WINDOW_COMMITS}`, "--name-only", "-z", "--format=%x00%x01%H",
     ];
     const { stdout } = await exec("git", args, { maxBuffer: 16 * 1024 * 1024 });
-    // `-z` 下提交头和路径一律以 NUL 分隔；`%x00%H` 让提交头自己也以 NUL 开场，于是
-    // 「40 位十六进制」这一个 token 就是提交号，其余 token 都是路径。
+    // `-z` 下提交头和路径一律以 NUL 分隔；`%x00%x01%H` 让提交头自己也以 NUL 开场、并且带上
+    // 那个哨兵，于是「0x01 + 40 位十六进制」这一个 token 就是提交号，其余 token 都是路径。
     let commits = 0;
     // `-z` 只管用 NUL 分隔，**不管 git 在提交头和它的路径列表之间插的那个换行**——实测格式
     // 是 `\0<hash>\0\n<path>\0<path>\0`。那个换行只在**紧跟提交头的第一条路径**前面出现一
@@ -229,7 +233,7 @@ export async function committedInWindows(
     // 「文件名真的以换行开头」的路径改写掉，`stat` 跟着查错地方（第 2 轮审查 N1）。
     let afterHeader = false;
     for (const raw of stdout.split("\0")) {
-      if (/^[\r\n]*[0-9a-f]{40}$/.test(raw)) {
+      if (/^[\r\n]*\x01[0-9a-f]{40}$/.test(raw)) {
         commits += 1;
         afterHeader = true;
         continue;

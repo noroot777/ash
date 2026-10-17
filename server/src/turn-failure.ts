@@ -30,6 +30,11 @@ export async function freshRunFailureTarget(task: typeof tasks.$inferSelect, run
     id: sessionId, taskId: task.id, role: "single", agentType, executor: agentType,
     runOwnerUserId, cwd: null, startedAt: at, endedAt: at,
     exitStatus: 1, activeMs: 0,
+    // 这一行是**诊断行**(一个回合连起跑都没成,见 isDiagnosticSession):它没跑过任何回合,
+    // 所以回合基数是确定的 0。不写就是 NULL,产物面板那边读作「升级那一步没跑成」,而且下次
+    // 启动的回填会把它改说成「升级之前就跑过」——两句都不对。产物读端另有一道按
+    // isDiagnosticSession 整行排除的闸,这里钉下来是为了不依赖那一道（本轮审查不拦项）。
+    turnsBase: 0, turnsBaseApprox: false,
   });
   return { sessionId, agentType, role: "single" as const };
 }

@@ -125,16 +125,35 @@ export function heldTurns(lead: Lead): string[] {
   return lead.held ? [...lead.held] : [];
 }
 
-/** 放掉这台手上**全部**回合身份。 */
-function releaseAll(lead: Lead): void {
+/** 放掉这台手上**全部**回合身份,并把放掉的那些**交回调用方**（队首在前）。 */
+function releaseAll(lead: Lead): string[] {
   const held = lead.held;
-  if (!held?.size) return;
-  for (const at of [...held]) clearTurnActive(lead.sessId, at);
+  if (!held?.size) return [];
+  const released = [...held];
+  for (const at of released) clearTurnActive(lead.sessId, at);
   held.clear();
+  // 这里**故意不**跟着 `adoptFront`：`busy` 要留在真上。摘牌的台事件流仍在消费,一松口
+  // 消费者就会对它之后每一条事件各补开一个回合（同 `holdTurn` 的 closedScopes 分支）。
+  return released;
 }
 
-/** 这台的作用域结束了（关台/换台）：放掉全部身份，并且从此不再接受新的持有。 */
-export function closeLeadTurns(lead: Lead): void {
+/**
+ * 这台的作用域结束了（关台/换台）：放掉全部身份,并且从此不再接受新的持有。
+ *
+ * 返回这台**在整个生命周期里**被这条路放掉的全部身份（含先前几次调用放掉的）。异常收尾要
+ * 按这一份补区间：放手与收尾**不在同一个时刻**——换台那一路是 `attachLead` 接管的那一瞬
+ * 就 `retireLead` 了,旧进程的 `close` 事件要再过一会儿才到,等 `closeLead` 去读 `held` 时
+ * 它早就空了。那时只能退回 `lead.turnStart` 那个单值,于是**被打断/还排着的那几轮永远留在
+ * `ended_at = NULL`**,读端把它们当「崩了没收口」的缺口报出来,整条区间跟着放宽
+ * （本轮审查第 3 条,已实测）。所以身份得交回来,而且得**记在台上**而不是只当返回值——
+ * 放手的那次调用（`retireLead`）并不是补区间的那次调用（`closeLead`）。
+ */
+export function closeLeadTurns(lead: Lead): string[] {
   closedScopes.add(lead);
-  releaseAll(lead);
+  const released = releaseAll(lead);
+  if (released.length) {
+    const stash = (lead.releasedTurns ??= []);
+    for (const at of released) if (!stash.includes(at)) stash.push(at);
+  }
+  return lead.releasedTurns ? [...lead.releasedTurns] : [];
 }

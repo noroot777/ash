@@ -233,10 +233,11 @@ export function clearTurnActive(sessionId: string, startedAt: string | null | un
 export function closeSessionTurns(sessionId: string): void {
   const seen = activeTurns.get(sessionId);
   if (seen) for (const at of [...seen.starts]) clearTurnActive(sessionId, at);
-  else {
-    // 没有活动身份也要留下「已关闭」的水位,否则迟到的开始事件照样能把它登记回来。
-    rememberClosed(sessionId, now());
-  }
+  // **不管手上有没有活动身份,水位都抬到「现在」**。只按活动起点抬的话,一个**已经分配、
+  // 还没来得及被持有**的更晚起点会绕过这道闸被登记回来（那条身份此后谁都不会来注销）。
+  // 这条路的语义就是「这条会话到此刻为止不再有任何回合在跑」,水位理应照这一刻记
+  // （本轮审查不拦项）。会话之后真又开跑时分配器只会给出更晚的起点,挡不住它。
+  rememberClosed(sessionId, now());
 }
 
 /**

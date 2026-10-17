@@ -420,6 +420,21 @@ async function importValidated(
     contextUsed: s.contextUsed,
     contextWindow: s.contextWindow,
     contextWindowEstimated: s.contextWindowEstimated,
+    // 逐回合计数**显式钉成「本机零历史」**,别留 NULL（本轮审查第 4 条）。
+    //
+    // 载荷里不带回合行(下面那条 delete 还会把本机残留的清掉),所以导进来的会话在本机一行
+    // 回合记录都没有——产物面板对这种行走的是 legacy 那一档「只记下了会话的起止、没有逐回合
+    // 记录」,措辞恰如其实。真正会错的是**计数**那两列:
+    //   • 留 NULL = 「升级那一步没跑成」。迁移明明跑成了,这条行只是从别的机器来的,话说错了；
+    //   • 而且不稳：下一次启动 `backfillTurnsBase` 会把 NULL 回填成 `approx = 1`,同一条会话
+    //     的说法变成「升级之前就跑过」——重启一次换一种说法（`db/migrate-session-turns.ts`）。
+    // `base = 0` + `approx = false` 说的是「**本机**没有未留痕的回合」,这是真的:本机每一轮
+    // 都从 openTurn 落行。对端跑过的那些回合不在这台机器上,它们的产物也不在这个工作目录里,
+    // 把那段未知摊进来只会让区间向导入**之前**放宽,那期间在同一目录干活的是别人。
+    // `turnsStarted`/`turnsLost` 照旧留 NULL：第一次在本机跑回合时加数语句自己从 0 起
+    //（`COALESCE(turns_started, 0) + 1`）,于是对账从那一刻起就是精确的。
+    turnsBase: 0,
+    turnsBaseApprox: false,
   }));
   // 自由工作流的审查历史(翻译成本机行,落库在下面两条路径里各自执行)。
   const freeWorkflowRows = await buildFreeWorkflowRows(m.task.id, m.freeWorkflow, notes);

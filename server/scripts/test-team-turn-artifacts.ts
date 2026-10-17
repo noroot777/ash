@@ -15,6 +15,14 @@
 //      后开那一轮被前一轮的结束事件提前收口 —— 它做好的海报永久漏在清单外（第 2 轮 F1）。
 //   ④ 一轮结束之后迟到的开始信息:把已经终结的身份重新排进队列,下一次结束就关错人 —— 真正
 //      刚结束的那一轮一直留在活动册上,读端把区间开到无穷,之后别人做的图全算成它的（第 2 轮 F2）。
+//   ⑤ **正常关台**之后迟到的开始信息:这台没被接管,所以不摘牌,老判据（只看 retired）放它过去
+//      —— 开出来的身份进了活动册,而关掉的台不会再有任何结束事件来注销它。读端于是从那个起点
+//      开到无穷**且不标 approx**,停工之后别人在同一个目录里做的东西全算成它的（本轮第 1 条）。
+//   ⑥ 换台（工作目录被抽走）：摘牌在接管那一瞬就发生,旧进程的 close 事件晚一步才到。收尾那
+//      一下去读「手上攥着什么」时队列早空了,只补了一个单值,被打断和还排着的那几轮永远留在
+//      `ended_at = NULL`,面板报假缺口、区间跟着放宽（本轮第 3 条）。
+//   ⑦ 回合在「开始那半边还没写完」时就收口了:开始那半边继续往下写,把已经收口的身份塞回活动
+//      册、把任务状态改回 running —— 又回到「从那个起点开到无穷」（本轮第 2 条）。
 //
 // 跑:npm -w server run test:turn-identity（链在它后面）
 import assert from "node:assert/strict";
@@ -38,8 +46,8 @@ mkdirSync(process.env.ASH_RUNS_DIR, { recursive: true });
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
-const { freshTurnFields, nextTurnStart, openTurn, activeTurnStarts } = await import("../src/session-turns.js");
-const { heldTurns } = await import("../src/team/lead-turns.js");
+const { freshTurnFields, nextTurnStart, openTurn, recordTurnSpan, activeTurnStarts } = await import("../src/session-turns.js");
+const { heldTurns, releaseHeldTurn } = await import("../src/team/lead-turns.js");
 const { createSessionConsumer } = await import("../src/team/session-consumer.js");
 const { attachLead, deliverToLead, teamIsLive } = await import("../src/team/session.js");
 const { openCodexResident } = await import("../src/executors/codex-resident.js");
@@ -380,6 +388,131 @@ try {
     push({ kind: "done", exitStatus: 0 });
     await until(() => !teamIsLive(taskId), "这台收完台");
     ok("结束之后迟到的开始信息:不重开所有权,下一次结束关的是它自己那一轮");
+  }
+
+  // 迟到的开始信息走的是真正的 `beginTurn`（开台路径调的就是它）。自己的 leads 映射里放着
+  // 这台,免得它走进「已经被接管」那条岔路。
+  const consumerFor = (taskId: string, desk: unknown) => createSessionConsumer({
+    leads: new Map([[taskId, desk]]) as never,
+    adoptInbound: async () => {},
+    flushUnqueued: async () => {},
+    releasePending: () => {},
+  });
+  const turnRows = async (sessId: string) => (await dbClient.execute(
+    `SELECT started_at, ended_at FROM session_turns WHERE session_id='${sessId}' ORDER BY started_at`,
+  )).rows;
+
+  // ── ⑤ 正常关台之后迟到的开始信息：不留一个没人注销的活动身份（本轮审查第 1 条）──────────
+  {
+    const taskId = "team-artifacts-closed-desk";
+    const sessId = "sess-closed-desk";
+    const root = await seed("closed-desk", taskId, sessId);
+    const { handle, push } = pushHandle();
+    const desk = lead(taskId, sessId, root, handle, openedAt);
+    attachLead(desk as never);
+    await openTurn({ sessionId: sessId, taskId, cwd: root, startedAt: openedAt });
+    push({ kind: "turnEnd" });
+    await until(() => !activeTurnStarts(sessId).size, "首轮收口");
+    push({ kind: "done", exitStatus: 0 });
+    await until(() => !teamIsLive(taskId), "这台正常关台");
+    // **这就是老判据拦不住它的原因**：正常关台没有人来接管,所以不摘牌。
+    assert.equal(desk.retired, false, "前置条件:正常关台不摘牌");
+    const closed = (await db.select().from(sessions).where(eq(sessions.id, sessId))).at(0)!;
+    assert(closed.endedAt, "前置条件:关台时把收尾时刻写在了会话行上");
+    // 开台那条链上排在后面的异步回调（库忙一下就够）这才轮到它这一句。
+    const late = nextTurnStart(sessId);
+    await consumerFor(taskId, desk).beginTurn(desk as never, late);
+    assert.deepEqual([...activeTurnStarts(sessId)], [],
+      "关了的台不许再往活动册里塞身份：这台再也不会有结束事件来注销它,读端会把区间从那个起点开到无穷");
+    const again = (await db.select().from(sessions).where(eq(sessions.id, sessId))).at(0)!;
+    assert.equal(again.endedAt, closed.endedAt, "也不许把会话行改回「正在跑」");
+    assert.deepEqual((await turnRows(sessId)).map((row) => row.started_at), [openedAt, late],
+      "那一行持久记录照落——开过就是开过,只是它不算「正在跑」");
+    // 停工之后别人在同一个目录里画一张（落定余量之外）。
+    await pause(3200);
+    writeFileSync(join(root, "output", "after-close.svg"), svg("after close"));
+    const after = await listing(taskId, root);
+    assert.deepEqual(paths(after), [],
+      `这台关了之后别人做的东西不该算成它的,实际清单：${JSON.stringify(paths(after))} / ${JSON.stringify(after.incomplete)}`);
+    assert(after.incomplete.some((line) => line.includes("收尾时刻")),
+      `那一行迟到的开始记录确实没有收尾,面板得照实说出来,实际：${JSON.stringify(after.incomplete)}`);
+    ok("正常关台之后迟到的开始信息:只落行、不进活动册,之后别人的产出不被收进来");
+  }
+
+  // ── ⑥ 换台：手上攥着的每一轮都要补上自己的区间（本轮审查第 3 条）────────────────────────
+  {
+    const taskId = "team-artifacts-takeover";
+    const sessId = "sess-takeover";
+    const root = await seed("takeover", taskId, sessId);
+    const { handle, push } = pushHandle();
+    const old = lead(taskId, sessId, root, handle, openedAt);
+    attachLead(old as never);
+    await openTurn({ sessionId: sessId, taskId, cwd: root, startedAt: openedAt });
+    assert.equal(await deliverToLead(taskId, "插话改方向"), true, "前置条件:插话进了调度台");
+    await until(() => heldTurns(old as never).length >= 2,
+      "手上同时攥着两轮（首轮还没收口,插话那一轮已经开跑）");
+    const held = heldTurns(old as never);
+    // 工作目录被抽走那条路：新台当场接管同一行会话,旧台**这一刻**就被摘牌,而旧进程的
+    // close 事件还在路上 —— 所以收尾那一下再去读 `held` 已经什么都没有了。
+    const fresh = lead(taskId, sessId, root, pushHandle().handle, nextTurnStart(sessId));
+    attachLead(fresh as never);
+    assert.equal(old.retired, true, "前置条件:旧台被摘牌");
+    assert.deepEqual(heldTurns(old as never), [], "前置条件:摘牌当场清空了队列");
+    push({ kind: "done", exitStatus: 0 }); // 旧进程这才退出
+    for (let tries = 0; tries < 300; tries += 1) {
+      if (!(await turnRows(sessId)).some((row) => !row.ended_at)) break;
+      await pause(20);
+    }
+    const rows = await turnRows(sessId);
+    assert.deepEqual(rows.map((row) => row.started_at), [...held].sort(),
+      `手上那两轮都该有自己的一行,实际：${JSON.stringify(rows)}`);
+    assert(rows.every((row) => row.ended_at),
+      "换台收尾必须把它手上攥着的**每一轮**都补上区间（只补一个单值的话,被打断/还排着的那几轮"
+      + `永远留在 ended_at = NULL,面板报假缺口、区间跟着放宽）,实际：${JSON.stringify(rows)}`);
+    ok("换台：摘牌时交回的身份在收尾时全部补上区间,一个都不漏");
+  }
+
+  // ── ⑦ 开始那半边还没写完,这一轮就收口了（本轮审查第 2 条）──────────────────────────────
+  {
+    const taskId = "team-artifacts-begin-race";
+    const sessId = "sess-begin-race";
+    const root = await seed("begin-race", taskId, sessId);
+    const { handle, push } = pushHandle();
+    const desk = lead(taskId, sessId, root, handle, openedAt);
+    attachLead(desk as never);
+    await openTurn({ sessionId: sessId, taskId, cwd: root, startedAt: openedAt });
+    push({ kind: "turnEnd" });
+    await until(() => !activeTurnStarts(sessId).size, "首轮收口");
+    // 这一轮收尾之后任务落了终态。开始那半边要是继续往下写,它会把状态改回 running。
+    await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, taskId));
+    const at = nextTurnStart(sessId);
+    // **不 await**：同步段跑到第一次写库（`updateOwnSession`）就停在那儿。
+    const begin = consumerFor(taskId, desk).beginTurn(desk as never, at);
+    assert.deepEqual([...activeTurnStarts(sessId)], [at], "前置条件:这一轮已经登记在册");
+    // 结束事件在**这一刻**到达。`endTurn` 开头那两句就是下面这两句,所以这里直接调它们:靠推
+    // 事件只能碰运气撞上这个窗口,而这两个都是生产函数,状态迁移跟真结束一模一样。
+    const endIso = new Date().toISOString();
+    assert.equal(releaseHeldTurn(desk as never), at, "前置条件:结束事件关掉的就是这一轮");
+    await recordTurnSpan({ sessionId: sessId, taskId, cwd: root, startedAt: at, endedAt: endIso });
+    await begin;
+    assert.deepEqual([...activeTurnStarts(sessId)], [],
+      "已经收口的身份不许被开始那半边塞回活动册（那之后谁都不会再来注销它,读端从它的起点开到无穷）");
+    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+    assert.equal(task.status, "paused", "也不许把已经收尾的任务状态改回 running");
+    const rows = await turnRows(sessId);
+    assert(rows.every((row) => row.ended_at),
+      `两轮都收过口（开始那半边只补行,不会把收口抹掉）,实际：${JSON.stringify(rows)}`);
+    // 它停工之后别人在同一个目录里画一张。
+    await pause(3200);
+    writeFileSync(join(root, "output", "after-race.svg"), svg("after race"));
+    const after = await listing(taskId, root);
+    assert.deepEqual(paths(after), [],
+      `这一轮早收口了,之后别人做的东西不该算成它的,实际清单：${JSON.stringify(paths(after))} / ${JSON.stringify(after.incomplete)}`);
+    assert.deepEqual(after.incomplete, [],
+      `两轮都有完整记录,面板不该说有缺口,实际：${JSON.stringify(after.incomplete)}`);
+    push({ kind: "done", exitStatus: 0 });
+    await until(() => !teamIsLive(taskId), "这台收完台");
+    ok("开始那半边撞上收口:不塞回活动册、不改回 running");
   }
 
   console.log("test:team-turn-artifacts ok");

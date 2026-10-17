@@ -204,8 +204,6 @@ export async function runWindows(
     /** 回合身份（起点字符串）去重后的集合。**不是行数**：重复行不能当成「多跑了一轮」，
      *  那正好能抵掉另一轮的真缺口（第 4 轮审查对 COUNT 口径的提醒）。 */
     starts: Set<string>;
-    /** 开了、但库里没有收尾时刻的那些回合的起点（毫秒）。 */
-    open: number[];
     earliest: number;
     latest: number;
   }>();
@@ -213,10 +211,11 @@ export async function runWindows(
   for (const turn of turnRows) {
     const at = Date.parse(turn.startedAt);
     const seen = coverage.get(turn.sessionId);
-    const slot = seen ?? { starts: new Set<string>(), open: [], earliest: at, latest: at };
+    const slot = seen ?? { starts: new Set<string>(), earliest: at, latest: at };
     if (!seen) coverage.set(turn.sessionId, slot);
     slot.starts.add(turn.startedAt);
-    if (!turn.endedAt && Number.isFinite(at)) slot.open.push(at);
+    // 「开了没收口」那一档不在这里攒：下面按 `recorded`（过了目录核对的那些行）逐行算,
+    // 要的是整行而不只是起点。这儿曾经留着一个没人读的 `open: number[]`（本轮审查不拦项）。
     if (Number.isFinite(at)) {
       slot.earliest = Math.min(slot.earliest, at);
       slot.latest = Math.max(slot.latest, at);

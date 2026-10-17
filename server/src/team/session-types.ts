@@ -37,6 +37,14 @@ export interface Lead {
    * 有权层按需建；判据不靠这个字段在不在,靠 `holdTurn`/`releaseHeldTurn` 成对。
    */
   held?: Set<string>;
+  /**
+   * 被「作用域结束」那条路放掉的身份（`closeLeadTurns`,队首在前,去重）。只由
+   * `lead-turns.ts` 写,`closeLead` 读它来补区间。
+   *
+   * 为什么要留这一份:放手与异常收尾不在同一时刻——换台那一路在 `attachLead` 当场摘牌,
+   * 旧进程的 `close` 还在路上。详见 `closeLeadTurns` 的注释。
+   */
+  releasedTurns?: string[];
   pending: PendingInbound[];
   notices: { text: string; at: string; level?: "notice" }[];
   pendingCredential: ({ cliSessionId: string } & ResumeFields) | null;

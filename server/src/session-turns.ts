@@ -8,6 +8,7 @@ export {
   clearTurnActive,
   closeSessionTurns,
   closeTaskTurns,
+  closedAlready,
   markTurnActive,
   nextTurnStart,
   primeTurnStarts,
@@ -193,18 +194,29 @@ export const resumedTurnFields = (_at: string) => ({
  *
  * **幂等**：同一 (session_id, started_at) 再调一次既不插行也不加数（唯一索引挡插入、
  * `NOT EXISTS` 挡加数）。接回、重试、团队那边同起点再开一次台都会重放同一个身份。
+ *
+ * `register: false` = **只补那一行持久记录,不登记活动身份**。给「迟到的开始信息」用：那个
+ * 身份在所有权层已经终结（刚被结束事件关掉、整台已经关了/摘了牌),行照落——开过就是开过,
+ * 而且按身份幂等——但它绝不是「正在跑」。默认的 `true` 顺手登记会在那条路上留下一个**没有
+ * 任何所有者会来注销**的活动身份,读端 `live` 据此把一条已经死掉的会话判成一直在写,区间
+ * 从那个起点开到无穷**且不标 approx**,停工之后别人在同一目录里做的东西全算成它的,面板一个
+ * 字都不说（本轮审查第 1 条,已实测）。
+ *
+ * 这一档同时也不算「新的一轮」,所以不做撞号判断：它本来就是在重放一个已经终结的身份,照水位
+ * 推断会在水位被淘汰过之后凭空记一笔 `turns_lost`（本轮审查不拦项）。
  */
 export async function openTurn(input: {
   sessionId: string;
   taskId: string;
   cwd: string | null | undefined;
   startedAt: string | null | undefined;
-}): Promise<void> {
+}, opts: { register?: boolean } = {}): Promise<void> {
   if (!input.startedAt) return;
   const startedAt = input.startedAt;
+  const register = opts.register ?? true;
   // 先登记活动身份：登记得比写库早一点没有坏处,反过来晚一点就有——那个窗口里面板会把
   // 正在写的这一轮算成「崩了没收口」。
-  markTurnActive({ sessionId: input.sessionId, taskId: input.taskId, startedAt });
+  if (register) markTurnActive({ sessionId: input.sessionId, taskId: input.taskId, startedAt });
   // 上一轮欠着的身份在这里补：那时库正坏着,现在也许好了。放在新回合落账**之前**,这样
   // 「后来成功的一轮」永远不会先把两个数凑相等再让欠账无声无息（第 6 轮审查必须修 2）。
   // 补的恰好是同一个身份时（库恢复后用同一个 `startedAt` 重试）这一步就把它落完了,下面
@@ -215,7 +227,11 @@ export async function openTurn(input: {
     // 同一个身份完全可能已经被收口了（收尾与迟到的开始本来就交错),那时库里那条收过口的行
     // 恰恰是它自己的,不是撞号。中间一让出执行权,F1 那个并发收尾就会被错报成撞号。
     // `persistTurn` → `writeTurnRow` → `dbClient.batch` 之间全同步,所以这个判据跟批是同序的。
-    const wrote = await persistTurn({ ...input, startedAt }, null, !closedAlready(input.sessionId, startedAt));
+    const wrote = await persistTurn(
+      { ...input, startedAt },
+      null,
+      register && !closedAlready(input.sessionId, startedAt),
+    );
     if (wrote === "collided") {
       console.warn(
         `[ash] 回合起点撞上一条已结束的历史记录（重启 + 墙钟回拨?）,这一轮按未知披露: ${input.sessionId} @ ${startedAt}`,
@@ -357,7 +373,11 @@ async function persistTurn(
  *
  * 持久化的形式是**补那一行开始记录**,不是往 `sessions.turns_lost` 上加一个数：数字欠账没有
  * 身份,同一个身份后来重试成功也消不掉它,读端只能继续把整条会话寿命算成宽的（第 1 轮审查
- * F2,机制见 `unconfirmed` 的注释）。`turns_lost` 从此只是**旧版留下的只读历史**。
+ * F2,机制见 `unconfirmed` 的注释）。
+ *
+ * 所以 `turns_lost` 只剩**两类写入**:旧版留下的历史,以及撞上历史身份那一档（`writeTurnRow`
+ * 的第 4 条语句）—— 后者正好相反,它是一笔**永远补不回来**的缺口,没有任何重试能消掉它,
+ * 所以无身份的计数恰好就是它该有的形状。
  */
 async function noteTurnLost(input: TurnStartInput, cause: unknown): Promise<void> {
   console.warn(`[ash] 回合开始没落盘（这一轮按缺口披露）: ${String(cause)}`);
