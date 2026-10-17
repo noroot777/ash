@@ -29,7 +29,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, TeamConfig } from "@ash/shared";
 import { TEAM_DEFAULTS } from "@ash/shared";
-import { freshTurnFields, nextTurnStart, openTurn, resumedTurnFields } from "../session-turns.js";
+import { freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "../session-turns.js";
 import { holdTurn } from "./lead-turns.js";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions, groups } from "../db/schema.js";
@@ -453,6 +453,10 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   // 授权现读、且读在开台之前的最后一刻:正文(rawMessage)拼好之后还隔着 runEnv 和
   // prepareResume 两个 await,在那边就把授权拼死的话,用户在开台期间收回授权拦不住
   // (同第 3 轮审查 P1 的续聊路径)。
+  // 接回同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,
+  // 墙钟又恰好回拨到上一轮开工那一刻时,不接就会把那个历史身份原样重发一遍（第 1 轮审查 F2,
+  // 机制见 session-turns.ts 的 primeTurnStarts）。放在同步段之前:它要读库。
+  if (resuming) await primeTurnStarts(prev!.id);
   const browserGrant = await browserGrantForProject(project.id);
   // 开台前的最后一道闸:这一句之后到 openResident 之间不再有 await。上面那几个 await
   // 期间可能来过「停止全组」,那时这台调度台还没出生、谁也杀不到它,停止只落在这一次开台

@@ -7,7 +7,7 @@ import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
-import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, resumedTurnFields } from "./session-turns.js";
+import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
 import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
@@ -407,6 +407,11 @@ export async function continueTask(
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
     const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan, preserveState: preserveCliState });
+    // 复用同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,
+    // 墙钟又恰好回拨到上一轮开工那一刻时,不接就会把那个历史身份原样重发一遍 —— 开始行被
+    // 唯一键合进旧行、收尾看见已收口直接返回,这一轮在库里一个字都没有（第 1 轮审查 F2,
+    // 机制见 session-turns.ts 的 primeTurnStarts）。
+    if (resuming) await primeTurnStarts(prev!.id);
     // 顺序定死:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论 → spawn。为什么只能这
     // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);

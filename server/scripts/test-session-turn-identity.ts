@@ -233,7 +233,10 @@ const resumeSame = async (taskId: string, text: string) => {
     // **一笔计数都别预种**：两轮各自由写端加（计数跟那行回合记录同批写,见 session-turns.ts
     // —— 开始行那条路和收尾补插那条路共用同一个批）。替它们种一笔就等于多加了一次,反而
     // 凭空多出一个缺口。
-    cwd: root, startedAt: stamp(0), endedAt: null, turnStartedAt: stamp(120), turnsStarted: 0, turnsBase: 0,
+    // `turnsBaseApprox: false` 不能省：生产里每条真起跑的会话行都是 `freshTurnFields` 建的
+    // （= 迁移确认过、没有升级前的未知历史）。空着就是「迁移还没确认」那一档,读端照未知披露。
+    cwd: root, startedAt: stamp(0), endedAt: null, turnStartedAt: stamp(120),
+    turnsStarted: 0, turnsBase: 0, turnsBaseApprox: false,
     activeMs: 30 * 60000, exitStatus: null,
   });
   // 第一轮按生产那条路走完整两步（开始落行 → 收尾补 ended_at）。
@@ -297,7 +300,8 @@ const resumeSame = async (taskId: string, text: string) => {
     // 只替**第二轮**预种那一笔：它的记录整条没写进去,所以没人会替它加。第一轮那一笔由下面
     // 那次 `recordTurnSpan` 自己加（没有开始行 ⇒ 走补插分支,行与计数同批）。
     cwd: root, startedAt: stamp(0), endedAt: stamp(250), turnStartedAt: stamp(240),
-    turnsStarted: 1, turnsBase: 0, activeMs: 30 * 60000, exitStatus: 0,
+    // approx 同 ④：这一组要测的是「重复行顶不掉真缺口」,不是「迁移没确认」那一档。
+    turnsStarted: 1, turnsBase: 0, turnsBaseApprox: false, activeMs: 30 * 60000, exitStatus: 0,
   });
   await recordTurnSpan({ sessionId: "session-TiDupes00001", taskId: "TiDupes00001", cwd: root, startedAt: stamp(0), endedAt: stamp(10) });
   // 唯一索引先拦一道：同一个回合再收一次口（接回、重试、旧调度台也来收）只更新那一行。

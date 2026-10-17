@@ -181,7 +181,8 @@
     "test:monitor-races": "tsx scripts/test-monitor-races.ts",
     "test:db-tx": "tsx scripts/test-db-tx-ownership.ts",
     "test:turn-identity": "tsx scripts/test-session-turn-identity.ts && tsx scripts/test-team-turn-artifacts.ts",
-    "test:turn-migration": "tsx scripts/test-session-turn-migration.ts"
+    "test:turn-migration": "tsx scripts/test-session-turn-migration.ts",
+    "test:turn-persist": "tsx scripts/test-session-turn-persist.ts"
   },
   "dependencies": {
     "@ash/shared": "*",

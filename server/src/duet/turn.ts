@@ -14,7 +14,7 @@ import { eq, sql } from "drizzle-orm";
 import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
-import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
+import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
@@ -176,6 +176,9 @@ export async function runTurn(args: {
   // 再有任何 await。把 await 塞进 run 的参数表达式里,停止请求就会落进那个窗口:stopTask
   // 返回 true、已有执行器也被杀了,这一轮却照样起了一个新的(第 3 轮审查 P2,我自己上一轮
   // 接线时引入的)。同一条不变量也管着下面那句 isCanceling。
+  // 复用同一行会话之前把库里用过的最晚起点接回水位（理由同 orchestrator,见
+  // session-turns.ts 的 primeTurnStarts）。必须排在下面那条「不再有 await」之前。
+  if (reuseRowId) await primeTurnStarts(reuseRowId);
   const browserGrant = await browserGrantForTask(taskId);
   // 版本读取与持久说明之间有 await；这期间收到停止请求也不能再起下一轮。
   if (isCanceling(taskId)) throw new CanceledRun();

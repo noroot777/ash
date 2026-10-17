@@ -7,6 +7,7 @@ import { worktreePathFor } from "./git.js";
 import { pathLens, type PathLens } from "./task-artifact-paths.js";
 import { runWindows, type RunWindow } from "./task-artifact-windows.js";
 import { isolatedWorkspaceOwner } from "./task-workspace.js";
+import { isDiagnosticSession } from "./turn-failure.js";
 
 // 「这个文件是这个任务弄出来的」凭什么成立——产物面板的**归属证据**都在这里。
 // 扫描在 `task-artifact-scan.ts`，三档合成在 `task-artifacts.ts`。
@@ -107,14 +108,27 @@ async function workspaceRunOwners(task: ArtifactTask): Promise<ArtifactTask[]> {
   return owners;
 }
 
-/** 任务第一次开跑的时刻。没有会话（还没跑过）时返回 null。 */
+/**
+ * 任务第一次**真的开跑**的时刻。没有会话（还没跑过）时返回 null。
+ *
+ * **诊断会话不算跑过**：启动前就失败时会建一条只为把错误显示出来的会话行（`turn-failure.ts`
+ * 的 `freshRunFailureTarget`）。拿它当「第一次开跑」,面板上一个压根没跑起来的任务就有了开跑
+ * 时刻,跟区间那一档的判据还彼此矛盾。判据和 `runWindows` 用的是同一个,不另写一份
+ * （第 1 轮审查 F4）。所以这里不能 `limit(1)` —— 第一条可能正是那条诊断行。
+ */
 async function firstRunAt(taskId: string): Promise<string | null> {
-  const first = (await db.select({ startedAt: sessions.startedAt })
-    .from(sessions)
+  const rows = await db.select({
+    startedAt: sessions.startedAt,
+    endedAt: sessions.endedAt,
+    turnStartedAt: sessions.turnStartedAt,
+    cliSessionId: sessions.cliSessionId,
+    commandLine: sessions.commandLine,
+    activeMs: sessions.activeMs,
+    exitStatus: sessions.exitStatus,
+  }).from(sessions)
     .where(eq(sessions.taskId, taskId))
-    .orderBy(asc(sessions.startedAt))
-    .limit(1)).at(0);
-  return first?.startedAt ?? null;
+    .orderBy(asc(sessions.startedAt));
+  return rows.find((row) => !isDiagnosticSession(row))?.startedAt ?? null;
 }
 
 export async function resolveArtifactScope(task: ArtifactTask, root: WorkspaceRoot): Promise<ArtifactScope> {

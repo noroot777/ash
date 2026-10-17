@@ -5,6 +5,7 @@ import { sessionTurns, sessions } from "./db/schema.js";
 import type { WorkspaceRoot } from "./file-browser.js";
 import type { PathLens } from "./task-artifact-paths.js";
 import { activeTurnStarts, unconfirmedTurns } from "./session-turns.js";
+import { isDiagnosticSession } from "./turn-failure.js";
 
 // 「它什么时候在写这个目录」——共享工作区上唯一能把任务分开的线索。归属证据的另一档
 // （目录独占）和入口在 `task-artifact-scope.ts`。
@@ -132,6 +133,11 @@ export async function runWindows(
       startedAt: sessions.startedAt,
       endedAt: sessions.endedAt,
       turnStartedAt: sessions.turnStartedAt,
+      // 下面三列只为**认出诊断会话**（`isDiagnosticSession`）：少一列就认不出来,于是一个
+      // 压根没跑起来的任务也会拿到运行区间（第 1 轮审查 F4）。
+      cliSessionId: sessions.cliSessionId,
+      commandLine: sessions.commandLine,
+      exitStatus: sessions.exitStatus,
       turnsStarted: sessions.turnsStarted,
       turnsLost: sessions.turnsLost,
       turnsBase: sessions.turnsBase,
@@ -178,7 +184,10 @@ export async function runWindows(
 
   const spans: RunWindow[] = [];
   /** 各类缺口各记一次数：面板上要说清楚「哪一段算不准」，但不能一条会话刷一行。 */
-  const counts = { stale: 0, legacy: 0, early: 0, lastTurn: 0, missing: 0, unsettled: 0, upgraded: 0, monitor: 0 };
+  const counts = {
+    stale: 0, legacy: 0, early: 0, lastTurn: 0, missing: 0, unsettled: 0,
+    upgraded: 0, unmigrated: 0, monitor: 0,
+  };
 
   /**
    * 回合记录分两份收：
@@ -232,6 +241,14 @@ export async function runWindows(
   }
 
   for (const row of sessionRows) {
+    // **只为「把启动错误显示出来」而建的那条诊断会话不是运行证据**（`turn-failure.ts` 的
+    // `freshRunFailureTarget`:没有 CLI 会话、没有命令行、没有回合起点,`active_ms=0`、
+    // `exit_status=1`、`ended_at` 就等于 `started_at`）。照常往下走的话它没有逐回合记录,
+    // 于是退回 `lifespan()`——一个**压根没跑起来**的任务因此拿到 [报错时刻, +10 分钟] 的
+    // 候选区间,把那十分钟里别人在同一个目录做的东西全列成它的产物（第 1 轮审查 F4）。
+    // 判据**复用已有那一个**,不在这里另写一份:导入、快照、跨机导入都可能带进这种行,
+    // 所以要挡在这条公共的证据解析上,而不是挡在某个起跑入口或某一个界面里。
+    if (isDiagnosticSession(row)) continue;
     const verdict = await dirVerdict(row.cwd, row.worktreePath);
     if (verdict === "elsewhere") continue;
     const start = Date.parse(row.startedAt ?? "");
@@ -310,7 +327,12 @@ export async function runWindows(
       if (live && activeStarts.has(turn.startedAt)) continue;
       // 开了没收口,又不是在飞：收尾那一下没写成。末端取**下一个回合的起点**（那一刻它
       // 肯定已经停了）,没有下一轮就按会话收尾时刻、再不行才兜底。这一段是估的,标 approx。
-      const next = allStarts.filter((at) => at > openAt + TURN_SKEW_MS).sort((a, b) => a - b)[0];
+      // 这里比的两个数**同源**（都来自 `session_turns.started_at`,而且已经按身份去重）,所以
+      // 「确实是另一个身份」只要 `>` 就够,不该再吃那 1 秒抖动容差 —— 那个容差是给「两个来源
+      // 的时间可能差几百毫秒」用的（会话行的 `turn_started_at` 对回合起点,见 TURN_SKEW_MS）。
+      // 混用的后果：未收口那一轮 t 和紧接着正常跑完的 t+200ms 之间,已知的下一份生命周期被
+      // 跳过,区间一路估到很久以后的第三轮,把第二轮的产出连停工时间一起收进来（第 1 轮审查 N2）。
+      const next = allStarts.filter((at) => at > openAt).sort((a, b) => a - b)[0];
       const end = Number.isFinite(next)
         ? next
         : (Number.isFinite(ended) ? Math.max(ended + SETTLE_MS, openAt) : openAt + UNSETTLED_RUN_MS + TURN_GRACE_MS);
@@ -322,9 +344,19 @@ export async function runWindows(
     // 判据是 `turns_base_approx` 而不是「base 大于 0」：迁移那一刻一行记录都没有的老会话
     // 回填出来的下界正好是 0,跟「升级后新建、确定没有历史」长得一模一样,照 base 判就把
     // 那种会话的未知历史说成了「确定没有」（第 5 轮审查必须修 2.2）。
-    if (row.turnsBaseApprox) counts.upgraded += 1;
+    // **迁移确认过没有,是这一档的前提**：`turns_base_approx` 有值才算确认过（0 = 升级之后
+    // 新建的、1 = 回填过）。NULL = 既没经过本版写端、也没被回填成功 —— 而那条迁移自己 catch
+    // 掉一切只 warn（抛出去 = 整台 ash 起不来,见 db/migrate-session-turns.ts）,所以「这一列
+    // 还是 NULL」就是**迁移没跑完**留在库里的那份可核验证据。那种行上的 `turns_started` 是
+    // 上一版口径（会漏起跑入口、又会重复加数）,拿它做精确减法就会出现「两条偏小的旧计数正好
+    // 抵掉两条已存行」,中间真缺的那一轮一句话都不说（第 1 轮审查 F3）。
+    const migrated = row.turnsBaseApprox != null;
+    if (migrated && row.turnsBaseApprox) counts.upgraded += 1;
+    if (!migrated) counts.unmigrated += 1;
     // 在飞那一轮不必在这里另行扣除：它的开始行早就落了,`starts` 和 `expected` 两边都含它。
-    const expected = row.turnsStarted == null ? null : (row.turnsBase ?? 0) + row.turnsStarted;
+    const expected = !migrated || row.turnsStarted == null
+      ? null
+      : (row.turnsBase ?? 0) + row.turnsStarted;
     // 两种缺口加在一起：
     //   • 对账差 —— 计数说开过 N 轮,表里只有 M 个身份（有人绕过写入端改表,或者唯一索引
     //     没建上时的重复行被去重后反而少了）；
@@ -337,11 +369,11 @@ export async function runWindows(
     //     披露（第 6 轮审查必须修 2）。
     const missing = (expected == null ? 0 : Math.max(0, expected - (seen?.starts.size ?? 0)))
       + (row.turnsLost ?? 0) + unconfirmedTurns(row.id);
-    if (missing > 0) {
-      // 缺的是哪几段无从得知，只能把整条寿命算成宽的那一档并说出来。
-      counts.missing += missing;
-      if (!live) spans.push(lifespan());
-    }
+    if (missing > 0) counts.missing += missing;
+    // 缺的是哪几段无从得知，只能把整条寿命算成宽的那一档并说出来。**未确认迁移的那一档同样
+    // 走这里**：它的旧计数不参与对账,所以「缺没缺」在它身上压根算不出来——照未知披露就得连
+    // 区间一起放宽,否则中间那一轮做出来的图照旧静默漏列（第 1 轮审查 F3）。
+    if ((missing > 0 || !migrated) && !live) spans.push(lifespan());
 
     // 有记录，但最早那条明显晚于会话起点：中间这一段是本表建立之前跑的回合，补上——同样是宽的。
     // 这一档**在飞时照样要查**：续聊一进来就跳过它，历史上的不确定会凭空消失一阵
@@ -408,6 +440,9 @@ export async function runWindows(
   }
   if (counts.upgraded) {
     gaps.push(`有 ${counts.upgraded} 段会话在逐回合记录升级之前就跑过，升级前那部分缺没缺记录无从得知`);
+  }
+  if (counts.unmigrated) {
+    gaps.push(`有 ${counts.unmigrated} 段会话还没完成逐回合记录的升级（升级那一步没跑成），它这部分缺没缺记录无从得知，只能按整段会话算`);
   }
   if (counts.monitor) {
     gaps.push(`有 ${counts.monitor} 个后台任务（哨兵）没留下收尾时刻，那一段只能按它的到期时刻估`);

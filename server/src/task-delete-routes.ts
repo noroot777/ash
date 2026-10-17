@@ -15,6 +15,7 @@ import { stopMonitorsForTask } from "./monitors.js";
 import { deleteTaskSideChats } from "./chat/lifecycle.js";
 import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
 import { taskBusyRejection } from "./task-busy.js";
+import { forgetTaskUnconfirmed } from "./session-turns.js";
 import { withRepoLock } from "./repo-lock.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 
@@ -93,6 +94,11 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     db.delete(groups).where(eq(groups.ownerTaskId, taskId)),
     db.delete(tasks).where(eq(tasks.id, taskId)),
   ]);
+  // 库里的行删完了,写端内存里那几笔「没落账的开始意图」也得跟着走：它们本来只在「这条会话
+  // 又开一个回合」时才有人去补、去划掉（session-turns.ts 的 flushUnconfirmed）,任务都没了
+  // 就再也不会有那一下,留着就是长命进程里只增不减的无主条目（第 1 轮审查 N3）。
+  // **只在确实删除时清**:暂停、失败、停止一律不清 —— 那几笔还是有效证据。
+  forgetTaskUnconfirmed(taskId);
 }
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支

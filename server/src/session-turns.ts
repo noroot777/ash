@@ -1,7 +1,17 @@
-import { and, eq, isNull } from "drizzle-orm";
-import { db, dbClient } from "./db/index.js";
-import { sessionTurns } from "./db/schema.js";
-import { id, now } from "./util.js";
+import { dbClient } from "./db/index.js";
+import { id } from "./util.js";
+import { clearTurnActive, closedAlready, markTurnActive } from "./session-turn-registry.js";
+// 对外的门面：登记层的公开函数在这里原样再导出一遍（理由见下面文件头的最后一段）。
+export {
+  activeRegistrySize,
+  activeTurnStarts,
+  clearTurnActive,
+  closeSessionTurns,
+  closeTaskTurns,
+  markTurnActive,
+  nextTurnStart,
+  primeTurnStarts,
+} from "./session-turn-registry.js";
 // 回合区间的**写入端**。读取端在 `task-artifact-windows.ts`（产物归属按时间认人），表的语义写在
 // `db/schema-sessions.ts` 的 `sessionTurns` 上，这里不复述。
 //
@@ -32,6 +42,14 @@ import { id, now } from "./util.js";
 //     同一条会话上两次投递撞在同一毫秒,时间字符串就是同一个值——所有权层的队列把两轮合成一个
 //     位置、唯一键把两行合成一行,于是后开那一轮被前一轮的结束事件当场收口,它真正干活那段落进
 //     空洞,做出来的东西永久漏在清单外（第 2 轮审查 F1）。
+//   • **同一身份的那一行只能往前走**：无行 → 开了 → 收了。开始与结束哪个先到、重放几次都
+//     不许丢掉已经拿到的结束事实,所以合并由**一个原子批**自己完成（`writeTurnRow`）,不是
+//     「先查一眼有没有行再决定插还是改」——查和写之间一让出执行权,另一条路就把那一行插进去了,
+//     补插被唯一键挡掉、已知的收尾时刻当场蒸发（第 1 轮审查 F1）。
+//   • **起点真撞上历史身份时照实降级**：水位只活在进程内存里,重启之后那张表是空的。所以
+//     复用历史会话之前先把库里用过的最晚起点接回来（`primeTurnStarts`）,万一还是撞上了
+//     （没接、或者水位被淘汰过）,写端记一笔持久的 `turns_lost`,读端把那一段降成未知——
+//     绝不把旧记录当成新一轮（第 1 轮审查 F2）。
 //   • **结束不可逆**：`markTurnActive` 返回「收下了没有」,不晚于已关闭水位的开始信息一律拒掉。
 //     迟到的开始回调只能**补持久记录**（`openTurn` 照写那一行）,不许把一个已经终结的身份重新
 //     登记成活动——重新登记出来的那个幽灵会被下一次结束消耗掉,真正刚结束的身份则一直留在册上,
@@ -40,219 +58,9 @@ import { id, now } from "./util.js";
 //     划掉**那一个**身份的欠账。少这一条,收尾补插出来的完整记录仍被当成缺口,读端照 `missing>0`
 //     把整条会话寿命重新算进候选区间,停工期间别人做的东西又被收进来（第 2 轮审查 F3）。
 //
-// 还有一件**只有写端知道**的事：这一刻到底哪些回合真的在跑。库里「开始了没收口」这一个
-// 事实下面压着两种完全相反的情况——正在写，和当初崩了没来得及收口。任务状态分不出它们
-// （同一个任务后来又跑起来时，`running` 对两者都成立），所以活动身份只能由写端在内存里
-// 登记：`markTurnActive` / `clearTurnActive`，进程一重启就全部清空——那正是语义所要的，
-// ash 重启后确实没有任何回合还在跑，旧的未收口身份一律回到「未知」（第 5 轮审查必须修 1）。
-
-/**
- * 这一刻真的在跑的回合身份：`session_id` → 该会话正在进行的那些 `started_at`。
- *
- * **为什么是内存而不是库**：库里存不下「还活着」这个事实——写它的那一刻之后进程随时可能
- * 没了，而没了的时候没人改得动那一行（真实的重启对账只把任务落 failed，不伪造旧回合的
- * 收尾时刻，那是**合理保留未知**）。内存登记的生命周期恰好等于「这个进程还在跑这个回合」。
- *
- * 读端据此判 live：只有登记在册的身份才算还在写，同一个任务名下别的未收口身份一律留在
- * 「未知」那一档。重启后接回仍在跑的 agent（`reattach.ts`）会重新登记——那是真事实。
- *
- * **登记和注销是一对资源操作,注销必须覆盖全部出口**：只在正常收尾那条路上注销是不够的——
- * 回合可能因为 stream 抛错、结算写库失败、被停、接回失败、调度台被换掉而根本走不到收尾
- * 函数。残留的登记会让读端把一条早就死掉的会话当成「还在写」：任务下一次跑起来时它从那个
- * 老起点一路开到无穷,中间歇着的几个钟头里别人做的东西全被认成它的,还不标 approx
- * （第 6 轮审查必须修 1）。所以 `closeSessionTurns` / `closeTaskTurns` 挂在各入口的
- * `finally` 和收尾函数的**开头**（不等写库成功),三条单飞/duet/team 的路都走得到。
- *
- * **怎么判一处新入口有没有做对**（第 7 轮审查必须修 1）：每个登记都必须有**恰好一个所有者
- * 作用域**,而所有者的每一个出口都注销。所有者只有两种形态,别混着用：
- *   • **登记它的那次函数调用**（单飞 `task-run`/`orchestrator`、`duet/turn` 的一轮发言、
- *     `reattach` 的那次接管）——那就必须有一道 `try/finally` **从拿到身份的那一刻**罩到
- *     函数末尾。只罩住消费循环是不够的:中间那段初始化（建目录、开写流）抛出来就绕过去了,
- *     duet 的 F1 就是这么漏的。
- *   • **一个活得比调用更长的对象**（团队那台 `Lead`:注销在 `endTurn`/`closeLead`/
- *     `retireLead`）——这种情况下**先把所有者挂上线,再去拿身份**。顺序反了,中间那段组装
- *     一抛就留下一个谁都不会来注销的登记,而这种泄漏在测试里是哑的（面板只是多列几个
- *     别人的东西）。
- */
-const activeTurns = new Map<string, { taskId: string; starts: Set<string> }>();
-/**
- * `task_id` → 它名下**此刻**有活动身份的会话。只为 `closeTaskTurns` 服务（各入口的 finally
- * 里只拿得到 taskId）。
- *
- * 跟着活动集合一起**对称回收**：一条会话的最后一个身份注销掉时,它从这张表里一并删掉,任务
- * 名下空了就把任务条目也删掉。所以这张表的大小等于「当下真的在跑的会话数」,不随进程跑过
- * 多少任务增长。不对称的那一版只有 `closeTaskTurns` 会删,而 duet 走 `closeSessionTurns`、
- * 团队走 `clearTurnActive`,两条路都不碰它:一个长命进程跑过的每条会话 id 都会永久留下,
- * 任务后来删掉也不回收（第 7 轮审查 N1）。`activeTurns` 里存 `taskId` 就是为了让
- * `clearTurnActive` 这种拿不到 taskId 的注销也能做这件事——一条会话行只属于一个任务,
- * 登记时那个 taskId 就是权威值。
- */
-const sessionsByTask = new Map<string, Set<string>>();
-/**
- * 每条会话的两道**水位**,一个条目装一对,**绝不许分家**：
- *
- *   • `last` —— 这条会话上已经见过的最大回合起点。下一次分配必须**严格大于**它
- *     （`nextTurnStart`）,于是「一条被接受的输入对应一份独立生命周期」这个前提成立：队列、
- *     唯一键和活动册都按起点认人,起点一撞,三样东西同时把两轮合成一轮（第 2 轮审查 F1）。
- *   • `closed` —— **已经关闭到哪个起点**（含）。挡住「迟到的开始信息把一个已经终结的身份重新
- *     登记成活动」：消费循环已经收尾、调度台已经摘牌、甚至这一轮刚刚被 `turnEnd` 关掉之后,
- *     仍可能有一个排在后面的异步回调去开这一轮（团队开台就是这个形状:先持有首轮身份,再隔着
- *     两次写库才轮到 `beginTurn`）。起点严格递增,所以「不晚于已关闭到的那一刻」就是迟到的凭据。
- *
- * 为什么必须装在同一个条目里：两张表各自淘汰时,`last` 先被丢掉就会分配出一个不大于 `closed`
- * 的起点,那一轮当场被当成迟到的拒掉——明明是新回合,活动册上却一个身份都没有。
- *
- * 顺带把墙钟回拨也挡住了：回拨之后 `now()` 可能落在 `closed` 之前,而分配器只认水位,不认时钟。
- */
-const watermarks = new Map<string, { last: string; closed: string | null }>();
-/** 这张表只在本进程生命周期内有意义;跑过几千条会话的长命进程别让它无限涨。 */
-const WATERMARK_LIMIT = 4096;
-
-/** 下一毫秒。同一条会话上撞了起点就往后顶——顶的是**身份**,区间数据差的那 1ms 无人可见。 */
-function bumpIso(at: string): string {
-  const ms = Date.parse(at);
-  if (Number.isFinite(ms)) return new Date(ms + 1).toISOString();
-  // 解析不出来（库被手改过、别的格式）：退回「现在」。它仍可能不大于那个怪字符串,那一档
-  // 的唯一性只剩唯一索引兜着（插不进去 = 不重复计数）,读端照未知披露,不假装记上了。
-  return now();
-}
-
-/** 把一个见过的起点纳入分配水位,并返回这条会话的水位条目。 */
-function noteStartSeen(sessionId: string, startedAt: string): { last: string; closed: string | null } {
-  const seen = watermarks.get(sessionId);
-  if (seen) {
-    if (startedAt > seen.last) seen.last = startedAt;
-    return seen;
-  }
-  const fresh = { last: startedAt, closed: null };
-  watermarks.set(sessionId, fresh);
-  capWatermarks();
-  return fresh;
-}
-
-/**
- * 这条会话的**下一个回合起点**。八处起跑入口一律从这里取,别自己调 `now()`。
- *
- * 为什么不另造一个 uuid 当身份：`(session_id, started_at)` 已经是库里的唯一键、活动册的键、
- * 所有权队列的元素和 trace/日志的文件名,换一套 id 要同时迁移这四样,而缺陷本身只是「这个
- * 字符串不保证唯一」。所以在**这一层**把它变成真唯一的身份:时间仍然是区间数据（最多差几
- * 毫秒,所有区间判据都带 `TURN_SKEW_MS` 级余量）,唯一性由水位保证而不是由时钟碰巧保证。
- */
-export function nextTurnStart(sessionId: string, preferred: string = now()): string {
-  const seen = watermarks.get(sessionId);
-  const at = seen && preferred <= seen.last ? bumpIso(seen.last) : preferred;
-  noteStartSeen(sessionId, at);
-  return at;
-}
-
-/**
- * 登记「这条会话的这个回合正在跑」。
- *
- * **返回收下了没有**：`false` = 这个身份已经终结（或者压根没有起点）,调用方据此不许把它当成
- * 一个在跑的回合——所有权层的 `holdTurn` 就是看这个返回值决定入不入队,两份账因此同源。只有
- * 这个函数知道「关闭到哪了」,判据留在这一层,八处开始入口才不必各记一份（第 2 轮审查 F2）。
- */
-export function markTurnActive(input: {
-  sessionId: string;
-  taskId: string;
-  startedAt: string | null | undefined;
-}): boolean {
-  const { sessionId, taskId, startedAt } = input;
-  if (!startedAt) return false;
-  // 见过的起点一律纳入分配水位:这里是**所有**身份的必经之路（含 `reattach` 从库里接回的那一个、
-  // 各种重放）,所以分配器永远不会再发一个已经用过的起点,重启之后接着跑也不会。
-  const mark = noteStartSeen(sessionId, startedAt);
-  if (mark.closed && startedAt <= mark.closed) return false; // 迟到：这个身份已经终结了
-  const seen = activeTurns.get(sessionId);
-  if (seen) seen.starts.add(startedAt);
-  else activeTurns.set(sessionId, { taskId, starts: new Set([startedAt]) });
-  const peers = sessionsByTask.get(taskId);
-  if (peers) peers.add(sessionId);
-  else sessionsByTask.set(taskId, new Set([sessionId]));
-  return true;
-}
-
-/** 这条会话不再有任何活动身份:两张表一起摘干净（登记那两步的镜像,见 `sessionsByTask`）。 */
-function forgetSession(sessionId: string, taskId: string): void {
-  activeTurns.delete(sessionId);
-  const peers = sessionsByTask.get(taskId);
-  if (!peers) return;
-  peers.delete(sessionId);
-  if (!peers.size) sessionsByTask.delete(taskId);
-}
-
-/** 记下「这条会话关闭到这一刻为止」。同一个条目里 `last` 一并抬起,两道水位不会错位。 */
-function rememberClosed(sessionId: string, startedAt: string): void {
-  const mark = noteStartSeen(sessionId, startedAt);
-  if (!mark.closed || startedAt > mark.closed) mark.closed = startedAt;
-}
-
-/** 水位表封顶。丢掉的只是「挡迟到 + 不重发起点」这层保险,而那些会话早就不在跑了。 */
-function capWatermarks(): void {
-  if (watermarks.size <= WATERMARK_LIMIT) return;
-  // 满了就从最早插入的那半开始丢（Map 保持插入序）,还在跑的那些一律留着。
-  let drop = Math.floor(watermarks.size / 2);
-  for (const key of watermarks.keys()) {
-    if (drop-- <= 0) break;
-    if (!activeTurns.has(key)) watermarks.delete(key);
-  }
-}
-
-/** 注销：收尾（或者确认不再跑）之后调。幂等——同一回合可能被收两次（接回、旧调度台）。 */
-export function clearTurnActive(sessionId: string, startedAt: string | null | undefined): void {
-  if (!startedAt) return;
-  rememberClosed(sessionId, startedAt);
-  const seen = activeTurns.get(sessionId);
-  if (!seen) return;
-  seen.starts.delete(startedAt);
-  if (!seen.starts.size) forgetSession(sessionId, seen.taskId);
-}
-
-/**
- * 这条会话名下**全部**活动身份一次注销。
- *
- * 用在「这条消费循环结束了」的地方（各入口的 finally、收尾函数开头、调度台摘牌/关台）：
- * 那一刻不必知道具体是哪个回合,也不该依赖写库成功——会话都不在跑了,它名下不可能还有
- * 回合在写。
- */
-export function closeSessionTurns(sessionId: string): void {
-  const seen = activeTurns.get(sessionId);
-  if (seen) for (const at of [...seen.starts]) clearTurnActive(sessionId, at);
-  else {
-    // 没有活动身份也要留下「已关闭」的水位,否则迟到的开始事件照样能把它登记回来。
-    rememberClosed(sessionId, now());
-  }
-}
-
-/**
- * 这个任务名下全部会话的活动身份一次注销。
- *
- * 各入口的 `finally` 只拿得到 `taskId`（`sessId` 声明在 try 里面）,而「这一次调用结束了」
- * 恰好等于「这一轮不再有任何回合在写」——单飞/续聊一个任务同时只有一条会话在跑,duet 的
- * 两个角色串行发言,团队调度台不走这两条路。
- */
-export function closeTaskTurns(taskId: string): void {
-  const peers = sessionsByTask.get(taskId);
-  if (!peers) return;
-  for (const sessionId of [...peers]) closeSessionTurns(sessionId);
-  sessionsByTask.delete(taskId);
-}
-
-/**
- * 内存登记此刻占着多少条目（会话数 / 任务数）。只读探针,给回归测试钉住「空了就对称回收」
- * 这条不变量——这两张表都只代表「当下真的在跑的那些回合」,跑过的会话 id 不许留在里面
- * （第 7 轮审查 N1）。
- */
-export function activeRegistrySize(): { sessions: number; tasks: number } {
-  return { sessions: activeTurns.size, tasks: sessionsByTask.size };
-}
-
-/** 这条会话此刻正在跑的回合起点。空集 = 它名下没有任何回合在跑（读端据此不给 live）。 */
-export function activeTurnStarts(sessionId: string): ReadonlySet<string> {
-  return activeTurns.get(sessionId)?.starts ?? EMPTY_STARTS;
-}
-
-const EMPTY_STARTS: ReadonlySet<string> = new Set<string>();
+// **登记那半截在 `session-turn-registry.ts`**（活动身份、两道水位、起点分配）：它是内存里的
+// 册子,进程重启即清空,跟这里的落账不是一回事。对外仍然只有这一个入口 —— 下面把它的公开
+// 函数原样再导出一遍,所以调用方只认 `session-turns.js`,拆文件纯粹是为了别顶破 700 行。
 
 /**
  * **没能落账的开始意图**：`session_id` → 那几个连一行都没写进去的回合**身份**（起点 → 它
@@ -333,6 +141,25 @@ function confirmTurn(sessionId: string, startedAt: string): void {
 }
 
 /**
+ * 这个任务真的被删了：把它名下那几笔「没落账的开始意图」一起扔掉。
+ *
+ * 为什么要有这个出口：`unconfirmed` 只在「同一条会话又开一个回合」时才有人去补、去划掉
+ * （`flushUnconfirmed`）。任务连会话带行一起删之后再也不会有那一下,这几笔就成了无主条目,
+ * 长命进程里只增不减（第 1 轮审查 N3）。
+ *
+ * **只在确实删除时调**：普通的暂停、失败、停止一律不清——那几笔还是有效证据,读端要靠它说
+ * 「有一次运行连开始都没留下记录」。
+ */
+export function forgetTaskUnconfirmed(taskId: string): void {
+  for (const [sessionId, owed] of [...unconfirmed]) {
+    for (const [startedAt, who] of [...owed]) {
+      if (who.taskId === taskId) owed.delete(startedAt);
+    }
+    if (!owed.size) unconfirmed.delete(sessionId);
+  }
+}
+
+/**
  * 新建会话行时的回合字段。
  *
  * **不含计数**：那是 `openTurn` 的事（同一批里加，条件是身份还不存在）。这里只声明
@@ -384,7 +211,16 @@ export async function openTurn(input: {
   // 那个批成了空操作——两条路共用一个幂等批,所以谁先成功都只留一行、只加一次数。
   await flushUnconfirmed(input.sessionId);
   try {
-    await persistTurn({ ...input, startedAt });
+    // **撞号判据在落批之前这一刻问,而且这一问到落批之间不许有 await**：上面那句 await 期间
+    // 同一个身份完全可能已经被收口了（收尾与迟到的开始本来就交错),那时库里那条收过口的行
+    // 恰恰是它自己的,不是撞号。中间一让出执行权,F1 那个并发收尾就会被错报成撞号。
+    // `persistTurn` → `writeTurnRow` → `dbClient.batch` 之间全同步,所以这个判据跟批是同序的。
+    const wrote = await persistTurn({ ...input, startedAt }, null, !closedAlready(input.sessionId, startedAt));
+    if (wrote === "collided") {
+      console.warn(
+        `[ash] 回合起点撞上一条已结束的历史记录（重启 + 墙钟回拨?）,这一轮按未知披露: ${input.sessionId} @ ${startedAt}`,
+      );
+    }
   } catch (error) {
     await noteTurnLost({ ...input, startedAt }, error);
   }
@@ -398,21 +234,49 @@ type TurnStartInput = {
   startedAt: string;
 };
 
+/** 这一批**实际**对那一行做了什么。两件判断都靠它,所以它只能来自批里语句的影响行数。 */
+type TurnWrite =
+  /** 这一行是我插的（开始行,或者收尾那下一次落下的完整行）。 */
+  | "inserted"
+  /** 行早就在,是我把已知的收尾时刻补上去的。 */
+  | "merged"
+  /** 这个起点在库里**已经是一条收过口的记录**,而它应该是新的一轮：撞上了历史身份。 */
+  | "collided"
+  /** 行在,这一批没有新事实可加（重放）。 */
+  | "present";
+
 /**
- * 「开过这一轮」的那一批写入：加计数 + 落回合行。**会抛**（调用方决定是记欠账还是重试）。
+ * 「开过这一轮」的那一批写入：加计数 + 落回合行 + **把已知的收尾时刻合并上去**。
+ * **会抛**（调用方决定是记欠账还是重试）。
  *
- * `endedAt` 为 null = 只知道起点（`openTurn`、补欠账）；给了值 = 收尾那下才发现开始行压根不在,
- * 一次把完整的一行落下去（`recordTurnSpan` 的补插）。**两种都要加计数**：计数和行是同一件事的
- * 两面,只插行不加数等于把一笔已经恢复的事实继续记成缺口（第 2 轮审查 F3）。
+ * `endedAt` 为 null = 只知道起点（`openTurn`、补欠账）；给了值 = 这一下同时知道起止
+ * （`recordTurnSpan`）。**两种都要加计数**：计数和行是同一件事的两面,只插行不加数等于把一笔
+ * 已经恢复的事实继续记成缺口（第 2 轮审查 F3）。
  *
- * **一个原子批,顺序不能换**：加数在前,它的 `NOT EXISTS` 问的是插入**之前**的状态；插在前
- * 就永远加不上数了。两条同生共死,所以不存在「行写上了计数没加」这种中间态——那种中间态在
- * 这里全是错的方向（计数偏小正好抵掉真缺口）。
+ * **一个原子批,四条语句,顺序都不能换**：
+ *   ① 加数在前,它的 `NOT EXISTS` 问的是插入**之前**的状态；插在前就永远加不上数了。
+ *   ② 插行。被唯一键挡掉只说明「这个身份已经有行了」,不说明那一行已经收过口。
+ *   ③ **收尾合并**——②被挡掉时把 `ended_at` 补到现存那一行上。这条就是「同一身份的那一行只能
+ *      往前走」这条不变量的实现：先查一眼再决定插还是改的那一版,在查与写之间让出执行权,
+ *      另一条路插进去的空行会把补插挡掉,已知的收尾时刻当场蒸发,而函数照样正常返回
+ *      （第 1 轮审查 F1）。
+ *   ④ **撞号降级**——这个起点在库里已经是一条收过口的记录,而调用方说它该是新的一轮：那是
+ *      重启 + 墙钟回拨之后重发了历史身份（见 `primeTurnStarts`）。这一轮永远不可能再补出
+ *      属于自己的行（那个身份在库里已经是别人的了）,没有任何重试能消掉它,所以它恰好就是
+ *      `turns_lost` 的语义；记在库里而不是内存里,重启之后那句披露还在（第 1 轮审查 F2）。
  *
- * **幂等**：同一 (session_id, started_at) 再跑一次既不插行也不加数。补欠账、团队那边同起点
- * 再开一次台、接回重试、收尾补插,走的都是这一个批。
+ * 四条同生共死,所以不存在「行写上了计数没加」「收尾合并成了但账没记」这种中间态——那些中间态
+ * 在这里全是错的方向（计数偏小正好抵掉真缺口）。
+ *
+ * **幂等**：同一 (session_id, started_at) 再跑一次既不插行也不加数,已经收过口的也不会被改晚
+ * （③ 的 `ended_at IS NULL`,认第一次）。补欠账、团队那边同起点再开一次台、接回重试、收尾补插,
+ * 走的都是这一个批。
  */
-async function writeTurnRow(input: TurnStartInput, endedAt: string | null): Promise<void> {
+async function writeTurnRow(
+  input: TurnStartInput,
+  endedAt: string | null,
+  fresh: boolean,
+): Promise<TurnWrite> {
   const args = {
     row: id(),
     sid: input.sessionId,
@@ -421,7 +285,7 @@ async function writeTurnRow(input: TurnStartInput, endedAt: string | null): Prom
     at: input.startedAt,
     end: endedAt,
   };
-  await dbClient.batch([
+  const [, inserted, merged, collided] = await dbClient.batch([
     {
       sql: `UPDATE sessions SET turns_started = COALESCE(turns_started, 0) + 1
               WHERE id = :sid
@@ -435,18 +299,52 @@ async function writeTurnRow(input: TurnStartInput, endedAt: string | null): Prom
               VALUES (:row, :sid, :task, :cwd, :at, :end)`,
       args,
     },
+    {
+      // `ended_at IS NULL` = 只收**还开着**的那一行（已经收过口的认第一次：团队那边旧调度台
+      // 也可能来收一次,改晚了就是个假区间）。`:end IS NULL` 时整条是空操作——开始行的重放
+      // 没有结束事实可加。cwd 用 COALESCE：收尾那下没带目录,不该把开始时记下的那个抹掉。
+      sql: `UPDATE session_turns SET ended_at = :end, cwd = COALESCE(:cwd, cwd)
+              WHERE session_id = :sid AND started_at = :at
+                AND ended_at IS NULL AND :end IS NOT NULL`,
+      args: { sid: args.sid, at: args.at, end: args.end, cwd: args.cwd },
+    },
+    {
+      // 只在**开始**那一下查（`:end IS NULL`）、且调用方说这是新的一轮（`:fresh`）时才算撞号。
+      // ② 真插进去了的话这里的 EXISTS 必然为假（那说明压根没有旧行）,所以不会把自己刚落的
+      // 完整记录当成撞号。会话行不在（夹具只插回合行）时这条影响 0 行：没有会话行可披露,
+      // 判据照常落回 `present`。
+      sql: `UPDATE sessions SET turns_lost = COALESCE(turns_lost, 0) + 1
+              WHERE id = :sid AND :fresh = 1 AND :end IS NULL
+                AND EXISTS (
+                  SELECT 1 FROM session_turns
+                    WHERE session_id = :sid AND started_at = :at AND ended_at IS NOT NULL
+                )`,
+      args: { sid: args.sid, at: args.at, end: args.end, fresh: fresh ? 1 : 0 },
+    },
   ]);
+  if (inserted.rowsAffected > 0) return "inserted";
+  if (merged.rowsAffected > 0) return "merged";
+  if (collided.rowsAffected > 0) return "collided";
+  return "present";
 }
 
 /**
- * **按身份落账的唯一写入口**：落行 + 加数（同一个原子批）,成了就划掉这个身份的欠账。
+ * **按身份落账的唯一写入口**：落行 + 加数 + 合并收尾（同一个原子批）,之后划掉这个身份的欠账。
  *
- * 开始、收尾补插、幂等重放三条路共用它。分成「开始走这个、补插走那个」的那一版,补插出来的
+ * 开始、收尾、幂等重放三条路共用它。分成「开始走这个、补插走那个」的那一版,补插出来的
  * 完整记录既不进计数也不消欠账,于是读端继续按缺口把整条会话寿命算宽（第 2 轮审查 F3）。
+ *
+ * **撞号那一档也要划掉内存欠账**：缺口已经换成库里那一笔 `turns_lost`,两边各算一次就等于
+ * 把一轮缺口说成两轮。
  */
-async function persistTurn(input: TurnStartInput, endedAt: string | null = null): Promise<void> {
-  await writeTurnRow(input, endedAt);
+async function persistTurn(
+  input: TurnStartInput,
+  endedAt: string | null = null,
+  fresh = false,
+): Promise<TurnWrite> {
+  const wrote = await writeTurnRow(input, endedAt, fresh);
   confirmTurn(input.sessionId, input.startedAt);
+  return wrote;
 }
 
 /**
@@ -476,15 +374,19 @@ async function noteTurnLost(input: TurnStartInput, cause: unknown): Promise<void
  * 任何意外都会变成「任务状态结算不下去」。写不进去就降级回老行为（按 session 寿命认），
  * 代价是面板可能多列几个同目录别的任务的东西，不是数据错乱。
  *
- * **按身份收口,不是追加**：有开始行就补它的 `ended_at`；没有（开始那下没写成、或者是本
- * 函数早于 `openTurn` 的老路径）才插一条完整的。已经收过口的**不覆盖**——团队那边旧调度台
- * 也可能来收一次（`closeLead`），认第一次才叫幂等,否则同一回合的收尾时刻会被改晚。
+ * **按身份收口,一个原子批把三种情形一次办完**（`writeTurnRow`）：没有行就落一条完整的、
+ * 有开着的行就把 `ended_at` 合并上去、已经收过口的不动（认第一次——团队那边旧调度台也可能
+ * 来收一次,改晚了就是假区间）。
  *
- * **三条分支都要按身份确认那笔欠账**（`persistTurn` / `confirmTurn`）：补插和重放同样是「这个
- * 身份在库里确实有记录了」的证据。原先只有「再开一次回合」那条路消账,于是「开始一直失败、库
- * 恢复后直接正常收尾」这条恢复路线留下一笔永远消不掉的假缺口——两行记录都已经完整,读端却还
- * 把整条会话寿命算进候选区间,停工期间别人做的图被收进来,面板还说有一次连开始都没记上
- * （第 2 轮审查 F3）。
+ * **这里不许先查一眼再决定插还是改**：查到无行之后到补插之间要让出执行权,而迟到的
+ * `openTurn` 正好在那个窗口里插进同一身份的空行,补插被唯一键挡掉、函数照样正常返回,于是
+ * 已经拿到的收尾时刻凭空蒸发——读端把那一轮估到下一轮起点,停工期间别人做的图被收进来,
+ * 面板还反过来说「这次运行没有正常结束」（第 1 轮审查 F1,实测只需 `Promise.all` 并发调用,
+ * 不需要任何写库故障）。
+ *
+ * **三条情形都要按身份确认那笔欠账**（`persistTurn`）：补插和重放同样是「这个身份在库里确实
+ * 有记录了」的证据。原先只有「再开一次回合」那条路消账,于是「开始一直失败、库恢复后直接正常
+ * 收尾」这条恢复路线留下一笔永远消不掉的假缺口（第 2 轮审查 F3）。
  */
 export async function recordTurnSpan(input: {
   sessionId: string;
@@ -498,35 +400,14 @@ export async function recordTurnSpan(input: {
   if (!input.startedAt) return;
   const startedAt = input.startedAt;
   // 收尾了就不再是活动身份。放在写库**之前**：这一行只影响「还在写吗」的判断,写库失败时
-  // 更要让它回到「未知」那一档,而不是继续被当成正在跑（区间会一直开到无穷）。
+  // 更要让它回到「未知」那一档,而不是继续被当成正在跑（区间会一直开到无穷）。顺带也把
+  // 「这个身份是本进程自己关的」这件事记进水位,撞号判据靠它分得出自己和别人（`closedAlready`）。
   clearTurnActive(input.sessionId, startedAt);
   try {
-    const existing = await db.select({ endedAt: sessionTurns.endedAt })
-      .from(sessionTurns)
-      .where(and(eq(sessionTurns.sessionId, input.sessionId), eq(sessionTurns.startedAt, startedAt)));
-    if (!existing.length) {
-      // 开始行压根不在：一次把完整的一行落下去,而且走**开始行那个原子批**（行与计数同批,
-      // 落成了按身份消账）。只 insert 不记账的那一版,补回来的完整记录在对账上仍然是个缺口。
-      await persistTurn(
-        { sessionId: input.sessionId, taskId: input.taskId, cwd: input.cwd, startedAt },
-        input.endedAt,
-      );
-      return;
-    }
-    if (existing.some((row) => row.endedAt)) {
-      // 已经收过口：那一行不动（认第一次）—— 但账要认：库里明摆着有一行完整记录,内存里却
-      // 还欠着同一个身份的话,读端照样把它算成缺口。
-      confirmTurn(input.sessionId, startedAt);
-      return;
-    }
-    await db.update(sessionTurns)
-      .set({ endedAt: input.endedAt, cwd: input.cwd ?? null })
-      .where(and(
-        eq(sessionTurns.sessionId, input.sessionId),
-        eq(sessionTurns.startedAt, startedAt),
-        isNull(sessionTurns.endedAt),
-      ));
-    confirmTurn(input.sessionId, startedAt);
+    await persistTurn(
+      { sessionId: input.sessionId, taskId: input.taskId, cwd: input.cwd, startedAt },
+      input.endedAt,
+    );
   } catch (error) {
     console.warn(`[ash] 回合区间没落盘（产物归属降级为按会话寿命认）: ${String(error)}`);
   }
