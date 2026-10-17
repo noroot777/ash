@@ -653,14 +653,34 @@ const zhLstart = (lstart: string): string => {
   assert.ok(owed.spawnAnchorMs, "**锚要留在债上** —— 哨兵行和边条都可能先没了,那之后只剩这一笔");
   assert.ok(existsSync(side), "**欠着责任就不许撤掉边条** —— 它是补全身份的唯一线索");
 
-  // ps 恢复 = 下一次开机清扫:这一刻第一次补得出身份 ⇒ 这才轮到补杀 + 收档。
+  // ps 恢复 = 下一次开机清扫。补得出身份的只有**记号那一问**:
+  //  · `exact`(Linux):真实环境项认得出这个号 ⇒ `proven` ⇒ 这才轮到补杀 + 收档;
+  //  · `ambiguous`(macOS):只有无边界展示文本 ⇒ `unprovable` ⇒ 照旧记责任、不下刀。
+  //
+  // **第 18 轮审查 F1 推翻了这里原来的后半句**:上一版在 ps 恢复之后拿「时间锚 + 命令包含」
+  // 把启动时刻猜回 `pid_started_at`,下游第 ② 步又把这一列当下刀凭证,于是一个只在另一个环境
+  // 变量的值里抄着记号文字的陌生进程被真实停止链杀掉。锚和边条这两样留着(第 10 轮 F2-B 的
+  // 「补全机会不许丢」照旧成立),但**猜出来的身份不许落库、更不许下刀**。
   await sweepMonitorReclaimDebts();
-  await until("补全身份之后才收掉它", async () => !isProcessGroupAlive(row.pid!));
-  await assertDebtClosed(row.id, "补全身份、收掉它之后才收档");
-  assert.ok((await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)?.pidStartedAt,
-    "补回来的身份要落库,不是只在内存里用一次");
-  assert.equal(existsSync(side), false, "收档之后边条才真的没用了");
+  if (EXACT_MARKS) {
+    await until("记号证出归属之后才收掉它", async () => !isProcessGroupAlive(row.pid!));
+    await assertDebtClosed(row.id, "补全身份、收掉它之后才收档");
+    assert.ok((await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)?.pidStartedAt,
+      "补回来的身份要落库,不是只在内存里用一次");
+    assert.equal(existsSync(side), false, "收档之后边条才真的没用了");
+  } else {
+    assert.equal(isProcessGroupAlive(row.pid!), true,
+      "**弱判据没有授权权** —— 记号只答得出展示文本那一档,时间锚不许把它凑成下刀凭证");
+    assert.equal((await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0)?.pidStartedAt, null,
+      "猜出来的启动时刻一律不许落库 —— 下游第 ② 步拿这一列当归属凭证");
+    const still = await debtRow(row.id);
+    assert.ok(still && !still.closedAt, "证不出来就继续欠着:看得见、追得回,只是谁都不许据此下刀");
+    assert.ok(still!.spawnAnchorMs, "锚留着 —— 记号哪天答得出 `ours` 就哪天补上");
+    assert.ok(existsSync(side), "边条留着 —— 同上");
+    killTree(row.pid!, "SIGKILL");
+    await until("测试自己把它收掉", async () => !isProcessGroupAlive(row.pid!));
+  }
 }
 
 await teardown();
-console.log("✓ 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说 / 身份不全只留「证不出」:记责、不下刀,补全后才收 / 孤儿组没代次、或者只有一个对不上的旧时刻都不下刀 / 陌生组的命令同名、前缀、完全不同都不下刀 / 带记号的孤儿后代:真实环境项那一档隔了重启也照收,只有展示文本那一档留责任不下刀 / argv 里的记号文字既不授权下刀也不遮住环境里的真记号 / 环境被清掉只留「证不出」/ 追空只收档、责任行活过删除与清扫 / 补刀没有当代证据就一刀不发 / 锚与边条留到收档,恢复后补全身份才动手 均受回归保护");
+console.log("✓ 身份只查一次:locale 不同与第二次查询失败都不是「另一个进程」/ 接回文案由最终 verdict 决定,责任没落盘就照实说 / 身份不全只留「证不出」:记责、不下刀,补全后才收 / 孤儿组没代次、或者只有一个对不上的旧时刻都不下刀 / 陌生组的命令同名、前缀、完全不同都不下刀 / 带记号的孤儿后代:真实环境项那一档隔了重启也照收,只有展示文本那一档留责任不下刀 / argv 里的记号文字既不授权下刀也不遮住环境里的真记号 / 环境被清掉只留「证不出」/ 追空只收档、责任行活过删除与清扫 / 补刀没有当代证据就一刀不发 / 锚与边条留到收档,只有记号证出归属才动手、猜出来的启动时刻不许落库 均受回归保护");

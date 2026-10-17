@@ -37,7 +37,7 @@ import { monitors, tasks } from "./db/schema.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
 import { adoptSpawnIdentity } from "./monitor-adopt.js";
-import { clearSpawnIdentity, readLogTail, readSpawnIdentity, tailLines, type Tailer } from "./monitor-spawn.js";
+import { clearSpawnIdentity, readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
 import { IS_WINDOWS } from "./platform.js";
 
 import { pushToTask } from "./monitor-events.js";
@@ -532,18 +532,21 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
     //    Windows 真机验证**(根 AGENTS.md)。
     if (!row.pid) {
       const adopted = await adoptSpawnIdentity(row);
-      if (!adopted) {
-        // 边条没有(写盘那一刻就崩了),或者它指的那个号现在是另一个进程 —— 两种都没有可用的
-        // 身份,照实说。**win32 和 POSIX 的事实不同**:那一侧没有闸,命令可能已经开工过。
-        const side = readSpawnIdentity(row.logPath);
-        const where = side ? `（身份边条记的 pid=${side.pid} 现在是另一个进程）` : "（连身份边条都没留下）";
-        await finishOffline(row, "lost", IS_WINDOWS
-          ? `server 重启后认不回它了：起进程时没来得及记下 pid${where}，这台机器上没有放行闸，当初那个壳已经不在、但它派生的命令可能还在后台跑着（日志路径见这一行）`
-          : `server 重启后判定它没有真正开工：起进程时没来得及记下 pid${where}，命令停在放行闸前面就退了`);
+      if (!adopted.row) {
+        // 认不下来的几种事实由 `adoptSpawnIdentity` 带回来(`why` / `settled`),这里只负责措辞。
+        // `settled`:当初那个壳一定不在了(没留边条 / 反证过 / 那个号现在是另一个进程)——
+        // 这一档照旧按 **win32 与 POSIX 事实不同**分开说:那一侧没有闸,命令可能已经开工过。
+        // `settled: false`:只是**这一刻核实不了**(反证账本读不出来),一个字都不许说成「它不在
+        // 了」(第 6 轮审查 F1 的同一条:问不出来 ≠ 它不在了)。
+        await finishOffline(row, "lost", adopted.settled
+          ? (IS_WINDOWS
+            ? `server 重启后认不回它了：起进程时没来得及记下 pid${adopted.why}，这台机器上没有放行闸，当初那个壳已经不在、但它派生的命令可能还在后台跑着（日志路径见这一行）`
+            : `server 重启后判定它没有真正开工：起进程时没来得及记下 pid${adopted.why}，命令停在放行闸前面就退了`)
+          : `server 重启后这一刻认不回它：起进程时没来得及记下 pid${adopted.why}，所以一个信号都没发；下一次启动会再问一遍（日志路径见这一行）`);
         lost += 1;
         continue;
       }
-      row = adopted;   // 认回来了:下面按正常身份走(接回 / 收尾 / 记责任),不再有特殊分支
+      row = adopted.row;   // 认回来了:下面按正常身份走(接回 / 收尾 / 记责任),不再有特殊分支
     }
     const state = reclaimState(row.pid!, row.pidStartedAt, row);
     // `unverifiable`(当初没记下启动时刻 / 边条认回来时 ps 不可用)跟 `unknown` 同一档处理:

@@ -38,6 +38,8 @@ import { monitorUnitProofGrade } from "../src/monitor-unit-scan.js";
 const { handoverRecoverable, monitorSpawnIdentityPath, spawnMonitor } = await import("../src/monitor-spawn.js");
 const { abandonRegistration } = await import("../src/monitor-create.js");
 const { beginTaskRevocation, releaseTaskRevocation } = await import("../src/claude-monitor-revoked.js");
+const { reclaimState } = await import("../src/monitor-reclaim-evidence.js");
+const { sweepMonitorReclaimDebts } = await import("../src/monitor-reclaim-debts.js");
 
 /**
  * 把「回填 pid」那一条 UPDATE 停在边界上。
@@ -349,11 +351,29 @@ function failNextDelete(): { restore: () => void; fired: () => boolean } {
   const { attached } = await reattachMonitors();
   const back = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
   assert.equal(back.pid, armed.pid, "身份边条按代次把那个 pid 认回来了");
-  assert.equal(back.pidStartedAt, armed.pidStartedAt, "启动时刻一起回填 —— 这才是**完整**身份");
+  // **只认号,不认启动时刻**(第 18 轮审查 F1)。这台机器上记号那一问只到展示文本那一档
+  // (`suspected`),所以归属证不出来 —— 而时间锚只是「这个号上的进程大约在那一刻起来、命令
+  // 文本也对得上」,它配投否决票,不配往 `pid_started_at` 里写值:那一列是 `reclaimEvidence`
+  // 第 ② 步的归属凭证,猜出来的值在那里跟 ash 自己 spawn 时读来的长得一模一样。
+  // 第 9 轮审查 F3-B 要的「要有能用来定位那个进程的身份」留着:号认回来了,行照旧 running、
+  // 看得见、停得掉、追得回。
+  assert.equal(back.pidStartedAt, null, "**启动时刻不许靠时间锚猜** —— 它会被下游当成下刀凭证");
   assert.equal(back.status, "running", "认回来的不许被写成 lost");
   assert.ok(attached >= 1, "它该算接回成功");
+  assert.equal(reclaimState(back.pid!, back.pidStartedAt, back), "unverifiable",
+    "归属证不出来 ⇒ 这一档记责任、不下刀");
+
+  // 点停:同一条判据 —— 一刀不发,把责任留在表上。进程由测试自己收场,再清扫一遍才收档。
   await stopMonitor(monitorId, "测试收尾");
-  await until("点停真的收掉了它", async () => psCount(m.token) === 0);
+  assert.ok(psCount(m.token) > 0, "**证不出归属就一刀不发** —— 停止只负责把责任记下来");
+  assert.ok(await debtRow(monitorId), "责任留在表上,等记号那一问哪天答得出来");
+  execFileSync("pkill", ["-9", "-f", m.token], { stdio: "ignore" });
+  await until("测试自己把它收掉", async () => psCount(m.token) === 0);
+  // 线索真的空了之后,清扫才收得了档(组里那几个 `sleep` 还要几百毫秒才退干净)。
+  await until("追空之后由清扫把戳补上", async () => {
+    await sweepMonitorReclaimDebts();
+    return !!(await debtRow(monitorId))?.closedAt;
+  }, 20_000);
 
   // 反面:边条指的那个号现在是**另一个进程**(锚差了几分钟)⇒ 一律不认,更不许去碰它。
   const other = await makeTask();

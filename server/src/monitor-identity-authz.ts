@@ -13,21 +13,36 @@
 // (`round-7/refutation-retry.log`、`refutation-auto.log`:首次拒绝成功,**随后的清扫和自动
 // 梯子把反证忘了**)。所以政策必须只有一份,而且反证不能只活在一次函数调用的返回值里。
 //
-// ── 四种资格,弱判据只服务其中两种 ──────────────────────────────────────────────
+// ── 三档资格,只有第一档签得出「可下刀的身份」 ─────────────────────────────────
 //
-// | 档 | 事实 | 弱判据(时间锚 + 命令原文) |
+// | 档 | 事实 | 能签出可下刀的身份吗 |
 // |---|---|---|
-// | `legacy` | 这条记录**根本没有记号**(记号那一列是后加的) | 允许 —— 否则存量行永远证不出身份 |
-// | `unanswered` | 记号这一问自己没答出来(展示文本档、`ps`/`/proc` 失败) | 允许 —— 第 10 轮 F2-B:查询恢复之后还得补得上 |
-// | `proven` | 记号在**真实环境项**里指着这个号,代次换算夹核通过 | 不需要 |
-// | `disproved` | `none` / `ours` 名单里没有这个号 / 代次 `changed` | **永久禁止** |
+// | `proven` | 记号在**真实环境项**里指着这个号,代次换算夹核通过 | 能 |
+// | `disproved` | `none` / `ours` 名单里没有这个号 / 代次 `changed` | 不能,**连把这个号认下来都不许** |
+// | `unprovable` | 这一问没答出来(展示文本档 `suspected`、`ps`/`/proc` 失败),或者这条记录**根本没有记号**(存量行) | 不能 |
 //
-// 「反证」与「问不出来」的区别是本层的全部内容:前者是**已经知道这个号不是它**,后者只是
-// 这一刻不知道。所以反证一旦出现就要**落盘**(`identity_disproved_at`),下一次尝试、另一个
-// 消费者、重启之后都不许把它退化成「未知」再走弱判据。
+// **「没有拿到反证」不等于「已经证明属于这次创建」**(第 18 轮审查 F1)。上一版把
+// `suspected` / `unprovable` / 存量行都归成「这一问没答出来」,然后**允许它们走时间锚 + 命令
+// 包含那条弱判据把启动时刻补进 `pid_started_at`** —— 而 `reclaimEvidence` 第 ② 步拿这一列当
+// 归属凭证(根活着 + 启动时刻对得上 ⇒ `ours-alive` ⇒ 可以下刀),它分不出这个值是 ash 自己
+// spawn 那一刻读来的,还是事后凭一个时间窗口猜出来的。实测后果:一个**没有**真实
+// `ASH_MONITOR_UNIT` 环境项、只是另一个变量的值里抄着那串记号文字的陌生进程,被产品真实的
+// 停止链杀掉(`cgtxRDWnCNVp/round-1/identity-ambiguous.log`)。
 //
-// 反证**只收走弱判据,不封死强凭证**:真实带着这次记号的后代落到同一个号上时,记号那一问
-// 仍然会把它判成 `proven` —— 那是它自己的独立证据,不是给旧根重新授信。
+// 所以这一层现在只有一条规矩:**弱判据只有拒绝权,没有授权权**。
+//  · 时间邻近、命令包含、展示文本里的记号文字 ⇒ 只配当「重试线索」和「这个号肯定不是它」
+//    的否决票,一律不许往 `pid_started_at` 里写值;
+//  · 签不出身份的那几档照旧**记责任、留锚、留边条、不发信号**(`unverifiable` 档:看得见、
+//    停得掉、追得回,但谁都不许据此下刀)。第 10 轮 F2-B 要的「补全机会不许丢」留着 —— 锚和
+//    边条都还在,记号那一问哪一刻答得出 `ours` 就哪一刻补上;它要的「补全之后就能下刀」这
+//    半句被本轮推翻:**猜出来的身份不配当下刀凭证**。
+//
+// 反证一旦出现就要**落盘**(`identity_disproved_at`),下一次尝试、另一个消费者、重启之后都
+// 不许把它退化成「未知」;而**账本读不出来时不许当成「没有反证」**(第 18 轮审查 F1 实测 B:
+// 只让那一句 SELECT 抛一次,产品出了一句日志就继续放行)—— 读失败一律按「这一轮不认」处理。
+//
+// 反证**只收走弱判据与认号资格,不封死强凭证**:真实带着这次记号的后代落到同一个号上时,
+// 记号那一问仍然会把它判成 `proven` —— 那是它自己的独立证据,不是给旧根重新授信。
 import { and, eq, isNull } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { monitorReclaimDebts } from "./db/schema.js";
@@ -66,42 +81,62 @@ export function askStrongIdentity(pid: number, unitToken: string | null): Strong
   return { grade: "proven", startedAt: converted.outcome === "proven" ? converted.startedAt : null };
 }
 
-/** 这一刻的授权结论。`disproved` 要跟着责任一起落盘(见 `DebtInput.identityDisproved`)。 */
+/** 这一刻的授权结论。 */
 export type RecoveredIdentity = {
+  /** 记号那一问原话(只用于措辞和日志)。 */
   strong: StrongIdentity;
-  /** 时间锚 + 命令原文这条弱判据,此刻有没有资格签身份。 */
-  weakAllowed: boolean;
-  /** 这个号被反证过 —— 这一次新问出来的,或者盘上早就记着。 */
-  disproved: boolean;
+  /** 三档资格。**只有 `proven` 签得出可下刀的身份**(见文件头)。 */
+  ownership: "proven" | "disproved" | "unprovable";
+  /** `proven` 顺带交出来的启动时刻;换算这一刻答不出来就是 `null`(号认下来,时刻等下一遍)。 */
+  startedAt: string | null;
+  /**
+   * 连「把这个号认下来」都不许:已经反证过,**或者反证账本这一刻读不出来**。
+   *
+   * 读失败不许当成「没有反证」—— 那正是实测 B 的犯法方式(一次 SELECT 异常就把一笔已经落盘
+   * 的拒绝洗掉)。读不出来就什么都不认,下一遍再问。
+   */
+  refuse: boolean;
+  /** **这一次新问出来**的反证,要跟着责任一起落盘。读失败不算:别把异常写成事实。 */
+  disprovedNow: boolean;
 };
 
 /**
- * **问一遍 + 把反证记住**:两个消费者都从这里拿授权,不自己判。
- *
- * 盘上的反证戳(`identity_disproved_at`)只有一个作用:即使记号这一问**退化**成「答不出来」,
- * 弱判据也不再有资格。它不参与强凭证 —— `proven` 照旧放行。
+ * **问一遍 + 把反证记住**:两个消费者(实时回收/债务恢复的 `completeIdentity`、重启后认领的
+ * `adoptSpawnIdentity`)都从这里拿授权,不自己判。
  */
 export async function authorizeRecoveredIdentity(m: {
   monitorId: string; pid: number; unitToken: string | null;
 }): Promise<RecoveredIdentity> {
   const strong = askStrongIdentity(m.pid, m.unitToken);
-  const remembered = strong.grade === "disproved" ? false : await weakIdentityRevoked(m.monitorId);
-  if (strong.grade === "disproved") await revokeWeakIdentity(m.monitorId, m.pid);
-  const disproved = strong.grade === "disproved" || remembered;
-  const answerable = strong.grade === "legacy" || strong.grade === "unanswered";
-  return { strong, weakAllowed: answerable && !disproved, disproved };
+  const disprovedNow = strong.grade === "disproved";
+  if (disprovedNow) await revokeWeakIdentity(m.monitorId, m.pid);
+  // 这一次就反证了,就不必再去读账本(省一次查询,也省掉「读失败」这一档)。
+  const ledger = disprovedNow ? "refuted" : await readIdentityRefutation(m.monitorId);
+  return {
+    strong,
+    ownership: strong.grade === "proven" ? "proven"
+      : (disprovedNow || ledger === "refuted" ? "disproved" : "unprovable"),
+    startedAt: strong.grade === "proven" ? strong.startedAt : null,
+    refuse: disprovedNow || ledger !== "clean",
+    disprovedNow,
+  };
 }
 
-/** 盘上记着这个号已经被反证过吗。读不到(库关了/行还没落盘)一律按「没记着」。 */
-async function weakIdentityRevoked(monitorId: string): Promise<boolean> {
-  if (dbClient.closed) return false;
+/**
+ * 盘上记着这个号被反证过吗。**三档,读失败不许混进「干净」那一档**(第 18 轮审查 F1 实测 B)。
+ *
+ * 库关了也算读不出来:那一刻什么都核实不了,而这一问的用途是「还能不能认这个号」——
+ * 核实不了就不认,下一遍再问。
+ */
+async function readIdentityRefutation(monitorId: string): Promise<"clean" | "refuted" | "unreadable"> {
+  if (dbClient.closed) return "unreadable";
   try {
     const row = (await db.select({ at: monitorReclaimDebts.identityDisprovedAt })
       .from(monitorReclaimDebts).where(eq(monitorReclaimDebts.monitorId, monitorId))).at(0);
-    return !!row?.at;
+    return row?.at ? "refuted" : "clean";
   } catch (err) {
-    console.error(`[ash] 身份反证记录读不出来 monitor=${monitorId}:`, err);
-    return false;
+    console.error(`[ash] 身份反证记录读不出来 monitor=${monitorId}（这一轮一律不认这个号）:`, err);
+    return "unreadable";
   }
 }
 

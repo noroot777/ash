@@ -74,7 +74,6 @@ import {
 } from "./monitor-reclaim-evidence.js";
 import { authorizeRecoveredIdentity } from "./monitor-identity-authz.js";
 import { clearSpawnIdentity, readSpawnIdentity } from "./monitor-spawn.js";
-import { processStartedNear } from "./proc.js";
 import { now } from "./util.js";
 
 /** 进程内的重试梯子。跟 claude 投影那边的补偿清理同一个形状(claude-monitor-revoked.ts)。 */
@@ -327,15 +326,17 @@ export type ReclaimOutcome =
  * 孤儿后代本来就不靠「刚刚」证明归属。留着只会让四个入口各传一个不同的值。
  */
 /**
- * **身份不全时,用时间锚把它补全** —— 一次查询失败不许把这条记录永久降级。
+ * **身份不全时再问一遍强凭证** —— 一次查询失败不许把这条记录永久降级。
  *
- * 锚有两个来处(谁在就用谁):哨兵行旁边那份身份边条(`spawn` 返回 pid 那一刻写的),或者这笔
- * 债上自己带的那一份。补得上就当场落库(行 + 债都补),补不上就照旧留「不知道」。
- *
- * 为什么必须有这一步(第 10 轮审气 F2-B):接回那一侧在 ps 恰好不可用时只回填了 pid、启动时刻
+ * 为什么必须有这一步(第 10 轮审查 F2-B):接回那一侧在 ps 恰好不可用时只回填了 pid、启动时刻
  * 留空,而**那之后再没有人会去读身份边条**(认领只发生在 pid 为空的行上),探活也只会拿现有的
- * 残缺身份反复问同一个问题 —— 于是这条行永久停在 `unverifiable`:停它只会记债、下不了刀,
- * 销不掉账。查询恢复之后本该能证出身份,证据却没人再去取。
+ * 残缺身份反复问同一个问题 —— 于是这条行永久停在 `unverifiable`:停它只会记债、下不了刀。
+ * 所以每一次回收/清扫都重新问一遍:记号那一问哪一刻答得出 `ours`,这一行就哪一刻补得上。
+ *
+ * **但只有那一问签得出身份**(第 18 轮审查 F1):时间锚(身份边条或债上那一份)现在只剩两个
+ * 用途 —— 留在债上当这个进程最后的线索,以及在重启认领那一侧投否决票。它**不许**再把启动
+ * 时刻写进 `pid_started_at`:那一列是 `reclaimEvidence` 第 ② 步的归属凭证,猜出来的值在那里
+ * 跟 ash 自己 spawn 时读来的长得一模一样。
  */
 async function completeIdentity(m: {
   id: string; pid: number; pidStartedAt: string | null; command: string;
@@ -352,16 +353,18 @@ async function completeIdentity(m: {
   // 文本又恰好包含记录的那一段时,它真实的启动时刻被写成旧哨兵的身份,随后按这条身份收到
   // 真实 SIGKILL(`round-7/refutation-retry.log`、`refutation-auto.log`)。
   const authz = await authorizeRecoveredIdentity({ monitorId: m.id, pid: m.pid, unitToken: m.unitToken });
-  // `proven` 但换算没交出启动时刻:号是记号证明过的,**启动时刻等下一遍** —— 不许因为
-  // 「这一刻没拿到值」就回落到弱判据(那正是第 16 轮 F1-B 的犯法方式)。
-  const provenStartedAt = authz.strong.grade === "proven" ? authz.strong.startedAt : null;
-  const weak = !provenStartedAt && authz.weakAllowed && anchorMs !== null;
-  if (!provenStartedAt && !weak) return { pidStartedAt: null, anchorMs, disproved: authz.disproved };
-  // 命令原文一起交过去:时间邻近单独不足以认下一个号(见 proc.ts 的 `processStartedNear`)。
-  const { verdict, startedAt } = provenStartedAt
-    ? { verdict: "same" as const, startedAt: provenStartedAt }
-    : processStartedNear(m.pid, anchorMs!, 2_000, m.command);
-  if (verdict !== "same" || !startedAt) return { pidStartedAt: null, anchorMs, disproved: authz.disproved };
+  // **只有「已证明属于这次创建」那一档签得出身份**(第 18 轮审查 F1)。上一版把展示文本那一档
+  // (`suspected`)、问不出来、以及存量行一律当成「没拿到反证」,放它们走时间锚 + 命令包含把
+  // 启动时刻补进 `pid_started_at` —— 而 `reclaimEvidence` 第 ② 步拿这一列当归属凭证,分不出
+  // 这个值是 ash 自己 spawn 那一刻读来的还是事后猜的,于是一个只在别的变量值里抄着记号文字
+  // 的陌生进程被真实的停止链杀掉(`identity-ambiguous.log`)。
+  //
+  // 签不出就照旧落在 `unverifiable` 档:**记责任、留锚、留边条、一刀不发**。锚和边条都还在,
+  // 记号那一问哪一刻答得出 `ours`,这一行就哪一刻补得上(第 10 轮 F2-B 的「补全机会不许丢」)。
+  if (authz.ownership !== "proven" || !authz.startedAt) {
+    return { pidStartedAt: null, anchorMs, disproved: authz.disprovedNow };
+  }
+  const startedAt = authz.startedAt;
   if (!dbClient.closed) {
     await Promise.all([
       db.update(monitors).set({ pidStartedAt: startedAt })
@@ -372,7 +375,7 @@ async function completeIdentity(m: {
         .catch(() => { /* 这一笔还没落盘,下面记账时会带上补全后的身份 */ }),
     ]);
   }
-  return { pidStartedAt: startedAt, anchorMs, disproved: authz.disproved };
+  return { pidStartedAt: startedAt, anchorMs, disproved: authz.disprovedNow };
 }
 
 export async function reclaimMonitorProcess(
