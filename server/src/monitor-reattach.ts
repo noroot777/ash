@@ -31,7 +31,7 @@ import { reclaimMonitorProcess, settleReclaim, type ReclaimVerdict } from "./mon
 import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
 import { monitorWakeGate } from "./monitor-session.js";
 import { clearSpawnIdentity } from "./monitor-spawn.js";
-import { attach, finish, finishOffline, isAshKind, isSupervised, serialize, type Row } from "./monitors.js";
+import { attach, finish, finishOffline, isAshKind, serialize, type Row } from "./monitors.js";
 import { IS_WINDOWS } from "./platform.js";
 
 /**
@@ -75,7 +75,9 @@ const owingNote = (verdict: ReclaimVerdict): string =>
  * 接回的三档计数。`pending` 是**pid 还空着、这一刻又认不回来**的那几条:行原样留着
  * (见 `notePendingIntent`),所以它既不算接回来了、也不算没了 —— 混进任何一边都是撒谎。
  */
-export async function reattachMonitors(): Promise<{ attached: number; lost: number; pending: number }> {
+export async function reattachMonitors(): Promise<
+  { attached: number; lost: number; pending: number; failed: number }
+> {
   // 只认 ash 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
   // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
   // `loseClaudeMonitorsOfSession` 在 agent 进程真的结束时统一收口。
@@ -83,7 +85,38 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
   let attached = 0;
   let lost = 0;
   let pending = 0;
+  let failed = 0;
   for (const stored of rows) {
+    // **输出与期限先立起来,一个前提都不附**(第 22 轮审查 F1-A)。这两件跟身份、跟出口资格
+    // 都不相干 —— 日志是我们自己的文件,期限是我们自己承诺的 —— 所以它们装在身份那一问
+    // 之前、`try` 之外:下面哪一步抛错都带不走它们。`attach` 是幂等的(已经在盯的不重挂,
+    // 只补缺的那一份),所以这一句对 `takeOver` 后面那几句 `attach` 没有任何影响。
+    attach(stored);
+    try {
+      const outcome = await recoverOne(stored);
+      if (outcome === "attached") attached += 1;
+      else if (outcome === "lost") lost += 1;
+      else if (outcome === "pending") pending += 1;
+    } catch (e) {
+      // **逐条隔离**:上一版一抛就整批退出 —— 它后面那些行连 tail 都没接上,而启动侧只打
+      // 一行日志就继续启动(index.ts),于是这一次启动期间它们完全没人管(审查实测:两条
+      // 哨兵都 `supervised=false`、期限早就过了、结果已经写进日志却一条通知都没有)。
+      // 现在这一条的失败只影响这一条:监督上面已经立好,接管那一趟交给有界的恢复重试。
+      console.error(`[ash] 接回这一行时出错,交给恢复重试 monitor=${stored.id}:`, e);
+      scheduleRecoveryRetry(stored.id);
+      failed += 1;
+    }
+  }
+  return { attached, lost, pending, failed };
+}
+
+/**
+ * **一条行的接回那一趟**:认身份 → 问出口资格 → 接管 / 判掉。
+ *
+ * 监督(tail、期限)不在这个函数的职责里 —— 调用方在它之前就立好了,所以这里每一步都可以
+ * 放心抛:抛出去只丢「这一趟结论」,不丢「有人在盯」(第 22 轮审查 F1-A)。
+ */
+async function recoverOne(stored: Row): Promise<"attached" | "lost" | "pending" | "ended"> {
     let row = stored;
     // **「问不出来」要跟「它不在了」分开**(第 6 轮审查 F1)。`unknown` = ps 这一问自己失败
     // 了,那就什么都不许声称:**照旧接回来**。这样它仍然在界面上、仍然能被点停、日志还在
@@ -111,30 +144,25 @@ export async function reattachMonitors(): Promise<{ attached: number; lost: numb
       // 期限没人管、认领也没人再问。结果早就写进日志了,界面却一直显示「在等」,到点连到期
       // 通知都没有(审查实测:等 31 秒仍 `running/pid=null/offset=0/events=0`、待发 0 条,
       // 只有脚本自己再跑一次启动接回才恢复)。所以这一档**在这一次启动周期里自己还要再问**:
-      // 挂一条有界的恢复梯子,见 `schedulePendingAdopt`。
+      // 挂一条有界的恢复梯子,见 `scheduleRecoveryRetry`。
       if (!adopted.identity && !adopted.settled) {
         await notePendingIntent(row, adopted.why);
-        // **先立监听,再问身份**(第 21 轮审查 F1):tail 和期限跟「认不认得回它的号」无关 ——
-        // 日志是我们自己的文件,期限是我们自己承诺的。探活那一根留到号认回来再补(`attach`
-        // 看 pid 那一列自己决定),所以这一步**一个信号都不多发**。
-        attach(row);
-        schedulePendingAdopt(row.id);
-        pending += 1;
-        continue;
+        // 监听已经由调用方立好了(tail 和期限跟「认不认得回它的号」无关)。这里只负责「再
+        // 问一遍号」:挂一条有界的恢复重试。
+        scheduleRecoveryRetry(row.id);
+        return "pending";
       }
       if (!adopted.identity) {
         await writeOffIntent(row, adopted);
-        lost += 1;
-        continue;
+        return "lost";
       }
       // 认回来了:下面按正常身份走(接回 / 收尾 / 记责任),不再有特殊分支。
       row = { ...row, pid: adopted.identity.pid, pidStartedAt: adopted.identity.pidStartedAt };
+      // **号到手就把退出检查那一根补上**,不等下面那一趟接管成功(第 22 轮审查 F1-B):接管
+      // 要先问出口资格(读任务行),那一问失败过的现场里,探活一直没装、进程退了也没人收。
+      attach(row);
     }
-    const verdict = await takeOver(row);
-    if (verdict === "attached") attached += 1;
-    else if (verdict === "lost") lost += 1;
-  }
-  return { attached, lost, pending };
+    return await takeOver(row);
 }
 
 /** 认不下来的那一支(`identity: null`)—— 接回和恢复梯子两处都按它分档。 */
@@ -233,7 +261,7 @@ const PENDING_LADDER_MS = [1_000, 5_000, 20_000, 60_000, 180_000];
 const ladders = new Map<string, NodeJS.Timeout>();
 
 /** 撤掉所有恢复梯子(测试台子和 `detachAllMonitors` 用:库要关了,别让它醒过来问一个关了的库)。 */
-export function stopPendingAdopts(): void {
+export function stopRecoveryRetries(): void {
   for (const [, timer] of ladders) clearTimeout(timer);
   ladders.clear();
 }
@@ -248,16 +276,16 @@ export function stopPendingAdopts(): void {
  * **一个信号都不因此多发**:认领的判据一个字没松(`adoptSpawnIdentity` / `reclaimEvidence`),
  * 梯子只是把「再问一遍」这件事自动化。
  */
-export function schedulePendingAdopt(monitorId: string, step = 0): void {
+export function scheduleRecoveryRetry(monitorId: string, step = 0): void {
   const existing = ladders.get(monitorId);
   if (existing) clearTimeout(existing);
   const timer = setTimeout(() => {
     ladders.delete(monitorId);
-    void retryPendingAdopt(monitorId, step).catch((e) => {
+    void retryRecovery(monitorId, step).catch((e) => {
       console.error(`[ash] 待认领哨兵重问身份时自己出错 monitor=${monitorId}:`, e);
       // **一次抛错不许把身份这一问整条掐掉**(第 21 轮审查 F1):库忙了一下、ps 抖了一下都
       // 会走到这里,而这一行的号还没认回来。照档位往下排(仍然有界),到顶就停。
-      if (step + 1 < PENDING_LADDER_MS.length) schedulePendingAdopt(monitorId, step + 1);
+      if (step + 1 < PENDING_LADDER_MS.length) scheduleRecoveryRetry(monitorId, step + 1);
     });
   }, PENDING_LADDER_MS[Math.min(step, PENDING_LADDER_MS.length - 1)]);
   (timer as { unref?: () => void }).unref?.();
@@ -272,7 +300,7 @@ const readRow = async (monitorId: string): Promise<Row | undefined> =>
  * 走的就是这一条队(见 monitors.ts 的 `stopMonitor`、monitor-reclaim.ts 的
  * `stopMonitorsForTask`),第 21 轮审查 F2 实测的就是不排队的后果。
  */
-async function retryPendingAdopt(monitorId: string, step: number): Promise<void> {
+async function retryRecovery(monitorId: string, step: number): Promise<void> {
   if (dbClient.closed) return;
   const before = await readRow(monitorId);
   if (!before) return;   // 行已经被删掉了:梯子到此为止
@@ -282,9 +310,16 @@ async function retryPendingAdopt(monitorId: string, step: number): Promise<void>
     // 别人已经有结论了(点停、删除、到期收尾)⇒ **一个字都不写、一条通知都不推**。
     if (!row || row.status !== "running") return;
     if (row.pid !== null) {
-      // 号已经在列上了:上一跳认回来了,而接管那一步抛了错。**「列上有 pid」不等于「有人在
-      // 盯」**(第 21 轮审查 F1),所以这里按运行时判一次、把缺的那一份补上,然后收手。
-      if (!isSupervised(row.id)) attach(row);
+      // 号已经在列上了:上一跳认回来了,而接管那一步抛了错。
+      //
+      // **「有一个运行时」也不等于「监督齐了」**(第 22 轮审查 F1-B):pending 那一刻接上的
+      // 只有 tail 和期限,而 `isSupervised` 只答「有没有运行时」—— 上一版拿它当闸,于是唯一
+      // 能补装探活的那一句被永久挡在门外(实测:进程真的退了,行还停在 running、一条结束
+      // 通知都没有)。`attach` 自己就认得出缺哪一份,所以这里**无条件**再调一遍。
+      attach(row);
+      // 接管那一趟也重试:出口资格、期限、记责任三件事上一跳没走完。它幂等 —— 还活着且
+      // 有出口就只是再 `attach` 一次;没出口或已到期就在这里收掉。再抛由梯子的 catch 接。
+      await takeOver(row);
       return;
     }
     const adopted = await adoptSpawnIdentity(row);
@@ -297,12 +332,16 @@ async function retryPendingAdopt(monitorId: string, step: number): Promise<void>
       return;
     }
     if (adopted.identity) {
-      // 认回来了:受阻那句话跟着作废(第 21 轮审查 N1 —— 卡片上不许留一句「正在重问」),
-      // 然后走正常那一趟(接上探活、判出口资格、该收就收)。
-      await clearPendingIntentNote(monitorId);
-      await takeOver({
+      // 认回来了:受阻那句话跟着作废(第 21 轮审查 N1 —— 卡片上不许留一句「正在重问」)。
+      const claimed = {
         ...after, pid: adopted.identity.pid, pidStartedAt: adopted.identity.pidStartedAt,
-      });
+      };
+      // **退出检查当场补上,不等接管那一趟成功**(第 22 轮审查 F1-B):接管第一步要读任务行
+      // 问出口资格,那一问失败过的现场里,探活一直没装 —— 进程退了也没人收,行一直停在
+      // running 等到原期限。能力修复和完成接管是两件事,前者不该押在后者先成功上。
+      attach(claimed);
+      await clearPendingIntentNote(monitorId);
+      await takeOver(claimed);
       return;
     }
     if (adopted.settled) {
@@ -316,7 +355,7 @@ async function retryPendingAdopt(monitorId: string, step: number): Promise<void>
       return;
     }
     await notePendingIntent(after, adopted.why);
-    schedulePendingAdopt(monitorId, step + 1);
+    scheduleRecoveryRetry(monitorId, step + 1);
   });
 }
 
@@ -335,4 +374,3 @@ function offlineReason(state: ReclaimState, owing: string): string {
   }
   return `server 重启后它的组长已经退出、组里还有后代（拿不到退出码）${owing}`;
 }
-

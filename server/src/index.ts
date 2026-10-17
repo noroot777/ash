@@ -161,12 +161,17 @@ async function initializeServer() {
       console.error("[ash] 哨兵接回失败（不影响启动）:", err);
       return null;
     });
-    if (monitorRecovery?.attached || monitorRecovery?.lost || monitorRecovery?.pending) {
+    if (monitorRecovery?.attached || monitorRecovery?.lost || monitorRecovery?.pending
+      || monitorRecovery?.failed) {
       // `pending` 单独说一句:那几条**既没接回来、也没判没**(pid 还空着、这一刻又认不回来),
       // 行原样留着等下一次问 —— 并进任何一边都是撒谎(第 19 轮审查 F2)。
       console.log(
         `[ash] 哨兵：接回 ${monitorRecovery.attached} 个，${monitorRecovery.lost} 个进程已不在`
-        + (monitorRecovery.pending ? `，${monitorRecovery.pending} 个这一刻认不回身份（创建意图留着）` : ""),
+        + (monitorRecovery.pending ? `，${monitorRecovery.pending} 个这一刻认不回身份（创建意图留着）` : "")
+        // `failed` 也要报出来:那几条的**监督已经立好**(日志照收、到点照收),欠的只是接管
+        // 那一趟结论,已经排了有界重试(第 22 轮审查 F1-A)。不说一句就只有 server 日志里
+        // 那行 error 知道这件事。
+        + (monitorRecovery.failed ? `，${monitorRecovery.failed} 个这一次没接管成功（已排重试，日志和期限照旧在盯）` : ""),
       );
     }
     // 「已停止」不等于「已退出」:上一辈子有人把它停了、信号发出去了、命令却没死,而那一版

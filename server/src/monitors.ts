@@ -36,7 +36,7 @@ import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { reclaimState } from "./monitor-reclaim-evidence.js";
-import { stopPendingAdopts } from "./monitor-reattach.js";
+import { stopRecoveryRetries } from "./monitor-reattach.js";
 import { clearSpawnIdentity, readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
 
 import { pushToTask } from "./monitor-events.js";
@@ -106,6 +106,11 @@ type Runtime = {
    * 有运行时在盯」)。
    */
   liveness: NodeJS.Timeout | null;
+  /**
+   * 退出这件事由外面那个 `ChildProcess` 的回调管(创建那一路传 `onExit`)。**跟 `liveness`
+   * 二选一**:判「退出检查装了没有」时两者任一即可(第 22 轮审查 F1-B)。
+   */
+  exitWatched: boolean;
 };
 const runtimes = new Map<string, Runtime>();
 /** 同一个哨兵的推送串行化：两批事件同时落库会把 offset / events 互相写回去。 */
@@ -162,7 +167,7 @@ export function attach(row: Row, onExit?: (cb: (code: number | null) => void) =>
   // 丢掉（实测：命令吐 3 行，只收到 2 行）。
   const rt: Runtime = {
     tail: null as unknown as Tailer, timers: [], buffer: [], readTo: null, flush: null,
-    closing: false, liveness: null,
+    closing: false, liveness: null, exitWatched: onExit !== undefined,
   };
   rt.tail = tailLines(row.logPath, row.offset, (lines, offset) => {
     // 收尾中也照收：`finish` 会先 drain 一次再推，进程死前最后几行不该因为「已经在停了」
@@ -237,6 +242,14 @@ function superviseLiveness(row: Row, rt: Runtime): void {
  * 决定(已经停掉就不推:用户点停就是为了不再被它叫醒),这里不替它决定。
  */
 export async function detachMonitor(monitorId: string): Promise<void> {
+  await serialize(monitorId, () => teardownRuntimeLocked(monitorId));
+}
+
+/**
+ * 撤运行时那几步的本体。**调用方必须已经在 `serialize(monitorId)` 里** —— 里面要把缓冲
+ * 排出去,而推送一律在那条队列上(排第二遍就是等自己后面那一位,当场死锁)。
+ */
+async function teardownRuntimeLocked(monitorId: string): Promise<void> {
   const rt = runtimes.get(monitorId);
   if (!rt || rt.closing) return;
   rt.closing = true;
@@ -245,13 +258,30 @@ export async function detachMonitor(monitorId: string): Promise<void> {
   if (rt.flush) clearTimeout(rt.flush);
   rt.tail.drain();
   rt.tail.stop();
-  await serialize(monitorId, () => flushBuffer(monitorId, rt)).catch(() => {});
+  await flushBuffer(monitorId, rt).catch(() => {});
 }
 
-/** 这一行此刻有没有运行时在盯(tail/期限)。**判据是运行时,不是 pid 那一列**。 */
-export const isSupervised = (monitorId: string): boolean => {
+/**
+ * 这一行此刻**装了哪几份监督**。判据一律是运行时,不是 pid 那一列。
+ *
+ * 分两件说而不是一个布尔(第 22 轮审查 F1-B):`watching` = tail 和期限有人管;`exitWatched`
+ * = 「这个进程退了没有」有人问(探活那一根,或者创建那一路手里的 ChildProcess 回调)。
+ * pending 那一刻只有前者 —— 拿「有一个运行时」当成「监督齐了」,补装探活的那一句就再也
+ * 走不到了。
+ */
+export function supervisionOf(monitorId: string): { watching: boolean; exitWatched: boolean } {
   const rt = runtimes.get(monitorId);
-  return rt !== undefined && !rt.closing;
+  if (!rt || rt.closing) return { watching: false, exitWatched: false };
+  return { watching: true, exitWatched: rt.liveness !== null || rt.exitWatched };
+}
+
+/** 这一行此刻有没有运行时在盯(tail/期限)。 */
+export const isSupervised = (monitorId: string): boolean => supervisionOf(monitorId).watching;
+
+/** 这一行要的监督**齐了没有**:tail/期限总要有,pid 在列上还得有一份退出检查。 */
+export const supervisionComplete = (row: { id: string; pid: number | null }): boolean => {
+  const view = supervisionOf(row.id);
+  return view.watching && (row.pid === null || view.exitWatched);
 };
 
 async function commitOffset(monitorId: string, offset: number): Promise<void> {
@@ -555,32 +585,40 @@ export async function finishOffline(
         + `${fresh?.status ?? "行已不在"}，这一刻的结局已经有人写过了（${reason}）`);
       return;
     }
+    // **现有运行时在这里交接掉**(第 22 轮审查 N2):接回层现在给每一条运行行都先立 tail 和
+    // 期限(连 pid 还空着的创建意图行也有),而这一趟判的就是「它已经不在了」。不撤的话一条
+    // 已经写成终态的行还占着文件句柄、还在算自己的期限,到点再走一次收尾。撤之前照旧把
+    // 文件吸干、把缓冲推出去(那一批是已经发生的事实)—— 所以下面**重读一遍**:offset 和
+    // events 刚被那一次 flush 推进过,照 `fresh` 读会把同一批行再推一次。
+    await teardownRuntimeLocked(fresh.id);
+    const base = (await db.select().from(monitors).where(eq(monitors.id, fresh.id))).at(0) ?? fresh;
+
     const collected: string[] = [];
-    let readTo = fresh.offset;
-    const tail = tailLines(fresh.logPath, fresh.offset, (lines, offset) => {
+    let readTo = base.offset;
+    const tail = tailLines(base.logPath, base.offset, (lines, offset) => {
       for (const line of lines) if (line.trim()) collected.push(line);
       readTo = offset;
     });
     tail.drain();
     tail.stop();
 
-    let events = fresh.events;
-    if (collected.length) events = await pushLines(fresh, collected, readTo);
-    else if (readTo !== fresh.offset) await commitOffset(fresh.id, readTo);
+    let events = base.events;
+    if (collected.length) events = await pushLines(base, collected, readTo);
+    else if (readTo !== base.offset) await commitOffset(base.id, readTo);
 
     const result = await db
       .update(monitors)
       .set({ status, endedAt: now(), endedReason: reason, exitCode: null })
-      .where(and(eq(monitors.id, fresh.id), eq(monitors.status, "running")));
+      .where(and(eq(monitors.id, base.id), eq(monitors.status, "running")));
     if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
       // 条件没落上 = 这一瞬有人把它收尾了。**结束通知到此为止**:再推就是在用户已经停掉
       // 之后又叫醒一次任务(补读出去的那几行是已经发生的事实,留着)。
-      console.error(`[ash] 离线收尾的条件更新没落上 monitor=${fresh.id}：结局已经有人写过了`);
+      console.error(`[ash] 离线收尾的条件更新没落上 monitor=${base.id}：结局已经有人写过了`);
       return;
     }
-    publish(fresh.taskId);
-    await appendTaskTimeline(fresh.taskId, `哨兵结束：${fresh.description}。${reason}（共推送 ${events} 条事件）`);
-    await pushToTask(fresh, `【哨兵结束】${fresh.description}（monitorId=${fresh.id}）。${reason}`);
+    publish(base.taskId);
+    await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${reason}（共推送 ${events} 条事件）`);
+    await pushToTask(base, `【哨兵结束】${base.description}（monitorId=${base.id}）。${reason}`);
   });
 }
 
@@ -592,7 +630,7 @@ export { reattachMonitors } from "./monitor-reattach.js";
 export function detachAllMonitors(): void {
   // 待认领那几行的恢复梯子也要撤:它是 unref 的定时器,但测试里库会被关掉,让它醒过来只会
   // 对着一个关了的库发问(第 20 轮审查 F2)。
-  stopPendingAdopts();
+  stopRecoveryRetries();
   for (const [, rt] of runtimes) {
     rt.closing = true;
     for (const t of rt.timers) { clearInterval(t); clearTimeout(t); }

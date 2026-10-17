@@ -405,12 +405,12 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   }
 }
 
-// ── 回复框上那条「在等哨兵」：pid 还空着的那几条不许被说成「等着就会被叫醒」 ────────
+// ── 回复框上那条「在等哨兵」：折叠那一行照旧只报数 ──────────────────────────────
 //
-// 第 20 轮审查 F2:重启恰好打断了「落身份 → 起进程 → 回填 pid」那一步时,那一行是 running、
-// pid 空、`ended_reason` 上写着受阻原因(server/src/monitor-adopt.ts 的 `notePendingIntent`),
-// 而**此刻没有任何东西在读它的日志**。这张卡是用户离开这一页之前看到的最后一句话,所以
-// 「有事件时会把这条会话重新叫醒」对它必须收回,受阻原因照抄出来。
+// 重启恰好打断了「落身份 → 起进程 → 回填 pid」那一步时,那一行是 running、pid 空、
+// `ended_reason` 上写着受阻原因(server/src/monitor-adopt.ts 的 `notePendingIntent`)。
+// 它展开之后该说什么**全归 DOM 测试**(第 22 轮审查 N1 改的就是那几句:监督已经不随认领走,
+// 所以「会被叫醒」对它也是真的,该说的是「点停未必停得掉它」)——正文要点开才渲染。
 {
   const stuck: TaskMonitor = {
     ...base, id: "m-stuck", pid: null, events: 0,

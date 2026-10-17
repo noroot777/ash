@@ -37,7 +37,8 @@ const { reclaimUnconfirmedStops } = await import("../src/monitor-reclaim.js");
 const { killTree } = await import("../src/platform.js");
 const { dbClient } = await import("../src/db/index.js");
 const { monitorSpawnIdentityPath } = await import("../src/monitor-spawn.js");
-const { finish, isSupervised, reattachMonitors, serialize } = await import("../src/monitors.js");
+const { finish, isSupervised, reattachMonitors, serialize, supervisionComplete, supervisionOf }
+  = await import("../src/monitors.js");
 
 /** 记号那一问在这台机器上答得有多实:Linux 读得到真实环境项(`exact`),macOS 只有展示文本。 */
 const EXACT_MARKS = monitorUnitProofGrade() === "exact";
@@ -122,7 +123,7 @@ try {
   assert.equal(pendingRow.pid, null, "更不许把一个没通过认领的候选号写上去");
   assert.match(pendingRow.endedReason ?? "", /核实不了/,
     "话要留在卡片上:running 的行也显示这一列,所以刷新页面仍看得出「它卡在认领这一步」");
-  assert.deepEqual(first, { attached: 0, lost: 0, pending: 1 },
+  assert.deepEqual(first, { attached: 0, lost: 0, pending: 1, failed: 0 },
     "既不算接回来、也不算没了:混进任何一边都是撒谎");
   assert.equal(await debtRow(mon), undefined,
     "这一刻不记回收债:债是补刀授权,而这一行的进程多半正常跑着");
@@ -240,6 +241,9 @@ try {
   }, 25_000);
   assert.match((await readRow(mon6))!.endedReason ?? "", /反证|没有真正开工/,
     "措辞照实:这一档是「那个号不是它」,不是「核实不了」");
+  assert.equal(isSupervised(mon6), false,
+    "**判掉的同时把运行时交接掉**(第 22 轮审查 N2):接回层给每条运行行都先立了 tail 和期限,"
+    + "判完还留着它就是让一条已经写成终态的行继续占文件句柄、继续算自己的期限");
 
   // ⑦ **身份边条这一刻读不出来 ≠ 没有边条**(第 20 轮审查 F1)。审查实测:注入一次 EIO,
   //    删除照样返回成功,任务行、哨兵行、债表同时为 0,而那条命令还在后台跑着。
@@ -506,6 +510,87 @@ try {
     dbClient.execute = realExec12;
     if (release12) release12();
   }
+
+  // ⑬ **接回某一条时出错,不许把整批监督一起带走**(第 22 轮审查 F1-A)。出口资格那一问(读
+  //    任务行)是接管的第一步;上一版它一抛就从整个循环里窜出去 —— 它后面那些行连 tail 都
+  //    没接上,而启动侧只打一行日志就继续启动(index.ts),于是这一次启动期间它们完全没人管
+  //    (审查实测:两条哨兵都 `supervised=false`、期限早就过了、结果已经写进日志)。
+  // 两条行分开建:夹具的 id 只随 `makeTask` 换序号(`uniq` 用的是 seq + 毫秒),同一毫秒连着
+  // 插两条会撞主键 —— 建完一条再建下一个任务,顺带把序号带过去。
+  const taskId13 = await makeTask({ status: "done" });        // 终态任务 ⇒ 出口资格判「没出口」
+  const token13 = `boot-isolate-a-${process.pid}-${Date.now()}`;
+  const pid13 = markedProcess(token13);
+  const mon13 = await insertMonitorRow(taskId13, { pid: pid13, unitToken: token13 });
+  const taskId13b = await makeTask({ status: "running" });
+  const token13b = `boot-isolate-b-${process.pid}-${Date.now()}`;
+  const pid13b = markedProcess(token13b);
+  const mon13b = await insertMonitorRow(taskId13b, { pid: pid13b, unitToken: token13b });
+  for (const id of [mon13, mon13b]) writeFileSync((await readRow(id))!.logPath, "");
+  let thrown13 = 0;
+  const realExec13 = dbClient.execute;
+  dbClient.execute = (async function (statement: unknown, ...rest: unknown[]) {
+    const sql = String(typeof statement === "string" ? statement : (statement as { sql?: string })?.sql);
+    if (thrown13 === 0 && /^\s*select\b[\s\S]*from "tasks" where/i.test(sql)) {
+      thrown13 += 1;
+      dbClient.execute = realExec13;   // 只打一次:它后面那一条要走到真东西
+      throw new Error("fixture: transient tasks read failure inside takeOver");
+    }
+    return (realExec13 as (...a: unknown[]) => unknown).call(dbClient, statement, ...rest);
+  }) as typeof dbClient.execute;
+  let boot13: Awaited<ReturnType<typeof reattachMonitors>>;
+  try {
+    boot13 = await reattachMonitors();
+  } finally { dbClient.execute = realExec13; }
+  assert.equal(thrown13, 1, "台子前提:出口资格那一问真的抛了一次");
+  assert.equal(boot13.failed, 1,
+    "那一条照实记成「这一次没接管成功」—— 混进接回或判没任何一边都是撒谎");
+  assert.equal(supervisionComplete({ id: mon13, pid: pid13 }), true,
+    "**抛错的那一条自己也不许失管**:tail、期限、探活都在身份与资格之前就立好了");
+  assert.equal(supervisionComplete({ id: mon13b, pid: pid13b }), true,
+    "**它后面那一条更不许被带走**:上一版整批窜出去,这一条连 tail 都没有");
+  // 监督是真的在盯,不是一个布尔:进程退了就收得到。
+  killTree(pid13b, "SIGKILL");
+  await until("后面那一条照常收尾", async () => (await readRow(mon13b))?.status === "exited", 20_000);
+  // 抛错的那一条:接管那一趟由恢复重试补完 —— 它的任务已终态,结论就是「没出口,收掉」。
+  await until("抛错的那一条由重试把接管补完", async () => (await readRow(mon13))?.status === "stopped", 25_000);
+  assert.match((await readRow(mon13))!.endedReason ?? "", /server 重启期间发生的/,
+    "补完的是**接管那一趟的结论**(出口资格),不只是把监督挂上");
+
+  // ⑭ **号认回来了、接管那一步抛了错:退出检查不许就此永久缺位**(第 22 轮审查 F1-B)。
+  //    上一版这一支拿 `isSupervised` 当闸,而 pending 那一刻已经有 tail 了 —— 于是唯一能补装
+  //    探活的那一句被永久挡在门外(审查实测:pid 已回填、进程真的退了,行还停在 running、
+  //    `events=1` 有输出、却一条【哨兵结束】都没有,只能白等到原期限)。
+  const taskId14 = await makeTask({ status: "running" });
+  const token14 = `retry-liveness-${process.pid}-${Date.now()}`;
+  const pid14 = markedProcess(token14);
+  const mon14 = await intentRow(taskId14, token14, pid14);
+  const [first14, injected14] = await withLedgerReadFailure(() => reattachMonitors());
+  assert.equal(injected14, 1);
+  assert.equal(first14.pending, 1, "台子前提:这一行落在「这一刻认不回来」那一档");
+  assert.deepEqual(supervisionOf(mon14), { watching: true, exitWatched: false },
+    "台子前提:pending 这一刻只有 tail 和期限 —— 探活问的是「这个号还是它吗」,空号问不出");
+  // 出口资格那一问**一直抛**(不是只打一次):这样「探活装上了」就只可能来自认回号那一刻的
+  // 当场补装,不可能来自某一次接管成功 —— 审查给的修复落点原话就是「能力修复不该押在完成
+  // 接管先成功上」。
+  let thrown14 = 0;
+  const realExec14 = dbClient.execute;
+  dbClient.execute = (async function (statement: unknown, ...rest: unknown[]) {
+    const sql = String(typeof statement === "string" ? statement : (statement as { sql?: string })?.sql);
+    if (/^\s*select\b[\s\S]*from "tasks" where/i.test(sql)) {
+      thrown14 += 1;
+      throw new Error("fixture: tasks read keeps failing after the pid landed");
+    }
+    return (realExec14 as (...a: unknown[]) => unknown).call(dbClient, statement, ...rest);
+  }) as typeof dbClient.execute;
+  try {
+    await until("梯子把号认回来了", async () => (await readRow(mon14))?.pid === pid14, 25_000);
+    await until("退出检查当场就补上了", async () => supervisionOf(mon14).exitWatched, 25_000);
+    assert.ok(thrown14 >= 1, "台子前提:出口资格那一问这期间一直在抛");
+    assert.equal((await readRow(mon14))!.status, "running",
+      "接管那一趟确实还没成功过 —— 所以上面那一份能力不是它带来的");
+  } finally { dbClient.execute = realExec14; }
+  killTree(pid14, "SIGKILL");
+  await until("进程退了就收得到结束", async () => (await readRow(mon14))?.status === "exited", 25_000);
 
   console.log(
     "✓ 创建意图的责任接管：认不回来时行原样留着且一刀不发 / 故障撤掉后 ash 自己认得回来、"
