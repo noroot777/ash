@@ -304,26 +304,32 @@ while (Date.now() < deadline) {
 if (ready) {
   say(`  ✓ :${PORT} 已就绪(pid ${serverPid},日志 ${LOG})`);
   // 「上一次服务是怎么停的」只有在这一刻说才有人读。新 server 启动时如果发现上一轮的
-  // 单例锁还在,它会按账本定性:账本里有那一轮的退出记录 = 走过退出路径、只是没删掉锁;
-  // 没有记录 = 死因未知。**不要在这里把「锁还在」说成强杀** —— 删锁本身会失败(数据目录
-  // 只读就 EACCES),那种情况下服务是正常停的。
+  // 单例锁还在,它会报**证据等级**:账本里有那一轮的退出意向,还是连记录都没有。
+  //
+  // **两档都不许说成死因**。锁还在只证明那一轮的清理没完成:删锁本身会失败(数据目录
+  // 只读就 EACCES),而「记完账、释放锁的路上又被强杀」留下的是同一个现场 —— 第 2 轮
+  // 审查实测过。所以这里不说「是正常停的」,也不说「是被强杀的」。
   const residual = readyHealth?.previousResidualLock;
-  if (residual?.diagnosis === "cleanup_failed") {
-    say(`  ⚠ 上一实例(pid ${residual.pid})是正常停的,但没能删掉单例锁(多半是数据目录不可写)。`);
-    say("     本次已覆盖那把陈旧锁;顺手看一下数据目录的权限,否则每次重启都会报这一句。");
+  const ledgerPath = LOCK_FILE.replace(/\.ash\.lock$/, ".exits.jsonl");
+  if (residual?.evidence === "exit_intent") {
+    const intent = residual.observedIntent;
+    const how = intent?.signal ? `收到 ${intent.signal}` : `退出码 ${intent?.code ?? "未知"}`;
+    say(`  ⚠ 上一实例(pid ${residual.pid})留下了单例锁,账本里有它的退出意向(${how})—— 它进入过退出流程,但清理没完成。`);
+    say("     最终死因仍然未知:删锁失败(数据目录不可写)和「记完账之后又被强杀」是同一个现场。");
+    say(`     先看数据目录权限;要分辨是不是被强杀,只能查系统日志。账本:${ledgerPath}`);
   } else if (residual) {
     const alive = residual.lastHeartbeatAt
       ? `最后已知存活 ${residual.lastHeartbeatAt}`
       : "连最后存活时刻都没有(上一实例是旧版本,锁里没心跳)";
-    say(`  ⚠ 上一实例(pid ${residual.pid})留下了单例锁,账本里没有它的退出记录 —— 死因未知:${alive}。`);
+    say(`  ⚠ 上一实例(pid ${residual.pid})留下了单例锁,账本里没有它的任何记录 —— 最终死因未知:${alive}。`);
     say("     可能是强杀/内核击杀,也可能是退出时连账本都没写进去。这不是重启失败,服务已经起来了。");
-    say(`     账本:${LOCK_FILE.replace(/\.ash\.lock$/, ".exits.jsonl")}`);
+    say(`     账本:${ledgerPath}`);
+  }
+  if (residual && process.platform === "darwin") {
     // 系统日志那条命令只有 macOS 有,而且 zsh 里 `log` 被遮蔽,必须写全路径。
-    if (process.platform === "darwin") {
-      say(`     /usr/bin/log show --last 1h --predicate 'eventMessage CONTAINS "${residual.pid}"'`);
-    } else if (!IS_WINDOWS) {
-      say(`     查内核日志:journalctl -k --since -1h | grep -i -e oom -e kill`);
-    }
+    say(`     /usr/bin/log show --last 1h --predicate 'eventMessage CONTAINS "${residual.pid}"'`);
+  } else if (residual && !IS_WINDOWS) {
+    say(`     查内核日志:journalctl -k --since -1h | grep -i -e oom -e kill`);
   }
 } else if (impostor) {
   say(`  ✕ :${PORT} 上应答的是 pid ${impostor},不是刚起的 ${serverPid} —— 重启没生效,跑的还是旧代码。看 ${LOG}`);

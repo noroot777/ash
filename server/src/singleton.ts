@@ -19,11 +19,12 @@ import {
   humanDuration,
   publicExitSummary,
   recordExit,
+  rotateExitLedger,
   runIdOfToken,
-  trimExitLedger,
+  type ExitEvidence,
   type ExitRecord,
+  type ObservedIntent,
   type PublicExitSummary,
-  type ResidualDiagnosis,
 } from "./exit-ledger.js";
 
 const LOCK_VERSION = 1;
@@ -45,7 +46,7 @@ let ownLockToken: string | null = null;
  * 启动时发现的「上一轮的锁还留在原地」这件事,算一次。
  *
  * 要让人看得见才有用:/api/health 带上它,`npm run restart` 在确认就绪那一步就能把
- * 「上次不是正常停的」摔在用户脸上,而不是让他下次再从 /tmp 日志 + 系统日志里拼。
+ * 「上一轮的清理没完成」摔在用户脸上,而不是让他下次再从 /tmp 日志 + 系统日志里拼。
  *
  * **只导出白名单投影**(`previousResidualLockPublic`),不导出这条全量记录:它的
  * `note` 可能含别的进程的完整命令行(PID 复用时),而健康端点是免登录的。想让公开
@@ -97,10 +98,15 @@ export class SingletonConflictError extends Error {
  * 打印「单例锁已释放」—— 第 1 轮审查把数据目录改成只读复现出来:删锁 EACCES、日志
  * 照说已释放、锁留在原地,下一个实例再把这次认成强杀。谁都没说谎,但三处拼起来是
  * 一个假结论。所以这里改成返回值,调用方按实际情况说话。
+ *
+ * `unknown` 这一档是第 2 轮审查加的:锁**读不出来**(EACCES、半行 JSON)时,原来一律
+ * 归成 `not-ours` 然后肯定地说「已不属于本进程」—— 那是把一次读失败升格成身份事实。
+ * 保守地不删是对的(删掉可能是别人的锁),肯定地下结论不对。
  */
 export type LockReleaseOutcome =
   | { state: "removed" }
   | { state: "not-ours" }
+  | { state: "unknown"; error: string }
   | { state: "failed"; error: string };
 
 export type SingletonLock = {
@@ -167,7 +173,7 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
   }
 
   installCleanup(ownLock);
-  trimExitLedger(dbFile);
+  rotateExitLedger(dbFile);
   return ownLock;
 }
 
@@ -231,23 +237,30 @@ function writeOwnLock(dbFile: string, lockFile: string, port: number | null): Si
     release: () => {
       if (outcome) return outcome;
       clearInterval(heartbeat);
+      const current = readLockResult(lockFile);
+      if ("error" in current) {
+        // 文件已经没了 = 没有要删的东西,这一档可以确定。其它读失败只能说「不知道」:
+        // 既不删(可能是别人的),也不声称身份已变。
+        outcome = isNotFound(current.error)
+          ? { state: "removed" }
+          : { state: "unknown", error: errnoOf(current.error) };
+        return outcome;
+      }
+      if (current.lock.pid !== lock.pid || current.lock.token !== lock.token) {
+        // 锁已经不是自己的了(被人工删掉、或被别的实例接走):没有要删的东西,
+        // 也不是失败 —— 但也不能说成「我释放了」。
+        outcome = { state: "not-ours" };
+        return outcome;
+      }
       try {
-        const current = readLock(lockFile);
-        if (current?.pid === lock.pid && current.token === lock.token) {
-          unlinkSync(lockFile);
-          outcome = { state: "removed" };
-        } else {
-          // 锁已经不是自己的了(被人工删掉、或被别的实例接走):没有要删的东西,
-          // 也不是失败 —— 但也不能说成「我释放了」。
-          outcome = { state: "not-ours" };
-        }
+        unlinkSync(lockFile);
+        outcome = { state: "removed" };
       } catch (e) {
         if (isNotFound(e)) {
           outcome = { state: "removed" };
         } else {
-          const error = (e as NodeJS.ErrnoException)?.code ?? String(e);
           console.warn(`[ash] failed to release singleton lock ${lockFile}:`, e);
-          outcome = { state: "failed", error };
+          outcome = { state: "failed", error: errnoOf(e) };
         }
       }
       return outcome;
@@ -258,7 +271,8 @@ function writeOwnLock(dbFile: string, lockFile: string, port: number | null): Si
 function describeRelease(outcome: LockReleaseOutcome): string {
   if (outcome.state === "removed") return "单例锁已释放";
   if (outcome.state === "not-ours") return "单例锁已不属于本进程,未改动";
-  return `单例锁删除失败(${outcome.error}),它会留在原地 —— 下一个实例会按账本把这次认成「退出已记录、清理失败」`;
+  if (outcome.state === "unknown") return `单例锁读不出来(${outcome.error}),没有动它 —— 现在它属于谁无从判断`;
+  return `单例锁删除失败(${outcome.error}),它会留在原地 —— 下一个实例只会看到「这一轮留过退出意向、清理没完成」`;
 }
 
 /**
@@ -299,11 +313,15 @@ function beat(lockFile: string, lock: LockFile): void {
 /**
  * 发现上一轮的锁还在:落账 + 打在终端上。
  *
- * **判据是账本,不是锁**。锁留在原地有两种完全不同的来由:
- *   * 账本里有这一轮的退出记录 ⇒ 它**走过**退出路径,只是删锁失败(数据目录只读
- *     就会 EACCES)。这不是强杀,说成强杀是假结论。
- *   * 账本里没有 ⇒ 死因未知。SIGKILL、内核击杀都在这一档里,但「退出时连账本都
- *     没写进去」也在 —— 所以只报 unknown,不点名 SIGKILL。
+ * **只报证据等级,不报死因**(第 2 轮审查)。锁还带着那一轮的 token,能确定的只有
+ * 一件事:那一轮的**清理没完成**。至于为什么没完成、进程最终是怎么走的,分两档:
+ *   * 账本里有这一轮的退出记录 ⇒ 它**进入过**退出流程。但那条记录写在删锁之前,
+ *     审查实测过「记完账、释放锁的路上被 SIGKILL」—— 现场跟删锁失败一模一样。
+ *     所以这一档只说「留过退出意向」,**不说「不是强杀」、不说「是正常停的」**。
+ *   * 账本里没有 ⇒ 连意向都没留下。SIGKILL、内核击杀都在这一档,但「退出时连账本
+ *     都没写进去」也在。
+ * 两档的结论都落在「最终死因未知」上 —— 要定性只能靠外部证据(wait 状态、系统日志),
+ * 进程自己写的任何标记都做不到,再加一条更晚的标记也一样(标记之后还有窗口)。
  *
  * 顺带一条:`staleReason` 里可能带别的进程的完整命令行(PID 复用那一支),它只进
  * `note`(账本 0600),不进公开响应。
@@ -316,7 +334,10 @@ function reportResidualLock(dbFile: string, lock: Partial<LockFile> | null, stal
   const startedAtMs = typeof lock?.processStartedAtMs === "number" ? lock.processStartedAtMs : null;
   const runId = typeof lock?.token === "string" && lock.token ? runIdOfToken(lock.token) : null;
   const prior = runId ? findExitByRunId(runId, dbFile) : null;
-  const diagnosis: ResidualDiagnosis = prior ? "cleanup_failed" : "unknown";
+  const evidence: ExitEvidence = prior ? "exit_intent" : "none";
+  const observedIntent: ObservedIntent | undefined = prior
+    ? { kind: prior.kind, signal: prior.signal, code: prior.code, at: prior.at }
+    : undefined;
   const record: ExitRecord = {
     at: new Date(now).toISOString(),
     pid,
@@ -326,7 +347,8 @@ function reportResidualLock(dbFile: string, lock: Partial<LockFile> | null, stal
     uptimeMs: heartbeatAtMs !== null && startedAtMs !== null ? heartbeatAtMs - startedAtMs : null,
     lastHeartbeatAt: lock?.heartbeatAt ?? null,
     silentMs: heartbeatAtMs !== null ? now - heartbeatAtMs : null,
-    diagnosis,
+    evidence,
+    observedIntent,
     note: staleReason,
   };
   previousResidualRecord = record;
@@ -335,8 +357,10 @@ function reportResidualLock(dbFile: string, lock: Partial<LockFile> | null, stal
   if (prior) {
     const how = prior.kind === "signal" ? `收到 ${prior.signal ?? "信号"}` : `退出码 ${prior.code ?? "未知"}`;
     console.warn(
-      `[ash] 上一实例(PID ${pid})留下了锁,但账本里有它这一轮的退出记录(${how},${prior.at})`
-        + ` ⇒ 它**走过**退出路径,只是没能把锁删掉(多半是数据目录不可写)。不是强杀。账本:${ledger}`,
+      `[ash] 上一实例(PID ${pid})留下了锁,账本里有它这一轮的退出意向(${how},${prior.at})`
+        + ` ⇒ 它**进入过**退出流程,但那一轮的清理没完成。那条记录写在删锁之前,`
+        + `所以「删锁失败(数据目录不可写)」和「记完账之后又被强杀」留下的是同一个现场`
+        + ` —— 最终死因未知。账本:${ledger}`,
     );
     return;
   }
@@ -344,9 +368,9 @@ function reportResidualLock(dbFile: string, lock: Partial<LockFile> | null, stal
     ? `最后已知存活 ${record.lastHeartbeatAt}(之后静默 ${humanDuration(record.silentMs)},至少活了 ${humanDuration(record.uptimeMs)})`
     : "那把锁是旧版本写的、没有心跳字段,连最后存活时刻都给不出";
   console.warn(
-    `[ash] 上一实例(PID ${pid})留下了锁,账本里**没有**它这一轮的退出记录 ⇒ 死因未知:`
+    `[ash] 上一实例(PID ${pid})留下了锁,账本里**没有**它这一轮的任何记录 ⇒ 最终死因未知:`
       + `${alive}。可能是 SIGKILL / 内核击杀,也可能是退出时连账本都没写进去;`
-      + `锁本身只能证明「没留下已确认的退出记录」。账本:${ledger}`,
+      + `锁本身只能证明「那一轮的清理没完成」。账本:${ledger}`,
   );
 }
 
@@ -383,11 +407,35 @@ function holderFromLock(lockFile: string) {
 }
 
 function readLock(lockFile: string): Partial<LockFile> | null {
+  const result = readLockResult(lockFile);
+  return "error" in result ? null : result.lock;
+}
+
+/**
+ * 同一次读取,但把「读不到」和「读到了、不是我的」分开。
+ *
+ * `readLock` 那个吞掉异常的版本给陈旧检测用没问题(读不出来本身就是一条陈旧理由),
+ * 但 `release()` 不能用它:那里把 null 当成「锁不是自己的」,等于把一次 EACCES
+ * 说成身份已变(第 2 轮审查)。
+ */
+function readLockResult(lockFile: string): { lock: Partial<LockFile> } | { error: unknown } {
+  let text: string;
   try {
-    return JSON.parse(readFileSync(lockFile, "utf8"));
-  } catch {
-    return null;
+    text = readFileSync(lockFile, "utf8");
+  } catch (e) {
+    return { error: e };
   }
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object") return { error: new Error("lock file is not an object") };
+    return { lock: parsed as Partial<LockFile> };
+  } catch (e) {
+    return { error: e };
+  }
+}
+
+function errnoOf(e: unknown): string {
+  return (e as NodeJS.ErrnoException)?.code ?? String(e);
 }
 
 function inspectProcess(pid: number): ProcessInfo | null {
@@ -455,14 +503,16 @@ const SIGNAL_EXIT_CODE: Partial<Record<NodeJS.Signals, number>> = {
 };
 
 /**
- * 记账和释放锁的**顺序是有讲究的:先落账,再释放**。
+ * 记账在释放锁**之前**:新实例一拿到锁就会去回查这一轮的退出意向,先落账它才看得到。
  *
- * 反过来写(原来就是)会开一个跨实例的写入竞态:旧实例一松锁,新实例立刻就能取到锁
- * 并开始裁剪账本,而旧实例那条退出记录还没写进去 —— 整文件重写会把它盖掉。先落账
- * 就等于「账本只在持锁期间被动」,竞态自然没了。
+ * 这个顺序**不再承担账本的完整性** —— 那条不变量现在住在账本层(`rotateExitLedger`
+ * 只改名、不重写),因为「所有写入都发生在持锁期间」这句话本来就不成立:启动失败
+ * 那条路(`index.ts` 的 `exitAfterStartupFailure`)先松锁再 `process.exit`,退出钩子
+ * 这条记录就是在没有锁的情况下追加的。第 2 轮审查用真实生产入口把那条竞态复现了,
+ * 所以别再靠调整调用顺序来保账本。
  *
- * 代价是日志里那句「锁怎么样了」要等释放之后才知道,所以释放结果不进账本:下一个
- * 实例要的是「这一轮有没有退出记录」,有记录 + 锁还在就足以推出「清理失败」。
+ * 释放结果不进账本:那是**释放之后**才知道的事,再补一条更晚的记录也证明不了终态
+ * (标记之后还有窗口),它只进日志。
  */
 function installCleanup(lock: SingletonLock) {
   const startedAtMs = Date.now() - Math.round(process.uptime() * 1000);

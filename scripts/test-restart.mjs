@@ -59,9 +59,10 @@ const fakeServer = join(TMP, "fake-server.mjs");
 writeFileSync(fakeServer, `import { writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 createServer((req, res) => {
+  const residual = process.env.RESTART_TEST_RESIDUAL;
   const body = req.url?.startsWith("/api/restart-impact")
     ? '{"survives":[],"resumes":[],"interrupted":[],"mcpDisrupted":[]}'
-    : JSON.stringify({ ok: true, pid: process.pid });
+    : JSON.stringify({ ok: true, pid: process.pid, previousResidualLock: residual ? JSON.parse(residual) : null });
   res.writeHead(200, { "content-type": "application/json" });
   res.end(body);
 }).listen(${PORT}, "127.0.0.1", () => {
@@ -222,6 +223,33 @@ if (forcedOutput.includes("问不到「重启会打断谁」")) fail("FORCE=1 �
 if (!forcedOutput.includes(`${PORT} 已就绪`)) fail("FORCE=1 没把服务端换成新的", forcedOutput);
 if (serverPid) { killPid(serverPid); serverPid = 0; }
 
+// ── 「上一轮留下了单例锁」怎么说给用户听 ─────────────────────────────────────
+// 第 2 轮审查打回的是这条提示的措辞:账本里有退出意向时它写的是「上一实例是正常停的」。
+// 那句站不住 —— 记完账之后再被 SIGKILL 留下的是同一个现场(审查实测)。所以这里钉的是
+// 「只报观察到的意向 + 最终死因未知」,并反向断言不许出现那两句定性。
+const residual = JSON.stringify({
+  at: "2026-10-19T09:00:00.000Z",
+  pid: 424242,
+  kind: "residual",
+  evidence: "exit_intent",
+  observedIntent: { kind: "signal", signal: "SIGTERM", at: "2026-10-19T08:59:59.000Z" },
+});
+const residualRun = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+  cwd: REPO,
+  env: { ...env, RESTART_TEST_RESIDUAL: residual },
+  encoding: "utf8",
+});
+const residualOutput = (residualRun.stdout ?? "") + (residualRun.stderr ?? "");
+try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* 下面统一报错 */ }
+
+if (residualRun.status !== 0) fail(`带残留锁提示时也该正常重启,退出码 ${residualRun.status}`, residualOutput);
+if (!residualOutput.includes("退出意向(收到 SIGTERM)")) fail("没把观察到的那条意向报出来", residualOutput);
+if (!residualOutput.includes("最终死因仍然未知")) fail("两档都必须落在「死因未知」上", residualOutput);
+if (residualOutput.includes("是正常停的")) fail("一条进程内的记录定不了性,不许说成正常停", residualOutput);
+if (residualOutput.includes("不是强杀")) fail("同理也不许声称排除强杀", residualOutput);
+if (serverPid) { killPid(serverPid); serverPid = 0; }
+
 process.stdout.write("✓ restart.mjs 的本机探测绕过代理，且脚本返回后 detached server 仍在运行\n");
 process.stdout.write("✓ 旧进程没能下线时 restart.mjs 明确失败，不再谎报「已就绪」\n");
 process.stdout.write("✓ 问不到「会打断谁」时 fail closed(FORCE=1 仍可越过)\n");
+process.stdout.write("✓ 上一轮留下单例锁时只报观察到的意向,不定性成正常停或强杀\n");

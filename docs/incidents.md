@@ -306,15 +306,15 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 | `npm run restart` | 否 | 那条路只发 SIGTERM（`scripts/platform.mjs` 的 `killPid`），而 SIGTERM 会删掉单例锁 |
 | 不留话地被带走（SIGKILL，或当时还没处理器的 SIGHUP/SIGQUIT） | **是** | 下面那条判据 |
 
-**判据只到「没留下已确认的退出记录」，不到「一定是 SIGKILL」**——这一步第一版写错了，是第 1 轮审查打回来的。`installCleanup` 在 `exit`/SIGINT/SIGTERM 任一路径都会 `unlink` 锁文件，所以锁还在确实说明「没走过那几条路」；但**删锁本身会失败**（数据目录只读就报 `EACCES`，审查实测复现过：服务正常收到 SIGTERM、账本里明明记着 `kind=signal`，锁却留在原地），而且当时 SIGHUP/SIGQUIT **还没有处理器**，一个显式的 `kill -HUP` 同样会留下锁。所以能证明的上限是「没有已确认的退出记录」。这条判据跟「进程还在不在」也是两件事，别混：`staleLockReason` 回答的是后者。
+**「锁还在」只能证明那一轮的清理没完成，证明不了死因。**这一步前两版都写过头，是审查连着打回两轮的：第一版直接写成「锁还在 ⇒ 被 SIGKILL」；第二版改口成「有退出记录 ⇒ 走过退出路径、不是强杀」，还是错的。两个反方向的实测各打掉一半：**删锁本身会失败**（数据目录只读就报 `EACCES`，服务正常收到 SIGTERM、账本里记着 `kind=signal`，锁却留在原地）；**记完账之后照样会被强杀**（在 `lock.release()` 入口暂停、再发 SIGKILL，操作系统侧终态是 SIGKILL，账本侧的意向是 SIGTERM）——这两种现场**一模一样**。再加上当时 SIGHUP/SIGQUIT 还没有处理器，一个显式的 `kill -HUP` 也留下同样的现场。
 
-正因如此，现在的实现把定性权交给账本而不是锁：锁里带这一轮的 `runId`，残留时回查账本——查到退出记录就是 `cleanup_failed`（走过退出路径、只是没删掉锁），查不到才是 `unknown`。
+所以现在只报**证据等级**、不报死因：账本里有这一轮的 `runId` 记录就是 `exit_intent`（进入过退出流程），没有就是 `none`，两档的结论都落在「最终死因未知」。要定性只能靠外部证据（wait 状态、系统日志），进程自己写的任何标记都做不到——再补一条更晚的标记也一样，标记之后还有窗口。另外别把这条跟「进程还在不在」混了：`staleLockReason` 回答的是后者。
 
-**凶手没能指认，但排除掉的路值得记下来**：全天所有 agent 执行过的 shell 命令扫了一遍，唯一的批量 `kill -9` 在 11:41–12:25 那一轮、目标是哨兵 shell 的 pid，不含 51330/65995；`/opt/homebrew/Cellar/node/26.4.0/bin/node` 自 6 月 29 日起没动过，排除「brew 覆盖运行中的二进制导致签名击杀」；服务端自己那三处 SIGKILL 的匹配条件都够不着 `node server/dist/index.js`——`cua.ts` 认 `SkyComputerUseService` 的可执行路径、`mcp-holders.ts` 要求 `mcp/dist/index.js` 正好是 argv[1]、`preview-process-stop.ts` 全程 `pid !== process.pid` 且走 ppid 树而不是 `lsof`。不可捕获的信号本来就不给被杀的一方留话的机会，所以这次的结论止步于「没有留下已确认的退出记录」，没能再往前一步指认具体是哪个信号、谁发的。
+**凶手没能指认，但排除掉的路值得记下来**：全天所有 agent 执行过的 shell 命令扫了一遍，唯一的批量 `kill -9` 在 11:41–12:25 那一轮、目标是哨兵 shell 的 pid，不含 51330/65995；`/opt/homebrew/Cellar/node/26.4.0/bin/node` 自 6 月 29 日起没动过，排除「brew 覆盖运行中的二进制导致签名击杀」；服务端自己那三处 SIGKILL 的匹配条件都够不着 `node server/dist/index.js`——`cua.ts` 认 `SkyComputerUseService` 的可执行路径、`mcp-holders.ts` 要求 `mcp/dist/index.js` 正好是 argv[1]、`preview-process-stop.ts` 全程 `pid !== process.pid` 且走 ppid 树而不是 `lsof`。不可捕获的信号本来就不给被杀的一方留话的机会，所以这次的结论止步于「那一轮的清理没完成、也没留下任何退出意向」，没能再往前一步指认具体是哪个信号、谁发的。
 
-顺手查出来一个真的洞：**POSIX 侧 SIGHUP 和 SIGQUIT 此前没有任何处理器**，默认动作是静默终止，会跳过全部四个 `exit` 钩子——`singleton.ts` 释放锁、`preview-trial.ts` SIGKILL 预览试跑进程树、`terminal.ts` 的 `terminalSessions.shutdown()`、`chat/execution.ts` 的 abort。也就是说那两个信号不只是「死得无声」，还会留下预览和终端的进程残留。今天这两次已排除是它们，但路是通的。
+顺手查出来一个真的洞：**POSIX 侧 SIGHUP 和 SIGQUIT 此前没有任何处理器**，默认动作是静默终止，会跳过全部四个 `exit` 钩子——`singleton.ts` 释放锁、`preview-trial.ts` SIGKILL 预览试跑进程树、`terminal.ts` 的 `terminalSessions.shutdown()`、`chat/execution.ts` 的 abort。也就是说那两个信号不只是「死得无声」，还会留下预览和终端的进程残留。今天这两次**没有证据指向**它们（也没有证据排除——在补上处理器之前，一个显式的 `kill -HUP` 和一次强杀留下的现场完全一样），但路是通的。
 
-做进系统的是**取证，不是防御**：锁文件加 10s 心跳（临时文件 + `rename` 原子换）、补上 SIGHUP/SIGQUIT 处理器、每条自己走过的退出路径都打一行日志并记一条账（`<db>.exits.jsonl`）、下次启动发现锁还在就把结论打出来并经 `/api/health.previousResidualLock`（白名单投影，诊断原文留在 0600 账本里不外发）让 `npm run restart` 顺手提示。**它不阻止服务再被杀，也不自动拉起**——下次还会停，还得手动 restart，区别只在于那时能说清是怎么没的。
+做进系统的是**取证，不是防御**：锁文件加 10s 心跳（临时文件 + `rename` 原子换）、补上 SIGHUP/SIGQUIT 处理器、每条自己走过的退出路径都打一行日志并记一条账（`<db>.exits.jsonl`，超水位只改名轮转成 `.1`、从不重写——它是跨进程追加的，任何「读整文件再写回」都会把刚落盘的那条吞掉）、下次启动发现锁还在就把证据等级打出来并经 `/api/health.previousResidualLock`（白名单投影，诊断原文留在 0600 账本里不外发）让 `npm run restart` 顺手提示。**它不阻止服务再被杀，也不自动拉起**——下次还会停，还得手动 restart，区别只在于那时能说清是怎么没的。
 
 心跳有两条边界，都别越：**它不能参与存活判据**——事件循环被同步活儿堵住时心跳也会停，拿它判陈旧就会把一个还活着的 server 判死，然后两个实例调度同一份库（存活判据始终是 pid + 进程启动时间 + 命令形状那三条）；**它也不是死亡时刻的上界**，只是「最后已知存活」——堵塞、睡眠、心跳落盘失败都能让间隔任意长，审查实测过权限失败导致心跳停更而进程照活。
 

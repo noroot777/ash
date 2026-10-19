@@ -9,49 +9,71 @@
 //
 // 所以把两件事做进系统:
 //   1. 每条**自己走过**的退出路径都记一条(带信号名、运行时长和这一轮的 runId);
-//   2. 下次启动发现锁还在,就拿锁里的 runId 回查账本 —— 查到退出记录说明上一实例
-//      **走过**退出路径、只是没删掉锁;查不到才是死因未知。
+//   2. 下次启动发现锁还在,就拿锁里的 runId 回查账本,把**证据等级**报出来。
 //
-// 两条边界,都是第 1 轮审查打回来的:
-//   * **「锁还在」不等于「被强杀」**。删锁本身会失败(数据目录只读就报 EACCES),
-//     旧版本的 SIGHUP/SIGQUIT 也会留锁。能证明死法的是账本里有没有那一轮的退出
-//     记录,不是锁在不在。所以 `residual` 这个 kind 只说「发现残留」,死因写在
-//     `diagnosis` 里,拿不准就是 `unknown`,不许升格成 SIGKILL。
-//   * **`note` 可能含别的进程的完整命令行**(PID 被复用时 `staleLockReason` 会把
-//     `ps` 读到的命令整段写进去),那里面可能带密钥。账本是 0600 的本地文件,可以
-//     存;公开响应必须走 `publicExitSummary` 这个**白名单投影**,逐项选取字段,
+// 四条边界,全部是审查打回来的,每一条都别越:
+//
+//   * **进程内部的记录只是「退出意向」,不是最终终态**(第 2 轮)。那条记录写在释放锁
+//     之前,写完之后照样可以被 SIGKILL 带走 —— 审查实测过:收到 SIGTERM、账本里记着
+//     `kind=signal`,进程最终却是被 SIGKILL 结束的。所以残留锁旁边只报 `ExitEvidence`
+//     (有没有留下退出意向),**不报死因**;最终死因要外部 wait 状态才说得清,ash 自己
+//     拿不到。也不许再加一条「更晚的进程内标记」来假装终态被证明 —— 更晚的标记之后
+//     同样有窗口。
+//
+//   * **`note` 可能含别的进程的完整命令行**(PID 被复用时 `staleLockReason` 会把 `ps`
+//     读到的命令整段写进去),那里面可能带密钥(第 1 轮实测)。账本是 0600 的本地文件,
+//     可以存;公开响应必须走 `publicExitSummary` 这个**白名单投影**,逐项选取字段,
 //     而不是「以后每出现一种敏感 note 再补一条过滤」。
 //
-// 账本按 DB 走(预览实例各自一份),只追加、超水位才裁剪。写入一律 best-effort:
-// 它跑在退出路径上,绝不能因为磁盘满/权限问题把退出本身搞崩。
+//   * **裁剪不许读-改-写**(第 2 轮)。这个文件是**跨进程**追加的:启动失败那条路
+//     (`index.ts` 的 `exitAfterStartupFailure`)先松锁再 `process.exit`,退出钩子那条
+//     记录因此是在**没有锁**的情况下追加的;取锁前的残留记账(`singleton.ts` 的
+//     `reportResidualLock`)同样不持锁。原来的「读整文件 → 写临时文件 → rename」会把
+//     快照之后的追加整段 rename 掉,审查用真实生产入口复现过:206 条变 200 条,刚写下
+//     的那条退出记录消失。所以裁剪改成**只改名、不产生任何内容**(当前那份改成
+//     `.1`),无论追加落在改名前的 inode 还是改名后的新文件,都不会丢 —— 这条不变量
+//     不依赖任何跨进程加锁,也不依赖调用方的持锁生命周期。
+//
+//   * **每次追加自带记录边界**(第 2 轮)。原来靠「先读一次文件尾巴、缺换行就补」,
+//     而读失败被当成「不需要补」:审查把账本设成 0200(可写不可读)就复现了 —— 追加
+//     成功、新记录却和坏尾行粘成一行,解析时一起被跳过。现在前后各带一个 `\n`,解析
+//     跳空行,写入安全不再以读成功为前提。
+//
+// 账本按 DB 走(预览实例各自一份)。写入一律 best-effort:它跑在退出路径上,绝不能
+// 因为磁盘满/权限问题把退出本身搞崩。
 import { createHash } from "node:crypto";
-import {
-  appendFileSync,
-  closeSync,
-  openSync,
-  readFileSync,
-  readSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, readFileSync, renameSync } from "node:fs";
 import { resolveAshDbFile } from "./db/path.js";
 
 const LEDGER_SUFFIX = ".exits.jsonl";
-/** 裁剪水位:够看清「最近是不是反复出事」,又不会无限长。 */
+/** 上一代账本:裁剪就是把当前这份改名成它。两代之外的才真正消失。 */
+const ROTATED_SUFFIX = ".1";
+/** 水位:当前那份超过这么多条就轮转。够看清「最近是不是反复出事」,又不会无限长。 */
 const KEEP_RECORDS = 200;
 
 export type ExitKind = "signal" | "exit" | "residual";
 
 /**
- * 残留锁的死因判定。**只有这两档**,没有「被 SIGKILL 了」那一档 —— 账本能证明的
- * 上限就是「这一轮有没有留下退出记录」。
+ * 残留锁旁边能拿到的**证据等级** —— 注意它不是死因。
  *
- * - `cleanup_failed` 账本里有这一轮的退出记录:它走过退出路径,只是锁没删掉
- * - `unknown`        账本里没有:强杀、内核击杀、或者退出时连账本都没写进去
+ * - `exit_intent` 账本里有这一轮的退出记录:进程**进入过**退出流程(收到过可捕获的
+ *   信号,或者跑过 `process.on("exit")`)。这条记录写在删锁之前,之后仍然可以被
+ *   SIGKILL 带走,所以它**不能**排除强杀,也不能断定锁为什么还留着。
+ * - `none`        账本里没有这一轮的任何记录。强杀、内核击杀都落在这一档,但「退出时
+ *   连账本都没写进去」也落在这一档。
+ *
+ * 两档的共同结论都是**最终死因未知**;差别只在「有没有留下退出意向」。
+ * 唯一能确定的事实是:锁还带着那一轮的 token ⇒ 那一轮的**清理确实没完成**。
  */
-export type ResidualDiagnosis = "cleanup_failed" | "unknown";
+export type ExitEvidence = "exit_intent" | "none";
+
+/** 账本里那条退出记录说了什么 —— 观察到的意向,不是终态。 */
+export type ObservedIntent = {
+  kind: ExitKind;
+  signal?: string;
+  code?: number | null;
+  at: string;
+};
 
 export type ExitRecord = {
   /** 写下这条记录的时刻(ISO)。 */
@@ -67,9 +89,10 @@ export type ExitRecord = {
    */
   runId?: string;
   /**
-   * - `signal`   收到可捕获的致命信号后主动退出(SIGTERM/SIGINT/SIGHUP/SIGQUIT)
-   * - `exit`     走完 `process.on("exit")`(正常收场,或启动失败自杀)
-   * - `residual` 下一次启动发现上一轮的锁还在(死因见 `diagnosis`)
+   * - `signal`   收到可捕获的致命信号、处理器跑过(SIGTERM/SIGINT/SIGHUP/SIGQUIT)。
+   *              **不等于进程最终以这个信号收场** —— 之后仍可能被强杀。
+   * - `exit`     走到了 `process.on("exit")`(正常收场,或启动失败自杀)
+   * - `residual` 下一次启动发现上一轮的锁还在(证据等级见 `evidence`)
    */
   kind: ExitKind;
   signal?: string;
@@ -89,7 +112,10 @@ export type ExitRecord = {
   lastHeartbeatAt?: string | null;
   /** `residual`:从最后已知存活到被下一个实例发现,中间静默了多久(ms)。 */
   silentMs?: number | null;
-  diagnosis?: ResidualDiagnosis;
+  /** `residual`:证据等级。**不是死因** —— 见 `ExitEvidence`。 */
+  evidence?: ExitEvidence;
+  /** `residual` 且 `evidence==="exit_intent"`:账本里那条记录观察到了什么。 */
+  observedIntent?: ObservedIntent;
   /**
    * 诊断原文(陈旧原因、释放失败的 errno 等)。
    *
@@ -115,7 +141,8 @@ export type PublicExitSummary = {
   uptimeMs?: number | null;
   lastHeartbeatAt?: string | null;
   silentMs?: number | null;
-  diagnosis?: ResidualDiagnosis;
+  evidence?: ExitEvidence;
+  observedIntent?: ObservedIntent;
 };
 
 export function publicExitSummary(record: ExitRecord | null): PublicExitSummary | null {
@@ -130,7 +157,8 @@ export function publicExitSummary(record: ExitRecord | null): PublicExitSummary 
     uptimeMs: record.uptimeMs,
     lastHeartbeatAt: record.lastHeartbeatAt,
     silentMs: record.silentMs,
-    diagnosis: record.diagnosis,
+    evidence: record.evidence,
+    observedIntent: record.observedIntent,
   };
 }
 
@@ -144,35 +172,16 @@ export function exitLedgerFileForDb(dbFile = resolveAshDbFile()): string {
 }
 
 /**
- * 上一次写入是不是停在了半行上(文件非空且结尾不是换行)。
+ * 追加一条。同步 + 吞异常:调用点在退出路径上。
  *
- * 不补这个换行的后果,第 1 轮审查实测过:坏尾行 `{"at":"unfinished` 后面直接接上
- * 新 JSON,两段粘成一行,解析时**连这条完整的新记录一起被跳过** —— 写坏一次就吞掉
- * 下一次。补一个换行把行边界还回来,坏的那半行自己占一行、被跳过就是了。
+ * 前后各带一个 `\n`,**不先去读文件尾巴**:上一次写到半行上时,那半行自己占一行被
+ * 跳过,本次这条完整记录照样解析得出。靠「读尾巴补换行」的版本在可写不可读的账本上
+ * 会把读失败当成「不需要补」,于是又粘回去(第 2 轮审查实测)。多出来的那个空行由
+ * `parseRecords` 跳掉。
  */
-function tailNeedsNewline(file: string): boolean {
-  try {
-    const { size } = statSync(file);
-    if (size === 0) return false;
-    const fd = openSync(file, "r");
-    try {
-      const tail = Buffer.alloc(1);
-      readSync(fd, tail, 0, 1, size - 1);
-      return tail[0] !== 0x0a;
-    } finally {
-      closeSync(fd);
-    }
-  } catch {
-    return false; // 文件不在/读不了:没有要修的边界
-  }
-}
-
-/** 追加一条。同步 + 吞异常:调用点在退出路径上。 */
 export function recordExit(record: ExitRecord, dbFile = resolveAshDbFile()): void {
-  const file = exitLedgerFileForDb(dbFile);
   try {
-    const prefix = tailNeedsNewline(file) ? "\n" : "";
-    appendFileSync(file, `${prefix}${JSON.stringify(record)}\n`, { mode: 0o600 });
+    appendFileSync(exitLedgerFileForDb(dbFile), `\n${JSON.stringify(record)}\n`, { mode: 0o600 });
   } catch {
     /* 账本写不进去不该影响退出本身 */
   }
@@ -198,14 +207,20 @@ function parseRecords(file: string): ExitRecord[] {
   return records;
 }
 
-/** 读出最近 N 条(最旧在前)。读不到就当没有 —— 它只是诊断信息。 */
-export function readExitRecords(limit = KEEP_RECORDS, dbFile = resolveAshDbFile()): ExitRecord[] {
-  return parseRecords(exitLedgerFileForDb(dbFile)).slice(-limit);
+/** 两代拼起来(旧在前)。轮转之后「最近的记录」会横跨两个文件,读的一侧必须都看。 */
+function parseLedger(dbFile: string): ExitRecord[] {
+  const file = exitLedgerFileForDb(dbFile);
+  return [...parseRecords(`${file}${ROTATED_SUFFIX}`), ...parseRecords(file)];
 }
 
-/** 这一轮启动留下过退出记录吗(从新往旧找)。残留锁的死因判定就靠它。 */
+/** 读出最近 N 条(最旧在前)。读不到就当没有 —— 它只是诊断信息。 */
+export function readExitRecords(limit = KEEP_RECORDS, dbFile = resolveAshDbFile()): ExitRecord[] {
+  return parseLedger(dbFile).slice(-limit);
+}
+
+/** 这一轮启动留下过退出意向吗(从新往旧找)。残留锁的证据等级就靠它。 */
 export function findExitByRunId(runId: string, dbFile = resolveAshDbFile()): ExitRecord | null {
-  const records = parseRecords(exitLedgerFileForDb(dbFile));
+  const records = parseLedger(dbFile);
   for (let i = records.length - 1; i >= 0; i -= 1) {
     const record = records[i]!;
     if (record.runId === runId && record.kind !== "residual") return record;
@@ -214,29 +229,24 @@ export function findExitByRunId(runId: string, dbFile = resolveAshDbFile()): Exi
 }
 
 /**
- * 启动时裁剪,把账本钉在水位上。
+ * 启动时轮转,把账本钉在水位上。**只改名,不产生任何内容。**
  *
- * 两条都是第 1 轮审查打回来的:
- *   * **没超水位就一个字都不动**。原来每次取锁都整文件重写,等于把「刚刚写进去的
- *     那条关键记录」反复放进一个可能失败的写入里。
- *   * **临时文件写完再原子换**。`writeFileSync` 是先截断再写:实测在 `ulimit -f 0`
- *     下,82 字节的历史被截成 0、异常被 catch 吞掉、服务照常启动 —— 「裁剪失败只是
- *     文件偏大」这句注释跟真实结果正好相反。
+ * 这是第 2 轮审查之后的形状,理由见文件头第三条:账本是跨进程追加的(启动失败那条路
+ * 先松锁、退出记录后到;取锁前的残留记账也不持锁),所以任何「读整文件 → 重写」都会
+ * 把快照之后的追加吞掉 —— 审查用真实生产入口复现过 206 → 200。改名没有这个窗口:
+ * 追加落在改名前的 inode 就跟着进 `.1`,落在改名后就进新文件,两种交错都读得到。
  *
- * 另外:裁剪只在**持锁**期间跑(取锁成功之后才调),而退出记录现在也改成了**释放锁
- * 之前**追加,所以整文件重写不会盖掉另一个实例的并发追加。
+ * 代价是磁盘上最多留两代(稳态 ≤ 2×水位),以及最旧那一代在下次轮转时被覆盖 —— 那是
+ * 裁剪本来就要做的事。换来的是「裁剪永不删除任何已经落盘的记录」这条不依赖加锁的
+ * 不变量,所以它也不要求调用方在持锁期间调用。
  */
-export function trimExitLedger(dbFile = resolveAshDbFile()): void {
+export function rotateExitLedger(dbFile = resolveAshDbFile()): void {
   const file = exitLedgerFileForDb(dbFile);
-  const temp = `${file}.trim`;
   try {
-    const all = parseRecords(file);
-    if (all.length <= KEEP_RECORDS) return;
-    writeFileSync(temp, `${all.slice(-KEEP_RECORDS).map((r) => JSON.stringify(r)).join("\n")}\n`, { mode: 0o600 });
-    renameSync(temp, file);
+    if (parseRecords(file).length <= KEEP_RECORDS) return;
+    renameSync(file, `${file}${ROTATED_SUFFIX}`);
   } catch {
-    // 原历史还在原地,这才是失败时该有的样子。
-    try { rmSync(temp, { force: true }); } catch { /* 清不掉就留着,下次覆盖 */ }
+    // 读不了/改不了名:账本偏大而已,内容一个字节都没动。
   }
 }
 
