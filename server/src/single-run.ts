@@ -9,6 +9,7 @@ import type { AgentEvent, AgentType, SessionRole, TaskStatus } from "@ash/shared
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
+import { closeSessionTurns, recordTurnSpan } from "./session-turns.js";
 import { scanForTitle } from "./auto-title.js";
 import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
@@ -523,6 +524,10 @@ export async function consumeSingleRun(a: {
   const steered = requestedSteer && !stopped;
   if (streamError && !steered && !stopped) throw streamError;
   const endIso = now();
+  // **这一刻起这个回合就不在写了**,所以注销排在所有写库动作之前：下面的 closeExecution、
+  // 会话 UPDATE 都可能抛,抛了就走不到 `recordTurnSpan`,残留的活动登记会让读端把这条会话
+  // 当成「还在写」（第 6 轮审查必须修 1）。入口的 finally 还兜一道。
+  closeSessionTurns(sessId);
   const executionFailed = !stopped && (exitStatus !== 0 || sawExecutionError);
   // CLI 否认了这条会话：把失效的 id 连同由它派生的三件套恢复命令一起清掉。清了之后
   // orchestrator 的 `resuming`（判据就是「这条会话行上有没有 cli_session_id」）自然为
@@ -549,6 +554,9 @@ export async function consumeSingleRun(a: {
       ...(dropSession ? LOST_SESSION_PATCH : {}),
     })
     .where(eq(sessions.id, sessId));
+  // 这一回合的区间单独落一行：产物归属要的是「它在写这个目录」的那几段，而上面那行
+  // 会话记录跨回合复用，只留得下最后一次收尾时刻（`db/schema.ts` 的 sessionTurns）。
+  await recordTurnSpan({ sessionId: sessId, taskId, cwd: a.cwd, startedAt: a.turnStart, endedAt: endIso });
   if (steered) {
     // 「引导会话」只截断旧回合：任务仍是 running，新消息已持有 scheduled_messages
     // 投递租约，并排在 releaseTurn 后用同一 cliSessionId 续送。这里若走普通 settle，

@@ -7,9 +7,10 @@ import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
+import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
+import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceRole } from "./runs.js";
-import type { ContinueOpts } from "./turn-continue-opts.js";
 import { consumeSingleRun } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -55,12 +56,9 @@ import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "./session-version-guard.js";
 import { announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "./session-notice.js";
 
-// Why a task is being (re)started — only used to label the resume; all reasons
-// behave the same (resume if there's a resumable session, else fresh). Note: a
-// scheduled cron fire is NOT here — it always starts a fresh run via runTask
-// (schedules.ts), so it never resumes. `wake` = an upstream task just settled
-// done and the settle hook is auto-resuming this paused dependent.
-export type ResumeReason = "group" | "run" | "retry" | "wake" | "queue";
+// 这一回合的**调用契约**(连 ResumeReason 一起)住在 task-continue-options.ts；这里原样
+// 再导出，调用方（task-resume、runs 那几处）不用跟着改导入路径。
+export type { ContinueTaskOptions, ResumeReason } from "./task-continue-options.js";
 
 async function setStatus(
   taskId: string,
@@ -97,7 +95,7 @@ export { runTask } from "./task-run.js";
 export async function continueTask(
   taskId: string,
   userText: string,
-  opts: ContinueOpts = {},
+  opts: ContinueTaskOptions = {},
 ): Promise<boolean> {
   // 这条消息是不是 CLI 原生命令(`/compact`):整条归 CLI 本地执行,不进模型 —— 它既不是
   // 任务的执行,也不是「新指令」。这一轮必须当旁路回合(下面的 sideTurn),否则「压一下
@@ -412,6 +410,11 @@ export async function continueTask(
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
     const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan, preserveState: preserveCliState });
+    // 复用同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,
+    // 墙钟又恰好回拨到上一轮开工那一刻时,不接就会把那个历史身份原样重发一遍 —— 开始行被
+    // 唯一键合进旧行、收尾看见已收口直接返回,这一轮在库里一个字都没有（第 1 轮审查 F2,
+    // 机制见 session-turns.ts 的 primeTurnStarts）。
+    if (resuming) await primeTurnStarts(prev!.id);
     // 顺序定死:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论 → spawn。为什么只能这
     // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
@@ -422,8 +425,10 @@ export async function continueTask(
     if (freeze) await abortFrozen(taskId, freeze, { restorable: !!followUpFrom });
     // 原生命令必须独占整条 prompt(理由见上),不贴策略。
     const prompt = nativeCommand ? promptBody : withGlobalBrowserPolicy(promptBody, promptLevel, browserGrant);
-    const turnStart = now();
     const sessId = resuming ? prev!.id : id();
+    // 起点从身份层分配（同 task-run）。续聊复用同一行会话,所以这一轮的起点必须严格晚于那条
+    // 会话上已经见过的全部起点 —— 撞上就会被当成同一个回合身份,既不插行也不加数。
+    const turnStart = nextTurnStart(sessId);
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
     // 续聊/重试/队列推进/唤醒这一路也要解绑 —— 漏掉它等于只保护「全新起跑」的
@@ -457,8 +462,9 @@ export async function continueTask(
       await db
         .update(sessions)
         .set({
-          turnStartedAt: turnStart,
-          endedAt: null,
+          // 回合三件套（起点 / 计数 / 清掉上一轮的收尾）一起来自 helper——见
+          // session-turns.ts 顶部：八个起跑入口手写就一定会漏掉其中一处。
+          ...resumedTurnFields(turnStart),
           exitStatus: null,
           commandLine: handle.commandLine,
           executor: ex.label,
@@ -512,7 +518,7 @@ export async function continueTask(
         ...ex.resumeFields(cwd, cliSessionId),
         commandLine: handle.commandLine,
         startedAt: turnStart,
-        turnStartedAt: turnStart,
+        ...freshTurnFields(turnStart),
         activeMs: 0,
         exitStatus: null,
         agentPid: handle.detached?.pid ?? null,
@@ -523,6 +529,8 @@ export async function continueTask(
         agentOffset: 0,
       });
     }
+    // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
+    await openTurn({ sessionId: sessId, taskId, cwd, startedAt: turnStart });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     if (opts.system) {
@@ -609,6 +617,8 @@ export async function continueTask(
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);
+    // 同 task-run：全出口注销,不依赖走到收尾函数（第 6 轮审查必须修 1）。
+    closeTaskTurns(taskId);
     if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里

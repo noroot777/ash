@@ -15,7 +15,10 @@ import { InspectorHeadActions } from "../inspector/index.ts";
 import { formatSize } from "./fileModel.ts";
 import {
   ARTIFACT_ORIGIN_HINT,
+  ARTIFACT_CONFIDENCE_HINT,
+  ARTIFACT_CONFIDENCE_LABEL,
   ARTIFACT_ORIGIN_LABEL,
+  ARTIFACT_SCOPE_NOTE,
   formatArtifactTime,
   groupArtifacts,
   useTaskArtifacts,
@@ -111,6 +114,10 @@ export function ArtifactsInspector({
       {/* 服务端那份 error 是「某一路线索没读成」，另外两路通常还有东西，所以它跟上面
           那条整块失败不是一回事：照常把列表铺出来，只在上面压一条提示。 */}
       {result?.error && <p className="artifacts__notice" role="status">{result.error}</p>}
+      {/* 「读成了但没读完」必须单独说：空清单和「它什么都没做出来」在面板上长得一样。 */}
+      {result?.incomplete.map((reason) => (
+        <p key={reason} className="artifacts__notice" role="status">{reason}</p>
+      ))}
 
       {loading && !result && <p className="artifacts__state"><SpinnerGap size={14} aria-hidden="true" />正在扫描…</p>}
 
@@ -139,7 +146,9 @@ export function ArtifactsInspector({
                 <button
                   type="button"
                   className={`artifacts__card${artifact.path === activePath ? " is-active" : ""}`}
-                  aria-label={`打开 ${artifact.path}，${ARTIFACT_ORIGIN_LABEL[artifact.origin]}`}
+                  aria-label={`打开 ${artifact.path}，${ARTIFACT_ORIGIN_LABEL[artifact.origin]}${
+                    artifact.confidence === "approx" ? `，${ARTIFACT_CONFIDENCE_LABEL}` : ""
+                  }`}
                   // 翻页的那一串按**这一组**给（图片跟图片翻、网页跟网页翻）：分组本来就是
                   // 「同一类东西」的意思，跨组翻到一份 html 只会让人以为点错了。
                   onClick={() => onOpenFile(artifact.path, group.items.map((item) => item.path))}
@@ -152,6 +161,14 @@ export function ArtifactsInspector({
                     {artifact.dir && <small className="artifacts__dir">{artifact.dir}</small>}
                     <small className="artifacts__facts">
                       <em data-origin={artifact.origin}>{ARTIFACT_ORIGIN_LABEL[artifact.origin]}</em>
+                      {/* 候选那一档逐条标出来。页脚只说「有 N 个是按估出来的时间段认的」时,
+                          用户看得见数目、看不出是哪几个,于是整张清单一起贬值（本轮审查第 5 条）。
+                          确定的那些不加角标——那是多数,标了只是噪音。 */}
+                      {artifact.confidence === "approx" && (
+                        // 解释走下面那张图例（跟 origin 那三个角标同一个做法）：原生 title 在每秒
+                        // 重渲染的界面里永远弹不出来,`scripts/check-conventions.mjs` 也拦着。
+                        <em data-confidence="approx">{ARTIFACT_CONFIDENCE_LABEL}</em>
+                      )}
                       {formatSize(artifact.size)}
                       {formatArtifactTime(artifact.mtime) && <span>{formatArtifactTime(artifact.mtime)}</span>}
                     </small>
@@ -182,6 +199,11 @@ export function ArtifactsInspector({
 
       {result?.truncated && <p className="artifacts__notice">产物太多，只列出了最近的一批</p>}
 
+      {/* 整份清单凭什么算这个任务的：共享目录下它只是候选，这句不能省。 */}
+      {result && artifacts.length > 0 && ARTIFACT_SCOPE_NOTE[result.scope] && (
+        <p className="artifacts__notice is-scope">{ARTIFACT_SCOPE_NOTE[result.scope]}</p>
+      )}
+
       {/* 角标上那三个词得有个地方解释一次——「未纳入版本管理」光看字面说不出它凭什么
           算这个任务的产物。放底下：认得的人扫一眼就过去了。 */}
       {artifacts.length > 0 && (
@@ -192,6 +214,14 @@ export function ArtifactsInspector({
               <dd>{ARTIFACT_ORIGIN_HINT[origin]}</dd>
             </div>
           ))}
+          {/* 清单里真有候选时才解释它——独占目录下一个都不会有,凭空多一行只会让人以为
+              这份清单也靠猜。 */}
+          {artifacts.some((artifact) => artifact.confidence === "approx") && (
+            <div>
+              <dt data-confidence="approx">{ARTIFACT_CONFIDENCE_LABEL}</dt>
+              <dd>{ARTIFACT_CONFIDENCE_HINT}</dd>
+            </div>
+          )}
         </dl>
       )}
     </div>

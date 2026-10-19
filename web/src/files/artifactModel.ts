@@ -30,8 +30,32 @@ export const ARTIFACT_ORIGIN_LABEL: Record<TaskArtifact["origin"], string> = {
 /** 角标的悬浮解释——「未提交」三个字本身说不清它凭什么算这个任务的产物。 */
 export const ARTIFACT_ORIGIN_HINT: Record<TaskArtifact["origin"], string> = {
   working: "还在工作目录里，没有提交",
-  committed: "已经提交在这条任务分支上",
-  ignored: "被 .gitignore 挡着，按「任务开跑之后才写的」认出来",
+  // 共享主仓的任务（useWorktree=false）压根没有一条属于它的分支，那一档退回「运行区间
+  // 里的提交」——两种认法的精度不同，角标上不说清楚就会被当成同一回事。
+  committed: "已经提交：有任务分支时按那条分支认，共享主仓的任务按运行区间里的提交认",
+  ignored: "被 .gitignore 挡着，不在版本管理里",
+};
+
+/**
+ * 候选那一档的角标。
+ *
+ * 只给 `approx` 一个角标,`exact` 什么都不加：清单里绝大多数条目是确定的,给每一条都挂个
+ * 「确定」只是噪音,真正需要被认出来的是**混进来的那几个**。
+ */
+export const ARTIFACT_CONFIDENCE_LABEL = "候选";
+export const ARTIFACT_CONFIDENCE_HINT =
+  "只落在估出来的时间段里（会话寿命、没收尾的回合），可能是别人在同一个目录里做的";
+
+/**
+ * 整份清单**凭什么算这个任务的**。
+ *
+ * 两档的精度差一个数量级，不能让用户自己猜：独占 worktree 是目录级隔离，清单是确定的；
+ * 共享主仓只能按「它在跑的那几段时间」认，同一段时间里并行跑的任务物理上分不开，那是
+ * **候选**。界面不说这一句，用户就会把候选当确定（第 1 轮审查 N6）。
+ */
+export const ARTIFACT_SCOPE_NOTE: Record<TaskArtifactsResult["scope"], string | null> = {
+  exclusive: null, // 独占目录：不必解释，清单就是它做的
+  shared: "这个任务和别人共用一个工作目录，下面是按它运行的那几段时间认出来的；同一段时间里并行跑的任务可能互相串。",
 };
 
 export function groupArtifacts(artifacts: readonly TaskArtifact[]): ArtifactGroup[] {
@@ -69,7 +93,10 @@ export function useTaskArtifacts(taskId: string) {
     try {
       const next = await api.taskArtifacts(taskId);
       if (epoch !== generation.current) return;
-      setResult(next);
+      // 字段在这儿补齐默认值：这两个是后加的，而前端是单独构建、单独刷新的——页面已经是
+      // 新版、服务端还没重启的那个窗口里，旧响应里没有 `incomplete`，渲染时 `.map` 直接
+      // 把整块炸掉（第 2 轮审查 N3）。补默认比在每个用到的地方各写一次 `?? []` 可靠。
+      setResult({ ...next, scope: next.scope ?? "shared", incomplete: next.incomplete ?? [] });
       setError(null);
     } catch (reason) {
       if (epoch !== generation.current) return;

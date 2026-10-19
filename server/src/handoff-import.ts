@@ -16,7 +16,7 @@ import { existsSync } from "node:fs";
 import { db } from "./db/index.js";
 import {
   freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
-  projects, scheduledMessages, schedules, sessions, tasks,
+  projects, scheduledMessages, schedules, sessionTurns, sessions, tasks,
 } from "./db/schema.js";
 import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, writeUploads } from "./handoff-uploads.js";
@@ -420,6 +420,21 @@ async function importValidated(
     contextUsed: s.contextUsed,
     contextWindow: s.contextWindow,
     contextWindowEstimated: s.contextWindowEstimated,
+    // 逐回合计数**显式钉成「本机零历史」**,别留 NULL（本轮审查第 4 条）。
+    //
+    // 载荷里不带回合行(下面那条 delete 还会把本机残留的清掉),所以导进来的会话在本机一行
+    // 回合记录都没有——产物面板对这种行走的是 legacy 那一档「只记下了会话的起止、没有逐回合
+    // 记录」,措辞恰如其实。真正会错的是**计数**那两列:
+    //   • 留 NULL = 「升级那一步没跑成」。迁移明明跑成了,这条行只是从别的机器来的,话说错了；
+    //   • 而且不稳：下一次启动 `backfillTurnsBase` 会把 NULL 回填成 `approx = 1`,同一条会话
+    //     的说法变成「升级之前就跑过」——重启一次换一种说法（`db/migrate-session-turns.ts`）。
+    // `base = 0` + `approx = false` 说的是「**本机**没有未留痕的回合」,这是真的:本机每一轮
+    // 都从 openTurn 落行。对端跑过的那些回合不在这台机器上,它们的产物也不在这个工作目录里,
+    // 把那段未知摊进来只会让区间向导入**之前**放宽,那期间在同一目录干活的是别人。
+    // `turnsStarted`/`turnsLost` 照旧留 NULL：第一次在本机跑回合时加数语句自己从 0 起
+    //（`COALESCE(turns_started, 0) + 1`）,于是对账从那一刻起就是精确的。
+    turnsBase: 0,
+    turnsBaseApprox: false,
   }));
   // 自由工作流的审查历史(翻译成本机行,落库在下面两条路径里各自执行)。
   const freeWorkflowRows = await buildFreeWorkflowRows(m.task.id, m.freeWorkflow, notes);
@@ -454,6 +469,12 @@ async function importValidated(
         // 会话、计划和 pending 消息确实随 manifest 迁移，只替换这三类；已发送/取消的
         // 本机消息仍是本机历史，不能和未迁移的自由工作流关联一起误删。
         await tx.delete(sessions).where(eq(sessions.taskId, m.task.id));
+        // 回合区间挂在会话行上，会话让位它必须一起让位：manifest 原样带着会话 id 回来，
+        // 本机那几行旧区间会直接挂到对端的会话上，产物归属读到的就是**另一台机器上那段
+        // 时间**，混进来的东西还说不出是哪儿来的（第 2 轮审查 F1）。
+        // 刻意不往 manifest 里加这张表：跨机协议改格式要兼顾旧版对端，而少了它只是归属
+        // 精度降级（读端按会话寿命估并在面板上明说），不是错的归属。
+        await tx.delete(sessionTurns).where(eq(sessionTurns.taskId, m.task.id));
         await tx.delete(schedules).where(eq(schedules.taskId, m.task.id));
         await tx.delete(scheduledMessages).where(and(
           eq(scheduledMessages.taskId, m.task.id),

@@ -581,9 +581,9 @@ export function whenTurnIdle(taskId: string, fn: () => void): void {
  * 表现是「什么都没发生」——就地验证轮起不来、打回重做的提示没人收。动态 import 是为了
  * 不让这个中立模块回头依赖 orchestrator（类型是纯类型引用，不构成运行时环）。
  */
-// 入口参数的类型住在 `turn-continue-opts.ts`(只放类型,不放运行时 —— 这条链上的运行时
+// 入口参数的类型住在 `task-continue-options.ts`(只放类型,不放运行时 —— 这条链上的运行时
 // import 要留给那句 dynamic import)。
-type ContinueOpts = import("./turn-continue-opts.js").ContinueOpts;
+type ContinueOpts = import("./task-continue-options.js").ContinueTaskOptions;
 
 export function continueWhenIdle(
   taskId: string,

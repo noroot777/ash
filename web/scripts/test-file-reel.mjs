@@ -35,6 +35,9 @@ const artifact = (path, kind) => ({
   size: 2048,
   mtime: "2026-09-28T02:00:00.000Z",
   origin: "ignored",
+  // 这份夹具模拟的是接口响应,字段得跟真接口一致（`TaskArtifact`）。独占 worktree 下每一条
+  // 都是确定的,所以这里全给 exact —— 候选那一档的判据在服务端,回归在 test-task-artifacts.ts。
+  confidence: "exact",
 });
 
 const artifacts = [
@@ -82,6 +85,8 @@ try {
         artifacts,
         truncated: false,
         since: "2026-09-28T01:00:00.000Z",
+        scope: "shared",
+        incomplete: [],
         error: null,
       });
     }

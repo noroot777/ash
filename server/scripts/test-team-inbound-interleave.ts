@@ -156,8 +156,15 @@ assert.ok(
 );
 console.log("   ✓ 同一台的投递按调用顺序串行,插话不会抢在合并汇报前面");
 
-// 下一次回合收尾:它必须真的送出去,并且只送一次。
-pushEvent({ kind: "turnEnd" } as AgentEvent);
+// 下一次**真的空下来**时它必须送出去,并且只送一次。
+//
+// 为什么推两个 turnEnd：这时这台手上有两轮 —— 合并汇报起的那一轮,和插话起的那一轮(插话是
+// 在前者还开着的时候投进去的,ash 先 interrupt 再 send)。一个结束事件只关它自己那一轮
+// (FIFO 配对,见 team/lead-turns.ts),所以要等两轮都报完,这台才算真的空下来。把第一个结束
+// 事件当成「空闲了」的那一版会顺手把正在跑的那一轮也收口,它做出来的东西就此漏在产物清单外
+// (第 1 轮审查 F1);攒着的汇报也会在一台其实正忙的调度台上被合并送出,还把它标成待命。
+pushEvent({ kind: "turnEnd" } as AgentEvent); // 合并汇报那一轮(队首)
+pushEvent({ kind: "turnEnd" } as AgentEvent); // 插话那一轮 —— 收完它才真的空下来
 await waitFor("第二条在下一次收尾时送出", () => sends.some((t) => t.includes(SECOND)));
 await waitFor("第二条销账", async () => (await pendingInbound(TASK)).length === 0);
 assert.equal(sends.filter((t) => t.includes(SECOND)).length, 1, "同一条汇报不许送两遍");

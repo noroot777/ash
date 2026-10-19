@@ -9,6 +9,7 @@
 // ash 起不来,它下次启动还会再试一遍。
 //
 // 入口只有一个:`runDataMigrations(client)`,由 `ensureSchema()` 在 DDL 之后调用。
+import { migrateSessionTurnIdentity } from "./migrate-session-turns.js";
 import type { Client } from "./node-sqlite-client.js";
 import { markPendingCallKey, pendingCallKeyBlocker, pendingCallKeyLive } from "./schema-readiness.js";
 import { dropRetiredTables } from "./retired-schema.js";
@@ -631,6 +632,7 @@ export async function runDataMigrations(client: Client): Promise<void> {
   // 必须排在 relax 之后：那一步先把「时长没有依据」的行降成 unknown，这一步才只给真正
   // 可信的时长回算列值。
   await backfillMonitorTimeoutFromExpiry(client);
+  await migrateSessionTurnIdentity(client);
   // 事实没迁走的那几列留到下次启动:它们各自是唯一还认得出旧状态的证据。
   const keepColumns = new Set<string>();
   if (!mergeStatesMigrated) for (const column of MERGE_STATE_COLUMNS) keepColumns.add(column);

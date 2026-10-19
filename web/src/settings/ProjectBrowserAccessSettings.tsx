@@ -66,8 +66,12 @@ export function ProjectBrowserAccessSettings({ project, onUpdated, notify, canMa
         不必每次在任务里点名 —— 定时抓取这类无人值守的活靠的就是它。
       </small>
       <small>
-        <b>范围严格只读</b>：名单内也只允许新建后台标签读数据，禁止接管或导航你正在用的标签、
+        <b>范围默认只读</b>：名单内也只允许新建后台标签读数据，禁止接管或导航你正在用的标签、
         禁止激活窗口，禁止一切写操作（发布、点赞、关注、改设置、发消息）。名单外的站点仍会停下来问你。
+      </small>
+      <small>
+        这组限制是默认态而不是硬禁令：要让任务写（发帖、点赞、改设置）或接管你的标签，
+        在任务里明确说出来就行 —— 放开的只有你点名的那一项，没点名的照旧禁止。
       </small>
     </div>
     <label className="browser-access__field">

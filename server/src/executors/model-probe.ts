@@ -16,7 +16,7 @@
 //
 //  ⑤ **档位(modelEfforts)与模型清单是两件事,各自降级**。有的 CLI 两样都给得出
 //     (codex 的 `debug models` 一份输出里就带 `supported_reasoning_levels`),有的只给
-//     得出档位(opencode/kilo 没有清单命令,但缓存着一份 models.dev),claude 则是两个
+//     得出档位(kilo 未接清单命令,但缓存着一份 models.dev),claude 则是两个
 //     不同来源(清单来自官方文档、档位来自 control protocol 握手)。所以任一边失败都
 //     不拖累另一边:档位探不到就退回 `MODEL_EFFORT_RULES`,与没接这条路时完全一样。
 //
@@ -150,7 +150,7 @@ async function probe(type: AgentType, settings?: AppSettings): Promise<CliModelC
     };
   }
   const spec = CLI_SPEC_BY_KEY[type];
-  // 档位可以独立于清单存在:opencode/kilo 没有清单命令,但缓存着一份 models.dev。
+  // 档位可以独立于清单存在:opencode/kilo 缓存着一份 models.dev。
   const localEfforts = await readOpencodeModelEfforts(type);
   if (!spec?.models) return presetCatalog(type, withEfforts(localEfforts));
 

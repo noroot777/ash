@@ -285,6 +285,19 @@ export type ArtifactKind = "image" | "video" | "audio" | "page" | "pdf";
 /** 这份产物是从哪条线索认出来的：还没提交 / 已提交在任务分支上 / 被 .gitignore 挡着。 */
 export type ArtifactOrigin = "working" | "committed" | "ignored";
 
+/**
+ * **这一条**的归属有多硬（服务端 `task-artifacts.ts` 的 `exactProof`）。
+ *
+ * - `exact` —— 确定：目录独占、任务分支上的提交动过它、或者落在一段**精确**区间里；
+ * - `approx` —— 候选：只落在**估出来**的区间里（会话寿命、没收尾的回合），可能是别人在同一个
+ *   目录里做的。
+ *
+ * 整份清单那一档（`ArtifactScopeKind`）说的是「这个目录是不是它独占的」,这一列说的是
+ * 「**这一个**文件凭什么算它的」—— 共享目录里两种条目是混着的,只给页脚一个总数,用户看得见
+ * 数目却看不出是哪几个（本轮审查第 5 条）。
+ */
+export type ArtifactConfidence = "exact" | "approx";
+
 export type TaskArtifact = {
   /** 相对工作区根、posix 分隔符——跟文件树、文件查看器同一个主键。 */
   path: string;
@@ -294,15 +307,31 @@ export type TaskArtifact = {
   size: number;
   mtime: string | null;
   origin: ArtifactOrigin;
+  confidence: ArtifactConfidence;
 };
+
+/**
+ * 归属是怎么成立的：
+ * - `exclusive` —— 工作区是这个任务（或它跟随的那个任务）独占的 worktree，目录本身就是
+ *   证据，清单是**确定的**；
+ * - `shared` —— 共享主仓，同一个目录先后乃至同时跑过别的任务，只能按「它在跑的那几段
+ *   时间」认，清单是**候选**。界面必须把这点说出来，否则用户会把候选当确定。
+ */
+export type ArtifactScopeKind = "exclusive" | "shared";
 
 export type TaskArtifactsResult = {
   /** 任务还没有工作目录时为 null——那是「还没有产物」，不是错误。 */
   root: FileWorkspaceRoot | null;
   artifacts: TaskArtifact[];
   truncated: boolean;
-  /** 被忽略那一档的时间下限（任务第一次开跑）。 */
+  /**
+   * 任务第一次开跑的时刻；界面只用它判「跑过没有」。真正的判据是**任务在跑的那几段**
+   * 的并集（共享工作区）或目录独占（worktree），判据本体在服务端 `task-artifact-scope.ts`。
+   */
   since: string | null;
+  scope: ArtifactScopeKind;
+  /** 清单**可能不全**的原因（预算用满、目录读不动…）。空数组 = 读全了。 */
+  incomplete: string[];
   /** 某一路线索读失败了。另外两路通常还有东西，所以不当致命错误。 */
   error: string | null;
 };
