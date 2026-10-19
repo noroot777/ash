@@ -3,24 +3,7 @@ import { ArrowsClockwise, CaretDown, Code } from "@phosphor-icons/react";
 import { Menu, MenuItem, MenuSeparator } from "../components/ui.tsx";
 import { api, type IdeApp, type IdeProbe } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
-
-const LAST_IDE_KEY = "ash.open-in-ide";
-
-function readLastIde(): string | null {
-  try {
-    return localStorage.getItem(LAST_IDE_KEY);
-  } catch {
-    return null; // 隐私模式 / 禁了存储：记不住上次用哪个而已，不影响打开
-  }
-}
-
-function rememberIde(id: string): void {
-  try {
-    localStorage.setItem(LAST_IDE_KEY, id);
-  } catch {
-    // 同上，写不进去就算了
-  }
-}
+import { rememberIde, useLastIde } from "./idePreference.ts";
 
 type ProbeState =
   | { status: "idle" }
@@ -46,6 +29,10 @@ function ordered(ides: readonly IdeApp[], last: string | null): IdeApp[] {
  * 探测同样是**点开菜单时才发起**，理由和 `OpenWithMenu` 顶部那段一模一样：请求由点击
  * 直接发出，不放进 effect（放进去就要拿 state 当守卫，而那个 state 一进依赖数组，
  * `setState(loading)` 自己会触发重跑，在途响应被 cleanup 作废，菜单永远停在「正在查…」）。
+ *
+ * 「别重复发」分成两件事，不能用一个标记一起管：**在途去重**看 `inFlight`，**已有结果**
+ * 看 state 是不是 `ready`。合在一起的写法（发过就不再发）会把一次临时失败变成永久的
+ * ——服务早就恢复了，反复开关菜单却只剩那句报错，只能刷新页面。
  */
 export function OpenInIdeMenu({
   taskId,
@@ -62,11 +49,12 @@ export function OpenInIdeMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<ProbeState>({ status: "idle" });
-  const [last, setLast] = useState<string | null>(() => readLastIde());
+  // 两份菜单（文件树头部、文件夹详情）共享同一个偏好，谁打开成功了另一份也跟着变。
+  const last = useLastIde();
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  // 已经发过一次就别再发；关掉菜单不作废在途请求，所以重开也不会卡住。
-  const requested = useRef(false);
+  // 只管「此刻有没有一个请求在飞」；关掉菜单不作废在途请求，所以重开也不会卡住。
+  const inFlight = useRef(false);
 
   useDismissable({
     enabled: open,
@@ -76,8 +64,10 @@ export function OpenInIdeMenu({
   });
 
   const probeOnce = (force = false) => {
-    if (requested.current && !force) return;
-    requested.current = true;
+    if (inFlight.current) return;
+    // 已经探到过就别再打扰服务端；失败那一次不算「探到过」，下次打开菜单会自己重试。
+    if (!force && state.status === "ready") return;
+    inFlight.current = true;
     setState({ status: "loading" });
     api.ides(force).then(
       (probe) => setState({ status: "ready", probe }),
@@ -85,15 +75,15 @@ export function OpenInIdeMenu({
         status: "error",
         message: reason instanceof Error ? reason.message : String(reason),
       }),
-    );
+    ).finally(() => { inFlight.current = false; });
   };
 
   const launch = async (ide: IdeApp) => {
     setOpen(false);
-    rememberIde(ide.id);
-    setLast(ide.id);
     try {
       await api.openTaskPathInIde(taskId, path, ide.id);
+      // 成功之后才记：这条标记说的是「上次用的」，被拒绝或没能打开的那次不算。
+      rememberIde(ide.id);
       notify(`已用 ${ide.name} 打开`);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
@@ -140,13 +130,17 @@ export function OpenInIdeMenu({
               </span>
             </MenuItem>
           ))}
-          {probe && (
+          {/* 出错那一档**更**需要这颗按钮：服务恢复了，用户总得有个地方点一下。
+              刚装上一个 IDE 的人也从这里重来，服务端那半分钟的缓存由 refresh 作废。 */}
+          {(probe || state.status === "error") && (
             <>
               <MenuSeparator />
-              {/* 刚装上一个 IDE 的人会立刻来点这里。服务端那半分钟的缓存由 refresh 作废。 */}
               <MenuItem onClick={() => probeOnce(true)}>
                 <span className="file-openwith__app">
-                  <b><ArrowsClockwise size={11} aria-hidden="true" />重新探测本机 IDE</b>
+                  <b>
+                    <ArrowsClockwise size={11} aria-hidden="true" />
+                    {state.status === "error" ? "重试" : "重新探测本机 IDE"}
+                  </b>
                 </span>
               </MenuItem>
             </>
