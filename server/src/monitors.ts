@@ -34,6 +34,7 @@ import {
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
+import { ensureSupervised, stopSupervisionHandover } from "./monitor-handover.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { reclaimState } from "./monitor-reclaim-evidence.js";
 import { stopRecoveryRetries } from "./monitor-reattach.js";
@@ -255,7 +256,7 @@ export async function detachMonitor(monitorId: string): Promise<void> {
  * 撤运行时那几步的本体。**调用方必须已经在 `serialize(monitorId)` 里** —— 里面要把缓冲
  * 排出去,而推送一律在那条队列上(排第二遍就是等自己后面那一位,当场死锁)。
  */
-async function teardownRuntimeLocked(monitorId: string): Promise<void> {
+export async function teardownRuntimeLocked(monitorId: string): Promise<void> {
   const rt = runtimes.get(monitorId);
   if (!rt || rt.closing) return;
   rt.closing = true;
@@ -281,30 +282,11 @@ export function supervisionOf(monitorId: string): { watching: boolean; exitWatch
   return { watching: true, exitWatched: rt.liveness !== null || rt.exitWatched };
 }
 
-/**
- * **库里还是运行态就必须有人盯 —— 这是收尾交接的那条不变量**(第 23 轮审查 F1)。
- *
- * 收尾这件事分三步:算结论(读日志、问回收)、把终态**落盘**、撤运行时。撤必须排在读日志
- * 之前(我们自己那条 tail 不停下来,就会边收尾边继续推),所以中间那段里「监督已经撤了、
- * 终态还没落上」是真实存在的一瞬 —— 审查实测:让离线收尾那条终态 UPDATE 抛一次,行留在
- * running、tail 和期限全没了,之后产出的结果一条都送不出去,期限过了也没有结束通知。
- *
- * 所以收尾的两条路(`finish`/`finishOffline`)都在 `finally` 里调它:重读一遍,**还是 running
- * 就把监督接回去**。`attach` 幂等,成功那一路读到的是终态,这里什么都不做。
- */
-export async function ensureSupervised(monitorId: string): Promise<void> {
-  try {
-    if (dbClient.closed) return;
-    const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
-    // claude 的投影行没有自己的进程(进程在 agent 的进程树里),一律不接 —— 判据跟
-    // `reattachMonitors` 那一侧同口径。
-    if (!row || row.status !== "running" || row.kind !== "ash") return;
-    attach(row);
-  } catch (e) {
-    // 这一句本身是兜底,它失败了只能出声:行还在 running,下一次启动的接回会重新立监督。
-    console.error(`[ash] 收尾失败后把监督接回去这一步也失败了 monitor=${monitorId}:`, e);
-  }
-}
+// 「库里还是运行态就必须有人盯」那条不变量的接管者住在 monitor-handover.ts(它要排重试,
+// 判据和本文件的运行时注册表咬得很紧,所以放在隔壁而不是塞进这里)。**公开面仍然从这里出**。
+export {
+  ensureSupervised, pendingSupervisionHandovers, stopSupervisionHandover, type HandoverOutcome,
+} from "./monitor-handover.js";
 
 /** 这一行此刻有没有运行时在盯(tail/期限)。 */
 export const isSupervised = (monitorId: string): boolean => supervisionOf(monitorId).watching;
@@ -461,6 +443,9 @@ export async function finish(
     // 也销不掉账(第 10 轮审查 F2-B)。确认退出之后它才真的没用了。
     if (row.kind === "ash" && row.logPath && verdict === "closed") clearSpawnIdentity(row.logPath);
   } finally {
+    // 不传 `holdingChain`:这个函数本身不跑在 `serialize(monitorId)` 上(它只在里面排过
+    // flush),所以让交接层把这一趟排进那条队列 —— 并发的两笔收尾于是各自有序,后落定的
+    // 那一笔一定看得到前一笔刚挂回来的运行时(第 24 轮审查 N1)。
     await ensureSupervised(monitorId);
   }
 }
@@ -574,8 +559,11 @@ export async function finishOffline(
       // 撤运行时排在读日志之前(自己那条 tail 不停下来就会边收尾边继续推),所以中间这一段
       // 里「监督已撤、终态未落」是真实的一瞬。**出去的时候还是 running 就把监督接回去**
       // (第 23 轮审查 F1 实测:让这条 UPDATE 抛一次,之后产出的结果一条都送不出去、期限
-      // 过了也没有结束通知)。这里不能再排一次 `serialize(row.id)` —— 正跑在那条队列上。
-      await ensureSupervised(row.id);
+      // 过了也没有结束通知)。`holdingChain`:正跑在 `serialize(row.id)` 上,不能再排一次。
+      //
+      // 这一趟做不成会**自己排重试**(第 24 轮审查 F1):接回那一步用的是同一个库,它跟着
+      // 这次故障一起失败时,光打一行日志就等于把这条哨兵永久丢掉。
+      await ensureSupervised(row.id, { holdingChain: true });
     }
   });
 }
@@ -591,6 +579,8 @@ export function detachAllMonitors(): void {
   // 待认领那几行的恢复梯子也要撤:它是 unref 的定时器,但测试里库会被关掉,让它醒过来只会
   // 对着一个关了的库发问(第 20 轮审查 F2)。
   stopRecoveryRetries();
+  // 监督交接那几跳同理:注入过读写失败的用例必然留下一两条排着的重试。
+  stopSupervisionHandover();
   for (const [, rt] of runtimes) {
     rt.closing = true;
     for (const t of rt.timers) { clearInterval(t); clearTimeout(t); }

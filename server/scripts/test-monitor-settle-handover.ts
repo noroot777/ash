@@ -25,8 +25,11 @@ import { invalidateMonitorUnitScan } from "../src/monitor-unit-scan.js";
 const { killTree } = await import("../src/platform.js");
 const { dbClient } = await import("../src/db/index.js");
 const { monitorSpawnIdentityPath } = await import("../src/monitor-spawn.js");
-const { attach, finish, isSupervised, reattachMonitors, serialize, supervisionComplete, supervisionOf }
-  = await import("../src/monitors.js");
+const {
+  attach, finish, finishOffline, isSupervised, pendingSupervisionHandovers, reattachMonitors,
+  serialize,
+  supervisionComplete, supervisionOf,
+} = await import("../src/monitors.js");
 
 try {
 
@@ -349,13 +352,146 @@ try {
   try {
     await finish(mon16, "expired", "盯满了约定的时长（台子直接叫的）", null).catch(() => undefined);
   } finally { dbClient.execute = realExec16; }
+  assert.equal(thrown16, 1, "台子前提:到期那次终态提交真的抛了一次");
+  assert.equal((await readRow(mon16))!.status, "running",
+    "那条终态没落上,所以这一行还是运行态 —— 它必须还有人盯");
+  await until("提交失败之后监督被交回来了(连探活那一根)",
+    async () => supervisionComplete({ id: mon16, pid: pid16 }), 10_000);
+  // 交回来的那几根**真的在干活**:把进程杀掉,探活那一根应当自己判出「已经不在了」并收尾 ——
+  // 不靠下一次启动。只断言 `watching` 就只证到「注册表里有个对象」。
+  killTree(pid16, "SIGKILL");
+  await until("进程退了照旧收得掉", async () => (await readRow(mon16))?.status !== "running", 25_000);
+
+  // ⑰ **交接那一趟自己失败时,责任不许就地丢掉**(第 24 轮审查 F1)。⑮⑯ 里接回那一次读都
+  //    是成功的;而审查实测的现场是**同一场故障**把收尾那次读和交接那次读一起打掉 —— 那时
+  //    的兜底只打一行日志,于是行留在 running、监督一样也没有,命令还在跑、结果已经写在磁盘
+  //    上,却再也没有人读出去,期限也再没人算。一次 700ms 的抖动换永久失联。
+  const taskId17 = await makeTask({ status: "running" });
+  const token17 = `handover-retry-${process.pid}-${Date.now()}`;
+  const pid17 = markedProcess(token17);
+  const mon17 = await insertMonitorRow(taskId17, { pid: pid17, unitToken: token17 });
+  const log17 = (await readRow(mon17))!.logPath;
+  writeFileSync(log17, "");
+  attach((await readRow(mon17))!);
+  assert.equal(supervisionComplete({ id: mon17, pid: pid17 }), true, "台子前提:监督是齐的");
+  // 这一阵**整张监听表都读不出来**(审查注的就是这个:到期那次读和 finally 那次读同源)。
+  let outage17 = true;
+  let reads17 = 0;
+  const realExec17 = dbClient.execute;
+  dbClient.execute = (async function (statement: unknown, ...rest: unknown[]) {
+    const sql = String(typeof statement === "string" ? statement : (statement as { sql?: string })?.sql);
+    if (outage17 && /^\s*select\b/i.test(sql) && /\bfrom\s+"monitors"/i.test(sql)) {
+      reads17 += 1;
+      throw new Error("fixture: monitors 表这一阵读不出来");
+    }
+    return (realExec17 as (...a: unknown[]) => unknown).call(dbClient, statement, ...rest);
+  }) as typeof dbClient.execute;
+  try {
+    await finish(mon17, "expired", "盯满了约定的时长（台子直接叫的）", null).catch(() => undefined);
+    assert.ok(reads17 >= 2, `台子前提:收尾那次读和交接那次读都撞上同一场故障（实到 ${reads17} 次）`);
+    assert.equal(isSupervised(mon17), false, "故障里确实接不回来 —— 这一刻监督是真没有的");
+    // **但责任不许丢**:排着下一跳,而且最后一档会一直续约(不是「等下一次启动」)。
+    assert.deepEqual(pendingSupervisionHandovers(), [mon17],
+      "交接失败之后必须留下一个会自己重试的接管者");
+  } finally { outage17 = false; dbClient.execute = realExec17; }
+  await until("故障过去之后它自己把监督接回来了(没有人再碰过它)",
+    async () => supervisionComplete({ id: mon17, pid: pid17 }), 20_000);
+  appendFileSync(log17, "RESULT_AFTER_OUTAGE\n");
+  await until("故障之后产出的那一行照旧推得出去",
+    async () => ((await readRow(mon17))?.events ?? 0) > 0, 20_000);
+  killTree(pid17, "SIGKILL");
+  await until("进程退了照旧收得掉", async () => (await readRow(mon17))?.status !== "running", 25_000);
+  assert.deepEqual(pendingSupervisionHandovers(), [], "收完之后不留排着的重试");
+
+  // ⑱ **反过来那一半:终态落定了就不许还有人盯**(第 24 轮审查 N1)。两笔收尾交错进来 ——
+  //    第一笔落终态失败,它的 finally 把运行时挂回来(那一刻行确实还是 running,挂回来是对的);
+  //    第二笔随后把它写成 stopped。那条已经停掉的行此前还占着文件句柄、还在算自己的期限。
+  const taskId18 = await makeTask({ status: "running" });
+  const absent18 = 999_999;
+  assert.equal(isPidAlive(absent18), false, "台子前提:这个号上没有进程(不会给无关进程发信号)");
+  const mon18 = await insertMonitorRow(taskId18, { pid: absent18 });
+  writeFileSync((await readRow(mon18))!.logPath, "");
+  attach((await readRow(mon18))!);
+  const gate18 = () => { let open!: () => void; const p = new Promise<void>((r) => { open = r; }); return { p, open }; };
+  const firstAtUpdate = gate18(), secondAtUpdate = gate18(), failFirst = gate18(), commitSecond = gate18();
+  let failures18 = 0;
+  const realExec18 = dbClient.execute;
+  dbClient.execute = (async function (statement: unknown, ...rest: unknown[]) {
+    const sql = String(typeof statement === "string" ? statement : (statement as { sql?: string })?.sql);
+    const args = ((statement as { args?: unknown[] })?.args ?? []) as unknown[];
+    if (/^\s*update\s+"monitors"\s+set/i.test(sql) && args.includes("expired")) {
+      failures18 += 1;
+      firstAtUpdate.open();
+      await failFirst.p;
+      throw new Error("fixture: 在途的那笔到期提交失败一次");
+    }
+    if (/^\s*update\s+"monitors"\s+set/i.test(sql) && args.includes("stopped")) {
+      secondAtUpdate.open();
+      await commitSecond.p;
+    }
+    return (realExec18 as (...a: unknown[]) => unknown).call(dbClient, statement, ...rest);
+  }) as typeof dbClient.execute;
+  try {
+    const first18 = finish(mon18, "expired", "并发的旧到期回调", null).catch(() => undefined);
+    await firstAtUpdate.p;
+    const second18 = stopMonitor(mon18, "用户点停");
+    await secondAtUpdate.p;
+    failFirst.open();
+    await first18;
+    assert.equal(isSupervised(mon18), true,
+      "台子前提:第一笔失败之后把运行时挂回来了(那一刻行还是 running)");
+    commitSecond.open();
+    await second18;
+  } finally { failFirst.open(); commitSecond.open(); dbClient.execute = realExec18; }
+  assert.equal(failures18, 1, "台子前提:第一笔的终态提交确实失败了一次");
+  assert.equal((await readRow(mon18))!.status, "stopped", "后落定的那一笔赢了");
+  assert.equal(isSupervised(mon18), false,
+    "终态已经落定,就不许还有人盯 —— 否则文件轮询、期限和探活都留在一条停掉的行上");
+
+  // ⑲ **离线收尾那条路要单独钉住**。⑮ 那一行身上还挂着恢复梯子,梯子的 catch 也会把监督
+  //    接回去 —— 所以 ⑮ 证不出「`finishOffline` 自己那一处 `finally`」有没有用(实测:把它
+  //    摘掉 ⑮ 照旧绿)。这里直接叫它,行是台子插的、从没进过接回那一趟,身上没有梯子。
+  const taskId19 = await makeTask({ status: "running" });
+  const token19 = `offline-commit-fail-${process.pid}-${Date.now()}`;
+  const pid19 = markedProcess(token19);
+  const mon19 = await insertMonitorRow(taskId19, { pid: pid19, unitToken: token19 });
+  const row19 = (await readRow(mon19))!;
+  writeFileSync(row19.logPath, "");
+  attach(row19);
+  assert.equal(supervisionComplete({ id: mon19, pid: pid19 }), true, "台子前提:监督是齐的");
+  let thrown19 = 0;
+  const realExec19 = dbClient.execute;
+  dbClient.execute = (async function (statement: unknown, ...rest: unknown[]) {
+    const sql = String(typeof statement === "string" ? statement : (statement as { sql?: string })?.sql);
+    const args = ((statement as { args?: unknown[] })?.args ?? []) as unknown[];
+    if (thrown19 === 0 && /^\s*update\s+"monitors"\s+set/i.test(sql) && args.includes("lost")) {
+      thrown19 += 1;
+      dbClient.execute = realExec19;
+      throw new Error("fixture: terminal UPDATE fails once inside finishOffline");
+    }
+    return (realExec19 as (...a: unknown[]) => unknown).call(dbClient, statement, ...rest);
+  }) as typeof dbClient.execute;
+  try {
+    await finishOffline(row19, "lost", "台子直接叫的离线收尾").catch(() => undefined);
+  } finally { dbClient.execute = realExec19; }
+  assert.equal(thrown19, 1, "台子前提:那次终态提交真的抛了一次");
+  assert.equal((await readRow(mon19))!.status, "running", "那条终态没落上,这一行还是运行态");
+  assert.deepEqual(pendingSupervisionHandovers(), [],
+    "台子前提:没有排着的重试在兜 —— 接回来的只能是它自己那一处 finally");
+  assert.equal(supervisionComplete({ id: mon19, pid: pid19 }), true,
+    "出这个函数时监督就该是齐的(它在自己那条队列里当场接回来,不用等下一跳)");
+  killTree(pid19, "SIGKILL");
+  await until("进程退了照旧收得掉", async () => (await readRow(mon19))?.status !== "running", 25_000);
 
   console.log(
     "✓ 收尾交接：点停赢了之后在途的旧回调一个字都不写、一条通知都不推、更不重新接上运行时 /"
     + " 重问那一跳自己抛错也还有下一跳 / 判掉与到期这两条收尾路在点停插进来之后都不许改写它 /"
     + " 接回某一条时出错既不带走它自己的监督、也不带走后面那些行,接管那一趟由重试补完 /"
     + " 号认回来而接管抛错时退出检查当场补上（进程退了收得到）/"
-    + " 终态没落上时监督交得回来（有梯子的那条、没梯子的那条都算）"
+    + " 终态没落上时监督交得回来（有梯子的那条、没梯子的那条都算,交回来的那几根真的在干活）/"
+    + " 交接那一趟自己撞上同一场故障时留下会重试的接管者、故障过去自己接回来 /"
+    + " 反过来那一半:终态落定之后不许还有人盯（并发收尾那一笔挂回来的也要撤）/"
+    + " 离线收尾那条路自己那一处 finally 单独钉住（行上没有梯子在兜时它是唯一的接回点）"
     + " 均受回归保护",
   );
 } finally {

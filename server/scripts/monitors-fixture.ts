@@ -20,7 +20,8 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("monitors");
 
 export const [
-  { db, ensureSchema }, schema, monitorsModule, createModule, monitorEvents, status, { isPidAlive }, pending,
+  { db, ensureSchema }, schema, monitorsModule, createModule, monitorEvents, status,
+  { isPidAlive, killTree }, pending,
   { continueTask }, runs, taskRoutes, { stopAllMonitorRecovery }, { inspectProcess },
 ] = await Promise.all([
   import("../src/db/index.js"),
@@ -50,8 +51,16 @@ export const { stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachM
  * 或 `{ kind: "unverified" }`(回连凭据对不上)。
  */
 type StartInput = Parameters<typeof createModule.startMonitor>[0];
-export const startMonitor = (input: Omit<StartInput, "caller"> & { caller?: StartInput["caller"] }) =>
-  createModule.startMonitor({ ...input, caller: input.caller ?? { kind: "external" } });
+/**
+ * 这个台子**亲手让它起来**的那些进程号。来源确凿:就是这一次创建返回给台子的那个号,
+ * 不是从库里挑出来的(见 `teardown` —— 它只配收掉自己造的)。
+ */
+const spawnedByFixture: number[] = [];
+export const startMonitor = async (input: Omit<StartInput, "caller"> & { caller?: StartInput["caller"] }) => {
+  const result = await createModule.startMonitor({ ...input, caller: input.caller ?? { kind: "external" } });
+  if (result.ok && result.monitor.pid !== null) spawnedByFixture.push(result.monitor.pid);
+  return result;
+};
 export const { monitors, projects, scheduledMessages, sessions, tasks } = schema;
 
 const monitorSession = await import("../src/monitor-session.js");
@@ -182,9 +191,25 @@ export async function assertDebtClosed(monId: string, what: string): Promise<voi
 export const pendingOf = (taskId: string) =>
   db.select().from(scheduledMessages).where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
 
-/** 收尾：哨兵全撒手（不杀——它们本来就该活过 ash）、放锁、删临时目录。 */
+/**
+ * 收尾：哨兵从运行时上撒手、**把台子自己起的命令收掉**、放锁、删临时目录。
+ *
+ * 「哨兵本来就该活过 ash」那条语义**靠的是库还在**:下一次启动按行把它们重新接回去、按责任
+ * 重收。测试没有那个明天 —— 临时库下一行就删掉了,之后谁都没法再按责任重收它们,留下的就是
+ * 一组永远没人认领的进程(第 24 轮审查 N5 实测到一组,之前几轮我手工清过十几个)。
+ *
+ * **只收来源确凿的那些**:`spawnedByFixture` 里的号是创建那一刻返回给台子的,不是从库里猜
+ * 的 —— 从库里挑「pid 非空」的行会把假号(`999999`)和被复用的号一起算进来,那正是这几轮一直
+ * 在钉的「弱判据不配下刀」。各份测试自己 spawn 的进程由它自己的台子收(见各自的 reap)。
+ */
 export async function teardown(): Promise<void> {
   detachAllMonitors();
+  for (const pid of spawnedByFixture) if (isPidAlive(pid)) killTree(pid, "SIGKILL");
+  for (const pid of spawnedByFixture) {
+    await until(`台子收掉自己起的 pid=${pid}`, async () => !isPidAlive(pid), 10_000)
+      .catch((e) => console.error(`[台子] 这个号收不掉 pid=${pid}:`, e));
+  }
+  spawnedByFixture.length = 0;
   // 待恢复账本的退避定时器是 unref 过的（不会拖住进程），但留着会在后续用例里继续重试
   // 刷日志——注入过读写失败的用例必然留下几条账。
   stopAllMonitorRecovery();
