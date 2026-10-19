@@ -284,6 +284,7 @@ if (started.status !== 0 || !Number.isInteger(serverPid) || serverPid <= 0) {
 
 let ready = false;
 let impostor = 0;
+let readyHealth = null;
 const deadline = Date.now() + START_TIMEOUT * 1000;
 while (Date.now() < deadline) {
   const health = await localJson(PORT, "/api/health");
@@ -292,6 +293,7 @@ while (Date.now() < deadline) {
   // —— 上面那道「必须先安静」的闸已经保证了此刻端口上不会有别人。
   if (health && (!health.pid || health.pid === serverPid)) {
     ready = true;
+    readyHealth = health;
     break;
   }
   if (health?.pid) impostor = health.pid;
@@ -301,6 +303,18 @@ while (Date.now() < deadline) {
 }
 if (ready) {
   say(`  ✓ :${PORT} 已就绪(pid ${serverPid},日志 ${LOG})`);
+  // 「上一次服务是怎么停的」只有在这一刻说才有人读。新 server 启动时如果发现单例锁
+  // 还在,就说明上一实例一条退出路径都没走过(正常退出 / SIGINT / SIGTERM / SIGHUP /
+  // SIGQUIT 都会删锁),它是被 SIGKILL 一类抓不住的方式带走的。不说的话,用户只能
+  // 下次再去翻 /tmp 日志加系统日志。
+  const gone = readyHealth?.previousAbnormalExit;
+  if (gone) {
+    const heartbeat = gone.lastHeartbeatAt ? `最后心跳 ${gone.lastHeartbeatAt}` : "无心跳记录(上一实例是旧版本)";
+    say(`  ⚠ 上一实例(pid ${gone.pid})不是正常停的:${heartbeat} —— 没走任何退出路径,属于被强杀/内核击杀。`);
+    say("     这不是重启失败,服务已经起来了;要查是谁下的手,看这份账本和系统日志:");
+    say(`     ${LOCK_FILE.replace(/\.ash\.lock$/, ".exits.jsonl")}`);
+    say("     log show --last 1h --predicate 'eventMessage CONTAINS \"<pid>\"'");
+  }
 } else if (impostor) {
   say(`  ✕ :${PORT} 上应答的是 pid ${impostor},不是刚起的 ${serverPid} —— 重启没生效,跑的还是旧代码。看 ${LOG}`);
   process.exit(1);
