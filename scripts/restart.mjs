@@ -303,17 +303,27 @@ while (Date.now() < deadline) {
 }
 if (ready) {
   say(`  ✓ :${PORT} 已就绪(pid ${serverPid},日志 ${LOG})`);
-  // 「上一次服务是怎么停的」只有在这一刻说才有人读。新 server 启动时如果发现单例锁
-  // 还在,就说明上一实例一条退出路径都没走过(正常退出 / SIGINT / SIGTERM / SIGHUP /
-  // SIGQUIT 都会删锁),它是被 SIGKILL 一类抓不住的方式带走的。不说的话,用户只能
-  // 下次再去翻 /tmp 日志加系统日志。
-  const gone = readyHealth?.previousAbnormalExit;
-  if (gone) {
-    const heartbeat = gone.lastHeartbeatAt ? `最后心跳 ${gone.lastHeartbeatAt}` : "无心跳记录(上一实例是旧版本)";
-    say(`  ⚠ 上一实例(pid ${gone.pid})不是正常停的:${heartbeat} —— 没走任何退出路径,属于被强杀/内核击杀。`);
-    say("     这不是重启失败,服务已经起来了;要查是谁下的手,看这份账本和系统日志:");
-    say(`     ${LOCK_FILE.replace(/\.ash\.lock$/, ".exits.jsonl")}`);
-    say("     log show --last 1h --predicate 'eventMessage CONTAINS \"<pid>\"'");
+  // 「上一次服务是怎么停的」只有在这一刻说才有人读。新 server 启动时如果发现上一轮的
+  // 单例锁还在,它会按账本定性:账本里有那一轮的退出记录 = 走过退出路径、只是没删掉锁;
+  // 没有记录 = 死因未知。**不要在这里把「锁还在」说成强杀** —— 删锁本身会失败(数据目录
+  // 只读就 EACCES),那种情况下服务是正常停的。
+  const residual = readyHealth?.previousResidualLock;
+  if (residual?.diagnosis === "cleanup_failed") {
+    say(`  ⚠ 上一实例(pid ${residual.pid})是正常停的,但没能删掉单例锁(多半是数据目录不可写)。`);
+    say("     本次已覆盖那把陈旧锁;顺手看一下数据目录的权限,否则每次重启都会报这一句。");
+  } else if (residual) {
+    const alive = residual.lastHeartbeatAt
+      ? `最后已知存活 ${residual.lastHeartbeatAt}`
+      : "连最后存活时刻都没有(上一实例是旧版本,锁里没心跳)";
+    say(`  ⚠ 上一实例(pid ${residual.pid})留下了单例锁,账本里没有它的退出记录 —— 死因未知:${alive}。`);
+    say("     可能是强杀/内核击杀,也可能是退出时连账本都没写进去。这不是重启失败,服务已经起来了。");
+    say(`     账本:${LOCK_FILE.replace(/\.ash\.lock$/, ".exits.jsonl")}`);
+    // 系统日志那条命令只有 macOS 有,而且 zsh 里 `log` 被遮蔽,必须写全路径。
+    if (process.platform === "darwin") {
+      say(`     /usr/bin/log show --last 1h --predicate 'eventMessage CONTAINS "${residual.pid}"'`);
+    } else if (!IS_WINDOWS) {
+      say(`     查内核日志:journalctl -k --since -1h | grep -i -e oom -e kill`);
+    }
   }
 } else if (impostor) {
   say(`  ✕ :${PORT} 上应答的是 pid ${impostor},不是刚起的 ${serverPid} —— 重启没生效,跑的还是旧代码。看 ${LOG}`);

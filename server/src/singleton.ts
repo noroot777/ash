@@ -13,7 +13,18 @@ import {
 import { resolveAshDbFile, ensureAshDbDir } from "./db/path.js";
 import { IS_WINDOWS, isPidAlive, killPidsCommand } from "./platform.js";
 import { inspectProcess as inspectProcessInfo, type ProcessInfo } from "./proc.js";
-import { exitLedgerFileForDb, humanDuration, recordExit, trimExitLedger, type ExitRecord } from "./exit-ledger.js";
+import {
+  exitLedgerFileForDb,
+  findExitByRunId,
+  humanDuration,
+  publicExitSummary,
+  recordExit,
+  runIdOfToken,
+  trimExitLedger,
+  type ExitRecord,
+  type PublicExitSummary,
+  type ResidualDiagnosis,
+} from "./exit-ledger.js";
 
 const LOCK_VERSION = 1;
 const LOCK_SUFFIX = ".ash.lock";
@@ -31,16 +42,19 @@ const HEARTBEAT_MS = 10_000;
 let ownLockToken: string | null = null;
 
 /**
- * 上一实例「一条退出路径都没走过」的取证结论,启动时算一次。
+ * 启动时发现的「上一轮的锁还留在原地」这件事,算一次。
  *
- * 暴露出去是因为**这件事只有人看得见才有用**:/api/health 带上它,`npm run restart`
- * 在确认就绪那一步就能把「上次不是正常停的」摔在用户脸上,而不是让他下次再从
- * /tmp 日志 + 系统日志里拼。
+ * 要让人看得见才有用:/api/health 带上它,`npm run restart` 在确认就绪那一步就能把
+ * 「上次不是正常停的」摔在用户脸上,而不是让他下次再从 /tmp 日志 + 系统日志里拼。
+ *
+ * **只导出白名单投影**(`previousResidualLockPublic`),不导出这条全量记录:它的
+ * `note` 可能含别的进程的完整命令行(PID 复用时),而健康端点是免登录的。想让公开
+ * 响应多带一个字段,就去 `publicExitSummary` 里显式加 —— 那一步是故意设成手工的。
  */
-let previousAbnormalExitRecord: ExitRecord | null = null;
+let previousResidualRecord: ExitRecord | null = null;
 
-export function previousAbnormalExit(): ExitRecord | null {
-  return previousAbnormalExitRecord;
+export function previousResidualLockPublic(): PublicExitSummary | null {
+  return publicExitSummary(previousResidualRecord);
 }
 
 type LockFile = {
@@ -76,10 +90,23 @@ export class SingletonConflictError extends Error {
   }
 }
 
+/**
+ * 释放锁的真实结果。
+ *
+ * 以前 `release()` 是 `void`、失败只 `console.warn` 一句,于是信号退出那条路**无条件**
+ * 打印「单例锁已释放」—— 第 1 轮审查把数据目录改成只读复现出来:删锁 EACCES、日志
+ * 照说已释放、锁留在原地,下一个实例再把这次认成强杀。谁都没说谎,但三处拼起来是
+ * 一个假结论。所以这里改成返回值,调用方按实际情况说话。
+ */
+export type LockReleaseOutcome =
+  | { state: "removed" }
+  | { state: "not-ours" }
+  | { state: "failed"; error: string };
+
 export type SingletonLock = {
   dbFile: string;
   lockFile: string;
-  release: () => void;
+  release: () => LockReleaseOutcome;
 };
 
 export function singletonLockFileForDb(dbFile = resolveAshDbFile()) {
@@ -182,9 +209,9 @@ function writeOwnLock(dbFile: string, lockFile: string, port: number | null): Si
         throw new SingletonConflictError(dbFile, lockFile, holder);
       }
       console.warn(`[ash] stale singleton lock at ${lockFile}: ${staleReason}; overwriting`);
-      // 锁还在 = 上一实例一条退出路径都没走过。这是目前唯一能证明「它是被强杀的」的
-      // 证据,别只打一句 overwriting 就扔掉。
-      reportVanishedPrevious(dbFile, existing, staleReason);
+      // 锁还在只说明「发现残留」,死因要回查账本才能定 —— 别只打一句 overwriting
+      // 就扔掉,也别直接升格成强杀。
+      reportResidualLock(dbFile, existing, staleReason);
       try {
         unlinkSync(lockFile);
       } catch (unlinkError) {
@@ -197,22 +224,41 @@ function writeOwnLock(dbFile: string, lockFile: string, port: number | null): Si
   // unref:心跳是旁路观测,绝不能成为「进程该不该退出」的理由。
   heartbeat.unref();
 
-  let released = false;
+  let outcome: LockReleaseOutcome | null = null;
   return {
     dbFile,
     lockFile,
     release: () => {
-      if (released) return;
-      released = true;
+      if (outcome) return outcome;
       clearInterval(heartbeat);
       try {
         const current = readLock(lockFile);
-        if (current?.pid === lock.pid && current.token === lock.token) unlinkSync(lockFile);
+        if (current?.pid === lock.pid && current.token === lock.token) {
+          unlinkSync(lockFile);
+          outcome = { state: "removed" };
+        } else {
+          // 锁已经不是自己的了(被人工删掉、或被别的实例接走):没有要删的东西,
+          // 也不是失败 —— 但也不能说成「我释放了」。
+          outcome = { state: "not-ours" };
+        }
       } catch (e) {
-        if (!isNotFound(e)) console.warn(`[ash] failed to release singleton lock ${lockFile}:`, e);
+        if (isNotFound(e)) {
+          outcome = { state: "removed" };
+        } else {
+          const error = (e as NodeJS.ErrnoException)?.code ?? String(e);
+          console.warn(`[ash] failed to release singleton lock ${lockFile}:`, e);
+          outcome = { state: "failed", error };
+        }
       }
+      return outcome;
     },
   };
+}
+
+function describeRelease(outcome: LockReleaseOutcome): string {
+  if (outcome.state === "removed") return "单例锁已释放";
+  if (outcome.state === "not-ours") return "单例锁已不属于本进程,未改动";
+  return `单例锁删除失败(${outcome.error}),它会留在原地 —— 下一个实例会按账本把这次认成「退出已记录、清理失败」`;
 }
 
 /**
@@ -250,31 +296,57 @@ function beat(lockFile: string, lock: LockFile): void {
   }
 }
 
-/** 把「上一实例是怎么没的」落账 + 打在终端上。 */
-function reportVanishedPrevious(dbFile: string, lock: Partial<LockFile> | null, staleReason: string): void {
+/**
+ * 发现上一轮的锁还在:落账 + 打在终端上。
+ *
+ * **判据是账本,不是锁**。锁留在原地有两种完全不同的来由:
+ *   * 账本里有这一轮的退出记录 ⇒ 它**走过**退出路径,只是删锁失败(数据目录只读
+ *     就会 EACCES)。这不是强杀,说成强杀是假结论。
+ *   * 账本里没有 ⇒ 死因未知。SIGKILL、内核击杀都在这一档里,但「退出时连账本都
+ *     没写进去」也在 —— 所以只报 unknown,不点名 SIGKILL。
+ *
+ * 顺带一条:`staleReason` 里可能带别的进程的完整命令行(PID 复用那一支),它只进
+ * `note`(账本 0600),不进公开响应。
+ */
+function reportResidualLock(dbFile: string, lock: Partial<LockFile> | null, staleReason: string): void {
   const pid = typeof lock?.pid === "number" && Number.isInteger(lock.pid) ? lock.pid : -1;
   if (pid <= 1) return; // 连是谁都读不出来,就别编一个死因
   const now = Date.now();
   const heartbeatAtMs = typeof lock?.heartbeatAtMs === "number" ? lock.heartbeatAtMs : null;
   const startedAtMs = typeof lock?.processStartedAtMs === "number" ? lock.processStartedAtMs : null;
+  const runId = typeof lock?.token === "string" && lock.token ? runIdOfToken(lock.token) : null;
+  const prior = runId ? findExitByRunId(runId, dbFile) : null;
+  const diagnosis: ResidualDiagnosis = prior ? "cleanup_failed" : "unknown";
   const record: ExitRecord = {
     at: new Date(now).toISOString(),
     pid,
-    kind: "vanished",
+    runId: runId ?? undefined,
+    kind: "residual",
+    // residual 只能算到最后一次心跳,所以这是**下界**,不是精确寿命。
     uptimeMs: heartbeatAtMs !== null && startedAtMs !== null ? heartbeatAtMs - startedAtMs : null,
     lastHeartbeatAt: lock?.heartbeatAt ?? null,
     silentMs: heartbeatAtMs !== null ? now - heartbeatAtMs : null,
+    diagnosis,
     note: staleReason,
   };
-  previousAbnormalExitRecord = record;
+  previousResidualRecord = record;
   recordExit(record, dbFile);
-  const when = record.lastHeartbeatAt
-    ? `最后心跳 ${record.lastHeartbeatAt}(之后静默 ${humanDuration(record.silentMs)}),活了 ${humanDuration(record.uptimeMs)}`
-    : "那把锁是旧版本写的、没有心跳字段,给不出死亡时刻";
+  const ledger = exitLedgerFileForDb(dbFile);
+  if (prior) {
+    const how = prior.kind === "signal" ? `收到 ${prior.signal ?? "信号"}` : `退出码 ${prior.code ?? "未知"}`;
+    console.warn(
+      `[ash] 上一实例(PID ${pid})留下了锁,但账本里有它这一轮的退出记录(${how},${prior.at})`
+        + ` ⇒ 它**走过**退出路径,只是没能把锁删掉(多半是数据目录不可写)。不是强杀。账本:${ledger}`,
+    );
+    return;
+  }
+  const alive = record.lastHeartbeatAt
+    ? `最后已知存活 ${record.lastHeartbeatAt}(之后静默 ${humanDuration(record.silentMs)},至少活了 ${humanDuration(record.uptimeMs)})`
+    : "那把锁是旧版本写的、没有心跳字段,连最后存活时刻都给不出";
   console.warn(
-    `[ash] 上一实例(PID ${pid})没走任何退出路径就消失了:${when}。`
-      + "正常退出和 SIGINT/SIGTERM/SIGHUP/SIGQUIT 都会删掉这把锁,锁还在 ⇒ 它是被 SIGKILL "
-      + `一类抓不住的方式带走的(外部强杀,或内核击杀)。历史:${exitLedgerFileForDb(dbFile)}`,
+    `[ash] 上一实例(PID ${pid})留下了锁,账本里**没有**它这一轮的退出记录 ⇒ 死因未知:`
+      + `${alive}。可能是 SIGKILL / 内核击杀,也可能是退出时连账本都没写进去;`
+      + `锁本身只能证明「没留下已确认的退出记录」。账本:${ledger}`,
   );
 }
 
@@ -382,8 +454,19 @@ const SIGNAL_EXIT_CODE: Partial<Record<NodeJS.Signals, number>> = {
   SIGBREAK: 149,
 };
 
+/**
+ * 记账和释放锁的**顺序是有讲究的:先落账,再释放**。
+ *
+ * 反过来写(原来就是)会开一个跨实例的写入竞态:旧实例一松锁,新实例立刻就能取到锁
+ * 并开始裁剪账本,而旧实例那条退出记录还没写进去 —— 整文件重写会把它盖掉。先落账
+ * 就等于「账本只在持锁期间被动」,竞态自然没了。
+ *
+ * 代价是日志里那句「锁怎么样了」要等释放之后才知道,所以释放结果不进账本:下一个
+ * 实例要的是「这一轮有没有退出记录」,有记录 + 锁还在就足以推出「清理失败」。
+ */
 function installCleanup(lock: SingletonLock) {
   const startedAtMs = Date.now() - Math.round(process.uptime() * 1000);
+  const runId = runIdOfToken(ownLockToken ?? "");
   let recorded = false;
   const note = (record: ExitRecord) => {
     if (recorded) return; // 信号路径已经记过,后面那次 exit 不要再记第二条
@@ -391,24 +474,25 @@ function installCleanup(lock: SingletonLock) {
     recordExit(record, lock.dbFile);
   };
   process.once("exit", (code) => {
-    lock.release();
     note({
       at: new Date().toISOString(),
       pid: process.pid,
+      runId,
       kind: "exit",
       code,
       uptimeMs: Date.now() - startedAtMs,
     });
+    lock.release();
   });
   for (const signal of EXIT_SIGNALS) {
     process.once(signal, () => {
       const uptimeMs = Date.now() - startedAtMs;
-      lock.release();
+      note({ at: new Date().toISOString(), pid: process.pid, runId, kind: "signal", signal, uptimeMs });
+      const outcome = lock.release();
       // 收到 SIGTERM 曾经是**完全静默**地退出(`npm run restart` 走的就是这条),于是
       // 日志里「上一次为什么停」永远少一行。现在至少能把「有人让它停」和「它自己没了」
-      // 分开。
-      console.warn(`[ash] 收到 ${signal}，退出（运行 ${humanDuration(uptimeMs)}，单例锁已释放）`);
-      note({ at: new Date().toISOString(), pid: process.pid, kind: "signal", signal, uptimeMs });
+      // 分开,而且锁到底有没有删掉也如实说 —— 说错了会让下一个实例得出假结论。
+      console.warn(`[ash] 收到 ${signal}，退出（运行 ${humanDuration(uptimeMs)}，${describeRelease(outcome)}）`);
       process.exit(SIGNAL_EXIT_CODE[signal] ?? 143);
     });
   }
