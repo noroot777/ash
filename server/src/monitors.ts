@@ -18,7 +18,7 @@
 //    后登记失败),都必须先落责任、再发信号、追到线索空才收档。只装在删除/审查收尾那两个
 //    包装函数里是不够的 —— 其余每一条停止路径都会绕过它(第 5 轮审查 F1,现场见
 //    monitor-reclaim-debts.ts 文件头)。
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import {
   MONITOR_BATCH_MS,
   MONITOR_MAX_EVENTS,
@@ -113,6 +113,8 @@ type Runtime = {
   exitWatched: boolean;
 };
 const runtimes = new Map<string, Runtime>();
+/** 期限那一根最快多久才许炸 —— 见 `attach` 里用它的地方。 */
+const EXPIRY_FLOOR_MS = 1_000;
 /** 同一个哨兵的推送串行化：两批事件同时落库会把 offset / events 互相写回去。 */
 const chains = new Map<string, Promise<unknown>>();
 
@@ -189,7 +191,11 @@ export function attach(row: Row, onExit?: (cb: (code: number | null) => void) =>
   });
   runtimes.set(row.id, rt);
 
-  const remaining = Math.max(0, new Date(row.expiresAt).getTime() - Date.now());
+  // 地板 1 秒(第 23 轮审查 F1 的连带防护):已经过了期限的行接上来时,这一根本来会在同一个
+  // tick 就炸 —— 而收尾失败之后监督会被交回来(见 `ensureSupervised`),两者凑在一起就是个
+  // 热循环(接上→立刻收尾→又失败→再接上)。给一秒地板:到期一定还是收得掉,失败重试也被
+  // 压成每秒一次。
+  const remaining = Math.max(EXPIRY_FLOOR_MS, new Date(row.expiresAt).getTime() - Date.now());
   const expiry = setTimeout(() => {
     settleInBackground(row.id, "expired", `盯满了约定的时长（${row.expiresAt}）`, null);
   }, remaining);
@@ -273,6 +279,31 @@ export function supervisionOf(monitorId: string): { watching: boolean; exitWatch
   const rt = runtimes.get(monitorId);
   if (!rt || rt.closing) return { watching: false, exitWatched: false };
   return { watching: true, exitWatched: rt.liveness !== null || rt.exitWatched };
+}
+
+/**
+ * **库里还是运行态就必须有人盯 —— 这是收尾交接的那条不变量**(第 23 轮审查 F1)。
+ *
+ * 收尾这件事分三步:算结论(读日志、问回收)、把终态**落盘**、撤运行时。撤必须排在读日志
+ * 之前(我们自己那条 tail 不停下来,就会边收尾边继续推),所以中间那段里「监督已经撤了、
+ * 终态还没落上」是真实存在的一瞬 —— 审查实测:让离线收尾那条终态 UPDATE 抛一次,行留在
+ * running、tail 和期限全没了,之后产出的结果一条都送不出去,期限过了也没有结束通知。
+ *
+ * 所以收尾的两条路(`finish`/`finishOffline`)都在 `finally` 里调它:重读一遍,**还是 running
+ * 就把监督接回去**。`attach` 幂等,成功那一路读到的是终态,这里什么都不做。
+ */
+export async function ensureSupervised(monitorId: string): Promise<void> {
+  try {
+    if (dbClient.closed) return;
+    const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+    // claude 的投影行没有自己的进程(进程在 agent 的进程树里),一律不接 —— 判据跟
+    // `reattachMonitors` 那一侧同口径。
+    if (!row || row.status !== "running" || row.kind !== "ash") return;
+    attach(row);
+  } catch (e) {
+    // 这一句本身是兜底,它失败了只能出声:行还在 running,下一次启动的接回会重新立监督。
+    console.error(`[ash] 收尾失败后把监督接回去这一步也失败了 monitor=${monitorId}:`, e);
+  }
 }
 
 /** 这一行此刻有没有运行时在盯(tail/期限)。 */
@@ -377,144 +408,63 @@ export async function finish(
     }
   }
   if (dbClient.closed) return;
-  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
-  if (!row || row.status !== "running") return;
-  // **回收这个进程的责任从这里起**(见文件头第 ③ 条)。下刀资格由取证层按档位判,这一层
-  // 不再传「刚刚还在我们手上吗」那个开关(第 14 轮审查 F1:四个入口共用同一份判据)。
-  //
-  // 记账排在**改状态之前**:顺序一反,中间崩一下这一行就成了「显示已停止、责任没人认、
-  // pid 线索下一步就被删除抹掉」(第 4、5 轮审查 F1 都是这个现场)。
-  const outcome = await reclaimMonitorProcess(row, reason);
-  // **条件落定**(第 21 轮审查 F2)。上面那次重读之后还 await 了回收层(问状态、下刀、等确认,
-  // 秒级),而这期间用户完全可以点停、可以删任务 —— 上一版这条 UPDATE 无条件,通知还紧跟其后,
-  // 于是「点停已经成功返回、页面写着用户停的」随后被这条在途的收尾改写成 expired 并补推一条
-  // 【哨兵结束】。条件没落上就**结局不改、通知不推**;回收责任照旧结清 —— 那一笔是上面已经
-  // 发生的事,跟谁写下结局无关。
-  const result = await db
-    .update(monitors)
-    .set({ status, endedAt: now(), endedReason: reason, exitCode })
-    .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running")));
-  if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
-    console.error(`[ash] 哨兵收尾放手 monitor=${monitorId}：条件更新没落上，结局已经有人写过了（${reason}）`);
-    await settleReclaim(outcome);
-    return;
-  }
-  publish(row.taskId);
-  const code = exitCode === null ? "" : `，退出码 ${exitCode}`;
-  const total = (await db.select({ events: monitors.events }).from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
-  await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（共推送 ${total} 条事件）`);
-  if (notify) await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`);
-  // **追线索放在最后**:状态、时间线、通知都已落定,这一步只负责「能收的档收掉」。
-  // 它会等到补刀生效(有界,见 `confirmReclaimed`)—— 于是这个函数返回时,要么进程确认不在了,
-  // 要么责任稳稳地留在账本上。
-  //
-  // 第三种(`unaccounted`:库写不进去)这里只能出声:**身份还在**(这一行没被删,pid 和启动
-  // 时刻都还在上面),开机时 `reclaimUnconfirmedStops` 会按非运行态把它重问一遍。真正不能
-  // 放过它的是**销毁身份**那条路 —— 那边整笔中止(见 monitor-reclaim.ts)。
-  const verdict = await settleReclaim(outcome);
-  if (verdict === "unaccounted") {
-    console.error(
-      `[ash] 哨兵收尾时既没确认退出、回收责任也没落库 monitor=${monitorId} pid=${row.pid}`
-      + `（哨兵行还留着它的身份，开机会再问一遍）`,
-    );
-  }
-  // 身份边条**只在线索追空之后**才撤(`closed`)。
-  //
-  // 它不只是「pid 空着那一档的兜底」:当这一行的 `pid_started_at` 还空着时,边条里那个时间锚
-  // 是**唯一**能把身份补全的东西(见 monitor-reclaim-debts 的 `completeIdentity`)。责任还欠着
-  // 就把它删掉,等于把「这一刻 ps 答不出来」永久固化成「这条永远证不出身份」:之后既不敢下刀,
-  // 也销不掉账(第 10 轮审查 F2-B)。确认退出之后它才真的没用了。
-  if (row.kind === "ash" && row.logPath && verdict === "closed") clearSpawnIdentity(row.logPath);
-}
-
-export type StopMonitorResult =
-  | { ok: true; monitor: TaskMonitor }
-  | { ok: false; status: 404 | 409; error: string };
-
-/**
- * 停一个哨兵。
- *
- * claude 内置 Monitor 的投影行**一律拒绝**而不是静默忽略：它的进程在 agent 自己的进程树
- * 里，`TaskStop` 是 claude 进程内的工具，ash 没有任何手柄够得着。假装停掉（把状态改成
- * stopped 就返回）比报错坏得多——那个进程还在那边跑着、还会继续唤醒任务，而界面上写着
- * 「已停止」，用户再也不会回头看它。前端据此根本不给 claude 那种卡渲染停止按钮，这里是
- * 第二道闸（API 直调、旧前端）。
- */
-export async function stopMonitorChecked(monitorId: string, reason = "被停掉了"): Promise<StopMonitorResult> {
-  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
-  if (!row) return { ok: false, status: 404, error: "哨兵不存在" };
-  if (row.kind === "claude") {
-    return {
-      ok: false,
-      status: 409,
-      error: "这是 claude 自己起的 Monitor，ash 只能看不能停——它的进程在智能体的进程树里。要停只能让智能体自己 TaskStop，或者停掉整个任务。",
-    };
-  }
-  const monitor = await stopMonitor(monitorId, reason);
-  return monitor ? { ok: true, monitor } : { ok: false, status: 404, error: "哨兵不存在" };
-}
-
-/**
- * 停一条哨兵。**它和创建共用 `task:<id>` 那条队列** —— 「停止」和「创建」是同一份资源所有权
- * 协议的两端,不排同一条队就会各自看到半成品:
- *
- * 上一版这里完全不参加那条队列,于是一次点停可以恰好落在「身份已登记、pid 还没回填」那一瞬:
- * 它读到 pid=null 的运行行 → 回收层按「没有待收资源」放过 → 写成 stopped 并**成功返回**,
- * 而创建随后照旧放行,命令这才开工;再点停时状态已经不是 running,`finish` 第一行就返回 ——
- * 页面写着已停止、进程活着、而且再也停不掉(第 8 轮审查 F1 实测 `aliveAfterSecondStop=true`)。
- *
- * 所以这里是两段:
- *  ① 读到一条**pid 还空着的运行行** = 创建正在半空中。先把「我停过」落盘 —— 创建方在放行
- *    之前会重读这一行(monitor-create.ts 的 ④),读到非 running 就不放行,命令一个字都不跑。
- *  ② 再进那条队列。拿到的是创建已经收口之后的终局,按它该怎么停就怎么停。
- */
-export async function stopMonitor(monitorId: string, reason = "被停掉了"): Promise<TaskMonitor | null> {
-  const before = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
-  if (!before) return null;
-  if (before.kind === "claude") return toTaskMonitor(before);
-  // ① 创建还在半空中:**先落「我停过」**。条件更新(仍是 running 且 pid 仍空)避免跟同一瞬
-  //    完成的创建互相覆盖 —— 回填成功的那一侧会让这条更新一行都不动,于是走 ② 的正常停止。
-  if (before.status === "running" && before.pid === null) {
-    const marked = await db
-      .update(monitors)
-      .set({ status: "stopped", endedAt: now(), endedReason: reason })
-      .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running"), isNull(monitors.pid)));
-    // 标记落上了 ⇒ 这一行从此是终态,**运行时要跟着撤**:pid 还空着的行现在也可能挂着 tail
-    // 和期限(见 monitor-reattach 的 pending 分支)。没落上说明同一瞬创建收口了,那条路由
-    // 下面的 ② 正常处理 —— 这时撤运行时就是把一条还在盯的哨兵弄瞎。
-    if (Number((marked as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) > 0) {
-      await detachMonitor(monitorId);
-    }
-  }
-  // ② 进创建那条队列。**不排在队首插队**:创建只差几毫秒就收口,等它比跟它抢更便宜也更可证。
-  return serialize(`task:${before.taskId}`, async () => {
+  // 运行时已经撤了,而终态还没落盘 —— 下面每一步都可能抛(回收层、条件更新、通知)。
+  // **出这个函数时如果库里还是 running,监督必须还在**(第 23 轮审查 F1),所以从这里起包进
+  // try/finally。成功那一路 `ensureSupervised` 读到终态,什么都不做。
+  try {
     const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
-    if (!row) return toTaskMonitor(before);
-    if (row.status === "running") {
-      // 用户/agent 主动停的不回推收尾事件：他就是为了不再被它叫醒才点的停。但已经攒在缓冲里
-      // 的行要照常推完——那是已经发生的事实，而且任务还活着，收得下。
-      await finish(monitorId, "stopped", reason, null, { notify: false });
-      const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
-      return toTaskMonitor(after ?? row);
+    if (!row || row.status !== "running") return;
+    // **回收这个进程的责任从这里起**(见文件头第 ③ 条)。下刀资格由取证层按档位判,这一层
+    // 不再传「刚刚还在我们手上吗」那个开关(第 14 轮审查 F1:四个入口共用同一份判据)。
+    //
+    // 记账排在**改状态之前**:顺序一反,中间崩一下这一行就成了「显示已停止、责任没人认、
+    // pid 线索下一步就被删除抹掉」(第 4、5 轮审查 F1 都是这个现场)。
+    const outcome = await reclaimMonitorProcess(row, reason);
+    // **条件落定**(第 21 轮审查 F2)。上面那次重读之后还 await 了回收层(问状态、下刀、等确认,
+    // 秒级),而这期间用户完全可以点停、可以删任务 —— 上一版这条 UPDATE 无条件,通知还紧跟其后,
+    // 于是「点停已经成功返回、页面写着用户停的」随后被这条在途的收尾改写成 expired 并补推一条
+    // 【哨兵结束】。条件没落上就**结局不改、通知不推**;回收责任照旧结清 —— 那一笔是上面已经
+    // 发生的事,跟谁写下结局无关。
+    const result = await db
+      .update(monitors)
+      .set({ status, endedAt: now(), endedReason: reason, exitCode })
+      .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running")));
+    if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
+      console.error(`[ash] 哨兵收尾放手 monitor=${monitorId}：条件更新没落上，结局已经有人写过了（${reason}）`);
+      await settleReclaim(outcome);
+      return;
     }
-    // 已经不是运行态了。**但「卡片上写着停了」不等于那个进程真的没了**:win32 那一侧没有
-    // 放行闸(见 monitor-spawn.ts),① 的取消标记落下时命令可能已经开工。所以这里按**资源
-    // 责任**再核一遍而不是看状态就返回 —— 这正是前几轮反复钉的那条判据。
-    // 追空的那一档这里什么都不做:没有落点可打,而**身份还在这一行上**(命令、pid、记号),
-    // 没有任何东西正在消失。留档发生在身份真要被销毁的那一刻 —— 删除/归档走的
-    // `accountForLiveProcesses`(第 13 轮审查 F1-B,见 monitor-reclaim.ts)。
-    // **pid 还空着的那一行也要走这一趟**(第 19 轮审查 F2):那是创建意图行(身份先落库、进程
-    // 后起、pid 回填),它的结局恰恰最没确认 —— 判据交给 `reclaimMonitorProcess`,它会先问
-    // 一遍认领、再按档位决定记责任还是收档,真的没有落点时才返回 `closed`。
-    if (row.pid === null || reclaimState(row.pid, row.pidStartedAt, row) !== "traceless") {
-      const outcome = await reclaimMonitorProcess(row, `${reason}（创建期取消后补收）`);
-      if (await settleReclaim(outcome) === "unaccounted") {
-        console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
-      }
+    publish(row.taskId);
+    const code = exitCode === null ? "" : `，退出码 ${exitCode}`;
+    const total = (await db.select({ events: monitors.events }).from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
+    await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（共推送 ${total} 条事件）`);
+    if (notify) await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`);
+    // **追线索放在最后**:状态、时间线、通知都已落定,这一步只负责「能收的档收掉」。
+    // 它会等到补刀生效(有界,见 `confirmReclaimed`)—— 于是这个函数返回时,要么进程确认不在了,
+    // 要么责任稳稳地留在账本上。
+    //
+    // 第三种(`unaccounted`:库写不进去)这里只能出声:**身份还在**(这一行没被删,pid 和启动
+    // 时刻都还在上面),开机时 `reclaimUnconfirmedStops` 会按非运行态把它重问一遍。真正不能
+    // 放过它的是**销毁身份**那条路 —— 那边整笔中止(见 monitor-reclaim.ts)。
+    const verdict = await settleReclaim(outcome);
+    if (verdict === "unaccounted") {
+      console.error(
+        `[ash] 哨兵收尾时既没确认退出、回收责任也没落库 monitor=${monitorId} pid=${row.pid}`
+        + `（哨兵行还留着它的身份，开机会再问一遍）`,
+      );
     }
-    return toTaskMonitor(row);
-  });
+    // 身份边条**只在线索追空之后**才撤(`closed`)。
+    //
+    // 它不只是「pid 空着那一档的兜底」:当这一行的 `pid_started_at` 还空着时,边条里那个时间锚
+    // 是**唯一**能把身份补全的东西(见 monitor-reclaim-debts 的 `completeIdentity`)。责任还欠着
+    // 就把它删掉,等于把「这一刻 ps 答不出来」永久固化成「这条永远证不出身份」:之后既不敢下刀,
+    // 也销不掉账(第 10 轮审查 F2-B)。确认退出之后它才真的没用了。
+    if (row.kind === "ash" && row.logPath && verdict === "closed") clearSpawnIdentity(row.logPath);
+  } finally {
+    await ensureSupervised(monitorId);
+  }
 }
+
 
 export async function liveMonitorsOf(taskId: string): Promise<Row[]> {
   return db.select().from(monitors).where(and(eq(monitors.taskId, taskId), eq(monitors.status, "running"), isAshKind));
@@ -585,46 +535,56 @@ export async function finishOffline(
         + `${fresh?.status ?? "行已不在"}，这一刻的结局已经有人写过了（${reason}）`);
       return;
     }
-    // **现有运行时在这里交接掉**(第 22 轮审查 N2):接回层现在给每一条运行行都先立 tail 和
-    // 期限(连 pid 还空着的创建意图行也有),而这一趟判的就是「它已经不在了」。不撤的话一条
-    // 已经写成终态的行还占着文件句柄、还在算自己的期限,到点再走一次收尾。撤之前照旧把
-    // 文件吸干、把缓冲推出去(那一批是已经发生的事实)—— 所以下面**重读一遍**:offset 和
-    // events 刚被那一次 flush 推进过,照 `fresh` 读会把同一批行再推一次。
-    await teardownRuntimeLocked(fresh.id);
-    const base = (await db.select().from(monitors).where(eq(monitors.id, fresh.id))).at(0) ?? fresh;
+    try {
+      // **现有运行时在这里交接掉**(第 22 轮审查 N2):接回层现在给每一条运行行都先立 tail 和
+      // 期限(连 pid 还空着的创建意图行也有),而这一趟判的就是「它已经不在了」。不撤的话一条
+      // 已经写成终态的行还占着文件句柄、还在算自己的期限,到点再走一次收尾。撤之前照旧把
+      // 文件吸干、把缓冲推出去(那一批是已经发生的事实)—— 所以下面**重读一遍**:offset 和
+      // events 刚被那一次 flush 推进过,照 `fresh` 读会把同一批行再推一次。
+      await teardownRuntimeLocked(fresh.id);
+      const base = (await db.select().from(monitors).where(eq(monitors.id, fresh.id))).at(0) ?? fresh;
 
-    const collected: string[] = [];
-    let readTo = base.offset;
-    const tail = tailLines(base.logPath, base.offset, (lines, offset) => {
-      for (const line of lines) if (line.trim()) collected.push(line);
-      readTo = offset;
-    });
-    tail.drain();
-    tail.stop();
+      const collected: string[] = [];
+      let readTo = base.offset;
+      const tail = tailLines(base.logPath, base.offset, (lines, offset) => {
+        for (const line of lines) if (line.trim()) collected.push(line);
+        readTo = offset;
+      });
+      tail.drain();
+      tail.stop();
 
-    let events = base.events;
-    if (collected.length) events = await pushLines(base, collected, readTo);
-    else if (readTo !== base.offset) await commitOffset(base.id, readTo);
+      let events = base.events;
+      if (collected.length) events = await pushLines(base, collected, readTo);
+      else if (readTo !== base.offset) await commitOffset(base.id, readTo);
 
-    const result = await db
-      .update(monitors)
-      .set({ status, endedAt: now(), endedReason: reason, exitCode: null })
-      .where(and(eq(monitors.id, base.id), eq(monitors.status, "running")));
-    if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
-      // 条件没落上 = 这一瞬有人把它收尾了。**结束通知到此为止**:再推就是在用户已经停掉
-      // 之后又叫醒一次任务(补读出去的那几行是已经发生的事实,留着)。
-      console.error(`[ash] 离线收尾的条件更新没落上 monitor=${base.id}：结局已经有人写过了`);
-      return;
+      const result = await db
+        .update(monitors)
+        .set({ status, endedAt: now(), endedReason: reason, exitCode: null })
+        .where(and(eq(monitors.id, base.id), eq(monitors.status, "running")));
+      if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
+        // 条件没落上 = 这一瞬有人把它收尾了。**结束通知到此为止**:再推就是在用户已经停掉
+        // 之后又叫醒一次任务(补读出去的那几行是已经发生的事实,留着)。
+        console.error(`[ash] 离线收尾的条件更新没落上 monitor=${base.id}：结局已经有人写过了`);
+        return;
+      }
+      publish(base.taskId);
+      await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${reason}（共推送 ${events} 条事件）`);
+      await pushToTask(base, `【哨兵结束】${base.description}（monitorId=${base.id}）。${reason}`);
+    } finally {
+      // 撤运行时排在读日志之前(自己那条 tail 不停下来就会边收尾边继续推),所以中间这一段
+      // 里「监督已撤、终态未落」是真实的一瞬。**出去的时候还是 running 就把监督接回去**
+      // (第 23 轮审查 F1 实测:让这条 UPDATE 抛一次,之后产出的结果一条都送不出去、期限
+      // 过了也没有结束通知)。这里不能再排一次 `serialize(row.id)` —— 正跑在那条队列上。
+      await ensureSupervised(row.id);
     }
-    publish(base.taskId);
-    await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${reason}（共推送 ${events} 条事件）`);
-    await pushToTask(base, `【哨兵结束】${base.description}（monitorId=${base.id}）。${reason}`);
   });
 }
 
 // 接回那一摊搬去了 monitor-reattach.ts(单文件 700 行的约定)。**出口仍然只有这一个**:
 // index.ts、测试台子和重启子进程都按 `monitors.js` 的这个名字拿它。
 export { reattachMonitors } from "./monitor-reattach.js";
+// 停止那一段住在 monitor-stop.ts(单文件行数上限),公开面照旧从这里出。
+export { stopMonitor, stopMonitorChecked, type StopMonitorResult } from "./monitor-stop.js";
 
 /** 只给测试用：把内存里的 tail/定时器全撤了，进程不动。 */
 export function detachAllMonitors(): void {

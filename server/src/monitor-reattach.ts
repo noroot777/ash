@@ -31,7 +31,8 @@ import { reclaimMonitorProcess, settleReclaim, type ReclaimVerdict } from "./mon
 import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
 import { monitorWakeGate } from "./monitor-session.js";
 import { clearSpawnIdentity } from "./monitor-spawn.js";
-import { attach, finish, finishOffline, isAshKind, serialize, type Row } from "./monitors.js";
+import { attach, ensureSupervised, finish, finishOffline, isAshKind, serialize, type Row }
+  from "./monitors.js";
 import { IS_WINDOWS } from "./platform.js";
 
 /**
@@ -283,6 +284,11 @@ export function scheduleRecoveryRetry(monitorId: string, step = 0): void {
     ladders.delete(monitorId);
     void retryRecovery(monitorId, step).catch((e) => {
       console.error(`[ash] 待认领哨兵重问身份时自己出错 monitor=${monitorId}:`, e);
+      // **这一跳抛错不许把日志和期限一起带走**(第 23 轮审查 F1)。这一跳里可能已经走到离线
+      // 收尾、把运行时撤了,随后那一步才抛 —— 而下面这个档位有界,最后一档抛完就不再有下一跳:
+      // 两件事凑在一起,行留在 running 而日志、期限、探活和梯子同时为空。所以先把监督接回去
+      // (幂等,库里不是运行态就什么都不做),再决定还要不要接着问号。
+      void ensureSupervised(monitorId);
       // **一次抛错不许把身份这一问整条掐掉**(第 21 轮审查 F1):库忙了一下、ps 抖了一下都
       // 会走到这里,而这一行的号还没认回来。照档位往下排(仍然有界),到顶就停。
       if (step + 1 < PENDING_LADDER_MS.length) scheduleRecoveryRetry(monitorId, step + 1);
@@ -309,16 +315,15 @@ async function retryRecovery(monitorId: string, step: number): Promise<void> {
     const row = await readRow(monitorId);
     // 别人已经有结论了(点停、删除、到期收尾)⇒ **一个字都不写、一条通知都不推**。
     if (!row || row.status !== "running") return;
+    // **这一跳头一件事就是把监督补齐,跟这次认不认得回号毫无关系**(第 22 轮审查 F1-B、第 23
+    // 轮审查 F1):`attach` 认得出缺哪一份 —— pending 那一刻只有 tail 和期限,号到手要补探活;
+    // 上一跳如果走到离线收尾撤了运行时、随后才抛错,那就整份重建。拿 `isSupervised` 当闸的
+    // 写法这两种都修不了(它只答「有没有运行时」)。
+    attach(row);
     if (row.pid !== null) {
-      // 号已经在列上了:上一跳认回来了,而接管那一步抛了错。
-      //
-      // **「有一个运行时」也不等于「监督齐了」**(第 22 轮审查 F1-B):pending 那一刻接上的
-      // 只有 tail 和期限,而 `isSupervised` 只答「有没有运行时」—— 上一版拿它当闸,于是唯一
-      // 能补装探活的那一句被永久挡在门外(实测:进程真的退了,行还停在 running、一条结束
-      // 通知都没有)。`attach` 自己就认得出缺哪一份,所以这里**无条件**再调一遍。
-      attach(row);
-      // 接管那一趟也重试:出口资格、期限、记责任三件事上一跳没走完。它幂等 —— 还活着且
-      // 有出口就只是再 `attach` 一次;没出口或已到期就在这里收掉。再抛由梯子的 catch 接。
+      // 号已经在列上了:上一跳认回来了,而接管那一步抛了错。接管那一趟也要重试 —— 出口
+      // 资格、期限、记责任三件事上一跳没走完。它幂等:还活着且有出口就只是再 `attach` 一次,
+      // 没出口或已到期就在这里收掉。再抛由梯子的 catch 接。
       await takeOver(row);
       return;
     }
