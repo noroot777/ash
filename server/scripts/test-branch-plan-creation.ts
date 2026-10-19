@@ -20,6 +20,7 @@ const { dispatchWorkers } = await import("../src/team/dispatch.js");
 const { acceptTask, mountTaskAcceptanceRoutes } = await import("../src/task-accept.js");
 const { branchDependency, baseRef } = await import("../src/task-branch-plan.js");
 const { readBranchPlan } = await import("../src/task-branch-routes.js");
+const { withRepoLock } = await import("../src/repo-lock.js");
 await ensureSchema();
 const api = new Hono();
 mountTaskRoutes(api);
@@ -53,6 +54,38 @@ async function changeTarget(id: string, branch: string, fingerprint?: string) {
 }
 
 try {
+  {
+    const repo = await repository("follow-current-branch");
+    const mainStart = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "-b", "version-upgrade");
+    const featureStart = commit(repo, "upgrade.txt");
+    git(repo, "checkout", "main");
+    let releaseCheckout!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseCheckout = resolve; });
+    let checkoutStarted!: () => void;
+    const started = new Promise<void>((resolve) => { checkoutStarted = resolve; });
+    const checkout = withRepoLock(repo, async () => {
+      checkoutStarted();
+      await gate;
+      git(repo, "checkout", "version-upgrade");
+    });
+    await started;
+    const creating = create("follow-current-branch", { worktreeBase: null });
+    releaseCheckout();
+    await checkout;
+    const automatic = await creating;
+    assert.equal(automatic.worktreeStartCommit, featureStart);
+    assert.equal(automatic.mergeTargetBranch, "version-upgrade");
+    const explicit = await create("follow-current-branch", { worktreeBase: "main" });
+    assert.equal(explicit.worktreeStartCommit, mainStart);
+    assert.equal(explicit.mergeTargetBranch, "main");
+    commit(repo, "later-upgrade.txt");
+    git(repo, "checkout", "main");
+    const workspace = await taskWorkspace(automatic, repo);
+    assert.equal(git(workspace.path, "rev-parse", "HEAD"), featureStart);
+    assert.equal((await row(automatic.id)).mergeTargetBranch, "version-upgrade");
+    console.log("✓ automatic base follows checkout at creation, explicit base stays fixed, and later branch changes preserve the frozen start");
+  }
   {
     const repo = await repository("retarget");
     git(repo, "branch", "feature-x");

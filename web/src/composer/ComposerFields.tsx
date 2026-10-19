@@ -52,6 +52,8 @@ export function ComposerFields({
   onSaveWorktreeDefault,
   branches,
   base,
+  automaticBaseLabel,
+  switchingBranch,
   onBaseChange,
   groups,
   groupId,
@@ -101,6 +103,8 @@ export function ComposerFields({
   onSaveWorktreeDefault: () => void;
   branches: string[];
   base: string;
+  automaticBaseLabel: string;
+  switchingBranch: boolean;
   onBaseChange: (value: string) => void;
   groups: Group[];
   groupId: string;
@@ -152,9 +156,10 @@ export function ComposerFields({
     <div className="composer-option-grid">
       <label className="composer-toggle-field"><span>worktree</span><Toggle checked={useWorktree} onChange={onUseWorktreeChange} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} /></label>
       <div className="composer-field"><span>base 分支</span><Dropdown label="base 分支" value={base}
-        options={[{ value: "", label: "当前 HEAD" }, ...branches.map((branch) => ({ value: branch, label: branch, mono: true }))]}
-        disabled={!useWorktree} filterable={branches.length > 6} filterPlaceholder="筛选分支…" placeholder="当前 HEAD" onChange={onBaseChange} /></div>
+        options={[{ value: "", label: automaticBaseLabel }, ...branches.map((branch) => ({ value: branch, label: branch, mono: true }))]}
+        disabled={!useWorktree || switchingBranch} filterable={branches.length > 6} filterPlaceholder="筛选分支…" placeholder={automaticBaseLabel} onChange={onBaseChange} /></div>
     </div>
+    {switchingBranch && <p className="studio-help" role="status">正在切换项目分支，完成后可创建任务。</p>}
     <p className="studio-help composer-workspace-default">
       {useWorktree === worktreeDefault
         ? <>本项目默认就是「{workspaceLabel(worktreeDefault)}」，到「设置 → 项目设置 → 工作目录」可随时改。</>
@@ -218,7 +223,7 @@ export function ComposerFields({
             <label className="composer-toggle-field"><span>共识闸门</span><Toggle checked={gate} onChange={onGateChange} label={gate ? "需要确认" : "自动结束"} /></label>
           </div> : <label className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={onReviewChange} label={review ? "已开启" : "已关闭"} /></label>}
         </ComposerPopover>}
-        {!duet && <ComposerPopover label="工作目录" value={`${directory}${isRepo && useWorktree ? ` · ${base || "当前 HEAD"}` : ""}`}
+        {!duet && <ComposerPopover label="工作目录" value={`${directory}${isRepo && useWorktree ? ` · ${base || automaticBaseLabel}` : ""}`}
           trigger={<>{isRepo && useWorktree ? <GitBranch size={14} /> : <FolderSimple size={14} />}<span>{directory}</span></>}>
           {isRepo ? workspaceEditor : <p className="studio-help">当前项目不是 Git 仓库，直接使用项目目录。</p>}
         </ComposerPopover>}
