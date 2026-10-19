@@ -85,7 +85,7 @@ function acceptanceMessage(task: TaskListItem, commit = true): string {
 }
 
 const mergeTargetLabel = (task: TaskListItem): string =>
-  task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "项目当前分支";
+  task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "未确定（验收时解析）";
 
 function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {  const handedOff = failure.reason === "merge_conflict" && failure.conflictHandoff?.notified === true;
   const manualConflict = failure.reason === "merge_conflict" && !handedOff;
@@ -370,7 +370,7 @@ function ChangeSummary({ task, data, loading, error }: { task: TaskListItem; dat
     <div className="team-review-change">
       <ChangeMetaBar
         source={data.diff.sourceBranch || data.branch || session?.branch || "项目当前分支"}
-        target={data.diff.targetBranch || task.worktreeBase || "项目当前分支"}
+        target={data.diff.targetBranch || task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "未确定（验收时解析）"}
         where={session?.worktreePath
           ? worktreeLabel(session.worktreePath)
           : task.useWorktree ? "worktree 尚未记录" : "共享项目目录"}

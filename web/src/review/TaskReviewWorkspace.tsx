@@ -173,7 +173,7 @@ export function TaskReviewWorkspace({
             <div className="single-review-content">
               <ChangeMetaBar
                 source={data.diff.sourceBranch || data.branch || "项目当前分支"}
-                target={data.diff.targetBranch || task.worktreeBase || "项目当前分支"}
+                target={data.diff.targetBranch || task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "未确定（验收时解析）"}
                 where={data.diff.mergeBase ? `基点 ${data.diff.mergeBase.slice(0, 8)}` : null}
                 commits={data.commits}
                 link={{ projectId: task.projectId, taskId: task.id }}

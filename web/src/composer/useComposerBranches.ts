@@ -31,10 +31,9 @@ export function useComposerBranches(project: ProjectView, notify: (message: stri
 
   const loaded = refs?.projectId === projectId ? refs : null;
   const latest = loaded?.epoch === projectGitEpoch(projectId) ? loaded : null;
-  const current = latest ? latest.current : git.state?.branch.head ?? null;
   const branches = latest?.branches ?? git.state?.branches.map((branch) => branch.name) ?? loaded?.branches ?? [];
   const base = selection.projectId === projectId ? selection.base : "";
-  const automaticLabel = `跟随项目分支 · ${current || "当前 HEAD"}`;
+  const automaticLabel = "跟随项目分支（创建时确定）";
   const switching = git.busy === "checkout";
 
   return {

@@ -87,6 +87,7 @@ function Fixture() {
     <header style={{ display: "flex", gap: 12, padding: 16, flexWrap: "wrap" }}>
       <ProjectGitContext key={project.id} projectId={project.id} health={project.health} project={project} canManage onOpenTerminal={null} />
       <button onClick={() => setProject(projectOf(project.id === "p1" ? "p2" : "p1"))}>切换项目</button>
+      <button onClick={() => { heads[project.id] = "version-upgrade"; }}>外部切到升级分支</button>
       <button onClick={() => { holdBranches = true; failBranches = false; setRound((value) => value + 1); }}>重开并延迟分支读取</button>
       <button onClick={() => { holdBranches = true; failBranches = true; setRound((value) => value + 1); }}>重开并延迟读取失败</button>
       <button onClick={() => { holdBranches = false; failBranches = false; branchReplies.splice(0).forEach((release) => release()); }}>释放分支读取</button>

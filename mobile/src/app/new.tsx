@@ -18,6 +18,7 @@ import { Pill, Button, Input } from "@/components/ui";
 import { ScheduleFields } from "@/components/ScheduleFields";
 import { TeamTaskOptions, type ExecutorSelection } from "@/components/TeamTaskOptions";
 import { ExecutionConfig } from "@/components/ExecutionConfig";
+import { useTaskBranches } from "@/lib/useTaskBranches";
 
 // 项目列表还没到手时顶一下的出厂值。真正的默认值在服务端按项目行算（createTasks），
 // 所以这里猜错只影响开屏那一瞬间预填什么，不会造出一个错的任务。
@@ -69,37 +70,15 @@ export default function NewTask() {
   const [useWorktree, setUseWorktree] = useState(FALLBACK_WORKTREE_DEFAULT);
   const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
   const worktreeChoiceTouched = useRef(false);
-  const [base, setBase] = useState("");
-  const [branches, setBranches] = useState<string[]>([]);
-  const [branchesLoaded, setBranchesLoaded] = useState(false);
   // Project the form is targeting determines which branch list we fetch.
   const project = projects.find((p) => p.id === projectId) ?? null;
+  const { base, branches, setBase } = useTaskBranches(projectId, useWorktree && !!project?.health.isRepo);
   // 项目一确定（或换了一个），默认值就跟着换：它是项目的性质，不是这台手机或这个人的。
   useEffect(() => {
     if (!project) return;
     setWorktreeDefault(project.useWorktreeDefault);
     if (!worktreeChoiceTouched.current) setUseWorktree(project.useWorktreeDefault);
   }, [project]);
-  // Lazy-load branches when the toggle opens for the current project; reset
-  // when the user switches projects.
-  useEffect(() => {
-    if (!useWorktree || !projectId) return;
-    if (branchesLoaded) return;
-    let alive = true;
-    api.projectBranches(projectId).then((r) => {
-      if (!alive) return;
-      setBranches(r.branches);
-      if (!base && r.current) setBase(r.current);
-      setBranchesLoaded(true);
-    }).catch(() => alive && setBranchesLoaded(true));
-    return () => { alive = false; };
-  }, [useWorktree, projectId, branchesLoaded, base]);
-  useEffect(() => {
-    // Switching projects invalidates the cached branch list.
-    setBranches([]);
-    setBranchesLoaded(false);
-    setBase("");
-  }, [projectId]);
 
   // Executor profiles + providers drive ordinary and team model choices. 本机检测
   // 也一起拉：普通任务的执行器候选同样只列探到的 CLI（目录里 15 个，没装的选出来只会
@@ -475,7 +454,7 @@ export default function NewTask() {
               <View style={{ marginTop: 8, gap: 8 }}>
                 <Text style={{ color: theme.faint, fontSize: 11 }}>base 分支</Text>
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                  <Pill label="当前分支" active={!base} onPress={() => setBase("")} />
+                  <Pill label="跟随项目分支（创建时确定）" active={!base} onPress={() => setBase("")} />
                   {branches.map((b) => (
                     <Pill key={b} label={b} active={b === base} onPress={() => setBase(b)} />
                   ))}

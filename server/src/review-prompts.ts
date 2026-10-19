@@ -77,6 +77,12 @@ function verifyRules(evidenceDir: string): string {
     REPORT_SUMMARY_FORMAT;
 }
 
+function comparisonBaseline(target: TaskRow): string {
+  return target.useWorktree
+    ? target.worktreeStartCommit || target.worktreeBase || "未记录任务起点，请先核实历史提交"
+    : "当前工作树的基准提交";
+}
+
 /**
  * 就地验证轮的协议正文。跟独立审查任务那份的差别只有两处，但都是要害：
  * ① 你**已经在**被验的工作目录里，不用再找它在哪；
@@ -94,7 +100,7 @@ export async function verifyProtocolFor(
   station: string | null = null,
 ): Promise<string> {
   const evidenceDir = reviewRoundDir(target.id, round);
-  const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
+  const baseline = comparisonBaseline(target);
   const requirements = await reviewRequestReference(target, evidenceDir);
   // 前面几轮报过的现象行（理由见 review-history.ts 文件头：会话可能被压缩，也可能是
   // 手点的新一轮）。放在验证动作之前，让它先判「我这条是不是上面某条的第 N 个变体」。
@@ -135,7 +141,7 @@ export async function reviewProtocolFor(
   const target = (await db.select().from(tasks).where(eq(tasks.id, review.reviewOf))).at(0);
   if (!target) return `【审查任务】被审任务 ${review.reviewOf} 已不存在，记录问题后结束本轮。\n\n`;
   const evidenceDir = reviewRoundDir(target.id, review.reviewRound);
-  const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
+  const baseline = comparisonBaseline(target);
   const requirements = await reviewRequestReference(target, evidenceDir);
   const history = await verifyHistorySection(target.id, review.reviewRound);
   return `【审查任务 · 第 ${review.reviewRound} 轮】\n` +

@@ -1,6 +1,6 @@
 import { join, isAbsolute, dirname, basename, resolve } from "node:path";
 import { mkdirSync, statSync, existsSync, readdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
-import type { ProjectHealth } from "@ash/shared";
+import type { ProjectHealth, Task } from "@ash/shared";
 import { DATA_DIR } from "./paths.js";
 import { IS_WINDOWS, expandHome, windowsLongPathHint } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
@@ -333,22 +333,15 @@ async function discardWorktreeLeftover(repo: string, path: string): Promise<void
 // 「这个任务留下的 worktree/分支还在不在」搬到了 ./workspace-cleanup.ts
 // (detectTaskWorkspace):删除任务时要连分支一起问,光看目录在不在已经不够。
 
-// List the commits a worktree task produced. The agent's
-// commits live on the task's branch since it forked from `base`, so `base..HEAD`
-// is exactly them. base = the user-picked ref, else the main repo's current
-// branch. Empty when we can't isolate (no worktree / unknown base) — honest, not
-// noisy. Capped at 50.
 export async function taskCommits(
   worktreePath: string | null | undefined,
-  repoPath: string,
-  base: string | null | undefined,
+  task: Pick<Task, "worktreeStartCommit" | "worktreeBase">,
 ): Promise<{ branch: string | null; commits: { sha: string; subject: string; at: string }[] }> {
   const wt = expandHome(worktreePath);
   if (!wt || !isDir(wt)) return { branch: null, commits: [] };
   try {
     const branch = (await currentBranch(wt)) ?? null;
-    let baseRef = (base ?? "").trim();
-    if (!baseRef) baseRef = (await currentBranch(expandHome(repoPath))) ?? "";
+    const baseRef = task.worktreeStartCommit?.trim() || task.worktreeBase?.trim();
     if (!baseRef || baseRef === branch) return { branch, commits: [] };
     const { stdout } = await exec("git", ["-C", wt, "log", "--format=%H%x1f%s%x1f%cI", "-n", "50", `${baseRef}..HEAD`]);
     const commits = stdout

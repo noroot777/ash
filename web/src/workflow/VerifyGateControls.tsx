@@ -39,7 +39,7 @@ function forcePassMessage(def: WorkflowDef, stationId: string, task: Task): stri
   const plain = segment.filter((step) => step.kind !== "accept").map((step) => `「${STEP_LABELS[step.kind]}」`);
   if (plain.length) parts.push(`接着会跑${plain.join("、")}`);
   if (accept) {
-    const target = task.worktreeBase || "项目当前分支";
+    const target = task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "未确定的合入目标（验收时解析）";
     const branch = task.useWorktree ? "任务分支" : "当前工作区的改动";
     const merge = accept.p.strategy === "tag"
       ? `不合并，只在${branch}头上打一个 ash-accepted 标签（${target} 一动不动）`
