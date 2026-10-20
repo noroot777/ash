@@ -7,6 +7,7 @@ import { worktreePathFor } from "./git.js";
 import { pathLens, type PathLens } from "./task-artifact-paths.js";
 import { runWindows, type RunWindow } from "./task-artifact-windows.js";
 import { isolatedWorkspaceOwner } from "./task-workspace.js";
+import { isDiagnosticSession } from "./turn-failure.js";
 
 // 「这个文件是这个任务弄出来的」凭什么成立——产物面板的**归属证据**都在这里。
 // 扫描在 `task-artifact-scan.ts`，三档合成在 `task-artifacts.ts`。
@@ -107,14 +108,27 @@ async function workspaceRunOwners(task: ArtifactTask): Promise<ArtifactTask[]> {
   return owners;
 }
 
-/** 任务第一次开跑的时刻。没有会话（还没跑过）时返回 null。 */
+/**
+ * 任务第一次**真的开跑**的时刻。没有会话（还没跑过）时返回 null。
+ *
+ * **诊断会话不算跑过**：启动前就失败时会建一条只为把错误显示出来的会话行（`turn-failure.ts`
+ * 的 `freshRunFailureTarget`）。拿它当「第一次开跑」,面板上一个压根没跑起来的任务就有了开跑
+ * 时刻,跟区间那一档的判据还彼此矛盾。判据和 `runWindows` 用的是同一个,不另写一份
+ * （第 1 轮审查 F4）。所以这里不能 `limit(1)` —— 第一条可能正是那条诊断行。
+ */
 async function firstRunAt(taskId: string): Promise<string | null> {
-  const first = (await db.select({ startedAt: sessions.startedAt })
-    .from(sessions)
+  const rows = await db.select({
+    startedAt: sessions.startedAt,
+    endedAt: sessions.endedAt,
+    turnStartedAt: sessions.turnStartedAt,
+    cliSessionId: sessions.cliSessionId,
+    commandLine: sessions.commandLine,
+    activeMs: sessions.activeMs,
+    exitStatus: sessions.exitStatus,
+  }).from(sessions)
     .where(eq(sessions.taskId, taskId))
-    .orderBy(asc(sessions.startedAt))
-    .limit(1)).at(0);
-  return first?.startedAt ?? null;
+    .orderBy(asc(sessions.startedAt));
+  return rows.find((row) => !isDiagnosticSession(row))?.startedAt ?? null;
 }
 
 export async function resolveArtifactScope(task: ArtifactTask, root: WorkspaceRoot): Promise<ArtifactScope> {
@@ -203,11 +217,15 @@ export async function committedInWindows(
       `${asFilter ? "--since-as-filter" : "--since"}=${new Date(window.start).toISOString()}`,
       // 开着的那一段（还在写）不设上界：Infinity 塞进 Date 只会抛。
       ...(Number.isFinite(window.end) ? [`--until=${new Date(window.end).toISOString()}`] : []),
-      `--max-count=${MAX_WINDOW_COMMITS}`, "--name-only", "-z", "--format=%x00%H",
+      // 提交头前面那个 `%x01` 是**哨兵**:光靠「NUL 开场 + 40 位十六进制」认提交头,一个名字
+      // 恰好是 40 位十六进制、又躺在仓库根上的文件就会被认成提交号 —— 它自己从清单里消失,
+      // 后面那一串路径还会被当成它的（`afterHeader` 跟着错位剥一个换行）。路径里出现 0x01
+      // 这个控制字符在实践中不会发生,于是两类 token 从形状上就分得开（本轮审查不拦项）。
+      `--max-count=${MAX_WINDOW_COMMITS}`, "--name-only", "-z", "--format=%x00%x01%H",
     ];
     const { stdout } = await exec("git", args, { maxBuffer: 16 * 1024 * 1024 });
-    // `-z` 下提交头和路径一律以 NUL 分隔；`%x00%H` 让提交头自己也以 NUL 开场，于是
-    // 「40 位十六进制」这一个 token 就是提交号，其余 token 都是路径。
+    // `-z` 下提交头和路径一律以 NUL 分隔；`%x00%x01%H` 让提交头自己也以 NUL 开场、并且带上
+    // 那个哨兵，于是「0x01 + 40 位十六进制」这一个 token 就是提交号，其余 token 都是路径。
     let commits = 0;
     // `-z` 只管用 NUL 分隔，**不管 git 在提交头和它的路径列表之间插的那个换行**——实测格式
     // 是 `\0<hash>\0\n<path>\0<path>\0`。那个换行只在**紧跟提交头的第一条路径**前面出现一
@@ -215,7 +233,7 @@ export async function committedInWindows(
     // 「文件名真的以换行开头」的路径改写掉，`stat` 跟着查错地方（第 2 轮审查 N1）。
     let afterHeader = false;
     for (const raw of stdout.split("\0")) {
-      if (/^[\r\n]*[0-9a-f]{40}$/.test(raw)) {
+      if (/^[\r\n]*\x01[0-9a-f]{40}$/.test(raw)) {
         commits += 1;
         afterHeader = true;
         continue;

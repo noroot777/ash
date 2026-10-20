@@ -57,6 +57,7 @@ import {
 import { useComposerRunSummary } from "./composerRunSummary.ts";
 import { ComposerForkContext } from "./ComposerForkContext.tsx";
 import { forkTaskBody, forkBodyProblem } from "../task-detail/conversationFork.ts";
+import { useComposerBranches } from "./useComposerBranches.ts";
 export type { ComposerDraft };
 
 export function TaskComposerPanel({
@@ -132,8 +133,7 @@ export function TaskComposerPanel({
   // 它什么时候刷新不归这里管，弹层上的提示不能等它。
   const [worktreeDefault, setWorktreeDefault] = useState(project.useWorktreeDefault);
   const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
-  const [branches, setBranches] = useState<string[]>([]);
-  const [base, setBase] = useState("");
+  const { branches, base, setBase, automaticLabel, switching, isSwitching } = useComposerBranches(project, notify);
   const [busy, setBusy] = useState(false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>("run");
   const [workflowMode, setWorkflowMode] = useState<TaskWorkflowMode>("free");
@@ -178,16 +178,9 @@ export function TaskComposerPanel({
     // effect 会重跑，于是选择跟着新项目走而不是留着上一个项目的。
     setUseWorktree(project.health.isRepo && project.useWorktreeDefault);
     setWorktreeDefault(project.useWorktreeDefault);
-    Promise.all([
-      api.settings(),
-      project.health.isRepo
-        ? api.projectBranches(project.id)
-        : Promise.resolve({ branches: [], current: null }),
-    ]).then(([settings, refs]) => {
+    api.settings().then((settings) => {
       if (!alive) return;
       workflow.setGlobalDefaultId(settings.defaultWorkflowId ?? "");
-      setBranches(refs.branches);
-      setBase(refs.current ?? "");
     }).catch((error) => {
       if (alive) notify(error instanceof Error ? error.message : "新建任务配置读取失败");
     });
@@ -418,7 +411,7 @@ export function TaskComposerPanel({
   const waitingUploads = uploads.uploading;
   const forkError = forkBodyProblem(fork, body);
   const canSubmit = (fork ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
-    && !forkError && !busy && !noExecutor && !roleBlocked && !scheduleError && !queueTargetError && !waitingUploads;
+    && !forkError && !busy && !switching && !noExecutor && !roleBlocked && !scheduleError && !queueTargetError && !waitingUploads;
 
   const changeLaunchMode = (next: LaunchMode) => {
     setLaunchMode(next);
@@ -436,7 +429,7 @@ export function TaskComposerPanel({
     return queueAfter.onGroupChanged(value, opts);
   };
   const submit = async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || isSwitching()) return;
     setBusy(true);
     let task: Task;
     try {
@@ -592,6 +585,8 @@ export function TaskComposerPanel({
             onSaveWorktreeDefault={saveWorktreeDefault}
             branches={branches}
             base={base}
+            automaticBaseLabel={automaticLabel}
+            switchingBranch={switching}
             onBaseChange={setBase}
             groups={groups}
             groupId={groupId}

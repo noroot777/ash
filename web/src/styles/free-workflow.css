@@ -104,15 +104,43 @@
 .free-review-dispute-card { display:grid; gap:9px; border-bottom:1px solid var(--line); background:color-mix(in lch,var(--amber) 3.5%,var(--panel)); padding:12px 14px; }
 .free-review-dispute-card > header { display:grid; min-width:0; grid-template-columns:28px minmax(0,1fr); align-items:center; gap:8px; }.free-review-dispute-card > header > span { display:grid; width:28px; height:28px; place-items:center; border:1px solid color-mix(in lch,var(--amber) 26%,var(--line)); border-radius:8px; background:var(--panel); color:var(--amber); }.free-review-dispute-card header b,.free-review-dispute-card header small { display:block; }.free-review-dispute-card header b { font-size:11px; }.free-review-dispute-card header small { margin-top:1px; color:var(--faint); font-size:8.5px; }
 .free-review-dispute-card > p { margin:0; color:var(--muted); font-size:9.5px; line-height:1.5; }
-.free-review-dispute-card__reason { border:1px solid color-mix(in lch,var(--amber) 20%,var(--line)); border-radius:8px; background:var(--panel); padding:8px 9px; }.free-review-dispute-card__reason > b { display:block; margin-bottom:4px; color:var(--amber); font-size:9px; }.free-review-dispute-card__reason .task-markdown { color:var(--muted); font-size:10px; line-height:1.6; }
-/* 「建议转独立任务」那一段与驳回理由并列，但底色换成中性:它说的不是「报告不对」,
-   而是「报告是对的、只是不该在这儿修」,和上面那块同色会被读成同一件事。 */
-.free-review-dispute-card__reason.is-defer { border-color:var(--line2); }.free-review-dispute-card__reason.is-defer > b { color:var(--muted); }
-.free-review-dispute-card__actions { display:flex; flex-wrap:wrap; gap:5px; }.free-review-dispute-card__actions > button { display:inline-flex; height:27px; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }.free-review-dispute-card__actions > button:hover:not(:disabled) { background:var(--raised); color:var(--ink); }.free-review-dispute-card__actions > button:disabled { opacity:.5; }
+/* 执行者写的那一句人话（`dispute.summary`）。它是这一屏的主角，所以是整块里唯一用
+   正文色、且比其它字都大的一行——用户先读它，再决定要不要展开下面几千字的依据。
+   选择器**必须带上父级和 `p`**：上面那条 `.free-review-dispute-card > p` 是「类+元素」，
+   比裸一个类更具体，光靠写在后面压不住它——主角会被渲染成和状态行一样的灰小字
+   （第 1 轮审查 N2 实测 9.5px/--muted）。 */
+.free-review-dispute-card > p.free-review-dispute-card__gist { margin:0; border-left:2px solid color-mix(in lch,var(--amber) 55%,var(--line2)); padding-left:8px; color:var(--ink); font-size:11px; line-height:1.65; }
+/* 「看审查者怎么说」：卡上只有执行者的说法，审查者那一半在报告里。 */
+.free-review-dispute-card__report { display:inline-flex; width:fit-content; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:2px 8px; color:var(--muted); font-size:9px; cursor:pointer; }
+.free-review-dispute-card__report:hover { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); background:color-mix(in lch,var(--accent) 8%,var(--panel)); color:var(--accent); }
+/* 出口竖排成一列：每行是「按钮 + 我什么时候该点它」。横排时四颗按钮各只有五个字、
+   彼此的差别写在确认框里（得点进去才看见），用户只能挨个点开看（用户 2026-10-20）。 */
+.free-review-dispute-card__exits { display:grid; gap:5px; margin:0; padding:0; list-style:none; }
+.free-review-dispute-card__exits > li { display:grid; align-items:center; gap:8px; grid-template-columns:minmax(104px,auto) minmax(0,1fr); }
+.free-review-dispute-card__exits > li > button { display:inline-flex; height:27px; align-items:center; justify-content:center; gap:4px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }
+.free-review-dispute-card__exits > li > button:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
+.free-review-dispute-card__exits > li > button:disabled { opacity:.5; }
+.free-review-dispute-card__exits > li > small { color:var(--muted); font-size:9px; line-height:1.4; }
 /* 「让它接着改」是这几个出口里的常路（辩完多半就是带着谈定的方案接着改），给它主色；
-   另外两个是岔路，保持平级的次要样式。 */
-.free-review-dispute-card__actions > button.is-primary { border-color:color-mix(in lch,var(--accent) 45%,var(--line2)); background:color-mix(in lch,var(--accent) 12%,var(--panel)); color:var(--accent); font-weight:600; }
-.free-review-dispute-card__actions > button.is-primary:hover:not(:disabled) { background:color-mix(in lch,var(--accent) 20%,var(--panel)); color:var(--accent); }
+   另外几个是岔路，保持平级的次要样式。 */
+.free-review-dispute-card__exits > li > button.is-primary { border-color:color-mix(in lch,var(--accent) 45%,var(--line2)); background:color-mix(in lch,var(--accent) 12%,var(--panel)); color:var(--accent); font-weight:600; }
+.free-review-dispute-card__exits > li > button.is-primary:hover:not(:disabled) { background:color-mix(in lch,var(--accent) 20%,var(--panel)); color:var(--accent); }
+/* 确认框底部那行小字：留档用的那套说法（「时间线上记作维持审查意见」）。按钮上只写
+   动作，但用户回头会在时间线里读到那个词，一次都不露会变成他没按过的词。 */
+.free-review-dispute-recorded { display:block; margin:8px 0 0; color:var(--faint); font-size:9px; }
+/* 折起来的长正文（驳回依据、每段辩论发言）：标题行报字数，点开才渲染 markdown。
+   组件在 components/FoldedProse.tsx，但只服务这两处，样式就留在这份里。 */
+.folded-prose > button { display:flex; width:100%; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:5px 8px; color:var(--muted); font-size:9.5px; cursor:pointer; text-align:left; }
+.folded-prose > button:hover { background:var(--raised); color:var(--ink); }
+.folded-prose > button > svg { flex:none; transition:transform .12s ease; }
+.folded-prose > button > b { flex:1; min-width:0; font-weight:500; }
+.folded-prose > button > em { flex:none; color:var(--faint); font-size:8.5px; font-style:normal; font-variant-numeric:tabular-nums; }
+.folded-prose.is-open > button > svg { transform:rotate(90deg); }
+.folded-prose.is-open > button { border-bottom-left-radius:0; border-bottom-right-radius:0; }
+.folded-prose.is-open .task-markdown { border:1px solid var(--line2); border-top:0; border-radius:0 0 7px 7px; background:var(--panel); padding:8px 9px; color:var(--muted); font-size:10px; line-height:1.6; }
+/* 「它认可、但说该另开任务」那一段换成中性色：它说的不是「报告不对」，而是「报告是
+   对的、只是不该在这儿修」，和驳回依据同色会被读成同一件事。 */
+.folded-prose.is-defer > button { border-style:dashed; }
 /* 辩论回放：两侧用不同的左边线区分，正文仍按报告那套 markdown 渲染。 */
 .free-review-debate { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:8px 9px; }
 .free-review-debate > header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }.free-review-debate > header b { color:var(--ink); font-size:9.5px; }.free-review-debate > header small { color:var(--faint); font-size:8.5px; }
@@ -120,6 +148,9 @@
 .free-review-debate li { border-left:2px solid var(--line2); padding-left:8px; }.free-review-debate li.is-reviewer { border-left-color:color-mix(in lch,var(--accent) 45%,var(--line2)); }.free-review-debate li.is-executor { border-left-color:color-mix(in lch,var(--amber) 45%,var(--line2)); }.free-review-debate li.is-speaking { opacity:.75; }
 .free-review-debate li > span { display:flex; align-items:center; gap:4px; color:var(--faint); }.free-review-debate li > span b { font-size:9px; }.free-review-debate li > span em { font-size:8.5px; font-style:normal; font-variant-numeric:tabular-nums; }
 .free-review-debate .task-markdown { margin-top:3px; color:var(--muted); font-size:10px; line-height:1.6; }
+/* 每段发言的那一句人话：逐段只读它就能看出这场辩论辩到哪了，完整发言折在下面。 */
+.free-review-debate__gist { margin:3px 0 4px; color:var(--ink); font-size:10px; line-height:1.55; }
+.free-review-debate.is-reading .free-review-debate__gist { margin:5px 0 7px; font-size:12px; font-weight:600; }
 .free-review-debate__pending { margin:3px 0 0; color:var(--faint); font-size:9.5px; }
 /* 「全宽阅读」：面板这一栏只有 ~540px，七段发言在里面是一根一万像素高的细条。 */
 .free-review-debate__expand { display:inline-flex; flex:none; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 7px; color:var(--muted); font-size:9px; cursor:pointer; }
@@ -141,6 +172,9 @@
 .free-review-debate.is-reading .free-review-debate__pending { font-size:11.5px; }
 .free-review-debate-exchanges { display:grid; gap:5px; padding:0 2px; }.free-review-debate-exchanges > b { color:var(--ink); font-size:10px; }.free-review-debate-exchanges > div { display:flex; gap:5px; }.free-review-debate-exchanges > div > button { width:32px; height:28px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); color:var(--muted); font-size:10.5px; }.free-review-debate-exchanges > div > button.is-selected { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); background:color-mix(in lch,var(--accent) 10%,var(--panel)); color:var(--accent); font-weight:700; }.free-review-debate-exchanges > small { color:var(--faint); font-size:9px; line-height:1.5; }
 .review-round-dispute { margin-top:10px; border-top:0.5px solid var(--line); padding-top:9px; }.review-round-dispute > b { display:block; margin-bottom:5px; color:var(--amber); font-size:10px; }.review-round-dispute > .free-review-debate { margin-top:8px; }
+/* 历史记录里同样先摆那一句人话（和驳回卡一个读法），几千字依据折在它下面。 */
+.review-round-dispute__gist { margin:0 0 6px; color:var(--ink); font-size:10.5px; line-height:1.6; }
+.review-round-dispute > .folded-prose { margin-top:6px; }
 /* 裁定要点是用户自己写的那段，配色跟驳回理由（琥珀=执行者的话）分开，免得读成同一个人说的。 */
 .review-round-dispute__note { margin-top:9px; border:1px solid color-mix(in lch,var(--accent) 22%,var(--line)); border-radius:8px; background:color-mix(in lch,var(--accent) 4%,var(--panel)); padding:8px 9px; }.review-round-dispute__note > b { display:block; margin-bottom:4px; color:var(--accent); font-size:9px; }.review-round-dispute__note .task-markdown { color:var(--muted); font-size:10px; line-height:1.6; }
 /* 裁定确认框里的要点输入：三档共用，措辞由 NOTE_FIELDS 换。 */

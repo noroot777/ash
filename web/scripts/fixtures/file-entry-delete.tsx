@@ -23,6 +23,7 @@ function Fixture() {
         style={{ width: 320, height: 620, overflow: "hidden", border: "1px solid var(--line2)", borderRadius: 10, background: "var(--panel)" }}
       >
         <FileTreeInspector
+          notify={notify}
           taskId={TASK_ID}
           activePath={view.activePath}
           onOpenFile={view.openFile}

@@ -29,7 +29,8 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, TeamConfig } from "@ash/shared";
 import { TEAM_DEFAULTS } from "@ash/shared";
-import { freshTurnFields, openTurn, resumedTurnFields } from "../session-turns.js";
+import { freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "../session-turns.js";
+import { holdTurn } from "./lead-turns.js";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions, groups } from "../db/schema.js";
 import { bus } from "../bus.js";
@@ -353,14 +354,19 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
     // **先确认进程收下了,再往时间线上落**。落早了这一句会以「用户已经说过」的样子留在
     // .md 里,可它接着还要由下一台补送 —— 同一句话在会话里出现两遍,而中间那一遍模型
     // 根本没收到。被拒时只留失败说明:原文还在待发送托盘里,用户看得见也等得到。
-    const { sent, interrupted } = await sendToLead(lead, promptedText, { steer: true });
+    const { sent, interrupted, at: turnAt } = await sendToLead(lead, promptedText, { steer: true });
     if (!sent) {
       reportLeadFailure(lead, "这条消息没能送进调度台进程 —— 它正在收尾。这一句留在待发送托盘里,等下一台调度台接手时自动补送。", at);
       return false;
     }
     if (interrupted) recordSystemTurn(lead, INTERRUPT_NOTE, at);
     recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at });
-    void beginTurn(lead, at);
+    // 回合身份用**投递口那一刻**的（`turnAt`）：`sendToLead` 收下消息时就按它持有住了,这里
+    // 另取一个时刻就等于同一轮登记两个起点,其中一个谁都不会来收（见 lead-delivery.ts）。
+    // 时间线上那条用户发言仍用 `at`（他说话的时刻,早于投递）。取不到投递口那一刻时交给
+    // `beginTurn` 的默认值（身份层分配器),别回退到 `at` —— 它是直接 `now()` 来的,不保证在
+    // 这条会话上唯一（第 2 轮审查 F1）。
+    void beginTurn(lead, turnAt ?? undefined);
     return true;
   }
   if (lead.busy) {
@@ -373,13 +379,14 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
   // 跟 endTurn 同一条规矩:**先确认进程收下了,再算它送出去了**。还挂在 leads 里不等于
   // stdin 还开着 —— 空闲回收 close() 到 closeLead 之间就是这么一个窗口。没收下就排进持久
   // 队列等下一台送(这时候别落盘正文,否则下一台真送成时同一条汇报会在 .md 里出现两遍)。
-  if (!(await sendToLead(lead, text)).sent) {
+  const delivery = await sendToLead(lead, text);
+  if (!delivery.sent) {
     lead.pending.push(await queueInbound(lead, text, at));
     reportLeadFailure(lead, "执行者消息没能送进调度台进程(它正在收尾),先排进待送队列交给下一台接手的调度台。", at);
     return true;
   }
   recordSystemTurn(lead, text, at);
-  void beginTurn(lead, at);
+  void beginTurn(lead, delivery.at ?? undefined); // 身份用投递口那一刻的,同上
   return true;
 }
 
@@ -446,6 +453,10 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   // 授权现读、且读在开台之前的最后一刻:正文(rawMessage)拼好之后还隔着 runEnv 和
   // prepareResume 两个 await,在那边就把授权拼死的话,用户在开台期间收回授权拦不住
   // (同第 3 轮审查 P1 的续聊路径)。
+  // 接回同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,
+  // 墙钟又恰好回拨到上一轮开工那一刻时,不接就会把那个历史身份原样重发一遍（第 1 轮审查 F2,
+  // 机制见 session-turns.ts 的 primeTurnStarts）。放在同步段之前:它要读库。
+  if (resuming) await primeTurnStarts(prev!.id);
   const browserGrant = await browserGrantForProject(project.id);
   // 开台前的最后一道闸:这一句之后到 openResident 之间不再有 await。上面那几个 await
   // 期间可能来过「停止全组」,那时这台调度台还没出生、谁也杀不到它,停止只落在这一次开台
@@ -453,8 +464,10 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   if (cell.halted) throw new TeamOpenHalted();
   const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full", browserGrant);
 
-  const turnStart = now();
   const sessId = resuming ? prev!.id : id();
+  // 起点从身份层分配（见 session-turns.ts 的 nextTurnStart）：接回同一行会话时,这一轮的起点
+  // 必须严格晚于那条会话上已经见过的全部起点,否则队列和唯一键会把两轮合成一轮。
+  const turnStart = nextTurnStart(sessId);
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
   const handle = openResident({
@@ -529,8 +542,11 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
       cwd: ws.path,
       handle,
       out: createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" }),
-      busy: false,
-      turnStart: null,
+      // **开台本身就是一个回合的开始**：CLI 已经起来了,首轮 prompt 也随 spawn 送进去了,所以
+      // 这两个字段在构造时就是真相（原先写 false/null、指望后面那句 beginTurn 去补,见上面
+      // attachLead 那条）。`attachLead` 据此在开放消费之前把首轮身份持有住。
+      busy: true,
+      turnStart,
       pending: [],
       notices: [],
       pendingCredential: null,
@@ -549,11 +565,8 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     // helper 里时这里是实打实加了两次,于是团队的第一个回合永远报「缺一个回合记录」
     //（第 5 轮审查必须修 2.1）。
     //
-    // **位置讲究**：这个回合身份的所有者是这台调度台本身（它活得比 openLead 这次调用长,注销
-    // 由 endTurn/closeLead/retireLead 做),所以必须**先把所有者挂上线、再去拿身份**。反过来
-    // 写（原先的顺序:先 openTurn,再组装 lead、再 attachLead）的话,中间那段组装只要抛一次
-    // 就留下一个谁都不会来注销的活动身份——读端会把这条会话当成「从那个起点一直在写」
-    //（第 7 轮审查必须修 1 的同类入口）。
+    // 活动登记已经在 `attachLead` 里跟首轮状态一起绑好了（见 lead-turns.ts）,这里只剩「把这
+    // 一轮记进库」这一半:同一身份再开一次既不插行也不加数,写不成也只按缺口披露。
     await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
     // 运行按钮带来的首个任务 prompt 不另记 turn；用户亲自发来的消息无论是否顺手
     // 打开了调度台，都必须成为可持久、可实时同步的一条 user turn。
@@ -582,6 +595,10 @@ export function attachLead(lead: Lead): void {
   const previous = leads.get(lead.taskId);
   if (previous && previous !== lead) retireLead(previous);
   leads.set(lead.taskId, lead);
+  // **先持有回合身份,再开放事件消费** —— 这一句与下面那行之间不许有 await,理由与机制见
+  // team/lead-turns.ts 顶部（第 8 轮审查必须修 1）。放在这里而不是让各调用方自己记着调：
+  // `attachLead` 是「开放消费」的唯一入口,顺序在这里定死,新调用点不可能写反。
+  if (lead.turnStart) holdTurn(lead, lead.turnStart);
   void consume(lead).catch((err) => console.error(`[ash] team consume(${lead.taskId}) failed:`, err));
 }
 

@@ -5,6 +5,7 @@
 // **整份仍由 schema.ts 原样再导出**:drizzle 的 `import * as schema` 必须看到全部表,
 // 拆文件不能拆掉那个视图。
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { Client } from "./node-sqlite-client.js";
 
 export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   taskId: text("task_id").primaryKey(),
@@ -78,6 +79,9 @@ export const freeReviewRounds = sqliteTable(
     conclusion: text("conclusion"),
     // 本轮启动时任务工作区的 HEAD。结论新不新鲜靠它跟当前 HEAD 比，不靠状态字段。
     reviewedCommit: text("reviewed_commit"),
+    // 写给用户的那一句人话（`PLAIN_SUMMARY_GUIDE`）：裁定屏的第一行字，时间线旁注也用它。
+    // null = 加这列之前落的老驳回（界面降级成只显示正文，不编一句摘要糊上去）。
+    disputeSummary: text("dispute_summary"),
     // 执行者对这一轮结论的驳回：理由正文 + 时刻。非空 = 这一轮没被执行者认下。
     disputeReason: text("dispute_reason"),
     // 同一次驳回里「我认可这几条，但它们超出本任务边界，建议转独立任务」那一段。
@@ -137,6 +141,8 @@ export const freeReviewDebateTurns = sqliteTable(
     debateId: text("debate_id").notNull(),
     seq: integer("seq").notNull(),
     side: text("side").notNull(),
+    // 这一段发言的一句人话（`PLAIN_SUMMARY_GUIDE`）：七段加起来一万字，界面逐段先摆它。
+    summary: text("summary"),
     // 发言正文由 `debate_reply` 直接落库（不走证据目录）：它是对话，不是证据文件，
     // 而且必须能在「这一段到底交卷没有」上给出确定答案 —— 文件存不存在答不了这个。
     statement: text("statement"),
@@ -146,3 +152,111 @@ export const freeReviewDebateTurns = sqliteTable(
   },
   (t) => ({ debateSeqIdx: uniqueIndex("free_review_debate_turns_seq_idx").on(t.debateId, t.seq) }),
 );
+
+/**
+ * 这一族表的建表与补列。**和表定义放在同一个文件里**（`schema-chat` /
+ * `schema-page-annotation` 就是这么做的）：列一加就是两处要改，隔着文件只会漏一边。
+ *
+ * 从 `db/index.ts` 搬出来的理由跟表定义当初搬出 `schema.ts` 一样——那份文件已经越过 700 行
+ * 上限，而这一族的边界最清楚：这些表不被其它表引用，建表和补列都只碰 `free_*`，所以整段
+ * 可以自成一个顺序无关的单元。`ensureSchema()` 只留一行调用。
+ *
+ * 内部顺序**不可换**：补列靠 CREATE TABLE 已经建好表才有意义（`CREATE TABLE IF NOT EXISTS`
+ * 对已存在的老表什么都不做，补列正是给那些老表用的）。每条 ALTER 各自容错，缺哪一列补哪
+ * 一列，老库漏了中间任意一条也能升上来。
+ */
+export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
+  await client.executeMultiple(`
+    CREATE TABLE IF NOT EXISTS free_workflow_states (
+      task_id TEXT PRIMARY KEY, selected_reviewer_id TEXT,
+      review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
+      review_retry_limit INTEGER, review_note TEXT, review_run_id TEXT,
+      review_agent_type TEXT, review_executor_id TEXT,
+      review_model TEXT, review_reasoning_effort TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS free_workflow_events (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
+      source TEXT NOT NULL, detail TEXT, occurred_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS free_workflow_events_task_idx
+      ON free_workflow_events (task_id, occurred_at);
+    CREATE TABLE IF NOT EXISTS free_review_runs (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, reviewer_id TEXT,
+      reviewer_name TEXT NOT NULL, agent_type TEXT NOT NULL, executor_id TEXT,
+      model TEXT, reasoning_effort TEXT, check_mode TEXT NOT NULL, note TEXT,
+      target_kind TEXT NOT NULL DEFAULT 'workspace', target_branch TEXT,
+      target_base_commit TEXT, target_commit TEXT, repair_task_id TEXT,
+      retry_limit INTEGER NOT NULL DEFAULT 1, current_round INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS free_review_runs_task_idx ON free_review_runs (task_id, created_at);
+    CREATE TABLE IF NOT EXISTS free_review_rounds (
+      id TEXT PRIMARY KEY, run_id TEXT NOT NULL, round INTEGER NOT NULL,
+      status TEXT NOT NULL, conclusion TEXT, reviewed_commit TEXT,
+      dispute_summary TEXT,
+      dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
+      dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
+      dispute_deferred_task_id TEXT,
+      started_at TEXT NOT NULL, ended_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
+      ON free_review_rounds (run_id, round);
+    CREATE TABLE IF NOT EXISTS free_review_debates (
+      id TEXT PRIMARY KEY, round_id TEXT NOT NULL, task_id TEXT NOT NULL,
+      run_id TEXT NOT NULL, round INTEGER NOT NULL, status TEXT NOT NULL,
+      exchanges INTEGER NOT NULL DEFAULT 1, current_seq INTEGER NOT NULL DEFAULT 1,
+      verdict TEXT, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS free_review_debates_round_idx
+      ON free_review_debates (round_id, started_at);
+    CREATE INDEX IF NOT EXISTS free_review_debates_task_idx
+      ON free_review_debates (task_id, started_at);
+    CREATE TABLE IF NOT EXISTS free_review_debate_turns (
+      id TEXT PRIMARY KEY, debate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+      side TEXT NOT NULL, summary TEXT, statement TEXT, status TEXT NOT NULL,
+      started_at TEXT NOT NULL, ended_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS free_review_debate_turns_seq_idx
+      ON free_review_debate_turns (debate_id, seq);
+  `);
+  for (const sql of [
+    // 自由工作流预约审查：只保存一份配置，confirmed done 后复用现有派审链。
+    "ALTER TABLE free_workflow_states ADD COLUMN review_armed INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_check_mode TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_retry_limit INTEGER",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_note TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_run_id TEXT",
+    // 预约里「这次换个模型/智能水平跑」的覆盖（不改审查者配置本身）。
+    "ALTER TABLE free_workflow_states ADD COLUMN review_agent_type TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_executor_id TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_model TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_reasoning_effort TEXT",
+    "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
+    "ALTER TABLE free_review_runs ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'workspace'",
+    "ALTER TABLE free_review_runs ADD COLUMN target_branch TEXT",
+    "ALTER TABLE free_review_runs ADD COLUMN target_base_commit TEXT",
+    "ALTER TABLE free_review_runs ADD COLUMN target_commit TEXT",
+    "ALTER TABLE free_review_runs ADD COLUMN repair_task_id TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN reviewed_commit TEXT",
+    // 执行者驳回审查结论那条支线（理由 + 用户裁定）；老库补列即可，空 = 没驳回过。
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_reason TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_at TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolved_at TEXT",
+    // 第三条出路：「意见成立但越界，建议转独立任务」的理由，以及裁定后建出的那个任务。
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_defer_reason TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_deferred_task_id TEXT",
+    // 裁定时用户写给执行者的要点（三档裁定表达不了的那部分结论，多半是辩论里达成的方案）。
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution_note TEXT",
+    // 驳回与每段辩论发言的「人话摘要」：裁定屏第一行字。老行留 null，界面降级显示正文。
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_summary TEXT",
+    "ALTER TABLE free_review_debate_turns ADD COLUMN summary TEXT",
+  ]) {
+    try {
+      await client.execute(sql);
+    } catch {
+      /* column already exists */
+    }
+  }
+}

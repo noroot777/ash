@@ -7,9 +7,9 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, discardStartingRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, discardStartingRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
-import { closeTaskTurns, freshTurnFields, openTurn } from "./session-turns.js";
+import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn } from "./session-turns.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
@@ -106,6 +106,8 @@ export async function runTask(
       .update(tasks)
       .set({ followUpFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
+    // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
+    bindTurnToken(taskId, turnToken);
     await setTaskStatus(taskId, "running");
     // 已验收任务被 fresh 重跑（Cron 到点 / fire）：旧「已验收」牌子当场摘掉——新一版
     // 产出不能躲在旧牌子下继续改（enterHumanGate 见 merged 会静默放行；审查实测：
@@ -188,8 +190,11 @@ export async function runTask(
     const freeze = takeFreeze(taskId, frozen);
     if (freeze) await abortFrozen(taskId, freeze);
     const prompt = withGlobalBrowserPolicy(promptBody, "full", browserGrant);
-    const turnStart = now();
     const sessId = id();
+    // 回合起点从身份层分配,不自己取 `now()`（见 session-turns.ts 的 nextTurnStart）：唯一性
+    // 是**会话级**不变量,八处起跑入口各自取时钟就各自碰运气。顺带让 trace/detach 的文件名
+    // （都由这个字符串派生）也跟着唯一。
+    const turnStart = nextTurnStart(sessId);
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
     // 解绑重启：输出落盘而不是走匿名管道，于是这个 agent 活得过 server 重启

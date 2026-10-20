@@ -37,6 +37,16 @@ export const ARTIFACT_ORIGIN_HINT: Record<TaskArtifact["origin"], string> = {
 };
 
 /**
+ * 候选那一档的角标。
+ *
+ * 只给 `approx` 一个角标,`exact` 什么都不加：清单里绝大多数条目是确定的,给每一条都挂个
+ * 「确定」只是噪音,真正需要被认出来的是**混进来的那几个**。
+ */
+export const ARTIFACT_CONFIDENCE_LABEL = "候选";
+export const ARTIFACT_CONFIDENCE_HINT =
+  "只落在估出来的时间段里（会话寿命、没收尾的回合），可能是别人在同一个目录里做的";
+
+/**
  * 整份清单**凭什么算这个任务的**。
  *
  * 两档的精度差一个数量级，不能让用户自己猜：独占 worktree 是目录级隔离，清单是确定的；

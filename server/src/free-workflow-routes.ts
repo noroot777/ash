@@ -113,10 +113,9 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const identity = await turnIdentityError(c, taskId, "驳回");
     if (identity) return c.json({ error: identity }, 409);
     try {
-      const body = await c.req.json<{ reason?: unknown; deferReason?: unknown }>()
-        .catch(() => ({} as { reason?: unknown; deferReason?: unknown }));
-      const { reason, deferReason } = disputeInputOf(body);
-      const result = await disputeFreeReview(taskId, reason, deferReason);
+      type DisputeBody = { summary?: unknown; reason?: unknown; deferReason?: unknown };
+      const body = await c.req.json<DisputeBody>().catch(() => ({} as DisputeBody));
+      const result = await disputeFreeReview(taskId, disputeInputOf(body));
       return c.json({ disputed: true, taskId, ...result });
     } catch (error) { return c.json(errorBody(error), 409); }
   });
@@ -150,7 +149,8 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const identity = await turnIdentityError(c, taskId, "辩论发言");
     if (identity) return c.json({ error: identity }, 409);
     try {
-      const body = await c.req.json<{ statement?: unknown; verdict?: unknown }>().catch(() => ({} as { statement?: unknown; verdict?: unknown }));
+      type ReplyBody = { summary?: unknown; statement?: unknown; verdict?: unknown };
+      const body = await c.req.json<ReplyBody>().catch(() => ({} as ReplyBody));
       return c.json({ recorded: true, taskId, ...(await submitDebateStatement(taskId, body)) });
     } catch (error) { return c.json(errorBody(error), 409); }
   });

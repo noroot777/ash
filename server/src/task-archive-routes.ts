@@ -9,7 +9,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
-import { stopMonitorsForTask } from "./monitors.js";
+import { stopMonitorsForTask } from "./monitor-reclaim.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { claimWorkspaceTurn, isRunning, isTurnClaimed } from "./runs.js";
 import { setTaskStatus } from "./status.js";
@@ -86,7 +86,15 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     for (const target of r.mode === "team"
       ? [r.id, ...(await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.parentId, r.id))).map((w) => w.id)]
       : [r.id]) {
-      await stopMonitorsForTask(target, "任务已归档，哨兵一并收回").catch(() => {});
+      // `destroy`：归档是用户要求这个任务停下来，审查还在进行也不留 —— 归档任务收不到任何
+      // 消息（deliveryVerdict 直接作废），留着它只是个永远喂不到人的后台进程。
+      //
+      // **这里吞掉异常，删除那边不吞**，不是疏漏:回收层抛错的意思是「既没确认退出、回收责任
+      // 也没能落库」,而归档**不销毁任何身份** —— `monitors` 行连 pid 一起原样留着,下次开机
+      // 接回时那道出口资格会判出「任务已归档」并当场把它收掉(monitors.ts 的
+      // `reattachBlockedReason`)。删除那边必须整笔中止,因为它紧接着就把那行线索抹掉了。
+      await stopMonitorsForTask(target, "任务已归档，哨兵一并收回", "destroy")
+        .catch((err) => console.error(`[ash] stopMonitorsForTask(${target}, destroy) failed:`, err));
     }
     // 任务行已经冻结,再收磁盘。顺序刻意如此:清理失败(目录脏/分支未合并/预览没停)
     // 不该把归档一起挡回去,结果如实回给 UI,并写进时间线 —— 刷新页面后还能看出

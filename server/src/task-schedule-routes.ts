@@ -64,6 +64,6 @@ api.get("/tasks/:id/commits", async (c) => {
   const project = (await db.select().from(projects).where(eq(projects.id, t.projectId))).at(0);
   const sess = (await db.select().from(sessions).where(eq(sessions.taskId, tid))).find((s) => s.worktreePath);
   if (!sess?.worktreePath || !project) return c.json({ branch: null, commits: [] });
-  return c.json(await taskCommits(sess.worktreePath, project.repoPath, t.worktreeBase));
+  return c.json(await taskCommits(sess.worktreePath, t));
 });
 }

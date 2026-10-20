@@ -177,8 +177,13 @@ export function crossSiteRejection(headers: {
  *
  * 校验必须**同时**认 taskId 和 token:光有 token 无从查起(它不是全局唯一索引),
  * 光有 taskId 谁都能填。
+ *
+ * **导出是给自用模式下的回调端点用的**(claude 的 PreToolUse hook,见 monitor-routes.ts):
+ * 自用模式在上面那个 gate 里一行不拦、直接 set 成 `SINGLE_ACTOR`,这条路根本不走 ——
+ * 于是「这次回调是哪条任务的哪一轮」在自用模式下无从得知。要它的地方自己再问一次,
+ * 但**判据只能有这一份**:抄一遍到别处,两边迟早对 token 的要求就分家了。
  */
-async function agentActor(c: Context): Promise<Actor | null> {
+export async function agentActor(c: Context): Promise<Actor | null> {
   const taskId = c.req.header("x-ash-source-task-id")?.trim();
   const token = c.req.header("x-ash-turn-token")?.trim();
   if (!taskId || !token) return null;

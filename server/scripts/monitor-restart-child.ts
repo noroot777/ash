@@ -9,7 +9,8 @@ import { writeFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db/index.js";
 import { monitors } from "../src/db/schema.js";
-import { reattachMonitors, startMonitor } from "../src/monitors.js";
+import { startMonitor } from "../src/monitor-create.js";
+import { reattachMonitors } from "../src/monitors.js";
 
 const [mode, taskId, stateFile, command] = process.argv.slice(2);
 // 保活：monitors.ts 里的定时器全 unref 了（真 server 由 HTTP 监听撑着事件循环，
@@ -18,7 +19,9 @@ const keepAlive = setInterval(() => {}, 500);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 if (mode === "v1") {
-  const started = await startMonitor({ taskId: taskId!, command: command!, description: "重启也要活着" });
+  const started = await startMonitor({
+    taskId: taskId!, command: command!, description: "重启也要活着", caller: { kind: "external" },
+  });
   if (!started.ok) { console.error(started.error); process.exit(3); }
   for (let i = 0; i < 100; i++) {
     const row = (await db.select().from(monitors).where(eq(monitors.id, started.monitor.id))).at(0);
@@ -30,7 +33,9 @@ if (mode === "v1") {
 }
 
 if (mode === "v3") {
-  const started = await startMonitor({ taskId: taskId!, command: command!, description: "停服期间跑完的活" });
+  const started = await startMonitor({
+    taskId: taskId!, command: command!, description: "停服期间跑完的活", caller: { kind: "external" },
+  });
   if (!started.ok) { console.error(started.error); process.exit(3); }
   writeFileSync(stateFile!, JSON.stringify({ monitorId: started.monitor.id, pid: started.monitor.pid }));
   process.exit(0);

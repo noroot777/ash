@@ -125,9 +125,20 @@ export async function migrateSessionTurnIdentity(client: Client): Promise<void> 
     );
     await backfillTurnsBase(client);
   } catch (e) {
-    // **绝不往外抛**：这条迁移没跑成的代价是「唯一索引没建上 / 基数没回填」,读端照保守档
-    // 披露就是了；抛出去的代价是 ensureSchema 崩掉 = 整台 ash 起不来（db/index.ts 里那条
+    // **绝不往外抛**：抛出去的代价是 ensureSchema 崩掉 = 整台 ash 起不来（db/index.ts 里那条
     // 2026-10-14 实测过的教训）。下次启动还会再试一遍。
+    //
+    // 代价是**失败很安静**,所以「跑成了没有」不能靠这句日志,得是一件**读端查得到的事实**:
+    //   • 基数没回填 → 那些行的 `turns_base_approx` 还是 NULL。读端只对这一列有值的行做精确
+    //     对账,NULL 的一律按「升级没跑完、缺没缺无从得知」披露并放宽区间
+    //     （`task-artifact-windows.ts` 的 `migrated` 判据,第 1 轮审查 F3）。少了那道判据,
+    //     上一版那个偏小的旧计数正好抵掉已存行数,中间真缺的那一轮一句话都不说。
+    //   • 表没重建 → `ended_at` 还带着 NOT NULL,于是「开了没收口」那一行压根插不进去,写端
+    //     每一轮都记一笔欠账,读端照「连开始都没留下记录」披露（更响）。
+    //   • 去重/唯一索引没建上 → 同一身份可能有多行,读端按身份去重（`starts` 是 Set）,重复行
+    //     冒充不了「多跑了一轮」。
+    // 三条出口都落在可核验的库内事实上,所以这里只补一句日志就够了——别再往上加「全局迁移
+    // 成功标记」那种第二份真相。
     console.warn(`[ash] session_turns 身份迁移没跑完（产物归属按保守档披露）: ${String(e)}`);
   }
 }

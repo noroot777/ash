@@ -277,6 +277,26 @@ export type OpenerProbe = {
   note: string | null;
 };
 
+/** 本机装着的一个编程 IDE。`id` 来自服务端写死的清单（server/src/openers/ide-catalog.ts）。 */
+export type IdeApp = {
+  id: string;
+  name: string;
+  /** 在哪儿找到它的：.app 路径或可执行文件路径。 */
+  detail: string;
+};
+
+export type IdeProbe = {
+  platform: string;
+  ides: IdeApp[];
+  note: string | null;
+};
+
+/**
+ * 一次启动服务端究竟观察到了什么。`opened` = 启动器以 0 退出、它说交代完了;
+ * `launching` = 盯完观察窗口它还活着,**没有任何确认** —— 界面不许据此说「已打开」。
+ */
+export type IdeLaunchStatus = "opened" | "launching";
+
 // ── 生成物（产物面板）────────────────────────────────────────────────────────
 // 「这个任务做出来了什么可以直接看的东西」。判据、三路线索和它们各自的可信区间都在服务端
 // `task-artifacts.ts` 顶部，这里只是它的形状。
@@ -284,6 +304,19 @@ export type OpenerProbe = {
 export type ArtifactKind = "image" | "video" | "audio" | "page" | "pdf";
 /** 这份产物是从哪条线索认出来的：还没提交 / 已提交在任务分支上 / 被 .gitignore 挡着。 */
 export type ArtifactOrigin = "working" | "committed" | "ignored";
+
+/**
+ * **这一条**的归属有多硬（服务端 `task-artifacts.ts` 的 `exactProof`）。
+ *
+ * - `exact` —— 确定：目录独占、任务分支上的提交动过它、或者落在一段**精确**区间里；
+ * - `approx` —— 候选：只落在**估出来**的区间里（会话寿命、没收尾的回合），可能是别人在同一个
+ *   目录里做的。
+ *
+ * 整份清单那一档（`ArtifactScopeKind`）说的是「这个目录是不是它独占的」,这一列说的是
+ * 「**这一个**文件凭什么算它的」—— 共享目录里两种条目是混着的,只给页脚一个总数,用户看得见
+ * 数目却看不出是哪几个（本轮审查第 5 条）。
+ */
+export type ArtifactConfidence = "exact" | "approx";
 
 export type TaskArtifact = {
   /** 相对工作区根、posix 分隔符——跟文件树、文件查看器同一个主键。 */
@@ -294,6 +327,7 @@ export type TaskArtifact = {
   size: number;
   mtime: string | null;
   origin: ArtifactOrigin;
+  confidence: ArtifactConfidence;
 };
 
 /**

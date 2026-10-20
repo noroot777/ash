@@ -57,6 +57,7 @@ function Fixture() {
             style={{ "--inspector-width": "300px" } as CSSProperties}
           >
             <FileTreeInspector
+              notify={() => undefined}
               taskId={TASK_ID}
               activePath={view.activePath}
               onOpenFile={view.openFile}

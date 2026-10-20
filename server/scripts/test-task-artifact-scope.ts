@@ -72,10 +72,14 @@ try {
     id, projectId: "p", title: id, body: "-", mode: "single", status: "done",
     agentType: "claude", useWorktree: false, createdAt: iso(0), updatedAt: iso(0), ...extra,
   });
+  // `turnsBase/turnsBaseApprox` 必须带上:生产里每条真起跑的会话行都是 `freshTurnFields`
+  // 建出来的（approx = false = 「迁移确认过、没有升级前的未知历史」）。空着就等于「迁移还
+  // 没确认」,读端照未知披露并放宽区间——那是 F3 那一档的语义,不是一条正常会话。
   const addSession = (id: string, taskId: string, cwd: string, startedAt: number, endedAt: number | null, extra: Record<string, unknown> = {}) =>
     db.insert(sessions).values({
       id, taskId, role: "main", agentType: "claude", executor: "claude", cwd,
-      startedAt: iso(startedAt), endedAt: endedAt === null ? null : iso(endedAt), exitStatus: 0, ...extra,
+      startedAt: iso(startedAt), endedAt: endedAt === null ? null : iso(endedAt), exitStatus: 0,
+      turnsBase: 0, turnsBaseApprox: false, ...extra,
     });
   const addTurn = (id: string, sessionId: string, taskId: string, cwd: string | null, from: number, to: number) =>
     db.insert(sessionTurns).values({ id, sessionId, taskId, cwd, startedAt: iso(from), endedAt: iso(to) });
@@ -155,6 +159,25 @@ try {
   const never = await read("NeverRun001");
   assert.deepEqual(never.artifacts, [], "没跑过就没有归属证据，git status 不是归属证明");
   assert.equal(never.since, null);
+
+  // 第一次 fresh run 在拿到执行器句柄**之前**就失败时,只为把错误显示出来会建一条诊断会话
+  // （turn-failure.ts 的 freshRunFailureTarget：没有 CLI 会话、没有命令行、没有回合起点,
+  // active_ms=0、exit_status=1、ended_at 就等于 started_at）。它不是运行证据——拿它当运行
+  // 过,一个压根没跑起来的任务就会拿到 [报错时刻, +10 分钟] 的候选区间,把那十分钟里别人在
+  // 同一个目录做的东西全列成它的产物（第 1 轮审查 F4）。
+  await addTask("FailedStart1", { status: "failed" });
+  await addSession("s-failed", "FailedStart1", null as unknown as string, 600, 600, {
+    activeMs: 0, exitStatus: 1,
+  });
+  write(shared, "output/报错之后别人做的.png");
+  touch(shared, "output/报错之后别人做的.png", at(603));
+  const failedStart = await read("FailedStart1");
+  assert.deepEqual(
+    failedStart.artifacts, [],
+    `只为显示启动错误建的诊断会话不构成运行证据。实际：${JSON.stringify(failedStart.artifacts.map((a) => a.path))}`,
+  );
+  assert.equal(failedStart.since, null, "它压根没跑过,「第一次开跑」也不该有时刻（判据跟区间那一档同一个）");
+  assert.deepEqual(failedStart.incomplete, [], "没有运行证据就没什么「算不准」可说,别白说一句让人紧张");
 
   // 跑过的任务仍然能看到自己运行期间的未提交改动（上面那条别误伤这一条）。
   await addTask("WorkingTask1");
@@ -564,12 +587,71 @@ try {
     "任务删掉之后不该留下它的回合记录",
   );
 
+  // ── F3：迁移没跑完的那种会话,不许继续拿旧计数做精确对账 ────────────────────────
+  // 那条迁移自己 catch 掉一切只 warn（抛出去 = 整台 ash 起不来）,所以「跑成了没有」只能靠
+  // 库里那件可核验的事实:`turns_base_approx` 还是 NULL = 没确认过。那种行上的 `turns_started`
+  // 是上一版口径（会漏起跑入口、又会重复加数）,拿它做精确减法就会出现「两条偏小的旧计数
+  // 正好抵掉两条已存行」,中间真缺的那一轮一句话都不说,它做出来的图静默漏列（第 1 轮审查 F3）。
+  await addTask("Unmigrated1");
+  await addSession("s-unmig", "Unmigrated1", shared, 2400, 2510, {
+    turnStartedAt: iso(2500), turnsStarted: 2, turnsBase: null, turnsBaseApprox: null,
+  });
+  await addTurn("t-unmig-1", "s-unmig", "Unmigrated1", shared, 2400, 2410);
+  await addTurn("t-unmig-2", "s-unmig", "Unmigrated1", shared, 2500, 2510);
+  write(shared, "output/升级没跑完那轮做的.png");
+  touch(shared, "output/升级没跑完那轮做的.png", at(2450));
+  const unmigrated = await read("Unmigrated1");
+  assert.equal(
+    originOf(unmigrated, "output/升级没跑完那轮做的.png"), "ignored",
+    "迁移没确认 = 缺没缺无从得知,那就不能按「对得上」把中间那一轮的产物滤掉",
+  );
+  assert.ok(
+    unmigrated.incomplete.some((line) => line.includes("还没完成逐回合记录的升级")),
+    `这一段是未知,面板上必须说出来。实际：${JSON.stringify(unmigrated.incomplete)}`,
+  );
+
+  // ── N2：已知的下一个回合身份就是上界,不该被那 1 秒抖动容差跳过 ──────────────────
+  // 未收口的那一轮 t、紧接着 500 毫秒后正常跑完的第二轮、很久以后才开的第三轮：t 的末端该
+  // 估到**第二轮的起点**（那一刻它肯定已经停了）,而不是跳过它一路估到第三轮——那样会把第
+  // 二轮的产出连中间的停工时间一起收进来（第 1 轮审查 N2）。
+  const isoMs = (minutes: number, ms: number) => new Date(T0.getTime() + minutes * 60 * 1000 + ms).toISOString();
+  await addTask("TightNext01");
+  await addSession("s-tight", "TightNext01", shared, 2600, 2900, {
+    turnStartedAt: iso(2800), turnsStarted: 3,
+  });
+  // 第一轮：开了没收口（结算那一下没写成）。
+  await db.insert(sessionTurns).values({
+    id: "t-tight-1", sessionId: "s-tight", taskId: "TightNext01", cwd: shared,
+    startedAt: iso(2600), endedAt: null,
+  });
+  // 第二轮：500 毫秒后就开工,正常跑完。
+  await db.insert(sessionTurns).values({
+    id: "t-tight-2", sessionId: "s-tight", taskId: "TightNext01", cwd: shared,
+    startedAt: isoMs(2600, 500), endedAt: iso(2605),
+  });
+  await addTurn("t-tight-3", "s-tight", "TightNext01", shared, 2800, 2810);
+  write(shared, "output/第二轮之后停工期.png");
+  touch(shared, "output/第二轮之后停工期.png", at(2700));
+  write(shared, "output/第二轮自己做的.png");
+  touch(shared, "output/第二轮自己做的.png", at(2602));
+  const tight = await read("TightNext01");
+  assert.equal(originOf(tight, "output/第二轮自己做的.png"), "ignored", "第二轮自己的区间照常认");
+  assert.equal(
+    originOf(tight, "output/第二轮之后停工期.png"), null,
+    "未收口那一轮的上界是**已知的下一个身份**,不该因为只差 500 毫秒就被跳过（N2）",
+  );
+  assert.ok(
+    tight.incomplete.some((line) => line.includes("没留下收尾时刻")),
+    "估出来的那一段照旧要披露",
+  );
+
   console.log("✓ artifact scope: 续聊区间按回合落账、没跑过就没有产物、独占目录不吃时间、提交按段取数");
   console.log("✓ artifact scope: 特殊文件名、profile 深路径入口、venv 边界、上游异地区间、哨兵生命周期");
   console.log("✓ artifact scope: 同仓异目录(worktree 已删)的区间要认、任务分支 diff 不吃时间门槛");
   console.log("✓ artifact scope: 团队执行者各看各的/领队汇总、软链别名同目录、工作目录自己是 profile");
   console.log("✓ artifact scope: 紧接着开工的执行者不串图、中间缺的那轮要认且披露、在飞也查早期缺口");
   console.log("✓ artifact scope: 换过工作目录不算缺口、软链改指向后重新解析独占");
+  console.log("✓ artifact scope: 诊断会话不算跑过、迁移没确认照未知披露、未收口那轮的上界是下一个身份");
   console.log(`✓ artifact scope: 提交日期回拨不剪掉区间内的提交（--since-as-filter ${sinceAsFilter ? "可用" : "不可用,已披露"}）、删任务清掉回合记录`);
 } finally {
   await releaseTmpDb();

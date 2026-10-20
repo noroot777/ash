@@ -29,7 +29,8 @@ try {
   const { claimTurn } = await import("../src/runs.js");
   const {
     disputeFreeReview, disputeReasonOf, disputeResolutionNoteOf, disputeResolutionOf,
-    openDisputeOf, resolveFreeReviewDispute,
+    disputeBriefOf, disputeInputOf, disputeTimelineNote, openDisputeOf, plainSummaryOf,
+    resolveFreeReviewDispute,
   } = await import("../src/free-review-dispute.js");
   const {
     activeDebateOf, debateClosingOf, debateOfRound, debateViews, debatesOfRound, exchangesOf,
@@ -39,6 +40,7 @@ try {
   const { freeManualRepairPrompt, freeRepairPrompt } = await import("../src/free-review-prompts.js");
   const {
     CLASS_PROBLEM_BOUNDARY, DEFER_BOUNDARY_CRITERION, DEFER_REASON_FIELD_GUIDE,
+    MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_GUIDE,
   } = await import("@ash/shared/free-workflow");
   const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
 
@@ -93,6 +95,25 @@ try {
   };
 
   // ── 入参 ──
+  // 「写给用户的那一句话」必填：可选的那一版等于没有——执行者手里的默认稿一直是写给
+  // 审查者看的辩护书（真实样本 1000~3500 字、满篇路径行号），缺了它用户只能对着那堵墙
+  // 拍板（用户 2026-10-20：「一大篇文字都看不懂」）。
+  assert.throws(() => disputeInputOf({ reason: "这条不成立" }), /summary 必填/,
+    "没写人话摘要的驳回必须被拒：用户要靠它拍板");
+  assert.throws(() => disputeInputOf({ reason: "这条不成立", summary: "   " }), /summary 必填/,
+    "只有空白的摘要等于没写");
+  assert.ok(
+    (() => { try { disputeInputOf({ reason: "x" }); return ""; } catch (e) { return (e as Error).message; } })()
+      .includes(PLAIN_SUMMARY_GUIDE),
+    "摘要的报错必须原样带上写法规范——否则 agent 补一次还是写成技术摘要",
+  );
+  assert.equal(
+    plainSummaryOf("  报告读错了代码，\n这条我不认  ", "summary", "x"),
+    "报告读错了代码， 这条我不认",
+    "摘要压成一行：它要摆在界面首屏当一行结论，顺手堵掉「在摘要栏里塞一份小报告」",
+  );
+  assert.equal(plainSummaryOf("摘".repeat(900), "summary", "x").length, MAX_PLAIN_SUMMARY_LEN,
+    "超长摘要截到上限：200 字塞不进路径行号和测试条数，限额本身就是「说人话」这条规范");
   assert.throws(() => disputeReasonOf("   "), /必须写明理由/, "空理由的驳回必须被拒");
   assert.equal(disputeReasonOf("  报告读错了行号  "), "报告读错了行号", "理由两端空白要去掉");
   assert.throws(() => disputeResolutionOf("passed"), /只能是 upheld/, "裁定只有两种");
@@ -108,35 +129,40 @@ try {
 
   // ── ① 驳回的门禁 ──
   const noTurn = await seedStoppedReview("d-no-turn");
-  await rejects(() => disputeFreeReview("d-no-turn", "不成立"), "没有正在进行的执行回合",
+  await rejects(() => disputeFreeReview("d-no-turn", { summary: "我不认这条", reason: "不成立", deferReason: null }), "没有正在进行的执行回合",
     "没有回合在跑时的驳回必须拒收（迟到/误投的调用不落账）");
   assert.equal((await roundRow(noTurn.roundId)).disputeReason, null, "被拒的驳回不许落库");
 
   await seedStoppedReview("d-reviewer-turn");
   assert.equal(claimTurn("d-reviewer-turn", "reviewer"), true);
-  await rejects(() => disputeFreeReview("d-reviewer-turn", "我自己不认自己"), "审查回合不能驳回自己的结论",
+  await rejects(() => disputeFreeReview("d-reviewer-turn", { summary: "我不认", reason: "我自己不认自己", deferReason: null }), "审查回合不能驳回自己的结论",
     "审查旁路回合不能替执行者驳回");
 
   const passed = await seedStoppedReview("d-passed", { conclusion: "verified", runStatus: "passed" });
   assert.equal(claimTurn("d-passed", "single"), true);
-  await rejects(() => disputeFreeReview("d-passed", "这条我不认"), "没有停在未通过状态",
+  await rejects(() => disputeFreeReview("d-passed", { summary: "我不认", reason: "这条我不认", deferReason: null }), "没有停在未通过状态",
     "通过的审查没有可驳回的意见");
   assert.equal((await roundRow(passed.roundId)).disputeReason, null, "通过轮不许被写上驳回");
 
   // ── ② 驳回落账 + 自动复审预约撤销 ──
   const auto = await seedStoppedReview("d-auto", { reservation: { runId: "d-auto-run" } });
   assert.equal(claimTurn("d-auto", "single"), true);
-  const disputed = await disputeFreeReview("d-auto", disputeReasonOf("  报告说的第 3 行是生成代码，不在本次改动里  "));
+  const disputed = await disputeFreeReview("d-auto", disputeInputOf({
+    summary: "  报告挑的那一行是生成出来的，\n不是我写的，这条我不认。  ",
+    reason: "  报告说的第 3 行是生成代码，不在本次改动里  ",
+  }));
   assert.equal(disputed.round, 1, "驳回回报的是被驳的那一轮");
   const autoRound = await roundRow(auto.roundId);
   assert.equal(autoRound.disputeReason, "报告说的第 3 行是生成代码，不在本次改动里", "驳回理由落库且去空白");
+  assert.equal(autoRound.disputeSummary, "报告挑的那一行是生成出来的， 不是我写的，这条我不认。",
+    "那一句人话也要落库：裁定屏的第一行字、时间线旁注都读它");
   assert.ok(autoRound.disputeAt, "驳回时间要落库");
   assert.equal(autoRound.disputeResolution, null, "刚驳回时还没有裁定");
   const autoReservation = (await db.select().from(freeWorkflowStates)
     .where(eq(freeWorkflowStates.taskId, "d-auto"))).at(0);
   assert.equal(autoReservation?.reviewArmed, false,
     "驳回必须撤掉自动复审预约：没改代码就复审只会拿到同一份报告，还会把「等你裁定」冲掉");
-  await rejects(() => disputeFreeReview("d-auto", "再说一遍"), "已经驳回过了", "一轮意见只能驳一次");
+  await rejects(() => disputeFreeReview("d-auto", { summary: "再说一次", reason: "再说一遍", deferReason: null }), "已经驳回过了", "一轮意见只能驳一次");
 
   const open = await openDisputeOf("d-auto");
   assert.equal(open?.round.id, auto.roundId, "openDisputeOf 认得这条待裁定的驳回");
@@ -144,7 +170,7 @@ try {
   // 用户自己手存的预约（runId 空）是他明确的意思，驳回一个字都不能动。
   const manual = await seedStoppedReview("d-manual", { reservation: { runId: null } });
   assert.equal(claimTurn("d-manual", "single"), true);
-  await disputeFreeReview("d-manual", "这条意见看错了文件");
+  await disputeFreeReview("d-manual", { summary: "它看错了文件", reason: "这条意见看错了文件", deferReason: null });
   const manualReservation = (await db.select().from(freeWorkflowStates)
     .where(eq(freeWorkflowStates.taskId, "d-manual"))).at(0);
   assert.equal(manualReservation?.reviewArmed, true, "用户手存的预约不因驳回被撤");
@@ -155,6 +181,8 @@ try {
   const stateRound = state.reviews.find((run) => run.id === auto.runId)?.rounds.at(0);
   assert.equal(stateRound?.dispute?.reason, "报告说的第 3 行是生成代码，不在本次改动里",
     "状态快照必须带上驳回理由");
+  assert.equal(stateRound?.dispute?.summary, "报告挑的那一行是生成出来的， 不是我写的，这条我不认。",
+    "快照必须带上那一句人话：界面首屏摆的是它，不是那几千字依据");
   assert.equal(stateRound?.dispute?.resolution, null, "快照里的裁定此刻为空");
   assert.deepEqual(stateRound?.dispute?.debates, [], "还没开过辩论");
 
@@ -198,8 +226,13 @@ try {
   assert.equal((await db.select().from(freeReviewDebateTurns)
     .where(eq(freeReviewDebateTurns.debateId, debate!.id))).length, 1, "起手只排一段");
 
-  await rejects(() => submitDebateStatement("d-debate", { statement: "  " }), "发言不能为空", "空发言拒收");
+  await rejects(() => submitDebateStatement("d-debate", { statement: "  ", summary: "随便" }),
+    "发言不能为空", "空发言拒收");
+  // 发言的那一句人话同样必填：七段加起来上万字，用户开辩论是为了裁定，不是为了读完。
+  await rejects(() => submitDebateStatement("d-debate", { statement: "有话说" }), "summary 必填",
+    "没写人话摘要的发言必须被拒");
   const first = await submitDebateStatement("d-debate", {
+    summary: "我还是认为那处少了一道空值检查。",
     statement: "报告第 2 条依据是 foo.ts:12，那一行确实没有空值检查。", verdict: "upheld",
   });
   assert.equal(first.seq, 1);
@@ -207,14 +240,14 @@ try {
   assert.equal(first.verdictIgnored, true, "非收尾段给的立场要明确告诉它被忽略了");
   assert.equal((await db.select().from(freeReviewDebates)
     .where(eq(freeReviewDebates.id, debate!.id))).at(0)?.verdict, null, "非收尾段不许写下立场");
-  await rejects(() => submitDebateStatement("d-debate", { statement: "再说一句" }), "已经交过卷",
-    "一段只能交一次卷");
+  await rejects(() => submitDebateStatement("d-debate", { statement: "再说一句", summary: "补一句" }),
+    "已经交过卷", "一段只能交一次卷");
 
   assert.equal(await settleDebateTurn("d-debate", true), true, "辩论段的结算由辩论自己收");
   const afterFirst = await activeDebateOf("d-debate");
   assert.equal(afterFirst?.currentSeq, 2, "收完第 1 段就换执行者说");
   // 身份按「这一段轮到谁」核对：现在占着的是 reviewer 回合，它不能替执行者发言。
-  await rejects(() => submitDebateStatement("d-debate", { statement: "我替执行者说" }),
+  await rejects(() => submitDebateStatement("d-debate", { statement: "我替执行者说", summary: "替它说" }),
     "轮到执行者发言", "审查回合不能冒充执行者交卷");
 
   // 那一段没人交卷（崩了 / agent 忘了调）→ 整场辩论中止，驳回仍挂着等裁定。
@@ -247,9 +280,10 @@ try {
       startedAt: at, endedAt: seq === 3 ? null : at,
     });
   }
-  await rejects(() => submitDebateStatement("d-closing", { statement: "就这样吧" }), "必须给出 verdict",
-    "收尾段必须表明立场");
+  await rejects(() => submitDebateStatement("d-closing", { statement: "就这样吧", summary: "收尾" }),
+    "必须给出 verdict", "收尾段必须表明立场");
   const final = await submitDebateStatement("d-closing", {
+    summary: "第 1 条我撤回，其余两条我坚持，复现步骤我补齐了。",
     statement: "复现步骤我补在报告末尾了，但第 1 条我撤回。", verdict: "partial",
   });
   assert.equal(final.final, true);
@@ -268,6 +302,10 @@ try {
   assert.equal(views[0]?.currentSide, null, "结束的辩论没有「正在发言的一方」");
   assert.equal(views[0]?.turns.at(0)?.side, "reviewer");
   assert.equal(views[0]?.turns.at(1)?.side, "executor");
+  assert.equal(views[0]?.turns.at(2)?.summary, "第 1 条我撤回，其余两条我坚持，复现步骤我补齐了。",
+    "每段那一句人话要进回放：界面逐段摆它，完整发言折在下面");
+  assert.equal(views[0]?.turns.at(0)?.summary, null,
+    "加这个字段之前落的老发言没有摘要，回放要如实给 null（界面据此把正文摊开）");
 
   // 辩论进行中不许裁定（否则用户按下的那一刻，下一段还在往里写）。
   const midway = await seedStoppedReview("d-midway");
@@ -405,6 +443,83 @@ try {
   // 用户已经裁定「维持审查意见、接着改」那一趟不给这条出路——这是现有语义，顺带钉住，
   // 免得上面那圈断言被人改成「所有修复提示都得带三种形态」。
   assert.ok(!bare.includes(DEFER_BOUNDARY_CRITERION), "裁定维持原意见后不再提供转出口径");
+
+  // ── ⑧ 「说人话」这条规范同样有两个运行时表面，和判据一样只能靠措辞钉 ──
+  //
+  // 执行者写出来的默认稿是给审查者看的辩护书；要它多写一句人话，只有**交接提示**和
+  // **MCP 工具说明**两处能开口，而执行者两边都读得到。少一处就等于这一句可有可无
+  //（用户 2026-10-20：「让用户裁定时要说人话，现在一大篇文字都看不懂」）。
+  const replyConfig = await (async () => {
+    const { registerTaskTurnTools } = await import("../../mcp/src/tools/task-turn.js");
+    const registered = new Map<string, { description?: string; inputSchema?: Record<string, { description?: string }> }>();
+    registerTaskTurnTools({
+      registerTool(name: string, configuration: never) { registered.set(name, configuration); },
+    } as never);
+    return registered.get("debate_reply")!;
+  })();
+  for (const [source, text] of [
+    ["自动修复交接里的驳回出路", await freeRepairPrompt("d-closing", closingRun)],
+    ["dispute_review 工具说明", toolConfig.description ?? ""],
+    ["dispute_review 的 summary 字段说明", toolConfig.inputSchema?.summary?.description ?? ""],
+    ["debate_reply 工具说明", replyConfig.description ?? ""],
+    ["debate_reply 的 summary 字段说明", replyConfig.inputSchema?.summary?.description ?? ""],
+  ] as const) {
+    assert.ok(text.includes(PLAIN_SUMMARY_GUIDE),
+      `${source} 必须原样带上「写给用户的那一句话」该怎么写——两处各写一份必然漂成两套规范`);
+  }
+  // 辩论每一段的开场白也要带（审查者那几段同样是给用户看的）。
+  const debateRow = (await db.select().from(freeReviewDebates)
+    .where(eq(freeReviewDebates.id, "closing-debate"))).at(0)!;
+  const debateTurnRow = (await db.select().from(freeReviewDebateTurns)
+    .where(eq(freeReviewDebateTurns.id, "closing-turn-1"))).at(0)!;
+  const { debatePrompt } = await import("../src/free-review-prompts.js");
+  const segmentPrompt = debatePrompt({
+    task: (await db.select().from(tasks).where(eq(tasks.id, "d-closing"))).at(0)!,
+    run: closingRun, debate: debateRow, turn: debateTurnRow,
+    disputeReason: "这条意见的依据不可复现", previous: [], repoPath: root,
+  });
+  assert.ok(segmentPrompt.includes(PLAIN_SUMMARY_GUIDE), "辩论每一段的开场白也要带上那份写法规范");
+  assert.ok(segmentPrompt.includes("summary"), "开场白里的调用示例要把 summary 摆出来");
+
+  // 发给双方的那份「执行者到底说了什么」必须三段都带。只取 disputeReason 的话，「只提
+  // 转出」那种形态（话全在 deferReason 里）会把 null 发出去，审查者对着一条空驳回答辩。
+  const deferOnlyRound = {
+    disputeSummary: "这两条我认，但该另开任务做。",
+    disputeReason: null,
+    disputeDeferReason: "第 2、3 条都是上一轮照意见改出来的。",
+  } as never;
+  const brief = disputeBriefOf(deferOnlyRound);
+  assert.ok(!brief.includes("null"), "只提转出时不许把 null 当成驳回正文发给双方");
+  assert.ok(brief.includes("第 2、3 条都是上一轮照意见改出来的。"), "转出那一段也是「它说过的话」，必须带上");
+  assert.ok(brief.includes("这两条我认，但该另开任务做。"), "那一句人话同样要带：它是双方对齐争点最省力的一句");
+  const bothBrief = disputeBriefOf({
+    disputeSummary: "一条不认，一条该另开任务。", disputeReason: "第 1 条读错了行号",
+    disputeDeferReason: "第 4 条越界",
+  } as never);
+  assert.ok(bothBrief.includes("第 1 条读错了行号") && bothBrief.includes("第 4 条越界"),
+    "两段都给时一段都不许掉");
+
+  // ── ⑨ 时间线旁注：拍板前最常先看到的那一眼 ──
+  const note = disputeTimelineNote({
+    round: 2, reviewerName: "顶级审查", summary: "报告挑的那一行是生成出来的，这条我不认。",
+    hasReason: true, hasDefer: false, canceledAuto: true,
+  });
+  assert.ok(note.includes("报告挑的那一行是生成出来的，这条我不认。"),
+    "旁注第二行放的是那一句人话，不是正文前 60 字（截出来的多半是「已修复并提交 ceed925…」那种噪音）");
+  assert.ok(note.includes("执行者不认这一轮审查意见"), "第一行先说清谁不认谁");
+  assert.ok(/现在由你裁定[：:]/.test(note),
+    "「现在由你裁定：」这个前缀不能改字：前端靠它在时间线里认出这一行并挂上「去裁定」");
+  assert.ok(note.includes("让它接着改") && note.includes("这一轮不用改了"),
+    "旁注要把能点的几档说出来，别只说「去裁定」");
+  assert.ok(!note.includes("把那几条转成独立任务"), "没提转出就不许列那一档——点不到的选项是假承诺");
+  assert.ok(note.includes("自动复审已取消"), "自动复审被撤这件事必须说，否则用户在等一轮永远不会来的复审");
+  const deferNote = disputeTimelineNote({
+    round: 3, reviewerName: "顶级审查", summary: "这两条我认，但它们不在这个任务的范围里。",
+    hasReason: false, hasDefer: true, canceledAuto: false,
+  });
+  assert.ok(deferNote.includes("认可这一轮意见，但说该另开一个任务去改"),
+    "只提转出时第一行不能写成「驳回了意见」：它说的恰恰是「报告是对的，只是不该在这儿修」");
+  assert.ok(deferNote.includes("把那几条转成独立任务"), "提了转出就要把那一档列出来");
 
   console.log("free review dispute ok");} catch (error) {
   failure = error;

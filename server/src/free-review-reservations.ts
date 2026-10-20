@@ -51,6 +51,25 @@ export async function noteReservationStillWaiting(taskId: string, reason: string
   return true;
 }
 
+/**
+ * 预约审查此刻在等什么 —— 一句人话,写进时间线。
+ *
+ * 三种等待在用户眼里完全不同:等他自己答复、agent 停在检查点等某个外部条件、以及
+ * **挂着哨兵在等一件慢事**。最后一种是 agent 主动安排的,也最容易被误读成「卡住了」。
+ */
+export async function reservationWaitReason(
+  task: { id: string; question?: string | null; resumePrompt?: string | null },
+): Promise<string> {
+  const { liveMonitorSummary } = await import("./monitor-session.js");
+  const live = await liveMonitorSummary(task.id);
+  if (live.count > 0) {
+    const what = live.labels.length ? `（${live.labels.join("、")}）` : "";
+    return `这一轮挂着 ${live.count} 个哨兵在盯着${what}，等它把结果带回来、任务续跑结束后再审`;
+  }
+  if (task.question) return "任务正在等你答复";
+  return "任务停在检查点等续跑";
+}
+
 /** 读一条预约槽的完整快照（含版本令牌）。 */
 export async function readFreeReviewReservation(taskId: string): Promise<ReservedFreeReview> {
   return (await db.select({

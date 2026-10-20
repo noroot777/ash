@@ -16,6 +16,7 @@ import { inspectPortCommand, inspectProcessSync, killPidsCommand, listenerPidsSy
 // 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
 import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
 import { recordListeningPort } from "./listening-port.js";
+import { guardMonitorHook } from "./monitor-hook-failsafe.js";
 import { mountPreviewProxy, attachPreviewUpgrades } from "./preview-proxy.js";
 import { mountPreviewOpenRoutes } from "./preview-access.js";
 
@@ -160,8 +161,36 @@ async function initializeServer() {
       console.error("[ash] 哨兵接回失败（不影响启动）:", err);
       return null;
     });
-    if (monitorRecovery?.attached || monitorRecovery?.lost) {
-      console.log(`[ash] 哨兵：接回 ${monitorRecovery.attached} 个，${monitorRecovery.lost} 个进程已不在`);
+    if (monitorRecovery?.attached || monitorRecovery?.lost || monitorRecovery?.pending
+      || monitorRecovery?.failed) {
+      // `pending` 单独说一句:那几条**既没接回来、也没判没**(pid 还空着、这一刻又认不回来),
+      // 行原样留着等下一次问 —— 并进任何一边都是撒谎(第 19 轮审查 F2)。
+      console.log(
+        `[ash] 哨兵：接回 ${monitorRecovery.attached} 个，${monitorRecovery.lost} 个进程已不在`
+        + (monitorRecovery.pending ? `，${monitorRecovery.pending} 个这一刻认不回身份（创建意图留着）` : "")
+        // `failed` 也要报出来:那几条的**监督已经立好**(日志照收、到点照收),欠的只是接管
+        // 那一趟结论,已经排了有界重试(第 22 轮审查 F1-A)。不说一句就只有 server 日志里
+        // 那行 error 知道这件事。
+        + (monitorRecovery.failed ? `，${monitorRecovery.failed} 个这一次没接管成功（已排重试，日志和期限照旧在盯）` : ""),
+      );
+    }
+    // 「已停止」不等于「已退出」:上一辈子有人把它停了、信号发出去了、命令却没死,而那一版
+    // 的停止路径没留下责任 —— 接回只看 running、债务清扫只看账本,中间漏的就是这一类
+    // (第 5 轮审查 F1)。**排在债务清扫之前**:这里新记下的责任由它在同一次开机里接着推。
+    const { reclaimUnconfirmedStops } = await import("./monitor-reclaim.js");
+    await reclaimUnconfirmedStops().catch((err) => {
+      console.error("[ash] 「已停止但没确认退出」的哨兵重收失败（不影响启动）:", err);
+      return 0;
+    });
+    // 上一个 server 没能收掉的哨兵进程:停止失败时留下的**回收责任**,现在是最后一次机会
+    // (它们的任务多半已经被删掉了,`monitors` 里也没有行,所以接回那一步看不见它们)。
+    const { sweepMonitorReclaimDebts } = await import("./monitor-reclaim-debts.js");
+    const debts = await sweepMonitorReclaimDebts().catch((err) => {
+      console.error("[ash] 哨兵回收责任清扫失败（不影响启动）:", err);
+      return null;
+    });
+    if (debts?.settled || debts?.left) {
+      console.log(`[ash] 哨兵回收责任：收档 ${debts.settled} 笔，仍收不掉 ${debts.left} 笔`);
     }
     // claude 自带 Monitor 的投影没有 pid，上面那一步按 kind 整批跳过了它们，得单独判一次。
     // **必须排在 reattachRunningTasks 之后**：它按「来源 agent 进程还在不在」裁决，而那些
@@ -246,7 +275,10 @@ const app = new Hono();
 // 预览资源凭证在已认证的任务入口签发；资源侧再核对有效期、运行代和项目权限。
 mountPreviewProxy(app);
 // 其它路由统一经过身份闸；公开接口在 auth/middleware.ts 中列出。
-app.use("*", authGate());
+// 身份闸被 `guardMonitorHook` 包着：内置 Monitor 改道 hook 那条路径上，**身份闸自己**抛的
+// 异常（它要查库）也必须收口成一个明确的 deny —— 非 2xx 在 http hook 的契约里等于放行，
+// 而放过去的内置 Monitor 照样活不过这一轮（monitor-hook-failsafe.ts）。
+app.use("*", guardMonitorHook(authGate()));
 // 认了身份之后紧接着认资源:`/api/tasks/:id/…` 这类路径一律先过可见性。逐条路由自己
 // 查是漏不完的(那条轴上的端点分散在十几个文件里且还在长),所以做成横切的一道。
 app.use("/api/*", resourceGate());

@@ -144,7 +144,7 @@ try {
 
     assert.ok(claimTurn("t1", "dispatch"), "派活方先占位");
     const reported: string[] = [];
-    continueWhenIdle("t1", "开始审查", { sessionRole: "reviewer" }, (msg) => { reported.push(msg); });
+    continueWhenIdle("t1", "开始审查", { turnSource: { role: "reviewer", review: { run: "freeze-run", round: 1 } } }, (msg) => { reported.push(msg); });
     await pauseGroup("g"); // 用户此刻点了「暂停分组」
     releaseTurn("t1");     // 派活方的 finally：交棒给真回合
     for (let i = 0; i < 200 && reported.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
@@ -171,7 +171,7 @@ try {
     });
     assert.ok(claimTurn("t1", "dispatch"));
     const reported2: string[] = [];
-    continueWhenIdle("t1", "开始审查", { sessionRole: "reviewer" }, (msg) => { reported2.push(msg); });
+    continueWhenIdle("t1", "开始审查", { turnSource: { role: "reviewer", review: { run: "freeze-run", round: 1 } } }, (msg) => { reported2.push(msg); });
     releaseTurn("t1");
     for (let i = 0; i < 200 && errs.length === 0 && reported2.length === 0; i++) {
       await new Promise((r) => setTimeout(r, 10));

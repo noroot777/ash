@@ -14,7 +14,8 @@ import {
   GitBranch,
   Warning,
 } from "@phosphor-icons/react";
-import type { FileEntry } from "../lib/api.ts";
+import { api, type FileEntry } from "../lib/api.ts";
+import { OpenInIdeMenu } from "./OpenInIdeMenu.tsx";
 import { formatSize, isImageName, ROOT_SOURCE_LABEL, siblingReel, useFileTree } from "./fileModel.ts";
 import { KIND_BADGE, KIND_LABEL, type ScmDiffTarget } from "../scm/scmModel.ts";
 import { fileGitDecorations, type FileGitDecoration } from "./fileGitDecorations.ts";
@@ -157,6 +158,9 @@ function Level({
  * 文件夹点一下仍然只是展开/折叠。要看它里面有多少东西、或者把它整个删掉，走行尾那颗
  * 「打开文件夹详情」——删除入口只有中间视图一处，树里不放危险按钮（行高 24px，紧挨着
  * 展开箭头，那是误点重灾区）。
+ *
+ * 头部那两颗「交给本机打开」只对**工作目录本身**：在文件管理器里打开它、用某个 IDE 打开
+ * 它。子目录的同类入口在中间栏的文件夹详情里——树里一行 24px，放不下第三颗按钮。
  */
 export function FileTreeInspector({
   taskId,
@@ -164,6 +168,7 @@ export function FileTreeInspector({
   onOpenFile,
   onOpenFolder,
   onOpenDiff,
+  notify,
 }: {
   taskId: string;
   activePath: string | null;
@@ -172,6 +177,8 @@ export function FileTreeInspector({
   /** 在中间栏摊开文件夹详情。没接就不显示行尾那颗按钮。 */
   onOpenFolder?: (path: string) => void;
   onOpenDiff?: (target: ScmDiffTarget) => void;
+  /** 「交给本机打开」那两颗按钮的回执（成功说打开了哪个，失败把原话端出来）。 */
+  notify: (message: string) => void;
 }) {
   const tree = useFileTree(taskId);
   const [showIgnored, setShowIgnored] = useState(false);
@@ -188,6 +195,17 @@ export function FileTreeInspector({
     }
   };
 
+  // 「在本机打开这个工作目录」。路径传空串就是根——服务端那边 `resolveTarget("")` 解析
+  // 出来的正是工作目录本身，前端不用（也不该）自己拼绝对路径。
+  const openInFileManager = async () => {
+    try {
+      await api.openTaskFile(taskId, "", null);
+      notify("已在文件管理器中打开工作目录");
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
   return (
     <div className="file-tree" aria-label="工作目录文件">
       <header className="file-tree__head" data-git-kind={decorations.get("")?.kind}>
@@ -198,6 +216,16 @@ export function FileTreeInspector({
           </b>
           <small>{tree.root ? `${rootLabel} · ${tree.root.path}` : "正在解析工作目录…"}</small>
         </div>
+        <button
+          type="button"
+          className="file-tree__action"
+          aria-label="在文件管理器中打开工作目录"
+          disabled={!tree.root}
+          onClick={() => void openInFileManager()}
+        >
+          <FolderOpen size={13} aria-hidden="true" />
+        </button>
+        <OpenInIdeMenu taskId={taskId} path="" notify={notify} variant="icon" />
         <button
           type="button"
           className="file-tree__action"

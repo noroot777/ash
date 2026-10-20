@@ -47,6 +47,18 @@ export type { ArtifactKind };
 export type ArtifactOrigin = "working" | "committed" | "ignored";
 /** 归属是怎么成立的：独占目录=确定；共享目录=按运行区间认出来的**候选**。 */
 export type ArtifactScopeKind = "exclusive" | "shared";
+/**
+ * **这一条**的归属有多硬。
+ *
+ * `exact` = 有确定证据：目录独占、任务分支上的提交动过它、或者 mtime 落在一段**精确**区间里。
+ * `approx` = 只落在**估出来**的区间里（会话寿命、没收尾的回合、宽到下一次起跑的那种），所以
+ * 它只是候选,可能是别人在同一个目录里做的。
+ *
+ * 为什么要逐条给:服务端本来就按条算出了这一档（`exactProof`）,却只在页脚汇总一句「有 N 个是
+ * 按估出来的时间段认的」——用户看得见数目,看不出**是哪几个**,于是整张清单一起贬值,面板就只能
+ * 当个列表看（本轮审查第 5 条）。这一列**不参与归属判定**,它只是把已经算出来的强弱如实带到界面。
+ */
+export type ArtifactConfidence = "exact" | "approx";
 
 export interface TaskArtifact {
   /** 相对工作区根、posix 分隔符——跟文件树、文件查看器用的是同一个主键。 */
@@ -57,6 +69,8 @@ export interface TaskArtifact {
   size: number;
   mtime: string | null;
   origin: ArtifactOrigin;
+  /** 这一条是确定的还是候选（见 `ArtifactConfidence`）。 */
+  confidence: ArtifactConfidence;
 }
 
 export interface TaskArtifactsResult {
@@ -240,7 +254,13 @@ export async function readTaskArtifacts(
     const hit = exclusive ? "exact" : windowHit(mtimeMs, windows);
     const exactProof = exclusive || proven.has(path) || hit === "exact";
     if (!exactProof && !committedProof && !hit) continue;
-    if (!exactProof) guessed += 1;
+    // 逐条的强弱就是**上面那个 `exactProof`**,不是另起一套判据:页脚那句「有 N 个是按估出来
+    // 的时间段认的」和每一条的标记从此同源,数目与标出来的条数恒等。
+    //
+    // 注意 `committedProof` 不够硬:它只说「有个提交动过这条路径」,而那个提交可能是从**估出来
+    // 的**区间里捞的（`proven` 才是任务分支差异那种确定证据）—— 那种条目照 candidate 算。
+    const confidence: ArtifactConfidence = exactProof ? "exact" : "approx";
+    if (confidence === "approx") guessed += 1;
     // 标签说的是**它现在是什么状态**：有未提交的改动就显示工作区改动（哪怕归属是提交证明
     // 下来的），否则按最强的那条证据。
     const origin: ArtifactOrigin = origins.has("working")
@@ -254,6 +274,7 @@ export async function readTaskArtifacts(
       size: info.size,
       mtime: mtimeMs === null ? null : new Date(mtimeMs).toISOString(),
       origin,
+      confidence,
     });
   }
 

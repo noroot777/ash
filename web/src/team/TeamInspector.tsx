@@ -147,7 +147,7 @@ function TeamInfoPanel({ task, workers, sessions }: Pick<TeamInspectorContext, "
             label="worktree"
             value={latestSession?.worktreePath || (task.useWorktree ? "尚未记录" : "共享项目目录")}
           />
-          {task.worktreeBase && <ConfigValue label="合入目标" value={task.worktreeBase} />}
+          {task.useWorktree && <ConfigValue label="合入目标" value={task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "未确定（验收时解析）"} />}
         </dl>
         {latestSession && <MessageFooter session={latestSession} />}
         <TaskTimeMeta task={task} />
@@ -231,6 +231,7 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
         onOpenFile={context.onOpenFile}
         onOpenFolder={context.onOpenFolder}
         onOpenDiff={context.onOpenDiff}
+        notify={context.notify}
       />
     ),
   },

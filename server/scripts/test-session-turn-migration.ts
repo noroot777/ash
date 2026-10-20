@@ -106,7 +106,34 @@ try {
   assert.equal(Number(fresh.turns_base), 0, "它没有升级前历史");
   assert.equal(Number(fresh.turns_base_approx), 0, "也不该被标成「算不准」");
 
-  console.log("✓ turn migration: ended_at 放开、重复回合去重、唯一索引建上、旧计数（含非 NULL base 的中间版本）收成可披露的下界、本版计数不被回填动到、幂等");
+  // ── 回填**失败**那条出口：不许把「没跑成」留成看着像跑成了 ──────────────────────
+  // 整条迁移自己 catch 掉一切只 warn（抛出去 = 整台 ash 起不来）,所以失败很安静。于是契约
+  // 只能架在库里那件**可核验的事实**上：失败之后那些行的 `turns_base_approx` 还是 NULL,
+  // 读端据此照「升级没跑完、缺没缺无从得知」披露并放宽区间（见 task-artifact-windows.ts 的
+  // `migrated` 判据,第 1 轮审查 F3）。下次启动重试要能把它补上。
+  await dbClient.execute(
+    `INSERT INTO sessions (id, task_id, started_at, turns_started)
+       VALUES ('s5','t5','2026-10-05T00:00:00.000Z', 2)`,
+  );
+  await dbClient.execute(
+    `INSERT INTO session_turns VALUES ('h','s5','t5','/w','2026-10-05T00:00:00.000Z','2026-10-05T00:10:00.000Z')`,
+  );
+  await dbClient.executeMultiple(
+    `CREATE TRIGGER block_backfill BEFORE UPDATE OF turns_base_approx ON sessions
+       WHEN NEW.id='s5' BEGIN SELECT RAISE(ABORT,'transient migration failure'); END;`,
+  );
+  await ensureSchema(); // 这一轮回填会整条回滚,迁移只 warn
+  const stalled = await sessionRow("s5");
+  assert.equal(stalled.turns_base_approx, null, "回填失败就得留着 NULL —— 它是读端唯一能核验的「没确认」证据");
+  assert.equal(Number(stalled.turns_started), 2, "也不许留半截:旧计数还在库里,但读端不拿它对账");
+  await dbClient.executeMultiple("DROP TRIGGER block_backfill;");
+  await ensureSchema(); // 故障撤掉,下一次启动重试
+  const healed = await sessionRow("s5");
+  assert.equal(Number(healed.turns_base_approx), 1, "故障没了就该补上（迁移每次启动都重试一遍）");
+  assert.equal(healed.turns_started, null, "补上之后旧口径的计数照常退出对账");
+  assert.equal(Number(healed.turns_base), 2, "下界取旧计数和现有行数里大的那个");
+
+  console.log("✓ turn migration: ended_at 放开、重复回合去重、唯一索引建上、旧计数（含非 NULL base 的中间版本）收成可披露的下界、本版计数不被回填动到、幂等、回填失败留下可核验的 NULL 且重启能补上");
 } finally {
   await dbClient.close();
   await releaseTmpDb();

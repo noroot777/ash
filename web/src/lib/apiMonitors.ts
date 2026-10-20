@@ -3,7 +3,7 @@
 // 那份已经顶到单文件 700 行上限。调用点仍然只写 `api.taskMonitors(...)`。
 import { id, json, request } from "./apiClient.ts";
 import { normalizeMonitorDto } from "@ash/shared/monitor";
-import type { MonitorRecovery, TaskMonitor } from "@ash/shared/monitor";
+import type { MonitorRecovery, MonitorWakeTarget, TaskMonitor } from "@ash/shared/monitor";
 
 export const monitorApi = {
   taskMonitors: (taskId: string): Promise<TaskMonitor[]> =>
@@ -11,9 +11,10 @@ export const monitorApi = {
   /** 还有没确认落地的监听事实吗（面板据此区分「还没读完」和「确实没有」）。 */
   monitorRecovery: (taskId: string): Promise<MonitorRecovery> =>
     request(`/tasks/${id(taskId)}/monitors/recovery`),
+  /** `wake` = 这个哨兵醒来叫谁。只有服务端说「说不清叫谁」(`needsWakeTarget`)时才需要带。 */
   startMonitor: (
     taskId: string,
-    body: { command: string; description?: string; timeoutMs?: number },
+    body: { command: string; description?: string; timeoutMs?: number; wake?: MonitorWakeTarget },
   ): Promise<{ monitor: TaskMonitor; notice?: string }> =>
     request(`/tasks/${id(taskId)}/monitors`, json("POST", body)),
   stopMonitor: (monitorId: string, reason?: string): Promise<{ monitor: TaskMonitor | null }> =>

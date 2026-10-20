@@ -5,6 +5,7 @@ import * as schema from "./schema.js";
 import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
 import { runDataMigrations } from "./migrations.js";
 import { ensureChatSchema } from "./schema-chat.js";
+import { ensureFreeWorkflowSchema } from "./schema-free-workflow.js";
 import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 
 const dbFile = resolveAshDbFile();
@@ -122,7 +123,8 @@ export async function ensureSchema() {
       attachments TEXT NOT NULL DEFAULT '[]', agent TEXT,
       executor_id TEXT, model TEXT, mode TEXT NOT NULL DEFAULT 'timed', send_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT,
-      delivering_since TEXT
+      delivering_since TEXT, checkpoint_taken TEXT,
+      review_run TEXT, review_round INTEGER
     );
     CREATE TABLE IF NOT EXISTS session_turns (
       id TEXT PRIMARY KEY,
@@ -150,9 +152,20 @@ export async function ensureSchema() {
       lifetime_evidence TEXT, source_pid INTEGER, source_pid_started_at TEXT,
       start_evidence TEXT, timeout_ms INTEGER,
       start_anchor_width_ms INTEGER, tool_use_id TEXT,
-      source_run TEXT, start_low_at TEXT
+      source_run TEXT, start_low_at TEXT, source_role TEXT,
+      source_review_run TEXT, source_review_round INTEGER,
+      unit_token TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
+    CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (
+      monitor_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
+      pid INTEGER NOT NULL, pid_started_at TEXT, spawn_anchor_ms INTEGER,
+      command TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
+      last_error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, last_attempt_at TEXT,
+      unit_token TEXT, closed_at TEXT, closed_note TEXT,
+      identity_disproved_at TEXT
+    );
     CREATE TABLE IF NOT EXISTS monitor_pending_calls (
       task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
       command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
@@ -202,57 +215,6 @@ export async function ensureSchema() {
       executor_id TEXT, model TEXT, reasoning_effort TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS free_workflow_states (
-      task_id TEXT PRIMARY KEY, selected_reviewer_id TEXT,
-      review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
-      review_retry_limit INTEGER, review_note TEXT, review_run_id TEXT,
-      review_agent_type TEXT, review_executor_id TEXT,
-      review_model TEXT, review_reasoning_effort TEXT,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS free_workflow_events (
-      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
-      source TEXT NOT NULL, detail TEXT, occurred_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS free_workflow_events_task_idx
-      ON free_workflow_events (task_id, occurred_at);
-    CREATE TABLE IF NOT EXISTS free_review_runs (
-      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, reviewer_id TEXT,
-      reviewer_name TEXT NOT NULL, agent_type TEXT NOT NULL, executor_id TEXT,
-      model TEXT, reasoning_effort TEXT, check_mode TEXT NOT NULL, note TEXT,
-      target_kind TEXT NOT NULL DEFAULT 'workspace', target_branch TEXT,
-      target_base_commit TEXT, target_commit TEXT, repair_task_id TEXT,
-      retry_limit INTEGER NOT NULL DEFAULT 1, current_round INTEGER NOT NULL DEFAULT 1,
-      status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
-    );
-    CREATE INDEX IF NOT EXISTS free_review_runs_task_idx ON free_review_runs (task_id, created_at);
-    CREATE TABLE IF NOT EXISTS free_review_rounds (
-      id TEXT PRIMARY KEY, run_id TEXT NOT NULL, round INTEGER NOT NULL,
-      status TEXT NOT NULL, conclusion TEXT, reviewed_commit TEXT,
-      dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
-      dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
-      dispute_deferred_task_id TEXT,
-      started_at TEXT NOT NULL, ended_at TEXT
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
-      ON free_review_rounds (run_id, round);
-    CREATE TABLE IF NOT EXISTS free_review_debates (
-      id TEXT PRIMARY KEY, round_id TEXT NOT NULL, task_id TEXT NOT NULL,
-      run_id TEXT NOT NULL, round INTEGER NOT NULL, status TEXT NOT NULL,
-      exchanges INTEGER NOT NULL DEFAULT 1, current_seq INTEGER NOT NULL DEFAULT 1,
-      verdict TEXT, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
-    );
-    CREATE INDEX IF NOT EXISTS free_review_debates_round_idx
-      ON free_review_debates (round_id, started_at);
-    CREATE INDEX IF NOT EXISTS free_review_debates_task_idx
-      ON free_review_debates (task_id, started_at);
-    CREATE TABLE IF NOT EXISTS free_review_debate_turns (
-      id TEXT PRIMARY KEY, debate_id TEXT NOT NULL, seq INTEGER NOT NULL,
-      side TEXT NOT NULL, statement TEXT, status TEXT NOT NULL,
-      started_at TEXT NOT NULL, ended_at TEXT
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS free_review_debate_turns_seq_idx
-      ON free_review_debate_turns (debate_id, seq);
     CREATE TABLE IF NOT EXISTS project_git_credentials (
       project_id TEXT PRIMARY KEY, username TEXT NOT NULL,
       secret TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -342,6 +304,9 @@ export async function ensureSchema() {
     // 调用发生时那一行报的 CLI 身份。旧行 NULL = 当初没记,那时只能靠 source_run 自证来源
     // (键的重建在 migrations.ts 的 repairPendingCallKey —— SQLite 改不了主键)。
     "ALTER TABLE monitor_pending_calls ADD COLUMN cli_session_id TEXT",
+    // 身份还没补全时,把「那一刻 spawn 的」这个时间锚留在债上:哨兵行和身份边条都可能先没了,
+    // 而缺了锚,一次查询失败就被永久固化成「这条证不出身份」(第 10 轮审查 F2-B)。
+    "ALTER TABLE monitor_reclaim_debts ADD COLUMN spawn_anchor_ms INTEGER",
     "ALTER TABLE monitors ADD COLUMN native_id TEXT",
     "ALTER TABLE monitors ADD COLUMN cli_session_id TEXT",
     // 默认值是 'unknown' 而**不是** 'bounded'：加列那一刻的存量行里，claude 投影的
@@ -368,6 +333,33 @@ export async function ensureSchema() {
     // 代次结论与起点下界的持久化依据(见 schema-monitors.ts)。存量行一律 NULL。
     "ALTER TABLE monitors ADD COLUMN source_run TEXT",
     "ALTER TABLE monitors ADD COLUMN start_low_at TEXT",
+    // 起它的那条会话的角色。审查是旁路回合,跑在自己那条 reviewer 会话上 —— 少了它,
+    // 审查者挂的哨兵醒来时叫的是执行者(见 schema-monitors.ts 的 source_role)。
+    "ALTER TABLE monitors ADD COLUMN source_role TEXT",
+    // 起它的那次审查(free_review_runs.id)。角色说得出「叫审查者」,说不出「叫哪一次审查
+    // 的审查者」——而任务终态清理、事件出口、唤醒配置三处都要后者(见 schema-monitors.ts
+    // 的 source_review_run)。存量行 NULL。
+    "ALTER TABLE monitors ADD COLUMN source_review_run TEXT",
+    // 起它的是那次审查的**第几轮**。run.id 跨轮复用(nextRound 把同一个 run 的
+    // current_round 加 1、status 推回 reviewing),所以只有 runId 不是跨轮隔离证明:
+    // 第 1 轮遗留的事件会在第 2 轮被重新解释成有效输入。存量行 NULL = 只按 run 判。
+    "ALTER TABLE monitors ADD COLUMN source_review_round INTEGER",
+    // 这一次创建独有的资源记号:归属与整项退出的唯一凭证(见 schema-monitors.ts)。
+    // 存量行一律 NULL ⇒ 孤儿后代只能落「证不出」,记责任、不下刀(第 12 轮审查 F1)。
+    "ALTER TABLE monitors ADD COLUMN unit_token TEXT",
+    "ALTER TABLE monitor_reclaim_debts ADD COLUMN unit_token TEXT",
+    // 「线索追到这里为止」的戳。**不是销账**:整项退出在当前平台证不出,所以行留着只盖戳
+    // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。
+    "ALTER TABLE monitor_reclaim_debts ADD COLUMN closed_at TEXT",
+    "ALTER TABLE monitor_reclaim_debts ADD COLUMN closed_note TEXT",
+    // 「这个号已经被反证过」的戳 —— 反证不许在下一次尝试/另一个消费者/重启后退化成「未知」
+    // 再走时间锚那条弱判据(见 schema-monitors.ts 的 identity_disproved_at、第 17 轮审查 F1)。
+    // 存量行一律 NULL = 还没有过反证。
+    "ALTER TABLE monitor_reclaim_debts ADD COLUMN identity_disproved_at TEXT",
+    // 这条消息已经把任务行上那段续跑交代**接走了**,正文里带着它(见 schema.ts 的
+    // checkpoint_taken)。持久账本:取走只写在内存里的话,送达之前进程一换,那段交代
+    // 就两边都不在了(第 2 轮审查 F4)。存量行 NULL。
+    "ALTER TABLE scheduled_messages ADD COLUMN checkpoint_taken TEXT",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
@@ -487,34 +479,6 @@ export async function ensureSchema() {
     // 同一个哨兵还没送出去的事件合并进同一行（一次唤醒看完全部，而不是一行一个回合），
     // 投递时标 byBackend 让它在会话里显示成系统代写而不是用户发言。
     "ALTER TABLE scheduled_messages ADD COLUMN origin TEXT",
-    // 自由工作流预约审查：只保存一份配置，confirmed done 后复用现有派审链。
-    "ALTER TABLE free_workflow_states ADD COLUMN review_armed INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_check_mode TEXT",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_retry_limit INTEGER",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_note TEXT",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_run_id TEXT",
-    // 预约里「这次换个模型/智能水平跑」的覆盖（不改审查者配置本身）。
-    "ALTER TABLE free_workflow_states ADD COLUMN review_agent_type TEXT",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_executor_id TEXT",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_model TEXT",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_reasoning_effort TEXT",
-    "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
-    "ALTER TABLE free_review_runs ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'workspace'",
-    "ALTER TABLE free_review_runs ADD COLUMN target_branch TEXT",
-    "ALTER TABLE free_review_runs ADD COLUMN target_base_commit TEXT",
-    "ALTER TABLE free_review_runs ADD COLUMN target_commit TEXT",
-    "ALTER TABLE free_review_runs ADD COLUMN repair_task_id TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN reviewed_commit TEXT",
-    // 执行者驳回审查结论那条支线（理由 + 用户裁定）；老库补列即可，空 = 没驳回过。
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_reason TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_at TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolved_at TEXT",
-    // 第三条出路：「意见成立但越界，建议转独立任务」的理由，以及裁定后建出的那个任务。
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_defer_reason TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_deferred_task_id TEXT",
-    // 裁定时用户写给执行者的要点（三档裁定表达不了的那部分结论，多半是辩论里达成的方案）。
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution_note TEXT",
     // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
     "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",
@@ -585,6 +549,10 @@ export async function ensureSchema() {
     // 不是按任务归属人 —— 共享项目里给别人的任务排一条回复,烧的是自己的 key。
     "ALTER TABLE scheduled_messages ADD COLUMN owner_user_id TEXT",
     "ALTER TABLE scheduled_messages ADD COLUMN execution INTEGER NOT NULL DEFAULT 0",
+    // 这条消息续起来的那一轮审查(run + 轮次)。存量行为空 = 不绑任何一轮,
+    // 投递时按显式的「不绑」处理,不退回「查最新那一轮」(本轮审查 F2)。
+    "ALTER TABLE scheduled_messages ADD COLUMN review_run TEXT",
+    "ALTER TABLE scheduled_messages ADD COLUMN review_round INTEGER",
     // 这一轮实际跑在谁名下(= 注入 CLAUDE_CONFIG_DIR/CODEX_HOME 的那个人)。接力搬会话
     // 文件按它找,不按任务归属人 —— 跨人回合两者不是一回事(见 db/schema.ts 同名列)。
     "ALTER TABLE sessions ADD COLUMN run_owner_user_id TEXT",
@@ -656,6 +624,7 @@ export async function ensureSchema() {
     /* 列还不存在 */
   }
   await ensureChatSchema(client);
+  await ensureFreeWorkflowSchema(client);
   // DDL 到此为止。剩下那一半(一次性数据搬运 + 退役字段/表清理)在 `migrations.ts`。
   await runDataMigrations(client);
 }

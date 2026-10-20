@@ -258,8 +258,47 @@ export function buildWindowsCommand(template: string, absPath: string) {
  * 调用方(openers/index.ts)已经确认过 appId 出现在这个文件的探测结果里,所以这里
  * 直接查刚才那次扫描的缓存 —— 查不到就退回系统默认,不是错误。
  */
+/**
+ * 「交给系统默认」那一档的命令。**整条链路上唯一非过 cmd 不可的地方** —— `start` 是
+ * cmd 的内部命令,没有对应的可执行文件。
+ *
+ * 所以路径**不拼进命令行,只放进环境变量**。理由跟 openers/ide.ts 的 `launchPlan` 一字
+ * 不差:cmd 先做元字符解析(`&` `|` `>` `^` `(` `)`)和 `%VAR%` 展开,而 Node/libuv 的 argv
+ * quoting 不是 cmd escaping —— 不含空格和引号的参数会原样落进命令串,于是
+ * `D:\\work\\project&ver` 里的 `&ver` 就成了第二条命令,`C:\\x\\%TEMP%` 则会被展开成别的
+ * 路径。这些都是**合法的目录名**,不需要调用方提交任何可执行文件。
+ *
+ * 换成变量之后:`%VAR%` 展开是单遍的(展开出来的内容不再被当成变量语法重新扫描),两侧
+ * 的双引号让展开后的元字符留在参数里;Windows 文件名本来就不允许 `"`,没有闭合引号被
+ * 撬开的路。`/d` 跳过 AutoRun,`/s` 锁定「去掉首尾一对引号、中间原样」这条解析规则。
+ *
+ * 导出是为了让 test-openers-windows.ts 在 macOS 上也能钉住「路径不出现在命令行里」。
+ *
+ * 2026-10-20 在 Windows 真机上验过(192.168.1.187,Windows 10.0.26200 / Node 22.20),
+ * 而且**先证明探针看得见注入**才说结论——上一轮栽在探针自己有洞上:
+ *  · 自检:把 `...\f1stage\amp&ver` 当裸参数交给 `cmd /c echo`,cmd 在 `&` 处截断、
+ *    `ver` 真的执行了(stdout 里有 `Microsoft Windows [版本 ...]`)。这就是旧模板的洞。
+ *  · 旧模板 `cmd /c start "" <裸路径>` 在同一个目录上直接卡死(25s 被 kill)——截断后的
+ *    路径不存在,`start` 停在那里不回来。
+ *  · 新模板:`start "" "%ASH_OPEN_TARGET%"`,命令行里只有占位符,资源管理器开的是
+ *    `f1stage/amp&ver` 本身,没有多余命令被执行。
+ *  · `%` 那一对的对照最直白:裸路径 `...\pct%ASH_F1_X%pct` 被 cmd 展开成了
+ *    `...\pctEXPANDEDpct`(打开的根本不是用户点的那个);走环境变量则原样是
+ *    `pct%ASH_F1_X%pct` —— 展开是单遍的,展开出来的 `%` 不会再被扫一次。
+ */
+export const WIN_OPEN_TARGET_ENV = "ASH_OPEN_TARGET";
+
+export function windowsDefaultOpenCommand(absPath: string) {
+  return {
+    file: process.env.COMSPEC || "cmd.exe",
+    args: ["/d", "/s", "/c", `start "" "%${WIN_OPEN_TARGET_ENV}%"`],
+    env: { [WIN_OPEN_TARGET_ENV]: absPath },
+    verbatim: true as const,
+  };
+}
+
 export async function windowsOpenCommand(absPath: string, ext: string, appId: string | null) {
-  const fallback = { file: "cmd", args: ["/c", "start", "", absPath] };
+  const fallback = windowsDefaultOpenCommand(absPath);
   if (!appId) return { ...fallback, fallback: null };
   const { entries } = await scan(ext, false);
   const entry = entries.find((item) => item.id.toLowerCase() === appId.toLowerCase());

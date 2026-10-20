@@ -6,6 +6,7 @@ import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display"
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { useSubagents } from "./useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
+import { MonitorWaitCard } from "../monitors/MonitorWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
 import { FolderViewer } from "../files/FolderViewer.tsx";
@@ -116,6 +117,18 @@ export function TaskDetail({
   });
   // 哨兵那一格：数据在这一层拉（看的是别的面板时也要知道有几个在盯着，图标条上那点活信号靠它）。
   const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
+  // 会话区那张卡把两种来源**分开**数（同 MonitorInspector 的分段）：ash 那几个才是「在等」
+  // —— claude 内置 Monitor 的只读投影就算还显示 running 也唤不醒任何人（它的通知只注回那
+  // 条已经结束的会话）。但内置那几个也不能当不存在：agent 明明在对话里说了「已挂监听」，
+  // 卡片要替它说清那句话到底成不成立。
+  const liveMonitors = useMemo(
+    () => monitorTab.monitors.monitors.filter((m) => m.kind === "ash" && m.status === "running"),
+    [monitorTab.monitors.monitors],
+  );
+  const liveBuiltinCount = useMemo(
+    () => monitorTab.monitors.monitors.filter((m) => m.kind === "claude" && m.status === "running").length,
+    [monitorTab.monitors.monitors],
+  );
   const inspectors = monitorTab.inspectors;
   // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
@@ -494,6 +507,9 @@ export function TaskDetail({
                     reviewRetryable={freeReviewRetryable(free.state?.reviews)}
                     reviews={free.state?.reviews}
                     onOpenReviewPanel={() => openTab("review")}
+                    // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条
+                    // 对话上下文里）；哨兵是「它自己会回来」，一行就够，落在回复框上方
+                    // 那条 rail 上（见下面的 monitorWait）。
                     dock={task.question ? (
                       <QuestionCard
                         task={task}
@@ -510,12 +526,27 @@ export function TaskDetail({
                     task={task}
                     hasConversation={hasConversation}
                     conversationItems={conversation.items}
-                    topRail={freeToolbarVisible || canHandoff
+                    // 哨兵那一条也住这儿:它跟派审/预览是同一类东西——任务正跑着也得
+                    // 看得见。所以 rail 的显示条件要连它一起算,否则「只有哨兵、没有那
+                    // 几个按钮」的任务（归档的、预设工作流的）会整条消失。
+                    topRail={freeToolbarVisible || canHandoff || liveMonitors.length || liveBuiltinCount
                       ? (
                         <TaskReplyRail
                           task={task}
                           freeToolbar={freeToolbarVisible}
                           canHandoff={canHandoff}
+                          monitorWait={(
+                            <MonitorWaitCard
+                              // 切任务时折叠回去:上一个任务展开过,不代表这一个也该展开。
+                              key={task.id}
+                              monitors={liveMonitors}
+                              builtinCount={liveBuiltinCount}
+                              status={task.status}
+                              resumePrompt={task.resumePrompt ?? null}
+                              reviewArmed={!!free.state?.reviewReservation.armed}
+                              onOpenPanel={() => openTab("monitors")}
+                            />
+                          )}
                           onHandoff={() => onHandoff?.(task)}
                           notify={notify}
                         />

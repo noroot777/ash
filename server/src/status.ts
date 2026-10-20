@@ -101,7 +101,7 @@ async function writeTaskStatus(
     //
     // **必须 await**:下面那句 flushPendingForTask 会把排着队的消息立刻送进会话,清理要是
     // 还在路上,刚攒下的哨兵事件就会抢在它前面把这个已经 done 的任务重新拉起来跑一轮。
-    await import("./monitors.js")
+    await import("./monitor-reclaim.js")
       .then(({ stopMonitorsForTask }) => stopMonitorsForTask(taskId, `任务已${status}，哨兵一并收回`))
       .catch((err) => console.error(`[ash] stopMonitorsForTask(${taskId}) failed:`, err));
   }

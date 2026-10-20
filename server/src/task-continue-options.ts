@@ -1,4 +1,5 @@
-import type { AgentType, SessionRole } from "@ash/shared";
+import type { AgentType } from "@ash/shared";
+import type { TurnSource } from "./runs.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -34,7 +35,17 @@ export type ContinueTaskOptions = {
   executionTurn?: boolean;
   /** 旁路回合结束后恢复进入旁路前的任务状态。 */
   sideTurn?: boolean;
-  sessionRole?: Extract<SessionRole, "single" | "reviewer">; freshSession?: boolean;
+  /**
+   * 这一回合的身份:**谁起的 + 为哪一次审查的哪一轮而起,一个对象**(见 runs.ts 的
+   * `TurnSource`)。缺省 = `{ role: "single" }`。
+   *
+   * 两样绑在一起是因为它们分开过一次就出过事:上一版是 `sessionRole?` 与 `reviewSource?`
+   * 两个各自可缺的字段,于是「reviewer 但没带审查代次」在类型上完全合法 —— 首次派审带了,
+   * 自动投递/手动恢复/答复提问三条恢复入口各自漏了,活着的审查者从此挂不上哨兵
+   * (第 18 轮审查 F2 实测 HTTP 409)。现在漏传在编译期就过不去。
+   */
+  turnSource?: TurnSource;
+  freshSession?: boolean;
   /** 内部旁路回合可钉在一个准确工作目录（例如验收快照的 detached worktree）。 */
   cwd?: string;
   /**

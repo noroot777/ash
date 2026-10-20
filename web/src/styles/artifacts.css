@@ -54,6 +54,8 @@
 .artifacts__facts em[data-origin="working"] { background:color-mix(in lch,var(--amber) 16%,var(--panel)); color:var(--amber); }
 .artifacts__facts em[data-origin="committed"] { background:color-mix(in lch,var(--green) 16%,var(--panel)); color:var(--green); }
 .artifacts__facts em[data-origin="ignored"] { background:var(--raised); color:var(--muted); }
+/* 候选：描边而不是填色——它说的是「这一条有多硬」,跟左边那三个讲状态的角标不是一回事。 */
+.artifacts__facts em[data-confidence="approx"] { border:.5px dashed color-mix(in lch,var(--amber) 42%,var(--line2)); background:transparent; padding:0 3px; color:var(--amber); }
 
 /* 「交给本机应用打开」压在卡片右上角，而且是卡片的**兄弟**不是子元素：套在按钮里浏览器
    会把它拎出去，点哪儿都变成点了整张卡（file-tree 那边踩过同一个坑）。 */
@@ -66,4 +68,5 @@
 .artifacts__legend dt { flex:0 0 auto; border-radius:4px; background:var(--raised); padding:0 4px; color:var(--muted); font-size:8.5px; line-height:1.6; }
 .artifacts__legend dt[data-origin="working"] { background:color-mix(in lch,var(--amber) 16%,var(--panel)); color:var(--amber); }
 .artifacts__legend dt[data-origin="committed"] { background:color-mix(in lch,var(--green) 16%,var(--panel)); color:var(--green); }
+.artifacts__legend dt[data-confidence="approx"] { border:.5px dashed color-mix(in lch,var(--amber) 42%,var(--line2)); background:transparent; color:var(--amber); }
 .artifacts__legend dd { margin:0; color:var(--faint); font-size:9px; line-height:1.6; }

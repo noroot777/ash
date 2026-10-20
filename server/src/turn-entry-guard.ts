@@ -15,14 +15,21 @@
 // 送达的通知把一个已经结束的任务拉起来),只是下游没有那个大 try 可以托管占位,所以它把
 // 「送完要还的那把锁」当返回值交出去。两个入口的判据(验收互斥、唤醒资格、读失败的退避
 // 语义)必须逐字一致 —— 分家一次就是第 6 轮审查那两条:单飞这侧全部修好,团队那侧照旧。
-import { claimTurn, claimWakeTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { claimTurn, claimWakeTurn, reclaimTurn, releaseTurn, turnSourceRole, turnSourceReview } from "./runs.js";
+import type { TurnSource } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 
 export type TurnEntryInput = {
   taskId: string;
-  /** 这一回合的身份（"single" / "reviewer"…），占位转正时写进它。 */
-  sessionRole: string;
+  /**
+   * 这一回合的身份:**谁起的 + 为哪一次审查而起,一个对象**(见 runs.ts 的 `TurnSource`)。
+   *
+   * 上一版这里是 `sessionRole: string` 加一个各自可选的 `reviewSource` —— 于是 reviewer
+   * 可以不带审查代次地进来,而那正是本轮审查 F2 那一幕:三条恢复入口各自漏传,活着的审查者
+   * 从此挂不上哨兵。合成一个联合类型之后,漏传在编译期就过不去。
+   */
+  source: TurnSource;
   /** 任务行上的接力状态；接力出去的任务在本机只是历史存档。 */
   handoff?: string | null;
   /** 调用方已在入口原子占好位（continueWhenIdle / run 路由），这里只做身份接管。 */
@@ -42,8 +49,8 @@ export async function enterTurn(input: TurnEntryInput): Promise<boolean> {
   // 抢不到 = 这个任务此刻正跑着别的回合，这一句话没送出去。调用方必须知道。
   // turnHeld 那条路用真实身份接管——只读预检查代替不了原子所有权（审查实测：两个并发
   // 启动双双 202）。
-  if (input.turnHeld) reclaimTurn(taskId, input.sessionRole);
-  else if (!claimTurn(taskId, input.sessionRole)) return false;
+  if (input.turnHeld) reclaimTurn(taskId, turnSourceRole(input.source), turnSourceReview(input.source));
+  else if (!claimTurn(taskId, turnSourceRole(input.source), turnSourceReview(input.source))) return false;
 
   // 验收互斥：**先占己锁（turn），再查彼锁（acceptance），两步之间没有 await**——
   // acceptTask 那边是镜像（beginAccepting 先占，acceptanceGuard 再查 isTurnClaimed）。

@@ -1,42 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { CaretRight, Pulse, SpinnerGap, StopCircle } from "@phosphor-icons/react";
 import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@ash/shared/monitor";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { formatInstant } from "../task-detail/utils.ts";
+import { claudeMonitorEpilogue, liveDeadline, startedAtLabel } from "./monitorCopy.ts";
 import { MONITOR_ENDED_LABEL } from "./useTaskMonitors.ts";
-
-/**
- * 还在盯着的那张卡，右上角那句「盯到什么时候」。
- *
- * **不能无脑写 `盯到 ${expiresAt}`**：claude 内置 Monitor 的期限是来源侧说了算的，而它
- * 可能是持续监听（没有到期时刻），也可能回执还没到（我们还不知道）。编一个确定时刻出来，
- * 用户会当真——第 2 轮审查实测来源侧会把请求的 1 小时钳成 30 分钟甚至 10 分钟。
- *
- * 第四种情况是**知道盯多久、但不知道从哪一刻起算**（历史重建时起点只是一个区间，见
- * shared/monitor.ts 的 MonitorStartEvidence）。那时说时长，不说时刻——上一版会按回执时刻
- * 编一个，而回执要等 PostToolUse hooks 跑完才生成，期限跟着往后漂。
- */
-function liveDeadline(monitor: TaskMonitor): string {
-  if (monitor.lifetime === "persistent") return "持续盯着（来源没设期限）";
-  if (monitor.expiresAt) return `盯到 ${formatInstant(monitor.expiresAt)}`;
-  if (monitor.lifetime === "bounded" && monitor.timeoutMs) return `总共盯 ${formatSpan(monitor.timeoutMs)}（起点不确定）`;
-  return "盯到什么时候由它自己定";
-}
-
-/**
- * 把毫秒说成人话。只给上面那句用。
- *
- * **先把总秒数取整，再拆分钟和秒**。反过来（先拆再对余数四舍五入）会在余数落在 59.5~60 秒
- * 时进位到「X 分 60 秒」——例如 119 600ms 显示成「1 分 60 秒」（第 6 轮审查不拦项）。
- */
-function formatSpan(ms: number): string {
-  const seconds = Math.round(ms / 1000);
-  if (seconds >= 3_600 && seconds % 3_600 === 0) return `${seconds / 3_600} 小时`;
-  if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60} 分钟`;
-  if (seconds >= 60) return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
-  return `${seconds} 秒`;
-}
 
 /** 展开着的那张卡每隔这么久重拉一次尾巴。只在「正在盯着」且「卡片是展开的」时才走。 */
 const LOG_POLL_MS = 2500;
@@ -103,7 +72,49 @@ export function MonitorCard({
   const stopTip = useHoverTip();
   const endedLabel = MONITOR_ENDED_LABEL[monitor.status] ?? monitor.status;
   // 结束原因常常就是那句状态标签本身（命令自己跑完了 / 盯满时长），一字不差时只说一遍。
-  const reason = monitor.endedReason && monitor.endedReason !== endedLabel ? monitor.endedReason : null;
+  //
+  // **跟描述一字不差的也不说**：claude 在回合收尾成批停止时，`summary` 填的就是那条描述
+  // 本身，于是卡片会变成「已停止 / 等待全量 unittest 跑完」——描述复读一遍，真正发生的事
+  // （它是被收走的、那件事当时还没有结果）一个字都没有。服务端新写的行已经归一过
+  // （shared 的 `claudeMonitorEndedReason`），这一道是给存量行的，它们不会自愈。
+  const reason = monitor.endedReason
+    && monitor.endedReason !== endedLabel
+    && monitor.endedReason !== monitor.description
+    ? monitor.endedReason
+    : null;
+
+  /**
+   * 那一行小字，按**时间顺序**排：起于 → 盯到什么时候 / 什么时候结束的 → 结局，
+   * 后面才挂事件数和 pid（只有 ash 自己起的那种才有）。
+   *
+   * **起点那一段每张卡都给**（用户 2026-10-20 要的「创建的时间」）：在这之前整张卡上**一个
+   * 绝对时刻都没有** —— 还在盯的那张只说「盯到 X」，结束的那张只剩一个状态词。于是最该
+   * 一眼看见的那件事反而查不到：**这条哨兵是不是会话里那句「我挂了监听」对应的那一条**。
+   * 一个任务上并排躺着四五条描述相近的哨兵时，没有起点就只能去翻库对账。
+   *
+   * 「每张卡都给」指的是**这一段永远在**，不是「永远给得出一个时刻」：答不出来时它明说答
+   * 不出来。整段静悄悄消失的话，用户分不出「这张卡没有起点」和「这功能根本没做」。
+   *
+   * 时刻**不能直接读 `startedAt` 画出来**：那一列在历史投影上允许退化成占位值，而退化值
+   * 照样是个合法日期。判据和措辞都归 `startedAtLabel`（见它的注释，以及 shared 的
+   * `startedAtExact`）—— 答不出来时它说「挂上的时刻不确定」，不编一个会被当真的时刻。
+   *
+   * 结束的那张顺带把**结束时刻**也给出来：起点单给会立刻引出下一个问题（那它跑了多久、
+   * 是不是在我离开之后才停的），而答案就在同一份 DTO 里（`endedAt`，它没有退化档：来源
+   * 是通知自己的时刻或 ash 收尾那一刻）。
+   */
+  const endedTimeLabel = formatInstant(monitor.endedAt);
+  const metaSegments = [
+    startedAtLabel(monitor),
+    // 起点那一段已经自己说了「不确定」，这里就不要再带一遍那句括号。
+    live ? liveDeadline(monitor, { startSaidSeparately: true }) : null,
+    !live && endedTimeLabel ? `结束于 ${endedTimeLabel}` : null,
+    live ? null : `${endedLabel}${monitor.exitCode === null ? "" : `（退出码 ${monitor.exitCode}）`}`,
+    // 事件数只有 ash 自己起的那种数得准：claude 把事件直接注回它自己的会话，ash 看不到
+    // 几条，显示一个恒为 0 的「0 条事件」只会被读成「过滤写错了」。
+    logged ? `${monitor.events} 条事件` : null,
+    monitor.pid === null ? null : `pid ${monitor.pid}`,
+  ].filter((segment): segment is string => !!segment);
 
   return (
     <article className={`monitor-card${live ? " is-live" : " is-ended"}`}>
@@ -129,30 +140,27 @@ export function MonitorCard({
       </header>
       <code className="monitor-card__command">{monitor.command}</code>
       <p className="monitor-card__meta">
-        {/* 事件数只有 ash 自己起的那种数得准：claude 把事件直接注回它自己的会话，
-            ash 看不到几条，显示一个恒为 0 的「0 条事件」只会被读成「过滤写错了」。 */}
-        {logged && (
-          <>
-            <span>{monitor.events} 条事件</span>
-            <span aria-hidden="true">·</span>
-          </>
-        )}
-        <span>
-          {live ? liveDeadline(monitor) : `${endedLabel}${monitor.exitCode === null ? "" : `（退出码 ${monitor.exitCode}）`}`}
-        </span>
-        {monitor.pid !== null && (
-          <>
-            <span aria-hidden="true">·</span>
-            <span>pid {monitor.pid}</span>
-          </>
-        )}
+        {metaSegments.map((segment, index) => (
+          <Fragment key={`${index}-${segment}`}>
+            {index > 0 && <span aria-hidden="true">·</span>}
+            <span>{segment}</span>
+          </Fragment>
+        ))}
       </p>
       {reason && <p className="monitor-card__reason">{reason}</p>}
       <p className="monitor-card__cwd">{monitor.cwd}</p>
       {!logged && (
         <p className="monitor-card__readonly">
           这是智能体自己起的 Monitor，ash 只能看不能停——它的进程在智能体的进程树里，
-          输出也直接进了它自己的会话。{live ? "起它的那个智能体进程结束时，它会跟着消失。" : ""}
+          输出也直接进了它自己的会话。
+          {/* 结束之后这句话要换一半：光一个「已停止」读起来像「等到了然后停了」，而实测
+              绝大多数是回合一结束就被 CLI 成批收走，它盯的那件事当时还在跑（整段实测行序
+              在 server/src/claude-monitor-reaped.ts 的文件头）。用户来这张卡上找的正是
+              「那它为什么没叫醒谁」——必须在这儿答，不能只留一个状态词，也不能把四种结束
+              方式说成同一种（第 4 轮审查 N1，措辞在 monitorCopy.ts）。 */}
+          {live
+            ? "起它的那个智能体进程结束时，它会跟着消失。"
+            : claudeMonitorEpilogue(monitor.status)}
         </p>
       )}
       {logged && (

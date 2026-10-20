@@ -277,18 +277,24 @@ export function killOne(pid: number, sig: NodeJS.Signals): void {
   }
 }
 
-/**
- * 这个 pid 还活着吗。
- * `process.kill(pid, 0)` 在 Windows 上是 libuv 明确支持的存活探测(uv__kill 对
- * signum 0 直接 return 0,不会 TerminateProcess),所以两个平台同一条实现;
- * EPERM = 进程在、只是没权限看。
- */
+// 这一摊里**两件事搬走了**,因为它们各自是一个独立的概念,不是「怎么问操作系统」的单问:
+//  · 「资源单位」那条记号(`ASH_MONITOR_UNIT`)的扫描 → monitor-unit-scan.ts(要读整张进程表、
+//    分证据等级、还带一份备忘);
+//  · **代次**(「这个号上还是不是那一代」)和按代次枚举组成员 → process-generation.ts
+//    (事实与它那一代必须同源,见那个文件的头注)。
+
 export function isProcessGroupAlive(pid: number): boolean {
   if (IS_WINDOWS || !Number.isInteger(pid) || pid <= 1) return false;
   try { process.kill(-pid, 0); return true; }
   catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 
+/**
+ * 这个 pid 还活着吗。
+ * `process.kill(pid, 0)` 在 Windows 上是 libuv 明确支持的存活探测(uv__kill 对
+ * signum 0 直接 return 0,不会 TerminateProcess),所以两个平台同一条实现;
+ * EPERM = 进程在、只是没权限看。
+ */
 export function isPidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {

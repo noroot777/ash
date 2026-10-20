@@ -48,6 +48,16 @@ function requiredChecks(target: TaskRow, at: string | null | undefined): string 
 function verifyRules(evidenceDir: string): string {
   return `必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务、用浏览器确认行为；` +
     `其它改动也必须运行与风险相称的测试或产物。\n\n` +
+    // 「要等一件慢事」这一条必须就在验证义务旁边：2026-10-16 实测的那一轮审查挂了监听、
+    // 说了「套件结束会叫我」，然后就这么结束了回合 —— 结算按「没给结论」把整条链停掉，
+    // 而它挂的内置 Monitor 本来就活不过那一轮（它的进程在 agent 自己的进程树里）。现在
+    // 那一下会被改道成 ash 哨兵（claude-monitor-hook.ts），但改道只换得掉进程归属，换不掉
+    // 「回合就这么结束了」——所以这一句照样要说：挂完得用 pause_task 收尾。
+    `要等的那件事以分钟计（跑全量套件、长构建、长转码）时，别干等、也别就这么结束这一轮：` +
+    `用 ash 的 start_monitor 挂一条盯它的命令（过滤到你真会据此做事的那几行，成功与失败两类标记都要覆盖），` +
+    `再用 pause_task 收尾本回合、写清「被叫醒后该干什么」——哨兵的进程由 ash 起，活得过你这一轮，` +
+    `事件来了会把你这条会话重新叫醒，你当初写下的那段交代也会一起喂回来。` +
+    `**没给结论就结束回合**会被判成「本轮未能给出结论」，整条审查链当场停掉。\n\n` +
     // 浏览器策略由投递点统一贴(带项目授权),这里不内嵌 —— 内嵌的只能是默认未授权那一
     // 份,还会把去重锚点提前占掉,把真实授权挡在门外(第 6 链第 1 轮审查 P2)。
     `一旦用了 playwright，验证结束前必须把它落在仓库工作区里的产物删干净（.playwright-cli/、playwright-report/、test-results/ 等），` +
@@ -67,6 +77,12 @@ function verifyRules(evidenceDir: string): string {
     REPORT_SUMMARY_FORMAT;
 }
 
+function comparisonBaseline(target: TaskRow): string {
+  return target.useWorktree
+    ? target.worktreeStartCommit || target.worktreeBase || "未记录任务起点，请先核实历史提交"
+    : "当前工作树的基准提交";
+}
+
 /**
  * 就地验证轮的协议正文。跟独立审查任务那份的差别只有两处，但都是要害：
  * ① 你**已经在**被验的工作目录里，不用再找它在哪；
@@ -84,7 +100,7 @@ export async function verifyProtocolFor(
   station: string | null = null,
 ): Promise<string> {
   const evidenceDir = reviewRoundDir(target.id, round);
-  const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
+  const baseline = comparisonBaseline(target);
   const requirements = await reviewRequestReference(target, evidenceDir);
   // 前面几轮报过的现象行（理由见 review-history.ts 文件头：会话可能被压缩，也可能是
   // 手点的新一轮）。放在验证动作之前，让它先判「我这条是不是上面某条的第 N 个变体」。
@@ -111,6 +127,7 @@ export function verifyReminderFor(taskId: string, round: number): string {
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
+    `要等一件以分钟计的慢事就用 start_monitor 挂上、pause_task 收尾这一轮（别干等，也别不给结论就结束）；` +
     `结束前调 report_stage(taskId="${taskId}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论，本回合不要调 complete_task。`;
 }
 
@@ -124,7 +141,7 @@ export async function reviewProtocolFor(
   const target = (await db.select().from(tasks).where(eq(tasks.id, review.reviewOf))).at(0);
   if (!target) return `【审查任务】被审任务 ${review.reviewOf} 已不存在，记录问题后结束本轮。\n\n`;
   const evidenceDir = reviewRoundDir(target.id, review.reviewRound);
-  const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
+  const baseline = comparisonBaseline(target);
   const requirements = await reviewRequestReference(target, evidenceDir);
   const history = await verifyHistorySection(target.id, review.reviewRound);
   return `【审查任务 · 第 ${review.reviewRound} 轮】\n` +

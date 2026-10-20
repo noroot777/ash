@@ -12,17 +12,21 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { projects, tasks } = await import("../src/db/schema.js");
+const { projects, tasks, sessions } = await import("../src/db/schema.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
+const { mountTaskScheduleRoutes } = await import("../src/task-schedule-routes.js");
+const { verifyProtocolFor, reviewProtocolFor } = await import("../src/review-prompts.js");
 const { createTasks } = await import("../src/task-store.js");
 const { taskWorkspace } = await import("../src/task-workspace.js");
 const { dispatchWorkers } = await import("../src/team/dispatch.js");
 const { acceptTask, mountTaskAcceptanceRoutes } = await import("../src/task-accept.js");
 const { branchDependency, baseRef } = await import("../src/task-branch-plan.js");
 const { readBranchPlan } = await import("../src/task-branch-routes.js");
+const { withRepoLock } = await import("../src/repo-lock.js");
 await ensureSchema();
 const api = new Hono();
 mountTaskRoutes(api);
+mountTaskScheduleRoutes(api);
 mountTaskAcceptanceRoutes(api);
 const at = new Date().toISOString();
 const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id)))[0];
@@ -53,6 +57,59 @@ async function changeTarget(id: string, branch: string, fingerprint?: string) {
 }
 
 try {
+  {
+    const repo = await repository("follow-current-branch");
+    const mainStart = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "-b", "version-upgrade");
+    const featureStart = commit(repo, "upgrade.txt");
+    git(repo, "checkout", "main");
+    let releaseCheckout!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseCheckout = resolve; });
+    let checkoutStarted!: () => void;
+    const started = new Promise<void>((resolve) => { checkoutStarted = resolve; });
+    const checkout = withRepoLock(repo, async () => {
+      checkoutStarted();
+      await gate;
+      git(repo, "checkout", "version-upgrade");
+    });
+    await started;
+    const creating = create("follow-current-branch", { worktreeBase: null });
+    releaseCheckout();
+    await checkout;
+    const automatic = await creating;
+    assert.equal(automatic.worktreeBase, null);
+    assert.equal(automatic.worktreeStartCommit, featureStart);
+    assert.equal(automatic.mergeTargetBranch, "version-upgrade");
+    const explicit = await create("follow-current-branch", { worktreeBase: "main" });
+    assert.equal(explicit.worktreeStartCommit, mainStart);
+    assert.equal(explicit.mergeTargetBranch, "main");
+    commit(repo, "later-upgrade.txt");
+    git(repo, "checkout", "main");
+    const workspace = await taskWorkspace(automatic, repo);
+    assert.equal(git(workspace.path, "rev-parse", "HEAD"), featureStart);
+    assert.equal((await row(automatic.id)).mergeTargetBranch, "version-upgrade");
+    console.log("✓ automatic base follows checkout at creation, explicit base stays fixed, and later branch changes preserve the frozen start");
+    const ownCommit = commit(workspace.path, "task-only.txt");
+    await db.insert(sessions).values({ id: "automatic-session", taskId: automatic.id, role: "single", agentType: "claude",
+      executor: "claude", startedAt: at, worktreePath: workspace.path, branch: workspace.branch });
+    const commits = async () => {
+      const response = await api.request(`/tasks/${automatic.id}/commits`);
+      assert.equal(response.status, 200);
+      return (await response.json()).commits as { sha: string; subject: string }[];
+    };
+    assert.deepEqual((await commits()).map((entry) => entry.sha), [ownCommit]);
+    assert.match(await verifyProtocolFor(automatic, 1, repo), new RegExp(`比较基线 ${featureStart}`));
+    assert.match(await reviewProtocolFor({ ...explicit, reviewOf: automatic.id, reviewRound: 1 }, workspace, repo),
+      new RegExp(`比较基线 ${featureStart}`));
+    await db.update(tasks).set({ worktreeBase: "main" }).where(eq(tasks.id, automatic.id));
+    assert.deepEqual((await commits()).map((entry) => entry.sha), [ownCommit], "frozen start wins over a legacy branch");
+    await db.update(tasks).set({ worktreeStartCommit: null }).where(eq(tasks.id, automatic.id));
+    assert.deepEqual((await commits()).map((entry) => entry.subject), ["task-only.txt", "upgrade.txt"], "legacy tasks retain their explicit baseline");
+    await db.update(tasks).set({ worktreeBase: null }).where(eq(tasks.id, automatic.id));
+    assert.deepEqual(await commits(), [], "unknown origins never borrow the project's current branch");
+    assert.match(await verifyProtocolFor(await row(automatic.id), 2, repo), /比较基线 未记录任务起点/);
+    console.log("✓ commits API and both verification protocols use the frozen start after checkout; legacy and unknown baselines stay honest");
+  }
   {
     const repo = await repository("retarget");
     git(repo, "branch", "feature-x");

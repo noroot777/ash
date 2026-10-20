@@ -24,6 +24,19 @@
 // 空空如也——用户翻遍界面也对不上账，只能得出「这功能坏了」。2026-10-14 实测的那个任务
 // 挂了 12 个内置 Monitor、ash 一个都不知道，用户的第一反应正是「为什么 inspector 里没
 // 东西」。只读也比没有强，前提是**界面必须如实说明它只读**（见 MonitorCard）。
+//
+// **两种都要能看见，但界面上不许混在一起**（用户 2026-10-16 拍板）：它们的能力不对等到
+// 了「同一个词指两件事」的地步——混排时用户会对着一张 claude 的卡去找停止按钮，或者把
+// 「这个哨兵会叫醒任务」的预期套到一个只在那一轮里有效的监听上。所以面板按来源分段
+// （见 MonitorInspector），会话区那张「在等哨兵」只数 ash 那种、另起一行交代内置那几个
+// （见 MonitorWaitCard）。
+//
+// **`claude` 这一种今后只从两处来**：2026-10-16 起，一次性回合（`claude -p`，单飞任务和
+// 团队执行者都是）里 agent 调内置 Monitor 会被 PreToolUse hook 当场改道成一条 ash 哨兵
+// （见 server/src/claude-monitor-hook.ts），所以那条路上不再产生新的只读投影。仍会产生
+// 的是**常驻会话**（团队调度台，`--input-format stream-json`——那种模式下 CLI 进程一直
+// 活着，内置 Monitor 真能唤醒它自己，拦它才是错的），以及**历史**：改道之前跑过的任务，
+// 会话文件里还躺着它们，面板得答得出「那 12 个 Monitor 后来怎么了」。
 
 export const MONITOR_STATUSES = ["running", "stopped", "expired", "exited", "lost"] as const;
 export type MonitorStatus = (typeof MONITOR_STATUSES)[number];
@@ -363,9 +376,15 @@ export const monitorStatusCorrectable = (status: string): boolean =>
  * **本来能停、能看日志的那张卡会变成只读且没有输出入口**(第 12/13 轮审查 N5)。前端先更新、
  * 后端还没更新的那段混合部署里只会出这一种 DTO:旧后端只有 ash 哨兵,所以缺省补 "ash" 是
  * 确定的,不是猜。恢复端点那边已有 404 兼容,这份 DTO 的同类兼容就在这里。
+ *
+ * {@link TaskMonitor.startedAtExact} 的缺省方向**相反**:补 `false`。它不是「猜哪种更常见」
+ * —— 旧后端根本答不出起点可不可信,而这一列的全部意义就是「答不出来时不许把那个时刻当成
+ * 创建时刻说出口」。补 `true` 等于在混合部署的那段窗口里把这道闸整个关掉。
  */
-export const normalizeMonitorDto = <T extends { kind?: MonitorKind }>(row: T): T =>
-  (row.kind ? row : { ...row, kind: "ash" as const });
+export const normalizeMonitorDto = <T extends { kind?: MonitorKind; startedAtExact?: boolean }>(row: T): T =>
+  (row.kind && row.startedAtExact !== undefined
+    ? row
+    : { ...row, kind: row.kind ?? ("ash" as const), startedAtExact: row.startedAtExact ?? false });
 
 /** 能不能从 ash 这边停掉它。`claude` 那种的进程在 agent 进程树里，ash 够不着。 */
 export const canStopMonitor = (kind: MonitorKind) => kind === "ash";
@@ -388,6 +407,14 @@ export interface TaskMonitor {
   command: string;
   /** 一句话说明，会出现在每条事件的抬头和界面上。 */
   description: string;
+  /**
+   * **起它的那条会话是谁**（`single`=执行者 / `reviewer`=审查者）；null = 认不出来或存量行。
+   *
+   * 界面要用它分辨「这是审查者在等一件事」还是「执行者在等」—— 同样一条「在等哨兵」，
+   * 落在哪条会话上决定了醒来之后会发生什么（续审查 vs 续实现）。投递侧用的是库里那一列
+   * （`monitors.source_role` → `scheduled_messages.session_role`），这里只是把它说给用户听。
+   */
+  sourceRole: "single" | "reviewer" | null;
   cwd: string;
   status: MonitorStatus;
   /** 进程组组长的 pid；重启后靠 pid + 启动时刻一起认人（pid 会被复用）。 */
@@ -397,6 +424,23 @@ export interface TaskMonitor {
   /** 命令自己退出时的退出码；跨 server 重启接回来的那种拿不到，记 null。 */
   exitCode: number | null;
   startedAt: string;
+  /**
+   * `startedAt` 这个时刻**算不算数**：false = 它只是个占位/边界值，**不许当成「这条哨兵是
+   * 什么时候挂上的」说出口**。
+   *
+   * 为什么非得多这一列：`started_at` 在库里是 `NOT NULL`，而历史投影允许它退化 ——
+   * `anchor.startedAt ?? startedAtLow ?? fileStartedAt ?? now()`（见
+   * server/src/claude-monitor-commit.ts）。退到后两档时那个值仍然是一个**合法日期**，
+   * 所以「能解析成日期就是真实时刻」这条判据一个字都挡不住它：第 1 轮审查用真实 backfill +
+   * 真实 `listMonitors` 复现到的卡片，同一行上先写「起于 10/19 10:00」再写「总共盯 10 分钟
+   * （起点不确定）」—— 前一个只是那一整轮执行开始的时刻，偏差可达该轮此前已经跑掉的时长。
+   *
+   * 判据与到期时刻那一半共用 {@link monitorStartTrusted}（档位 + 可重验的误差界）。
+   *
+   * **不能拿 `expiresAt === null` 代替它**：持续监听和期限未知本来就没有到期时刻，跟起点可不
+   * 可信是两件独立的事 —— 一条 `persistent` 的哨兵完全可以有一个证据齐全的起点。
+   */
+  startedAtExact: boolean;
   /**
    * 到期时刻。**只有「期限有限」且「起点有依据」时才非空**。
    *
@@ -538,14 +582,51 @@ export function mergeMonitorEventText(existing: string, incoming: string): strin
  *
  * 终态的那三种和归档分开说：归档是「这个任务收进柜子了」，终态是「它跑完了」——后者
  * 重新跑起来就又能挂，措辞得给出这条出路。
+ *
+ * ── `activeReview`：任务跑完了，但**审查这件事还没完** ────────────────────────
+ *
+ * 自由工作流的审查是在一个**已经 done 的任务**上跑的旁路回合（终态原样不动）。所以光看
+ * `status` 的话，审查者连一个哨兵都挂不上：它要等的那件事（跑一遍全量测试）恰恰是最需要
+ * 哨兵的那种。实测后果是它退而求其次用了 claude 内置的 `Monitor`——那个活不过这一回合，
+ * 于是说完「套件结束会叫我」就再也没有下文（Bp2LkwfRO37A 第 2 轮审查）。
+ *
+ * 判据给的是「有没有一条正在进行的审查」，而不是「这一刻是不是审查回合」：哨兵的事件要在
+ * **下一个**回合才送达，那时审查者已经 pause 住了、没有任何回合在跑——按后者判会在最关键
+ * 的那一刻拒掉它。归档不吃这条豁免：那是「收进柜子了」，跟做没做完无关。
  */
+/**
+ * **哨兵醒来叫谁**:执行者那条会话(`single`),还是起它的那次审查(`reviewer`)。
+ *
+ * 两端共用一份:服务端据它判创建请求里显式指定的唤醒目标合不合法(`monitor-session.ts`),
+ * 前端据它渲染「说不清叫谁」时那个二选一(`MonitorComposer`)。各写一份的话,前端能提交一个
+ * 后端不认的值,而后端只会回一句「没说清」—— 用户看到的是一个点了没反应的选项。
+ */
+export type MonitorWakeTarget = "single" | "reviewer";
+export const MONITOR_WAKE_TARGETS: readonly MonitorWakeTarget[] = ["single", "reviewer"];
+/** 这两种在界面上怎么说。 */
+export const MONITOR_WAKE_LABEL: Record<MonitorWakeTarget, string> = {
+  single: "实现者",
+  reviewer: "这次审查",
+};
+
 const MONITOR_BLOCKING_STATUSES = new Set(["done", "failed", "canceled"]);
 
+/**
+ * 「这个任务现在能不能挂哨兵 / 哨兵的事件还能不能唤醒它」——创建入口、事件出口、唤醒前
+ * 最后一道闸共用这一份判据（三处分家就等于没防）。
+ *
+ * `activeReview` = 这个任务上有一条**正在进行**的审查。自由工作流的审查是旁路回合，跑在
+ * 一个已经 done 的任务上，而它要等的那件事恰恰最需要哨兵；只看 status 的话审查者一个都挂
+ * 不上（2026-10-16 实测：于是它退而求其次用了活不过这一回合的内置 Monitor）。服务端由
+ * `monitorTaskGate` 在被状态拦下来时才查一次库填进来。**归档不吃这条豁免**：任务都被收走
+ * 了，审查链也没有续下去的地方。
+ */
 export function monitorBlockedReason(
   task: { status: string; archived?: boolean | null },
+  opts?: { activeReview?: boolean },
 ): string | null {
   if (task.archived) return "任务已归档，不能再挂哨兵";
-  if (MONITOR_BLOCKING_STATUSES.has(task.status))
+  if (MONITOR_BLOCKING_STATUSES.has(task.status) && !opts?.activeReview)
     return "任务已经结束，哨兵的输出不会再唤醒它——要盯新的活，先让这个任务重新跑起来";
   return null;
 }
@@ -554,54 +635,3 @@ export function monitorBlockedReason(
 export const monitorMessageOrigin = (monitorId: string) => `monitor:${monitorId}`;
 export const monitorIdFromOrigin = (origin: string | null | undefined): string | null =>
   origin?.startsWith("monitor:") ? origin.slice("monitor:".length) : null;
-
-/**
- * claude 后台任务的状态 → 哨兵状态。
- *
- * claude 侧的取值来自 `system/task_notification` 的 `status`，实测见过 `completed`
- * （命令自己跑完）和 `stopped`（被 `TaskStop` 停掉）。拿不准的一律当 `exited` 收口而不是
- * 留在 `running`：面板上一个永远「正在盯着」的僵尸条目，比一个状态说得略粗的存档更误导人。
- */
-export function claudeMonitorStatus(status: unknown): MonitorStatus {
-  switch (String(status ?? "").toLowerCase()) {
-    case "stopped":
-    case "canceled":
-    case "cancelled":
-    case "killed":
-      return "stopped";
-    case "timeout":
-    case "timed_out":
-    case "expired":
-      return "expired";
-    case "running":
-    case "in_progress":
-    case "pending":
-      return "running";
-    default:
-      return "exited";
-  }
-}
-
-/** claude 内置 Monitor 的结束原因文案，按状态给。 */
-export const CLAUDE_MONITOR_ENDED_REASON: Partial<Record<MonitorStatus, string>> = {
-  exited: "命令自己跑完了（claude 侧报的完成）",
-  stopped: "被 claude 自己停掉了（TaskStop）",
-  expired: "盯满了 claude 侧约定的时长",
-  lost: "agent 进程已经不在了，它跟着一起没了",
-};
-
-/**
- * **来源侧**报的时长 → 投影的有效期。
- *
- * 和 `normalizeMonitorTimeout` 的区别是这份代码里最容易搞错的一处：那一个是「ash 自己要
- * 起一个哨兵，允许多久」——是一条**创建策略**；这一个是「claude 那边说它要盯多久」——是
- * 一条**既成事实**。拿创建策略去钳来源事实，卡片上就会显示一个与来源侧不符的到期时刻
- * （claude 盯 5 秒，ash 按自己的下限写成 60 秒后到期）。投影的职责是如实转述，不是裁决。
- *
- * 所以这里只做「是不是个正数」这一道校验，不钳到 ash 的区间里。拿不到就返回 null，由调用
- * 方决定怎么表示「来源没说」，而不是替它编一个。
- */
-export function sourceMonitorTimeout(ms: unknown): number | null {
-  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return null;
-  return Math.round(ms);
-}

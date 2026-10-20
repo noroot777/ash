@@ -259,7 +259,7 @@ export function isCanceling(taskId: string): boolean {
  * 还写成「所在分组已暂停」——分组其实早恢复了（第 3 轮审查稳定复现）。
  */
 export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"): boolean {
-  const role = turns.get(taskId);
+  const role = turns.get(taskId)?.role;
   if (role === undefined || role === WORKSPACE_TURN_ROLE || role === WAKE_TURN_ROLE) return false;
   if (role === RECONCILE_TURN_ROLE) return false; // 残留结算也不是回合,理由同上
   startFreeze.set(taskId, settle);
@@ -405,7 +405,49 @@ export class CanceledRun extends Error {
 // 那一刻锁还锁着，此时对同一个任务调 continueTask 会被直接挡回、什么都不发生 ——
 // 就地验证轮正是这种情况。于是由 run loop 释放锁的同一处把队列排空，不靠
 // setTimeout 赌事件循环的先后。
-const turns = new Map<string, string>();
+/**
+ * **一个回合的完整身份,一份对象。**
+ *
+ * 为什么三样挤在一起:令牌、角色、审查代次要么出自同一份回合事实,要么就会被拼成一份
+ * 谁都没授权过的来源。第 10 轮审查 F1 实测过那条拼法 —— 旧审查的令牌 + 「现在是哪次审查」
+ * 的现查结果:旧审查结束、新审查(换了审查者)刚写进库而新令牌还没落下的那一瞬,一条由
+ * **原审查者**提交的哨兵被绑到了**新审查**上(HTTP 200、命令照跑、`delivery.agent` 从
+ * codex 变成 claude),原审查没有任何后续。
+ *
+ * 所以身份只在这里产生、只整份读走(`turnIdentity`):
+ *  · `role`  —— 这一轮是谁(`single` / `reviewer` / 占位身份…),运行时事实;
+ *  · `review`—— 这一轮**为哪一次审查的哪一轮**而起(由派审那一侧在 claim 时交代);
+ *  · `token` —— 这一轮的令牌。由写 `tasks.active_turn_token` 的同一处绑上来
+ *    (`bindTurnToken`),所以「库里的令牌」和「内存里的这一轮」说的是同一件事。
+ */
+export type TurnReview = { run: string; round: number };
+export type TurnIdentity = { role: string; review: TurnReview | null; token: string | null };
+
+/**
+ * **起这一轮的人是谁、为哪一次审查而起** —— 一个对象,不是两个各自可缺的字段。
+ *
+ * 为什么是联合类型:上一版这两样在回合入口上是 `sessionRole?` 和 `reviewSource?` 两个独立
+ * 可选字段,于是「reviewer 但没带审查代次」是一个**类型上完全合法**的组合 —— 首次派审带了,
+ * 自动投递、手动恢复、答复提问三条恢复入口各自漏了,而漏掉的后果不是报错而是**静默降级**:
+ * 续起来的那一轮身份里 `review=null`,来源核验据此判「这次审查已经结束」,还活着的审查者
+ * 从此一条哨兵都挂不上(本轮审查 F2 实测 HTTP 409)。
+ *
+ * 所以 reviewer 这一支**必须**说出 review。确实不代表某一轮审查的 reviewer 回合(duet 研讨、
+ * 辩论)写 `"unbound"`:那是一句**显式**的「这一轮不绑任何审查」,读代码的人和编译器都看得见,
+ * 而且它换来的行为正是对的 —— 那种回合挂不上「本轮审查」的哨兵。
+ */
+export type TurnSource =
+  | { role: "single" }
+  | { role: "reviewer"; review: TurnReview | "unbound" };
+
+/** 回合身份里的角色。缺省(普通续聊)就是 `single`。 */
+export const turnSourceRole = (source?: TurnSource | null): string => source?.role ?? "single";
+
+/** 回合身份里绑定的那次审查。`"unbound"` 与不是 reviewer 都是 null。 */
+export const turnSourceReview = (source?: TurnSource | null): TurnReview | null =>
+  source && source.role === "reviewer" && source.review !== "unbound" ? source.review : null;
+
+const turns = new Map<string, TurnIdentity>();
 const afterTurn = new Map<string, Array<() => void>>();
 
 /**
@@ -434,9 +476,9 @@ const RECONCILE_TURN_ROLE = "reconcile";
  * 归属检查（report_stage）读它，而不是查 sessions 表猜（session 行的 endedAt 语义
  * 既不代表进程活着、也不代表回合归属，审查实测两个方向都错过）。
  */
-export function claimTurn(taskId: string, role = "single"): boolean {
+export function claimTurn(taskId: string, role = "single", review: TurnReview | null = null): boolean {
   if (turns.has(taskId)) return false;
-  turns.set(taskId, role);
+  turns.set(taskId, { role, review, token: null });
   return true;
 }
 
@@ -453,16 +495,43 @@ export function isTurnClaimed(taskId: string): boolean {
 
 /** 当前回合的身份；没有回合在跑返回 null。 */
 export function turnRole(taskId: string): string | null {
+  return turns.get(taskId)?.role ?? null;
+}
+
+/**
+ * 这一轮的**整份身份**(令牌 + 角色 + 它为哪一次审查而起)。
+ *
+ * 要用就整份读走:拆成「先读角色、再去查审查」就又回到第 10 轮审查 F1 那条拼法上了
+ * (见 `TurnIdentity`)。读到 null = 此刻没有回合在跑。
+ */
+export function turnIdentity(taskId: string): TurnIdentity | null {
   return turns.get(taskId) ?? null;
+}
+
+/**
+ * 把这一轮的令牌绑到它的身份上。**只许在写 `tasks.active_turn_token` 的同一处调**
+ * (orchestrator 起一轮、task-run 首跑、reattach 接回上一轮),这样「库里那个令牌」和
+ * 「内存里这一轮」永远指同一件事 —— 来源核验据此只认一份事实。
+ */
+export function bindTurnToken(taskId: string, token: string): void {
+  const held = turns.get(taskId);
+  if (!held) {
+    // 没占位就写令牌 = 调用顺序错了。不静默:来源核验会把这一轮当「不是当前这一轮」拒掉。
+    console.error(`[ash] bindTurnToken(${taskId}) 时没有回合在跑,这一轮的来源将无法核验`);
+    return;
+  }
+  held.token = token;
 }
 
 /**
  * 占位转正：入口在最后一个 await 检查之后原子占住 turn（turnHeld 传递给启动函数），
  * 启动函数到位后用真实身份接管这把锁。只允许在**已持有**时调用——没占就转正是编程错。
  */
-export function reclaimTurn(taskId: string, role: string): void {
-  if (!turns.has(taskId)) throw new Error(`reclaimTurn(${taskId}) without holding the turn`);
-  turns.set(taskId, role);
+export function reclaimTurn(taskId: string, role: string, review?: TurnReview | null): void {
+  const held = turns.get(taskId);
+  if (!held) throw new Error(`reclaimTurn(${taskId}) without holding the turn`);
+  // `review` 省略 = 沿用占位时交代的那一份(占位转正不该把它抹掉);显式传 null 才是清掉。
+  turns.set(taskId, { role, review: review === undefined ? held.review : review, token: held.token });
 }
 
 /** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
@@ -603,7 +672,9 @@ export function whenTurnIdle(taskId: string, fn: () => void): void {
  * 表现是「什么都没发生」——就地验证轮起不来、打回重做的提示没人收。动态 import 是为了
  * 不让这个中立模块回头依赖 orchestrator（类型是纯类型引用，不构成运行时环）。
  */
-type ContinueOpts = Parameters<(typeof import("./orchestrator.js"))["continueTask"]>[2];
+// 入口参数的类型住在 `task-continue-options.ts`(只放类型,不放运行时 —— 这条链上的运行时
+// import 要留给那句 dynamic import)。
+type ContinueOpts = import("./task-continue-options.js").ContinueTaskOptions;
 
 export function continueWhenIdle(
   taskId: string,
@@ -616,8 +687,11 @@ export function continueWhenIdle(
     // 话，异步 import 的间隙里同一释放点的后续 waiter 能同步抢锁——投递「not delivered」
     // 而调用方可能已提前写下状态（审查实测 3/3：dispatch 释放点被竞争 waiter 抢先，
     // 任务留在 stage=verifying 而验证从未启动）。
-    const role = (opts.sessionRole as string | undefined) ?? "single";
-    if (!claimTurn(taskId, role)) {
+    // **占位的那一刻就把「谁起的、为哪一次审查而起」一起交代清楚**:派审那一侧此刻手里正握着
+    // run 和轮次,而创建入口过后只能查「现在是哪一次」—— 那两者在派审交接期并不是同一个
+    // (第 10 轮审查 F1)。两样同在一个 `TurnSource` 里,所以这里不可能只带到一半。
+    const source = (opts as { turnSource?: TurnSource | null }).turnSource ?? null;
+    if (!claimTurn(taskId, turnSourceRole(source), turnSourceReview(source))) {
       console.error(`[ash] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
       void onError?.("回合被其它执行抢占，消息未能投递");
       return;

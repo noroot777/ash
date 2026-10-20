@@ -372,6 +372,13 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 时答案会落到这里排队——不存 role 的话投递会以 single 身份进实现会话，reviewer 永远
   // 收不到答案（审查实测复现）。null = 普通消息。
   sessionRole: text("session_role"),
+  // **这条消息续起来的那一轮审查是哪一次、哪一轮。** 只跟 session_role='reviewer' 一起有意义。
+  // 为什么要落库:投递可能发生在几分钟之后,那时「现在最新是哪一次审查」已经不一定是排它
+  // 那一刻的那一次(派审交接期尤其),而现查会把旧请求绑到新审查上(第 10 轮审查 F1)。
+  // 两列为空 = 这条消息没记下为哪一轮排的,它续起来的回合**不代表任何一轮审查**(显式的
+  // `"unbound"`,不是「就按最新那一轮算」;本轮审查 F2)。
+  reviewRun: text("review_run"),
+  reviewRound: integer("review_round"),
   // 这条消息是**谁发的**(多人模式)。投递时按它解析执行器/供应商/CLI 环境与 git 署名
   // —— 排队消息可能几分钟后才送出去,那时不能退回「任务归属人」:在别人的任务上排的
   // 队,烧的仍该是排队那个人自己的 key(§八)。null = 自用模式或存量行。
@@ -394,6 +401,16 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 真的落进会话之后才写，所以 sent 永远意味着「用户刷新后看得见」。租约是内存态的
   // 持久投影：进程一换就作废（开机 reclaimStaleDeliveries 全清），那条消息回到待发送。
   deliveringSince: text("delivering_since"),
+  // 这条消息已经把 `tasks.resume_prompt` 那段续跑交代**接走了**,值就是那一段原文,正文
+  // 末尾带着它(见 monitor-session.ts 的 monitorWakeCheckpoint)。
+  //
+  // 为什么要这一列:哨兵叫醒的那一轮要把 agent 自己留下的交代一起喂回去,而「先从任务行
+  // 取走、没送出去再回填」只把那段话留在一个内存闭包里 —— 取走成功、送达之前进程一换
+  // (崩溃/重启),开机只清投递租约,重投的是原始事件正文,再去读任务行也已经空了:那段
+  // 交代两边都不在(第 2 轮审查 F4)。写在这里 = 跟取走同一个批里落盘,于是重投认得出
+  // 「正文里已经带着它了」(幂等)、回填失败也不丢(下一次投递照旧带着它走)、送达之后
+  // 这一行就是那段交代被谁消费掉的记录。
+  checkpointTaken: text("checkpoint_taken"),
 });
 
 // Queue items: ordered list of tasks where each task waits for the one
@@ -544,4 +561,4 @@ export const handoffLocalKeyRevisions = sqliteTable("handoff_local_key_revisions
 });
 
 // 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
-export { monitors, monitorPendingCalls, monitorScanCursors } from "./schema-monitors.js";
+export { monitors, monitorPendingCalls, monitorScanCursors, monitorReclaimDebts } from "./schema-monitors.js";

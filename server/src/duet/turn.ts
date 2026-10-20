@@ -14,7 +14,7 @@ import { eq, sql } from "drizzle-orm";
 import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
-import { closeSessionTurns, freshTurnFields, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
+import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
@@ -176,10 +176,16 @@ export async function runTurn(args: {
   // 再有任何 await。把 await 塞进 run 的参数表达式里,停止请求就会落进那个窗口:stopTask
   // 返回 true、已有执行器也被杀了,这一轮却照样起了一个新的(第 3 轮审查 P2,我自己上一轮
   // 接线时引入的)。同一条不变量也管着下面那句 isCanceling。
+  // 复用同一行会话之前把库里用过的最晚起点接回水位（理由同 orchestrator,见
+  // session-turns.ts 的 primeTurnStarts）。必须排在下面那条「不再有 await」之前。
+  if (reuseRowId) await primeTurnStarts(reuseRowId);
   const browserGrant = await browserGrantForTask(taskId);
   // 版本读取与持久说明之间有 await；这期间收到停止请求也不能再起下一轮。
   if (isCanceling(taskId)) throw new CanceledRun();
-  const turnStart = now();
+  // 会话行 id 先定下来（纯 `id()`,不碰库、不 await,所以不破坏「这一句之后到 run 之间全同步」
+  // 那条不变量）：起点要按它从身份层分配,见 session-turns.ts 的 nextTurnStart。
+  const rowId = reuseRowId ?? id();
+  const turnStart = nextTurnStart(rowId);
   const handle = executor.run({
     prompt: withGlobalBrowserPolicy(prompt, resumeCliId ? "reminder" : "full", browserGrant),
     cwd,
@@ -200,7 +206,6 @@ export async function runTurn(args: {
   trackRun(taskId, handle);
   let cliId = handle.sessionId;
 
-  const rowId = reuseRowId ?? id();
   // **从这里到函数末尾是这一轮两样登记的作用域** —— 执行器句柄（上面那句 `trackRun`）与
   // 回合身份（下面那句 `openTurn`）。两样都必须从**拿到的那一刻**罩到函数末尾,而不是从消费
   // 循环开始:中间这段初始化（落库、建日志目录、开写流）抛出来时 CLI 已经起了,而这一轮的消费

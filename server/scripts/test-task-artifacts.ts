@@ -93,6 +93,9 @@ try {
   };
   const originOf = (result: { artifacts: { path: string; origin: string }[] }, path: string) =>
     result.artifacts.find((artifact) => artifact.path === path)?.origin ?? null;
+  /** 这一条是确定的还是候选。页脚只给总数,用户看得见数目看不出是哪几个（本轮审查第 5 条）。 */
+  const confOf = (result: { artifacts: { path: string; confidence?: string }[] }, path: string) =>
+    result.artifacts.find((artifact) => artifact.path === path)?.confidence ?? null;
 
   // 仓库原有的图 mtime 比任务开跑还新（worktree 检出就是这个效果），仍然不算产物。
   touchAt("assets/仓库原有.png", after);
@@ -147,6 +150,15 @@ try {
   assert.equal(result.artifacts.find((a) => a.path === "out/海报.png")?.kind, "image");
   assert.equal(result.artifacts.find((a) => a.path === "out/海报.png")?.dir, "out");
   assert.equal(result.artifacts.find((a) => a.path === "out/海报.png")?.size, png.length * 2);
+  // **强弱与状态是两件事**：这个 fixture 跑在项目主仓上（不是独占 worktree）,而它那条会话
+  // 没有逐回合记录,所以按时间认的那几条只能是候选；任务分支的差异自带归属、不吃时间,所以
+  // 那两条是确定的 —— 哪怕其中一条此刻的状态标签是「未提交」（它刚被改过）。
+  assert.equal(confOf(result, "out/海报.png"), "exact",
+    "任务分支上的提交动过它:归属是确定的,跟它此刻的状态标签无关");
+  assert.equal(confOf(result, "out/页面.html"), "exact");
+  assert.equal(confOf(result, "output/渲染.png"), "approx",
+    "被忽略的那一档只有「在这个目录里 + 时间对得上」一条线索,而这段区间是估出来的");
+  assert.equal(confOf(result, "out/草稿.png"), "approx");
   const times = result.artifacts.map((a) => Date.parse(a.mtime ?? ""));
   assert.deepEqual(times, [...times].sort((a, b) => b - a), "新的排前面");
   assert.equal(result.since, stamp);
@@ -249,6 +261,12 @@ try {
   // 上只说「1 个是估的」，另一个凭着同一段估出来的区间冒充确定。
   const guessedCount = Number(first.incomplete.find((n) => n.includes("按估出来的时间段"))?.match(/有 (\d+) 个/)?.[1]);
   assert.equal(guessedCount, 2, `估算区间认进来的两张都要计数（含已提交那张）：${JSON.stringify(first.incomplete)}`);
+  // **逐条标出来**,不是只给个总数：这两张正是上面那个 2 的来源,页脚的数目与标出来的条数同源。
+  assert.equal(confOf(first, "art/海报.png"), "approx",
+    "估出来的区间里捞到的提交只是候选——「已提交」这个标签说的是状态,不是归属有多硬");
+  assert.equal(confOf(first, "output/第一趟.png"), "approx");
+  assert.equal(first.artifacts.filter((a) => a.confidence === "approx").length, guessedCount,
+    `标成候选的条数必须等于页脚那个数,实际：${JSON.stringify(first.artifacts.map((a) => [a.path, a.confidence]))}`);
   assert.equal(originOf(first, "output/第一趟.png"), "ignored");
   assert.equal(originOf(first, "art/海报.png"), "committed", "共享工作区没有任务分支，已提交的那一档只能按运行区间认");
   assert.equal(

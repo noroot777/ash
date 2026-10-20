@@ -15,6 +15,8 @@ import { InspectorHeadActions } from "../inspector/index.ts";
 import { formatSize } from "./fileModel.ts";
 import {
   ARTIFACT_ORIGIN_HINT,
+  ARTIFACT_CONFIDENCE_HINT,
+  ARTIFACT_CONFIDENCE_LABEL,
   ARTIFACT_ORIGIN_LABEL,
   ARTIFACT_SCOPE_NOTE,
   formatArtifactTime,
@@ -144,7 +146,9 @@ export function ArtifactsInspector({
                 <button
                   type="button"
                   className={`artifacts__card${artifact.path === activePath ? " is-active" : ""}`}
-                  aria-label={`打开 ${artifact.path}，${ARTIFACT_ORIGIN_LABEL[artifact.origin]}`}
+                  aria-label={`打开 ${artifact.path}，${ARTIFACT_ORIGIN_LABEL[artifact.origin]}${
+                    artifact.confidence === "approx" ? `，${ARTIFACT_CONFIDENCE_LABEL}` : ""
+                  }`}
                   // 翻页的那一串按**这一组**给（图片跟图片翻、网页跟网页翻）：分组本来就是
                   // 「同一类东西」的意思，跨组翻到一份 html 只会让人以为点错了。
                   onClick={() => onOpenFile(artifact.path, group.items.map((item) => item.path))}
@@ -157,6 +161,14 @@ export function ArtifactsInspector({
                     {artifact.dir && <small className="artifacts__dir">{artifact.dir}</small>}
                     <small className="artifacts__facts">
                       <em data-origin={artifact.origin}>{ARTIFACT_ORIGIN_LABEL[artifact.origin]}</em>
+                      {/* 候选那一档逐条标出来。页脚只说「有 N 个是按估出来的时间段认的」时,
+                          用户看得见数目、看不出是哪几个,于是整张清单一起贬值（本轮审查第 5 条）。
+                          确定的那些不加角标——那是多数,标了只是噪音。 */}
+                      {artifact.confidence === "approx" && (
+                        // 解释走下面那张图例（跟 origin 那三个角标同一个做法）：原生 title 在每秒
+                        // 重渲染的界面里永远弹不出来,`scripts/check-conventions.mjs` 也拦着。
+                        <em data-confidence="approx">{ARTIFACT_CONFIDENCE_LABEL}</em>
+                      )}
                       {formatSize(artifact.size)}
                       {formatArtifactTime(artifact.mtime) && <span>{formatArtifactTime(artifact.mtime)}</span>}
                     </small>
@@ -202,6 +214,14 @@ export function ArtifactsInspector({
               <dd>{ARTIFACT_ORIGIN_HINT[origin]}</dd>
             </div>
           ))}
+          {/* 清单里真有候选时才解释它——独占目录下一个都不会有,凭空多一行只会让人以为
+              这份清单也靠猜。 */}
+          {artifacts.some((artifact) => artifact.confidence === "approx") && (
+            <div>
+              <dt data-confidence="approx">{ARTIFACT_CONFIDENCE_LABEL}</dt>
+              <dd>{ARTIFACT_CONFIDENCE_HINT}</dd>
+            </div>
+          )}
         </dl>
       )}
     </div>

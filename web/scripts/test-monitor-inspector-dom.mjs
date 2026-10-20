@@ -33,6 +33,8 @@ const monitor = (id, taskId, over = {}) => ({
   events: 3,
   exitCode: null,
   startedAt: "2026-10-09T02:00:00.000Z",
+  // 起点作数（服务端的可信性那一列）。缺了它卡片只会说「挂上的时刻不确定」。
+  startedAtExact: true,
   expiresAt: "2026-10-09T04:00:00.000Z",
   endedAt: null,
   endedReason: null,
@@ -554,8 +556,43 @@ try {
     await page.close();
   }
 
+  // ── 回复框上那条「在等哨兵」展开之后说了什么 ───────────────────────────────
+  // 这件事**只能点开才看得见**：正文默认不渲染，所以静态渲染根本摸不到那段文案（第 21 轮
+  // 审查 N2：上一版那条静态断言查的是折叠态，于是「不含某句话」在任何实现下都成立）。
+  //
+  // **判据按当前的监督事实写，不按 pid 空不空推断**（第 22 轮审查 N1）：接回层现在给每条
+  // 运行行都先立 tail 和期限，跟认不认得回号无关，所以「有事件会把这条会话重新叫醒」对
+  // 没认回来的那几条**也是真的**；同一段里一句「日志还没人接着读」、紧接着照抄的原因里
+  // 又写着「日志和期限已经有人接着管」，那是两句话打架（页面实测逮到的就是这一处）。
+  // 认不回号真正影响的是另一件事：点停未必停得掉那个进程 —— 那一句才是它该说的。
+  {
+    const bodyOf = async (mode) => {
+      const page = await open(undefined, `?wait=${mode}`);
+      await page.locator(".monitor-wait__bar").click();
+      const body = page.locator(".monitor-wait__body");
+      await body.waitFor();
+      const text = await body.innerText();
+      await page.close();
+      return text;
+    };
+
+    const claimed = await bodyOf("claimed");
+    assert.match(claimed, /重新叫醒/, "认回来的哨兵照旧：有事件会把这条会话重新叫醒");
+    assert.match(claimed, /继续：接着做 tts 这一段/, "交代原文要照抄进正文");
+    assert.doesNotMatch(claimed, /认不回它的进程/, "反向台子：正常那条一个字都不该提「认不回」");
+
+    const pending = await bodyOf("pending");
+    assert.match(pending, /重新叫醒/,
+      "没认回来的那条也会被叫醒（tail 和期限在 pending 那一刻就接上了）——收回这句话才是撒谎");
+    assert.match(pending, /这一刻认不回它的进程/, "得说清它现在是什么处境");
+    assert.match(pending, /未必停得掉那个进程/, "认不回号真正影响的那一件事要说出来：点停未必停得掉它");
+    assert.match(pending, /日志和期限已经有人接着管/, "受阻原因照抄：用户据以决定等不等的就是这一句");
+    assert.doesNotMatch(pending, /还没人接着读|没人读/,
+      "**同一段里不许同时说「日志没人读」和「日志有人管」**（第 22 轮审查 N1 页面实测）");
+  }
+
   assert.deepEqual(failures, []);
-  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task/form results never land, reconnects re-read the snapshot");
+  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task/form results never land, reconnects re-read the snapshot, the expanded wait card describes the real supervision state (woken either way; unclaimed ones may not be stoppable)");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();

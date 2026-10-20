@@ -1,7 +1,8 @@
 /* 文件树 Inspector + 会话区文件查看器 */
 
 .file-tree { display:flex; min-height:0; height:100%; flex-direction:column; }
-.file-tree__head { display:flex; flex:0 0 auto; align-items:center; gap:6px; border-bottom:.5px solid var(--line); padding:8px 9px; }
+/* position:relative 是给头部那颗「用 IDE 打开」的菜单当定位上下文用的，见 .file-ide.is-rail。 */
+.file-tree__head { position:relative; display:flex; flex:0 0 auto; align-items:center; gap:6px; border-bottom:.5px solid var(--line); padding:8px 9px; }
 .file-tree__where { min-width:0; flex:1; }
 .file-tree__where b { display:flex; min-width:0; align-items:center; gap:4px; overflow:hidden; color:var(--ink); font-size:11px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
 .file-tree__where b > svg { flex:0 0 auto; color:var(--accent); }
@@ -42,7 +43,10 @@
 .file-tree__peek:hover { background:var(--raised); color:var(--accent); }
 
 .file-viewer { display:flex; min-width:0; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
-.file-viewer__bar { display:flex; min-height:52px; flex:0 0 auto; align-items:center; gap:8px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
+/* 换行是必需的，不是美化：这排按钮全是 `flex:0 0 auto`，中栏收窄到 420px 左右时
+   标题会被压成零宽、最后几颗（含「关闭」）整个溢出到面板外被裁掉——点都点不到。
+   宽度够时 wrap 不改变任何东西（标题的 flex-basis 是 0，不会把按钮挤下去）。 */
+.file-viewer__bar { display:flex; min-height:52px; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:8px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
 .file-viewer__title { min-width:0; flex:1; }
 .file-viewer__title b { display:block; overflow:hidden; color:var(--ink); font-size:12.5px; text-overflow:ellipsis; white-space:nowrap; }
 .file-viewer__title small { display:block; overflow:hidden; color:var(--faint); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
@@ -131,11 +135,18 @@
 .file-delete__error { display:flex; align-items:center; gap:6px; margin:11px 0 0; color:var(--red); font-size:10.5px; }
 .file-delete__error.is-busy { color:var(--faint); }
 
-.file-openwith { position:relative; flex:0 0 auto; }
+/* 「打开方式」和「用 IDE 打开」是同一副长相的菜单，只是问的问题不同（系统关联 vs 清单里的 IDE）。 */
+:is(.file-openwith, .file-ide) { position:relative; flex:0 0 auto; }
+/* Inspector 栏只有 300 来像素宽，250px 的定宽菜单右对齐会伸出面板左边界，被面板的
+   overflow 削掉第一个字。所以这一档不以按钮为锚，而是贴着整条头部左右撑开。 */
+.file-ide.is-rail { position:static; }
+.file-ide.is-rail .file-openwith__menu { right:9px; left:9px; width:auto; }
 .file-openwith__menu { position:absolute; z-index:40; top:calc(100% + 5px); right:0; width:250px; max-height:340px; overflow-y:auto; }
 .file-openwith__hint { margin:0; padding:8px 10px; color:var(--faint); font-size:10px; }
 .file-openwith__hint.is-error { color:var(--red); }
 .file-openwith__app { display:flex; min-width:0; flex-direction:column; gap:1px; }
 .file-openwith__app b { display:flex; align-items:center; gap:4px; color:var(--ink); font-size:11px; font-weight:550; }
 .file-openwith__app b > svg { color:var(--accent); }
-.file-openwith__app small { color:var(--faint); font-size:9px; }
+.file-openwith__app small { overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+/* 「上次用的」：排在第一行那个的轻标记，别做成彩色徽章跟文件名抢注意力。 */
+.file-openwith__app b em { flex:0 0 auto; border-radius:3px; background:var(--overlay); padding:0 4px; color:var(--faint); font-size:8.5px; font-style:normal; font-weight:500; }

@@ -7,10 +7,10 @@ import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
-import { closeTaskTurns, freshTurnFields, openTurn, resumedTurnFields } from "./session-turns.js";
+import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
 import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, discardStartingRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceRole } from "./runs.js";
 import { consumeSingleRun } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -137,13 +137,13 @@ export async function continueTask(
   // 起跑前的那串闸（接力存档 / 回合占位 / 验收互斥 / 唤醒资格）收在一处，见
   // turn-entry-guard.ts 的文件头：它们共享的不变量是「从占住位到交给下面那个大 try
   // 之间，每一条出路都得自己把位还回去」，散着写时新加一道闸就会漏掉这件事。
-  const sessionRole = opts.sessionRole ?? "single";
+  const sessionRole = turnSourceRole(opts.turnSource) as Extract<SessionRole, "single" | "reviewer">;
   if (!await enterTurn({
     taskId,
-    sessionRole,
     handoff: head?.handoff,
     turnHeld: opts.turnHeld,
     wakeGuard: opts.wakeGuard,
+    source: opts.turnSource ?? { role: "single" },
   })) return false;
   // catch 那边署名用的就是它：出错时 task 可能压根没读出来，所以按 head 的快照兜底，
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
@@ -217,6 +217,9 @@ export async function continueTask(
       .update(tasks)
       .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
+    // 令牌落库的同一处把它绑到这一轮的运行时身份上:来源核验要的是「库里的令牌」和
+    // 「内存里这一轮」是同一件事,而不是两份各自独立的读(见 runs.ts `bindTurnToken`)。
+    bindTurnToken(taskId, turnToken);
 
     // 续聊/重跑同样按**这一回合是谁点的**解析执行器(§八)。跨人时降级到本人的默认
     // 执行器,并把这次降级写进时间线 —— 换执行器可能换模型档位,产出会变,不能静默。
@@ -407,6 +410,11 @@ export async function continueTask(
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
     const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan, preserveState: preserveCliState });
+    // 复用同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,
+    // 墙钟又恰好回拨到上一轮开工那一刻时,不接就会把那个历史身份原样重发一遍 —— 开始行被
+    // 唯一键合进旧行、收尾看见已收口直接返回,这一轮在库里一个字都没有（第 1 轮审查 F2,
+    // 机制见 session-turns.ts 的 primeTurnStarts）。
+    if (resuming) await primeTurnStarts(prev!.id);
     // 顺序定死:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论 → spawn。为什么只能这
     // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
@@ -417,8 +425,10 @@ export async function continueTask(
     if (freeze) await abortFrozen(taskId, freeze, { restorable: !!followUpFrom });
     // 原生命令必须独占整条 prompt(理由见上),不贴策略。
     const prompt = nativeCommand ? promptBody : withGlobalBrowserPolicy(promptBody, promptLevel, browserGrant);
-    const turnStart = now();
     const sessId = resuming ? prev!.id : id();
+    // 起点从身份层分配（同 task-run）。续聊复用同一行会话,所以这一轮的起点必须严格晚于那条
+    // 会话上已经见过的全部起点 —— 撞上就会被当成同一个回合身份,既不插行也不加数。
+    const turnStart = nextTurnStart(sessId);
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
     // 续聊/重试/队列推进/唤醒这一路也要解绑 —— 漏掉它等于只保护「全新起跑」的

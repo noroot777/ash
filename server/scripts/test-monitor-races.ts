@@ -21,7 +21,7 @@ import { eq } from "drizzle-orm";
 import { monitorMessageOrigin } from "@ash/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
-  HERE, root, db, schema, monitorsModule, status, pending, continueTask, runs, mountTaskRoutes,
+  HERE, root, db, schema, monitorsModule, monitorEvents, status, pending, continueTask, runs, mountTaskRoutes,
   startMonitor, stopMonitor, listMonitors, getMonitor,
   monitors, scheduledMessages, sessions, tasks,
   sleep, until, now, uniq, makeTask, pendingOf, teardown,
@@ -120,7 +120,7 @@ import {
   // ⑭ 「查到可合并的那一行之后，投递方才抢走租约」——那一发 CAS 必然落空。拿一份**已经
   // 过期**的 `existing` 调生产函数就是这个现场本身（不需要往产线里埋钩子）：行是查出来
   // 的，租约是真抢的，落空之后该怎么办全由生产代码自己决定。
-  await monitorsModule.mergeOrEnqueueMonitorEvent(row, "【哨兵事件】THIRD_AFTER_LEASE", queued);
+  await monitorEvents.mergeOrEnqueueMonitorEvent(row, "【哨兵事件】THIRD_AFTER_LEASE", queued);
   const after = await pendingOf(taskId);
   assert.equal(
     after.filter((m) => m.text.includes("THIRD_AFTER_LEASE")).length,
@@ -192,7 +192,7 @@ import {
 
   // 迟到的那一步:走生产的入库函数,`existing=null` 就是「没有可合并的那一行」,
   // 跟真实在途投递走到这一句时的处境一样。
-  await monitorsModule.mergeOrEnqueueMonitorEvent(row, "OUTPUT_IN_FLIGHT_AT_DONE", null);
+  await monitorEvents.mergeOrEnqueueMonitorEvent(row, "OUTPUT_IN_FLIGHT_AT_DONE", null);
   const late = (await pendingOf(taskId)).find((m) => m.origin === `monitor:${row.id}`);
   assert.ok(late, "这一行确实落进了队列——清理已经管不到它了");
 
@@ -214,9 +214,9 @@ import {
   );
 
   // 收尾那一侧的边界也钉一下:只清缓冲不等在途,那条缝就一直在。
-  const monitorsSrc = readSource(join(HERE, "../src/monitors.ts"));
+  const reclaimSrc = readSource(join(HERE, "../src/monitor-reclaim.ts"));
   assert.match(
-    monitorsSrc,
+    reclaimSrc,
     /for \(const m of all\) await serialize\(m\.id/,
     "连坐停止必须把每条哨兵自己的队列排空——轮到那个空活,才说明在途那一批已经写完",
   );

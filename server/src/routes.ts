@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { stream, streamSSE } from "hono/streaming";
 import { getConnInfo } from "@hono/node-server/conninfo";
-import { eq } from "drizzle-orm";
+import { and, eq, exists, sql } from "drizzle-orm";
 import type {
   Group,
   AgentType,
@@ -14,10 +14,11 @@ import { isSearchSort } from "@ash/shared/search";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@ash/shared/cli-overrides";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, agents, llmProviders } from "./db/schema.js";
+import { projects, groups, agents, llmProviders } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
+import { previousResidualLockPublic } from "./singleton.js";
 import { mountQueueRoutes } from "./queues.js";
 import { detectKnownClis, detectLocalAgents, registrationBlockReason } from "./detect.js";
 import { cliHostEnv } from "./executors/cli-env.js";
@@ -38,6 +39,7 @@ import { mountSkillRoutes } from "./skill-routes.js";
 import { mountAnthropicContext1mRoutes, stripContext1mSuffix } from "./anthropic-context-1m.js";
 import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
+import { detachTaskRefs } from "./task-refs.js";
 import { mountGroupRoutes } from "./group-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountMonitorRoutes } from "./monitor-routes.js";
@@ -70,7 +72,7 @@ import { makeEventFilter } from "./auth/event-filter.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 import { isHostCliIsolated } from "./auth/mode.js";
-import { clearDefaultFor, dispatchBlockReason } from "./auth/dispatch-gate.js";
+import { defaultClearScope, dispatchBlockReason } from "./auth/dispatch-gate.js";
 
 export const api = new Hono();
 // 认证 / 首启向导 / 用户与项目成员。挂在最前:它们里有几条是**闸外**的公开端点
@@ -92,7 +94,21 @@ mountPageAnnotationRoutes(api);
 // `pid` 是给 scripts/restart.mjs 认人用的:它重启完要确认「端口上应答的是我刚起的
 // 那个进程」,而不是「端口上有人应答」。少了这个字段,旧进程没被杀掉时(容器里没有
 // lsof/ss 就会这样)整条重启会安静地失败成一句「✓ 已就绪」。
-api.get("/health", (c) => c.json({ ok: true, ts: now(), pid: process.pid }));
+//
+// `previousResidualLock` 是「启动时发现上一轮的锁还在」这件事(启动时算一次,常量
+// 开销)。放在 health 上是因为**人只在重启那一刻关心它**:scripts/restart.mjs 确认就绪
+// 时顺手把它打出来,用户不必再去 /tmp 日志 + 系统日志里拼「上次为什么停」。
+//
+// 它走的是 `publicExitSummary` 白名单投影,**不是**内部那条全量记录:这个端点免登录
+// (见 auth/middleware.ts 的放行名单,多人模式同样放行),而全量记录的 `note` 在 PID
+// 被复用时会带上那个进程的完整命令行 —— 第 1 轮审查实测过未登录请求能从这里读到
+// 命令行里的密钥。要多公开一个字段,去 publicExitSummary 里显式加。
+api.get("/health", (c) => c.json({
+  ok: true,
+  ts: now(),
+  pid: process.pid,
+  previousResidualLock: previousResidualLockPublic(),
+}));
 
 // 「现在重启会打断谁」。scripts/restart.mjs 的安全闸靠它决定拦不拦 —— 只数
 // running/queued 的个数已经不对了：agent 输出走文件之后，多数单飞任务重启不会断。
@@ -307,10 +323,15 @@ api.post("/agents", async (c) => {
     configOverrides: JSON.stringify(configOverrides),
     isDefault: !!b.isDefault,
   };
-  // 「同一类型至多一个默认」在多人模式下是**每人各自**的一个默认 —— 清别人的标记
-  // 既越权又会把他的设置改掉。
-  if (row.isDefault) await clearDefaultFor(row.type, row.ownerUserId);
-  await db.insert(agents).values(row);
+  // 清旧默认与落新行**同批提交**:两次并发的「设为默认」若在清与设之间互相插队,同一
+  // 类型会留下两个默认(解析时取到哪个全看行序)。清的范围见 defaultClearScope。
+  const clearDefault = row.isDefault
+    ? db.update(agents).set({ isDefault: false })
+      .where(await defaultClearScope(row.type, row.ownerUserId))
+    : null;
+  const insert = db.insert(agents).values(row);
+  if (clearDefault) await db.batch([clearDefault, insert]);
+  else await insert;
   return c.json(toAgent(row as typeof agents.$inferSelect), 201);
 });
 
@@ -348,12 +369,24 @@ api.patch("/agents/:id", async (c) => {
     if (overrideErrors.length) return c.json({ error: overrideErrors.join("；") }, 400);
     patch.configOverrides = JSON.stringify(configOverrides);
   }
-  if (b.isDefault === true) {
-    await clearDefaultFor(existing.type, existing.ownerUserId);
-    patch.isDefault = true;
-  }
-  await db.update(agents).set(patch).where(eq(agents.id, aid));
-  const updated = (await db.select().from(agents).where(eq(agents.id, aid))).at(0)!;
+  // 同上:清旧默认与设新默认打进同一批。但**成批不等于两条都命中** —— 开头那句
+  // 「这个 profile 存在」是在批外读的,删除可以恰好落在它和这一批之间;而 SQLite 对
+  // 不存在的行做 UPDATE 是成功的零行操作,不报错也不回滚。于是清旧默认照常提交,设
+  // 新默认一行没中:**设置失败,却把另一个仍在的默认抹掉了**(第 1 轮审查 20/20 复现)。
+  // 所以把「目标还在」做成清那条语句自己的条件(子查询跟它一起求值),两条就只剩
+  // 「都中」或「都不中」—— 判据同 claude-monitor-write.ts 那段。
+  const targetAlive = exists(db.select({ one: sql`1` }).from(agents).where(eq(agents.id, aid)));
+  const clearDefault = b.isDefault === true
+    ? db.update(agents).set({ isDefault: false })
+      .where(and(await defaultClearScope(existing.type, existing.ownerUserId), targetAlive))
+    : null;
+  if (clearDefault) patch.isDefault = true;
+  // 响应取**这次写入自己的结果**:写完再独立读一次是第二个空窗口(行刚被删就读成
+  // undefined,老代码那个非空断言当场 500)。零行 = 目标已经没了,与开头的预读同一句话。
+  const write = db.update(agents).set(patch).where(eq(agents.id, aid)).returning();
+  const written = clearDefault ? (await db.batch([clearDefault, write]))[1] : await write;
+  const updated = written.at(0);
+  if (!updated) return c.json({ error: "not found" }, 404); // 与开头预读那条同一句话
   return c.json(toAgent(updated));
 });
 
@@ -362,7 +395,7 @@ api.delete("/agents/:id", async (c) => {
   const existing = (await db.select().from(agents).where(eq(agents.id, aid))).at(0);
   if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
   await db.delete(agents).where(eq(agents.id, aid));
-  await db.update(tasks).set({ executorId: null, updatedAt: now() }).where(eq(tasks.executorId, aid));
+  await detachTaskRefs("executorId", aid);
   return c.json({ deleted: true });
 });
 

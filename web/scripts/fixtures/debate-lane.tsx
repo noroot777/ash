@@ -50,6 +50,7 @@ const run = {
     round: 1, status: "failed", conclusion: "verify_failed", reviewedCommit: "c1",
     reportMarkdown: "# 报告", screenshots: [],
     dispute: {
+      summary: "这一条我认，但它该另开一个任务做，不属于这次要改的那件事。",
       reason: "", deferReason: "只转出一项：P1 修复方向里的「为代理层增加有界超时/可取消策略」。",
       at: "2026-09-24T13:31:36.345Z", resolution: null, resolvedAt: null, deferredTaskId: null,
       debates: [debate],
@@ -76,8 +77,8 @@ const runningDebate = {
   id: "running-1", status: "running", exchanges: 1, currentSide: "executor", verdict: null,
   startedAt: "2026-09-24T15:10:00.000Z", finishedAt: null,
   turns: [
-    { seq: 1, side: "reviewer", status: "done", statement: "审查者第 1 段。", startedAt: "2026-09-24T15:10:00.100Z", endedAt: "2026-09-24T15:12:39.000Z" },
-    { seq: 2, side: "executor", status: "speaking", statement: null, startedAt: "2026-09-24T15:12:40.000Z", endedAt: null },
+    { seq: 1, side: "reviewer", summary: "我坚持这一条。", status: "done", statement: "审查者第 1 段。", startedAt: "2026-09-24T15:10:00.100Z", endedAt: "2026-09-24T15:12:39.000Z" },
+    { seq: 2, side: "executor", summary: null, status: "speaking", statement: null, startedAt: "2026-09-24T15:12:40.000Z", endedAt: null },
   ],
 } as unknown as FreeReviewDebate;
 

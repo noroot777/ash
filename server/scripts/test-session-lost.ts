@@ -221,7 +221,10 @@ const CHAIN_OWNER: Record<string, string> = {
   "team/session.ts": "team/session-consumer.ts",
   "duet/turn.ts": "duet/turn.ts",
 };
-const RESUME_CALL = /sessionId:[^,\n]*(cliSessionId|resumeCliId)/;
+// **`(` 不许出现在中间**:这一问找的是「库里那个 id 原样当成 `--resume` 的参数」。把它交给
+// 一个函数去换成别的东西(`sessionOf(cliSessionId, taskId)` 换出来的是 ash 自己的会话行 id,
+// 给时间线用的)既不是续跑,也不需要清失效 id —— 上一版的宽松写法把那种调用也算成一条链。
+const RESUME_CALL = /sessionId:\s*[^,\n(]*(cliSessionId|resumeCliId)/;
 const walk = (d: string): string[] =>
   readdirSync(d, { withFileTypes: true }).flatMap((e) =>
     e.isDirectory() ? walk(join(d, e.name)) : e.name.endsWith(".ts") ? [join(d, e.name)] : [],

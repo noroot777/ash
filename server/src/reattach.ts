@@ -5,12 +5,12 @@
 // 不 import 这里（它靠 runs.ts 的 isRunning 就能知道谁被接管了，不需要回引）。
 import { createWriteStream } from "node:fs";
 import { join } from "node:path";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { AgentType, SessionRole } from "@ash/shared";
 import type { RunHandle } from "./executors/types.js";
 import { db } from "./db/index.js";
-import { agents, tasks, sessions } from "./db/schema.js";
-import { claimTurn, discardStartingRun, releaseTurn, trackRun } from "./runs.js";
+import { agents, freeReviewRuns, tasks, sessions } from "./db/schema.js";
+import { bindTurnToken, claimTurn, discardStartingRun, releaseTurn, trackRun } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
@@ -159,7 +159,22 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       markTurnActive({ sessionId: sess.id, taskId: task.id, startedAt: sess.turnStartedAt ?? sess.startedAt });
       // 接管也要恢复 turn 的运行时身份：report_stage 只认 turnRole（claimTurn 落下的），
       // 不恢复的话接回的 reviewer 交卷必被拒，一条本可有结论的审查被错杀成异常失败。
-      claimedTurn = claimTurn(task.id, sess.role);
+      //
+      // **令牌和审查来源一起恢复**:接回的 agent 手里拿的还是上一轮那个 `ASH_TURN_TOKEN`,
+      // 它挂哨兵时要靠「内存这一轮 = 库里那个令牌」才核验得过(见 runs.ts `bindTurnToken`)。
+      // 审查来源在这一刻按库里**正在进行**的那次审查认:启动期是串行的,没有派审交接在飞,
+      // 所以这一问不会落到第 10 轮审查 F1 那个窗口里。
+      const restoredReview = sess.role === "reviewer"
+        ? (await db.select({ id: freeReviewRuns.id, round: freeReviewRuns.currentRound })
+          .from(freeReviewRuns)
+          .where(and(eq(freeReviewRuns.taskId, task.id), eq(freeReviewRuns.status, "reviewing")))).at(0) ?? null
+        : null;
+      // claimedTurn 是外层那个 let(不是 const):下面接管失败的 catch 出口也要凭它放锁。
+      claimedTurn = claimTurn(
+        task.id, sess.role,
+        restoredReview ? { run: restoredReview.id, round: restoredReview.round } : null,
+      );
+      if (claimedTurn && task.activeTurnToken) bindTurnToken(task.id, task.activeTurnToken);
       // 消费循环与它的 finally 要的是**这一次**接到的那个句柄(上面那个 let 为了让失败出口
       // 够得着它才声明在 try 外面,类型上是可空的)。
       const adoptedHandle = handle;

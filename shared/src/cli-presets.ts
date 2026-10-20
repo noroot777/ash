@@ -86,7 +86,7 @@ export interface CliModelCatalog {
  * 服务端返回的 `probeSupported`。与 server catalog 里填了 `models` 的
  * type 是否一致,由 `server/scripts/test-cli-models.ts` 断言,不靠自觉。
  */
-export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", "codex", "grok", "pi"]);
+export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", "codex", "grok", "opencode", "pi"]);
 
 // CLI-native model aliases used when an executor is on its official account.
 // Provider-backed executors replace these with that provider's /v1/models list.
