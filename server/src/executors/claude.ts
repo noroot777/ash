@@ -121,12 +121,12 @@ export class ClaudeExecutor implements AgentExecutor {
     cwd: string,
     model?: string,
     relayAuthToken?: string,
-    resident = false,
+    crossTurn = false,
   ): Record<string, unknown> | null {
     const settings = {
       ...(this.speed === "fast" ? { fastMode: true } : {}),
       ...cliConfigOverrideSettings(this.type, this.configOverrides, cliHostEnv(cwd)),
-      ...monitorRedirectHook(resident),
+      ...monitorRedirectHook(crossTurn),
     } as Record<string, unknown>;
     const relayBaseUrl = this.relayBaseUrl(model);
     if (relayBaseUrl) {
@@ -171,8 +171,8 @@ export class ClaudeExecutor implements AgentExecutor {
     return env;
   }
 
-  private runtimeSettings(cwd: string, model?: string, resident = false): RuntimeSettings {
-    const settings = this.settingsPayload(cwd, model, this.relay?.apiKey, resident);
+  private runtimeSettings(cwd: string, model?: string, crossTurn = false): RuntimeSettings {
+    const settings = this.settingsPayload(cwd, model, this.relay?.apiKey, crossTurn);
     if (!settings) return { arg: null, cleanup: () => {} };
     if (!this.relay) return { arg: JSON.stringify(settings), cleanup: () => {} };
     const path = join(tmpdir(), `ash-claude-settings-${process.pid}-${randomUUID()}.json`);
@@ -232,9 +232,12 @@ export class ClaudeExecutor implements AgentExecutor {
     if (opts.cliCommand?.name === "goal") return this.run(opts);
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
+    // **`--input-format stream-json` ≠ 跨回合**：这一路的进程照样在本回合的 `result`
+    // 之后就被收台（见下面的 `singleRunFromResident`），所以 Monitor 改道必须照挂 ——
+    // 第三个参数给 `false`，而 `buildArgs` 那个 `true` 只是在要 stdin 的那个参数。
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
-      : this.runtimeSettings(opts.cwd, model, true);
+      : this.runtimeSettings(opts.cwd, model, false);
     const args = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError || settings.error
