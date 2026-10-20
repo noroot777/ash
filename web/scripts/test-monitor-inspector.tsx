@@ -538,13 +538,23 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
 
   // ── 第 1 轮审查 F4：**空行列表有三种来由,只有「确证的 0 字节」那一种能说「它从头到尾
   //    是空的」**。读不出来、尾部切不出完整行(超长单行)时,文件里完全可能有几兆字节。
-  for (const [bytes, label] of [[null, "读不出来"], [undefined, "老后端没这一列"]] as const) {
-    for (const liveNow of [true, false]) {
-      const text = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, liveNow, bytes);
-      assert.match(text, /读不出来/, `${label}：要照实说读不出来`);
-      assert.match(text, /说不准/, `${label}：不许替它下「有没有产出」的结论`);
-      assert.doesNotMatch(text, /从头到尾是空的|一个字都还没吐/, `${label}：不许断言零输出`);
-    }
+  //    **而「读不出来」跟「这个后端没给这一项」又得再分一层**（第 2 轮审查 N3）：旧后端可能
+  //    成功读出一个空文件,只是那一版响应里没有这一列 —— 凭「字段不在」说「读失败」又是一次
+  //    替它编事实。所以两种都不许断言零输出,但说的是不同的原因。
+  for (const liveNow of [true, false]) {
+    const unreadable = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, liveNow, null);
+    assert.match(unreadable, /读不出来/, "后端说读不出来：照实说读不出来");
+    assert.match(unreadable, /说不准/, "不许替它下「有没有产出」的结论");
+    assert.doesNotMatch(unreadable, /从头到尾是空的|一个字都还没吐/, "不许断言零输出");
+
+    const legacy = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, liveNow, undefined);
+    assert.match(legacy, /没有日志大小这一项|版本比当前界面旧/, "字段缺失要说清是后端没给（N3）");
+    assert.match(legacy, /说不准/, "同样不许下结论");
+    assert.doesNotMatch(legacy, /从头到尾是空的|一个字都还没吐/, "不许断言零输出");
+    assert.doesNotMatch(
+      legacy, /读不出来/,
+      "**但不许说成读取失败**：那是另一件事,旧后端很可能读得好好的（N3）",
+    );
   }
   {
     const text = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, false, 4096);

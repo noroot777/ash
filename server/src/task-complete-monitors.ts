@@ -44,7 +44,28 @@
 // 三类都只挡「这一次完成」，不是永久锁：撤掉 / 收下来看一眼 / 用户在待发送托盘里删掉 /
 // 对它调 stop_monitor 明确放弃，任一件做完闸自己就开（**不是**按事件计数大于零就算已处理
 // —— 计数只在投递被接受时才涨，正好是这里要护的那一批还没涨的）。
-import { and, desc, eq, isNotNull, isNull, like } from "drizzle-orm";
+//
+// ── 三类必须在**一条语句**里读齐 ──────────────────────────────────────────────────
+//
+// 这是本文件第二个容易写错的地方（第 2 轮审查 F1）。上一版三类各发一条 SELECT，中间隔着
+// await —— 而一份责任正是**从一类移到另一类**的：收尾的交接是「把【哨兵结束】入队」再「销掉
+// 凭证」两条语句。于是：读完第二类（还没入队，空）→ 交接整件做完（入队了、凭证销了）→ 读第
+// 三类（凭证已销，空）。三个读数全空，闸放行，任务落 done，刚入队那条通知被终态清理作废。
+// 实测 `F1_NONATOMIC_GATE_HTTP` / `F1_NONATOMIC_GATE_FINAL`：精确在第二类查完之后注入真实
+// `deliverResultHandoff`，HTTP 200、结算 done、消息 canceled。
+//
+// 所以补的办法不是再加第四类，而是**把读取做成一次**：一条 `UNION ALL` 走完三张来源，SQLite
+// 的单语句自带一致快照，JS 这一侧也没有可插入的调度点。于是对那笔转移的每一个瞬间：
+//
+//   · 入队之前读到 ⇒ 凭证在（第三类）⇒ 拦
+//   · 两条语句之间读到 ⇒ 消息在、凭证也在 ⇒ 拦
+//   · 销凭证之后读到 ⇒ 消息在（第二类）⇒ 拦
+//
+// **这个不变量依赖「先入队、后销凭证」那个顺序**（monitor-events.ts 的 `deliverResultHandoff`）：
+// 反过来就又空出一个两边都看不见的瞬间。两处各自钉了回归：这里数语句条数（拆回多条就红），
+// 那边钉顺序。
+import { and, desc, eq, isNotNull, isNull, like, or, sql } from "drizzle-orm";
+import { unionAll } from "drizzle-orm/sqlite-core";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
@@ -88,6 +109,15 @@ const factsOf = (r: MonitorRow): MonitorFacts => ({
   logBytes: monitorLogBytes(r.logPath), endedReason: r.endedReason,
 });
 
+/** 同一口径，但吃的是 UNION 出来的行：第二类的哨兵行可能已经没了，那就退回 origin 里的 id。 */
+const labelOfRow = (r: BlockingRow): string =>
+  (r.description ?? "").trim() || (r.command ?? "").trim() || monitorIdFromOrigin(r.origin) || "（已删除的哨兵）";
+
+const factsOfRow = (r: BlockingRow): MonitorFacts => ({
+  id: r.monitorId ?? "", label: labelOfRow(r), events: r.events ?? 0,
+  logBytes: r.logPath ? monitorLogBytes(r.logPath) : null, endedReason: r.endedReason,
+});
+
 /**
  * 这条哨兵活得过这次完成吗。
  *
@@ -101,16 +131,78 @@ async function sparedByReview(r: Pick<MonitorRow, "sourceReviewRun" | "sourceRev
   return await isReviewSourceActive(r.sourceReviewRun, r.sourceReviewRound);
 }
 
-/** 第一类：还在盯的进程。 */
-async function liveMonitors(taskId: string): Promise<MonitorFacts[]> {
-  const rows = await db.select(MONITOR_COLUMNS).from(monitors)
+/**
+ * **三类一条语句读齐**（见文件头「三类必须在一条语句里读齐」）。
+ *
+ * 三段 `UNION ALL` 对应三类，`cls` 列标明是哪一类。第三类从 `scheduled_messages` 出发左连
+ * `monitors`：那条消息的哨兵行**可能已经没了**（被删 / 被清），而消息本身就是结果，照样算
+ * （所以是 LEFT JOIN，不是 INNER）。
+ *
+ * 过滤能放进 SQL 的都放进去（`results_abandoned_at`），放不进的留在内存里（审查豁免要查另一
+ * 张表、日志字节要读文件）—— **这两样都不影响快照一致性**：它们只会把已经读出来的行筛掉或
+ * 装饰，不会让一份正在转移的责任从指缝里漏过去。
+ */
+type BlockingRow = {
+  cls: string;
+  monitorId: string | null;
+  origin: string | null;
+  description: string | null;
+  command: string | null;
+  events: number | null;
+  logPath: string | null;
+  endedReason: string | null;
+  reviewRun: string | null;
+  reviewRound: number | null;
+};
+
+/** `monitor:` 这个前缀的长度；SQL 里按它从 origin 切出哨兵 id（`substr` 的下标从 1 起）。 */
+const ORIGIN_PREFIX = "monitor:";
+
+async function blockingRows(taskId: string): Promise<BlockingRow[]> {
+  const shape = {
+    monitorId: monitors.id,
+    description: monitors.description,
+    command: monitors.command,
+    events: monitors.events,
+    logPath: monitors.logPath,
+    endedReason: monitors.endedReason,
+    reviewRun: monitors.sourceReviewRun,
+    reviewRound: monitors.sourceReviewRound,
+  };
+  // 第一类：还在盯的进程。**不按 `results_abandoned_at` 筛** —— 那一列是「不要这条哨兵的结果
+  // 了」，而 `stop_monitor` 对一条 running 的哨兵同时会把进程停掉，所以这个组合实际不出现；
+  // 真出现（停进程失败）时它仍然在盯，仍然会被这次完成毁掉，该拦。
+  const live = db.select({ cls: sql<string>`'live'`.as("cls"), origin: sql<string | null>`NULL`.as("origin"), ...shape })
+    .from(monitors)
     .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "ash"), eq(monitors.status, "running")));
-  const live: MonitorFacts[] = [];
-  for (const r of rows) if (!await sparedByReview(r)) live.push(factsOf(r));
-  return live;
+  // 第三类：结局已写定、结束通知还没入队的（凭证还在）。
+  const handoff = db.select({ cls: sql<string>`'handoff'`.as("cls"), origin: sql<string | null>`NULL`.as("origin"), ...shape })
+    .from(monitors)
+    .where(and(
+      eq(monitors.taskId, taskId), eq(monitors.kind, "ash"),
+      isNotNull(monitors.resultHandoffAt), isNull(monitors.resultsAbandonedAt),
+    ));
+  // 第二类：还排在待发送托盘里的哨兵结果。
+  const unread = db.select({ cls: sql<string>`'unread'`.as("cls"), origin: scheduledMessages.origin, ...shape })
+    .from(scheduledMessages)
+    .leftJoin(monitors, eq(monitors.id, sql`substr(${scheduledMessages.origin}, ${ORIGIN_PREFIX.length + 1})`))
+    .where(and(
+      eq(scheduledMessages.taskId, taskId),
+      eq(scheduledMessages.status, "pending"),
+      like(scheduledMessages.origin, `${ORIGIN_PREFIX}%`),
+      // 哨兵行没了的照样算；行还在但已经被明确放弃的不算（下面那段长注释）。
+      or(isNull(monitors.id), isNull(monitors.resultsAbandonedAt)),
+    ));
+  // **最宽的那一支放第一位**:`unionAll` 的结果类型取第一支,而第二类是 LEFT JOIN(哨兵行可能
+  // 没了),它的列全是可空的。另外两支的非空列可以赋进可空类型,反过来编译不过。
+  return await unionAll(unread, live, handoff);
 }
 
 /**
+ * 第一类：还在盯的进程。
+ *
+ * 任务落终态时 `stopMonitorsForTask` 把它们停掉，判据必须跟那边的 `kept` 同一份（见文件头）。
+ *
  * 第二类：还排在待发送托盘里、没送到执行者手上的哨兵结果。
  *
  * **带投递租约的那一行也算**。`cancelPendingMonitorEvents` 放过它（它归抢下租约的那位投递者），
@@ -129,49 +221,24 @@ async function liveMonitors(taskId: string): Promise<MonitorFacts[]> {
  * 而那一列只有 running 分支写得到 —— 对一条已经 `exited` 的哨兵，`stop_monitor` 一个字都写不
  * 进去，于是文案承诺的出路对它永远无效。放弃连理由一起落库、并留在时间线上，所以它是看得见
  * 的，不是偷偷丢掉。
- */
-async function undeliveredResults(taskId: string): Promise<{ id: string; label: string }[]> {
-  const rows = await db
-    .select({ id: scheduledMessages.id, origin: scheduledMessages.origin })
-    .from(scheduledMessages)
-    .where(and(
-      eq(scheduledMessages.taskId, taskId),
-      eq(scheduledMessages.status, "pending"),
-      like(scheduledMessages.origin, "monitor:%"),
-    ));
-  const unread: { id: string; label: string }[] = [];
-  for (const r of rows) {
-    const monitorId = monitorIdFromOrigin(r.origin);
-    if (!monitorId) continue;
-    const m = (await db.select(MONITOR_COLUMNS).from(monitors).where(eq(monitors.id, monitorId))).at(0);
-    if (m?.resultsAbandonedAt) continue;
-    if (m && await sparedByReview(m)) continue;
-    unread.push({ id: r.id, label: m ? labelOf(m) : monitorId });
-  }
-  return unread;
-}
-
-/**
+ *
  * 第三类：结局已经写定、那条结束通知**还没入队**的（`result_handoff_at` 非空）。
  *
  * 这一列由收尾那一笔跟终态**同一条 UPDATE** 写下，入队成功后才销，所以它覆盖的正是前两类之间
- * 那条缝（见文件头）。它也覆盖「进程这中间死掉」：凭证留在库里，启动时按它重投
- * （`redeliverResultHandoffs`），而在重投之前闸一直看得见。
- *
- * 豁免跟前两类同口径：明确放弃过结果的（`results_abandoned_at`）不算，属于仍在进行的审查的
- * 不算。
+ * 那条缝（见文件头）。它也覆盖「进程这中间死掉」：凭证留在库里，由重投器按它补送
+ * （`redeliverResultHandoffs`），而在送出去之前闸一直看得见。
  */
-async function handoffInFlight(taskId: string): Promise<MonitorFacts[]> {
-  const rows = await db.select(MONITOR_COLUMNS).from(monitors)
-    .where(and(
-      eq(monitors.taskId, taskId),
-      eq(monitors.kind, "ash"),
-      isNotNull(monitors.resultHandoffAt),
-      isNull(monitors.resultsAbandonedAt),
-    ));
-  const inflight: MonitorFacts[] = [];
-  for (const r of rows) if (!await sparedByReview(r)) inflight.push(factsOf(r));
-  return inflight;
+type Blocking = { live: MonitorFacts[]; unread: { label: string }[]; inflight: MonitorFacts[] };
+
+async function blockingSets(taskId: string): Promise<Blocking> {
+  const out: Blocking = { live: [], unread: [], inflight: [] };
+  for (const r of await blockingRows(taskId)) {
+    if (await sparedByReview({ sourceReviewRun: r.reviewRun, sourceReviewRound: r.reviewRound })) continue;
+    if (r.cls === "unread") out.unread.push({ label: labelOfRow(r) });
+    else if (r.cls === "handoff") out.inflight.push(factsOfRow(r));
+    else out.live.push(factsOfRow(r));
+  }
+  return out;
 }
 
 const nameList = (items: { label: string }[]): string => {
@@ -188,9 +255,7 @@ const nameList = (items: { label: string }[]): string => {
  * **有意识的**取舍，而不是撞上一堵没有门的墙。
  */
 export async function monitorsBlockingComplete(taskId: string): Promise<string | null> {
-  const live = await liveMonitors(taskId);
-  const unread = await undeliveredResults(taskId);
-  const inflight = await handoffInFlight(taskId);
+  const { live, unread, inflight } = await blockingSets(taskId);
   if (live.length === 0 && unread.length === 0 && inflight.length === 0) return null;
   const what = [
     live.length ? `${live.length} 个哨兵还在盯着（${nameList(live)}）` : null,
@@ -216,7 +281,8 @@ export async function monitorsBlockingComplete(taskId: string): Promise<string |
       : "")
     + (inflight.length
       ? "④ 正在送的那几条：**等一下再调一次 complete_task 就行** —— 它们是刚刚跑完的哨兵的结束通知，"
-        + "这一刻正在入队（通常就是下一个瞬间）。确实不要了也可以对它调 stop_monitor。"
+        + "ash 正在把它们送到你手上（通常就是下一个瞬间；这一笔万一写失败，有人按退避一直重试、"
+        + "每分钟还会巡检一遍，不需要你做什么）。确实不要了也可以对它调 stop_monitor。"
       : "")
   );
 }

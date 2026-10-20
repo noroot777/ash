@@ -15,7 +15,9 @@ function useMonitorLog(monitorId: string, open: boolean, live: boolean) {
   const [truncated, setTruncated] = useState(false);
   // 日志文件这一刻多大。`null` = 读不出来（或者老后端没这一列）—— 跟 0 不是一回事,空行
   // 列表的三种来由只有它分得开（第 1 轮审查 F4，见 `emptyLogCopy`）。
-  const [bytes, setBytes] = useState<number | null>(null);
+  // **三态**（第 2 轮审查 N3）：`undefined` = 这个后端没给这一项（旧版本），`null` = 后端说它
+  // 读不出来，数字 = 实测大小。归一成两态就等于拿「字段不在」冒充「读失败」。
+  const [bytes, setBytes] = useState<number | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   // 轮询里引用的是「这一刻还该不该拉」，所以 live 进 ref，避免定时器跟着它重建。
   const liveRef = useRef(live);
@@ -26,7 +28,7 @@ function useMonitorLog(monitorId: string, open: boolean, live: boolean) {
       const tail = await api.monitorLog(monitorId);
       setLines(tail.lines);
       setTruncated(tail.truncated);
-      setBytes(tail.bytes ?? null);
+      setBytes(tail.bytes);
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));

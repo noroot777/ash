@@ -123,7 +123,7 @@ export async function ensureSchema() {
       attachments TEXT NOT NULL DEFAULT '[]', agent TEXT,
       executor_id TEXT, model TEXT, mode TEXT NOT NULL DEFAULT 'timed', send_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT,
-      delivering_since TEXT, checkpoint_taken TEXT,
+      delivering_since TEXT, checkpoint_taken TEXT, handoff_token TEXT,
       review_run TEXT, review_round INTEGER
     );
     CREATE TABLE IF NOT EXISTS session_turns (
@@ -375,6 +375,14 @@ export async function ensureSchema() {
     // checkpoint_taken)。持久账本:取走只写在内存里的话,送达之前进程一换,那段交代
     // 就两边都不在了(第 2 轮审查 F4)。存量行 NULL。
     "ALTER TABLE scheduled_messages ADD COLUMN checkpoint_taken TEXT",
+    // 这条消息承载的是哪一笔结果交接。身份跟入队同一笔落库,于是「这一笔送过没有」有一个原子
+    // 的答案——重投器据此不把同一条结束通知送成两条、把 agent 叫醒两次(第 2 轮审查 N1)。
+    // 存量行 NULL = 不是交接。
+    "ALTER TABLE scheduled_messages ADD COLUMN handoff_token TEXT",
+    // 那段续跑交代的随身凭证:来源 + 取走时的占用代次(见 schema.ts)。存量行 NULL = 老账本,
+    // 按「来源未知」处理(退回时不改来源列,照旧只认代次)。
+    "ALTER TABLE scheduled_messages ADD COLUMN checkpoint_auto INTEGER",
+    "ALTER TABLE scheduled_messages ADD COLUMN checkpoint_generation INTEGER",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
@@ -406,6 +414,9 @@ export async function ensureSchema() {
     // 那段续跑指令是系统自己写的(哨兵闸)还是人/agent 写的 —— 只有前者可以在阻塞物消失后
     // 自动清掉(第 2 轮审查 R2-2)。存量行一律 0 = 当成人写的,不会被自动抹掉。
     "ALTER TABLE tasks ADD COLUMN resume_prompt_auto INTEGER NOT NULL DEFAULT 0",
+    // 这一格被占用的第几次。来源列只在「文字还在」时有意义,所以一段在途的退回必须靠代次
+    // 判断自己是否已经过期 —— 否则它会继承到别人的来源(第 2 轮审查 F2)。存量行 0。
+    "ALTER TABLE tasks ADD COLUMN resume_prompt_generation INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN resume_depends_on TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE agents ADD COLUMN speed TEXT",
     "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT",

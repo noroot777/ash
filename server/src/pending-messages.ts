@@ -93,6 +93,8 @@ export function pendingMessageRow(input: {
   execution?: boolean;
   // 排队消息不看钟点,sendAt 只用来排先后,所以默认取此刻。
   sendAt?: Date;
+  /** 这条消息承载的那一笔结果交接的身份(见 schema 的 `handoff_token`);普通消息不填。 */
+  handoffToken?: string | null;
 }): Row {
   return {
     id: id(),
@@ -117,6 +119,10 @@ export function pendingMessageRow(input: {
     deliveringSince: null,
     // 新消息没接走任何交代（接走发生在投递那一刻，见 monitorWakeCheckpoint）。
     checkpointTaken: null,
+    handoffToken: input.handoffToken ?? null,
+    // 普通消息不承载续跑交代,所以凭证两列一起空着(账本在 monitor-session.ts 里才写)。
+    checkpointAuto: null,
+    checkpointGeneration: null,
   };
 }
 

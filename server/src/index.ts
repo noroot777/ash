@@ -161,22 +161,32 @@ async function initializeServer() {
       console.error("[ash] 哨兵接回失败（不影响启动）:", err);
       return null;
     });
+    const handoff = monitorRecovery?.handoff;
     if (monitorRecovery?.attached || monitorRecovery?.lost || monitorRecovery?.pending
-      || monitorRecovery?.failed || monitorRecovery?.redelivered) {
+      || monitorRecovery?.failed || handoff?.delivered || handoff?.dropped || handoff?.failed) {
       // `pending` 单独说一句:那几条**既没接回来、也没判没**(pid 还空着、这一刻又认不回来),
       // 行原样留着等下一次问 —— 并进任何一边都是撒谎(第 19 轮审查 F2)。
       console.log(
-        `[ash] 哨兵：接回 ${monitorRecovery.attached} 个，${monitorRecovery.lost} 个进程已不在`
-        + (monitorRecovery.pending ? `，${monitorRecovery.pending} 个这一刻认不回身份（创建意图留着）` : "")
+        `[ash] 哨兵：接回 ${monitorRecovery?.attached ?? 0} 个，${monitorRecovery?.lost ?? 0} 个进程已不在`
+        + (monitorRecovery?.pending ? `，${monitorRecovery?.pending ?? 0} 个这一刻认不回身份（创建意图留着）` : "")
         // `failed` 也要报出来:那几条的**监督已经立好**(日志照收、到点照收),欠的只是接管
         // 那一趟结论,已经排了有界重试(第 22 轮审查 F1-A)。不说一句就只有 server 日志里
         // 那行 error 知道这件事。
-        + (monitorRecovery.failed ? `，${monitorRecovery.failed} 个这一次没接管成功（已排重试，日志和期限照旧在盯）` : "")
-        // `redelivered`:上一次死在「结局已写定、结束通知还没入队」中间的那几条,这一趟把那笔
-        // 交接补完了(第 1 轮审查 F1)。不说一句的话,这件事只有库里那两列知道。
-        + (monitorRecovery.redelivered ? `，${monitorRecovery.redelivered} 条上次没来得及入队的结束通知已补发` : ""),
+        + (monitorRecovery?.failed ? `，${monitorRecovery?.failed ?? 0} 个这一次没接管成功（已排重试，日志和期限照旧在盯）` : "")
+        // 上一次死在「结局已写定、结束通知还没入队」中间的那几条,这一趟把那笔交接补完了
+        // (第 1 轮审查 F1)。不说一句的话,这件事只有库里那两列知道。
+        // **三种结局分开说**(第 2 轮审查 N2):上一版 await 一个吞掉异常的函数之后无条件 +1,
+        // 于是「补发期间入队继续失败」会被打印成「已补发」—— 凭证明明还在库里挂着。
+        + (handoff?.delivered ? `，${handoff.delivered} 条上次没来得及入队的结束通知已补发` : "")
+        + (handoff?.dropped ? `，${handoff.dropped} 条结束通知已无人可收（任务终态/归档）` : "")
+        + (handoff?.failed ? `，${handoff.failed} 条结束通知这一趟仍没送出去（已排重试，凭证留着）` : ""),
       );
     }
+    // 结束通知的**常驻**负责人(第 2 轮审查 F3):开机补发只是第一跳,之后每分钟巡检一次,
+    // 失败按阶梯退避重试。少了它,一次瞬时写失败就得等到下次重启才会再试。
+    const { startResultHandoffSweeper } = await import("./monitor-handoff-retry.js");
+    startResultHandoffSweeper();
+
     // 「已停止」不等于「已退出」:上一辈子有人把它停了、信号发出去了、命令却没死,而那一版
     // 的停止路径没留下责任 —— 接回只看 running、债务清扫只看账本,中间漏的就是这一类
     // (第 5 轮审查 F1)。**排在债务清扫之前**:这里新记下的责任由它在同一次开机里接着推。

@@ -13,7 +13,7 @@
 // ② **一条事件 = 唤醒一次 = 一个真实的模型回合。** 所以合并是第一位的。
 import { and, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
-import { mergeMonitorEventText, monitorMessageOrigin } from "@ash/shared/monitor";
+import { handoffToken, mergeMonitorEventText, monitorMessageOrigin } from "@ash/shared/monitor";
 import { db, dbClient } from "./db/index.js";
 import { monitors, scheduledMessages, tasks } from "./db/schema.js";
 import { monitorTurnSource, monitorWakeExecutor, monitorWakeGate } from "./monitor-session.js";
@@ -28,7 +28,12 @@ type Row = typeof monitors.$inferSelect;
  * 追加。任务正忙的那几分钟里攒下的十几条事件于是只唤醒它一次；而不是排十几行、醒十几轮。
  * 带着投递租约的那一行不能碰 —— 它正在被送进会话，改它等于改一句已经出口的话。
  */
-export async function pushToTask(row: Row, text: string): Promise<boolean> {
+export async function pushToTask(
+  row: Row,
+  text: string,
+  /** 这一笔是结果交接时的身份(见 schema 的 `handoff_token`);普通事件不填。 */
+  handoffToken?: string,
+): Promise<boolean> {
   // **库关了就什么都送不出去**:ash 退出时会关库,而这一侧的调用方有几个是「放后台跑」的
   // (探活那一问判出结束之后的 `void finish`),所以这一刻完全可能撞上关库。那时这里不该抛
   // —— 抛出去就是一个没人接的 rejection,把正在退出的进程变成异常退出。
@@ -59,44 +64,78 @@ export async function pushToTask(row: Row, text: string): Promise<boolean> {
       eq(scheduledMessages.status, "pending"),
       isNull(scheduledMessages.deliveringSince),
     ))).at(0) ?? null;
-  await mergeOrEnqueueMonitorEvent(row, text, existing);
+  await mergeOrEnqueueMonitorEvent(row, text, existing, handoffToken);
   flushPendingForTask(row.taskId);
   return true;
 }
 
 /**
+ * 这一趟交接的结局。**调用方据此决定还要不要再负责**，所以四种必须分开（第 2 轮审查 N2：
+ * 上一版返回 void、吞掉异常，调用方只能用「函数没抛」冒充「已补发」）。
+ *
+ *  · `delivered` 送进托盘了（凭证已销）
+ *  · `already`   这一笔早就送过 / 压根没有凭证（凭证已销或本来就没有）—— 不是失败
+ *  · `dropped`   任务已经终态/归档，这条通知再也没人收（凭证已销，出过声）
+ *  · `failed`    这一趟没送出去，**凭证留着**，已排退避重试
+ */
+export type HandoffOutcome = "delivered" | "already" | "dropped" | "failed";
+
+/**
  * **把「结局已写定、通知还没入队」那一笔交接做完**：按凭证入队，入队之后才销掉凭证。
  *
  * 凭证是跟终态同一条 UPDATE 落下的（见 schema-monitors.ts 的 `result_handoff_at`），所以这一
- * 刻完成闸已经能看见它了。顺序只能是「先入队、后销凭证」：反过来的话那条缝又回来了。
+ * 刻完成闸已经能看见它了。顺序只能是「先入队、后销凭证」：反过来的话那条缝又回来了 —— 而且
+ * 闸的那一条 UNION 语句正是**靠这个顺序**才做到「转移的每一刻至少有一类看得见」
+ * （task-complete-monitors.ts 文件头）。
+ *
+ * **幂等靠消息侧的身份，不靠「凭证还在不在」**（第 2 轮审查 N1）：入队成功、销凭证失败（或者
+ * 进程正好死在这两条语句之间）之后，凭证还在，下一趟重投会再送一次 —— 而上一条可能已经
+ * `sent`，合并窗口对它不适用，于是同一条结束通知变成两条消息、把 agent 叫醒两次。身份
+ * （`<monitorId>:<result_handoff_at>`）跟入队写在同一笔里，所以「送过没有」这一问有一个原子
+ * 的答案。
  *
  * 入队被拒（`pushToTask` 返回 false）= 任务已经终态/归档，这条通知再也不会有人收：**凭证照样
  * 销掉**，否则它会永久拦着这个任务的完成，而拦着也救不回那条通知。那种情况出一行日志 —— 它
  * 正是 F1 要防的事故现场，静默销账等于把现场也擦掉。
  *
- * 不抛：调用点都在收尾路径上，往上抛会让一次已经落定的终态看起来像失败。
+ * 不抛：调用点都在收尾路径上，往上抛会让一次已经落定的终态看起来像失败。**但也不再静默**：
+ * 失败会排一次退避重试，而且照实返回 `failed`（见 monitor-handoff-retry.ts）。
  */
-export async function deliverResultHandoff(monitorId: string): Promise<void> {
+export async function deliverResultHandoff(monitorId: string): Promise<HandoffOutcome> {
   try {
-    if (dbClient.closed) return;
+    if (dbClient.closed) return "failed";
     const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
-    if (!row?.resultHandoffAt || !row.resultHandoffText) return;
-    const delivered = await pushToTask(row, row.resultHandoffText);
+    if (!row?.resultHandoffAt || !row.resultHandoffText) return "already";
+    const token = handoffToken(row.id, row.resultHandoffAt);
+    // 已经有一条消息认下了这一笔 ⇒ 送过了。凭证是上一趟没销掉的残留,补销就行。
+    const sentAlready = (await db
+      .select({ id: scheduledMessages.id })
+      .from(scheduledMessages)
+      .where(and(eq(scheduledMessages.taskId, row.taskId), eq(scheduledMessages.handoffToken, token)))).length > 0;
+    const delivered = sentAlready ? false : await pushToTask(row, row.resultHandoffText, token);
     await db
       .update(monitors)
       .set({ resultHandoffAt: null, resultHandoffText: null })
-      // CAS：只销掉自己刚送出去的那一笔。另一路（启动重投）可能正在送同一条，而它送完会写上
-      // 新的……不会——凭证只由收尾那一笔写。CAS 在这里的用处是：凭证已经被别人销掉时不空写。
+      // CAS：只销掉自己这一趟处理的那一笔。重投器和收尾可能同时在送同一条,CAS 让后到的那一位
+      // 不去空写(它那一趟会从身份那一问得到「送过了」)。
       .where(and(eq(monitors.id, monitorId), eq(monitors.resultHandoffAt, row.resultHandoffAt)));
+    if (sentAlready) return "already";
     if (!delivered) {
       console.error(
         `[ash] 哨兵结束通知无人可收 monitor=${monitorId} task=${row.taskId}：`
         + "任务已经是终态或已归档，这条通知作废（凭证已销，不再拦着完成）",
       );
+      return "dropped";
     }
+    return "delivered";
   } catch (e) {
-    // 凭证还在 ⇒ 完成闸继续拦着、启动时还会重投。这里只需要出声。
-    console.error(`[ash] 哨兵结束通知这一趟没送出去 monitor=${monitorId}（凭证留着,会重投）:`, e);
+    // 凭证还在 ⇒ 完成闸继续拦着。**而且这一趟必须留下一个还会再试的人**：上一版只打一行日志,
+    // 唯一的补发入口在开机那一趟,于是一次瞬时写失败之后,结果要等到下次重启才送得出去,
+    // agent 这期间反复 complete 只会一直吃 409(第 2 轮审查 F3 实测 `F3_NO_LIVE_RESULT_RETRY`)。
+    console.error(`[ash] 哨兵结束通知这一趟没送出去 monitor=${monitorId}（凭证留着,已排重试）:`, e);
+    const { scheduleResultHandoffRetry } = await import("./monitor-handoff-retry.js");
+    scheduleResultHandoffRetry(monitorId);
+    return "failed";
   }
 }
 
@@ -122,11 +161,16 @@ export async function mergeOrEnqueueMonitorEvent(
   row: Row,
   text: string,
   existing: typeof scheduledMessages.$inferSelect | null,
+  /** 结果交接的身份：合并和新建**两支都要落下它**，否则重投会把同一笔再送一次（N1）。 */
+  handoffToken?: string,
 ): Promise<void> {
   const merged = existing
     ? await db
       .update(scheduledMessages)
-      .set({ text: mergeMonitorEventText(existing.text, text) })
+      .set({
+        text: mergeMonitorEventText(existing.text, text),
+        ...(handoffToken ? { handoffToken } : {}),
+      })
       .where(and(
         eq(scheduledMessages.id, existing.id),
         eq(scheduledMessages.status, "pending"),
@@ -149,6 +193,7 @@ export async function mergeOrEnqueueMonitorEvent(
     await enqueueMessage({
       taskId: row.taskId, text, origin: monitorMessageOrigin(row.id),
       ownerUserId: row.ownerUserId,
+      ...(handoffToken ? { handoffToken } : {}),
       // **角色和「为哪一次审查的哪一轮」一起交出去**:两样都记在哨兵行上,所以投递那一刻
       // 不必现查。只带角色的那一版会让续起来的审查者挂不上下一条哨兵 —— 身份里 review=null,
       // 来源核验据此判「这次审查已经结束」(本轮审查 F2 实测 HTTP 409)。

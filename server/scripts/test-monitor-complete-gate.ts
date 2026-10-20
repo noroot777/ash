@@ -27,6 +27,7 @@ import { writeFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import { isSilentWaitLoop, monitorEventTally, silentWaitNotice, spanWords } from "@ash/shared/monitor-silence";
 import { checkpointGroups } from "./monitor-complete-checkpoint-groups.js";
+import { resultHandoffGroups } from "./monitor-result-handoff-groups.js";
 import {
   beginTerminalLanding, complete, confirmedAt, db, dropByActor, inTurnCaller, insertMonitorRow, makeTask,
   monitorRow, monitors, monitorStatus, now, pendingOf, queueMonitorEvent, redeliverResultHandoffs,
@@ -516,7 +517,9 @@ await checkpointGroups();
   }
 
   // 入队恢复之后：**启动重投把这笔交接做完**（凭证里有原文，所以进程死在中间也补得上）。
-  assert.equal(await redeliverResultHandoffs(), 1, "有一笔没做完的交接要补");
+  // 分项统计（第 2 轮审查 N2）：送出去几条、几条已经无人可收、几条仍然失败，各算各的。
+  assert.deepEqual(await redeliverResultHandoffs(), { delivered: 1, dropped: 0, failed: 0 },
+    "有一笔没做完的交接要补,而且要算进「真送出去了」那一格");
   assert.match(
     (await pendingOf(taskId)).map((m) => m.text).join("\n"), /哨兵结束/,
     "结果真的到了任务头上 —— 这才是整条不变量要护的东西",
@@ -550,12 +553,24 @@ await checkpointGroups();
       "终态连着凭证一起落库（拆成两笔的话这一步会一直等不到）",
       async () => (await monitorStatus(monitorId)) === "exited",
     );
-    assert.ok((await monitorRow(monitorId)).resultHandoffAt, "落上了就一定带着凭证");
+    // **凭证在、或者通知已经送到,两者都算**:这一节的保证整个来自那个触发器 —— 拆成两笔的话
+    // 第一笔就 ABORT,行压根落不上终态,上面那个 `until` 会超时。而「读到终态的这一刻凭证还在」
+    // 是时序,不是不变量:收尾紧接着就会把这笔交接做完并销掉凭证(这条哨兵有 stdout,通知还会被
+    // 合并进那条事件消息里)。上一版把时序当不变量断言,时序一变就假红。
+    const landed = await monitorRow(monitorId);
+    const delivered = (await pendingOf(taskId)).some((m) => /哨兵结束/.test(m.text));
+    assert.ok(
+      landed.resultHandoffAt || delivered,
+      "落上终态就意味着那笔责任有人认:要么凭证还在,要么已经把通知送到了",
+    );
   } finally {
     await db.run("DROP TRIGGER handoff_atomic" as never);
   }
   await stopMonitor(monitorId, "探针用完了");
 }
+
+// ── ㉘ 及后续：结果交接那一半（搬去 monitor-result-handoff-groups.ts，同一套台子）────
+await resultHandoffGroups();
 
 // ── ㉕ F3：旧方向的断线补录，一个字都不许写到新方向头上 ──────────────────────────
 //

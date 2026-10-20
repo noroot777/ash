@@ -21,15 +21,15 @@
 //     已经成功返回(stopped、待发 0 条),在途的旧回调照旧把行写成 expired 并补推一条结束
 //     通知。所以每一跳都排进停止/创建/删除那同一条 `task:<id>` 队列,并在队列里重读 ——
 //     三个出口(接管 / 判掉 / 到期)一个都不许按旧行下结论。
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
+import type { HandoffSweep } from "./monitor-handoff-retry.js";
 import { monitors, tasks } from "./db/schema.js";
 import {
   adoptSpawnIdentity, clearPendingIntentNote, notePendingIntent, type AdoptOutcome,
 } from "./monitor-adopt.js";
 import { reclaimMonitorProcess, settleReclaim, type ReclaimVerdict } from "./monitor-reclaim-debts.js";
 import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
-import { deliverResultHandoff } from "./monitor-events.js";
 import { monitorWakeGate } from "./monitor-session.js";
 import { clearSpawnIdentity } from "./monitor-spawn.js";
 import { attach, ensureSupervised, finish, finishOffline, isAshKind, serialize, type Row }
@@ -78,7 +78,7 @@ const owingNote = (verdict: ReclaimVerdict): string =>
  * (见 `notePendingIntent`),所以它既不算接回来了、也不算没了 —— 混进任何一边都是撒谎。
  */
 export async function reattachMonitors(): Promise<
-  { attached: number; lost: number; pending: number; failed: number; redelivered: number }
+  { attached: number; lost: number; pending: number; failed: number; handoff: HandoffSweep }
 > {
   // 只认 ash 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
   // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
@@ -109,7 +109,7 @@ export async function reattachMonitors(): Promise<
       failed += 1;
     }
   }
-  return { attached, lost, pending, failed, redelivered: await redeliverResultHandoffs() };
+  return { attached, lost, pending, failed, handoff: await redeliverResultHandoffs() };
 }
 
 /**
@@ -119,24 +119,16 @@ export async function reattachMonitors(): Promise<
  * ——而且在补上之前,完成闸一直看得见它(task-complete-monitors.ts 的第三类),不会趁这个空当
  * 把任务放成 done 再把通知吃掉(第 1 轮审查 F1)。
  *
- * 排在接回之后:接回只管 `running` 的行,这里管的全是已经终态的行,两边不重叠。失败只记日志
- * ——凭证留着,下一次启动还会再试,而拦截一直有效。
+ * 排在接回之后:接回只管 `running` 的行,这里管的全是已经终态的行,两边不重叠。
+ *
+ * **开机这一趟只是兜底的第一跳**,不是唯一的补发入口(第 2 轮审查 F3):常驻巡检和退避重试
+ * 住在 monitor-handoff-retry.ts,这里直接复用它那个函数,免得两处各写一份扫描(改一处漏一处)。
+ * 返回的是**分项**统计 —— 送出去几条、几条已经无人可收、几条这一趟仍然失败,`failed` 绝不能
+ * 混进「已补发」里(N2:上一版 await 一个吞异常的函数之后无条件 +1,然后打印「已补发」)。
  */
-export async function redeliverResultHandoffs(): Promise<number> {
-  const rows = await db
-    .select({ id: monitors.id, taskId: monitors.taskId })
-    .from(monitors)
-    .where(and(isNotNull(monitors.resultHandoffAt), isAshKind));
-  let done = 0;
-  for (const r of rows) {
-    try {
-      await deliverResultHandoff(r.id);
-      done += 1;
-    } catch (e) {
-      console.error(`[ash] 重投哨兵结束通知失败 monitor=${r.id} task=${r.taskId}（凭证留着,下次启动再试）:`, e);
-    }
-  }
-  return done;
+export async function redeliverResultHandoffs(): Promise<HandoffSweep> {
+  const { sweepResultHandoffs } = await import("./monitor-handoff-retry.js");
+  return await sweepResultHandoffs();
 }
 
 /**

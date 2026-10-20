@@ -199,6 +199,22 @@ export const tasks = sqliteTable("tasks", {
    * 吞掉(所以要分来源,不能只看「有没有一段」)。
    */
   resumePromptAuto: integer("resume_prompt_auto", { mode: "boolean" }).notNull().default(false),
+  /**
+   * **这一格被占用的第几次**（第 2 轮审查 F2）。写入一段新文字 +1，作废一段等待也 +1；取走和
+   * 原样退回不动它。
+   *
+   * 为什么光有来源列不够：来源列只在 `resume_prompt` 非空时有意义，于是「取走之后那一格休眠
+   * 着、等文字回来」这个口径**只在中间没有别的写入时**成立。槽可以被另一段文字占用、再被取走，
+   * 又变成空的 —— 这时一个在途的旧退回（持久账本重投、改派回滚）填回来，就会继承到不属于它的
+   * 来源：系统等待被洗成「agent 自己写的」(此后永不自动清理、任务卡在 paused)，或者反过来，
+   * agent 自己写的主动暂停被当成系统等待清掉。实测两个方向都成立
+   * （`F2_DORMANT_SCALAR_IS_NOT_PROVENANCE`）。
+   *
+   * 所以凭证随身：取走的那一位拿到 `{text, auto, generation}`，退回时三样一起带回来，并且
+   * **只在代次没变时**才填得进去。代次变了 = 这一格已经被别人占用过，那段文字就此过期，不许
+   * 复活（见 task-resume-prompt.ts 的 `ResumePromptReceipt`）。
+   */
+  resumePromptGeneration: integer("resume_prompt_generation").notNull().default(0),
   // 提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，
   // 等 answer_question 清空并带答复 resume（见 scheduler.pickNextLaunchable 的挡板）。
   question: text("question"),
@@ -421,6 +437,19 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 「正文里已经带着它了」(幂等)、回填失败也不丢(下一次投递照旧带着它走)、送达之后
   // 这一行就是那段交代被谁消费掉的记录。
   checkpointTaken: text("checkpoint_taken"),
+  // 跟 `checkpoint_taken` 同一笔落库的**随身凭证**：那段交代的来源和它取走时的占用代次
+  // （见 tasks.resume_prompt_generation）。少了这两样，持久重投只能靠任务行上的休眠值猜来源、
+  // 靠「那一格空着」猜归属 —— 两样都会在期间有过别的占用时猜错（第 2 轮审查 F2）。
+  checkpointAuto: integer("checkpoint_auto", { mode: "boolean" }),
+  checkpointGeneration: integer("checkpoint_generation"),
+  // 这条消息承载的是**哪一笔**结果交接(`<monitorId>:<result_handoff_at>`)。null = 不是交接,
+  // 是普通消息/哨兵事件。
+  //
+  // 为什么要这一列(第 2 轮审查 N1):交接是「入队」+「销凭证」两条语句,第二条失败(或进程正好
+  // 死在中间)时凭证留着,重投器下一趟还会按它再送一次 —— 而上一条可能已经 sent,合并窗口对它
+  // 不适用,于是同一条结束通知变成两条消息、把 agent 叫醒两次。身份跟入队写在同一笔里,所以
+  // 「送过没有」这一问有一个原子的答案:库里找得到这个 token ⇒ 已经送过,只补销凭证。
+  handoffToken: text("handoff_token"),
 });
 
 // Queue items: ordered list of tasks where each task waits for the one

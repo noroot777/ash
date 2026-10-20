@@ -49,24 +49,32 @@ try {
 
   // ① 取走检查点 → 整行广播，且广播出去的那份 resumePrompt 已经是空的。
   const taken = await takeResumePrompt("task", "【任务接力】从另一台机器接力过来，先核对工作目录再继续。");
-  assert.equal(taken, true, "CAS 应该取走这段续跑指令");
+  // 取走给的是一张**凭证**(文字 + 来源 + 占用代次),退回必须原样带着它(见 task-resume-prompt.ts
+  // 顶部:来源不再由任务行上一个可能已经改过的布尔说)。
+  assert.ok(taken, "CAS 应该取走这段续跑指令");
   assert.equal(updates().length, 1, "清空 resume_prompt 必须广播整行，否则前端的派审/预约入口一直灰着");
   assert.equal(updates()[0]!.task.resumePrompt, null, "广播出去的那一行必须已经是清空后的状态");
 
   // ② CAS 没抢到（别人先取走了）→ 不广播，也不改库。
   events.length = 0;
-  assert.equal(await takeResumePrompt("task", "别人那一段"), false, "指令已被取走时 CAS 应该失败");
+  assert.equal(await takeResumePrompt("task", "别人那一段"), null, "指令已被取走时 CAS 应该失败");
   assert.equal(updates().length, 0, "什么都没改就不该广播");
 
   // ③ 回填（回合被抢，指令一个字都没送出去）→ 同样要广播，否则按钮该灰不灰、点下去吃 409。
   events.length = 0;
-  assert.equal(await restoreResumePrompt("task", "回填的检查点"), true, "空位应该允许回填");
+  assert.equal(
+    await restoreResumePrompt("task", { ...taken, text: "回填的检查点" }), true,
+    "空位应该允许回填",
+  );
   assert.equal(updates().length, 1, "写回 resume_prompt 必须广播整行");
   assert.equal(updates()[0]!.task.resumePrompt, "回填的检查点");
 
   // ④ 已经挂着别的指令时不覆盖，也不广播（agent 可能刚 pause_task 写下新的一段）。
   events.length = 0;
-  assert.equal(await restoreResumePrompt("task", "旧指令"), false, "非空位不该被旧指令盖掉");
+  assert.equal(
+    await restoreResumePrompt("task", { ...taken, text: "旧指令" }), false,
+    "非空位不该被旧指令盖掉",
+  );
   assert.equal(updates().length, 0, "没写进去就不该广播");
   assert.equal(
     (await db.select({ resumePrompt: tasks.resumePrompt }).from(tasks).where(eq(tasks.id, "task"))).at(0)?.resumePrompt,

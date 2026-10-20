@@ -15,7 +15,7 @@ import { setTaskStatus } from "./status.js";
 import { takeConfirmed, type StopSettle } from "./runs.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
-import { announceResumePrompt } from "./task-resume-prompt.js";
+import { announceResumePrompt, resumePromptVoidPatch } from "./task-resume-prompt.js";
 import { turnOutputHint } from "./turn-output.js";
 import { beginTerminalLanding } from "./task-complete.js";
 import { readCliState } from "./task-cli-state.js";
@@ -164,8 +164,9 @@ export async function settleTaskStatus(
         followUpFrom: null,
         // checkpoint-paused 上的真人消息先保留旧检查点,避免一句普通追问把恢复指令吞掉;
         // 本轮明确交卷才证明这句话确实接管了检查点,此时完成优先并清掉当前指令。
-        // 来源列跟着一起归 false(见 task-resume-prompt.ts 文件头:同写同清)。
-        ...(consumedCheckpoint ? { resumePrompt: null } : {}),
+        // **这是作废,不是取走**:来源归零、代次 +1,于是任何还在途的旧凭证都填不回来
+        // (见 task-resume-prompt.ts 的 `resumePromptVoidPatch`)。
+        ...(consumedCheckpoint ? resumePromptVoidPatch() : {}),
         updatedAt: now(),
       }).where(eq(tasks.id, taskId));
       // 检查点被这一轮消费掉了:随后的 setStatus 只广播 task.status,带不动 resume_prompt,

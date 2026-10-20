@@ -644,5 +644,14 @@ export function monitorBlockedReason(
 
 /** 待发送消息上的来源标记（`scheduled_messages.origin`）。同一个哨兵的事件按它合并。 */
 export const monitorMessageOrigin = (monitorId: string) => `monitor:${monitorId}`;
+/**
+ * **一笔结果交接的身份**:哪条哨兵的、哪一次凭证。写进承载它的那条消息
+ * (`scheduled_messages.handoff_token`,跟入队同一笔落库),于是「这一笔送过没有」有一个原子的
+ * 答案 —— 重投器据此不把同一条结束通知送成两条(第 2 轮审查 N1)。
+ *
+ * 用凭证时刻而不是哨兵 id 当后半截:同一条哨兵理论上可以先后有两笔交接(离线收尾补过一次),
+ * 只按 id 去重会把第二笔当成已送过。
+ */
+export const handoffToken = (monitorId: string, handoffAt: string) => `${monitorId}:${handoffAt}`;
 export const monitorIdFromOrigin = (origin: string | null | undefined): string | null =>
   origin?.startsWith("monitor:") ? origin.slice("monitor:".length) : null;

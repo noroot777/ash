@@ -360,6 +360,10 @@ async function importValidated(
     verifyCompletedSteps: jsonOr(m.task.verifyCompletedSteps, "[]"),
     resumePrompt,
     resumePromptAuto,
+    // **代次从 1 起（有文字）/ 0（没有）**：这台机器上的那一格是新建的，不可能有在途的凭证
+    // （取走只发生在本机进程里），所以从哪个数起都安全 —— 取 1 是为了让「有文字 = 被占用过」
+    // 这件事在库里看得出来。代次本身不进 manifest：它是本机那一格的局部事实，跨机没有意义。
+    resumePromptGeneration: resumePrompt ? 1 : 0,
     question: m.task.question,
     questionOptions: jsonOr(m.task.questionOptions, "") || null,
     questionItems: jsonOr(m.task.questionItems, "") || null,

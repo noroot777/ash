@@ -19,26 +19,31 @@
 // **有效期不同**：系统写的那段在「它等的东西没了」之后必须清掉（否则任务永远停在 paused
 // 等一个再也不会来的唤醒，第 2 轮审查 R2-2 实测），而 agent 自己写的那段谁也不许抹。
 //
-// ## 来源列的口径：**只有写入新文本的地方写它，清空与回填一律不碰**
+// ## 口径：**凭证随身**（取走的那一位拿着 `{text, auto, generation}`，退回时三样一起带回来）
 //
-// 上一版的口径是「凡是写 `resume_prompt` 的地方都同时写它」,靠自觉在十来个点上带对一个
-// 布尔 —— 第 1 轮审查（PUfD6pQBJUri）F2 从三个点走穿了它:持久重投账本只存了文字、普通
-// 运行冲突的退回漏了来源、跨机接力的载荷里压根没有这一列,于是一段系统等待往返一趟就被洗成
-// 「agent 自己写的」,此后永不自动清理,任务停在 paused 等一个再也不会来的唤醒。
+// 这一列的来源只在 `resume_prompt` 非空时有意义，所以前两版都在想办法「让来源跟着文字走」：
 //
-// 现在换成一条**守得住**的：这一列只在 `resume_prompt` 非空时有意义,所以
+//  · 第一版「凡是写 resume_prompt 的地方都同时写来源」—— 靠自觉在十来个点上带对一个布尔，
+//    第 1 轮审查从三个点走穿（账本只存文字、运行冲突的退回漏了来源、跨机载荷里压根没这一列）。
+//  · 第二版「取走/退回一个字都不碰它，那一格休眠着等文字回来」—— 看着守得住，但它只在**中间
+//    没有别的写入**时成立：槽可以被另一段文字占用、再被取走，于是又空了。这时一个在途的旧退回
+//    填回来，就继承到不属于它的来源。第 2 轮审查两个方向都实测到
+//    （`F2_DORMANT_SCALAR_IS_NOT_PROVENANCE`：系统等待被洗成主动暂停 ⇒ 任务卡在 paused；
+//    主动暂停被洗成系统等待 ⇒ 被自动清掉）。
 //
-//  · **取走 / 清空**：一个字都不碰它。那一格就此休眠 —— 休眠值不是脏数据,它正是那段文字
-//    的来源,等着文字回来。
-//  · **原样退回**（CAS 只填回自己腾空的那个位置）：同样不碰。于是来源**自动**跟着文字回来,
-//    调用方连这件事都不必知道（`restoreResumePrompt` 压根没有这个参数,想传也传不进去）。
-//  · **写入一段新文本**：必须自己声明来源（`writeResumePrompt` 的第三个参数没有缺省值,
-//    漏了就编译不过）。
+// 现在换成**不靠猜**的那一种：那一格有个占用代次（`resume_prompt_generation`），
 //
-// 库里直接 `db.update` 写这一列的只剩两处新文本写入点（`pause` 端点、断线补录的 pause),
-// 各自在就近注释里点名了它;清空与回滚（结算消费、引导清场与回滚、哨兵唤醒的交代转手）按上面
-// 第一、二条,一律不出现这一列。
-import { and, eq, isNotNull, isNull, type SQL } from "drizzle-orm";
+//  · **写入一段新文字**：代次 +1，并声明来源（`writeResumePrompt`，`auto` 没有缺省值）。
+//  · **作废一段等待**：代次也 +1（`clearAutoCheckpoint`）—— 它不是「腾个空等文字回来」，所以
+//    任何在途的旧凭证都该就此失效。
+//  · **取走**：代次不动，返回一张凭证 `{text, auto, generation}`（`takeResumePrompt`）。
+//  · **退回**：凭证三样一起写回去，而且**只在代次没变时**才写得进去（`restoreResumePrompt`）。
+//    代次变了 = 这一格已经被别人占用过，那段文字就此过期，不许复活。
+//
+// 于是「这段文字是谁写的」永远由**拿着它的那一位**说，不再由任务行上一个可能已经改过的布尔说。
+// 需要在别的语句里一起落库的调用方（消息账本、改派回滚）不许自己拼条件，用
+// `resumePromptSlotFor` / `resumePromptRestorePatch` —— 口径只有这一份。
+import { and, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -54,34 +59,59 @@ export async function announceResumePrompt(taskId: string): Promise<void> {
 }
 
 /**
- * CAS 取走这段续跑指令：只清掉调用方读到的那一段。
- * 返回是否**由本次调用**清掉（false = 被另一路取走了，或 agent 刚换了新的一段）。
+ * 取走那一段续跑指令时拿到的**凭证**：文字、它是谁写的、取走时这一格的占用代次。
+ *
+ * 退回必须原样带着它（见文件头）。`generation` 是归属本体：代次变了说明这一格已经被别人
+ * 占用过，这张凭证就此过期。
  */
-export async function takeResumePrompt(taskId: string, expected: string): Promise<boolean> {
+export type ResumePromptReceipt = { text: string; auto: boolean; generation: number };
+
+/**
+ * CAS 取走这段续跑指令：只清掉调用方读到的那一段。
+ *
+ * 返回凭证（`null` = 没取到：被另一路取走了，或 agent 刚换了新的一段）。**来源列一个字都不碰**
+ * —— 归零会让这段文字的来源凭空丢掉，而改写它会动到下一段文字的来源；它的真正去处是凭证。
+ */
+export async function takeResumePrompt(taskId: string, expected: string): Promise<ResumePromptReceipt | null> {
   const cleared = await db
     .update(tasks)
-    // **来源列一个字都不碰**(见文件头的口径):它就此休眠,等这段文字被退回来时原样生效。
-    // 归零反而是错的 —— 退回那一笔不知道来源,只能按缺省当成「agent 自己写的」,于是一段
-    // 系统等待往返一趟就再也不会被自动清理（第 1 轮审查 F2 的三个实例都是这样来的）。
-    // agent 随后自己 `pause_task` 写下新的一段时会**显式**把来源写成 false,盖不到一起。
     .set({ resumePrompt: null, updatedAt: now() })
     .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, expected)))
-    .returning({ id: tasks.id });
-  if (!cleared.length) return false;
+    // RETURNING 给的是写后的行,而这一笔不碰这两列 —— 所以它们就是取走那一刻的事实。
+    .returning({ auto: tasks.resumePromptAuto, generation: tasks.resumePromptGeneration });
+  const row = cleared.at(0);
+  if (!row) return null;
   await announceResumePrompt(taskId);
-  return true;
+  return { text: expected, auto: row.auto, generation: row.generation };
 }
 
 /**
- * CAS 回填**自己刚取走的那一段**：只填回自己腾出的那个空。这中间 agent 可能已经 pause_task
- * 写下**新的**一段，无条件回填就是拿旧指令盖掉新指令。
+ * **要填回自己取走的那一段，条件是什么**：这一格空着，而且还是同一次占用。
  *
- * **没有来源参数,这是故意的**（见文件头）：取走时没碰那一列,所以它还原样记着这段文字是谁
- * 写的,填回来就自动对上。想传一个来源进来 = 想声明「这是一段新文本」,那该调
- * `writeResumePrompt`。
+ * 导出是为了让需要把「填回」跟别的语句放进同一个批的调用方（消息账本的转手、改派回滚）复用
+ * 同一份口径 —— 自己拼一遍就会漏掉代次那一条，而那正是第 2 轮审查 F2 走穿的地方。
  */
-export async function restoreResumePrompt(taskId: string, value: string): Promise<boolean> {
-  return writeInto(taskId, { resumePrompt: value, updatedAt: now() });
+export const resumePromptSlotFor = (receipt: ResumePromptReceipt): SQL[] => [
+  isNull(tasks.resumePrompt),
+  eq(tasks.resumePromptGeneration, receipt.generation),
+];
+
+/** 填回时要写的那几列（同上，口径只有一份）。**代次不动**：原样退回不是一次新的占用。 */
+export const resumePromptRestorePatch = (receipt: ResumePromptReceipt) => ({
+  resumePrompt: receipt.text,
+  resumePromptAuto: receipt.auto,
+  updatedAt: now(),
+});
+
+/**
+ * CAS 回填**自己刚取走的那一段**：只填回自己腾出的那个空，而且只在这一格还是同一次占用时。
+ *
+ * 这中间 agent 可能已经 pause_task 写下**新的**一段（代次变了、槽也占着），无条件回填就是拿旧
+ * 指令盖掉新指令；更隐蔽的是「新的一段又被取走了」—— 槽空着，但代次已经不是它那一次，这时填
+ * 回去就会连来源一起错位（第 2 轮审查 F2）。
+ */
+export async function restoreResumePrompt(taskId: string, receipt: ResumePromptReceipt): Promise<boolean> {
+  return writeInto(taskId, resumePromptRestorePatch(receipt), resumePromptSlotFor(receipt));
 }
 
 /**
@@ -89,6 +119,8 @@ export async function restoreResumePrompt(taskId: string, value: string): Promis
  *
  * `auto` 没有缺省值 —— 漏了就编译不过。少了它这段文字的有效期就无从判断,而两种来源的有效期
  * 完全相反（`clearAutoCheckpoint`）。
+ *
+ * **代次 +1**：这是一次新的占用，所以之前取走的那些凭证就此过期（它们退回来会被挡住）。
  */
 export async function writeResumePrompt(
   taskId: string,
@@ -103,12 +135,20 @@ export async function writeResumePrompt(
    */
   where: (SQL | undefined)[] = [],
 ): Promise<boolean> {
-  return writeInto(taskId, { resumePrompt: value, resumePromptAuto: auto, updatedAt: now() }, where);
+  return writeInto(
+    taskId,
+    {
+      resumePrompt: value, resumePromptAuto: auto, updatedAt: now(),
+      resumePromptGeneration: sql`${tasks.resumePromptGeneration} + 1`,
+    },
+    where,
+  );
 }
 
 async function writeInto(
   taskId: string,
-  patch: Partial<typeof tasks.$inferInsert>,
+  // 不用 `Partial<$inferInsert>`:代次那一笔是 `generation + 1` 这样的 SQL 表达式,不是字面量。
+  patch: Parameters<ReturnType<typeof db.update<typeof tasks>>["set"]>[0],
   where: (SQL | undefined)[] = [],
 ): Promise<boolean> {
   const restored = await db
@@ -122,6 +162,22 @@ async function writeInto(
 }
 
 /**
+ * **「这段等待作废了」要写的那几列**：来源归零 + 代次 +1。
+ *
+ * 跟「取走」差一个代次：取走是「腾个空，文字可能退回来」，作废是「这段话不该再回来了」。代次
+ * 一动，所有还在途的旧凭证（账本重投、改派回滚、迟到的旧方向）就此过期 —— 否则它们能凭一个空
+ * 槽把一段已经作废的等待复活回来（第 2 轮审查 F2）。
+ *
+ * 导出给需要在复合更新里一起落库的那几处用（结算消费检查点、丢弃迟到的旧方向状态）：口径只有
+ * 这一份，各写一遍就会漏掉代次。**它们记得自己补一条 `announceResumePrompt`**（见文件头）。
+ */
+export const resumePromptVoidPatch = () => ({
+  resumePrompt: null,
+  resumePromptAuto: false,
+  resumePromptGeneration: sql`${tasks.resumePromptGeneration} + 1`,
+});
+
+/**
  * 清掉**系统自己写的**那段等待（`resume_prompt_auto`），agent 用 `pause_task` 写的原样留着。
  *
  * 调用点只有一个：完成请求重新获准的那一刻（`confirmTaskComplete`）—— 闸放行 ⇒ 它等的那些
@@ -131,9 +187,10 @@ async function writeInto(
 export async function clearAutoCheckpoint(taskId: string): Promise<boolean> {
   const cleared = await db
     .update(tasks)
-    // 这里**要**把来源归零:它不是「腾个空等文字回来」,而是「这段等待作废了」。留着 true
-    // 的话,下一次有人往空位里退回一段**别的**文字,会凭休眠值继承到一个不属于它的来源。
-    .set({ resumePrompt: null, resumePromptAuto: false, updatedAt: now() })
+    // 来源归零、**代次 +1**:这不是「腾个空等文字回来」,而是「这段等待作废了」。代次一动,
+    // 所有还在途的旧凭证(账本重投、改派回滚)就此过期 —— 否则它们能把一段已经作废的等待凭
+    // 一个空槽复活回来(第 2 轮审查 F2)。
+    .set({ ...resumePromptVoidPatch(), updatedAt: now() })
     // `isNotNull`:文字已经被取走时这一列是休眠值,碰它就等于把那段正在路上的文字的来源
     // 改掉（它还可能被退回来）。没有文字可清 = 没有等待可作废,照实返回 false。
     .where(and(eq(tasks.id, taskId), eq(tasks.resumePromptAuto, true), isNotNull(tasks.resumePrompt)))

@@ -26,7 +26,7 @@ import {
   whenTurnIdle,
 } from "./runs.js";
 import { setTaskStatus } from "./status.js";
-import { announceResumePrompt } from "./task-resume-prompt.js";
+import { announceResumePrompt, resumePromptVoidPatch } from "./task-resume-prompt.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { attachmentsPrompt, id, now } from "./util.js";
@@ -45,7 +45,12 @@ interface PreviousDirectionState {
   clearedDirectionToken: string;
   clearedDirectionVersion: number;
   completeConfirmedAt: string | null;
+  // 那段续跑指令的**整张凭证**：文字、谁写的、这一格被占用的第几次（第 2 轮审查 F2）。
+  // 只记文字的话，回滚填回去时来源只能靠任务行上那个可能已经改过的布尔 —— 期间有人写过新的
+  // 一段又被取走时，这段文字就会继承到不属于它的来源。
   resumePrompt: string | null;
+  resumePromptAuto: boolean;
+  resumePromptGeneration: number;
   question: string | null;
   questionOptions: string | null;
   questionItems: string | null;
@@ -70,6 +75,8 @@ async function clearPreviousDirectionState(
       activeDirectionVersion: tasks.activeDirectionVersion,
       completeConfirmedAt: tasks.completeConfirmedAt,
       resumePrompt: tasks.resumePrompt,
+      resumePromptAuto: tasks.resumePromptAuto,
+      resumePromptGeneration: tasks.resumePromptGeneration,
       question: tasks.question,
       questionOptions: tasks.questionOptions,
       questionItems: tasks.questionItems,
@@ -172,7 +179,9 @@ async function discardLateDirectionState(taskId: string, turnToken: string, dire
     .update(tasks)
     .set({
       completeConfirmedAt: null,
-      resumePrompt: null,
+      // **作废,不是取走**:旧方向迟到的那段检查点不该再回来,所以代次一起 +1 —— 否则它那一侧
+      // 还在途的退回(账本重投)能凭一个空槽把它填回新方向头上(第 2 轮审查 F2 同类)。
+      ...resumePromptVoidPatch(),
       question: null,
       questionOptions: null,
       questionItems: null,
@@ -219,6 +228,10 @@ async function restorePreviousDirectionState(
         : previous.activeDirectionVersion,
       completeConfirmedAt: previous.completeConfirmedAt,
       resumePrompt: previous.resumePrompt,
+      // **来源跟着文字一起回来**（F2）：清那一笔没动来源列，但这中间别人可能写过新的一段并把
+      // 它取走，于是那一格的来源早就不是这段文字的了。代次条件（下面）保证这一笔只在「还是同
+      // 一次占用」时落地，所以把快照里的来源原样写回去是安全的、也是唯一正确的。
+      resumePromptAuto: previous.resumePromptAuto,
       question: previous.question,
       questionOptions: previous.questionOptions,
       questionItems: previous.questionItems,
@@ -227,6 +240,7 @@ async function restorePreviousDirectionState(
     .where(and(
       eq(tasks.id, taskId),
       eq(tasks.activeTurnToken, previous.clearedTurnToken),
+      eq(tasks.resumePromptGeneration, previous.resumePromptGeneration),
       eq(tasks.activeDirectionToken, previous.clearedDirectionToken),
       eq(tasks.activeDirectionVersion, previous.clearedDirectionVersion),
       isNull(tasks.completeConfirmedAt),
@@ -245,6 +259,7 @@ async function restorePreviousDirectionState(
       .set({
         completeConfirmedAt: previous.completeConfirmedAt,
         resumePrompt: previous.resumePrompt,
+        resumePromptAuto: previous.resumePromptAuto, // 同上：来源跟着文字一起回来（F2）
         question: previous.question,
         questionOptions: previous.questionOptions,
         questionItems: previous.questionItems,
@@ -253,6 +268,7 @@ async function restorePreviousDirectionState(
       .where(and(
         eq(tasks.id, taskId),
         isNull(tasks.activeTurnToken),
+        eq(tasks.resumePromptGeneration, previous.resumePromptGeneration),
         ne(tasks.status, "running"),
         ne(tasks.status, "queued"),
         isNull(tasks.completeConfirmedAt),

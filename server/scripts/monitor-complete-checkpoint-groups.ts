@@ -27,20 +27,23 @@ export async function checkpointGroups(): Promise<void> {
     assert.ok(await writeResumePrompt(taskId, text, auto), "写入新文本要声明来源");
     assert.equal((await taskRow(taskId)).resumePromptAuto, auto);
 
-    assert.ok(await takeResumePrompt(taskId, text), "取走");
+    const receipt = await takeResumePrompt(taskId, text);
+    assert.ok(receipt, "取走");
+    assert.deepEqual(
+      receipt, { text, auto, generation: 1 },
+      "取走拿到的是**整张凭证**:文字、来源、这一格被占用的第几次（第 2 轮审查 F2）",
+    );
     const away = await taskRow(taskId);
     assert.equal(away.resumePrompt, null, "文字确实被带走了");
-    assert.equal(
-      away.resumePromptAuto, auto,
-      "来源那一格休眠着、不许归零：归零之后退回来就成了「agent 自己写的」（F2）",
-    );
+    assert.equal(away.resumePromptGeneration, 1, "取走不是一次新的占用 —— 代次不许动");
     // 文字不在手上时「作废这段等待」是空操作：动它就等于把一段正在路上的文字的来源改掉。
     assert.equal(await clearAutoCheckpoint(taskId), false, "没有文字 = 没有等待可作废");
 
-    assert.ok(await restoreResumePrompt(taskId, text), "原样退回");
+    assert.ok(await restoreResumePrompt(taskId, receipt), "原样退回");
     const back = await taskRow(taskId);
     assert.equal(back.resumePrompt, text);
     assert.equal(back.resumePromptAuto, auto, "往返一趟,来源必须还是原来那个（F2）");
+    assert.equal((await taskRow(taskId)).resumePromptGeneration, 1, "原样退回也不是新占用");
     // 来源还在 ⇒ 两种等待的有效期才分得开：系统那段作废得掉，agent 自己那段谁也不许抹。
     assert.equal(await clearAutoCheckpoint(taskId), auto, "有效期按来源判");
     assert.equal((await taskRow(taskId)).resumePrompt, auto ? null : text);
@@ -68,10 +71,13 @@ export async function checkpointGroups(): Promise<void> {
 
     const first = await monitorWakeCheckpoint(await msgRow());
     assert.ok(first, "任务行上挂着交代就该带上");
+    const ledger = await msgRow();
+    assert.equal(ledger.checkpointTaken, wait, "账本上记着是哪一段");
     assert.equal(
-      (await taskRow(taskId)).resumePromptAuto, true,
-      "取走那一笔不许动来源列 —— 这正是重投能认回来源的前提",
+      ledger.checkpointAuto, true,
+      "**来源跟文字同一笔落账**（第 2 轮审查 F2）—— 重投那一趟不许靠任务行上那个可能已经改过的布尔猜",
     );
+    assert.equal(ledger.checkpointGeneration, 1, "取走时的占用代次也要落账:它是退回时的归属凭证");
     // **把 first.restore 丢掉**：模拟「进程在这儿没了」。下一次只剩账本列。
     const again = await monitorWakeCheckpoint(await msgRow());
     assert.ok(again, "重投只认账本列,不再从任务行上取第二次");
@@ -85,6 +91,97 @@ export async function checkpointGroups(): Promise<void> {
     );
     assert.equal(await clearAutoCheckpoint(taskId), true, "来源在 ⇒ 不等它了之后这段话作废得掉");
     assert.equal(await monitorStatus(monitorId), "exited");
+  }
+
+  // ── ㉗b F2 第 2 轮走穿的那条：**跨代往返** —— 一个空槽证明不了「来源还是我的」────────
+  //
+  // 上一轮的口径是「取走/退回一个字都不碰来源列，那一格休眠着等文字回来」。它只在**中间没有
+  // 别的写入**时成立：槽可以被另一段文字占用、再被取走，于是又空了 —— 这时在途的旧退回填回来，
+  // 就继承到不属于它的来源。审查两个方向都实测到：
+  //
+  //   `F2_DORMANT_SCALAR_IS_NOT_PROVENANCE originalAuto=true, restoredAuto=false,
+  //    settlement=paused`（系统等待被洗成主动暂停 ⇒ 再没人清得掉它，任务卡死在 paused）
+  //   `F2_DORMANT_SCALAR_IS_NOT_PROVENANCE originalAuto=false, restoredAuto=true,
+  //    settlement=done`（agent 自己写的主动指令被当成系统等待，自动清掉）
+  //
+  // 现在凭证随身、代次是归属本体：代次变了 ⇒ 这张凭证过期，那段文字**压根填不回去**（它也
+  // 确实不该回来 —— 后写的那一段才是最新意图）。所以断言不是「来源对不对」，而是「它根本不许
+  // 复活」。
+  for (const firstAuto of [true, false]) {
+    const taskId = await makeTask();
+    const older = firstAuto ? "系统等待：收齐结果以后再确认完成" : "继续：先把那份报表取回来";
+    const newer = firstAuto ? "继续：我自己决定在这儿停一下" : "系统等待：收齐结果以后再确认完成";
+    assert.ok(await writeResumePrompt(taskId, older, firstAuto));
+    const stale = await takeResumePrompt(taskId, older);
+    assert.ok(stale, "第一段被取走（它的退回从此在途）");
+
+    // 另一段、**相反来源**的新检查点：写入（代次 +1）→ 又被取走（槽再次空着）。
+    assert.ok(await writeResumePrompt(taskId, newer, !firstAuto), "槽空着 ⇒ 新的一段写得进去");
+    assert.equal((await taskRow(taskId)).resumePromptGeneration, 2, "写入新文本 = 一次新的占用");
+    assert.ok(await takeResumePrompt(taskId, newer), "新的一段也被取走 —— 槽又空了");
+
+    // 旧凭证这时候退回来：**不许落地**。
+    assert.equal(
+      await restoreResumePrompt(taskId, stale), false,
+      "代次已经不是它那一次 ⇒ 这张凭证过期,一个字都不许填回去（上一版会填回去并继承新来源）",
+    );
+    const after = await taskRow(taskId);
+    assert.equal(after.resumePrompt, null, "槽仍然空着 —— 过期的文字没被复活");
+    assert.equal(after.resumePromptGeneration, 2, "被挡住的退回不许动代次");
+  }
+
+  // 同一条不变量的另一半：**作废**（`clearAutoCheckpoint`）也让代次前进，所以一段已经作废的
+  // 等待不许被在途的旧凭证凭一个空槽复活。
+  {
+    const taskId = await makeTask();
+    const wait = "系统等待：收齐结果以后再确认完成";
+    assert.ok(await writeResumePrompt(taskId, wait, true));
+    assert.equal(await clearAutoCheckpoint(taskId), true, "台子前提：这段等待作废掉了");
+    // 伪造一张「作废之前取走的」凭证（代次还是 1）：现实里它来自账本重投或改派回滚。
+    assert.equal(
+      await restoreResumePrompt(taskId, { text: wait, auto: true, generation: 1 }), false,
+      "作废让代次 +1 ⇒ 作废之前取走的凭证全部过期,填不回来",
+    );
+    assert.equal((await taskRow(taskId)).resumePrompt, null, "作废了就是作废了");
+  }
+
+  // 同一条不变量走**生产路径**：账本重投 + 跨代。审查实测的那条正是这一条（持久账本里的旧
+  // 文字 + 任务行上另一段文字留下的来源）。
+  {
+    const taskId = await makeTask({ status: "done" });
+    const sessionId = await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+    const older = "继续：等那条哨兵的结果到了再收工"; // 系统等待
+    assert.ok(await writeResumePrompt(taskId, older, true));
+    const monitorId = await insertMonitorRow(taskId, { status: "exited" });
+    const msgId = uniq("msg-cross");
+    await db.insert(scheduledMessages).values({
+      id: msgId, taskId, text: "【哨兵】RESULT_READY", attachments: "[]",
+      origin: `monitor:${monitorId}`, mode: "queued", status: "pending",
+      sendAt: now(), createdAt: now(),
+    });
+    const msgRow = async () =>
+      (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, msgId))).at(0)!;
+
+    const taken = await monitorWakeCheckpoint(await msgRow());
+    assert.ok(taken, "台子前提：交代被这条消息接走了");
+    // 进程换过一次（闭包丢掉），同时另一段**主动**暂停占用过那一格又被取走。
+    const newer = "继续：我自己决定在这儿停一下";
+    assert.ok(await writeResumePrompt(taskId, newer, false), "槽空着 ⇒ 新的一段写得进去");
+    assert.ok(await takeResumePrompt(taskId, newer), "新的一段也被取走");
+
+    const replay = await monitorWakeCheckpoint(await msgRow());
+    assert.ok(replay, "重投认得出账本上那一段");
+    await replay.restore();
+    const after = await taskRow(taskId);
+    assert.equal(
+      after.resumePrompt, null,
+      "过期的那一段不许复活 —— 上一版会把它填回去,并继承「agent 自己写的」那个来源(F2)",
+    );
+    assert.equal((await msgRow()).checkpointTaken, null, "账本要清掉,否则这一段会被无限重投");
+    assert.match(
+      transcriptOf(sessionId, taskId), /没有放回任务行/,
+      "**不许静默作废**:那段交代就这么没了,刷新页面后要看得出发生过这件事",
+    );
   }
 
   // ── ⑳ R2-2：系统写下的那段等待有有效期 —— 不等它了、重新交卷就该清掉 ─────────────
