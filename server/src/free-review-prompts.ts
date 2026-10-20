@@ -7,7 +7,10 @@ import { reviewRequestReference } from "./review-request-context.js";
 import { settledRulingsFor } from "./free-review-settled.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import {
-  CLASS_PROBLEM_BOUNDARY, DEFER_BOUNDARY_CRITERION, DEFER_REASON_FIELD_GUIDE,
+  CLASS_PROBLEM_BOUNDARY,
+  DEFER_BOUNDARY_CRITERION,
+  DEFER_REASON_FIELD_GUIDE,
+  PLAIN_SUMMARY_GUIDE,
 } from "@ash/shared/free-workflow";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { freeReviewHistorySection } from "./review-history.js";
@@ -127,8 +130,14 @@ export function freeReviewResumeMessage(task: TaskRow, run: ReviewRunRow, round:
 function disputeOption(taskId: string): string {
   return `\n\n如果报告里有**你认为不成立**的意见（读错了代码、依据不可复现），或者那是一处` +
     `**知情且有意为之**的设计、这次不该改：不要勉强照改，也不要只在回复里辩解两句了事——` +
-    `调用 dispute_review(taskId="${taskId}", reason="逐条写清哪一条不成立、依据是什么（指到文件/行/可复现步骤）", ` +
+    `调用 dispute_review(taskId="${taskId}", summary="<一句人话，见下>", ` +
+    `reason="逐条写清哪一条不成立、依据是什么（指到文件/行/可复现步骤）", ` +
     `directionToken="<最新【当前方向身份】token>") 把驳回落下来，然后结束本回合，由用户裁定。\n` +
+    // 必填，而且**单独成段**：规范本身带列表，塞进 `- ` 条目里子条目会跳出父条目
+    // （同 CLASS_PROBLEM_BOUNDARY 那一段），而且回归钉的是「原样出现」——改一个字
+    // 的缩进都会让两个表面漂开。
+    `\n**summary 必填**，它是用户裁定时看到的第一行字，决定他点「让你接着改」还是「这一轮不用改」。` +
+    PLAIN_SUMMARY_GUIDE + `\n\n` +
     `- 部分成立时：先把成立的那几条改掉并验证，再用 dispute_review 只驳不成立的那几条，理由里写明你已经改了什么。\n` +
     `- 驳回之后**不要**调用 complete_task：这一轮停在「等用户裁定」，不是完成。\n` +
     `- 默认仍然是照报告修复；驳回是例外，拿不出具体依据就不要用。\n` +
@@ -292,8 +301,12 @@ export function debatePrompt(input: {
     `${history}\n\n${ask}\n\n` +
     `**这一段只辩论，不改代码**：不要编辑任何文件、不要提交、不要跑会改变状态的命令；` +
     `只读代码、只读日志、必要时只读地复核可以。一边辩一边改的话，下一段的对方看到的就是另一版代码了。\n\n` +
-    `说完调用 debate_reply(taskId="${task.id}", statement="<你这一段的完整发言>"` +
+    `说完调用 debate_reply(taskId="${task.id}", summary="<一句人话，见下>", statement="<你这一段的完整发言>"` +
     `${final ? `, verdict="upheld|withdrawn|partial"` : ""}, directionToken="<最新【当前方向身份】token>") 交卷，` +
+    // 一场辩论七段、合起来上万字，而用户开辩论的目的就是裁定。逐段这一句是他唯一会
+    // 逐段读的东西，正文在界面上默认折着。
+    `\n**summary 必填**：用户会逐段只读这一句来判断这场辩论辩到哪了。` +
+    PLAIN_SUMMARY_GUIDE + `\n` +
     `然后结束本回合。**不要**调用 report_stage / complete_task / accept_task / dispute_review：` +
     `这一段既不改结论也不改任务状态${final ? "——你的 verdict 只是你的立场，裁定权在用户手上" : ""}。` +
     (final ? "" : "\n没有调用 debate_reply 就结束回合的话，这场辩论会按「没说话」中止。");

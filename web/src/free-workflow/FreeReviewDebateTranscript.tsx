@@ -1,13 +1,18 @@
 import type { FreeReviewDebate, FreeReviewDebateTurn } from "@ash/shared";
 import { Quotes, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { FoldedProse } from "../components/FoldedProse.tsx";
 import { DEBATE_SIDE_LABEL, debateStatusText, debateTotalSegments } from "./debateModel.ts";
 
 export { debateStatusText };
 
 /**
- * 一条驳回上那几段发言的逐段回放。发言正文是 agent 写的 Markdown，按报告同样的方式渲染。
+ * 一条驳回上那几段发言的逐段回放。
+ *
+ * 逐段摆的是**那一句人话**（`turn.summary`，`PLAIN_SUMMARY_GUIDE` 要求的必填字段），
+ * 完整发言折在它下面。因为用户开辩论是为了裁定：七段发言合起来上万字（真实样本），
+ * 他要的是「这段站哪边」，不是逐段读完（用户 2026-10-20：「一大篇文字都看不懂」）。
+ * 加这个字段之前的老记录没有那一句，那时正文**默认摊开**——折起来就成了「什么都没有」。
  *
  * 两种宽度：`panel` 是审查面板里那一栏（窄，只求「看得见」），`reading` 是全宽阅读态
  * （宽，求「读得完」）。同一份数据两套排版，是因为面板那一栏只有 ~540px，七段发言在
@@ -60,8 +65,16 @@ export function FreeReviewDebateTranscript({
                 </button>
               )}
             </span>
+            {turn.summary && <p className="free-review-debate__gist">{turn.summary}</p>}
             {turn.statement
-              ? <MarkdownBody text={turn.statement} />
+              ? (
+                <FoldedProse
+                  label="这一段的完整发言"
+                  text={turn.statement}
+                  // 阅读态是专门为「读得完」开的那一层，在那里还折着就本末倒置了。
+                  open={variant === "reading" || !turn.summary}
+                />
+              )
               : <p className="free-review-debate__pending">{turn.status === "speaking" ? "正在组织发言…" : "这一段没有留下发言。"}</p>}
           </li>
         ))}

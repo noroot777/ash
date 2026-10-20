@@ -252,6 +252,7 @@ const reviewTurnState: FreeWorkflowApiState = {
 const waivedRound = (resolution: "deferred" | "withdrawn") => ({
   ...repairState.reviews[0].rounds[0],
   dispute: {
+    summary: resolution === "withdrawn" ? "它看错了行号，这条我不认。" : "这几条我认，但该另开任务做。",
     reason: resolution === "withdrawn" ? "第 2 条读错了行号" : "",
     deferReason: resolution === "deferred" ? "第 2、3 条是第 1 轮修复引入的" : null,
     at: "2026-08-09T01:12:00.000Z",

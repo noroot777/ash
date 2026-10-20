@@ -15,6 +15,7 @@ import {
   WarningCircle,
   Wrench,
 } from "@phosphor-icons/react";
+import { FoldedProse } from "../components/FoldedProse.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody, ReviewReportBody } from "../components/MarkdownBody.tsx";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
@@ -26,6 +27,7 @@ import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewDisputeCard } from "./FreeReviewDisputeCard.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
+import { DISPUTE_PROSE_LABELS } from "./disputeCopy.ts";
 import { freeReviewView } from "./freeReviewCopy.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
@@ -114,11 +116,13 @@ function disputeSuffix(round: FreeReviewRound): string {
 function disputeStateText(round: FreeReviewRound): string {
   const dispute = round.dispute;
   if (!dispute) return "执行者驳回";
-  const who = deferOnly(round) ? "执行者提出越界" : "执行者驳回";
-  if (dispute.resolution === "withdrawn") return `${who} · 你已采纳，这条意见作废`;
-  if (dispute.resolution === "deferred") return `${who} · 你已裁定转为独立任务，不在本任务里修`;
-  if (dispute.resolution === "upheld") return `${who} · 你维持了审查意见`;
-  return dispute.debates.at(-1)?.status === "running" ? `${who} · 双方辩论中` : `${who} · 等你裁定`;
+  // 这一行是**历史记录**里的状态条，措辞跟着裁定屏走（用户 2026-10-20 要的是人话）：
+  // 说「谁不认什么、你当时怎么判的」，不说状态枚举的名字。
+  const who = deferOnly(round) ? "执行者说这几条该另开任务改" : "执行者不认这一轮意见";
+  if (dispute.resolution === "withdrawn") return `${who} · 你判了这一轮不用改`;
+  if (dispute.resolution === "deferred") return `${who} · 你把它转成了独立任务`;
+  if (dispute.resolution === "upheld") return `${who} · 你让它接着改了`;
+  return dispute.debates.at(-1)?.status === "running" ? `${who} · 双方辩论中` : `${who} · 等你拍板`;
 }
 
 function reviewKey(runId: string, round: number): string {
@@ -281,7 +285,26 @@ export function FreeWorkflowInspector({
           {opened.round.dispute && (
             <div className="review-round-dispute">
               <b>{disputeStateText(opened.round)}</b>
-              <MarkdownBody text={opened.round.dispute.reason} />
+              {/* 和驳回卡同一个读法：那一句人话摆出来，几千字依据折起来（用户 2026-10-20
+                  「一大篇文字都看不懂」）。老记录没有那一句，正文就默认摊开。 */}
+              {opened.round.dispute.summary && (
+                <p className="review-round-dispute__gist">{opened.round.dispute.summary}</p>
+              )}
+              {opened.round.dispute.reason && (
+                <FoldedProse
+                  label={DISPUTE_PROSE_LABELS.reason}
+                  text={opened.round.dispute.reason}
+                  open={!opened.round.dispute.summary}
+                />
+              )}
+              {opened.round.dispute.deferReason && (
+                <FoldedProse
+                  label={DISPUTE_PROSE_LABELS.defer}
+                  text={opened.round.dispute.deferReason}
+                  open={!opened.round.dispute.summary}
+                  tone="defer"
+                />
+              )}
               {opened.round.dispute.debates.map((debate, index) => (
                 <FreeReviewDebateTranscript
                   key={debate.id}
@@ -408,6 +431,9 @@ export function FreeWorkflowInspector({
               disabled={locked || taskBusy || !!reviewing}
               onChanged={free.setState}
               notify={notify}
+              // 卡上只有执行者的说法；审查者那一半在报告里，用户不该为了读它先去
+              // 「审查记录」列表里认第几轮。
+              onOpenReport={() => selectReview(stoppedRun, disputedRound)}
             />
           )}
 

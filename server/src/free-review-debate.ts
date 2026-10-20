@@ -35,7 +35,8 @@ import {
   tasks,
 } from "./db/schema.js";
 import { debatePrompt, type DebateClosing } from "./free-review-prompts.js";
-import { openDisputeOf, type ReviewRunRow } from "./free-review-dispute.js";
+// `plainSummaryOf`：发言摘要与驳回摘要是同一条规范，共用同一处校验（见那边的注释）。
+import { disputeBriefOf, openDisputeOf, plainSummaryOf, type ReviewRunRow } from "./free-review-dispute.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
@@ -245,7 +246,7 @@ export async function startFreeReviewDebate(
       await launchSegment(
         task, open.run,
         debate as DebateRow, turn as DebateTurnRow,
-        open.round.disputeReason!, [],
+        disputeBriefOf(open.round), [],
       );
       return { debateId: debate.id, exchanges };
     } finally {
@@ -264,10 +265,14 @@ export async function startFreeReviewDebate(
  */
 export async function submitDebateStatement(
   taskId: string,
-  input: { statement?: unknown; verdict?: unknown },
+  input: { summary?: unknown; statement?: unknown; verdict?: unknown },
 ): Promise<{ seq: number; side: FreeReviewDebateSide; final: boolean; verdictIgnored: boolean }> {
   const statement = typeof input.statement === "string" ? input.statement.trim() : "";
   if (!statement) throw new Error("发言不能为空：把你这一段的意见写进 statement");
+  // 摘要先校验、后落库：七段发言合起来上万字，用户开辩论是为了裁定，不是为了读完。
+  const summary = plainSummaryOf(
+    input.summary, "summary", "用户要靠逐段的这一句看懂这场辩论辩到哪了，别让他为了裁定去读一万字",
+  );
   const debate = await activeDebateOf(taskId);
   if (!debate) throw new Error("当前没有正在进行的辩论");
   const turn = await speakingTurnOf(debate);
@@ -290,7 +295,7 @@ export async function submitDebateStatement(
   }
   const at = now();
   const written = await db.update(freeReviewDebateTurns)
-    .set({ statement: statement.slice(0, MAX_DEBATE_STATEMENT_LEN), status: "done", endedAt: at })
+    .set({ summary, statement: statement.slice(0, MAX_DEBATE_STATEMENT_LEN), status: "done", endedAt: at })
     .where(and(eq(freeReviewDebateTurns.id, turn.id), eq(freeReviewDebateTurns.status, "speaking")))
     .returning({ id: freeReviewDebateTurns.id });
   if (!written.length) throw new Error("这一段发言已经交过卷了");
@@ -360,7 +365,7 @@ export async function settleDebateTurn(taskId: string, turnOk: boolean): Promise
     .where(eq(freeReviewDebates.id, debate.id));
   await launchSegment(
     task, run, { ...debate, currentSeq: next.seq }, next as DebateTurnRow,
-    open.round.disputeReason!, await debateTurnsOf(debate.id),
+    disputeBriefOf(open.round), await debateTurnsOf(debate.id),
   );
   return true;
 }
@@ -399,6 +404,7 @@ export async function debateViews(roundId: string) {
     turns: (await debateTurnsOf(debate.id)).map((turn) => ({
       seq: turn.seq,
       side: turn.side as FreeReviewDebateSide,
+      summary: turn.summary ?? null,
       statement: turn.statement ?? "",
       status: turn.status as "speaking" | "done" | "error",
       startedAt: turn.startedAt,

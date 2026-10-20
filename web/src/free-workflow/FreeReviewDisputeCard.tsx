@@ -1,74 +1,56 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { FreeReviewDebateTurn, FreeReviewRound, FreeReviewRun } from "@ash/shared";
 import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@ash/shared/free-workflow";
-import { ArrowSquareOut, ArrowsOutSimple, ChatsCircle, HandPalm, SpinnerGap, Wrench } from "@phosphor-icons/react";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import {
+  ArrowSquareOut, ArrowsOutSimple, ChatsCircle, FileText, HandPalm, SpinnerGap, Wrench,
+} from "@phosphor-icons/react";
+import { FoldedProse } from "../components/FoldedProse.tsx";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DEBATE_SIDE_LABEL } from "./debateModel.ts";
+import {
+  DISPUTE_PROSE_LABELS, RESOLUTIONS, disputeHeadline, disputeStatusLine, resolutionConfirmText,
+  type DisputeResolutionKind,
+} from "./disputeCopy.ts";
 import { FreeReviewDebateReader } from "./FreeReviewDebateReader.tsx";
 import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
 
-type Pending = "debate" | "withdrawn" | "upheld" | "deferred";
+type Pending = "debate" | DisputeResolutionKind;
 
 /**
- * 三个出口的按钮文案。
+ * 「执行者不认这一轮意见」的那张卡：它一句话说了什么 + 完整依据（折着）+ 几个只有用户
+ * 能按的出口。
  *
- * **按「接下来干什么」命名，不按「谁对」命名**（用户 2026-09-27 拍的板）。上一版叫
- * 「维持意见并修复」和「采纳执行者说法」——那是裁判用语，回答的是谁赢；而用户真正要
- * 做的是下一步的指令。两者一旦分叉，界面就会问出一个没有正确答案的问题：辩论辩出
- * 「第 2 条成立，但按后来达成的新方案做」时，既不是「维持」原报告（报告要的是另一版），
- * 也不是「采纳执行者」（它说的是这条不成立），用户只能在两颗都不对的按钮里挑一颗。
+ * ── 这一屏为什么长这样（用户 2026-10-20：「一大篇文字都看不懂」）──
+ * 上一版把 `dispute.reason` / `deferReason` 原样铺在卡上。那两段是执行者写给**审查者**
+ * 看的辩护书：真实样本 1000~3500 字、一段到底、满篇 `kb/feeds/x_post.py:211`、「672 条
+ * 回归通过」、commit 短 hash。开了辩论再加七段、合计上万字。用户要在这堆东西上面按一颗
+ * 按钮，而四颗按钮各只有五个字、彼此的差别写在确认框里（得点进去才看见）。
  *
- * 「谁对」是**事实**，仍要留档——它写在确认框、时间线和审查记录里，那才是它该待的
- * 地方。按钮是下命令用的，不是记分用的。
- */
-const RESOLUTIONS = {
-  upheld: {
-    button: "让它接着改",
-    title: "让执行者接着改",
-    note: {
-      label: "写给执行者的要点（选填）",
-      hint: "会随修复指令一起发过去，并注明与报告冲突时以你这段为准；留空就是照报告改。",
-    },
-  },
-  withdrawn: {
-    button: "这一轮不用改了",
-    title: "这一轮不用改了",
-    note: {
-      label: "记下你的理由（选填）",
-      hint: "这一档不会给执行者发任何消息，这段话只留在审查记录和时间线里备查。",
-    },
-  },
-  deferred: {
-    button: "转为独立任务",
-    title: "转为独立任务",
-    note: {
-      label: "写给新任务的要点（选填）",
-      hint: "会写进新建那个待办任务的描述里，接手的人一开始就看得到。",
-    },
-  },
-} as const;
-
-/**
- * 「执行者不认这一轮意见」的那张卡：驳回理由 + 辩论回放 + 几个只有用户能按的出口。
+ * 所以这一屏现在按**读的顺序**排，一屏之内答完三个问题：
+ * ① 争的是什么 —— 标题（系统按两段理由在不在推出来的，不依赖 agent 措辞）
+ *                 + 执行者的一句人话（`dispute.summary`，结构化字段，上限 200 字）
+ * ② 想深究就展开 —— 两段技术依据各自折着，标题上报字数
+ * ③ 我能怎么选 —— 出口竖排成一列，每行「按钮 + 我什么时候该点它」，不必点进确认框才懂
  *
- * 出口互不等价，确认框的文案必须把差别说死（按钮上只写动作，见 RESOLUTIONS）：
- * - 让双方辩论：先听几段再决定，**不改变任何结论**，辩完还是回到这张卡上裁定。
+ * 老数据（加 `summary` 之前落的那 32 条驳回）没有那一句：此时正文**默认摊开**，因为那是
+ * 用户唯一能读到的东西；折起来就成了「什么都没有」。
+ *
+ * ── 四个出口互不等价，这几条规矩别动 ──
+ * - 让双方辩论：先听几段再决定，**不改变任何结论**，辩完还是回到这张卡上拍板。
  * - 这一轮不用改了（记为采纳执行者）：这条未通过意见作废；审查记录与证据原样留着，
  *   那条 run 也**不会**被改写成「已通过」——替审查者签字比留一条「用户裁定作废」的
  *   记录危险得多。
  * - 转为独立任务：意见**成立**，只是偏离了本任务要做的那件事（判据与三种形态见
- *   `@ash/shared/free-workflow` 的 `DEFER_BOUNDARY_CRITERION`）。
- *   建一个待办派生任务把它带走，本轮不再在这里修。**只在执行者逐条写明越界依据时才
- *   出现**——凭空给这颗按钮，它就成了谁都能按的免修开关（后端同样拒绝，这里不是唯一
- *   防线）。它与上一档的差别是：那条意见没有作废，只是换了个地方修。
- * - 让它接着改（记为维持审查意见）：驳回不被采纳，后端接着发起修复。
+ *   `@ash/shared/free-workflow` 的 `DEFER_BOUNDARY_CRITERION`）。建一个待办派生任务把它
+ *   带走，本轮不再在这里修。**只在执行者逐条写明越界依据时才出现**——凭空给这颗按钮，
+ *   它就成了谁都能按的免修开关（后端同样拒绝，这里不是唯一防线）。
+ * - 让它接着改（记为维持审查意见）：驳回不被采纳，接着发起修复。
  *
- * 三档共用一栏**裁定要点**：辩论常常辩出「第 2 条我认，但按后来达成的方案做」这种
- * 结论，三档一个都表达不了它。没有这一栏时用户只能事后再手打一条续聊，而那段话不在
- * 任何结构化状态里，也比修复指令到得晚。辩论回放的每一段还挂着「用这段作要点」，
- * 省掉跨面板的手动复制——最常见的一次裁定就是「照审查者收尾说的办」。
+ * 三档共用一栏**裁定要点**：辩论常常辩出「第 2 条我认，但按后来达成的方案做」这种结论，
+ * 三档一个都表达不了它。没有这一栏时用户只能事后再手打一条续聊，而那段话不在任何结构化
+ * 状态里，也比修复指令到得晚。辩论回放的每一段还挂着「用这段作要点」，省掉跨面板的手动
+ * 复制——最常见的一次裁定就是「照审查者收尾说的办」。
  */
 export function FreeReviewDisputeCard({
   taskId,
@@ -77,6 +59,7 @@ export function FreeReviewDisputeCard({
   disabled = false,
   onChanged,
   notify,
+  onOpenReport,
 }: {
   taskId: string;
   run: FreeReviewRun;
@@ -84,6 +67,13 @@ export function FreeReviewDisputeCard({
   disabled?: boolean;
   onChanged: (state: FreeWorkflowApiState) => void;
   notify: (message: string) => void;
+  /**
+   * 「看审查者的原话」——把这一轮的报告选到左边去。
+   *
+   * 卡上只有执行者的说法，审查者的那一半在报告里。不给入口的话，用户要在右边的「审查
+   * 记录」列表里自己找回第几轮（两处都在同一个面板里，但得先知道该点哪一行）。
+   */
+  onOpenReport?: () => void;
 }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
@@ -103,9 +93,6 @@ export function FreeReviewDisputeCard({
   if (!dispute) return null;
   const blocked = disabled || debateRunning;
   const deferReason = dispute.deferReason;
-  // 只提了转出、一条都没驳：标题不能还写「驳回了意见」——那会让用户以为执行者在说
-  // 报告不对，而它说的恰恰是「报告是对的，只是不该在这儿修」。
-  const deferOnly = !!deferReason && !dispute.reason;
 
   const startDebate = async () => {
     setBusy(true);
@@ -121,7 +108,7 @@ export function FreeReviewDisputeCard({
     }
   };
 
-  const resolve = async (resolution: "withdrawn" | "upheld" | "deferred") => {
+  const resolve = async (resolution: DisputeResolutionKind) => {
     setBusy(true);
     try {
       const written = note.trim();
@@ -158,7 +145,7 @@ export function FreeReviewDisputeCard({
   };
 
   /** 三个裁定确认框共用的要点输入框（措辞按档位换，见 RESOLUTIONS）。 */
-  const noteField = (kind: "withdrawn" | "upheld" | "deferred") => (
+  const noteField = (kind: DisputeResolutionKind) => (
     <label className="free-review-dispute-note">
       <span>{RESOLUTIONS[kind].note.label}</span>
       <textarea
@@ -174,29 +161,67 @@ export function FreeReviewDisputeCard({
     </label>
   );
 
+  /** 一个出口 = 一行：按钮 + 「我什么时候该点它」。竖排是为了让三档的差别一眼可比。 */
+  const exit = (kind: DisputeResolutionKind, icon: ReactNode, primary = false) => (
+    <li>
+      <button
+        type="button"
+        className={primary ? "is-primary" : ""}
+        disabled={blocked || busy}
+        onClick={() => setPending(kind)}
+      >{icon}{RESOLUTIONS[kind].button}</button>
+      <small>{RESOLUTIONS[kind].blurb}</small>
+    </li>
+  );
+
+  /** 确认框里的正文一律走 ConfirmDialog 自己的 `message`（口径见 disputeCopy.ts）。 */
+  const confirmMessage = (kind: DisputeResolutionKind, extra = "") =>
+    `${resolutionConfirmText(kind, round.round)}${extra ? `\n${extra}` : ""}`;
+
+  /** 要点栏 + 留档那行小字（「时间线上记作…」，口径③）。 */
+  const confirmBody = (kind: DisputeResolutionKind) => (
+    <>
+      {noteField(kind)}
+      <small className="free-review-dispute-recorded">{RESOLUTIONS[kind].recorded}</small>
+    </>
+  );
+
   return (
     <section className="free-review-dispute-card" aria-label="执行者驳回审查意见">
       <header>
         <span><HandPalm size={13} weight="fill" /></span>
         <div>
-          <b>{deferOnly
-            ? `执行者认为第 ${round.round} 轮意见超出本任务边界`
-            : `执行者驳回了第 ${round.round} 轮意见`}</b>
-          <small>{run.reviewerName} · {debateRunning ? "辩论进行中" : "等你裁定"}</small>
+          <b>{disputeHeadline(round, dispute)}</b>
+          <small>{run.reviewerName} · {debateRunning ? "辩论进行中" : "等你拍板"}</small>
         </div>
       </header>
+
+      {/* 执行者的一句人话（`PLAIN_SUMMARY_GUIDE`，必填字段）。它是这一屏的主角：用户
+          先读它，再决定要不要展开下面那几百到几千字的依据。老驳回没有这一句，此时不
+          编一句糊上去，直接把正文摊开。 */}
+      {dispute.summary && <p className="free-review-dispute-card__gist">{dispute.summary}</p>}
+
       {dispute.reason && (
-        <div className="free-review-dispute-card__reason">
-          <b>驳回理由</b>
-          <MarkdownBody text={dispute.reason} />
-        </div>
+        <FoldedProse
+          label={DISPUTE_PROSE_LABELS.reason}
+          text={dispute.reason}
+          open={!dispute.summary}
+        />
       )}
       {deferReason && (
-        <div className="free-review-dispute-card__reason is-defer">
-          <b>认可、但认为超出本任务边界的那几条</b>
-          <MarkdownBody text={deferReason} />
-        </div>
+        <FoldedProse
+          label={DISPUTE_PROSE_LABELS.defer}
+          text={deferReason}
+          open={!dispute.summary}
+          tone="defer"
+        />
       )}
+      {onOpenReport && (
+        <button type="button" className="free-review-dispute-card__report" onClick={onOpenReport}>
+          <FileText size={11} aria-hidden="true" />看审查者在第 {round.round} 轮报告里怎么说
+        </button>
+      )}
+
       {debates.map((item, index) => {
         const ordinal = debates.length > 1 ? index + 1 : null;
         return (
@@ -221,37 +246,24 @@ export function FreeReviewDisputeCard({
           />
         );
       })}
-      <p>
-        {debateRunning
-          ? "双方正在各自陈词；辩论只产生发言，不改变结论，说完仍由你裁定。"
-          : latestDebate?.status === "finished"
-            // 辩完最常见的结论恰恰落在三档之间（「这条我认，但按刚才达成的方案做」），
-            // 不点明要点栏的话，用户只会在两颗都不对的按钮之间挑一颗。
-            ? "双方都说完了。审查者收尾时给的只是它自己的立场，最后由你裁定；想让它照某一段说的办，点那一段上的「用这段作要点」。"
-            : latestDebate?.status === "failed"
-              ? "上一场辩论中途断了（有一段没能发言）；可以重开一场，也可以直接裁定。"
-              : "审查链已停在这里：既没有照改，也没有当成通过。"}
-      </p>
-      <div className="free-review-dispute-card__actions">
+
+      <p>{disputeStatusLine(latestDebate)}</p>
+
+      <ul className="free-review-dispute-card__exits">
+        {/* 主出口排第一颗：辩论之后绝大多数情况下要的就是「带着刚谈定的方案接着改」。 */}
+        {exit("upheld", <Wrench size={12} />, true)}
+        {exit("withdrawn", <HandPalm size={12} />)}
+        {deferReason && exit("deferred", <ArrowSquareOut size={12} />)}
         {(canDebate || debateRunning) && (
-          <button type="button" disabled={blocked || busy} onClick={() => setPending("debate")}>
-            {debateRunning ? <SpinnerGap size={12} className="is-spinning" /> : <ChatsCircle size={12} />}
-            {latestDebate ? "重开辩论" : "让双方辩论"}
-          </button>
+          <li>
+            <button type="button" disabled={blocked || busy} onClick={() => setPending("debate")}>
+              {debateRunning ? <SpinnerGap size={12} className="is-spinning" /> : <ChatsCircle size={12} />}
+              {latestDebate ? "重开辩论" : "让双方辩论"}
+            </button>
+            <small>还拿不准 —— 让两边各说几段再定</small>
+          </li>
         )}
-        {deferReason && (
-          <button type="button" disabled={blocked || busy} onClick={() => setPending("deferred")}>
-            <ArrowSquareOut size={12} />{RESOLUTIONS.deferred.button}
-          </button>
-        )}
-        <button type="button" disabled={blocked || busy} onClick={() => setPending("withdrawn")}>
-          <HandPalm size={12} />{RESOLUTIONS.withdrawn.button}
-        </button>
-        {/* 主按钮：辩论之后绝大多数情况下要的就是「带着刚谈定的方案接着改」。 */}
-        <button className="is-primary" type="button" disabled={blocked || busy} onClick={() => setPending("upheld")}>
-          <Wrench size={12} />{RESOLUTIONS.upheld.button}
-        </button>
-      </div>
+      </ul>
 
       {readingDebate && (
         <FreeReviewDebateReader
@@ -266,7 +278,7 @@ export function FreeReviewDisputeCard({
           title="让审查者和执行者辩论"
           eyebrow="CONFIRM ACTION"
           icon={<ChatsCircle size={19} weight="duotone" />}
-          message="双方会轮流发言、都不改代码；辩完仍然回到这张卡上由你裁定。"
+          message="双方轮流发言，都不改代码；说完还是回到这张卡上由你拍板。"
           confirmLabel="开始辩论"
           busy={busy}
           onConfirm={() => void startDebate()}
@@ -291,54 +303,42 @@ export function FreeReviewDisputeCard({
       )}
       {pending === "deferred" && (
         <ConfirmDialog
-          title="转为独立任务"
+          title={RESOLUTIONS.deferred.title}
           eyebrow="CONFIRM ACTION"
           icon={<ArrowSquareOut size={19} weight="duotone" />}
-          message={
-            `会建一个待办、不起跑的新任务，把上面那几条意见连同第 ${round.round} 轮的报告与证据目录带过去，` +
-            "并回链到本任务。这几条意见没有作废，只是不在本任务里修；审查报告与截图原样保留，" +
-            "这条审查链也不会被改写成「已通过」。什么时候开工由你决定。" +
-            "本任务这一轮到此为止：执行者已经改掉的那部分还没审过，要继续推进就再派一轮审查。"
-          }
-          confirmLabel="建任务并转走这几条"
+          message={confirmMessage("deferred")}
+          confirmLabel={RESOLUTIONS.deferred.confirmLabel}
           busy={busy}
           onConfirm={() => void resolve("deferred")}
           onClose={() => { if (!busy) setPending(null); }}
-        >{noteField("deferred")}</ConfirmDialog>
+        >{confirmBody("deferred")}</ConfirmDialog>
       )}
       {pending === "withdrawn" && (
         <ConfirmDialog
           title={RESOLUTIONS.withdrawn.title}
-          message={
-            `第 ${round.round} 轮那条未通过意见作废，执行者不再按它修改，记为「用户采纳执行者说法」。` +
-            "审查报告与截图原样保留，这条审查链也不会被改写成「已通过」。"
-          }
-          confirmLabel="作废这条意见"
+          message={confirmMessage("withdrawn")}
+          confirmLabel={RESOLUTIONS.withdrawn.confirmLabel}
           busy={busy}
           onConfirm={() => void resolve("withdrawn")}
           onClose={() => { if (!busy) setPending(null); }}
-        >{noteField("withdrawn")}</ConfirmDialog>
+        >{confirmBody("withdrawn")}</ConfirmDialog>
       )}
       {pending === "upheld" && (
         <ConfirmDialog
           title={RESOLUTIONS.upheld.title}
-          message={
-            // 记录里这一档仍叫「维持审查意见」（= 没有采纳执行者的驳回），那是要留档的
-            // 事实。按钮上只写动作，所以这里必须把两个说法对上，否则用户在时间线上会
-            // 读到一个他没按过的词。
-            "执行者的驳回不被采纳（记为「维持审查意见」），后端接着发起修复。" +
-            `下面写了要点就按要点 + 第 ${round.round} 轮报告改，留空就照报告改。` +
-            (latestDebate?.status === "finished"
-              // 辩论收尾那一段执行者结构上没见过（后端会随修复指令整段抄给它），这里
-              // 说出来，免得用户以为「它刚才都听见了」而把要点栏留空。
-              ? "辩论里审查者的收尾发言会一并发给它——那一段它自己的会话里没有。"
-              : "")
-          }
-          confirmLabel="发起修复"
+          message={confirmMessage(
+            "upheld",
+            // 辩论收尾那一段执行者结构上没见过（修复指令里会整段抄给它），这里说出来，
+            // 免得用户以为「它刚才都听见了」而把要点栏留空。
+            latestDebate?.status === "finished"
+              ? "辩论里审查者最后那段会一并发给它 —— 它自己的会话里没有那一段。"
+              : "",
+          )}
+          confirmLabel={RESOLUTIONS.upheld.confirmLabel}
           busy={busy}
           onConfirm={() => void resolve("upheld")}
           onClose={() => { if (!busy) setPending(null); }}
-        >{noteField("upheld")}</ConfirmDialog>
+        >{confirmBody("upheld")}</ConfirmDialog>
       )}
     </section>
   );

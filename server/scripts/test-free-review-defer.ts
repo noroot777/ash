@@ -98,13 +98,13 @@ try {
   assert.throws(() => disputeInputOf({ reason: "  ", deferReason: "\n" }), /必须写明理由/,
     "只有空白也算空");
   assert.deepEqual(
-    disputeInputOf({ deferReason: "  第 2 条是上一轮修复引入的  " }),
-    { reason: "", deferReason: "第 2 条是上一轮修复引入的" },
+    disputeInputOf({ summary: "这两条我认，但不在这个任务里改", deferReason: "  第 2 条是上一轮修复引入的  " }),
+    { summary: "这两条我认，但不在这个任务里改", reason: "", deferReason: "第 2 条是上一轮修复引入的" },
     "只提转出时不强求 reason——强求它就只能在「哪条不成立」那栏里编一句自己都不认的话",
   );
   assert.deepEqual(
-    disputeInputOf({ reason: "第 1 条读错了行号", deferReason: "第 2 条越界" }),
-    { reason: "第 1 条读错了行号", deferReason: "第 2 条越界" },
+    disputeInputOf({ summary: "一条我不认，另一条该另开任务", reason: "第 1 条读错了行号", deferReason: "第 2 条越界" }),
+    { summary: "一条我不认，另一条该另开任务", reason: "第 1 条读错了行号", deferReason: "第 2 条越界" },
     "两段可以同时给：一次交接里表达「不成立」和「成立但越界」共存",
   );
   assert.equal(disputeResolutionOf("deferred"), "deferred", "deferred 是合法裁定");
@@ -117,7 +117,11 @@ try {
   const plain = await seed("f-defer", { reservation: { runId: "f-defer-run" } });
   assert.equal(claimTurn("f-defer", "single"), true);
   const before = await taskCount();
-  await disputeFreeReview("f-defer", "", "第 2、3 条成立，但都是第 1 轮按意见修复时引入的并发保护，超出原任务边界");
+  await disputeFreeReview("f-defer", {
+    summary: "第 2、3 条我认，但它们是上一轮照意见改出来的新问题，建议另开一个任务做。",
+    reason: "",
+    deferReason: "第 2、3 条成立，但都是第 1 轮按意见修复时引入的并发保护，超出原任务边界",
+  });
   assert.equal(await taskCount(), before,
     "裁定权只在用户手上：执行者提出转出时一个任务都不许建（规矩①）");
   const row = await roundRow(plain.roundId);
@@ -136,21 +140,25 @@ try {
     "提出之后不自动修复：任务不许被唤醒");
 
   // CAS：两段理由一起判，「先只提转出、再只驳一条」也算重复。
-  await rejects(() => disputeFreeReview("f-defer", "那我再驳一条"), "已经驳回过了",
-    "一轮意见只能提一次（两列一起 CAS，不是各判各的）");
+  await rejects(
+    () => disputeFreeReview("f-defer", { summary: "还有一条不认", reason: "那我再驳一条", deferReason: null }),
+    "已经驳回过了", "一轮意见只能提一次（两列一起 CAS，不是各判各的）",
+  );
   releaseTurn("f-defer");
 
   // 审查旁路回合不能替执行者提出（同 dispute_review 的 turnRole 判据）。
   await seed("f-reviewer-turn");
   assert.equal(claimTurn("f-reviewer-turn", "reviewer"), true);
-  await rejects(() => disputeFreeReview("f-reviewer-turn", "", "这条越界"),
-    "审查回合不能驳回自己的结论", "审查旁路回合不能提出转独立任务");
+  await rejects(
+    () => disputeFreeReview("f-reviewer-turn", { summary: "这条该另开任务", reason: "", deferReason: "这条越界" }),
+    "审查回合不能驳回自己的结论", "审查旁路回合不能提出转独立任务",
+  );
   releaseTurn("f-reviewer-turn");
 
   // ── ③ 凭空的 deferred 裁定必须被拒（规矩③：不能变成免修按钮） ──
   const noOffer = await seed("f-no-offer");
   assert.equal(claimTurn("f-no-offer", "single"), true);
-  await disputeFreeReview("f-no-offer", "这条读错了文件");
+  await disputeFreeReview("f-no-offer", { summary: "它读错了文件", reason: "这条读错了文件", deferReason: null });
   releaseTurn("f-no-offer");
   await rejects(() => resolveFreeReviewDispute("f-no-offer", "deferred"),
     "执行者没有提出", "执行者没写越界依据时，用户也不能把意见转走");
@@ -228,8 +236,11 @@ try {
   // ── ⑦ 混合形态：reason 与 deferReason 同时给，两段都落库、两个出口都在 ──
   const mixed = await seed("f-mixed");
   assert.equal(claimTurn("f-mixed", "single"), true);
-  await disputeFreeReview("f-mixed", "第 1 条读错了行号：foo.ts:12 那一行是生成代码",
-    "第 4 条成立，但它是第 2 轮修复引入的，建议单独做");
+  await disputeFreeReview("f-mixed", {
+    summary: "第 1 条我不认（它看的那行是生成出来的）；第 4 条我认，但建议另开任务做。",
+    reason: "第 1 条读错了行号：foo.ts:12 那一行是生成代码",
+    deferReason: "第 4 条成立，但它是第 2 轮修复引入的，建议单独做",
+  });
   releaseTurn("f-mixed");
   const mixedRow = await roundRow(mixed.roundId);
   assert.equal(mixedRow.disputeReason, "第 1 条读错了行号：foo.ts:12 那一行是生成代码");
