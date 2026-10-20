@@ -23,7 +23,8 @@ import { IS_WINDOWS } from "../platform.js";
 import { isSameProcess } from "../proc.js";
 import {
   shq, resolveBin, agentBaseEnv, failedChild, guardAgentSpawn,
-  openTrackFd, registerTrackFd, shareTrackFdRegistration, killChild, killByPid, spawnAgent,
+  openTrackFd, registerTrackFd, shareTrackFdRegistration, shareChildIdentity, markAdoptedChild,
+  killChild, killByPid, spawnAgent,
 } from "./spawn.js";
 
 // 一次运行的三个落盘文件。rc 是退出码 —— 管道模式下退出码是 close 事件白送的,
@@ -276,6 +277,11 @@ export function spawnControllableDetachedAgent(
     },
   });
   shareTrackFdRegistration(real, child);
+  // 追踪证据过户的同时把**退出身份**也过户:合成品自己的 exitCode 是上面 onExit 回调里补
+  // 写的,真进程退出到回调之间有一段窗口,被信号带走时更是永远停在 null —— 拿它判断
+  // 「这个号还是不是我们的进程」会在一个已经退出的号上发信号(第 2 轮审查 F1)。真进程还
+  // 握在手里,内核状态就是权威答案,所以指向它。
+  shareChildIdentity(real, child);
   return child;
 }
 
@@ -350,6 +356,7 @@ export function spawnDetachedAgent(
     },
   });
   shareTrackFdRegistration(real, child);
+  shareChildIdentity(real, child); // 理由同上:身份以真进程的内核状态为准
   return child;
 }
 
@@ -414,7 +421,7 @@ export function reattachDetachedAgent(opts: {
 }): DetachedChild | null {
   if (!isSameProcess(opts.pid, opts.startedAt)) return null;
 
-  return makeDetachedChild({
+  const child = makeDetachedChild({
     pid: opts.pid,
     paths: opts.paths,
     startOffset: opts.offset,
@@ -423,6 +430,8 @@ export function reattachDetachedAgent(opts: {
     // 把启动时间一起交给 killByPid:接管这一刻核对过的身份,到真要杀它时隔着整段回合,
     // 那个号可能已经换了主人,所以发信号前要按同一判据再核一次(第 1 轮审查 F2)。
     kill: () => killByPid(opts.pid, opts.startedAt),
+    // 注:这个合成品的 exitCode/signalCode 由下面的轮询补写,不是内核答案,所以它的身份
+    // 由 markAdoptedChild 单独声明(见函数尾部)——cleanup 这条路不经过上面这个 kill。
     onExit: (cb) => {
       // 没有 ChildProcess 可听,只能探。kill(pid,0) 抛 ESRCH = 确实没了
       //(复用只会让它显得「活着」,不会让活着的显得死了,所以这个方向是安全的)。
@@ -440,4 +449,9 @@ export function reattachDetachedAgent(opts: {
       (t as { unref?: () => void }).unref?.();
     },
   });
+  // 这个句柄手上只有一个号,没有真 ChildProcess 可问:身份就是「号 + 启动时间」,每次要
+  // 对它(或它的后代树)发信号前现查一遍 ps。cleanupAfterRun 走的是 childStillOurs 而不是
+  // 上面那个 kill,不声明身份它就会去读合成品那两个由轮询补写的字段(第 2 轮审查 F1)。
+  markAdoptedChild(child, opts.pid, opts.startedAt);
+  return child;
 }

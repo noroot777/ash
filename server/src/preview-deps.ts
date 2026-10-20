@@ -405,7 +405,8 @@ async function install(
       const timer = setTimeout(() => {
         // 按树杀，不是 `child.kill()`：那只打得到最外层的 shell，install 自己派生的
         // 后代（生命周期脚本、node-gyp…）会活下来，超时于是变成「放弃等待 + 留一堆孤儿」。
-        killByPid(child.pid ?? 0);
+        // 句柄还在手里、也没记启动时间,传 null = 存在性检查(startedAt 是必传项)。
+        killByPid(child.pid ?? 0, null);
         resolve(`装了 ${Math.round(INSTALL_TIMEOUT_MS / 60_000)} 分钟还没装完，已经放弃`);
       }, INSTALL_TIMEOUT_MS);
       const done = (result: string | null) => { clearTimeout(timer); onChild(0); resolve(result); };

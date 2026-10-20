@@ -4,7 +4,7 @@ import { desc, eq, inArray } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
-import { isRunning } from "./runs.js";
+import { claimReconcileTurn } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { startTeam } from "./team/session.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
@@ -29,18 +29,24 @@ export async function reconcileInterrupted(): Promise<void> {
   // **必须在 reattachRunningTasks 之后调用**（index.ts 保证顺序）。被成功接管的
   // 任务此刻有活的 handle，isRunning 为真 —— 它们绝不能再被当成「被打断」判
   // failed：那会让一个正在干活的 agent 在界面上显示失败，用户一点重试就会有
-  // 第二个 agent 进同一个 worktree。
-  // 用 isRunning（runs.ts，中立模块）而不是回头 import reattach，依赖保持单向。
-  const orphaned = (await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"])))
-    .filter((t) => !isRunning(t.id));
+  // 第二个 agent 进同一个 worktree。那道闸现在长在 reconcileInterruptedTask 里
+  //（原子预占 + 临界区内重读），这里只负责**扫谁**和**汇总日志**。
+  const orphaned = await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]));
   if (!orphaned.length) return;
-  const teamIds = orphaned.filter((t) => t.mode === "team").map((t) => t.id);
-  const others = orphaned.filter((t) => t.mode !== "team");
-  for (const t of others) await settleInterruptedTask(t);
-  for (const teamId of teamIds) await setTaskStatus(teamId, "idle");
-  const followUps = others.filter((t) => t.followUpFrom).length;
+  const teamIds: string[] = [];
+  let failed = 0;
+  let followUps = 0;
+  // 批量入口不自己写一份结算,一律走单条入口 —— 两份判据只要漂移一次,漂的那条就是会把
+  // 正在干活的任务写成 failed 的那条（第 1 轮审查 F3）。
+  for (const t of orphaned) {
+    if (!(await reconcileInterruptedTask(t.id))) continue; // 已经有人在跑/正在起跑 → 归他
+    if (t.mode === "team") teamIds.push(t.id);
+    else if (t.followUpFrom) followUps++;
+    else failed++;
+  }
+  if (!failed && !followUps && !teamIds.length) return;
   console.log(
-    `[ash] reconciled ${others.length - followUps} interrupted task(s) → failed` +
+    `[ash] reconciled ${failed} interrupted task(s) → failed` +
       (followUps ? `, ${followUps} follow-up turn(s) → 原终态` : "") +
       (teamIds.length ? `, ${teamIds.length} team task(s) → idle` : ""),
   );
@@ -88,17 +94,30 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
 // 循环已经落了终态)和被别人接着跑起来的,走到这里都是空转。
 // 返回值 = 「这一条确实是被打断、而且这次由我结算的」。调用方据此知道那次接管最终没成,
 // 可以把它从「已接管」名单里撤下来(见 reattach.ts)。
+//
+// **判定与写状态必须在同一段临界区里**,所以第一步是原子预占这个任务的回合锁
+// (claimReconcileTurn),而不是查一下 isRunning 就往下走:claim 发生在 trackRun 之前,
+// 「手上没有句柄」证明不了「没有人正在起跑」;而查完到写库之间隔着好几个 await(读任务行、
+// 读会话行、interruptCliGoal、基线),新回合完全来得及合法插进来 —— 结果是一个刚起跑的任务
+// 被写成 failed:界面显示失败、agent 照样在跑,队列还跟着错推一格(第 1 轮审查 F3 给出的
+// 两种交错)。占住锁之后新回合起不来,这段读-判-写就是真临界区;占不到 = 这条任务此刻归
+// 别人,我们一个字都不改。
 export async function reconcileInterruptedTask(taskId: string): Promise<boolean> {
-  if (isRunning(taskId)) return false;
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
-  if (!task || !["running", "queued"].includes(task.status)) return false;
-  if (task.mode === "team") {
-    await setTaskStatus(taskId, "idle");
+  const release = claimReconcileTurn(taskId);
+  if (!release) return false;
+  try {
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
+    if (!task || !["running", "queued"].includes(task.status)) return false;
+    if (task.mode === "team") {
+      await setTaskStatus(taskId, "idle");
+      return true;
+    }
+    await settleInterruptedTask(task);
+    console.log(`[ash] 已结算被打断的任务 ${taskId}(状态在飞,手上却没有活句柄)`);
     return true;
+  } finally {
+    release();
   }
-  await settleInterruptedTask(task);
-  console.log(`[ash] 已结算被打断的任务 ${taskId}(接管后失败,无人收尾)`);
-  return true;
 }
 
 // 被打断在「正在思考/派活」当口的团队调度台，重启后必须主动叫醒一次。

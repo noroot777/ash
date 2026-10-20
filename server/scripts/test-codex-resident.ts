@@ -266,5 +266,30 @@ console.log("7) cleanup 覆盖所有已启动回合,且幂等");
   await sub.finished;
 }
 
+// 这个句柄以前有一条「最多攒 16 轮未收尾的回合,超了先把最老那一轮收掉」的引用上限。
+// 它拿错东西换内存了:finalizeTurn 做的是 cleanupAfterRun —— 把那一轮甩到后台的**所有**
+// 后代杀掉,而调度台恰恰是「第 3 轮起一个服务、第 20 轮还在用它」的典型,第 17 轮一到就会
+// 把那个服务连根杀掉,而且是静默的(第 2 轮审查 F4)。
+console.log("8) 轮次远超旧的 16 轮上限,也不许提前回收任何一轮");
+{
+  const TURNS = 20;
+  const { handle, spawned, finalized } = open();
+  const sub = subscribe(handle.events);
+  await sub.waitTurns(1);
+  for (let i = 2; i <= TURNS; i++) {
+    handle.send(`第 ${i} 条`);
+    await sub.waitTurns(i);
+  }
+  if (spawned.length === TURNS) ok(`${TURNS} 个回合都起过进程`);
+  else fail(`期望 ${TURNS} 个回合,实到 ${spawned.length}`);
+  if (!finalized.length) ok("过了第 17 轮仍然一个都没被回收(上一轮起的服务不会被静默杀掉)");
+  else fail(`有回合被提前回收:${JSON.stringify(finalized)}`);
+  await handle.cleanup();
+  if (finalized.length === TURNS) ok("cleanup 一次把 20 个回合全收齐");
+  else fail(`cleanup 只收了 ${finalized.length}/${TURNS} 个回合`);
+  handle.kill();
+  await sub.finished;
+}
+
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
 process.exit(bad ? 1 : 0);

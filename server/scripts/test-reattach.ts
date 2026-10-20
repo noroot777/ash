@@ -360,6 +360,31 @@ console.log("⑥ 接管后无人收尾的任务,finally 那一问必须把它结
   if (team === "idle") okLine("团队调度台落 idle,跟批量版同一口径");
   else fail(`团队调度台应落 idle,实为 ${team}`);
 
+  // 新回合**已经占住回合锁、还没登记句柄**的那一瞬:claim 排在 trackRun 之前,所以
+  // 「手上没有句柄」证明不了「没有人正在起跑」。结算必须原子预占同一把锁,占不到就撤
+  // (第 1 轮审查 F3:否则一个刚起跑的任务被写成 failed,界面失败、agent 照跑)。
+  const STARTING = `T-starting-${RUN}`;
+  await db.insert(projects).values({ id: `p-${STARTING}`, name: "t", repoPath: dir, createdAt: now() } as never);
+  await db.insert(tasks).values({
+    id: STARTING, projectId: `p-${STARTING}`, title: "正在起跑", body: "", status: "running",
+    mode: "single", agentType: "claude", labels: "[]", createdAt: now(), updatedAt: now(), autoTitle: 0, useWorktree: 0,
+  } as never);
+  const { claimTurn, releaseTurn, isTurnClaimed } = await import("../src/runs.js");
+  if (!claimTurn(STARTING)) fail("这条用例的前提是能占到那把回合锁");
+  const startingSettled = await reconcileInterruptedTask(STARTING);
+  if (startingSettled) fail("正在起跑(已占锁、未登记句柄)的任务不该给出「我结算了」的回执");
+  const starting = (await db.select().from(tasks).where(eq(tasks.id, STARTING))).at(0)?.status;
+  if (starting === "running") okLine("已占锁、还没 spawn 的那一瞬,结算必须空转");
+  else fail(`正在起跑的任务被误结算成了 ${starting}`);
+  releaseTurn(STARTING);
+  // 放手之后它就是一条真正没人管的任务,照常结算;占位也不许留下(占不回来就说明漏放了)。
+  const afterRelease = await reconcileInterruptedTask(STARTING);
+  const settledNow = (await db.select().from(tasks).where(eq(tasks.id, STARTING))).at(0)?.status;
+  if (afterRelease && settledNow === "failed") okLine("起跑撤回之后,同一条任务照常被结算");
+  else fail(`回合放手后仍没能结算(回执 ${afterRelease}、状态 ${settledNow})`);
+  if (isTurnClaimed(STARTING)) fail("结算用的占位没还回去 —— 这个任务此后再也起不来");
+  else okLine("结算占位用完即还");
+
   // 已经结算过的任务再问一次 = 空转(正常收尾的那条路每轮都会走到这一问)。
   const againSettled = await reconcileInterruptedTask(STRANDED);
   if (againSettled) fail("已落终态的任务不该再给出「我结算了」的回执");

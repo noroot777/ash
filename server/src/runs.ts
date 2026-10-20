@@ -261,6 +261,7 @@ export function isCanceling(taskId: string): boolean {
 export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"): boolean {
   const role = turns.get(taskId);
   if (role === undefined || role === WORKSPACE_TURN_ROLE || role === WAKE_TURN_ROLE) return false;
+  if (role === RECONCILE_TURN_ROLE) return false; // 残留结算也不是回合,理由同上
   startFreeze.set(taskId, settle);
   return true;
 }
@@ -422,6 +423,12 @@ const WORKSPACE_TURN_ROLE = "scm";
 const WAKE_TURN_ROLE = "lead-wake";
 
 /**
+ * 「重启后给打断的任务做失败结算」的占位身份（`claimReconcileTurn`）。同样不是一个回合:
+ * 它不 spawn 任何东西,只是把「读状态 → 判定 → 写状态」围成一段临界区。
+ */
+const RECONCILE_TURN_ROLE = "reconcile";
+
+/**
  * 抢占这个任务的回合；已经有人在跑就返回 false（调用方直接放弃这一次）。
  * role 是这一回合的身份（"single" / "reviewer"…）——它是**运行时事实**，审查结论的
  * 归属检查（report_stage）读它，而不是查 sessions 表猜（session 行的 endedAt 语义
@@ -529,6 +536,27 @@ export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
  */
 export function claimWakeTurn(taskId: string): (() => void) | null {
   if (!claimTurn(taskId, WAKE_TURN_ROLE)) return null;
+  return releaserFor([taskId]);
+}
+
+/**
+ * 「结算一个被打断的任务」要占的那把锁:同一把回合锁，占不到返回 null。
+ *
+ * 为什么必须是原子预占、而不是结算前再查一次 `isRunning`:**claim 发生在 trackRun 之前**，
+ * 所以「手上有没有句柄」答不了「有没有人正在起跑」;而查是观察式的 —— 从查完到写状态之间
+ * 隔着几个 await，新回合完全可以合法插进来,结果一个正在干活的任务被写成 failed:界面显示
+ * 失败、后台还在跑，队列也跟着错推一格（第 1 轮审查给出两种交错，都能复现）。占住之后新回合
+ * 起不来，「读状态 → 写状态」这段就是真临界区;占不到 = 已经有人在跑或正在起跑，这条任务归
+ * 他结算，我们一个字都不改。
+ *
+ * `isRunning` 仍要查:团队调度台这类任务平时不占这把锁（它只在 beginTurn/endTurn 之间占），
+ * 句柄却实实在在挂着。
+ *
+ * 和真回合的差别同 `claimWorkspaceTurn`:**不碰起跑冻结**（这不是一个回合）。
+ */
+export function claimReconcileTurn(taskId: string): (() => void) | null {
+  if (isRunning(taskId)) return null;
+  if (!claimTurn(taskId, RECONCILE_TURN_ROLE)) return null;
   return releaserFor([taskId]);
 }
 

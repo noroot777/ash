@@ -221,7 +221,9 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       await db.insert(monitors).values(row);
     } catch (e) {
       // 登记失败就把刚起的进程收回来：留着它就是一个谁都看不见、也停不掉的后台命令。
-      killByPid(spawned.pid);
+      // 刚 spawn 出来、这一刻还在手里的号,没有记下启动时间可比 —— 传 null = 退化成
+      // 存在性检查(killByPid 的 startedAt 是必传项,没有「不用查」这档)。
+      killByPid(spawned.pid, null);
       return { ok: false, status: 409, error: `哨兵登记失败，已回收它的进程：${e instanceof Error ? e.message : String(e)}` };
     }
     attach(row, spawned.onExit);
@@ -440,7 +442,7 @@ async function finish(
   if (dbClient.closed) return;
   const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   if (!row || row.status !== "running") return;
-  if (row.pid && isSameProcess(row.pid, row.pidStartedAt)) killByPid(row.pid);
+  if (row.pid && isSameProcess(row.pid, row.pidStartedAt)) killByPid(row.pid, row.pidStartedAt);
   await db
     .update(monitors)
     .set({ status, endedAt: now(), endedReason: reason, exitCode })

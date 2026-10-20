@@ -55,10 +55,16 @@ export function openCodexResident(params: {
   // 对外**没有任何**清理能力(第 1 轮审查 F1)。能力搬到句柄自己身上,`cleanup` 覆盖它起过
   // 的所有回合,且幂等。
   const unfinalized = new Set<ChildProcess>();
-  // 调度台可以活成百上千轮,句柄不能无限攒 ChildProcess 引用(每个还挂着它的 stdio 对象)。
-  // 超过这个数就先把最老的那一轮收掉:它的后代至少隔了这么多个回合,「上一轮起服务、这一轮
-  // 接着用」碰不到这条线;而今天那些后代是**永远不收**,所以这个取舍只会更干净。
-  const MAX_UNFINALIZED_TURNS = 16;
+  // **这里曾经有一个「最多攒 16 轮,超了先收最老那一轮」的淘汰**,为的是不让长命调度台无限
+  // 攒 ChildProcess 引用。它被删掉了:`finalizeTurn` 做的事是 `cleanupAfterRun` ——
+  // 按继承 fd 反查并杀掉那一轮甩到后台的**所有**后代。调度台恰恰是「第 3 轮起一个服务,
+  // 第 20 轮还在用它」的典型,第 17 轮一到就会把那个服务连根杀掉,而且是静默的:内存上限
+  // 不能用「杀掉还在用的资源」去换(第 2 轮审查 F4)。
+  //
+  // 代价如实记下:一条活很久的调度台会把它起过的每个回合进程对象留到会话结束。单个对象是
+  // 一个 EventEmitter 加几个已经 EOF 的 stdio 流,量级上远小于「误杀用户服务」的代价。
+  // 真要给引用量设上限,方向是把每轮要记的东西**瘦成租约**(pid + 启动时间 + 追踪文件路径,
+  // 不持有对象),而不是把 16 改成一个更大的常数 —— 换个常数只是把同一个误杀推迟到更后面。
   const finalizeTurn = async (child: ChildProcess): Promise<void> => {
     if (!unfinalized.delete(child)) return; // 收过了(幂等)
     try {
@@ -93,10 +99,6 @@ export function openCodexResident(params: {
     const hadSession = !!sessionId;
     const turn = params.startTurn(prompt, sessionId);
     unfinalized.add(turn.child);
-    if (unfinalized.size > MAX_UNFINALIZED_TURNS) {
-      const oldest = unfinalized.values().next().value; // Set 按插入序,最老的在前
-      if (oldest) void finalizeTurn(oldest);
-    }
     current = turn;
     commandLine = turn.commandLine;
     return { turn, hadSession };
