@@ -82,17 +82,20 @@ export function silentWaitNotice(command: string, timeoutMs: number): string | n
 /**
  * 收尾时那句「推了多少条」。
  *
- * **只说这两件能证实的事**：推出去了几条、日志里有没有读到过东西。一个字都不提「它等的
- * 条件」—— 那是运行时的业务事实，这一层看不见（第 1 轮审查 F3 实测：`until true` 的条件
- * 一开始就满足，命令正常退出，照样 0 事件 0 输出）。
+ * **只说这两件能证实的事**：推出去了几条、它的日志文件这一刻有多少字节。一个字都不提
+ * 「它等的条件」—— 那是运行时的业务事实，这一层看不见（第 1 轮审查 F3 实测：`until true`
+ * 的条件一开始就满足，命令正常退出，照样 0 事件 0 输出）。
  *
- * `readOffset` 是这条哨兵已经读过的字节数，所以两种 0 分得开：**它根本没说话**，和
- * **它说了但一个字都没送到任务头上**（事件计数只在投递被接受时才涨，终态/归档会挡下
- * 投递 —— 报告指出的就是这一处）。
+ * `logBytes` 必须是**对那个日志文件的实际观测**，不是投递游标（第 2 轮审查 R2-4）：
+ * `monitors.read_offset` 只在 `pushToTask` **接受投递**时才推进，而终态/归档会把投递挡回、
+ * `keepBuffered:false` 会把没投出去的缓冲直接丢掉 —— 那时「日志里明明有字」和「游标是 0」
+ * 同时成立，拿游标当输出证据就会断言出一句假话。`null` = 这一刻读不出那个文件，那就照实
+ * 说读不出来，不替它下结论。
  */
-export function monitorEventTally(events: number, readOffset: number): string {
+export function monitorEventTally(events: number, logBytes: number | null): string {
   if (events > 0) return `共推送 ${events} 条事件`;
-  return readOffset > 0
-    ? "一条事件都没推：它的日志里有输出，但没有一条送到这个任务头上"
-    : "一条事件都没推，它的日志里也没有任何输出";
+  if (logBytes === null) return "一条事件都没推，它的日志这一刻也读不出来（有没有产出过，这里说不准）";
+  return logBytes > 0
+    ? `一条事件都没推：它的日志里有 ${logBytes} 字节输出，但没有一条送到这个任务头上`
+    : "一条事件都没推，它的日志文件也是空的";
 }

@@ -542,11 +542,14 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
     ["exited", /命令自己跑完了（退出码 0）/],
     ["expired", /一直到盯满时长/],
     ["stopped", /被停掉之前没有输出/],
-    ["lost", /这个进程已经不在了/],
+    // `lost` 只说得出两件事：ash 认不回它了、没有一条输出送到。**不许编一次重启**（第 2 轮
+    // 审查 R2-4：创建期补偿失败也写 lost，那一路压根没有重启，也证明不了进程已经不在）。
+    ["lost", /认不回这个进程/],
   ] as const) {
     const text = ended({ status, exitCode: status === "exited" ? 0 : null });
     assert.match(text, expect, `${status} 要按自己的结束方式说`);
     assert.doesNotMatch(text, /条件/, "不许从「日志空」推断它等的条件没满足（F3）");
+    assert.doesNotMatch(text, /重启/, "不许从一个通用终态反推一次没发生过的重启（R2-4）");
   }
   assert.match(ended({ status: "exited", exitCode: 2 }), /退出码 2/, "非 0 退出码是唯一线索，要带上");
 }

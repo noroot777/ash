@@ -481,14 +481,22 @@ export async function monitorWakeCheckpoint(
   // 哪一段,不再取第二次。拼接在内存里当场做,所以这一次带上的是**此刻**的事件正文——
   // 期间合并进来的新事件一并带走,而不是上一次那一份快照。
   if (message.checkpointTaken) {
-    const held = message.checkpointTaken;
-    return { text: withCheckpoint(message.text, held), restore: () => restoreCheckpoint(message, held) };
+    const taken = message.checkpointTaken;
+    // 重投:来源列此刻已经是 false(上一次取走时归过零),而退回去的那一段原本是谁写的,
+    // 库里再也答不出来了。只能保守地按「agent 自己写的」放回 —— 多留一段失效的系统等待
+    // (用户手点续跑即可)比抹掉 agent 自己写的那一段轻。
+    return { text: withCheckpoint(message.text, taken), restore: () => restoreCheckpoint(message, taken, false) };
   }
-  const checkpoint = (await db
-    .select({ resumePrompt: tasks.resumePrompt })
+  const held = (await db
+    .select({ resumePrompt: tasks.resumePrompt, auto: tasks.resumePromptAuto })
     .from(tasks)
-    .where(eq(tasks.id, message.taskId))).at(0)?.resumePrompt;
+    .where(eq(tasks.id, message.taskId))).at(0);
+  const checkpoint = held?.resumePrompt;
   if (!checkpoint) return null;
+  // 「这段话是谁写的」跟它本身一起转手:带走时归 false(那一格空了)、退回时原样放回。
+  // 不带的话,一次「取走又退回」会把系统写的那段洗成「agent 自己写的」,于是它再也不会在
+  // 阻塞物消失时被清掉(见 task-resume-prompt.ts 文件头)。
+  const auto = !!held?.auto;
   // ── 取走:**两条语句互为对方的生效条件** ──────────────────────────────────────
   //
   // 一笔交代的转手是「任务行上腾空」+「这条消息认下这笔账」两半,少任何一半都是错的:
@@ -512,7 +520,7 @@ export async function monitorWakeCheckpoint(
         checkpointStillHere,
       ))
       .returning({ id: scheduledMessages.id }),
-    db.update(tasks).set({ resumePrompt: null, updatedAt: now() })
+    db.update(tasks).set({ resumePrompt: null, resumePromptAuto: false, updatedAt: now() })
       .where(and(eq(tasks.id, message.taskId), eq(tasks.resumePrompt, checkpoint), ledgerOurs))
       .returning({ id: tasks.id }),
   ]);
@@ -520,13 +528,13 @@ export async function monitorWakeCheckpoint(
     // 都不中 = 读到之后、批跑到之前另一路(真人续跑、手点运行)先取走了同一段,或者这条消息
     // 已经不是那个样子了。什么都没变,直接不带交代走。
     // 单侧命中按上面的条件推不出来,真出现就是条件被改坏了:出声,并把那一侧退回去。
-    if (logged.length !== taken.length) await unwindHalfTake(message, checkpoint, logged.length > 0);
+    if (logged.length !== taken.length) await unwindHalfTake(message, checkpoint, logged.length > 0, auto);
     return null;
   }
   await announceResumePrompt(message.taskId);
   return {
     text: withCheckpoint(message.text, checkpoint),
-    restore: () => restoreCheckpoint(message, checkpoint),
+    restore: () => restoreCheckpoint(message, checkpoint, auto),
   };
 }
 
@@ -548,6 +556,7 @@ async function unwindHalfTake(
   message: { id: string; taskId: string },
   checkpoint: string,
   loggedOnly: boolean,
+  auto: boolean,
 ): Promise<void> {
   console.error(
     `[ash] 续跑交代转手出现单侧命中 ${message.taskId}/${message.id}(${loggedOnly ? "只落账" : "只腾空"}),`
@@ -558,7 +567,8 @@ async function unwindHalfTake(
       await db.update(scheduledMessages).set({ checkpointTaken: null })
         .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.checkpointTaken, checkpoint)));
     } else {
-      await db.update(tasks).set({ resumePrompt: checkpoint, updatedAt: now() })
+      // 来源列跟着那段话一起退回去（见 task-resume-prompt.ts 文件头：同写同清）。
+      await db.update(tasks).set({ resumePrompt: checkpoint, resumePromptAuto: auto, updatedAt: now() })
         .where(and(eq(tasks.id, message.taskId), isNull(tasks.resumePrompt)));
     }
   } catch (error) {
@@ -582,6 +592,7 @@ async function unwindHalfTake(
 async function restoreCheckpoint(
   message: { id: string; taskId: string },
   checkpoint: string,
+  auto: boolean,
 ): Promise<void> {
   // **归属判据只有一条,两条语句共用它**:这笔账此刻还记在这条消息上、而且没有别人正在送它。
   //
@@ -601,7 +612,7 @@ async function restoreCheckpoint(
       // 被自己清空的账本,又退回「空着 = 是我清的」那个推不出来的结论。
       // CAS:只填回自己腾出的那个空。agent 中途写了新的一段就不动它——那一段才是最新交代,
       // 下一次投递会取它。
-      db.update(tasks).set({ resumePrompt: checkpoint, updatedAt: now() })
+      db.update(tasks).set({ resumePrompt: checkpoint, resumePromptAuto: auto, updatedAt: now() })
         .where(and(
           eq(tasks.id, message.taskId),
           isNull(tasks.resumePrompt),

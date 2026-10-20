@@ -56,6 +56,21 @@ export const monitors = sqliteTable("monitors", {
    * 从 `ended_reason` 的文案反推同样不行 —— 那是一句随时会改的人话。
    */
   endedBy: text("ended_by"),
+  /**
+   * **「它还没送到的结果,我不要了」这句话本身**(ISO 时刻 + 理由)。
+   *
+   * 跟 `ended_by` 是两件事,第 2 轮审查 R2-3 把它们混成一件:`ended_by` 回答「谁让这个**进程**
+   * 结束的」,而一条已经 `exited` 的哨兵根本不是被谁停的 —— 对它调 `stop_monitor` 走的是
+   * 非 running 分支,一个字都写不进 `ended_by`,于是闸继续拦着「先把结果收下来」,而工具说明
+   * 和拒绝文案都承诺「stop_monitor 就能放弃」。实测:停完仍是 exited / ended_by=system /
+   * pending=1 / 再次 complete 仍 409,文案还在重复推荐同一个动作。
+   *
+   * 所以这一对列只记**动作与理由**,对所有结束状态幂等,且**不动**原来的结束事实(状态、
+   * ended_at、ended_reason 一律原样保留 —— 它们是已经发生的事)。放弃的是「必须先收下它」
+   * 这件事,不是那几行本身:已经排进待发送的事件照旧会送(任务还活着就收得下)。
+   */
+  resultsAbandonedAt: text("results_abandoned_at"),
+  resultsAbandonedReason: text("results_abandoned_reason"),
   // 谁起的这个哨兵(多人模式)。停它、看它都按任务归属判权,这一列只做记账。
   ownerUserId: text("owner_user_id"),
   // 出身:'ash' = ash server 自己起的进程(全功能);'claude' = claude CLI 内置 Monitor 的

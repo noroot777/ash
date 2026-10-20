@@ -34,7 +34,7 @@ import { tasks, sessions } from "./db/schema.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
-import { confirmTaskComplete } from "./task-complete.js";
+import { confirmTaskComplete, holdCompletionForBlockedReplay } from "./task-complete.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -229,10 +229,14 @@ async function applyReplay(
       ],
       staleError: "补录时方向身份已经换走了",
     });
-    // 补录是「尽力恢复一条丢掉的调用」,拦下来就如实什么都不说 —— 这一轮照旧按没交卷结算,
-    // 而哨兵和它排着的结果一条不少(拦下来的理由本身已经由闸写进了任务时间线)。
     if (!confirm.ok) {
       console.warn(`[ash] replay complete_task(${taskId}) rejected: ${confirm.error}`);
+      // **被哨兵闸拦下 ≠ 什么都不用做**(第 2 轮审查 R2-1)。它确实交了卷,只是这一刻还不能
+      // 落终态;什么都不说的话这一轮按「没交卷」记 failed —— 而 failed 同样是终态,哨兵跟着
+      // 被收走,结果再也送不到它手上(实测 `settlement:"failed"`、`monitorAfter:"stopped"`)。
+      // 落一段可恢复的等待,结算读到它就落 paused。
+      if (confirm.blockedByMonitors) return holdCompletionForBlockedReplay(taskId, confirm.error);
+      // 身份过期那一种照旧什么都不说:那笔确认本来就不该生效(换方向了/不是这一回合的)。
       return null;
     }
     return "完成确认当时因 MCP 通道中断没能送达，已从本回合的调用记录中补录（否则这一轮会被记成失败）。";
@@ -241,7 +245,11 @@ async function applyReplay(
     const prompt = call.args.resumePrompt;
     if (typeof prompt !== "string" || !prompt.trim()) return null;
     const at = now();
-    const updated = await db.update(tasks).set({ resumePrompt: prompt.trim(), updatedAt: at }).where(and(
+    // `resumePromptAuto: false` = 这段是 agent 自己写的,谁也不许替它清掉（见
+    // task-resume-prompt.ts 文件头：那一列只在这一列非空时有意义,所以同写同清）。
+    const updated = await db.update(tasks).set({
+      resumePrompt: prompt.trim(), resumePromptAuto: false, updatedAt: at,
+    }).where(and(
       eq(tasks.id, taskId),
       directionToken === undefined ? undefined : directionToken === null
         ? isNull(tasks.activeDirectionToken)

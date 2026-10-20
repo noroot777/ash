@@ -12,6 +12,17 @@
 //   - 写入不广播 → 该灰的按钮一直亮，点下去吃后端 409。
 // 复合更新里顺手改到这一列（结算、原生引导的清场与回滚）用不上下面的 CAS 助手，那些地方
 // 直接调 announceResumePrompt 补一条广播。
+//
+// **它还有个同伴列 `resume_prompt_auto`：这一段话是谁写的。**
+// `false`/缺省 = agent 自己 `pause_task` 写的（或真人塞的）；`true` = 系统替它写下的等待
+// （目前只有一种来源：哨兵拦下了这一轮的完成，见 task-complete.ts）。分开记是因为两者的
+// **有效期不同**：系统写的那段在「它等的东西没了」之后必须清掉（否则任务永远停在 paused
+// 等一个再也不会来的唤醒，第 2 轮审查 R2-2 实测），而 agent 自己写的那段谁也不许抹。
+//
+// 口径一句话：**这一列只在 `resume_prompt` 非空时有意义，所以凡是写 `resume_prompt` 的地方
+// 都必须同时写它**（清空时一并归 `false`，回填时带上原来那一笔的来源）。靠「写的时候记得
+// 带上」保证不住，所以写入一律走下面这几个助手；库里直接 `db.update` 改这一列的地方
+// （结算消费、引导清场与回滚、哨兵唤醒的交代转手）各自在就近注释里点名了它。
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
@@ -34,7 +45,9 @@ export async function announceResumePrompt(taskId: string): Promise<void> {
 export async function takeResumePrompt(taskId: string, expected: string): Promise<boolean> {
   const cleared = await db
     .update(tasks)
-    .set({ resumePrompt: null, updatedAt: now() })
+    // 取走了 ⇒ 这一格空了,来源归 false:留着 `true` 的话,agent 随后自己 pause_task 写下的
+    // 那一段会顶着一个「系统写的」的标记,被 clearAutoCheckpoint 当成失效等待抹掉。
+    .set({ resumePrompt: null, resumePromptAuto: false, updatedAt: now() })
     .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, expected)))
     .returning({ id: tasks.id });
   if (!cleared.length) return false;
@@ -46,13 +59,31 @@ export async function takeResumePrompt(taskId: string, expected: string): Promis
  * CAS 回填：只填回自己腾出的那个空。这中间 agent 可能已经 pause_task 写下**新的**一段，
  * 无条件回填就是拿旧指令盖掉新指令。
  */
-export async function restoreResumePrompt(taskId: string, value: string): Promise<boolean> {
+export async function restoreResumePrompt(taskId: string, value: string, auto = false): Promise<boolean> {
   const restored = await db
     .update(tasks)
-    .set({ resumePrompt: value, updatedAt: now() })
+    .set({ resumePrompt: value, resumePromptAuto: auto, updatedAt: now() })
     .where(and(eq(tasks.id, taskId), isNull(tasks.resumePrompt)))
     .returning({ id: tasks.id });
   if (!restored.length) return false;
+  await announceResumePrompt(taskId);
+  return true;
+}
+
+/**
+ * 清掉**系统自己写的**那段等待（`resume_prompt_auto`），agent 用 `pause_task` 写的原样留着。
+ *
+ * 调用点只有一个：完成请求重新获准的那一刻（`confirmTaskComplete`）—— 闸放行 ⇒ 它等的那些
+ * 哨兵/结果已经没了 ⇒ 这段话已经失效。不清的话这一轮照旧落 paused，而再没有任何哨兵会来
+ * 叫醒它（第 2 轮审查 R2-2 实测 `NEW_STALE_AUTOMATIC_CHECKPOINT`）。
+ */
+export async function clearAutoCheckpoint(taskId: string): Promise<boolean> {
+  const cleared = await db
+    .update(tasks)
+    .set({ resumePrompt: null, resumePromptAuto: false, updatedAt: now() })
+    .where(and(eq(tasks.id, taskId), eq(tasks.resumePromptAuto, true)))
+    .returning({ id: tasks.id });
+  if (!cleared.length) return false;
   await announceResumePrompt(taskId);
   return true;
 }

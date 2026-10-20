@@ -36,6 +36,7 @@ import { and, desc, eq, isNull, like } from "drizzle-orm";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
+import { monitorLogBytes } from "./monitors.js";
 import { monitors, scheduledMessages, sessions } from "./db/schema.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
@@ -43,7 +44,8 @@ type MonitorFacts = {
   id: string;
   label: string;
   events: number;
-  readOffset: number;
+  /** 日志文件这一刻有多少字节(`null` = 读不出来)。**不是投递游标**,见 `monitorLogBytes`。 */
+  logBytes: number | null;
   endedReason: string | null;
 };
 
@@ -51,13 +53,15 @@ const MONITOR_COLUMNS = {
   id: monitors.id, description: monitors.description, command: monitors.command,
   events: monitors.events, offset: monitors.offset,
   endedAt: monitors.endedAt, endedReason: monitors.endedReason, endedBy: monitors.endedBy,
+  logPath: monitors.logPath, resultsAbandonedAt: monitors.resultsAbandonedAt,
   sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
 };
 
 type MonitorRow = {
   id: string; description: string; command: string;
-  events: number; offset: number;
+  events: number; offset: number; logPath: string;
   endedAt: string | null; endedReason: string | null; endedBy: string | null;
+  resultsAbandonedAt: string | null;
   sourceReviewRun: string | null; sourceReviewRound: number | null;
 };
 
@@ -66,7 +70,8 @@ const labelOf = (r: { description: string | null; command: string }): string =>
   (r.description ?? "").trim() || r.command.trim();
 
 const factsOf = (r: MonitorRow): MonitorFacts => ({
-  id: r.id, label: labelOf(r), events: r.events, readOffset: r.offset, endedReason: r.endedReason,
+  id: r.id, label: labelOf(r), events: r.events,
+  logBytes: monitorLogBytes(r.logPath), endedReason: r.endedReason,
 });
 
 /**
@@ -100,12 +105,16 @@ async function liveMonitors(taskId: string): Promise<MonitorFacts[]> {
  *
  * 行还在、哨兵行已经没了（被删/被清）的，照样算：那条消息仍会被作废，而消息本身就是结果。
  *
- * **主动撤掉的那几条除外**（`ended_by = 'actor'`）。`stop_monitor` 本身就是「这个结果我不要了」
- * 那句话的正式说法，而它**不会**把已经攒在缓冲里的行取消（见 monitor-stop.ts：那些是已经发生
- * 的事实，任务还活着就该推完）。不排除的话，闸给出的出路②「不要了就 stop_monitor 再
- * complete_task」自己就走不通：停的那一刻刚好有几行进了托盘，complete 接着被这一类拦住，而
- * agent 手上再没有第三个动作可用。撤掉这件事连它的理由带事件计数一起落在时间线上
- * （`noteMonitorsDropped`），所以「明确放弃」是看得见的，不是偷偷丢掉。
+ * **已经被明确放弃的那几条除外**（`results_abandoned_at` 非空 —— 有人对它调过 `stop_monitor`）。
+ * 不排除的话，闸给出的那条出路「不要了就 stop_monitor 再 complete_task」自己就走不通：
+ * `stop_monitor` **不会**把已经攒在缓冲里的行取消（monitor-stop.ts：那些是已经发生的事实，
+ * 任务还活着就该推完），于是停的那一刻刚好有几行进了托盘，complete 接着被这一类拦住，而
+ * agent 手上再没有第三个动作可用。
+ *
+ * **判据是那句话本身，不是进程的结束来源**（第 2 轮审查 R2-3）：上一版认 `ended_by='actor'`，
+ * 而那一列只有 running 分支写得到 —— 对一条已经 `exited` 的哨兵，`stop_monitor` 一个字都写不
+ * 进去，于是文案承诺的出路对它永远无效。放弃连理由一起落库、并留在时间线上，所以它是看得见
+ * 的，不是偷偷丢掉。
  */
 async function undeliveredResults(taskId: string): Promise<{ id: string; label: string }[]> {
   const rows = await db
@@ -121,7 +130,7 @@ async function undeliveredResults(taskId: string): Promise<{ id: string; label: 
     const monitorId = monitorIdFromOrigin(r.origin);
     if (!monitorId) continue;
     const m = (await db.select(MONITOR_COLUMNS).from(monitors).where(eq(monitors.id, monitorId))).at(0);
-    if (m?.endedBy === "actor") continue;
+    if (m?.resultsAbandonedAt) continue;
     if (m && await sparedByReview(m)) continue;
     unread.push({ id: r.id, label: m ? labelOf(m) : monitorId });
   }
@@ -160,8 +169,9 @@ export async function monitorsBlockingComplete(taskId: string): Promise<string |
       : "")
     + (unread.length
       ? "③ 排着的那几条：要么先收下来看一眼（走①），要么对它那条哨兵调 stop_monitor"
-        + "（reason 写清为什么不要了）—— 主动撤掉的哨兵，它排着的结果按「明确放弃」算，"
-        + "连理由一起记在任务时间线上。用户也可以在界面的待发送托盘里直接删掉。"
+        + "（reason 写清为什么不要了）—— 对已经结束的哨兵照样管用，它只是把「必须先收下这份结果」"
+        + "这条放行条件撤掉，连理由一起记进任务时间线，排着的事件该送还是会送。"
+        + "用户也可以在界面的待发送托盘里直接删掉。"
       : "")
   );
 }
@@ -206,7 +216,7 @@ export async function noteMonitorsDropped(taskId: string): Promise<void> {
     if (dropped.length === 0) return;
     const detail = dropped.slice(0, 3).map((m) => {
       const why = (m.endedReason ?? "").trim();
-      return `${m.label}（${why ? `撤的理由「${why}」，` : ""}${monitorEventTally(m.events, m.readOffset)}）`;
+      return `${m.label}（${why ? `撤的理由「${why}」，` : ""}${monitorEventTally(m.events, m.logBytes)}）`;
     }).join("；");
     const more = dropped.length > 3 ? `，另有 ${dropped.length - 3} 个` : "";
     await appendTaskTimeline(

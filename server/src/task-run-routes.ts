@@ -264,7 +264,9 @@ api.post("/tasks/:id/pause", async (c) => {
   }
   const updated = await db
     .update(tasks)
-    .set({ resumePrompt: rp, updatedAt: now() })
+    // `resumePromptAuto: false` = 这段是 agent 自己写的,系统不许替它清掉（见
+    // task-resume-prompt.ts 文件头：这一列只在 resume_prompt 非空时有意义,所以同写同清）。
+    .set({ resumePrompt: rp, resumePromptAuto: false, updatedAt: now() })
     .where(and(
       eq(tasks.id, taskId),
       eq(tasks.status, "running"),
@@ -328,6 +330,30 @@ api.post("/tasks/:id/complete", async (c) => {
     staleError: "当前回合已经结束或已被引导，完成确认未写入",
   });
   if (!confirm.ok) return c.json({ error: confirm.error }, 409);
+  // **`willSettleAs` 得跟结算真会落的那个一致**(第 2 轮审查 R2-2:这里回 done、实际落 paused,
+  // agent 据此以为活干完了)。结算的优先级是「提问 > 检查点 > 完成」(settle-status.ts):手里
+  // 还攥着一段续跑指令,这一轮就落 paused。系统为哨兵写的那段已经在闸放行时清掉了,所以能
+  // 走到这里还剩下的,是 agent 自己 `pause_task` 写的那一段 —— 它比我们更知道它想干什么,
+  // 不动它,只是别谎称这一轮会落 done。
+  const after = (await db
+    .select({ resumePrompt: tasks.resumePrompt, question: tasks.question })
+    .from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (after?.question) {
+    return c.json({
+      confirmed: true,
+      willSettleAs: "paused",
+      note: "确认已记下,但你这一轮还留着一个待答复的提问,所以这一轮会落「已暂停」等答复;"
+        + "答复回来会续跑同一条会话。",
+    });
+  }
+  if (after?.resumePrompt) {
+    return c.json({
+      confirmed: true,
+      willSettleAs: "paused",
+      note: "确认已记下,但你这一轮还留着一段续跑指令(pause_task),结算把检查点排在完成之前,"
+        + "所以这一轮会落「已暂停」。真要收工就别再留检查点。",
+    });
+  }
   // 续聊回合(followUpFrom 非空)确认完成 = 把任务推进到 done;正常回合就是 done。
   return c.json({ confirmed: true, willSettleAs: "done" });
 });

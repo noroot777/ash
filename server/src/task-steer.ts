@@ -46,6 +46,8 @@ interface PreviousDirectionState {
   clearedDirectionVersion: number;
   completeConfirmedAt: string | null;
   resumePrompt: string | null;
+  /** 那段续跑指令是系统写的还是 agent 自己写的（`tasks.resume_prompt_auto`）。 */
+  resumePromptAuto: boolean;
   question: string | null;
   questionOptions: string | null;
   questionItems: string | null;
@@ -70,6 +72,7 @@ async function clearPreviousDirectionState(
       activeDirectionVersion: tasks.activeDirectionVersion,
       completeConfirmedAt: tasks.completeConfirmedAt,
       resumePrompt: tasks.resumePrompt,
+      resumePromptAuto: tasks.resumePromptAuto,
       question: tasks.question,
       questionOptions: tasks.questionOptions,
       questionItems: tasks.questionItems,
@@ -98,6 +101,7 @@ async function clearPreviousDirectionState(
         activeDirectionVersion: clearedDirectionVersion,
         completeConfirmedAt: null,
         resumePrompt: null,
+        resumePromptAuto: false,
         question: null,
         questionOptions: null,
         questionItems: null,
@@ -173,6 +177,7 @@ async function discardLateDirectionState(taskId: string, turnToken: string, dire
     .set({
       completeConfirmedAt: null,
       resumePrompt: null,
+      resumePromptAuto: false,
       question: null,
       questionOptions: null,
       questionItems: null,
@@ -219,6 +224,7 @@ async function restorePreviousDirectionState(
         : previous.activeDirectionVersion,
       completeConfirmedAt: previous.completeConfirmedAt,
       resumePrompt: previous.resumePrompt,
+      resumePromptAuto: previous.resumePromptAuto,
       question: previous.question,
       questionOptions: previous.questionOptions,
       questionItems: previous.questionItems,
@@ -245,6 +251,7 @@ async function restorePreviousDirectionState(
       .set({
         completeConfirmedAt: previous.completeConfirmedAt,
         resumePrompt: previous.resumePrompt,
+        resumePromptAuto: previous.resumePromptAuto,
         question: previous.question,
         questionOptions: previous.questionOptions,
         questionItems: previous.questionItems,
@@ -474,7 +481,7 @@ async function finishStoppedSteer(
   try {
     if (previous) await restorePreviousDirectionState(message.taskId, previous);
     if (needsSettlement) {
-      const { settleTaskStatus, afterSettlement } = await import("./single-run.js");
+      const { settleTaskStatus, afterSettlement } = await import("./settle-status.js");
       const settled = await settleTaskStatus(message.taskId, 1, stopped);
       const { clearTurnStart } = await import("./turn-output.js");
       clearTurnStart(message.taskId);

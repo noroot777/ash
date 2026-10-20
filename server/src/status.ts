@@ -10,6 +10,7 @@ import { now, runsTiming } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { previewStopFailure } from "./preview-process-stop.js";
 import { recordTaskStatus } from "./task-start-status.js";
+import { releaseTerminalLanding } from "./task-complete.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -87,6 +88,13 @@ async function writeTaskStatus(
   }
 
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
+  // 这一行落库了 ⇒ 结算那一关置的闩可以撤了(见 task-complete.ts 的 `beginTerminalLanding`):
+  // 它护的就是「核完阻塞物」到「这一笔写进库」之间那条缝。从这一刻起,库里这一行自己就答得了
+  // 「还能不能挂哨兵」—— 终态由 `monitorSourceGate` 挡住,非终态本来就该放行。
+  //
+  // **撤在终态清理之前、而且不只在终态撤**:续聊回合核过闩之后恢复的可能是 paused/backlog
+  // 一类非终态,只在终态分支撤的话,那一轮会把这个任务的创建挡到闩过期为止。撤销幂等。
+  releaseTerminalLanding(taskId);
   recordTaskStatus(cur, status);
   if (TERMINAL.includes(status)) {
     // 任务自己结束了,它名下的哨兵一并停掉。哨兵唯一的出口就是「唤醒这个任务」,任务都

@@ -18,6 +18,7 @@
 //    后登记失败),都必须先落责任、再发信号、追到线索空才收档。只装在删除/审查收尾那两个
 //    包装函数里是不够的 —— 其余每一条停止路径都会绕过它(第 5 轮审查 F1,现场见
 //    monitor-reclaim-debts.ts 文件头)。
+import { statSync } from "node:fs";
 import { and, desc, eq } from "drizzle-orm";
 import {
   MONITOR_BATCH_MS,
@@ -139,6 +140,17 @@ export function serialize<T>(monitorId: string, job: () => Promise<T>): Promise<
 }
 
 export const publish = (taskId: string) => bus.publish({ type: "task.monitors", taskId });
+
+/**
+ * 那个日志文件**这一刻有多少字节**。读不出来给 `null`。
+ *
+ * 这是「它到底有没有产出过」唯一的直接证据。**不许拿 `monitors.read_offset` 代替**:那是
+ * 投递游标,只在 `pushToTask` 接受投递时才推进 —— 终态/归档会把投递挡回、`keepBuffered:false`
+ * 会把没投出去的缓冲丢掉,那时日志里有字而游标还是 0(第 2 轮审查 R2-4)。
+ */
+export function monitorLogBytes(logPath: string): number | null {
+  try { return statSync(logPath).size; } catch { return null; }
+}
 
 // ── 盯 ───────────────────────────────────────────────────────────────────────
 
@@ -433,15 +445,15 @@ export async function finish(
     }
     publish(row.taskId);
     const code = exitCode === null ? "" : `，退出码 ${exitCode}`;
-    // 事件数和读取位置**一起重读**：两者要同时反映收尾前最后那一次 flush，各读各的会让
-    // 「推了 0 条」配上一个过期的位置，于是把「它说了但没送出去」说成「它什么都没说」。
-    const tallyRow = (await db
-      .select({ events: monitors.events, offset: monitors.offset })
-      .from(monitors).where(eq(monitors.id, monitorId))).at(0);
-    const total = tallyRow?.events ?? row.events;
+    // 事件数**重读**：它要反映收尾前最后那一次 flush。有没有产出过则一律问日志文件本身,
+    // 不问投递游标(见 `monitorLogBytes`:游标被终态挡回时会把「它说了但没送出去」说成
+    // 「它什么都没说」—— 第 2 轮审查 R2-4)。
+    const total = (await db
+      .select({ events: monitors.events })
+      .from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
     await appendTaskTimeline(
       row.taskId,
-      `哨兵结束：${row.description}${code}。${reason}（${monitorEventTally(total, tallyRow?.offset ?? row.offset)}）`,
+      `哨兵结束：${row.description}${code}。${reason}（${monitorEventTally(total, monitorLogBytes(row.logPath))}）`,
     );
     if (notify) await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`);
     // **追线索放在最后**:状态、时间线、通知都已落定,这一步只负责「能收的档收掉」。
@@ -576,7 +588,11 @@ export async function finishOffline(
         return;
       }
       publish(base.taskId);
-      await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${reason}（${monitorEventTally(events, readTo)}）`);
+      // 同上:问日志文件,不问游标也不问这一趟读到哪(两者都只是「送出去多少」的影子)。
+      await appendTaskTimeline(
+        base.taskId,
+        `哨兵结束：${base.description}。${reason}（${monitorEventTally(events, monitorLogBytes(base.logPath))}）`,
+      );
       await pushToTask(base, `【哨兵结束】${base.description}（monitorId=${base.id}）。${reason}`);
     } finally {
       // 撤运行时排在读日志之前(自己那条 tail 不停下来就会边收尾边继续推),所以中间这一段

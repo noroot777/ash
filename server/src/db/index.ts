@@ -154,7 +154,8 @@ export async function ensureSchema() {
       start_anchor_width_ms INTEGER, tool_use_id TEXT,
       source_run TEXT, start_low_at TEXT, source_role TEXT,
       source_review_run TEXT, source_review_round INTEGER,
-      unit_token TEXT, ended_by TEXT
+      unit_token TEXT, ended_by TEXT,
+      results_abandoned_at TEXT, results_abandoned_reason TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (
@@ -351,6 +352,11 @@ export async function ensureSchema() {
     // 拿 status 代替来源会把后两种说成「本回合撤掉了哨兵」(第 1 轮审查 N1)。存量行 NULL
     // = 来源不详,一律不算主动撤。
     "ALTER TABLE monitors ADD COLUMN ended_by TEXT",
+    // 「它还没送到的结果我不要了」这句话本体。**不是 ended_by**(那是「谁让进程结束的」):
+    // 已经 exited 的哨兵不是被谁停的,拿 ended_by 当放弃凭证就等于那条出路对它永远无效
+    // (第 2 轮审查 R2-3)。存量行 NULL = 没人放弃过。
+    "ALTER TABLE monitors ADD COLUMN results_abandoned_at TEXT",
+    "ALTER TABLE monitors ADD COLUMN results_abandoned_reason TEXT",
     "ALTER TABLE monitor_reclaim_debts ADD COLUMN unit_token TEXT",
     // 「线索追到这里为止」的戳。**不是销账**:整项退出在当前平台证不出,所以行留着只盖戳
     // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。
@@ -392,6 +398,9 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN creation_origin TEXT",
     "ALTER TABLE projects ADD COLUMN api_keys TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_prompt TEXT",
+    // 那段续跑指令是系统自己写的(哨兵闸)还是人/agent 写的 —— 只有前者可以在阻塞物消失后
+    // 自动清掉(第 2 轮审查 R2-2)。存量行一律 0 = 当成人写的,不会被自动抹掉。
+    "ALTER TABLE tasks ADD COLUMN resume_prompt_auto INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN resume_depends_on TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE agents ADD COLUMN speed TEXT",
     "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT",

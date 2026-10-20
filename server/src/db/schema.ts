@@ -189,6 +189,16 @@ export const tasks = sqliteTable("tasks", {
   creationOrigin: text("creation_origin"),
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
   resumePrompt: text("resume_prompt"),
+  /**
+   * **上面那段是系统自己写的**(1),还是人/agent 用 pause_task 写的(0/null)。
+   *
+   * 只有「系统自动写的」那种才允许在阻塞物消失后被自动清掉 —— 第 2 轮审查 R2-2 实测:
+   * 确认完成 → 挂哨兵(自动写下这段)→ 把哨兵停掉 → 再确认完成,结算照旧落 paused,因为
+   * 那段自动指令没人撤;而任务这时既没有哨兵也没有待送结果,再没有任何东西会来叫醒它。
+   * 反过来**不能无差别抹掉**:agent 自己 pause_task 写的那段是它的本意,完成确认不该把它
+   * 吞掉(所以要分来源,不能只看「有没有一段」)。
+   */
+  resumePromptAuto: integer("resume_prompt_auto", { mode: "boolean" }).notNull().default(false),
   // 提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，
   // 等 answer_question 清空并带答复 resume（见 scheduler.pickNextLaunchable 的挡板）。
   question: text("question"),

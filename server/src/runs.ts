@@ -336,6 +336,16 @@ export function revokeConfirmed(taskId: string): boolean {
   return confirmed.delete(taskId);
 }
 
+/**
+ * 内存这条快路上现在有确认吗？**不消费它**（对称 `takeConfirmed` 的只读版）。
+ *
+ * 用在「刚挂上哨兵,要不要撤确认」那一步:没有确认可撤就该原样返回,而不是顺手写一段等待。
+ * 借 `takeConfirmed` 一问一还的话,中间任何一个 await 都会让另一路读到一个假的「没确认」。
+ */
+export function hasConfirmed(taskId: string): boolean {
+  return confirmed.has(taskId);
+}
+
 // Thrown by a run step when a stop was requested mid-flight, so the duet
 // pipeline unwinds to its top-level catch and settles as `canceled`.
 export class CanceledRun extends Error {

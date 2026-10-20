@@ -14,66 +14,25 @@
 //  ④ **已经出了结果、但还排在待发送里没送到执行者手上的**也要拦（F2）；
 //  ⑤ 确认之后再挂哨兵、断线补录绕过入口、结算最后一关（F1 的三条路）；
 //  ⑥ 静默与零输出的措辞只说可证实的事实（F3、N3）。
+//
+// 第 2 轮审查又从**那几关之间的缝**走穿了四条，所以下面还钉上了：
+//  ⑦ 最后一关放行到终态行落库之间那条缝（闩：期间 `startMonitor` 一律 409；R2-1）；
+//  ⑧ 补录被闸拦下时落的是**可恢复的等待**，不是 failed（R2-1 实测 `monitorAfter:"stopped"`）；
+//  ⑨ 原生命令回合、以及续聊回合里**没交卷**那一支，也都会收走哨兵 ⇒ 一样过闸（R2-1）；
+//  ⑩ 系统替它写下的那段等待**有有效期**：阻塞物没了、重新交卷就清掉，而 agent 自己
+//     `pause_task` 写的那段谁也不许抹（R2-2）；
+//  ⑪ 「这个结果不要了」用**真的** `stop_monitor` 对一条**已经结束**的哨兵也走得通（R2-3）。
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
-import { Hono } from "hono";
 import { isSilentWaitLoop, monitorEventTally, silentWaitNotice, spanWords } from "@ash/shared/monitor-silence";
+import { checkpointGroups } from "./monitor-complete-checkpoint-groups.js";
 import {
-  db, insertMonitorRow, makeTask, monitors, now, reviewInFlight, root, schema, scheduledMessages,
-  sessions, sleep, startMonitor, tasks, teardown, uniq,
-} from "./monitors-fixture.js";
-
-const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
-const { sessionTranscriptPath } = await import("../src/transcript.js");
-const { settleTaskStatus } = await import("../src/single-run.js");
-const { replayUndeliveredMcpCalls } = await import("../src/mcp-handoff.js");
-const { RUNS_DIR } = await import("../src/paths.js");
-
-const api = new Hono();
-mountTaskRunRoutes(api);
-
-const complete = (taskId: string) => api.request(`/tasks/${taskId}/complete`, {
-  method: "POST", headers: { "content-type": "application/json" }, body: "{}",
-});
-const taskRow = async (taskId: string) =>
-  (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
-const confirmedAt = async (taskId: string): Promise<string | null> =>
-  (await taskRow(taskId)).completeConfirmedAt ?? null;
-const monitorStatus = async (monitorId: string): Promise<string> =>
-  (await db.select({ s: monitors.status }).from(monitors).where(eq(monitors.id, monitorId))).at(0)!.s;
-
-/** 一条带回合起点的执行会话 —— 「本回合」这个时间窗就是从它身上读的。 */
-async function sessionWithTurn(
-  taskId: string, turnStartedAt: string,
-  opts: { id?: string; agentType?: string; startedAt?: string; turn?: boolean } = {},
-): Promise<string> {
-  const id = opts.id ?? `sess-${taskId}`;
-  await db.insert(sessions).values({
-    id, taskId, role: "single", agentType: opts.agentType ?? "claude", executor: "claude",
-    cwd: root, startedAt: opts.startedAt ?? turnStartedAt,
-    turnStartedAt: opts.turn === false ? null : turnStartedAt,
-  });
-  return id;
-}
-const transcriptOf = (sessionId: string, taskId: string): string => {
-  try { return readFileSync(sessionTranscriptPath(taskId, sessionId), "utf8"); }
-  catch { return ""; }
-};
-/** 主动撤掉一条哨兵（`ended_by='actor'`，跟 `stopMonitor` 落的那一行一致）。 */
-const dropByActor = (monitorId: string, reason: string, endedAt = now()) =>
-  db.update(monitors).set({ status: "stopped", endedAt, endedReason: reason, endedBy: "actor" })
-    .where(eq(monitors.id, monitorId));
-/** 一条哨兵推来的事件，还排在待发送托盘里。 */
-const queueMonitorEvent = async (taskId: string, monitorId: string, text: string): Promise<string> => {
-  const id = uniq("msg");
-  await db.insert(scheduledMessages).values({
-    id, taskId, text, origin: `monitor:${monitorId}`, mode: "queued",
-    sendAt: now(), status: "pending", createdAt: now(),
-  });
-  return id;
-};
+  beginTerminalLanding, complete, confirmedAt, db, dropByActor, inTurnCaller, insertMonitorRow, makeTask,
+  monitors, monitorStatus, now, pendingOf, queueMonitorEvent, replayUndeliveredMcpCalls, reviewInFlight,
+  runs, schema, scheduledMessages, sessionWithTurn, setTaskStatus, settleTaskStatus, sleep, startMonitor,
+  stopMonitor, tasks, taskRow, teardown, terminalLandingInFlight, transcriptOf, until, writeLostCompleteCall,
+} from "./monitor-complete-gate-harness.js";
 
 // ── ① 还在盯的哨兵拦得住，而且真的没放行 ──────────────────────────────────────
 {
@@ -201,11 +160,15 @@ const queueMonitorEvent = async (taskId: string, monitorId: string, text: string
 {
   const taskId = await makeTask();
   const sessionId = await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
-  const monitorId = await insertMonitorRow(taskId, { command: "tail -F deploy.log" });
+  // **真起、真停**：预写一行 `ended_by='actor'` 证明不了这条出路通（第 2 轮审查 R2-3 就是
+  // 从这里漏的 —— 旧用例预写终态字段，而真 `stopMonitor` 在那条路上一笔凭证都没写）。
+  const started = await startMonitor({ taskId, command: "tail -f /dev/null", description: "太吵的日志" });
+  assert.ok(started.ok, `先得真的挂上一条：${started.ok ? "" : started.error}`);
+  const monitorId = started.ok ? started.monitor.id : "";
   // `stop_monitor` 不会取消已经攒进托盘的那几行（它们是已经发生的事实），所以这个组合
   // 必须放行 —— 否则「不要了 → stop_monitor → complete_task」这条出路自己走不通。
   await queueMonitorEvent(taskId, monitorId, "[12:00] 又一行进度");
-  await dropByActor(monitorId, "这条日志太吵，不看了");
+  assert.ok(await stopMonitor(monitorId, "这条日志太吵，不看了"), "真接口停得掉");
 
   assert.equal((await complete(taskId)).status, 200, "主动撤掉之后完成必须放行");
   assert.match(
@@ -256,24 +219,12 @@ const queueMonitorEvent = async (taskId: string, monitorId: string, text: string
   await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString(), { id: sessId });
   const monitorId = await insertMonitorRow(taskId, { command: "tail -F deploy.log" });
   const turnStart = "2026-10-20T04:08:22.911Z";
-  const stream = JSON.stringify({
-    type: "item.completed",
-    item: {
-      id: "item_1", type: "mcp_tool_call", server: "ash", tool: "complete_task",
-      arguments: { taskId }, result: null,
-      error: { message: "tool call error: tool call failed for `ash/complete_task`\n\nCaused by:\n    Transport closed" },
-      status: "failed",
-    },
-  });
-  mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
-  const outPath = join(RUNS_DIR, taskId, `${sessId}-${turnStart.replace(/[^0-9A-Za-z]/g, "")}.agent-out.jsonl`);
-  writeFileSync(outPath, stream);
+  writeLostCompleteCall(taskId, sessId, turnStart);
 
-  assert.equal(
-    await replayUndeliveredMcpCalls({ taskId, sessId, turnStart, agentType: "codex" }), 0,
-    "挂着哨兵时补录也不许把确认写进来（F1 实测那一条）",
-  );
-  assert.equal(await confirmedAt(taskId), null, "补录被拦下就不该留下确认");
+  // 返回的 1 是「落了一笔可恢复的等待」，**不是**「补上了那份确认」—— 后者看
+  // `complete_confirmed_at`，它必须还是空的（拦下来的那一笔一个字都不许落库）。
+  await replayUndeliveredMcpCalls({ taskId, sessId, turnStart, agentType: "codex" });
+  assert.equal(await confirmedAt(taskId), null, "挂着哨兵时补录也不许把确认写进来（F1 实测那一条）");
 
   // 撤掉之后同一条记录该补得上 —— 闸拦的是哨兵，不是补录这条路本身。
   await dropByActor(monitorId, "不等它了");
@@ -309,6 +260,213 @@ const queueMonitorEvent = async (taskId: string, monitorId: string, text: string
   assert.equal(settled.confirmedDone, true);
 }
 
+// ── ⑭b R2-4：撤哨兵那句话里的「有没有产出」读的是日志文件，不是投递游标 ───────────
+{
+  const taskId = await makeTask();
+  const sessionId = await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+  const monitorId = await insertMonitorRow(taskId, { command: "tail -F build.log" });
+  // **日志里有字、投递游标却是 0**：被终态/归档拒投、以及终态清理丢掉未投递缓冲，都正好
+  // 长这样（第 2 轮审查 R2-4：`offset` 只在事件被接受投递时才推进，它不是产出证据）。
+  const logPath = (await db.select({ p: monitors.logPath }).from(monitors)
+    .where(eq(monitors.id, monitorId))).at(0)!.p;
+  writeFileSync(logPath, "[12:00] 正在编译\n[12:01] 还在编译\n");
+  await dropByActor(monitorId, "不等它了");
+
+  assert.equal((await complete(taskId)).status, 200);
+  const text = transcriptOf(sessionId, taskId);
+  assert.match(text, /日志里有 \d+ 字节输出/, "日志里有字就不许说它一个字都没产出（R2-4）");
+  assert.doesNotMatch(text, /日志文件也是空的/, "游标为 0 推不出「什么都没产出」");
+}
+
+// ── ⑭c R2-4 的另一半：日志压根读不出来时，照实说「说不准」──────────────────────
+{
+  const taskId = await makeTask();
+  const sessionId = await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+  // 这条哨兵的日志文件从来没被创建过（创建期就夭折的那种）。
+  const monitorId = await insertMonitorRow(taskId, { command: "tail -F nowhere.log" });
+  await dropByActor(monitorId, "起都没起来");
+
+  assert.equal((await complete(taskId)).status, 200);
+  const text = transcriptOf(sessionId, taskId);
+  assert.match(text, /读不出来/, "读不出来就说读不出来，不许当成「日志是空的」（R2-4）");
+  assert.doesNotMatch(text, /日志文件也是空的/, "不许从读不到反推没产出");
+}
+
+// ── ⑮ R2-1：最后一关放行之后、终态行落库之前，一个哨兵都不许插进来 ─────────────
+//
+// 上一版这里是条真缝：结算先核阻塞物（放行），松手之后才写 `done` 那一行，审查探针在缝里
+// 用真 `startMonitor` 起了一条 `sleep 45`，放开之后任务落 done、新哨兵被终态清理停掉
+// （`OLD_F1_FINAL_SETTLEMENT_RACE {"startMonitor":true,"monitorAfter":"stopped"}`）。
+// 现在那一关**核完就把闩置上**，所以这一节不必去抢那几毫秒：它直接站在缝里看。
+{
+  const taskId = await makeTask();
+  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+  assert.equal((await complete(taskId)).status, 200, "名下干净，先正常确认");
+
+  assert.equal(await beginTerminalLanding(taskId), null, "没有阻塞物 ⇒ 最后一关放行");
+  assert.equal(terminalLandingInFlight(taskId), true, "放行的同一把锁里必须把闩置上");
+
+  const squeezed = await startMonitor({ taskId, command: "sleep 45", description: "缝里插进来的" });
+  assert.equal(squeezed.ok, false, "正在落终态 ⇒ 这一刻挂不上哨兵（R2-1）");
+  assert.match(squeezed.ok ? "" : squeezed.error, /正在落终态/, "拒绝文案要说清为什么");
+  assert.equal(
+    (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).length, 0,
+    "拒掉的创建一行都不许留下（命令也一个字都没跑）",
+  );
+
+  const settled = await settleTaskStatus(taskId, 0, null);
+  assert.equal(settled.status, "done", "缝被焊上了，但正常路径照旧落 done");
+  assert.equal(terminalLandingInFlight(taskId), false, "终态行落库之后闩必须撤掉");
+}
+
+// ── ⑯ 闩的另一半：落位不是终态时也要撤，否则这个任务被挡到闩过期 ───────────────
+{
+  const taskId = await makeTask();
+  assert.equal(await beginTerminalLanding(taskId), null);
+  assert.equal(terminalLandingInFlight(taskId), true);
+  // 续聊回合核过闩之后恢复的可能是 paused/backlog 一类非终态 —— 只在终态分支撤闩的话，
+  // 那一轮会把这个任务的哨兵创建挡到闩自己过期为止。
+  await setTaskStatus(taskId, "paused");
+  assert.equal(terminalLandingInFlight(taskId), false, "任何一次状态落库都撤闩");
+  await setTaskStatus(taskId, "running");
+  const after = await startMonitor({ taskId, command: "sleep 1", description: "撤闩之后" });
+  assert.ok(after.ok, `撤闩之后照旧挂得上：${after.ok ? "" : after.error}`);
+  if (after.ok) await stopMonitor(after.monitor.id, "用例收尾");
+}
+
+// ── ⑰ R2-1：补录被闸拦下 ⇒ 落可恢复的等待，而不是按「没交卷」记 failed ───────────
+//
+// 上一版拦下来就什么都不说，那一轮照旧按没交卷落 failed —— 而 failed 同样是终态，哨兵跟着
+// 被收走（`OLD_F1_REPLAY_REJECTED_THEN_FAILED {"settlement":"failed","monitorAfter":"stopped"}`）。
+// 它确实交了卷，只是那一笔丢在了断掉的通道里。
+{
+  const taskId = await makeTask();
+  const sessId = `sess-blocked-${taskId}`;
+  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString(), { id: sessId });
+  const monitorId = await insertMonitorRow(taskId, { command: "tail -F train.log" });
+  const turnStart = "2026-10-20T05:11:00.000Z";
+  writeLostCompleteCall(taskId, sessId, turnStart);
+
+  await replayUndeliveredMcpCalls({ taskId, sessId, turnStart, agentType: "codex" });
+  assert.equal(await confirmedAt(taskId), null, "拦下来的那一笔确认一个字都不许落库");
+  const held = await taskRow(taskId);
+  assert.ok(held.resumePrompt, "必须留下一段可恢复的等待（R2-1）");
+  assert.equal(held.resumePromptAuto, true, "它要记着自己是系统写的，好在失效时被清掉");
+  assert.match(
+    transcriptOf(sessId, taskId), /通道中断/,
+    "为什么这一轮变成了暂停，要在它自己那条会话上说清",
+  );
+
+  const settled = await settleTaskStatus(taskId, 0, null);
+  assert.equal(settled.status, "paused", "落位是检查点暂停，不是 failed");
+  assert.equal(await monitorStatus(monitorId), "running", "哨兵必须活着 —— 它等的结果还没来");
+}
+
+// ── ⑱ R2-1：原生命令回合（`/compact`）正常收尾也会收走哨兵 ⇒ 一样过闸 ────────────
+{
+  const taskId = await makeTask();
+  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+  const monitorId = await insertMonitorRow(taskId, { command: "tail -F deploy.log" });
+  await db.update(tasks).set({ nativeTurn: true }).where(eq(tasks.id, taskId));
+
+  const settled = await settleTaskStatus(taskId, 0, null);
+  assert.equal(settled.status, "paused", "压缩一次上下文不该顺手把哨兵停掉（R2-1）");
+  assert.equal(settled.nativeTurn, true, "它仍然是原生回合：结算钩子照旧整段跳过");
+  assert.equal(await monitorStatus(monitorId), "running");
+}
+
+// ── ⑲ R2-1：续聊回合**没交卷**那一支也过闸（恢复终态跟落终态是同一件事）──────────
+{
+  const taskId = await makeTask();
+  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+  const monitorId = await insertMonitorRow(taskId, { command: "tail -F deploy.log" });
+  await db.update(tasks).set({ followUpFrom: "done" }).where(eq(tasks.id, taskId));
+
+  const settled = await settleTaskStatus(taskId, 0, null);
+  assert.equal(settled.status, "paused", "恢复 done 会连坐停掉这一轮新挂的哨兵（R2-1）");
+  assert.equal(await monitorStatus(monitorId), "running");
+  assert.equal((await taskRow(taskId)).followUpFrom, null, "旁路身份要一起清掉");
+}
+
+// ── ⑲b 对称面：恢复的原状态**不是**终态时不许问闸（问了只会白写一段系统等待）────
+{
+  const taskId = await makeTask();
+  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+  const monitorId = await insertMonitorRow(taskId, { command: "tail -F deploy.log" });
+  await db.update(tasks).set({ followUpFrom: "paused" }).where(eq(tasks.id, taskId));
+
+  const settled = await settleTaskStatus(taskId, 0, null);
+  assert.equal(settled.status, "paused", "原样恢复它本来的 paused");
+  assert.equal(
+    (await taskRow(taskId)).resumePrompt, null,
+    "这一笔不碰哨兵，所以不该留下任何系统等待",
+  );
+  assert.equal(await monitorStatus(monitorId), "running");
+}
+
+// ── ⑳ ⑳b ⑳c ㉑ 检查点归属那一半（搬去 monitor-complete-checkpoint-groups.ts：
+//    两份共用同一套台子，合在一个文件里超过 700 行的约定）────────────────────────────
+await checkpointGroups();
+
+// ── ㉒ R2-2：创建侧跟闸共用同一份判据 —— 属于活跃审查的新哨兵不该撤掉确认 ─────────
+{
+  const taskId = await makeTask();
+  await reviewInFlight(taskId, "run-hold-spared", { round: 1 });
+  runs.claimTurn(taskId, "reviewer", { run: "run-hold-spared", round: 1 });
+  await db.update(tasks).set({ workflowMode: "free" }).where(eq(tasks.id, taskId));
+  assert.equal((await complete(taskId)).status, 200, "审查豁免 ⇒ 确认放行");
+  const confirmed = await confirmedAt(taskId);
+  assert.notEqual(confirmed, null);
+
+  const started = await startMonitor({
+    taskId, command: "sleep 45", description: "审查还要等的那件事",
+    caller: await inTurnCaller(taskId, "tok-spared"),
+  });
+  assert.ok(started.ok, `审查进行中就该挂得上：${started.ok ? "" : started.error}`);
+  // 这条哨兵活得过这次完成（终态清理对它有豁免），所以它不是「会被这次完成毁掉的东西」——
+  // 上一版无条件撤确认、写等待，把一次本不该被打断的收尾改成了暂停（R2-2 的同类实例）。
+  assert.equal(started.ok ? started.notice ?? null : null, null, "没有东西要撤，就别跟它说撤了");
+  assert.equal(await confirmedAt(taskId), confirmed, "那份确认必须原样留着");
+  assert.equal((await taskRow(taskId)).resumePrompt, null, "也不该凭空写一段等待");
+  runs.releaseTurn(taskId);
+  if (started.ok) await stopMonitor(started.monitor.id, "用例收尾");
+}
+
+// ── ㉓ R2-3：已经跑完的哨兵，照提示用真 `stop_monitor` 放弃它的结果 ───────────────
+//
+// 实测走不通的那条出路：哨兵 `exited`、结果还排在待发送里，完成 409 并推荐 stop_monitor；
+// 照做之后仍是 `exited` / `ended_by=system` / `pending=1`，再完成仍 409，文案还在重复推荐
+// 同一个动作（`NEW_COMPLETED_RESULT_CANNOT_BE_DISCARDED`）。
+{
+  const taskId = await makeTask();
+  const sessionId = await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+  const started = await startMonitor({ taskId, command: "printf 'RESULT_READY\\n'", description: "出一次结果就走" });
+  assert.ok(started.ok, `先真起一条：${started.ok ? "" : started.error}`);
+  const monitorId = started.ok ? started.monitor.id : "";
+  await until("它自己跑完、并且结果还排在待发送里", async () =>
+    await monitorStatus(monitorId) === "exited" && (await pendingOf(taskId)).length > 0);
+
+  assert.equal((await complete(taskId)).status, 409, "出了结果没送到 ⇒ 先拦住（F2 那道保护不许撤）");
+
+  assert.ok(await stopMonitor(monitorId, "这份结果不要了，换别的办法核对"), "停一条已经结束的哨兵不该 404");
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(row.status, "exited", "结束事实一个字都不许改写 —— 它不是被停掉的");
+  assert.notEqual(row.endedBy, "actor", "「谁让进程结束的」也不许被这一次改写");
+  assert.ok(row.resultsAbandonedAt, "放弃凭证要单独落下来（R2-3）");
+  assert.match(row.resultsAbandonedReason ?? "", /不要了/, "理由要留着：用户之后得看得出为什么放行了");
+  assert.equal((await pendingOf(taskId)).length, 1, "放弃的是「必须先收下它」这条条件，不是那几行事件本身");
+  assert.match(transcriptOf(sessionId, taskId), /不再等哨兵/, "已经结束的那种不会再走收尾播报，这里得补一行");
+
+  assert.equal((await complete(taskId)).status, 200, "照提示做完之后，完成必须真的放得行（R2-3）");
+
+  // 幂等：再点一次停，不改第一次的时刻与理由。
+  const again = row.resultsAbandonedAt;
+  await stopMonitor(monitorId, "手滑又点了一次");
+  const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(after.resultsAbandonedAt, again, "重复点停不许改写第一次的时刻");
+  assert.match(after.resultsAbandonedReason ?? "", /不要了/, "也不许改写第一次的理由");
+}
+
 // ── ⑭ 静默判据与零输出措辞：只说可证实的事实（F3、N3）───────────────────────
 {
   // 那次空转的原命令：循环体里只有 sleep、条件是 `grep -q` ⇒ 跳出之前结构上不会出声。
@@ -338,15 +496,24 @@ const queueMonitorEvent = async (taskId: string, monitorId: string, text: string
   assert.equal(spanWords(90_000), "1 分 30 秒");
   assert.match(silentWaitNotice(real, 1_000) ?? "", /1 秒后到期/, "短期限用秒说（N3）");
 
-  // 事后那句话只陈述能证实的两样：推了几条、日志里读到过没有 —— 一个字都不提「它等的条件」。
-  assert.match(monitorEventTally(0, 0), /日志里也没有任何输出/, "0 事件 0 字节：如实说两样都没有");
+  // 事后那句话只陈述能证实的两样：推了几条、**日志文件此刻多大** —— 一个字都不提「它等的
+  // 条件」。第二个入参从前传的是 `offset`（投递游标），而那一列只在事件被接受投递时才推进：
+  // 被终态/归档拒投、或者终态清理丢掉未投递缓冲时，日志里明明有字，它仍然是 0（第 2 轮审查
+  // R2-4）。现在传的是 `statSync(logPath).size`，读不出来就老实说读不出来。
+  assert.match(monitorEventTally(0, 0), /日志文件也是空的/, "0 事件 + 空文件：如实说两样都没有");
+  assert.match(monitorEventTally(0, 128), /128 字节/, "文件里有字就把字数说出来");
   assert.match(monitorEventTally(0, 128), /没有一条送到这个任务头上/, "有输出但 0 事件要分得开");
+  assert.match(monitorEventTally(0, null), /说不准/, "日志读不出来时不许替它断言有没有产出（R2-4）");
+  assert.doesNotMatch(monitorEventTally(0, null), /空/, "读不出来 ≠ 空的");
   assert.doesNotMatch(monitorEventTally(0, 0), /条件/, "不许从没有输出推断业务条件没满足（F3）");
   assert.equal(monitorEventTally(3, 500), "共推送 3 条事件", "推出去过就照旧报数");
 }
 
 // 结算会甩出几件后台活（回合基线、待发送投递、时间线）。台子一关库它们就刷一屏
-// 「database is not open」—— 噪声本身不是失败，但它会盖住真正的失败。等它们落完再收台子。
-await sleep(800);
+// 「database is not open」—— 噪声本身不是失败，但它会盖住真正的失败。所以先把还排在托盘里
+// 的那几条清掉（它们是用例故意留下的「没送到的结果」，到这一步已经断言完了；留着的话投递
+// 链会在回合空闲时去送、送不出去又要回填检查点，正好撞上已经关掉的库），再等余下的落完。
+await db.delete(scheduledMessages);
+await sleep(1200);
 await teardown();
 console.log("✓ 完成确认的哨兵闸");

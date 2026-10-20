@@ -63,7 +63,7 @@ import {
   attach, liveMonitorsOf, publish, serialize, toTaskMonitor, type Row,
 } from "./monitors.js";
 import { inspectProcess } from "./proc.js";
-import { holdCompletionForNewMonitor } from "./task-complete.js";
+import { holdCompletionForNewMonitor, terminalLandingInFlight } from "./task-complete.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
 
@@ -441,6 +441,23 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     if (source.blocked) {
       return { ok: false, status: 409, error: source.blocked, ...(source.needsWake ? { needsWakeTarget: true as const } : {}) };
     }
+    // ⑤-b **这个任务此刻正在落一个会收走哨兵的终态** —— 一个字都不许起。
+    //
+    // 上面那道 `monitorSourceGate` 读的是**库里的状态**，而终态行是在它落库之前就已经决定好
+    // 了的：结算先核一遍阻塞物（放行）、随后才写 `done` 那一行。两件事之间的那条缝里，这里
+    // 读到的仍是 `running`，于是创建照旧放行 —— 紧接着的终态清理把它当场停掉（第 2 轮审查
+    // R2-1 实测 `OLD_F1_FINAL_SETTLEMENT_RACE`：`startMonitor:true` → `monitorAfter:"stopped"`）。
+    //
+    // 结算那一关**在同一把 `task:<id>` 锁里**置的这个闩（见 task-complete.ts 的
+    // `beginTerminalLanding`），所以这里是一句同步判断就能答的事实，不是又一次「读库猜」。
+    if (terminalLandingInFlight(input.taskId)) {
+      return {
+        ok: false,
+        status: 409,
+        error: "这个任务正在落终态（本回合已经在结算了），这一刻挂不上哨兵 —— 挂上去也会被终态清理"
+          + "当场停掉。命令一个字都没跑；要盯的事情还在的话，等这一轮结算完、任务被重新唤醒后再挂。",
+      };
+    }
 
     const live = await liveMonitorsOf(input.taskId);
     if (live.length >= MONITOR_MAX_PER_TASK)
@@ -482,6 +499,9 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       endedReason: null,
       // 「谁让它停的」只在真被停下来时才有值（见 schema 的 ended_by）。
       endedBy: null,
+      // 「它的结果我不要了」也只在有人真这么说过时才有值（见 schema 的 results_abandoned_at）。
+      resultsAbandonedAt: null,
+      resultsAbandonedReason: null,
       ownerUserId: input.ownerUserId ?? null,
       kind: "ash",
       nativeId: null,

@@ -612,6 +612,17 @@ export const MONITOR_WAKE_LABEL: Record<MonitorWakeTarget, string> = {
 const MONITOR_BLOCKING_STATUSES = new Set(["done", "failed", "canceled"]);
 
 /**
+ * **落成这个状态 = 这个任务名下的哨兵会被一并收走**（服务端 `stopMonitorsForTask`）。
+ *
+ * 跟上面那两问同一个集合，刻意不另列一份：结算那一侧要判「我这一笔会不会毁掉哨兵」（见
+ * `settle-status.ts` 的哨兵闸），而那恰恰是「哨兵还能不能唤醒它」的另一面。分开写两份，
+ * 迟早出现「拦住了创建却照样把它收走」或者反过来（第 2 轮审查 R2-1：判据必须共用一份）。
+ */
+export function monitorSweepingStatus(status: string): boolean {
+  return MONITOR_BLOCKING_STATUSES.has(status);
+}
+
+/**
  * 「这个任务现在能不能挂哨兵 / 哨兵的事件还能不能唤醒它」——创建入口、事件出口、唤醒前
  * 最后一道闸共用这一份判据（三处分家就等于没防）。
  *
