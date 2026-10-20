@@ -42,7 +42,8 @@ const WAIT_BASE: TaskMonitor = {
   id: "m-wait", taskId: "task-a", kind: "ash", nativeId: null, lifetime: "bounded",
   command: "tail -F build.log", description: "盯构建日志", cwd: "/repo", status: "running",
   pid: 4242, events: 3, exitCode: null,
-  startedAt: "2026-10-17T02:00:00.000Z", expiresAt: "2026-10-17T04:00:00.000Z",
+  startedAt: "2026-10-17T02:00:00.000Z", startedAtExact: true,
+  expiresAt: "2026-10-17T04:00:00.000Z",
   timeoutMs: 7_200_000, endedAt: null, endedReason: null,
 };
 const WAIT_PENDING: TaskMonitor = {

@@ -16,11 +16,43 @@ import { formatInstant } from "../task-detail/utils.ts";
  * shared/monitor.ts 的 MonitorStartEvidence）。那时说时长，不说时刻——上一版会按回执时刻
  * 编一个，而回执要等 PostToolUse hooks 跑完才生成，期限跟着往后漂。
  */
-export function liveDeadline(monitor: TaskMonitor): string {
+export function liveDeadline(
+  monitor: TaskMonitor,
+  /**
+   * 调用处**已经单独说过起点了没有**（哨兵卡片上那一段 {@link startedAtLabel}）。
+   *
+   * 说过就别再带那句「（起点不确定）」：同一行上连说两遍不是更保险，是噪音
+   * （「挂上的时刻不确定 · 总共盯 10 分钟（起点不确定）」）。回复框上那条等待卡只显示这
+   * 一句、没有起点那一段，所以它缺省仍然要带着。
+   */
+  opts: { startSaidSeparately?: boolean } = {},
+): string {
   if (monitor.lifetime === "persistent") return "持续盯着（来源没设期限）";
   if (monitor.expiresAt) return `盯到 ${formatInstant(monitor.expiresAt)}`;
-  if (monitor.lifetime === "bounded" && monitor.timeoutMs) return `总共盯 ${formatSpan(monitor.timeoutMs)}（起点不确定）`;
+  if (monitor.lifetime === "bounded" && monitor.timeoutMs) {
+    const span = `总共盯 ${formatSpan(monitor.timeoutMs)}`;
+    return opts.startSaidSeparately ? span : `${span}（起点不确定）`;
+  }
   return "盯到什么时候由它自己定";
+}
+
+/**
+ * 「它是什么时候挂上的」那一段。
+ *
+ * **不能无脑写 `起于 ${startedAt}`**：那一列在历史投影上允许退化成占位值 —— 真实起点裁不
+ * 出来时它退到那一整轮执行的开始时刻、甚至退到落库时刻（见 server/src/claude-monitor-commit.ts
+ * 的 `anchor.startedAt ?? startedAtLow ?? fileStartedAt ?? now()`）。退化值仍然是一个**合法
+ * 日期**，所以 `formatInstant` 的「坏日期不显示」一个字都挡不住它。第 1 轮审查用真实 backfill +
+ * 真实 `listMonitors` 复现到的卡片，同一行先写「起于 10/19 10:00」再写「总共盯 10 分钟
+ * （起点不确定）」—— 自相矛盾，而被当真的恰恰是前半句。
+ *
+ * 所以判据只认服务端带过来的那一列（`startedAtExact`，源头是 shared 的
+ * `monitorStartTrusted`）：答不出来时只说「答不出来」，不画一个会被当真的时刻。
+ */
+export function startedAtLabel(monitor: TaskMonitor): string | null {
+  if (!monitor.startedAtExact) return "挂上的时刻不确定";
+  const at = formatInstant(monitor.startedAt);
+  return at ? `起于 ${at}` : null;
 }
 
 /**

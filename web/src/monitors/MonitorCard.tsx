@@ -4,7 +4,7 @@ import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@ash/shared/mon
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { formatInstant } from "../task-detail/utils.ts";
-import { claudeMonitorEpilogue, liveDeadline } from "./monitorCopy.ts";
+import { claudeMonitorEpilogue, liveDeadline, startedAtLabel } from "./monitorCopy.ts";
 import { MONITOR_ENDED_LABEL } from "./useTaskMonitors.ts";
 
 /** 展开着的那张卡每隔这么久重拉一次尾巴。只在「正在盯着」且「卡片是展开的」时才走。 */
@@ -87,24 +87,27 @@ export function MonitorCard({
    * 那一行小字，按**时间顺序**排：起于 → 盯到什么时候 / 什么时候结束的 → 结局，
    * 后面才挂事件数和 pid（只有 ash 自己起的那种才有）。
    *
-   * **「起于」每张卡都给**（用户 2026-10-20 要的「创建的时间」）：在这之前整张卡上**一个
+   * **起点那一段每张卡都给**（用户 2026-10-20 要的「创建的时间」）：在这之前整张卡上**一个
    * 绝对时刻都没有** —— 还在盯的那张只说「盯到 X」，结束的那张只剩一个状态词。于是最该
    * 一眼看见的那件事反而查不到：**这条哨兵是不是会话里那句「我挂了监听」对应的那一条**。
    * 一个任务上并排躺着四五条描述相近的哨兵时，没有起点就只能去翻库对账。
    *
-   * 取的是 `startedAt` —— 全系统拿来计时的那个起点本身（到期时刻就是它加上时长算出来的）。
-   * claude 投影那种由服务端按 `task_started` 事件或回执区间定，本机全部样本的不确定度都在
-   * 百毫秒量级，分钟粒度上看不出来（证据档位见 shared/src/monitor.ts 的 MonitorStartEvidence）。
+   * 「每张卡都给」指的是**这一段永远在**，不是「永远给得出一个时刻」：答不出来时它明说答
+   * 不出来。整段静悄悄消失的话，用户分不出「这张卡没有起点」和「这功能根本没做」。
    *
-   * 结束的那张顺带把**结束时刻**也给出来：「起于」单给会立刻引出下一个问题（那它跑了多久、
-   * 是不是在我离开之后才停的），而答案就在同一份 DTO 里（`endedAt`）。
+   * 时刻**不能直接读 `startedAt` 画出来**：那一列在历史投影上允许退化成占位值，而退化值
+   * 照样是个合法日期。判据和措辞都归 `startedAtLabel`（见它的注释，以及 shared 的
+   * `startedAtExact`）—— 答不出来时它说「挂上的时刻不确定」，不编一个会被当真的时刻。
+   *
+   * 结束的那张顺带把**结束时刻**也给出来：起点单给会立刻引出下一个问题（那它跑了多久、
+   * 是不是在我离开之后才停的），而答案就在同一份 DTO 里（`endedAt`，它没有退化档：来源
+   * 是通知自己的时刻或 ash 收尾那一刻）。
    */
-  const startedLabel = formatInstant(monitor.startedAt);
   const endedTimeLabel = formatInstant(monitor.endedAt);
   const metaSegments = [
-    // 时刻拿不出来时整段不给，而不是留一个「起于 」的半截（formatInstant 对坏值回空串）。
-    startedLabel ? `起于 ${startedLabel}` : null,
-    live ? liveDeadline(monitor) : null,
+    startedAtLabel(monitor),
+    // 起点那一段已经自己说了「不确定」，这里就不要再带一遍那句括号。
+    live ? liveDeadline(monitor, { startSaidSeparately: true }) : null,
     !live && endedTimeLabel ? `结束于 ${endedTimeLabel}` : null,
     live ? null : `${endedLabel}${monitor.exitCode === null ? "" : `（退出码 ${monitor.exitCode}）`}`,
     // 事件数只有 ash 自己起的那种数得准：claude 把事件直接注回它自己的会话，ash 看不到

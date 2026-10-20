@@ -108,6 +108,9 @@ async function main(): Promise<void> {
   // 起点取**起手回执**那条事件的时刻（01:00:06），不是 tool_use 那条（01:00:05）：工具调用
   // 可能卡在权限确认上，两者能差很久，而回执是启动后立刻返回的。
   check(first?.startedAt === "2026-10-14T01:00:06.000Z", "起点用起手回执那条事件的时刻", String(first?.startedAt));
+  // 反面那一半（⑥b 钉的是「答不出来」）：裁得出窄区间的历史行，起点就是作数的。两头都要
+  // 钉，否则「一律说不确定」也能让 ⑥b 绿。
+  check(first?.startedAtExact === true, "裁得出可信起点的历史行，起点作数", String(first?.startedAtExact));
   const span = first?.expiresAt ? Date.parse(first.expiresAt) - Date.parse(first.startedAt) : -1;
   check(Math.abs(span - 600_000) < 2_000, "期限按回执的 10 分钟，不是请求的 15 分钟", `${span}ms`);
 
@@ -338,7 +341,12 @@ async function main(): Promise<void> {
     check(row?.lifetime === "bounded", "读到回执 → 时长已知", String(row?.lifetime));
     check(row?.timeoutMs === 600_000, "时长就是回执说的 10 分钟", String(row?.timeoutMs));
     check(row?.expiresAt === null, "但起点不可信 → 不编到期时刻", String(row?.expiresAt));
-    check(row?.startedAt === "2026-10-14T11:00:00.000Z", "起点退回文件时刻，只作显示", String(row?.startedAt));
+    check(row?.startedAt === "2026-10-14T11:00:00.000Z", "起点退回文件时刻（排序和内部计时要有个值）", String(row?.startedAt));
+    // **这一列是那个退化值的出厂标签**。少了它，读的人手上只剩一个合法日期字符串，只能当
+    // 它是真的 —— 第 1 轮审查就是这么把「那一轮几点开始的」显示成了「这条哨兵几点挂上的」
+    // （卡片同一行上先写「起于 10/19 10:00」、再写「总共盯 10 分钟（起点不确定）」）。
+    check(row?.startedAtExact === false, "而且必须明说这个起点不作数，不能让读的人当成创建时刻",
+      String(row?.startedAtExact));
   }
   await fileTimeIsNotAnAnchor();
 
