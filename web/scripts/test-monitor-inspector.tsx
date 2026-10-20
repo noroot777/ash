@@ -8,6 +8,7 @@ import {
 } from "@ash/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
+import { formatInstant } from "../src/task-detail/utils.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
 import { MonitorWaitCard } from "../src/monitors/MonitorWaitCard.tsx";
 import { withMonitorTab } from "../src/monitors/useMonitorInspector.tsx";
@@ -162,6 +163,34 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
   assert.match(html, /停掉哨兵“盯构建日志”/, "在盯的哨兵必须给得出停止入口");
   assert.match(html, /grep --line-buffered ERROR/, "命令原文是判断「它到底在盯什么」的唯一依据");
   assert.match(html, /看它的输出/, "能回看原始输出才分得出「还没吐」和「过滤条件写错了」");
+}
+
+// ── 每张卡都要说得出它是什么时候挂上的 ──────────────────────────────────────
+// 用户 2026-10-20 要的：在这之前整张卡上**一个绝对时刻都没有** —— 还在盯的只说「盯到 X」，
+// 结束的只剩一个状态词。于是对账时第一个要问的那件事反而查不到：**会话里那句「我挂了监听」
+// 对应的是哪一条**（一个任务上并排躺着四五条描述相近的哨兵是常态）。
+//
+// 时刻按本地时区渲染，所以期望值走同一个 formatInstant，不写死字符串。
+{
+  const started = formatInstant(base.startedAt);
+  assert.ok(started, "夹具的起点得是个能渲染的时刻，否则下面几条断言是空的");
+
+  const live = panel([base]);
+  assert.match(live, new RegExp(`起于 ${started}`), "还在盯的那张要说得出起点");
+  assert.match(live, /盯到/, "起点不能把原来的期限挤掉——两个一起看才知道它还剩多久");
+
+  // 结束的那张顺带给出结束时刻：「起于」单给会立刻引出「那它跑了多久、是不是我离开之后
+  // 才停的」，而答案就在同一份 DTO 里。
+  const ended = panel([{ ...base, status: "exited", exitCode: 0, endedAt: "2026-08-25T11:30:00.000Z" }]);
+  assert.match(ended, new RegExp(`起于 ${started}`), "结束的那张同样要说得出起点");
+  assert.match(ended, new RegExp(`结束于 ${formatInstant("2026-08-25T11:30:00.000Z")}`), "结束的那张还要说得出什么时候结束的");
+  assert.match(ended, /命令自己跑完了/, "结局照旧要说");
+
+  // claude 投影那种也一样：它恰恰是最需要对账的那种（事件数和日志都没有，时刻是仅剩的锚点）。
+  assert.match(panel([projected]), new RegExp(`起于 ${started}`), "claude 投影那张也要说得出起点");
+
+  // 还在盯着的不写「结束于」——那一栏此刻还没有答案，编一个出来会被当真。
+  assert.doesNotMatch(live, /结束于/, "还在盯着的没有结束时刻可言");
 }
 
 // ── 两种出身的卡不一样，而且差别必须看得见 ──────────────────────────────────

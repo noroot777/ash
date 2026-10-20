@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { CaretRight, Pulse, SpinnerGap, StopCircle } from "@phosphor-icons/react";
 import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@ash/shared/monitor";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
+import { formatInstant } from "../task-detail/utils.ts";
 import { claudeMonitorEpilogue, liveDeadline } from "./monitorCopy.ts";
 import { MONITOR_ENDED_LABEL } from "./useTaskMonitors.ts";
 
@@ -82,6 +83,36 @@ export function MonitorCard({
     ? monitor.endedReason
     : null;
 
+  /**
+   * 那一行小字，按**时间顺序**排：起于 → 盯到什么时候 / 什么时候结束的 → 结局，
+   * 后面才挂事件数和 pid（只有 ash 自己起的那种才有）。
+   *
+   * **「起于」每张卡都给**（用户 2026-10-20 要的「创建的时间」）：在这之前整张卡上**一个
+   * 绝对时刻都没有** —— 还在盯的那张只说「盯到 X」，结束的那张只剩一个状态词。于是最该
+   * 一眼看见的那件事反而查不到：**这条哨兵是不是会话里那句「我挂了监听」对应的那一条**。
+   * 一个任务上并排躺着四五条描述相近的哨兵时，没有起点就只能去翻库对账。
+   *
+   * 取的是 `startedAt` —— 全系统拿来计时的那个起点本身（到期时刻就是它加上时长算出来的）。
+   * claude 投影那种由服务端按 `task_started` 事件或回执区间定，本机全部样本的不确定度都在
+   * 百毫秒量级，分钟粒度上看不出来（证据档位见 shared/src/monitor.ts 的 MonitorStartEvidence）。
+   *
+   * 结束的那张顺带把**结束时刻**也给出来：「起于」单给会立刻引出下一个问题（那它跑了多久、
+   * 是不是在我离开之后才停的），而答案就在同一份 DTO 里（`endedAt`）。
+   */
+  const startedLabel = formatInstant(monitor.startedAt);
+  const endedTimeLabel = formatInstant(monitor.endedAt);
+  const metaSegments = [
+    // 时刻拿不出来时整段不给，而不是留一个「起于 」的半截（formatInstant 对坏值回空串）。
+    startedLabel ? `起于 ${startedLabel}` : null,
+    live ? liveDeadline(monitor) : null,
+    !live && endedTimeLabel ? `结束于 ${endedTimeLabel}` : null,
+    live ? null : `${endedLabel}${monitor.exitCode === null ? "" : `（退出码 ${monitor.exitCode}）`}`,
+    // 事件数只有 ash 自己起的那种数得准：claude 把事件直接注回它自己的会话，ash 看不到
+    // 几条，显示一个恒为 0 的「0 条事件」只会被读成「过滤写错了」。
+    logged ? `${monitor.events} 条事件` : null,
+    monitor.pid === null ? null : `pid ${monitor.pid}`,
+  ].filter((segment): segment is string => !!segment);
+
   return (
     <article className={`monitor-card${live ? " is-live" : " is-ended"}`}>
       <header>
@@ -106,23 +137,12 @@ export function MonitorCard({
       </header>
       <code className="monitor-card__command">{monitor.command}</code>
       <p className="monitor-card__meta">
-        {/* 事件数只有 ash 自己起的那种数得准：claude 把事件直接注回它自己的会话，
-            ash 看不到几条，显示一个恒为 0 的「0 条事件」只会被读成「过滤写错了」。 */}
-        {logged && (
-          <>
-            <span>{monitor.events} 条事件</span>
-            <span aria-hidden="true">·</span>
-          </>
-        )}
-        <span>
-          {live ? liveDeadline(monitor) : `${endedLabel}${monitor.exitCode === null ? "" : `（退出码 ${monitor.exitCode}）`}`}
-        </span>
-        {monitor.pid !== null && (
-          <>
-            <span aria-hidden="true">·</span>
-            <span>pid {monitor.pid}</span>
-          </>
-        )}
+        {metaSegments.map((segment, index) => (
+          <Fragment key={`${index}-${segment}`}>
+            {index > 0 && <span aria-hidden="true">·</span>}
+            <span>{segment}</span>
+          </Fragment>
+        ))}
       </p>
       {reason && <p className="monitor-card__reason">{reason}</p>}
       <p className="monitor-card__cwd">{monitor.cwd}</p>
