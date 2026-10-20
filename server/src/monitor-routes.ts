@@ -126,6 +126,9 @@ export function mountMonitorRoutes(api: Hono): void {
     // 不必等三十分钟后收一条「0 条事件」才明白)。判据见 shared/src/monitor-silence.ts。
     const notices = [
       clamped ? "timeoutMs 超出允许区间，已钳到边界。" : null,
+      // 这次创建撤掉了 agent 手里那份完成确认时的那句话（`startMonitor` 的 ⑦）。排在静默
+      // 忠告之前：它说的是**这一轮的落位变了**，而那一条只是对命令写法的忠告。
+      result.notice ?? null,
       silentWaitNotice(body.command, normalizeMonitorTimeout(body.timeoutMs)),
     ].filter((n): n is string => !!n);
     return c.json({ monitor: result.monitor, ...(notices.length ? { notice: notices.join("") } : {}) });

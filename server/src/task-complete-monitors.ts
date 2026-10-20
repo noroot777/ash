@@ -1,6 +1,6 @@
 // 完成确认这一刻的两问，都只关于哨兵：
 //
-//  ① **还有会被这次完成毁掉的哨兵吗** —— 有就不许完成（`monitorsBlockingComplete`）。
+//  ① **还有会被这次完成毁掉的东西吗** —— 有就不许完成（`monitorsBlockingComplete`）。
 //  ② **这一回合亲手撤掉过哨兵吗** —— 撤过就在时间线上留一行（`noteMonitorsDropped`）。
 //
 // 为什么是两问而不是一问：它们堵的是同一件事的两条路径。一条是「挂着哨兵直接收工」，闸
@@ -10,123 +10,210 @@
 // 10 秒后自撤、5 秒后把同一条等待命令换成活不过本回合的内置后台任务，最后两边都没拿到
 // 结果。只做①的话，这种情形在界面上依旧一声不响。
 //
-// ── 闸拦的集合 = 完成那一刻**真会被收走**的集合 ───────────────────────────────────
+// ── ①拦的集合 = 完成那一刻**真会被毁掉**的集合 ────────────────────────────────────
 //
-// 这是本文件唯一容易写错的地方。任务落终态时 `stopMonitorsForTask` 并不收走所有哨兵：
-// **属于一次仍在进行的审查的那些有豁免**（任务终态 ≠ 审查结束，见 monitor-reclaim.ts）。
-// 所以闸必须用同一份判据，否则两边一漂移就会出现两种错：拦了却不收（审查者挂的哨兵白白
-// 把执行者的完成堵死，而它本来就活得过这次完成），或者收了却不拦（回到今天这个缺口）。
-// 判据就一句：`sourceReviewRun` 指向的那一轮审查此刻还活着 ⇒ 这条哨兵不受这次完成影响。
-import { and, desc, eq, isNull } from "drizzle-orm";
+// 这是本文件唯一容易写错的地方，而且**有两类**，第一版只认了第一类（第 1 轮审查 F2）：
+//
+// **第一类:还在跑的进程**。任务落终态时 `stopMonitorsForTask` 把它们停掉。但它并不收走
+// 所有哨兵：**属于一次仍在进行的审查的那些有豁免**（任务终态 ≠ 审查结束，见
+// monitor-reclaim.ts）。闸必须用同一份判据，否则两边一漂移就会出现两种错：拦了却不收
+// （审查者挂的哨兵白白把执行者的完成堵死，而它本来就活得过这次完成），或者收了却不拦
+// （回到今天这个缺口）。判据就一句：`sourceReviewRun` 指向的那一轮审查此刻还活着 ⇒ 这条
+// 哨兵不受这次完成影响。
+//
+// **第二类:已经出了结果、但还没送到执行者手上的那几条**。「进程不再 running」推不出
+// 「结果已经被消费」—— 哨兵的事件先进待发送托盘（`scheduled_messages`，origin 为
+// `monitor:<id>`），任务正在跑的时候送不进去，要等下一次它空下来。哨兵可以先自己退出，
+// 这一批结果还排在那里。而任务一落终态，`cancelPendingMonitorEvents` 会把它们整批作废：
+// 哨兵卡片上写着「命令自己跑完了」，执行者一个字都没见到。审查实测（F2）就是这条：
+// `printf 'RESULT_READY\n'` 的哨兵已经 exited、消息正文有 RESULT_READY、complete 照旧
+// 200、结算落 done、那条消息变成 canceled。
+//
+// 两类都只挡「这一次完成」，不是永久锁：撤掉 / 收下来看一眼 / 用户在待发送托盘里删掉，
+// 任一件做完闸自己就开（**不是**按事件计数大于零就算已处理 —— 计数只在投递被接受时才涨，
+// 正好是这里要护的那一批还没涨的）。
+import { and, desc, eq, isNull, like } from "drizzle-orm";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
+import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
-import { monitors, sessions } from "./db/schema.js";
+import { monitors, scheduledMessages, sessions } from "./db/schema.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
-type DoomedMonitor = {
+type MonitorFacts = {
   id: string;
   label: string;
-  command: string;
   events: number;
+  readOffset: number;
   endedReason: string | null;
+};
+
+const MONITOR_COLUMNS = {
+  id: monitors.id, description: monitors.description, command: monitors.command,
+  events: monitors.events, offset: monitors.offset,
+  endedAt: monitors.endedAt, endedReason: monitors.endedReason, endedBy: monitors.endedBy,
+  sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
+};
+
+type MonitorRow = {
+  id: string; description: string; command: string;
+  events: number; offset: number;
+  endedAt: string | null; endedReason: string | null; endedBy: string | null;
+  sourceReviewRun: string | null; sourceReviewRound: number | null;
 };
 
 /** 描述是 agent 自己写的「我在盯什么」，没写就退回命令原文（跟 `liveMonitorSummary` 同一口径）。 */
 const labelOf = (r: { description: string | null; command: string }): string =>
   (r.description ?? "").trim() || r.command.trim();
 
+const factsOf = (r: MonitorRow): MonitorFacts => ({
+  id: r.id, label: labelOf(r), events: r.events, readOffset: r.offset, endedReason: r.endedReason,
+});
+
 /**
- * 这次完成会毁掉哪几条哨兵。
+ * 这条哨兵活得过这次完成吗。
  *
- * `status` 由调用方给：闸问的是 `running`（还在盯的），痕迹问的是 `stopped`（本回合被撤的）。
- * 审查豁免两边同一份 —— 一条属于活跃审查的哨兵既不该拦住完成，也不该在「撤了几个」里被
- * 算进去（它根本不是这次完成的受害者）。
+ * 跟 `stopMonitorsForTask` 的 `kept` 同一份判据（`intent === "task-settled"` 那一档）：属于
+ * 一次仍在进行的审查的哨兵既不该拦住完成，也不该被算进「撤了几个」—— 它根本不是这次完成
+ * 的受害者。
  */
-async function monitorsAffectedByCompletion(
-  taskId: string,
-  status: "running" | "stopped",
-  since?: string,
-): Promise<DoomedMonitor[]> {
+async function sparedByReview(r: Pick<MonitorRow, "sourceReviewRun" | "sourceReviewRound">): Promise<boolean> {
+  if (r.sourceReviewRun === null) return false;
   const { isReviewSourceActive } = await import("./monitor-session.js");
-  const rows = await db
-    .select({
-      id: monitors.id, description: monitors.description, command: monitors.command,
-      events: monitors.events, endedAt: monitors.endedAt, endedReason: monitors.endedReason,
-      sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
-    })
-    .from(monitors)
-    .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "ash"), eq(monitors.status, status)));
-  const affected: DoomedMonitor[] = [];
-  for (const r of rows) {
-    // 时间窗只用于「本回合撤的」那一问。字符串比较成立是因为两列都是 `new Date().toISOString()`
-    // （util.ts 的 `now`），同一种定长 UTC 格式，字典序就是时间序。
-    if (since && !(r.endedAt && r.endedAt >= since)) continue;
-    const spared = r.sourceReviewRun !== null
-      && await isReviewSourceActive(r.sourceReviewRun, r.sourceReviewRound);
-    if (spared) continue;
-    affected.push({
-      id: r.id, label: labelOf(r), command: r.command,
-      events: r.events, endedReason: r.endedReason,
-    });
-  }
-  return affected;
+  return await isReviewSourceActive(r.sourceReviewRun, r.sourceReviewRound);
+}
+
+/** 第一类：还在盯的进程。 */
+async function liveMonitors(taskId: string): Promise<MonitorFacts[]> {
+  const rows = await db.select(MONITOR_COLUMNS).from(monitors)
+    .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "ash"), eq(monitors.status, "running")));
+  const live: MonitorFacts[] = [];
+  for (const r of rows) if (!await sparedByReview(r)) live.push(factsOf(r));
+  return live;
 }
 
 /**
- * 完成确认前的闸：名下还有活哨兵就不许完成，返回那句拒绝的话（`null` = 放行）。
+ * 第二类：还排在待发送托盘里、没送到执行者手上的哨兵结果。
  *
- * 文案里**必须带着两条出路**。只说「不许」的话，agent 碰上一个永远等不到的哨兵就被锁死在
- * 这个任务上 —— 而那恰恰是最常见的一种：2026-10-20 那条哨兵等的 `^OK` 根本不会出现（被等
- * 的测试进程早没了）。所以这里既要拦住「挂着哨兵就收工」，也要把 `stop_monitor` 这条明路
- * 指出来，让它做一个**有意识的**取舍，而不是撞上一堵没有门的墙。
+ * **带投递租约的那一行也算**。`cancelPendingMonitorEvents` 放过它（它归抢下租约的那位投递者），
+ * 但投递者起这一轮时会按最新状态自己撤回并取消（`pending-messages.ts` 的 `monitorWakeGuard`）
+ * —— 对「结果还会不会到执行者手上」这一问，两条路的答案是同一个「不会」。
+ *
+ * 行还在、哨兵行已经没了（被删/被清）的，照样算：那条消息仍会被作废，而消息本身就是结果。
+ *
+ * **主动撤掉的那几条除外**（`ended_by = 'actor'`）。`stop_monitor` 本身就是「这个结果我不要了」
+ * 那句话的正式说法，而它**不会**把已经攒在缓冲里的行取消（见 monitor-stop.ts：那些是已经发生
+ * 的事实，任务还活着就该推完）。不排除的话，闸给出的出路②「不要了就 stop_monitor 再
+ * complete_task」自己就走不通：停的那一刻刚好有几行进了托盘，complete 接着被这一类拦住，而
+ * agent 手上再没有第三个动作可用。撤掉这件事连它的理由带事件计数一起落在时间线上
+ * （`noteMonitorsDropped`），所以「明确放弃」是看得见的，不是偷偷丢掉。
+ */
+async function undeliveredResults(taskId: string): Promise<{ id: string; label: string }[]> {
+  const rows = await db
+    .select({ id: scheduledMessages.id, origin: scheduledMessages.origin })
+    .from(scheduledMessages)
+    .where(and(
+      eq(scheduledMessages.taskId, taskId),
+      eq(scheduledMessages.status, "pending"),
+      like(scheduledMessages.origin, "monitor:%"),
+    ));
+  const unread: { id: string; label: string }[] = [];
+  for (const r of rows) {
+    const monitorId = monitorIdFromOrigin(r.origin);
+    if (!monitorId) continue;
+    const m = (await db.select(MONITOR_COLUMNS).from(monitors).where(eq(monitors.id, monitorId))).at(0);
+    if (m?.endedBy === "actor") continue;
+    if (m && await sparedByReview(m)) continue;
+    unread.push({ id: r.id, label: m ? labelOf(m) : monitorId });
+  }
+  return unread;
+}
+
+const nameList = (items: { label: string }[]): string => {
+  const head = items.slice(0, 3).map((m) => m.label).join("、");
+  return items.length > 3 ? `${head} 等 ${items.length} 个` : head;
+};
+
+/**
+ * 完成资格：名下还有会被这次完成毁掉的哨兵或哨兵结果吗。返回那句拒绝的话（`null` = 放行）。
+ *
+ * 文案里**必须带着出路**。只说「不许」的话，agent 碰上一个永远等不到的哨兵就被锁死在这个
+ * 任务上 —— 而那恰恰是最常见的一种：2026-10-20 那条哨兵等的 `^OK` 根本不会出现（被等的测试
+ * 进程早没了）。所以这里既要拦住「挂着哨兵就收工」，也要把每一类的明路指出来，让它做一个
+ * **有意识的**取舍，而不是撞上一堵没有门的墙。
  */
 export async function monitorsBlockingComplete(taskId: string): Promise<string | null> {
-  const live = await monitorsAffectedByCompletion(taskId, "running");
-  if (live.length === 0) return null;
-  const what = live.map((m) => m.label).slice(0, 3).join("、");
-  const more = live.length > 3 ? `等 ${live.length} 个` : "";
+  const live = await liveMonitors(taskId);
+  const unread = await undeliveredResults(taskId);
+  if (live.length === 0 && unread.length === 0) return null;
+  const what = [
+    live.length ? `${live.length} 个哨兵还在盯着（${nameList(live)}）` : null,
+    unread.length ? `${unread.length} 条哨兵结果还排在待发送里、没送到你手上（${nameList(unread)}）` : null,
+  ].filter(Boolean).join("，以及 ");
   return (
-    `完成确认被拦下：你名下还有 ${live.length} 个哨兵在盯着（${what}${more}）。`
-    + "任务一落 done，它们会被系统一并停掉，它们在等的结果你就再也拿不到了。按你的判断选一条出路："
+    `完成确认被拦下：你名下还有 ${what}。`
+    + "任务一落 done，还在盯的会被系统一并停掉，排着没送到的会被作废 —— 两边的结果你都再也拿不到了。"
+    + "按你的判断选一条出路："
     + "① 还要那个结果 → 改用 pause_task 收尾，resumePrompt 写清「被哨兵叫醒后该干什么」；"
-    + "哨兵醒来会把这条会话重新叫起来，已预约的审查也会等它。"
-    + "② 不要了 → 对每个哨兵调 stop_monitor（reason 写清为什么不要了），再调 complete_task。"
+    + "哨兵醒来、或者排着的那几条送到，都会把这条会话重新叫起来，已预约的审查也会等它；拿到结果再 complete_task。"
+    + (live.length
+      ? "② 还在盯的那几个不要了 → 逐个调 stop_monitor（reason 写清为什么不要了），再调 complete_task。"
+      : "")
+    + (unread.length
+      ? "③ 排着的那几条：要么先收下来看一眼（走①），要么对它那条哨兵调 stop_monitor"
+        + "（reason 写清为什么不要了）—— 主动撤掉的哨兵，它排着的结果按「明确放弃」算，"
+        + "连理由一起记在任务时间线上。用户也可以在界面的待发送托盘里直接删掉。"
+      : "")
   );
 }
 
-/** 这个任务当前这一轮是什么时候开跑的。会话行跨回合复用，所以 `turnStartedAt` 才是回合锚。 */
-async function currentTurnStartedAt(taskId: string): Promise<string | null> {
+/** 这个任务当前这一轮是哪条会话、什么时候开跑的。会话行跨回合复用，所以 `turnStartedAt` 才是回合锚。 */
+async function currentTurn(taskId: string): Promise<{ sessionId: string; since: string } | null> {
   const row = (await db
-    .select({ turnStartedAt: sessions.turnStartedAt, startedAt: sessions.startedAt })
+    .select({ id: sessions.id, turnStartedAt: sessions.turnStartedAt, startedAt: sessions.startedAt })
     .from(sessions)
     .where(and(eq(sessions.taskId, taskId), isNull(sessions.endedAt)))
     .orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt))).at(0);
-  return row?.turnStartedAt ?? row?.startedAt ?? null;
+  const since = row?.turnStartedAt ?? row?.startedAt;
+  return row && since ? { sessionId: row.id, since } : null;
 }
 
 /**
- * 完成确认落定之后：这一回合撤掉过哨兵吗。撤过就写一条时间线。
+ * 完成确认落定之后：这一回合**主动**撤掉过哨兵吗。撤过就写一条时间线。
  *
- * **跑在确认之后、任务还 running 的时候**，所以这时查到的 `stopped` 行必然是人或 agent 主动
- * 停的 —— 系统的那次收回（`stopMonitorsForTask`）要等任务真落 done 才发生，还没轮到。
+ * 判据是 `ended_by = 'actor'`，不是 `status = 'stopped'`（第 1 轮审查 N1）：同一个 stopped
+ * 状态下还有「推够 200 条事件自动停」和「系统回收」两种来由，拿状态当行为来源，就会把
+ * 一次额度自动停说成「本回合撤掉哨兵，撤的理由『推够了 200 条事件自动停』」。
+ *
+ * 时间线写到**这一回合那条会话**上，不是「最新创建的那条」（N2）：一个任务里可以有多条
+ * 会话（用户 @ 过谁就多一条），按最新创建投递会把这段说明写进另一位智能体的时间线里。
  *
  * 失败不往上抛：完成确认已经落库了，一条说明文字写不进去不该把它翻掉。
  */
 export async function noteMonitorsDropped(taskId: string): Promise<void> {
   try {
-    const since = await currentTurnStartedAt(taskId);
-    if (!since) return;
-    const dropped = await monitorsAffectedByCompletion(taskId, "stopped", since);
+    const turn = await currentTurn(taskId);
+    if (!turn) return;
+    const rows = await db.select(MONITOR_COLUMNS).from(monitors)
+      .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "ash"), eq(monitors.endedBy, "actor")));
+    const dropped: MonitorFacts[] = [];
+    for (const r of rows) {
+      // 时间窗：字符串比较成立是因为两列都是 `new Date().toISOString()`（util.ts 的 `now`），
+      // 同一种定长 UTC 格式，字典序就是时间序。
+      if (!(r.endedAt && r.endedAt >= turn.since)) continue;
+      if (await sparedByReview(r)) continue;
+      dropped.push(factsOf(r));
+    }
     if (dropped.length === 0) return;
     const detail = dropped.slice(0, 3).map((m) => {
       const why = (m.endedReason ?? "").trim();
-      return `${m.label}（${why ? `撤的理由「${why}」，` : ""}${monitorEventTally(m.events, m.command)}）`;
+      return `${m.label}（${why ? `撤的理由「${why}」，` : ""}${monitorEventTally(m.events, m.readOffset)}）`;
     }).join("；");
     const more = dropped.length > 3 ? `，另有 ${dropped.length - 3} 个` : "";
     await appendTaskTimeline(
       taskId,
       `本回合撤掉 ${dropped.length} 个哨兵后确认完成：${detail}${more}。`
       + "它们在等的结果不会再回来了——还需要的话得重新挂一个哨兵。",
+      { sessionId: turn.sessionId },
     );
   } catch (e) {
     console.error(`[ash] 记录「撤哨兵后完成」失败 task=${taskId}:`, e);

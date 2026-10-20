@@ -325,6 +325,17 @@ export function takeConfirmed(taskId: string): boolean {
   return confirmed.delete(taskId);
 }
 
+/**
+ * **撤掉一次还没结算的确认**。返回它本来在不在。
+ *
+ * 用在「确认之后又挂了哨兵」那一刻(task-complete.ts):那一次确认已经不成立了,而只清
+ * `tasks.complete_confirmed_at` 不够 —— settle 是两条道任一命中即算确认,内存这条快路留着
+ * 的话任务照旧落 done(第 1 轮审查 F1 的原话:不能只清 DB 而保留内存快路)。
+ */
+export function revokeConfirmed(taskId: string): boolean {
+  return confirmed.delete(taskId);
+}
+
 // Thrown by a run step when a stop was requested mid-flight, so the duet
 // pipeline unwinds to its top-level catch and settles as `canceled`.
 export class CanceledRun extends Error {

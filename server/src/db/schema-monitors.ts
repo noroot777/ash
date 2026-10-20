@@ -46,6 +46,16 @@ export const monitors = sqliteTable("monitors", {
   expiresAt: text("expires_at").notNull(),
   endedAt: text("ended_at"),
   endedReason: text("ended_reason"),
+  /**
+   * **谁让它停的**：`actor`=人点停或 agent 调 stop_monitor；`limit`=推满事件上限自动停；
+   * `system`=任务终态/归档/重启后没有出口被回收。null = 来源不详（存量行，或自己退出/到期
+   * 这类本来就不是「被停」的结局）。
+   *
+   * 单独一列而不是从 `status` 推：`stopped` 这一个状态下三种来由都会写（第 1 轮审查 N1
+   * 实测把「推够了 200 条事件自动停」说成了「本回合撤掉哨兵，撤的理由『推够了…』」）。
+   * 从 `ended_reason` 的文案反推同样不行 —— 那是一句随时会改的人话。
+   */
+  endedBy: text("ended_by"),
   // 谁起的这个哨兵(多人模式)。停它、看它都按任务归属判权,这一列只做记账。
   ownerUserId: text("owner_user_id"),
   // 出身:'ash' = ash server 自己起的进程(全功能);'claude' = claude CLI 内置 Monitor 的

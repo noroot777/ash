@@ -34,7 +34,7 @@ import { tasks, sessions } from "./db/schema.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
-import { confirmDone } from "./runs.js";
+import { confirmTaskComplete } from "./task-complete.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -218,15 +218,23 @@ async function applyReplay(
     return `验证结论（${stage}）当时因 MCP 通道中断没能写回，已从本回合的调用记录中补录。`;
   }
   if (call.tool === "complete_task") {
-    const at = now();
-    const updated = await db.update(tasks).set({ completeConfirmedAt: at, updatedAt: at }).where(and(
-      eq(tasks.id, taskId),
-      directionToken === undefined ? undefined : directionToken === null
-        ? isNull(tasks.activeDirectionToken)
-        : eq(tasks.activeDirectionToken, directionToken),
-    )).returning({ id: tasks.id });
-    if (!updated.length) return null;
-    confirmDone(taskId);
+    // **走共用入口**(task-complete.ts):这条旁路豁免的是「活跃回合」那道身份闸,不是业务约束。
+    // 第 1 轮审查 F1 实测过它绕开哨兵闸的样子:补录 1 条、确认写入、结算落 done、哨兵被停掉。
+    const confirm = await confirmTaskComplete({
+      taskId,
+      where: [
+        directionToken === undefined ? undefined : directionToken === null
+          ? isNull(tasks.activeDirectionToken)
+          : eq(tasks.activeDirectionToken, directionToken),
+      ],
+      staleError: "补录时方向身份已经换走了",
+    });
+    // 补录是「尽力恢复一条丢掉的调用」,拦下来就如实什么都不说 —— 这一轮照旧按没交卷结算,
+    // 而哨兵和它排着的结果一条不少(拦下来的理由本身已经由闸写进了任务时间线)。
+    if (!confirm.ok) {
+      console.warn(`[ash] replay complete_task(${taskId}) rejected: ${confirm.error}`);
+      return null;
+    }
     return "完成确认当时因 MCP 通道中断没能送达，已从本回合的调用记录中补录（否则这一轮会被记成失败）。";
   }
   if (call.tool === "pause_task") {

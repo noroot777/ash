@@ -60,7 +60,9 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
   if (before.status === "running" && before.pid === null) {
     const marked = await db
       .update(monitors)
-      .set({ status: "stopped", endedAt: now(), endedReason: reason })
+      // `endedBy: "actor"` = 人点停 / agent 调 stop_monitor。**单独记来源而不是从 stopped 反推**：
+      // 额度自动停、系统回收写的也是 stopped（见 schema 的 ended_by，第 1 轮审查 N1）。
+      .set({ status: "stopped", endedAt: now(), endedReason: reason, endedBy: "actor" })
       .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running"), isNull(monitors.pid)));
     // 标记落上了 ⇒ 这一行从此是终态,**运行时要跟着撤**:pid 还空着的行现在也可能挂着 tail
     // 和期限(见 monitor-reattach 的 pending 分支)。没落上说明同一瞬创建收口了,那条路由
@@ -76,7 +78,7 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
     if (row.status === "running") {
       // 用户/agent 主动停的不回推收尾事件：他就是为了不再被它叫醒才点的停。但已经攒在缓冲里
       // 的行要照常推完——那是已经发生的事实，而且任务还活着，收得下。
-      await finish(monitorId, "stopped", reason, null, { notify: false });
+      await finish(monitorId, "stopped", reason, null, { notify: false, endedBy: "actor" });
       const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
       return toTaskMonitor(after ?? row);
     }

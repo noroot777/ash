@@ -154,7 +154,7 @@ export async function ensureSchema() {
       start_anchor_width_ms INTEGER, tool_use_id TEXT,
       source_run TEXT, start_low_at TEXT, source_role TEXT,
       source_review_run TEXT, source_review_round INTEGER,
-      unit_token TEXT
+      unit_token TEXT, ended_by TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (
@@ -347,6 +347,10 @@ export async function ensureSchema() {
     // 这一次创建独有的资源记号:归属与整项退出的唯一凭证(见 schema-monitors.ts)。
     // 存量行一律 NULL ⇒ 孤儿后代只能落「证不出」,记责任、不下刀(第 12 轮审查 F1)。
     "ALTER TABLE monitors ADD COLUMN unit_token TEXT",
+    // 「谁让它停的」。status=stopped 有三种来由(主动点停 / 推满事件上限 / 系统回收),
+    // 拿 status 代替来源会把后两种说成「本回合撤掉了哨兵」(第 1 轮审查 N1)。存量行 NULL
+    // = 来源不详,一律不算主动撤。
+    "ALTER TABLE monitors ADD COLUMN ended_by TEXT",
     "ALTER TABLE monitor_reclaim_debts ADD COLUMN unit_token TEXT",
     // 「线索追到这里为止」的戳。**不是销账**:整项退出在当前平台证不出,所以行留着只盖戳
     // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。

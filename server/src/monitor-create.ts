@@ -63,6 +63,7 @@ import {
   attach, liveMonitorsOf, publish, serialize, toTaskMonitor, type Row,
 } from "./monitors.js";
 import { inspectProcess } from "./proc.js";
+import { holdCompletionForNewMonitor } from "./task-complete.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
 
@@ -83,7 +84,8 @@ export type StartMonitorInput = {
 };
 
 export type StartMonitorResult =
-  | { ok: true; monitor: TaskMonitor }
+  /** `notice` = 这次创建顺带改变了别的东西,调用方要原样带给 agent(目前只有一种:撤掉了它手里那份完成确认)。 */
+  | { ok: true; monitor: TaskMonitor; notice?: string }
   /** `needsWakeTarget` = 拒绝的理由是「说不清醒来叫谁」:调用方指定一个唤醒目标就能再来。 */
   | { ok: false; status: 400 | 404 | 409; error: string; needsWakeTarget?: true };
 
@@ -478,6 +480,8 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       expiresAt: new Date(startedAt.getTime() + timeoutMs).toISOString(),
       endedAt: null,
       endedReason: null,
+      // 「谁让它停的」只在真被停下来时才有值（见 schema 的 ended_by）。
+      endedBy: null,
       ownerUserId: input.ownerUserId ?? null,
       kind: "ash",
       nativeId: null,
@@ -607,7 +611,13 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       spawned.release();   // 命令从这一刻才真正开工,而它的身份在 ⑤ 已经完整落库
       handed = true;
       publish(row.taskId);
-      return { ok: true, monitor: toTaskMonitor(row) };
+      // ⑦ **这一刻 agent 手里可能正握着一份完成确认**:它先 complete_task 再 start_monitor,
+      //    那份确认已经不成立了 —— 不撤的话结算照旧落 done,刚起的这条当场被连坐停掉
+      //    (第 1 轮审查 F1 实测 confirmationStillSet=true / monitorAfter=stopped)。撤它必须
+      //    跟「数一数有几个哨兵」排同一条队,所以落在这个 `serialize` 里面;那一句话随创建
+      //    结果回给 agent,它读结果的那一眼就看到落位变了。**绝不抛**(见那个函数)。
+      const notice = await holdCompletionForNewMonitor(row.taskId, row.description);
+      return { ok: true, monitor: toTaskMonitor(row), ...(notice ? { notice } : {}) };
     } catch (e) {
       // 交接已经完成 ⇒ 这个进程归运行时了,这里再去收它反而是抢它的东西:原样抛出去。
       if (handed) throw e;

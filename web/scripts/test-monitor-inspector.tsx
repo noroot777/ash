@@ -10,6 +10,7 @@ import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
 import { formatInstant } from "../src/task-detail/utils.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
+import { emptyLogCopy } from "../src/monitors/monitorCopy.ts";
 import { MonitorWaitCard } from "../src/monitors/MonitorWaitCard.tsx";
 import { withMonitorTab } from "../src/monitors/useMonitorInspector.tsx";
 import type { TaskMonitorsState } from "../src/monitors/useTaskMonitors.ts";
@@ -520,4 +521,34 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
     "折叠态连正文都不渲染 —— 这一条钉住上面那句话的前提:正文的断言只能在真点击里做");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");
+// ── 空日志那一格：只说可证实的事实（第 1 轮审查 F3 的前端那一半）──────────────
+//
+// 被打回的那一版拿命令字符串的形状去断言「它等的条件始终没出现」：`until true; do sleep 1;
+// done` 的条件一开始就满足，哨兵正常退出、日志为空，而卡片同时写着「命令自己跑完了」和
+// 「那个条件始终没出现」—— 同一张卡上两句话互相打脸。现在只许说两样：静默了多久、怎么结束的。
+{
+  const silentLoop = "until true; do sleep 1; done";
+  const live = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, true);
+  assert.match(live, /一个字都还没吐/, "还在盯的只说现象");
+  assert.match(live, /已经静默/, "起点作数就说清哑了多久");
+  assert.doesNotMatch(
+    emptyLogCopy({ ...base, command: silentLoop, events: 0, startedAtExact: false }, true),
+    /已经静默/, "起点不作数就不许编一个时长出来",
+  );
+
+  const ended = (patch: Partial<TaskMonitor>) =>
+    emptyLogCopy({ ...base, command: silentLoop, events: 0, endedAt: "2026-08-25T10:00:05.000Z", ...patch }, false);
+  for (const [status, expect] of [
+    ["exited", /命令自己跑完了（退出码 0）/],
+    ["expired", /一直到盯满时长/],
+    ["stopped", /被停掉之前没有输出/],
+    ["lost", /这个进程已经不在了/],
+  ] as const) {
+    const text = ended({ status, exitCode: status === "exited" ? 0 : null });
+    assert.match(text, expect, `${status} 要按自己的结束方式说`);
+    assert.doesNotMatch(text, /条件/, "不许从「日志空」推断它等的条件没满足（F3）");
+  }
+  assert.match(ended({ status: "exited", exitCode: 2 }), /退出码 2/, "非 0 退出码是唯一线索，要带上");
+}
+
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空日志只说可证实的事实，空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");

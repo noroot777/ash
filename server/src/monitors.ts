@@ -152,8 +152,9 @@ export const publish = (taskId: string) => bus.publish({ type: "task.monitors", 
  */
 function settleInBackground(
   monitorId: string, status: Exclude<MonitorStatus, "running">, reason: string, code: number | null,
+  opts?: Parameters<typeof finish>[4],
 ): void {
-  void finish(monitorId, status, reason, code)
+  void finish(monitorId, status, reason, code, opts)
     .catch((e) => console.error(`[ash] 后台收尾失败 monitor=${monitorId}（${reason}）:`, e));
 }
 
@@ -359,7 +360,7 @@ async function flushBuffer(monitorId: string, rtOverride?: Runtime): Promise<voi
   if (events >= MONITOR_MAX_EVENTS) {
     // **不能 await**：这里正跑在 `serialize(monitorId, …)` 的队列里，而 finish 收尾时
     // 还要往同一条队列里排一次最后的 flush。await 它就是等自己后面那一位，当场死锁。
-    settleInBackground(monitorId, "stopped", `推够了 ${MONITOR_MAX_EVENTS} 条事件自动停——每条事件都要唤醒任务跑一轮，再盯下去就是白烧回合。真要继续，换一条过滤更紧的命令重起一个`, null);
+    settleInBackground(monitorId, "stopped", `推够了 ${MONITOR_MAX_EVENTS} 条事件自动停——每条事件都要唤醒任务跑一轮，再盯下去就是白烧回合。真要继续，换一条过滤更紧的命令重起一个`, null, { endedBy: "limit" });
   }
 }
 
@@ -376,7 +377,9 @@ export async function finish(
   status: Exclude<MonitorStatus, "running">,
   reason: string,
   exitCode: number | null,
-  opts: { notify?: boolean; keepBuffered?: boolean } = {},
+  // `endedBy` = **谁让它停的**(见 schema 的 ended_by)。缺省 `system`:拿不准的时候一律
+  // 不算主动撤 —— 说成「本回合撤掉了哨兵」是个会误导人的断言,说成系统回收顶多是少说一句。
+  opts: { notify?: boolean; keepBuffered?: boolean; endedBy?: "actor" | "limit" | "system" } = {},
 ): Promise<void> {
   const notify = opts.notify ?? true;
   const keepBuffered = opts.keepBuffered ?? true;
@@ -421,7 +424,7 @@ export async function finish(
     // 发生的事,跟谁写下结局无关。
     const result = await db
       .update(monitors)
-      .set({ status, endedAt: now(), endedReason: reason, exitCode })
+      .set({ status, endedAt: now(), endedReason: reason, exitCode, endedBy: opts.endedBy ?? "system" })
       .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running")));
     if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
       console.error(`[ash] 哨兵收尾放手 monitor=${monitorId}：条件更新没落上，结局已经有人写过了（${reason}）`);
@@ -430,8 +433,16 @@ export async function finish(
     }
     publish(row.taskId);
     const code = exitCode === null ? "" : `，退出码 ${exitCode}`;
-    const total = (await db.select({ events: monitors.events }).from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
-    await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（${monitorEventTally(total, row.command)}）`);
+    // 事件数和读取位置**一起重读**：两者要同时反映收尾前最后那一次 flush，各读各的会让
+    // 「推了 0 条」配上一个过期的位置，于是把「它说了但没送出去」说成「它什么都没说」。
+    const tallyRow = (await db
+      .select({ events: monitors.events, offset: monitors.offset })
+      .from(monitors).where(eq(monitors.id, monitorId))).at(0);
+    const total = tallyRow?.events ?? row.events;
+    await appendTaskTimeline(
+      row.taskId,
+      `哨兵结束：${row.description}${code}。${reason}（${monitorEventTally(total, tallyRow?.offset ?? row.offset)}）`,
+    );
     if (notify) await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`);
     // **追线索放在最后**:状态、时间线、通知都已落定,这一步只负责「能收的档收掉」。
     // 它会等到补刀生效(有界,见 `confirmReclaimed`)—— 于是这个函数返回时,要么进程确认不在了,
@@ -565,7 +576,7 @@ export async function finishOffline(
         return;
       }
       publish(base.taskId);
-      await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${reason}（${monitorEventTally(events, base.command)}）`);
+      await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${reason}（${monitorEventTally(events, readTo)}）`);
       await pushToTask(base, `【哨兵结束】${base.description}（monitorId=${base.id}）。${reason}`);
     } finally {
       // 撤运行时排在读日志之前(自己那条 tail 不停下来就会边收尾边继续推),所以中间这一段

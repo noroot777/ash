@@ -34,6 +34,7 @@ import { announceResumePrompt } from "./task-resume-prompt.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart, turnOutputHint } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
+import { holdCompletionAtSettlement } from "./task-complete.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
 import { markCliGoalStarted, persistRunGoal, readCliState } from "./task-cli-state.js";
 
@@ -136,6 +137,21 @@ export async function settleTaskStatus(
   if (t?.completeConfirmedAt) {
     await db.update(tasks).set({ completeConfirmedAt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
   }
+  // **确认在手 ≠ 可以落 done**(第 1 轮审查 F1)。确认那一刻过的那道哨兵闸只证明「那一刻」:
+  // 之后还可以挂新哨兵、断线补录还能从旁路写进来一份确认。所以 done 落位之前再问一次同一份
+  // 判据 —— 这是那条不变量的最后一关,而且不依赖任何人调接口。拦下来不是失败,是**检查点
+  // 暂停**:哨兵醒来会把这条会话重新叫起来,预约的审查也跟着等(见 task-complete.ts 文件头)。
+  //
+  // **按需问、问一次**:它有副作用(落 resumePrompt + 时间线),而这一轮可能根本不往 done 走
+  // (手停、组暂停、提问、崩了)—— 那些落位本来就留着哨兵,不该被这一段碰。判据是「这一轮
+  // **有可能**落 done」而不是「交了卷」:`ASH_LAX_DONE` 下没交卷也会落 done,一样会连坐。
+  let heldNote: string | null | undefined;
+  const monitorHold = async (): Promise<string | null> => {
+    if (heldNote === undefined) {
+      heldNote = confirmed || !STRICT_DONE ? await holdCompletionAtSettlement(taskId) : null;
+    }
+    return heldNote;
+  };
   // 执行者结算 → 按需唤醒团队调度者(§Team)。只有提问、失败、以及 reportBack 的
   // done 会投递;普通 done 静默(UI 自己会更新,不花一轮模型调用)。非团队任务
   // (parentId 空)里 notifyTeamLead 直接返回。
@@ -153,8 +169,9 @@ export async function settleTaskStatus(
   if (t?.followUpFrom) {
     // 旁路回合(就地验证)恢复的可能是 paused/backlog 一类的原状态,不止三个终态。
     const back = t.followUpFrom as Parameters<typeof setStatus>[1];
-    const consumedCheckpoint = !!(confirmed && t.resumePrompt);
-    if (confirmed) {
+    const hold = confirmed ? await monitorHold() : null;
+    const consumedCheckpoint = !!(confirmed && !hold && t.resumePrompt);
+    if (confirmed && !hold) {
       await db.update(tasks).set({
         followUpFrom: null,
         // checkpoint-paused 上的真人消息先保留旧检查点,避免一句普通追问把恢复指令吞掉;
@@ -168,6 +185,18 @@ export async function settleTaskStatus(
       await setStatus(taskId, "done"); // done 的终态钩子自会推进队列
       notify("done");
       return { status: "done", confirmedDone: true, nativeTurn };
+    }
+    if (hold) {
+      // 续聊回合交了卷、但名下还有没了结的哨兵:**不能回那个终态**(回去 = 终态连坐当场把
+      // 哨兵停掉、排着的结果作废,正是这条不变量要拦的),落 paused 让它醒得过来。旁路身份
+      // 要一起清掉,否则队列会继续把它当成一个「旁路回合」记账。
+      const { serializeQueueClaims } = await import("./queue-seat.js");
+      await serializeQueueClaims(async () => {
+        await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+        await setStatus(taskId, "paused");
+      });
+      await announceResumePrompt(taskId);
+      return { status: "paused", note: hold, confirmedDone: false, nativeTurn };
     }
     // 「清旁路身份」与「恢复原状态」必须对队列推进原子:分开写的话,两次 UPDATE 之间
     // 任务是 running + followUpFrom=null —— 前项此刻让位,推进看到的是一个「真执行」,
@@ -249,6 +278,14 @@ export async function settleTaskStatus(
     await setStatus(taskId, "failed");
     notify("failed");
     return { status: "failed", confirmedDone: false, nativeTurn };
+  }
+  const held = await monitorHold();
+  if (held) {
+    // 交了卷,但名下还有会被 done 毁掉的哨兵/哨兵结果 ⇒ 检查点暂停。排在 `exitStatus !== 0`
+    // 之后:进程异常退出是另一回事,崩了就是崩了。
+    await setStatus(taskId, "paused");
+    await announceResumePrompt(taskId);
+    return { status: "paused", note: held, confirmedDone: false, nativeTurn };
   }
   if (confirmed || !STRICT_DONE) {
     await setStatus(taskId, "done");

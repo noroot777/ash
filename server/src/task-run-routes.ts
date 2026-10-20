@@ -22,7 +22,7 @@ import { resolveGate } from "./duet/gates.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
-import { monitorsBlockingComplete, noteMonitorsDropped } from "./task-complete-monitors.js";
+import { confirmTaskComplete } from "./task-complete.js";
 import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
@@ -31,7 +31,7 @@ import { RUNS_DIR } from "./paths.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
-import { claimTurn, confirmDone, releaseTurn, stopTask } from "./runs.js";
+import { claimTurn, releaseTurn, stopTask } from "./runs.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
@@ -310,15 +310,13 @@ api.post("/tasks/:id/complete", async (c) => {
       ? "完成确认的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 complete_task"
       : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），完成确认已拒绝写入" }, 409);
   }
-  // ── 哨兵闸：挂着哨兵就不许收工（见 task-complete-monitors.ts 的文件头）──────────
+  // ── 落确认走共用入口（task-complete.ts）──────────────────────────────────────
+  // 身份校验留在这里（这一条通道独有的口径、独有的措辞），闸和落库那一段必须共用 ——
+  // 补录那条旁路就是因为「只在这里问了一次」才走穿了整条不变量（第 1 轮审查 F1）。
   // 排在令牌校验**之后**：身份没对上的请求连「你名下有哪几个哨兵」都不该看见。
-  const blocked = await monitorsBlockingComplete(taskId);
-  if (blocked) return c.json({ error: blocked }, 409);
-  const updated = await db
-    .update(tasks)
-    .set({ completeConfirmedAt: now(), updatedAt: now() })
-    .where(and(
-      eq(tasks.id, taskId),
+  const confirm = await confirmTaskComplete({
+    taskId,
+    where: [
       eq(tasks.status, "running"),
       r.activeTurnToken === null
         ? isNull(tasks.activeTurnToken)
@@ -326,12 +324,10 @@ api.post("/tasks/:id/complete", async (c) => {
       r.activeDirectionToken === null
         ? isNull(tasks.activeDirectionToken)
         : eq(tasks.activeDirectionToken, r.activeDirectionToken),
-    ))
-    .returning({ id: tasks.id });
-  if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，完成确认未写入" }, 409);
-  confirmDone(taskId);
-  // 闸只拦得住「还挂着」的那些；「先撤再完成」是合法动作的合法组合，拦不得，但要留下痕迹。
-  await noteMonitorsDropped(taskId);
+    ],
+    staleError: "当前回合已经结束或已被引导，完成确认未写入",
+  });
+  if (!confirm.ok) return c.json({ error: confirm.error }, 409);
   // 续聊回合(followUpFrom 非空)确认完成 = 把任务推进到 done;正常回合就是 done。
   return c.json({ confirmed: true, willSettleAs: "done" });
 });
