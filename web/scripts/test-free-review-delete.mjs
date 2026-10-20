@@ -4,18 +4,24 @@ import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
-// 派审对话框里删审查者。五段，每段一个干净页面：
+// 派审对话框里删审查者。每一段一张干净页面：
 //
-// ① 基本面：每一行都有自己的删除入口（按钮不能套按钮,所以行是 div + 两颗按钮），点它只
-//    开确认框,不会顺手把这一行选中,也不会把外面那层派审对话框一起关掉；取消不发请求；
-//    删掉的是**全局配置**,确认框要说清它会从所有任务的列表里消失；删到本任务已经预约的
+// ① 基本面：每一行都有自己的删除入口（按钮不能套按钮，所以行是 div + 两颗按钮），点它只
+//    开确认框，不会顺手把这一行选中，也不会把外面那层派审对话框一起关掉；取消不发请求；
+//    删掉的是**全局配置**，确认框要说清它会从所有任务的列表里消失；删到本任务已经预约的
 //    那位时点名「本任务」；删掉选中项下一位顶上；删光了摊开新建表单。
-// ② 草稿面：删掉被预约引用的审查者会让服务端撤掉预约、状态跟着变。那不等于「用户重新
-//    打开了对话框」——正在写的审查者/检查类型/复审轮数/附言一个都不许被远端刷新打回。
-// ③ 失败面：DELETE 报错后确认框留着,再点一次要真的重试;两个框都不许因此消失。
-// ④ 乱序面：状态晚到会触发第二次读清单,如果它是删除之前发出的,回来时必须整份丢掉重读,
-//    不能把刚删掉的那位贴回清单（那时提示还写着「已删除」）。
-// ⑤ 焦点面：删掉选中项之后,焦点要留在对话框里,不能掉到 body 上。
+// ② 草稿面：删掉被预约引用的审查者会让服务端撤掉预约、任务状态跟着变。那不等于「用户重新
+//    打开了对话框」—— 正在写的审查者 / 检查类型 / 轮数 / 附言一个都不许被远端刷新打回。
+// ③ 失败面：DELETE 报错后确认框留着，再点一次要真的重试；两个框都不许因此消失。
+// ④ 就绪面：任务状态还没到就**不开放编辑**（摆加载态、没有可填的表单、提交按钮灰着）。
+//    否则在空表单上写的东西，等状态到了会被那一次初始化整套盖掉。
+// ⑤ 同步面：别的页面删掉了本页选中的那位 —— 任务状态一变，本页要重读权威清单、让失效的
+//    选中项回退并说一声，而不是继续摆着一个点下去才报「审查者不存在」的配置；与此同时
+//    用户正在填的附言一个字都不能动。
+// ⑥ 乱序面：同步那次读取被按在半空，期间本页删掉一位；放行后旧清单不许把它贴回来。
+// ⑦ 换任务面：对话框开着的时候任务被换掉（后退 / 切任务，容器不重建组件），草稿必须整套
+//    重来，提交发出去的必须是**新任务**自己的内容，不能把写给 A 的附言保存到 B 身上。
+// ⑧ 焦点面：删掉选中项之后，焦点要留在对话框里，不能掉到 body 上。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
@@ -63,13 +69,20 @@ try {
   // 自己 fulfill 了这一次请求（用来演慢响应和 503）。
   const open = async ({ query = "", onList, onDelete } = {}) => {
     const page = await browser.newPage({ viewport: { width: 1080, height: 820 } });
-    const store = { reviewers: initialReviewers(), deleted: [], listCalls: 0, deleteCalls: 0 };
+    const store = { reviewers: initialReviewers(), deleted: [], dispatched: [], listCalls: 0, deleteCalls: 0 };
     await page.route("**/api/llm-providers", (route) => json(route, []));
     await page.route("**/api/agents", (route) => json(route, AGENTS));
     await page.route("**/api/reviewer-profiles*", async (route) => {
       store.listCalls += 1;
       if (await onList?.(store, route)) return;
       return json(route, store.reviewers);
+    });
+    await page.route("**/free-workflow/review", async (route) => {
+      store.dispatched.push({
+        taskId: new URL(route.request().url()).pathname.split("/").at(-3),
+        body: JSON.parse(route.request().postData() ?? "{}"),
+      });
+      return json(route, { ok: true }, 200);
     });
     await page.route("**/api/reviewer-profiles/*", async (route) => {
       if (route.request().method() !== "DELETE") return json(route, { error: "unhandled" }, 404);
@@ -84,7 +97,7 @@ try {
     const dialog = page.locator(".free-review-dialog");
     const confirm = page.locator(".task-confirm-dialog");
     await dialog.waitFor();
-    await page.locator(".free-review-reviewer-row").first().waitFor();
+    if (!query) await page.locator(".free-review-reviewer-row").first().waitFor();
     return {
       page,
       store,
@@ -94,6 +107,8 @@ try {
       trash: (name) => page.getByRole("button", { name: `删除审查者「${name}」` }),
       confirmDelete: () => confirm.getByRole("button", { name: "删除", exact: true }),
       selectedName: () => dialog.locator(".free-review-reviewer-pick[aria-selected='true'] b").innerText(),
+      submit: () => dialog.locator("footer button[type='submit']"),
+      note: () => dialog.locator(".free-review-note textarea"),
     };
   };
 
@@ -226,13 +241,47 @@ try {
     await page.close();
   }
 
-  // ── ④ 乱序面：删除之前发出的那份清单回来了，不能把删掉的那位贴回去 ──────────────
+  // ── ④ 就绪面：任务状态还没到就不开放编辑 ─────────────────────────────────
+  {
+    const ui = await open({ query: "?state=late" });
+    const { page, dialog } = ui;
+    await dialog.locator(".free-review-loading").waitFor();
+    assert.match(await dialog.locator(".free-review-loading").innerText(), /正在读取任务状态/);
+    assert.equal(await page.locator(".free-review-reviewer-row").count(), 0);
+    assert.equal(await ui.note().count(), 0, "状态没到就不该给出可填的表单");
+    assert.equal(await ui.submit().isDisabled(), true);
+
+    await page.evaluate(() => window.freeReviewFixture.arrive());
+    await page.locator(".free-review-reviewer-row").first().waitFor();
+    assert.equal(await ui.selectedName(), "opus5", "状态到了之后要按这项任务的预约初始化");
+    assert.equal(await ui.submit().isDisabled(), false);
+    await page.close();
+  }
+
+  // ── ⑤ 同步面：别处删掉了本页选中的那位 ───────────────────────────────────
+  {
+    const ui = await open();
+    const { page, store, dialog } = ui;
+    const note = "清单同步不该把我正在写的附言碰掉";
+    await ui.note().fill(note);
+    // 另一个页面在设置页里把 opus5 删了；服务端随后清引用、撤预约并发 task.review。
+    store.reviewers = store.reviewers.filter((item) => item.id !== "reviewer-2");
+    await page.evaluate(() => window.freeReviewFixture.cancelReservation());
+
+    await ui.row("opus5").waitFor({ state: "detached" });
+    assert.equal(await ui.selectedName(), "顶级审查", "选中的那位没了，要替用户回退到还在的那位");
+    assert.match(await page.getByTestId("notices").innerText(), /原先选中的审查者已被删除，已替你改选「顶级审查」/);
+    assert.equal(await ui.note().inputValue(), note, "清单同步不许动用户正在填的东西");
+    assert.equal(await ui.submit().isDisabled(), false);
+    await page.close();
+  }
+
+  // ── ⑥ 乱序面：删除之前发出的那份清单回来了，不能把删掉的那位贴回去 ──────────────
   {
     let release;
     // 下一次读清单按在半空等这里放行，而且回的是**此刻**（删除之前）的那份清单。
     const gate = { hold: false, held: new Promise((resolve) => { release = resolve; }) };
     const ui = await open({
-      query: "?state=late",
       onList: async (store, route) => {
         if (!gate.hold) return false;
         gate.hold = false;
@@ -246,7 +295,7 @@ try {
     assert.equal(await page.locator(".free-review-reviewer-row").count(), 3);
 
     gate.hold = true;
-    await page.evaluate(() => window.freeReviewFixture.arrive());
+    await page.evaluate(() => window.freeReviewFixture.bumpState());
     await ui.row("顶级审查").hover();
     await ui.trash("顶级审查").click();
     await confirm.waitFor();
@@ -258,12 +307,45 @@ try {
     await page.waitForTimeout(500);
     assert.equal(await ui.row("顶级审查").count(), 0, "删除之前发出的清单回来了，不能把删掉的那位贴回去");
     assert.deepEqual(store.reviewers.map((item) => item.name), ["opus5", "grok4.6"]);
-    assert.ok(store.listCalls >= 3, "整份丢掉之后应当重读一次清单，而不是停在旧世界");
     assert.equal(await page.locator(".free-review-reviewer-row").count(), 2);
     await page.close();
   }
 
-  // ── ⑤ 焦点面：删掉选中项之后焦点要留在对话框里 ────────────────────────────────
+  // ── ⑦ 换任务面：草稿属于「这个任务的这一次打开」 ────────────────────────────
+  {
+    const gate = { slow: false };
+    const ui = await open({
+      onList: async (store, route) => {
+        if (!gate.slow) return false;
+        await sleep(400);
+        await json(route, store.reviewers);
+        return true;
+      },
+    });
+    const { page, store, dialog } = ui;
+    await ui.note().fill("只给任务 A 的附言，不能发给任务 B");
+
+    gate.slow = true;
+    await page.evaluate(() => window.freeReviewFixture.switchTask());
+    await page.getByTestId("current-task").getByText("task-b").waitFor();
+    // 换任务那一瞬：旧草稿已经不属于当前任务，表单先收起来，提交按钮灰着。
+    assert.equal(await ui.note().count(), 0, "任务换了，不能继续摆着上一个任务的草稿");
+    assert.equal(await ui.submit().isDisabled(), true);
+
+    await page.locator(".free-review-reviewer-row").first().waitFor();
+    assert.equal(await ui.note().inputValue(), "任务 B 自己的附言", "要按新任务自己的预约重新初始化");
+    assert.equal(await ui.selectedName(), "grok4.6");
+    assert.equal(await dialog.locator(".free-review-options select").inputValue(), "syntax");
+    assert.equal(await dialog.locator(".free-review-retry-field input").inputValue(), "3");
+
+    await ui.submit().click();
+    await page.waitForFunction(() => true);
+    await page.waitForTimeout(200);
+    assert.deepEqual(store.dispatched.map((item) => [item.taskId, item.body.note]), [["task-b", "任务 B 自己的附言"]]);
+    await page.close();
+  }
+
+  // ── ⑧ 焦点面：删掉选中项之后焦点要留在对话框里 ────────────────────────────────
   {
     const ui = await open();
     const { page, confirm } = ui;

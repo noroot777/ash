@@ -85,6 +85,8 @@
 .free-review-dialog > footer button.is-primary { border-color:var(--accent); background:var(--accent); color:white; }
 .free-review-dialog > footer button:disabled { opacity:.5; }
 .free-review-loading { display:flex; min-height:260px; align-items:center; justify-content:center; gap:7px; color:var(--faint); }
+.free-review-loading.is-error { color:var(--red); }
+.free-review-loading button { height:26px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 10px; color:var(--muted); font-size:10px; }
 .reviewer-profile-fields { display:grid; gap:10px; }
 .free-review-run-override { display:grid; gap:9px; margin-top:10px; border-top:1px solid var(--line); padding-top:10px; }
 .free-review-run-override > label > span { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }

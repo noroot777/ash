@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AgentExecutorProfile, FreeReviewCheckMode, FreeReviewExecutorOverride, ReviewerProfile } from "@ash/shared";
 import { MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
-import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, Trash, X } from "@phosphor-icons/react";
+import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { reviewerDeleteMessage, settledDisputeRounds } from "./freeReviewCopy.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
@@ -71,15 +71,29 @@ export function FreeReviewDialog({
   const [saveMode, setSaveMode] = useState<ReviewerRunSaveMode>("once");
   const [newName, setNewName] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const [busy, setBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ReviewerProfile | null>(null);
-  // 这份表单只在「打开这一次」初始化一次。对话框开着的时候远端预约字段照样会变 —— 别的
-  // 页面改了预约、自动复审推进了一轮，以及**在这个对话框里删掉被预约引用的那位审查者**
-  // （服务端会顺手取消那条预约）。这些都不等于「用户重新打开了对话框」：正在写的草稿不
-  // 是已经保存的旧预约，不该被一次远端刷新冲掉（实测：删掉另一位审查者，刚改好的审查者、
-  // 检查类型、复审轮数和整段附言会一起被打回）。三个入口都写成
-  // `{open && <FreeReviewDialog …>}`，所以「挂载一次 = 打开一次」，这个 ref 跟着对话框活。
-  const initialized = useRef(false);
+  /*
+   * 这个对话框里有两样东西，生命周期完全不同，必须分开管，别拿一个去挡另一个：
+   *
+   * ① **草稿**（选中谁、检查类型、轮数、附言、执行器覆盖、新建表单）属于「某个任务的
+   *    某一次打开」。它只按 taskId 初始化一次：远端预约字段在对话框开着的时候照样会变
+   *    （别的页面改了预约、自动复审推进了一轮、在这里删掉被预约引用的那位审查者——服务端
+   *    会顺手撤掉预约），那都不等于「用户重新打开了对话框」，正在写的草稿不是已经保存的
+   *    旧预约。反过来，**任务一旦被换掉**（浏览器后退、侧栏切任务；容器没有按 task.id
+   *    重建组件），这份草稿就不再属于当前任务了，必须整套重来 —— 否则会把给 A 写的附言
+   *    保存到 B 身上。所以这里记的是「为哪个任务初始化过」，不是一个布尔开关。
+   *
+   * ② **审查者清单**是一份**全局配置**，别的页面（设置页就有删除入口）随时能删掉其中一
+   *    位。它必须跟着远端走：任务状态每变一次就重读一次权威清单，只更新清单本身和**确实
+   *    失效**的选中项。保护用户输入不等于停止同步远端资源——那会让这里一直摆着一个已经
+   *    不存在的配置，点下去才报「审查者不存在」。
+   */
+  const [initializedFor, setInitializedFor] = useState<string | null>(null);
+  const initializedForRef = useRef<string | null>(null);
+  initializedForRef.current = initializedFor;
   // 审查者清单的代次：每成功写一次（删除 / 新建 / 覆盖）就 +1，比它旧的在飞响应整份丢弃。
   // `alive` 只能证明这个 effect 还活着，证明不了这份响应比最近一次写操作新 —— 一个先发后
   // 到的 GET 会把刚删掉的那位又贴回清单，而提示还写着「已删除」。
@@ -88,8 +102,13 @@ export function FreeReviewDialog({
   // 初始化要读「清单回来那一刻」的状态，而不是某次渲染闭包里的那一份。
   const stateRef = useRef(state);
   stateRef.current = state;
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   const hasState = !!state;
   const refocusAfterDelete = useRef(false);
+  // 表单摊开的前提：**这个任务**的状态和审查者清单都到齐了。少一样都不许开放编辑 ——
+  // 在还没有真实状态的空表单上写的东西，等状态到了会被那一次初始化整套盖掉。
+  const ready = initializedFor === taskId && !loading;
   const postMerge = !!postMergeTarget;
   const parsedRetryLimit = parseRetryLimit(retryLimit);
   // 合并结果审查本来就不复审（提交时写死 0），别让那条禁用的输入卡住它的提交按钮。
@@ -127,10 +146,13 @@ export function FreeReviewDialog({
 
   useEffect(() => { dialog.current?.focus(); }, []);
 
+  // ① 草稿初始化：每个任务只做一次（见上面那段说明）。
   useEffect(() => {
-    // 已经按一份真实状态初始化过就不再来第二遍（见 initialized 的说明）。
-    if (initialized.current) return;
+    if (initializedForRef.current === taskId) return;
+    // 这个任务的状态还没到（父层那条 GET 还在飞）：先摆加载态，别让人在空表单上开写。
+    if (!hasState) return;
     let alive = true;
+    setLoadError(null);
     const read = () => {
       const gen = listGen.current;
       Promise.all([api.reviewerProfiles(), api.agents()]).then(([nextReviewers, nextProfiles]) => {
@@ -140,8 +162,6 @@ export function FreeReviewDialog({
         if (gen !== listGen.current) { read(); return; }
         // 读的是「清单回来那一刻」的状态，不是某次渲染闭包里的那一份。
         const opened = stateRef.current;
-        // 状态还没到（父层那条 GET 还在飞）就先按默认值摆出来，等它到了再补这一次初始化。
-        initialized.current = !!opened;
         setReviewers(nextReviewers);
         setProfiles(nextProfiles);
         setDraft(createReviewerDraft(nextProfiles));
@@ -160,12 +180,50 @@ export function FreeReviewDialog({
         setSaveMode("once");
         setNewName("");
         setCreating(nextReviewers.length === 0);
-      }).catch((error) => notify(error instanceof Error ? error.message : "审查者读取失败"))
-        .finally(() => { if (alive) setLoading(false); });
+        setInitializedFor(taskId);
+      }).catch((error) => {
+        if (!alive) return;
+        // 读不到清单就老实摆在那儿给一颗重试，别摊开一份空表单冒充「你还没有审查者」。
+        const message = error instanceof Error ? error.message : "审查者读取失败";
+        setLoadError(message);
+        notify(message);
+      }).finally(() => { if (alive) setLoading(false); });
     };
     read();
     return () => { alive = false; };
-  }, [hasState, notify]);
+  }, [hasState, notify, reloadToken, taskId]);
+
+  // ② 清单同步：审查者是全局配置，任务状态每变一次就重读一次权威清单（删掉被这项任务
+  //    引用的那位时，服务端会清引用、撤预约并发 task.review，这里正好收得到）。只动清单
+  //    和确实失效的选中项，附言 / 检查类型 / 轮数这些正在填的东西一个都不碰。
+  const syncToken = state?.stateVersion ?? 0;
+  useEffect(() => {
+    if (initializedForRef.current !== taskId) return;
+    let alive = true;
+    const gen = listGen.current;
+    api.reviewerProfiles().then((next) => {
+      if (!alive || gen !== listGen.current) return;
+      setReviewers(next);
+      const current = selectedIdRef.current;
+      if (!current || next.some((item) => item.id === current)) return;
+      // 选中的那位在别处被删了。不能就这么摆着让人点一个注定失败的提交。
+      const fallback = next[0];
+      if (fallback) {
+        selectReviewer(fallback);
+        notify(`原先选中的审查者已被删除，已替你改选「${fallback.name}」`);
+        return;
+      }
+      setSelectedId("");
+      setRunDraft(reviewerRunDraft(null));
+      setSaveMode("once");
+      setNewName("");
+      setCreating(true);
+      notify("审查者已被删除，请先新建一位再派审");
+    }).catch(() => {
+      // 同步失败就先用手上这份，下一次状态变化再试；这是后台同步，不拿它打扰用户。
+    });
+    return () => { alive = false; };
+  }, [notify, syncToken, taskId]);
 
   // 删成功那一下，原来那颗删除按钮已经不在了；确认框只在「原来那个元素还连着」时才还
   // 焦点，于是焦点掉到 body 上，键盘就从对话框里掉了出去。给它补一个落点：对话框本身。
@@ -234,7 +292,14 @@ export function FreeReviewDialog({
   };
 
   const submit = async () => {
-    if (!selectedId || busy || loading) return;
+    if (!selectedId || busy || !ready) return;
+    // 草稿属于「这个任务的这一次打开」。任务在对话框开着的时候被换掉（浏览器后退、侧栏切
+    // 任务——容器没有按 task.id 重建组件），这份草稿就不再属于当前任务了，绝不能拿它去
+    // 提交：那会把写给 A 的附言保存到 B 身上。重新初始化期间这里只是挡一下，等它完成。
+    if (initializedForRef.current !== taskId) {
+      notify("任务已经切换，正在重新读取这项任务的审查配置");
+      return;
+    }
     if (retryLimitInvalid) {
       notify(`自动复审轮数必须是 0-${MAX_FREE_REVIEW_RETRIES} 的整数`);
       return;
@@ -329,7 +394,13 @@ export function FreeReviewDialog({
           <div><h2 id="free-review-title">{dialogTitle}</h2><p>{postMerge ? "在验收时冻结的目标分支快照上做一次可选检查；未通过时另建修复任务。" : reservationMode ? "选择审查者与检查深度；执行回合正常结束后自动开始。托盘里还排着消息时先把它们发完，停止、异常或等待答复时保留预约。" : "选择一套审查者配置，再决定检查深度与失败后的自动复审次数。"}</p></div>
           <button type="button" aria-label={`关闭${dialogTitle}`} disabled={busy} onClick={onClose}><X size={15} /></button>
         </header>
-        {loading ? <div className="free-review-loading"><SpinnerGap size={15} className="is-spinning" />正在读取审查者…</div> : (
+        {!ready ? (
+          <div className={`free-review-loading${loadError ? " is-error" : ""}`}>
+            {loadError
+              ? <><WarningCircle size={15} />{loadError}<button type="button" onClick={() => { setLoadError(null); setLoading(true); setReloadToken((value) => value + 1); }}>重试</button></>
+              : <><SpinnerGap size={15} className="is-spinning" />{hasState ? "正在读取审查者…" : "正在读取任务状态…"}</>}
+          </div>
+        ) : (
           <div className="free-review-dialog-body">
             <section className="free-review-reviewers">
               <div className="free-review-section-title"><b>审查者</b><button type="button" onClick={() => setCreating((value) => !value)}><Plus size={11} />新建</button></div>
@@ -437,7 +508,7 @@ export function FreeReviewDialog({
         <footer>
           {!postMerge && state?.reviewReservation?.armed && <button type="button" disabled={busy} onClick={() => void cancelReservation()}>取消预约</button>}
           <button type="button" disabled={busy} onClick={onClose}>{!postMerge && state?.reviewReservation?.armed ? "关闭" : "取消"}</button>
-          <button className="is-primary" type="submit" aria-keyshortcuts={sendKeys.ariaShortcut} disabled={busy || loading || !selectedId || retryLimitInvalid}>
+          <button className="is-primary" type="submit" aria-keyshortcuts={sendKeys.ariaShortcut} disabled={busy || !ready || !selectedId || retryLimitInvalid}>
             {busy ? (reservationMode && !postMerge ? "保存中…" : "启动中…") : postMerge ? "开始审查" : reservationMode ? (state?.reviewReservation?.armed ? "保存预约" : "预约审查") : "开始审查"}
           </button>
         </footer>
