@@ -46,7 +46,7 @@ if (args.includes("--slow")) setTimeout(say, 3000); else say();
 );
 
 /** 造一个跑假 CLI 的常驻会话;prompt 直接当最后一个 argv 传进去便于断言。 */
-function open(opts: { slow?: boolean; poisonFirst?: boolean } = {}) {
+function open(opts: { slow?: boolean; poisonFirst?: boolean; slowFinalize?: boolean } = {}) {
   const spawned: string[][] = [];
   const finalized: number[] = [];
   const handle = openCodexResident({
@@ -68,7 +68,12 @@ function open(opts: { slow?: boolean; poisonFirst?: boolean } = {}) {
     },
     killTurn: (child) => child.kill("SIGTERM"),
     // 真实实现是 cleanupAfterRun(回收这一轮甩到后台的后代);这里只记「谁被收过」。
-    finalizeTurn: async (child) => { finalized.push(child.pid ?? -1); },
+    finalizeTurn: async (child) => {
+      // slowFinalize:真的 cleanupAfterRun 要等 SIGTERM→2s→SIGKILL,快不了。只有这样才分得清
+      // 「cleanup 返回了」和「清理真的做完了」。
+      if (opts.slowFinalize) await new Promise((r) => setTimeout(r, 150));
+      finalized.push(child.pid ?? -1);
+    },
   });
   return { handle, spawned, finalized };
 }
@@ -287,6 +292,28 @@ console.log("8) 轮次远超旧的 16 轮上限,也不许提前回收任何一�
   await handle.cleanup();
   if (finalized.length === TURNS) ok("cleanup 一次把 20 个回合全收齐");
   else fail(`cleanup 只收了 ${finalized.length}/${TURNS} 个回合`);
+  handle.kill();
+  await sub.finished;
+}
+
+// 「收过了」的凭据必须是**那次清理真的做完了**:划掉早于 await 时,第二个 cleanup 看到册上
+// 没它就立刻返回,其实清理还在途 —— 调用方(finalizeAbandonedRun)于是在后代还没收干净时
+// 就认为收完了(第 2 轮审查 N1)。
+console.log("9) 并发 cleanup 等的是在途那份清理,不是「册上没它了」");
+{
+  const { handle, finalized } = open({ slowFinalize: true });
+  const sub = subscribe(handle.events);
+  await sub.waitTurns(1);
+  handle.send("第二条");
+  await sub.waitTurns(2);
+  const first = handle.cleanup();
+  const second = handle.cleanup();
+  await second;
+  if (finalized.length === 2) ok("第二个 cleanup 等到了在途那份清理做完才返回");
+  else fail(`第二个 cleanup 提前返回了,此刻只收掉 ${finalized.length}/2 个回合`);
+  await first;
+  if (finalized.length === 2) ok("两个调用合起来也只收一遍(不重复动手)");
+  else fail(`重复动手了:${finalized.length} 次`);
   handle.kill();
   await sub.finished;
 }

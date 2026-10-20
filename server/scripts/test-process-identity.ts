@@ -78,7 +78,12 @@ async function goneWithin(pid: number, ms: number): Promise<boolean> {
 }
 
 // ── ② cleanupAfterRun:根进程已退出 → 后代照样清,那个号一刀不发 ────────────────
-{
+// POSIX 专属:认后代靠继承的追踪 fd,而 openTrackFd 在 Windows 上明确返回空(那边没有零
+// 依赖的反查手段)。Windows 的对应能力是「从已退出根进程保留下来的 ParentProcessId 往下
+// 走」(killEscapees 的 IS_WINDOWS 分支),那条要在 Windows 真机上验,本机验不了就不假装。
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 没有追踪 fd,跳过 ②(那边的对应路径是 ppid 树,需真机验)");
+} else {
   const bystander = sleeper(); // 「这个号现在是别人的程序」
   const track = openTrackFd();
   assert.ok(track.fd !== null && track.path, "这条用例要靠追踪 fd 认后代");
@@ -135,7 +140,11 @@ async function goneWithin(pid: number, ms: number): Promise<boolean> {
 }
 
 // ── ⑤ 组长已经死了、组里还有后代:号没人占 → 照打(「补刀不看组长死没死」)──────────
-{
+// 同样是 POSIX 专属:这一条验的是 `kill(-pid)` 的进程组语义,Windows 上根本没有进程组
+// (killTree 在那边是 `taskkill /T`,按进程表的父子关系走)。
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 没有进程组,跳过 ⑤(那边同一件事由 taskkill /T 的树遍历覆盖)");
+} else {
   const leader = spawn(process.execPath, ["-e", `
     const { spawn } = require("node:child_process");
     const kid = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });

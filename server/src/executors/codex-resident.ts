@@ -65,13 +65,27 @@ export function openCodexResident(params: {
   // 一个 EventEmitter 加几个已经 EOF 的 stdio 流,量级上远小于「误杀用户服务」的代价。
   // 真要给引用量设上限,方向是把每轮要记的东西**瘦成租约**(pid + 启动时间 + 追踪文件路径,
   // 不持有对象),而不是把 16 改成一个更大的常数 —— 换个常数只是把同一个误杀推迟到更后面。
-  const finalizeTurn = async (child: ChildProcess): Promise<void> => {
-    if (!unfinalized.delete(child)) return; // 收过了(幂等)
-    try {
-      await params.finalizeTurn(child);
-    } catch (error) {
-      console.warn("[ash] 回收 codex 常驻回合的后代失败:", error);
-    }
+  // 「这一轮收过了」的凭据是**那次清理真的做完了**,不是「从册上划掉了」。划掉早于 await
+  // 时有两个缺口:另一个 cleanup 看到册上没它就直接返回,其实清理还在途(它以为收完了);
+  // 清理失败时它也已经不在册上,再没有人会重试(第 2 轮审查 N1)。所以在途的那个 Promise
+  // 本身就是凭据 —— 同一轮的并发调用等同一份,成功才注销,失败留在册上等下一次 cleanup。
+  const inflight = new Map<ChildProcess, Promise<void>>();
+  const finalizeTurn = (child: ChildProcess): Promise<void> => {
+    const pending = inflight.get(child);
+    if (pending) return pending;
+    if (!unfinalized.has(child)) return Promise.resolve(); // 确实收完了
+    const run = (async () => {
+      try {
+        await params.finalizeTurn(child);
+        unfinalized.delete(child);
+      } catch (error) {
+        console.warn("[ash] 回收 codex 常驻回合的后代失败(留在册上,下一次 cleanup 再试):", error);
+      }
+    })().finally(() => {
+      inflight.delete(child);
+    });
+    inflight.set(child, run);
+    return run;
   };
   // 回合排队:codex 一次只跑一个回合,回合进行中来的消息攒着,结束后依次送。
   const waiting: string[] = [];
