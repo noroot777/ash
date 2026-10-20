@@ -10,7 +10,7 @@ import { id, now, attachmentsPrompt } from "./util.js";
 import { closeTaskTurns, freshTurnFields, openTurn, resumedTurnFields } from "./session-turns.js";
 import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, discardStartingRun, takeSteered, takeStopped, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -605,7 +605,10 @@ export async function continueTask(
       stopped, baseFallback, baseFallbackTold,
     });
   } finally {
-    if (handle) untrackRun(taskId, handle);
+    // 这一轮归谁:到 consumeSingleRun 认领之前都归起跑方,所以**失败出口必须连进程一起
+    // 收掉**,只注销会留下一个没人读输出、停止按钮也碰不到的 CLI(第 1 轮审查 F1;三态
+    // 和「为什么认领过的只注销不杀」见 runs.ts 顶部)。认领过的走到这里只是注销。
+    if (handle) discardStartingRun(taskId, handle);
     releaseTurn(taskId);
     // 同 task-run：全出口注销,不依赖走到收尾函数（第 6 轮审查必须修 1）。
     closeTaskTurns(taskId);

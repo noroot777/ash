@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
 import { IS_WINDOWS, isPidAlive, killOne, killTree, listProcesses } from "../platform.js";
+import { isSameProcess } from "../proc.js";
 import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins } from "./bin-resolve.js";
 
@@ -139,9 +140,15 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<n
       if (p) targets.add(p);
     }
   }
-  // 每个 fd 持有者 + CLI 本体的存活后代(ppid 树)一并纳入
+  // 每个 fd 持有者 + CLI 本体的存活后代(ppid 树)一并纳入。
+  // fd 持有者的身份证据长在文件对象上,跟号码无关,所以无条件可用;**根进程的号**不是 ——
+  // 只有确认它还是它(childStillOurs)才能当树根,否则号被复用之后这棵「后代树」是别人的
+  // 子进程(第 1 轮审查 F2)。POSIX 上这一道闸不损失任何能力:根进程一退出,它的孩子立刻被
+  // 重父到 init,以旧号为根的树本来就是空的。
+  // **Windows 例外**:那边没有追踪 fd(openTrackFd 直接返回空),退出后仍保留的
+  // ParentProcessId 是唯一的找回手段(见本文件顶部),所以那边照旧尽力而为。
   const roots = [...targets];
-  if (child.pid) roots.push(child.pid);
+  if (child.pid && (IS_WINDOWS || childStillOurs(child))) roots.push(child.pid);
   if (roots.length) {
     const kids = new Map<number, number[]>();
     for (const row of await listProcesses()) {
@@ -192,7 +199,10 @@ async function waitForPidsGone(pids: readonly number[], timeoutMs: number): Prom
  */
 export async function cleanupAfterRun(child: ChildProcess): Promise<void> {
   const targets = new Set(await killEscapees(child, "SIGTERM"));
-  if (child.pid && isPidAlive(child.pid)) {
+  // 判据与 killChild 同一条(childStillOurs):以前这里问的是 `isPidAlive`,那只能证明
+  // 「有人占着这个号」—— 根进程先退出、号被复用之后,它指向的已经是别人(第 1 轮审查
+  // F2)。根进程已退出就只扫后代,一刀都不往那个号上发。
+  if (child.pid && childStillOurs(child)) {
     targets.add(child.pid);
     killTree(child.pid, "SIGTERM");
   }
@@ -200,7 +210,8 @@ export async function cleanupAfterRun(child: ChildProcess): Promise<void> {
 
   const survivors = await waitForPidsGone([...targets], 2000);
   if (!survivors.length) return;
-  if (child.pid && survivors.includes(child.pid)) killTree(child.pid, "SIGKILL");
+  // 等的这 2 秒里根进程可能自己退了,号随时会被复用 —— 补刀前按同一判据再确认一次。
+  if (child.pid && survivors.includes(child.pid) && childStillOurs(child)) killTree(child.pid, "SIGKILL");
   for (const pid of survivors) {
     if (pid !== child.pid) killOne(pid, "SIGKILL");
   }
@@ -371,6 +382,24 @@ export function redactSecrets(s: string): string {
     .replace(/((?:token|api[_-]?key|auth[_-]?token|secret)["']?\s*[:=]\s*["']?)[A-Za-z0-9._-]{8,}/gi, "$1***");
 }
 
+// ── 「这个号此刻还是它吗」:kill 与 cleanup 共用的唯一判据 ──────────────────────
+//
+// 我们是它的父进程,所以这件事有**权威答案**:内核在父进程 reap 之前不会把 pid 分给
+// 别人,而 Node 正是在 reap 到它时才填上 exitCode/signalCode —— 两个都还是 null,就
+// 等于这个号现在一定还是它;任一个有值,就等于这个号已经可以被任意复用了。
+//
+// 反过来 `isPidAlive(pid)` 只能证明「有人占着这个号」,证明不了是谁:根进程先自己退出
+// (落库那几百毫秒里完全来得及)、号被系统分给用户的别的程序之后,拿它当依据发信号就是
+// 在杀无关进程。「它从登记集合里注销过没有」更答不了这个问题 —— 那只是 isRunning 的真假。
+// 所以本文件里 kill 与 cleanup 两条路问的都是这一个函数。
+//
+// 后代不受这条限制:killEscapees 认的是「继承了我们那个追踪 fd」,身份证据长在文件
+// 对象上而不是号码上 —— 所以根进程已经退出时**照样要扫后代**,只是不许再对那个号发
+// 信号。(第 1 轮审查 F2)
+export function childStillOurs(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
 // Terminate a running agent subprocess (manual stop). SIGTERM first so the CLI
 // can wind down; a short fallback SIGKILL guarantees the process — and thus our
 // output stream — actually ends even if the CLI ignores SIGTERM. Safe to call on
@@ -387,6 +416,8 @@ export function redactSecrets(s: string): string {
 export function killChild(child: ChildProcess): void {
   if (typeof child.kill !== "function") return;
   const signal = (sig: NodeJS.Signals) => {
+    // 身份先于信号:已经 reap 过的号可能已经是别人的了(判据见 childStillOurs)。
+    if (!childStillOurs(child)) return;
     if (child.pid) {
       killTree(child.pid, sig);
       return;
@@ -400,7 +431,7 @@ export function killChild(child: ChildProcess): void {
   signal("SIGTERM");
   void killEscapees(child, "SIGTERM").catch(() => {});
   const t = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) signal("SIGKILL");
+    signal("SIGKILL");
     // 无论 CLI 死没死透,逃逸者一律补 SIGKILL —— stop 的语义就是全家结束。
     void killEscapees(child, "SIGKILL").catch(() => {});
   }, 2000);
@@ -413,8 +444,9 @@ export function killChild(child: ChildProcess): void {
 // 只剩三层里的第①③层:进程组信号 + 2s 后补 SIGKILL。第②层(继承 fd 反查逃逸者)
 // 做不到,因为那份映射是内存态的。代价:重启前就已经逃出进程组的孤儿杀不到 ——
 // 如实记在这里,别让以后的人以为这条路和 killChild 等价。
-export function killByPid(pid: number): void {
+export function killByPid(pid: number, startedAt?: string | null): void {
   if (!Number.isInteger(pid) || pid <= 1) return;
+  if (!pidStillOurs(pid, startedAt)) return;
   killTree(pid, "SIGTERM");
   const t = setTimeout(() => {
     // **补刀不看组长死没死。** 以前这里是 `if (isPidAlive(pid))`，等于拿「组长还在吗」
@@ -423,10 +455,26 @@ export function killByPid(pid: number): void {
     // preinstall/postinstall 是任意代码，node-gyp、自己管子进程的脚本都算）还留在原
     // 进程组里。组长一死，补刀被跳过，那个进程就永远留下了——而接口已经回了句「已停止」。
     // killTree 打的是进程组（POSIX 上 `kill(-pid)`），组空了是 ESRCH，被它自己吞掉，
-    // 所以无条件发这一刀没有副作用。
-    killTree(pid, "SIGKILL");
+    // 所以无条件发这一刀没有副作用。但**号被别人占去了就不能发**——那一刀会打到人家
+    // 的进程组上(判据见 pidStillOurs)。
+    if (pidStillOurs(pid, startedAt)) killTree(pid, "SIGKILL");
   }, 2000);
   (t as { unref?: () => void }).unref?.();
+}
+
+// 只有 pid 时的身份判据(没有 ChildProcess 可问,只能现查 ps):
+//   · 调用方没给 startedAt → 它自己没有身份证据,只能保持老语义(两个既有调用方
+//     —— monitors 的哨兵、preview-deps —— 都在调用前自己核过);
+//   · 号没人占 → 以它为组 id 的只能是我们那个已经死掉的组长留下的后代(新进程不会
+//     跑进一个以空号为 id 的进程组),照打,这正是上面「补刀不看组长死没死」要的;
+//   · 号有人占、而且就是当初那个(启动时间对得上) → 照打;
+//   · 号有人占、但换了主人 → 一刀都不许发。
+// **认领那一刻核过不算数**:从接管到真要杀它之间隔着整段回合,号完全可能已经换了主人
+// (第 1 轮审查 F2)。
+function pidStillOurs(pid: number, startedAt: string | null | undefined): boolean {
+  if (startedAt === undefined) return true;
+  if (!isPidAlive(pid)) return true;
+  return isSameProcess(pid, startedAt);
 }
 
 // exit(进程亡)之后 close(所有 stdio 关闭)通常毫秒级跟到;但当管道写端被

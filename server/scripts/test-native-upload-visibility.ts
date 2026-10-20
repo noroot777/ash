@@ -74,7 +74,7 @@ try {
       { kind: "done", exitStatus: 0 },
     ];
     const handle: ResidentHandle = { sessionId: "fixture", commandLine: "fixture", events: (async function* () { yield* events; })(),
-      kill() {}, close() {}, interrupt() {}, send: () => true };
+      kill() {}, close() {}, interrupt() {}, send: () => true, cleanup: async () => {} };
     const runDir = join(stage, "runs", taskId);
     mkdirSync(runDir, { recursive: true });
     const out = createWriteStream(join(runDir, `${sessId}.md`));

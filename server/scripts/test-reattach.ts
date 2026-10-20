@@ -315,5 +315,58 @@ console.log(`   任务最终状态 = ${finalStatus}`);
 if (finalStatus === "running") fail("agent 结束后任务仍卡在 running —— 结算没跑");
 else okLine(`agent 结束后正常结算为 ${finalStatus}`);
 
+// ⑥ 接管成功**之后**才暴露出来的中断,谁来结算(第 1 轮审查 F1)。
+//
+// reattachRunningTasks 把消费循环 `void` 出去就返回了,紧随其后的 reconcileInterrupted
+// 看到 isRunning 为真、正确地跳过了这个任务(上面 ③ 钉的就是这一条)。可那条消费循环要是
+// 随后在初始化段抛了错,进程收掉了、登记注销了,却**再也没有人来结算它** —— 任务永远停在
+// running:界面上一个转着的任务,不会有输出,也停不掉,连重试都点不了。
+// 所以那条 finally 在撤干净「有活句柄」的证据之后,必须再问一次这个任务该不该结算。
+console.log("⑥ 接管后无人收尾的任务,finally 那一问必须把它结算掉");
+{
+  const { reconcileInterruptedTask } = await import("../src/task-reconcile.js");
+  const { trackRun, untrackRun } = await import("../src/runs.js");
+  const STRANDED = `T-stranded-${RUN}`;
+  const GUARDED = `T-guarded-${RUN}`;
+  const TEAM = `T-team-stranded-${RUN}`;
+  for (const [id, mode] of [[STRANDED, "single"], [GUARDED, "single"], [TEAM, "team"]] as const) {
+    await db.insert(projects).values({ id: `p-${id}`, name: "t", repoPath: dir, createdAt: now() } as never);
+    await db.insert(tasks).values({
+      id, projectId: `p-${id}`, title: "接管后中断", body: "", status: "running",
+      mode, agentType: "claude", labels: "[]", createdAt: now(), updatedAt: now(), autoTitle: 0, useWorktree: 0,
+    } as never);
+  }
+  const settled = await reconcileInterruptedTask(STRANDED);
+  const stranded = (await db.select().from(tasks).where(eq(tasks.id, STRANDED))).at(0)?.status;
+  if (stranded === "failed") okLine("没人收尾的那条被结算成 failed(用户能重试)");
+  else fail(`接管后中断的任务应判 failed,实为 ${stranded}`);
+  if (settled) okLine("回执说明这次接管没跑成(调用方据此把它从「已接管」里撤掉)");
+  else fail("结算了却回执「没我的事」,调用方会继续把它当成接管成功");
+
+  // 真在跑的绝不许被它动:这一问发生在消费循环结束之后,但同一个任务可能已经被别人重新
+  // 跑起来了(用户点了重试、队列推进过来),判据必须是「此刻有没有活句柄」。
+  const liveHandle = { kill: () => {} };
+  trackRun(GUARDED, liveHandle);
+  const guardedSettled = await reconcileInterruptedTask(GUARDED);
+  if (guardedSettled) fail("在跑的任务不该给出「我结算了」的回执");
+  const guarded = (await db.select().from(tasks).where(eq(tasks.id, GUARDED))).at(0)?.status;
+  if (guarded === "running") okLine("手上还有活句柄的任务,这一问必须空转");
+  else fail(`在跑的任务被误结算成了 ${guarded}`);
+  untrackRun(GUARDED, liveHandle);
+
+  // 团队调度台没有「失败」这回事(进程随 server 走,下次说话 --resume 接回),落待命。
+  await reconcileInterruptedTask(TEAM);
+  const team = (await db.select().from(tasks).where(eq(tasks.id, TEAM))).at(0)?.status;
+  if (team === "idle") okLine("团队调度台落 idle,跟批量版同一口径");
+  else fail(`团队调度台应落 idle,实为 ${team}`);
+
+  // 已经结算过的任务再问一次 = 空转(正常收尾的那条路每轮都会走到这一问)。
+  const againSettled = await reconcileInterruptedTask(STRANDED);
+  if (againSettled) fail("已落终态的任务不该再给出「我结算了」的回执");
+  const again = (await db.select().from(tasks).where(eq(tasks.id, STRANDED))).at(0)?.status;
+  if (again === "failed") okLine("已落终态的任务再问一次不会被改写");
+  else fail(`空转这一问把终态改成了 ${again}`);
+}
+
 console.log(bad === 0 ? "\n✅ 接管接线全部正确" : `\n❌ ${bad} 项不符（现场：${dir}）`);
 process.exit(bad === 0 ? 0 : 1);

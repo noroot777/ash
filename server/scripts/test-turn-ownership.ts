@@ -343,13 +343,15 @@ assert.equal(followUp.reviewCheckMode, runA.checkMode, "续轮必须覆盖残留
 assert.equal(followUp.reviewRetryLimit, runA.retryLimit, "续轮必须覆盖残留的重试上限");
 assert.equal(followUp.reviewNote, null, "续轮必须清掉残留的预约备注");
 
-// ── ⑭ 起跑途中丢弃一个还没人消费的句柄:杀和注销必须成对（第 8 轮审查 N1）──────────
+// ── ⑭ 一个「已经起来的 CLI」归谁:起跑方 / 消费方(第 1 轮审查 F1·F2)──────────────
 // 初始化段（落库、建日志目录、组装调度台）抛出来时,CLI 已经 spawn 了而消费循环永远不会
 // 开始。只撤登记 → 留一个没人读、没人杀得到的无主进程；只杀不撤 → `isRunning` 永远判真,
-// 停止按钮亮着、`stopTask` 返回 true 又什么都没停。两样必须一起做,而且只许对**还在册**
-// 的句柄做（消费循环正常收尾时已经撤过,再 kill 一次打的可能是别人复用的那个 pid）。
+// 停止按钮亮着、`stopTask` 返回 true 又什么都没停。两样必须一起做。
+// 判据是**有没有被消费方认领过**,不是「还在不在集合里」：正常跑完时登记仍可能在册,那时候
+// 去 kill 就是对一个已经退出的号发信号（那个号可能已经属于用户的别的程序）。
 {
-  const { trackRun, untrackRun, discardStartingRun, isRunning, stopTask } = await import("../src/runs.js");
+  const { trackRun, untrackRun, adoptRun, discardStartingRun, finalizeAbandonedRun, isRunning, stopTask } =
+    await import("../src/runs.js");
   let killed = 0;
   let cleaned = 0;
   const handle = { kill: () => { killed++; }, cleanup: async () => { cleaned++; } };
@@ -358,16 +360,98 @@ assert.equal(followUp.reviewNote, null, "续轮必须清掉残留的预约备注
   discardStartingRun("t-handle-scope", handle);
   assert.equal(isRunning("t-handle-scope"), false, "初始化抛出之后句柄必须撤出集合,否则任务空着也一直判在跑");
   assert.equal(killed, 1, "那个没人消费的 CLI 也得收掉——只撤登记就留下一个谁都杀不到的无主进程");
+  await new Promise((r) => setImmediate(r)); // cleanup 是异步的,等一个微任务
   assert.equal(cleaned, 1, "后台后代平时靠消费循环的 finally 回收,这条路上没有那道 finally");
   assert.equal(stopTask("t-handle-scope"), false, "名下已经没有进程了,停止不该宣称自己停下了什么");
   discardStartingRun("t-handle-scope", handle);
-  assert.equal(killed, 1, "不在册的句柄不许再杀一次(那个 pid 可能已经被系统分给别人了)");
-  // 消费循环注销过的那些:外层 finally 再丢一次必须是空转（duet 的正常收尾就是这条路）。
-  trackRun("t-handle-scope", handle);
-  untrackRun("t-handle-scope", handle);
-  discardStartingRun("t-handle-scope", handle);
-  assert.equal(killed, 1, "已经被消费循环撤掉的句柄,外层兜底不许对它动手");
-  assert.equal(isRunning("t-handle-scope"), false, "这一步的收尾:集合里不留东西给后面的用例");
+  assert.equal(killed, 1, "同一个句柄不许收两次(第二刀打的可能是别人复用的那个号)");
+
+  // 消费方认领过的:外层兜底只许注销。**这是正常路径**(单飞跑完、duet 一轮跑完),句柄这时
+  // 候很可能还在册,而进程早就自己退了 —— 在这里动手就是 F2 那个误杀窗口。
+  let killed2 = 0;
+  let cleaned2 = 0;
+  const consumed = { kill: () => { killed2++; }, cleanup: async () => { cleaned2++; } };
+  trackRun("t-handle-adopted", consumed);
+  adoptRun(consumed);
+  discardStartingRun("t-handle-adopted", consumed);
+  assert.equal(isRunning("t-handle-adopted"), false, "认领过也要注销:登记留着就等于谎报在跑");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(killed2, 0, "认领过的句柄由消费循环的 finally 负责,外层兜底不许对它动手");
+  assert.equal(cleaned2, 0, "同理,后代回收也归消费循环那一侧,别重复做");
+
+  // 无主回合的收尾本体:杀 + 等后代收完(两件事都做完才 resolve)。
+  let killed3 = 0;
+  let cleaned3 = 0;
+  await finalizeAbandonedRun({
+    kill: () => { killed3++; },
+    cleanup: async () => { await new Promise((r) => setTimeout(r, 10)); cleaned3++; },
+  });
+  assert.equal(killed3, 1, "无主回合先杀进程本体");
+  assert.equal(cleaned3, 1, "再等它的后代回收真的完成——不能发出去就不管了");
+}
+
+// ── ⑮ 单飞消费循环:认领边界 + 初始化抛出时的兜底(第 1 轮审查 F1)────────────────
+// consumeSingleRun 的事件流**之前**还有一段初始化(读 tasks 行、记自由工作流执行开始、
+// 读 handle.detached)。那一段抛出来时 CLI 已经在跑,而流循环自己那道 finally 一次都没执行
+// —— 必须由外壳补上 kill + 后代回收,否则它成了没人读输出、停止按钮也碰不到的无主进程。
+{
+  const { createWriteStream } = await import("node:fs");
+  const { consumeSingleRun } = await import("../src/single-run.js");
+  const { trackRun, discardStartingRun, isRunning } = await import("../src/runs.js");
+  const [task] = await createTasks([{ ...baseTask, id: "t-single-adopt", title: "认领边界", status: "running" }]);
+  const ex = { label: "fake", model: null, reasoningEffort: null } as any;
+
+  // ① 初始化段抛出 → 外壳必须把进程收掉(kill + cleanup),异常照旧往外抛给调用方结算。
+  let killed = 0;
+  let cleaned = 0;
+  const broken = {
+    kill: () => { killed++; },
+    cleanup: async () => { cleaned++; },
+    events: (async function* () { /* 一次都不会被遍历 */ })(),
+    sessionId: "", commandLine: "",
+    // 真实现场是落库/建日志目录/开写流抛错;这里用句柄属性制造同一个窗口(它就在流循环
+    // 之前那几行被读到),比去搞坏数据库更贴近「初始化段的任意一句抛了」。
+    get detached(): never { throw new Error("初始化段炸了"); },
+  } as any;
+  trackRun(task!.id, broken);
+  await assert.rejects(
+    () => consumeSingleRun({
+      taskId: task!.id, sessId: "s-single-adopt", agentType: "claude", ex, cwd: root,
+      handle: broken, out: createWriteStream(join(root, "single-adopt.md")),
+      turnStart: new Date().toISOString(), cliSessionId: "", autoTitle: false,
+    }),
+    /初始化段炸了/,
+    "初始化抛出要原样传给调用方(它据此落 failed)",
+  );
+  assert.equal(killed, 1, "消费循环一次没跑,那个 CLI 必须由外壳收掉");
+  assert.equal(cleaned, 1, "连它甩到后台的后代一起收——这条路上没有流循环那道 finally");
+  // 外层(task-run / reattach)的 finally 随后也会丢一次:认领过 → 只注销,不许再补刀。
+  discardStartingRun(task!.id, broken);
+  assert.equal(killed, 1, "外层兜底不许对已经收过的句柄再动手");
+  assert.equal(isRunning(task!.id), false, "收完之后登记必须干净");
+
+  // ② 认领发生在**进流之前**:正常路径上外层兜底对它动不了手(F2 的误杀窗口)。
+  let killed2 = 0;
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = () => resolve(); });
+  const hanging = {
+    kill: () => { killed2++; release(); },
+    cleanup: async () => {},
+    events: (async function* () { await held; })(),
+    sessionId: "", commandLine: "", detached: null,
+  } as any;
+  trackRun(task!.id, hanging);
+  const running = consumeSingleRun({
+    taskId: task!.id, sessId: "s-single-hang", agentType: "claude", ex, cwd: root,
+    handle: hanging, out: createWriteStream(join(root, "single-hang.md")),
+    turnStart: new Date().toISOString(), cliSessionId: "", autoTitle: false,
+  });
+  await new Promise((r) => setTimeout(r, 50)); // 让它跑进事件流
+  discardStartingRun(task!.id, hanging);
+  assert.equal(killed2, 0, "已经在消费的回合,外层兜底绝不许杀——那一刀会打断一个正在干活的 agent");
+  assert.equal(isRunning(task!.id), false, "但注销照做(语义是「这次调用不再持有它」)");
+  release();
+  await running;
 }
 
 console.log("turn-ownership regressions ok");

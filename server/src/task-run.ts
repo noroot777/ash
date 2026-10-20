@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, discardStartingRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { closeTaskTurns, freshTurnFields, openTurn } from "./session-turns.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -298,7 +298,10 @@ export async function runTask(
     await setTaskStatus(taskId, status);
     await afterSettlement(taskId, status, false, false, "single", true, !stopped);
   } finally {
-    if (handle) untrackRun(taskId, handle);
+    // 这一轮归谁:到 consumeSingleRun 认领之前都归起跑方,所以**失败出口必须连进程一起
+    // 收掉**,只注销会留下一个没人读输出、停止按钮也碰不到的 CLI(第 1 轮审查 F1;三态
+    // 和「为什么认领过的只注销不杀」见 runs.ts 顶部)。认领过的走到这里只是注销。
+    if (handle) discardStartingRun(taskId, handle);
     releaseTurn(taskId);
     // 这一次调用结束了 = 它名下不再有回合在写。**注销不能只挂在正常收尾那条路上**：
     // stream 抛错、结算写库失败、被停都走不到 `recordTurnSpan`,残留的活动登记会让读端把这条

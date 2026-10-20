@@ -18,7 +18,7 @@ import { closeSessionTurns, freshTurnFields, openTurn, recordTurnSpan, resumedTu
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
-import { trackRun, untrackRun, discardStartingRun, isCanceling, CanceledRun } from "../runs.js";
+import { adoptRun, trackRun, untrackRun, discardStartingRun, isCanceling, CanceledRun } from "../runs.js";
 import type { AgentExecutor } from "../executors/types.js";
 import {
   LOST_SESSION_PATCH,
@@ -274,6 +274,10 @@ export async function runTurn(args: {
     // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
     const trace: TurnTraceEvent[] = [];
     const TRACE_CAP = 200;
+    // duet 有自己的消费循环(不走 single-run),所以认领也在自己这儿:**从这一行起**句柄的
+    // 回收责任归下面那道 finally,外层兜底只负责注销。认领之前(落库、建日志目录、开写流)
+    // 任何一条出口都归起跑方,它必须连进程一起收 —— 三态见 runs.ts 顶部。
+    adoptRun(handle);
     try {
       for await (const event of handle.events) {
         const sessionNotice = isSessionScopeNotice(event);
@@ -398,9 +402,9 @@ export async function runTurn(args: {
     // 这一次 runTurn 结束了 = 这条会话名下不再有回合在写。幂等:正常路径上消费循环那道
     // finally 已经注销过一次（那一刻就确定不再写盘了,早撤比晚撤准）。
     closeSessionTurns(rowId);
-    // 句柄还在册 = 这一轮压根没进消费循环（上面那段初始化就抛了）:那个 CLI 没人读它的输出、
-    // 也没人杀得到它,连进程一起收掉。正常路径上消费循环那道 finally 早撤过,这里自动跳过
-    // （不会去 kill 一个已经自己退了的 pid,见 runs.ts 的 discardStartingRun）。
+    // 没走到 `adoptRun` = 这一轮压根没进消费循环（上面那段初始化就抛了）:那个 CLI 没人读
+    // 它的输出、也没人杀得到它,连进程一起收掉。认领过的(正常路径)这里只注销,不会去动一个
+    // 已经自己退了的 pid —— 判据和理由都在 runs.ts 顶部。
     discardStartingRun(taskId, handle);
   }
 }

@@ -257,7 +257,6 @@ export class CodexExecutor implements AgentExecutor {
   // 在 codex 自己的 thread 里连着。取舍、实测结论与两处可见差异写在
   // executors/codex-resident.ts 头部。
   openResident(opts: RunOpts): ResidentHandle {
-    let lastChild: ChildProcess | undefined;
     const handle = openCodexResident({
       initialSessionId: opts.sessionId ?? "",
       initialPrompt: opts.prompt,
@@ -268,7 +267,6 @@ export class CodexExecutor implements AgentExecutor {
         // 常驻的每一轮都是**新进程**,所以 stdin 照旧读完即关(keepStdin 是
         // claude 那种「一个进程吃多个回合」才需要的)。
         const child = spawnAgent(opts.cwd, this.bin, args, prompt, { ...this.env(), ...opts.env });
-        lastChild = child;
         return {
           child,
           commandLine: redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`),
@@ -281,11 +279,15 @@ export class CodexExecutor implements AgentExecutor {
         };
       },
       killTurn: (child) => killChild(child),
+      // 每个回合的后代由谁收:句柄自己(见 codex-resident.ts 的 cleanup)。这里只提供
+      // 「怎么收一个回合」,什么时候收由句柄决定 —— 以前这段能力只长在下面那个事件包装器
+      // 上,而它在起跑失败/被杀/非桌面会话时一次都不执行(第 1 轮审查 F1)。
+      finalizeTurn: (child) => cleanupAfterRun(child),
     });
     handle.events = archiveVisibleCodexSession(handle.events, {
       bin: this.bin, args: this.appServerArgs(opts).args, cwd: opts.cwd,
       env: { ...this.env(), ...opts.env },
-    }, opts.sessionId, async () => { if (lastChild) await cleanupAfterRun(lastChild); });
+    }, opts.sessionId, () => handle.cleanup());
     return handle;
   }
 }

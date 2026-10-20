@@ -13,7 +13,9 @@ import { closeSessionTurns, recordTurnSpan } from "./session-turns.js";
 import { scanForTitle } from "./auto-title.js";
 import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { bindNativeSteer, takeSteered, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
+import {
+  adoptRun, bindNativeSteer, finalizeAbandonedRun, takeSteered, takeStopped, takeConfirmed, type StopSettle,
+} from "./runs.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
 import {
   LOST_SESSION_PATCH,
@@ -263,13 +265,7 @@ export async function settleTaskStatus(
   return { status: "failed", note: UNCONFIRMED_NOTE + hint, confirmedDone: false, nativeTurn };
 }
 
-// 消费一次单飞运行的事件流，直到它结束，然后结算。
-//
-// **fresh run 与「重启后接管」共用这一份**——两条路只有前半段不同（一个是刚
-// spawn 出来的 handle，一个是按 pid+offset 接回来的），从「读事件」这一步往后
-// 完全一样。抄成两份的话，结算优先级、标题解析、.md 落盘这些迟早会漂。
-// autoTitle=false 时跳过标题解析（接管路径必然已经解析过了）。
-export async function consumeSingleRun(a: {
+export type SingleRunArgs = {
   taskId: string;
   sessId: string;
   agentType: AgentType;
@@ -285,7 +281,37 @@ export async function consumeSingleRun(a: {
     prepare?(text: string): string | Promise<string>;
     record(text: string, at: string): void;
   };
-}): Promise<void> {
+};
+
+// 消费一次单飞运行的事件流，直到它结束，然后结算。
+//
+// **fresh run 与「重启后接管」共用这一份**——两条路只有前半段不同（一个是刚
+// spawn 出来的 handle，一个是按 pid+offset 接回来的），从「读事件」这一步往后
+// 完全一样。抄成两份的话，结算优先级、标题解析、.md 落盘这些迟早会漂。
+// autoTitle=false 时跳过标题解析（接管路径必然已经解析过了）。
+//
+// 这一层只管**进程归属**:认领 + 兜底(见下);事件流与结算本体在 consumeRunStream。
+export async function consumeSingleRun(a: SingleRunArgs): Promise<void> {
+  // 消费方在这一行正式接手(runs.ts 的归属三态 ②):此前 handle 的回收责任在起跑方身上,
+  // 此后归下面这道 finally。认领本身也是在告诉起跑方的 finally「别再杀了」—— 正常跑完
+  // 时登记可能仍在册,那时候动手就是对一个已退出的号发信号(第 1 轮审查 F2)。
+  adoptRun(a.handle);
+  let streamDrained = false;
+  try {
+    await consumeRunStream(a, () => {
+      streamDrained = true;
+    });
+  } finally {
+    // 认领了就得兜到底。事件流**之前**还有一段初始化(读 tasks 那一行、记自由工作流执行
+    // 开始、建 closer),它抛出来时 CLI 早就在跑了,而流循环自己那道 finally 一次都没执行
+    // —— 不补这一刀,它就成了没人读输出、停止按钮也碰不到的无主进程(第 1 轮审查 F1)。
+    if (!streamDrained) await finalizeAbandonedRun(a.handle);
+  }
+}
+
+// 事件流 + 结算本体。`markStreamDrained` 由流循环的 finally 调用,告诉外壳「进程资源已经
+// 收干净了」—— 在它被调用之前抛出的任何异常,都意味着那个 CLI 还没人收。
+async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void): Promise<void> {
   const { taskId, sessId, agentType, ex, out } = a;
   const role = a.role ?? "single";
   // 原生 CLI 命令回合(`/compact` 一类)不记「任务执行」:那一轮压根没在推进任务,记下来
@@ -510,6 +536,9 @@ export async function consumeSingleRun(a: {
     await a.handle.cleanup?.().catch((error) => {
       console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);
     });
+    // 进程资源到此已经收干净(cleanup 覆盖根进程与它甩出去的后代),外层那道兜底不必再
+    // 补刀;后面结算段再抛错也只是结算的事,不会留下无主进程。
+    markStreamDrained();
   }
   // 一个换行都没等到就收流了（整轮只吐了一行的那种）。这里补一次 flush 扫描：
   // 老实现直接把缓冲原样吐出去，那一行哪怕就是标准的 `标题：xxx` 也白瞎。

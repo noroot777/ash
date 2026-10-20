@@ -8,6 +8,7 @@
  *   ④interrupt 杀当前回合、不结束会话;close 等手头这轮跑完;kill 立刻收摊
  *   ⑤openCodexResident 一返回,commandLine 就得是真的(调用方立刻写进 sessions 表)
  *   ⑥恢复 thread 被判 poisoned 后,下一回合必须 fresh
+ *   ⑦cleanup 覆盖**这个会话起过的每一个回合**,且幂等
  *
  * codex CLI 本身的行为(resume 保持 thread_id、被杀后会话仍可续)是 2026-08-01
  * 手工实测过的,结论记在 executors/codex-resident.ts 头部,不在这里重复验证。
@@ -47,6 +48,7 @@ if (args.includes("--slow")) setTimeout(say, 3000); else say();
 /** 造一个跑假 CLI 的常驻会话;prompt 直接当最后一个 argv 传进去便于断言。 */
 function open(opts: { slow?: boolean; poisonFirst?: boolean } = {}) {
   const spawned: string[][] = [];
+  const finalized: number[] = [];
   const handle = openCodexResident({
     initialSessionId: "",
     initialPrompt: "第一条",
@@ -65,8 +67,10 @@ function open(opts: { slow?: boolean; poisonFirst?: boolean } = {}) {
       };
     },
     killTurn: (child) => child.kill("SIGTERM"),
+    // 真实实现是 cleanupAfterRun(回收这一轮甩到后台的后代);这里只记「谁被收过」。
+    finalizeTurn: async (child) => { finalized.push(child.pid ?? -1); },
   });
-  return { handle, spawned };
+  return { handle, spawned, finalized };
 }
 
 /** 极简 codex 事件解析(真的那份在 codex.ts,这里只要够驱动状态机)。 */
@@ -231,6 +235,33 @@ console.log("6) poisoned 回合结束前已排队,下一回合仍 fresh");
   const contradictory = sub.all.some((event) => event.kind === "error" && event.message.includes("没有报出会话 id"));
   if (!contradictory) ok("已收到 thread.started 后判 poisoned，不会再误报没有会话 id");
   else fail("poisoned 清空 id 后又误报没有收到 thread.started");
+  handle.kill();
+  await sub.finished;
+}
+
+// 「会话级常驻」= 一个回合一个进程,所以句柄的清理能力必须覆盖**所有**回合,而不是当前
+// 那一个。这条能力以前只长在 codex.ts 的事件包装器上,它要求「流正常走到尽头 + 这条
+// thread 在桌面端可见」—— 起跑失败、被杀、普通 exec 会话一条都走不到,等于句柄对外没有
+// 清理能力(第 1 轮审查 F1)。
+console.log("7) cleanup 覆盖所有已启动回合,且幂等");
+{
+  const { handle, spawned, finalized } = open();
+  const sub = subscribe(handle.events);
+  await sub.waitTurns(1);
+  handle.send("第二条");
+  await sub.waitTurns(2);
+  handle.send("第三条");
+  await sub.waitTurns(3);
+  if (spawned.length === 3) ok("三个回合都起过进程");
+  else fail(`期望 3 个回合,实到 ${spawned.length}`);
+  if (!finalized.length) ok("正常跑完的回合不会被提前回收(上一轮起的后台服务还能接着用)");
+  else fail(`回合正常结束就被回收了:${JSON.stringify(finalized)}`);
+  await handle.cleanup();
+  if (finalized.length === 3) ok("cleanup 把三个回合的后代一并收掉");
+  else fail(`cleanup 只收了 ${finalized.length} 个回合`);
+  await handle.cleanup();
+  if (finalized.length === 3) ok("重复 cleanup 不再重复动手(幂等)");
+  else fail(`第二次 cleanup 又收了一遍:${finalized.length} 次`);
   handle.kill();
   await sub.finished;
 }

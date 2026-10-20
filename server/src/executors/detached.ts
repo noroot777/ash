@@ -420,7 +420,9 @@ export function reattachDetachedAgent(opts: {
     startOffset: opts.offset,
     // 普通一次性 detached 没有 FIFO，仍是 null；原生引导回合从约定路径重开 writer。
     stdin: existsSync(controlPath(opts.paths)) ? fifoWriter(controlPath(opts.paths)) : null,
-    kill: () => killByPid(opts.pid),
+    // 把启动时间一起交给 killByPid:接管这一刻核对过的身份,到真要杀它时隔着整段回合,
+    // 那个号可能已经换了主人,所以发信号前要按同一判据再核一次(第 1 轮审查 F2)。
+    kill: () => killByPid(opts.pid, opts.startedAt),
     onExit: (cb) => {
       // 没有 ChildProcess 可听,只能探。kill(pid,0) 抛 ESRCH = 确实没了
       //(复用只会让它显得「活着」,不会让活着的显得死了,所以这个方向是安全的)。

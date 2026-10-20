@@ -78,6 +78,7 @@ const partialResident: ResidentHandle = {
   },
   close: () => { partialCalls.push("close"); partialEvents.end(); },
   kill: () => { partialCalls.push("kill"); partialEvents.end(); },
+  cleanup: async () => { partialCalls.push("cleanup"); },
 };
 const partialClaude = singleRunFromResident(partialResident);
 const partialSeen: AgentEvent[] = [];

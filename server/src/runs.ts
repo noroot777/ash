@@ -67,33 +67,65 @@ export function untrackRun(taskId: string, h: Killable): void {
   if (!set.size) handles.delete(taskId);
 }
 
+// ── 一个「已经起来的 CLI 进程」有三种归属 ──────────────────────────────────────
+//
+// 进程由**起跑方** spawn（`executor.run` / `openResident` 都是当场起,不是惰性）,却由
+// **消费循环的 finally** 回收。中间夹着一整段初始化:落库、建日志目录、开写流、组装调度
+// 台、重启后接管。这段里任何一条出口没接上,进程就变成无主的 —— 没人读它的输出,停止按钮
+// 也动不了它,它继续在用户的工作目录里跑、烧真额度。这件事以前只在各处 finally 里口头约
+// 定,所以四个起跑入口各漏了一处(第 1 轮审查 F1)。写成显式的三态:
+//
+//   ① **起跑方持有**(trackRun 之后、adoptRun 之前):它的每一条失败出口都落在
+//      discardStartingRun 上 —— 注销 + 杀 + 回收后代。`void` 出去的异步接管也算这一档。
+//   ② **消费方持有**(adoptRun 之后):回收转给消费循环的 finally,起跑方此后**只注销不杀**。
+//   ③ **所有者活得比这次调用长**(常驻调度台 attachLead 之后):句柄挂在 lead 上,由
+//      haltTeam / endTurn 收口,起跑方不再过问。
+//
+// 判据是「有没有被 adoptRun 认领过」,**不是「还在不在 handles 集合里」**:在不在集合里只
+// 决定 isRunning 的真假,跟进程死没死是两件事。拿「注销过没有」当「可以安全开刀」用,会在
+// 正常跑完(登记仍在册)的路径上对着一个已经退出的号发信号 —— 那个号此时可能已经属于用
+// 户的别的程序(第 1 轮审查 F2,进程层判据见 executors/spawn.ts `childStillOurs`)。
+const adoptedRuns = new WeakSet<Killable>();
+const discardedRuns = new WeakSet<Killable>();
+
+/** ②:消费循环已经真正接手这个 handle,之后的回收由它的 finally 负责。 */
+export function adoptRun(h: Killable): void {
+  adoptedRuns.add(h);
+}
+
 /**
- * 起跑途中失败,而这个 handle **还没有人消费**:杀掉进程 + 注销登记,两件事一起做。
- *
- * 为什么必须一起 —— 初始化段（落库、建日志目录、开写流、组装调度台）抛出来的那一刻,CLI
- * 进程**已经起了**（`executor.run` / `openResident` 都是当场 spawn,不是惰性）,而这一轮的
- * 消费循环永远不会开始,没有任何 finally 会来收它:
- *   · 只注销 → `isRunning` 对了,可那个 CLI 还在跑。没人读它的输出,而停止按钮看的就是这份
- *     集合,于是谁也杀不到它 —— 一个无主进程在用户的工作目录里继续烧真额度。
- *   · 只杀不注销 → 进程走了,集合里的 handle 还在,`isRunning` 便永远判真:任务明明空着,
- *     界面上停止按钮却亮着,`stopTask` 返回 true 又什么都没停（第 8 轮审查 N1）。
- * `cleanup` 一并调:CLI 甩出去的后台后代平时由消费循环的 finally 回收（见 single-run.ts）,
- * 这条路上没有那道 finally。
- *
- * **只对还在册的 handle 动手**,所以可以无脑挂在 finally 上:已经被消费循环注销过的那些
- * （正常收尾、流抛错、被停）一律跳过,不会去 kill 一个早就自己退了的 pid。
+ * 起跑途中(或接管途中)失败时的收口,可以无脑挂在任何一条出口上:
+ *   · 一律注销登记 —— 否则进程走了而 handle 还在册,`isRunning` 永远判真,界面上停止按钮
+ *     亮着、`stopTask` 返回 true 却什么都没停(第 8 轮审查 N1);
+ *   · **只有尚未被 adoptRun 认领的**才杀 + 回收后代 —— 那种才是真·无主:CLI 已经起来了,
+ *     而这一轮的消费循环永远不会开始,没有任何 finally 会来收它。认领过的交给消费方,这里
+ *     多事只会制造 F2 的误杀窗口。
+ * 重复调用无副作用(幂等),所以 try/catch/finally 里重复挂也不怕。
  */
 export function discardStartingRun(taskId: string, h: Killable): void {
-  if (!handles.get(taskId)?.has(h)) return;
   untrackRun(taskId, h);
+  if (adoptedRuns.has(h) || discardedRuns.has(h)) return;
+  discardedRuns.add(h);
+  void finalizeAbandonedRun(h).catch(() => { /* finalizeAbandonedRun 自己已经兜住了 */ });
+}
+
+/**
+ * 真·无主回合的进程收尾:杀根进程 + 回收它甩出去的后台后代,两件事都做完才 resolve。
+ * `cleanup` 是执行器句柄对「我这一轮起过的所有后代」的幂等 finalizer —— 平时由消费循环
+ * 的 finally 调用(见 single-run.ts),这条路上没有那道 finally,所以必须在这里补上;少
+ * 了它,被杀掉的只是 CLI 本体,它 nohup 出去的那些还在(第 1 轮审查 F1)。
+ */
+export async function finalizeAbandonedRun(h: Killable): Promise<void> {
   try {
     h.kill();
   } catch {
     /* best effort */
   }
-  void h.cleanup?.().catch((error) => {
-    console.warn(`[ash] 起跑失败后回收 ${taskId} 的 CLI 后代失败:`, error);
-  });
+  try {
+    await h.cleanup?.();
+  } catch (error) {
+    console.warn("[ash] 回收无主回合的 CLI 后代失败:", error);
+  }
 }
 
 /**

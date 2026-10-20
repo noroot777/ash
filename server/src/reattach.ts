@@ -10,7 +10,7 @@ import type { AgentType, SessionRole } from "@ash/shared";
 import type { RunHandle } from "./executors/types.js";
 import { db } from "./db/index.js";
 import { agents, tasks, sessions } from "./db/schema.js";
-import { claimTurn, discardStartingRun, releaseTurn, trackRun, untrackRun } from "./runs.js";
+import { claimTurn, discardStartingRun, releaseTurn, trackRun } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
@@ -23,6 +23,7 @@ import { withSkillInvocation } from "./skills.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { closeSessionTurns, markTurnActive } from "./session-turns.js";
+import { reconcileInterruptedTask } from "./task-reconcile.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -189,13 +190,28 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         },
       })
         .catch((err) => console.error(`[ash] 接管 ${task.id} 的消费循环出错:`, err))
-        .finally(() => {
-          untrackRun(task.id, adoptedHandle);
+        .finally(async () => {
+          discardStartingRun(task.id, adoptedHandle);
           if (claimedTurn) releaseTurn(task.id);
           // 接回的这条消费循环结束了（正常收尾、抛错、被停都走这里）：活动登记跟着撤,
           // 否则一条接回后崩掉的会话会一直被读端当成「还在写」（第 6 轮审查必须修 1）。
           closeSessionTurns(sess.id);
-        });
+          // **这条 finally 跑在 reconcileInterrupted 之后**:接管是 `void` 出去的,
+          // reattachRunningTasks 当场就返回了,紧随其后的那次全库收拾看到 isRunning 为真
+          // (句柄刚登记上)、正确地跳过了这个任务。于是消费循环若在初始化段抛错,进程收掉
+          // 了、登记注销了,却没有任何人来结算它 —— 任务永远停在 running(第 1 轮审查 F1)。
+          // 上面三行把「有活句柄」的证据撤干净之后再问一次,正常收尾时它是空转。
+          const stranded = await reconcileInterruptedTask(task.id).catch((error) => {
+            console.error(`[ash] 结算接管后中断的 ${task.id} 失败:`, error);
+            return false;
+          });
+          // 这次接管最终没跑成,「已接管」名单里也不该再算它(调用方拿这份名单判「谁不用
+          // 再按中断处理」)。正常收尾时 stranded 为假,名单不动。
+          if (stranded) adopted.delete(task.id);
+        })
+        // 这条链是 `void` 出去的,finally 里再抛就是一条无人接管的 rejection(Node 默认
+        // 直接掀掉进程)。收尾动作本身不该连累整个 server。
+        .catch((error) => console.error(`[ash] 接管 ${task.id} 的收尾出错:`, error));
       console.log(`[ash] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
     } catch (err) {
       console.error(`[ash] 接管 ${task.id} 失败:`, err);

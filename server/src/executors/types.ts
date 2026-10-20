@@ -92,8 +92,16 @@ export interface ResidentHandle {
   dropSession?(): void;
   close(): void; // 优雅收尾:关 stdin,等它自己退出
   kill(): void; // 硬杀,走 killChild 三层击杀
-  /** 单飞适配器收流后继续清理 CLI 遗留的后台后代。 */
-  cleanup?: () => Promise<void>;
+  /**
+   * 覆盖这个句柄**已经启动过的所有回合/后代**的幂等 finalizer。`kill()` 只负责进程本体
+   * (codex 的会话级常驻还只负责当前那一轮),CLI 甩到后台的后代要靠这个收。
+   *
+   * 字段做成必填而不是可选,是因为无主回合的收尾(runs.ts `finalizeAbandonedRun`)和单飞
+   * 适配器收流之后都只有这一条路可走:codex 侧曾把唯一的清理能力藏在一个「流走到尽头且
+   * 会话在桌面端可见」才触发的事件包装器里,于是那条路对外等于没有能力(第 1 轮审查 F1)。
+   * claude(residentFromChild)与 codex(codex-resident.ts)两侧都实现了它。
+   */
+  cleanup: () => Promise<void>;
 }
 
 // 从执行器 profile(agents 表一行)解析出来的构造参数 —— 单点在

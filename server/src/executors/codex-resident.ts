@@ -43,9 +43,30 @@ export function openCodexResident(params: {
   startTurn: (prompt: string, sessionId: string) => CodexTurn;
   /** 硬杀一个回合进程(走三层击杀)。 */
   killTurn: (child: ChildProcess) => void;
+  /** 回收一个回合进程甩到后台的后代(幂等,`cleanup` 的单位)。 */
+  finalizeTurn: (child: ChildProcess) => Promise<void>;
 }): ResidentHandle {
   let sessionId = params.initialSessionId;
   let commandLine = "";
+  // 这个会话**起过而还没收尾**的回合进程。codex 的常驻是会话级的 —— 一个回合一个进程,所以
+  // 「把这个句柄收干净」不等于「收掉当前这一个」:前面几轮 CLI 甩到后台的后代一样要收。
+  // 以前这件事唯一的指望是 codex.ts 那个事件包装器,而它只在「事件流正常走到尽头 + 这条
+  // thread 在桌面端可见」时才触发 —— 起跑失败、被杀、普通 exec 会话一条都走不到,于是句柄
+  // 对外**没有任何**清理能力(第 1 轮审查 F1)。能力搬到句柄自己身上,`cleanup` 覆盖它起过
+  // 的所有回合,且幂等。
+  const unfinalized = new Set<ChildProcess>();
+  // 调度台可以活成百上千轮,句柄不能无限攒 ChildProcess 引用(每个还挂着它的 stdio 对象)。
+  // 超过这个数就先把最老的那一轮收掉:它的后代至少隔了这么多个回合,「上一轮起服务、这一轮
+  // 接着用」碰不到这条线;而今天那些后代是**永远不收**,所以这个取舍只会更干净。
+  const MAX_UNFINALIZED_TURNS = 16;
+  const finalizeTurn = async (child: ChildProcess): Promise<void> => {
+    if (!unfinalized.delete(child)) return; // 收过了(幂等)
+    try {
+      await params.finalizeTurn(child);
+    } catch (error) {
+      console.warn("[ash] 回收 codex 常驻回合的后代失败:", error);
+    }
+  };
   // 回合排队:codex 一次只跑一个回合,回合进行中来的消息攒着,结束后依次送。
   const waiting: string[] = [];
   let current: CodexTurn | null = null;
@@ -71,6 +92,11 @@ export function openCodexResident(params: {
   function beginTurn(prompt: string): { turn: CodexTurn; hadSession: boolean } {
     const hadSession = !!sessionId;
     const turn = params.startTurn(prompt, sessionId);
+    unfinalized.add(turn.child);
+    if (unfinalized.size > MAX_UNFINALIZED_TURNS) {
+      const oldest = unfinalized.values().next().value; // Set 按插入序,最老的在前
+      if (oldest) void finalizeTurn(oldest);
+    }
     current = turn;
     commandLine = turn.commandLine;
     return { turn, hadSession };
@@ -202,6 +228,12 @@ export function openCodexResident(params: {
         params.killTurn(turn.child);
       }
       finish();
+    },
+    // 幂等 finalizer:覆盖这个句柄起过的**每一个**回合进程的后代,不只是当前那一轮
+    // (kill() 管的才是当前那一轮的进程本体)。无主回合的收尾就靠它(runs.ts
+    // `finalizeAbandonedRun`),单飞原生常驻则由消费循环的 finally 调用。
+    cleanup: async () => {
+      await Promise.all([...unfinalized].map((child) => finalizeTurn(child)));
     },
   };
 }

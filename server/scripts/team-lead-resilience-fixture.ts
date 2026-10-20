@@ -129,6 +129,7 @@ async function startLead(opts: {
       dropSession: () => {},
       close: () => {},
       kill: () => { killed++; },
+      cleanup: async () => {},
     },
     out: createWriteStream(join(runDir, `${opts.sessId}.md`), { flags: "a" }),
     busy: true,
