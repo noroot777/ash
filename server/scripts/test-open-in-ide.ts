@@ -4,9 +4,11 @@
 // 的不是「能打开」(那会在跑测试的机器上弹出一个 IDE 窗口),是那一圈拒绝:
 //   ① `ideId` 必须出现在服务端自己的探测结果里 —— 清单之外的 id、以及任何想直接塞路径
 //      的写法,一律 400 且不起任何进程;
-//   ⓪ 以及一条**正面**的:启动器真的失败时接口必须说失败。`spawn` 成功只证明启动器进程
-//      被创建了,证明不了 IDE 打开了;页面要是把它当成功,用户会盯着一个没动静的屏幕以为
-//      自己点漏了。这条用一个受控的假 CLI 跑真进程验,不碰本机真实的编辑器;
+//   ⓪ 以及一条**正面**的:启动器真的失败时接口必须说失败,而「没看到失败」不许冒充成功。
+//      `spawn` 成功只证明启动器进程被创建了,证明不了 IDE 打开了;页面要是把它当成功,
+//      用户会盯着一个没动静的屏幕以为自己点漏了。三种收场各钉一条:非零退出、**被信号
+//      打死**(以前跟「退出码 0」混在一个判断里)、**盯完窗口还活着**(回 `launching`,
+//      不是 `opened`)。全用一个受控的假 CLI 跑真进程验,不碰本机真实的编辑器;
 //   ② 路径仍然走 `resolveTarget`,越界 / 不存在照样拒;
 //   ③ 没有工作目录的任务 404;
 //   ④ 清单本身的形状:id 不重名、每条至少给了一种平台的线索 —— 少了的那条在任何机器上
@@ -155,6 +157,10 @@ await check("Windows: PATH 按分号切，每个目录再按 PATHEXT 补后缀",
 });
 
 await check("非 Windows: 不补后缀，按冒号切", () => {
+  // 这条**在 Windows 宿主上也必须过**：分隔符和 join 以前各有一半跟着宿主走，于是在
+  // Windows 真机上它拿 `;` 去切冒号路径、再用 win32.join 拼，结果是
+  // `\\usr\\local\\bin:\\usr\\bin\\code`（第 2 轮审查 N2 实测）。只参数化一半，跨平台
+  // 那一档就只能在对应宿主上验证——而那正是这个函数存在的理由。
   const candidates = commandCandidates("code", { PATH: "/usr/local/bin:/usr/bin" }, false);
   assert.deepEqual(candidates, ["/usr/local/bin/code", "/usr/bin/code"]);
 });
@@ -196,7 +202,7 @@ await check("Windows 原生 exe 直接起，不经过 cmd", () => {
   assert.equal(plan.file, "C:\\Programs\\cursor\\Cursor.exe");
   assert.deepEqual(plan.args, [NASTY], "目录是一个 argv 元素，中间没有 shell 再解释一遍");
   assert.equal(plan.verbatim, false);
-  assert.equal(plan.shortLived, false, "GUI 进程会一直跑，不能等它退出");
+  assert.ok(plan.waitMs > 0 && plan.waitMs <= 3000, "直接起的进程只盯早夭窗口，不能等它退出");
 });
 
 await check("Windows 批处理入口：路径不出现在命令行里，只走环境变量", () => {
@@ -217,14 +223,14 @@ await check("Windows 批处理入口：路径不出现在命令行里，只走�
   // 引号则让展开出来的 & | > 留在参数里而不是变成命令分隔符。
   assert.ok(plan.args.some((arg) => arg.includes(`"%${WIN_TARGET_ENV}%"`)), "目标占位必须被双引号包住");
   assert.ok(plan.args.some((arg) => arg.includes(`"%${WIN_LAUNCHER_ENV}%"`)), "启动器占位必须被双引号包住");
-  assert.equal(plan.shortLived, true);
+  assert.ok(plan.waitMs >= 10_000, "包装器交代完就退出，给足时间等它的退出码");
 });
 
 await check("macOS 走 open -a，退出码可信，算短命启动器", () => {
   const plan = launchPlan("app", "/Applications/Zed.app", "/Users/me/code/a&b");
   assert.deepEqual([plan.file, ...plan.args], ["open", "-a", "/Applications/Zed.app", "/Users/me/code/a&b"]);
   assert.equal(plan.verbatim, false);
-  assert.equal(plan.shortLived, true, "open 几百毫秒就退出，它的退出码就是成败");
+  assert.ok(plan.waitMs >= 10_000, "open 几百毫秒就退出，值得等它的退出码");
 });
 
 await check("清单里 Windows 那一列的 .cmd / .bat 都会落到 shell 档，其余不进 shell", () => {
@@ -268,10 +274,13 @@ await check("没有工作目录的任务 404", async () => {
   assert.equal(result.status, 404);
 });
 
-// ── 启动器失败 = 接口失败（跑真进程，但只跑我们自己造的那个） ──────────────
+// ── 启动结果三档（跑真进程，但只跑我们自己造的那个） ──────────────────────
 // 不碰本机真实编辑器：往 PATH 前面塞一个假的 `codium`，让探测从 commands 那一列命中它。
-// 它把收到的参数写进文件再按 FAKE_EXIT 退出，于是「传对了哪个目录」和「失败有没有如实
-// 回报」能在同一个真进程上验完。
+// 它把收到的参数写进文件，再按 FAKE_IDE_MODE 选一种收场，于是「传对了哪个目录」和「三种
+// 收场各自被怎么报回去」能在同一个真进程上验完。
+//
+// 为什么非得跑真进程：这三档的区别全在 `child.on("exit")` 拿到的 `(code, signal)` 上，
+// 纯函数测不到——被信号打死那一档以前正是栽在这里（`code === null` 被当成了成功）。
 if (process.platform === "win32") {
   console.log("⊘ 启动器真进程用例在 Windows 上跳过（假 CLI 是 sh 脚本）");
 } else {
@@ -280,7 +289,19 @@ if (process.platform === "win32") {
   mkdirSync(fakeBin, { recursive: true });
   writeFileSync(
     join(fakeBin, "codium"),
-    `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsLog}"\nexit \${FAKE_IDE_EXIT:-0}\n`,
+    [
+      "#!/bin/sh",
+      `printf '%s\\n' "$@" > "${argsLog}"`,
+      'case "${FAKE_IDE_MODE:-ok}" in',
+      "  fail) exit 23 ;;",
+      // 自杀式信号退出 = 被安全软件 / OOM killer 打死的那一类
+      "  signal) kill -TERM $$; sleep 5 ;;",
+      // 活过早夭窗口再失败：这正是「等一会儿没动静就说已打开」会漏掉的那一档
+      "  slowfail) sleep 3; exit 23 ;;",
+      "  *) exit 0 ;;",
+      "esac",
+      "",
+    ].join("\n"),
   );
   chmodSync(join(fakeBin, "codium"), 0o755);
   process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
@@ -292,21 +313,42 @@ if (process.platform === "win32") {
     console.log("⊘ 启动器真进程用例跳过：这台机器上 vscodium 命中的是真实安装");
   } else {
     await check("启动器以非零退出 → 接口回失败，不说「已打开」", async () => {
-      process.env.FAKE_IDE_EXIT = "23";
+      process.env.FAKE_IDE_MODE = "fail";
       const result = await openInIde("task-main", { path: "src", ideId: "vscodium" });
       assert.equal(result.status, 500, `应当失败，实际 ${result.status}：${JSON.stringify(result.json)}`);
       assert.match(String(result.json.error), /23/, "错误里要带上退出码，否则用户无从查起");
       assert.ok(!("ok" in result.json), "失败的回执里不该还有 ok");
     });
 
-    await check("启动器正常退出 → 回成功，且收到的就是那个子目录的绝对路径", async () => {
-      process.env.FAKE_IDE_EXIT = "0";
+    await check("启动器被信号打死 → 同样是失败，不能当成退出码 0", async () => {
+      process.env.FAKE_IDE_MODE = "signal";
+      const result = await openInIde("task-main", { path: "src", ideId: "vscodium" });
+      assert.equal(result.status, 500, `应当失败，实际 ${result.status}：${JSON.stringify(result.json)}`);
+      assert.match(String(result.json.error), /信号/, "要说清是被信号终止的，不然没法查是谁杀的");
+    });
+
+    await check("活过早夭窗口但还没确认 → 回 launching，不是 opened", async () => {
+      process.env.FAKE_IDE_MODE = "slowfail";
+      const started = Date.now();
+      const result = await openInIde("task-main", { path: "src", ideId: "vscodium" });
+      assert.equal(result.status, 200, "没看到失败就不该报错——它可能真的是个编辑器");
+      assert.equal(
+        result.json.status,
+        "launching",
+        "这一档服务端什么确认都没拿到，报 opened 就是让页面去说一件没发生的事",
+      );
+      assert.ok(Date.now() - started < 2500, "只盯早夭窗口，不能一路等到它三秒后失败");
+    });
+
+    await check("启动器正常退出 → opened，且收到的就是那个子目录的绝对路径", async () => {
+      process.env.FAKE_IDE_MODE = "ok";
       const result = await openInIde("task-main", { path: "src", ideId: "vscodium" });
       assert.equal(result.status, 200);
       assert.equal(result.json.name, "VSCodium");
+      assert.equal(result.json.status, "opened", "拿到 0 退出码才是确认");
       assert.equal(readFileSync(argsLog, "utf8").trim(), join(repo, "src"));
     });
-    delete process.env.FAKE_IDE_EXIT;
+    delete process.env.FAKE_IDE_MODE;
   }
 }
 

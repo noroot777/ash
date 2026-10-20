@@ -202,8 +202,10 @@ export function mountFileRoutes(api: Hono) {
     try {
       const body = await c.req.json().catch(() => ({})) as { path?: string; ideId?: string };
       const target = await resolveTarget(root, body.path ?? "");
-      const { name } = await openInIde((body.ideId ?? "").trim(), target.absPath);
-      return c.json({ ok: true, absPath: target.absPath, name });
+      // `status` 不是装饰:`opened` 是启动器给了 0 退出码,`launching` 只是「盯完窗口它
+      // 还活着」。页面不许把后者说成「已打开」(第 2 轮审查 F2)。
+      const { name, status } = await openInIde((body.ideId ?? "").trim(), target.absPath);
+      return c.json({ ok: true, absPath: target.absPath, name, status });
     } catch (error) {
       return c.json({ error: messageOf(error) }, statusOf(error) as 400);
     }

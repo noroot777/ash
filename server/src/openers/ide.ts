@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { access, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
-import { join, win32 } from "node:path";
-import { IS_WINDOWS, splitPathList } from "../platform.js";
+import { join, posix, win32 } from "node:path";
+import { IS_WINDOWS } from "../platform.js";
 import { IDE_CATALOG, type IdeSpec } from "./ide-catalog.js";
 
 // 「用 IDE 打开这个文件夹」。清单在 ide-catalog.ts(为什么不能靠系统文件关联,见那里)。
@@ -76,12 +76,13 @@ export function commandCandidates(name: string, env: Env = process.env, windows 
   const exts = windows
     ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((ext) => ext.trim()).filter(Boolean)
     : [""];
-  // PATH 的分隔符 Windows 是 `;`,别写死 `:`——那会把 `C:\\bin` 从盘符处切成两段。
-  const dirs = windows ? (env.PATH ?? "").split(";").filter(Boolean) : splitPathList(env.PATH);
-  // 拼接也按目标平台取,不跟着**当前**平台走:`node:path` 的 join 在 macOS 上是 posix 版,
-  // 拼出来是 `C:\\system32/code.EXE`。运行时跑在 Windows 上本来就是对的,但那样这段逻辑
-  // 就只能在 Windows 上验证——而它写错的症状只是「那边探不到 IDE」,没人查得到这里。
-  const joinPath = windows ? win32.join : join;
+  // 分隔符和拼接**都**跟着 `windows` 参数走,一个都不能跟着宿主平台:`splitPathList` 和
+  // `node:path.join` 认的是**当前**平台 —— 在 Windows 宿主上,非 Windows 那一档会把
+  // `/usr/local/bin:/usr/bin` 当成一整个目录,再拼成 `\\usr\\local\\bin:...`。
+  // 只参数化一半等于这个函数只在它自己的宿主上是对的,跨平台那一档永远验不到
+  // (2026-10-20 第 2 轮审查 N2:这条断言在 Windows 真机上确实挂了)。
+  const dirs = (env.PATH ?? "").split(windows ? ";" : ":").map((dir) => dir.trim()).filter(Boolean);
+  const joinPath = windows ? win32.join : posix.join;
   return dirs.flatMap((dir) => exts.map((ext) => joinPath(dir, name + ext)));
 }
 
@@ -196,6 +197,19 @@ function windowsKind(path: string): "exec" | "winshell" {
 export const WIN_LAUNCHER_ENV = "ASH_IDE_LAUNCHER";
 export const WIN_TARGET_ENV = "ASH_IDE_TARGET";
 
+/**
+ * 一次启动的结果。**「没看到失败」不等于「打开了」**,所以这里是三档不是两档:
+ *  · 抛错     = 明确失败(启动器非零退出、被信号打死、进程根本没起来);
+ *  · `opened` = 启动器自己以 0 退出,它说交代完了;
+ *  · `launching` = 盯到窗口尽头它还活着 —— 多半就是那个编辑器进程,但**我们没有拿到
+ *    任何确认**,调用方不许据此说「已打开」。
+ *
+ * 为什么不能把第三档当成功:直接起的可执行文件不一定是常驻 GUI,PATH 上捡到的 `code`
+ * 之流是会退出的启动器,它完全可以在三秒后才失败;盯一秒半没动静就报「已用 X 打开」,
+ * 用户看着一个没反应的屏幕,只会以为自己点漏了。
+ */
+export type LaunchStatus = "opened" | "launching";
+
 /** 一次启动要跑的东西。跟真正 spawn 分开,是为了让 Windows 那两档在 macOS 上也测得到。 */
 export interface LaunchPlan {
   file: string;
@@ -205,15 +219,23 @@ export interface LaunchPlan {
   /** 整条命令行由我们自己写死,不让 Node 再加一层引号(只有 cmd 那档要)。 */
   verbatim: boolean;
   /**
-   * 这是个**短命启动器**(macOS 的 `open`、cmd 包装器):它退出就等于「交代完了」,
-   * 退出码能用来判断成败。直接起的 GUI 进程不是,它会一直跑。
+   * 盯住它多久再下结论。**这是观察预算,不是对目标性质的断言** —— 到底是短命启动器
+   * 还是常驻 GUI,由它在这段时间里退没退出来说明,不由这个字段替它回答。
+   *
+   * 明确是启动器的那两档(macOS 的 `open`、cmd 包装器)给足时间等退出码;直接起的进程
+   * 只盯一小段「起来就夭折」的窗口,再久就是在等整个编辑器的生命周期了。
    */
-  shortLived: boolean;
+  waitMs: number;
 }
+
+/** 短命启动器最多等这么久等它的退出码。到点**不杀**它。 */
+const LAUNCHER_WAIT_MS = 15_000;
+/** 直接起的进程只盯这一小段早夭窗口,过了就放它去跑(结论是 `launching`,不是成功)。 */
+const EARLY_EXIT_WINDOW_MS = 1500;
 
 export function launchPlan(kind: LaunchKind, target: string, absPath: string): LaunchPlan {
   if (kind === "app") {
-    return { file: "open", args: ["-a", target, absPath], verbatim: false, shortLived: true };
+    return { file: "open", args: ["-a", target, absPath], verbatim: false, waitMs: LAUNCHER_WAIT_MS };
   }
   if (kind === "winshell") {
     return {
@@ -221,31 +243,29 @@ export function launchPlan(kind: LaunchKind, target: string, absPath: string): L
       args: ["/d", "/s", "/c", `""%${WIN_LAUNCHER_ENV}%" "%${WIN_TARGET_ENV}%""`],
       env: { [WIN_LAUNCHER_ENV]: target, [WIN_TARGET_ENV]: absPath },
       verbatim: true,
-      shortLived: true,
+      waitMs: LAUNCHER_WAIT_MS,
     };
   }
   // 原生可执行文件:路径作为一个 argv 元素交给 execvp / CreateProcess,中间没有 shell
   // 会再解释一遍,所以 `&`、`%`、空格、中文都只是文件名。
-  return { file: target, args: [absPath], verbatim: false, shortLived: false };
+  return { file: target, args: [absPath], verbatim: false, waitMs: EARLY_EXIT_WINDOW_MS };
 }
 
-/** 短命启动器最多等这么久。到点**不杀**它:挂住多半说明它就是那个前台 GUI 进程。 */
-const LAUNCHER_WAIT_MS = 15_000;
-/** 直接起的 GUI 进程只盯这一小段「起来就夭折」的窗口,过了就放它去跑。 */
-const EARLY_EXIT_WINDOW_MS = 1500;
-
 /**
- * 起一个**活过这一轮请求**的进程,并尽可能把「它其实没打开」如实报回来。
+ * 起一个**活过这一轮请求**的进程,并如实报出我们究竟观察到了什么。
  *
  * `spawn` 事件只证明**启动器**进程被创建了,证明不了它要做的事成功了:应用包损坏、
- * 探测之后被卸掉、权限不对,全都是启动器自己非零退出,而页面照样会说「已用 X 打开」。
- * 所以短命启动器要等它的退出码;真正的 GUI 进程不能等(那一等就是整个编辑器的生命周期),
- * 只盯一小段早夭窗口,没夭折就 unref 放手。
+ * 探测之后被卸掉、权限不对、被安全软件当场打死,全都是启动器自己异常收场。
+ * 三种收场各走各的出口(见 `LaunchStatus`):
+ *  · 非零退出码 → 失败,带上退出码,用户才查得下去;
+ *  · `code === null` → 它是**被信号打死**的,这同样是失败 —— 以前这一档跟「退出码 0」
+ *    混在一个判断里,于是被 SIGTERM 终止的启动器会被报成「已打开」;
+ *  · 等到窗口尽头还活着 → `launching`,**绝不 kill**:用户刚打开的编辑器不能被这条
+ *    判据杀掉,但也不能冒充成功。
  *
- * 超时一律按成功处理,**绝不 kill** —— 用户刚打开的编辑器不能被这条判据杀掉。
  * `stdio:"ignore"` 保留着:管道会把它绑回服务端,重启 ash 就会连它一起带走。
  */
-function launch(plan: LaunchPlan, name: string): Promise<void> {
+function launch(plan: LaunchPlan, name: string): Promise<LaunchStatus> {
   return new Promise((resolve, reject) => {
     const child = spawn(plan.file, plan.args, {
       detached: true,
@@ -255,24 +275,27 @@ function launch(plan: LaunchPlan, name: string): Promise<void> {
       ...(plan.env ? { env: { ...process.env, ...plan.env } } : {}),
     });
     let settled = false;
-    const settle = (failure?: Error) => {
+    const fail = (error: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (failure) {
-        reject(failure);
-        return;
-      }
-      child.unref();
-      resolve();
+      reject(error);
     };
-    const timer = setTimeout(() => settle(), plan.shortLived ? LAUNCHER_WAIT_MS : EARLY_EXIT_WINDOW_MS);
+    const done = (status: LaunchStatus) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.unref();
+      resolve(status);
+    };
+    const timer = setTimeout(() => done("launching"), plan.waitMs);
     timer.unref();
-    child.once("error", settle);
+    child.once("error", fail);
     child.once("exit", (code, signal) => {
-      if (code === 0 || code === null) return settle();
-      settle(new Error(
-        `${name} 没能打开：启动器以退出码 ${code}${signal ? `（信号 ${signal}）` : ""} 退出。`
+      if (code === 0) return done("opened");
+      const how = code === null ? `被信号 ${signal} 终止` : `以退出码 ${code} 退出`;
+      fail(new Error(
+        `${name} 没能打开：启动器${how}。`
         + "它可能已经被卸载、安装损坏，或者这台机器不允许它启动",
       ));
     });
@@ -286,13 +309,16 @@ function launch(plan: LaunchPlan, name: string): Promise<void> {
  * 本机程序」,不校验就是把任意可执行文件的启动入口开在了 HTTP 上。这里更严一档,因为
  * id 来自写死的清单,连「探到过的路径」都不接受。
  */
-export async function openInIde(ideId: string, absPath: string): Promise<{ name: string }> {
+export async function openInIde(
+  ideId: string,
+  absPath: string,
+): Promise<{ name: string; status: LaunchStatus }> {
   const found = (await findInstalled(false)).find((item) => item.spec.id === ideId)
     // 缓存里没有可能只是它刚装上,重探一次再说没有。
     ?? (await findInstalled(true)).find((item) => item.spec.id === ideId);
   if (!found) {
     throw Object.assign(new Error("这个 IDE 不在本机已探测到的清单里"), { status: 400 });
   }
-  await launch(launchPlan(found.kind, found.target, absPath), found.spec.name);
-  return { name: found.spec.name };
+  const status = await launch(launchPlan(found.kind, found.target, absPath), found.spec.name);
+  return { name: found.spec.name, status };
 }

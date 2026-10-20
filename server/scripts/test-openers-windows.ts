@@ -4,7 +4,14 @@
 // 解析和拼装都是纯函数，所以拿真实机器上抄下来的注册表输出当样本喂进去。开发机上没有
 // 注册表可查，没有这条测试的话，`%1` 替换、带空格的路径、默认应用这些地方全靠肉眼。
 import assert from "node:assert/strict";
-import { buildWindowsCommand, parseRegistryScan, registryScript, toWindowsProbe } from "../src/openers/windows.js";
+import {
+  WIN_OPEN_TARGET_ENV,
+  buildWindowsCommand,
+  parseRegistryScan,
+  registryScript,
+  toWindowsProbe,
+  windowsDefaultOpenCommand,
+} from "../src/openers/windows.js";
 
 // 样本照着真机上 .md 的注册表长相写：VS Code 是 ProgID 关联、Notepad++ 走 OpenWithList
 // 落到 Applications\ 下、最后一个是没有 %1 占位符的老式条目。
@@ -114,4 +121,38 @@ assert.deepEqual(buildWindowsCommand('"C:\\a\\b.exe" "%1"', hostile), { file: "C
 const messy = parseRegistryScan(["垃圾行", "A\t\t没有 id\tcmd", "A\tOnlyId", "D\t", "A\tX\t\t"].join("\n"));
 assert.deepEqual(messy, { entries: [], defaultId: null }, "缺 id、缺命令行、字段不够的行一律丢掉");
 
-console.log("✓ openers/windows：注册表输出解析、默认应用、%1 替换与老式条目兜底都对");
+// ── 「交给系统默认」那一档：路径永远是数据，不是命令 ──────────────────────
+// 这是整条打开链路上唯一非过 cmd 不可的地方（`start` 只有 cmd 里有），也因此是唯一能
+// 把目录名重新解释成命令的地方。下面这些**全是合法的 Windows 目录名**，不需要调用方
+// 提交任何可执行文件：`&` 没被引号包住就是命令分隔符，`%TEMP%` 会被展开成别的路径。
+// 真机复现见 2026-10-20 第 2 轮审查 F1（`...\launch.exe&ver` 启动了旁边的程序并多跑了
+// 一条 `ver`）。注册表模板那一档不在此列——它是 execFile 直接起 exe，中间没有 shell。
+for (const dir of [
+  "D:\\work\\project&ver",
+  "D:\\work\\proj&md INJECTED",
+  "C:\\x\\%TEMP%",
+  "D:\\work\\with space (x)",
+  "D:\\work\\caret^x",
+  "D:\\work\\中文目录",
+]) {
+  const command = windowsDefaultOpenCommand(dir);
+  const line = [command.file, ...command.args].join(" ");
+  assert.ok(!line.includes(dir), `目录泄进了命令行：${line}`);
+  for (const meta of ["&", "^", "(", ")"]) {
+    assert.ok(!line.includes(meta), `元字符 ${meta} 不该出现在命令行上：${line}`);
+  }
+  assert.equal(command.env[WIN_OPEN_TARGET_ENV], dir, "路径原样走环境变量");
+  assert.equal(command.verbatim, true, "命令行是自己写死的，别让 Node 再加一层引号");
+  assert.ok(
+    command.args.some((arg) => arg.includes(`"%${WIN_OPEN_TARGET_ENV}%"`)),
+    "占位必须被双引号包住——展开出来的 & 才会留在参数里而不是变成命令分隔符",
+  );
+  assert.ok(command.args.includes("/d"), "/d 跳过注册表里挂的 AutoRun 脚本");
+}
+assert.deepEqual(
+  windowsDefaultOpenCommand("C:\\a").args.filter((arg) => arg.startsWith("start")),
+  ['start "" "%ASH_OPEN_TARGET%"'],
+  "start 的第一个引号对是窗口标题，省掉它的话带空格的路径会被当成标题",
+);
+
+console.log("✓ openers/windows：注册表输出解析、默认应用、%1 替换、老式条目兜底，以及默认打开不把路径拼进命令行");

@@ -43,7 +43,10 @@
 .file-tree__peek:hover { background:var(--raised); color:var(--accent); }
 
 .file-viewer { display:flex; min-width:0; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
-.file-viewer__bar { display:flex; min-height:52px; flex:0 0 auto; align-items:center; gap:8px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
+/* 换行是必需的，不是美化：这排按钮全是 `flex:0 0 auto`，中栏收窄到 420px 左右时
+   标题会被压成零宽、最后几颗（含「关闭」）整个溢出到面板外被裁掉——点都点不到。
+   宽度够时 wrap 不改变任何东西（标题的 flex-basis 是 0，不会把按钮挤下去）。 */
+.file-viewer__bar { display:flex; min-height:52px; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:8px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
 .file-viewer__title { min-width:0; flex:1; }
 .file-viewer__title b { display:block; overflow:hidden; color:var(--ink); font-size:12.5px; text-overflow:ellipsis; white-space:nowrap; }
 .file-viewer__title small { display:block; overflow:hidden; color:var(--faint); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }

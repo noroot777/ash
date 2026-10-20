@@ -258,8 +258,35 @@ export function buildWindowsCommand(template: string, absPath: string) {
  * 调用方(openers/index.ts)已经确认过 appId 出现在这个文件的探测结果里,所以这里
  * 直接查刚才那次扫描的缓存 —— 查不到就退回系统默认,不是错误。
  */
+/**
+ * 「交给系统默认」那一档的命令。**整条链路上唯一非过 cmd 不可的地方** —— `start` 是
+ * cmd 的内部命令,没有对应的可执行文件。
+ *
+ * 所以路径**不拼进命令行,只放进环境变量**。理由跟 openers/ide.ts 的 `launchPlan` 一字
+ * 不差:cmd 先做元字符解析(`&` `|` `>` `^` `(` `)`)和 `%VAR%` 展开,而 Node/libuv 的 argv
+ * quoting 不是 cmd escaping —— 不含空格和引号的参数会原样落进命令串,于是
+ * `D:\\work\\project&ver` 里的 `&ver` 就成了第二条命令,`C:\\x\\%TEMP%` 则会被展开成别的
+ * 路径。这些都是**合法的目录名**,不需要调用方提交任何可执行文件。
+ *
+ * 换成变量之后:`%VAR%` 展开是单遍的(展开出来的内容不再被当成变量语法重新扫描),两侧
+ * 的双引号让展开后的元字符留在参数里;Windows 文件名本来就不允许 `"`,没有闭合引号被
+ * 撬开的路。`/d` 跳过 AutoRun,`/s` 锁定「去掉首尾一对引号、中间原样」这条解析规则。
+ *
+ * 导出是为了让 test-openers-windows.ts 在 macOS 上也能钉住「路径不出现在命令行里」。
+ */
+export const WIN_OPEN_TARGET_ENV = "ASH_OPEN_TARGET";
+
+export function windowsDefaultOpenCommand(absPath: string) {
+  return {
+    file: process.env.COMSPEC || "cmd.exe",
+    args: ["/d", "/s", "/c", `start "" "%${WIN_OPEN_TARGET_ENV}%"`],
+    env: { [WIN_OPEN_TARGET_ENV]: absPath },
+    verbatim: true as const,
+  };
+}
+
 export async function windowsOpenCommand(absPath: string, ext: string, appId: string | null) {
-  const fallback = { file: "cmd", args: ["/c", "start", "", absPath] };
+  const fallback = windowsDefaultOpenCommand(absPath);
   if (!appId) return { ...fallback, fallback: null };
   const { entries } = await scan(ext, false);
   const entry = entries.find((item) => item.id.toLowerCase() === appId.toLowerCase());
