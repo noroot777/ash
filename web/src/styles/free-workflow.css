@@ -38,11 +38,20 @@
 .free-review-section-title b { font-size:10px; letter-spacing:.04em; text-transform:uppercase; }
 .free-review-section-title button { display:inline-flex; align-items:center; gap:4px; border:0; border-radius:6px; background:transparent; padding:4px 7px; color:var(--accent); font-size:9.5px; font-weight:650; }
 .free-review-reviewer-list { display:grid; gap:6px; }
-.free-review-reviewer-list > button { display:flex; min-width:0; min-height:50px; align-items:center; gap:8px; border:1px solid var(--line); border-radius:9px; background:var(--canvas); padding:8px 10px; text-align:left; }
-.free-review-reviewer-list > button:hover,.free-review-reviewer-list > button[aria-selected="true"] { border-color:color-mix(in lch,var(--accent) 44%,var(--line)); background:color-mix(in lch,var(--accent) 4%,var(--panel)); }
-.free-review-reviewer-list > button > span { min-width:0; flex:1; }
+/* 一行 = 选它 + 删它。按钮不能套按钮，所以行是 div；卡片的边框与选中态仍画在选按钮上。 */
+.free-review-reviewer-row { display:flex; min-width:0; align-items:center; gap:4px; }
+.free-review-reviewer-pick { display:flex; min-width:0; flex:1; min-height:50px; align-items:center; gap:8px; border:1px solid var(--line); border-radius:9px; background:var(--canvas); padding:8px 10px; text-align:left; }
+.free-review-reviewer-pick:hover,.free-review-reviewer-pick[aria-selected="true"] { border-color:color-mix(in lch,var(--accent) 44%,var(--line)); background:color-mix(in lch,var(--accent) 4%,var(--panel)); }
+.free-review-reviewer-pick > span { min-width:0; flex:1; }
 .free-review-reviewer-list b { display:block; overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .free-review-reviewer-list svg { flex:0 0 auto; color:var(--accent); }
+/* 删除是破坏性的，平时收着：扫到这一行、或键盘 Tab 进来才露出。位置常驻（只动 opacity），
+   免得一悬停整列卡片就窜宽。触摸设备没有 hover，那里常亮，见文件末尾的媒体查询。 */
+.free-review-reviewer-delete { display:grid; width:28px; height:28px; flex:0 0 auto; place-items:center; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--faint); opacity:0; transition:opacity .12s; }
+.free-review-reviewer-row:hover .free-review-reviewer-delete,.free-review-reviewer-delete:focus-visible { opacity:1; }
+.free-review-reviewer-delete:hover:not(:disabled) { border-color:color-mix(in lch,var(--red) 32%,var(--line)); background:color-mix(in lch,var(--red) 10%,var(--panel)); color:var(--red); }
+.free-review-reviewer-delete:disabled { color:var(--line2); }
+.free-review-reviewer-delete svg { color:inherit; }
 .reviewer-profile-summary { display:flex; min-width:0; align-items:baseline; gap:4px; margin-top:2px; overflow:hidden; color:var(--faint); font-size:9px; line-height:1.25; white-space:nowrap; }
 .reviewer-profile-summary > span { min-width:0; max-width:40%; overflow:hidden; flex:0 1 auto; text-overflow:ellipsis; }
 .reviewer-profile-summary i { flex:0 0 auto; color:var(--line2); font-style:normal; }
@@ -76,6 +85,8 @@
 .free-review-dialog > footer button.is-primary { border-color:var(--accent); background:var(--accent); color:white; }
 .free-review-dialog > footer button:disabled { opacity:.5; }
 .free-review-loading { display:flex; min-height:260px; align-items:center; justify-content:center; gap:7px; color:var(--faint); }
+.free-review-loading.is-error { color:var(--red); }
+.free-review-loading button { height:26px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 10px; color:var(--muted); font-size:10px; }
 .reviewer-profile-fields { display:grid; gap:10px; }
 .free-review-run-override { display:grid; gap:9px; margin-top:10px; border-top:1px solid var(--line); padding-top:10px; }
 .free-review-run-override > label > span { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
@@ -260,3 +271,10 @@
 .preview-service-links .preview-service-scroll > a:hover { border-color:var(--line2); background:var(--raised); color:var(--ink); }
 .preview-service-links .preview-service-scroll > a > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .preview-service-links .preview-service-scroll > a > svg { flex-shrink:0; color:var(--faint); }
+
+@media (prefers-reduced-motion:reduce) {
+  .free-review-reviewer-delete { transition:none; }
+}
+@media (hover:none) {
+  .free-review-reviewer-delete { opacity:1; }
+}

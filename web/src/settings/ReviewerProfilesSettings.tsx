@@ -13,6 +13,7 @@ import {
   reviewerPayload,
   type ReviewerDraft,
 } from "../free-workflow/ReviewerProfileFields.tsx";
+import { reviewerDeleteMessage } from "../free-workflow/freeReviewCopy.ts";
 
 export function ReviewerProfilesSettings({ notify }: { notify: (message: string) => void }) {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
@@ -127,7 +128,7 @@ export function ReviewerProfilesSettings({ notify }: { notify: (message: string)
           )}
         </div>
       </section>
-      {deleteTarget && <ConfirmDialog title="删除审查者" message={`确定删除“${deleteTarget.name}”？历史审查记录仍会保留当时的配置快照。`} confirmLabel="删除" danger busy={busy} onConfirm={() => void remove()} onClose={() => setDeleteTarget(null)} />}
+      {deleteTarget && <ConfirmDialog title="删除审查者" message={reviewerDeleteMessage(deleteTarget.name)} confirmLabel="删除" danger busy={busy} onConfirm={() => void remove()} onClose={() => setDeleteTarget(null)} />}
     </>
   );
 }

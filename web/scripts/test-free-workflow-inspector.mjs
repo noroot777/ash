@@ -93,7 +93,7 @@ try {
   await reserveButton.click();
   const reviewDialog = page.locator(".free-review-dialog");
   await reviewDialog.getByRole("heading", { name: "预约审查" }).waitFor();
-  await reviewDialog.getByRole("button", { name: /Codex 审查/ }).waitFor();
+  await reviewDialog.locator(".free-review-reviewer-pick").filter({ hasText: "Codex 审查" }).waitFor();
   const dialogBox = await reviewDialog.boundingBox();
   assert.ok(dialogBox && dialogBox.width <= 642, "派审弹窗应收窄到 640px 左右");
   assert.equal(await reviewDialog.evaluate((node) => node === document.activeElement), true, "弹窗打开后应接管焦点，让 Enter 可直接提交");
@@ -110,6 +110,10 @@ try {
   assert.equal(await page.evaluate(() => window.__reservationRequests ?? 0), 1, "Shift+Enter 只能换行，不能提交");
   await note.press("Enter");
   await chatToolbar.getByRole("button", { name: "已预约复审" }).waitFor();
+  // 这颗按钮上一次预约之后就一直写着「已预约复审」，所以它满足得了但证明不了这一次 ——
+  // 等计数本身。派审在提交前会跟权威清单核对一次（多一跳网络），别拿「同一拍里就该到」
+  // 当断言前提。
+  await page.waitForFunction(() => window.__reservationRequests === 2);
   assert.equal(await page.evaluate(() => window.__reservationRequests), 2, "Enter 更新预约时应只新增一次请求");
   assert.equal(await page.evaluate(() => window.__reservationNote), "重点检查窄屏布局\n与键盘交互", "Enter 提交时必须携带附言");
 
@@ -224,7 +228,7 @@ try {
   await menuReview.waitFor();
   await menuReview.click();
   await reviewDialog.getByRole("heading", { name: "审查合并结果" }).waitFor();
-  await reviewDialog.getByRole("button", { name: /Codex 审查/ }).waitFor();
+  await reviewDialog.locator(".free-review-reviewer-pick").filter({ hasText: "Codex 审查" }).waitFor();
   assert.match(await reviewDialog.innerText(), /main/);
   assert.match(await reviewDialog.innerText(), /11111111.*22222222/);
   assert.equal(await reviewDialog.getByText("失败后自动复审", { exact: true }).count(), 0, "合并后审查固定单轮，不显示自动复审设置");
@@ -238,7 +242,7 @@ try {
   assert.equal(await snapshotLink.count(), 1, "统一验收快照卡应提供低调文字入口");
   await snapshotLink.click();
   await reviewDialog.getByRole("heading", { name: "审查合并结果" }).waitFor();
-  await reviewDialog.getByRole("button", { name: /Codex 审查/ }).waitFor();
+  await reviewDialog.locator(".free-review-reviewer-pick").filter({ hasText: "Codex 审查" }).waitFor();
   await reviewDialog.getByRole("button", { name: "开始审查", exact: true }).click();
   await page.waitForFunction(() => window.__postMergeRequests === 1);
   assert.equal(await page.evaluate(() => window.__postMergeRequests), 1, "快照入口应发起一次合并结果审查");
