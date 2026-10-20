@@ -65,7 +65,13 @@ assert.equal(columns.rows.some((r) => r.name === "target"), false, "ssh profile 
 
 const task = (await dbClient.execute("SELECT executor_id, updated_at FROM tasks WHERE id = 'task-on-ssh'")).rows[0]!;
 assert.equal(task.executor_id, null, "指向 ssh profile 的任务必须回到「按类型默认执行器」");
-assert.notEqual(task.updated_at, stamp, "改了任务的执行器归属就得动 updated_at,否则前端拿不到新值");
+// 这一条原来是反过来钉的(「否则前端拿不到新值」)。那条理由站不住:前端的逐行合并只在
+// **本地行严格更新**时才保留本地行(web/src/lib/useTasks.ts `mergeFetchedTasks`),时间戳
+// 相同时取的就是服务端快照;何况这条迁移跑在启动期,那会儿还没有任何客户端状态。
+// 而推进它的代价是实打实的:updated_at 是任务的「最后活动时间」,列表排序、普通模式的
+// 24 小时折叠、未读事件键都读它 —— 2026-10-19 删两个 profile 把 432 条历史任务一次推到
+// 「昨天」就是这么来的。判据统一在 server/src/task-refs.ts。
+assert.equal(task.updated_at, stamp, "清掉悬空的 ssh 执行器引用不该推进任务的最后活动时间");
 
 const msg = (await dbClient.execute("SELECT executor_id FROM scheduled_messages WHERE id = 'msg'")).rows[0]!;
 assert.equal(msg.executor_id, null, "待发送消息还钉着已删的 ssh profile");
