@@ -155,7 +155,8 @@ export async function ensureSchema() {
       source_run TEXT, start_low_at TEXT, source_role TEXT,
       source_review_run TEXT, source_review_round INTEGER,
       unit_token TEXT, ended_by TEXT,
-      results_abandoned_at TEXT, results_abandoned_reason TEXT
+      results_abandoned_at TEXT, results_abandoned_reason TEXT,
+      result_handoff_at TEXT, result_handoff_text TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (
@@ -357,6 +358,10 @@ export async function ensureSchema() {
     // (第 2 轮审查 R2-3)。存量行 NULL = 没人放弃过。
     "ALTER TABLE monitors ADD COLUMN results_abandoned_at TEXT",
     "ALTER TABLE monitors ADD COLUMN results_abandoned_reason TEXT",
+    // 「结局已写定、结束通知还没入队」那一瞬的责任凭证(时刻 + 原文)。少了它,那条缝里完成闸
+    // 看不见任何东西,任务落 done 把唯一的结果通知吃掉(第 1 轮审查 F1)。存量行 NULL = 不在交接中。
+    "ALTER TABLE monitors ADD COLUMN result_handoff_at TEXT",
+    "ALTER TABLE monitors ADD COLUMN result_handoff_text TEXT",
     "ALTER TABLE monitor_reclaim_debts ADD COLUMN unit_token TEXT",
     // 「线索追到这里为止」的戳。**不是销账**:整项退出在当前平台证不出,所以行留着只盖戳
     // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。

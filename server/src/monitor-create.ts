@@ -502,6 +502,9 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       // 「它的结果我不要了」也只在有人真这么说过时才有值（见 schema 的 results_abandoned_at）。
       resultsAbandonedAt: null,
       resultsAbandonedReason: null,
+      // 结束通知的交接凭证只在收尾那一刻写（见 schema 的 result_handoff_at）。
+      resultHandoffAt: null,
+      resultHandoffText: null,
       ownerUserId: input.ownerUserId ?? null,
       kind: "ash",
       nativeId: null,

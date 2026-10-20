@@ -34,7 +34,7 @@ import { tasks, sessions } from "./db/schema.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
-import { confirmTaskComplete, holdCompletionForBlockedReplay } from "./task-complete.js";
+import { confirmTaskComplete } from "./task-complete.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -228,16 +228,19 @@ async function applyReplay(
           : eq(tasks.activeDirectionToken, directionToken),
       ],
       staleError: "补录时方向身份已经换走了",
-    });
-    if (!confirm.ok) {
-      console.warn(`[ash] replay complete_task(${taskId}) rejected: ${confirm.error}`);
       // **被哨兵闸拦下 ≠ 什么都不用做**(第 2 轮审查 R2-1)。它确实交了卷,只是这一刻还不能
       // 落终态;什么都不说的话这一轮按「没交卷」记 failed —— 而 failed 同样是终态,哨兵跟着
       // 被收走,结果再也送不到它手上(实测 `settlement:"failed"`、`monitorAfter:"stopped"`)。
-      // 落一段可恢复的等待,结算读到它就落 paused。
-      if (confirm.blockedByMonitors) return holdCompletionForBlockedReplay(taskId, confirm.error);
-      // 身份过期那一种照旧什么都不说:那笔确认本来就不该生效(换方向了/不是这一回合的)。
-      return null;
+      // 这段等待由**入口自己**在同一段临界区、同一份方向 CAS 下落:拿到结果再补一笔的话,那
+      // 一笔没有身份条件,方向换走之后会把旧方向的暂停指令写到新方向头上（第 1 轮审查 F3）。
+      holdOnBlock: (blocked) =>
+        "完成确认当时因 MCP 通道中断没能送达，补录时被哨兵闸拦下，这一轮改为检查点暂停：" + blocked,
+    });
+    if (!confirm.ok) {
+      console.warn(`[ash] replay complete_task(${taskId}) rejected: ${confirm.error}`);
+      // 身份过期那一种照旧什么都不说:那笔确认本来就不该生效(换方向了/不是这一回合的),
+      // 入口也保证了它一个字都没写。
+      return confirm.blockedByMonitors ? confirm.note ?? null : null;
     }
     return "完成确认当时因 MCP 通道中断没能送达，已从本回合的调用记录中补录（否则这一轮会被记成失败）。";
   }

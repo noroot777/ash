@@ -21,6 +21,8 @@ export const monitorApi = {
     request<{ monitor: TaskMonitor | null }>(`/monitors/${id(monitorId)}/stop`, json("POST", { reason }))
       .then((r) => ({ monitor: r.monitor ? normalizeMonitorDto(r.monitor) : null })),
   /** 哨兵日志的尾巴：事件正文里被略去的行（单批超限、合并超长）只有这里还有。 */
-  monitorLog: (monitorId: string, lines?: number): Promise<{ lines: string[]; truncated: boolean }> =>
+  // `bytes`:日志文件这一刻多大（`null` = 这一刻读不出来,老后端也没有这一列）。空行列表有三
+  // 种来由（真空文件 / 读取失败 / 尾部没有完整行),只有这个字段分得开（第 1 轮审查 F4）。
+  monitorLog: (monitorId: string, lines?: number): Promise<{ lines: string[]; truncated: boolean; bytes?: number | null }> =>
     request(`/monitors/${id(monitorId)}/log${lines ? `?lines=${lines}` : ""}`),
 };

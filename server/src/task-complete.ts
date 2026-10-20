@@ -36,7 +36,7 @@ import { tasks } from "./db/schema.js";
 import { serialize } from "./monitors.js";
 import { confirmDone, hasConfirmed, revokeConfirmed } from "./runs.js";
 import { monitorsBlockingComplete, noteMonitorsDropped } from "./task-complete-monitors.js";
-import { clearAutoCheckpoint, restoreResumePrompt } from "./task-resume-prompt.js";
+import { clearAutoCheckpoint, writeResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -54,6 +54,14 @@ export type ConfirmCompleteResult =
        * （第 2 轮审查 R2-1 实测 `OLD_F1_REPLAY_REJECTED_THEN_FAILED`）。
        */
       blockedByMonitors?: true;
+      /**
+       * 受阻时**已经落下**的那段可恢复等待的说明（只有调用方传了 `holdOnBlock` 才有）。
+       *
+       * 由入口自己落、自己回这句话,而不是让调用方拿到 `blockedByMonitors` 再去补一笔:补的
+       * 那一笔不在这次身份判断的临界区里,也带不上身份条件（第 1 轮审查 F3 实测:旧方向的
+       * 暂停指令被补到了新方向头上）。
+       */
+      note?: string;
     };
 
 // ── ③ 的那把闩 ───────────────────────────────────────────────────────────────
@@ -119,10 +127,30 @@ export async function confirmTaskComplete(a: {
   taskId: string;
   where: (SQL | undefined)[];
   staleError: string;
+  /**
+   * 被闸拦下时要落的那段可恢复等待（给一句话，返回要写进时间线的说明）。
+   *
+   * **断线补录必须给**：补录是「替 agent 把丢在断掉通道里的那一笔交上去」，拦下来什么都不
+   * 写的话，这一轮照旧按没交卷记 failed —— 而 failed 同样是终态，哨兵跟着被收走（第 2 轮
+   * 审查 R2-1）。**HTTP 不给**：那条路上 agent 还在跑，拿到 409 自己会接着处置，提前写一段
+   * 系统等待只会让界面在它还在干活时就显示「在等续跑」。
+   *
+   * 落它的是这个入口自己,所以它和上面那次身份判断用的是同一份 CAS 条件、同一段临界区。
+   */
+  holdOnBlock?: (blocked: string) => string;
 }): Promise<ConfirmCompleteResult> {
   const result = await serialize(`task:${a.taskId}`, async (): Promise<ConfirmCompleteResult> => {
     const blocked = await monitorsBlockingComplete(a.taskId);
-    if (blocked) return { ok: false, error: blocked, blockedByMonitors: true };
+    if (blocked) {
+      if (!a.holdOnBlock) return { ok: false, error: blocked, blockedByMonitors: true };
+      const note = a.holdOnBlock(blocked);
+      // 身份条件进到这一笔写入里。换走了 = 一个字都没写,照「身份过期」回 —— 不是「业务受阻」:
+      // 业务受阻会让调用方把这当成「它确实交了卷」而记一行时间线（第 1 轮审查 F3）。
+      if (!await landCheckpoint(a.taskId, "名下还有没了结的哨兵", note, a.where)) {
+        return { ok: false, error: a.staleError };
+      }
+      return { ok: false, error: blocked, blockedByMonitors: true, note };
+    }
     const at = now();
     const updated = await db
       .update(tasks)
@@ -175,20 +203,6 @@ export async function holdCompletionForNewMonitor(taskId: string, label: string)
   }
 }
 
-/**
- * 补录被闸拦下时：**落一段可恢复的等待**，并把那句话交给调用方写进时间线。
- *
- * 不落的话那一轮按「没交卷」记 failed —— 而 failed 同样是终态，哨兵照样被收走（第 2 轮审查
- * 实测 `settlement:"failed"`、`monitorAfter:"stopped"`）。agent 确实交过卷，只是那一笔丢在了
- * 断掉的通道里；拦下它的是业务等待，不是它做错了什么。
- */
-export async function holdCompletionForBlockedReplay(taskId: string, blocked: string): Promise<string> {
-  const note = "完成确认当时因 MCP 通道中断没能送达，补录时被哨兵闸拦下，这一轮改为检查点暂停："
-    + blocked;
-  await landCheckpoint(taskId, "名下还有没了结的哨兵", note);
-  return note;
-}
-
 /** 被拦下来之后喂回给 agent 的那段续跑指令。它会作为一条 user 消息唤醒同一条会话。 */
 const checkpointResume = (why: string): string =>
   `继续：你这一轮确认过完成，但${why}，所以这一轮落成了检查点暂停而不是已完成`
@@ -219,7 +233,23 @@ async function revokeConfirmation(taskId: string): Promise<void> {
  * 没了就把这段话清掉」才能既做到（第 2 轮审查 R2-2），又不会顺手抹掉 agent 自己写的那段。
  * CAS 回填与整行广播都在助手里（`task-resume-prompt.ts` 文件头：这一列前端当门禁读）。
  */
-async function landCheckpoint(taskId: string, why: string, note: string): Promise<void> {
-  await restoreResumePrompt(taskId, checkpointResume(why), true);
+async function landCheckpoint(
+  taskId: string,
+  why: string,
+  note: string,
+  where: (SQL | undefined)[] = [],
+): Promise<boolean> {
+  const wrote = await writeResumePrompt(taskId, checkpointResume(why), true, where);
+  if (!wrote && where.length) {
+    // 没写上有两种:**空位已经被占**（agent 自己 pause_task 写过一段 —— 那段比我们这段更
+    // 知道它想干什么,不盖它,但这一轮照旧是暂停,时间线该记）和**身份已经换走**（整笔不该
+    // 生效,一个字都不许写）。只有后者要中止,所以这里必须分得开:再按同一份身份条件读一次。
+    const mine = await db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(and(eq(tasks.id, taskId), ...where));
+    if (!mine.length) return false;
+  }
   await appendTaskTimeline(taskId, note);
+  return true;
 }

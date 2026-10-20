@@ -162,7 +162,7 @@ async function initializeServer() {
       return null;
     });
     if (monitorRecovery?.attached || monitorRecovery?.lost || monitorRecovery?.pending
-      || monitorRecovery?.failed) {
+      || monitorRecovery?.failed || monitorRecovery?.redelivered) {
       // `pending` 单独说一句:那几条**既没接回来、也没判没**(pid 还空着、这一刻又认不回来),
       // 行原样留着等下一次问 —— 并进任何一边都是撒谎(第 19 轮审查 F2)。
       console.log(
@@ -171,7 +171,10 @@ async function initializeServer() {
         // `failed` 也要报出来:那几条的**监督已经立好**(日志照收、到点照收),欠的只是接管
         // 那一趟结论,已经排了有界重试(第 22 轮审查 F1-A)。不说一句就只有 server 日志里
         // 那行 error 知道这件事。
-        + (monitorRecovery.failed ? `，${monitorRecovery.failed} 个这一次没接管成功（已排重试，日志和期限照旧在盯）` : ""),
+        + (monitorRecovery.failed ? `，${monitorRecovery.failed} 个这一次没接管成功（已排重试，日志和期限照旧在盯）` : "")
+        // `redelivered`:上一次死在「结局已写定、结束通知还没入队」中间的那几条,这一趟把那笔
+        // 交接补完了(第 1 轮审查 F1)。不说一句的话,这件事只有库里那两列知道。
+        + (monitorRecovery.redelivered ? `，${monitorRecovery.redelivered} 条上次没来得及入队的结束通知已补发` : ""),
       );
     }
     // 「已停止」不等于「已退出」:上一辈子有人把它停了、信号发出去了、命令却没死,而那一版

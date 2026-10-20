@@ -29,10 +29,22 @@
 // `printf 'RESULT_READY\n'` 的哨兵已经 exited、消息正文有 RESULT_READY、complete 照旧
 // 200、结算落 done、那条消息变成 canceled。
 //
-// 两类都只挡「这一次完成」，不是永久锁：撤掉 / 收下来看一眼 / 用户在待发送托盘里删掉，
-// 任一件做完闸自己就开（**不是**按事件计数大于零就算已处理 —— 计数只在投递被接受时才涨，
-// 正好是这里要护的那一批还没涨的）。
-import { and, desc, eq, isNull, like } from "drizzle-orm";
+// **第三类:结局已经写定、那条结束通知还没入队的**（第 1 轮审查 F1）。前两类之间原来是有缝
+// 的:哨兵的结束是「把行写成终态」加「把【哨兵结束】排进待发送」两件事,中间还隔着写时间线
+// 那一笔 await。那一瞬第一类看不见它（已经不是 running）、第二类也看不见（消息还没入队),
+// 于是闸放行、任务落 done、紧接着的入队被终态挡回 —— 一条没有 stdout 的命令唯一能告诉执行者
+// 「等到了」的通知就此蒸发（实测 `F1_END_RESULT_HANDOFF`:statusAtSeam=exited、pendingBefore=0、
+// complete 200、settlement=done、messagesAfter=[]）。
+//
+// 补的办法不是在闸上再加一个 if（那只是把这一个窗口糊住,离线收尾那条对称路径照旧漏),而是
+// **让生产侧在产出结果的那一刻就留下一笔闸看得见的责任**:收尾把凭证跟终态写进同一条 UPDATE,
+// 入队成功之后才销（schema-monitors.ts 的 `result_handoff_at`、monitor-events.ts 的
+// `deliverResultHandoff`）。于是从结果产出到持久入队,任何一刻这三类里至少有一类看得见它。
+//
+// 三类都只挡「这一次完成」，不是永久锁：撤掉 / 收下来看一眼 / 用户在待发送托盘里删掉 /
+// 对它调 stop_monitor 明确放弃，任一件做完闸自己就开（**不是**按事件计数大于零就算已处理
+// —— 计数只在投递被接受时才涨，正好是这里要护的那一批还没涨的）。
+import { and, desc, eq, isNotNull, isNull, like } from "drizzle-orm";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
@@ -54,6 +66,7 @@ const MONITOR_COLUMNS = {
   events: monitors.events, offset: monitors.offset,
   endedAt: monitors.endedAt, endedReason: monitors.endedReason, endedBy: monitors.endedBy,
   logPath: monitors.logPath, resultsAbandonedAt: monitors.resultsAbandonedAt,
+  resultHandoffAt: monitors.resultHandoffAt,
   sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
 };
 
@@ -62,6 +75,7 @@ type MonitorRow = {
   events: number; offset: number; logPath: string;
   endedAt: string | null; endedReason: string | null; endedBy: string | null;
   resultsAbandonedAt: string | null;
+  resultHandoffAt: string | null;
   sourceReviewRun: string | null; sourceReviewRound: number | null;
 };
 
@@ -137,6 +151,29 @@ async function undeliveredResults(taskId: string): Promise<{ id: string; label: 
   return unread;
 }
 
+/**
+ * 第三类：结局已经写定、那条结束通知**还没入队**的（`result_handoff_at` 非空）。
+ *
+ * 这一列由收尾那一笔跟终态**同一条 UPDATE** 写下，入队成功后才销，所以它覆盖的正是前两类之间
+ * 那条缝（见文件头）。它也覆盖「进程这中间死掉」：凭证留在库里，启动时按它重投
+ * （`redeliverResultHandoffs`），而在重投之前闸一直看得见。
+ *
+ * 豁免跟前两类同口径：明确放弃过结果的（`results_abandoned_at`）不算，属于仍在进行的审查的
+ * 不算。
+ */
+async function handoffInFlight(taskId: string): Promise<MonitorFacts[]> {
+  const rows = await db.select(MONITOR_COLUMNS).from(monitors)
+    .where(and(
+      eq(monitors.taskId, taskId),
+      eq(monitors.kind, "ash"),
+      isNotNull(monitors.resultHandoffAt),
+      isNull(monitors.resultsAbandonedAt),
+    ));
+  const inflight: MonitorFacts[] = [];
+  for (const r of rows) if (!await sparedByReview(r)) inflight.push(factsOf(r));
+  return inflight;
+}
+
 const nameList = (items: { label: string }[]): string => {
   const head = items.slice(0, 3).map((m) => m.label).join("、");
   return items.length > 3 ? `${head} 等 ${items.length} 个` : head;
@@ -153,10 +190,14 @@ const nameList = (items: { label: string }[]): string => {
 export async function monitorsBlockingComplete(taskId: string): Promise<string | null> {
   const live = await liveMonitors(taskId);
   const unread = await undeliveredResults(taskId);
-  if (live.length === 0 && unread.length === 0) return null;
+  const inflight = await handoffInFlight(taskId);
+  if (live.length === 0 && unread.length === 0 && inflight.length === 0) return null;
   const what = [
     live.length ? `${live.length} 个哨兵还在盯着（${nameList(live)}）` : null,
     unread.length ? `${unread.length} 条哨兵结果还排在待发送里、没送到你手上（${nameList(unread)}）` : null,
+    inflight.length
+      ? `${inflight.length} 条哨兵刚跑完、结束通知正在送往你手上（${nameList(inflight)}）`
+      : null,
   ].filter(Boolean).join("，以及 ");
   return (
     `完成确认被拦下：你名下还有 ${what}。`
@@ -172,6 +213,10 @@ export async function monitorsBlockingComplete(taskId: string): Promise<string |
         + "（reason 写清为什么不要了）—— 对已经结束的哨兵照样管用，它只是把「必须先收下这份结果」"
         + "这条放行条件撤掉，连理由一起记进任务时间线，排着的事件该送还是会送。"
         + "用户也可以在界面的待发送托盘里直接删掉。"
+      : "")
+    + (inflight.length
+      ? "④ 正在送的那几条：**等一下再调一次 complete_task 就行** —— 它们是刚刚跑完的哨兵的结束通知，"
+        + "这一刻正在入队（通常就是下一个瞬间）。确实不要了也可以对它调 stop_monitor。"
       : "")
   );
 }
@@ -222,7 +267,12 @@ export async function noteMonitorsDropped(taskId: string): Promise<void> {
     await appendTaskTimeline(
       taskId,
       `本回合撤掉 ${dropped.length} 个哨兵后确认完成：${detail}${more}。`
-      + "它们在等的结果不会再回来了——还需要的话得重新挂一个哨兵。",
+      // **只说「不再继续盯」**(第 1 轮审查 N3)。上一版写「它们在等的结果不会再回来了」,
+      // 而这句话有两处说不准:一是确认成功不等于这一轮就落 done(手里还攥着人工检查点/
+      // 提问时会落 paused),二是 `stop_monitor` 明确保留已经攒下的事件(monitor-stop.ts),
+      // 放弃撤掉的只是「必须先收下它」这条放行条件 —— 那几条该送还是会送到。
+      + "从这一刻起没人再盯着它们了,之后才产生的输出不会再有人收——还需要的话得重新挂一个哨兵"
+      + "（它们停之前已经攒下、还排在待发送里的那些,该送的照旧会送到）。",
       { sessionId: turn.sessionId },
     );
   } catch (e) {

@@ -71,6 +71,25 @@ export const monitors = sqliteTable("monitors", {
    */
   resultsAbandonedAt: text("results_abandoned_at"),
   resultsAbandonedReason: text("results_abandoned_reason"),
+  /**
+   * **「它的结局已经写定、那条结束通知还没入队」这一瞬的责任凭证**(时刻 + 要送的原文)。
+   *
+   * 为什么非要落库:结束是两件事 —— 把行写成终态,和把「【哨兵结束】…」排进待发送。中间隔着
+   * 时间线那一笔 await。那一瞬库里的样子是「没有 running 的哨兵、也没有排着的消息」,而完成闸
+   * 的两类判据恰好就是这两样,于是它放行、任务落 done,紧接着的那次入队被终态挡回 —— 一条
+   * 没有 stdout 的命令(`sleep 0.15`)唯一能告诉执行者「等到了」的通知就此蒸发(第 1 轮审查
+   * F1 实测 `F1_END_RESULT_HANDOFF`:statusAtSeam=exited、pendingBefore=0、complete 200、
+   * settlement=done、messagesAfter=[])。
+   *
+   * 所以凭证跟终态**同一条 UPDATE 落库**(一条语句,没有缝),入队成功之后才清。于是从结果产出
+   * 到持久入队,任何一刻完成闸都至少看得见一样东西。进程这中间死掉也不丢:原文就在这一列上,
+   * 启动时按它重投(monitor-reattach.ts 的 `redeliverResultHandoffs`)。
+   *
+   * 跟 `results_abandoned_at` 的关系:那一列是「我不要这份结果了」—— 它一旦落下,这一列照旧
+   * 留着(通知该送还是会送),只是不再拦着完成。
+   */
+  resultHandoffAt: text("result_handoff_at"),
+  resultHandoffText: text("result_handoff_text"),
   // 谁起的这个哨兵(多人模式)。停它、看它都按任务归属判权,这一列只做记账。
   ownerUserId: text("owner_user_id"),
   // 出身:'ash' = ash server 自己起的进程(全功能);'claude' = claude CLI 内置 Monitor 的

@@ -435,13 +435,28 @@ export function tailLines(
  * 不从头读的理由不只是省内存：哨兵盯的东西一跑就是几小时，日志动辄几十上百兆，而人想看
  * 的永远是最后那几十行。从尾部截一段再把开头那半行丢掉（`start > 0` 时），比按行遍历
  * 整个文件便宜几个数量级，代价只是最旧的那一行可能缺个头——那一行本来也不在视野里。
+ *
+ * **`bytes` 是单独一件事实,不是行数的影子**(第 1 轮审查 F4)。空行列表有三种来由,而它们
+ * 对用户完全不是一回事:
+ *
+ *  · 文件确实是 0 字节 ⇒ `bytes: 0`,「从头到尾什么都没写过」说得出口;
+ *  · `statSync`/`openSync` 失败(日志被删/被挪、权限、I/O 出错)⇒ `bytes: null`,这一刻什么都
+ *    说不出口 —— 上一版在这里直接返回空列表,于是界面一句「它的日志从头到尾是空的」把一次
+ *    读取失败说成了确证的零输出;
+ *  · 尾部那一段里**一个换行都没有**(比如一条超过上限的超长输出)⇒ `bytes` 是真实大小、
+ *    `lines` 为空、`truncated` 为真。文件明明非空,而完整行一条都切不出来。
+ *
+ * 所以这三个字段一起返回,「有没有产出过」只许由 `bytes` 回答。
  */
-export function readLogTail(path: string, maxBytes: number): { lines: string[]; truncated: boolean } {
+export function readLogTail(
+  path: string,
+  maxBytes: number,
+): { lines: string[]; truncated: boolean; bytes: number | null } {
   let size = 0;
-  try { size = statSync(path).size; } catch { return { lines: [], truncated: false }; }
+  try { size = statSync(path).size; } catch { return { lines: [], truncated: false, bytes: null }; }
   const start = Math.max(0, size - maxBytes);
   let fd: number;
-  try { fd = openSync(path, "r"); } catch { return { lines: [], truncated: false }; }
+  try { fd = openSync(path, "r"); } catch { return { lines: [], truncated: false, bytes: null }; }
   try {
     const buf = Buffer.allocUnsafe(size - start);
     let filled = 0;
@@ -455,7 +470,9 @@ export function readLogTail(path: string, maxBytes: number): { lines: string[]; 
     // 截断点多半落在某一行中间：那半行不是一行，丢掉而不是当成一行展示。
     if (start > 0) lines.shift();
     if (lines.at(-1) === "") lines.pop();
-    return { lines, truncated: start > 0 };
+    // `truncated` 还有第二种来由:尾部这一段里一个完整行都没切出来(超长单行)。界面据此
+    // 才能把「文件是空的」和「这一段里没有完整行」分开说。
+    return { lines, truncated: start > 0 || (size > 0 && lines.length === 0), bytes: size };
   } finally {
     try { closeSync(fd); } catch { /* ignore */ }
   }

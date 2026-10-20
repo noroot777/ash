@@ -278,6 +278,8 @@ async function importValidated(
   ];
   // 源机留下的 checkpoint 指令原样带走,不再被前言裹一层。
   let resumePrompt = m.task.resumePrompt;
+  // 来源跟着文字一起过来（老 manifest 没这一列 ⇒ 按「自己写的」处理,见 handoff-types.ts）。
+  let resumePromptAuto = m.task.resumePromptAuto ?? false;
   if (m.sessions.length > 0 && !resumable) {
     notes.push("CLI 会话历史未迁移,续跑将开全新会话");
     noticeLines.push("注意:CLI 会话历史没有随任务迁移,这是一个全新会话。");
@@ -285,6 +287,10 @@ async function importValidated(
     // **不含任务正文**——会话历史又没到货,不自带就等于让 agent 空手上阵。
     if (resumePrompt) {
       resumePrompt = `任务目标全文如下:\n\n${m.task.body}\n\n上次暂停时留下的续跑提示:\n${resumePrompt}`;
+      // 重新包过一层 = 这已经是**导入侧新写的一段文本**（里面裹进了任务正文),不再是源机那
+      // 一笔凭证。所以来源归「自己写的」:它不该被对端的自动清理当成失效等待抹掉 —— 那会
+      // 连任务正文一起抹掉,而会话历史又没到货。
+      resumePromptAuto = false;
     }
   }
   const handoffNotice = noticeLines.join("");
@@ -353,6 +359,7 @@ async function importValidated(
     verifyStationRounds: m.task.verifyStationRounds ?? 0,
     verifyCompletedSteps: jsonOr(m.task.verifyCompletedSteps, "[]"),
     resumePrompt,
+    resumePromptAuto,
     question: m.task.question,
     questionOptions: jsonOr(m.task.questionOptions, "") || null,
     questionItems: jsonOr(m.task.questionItems, "") || null,

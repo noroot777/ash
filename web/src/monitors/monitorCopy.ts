@@ -100,7 +100,18 @@ export function claudeMonitorEpilogue(status: TaskMonitor["status"]): string {
  * 的投影行不说，判据同 {@link startedAtLabel}），以及**它是怎么结束的** —— 一条空日志配上
  * 「命令自己跑完了」和配上「盯到期了」，对用户是完全不同的两件事。
  */
-export function emptyLogCopy(monitor: TaskMonitor, live: boolean): string {
+export function emptyLogCopy(monitor: TaskMonitor, live: boolean, bytes: number | null | undefined): string {
+  // **「没有完整行」不等于「没有产出」**（第 1 轮审查 F4）。读不出来、或者尾部那一段里一个
+  // 换行都没有（超长单行）时,行列表同样是空的,而文件里可能有几兆字节。所以这两种先说清,
+  // 再谈「它一个字都没吐」—— 否则这一句就是拿一份不充分的代理数据断言一件没观测到的事实。
+  if (bytes === null || bytes === undefined) {
+    return "它的日志这一刻读不出来（文件可能被删掉或挪走了，也可能是权限/读写出错）——"
+      + "所以这里说不准它有没有产出过。";
+  }
+  if (bytes > 0) {
+    return `它的日志文件里有 ${bytes} 字节，但这一段尾巴里切不出一行完整内容`
+      + "（最可能是一条长到没有换行的输出）。完整内容在哨兵的日志文件里。";
+  }
   if (live) {
     const started = Date.parse(monitor.startedAt);
     const span = monitor.startedAtExact && Number.isFinite(started)

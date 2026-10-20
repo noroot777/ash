@@ -43,7 +43,7 @@ import { reclaimState } from "./monitor-reclaim-evidence.js";
 import { stopRecoveryRetries } from "./monitor-reattach.js";
 import { clearSpawnIdentity, readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
 
-import { pushToTask } from "./monitor-events.js";
+import { deliverResultHandoff, pushToTask } from "./monitor-events.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -434,9 +434,21 @@ export async function finish(
     // 于是「点停已经成功返回、页面写着用户停的」随后被这条在途的收尾改写成 expired 并补推一条
     // 【哨兵结束】。条件没落上就**结局不改、通知不推**;回收责任照旧结清 —— 那一笔是上面已经
     // 发生的事,跟谁写下结局无关。
+    const code = exitCode === null ? "" : `，退出码 ${exitCode}`;
+    // **结束通知的责任凭证跟终态同一条语句落库**(第 1 轮审查 F1)。上一版是「先写终态,再去
+    // 入队」,中间还隔着时间线那一笔 await —— 那一瞬库里既没有 running 的哨兵、也没有排着的
+    // 消息,而完成闸问的恰好就是这两样,于是它放行、任务落 done,紧接着的入队被终态挡回,
+    // 那条通知就此蒸发(实测 `F1_END_RESULT_HANDOFF`)。一条语句写下来就没有那条缝:从这一刻
+    // 起闸看得见这笔交接(见 schema 的 `result_handoff_at`),入队完成后才销。
+    const endNotice = notify
+      ? `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`
+      : null;
     const result = await db
       .update(monitors)
-      .set({ status, endedAt: now(), endedReason: reason, exitCode, endedBy: opts.endedBy ?? "system" })
+      .set({
+        status, endedAt: now(), endedReason: reason, exitCode, endedBy: opts.endedBy ?? "system",
+        ...(endNotice ? { resultHandoffAt: now(), resultHandoffText: endNotice } : {}),
+      })
       .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running")));
     if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
       console.error(`[ash] 哨兵收尾放手 monitor=${monitorId}：条件更新没落上，结局已经有人写过了（${reason}）`);
@@ -444,7 +456,6 @@ export async function finish(
       return;
     }
     publish(row.taskId);
-    const code = exitCode === null ? "" : `，退出码 ${exitCode}`;
     // 事件数**重读**：它要反映收尾前最后那一次 flush。有没有产出过则一律问日志文件本身,
     // 不问投递游标(见 `monitorLogBytes`:游标被终态挡回时会把「它说了但没送出去」说成
     // 「它什么都没说」—— 第 2 轮审查 R2-4)。
@@ -455,7 +466,8 @@ export async function finish(
       row.taskId,
       `哨兵结束：${row.description}${code}。${reason}（${monitorEventTally(total, monitorLogBytes(row.logPath))}）`,
     );
-    if (notify) await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`);
+    // 入队 + 销凭证。顺序反过来那条缝又回来了(见 `deliverResultHandoff`)。
+    if (endNotice) await deliverResultHandoff(monitorId);
     // **追线索放在最后**:状态、时间线、通知都已落定,这一步只负责「能收的档收掉」。
     // 它会等到补刀生效(有界,见 `confirmReclaimed`)—— 于是这个函数返回时,要么进程确认不在了,
     // 要么责任稳稳地留在账本上。
@@ -510,16 +522,19 @@ export async function getMonitor(monitorId: string): Promise<TaskMonitor | null>
 export async function readMonitorTail(
   monitorId: string,
   maxLines = MONITOR_TAIL_DEFAULT_LINES,
-): Promise<{ lines: string[]; truncated: boolean } | null> {
+): Promise<{ lines: string[]; truncated: boolean; bytes: number | null } | null> {
   const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
   if (!row) return null;
   // claude 那种没有日志文件：它的输出进了 agent 自己的会话，ash 这边一个字节都没有。
   // 返回空而不是读 `logPath`（空串）——后者会变成一次对仓库根目录的读取尝试。
-  if (row.kind === "claude") return { lines: [], truncated: false };
+  // `bytes: null` = 「这一刻答不出它有没有产出过」。claude 投影确实没有日志文件,这里答
+  // `0` 会变成一句「它从头到尾什么都没写过」的断言,而那件事只有 agent 自己的会话知道。
+  if (row.kind === "claude") return { lines: [], truncated: false, bytes: null };
   const limit = Math.min(MONITOR_TAIL_MAX_LINES, Math.max(1, Math.round(maxLines)));
   const tail = readLogTail(row.logPath, MONITOR_TAIL_MAX_BYTES);
+  // 按行数再截一刀时 `bytes` 原样带着:它说的是文件有多大,跟这次给了几行无关。
   return tail.lines.length > limit
-    ? { lines: tail.lines.slice(-limit), truncated: true }
+    ? { lines: tail.lines.slice(-limit), truncated: true, bytes: tail.bytes }
     : tail;
 }
 
@@ -577,9 +592,14 @@ export async function finishOffline(
       if (collected.length) events = await pushLines(base, collected, readTo);
       else if (readTo !== base.offset) await commitOffset(base.id, readTo);
 
+      // 同上:凭证跟终态一条语句落库(第 1 轮审查 F1 的对称面 —— 离线收尾也是「先结束、后通知」)。
+      const endNotice = `【哨兵结束】${base.description}（monitorId=${base.id}）。${reason}`;
       const result = await db
         .update(monitors)
-        .set({ status, endedAt: now(), endedReason: reason, exitCode: null })
+        .set({
+          status, endedAt: now(), endedReason: reason, exitCode: null,
+          resultHandoffAt: now(), resultHandoffText: endNotice,
+        })
         .where(and(eq(monitors.id, base.id), eq(monitors.status, "running")));
       if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
         // 条件没落上 = 这一瞬有人把它收尾了。**结束通知到此为止**:再推就是在用户已经停掉
@@ -593,7 +613,7 @@ export async function finishOffline(
         base.taskId,
         `哨兵结束：${base.description}。${reason}（${monitorEventTally(events, monitorLogBytes(base.logPath))}）`,
       );
-      await pushToTask(base, `【哨兵结束】${base.description}（monitorId=${base.id}）。${reason}`);
+      await deliverResultHandoff(base.id);
     } finally {
       // 撤运行时排在读日志之前(自己那条 tail 不停下来就会边收尾边继续推),所以中间这一段
       // 里「监督已撤、终态未落」是真实的一瞬。**出去的时候还是 running 就把监督接回去**

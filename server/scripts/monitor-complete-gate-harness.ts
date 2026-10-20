@@ -12,13 +12,23 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 // 台子自己要用的那几个（`export … from` 不建立本地绑定，所以这一行不能省）。
 import {
-  db, monitors, now, root, scheduledMessages, sessions, tasks, uniq,
+  db, monitors, monitorsModule, now, root, scheduledMessages, sessions, tasks, uniq,
 } from "./monitors-fixture.js";
 // 各节直接从台子上取,免得同一份夹具在两个文件里各写一份进口清单(改一处漏一处)。
 export {
   db, inTurnCaller, insertMonitorRow, makeTask, monitors, now, pendingOf, reviewInFlight, runs,
   schema, scheduledMessages, sleep, startMonitor, stopMonitor, tasks, teardown, until,
 } from "./monitors-fixture.js";
+export const { serialize } = monitorsModule;
+export const { clearAutoCheckpoint, restoreResumePrompt, takeResumePrompt, writeResumePrompt } =
+  await import("../src/task-resume-prompt.js");
+export const { monitorWakeCheckpoint } = await import("../src/monitor-session.js");
+export { uniq } from "./monitors-fixture.js";
+export const { redeliverResultHandoffs } = await import("../src/monitor-reattach.js");
+
+/** 哨兵整行（新列也在里面：交接凭证、放弃凭证）。 */
+export const monitorRow = async (monitorId: string) =>
+  (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
 
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { sessionTranscriptPath } = await import("../src/transcript.js");

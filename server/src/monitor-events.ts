@@ -65,6 +65,42 @@ export async function pushToTask(row: Row, text: string): Promise<boolean> {
 }
 
 /**
+ * **把「结局已写定、通知还没入队」那一笔交接做完**：按凭证入队，入队之后才销掉凭证。
+ *
+ * 凭证是跟终态同一条 UPDATE 落下的（见 schema-monitors.ts 的 `result_handoff_at`），所以这一
+ * 刻完成闸已经能看见它了。顺序只能是「先入队、后销凭证」：反过来的话那条缝又回来了。
+ *
+ * 入队被拒（`pushToTask` 返回 false）= 任务已经终态/归档，这条通知再也不会有人收：**凭证照样
+ * 销掉**，否则它会永久拦着这个任务的完成，而拦着也救不回那条通知。那种情况出一行日志 —— 它
+ * 正是 F1 要防的事故现场，静默销账等于把现场也擦掉。
+ *
+ * 不抛：调用点都在收尾路径上，往上抛会让一次已经落定的终态看起来像失败。
+ */
+export async function deliverResultHandoff(monitorId: string): Promise<void> {
+  try {
+    if (dbClient.closed) return;
+    const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+    if (!row?.resultHandoffAt || !row.resultHandoffText) return;
+    const delivered = await pushToTask(row, row.resultHandoffText);
+    await db
+      .update(monitors)
+      .set({ resultHandoffAt: null, resultHandoffText: null })
+      // CAS：只销掉自己刚送出去的那一笔。另一路（启动重投）可能正在送同一条，而它送完会写上
+      // 新的……不会——凭证只由收尾那一笔写。CAS 在这里的用处是：凭证已经被别人销掉时不空写。
+      .where(and(eq(monitors.id, monitorId), eq(monitors.resultHandoffAt, row.resultHandoffAt)));
+    if (!delivered) {
+      console.error(
+        `[ash] 哨兵结束通知无人可收 monitor=${monitorId} task=${row.taskId}：`
+        + "任务已经是终态或已归档，这条通知作废（凭证已销，不再拦着完成）",
+      );
+    }
+  } catch (e) {
+    // 凭证还在 ⇒ 完成闸继续拦着、启动时还会重投。这里只需要出声。
+    console.error(`[ash] 哨兵结束通知这一趟没送出去 monitor=${monitorId}（凭证留着,会重投）:`, e);
+  }
+}
+
+/**
  * 「追加进那一行」还是「另起一条」。
  *
  * 合并那一发是一次 CAS（条件是「这一行还在等投递」），**它可以合法地落空**：上面查到这一行

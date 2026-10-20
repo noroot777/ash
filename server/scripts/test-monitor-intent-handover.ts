@@ -60,8 +60,9 @@ try {
   assert.equal(pendingRow.pid, null, "更不许把一个没通过认领的候选号写上去");
   assert.match(pendingRow.endedReason ?? "", /核实不了/,
     "话要留在卡片上:running 的行也显示这一列,所以刷新页面仍看得出「它卡在认领这一步」");
-  assert.deepEqual(first, { attached: 0, lost: 0, pending: 1, failed: 0 },
-    "既不算接回来、也不算没了:混进任何一边都是撒谎");
+  assert.deepEqual(first, { attached: 0, lost: 0, pending: 1, failed: 0, redelivered: 0 },
+    "既不算接回来、也不算没了:混进任何一边都是撒谎（这里刻意逐项列全,新开一类计数就得"
+    + "在这儿现身,免得「接不回来」被悄悄算进别的格子）");
   assert.equal(await debtRow(mon), undefined,
     "这一刻不记回收债:债是补刀授权,而这一行的进程多半正常跑着");
   assert.equal(isPidAlive(pid), true, "候选号一个信号都不授权");

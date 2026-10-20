@@ -29,9 +29,10 @@ import { isSilentWaitLoop, monitorEventTally, silentWaitNotice, spanWords } from
 import { checkpointGroups } from "./monitor-complete-checkpoint-groups.js";
 import {
   beginTerminalLanding, complete, confirmedAt, db, dropByActor, inTurnCaller, insertMonitorRow, makeTask,
-  monitors, monitorStatus, now, pendingOf, queueMonitorEvent, replayUndeliveredMcpCalls, reviewInFlight,
-  runs, schema, scheduledMessages, sessionWithTurn, setTaskStatus, settleTaskStatus, sleep, startMonitor,
-  stopMonitor, tasks, taskRow, teardown, terminalLandingInFlight, transcriptOf, until, writeLostCompleteCall,
+  monitorRow, monitors, monitorStatus, now, pendingOf, queueMonitorEvent, redeliverResultHandoffs,
+  replayUndeliveredMcpCalls, reviewInFlight, runs, schema, scheduledMessages, serialize, sessionWithTurn,
+  setTaskStatus, settleTaskStatus, sleep, startMonitor, stopMonitor, tasks, taskRow, teardown,
+  terminalLandingInFlight, transcriptOf, until, writeLostCompleteCall,
 } from "./monitor-complete-gate-harness.js";
 
 // ── ① 还在盯的哨兵拦得住，而且真的没放行 ──────────────────────────────────────
@@ -465,6 +466,136 @@ await checkpointGroups();
   const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
   assert.equal(after.resultsAbandonedAt, again, "重复点停不许改写第一次的时刻");
   assert.match(after.resultsAbandonedReason ?? "", /不要了/, "也不许改写第一次的理由");
+}
+
+// ── ㉔ F1：哨兵正常跑完的那一瞬 —— 结局已写定、结束通知还没入队，照样拦得住 ──────────
+//
+// 这是第 1 轮审查（PUfD6pQBJUri）走穿的那条缝：结束是两件事（把行写成终态、把通知排进待
+// 发送），上一版中间还隔着写时间线那一笔 await。那一瞬前两类判据都看不见它，于是完成放行、
+// 任务落 done，紧接着的入队被终态挡回 —— 一条没有 stdout 的命令唯一能告诉执行者「等到了」
+// 的通知就此蒸发（`F1_END_RESULT_HANDOFF {"statusAtSeam":"exited","pendingBefore":0,
+// "completeHttp":200,"settlement":"done","messagesAfter":[]}`）。
+//
+// 台子怎么站进那条缝里：**让入队这一笔真的写不进去**（触发器 ABORT）。于是库里就是那一瞬
+// 的样子 —— 行已经终态、托盘里一条消息都没有 —— 而凭证跟终态是同一条语句落的，闸看得见。
+{
+  const taskId = await makeTask();
+  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+  await db.run(
+    "CREATE TRIGGER block_enqueue BEFORE INSERT ON scheduled_messages"
+    + " BEGIN SELECT RAISE(ABORT, '注入:结束通知入不了队'); END" as never,
+  );
+  let monitorId = "";
+  try {
+    const started = await startMonitor({ taskId, command: "printf 'READY\n'", description: "一跑就完" });
+    assert.ok(started.ok, `创建要成功：${started.ok ? "" : started.error}`);
+    monitorId = started.ok ? started.monitor.id : "";
+    await until("它自己跑完、终态已落库", async () => (await monitorStatus(monitorId)) === "exited");
+
+    const seam = await monitorRow(monitorId);
+    assert.ok(seam.resultHandoffAt, "结局已写定、通知还没入队 ⇒ 必须留着一笔闸看得见的责任（F1）");
+    assert.match(seam.resultHandoffText ?? "", /哨兵结束/, "凭证里带着要送的原文，重启后才补得上");
+    assert.equal((await pendingOf(taskId)).length, 0, "托盘确实还是空的 —— 台子正站在那条缝里");
+
+    const res = await complete(taskId);
+    assert.equal(res.status, 409, "缝里的完成必须被拦下（上一版这里是 200，结果就此蒸发）");
+    assert.match(
+      ((await res.json()) as { error?: string }).error ?? "", /正在送/,
+      "拒绝文案要说清这是第三类（刚跑完、通知在路上），别让 agent 以为是「还在盯」",
+    );
+    assert.equal(await confirmedAt(taskId), null, "那一笔确认一个字都不许落库");
+    // **最后一关同样站在这条缝上**：结算落终态之前问的是同一份判据（`beginTerminalLanding`
+    // 返回非空 = 这一刻不许落终态）。这里直接问它，而不是跑整条结算 —— 那条路上「这一轮没
+    // 交卷」本身就会落 failed（严格完成协议,见 settle-status.ts），测的就不是这道闸了。
+    assert.match(
+      await beginTerminalLanding(taskId) ?? "", /正在送/,
+      "最后一关也拦得住，而且拦的理由是同一类",
+    );
+  } finally {
+    await db.run("DROP TRIGGER block_enqueue" as never);
+  }
+
+  // 入队恢复之后：**启动重投把这笔交接做完**（凭证里有原文，所以进程死在中间也补得上）。
+  assert.equal(await redeliverResultHandoffs(), 1, "有一笔没做完的交接要补");
+  assert.match(
+    (await pendingOf(taskId)).map((m) => m.text).join("\n"), /哨兵结束/,
+    "结果真的到了任务头上 —— 这才是整条不变量要护的东西",
+  );
+  assert.equal((await monitorRow(monitorId)).resultHandoffAt, null, "送进托盘了就销凭证");
+  // 凭证销了,但结果还排在托盘里 ⇒ 换第二类接着拦。两类之间没有空档,这正是 F1 的要求。
+  assert.equal((await complete(taskId)).status, 409, "交接完了换「排着没送到」继续拦，中间没有空档");
+  // 出路照旧走得通:明确放弃这份结果,完成就放行。
+  assert.ok(await stopMonitor(monitorId, "结果我已经从日志看过了"), "放弃这份结果");
+  assert.equal((await complete(taskId)).status, 200, "放弃之后放行 —— 闸不是永久锁");
+}
+
+// ── ㉔b F1 的结构锁：终态与交接凭证必须**同一条语句**落库 ─────────────────────────
+//
+// 上一节证明「缝里拦得住」，这一节钉住「压根没有缝」：触发器只盯这一条哨兵，一旦有人把这两
+// 笔拆成两条 UPDATE（先写终态、再补凭证），第一条就会 ABORT —— 行停在 running，下面那个
+// `until` 超时，当场失败。单测「凭证存在」是看不出这件事的。
+{
+  const taskId = await makeTask();
+  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+  const started = await startMonitor({ taskId, command: "printf 'ONE\n'", description: "原子性探针" });
+  assert.ok(started.ok, `创建要成功：${started.ok ? "" : started.error}`);
+  const monitorId = started.ok ? started.monitor.id : "";
+  await db.run(
+    `CREATE TRIGGER handoff_atomic AFTER UPDATE OF status ON monitors`
+    + ` WHEN NEW.id = '${monitorId}' AND NEW.status <> 'running' AND NEW.result_handoff_at IS NULL`
+    + " BEGIN SELECT RAISE(ABORT, '终态与交接凭证必须同一条语句落库'); END" as never,
+  );
+  try {
+    await until(
+      "终态连着凭证一起落库（拆成两笔的话这一步会一直等不到）",
+      async () => (await monitorStatus(monitorId)) === "exited",
+    );
+    assert.ok((await monitorRow(monitorId)).resultHandoffAt, "落上了就一定带着凭证");
+  } finally {
+    await db.run("DROP TRIGGER handoff_atomic" as never);
+  }
+  await stopMonitor(monitorId, "探针用完了");
+}
+
+// ── ㉕ F3：旧方向的断线补录，一个字都不许写到新方向头上 ──────────────────────────
+//
+// 实测走穿的那条：补录在函数开头读到旧方向 → 排在任务锁后面 → 用户这期间改派了方向 → 它
+// 拿到锁后先被哨兵闸拦下（那一支上一版压根不执行身份条件），接着**无条件**给当前方向补了
+// 一段暂停指令（`F3_STALE_REPLAY_MUTATES_NEW_DIRECTION {"replayed":1,
+// "activeDirection":"new-direction","promptInjected":true,"promptAuto":true}`）。
+//
+// 现在那段等待由同一个入口在**同一份身份 CAS**下落：方向换走了就是 0 行，整笔不生效。
+{
+  const taskId = await makeTask();
+  const sessId = `sess-stale-${taskId}`;
+  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString(), { id: sessId });
+  const monitorId = await insertMonitorRow(taskId, { command: "tail -F deploy.log" });
+  const turnStart = "2026-10-20T07:30:00.000Z";
+  writeLostCompleteCall(taskId, sessId, turnStart);
+  await db.update(tasks)
+    .set({ activeDirectionToken: "old-direction", activeDirectionVersion: 1 })
+    .where(eq(tasks.id, taskId));
+
+  // 先把任务锁占住,补录只能排在后面;占着的这段时间里把方向换掉 —— 这就是那个现场。
+  let switched = false;
+  const holder = serialize(`task:${taskId}`, async () => {
+    await sleep(150);
+    await db.update(tasks)
+      .set({ activeDirectionToken: "new-direction", activeDirectionVersion: 2 })
+      .where(eq(tasks.id, taskId));
+    switched = true;
+  });
+  const replay = replayUndeliveredMcpCalls({ taskId, sessId, turnStart, agentType: "codex" });
+  const [, replayed] = await Promise.all([holder, replay]);
+
+  assert.ok(switched, "台子自检:方向确实在补录拿到锁之前就换掉了");
+  assert.equal(replayed, 0, "旧方向的补录整笔不生效（它连「受阻」都不算，那是身份过期）");
+  const after = await taskRow(taskId);
+  assert.equal(after.resumePrompt, null, "新方向头上不许被补一段旧方向的暂停指令（F3）");
+  assert.equal(after.resumePromptAuto, false, "更不许留下一个「系统写的」标记");
+  assert.equal(after.completeConfirmedAt, null, "确认同样不许落");
+  assert.equal(after.activeDirectionToken, "new-direction", "新方向原样留着");
+  assert.equal(await monitorStatus(monitorId), "running");
 }
 
 // ── ⑭ 静默判据与零输出措辞：只说可证实的事实（F3、N3）───────────────────────

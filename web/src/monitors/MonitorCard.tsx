@@ -13,6 +13,9 @@ const LOG_POLL_MS = 2500;
 function useMonitorLog(monitorId: string, open: boolean, live: boolean) {
   const [lines, setLines] = useState<string[] | null>(null);
   const [truncated, setTruncated] = useState(false);
+  // 日志文件这一刻多大。`null` = 读不出来（或者老后端没这一列）—— 跟 0 不是一回事,空行
+  // 列表的三种来由只有它分得开（第 1 轮审查 F4，见 `emptyLogCopy`）。
+  const [bytes, setBytes] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   // 轮询里引用的是「这一刻还该不该拉」，所以 live 进 ref，避免定时器跟着它重建。
   const liveRef = useRef(live);
@@ -23,6 +26,7 @@ function useMonitorLog(monitorId: string, open: boolean, live: boolean) {
       const tail = await api.monitorLog(monitorId);
       setLines(tail.lines);
       setTruncated(tail.truncated);
+      setBytes(tail.bytes ?? null);
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -37,7 +41,7 @@ function useMonitorLog(monitorId: string, open: boolean, live: boolean) {
     return () => clearInterval(timer);
   }, [live, load, open]);
 
-  return { lines, truncated, error };
+  return { lines, truncated, bytes, error };
 }
 
 /**
@@ -178,7 +182,7 @@ export function MonitorCard({
         <div className="monitor-card__log">
           {log.error && <p role="alert">{log.error}</p>}
           {!log.error && log.lines === null && <p>读取中…</p>}
-          {!log.error && log.lines?.length === 0 && <p>{emptyLogCopy(monitor, live)}</p>}
+          {!log.error && log.lines?.length === 0 && <p>{emptyLogCopy(monitor, live, log.bytes)}</p>}
           {log.lines && log.lines.length > 0 && (
             <>
               {log.truncated && <p>（只显示最后一段，更早的内容在哨兵的日志文件里）</p>}

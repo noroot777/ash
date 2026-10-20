@@ -528,16 +528,33 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
 // 「那个条件始终没出现」—— 同一张卡上两句话互相打脸。现在只许说两样：静默了多久、怎么结束的。
 {
   const silentLoop = "until true; do sleep 1; done";
-  const live = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, true);
+  const live = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, true, 0);
   assert.match(live, /一个字都还没吐/, "还在盯的只说现象");
   assert.match(live, /已经静默/, "起点作数就说清哑了多久");
   assert.doesNotMatch(
-    emptyLogCopy({ ...base, command: silentLoop, events: 0, startedAtExact: false }, true),
+    emptyLogCopy({ ...base, command: silentLoop, events: 0, startedAtExact: false }, true, 0),
     /已经静默/, "起点不作数就不许编一个时长出来",
   );
 
+  // ── 第 1 轮审查 F4：**空行列表有三种来由,只有「确证的 0 字节」那一种能说「它从头到尾
+  //    是空的」**。读不出来、尾部切不出完整行(超长单行)时,文件里完全可能有几兆字节。
+  for (const [bytes, label] of [[null, "读不出来"], [undefined, "老后端没这一列"]] as const) {
+    for (const liveNow of [true, false]) {
+      const text = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, liveNow, bytes);
+      assert.match(text, /读不出来/, `${label}：要照实说读不出来`);
+      assert.match(text, /说不准/, `${label}：不许替它下「有没有产出」的结论`);
+      assert.doesNotMatch(text, /从头到尾是空的|一个字都还没吐/, `${label}：不许断言零输出`);
+    }
+  }
+  {
+    const text = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, false, 4096);
+    assert.match(text, /4096 字节/, "非空文件要把实测字节数说出来");
+    assert.doesNotMatch(text, /从头到尾是空的|没有产生任何输出/,
+      "文件里有字节,一句「空的」就是假话（F4）");
+  }
+
   const ended = (patch: Partial<TaskMonitor>) =>
-    emptyLogCopy({ ...base, command: silentLoop, events: 0, endedAt: "2026-08-25T10:00:05.000Z", ...patch }, false);
+    emptyLogCopy({ ...base, command: silentLoop, events: 0, endedAt: "2026-08-25T10:00:05.000Z", ...patch }, false, 0);
   for (const [status, expect] of [
     ["exited", /命令自己跑完了（退出码 0）/],
     ["expired", /一直到盯满时长/],
@@ -554,4 +571,4 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   assert.match(ended({ status: "exited", exitCode: 2 }), /退出码 2/, "非 0 退出码是唯一线索，要带上");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空日志只说可证实的事实，空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空日志只说可证实的事实（读不出来/非空却切不出完整行/确证零字节三种分开说），空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");

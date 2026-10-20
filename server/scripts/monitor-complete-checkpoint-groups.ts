@@ -8,11 +8,85 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import {
-  complete, confirmedAt, db, makeTask, monitorStatus, sessionWithTurn, settleTaskStatus,
-  startMonitor, stopMonitor, tasks, taskRow, transcriptOf,
+  clearAutoCheckpoint, complete, confirmedAt, db, insertMonitorRow, makeTask, monitorStatus,
+  monitorWakeCheckpoint, now, restoreResumePrompt, scheduledMessages, sessionWithTurn,
+  settleTaskStatus, startMonitor, stopMonitor, takeResumePrompt, tasks, taskRow, transcriptOf,
+  uniq, writeResumePrompt,
 } from "./monitor-complete-gate-harness.js";
 
 export async function checkpointGroups(): Promise<void> {
+  // ── ㉖ F2：那段话的来源在「取走 → 退回」一趟里不许丢 ─────────────────────────────
+  //
+  // 上一版的口径是「凡是写 resume_prompt 的地方都同时写来源」，靠自觉在十来个点上带对一个
+  // 布尔；第 1 轮审查（PUfD6pQBJUri）F2 从三个点走穿了它（持久重投只存了文字、普通运行冲突
+  // 的退回漏了来源、跨机接力载荷里压根没这一列）。现在换成「取走/退回一个字都不碰来源列」
+  // —— 于是**调用方连传错的机会都没有**（`restoreResumePrompt` 没有这个参数）。
+  for (const auto of [true, false]) {
+    const taskId = await makeTask();
+    const text = auto ? "系统替它写下的等待" : "继续：先把那份报表取回来";
+    assert.ok(await writeResumePrompt(taskId, text, auto), "写入新文本要声明来源");
+    assert.equal((await taskRow(taskId)).resumePromptAuto, auto);
+
+    assert.ok(await takeResumePrompt(taskId, text), "取走");
+    const away = await taskRow(taskId);
+    assert.equal(away.resumePrompt, null, "文字确实被带走了");
+    assert.equal(
+      away.resumePromptAuto, auto,
+      "来源那一格休眠着、不许归零：归零之后退回来就成了「agent 自己写的」（F2）",
+    );
+    // 文字不在手上时「作废这段等待」是空操作：动它就等于把一段正在路上的文字的来源改掉。
+    assert.equal(await clearAutoCheckpoint(taskId), false, "没有文字 = 没有等待可作废");
+
+    assert.ok(await restoreResumePrompt(taskId, text), "原样退回");
+    const back = await taskRow(taskId);
+    assert.equal(back.resumePrompt, text);
+    assert.equal(back.resumePromptAuto, auto, "往返一趟,来源必须还是原来那个（F2）");
+    // 来源还在 ⇒ 两种等待的有效期才分得开：系统那段作废得掉，agent 自己那段谁也不许抹。
+    assert.equal(await clearAutoCheckpoint(taskId), auto, "有效期按来源判");
+    assert.equal((await taskRow(taskId)).resumePrompt, auto ? null : text);
+  }
+
+  // ── ㉗ F2 实测走穿的那条：**持久重投**（首次调用的内存闭包早没了，只剩账本列）─────────
+  //
+  // `F2_DURABLE_CHECKPOINT_SOURCE {"afterTake":{"auto":false},"afterRestore":{"auto":false},
+  // "settlement":"paused"}` —— 上一版在重投分支里硬写 `false`，于是一段系统等待经一次「进程
+  // 在这儿没了、靠账本重投」就被洗成 agent 自己写的，此后永不自动清理，任务停在 paused 等
+  // 一个再也不会来的唤醒。
+  {
+    const taskId = await makeTask({ status: "done" });
+    const wait = "继续：等那条哨兵的结果到了再收工";
+    assert.ok(await writeResumePrompt(taskId, wait, true));
+    const monitorId = await insertMonitorRow(taskId, { status: "exited" });
+    const msgId = uniq("msg");
+    await db.insert(scheduledMessages).values({
+      id: msgId, taskId, text: "【哨兵】RESULT_READY", attachments: "[]",
+      origin: `monitor:${monitorId}`, mode: "queued", status: "pending",
+      sendAt: now(), createdAt: now(),
+    });
+    const msgRow = async () =>
+      (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, msgId))).at(0)!;
+
+    const first = await monitorWakeCheckpoint(await msgRow());
+    assert.ok(first, "任务行上挂着交代就该带上");
+    assert.equal(
+      (await taskRow(taskId)).resumePromptAuto, true,
+      "取走那一笔不许动来源列 —— 这正是重投能认回来源的前提",
+    );
+    // **把 first.restore 丢掉**：模拟「进程在这儿没了」。下一次只剩账本列。
+    const again = await monitorWakeCheckpoint(await msgRow());
+    assert.ok(again, "重投只认账本列,不再从任务行上取第二次");
+    await again.restore();
+
+    const back = await taskRow(taskId);
+    assert.equal(back.resumePrompt, wait, "退回原位");
+    assert.equal(
+      back.resumePromptAuto, true,
+      "持久重投退回来仍然是「系统写的」（F2 走穿的就是这一笔）—— 否则它再也不会被自动清掉",
+    );
+    assert.equal(await clearAutoCheckpoint(taskId), true, "来源在 ⇒ 不等它了之后这段话作废得掉");
+    assert.equal(await monitorStatus(monitorId), "exited");
+  }
+
   // ── ⑳ R2-2：系统写下的那段等待有有效期 —— 不等它了、重新交卷就该清掉 ─────────────
   //
   // 实测过的死局：complete 200 → 挂哨兵（撤确认 + 写等待）→ 自己又 stop 掉它 → 再 complete 200，

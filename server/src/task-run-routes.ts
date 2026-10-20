@@ -336,8 +336,14 @@ api.post("/tasks/:id/complete", async (c) => {
   // 走到这里还剩下的,是 agent 自己 `pause_task` 写的那一段 —— 它比我们更知道它想干什么,
   // 不动它,只是别谎称这一轮会落 done。
   const after = (await db
-    .select({ resumePrompt: tasks.resumePrompt, question: tasks.question })
+    .select({
+      resumePrompt: tasks.resumePrompt, question: tasks.question, followUpFrom: tasks.followUpFrom,
+    })
     .from(tasks).where(eq(tasks.id, taskId))).at(0);
+  // **续聊回合走的是另一条分支**(第 1 轮审查 N2):那一支里「本回合亲口确认」优先于一切 ——
+  // 检查点被这一轮消费掉、任务直接落 done(settle-status.ts 的 `followUpFrom` 分支)。拿普通
+  // 回合的「提问/检查点优先」去预告它,就会说「将暂停」而实际落 done。
+  if (after?.followUpFrom) return c.json({ confirmed: true, willSettleAs: "done" });
   if (after?.question) {
     return c.json({
       confirmed: true,

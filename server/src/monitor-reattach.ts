@@ -21,7 +21,7 @@
 //     已经成功返回(stopped、待发 0 条),在途的旧回调照旧把行写成 expired 并补推一条结束
 //     通知。所以每一跳都排进停止/创建/删除那同一条 `task:<id>` 队列,并在队列里重读 ——
 //     三个出口(接管 / 判掉 / 到期)一个都不许按旧行下结论。
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { monitors, tasks } from "./db/schema.js";
 import {
@@ -29,6 +29,7 @@ import {
 } from "./monitor-adopt.js";
 import { reclaimMonitorProcess, settleReclaim, type ReclaimVerdict } from "./monitor-reclaim-debts.js";
 import { reclaimState, type ReclaimState } from "./monitor-reclaim-evidence.js";
+import { deliverResultHandoff } from "./monitor-events.js";
 import { monitorWakeGate } from "./monitor-session.js";
 import { clearSpawnIdentity } from "./monitor-spawn.js";
 import { attach, ensureSupervised, finish, finishOffline, isAshKind, serialize, type Row }
@@ -77,7 +78,7 @@ const owingNote = (verdict: ReclaimVerdict): string =>
  * (见 `notePendingIntent`),所以它既不算接回来了、也不算没了 —— 混进任何一边都是撒谎。
  */
 export async function reattachMonitors(): Promise<
-  { attached: number; lost: number; pending: number; failed: number }
+  { attached: number; lost: number; pending: number; failed: number; redelivered: number }
 > {
   // 只认 ash 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
   // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
@@ -108,7 +109,34 @@ export async function reattachMonitors(): Promise<
       failed += 1;
     }
   }
-  return { attached, lost, pending, failed };
+  return { attached, lost, pending, failed, redelivered: await redeliverResultHandoffs() };
+}
+
+/**
+ * **上一次进程死在「结局已写定、结束通知还没入队」中间的,这一趟把那笔交接做完。**
+ *
+ * 凭证(`result_handoff_at` + 原文)是跟终态同一条 UPDATE 落库的,所以这件事认得出来、也补得上
+ * ——而且在补上之前,完成闸一直看得见它(task-complete-monitors.ts 的第三类),不会趁这个空当
+ * 把任务放成 done 再把通知吃掉(第 1 轮审查 F1)。
+ *
+ * 排在接回之后:接回只管 `running` 的行,这里管的全是已经终态的行,两边不重叠。失败只记日志
+ * ——凭证留着,下一次启动还会再试,而拦截一直有效。
+ */
+export async function redeliverResultHandoffs(): Promise<number> {
+  const rows = await db
+    .select({ id: monitors.id, taskId: monitors.taskId })
+    .from(monitors)
+    .where(and(isNotNull(monitors.resultHandoffAt), isAshKind));
+  let done = 0;
+  for (const r of rows) {
+    try {
+      await deliverResultHandoff(r.id);
+      done += 1;
+    } catch (e) {
+      console.error(`[ash] 重投哨兵结束通知失败 monitor=${r.id} task=${r.taskId}（凭证留着,下次启动再试）:`, e);
+    }
+  }
+  return done;
 }
 
 /**

@@ -20,13 +20,15 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { MONITOR_MAX_EVENTS, MONITOR_MAX_MERGED_CHARS, MONITOR_MAX_PER_TASK } from "@ash/shared/monitor";
+import {
+  MONITOR_MAX_EVENTS, MONITOR_MAX_MERGED_CHARS, MONITOR_MAX_PER_TASK, MONITOR_TAIL_MAX_BYTES,
+} from "@ash/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
   HERE, root, db, schema, monitorsModule, status, isPidAlive,
   startMonitor, stopMonitor, listMonitors, getMonitor, readMonitorTail, reattachMonitors, detachAllMonitors,
   monitors, projects, tasks,
-  sleep, until, now, makeTask, pendingOf, teardown,
+  sleep, until, now, makeTask, insertMonitorRow, pendingOf, teardown,
 } from "./monitors-fixture.js";
 
 // ── ①②③ 推事件、合并、自己跑完 ───────────────────────────────────────────────
@@ -176,8 +178,39 @@ setInterval(() => {}, 1000); // 吐完不退出：停下来必须是「到顶了
   assert.equal(tail.truncated, true, "截过就要如实说，别让人以为这就是全部");
 
   assert.equal(await readMonitorTail("no-such-monitor"), null, "不存在的哨兵要分得清，不能装作空日志");
+  assert.ok((all.bytes ?? 0) > 0, "有输出的日志要报出真实字节数");
   await stopMonitor(monitorId, "测试收尾");
-  console.log("✓ 哨兵的原始输出可回看，限行数时留最后几行并如实报截断");
+
+  // ── 空行列表的三种来由必须分得开（第 1 轮审查 F4）──────────────────────────────
+  //
+  // `lines: []` 推不出「它从头到尾什么都没写过」：日志被删/没权限时读取**失败**，而尾部那段
+  // 里一个换行都没有（超长单行）时文件明明有几 KB。上一版这三种都只返回一个空列表，界面于是
+  // 把前两种说成了确证的零输出。所以这里逐一钉住 `bytes`：它是对文件本身的实测，不是行数的影子。
+  {
+    const probe = await insertMonitorRow(taskId, { status: "exited" });
+    const logOf = async () => (await db.select({ p: monitors.logPath })
+      .from(monitors).where(eq(monitors.id, probe))).at(0)!.p;
+    const path = await logOf();
+
+    // ① 文件压根不在（被删掉/挪走/没权限）⇒ 读不出来，一个字都不许声称
+    const missing = (await readMonitorTail(probe))!;
+    assert.deepEqual(missing.lines, []);
+    assert.equal(missing.bytes, null, "读不出来 = null,不是 0（0 是「确证空文件」这条断言）");
+
+    // ② 确证的空文件
+    writeFileSync(path, "");
+    assert.equal((await readMonitorTail(probe))!.bytes, 0, "真的 0 字节才许报 0");
+
+    // ③ 一条**超过回读上限**、而且从头到尾没有换行的输出：那半行被丢掉（它不是一行），于是
+    //    完整行一条都切不出来 —— 而文件实测几百 KB。这两件事混成一句「空的」就是假话。
+    const size = MONITOR_TAIL_MAX_BYTES + 1024;
+    writeFileSync(path, "x".repeat(size));
+    const long = (await readMonitorTail(probe))!;
+    assert.deepEqual(long.lines, [], "超长单行 ⇒ 这一段里切不出完整行");
+    assert.equal(long.bytes, size, `而文件实测是 ${size} 字节 —— 不能混成一句「空的」`);
+    assert.equal(long.truncated, true, "要说清「这一段不是全部」");
+  }
+  console.log("✓ 哨兵的原始输出可回看，限行数时留最后几行并如实报截断，空行列表的三种来由分得开");
 }
 // ── ⑦ 四道闸真的挡得住 ───────────────────────────────────────────────────────
 {
