@@ -12,6 +12,8 @@ import type {
   FileEntryOverview,
   FileListing,
   FileSearchResult,
+  IdeLaunchStatus,
+  IdeProbe,
   OpenerProbe,
   TaskArtifactsResult,
   TaskFileRead,
@@ -45,6 +47,18 @@ export const fileApi = {
     request(`/tasks/${id(taskId)}/file/openers?path=${id(path)}${refresh ? "&refresh=1" : ""}`),
   revealTaskFile: (taskId: string, path: string): Promise<{ ok: true; absPath: string }> =>
     request(`/tasks/${id(taskId)}/file/reveal`, json("POST", { path })),
+  // 本机装了哪些编程 IDE。整台机器一份，跟任务无关，所以路径上没有 taskId。
+  // `signal` 让调用方能给这次探测设期限:探测要 stat 几百个路径,代理或磁盘卡住时它
+  // 可能既不返回也不断开,菜单就永远停在「正在查…」(第 2 轮审查 N3)。
+  ides: (refresh = false, signal?: AbortSignal): Promise<IdeProbe> =>
+    request(`/ides${refresh ? "?refresh=1" : ""}`, signal ? { signal } : undefined),
+  // 用某个 IDE 打开工作目录里的一个文件夹（`path` 为空 = 工作目录本身）。
+  openTaskPathInIde: (
+    taskId: string,
+    path: string,
+    ideId: string,
+  ): Promise<{ ok: true; absPath: string; name: string; status: IdeLaunchStatus }> =>
+    request(`/tasks/${id(taskId)}/file/open-in-ide`, json("POST", { path, ideId })),
   openTaskFile: (
     taskId: string,
     path: string,

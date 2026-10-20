@@ -45,6 +45,7 @@ function Fixture() {
             notify={() => undefined}
           />
           <FileTreeInspector
+            notify={() => undefined}
             taskId={TASK_ID}
             activePath={view.activePath}
             onOpenFile={view.openFile}

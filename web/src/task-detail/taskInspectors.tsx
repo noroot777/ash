@@ -102,6 +102,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
         onOpenFile={context.onOpenFile}
         onOpenFolder={context.onOpenFolder}
         onOpenDiff={context.onOpenScmDiff}
+        notify={context.notify}
       />
     ),
   },

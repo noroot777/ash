@@ -231,6 +231,7 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
         onOpenFile={context.onOpenFile}
         onOpenFolder={context.onOpenFolder}
         onOpenDiff={context.onOpenDiff}
+        notify={context.notify}
       />
     ),
   },

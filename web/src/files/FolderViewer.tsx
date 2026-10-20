@@ -14,6 +14,7 @@ import { api, type FileEntryOverview } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { formatSize, siblingReel } from "./fileModel.ts";
 import { useDeleteEntry } from "./useDeleteEntry.tsx";
+import { OpenInIdeMenu } from "./OpenInIdeMenu.tsx";
 
 /**
  * 会话区里的文件夹详情，和 `FileViewer` 占中间栏同一个位置。
@@ -114,6 +115,9 @@ export function FolderViewer({
           <FolderOpen size={13} aria-hidden="true" />
           在文件夹中查看
         </button>
+        {/* 「在文件夹中查看」是在访达里**定位**它（父目录选中），这一颗是把它当工程目录
+            交给编辑器。两件事，所以两颗按钮。 */}
+        <OpenInIdeMenu taskId={taskId} path={path} notify={notify} />
         <button
           type="button"
           className="file-viewer__action"

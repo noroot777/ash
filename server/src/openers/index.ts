@@ -8,10 +8,24 @@ import type { OpenerProbe } from "./types.js";
 
 export type { AppOpener, OpenerProbe } from "./types.js";
 
-interface Command {
+/**
+ * 一条「交给本机去跑」的命令。
+ *
+ * `env` / `verbatim` 是为 Windows 的默认打开那一档加的:`start` 只有 cmd 里有,过 cmd 就
+ * 要面对它的元字符解析和 `%VAR%` 展开,所以那一档把路径放进环境变量、命令行里只留一个
+ * 带引号的占位(见 windows.ts 的 `windowsDefaultOpenCommand`)。整条链路上**路径永远是
+ * 一个原样的数据参数**,不会被哪一层重新解释成命令 —— 其余各档本来就是 execFile 直接
+ * 起可执行文件,中间没有 shell。
+ */
+interface Spawnable {
   file: string;
   args: string[];
-  fallback?: { file: string; args: string[] } | null;
+  env?: Record<string, string>;
+  verbatim?: boolean;
+}
+
+interface Command extends Spawnable {
+  fallback?: Spawnable | null;
 }
 
 /** 本机上哪些应用能打开这个文件。`force` 跳过应用清单缓存重扫一次。 */
@@ -28,12 +42,20 @@ export async function probeOpeners(absPath: string, force = false): Promise<Open
   };
 }
 
+function runOne(command: Spawnable): Promise<unknown> {
+  return exec(command.file, command.args, {
+    timeout: 15000,
+    ...(command.env ? { env: { ...process.env, ...command.env } } : {}),
+    ...(command.verbatim ? { windowsVerbatimArguments: true } : {}),
+  });
+}
+
 async function run(command: Command): Promise<void> {
   try {
-    await exec(command.file, command.args, { timeout: 15000 });
+    await runOne(command);
   } catch (error) {
     if (!command.fallback) throw error;
-    await exec(command.fallback.file, command.fallback.args, { timeout: 15000 });
+    await runOne(command.fallback);
   }
 }
 

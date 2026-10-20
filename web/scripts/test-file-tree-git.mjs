@@ -87,6 +87,15 @@ try {
 
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 900, height: 760 } });
+  // 没有这一条，组件新增必填回调时这页只会在点击那一刻静悄悄抛一个未捕获异常——
+  // tsc 不看 scripts/fixtures，回归又从来不点那两颗按钮，于是两道闸一起漏（第 3 轮审查 N1）。
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const openCalls = [];
+  await page.route("**/api/tasks/*/file/open", async (route) => {
+    openCalls.push(JSON.parse(route.request().postData() ?? "{}"));
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, absPath: "/tmp/file-tree-a" }) });
+  });
   await page.route("**/api/tasks/*/files?*", async (route) => {
     const url = new URL(route.request().url());
     const match = /^\/api\/tasks\/([^/]+)\/files$/.exec(url.pathname);
@@ -297,7 +306,13 @@ try {
   assert.notEqual(await nameColor("staged.ts"), green, "深色主题没有换用自己的 Git 颜色令牌");
   await page.screenshot({ path: "/tmp/ash-file-tree-git-dark.png", fullPage: true });
 
-  console.log("file tree git decorations: ok");
+  // 头部那颗「打开工作目录」：真点一下，回执要落到页面上，且不许留下未捕获异常。
+  await page.getByRole("button", { name: "在文件管理器中打开工作目录" }).click();
+  await page.getByTestId("tree-toast").filter({ hasText: "已在文件管理器中打开工作目录" }).waitFor();
+  assert.deepEqual(openCalls, [{ path: "", appId: null }], "根按钮要按空路径请求打开工作目录");
+  assert.deepEqual(pageErrors, [], `页面抛了未捕获异常：${pageErrors.join(" / ")}`);
+
+  console.log("file tree git decorations: ok（含头部「打开工作目录」真实点击）");
 } finally {
   await browser?.close();
   await server.close();
