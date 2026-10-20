@@ -19,7 +19,7 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { confirmDone, takeConfirmed } from "./runs.js";
-import { announceResumePrompt, resumePromptClearPatch, restoreResumePrompt } from "./task-resume-prompt.js";
+import { announceResumePrompt, resumePromptVoidPatch, restoreResumePrompt } from "./task-resume-prompt.js";
 import { id, now } from "./util.js";
 
 export interface PreviousDirectionState {
@@ -93,11 +93,12 @@ export async function clearPreviousDirectionState(
         activeDirectionToken: clearedDirectionToken,
         activeDirectionVersion: clearedDirectionVersion,
         completeConfirmedAt: null,
-        // **清场要作废在途的旧凭证**：这一笔清掉的那段检查点可能已经被消息账本取走、还在路上，
-        // 它那一侧的回填只认「空槽 + 同一代次」。清了不动代次的话，那段旧文字还能凭一个空槽填
-        // 回**新方向**头上（第 3 轮审查 F1）。`resumePromptClearPatch` 只在真的清掉了东西时才
-        // 推代次 —— 空着就一个字不动，否则下面那一步回滚会被自己推走的代次挡死（F1-C）。
-        ...resumePromptClearPatch(),
+        // **清场要连在途的旧凭证一起作废**：这一笔清掉的那段检查点可能早就被消息账本取走、还
+        // 在路上，而它那一侧的回填只认「空槽 + 同一代次」。不推代次的话，那段旧文字能凭一个空
+        // 槽填回**新方向**头上（第 3 轮审查 F1 的 Codex 那一支：它的成功路径没有第二次清场）。
+        // 推走的这一代随后由 `generationAfterClear` 记进快照 —— 回滚问的是「还是我离开时那一代
+        // 吗」，所以自己推的代次挡不住自己（F1-C）。
+        ...resumePromptVoidPatch(),
         question: null,
         questionOptions: null,
         questionItems: null,
@@ -184,15 +185,13 @@ export async function discardLateDirectionState(
     .update(tasks)
     .set({
       completeConfirmedAt: null,
-      // **作废,不是取走**:旧方向迟到的那段检查点不该再回来,所以真清掉了东西就把代次推走 ——
-      // 否则它那一侧还在途的退回(账本重投)能凭一个空槽把它填回新方向头上(第 2 轮审查 F2 同类)。
+      // **作废,不是取走**:旧方向迟到的那段检查点不该再回来,在途的旧凭证也一律过期(同上)。
       //
-      // **但空着的时候一个字都不许动**:上一步 `clearPreviousDirectionState` 已经清过一遍,这一
-      // 趟多半什么也没清。原来这里无条件 `+1`,于是没有任何竞争写入也把代次推走,紧接着新正文
-      // 发送失败要回滚时,回滚自己的 CAS 被自己刚推走的那一格挡死 —— 检查点、提问、完成票一起
-      // 没了,而新工作压根没送出去（第 3 轮审查 F1-C 实测
+      // 这一笔推走的代次同样**记回快照**。原来它只推不记,于是没有任何竞争写入也把代次推走,紧
+      // 接着新正文发送失败要回滚时,回滚自己的 CAS 被自己刚推走的那一格挡死 —— 检查点、提问、
+      // 完成票一起没了,而新工作压根没送出去（第 3 轮审查 F1-C 实测
       // `F2_NATIVE_STEER_SELF_INVALIDATES_ROLLBACK`）。
-      ...resumePromptClearPatch(),
+      ...resumePromptVoidPatch(),
       question: null,
       questionOptions: null,
       questionItems: null,

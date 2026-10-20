@@ -128,23 +128,30 @@ try {
     await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.taskId, id));
   }
 
-  // ── ③ 清场那一步**什么都没清**时不许动代次（上面两条靠它才分得开）─────────────────
+  // ── ③ 改派作废旧方向的检查点意图时，**在路上的那一段也不许回来**（F1 的 Codex 那一支）──
+  //
+  // 这一格为空还有一种原因：那段文字早被消息账本取走、正在投递途中。清场只看行上有没有文字
+  // 的话，Codex 这条成功路径（它没有第二次清场）之后，账本那一侧投递失败仍能把**旧方向**的
+  // 检查点填到新方向头上。所以作废就是作废：代次一律前进，在途的凭证全部过期。
   {
-    const id = "clear-nothing-no-bump";
-    await seed(id, { generation: 5 });
-    await db.update(tasks).set({ resumePrompt: null, resumePromptAuto: false }).where(eq(tasks.id, id));
+    const id = "codex-inflight-receipt";
+    await seed(id, { generation: 4 });
+    const { takeResumePrompt, restoreResumePrompt } = await import("../src/task-resume-prompt.js");
+    const inflight = await takeResumePrompt(id, "主动暂停：保留待续工作");
+    assert.ok(inflight, "台子前提：那段检查点已经被取走，一张凭证在投递途中");
     assert.equal(runs.claimTurn(id, "single"), true);
-    const handle = {
-      kill: () => {},
-      steer: async (_text: unknown, beforeSend?: () => void | Promise<void>) => { await beforeSend?.(); },
-    };
+    // Codex 的句柄没有 beforeSend 那一跳 —— 成功送达之后不会再清一次（那是有意的：ACK 之后
+    // 旧工作仍可能合法写入这几列，无条件再清会误删）。
+    const handle = { kill: () => {}, steer: async () => {} };
     runs.trackRun(id, handle);
-    runs.bindNativeSteer(id, handle, { agentType: "claude", record: () => {} });
-    assert.equal((await steer.steerQueuedMessage(`m-${id}`)).ok, true);
+    runs.bindNativeSteer(id, handle, { agentType: "codex", record: () => {} });
+    assert.equal((await steer.steerQueuedMessage(`m-${id}`)).ok, true, "新方向照常送达");
+
     assert.equal(
-      (await taskRow(id)).resumePromptGeneration, 5,
-      "一前一后两次清场都没东西可清 ⇒ 代次一个字都不许动（代次是「有过几次占用」，不是「被清过几次」）",
+      await restoreResumePrompt(id, inflight), false,
+      "改派作废了旧方向的检查点意图 ⇒ 在路上那一段填不回来（否则它会落到新方向头上）",
     );
+    assert.equal((await taskRow(id)).resumePrompt, null, "新方向头上不许凭空多出一段旧交代");
     runs.untrackRun(id, handle);
     runs.releaseTurn(id);
   }
@@ -183,9 +190,35 @@ try {
     runs.releaseTurn(id);
   }
 
+  // ── ⑤ **Codex 送达失败**：这条路上只有一次清场，所以首次清场推走的代次也必须记回快照 ────
+  //
+  // Claude 那条链在 ACK 之后还有第二次清场，它记回去的那一代会把第一次的疏漏盖过去 —— 于是
+  // 「首次清场不记回」这个错在 Claude 路径上看不出来。Codex 没有那一跳，漏了就是整组丢失。
+  {
+    const id = "codex-send-fails";
+    await seed(id, { generation: 7 });
+    assert.equal(runs.claimTurn(id, "single"), true);
+    const handle = {
+      kill: () => {},
+      steer: async () => { throw new Error("注入：Codex 这一程压根没送出去"); },
+    };
+    runs.trackRun(id, handle);
+    runs.bindNativeSteer(id, handle, { agentType: "codex", record: () => {} });
+    assert.equal((await steer.steerQueuedMessage(`m-${id}`)).ok, false);
+
+    const after = await taskRow(id);
+    assert.equal(after.resumePrompt, "主动暂停：保留待续工作", "那段待续工作必须回来");
+    assert.equal(after.resumePromptAuto, false, "来源跟着文字一起回来");
+    assert.equal(after.question, "保留旧问题");
+    assert.equal(after.completeConfirmedAt, "2026-10-20T08:00:00.000Z");
+    runs.untrackRun(id, handle);
+    runs.releaseTurn(id);
+  }
+
   console.log(
     "✓ 原生引导发送失败后的回滚：ACK 后清场不挡自己的回滚（检查点/提问/完成票三样都回来）"
-    + " / 期间真有新占用时只有检查点过期 / 没清掉东西就不推代次 / 作废迟到那一段之后照样回得去",
+    + " / 期间真有新占用时只有检查点过期 / 在路上的旧交代填不回新方向 / 作废迟到那一段之后照样回得去"
+    + " / Codex 那条只有一次清场的链同样回得去",
   );
 } finally {
   await releaseTmpDb();

@@ -55,8 +55,7 @@
 //  · 占位：`writeResumePrompt`（只填空位）/ `occupyResumePrompt`（允许盖掉已经挂着的那一段）
 //  · 取走：`resumePromptTakePatch` + `resumePromptHeldBy`（谁还握着这一次占用）
 //  · 退回：`restoreResumePrompt` / `resumePromptSlotFor` + `resumePromptRestorePatch`
-//  · 作废：`resumePromptVoidPatch`（这段话已经消费掉/不该再回来）
-//  · 清场：`resumePromptClearPatch`（有就作废、没有就一个字不动）
+//  · 作废：`resumePromptVoidPatch`（这段话已经消费掉/不该再回来，在途的旧凭证一律过期）
 //
 // 这条不靠自觉：回归里有一道结构锁遍历 `server/src` 的每一条 `db.update(tasks)`，谁再在
 // 自己那边直写这三列就红（`monitor-complete-checkpoint-groups.ts` ㉗c）。
@@ -246,30 +245,23 @@ async function writeInto(
  * 导出给需要在复合更新里一起落库的那几处用（结算消费检查点、丢弃迟到的旧方向状态）：口径只有
  * 这一份，各写一遍就会漏掉代次。**它们记得自己补一条 `announceResumePrompt`**（见文件头）。
  */
+/**
+ * **作废**要写的那几列：来源归零 + 代次 +1。
+ *
+ * 「空着也要 +1」是有意的：那一格为空还有一种原因是**那段文字正在别人手上**（账本取走了、还
+ * 没送出去）。作废的语义是「这段等待不该再回来」，所以它必须同时把在途的那些凭证作废掉 ——
+ * 只看行上有没有文字的话，改派清掉旧方向之后，账本那一侧投递失败仍能把旧方向的检查点填到
+ * **新方向**头上（第 3 轮审查 F1 的 Codex 那一支）。
+ *
+ * 代价是「我自己推走的代次」会挡住我自己紧接着的回滚 —— 那一条由**调用方把结果记回快照**解决
+ * （`task-steer-direction-state.ts`），不是靠在这里少推一次：少推就回到上面那个漏洞。
+ */
 export const resumePromptVoidPatch = () => ({
   resumePrompt: null,
   resumePromptAuto: false,
   resumePromptGeneration: sql`${tasks.resumePromptGeneration} + 1`,
 });
 
-/**
- * **清场**：这一刻挂着什么就作废什么，**空着就一个字都不动**（代次也不动）。
- *
- * 跟上面差的就是这一条，而它是一次回归的根因：原生引导清完旧方向之后，ACK 回来还要再清一遍
- * 迟到的那几样（`discardLateDirectionState`）。那一笔原来无条件 `+1`，于是**没有任何竞争写入
- * 也会把代次推走**，紧接着新正文发送失败要回滚时，回滚自己的 CAS（代次 = 快照）被自己刚推走
- * 的那一格挡死：检查点、提问、完成票一起没了，而新工作压根没送出去（第 3 轮审查 F1-C 实测
- * `F2_NATIVE_STEER_SELF_INVALIDATES_ROLLBACK`）。
- *
- * 「真的清掉了一段话」才算一次作废 —— 那时在途的旧凭证本来就该过期；什么都没清就不是事件，
- * 不许动代次。
- */
-export const resumePromptClearPatch = () => ({
-  resumePrompt: null,
-  resumePromptAuto: false,
-  resumePromptGeneration: sql`CASE WHEN ${tasks.resumePrompt} IS NULL THEN ${tasks.resumePromptGeneration}`
-    .append(sql` ELSE ${tasks.resumePromptGeneration} + 1 END`),
-});
 
 /**
  * 清掉**系统自己写的**那段等待（`resume_prompt_auto`），agent 用 `pause_task` 写的原样留着。
