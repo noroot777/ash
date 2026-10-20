@@ -13,10 +13,11 @@
 // 跑法:
 //   ASH_DB=/tmp/test-executor-default-scope-$RANDOM.db npx tsx server/scripts/test-executor-default-scope.ts
 import assert from "node:assert/strict";
+import { eq } from "drizzle-orm";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { requireTmpDb } from "./tmp-db.js";
+import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-executor-default-scope-"));
 process.env.ASH_DB ||= join(stage, "default-scope.db");
@@ -81,7 +82,38 @@ assert.deepEqual(
 );
 assert.ok(claudeB, "claude@b 建过");
 
-// ── ③ 多人模式:按人收窄,且仍不越类型 ───────────────────────────────────
+// ── ③ 设默认撞上删除:要么都成,要么库里一个字没动 ───────────────────────
+// 开头那句「这个 profile 还在」是在批外读的,删除可以恰好落在它和这一批之间;而 SQLite
+// 对不存在的行做 UPDATE 是零行成功,不报错也不回滚 —— 没有「目标还在」这个条件的话,
+// 清旧默认照常提交、设新默认一行没中,净效果是**设置失败却把另一个仍在的默认抹掉了**
+// (第 1 轮审查 20/20 复现,报的是 500)。
+await db.delete(agents);
+const keeper = await createProfile("claude@keeper", "claude", true);
+const doomed = await createProfile("claude@doomed", "claude", false);
+for (let round = 0; round < 20; round++) {
+  const [patchRes, deleteRes] = await Promise.all([
+    api.request(`/agents/${doomed}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isDefault: true }),
+    }),
+    api.request(`/agents/${doomed}`, { method: "DELETE" }),
+  ]);
+  assert.equal(deleteRes.status, 200, "删除那边应照常成功");
+  assert.ok([200, 404].includes(patchRes.status), `设默认撞上删除不该 500: ${patchRes.status}`);
+  const keeperRow = (await db.select().from(agents).where(eq(agents.id, keeper))).at(0);
+  if (patchRes.status !== 200) {
+    assert.equal(keeperRow?.isDefault, true, "设默认没成,就不许动另一个仍在的默认");
+  }
+  // 下一轮重新摆好现场(doomed 已被删,keeper 的默认可能被合法地让了出去)。
+  await db.update(agents).set({ isDefault: true }).where(eq(agents.id, keeper));
+  await db.insert(agents).values({
+    id: doomed, name: "claude@doomed", type: "claude", extraArgs: "[]", configOverrides: "{}", isDefault: false,
+  });
+}
+await db.delete(agents);
+
+// ── ④ 多人模式:按人收窄,且仍不越类型 ───────────────────────────────────
 const root = join(stage, "root");
 mkdirSync(join(root, "alice"), { recursive: true });
 mkdirSync(join(root, "bob"), { recursive: true });
@@ -111,5 +143,6 @@ assert.equal(after["a-codex"], true, "本人**别的类型**的默认不该被�
 assert.equal(after["b-claude"], true, "别人的默认不该被清掉");
 assert.equal(after["legacy-claude"], true, "归属为 null 的存量行不属于 alice,不该被清掉");
 
+await releaseTmpDb();
 rmSync(stage, { recursive: true, force: true });
 console.log("✓ 设默认只在「同类型 + 同归属」这一格内清标记,不越类型、不越人");

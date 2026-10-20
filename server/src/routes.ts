@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { stream, streamSSE } from "hono/streaming";
 import { getConnInfo } from "@hono/node-server/conninfo";
-import { eq } from "drizzle-orm";
+import { and, eq, exists, sql } from "drizzle-orm";
 import type {
   Group,
   AgentType,
@@ -354,16 +354,24 @@ api.patch("/agents/:id", async (c) => {
     if (overrideErrors.length) return c.json({ error: overrideErrors.join("；") }, 400);
     patch.configOverrides = JSON.stringify(configOverrides);
   }
-  // 同上:清旧默认与设新默认打进同一批。
+  // 同上:清旧默认与设新默认打进同一批。但**成批不等于两条都命中** —— 开头那句
+  // 「这个 profile 存在」是在批外读的,删除可以恰好落在它和这一批之间;而 SQLite 对
+  // 不存在的行做 UPDATE 是成功的零行操作,不报错也不回滚。于是清旧默认照常提交,设
+  // 新默认一行没中:**设置失败,却把另一个仍在的默认抹掉了**(第 1 轮审查 20/20 复现)。
+  // 所以把「目标还在」做成清那条语句自己的条件(子查询跟它一起求值),两条就只剩
+  // 「都中」或「都不中」—— 判据同 claude-monitor-write.ts 那段。
+  const targetAlive = exists(db.select({ one: sql`1` }).from(agents).where(eq(agents.id, aid)));
   const clearDefault = b.isDefault === true
     ? db.update(agents).set({ isDefault: false })
-      .where(await defaultClearScope(existing.type, existing.ownerUserId))
+      .where(and(await defaultClearScope(existing.type, existing.ownerUserId), targetAlive))
     : null;
   if (clearDefault) patch.isDefault = true;
-  const write = db.update(agents).set(patch).where(eq(agents.id, aid));
-  if (clearDefault) await db.batch([clearDefault, write]);
-  else await write;
-  const updated = (await db.select().from(agents).where(eq(agents.id, aid))).at(0)!;
+  // 响应取**这次写入自己的结果**:写完再独立读一次是第二个空窗口(行刚被删就读成
+  // undefined,老代码那个非空断言当场 500)。零行 = 目标已经没了,与开头的预读同一句话。
+  const write = db.update(agents).set(patch).where(eq(agents.id, aid)).returning();
+  const written = clearDefault ? (await db.batch([clearDefault, write]))[1] : await write;
+  const updated = written.at(0);
+  if (!updated) return c.json({ error: "not found" }, 404); // 与开头预读那条同一句话
   return c.json(toAgent(updated));
 });
 

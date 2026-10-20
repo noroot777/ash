@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-task-activity-"));
 process.env.ASH_DB = join(root, "ash.db");
@@ -74,5 +75,7 @@ try {
 
   console.log("task activity tests passed");
 } finally {
+  // Windows 删不掉还开着的库文件(舞台目录里就是 ASH_DB),先松手再删。
+  await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }
