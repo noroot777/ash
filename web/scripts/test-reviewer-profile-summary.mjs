@@ -38,7 +38,7 @@ try {
   ));
   assert(Math.max(...partTops) - Math.min(...partTops) <= 2, "智能体、模型与智能水平应保持在同一行");
 
-  const card = await page.locator(".free-review-reviewer-list > button").boundingBox();
+  const card = await page.locator(".free-review-reviewer-pick").boundingBox();
   assert(card && card.height < 64, "单行摘要不应把审查者条目撑得过高");
   console.log("reviewer profile summary test passed");
 } finally {

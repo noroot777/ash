@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import type { AgentExecutorProfile, ReviewerProfile } from "@ash/shared";
 import { ReviewerProfileSummary } from "../../src/free-workflow/ReviewerProfileFields.tsx";
-import { CheckCircle } from "@phosphor-icons/react";
+import { CheckCircle, Trash } from "@phosphor-icons/react";
 import "../../src/styles/global.css";
 
 const profiles: AgentExecutorProfile[] = [{
@@ -30,10 +30,15 @@ function Fixture() {
   return (
     <main style={{ width: 720, margin: "40px auto" }}>
       <div className="free-review-reviewer-list" style={{ width: 470 }}>
-        <button type="button" aria-selected="true">
-          <span><b>{reviewer.name}</b><ReviewerProfileSummary reviewer={reviewer} profiles={profiles} /></span>
-          <CheckCircle size={16} weight="fill" />
-        </button>
+        <div className="free-review-reviewer-row">
+          <button className="free-review-reviewer-pick" type="button" aria-selected="true">
+            <span><b>{reviewer.name}</b><ReviewerProfileSummary reviewer={reviewer} profiles={profiles} /></span>
+            <CheckCircle size={16} weight="fill" />
+          </button>
+          <button className="free-review-reviewer-delete" type="button" aria-label={`删除审查者「${reviewer.name}」`}>
+            <Trash size={13} />
+          </button>
+        </div>
       </div>
     </main>
   );

@@ -2,14 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AgentExecutorProfile, FreeReviewCheckMode, FreeReviewExecutorOverride, ReviewerProfile } from "@ash/shared";
 import { MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
-import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, X } from "@phosphor-icons/react";
+import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, Trash, X } from "@phosphor-icons/react";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
-import { settledDisputeRounds } from "./freeReviewCopy.ts";
+import { reviewerDeleteMessage, settledDisputeRounds } from "./freeReviewCopy.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
+import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import {
   createReviewerDraft,
   ReviewerProfileSummary,
@@ -71,6 +72,7 @@ export function FreeReviewDialog({
   const [newName, setNewName] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ReviewerProfile | null>(null);
   const postMerge = !!postMergeTarget;
   const parsedRetryLimit = parseRetryLimit(retryLimit);
   // 合并结果审查本来就不复审（提交时写死 0），别让那条禁用的输入卡住它的提交按钮。
@@ -150,6 +152,44 @@ export function FreeReviewDialog({
       notify(`已创建并选中审查者「${created.name}」`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "审查者创建失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 删审查者删的是一份**全局配置**，别的任务也在用它，所以跟设置页同一套口径：先确认，
+  // 再照服务端的真实后果写清楚（历史审查记录留的是当时的配置快照，不受影响）。
+  const reservation = state?.reviewReservation;
+  // 自动复审的续轮预约（runId 非空）配置已冻结在 run 行里，删了照样能续；只有手动预约会断，
+  // 服务端在那种情况下会顺手 disarm，所以确认框要提前把这句说在前面。
+  const deleteBreaksReservation = !!deleteTarget
+    && !!reservation?.armed
+    && !reservation.runId
+    && reservation.reviewerId === deleteTarget.id;
+
+  const removeReviewer = async () => {
+    if (!deleteTarget || busy) return;
+    setBusy(true);
+    try {
+      await api.deleteReviewerProfile(deleteTarget.id);
+      const rest = reviewers.filter((item) => item.id !== deleteTarget.id);
+      setReviewers(rest);
+      // 删掉的正是当前选中的那位时要补一个选中项：下一位顶上；一个都不剩就把新建表单摊开。
+      // 否则对话框会停在「没有选中、提交按钮永远灰着」的死角，用户只能关掉重开。
+      if (deleteTarget.id === selectedId) {
+        if (rest[0]) selectReviewer(rest[0]);
+        else {
+          setSelectedId("");
+          setRunDraft(reviewerRunDraft(null));
+          setSaveMode("once");
+          setNewName("");
+          setCreating(true);
+        }
+      }
+      setDeleteTarget(null);
+      notify(`已删除审查者「${deleteTarget.name}」`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "审查者删除失败");
     } finally {
       setBusy(false);
     }
@@ -255,10 +295,19 @@ export function FreeReviewDialog({
               <div className="free-review-section-title"><b>审查者</b><button type="button" onClick={() => setCreating((value) => !value)}><Plus size={11} />新建</button></div>
               <div className="free-review-reviewer-list">
                 {reviewers.map((reviewer) => (
-                  <button key={reviewer.id} type="button" aria-selected={selectedId === reviewer.id} onClick={() => { selectReviewer(reviewer); setCreating(false); }}>
-                    <span><b>{reviewer.name}</b><ReviewerProfileSummary reviewer={reviewer} profiles={profiles} /></span>
-                    {selectedId === reviewer.id && <CheckCircle size={16} weight="fill" />}
-                  </button>
+                  <div key={reviewer.id} className="free-review-reviewer-row">
+                    <button className="free-review-reviewer-pick" type="button" aria-selected={selectedId === reviewer.id} onClick={() => { selectReviewer(reviewer); setCreating(false); }}>
+                      <span><b>{reviewer.name}</b><ReviewerProfileSummary reviewer={reviewer} profiles={profiles} /></span>
+                      {selectedId === reviewer.id && <CheckCircle size={16} weight="fill" />}
+                    </button>
+                    <button
+                      className="free-review-reviewer-delete"
+                      type="button"
+                      aria-label={`删除审查者「${reviewer.name}」`}
+                      disabled={busy}
+                      onClick={() => setDeleteTarget(reviewer)}
+                    ><Trash size={13} /></button>
+                  </div>
                 ))}
               </div>
               {!creating && selectedReviewer && (
@@ -353,6 +402,18 @@ export function FreeReviewDialog({
           </button>
         </footer>
       </form>
+      {/* 自己 portal 到 body、自己进那摞可关闭层，所以挂在这里不会被遮罩的「点外面」判成关闭。 */}
+      {deleteTarget && (
+        <ConfirmDialog
+          title="删除审查者"
+          message={reviewerDeleteMessage(deleteTarget.name, { breaksReservation: deleteBreaksReservation })}
+          confirmLabel="删除"
+          danger
+          busy={busy}
+          onConfirm={() => void removeReviewer()}
+          onClose={() => setDeleteTarget(null)}
+        />
+      )}
     </div>,
     document.body,
   );
