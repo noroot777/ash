@@ -237,6 +237,16 @@ export interface HandoffManifest {
     verifyStationRounds: number;
     verifyCompletedSteps?: string;
     resumePrompt: string | null;
+    /**
+     * 那段续跑指令是**系统替它写下的等待**（`true`）还是 agent/真人自己写的（`false`/缺省）。
+     *
+     * 必须随文字一起过网:它决定这段话的**有效期** —— 系统写的那种在「它等的东西没了」之后
+     * 会被自动清掉,自己写的那种谁也不许抹（server/src/task-resume-prompt.ts 文件头）。只传
+     * 文字的话,接力一趟就把它洗成「自己写的」,对端那台机器上永不自动清理（第 1 轮审查 F2
+     * 的契约面实例）。老版本导出的 manifest 没有这一列,导入侧按 `false` 处理 —— 那是安全的
+     * 一侧:宁可留着让人手点,也不要替它清掉一段可能是 agent 自己留的交代。
+     */
+    resumePromptAuto?: boolean;
     question: string | null;
     questionOptions: string | null;
     questionItems: string | null;

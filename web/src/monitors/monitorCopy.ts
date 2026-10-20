@@ -86,3 +86,70 @@ export function claudeMonitorEpilogue(status: TaskMonitor["status"]): string {
     return `起它的那个智能体进程已经不在了，它的通知没有任何去处${tail}`;
   return `它的通知只注回那个会话，而它已经没命等到结果了${tail}`;
 }
+
+/**
+ * 日志那一格是空的时候说什么。
+ *
+ * 「这个命令到现在一个字都还没吐」是对的，但它只报现象、不答用户真正在问的那一句：**那它
+ * 到底还在等，还是已经没戏了**。2026-10-20 那次空转里，用户盯着这一格和一句「共推送 0 条
+ * 事件」，两句加起来仍然推不出「它等的标记永远不会出现了」。
+ *
+ * 但**这一层也答不出那一句**（第 1 轮审查 F3 实测：`until true; do sleep 1; done` 的条件
+ * 一开始就满足，命令正常退出、日志为空，第一版照样写「那个条件始终没出现」，而同一张卡
+ * 上方还写着「命令自己跑完了」）。所以这里只说两件能证实的事：**静默了多久**（起点不可信
+ * 的投影行不说，判据同 {@link startedAtLabel}），以及**它是怎么结束的** —— 一条空日志配上
+ * 「命令自己跑完了」和配上「盯到期了」，对用户是完全不同的两件事。
+ */
+export function emptyLogCopy(monitor: TaskMonitor, live: boolean, bytes: number | null | undefined): string {
+  // **「没有完整行」不等于「没有产出」**（第 1 轮审查 F4）。读不出来、或者尾部那一段里一个
+  // 换行都没有（超长单行）时,行列表同样是空的,而文件里可能有几兆字节。所以这两种先说清,
+  // 再谈「它一个字都没吐」—— 否则这一句就是拿一份不充分的代理数据断言一件没观测到的事实。
+  // **「这个后端没给」跟「读不出来」是两件事**（第 2 轮审查 N3）：上一版把字段缺失也说成读取
+  // 失败 —— 而旧后端完全可能成功读出一个空文件，只是那一版的响应里压根没有这一列。凭「字段
+  // 不在」断言「读失败」，就是又替它编了一次没观测到的事实。
+  if (bytes === undefined) {
+    return "这个后端的响应里没有日志大小这一项（版本比当前界面旧），所以这里说不准它是真的"
+      + "一个字都没吐、还是只是这一段尾巴里切不出完整内容。";
+  }
+  if (bytes === null) {
+    return "它的日志这一刻读不出来（文件可能被删掉或挪走了，也可能是权限/读写出错）——"
+      + "所以这里说不准它有没有产出过。";
+  }
+  if (bytes > 0) {
+    return `它的日志文件里有 ${bytes} 字节，但这一段尾巴里切不出一行完整内容`
+      + "（最可能是一条长到没有换行的输出）。完整内容在哨兵的日志文件里。";
+  }
+  if (live) {
+    const started = Date.parse(monitor.startedAt);
+    const span = monitor.startedAtExact && Number.isFinite(started)
+      ? `（已经静默 ${formatSpan(Math.max(0, Date.now() - started))}）`
+      : "";
+    return `这个命令到现在一个字都还没吐${span}。`;
+  }
+  return `它的日志从头到尾是空的。${endedWithoutOutput(monitor)}`;
+}
+
+/** 空日志 + 已经结束：按**结束方式**把这件事说完整，不猜它在等的东西到底来没来。 */
+function endedWithoutOutput(monitor: TaskMonitor): string {
+  switch (monitor.status) {
+    case "exited":
+      if (monitor.exitCode === 0) return "命令自己跑完了（退出码 0），只是没有产生任何输出。";
+      // 非 0 要把码带上：那是「它为什么没输出」目前唯一的线索。拿不到码（离线补读过）就不编。
+      return typeof monitor.exitCode === "number"
+        ? `命令自己结束了（退出码 ${monitor.exitCode}），没有产生任何输出。`
+        : "命令自己结束了（退出码没记下来），没有产生任何输出。";
+    case "expired":
+      return "一直到盯满时长，它都没有输出过。";
+    case "stopped":
+      return "它被停掉之前没有输出过。";
+    case "lost":
+      // **不替它编一次重启**（第 2 轮审查 R2-4）：`lost` 还有另一个来源 —— 创建期的补偿没能
+      // 确认那个壳的归属（`monitor-create.ts` 的两处 `lost`），那一路压根没发生过重启，也
+      // 证明不了那个进程已经不在。这一层说得出的只有两件事：ash 认不回它了，以及它一条
+      // 输出都没送到。到底是哪一种由 `endedReason` 答（就显示在这句话旁边），不从一个通用
+      // 终态反推一个没观测到的事实。
+      return "ash 已经认不回这个进程了，期间它也没有一条输出送到这个任务头上。";
+    default:
+      return "";
+  }
+}

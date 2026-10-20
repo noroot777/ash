@@ -612,6 +612,17 @@ export const MONITOR_WAKE_LABEL: Record<MonitorWakeTarget, string> = {
 const MONITOR_BLOCKING_STATUSES = new Set(["done", "failed", "canceled"]);
 
 /**
+ * **落成这个状态 = 这个任务名下的哨兵会被一并收走**（服务端 `stopMonitorsForTask`）。
+ *
+ * 跟上面那两问同一个集合，刻意不另列一份：结算那一侧要判「我这一笔会不会毁掉哨兵」（见
+ * `settle-status.ts` 的哨兵闸），而那恰恰是「哨兵还能不能唤醒它」的另一面。分开写两份，
+ * 迟早出现「拦住了创建却照样把它收走」或者反过来（第 2 轮审查 R2-1：判据必须共用一份）。
+ */
+export function monitorSweepingStatus(status: string): boolean {
+  return MONITOR_BLOCKING_STATUSES.has(status);
+}
+
+/**
  * 「这个任务现在能不能挂哨兵 / 哨兵的事件还能不能唤醒它」——创建入口、事件出口、唤醒前
  * 最后一道闸共用这一份判据（三处分家就等于没防）。
  *
@@ -633,5 +644,14 @@ export function monitorBlockedReason(
 
 /** 待发送消息上的来源标记（`scheduled_messages.origin`）。同一个哨兵的事件按它合并。 */
 export const monitorMessageOrigin = (monitorId: string) => `monitor:${monitorId}`;
+/**
+ * **一笔结果交接的身份**:哪条哨兵的、哪一次凭证。写进承载它的那条消息
+ * (`scheduled_messages.handoff_token`,跟入队同一笔落库),于是「这一笔送过没有」有一个原子的
+ * 答案 —— 重投器据此不把同一条结束通知送成两条(第 2 轮审查 N1)。
+ *
+ * 用凭证时刻而不是哨兵 id 当后半截:同一条哨兵理论上可以先后有两笔交接(离线收尾补过一次),
+ * 只按 id 去重会把第二笔当成已送过。
+ */
+export const handoffToken = (monitorId: string, handoffAt: string) => `${monitorId}:${handoffAt}`;
 export const monitorIdFromOrigin = (origin: string | null | undefined): string | null =>
   origin?.startsWith("monitor:") ? origin.slice("monitor:".length) : null;

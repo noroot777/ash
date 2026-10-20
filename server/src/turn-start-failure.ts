@@ -21,7 +21,7 @@ import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { reportTurnFailure } from "./turn-failure.js";
 import { announceBaseFallback } from "./base-fallback-notice.js";
 import type { Workspace } from "./git.js";
-import { afterSettlement } from "./single-run.js";
+import { afterSettlement } from "./settle-status.js";
 import { now } from "./util.js";
 import { interruptCliGoal } from "./task-cli-state.js";
 

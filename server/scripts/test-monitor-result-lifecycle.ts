@@ -262,7 +262,7 @@ const { takeResumePrompt } = await import("../src/task-resume-prompt.js");
     assert.ok(again2, "重投拿到同一笔(两份句柄都指着它)");
     await again2.restore();
     assert.equal((await taskOf()).resumePrompt, checkpoint, "新的那份归还成功");
-    assert.equal(await takeResumePrompt(taskId, checkpoint), true, "真人续跑把它消费掉");
+    assert.ok(await takeResumePrompt(taskId, checkpoint), "真人续跑把它消费掉");
     await first.restore(); // 过期句柄
     assert.equal((await taskOf()).resumePrompt, null,
       "过期的 restore 不许把已经被消费掉的那一段凭空复活（任务会从此卡在「在等续跑」）");

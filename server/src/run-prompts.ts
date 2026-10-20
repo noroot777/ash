@@ -1,5 +1,5 @@
 import { STEP_LABELS } from "@ash/shared/workflow";
-import { STRICT_DONE_PROTOCOL } from "./single-run.js";
+import { STRICT_DONE_PROTOCOL } from "./settle-status.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { railStalledAtRun } from "./workflows.js";
 

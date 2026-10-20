@@ -10,6 +10,7 @@ import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
 import { formatInstant } from "../src/task-detail/utils.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
+import { emptyLogCopy } from "../src/monitors/monitorCopy.ts";
 import { MonitorWaitCard } from "../src/monitors/MonitorWaitCard.tsx";
 import { withMonitorTab } from "../src/monitors/useMonitorInspector.tsx";
 import type { TaskMonitorsState } from "../src/monitors/useTaskMonitors.ts";
@@ -520,4 +521,64 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
     "折叠态连正文都不渲染 —— 这一条钉住上面那句话的前提:正文的断言只能在真点击里做");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");
+// ── 空日志那一格：只说可证实的事实（第 1 轮审查 F3 的前端那一半）──────────────
+//
+// 被打回的那一版拿命令字符串的形状去断言「它等的条件始终没出现」：`until true; do sleep 1;
+// done` 的条件一开始就满足，哨兵正常退出、日志为空，而卡片同时写着「命令自己跑完了」和
+// 「那个条件始终没出现」—— 同一张卡上两句话互相打脸。现在只许说两样：静默了多久、怎么结束的。
+{
+  const silentLoop = "until true; do sleep 1; done";
+  const live = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, true, 0);
+  assert.match(live, /一个字都还没吐/, "还在盯的只说现象");
+  assert.match(live, /已经静默/, "起点作数就说清哑了多久");
+  assert.doesNotMatch(
+    emptyLogCopy({ ...base, command: silentLoop, events: 0, startedAtExact: false }, true, 0),
+    /已经静默/, "起点不作数就不许编一个时长出来",
+  );
+
+  // ── 第 1 轮审查 F4：**空行列表有三种来由,只有「确证的 0 字节」那一种能说「它从头到尾
+  //    是空的」**。读不出来、尾部切不出完整行(超长单行)时,文件里完全可能有几兆字节。
+  //    **而「读不出来」跟「这个后端没给这一项」又得再分一层**（第 2 轮审查 N3）：旧后端可能
+  //    成功读出一个空文件,只是那一版响应里没有这一列 —— 凭「字段不在」说「读失败」又是一次
+  //    替它编事实。所以两种都不许断言零输出,但说的是不同的原因。
+  for (const liveNow of [true, false]) {
+    const unreadable = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, liveNow, null);
+    assert.match(unreadable, /读不出来/, "后端说读不出来：照实说读不出来");
+    assert.match(unreadable, /说不准/, "不许替它下「有没有产出」的结论");
+    assert.doesNotMatch(unreadable, /从头到尾是空的|一个字都还没吐/, "不许断言零输出");
+
+    const legacy = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, liveNow, undefined);
+    assert.match(legacy, /没有日志大小这一项|版本比当前界面旧/, "字段缺失要说清是后端没给（N3）");
+    assert.match(legacy, /说不准/, "同样不许下结论");
+    assert.doesNotMatch(legacy, /从头到尾是空的|一个字都还没吐/, "不许断言零输出");
+    assert.doesNotMatch(
+      legacy, /读不出来/,
+      "**但不许说成读取失败**：那是另一件事,旧后端很可能读得好好的（N3）",
+    );
+  }
+  {
+    const text = emptyLogCopy({ ...base, command: silentLoop, events: 0 }, false, 4096);
+    assert.match(text, /4096 字节/, "非空文件要把实测字节数说出来");
+    assert.doesNotMatch(text, /从头到尾是空的|没有产生任何输出/,
+      "文件里有字节,一句「空的」就是假话（F4）");
+  }
+
+  const ended = (patch: Partial<TaskMonitor>) =>
+    emptyLogCopy({ ...base, command: silentLoop, events: 0, endedAt: "2026-08-25T10:00:05.000Z", ...patch }, false, 0);
+  for (const [status, expect] of [
+    ["exited", /命令自己跑完了（退出码 0）/],
+    ["expired", /一直到盯满时长/],
+    ["stopped", /被停掉之前没有输出/],
+    // `lost` 只说得出两件事：ash 认不回它了、没有一条输出送到。**不许编一次重启**（第 2 轮
+    // 审查 R2-4：创建期补偿失败也写 lost，那一路压根没有重启，也证明不了进程已经不在）。
+    ["lost", /认不回这个进程/],
+  ] as const) {
+    const text = ended({ status, exitCode: status === "exited" ? 0 : null });
+    assert.match(text, expect, `${status} 要按自己的结束方式说`);
+    assert.doesNotMatch(text, /条件/, "不许从「日志空」推断它等的条件没满足（F3）");
+    assert.doesNotMatch(text, /重启/, "不许从一个通用终态反推一次没发生过的重启（R2-4）");
+  }
+  assert.match(ended({ status: "exited", exitCode: 2 }), /退出码 2/, "非 0 退出码是唯一线索，要带上");
+}
+
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空日志只说可证实的事实（读不出来/非空却切不出完整行/确证零字节三种分开说），空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");

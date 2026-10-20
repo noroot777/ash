@@ -22,6 +22,7 @@ import { resolveGate } from "./duet/gates.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
+import { confirmTaskComplete } from "./task-complete.js";
 import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
@@ -30,7 +31,7 @@ import { RUNS_DIR } from "./paths.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
-import { claimTurn, confirmDone, releaseTurn, stopTask } from "./runs.js";
+import { claimTurn, releaseTurn, stopTask } from "./runs.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
@@ -39,10 +40,9 @@ import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
-import { announceResumePrompt } from "./task-resume-prompt.js";
+import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { readableRunPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { now } from "./util.js";
 
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
 // 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
@@ -261,24 +261,23 @@ api.post("/tasks/:id/pause", async (c) => {
       ? "检查点的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试"
       : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），检查点已拒绝写入" }, 409);
   }
-  const updated = await db
-    .update(tasks)
-    .set({ resumePrompt: rp, updatedAt: now() })
-    .where(and(
-      eq(tasks.id, taskId),
-      eq(tasks.status, "running"),
-      r.activeTurnToken === null
-        ? isNull(tasks.activeTurnToken)
-        : eq(tasks.activeTurnToken, r.activeTurnToken),
-      r.activeDirectionToken === null
-        ? isNull(tasks.activeDirectionToken)
-        : eq(tasks.activeDirectionToken, r.activeDirectionToken),
-    ))
-    .returning({ id: tasks.id });
-  if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
-  // 检查点一挂上，前端的派审/预约/修复入口就该跟着灰掉；SSE 没有带 resume_prompt 的
-  // 局部事件，只能推整行（见 task-resume-prompt.ts 顶部）。
-  await announceResumePrompt(taskId);
+  // `auto: false` = 这段是 agent 自己写的,系统不许替它清掉（见 task-resume-prompt.ts 文件头）。
+  //
+  // **这一笔必须走存储层的 writer**,不许在这里自己 `db.update`:那样代次不会 +1,而代次正是
+  // 「这一格现在是第几次占用」这个归属判据的本体。实测过的现场:写下一段新的主动暂停后代次仍
+  // 是 1,于是一个在途的旧凭证合法地填回来、占住位置,真正新的那一段再也退不回去（第 3 轮审查
+  // F1-A `F2_HTTP_PAUSE_GENERATION_BYPASS`）。身份 CAS 跟这一笔写在同一条语句里（见那一层）；
+  // 整行广播也在那一层，前端的派审/预约/修复入口靠这一列灰掉。
+  const occupied = await occupyResumePrompt(taskId, rp, false, [
+    eq(tasks.status, "running"),
+    r.activeTurnToken === null
+      ? isNull(tasks.activeTurnToken)
+      : eq(tasks.activeTurnToken, r.activeTurnToken),
+    r.activeDirectionToken === null
+      ? isNull(tasks.activeDirectionToken)
+      : eq(tasks.activeDirectionToken, r.activeDirectionToken),
+  ]);
+  if (!occupied) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
   return c.json({ paused: true, willSettleAs: "paused" });
 });
 
@@ -289,6 +288,7 @@ api.post("/tasks/:id/pause", async (c) => {
 // 而跑这个回合的未必是同一个进程(历史事故:僵尸实例在跑,确认落在监听进程的
 // 内存里,结算那边什么都没看见,agent 明明确认了却记 failed)。落库那份是权威,
 // settle 两边任一命中即算确认(见 orchestrator.settleTaskStatus)。
+// **名下还挂着会被这次完成毁掉的哨兵时一律拒绝**(见 task-complete-monitors.ts)。
 api.post("/tasks/:id/complete", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -308,11 +308,13 @@ api.post("/tasks/:id/complete", async (c) => {
       ? "完成确认的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 complete_task"
       : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），完成确认已拒绝写入" }, 409);
   }
-  const updated = await db
-    .update(tasks)
-    .set({ completeConfirmedAt: now(), updatedAt: now() })
-    .where(and(
-      eq(tasks.id, taskId),
+  // ── 落确认走共用入口（task-complete.ts）──────────────────────────────────────
+  // 身份校验留在这里（这一条通道独有的口径、独有的措辞），闸和落库那一段必须共用 ——
+  // 补录那条旁路就是因为「只在这里问了一次」才走穿了整条不变量（第 1 轮审查 F1）。
+  // 排在令牌校验**之后**：身份没对上的请求连「你名下有哪几个哨兵」都不该看见。
+  const confirm = await confirmTaskComplete({
+    taskId,
+    where: [
       eq(tasks.status, "running"),
       r.activeTurnToken === null
         ? isNull(tasks.activeTurnToken)
@@ -320,10 +322,40 @@ api.post("/tasks/:id/complete", async (c) => {
       r.activeDirectionToken === null
         ? isNull(tasks.activeDirectionToken)
         : eq(tasks.activeDirectionToken, r.activeDirectionToken),
-    ))
-    .returning({ id: tasks.id });
-  if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，完成确认未写入" }, 409);
-  confirmDone(taskId);
+    ],
+    staleError: "当前回合已经结束或已被引导，完成确认未写入",
+  });
+  if (!confirm.ok) return c.json({ error: confirm.error }, 409);
+  // **`willSettleAs` 得跟结算真会落的那个一致**(第 2 轮审查 R2-2:这里回 done、实际落 paused,
+  // agent 据此以为活干完了)。结算的优先级是「提问 > 检查点 > 完成」(settle-status.ts):手里
+  // 还攥着一段续跑指令,这一轮就落 paused。系统为哨兵写的那段已经在闸放行时清掉了,所以能
+  // 走到这里还剩下的,是 agent 自己 `pause_task` 写的那一段 —— 它比我们更知道它想干什么,
+  // 不动它,只是别谎称这一轮会落 done。
+  const after = (await db
+    .select({
+      resumePrompt: tasks.resumePrompt, question: tasks.question, followUpFrom: tasks.followUpFrom,
+    })
+    .from(tasks).where(eq(tasks.id, taskId))).at(0);
+  // **续聊回合走的是另一条分支**(第 1 轮审查 N2):那一支里「本回合亲口确认」优先于一切 ——
+  // 检查点被这一轮消费掉、任务直接落 done(settle-status.ts 的 `followUpFrom` 分支)。拿普通
+  // 回合的「提问/检查点优先」去预告它,就会说「将暂停」而实际落 done。
+  if (after?.followUpFrom) return c.json({ confirmed: true, willSettleAs: "done" });
+  if (after?.question) {
+    return c.json({
+      confirmed: true,
+      willSettleAs: "paused",
+      note: "确认已记下,但你这一轮还留着一个待答复的提问,所以这一轮会落「已暂停」等答复;"
+        + "答复回来会续跑同一条会话。",
+    });
+  }
+  if (after?.resumePrompt) {
+    return c.json({
+      confirmed: true,
+      willSettleAs: "paused",
+      note: "确认已记下,但你这一轮还留着一段续跑指令(pause_task),结算把检查点排在完成之前,"
+        + "所以这一轮会落「已暂停」。真要收工就别再留检查点。",
+    });
+  }
   // 续聊回合(followUpFrom 非空)确认完成 = 把任务推进到 done;正常回合就是 done。
   return c.json({ confirmed: true, willSettleAs: "done" });
 });

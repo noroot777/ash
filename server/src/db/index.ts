@@ -5,6 +5,7 @@ import * as schema from "./schema.js";
 import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
 import { runDataMigrations } from "./migrations.js";
 import { ensureChatSchema } from "./schema-chat.js";
+import { ensureHandoffTokenUnique } from "./handoff-token-index.js";
 import { ensureFreeWorkflowSchema } from "./schema-free-workflow.js";
 import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 
@@ -123,7 +124,7 @@ export async function ensureSchema() {
       attachments TEXT NOT NULL DEFAULT '[]', agent TEXT,
       executor_id TEXT, model TEXT, mode TEXT NOT NULL DEFAULT 'timed', send_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT,
-      delivering_since TEXT, checkpoint_taken TEXT,
+      delivering_since TEXT, checkpoint_taken TEXT, handoff_token TEXT,
       review_run TEXT, review_round INTEGER
     );
     CREATE TABLE IF NOT EXISTS session_turns (
@@ -154,7 +155,9 @@ export async function ensureSchema() {
       start_anchor_width_ms INTEGER, tool_use_id TEXT,
       source_run TEXT, start_low_at TEXT, source_role TEXT,
       source_review_run TEXT, source_review_round INTEGER,
-      unit_token TEXT
+      unit_token TEXT, ended_by TEXT,
+      results_abandoned_at TEXT, results_abandoned_reason TEXT,
+      result_handoff_at TEXT, result_handoff_text TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (
@@ -347,6 +350,19 @@ export async function ensureSchema() {
     // 这一次创建独有的资源记号:归属与整项退出的唯一凭证(见 schema-monitors.ts)。
     // 存量行一律 NULL ⇒ 孤儿后代只能落「证不出」,记责任、不下刀(第 12 轮审查 F1)。
     "ALTER TABLE monitors ADD COLUMN unit_token TEXT",
+    // 「谁让它停的」。status=stopped 有三种来由(主动点停 / 推满事件上限 / 系统回收),
+    // 拿 status 代替来源会把后两种说成「本回合撤掉了哨兵」(第 1 轮审查 N1)。存量行 NULL
+    // = 来源不详,一律不算主动撤。
+    "ALTER TABLE monitors ADD COLUMN ended_by TEXT",
+    // 「它还没送到的结果我不要了」这句话本体。**不是 ended_by**(那是「谁让进程结束的」):
+    // 已经 exited 的哨兵不是被谁停的,拿 ended_by 当放弃凭证就等于那条出路对它永远无效
+    // (第 2 轮审查 R2-3)。存量行 NULL = 没人放弃过。
+    "ALTER TABLE monitors ADD COLUMN results_abandoned_at TEXT",
+    "ALTER TABLE monitors ADD COLUMN results_abandoned_reason TEXT",
+    // 「结局已写定、结束通知还没入队」那一瞬的责任凭证(时刻 + 原文)。少了它,那条缝里完成闸
+    // 看不见任何东西,任务落 done 把唯一的结果通知吃掉(第 1 轮审查 F1)。存量行 NULL = 不在交接中。
+    "ALTER TABLE monitors ADD COLUMN result_handoff_at TEXT",
+    "ALTER TABLE monitors ADD COLUMN result_handoff_text TEXT",
     "ALTER TABLE monitor_reclaim_debts ADD COLUMN unit_token TEXT",
     // 「线索追到这里为止」的戳。**不是销账**:整项退出在当前平台证不出,所以行留着只盖戳
     // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。
@@ -360,6 +376,14 @@ export async function ensureSchema() {
     // checkpoint_taken)。持久账本:取走只写在内存里的话,送达之前进程一换,那段交代
     // 就两边都不在了(第 2 轮审查 F4)。存量行 NULL。
     "ALTER TABLE scheduled_messages ADD COLUMN checkpoint_taken TEXT",
+    // 这条消息承载的是哪一笔结果交接。身份跟入队同一笔落库,于是「这一笔送过没有」有一个原子
+    // 的答案——重投器据此不把同一条结束通知送成两条、把 agent 叫醒两次(第 2 轮审查 N1)。
+    // 存量行 NULL = 不是交接。
+    "ALTER TABLE scheduled_messages ADD COLUMN handoff_token TEXT",
+    // 那段续跑交代的随身凭证:来源 + 取走时的占用代次(见 schema.ts)。存量行 NULL = 老账本,
+    // 按「来源未知」处理(退回时不改来源列,照旧只认代次)。
+    "ALTER TABLE scheduled_messages ADD COLUMN checkpoint_auto INTEGER",
+    "ALTER TABLE scheduled_messages ADD COLUMN checkpoint_generation INTEGER",
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
@@ -388,6 +412,12 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN creation_origin TEXT",
     "ALTER TABLE projects ADD COLUMN api_keys TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_prompt TEXT",
+    // 那段续跑指令是系统自己写的(哨兵闸)还是人/agent 写的 —— 只有前者可以在阻塞物消失后
+    // 自动清掉(第 2 轮审查 R2-2)。存量行一律 0 = 当成人写的,不会被自动抹掉。
+    "ALTER TABLE tasks ADD COLUMN resume_prompt_auto INTEGER NOT NULL DEFAULT 0",
+    // 这一格被占用的第几次。来源列只在「文字还在」时有意义,所以一段在途的退回必须靠代次
+    // 判断自己是否已经过期 —— 否则它会继承到别人的来源(第 2 轮审查 F2)。存量行 0。
+    "ALTER TABLE tasks ADD COLUMN resume_prompt_generation INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN resume_depends_on TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE agents ADD COLUMN speed TEXT",
     "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT",
@@ -609,6 +639,8 @@ export async function ensureSchema() {
   } catch (e) {
     console.warn("[ash] monitors_native_source 索引创建失败,忽略:", e);
   }
+  // 一份结果交接只许对应一条消息（含存量重复时的身份归并，理由在那个文件顶部）。
+  await ensureHandoffTokenUnique(client);
   // ash 自己起的哨兵期限是它自己定的,`bounded` 对它恒成立 —— 上面那个 ALTER 为了不给
   // claude 投影编期限把默认值设成了 'unknown',这里把 ash 那半刷回来；证据列同理补 'self'
   // （新列对存量行一律 NULL,而 NULL 的语义是「旧算法推的、不可信」,对 ash 行不成立）。幂等。

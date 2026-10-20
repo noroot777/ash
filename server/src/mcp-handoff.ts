@@ -21,7 +21,7 @@
 // ③ **只补白名单里的**（`REPLAYABLE_MCP_TOOLS`）。`accept_task` 重放一次就是多合并一次代码。
 //
 // 补录必须留痕：不写时间线的话，用户看到的就是「我没点它自己就过了」。
-import { and, eq, isNull } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
@@ -31,13 +31,12 @@ import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
-import { announceResumePrompt } from "./task-resume-prompt.js";
+import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
-import { confirmDone } from "./runs.js";
+import { confirmTaskComplete } from "./task-complete.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { now } from "./util.js";
 
 /** 从输出流里认出来的一次 ash MCP 调用。 */
 export interface McpCallRecord {
@@ -218,29 +217,45 @@ async function applyReplay(
     return `验证结论（${stage}）当时因 MCP 通道中断没能写回，已从本回合的调用记录中补录。`;
   }
   if (call.tool === "complete_task") {
-    const at = now();
-    const updated = await db.update(tasks).set({ completeConfirmedAt: at, updatedAt: at }).where(and(
-      eq(tasks.id, taskId),
-      directionToken === undefined ? undefined : directionToken === null
-        ? isNull(tasks.activeDirectionToken)
-        : eq(tasks.activeDirectionToken, directionToken),
-    )).returning({ id: tasks.id });
-    if (!updated.length) return null;
-    confirmDone(taskId);
+    // **走共用入口**(task-complete.ts):这条旁路豁免的是「活跃回合」那道身份闸,不是业务约束。
+    // 第 1 轮审查 F1 实测过它绕开哨兵闸的样子:补录 1 条、确认写入、结算落 done、哨兵被停掉。
+    const confirm = await confirmTaskComplete({
+      taskId,
+      where: [
+        directionToken === undefined ? undefined : directionToken === null
+          ? isNull(tasks.activeDirectionToken)
+          : eq(tasks.activeDirectionToken, directionToken),
+      ],
+      staleError: "补录时方向身份已经换走了",
+      // **被哨兵闸拦下 ≠ 什么都不用做**(第 2 轮审查 R2-1)。它确实交了卷,只是这一刻还不能
+      // 落终态;什么都不说的话这一轮按「没交卷」记 failed —— 而 failed 同样是终态,哨兵跟着
+      // 被收走,结果再也送不到它手上(实测 `settlement:"failed"`、`monitorAfter:"stopped"`)。
+      // 这段等待由**入口自己**在同一段临界区、同一份方向 CAS 下落:拿到结果再补一笔的话,那
+      // 一笔没有身份条件,方向换走之后会把旧方向的暂停指令写到新方向头上（第 1 轮审查 F3）。
+      holdOnBlock: (blocked) =>
+        "完成确认当时因 MCP 通道中断没能送达，补录时被哨兵闸拦下，这一轮改为检查点暂停：" + blocked,
+    });
+    if (!confirm.ok) {
+      console.warn(`[ash] replay complete_task(${taskId}) rejected: ${confirm.error}`);
+      // 身份过期那一种照旧什么都不说:那笔确认本来就不该生效(换方向了/不是这一回合的),
+      // 入口也保证了它一个字都没写。
+      return confirm.blockedByMonitors ? confirm.note ?? null : null;
+    }
     return "完成确认当时因 MCP 通道中断没能送达，已从本回合的调用记录中补录（否则这一轮会被记成失败）。";
   }
   if (call.tool === "pause_task") {
     const prompt = call.args.resumePrompt;
     if (typeof prompt !== "string" || !prompt.trim()) return null;
-    const at = now();
-    const updated = await db.update(tasks).set({ resumePrompt: prompt.trim(), updatedAt: at }).where(and(
-      eq(tasks.id, taskId),
+    // `auto: false` = 这段是 agent 自己写的,谁也不许替它清掉（见 task-resume-prompt.ts 文件头）。
+    // **走 occupyResumePrompt 而不是自己 db.update**:这一笔是一次新占用,代次必须 +1,否则在途
+    // 的旧凭证能凭「数值相等」冒领这一格（第 3 轮审查 F1-A,HTTP 那条入口已实测）。整行广播也
+    // 在那一层里（前端的派审/预约入口靠这一列灰掉）。
+    const occupied = await occupyResumePrompt(taskId, prompt.trim(), false, [
       directionToken === undefined ? undefined : directionToken === null
         ? isNull(tasks.activeDirectionToken)
         : eq(tasks.activeDirectionToken, directionToken),
-    )).returning({ id: tasks.id });
-    if (!updated.length) return null;
-    await announceResumePrompt(taskId);
+    ]);
+    if (!occupied) return null;
     return "检查点暂停当时因 MCP 通道中断没能送达，已补录续跑指令。";
   }
   return null;
