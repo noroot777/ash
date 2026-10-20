@@ -8,6 +8,9 @@ function Fixture() {
   // 真实接线里「摊全文」和「摊 diff」是中间栏的同一块位置，文件树只认最终那个路径。
   const [opened, setOpened] = useState<{ kind: "file" | "diff"; path: string; source?: string } | null>(null);
   const [theme, setTheme] = useState("light");
+  // 头部那两颗新按钮（打开工作目录 / 用 IDE 打开）的回执落在这里：吞掉的话，
+  // 「少传了 notify」这类缺参只会变成点下去才炸的运行时错误，构建和回归都看不见。
+  const [toast, setToast] = useState("");
 
   const chooseTheme = (next: "light" | "dark") => {
     document.documentElement.dataset.fixtureTheme = next;
@@ -35,12 +38,16 @@ function Fixture() {
           style={{ height: 570, overflow: "hidden", border: "1px solid var(--line2)", borderRadius: 10, background: "var(--panel)" }}
         >
           <FileTreeInspector
+            notify={setToast}
             taskId={taskId}
             activePath={opened?.path ?? null}
             onOpenFile={(path) => setOpened({ kind: "file", path })}
             onOpenDiff={(target) => setOpened({ kind: "diff", path: target.path, source: target.source })}
           />
         </div>
+        <output data-testid="tree-toast" style={{ display: "block", minHeight: 20, marginTop: 8, color: "var(--faint)", fontSize: 10 }}>
+          {toast}
+        </output>
         <output data-testid="active-path" style={{ display: "block", minHeight: 20, marginTop: 8, color: "var(--faint)", fontFamily: "var(--font-mono)", fontSize: 10 }}>
           {opened?.path ?? "未选择文件"}
         </output>

@@ -49,7 +49,7 @@ const { projects, tasks } = await import("../src/db/schema.js");
 const { Hono } = await import("hono");
 const { api } = await import("../src/routes.js");
 const { IDE_CATALOG } = await import("../src/openers/ide-catalog.js");
-const { WIN_LAUNCHER_ENV, WIN_TARGET_ENV, commandCandidates, expandWindowsBase, launchPlan } =
+const { WIN_LAUNCHER_ENV, WIN_TARGET_ENV, commandCandidates, encodeQuotedArgv, expandWindowsBase, launchPlan } =
   await import("../src/openers/ide.js");
 
 await ensureSchema();
@@ -224,6 +224,75 @@ await check("Windows 批处理入口：路径不出现在命令行里，只走�
   assert.ok(plan.args.some((arg) => arg.includes(`"%${WIN_TARGET_ENV}%"`)), "目标占位必须被双引号包住");
   assert.ok(plan.args.some((arg) => arg.includes(`"%${WIN_LAUNCHER_ENV}%"`)), "启动器占位必须被双引号包住");
   assert.ok(plan.waitMs >= 10_000, "包装器交代完就退出，给足时间等它的退出码");
+});
+
+/**
+ * Windows 把命令行还原成 argv 的那套规则（CommandLineToArgvW / C 运行时），只实现
+ * 「一个带引号的参数」这一段：2n 个反斜杠接 `"` = n 个反斜杠 + 引号本身起作用；
+ * 2n+1 个接 `"` = n 个反斜杠 + 一个**字面**引号；其余反斜杠原样。
+ *
+ * 在这里重写一遍而不是断言编码后的字符串长什么样，是因为要钉的不变量是**还原得回去**
+ * ——「字符串等于某个值」那种断言，改错方向也能一起改，等于没钉。
+ */
+function parseQuotedArgv(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "\\") {
+      let n = 0;
+      while (text[i] === "\\") { n += 1; i += 1; }
+      if (text[i] === '"') {
+        out += "\\".repeat(n >> 1);
+        if (n % 2) out += '"';  // 奇数个：最后那个把引号转义成字面量
+        i += 1;                 // 偶数个：引号是分隔符，吃掉
+      } else {
+        out += "\\".repeat(n); // 后面不是引号：反斜杠不成对，原样
+      }
+      continue;
+    }
+    if (text[i] === '"') { i += 1; continue; }
+    out += text[i];
+    i += 1;
+  }
+  return out;
+}
+
+// ── F1：目录穿过包装器之后，原生程序收到的还得是同一个目录 ─────────────────
+// 引号只挡住了 cmd 那一层。`.cmd` 包装器用 `%*` 把参数尾原样转交给原生程序，后者按
+// argv 规则重新解析，而那套规则里 `\"` 是转义引号——磁盘根目录 `C:\` 拼出的 `"C:\"`
+// 会被读成 `C:"`。
+//
+// 这里是纯函数回归：用 argv 规则把编码结果还原回去，不起进程。真机那一半（192.168.1.187，
+// 2026-10-20）另跑过一遍——自写 `code.cmd`/`code.bat` 转发给 node，加倍后 14/14 一字不差，
+// 拿掉加倍则 `C:\`→`C:"`、`D:\`→`D:"`，普通目录照样对。结论记在 openers/ide.ts 的
+// encodeQuotedArgv 顶部。**盘根那一档不能省**：洞只在那里现形。
+await check("Windows 批处理档：目录经过「加引号 → 按 argv 还原」必须一字不差", () => {
+  const dirs = [
+    "C:\\", "D:\\",                      // 磁盘根目录：唯一会以反斜杠结尾的常见路径
+    "D:\\work\\proj", "D:\\work\\proj\\",   // 普通目录 / 带结尾分隔符
+    "D:\\a\\\\",                           // 连着两个反斜杠
+    "D:\\review\\project&ver %TEMP% (x)", // 元字符照旧不许出问题
+    "D:\\中文目录\\",
+  ];
+  for (const launcher of ["C:\\x\\code.cmd", "C:\\x\\code.bat"]) {
+    for (const dir of dirs) {
+      const plan = launchPlan("winshell", launcher, dir);
+      const encoded = plan.env![WIN_TARGET_ENV]!;
+      assert.equal(
+        parseQuotedArgv(`"${encoded}"`), dir,
+        `${launcher} 转交 ${dir} 之后原生程序收到的不是同一个目录`,
+      );
+      // 目录仍然不许出现在命令行上（上一轮那条不变量不能因为这次修复退化）。
+      assert.ok(!plan.args.join(" ").includes(dir), "目录泄进了命令行");
+    }
+  }
+});
+
+await check("这条往返断言确实照得出旧写法的洞（不加倍就还原不回来）", () => {
+  // 没有这条自检，「还原得回去」只证明我写的编码和我写的解析互相自洽。
+  assert.notEqual(parseQuotedArgv('"C:\\"'), "C:\\", "不加倍时必须还原失败，否则这条测试是空转");
+  assert.equal(parseQuotedArgv('"C:\\"'), 'C:"', "旧写法下原生程序实际收到的就是 C 冒号加一个引号");
+  assert.equal(encodeQuotedArgv("D:\\work\\proj"), "D:\\work\\proj", "普通目录一个字符都不该变");
 });
 
 await check("macOS 走 open -a，退出码可信，算短命启动器", () => {

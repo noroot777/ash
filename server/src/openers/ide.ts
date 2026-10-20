@@ -198,6 +198,39 @@ export const WIN_LAUNCHER_ENV = "ASH_IDE_LAUNCHER";
 export const WIN_TARGET_ENV = "ASH_IDE_TARGET";
 
 /**
+ * 放进那对双引号之前,先把**紧挨着闭合引号的那串反斜杠加倍**。
+ *
+ * 引号挡住了 cmd 的元字符,但挡不住**下一层**。`.cmd` 包装器几乎都写成
+ * `"...\code.exe" %*`,把参数尾原样转交给一个原生程序;原生程序按 Windows 的 argv 规则
+ * (CommandLineToArgvW / C 运行时)重新解析,而那套规则里 `\"` 是**转义的引号**。于是磁盘
+ * 根目录 `C:\` 拼出来的 `"C:\"` 在它眼里是「开引号 + `C:` + 一个字面引号」,程序收到的是
+ * `C:"` 三个字符 —— 打开的根本不是用户选的那个盘,而启动器照样退出 0,页面照样说已打开。
+ *
+ * 加倍之后 `"C:\\"` 原样还原成 `C:\`:`\\` 是一个字面反斜杠,后面那个 `"` 才是闭合引号。
+ * 不以反斜杠结尾的普通目录一个字符都不变。包装器写成 `%~1` 再自己补引号也成立 —— 它拿到
+ * 的是 `C:\\`,补回引号仍然还原成 `C:\`;直接当路径用也对,Windows 会折叠重复的分隔符。
+ *
+ * **这条不变量是「最终程序收到的目录和用户选的那个相等」,不是「目录没拼进命令字符串」**
+ * ——后者只覆盖了 cmd 那一层(2026-10-20 第 3 轮审查 F1)。
+ *
+ * 2026-10-20 在 192.168.1.187 真机上验过:自写的 `code.cmd` / `code.bat`(内容就是
+ * `node "%~dp0recorder.cjs" %*`)转交给 node,记下它 argv 里真正收到的那一项。
+ *  · 加倍之后 14/14 一字不差 —— 两种包装器 × `C:\` / `D:\` / 普通目录 / 末尾带反斜杠 /
+ *    带空格括号 / 带 `&` / 中文目录,目录一次都没出现在命令行上。
+ *  · 同一套装置拿掉这个函数当对照:`C:\` 变成 `C:"`、`D:\` 变成 `D:"`,普通目录仍然正确
+ *    —— 洞只在盘根上现形,所以回归里缺了盘根这一档就等于没测。
+ *
+ * 装置先自检(直跑一次记录器确认它真能记下参数)才看结论:拿不出 positive 的探针,
+ * 它的 negative 什么都不证明(同 `openers/windows.ts` 顶部那一课)。
+ *
+ * 原生 `exec` 那一档不需要这个:libuv 的 `quote_cmd_arg` 自己就做了同样的加倍。系统默认
+ * 打开那一档(`start "" "%VAR%"`)也不需要:它的消费者是 cmd 自己,cmd 不认反斜杠转义。
+ */
+export function encodeQuotedArgv(value: string): string {
+  return value + (/\\*$/.exec(value)?.[0] ?? "");
+}
+
+/**
  * 一次启动的结果。**「没看到失败」不等于「打开了」**,所以这里是三档不是两档:
  *  · 抛错     = 明确失败(启动器非零退出、被信号打死、进程根本没起来);
  *  · `opened` = 启动器自己以 0 退出,它说交代完了;
@@ -241,7 +274,9 @@ export function launchPlan(kind: LaunchKind, target: string, absPath: string): L
     return {
       file: "cmd.exe",
       args: ["/d", "/s", "/c", `""%${WIN_LAUNCHER_ENV}%" "%${WIN_TARGET_ENV}%""`],
-      env: { [WIN_LAUNCHER_ENV]: target, [WIN_TARGET_ENV]: absPath },
+      // 启动器路径不用编码:它是给 cmd 自己找程序用的,cmd 不认 `\"` 转义,而且 `.cmd`
+      // 路径不会以反斜杠结尾。目标必须编码——它要穿过包装器交给下一层原生程序。
+      env: { [WIN_LAUNCHER_ENV]: target, [WIN_TARGET_ENV]: encodeQuotedArgv(absPath) },
       verbatim: true,
       waitMs: LAUNCHER_WAIT_MS,
     };
