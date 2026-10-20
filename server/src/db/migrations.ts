@@ -283,8 +283,11 @@ async function migrateFreeWorkflowMergeStates(client: Client): Promise<boolean> 
 // 反而会让在远端跑过的会话被静默重放到本机,那正是这条迁移要挡的事。
 // tasks.duet / tasks.team / mode_presets.config 这类 JSON 里的 executorId 不动:悬空 id 在
 // pickProfile 里就是降级到类型默认,与手删 profile 后的现状一致,没必要再去改写用户的配置。
-const SSH_PROFILE_REFERENCES: { table: string; column: string; touchUpdatedAt?: boolean }[] = [
-  { table: "tasks", column: "executor_id", touchUpdatedAt: true },
+// 清引用一律不碰 updated_at —— 同 task-refs.ts 里那段:那是任务的「最后活动时间」,
+// 列表排序、24 小时折叠和未读事件键都读它,而删掉一个用不了的 ssh profile 不是任务的进展。
+// 这条迁移在每次启动时跑,悄悄推平几百条历史任务的时间戳尤其没法追查。
+const SSH_PROFILE_REFERENCES: { table: string; column: string }[] = [
+  { table: "tasks", column: "executor_id" },
   { table: "reviewer_profiles", column: "executor_id" },
   { table: "free_workflow_states", column: "review_executor_id" },
   { table: "scheduled_messages", column: "executor_id" },
@@ -314,8 +317,8 @@ async function removeSshExecutorProfiles(client: Client): Promise<boolean> {
       for (const ref of SSH_PROFILE_REFERENCES) {
         if (!present.has(`${ref.table}.${ref.column}`)) continue;
         await client.execute({
-          sql: `UPDATE ${ref.table} SET ${ref.column} = NULL${ref.touchUpdatedAt ? ", updated_at = ?" : ""} WHERE ${ref.column} = ?`,
-          args: ref.touchUpdatedAt ? [new Date().toISOString(), id] : [id],
+          sql: `UPDATE ${ref.table} SET ${ref.column} = NULL WHERE ${ref.column} = ?`,
+          args: [id],
         });
       }
       await client.execute({ sql: "DELETE FROM agents WHERE id = ?", args: [id] });

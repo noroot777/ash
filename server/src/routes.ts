@@ -14,7 +14,7 @@ import { isSearchSort } from "@ash/shared/search";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@ash/shared/cli-overrides";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, agents, llmProviders } from "./db/schema.js";
+import { projects, groups, agents, llmProviders } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
@@ -38,6 +38,7 @@ import { mountSkillRoutes } from "./skill-routes.js";
 import { mountAnthropicContext1mRoutes, stripContext1mSuffix } from "./anthropic-context-1m.js";
 import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
+import { detachTaskRefs } from "./task-refs.js";
 import { mountGroupRoutes } from "./group-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountMonitorRoutes } from "./monitor-routes.js";
@@ -371,7 +372,7 @@ api.delete("/agents/:id", async (c) => {
   const existing = (await db.select().from(agents).where(eq(agents.id, aid))).at(0);
   if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
   await db.delete(agents).where(eq(agents.id, aid));
-  await db.update(tasks).set({ executorId: null, updatedAt: now() }).where(eq(tasks.executorId, aid));
+  await detachTaskRefs("executorId", aid);
   return c.json({ deleted: true });
 });
 

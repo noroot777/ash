@@ -7,7 +7,7 @@ import { TASK_WORKFLOW_MODES, freeWorkflowFits } from "@ash/shared/free-workflow
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { groups, projects, queueItems, tasks } from "./db/schema.js";
+import { groups, projects, queueItems } from "./db/schema.js";
 import { repoKey } from "./git.js";
 import { pauseGroup, runGroup } from "./scheduler.js";
 import { createTasks } from "./task-store.js";
@@ -16,6 +16,7 @@ import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
+import { detachTaskRefs } from "./task-refs.js";
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
 // 从 task-routes.ts 拆出的分组路由:列表/运行/暂停/批量建任务/编辑/删除。
@@ -278,7 +279,7 @@ api.patch("/groups/:id", async (c) => {
 // Delete a group. Tasks are NOT deleted — they're just ungrouped (groupId null).
 api.delete("/groups/:id", async (c) => {
   const gid = c.req.param("id");
-  await db.update(tasks).set({ groupId: null, updatedAt: now() }).where(eq(tasks.groupId, gid));
+  await detachTaskRefs("groupId", gid);
   await db.delete(groups).where(eq(groups.id, gid));
   return c.json({ deleted: true });
 });
