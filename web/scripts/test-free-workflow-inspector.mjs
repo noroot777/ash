@@ -93,7 +93,7 @@ try {
   await reserveButton.click();
   const reviewDialog = page.locator(".free-review-dialog");
   await reviewDialog.getByRole("heading", { name: "预约审查" }).waitFor();
-  await reviewDialog.getByRole("button", { name: /Codex 审查/ }).waitFor();
+  await reviewDialog.locator(".free-review-reviewer-pick").filter({ hasText: "Codex 审查" }).waitFor();
   const dialogBox = await reviewDialog.boundingBox();
   assert.ok(dialogBox && dialogBox.width <= 642, "派审弹窗应收窄到 640px 左右");
   assert.equal(await reviewDialog.evaluate((node) => node === document.activeElement), true, "弹窗打开后应接管焦点，让 Enter 可直接提交");
@@ -224,7 +224,7 @@ try {
   await menuReview.waitFor();
   await menuReview.click();
   await reviewDialog.getByRole("heading", { name: "审查合并结果" }).waitFor();
-  await reviewDialog.getByRole("button", { name: /Codex 审查/ }).waitFor();
+  await reviewDialog.locator(".free-review-reviewer-pick").filter({ hasText: "Codex 审查" }).waitFor();
   assert.match(await reviewDialog.innerText(), /main/);
   assert.match(await reviewDialog.innerText(), /11111111.*22222222/);
   assert.equal(await reviewDialog.getByText("失败后自动复审", { exact: true }).count(), 0, "合并后审查固定单轮，不显示自动复审设置");
@@ -238,7 +238,7 @@ try {
   assert.equal(await snapshotLink.count(), 1, "统一验收快照卡应提供低调文字入口");
   await snapshotLink.click();
   await reviewDialog.getByRole("heading", { name: "审查合并结果" }).waitFor();
-  await reviewDialog.getByRole("button", { name: /Codex 审查/ }).waitFor();
+  await reviewDialog.locator(".free-review-reviewer-pick").filter({ hasText: "Codex 审查" }).waitFor();
   await reviewDialog.getByRole("button", { name: "开始审查", exact: true }).click();
   await page.waitForFunction(() => window.__postMergeRequests === 1);
   assert.equal(await page.evaluate(() => window.__postMergeRequests), 1, "快照入口应发起一次合并结果审查");
