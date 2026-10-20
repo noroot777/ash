@@ -15,13 +15,21 @@ import { createServer } from "vite";
 // ③ 失败面：DELETE 报错后确认框留着，再点一次要真的重试；两个框都不许因此消失。
 // ④ 就绪面：任务状态还没到就**不开放编辑**（摆加载态、没有可填的表单、提交按钮灰着）。
 //    否则在空表单上写的东西，等状态到了会被那一次初始化整套盖掉。
-// ⑤ 同步面：别的页面删掉了本页选中的那位 —— 任务状态一变，本页要重读权威清单、让失效的
-//    选中项回退并说一声，而不是继续摆着一个点下去才报「审查者不存在」的配置；与此同时
-//    用户正在填的附言一个字都不能动。
+// ⑤ 失效面：别的页面删掉了本页选中的那位，而**本任务的状态一个字都没变**（删掉的那位
+//    没被这项任务预约时，服务端根本不会发这项任务的 task.review）。审查者是全局配置，
+//    清单该自己过期：选中项失效要回退并说一声，而不是继续摆着一个点下去才报「审查者不
+//    存在」的配置；与此同时用户正在填的附言一个字都不能动。
 // ⑥ 乱序面：同步那次读取被按在半空，期间本页删掉一位；放行后旧清单不许把它贴回来。
 // ⑦ 换任务面：对话框开着的时候任务被换掉（后退 / 切任务，容器不重建组件），草稿必须整套
 //    重来，提交发出去的必须是**新任务**自己的内容，不能把写给 A 的附言保存到 B 身上。
 // ⑧ 焦点面：删掉选中项之后，焦点要留在对话框里，不能掉到 body 上。
+// ⑨ 在飞面：在 A 上发起的删除，响应回来时页面已经后退到 B 了。请求本身该做完就做完，
+//    但它不许改 B 刚初始化好的草稿、不许把 B 的对话框卡成关不掉。
+// ⑩ 回到本页：在别的标签页删完切回来，不用等轮询那一拍就该对齐。
+// ⑪ 倒退面：本页那次删除挂在半空时，权威清单已经把**当前选中的**那位也删了；放行后不许
+//    拿发起时捕获的旧清单把谁贴回来，也不许留下一个「谁都没选中」的死角。
+// ⑫ 核对面：派出去之前跟权威清单核一次 —— 选中的那位刚在别处被删，就别发一个注定被
+//    服务端退回的请求。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
@@ -55,6 +63,15 @@ const reviewer = (id, name) => ({
 const initialReviewers = () => [reviewer("reviewer-1", "顶级审查"), reviewer("reviewer-2", "opus5"), reviewer("reviewer-3", "grok4.6")];
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// 等测试进程这边那份「服务端」状态成立。比 waitForTimeout 稳：慢一点也不会误判。
+const waitFor = async (check, label, timeout = 8000) => {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await sleep(50);
+  }
+  assert.fail(label);
+};
 
 let browser;
 try {
@@ -109,6 +126,9 @@ try {
       selectedName: () => dialog.locator(".free-review-reviewer-pick[aria-selected='true'] b").innerText(),
       submit: () => dialog.locator("footer button[type='submit']"),
       note: () => dialog.locator(".free-review-note textarea"),
+      closeButton: () => dialog.getByRole("button", { name: "关闭派审查" }),
+      // 用户切回这个标签页那一下：资源层拿它当「立刻跟权威清单对一次」的信号。
+      refocus: () => page.evaluate(() => window.dispatchEvent(new Event("focus"))),
     };
   };
 
@@ -142,7 +162,8 @@ try {
     assert.match(otherText, /确定删除“顶级审查”/);
     assert.match(otherText, /会从所有任务的审查者列表里消失/);
     assert.match(otherText, /历史审查记录仍保留当时的配置快照/);
-    assert.match(otherText, /「完成后自动审查」预约会被取消/, "删一份全局配置，别的任务挂着的预约也会断，得说");
+    assert.match(otherText, /已排好、还没开跑的审查预约会被取消/, "删一份全局配置，别的任务挂着的预约也会断，得说");
+    assert.match(otherText, /已经在跑的自动复审.*继续跑完/, "删配置不等于停掉正在跑的复审链，这句不能省");
     assert.doesNotMatch(otherText, /本任务/, "删的不是本任务预约的那位，别冤枉本任务");
     assert.equal(await ui.selectedName(), "opus5", "点删除不该顺手改选中项");
     await confirm.getByRole("button", { name: "取消", exact: true }).click();
@@ -154,7 +175,7 @@ try {
     await ui.row("opus5").hover();
     await ui.trash("opus5").click();
     await confirm.waitFor();
-    assert.match(await confirm.innerText(), /本任务已排上的审查预约会一并取消/);
+    assert.match(await confirm.innerText(), /本任务已排上、还没开跑的审查预约会一并取消/);
     await ui.confirmDelete().click();
     await confirm.waitFor({ state: "detached" });
     assert.deepEqual(store.deleted, ["reviewer-2"]);
@@ -258,17 +279,19 @@ try {
     await page.close();
   }
 
-  // ── ⑤ 同步面：别处删掉了本页选中的那位 ───────────────────────────────────
+  // ── ⑤ 失效面：别处删掉了本页选中的那位，本任务的状态一个字都没变 ─────────────────
   {
     const ui = await open();
-    const { page, store, dialog } = ui;
+    const { page, store } = ui;
     const note = "清单同步不该把我正在写的附言碰掉";
     await ui.note().fill(note);
-    // 另一个页面在设置页里把 opus5 删了；服务端随后清引用、撤预约并发 task.review。
+    // 另一个页面（设置页也有删除入口）把 opus5 删了。它这会儿只是本页的**草稿选择**，
+    // 持久化预约里压根没它，服务端因此不会发这项任务的 task.review —— 本页的任务状态
+    // 一个字都不会变。下面全程不碰 fixture 的任何状态接口，也不做任何本页动作：
+    // 清单必须自己过期，这是「失效信号不挂在当前任务身上」的全部意思。
     store.reviewers = store.reviewers.filter((item) => item.id !== "reviewer-2");
-    await page.evaluate(() => window.freeReviewFixture.cancelReservation());
 
-    await ui.row("opus5").waitFor({ state: "detached" });
+    await ui.row("opus5").waitFor({ state: "detached", timeout: 15000 });
     assert.equal(await ui.selectedName(), "顶级审查", "选中的那位没了，要替用户回退到还在的那位");
     assert.match(await page.getByTestId("notices").innerText(), /原先选中的审查者已被删除，已替你改选「顶级审查」/);
     assert.equal(await ui.note().inputValue(), note, "清单同步不许动用户正在填的东西");
@@ -294,8 +317,10 @@ try {
     const { page, store, confirm } = ui;
     assert.equal(await page.locator(".free-review-reviewer-row").count(), 3);
 
+    const before = store.listCalls;
     gate.hold = true;
-    await page.evaluate(() => window.freeReviewFixture.bumpState());
+    await ui.refocus();
+    await waitFor(() => store.listCalls > before, "切回本页那一次清单读取没有发出来");
     await ui.row("顶级审查").hover();
     await ui.trash("顶级审查").click();
     await confirm.waitFor();
@@ -338,9 +363,9 @@ try {
     assert.equal(await dialog.locator(".free-review-options select").inputValue(), "syntax");
     assert.equal(await dialog.locator(".free-review-retry-field input").inputValue(), "3");
 
+    gate.slow = false;
     await ui.submit().click();
-    await page.waitForFunction(() => true);
-    await page.waitForTimeout(200);
+    await waitFor(() => store.dispatched.length === 1, "派审请求没发出来");
     assert.deepEqual(store.dispatched.map((item) => [item.taskId, item.body.note]), [["task-b", "任务 B 自己的附言"]]);
     await page.close();
   }
@@ -360,6 +385,143 @@ try {
       true,
       "删掉选中项后焦点不能掉到 body 上，键盘得还能接着用",
     );
+    await page.close();
+  }
+
+  // ── ⑨ 在飞面：A 上发起的删除，响应回来时页面已经是 B 了 ──────────────────────
+  {
+    let release;
+    const gate = { hold: true, held: new Promise((resolve) => { release = resolve; }) };
+    const ui = await open({
+      onDelete: async (store, route, id) => {
+        if (!gate.hold) return false;
+        gate.hold = false;
+        await gate.held;
+        store.deleted.push(id);
+        store.reviewers = store.reviewers.filter((item) => item.id !== id);
+        await json(route, { deleted: true });
+        return true;
+      },
+    });
+    const { page, store, confirm } = ui;
+    assert.equal(await ui.selectedName(), "opus5");
+    await ui.row("opus5").hover();
+    await ui.trash("opus5").click();
+    await confirm.waitFor();
+    await ui.confirmDelete().click();
+
+    // 删除还挂在半空，用户已经后退到任务 B（容器不重建组件，只换 props）。
+    await page.evaluate(() => window.freeReviewFixture.switchTask());
+    await page.getByTestId("current-task").getByText("task-b").waitFor();
+    await page.locator(".free-review-reviewer-row").first().waitFor();
+    assert.equal(await ui.note().inputValue(), "任务 B 自己的附言");
+    assert.equal(await ui.selectedName(), "grok4.6");
+    assert.equal(
+      await ui.closeButton().isDisabled(),
+      false,
+      "上一个任务那次删除还在飞，不该把这个任务的对话框卡成关不掉",
+    );
+
+    release();
+    await waitFor(() => store.deleted.length === 1, "删除请求本身还是要照常完成");
+    await ui.row("opus5").waitFor({ state: "detached" });
+    assert.equal(await ui.selectedName(), "grok4.6", "A 上那次删除不许改掉 B 已经初始化好的选择");
+    assert.equal(await ui.note().inputValue(), "任务 B 自己的附言");
+
+    await ui.submit().click();
+    await waitFor(() => store.dispatched.length === 1, "派审请求没发出来");
+    assert.deepEqual(
+      store.dispatched.map((item) => [item.taskId, item.body.reviewerId, item.body.note]),
+      [["task-b", "reviewer-3", "任务 B 自己的附言"]],
+      "派出去的必须是 B 自己选的那位、B 自己的附言",
+    );
+    await page.close();
+  }
+
+  // ── ⑩ 回到本页：在别的标签页删完切回来，不用等轮询那一拍 ──────────────────────
+  {
+    const ui = await open();
+    const { page, store } = ui;
+    // 删的是**没被选中、也没被本任务预约**的那位：本任务的状态更不会变。
+    store.reviewers = store.reviewers.filter((item) => item.id !== "reviewer-3");
+    await ui.refocus();
+    // 比轮询那一拍短：这一下必须是「切回本页」自己触发的。
+    await ui.row("grok4.6").waitFor({ state: "detached", timeout: 3000 });
+    assert.equal(await page.locator(".free-review-reviewer-row").count(), 2);
+    assert.equal(await ui.selectedName(), "opus5", "删的不是选中那位，选中项一个字都不该动");
+    await page.close();
+  }
+
+  // ── ⑪ 倒退面：删除挂在半空时，权威清单已经把当前选中的那位也删了 ─────────────────
+  {
+    let release;
+    const gate = { hold: true, held: new Promise((resolve) => { release = resolve; }) };
+    const ui = await open({
+      onDelete: async (store, route, id) => {
+        if (!gate.hold) return false;
+        gate.hold = false;
+        await gate.held;
+        store.deleted.push(id);
+        store.reviewers = store.reviewers.filter((item) => item.id !== id);
+        await json(route, { deleted: true });
+        return true;
+      },
+    });
+    const { page, store, confirm } = ui;
+    // 本页删「顶级审查」，发起时选中的是 opus5 —— 这两份都会被旧闭包捕获。
+    await ui.row("顶级审查").hover();
+    await ui.trash("顶级审查").click();
+    await confirm.waitFor();
+    await ui.confirmDelete().click();
+
+    // 删除还挂着，另一个页面把 opus5 也删了；本页切回来先察觉到这一条。
+    store.reviewers = store.reviewers.filter((item) => item.id !== "reviewer-2");
+    await ui.refocus();
+    await ui.row("opus5").waitFor({ state: "detached", timeout: 3000 });
+    assert.equal(await ui.selectedName(), "顶级审查", "opus5 没了，先回退到还在的第一位");
+
+    release();
+    await waitFor(() => store.deleted.length === 1, "删除请求本身还是要照常完成");
+    await ui.row("顶级审查").waitFor({ state: "detached" });
+    await sleep(400);
+    assert.deepEqual(
+      await page.locator(".free-review-reviewer-pick b").allInnerTexts(),
+      ["grok4.6"],
+      "发起时捕获的那份旧清单不许把别处刚删掉的 opus5 贴回来",
+    );
+    assert.equal(await ui.selectedName(), "grok4.6", "刚被删掉的正是当前选中项，必须再回退一次，不能留下谁都没选中");
+    assert.equal(await ui.submit().isDisabled(), false);
+    await page.close();
+  }
+
+  // ── ⑫ 核对面：派出去之前跟权威清单核一次 ──────────────────────────────────
+  {
+    let release;
+    const gate = { hold: false, held: new Promise((resolve) => { release = resolve; }) };
+    const ui = await open({
+      onList: async (store, route) => {
+        if (!gate.hold) return false;
+        // 压住之后再读 store.reviewers：放行时回的是**最新**那份权威清单。
+        await gate.held;
+        await json(route, store.reviewers);
+        return true;
+      },
+    });
+    const { page, store } = ui;
+    assert.equal(await ui.selectedName(), "opus5");
+
+    gate.hold = true;
+    await sleep(200); // 让这之前可能在飞的那次读先落地，之后发出的一律被压住
+    await ui.submit().click();
+    // 点下去的这一瞬，另一个标签页把 opus5 删了。
+    store.reviewers = store.reviewers.filter((item) => item.id !== "reviewer-2");
+    release();
+
+    await ui.row("opus5").waitFor({ state: "detached" });
+    assert.deepEqual(store.dispatched, [], "选中的那位已经不在权威清单里，这一次不许发出去");
+    assert.match(await page.getByTestId("notices").innerText(), /这一次没有派出去/);
+    assert.equal(await ui.selectedName(), "顶级审查", "核对完要替用户改选到还在的那位");
+    assert.equal(await ui.submit().isDisabled(), false, "改选之后要能接着派");
     await page.close();
   }
 

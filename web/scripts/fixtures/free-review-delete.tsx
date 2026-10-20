@@ -62,10 +62,6 @@ function Fixture() {
             armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, override: null, runId: null,
           },
         } } : current)),
-        // 任意一次「任务状态变了」（预览起停、审查推进…）：只把修订号 +1。
-        bumpState: () => setTask((current) => (current.state
-          ? { ...current, state: { ...current.state, stateVersion: current.state.stateVersion + 1 } }
-          : current)),
         // 浏览器后退到另一个任务：容器不重建组件，只换 props。
         switchTask: () => setTask({ id: "task-b", state: STATE_B }),
       },

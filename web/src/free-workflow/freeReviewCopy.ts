@@ -15,12 +15,16 @@ export const FREE_REVIEW_RUN_LABELS: Record<FreeReviewRun["status"], string> = {
 
 /**
  * 删审查者的确认文案。两处表面（设置页、派审对话框）共用一份，免得一边说「历史记录保留」、
- * 另一边只说「确定吗」。后果按服务端 `reviewer-profiles.ts` 的 DELETE 实际做的事写：
- * 配置是全局的、引用它的手动预约会被 disarm、历史审查记录读的是 run 行里的快照不受影响。
+ * 另一边只说「确定吗」。后果按服务端 `reviewer-profiles.ts` 的 DELETE 实际做的事写，三句
+ * 话对应它做的三件事：配置是全局的（所有任务的清单里都没了）、**还没开跑**的手动预约按
+ * 它的配置跑不起来所以被 disarm、**已经在跑**的自动复审读的是 run 行里的冻结快照 —— 删了
+ * 照样一轮轮跑完。最后这句不能省：少了它，用户会把「删掉配置」当成「停掉正在跑的复审链」，
+ * 那是两件事（真要停，走审查链自己的停止入口）。
  */
 export function reviewerDeleteMessage(name: string, options: { breaksReservation?: boolean } = {}): string {
   return `确定删除“${name}”？这份配置会从所有任务的审查者列表里消失；历史审查记录仍保留当时的配置快照。`
-    + (options.breaksReservation ? "本任务已排上的审查预约会一并取消。" : "已排上它的「完成后自动审查」预约会被取消。");
+    + (options.breaksReservation ? "本任务已排上、还没开跑的审查预约会一并取消；" : "任何任务上已排好、还没开跑的审查预约会被取消；")
+    + "已经在跑的自动复审用的是开跑那一刻的配置快照，删掉配置也会继续跑完。";
 }
 
 export function freeReviewBlockingLabel(run: FreeReviewRun): string | null {

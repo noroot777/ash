@@ -6,6 +6,7 @@ import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, Trash, WarningCircle, X
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { reviewerDeleteMessage, settledDisputeRounds } from "./freeReviewCopy.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
+import { reviewerProfilesStore } from "./reviewerProfilesStore.ts";
 import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
@@ -58,7 +59,9 @@ export function FreeReviewDialog({
 }) {
   const scrim = useRef<HTMLDivElement>(null);
   const dialog = useRef<HTMLFormElement>(null);
-  const [reviewers, setReviewers] = useState<ReviewerProfile[]>([]);
+  // 清单只从资源层来（`reviewerProfilesStore.ts`）：这个组件绝不自己拼清单 —— 某个闭包里
+  // 捕获的那份旧清单会把别处刚删掉的那位贴回去。写操作只管调资源层，新清单由订阅送达。
+  const [reviewers, setReviewers] = useState<ReviewerProfile[]>(() => reviewerProfilesStore.current() ?? []);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [selectedId, setSelectedId] = useState(state?.selectedReviewerId ?? "");
   const [checkMode, setCheckMode] = useState<FreeReviewCheckMode>(state?.reviewReservation?.checkMode ?? "logic");
@@ -94,11 +97,21 @@ export function FreeReviewDialog({
   const [initializedFor, setInitializedFor] = useState<string | null>(null);
   const initializedForRef = useRef<string | null>(null);
   initializedForRef.current = initializedFor;
-  // 审查者清单的代次：每成功写一次（删除 / 新建 / 覆盖）就 +1，比它旧的在飞响应整份丢弃。
-  // `alive` 只能证明这个 effect 还活着，证明不了这份响应比最近一次写操作新 —— 一个先发后
-  // 到的 GET 会把刚删掉的那位又贴回清单，而提示还写着「已删除」。
-  const listGen = useRef(0);
-  const invalidateReviewerList = () => { listGen.current += 1; };
+  /*
+   * 异步写回的身份门禁。这个对话框**不按 task.id 重建**（浏览器后退、侧栏切任务都只是换
+   * props），所以「组件还活着」和「当前已经初始化完成」两条都证明不了「这次 await 回来的
+   * 动作仍属于眼前这份草稿」。每个异步动作发起时记下身份（哪个任务、第几次初始化），回来
+   * 先验一遍：服务端请求该做的照做（用户点的删除 / 派审本来就是冲着那个任务发的），但它
+   * 不许再改一份已经不属于它的草稿、不许抢掉新对话框的忙碌态、更不许把新对话框关掉。
+   *
+   * 不做这道门禁的后果（实测）：在 A 删掉选中的审查者，等 DELETE 响应期间后退到 B，B 刚
+   * 初始化好的选择会被 A 这次删除改掉，点「保存预约」就把错的那位写给了 B。
+   */
+  const taskIdRef = useRef(taskId);
+  taskIdRef.current = taskId;
+  const openGen = useRef(0);
+  const identity = () => `${taskIdRef.current}#${openGen.current}`;
+  const mine = (token: string) => identity() === token;
   // 初始化要读「清单回来那一刻」的状态，而不是某次渲染闭包里的那一份。
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -153,77 +166,76 @@ export function FreeReviewDialog({
     if (!hasState) return;
     let alive = true;
     setLoadError(null);
-    const read = () => {
-      const gen = listGen.current;
-      Promise.all([api.reviewerProfiles(), api.agents()]).then(([nextReviewers, nextProfiles]) => {
-        if (!alive) return;
-        // 这中间写过一次（删 / 新建 / 覆盖）：手上这份清单已经是旧世界的，整份丢掉重读
-        // 一次。直接铺上去的话，刚删掉的那位会原样回到清单里，而提示还写着「已删除」。
-        if (gen !== listGen.current) { read(); return; }
-        // 读的是「清单回来那一刻」的状态，不是某次渲染闭包里的那一份。
-        const opened = stateRef.current;
-        setReviewers(nextReviewers);
-        setProfiles(nextProfiles);
-        setDraft(createReviewerDraft(nextProfiles));
-        const preferred = opened?.selectedReviewerId && nextReviewers.some((item) => item.id === opened.selectedReviewerId)
-          ? opened.selectedReviewerId
-          : nextReviewers[0]?.id ?? "";
-        setSelectedId(preferred);
-        setCheckMode(opened?.reviewReservation?.checkMode ?? "logic");
-        setRetryLimit(String(opened?.reviewReservation?.retryLimit ?? 1));
-        setNote(opened?.reviewReservation?.note ?? "");
-        // 「调整预约审查」再打开时要看到上次改后的那套配置，而不是审查者的原配置——
-        // 预约里存着覆盖就回显它，保存方式跟着回到「仅本次使用」。
-        const reserved = opened?.reviewReservation?.override ?? null;
-        const reviewer = nextReviewers.find((item) => item.id === preferred) ?? null;
-        setRunDraft(reserved && reviewer ? reviewerRunDraftFrom(reserved) : reviewerRunDraft(reviewer));
-        setSaveMode("once");
-        setNewName("");
-        setCreating(nextReviewers.length === 0);
-        setInitializedFor(taskId);
-      }).catch((error) => {
-        if (!alive) return;
-        // 读不到清单就老实摆在那儿给一颗重试，别摊开一份空表单冒充「你还没有审查者」。
-        const message = error instanceof Error ? error.message : "审查者读取失败";
-        setLoadError(message);
-        notify(message);
-      }).finally(() => { if (alive) setLoading(false); });
-    };
-    read();
+    // 「读到哪一份算数」「写完怎么作废在飞的读」「删掉的那位不许被旧清单贴回来」都在资源
+    // 层收口，这里只管拿结果，并且以它当时的缓存为准（这一拍可能刚被别处的变化更新过）。
+    Promise.all([reviewerProfilesStore.read(), api.agents()]).then(([list, nextProfiles]) => {
+      if (!alive) return;
+      // 读的是「清单回来那一刻」的状态，不是某次渲染闭包里的那一份。
+      const opened = stateRef.current;
+      const nextReviewers = reviewerProfilesStore.current() ?? list;
+      setReviewers(nextReviewers);
+      setProfiles(nextProfiles);
+      setDraft(createReviewerDraft(nextProfiles));
+      const preferred = opened?.selectedReviewerId && nextReviewers.some((item) => item.id === opened.selectedReviewerId)
+        ? opened.selectedReviewerId
+        : nextReviewers[0]?.id ?? "";
+      setSelectedId(preferred);
+      setCheckMode(opened?.reviewReservation?.checkMode ?? "logic");
+      setRetryLimit(String(opened?.reviewReservation?.retryLimit ?? 1));
+      setNote(opened?.reviewReservation?.note ?? "");
+      // 「调整预约审查」再打开时要看到上次改后的那套配置，而不是审查者的原配置——
+      // 预约里存着覆盖就回显它，保存方式跟着回到「仅本次使用」。
+      const reserved = opened?.reviewReservation?.override ?? null;
+      const reviewer = nextReviewers.find((item) => item.id === preferred) ?? null;
+      setRunDraft(reserved && reviewer ? reviewerRunDraftFrom(reserved) : reviewerRunDraft(reviewer));
+      setSaveMode("once");
+      setNewName("");
+      setCreating(nextReviewers.length === 0);
+      // 这一次初始化之前发出的异步动作，从这一刻起都不再属于眼前这份草稿。
+      openGen.current += 1;
+      setInitializedFor(taskId);
+    }).catch((error) => {
+      if (!alive) return;
+      // 读不到清单就老实摆在那儿给一颗重试，别摊开一份空表单冒充「你还没有审查者」。
+      const message = error instanceof Error ? error.message : "审查者读取失败";
+      setLoadError(message);
+      notify(message);
+    }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [hasState, notify, reloadToken, taskId]);
 
-  // ② 清单同步：审查者是全局配置，任务状态每变一次就重读一次权威清单（删掉被这项任务
-  //    引用的那位时，服务端会清引用、撤预约并发 task.review，这里正好收得到）。只动清单
-  //    和确实失效的选中项，附言 / 检查类型 / 轮数这些正在填的东西一个都不碰。
-  const syncToken = state?.stateVersion ?? 0;
+  // ② 任务一换，上一轮在飞的写操作就不再属于这个对话框：忙碌态和删除确认框立刻让位。
+  //    否则新任务的对话框会顶着一个关不掉的「忙」——右上角那颗关闭按钮也是 disabled={busy}。
   useEffect(() => {
-    if (initializedForRef.current !== taskId) return;
-    let alive = true;
-    const gen = listGen.current;
-    api.reviewerProfiles().then((next) => {
-      if (!alive || gen !== listGen.current) return;
-      setReviewers(next);
-      const current = selectedIdRef.current;
-      if (!current || next.some((item) => item.id === current)) return;
-      // 选中的那位在别处被删了。不能就这么摆着让人点一个注定失败的提交。
-      const fallback = next[0];
-      if (fallback) {
-        selectReviewer(fallback);
-        notify(`原先选中的审查者已被删除，已替你改选「${fallback.name}」`);
-        return;
-      }
-      setSelectedId("");
-      setRunDraft(reviewerRunDraft(null));
-      setSaveMode("once");
-      setNewName("");
-      setCreating(true);
-      notify("审查者已被删除，请先新建一位再派审");
-    }).catch(() => {
-      // 同步失败就先用手上这份，下一次状态变化再试；这是后台同步，不拿它打扰用户。
-    });
-    return () => { alive = false; };
-  }, [notify, syncToken, taskId]);
+    setBusy(false);
+    setDeleteTarget(null);
+  }, [taskId]);
+
+  // ③ 清单同步：审查者是一份全局配置，谁都能删，所以重读的信号**不挂在「这项任务的状态
+  //    变了」上** —— 别的页面删掉一位不被本任务引用的审查者时，这项任务的修订号一动不动，
+  //    而用户在这里刚改选的那位本来就只是草稿，更不在持久化预约里。订阅期间由资源层自己
+  //    保持新鲜（见那边的说明）。这里只做两件事：换上权威清单；选中项**确实失效**时补一个。
+  //    附言 / 检查类型 / 轮数这些正在填的东西一个都不碰。
+  useEffect(() => reviewerProfilesStore.subscribe((source) => {
+    const next = reviewerProfilesStore.current() ?? [];
+    setReviewers(next);
+    const current = selectedIdRef.current;
+    if (!current || next.some((item) => item.id === current)) return;
+    // 选中的那位已经不在了。不能就这么摆着让人点一个注定失败的提交。
+    const fallback = next[0];
+    if (fallback) {
+      selectReviewer(fallback);
+      // 本机刚按下的那次删除自己会报「已删除审查者「X」」，别再叠一条。
+      if (source === "remote") notify(`原先选中的审查者已被删除，已替你改选「${fallback.name}」`);
+      return;
+    }
+    setSelectedId("");
+    setRunDraft(reviewerRunDraft(null));
+    setSaveMode("once");
+    setNewName("");
+    setCreating(true);
+    if (source === "remote") notify("审查者已被删除，请先新建一位再派审");
+  }), [notify]);
 
   // 删成功那一下，原来那颗删除按钮已经不在了；确认框只在「原来那个元素还连着」时才还
   // 焦点，于是焦点掉到 body 上，键盘就从对话框里掉了出去。给它补一个落点：对话框本身。
@@ -235,18 +247,19 @@ export function FreeReviewDialog({
 
   const create = async () => {
     if (!draft.name.trim() || busy) return;
+    const token = identity();
     setBusy(true);
     try {
-      const created = await api.createReviewerProfile(reviewerPayload(draft, profiles));
-      invalidateReviewerList();
-      setReviewers((current) => [created, ...current]);
+      const created = await reviewerProfilesStore.create(reviewerPayload(draft, profiles));
+      // 配置是真建出来了，所以这句话无论如何都得说；但「顺手选中它」只对发起时那份草稿成立。
+      if (!mine(token)) { notify(`已创建审查者「${created.name}」`); return; }
       selectReviewer(created);
       setCreating(false);
       notify(`已创建并选中审查者「${created.name}」`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "审查者创建失败");
     } finally {
-      setBusy(false);
+      if (mine(token)) setBusy(false);
     }
   };
 
@@ -262,32 +275,24 @@ export function FreeReviewDialog({
 
   const removeReviewer = async () => {
     if (!deleteTarget || busy) return;
+    // 确认框里的那一位，不是「现在的 deleteTarget」：await 之后它随时可能已经是别的东西。
+    const target = deleteTarget;
+    const token = identity();
     setBusy(true);
     try {
-      await api.deleteReviewerProfile(deleteTarget.id);
-      // 先作废在飞的清单读取，再整体写回：这之后不会再有旧响应把这位贴回来。
-      invalidateReviewerList();
-      const rest = reviewers.filter((item) => item.id !== deleteTarget.id);
-      setReviewers(rest);
-      // 删掉的正是当前选中的那位时要补一个选中项：下一位顶上；一个都不剩就把新建表单摊开。
-      // 否则对话框会停在「没有选中、提交按钮永远灰着」的死角，用户只能关掉重开。
-      if (deleteTarget.id === selectedId) {
-        if (rest[0]) selectReviewer(rest[0]);
-        else {
-          setSelectedId("");
-          setRunDraft(reviewerRunDraft(null));
-          setSaveMode("once");
-          setNewName("");
-          setCreating(true);
-        }
-      }
+      await reviewerProfilesStore.remove(target.id);
+      // 新清单和「选中的那位没了怎么办」都由资源层 + ③ 的订阅收口 —— 这里一个字都不自己
+      // 拼。拿发起时捕获的那份清单算 rest 会把这中间别处删掉的那位贴回去，拿发起时的
+      // selectedId 判断又会漏掉「当前选中的其实也刚被删」。
+      notify(`已删除审查者「${target.name}」`);
+      // 删完要收的尾只属于这一次打开：关掉确认框、把焦点收回对话框。
+      if (!mine(token)) return;
       refocusAfterDelete.current = true;
       setDeleteTarget(null);
-      notify(`已删除审查者「${deleteTarget.name}」`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "审查者删除失败");
     } finally {
-      setBusy(false);
+      if (mine(token)) setBusy(false);
     }
   };
 
@@ -308,22 +313,33 @@ export function FreeReviewDialog({
       notify("请先给新审查者起个名字");
       return;
     }
+    // 用户按下这一下时选的是哪一位 —— 不是「await 之后 selectedId 变成了什么」。这中间
+    // ③ 的订阅可能已经替他改选了别人，那也绝不能顶着「他点的是派审」把另一位派出去。
+    const intended = selectedId;
+    const token = identity();
     setBusy(true);
     try {
+      // 派出去之前跟权威清单核一次：这中间别处（另一个标签页、另一台机器）删掉了这位，
+      // 与其让服务端退一句「所选审查者不存在」，不如在这里就改选并说清楚。读失败不拦提交
+      // —— 真的无效，服务端照样会拒。
+      await reviewerProfilesStore.read().catch(() => {});
+      const latest = reviewerProfilesStore.current();
+      if (latest && !latest.some((item) => item.id === intended)) {
+        // 「已替你改选成谁」由 ③ 的订阅自己报，这里只说清**这一次没派出去**，别叠一条重话。
+        notify("所选审查者刚刚被删除了，这一次没有派出去；请确认改选后再派审");
+        return;
+      }
       // 三种去向的共同点：这一次审查一定按改后的配置跑。前两种把改动落进审查者配置
       // （落完就是它自己的配置，不必再带覆盖），「仅本次使用」才走 override。
       const payload = runChanged ? reviewerRunPayload(runDraft, profiles) : null;
-      let reviewerId = selectedId;
+      let reviewerId = intended;
       let override: FreeReviewExecutorOverride | null = null;
       if (payload && saveMode === "overwrite") {
-        const updated = await api.patchReviewerProfile(selectedId, payload);
-        invalidateReviewerList();
-        setReviewers((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+        await reviewerProfilesStore.update(intended, payload);
       } else if (payload && saveMode === "new") {
-        const created = await api.createReviewerProfile({ name: newName.trim(), ...payload });
-        invalidateReviewerList();
-        setReviewers((current) => [created, ...current]);
-        setSelectedId(created.id);
+        const created = await reviewerProfilesStore.create({ name: newName.trim(), ...payload });
+        // 清单由资源层送达；只有「把选中项挪到新建的那位」属于这一次打开的草稿。
+        if (mine(token)) setSelectedId(created.id);
         reviewerId = created.id;
       } else if (payload) {
         override = payload;
@@ -335,36 +351,43 @@ export function FreeReviewDialog({
         note,
         override,
       };
+      // 这条请求冲着发起时那个任务发（`taskId` 是那一次渲染里的值），所以它该跑完就跑完。
       const next = postMerge
         ? await api.dispatchPostMergeReview(taskId, input)
         : reservationMode
           ? await api.reserveFreeReview(taskId, input)
           : await api.dispatchFreeReview(taskId, input);
-      onChanged(next);
-      const name = reviewerId === selectedId
-        ? reviewers.find((item) => item.id === selectedId)?.name ?? "审查者"
+      const name = reviewerId === intended
+        ? reviewers.find((item) => item.id === intended)?.name ?? "审查者"
         : newName.trim();
       notify(postMerge ? `已派出 ${name} 审查合并结果` : reservationMode ? `已预约由「${name}」审查，执行回合正常结束后开始` : `已派出 ${name}`);
+      // 但返回的是**那个任务**的状态，对话框这会儿可能已经是另一个任务的了：把它交给
+      // 容器就等于用 A 的状态盖 B，顺手 onClose() 更是关掉了一个别人正在填的对话框。
+      if (!mine(token)) return;
+      onChanged(next);
       onClose();
     } catch (error) {
       notify(error instanceof Error ? error.message : postMerge ? "合并结果审查启动失败" : reservationMode ? "预约审查失败" : "派审失败");
     } finally {
-      setBusy(false);
+      if (mine(token)) setBusy(false);
     }
   };
 
   const cancelReservation = async () => {
     if (busy) return;
+    const token = identity();
     setBusy(true);
     try {
       const next = await api.cancelFreeReviewReservation(taskId);
-      onChanged(next);
       notify("已取消审查预约");
+      // 同上：取消本身该生效就生效，但 A 的状态不许盖到 B 身上，也不许关掉 B 的对话框。
+      if (!mine(token)) return;
+      onChanged(next);
       onClose();
     } catch (error) {
       notify(error instanceof Error ? error.message : "取消审查预约失败");
     } finally {
-      setBusy(false);
+      if (mine(token)) setBusy(false);
     }
   };
 
