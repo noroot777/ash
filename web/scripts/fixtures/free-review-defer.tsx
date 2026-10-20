@@ -29,7 +29,10 @@ const run: FreeReviewRun = {
   finishedAt: "2026-09-24T00:10:00.000Z",
 };
 
-function round(dispute: { reason: string; deferReason: string | null }, debates: FreeReviewDebate[] = []): FreeReviewRound {
+function round(
+  dispute: { summary?: string | null; reason: string; deferReason: string | null },
+  debates: FreeReviewDebate[] = [],
+): FreeReviewRound {
   return {
     round: 1,
     status: "failed",
@@ -38,6 +41,7 @@ function round(dispute: { reason: string; deferReason: string | null }, debates:
     reportMarkdown: "# 报告",
     screenshots: [],
     dispute: {
+      summary: null,
       ...dispute,
       at: "2026-09-24T00:12:00.000Z",
       resolution: null,
@@ -62,22 +66,31 @@ const finishedDebate: FreeReviewDebate = {
   startedAt: "2026-09-24T00:20:00.000Z",
   finishedAt: "2026-09-24T00:30:00.000Z",
   turns: [
-    { seq: 1, side: "reviewer", status: "done", statement: "审查者第 1 段：那一行不是生成代码。", startedAt: "2026-09-24T00:20:00.000Z", endedAt: "2026-09-24T00:23:00.000Z" },
-    { seq: 2, side: "executor", status: "done", statement: "执行者第 2 段：我核对了，确实不是。", startedAt: "2026-09-24T00:23:00.000Z", endedAt: "2026-09-24T00:26:00.000Z" },
-    { seq: 3, side: "reviewer", status: "done", statement: "收尾：我建议你让它按新方案改，别按报告里那版。", startedAt: "2026-09-24T00:26:00.000Z", endedAt: "2026-09-24T00:30:00.000Z" },
+    { seq: 1, side: "reviewer", summary: "我坚持这一条：那行代码是手写的。", status: "done", statement: "审查者第 1 段：那一行不是生成代码。", startedAt: "2026-09-24T00:20:00.000Z", endedAt: "2026-09-24T00:23:00.000Z" },
+    // 第 2 段故意不给摘要：加这个字段之前落的老发言就是这个样子，界面要把正文摊开兜住。
+    { seq: 2, side: "executor", summary: null, status: "done", statement: "执行者第 2 段：我核对了，确实不是。", startedAt: "2026-09-24T00:23:00.000Z", endedAt: "2026-09-24T00:26:00.000Z" },
+    { seq: 3, side: "reviewer", summary: "建议：让它按我们刚谈定的方案改，不要按报告里那版。", status: "done", statement: "收尾：我建议你让它按新方案改，别按报告里那版。", startedAt: "2026-09-24T00:26:00.000Z", endedAt: "2026-09-24T00:30:00.000Z" },
   ],
 };
 
 const deferOnly = round({
+  summary: "这两条我认，但它们是上一轮照意见改出来的新问题，建议另开一个任务做。",
   reason: "",
   deferReason: "第 2、3 条成立，但都是第 1 轮按意见修复时引入的并发保护，超出原任务边界。",
 });
+// 这一张**故意不给摘要**：加这个字段之前落的那些驳回就是这个样子，此时正文必须默认
+// 摊开（折起来就成了「什么都没有」）。
 const reasonOnly = round({ reason: "第 1 条读错了行号：那一行是生成代码。", deferReason: null });
 const mixed = round({
+  summary: "第 1 条我不认（它看的那行是生成出来的）；第 4 条我认，但建议另开任务做。",
   reason: "第 1 条读错了行号：那一行是生成代码。",
   deferReason: "第 4 条成立，但它是第 2 轮修复引入的，建议单独做。",
 });
-const debated = round({ reason: "第 1 条读错了行号：那一行是生成代码。", deferReason: null }, [finishedDebate]);
+const debated = round({
+  summary: "报告挑的那一行是生成出来的，不是我写的，这条我不认。",
+  reason: "第 1 条读错了行号：那一行是生成代码。",
+  deferReason: null,
+}, [finishedDebate]);
 
 const state = { taskId: "defer-task", stateVersion: 2 } as never;
 const deferredTask = { id: "derived-1", title: "原任务 · 承接第 1 轮审查的越界意见" };

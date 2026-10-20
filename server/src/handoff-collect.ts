@@ -270,6 +270,7 @@ export async function collectFreeWorkflow(taskId: string): Promise<HandoffFreeWo
     list.push({
       round: r.round, status: r.status, conclusion: r.conclusion,
       reviewedCommit: r.reviewedCommit,
+      disputeSummary: r.disputeSummary,
       disputeReason: r.disputeReason, disputeDeferReason: r.disputeDeferReason, disputeAt: r.disputeAt,
       disputeResolution: r.disputeResolution, disputeResolvedAt: r.disputeResolvedAt,
       disputeResolutionNote: r.disputeResolutionNote,

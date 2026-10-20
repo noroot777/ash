@@ -106,6 +106,7 @@ export async function buildFreeWorkflowRows(
     // 双方说过什么本来就在两条 CLI 会话历史里，对端要的话重新辩一轮即可。
     // `disputeDeferredTaskId` 是机器本地外键（对端库里没有那行任务），不随载荷走——
     // 同 repairTaskId 的规矩，见 handoff-types.ts 顶部。
+    disputeSummary: round.disputeSummary ?? null,
     disputeReason: round.disputeReason ?? null,
     disputeDeferReason: round.disputeDeferReason ?? null,
     disputeAt: round.disputeAt ?? null,

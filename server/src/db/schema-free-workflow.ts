@@ -78,6 +78,9 @@ export const freeReviewRounds = sqliteTable(
     conclusion: text("conclusion"),
     // 本轮启动时任务工作区的 HEAD。结论新不新鲜靠它跟当前 HEAD 比，不靠状态字段。
     reviewedCommit: text("reviewed_commit"),
+    // 写给用户的那一句人话（`PLAIN_SUMMARY_GUIDE`）：裁定屏的第一行字，时间线旁注也用它。
+    // null = 加这列之前落的老驳回（界面降级成只显示正文，不编一句摘要糊上去）。
+    disputeSummary: text("dispute_summary"),
     // 执行者对这一轮结论的驳回：理由正文 + 时刻。非空 = 这一轮没被执行者认下。
     disputeReason: text("dispute_reason"),
     // 同一次驳回里「我认可这几条，但它们超出本任务边界，建议转独立任务」那一段。
@@ -137,6 +140,8 @@ export const freeReviewDebateTurns = sqliteTable(
     debateId: text("debate_id").notNull(),
     seq: integer("seq").notNull(),
     side: text("side").notNull(),
+    // 这一段发言的一句人话（`PLAIN_SUMMARY_GUIDE`）：七段加起来一万字，界面逐段先摆它。
+    summary: text("summary"),
     // 发言正文由 `debate_reply` 直接落库（不走证据目录）：它是对话，不是证据文件，
     // 而且必须能在「这一段到底交卷没有」上给出确定答案 —— 文件存不存在答不了这个。
     statement: text("statement"),

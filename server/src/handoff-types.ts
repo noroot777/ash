@@ -89,6 +89,9 @@ export interface HandoffFreeReviewRound {
   // `disputeDeferReason` 是同一次驳回里「这几条成立但越界，建议转独立任务」那一段。
   // 辩论发言**不随载荷走**：那是两条 CLI 会话之间的对话，会话历史本身已经接力过去，
   // 对端重开一次辩论即可；把它再复制一份反而会有两份互相矛盾的「双方说过什么」。
+  // 写给用户的那一句人话（裁定屏的第一行字）。它跟 `disputeReason` 一样是**状态**而不是
+  // 会话内容，丢了对端就退化成「只有几千字技术依据」的老数据形态。
+  disputeSummary?: string | null;
   disputeReason?: string | null;
   disputeDeferReason?: string | null;
   disputeAt?: string | null;

@@ -41,18 +41,31 @@ try {
   // ② 只提转出：标题换说法，「驳回理由」那块整块不出现。
   assert.match(
     await deferOnly.locator("header b").innerText(),
-    /超出本任务边界/,
+    /认可第 1 轮意见，但说该另开一个任务去改/,
     "只提转出时标题不能写成「驳回了意见」——执行者说的是报告对、只是不该在这儿修",
   );
   assert.equal(
-    await deferOnly.locator(".free-review-dispute-card__reason:not(.is-defer)").count(),
+    await deferOnly.locator(".folded-prose:not(.is-defer)").count(),
     0,
-    "只提转出时不该摆出空的「驳回理由」块",
+    "只提转出时不该摆出空的「驳回依据」块",
   );
+  // 执行者那一句人话是这一屏的主角：先读它再决定要不要展开几千字依据（用户 2026-10-20
+  // 「一大篇文字都看不懂」）。所以它摆在首屏、且不折叠。
   assert.match(
-    await deferOnly.locator(".free-review-dispute-card__reason.is-defer").innerText(),
+    await deferOnly.locator(".free-review-dispute-card__gist").innerText(),
+    /这两条我认，但它们是上一轮照意见改出来的新问题/,
+    "那一句人话必须摆在卡上，不能只有折叠着的技术依据",
+  );
+  const deferProse = deferOnly.locator(".folded-prose.is-defer");
+  assert.equal(await deferProse.locator(".task-markdown").count(), 0,
+    "有摘要时技术依据默认折着：一墙字拍上来，用户连「有几个选项」都看不见");
+  assert.match(await deferProse.locator("button em").innerText(), /\d+ 字/,
+    "折叠标题要报字数，用户才知道展开要读多少");
+  await deferProse.locator("button").click();
+  assert.match(
+    await deferProse.locator(".task-markdown").innerText(),
     /超出原任务边界/,
-    "转出理由要原样摆出来给用户看",
+    "展开之后技术依据原样可读",
   );
 
   // ① 出口的存在条件：没写越界依据就没有这颗按钮。
@@ -67,13 +80,31 @@ try {
     "现有两个出口一个都不许少",
   );
   assert.equal(await reasonOnly.getByRole("button", { name: "让它接着改" }).count(), 1);
-  assert.match(await reasonOnly.locator("header b").innerText(), /驳回了第 1 轮意见/);
+  assert.match(await reasonOnly.locator("header b").innerText(), /不认第 1 轮审查意见/);
+  // 这一张是**老数据**（没有那一句人话）：此时正文必须默认摊开，折起来就成了「什么都没有」。
+  assert.equal(await reasonOnly.locator(".free-review-dispute-card__gist").count(), 0,
+    "没有摘要就不编一句糊上去");
+  assert.equal(await reasonOnly.locator(".folded-prose .task-markdown").count(), 1,
+    "老驳回没有摘要，技术依据要默认摊开——否则这张卡上一个字都读不到");
+  // 出口竖排成一列，每行都带一句「我什么时候该点它」：横排时四颗按钮各只有五个字，
+  // 彼此的差别写在确认框里，用户只能挨个点开看。
+  const exits = reasonOnly.locator(".free-review-dispute-card__exits > li");
+  assert.ok(await exits.count() >= 3, "出口要摆成一列");
+  for (const [index, blurb] of [[0, /审查说得对/], [1, /它说得对/]]) {
+    assert.match(await exits.nth(index).locator("small").innerText(), blurb,
+      "每个出口都要有一行「我什么时候该点它」");
+  }
 
   // ③ 混合形态：两块理由 + 四个出口并存。
   assert.equal(
-    await mixed.locator(".free-review-dispute-card__reason").count(),
+    await mixed.locator(".folded-prose").count(),
     2,
     "两段理由同时给时两块都要摆出来（一次交接里表达「不成立」和「成立但越界」共存）",
+  );
+  assert.match(
+    await mixed.locator("header b").innerText(),
+    /不认第 1 轮的部分意见，另几条说该另开任务去改/,
+    "混合形态的标题要把两件事都说出来",
   );
   for (const name of ["让双方辩论", "转为独立任务", "这一轮不用改了", "让它接着改"]) {
     assert.equal(await mixed.getByRole("button", { name }).count(), 1, `混合形态下「${name}」出口要在`);
@@ -84,7 +115,7 @@ try {
   const dialog = page.getByRole("dialog");
   await dialog.waitFor();
   const message = await dialog.innerText();
-  assert.match(message, /待办、不起跑/, "确认框必须说清建出来的是待办任务，不会自己起跑");
+  assert.match(message, /待办，不会自动开跑/, "确认框必须说清建出来的是待办任务，不会自己起跑");
   assert.match(message, /没有作废/, "确认框必须把它和「这一轮不用改了」的差别说死");
   // 转出之后这条链就停住了，可执行者在提驳回之前已经把在边界内的那几条改掉了——那部分
   // 代码一轮都没审过。不说一句，用户按完只会以为「处理完了」，改动就这么没人看地留着。
@@ -96,7 +127,7 @@ try {
   // ⑤ 裁定要点：这一档写给的是新任务，措辞得说清它落到哪儿去。
   const note = dialog.locator(".free-review-dispute-note");
   await note.waitFor();
-  assert.match(await note.locator("span").innerText(), /写给新任务的要点/,
+  assert.match(await note.locator("span").innerText(), /交代给新任务/,
     "转出这一档的要点是写给派生任务的，不是写给本任务执行者的");
   assert.match(await note.locator("small").innerText(), /待办任务的描述/,
     "要说清这段话落到哪儿，否则用户不知道有没有人会看");
@@ -127,11 +158,18 @@ try {
   await reasonOnly.getByRole("button", { name: "让它接着改" }).click();
   const upheldDialog = page.getByRole("dialog");
   await upheldDialog.locator(".free-review-dispute-note").waitFor();
-  assert.match(await upheldDialog.locator(".free-review-dispute-note span").innerText(), /写给执行者的要点/);
+  assert.match(await upheldDialog.locator(".free-review-dispute-note span").innerText(), /交代给执行者/);
   assert.match(
     await upheldDialog.locator(".free-review-dispute-note small").innerText(),
-    /随修复指令一起发过去.*以你这段为准/,
+    /一起发给它.*以你这段为准/,
     "维持这一档要说清：这段话会发给执行者，并且压过报告",
+  );
+  // 按钮上只写动作，但留档用的那套说法仍要露一次：用户回头会在时间线上读到「维持审查
+  // 意见」，界面上一次都不提，那就成了他没按过的词。
+  assert.match(
+    await upheldDialog.locator(".free-review-dispute-recorded").innerText(),
+    /维持审查意见/,
+    "确认框要把留档用的那个名字对上",
   );
   await upheldDialog.getByRole("button", { name: "取消" }).click();
 
@@ -153,6 +191,20 @@ try {
   // ⑥ 辩完之后：每段发言上的「用这段作要点」把整段灌进要点栏并直接落到「让它接着改」。
   // 辩论最有用的产物常常就是收尾那段里的具体方案，没有这颗按钮它是一次跨面板的手抄。
   const debated = page.locator(".debated-fixture");
+  // 辩论回放逐段摆的是那一句人话，完整发言折在下面：七段发言合起来上万字（真实样本），
+  // 而用户开辩论就是为了裁定，不是为了读完。
+  const turns = debated.locator(".free-review-debate li");
+  assert.match(
+    await turns.nth(0).locator(".free-review-debate__gist").innerText(),
+    /我坚持这一条/,
+    "每段先摆那一句人话",
+  );
+  assert.equal(await turns.nth(0).locator(".folded-prose .task-markdown").count(), 0,
+    "有摘要的那段，完整发言默认折着");
+  assert.equal(await turns.nth(1).locator(".free-review-debate__gist").count(), 0,
+    "老发言没有摘要就不编一句");
+  assert.equal(await turns.nth(1).locator(".folded-prose .task-markdown").count(), 1,
+    "没有摘要的那段要把发言摊开兜住");
   const quotes = debated.getByRole("button", { name: "用这段作要点" });
   assert.equal(await quotes.count(), 3, "三段发言各挂一颗：只许引用一方等于替用户挑了立场");
   await quotes.nth(2).click();
@@ -171,7 +223,7 @@ try {
   );
   assert.match(
     await quoted.innerText(),
-    /收尾发言会一并发给它/,
+    /审查者最后那段会一并发给它/,
     "辩完这一档要说清收尾那段执行者自己没见过，否则用户会以为它听见了",
   );
   // 追加而不是覆盖：用户可能先自己写了半句再想起来引用，覆盖掉等于吃掉他刚打的字。

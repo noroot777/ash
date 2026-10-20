@@ -38,6 +38,7 @@
 //    **工作量**，措辞见 free-review-prompts.ts 的 disputeOption）；
 // ④ 提出之后停下来等人——与驳回共用同一条停顿，撤自动复审预约的规矩也共用。
 import type { FreeReviewDisputeResolution, Task } from "@ash/shared";
+import { MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_GUIDE } from "@ash/shared/free-workflow";
 import { and, eq, isNull } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -73,11 +74,33 @@ export function disputeReasonOf(raw: unknown): string {
 }
 
 /**
- * 两段理由的联合入参校验：`reason`（哪几条不成立）与 `deferReason`（哪几条成立但越界）
- * **至少要有一段**。只提转出时不强求 `reason` —— 强求的话执行者就只能在「哪一条不成立」
- * 那一栏里编一句它自己都不认的话，而那正是这条出路要消灭的东西。
+ * 「写给用户的那一句话」的入参校验 —— 驳回和辩论发言共用（`free-review-debate.ts` 从这里
+ * 取，两处各写一份校验就会漂成两套规范）。
+ *
+ * **必填**，而不是「有就用、没有就算了」：可选的那一版等于没有——执行者手里的默认稿
+ * 一直是写给审查者看的辩护书（真实样本 1000~3500 字、满篇路径行号），缺了这一句用户
+ * 就只能对着那堵墙拍板。漏传的代价只是 agent 读到这条报错再补一次调用，它读得到；
+ * 用户读不懂的代价是每次裁定都在猜。
+ *
+ * 换行压成空格：它要摆在界面首屏当一行结论，顺手也堵掉「在摘要栏里塞一份小报告」。
  */
-export function disputeInputOf(raw: { reason?: unknown; deferReason?: unknown }): {
+export function plainSummaryOf(raw: unknown, field: string, what: string): string {
+  const text = typeof raw === "string"
+    ? raw.replace(/\s+/g, " ").trim().slice(0, MAX_PLAIN_SUMMARY_LEN)
+    : "";
+  if (!text) throw new Error(`${field} 必填：${what}\n${PLAIN_SUMMARY_GUIDE}`);
+  return text;
+}
+
+/**
+ * 三段入参的联合校验。
+ *
+ * `summary` 必填（理由见 `plainSummaryOf`）；`reason`（哪几条不成立）与 `deferReason`
+ * （哪几条成立但越界）**至少要有一段**。只提转出时不强求 `reason` —— 强求的话执行者就
+ * 只能在「哪一条不成立」那一栏里编一句它自己都不认的话，而那正是这条出路要消灭的东西。
+ */
+export function disputeInputOf(raw: { summary?: unknown; reason?: unknown; deferReason?: unknown }): {
+  summary: string;
   reason: string;
   deferReason: string | null;
 } {
@@ -89,12 +112,31 @@ export function disputeInputOf(raw: { reason?: unknown; deferReason?: unknown })
       "若你认可这些意见、只是认为它们超出本任务边界，就把逐条依据写进 deferReason",
     );
   }
-  return { reason, deferReason: deferReason || null };
+  const summary = plainSummaryOf(
+    raw.summary, "summary", "用户要靠这一句决定「让你接着改 / 这一轮不用改 / 转成独立任务」，所以它必须是人话",
+  );
+  return { summary, reason, deferReason: deferReason || null };
 }
 
 /** 「这一轮挂着一条驳回」——两段理由任意一段非空即算（只提转出的那次 reason 为空）。 */
 export function hasDispute(round: ReviewRoundRow | null | undefined): boolean {
   return !!(round?.disputeReason || round?.disputeDeferReason);
+}
+
+/**
+ * 「执行者到底说了什么」——发给辩论双方的那一份完整材料。
+ *
+ * 必须**三段都带**，而且必须是一个函数：辩论提示原来直接取 `round.disputeReason!`，
+ * 碰上「只提转出」那种形态（`reason` 为空、话全在 `deferReason` 里）就把 null 发了出去，
+ * 双方看到的是字面量「null」—— 审查者对着一条空驳回答辩，执行者再读一遍自己的空话。
+ * 这条形态在线上真实发生过（见 web fixture `debate-lane.data.json` 那场）。
+ */
+export function disputeBriefOf(round: ReviewRoundRow): string {
+  return [
+    round.disputeSummary ? `〔一句话〕${round.disputeSummary}` : "",
+    round.disputeReason ? `〔它认为不成立的那几条〕\n${round.disputeReason}` : "",
+    round.disputeDeferReason ? `〔它认可、但认为该另开一个任务去改的那几条〕\n${round.disputeDeferReason}` : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 async function freeTask(taskId: string): Promise<TaskRow> {
@@ -152,9 +194,9 @@ export async function waivedDisputeOf(taskId: string): Promise<{ run: ReviewRunR
  */
 export async function disputeFreeReview(
   taskId: string,
-  reason: string,
-  deferReason: string | null = null,
+  input: { summary: string; reason: string; deferReason: string | null },
 ): Promise<{ runId: string; round: number }> {
+  const { summary, reason, deferReason } = input;
   const task = await freeTask(taskId);
   if (task.archived) throw new Error("归档任务不能驳回审查意见");
   const handedOff = handoffBlockReason(task.handoff);
@@ -176,7 +218,7 @@ export async function disputeFreeReview(
   // 两下）到这里都只会落一条驳回，而不是后写的盖掉先写的。两列一起判——只判一列的话，
   // 「只提转出」和「只提不成立」这两次并发调用会各自看到对方那列是空，双双写进去。
   const written = await db.update(freeReviewRounds)
-    .set({ disputeReason: reason || null, disputeDeferReason: deferReason, disputeAt: at })
+    .set({ disputeSummary: summary, disputeReason: reason || null, disputeDeferReason: deferReason, disputeAt: at })
     .where(and(
       eq(freeReviewRounds.id, round.id),
       isNull(freeReviewRounds.disputeReason),
@@ -193,18 +235,53 @@ export async function disputeFreeReview(
     ? await consumeFreeReviewReservation(taskId, reservation)
     : null;
 
-  const what = deferReason
-    ? reason
-      ? "驳回了部分意见，并提出另几条虽然成立、但超出本任务边界，建议转独立任务"
-      : "认可这一轮意见，但提出它们超出本任务边界，建议转独立任务"
-    : "驳回了这一轮审查意见";
-  await appendTaskTimeline(taskId,
-    `执行者${what}（第 ${run.currentRound} 轮 · ${run.reviewerName}）：${summarize(reason || deferReason || "")}` +
-    `${canceledAuto ? "；自动复审已取消" : ""}。` +
-    "现在由你裁定：可以让双方辩一轮，也可以直接让它接着改、或者判这一轮不用改了" +
-    `${deferReason ? "，还可以把越界的那几条转成一个独立任务" : ""}。`);
+  await appendTaskTimeline(taskId, disputeTimelineNote({
+    round: run.currentRound,
+    reviewerName: run.reviewerName,
+    summary,
+    hasReason: !!reason,
+    hasDefer: !!deferReason,
+    canceledAuto: !!canceledAuto,
+  }));
   bus.publish({ type: "task.review", taskId });
   return { runId: run.id, round: run.currentRound };
+}
+
+/**
+ * 「执行者不认这一轮意见，等你裁定」那条时间线旁注。
+ *
+ * 它是用户最常先看到的那一眼——会话里就能读到，不必先打开审查面板——所以只说三件事：
+ * **谁不认谁、它一句话说了什么、你能怎么选**。
+ *
+ * 第二行用 `summary` 而不是正文前 60 字：原来截出来的是「本轮认可的部分已先修复、验证
+ * 并提交 ceed925（fix: separa…」，占着最值钱的一行却一个字都没说到争点上（用户 2026-10-20
+ * 「一大篇文字都看不懂」里的一半就是这条旁注）。
+ *
+ * 「现在由你裁定：」这个前缀不能改字：前端靠它在时间线里认出这一行并挂上「去裁定」按钮
+ * （`web/src/task-detail/systemNoticeModel.ts` 的 `pendingDisputeEvent`）。
+ *
+ * 抽成纯函数是为了能被回归钉住：这条链里「措辞」本身就是功能，而测试环境里任务没有会话，
+ * `appendTaskTimeline` 根本不落盘，断不到。
+ */
+export function disputeTimelineNote(input: {
+  round: number;
+  reviewerName: string;
+  summary: string;
+  hasReason: boolean;
+  hasDefer: boolean;
+  canceledAuto: boolean;
+}): string {
+  const what = input.hasDefer
+    ? input.hasReason
+      ? "不认这一轮的部分意见，另几条认可、但说该另开一个任务去改"
+      : "认可这一轮意见，但说该另开一个任务去改，不在这个任务里改"
+    : "不认这一轮审查意见";
+  const choices = ["让它接着改", "这一轮不用改了"];
+  if (input.hasDefer) choices.push("把那几条转成独立任务");
+  return `执行者${what}（第 ${input.round} 轮 · ${input.reviewerName}）。\n`
+    + `它的说法：${input.summary}\n`
+    + `现在由你裁定：${choices.join(" / ")}；拿不准就先让双方辩一轮。`
+    + (input.canceledAuto ? "（自动复审已取消，等你拍板。）" : "");
 }
 
 /** 时间线里只放一句话的摘要，全文留在审查记录里（时间线不是正文的第二个家）。 */

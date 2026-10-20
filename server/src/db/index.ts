@@ -241,6 +241,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS free_review_rounds (
       id TEXT PRIMARY KEY, run_id TEXT NOT NULL, round INTEGER NOT NULL,
       status TEXT NOT NULL, conclusion TEXT, reviewed_commit TEXT,
+      dispute_summary TEXT,
       dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
       dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
       dispute_deferred_task_id TEXT,
@@ -260,7 +261,7 @@ export async function ensureSchema() {
       ON free_review_debates (task_id, started_at);
     CREATE TABLE IF NOT EXISTS free_review_debate_turns (
       id TEXT PRIMARY KEY, debate_id TEXT NOT NULL, seq INTEGER NOT NULL,
-      side TEXT NOT NULL, statement TEXT, status TEXT NOT NULL,
+      side TEXT NOT NULL, summary TEXT, statement TEXT, status TEXT NOT NULL,
       started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_debate_turns_seq_idx
@@ -557,6 +558,9 @@ export async function ensureSchema() {
     "ALTER TABLE free_review_rounds ADD COLUMN dispute_deferred_task_id TEXT",
     // 裁定时用户写给执行者的要点（三档裁定表达不了的那部分结论，多半是辩论里达成的方案）。
     "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution_note TEXT",
+    // 驳回与每段辩论发言的「人话摘要」：裁定屏第一行字。老行留 null，界面降级显示正文。
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_summary TEXT",
+    "ALTER TABLE free_review_debate_turns ADD COLUMN summary TEXT",
     // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
     "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",
