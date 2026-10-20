@@ -9,6 +9,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { migrateLegacyDbFiles } from "../src/db/path.js";
+import { killPidsCommand } from "../src/platform.js";
 import { singletonLockFileForDb } from "../src/singleton.js";
 import {
   exitLedgerFileForDb,
@@ -100,7 +101,10 @@ async function testSameDbRejected(root: string) {
     assert.equal(exit.code, 1, "second same-DB server should exit 1");
     assert.match(output, /Refusing to start/, "same-DB rejection should be explicit");
     assert.match(output, new RegExp(`PID: ${first.child.pid}`), "message should include conflicting PID");
-    assert.match(output, new RegExp(`kill ${first.child.pid}`), "message should include a copyable kill command");
+    assert.ok(
+      output.includes(killPidsCommand([first.child.pid!])),
+      `message should include a copyable kill command (${killPidsCommand([first.child.pid!])})`,
+    );
     console.log(`[singleton-test] same DB rejected with exit ${exit.code}`);
     console.log(indentBlock(output.trim()));
   } finally {
