@@ -105,8 +105,11 @@
 .free-review-dispute-card > header { display:grid; min-width:0; grid-template-columns:28px minmax(0,1fr); align-items:center; gap:8px; }.free-review-dispute-card > header > span { display:grid; width:28px; height:28px; place-items:center; border:1px solid color-mix(in lch,var(--amber) 26%,var(--line)); border-radius:8px; background:var(--panel); color:var(--amber); }.free-review-dispute-card header b,.free-review-dispute-card header small { display:block; }.free-review-dispute-card header b { font-size:11px; }.free-review-dispute-card header small { margin-top:1px; color:var(--faint); font-size:8.5px; }
 .free-review-dispute-card > p { margin:0; color:var(--muted); font-size:9.5px; line-height:1.5; }
 /* 执行者写的那一句人话（`dispute.summary`）。它是这一屏的主角，所以是整块里唯一用
-   正文色、且比其它字都大的一行——用户先读它，再决定要不要展开下面几千字的依据。 */
-.free-review-dispute-card__gist { margin:0; border-left:2px solid color-mix(in lch,var(--amber) 55%,var(--line2)); padding-left:8px; color:var(--ink); font-size:11px; line-height:1.65; }
+   正文色、且比其它字都大的一行——用户先读它，再决定要不要展开下面几千字的依据。
+   选择器**必须带上父级和 `p`**：上面那条 `.free-review-dispute-card > p` 是「类+元素」，
+   比裸一个类更具体，光靠写在后面压不住它——主角会被渲染成和状态行一样的灰小字
+   （第 1 轮审查 N2 实测 9.5px/--muted）。 */
+.free-review-dispute-card > p.free-review-dispute-card__gist { margin:0; border-left:2px solid color-mix(in lch,var(--amber) 55%,var(--line2)); padding-left:8px; color:var(--ink); font-size:11px; line-height:1.65; }
 /* 「看审查者怎么说」：卡上只有执行者的说法，审查者那一半在报告里。 */
 .free-review-dispute-card__report { display:inline-flex; width:fit-content; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:2px 8px; color:var(--muted); font-size:9px; cursor:pointer; }
 .free-review-dispute-card__report:hover { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); background:color-mix(in lch,var(--accent) 8%,var(--panel)); color:var(--accent); }

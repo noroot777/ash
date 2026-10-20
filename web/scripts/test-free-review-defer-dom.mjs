@@ -10,6 +10,9 @@
 // ⑤ 每个裁定确认框里都有**裁定要点**那一栏，措辞按档位换，写下的话真的随裁定发出去。
 //    三档枚举表达不了「这条我认，但按辩论里达成的方案做」，它是那部分结论唯一的出口；
 // ⑥ 辩完之后每段发言上的「用这段作要点」：灌整段原文、追加不覆盖、落到「让它接着改」。
+// ⑦ 同一个卡片位置换一轮内容时，折叠档位跟着**新内容**走，不沿用上一轮的手动展开；
+// ⑧ 那一句人话真的被渲染成大字正文色——它是整屏唯一的主角，被通用段落样式压成灰小字
+//    就等于白写（这两条都是第 1 轮审查记下的 N1/N2）。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -246,6 +249,44 @@ try {
     /我建议你让它按新方案改/,
     "引用来的原文必须真的跟着裁定发出去",
   );
+
+  // ⑧ 那一句人话的字号与颜色得是真的生效值，不是写在 CSS 里就算。`.free-review-dispute-card
+  // > p` 是「类+元素」，比裸一个类更具体，所以摘要那条规则光写在它后面压不住——主角会被
+  // 渲染成和状态行一样的灰小字（第 1 轮审查 N2 实测 9.5px/--muted）。
+  const gistStyle = await mixed.locator(".free-review-dispute-card__gist").evaluate((node) => {
+    const style = getComputedStyle(node);
+    // 同一张卡里的状态行（那个没有 class 的 <p>）是「灰小字」的基准值：摘要跟它同款就
+    // 说明通用段落规则又把它压了回去。
+    const plain = node.parentElement.querySelector("p:not([class])");
+    return { fontSize: style.fontSize, color: style.color, plainColor: getComputedStyle(plain).color };
+  });
+  assert.equal(gistStyle.fontSize, "11px", "摘要必须比周围的字大，否则读者第一眼落不到它身上");
+  assert.notEqual(
+    gistStyle.color,
+    gistStyle.plainColor,
+    "摘要要用正文色：跟状态行一样的灰字 = 主角被渲染成了配角",
+  );
+
+  // ⑦ 同一个位置换一轮：历史报告抽屉切换轮次时复用的就是这一个卡片位置。展开档位必须按
+  // **内容**认——否则甲轮手动展开会跟着切到乙轮，而乙轮那条该默认摊开的老记录反倒是收起
+  // 的，用户以为「这条没写理由」（第 1 轮审查 N1）。钉在组件这一层而不是抽屉里：这一屏有
+  // 5 个 FoldedProse 调用点，靠每处记得传 key 就是在等下一处漏传。
+  const switcher = page.locator(".switch-fixture");
+  const switchProse = switcher.locator(".folded-prose");
+  await switchProse.waitFor();
+  assert.equal(await switchProse.locator(".task-markdown").count(), 0,
+    "有摘要的那一轮，依据默认折着");
+  await switcher.getByRole("button", { name: "换一轮" }).click();
+  assert.equal(await switchProse.locator(".task-markdown").count(), 1,
+    "换到没有摘要的那一轮，依据要按它自己的默认摊开——不能沿用上一轮的收起状态");
+  await switchProse.locator("button").click();
+  assert.equal(await switchProse.locator(".task-markdown").count(), 0, "手动收起照旧生效");
+  await switcher.getByRole("button", { name: "换一轮" }).click();
+  assert.equal(await switchProse.locator(".task-markdown").count(), 0,
+    "切回有摘要那一轮，回到它自己的默认档（折着）");
+  await switcher.getByRole("button", { name: "换一轮" }).click();
+  assert.equal(await switchProse.locator(".task-markdown").count(), 0,
+    "再切回去，用户刚才在这份内容上的手动收起要留着（状态按内容认，不是每次切换粗暴重置）");
 
   console.log("free review defer dom tests passed");} finally {
   await browser?.close();

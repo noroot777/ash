@@ -5,6 +5,7 @@ import * as schema from "./schema.js";
 import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
 import { runDataMigrations } from "./migrations.js";
 import { ensureChatSchema } from "./schema-chat.js";
+import { ensureFreeWorkflowSchema } from "./schema-free-workflow.js";
 import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 
 const dbFile = resolveAshDbFile();
@@ -214,58 +215,6 @@ export async function ensureSchema() {
       executor_id TEXT, model TEXT, reasoning_effort TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS free_workflow_states (
-      task_id TEXT PRIMARY KEY, selected_reviewer_id TEXT,
-      review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
-      review_retry_limit INTEGER, review_note TEXT, review_run_id TEXT,
-      review_agent_type TEXT, review_executor_id TEXT,
-      review_model TEXT, review_reasoning_effort TEXT,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS free_workflow_events (
-      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
-      source TEXT NOT NULL, detail TEXT, occurred_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS free_workflow_events_task_idx
-      ON free_workflow_events (task_id, occurred_at);
-    CREATE TABLE IF NOT EXISTS free_review_runs (
-      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, reviewer_id TEXT,
-      reviewer_name TEXT NOT NULL, agent_type TEXT NOT NULL, executor_id TEXT,
-      model TEXT, reasoning_effort TEXT, check_mode TEXT NOT NULL, note TEXT,
-      target_kind TEXT NOT NULL DEFAULT 'workspace', target_branch TEXT,
-      target_base_commit TEXT, target_commit TEXT, repair_task_id TEXT,
-      retry_limit INTEGER NOT NULL DEFAULT 1, current_round INTEGER NOT NULL DEFAULT 1,
-      status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
-    );
-    CREATE INDEX IF NOT EXISTS free_review_runs_task_idx ON free_review_runs (task_id, created_at);
-    CREATE TABLE IF NOT EXISTS free_review_rounds (
-      id TEXT PRIMARY KEY, run_id TEXT NOT NULL, round INTEGER NOT NULL,
-      status TEXT NOT NULL, conclusion TEXT, reviewed_commit TEXT,
-      dispute_summary TEXT,
-      dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
-      dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
-      dispute_deferred_task_id TEXT,
-      started_at TEXT NOT NULL, ended_at TEXT
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
-      ON free_review_rounds (run_id, round);
-    CREATE TABLE IF NOT EXISTS free_review_debates (
-      id TEXT PRIMARY KEY, round_id TEXT NOT NULL, task_id TEXT NOT NULL,
-      run_id TEXT NOT NULL, round INTEGER NOT NULL, status TEXT NOT NULL,
-      exchanges INTEGER NOT NULL DEFAULT 1, current_seq INTEGER NOT NULL DEFAULT 1,
-      verdict TEXT, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
-    );
-    CREATE INDEX IF NOT EXISTS free_review_debates_round_idx
-      ON free_review_debates (round_id, started_at);
-    CREATE INDEX IF NOT EXISTS free_review_debates_task_idx
-      ON free_review_debates (task_id, started_at);
-    CREATE TABLE IF NOT EXISTS free_review_debate_turns (
-      id TEXT PRIMARY KEY, debate_id TEXT NOT NULL, seq INTEGER NOT NULL,
-      side TEXT NOT NULL, summary TEXT, statement TEXT, status TEXT NOT NULL,
-      started_at TEXT NOT NULL, ended_at TEXT
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS free_review_debate_turns_seq_idx
-      ON free_review_debate_turns (debate_id, seq);
     CREATE TABLE IF NOT EXISTS project_git_credentials (
       project_id TEXT PRIMARY KEY, username TEXT NOT NULL,
       secret TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -530,37 +479,6 @@ export async function ensureSchema() {
     // 同一个哨兵还没送出去的事件合并进同一行（一次唤醒看完全部，而不是一行一个回合），
     // 投递时标 byBackend 让它在会话里显示成系统代写而不是用户发言。
     "ALTER TABLE scheduled_messages ADD COLUMN origin TEXT",
-    // 自由工作流预约审查：只保存一份配置，confirmed done 后复用现有派审链。
-    "ALTER TABLE free_workflow_states ADD COLUMN review_armed INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_check_mode TEXT",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_retry_limit INTEGER",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_note TEXT",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_run_id TEXT",
-    // 预约里「这次换个模型/智能水平跑」的覆盖（不改审查者配置本身）。
-    "ALTER TABLE free_workflow_states ADD COLUMN review_agent_type TEXT",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_executor_id TEXT",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_model TEXT",
-    "ALTER TABLE free_workflow_states ADD COLUMN review_reasoning_effort TEXT",
-    "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
-    "ALTER TABLE free_review_runs ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'workspace'",
-    "ALTER TABLE free_review_runs ADD COLUMN target_branch TEXT",
-    "ALTER TABLE free_review_runs ADD COLUMN target_base_commit TEXT",
-    "ALTER TABLE free_review_runs ADD COLUMN target_commit TEXT",
-    "ALTER TABLE free_review_runs ADD COLUMN repair_task_id TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN reviewed_commit TEXT",
-    // 执行者驳回审查结论那条支线（理由 + 用户裁定）；老库补列即可，空 = 没驳回过。
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_reason TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_at TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolved_at TEXT",
-    // 第三条出路：「意见成立但越界，建议转独立任务」的理由，以及裁定后建出的那个任务。
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_defer_reason TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_deferred_task_id TEXT",
-    // 裁定时用户写给执行者的要点（三档裁定表达不了的那部分结论，多半是辩论里达成的方案）。
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution_note TEXT",
-    // 驳回与每段辩论发言的「人话摘要」：裁定屏第一行字。老行留 null，界面降级显示正文。
-    "ALTER TABLE free_review_rounds ADD COLUMN dispute_summary TEXT",
-    "ALTER TABLE free_review_debate_turns ADD COLUMN summary TEXT",
     // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
     "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",
@@ -706,6 +624,7 @@ export async function ensureSchema() {
     /* 列还不存在 */
   }
   await ensureChatSchema(client);
+  await ensureFreeWorkflowSchema(client);
   // DDL 到此为止。剩下那一半(一次性数据搬运 + 退役字段/表清理)在 `migrations.ts`。
   await runDataMigrations(client);
 }
