@@ -273,6 +273,18 @@ export function buildWindowsCommand(template: string, absPath: string) {
  * 撬开的路。`/d` 跳过 AutoRun,`/s` 锁定「去掉首尾一对引号、中间原样」这条解析规则。
  *
  * 导出是为了让 test-openers-windows.ts 在 macOS 上也能钉住「路径不出现在命令行里」。
+ *
+ * 2026-10-20 在 Windows 真机上验过(192.168.1.187,Windows 10.0.26200 / Node 22.20),
+ * 而且**先证明探针看得见注入**才说结论——上一轮栽在探针自己有洞上:
+ *  · 自检:把 `...\f1stage\amp&ver` 当裸参数交给 `cmd /c echo`,cmd 在 `&` 处截断、
+ *    `ver` 真的执行了(stdout 里有 `Microsoft Windows [版本 ...]`)。这就是旧模板的洞。
+ *  · 旧模板 `cmd /c start "" <裸路径>` 在同一个目录上直接卡死(25s 被 kill)——截断后的
+ *    路径不存在,`start` 停在那里不回来。
+ *  · 新模板:`start "" "%ASH_OPEN_TARGET%"`,命令行里只有占位符,资源管理器开的是
+ *    `f1stage/amp&ver` 本身,没有多余命令被执行。
+ *  · `%` 那一对的对照最直白:裸路径 `...\pct%ASH_F1_X%pct` 被 cmd 展开成了
+ *    `...\pctEXPANDEDpct`(打开的根本不是用户点的那个);走环境变量则原样是
+ *    `pct%ASH_F1_X%pct` —— 展开是单遍的,展开出来的 `%` 不会再被扫一次。
  */
 export const WIN_OPEN_TARGET_ENV = "ASH_OPEN_TARGET";
 

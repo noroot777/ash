@@ -127,6 +127,11 @@ assert.deepEqual(messy, { entries: [], defaultId: null }, "缺 id、缺命令行
 // 提交任何可执行文件：`&` 没被引号包住就是命令分隔符，`%TEMP%` 会被展开成别的路径。
 // 真机复现见 2026-10-20 第 2 轮审查 F1（`...\launch.exe&ver` 启动了旁边的程序并多跑了
 // 一条 `ver`）。注册表模板那一档不在此列——它是 execFile 直接起 exe，中间没有 shell。
+//
+// 修复同日在 Windows 真机上验过，结论和踩到的坑都记在 `windowsDefaultOpenCommand` 的
+// 注释里。**那一条值得单独记住**：第一版探针只看「有没有注入痕迹」，而它的对照组（旧
+// 模板）也报「没注入」——因为旧模板那次其实是卡死被 kill 的，什么都没输出。探针报不出
+// 阳性时，「没检测到」和「检测不出来」长得一模一样，所以自检必须先跑。
 for (const dir of [
   "D:\\work\\project&ver",
   "D:\\work\\proj&md INJECTED",
