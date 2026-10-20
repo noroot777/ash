@@ -21,7 +21,7 @@
 // ③ **只补白名单里的**（`REPLAYABLE_MCP_TOOLS`）。`accept_task` 重放一次就是多合并一次代码。
 //
 // 补录必须留痕：不写时间线的话，用户看到的就是「我没点它自己就过了」。
-import { and, eq, isNull } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
@@ -31,13 +31,12 @@ import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
-import { announceResumePrompt } from "./task-resume-prompt.js";
+import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { confirmTaskComplete } from "./task-complete.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { now } from "./util.js";
 
 /** 从输出流里认出来的一次 ash MCP 调用。 */
 export interface McpCallRecord {
@@ -247,19 +246,16 @@ async function applyReplay(
   if (call.tool === "pause_task") {
     const prompt = call.args.resumePrompt;
     if (typeof prompt !== "string" || !prompt.trim()) return null;
-    const at = now();
-    // `resumePromptAuto: false` = 这段是 agent 自己写的,谁也不许替它清掉（见
-    // task-resume-prompt.ts 文件头：那一列只在这一列非空时有意义,所以同写同清）。
-    const updated = await db.update(tasks).set({
-      resumePrompt: prompt.trim(), resumePromptAuto: false, updatedAt: at,
-    }).where(and(
-      eq(tasks.id, taskId),
+    // `auto: false` = 这段是 agent 自己写的,谁也不许替它清掉（见 task-resume-prompt.ts 文件头）。
+    // **走 occupyResumePrompt 而不是自己 db.update**:这一笔是一次新占用,代次必须 +1,否则在途
+    // 的旧凭证能凭「数值相等」冒领这一格（第 3 轮审查 F1-A,HTTP 那条入口已实测）。整行广播也
+    // 在那一层里（前端的派审/预约入口靠这一列灰掉）。
+    const occupied = await occupyResumePrompt(taskId, prompt.trim(), false, [
       directionToken === undefined ? undefined : directionToken === null
         ? isNull(tasks.activeDirectionToken)
         : eq(tasks.activeDirectionToken, directionToken),
-    )).returning({ id: tasks.id });
-    if (!updated.length) return null;
-    await announceResumePrompt(taskId);
+    ]);
+    if (!occupied) return null;
     return "检查点暂停当时因 MCP 通道中断没能送达，已补录续跑指令。";
   }
   return null;

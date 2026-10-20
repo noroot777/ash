@@ -48,6 +48,17 @@ mountTaskRunRoutes(api);
 export const complete = (taskId: string) => api.request(`/tasks/${taskId}/complete`, {
   method: "POST", headers: { "content-type": "application/json" }, body: "{}",
 });
+/**
+ * 真人/agent 自己挂检查点走的那条**生产路由**。
+ *
+ * 用它而不是直接写库：这一列的归属判据（占用代次）只有在**所有** writer 都维护时才成立，而
+ * 第 3 轮审查走穿的正是这条路由自己直写两列、不动代次（`F2_HTTP_PAUSE_GENERATION_BYPASS`）。
+ */
+export const pause = (taskId: string, resumePrompt: string, headers: Record<string, string> = {}) =>
+  api.request(`/tasks/${taskId}/pause`, {
+    method: "POST", headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({ resumePrompt }),
+  });
 export const taskRow = async (taskId: string) =>
   (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
 export const confirmedAt = async (taskId: string): Promise<string | null> =>
@@ -114,4 +125,3 @@ export function writeLostCompleteCall(taskId: string, sessId: string, turnStart:
     stream,
   );
 }
-

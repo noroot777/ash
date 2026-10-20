@@ -101,6 +101,20 @@ export type HandoffOutcome = "delivered" | "already" | "dropped" | "failed";
  * 不抛：调用点都在收尾路径上，往上抛会让一次已经落定的终态看起来像失败。**但也不再静默**：
  * 失败会排一次退避重试，而且照实返回 `failed`（见 monitor-handoff-retry.ts）。
  */
+/**
+ * 这个错是不是「唯一索引说这一笔已经有人送了」。
+ *
+ * 按索引名认而不是按「唯一约束」泛认：别的唯一约束失败（比如消息主键撞上）是真的出错了，当成
+ * 「已经送过」会把一次没送出去的交接说成送到了。驱动把原始错包了一层，所以连 `cause` 一起看。
+ */
+function isHandoffTokenConflict(error: unknown): boolean {
+  const text = [error, (error as { cause?: unknown })?.cause]
+    .map((e) => (e instanceof Error ? e.message : String(e ?? "")))
+    .join(" | ");
+  return /UNIQUE constraint failed: scheduled_messages\.handoff_token/i.test(text)
+    || (/unique/i.test(text) && /scheduled_messages_handoff_token/i.test(text));
+}
+
 export async function deliverResultHandoff(monitorId: string): Promise<HandoffOutcome> {
   try {
     if (dbClient.closed) return "failed";
@@ -112,14 +126,26 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
       .select({ id: scheduledMessages.id })
       .from(scheduledMessages)
       .where(and(eq(scheduledMessages.taskId, row.taskId), eq(scheduledMessages.handoffToken, token)))).length > 0;
-    const delivered = sentAlready ? false : await pushToTask(row, row.resultHandoffText, token);
+    // 入队撞上唯一索引 = 另一位发送者在这两步之间把同一笔送出去了（见 db/index.ts 的
+    // `scheduled_messages_handoff_token`）。那是**已经送过**，不是失败：不该出声、不该排重试，
+    // 凭证照样销掉。先查那一步留着只是省掉一次必然失败的写（第 3 轮审查 N1）。
+    let duplicate = false;
+    let delivered = false;
+    if (!sentAlready) {
+      try {
+        delivered = await pushToTask(row, row.resultHandoffText, token);
+      } catch (e) {
+        if (!isHandoffTokenConflict(e)) throw e;
+        duplicate = true;
+      }
+    }
     await db
       .update(monitors)
       .set({ resultHandoffAt: null, resultHandoffText: null })
       // CAS：只销掉自己这一趟处理的那一笔。重投器和收尾可能同时在送同一条,CAS 让后到的那一位
       // 不去空写(它那一趟会从身份那一问得到「送过了」)。
       .where(and(eq(monitors.id, monitorId), eq(monitors.resultHandoffAt, row.resultHandoffAt)));
-    if (sentAlready) return "already";
+    if (sentAlready || duplicate) return "already";
     if (!delivered) {
       console.error(
         `[ash] 哨兵结束通知无人可收 monitor=${monitorId} task=${row.taskId}：`

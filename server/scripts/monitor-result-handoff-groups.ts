@@ -230,6 +230,56 @@ export async function resultHandoffGroups(): Promise<void> {
     await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
   }
 
+  // ── ㉚b N1：**库上的唯一性**才是「一笔交接只对应一条消息」的保证 ────────────────────
+  //
+  // 去重原来是「先查有没有同口令的消息，没有就入队」。两位发送者（在线收尾、离线收尾、退避
+  // 重试、每分钟巡检）可以同时读到「没有」，然后各建一条 —— 实测 `Promise.all` 两次投递得到
+  // 两条正文和口令都一模一样的待发消息，agent 被同一个结果叫醒两轮。单实例不等于单一在途
+  // 调用，所以这件事只能由库给：先查那一步留着只是省掉一次必然失败的写。
+  {
+    const taskId = await makeTask();
+    const token = handoffToken("mon-unique", "2026-10-21T00:00:00.000Z");
+    const insert = (id: string) => db.insert(scheduledMessages).values({
+      id: uniq(id), taskId, text: "【哨兵结束】只许一条。", attachments: "[]",
+      origin: "monitor:mon-unique", mode: "queued", status: "pending",
+      sendAt: now(), createdAt: now(), handoffToken: token,
+    });
+    await insert("msg-first");
+    await assert.rejects(
+      () => insert("msg-second"),
+      /unique/i,
+      "同一笔交接不许在托盘里出现两条 —— 这一条由库上的唯一索引挡住，不靠两次读之间什么都没发生",
+    );
+    // 普通事件这一列是 NULL，而 SQLite 认为 NULL 彼此不等 —— 它们一条都不受影响。
+    for (const id of ["msg-plain-a", "msg-plain-b"]) {
+      await db.insert(scheduledMessages).values({
+        id: uniq(id), taskId, text: "【哨兵】普通事件", attachments: "[]",
+        origin: "monitor:mon-unique", mode: "queued", status: "pending",
+        sendAt: now(), createdAt: now(),
+      });
+    }
+    assert.equal((await pendingOf(taskId)).length, 3, "没有口令的普通事件照旧想排几条排几条");
+    await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
+  }
+
+  // 同一笔交接**真的并发送两次**：托盘里只许留一条，而且两位发送者都不许报失败（N1）。
+  {
+    const taskId = await makeTask();
+    await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
+    const monitorId = await handoffPending(taskId, "【哨兵结束】并发也只叫醒一次。");
+    const outcomes = await Promise.all([deliverResultHandoff(monitorId), deliverResultHandoff(monitorId)]);
+    const queued = await pendingOf(taskId);
+    assert.equal(queued.length, 1, "两位发送者撞上同一笔 ⇒ 托盘里只许有一条（上一版实测是两条）");
+    assert.match(queued[0]!.text, /并发也只叫醒一次/);
+    assert.ok(
+      outcomes.every((o) => o === "delivered" || o === "already"),
+      `谁都不该报失败（撞上唯一索引 = 别人送过了，不是出错）：${outcomes.join(",")}`,
+    );
+    assert.ok(outcomes.includes("delivered"), "至少有一位是真的把它送进去的");
+    assert.deepEqual(await outstandingResultHandoffs(), [], "凭证销掉，不许继续拦着完成");
+    await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
+  }
+
   // ── ㉛ 任务已经终态 ⇒ 这条通知**无人可收**：销凭证、照实报 dropped，不许算成已补发 ────
   {
     const taskId = await makeTask();

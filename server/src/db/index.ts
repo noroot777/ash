@@ -638,6 +638,27 @@ export async function ensureSchema() {
   } catch (e) {
     console.warn("[ash] monitors_native_source 索引创建失败,忽略:", e);
   }
+  // **一份结果交接只许对应一条消息**（第 3 轮审查 N1）。
+  //
+  // 去重原来是「先查有没有同口令的消息，没有就入队」：两位发送者（收尾、退避重试、每分钟巡检、
+  // 另一次收尾）可以同时读到「没有」，然后各建一条 —— 实测 `Promise.all` 两次投递得到两条正文
+  // 和口令都一模一样的待发消息，agent 被同一个结果叫醒两轮。单实例不等于单一在途调用。
+  //
+  // 唯一性只能由库给：有了这条索引，第二位发送者的入队直接被拒（调用方把它读成「已经送过了」，
+  // 见 monitor-events.ts），而不是靠两次读之间什么都没发生这种运气。普通事件的这一列是 NULL，
+  // SQLite 的唯一索引认为 NULL 彼此不等，所以它们一条都不受影响。
+  //
+  // 同样**必须排在容错 ALTER 之后**（这一列是 ALTER 补上的，理由见上一段注释）。
+  try {
+    await client.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS scheduled_messages_handoff_token"
+      + " ON scheduled_messages(handoff_token) WHERE handoff_token IS NOT NULL",
+    );
+  } catch (e) {
+    // 建不起来只有一种可能:存量库里已经有两条认着同一笔交接(上一版那个竞态真的发生过)。
+    // 不替用户删消息——那是他看得见的待发内容;照实出声,去重退回「先查后写」那一档。
+    console.warn("[ash] scheduled_messages_handoff_token 唯一索引创建失败（存量库里已有重复交接？）:", e);
+  }
   // ash 自己起的哨兵期限是它自己定的,`bounded` 对它恒成立 —— 上面那个 ALTER 为了不给
   // claude 投影编期限把默认值设成了 'unknown',这里把 ash 那半刷回来；证据列同理补 'self'
   // （新列对存量行一律 NULL,而 NULL 的语义是「旧算法推的、不可信」,对 ash 行不成立）。幂等。

@@ -9,7 +9,8 @@
 //  · `monitors.result_handoff_at/-_text` 缺 ⇒ 「结局已写定、结束通知还没入队」那一瞬没有任何
 //    凭证，闸看不见它，任务照旧落 done 把唯一的结果通知吃掉（第 1 轮审查 F1）。
 //
-// 第 2 轮审查又加了四列，失败形态同样安静，而且更难归因：
+// 第 2 轮审查又加了四列，失败形态同样安静，而且更难归因（第 3 轮又在账本口令上加了一条唯一
+// 索引，一并在这里验：它引用 ALTER 补的列，建早了老库就没有）：
 //  · `scheduled_messages.handoff_token` 缺 ⇒ 「这条结果送过了吗」没有原子答案。重试一旦启用
 //    （F3），同一条结束通知每重试一次就多叫醒一轮 —— 而本轮正是靠它去重的（N1）。
 //  · `scheduled_messages.checkpoint_auto/-_generation` 缺 ⇒ 账本只记得那段文字、记不住它是谁
@@ -143,6 +144,19 @@ try {
   const written = await readMessage();
   assert.equal(written.token, "m-old:2026-10-02T00:00:01.000Z");
   assert.deepEqual([written.auto, written.generation], [true, 7], "布尔列走的是 INTEGER，写回来还得是布尔");
+
+  // **存量库也要拿到那条唯一索引**（第 3 轮审查 N1）：它引用的是 ALTER 补上的那一列，所以建
+  // 索引必须排在那串 ALTER 之后 —— 顺序写反的话新库有、老库没有，而「一笔交接只对应一条消息」
+  // 恰恰是在老库上升级的人最需要的保证。
+  // 走裸 SQL 而不是 drizzle：老形状故意只建了本测试要看的那几列，而 drizzle 的 insert 会把带
+  // 缺省值的列一并写进语句，撞的是「老形状写得窄」而不是这条索引。
+  const insertDup = (id: string) => dbClient.execute(
+    "INSERT INTO scheduled_messages (id, task_id, text, send_at, created_at, handoff_token)"
+    + ` VALUES ('${id}', 't-old', '【哨兵结束】重复的那一条', '2026-10-02T00:00:02.000Z',`
+    + " '2026-10-02T00:00:02.000Z', 'm-old:2026-10-02T00:00:03.000Z')",
+  );
+  await insertDup("dup-a");
+  await assert.rejects(() => insertDup("dup-b"), /unique/i, "升级后的老库上，同一笔交接也不许排出两条消息");
 
   // 幂等：再跑一遍 ensureSchema 不许把刚写进去的值重置掉（宽容 ALTER 失败后不许退回重建）。
   await ensureSchema();

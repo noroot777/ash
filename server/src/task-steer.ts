@@ -4,10 +4,9 @@
 //
 // 两条硬不变量：① 清旧状态前先预约 steering，数据库失败可撤销；② 原话真正落盘前消息
 // 始终 pending，续送失败先把假 running 拉回真实状态，再归还投递租约。
-import type { QuestionItem, TaskStatus } from "@ash/shared";
-import { and, asc, eq, isNull, ne } from "drizzle-orm";
+import type { TaskStatus } from "@ash/shared";
+import { and, asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
@@ -16,319 +15,31 @@ import {
   isRunning,
   isCanceling,
   isTurnClaimed,
-  confirmDone,
   reserveNativeSteerTask,
   reserveSteerTask,
   type NativeSteerReservation,
   type StopSettle,
-  takeConfirmed,
   turnRole,
   whenTurnIdle,
 } from "./runs.js";
 import { setTaskStatus } from "./status.js";
-import { announceResumePrompt, resumePromptVoidPatch } from "./task-resume-prompt.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
-import { attachmentsPrompt, id, now } from "./util.js";
+import { attachmentsPrompt, now } from "./util.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { nativeCliCommand } from "./skills.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { DIRECTION_PROTOCOL } from "./run-prompts.js";
+import {
+  clearPreviousDirectionState, discardLateDirectionState, restorePreviousCompletionState,
+  restorePreviousDirectionState, type PreviousDirectionState,
+} from "./task-steer-direction-state.js";
 
 type MessageRow = typeof scheduledMessages.$inferSelect;
-
-interface PreviousDirectionState {
-  activeTurnToken: string | null;
-  activeDirectionToken: string | null;
-  activeDirectionVersion: number;
-  clearedTurnToken: string;
-  clearedDirectionToken: string;
-  clearedDirectionVersion: number;
-  completeConfirmedAt: string | null;
-  // 那段续跑指令的**整张凭证**：文字、谁写的、这一格被占用的第几次（第 2 轮审查 F2）。
-  // 只记文字的话，回滚填回去时来源只能靠任务行上那个可能已经改过的布尔 —— 期间有人写过新的
-  // 一段又被取走时，这段文字就会继承到不属于它的来源。
-  resumePrompt: string | null;
-  resumePromptAuto: boolean;
-  resumePromptGeneration: number;
-  question: string | null;
-  questionOptions: string | null;
-  questionItems: string | null;
-  memoryConfirmed: boolean;
-}
 
 export type SteerQueuedMessageResult =
   | { ok: true; taskId: string; messageId: string }
   | { ok: false; status: 404 | 409 | 500; error: string };
-
-async function clearPreviousDirectionState(
-  taskId: string,
-  rotateTurnToken = true,
-): Promise<PreviousDirectionState> {
-  // 硬切降级先换 token 再 kill；原生 steer 仍是同一个活动 turn，必须保留 token，让同一
-  // 进程里后续的 complete_task / ask_question 继续有效。两种路径都清两次内存快路。
-  const confirmedBefore = takeConfirmed(taskId);
-  const current = (await db
-    .select({
-      activeTurnToken: tasks.activeTurnToken,
-      activeDirectionToken: tasks.activeDirectionToken,
-      activeDirectionVersion: tasks.activeDirectionVersion,
-      completeConfirmedAt: tasks.completeConfirmedAt,
-      resumePrompt: tasks.resumePrompt,
-      resumePromptAuto: tasks.resumePromptAuto,
-      resumePromptGeneration: tasks.resumePromptGeneration,
-      question: tasks.question,
-      questionOptions: tasks.questionOptions,
-      questionItems: tasks.questionItems,
-    })
-    .from(tasks)
-    .where(eq(tasks.id, taskId))).at(0);
-  if (!current) {
-    if (confirmedBefore) confirmDone(taskId);
-    throw new Error("任务不存在");
-  }
-  const clearedTurnToken = rotateTurnToken ? id() : current.activeTurnToken;
-  const clearedDirectionToken = id();
-  const clearedDirectionVersion = Math.max(current.activeDirectionVersion + 1, 2);
-  if (!clearedTurnToken) {
-    if (confirmedBefore) confirmDone(taskId);
-    throw new Error("当前回合缺少身份 token，无法原生引导");
-  }
-  const updatedAt = now();
-  let memoryConfirmed = confirmedBefore;
-  try {
-    const updated = await db
-      .update(tasks)
-      .set({
-        activeTurnToken: clearedTurnToken,
-        activeDirectionToken: clearedDirectionToken,
-        activeDirectionVersion: clearedDirectionVersion,
-        completeConfirmedAt: null,
-        resumePrompt: null,
-        question: null,
-        questionOptions: null,
-        questionItems: null,
-        updatedAt,
-      })
-      .where(and(
-        eq(tasks.id, taskId),
-        current.activeTurnToken === null
-          ? isNull(tasks.activeTurnToken)
-          : eq(tasks.activeTurnToken, current.activeTurnToken),
-        current.activeDirectionToken === null
-          ? isNull(tasks.activeDirectionToken)
-          : eq(tasks.activeDirectionToken, current.activeDirectionToken),
-        eq(tasks.activeDirectionVersion, current.activeDirectionVersion),
-        current.completeConfirmedAt === null
-          ? isNull(tasks.completeConfirmedAt)
-          : eq(tasks.completeConfirmedAt, current.completeConfirmedAt),
-        current.resumePrompt === null
-          ? isNull(tasks.resumePrompt)
-          : eq(tasks.resumePrompt, current.resumePrompt),
-        current.question === null ? isNull(tasks.question) : eq(tasks.question, current.question),
-        current.questionOptions === null
-          ? isNull(tasks.questionOptions)
-          : eq(tasks.questionOptions, current.questionOptions),
-        current.questionItems === null
-          ? isNull(tasks.questionItems)
-          : eq(tasks.questionItems, current.questionItems),
-      ))
-      .returning({ id: tasks.id });
-    memoryConfirmed = takeConfirmed(taskId) || memoryConfirmed;
-    if (!updated.length) throw new Error("当前回合状态已变化，请重试引导");
-  } catch (error) {
-    memoryConfirmed = takeConfirmed(taskId) || memoryConfirmed;
-    if (memoryConfirmed) confirmDone(taskId);
-    throw error;
-  }
-  if (current?.question) {
-    try {
-      bus.publish({
-        type: "task.question",
-        taskId,
-        updatedAt,
-        question: null,
-        questionOptions: null,
-        questionItems: null,
-      });
-    } catch (error) {
-      console.warn(`[ash] 引导会话已清提问，但实时通知失败 ${taskId}:`, error);
-    }
-  }
-  // 提问有自己的局部事件，检查点没有：清掉的 resume_prompt 只能靠整行广播告诉前端
-  // （见 task-resume-prompt.ts 顶部）。
-  if (current?.resumePrompt) await announceResumePrompt(taskId);
-  return { ...current, clearedTurnToken, clearedDirectionToken, clearedDirectionVersion, memoryConfirmed };
-}
-
-async function discardLateDirectionState(taskId: string, turnToken: string, directionToken: string): Promise<void> {
-  // 原生请求确认接收前，旧方向已经发出的完成/提问/检查点仍可能刚好落库；成功 ACK 后
-  // 再清一遍。此刻新消息还没开始执行，因此不会误删新方向自己产生的状态；turn token
-  // 保持不变，方向 token 已在第一次清理时旋转。
-  takeConfirmed(taskId);
-  const late = (await db
-    .select({ question: tasks.question, resumePrompt: tasks.resumePrompt })
-    .from(tasks)
-    .where(and(
-      eq(tasks.id, taskId),
-      eq(tasks.activeTurnToken, turnToken),
-      eq(tasks.activeDirectionToken, directionToken),
-    ))).at(0);
-  const updatedAt = now();
-  await db
-    .update(tasks)
-    .set({
-      completeConfirmedAt: null,
-      // **作废,不是取走**:旧方向迟到的那段检查点不该再回来,所以代次一起 +1 —— 否则它那一侧
-      // 还在途的退回(账本重投)能凭一个空槽把它填回新方向头上(第 2 轮审查 F2 同类)。
-      ...resumePromptVoidPatch(),
-      question: null,
-      questionOptions: null,
-      questionItems: null,
-      updatedAt,
-    })
-    .where(and(
-      eq(tasks.id, taskId),
-      eq(tasks.activeTurnToken, turnToken),
-      eq(tasks.activeDirectionToken, directionToken),
-    ));
-  takeConfirmed(taskId);
-  if (late?.question) {
-    try {
-      bus.publish({
-        type: "task.question",
-        taskId,
-        updatedAt,
-        question: null,
-        questionOptions: null,
-        questionItems: null,
-      });
-    } catch (error) {
-      console.warn(`[ash] 原生引导已清迟到提问，但实时通知失败 ${taskId}:`, error);
-    }
-  }
-  if (late?.resumePrompt) await announceResumePrompt(taskId);
-}
-
-async function restorePreviousDirectionState(
-  taskId: string,
-  previous: PreviousDirectionState,
-  preserveDirectionBarrier = false,
-): Promise<boolean> {
-  const updatedAt = now();
-  let restored = await db
-    .update(tasks)
-    .set({
-      activeTurnToken: previous.activeTurnToken,
-      activeDirectionToken: preserveDirectionBarrier
-        ? previous.clearedDirectionToken
-        : previous.activeDirectionToken,
-      activeDirectionVersion: preserveDirectionBarrier
-        ? previous.clearedDirectionVersion
-        : previous.activeDirectionVersion,
-      completeConfirmedAt: previous.completeConfirmedAt,
-      resumePrompt: previous.resumePrompt,
-      // **来源跟着文字一起回来**（F2）：清那一笔没动来源列，但这中间别人可能写过新的一段并把
-      // 它取走，于是那一格的来源早就不是这段文字的了。代次条件（下面）保证这一笔只在「还是同
-      // 一次占用」时落地，所以把快照里的来源原样写回去是安全的、也是唯一正确的。
-      resumePromptAuto: previous.resumePromptAuto,
-      question: previous.question,
-      questionOptions: previous.questionOptions,
-      questionItems: previous.questionItems,
-      updatedAt,
-    })
-    .where(and(
-      eq(tasks.id, taskId),
-      eq(tasks.activeTurnToken, previous.clearedTurnToken),
-      eq(tasks.resumePromptGeneration, previous.resumePromptGeneration),
-      eq(tasks.activeDirectionToken, previous.clearedDirectionToken),
-      eq(tasks.activeDirectionVersion, previous.clearedDirectionVersion),
-      isNull(tasks.completeConfirmedAt),
-      isNull(tasks.resumePrompt),
-      isNull(tasks.question),
-      isNull(tasks.questionOptions),
-      isNull(tasks.questionItems),
-    ))
-    .returning({ id: tasks.id });
-  if (!restored.length) {
-    // 旧回合可能已按停止/自然结束完成结算：setTaskStatus 会把 token 置 null，但清掉的
-    // 方向字段仍全是 null。只在任务已离开运行态且这些字段仍未被新写入时恢复，避免
-    // 覆盖停止窗口里新产生的提问、检查点或完成票。
-    restored = await db
-      .update(tasks)
-      .set({
-        completeConfirmedAt: previous.completeConfirmedAt,
-        resumePrompt: previous.resumePrompt,
-        resumePromptAuto: previous.resumePromptAuto, // 同上：来源跟着文字一起回来（F2）
-        question: previous.question,
-        questionOptions: previous.questionOptions,
-        questionItems: previous.questionItems,
-        updatedAt,
-      })
-      .where(and(
-        eq(tasks.id, taskId),
-        isNull(tasks.activeTurnToken),
-        eq(tasks.resumePromptGeneration, previous.resumePromptGeneration),
-        ne(tasks.status, "running"),
-        ne(tasks.status, "queued"),
-        isNull(tasks.completeConfirmedAt),
-        isNull(tasks.resumePrompt),
-        isNull(tasks.question),
-        isNull(tasks.questionOptions),
-        isNull(tasks.questionItems),
-      ))
-      .returning({ id: tasks.id });
-  }
-  if (!restored.length) return false;
-  if (previous.memoryConfirmed) confirmDone(taskId);
-  if (previous.question) {
-    try {
-      bus.publish({
-        type: "task.question",
-        taskId,
-        updatedAt,
-        question: previous.question,
-        questionOptions: previous.questionOptions
-          ? JSON.parse(previous.questionOptions) as string[]
-          : null,
-        questionItems: previous.questionItems
-          ? JSON.parse(previous.questionItems) as QuestionItem[]
-          : null,
-      });
-    } catch (error) {
-      console.warn(`[ash] 引导会话已恢复提问，但实时通知失败 ${taskId}:`, error);
-    }
-  }
-  if (previous.resumePrompt) await announceResumePrompt(taskId);
-  return true;
-}
-
-async function restorePreviousCompletionState(
-  taskId: string,
-  previous: PreviousDirectionState,
-): Promise<void> {
-  if (!previous.completeConfirmedAt && !previous.memoryConfirmed) return;
-  const restored = await db
-    .update(tasks)
-    .set({ completeConfirmedAt: previous.completeConfirmedAt, updatedAt: now() })
-    .where(and(
-      eq(tasks.id, taskId),
-      isNull(tasks.activeTurnToken),
-      isNull(tasks.completeConfirmedAt),
-      previous.resumePrompt === null
-        ? isNull(tasks.resumePrompt)
-        : eq(tasks.resumePrompt, previous.resumePrompt),
-      previous.question === null ? isNull(tasks.question) : eq(tasks.question, previous.question),
-      previous.questionOptions === null
-        ? isNull(tasks.questionOptions)
-        : eq(tasks.questionOptions, previous.questionOptions),
-      previous.questionItems === null
-        ? isNull(tasks.questionItems)
-        : eq(tasks.questionItems, previous.questionItems),
-    ))
-    .returning({ id: tasks.id });
-  if (restored.length && previous.memoryConfirmed) confirmDone(taskId);
-}
 
 async function recoverUndeliveredSteer(taskId: string): Promise<void> {
   // 新回合没抢到时，旧回合已经按 steering 跳过结算。只有确认此刻既无 handle、也无
@@ -445,6 +156,7 @@ async function deliverNativeSteer(
             message.taskId,
             previous!.activeTurnToken!,
             previous!.clearedDirectionToken,
+            previous!,
           )
         : undefined,
     });

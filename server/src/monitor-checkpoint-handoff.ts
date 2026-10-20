@@ -13,13 +13,15 @@
 // 字回来 —— 那一格可能被另一段文字占用过又腾空（见 task-resume-prompt.ts 文件头的两版历史与
 // 第 2 轮审查 F2 的双向实测）。代次（`resume_prompt_generation`）是归属本体：代次变了，这张凭
 // 证就此过期，那段文字不许再填回去。
-import { and, eq, exists, isNull, ne, sql, type SQL } from "drizzle-orm";
+import { and, eq, exists, isNull, ne, sql } from "drizzle-orm";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
-import { announceResumePrompt } from "./task-resume-prompt.js";
+import {
+  announceResumePrompt, resumePromptHeldBy, resumePromptRestorePatch, resumePromptSlotFor,
+  resumePromptTakePatch, type StoredResumePromptReceipt,
+} from "./task-resume-prompt.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { now } from "./util.js";
 
 /**
  * 哨兵把任务叫醒的那一轮，要把 agent 当初**留给自己**的那段续跑交代一起喂回去。
@@ -46,30 +48,16 @@ import { now } from "./util.js";
  * `restore`，没有 `consume` —— 调用方必须在未送达的每条出路上回填（见两处投递点）。
  */
 /**
- * 账本上那张凭证。跟 `ResumePromptReceipt` 的区别只有一处：**两列可能是 NULL**（存量账本行是
- * 这一轮之前写下的，那时还没有这两列）。NULL 只能退化成旧口径：只填回空槽、不碰来源列 —— 不许
- * 拿 `false`/`0` 冒充事实，那就是第 1 轮 F2 把系统等待洗成主动暂停的那个写法。
+ * 账本上那张凭证就是 `StoredResumePromptReceipt`（存量行的来源与代次可能是 NULL）。**归属条件
+ * 和要写的列一律由 task-resume-prompt.ts 给**，这里不再自己拼一份：那两份口径只要有一处漂移，
+ * 漂的就是「这段话是谁的」—— 第 3 轮审查前，这边把「代次未知」解释成了「对任意新代次都有效」。
  */
-type LedgerReceipt = { text: string; auto: boolean | null; generation: number | null };
-
 const ledgerReceipt = (m: {
   checkpointTaken: string | null; checkpointAuto?: boolean | null; checkpointGeneration?: number | null;
-}): LedgerReceipt => ({
+}): StoredResumePromptReceipt => ({
   text: m.checkpointTaken ?? "",
   auto: m.checkpointAuto ?? null,
   generation: m.checkpointGeneration ?? null,
-});
-
-/** 填回那一段时的归属条件与要写的列（口径跟 task-resume-prompt.ts 共用，存量行退化见上）。 */
-const slotFor = (r: LedgerReceipt): SQL[] =>
-  r.generation === null
-    ? [isNull(tasks.resumePrompt)]
-    : [isNull(tasks.resumePrompt), eq(tasks.resumePromptGeneration, r.generation)];
-
-const restorePatch = (r: LedgerReceipt) => ({
-  resumePrompt: r.text,
-  ...(r.auto === null ? {} : { resumePromptAuto: r.auto }),
-  updatedAt: now(),
 });
 
 export async function monitorWakeCheckpoint(
@@ -105,8 +93,9 @@ export async function monitorWakeCheckpoint(
     .where(eq(tasks.id, message.taskId))).at(0);
   const checkpoint = slot?.resumePrompt;
   if (!checkpoint || !slot) return null;
-  // 这一刻读到的三样就是凭证本体:文字、来源、占用代次。下面的转手把它们一起落到账本上。
-  const receipt: LedgerReceipt = { text: checkpoint, auto: slot.auto, generation: slot.generation };
+  // 这一刻读到的三样就是凭证本体:文字、来源、占用代次。下面的转手把它们一起落到账本上,
+  // **而且转手的两条语句都按这三样认人**(见下面的 heldByUs)。
+  const receipt = { text: checkpoint, auto: slot.auto, generation: slot.generation };
   // ── 取走:**两条语句互为对方的生效条件** ──────────────────────────────────────
   //
   // 一笔交代的转手是「任务行上腾空」+「这条消息认下这笔账」两半,少任何一半都是错的:
@@ -118,8 +107,13 @@ export async function monitorWakeCheckpoint(
   // 各的,要互相引用:① 认账的前提是「任务行上那一段还在」,② 腾空的前提是「账已经认在这条
   // 消息上」。①先跑,于是只有两种结局——都中(真的转手成功),或者都不中(库里一个字没动)。
   // 不对称的回滚因此不在提交之后发生,而是**压根提交不出来**,下面那条只是个会出声的兜底。
+  // **判据是「文字 + 代次」而不是只有文字**（第 3 轮审查 F1-B）：同一段话被另一路取走、又被
+  // 原样写成一段新的主动暂停时，只比文字照样命中 —— 于是清掉的是**新**的那一段，账本上记的
+  // 却是**旧**的来源和代次（实测 `F2_SAME_TEXT_ABA_WRONG_RECEIPT`，随后回填被代次挡住、账本
+  // 也清了，新暂停两边都没了）。条件由存储层给，两条语句共用同一份。
+  const heldByUs = resumePromptHeldBy(receipt);
   const checkpointStillHere = exists(db.select({ one: sql`1` }).from(tasks)
-    .where(and(eq(tasks.id, message.taskId), eq(tasks.resumePrompt, checkpoint))));
+    .where(and(eq(tasks.id, message.taskId), ...heldByUs)));
   const ledgerOurs = exists(db.select({ one: sql`1` }).from(scheduledMessages)
     .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.checkpointTaken, checkpoint))));
   const [logged, taken] = await db.batch([
@@ -133,8 +127,8 @@ export async function monitorWakeCheckpoint(
       ))
       .returning({ id: scheduledMessages.id }),
     // 来源列不碰、代次也不动:取走不是一次新的占用,这段文字的来源在凭证里跟着走。
-    db.update(tasks).set({ resumePrompt: null, updatedAt: now() })
-      .where(and(eq(tasks.id, message.taskId), eq(tasks.resumePrompt, checkpoint), ledgerOurs))
+    db.update(tasks).set(resumePromptTakePatch())
+      .where(and(eq(tasks.id, message.taskId), ...heldByUs, ledgerOurs))
       .returning({ id: tasks.id }),
   ]);
   if (!logged.length || !taken.length) {
@@ -167,7 +161,7 @@ const withCheckpoint = (text: string, checkpoint: string) =>
 /** 不该发生的单侧命中(见上)。退回那一侧,并且一定要出声。 */
 async function unwindHalfTake(
   message: { id: string; taskId: string },
-  receipt: LedgerReceipt,
+  receipt: StoredResumePromptReceipt,
   loggedOnly: boolean,
 ): Promise<void> {
   const checkpoint = receipt.text;
@@ -183,8 +177,8 @@ async function unwindHalfTake(
     } else {
       // 凭证原样退回（来源 + 代次条件一起带上，见文件里 `slotFor`）：这一格可能已经被另一段
       // 文字占用过又腾空，只认「空着」会把这段文字填到别人的来源上（第 2 轮审查 F2）。
-      await db.update(tasks).set(restorePatch(receipt))
-        .where(and(eq(tasks.id, message.taskId), ...slotFor(receipt)));
+      await db.update(tasks).set(resumePromptRestorePatch(receipt))
+        .where(and(eq(tasks.id, message.taskId), ...resumePromptSlotFor(receipt)));
     }
   } catch (error) {
     console.error(`[ash] 单侧命中退回也失败 ${message.taskId}:`, error);
@@ -206,7 +200,7 @@ async function unwindHalfTake(
  */
 async function restoreCheckpoint(
   message: { id: string; taskId: string },
-  receipt: LedgerReceipt,
+  receipt: StoredResumePromptReceipt,
 ): Promise<void> {
   const checkpoint = receipt.text;
   // **归属判据只有一条,两条语句共用它**:这笔账此刻还记在这条消息上、而且没有别人正在送它。
@@ -230,10 +224,10 @@ async function restoreCheckpoint(
       // **归属有两半**:账本还记在这条消息上(下面那个 EXISTS),而且这一格还是同一次占用
       // (`slotFor` 里的代次)。只认前一半的话,期间被另一段文字占用过又腾空时,这段文字会连
       // 来源一起错位(第 2 轮审查 F2)。
-      db.update(tasks).set(restorePatch(receipt))
+      db.update(tasks).set(resumePromptRestorePatch(receipt))
         .where(and(
           eq(tasks.id, message.taskId),
-          ...slotFor(receipt),
+          ...resumePromptSlotFor(receipt),
           exists(db.select({ one: sql`1` }).from(scheduledMessages).where(ledgerOurs)),
         ))
         .returning({ id: tasks.id }),
@@ -266,4 +260,3 @@ async function restoreCheckpoint(
     ).catch(() => {});
   }
 }
-

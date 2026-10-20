@@ -40,10 +40,9 @@ import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
-import { announceResumePrompt } from "./task-resume-prompt.js";
+import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { readableRunPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { now } from "./util.js";
 
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
 // 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
@@ -262,26 +261,23 @@ api.post("/tasks/:id/pause", async (c) => {
       ? "检查点的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试"
       : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），检查点已拒绝写入" }, 409);
   }
-  const updated = await db
-    .update(tasks)
-    // `resumePromptAuto: false` = 这段是 agent 自己写的,系统不许替它清掉（见
-    // task-resume-prompt.ts 文件头：这一列只在 resume_prompt 非空时有意义,所以同写同清）。
-    .set({ resumePrompt: rp, resumePromptAuto: false, updatedAt: now() })
-    .where(and(
-      eq(tasks.id, taskId),
-      eq(tasks.status, "running"),
-      r.activeTurnToken === null
-        ? isNull(tasks.activeTurnToken)
-        : eq(tasks.activeTurnToken, r.activeTurnToken),
-      r.activeDirectionToken === null
-        ? isNull(tasks.activeDirectionToken)
-        : eq(tasks.activeDirectionToken, r.activeDirectionToken),
-    ))
-    .returning({ id: tasks.id });
-  if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
-  // 检查点一挂上，前端的派审/预约/修复入口就该跟着灰掉；SSE 没有带 resume_prompt 的
-  // 局部事件，只能推整行（见 task-resume-prompt.ts 顶部）。
-  await announceResumePrompt(taskId);
+  // `auto: false` = 这段是 agent 自己写的,系统不许替它清掉（见 task-resume-prompt.ts 文件头）。
+  //
+  // **这一笔必须走存储层的 writer**,不许在这里自己 `db.update`:那样代次不会 +1,而代次正是
+  // 「这一格现在是第几次占用」这个归属判据的本体。实测过的现场:写下一段新的主动暂停后代次仍
+  // 是 1,于是一个在途的旧凭证合法地填回来、占住位置,真正新的那一段再也退不回去（第 3 轮审查
+  // F1-A `F2_HTTP_PAUSE_GENERATION_BYPASS`）。身份 CAS 跟这一笔写在同一条语句里（见那一层）；
+  // 整行广播也在那一层，前端的派审/预约/修复入口靠这一列灰掉。
+  const occupied = await occupyResumePrompt(taskId, rp, false, [
+    eq(tasks.status, "running"),
+    r.activeTurnToken === null
+      ? isNull(tasks.activeTurnToken)
+      : eq(tasks.activeTurnToken, r.activeTurnToken),
+    r.activeDirectionToken === null
+      ? isNull(tasks.activeDirectionToken)
+      : eq(tasks.activeDirectionToken, r.activeDirectionToken),
+  ]);
+  if (!occupied) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
   return c.json({ paused: true, willSettleAs: "paused" });
 });
 

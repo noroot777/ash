@@ -6,10 +6,12 @@
 // （`monitor-complete-gate-harness.ts`），由那份脚本按顺序驱动 —— 合在一个文件里是 706 行，
 // 超过单文件 700 行的约定（全局约定；`monitor-checkpoint-edges.ts` 也是这条理由）。
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import {
   clearAutoCheckpoint, complete, confirmedAt, db, insertMonitorRow, makeTask, monitorStatus,
-  monitorWakeCheckpoint, now, restoreResumePrompt, scheduledMessages, sessionWithTurn,
+  monitorWakeCheckpoint, now, pause, restoreResumePrompt, scheduledMessages, sessionWithTurn,
   settleTaskStatus, startMonitor, stopMonitor, takeResumePrompt, tasks, taskRow, transcriptOf,
   uniq, writeResumePrompt,
 } from "./monitor-complete-gate-harness.js";
@@ -275,6 +277,160 @@ export async function checkpointGroups(): Promise<void> {
     assert.equal(settled.status, "paused", "半写之后仍然不许落 done");
     assert.equal(await monitorStatus(monitorId), "running");
     assert.ok((await taskRow(taskId)).resumePrompt, "这一次（库已经正常）要留下续跑指令");
+  }
+
+  // ── ㉗c F1-A：**真人暂停走的是生产路由**，它也得记一次占用 ──────────────────────────
+  //
+  // 代次只有在所有 writer 都维护它时才是归属凭证。这条路由原来自己 `db.update` 直写两列、
+  // 不动代次，于是「数值相等」压根证明不了「还是同一次占用」：实测写下一段新的主动暂停后代次
+  // 仍是 1，一个在途的旧凭证于是合法地填回去、占住位置，真正新的那一段再也退不回来
+  // （`F2_HTTP_PAUSE_GENERATION_BYPASS`）。
+  {
+    const taskId = await makeTask();
+    const older = "旧的自动等待";
+    assert.ok(await writeResumePrompt(taskId, older, true));
+    const stale = await takeResumePrompt(taskId, older);
+    assert.ok(stale, "台子前提：旧那段已被取走，一张凭证在途");
+
+    const newer = "新的主动暂停：继续取报表";
+    assert.equal((await pause(taskId, newer)).status, 200, "生产路由本身照常放行");
+    const after = await taskRow(taskId);
+    assert.equal(after.resumePrompt, newer);
+    assert.equal(after.resumePromptAuto, false, "路由写的是「agent 自己写的」");
+    assert.equal(
+      after.resumePromptGeneration, stale.generation + 1,
+      "这是一次新占用 ⇒ 代次必须 +1（绕过记账的直写就是 F1-A 走穿的那一处）",
+    );
+    // 新的这一段也被取走（它那一轮起跑没完成），于是两张凭证同时在途、槽空着。
+    const fresh = await takeResumePrompt(taskId, newer);
+    assert.ok(fresh);
+    assert.equal(
+      await restoreResumePrompt(taskId, stale), false,
+      "旧凭证不许占住这一格 —— 它那次占用早就过去了",
+    );
+    assert.ok(await restoreResumePrompt(taskId, fresh), "真正新的那一段退得回来");
+    const back = await taskRow(taskId);
+    assert.equal(back.resumePrompt, newer, "最后留在任务行上的必须是新的那一段");
+    assert.equal(back.resumePromptAuto, false, "来源也得是它自己的");
+  }
+
+  // ── ㉗d F1-A 的结构锁：**写这三列的入口只有存储层那一个** ───────────────────────────
+  //
+  // 上面那条只钉得住 HTTP 这一个入口，而同形的直写当时还有一处（断线补录的 `pause_task`）。
+  // 「以后记得走 writer」是靠自觉，所以这里按**语句**扫一遍：`server/src` 里每一条
+  // `update(tasks)` 的 `.set({…})` 都不许出现这三列的键名 —— 要写就从 task-resume-prompt.ts
+  // 取 patch（那边的 `occupyPatch` 保证代次跟着动）。
+  {
+    const srcDir = new URL("../src/", import.meta.url).pathname;
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) walk(join(dir, entry.name));
+        else if (entry.name.endsWith(".ts")) files.push(join(dir, entry.name));
+      }
+    };
+    walk(srcDir);
+    assert.ok(files.length > 50, `台子前提：扫到的源文件太少（${files.length}），路径多半不对`);
+    const offenders: string[] = [];
+    for (const file of files) {
+      if (file.endsWith("task-resume-prompt.ts")) continue; // 存储层本身
+      const src = readFileSync(file, "utf8");
+      for (const m of src.matchAll(/update\(\s*tasks\s*\)/g)) {
+        const setAt = src.indexOf(".set(", m.index);
+        if (setAt < 0) continue;
+        let depth = 0;
+        let end = setAt + 4;
+        for (; end < src.length; end += 1) {
+          if (src[end] === "(") depth += 1;
+          else if (src[end] === ")") { depth -= 1; if (depth === 0) break; }
+        }
+        const block = src.slice(setAt, end + 1);
+        if (/\bresumePrompt(Auto|Generation)?\s*:/.test(block)) {
+          offenders.push(`${file.slice(srcDir.length)}：${block.replace(/\s+/g, " ").slice(0, 90)}`);
+        }
+      }
+    }
+    assert.deepEqual(
+      offenders, [],
+      "这三列只许由 task-resume-prompt.ts 写（用它导出的 patch/条件助手）——"
+      + `自己 \`.set\` 就会漏掉代次，而那正是 F1-A：\n${offenders.join("\n")}`,
+    );
+  }
+
+  // ── ㉗e F1-B：转手的归属判据是「文字 + 代次」，只比文字会把新占用记成旧凭证 ──────────
+  //
+  // 实测现场（`F2_SAME_TEXT_ABA_WRONG_RECEIPT`）：读到那一段之后、转手那一批跑到之前，另一路
+  // 把它取走、又原样写成一段**新的主动暂停**（文字一模一样、代次变了）。只比文字的话转手照样
+  // 命中，于是清掉的是新那一段、账本记的却是旧的来源和代次；随后投递失败回填被代次挡住、账本
+  // 也清了 —— 新暂停两边都没了。
+  {
+    const taskId = await makeTask();
+    const text = "继续：同一句交代";
+    assert.ok(await writeResumePrompt(taskId, text, true), "台子前提：先挂一段系统等待");
+    const monitorId = await insertMonitorRow(taskId, { status: "exited" });
+    const msgId = uniq("msg-aba");
+    await db.insert(scheduledMessages).values({
+      id: msgId, taskId, text: "【哨兵】RESULT_READY", attachments: "[]",
+      origin: `monitor:${monitorId}`, mode: "queued", status: "pending",
+      sendAt: now(), createdAt: now(),
+    });
+    const msgRow = async () =>
+      (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, msgId))).at(0)!;
+
+    // 窗口切在生产代码的两步之间：读完那一格、还没跑转手那一批。`db.batch` 只拦这一次。
+    const realBatch = db.batch.bind(db);
+    let interleaved = false;
+    (db as { batch: unknown }).batch = async (stmts: never) => {
+      (db as { batch: unknown }).batch = realBatch;
+      assert.ok(await takeResumePrompt(taskId, text), "ABA 第一步：另一路把它取走");
+      assert.ok(await writeResumePrompt(taskId, text, false), "ABA 第二步：同样的文字、新的一次占用");
+      interleaved = true;
+      return realBatch(stmts as never);
+    };
+    const carried = await monitorWakeCheckpoint(await msgRow());
+    (db as { batch: unknown }).batch = realBatch;
+    assert.equal(interleaved, true, "台子前提：真的切在那两步之间");
+    assert.equal(carried, null, "那一格已经换了一次占用 ⇒ 这一趟一个字都不许转手");
+    const after = await taskRow(taskId);
+    assert.equal(after.resumePrompt, text, "新占用的那一段必须还在任务行上（上一版会把它清掉）");
+    assert.equal(after.resumePromptAuto, false, "它的来源也不许被洗成旧那一段的");
+    assert.equal((await msgRow()).checkpointTaken, null, "账本一个字都没认（没有半状态）");
+  }
+
+  // ── ㉗f F1 同类：**存量账本行**（代次 NULL）只对升级后还没被占用过的那一格有效 ─────────
+  //
+  // 「代次未知」不等于「对任意新代次都有效」：那种行写下时这一列还不存在，任务行的代次只能是
+  // 迁移缺省 0。按「只认空槽」处理的话，升级后明明有过新占用，旧账本仍能把它那一段填回去，
+  // 来源还会借用新占用留下的值。
+  for (const occupiedSinceUpgrade of [false, true]) {
+    const taskId = await makeTask();
+    const monitorId = await insertMonitorRow(taskId, { status: "exited" });
+    const legacy = "继续：旧库那条消息接走的交代";
+    const msgId = uniq("msg-legacy");
+    await db.insert(scheduledMessages).values({
+      id: msgId, taskId, text: "【哨兵】旧账本", attachments: "[]",
+      origin: `monitor:${monitorId}`, mode: "queued", status: "pending",
+      sendAt: now(), createdAt: now(),
+    });
+    // 老账本的样子：只记了文字，来源和代次这两列压根没有。
+    await db.update(scheduledMessages)
+      .set({ checkpointTaken: legacy, checkpointAuto: null, checkpointGeneration: null })
+      .where(eq(scheduledMessages.id, msgId));
+    if (occupiedSinceUpgrade) {
+      assert.ok(await writeResumePrompt(taskId, "升级后另挂的一段", false));
+      assert.ok(await takeResumePrompt(taskId, "升级后另挂的一段"), "它也被取走 ⇒ 槽又空了");
+    }
+    const replay = await monitorWakeCheckpoint(
+      (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, msgId))).at(0)!,
+    );
+    assert.ok(replay, "重投认得出账本上那一段");
+    await replay.restore();
+    assert.equal(
+      (await taskRow(taskId)).resumePrompt, occupiedSinceUpgrade ? null : legacy,
+      occupiedSinceUpgrade
+        ? "升级后有过新占用 ⇒ 这张旧凭证就此过期（未知代次不是通配符）"
+        : "没人占用过 ⇒ 旧账本那一段照样填得回去（兼容不许反过来丢掉它）",
+    );
   }
 
   // ── ㉑ R2-2 的另一半：agent 自己 `pause_task` 写的那段，谁也不许抹 ────────────────
