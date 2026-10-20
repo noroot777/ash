@@ -70,7 +70,7 @@ import { makeEventFilter } from "./auth/event-filter.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 import { isHostCliIsolated } from "./auth/mode.js";
-import { clearDefaultFor, dispatchBlockReason } from "./auth/dispatch-gate.js";
+import { defaultClearScope, dispatchBlockReason } from "./auth/dispatch-gate.js";
 
 export const api = new Hono();
 // 认证 / 首启向导 / 用户与项目成员。挂在最前:它们里有几条是**闸外**的公开端点
@@ -307,10 +307,15 @@ api.post("/agents", async (c) => {
     configOverrides: JSON.stringify(configOverrides),
     isDefault: !!b.isDefault,
   };
-  // 「同一类型至多一个默认」在多人模式下是**每人各自**的一个默认 —— 清别人的标记
-  // 既越权又会把他的设置改掉。
-  if (row.isDefault) await clearDefaultFor(row.type, row.ownerUserId);
-  await db.insert(agents).values(row);
+  // 清旧默认与落新行**同批提交**:两次并发的「设为默认」若在清与设之间互相插队,同一
+  // 类型会留下两个默认(解析时取到哪个全看行序)。清的范围见 defaultClearScope。
+  const clearDefault = row.isDefault
+    ? db.update(agents).set({ isDefault: false })
+      .where(await defaultClearScope(row.type, row.ownerUserId))
+    : null;
+  const insert = db.insert(agents).values(row);
+  if (clearDefault) await db.batch([clearDefault, insert]);
+  else await insert;
   return c.json(toAgent(row as typeof agents.$inferSelect), 201);
 });
 
@@ -348,11 +353,15 @@ api.patch("/agents/:id", async (c) => {
     if (overrideErrors.length) return c.json({ error: overrideErrors.join("；") }, 400);
     patch.configOverrides = JSON.stringify(configOverrides);
   }
-  if (b.isDefault === true) {
-    await clearDefaultFor(existing.type, existing.ownerUserId);
-    patch.isDefault = true;
-  }
-  await db.update(agents).set(patch).where(eq(agents.id, aid));
+  // 同上:清旧默认与设新默认打进同一批。
+  const clearDefault = b.isDefault === true
+    ? db.update(agents).set({ isDefault: false })
+      .where(await defaultClearScope(existing.type, existing.ownerUserId))
+    : null;
+  if (clearDefault) patch.isDefault = true;
+  const write = db.update(agents).set(patch).where(eq(agents.id, aid));
+  if (clearDefault) await db.batch([clearDefault, write]);
+  else await write;
   const updated = (await db.select().from(agents).where(eq(agents.id, aid))).at(0)!;
   return c.json(toAgent(updated));
 });

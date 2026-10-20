@@ -12,7 +12,7 @@
 // 大家在用的那份,没挂供应商恰恰是常态,这里必须整条穿透 —— 判据统一问
 // `isHostCliIsolated()`,不是 `isMultiUser()`。自用模式下同样一律不成立,行为与本
 // 功能上线前逐字节一致。
-import { eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, type SQL } from "drizzle-orm";
 import type { AgentType, ExecutorDowngradeItem, ExecutorSlot } from "@ash/shared";
 import { MULTI_USER_CLI_BLOCKED, MULTI_USER_NO_PROVIDER_HINT } from "@ash/shared/multiuser";
 import { db } from "../db/index.js";
@@ -69,22 +69,31 @@ export async function dispatchRejection(input: {
 }
 
 /**
- * 「同一类型至多一个默认执行器」在多人模式下是**每人各自**的一个默认。
- * 清标记时按归属收窄,否则设自己的默认会把别人的设置一起改掉。
+ * 「同一类型至多一个默认执行器」—— 清标记要打在**同类型 + 同归属**这一格里。
+ *
+ * 两维各有一条踩过的坑,少哪一维都不行:
+ *  · **类型**:漏掉它,自用模式下去 codex 那一栏点设为默认,会把 claude 的默认一并抹掉
+ *    (界面上只剩一句「默认 · 内置本地执行器」,看着像不同智能体之间在抢,其实是这条
+ *    UPDATE 自己越界清的,确定性复现)。回归见 `test-executor-default-scope.ts`。
+ *  · **归属**:多人模式下是每人各自的一个默认,不按人收窄就等于改掉别人的设置。
+ *    自用模式没有「别人的默认」可言,按类型整清 —— 与本功能上线前逐字节一致。
+ *
+ * 给的是**条件**不是造好的语句:drizzle 的语句构造器本身是 thenable,从 async 函数里
+ * 返回它会被 await 当场执行掉,拿不到能塞进 `db.batch` 的那个东西。
  */
+export async function defaultClearScope(type: string, ownerUserId: string | null): Promise<SQL> {
+  const sameType = eq(agents.type, type);
+  if (!(await isMultiUser())) return sameType;
+  const sameOwner = ownerUserId === null
+    ? isNull(agents.ownerUserId)
+    : eq(agents.ownerUserId, ownerUserId);
+  return and(sameType, sameOwner)!;
+}
+
+/** 单独清标记(没有「设上新默认」要跟它同批时用)。 */
 export async function clearDefaultFor(type: string, ownerUserId: string | null): Promise<void> {
-  const rows = await db
-    .select({ id: agents.id, ownerUserId: agents.ownerUserId })
-    .from(agents)
-    .where(eq(agents.type, type));
-  for (const row of rows) {
-    if (row.ownerUserId !== ownerUserId) continue;
-    await db.update(agents).set({ isDefault: false }).where(eq(agents.id, row.id));
-  }
-  // 自用模式(归属全是 null)时上面那层判断退化成「全清」,与原行为一致。
-  if (ownerUserId === null) {
-    await db.update(agents).set({ isDefault: false }).where(isNull(agents.ownerUserId));
-  }
+  await db.update(agents).set({ isDefault: false })
+    .where(await defaultClearScope(type, ownerUserId));
 }
 
 /**

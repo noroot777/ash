@@ -76,7 +76,7 @@
     "test:archive-cleanup": "tsx scripts/test-archive-cleanup.ts && tsx scripts/test-archive-preview-guard.ts",
     "test:workspace-cleanup": "tsx scripts/test-workspace-cleanup.ts",
     "test:workspace-dirty": "tsx scripts/test-workspace-dirty.ts",
-    "test:executor-resolution": "tsx scripts/test-executor-resolution.ts",
+    "test:executor-resolution": "tsx scripts/test-executor-resolution.ts && tsx scripts/test-executor-default-scope.ts",
     "test:ssh-retire": "tsx scripts/test-ssh-profile-retire.ts",
     "test:answer-routing": "tsx scripts/test-answer-routing.ts",
     "test:question-history": "tsx scripts/test-question-history.ts",
