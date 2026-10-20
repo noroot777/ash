@@ -56,6 +56,7 @@
 //  · 取走：`resumePromptTakePatch` + `resumePromptHeldBy`（谁还握着这一次占用）
 //  · 退回：`restoreResumePrompt` / `resumePromptSlotFor` + `resumePromptRestorePatch`
 //  · 作废：`resumePromptVoidPatch`（这段话已经消费掉/不该再回来，在途的旧凭证一律过期）
+//  · 快照：`resumePromptUnchangedSince`（复合更新里问「这一格还是我读到的那一次占用吗」）
 //
 // 这条不靠自觉：回归里有一道结构锁遍历 `server/src` 的每一条 `db.update(tasks)`，谁再在
 // 自己那边直写这三列就红（`monitor-complete-checkpoint-groups.ts` ㉗c）。
@@ -156,6 +157,30 @@ export const resumePromptTakePatch = () => ({ resumePrompt: null, updatedAt: now
 export const resumePromptHeldBy = (receipt: { text: string; generation: number }): SQL[] => [
   eq(tasks.resumePrompt, receipt.text),
   eq(tasks.resumePromptGeneration, receipt.generation),
+];
+
+/**
+ * **一份快照读到的那一格，到落笔时还是同一次占用吗** —— 复合更新（改派清场）的 CAS 用。
+ *
+ * 跟 `resumePromptHeldBy` 差一处：它还接受「快照读到的本来就是空槽」。要害是**两种情况都连
+ * 代次一起比**，因为「读到的文字」压根证明不了「读到的是同一次占用」：
+ *
+ *  · 读到有文字：只比文字的话，这中间那一段被取走、又被原样写成一段**新的主动暂停**（文字
+ *    一模一样、代次已经变了），清场照样命中 —— 于是它带走的是 SELECT 读到的**旧来源**，配上
+ *    作废推出来的**新代次**。这份错配的凭证随后能合法回填：真人刚写下的主动暂停被洗成系统
+ *    等待，接着就被 `clearAutoCheckpoint` 删掉（第 4 轮审查 F1-A 实测
+ *    `F1_A_SAME_TEXT_NEW_OCCUPANCY_LOST`）。
+ *  · 读到是空槽：代次变了说明这中间有人占用过（可能又被取走，所以看着仍然是空的），那就不是
+ *    我读到的那一格。宁可让调用方重新取一次快照，也不能替一次陌生的占用签发凭证。
+ *
+ * **来源不用另比**：代次相同 ⇒ 还是同一次占用 ⇒ 来源必然是同一个（新占用一律 `+1`，而退回
+ * 只落在「空槽 + 同代次」上，带的又是那一次占用自己的来源）。
+ */
+export const resumePromptUnchangedSince = (
+  snapshot: { text: string | null; generation: number },
+): SQL[] => [
+  snapshot.text === null ? isNull(tasks.resumePrompt) : eq(tasks.resumePrompt, snapshot.text),
+  eq(tasks.resumePromptGeneration, snapshot.generation),
 ];
 
 /**

@@ -19,7 +19,7 @@ const root = mkdtempSync(join(tmpdir(), "ash-task-steer-rollback-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 
-const [{ db, ensureSchema }, schema, runs, steer] = await Promise.all([
+const [{ db, dbClient, ensureSchema }, schema, runs, steer] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/runs.js"),
@@ -32,19 +32,24 @@ const at = new Date().toISOString();
 await db.insert(projects).values({ id: "p", name: "steer-rollback", repoPath: root, createdAt: at });
 
 const taskRow = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+const msgRow = async (id: string) =>
+  (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, `m-${id}`))).at(0)!;
 
 /**
  * 一条**正在跑、而且三样都挂着**的任务：那段检查点、一个待答的问题、一张已经确认的完成票。
  * 引导要先把这三样收起来；送不出去时它们必须回来。
  */
-async function seed(id: string, opts: { generation: number } = { generation: 3 }): Promise<void> {
+async function seed(
+  id: string,
+  opts: { generation?: number; auto?: boolean; resumePrompt?: string } = {},
+): Promise<void> {
   await db.insert(tasks).values({
     id, projectId: "p", title: id, body: "test", mode: "single", status: "running",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", createdAt: at, updatedAt: at,
     activeTurnToken: `${id}-turn`, activeDirectionToken: `${id}-dir`, activeDirectionVersion: 1,
     completeConfirmedAt: "2026-10-20T08:00:00.000Z",
-    resumePrompt: "主动暂停：保留待续工作", resumePromptAuto: false,
-    resumePromptGeneration: opts.generation,
+    resumePrompt: opts.resumePrompt ?? "主动暂停：保留待续工作", resumePromptAuto: opts.auto ?? false,
+    resumePromptGeneration: opts.generation ?? 3,
     question: "保留旧问题", questionOptions: JSON.stringify(["甲", "乙"]),
   });
   await db.insert(scheduledMessages).values({
@@ -215,10 +220,72 @@ try {
     runs.releaseTurn(id);
   }
 
+  // ── ⑥ 清场**取快照和落笔之间**，真人写下一段一模一样的主动暂停 ───────────────────────
+  //
+  // 第 4 轮审查 F1-A 实测（`F1_A_SAME_TEXT_NEW_OCCUPANCY_LOST`）：那一格原来挂着系统替它写下
+  // 的等待，清场的 SELECT 读到了「这段文字 + 系统来源 + 第 1 次占用」；UPDATE 还没发出去，真人
+  // 带着有效回合和方向身份走 `/pause` 原样写下同一句话（来源改成主动、代次 +1）。清场只比文字
+  // 的话照样命中，于是快照带走的是**旧来源配新代次**：发送失败回滚把这段文字填回去、来源写成
+  // 「系统等待」，紧接着完成闸放行时 `clearAutoCheckpoint` 就把真人刚留下的主动暂停删了。
+  //
+  // 修法是「清场也得证明自己拿到的是同一次占用」，所以这里正确的结果是**整笔改派被拒**：一个
+  // 字都别动，让这一趟重来。
+  {
+    const id = "same-text-new-occupancy";
+    const text = "继续：同一句交代";
+    await seed(id, { generation: 1, auto: true, resumePrompt: text });
+    assert.equal(runs.claimTurn(id, "single"), true);
+    const { clearAutoCheckpoint, occupyResumePrompt } = await import("../src/task-resume-prompt.js");
+
+    // 窗口切在生产代码的两步之间：清场读完那一格、那一笔 UPDATE 还没发出去。按语句形状认它，
+    // 而且只拦一次 —— 注入自己也要走这个 client，所以先还原再写。
+    const realExecute = dbClient.execute.bind(dbClient);
+    let injected = false;
+    (dbClient as { execute: unknown }).execute = async (stmt: never) => {
+      const statement: string = typeof stmt === "string" ? stmt : (stmt as { sql: string }).sql;
+      if (!injected && /update "tasks" set/i.test(statement) && /resume_prompt_generation/.test(statement)) {
+        injected = true;
+        (dbClient as { execute: unknown }).execute = realExecute;
+        // 生产 `/pause` 走的就是这个 writer 和这组身份条件（task-run-routes.ts）。
+        assert.ok(
+          await occupyResumePrompt(id, text, false, [
+            eq(tasks.status, "running"),
+            eq(tasks.activeTurnToken, `${id}-turn`),
+            eq(tasks.activeDirectionToken, `${id}-dir`),
+          ]),
+          "台子前提：这一刻真人的暂停是合法的（回合、方向身份都还对得上）",
+        );
+      }
+      return realExecute(stmt);
+    };
+    const handle = { kill: () => {}, steer: async () => { throw new Error("注入：不该走到这一步"); } };
+    runs.trackRun(id, handle);
+    runs.bindNativeSteer(id, handle, { agentType: "codex", record: () => {} });
+    const result = await steer.steerQueuedMessage(`m-${id}`);
+    (dbClient as { execute: unknown }).execute = realExecute;
+    assert.equal(injected, true, "台子前提：真的切在清场的读与写之间");
+    assert.equal(result.ok, false, "那一格已经换了一次占用 ⇒ 这一趟改派必须被拒，而不是带走错配的凭证");
+
+    const after = await taskRow(id);
+    assert.equal(after.resumePrompt, text, "真人刚写下的那一段必须还在");
+    assert.equal(after.resumePromptAuto, false, "而且还是**主动**暂停 —— 上一版会把它洗成系统等待");
+    assert.equal(after.resumePromptGeneration, 2, "代次停在真人那一次占用上（清场一行都没改）");
+    assert.equal(after.question, "保留旧问题", "清场落空 ⇒ 提问和完成票一个字都没动");
+    assert.equal(after.completeConfirmedAt, "2026-10-20T08:00:00.000Z");
+    assert.equal(
+      await clearAutoCheckpoint(id), false,
+      "来源没被洗掉 ⇒ 完成闸放行时这段主动暂停不会被当成系统等待删掉（F1-A 的实际伤害）",
+    );
+    assert.equal((await taskRow(id)).resumePrompt, text, "删不掉，原文还在");
+    assert.equal((await msgRow(id)).status, "pending", "改派被拒 ⇒ 那条消息退回队列继续排着，不是悄悄丢掉");
+    runs.untrackRun(id, handle);
+    runs.releaseTurn(id);
+  }
+
   console.log(
     "✓ 原生引导发送失败后的回滚：ACK 后清场不挡自己的回滚（检查点/提问/完成票三样都回来）"
     + " / 期间真有新占用时只有检查点过期 / 在路上的旧交代填不回新方向 / 作废迟到那一段之后照样回得去"
-    + " / Codex 那条只有一次清场的链同样回得去",
+    + " / Codex 那条只有一次清场的链同样回得去 / 取快照和落笔之间换了占用时整笔改派被拒（真人的主动暂停不被洗成系统等待）",
   );
 } finally {
   await releaseTmpDb();

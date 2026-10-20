@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import {
   clearAutoCheckpoint, complete, confirmedAt, db, insertMonitorRow, makeTask, monitorStatus,
@@ -321,7 +322,10 @@ export async function checkpointGroups(): Promise<void> {
   // `update(tasks)` 的 `.set({…})` 都不许出现这三列的键名 —— 要写就从 task-resume-prompt.ts
   // 取 patch（那边的 `occupyPatch` 保证代次跟着动）。
   {
-    const srcDir = new URL("../src/", import.meta.url).pathname;
+    // 取本机路径只能走 `fileURLToPath`：`URL.pathname` 是百分号编码的 URL 路径，仓库目录
+    // 名里有空格时它给的是 `%20`，`readdirSync` 对着这个名字报 ENOENT（Windows 的盘符
+    // pathname 还多一个前导斜杠）—— 结构锁于是在那种检出上「悄悄通不了」（第 4 轮审查 N2）。
+    const srcDir = fileURLToPath(new URL("../src/", import.meta.url));
     const files: string[] = [];
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {

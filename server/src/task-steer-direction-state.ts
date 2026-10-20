@@ -19,7 +19,12 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { confirmDone, takeConfirmed } from "./runs.js";
-import { announceResumePrompt, resumePromptVoidPatch, restoreResumePrompt } from "./task-resume-prompt.js";
+import {
+  announceResumePrompt,
+  restoreResumePrompt,
+  resumePromptUnchangedSince,
+  resumePromptVoidPatch,
+} from "./task-resume-prompt.js";
 import { id, now } from "./util.js";
 
 export interface PreviousDirectionState {
@@ -116,9 +121,15 @@ export async function clearPreviousDirectionState(
         current.completeConfirmedAt === null
           ? isNull(tasks.completeConfirmedAt)
           : eq(tasks.completeConfirmedAt, current.completeConfirmedAt),
-        current.resumePrompt === null
-          ? isNull(tasks.resumePrompt)
-          : eq(tasks.resumePrompt, current.resumePrompt),
+        // **连代次一起比**：只比文字的话，这中间那一段被取走、又被原样写成一段新的主动暂停
+        // （文字一样、代次已变）时清场照样命中，于是带走的是 SELECT 读到的旧来源配上作废推出
+        // 的新代次 —— 那份错配的凭证随后合法回填，把真人刚写下的主动暂停洗成系统等待、被
+        // `clearAutoCheckpoint` 删掉（第 4 轮审查 F1-A）。代次变了就一行都不匹配，整笔清场
+        // 退回下面那句「请重试引导」：宁可让这一趟改派重来，也不能替一次陌生的占用签发凭证。
+        ...resumePromptUnchangedSince({
+          text: current.resumePrompt,
+          generation: current.resumePromptGeneration,
+        }),
         current.question === null ? isNull(tasks.question) : eq(tasks.question, current.question),
         current.questionOptions === null
           ? isNull(tasks.questionOptions)

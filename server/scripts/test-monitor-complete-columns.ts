@@ -10,7 +10,8 @@
 //    凭证，闸看不见它，任务照旧落 done 把唯一的结果通知吃掉（第 1 轮审查 F1）。
 //
 // 第 2 轮审查又加了四列，失败形态同样安静，而且更难归因（第 3 轮又在账本口令上加了一条唯一
-// 索引，一并在这里验：它引用 ALTER 补的列，建早了老库就没有）：
+// 索引，一并在这里验：它引用 ALTER 补的列，建早了老库就没有；第 4 轮再补一条 —— 升级前就已经
+// 有重复的库也必须拿到那条唯一性，而不是打一行警告退回先查后写）：
 //  · `scheduled_messages.handoff_token` 缺 ⇒ 「这条结果送过了吗」没有原子答案。重试一旦启用
 //    （F3），同一条结束通知每重试一次就多叫醒一轮 —— 而本轮正是靠它去重的（N1）。
 //  · `scheduled_messages.checkpoint_auto/-_generation` 缺 ⇒ 账本只记得那段文字、记不住它是谁
@@ -158,6 +159,58 @@ try {
   await insertDup("dup-a");
   await assert.rejects(() => insertDup("dup-b"), /unique/i, "升级后的老库上，同一笔交接也不许排出两条消息");
 
+  // ── **升级之前就已经有重复**：索引照样要装上去（第 4 轮审查 N1）───────────────────────
+  //
+  // 这条索引建不起来只有一种原因 —— 上一版那个竞态真的发生过，库里已经有两条消息认着同一笔
+  // 交接。上一版在这里只打一行警告就继续启动，于是去重退回「先查后写」，重复叫醒照旧（实测
+  // `N1_OLD_DUPLICATES_DISABLE_NEW_DEDUP`：旧重复在场时索引数为 0，两次并发投递又排出两条）。
+  // 而那恰恰是最需要这条保证的库。现在装之前先把重复那几条的**身份**收归最早那一条，**正文
+  // 一个字都不动**（那是用户看得见的待发内容，不替他删）。
+  //
+  // 现场就按真实形状造：`handoff_token` 这一列是上一版 ALTER 补的（所以老库有列），索引是这一
+  // 版才加的（所以老库没有）—— 把索引撤掉再写两条已 sent 的重复行，就是那种库。
+  await dbClient.execute("DROP INDEX scheduled_messages_handoff_token");
+  const dupToken = "m-old:2026-10-03T00:00:00.000Z";
+  const insertSent = (id: string, text: string, token: string) => dbClient.execute(
+    "INSERT INTO scheduled_messages (id, task_id, text, send_at, created_at, status, sent_at, handoff_token)"
+    + ` VALUES ('${id}', 't-old', '${text}', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z',`
+    + ` 'sent', '2026-10-03T00:00:01.000Z', '${token}')`,
+  );
+  await insertSent("s-dup-1", "【哨兵结束】旧库里重复的那一条（甲）", dupToken);
+  await insertSent("s-dup-2", "【哨兵结束】旧库里重复的那一条（乙）", dupToken);
+  await ensureSchema();
+
+  const indexCount = (await dbClient.execute(
+    "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='index' AND name='scheduled_messages_handoff_token'",
+  )).rows[0]!.n;
+  assert.equal(
+    Number(indexCount), 1,
+    "升级前就有重复的库，升级后也必须拿到这条唯一索引 —— 只打一行警告不算修（第 4 轮审查 N1）",
+  );
+  const dupRows = (await dbClient.execute(
+    "SELECT id, text, handoff_token FROM scheduled_messages WHERE id IN ('s-dup-1','s-dup-2') ORDER BY id",
+  )).rows;
+  assert.deepEqual(
+    dupRows.map((r) => [r.id, r.text, r.handoff_token]),
+    [
+      ["s-dup-1", "【哨兵结束】旧库里重复的那一条（甲）", dupToken],
+      ["s-dup-2", "【哨兵结束】旧库里重复的那一条（乙）", null],
+    ],
+    "两条正文一个字都不许动；这笔交接的身份只留给最早那一条（它就是真正送达的那一次）",
+  );
+  const kept = (await dbClient.execute(
+    "SELECT id, handoff_token FROM scheduled_messages WHERE id IN ('s-old','dup-a') ORDER BY id",
+  )).rows;
+  assert.deepEqual(
+    kept.map((r) => [r.id, r.handoff_token]),
+    [["dup-a", "m-old:2026-10-02T00:00:03.000Z"], ["s-old", "m-old:2026-10-02T00:00:01.000Z"]],
+    "归并只碰真的撞在一起的那几条，本来不重复的身份一个都不许动",
+  );
+  await assert.rejects(
+    () => insertSent("s-dup-3", "【哨兵结束】升级之后再来一条", dupToken), /unique/i,
+    "装上之后，同一笔交接在这台老库上也只能有一条消息（并发入队由库拦，不靠先查后写）",
+  );
+
   // 幂等：再跑一遍 ensureSchema 不许把刚写进去的值重置掉（宽容 ALTER 失败后不许退回重建）。
   await ensureSchema();
   assert.equal(await readAuto(), true, "第二次 ensureSchema 不许把已经写上的值冲掉");
@@ -166,4 +219,8 @@ try {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
 }
-console.log("✓ 存量库升级：完成闸这几列（来源、占用代次、放弃凭证、交接凭证、转手口令、账本来源）补得上、缺省值不改写既有事实（代次是 0 不是 NULL、账本缺列退化成空而不是报错）、补上之后写得进去且幂等");
+console.log(
+  "✓ 存量库升级：完成闸这几列（来源、占用代次、放弃凭证、交接凭证、转手口令、账本来源）补得上、"
+    + "缺省值不改写既有事实（代次是 0 不是 NULL、账本缺列退化成空而不是报错）、补上之后写得进去且幂等；"
+    + "升级前就有重复交接的库也拿到唯一索引（身份归给最早那一条、正文一个字不动）",
+);
