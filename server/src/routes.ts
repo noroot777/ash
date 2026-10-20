@@ -18,6 +18,7 @@ import { projects, groups, agents, llmProviders } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
+import { previousResidualLockPublic } from "./singleton.js";
 import { mountQueueRoutes } from "./queues.js";
 import { detectKnownClis, detectLocalAgents, registrationBlockReason } from "./detect.js";
 import { cliHostEnv } from "./executors/cli-env.js";
@@ -93,7 +94,21 @@ mountPageAnnotationRoutes(api);
 // `pid` 是给 scripts/restart.mjs 认人用的:它重启完要确认「端口上应答的是我刚起的
 // 那个进程」,而不是「端口上有人应答」。少了这个字段,旧进程没被杀掉时(容器里没有
 // lsof/ss 就会这样)整条重启会安静地失败成一句「✓ 已就绪」。
-api.get("/health", (c) => c.json({ ok: true, ts: now(), pid: process.pid }));
+//
+// `previousResidualLock` 是「启动时发现上一轮的锁还在」这件事(启动时算一次,常量
+// 开销)。放在 health 上是因为**人只在重启那一刻关心它**:scripts/restart.mjs 确认就绪
+// 时顺手把它打出来,用户不必再去 /tmp 日志 + 系统日志里拼「上次为什么停」。
+//
+// 它走的是 `publicExitSummary` 白名单投影,**不是**内部那条全量记录:这个端点免登录
+// (见 auth/middleware.ts 的放行名单,多人模式同样放行),而全量记录的 `note` 在 PID
+// 被复用时会带上那个进程的完整命令行 —— 第 1 轮审查实测过未登录请求能从这里读到
+// 命令行里的密钥。要多公开一个字段,去 publicExitSummary 里显式加。
+api.get("/health", (c) => c.json({
+  ok: true,
+  ts: now(),
+  pid: process.pid,
+  previousResidualLock: previousResidualLockPublic(),
+}));
 
 // 「现在重启会打断谁」。scripts/restart.mjs 的安全闸靠它决定拦不拦 —— 只数
 // running/queued 的个数已经不对了：agent 输出走文件之后，多数单飞任务重启不会断。
