@@ -17,6 +17,7 @@ import { refreshProviders } from "../lib/modelCatalog.ts";
 import { clearProviderModelCache } from "./ProviderModelInput.tsx";
 import { ProviderPinnedModels } from "./ProviderPinnedModels.tsx";
 import { ProviderContext1mModels } from "./ProviderContext1mModels.tsx";
+import { useProviderCatalog, type ProviderCatalog } from "./useProviderCatalog.ts";
 
 type ProviderDraft = {
   name: string;
@@ -40,8 +41,8 @@ function ProviderModelField({
   knownModels,
   context1mModels,
   protocolConversionEnabled,
+  catalog,
   onModelChange,
-  onModelsChange,
 }: {
   providerId?: string;
   providerName: string;
@@ -52,25 +53,15 @@ function ProviderModelField({
   knownModels: string[];
   context1mModels: string[];
   protocolConversionEnabled: boolean;
+  /** 整个表单共用的那份模型目录。 */
+  catalog: ProviderCatalog;
   onModelChange: (model: string) => void;
-  onModelsChange: (models: string[]) => void;
 }) {
-  const [models, setModels] = useState<string[]>([]);
-  const [probing, setProbing] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [probeError, setProbeError] = useState("");
   const [testResult, setTestResult] = useState("");
   const [testError, setTestError] = useState("");
-  const probeRequest = useRef(0);
   const testRequest = useRef(0);
-
-  useEffect(() => {
-    probeRequest.current += 1;
-    setModels([]);
-    setProbing(false);
-    setProbeError("");
-    onModelsChange([]);
-  }, [apiKey, baseUrl, protocol, providerId]);
+  const { models, probing, error: probeError, probe } = catalog;
 
   useEffect(() => {
     testRequest.current += 1;
@@ -79,33 +70,11 @@ function ProviderModelField({
     setTestError("");
   }, [apiKey, baseUrl, model, protocol, protocolConversionEnabled, providerId]);
 
-  const probe = async () => {
-    if (!baseUrl.trim()) {
-      setProbeError("先填写 base URL");
-      return;
-    }
-    const request = ++probeRequest.current;
-    setProbing(true);
-    setProbeError("");
-    try {
-      const result = await api.probeModels({
-        protocol,
-        baseUrl: baseUrl.trim(),
-        apiKey: apiKey.trim() || undefined,
-        id: providerId,
-      });
-      if (probeRequest.current !== request) return;
-      setModels(result.models);
-      onModelsChange(result.models);
-      if (!result.models.length) setProbeError("供应商未返回模型");
-      else if (!model) onModelChange(result.models[0]);
-    } catch (error) {
-      if (probeRequest.current === request) {
-        setProbeError(error instanceof Error ? error.message : "模型探测失败");
-      }
-    } finally {
-      if (probeRequest.current === request) setProbing(false);
-    }
+  // 从**这颗**按钮探测才顺手补上默认模型：下面那两处探的是固定/1M 列表，
+  // 在那里按一下就被改掉默认模型，用户不会预期。
+  const probeForDefault = async () => {
+    const probedModels = await probe();
+    if (probedModels?.length && !model) onModelChange(probedModels[0]);
   };
 
   const testModel = async () => {
@@ -180,7 +149,7 @@ function ProviderModelField({
           onClear={model ? () => onModelChange("") : undefined}
           clearLabel="不设置默认模型"
         />
-        <Button disabled={probing} onClick={() => void probe()}>
+        <Button disabled={probing} onClick={() => void probeForDefault()}>
           <ArrowsClockwise size={12} className={probing ? "provider-spin" : ""} />
           {probing ? "探测中…" : "探测模型"}
         </Button>
@@ -228,8 +197,15 @@ function ProviderForm({
     pinnedModels: provider?.pinnedModels ?? [],
     context1mModels: provider?.context1mModels ?? [],
   });
-  const [probedModels, setProbedModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  // 表单里三处要选模型（默认 / 固定 / 1M），共用这一份目录：在任意一处按
+  // 「探测模型」，三处同时就绪，不必挨个再点一遍。
+  const catalog = useProviderCatalog({
+    providerId: provider?.id,
+    protocol: draft.protocol,
+    baseUrl: draft.baseUrl,
+    apiKey: draft.apiKey,
+  });
 
   const set = <K extends keyof ProviderDraft>(key: K, value: ProviderDraft[K]) => {
     setDraft((current) => ({
@@ -334,8 +310,8 @@ function ProviderForm({
           knownModels={draft.pinnedModels}
           context1mModels={draft.context1mModels}
           protocolConversionEnabled={draft.protocolConversionEnabled}
+          catalog={catalog}
           onModelChange={(model) => set("model", model)}
-          onModelsChange={setProbedModels}
         />
         <ProviderPinnedModels
           providerId={provider?.id}
@@ -343,6 +319,7 @@ function ProviderForm({
           baseUrl={draft.baseUrl}
           apiKey={draft.apiKey}
           protocolConversionEnabled={draft.protocolConversionEnabled}
+          catalog={catalog}
           mode={draft.modelListMode}
           pinned={draft.pinnedModels}
           onModeChange={(mode) => set("modelListMode", mode)}
@@ -351,12 +328,9 @@ function ProviderForm({
         {draft.protocol === "anthropic" && (
           <ProviderContext1mModels
             providerId={provider?.id}
-            protocol={draft.protocol}
-            baseUrl={draft.baseUrl}
-            apiKey={draft.apiKey}
             defaultModel={draft.model}
             pinnedModels={draft.pinnedModels}
-            availableModels={probedModels}
+            catalog={catalog}
             selectedModels={draft.context1mModels}
             onChange={(models) => set("context1mModels", models)}
           />

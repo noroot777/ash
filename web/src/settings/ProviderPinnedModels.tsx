@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LlmProtocol, ProviderModelListMode } from "@ash/shared";
 import { ArrowsClockwise, Play, X } from "@phosphor-icons/react";
 import { Button, PillTabs } from "../components/ui.tsx";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { api } from "../lib/api.ts";
+import type { ProviderCatalog } from "./useProviderCatalog.ts";
 
 /**
  * 「对话框里弹出这家供应商的模型时，列什么」的设置。
@@ -24,6 +25,7 @@ export function ProviderPinnedModels({
   baseUrl,
   apiKey,
   protocolConversionEnabled,
+  catalog,
   mode,
   pinned,
   onModeChange,
@@ -34,56 +36,21 @@ export function ProviderPinnedModels({
   baseUrl: string;
   apiKey: string;
   protocolConversionEnabled: boolean;
+  /** 整个表单共用的那份模型目录：上面探过了，这里就是探过的。 */
+  catalog: ProviderCatalog;
   mode: ProviderModelListMode;
   pinned: string[];
   onModeChange: (mode: ProviderModelListMode) => void;
   onPinnedChange: (models: string[]) => void;
 }) {
-  const [catalog, setCatalog] = useState<string[]>([]);
-  const [probing, setProbing] = useState(false);
-  const [probeError, setProbeError] = useState("");
-  const [probed, setProbed] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, { ok: boolean; text: string }>>({});
-  const probeRequest = useRef(0);
+  const { models: probedModels, probed, probing, error: probeError, probe } = catalog;
 
-  // 连的还是不是同一家供应商变了，之前探到的目录和测试结论就都不作数了。
+  // 连的还是不是同一家供应商变了，之前的测试结论就不作数了（目录由 hook 自己作废）。
   useEffect(() => {
-    probeRequest.current += 1;
-    setCatalog([]);
-    setProbed(false);
-    setProbing(false);
-    setProbeError("");
     setResults({});
   }, [apiKey, baseUrl, protocol, providerId]);
-
-  const probe = async () => {
-    if (!baseUrl.trim()) {
-      setProbeError("先填写 Base URL");
-      return;
-    }
-    const request = ++probeRequest.current;
-    setProbing(true);
-    setProbeError("");
-    try {
-      const result = await api.probeModels({
-        protocol,
-        baseUrl: baseUrl.trim(),
-        apiKey: apiKey.trim() || undefined,
-        id: providerId,
-      });
-      if (probeRequest.current !== request) return;
-      setCatalog(result.models);
-      setProbed(true);
-      if (!result.models.length) setProbeError("供应商未返回模型");
-    } catch (error) {
-      if (probeRequest.current === request) {
-        setProbeError(error instanceof Error ? error.message : "模型探测失败");
-      }
-    } finally {
-      if (probeRequest.current === request) setProbing(false);
-    }
-  };
 
   const testModel = async (model: string) => {
     setTesting(model);
@@ -112,10 +79,10 @@ export function ProviderPinnedModels({
 
   // 探测过就在目录里挑（已钉的不再重复列），没探过（或探失败）也能在筛选框里
   // 直接手打模型名当自由值加进去。
-  const candidates = useMemo<DropdownOption[]>(() => catalog
+  const candidates = useMemo<DropdownOption[]>(() => probedModels
     .filter((model) => !pinned.includes(model))
     .map((model) => ({ value: model, label: model, mono: true, group: "探测到的模型" })),
-  [catalog, pinned]);
+  [probedModels, pinned]);
 
   const add = (model: string) => {
     const value = model.trim();
@@ -158,7 +125,7 @@ export function ProviderPinnedModels({
               label="添加固定模型"
               value=""
               options={candidates}
-              status={probing ? "loading" : probeError ? "failed" : catalog.length ? "ready" : "idle"}
+              status={probing ? "loading" : probeError ? "failed" : probedModels.length ? "ready" : "idle"}
               note={probeError ? `探测失败：${probeError}（仍可直接填写模型名）` : ""}
               allowCustom
               mono
@@ -176,9 +143,9 @@ export function ProviderPinnedModels({
             </Button>
           </div>
 
-          {(catalog.length > 0 || probeError) && (
+          {(probedModels.length > 0 || probeError) && (
             <small className={probeError ? "is-error" : ""}>
-              {probeError || `已返回 ${catalog.length} 个完整模型名`}
+              {probeError || `可从探测到的 ${probedModels.length} 个模型里挑`}
             </small>
           )}
 

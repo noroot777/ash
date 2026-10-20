@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import type { LlmProtocol } from "@ash/shared";
+import { useMemo, useState } from "react";
 import { ArrowsClockwise, CaretDown } from "@phosphor-icons/react";
 import { Button, Checkbox } from "../components/ui.tsx";
-import { api } from "../lib/api.ts";
+import type { ProviderCatalog } from "./useProviderCatalog.ts";
 
 function uniqueModels(models: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -15,70 +14,34 @@ function uniqueModels(models: readonly string[]): string[] {
 
 export function ProviderContext1mModels({
   providerId,
-  protocol,
-  baseUrl,
-  apiKey,
   defaultModel,
   pinnedModels,
-  availableModels,
+  catalog,
   selectedModels,
   onChange,
 }: {
   providerId?: string;
-  protocol: LlmProtocol;
-  baseUrl: string;
-  apiKey: string;
   defaultModel: string;
   pinnedModels: string[];
-  availableModels: string[];
+  /** 整个表单共用的那份模型目录：上面探过了，这里就有的挑。 */
+  catalog: ProviderCatalog;
   selectedModels: string[];
   onChange: (models: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [catalog, setCatalog] = useState<string[]>([]);
   const [filter, setFilter] = useState("");
-  const [probing, setProbing] = useState(false);
-  const [probeError, setProbeError] = useState("");
   const panelId = `provider-${providerId ?? "new"}-context-1m`;
-
-  useEffect(() => {
-    setCatalog([]);
-    setProbeError("");
-    setProbing(false);
-  }, [apiKey, baseUrl, protocol, providerId]);
+  const { models: probedModels, probing, error: probeError, probe } = catalog;
 
   const models = useMemo(
-    () => uniqueModels([defaultModel, ...pinnedModels, ...availableModels, ...catalog, ...selectedModels]),
-    [availableModels, catalog, defaultModel, pinnedModels, selectedModels],
+    () => uniqueModels([defaultModel, ...pinnedModels, ...probedModels, ...selectedModels]),
+    [probedModels, defaultModel, pinnedModels, selectedModels],
   );
   const visibleModels = useMemo(() => {
     const keyword = filter.trim().toLowerCase();
     return keyword ? models.filter((model) => model.toLowerCase().includes(keyword)) : models;
   }, [filter, models]);
   const selected = useMemo(() => new Set(selectedModels), [selectedModels]);
-
-  const probe = async () => {
-    if (!baseUrl.trim()) {
-      setProbeError("先填写 Base URL");
-      return;
-    }
-    setProbing(true);
-    setProbeError("");
-    try {
-      const result = await api.probeModels({
-        protocol,
-        baseUrl: baseUrl.trim(),
-        apiKey: apiKey.trim() || undefined,
-        id: providerId,
-      });
-      setCatalog(result.models);
-      if (!result.models.length) setProbeError("供应商未返回模型");
-    } catch (error) {
-      setProbeError(error instanceof Error ? error.message : "模型探测失败");
-    } finally {
-      setProbing(false);
-    }
-  };
 
   const toggle = (model: string, checked: boolean) => {
     onChange(checked
