@@ -33,6 +33,8 @@ const monitor = (id, taskId, over = {}) => ({
   events: 3,
   exitCode: null,
   startedAt: "2026-10-09T02:00:00.000Z",
+  // 起点作数（服务端的可信性那一列）。缺了它卡片只会说「挂上的时刻不确定」。
+  startedAtExact: true,
   expiresAt: "2026-10-09T04:00:00.000Z",
   endedAt: null,
   endedReason: null,

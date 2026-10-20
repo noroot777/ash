@@ -8,6 +8,7 @@ import {
 } from "@ash/shared/monitor";
 import { readSource } from "../../scripts/read-source.mjs";
 import type { InspectorDescriptor } from "../src/inspector/types.ts";
+import { formatInstant } from "../src/task-detail/utils.ts";
 import { MonitorInspector } from "../src/monitors/MonitorInspector.tsx";
 import { MonitorWaitCard } from "../src/monitors/MonitorWaitCard.tsx";
 import { withMonitorTab } from "../src/monitors/useMonitorInspector.tsx";
@@ -29,6 +30,10 @@ const base: TaskMonitor = {
   events: 3,
   exitCode: null,
   startedAt: "2026-08-25T10:00:00.000Z",
+  // 这个起点**作数**（服务端的 `monitorStartTrusted` 说了算）。它和 `startedAt` 是两列
+  // 而不是一列的理由见下面那一节：`startedAt` 在历史投影上会退化成占位值，而退化值照样是
+  // 个合法日期，前端自己分不出来。
+  startedAtExact: true,
   expiresAt: "2026-08-25T12:00:00.000Z",
   // 时长独立于起点：起点不确定时对外只有这一列（卡片改说「总共盯 X（起点不确定）」）。
   timeoutMs: 7_200_000,
@@ -120,8 +125,8 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
 
 // ── 时长的说法不能进位成「X 分 60 秒」 ──────────────────────────────────────
 //
-// 起点不确定时卡片改说「总共盯 X」。先拆分钟再对余数四舍五入的话，余数落在 59.5~60 秒
-// 之间就会写出「1 分 60 秒」（第 6 轮审查不拦项）。
+// 拿不到到期时刻时这两处都改说「总共盯 X」。先拆分钟再对余数四舍五入的话，余数落在
+// 59.5~60 秒之间就会写出「1 分 60 秒」（第 6 轮审查不拦项）。
 {
   const spanOnly = renderToStaticMarkup(
     <MonitorInspector
@@ -129,8 +134,20 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
       blockedReason={null}
     />,
   );
-  assert.match(spanOnly, /总共盯 2 分钟（起点不确定）/, "119.6 秒说成「2 分钟」，不是「1 分 60 秒」");
+  assert.match(spanOnly, /总共盯 2 分钟/, "119.6 秒说成「2 分钟」，不是「1 分 60 秒」");
   assert.doesNotMatch(spanOnly, /60 秒/, "任何情况下都不该出现 60 秒");
+
+  // 「（起点不确定）」这句话现在只剩**回复框上那张等待卡**一个去处：那里没有起点那一段，
+  // 所以必须自带这半句。卡片上它是重复的（起点那一段已经认了），于是传
+  // `startSaidSeparately` 关掉——两头要分别钉住，否则「到处都不说」也能让上面那条绿。
+  const waiting = renderToStaticMarkup(
+    <MonitorWaitCard
+      monitors={[{ ...base, expiresAt: null, timeoutMs: 119_600 }]} builtinCount={0}
+      status="paused" resumePrompt={null} reviewArmed={false} onOpenPanel={() => undefined}
+    />,
+  );
+  assert.match(waiting, /总共盯 2 分钟（起点不确定）/, "等待卡只显示这一句，所以要自带「起点不确定」");
+  assert.doesNotMatch(spanOnly, /起点不确定/, "卡片上起点已经单独说过了，不许再带一遍");
 }
 
 // ── 手动表单的时长选项必须真的能兑现 ────────────────────────────────────────
@@ -162,6 +179,69 @@ const panelPending = (monitors: TaskMonitor[]) => renderToStaticMarkup(
   assert.match(html, /停掉哨兵“盯构建日志”/, "在盯的哨兵必须给得出停止入口");
   assert.match(html, /grep --line-buffered ERROR/, "命令原文是判断「它到底在盯什么」的唯一依据");
   assert.match(html, /看它的输出/, "能回看原始输出才分得出「还没吐」和「过滤条件写错了」");
+}
+
+// ── 每张卡都要说得出它是什么时候挂上的 ──────────────────────────────────────
+// 用户 2026-10-20 要的：在这之前整张卡上**一个绝对时刻都没有** —— 还在盯的只说「盯到 X」，
+// 结束的只剩一个状态词。于是对账时第一个要问的那件事反而查不到：**会话里那句「我挂了监听」
+// 对应的是哪一条**（一个任务上并排躺着四五条描述相近的哨兵是常态）。
+//
+// 时刻按本地时区渲染，所以期望值走同一个 formatInstant，不写死字符串。
+{
+  const started = formatInstant(base.startedAt);
+  assert.ok(started, "夹具的起点得是个能渲染的时刻，否则下面几条断言是空的");
+
+  const live = panel([base]);
+  assert.match(live, new RegExp(`起于 ${started}`), "还在盯的那张要说得出起点");
+  assert.match(live, /盯到/, "起点不能把原来的期限挤掉——两个一起看才知道它还剩多久");
+
+  // 结束的那张顺带给出结束时刻：「起于」单给会立刻引出「那它跑了多久、是不是我离开之后
+  // 才停的」，而答案就在同一份 DTO 里。
+  const ended = panel([{ ...base, status: "exited", exitCode: 0, endedAt: "2026-08-25T11:30:00.000Z" }]);
+  assert.match(ended, new RegExp(`起于 ${started}`), "结束的那张同样要说得出起点");
+  assert.match(ended, new RegExp(`结束于 ${formatInstant("2026-08-25T11:30:00.000Z")}`), "结束的那张还要说得出什么时候结束的");
+  assert.match(ended, /命令自己跑完了/, "结局照旧要说");
+
+  // claude 投影那种也一样：它恰恰是最需要对账的那种（事件数和日志都没有，时刻是仅剩的锚点）。
+  assert.match(panel([projected]), new RegExp(`起于 ${started}`), "claude 投影那张也要说得出起点");
+
+  // 还在盯着的不写「结束于」——那一栏此刻还没有答案，编一个出来会被当真。
+  assert.doesNotMatch(live, /结束于/, "还在盯着的没有结束时刻可言");
+}
+
+// ── 起点不作数的时候，一个时刻都不许画 ──────────────────────────────────────
+// 上一版这张卡直接读 `startedAt` 写「起于 X」。那一列在历史投影上是允许退化的（真实起点裁
+// 不出来时退到整轮执行的开始时刻、甚至落库时刻），而退化值仍然是个**合法日期** —— 于是
+// `formatInstant` 的坏日期分支一个字都挡不住，第 1 轮审查在真实 backfill 上抓到的卡片同一
+// 行写着「起于 10/19 10:00 · 总共盯 10 分钟（起点不确定）」：自相矛盾，而用户会信前半句。
+//
+// 这几条钉的就是那一幕：**可信性由服务端那一列说了算，答不出来就只说答不出来。**
+{
+  const vague: TaskMonitor = {
+    ...projected, startedAtExact: false, expiresAt: null, lifetime: "bounded", timeoutMs: 600_000,
+    startedAt: "2026-10-19T02:00:00.000Z", // 退化值：那一整轮执行的开始时刻
+  };
+  const html = panel([vague]);
+  assert.ok(formatInstant(vague.startedAt), "（口径）这个退化值本身是能渲染的——所以挡不住它的只有那一列");
+  assert.doesNotMatch(html, new RegExp(`起于 ${formatInstant(vague.startedAt)}`),
+    "起点不作数时不许把那个退化值画成「起于 X」——它会被当成确定事实");
+  assert.doesNotMatch(html, /起于/, "连「起于」这两个字都不该有：那是一句肯定句");
+  assert.match(html, /挂上的时刻不确定/, "但要如实说这一栏答不出来，不是整段消失");
+  // 同一行上不许把同一件事说两遍：起点那一段已经认了，期限那一段就别再带「（起点不确定）」。
+  assert.match(html, /总共盯 10 分钟/, "盯多久是另一半证据，照常给");
+  assert.doesNotMatch(html, /起点不确定/, "「起点不确定」不该在同一行上说第二遍");
+
+  // 结束之后同样守住：那张卡恰恰是事后对账时唯一的依据。
+  const ended = panel([{ ...vague, status: "exited", exitCode: 0, endedAt: "2026-10-19T02:05:00.000Z" }]);
+  assert.doesNotMatch(ended, /起于/, "结束的那张也不许凭退化值说「起于」");
+  assert.match(ended, /挂上的时刻不确定/, "结束的那张照样如实说");
+  assert.match(ended, new RegExp(`结束于 ${formatInstant("2026-10-19T02:05:00.000Z")}`),
+    "结束时刻是真实落库的，不受起点那一半影响");
+
+  // 反面:持续监听也能有可信起点 —— 所以判据不是「有没有到期时刻」。
+  const forever = panel([{ ...projected, lifetime: "persistent", expiresAt: null, timeoutMs: null }]);
+  assert.match(forever, new RegExp(`起于 ${formatInstant(base.startedAt)}`),
+    "没有到期时刻 ≠ 起点不可信：持续监听的起点照常给");
 }
 
 // ── 两种出身的卡不一样，而且差别必须看得见 ──────────────────────────────────
@@ -393,6 +473,14 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
 {
   const legacy = { ...base, kind: undefined } as unknown as TaskMonitor;
   assert.equal(normalizeMonitorDto(legacy).kind, "ash", "缺 kind 的旧 DTO 要归一成 ash");
+  // `startedAtExact` 的兜底方向和 `kind` **相反**：那一列缺失说明后端还不会算这份可信性，
+  // 于是只能当「答不出来」。补成 true 等于凭空给旧后端发来的占位值盖章。
+  const noExact = { ...base, startedAtExact: undefined } as unknown as TaskMonitor;
+  assert.equal(normalizeMonitorDto(noExact).startedAtExact, false,
+    "缺 startedAtExact 的旧 DTO 只能当「不作数」——这一列的兜底方向和 kind 相反");
+  assert.doesNotMatch(panel([normalizeMonitorDto(noExact)]), /起于/,
+    "归一之后那张卡不画时刻（旧后端给不出这份可信性）");
+  assert.equal(normalizeMonitorDto(base).startedAtExact, true, "带这一列的不许被改写");
   assert.ok(canStopMonitor(normalizeMonitorDto(legacy).kind), "归一之后它又停得掉了");
   assert.equal(normalizeMonitorDto(projected).kind, "claude", "带 kind 的不许被改写");
   assert.match(panel([normalizeMonitorDto(legacy)]), /停掉哨兵/, "归一后的旧 DTO 照常画出停止入口");
@@ -432,4 +520,4 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
     "折叠态连正文都不渲染 —— 这一条钉住上面那句话的前提:正文的断言只能在真点击里做");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一，回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");

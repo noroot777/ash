@@ -28,6 +28,7 @@ import {
   MONITOR_TAIL_MAX_BYTES,
   MONITOR_TAIL_MAX_LINES,
   monitorExactExpiry,
+  monitorStartTrusted,
   type MonitorStatus,
   type TaskMonitor,
 } from "@ash/shared/monitor";
@@ -81,6 +82,16 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
   events: r.events,
   exitCode: r.exitCode,
   startedAt: r.startedAt,
+  /**
+   * 起点可不可信也**现算**，判据跟到期时刻那一半是同一个（`monitorStartTrusted`）。
+   *
+   * 这一列是对外契约的一部分而不是前端自己猜：库里明明记着「这个锚点有没有可重验的误差
+   * 界」，而 `started_at` 是 `NOT NULL` 列、历史投影允许它退化成整轮执行的开始时刻（见
+   * claude-monitor-commit.ts 那条 `?? fileStartedAt ?? now()`）。不把这份可信性带出去，
+   * 读的人手上只剩一个合法日期字符串，只能当它是真的 —— 第 1 轮审查复现到的卡片就是这么
+   * 把「那一轮几点开始的」写成了「这条哨兵几点挂上的」。
+   */
+  startedAtExact: monitorStartTrusted(r),
   // 到期时刻**现算，不读 `expires_at` 那一列**：判据与算式都在 `monitorExactExpiry` 里，
   // 时长和起点各自的证据少一样就只给时长。为什么不能读列见那个函数的注释——`expires_at`
   // 是 NOT NULL 列，期限未知时存的是占位值，而「读列 + 开关判断」漏过两类占位值。

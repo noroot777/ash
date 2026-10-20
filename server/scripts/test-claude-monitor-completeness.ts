@@ -149,6 +149,73 @@ async function main(): Promise<void> {
     }) === null, "①现算那一步同样拒绝没有误差界的起点");
   }
 
+  // ── ①b 同一份可信性要**带到创建时刻那一列**上，不只用来藏到期时刻 ──────────────
+  //
+  // 第 1 轮审查复现到的那张卡：一行里先写「起于 10/19 10:00」、紧接着写「总共盯 10 分钟
+  // （起点不确定）」。两句话都是真的，矛盾在于**只有到期时刻那一半听了 `monitorStartTrusted`**
+  // —— 创建时刻那一半直接读 `startedAt`，而那一列在历史投影里允许退化成「整轮执行的开始
+  // 时刻」甚至 `now()`（`claude-monitor-commit.ts` 的 `?? startLowAt ?? fileStartedAt ?? now()`）。
+  // 退化值照样是个合法日期，前端的坏日期分支抓不到它，于是被当成确定事实画出来。
+  //
+  // 所以不变量是：**同一行的两个时间出口共用一个判据**。拿 `expiresAt === null` 当判据不行
+  // ——持续监听的起点可以是可信的（最后那一例），那时它该照常给出创建时刻。
+  {
+    const f = await fixture("start-exactness");
+    const at = "2026-10-15T01:00:05.000Z";
+    const span = 600_000; // 容差 = max(1s, 600s×1%) = 6s
+    // [这一行的形状, 期望 startedAtExact, 为什么]
+    const shapes: readonly [Record<string, unknown>, boolean, string][] = [
+      [{ startEvidence: null, startAnchorWidthMs: null, sourceLifetime: "unknown", timeoutMs: null },
+        false, "没时间戳的历史：起点退回文件时刻"],
+      [{ startEvidence: "observed", startAnchorWidthMs: null, sourceLifetime: "bounded", timeoutMs: span },
+        false, "旧 observed 缺误差界：结论字符串无法重验"],
+      [{ startEvidence: "observed", startAnchorWidthMs: 2_205, sourceLifetime: "bounded", timeoutMs: span },
+        true, "写库积压 2205ms 取的点：对 10 分钟的哨兵仍在 6s 容差内"],
+      [{ startEvidence: "receipt-window", startAnchorWidthMs: 60_000, sourceLifetime: "bounded", timeoutMs: span },
+        false, "回执区间宽到 60s：裁不出可用起点"],
+      [{ startEvidence: "bogus", startAnchorWidthMs: 0, sourceLifetime: "bounded", timeoutMs: span },
+        false, "档位不在白名单：那是脏数据，不是证据"],
+      [{ startEvidence: "observed", startAnchorWidthMs: 40, sourceLifetime: "bounded", timeoutMs: span },
+        true, "实时取点，误差 40ms（真实量级 22~59ms）"],
+      [{ startEvidence: "receipt-window", startAnchorWidthMs: 40, sourceLifetime: "bounded", timeoutMs: span },
+        true, "历史重放裁出的窄区间"],
+      [{ startEvidence: "observed", startAnchorWidthMs: 0, sourceLifetime: "persistent", timeoutMs: null },
+        true, "持续监听也能有可信起点：expiresAt 为 null 不是判据"],
+    ];
+    // 索引 2 那一例是故意留的：同一个 2205ms 对 10 分钟的哨兵在界内、对 30 秒的就超界
+    // （容差回落到 1s 下限）。所以判据不能是「误差小于某个定值」——它随时长走。
+    for (const [i, [over, want, why]] of shapes.entries()) {
+      const nativeId = `shape${i}`;
+      await db.insert(monitors).values(legacyRow({
+        id: `row-shape-${i}`, taskId: f.taskId, nativeId, cliSessionId: f.cli,
+        description: why, startedAt: at, expiresAt: at, ...over,
+      }) as never);
+      const dto = (await listMonitors(f.taskId)).find((m) => m.nativeId === nativeId);
+      const expect = want;
+      check(dto?.startedAtExact === expect,
+        `①b[${i}] ${why} → 创建时刻${expect ? "作数" : "不作数"}`,
+        `实际 ${String(dto?.startedAtExact)}`);
+      if (i === 2) {
+        check(monitorStartTrusted({ ...(over as never), timeoutMs: 30_000 }) === false,
+          "①b[2] 同一个 2205ms 放到 30 秒的哨兵上就超界——容差随时长走，不是一个定值");
+      }
+      // 结束态不改判据：卡片上「起于」那一段对两态是同一句话，别只在 running 上守住。
+      await db.update(monitors).set({
+        status: "exited", exitCode: 0, endedAt: new Date(Date.parse(at) + 1_000).toISOString(),
+      }).where(eq(monitors.id, `row-shape-${i}`));
+      const ended = (await listMonitors(f.taskId)).find((m) => m.nativeId === nativeId);
+      check(ended?.startedAtExact === expect,
+        `①b[${i}] 结束之后这份可信性一个字不变`, `实际 ${String(ended?.startedAtExact)}`);
+    }
+    // 两个出口共用判据：有精确到期时刻的，创建时刻必然也作数（反之不然——见持续监听那例）。
+    for (const dto of await listMonitors(f.taskId)) {
+      if (dto.expiresAt !== null) {
+        check(dto.startedAtExact,
+          "①b 给得出精确到期时刻却说创建时刻不作数 = 两个出口的判据又分叉了", dto.description);
+      }
+    }
+  }
+
   // ── ② 死活裁决失败：扫描读完了 ≠ 这一轮做完了 ─────────────────────────────────
   //
   // 上一版 clear 排在 reconcileLiveness 之前，而后者抛错只 warn。于是注入一次死活 UPDATE
@@ -389,7 +456,7 @@ async function main(): Promise<void> {
   }
 
   if (failures === 0) {
-    console.log("✓ 内置 Monitor 的「完成」定义与证据可重验：旧 observed 降级且可被窄锚点纠正 / "
+    console.log("✓ 内置 Monitor 的「完成」定义与证据可重验：旧 observed 降级且可被窄锚点纠正（八种起点形状的可信性，运行/结束两态同判，且与到期时刻共用判据）/ "
       + "死活裁决失败留账并自动补上 / 恢复状态变化双向推送且不刷屏 / 两条端点同一轮 / "
       + "持续失败时退避真的在走 / 恢复中的游标不被挤掉 / 孤儿溢出不静默丢弃 / "
       + "回退路径自己失败时责任照样留下并自动补上 均受回归保护");

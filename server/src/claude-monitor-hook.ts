@@ -32,8 +32,20 @@
 //
 // ── 什么时候不挂这个 hook ────────────────────────────────────────────────────
 //
-// 常驻会话（`--input-format stream-json`，团队调度台）不挂：那种模式下 CLI 进程一直
-// 活着，会话循环在，内置 Monitor 真能唤醒它自己——那时它不是坏的，拦它才是错的。
+// 只有**真的跨回合活着**的那一种不挂：团队调度台（`openResident`）一个进程吃多个回合，
+// 会话循环一直在，内置 Monitor 的通知真能注回一个还活着的会话——那时它不是坏的，拦它
+// 才是错的。
+//
+// **判据是「进程活不活得过这一回合」，不是「stdin 是不是 stream-json」。** 这两件事曾经
+// 共用 `ClaudeExecutor` 里同一个 `resident` 布尔，而单飞的 `runSteerable` 也要
+// `--input-format stream-json`（为的是能一行行插话/引导，进程仍在本回合 `result` 之后
+// 收台）—— 于是它顺带把这个 hook 关掉了。`runSteerable` 又是**所有任务的默认路径**
+// （`orchestrator.ts` / `task-run.ts` 都是 `ex.runSteerable ?? ex.run`），净效果是本功能
+// 2026-10-16 上线之后，在真实任务上一次都没有生效过：库里 2026-10-15 ~ 10-20 的 93 条
+// 内置 Monitor 投影一条都没被改道（同期 ash 哨兵只有 2 条，还都是 agent 自己手动调的）。
+// 上线时那次真机验证走的是 `run()`（一次性 `claude -p`），恰好是唯一挂着 hook 的那条路。
+// 现在两个概念分开了（`crossTurn`），而 `test-claude-monitor-hook.ts` 直接按三条真实出
+// 入口断言「谁该带、谁不该带」。
 import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS } from "@ash/shared/monitor";
 import { currentListeningPort } from "./listening-port.js";
 import { startMonitor } from "./monitor-create.js";
@@ -165,8 +177,8 @@ export async function claudeMonitorHookDecision(
 }
 
 /**
- * 拼进 `--settings` 的那一段。`resident` 为真时返回空对象 —— 常驻会话里内置 Monitor
- * 是好用的（见文件头）。
+ * 拼进 `--settings` 的那一段。`crossTurn` 为真时返回空对象 —— 进程真能活过这一回合时
+ * 内置 Monitor 是好用的（见文件头，以及它跟 `--input-format stream-json` 的区别）。
  *
  * 用 `http` 而不是 `command`：见文件头。`headers` 里的 `$VAR` 由 CLI 从进程环境里取，
  * 而 `ASH_TASK_ID` / `ASH_TURN_TOKEN` 正是 ash 起跑时注进去给 MCP 用的那两个
@@ -182,8 +194,8 @@ export async function claudeMonitorHookDecision(
  */
 export const MONITOR_HOOK_PATH = "/api/hooks/claude-monitor";
 
-export function monitorRedirectHook(resident: boolean): Record<string, unknown> {
-  if (resident) return {};
+export function monitorRedirectHook(crossTurn: boolean): Record<string, unknown> {
+  if (crossTurn) return {};
   const port = currentListeningPort() ?? 4317;
   return {
     hooks: {

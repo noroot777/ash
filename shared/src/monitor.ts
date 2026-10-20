@@ -376,9 +376,15 @@ export const monitorStatusCorrectable = (status: string): boolean =>
  * **本来能停、能看日志的那张卡会变成只读且没有输出入口**(第 12/13 轮审查 N5)。前端先更新、
  * 后端还没更新的那段混合部署里只会出这一种 DTO:旧后端只有 ash 哨兵,所以缺省补 "ash" 是
  * 确定的,不是猜。恢复端点那边已有 404 兼容,这份 DTO 的同类兼容就在这里。
+ *
+ * {@link TaskMonitor.startedAtExact} 的缺省方向**相反**:补 `false`。它不是「猜哪种更常见」
+ * —— 旧后端根本答不出起点可不可信,而这一列的全部意义就是「答不出来时不许把那个时刻当成
+ * 创建时刻说出口」。补 `true` 等于在混合部署的那段窗口里把这道闸整个关掉。
  */
-export const normalizeMonitorDto = <T extends { kind?: MonitorKind }>(row: T): T =>
-  (row.kind ? row : { ...row, kind: "ash" as const });
+export const normalizeMonitorDto = <T extends { kind?: MonitorKind; startedAtExact?: boolean }>(row: T): T =>
+  (row.kind && row.startedAtExact !== undefined
+    ? row
+    : { ...row, kind: row.kind ?? ("ash" as const), startedAtExact: row.startedAtExact ?? false });
 
 /** 能不能从 ash 这边停掉它。`claude` 那种的进程在 agent 进程树里，ash 够不着。 */
 export const canStopMonitor = (kind: MonitorKind) => kind === "ash";
@@ -418,6 +424,23 @@ export interface TaskMonitor {
   /** 命令自己退出时的退出码；跨 server 重启接回来的那种拿不到，记 null。 */
   exitCode: number | null;
   startedAt: string;
+  /**
+   * `startedAt` 这个时刻**算不算数**：false = 它只是个占位/边界值，**不许当成「这条哨兵是
+   * 什么时候挂上的」说出口**。
+   *
+   * 为什么非得多这一列：`started_at` 在库里是 `NOT NULL`，而历史投影允许它退化 ——
+   * `anchor.startedAt ?? startedAtLow ?? fileStartedAt ?? now()`（见
+   * server/src/claude-monitor-commit.ts）。退到后两档时那个值仍然是一个**合法日期**，
+   * 所以「能解析成日期就是真实时刻」这条判据一个字都挡不住它：第 1 轮审查用真实 backfill +
+   * 真实 `listMonitors` 复现到的卡片，同一行上先写「起于 10/19 10:00」再写「总共盯 10 分钟
+   * （起点不确定）」—— 前一个只是那一整轮执行开始的时刻，偏差可达该轮此前已经跑掉的时长。
+   *
+   * 判据与到期时刻那一半共用 {@link monitorStartTrusted}（档位 + 可重验的误差界）。
+   *
+   * **不能拿 `expiresAt === null` 代替它**：持续监听和期限未知本来就没有到期时刻，跟起点可不
+   * 可信是两件独立的事 —— 一条 `persistent` 的哨兵完全可以有一个证据齐全的起点。
+   */
+  startedAtExact: boolean;
   /**
    * 到期时刻。**只有「期限有限」且「起点有依据」时才非空**。
    *

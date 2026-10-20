@@ -8,11 +8,16 @@
 //  ③ 代办不了的要说清为什么、以及它自己该怎么挂（ws；没有回合身份；闸拒了）。
 //  ④ 每一条 deny 都要把「这一轮该用 pause_task 收尾」说出口——这是整件事的落点：
 //     哨兵挂上了而回合就这么结束的话，任务照样不会停在那儿等。
-//  ⑤ 常驻会话不挂这个 hook（那种模式下 CLI 进程一直活着，内置 Monitor 真能唤醒自己）。
+//  ⑤ 只有**真跨回合**的那一种不挂（团队调度台：CLI 进程一直活着，内置 Monitor 真能
+//     唤醒自己）。判据不是「stdin 是不是 stream-json」—— 单飞可引导回合也用它，而它的
+//     进程在本回合结束时就收台，所以照挂（⑧b 按三条真实出入口钉住）。
 //  ⑥ **自用模式下也得认出是哪条任务的哪一轮**。这一条是实测抓出来的：那一档的 authGate
 //     一行不拦、直接 set 成 SINGLE_ACTOR，`agentActor` 根本不走，只看 actor 的话 taskId
 //     永远是 null —— 代办会在绝大多数实例上静默退化成「拦住了但没替你挂」。
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { MONITOR_MAX_TIMEOUT_MS } from "@ash/shared/monitor";
 import { db, inTurnCaller, monitors, tasks, stopMonitor, makeTask, teardown, runs,
@@ -169,6 +174,48 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
     "x-ash-turn-token": "$ASH_TURN_TOKEN",
   });
   assert.deepEqual(handler.allowedEnvVars, ["ASH_TASK_ID", "ASH_TURN_TOKEN"]);
+}
+
+// ── ⑧b 装配**接到了真实出入口上**：三条路各自该不该带这个 hook ────────────────
+//
+// 上面那一段只证明了「`monitorRedirectHook(false)` 拼出来的那段 JSON 是对的」。中间还剩
+// 一道缝，而本功能正是掉进了那道缝里：执行器调它时传错了那个布尔，整段配置就从真实命令
+// 行上消失，上面那一段照样全绿。
+//
+// 2026-10-16 上线到 10-20 之间，所有任务都没被改道过（库里 93 条内置 Monitor 投影一条
+// 没拦住）—— 因为 `runSteerable`（单飞的默认路径）拿 `--input-format stream-json` 当成
+// 了「常驻」，顺手关掉了这个 hook。而它的进程照样在本回合 `result` 之后收台，内置
+// Monitor 照样被成批收走，没有任何东西会叫醒任务。
+//
+// 所以这里按**真实出入口**断言，而不是按那个布尔：cwd 给一个不存在的目录，spawn 必然失败，
+// 但 `commandLine` 在 spawn 之前就拼好了 —— 三条路各跑一次，看那段 hook 在不在。
+{
+  const { ClaudeExecutor } = await import("../src/executors/claude.js");
+  const executor = new ClaudeExecutor({ bin: process.execPath });
+  const missing = join(tmpdir(), `ash-hook-wiring-${randomUUID()}`);   // 故意不存在
+
+  const oneShot = executor.run({ cwd: missing, prompt: "ping" });
+  const steerable = executor.runSteerable({ cwd: missing, prompt: "ping" });
+  const residentHandle = executor.openResident({ cwd: missing, prompt: "ping" });
+
+  assert.match(oneShot.commandLine, /PreToolUse/,
+    "一次性回合（run）必须带 Monitor 改道");
+  // 本功能的真实故障点。`--input-format stream-json` 只是让 stdin 能一行行插话，
+  // 进程仍在本回合结束时收台 —— 内置 Monitor 在这条路上同样活不过这一轮。
+  assert.match(steerable.commandLine, /PreToolUse/,
+    "单飞可引导回合（runSteerable，所有任务的默认路径）也必须带 Monitor 改道");
+  assert.match(steerable.commandLine, /--input-format stream-json/,
+    "它确实用着 stream-json 的 stdin —— 那恰恰不是「跨回合」的判据");
+  // 这一条才是真的跨回合：团队调度台一个进程吃多个回合，内置 Monitor 的通知注得回一条
+  // 还活着的会话，拦它才是错的。
+  assert.doesNotMatch(residentHandle.commandLine, /PreToolUse/,
+    "团队调度台（openResident）不挂：那里内置 Monitor 真能唤醒自己");
+
+  for (const handle of [oneShot, steerable, residentHandle]) {
+    try { handle.kill?.(); } catch { /* spawn 本来就失败了 */ }
+    for await (const _event of handle.events) { /* 把 spawn 失败那条 error 消费掉 */ }
+    await (handle as { cleanup?: () => Promise<void> | void }).cleanup?.();
+  }
 }
 
 // ── ⑨ 端点层：自用模式下也要认出回合身份 ─────────────────────────────────────
