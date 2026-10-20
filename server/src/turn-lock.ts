@@ -1,0 +1,378 @@
+// 回合占位锁:「一个任务同一时刻只跑一个回合」这把锁本身,加上几种**不是回合**的预占
+// (SCM 写工作区、调度台收唤醒、残留结算)、起跑冻结标记,以及「等这一轮跑完再给它送下
+// 一条」那条唯一安全的续跑路。
+//
+// 从 runs.ts 搬出来的理由很实:那边是「在飞的 CLI 进程登记册」(句柄、归属三态、停止落位、
+// 引导预约),这边是「谁有权开始下一轮」。两摊的使用方几乎不重叠,挤在一个文件里它已经
+// 742 行、过了 700 行上限(第 3 轮审查 F3)。
+//
+// **老使用方照旧从 `runs.js` import** —— 那边把这里的导出原样转出去(八十多个文件在用)。
+// 依赖是单向的:这个文件不 import runs 的运行时(只借一个类型),所以 `claimReconcileTurn`
+// 那条要问「有没有句柄在册」的,住在 runs.ts 里。
+import type { StopSettle } from "./runs.js";
+
+// ── 单飞锁与「这一轮跑完之后」────────────────────────────────────────────────
+// 一个任务同一时刻只跑一个回合。锁本身原来住在 orchestrator 里，挪到这个中立模块
+// 是因为「等这个任务当前这一轮退干净了再给它起下一轮」需要跟锁同一份真相：
+// **结算钩子是在 run loop 的 try 里调的**（afterSettlement → handleTaskSettlement），
+// 那一刻锁还锁着，此时对同一个任务调 continueTask 会被直接挡回、什么都不发生 ——
+// 就地验证轮正是这种情况。于是由 run loop 释放锁的同一处把队列排空，不靠
+// setTimeout 赌事件循环的先后。
+/**
+ * **一个回合的完整身份,一份对象。**
+ *
+ * 为什么三样挤在一起:令牌、角色、审查代次要么出自同一份回合事实,要么就会被拼成一份
+ * 谁都没授权过的来源。第 10 轮审查 F1 实测过那条拼法 —— 旧审查的令牌 + 「现在是哪次审查」
+ * 的现查结果:旧审查结束、新审查(换了审查者)刚写进库而新令牌还没落下的那一瞬,一条由
+ * **原审查者**提交的哨兵被绑到了**新审查**上(HTTP 200、命令照跑、`delivery.agent` 从
+ * codex 变成 claude),原审查没有任何后续。
+ *
+ * 所以身份只在这里产生、只整份读走(`turnIdentity`):
+ *  · `role`  —— 这一轮是谁(`single` / `reviewer` / 占位身份…),运行时事实;
+ *  · `review`—— 这一轮**为哪一次审查的哪一轮**而起(由派审那一侧在 claim 时交代);
+ *  · `token` —— 这一轮的令牌。由写 `tasks.active_turn_token` 的同一处绑上来
+ *    (`bindTurnToken`),所以「库里的令牌」和「内存里的这一轮」说的是同一件事。
+ */
+export type TurnReview = { run: string; round: number };
+export type TurnIdentity = { role: string; review: TurnReview | null; token: string | null };
+
+/**
+ * **起这一轮的人是谁、为哪一次审查而起** —— 一个对象,不是两个各自可缺的字段。
+ *
+ * 为什么是联合类型:上一版这两样在回合入口上是 `sessionRole?` 和 `reviewSource?` 两个独立
+ * 可选字段,于是「reviewer 但没带审查代次」是一个**类型上完全合法**的组合 —— 首次派审带了,
+ * 自动投递、手动恢复、答复提问三条恢复入口各自漏了,而漏掉的后果不是报错而是**静默降级**:
+ * 续起来的那一轮身份里 `review=null`,来源核验据此判「这次审查已经结束」,还活着的审查者
+ * 从此一条哨兵都挂不上(本轮审查 F2 实测 HTTP 409)。
+ *
+ * 所以 reviewer 这一支**必须**说出 review。确实不代表某一轮审查的 reviewer 回合(duet 研讨、
+ * 辩论)写 `"unbound"`:那是一句**显式**的「这一轮不绑任何审查」,读代码的人和编译器都看得见,
+ * 而且它换来的行为正是对的 —— 那种回合挂不上「本轮审查」的哨兵。
+ */
+export type TurnSource =
+  | { role: "single" }
+  | { role: "reviewer"; review: TurnReview | "unbound" };
+
+/** 回合身份里的角色。缺省(普通续聊)就是 `single`。 */
+export const turnSourceRole = (source?: TurnSource | null): string => source?.role ?? "single";
+
+/** 回合身份里绑定的那次审查。`"unbound"` 与不是 reviewer 都是 null。 */
+export const turnSourceReview = (source?: TurnSource | null): TurnReview | null =>
+  source && source.role === "reviewer" && source.review !== "unbound" ? source.review : null;
+
+const turns = new Map<string, TurnIdentity>();
+const afterTurn = new Map<string, Array<() => void>>();
+
+// 「回合已占位、进程还没起来」时收到的冻结请求。这一段窗口里 `handles` 是空的、
+// `tasks.status` 也可能还停在上一轮的终态 —— 只有回合锁看得见它，所以分组暂停既杀不到
+// 也拦不住（第 1 轮审查 finding 1：pause 已经 200 返回，重试仍把 CLI 拉起来了）。
+// 记在这里，由起跑前的最后一道闸在 spawn 之前消费（turn-freeze.ts）。
+const startFreeze = new Map<string, StopSettle>();
+
+/**
+ * SCM 面板占住工作区时写进 `turns` 的身份。它**不是一个回合**：没有 agent、没有 spawn、
+ * 不进结算。凡是「对正在起跑的回合做点什么」的逻辑都得按这个身份把它排除掉
+ * （目前是 `freezeStartingTurn`）。
+ */
+const WORKSPACE_TURN_ROLE = "scm";
+
+/**
+ * 同样**不是一个回合**：常驻团队调度台收一条唤醒类通知(哨兵事件)时的短暂预占,只为了
+ * 和「手动改终态」互斥（`claimWakeTurn`）。调度台的一次运行是整段常驻,它平时不占这把
+ * 锁;这一次占也不代表有谁在起跑,所以照 SCM 预占同一口径排除在起跑冻结之外。
+ */
+const WAKE_TURN_ROLE = "lead-wake";
+
+/**
+ * 「重启后给打断的任务做失败结算」的占位身份（`claimReconcileTurn`）。同样不是一个回合:
+ * 它不 spawn 任何东西,只是把「读状态 → 判定 → 写状态」围成一段临界区。
+ */
+export const RECONCILE_TURN_ROLE = "reconcile";
+
+/**
+ * 冻结一个**正在起跑**的回合：已 claim、还没 spawn，所以没有 handle 可杀。
+ * 返回 false = 这个任务根本没有回合在起跑（调用方无事可做）。
+ *
+ * 标记只对当前这一回合有效：回合退出时由 releaseTurn 清掉，绝不留给下一轮
+ * （留下来就是「下一次运行刚起跑就被上一次的暂停冻掉」）。
+ *
+ * **SCM 占位不是回合**，所以一律不接：`claimWorkspaceTurn` 能占住就说明此刻没有 agent
+ * 在起跑（真回合占着锁时它压根占不到），冻它没有对象；而它释放时刻意不清起跑冻结（那是
+ * 真回合的东西），标记会活到下一次真启动，把一次正常的「运行」莫名撤回成 paused，时间线
+ * 还写成「所在分组已暂停」——分组其实早恢复了（第 3 轮审查稳定复现）。
+ */
+export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"): boolean {
+  const role = turns.get(taskId)?.role;
+  if (role === undefined || role === WORKSPACE_TURN_ROLE || role === WAKE_TURN_ROLE) return false;
+  if (role === RECONCILE_TURN_ROLE) return false; // 残留结算也不是回合,理由同上
+  startFreeze.set(taskId, settle);
+  return true;
+}
+
+/** 起跑前的最后一道闸消费它：非 null = 这一轮必须在 spawn 之前撤回，并按这个落位结算。 */
+export function takeStartFreeze(taskId: string): StopSettle | null {
+  const s = startFreeze.get(taskId) ?? null;
+  startFreeze.delete(taskId);
+  return s;
+}
+
+/**
+ * 抢占这个任务的回合；已经有人在跑就返回 false（调用方直接放弃这一次）。
+ * role 是这一回合的身份（"single" / "reviewer"…）——它是**运行时事实**，审查结论的
+ * 归属检查（report_stage）读它，而不是查 sessions 表猜（session 行的 endedAt 语义
+ * 既不代表进程活着、也不代表回合归属，审查实测两个方向都错过）。
+ */
+export function claimTurn(taskId: string, role = "single", review: TurnReview | null = null): boolean {
+  if (turns.has(taskId)) return false;
+  turns.set(taskId, { role, review, token: null });
+  return true;
+}
+
+/**
+ * 只读探测：这个任务的回合是否已被占用。
+ *
+ * 给「验收 / 派审 / 修复 / 预览」这类守卫用：`tasks.status` 要到 continueTask 深处才写成
+ * running，claim 到落库之间有真实窗口——只看 DB status 会把一个已经开跑的任务当成空闲，
+ * 进而合并、删 worktree 或往它身上派审（审查报告实测复现过）。守卫必须两个都看。
+ */
+export function isTurnClaimed(taskId: string): boolean {
+  return turns.has(taskId);
+}
+
+/** 当前回合的身份；没有回合在跑返回 null。 */
+export function turnRole(taskId: string): string | null {
+  return turns.get(taskId)?.role ?? null;
+}
+
+/**
+ * 这一轮的**整份身份**(令牌 + 角色 + 它为哪一次审查而起)。
+ *
+ * 要用就整份读走:拆成「先读角色、再去查审查」就又回到第 10 轮审查 F1 那条拼法上了
+ * (见 `TurnIdentity`)。读到 null = 此刻没有回合在跑。
+ */
+export function turnIdentity(taskId: string): TurnIdentity | null {
+  return turns.get(taskId) ?? null;
+}
+
+/**
+ * 把这一轮的令牌绑到它的身份上。**只许在写 `tasks.active_turn_token` 的同一处调**
+ * (orchestrator 起一轮、task-run 首跑、reattach 接回上一轮),这样「库里那个令牌」和
+ * 「内存里这一轮」永远指同一件事 —— 来源核验据此只认一份事实。
+ */
+export function bindTurnToken(taskId: string, token: string): void {
+  const held = turns.get(taskId);
+  if (!held) {
+    // 没占位就写令牌 = 调用顺序错了。不静默:来源核验会把这一轮当「不是当前这一轮」拒掉。
+    console.error(`[ash] bindTurnToken(${taskId}) 时没有回合在跑,这一轮的来源将无法核验`);
+    return;
+  }
+  held.token = token;
+}
+
+/**
+ * 占位转正：入口在最后一个 await 检查之后原子占住 turn（turnHeld 传递给启动函数），
+ * 启动函数到位后用真实身份接管这把锁。只允许在**已持有**时调用——没占就转正是编程错。
+ */
+export function reclaimTurn(taskId: string, role: string, review?: TurnReview | null): void {
+  const held = turns.get(taskId);
+  if (!held) throw new Error(`reclaimTurn(${taskId}) without holding the turn`);
+  // `review` 省略 = 沿用占位时交代的那一份(占位转正不该把它抹掉);显式传 null 才是清掉。
+  turns.set(taskId, { role, review: review === undefined ? held.review : review, token: held.token });
+}
+
+/** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
+export function releaseTurn(taskId: string): void {
+  // 起跑冻结标记只属于刚结束的这一回合（没被消费 = 那一轮已经自己结束了）。留着它，
+  // 下一次运行会在起跑前被上一次的暂停莫名冻掉。
+  startFreeze.delete(taskId);
+  endTurn(taskId);
+}
+
+/**
+ * SCM 面板要动这个工作目录：**用同一把回合锁原子预占**，占不到返回 null。
+ *
+ * 为什么不是「再查一次在不在飞」：查是观察式的，`claimTurn` 不需要仓库锁，查完到真正
+ * 动手之间另一次启动完全可以合法插进来（第 2 轮审查确定性复现过：guard 观察到空闲，
+ * 其后的微任务里 claim 成功，git 命令仍照跑）。多查几次关不掉这个窗口——启动与工作区
+ * 写入必须争同一个原子对象。占住之后 `claimTurn` 会挡下新的启动，`isTurnClaimed` 也会
+ * 让归档/验收/派审这些既有守卫一并退避，不必在每个调用点再加一道。
+ *
+ * **要占的是这个目录的全部共用者，不是一个 task id**（`workspaceParticipants`）：团队
+ * 调度台和它那些跟随的执行者跑在同一个 worktree 里，只占自己那把锁，兄弟执行者照样能在
+ * 我们跑 git 的同一时刻起跑（第 4 轮审查复现）。所以这里是**全有或全无**：中途占不到就
+ * 把已占的全部还回去，让调用方按 `needsForce` 那一档处理；用户确认过的 force 走
+ * `claimIdleWorkspaceTurns`。
+ *
+ * 和真回合的唯一差别是**不碰起跑冻结**：这不是一个回合，清掉它会把上一次真回合留下的
+ * 暂停意图吃掉；反过来，占住期间也不许有人往它身上写冻结（见 `freezeStartingTurn`），
+ * 否则标记会漏给下一次真启动。
+ */
+export function claimWorkspaceTurn(taskIds: string[]): (() => void) | null {
+  const claimed: string[] = [];
+  for (const taskId of new Set(taskIds)) {
+    if (claimTurn(taskId, WORKSPACE_TURN_ROLE)) {
+      claimed.push(taskId);
+      continue;
+    }
+    for (const held of claimed) endTurn(held);
+    return null;
+  }
+  return releaserFor(claimed);
+}
+
+/**
+ * 同上，但**能占到几把就占几把**——只跳过此刻真有回合在跑的那些。带 `force` 的写操作走
+ * 这一条。
+ *
+ * force 的本意是覆盖「已经在写这个目录的那一位」，用户为此点过一次确认。全有或全无在这
+ * 里是反的：一位共用者在跑，整组锁就都还回去了，于是**还没起跑的闲置同伴照样能在这次
+ * git 期间起跑**（第 1 轮审查函数级复现：`claimWorkspaceTurn([running, idle]) === null`
+ * 之后 `claimTurn(idle)` 立刻成功）。用户放行的是一个明确的对象，不是整组。
+ *
+ * 占不到的那些不必回给调用方：force 路径本来就不再据此拒绝，知道也无事可做。
+ */
+export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
+  const claimed: string[] = [];
+  for (const taskId of new Set(taskIds)) {
+    if (claimTurn(taskId, WORKSPACE_TURN_ROLE)) claimed.push(taskId);
+  }
+  return releaserFor(claimed);
+}
+
+/**
+ * 团队调度台要收一条**唤醒类**通知：按同一把回合锁原子预占，占不到返回 null。
+ *
+ * 为什么也是这把锁：手动改终态的那条路（`PATCH /tasks/:id`）占的就是它。通知那一侧
+ * 「这个任务还能不能被叫醒」的判定与它必须互斥，否则两种交错里总有一种漏过去 —— 判定
+ * 读到 idle、结果还没交回去，完成操作照样写库，放开之后通知仍旧开台（第 6 轮审查实测）。
+ * 再多查几次状态是关不掉这个窗口的：查是观察式的。
+ *
+ * 和真回合的差别同 `claimWorkspaceTurn`：**不碰起跑冻结**（这不是一个回合）。
+ */
+export function claimWakeTurn(taskId: string): (() => void) | null {
+  if (!claimTurn(taskId, WAKE_TURN_ROLE)) return null;
+  return releaserFor([taskId]);
+}
+
+/**
+ * **占一把「不是回合」的位**:同一把回合锁,占不到返回 null。残留结算(`claimReconcileTurn`,
+ * 住在 runs.ts —— 它还要问「有没有句柄在册」)走这条。
+ *
+ * 和真回合的差别同 `claimWorkspaceTurn`:**不碰起跑冻结**(这不是一个回合)。
+ */
+export function claimNonTurn(taskId: string, role: string): (() => void) | null {
+  if (!claimTurn(taskId, role)) return null;
+  return releaserFor([taskId]);
+}
+
+/** 释放函数可重复调用（写操作的 finally 与错误路径可能都走到）。 */
+function releaserFor(claimed: readonly string[]): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    for (const taskId of claimed) endTurn(taskId);
+  };
+}
+
+/** 放锁 + 跑「等这一轮跑完」的回调。回合与 SCM 预占共用（前者另外还要清起跑冻结）。 */
+function endTurn(taskId: string): void {
+  turns.delete(taskId);
+  const waiting = afterTurn.get(taskId);
+  if (!waiting) return;
+  afterTurn.delete(taskId);
+  for (const fn of waiting) {
+    try {
+      fn();
+    } catch (error) {
+      console.error(`[ash] after-turn hook failed for ${taskId}:`, error);
+    }
+  }
+}
+
+/** 任务空着就立刻执行，正在跑就排到它这一轮退出之后。 */
+export function whenTurnIdle(taskId: string, fn: () => void): void {
+  if (!turns.has(taskId)) {
+    fn();
+    return;
+  }
+  const waiting = afterTurn.get(taskId);
+  if (waiting) waiting.push(fn);
+  else afterTurn.set(taskId, [fn]);
+}
+
+/**
+ * 结算钩子里给同一个任务续跑的**唯一安全写法**：等它这一轮退干净再送消息。
+ *
+ * 直接 `continueTask` 会被单飞锁静默挡回（结算钩子跑在 run loop 的 try 里，锁还锁着），
+ * 表现是「什么都没发生」——就地验证轮起不来、打回重做的提示没人收。动态 import 是为了
+ * 不让这个中立模块回头依赖 orchestrator（类型是纯类型引用，不构成运行时环）。
+ */
+// 入口参数的类型住在 `task-continue-options.ts`(只放类型,不放运行时 —— 这条链上的运行时
+// import 要留给那句 dynamic import)。
+type ContinueOpts = import("./task-continue-options.js").ContinueTaskOptions;
+
+export function continueWhenIdle(
+  taskId: string,
+  text: string,
+  opts: ContinueOpts = {},
+  onError?: (message: string) => void | Promise<unknown>,
+): void {
+  whenTurnIdle(taskId, () => {
+    // 排到队头的一瞬间**同步**锁定所有权（turnHeld 传递给 continueTask 接管）：不占的
+    // 话，异步 import 的间隙里同一释放点的后续 waiter 能同步抢锁——投递「not delivered」
+    // 而调用方可能已提前写下状态（审查实测 3/3：dispatch 释放点被竞争 waiter 抢先，
+    // 任务留在 stage=verifying 而验证从未启动）。
+    // **占位的那一刻就把「谁起的、为哪一次审查而起」一起交代清楚**:派审那一侧此刻手里正握着
+    // run 和轮次,而创建入口过后只能查「现在是哪一次」—— 那两者在派审交接期并不是同一个
+    // (第 10 轮审查 F1)。两样同在一个 `TurnSource` 里,所以这里不可能只带到一半。
+    const source = (opts as { turnSource?: TurnSource | null }).turnSource ?? null;
+    if (!claimTurn(taskId, turnSourceRole(source), turnSourceReview(source))) {
+      console.error(`[ash] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
+      void onError?.("回合被其它执行抢占，消息未能投递");
+      return;
+    }
+    void import("./turn-freeze.js")
+      .then(async ({ turnFreezeReason }) => {
+        // 这条路上的启动**全是系统发起的**（就地验证、自由派审、修复、验收冲突叫醒），
+        // 而且都是「先占位登记、释放点之后才真起跑」的交接：从调用方那次预检查到这里，
+        // 中间隔着上一整轮，用户完全可能已经把分组暂停、把任务删了或归档了。
+        //
+        // 内存里的起跑冻结标记在这条路上**指望不上**：`pauseGroup` 冻的是占位那一个
+        // 回合（dispatch），占位方的 finally `releaseTurn` 会连着标记一起清掉——接棒的
+        // 真实回合什么都看不到，于是「暂停已经 200 返回，reviewer 照样被拉起来」
+        //（第 4 轮审查确定性复现）。所以这里按事实查库权威复查一次。
+        const freeze = await turnFreezeReason(taskId, true);
+        if (!freeze) {
+          return (await import("./orchestrator.js")).continueTask(taskId, text, { ...opts, turnHeld: true });
+        }
+        // 撤回，且**不标停止落位**：这一轮一个字都没送出去，任务状态还停在上一轮的终态，
+        // 标了就会被下一次真启动误读成「上一轮是被停的」。当作投递失败上报，调用方那套
+        // 回滚（清 verifyRound、复位 stage、写时间线）才跑得到——不然任务会永久卡在
+        // 「正在验证」而验证从未开始。
+        releaseTurn(taskId);
+        console.error(`[ash] continueWhenIdle(${taskId}) withdrawn: ${freeze.reason}`);
+        try { await onError?.(`${freeze.reason}，这一轮在启动前被撤回`); } catch { /* 上报失败不再连锁 */ }
+        return true;
+      })
+      .then(
+        async (delivered) => {
+          // continueTask 返回 false = 一个字都没送出去（验收互斥退避等）。吞掉它，
+          // 调用方的时间线就会停在「意见已发回会话」而消息实际没了——必须当失败上报。
+          if (delivered === false) {
+            console.error(`[ash] continueWhenIdle(${taskId}) not delivered`);
+            try { await onError?.("回合被其它执行抢占，消息未能投递"); } catch { /* 上报失败不再连锁 */ }
+          }
+        },
+        async (error) => {
+          // 只有 import 失败或 continueTask 进入自己的 try/finally 之前抛错才会到这——
+          // 那两种情况下锁还是这里占的那把，必须还回去（continueTask 一旦接管，正常与
+          // 失败路径都由它自己释放，不会落到这个分支）。
+          releaseTurn(taskId);
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[ash] continueWhenIdle(${taskId}) failed:`, error);
+          try { await onError?.(message); } catch { /* 上报失败不再连锁 */ }
+        },
+      );
+  });
+}

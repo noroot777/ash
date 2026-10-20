@@ -1,19 +1,26 @@
-import { spawn, execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { tmpdir } from "node:os";
-import { statSync, openSync, closeSync, unlinkSync, createWriteStream, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { statSync, createWriteStream, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
-import { IS_WINDOWS, isPidAlive, killOne, killTree, listProcesses } from "../platform.js";
-import { isSameProcess } from "../proc.js";
+import { IS_WINDOWS } from "../platform.js";
 import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins } from "./bin-resolve.js";
+import { openTrackFd, registerTrackFd } from "./kill.js";
 
 // PATH 补全与命令名解析住在 bin-resolve.ts(Windows 的 PATHEXT / `.cmd` 垫片够写
 // 一整个文件)。这里转出去,是因为已有近二十处从 spawn.ts import 它们。
 export { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins };
 export type { LaunchPlan } from "./bin-resolve.js";
+
+// 三层击杀、逃逸后代追踪、进程身份与追踪证据的租约住在 kill.ts(同样是因为两摊各自都在
+// 往 700 行上限靠)。二十来个使用方照旧从 `spawn.js` import,所以这里原样转出去。
+export {
+  childStillOurs, cleanupAfterRun, killByPid, killChild, markAdoptedChild, openTrackFd,
+  pidRunStillAlive, registerTrackFd, releaseTrackEvidence, shareChildIdentity,
+  shareTrackFdRegistration, sweepOrphanTrackFiles,
+} from "./kill.js";
 
 // ── 多人模式:server 进程自己的出站凭证不透传给 agent(docs/multi-user-plan.md §八)──
 // 宿主机上跑着的 ash 很可能自带 ANTHROPIC_API_KEY 之类;不删的话,一个「没挂供应商」
@@ -105,142 +112,6 @@ export function spawnErrorMessage(bin: string, err: NodeJS.ErrnoException): stri
   if ((err as any).precise) return err.message;
   if (err.code === "ENOENT") return `找不到 ${bin} 命令(PATH 未包含其所在目录)`;
   return `启动 ${bin} 失败：${err.message}`;
-}
-
-// ── 逃逸进程追踪(继承 fd,systemd 同款思路)──────────────────────────────
-// 进程组击杀(kill -pid)只覆盖「还留在 agent 进程组里」的后代。但 codex/claude
-// 的 exec 层会给命令另开进程组,命令再 nohup/& 一放、父进程一退,整条流水线就
-// 变成 ppid=1、自成一组的孤儿 —— 组杀和树遍历都追不到(真实案例:暂停分组后
-// TTS 流水线 run_youtube_pipeline.sh 一家五口继续后台跑)。
-// 解法:spawn 时塞一个指向「本次运行专属追踪文件」的继承 fd(stdio[3])。所有
-// 后代都会带着这个 fd(bash/nohup 不关高位 fd),无论怎么改组、被谁收养;停止
-// 时 `lsof -t <file>` 反查持有者,再从每个持有者向下走 ppid 树补上被 python
-// close_fds 掐断继承的孙进程。局限:双 fork 且中间
-// 层已死、又恰好隔着一层 close_fds 的深孤儿仍可能漏(实践中极少)。
-//
-// **Windows 上这一层仍然比 POSIX 弱,但正常收尾那条路可以补。** 两个差异:
-//  · 继承 fd 反查没有零依赖等价物(handle.exe 要单独装、要管理员),所以
-//    Windows 上根本不开追踪文件,只剩 ppid 树遍历这一半。
-//  · Windows 不做 reparent,孤儿的 ParentProcessId 保留着已死父进程的号 ——
-//    CLI 活着时从它往下走得到;CLI 已死以后如果把它的 pid 一起忘了,就再也找不到入口。
-//    RunHandle 因此在事件流收尾时调用 cleanupAfterRun:ChildProcess 还握在手里,哪怕根
-//    进程刚退出,仍能拿它的旧 pid 走这棵保留下来的 ppid 树。server 重启后句柄丢了、
-//    或 pid 已经被复用的深孤儿仍然无解,所以 Windows 依旧是尽力而为,不是等价保证。
-const trackFiles = new WeakMap<ChildProcess, string>();
-
-async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<number[]> {
-  const targets = await collectEscapees(child);
-  for (const pid of targets) killOne(pid, sig);
-  return targets;
-}
-
-// 取证与发信号分开:**号码不是身份**,所以任何一次补刀前都要现场重新取一遍证据,而不是
-// 复用几秒前的号码快照(第 2 轮审查 F1)。证据有两种,都跟号码无关:继承了本次运行那个
-// 追踪 fd(文件对象),或者挂在一个身份已确认的根下面(ppid 树)。
-async function collectEscapees(child: ChildProcess): Promise<number[]> {
-  const targets = new Set<number>();
-  const trackPath = trackFiles.get(child);
-  if (trackPath) {
-    const out = await new Promise<string>((res) =>
-      execFile("lsof", ["-t", trackPath], (_e, stdout) => res(stdout || "")),
-    );
-    for (const line of out.split("\n")) {
-      const p = Number(line.trim());
-      if (p) targets.add(p);
-    }
-  }
-  // 每个 fd 持有者 + CLI 本体的存活后代(ppid 树)一并纳入。
-  // fd 持有者的身份证据长在文件对象上,跟号码无关,所以无条件可用;**根进程的号**不是 ——
-  // 只有确认它还是它(childStillOurs)才能当树根,否则号被复用之后这棵「后代树」是别人的
-  // 子进程(第 1 轮审查 F2)。POSIX 上这一道闸不损失任何能力:根进程一退出,它的孩子立刻被
-  // 重父到 init,以旧号为根的树本来就是空的。
-  // **Windows 例外**:那边没有追踪 fd(openTrackFd 直接返回空),退出后仍保留的
-  // ParentProcessId 是唯一的找回手段(见本文件顶部),所以那边照旧尽力而为。
-  const roots = [...targets];
-  if (child.pid && (IS_WINDOWS || childStillOurs(child))) roots.push(child.pid);
-  if (roots.length) {
-    const kids = new Map<number, number[]>();
-    for (const row of await listProcesses()) {
-      if (!row.ppid) continue;
-      if (!kids.has(row.ppid)) kids.set(row.ppid, []);
-      kids.get(row.ppid)!.push(row.pid);
-    }
-    const stack = [...roots];
-    while (stack.length) {
-      const p = stack.pop()!;
-      for (const k of kids.get(p) ?? []) {
-        if (!targets.has(k)) {
-          targets.add(k);
-          stack.push(k);
-        }
-      }
-    }
-  }
-  targets.delete(process.pid);
-  if (child.pid) targets.delete(child.pid); // CLI 本体走进程组信号,不重复补刀
-  return [...targets].filter((pid) => pid > 1);
-}
-
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function waitForPidsGone(pids: readonly number[], timeoutMs: number): Promise<number[]> {
-  const deadline = Date.now() + timeoutMs;
-  let alive = pids.filter(isPidAlive);
-  while (alive.length && Date.now() < deadline) {
-    await wait(50);
-    alive = pids.filter(isPidAlive);
-  }
-  return alive;
-}
-
-/**
- * 一次性 agent 的事件流已经收完:CLI 本体按理已经退出,但它用 `&` / `start /b`
- * 甩出去的后台后代可能还活着。此刻 ChildProcess 还在手里,是 Windows 上利用已死
- * ParentProcessId 找回它们的最后窗口;再往后只剩一个 worktree 路径,已经无法可靠
- * 区分「agent 遗留」和「用户自己开的终端」。
- *
- * 先给 SIGTERM/Windows taskkill,最多等 2 秒;残存者再补 SIGKILL。正常没有逃逸者时
- * 只做一次进程表快照,不会给每个回合平白加等待。
- */
-export async function cleanupAfterRun(child: ChildProcess): Promise<void> {
-  try {
-    await sweepAfterRun(child);
-  } finally {
-    // 扫完了,这个句柄的追踪证据可以进入删除倒计时(见 releaseTrackEvidence)。
-    // 放在 finally 里:中途抛出也不该让文件永远留着,它的寿命归清扫方管。
-    releaseTrackEvidence(child);
-  }
-}
-
-async function sweepAfterRun(child: ChildProcess): Promise<void> {
-  const targets = new Set(await killEscapees(child, "SIGTERM"));
-  // 判据与 killChild 同一条(childStillOurs):以前这里问的是 `isPidAlive`,那只能证明
-  // 「有人占着这个号」—— 根进程先退出、号被复用之后,它指向的已经是别人(第 1 轮审查
-  // F2)。根进程已退出就只扫后代,一刀都不往那个号上发。
-  if (child.pid && childStillOurs(child)) {
-    targets.add(child.pid);
-    killTree(child.pid, "SIGTERM");
-  }
-  if (!targets.size) return;
-
-  const survivors = await waitForPidsGone([...targets], 2000);
-  if (!survivors.length) return;
-  const killed: number[] = [];
-  // 等的这 2 秒里根进程可能自己退了,号随时会被复用 —— 补刀前按同一判据再确认一次。
-  if (child.pid && survivors.includes(child.pid) && childStillOurs(child)) {
-    killTree(child.pid, "SIGKILL");
-    killed.push(child.pid);
-  }
-  // 后代的补刀同样要**现场重新取证**:survivors 是 2 秒前的一串号码,而这 2 秒里它们正被
-  // SIGTERM 催着退出,退出就意味着号可以被系统分给任何人。所以这里的判据不是「这个号还
-  // 活着」,而是「现在仍然能从追踪 fd / 已确认的 ppid 树上取到它」(第 2 轮审查 F1)。
-  const stillOurs = new Set(await collectEscapees(child));
-  for (const pid of survivors) {
-    if (pid === child.pid || !stillOurs.has(pid)) continue;
-    killOne(pid, "SIGKILL");
-    killed.push(pid);
-  }
-  await waitForPidsGone(killed, 2000);
 }
 
 // Windows 上一律不 detached。三点理由:
@@ -347,77 +218,6 @@ function teeStdout(child: ChildProcess, file: string | undefined): void {
   Object.defineProperty(child, "stdout", { value: relay, configurable: true, writable: true });
 }
 
-// 追踪 fd(见 killEscapees):打开一个本次运行专属文件,把 fd 作为 stdio[3] 传给
-// 子进程 —— 后代无论怎么换组/被收养都带着它,stop 时可按文件名 lsof 反查。
-// best-effort:开不出来就照旧 spawn,只是丢掉逃逸追踪能力。
-// 抽成一对函数是为了让 detached.ts 那条路(输出走文件)复用同一套逃逸追踪,
-// 而不是各写一份 —— 少一份就意味着那条路上的孤儿没人管。
-// Windows 上直接返回空:反查手段不存在(见 killEscapees 顶部),开了也没人用,
-// 还会平白留下一堆临时文件。
-export function openTrackFd(): { fd: number | null; path: string | null } {
-  if (IS_WINDOWS) return { fd: null, path: null };
-  try {
-    const path = join(tmpdir(), `ash-track-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-    return { fd: openSync(path, "w"), path };
-  } catch {
-    return { fd: null, path: null };
-  }
-}
-
-// 追踪文件什么时候可以删:**由清扫方说了算,不看根进程的生死**。
-//
-// 以前这个删除挂在 child 的 'close' 上(close + 60s)。一次性 agent 上刚好等价 —— 事件流
-// 收完就立刻 cleanupAfterRun。但 codex 的会话级常驻是**每回合一个进程**,句柄的 cleanup
-// 要等整条会话结束才跑:会话只要长过一分钟,那些早已 close 的回合进程的追踪文件就全被删
-// 了,cleanup 到时 lsof 查无此文件,被 `&` 甩出去的后代一个也捞不回来 —— 恰好是追踪 fd
-// 这一层唯一要解决的那类孤儿(第 2 轮审查 F2)。
-//
-// 现在分两档:注册时只排一个**长兜底**(谁都没来认领的极端情况下也不留垃圾),清扫方扫完
-// (releaseTrackEvidence)才排 60s 的尾巴 —— 这 60s 是留给 killChild 的
-// SIGTERM→2s→SIGKILL 补刀窗口,它也要靠文件名 lsof 取证。
-// 两档延迟各有一个压短开关,给回归测试用(生产两个都不设):回归要在一条用例里看完
-// 「close 之后还在 → 清扫后才删」,所以尾巴得短、兜底得够长,一个变量调不出来。
-const TRACK_TAIL_MS = Number(process.env.ASH_TRACK_EVIDENCE_MS ?? 60_000);
-const TRACK_BACKSTOP_MS = Number(process.env.ASH_TRACK_EVIDENCE_BACKSTOP_MS ?? 24 * 60 * 60 * 1000);
-// 按**路径**记而不是按 ChildProcess 记:shareTrackFdRegistration 会让合成句柄和真进程两个
-// 对象指向同一个文件,它们的倒计时必须是同一个。
-const trackRemoval = new Map<string, ReturnType<typeof setTimeout>>();
-
-function scheduleTrackRemoval(path: string, delayMs: number): void {
-  const pending = trackRemoval.get(path);
-  if (pending) clearTimeout(pending);
-  const t = setTimeout(() => {
-    trackRemoval.delete(path);
-    try {
-      unlinkSync(path);
-    } catch {
-      /* already gone */
-    }
-  }, delayMs);
-  (t as { unref?: () => void }).unref?.();
-  trackRemoval.set(path, t);
-}
-
-export function registerTrackFd(child: ChildProcess, track: { fd: number | null; path: string | null }): void {
-  if (track.fd === null || !track.path) return;
-  closeSync(track.fd); // 子进程已持有副本,父进程这份立即关掉
-  trackFiles.set(child, track.path);
-  scheduleTrackRemoval(track.path, TRACK_BACKSTOP_MS);
-}
-
-/** 清扫方已经扫完这个句柄:证据再留一截补刀窗口就可以删了(见上面那段)。 */
-export function releaseTrackEvidence(child: ChildProcess): void {
-  const path = trackFiles.get(child);
-  if (path) scheduleTrackRemoval(path, TRACK_TAIL_MS);
-}
-
-// detached.ts 对外返回的是合成 ChildProcess；把真进程上的追踪文件映射复制过去，
-// cleanupAfterRun 才能在根进程退出后继续按继承 fd 找回已经 reparent 的后代。
-export function shareTrackFdRegistration(source: ChildProcess, target: ChildProcess): void {
-  const path = trackFiles.get(source);
-  if (path) trackFiles.set(target, path);
-}
-
 // Wrap a resume command so it is copy-paste runnable (§13).
 // envPrefix(供应商的 `KEY=值 `,token 已换成占位符)拼在 CLI 前面 —— 不带它,
 // 粘到终端的命令会走 CLI 自己的官方账号,跟这次运行不是同一个来源。
@@ -433,128 +233,6 @@ export function redactSecrets(s: string): string {
     .replace(/\b(sk|sk-ant|sk-proj|ghp|gho)-[A-Za-z0-9_-]{8,}/g, "$1-***")
     .replace(/\b(Bearer)\s+[A-Za-z0-9._-]{8,}/gi, "$1 ***")
     .replace(/((?:token|api[_-]?key|auth[_-]?token|secret)["']?\s*[:=]\s*["']?)[A-Za-z0-9._-]{8,}/gi, "$1***");
-}
-
-// ── 「这个号此刻还是它吗」:kill 与 cleanup 共用的唯一判据 ──────────────────────
-//
-// 自己 spawn 出来的孩子有**权威答案**:内核在父进程 reap 之前不会把 pid 分给别人,而
-// Node 正是在 reap 到它时才填上 exitCode/signalCode —— 两个都还是 null,就等于这个号现在
-// 一定还是它;任一个有值,就等于这个号已经可以被任意复用了。
-//
-// 反过来 `isPidAlive(pid)` 只能证明「有人占着这个号」,证明不了是谁:根进程先自己退出
-// (落库那几百毫秒里完全来得及)、号被系统分给用户的别的程序之后,拿它当依据发信号就是
-// 在杀无关进程。「它从登记集合里注销过没有」更答不了这个问题 —— 那只是 isRunning 的真假。
-// 所以本文件里 kill 与 cleanup 两条路问的都是这一个函数。
-//
-// **合成 ChildProcess 没有这个权威答案**(detached.ts 对外返回的都是拼出来的对象):它的
-// exitCode 是回调里补写的,真进程退出到回调之间有一段窗口;被信号带走而又没写下 rc 时它
-// 永远停在 null,signalCode 则从来没人填 —— 拿它当「还是我们的进程」用,等于在一个早已
-// 退出(号随时被复用)的号上发信号(第 2 轮审查 F1 实测复现)。所以合成品必须在出厂时声明
-// 自己的身份来源,见 shareChildIdentity / markAdoptedChild。
-//
-// 后代不受这条限制:killEscapees 认的是「继承了我们那个追踪 fd」,身份证据长在文件
-// 对象上而不是号码上 —— 所以根进程已经退出时**照样要扫后代**,只是不许再对那个号发
-// 信号。(第 1 轮审查 F2)
-type ChildIdentity =
-  /** 真进程还在我们手里(新起的 detached):身份委托给它,内核状态仍是权威答案。 */
-  | { kind: "real"; source: ChildProcess }
-  /** 只接管了一个号(重启后接回):身份就是号 + 启动时间,每次发信号前现查 ps。 */
-  | { kind: "adopted"; pid: number; startedAt: string | null };
-const childIdentities = new WeakMap<ChildProcess, ChildIdentity>();
-
-/** 合成句柄与真进程成对出厂时调用:两者是同一个进程,身份以真的那份为准。 */
-export function shareChildIdentity(source: ChildProcess, target: ChildProcess): void {
-  childIdentities.set(target, { kind: "real", source });
-}
-
-/** 接管一个还活着的号时调用:此后对它的每一次信号都按 pid + 启动时间核身份。 */
-export function markAdoptedChild(child: ChildProcess, pid: number, startedAt: string | null): void {
-  childIdentities.set(child, { kind: "adopted", pid, startedAt });
-}
-
-const ownExitState = (child: ChildProcess): boolean => child.exitCode === null && child.signalCode === null;
-
-export function childStillOurs(child: ChildProcess): boolean {
-  const identity = childIdentities.get(child);
-  if (!identity) return ownExitState(child);
-  if (identity.kind === "real") return ownExitState(identity.source);
-  return pidStillOurs(identity.pid, identity.startedAt);
-}
-
-// Terminate a running agent subprocess (manual stop). SIGTERM first so the CLI
-// can wind down; a short fallback SIGKILL guarantees the process — and thus our
-// output stream — actually ends even if the CLI ignores SIGTERM. Safe to call on
-// the pre-flight failedChild stub (it has no real pid) and after exit.
-// 三层击杀:①信号发给整个进程组(-pid,spawn 时 detached 使 child 为组长);
-// ②killEscapees 按继承 fd 反查逃出进程组的后代(nohup 孤儿等)一并处理;
-// ③2s 后对残存者(含期间新逃逸的)统一补 SIGKILL。
-//
-// **Windows 上第①层换成 `taskkill /T /F`,而且没有「优雅」这一档。** Windows 只有
-// GUI 窗口收得到 WM_CLOSE,控制台程序不吃;Ctrl+C 只能发给同一个控制台组,而 agent
-// 是 DETACHED_PROCESS 起的(没有控制台)。所以第一发就是强杀,CLI 没有落盘/收尾的
-// 机会 —— 这是平台限制,如实记在这里。第②层退化成纯 ppid 树遍历(见 killEscapees),
-// 第③层仍在(确认死透)。
-export function killChild(child: ChildProcess): void {
-  if (typeof child.kill !== "function") return;
-  const signal = (sig: NodeJS.Signals) => {
-    // 身份先于信号:已经 reap 过的号可能已经是别人的了(判据见 childStillOurs)。
-    if (!childStillOurs(child)) return;
-    if (child.pid) {
-      killTree(child.pid, sig);
-      return;
-    }
-    try {
-      child.kill(sig);
-    } catch {
-      /* already gone */
-    }
-  };
-  signal("SIGTERM");
-  void killEscapees(child, "SIGTERM").catch(() => {});
-  const t = setTimeout(() => {
-    signal("SIGKILL");
-    // 无论 CLI 死没死透,逃逸者一律补 SIGKILL —— stop 的语义就是全家结束。
-    void killEscapees(child, "SIGKILL").catch(() => {});
-  }, 2000);
-  // Don't keep the event loop alive just for the fallback timer.
-  (t as { unref?: () => void }).unref?.();
-}
-
-// 只有 pid 时的击杀(重启后接管的 agent 走这条 —— ChildProcess 句柄随上一个
-// server 进程一起没了,追踪 fd 的 WeakMap 也没了)。
-// 只剩三层里的第①③层:进程组信号 + 2s 后补 SIGKILL。第②层(继承 fd 反查逃逸者)
-// 做不到,因为那份映射是内存态的。代价:重启前就已经逃出进程组的孤儿杀不到 ——
-// 如实记在这里,别让以后的人以为这条路和 killChild 等价。
-export function killByPid(pid: number, startedAt: string | null): void {
-  if (!Number.isInteger(pid) || pid <= 1) return;
-  if (!pidStillOurs(pid, startedAt)) return;
-  killTree(pid, "SIGTERM");
-  const t = setTimeout(() => {
-    // **补刀不看组长死没死。** 以前这里是 `if (isPidAlive(pid))`，等于拿「组长还在吗」
-    // 当「这一组还在吗」——可这两件事恰恰在最该补刀的现场分开：外层 shell / 包管理器
-    // 收到 SIGTERM 老老实实退了，它派生的那个**忽略 SIGTERM** 的东西（用户仓库里的
-    // preinstall/postinstall 是任意代码，node-gyp、自己管子进程的脚本都算）还留在原
-    // 进程组里。组长一死，补刀被跳过，那个进程就永远留下了——而接口已经回了句「已停止」。
-    // killTree 打的是进程组（POSIX 上 `kill(-pid)`），组空了是 ESRCH，被它自己吞掉，
-    // 所以无条件发这一刀没有副作用。但**号被别人占去了就不能发**——那一刀会打到人家
-    // 的进程组上(判据见 pidStillOurs)。
-    if (pidStillOurs(pid, startedAt)) killTree(pid, "SIGKILL");
-  }, 2000);
-  (t as { unref?: () => void }).unref?.();
-}
-
-// 只有 pid 时的身份判据(没有真 ChildProcess 可问,只能现查 ps):
-//   · 号没人占 → 以它为组 id 的只能是我们那个已经死掉的组长留下的后代(新进程不会
-//     跑进一个以空号为 id 的进程组),照打,这正是上面「补刀不看组长死没死」要的;
-//   · 号有人占、而且就是当初那个(启动时间对得上) → 照打;
-//   · 号有人占、但换了主人 → 一刀都不许发。
-// **认领那一刻核过不算数**:从接管到真要杀它之间隔着整段回合,号完全可能已经换了主人
-// (第 1 轮审查 F2)。`startedAt` 是必传的 —— 以前缺省值是「放行」,于是没传的调用方静默
-// 绕过了整条判据(第 2 轮审查 F1);传 null 的含义是「我没有记下启动时间」,只能退化成存在
-// 性检查,而不是「不用查」。
-function pidStillOurs(pid: number, startedAt: string | null): boolean {
-  if (!isPidAlive(pid)) return true;
-  return isSameProcess(pid, startedAt);
 }
 
 // exit(进程亡)之后 close(所有 stdio 关闭)通常毫秒级跟到;但当管道写端被

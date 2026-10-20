@@ -78,7 +78,7 @@
 import { IS_WINDOWS, isPidAlive, isProcessGroupAlive, killOne, killTree } from "./platform.js";
 import { processIdentity, processUnitEvidence } from "./proc.js";
 import {
-  processGenerationSync, processGroupMembersSync, type ProcessMember,
+  processGroupMembersSync, stillSameGeneration, type ProcessMember,
 } from "./process-generation.js";
 
 /**
@@ -429,8 +429,6 @@ export function shootProvenUnitNow(
  * 两种问法都失败、或者这一刻走了另一种问法)一律按「不是」处理:宁可漏收,也不碰一个
  * 证不出代次的号。
  */
-const stillSameGeneration = (member: ProcessMember): boolean =>
-  processGenerationSync(member.pid) === member.gen;
 
 /**
  * 根此刻还是不是**授权这一档时**那一个 —— 组信号(`killTree`)之前必须重问一遍。

@@ -31,9 +31,9 @@
 //    的号它分不出来 —— 这是平台边界,如实记在这里:macOS 上记号那一问本来就只给
 //    `suspected`(不签发下刀凭证,见 monitor-unit-scan.ts 的 `UnitProofGrade`),所以这个
 //    戳在 macOS 上的作用是**让「还是同一代」这句话有个依据**,不是把它升格成精确身份。
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
-import { IS_WINDOWS, inspectProcessSync, isPidAlive } from "./platform.js";
+import { IS_WINDOWS, inspectProcessSync, isPidAlive, listProcesses } from "./platform.js";
 
 /** 一个号上这一代的戳(带问法标签,见文件头)。**只做相等比较,不要解析它的内容。** */
 export type ProcessGeneration = string;
@@ -214,4 +214,123 @@ function groupViaPs(pgid: number): ProcessMember[] | null {
     members.push({ pid: Number(m[1]), gen: `t:${startedAt}` });
   }
   return members;
+}
+
+/** 这个号此刻还是不是记下那个事实时的那一代 —— **每一刀之前都要问这一句**。 */
+export const stillSameGeneration = (member: ProcessMember): boolean =>
+  processGenerationSync(member.pid) === member.gen;
+
+/**
+ * 这些根**自己 + 它们下面的全部后代**,每一个都带着代次。
+ *
+ * 为什么不是「先用 `listProcesses()` 拿 pid/ppid,再逐个问 `ps` 要启动时刻」:那正是本文件
+ * 开头那条缝 —— 「它是谁的孩子」和「它是哪一代」成了两次读数,第一次读到的那个进程退掉、
+ * 这个号被别人接手时,新进程的代次被写到了前一个事实上,随后的 TERM 和补刀都据此下刀。
+ * 所以三个平台各走一条**单次读数**的路:
+ *
+ *  · Linux  —— 一次 `/proc/<pid>/stat` 同时给出 ppid(第 4 项)和 starttime(第 22 项);
+ *  · 其它 POSIX —— `ps` 的同一行同时给出 pid / ppid / lstart;
+ *  · Windows —— `listProcesses()` 的同一行就带着 `startedAt`(只有那一支填得上),所以
+ *    那边**没有**这条缝,直接用它。
+ *
+ * 查不到返回 null,**不要读成「没有后代」**(ps/`/proc` 失败与真的没有后代是两件事)。
+ */
+export async function processTreeMembers(
+  roots: readonly number[],
+): Promise<{ roots: ProcessMember[]; descendants: ProcessMember[] } | null> {
+  const seeds = [...new Set(roots)].filter((pid) => Number.isInteger(pid) && pid > 1);
+  if (!seeds.length) return { roots: [], descendants: [] };
+  const table = IS_WINDOWS ? await treeViaProcessList() : treeViaProc() ?? (await treeViaPs());
+  if (!table) return null;
+  const rootMembers: ProcessMember[] = [];
+  const seen = new Set<number>();
+  const stack: number[] = [];
+  for (const pid of seeds) {
+    const gen = table.gens.get(pid);
+    if (gen) rootMembers.push({ pid, gen });      // 根此刻不在表上 = 它已经退了,不是成员
+    seen.add(pid);
+    stack.push(pid);
+  }
+  const descendants: ProcessMember[] = [];
+  while (stack.length) {
+    const parent = stack.pop()!;
+    for (const kid of table.kids.get(parent) ?? []) {
+      if (seen.has(kid)) continue;
+      seen.add(kid);
+      const gen = table.gens.get(kid);
+      if (!gen) continue;                         // 代次读不出 ⇒ 不收这个成员(宁可漏收)
+      descendants.push({ pid: kid, gen });
+      stack.push(kid);
+    }
+  }
+  return { roots: rootMembers, descendants };
+}
+
+type ProcessTree = { kids: Map<number, number[]>; gens: Map<number, ProcessGeneration> };
+
+const addKid = (tree: ProcessTree, ppid: number, pid: number): void => {
+  if (!ppid || ppid === pid) return;
+  const kids = tree.kids.get(ppid);
+  if (kids) kids.push(pid);
+  else tree.kids.set(ppid, [pid]);
+};
+
+/** Linux:一次 `stat` 里同时读到 ppid 与 starttime ⇒ 父子关系和代次同源。 */
+function treeViaProc(): ProcessTree | null {
+  let entries: string[];
+  try {
+    entries = readdirSync("/proc");
+  } catch {
+    return null;
+  }
+  const tree: ProcessTree = { kids: new Map(), gens: new Map() };
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    const pid = Number(entry);
+    const fields = procStatFields(pid);
+    if (!fields) continue;
+    const jiffies = procStarttime(fields);
+    if (!jiffies) continue;
+    tree.gens.set(pid, `j:${jiffies}`);
+    const ppid = fields[1];
+    if (ppid && /^\d+$/.test(ppid)) addKid(tree, Number(ppid), pid);
+  }
+  return tree;
+}
+
+/** 没有 `/proc` 的 POSIX:`ps` 的同一行给出 pid / ppid / lstart,精度到秒。 */
+async function treeViaPs(): Promise<ProcessTree | null> {
+  const out = await new Promise<string | null>((resolve) => {
+    execFile(
+      "ps",
+      ["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart=", "-ww"],
+      { maxBuffer: 16 * 1024 * 1024, env: { ...process.env, LC_ALL: "C", LANG: "C" } },
+      (error, stdout) => resolve(error && !stdout ? null : stdout || ""),
+    );
+  });
+  if (out === null) return null;
+  const tree: ProcessTree = { kids: new Map(), gens: new Map() };
+  for (const line of out.split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (!m) continue;
+    const startedAt = m[3]!.trim();
+    if (!startedAt) continue;
+    const pid = Number(m[1]);
+    tree.gens.set(pid, `t:${startedAt}`);
+    addKid(tree, Number(m[2]), pid);
+  }
+  return tree;
+}
+
+/** Windows:进程表那一行自带 `startedAt`(见 platform.ts),所以这里本来就是单次读数。 */
+async function treeViaProcessList(): Promise<ProcessTree | null> {
+  const rows = await listProcesses();
+  if (!rows.length) return null;
+  const tree: ProcessTree = { kids: new Map(), gens: new Map() };
+  for (const row of rows) {
+    const startedAt = row.startedAt?.trim();
+    if (startedAt) tree.gens.set(row.pid, `t:${startedAt}`);
+    addKid(tree, row.ppid, row.pid);
+  }
+  return tree;
 }

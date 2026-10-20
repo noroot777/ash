@@ -24,7 +24,7 @@ import { isSameProcess } from "../proc.js";
 import {
   shq, resolveBin, agentBaseEnv, failedChild, guardAgentSpawn,
   openTrackFd, registerTrackFd, shareTrackFdRegistration, shareChildIdentity, markAdoptedChild,
-  killChild, killByPid, spawnAgent,
+  killChild, killByPid, pidRunStillAlive, spawnAgent,
 } from "./spawn.js";
 
 // 一次运行的三个落盘文件。rc 是退出码 —— 管道模式下退出码是 close 事件白送的,
@@ -433,16 +433,14 @@ export function reattachDetachedAgent(opts: {
     // 注:这个合成品的 exitCode/signalCode 由下面的轮询补写,不是内核答案,所以它的身份
     // 由 markAdoptedChild 单独声明(见函数尾部)——cleanup 这条路不经过上面这个 kill。
     onExit: (cb) => {
-      // 没有 ChildProcess 可听,只能探。kill(pid,0) 抛 ESRCH = 确实没了
-      //(复用只会让它显得「活着」,不会让活着的显得死了,所以这个方向是安全的)。
+      // 没有 ChildProcess 可听,只能探 —— 但问的必须是「这个号上**还是不是它**」,不是
+      // 「这个号上有人吗」。`kill(pid,0)` 那一问在号被别人接手之后永远答「活着」,于是
+      // 退出回调再也不触发:事件流不结束、任务卡在 running、停止按钮也没用(而身份闸又
+      // 正确地拒绝对新主人下刀,所以连「杀掉它」这条退路都没有)——第 3 轮审查 F1。
       const t = setInterval(() => {
-        let alive = true;
-        try {
-          process.kill(opts.pid, 0);
-        } catch {
-          alive = false;
-        }
-        if (alive) return;
+        // 走的是击杀那条路同一份身份读数(`pidRunStillAlive`):它每答一次「还是它」都记在
+        // 册上,随后的补刀据此才敢对一个刚空下来的组号发信号。
+        if (pidRunStillAlive(opts.pid, opts.startedAt) !== "gone") return;
         clearInterval(t);
         setTimeout(() => cb(readExitCode(opts.paths.rc)), 50);
       }, LIVENESS_MS);

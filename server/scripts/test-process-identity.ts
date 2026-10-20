@@ -17,24 +17,26 @@
  */
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "ash-process-identity-"));
 process.env.ASH_DB = join(root, "ash.db");
-/** 把「清扫后的尾巴」压到 700ms(生产 60s),⑧ 才能在一条用例里看完整条寿命;兜底那一档
- *  仍留得足够长(生产 24h),否则它会先于尾巴到期,⑧ 验的就不是同一件事了。 */
+/** 把「清扫后的尾巴」压到 700ms(生产 60s),⑧ 才能在一条用例里看完整条寿命;**复核间隔**
+ *  压到 300ms(生产 10 分钟),⑧ 才跨得过好几次复核 —— 老实现在那一刻无条件删文件。 */
 const TRACK_MS = 700;
+const RECHECK_MS = 300;
 process.env.ASH_TRACK_EVIDENCE_MS = String(TRACK_MS);
-process.env.ASH_TRACK_EVIDENCE_BACKSTOP_MS = String(5 * 60_000);
+process.env.ASH_TRACK_EVIDENCE_RECHECK_MS = String(RECHECK_MS);
 
 const {
-  childStillOurs, cleanupAfterRun, killByPid, killChild,
+  childStillOurs, cleanupAfterRun, killByPid, killChild, pidRunStillAlive,
   openTrackFd, registerTrackFd, shareChildIdentity, markAdoptedChild,
 } = await import("../src/executors/spawn.js");
 const { IS_WINDOWS, isPidAlive } = await import("../src/platform.js");
 const { inspectProcess } = await import("../src/proc.js");
+const { processGenerationSync, stillSameGeneration } = await import("../src/process-generation.js");
 
 /** 拼一个 detached.ts 那种合成句柄:字段齐全,但 exitCode 由回调补写,不是内核答案。 */
 function synthetic(pid: number | undefined, fields: Partial<ChildProcess> = {}): ChildProcess {
@@ -42,6 +44,8 @@ function synthetic(pid: number | undefined, fields: Partial<ChildProcess> = {}):
 }
 
 const strays: ChildProcess[] = [];
+/** 只拿到号的那些(别人进程组里的后代):收尾一并清掉,别把 sleep 留在机器上。 */
+const strayPids: number[] = [];
 /** 一个安静活着 60s 的真进程。detached = 自成进程组(killTree 打的就是组)。 */
 function sleeper(): ChildProcess {
   const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
@@ -136,10 +140,15 @@ if (IS_WINDOWS) {
   gone.kill("SIGKILL");
   await waitReaped(gone);
   killByPid(gonePid, "Thu Jan  1 00:00:00 1970"); // 号已经没了:不该抛,也不该乱打
-  assert.equal(isPidAlive(gonePid), false, "号已经空了,照打(组里可能还有后代)也打不到别人");
+  assert.equal(isPidAlive(gonePid), false, "号已经空了:不抛错,也不往这个号上发任何信号");
 }
 
-// ── ⑤ 组长已经死了、组里还有后代:号没人占 → 照打(「补刀不看组长死没死」)──────────
+// ── ⑤ 组长已经死了、组里还有后代:**刚探活确认过**才补这一刀 ────────────────────
+// 「补刀不看组长死没死」这条能力要留住(外层 shell 退了、它派生的忽略 SIGTERM 的东西还在
+// 原组里),但授权不能是「号空着」本身 —— 那个号被复用成新组长、新组长又先退了的时候,它
+// 留下的那一组的组 id 同样是空号(第 3 轮审查 F1)。
+// 现在的授权是**刚刚正面确认过这个号**:接回那条路每 400ms 探一次活,探活与击杀共用同一份
+// 身份读数,所以「刚才还确认它活着」这件事在随后的这一刀里作数。
 // 同样是 POSIX 专属:这一条验的是 `kill(-pid)` 的进程组语义,Windows 上根本没有进程组
 // (killTree 在那边是 `taskkill /T`,按进程表的父子关系走)。
 if (IS_WINDOWS) {
@@ -155,18 +164,15 @@ if (IS_WINDOWS) {
   leader.stdout!.on("data", (chunk) => { out += String(chunk); });
   const leaderPid = leader.pid!;
   const startedAt = inspectProcess(leaderPid)?.startedAt ?? null;
+  // 接回那条路的退出轮询:它活着的时候至少答过一次「还是它」。
+  assert.equal(pidRunStillAlive(leaderPid, startedAt), "alive", "前提:探活此刻认得它");
   await new Promise<void>((resolve) => leader.on("exit", () => resolve()));
   const kidPid = Number(out.trim());
   assert.ok(kidPid > 1, "这条用例要拿到组里那个后代的 pid");
-  if (isPidAlive(leaderPid)) {
-    // 组长的号在这个窗口里被系统分给了别人(概率极低)。这时候「不发信号」才是对的,
-    // 本用例的前提不成立,如实跳过而不是假装通过。
-    console.log("   ~ 组长的号已被复用,跳过「组长已死仍补刀」这一条");
-    process.kill(kidPid, "SIGKILL");
-  } else {
-    killByPid(leaderPid, startedAt);
-    assert.ok(await goneWithin(kidPid, 3000), "组长先退场、后代还在组里时,那一刀必须照发(否则它永远留下)");
-  }
+  strayPids.push(kidPid);
+  assert.equal(pidRunStillAlive(leaderPid, startedAt), "gone", "组长退场后探活必须报 gone,否则这一轮永远不结束");
+  killByPid(leaderPid, startedAt);
+  assert.ok(await goneWithin(kidPid, 3000), "刚确认过的那个号:组长先退场也要把这一刀发完");
 }
 
 // ── ⑥ 合成句柄:身份来自真进程的内核状态,不看自己那两个补写字段 ──────────────────
@@ -203,9 +209,13 @@ if (IS_WINDOWS) {
   assert.ok(await goneWithin(mine.pid!, 3000), "身份对得上就照清(接回的那一轮也要能收干净)");
 }
 
-// ── ⑧ 追踪证据的寿命归清扫方,不归根进程的 close ──────────────────────────────────
-// 钉的是 codex 会话级常驻:一个回合一个进程,句柄的 cleanup 要等整条会话结束才跑。证据
-// 一旦按「根进程 close + 一分钟」删,长会话里那些早退场的回合就再也捞不回后代(F2)。
+// ── ⑧ 追踪证据的寿命:只按「还能不能取到人」判,不按时长判 ────────────────────────
+// 钉两件事:
+//  · codex 会话级常驻那条路 —— 一个回合一个进程,句柄的 cleanup 要等整条会话结束才跑。
+//    证据按任何固定时长删,长会话里那些早退场的回合就再也捞不回后代(F2:先是 close+60s,
+//    后是「注册后 24 小时」,判据都是时长);
+//  · 清扫**抛错**那条路 —— 调用方还会再试一次(常驻把这个 child 留在册上),所以那一次
+//    不许进删除倒计时(第 3 轮审查 F2)。
 if (IS_WINDOWS) {
   console.log("   ~ Windows 没有追踪 fd(openTrackFd 直接返回空),跳过 ⑧");
 } else {
@@ -224,24 +234,39 @@ if (IS_WINDOWS) {
   });
   registerTrackFd(real, track);
   await new Promise<void>((resolve) => real.on("close", () => resolve()));
-  await wait(TRACK_MS * 2); // 跨过「close + 延迟」那条老删除线
-  assert.equal(existsSync(track.path!), true, "根进程 close 不是证据的死期 —— 清扫方还没来");
+  // 跨过「close + 尾巴」那条老删除线,也跨过好几次复核:持有者还活着 ⇒ 一个字都不能删。
+  await wait(Math.max(TRACK_MS * 2, RECHECK_MS * 4));
+  assert.equal(existsSync(track.path!), true, "持有者还活着时,证据不许按时长销毁");
   await cleanupAfterRun(real);
   assert.ok(await goneWithin(holder.pid!, 3000), "迟到的清扫仍然要捞得回逃逸者");
   const deadline = Date.now() + TRACK_MS * 6;
   while (existsSync(track.path!) && Date.now() < deadline) await wait(50);
-  assert.equal(existsSync(track.path!), false, "清扫方扫完之后才删:临时文件不会无限堆积");
+  assert.equal(existsSync(track.path!), false, "扫完了、也确认没人握着,才删:临时文件不会无限堆积");
+
+  // 清扫中途失败:证据必须留给下一次重试(注入法是让清扫读根进程的号时抛错)。
+  const track2 = openTrackFd();
+  assert.ok(track2.path, "这条用例要靠第二个追踪文件");
+  const broken = {
+    get pid(): number { throw new Error("注入:清扫中途失败"); },
+    exitCode: null, signalCode: null, kill: () => true, on: () => {},
+  } as unknown as ChildProcess;
+  registerTrackFd(broken, track2);
+  await assert.rejects(() => cleanupAfterRun(broken), /清扫中途失败/, "清扫的错不许被吞掉");
+  await wait(Math.max(TRACK_MS * 2, RECHECK_MS * 4));
+  assert.equal(existsSync(track2.path!), true, "清扫失败 = 还没扫完,证据不许进删除倒计时");
 }
 
-// ── ⑨ 补刀前现场重新取证:号码不是身份 ───────────────────────────────────────────
+// ── ⑨ 认过的后代丢掉追踪 fd 之后,补刀照样要落在它身上 ────────────────────────────
+// 这是第 3 轮审查 F1 用生产 openResident 实测的那条缝:一个后代收到 SIGTERM 时顺手把继承
+// fd 关掉,却继续在用户目录里写文件。上一版的补刀要求「此刻仍能取到证据」,于是它从 lsof
+// 名单里一消失就被当成「号已换主」而放过(心跳从 17 涨到 156)。
+// 现在的判据是「账上记过 + 代次仍对得上」—— 丢 fd 不等于换代。
 if (IS_WINDOWS) {
   console.log("   ~ 同上(这条也要追踪 fd),跳过 ⑨");
 } else {
   const track = openTrackFd();
   assert.ok(track.fd !== null && track.path, "这条用例要靠追踪文件");
-  // 一个「SIGTERM 不吃」的后代,并且在那 2 秒等待窗口里**主动放掉追踪 fd**:到补刀那一刻
-  // 它已经不是我们的证据了。它代表「这个号在这 2 秒里被系统分给了别人」—— SIGTERM 正是
-  // 为了让它们退出,退出就意味着号可复用,所以不能拿 2 秒前的号码快照当身份(F1)。
+  // SIGTERM 不吃,而且在那 2 秒等待窗口里**主动放掉追踪 fd**,然后接着活。
   const stubborn = spawn("/bin/sh", ["-c", 'trap "" TERM; sleep 0.6; exec 3>&-; sleep 30'], {
     stdio: ["ignore", "ignore", "ignore", track.fd!],
     detached: true,
@@ -251,12 +276,69 @@ if (IS_WINDOWS) {
   const exited = synthetic(undefined); // 没有根进程的号,只验后代那一条
   registerTrackFd(exited, track);
   await cleanupAfterRun(exited);
-  assert.equal(isPidAlive(stubborn.pid!), true, "补刀那一刻已经取不到它 = 不是我们的号,一刀都不许发");
-  process.kill(stubborn.pid!, "SIGKILL");
+  assert.ok(await goneWithin(stubborn.pid!, 3000), "它自己关掉 fd 不等于换了主人,补刀必须照落");
+}
+
+// ── ⑩ 只有 pid 时:「号空着」不再等于「这一组还是我们的」 ─────────────────────────
+// 老判据是无条件放行(理由:新进程不会跑进一个以空号为 id 的进程组)。漏的一步是**这个号
+// 被复用成新的组长、新组长又先退了** —— 那时它留下的那一组的组 id 同样是个空号,几小时后
+// 按下的停止会打在人家的组上(第 3 轮审查 F1)。
+// 所以「号空着」只在我们**刚刚正面确认过它**的那一小会儿内作数。
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 没有进程组(killByPid 走 taskkill /T),跳过 ⑩");
+} else {
+  // ⑩-a 从没确认过的空号:一刀都不许发,它那一组里的进程必须活着。
+  const kidFile = join(root, "orphan-kid.pid");
+  const leaderGone = spawn("/bin/sh", ["-c", `sleep 30 & echo $! > ${kidFile}; exit 0`], {
+    stdio: "ignore", detached: true,
+  });
+  const leaderPid = leaderGone.pid!;
+  const startedAt = inspectProcess(leaderPid)?.startedAt ?? null;
+  await waitReaped(leaderGone);
+  await wait(100);
+  const orphanKid = Number(readFileSync(kidFile, "utf8").trim());
+  assert.ok(orphanKid > 1 && isPidAlive(orphanKid), "前提:组长退场了,它的孩子还在原组里");
+  strayPids.push(orphanKid);
+  killByPid(leaderPid, startedAt);
+  await wait(300);
+  assert.equal(isPidAlive(orphanKid), true, "号空着、又没有刚确认过 ⇒ 这一组证不出是我们的,不许下刀");
+  process.kill(orphanKid, "SIGKILL");
+
+  // ⑩-b 正常停止那条路:首发之前拿到了正面身份,组长随后自己退了 —— 2 秒后的补刀仍要落在
+  // 这一组上(「忽略 SIGTERM 的后代还在原组里」正是补刀存在的理由)。
+  const stubbornKidFile = join(root, "stubborn-kid.pid");
+  const leader = spawn("/bin/sh", [
+    "-c",
+    `/bin/sh -c 'trap "" TERM; sleep 30' & echo $! > ${stubbornKidFile}; sleep 0.4; exit 0`,
+  ], { stdio: "ignore", detached: true });
+  await wait(200);
+  const stubbornKid = Number(readFileSync(stubbornKidFile, "utf8").trim());
+  assert.ok(stubbornKid > 1 && isPidAlive(stubbornKid), "前提:组里有一个不吃 SIGTERM 的后代");
+  strayPids.push(stubbornKid);
+  killByPid(leader.pid!, inspectProcess(leader.pid!)?.startedAt ?? null);
+  assert.ok(await goneWithin(stubbornKid, 4000), "刚确认过的那一组:组长死了也要把补刀发完");
+}
+
+// ── ⑪ 代次闸本体:所有信号都从这一句过 ───────────────────────────────────────────
+{
+  const live = sleeper();
+  const gen = processGenerationSync(live.pid!);
+  assert.ok(gen, "这条用例要拿到代次戳");
+  assert.equal(stillSameGeneration({ pid: live.pid!, gen: gen! }), true, "对得上 ⇒ 还是它");
+  assert.equal(stillSameGeneration({ pid: live.pid!, gen: `${gen}x` }), false, "对不上 ⇒ 这个号换了主人,一刀都不发");
+  // 探活同理:号上有人**不等于**还是它。老写法问的是 `kill(pid,0)`,号被别人接手之后它永远
+  // 答「活着」,于是接回的那一轮再也不结束(任务卡 running、停止也没用)。
+  assert.equal(
+    pidRunStillAlive(live.pid!, "Thu Jan  1 00:00:00 1970"), "gone",
+    "启动时刻对不上 = 当初那个已经退了,探活必须这么报(否则这一轮永不结束)",
+  );
 }
 
 for (const child of strays) {
   try { if (child.pid) process.kill(child.pid, "SIGKILL"); } catch { /* 已经没了 */ }
+}
+for (const pid of strayPids) {
+  try { process.kill(pid, "SIGKILL"); } catch { /* 已经没了 */ }
 }
 console.log("process-identity regressions ok");
 process.exit(0);

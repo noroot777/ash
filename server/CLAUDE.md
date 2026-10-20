@@ -21,7 +21,7 @@
 | 重新排队的位置规则 | `queues.ts` `isOvertaken` / `tailOrder` | `test:queue` |
 | agent 活得过 server 重启 | `executors/detached.ts` 顶部 | `test:detached` |
 | 重启后接回 / 收拾残留（`reattach` 必须排在 `reconcile` 前） | `reattach.ts` + `index.ts` 调用顺序 | `test:reattach` |
-| 三层击杀、预检失败的惰性 `'error'` | `executors/spawn.ts` | — |
+| 三层击杀、进程身份 | `executors/kill.ts` | `test:process-identity` |
 | 单实例锁（粒度是 DB 文件路径，不是端口） | `singleton.ts` | `test:singleton` |
 | 启动期致命错误必须 `exit(1)` | `index.ts` `exitAfterStartupFailure`（**代码已在做**，不是靠自觉） | — |
 | 同仓库写型 git 操作串行 | `repo-lock.ts` 顶部 | `test:repo-lock` |

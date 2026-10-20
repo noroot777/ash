@@ -229,6 +229,15 @@ async function initializeServer() {
     const { sweepPersonalAshMcp } = await import("./auth/user-cli.js");
     await sweepPersonalAshMcp().catch((err) => console.error("[ash] 个人 CLI 的 ash MCP 自检失败（不影响启动）:", err));
   }
+  // 上一个 ash 留下的逃逸追踪文件(tmpdir 里的空文件)。证据的寿命跟着「还能不能取到人」
+  // 走、不再有硬期限(见 executors/kill.ts),所以「进程整个没了、内存里的租约也没了」这条
+  // 路得有人收。只删「创建者 pid 已经不在 + 此刻没有活着的持有者」的那些,所以不会碰到
+  // 另一个 ash 实例正用着的文件。best-effort。
+  void (async () => {
+    const { sweepOrphanTrackFiles } = await import("./executors/kill.js");
+    const removed = await sweepOrphanTrackFiles();
+    if (removed) console.log(`[ash] 回收 ${removed} 个上一轮遗留的逃逸追踪文件`);
+  })().catch((err) => console.error("[ash] 逃逸追踪文件回收失败（不影响运行）:", err));
   // 回收上一轮遗留的原始输出文件（纯传输介质，正文早已进 .md）。放在接管之后：
   // 它靠 sessions 判断哪些文件仍在用，接管完那份名单才是准的。best-effort。
   void sweepRunLogs()
