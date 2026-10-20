@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { migrateLegacyDbFiles } from "../src/db/path.js";
 import { singletonLockFileForDb } from "../src/singleton.js";
@@ -19,7 +19,11 @@ import {
   type ExitRecord,
 } from "../src/exit-ledger.js";
 
-const serverRoot = resolve(new URL("..", import.meta.url).pathname);
+// `new URL(..).pathname` 在 Windows 上给的是 `/D:/...`(带前导斜杠),`resolve` 会把它
+// 拼成 `C:\D:\...` —— 于是每个 spawn 的 cwd 都不存在,报 `spawn node.exe ENOENT`。
+// 这一行是基线既有的,后果是**这套用例在 Windows 上从来没跑起来过**;2026-10-20 上
+// 真机验证 win32 分支时撞上,改成 fileURLToPath 才跑得动。
+const serverRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const singletonUrl = pathToFileURL(join(serverRoot, "dist/singleton.js")).href;
 const POSIX = process.platform !== "win32";
 
