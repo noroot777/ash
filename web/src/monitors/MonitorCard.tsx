@@ -4,7 +4,7 @@ import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@ash/shared/mon
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { formatInstant } from "../task-detail/utils.ts";
-import { claudeMonitorEpilogue, liveDeadline, startedAtLabel } from "./monitorCopy.ts";
+import { claudeMonitorEpilogue, emptyLogCopy, liveDeadline, startedAtLabel } from "./monitorCopy.ts";
 import { MONITOR_ENDED_LABEL } from "./useTaskMonitors.ts";
 
 /** 展开着的那张卡每隔这么久重拉一次尾巴。只在「正在盯着」且「卡片是展开的」时才走。 */
@@ -178,7 +178,7 @@ export function MonitorCard({
         <div className="monitor-card__log">
           {log.error && <p role="alert">{log.error}</p>}
           {!log.error && log.lines === null && <p>读取中…</p>}
-          {!log.error && log.lines?.length === 0 && <p>这个命令到现在一个字都还没吐。</p>}
+          {!log.error && log.lines?.length === 0 && <p>{emptyLogCopy(monitor, live)}</p>}
           {log.lines && log.lines.length > 0 && (
             <>
               {log.truncated && <p>（只显示最后一段，更早的内容在哨兵的日志文件里）</p>}

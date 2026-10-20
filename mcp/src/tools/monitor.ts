@@ -2,8 +2,8 @@
 //
 // 这几段 description 是**注入给 agent 的判据**，不是字段文档。三件事全靠措辞立住：
 // ① 什么时候该用它（而不是 sleep + 反复 cat 日志）；② 命令本身就是过滤器，别让它吐
-// 流水账；③ 起了哨兵的那一轮必须用 pause_task 收尾，用 complete_task 收尾哨兵会被
-// 一起收走 —— 这条是系统行为，agent 看不到别处。
+// 流水账；③ 起了哨兵的那一轮必须用 pause_task 收尾 —— complete_task 会被服务端
+// 拒掉（task-complete-monitors.ts），这里要把那条 409 的出路提前说清，省得它撞上才知道。
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
@@ -27,7 +27,7 @@ server.registerTool(
       "把一条长跑命令挂在任务上，由 **ash** 起进程（不在你的进程树里），它的 stdout **每输出一行就是一条事件**：ash 会把这些行攒成一条消息送回这个任务、把你唤醒。你不必轮询。\n\n" +
       "**什么时候用它**：你要等的事情以「分钟~小时」计，而且过程中会往某处写进展——跑批、训练、长构建、爬取、转码、轮询一个外部状态。典型手法是让命令自己做过滤：`tail -F build.log | grep --line-buffered -E '^\\[DONE\\]|ERROR'`。**什么时候不用**：几秒内就能出结果的命令（直接跑完它）；需要你立刻看全文的（直接读文件）。\n\n" +
       "**命令就是过滤器，这是最重要的一条**：每一行事件都会唤醒任务跑一个真实回合，花的是真钱。所以别 `tail -F` 整份日志，要 grep 到「你真会据此做事」的那几行。管道每一级都得逐行冲刷（`grep --line-buffered`、`awk` 里 `fflush()`；`head` 做不到，别用）。同时**别只匹配成功**：只 grep 成功标记的哨兵在崩溃、卡死、异常退出时一声不吭，而「安静」和「还在跑」长得一模一样——把失败特征（`Traceback|ERROR|FAILED|Killed`）一起写进交替分支里。\n\n" +
-      "**起了哨兵的那一轮，用 pause_task 收尾，不要用 complete_task**：任务一落 done/failed/canceled，它名下的哨兵会被系统一并停掉（哨兵唯一的出口就是唤醒这个任务，任务都结束了再留着只会白烧回合）。pause_task 的 resumePrompt 写清「被哨兵叫醒后该干什么」。\n\n" +
+      "**起了哨兵的那一轮，用 pause_task 收尾** —— `complete_task` 会被当场拒掉（名下还挂着哨兵时一律 409）。理由是任务一落 done/failed/canceled，它名下的哨兵会被系统一并停掉（哨兵唯一的出口就是唤醒这个任务，任务都结束了再留着只会白烧回合），于是它在等的那个结果你再也拿不到。pause_task 的 resumePrompt 写清「被哨兵叫醒后该干什么」；确实不要那个结果了，就先对它调 stop_monitor（reason 写清为什么），再确认完成。\n\n" +
       `**上限**：一个任务同时最多 ${MONITOR_MAX_PER_TASK} 个哨兵；单个哨兵推够 ${MONITOR_MAX_EVENTS} 条事件自动停（到顶会明确告诉你）；timeoutMs 在 ${MONITOR_MIN_TIMEOUT_MS / 1000} 秒到 ${minutes(MONITOR_MAX_TIMEOUT_MS)} 之间，缺省 ${minutes(MONITOR_DEFAULT_TIMEOUT_MS)}，到点进程被杀掉并推一条收尾事件。要盯更久就在到期事件里重挂一个。\n\n` +
       "**它活得比你这一轮久**：进程由 ash 起、输出落文件，你的回合结束、会话结束、ash 重启都不会把它带走。所以不需要自己 `fork + setsid` 或 `nohup` —— 那样起的进程 ash 看不见也停不掉，留下的是没人认领的僵尸。",
     inputSchema: {

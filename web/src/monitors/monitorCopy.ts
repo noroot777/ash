@@ -3,6 +3,7 @@
 // 单独成文件是因为**会话区那张等待卡和 inspector 里那张卡必须说同一句话**：同一个哨兵
 // 在两处显示成不同的期限，用户只会以为其中一处是坏的。
 import type { TaskMonitor } from "@ash/shared/monitor";
+import { isSilentWaitLoop } from "@ash/shared/monitor-silence";
 import { formatInstant } from "../task-detail/utils.ts";
 
 /**
@@ -85,4 +86,34 @@ export function claudeMonitorEpilogue(status: TaskMonitor["status"]): string {
   if (status === "lost")
     return `起它的那个智能体进程已经不在了，它的通知没有任何去处${tail}`;
   return `它的通知只注回那个会话，而它已经没命等到结果了${tail}`;
+}
+
+/**
+ * 日志那一格是空的时候说什么。
+ *
+ * 「这个命令到现在一个字都还没吐」是对的，但它只报现象、不答用户真正在问的那一句：**那它
+ * 到底是还在等，还是已经没戏了**。2026-10-20 那次空转（任务 u7nb4wnGcX2O）里，用户盯着
+ * 这一格和一句「共推送 0 条事件」，两句话加起来仍然推不出「它等的标记永远不会出现了」。
+ *
+ * 所以这里多答两件事：
+ *  · **静默了多久** —— 刚挂上 10 秒和已经哑了 40 分钟是完全不同的处境（起点不可信的投影
+ *    行不说，宁可少说一句也不编一个时长出来，判据同 {@link startedAtLabel}）；
+ *  · **这条命令会不会说话** —— 循环体里只有 sleep 的等待循环在条件成立之前**结构上**不
+ *    可能有输出（判据在 shared/monitor-silence.ts）。说清这一点，沉默本身才从「像是坏了」
+ *    变成一条可读的事实。
+ */
+export function emptyLogCopy(monitor: TaskMonitor, live: boolean): string {
+  const silent = isSilentWaitLoop(monitor.command);
+  if (!live) {
+    return "它从头到尾一个字都没吐。"
+      + (silent ? "这条命令只在条件成立时才说话，所以它一直沉默 = 那个条件始终没出现。" : "");
+  }
+  const started = Date.parse(monitor.startedAt);
+  const span = monitor.startedAtExact && Number.isFinite(started)
+    ? `（已经静默 ${formatSpan(Math.max(0, Date.now() - started))}）`
+    : "";
+  return `这个命令到现在一个字都还没吐${span}。`
+    + (silent
+      ? "它在跳出等待循环之前本来就不会说话——所以这既可能是「还在等」，也可能是它等的条件已经不会出现了。"
+      : "");
 }

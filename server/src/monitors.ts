@@ -32,6 +32,7 @@ import {
   type MonitorStatus,
   type TaskMonitor,
 } from "@ash/shared/monitor";
+import { monitorEventTally } from "@ash/shared/monitor-silence";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
@@ -430,7 +431,7 @@ export async function finish(
     publish(row.taskId);
     const code = exitCode === null ? "" : `，退出码 ${exitCode}`;
     const total = (await db.select({ events: monitors.events }).from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
-    await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（共推送 ${total} 条事件）`);
+    await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（${monitorEventTally(total, row.command)}）`);
     if (notify) await pushToTask(row, `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`);
     // **追线索放在最后**:状态、时间线、通知都已落定,这一步只负责「能收的档收掉」。
     // 它会等到补刀生效(有界,见 `confirmReclaimed`)—— 于是这个函数返回时,要么进程确认不在了,
@@ -564,7 +565,7 @@ export async function finishOffline(
         return;
       }
       publish(base.taskId);
-      await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${reason}（共推送 ${events} 条事件）`);
+      await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${reason}（${monitorEventTally(events, base.command)}）`);
       await pushToTask(base, `【哨兵结束】${base.description}（monitorId=${base.id}）。${reason}`);
     } finally {
       // 撤运行时排在读日志之前(自己那条 tail 不停下来就会边收尾边继续推),所以中间这一段
