@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { stream, streamSSE } from "hono/streaming";
 import { getConnInfo } from "@hono/node-server/conninfo";
-import { eq } from "drizzle-orm";
+import { and, eq, exists, sql } from "drizzle-orm";
 import type {
   Group,
   AgentType,
@@ -14,7 +14,7 @@ import { isSearchSort } from "@ash/shared/search";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@ash/shared/cli-overrides";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, agents, llmProviders } from "./db/schema.js";
+import { projects, groups, agents, llmProviders } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
@@ -38,6 +38,7 @@ import { mountSkillRoutes } from "./skill-routes.js";
 import { mountAnthropicContext1mRoutes, stripContext1mSuffix } from "./anthropic-context-1m.js";
 import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
+import { detachTaskRefs } from "./task-refs.js";
 import { mountGroupRoutes } from "./group-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountMonitorRoutes } from "./monitor-routes.js";
@@ -70,7 +71,7 @@ import { makeEventFilter } from "./auth/event-filter.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 import { isHostCliIsolated } from "./auth/mode.js";
-import { clearDefaultFor, dispatchBlockReason } from "./auth/dispatch-gate.js";
+import { defaultClearScope, dispatchBlockReason } from "./auth/dispatch-gate.js";
 
 export const api = new Hono();
 // 认证 / 首启向导 / 用户与项目成员。挂在最前:它们里有几条是**闸外**的公开端点
@@ -307,10 +308,15 @@ api.post("/agents", async (c) => {
     configOverrides: JSON.stringify(configOverrides),
     isDefault: !!b.isDefault,
   };
-  // 「同一类型至多一个默认」在多人模式下是**每人各自**的一个默认 —— 清别人的标记
-  // 既越权又会把他的设置改掉。
-  if (row.isDefault) await clearDefaultFor(row.type, row.ownerUserId);
-  await db.insert(agents).values(row);
+  // 清旧默认与落新行**同批提交**:两次并发的「设为默认」若在清与设之间互相插队,同一
+  // 类型会留下两个默认(解析时取到哪个全看行序)。清的范围见 defaultClearScope。
+  const clearDefault = row.isDefault
+    ? db.update(agents).set({ isDefault: false })
+      .where(await defaultClearScope(row.type, row.ownerUserId))
+    : null;
+  const insert = db.insert(agents).values(row);
+  if (clearDefault) await db.batch([clearDefault, insert]);
+  else await insert;
   return c.json(toAgent(row as typeof agents.$inferSelect), 201);
 });
 
@@ -348,12 +354,24 @@ api.patch("/agents/:id", async (c) => {
     if (overrideErrors.length) return c.json({ error: overrideErrors.join("；") }, 400);
     patch.configOverrides = JSON.stringify(configOverrides);
   }
-  if (b.isDefault === true) {
-    await clearDefaultFor(existing.type, existing.ownerUserId);
-    patch.isDefault = true;
-  }
-  await db.update(agents).set(patch).where(eq(agents.id, aid));
-  const updated = (await db.select().from(agents).where(eq(agents.id, aid))).at(0)!;
+  // 同上:清旧默认与设新默认打进同一批。但**成批不等于两条都命中** —— 开头那句
+  // 「这个 profile 存在」是在批外读的,删除可以恰好落在它和这一批之间;而 SQLite 对
+  // 不存在的行做 UPDATE 是成功的零行操作,不报错也不回滚。于是清旧默认照常提交,设
+  // 新默认一行没中:**设置失败,却把另一个仍在的默认抹掉了**(第 1 轮审查 20/20 复现)。
+  // 所以把「目标还在」做成清那条语句自己的条件(子查询跟它一起求值),两条就只剩
+  // 「都中」或「都不中」—— 判据同 claude-monitor-write.ts 那段。
+  const targetAlive = exists(db.select({ one: sql`1` }).from(agents).where(eq(agents.id, aid)));
+  const clearDefault = b.isDefault === true
+    ? db.update(agents).set({ isDefault: false })
+      .where(and(await defaultClearScope(existing.type, existing.ownerUserId), targetAlive))
+    : null;
+  if (clearDefault) patch.isDefault = true;
+  // 响应取**这次写入自己的结果**:写完再独立读一次是第二个空窗口(行刚被删就读成
+  // undefined,老代码那个非空断言当场 500)。零行 = 目标已经没了,与开头的预读同一句话。
+  const write = db.update(agents).set(patch).where(eq(agents.id, aid)).returning();
+  const written = clearDefault ? (await db.batch([clearDefault, write]))[1] : await write;
+  const updated = written.at(0);
+  if (!updated) return c.json({ error: "not found" }, 404); // 与开头预读那条同一句话
   return c.json(toAgent(updated));
 });
 
@@ -362,7 +380,7 @@ api.delete("/agents/:id", async (c) => {
   const existing = (await db.select().from(agents).where(eq(agents.id, aid))).at(0);
   if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
   await db.delete(agents).where(eq(agents.id, aid));
-  await db.update(tasks).set({ executorId: null, updatedAt: now() }).where(eq(tasks.executorId, aid));
+  await detachTaskRefs("executorId", aid);
   return c.json({ deleted: true });
 });
 
