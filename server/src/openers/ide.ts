@@ -188,6 +188,10 @@ function windowsKind(path: string): "exec" | "winshell" {
  * 不是变成命令分隔符。Windows 的文件名本来就不允许 `"`,所以没有闭合引号被撬开的路。
  * `/d` 跳过 AutoRun(用户注册表里挂的启动脚本不该混进来),`/s` 锁定「去掉首尾一对引号、
  * 中间原样」这条解析规则。
+ *
+ * 2026-10-20 在 Windows 真机上验过这两档:`amp&ver`、`amp&md INJECTED`、`pct%TEMP%pct`、
+ * `caret^x`、`中文目录` 等目录名,经 `.cmd` 包装器和原生 `.exe` 各走一遍,启动器收到的都是
+ * 原样完整路径,没有额外命令被执行。用例在 `server/scripts/test-open-in-ide.ts` 顶部有记。
  */
 export const WIN_LAUNCHER_ENV = "ASH_IDE_LAUNCHER";
 export const WIN_TARGET_ENV = "ASH_IDE_TARGET";
