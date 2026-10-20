@@ -73,6 +73,23 @@ export function FreeReviewDialog({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ReviewerProfile | null>(null);
+  // 这份表单只在「打开这一次」初始化一次。对话框开着的时候远端预约字段照样会变 —— 别的
+  // 页面改了预约、自动复审推进了一轮，以及**在这个对话框里删掉被预约引用的那位审查者**
+  // （服务端会顺手取消那条预约）。这些都不等于「用户重新打开了对话框」：正在写的草稿不
+  // 是已经保存的旧预约，不该被一次远端刷新冲掉（实测：删掉另一位审查者，刚改好的审查者、
+  // 检查类型、复审轮数和整段附言会一起被打回）。三个入口都写成
+  // `{open && <FreeReviewDialog …>}`，所以「挂载一次 = 打开一次」，这个 ref 跟着对话框活。
+  const initialized = useRef(false);
+  // 审查者清单的代次：每成功写一次（删除 / 新建 / 覆盖）就 +1，比它旧的在飞响应整份丢弃。
+  // `alive` 只能证明这个 effect 还活着，证明不了这份响应比最近一次写操作新 —— 一个先发后
+  // 到的 GET 会把刚删掉的那位又贴回清单，而提示还写着「已删除」。
+  const listGen = useRef(0);
+  const invalidateReviewerList = () => { listGen.current += 1; };
+  // 初始化要读「清单回来那一刻」的状态，而不是某次渲染闭包里的那一份。
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const hasState = !!state;
+  const refocusAfterDelete = useRef(false);
   const postMerge = !!postMergeTarget;
   const parsedRetryLimit = parseRetryLimit(retryLimit);
   // 合并结果审查本来就不复审（提交时写死 0），别让那条禁用的输入卡住它的提交按钮。
@@ -91,11 +108,14 @@ export function FreeReviewDialog({
     ? `${sendKeys.send} 提交 · ${sendKeys.newline} 换行 · 已有 ${settled.length} 处意见被你裁定「不在本任务里修」` +
       "（转为独立任务或作废），派审时会自动讲给审查者，不必在这里重复说明"
     : `${sendKeys.send} 提交 · ${sendKeys.newline} 换行`;
-  // 预约里的覆盖每次轮询都是新对象，直接进依赖会把用户正在改的草稿冲掉；按值序列化当键。
-  const reservedOverrideKey = JSON.stringify(state?.reviewReservation?.override ?? null);
   const selectedReviewer = reviewers.find((item) => item.id === selectedId) ?? null;
   const runChanged = !sameAsReviewer(runDraft, selectedReviewer);
-  useDismissable({ enabled: !busy, containerRef: scrim, onClose });
+  // 对话框开着期间**始终**登记在那摞可关闭层里。`enabled` 跟着 busy 翻动等于「退出这摞
+  // 再重新 push」，层序会被改写成最新 push 的那一个 —— 父层跑到里面那个确认框前面去，
+  // 于是点确认框被父层判成「点了外面」，两个框一起关掉（删除失败后再点一次「删除」，
+  // 实测就是两个一起消失、请求一次都没发出去）。要禁的是「这会儿不许关」，那归 onClose
+  // 判，跟层序无关；`useDismissable` 的 onClose 是每次渲染写进 ref 的，不会因此重登记。
+  useDismissable({ enabled: true, containerRef: scrim, onClose: () => { if (!busy) onClose(); } });
 
   // 换审查者 = 换了参照系：草稿、保存方式、新名字整套回到这位审查者的原配置。
   const selectReviewer = (reviewer: ReviewerProfile) => {
@@ -108,44 +128,59 @@ export function FreeReviewDialog({
   useEffect(() => { dialog.current?.focus(); }, []);
 
   useEffect(() => {
+    // 已经按一份真实状态初始化过就不再来第二遍（见 initialized 的说明）。
+    if (initialized.current) return;
     let alive = true;
-    Promise.all([api.reviewerProfiles(), api.agents()]).then(([nextReviewers, nextProfiles]) => {
-      if (!alive) return;
-      setReviewers(nextReviewers);
-      setProfiles(nextProfiles);
-      setDraft(createReviewerDraft(nextProfiles));
-      const preferred = state?.selectedReviewerId && nextReviewers.some((item) => item.id === state.selectedReviewerId)
-        ? state.selectedReviewerId
-        : nextReviewers[0]?.id ?? "";
-      setSelectedId(preferred);
-      setCheckMode(state?.reviewReservation?.checkMode ?? "logic");
-      setRetryLimit(String(state?.reviewReservation?.retryLimit ?? 1));
-      setNote(state?.reviewReservation?.note ?? "");
-      // 「调整预约审查」再打开时要看到上次改后的那套配置，而不是审查者的原配置——
-      // 预约里存着覆盖就回显它，保存方式跟着回到「仅本次使用」。
-      const reserved = JSON.parse(reservedOverrideKey) as FreeReviewExecutorOverride | null;
-      const reviewer = nextReviewers.find((item) => item.id === preferred) ?? null;
-      setRunDraft(reserved && reviewer ? reviewerRunDraftFrom(reserved) : reviewerRunDraft(reviewer));
-      setSaveMode("once");
-      setNewName("");
-      setCreating(nextReviewers.length === 0);
-    }).catch((error) => notify(error instanceof Error ? error.message : "审查者读取失败"))
-      .finally(() => { if (alive) setLoading(false); });
+    const read = () => {
+      const gen = listGen.current;
+      Promise.all([api.reviewerProfiles(), api.agents()]).then(([nextReviewers, nextProfiles]) => {
+        if (!alive) return;
+        // 这中间写过一次（删 / 新建 / 覆盖）：手上这份清单已经是旧世界的，整份丢掉重读
+        // 一次。直接铺上去的话，刚删掉的那位会原样回到清单里，而提示还写着「已删除」。
+        if (gen !== listGen.current) { read(); return; }
+        // 读的是「清单回来那一刻」的状态，不是某次渲染闭包里的那一份。
+        const opened = stateRef.current;
+        // 状态还没到（父层那条 GET 还在飞）就先按默认值摆出来，等它到了再补这一次初始化。
+        initialized.current = !!opened;
+        setReviewers(nextReviewers);
+        setProfiles(nextProfiles);
+        setDraft(createReviewerDraft(nextProfiles));
+        const preferred = opened?.selectedReviewerId && nextReviewers.some((item) => item.id === opened.selectedReviewerId)
+          ? opened.selectedReviewerId
+          : nextReviewers[0]?.id ?? "";
+        setSelectedId(preferred);
+        setCheckMode(opened?.reviewReservation?.checkMode ?? "logic");
+        setRetryLimit(String(opened?.reviewReservation?.retryLimit ?? 1));
+        setNote(opened?.reviewReservation?.note ?? "");
+        // 「调整预约审查」再打开时要看到上次改后的那套配置，而不是审查者的原配置——
+        // 预约里存着覆盖就回显它，保存方式跟着回到「仅本次使用」。
+        const reserved = opened?.reviewReservation?.override ?? null;
+        const reviewer = nextReviewers.find((item) => item.id === preferred) ?? null;
+        setRunDraft(reserved && reviewer ? reviewerRunDraftFrom(reserved) : reviewerRunDraft(reviewer));
+        setSaveMode("once");
+        setNewName("");
+        setCreating(nextReviewers.length === 0);
+      }).catch((error) => notify(error instanceof Error ? error.message : "审查者读取失败"))
+        .finally(() => { if (alive) setLoading(false); });
+    };
+    read();
     return () => { alive = false; };
-  }, [
-    notify,
-    reservedOverrideKey,
-    state?.reviewReservation?.checkMode,
-    state?.reviewReservation?.note,
-    state?.reviewReservation?.retryLimit,
-    state?.selectedReviewerId,
-  ]);
+  }, [hasState, notify]);
+
+  // 删成功那一下，原来那颗删除按钮已经不在了；确认框只在「原来那个元素还连着」时才还
+  // 焦点，于是焦点掉到 body 上，键盘就从对话框里掉了出去。给它补一个落点：对话框本身。
+  useEffect(() => {
+    if (deleteTarget || !refocusAfterDelete.current) return;
+    refocusAfterDelete.current = false;
+    if (!dialog.current?.contains(document.activeElement)) dialog.current?.focus();
+  }, [deleteTarget]);
 
   const create = async () => {
     if (!draft.name.trim() || busy) return;
     setBusy(true);
     try {
       const created = await api.createReviewerProfile(reviewerPayload(draft, profiles));
+      invalidateReviewerList();
       setReviewers((current) => [created, ...current]);
       selectReviewer(created);
       setCreating(false);
@@ -172,6 +207,8 @@ export function FreeReviewDialog({
     setBusy(true);
     try {
       await api.deleteReviewerProfile(deleteTarget.id);
+      // 先作废在飞的清单读取，再整体写回：这之后不会再有旧响应把这位贴回来。
+      invalidateReviewerList();
       const rest = reviewers.filter((item) => item.id !== deleteTarget.id);
       setReviewers(rest);
       // 删掉的正是当前选中的那位时要补一个选中项：下一位顶上；一个都不剩就把新建表单摊开。
@@ -186,6 +223,7 @@ export function FreeReviewDialog({
           setCreating(true);
         }
       }
+      refocusAfterDelete.current = true;
       setDeleteTarget(null);
       notify(`已删除审查者「${deleteTarget.name}」`);
     } catch (error) {
@@ -214,9 +252,11 @@ export function FreeReviewDialog({
       let override: FreeReviewExecutorOverride | null = null;
       if (payload && saveMode === "overwrite") {
         const updated = await api.patchReviewerProfile(selectedId, payload);
+        invalidateReviewerList();
         setReviewers((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       } else if (payload && saveMode === "new") {
         const created = await api.createReviewerProfile({ name: newName.trim(), ...payload });
+        invalidateReviewerList();
         setReviewers((current) => [created, ...current]);
         setSelectedId(created.id);
         reviewerId = created.id;

@@ -43,8 +43,12 @@ export function ConfirmDialog({
   //    那一层的堆叠上下文困住；② 不在这摞层里的话，点确认框会被下面那层读成「点了外面」
   //    而把它连根关掉，Esc 也会被抢走。进了摞就按打开顺序处理：Esc 先关这一个。
   // 遮罩铺满全屏，所以「点外面」只可能是点遮罩本身，仍由下面的 onMouseDown 判定。
+  // 开着就一直登记在那摞里，不跟着 busy 退出再进来：`enabled` 一翻动就是「退出这摞再重新
+  // push」，层序会被改写成最新 push 的那一个 —— 外面那层浮层于是跑到这个确认框前面去，
+  // 点确认框被它判成「点了外面」，两层一起关掉。「这会儿不许关」归 onClose 判，跟层序
+  // 无关（onClose 每次渲染写进 ref，不会因此重登记）。
   const canClose = !busy || allowCloseWhenBusy;
-  useDismissable({ enabled: canClose, containerRef: scrim, onClose });
+  useDismissable({ enabled: true, containerRef: scrim, onClose: () => { if (canClose) onClose(); } });
 
   // 开着的时候把焦点收进来，关掉时还回去。模态开着而焦点还留在外面那颗触发按钮上的话，
   // Tab 会跑进被遮住的页面，回车更是会再按一次触发按钮而不是这里的确认。children 里
