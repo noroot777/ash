@@ -322,10 +322,13 @@ export function shareTrackFdRegistration(source: ChildProcess, target: ChildProc
  * 启动时清掉**上一个 ash 留下的**追踪文件。
  *
  * 租约没有硬期限了(见上面那段),所以「进程整个没了、内存里的租约跟着没了」这条路必须有人
- * 收 —— 否则 tmpdir 里会慢慢积空文件。判据两条,都不猜:
+ * 收 —— 否则 tmpdir 里会慢慢积空文件(第 3 轮审查 N4:实测攒到了三千多个)。判据两条,都不猜:
  *  · 文件名里那个创建者 pid **已经不在了**(还在就可能是另一个 ash 实例正用着它,
  *    多实例共用同一个 tmpdir);
- *  · 此刻**没有活着的持有者**(有就说明那一摊后代还在,证据得留着让人能查)。
+ *  · 此刻**没有持有者**(有就说明那一摊后代还在,证据得留着让人能查)。
+ *
+ * 持有者那一问**批量问**:一个文件一次 `lsof` 的话,三千多个候选要跑掉一分钟 —— 启动期
+ * 不该为清垃圾付这个钱。`lsof -F pn` 一次给出「哪个进程 / 哪些路径」,按块喂给它。
  */
 export async function sweepOrphanTrackFiles(): Promise<number> {
   if (IS_WINDOWS) return 0;                       // 那边不开追踪文件
@@ -335,14 +338,19 @@ export async function sweepOrphanTrackFiles(): Promise<number> {
   } catch {
     return 0;
   }
-  let removed = 0;
+  const candidates: string[] = [];
   for (const name of names) {
     if (!name.startsWith(TRACK_PREFIX)) continue;
     const owner = Number(name.slice(TRACK_PREFIX.length).split("-")[0]);
     if (!Number.isInteger(owner) || owner === process.pid || isPidAlive(owner)) continue;
     const path = join(tmpdir(), name);
-    if (leases.has(path) || !existsSync(path)) continue;
-    if ((await trackHolders(path)).some(isPidAlive)) continue;
+    if (!leases.has(path) && existsSync(path)) candidates.push(path);
+  }
+  if (!candidates.length) return 0;
+  const held = await heldNames(candidates);
+  let removed = 0;
+  for (const path of candidates) {
+    if (held.has(path.split("/").pop() ?? "")) continue;
     try {
       unlinkSync(path);
       removed += 1;
@@ -351,6 +359,28 @@ export async function sweepOrphanTrackFiles(): Promise<number> {
     }
   }
   return removed;
+}
+
+/**
+ * 这些路径里,此刻**有人握着**的是哪些(一次 `lsof` 问一批)。
+ *
+ * 认的是**文件名**而不是整条路径:`lsof` 回的是解析过的真实路径(macOS 上 `/var/...` 会变成
+ * `/private/var/...`),拿整条路径进集合一个都对不上 —— 那等于「有持有者」这一问永远答否,
+ * 正要留下的证据会被当成垃圾删掉。追踪文件的名字自带 pid + 时间戳 + 随机串,本来就唯一。
+ */
+async function heldNames(paths: readonly string[]): Promise<Set<string>> {
+  const held = new Set<string>();
+  const CHUNK = 128;                              // argv 有长度上限,别一把梭
+  for (let i = 0; i < paths.length; i += CHUNK) {
+    const chunk = paths.slice(i, i + CHUNK);
+    const out = await new Promise<string>((res) =>
+      execFile("lsof", ["-F", "pn", "--", ...chunk], { maxBuffer: 8 << 20 }, (_e, stdout) => res(stdout || "")),
+    );
+    for (const line of out.split("\n")) {
+      if (line.startsWith("n")) held.add(line.slice(1).split("/").pop() ?? "");
+    }
+  }
+  return held;
 }
 
 // ── 「这个号此刻还是它吗」:kill 与 cleanup 共用的唯一判据 ──────────────────────

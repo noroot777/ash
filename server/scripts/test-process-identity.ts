@@ -17,7 +17,7 @@
  */
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -332,6 +332,43 @@ if (IS_WINDOWS) {
     pidRunStillAlive(live.pid!, "Thu Jan  1 00:00:00 1970"), "gone",
     "启动时刻对不上 = 当初那个已经退了,探活必须这么报(否则这一轮永不结束)",
   );
+}
+
+// ── ⑫ 启动期清掉上一个 ash 留下的追踪文件:只删「创建者已不在 + 此刻无人持有」 ────────
+// 证据的寿命不再有硬期限(⑧),所以「进程整个没了、内存里的租约也没了」这条路得有人收
+// (实测 tmpdir 里攒到过三千多个空文件)。这一条钉的是**不该删的两类必须活下来**,尤其是
+// 「有持有者」那一类:`lsof` 回的是解析过的真实路径(macOS 上 /var → /private/var),按整条
+// 路径比的话这一问永远答否,正要留着取证的那份会被当垃圾删掉。
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 不开追踪文件,跳过 ⑫");
+} else {
+  const { sweepOrphanTrackFiles } = await import("../src/executors/spawn.js");
+  const deadOwner = 999_999;
+  assert.equal(isPidAlive(deadOwner), false, "这条用例要一个确定不存在的创建者 pid");
+  const stamp = Date.now();
+  // ① 创建者是我们自己(还活着)⇒ 另一个 ash 实例正用着的那类,不许碰
+  const mine = join(tmpdir(), `ash-track-${process.pid}-${stamp}-selfown`);
+  writeFileSync(mine, "");
+  // ② 创建者已死、但还有活着的持有者 ⇒ 那一摊后代还在,证据必须留着
+  const stillHeld = join(tmpdir(), `ash-track-${deadOwner}-${stamp}-held`);
+  const heldFd = openSync(stillHeld, "w");
+  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+    stdio: ["ignore", "ignore", "ignore", heldFd],
+    detached: true,
+  });
+  holder.unref();
+  strays.push(holder);
+  closeSync(heldFd);
+  // ③ 创建者已死、也没人握着 ⇒ 真垃圾
+  const orphan = join(tmpdir(), `ash-track-${deadOwner}-${stamp}-orphan`);
+  writeFileSync(orphan, "");
+  await wait(200);
+  await sweepOrphanTrackFiles();
+  assert.equal(existsSync(mine), true, "创建者还活着(可能是另一个 ash 实例)⇒ 不许删");
+  assert.equal(existsSync(stillHeld), true, "还有活着的持有者 ⇒ 证据不许删");
+  assert.equal(existsSync(orphan), false, "创建者已不在、又没人握着 ⇒ 该删");
+  unlinkSync(mine);
+  unlinkSync(stillHeld);
 }
 
 for (const child of strays) {
