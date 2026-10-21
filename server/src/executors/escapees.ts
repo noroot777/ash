@@ -205,13 +205,14 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   // 号任何子树都遍历不到 —— 于是「这棵树里没看到它」被当成了「已经排除了它属于这次运行」。
   // 它既认不下来也否不掉,所以逐个走排除路(退了 / 已经算进去了 / 开工前就在),剩下的记一笔。
   const topologyGap = (accounted: Iterable<number>): void => {
-    const gaps = unresolvedTopology(table, { accounted, runStartedAtMs: runBeganAtMs() });
-    if (gaps.length) {
-      faults.push(
-        `${gaps.map((g) => g.pid).join(",")} 在进程表上,可是挂在谁下面问不出来`
-        + `,也排除不掉它属于这次运行(${gaps.some((g) => !g.gen) ? "连那一代也核验不了" : "开工之后才出生的"})`,
-      );
-    }
+    const began = runBeganAtMs();
+    const gaps = unresolvedTopology(table, { accounted, runStartedAtMs: began });
+    if (!gaps.length) return;
+    // 这句话会进清理责任那一行的 detail 给人看,所以说清**是哪一条排除路走不通**。
+    const why = gaps.some((g) => !g.gen) ? "连那一代也核验不了"
+      : began === null ? "也问不出本次运行从哪一刻开始,没法按时间排除"
+      : "而且是开工之后才出生的";
+    faults.push(`${gaps.map((g) => g.pid).join(",")} 在进程表上,可是挂在谁下面问不出来,${why}`);
   };
 
   /**
