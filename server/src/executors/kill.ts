@@ -18,17 +18,20 @@
 import { execFileSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { IS_WINDOWS, isPidAlive, killTree } from "../platform.js";
-import { processUnitEvidence, type UnitEvidence } from "../proc.js";
+import { inspectProcess, processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { processGroupMembersSync } from "../process-generation.js";
 import { canShoot, killProvenUnit, reclaimState } from "../monitor-reclaim-evidence.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { runOutPathOf, unitTokenOf } from "./unit-token.js";
 import { childKillAuthorized, childStillOurs } from "./child-identity.js";
 import {
-  fileHoldersAnswerable, holderMayOwn, probeFileHolders, releaseTrackEvidence, trackPathOf,
-  type HolderProbe,
+  fileHoldersAnswerable, probeFileHolders, releaseTrackEvidence, trackPathOf,
 } from "./track-evidence.js";
 import { describeEvidence, killEscapees, signalMembers } from "./escapees.js";
+import {
+  judgeByClues, mergeClueAnswers, residueFromProbe,
+  type CleanupResult, type ClueAnswer,
+} from "./cleanup-result.js";
 // 只借类型:持久层是按需加载的(它拉起整个 db 层),不许在这里长出静态依赖。
 import type { CleanupDebtInput } from "./cleanup-debt.js";
 
@@ -40,6 +43,10 @@ export {
   openTrackFd, registerTrackFd, releaseTrackEvidence, shareTrackFdRegistration,
   sweepOrphanTrackFiles,
 } from "./track-evidence.js";
+export {
+  cleanupDetail, cleanupRetriable, cleanupSettled, mergeCleanupResults, residueFromProbe,
+  type CleanupResult,
+} from "./cleanup-result.js";
 
 // ── 清理责任那一层**按需加载,不静态 import** ─────────────────────────────────────
 //
@@ -51,6 +58,10 @@ export {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 本文件自己要读结论里那句人话时用它(转出的 `cleanupDetail` 只是给外面的)。 */
+const cleanupResultDetail = (result: CleanupResult): string =>
+  result.kind === "empty" ? "" : result.kind === "silent" ? result.why : result.detail;
+
 async function waitForPidsGone(pids: readonly number[], timeoutMs: number): Promise<number[]> {
   const deadline = Date.now() + timeoutMs;
   let alive = pids.filter(isPidAlive);
@@ -61,96 +72,9 @@ async function waitForPidsGone(pids: readonly number[], timeoutMs: number): Prom
   return alive;
 }
 
-// ── 清理的结论:**三档,不是 `Promise<void>`** ─────────────────────────────────
-//
-// 上一版这个函数返回 `Promise<void>`,于是「收干净了」「还有残留」「这一轮问不清楚」三种
-// 结局对调用方长得一模一样 —— resolve 就是成功。后果是实测出来的(本轮审查 F2):macOS 上
-// 记号前后都明确指出那个孤儿还在写文件,清理照样 resolve,于是待收册划掉它、追踪文件被删、
-// 再点一次停止也停不住,重启后更没人认领。
-//
-// 三档各自的处置,**责任在这一层就落下来**,不指望每个调用方记得做:
-//  · `empty`     —— 确证清空:释放追踪证据、销账。
-//  · `remaining` —— 确证还有成员(可能根本杀不掉,比如 macOS 只给得出 `suspected`):
-//                   证据留着、责任落库、日志如实说。
-//  · `unknown`   —— 这一轮有问题没答出来:同上。「问不出来」不是「没有」。
-//
-// 调用方要的是「我能不能从待收册上把它划掉」,所以读 `cleanupSettled(result)` 就够了。
-export type CleanupResult =
-  | { kind: "empty" }
-  | { kind: "remaining"; detail: string }
-  | { kind: "unknown"; detail: string };
-
-/** 这一轮能不能放手(从待收册划掉、不再重试)。**只有确证清空算。** */
-export const cleanupSettled = (result: CleanupResult): boolean => result.kind === "empty";
-
-/** 给人看的那一句(`empty` 那档没有细节,返回空串)。 */
-export const cleanupDetail = (result: CleanupResult): string =>
-  result.kind === "empty" ? "" : result.detail;
-
-/**
- * 几份结论合成一份:**取最保守的那一档**(`remaining` > `unknown` > `empty`)。
- *
- * 用在「一个句柄起过好几轮」的地方(codex 的会话级常驻):任何一轮还没收干净,这个句柄
- * 就不算收干净 —— 取最乐观的那一档等于让干净的那几轮把脏的那一轮洗白。
- */
-export function mergeCleanupResults(results: readonly CleanupResult[]): CleanupResult {
-  const remaining = results.filter((r) => r.kind === "remaining");
-  if (remaining.length) {
-    return { kind: "remaining", detail: remaining.map((r) => r.detail).join(" | ") };
-  }
-  const unknown = results.filter((r) => r.kind === "unknown");
-  if (unknown.length) {
-    return { kind: "unknown", detail: unknown.map((r) => r.detail).join(" | ") };
-  }
-  return { kind: "empty" };
-}
-
-/**
- * **一条路径线索的终态,写成同一种三档结论** —— 判空的时候要把它跟记号那一问并起来。
- *
- * 为什么必须有这一步(第 2 轮审查 F1 实测):上一版判空只问了记号、追踪 fd 和句柄树,
- * 而**这一次运行的输出文件从头到尾没人问**。真实现场是:后代把环境洗掉(记号 `none`)、
- * 顺手丢掉高位 fd(追踪文件没有持有者)、根已经退出(句柄树是空的)—— 三问全答「没有」,
- * 可它的 stdout 还接在这次运行的输出文件上,继续往用户目录里写。于是局部的空被当成了
- * 整项资源的空:结论 `empty`、证据释放、一笔债都没留下。
- *
- * 判据与记号那一层同源:
- *  · `held` 且确实还有活着的号 ⇒ `remaining`(这是最硬的那种残留证据);
- *  · `held` 但那几个号都已经没了 ⇒ 这条线索这一刻证明不了残留 ⇒ `empty`;
- *  · `empty` ⇒ 确证没人握着;
- *  · `unknown` ⇒ **「问不出来」不是「没有」**,照 `unknown` 往上传,由调用方保留责任与证据。
- *
- * `null` = 这条线索这一次运行根本没有(非 detached 的运行没有输出文件、Windows 不开追踪
- * 文件)。那是**没有意见**,合并时当单位元,不是一张「已经空了」的证书。
- *
- * 代价如实记下:输出文件是 `data/runs/` 下的真实日志,用户自己 `tail -f` 它也会被算成持有者,
- * 于是落一笔假债。方向是对的那一边(宁可多留一笔可重试的记录,也不要把活着的后代宣布成
- * 收干净),而且它只用于**残留检测、不用于下刀**(同 cleanup-debt.ts 里那段)。
- */
-export function residueFromProbe(label: string, probe: HolderProbe | null): CleanupResult {
-  if (!probe) return { kind: "empty" };
-  if (probe.kind === "empty") return { kind: "empty" };
-  if (probe.kind === "unknown") {
-    return { kind: "unknown", detail: `${label}这一问没答出来:${probe.reason}` };
-  }
-  const alive = probe.holders.filter((h) => isPidAlive(h.pid));
-  if (!alive.length) return { kind: "empty" };
-  // **写模式才算确证残留**(第 3 轮审查 F1):这一问要答的是「还有没有东西在往这次运行的
-  // 文件里写」。后代继承的是写端(追踪文件开的是 `"w"`、输出文件是根的 stdout)。
-  const writers = alive.filter(holderMayOwn);
-  if (writers.length) {
-    return { kind: "remaining", detail: `${label}仍被 ${writers.map((h) => h.pid).join(",")} 写着` };
-  }
-  // 剩下的是只读的(或者模式问不出来的)持有者:「有人握着」是事实,「握着的是不是这次运行
-  // 的后代」这一问没答出来 —— 别再把这两件事折成一个 `empty`。用户自己 tail 日志就是只读
-  // 打开的,它更像看客而不是残留,可「更像」不是证明:所以这一档只说「问不清楚」,账留着、
-  // 下一轮再问,而不是当场宣布收干净。
-  return {
-    kind: "unknown",
-    detail: `${label}被 ${alive.map((h) => h.pid).join(",")} 握着、但不是写模式 ——`
-      + " 分不出是这次运行的后代还是只读的看客",
-  };
-}
+// 清理结论的代数(四档答案、两个问、判空的不变量)住在 `cleanup-result.ts`:它有三个
+// 互不相识的使用方(本文件的即时清理、cleanup-debt.ts 的跨重启清扫、codex-resident.ts 的
+// 多轮合并),而第 4 轮审查 F1 实测的那一下正是「各出口各判一套」的后果。
 
 /**
  * 这一次运行的**两个运行专属文件**此刻的终态。
@@ -160,18 +84,24 @@ export function residueFromProbe(label: string, probe: HolderProbe | null): Clea
  * 逃出来的漏掉。
  */
 async function finalResidue(child: ChildProcess): Promise<CleanupResult> {
-  // 这台机器结构性答不了「谁握着这个文件」时**不问**(见 `fileHoldersAnswerable`):
-  // 把结构性的答不了记成「这一次没答出来」,等于让那个平台每个回合都欠一笔追不动的债。
-  if (!fileHoldersAnswerable()) return { kind: "empty" };
   const trackPath = trackPathOf(child);
   const outPath = runOutPathOf(child);
+  // 这台机器结构性答不了「谁握着这个文件」时**不问,而且如实说这一问没有证据来源**
+  // (`silent`,见 cleanup-result.ts 顶部)。记成「这一次没答出来」会让那个平台每个回合都欠
+  // 一笔追不动的债(第 3 轮审查 N2);可记成「没有残留」就是第 4 轮审查 F1 那一下 —— 缺的是
+  // 设备,不是资源。两个文件压根不存在才是正面的「没有东西能被握着」。
+  if (!fileHoldersAnswerable()) {
+    return trackPath || outPath
+      ? { kind: "silent", why: "这台机器答不了「谁还握着这次运行的文件」(没有 lsof 等价物)" }
+      : { kind: "empty" };
+  }
   const [track, out] = await Promise.all([
     trackPath ? probeFileHolders(trackPath) : Promise.resolve(null),
     outPath ? probeFileHolders(outPath) : Promise.resolve(null),
   ]);
-  return mergeCleanupResults([
+  return mergeClueAnswers([
     residueFromProbe("追踪文件", track), residueFromProbe("输出文件", out),
-  ]);
+  ], "运行专属文件");
 }
 
 /**
@@ -197,8 +127,8 @@ export async function cleanupAfterRun(child: ChildProcess): Promise<CleanupResul
     // 「放弃过」,再调一次直接返回。线索只在这里拿得到(句柄在手),所以责任也只能在这里
     // 交出去:先记一笔「这一轮没问出结果」,再把异常原样抛给调用方。
     await handOffCleanupDebt({
+      ...rootClues(child),
       unitToken: unitTokenOf(child),
-      rootPid: child.pid ?? null,
       trackPath: trackPathOf(child),
       outPath: runOutPathOf(child),
       state: "unknown",
@@ -232,12 +162,12 @@ async function sweepAndJudge(child: ChildProcess): Promise<CleanupResult> {
   // 结算要做,而这件事必须活得比它们都久 —— 见 cleanup-debt.ts 顶部)。
   // **没有记号也要试着记**(升级前建的老会话行):键退回路径线索,见 `debtKey`。
   const noted = await handOffCleanupDebt({
+    ...rootClues(child),
     unitToken: token,
-    rootPid: child.pid ?? null,
     trackPath: trackPathOf(child),
     outPath: runOutPathOf(child),
-    state: result.kind === "remaining" ? "remaining" : "unknown",
-    detail: result.detail, unitVerdict: sweep.unit.verdict,
+    state: result.kind === "remaining" ? "remaining" : result.kind === "silent" ? "silent" : "unknown",
+    detail: cleanupResultDetail(result), unitVerdict: sweep.unit.verdict,
   });
   // **三档各说各的**(第 2 轮审查 F1 末条):上一版把「写库失败」也印成「没有可追的线索」,
   // 等于把一次真正的责任丢失说成了「本来就没什么可追的」。
@@ -249,9 +179,23 @@ async function sweepAndJudge(child: ChildProcess): Promise<CleanupResult> {
     failed: ";**责任没能落盘**(库写失败),已留在内存里等补投 —— 但它跨不过重启",
   }[noted];
   console.warn(
-    `[ash] 这一次运行的后代还不能证明收干净(pid=${child.pid ?? "?"}):${result.detail}${tail}`,
+    `[ash] 这一次运行的后代还不能证明收干净(pid=${child.pid ?? "?"}):`
+    + `${cleanupResultDetail(result)}${tail}`,
   );
   return result;
+}
+
+/**
+ * 落账要记的**根身份**:号 + 这一刻查到的启动时刻。
+ *
+ * 只记号是不够的 —— 号会被复用,清扫侧拿它只能问出「这个号上有进程」,问不出「还是它」,
+ * 于是那一问永远停在「核验不了」。第 4 轮审查 F1 在 Windows 真机上同时验了两头:生产落账
+ * 当时只写号(行上 `rootStartedAt=null`),而就算把精确时刻补上,清扫侧也压根没读它。
+ * 现在两头都接上:这里负责记下来,`judgeDebtRow` 负责把它当一台设备来问。
+ */
+function rootClues(child: ChildProcess): { rootPid: number | null; rootStartedAt: string | null } {
+  const pid = child.pid ?? null;
+  return { rootPid: pid, rootStartedAt: pid ? inspectProcess(pid)?.startedAt ?? null : null };
 }
 
 /**
@@ -270,22 +214,37 @@ async function handOffCleanupDebt(
     return await layer.noteCleanupDebt(input);
   } catch (error) {
     console.error("[ash] 清理责任这一层加载失败,这一笔先留在内存里等重试:", error);
-    undelivered.push(input);
+    keepUndelivered(input);
     scheduleRedelivery();
     return "failed";
   }
 }
 
-/** 连持久层都没加载起来的那几笔。 */
-const undelivered: CleanupDebtInput[] = [];
+/**
+ * 连持久层都没加载起来的那几笔,**按这一次运行去重**(第 4 轮审查 N3)。
+ *
+ * 上一版是个数组、一笔一笔 `push`:同一次运行反复交不出去时会在清单上堆好几份旧结论,
+ * 补交按入列顺序一个个投,于是**旧的那一版最后落库、盖掉新的**。键按同一套线索算
+ * (记号优先、退回运行专属文件路径,同 `debtKey`),所以同一次运行只会占一格、留最新那版。
+ */
+const undelivered = new Map<string, CleanupDebtInput>();
 let redeliveryTimer: ReturnType<typeof setTimeout> | null = null;
 const REDELIVERY_DELAY_MS = 30_000;
 
+/** 只为去重算的键 —— 真正落库用哪个键由 `cleanup-debt.ts` 的 `debtKey` 说。 */
+const undeliveredKey = (input: CleanupDebtInput): string =>
+  input.unitToken || input.outPath || input.trackPath || "no-clue";
+
+function keepUndelivered(input: CleanupDebtInput): void {
+  undelivered.set(undeliveredKey(input), input);
+}
+
 function scheduleRedelivery(): void {
-  if (redeliveryTimer || !undelivered.length) return;
+  if (redeliveryTimer || !undelivered.size) return;
   redeliveryTimer = setTimeout(() => {
     redeliveryTimer = null;
-    const batch = undelivered.splice(0);
+    const batch = [...undelivered.values()];
+    undelivered.clear();
     void (async () => { for (const one of batch) await handOffCleanupDebt(one); })();
   }, REDELIVERY_DELAY_MS);
   // 不拿住事件循环:这件事不该让一个本来可以退出的进程多活着。
@@ -293,7 +252,7 @@ function scheduleRedelivery(): void {
 }
 
 /** 披露用:这一刻有几笔责任连持久层都还没交出去。 */
-export const undeliveredCleanupDebtCount = (): number => undelivered.length;
+export const undeliveredCleanupDebtCount = (): number => undelivered.size;
 
 type SweepOutcome = {
   /** 这一轮每一问都答出来了吗。 */
@@ -305,17 +264,19 @@ type SweepOutcome = {
   /** 补刀之后仍然活着的号。 */
   survivors: number[];
   /**
-   * **清扫做完之后,这个根还占着那个号、而我们又证不出它归谁。**
+   * **根这一问的答案**(判空的两个问之一,见 cleanup-result.ts 顶部)。
    *
-   * 这一档是 F2 的核心场景,而它跟「有残存者」不是同一件事:我们一刀都没敢发(授权档
-   * 证不出),所以它不会出现在 `survivors` 里 —— 上一版于是把这一轮判成了「确证清空」,
-   * 顺手释放证据、销掉责任。可探活档明明还说得出「那个号上有东西」:那是**仍能检测到的
-   * 残留**,不许宣布成清理完成。
+   * 设备是内核权威的句柄状态 + 这一轮下过的刀:
+   *  · 根出现在残存者名单里 ⇒ 正面证明还在;
+   *  · 根还占着那个号、而我们又证不出它归谁(探活档说有、授权档不敢碰)⇒ 同样是**仍能
+   *    检测到的残留**:我们一刀都没敢发,所以它不会出现在 `survivors` 里 —— 上一版于是把
+   *    这一轮判成了「确证清空」,顺手释放证据、销掉责任(第 2 轮审查 F2 的核心场景);
+   *  · 其余 ⇒ 正面证明它退了(内核已 reap / 号已换主,或者这一轮朝它开过刀、2 秒复查时
+   *    那个号上已经没有它)。失败桩压根没有真实进程,那是「没有资源」⇒ 也算正面的空。
    *
-   * 正常路径不会落到这一档:根退场后探活档答 `gone`(真句柄看内核状态,接回的句柄看
-   * pid + 启动时刻),所以每个回合不会平白欠一笔债。
+   * 正常路径落在最后一档:根退场后探活档答 `gone`,所以每个回合不会平白欠一笔债。
    */
-  rootLingers: boolean;
+  rootProof: CleanupResult;
   /**
    * 清扫**做完之后**两个运行专属文件的终态(见 `finalResidue`)。
    *
@@ -327,44 +288,75 @@ type SweepOutcome = {
 };
 
 /**
- * 把这一轮的全部线索并成一个结论。
+ * **根这一问的答案**(见 `SweepOutcome.rootProof`)。设备是内核权威的句柄状态 + 这一轮的刀。
  *
- * **`empty` 的门槛是「每一问都答出来、而且都答没有」**,所以这里不再逐条 early return,
- * 而是把每条线索各自的三档结论交给 `mergeCleanupResults` 取最保守的那一档 —— 判空少问
- * 一条线索,就是第 2 轮审查 F1 的那个漏洞;而逐条 return 的写法让「少问一条」永远只差
- * 一次疏忽。
+ * `lingers` 两档合起来才成立(见 child-identity.ts):探活档说「那个号上还有东西」,授权档说
+ * 「不敢碰」—— 两句都成立时这一轮既杀不掉、也不许自称收干净。
+ */
+function rootProofOf(child: ChildProcess, survivors: readonly number[], lingers: boolean): CleanupResult {
+  const pid = child.pid;
+  // 压根没有真实进程(失败桩):缺的是**资源**不是设备 ⇒ 这一问正面答空(cleanup-result.ts 顶部)。
+  if (!pid) return { kind: "empty" };
+  if (survivors.includes(pid)) return { kind: "remaining", detail: `根进程 ${pid} 下过刀仍活着` };
+  if (lingers) {
+    return {
+      kind: "remaining",
+      detail: "根进程还在那个号上,但证不出它属于这一次运行(粗档 pid 不是排他凭证)",
+    };
+  }
+  // 要么内核已经确认它退了(已 reap / 号已换主),要么这一轮朝它开过刀、2 秒复查时那个号上
+  // 已经没有它 —— 两种都是正面的退出证明。
+  return { kind: "empty" };
+}
+
+/**
+ * 把这一轮的全部线索并成一个结论,**判据借 `judgeByClues`** —— 跟跨重启那条清扫路共用
+ * 同一条判空不变量(第 4 轮审查 F1:「各出口同用一条能证明清空的不变量」)。
+ *
+ * **`empty` 的门槛是「根与后代两问都有正面答案」**,所以这里不再逐条 early return,而是
+ * 每条线索各自表态、声明自己在答哪一问 —— 判空少问一条线索,就是第 2 轮审查 F1 的那个
+ * 漏洞;而逐条 return 的写法让「少问一条」永远只差一次疏忽。
+ *
+ * 即时路径比清扫路径多一台后代设备:**逃逸扫描**(继承 fd + 记号 + ppid 树)。它答出来了
+ * 且没有残存者,后代这一问就有了正面答案 —— 于是 Windows 上那两台结构性弃权的设备
+ * (记号、运行专属文件)不会把每个正常收尾的回合都变成一笔追不动的债(第 3 轮审查 N2),
+ * 而弃权本身仍然如实记在那一问里。
  */
 function judgeCleanup(sweep: SweepOutcome, token: string | null): CleanupResult {
   const reasons = [...sweep.faults];
-  // 两个运行专属文件的终态:这一条独立于记号(见 `SweepOutcome.residue`)。
-  const clues: CleanupResult[] = [sweep.residue];
-  if (sweep.survivors.length) {
-    clues.push({ kind: "remaining", detail: `下过刀仍活着:${sweep.survivors.join(",")}` });
-  }
-  // 根还占着那个号、归属又证不出 ⇒ **确有残留,只是不敢碰**(见 `rootLingers`)。
-  if (sweep.rootLingers) {
-    clues.push({
-      kind: "remaining",
-      detail: "根进程还在那个号上,但证不出它属于这一次运行(粗档 pid 不是排他凭证)",
-    });
-  }
-  // 记号那一问**只在有记号时参与**:老会话行、Windows、种失败的那些本来就问不出意见,
-  // 让它们永久挂着责任只会把真正的残留淹掉。
+  const clues: ClueAnswer[] = [
+    { subject: "root", answer: sweep.rootProof },
+    // 两个运行专属文件的终态:这一条独立于记号(见 `SweepOutcome.residue`)。
+    { subject: "descendants", answer: sweep.residue },
+  ];
+  // 记号那一问**有记号才有这台设备**:种失败的那些压根没这条线索。
   if (token) {
     if (sweep.unit.verdict === "ours" || sweep.unit.verdict === "suspected") {
-      clues.push({ kind: "remaining", detail: describeEvidence(sweep.unit) });
-    }
-    // `unprovable` 有两种,处置相反(第 3 轮审查 N2):这一次查询失败 ⇒ 留着重试;而
-    // **这台机器结构性读不到别的进程的环境块**(win32,`monitorUnitProofGrade()` 为 null)
-    // ⇒ 重试一万次也是同一个答案,记成「没答出来」只会让那边每个回合都欠一笔追不动的债。
-    if (sweep.unit.verdict === "unprovable" && monitorUnitAnswerable()) {
+      clues.push({ subject: "descendants", answer: { kind: "remaining", detail: describeEvidence(sweep.unit) } });
+    } else if (sweep.unit.verdict === "none") {
+      clues.push({ subject: "descendants", answer: { kind: "empty" } });
+    } else if (monitorUnitAnswerable()) {
+      // `unprovable` 有两种,处置相反(第 3 轮审查 N2):这一次查询失败 ⇒ 留着重试……
       reasons.push("资源记号这一问没答出来");
+    } else {
+      // ……而**这台机器结构性读不到别的进程的环境块**(win32)⇒ 重试一万次也是同一个答案。
+      // 它不是「没有残留」(第 4 轮审查 F1),是这一问**没有证据来源**:如实弃权。
+      clues.push({
+        subject: "descendants",
+        answer: { kind: "silent", why: "这台机器读不到别的进程的环境块,问不出带这次记号的进程" },
+      });
     }
   }
-  if (!sweep.answered || reasons.length) {
-    clues.push({ kind: "unknown", detail: reasons.join(";") || "有一问没答出来" });
-  }
-  return mergeCleanupResults(clues);
+  // 逃逸扫描这台设备:问全了才有发言权,残存者是最硬的那种残留证据。
+  clues.push({
+    subject: "descendants",
+    answer: sweep.survivors.length
+      ? { kind: "remaining", detail: `下过刀仍活着:${sweep.survivors.join(",")}` }
+      : !sweep.answered || reasons.length
+        ? { kind: "unknown", detail: reasons.join(";") || "有一问没答出来" }
+        : { kind: "empty" },
+  });
+  return judgeByClues(clues);
 }
 
 /**
@@ -388,7 +380,7 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
    * (第 2 轮审查 N1);路径那两条线索则压根没问(同轮 F1)。
    */
   const settle = async (answered: boolean, survivors: number[]): Promise<SweepOutcome> => ({
-    answered, faults, survivors, rootLingers: lingers(),
+    answered, faults, survivors, rootProof: rootProofOf(child, survivors, lingers()),
     unit: processUnitEvidence(token, { fresh: true }),
     residue: await finalResidue(child),
   });

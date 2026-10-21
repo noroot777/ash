@@ -121,6 +121,13 @@ export const holderMayOwn = (holder: FileHolder): boolean => holder.mode === "wr
 export const fileHoldersAnswerable = (): boolean => !IS_WINDOWS;
 
 /**
+ * 问系统工具的时限。**不设时限的那个版本会把整条路拖住**(第 4 轮审查 N4):`lsof` 在网络
+ * 文件系统上挂死是常见现场,而这一问排在清理、同键那把锁、以及等着它的回合结算前面。
+ * 超时的处置是「这一次没答出来」(留着重试),不是「没有持有者」。
+ */
+const PROBE_TIMEOUT_MS = 10_000;
+
+/**
  * `lsof -F pfan <file>`:此刻还握着这次运行那个继承 fd 的号,**连 fd 与访问模式一起**。
  *
  * **退出码 1 不等于「查全了、没找到」**(本轮审查 F2 实测):路径不存在时 lsof 打印
@@ -137,12 +144,17 @@ export const fileHoldersAnswerable = (): boolean => !IS_WINDOWS;
  */
 async function trackHolders(trackPath: string): Promise<HolderProbe> {
   const probe = await new Promise<{ err: ExecFileException | null; out: string; errOut: string }>(
-    (res) => execFile("lsof", ["-F", "pfan", "--", trackPath],
+    (res) => execFile("lsof", ["-F", "pfan", "--", trackPath], { timeout: PROBE_TIMEOUT_MS },
       (err, stdout, stderr) => res({ err, out: stdout || "", errOut: stderr || "" })),
   );
   const holders = parseHolders(probe.out);
   if (holders.length) return { kind: "held", holders };
   if (!probe.err) return { kind: "empty" };
+  // 被时限掐掉的那一次:**没答出来**,而且文件可能还在(第 4 轮审查 N4)。挂死的 lsof 会
+  // 把这一问、同键那把锁、以及等着它的结算一起拖住,所以宁可按「这一次没答出来」收场。
+  if (probe.err.killed || probe.err.signal) {
+    return { kind: "unknown", reason: `lsof 超过 ${PROBE_TIMEOUT_MS} 毫秒没回,已中止`, lost: !existsSync(trackPath) };
+  }
   if (probe.err.code !== 1) {
     // `≥2` 是它自己出错;`ENOENT`(字符串码)是这台机器上根本没有 lsof。
     return { kind: "unknown", reason: `lsof 退出码 ${String(probe.err.code)}` };
@@ -171,22 +183,38 @@ function lsofFault(stderr: string): string | null {
  *
  * 自己这个进程一律剔掉(追踪文件的父侧 fd 在 `registerTrackFd` 里就关了,输出文件却是 ash
  * 自己在读 —— 把它算成持有者会让每一次清理都答「还有残留」)。
+ *
+ * **`a` 字段缺席时这个持有者照样要出列,模式记 `unknown`**(第 4 轮审查 N10)。上一版只在
+ * 见到 `a` 时才落一条,于是某个 lsof 只回 `p`/`f`/`n` 时整条被丢掉,上一层又把「查询成功、
+ * 零个持有者」读成确证空 —— 又是一次「没有证明存在」被当成「已经证明不存在」。缺模式的
+ * 持有者在两侧都按「证不出」处理:授权那边不放行,检测那边留着重试(见 `FileHolder`)。
  */
 function parseHolders(out: string): FileHolder[] {
   const holders: FileHolder[] = [];
   let pid = 0;
   let fd: number | null = null;
+  let pending = false;                            // 这一段 fd 还没落账
+  const flush = (mode: FileHolder["mode"]) => {
+    if (!pending) return;
+    pending = false;
+    if (pid <= 1 || pid === process.pid) return;
+    holders.push({ pid, fd, mode });
+  };
   for (const raw of out.split("\n")) {
     const line = raw.trim();
     if (!line) continue;
     const tag = line[0], value = line.slice(1);
-    if (tag === "p") { pid = Number(value) || 0; fd = null; continue; }
-    if (tag === "f") { fd = Number.isInteger(Number(value)) ? Number(value) : null; continue; }
+    if (tag === "p") { flush("unknown"); pid = Number(value) || 0; fd = null; continue; }
+    if (tag === "f") {
+      flush("unknown");                           // 上一段没见到模式 ⇒ 按「问不出来」记下
+      fd = Number.isInteger(Number(value)) ? Number(value) : null;
+      pending = true;
+      continue;
+    }
     if (tag !== "a") continue;
-    if (pid <= 1 || pid === process.pid) continue;
-    const mode = /[wu]/.test(value) ? "write" : /r/.test(value) ? "read" : "unknown";
-    holders.push({ pid, fd, mode });
+    flush(/[wu]/.test(value) ? "write" : /r/.test(value) ? "read" : "unknown");
   }
+  flush("unknown");
   return holders;
 }
 
@@ -385,7 +413,8 @@ async function heldNames(paths: readonly string[]): Promise<Set<string> | null> 
   for (let i = 0; i < paths.length; i += CHUNK) {
     const chunk = paths.slice(i, i + CHUNK);
     const probe = await new Promise<{ err: ExecFileException | null; out: string; errOut: string }>(
-      (res) => execFile("lsof", ["-F", "pn", "--", ...chunk], { maxBuffer: 8 << 20 },
+      (res) => execFile("lsof", ["-F", "pn", "--", ...chunk],
+        { maxBuffer: 8 << 20, timeout: PROBE_TIMEOUT_MS },
         (err, stdout, stderr) => res({ err, out: stdout || "", errOut: stderr || "" })),
     );
     // **一个分片答不出来就整问作废**(返回 null):没法只把这一片排除掉 —— 调用方拿到的集合
@@ -393,7 +422,8 @@ async function heldNames(paths: readonly string[]): Promise<Set<string> | null> 
     // 判据同 `trackHolders`:**退出 1 也可能是它自己出错**。批量这一侧更要紧 —— 一片里只要
     // 有一个路径没问清楚,「谁有人握着」这个集合就少了那一片,而调用方会把缺席读成「没人
     // 握着」然后删掉文件。所以这一片的 stderr 一有故障就整问作废。
-    if (probe.err && (probe.err.code !== 1 || lsofFault(probe.errOut))) return null;
+    // 超时被中止也算这一片没问清楚(判据同 `trackHolders`:退出 1 也可能是它自己出错)。
+    if (probe.err && (probe.err.code !== 1 || probe.err.killed || lsofFault(probe.errOut))) return null;
     for (const line of probe.out.split("\n")) {
       if (line.startsWith("n")) held.add(line.slice(1).split("/").pop() ?? "");
     }

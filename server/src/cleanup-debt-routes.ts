@@ -45,11 +45,21 @@ export function mountCleanupDebtRoutes(api: Hono): void {
     if (denied) return c.json(denied, 403);
     // **收档的那几笔也要给**:收档是「能追的都追到头了」,不是「它走了」—— 握着那个 inode
     // 的进程可能还在写。按 closedAt 过滤掉它们,在披露面上跟销账长得一模一样(本轮 N2)。
-    const { listAllCleanupDebts } = await import("./executors/cleanup-debt.js");
+    const { listAllCleanupDebts, pendingCleanupNoteCount } = await import("./executors/cleanup-debt.js");
     const listing = await listAllCleanupDebts();
-    // 读失败**不许长成空列表**(本轮 N3):那会让披露面在数据库出问题时安静地显示「干净」。
+    // 读失败**不许长成空列表**(第 2 轮审查 N3):那会让披露面在数据库出问题时安静地显示
+    // 「干净」。
     if (!listing.ok) return c.json({ error: `这一问没答出来:${listing.reason}` }, 503);
-    return c.json(listing.debts);
+    // **只在内存里扛着的那几笔也要说出来**(第 4 轮审查 N2):库里的行是「落过盘的责任」,
+    // 而落库失败、或者连交接层都没加载起来的那几笔只活在本进程内 —— 它们跨不过重启。
+    // 上一版这个端点只返回库内行,于是「INSERT 失败但 SELECT 正常」时披露面显示干干净净,
+    // 正是这张表存在的理由要防的那件事。两个计数分开给,因为它们是两段路(见 sweep 的注释)。
+    const { undeliveredCleanupDebtCount } = await import("./executors/kill.js");
+    return c.json({
+      debts: listing.debts,
+      pendingNotes: pendingCleanupNoteCount(),
+      undelivered: undeliveredCleanupDebtCount(),
+    });
   });
 
   api.post("/cleanup-debts/sweep", async (c) => {

@@ -392,8 +392,14 @@ async function treeViaPs(): Promise<ProcessTree | null> {
     execFile(
       "ps",
       ["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart=", "-ww"],
-      { maxBuffer: 16 * 1024 * 1024, env: { ...process.env, LC_ALL: "C", LANG: "C" } },
-      (error, stdout) => resolve(error && !stdout ? null : stdout || ""),
+      // **带时限**(第 4 轮审查 N4):挂死的 ps 会把进程树这一问、以及等着它的清理一起拖住。
+      // 被掐掉时 stdout 多半是空的 ⇒ 这一问答 `null`(没问出来),调用方据此留着重试。
+      { maxBuffer: 16 * 1024 * 1024, timeout: 10_000, env: { ...process.env, LC_ALL: "C", LANG: "C" } },
+      // 被时限掐掉时 stdout 可能有**半截**:那半截不是一棵完整的进程树,拿它当答案等于把
+      // 没扫到的那部分默认成「没有这些进程」。所以超时一律按「这一问没答出来」(null)。
+      (error, stdout) => resolve(
+        error && (error.killed || error.signal || !stdout) ? null : stdout || "",
+      ),
     );
   });
   if (out === null) return null;

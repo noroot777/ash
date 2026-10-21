@@ -3,10 +3,10 @@
 // 为什么非得落盘,见 `db/schema-sessions.ts` 里 `agent_cleanup_debts` 的注释。这一份是那张
 // 表的读写层加上**重试**:开机扫一遍、用户也能自己点一次。
 //
-// 一句话的规矩:**只有确证清空才销账**。记号那一问答 `none`(问全了、一个带着这次记号的
-// 进程都没有)而且追踪文件也没有持有者 —— 只有这一档才删行。`suspected`(macOS 看得见
-// 却给不出落点)、`unprovable`(这一问自己没答出来)一律留着,并且如实说出来:那是
-// 「还没收干净」,不是「收干净了」。
+// 一句话的规矩:**只有确证清空才销账** —— 「根」和「后代」两问都得有正面答案。那一问怎么
+// 问、什么才算答出来,全在 `cleanup-debt-judge.ts`(判据)+ `cleanup-result.ts`(代数)两份里;
+// 这一份只拿它的结论办三件事:销账(删行)、收档(盖戳留行)、留着(记下这一刻停在哪)。
+// 「这个平台答不了」「这一行没记启动时刻」一律不是「收干净了」(第 4 轮审查 F1)。
 //
 // 这一份同时是**责任交接层**,两头都在这里收口(第 3 轮审查 F2):
 //  · 清空证明对应**哪一版证据**,销账只针对那一版 —— 读、判、写在同一把键锁里,行上带
@@ -18,12 +18,13 @@ import { db, dbClient } from "../db/index.js";
 import { agentCleanupDebts } from "../db/schema.js";
 import { now } from "../util.js";
 import { processUnitEvidence, type UnitEvidence } from "../proc.js";
-import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
-import { describeEvidence, signalMembers } from "./escapees.js";
-import { fileHoldersAnswerable, probeFileHolders, type HolderProbe } from "./track-evidence.js";
+import { signalMembers } from "./escapees.js";
+import { cleanupDetail, type CleanupResult } from "./cleanup-result.js";
+// **判据在隔壁那一份**:这里只管账本的读写,「这一刻算不算空、该销还是该收档」问它。
 import {
-  mergeCleanupResults, residueFromProbe, type CleanupResult,
-} from "./kill.js";
+  debtDisposition, debtKey, isMarked, judgeDebtRow,
+  type CleanupDebtClues, type DebtRow,
+} from "./cleanup-debt-judge.js";
 
 // ── 同一个键上的读-判-写必须串起来 ──────────────────────────────────────────────
 //
@@ -46,31 +47,22 @@ function withDebtKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/**
- * 定位这一次运行的那几条线索 —— **记一笔和销一笔必须按同一套线索算键**。
- *
- * 销账那一侧上一版只交了个记号,于是没有记号的那些行(键是 `no-unit:<路径>`)永远对不上,
- * 一旦欠过就再也销不掉,披露面上堆着一笔其实早就空了的账(第 3 轮审查 N8)。
- */
-export type CleanupDebtClues = {
-  /** `null` = 这一次运行没有记号(升级前建的老会话行)⇒ 退回路径线索当键,见 `debtKey`。 */
-  unitToken: string | null;
-  trackPath?: string | null;
-  outPath?: string | null;
-};
+export type { CleanupDebtClues, DebtRow } from "./cleanup-debt-judge.js";
+export { markerResidue } from "./cleanup-debt-judge.js";
 
 export type CleanupDebtInput = CleanupDebtClues & {
   taskId?: string;
   sessionId?: string;
   rootPid?: number | null;
   rootStartedAt?: string | null;
-  /** `remaining` = 确证还有成员活着;`unknown` = 这一轮问不清楚。 */
-  state: "remaining" | "unknown";
+  /**
+   * `remaining` = 确证还有成员活着;`unknown` = 这一轮问不清楚;
+   * `silent` = 这一问**没有可用的证据来源**(见 cleanup-result.ts 顶部的四档)。
+   */
+  state: "remaining" | "unknown" | "silent";
   detail: string;
   unitVerdict: UnitEvidence["verdict"];
 };
-
-export type DebtRow = typeof agentCleanupDebts.$inferSelect;
 
 /**
  * 记一笔:这一次运行**还不能证明收干净了**。
@@ -90,12 +82,16 @@ export async function noteCleanupDebt(
 ): Promise<"noted" | "untrackable" | "failed"> {
   const key = debtKey(input);
   if (!key) return "untrackable";
+  // **每一笔落账带一个序号**(第 4 轮审查 N3):待投清单上那几笔是「还没落库的旧结论」,
+  // 而同一个键上随后可能已经有更新的结论落进去了。没有序号时两者长得一样,补投会把新线索
+  // (比如换过的输出文件路径)盖回旧的那一版。
+  const seq = ++noteSeq;
   if (dbClient.closed) {                          // 有线索、只是这一刻没处写
-    keepPendingNote(key, input);
+    keepPendingNote(key, input, seq);
     return "failed";
   }
-  const verdict = await withDebtKey(key, () => noteDebtRow(key, input));
-  if (verdict === "failed") keepPendingNote(key, input);
+  const verdict = await withDebtKey(key, () => writeNote(key, input, seq));
+  if (verdict === "failed") keepPendingNote(key, input, seq);
   return verdict;
 }
 
@@ -106,13 +102,53 @@ export async function noteCleanupDebt(
 // 不会再想起它(第 3 轮审查 F2)。库写失败多半是瞬时的(锁、磁盘满、关库竞态),所以这里
 // 留一份进程内的待投清单:定时补投,每次清扫开头也补投一遍,并且把「还剩几笔只在内存里」
 // 写进清扫结果 —— 它跨不过重启这一点藏不住,但至少在本进程里不再是丢了。
-const pendingNotes = new Map<string, CleanupDebtInput>();
+const pendingNotes = new Map<string, PendingNote>();
+type PendingNote = { input: CleanupDebtInput; seq: number };
+/** 落账的单调序号:同一个键上「哪一版结论更新」只认它(见 `noteCleanupDebt`)。 */
+let noteSeq = 0;
+/** 这个键上**已经落库的最新一版**是第几号 —— 比它旧的补投一律作废。 */
+const landedSeq = new Map<string, number>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 const FLUSH_DELAY_MS = 30_000;
 
-function keepPendingNote(key: string, input: CleanupDebtInput): void {
-  pendingNotes.set(key, input);                   // 同一个键只留最后一次的结论
+function keepPendingNote(key: string, input: CleanupDebtInput, seq: number): void {
+  const held = pendingNotes.get(key);
+  if (held && held.seq > seq) return;             // 清单上那笔比这一笔新,别往回盖
+  pendingNotes.set(key, { input, seq });          // 同一个键只留最新那一版结论
   scheduleFlush();
+}
+
+/**
+ * 真正写库的那一层,**带「这一版还作不作数」的闸**(第 4 轮审查 N3)。
+ *
+ * 补投是「把一笔旧结论再投一次」,所以它必须先问一句:这个键上有没有更新的一版已经落库了?
+ * 有 ⇒ 这一笔早就过期,直接当落完处理(把清单上那笔丢掉),绝不拿旧线索去盖新线索。
+ */
+async function writeNote(
+  key: string, input: CleanupDebtInput, seq: number,
+): Promise<"noted" | "failed"> {
+  if ((landedSeq.get(key) ?? 0) > seq) {
+    dropPendingNote(key, seq);
+    return "noted";
+  }
+  const verdict = await noteDebtRow(key, input);
+  if (verdict === "noted") {
+    landedSeq.set(key, Math.max(landedSeq.get(key) ?? 0, seq));
+    dropPendingNote(key, seq);                    // 落库成功 ⇒ 清单上那笔(不更新的)淘汰掉
+  }
+  return verdict;
+}
+
+/** 清单上这个键的那一笔,只在**不比刚落库的那版新**时才丢掉。 */
+function dropPendingNote(key: string, seq: number): void {
+  const held = pendingNotes.get(key);
+  if (held && held.seq <= seq) pendingNotes.delete(key);
+}
+
+/** 这个键彻底了结(销账)时把两份内存记录一起清掉,免得它们无限长。 */
+function forgetNoteBookkeeping(key: string): void {
+  pendingNotes.delete(key);
+  landedSeq.delete(key);
 }
 
 function scheduleFlush(): void {
@@ -128,9 +164,9 @@ function scheduleFlush(): void {
 /** 把内存里还扛着的那几笔再投一次。返回这一轮落进库的笔数和仍没落下的笔数。 */
 export async function flushPendingCleanupNotes(): Promise<{ landed: number; pending: number }> {
   let landed = 0;
-  for (const [key, input] of [...pendingNotes]) {
+  for (const [key, note] of [...pendingNotes]) {
     if (dbClient.closed) break;
-    const verdict = await withDebtKey(key, () => noteDebtRow(key, input));
+    const verdict = await withDebtKey(key, () => writeNote(key, note.input, note.seq));
     if (verdict !== "noted") continue;
     pendingNotes.delete(key);
     landed += 1;
@@ -180,26 +216,6 @@ async function noteDebtRow(
 }
 
 /**
- * 这一笔记在哪个键上。
- *
- * 首选记号 —— 它是这一次运行独有的身份,而且清扫侧能靠它重新取证。**没有记号时不是直接
- * 放弃**:升级前建的那些会话行就没有这一列,可它们同样会留下后代,而路径线索(这一次
- * 运行独有的输出文件 / 追踪文件)对它们仍然有效 —— 清扫问得出「还有没有人握着」,
- * 只是问不出「那个号是谁」。留一行能追的,比什么都不留强。
- *
- * 三条线索都没有才返回 `null`:那种记录追不出任何东西,记下来只会让披露面永久积压一条
- * 谁也处置不了的行(失败桩、没有真实进程的合成句柄就属于这一类)。
- */
-function debtKey(clues: CleanupDebtClues): string | null {
-  if (clues.unitToken) return clues.unitToken;
-  const path = clues.outPath || clues.trackPath;
-  return path ? `${NO_UNIT_PREFIX}${path}` : null;
-}
-
-/** 键前缀:这一行没有记号,清扫侧据此知道「别拿记号那一问当判据」。 */
-const NO_UNIT_PREFIX = "no-unit:";
-
-/**
  * 这一次运行**自己**判出了「清空」⇒ 销账。清理路径的 `empty` 分支调它。
  *
  * **它不信调用方那句「空了」就删行**(第 3 轮审查 F2):那个判断是在锁外做的,从判完到这里
@@ -226,14 +242,21 @@ async function settleIfStillEmpty(key: string): Promise<void> {
   if (!read.row) return;                          // 从来没欠过 —— 绝大多数回合走这里
   const row = read.row;
   const judged = await judgeDebtRow(row);
-  if (judged.result.kind !== "empty") {
-    console.warn(`[ash] 这一笔清理责任还不能销(unit=${key}):${judged.result.detail}`);
-    await touchDebtRow(row, judged.result, judged.after.verdict);
-    return;
-  }
-  if (!await settleDebtRow(key, row.version)) {
-    console.warn(`[ash] 这一笔清理责任确证空了、销账却没落下(unit=${key}):`
-      + "行留着,下一轮清扫会再确证一次");
+  switch (debtDisposition(judged)) {
+    case "settle":
+      if (!await settleDebtRow(key, row.version)) {
+        console.warn(`[ash] 这一笔清理责任确证空了、销账却没落下(unit=${key}):`
+          + "行留着,下一轮清扫会再确证一次");
+      }
+      return;
+    case "close":
+      console.warn(`[ash] 这一笔清理责任追到这里为止(unit=${key}):${cleanupDetail(judged.result)}`
+        + " —— 行留着(最后的可定位身份),不再自动重试");
+      await closeDebtRow(key, row.version, cleanupDetail(judged.result));
+      return;
+    default:
+      console.warn(`[ash] 这一笔清理责任还不能销(unit=${key}):${cleanupDetail(judged.result)}`);
+      await touchDebtRow(row, judged.result, judged.after.verdict);
   }
 }
 
@@ -251,19 +274,6 @@ async function readDebtRow(
   }
 }
 
-/** 按行上现有的线索重新取证,得到这一刻的结论。销账与推进共用它 —— 判据只有一处。 */
-async function judgeDebtRow(row: DebtRow): Promise<{
-  marked: boolean; after: UnitEvidence; clues: PathClues; result: CleanupResult;
-}> {
-  const marked = isMarked(row.unitToken);
-  const after = processUnitEvidence(marked ? row.unitToken : null, { fresh: true });
-  const clues = await probeDebtPaths(row);
-  return {
-    marked, after, clues,
-    result: mergeCleanupResults([markerResidue(after, marked), pathResidue(clues)]),
-  };
-}
-
 /**
  * 销账删行,**条件是「还是我判的那一版」**(见 schema 的 version)。
  *
@@ -276,7 +286,10 @@ async function settleDebtRow(unitToken: string, version: number): Promise<boolea
     const result = await db.delete(agentCleanupDebts).where(and(
       eq(agentCleanupDebts.unitToken, unitToken), eq(agentCleanupDebts.version, version),
     ));
-    if (rowsAffectedOf(result) > 0) return true;
+    if (rowsAffectedOf(result) > 0) {
+      forgetNoteBookkeeping(unitToken);
+      return true;
+    }
     console.warn(`[ash] 销账没删到行(unit=${unitToken}、判的是第 ${version} 版):`
       + "这个键上的证据在判定之后被人动过,这一刀不下,下一轮重新取证");
     return false;
@@ -313,9 +326,6 @@ async function closeDebtRow(unitToken: string, version: number, note: string): P
 /** 条件写到底改没改到行。drizzle 把底层 client 的 `rowsAffected` 原样带出来。 */
 const rowsAffectedOf = (result: unknown): number =>
   Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0);
-
-/** 这一行有没有记号(`no-unit:` 开头的那些是升级前建的老会话,键退回了路径线索)。 */
-const isMarked = (key: string): boolean => !key.startsWith(NO_UNIT_PREFIX);
 
 /**
  * 还在追的那几笔(披露与重试入口都读它)。
@@ -387,6 +397,13 @@ export type CleanupSweepResult =
     landedNotes: number;
     /** 仍然只在内存里扛着的责任笔数(跨不过重启,见 `pendingNotes`)。 */
     pendingNotes: number;
+    /**
+     * 连交接层都没加载起来、留在**清理那一侧**内存里等补交的笔数(`kill.ts` 的 `undelivered`)。
+     *
+     * 跟上面那个是两段路、各管一半:`pendingNotes` 是「进了这一层、库没写进去」,这一个是
+     * 「压根没进这一层」。两个都跨不过重启,所以披露面上一个都不能少(第 4 轮审查 N2)。
+     */
+    undelivered: number;
   }
   /** 连「有哪几笔」都没问出来 ⇒ **不许报成 0/0/0**(那和「全扫完了,什么都没有」同形)。 */
   | { ok: false; reason: string };
@@ -409,13 +426,30 @@ export async function sweepAgentCleanupDebts(): Promise<CleanupSweepResult> {
   return {
     ok: true, settled, left, closed, vanished, stuck,
     landedNotes: flushed.landed, pendingNotes: flushed.pending,
+    undelivered: await undeliveredCount(),
   };
+}
+
+/**
+ * 清理那一侧内存里还扛着几笔(按需加载,拿不到就如实报 0 —— 它只用于披露)。
+ *
+ * 为什么是按需加载:`kill.ts` 对这一层是按需加载的(见那边顶部那段),反过来静态 import
+ * 会在两边之间长出一条真实的运行时环。
+ */
+async function undeliveredCount(): Promise<number> {
+  try {
+    const { undeliveredCleanupDebtCount } = await import("./kill.js");
+    return undeliveredCleanupDebtCount();
+  } catch {
+    return 0;
+  }
 }
 
 /**
  * 把一笔账往前推一次,**结论来自全部线索的终态合并**(第 2 轮审查 F1 的修复落点)。
  *
- * 三条线索,各自答同一种三档(`remaining` / `unknown` / `empty`),然后取最保守的那一档:
+ * 四条线索分属**两个问**(判空的不变量见 cleanup-result.ts 顶部),各自答四档里的一档:
+ *  · 根的号 + 启动时刻 —— 答「根」这一问,见 `rootResidue`;
  *  · 资源记号 —— `ours` 档敢下刀(逐个打,绝不打组:孤儿的组号是那个已经死掉的根的号);
  *  · 追踪文件 —— 后代继承的高位 fd;
  *  · 输出文件 —— 根的 stdout,这一次运行独有。
@@ -425,10 +459,7 @@ export async function sweepAgentCleanupDebts(): Promise<CleanupSweepResult> {
  * 后一种:后代把输出文件的名字弄丢(进程还握着那个 inode、心跳继续涨),这一问正确地答了
  * `unknown`,销账照落 —— 「局部查空」被当成了「整次运行清空」。
  *
- * 所以这里只有一个出口,判据是合并结果:
- *  · `empty`     ⇒ 销账(删行);
- *  · `unknown` 且记号确证空、且路径线索的名字本身都没了 ⇒ 收档(盖戳不删行,追到这里为止);
- *  · 其余        ⇒ 留着,记下这一刻停在哪、第几次了。
+ * 所以这里只有一个出口,判据是 `debtDisposition`(销账 / 收档 / 留着,三档的判据见那一段)。
  *
  * **记号与路径都在(可能的)下刀之后才取证**:下刀前那次读数说明不了下刀后的事。
  */
@@ -463,85 +494,19 @@ async function pushDebtLocked(key: string): Promise<SweepVerdict> {
   }
 
   // **记号与路径都在(可能的)下刀之后才取证**:下刀前那次读数说明不了下刀后的事。
-  const { after, clues, result } = await judgeDebtRow(debt);
+  const judged = await judgeDebtRow(debt);
+  const { after, result } = judged;
 
-  if (result.kind === "empty") {
-    // 删不掉就还是欠着:「写失败」不许在计数上长成「销账成功」(本轮 N9)。
-    return await settleDebtRow(key, debt.version) ? "settled" : "left";
+  switch (debtDisposition(judged)) {
+    case "settle":
+      // 删不掉就还是欠着:「写失败」不许在计数上长成「销账成功」(第 3 轮审查 N9)。
+      return await settleDebtRow(key, debt.version) ? "settled" : "left";
+    case "close":
+      return await closeDebtRow(key, debt.version, cleanupDetail(result)) ? "closed" : "left";
+    default:
+      await touchDebtRow(debt, result, after.verdict);
+      return "left";
   }
-  // 记号这边已经确证空(或者本来就没有记号),路径那边只剩「名字自己没了」这种再问多少次
-  // 都一样的答案 ⇒ 能追的都追到头了。**收档不是销账**:行留着,它是最后的可定位身份。
-  if (result.kind === "unknown" && (!marked || after.verdict === "none") && cluesExhausted(clues)) {
-    return await closeDebtRow(key, debt.version, result.detail) ? "closed" : "left";
-  }
-  await touchDebtRow(debt, result, after.verdict);
-  return "left";
-}
-
-/** 两条跨得过重启的路径线索,**一起问**(少问一条就是上面那段说的那个漏洞)。 */
-async function probeDebtPaths(debt: DebtRow): Promise<PathClues> {
-  // 这台机器结构性答不了「谁握着这个文件」时**不问**(见 `fileHoldersAnswerable`):那一档
-  // 记成「没答出来」会让每一笔账在那个平台上永远推不动,真正的残留反而被淹掉(本轮 N2)。
-  if (!fileHoldersAnswerable()) return { track: null, out: null };
-  const [track, out] = await Promise.all([
-    debt.trackPath ? probeFileHolders(debt.trackPath) : Promise.resolve(null),
-    debt.outPath ? probeFileHolders(debt.outPath) : Promise.resolve(null),
-  ]);
-  return { track, out };
-}
-
-type PathClues = { track: HolderProbe | null; out: HolderProbe | null };
-
-/**
- * 两条路径线索合成一档。
- *
- * **它们只用于残留检测,不用于下刀** —— 「谁还握着这个文件」证明得了「还有东西在」,证明
- * 不了「那个号就是那个东西」,而重启之后这边连句柄都没有。要下刀只走记号 `ours` 那一条
- * (自带归属证明 + 同源代次)。
- */
-const pathResidue = (clues: PathClues): CleanupResult => mergeCleanupResults([
-  residueFromProbe("追踪文件", clues.track), residueFromProbe("输出文件", clues.out),
-]);
-
-/**
- * 记号那一问写成同一种三档。没有记号的行上这一问**不发表意见**(合并时的单位元)。
- *
- * `answerable` 是「这台机器答得了这一问吗」(默认取本机事实,见 `monitorUnitAnswerable`)。
- * 显式收成参数是为了让 `null` 档那一支在**任何**平台上都跑得到回归 —— 它只在 win32 上
- * 触发,而那台真机这一轮连不上;把判据写成参数,至少这条分支的逻辑本身是被钉住的。
- */
-export function markerResidue(
-  evidence: UnitEvidence, marked: boolean, answerable = monitorUnitAnswerable(),
-): CleanupResult {
-  if (!marked) return { kind: "empty" };
-  switch (evidence.verdict) {
-    case "ours": case "suspected":
-      return { kind: "remaining", detail: describeEvidence(evidence) };
-    case "unprovable":
-      // 这台机器**结构性读不到别的进程的环境块**(win32)时这一问同样不发表意见:它跟
-      // 「这一次查询失败」不是一件事 —— 后者下一轮还问得出来,前者永远是这个答案,记成
-      // 「没答出来」只会让那个平台上的每一笔账永远推不动(本轮 N2)。
-      return answerable
-        ? { kind: "unknown", detail: `资源记号${describeEvidence(evidence)}` }
-        : { kind: "empty" };
-    case "none":
-      return { kind: "empty" };
-  }
-}
-
-/**
- * 路径这边**还追得下去吗**。
- *
- * 要收档就得满足两条:至少有一条线索的**名字本身没了**(`lost` —— 再问多少次都是同一个
- * 答案),而且没有任何一条是「这一次没答出来、下一次还问得出来」。一条都没有记下来时
- * 同样算追不下去 —— 那种行除了这一句描述什么都没有(正常不会出现,`debtKey` 要求至少
- * 一条线索)。
- */
-function cluesExhausted(clues: PathClues): boolean {
-  const probes = [clues.track, clues.out].filter((p): p is HolderProbe => !!p);
-  if (!probes.length) return true;
-  if (!probes.some((p) => p.kind === "unknown" && p.lost)) return false;
-  return !probes.some((p) => p.kind === "unknown" && !p.lost);
 }
 
 /**
@@ -556,7 +521,7 @@ async function touchDebtRow(
   if (dbClient.closed || result.kind === "empty") return false;
   try {
     const written = await db.update(agentCleanupDebts).set({
-      state: result.kind, detail: result.detail.slice(0, 2000), unitVerdict: verdict,
+      state: result.kind, detail: cleanupDetail(result).slice(0, 2000), unitVerdict: verdict,
       lastAttemptAt: now(), attempts: sql`${agentCleanupDebts.attempts} + 1`,
       version: debt.version + 1,
     }).where(and(
