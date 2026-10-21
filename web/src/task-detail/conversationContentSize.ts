@@ -116,6 +116,7 @@ const USER_SIZE: SizeTable<UserItem> = {
   at: () => 0,
   isAnswer: () => 0,
   bySystem: () => 0,
+  monitorWake: (value) => value ? JSON.stringify(value).length : 0,
   text: (value) => value.length,
   attachments: (value) => value.length,
 };

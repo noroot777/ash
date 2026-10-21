@@ -10,6 +10,7 @@ import type { AgentType, DuetConsensusBy, QuestionItem, Task, TaskStage, TaskSta
 import type { SessionRole } from "./session.ts";
 import type { ContextUsage, TokenUsage } from "./usage.ts";
 import type { NativeWorkEvent } from "./native-work.ts";
+import type { MonitorWakeData } from "./monitor-wake.ts";
 
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events
@@ -124,6 +125,7 @@ export type ServerEvent =
       text: string;
       at: string;
       bySystem?: true;
+      monitorWake?: MonitorWakeData;
     }
   | {
       type: "duet.progress";

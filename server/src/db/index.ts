@@ -513,6 +513,7 @@ export async function ensureSchema() {
     // 同一个哨兵还没送出去的事件合并进同一行（一次唤醒看完全部，而不是一行一个回合），
     // 投递时标 byBackend 让它在会话里显示成系统代写而不是用户发言。
     "ALTER TABLE scheduled_messages ADD COLUMN origin TEXT",
+    "ALTER TABLE scheduled_messages ADD COLUMN monitor_wake TEXT",
     // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
     "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",

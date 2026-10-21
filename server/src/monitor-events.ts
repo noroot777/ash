@@ -14,6 +14,7 @@
 import { and, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
 import { handoffToken, mergeMonitorEventText, monitorMessageOrigin } from "@ash/shared/monitor";
+import { appendMonitorWake, readMonitorWake, type MonitorWakeEvent } from "@ash/shared/monitor-wake";
 import { db, dbClient } from "./db/index.js";
 import { monitors, scheduledMessages, tasks } from "./db/schema.js";
 import { monitorTurnSource, monitorWakeExecutor, monitorWakeGate } from "./monitor-session.js";
@@ -33,6 +34,7 @@ export async function pushToTask(
   text: string,
   /** 这一笔是结果交接时的身份(见 schema 的 `handoff_token`);普通事件不填。 */
   handoffToken?: string,
+  event?: MonitorWakeEvent,
 ): Promise<boolean> {
   // **库关了就什么都送不出去**:ash 退出时会关库,而这一侧的调用方有几个是「放后台跑」的
   // (探活那一问判出结束之后的 `void finish`),所以这一刻完全可能撞上关库。那时这里不该抛
@@ -64,7 +66,7 @@ export async function pushToTask(
       eq(scheduledMessages.status, "pending"),
       isNull(scheduledMessages.deliveringSince),
     ))).at(0) ?? null;
-  await mergeOrEnqueueMonitorEvent(row, text, existing, handoffToken);
+  await mergeOrEnqueueMonitorEvent(row, text, existing, handoffToken, event);
   flushPendingForTask(row.taskId);
   return true;
 }
@@ -133,7 +135,11 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
     let delivered = false;
     if (!sentAlready) {
       try {
-        delivered = await pushToTask(row, row.resultHandoffText, token);
+        const header = `【哨兵结束】${row.description}（monitorId=${row.id}）`;
+        delivered = await pushToTask(row, row.resultHandoffText, token, {
+          kind: "ended", monitorId: row.id, source: row.description,
+          body: row.resultHandoffText.startsWith(header) ? row.resultHandoffText.slice(header.length) : row.resultHandoffText,
+        });
       } catch (e) {
         if (!isHandoffTokenConflict(e)) throw e;
         duplicate = true;
@@ -189,12 +195,16 @@ export async function mergeOrEnqueueMonitorEvent(
   existing: typeof scheduledMessages.$inferSelect | null,
   /** 结果交接的身份：合并和新建**两支都要落下它**，否则重投会把同一笔再送一次（N1）。 */
   handoffToken?: string,
+  event?: MonitorWakeEvent,
 ): Promise<void> {
+  const previous = readMonitorWake(existing?.monitorWake);
+  const monitorWake = event && (!existing || previous) ? appendMonitorWake(previous, event) : null;
   const merged = existing
     ? await db
       .update(scheduledMessages)
       .set({
         text: mergeMonitorEventText(existing.text, text),
+        monitorWake,
         ...(handoffToken ? { handoffToken } : {}),
       })
       .where(and(
@@ -218,6 +228,7 @@ export async function mergeOrEnqueueMonitorEvent(
     const executor = await monitorWakeExecutor(row.sourceReviewRun, row.sourceReviewRound);
     await enqueueMessage({
       taskId: row.taskId, text, origin: monitorMessageOrigin(row.id),
+      monitorWake: event ? appendMonitorWake(null, event) : null,
       ownerUserId: row.ownerUserId,
       ...(handoffToken ? { handoffToken } : {}),
       // **角色和「为哪一次审查的哪一轮」一起交出去**:两样都记在哨兵行上,所以投递那一刻

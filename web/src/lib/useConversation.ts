@@ -261,6 +261,7 @@ export function useConversation(
           at: event.at,
           isAnswer: event.text.startsWith(ANSWER_PREFIX),
           bySystem: event.bySystem,
+          monitorWake: event.monitorWake,
           source: "server",
         });
         refreshSessions();

@@ -199,6 +199,7 @@ export function appendLiveTimeline(
         at: entry.at,
         isAnswer: entry.isAnswer,
         bySystem: entry.bySystem,
+        monitorWake: entry.monitorWake,
       });
       continue;
     }

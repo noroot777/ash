@@ -1,4 +1,5 @@
 import type { ContextUsage, Session, TokenUsage } from "@ash/shared";
+import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { ANSWER_PREFIX, parseSessionOutput } from "@ash/shared";
 import { addUsage, usageTotal } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
@@ -30,7 +31,7 @@ export type { AgentAuxEvent, AgentContentSegment } from "./conversationSegments.
 export type { LiveAgentEvent } from "./conversationTurnParts.ts";
 
 export type TimelineEntry =
-  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; source?: "optimistic" | "server" }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData; source?: "optimistic" | "server" }
   | { kind: "server"; id: string; event: LiveAgentEvent };
 
 export type ConversationItem =
@@ -76,7 +77,7 @@ export type ConversationItem =
       markdown: string;
       segments: AgentContentSegment[];
     }
-  | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean; bySystem?: boolean }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData }
   | {
       kind: "event";
       id: string;
@@ -353,6 +354,7 @@ function appendPersistedSession(
         // 后端代写、占着真人回合的那种（验证打回、验收冲突）。照常渲染成 user 气泡，
         // 但「后续追问」不收它 —— 判据统一在 shared 的 isUserFollowUp。
         bySystem: segment.bySystem,
+        monitorWake: segment.monitorWake,
       });
       turnStartedAt = segment.at ?? turnStartedAt;
       openTurn = null;

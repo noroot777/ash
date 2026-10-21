@@ -1,6 +1,7 @@
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { ProjectPreviewConfig } from "@ash/shared/preview";
 import type { ProjectCommandsConfig } from "@ash/shared/project-commands";
+import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 
 // JSON columns are stored as text and parsed in the repository layer.
 // Schema mirrors shared/src/index.ts.
@@ -427,6 +428,7 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 同一个哨兵还没送出去的事件合并进同一行（一次唤醒看完全部，而不是一行一个回合），
   // 投递时标 byBackend，让它在会话里显示成系统代写的一回合而不是冒充用户发言。
   origin: text("origin"),
+  monitorWake: text("monitor_wake", { mode: "json" }).$type<MonitorWakeData>(),
   mode: text("mode").notNull().default("timed"), // timed | queued
   // 执行意图:1 = 这条是任务**排队等轮次时**暂存的回复,投递它 = 开启任务的执行回合
   // —— 整队在跑守卫与分组暂停都挡它,重投也不丢(第 xNb655YqYzcA 链第 5 轮:起跑失败

@@ -344,7 +344,10 @@ async function pushLines(row: Row, lines: string[], readTo: number | null): Prom
   const omitted = lines.length - shown.length;
   const head = `【哨兵事件】${row.description}（monitorId=${row.id}）`;
   const tail = omitted > 0 ? `\n…（这一批共 ${lines.length} 行，上面只列了前 ${shown.length} 行）` : "";
-  const delivered = await pushToTask(row, `${head}\n${shown.join("\n")}${tail}`);
+  const body = `${shown.join("\n")}${tail}`;
+  const delivered = await pushToTask(row, `${head}\n${body}`, undefined, {
+    kind: "output", monitorId: row.id, source: row.description, body,
+  });
   // `events` 数的是「**唤醒过任务几次**」，不是「读到过几行」。没投出去的那几行一次唤醒
   // 都没造成，计进去只会让卡片显示「已有 3 条事件」而任务那边一声没响——用户据此以为
   // 通知已经处理过了（第 2 轮审查实测：终态任务上卡片显示 1 条事件、待发消息数 0）。

@@ -40,6 +40,7 @@ import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, settleBusyAga
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState, monitorWakeCheckpoint } from "./monitor-session.js";
+import { monitorWakeForDelivery, type MonitorWakeData } from "@ash/shared/monitor-wake";
 import { deliveryOptions, deliveryVerdict, isDueForDelivery, monitorWakeGuard, pendingExecutionIntent } from "./pending-verdict.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -88,6 +89,7 @@ export function pendingMessageRow(input: {
   ownerUserId?: string | null;
   /** 不是真人写的那种消息的来源标记(`monitor:<id>`)。null = 用户自己发的。 */
   origin?: string | null;
+  monitorWake?: MonitorWakeData | null;
   mode?: ScheduledMessageMode;
   /** 执行意图:排队等轮次时暂存的回复(投递 = 任务的执行回合,见 schema 注释)。 */
   execution?: boolean;
@@ -110,6 +112,7 @@ export function pendingMessageRow(input: {
     reviewRound: turnSourceReview(input.turnSource)?.round ?? null,
     ownerUserId: input.ownerUserId ?? null,
     origin: input.origin ?? null,
+    monitorWake: input.monitorWake ?? null,
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
     execution: input.execution ?? false,
     sendAt: (input.sendAt ?? new Date()).toISOString(),
@@ -320,6 +323,7 @@ async function deliverWhenIdle(
     }
     const started = await continueTask(message.taskId, checkpoint?.text ?? claimed.text, {
       ...options,
+      monitorWake: monitorWakeForDelivery(claimed.monitorWake, checkpoint?.checkpoint),
       ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
       onDelivered: async () => {
         delivered = true;
@@ -475,6 +479,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
           }
           const started = await continueTask(m.taskId, checkpoint?.text ?? claimed.text, {
             ...options,
+            monitorWake: monitorWakeForDelivery(claimed.monitorWake, checkpoint?.checkpoint),
             ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
             throwOnTeamUnavailable: true,
             onDelivered: async () => {

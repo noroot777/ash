@@ -18,6 +18,8 @@
     "postinstall": "node scripts/prepare-node-pty.mjs",
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "test:monitor-wake-data": "tsx scripts/test-monitor-wake-data.ts",
+    "pretest:monitors": "npm run test:monitor-wake-data",
     "test:preview-annotation": "tsx scripts/test-preview-annotation.ts",
     "test:preview-assist": "tsx scripts/test-preview-assist.ts",
     "prestart": "node ../scripts/check-built.mjs",
