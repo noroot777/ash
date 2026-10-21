@@ -92,6 +92,14 @@ export function mountFileRoutes(api: Hono) {
   api.get("/tasks/:id/file/raw", async (c) => {
     const root = await rootFor(c.req.param("id"));
     if (!root) return c.json({ error: "这个任务还没有可浏览的工作目录" }, 404);
+    // `workspaceOnly` 的意思是「只认这个任务**自己**那个目录」，由对话正文里的图片那一档
+    // 带上来（web/src/task-detail/turnImages.ts）。必要性在于 taskFileRoot 的最后一档会退
+    // 到项目主仓：那时 `output/shot.png` 会解到主仓里**另一个任务留下的同名文件**上，于是
+    // 正文里画出一张完全不相干的图 —— 比不画坏得多（审查第 1 轮 F1 的同一类错）。
+    // 浏览文件树那几条照旧要这一档（它据 source === "repo" 说明「工作目录还没建出来」）。
+    if (c.req.query("workspaceOnly") && root.source === "repo") {
+      return c.json({ error: "这个任务自己的工作目录已经不在了" }, 404);
+    }
     try {
       const raw = await openRawStream(root, c.req.query("path") ?? "", c.req.header("range"));
       return new Response(Readable.toWeb(raw.stream) as ReadableStream, {

@@ -55,12 +55,15 @@ function ReviewerBadge({ round }: { round: number | null }) {
 
 function AgentMessage({
   item,
+  taskId,
   retry,
   hideTime,
   laneRole,
   onFork,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
+  /** 这条发言是在哪个任务的工作目录里说的（正文里的图靠它去那个目录取），见 AgentTurnBody。 */
+  taskId: string;
   /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
   retry?: React.ReactNode;
   /** 紧邻的旁注已经显示了同一个时间。 */
@@ -123,7 +126,7 @@ function AgentMessage({
             <CopyButton value={item.markdown} ariaLabel="复制这条回复" icon />
           </header>
         )}
-        <AgentTurnBody segments={item.segments} running={!item.endedAt} />
+        <AgentTurnBody segments={item.segments} running={!item.endedAt} taskId={taskId} />
         {/* 账目一律在尾栏，头部不放。位置不许随「是不是会话最后一条」变——
             那样同一个数会在气泡顶和气泡底之间跳，而这条规则用户看不见。 */}
         <MessageFooter
@@ -297,6 +300,9 @@ export function ConversationFeed({
         <AgentMessage
           key={item.id}
           item={item}
+          // 审查会话、团队执行者的发言都挂在**自己那个任务**上，工作目录各是各的；
+          // 会话行缺失（记录读不全）时才退到当前任务。
+          taskId={item.session?.taskId ?? task.id}
           hideTime={hiddenTimes.has(item.id)}
           laneRole={laneRole}
           onFork={onForkReply && !loading && !error && !forkBlockedReason && canForkReply(item) ? () => onForkReply(item.id) : undefined}

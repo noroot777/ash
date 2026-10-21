@@ -4,6 +4,7 @@ import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { taskFileResolver } from "../components/markdownPolicy.ts";
 import type { NativeWorkItem } from "./nativeWorkModel.ts";
 import { NATIVE_WORK_NO_ASSIGNMENT } from "./nativeWorkModel.ts";
 import { nativeAgentSegments } from "./nativeAgentSegments.ts";
@@ -12,12 +13,17 @@ import { NativeWorkHeadline } from "./NativeWorkMeta.tsx";
 
 // 住在左侧抽屉里（见 components/SideDrawer.tsx）：返回列表靠抽屉自己那颗关闭按钮、
 // 点遮罩或 Esc —— 列表本来就一直在右侧 Inspector 里开着，这里不再重复一个「返回」。
-export function NativeAgentConversation({ row, statusLabel, error, onRetry }: {
+export function NativeAgentConversation({ row, taskId, statusLabel, error, onRetry }: {
   row: NativeWorkItem; statusLabel: string;
+  /** 子智能体跑在**派它的那个任务**的工作目录里：正文里的图按它去取（见 AgentTurnBody）。 */
+  taskId: string;
   error?: Error | null; onRetry?: () => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const segments = useMemo(() => nativeAgentSegments(row.activity ?? []), [row.activity]);
+  // 没有执行记录、只剩 message/result 那条路径不走分段模型（也就没有 turnImages 那一档
+  // 快照配对），正文里的本机图片只能「现在去工作目录里取」。
+  const resolveFile = useMemo(() => taskFileResolver(taskId), [taskId]);
   const running = row.status === "running";
   const pending = row.status === "pending";
   const finalResult = segments.length > 0 && (row.status === "completed" || row.status === "failed")
@@ -51,12 +57,12 @@ export function NativeAgentConversation({ row, statusLabel, error, onRetry }: {
           {row.description
             ? <details className="native-agent__assignment"><summary>收到的输入</summary><MarkdownBody text={row.description} /></details>
             : <p className="native-work__hint">{NATIVE_WORK_NO_ASSIGNMENT}</p>}
-          {segments.length > 0 ? <AgentTurnBody segments={segments} running={running} /> : <>
+          {segments.length > 0 ? <AgentTurnBody segments={segments} running={running} taskId={taskId} /> : <>
             <p className="native-work__hint">{running ? "等待子智能体的执行记录…" : pending ? "等待子智能体开始执行…" : "此会话未记录详细执行过程。"}</p>
-            {row.message && <MarkdownBody text={row.message} />}
-            {row.result && row.result !== row.message && <MarkdownBody text={row.result} />}
+            {row.message && <MarkdownBody text={row.message} resolveFile={resolveFile} />}
+            {row.result && row.result !== row.message && <MarkdownBody text={row.result} resolveFile={resolveFile} />}
           </>}
-          {finalResult && <section><h4>返回结果</h4><MarkdownBody text={finalResult} /></section>}
+          {finalResult && <section><h4>返回结果</h4><MarkdownBody text={finalResult} resolveFile={resolveFile} /></section>}
           {running && <p className="native-agent__live" role="status"><span className="task-execution-pulse" aria-hidden="true" />执行中，内容实时更新</p>}
         </div>
         <ConversationScrollControls scrollRef={scroll} resetKey={row.id} tailKey={nativeTailKey} />

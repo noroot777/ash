@@ -13,10 +13,39 @@ import {
   openLocalPath,
   remarkSoftBreaks,
   reviewFileTarget,
+  sameOriginUrl,
   siblingResolverForUrl,
   type MarkdownFileResolver,
   type ReviewFileTarget,
 } from "./markdownPolicy.ts";
+
+/**
+ * 正文里的一张图。**站内取不到字节就整个消失**，绝不留一个裂开的图标。
+ *
+ * 必要性：解析器只能判断「这个地址站内服务得了」，判断不了「那个文件此刻还在不在」。
+ * 工作目录被清掉、文件被 agent 删掉、证据目录被删，地址都还拼得出来，但请求是 404 ——
+ * 画出来就是用户 2026-10-21 报的那一幕：一个裂图标配一行标题，读起来像「这个功能坏了」。
+ * 看不到那张图是事实，但那是「图没了」，不该长成「页面坏了」。
+ *
+ * **只收站内的**：同源地址是我们自己服务的，取不到就等于那个文件真没了；站外地址取不到
+ * 可能只是此刻连不上（要翻墙、要内网），这时候浏览器拿 alt 文字画出来的那个占位反而是
+ * 更诚实的交代，不归这条收。
+ *
+ * 按 src 记而不是一个布尔：同一个位置换了地址（重渲染、换任务）要重新试一次。
+ */
+function MarkdownImage({ src, alt, label }: { src: string; alt: string; label?: string }) {
+  const [broken, setBroken] = useState<string | null>(null);
+  if (broken === src) return null;
+  return (
+    <PreviewableImage
+      className="task-markdown-image"
+      src={src}
+      alt={alt}
+      label={label}
+      onError={() => { if (sameOriginUrl(src)) setBroken(src); }}
+    />
+  );
+}
 
 function MarkdownDocument({ text, resolveFile, onReviewReport, onActionError }: {
   text: string;
@@ -82,14 +111,7 @@ function MarkdownDocument({ text, resolveFile, onReviewReport, onActionError }: 
             const image = imagePreviewTarget(raw, resolveFile);
             // 解不出来的本机路径**一个字都不画**：裂图标只会被读成「这个功能坏了」。
             if (!image && isLocalImageReference(raw)) return null;
-            return (
-              <PreviewableImage
-                className="task-markdown-image"
-                src={image?.url ?? raw}
-                alt={alt ?? ""}
-                label={alt || image?.name}
-              />
-            );
+            return <MarkdownImage src={image?.url ?? raw} alt={alt ?? ""} label={alt || image?.name} />;
           },
           table: ({ children, ...props }) => (
             <div className="task-markdown-table">

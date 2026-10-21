@@ -4,11 +4,26 @@ import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
+// 夹具里的 `/image-preview-*.png` 得**真吐出字节**：取不到的站内图会被正文自己收掉
+// （见 MarkdownBody 的 MarkdownImage——站内 404 等于那个文件真没了，不留裂图标），
+// 于是「灯箱编组」这件要验的事连一张缩略图都找不着。
+const PIXELS = '<svg xmlns="http://www.w3.org/2000/svg" width="6" height="6"><rect width="6" height="6" fill="#4b7"/></svg>';
+
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
   logLevel: "error",
   server: { host: "127.0.0.1", port: 0, strictPort: false },
+  plugins: [{
+    name: "fixture-images",
+    configureServer(vite) {
+      vite.middlewares.use((req, res, next) => {
+        if (!/^\/image-preview-[^/?#]+\.png/.test(req.url ?? "")) return next();
+        res.setHeader("content-type", "image/svg+xml");
+        res.end(PIXELS);
+      });
+    },
+  }],
 });
 
 let browser;

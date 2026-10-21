@@ -30,9 +30,12 @@ import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type Inbo
 
 function AgentRow({
   row,
+  taskId,
   hideTime,
 }: {
   row: Extract<TeamFeedRow, { kind: "conv" }>["item"];
+  /** 这条发言是在哪个任务的工作目录里说的（正文里的图靠它去那个目录取），见 AgentTurnBody。 */
+  taskId: string;
   hideTime?: boolean;
 }) {
   if (row.kind !== "agent") return null;
@@ -52,7 +55,7 @@ function AgentRow({
           {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>{row.continuation ? "" : "· "}⏱ {duration} 用时</small>}
         </header>
       )}
-      <AgentTurnBody segments={row.segments} running={!row.endedAt} />
+      <AgentTurnBody segments={row.segments} running={!row.endedAt} taskId={taskId} />
       <MessageFooter
         turnUsage={row.usage}
         session={row.showSessionMeta ? row.session : null}
@@ -234,7 +237,9 @@ export function TeamFeed({
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
             const item = row.item;
-            if (item.kind === "agent") return <AgentRow key={row.key} row={item} hideTime={hiddenTimes.has(item.id)} />;
+            // 执行者各有自己的工作目录（团队共享那一档也一样按会话行走），所以按发言
+            // 所属的会话取任务，不是一律用调度台。
+            if (item.kind === "agent") return <AgentRow key={row.key} row={item} taskId={item.session?.taskId ?? task.id} hideTime={hiddenTimes.has(item.id)} />;
             if (item.kind === "user") return <UserRow key={row.key} row={item} noticeMode={noticeMode} />;
             const inbound = parseInbound(item.text);
             if (inbound) {

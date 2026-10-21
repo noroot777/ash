@@ -37,8 +37,12 @@ export const fileApi = {
   taskFile: (taskId: string, path: string): Promise<TaskFileRead> =>
     request(`/tasks/${id(taskId)}/file?path=${id(path)}`),
   // 图片/PDF 预览直接把这个地址交给 <img>/<iframe>，不经过 JSON。
-  taskFileRawUrl: (taskId: string, path: string): string =>
-    apiPath(`/tasks/${id(taskId)}/file/raw?path=${id(path)}`),
+  //
+  // `workspaceOnly` 给**对话正文里的图**用（见 task-detail/turnImages.ts）：那一档必须只
+  // 认任务自己那个目录，退到项目主仓会把 `output/shot.png` 解到另一个任务留下的同名文件
+  // 上，画出一张不相干的图。文件树、生成物那几处不传——它们要的就是「退到主仓也让人看」。
+  taskFileRawUrl: (taskId: string, path: string, options?: { workspaceOnly?: boolean }): string =>
+    apiPath(`/tasks/${id(taskId)}/file/raw?path=${id(path)}${options?.workspaceOnly ? "&workspaceOnly=1" : ""}`),
   // 网页产物的预览地址**不在前端拼**：它带着一段预览令牌，由 `taskFile` 随内容一起发下来
   // （见 server/src/task-page.ts 顶部——令牌是放开 ACAO 之后挡住第三方站点的那一道）。
   taskArtifacts: (taskId: string, signal?: AbortSignal): Promise<TaskArtifactsResult> =>

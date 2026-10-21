@@ -29,6 +29,19 @@ const server = await createServer({
         res.setHeader("content-type", "image/svg+xml");
         res.end(PIXELS);
       });
+      // 「读的时候再去工作目录里取」那一档。只有还在的那个路径吐字节，另一个按真实情形
+      // 回 404（目录被清掉 / 文件被删）—— 那一张必须整个消失，不许留裂图标。
+      vite.middlewares.use("/api/tasks", (req, res) => {
+        const path = new URL(req.url ?? "/", "http://fixture.invalid").searchParams.get("path") ?? "";
+        if (path.includes("gone")) {
+          res.statusCode = 404;
+          res.setHeader("content-type", "application/json");
+          res.end('{"error":"没有这个文件"}');
+          return;
+        }
+        res.setHeader("content-type", "image/svg+xml");
+        res.end(PIXELS);
+      });
     },
   }],
 });
@@ -57,7 +70,7 @@ try {
   await page.locator(".orphan-fixture .task-markdown").first().waitFor();
   // 每一张站内图都得真拿到字节 —— 只看 src 不看 naturalWidth 等于没验。
   await page.waitForFunction(() => {
-    const images = [...document.querySelectorAll('img[src^="/api/uploads"]')];
+    const images = [...document.querySelectorAll('img[src^="/api/uploads"], img[src*="/file/raw"]')];
     return images.length > 0 && images.every((img) => img.complete && img.naturalWidth > 0);
   });
 
@@ -104,6 +117,8 @@ try {
   );
 
   // ── ⑤ 站外地址不许被同名本地附件顶掉；同一份字节的两个名字都要画得出 ───────
+  // 这一条还兼着守「取不到就收掉」的边界：`example.invalid` 根本解析不出来、必然加载失败，
+  // 它仍然要留在这儿 —— 站外取不到可能只是此刻连不上，不归那一条收（见 MarkdownImage）。
   const alias = page.locator(".alias-fixture");
   assert.deepEqual(
     await srcs(alias.locator(".task-markdown img")),
@@ -146,6 +161,28 @@ try {
   assert.equal(await orphan.locator("img").count(), 0, "解释不了的本机路径要静默收掉，绝不留裂开的图标");
   assert.match(
     await orphan.locator(".task-markdown").innerText(),
+    /当时的截图/,
+    "收掉的只是那张图，正文一个字都不能少",
+  );
+
+  // ── ⑨ 存量消息退一档：现在去工作目录里取。文件还在就真画出来 ────────────────
+  const live = page.locator(".live-fixture .task-markdown img");
+  assert.deepEqual(
+    await srcs(live),
+    ["/api/tasks/T1/file/raw?path=output%2Flive.svg&workspaceOnly=1"],
+    "没有快照拷贝的引用改写到任务工作目录的原始字节接口",
+  );
+  assert.ok(
+    await live.first().evaluate((node) => node.complete && node.naturalWidth > 0),
+    "那个地址必须真把字节吐出来",
+  );
+
+  // ── ⑩ 文件已经没了（404）：那一张整个消失，正文一个字不少 ───────────────────
+  // 这一条是用户 2026-10-21 报的那一幕的下界：解析器判得出「这地址站内服务得了」，判不出
+  // 「那个文件此刻还在不在」，所以必须由渲染点兜住 —— 不然裂图标照旧。
+  await page.waitForFunction(() => document.querySelectorAll(".gone-fixture img").length === 0);
+  assert.match(
+    await page.locator(".gone-fixture .task-markdown").innerText(),
     /当时的截图/,
     "收掉的只是那张图，正文一个字都不能少",
   );

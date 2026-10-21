@@ -59,15 +59,21 @@ function ProcessFold({ segments }: { segments: AgentContentSegment[] }) {
 export function AgentTurnBody({
   segments: traced,
   running,
+  taskId,
 }: {
   segments: AgentContentSegment[];
   /** 这一回合还在飞（会话行还没落 endedAt）。在飞就不折，见 turnLayout。 */
   running: boolean;
+  /**
+   * 这一回合是在哪个任务的工作目录里说的话。给了才有「读的时候再去目录里取一次」那一
+   * 档退路——存量消息（落盘之前说的那些）唯一还拿得到图的路子，见 turnImages。
+   */
+  taskId?: string;
 }) {
   // 正文里引用到的那几张图画进正文本身（agent 把它放在哪就在哪），同一张图随之从卡片排
   // 里拿掉。**必须按整个回合配**：附件事件恒在它那段正文之后，分段又遇附件就另起一段，
   // 所以正文和它的图天然分在相邻两段（见 turnImages）。
-  const segments = useMemo(() => turnImages(traced), [traced]);
+  const segments = useMemo(() => turnImages(traced, taskId), [taskId, traced]);
   // 跑的时候不折 —— 连「切成过程 / 结论」这一步都不做（见 turnLayout）。折叠是个重组
   // 动作：它会把已经说出口、已经露在外面的正文一并收进过程块，跑的中途干这件事，用户
   // 正读的内容说没就没。这一回合收口那一下才折，位置从此不再变。

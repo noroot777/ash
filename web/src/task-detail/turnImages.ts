@@ -20,6 +20,8 @@
 // 一边存了一边配不上（图没了）、或者一边认领了一边没存（卡片被吃掉、正文又什么都不画）。
 // 它不认的写法（引用式、缩进代码块）两边一致地不认，所以顶多不显示，不会显示成另一张图。
 import { markdownImageRefs } from "@ash/shared/markdown-images";
+import { taskFilePath } from "../components/markdownPolicy.ts";
+import { api } from "../lib/api.ts";
 import type { AgentContentSegment } from "./conversationModel.ts";
 import { attachmentView } from "./utils.ts";
 
@@ -33,9 +35,19 @@ function applyEdits(text: string, edits: Edit[]): string {
 /**
  * 正文认领得了的图画进正文，认领走的附件从卡片排里拿掉。
  *
- * 一条都没配上时原样返回入参（引用相等，省掉下游的重渲染）。
+ * `taskId` 给了就多一档退路：没有快照拷贝的引用改写成「现在去这个任务的工作目录里取」
+ * （`/api/tasks/:id/file/raw`）。**存量消息只有这一条出路** —— 落盘是 2026-10-21 才加的，
+ * 那之前说过的每一张图都没有拷贝，而文件常常还在原地（用户报的就是这一幕：正文里是裂
+ * 图标，「生成物」面板里那几个文件明明在）。
+ *
+ * 两档的先后不能反：快照拷贝是「agent 说那句话时的那一张」，工作目录里的是「现在的那
+ * 一张」。同一个路径被改过之后，后者已经不是正文在说的东西了，所以它只在**没有快照**
+ * 时才用——不是更好的字节，是唯一还拿得到的字节。取不到会 404，由渲染点收掉（见
+ * MarkdownBody 的 MarkdownImage：一个裂图标都不许留）。
+ *
+ * 一条都没改写时原样返回入参（引用相等，省掉下游的重渲染）。
  */
-export function turnImages(segments: AgentContentSegment[]): AgentContentSegment[] {
+export function turnImages(segments: AgentContentSegment[], taskId?: string): AgentContentSegment[] {
   // 同一处目的地可能对着好几份拷贝（被重拍过），按事件顺序排队，正文里第 n 次引用取第 n 份。
   const queues = new Map<string, string[]>();
   for (const segment of segments) {
@@ -46,25 +58,37 @@ export function turnImages(segments: AgentContentSegment[]): AgentContentSegment
       else queues.set(source, [path]);
     }
   }
-  if (!queues.size) return segments;
+  if (!queues.size && !taskId) return segments;
 
+  const live = (destination: string): string | null => {
+    if (!taskId) return null;
+    const path = taskFilePath(destination);
+    // workspaceOnly：工作目录没了就得是 404，绝不能退到项目主仓解到同名的另一张图。
+    return path ? api.taskFileRawUrl(taskId, path, { workspaceOnly: true }) : null;
+  };
   const used = new Set<string>();
   // 队列空了但这个来源配过：正文里同一张图被引用了两次（服务端按内容去重，只存了一份）。
   const reuse = new Map<string, string>();
   const claimed: AgentContentSegment[] = [];
+  let rewrote = false;
   for (const segment of segments) {
     const edits: Edit[] = [];
     for (const ref of markdownImageRefs(segment.markdown)) {
       const path = queues.get(ref.destination)?.shift() ?? reuse.get(ref.destination);
-      const url = path ? attachmentView(path).url : null;
-      if (!path || !url) continue;
-      reuse.set(ref.destination, path);
-      used.add(path);
+      const snapshot = path ? attachmentView(path).url : null;
+      if (path && snapshot) {
+        reuse.set(ref.destination, path);
+        used.add(path);
+      }
+      const url = snapshot ?? live(ref.destination);
+      if (!url) continue;
       edits.push({ start: ref.start, end: ref.end, url });
     }
+    rewrote = rewrote || edits.length > 0;
     claimed.push(edits.length ? { ...segment, markdown: applyEdits(segment.markdown, edits) } : segment);
   }
-  if (!used.size) return segments;
+  if (!rewrote) return segments;
+  if (!used.size) return claimed;
 
   return claimed.map((segment) => (
     segment.attachments.some((path) => used.has(path))

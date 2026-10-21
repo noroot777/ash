@@ -20,6 +20,7 @@ import { executionEventsSize } from "../task-detail/conversationContentSize.ts";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { taskFileResolver } from "../components/markdownPolicy.ts";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { OriginTaskBar, TaskCreationBadge } from "../components/TaskOrigin.tsx";
@@ -64,11 +65,14 @@ function TurnBubble({
   previousRound,
   session,
   fallback,
+  taskId,
 }: {
   turn: DuetTurn;
   previousRound?: number;
   session?: Session;
   fallback: string;
+  /** 讨论者引用的本机图片按这个任务的工作目录取（见 markdownPolicy 的 taskFileResolver）。 */
+  taskId: string;
 }) {
   const newRound = turn.round !== previousRound;
   if (turn.speaker === "user") {
@@ -102,7 +106,11 @@ function TurnBubble({
         </header>
         <ExecutionDetails events={turn.events} running={!turn.done} />
         {!turn.done && !turn.text && !turn.events.length && <p className="duet-thinking">{side === "synthesis" ? "正在把讨论成果整理成共同方案…" : "正在组织本轮观点…"}</p>}
-        {turn.text && <MarkdownBody text={turn.text} />}
+        {/* 讨论者写的 `![](output/x.png)` 指的是**它工作目录里**那张图，浏览器直接取不到。
+            会话流那边还多一档「说那句话时的快照拷贝」（见 turnImages），这一条线的回合不走
+            分段模型、附件事件没有落到 DuetTurn 上，所以这里只有「现在去目录里取」这一档：
+            目录还在就看得见，被清掉了就什么都不画（绝不留裂图标）。 */}
+        {turn.text && <MarkdownBody text={turn.text} resolveFile={taskFileResolver(taskId)} />}
         {turn.notice && <p className="duet-turn-notice">{turn.notice}</p>}
         {turn.error && <p className="duet-turn-error">{turn.error}</p>}
       </article>
@@ -347,6 +355,7 @@ export function DuetView({
                 previousRound={turns[index - 1]?.round}
                 session={turn.speaker === "A" ? sessionsByRole.voiceA : turn.speaker === "B" ? sessionsByRole.voiceB : undefined}
                 fallback={turn.speaker === "B" ? config.voiceB : config.voiceA}
+                taskId={task.id}
               />
             ))}
             {activityPhase === "replying" && turns.length > 0 && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} queuePosition={task.queuePosition} />}

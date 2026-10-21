@@ -96,7 +96,8 @@ export function taskFileOpenTarget(href?: string): TaskFileOpenTarget | null {
   return match ? { taskId: match[1], path: match[2] } : null;
 }
 
-function sameOriginUrl(href: string): URL | null {
+/** 这个地址是不是**这个站自己**服务的（取不到就是「文件真没了」，而不是网络问题）。 */
+export function sameOriginUrl(href: string): URL | null {
   try {
     const url = new URL(href, window.location.origin);
     return url.origin === window.location.origin ? url : null;
@@ -139,6 +140,67 @@ export function siblingFileName(destination: string): string | null {
   return name && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".." ? name : null;
 }
 
+/** `..` 爬出去的那一段——服务端一律 400，这里就别拼这个必败的地址。 */
+const PARENT_SEGMENT = /(^|[/\\])\.\.([/\\]|$)/;
+
+/**
+ * 这个 `![]()` 指的是**任务工作目录里**的哪个文件（相对路径原样留着，绝对路径按真路径）。
+ *
+ * 用处是「读的时候再取一次」那一档：服务端从 2026-10-21 起会在收到正文的那一刻把被引用
+ * 的图复制进 `data/uploads/`，但**那之前的消息一份拷贝都没有**，而文件往往还好好躺在工作
+ * 目录里（用户 2026-10-21 的截图就是这一幕：正文里是裂图标，「生成物」面板里那几个文件
+ * 明明在）。只要那个目录还在，`/api/tasks/:id/file/raw` 就取得到它。
+ *
+ * 口径跟服务端的 `resolveInRoot` 对齐：相对路径按工作目录解，绝对路径只要落在工作目录
+ * 里就服务。解得出路径不等于取得到字节——目录被清掉、文件被删都会 404，所以调用点必须
+ * 保证「取不到就什么都不画」（见 MarkdownBody 的 MarkdownImage）。
+ */
+export function taskFilePath(destination?: string): string | null {
+  const raw = destination?.trim();
+  if (!raw) return null;
+  // `file://`、磁盘根开头的绝对路径、UNC —— 这一支自带完整路径，直接交服务端判越界。
+  // 其余只认**没有协议的相对路径**：斜杠开头的是站内地址（`/api/…`），协议开头的是网址。
+  const path = localDiskPath(raw)
+    ?? (hasUrlScheme(raw) || raw.startsWith("/")
+      ? null
+      : decodeSafe((raw.split(/[?#]/)[0] ?? "").replace(/^(?:\.\/)+/, "")));
+  if (!path || PARENT_SEGMENT.test(path)) return null;
+  return path;
+}
+
+/**
+ * 「这份正文的相对路径按任务工作目录解」——对话正文那一档。
+ *
+ * 跟 `siblingFileResolver`（审查报告 → 证据目录）是并列的两档，不是替代：审查报告里
+ * 的截图跟 report.md 同住证据目录，而 agent 在对话里写的是它自己工作目录里的路径。
+ */
+export function taskFileResolver(taskId: string): MarkdownFileResolver {
+  return (destination) => {
+    const path = taskFilePath(destination);
+    if (!path) return null;
+    return {
+      name: path.split(/[/\\]/).pop() || path,
+      // 只认任务自己那个工作目录：退到项目主仓会解到同名的**另一个**文件上（见 fileApi）。
+      url: api.taskFileRawUrl(taskId, path, { workspaceOnly: true }),
+    };
+  };
+}
+
+/** 按顺序试几档解析（前一档解不出来才问下一档），空档位直接跳过。 */
+export function firstResolver(
+  ...resolvers: (MarkdownFileResolver | undefined)[]
+): MarkdownFileResolver | undefined {
+  const present = resolvers.filter((resolver): resolver is MarkdownFileResolver => !!resolver);
+  if (present.length < 2) return present[0];
+  return (destination) => {
+    for (const resolver of present) {
+      const target = resolver(destination);
+      if (target) return target;
+    }
+    return null;
+  };
+}
+
 /** 正文跟它引用的文件同住一个目录时的解析器（审查报告：report.md 和截图在一起）。 */
 export function siblingFileResolver(urlFor: (name: string) => string): MarkdownFileResolver {
   return (destination) => {
@@ -157,11 +219,15 @@ export function siblingFileResolver(urlFor: (name: string) => string): MarkdownF
 export function siblingResolverForUrl(fileUrl: string): MarkdownFileResolver | undefined {
   const base = sameOriginUrl(fileUrl);
   if (!base || !isReviewFileEndpoint(base.pathname) || !base.searchParams.has("name")) return undefined;
-  return siblingFileResolver((name) => {
+  const sibling = siblingFileResolver((name) => {
     const url = new URL(base.toString());
     url.searchParams.set("name", name);
     return url.toString();
   });
+  // 报告里也会提到**工作目录里**的文件（审查者就站在那儿跑的，截图未必落进证据目录）。
+  // 这个弹窗手上只有报告自己的地址，而任务 id 就在那个地址里。
+  const taskId = /\/tasks\/([^/]+)\//.exec(base.pathname)?.[1];
+  return firstResolver(sibling, taskId ? taskFileResolver(decodeSafe(taskId)) : undefined);
 }
 
 // 正文里指向图片的**链接**（不是 `![]()` 内嵌图），点开要落进全站统一的灯箱，而不是
@@ -222,9 +288,14 @@ function servableImage(href: string): ImagePreviewTarget | null {
   }
 
   if (!url) return null;
-  // 站内 URL 的文件名一般就在 pathname 末段；验证证据接口是例外，它把名字放在 ?name=
-  // （用户从证据面板「复制图片地址」再贴回对话里，走的就是这一条）。
-  const named = isReviewFileEndpoint(url.pathname) ? url.searchParams.get("name") : null;
+  // 站内 URL 的文件名一般就在 pathname 末段；两个例外把它放在查询串里：验证证据接口用
+  // `?name=`（用户从证据面板「复制图片地址」再贴回对话里，走的就是这一条），任务工作
+  // 目录的原始字节接口用 `?path=`（末段是固定的 `raw`，拿它当名字灯箱上就只剩「raw」）。
+  const named = isReviewFileEndpoint(url.pathname)
+    ? url.searchParams.get("name")
+    : url.pathname.endsWith("/file/raw")
+      ? url.searchParams.get("path")?.split(/[/\\]/).pop() ?? null
+      : null;
   const name = decodeSafe(named ?? url.pathname.split("/").pop() ?? "");
   if (!isImagePath(name)) return null;
   if (!/^https?:/i.test(href) && !url.pathname.startsWith("/api/")) return null;

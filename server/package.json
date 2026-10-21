@@ -154,6 +154,7 @@
     "test:llm-relay": "tsx scripts/test-llm-relay.ts",
     "test:skills": "tsx scripts/test-skills.ts",
     "test:file-browser": "tsx scripts/test-file-browser.ts",
+    "test:task-file-raw": "tsx scripts/test-task-file-raw.ts",
     "test:task-artifacts": "tsx scripts/test-task-artifacts.ts",
     "test:artifact-scope": "tsx scripts/test-task-artifact-scope.ts",
     "test:task-page": "tsx scripts/test-task-page.ts",

@@ -137,6 +137,11 @@ const AWKWARD = turn(
 // 存量消息：那时相对路径根本没被复制进 uploads，配不上任何来源。
 const ORPHAN = [segment("orphan:0", "当时的截图：\n\n![旧截图](output/playwright/gone.png)\n")];
 
+// 同一条存量消息，但这一回知道它是哪个任务说的：退一档「现在去那个工作目录里取」。
+// 文件还在的那张要真画出来（夹具服务端吐真字节），已经没了的那张**一个 img 都不许留**。
+const LIVE = [segment("live:0", "当时的截图：\n\n![旧截图](output/live.svg)\n")];
+const GONE = [segment("gone:0", "当时的截图：\n\n![没了](output/gone.svg)\n")];
+
 const TURNS: [string, AgentContentSegment[]][] = [
   ["conclusion", CONCLUSION],
   ["single", SINGLE],
@@ -161,6 +166,11 @@ createRoot(document.getElementById("root")!).render(
     {TURNS.map(([name, segments]) => (
       <section className={`${name}-fixture`} key={name}>
         <AgentTurnBody segments={segments} running={false} />
+      </section>
+    ))}
+    {([["live", LIVE], ["gone", GONE]] as [string, AgentContentSegment[]][]).map(([name, segments]) => (
+      <section className={`${name}-fixture`} key={name}>
+        <AgentTurnBody segments={segments} running={false} taskId="T1" />
       </section>
     ))}
   </StrictMode>,
