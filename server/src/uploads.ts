@@ -153,6 +153,42 @@ export async function bindUploadsToTask(
   }
 }
 
+/**
+ * **可信产物**里记着的那几张图,归属补齐(可重入)。
+ *
+ * 为什么需要它:登记只发生在「刚写下这些字节」的那一刻(`noteAgentEventUpload` 挂在公共
+ * 广播口上),而那一道是 2026-10-21 才补的 —— 在它之前落盘的回合,图还好好躺在 uploads
+ * 里、产物里也写着它的路径,唯独这张表里那一行没有 taskId。按 `canReadUpload` 的判据那就
+ * 是无主资产:多人模式下同项目的普通成员重新打开那条讨论/那段执行过程,结论看得到、图一律
+ * 404(跟「文件不存在」同一句话),而且**没有新广播就永远不会恢复**(审查第 3 轮 R4)。
+ * `claimExistingUploads` 也补不到:它只扫任务正文,agent 后来生成的图不在里面。
+ * 顺带把登记失败那条分支也收口了 —— `noteAgentUpload` 写不进去只是 warn,下一次读到那份
+ * 产物就会再登记一次。
+ *
+ * **路径只能来自服务端自己写下的产物清单**(讨论回合的 `images`、会话 trace 的 attachment
+ * 事件),信任级别跟广播口那一道完全相同。正文里的路径一个都不认,那是「引用即认领」那条
+ * 路(推演见 `bindUploadsToTask`);这里再经 `uploadNameOf` 核一遍它真落在 uploads 目录直
+ * 下,`registerUpload` 本身又只补空位,所以这一道夺不走任何归属。
+ */
+export async function backfillArtifactUploads(
+  taskId: string,
+  paths: Iterable<string | undefined>,
+): Promise<void> {
+  const names = new Set<string>();
+  for (const path of paths) {
+    const name = typeof path === "string" ? uploadNameOf(path) : null;
+    if (name) names.add(name);
+  }
+  for (const name of names) {
+    try {
+      await registerUpload(name, { taskId });
+    } catch (error) {
+      // 读产物这件事不该因为补归属失败而整条失败(下一次读还会再试)。
+      console.warn("[ash] 附件归属回填失败:", error);
+    }
+  }
+}
+
 /** agent 自己产出的图(工具结果截图之类)。没有上传者,归它跑的那个任务。 */
 export function noteAgentUpload(taskId: string, path: string): void {
   void registerUpload(path, { taskId }).catch((error) => {

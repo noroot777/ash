@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
+import { backfillArtifactUploads } from "./uploads.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
@@ -92,6 +93,13 @@ export async function readSessionTrace(taskId: string, sessionId: string): Promi
   if (parsed.badLines > 0) return { ok: false, missing: false };
   const trace = parsed.entries;
   const tail = parsed.truncatedTail;
+  // 这段执行过程里记着的图,归属补齐 —— 登记那一道是后来才补的,在它之前落盘的会话、以及
+  // 登记写失败的那几次,图对普通成员一律 404 且**没有新广播就永远不会恢复**(判据与边界见
+  // uploads.ts 的 backfillArtifactUploads;讨论那条读取路径用的是同一道)。
+  await backfillArtifactUploads(
+    taskId,
+    trace.map((entry) => entry.event.kind === "attachment" ? entry.event.path : undefined),
+  );
   if (!trace.some((entry) => entry.event.kind === "tool" && entry.event.nativeWork)) {
     return { ok: true, value: trace, truncatedTail: tail };
   }

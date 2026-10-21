@@ -14,7 +14,8 @@
 //   ② 包在**子智能体活动**里的那张(native tool activity)同样登记 —— 不能只管一种路径;
 //   ③ 没有 path 的 attachment(「这处引用没存下副本」的交代)不许凭空造出一行归属;
 //   ④ **这一道之前落盘的讨论**:读时间线时按回合自己记下的那份清单可重入地回填归属 ——
-//      没有新广播就永远不会恢复(审查第 3 轮 R4)。正文里的路径一个都不认。
+//      没有新广播就永远不会恢复(审查第 3 轮 R4)。正文里的路径一个都不认。会话执行过程
+//      那条读取路径同一道:R4 是类问题,普通任务那条链的存量会话症状一模一样。
 //
 // 跑法(自带临时库):npm -w server run test:duet-image-ownership
 import assert from "node:assert/strict";
@@ -32,7 +33,7 @@ requireTmpDb("test-duet-image-ownership");
 
 // 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前。
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { projects, tasks, uploads } = await import("../src/db/schema.js");
+const { projects, sessions, tasks, uploads } = await import("../src/db/schema.js");
 const { RUNS_DIR, UPLOADS_DIR } = await import("../src/paths.js");
 const { bus } = await import("../src/bus.js");
 const mode = await import("../src/auth/mode.js");
@@ -191,7 +192,24 @@ try {
   );
   assert.equal((await db.select().from(uploads)).length, before, "重入不该多出任何一行");
 
-  console.log("讨论图片归属登记回归通过(主发言者 + 子智能体 + 无副本交代 + 存量讨论读时回填)");
+  // 同一道也挂在**会话执行过程**那条读取上:R4 是类问题,普通任务/团队那条链的存量会话、
+  // 以及登记写失败的那几次,症状一模一样(图 404 且不会自愈)。
+  const traced = image("duet-traced");
+  await db.insert(sessions).values([{
+    id: "s-old", taskId: "t-duet-old", role: "single", agentType: "claude", executor: "claude",
+    cwd: repo, startedAt: at, endedAt: at,
+  }] as never);
+  writeFileSync(join(oldRuns, "s-old.trace.jsonl"), JSON.stringify({
+    at, turnStartedAt: at, event: { kind: "attachment", path: traced, source: "output/traced.png", ref: 0 },
+  }) + "\n");
+  assert.equal(await read(traced, AS_ALICE), 404, "回填之前:存量会话里那张图同样是 404");
+  const trace = await app.fetch(
+    new Request("http://127.0.0.1:4317/api/sessions/s-old/trace", { headers: AS_ALICE }),
+  );
+  assert.equal(trace.status, 200);
+  assert.equal(await read(traced, AS_ALICE), 200, "读过那段执行过程之后,里面的图就该打得开");
+
+  console.log("讨论图片归属登记回归通过(主发言者 + 子智能体 + 无副本交代 + 存量讨论/会话读时回填)");
 } finally {
   releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
