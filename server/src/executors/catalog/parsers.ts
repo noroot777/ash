@@ -4,7 +4,7 @@ import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import { parseClaudeStream } from "../claude.js";
 import { markdownImageRefs, trimCarry } from "@ash/shared/markdown-images";
-import { imageStore, persistMarkdownImageRefs } from "../../agent-attachments.js";
+import { captureMarkdownImages, imageStore, persistMarkdownImageRefs, type ImageSnapshots } from "../../agent-attachments.js";
 import type { CliParser, CliParserContext } from "./types.js";
 
 // ── 目录自带的输出解析器 ────────────────────────────────────────────────────
@@ -130,10 +130,24 @@ const CARRY_MAX = 8192;
  * 自带持久化的解析器(claudeStreamJsonParser 套的 parseClaudeStream)由 generic 直接放行,
  * 不过这一层 —— 两层各存一份就是同一处引用两条记录、两份拷贝(见 generic.ts)。
  *
- * 碎片:流式解析器一个 text 事件可能只是半句话,所以攒一段 `carry` 再扫。只在这一片带了
- * `)` 或 `]` 时才扫 —— 一处引用只可能由这两个字符收尾,拿它当闸省掉逐 token 的解析。扫完
- * 裁到最后一处引用之后(**交代过的引用一个字都不再扫**,否则同一处会发两条、身份对不上),
- * 攒长了按**块边界**裁(见 shared 的 trimCarry:围栏的开栏不会跟着被裁掉)。
+ * **按消息边界扫,不按碎片扫**。流式解析器一个 text 事件可能只是半句话,而半句话的语法
+ * 结论随时会被后文推翻:
+ *   · `![a][r]` 先到、`[r]: output/x.png` 后到 —— 按碎片扫时那处引用还没有定义,扫完又把
+ *     交代过的前文裁掉,后到的定义再也修正不了它(拼回来明明有一张图,结果一条都没存);
+ *   · 行内代码的一对反引号被切在两片里 —— 前半片里 `![示例](output/x.png)` 看着是真图,
+ *     等后半片的反引号到了它才是代码(于是白存一份,而展示端扫完整正文不认它)。
+ * 两种都是审查第 2 轮 F2 的实测用例。所以**身份**只在消息结束(`done`)那一遍扫描里认:
+ * 那时候语法边界是稳定的,扫出来的节点集合跟展示端扫同一段正文的结果必然相同。
+ *
+ * **字节反过来,一刻都不能等**:一条消息里 agent 边说边重拍同一个路径是常事(红→蓝→红,
+ * 这一层裹的是整条 run,中间真的会有工具改文件),全等到收尾再读,三处引用会一起拿到最后
+ * 那份字节(审查第 1 轮 F1 实测 A)。所以每来一片就按当下的正文把**字节**先拍进 uploads
+ * (captureMarkdownImages:不发事件、不占身份),收尾那一遍权威扫描再决定哪几处引用是真图、
+ * 各自领走哪一份快照 —— 先拍下来,待会儿再认。
+ *
+ * 攒的上限是兜底而不是常态(单条消息不该有兆字节的正文):顶到上限就先扫一轮、按**块
+ * 边界**裁掉已交代的部分(见 shared 的 trimCarry:围栏的开栏不会跟着被裁掉),代价是那种
+ * 超长消息退回「按片扫」的老语义 —— 但不这么兜,一条失控的流能把内存吃光。
  */
 export async function* withMarkdownImages(
   events: AsyncIterable<AgentEvent>,
@@ -143,7 +157,28 @@ export async function* withMarkdownImages(
   // 解析器自己挂上来的附件(工具结果截图):同一份拷贝不铺两张卡片。正文引用来的那些
   // **不能**按路径去重 —— 重拍过的两处引用字节可能一样,但它们是两处引用(F1)。
   const passed = new Set<string>();
+  // 流式阶段拍下的字节。key 带一个 generation:裁剪过的 carry 里偏移会整体挪位,老快照
+  // 一律作废(它指的那处引用已经交代过了)。
+  const snapshots: ImageSnapshots = new Map();
+  let generation = 0;
   let carry = "";
+
+  const emit = function* (refs: ReturnType<typeof markdownImageRefs>): Generator<AgentEvent> {
+    for (const image of persistMarkdownImageRefs(refs, seen, { cwd, snapshots, generation })) {
+      yield { kind: "attachment", ...image };
+    }
+  };
+  const drop = (kept: string) => {
+    snapshots.clear();
+    generation += 1;
+    carry = kept;
+  };
+  const flush = function* (): Generator<AgentEvent> {
+    if (!carry) return;
+    yield* emit(markdownImageRefs(carry));
+    drop("");
+  };
+
   for await (const event of events) {
     if (event.kind === "attachment") {
       if (event.path) {
@@ -153,17 +188,27 @@ export async function* withMarkdownImages(
       yield event;
       continue;
     }
-    yield event;
-    if (event.kind !== "text") continue;
-    carry += event.text;
-    if (!/[)\]]/.test(event.text)) {
-      carry = trimCarry(carry, CARRY_MAX);
+    if (event.kind === "text") {
+      yield event;
+      carry += event.text;
+      // 一处引用只可能由 `)`(行内图)、`]`(引用式图)或行尾(它的定义)收尾 —— 三个都
+      // 没有的那一片不可能改变「有哪几处引用」,拿它当闸省掉逐 token 的解析。顶到上限时
+      // 照扫:那一轮要把攒着的引用交代掉才能裁(见下),漏掉就等于把它们丢了。
+      if (!/[)\]\n]/.test(event.text) && carry.length <= CARRY_MAX) continue;
+      const refs = markdownImageRefs(carry);
+      captureMarkdownImages(refs, seen, snapshots, { cwd, generation });
+      // 兜底:顶到上限才按老语义交代一轮并裁剪(交代过的引用一个字都不再扫,否则同一处
+      // 会发两条、身份对不上)。
+      if (carry.length > CARRY_MAX) {
+        yield* emit(refs);
+        drop(trimCarry(carry.slice(refs.at(-1)?.end ?? 0), CARRY_MAX));
+      }
       continue;
     }
-    const refs = markdownImageRefs(carry);
-    for (const image of persistMarkdownImageRefs(refs, seen, { cwd })) {
-      yield { kind: "attachment", ...image };
-    }
-    carry = trimCarry(carry.slice(refs.at(-1)?.end ?? 0), CARRY_MAX);
+    // 消息收尾:先把这条消息的图交代完,再把 `done` 放出去 —— 反过来的话结算那一侧已经
+    // 把回合收了,后到的 attachment 挂不上这一回合。
+    if (event.kind === "done") yield* flush();
+    yield event;
   }
+  yield* flush();
 }

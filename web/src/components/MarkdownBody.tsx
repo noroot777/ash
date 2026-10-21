@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CaretDown, X } from "@phosphor-icons/react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ReviewConclusion } from "@ash/shared";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
@@ -10,6 +10,7 @@ import {
   imageOriginLabel,
   imagePreviewTarget,
   isLocalImageReference,
+  unavailableImageOrigin,
   localOpenUrl,
   openLocalPath,
   remarkSoftBreaks,
@@ -89,6 +90,12 @@ function MarkdownDocument({ text, resolveFile, onReviewReport, onActionError }: 
     <div className="task-markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkSoftBreaks]}
+        // 图片地址**原样交给我们自己判**:react-markdown 默认会把它不认的协议整个清空,
+        // 于是没来得及被改写的 `file:///…/shot.png` 到 img 这里只剩空串 —— 既画不出来,也
+        // 报不出「哪个文件取不到」(连路径都没了,审查第 2 轮 F2 的失败分支)。img 的 src
+        // 不会被当成可执行地址,分类与越界判定全在 markdownPolicy + 服务端那道门禁;链接
+        // (href)仍走默认清理,那条才是 `javascript:` 的入口。
+        urlTransform={(url, key) => (key === "src" ? url : defaultUrlTransform(url))}
         components={{
           a: ({ node: _node, href, onClick, ...props }) => {
             const reviewFile = reviewFileTarget(href) ?? resolveFile?.(href ?? "") ?? null;
@@ -139,6 +146,10 @@ function MarkdownDocument({ text, resolveFile, onReviewReport, onActionError }: 
             // 空地址也**一个字都不画**：react-markdown 的 urlTransform 会把它不认的协议
             // （`file:` 就是一个）整个清空，画出来就是一张没有 src 的裂图（审查第 1 轮 F2）。
             if (!raw) return null;
+            // 作废标记:归属不可信那一处,任何 resolver 都不许再把它救活成当前文件
+            // (审查第 2 轮 F1)。必须在解析之前就认掉。
+            const unavailable = unavailableImageOrigin(raw);
+            if (unavailable) return <MissingImage origin={unavailable} alt={alt} />;
             const image = imagePreviewTarget(raw, resolveFile);
             // 解不出来的本机路径（agent 自己机器上的地址，浏览器一个都取不到）报一行小字。
             if (!image && isLocalImageReference(raw)) return <MissingImage origin={raw} alt={alt} />;

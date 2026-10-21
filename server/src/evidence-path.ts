@@ -10,8 +10,19 @@
 import { realpathSync } from "node:fs";
 import { sep } from "node:path";
 
-/** 证据目录往下最多认这么深 —— 真实证据都是一两层，再深的只可能是构造出来的。 */
-const MAX_DEPTH = 8;
+/**
+ * 证据目录往下最多认这么深 —— 真实证据都是一两层，再深的只可能是构造出来的。
+ *
+ * **枚举清单跟它共用这一个数**：两边不一样的话就会出现「接口服务得了、证据面板里却列不
+ * 出来」的文件（审查第 2 轮 N1：形状判据放到 8 层，两处清单还只走 3 层）。
+ */
+export const EVIDENCE_MAX_DEPTH = 8;
+
+/**
+ * 自动列进证据清单的图片类型。**跟 `REVIEW_MIME` 对齐**：列出来就得服务得了，否则面板上
+ * 那张卡片必然 404。两处清单曾经一个收 WebP、一个不收（同上 N1）。
+ */
+export const EVIDENCE_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
 /**
  * `name` 作为证据目录内的相对路径拆成段，拆不动就是 `null`（调用点一律拒）。
@@ -23,7 +34,7 @@ const MAX_DEPTH = 8;
 export function evidenceSegments(name: string): string[] | null {
   if (!name || /^[a-zA-Z]:/.test(name) || /^[\\/]/.test(name)) return null;
   const segments = name.split(/[\\/]/);
-  if (segments.length > MAX_DEPTH) return null;
+  if (segments.length > EVIDENCE_MAX_DEPTH) return null;
   for (const part of segments) if (!part || part === "." || part === "..") return null;
   return segments;
 }

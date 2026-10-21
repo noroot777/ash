@@ -186,7 +186,9 @@
     "test:db-tx": "tsx scripts/test-db-tx-ownership.ts",
     "test:turn-identity": "tsx scripts/test-session-turn-identity.ts && tsx scripts/test-team-turn-artifacts.ts",
     "test:turn-migration": "tsx scripts/test-session-turn-migration.ts",
-    "test:turn-persist": "tsx scripts/test-session-turn-persist.ts"
+    "test:turn-persist": "tsx scripts/test-session-turn-persist.ts",
+    "//test:duet-image-ownership": "讨论里 agent 贴的图：走真路由验普通成员看不看得到（上传归属登记），主发言者与子智能体两条路径各一次。",
+    "test:duet-image-ownership": "tsx scripts/test-duet-image-ownership.ts"
   },
   "dependencies": {
     "@ash/shared": "*",
@@ -194,6 +196,8 @@
     "drizzle-orm": "^0.38.3",
     "hono": "^4.6.14",
     "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "micromark-extension-gfm": "^3.0.0",
     "nanoid": "^5.0.9",
     "node-pty": "^1.1.0",
     "undici": "^7.30.0"

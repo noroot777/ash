@@ -151,6 +151,60 @@ try {
   })(), root));
   assert.deepEqual(attachments(passed).map((event) => event.source), [undefined]);
 
+  // ⑦ 引用式图的**定义后到**:`![引用截图][r]` 先到,`[r]: output/shot.png` 随后才到。
+  // 按碎片扫的那一版在第一片就给这处引用定了性(还没有定义 → 不是图),扫完又把交代过的
+  // 前文裁掉,后到的定义再也修正不了它 —— 拼回来明明有一张图,结果一条都没存(审查第 2
+  // 轮 F2 的证明输入)。
+  const late = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "![引用截图][r]\n\n[r]: " } as AgentEvent;
+    yield { kind: "text", text: "output/shot.png\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(late).map((event) => event.source),
+    ["output/shot.png"],
+    "定义后到的引用式图要认出来",
+  );
+
+  // ⑧ 反过来:一对反引号被切在两片里。前半片里 `![示例](output/shot.png)` 看着是真图,
+  // 等后半片的反引号到了它才是行内代码 —— 一条都不许发(发了就会在展示端把附件卡片领走,
+  // 而展示端扫完整正文压根不认它)。
+  const fenced = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "行内 `![示例](output/shot.png)" } as AgentEvent;
+    yield { kind: "text", text: "` 不算图。\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(attachments(fenced).map((event) => event.source), [], "拼全了是行内代码的,一条都不发");
+
+  // ⑨ 脚注里的真截图:方言得跟渲染器一致(核心语法把它当四空格缩进代码 → 0 张,
+  // GFM 当脚注正文 → 1 张;渲染器挂的就是 remark-gfm,所以必须是 1)。
+  const footnote = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "结论见脚注[^a]。\n\n[^a]: 证据：\n\n    ![脚注截图](output/shot.png)\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(footnote).map((event) => event.source),
+    ["output/shot.png"],
+    "脚注里的真截图要认出来(方言跟渲染器一致)",
+  );
+
+  // ⑩ 「先拍字节、后认身份」的边界:重拍发生在**引用的文字还没写完**的那一刻。
+  // 第一处引用的括号刚闭合(字节=红)→ 文件被改成蓝 → 第二处引用写完。两处引用必须各自
+  // 拿到自己那一刻的字节,而不是一起拿收尾时的蓝。
+  const mid = join(root, "output", "mid.png");
+  const amber = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 3)]);
+  const midEvents = await collect(withMarkdownImages((async function* () {
+    writeFileSync(mid, red);
+    yield { kind: "text", text: "改前：![改前](output/mid.png)" } as AgentEvent;
+    writeFileSync(mid, amber);
+    yield { kind: "text", text: "\n\n改后：![改后](output/mid.png)\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  const two = attachments(midEvents);
+  assert.equal(two.length, 2, "两处引用两条结果");
+  assert.deepEqual(readFileSync(two[0]!.path!), red, "第一处引用拿到的是它写完那一刻的字节");
+  assert.deepEqual(readFileSync(two[1]!.path!), amber, "第二处引用拿到的是改过之后的字节");
+
   console.log("自定义解析器的图片落盘回归通过");
 } finally {
   rmSync(root, { recursive: true, force: true });

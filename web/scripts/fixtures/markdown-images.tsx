@@ -170,7 +170,22 @@ const ORPHAN = [segment("orphan:0", "当时的截图：\n\n![旧截图](output/p
 const LIVE = [segment("live:0", "当时的截图：\n\n![旧截图](output/live.svg)\n")];
 const GONE = [segment("gone:0", "当时的截图：\n\n![没了](output/gone.svg)\n")];
 
+// 协议相对网址(`//host/x.png`):沿用当前页面的 http/https,**不是**本机路径。只问「有没
+// 有协议」的那一版把它改写成「去任务工作目录取」,于是这张站外图永远画不出来(审查第 2 轮
+// F3)。`file:` 那条反过来:它是本机文件,解不出来时要留下小字而不是被 react-markdown 清成
+// 空串后无声消失(同轮 F2 的失败分支)。
+const PROTOCOL = [segment("protocol:0", [
+  "站外那张沿用当前页面的协议：",
+  "",
+  "![协议相对](//cdn.example.invalid/remote.svg)",
+  "",
+  "这张是本机文件、没有副本也不在工作目录里：",
+  "",
+  "![没了](file:///Users/demo/code/ash/output/vanished.svg)",
+].join("\n"))];
+
 const TURNS: [string, AgentContentSegment[]][] = [
+  ["protocol", PROTOCOL],
   ["conclusion", CONCLUSION],
   ["single", SINGLE],
   ["retake", RETAKE],

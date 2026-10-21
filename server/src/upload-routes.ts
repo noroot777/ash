@@ -5,7 +5,7 @@ import { join, basename, extname } from "node:path";
 import { maxBytesFor, attachmentKind } from "@ash/shared";
 import { UPLOADS_DIR } from "./paths.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { canReadUpload, registerUpload } from "./uploads.js";
+import { canReadUpload, registerUpload, watchAgentUploads } from "./uploads.js";
 import { id } from "./util.js";
 
 // ── attachment uploads (pasted into the composer / reply box) ────────────────
@@ -42,6 +42,10 @@ const sanitizeName = (name: string): string =>
   (name || "").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._-]+/, "").slice(-80);
 
 export function mountUploadRoutes(api: Hono): void {
+  // 读得到的那一刻起,归属登记就在管着:广播出去的 agent 附件一律登记(见 uploads.ts 的
+  // watchAgentUploads —— 讨论那条链曾经整条漏掉)。挂在这里而不是 index.ts,是为了让
+  // 「挂了读接口」和「有归属兜底」成为同一件事,隔离测试里也不会只装一半。
+  watchAgentUploads();
   // Accept a base64 data URL of any type, persist it, return the absolute path (for
   // the prompt) plus a url (preview thumbnail) and the kind (image vs file → which
   // chip the web shows). The agent-facing filename keeps the original name when the

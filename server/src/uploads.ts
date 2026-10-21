@@ -19,6 +19,7 @@
 import { readdir } from "node:fs/promises";
 import { eq, inArray } from "drizzle-orm";
 import { basename } from "node:path";
+import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks, uploads } from "./db/schema.js";
 import { UPLOADS_DIR } from "./paths.js";
@@ -142,6 +143,33 @@ export function noteAgentUpload(taskId: string, path: string): void {
   void registerUpload(path, { taskId }).catch((error) => {
     // 登记失败只影响别人能不能在界面上看到这张图,不该动摇这一轮的产出。
     console.warn("[ash] 附件归属登记失败:", error);
+  });
+}
+
+/**
+ * 「凡是作为 `agent.event` 广播出去的附件,归属已经登记」—— 这条不变量落在**公共发布
+ * 口**上,而不是指望每条执行链各自记得调一次。
+ *
+ * 为什么必须补这一层:单飞在 `single-run.ts` 的 persistTrace 里登记、团队调度台在
+ * `team/lead-voice.ts` 的 traceLead 里登记,两处都挂在**写 trace** 这个动作上;讨论
+ * (`duet/turn.ts`)自己写 transcript.jsonl、不走 appendSessionTrace,于是整条链一个字都
+ * 没登记 —— 多人模式下普通成员看得到讨论任务和结论、却打不开结论里的图(uploads 行没有
+ * taskId = 无主资产,`canReadUpload` 回 404,跟「文件不存在」同一句话;审查第 2 轮 F4 用
+ * 真实 runTurn + 真实上传路由实测 404 → 登记后 200)。
+ *
+ * 判据因此换成**「它有没有把这个事件广播出去」**:广播了就等于这条链要让人看见这张图,
+ * 那就必须先有归属。下一条新执行链不写 trace 也照样被这条网兜住。主发言者自己的
+ * attachment 和包在子智能体活动里的那些由 `noteAgentEventUpload` 同一个入口处理。
+ *
+ * 跟那两处直接调用重复不要紧:`registerUpload` 只补空位(见它的注释),重复登记是幂等的。
+ */
+let watching = false;
+
+export function watchAgentUploads(): void {
+  if (watching) return;
+  watching = true;
+  bus.subscribe((event) => {
+    if (event.type === "agent.event") noteAgentEventUpload(event.taskId, event.event);
   });
 }
 

@@ -1,9 +1,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { containedPath, evidenceSegments } from "./evidence-path.js";
+import { containedPath, evidenceSegments, EVIDENCE_IMAGE_EXTENSIONS, EVIDENCE_MAX_DEPTH } from "./evidence-path.js";
 import { RUNS_DIR } from "./paths.js";
-
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
 export function freeReviewEvidenceDir(taskId: string, runId: string, round: number): string {
   return join(RUNS_DIR, taskId, "free-review", runId, `round-${round}`);
@@ -68,7 +66,8 @@ export function readFreeReviewReport(taskId: string, runId: string, round: numbe
 }
 
 // 子目录一起列：审查者把截图归到 `shots/` 里是合法写法（接口也服务得了），列不出来就
-// 等于那几张只能靠报告正文提到才看得见。深度跟 evidenceSegments 一个口径。
+// 等于那几张只能靠报告正文提到才看得见。深度与类型都跟**能不能服务**共用一份常量
+// （evidence-path.ts）—— 两边一松一紧就会出现「打得开、但面板里没有」。
 function imagesUnder(dir: string, prefix: string, depth: number): string[] {
   if (depth <= 0) return [];
   const found: string[] = [];
@@ -77,7 +76,7 @@ function imagesUnder(dir: string, prefix: string, depth: number): string[] {
     if (entry.isSymbolicLink()) continue;
     const name = `${prefix}${entry.name}`;
     if (entry.isDirectory()) found.push(...imagesUnder(join(dir, entry.name), `${name}/`, depth - 1));
-    else if (entry.isFile() && IMAGE_EXTENSIONS.has(extname(entry.name).toLowerCase())) found.push(name);
+    else if (entry.isFile() && EVIDENCE_IMAGE_EXTENSIONS.has(extname(entry.name).toLowerCase())) found.push(name);
   }
   return found;
 }
@@ -86,7 +85,7 @@ export function freeReviewScreenshots(taskId: string, runId: string, round: numb
   try {
     const dir = freeReviewEvidenceDir(taskId, runId, round);
     if (!safeEvidenceDir(dir)) return [];
-    return imagesUnder(dir, "", 3).sort();
+    return imagesUnder(dir, "", EVIDENCE_MAX_DEPTH).sort();
   } catch {
     return [];
   }

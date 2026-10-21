@@ -30,4 +30,16 @@ export const IMAGE_SHAPES: ImageShape[] = [
   { key: "alt-brackets", about: "alt 里有成对方括号（按字符位置找目的地会在 alt 内部就对上）", markdown: "![a[b]c](output/shot.svg)" },
   { key: "table", about: "GFM 表格里的图（核心语法把它当段落，渲染器当表格——两种解析下都得是同一张图）", markdown: "| 图 |\n|---|\n| ![t](output/t.svg) |" },
   { key: "multiline", about: "括号内换行（逐行扫描看不见它）", markdown: "![跨行](\noutput/shot.svg\n)" },
+  // ↓ 这两种是 GFM 扩展**独有**的分歧：核心语法与 GFM 对同一段正文给出不同的图片节点集合。
+  // 扫描器少挂 remark-gfm 的那一版在这里两头都错（审查第 2 轮 F2 实测）。
+  {
+    key: "footnote",
+    about: "脚注里的真截图（核心语法当成四空格缩进代码 → 0 张；GFM 当成脚注正文 → 1 张）",
+    markdown: "结论见脚注[^a]。\n\n[^a]: 证据：\n\n    ![脚注截图](output/foot.svg)\n",
+  },
+  {
+    key: "table-pipe",
+    about: "表格单元里有未转义的 `|`（GFM 按它切单元，图片语法被切断 → 0 张；核心语法 → 1 张）",
+    markdown: "| 名 | 图 |\n| --- | --- |\n| a | ![示例](output/a|b.svg) |\n",
+  },
 ];

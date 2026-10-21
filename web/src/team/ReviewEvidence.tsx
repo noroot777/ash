@@ -93,11 +93,13 @@ export function ReviewRoundBody({
             text={round.reportMarkdown}
             reportKey={`${taskId}:${round.where}:${round.round}`}
             conclusion={round.conclusion}
-            // 文档根归属（同目录优先、再退任务工作目录，以及已知的歧义）一处定清楚，
-            // 见 markdownPolicy 的 reportFileResolver。
+            // 文档根归属（证据目录 vs 被审任务工作目录）一处定清楚，见 markdownPolicy 的
+            // reportFileResolver。`screenshots` 是服务端列出来的那份权威清单：带着它，根
+            // 归属是**算出来的**，不再靠「第一个地址加载失败」试出来。
             resolveFile={reportFileResolver(
               (name) => api.taskReviewFileUrl(taskId, round.round, name),
               taskId,
+              round.screenshots,
             )}
           />
         : <p>验证报告尚未写入。</p>}

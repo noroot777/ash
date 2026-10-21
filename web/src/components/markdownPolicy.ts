@@ -1,4 +1,4 @@
-import { hasUrlScheme } from "@ash/shared/markdown-images";
+import { hasUrlScheme, isNetworkDestination } from "@ash/shared/markdown-images";
 import { api } from "../lib/api.ts";
 import { attachmentView, isImagePath } from "../task-detail/utils.ts";
 
@@ -209,7 +209,10 @@ export function taskFilePath(destination?: string): string | null {
     ? fileUrlPath(raw)
     : WINDOWS_DISK_ROOT.test(raw) || UNC_ROOT.test(raw)
       ? decodeSafe(raw)
-      : hasUrlScheme(raw) || SITE_ROUTE.test(raw)
+      // isNetworkDestination 而不是 hasUrlScheme:`//cdn.example.com/a.png` 是协议相对网址,
+      // 没有协议却绝不是本机路径。只问 scheme 的那一版把它改写成「去工作目录取」,于是这
+      // 张站外图永远画不出来(审查第 2 轮 F3)。UNC 的 `\\server\share` 上一档已经认掉。
+      : isNetworkDestination(raw) || SITE_ROUTE.test(raw)
         ? null
         : decodeSafe(withoutQuery(raw).replace(/^(?:\.\/)+/, ""));
   if (!path || PARENT_SEGMENT.test(path)) return null;
@@ -260,14 +263,23 @@ export function siblingFileResolver(urlFor: (name: string) => string): MarkdownF
 export function reportFileResolver(
   urlFor: (name: string) => string,
   taskId?: string,
+  /**
+   * 证据目录里**真有哪些文件**(服务端列出来的那份清单)。给了它,根归属就是算出来的而
+   * 不是试出来的 —— 「第一个地址加载失败」只能证明那个文件此刻取不到,证明不了这处引用
+   * 说的是另一个根(审查第 2 轮 F1 的同类位置)。清单拿不到时(单独打开的报告弹窗手上只
+   * 有报告自己的地址)才退回按顺序试。
+   */
+  evidenceNames?: readonly string[],
 ): MarkdownFileResolver | undefined {
   const sibling = siblingFileResolver(urlFor);
   const workspace = taskId ? taskFileResolver(taskId) : undefined;
   if (!workspace) return sibling;
+  const known = evidenceNames ? new Set(evidenceNames) : null;
   return (destination) => {
     const inWorkspace = workspace(destination);
     const inReportDir = sibling(destination);
     if (!inReportDir) return inWorkspace;
+    if (known) return known.has(inReportDir.name) ? inReportDir : inWorkspace ?? inReportDir;
     return inWorkspace ? { ...inReportDir, fallback: inWorkspace } : inReportDir;
   };
 }
@@ -339,6 +351,28 @@ export function isLocalDiskImagePath(href: string): boolean {
  * 用户脸上 —— 他要核实的是 **agent 原文写的那个路径**，所以站内地址一律还原成它携带的
  * 那一个。
  */
+/**
+ * 「这一处引用的归属不可信,一个字都不许画」的**显式**标记。
+ *
+ * 为什么要有它:作废原先靠「保持原样」表达 —— 正文里仍然是 `output/shot.png`,于是下一个
+ * resolver(讨论区的 taskFileResolver)照样把它解成「去工作目录取」,被作废的那处引用又被
+ * 救活成当前文件(审查第 2 轮 F1:拒绝配对的结果被另一个解析入口绕过)。作废必须是一个
+ * **没有任何 resolver 认得**的目的地,同时把 agent 原文写的那个地址带着,好让提示报得出。
+ *
+ * 形状选 `#` 开头的片段:react-markdown 不会把它清空(它是相对地址),浏览器也不会为它发
+ * 请求 —— 不像一个假的站内路径那样白跑一趟 404。
+ */
+const UNAVAILABLE = "#ash-image-unavailable:";
+
+export function unavailableImage(destination: string): string {
+  return `${UNAVAILABLE}${encodeURIComponent(destination)}`;
+}
+
+/** 这个 src 是作废标记吗 —— 是就返回 agent 原文写的那个地址(渲染点据此报一行小字)。 */
+export function unavailableImageOrigin(href: string): string | null {
+  return href.startsWith(UNAVAILABLE) ? decodeSafe(href.slice(UNAVAILABLE.length)) : null;
+}
+
 export function imageOriginLabel(href: string): string {
   const url = sameOriginUrl(href);
   if (!url) return href;

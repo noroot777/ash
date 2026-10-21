@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { hasUrlScheme, markdownImageRefs } from "@ash/shared/markdown-images";
+import { hasUrlScheme, isNetworkDestination, markdownImageRefs } from "@ash/shared/markdown-images";
 import {
   imageStore,
   persistMarkdownImages,
@@ -153,6 +153,21 @@ try {
     "`D:` 被当成协议时这一条恒为空 —— 那就是 Windows 上图全没了的那个回归",
   );
   assert.equal(drive[0]!.path, undefined, "文件不在就明确报「这处引用没有副本」");
+
+  // ── 协议相对网址是站外地址,不是本机路径(审查第 2 轮 F3)──────────────────────
+  // `//cdn.example.invalid/a.png` 没有协议,却绝不是本机文件。只问 scheme 的那一版把它交给
+  // `isAbsolute`(/ 开头 → 真)去读 `/cdn.example.invalid/a.png`,必然失败,还白报一条
+  // 「这处引用没有副本」—— 于是展示端把这张站外图改写成「去工作目录取」,永远画不出来。
+  // 判据跟 Windows UNC(`\\server\share`,反斜杠)不重叠,上面那条盘符用例一起钉住。
+  assert.equal(isNetworkDestination("//cdn.example.invalid/a.png"), true);
+  assert.equal(isNetworkDestination("https://example.com/a.png"), true);
+  assert.equal(isNetworkDestination("D:/work/shot.png"), false);
+  assert.equal(isNetworkDestination("\\\\server\\share\\shot.png"), false);
+  assert.deepEqual(
+    persistMarkdownImages("![远程](//cdn.example.invalid/a.png)", imageStore(), { directory: uploads, cwd: root }),
+    [],
+    "协议相对网址一条都不报 —— 报了就等于告诉展示端「这处引用我管过」",
+  );
 
   // ── 落盘失败不许毒化本轮重试,也不许把事件流带走 ─────────────────────────────
   const blocked = join(root, "not-a-dir");

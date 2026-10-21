@@ -28,6 +28,7 @@ import {
   type SessionResumeFault,
 } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
+import { noteAgentEventUpload } from "../uploads.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
@@ -287,6 +288,13 @@ export async function runTurn(args: {
         const publishedEvent = event.kind === "error" && sessionNotice
           ? { kind: "system" as const, text: event.message, at: now() }
           : emittedEvent;
+        // 图片的**归属登记**要在它成为可展示数据之前:附件躺在 uploads 目录里,不登记就是
+        // 「无主资产」,多人模式下同项目的普通成员在讨论区打不开它(uploads.ts 的
+        // canReadUpload 回 404 —— 跟「文件不存在」同一句话,前端连隐不隐都分不出)。主发言
+        // 者自己的 attachment 和包在子智能体活动里的那些由同一个消费入口处理:普通任务在
+        // single-run.ts、团队调度台在 team/lead-voice.ts,讨论这一条整条链以前漏掉了
+        // (审查第 2 轮 F4,真实 runTurn + 真实上传路由实测 404 → 登记后 200)。
+        noteAgentEventUpload(taskId, event);
         bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event: publishedEvent });
         if (event.kind === "session" && event.cliSessionId !== cliId) {
           cliId = event.cliSessionId;

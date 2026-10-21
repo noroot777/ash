@@ -112,8 +112,13 @@ assert.equal(
   "明确没有副本 → 现在去工作目录取",
 );
 
-// ⑨ 配不上、而契约保证过「每处引用恒有一条」(ref 在)→ **什么都不画**,也不许拿当前文件
-// 或上一份拷贝去补(F1:猜出来的那张恰好是错的那张)。那张图仍留在附件卡片里,点得开。
+// ⑨ 正文里的引用序列跟记录**对不上**(契约保证过每处引用恒有一条,这里两处却只记了一
+// 条)→ 记录过的那几处**一处都不画**,显式作废。
+//
+// 为什么连第一处也不画:对不上说明「这段正文不是服务端扫过的那一段」,那时「第一处」未必
+// 就是记录的那一条 —— 展示端有一条按权威 .md 重建正文的恢复分支,重建出来可能只剩最后一
+// 句,于是幸存的那处引用其实是第三处。按位置顶上去画出来的恰好是错的那张(审查第 2 轮
+// F1:正文写蓝色、画出来是红色)。拷贝全部留在附件卡片里点得开,宁可让人自己点。
 const shortQueue = [{
   id: "q:0",
   markdown: "![一](output/s.png) ![二](output/s.png)",
@@ -124,10 +129,51 @@ const shortQueue = [{
 const short = turnImages(shortQueue, "C0ojRgeQnMsa");
 assert.equal(
   short[0].markdown,
-  "![一](/api/uploads/eeeeeeeeeeee-s.png) ![二](output/s.png)",
-  "第二处引用配不上:原样留着(渲染端自己收掉),绝不顶一份别的拷贝",
+  "![一](#ash-image-unavailable:output%2Fs.png) ![二](#ash-image-unavailable:output%2Fs.png)",
+  "对不上就显式作废:作废**不能**靠「原样留着」表达,否则下一个 resolver 又把它救活成当前文件",
 );
-assert.deepEqual(short[0].attachments, [], "第一处引用领走的那张不再挂卡片");
+assert.deepEqual(
+  short[0].attachments,
+  [uploads("eeeeeeeeeeee-s.png")],
+  "一处都没领走,那份拷贝必须留在卡片里 —— 画不出来不等于让人拿不到",
+);
+
+// ⑨' 序列**对得上**就按位置逐处认领(红→蓝→红:第三处回到第一份拷贝,不是按来源取第一个)。
+const abaSources = [
+  { path: uploads("1111eeeeeeee-shot.png"), source: "output/shot.png", ref: 0 },
+  { path: uploads("2222ffffffff-shot.png"), source: "output/shot.png", ref: 1 },
+  { path: uploads("1111eeeeeeee-shot.png"), source: "output/shot.png", ref: 2 },
+];
+assert.equal(
+  turnImages([{
+    id: "aba:0",
+    markdown: "改前：![改前](output/shot.png)\n\n改后：![改后](output/shot.png)\n\n回滚了：![恢复](output/shot.png)",
+    events: [],
+    attachments: abaSources.map((item) => item.path),
+    attachmentSources: abaSources,
+  }], "C0ojRgeQnMsa")[0].markdown,
+  "改前：![改前](/api/uploads/1111eeeeeeee-shot.png)\n\n改后：![改后](/api/uploads/2222ffffffff-shot.png)\n\n回滚了：![恢复](/api/uploads/1111eeeeeeee-shot.png)",
+  "三处引用各拿自己那一次",
+);
+
+// ⑨'' 分段**不许改变配对与解析**:同一条消息被附件事件切成两段时,拼回去才是 agent 说的
+// 那一段(审查第 2 轮 F2:切段让一对反引号被切开,里面的写法示例在后半段里成了真图)。
+const split = turnImages([
+  { id: "sp:0", markdown: "示例 `![示例](output/x.png)", events: [], attachments: [] },
+  {
+    id: "sp:1",
+    markdown: "` 真图：![真图](output/y.png)",
+    events: [],
+    attachments: [uploads("3333aaaaaaaa-y.png")],
+    attachmentSources: [{ path: uploads("3333aaaaaaaa-y.png"), source: "output/y.png", ref: 0 }],
+  },
+], "C0ojRgeQnMsa");
+assert.equal(split[0].markdown, "示例 `![示例](output/x.png)", "行内代码里的示例一个字都不许改写");
+assert.equal(
+  split[1].markdown,
+  "` 真图：![真图](/api/uploads/3333aaaaaaaa-y.png)",
+  "真图照旧认领;改写落在它自己那一段里",
+);
 
 // ⑩ 老数据(一条 ref 都没有)队列取空了:仍退到当前文件 —— 那时服务端按字节去重,同一张
 // 图被引用两次只留了一条记录,而「现在去工作目录取」是存量消息唯一的出路。
@@ -167,6 +213,39 @@ assert.equal(
   turnImages(diverged, "C0ojRgeQnMsa")[0].markdown,
   "权威正文说的是这张：\n\n![图](/api/uploads/99999999999a-shot.png)",
   "关联还在就画那份副本,不许退到当前文件",
+);
+
+// ⑪' **投影重建**那一路:trace 记了三处引用(红→蓝→红),权威 .md 只剩最后一句。
+// 这是审查第 2 轮 F1 的实测用例 —— 旧实现按「来源队列取第一个」把幸存的那句话配给了**红
+// 图**,正文写着「已经改为蓝色」。现在序列对不上就一处都不画,三份拷贝全留在卡片里。
+const projectionItems = buildConversationItems([{
+  session,
+  output: "最终结论：已经改为蓝色\n\n![最终](output/take.png)\n",
+  trace: [
+    traced("2026-10-21T08:04:00.000Z", { kind: "text", text: "改前：![改前](output/take.png)\n" }),
+    traced("2026-10-21T08:04:01.000Z", { kind: "attachment", path: uploads("aaaa11111111-take.png"), source: "output/take.png", ref: 0 }),
+    traced("2026-10-21T08:04:02.000Z", { kind: "text", text: "改后：![改后](output/take.png)\n" }),
+    traced("2026-10-21T08:04:03.000Z", { kind: "attachment", path: uploads("bbbb22222222-take.png"), source: "output/take.png", ref: 1 }),
+    traced("2026-10-21T08:04:04.000Z", { kind: "text", text: "回滚：![恢复](output/take.png)\n" }),
+    traced("2026-10-21T08:04:05.000Z", { kind: "attachment", path: uploads("aaaa11111111-take.png"), source: "output/take.png", ref: 2 }),
+  ],
+}], [session], []);
+const projected = projectionItems.filter((item) => item.kind === "agent")[0].segments;
+const painted = turnImages(projected, "C0ojRgeQnMsa");
+assert.equal(
+  painted.map((segment) => segment.markdown).join("").includes("/api/uploads/"),
+  false,
+  "正文只剩一句、记录却有三条:一处都不许按位置顶上去 —— 顶出来的恰好是红图",
+);
+assert.match(
+  painted.map((segment) => segment.markdown).join(""),
+  /#ash-image-unavailable:/,
+  "作废要显式表达,这样任何 resolver 都救不活它",
+);
+assert.deepEqual(
+  [...new Set(painted.flatMap((segment) => segment.attachments))].sort(),
+  [uploads("aaaa11111111-take.png"), uploads("bbbb22222222-take.png")].sort(),
+  "两份拷贝都留在卡片里:画不出来不等于让人拿不到",
 );
 
 // ⑫ 扫描器跟渲染器同一套语义(F2):带括号的文件名要完整改写,四空格缩进的写法示例一个

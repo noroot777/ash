@@ -141,9 +141,10 @@ export function contentSegments(
       continue;
     }
     if (entry.event.kind === "attachment") {
-      // 只有真铺得出卡片的那条才切段:没有 path 的 attachment 画不出任何东西,让它切段
-      // 等于正文后面凭空多一个空 section(见 segmentHasVisibleContent)。
-      if (entry.event.path && current.markdown) pushCurrent();
+      // **附件不切段**。卡片铺在那一段正文下面,位置本来就不靠切段表达;而切了段,同一条
+      // 消息的正文就被分成两份分别解析 —— 一对反引号被切开之后,里面的写法示例在后半段
+      // 里成了「真图」(审查第 2 轮 F2 实测:它真的显示出了截图)。执行事件的布局不许改变
+      // Markdown 的语法边界,所以这里只收集,不动分段。
       if (entry.event.path && !current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
       if (entry.event.source) {
         (current.attachmentSources ??= []).push({ path: entry.event.path, source: entry.event.source, ref: entry.event.ref });

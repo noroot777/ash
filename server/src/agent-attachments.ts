@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { maxBytesFor } from "@ash/shared";
-import { hasUrlScheme, markdownImageRefs, type MarkdownImageRef } from "@ash/shared/markdown-images";
+import { isNetworkDestination, markdownImageRefs, type MarkdownImageRef } from "@ash/shared/markdown-images";
 import { UPLOADS_DIR } from "./paths.js";
 import { id } from "./util.js";
 
@@ -142,12 +142,27 @@ function localImagePath(destination: string, cwd?: string): string | null {
   try {
     // `file:` 指的就是本机文件,它要在协议判据之前单独认掉。
     if (/^file:\/\//i.test(destination)) return fileURLToPath(destination);
-    if (hasUrlScheme(destination)) return null;
+    // 协议 **或 `//` 协议相对网址**都是浏览器去网络取的地址,不是本机文件(审查第 2 轮
+    // F3:只问 scheme 时 `//cdn.x/a.png` 会被 `isAbsolute` 当成绝对路径读一遍)。
+    if (isNetworkDestination(destination)) return null;
     const path = decodeURIComponent(destination);
     if (isAbsolute(path)) return path;
     return cwd ? resolve(cwd, path) : null;
   } catch {
     return null; /* 坏转义 / 不合法的 file URL */
+  }
+}
+
+/** 正文里一处引用指到的那张本机图片,**此刻**的字节;不是本机图片 / 读不到就返回 null。 */
+function readImageAt(destination: string, cwd?: string): ImageBytes | null {
+  const path = localImagePath(destination, cwd);
+  if (!path) return null;
+  const mime = EXT_MIME[extname(path).toLowerCase()];
+  if (!mime) return null;
+  try {
+    return { mime, bytes: readFileSync(path), name: basename(path) };
+  } catch {
+    return null; /* 不存在 / 读不了 */
   }
 }
 
@@ -162,32 +177,81 @@ function localImagePath(destination: string, cwd?: string): string | null {
  */
 export type PersistedMarkdownImage = { source: string; ref: number; path?: string };
 
+/**
+ * 流式阶段拍下的一份字节快照。
+ *
+ * `destination` 必须跟着记:半截正文的语法结论随时会被后文推翻,同一个位置上的目的地也
+ * 会跟着变(`[r]: output/` 再来一片才是 `[r]: output/x.png`)。配不上就当没拍过。
+ */
+export type ImageSnapshot = { destination: string; path: string };
+export type ImageSnapshots = Map<string, ImageSnapshot>;
+
+/** 快照的身份:这一轮攒的正文里**哪个位置**那一处引用(generation 由调用方在裁剪后递增)。 */
+function snapshotKey(generation: number, start: number): string {
+  return `${generation}:${start}`;
+}
+
+type MarkdownImageOptions = {
+  directory?: string;
+  cwd?: string;
+  /** 流式阶段拍下的字节(见 captureMarkdownImages):有就用它,没有才现在去读文件。 */
+  snapshots?: ImageSnapshots;
+  generation?: number;
+};
+
+/**
+ * 「先拍下来,待会儿再认」—— 流式阶段把这几处引用**当下**的字节复制进 uploads。
+ *
+ * 不发事件、不占身份(`seen.refs` 一个都不动):这一刻的语法结论是半截正文给的,随时会被
+ * 后文推翻,所以「哪几处是真图」只能等消息收尾那一遍权威扫描说(见 parsers.ts)。可**字节
+ * 不能等** —— 一条消息里 agent 边说边重拍同一个路径是常事(红→蓝→红),等收尾再去读文件,
+ * 三处引用会一起拿到最后那份字节,于是正文写着「恢复红色」、画出来是蓝色(审查第 1 轮 F1
+ * 实测 A)。所以字节按「说到它的那一刻」拍,身份按「消息完整时」认。
+ *
+ * 代价:拼全了才知道不是图的那种(行内代码的一对反引号被切在两片里),uploads 里会多留一
+ * 份没人引用的拷贝。它不进任何 uploads 记录(那是 attachment 事件的事),用户看不见;而且
+ * 按内容寻址,跟真图字节一样时连文件都不会多一个。
+ */
+export function captureMarkdownImages(
+  refs: MarkdownImageRef[],
+  seen: ImageStore,
+  snapshots: ImageSnapshots,
+  options: MarkdownImageOptions = {},
+): void {
+  const directory = options.directory ?? UPLOADS_DIR;
+  const generation = options.generation ?? 0;
+  for (const ref of refs) {
+    const key = snapshotKey(generation, ref.start);
+    if (snapshots.get(key)?.destination === ref.destination) continue;
+    const bytes = readImageAt(ref.destination, options.cwd);
+    if (!bytes) continue;
+    const stored = storeImage(bytes, seen, directory, snapshots.size);
+    if (stored) snapshots.set(key, { destination: ref.destination, path: stored.path });
+  }
+}
+
 /** 把已经扫出来的那几处引用逐一落盘 —— 扫描结果复用时走这条(流式那层只扫一遍)。 */
 export function persistMarkdownImageRefs(
   refs: MarkdownImageRef[],
   seen: ImageStore,
-  options: { directory?: string; cwd?: string } = {},
+  options: MarkdownImageOptions = {},
 ): PersistedMarkdownImage[] {
   const directory = options.directory ?? UPLOADS_DIR;
+  const generation = options.generation ?? 0;
   const persisted: PersistedMarkdownImage[] = [];
   for (const ref of refs) {
-    const path = localImagePath(ref.destination, options.cwd);
     // 站外地址、data:、给不出 cwd 的相对路径:本来就不该有「保存结果」,一条都不发
     // —— 发了等于告诉展示端「这处引用我管过」,而它其实只能靠浏览器自己去取。
-    if (!path) continue;
+    if (!localImagePath(ref.destination, options.cwd)) continue;
     const id = seen.refs;
     seen.refs += 1;
-    const mime = EXT_MIME[extname(path).toLowerCase()];
-    let bytes: Buffer | null = null;
-    if (mime) {
-      try {
-        bytes = readFileSync(path);
-      } catch {
-        bytes = null; /* 不存在 / 读不了 */
-      }
+    const snapshot = options.snapshots?.get(snapshotKey(generation, ref.start));
+    let copy = snapshot?.destination === ref.destination ? snapshot.path : null;
+    if (!copy) {
+      const bytes = readImageAt(ref.destination, options.cwd);
+      copy = bytes ? storeImage(bytes, seen, directory, id)?.path ?? null : null;
     }
-    const stored = bytes ? storeImage({ mime: mime!, bytes, name: basename(path) }, seen, directory, id) : null;
-    persisted.push(stored ? { source: ref.destination, ref: id, path: stored.path } : { source: ref.destination, ref: id });
+    persisted.push(copy ? { source: ref.destination, ref: id, path: copy } : { source: ref.destination, ref: id });
   }
   return persisted;
 }
@@ -204,7 +268,7 @@ export function persistMarkdownImageRefs(
 export function persistMarkdownImages(
   text: string,
   seen: ImageStore = imageStore(),
-  options: { directory?: string; cwd?: string } = {},
+  options: MarkdownImageOptions = {},
 ): PersistedMarkdownImage[] {
   return persistMarkdownImageRefs(markdownImageRefs(text), seen, options);
 }

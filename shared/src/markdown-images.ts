@@ -15,6 +15,15 @@
 // 仍然不认的只剩一种:裸 `<img>` 标签。那是对的 —— 这个应用没装 `rehype-raw`,渲染器自己
 // 也不画它,认了反而会凭空多出一张卡片。
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
+
+// **方言必须跟渲染器一字不差**:`web/src/components/MarkdownBody.tsx` 挂的是 `remarkGfm`,
+// 而 remark-gfm 就是这两个扩展。少挂它们,同一段正文两边认出的图片节点集合**不是一个**
+// (审查第 2 轮 F2 实测:脚注里的真截图 core=0 / gfm=1 —— 存不下也画不出来;表格单元里带
+// 未转义 `|` 的写法 core=1 / gfm=0 —— 服务端当成真图存一份、改写之后 GFM 里反而凭空多出
+// 一张图)。所以解析参数在这里**定义一次**,服务端和展示端都从这个文件拿。
+const GFM = { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] };
 
 export type MarkdownImageRef = {
   /** 目的地:转义与字符实体已由解析器解开(`![](a\(1\).png)` → `a(1).png`),`<>` 已剥掉。 */
@@ -39,6 +48,22 @@ export function hasUrlScheme(value: string): boolean {
   return URL_SCHEME.test(value.trim());
 }
 
+/**
+ * 这个目的地是**浏览器要去网络上取的地址**吗 —— 服务端与展示端共用的唯一判据。
+ *
+ * 为什么不能只问 `hasUrlScheme`:`//cdn.example.com/a.png` 是**协议相对网址**(沿用当前
+ * 页面的 http/https),它没有协议,却绝不是本机路径。只问 scheme 的那一版把它当成绝对
+ * 路径:服务端去读 `/cdn.example.com/a.png`(必然失败,还白报一条「没副本」),展示端把它
+ * 改写成「去任务工作目录取」,于是这张站外图**永远画不出来**(审查第 2 轮 F3)。
+ *
+ * 跟 Windows UNC 的分界:UNC 是 `\\server\share`(反斜杠),Windows 工具写出来的就是这个
+ * 形状;`//` 在一份要交给浏览器渲染的 Markdown 里按网络地址解释。两者判据不重叠。
+ */
+export function isNetworkDestination(value: string): boolean {
+  const raw = value.trim();
+  return hasUrlScheme(raw) || raw.startsWith("//");
+}
+
 type Node = {
   type: string;
   url?: string;
@@ -55,7 +80,7 @@ function* walk(node: Node): Generator<Node> {
 
 function parse(text: string): Node | null {
   try {
-    return fromMarkdown(text) as Node;
+    return fromMarkdown(text, GFM) as Node;
   } catch {
     return null; /* 解析器自己崩了也不该掀掉整条事件流 */
   }

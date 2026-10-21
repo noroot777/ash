@@ -216,6 +216,20 @@ try {
     "404 之后也要报是哪个地址取不到",
   );
 
+  // ── ⑭ 协议相对网址留在站外;解不出来的 file: 留一行小字(F3 / F2 的失败分支)──────
+  const protocol = page.locator(".protocol-fixture");
+  assert.deepEqual(
+    await srcs(protocol.locator(".task-markdown img")),
+    ["//cdn.example.invalid/remote.svg"],
+    "`//host/x.png` 是网址,不许被改写成「去任务工作目录取」",
+  );
+  assert.match(
+    await protocol.locator(".task-markdown-image-missing").innerText(),
+    /图取不到[\s\S]*\/Users\/demo\/code\/ash\/output\/vanished\.svg/,
+    // react-markdown 默认会把它不认的协议整个清空,于是这一张连「哪个文件」都报不出来。
+    "解不出来的 file: 要报出那个本机路径,而不是被清成空串后无声消失",
+  );
+
   // ── ⑪ 扫描器认的那几处 == 渲染器画出来的那几个（F2 的根:两边必须是同一套语义）───
   // 只比「两次调用同一个扫描器」证明不了任何事(上一版服务端和展示端共用同一份错正则,
   // 两边一致地把带括号的文件名截断、把缩进代码里的示例当成真图)。所以这里在 Node 里数
@@ -251,15 +265,22 @@ try {
 
   // ── ⑬ 配不上、而本该有一条:第二处什么都不画,也不许顶一份别的拷贝(F1)──────────
   const short = page.locator(".short-fixture");
-  assert.deepEqual(
-    await srcs(short.locator(".task-markdown img")),
-    [uploads("kkkkkkkkkkkk-short.svg")],
-    "第一处引用画自己那份拷贝;第二处配不上就一个 img 都不留,绝不复用上一份",
+  assert.equal(
+    await short.locator(".task-markdown img").count(),
+    0,
+    // 连第一处也不画:序列对不上说明「这段正文不是服务端扫过的那一段」,那时「第一处」未必
+    // 就是记录的那一条(审查第 2 轮 F1:投影重建后幸存的那句其实是第三处,顶上去画的是红图)。
+    "正文两处引用、记录只有一条 → 一处都不画,绝不按位置顶上去",
   );
   assert.equal(
-    await short.locator(".task-message-attachments").count(),
-    0,
-    "那份拷贝已经被第一处引用领走,不该再剩一张卡片",
+    await short.locator(".task-markdown-image-missing").count(),
+    2,
+    "两处都留一行小字 —— 不画不等于无声蒸发",
+  );
+  assert.deepEqual(
+    await srcs(short.locator(".task-message-attachments img")),
+    [uploads("kkkkkkkkkkkk-short.svg")],
+    "一处都没领走,那份拷贝必须留在卡片里:画不出来不等于让人拿不到",
   );
   assert.match(
     await short.locator(".task-markdown").last().innerText(),
@@ -267,9 +288,9 @@ try {
     "收掉的只是那张图,正文一个字都不能少",
   );
   assert.match(
-    await short.locator(".task-markdown-image-missing").innerText(),
+    await short.locator(".task-markdown-image-missing").first().innerText(),
     /图取不到[\s\S]*output\/short\.svg/,
-    "不敢画的那一处也要留一行小字,而不是让那句话指向空气",
+    "不敢画的那几处也要留一行小字,而不是让那几句话指向空气",
   );
 
   console.log("Markdown 图片解析回归通过");

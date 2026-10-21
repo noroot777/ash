@@ -8,7 +8,7 @@ import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ReviewConclusion } from "@ash/shared";
-import { containedPath, evidenceSegments } from "./evidence-path.js";
+import { containedPath, evidenceSegments, EVIDENCE_IMAGE_EXTENSIONS, EVIDENCE_MAX_DEPTH } from "./evidence-path.js";
 import { RUNS_DIR } from "./paths.js";
 import { id, now } from "./util.js";
 
@@ -105,7 +105,8 @@ export async function readReport(taskId: string, round: number): Promise<string>
 }
 
 // 子目录一起列（跟 free-review-files.ts 的 imagesUnder 同一口径）：归到 `shots/` 里的那
-// 几张接口服务得了，列不出来就只能靠报告正文提到才看得见。
+// 几张接口服务得了，列不出来就只能靠报告正文提到才看得见。深度与类型跟**能不能服务**共用
+// 一份常量（evidence-path.ts）—— 这份清单以前不收 WebP，自由工作流那份收（审查第 2 轮 N1）。
 async function imagesUnder(dir: string, prefix: string, depth: number): Promise<string[]> {
   if (depth <= 0) return [];
   const found: string[] = [];
@@ -114,7 +115,7 @@ async function imagesUnder(dir: string, prefix: string, depth: number): Promise<
     if (entry.isSymbolicLink()) continue;
     const name = `${prefix}${entry.name}`;
     if (entry.isDirectory()) found.push(...await imagesUnder(join(dir, entry.name), `${name}/`, depth - 1));
-    else if (entry.isFile() && [".png", ".jpg", ".jpeg"].includes(extname(entry.name).toLowerCase())) found.push(name);
+    else if (entry.isFile() && EVIDENCE_IMAGE_EXTENSIONS.has(extname(entry.name).toLowerCase())) found.push(name);
   }
   return found;
 }
@@ -123,7 +124,7 @@ export async function screenshots(taskId: string, round: number): Promise<string
   try {
     const dir = reviewRoundDir(taskId, round);
     if (!(await safeRunDirectory(dir))) return [];
-    return (await imagesUnder(dir, "", 3)).sort();
+    return (await imagesUnder(dir, "", EVIDENCE_MAX_DEPTH)).sort();
   } catch {
     return [];
   }
