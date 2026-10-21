@@ -19,7 +19,6 @@ import { FoldedProse } from "../components/FoldedProse.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody, ReviewReportBody } from "../components/MarkdownBody.tsx";
 import { reportFileResolver } from "../components/markdownPolicy.ts";
-import { useEvidenceNames } from "../components/useEvidenceNames.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewNote } from "../review/ReviewNote.tsx";
@@ -167,12 +166,6 @@ export function FreeWorkflowInspector({
   const opened = selectedReviewKey
     ? reviewActivities.find((activity) => reviewKey(activity.run.id, activity.round.round) === selectedReviewKey) ?? null
     : null;
-  // 摊开那一轮的证据目录里服务得了的全部文件（不只是截图）—— 报告正文里的相对路径按它
-  // 判定文档根（见 markdownPolicy 的 reportFileResolver）。
-  const evidenceNames = useEvidenceNames(
-    opened ? () => api.freeReviewFileNames(task.id, opened.run.id, opened.round.round).then((r) => r.names) : null,
-    opened ? `${task.id}:${opened.run.id}:${opened.round.round}` : "",
-  );
   const latestReview = workspaceReviewActivities.at(-1);
   const postMergeRuns = state?.reviews.filter((run) => run.target?.kind === "accepted_merge") ?? [];
   const latestPostMerge = postMergeRuns[0];
@@ -286,13 +279,11 @@ export function FreeWorkflowInspector({
                 text={opened.round.reportMarkdown}
                 reportKey={`${opened.run.id}:${opened.round.round}`}
                 conclusion={opened.round.conclusion}
-                // 文档根归属（证据目录 vs 被审任务工作目录）一处定清楚，见 markdownPolicy
-                // 的 reportFileResolver。清单是服务端列的那份权威清单：带着它，根归属是
-                // **算出来的**，不再靠「第一个地址加载失败」试出来。
+                // 文档根归属（相对路径 → 证据目录；绝对路径 → 被审任务工作目录）一处定
+                // 清楚，判据见 markdownPolicy 的 reportFileResolver。
                 resolveFile={reportFileResolver(
                   (name) => api.freeReviewFileUrl(task.id, opened.run.id, opened.round.round, name),
                   task.id,
-                  evidenceNames,
                 )}
               />
             : <p>报告尚未生成。</p>}

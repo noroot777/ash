@@ -33,7 +33,8 @@ const server = await createServer({
       });
       // 证据接口（`?name=`）只认真在证据目录里的那几个名字，工作目录接口（`?path=`）只有
       // 还在的那个路径吐字节 —— 两边都得按真实情形回 404，不然「取不到那一档」根本没被验到：
-      //   · 证据目录没有、工作目录有 → 报告里那张要退到工作目录（带目录的相对路径两解）；
+      //   · 证据目录没有 → 报告里那一处只留一行「图取不到」，**不许**换成工作目录里同名
+      //     的那一份（审查第 3 轮 R3 第 1 条：端上来的是另一张图）；
       //   · 两边都没有 → 那一张整个消失，只留一行「图取不到」，不许留裂图标。
       const EVIDENCE = new Set(["shot.png", "第一屏 空.png", "shots/deep.png"]);
       vite.middlewares.use("/api/tasks", (req, res) => {
@@ -75,17 +76,20 @@ try {
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/markdown-images.html`);
   await page.locator(".orphan-fixture .task-markdown").first().waitFor();
-  // 每一张站内图都得真拿到字节 —— 只看 src 不看 naturalWidth 等于没验。
+  // 每一张站内图都得真拿到字节 —— 只看 src 不看 naturalWidth 等于没验。证据接口那几张
+  // 一起算（取不到的那一处会被收成一行小字，到不了这个选择器里）。
   await page.waitForFunction(() => {
-    const images = [...document.querySelectorAll('img[src^="/api/uploads"], img[src*="/file/raw"]')];
+    const images = [...document.querySelectorAll(
+      'img[src^="/api/uploads"], img[src*="/file/raw"], img[src*="review-file"]',
+    )];
     return images.length > 0 && images.every((img) => img.complete && img.naturalWidth > 0);
   });
 
   // ── ① 审查报告：截图跟 report.md 同目录，这是审查 prompt 交代的写法 ──────────
   const report = page.locator(".report-fixture .task-markdown img");
-  // 第四张先试证据目录（404），再退到工作目录 —— 等那一步落定再数。
+  // 证据目录里没有的那个相对路径会 404 → 收成一行小字，等那一步落定再数。
   await page.waitForFunction(() => !!document.querySelector(
-    '.report-fixture img[src*="file/raw"]',
+    ".report-fixture .task-markdown-image-missing",
   ));
   assert.deepEqual(
     await srcs(report),
@@ -93,11 +97,23 @@ try {
       "/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=shot.png",
       `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent("第一屏 空.png")}`,
       `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent("shots/deep.png")}`,
-      "/api/tasks/T1/file/raw?path=output%2Fshot.svg&workspaceOnly=1",
+      "/api/tasks/T1/file/raw?path=%2FUsers%2Fdemo%2Fcode%2Fash%2F.worktrees%2Fx%2Foutput%2Fshot.svg&workspaceOnly=1",
     ],
     // 子目录那张曾经画不出来:两边都只认 basename,审查者把截图归进 shots/ 就等于没放
     // (审查第 1 轮非阻塞项 2)。证据接口现在服务证据目录内的相对路径。
-    "同目录那两张(含带空格中文名)和子目录那张解到证据接口;证据目录没有的那张退到工作目录",
+    "相对路径(含带空格中文名、子目录)一律解到证据接口;工作目录那一份靠绝对路径显式指明",
+  );
+  // **证据目录里没有它,不等于这处引用说的是另一个根**:那一处只留一行「图取不到」加上原
+  // 地址,绝不许换成工作目录里同名的那一份(审查第 3 轮 R3 第 1 条:端上来的是另一张图)。
+  assert.match(
+    await page.locator(".report-fixture .task-markdown-image-missing").innerText(),
+    /图取不到[\s\S]*missing\.png/,
+    "证据目录里没有的那一处要如实报「图取不到 + 原地址」",
+  );
+  assert.equal(
+    await page.locator('.report-fixture img[src*="missing"]').count(),
+    0,
+    "取不到的那一处不许换一个根再试 —— 加载失败只能证明此刻取不到",
   );
 
   // ── ② 对话结论：相对路径 + 绝对路径，都靠服务端那份 uploads 拷贝落地 ────────

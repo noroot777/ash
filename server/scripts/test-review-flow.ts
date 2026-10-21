@@ -424,23 +424,31 @@ const symlinkTraversal = await api.request(
 assert.equal(symlinkTraversal.status, 404, "review/file 必须拒绝证据目录祖先 symlink");
 rmSync(reviewParent, { force: true });
 
-// 证据清单:展示端靠它判定「报告里这处相对路径说的是证据目录还是被审任务工作目录」。
-// 判据必须是「清单里有没有它」而不是「先试一个、加载失败再换」(审查第 2 轮 F1 同类位置),
-// 而且不能只有截图 —— 报告里指向同目录另一份 .md 的链接也要落在证据目录上。
+// 取证据文件:认不认一个名字只由 evidence-path.ts 那一张表说,**两条审查线共用**(自由
+// 工作流那条的对称用例在 test-free-workflow-hardening.ts)。以前那条认任何后缀、不认识
+// 就按 octet-stream 端出去,这条按表 400,于是同一个 .txt 在两条线上一个 200 一个 400
+// (审查第 3 轮 R3 第 3 条实测)。纯文本证据必须服务得了 —— 报告正文真的会链 .log/.json。
 mkdirSync(join(base, "shots"), { recursive: true });
 writeFileSync(join(base, "report.md"), "# 报告\n");
 writeFileSync(join(base, "notes.md"), "# 附记\n");
 writeFileSync(join(base, "shots", "deep.png"), "PNG");
-writeFileSync(join(base, "repro.log"), "服务不了的类型不进清单\n");
-const listing = await api.request(`/tasks/${taskId}/review/files?round=1`);
-assert.equal(listing.status, 200);
-assert.deepEqual(
-  (await listing.json() as { names: string[] }).names,
-  ["notes.md", "report.md", "shots/deep.png"],
-  "清单 = 证据目录里服务得了的全部文件(含子目录、含 .md;服务不了的 .log 不在)",
+writeFileSync(join(base, "repro.log"), "日志证据\n");
+writeFileSync(join(base, "evil.html"), "<script>alert(1)</script>\n");
+const logFile = await api.request(`/tasks/${taskId}/review/file?round=1&name=repro.log`);
+assert.equal(logFile.status, 200, "纯文本证据要服务得了");
+assert.equal(logFile.headers.get("content-type"), "text/plain; charset=utf-8");
+assert.equal(logFile.headers.get("x-content-type-options"), "nosniff", "按 text/plain 端的一律禁嗅探");
+assert.equal(
+  (await api.request(`/tasks/${taskId}/review/file?round=1&name=evil.html`)).status,
+  400,
+  ".html 不服务:同源端出去等于执行审查者写进证据目录的标记",
 );
-assert.equal((await api.request(`/tasks/${taskId}/review/files?round=0`)).status, 400, "非法轮次不给清单");
-assert.equal((await api.request("/tasks/nope/review/files?round=1")).status, 404, "任务不存在不给清单");
+for (const name of ["notes.md", "shots%2Fdeep.png"]) {
+  assert.equal((await api.request(`/tasks/${taskId}/review/file?round=1&name=${name}`)).status, 200, `${name} 要服务得了`);
+}
+// 清单接口已撤:报告正文里一处相对路径按**这份文档自己的地址**解,不再问「清单里有没有
+// 它」—— 文件被删掉之后那一处会被判成工作目录的,于是把同名的另一张图端上来(R3 第 1 条)。
+assert.equal((await api.request(`/tasks/${taskId}/review/files?round=1`)).status, 404, "文件清单接口已撤");
 
 const info = await api.request(`/tasks/${taskId}/review`);
 assert.deepEqual(await info.json(), { reviewRequested: true, rounds: [] });

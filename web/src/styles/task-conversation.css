@@ -330,3 +330,16 @@
   padding: 0;
   font-size: 12px;
 }
+/* 同源的失败可能是临时的（文件稍后补齐、鉴权刷新），给一个重试入口；跨站图没有这个按钮。 */
+.task-markdown-image-retry {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.task-markdown-image-retry:hover { color: var(--text); }
+.task-markdown-image-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

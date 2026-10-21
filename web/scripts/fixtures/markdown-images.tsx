@@ -3,6 +3,7 @@
 // 挂的每一组都是同一个毛病的一张脸（用户 2026-10-21 报的「结论里的文件总是读不到」，
 // 以及审查第 1 轮按它复现出来的那几种）：
 //   ① 审查报告 `![](shot.png)` —— 截图跟 report.md 同在证据目录，审查 prompt 就这么交代；
+//      相对路径恒按这份文档自己那个目录解，取不到也不许换成另一个根下同名的文件；
 //   ② 对话结论 `![](output/x.png)` —— agent 站在工作目录里，写相对路径最自然；
 //   ③ 同一个路径被重拍过 —— 「结论说修改后、画出来是修改前」比不画更坏，这是 F1 的要害；
 //   ④ 站外地址、同名别名、围栏代码块里的例子、带空格中文名、`file://` —— 一处都不许配串；
@@ -32,9 +33,14 @@ const REPORT = [
   "",
   "![子目录](shots/deep.png)",
   "",
-  "实现者放在工作目录里的那张 —— 证据目录没有它，要退到被审任务的工作目录：",
+  "证据目录里**没有**的那个相对路径 —— 只能留一行「图取不到」。工作目录里刚好有个同名的",
+  "别的文件时，把它端上来比不画更坏（审查第 3 轮 R3 第 1 条）：",
   "",
-  "![工作目录](output/shot.svg)",
+  "![证据丢了](missing.png)",
+  "",
+  "报告里提被审任务工作目录里那一份时写的是**绝对路径** —— 那是显式归属，不是猜的：",
+  "",
+  "![工作目录](/Users/demo/code/ash/.worktrees/x/output/shot.svg)",
 ].join("\n");
 
 // 服务端落盘时留住了源文件的名字（`<12 位 id>-<原名>`）；配对**不靠**它，靠 source 标注。
@@ -203,7 +209,7 @@ createRoot(document.getElementById("root")!).render(
         text={REPORT}
         reportKey="run-1:1"
         conclusion="verify_failed"
-        // 真实表面用的就是 reportFileResolver（证据目录优先、取不到退到工作目录）。
+        // 真实表面用的就是 reportFileResolver（相对路径 → 证据目录，绝对路径 → 工作目录）。
         resolveFile={reportFileResolver((name) =>
           `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent(name)}`, "T1")}
       />

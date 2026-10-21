@@ -23,13 +23,17 @@ function decodeSafe(value: string): string {
 
 export function reviewFileTarget(path?: string): ReviewFileTarget | null {
   if (!path) return null;
-  const review = path.match(REVIEW_FILE_PATH);
+  // 下面两条正则认的是**磁盘路径形状**(`/Users/…/data/runs/…`、`file://…`)。站外网址里
+  // 碰巧有同样的路径形状时不许按它改写:那张图住在别人站上,改写过来只会 404,还顺手把
+  // 「这是谁家的资源」判错(审查第 3 轮 R3 第 5 条)。`file:` 例外 —— 它指的就是本机文件。
+  const offSite = isNetworkDestination(path) && !/^file:\/\//i.test(path.trim());
+  const review = offSite ? null : path.match(REVIEW_FILE_PATH);
   if (review) {
     const [, taskId, round, encodedName] = review;
     const name = decodeSafe(encodedName);
     if (!PARENT_SEGMENT.test(name)) return { name, url: api.taskReviewFileUrl(taskId, Number(round), name) };
   }
-  const freeReview = path.match(FREE_REVIEW_FILE_PATH);
+  const freeReview = offSite ? null : path.match(FREE_REVIEW_FILE_PATH);
   if (freeReview) {
     const [, taskId, runId, round, encodedName] = freeReview;
     const name = decodeSafe(encodedName);
@@ -129,18 +133,15 @@ function isReviewFileEndpoint(pathname: string): boolean {
   return pathname.endsWith("/review/file") || pathname.endsWith("/free-workflow/review-file");
 }
 
-/** 站内取得到的那张图：灯箱要的 url，加上给人看的名字。 */
-export type ImagePreviewTarget = ReviewFileTarget & {
-  /**
-   * 第一个地址取不到时再试的那一个（渲染点按顺序试，见 MarkdownBody 的 MarkdownImage）。
-   *
-   * 为什么需要它：带目录的相对路径（`shots/a.png`、`output/shot.png`）**两个根都解释得通**
-   * —— 审查报告自己那个证据目录，和被审任务的工作目录。客户端两边都看不见文件在不在，
-   * 猜一次就得错一半：猜证据目录，实现者写的 `output/shot.png` 画不出来；猜工作目录，
-   * 审查者归进 `shots/` 的截图画不出来。所以不猜，按顺序试。
-   */
-  fallback?: ReviewFileTarget;
-};
+/**
+ * 站内取得到的那张图：灯箱要的 url，加上给人看的名字。
+ *
+ * 曾经还带一个 `fallback`「取不到再试另一个根」——那条路已经删掉:**加载失败只能证明那个
+ * 文件此刻取不到,证明不了这处引用说的是另一个根**。证据文件被删掉之后它恰好会去工作目录
+ * 里取同名的另一张图端上来(审查第 3 轮 R3 第 1 条实测:naturalWidth=400 的另一张蓝图)。
+ * 现在的归属判据见 reportFileResolver:相对路径恒属于这份文档自己那个目录。
+ */
+export type ImagePreviewTarget = ReviewFileTarget;
 
 /**
  * 「这段 Markdown 的相对路径该按哪儿解」。
@@ -249,44 +250,27 @@ export function siblingFileResolver(urlFor: (name: string) => string): MarkdownF
  * 审查报告这份正文的**文档根归属**，一处定清楚（三个入口共用：团队证据、自由工作流
  * 检视、单独打开的报告弹窗）。
  *
- * ① **相对路径**（`shot.png`、`./shot.png`、`shots/deep.png`）先按**报告自己那个目录**解
- *    —— 相对路径相对的就是这份文档，审查 prompt 也是这么交代的：截图跟 report.md 放在
- *    一起。取不到再退到 ②（`fallback`）。
- * ② **绝对路径、`file:`、以及 ① 取不到的那些** = **被审任务的工作目录**。审查者就站在
- *    那儿跑的，截图未必落进证据目录，`output/shot.png` 多半指的是工作目录里那张。
+ * 判据只有一条,而且是 Markdown/HTML 的通用口径:**相对路径相对的就是这份文档自己那个
+ * 目录**（证据目录,子目录里的报告则是它自己那一层,见 siblingResolverForUrl）。解不成
+ * 相对路径的那些（绝对路径、`file:`、UNC、盘符）才有第二身份 = 被审任务的工作目录 ——
+ * 那是**显式**的归属,不是猜的。
  *
- * 顺序不能反：同名时报告自己那一份才是它在说的东西。而「带目录的相对路径两个根都解释
- * 得通」这个歧义不靠猜消 —— 猜任何一边都会让另一边那种写法彻底画不出来（审查第 1 轮非
- * 阻塞项 2：原先证据接口只服务 basename，`shots/a.png` 只能落到 ②；现在接口服务证据目录
- * 内的子路径，两档都真走得通）。消歧的办法是**问清单**：`evidenceNames` 一到，根归属就是
- * 算出来的；清单还没到货才退回「两个地址都给出去、渲染点按顺序试」那一档降级。
+ * 曾经试过两版「消歧」,都被证伪:
+ *   · 「先按证据目录解,加载失败再换工作目录」—— 加载失败只能证明此刻取不到,证明不了
+ *     这处引用说的是另一个根(审查第 2 轮 F1 同类位置);
+ *   · 「问服务端要这一轮的文件清单,不在清单里就算工作目录的」—— 清单只能回答「现在有
+ *     没有」。证据文件被删掉之后那一处就被判成工作目录的,于是把同名的另一张图端上来
+ *     (审查第 3 轮 R3 第 1 条实测);清单取不到、还在路上时又只能退回上一版那条路。
+ * 所以不再猜:相对路径一律落在文档目录上,取不到就如实报「图取不到」加上那个路径 ——
+ * 宁可让人自己去证据目录找,也不许把另一个根下同名的文件冒充成它。
  */
 export function reportFileResolver(
   urlFor: (name: string) => string,
   taskId?: string,
-  /**
-   * 证据目录里**服务得了的全部文件**(服务端列出来的那份清单,见 useEvidenceNames)。
-   *
-   * 给了它,根归属就是算出来的而不是试出来的 —— 「第一个地址加载失败」只能证明那个文件
-   * 此刻取不到,证明不了这处引用说的是另一个根(审查第 2 轮 F1 的同类位置)。
-   *
-   * **必须是全部服务得了的文件,不能只给截图**:报告里指向同目录另一份 `.md` 的链接也要
-   * 落在证据目录上,只给图片清单会把它判成「工作目录里的文件」(那儿压根没有这份)。
-   * 清单取不到时(接口报错、或者还在路上)返回 undefined,退回按顺序试那一档。
-   */
-  evidenceNames?: readonly string[],
-): MarkdownFileResolver | undefined {
+): MarkdownFileResolver {
   const sibling = siblingFileResolver(urlFor);
   const workspace = taskId ? taskFileResolver(taskId) : undefined;
-  if (!workspace) return sibling;
-  const known = evidenceNames ? new Set(evidenceNames) : null;
-  return (destination) => {
-    const inWorkspace = workspace(destination);
-    const inReportDir = sibling(destination);
-    if (!inReportDir) return inWorkspace;
-    if (known) return known.has(inReportDir.name) ? inReportDir : inWorkspace ?? inReportDir;
-    return inWorkspace ? { ...inReportDir, fallback: inWorkspace } : inReportDir;
-  };
+  return (destination) => sibling(destination) ?? workspace?.(destination) ?? null;
 }
 
 /**
@@ -296,37 +280,23 @@ export function reportFileResolver(
  * `?name=`，所以换掉那一个参数就是同目录的另一个文件。打开一份孤立报告（正文里指向
  * report.md 的链接）时手上只有这个 URL，没有 run/round，这是唯一解得出来的办法。
  *
- * 清单(`evidenceNames`)由调用点用 `evidenceListingUrl(fileUrl)` 取回来再递进来 —— 那条
- * 地址也是从同一个 URL 推出来的，所以这个弹窗跟另外两处表面用的是同一套判据，不再是
- * 「这里只能靠试」。
+ * **子目录里的报告按它自己那一层解**:`name=notes/supplement.md` 里的 `shot.png` 指的是
+ * `notes/shot.png`,不是证据根下那一张。丢掉这一层的那一版会把根目录下同名的另一张图端
+ * 上来(审查第 3 轮 R3 第 4 条实测)。
  */
-export function siblingResolverForUrl(fileUrl: string, evidenceNames?: readonly string[]): MarkdownFileResolver | undefined {
+export function siblingResolverForUrl(fileUrl: string): MarkdownFileResolver | undefined {
   const base = sameOriginUrl(fileUrl);
   if (!base || !isReviewFileEndpoint(base.pathname) || !base.searchParams.has("name")) return undefined;
   // 文档根归属见 reportFileResolver。这个弹窗手上只有报告自己的地址，而任务 id 就在
   // 那个地址里（报告里也会提到工作目录里的文件）。
   const taskId = /\/tasks\/([^/]+)\//.exec(base.pathname)?.[1];
+  const document = decodeSafe(base.searchParams.get("name") ?? "").replace(/\\/g, "/");
+  const directory = document.includes("/") ? document.slice(0, document.lastIndexOf("/") + 1) : "";
   return reportFileResolver((name) => {
     const url = new URL(base.toString());
-    url.searchParams.set("name", name);
+    url.searchParams.set("name", `${directory}${name}`);
     return url.toString();
-  }, taskId ? decodeSafe(taskId) : undefined, evidenceNames);
-}
-
-/**
- * 一份报告的地址 → 「它那一轮证据目录里有哪些文件」的清单地址。
- *
- * 两条证据接口的清单路由就是文件路由加一个 `s`（`review/file` → `review/files`，
- * `free-workflow/review-file` → `review-files`），查询参数里只去掉 `name`：run/round
- * 都原样留着，所以孤立弹窗也问得出「这一轮有哪些文件」。不是证据接口就返回 null。
- */
-export function evidenceListingUrl(fileUrl: string): string | null {
-  const base = sameOriginUrl(fileUrl);
-  if (!base || !isReviewFileEndpoint(base.pathname)) return null;
-  const url = new URL(base.toString());
-  url.pathname = `${base.pathname}s`;
-  url.searchParams.delete("name");
-  return url.toString();
+  }, taskId ? decodeSafe(taskId) : undefined);
 }
 
 // 正文里指向图片的**链接**（不是 `![]()` 内嵌图），点开要落进全站统一的灯箱，而不是

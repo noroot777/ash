@@ -8,22 +8,28 @@
 // 这里只管**路径形状**，越界判定仍归各自调用点：两个接口的根目录不同，附加检查（符号
 // 链接、硬链接、目录祖先）也不同，`containedPath` 是它们共用的最后一道。
 import { realpathSync } from "node:fs";
-import { sep } from "node:path";
+import { extname, sep } from "node:path";
 
 /**
  * 证据目录往下最多认这么深 —— 真实证据都是一两层，再深的只可能是构造出来的。
  *
- * **枚举清单跟它共用这一个数**：两边不一样的话就会出现「接口服务得了、证据面板里却列不
- * 出来」的文件（审查第 2 轮 N1：形状判据放到 8 层，两处清单还只走 3 层）。
+ * **截图条的枚举跟它共用这一个数**：两边不一样的话就会出现「接口服务得了、证据面板里却
+ * 列不出来」的截图（审查第 2 轮 N1：形状判据放到 8 层，两处清单还只走 3 层）。
  */
 export const EVIDENCE_MAX_DEPTH = 8;
 
 /**
- * 证据接口**服务得了**的类型 —— 两个接口的 Content-Type 表就是它。
+ * 证据接口**服务得了**的类型 —— 两个接口(团队 `review/file`、自由工作流
+ * `free-workflow/review-file`)认不认一个名字,判据只有这张表,见 `evidenceHeaders`。
  *
- * 它同时是「列得出来」的判据,所以只能有这一份:列出来却服务不了,面板上那张卡片必然 404;
- * 服务得了却列不出来,报告正文没提到的那几张就只能靠猜(审查第 2 轮 N1:两处清单一个收
- * WebP、一个不收;形状判据放到 8 层、清单还只走 3 层)。谁要加一种类型,改这里一处。
+ * 两边必须是同一张表:曾经团队那条按表判、不认的一律 400,自由工作流那条认任何后缀、不
+ * 认识就当 `application/octet-stream` 端出去,于是同一个 `notes.txt` 在一条线上 200、另
+ * 一条上 400(审查第 3 轮 R3 第 3 条实测)。能力一边松一边紧时,报告正文里一处相对路径
+ * 在两条线上的结局就不一样,而写报告的人无从预料自己落在哪条线上。
+ *
+ * 收哪些:图片 + 审查者真会往报告里链的那些纯文本证据(`.log`、`.json`、`.diff`…)。
+ * **不收 `.html`/`.svg`**——证据由被审任务的审查者写,同源端出去等于给自己站内塞一段可
+ * 执行的标记。源码文件也不收:要给人看就贴进报告或存成 `.txt`/`.diff`。
  */
 export const EVIDENCE_MIME: Record<string, string> = {
   ".png": "image/png",
@@ -31,15 +37,32 @@ export const EVIDENCE_MIME: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
   ".md": "text/markdown; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".log": "text/plain; charset=utf-8",
+  ".csv": "text/plain; charset=utf-8",
+  ".diff": "text/plain; charset=utf-8",
+  ".patch": "text/plain; charset=utf-8",
+  ".yml": "text/plain; charset=utf-8",
+  ".yaml": "text/plain; charset=utf-8",
+  ".jsonl": "text/plain; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
 };
 
-/** 自动列进**截图条**的那几种 —— 上面那张表里的图片类型,不另立一份。 */
+/**
+ * 这个名字该怎么端出去 —— `null` = 这类文件两条接口都不服务(一律 400)。
+ *
+ * `nosniff` 是必须的:表里几种纯文本都按 `text/plain` 端,浏览器嗅探出 HTML 就等于同源
+ * 执行审查者写的内容。
+ */
+export function evidenceHeaders(name: string): Record<string, string> | null {
+  const mime = EVIDENCE_MIME[extname(name).toLowerCase()];
+  return mime ? { "content-type": mime, "x-content-type-options": "nosniff" } : null;
+}
+
+/** 自动铺进**截图条**的那几种 —— 上面那张表里的图片类型,不另立一份。 */
 export const EVIDENCE_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(
   Object.entries(EVIDENCE_MIME).filter(([, mime]) => mime.startsWith("image/")).map(([ext]) => ext),
 );
-
-/** 证据目录里**服务得了的全部类型** —— 报告里指向同目录另一份 `.md` 的链接也算。 */
-export const EVIDENCE_SERVABLE_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(EVIDENCE_MIME));
 
 /**
  * `name` 作为证据目录内的相对路径拆成段，拆不动就是 `null`（调用点一律拒）。

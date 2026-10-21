@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { extname } from "node:path";
 import type { FreeReviewDispatchInput } from "@ash/shared";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
@@ -19,12 +18,12 @@ import {
   disputeResolutionNoteOf,
   resolveFreeReviewDispute,
 } from "./free-review-dispute.js";
-import { freeReviewFile, freeReviewFiles } from "./free-review-files.js";
+import { freeReviewFile } from "./free-review-files.js";
 import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
 import { freeWorkflowState } from "./free-workflow-state.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { createPostMergeRepairTask, startPostMergeReview } from "./post-merge-review.js";
-import { EVIDENCE_MIME } from "./evidence-path.js";
+import { evidenceHeaders } from "./evidence-path.js";
 import { actorOf } from "./auth/context.js";
 
 const errorBody = (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) });
@@ -174,25 +173,20 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     try { return c.json(await cancelFreeReviewReservation(c.req.param("id"))); }
     catch (error) { return c.json(errorBody(error), 409); }
   });
-  // 这一轮证据目录里服务得了的文件清单(用处见 review.ts 的 /review/files)。
-  api.get("/tasks/:id/free-workflow/review-files", async (c) => {
-    const taskId = c.req.param("id");
-    const runId = c.req.query("run") ?? "";
-    const round = Number(c.req.query("round"));
-    if (!(await ownsFreeReviewRound(taskId, runId, round))) return c.json({ error: "not found" }, 404);
-    return c.json({ names: freeReviewFiles(taskId, runId, round) });
-  });
-
   api.get("/tasks/:id/free-workflow/review-file", async (c) => {
     const taskId = c.req.param("id");
     const runId = c.req.query("run") ?? "";
     const round = Number(c.req.query("round"));
     const name = c.req.query("name") ?? "";
-    const file = await ownsFreeReviewRound(taskId, runId, round)
-      ? freeReviewFile(taskId, runId, round, name)
-      : null;
+    if (!(await ownsFreeReviewRound(taskId, runId, round))) return c.json({ error: "not found" }, 404);
+    // 认不认这个类型跟团队那条 `review/file` 共用一张表,连这里的次序(先归属 404、再类型
+    // 400)也跟它一样。以前这里是「不认识就按 octet-stream 端出去」,于是同一个 `notes.txt`
+    // 在团队线上 400、在这条线上 200(审查第 3 轮 R3 第 3 条实测)——报告正文落在哪条线上,
+    // 写报告的人无从预料。
+    const headers = evidenceHeaders(name);
+    if (!headers) return c.json({ error: "非法的审查文件路径或类型" }, 400);
+    const file = freeReviewFile(taskId, runId, round, name);
     if (!file) return c.json({ error: "not found" }, 404);
-    const mime = EVIDENCE_MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
-    return c.body(Uint8Array.from(readFileSync(file)), 200, { "content-type": mime });
+    return c.body(Uint8Array.from(readFileSync(file)), 200, headers);
   });
 }

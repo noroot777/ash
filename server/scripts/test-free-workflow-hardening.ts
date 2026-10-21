@@ -183,31 +183,37 @@ try {
   const subFetch = await api.request("/tasks/free-task/free-workflow/review-file?run=sub-run&round=1&name=shots%2Fdeep.png");
   assert.equal(subFetch.status, 404, "接口层仍要先核对这一轮归谁(sub-run 没登记过)");
 
-  // ── 证据清单:展示端靠它判定「报告里这处相对路径说的是证据目录还是工作目录」──────
-  // 判据必须是「清单里有没有它」。靠「先试证据目录、加载失败就换工作目录」是试出来的:
-  // 加载失败只能证明那个文件此刻取不到(审查第 2 轮 F1 同类位置)。清单**不能只有截图** ——
-  // 报告里指向同目录另一份 .md 的链接也要落在证据目录上。
-  const { freeReviewFiles } = await import("../src/free-review-files.js");
+  // ── 取证据文件:认不认一个名字,两条审查线共用 evidence-path.ts 那一张表 ──────────
+  // 以前这条路由认任何后缀(不认识就按 octet-stream 端出去),团队那条按表 400 —— 同一个
+  // `notes.txt` 在两条线上一个 200 一个 400(审查第 3 轮 R3 第 3 条实测),而报告正文落在
+  // 哪条线上写报告的人无从预料。团队那条的对称用例在 test-review-flow.ts。
+  const base = "/tasks/free-turn-window-task/free-workflow/review-file?run=evidence-review&round=1";
+  writeFileSync(join(evidenceDir, "notes.txt"), "EVIDENCE NOTES\n");
   writeFileSync(join(evidenceDir, "notes.md"), "# 附记\n");
-  writeFileSync(join(evidenceDir, "shot.png"), "PNG");
-  writeFileSync(join(evidenceDir, "repro.log"), "服务不了的类型不进清单\n");
-  assert.deepEqual(
-    freeReviewFiles("free-turn-window-task", "evidence-review", 1),
-    ["notes.md", "report.md", "shot.png"],
-    "清单 = 证据目录里**服务得了**的全部文件(.md 也在;服务不了的 .log 不在)",
+  writeFileSync(join(evidenceDir, "evil.html"), "<script>alert(1)</script>\n");
+  const textFile = await api.request(`${base}&name=notes.txt`);
+  assert.equal(textFile.status, 200, "纯文本证据要服务得了");
+  assert.equal(textFile.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(textFile.headers.get("x-content-type-options"), "nosniff", "按 text/plain 端的一律禁嗅探");
+  assert.equal((await api.request(`${base}&name=notes.md`)).status, 200, "同目录另一份 .md 要服务得了");
+  assert.equal(
+    (await api.request(`${base}&name=evil.html`)).status,
+    400,
+    ".html 两条线都不服务:同源端出去等于执行审查者写进证据目录的标记",
   );
-  const names = await api.request("/tasks/free-turn-window-task/free-workflow/review-files?run=evidence-review&round=1");
-  assert.equal(names.status, 200);
-  assert.deepEqual(
-    (await names.json() as { names: string[] }).names,
-    ["notes.md", "report.md", "shot.png"],
-    "清单路由跟函数同一份结果",
+  // 次序也跟团队那条一样:先核对这一轮归谁(404),再判类型(400)。
+  assert.equal(
+    (await api.request("/tasks/free-task/free-workflow/review-file?run=sub-run&round=1&name=evil.html")).status,
+    404,
+    "没登记在这个任务上的轮次先 404,不给类型判定泄露任何信息",
   );
-  // 归属校验跟文件路由共用一道(sub-run 没登记在这个任务上)。
-  const strayNames = await api.request("/tasks/free-task/free-workflow/review-files?run=sub-run&round=1");
-  assert.equal(strayNames.status, 404, "清单路由也要先核对这一轮归谁");
-  const badRound = await api.request("/tasks/free-turn-window-task/free-workflow/review-files?run=evidence-review&round=0");
-  assert.equal(badRound.status, 404, "非法轮次不给清单");
+  // 清单接口已撤:报告正文里一处相对路径按**这份文档自己的地址**解,不再问「清单里有没有
+  // 它」—— 文件被删掉之后那一处会被判成工作目录的,于是把同名的另一张图端上来(R3 第 1 条)。
+  assert.equal(
+    (await api.request("/tasks/free-turn-window-task/free-workflow/review-files?run=evidence-review&round=1")).status,
+    404,
+    "文件清单接口已撤",
+  );
 
   // 部分成功重试：首次合并的 base 不能被 already_merged 的同值区间覆盖。
   await createTasks([{

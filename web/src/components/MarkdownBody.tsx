@@ -6,7 +6,6 @@ import remarkGfm from "remark-gfm";
 import type { ReviewConclusion } from "@ash/shared";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
-import { useEvidenceNames } from "./useEvidenceNames.ts";
 import {
   imageOriginLabel,
   imagePreviewTarget,
@@ -17,7 +16,6 @@ import {
   remarkSoftBreaks,
   reviewFileTarget,
   sameOriginUrl,
-  evidenceListingUrl,
   siblingResolverForUrl,
   type MarkdownFileResolver,
   type ReviewFileTarget,
@@ -49,34 +47,43 @@ import {
  * 都拿不到）。所以只报「取不到」加上 agent 原文写的那个地址 —— 那是唯一能让人自己去核
  * 实的东西。
  */
-function MissingImage({ origin, alt }: { origin: string; alt?: string }) {
+function MissingImage({ origin, alt, onRetry }: {
+  origin: string;
+  alt?: string;
+  /** 给了就显示「再试一次」——同源的临时失败(503、鉴权刷新、文件稍后补齐)是可以恢复的。 */
+  onRetry?: () => void;
+}) {
   return (
     <span className="task-markdown-image-missing">
       <span className="task-markdown-image-missing-tag">图取不到</span>
       <code>{alt ? `${alt} · ${imageOriginLabel(origin)}` : imageOriginLabel(origin)}</code>
+      {onRetry && (
+        <button type="button" className="task-markdown-image-retry" onClick={onRetry}>再试一次</button>
+      )}
     </span>
   );
 }
 
-function MarkdownImage({ alt, origin, chain }: {
+function MarkdownImage({ alt, origin, url, name }: {
   alt: string;
-  /** agent 在正文里写的原地址（`chain` 里的可能已经被改写成站内接口），小字里报的是它。 */
+  /** agent 在正文里写的原地址（`url` 可能已经被改写成站内接口），小字里报的是它。 */
   origin: string;
-  /** 按顺序试的几个地址（见 markdownPolicy 的 ImagePreviewTarget.fallback），至少一个。 */
-  chain: { url: string; name?: string }[];
+  /** 这处引用解出来的那**一个**地址（归属判据见 markdownPolicy 的 reportFileResolver）。 */
+  url: string;
+  name?: string;
 }) {
-  const [failed, setFailed] = useState<string[]>([]);
-  const current = chain.find((candidate) => !failed.includes(candidate.url));
-  if (!current) return <MissingImage origin={origin} alt={alt} />;
+  const [failed, setFailed] = useState(false);
+  // 失败是可以恢复的:短暂 503、鉴权状态刷新、文件稍后补齐 —— 之前这个状态挂到组件卸载
+  // 为止,只能靠刷新页面(审查第 3 轮 N2)。所以给一个「再试一次」,它只重置这一个状态。
+  if (failed) return <MissingImage origin={origin} alt={alt} onRetry={() => setFailed(false)} />;
   return (
     <PreviewableImage
       className="task-markdown-image"
-      src={current.url}
+      src={url}
       alt={alt}
-      label={alt || current.name}
-      // 站外地址失败照旧交给浏览器自己的 alt：那是对面站点的事，报「取不到」帮不上忙，
-      // 也不该据此去试下一个地址（下一个是本机根的解释，跟站外那张没关系）。
-      onError={() => { if (sameOriginUrl(current.url)) setFailed([...failed, current.url]); }}
+      label={alt || name}
+      // 站外地址失败照旧交给浏览器自己的 alt：那是对面站点的事，报「取不到」帮不上忙。
+      onError={() => { if (sameOriginUrl(url)) setFailed(true); }}
     />
   );
 }
@@ -155,10 +162,7 @@ function MarkdownDocument({ text, resolveFile, onReviewReport, onActionError }: 
             const image = imagePreviewTarget(raw, resolveFile);
             // 解不出来的本机路径（agent 自己机器上的地址，浏览器一个都取不到）报一行小字。
             if (!image && isLocalImageReference(raw)) return <MissingImage origin={raw} alt={alt} />;
-            const chain = image
-              ? [{ url: image.url, name: image.name }, ...(image.fallback ? [image.fallback] : [])]
-              : [{ url: raw }];
-            return <MarkdownImage chain={chain} alt={alt ?? ""} origin={raw} />;
+            return <MarkdownImage url={image?.url ?? raw} name={image?.name} alt={alt ?? ""} origin={raw} />;
           },
           table: ({ children, ...props }) => (
             <div className="task-markdown-table">
@@ -389,13 +393,6 @@ export function ReviewReportDialog({ target, onReviewReport, onClose }: {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  // 这一轮证据目录里服务得了的文件清单：地址从报告自己的地址推出来（run/round 都在里面）。
-  const listing = evidenceListingUrl(target.url);
-  const evidenceNames = useEvidenceNames(
-    listing ? () => fetch(listing).then((r) => r.ok ? r.json() as Promise<{ names?: string[] }> : null).then((body) => body?.names ?? []) : null,
-    listing ?? "",
-  );
-
   useEffect(() => {
     const controller = new AbortController();
     setText(null);
@@ -445,9 +442,9 @@ export function ReviewReportDialog({ target, onReviewReport, onClose }: {
               {/* 这个弹窗打开的是一份**孤立的报告文件**（正文里的 report.md 链接），手上
                   没有它属于哪一轮，也就拿不到权威结论——按钮跟着什么都不宣称。 */}
               {/* 相对路径按**这份报告自己所在的目录**解：弹窗手上只有它的地址，run/round 都没有。
-                  文档根归属仍然按清单算（清单地址也从这个地址推出来，见 evidenceListingUrl）——
-                  这里曾经是唯一一处只能靠「第一个地址加载失败再换」的表面。 */}
-              <ReviewReportSplit text={text} reportKey={target.url} conclusion={null} resolveFile={siblingResolverForUrl(target.url, evidenceNames)} onReviewReport={onReviewReport} onActionError={setActionError} />
+                  子目录里的报告按它自己那一层解（`notes/supplement.md` 里的 `shot.png` =
+                  `notes/shot.png`），归属判据与另外两处表面同一份，见 reportFileResolver。 */}
+              <ReviewReportSplit text={text} reportKey={target.url} conclusion={null} resolveFile={siblingResolverForUrl(target.url)} onReviewReport={onReviewReport} onActionError={setActionError} />
             </ImagePreviewGroup>
           ) : error ? (
             <p className="markdown-report-error">审查报告加载失败：{error}</p>

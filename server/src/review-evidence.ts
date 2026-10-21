@@ -13,7 +13,6 @@ import {
   evidenceSegments,
   EVIDENCE_IMAGE_EXTENSIONS,
   EVIDENCE_MAX_DEPTH,
-  EVIDENCE_SERVABLE_EXTENSIONS,
 } from "./evidence-path.js";
 import { RUNS_DIR } from "./paths.js";
 import { id, now } from "./util.js";
@@ -105,8 +104,8 @@ export async function readReport(taskId: string, round: number): Promise<string>
 }
 
 // 子目录一起列（跟 free-review-files.ts 的 filesUnder 同一口径）：归到 `shots/` 里的那
-// 几张接口服务得了，列不出来就只能靠报告正文提到才看得见。深度与类型跟**能不能服务**共用
-// 一份常量（evidence-path.ts）—— 这份清单以前不收 WebP，自由工作流那份收（审查第 2 轮 N1）。
+// 几张接口服务得了，列不出来就等于截图条里没有。深度与类型跟**能不能服务**共用一份常量
+// （evidence-path.ts）—— 这份清单以前不收 WebP，自由工作流那份收（审查第 2 轮 N1）。
 async function filesUnder(
   dir: string,
   prefix: string,
@@ -138,18 +137,6 @@ async function listEvidence(taskId: string, round: number, extensions: ReadonlyS
 /** 截图条铺的那几张（图片类型）。 */
 export async function screenshots(taskId: string, round: number): Promise<string[]> {
   return listEvidence(taskId, round, EVIDENCE_IMAGE_EXTENSIONS);
-}
-
-/**
- * 这一轮证据目录里**服务得了的全部文件**。
- *
- * 展示端据此判断报告正文里一处相对路径说的是「证据目录里那一份」还是「被审任务工作目录里
- * 那一份」—— 判据只能是「清单里有没有它」。靠「先试证据目录、加载失败就换工作目录」是**试**
- * 出来的:加载失败只能证明那个文件此刻取不到,证明不了这处引用说的是另一个根,而工作目录
- * 里刚好有个同名的别的文件时就会被当成证据端上来(审查第 2 轮 F1 的同类位置)。
- */
-export async function evidenceFiles(taskId: string, round: number): Promise<string[]> {
-  return listEvidence(taskId, round, EVIDENCE_SERVABLE_EXTENSIONS);
 }
 
 export async function readReviewFile(taskId: string, round: number, name: string): Promise<Buffer | null> {

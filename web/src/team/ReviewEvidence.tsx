@@ -11,7 +11,6 @@ import {
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { ReviewReportBody } from "../components/MarkdownBody.tsx";
 import { reportFileResolver } from "../components/markdownPolicy.ts";
-import { useEvidenceNames } from "../components/useEvidenceNames.ts";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { ReviewDispatchControl } from "../review/ReviewDispatchControl.tsx";
@@ -87,11 +86,6 @@ export function ReviewRoundBody({
   includeScreenshots?: boolean;
 }) {
   const reviewTaskId = round.reviewTaskId;
-  // 证据目录里服务得了的全部文件（不只是截图）—— 报告正文里的相对路径按它判定文档根。
-  const evidenceNames = useEvidenceNames(
-    () => api.taskReviewFileNames(taskId, round.round).then((result) => result.names),
-    `${taskId}:${round.round}`,
-  );
   return (
     <>
       {round.reportMarkdown
@@ -99,13 +93,11 @@ export function ReviewRoundBody({
             text={round.reportMarkdown}
             reportKey={`${taskId}:${round.where}:${round.round}`}
             conclusion={round.conclusion}
-            // 文档根归属（证据目录 vs 被审任务工作目录）一处定清楚，见 markdownPolicy 的
-            // reportFileResolver。清单是服务端列的那份权威清单：带着它，根归属是**算出来
-            // 的**，不再靠「第一个地址加载失败」试出来。
+            // 文档根归属（相对路径 → 证据目录；绝对路径 → 被审任务工作目录）一处定清楚，
+            // 判据和被证伪的两版「消歧」都写在 markdownPolicy 的 reportFileResolver 上。
             resolveFile={reportFileResolver(
               (name) => api.taskReviewFileUrl(taskId, round.round, name),
               taskId,
-              evidenceNames,
             )}
           />
         : <p>验证报告尚未写入。</p>}

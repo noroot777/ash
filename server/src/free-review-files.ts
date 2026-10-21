@@ -5,7 +5,6 @@ import {
   evidenceSegments,
   EVIDENCE_IMAGE_EXTENSIONS,
   EVIDENCE_MAX_DEPTH,
-  EVIDENCE_SERVABLE_EXTENSIONS,
 } from "./evidence-path.js";
 import { RUNS_DIR } from "./paths.js";
 
@@ -72,7 +71,7 @@ export function readFreeReviewReport(taskId: string, runId: string, round: numbe
 }
 
 // 子目录一起列：审查者把截图归到 `shots/` 里是合法写法（接口也服务得了），列不出来就
-// 等于那几张只能靠报告正文提到才看得见。深度与类型都跟**能不能服务**共用一份常量
+// 等于截图条里没有那几张。深度与类型都跟**能不能服务**共用一份常量
 // （evidence-path.ts）—— 两边一松一紧就会出现「打得开、但面板里没有」。
 function filesUnder(dir: string, prefix: string, depth: number, extensions: ReadonlySet<string>): string[] {
   if (depth <= 0) return [];
@@ -100,9 +99,4 @@ function listFreeEvidence(taskId: string, runId: string, round: number, extensio
 /** 截图条铺的那几张（图片类型）。 */
 export function freeReviewScreenshots(taskId: string, runId: string, round: number): string[] {
   return listFreeEvidence(taskId, runId, round, EVIDENCE_IMAGE_EXTENSIONS);
-}
-
-/** 这一轮证据目录里**服务得了的全部文件** —— 用处见 review-evidence.ts 的 evidenceFiles。 */
-export function freeReviewFiles(taskId: string, runId: string, round: number): string[] {
-  return listFreeEvidence(taskId, runId, round, EVIDENCE_SERVABLE_EXTENSIONS);
 }

@@ -342,10 +342,6 @@ export const api = {
     request(`/tasks/${id(taskId)}/review/dispatch`, json("POST", input)),
   taskReviewFileUrl: (taskId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/review/file?round=${id(String(round))}&name=${id(name)}`),
-  // 这一轮证据目录里服务得了的文件清单。报告正文里的相对路径按它判定文档根（证据目录
-  // 还是被审任务的工作目录）—— 判据是「清单里有没有它」而不是「先试一个、失败再换」。
-  taskReviewFileNames: (taskId: string, round: number): Promise<{ names: string[] }> =>
-    request(`/tasks/${id(taskId)}/review/files?round=${id(String(round))}`),
   freeWorkflow: (taskId: string): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow`),
   dispatchFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
@@ -395,9 +391,6 @@ export const api = {
   }> => request(`/tasks/${id(taskId)}/free-workflow/preview/log${serviceId ? `?service=${id(serviceId)}` : ""}`),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),
-  // 同 taskReviewFileNames，自由工作流那条线。
-  freeReviewFileNames: (taskId: string, runId: string, round: number): Promise<{ names: string[] }> =>
-    request(`/tasks/${id(taskId)}/free-workflow/review-files?run=${id(runId)}&round=${id(String(round))}`),
   // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上
   // 画着「合并并清理」时这一按就是真合并，调用点必须先把话说清楚再让人按。
   forcePassVerify: (taskId: string): Promise<VerifyOverrideResult> =>
