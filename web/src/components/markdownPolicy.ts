@@ -256,18 +256,23 @@ export function siblingFileResolver(urlFor: (name: string) => string): MarkdownF
  *    那儿跑的，截图未必落进证据目录，`output/shot.png` 多半指的是工作目录里那张。
  *
  * 顺序不能反：同名时报告自己那一份才是它在说的东西。而「带目录的相对路径两个根都解释
- * 得通」这个歧义不靠猜消 —— 猜任何一边都会让另一边那种写法彻底画不出来，所以两个地址
- * 都给出去，由渲染点按顺序试（审查第 1 轮非阻塞项 2：原先证据接口只服务 basename，
- * `shots/a.png` 只能落到 ②；现在接口服务证据目录内的子路径，两档都真走得通）。
+ * 得通」这个歧义不靠猜消 —— 猜任何一边都会让另一边那种写法彻底画不出来（审查第 1 轮非
+ * 阻塞项 2：原先证据接口只服务 basename，`shots/a.png` 只能落到 ②；现在接口服务证据目录
+ * 内的子路径，两档都真走得通）。消歧的办法是**问清单**：`evidenceNames` 一到，根归属就是
+ * 算出来的；清单还没到货才退回「两个地址都给出去、渲染点按顺序试」那一档降级。
  */
 export function reportFileResolver(
   urlFor: (name: string) => string,
   taskId?: string,
   /**
-   * 证据目录里**真有哪些文件**(服务端列出来的那份清单)。给了它,根归属就是算出来的而
-   * 不是试出来的 —— 「第一个地址加载失败」只能证明那个文件此刻取不到,证明不了这处引用
-   * 说的是另一个根(审查第 2 轮 F1 的同类位置)。清单拿不到时(单独打开的报告弹窗手上只
-   * 有报告自己的地址)才退回按顺序试。
+   * 证据目录里**服务得了的全部文件**(服务端列出来的那份清单,见 useEvidenceNames)。
+   *
+   * 给了它,根归属就是算出来的而不是试出来的 —— 「第一个地址加载失败」只能证明那个文件
+   * 此刻取不到,证明不了这处引用说的是另一个根(审查第 2 轮 F1 的同类位置)。
+   *
+   * **必须是全部服务得了的文件,不能只给截图**:报告里指向同目录另一份 `.md` 的链接也要
+   * 落在证据目录上,只给图片清单会把它判成「工作目录里的文件」(那儿压根没有这份)。
+   * 清单取不到时(接口报错、或者还在路上)返回 undefined,退回按顺序试那一档。
    */
   evidenceNames?: readonly string[],
 ): MarkdownFileResolver | undefined {
@@ -290,8 +295,12 @@ export function reportFileResolver(
  * 证据接口的两条路径（`…/review/file`、`…/free-workflow/review-file`）都是把文件名放在
  * `?name=`，所以换掉那一个参数就是同目录的另一个文件。打开一份孤立报告（正文里指向
  * report.md 的链接）时手上只有这个 URL，没有 run/round，这是唯一解得出来的办法。
+ *
+ * 清单(`evidenceNames`)由调用点用 `evidenceListingUrl(fileUrl)` 取回来再递进来 —— 那条
+ * 地址也是从同一个 URL 推出来的，所以这个弹窗跟另外两处表面用的是同一套判据，不再是
+ * 「这里只能靠试」。
  */
-export function siblingResolverForUrl(fileUrl: string): MarkdownFileResolver | undefined {
+export function siblingResolverForUrl(fileUrl: string, evidenceNames?: readonly string[]): MarkdownFileResolver | undefined {
   const base = sameOriginUrl(fileUrl);
   if (!base || !isReviewFileEndpoint(base.pathname) || !base.searchParams.has("name")) return undefined;
   // 文档根归属见 reportFileResolver。这个弹窗手上只有报告自己的地址，而任务 id 就在
@@ -301,7 +310,23 @@ export function siblingResolverForUrl(fileUrl: string): MarkdownFileResolver | u
     const url = new URL(base.toString());
     url.searchParams.set("name", name);
     return url.toString();
-  }, taskId ? decodeSafe(taskId) : undefined);
+  }, taskId ? decodeSafe(taskId) : undefined, evidenceNames);
+}
+
+/**
+ * 一份报告的地址 → 「它那一轮证据目录里有哪些文件」的清单地址。
+ *
+ * 两条证据接口的清单路由就是文件路由加一个 `s`（`review/file` → `review/files`，
+ * `free-workflow/review-file` → `review-files`），查询参数里只去掉 `name`：run/round
+ * 都原样留着，所以孤立弹窗也问得出「这一轮有哪些文件」。不是证据接口就返回 null。
+ */
+export function evidenceListingUrl(fileUrl: string): string | null {
+  const base = sameOriginUrl(fileUrl);
+  if (!base || !isReviewFileEndpoint(base.pathname)) return null;
+  const url = new URL(base.toString());
+  url.pathname = `${base.pathname}s`;
+  url.searchParams.delete("name");
+  return url.toString();
 }
 
 // 正文里指向图片的**链接**（不是 `![]()` 内嵌图），点开要落进全站统一的灯箱，而不是

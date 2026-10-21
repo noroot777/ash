@@ -19,10 +19,27 @@ import { sep } from "node:path";
 export const EVIDENCE_MAX_DEPTH = 8;
 
 /**
- * 自动列进证据清单的图片类型。**跟 `REVIEW_MIME` 对齐**：列出来就得服务得了，否则面板上
- * 那张卡片必然 404。两处清单曾经一个收 WebP、一个不收（同上 N1）。
+ * 证据接口**服务得了**的类型 —— 两个接口的 Content-Type 表就是它。
+ *
+ * 它同时是「列得出来」的判据,所以只能有这一份:列出来却服务不了,面板上那张卡片必然 404;
+ * 服务得了却列不出来,报告正文没提到的那几张就只能靠猜(审查第 2 轮 N1:两处清单一个收
+ * WebP、一个不收;形状判据放到 8 层、清单还只走 3 层)。谁要加一种类型,改这里一处。
  */
-export const EVIDENCE_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+export const EVIDENCE_MIME: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".md": "text/markdown; charset=utf-8",
+};
+
+/** 自动列进**截图条**的那几种 —— 上面那张表里的图片类型,不另立一份。 */
+export const EVIDENCE_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(
+  Object.entries(EVIDENCE_MIME).filter(([, mime]) => mime.startsWith("image/")).map(([ext]) => ext),
+);
+
+/** 证据目录里**服务得了的全部类型** —— 报告里指向同目录另一份 `.md` 的链接也算。 */
+export const EVIDENCE_SERVABLE_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(EVIDENCE_MIME));
 
 /**
  * `name` 作为证据目录内的相对路径拆成段，拆不动就是 `null`（调用点一律拒）。

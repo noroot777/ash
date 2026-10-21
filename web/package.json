@@ -22,7 +22,7 @@
     "//test:turn-images": "附件事件上的 source 标注有没有一路带到分段里,以及同一个路径被重拍过时两处引用各拿自己那一次 —— DOM 那份是手搓分段喂进去的,看不见这段接缝。",
     "test:turn-images": "node --experimental-strip-types scripts/test-turn-images.mjs",
     "//test:markdown-images": "agent 说的那张图用户看不看得到:审查报告里同目录的截图解到证据接口、结论里相对/绝对路径解到 uploads 拷贝并画在原位(同时撤掉重复的附件卡片)、配不上来源的本机路径一个 img 都不留,以及**扫描器认的那几处 == 渲染器真画出来的那几个**(见 fixtures/markdown-shapes.ts)。",
-    "test:markdown-images": "node --experimental-strip-types scripts/test-markdown-images.mjs",
+    "test:markdown-images": "node --experimental-strip-types scripts/test-markdown-images.mjs && node --experimental-strip-types scripts/test-report-roots.mjs",
     "test:inspector-shortcuts": "node --experimental-strip-types scripts/test-inspector-shortcuts.mjs",
     "test:inspector-shortcut-stack": "node scripts/test-inspector-shortcut-stack.mjs",
     "test:key-chord": "node --experimental-strip-types scripts/test-key-chord.mjs",

@@ -29,6 +29,7 @@ import { anchorAt, firstAnchor, workflowPolicy } from "@ash/shared/workflow-poli
 import { and, asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
+import { EVIDENCE_MIME } from "./evidence-path.js";
 import { db } from "./db/index.js";
 import { agents, projects, sessions, tasks } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -37,7 +38,7 @@ import {
   type ReviewCoverageFinding,
 } from "./review-coverage.js";
 import {
-  REVIEW_MIME,
+  evidenceFiles,
   nextReviewRound,
   readConclusion,
   readReport,
@@ -617,13 +618,25 @@ export function mountReviewRoutes(api: Hono): void {
     return c.json(await reviewInfo(target));
   });
 
+  // 这一轮证据目录里服务得了的文件清单。展示端用它判断报告正文里的相对路径说的是证据
+  // 目录还是被审任务的工作目录 —— 判据是「清单里有没有它」,不是「先试一个、加载失败再换」
+  // (审查第 2 轮 F1 同类位置)。孤立打开的报告弹窗手上只有报告自己的地址,它也从这里取。
+  api.get("/tasks/:id/review/files", async (c) => {
+    const taskId = c.req.param("id");
+    const target = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!target) return c.json({ error: "not found" }, 404);
+    const round = Number(c.req.query("round"));
+    if (!Number.isInteger(round) || round <= 0) return c.json({ error: "非法的轮次" }, 400);
+    return c.json({ names: await evidenceFiles(taskId, round) });
+  });
+
   api.get("/tasks/:id/review/file", async (c) => {
     const taskId = c.req.param("id");
     const target = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!target) return c.json({ error: "not found" }, 404);
     const round = Number(c.req.query("round"));
     const name = c.req.query("name") ?? "";
-    const mime = REVIEW_MIME[extname(name).toLowerCase()];
+    const mime = EVIDENCE_MIME[extname(name).toLowerCase()];
     const file = safeReviewFilePath(taskId, round, name);
     if (!file || !mime) return c.json({ error: "非法的审查文件路径或类型" }, 400);
     const content = await readReviewFile(taskId, round, name);

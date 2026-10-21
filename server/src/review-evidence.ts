@@ -8,7 +8,13 @@ import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ReviewConclusion } from "@ash/shared";
-import { containedPath, evidenceSegments, EVIDENCE_IMAGE_EXTENSIONS, EVIDENCE_MAX_DEPTH } from "./evidence-path.js";
+import {
+  containedPath,
+  evidenceSegments,
+  EVIDENCE_IMAGE_EXTENSIONS,
+  EVIDENCE_MAX_DEPTH,
+  EVIDENCE_SERVABLE_EXTENSIONS,
+} from "./evidence-path.js";
 import { RUNS_DIR } from "./paths.js";
 import { id, now } from "./util.js";
 
@@ -37,13 +43,7 @@ export async function replaceEvidenceFile(path: string, content: string): Promis
   }
 }
 
-export const REVIEW_MIME: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".md": "text/markdown; charset=utf-8",
-};
+
 
 export function reviewRoundDir(taskId: string, round: number): string {
   return join(RUNS_DIR, taskId, "review", `round-${round}`);
@@ -104,30 +104,52 @@ export async function readReport(taskId: string, round: number): Promise<string>
   return (await readReviewFile(taskId, round, "report.md"))?.toString("utf8") ?? "";
 }
 
-// 子目录一起列（跟 free-review-files.ts 的 imagesUnder 同一口径）：归到 `shots/` 里的那
+// 子目录一起列（跟 free-review-files.ts 的 filesUnder 同一口径）：归到 `shots/` 里的那
 // 几张接口服务得了，列不出来就只能靠报告正文提到才看得见。深度与类型跟**能不能服务**共用
 // 一份常量（evidence-path.ts）—— 这份清单以前不收 WebP，自由工作流那份收（审查第 2 轮 N1）。
-async function imagesUnder(dir: string, prefix: string, depth: number): Promise<string[]> {
+async function filesUnder(
+  dir: string,
+  prefix: string,
+  depth: number,
+  extensions: ReadonlySet<string>,
+): Promise<string[]> {
   if (depth <= 0) return [];
   const found: string[] = [];
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     // isSymbolicLink 先问：指向目录的符号链接 isDirectory() 是 false，跟着走会爬出证据根。
     if (entry.isSymbolicLink()) continue;
     const name = `${prefix}${entry.name}`;
-    if (entry.isDirectory()) found.push(...await imagesUnder(join(dir, entry.name), `${name}/`, depth - 1));
-    else if (entry.isFile() && EVIDENCE_IMAGE_EXTENSIONS.has(extname(entry.name).toLowerCase())) found.push(name);
+    if (entry.isDirectory()) found.push(...await filesUnder(join(dir, entry.name), `${name}/`, depth - 1, extensions));
+    else if (entry.isFile() && extensions.has(extname(entry.name).toLowerCase())) found.push(name);
   }
   return found;
 }
 
-export async function screenshots(taskId: string, round: number): Promise<string[]> {
+async function listEvidence(taskId: string, round: number, extensions: ReadonlySet<string>): Promise<string[]> {
   try {
     const dir = reviewRoundDir(taskId, round);
     if (!(await safeRunDirectory(dir))) return [];
-    return (await imagesUnder(dir, "", EVIDENCE_MAX_DEPTH)).sort();
+    return (await filesUnder(dir, "", EVIDENCE_MAX_DEPTH, extensions)).sort();
   } catch {
     return [];
   }
+}
+
+/** 截图条铺的那几张（图片类型）。 */
+export async function screenshots(taskId: string, round: number): Promise<string[]> {
+  return listEvidence(taskId, round, EVIDENCE_IMAGE_EXTENSIONS);
+}
+
+/**
+ * 这一轮证据目录里**服务得了的全部文件**。
+ *
+ * 展示端据此判断报告正文里一处相对路径说的是「证据目录里那一份」还是「被审任务工作目录里
+ * 那一份」—— 判据只能是「清单里有没有它」。靠「先试证据目录、加载失败就换工作目录」是**试**
+ * 出来的:加载失败只能证明那个文件此刻取不到,证明不了这处引用说的是另一个根,而工作目录
+ * 里刚好有个同名的别的文件时就会被当成证据端上来(审查第 2 轮 F1 的同类位置)。
+ */
+export async function evidenceFiles(taskId: string, round: number): Promise<string[]> {
+  return listEvidence(taskId, round, EVIDENCE_SERVABLE_EXTENSIONS);
 }
 
 export async function readReviewFile(taskId: string, round: number, name: string): Promise<Buffer | null> {

@@ -19,12 +19,12 @@ import {
   disputeResolutionNoteOf,
   resolveFreeReviewDispute,
 } from "./free-review-dispute.js";
-import { freeReviewFile } from "./free-review-files.js";
+import { freeReviewFile, freeReviewFiles } from "./free-review-files.js";
 import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
 import { freeWorkflowState } from "./free-workflow-state.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { createPostMergeRepairTask, startPostMergeReview } from "./post-merge-review.js";
-import { REVIEW_MIME } from "./review-evidence.js";
+import { EVIDENCE_MIME } from "./evidence-path.js";
 import { actorOf } from "./auth/context.js";
 
 const errorBody = (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) });
@@ -66,6 +66,16 @@ async function turnIdentityError(c: Context, taskId: string, what: string): Prom
       : `MCP 未携带当前方向身份（请传当前消息附带的 directionToken），${what}已拒绝写入`;
   }
   return null;
+}
+
+/** 这一轮证据确实属于这个任务吗 —— 文件与清单两条路由共用这一道(轮次形状 + 归属)。 */
+async function ownsFreeReviewRound(taskId: string, runId: string, round: number): Promise<boolean> {
+  if (!Number.isInteger(round) || round <= 0) return false;
+  const row = (await db.select({ id: freeReviewRounds.id }).from(freeReviewRounds)
+    .innerJoin(freeReviewRuns, eq(freeReviewRounds.runId, freeReviewRuns.id))
+    .where(and(eq(freeReviewRuns.id, runId), eq(freeReviewRuns.taskId, taskId), eq(freeReviewRounds.round, round)))
+    .limit(1)).at(0);
+  return !!row;
 }
 
 export function mountFreeWorkflowRoutes(api: Hono): void {
@@ -164,20 +174,25 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     try { return c.json(await cancelFreeReviewReservation(c.req.param("id"))); }
     catch (error) { return c.json(errorBody(error), 409); }
   });
+  // 这一轮证据目录里服务得了的文件清单(用处见 review.ts 的 /review/files)。
+  api.get("/tasks/:id/free-workflow/review-files", async (c) => {
+    const taskId = c.req.param("id");
+    const runId = c.req.query("run") ?? "";
+    const round = Number(c.req.query("round"));
+    if (!(await ownsFreeReviewRound(taskId, runId, round))) return c.json({ error: "not found" }, 404);
+    return c.json({ names: freeReviewFiles(taskId, runId, round) });
+  });
+
   api.get("/tasks/:id/free-workflow/review-file", async (c) => {
     const taskId = c.req.param("id");
     const runId = c.req.query("run") ?? "";
     const round = Number(c.req.query("round"));
     const name = c.req.query("name") ?? "";
-    const owned = Number.isInteger(round) && round > 0
-      ? (await db.select({ id: freeReviewRounds.id }).from(freeReviewRounds)
-        .innerJoin(freeReviewRuns, eq(freeReviewRounds.runId, freeReviewRuns.id))
-        .where(and(eq(freeReviewRuns.id, runId), eq(freeReviewRuns.taskId, taskId), eq(freeReviewRounds.round, round)))
-        .limit(1)).at(0)
+    const file = await ownsFreeReviewRound(taskId, runId, round)
+      ? freeReviewFile(taskId, runId, round, name)
       : null;
-    const file = owned ? freeReviewFile(taskId, runId, round, name) : null;
     if (!file) return c.json({ error: "not found" }, 404);
-    const mime = REVIEW_MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
+    const mime = EVIDENCE_MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
     return c.body(Uint8Array.from(readFileSync(file)), 200, { "content-type": mime });
   });
 }

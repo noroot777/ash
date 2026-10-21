@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import type { ReviewConclusion } from "@ash/shared";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
+import { useEvidenceNames } from "./useEvidenceNames.ts";
 import {
   imageOriginLabel,
   imagePreviewTarget,
@@ -16,6 +17,7 @@ import {
   remarkSoftBreaks,
   reviewFileTarget,
   sameOriginUrl,
+  evidenceListingUrl,
   siblingResolverForUrl,
   type MarkdownFileResolver,
   type ReviewFileTarget,
@@ -387,6 +389,12 @@ export function ReviewReportDialog({ target, onReviewReport, onClose }: {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // 这一轮证据目录里服务得了的文件清单：地址从报告自己的地址推出来（run/round 都在里面）。
+  const listing = evidenceListingUrl(target.url);
+  const evidenceNames = useEvidenceNames(
+    listing ? () => fetch(listing).then((r) => r.ok ? r.json() as Promise<{ names?: string[] }> : null).then((body) => body?.names ?? []) : null,
+    listing ?? "",
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -436,8 +444,10 @@ export function ReviewReportDialog({ target, onReviewReport, onClose }: {
             <ImagePreviewGroup isolated>
               {/* 这个弹窗打开的是一份**孤立的报告文件**（正文里的 report.md 链接），手上
                   没有它属于哪一轮，也就拿不到权威结论——按钮跟着什么都不宣称。 */}
-              {/* 相对路径按**这份报告自己所在的目录**解：弹窗手上只有它的地址，run/round 都没有。 */}
-              <ReviewReportSplit text={text} reportKey={target.url} conclusion={null} resolveFile={siblingResolverForUrl(target.url)} onReviewReport={onReviewReport} onActionError={setActionError} />
+              {/* 相对路径按**这份报告自己所在的目录**解：弹窗手上只有它的地址，run/round 都没有。
+                  文档根归属仍然按清单算（清单地址也从这个地址推出来，见 evidenceListingUrl）——
+                  这里曾经是唯一一处只能靠「第一个地址加载失败再换」的表面。 */}
+              <ReviewReportSplit text={text} reportKey={target.url} conclusion={null} resolveFile={siblingResolverForUrl(target.url, evidenceNames)} onReviewReport={onReviewReport} onActionError={setActionError} />
             </ImagePreviewGroup>
           ) : error ? (
             <p className="markdown-report-error">审查报告加载失败：{error}</p>

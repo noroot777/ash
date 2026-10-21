@@ -424,6 +424,24 @@ const symlinkTraversal = await api.request(
 assert.equal(symlinkTraversal.status, 404, "review/file 必须拒绝证据目录祖先 symlink");
 rmSync(reviewParent, { force: true });
 
+// 证据清单:展示端靠它判定「报告里这处相对路径说的是证据目录还是被审任务工作目录」。
+// 判据必须是「清单里有没有它」而不是「先试一个、加载失败再换」(审查第 2 轮 F1 同类位置),
+// 而且不能只有截图 —— 报告里指向同目录另一份 .md 的链接也要落在证据目录上。
+mkdirSync(join(base, "shots"), { recursive: true });
+writeFileSync(join(base, "report.md"), "# 报告\n");
+writeFileSync(join(base, "notes.md"), "# 附记\n");
+writeFileSync(join(base, "shots", "deep.png"), "PNG");
+writeFileSync(join(base, "repro.log"), "服务不了的类型不进清单\n");
+const listing = await api.request(`/tasks/${taskId}/review/files?round=1`);
+assert.equal(listing.status, 200);
+assert.deepEqual(
+  (await listing.json() as { names: string[] }).names,
+  ["notes.md", "report.md", "shots/deep.png"],
+  "清单 = 证据目录里服务得了的全部文件(含子目录、含 .md;服务不了的 .log 不在)",
+);
+assert.equal((await api.request(`/tasks/${taskId}/review/files?round=0`)).status, 400, "非法轮次不给清单");
+assert.equal((await api.request("/tasks/nope/review/files?round=1")).status, 404, "任务不存在不给清单");
+
 const info = await api.request(`/tasks/${taskId}/review`);
 assert.deepEqual(await info.json(), { reviewRequested: true, rounds: [] });
 

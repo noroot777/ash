@@ -183,6 +183,32 @@ try {
   const subFetch = await api.request("/tasks/free-task/free-workflow/review-file?run=sub-run&round=1&name=shots%2Fdeep.png");
   assert.equal(subFetch.status, 404, "接口层仍要先核对这一轮归谁(sub-run 没登记过)");
 
+  // ── 证据清单:展示端靠它判定「报告里这处相对路径说的是证据目录还是工作目录」──────
+  // 判据必须是「清单里有没有它」。靠「先试证据目录、加载失败就换工作目录」是试出来的:
+  // 加载失败只能证明那个文件此刻取不到(审查第 2 轮 F1 同类位置)。清单**不能只有截图** ——
+  // 报告里指向同目录另一份 .md 的链接也要落在证据目录上。
+  const { freeReviewFiles } = await import("../src/free-review-files.js");
+  writeFileSync(join(evidenceDir, "notes.md"), "# 附记\n");
+  writeFileSync(join(evidenceDir, "shot.png"), "PNG");
+  writeFileSync(join(evidenceDir, "repro.log"), "服务不了的类型不进清单\n");
+  assert.deepEqual(
+    freeReviewFiles("free-turn-window-task", "evidence-review", 1),
+    ["notes.md", "report.md", "shot.png"],
+    "清单 = 证据目录里**服务得了**的全部文件(.md 也在;服务不了的 .log 不在)",
+  );
+  const names = await api.request("/tasks/free-turn-window-task/free-workflow/review-files?run=evidence-review&round=1");
+  assert.equal(names.status, 200);
+  assert.deepEqual(
+    (await names.json() as { names: string[] }).names,
+    ["notes.md", "report.md", "shot.png"],
+    "清单路由跟函数同一份结果",
+  );
+  // 归属校验跟文件路由共用一道(sub-run 没登记在这个任务上)。
+  const strayNames = await api.request("/tasks/free-task/free-workflow/review-files?run=sub-run&round=1");
+  assert.equal(strayNames.status, 404, "清单路由也要先核对这一轮归谁");
+  const badRound = await api.request("/tasks/free-turn-window-task/free-workflow/review-files?run=evidence-review&round=0");
+  assert.equal(badRound.status, 404, "非法轮次不给清单");
+
   // 部分成功重试：首次合并的 base 不能被 already_merged 的同值区间覆盖。
   await createTasks([{
     id: "free-retry-task", projectId: "p-git", groupId: null, parentId: null,
