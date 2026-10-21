@@ -294,6 +294,25 @@ if (IS_WINDOWS) {
   try { process.kill(second.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
 }
 
+// ⑯ Windows 那张表的解析:哪种行算「丢了」,哪种只是认得出来但不是进程。
+// 纯函数,所以在任何平台上都跑 —— 这段判据的输入形状只在 Windows 上出现,而它判错的代价
+// 是在那台机器上每次清理都压一笔销不掉的债(真机实测过:0 号被算成丢行)。
+{
+  const { readWindowsRows } = await import("../src/platform.js");
+  const table = [
+    "0\t0\t\tSystem Idle Process",                       // 认得出来、不是进程
+    "4\t0\t2026-10-21T00:00:00.0000000Z\tSystem",
+    "1234\t4\t\tC:\\x\\node.exe --nope",                  // 活着、可是给不出启动时刻
+    "5678",                                               // 行首像个号、整行认不出来
+    "lsof: WARNING something",                            // 压根不像表里的行
+  ].join("\r\n");
+  const read = readWindowsRows(table);
+  assert.equal(read.rows.map((r) => r.pid).join(","), "4,1234", "认得出来的行要进表");
+  assert.equal(read.unnamed, 1, "只有真认不出号的那一行算丢:0 号跳过不计,不像表的行也不计");
+  assert.equal(read.rows[1]!.startedAt, null, "给不出启动时刻 ⇒ null(交给上层记成『核验不了这一代』)");
+  assert.equal(read.rows[1]!.command, "C:\\x\\node.exe --nope", "命令列照原样带上");
+}
+
 for (const child of strays) {
   try { if (child.pid) process.kill(child.pid, "SIGKILL"); } catch { /* 已经没了 */ }
 }

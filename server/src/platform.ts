@@ -158,12 +158,15 @@ foreach ($p in $procs) {
 /**
  * Windows 那张表,**认下来的行 + 没认出号的行数**(见 `ProcessTableRead`)。
  *
+ * 导出只为了钉回归(`test:process-subtrees`):这段判据的输入形状只在 Windows 上出现,
+ * 而它判错的代价是在那台机器上压一笔永远销不掉的债 —— 纯函数能在任何平台上被钉住。
+ *
  * 「没认出来」只算真的认不出的那种:行首像个号、却凑不出字段或号不是整数。0 号(System
  * Idle Process)每次都在这张表里,它永远不可能是我们的进程 —— 实测把它算成「丢了一行」,
  * 于是 Windows 上每一次清理都凭一条假线索压一笔永远销不掉的债(真机实测:行数 298、
  * 「没认出来」1,就是它)。
  */
-function readWindowsRows(text: string): ProcessTableRead {
+export function readWindowsRows(text: string): ProcessTableRead {
   const rows: ProcessRow[] = [];
   let unnamed = 0;
   for (const line of text.split(/\r?\n/)) {
