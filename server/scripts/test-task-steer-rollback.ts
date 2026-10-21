@@ -9,9 +9,10 @@
 // 的那一代」当资格，于是自己把自己挡死；而检查点、提问、完成票当时又共用同一笔 UPDATE，一处
 // 不符就整组放弃。现在清场只在真的清掉了东西时才推代次、并把结果记回快照，三张票也各判资格。
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
@@ -19,12 +20,17 @@ const root = mkdtempSync(join(tmpdir(), "ash-task-steer-rollback-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 
-const [{ db, dbClient, ensureSchema }, schema, runs, steer] = await Promise.all([
-  import("../src/db/index.js"),
-  import("../src/db/schema.js"),
-  import("../src/runs.js"),
-  import("../src/task-steer.js"),
-]);
+const [{ db, dbClient, ensureSchema }, schema, runs, steer, directionState, epoch, status, util] =
+  await Promise.all([
+    import("../src/db/index.js"),
+    import("../src/db/schema.js"),
+    import("../src/runs.js"),
+    import("../src/task-steer.js"),
+    import("../src/task-steer-direction-state.js"),
+    import("../src/task-direction-epoch.js"),
+    import("../src/status.js"),
+    import("../src/util.js"),
+  ]);
 const { projects, scheduledMessages, tasks } = schema;
 await ensureSchema();
 
@@ -41,14 +47,16 @@ const msgRow = async (id: string) =>
  */
 async function seed(
   id: string,
-  opts: { generation?: number; auto?: boolean; resumePrompt?: string } = {},
+  opts: { generation?: number; auto?: boolean; resumePrompt?: string | null } = {},
 ): Promise<void> {
   await db.insert(tasks).values({
     id, projectId: "p", title: id, body: "test", mode: "single", status: "running",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", createdAt: at, updatedAt: at,
     activeTurnToken: `${id}-turn`, activeDirectionToken: `${id}-dir`, activeDirectionVersion: 1,
     completeConfirmedAt: "2026-10-20T08:00:00.000Z",
-    resumePrompt: opts.resumePrompt ?? "主动暂停：保留待续工作", resumePromptAuto: opts.auto ?? false,
+    // `null` = 这一轮压根没挂检查点（只验提问/完成票那两张票时用），跟「缺省」区分开。
+    resumePrompt: opts.resumePrompt === undefined ? "主动暂停：保留待续工作" : opts.resumePrompt,
+    resumePromptAuto: opts.auto ?? false,
     resumePromptGeneration: opts.generation ?? 3,
     question: "保留旧问题", questionOptions: JSON.stringify(["甲", "乙"]),
   });
@@ -282,10 +290,199 @@ try {
     runs.releaseTurn(id);
   }
 
+  // ── 旧改派的**迟到回滚**：它分得清「我离开时那一轮」和「后来又跑完的另一轮」吗 ──────────
+  //
+  // 第 4 轮审查 F1-B。两条备用回滚分支（`restorePreviousDirectionState` 精确 CAS 落空后的那一
+  // 支、`restorePreviousCompletionState`）原来只问「非 running/queued + 活动回合为空 + 提问和
+  // 完成确认为空」。而 `status.ts` 一离开运行态**本来就会**把 token 置 null、方向版本归零 ——
+  // 于是「现在空着」同时对应两个世界：我清掉的那一轮刚结束（回滚该落地），和那之后又完整跑完
+  // 了一轮新工作（回滚是迟到者）。实测后者被当成前者，旧提问和旧完成确认被写回一个早已交完新
+  // 工作的任务（`F1_B_LATE_ROLLBACK_AFTER_NEW_DIRECTION_DONE` /
+  // `F1_B_COMPLETION_FALLBACK_SAME_CLASS`）。
+  //
+  // 现在任务行上多一列永不归零的方向世代（`tasks.direction_epoch`）：回合起跑和方向轮换各 +1，
+  // 任何状态落位都不许碰它。回滚问的是「还是我离开时那一代吗」。
+
+  /** 一个**完整跑完的新回合**：起跑写下自己的方向身份（世代 +1），跑完落终态（三列身份清空）。 */
+  const runFreshTurn = async (taskId: string): Promise<void> => {
+    // 起跑那一笔跟 task-run.ts / orchestrator.ts 是同一个 patch（`turnDirectionStart`）——
+    // 世代这一列的写入口只有那一个，所以这里不是在仿造一个形状，而是在跑同一段代码。
+    // 新回合同样把上一轮残留的完成确认清掉（生产那两处也在同一笔里做这件事）。
+    await db
+      .update(tasks)
+      .set({
+        completeConfirmedAt: null,
+        ...epoch.turnDirectionStart(util.id(), util.id()),
+        updatedAt: util.now(),
+      })
+      .where(eq(tasks.id, taskId));
+    await status.setTaskStatus(taskId, "running");
+    await status.setTaskStatus(taskId, "done");
+  };
+
+  // ── ⑦ 正向控制：回合结束了，但**没有**新回合插进来 ⇒ 两条备用分支照旧恢复 ───────────────
+  //
+  // 这一条和下面两条必须同时成立，否则修法就是把备用分支整条拆掉：改派正常失败时回滚本来就
+  // 可能撞上「旧回合已经按停止/自然结束结算完」，那时三列身份全是空的，只能靠世代放行。
+  {
+    const id = "ended-turn-no-new-work";
+    await seed(id);
+    await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.taskId, id));
+    const previous = await directionState.clearPreviousDirectionState(id, false);
+    await status.setTaskStatus(id, "done"); // 旧回合按自然结束结算：token 清空、版本归零
+    assert.equal(
+      await directionState.restorePreviousDirectionState(id, previous), true,
+      "没有新方向开过工 ⇒ 备用分支照旧放行（闸不能收得连自己都回不去）",
+    );
+    const after = await taskRow(id);
+    assert.equal(after.question, "保留旧问题", "用户的问题回得来");
+    assert.deepEqual(JSON.parse(after.questionOptions ?? "null"), ["甲", "乙"]);
+    assert.equal(after.completeConfirmedAt, "2026-10-20T08:00:00.000Z", "完成确认回得来");
+    assert.equal(after.resumePrompt, "主动暂停：保留待续工作", "那段待续工作也回得来");
+  }
+  /**
+   * `restorePreviousCompletionState` 的生产前置（`finishStoppedSteer`）：先把方向状态放回去，
+   * 结算再把那张完成票消费掉 —— 它补的就是结算消费之后留下的那个空。单独调它而不摆出这个
+   * 前置的话，整笔会被「旧提问对不上」挡在门外，验不到世代那一条。
+   */
+  const settleConsumesCompletion = async (taskId: string): Promise<void> => {
+    await db
+      .update(tasks)
+      .set({ completeConfirmedAt: null, updatedAt: util.now() })
+      .where(eq(tasks.id, taskId));
+  };
+
+  {
+    // `restorePreviousCompletionState` 的正向控制（停止抢在引导前面落地那一支：结算已经跑完，
+    // 只剩这一张票要补）。不挂检查点，把它和检查点那张票的判据分开看。
+    const id = "ended-turn-completion-back";
+    await seed(id, { resumePrompt: null });
+    await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.taskId, id));
+    const previous = await directionState.clearPreviousDirectionState(id, false);
+    await status.setTaskStatus(id, "done");
+    await directionState.restorePreviousDirectionState(id, previous);
+    await settleConsumesCompletion(id);
+    await directionState.restorePreviousCompletionState(id, previous);
+    assert.equal(
+      (await taskRow(id)).completeConfirmedAt, "2026-10-20T08:00:00.000Z",
+      "没有新回合插进来 ⇒ 那张完成票补得回去",
+    );
+  }
+
+  // ── ⑧ 迟到回滚撞上一个**已经跑完并结束**的新回合 ⇒ 旧提问不许回来（F1-B）────────────────
+  //
+  // 只验提问那张票：检查点有它自己的代次闸（真实链路上由结算的 `resumePromptVoidPatch` 作废），
+  // 三张票各判资格是第 3 轮 F1-C 的结论，这里不把它们重新搅在一起。
+  {
+    const id = "late-rollback-after-new-turn";
+    await seed(id, { resumePrompt: null });
+    await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.taskId, id));
+    const previous = await directionState.clearPreviousDirectionState(id, false);
+    await status.setTaskStatus(id, "done"); // 旧回合结束：三列身份被清空
+    await runFreshTurn(id);                 // 这中间任务又完整跑完了一轮新工作
+    const before = await taskRow(id);
+    assert.deepEqual(
+      [before.question, before.completeConfirmedAt, before.activeTurnToken], [null, null, null],
+      "台子前提：新回合跑完之后，这几列跟「我刚清掉、还没人动过」长得一模一样",
+    );
+
+    await directionState.restorePreviousDirectionState(id, previous);
+    const after = await taskRow(id);
+    assert.equal(
+      after.question, null,
+      "新工作都交完了，旧方向的问题不许凭一个空位冒出来 —— 用户会对着一个早就过去的问题作答（F1-B）",
+    );
+    assert.equal(after.questionOptions, null, "候选同上");
+    assert.equal(
+      after.completeConfirmedAt, null,
+      "同一笔里的完成票也一样：它会被下一次结算当成这一轮交了卷",
+    );
+  }
+
+  // ── ⑨ 同一时序下的 `restorePreviousCompletionState` ⇒ 旧完成确认不许回来（F1-B）──────────
+  //
+  // 它天生只有备用分支那一种形态（回合已经结束，token 必然是 null），所以世代是它**唯一**的
+  // 归属判据 —— 比空活动回合和旧正文/提问，一个跑完新回合的任务照样全都对得上。
+  {
+    const id = "late-completion-after-new-turn";
+    await seed(id, { resumePrompt: null });
+    await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.taskId, id));
+    const previous = await directionState.clearPreviousDirectionState(id, false);
+    await status.setTaskStatus(id, "done");
+    await directionState.restorePreviousDirectionState(id, previous);
+    await settleConsumesCompletion(id);
+    await runFreshTurn(id); // 这中间任务又完整跑完了一轮新工作
+    const before = await taskRow(id);
+    assert.deepEqual(
+      [before.activeTurnToken, before.completeConfirmedAt, before.question],
+      [null, null, "保留旧问题"],
+      "台子前提：除了世代，这一笔的每一条资格（空活动回合、空完成确认、旧提问原样）都对得上",
+    );
+
+    await directionState.restorePreviousCompletionState(id, previous);
+    assert.equal(
+      (await taskRow(id)).completeConfirmedAt, null,
+      "迟到的那张完成票落不进来 —— 否则这个任务会凭一轮早就结束的工作被记成已交卷（F1-B）",
+    );
+  }
+
+  // ── ⑩ F1-B 的结构锁：**方向世代这一列的写入口只有 task-direction-epoch.ts** ───────────────
+  //
+  // 上面三条钉得住现在这几个调用点，而这道闸能被绕开的方式只有一种：某处自己 `.set` 这一列、
+  // 或者在某条状态落位里顺手把它置回某个值（`status.ts` 清三列身份时就差点连它一起清）。
+  // 「以后记得走 writer」是靠自觉，所以按语句扫一遍 —— 这正是 `task-resume-prompt.ts` 那一列
+  // 学过三次的同一课（第 3 轮审查 F1：代次只有在所有 writer 都维护它时才是归属凭证）。
+  {
+    // 取本机路径只能走 `fileURLToPath`：`URL.pathname` 是百分号编码的 URL 路径，仓库目录名里
+    // 有空格时它给的是 `%20`，结构锁会在那种检出上「悄悄通不了」（第 4 轮审查 N2）。
+    const srcDir = fileURLToPath(new URL("../src/", import.meta.url));
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) walk(join(dir, entry.name));
+        else if (entry.name.endsWith(".ts")) files.push(join(dir, entry.name));
+      }
+    };
+    walk(srcDir);
+    assert.ok(files.length > 50, `台子前提：扫到的源文件太少（${files.length}），路径多半不对`);
+    const offenders: string[] = [];
+    for (const file of files) {
+      if (file.endsWith("task-direction-epoch.ts")) continue; // 存储层本身
+      const src = readFileSync(file, "utf8");
+      // (a) `update(tasks)` 的 `.set({…})` 字面量里直写这一列
+      for (const m of src.matchAll(/update\(\s*tasks\s*\)/g)) {
+        const setAt = src.indexOf(".set(", m.index);
+        if (setAt < 0) continue;
+        let depth = 0;
+        let end = setAt + 4;
+        for (; end < src.length; end += 1) {
+          if (src[end] === "(") depth += 1;
+          else if (src[end] === ")") { depth -= 1; if (depth === 0) break; }
+        }
+        const block = src.slice(setAt, end + 1);
+        if (/\bdirectionEpoch\s*:/.test(block)) {
+          offenders.push(`${file.slice(srcDir.length)}：${block.replace(/\s+/g, " ").slice(0, 90)}`);
+        }
+      }
+      // (b) 先攒 patch 对象再 `.set(patch)` 的那种写法（`status.ts` 就是这个形状）——
+      //     归零一次就等于把这道闸整条废掉，而它不会出现在任何 `.set({…})` 字面量里。
+      for (const m of src.matchAll(/\.directionEpoch\s*=[^=]/g)) {
+        offenders.push(`${file.slice(srcDir.length)}：${src.slice(m.index, m.index + 60).split("\n")[0]}`);
+      }
+    }
+    assert.deepEqual(
+      offenders, [],
+      "方向世代只许由 task-direction-epoch.ts 写（用它导出的 patch）——自己 `.set` 或者在状态"
+      + `落位里把它归零，迟到的回滚就又分不清「我那一轮」和「后来那一轮」了：\n${offenders.join("\n")}`,
+    );
+  }
+
   console.log(
     "✓ 原生引导发送失败后的回滚：ACK 后清场不挡自己的回滚（检查点/提问/完成票三样都回来）"
     + " / 期间真有新占用时只有检查点过期 / 在路上的旧交代填不回新方向 / 作废迟到那一段之后照样回得去"
-    + " / Codex 那条只有一次清场的链同样回得去 / 取快照和落笔之间换了占用时整笔改派被拒（真人的主动暂停不被洗成系统等待）",
+    + " / Codex 那条只有一次清场的链同样回得去 / 取快照和落笔之间换了占用时整笔改派被拒（真人的主动暂停不被洗成系统等待）"
+    + " / 回合结束但没有新工作插进来时两条备用分支照旧放行"
+    + " / 这中间又完整跑完一轮新回合时迟到的旧提问和旧完成确认都落不进来（方向世代，写入口上了结构锁）",
   );
 } finally {
   await releaseTmpDb();
