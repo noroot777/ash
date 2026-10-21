@@ -40,7 +40,7 @@ import { reclaimState } from "./monitor-reclaim-evidence.js";
 import { stopRecoveryRetries } from "./monitor-reattach.js";
 import { clearSpawnIdentity, readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
 
-import { consumeTailChunk, flushBuffer, linesBody, renderLines, type FlushOutcome } from "./monitor-consume.js";
+import { consumeTailChunk, drainOwed, flushBuffer, linesBody, renderLines } from "./monitor-consume.js";
 import { deliverResultHandoff } from "./monitor-events.js";
 // 消费层是从这个文件拆出去的（见 monitor-consume.ts 文件头）。这两个仍从这里导出:
 // 它们的调用方（离线补读、创建协议）本来就按「找 monitors 要」在写，没必要跟着搬家。
@@ -382,24 +382,30 @@ export async function finish(
       // 进程刚死那一瞬写进去的最后几行也算数：先把文件吸干，再把缓冲里剩下的一并推出去。
       rt.tail.drain();
       rt.tail.stop();
-      // **按批排干**（一批有上界，见 `MONITOR_MAX_LINES_PER_FLUSH`）：每一批自己落库，
-      // 哪一批没交付就停在那儿,剩下的连它一起由下面的 `owed` 接走 —— 这条运行时马上就没了,
-      // `closing` 之下 `armFlush` 不再排重试,没人会回来替它们试第二次。
+      // **排干这件事归消费层**（`drainOwed`，判据见那边文件头 ⑤）:按批推（一批有上界，见
+      // `MONITOR_MAX_LINES_PER_FLUSH`），推不动的那几行交回来 —— 由下面的 `owed` 跟结束通知
+      // 一起落库交接。
       //
-      // 上一版这里是「推一次,成不成都不管」(`.catch(() => {})`),于是第 2 轮审查 F1-A 那一幕:
-      // 命令自己跑完、最后那一批里正是 `FINAL_DONE`、通知那一笔 INSERT 失败一次 —— 行就地
-      // 蒸发,而终态、结束通知、回收责任照旧一路写下去(实测 events=0、游标 0、待发里只有
-      // 【哨兵结束】)。接回那条路也捡不回来:它只枚举 running。
-      while (rt.buffer.length) {
-        const outcome = await serialize(monitorId, () => flushBuffer(monitorId, rt))
-          .catch((): FlushOutcome => "owed");
-        if (outcome !== "delivered") break;
-      }
-      if (rt.buffer.length) owed = rt.buffer.splice(0, rt.buffer.length);
+      // 这一层**不自己判「还有没有东西要交接」**（第 4 轮审查 F1）。上一版这里的循环条件是
+      // 「缓冲非空」,而 `flushBuffer` 一开头就把在途那一批 `splice` 走了 —— 于是在途那一笔
+      // 事件 INSERT 挂在半空中时,这里看一眼空缓冲就认定没什么要交接,结束通知里一个字都没
+      // 附、终态当场落定;那笔 INSERT 随后失败,行被放回一个已经撤掉、而且 `closing` 的运行
+      // 时:`armFlush` 不排重试、接回只枚举 running、通知里也没有它 —— 那一行(多半就是
+      // agent 要的结果本身)此后谁都不管了（审查实测:自退与到期两路都是 events=0、offset=0、
+      // 待发里只有【哨兵结束】）。
+      //
+      // 更早那一版连「推不动」都不管（`.catch(() => {})`，第 2 轮审查 F1-A）:行就地蒸发,
+      // 而终态、结束通知、回收责任照旧一路写下去。
+      owed = await drainOwed(monitorId, rt);
     } else {
       // 任务自己已经结束的那一路：缓冲里这几行一个都不推。`notify=false` 只挡住最后那条
       // 「哨兵结束」，挡不住这一批——它照样会排进待发队列，而紧接着的 flushPendingForTask
       // 会立刻把它送进会话（第 1 轮审查实测：任务 done 之后被重新拉起跑了一轮）。
+      //
+      // **这一路算「明确放弃」**（见消费层文件头 ⑤ 的三种归宿）:在途那一批要么自己落了库、
+      // 要么失败放回这个再也没人读的缓冲 —— 两样都对得上「这几行一个都不推」这个决定,所以
+      // 这里不等它。点停那一路要的是另一半（已攒的行照常推完，见 monitor-stop.ts），它走的
+      // 是上面那一支。
       rt.tail.stop();
       rt.buffer.length = 0;
       rt.readTo = null;

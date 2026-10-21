@@ -12,6 +12,11 @@
 //    这一条是 ① 的对称面:①管「这一批」,④管**整个游标**—— 空行快进、分批、失败重试、
 //    收尾排干、离线补读全都在写同一个游标,所以判据只有一份(`commitProgress`),而不是每个
 //    写入口各自现场判一次时序。
+// ⑤ **终态放行之前,每一批都得有归宿**:已交付 / 已明确放弃 / 已持久移交,三者之一
+//    （第 4 轮审查 F1）。④管的是游标,⑤管的是**那几行本身**,而两者的判据是同一个
+//    `outstanding` —— 「缓冲这会儿是空的」既不能当成「游标可以推」,也不能当成「没有东西
+//    要交接」:`flushBuffer` 一开头就把那一批 `splice` 走了。收尾那一路问这件事走
+//    `drainOwed`,它是唯一答得出「还欠着哪几行」的地方。
 import { eq } from "drizzle-orm";
 import {
   MONITOR_BATCH_MS,
@@ -228,6 +233,46 @@ export async function flushBuffer(monitorId: string, rtOverride?: Runtime): Prom
   } finally {
     rt.inflight -= 1;
   }
+}
+
+/**
+ * 收尾那一路的**排干**:把这条哨兵手上没结清的内容全部结清,把结清不掉的那几行**交出去**。
+ *
+ * 判据是 `outstanding`,不是 `rt.buffer.length`（第 4 轮审查 F1）。上一版这个循环写在 `finish`
+ * 里、条件是「缓冲非空」—— 于是审查实测的那一幕:命令打完 `FINAL_INFLIGHT=0` 就睡,那一笔
+ * 事件 INSERT 挂在半空中(缓冲已经空了、`inflight=1`),命令随后自己退出 —— `finish` 看一眼
+ * 空缓冲就认为没什么要交接,结束通知里一个字都没附,终态落定;再让那笔 INSERT 失败,行被放回
+ * 一个**已经撤掉、而且 closing** 的运行时:`armFlush` 不再排重试,接回那条路只枚举 running,
+ * 结束通知里也没有它 —— 那一行(多半就是 agent 要的结果本身)此后谁都不管了。
+ *
+ * **进队列一次就等于等在途那一批**:推送一律排在 `serialize(monitorId)` 上,在途那一批比我们
+ * 先排进去,所以我们这一轮一定排在它后面 —— 它要是失败放回,那几行在我们这一轮看缓冲时已经
+ * 在里面了。所以这里的循环只要**按 `outstanding` 决定要不要再进一次队列**,不必（也不能）
+ * 自己去 await 那一批:它是别人的 promise。
+ *
+ * 调用方必须**不在** `serialize(monitorId)` 的队列里（`finish` 一路都是这么调的）—— 在队列里
+ * 再排一次就是等自己后面那一位（同一条约束见 `teardownRuntimeLocked`:它在队列里,所以直接
+ * 调 `flushBuffer`）。
+ */
+export async function drainOwed(monitorId: string, rt: Runtime): Promise<string[]> {
+  while (outstanding(rt)) {
+    const outcome = await serialize(monitorId, () => flushBuffer(monitorId, rt))
+      .catch((): FlushOutcome => "owed");
+    // 没交付就停:`closing` 之下 `armFlush` 不再排重试,再转一圈也只是同一笔失败
+    //（`idle` = 在途那一批自己成了,缓冲里本来就没东西）。
+    if (outcome !== "delivered") break;
+  }
+  const owed = rt.buffer.splice(0, rt.buffer.length);
+  // 走到这儿 `inflight` 必须是 0:所有推送都排在那条队列上,而我们刚从队列里出来,定时器也
+  // 已经撤了。不是 0 就说明**又多了一个不走队列的推送入口** —— 那一批的归宿这里答不出来,
+  // 只能当场出声（静默的话它就是下一次「结果再也收不到」）。
+  if (rt.inflight > 0) {
+    console.error(
+      `[ash] 哨兵 ${monitorId} 排干之后还有 ${rt.inflight} 批在途:有推送没走 serialize 队列,`
+      + `这一批的归宿没人答得出来（已交出 ${owed.length} 行）`,
+    );
+  }
+  return owed;
 }
 
 async function flushLocked(

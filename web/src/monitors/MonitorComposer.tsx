@@ -4,7 +4,8 @@ import {
   MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_WAKE_LABEL, MONITOR_WAKE_TARGETS, monitorDurationOptions,
 } from "@ash/shared/monitor";
 import type { MonitorWakeTarget } from "@ash/shared/monitor";
-import { END_CONDITION_HINT, neverExitsOnItsOwn, parseEndCondition } from "@ash/shared/monitor-end-condition";
+import { neverExitsOnItsOwn } from "@ash/shared/command-never-exits";
+import { END_CONDITION_HINT, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import type { StartMonitorInput } from "./useTaskMonitors.ts";
 
 // **从共享常量推导，不要在这里另列一张表**：写死的那版在时长上限改掉之后整张失真

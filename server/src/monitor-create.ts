@@ -50,7 +50,8 @@
 // 而那一刻要收掉的进程由**句柄**证明所有权,不经过 pid 身份那条路。
 import { desc, eq } from "drizzle-orm";
 import { MONITOR_MAX_PER_TASK, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
-import { endConditionDemand, neverExitsOnItsOwn, parseEndCondition } from "@ash/shared/monitor-end-condition";
+import { neverExitsOnItsOwn } from "@ash/shared/command-never-exits";
+import { endConditionDemand, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import { db } from "./db/index.js";
 import { monitors, projects, sessions, tasks } from "./db/schema.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";

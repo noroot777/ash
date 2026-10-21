@@ -6,16 +6,18 @@
 //  ① 约定的那一行一出现就收工（这是「命令自己永远不会结束」那一类的唯一非到期出路）
 //  ② 命令自己不会结束、又没给结束条件 ⇒ **一个字都不许跑**，而且拦下时三条出路给全
 //  ③ 判「会不会自己结束」只认**明确**的几种:误判的代价不对称，拦错 = 做得成的事做不成
-//  ④ 匹配有计算上界:服务里一条调用方正则都不构造（`^(a+)+$` 能把唯一那条线程卡死）
+//  ④ 匹配**和结构判据**都有计算上界:服务里一条调用方正则都不构造（`^(a+)+$` 能把唯一
+//     那条线程卡死）,深嵌套的命令也不许把那条线程占住（两处都是同步调用）
 //  ⑤ 库里存着一条**这一版读不出来**的条件 ⇒ 出声,不静默降级、也不许界面替它背书
 //  ⑥ 命中那一行哪怕排在摘要之外,也必须出现在推给 agent 的那条消息里
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { neverExitsOnItsOwn } from "@ash/shared/command-never-exits";
 import {
   END_CONDITION_HINT, END_CONDITION_SYNTAX,
-  endConditionHit, endConditionNote, neverExitsOnItsOwn, parseEndCondition,
+  endConditionHit, endConditionNote, parseEndCondition,
 } from "@ash/shared/monitor-end-condition";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
@@ -85,7 +87,6 @@ setInterval(() => {}, 1000);
     // ↓ 第 3 轮审查 F3 之后判据倒过来写（先证明会跑、再问会不会结束），这几条是**赚回来**的:
     //   上一版「条件分支在场 ⇒ 跟随型那一扫整个不做」把它们一起放过了
     ["if false; then :; fi; tail -F x", "tail -f/-F"],            // 分支之后那一条照跑
-    ["while true; do tail -F x; break; done", "tail -f/-F"],      // 恒真循环第一圈就挂在它上
     ["for f in a b; do tail -F $f; done", "tail -f/-F"],          // 列表非空 ⇒ 循环体一定跑
     ["exec tail -F x", "tail -f/-F"],                             // 本进程被换成了那个 tail
     ["( tail -F x )", "tail -f/-F"],                              // 子 shell 里的照跑
@@ -133,7 +134,25 @@ setInterval(() => {}, 1000);
     ": tok; ( while :; do sleep 0.2; done ) & sleep 0.6; exit 0", // 同上（回归台子里的真命令）
     "false && { tail -F x; }",                               // 组整个挂在短路右边
     "( tail -F x",                                           // 括号没配上对 ⇒ 读不懂就放行
+    // ↓ 第 4 轮审查 F2 实测的**误判**:七条全部 `/bin/sh` 退出 0 且打出 DONE,而创建入口
+    //   一律 409。共同点是判据只看了「一个词 + 一小段」,没问「这件事在它自己的作用域里
+    //   成立吗」（见 shared/src/command-never-exits.ts 文件头 ④）。
+    "while true && false; do :; done; printf 'DONE\n'",      // 恒真只看了循环头第一个词
+    "until false || true; do :; done; printf 'DONE\n'",      // 同上,`until` 这一边
+    "while true; do exec printf 'DONE\n'; done",             // exec 把本进程换掉 ⇒ 没有第二圈
+    "false && { printf 'x'; tail -F /dev/null; }; printf 'DONE\n'",  // 整组被短路,组内 `;` 不作数
+    "false && ( printf 'x'; tail -F /dev/null ); printf 'DONE\n'",   // 圆括号组同样
+    "for item in one; do break; tail -F /dev/null; done; printf 'DONE\n'",    // 跳转之后跑不到
+    "for item in one; do continue; tail -F /dev/null; done; printf 'DONE\n'", // `continue` 同样
   ]) assert.equal(neverExitsOnItsOwn(command), null, `不许拦：${command}`);
+  // 跳转压住的只是**它后面**那一段,不是整个循环体 —— 不然这两条真阳会跟着一起放掉。
+  for (const [command, hit] of [
+    // 第一圈就挂在 `break` 前面那一条上
+    ["while true; do tail -F x; break; done", "tail -f/-F"],
+    ["for item in one; do tail -F /dev/null; break; done", "tail -f/-F"],
+    // `continue` 不是出路:回到循环开头而已
+    ["while true; do continue; done", "while true / until false"],
+  ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该判成不会自退：${command}`);
   // 条件分支**不传染**:循环体里有 `if` 不改变「这个循环没有出路」这件事,照旧要拦。
   assert.equal(
     neverExitsOnItsOwn("while true; do if [ -f x ]; then cat x; fi; sleep 5; done"),
@@ -266,7 +285,22 @@ setInterval(() => {}, 1000);
   const rtSrc = readSource(join(HERE, "../src/monitor-consume.ts"));
   assert.doesNotMatch(rtSrc, /\.unshift\(\.\.\./, "放回缓冲不许展开传参（见 returnToBuffer）");
   assert.match(rtSrc, /splice\(0, MONITOR_MAX_LINES_PER_FLUSH\)/, "一批必须有上界");
-  console.log("✓ 结束条件的匹配有计算上界：服务里不构造调用方正则，锚点语义各自正确，读不出来的不许背书");
+
+  // **结构判据的工作量也要有上界**（第 4 轮审查 N1）。那一版 `matchEnd` 每遇到一个
+  // `if`/`do` 就从当前位置往后找配对、`wordsIn` 每进一个区就把整区的词重列一遍 —— 嵌套
+  // 一深就是平方级（审查实测:1 万层 `for` 单次 1909ms）,而创建入口和表单都是**同步**调用
+  // 它:那段时间里页面、停止按钮、到期收尾跟 ⑦c 开头说的那一幕一样全卡着。
+  // 预算给得很松（跟那一节同一个理由）：它要的只是「不是平方级」。
+  {
+    const deep = (n: number) => `${"for item in one; do ".repeat(n)}:; ${"done; ".repeat(n)}`;
+    for (const n of [1_000, 10_000]) {
+      const t0 = Date.now();
+      assert.equal(neverExitsOnItsOwn(deep(n)), null, "深嵌套里什么都证明不出来 ⇒ 放行");
+      const ms = Date.now() - t0;
+      assert.ok(ms < 400, `${n} 层嵌套的结构判据要线性:实测 ${ms}ms（平方级那一版 1 万层 1909ms）`);
+    }
+  }
+  console.log("✓ 匹配和结构判据都有计算上界：服务里不构造调用方正则，深嵌套命令也占不住那条线程");
 }
 // ── ⑦g 库里存着一条**这一版读不出来**的结束条件 ⇒ 出声，不静默降级（第 2 轮审查 F2）──
 // 结束条件的语义换过一轮（上一版收 JS 正则源文，这一版是字面量候选）。`^(READY|FAILED)$`

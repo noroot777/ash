@@ -170,6 +170,10 @@
       "types": "./src/monitor-end-condition.ts",
       "default": "./src/monitor-end-condition.ts"
     },
+    "./command-never-exits": {
+      "types": "./src/command-never-exits.ts",
+      "default": "./src/command-never-exits.ts"
+    },
     "./monitor-claude": {
       "types": "./src/monitor-claude.ts",
       "default": "./src/monitor-claude.ts"
