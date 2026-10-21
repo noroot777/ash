@@ -156,9 +156,9 @@ const liveSegments = (events: ReturnType<typeof live>[]) => {
   const first = built[0] as Extract<(typeof built)[number], { kind: "agent" }>;
   return first.segments;
 };
-const tracedSegments = (events: (AgentEvent | { kind: string; [key: string]: unknown })[]) => {
+const tracedSegments = (events: (AgentEvent | { kind: string; [key: string]: unknown })[], output = "") => {
   const built = buildConversationItems(
-    [{ session, output: "", trace: events.map((event, index) => traced(event, 1_000 * (index + 1))) }],
+    [{ session, output, trace: events.map((event, index) => traced(event, 1_000 * (index + 1))) }],
     [session],
     [],
   );
@@ -206,4 +206,31 @@ assert.equal(
 );
 assert.equal(awaitingUpstream([]), false);
 
-console.log("上游重试排在执行过程里它发生的那一步下面：落盘、直播、折叠、duet 四路一致，不标红，且恢复输出会解除等待");
+// **用量不进执行过程,却是实打实的「上游回了话」**:直播只拿它记账、重建前又把它整条滤掉,
+// 于是同一串事件在普通任务判「还在等」、在讨论判「已恢复」—— 同一件事两套口径(第 4 轮 N1)。
+const USAGE = { kind: "usage", usage: { inputTokens: 12, outputTokens: 34 } } as unknown as AgentEvent;
+assert.equal(
+  awaitingUpstream(liveSegments([live("c1", BASH), live("c2", NOTICE), live("c3", USAGE)])),
+  false,
+  "用量都回来了(请求显然已经回话),直播还说在等上游(N1)",
+);
+assert.equal(
+  awaitingUpstream(tracedSegments([BASH, NOTICE, USAGE])),
+  false,
+  "刷新之后同一串事件又说在等上游 —— 展示过滤把恢复信号一起滤掉了(N1)",
+);
+// 上面那串压根没有正文,走的是「整轮没正文」那一档;有正文的这一串才走分段循环。
+assert.equal(
+  awaitingUpstream(tracedSegments([{ kind: "text", text: "先说了半句。" } as AgentEvent, NOTICE, USAGE], "先说了半句。")),
+  false,
+  "正文之后的提示已经被用量解除了,分段循环还说在等上游(N1)",
+);
+// 对齐失败那一路(部分写入 / 历史 trace):正文只能整块给,但「此刻还在不在等」不跟着丢。
+const unaligned = tracedSegments(
+  [BASH, { kind: "text", text: "trace 里这半句" } as AgentEvent, NOTICE],
+  "库里那份正文跟 trace 对不上。",
+);
+assert.equal(unaligned.length, 1, "这份用例要的就是对不齐、退成一整段那一路");
+assert.equal(awaitingUpstream(unaligned), true, "对不齐那一路把等待状态丢了(N1)");
+
+console.log("上游重试排在执行过程里它发生的那一步下面：落盘、直播、折叠、duet 四路一致，不标红，恢复输出(含只记账的用量)会解除等待");

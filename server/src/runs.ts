@@ -184,6 +184,16 @@ export function isCanceling(taskId: string): boolean {
 }
 
 /**
+ * 停止/暂停标记**只看一眼,不消费**。
+ *
+ * 回合收尾要把「这一轮是被停的」跟退出码一起落库(受控停止和崩溃的退出码一模一样),而标记
+ * 的消费权归结算那一方 —— 读的人不能顺手把它取走。
+ */
+export function peekStopped(taskId: string): StopSettle | null {
+  return stopping.get(taskId) ?? null;
+}
+
+/**
  * 冻结一个**正在起跑**的回合：已 claim、还没 spawn，所以没有 handle 可杀。
  * 返回 false = 这个任务根本没有回合在起跑（调用方无事可做）。
  *

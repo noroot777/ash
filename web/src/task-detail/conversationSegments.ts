@@ -6,6 +6,7 @@
 //
 // 从 conversationModel 拆出来的一族:那边管「会话 → 气泡」,这里管「事件 → 段落」。
 import type { AgentEvent } from "@ash/shared";
+import { resumesWaiting } from "@ash/shared/waiting";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 
@@ -67,10 +68,31 @@ export function awaitingUpstream(segments: AgentContentSegment[]): boolean {
  */
 export const awaitingAfterEvent = (event: AgentAuxEvent): boolean => event.kind === "notice";
 
+/**
+ * 这一条**原始** trace 事件把等待状态置成什么:`true`=在等、`false`=解除、`null`=与它无关。
+ *
+ * **「这一行画不画得出来」和「上游回没回话」是两件事**(第 4 轮审查 N1):`usage` 不进执行
+ * 过程(它只是这一轮的账,渲出来就是一行莫名的异常),可它到达就说明请求已经回来了;`run` 是
+ * `beginTurn` 落的执行器参数,两件事都不是。恢复判据共用 `@ash/shared/waiting` 那一份 ——
+ * 服务端、讨论、这里同一个口径,各算一份就会漂。
+ */
+export function awaitingAfterTraceEvent(event: SessionTraceEntry["event"]): boolean | null {
+  if (event.kind === "run") return null;
+  if (event.kind === "error" && event.level === "notice") return true;
+  return resumesWaiting(event) ? false : null;
+}
+
+/** 走完这一串原始事件之后还在不在等(上面那一位的折叠)。 */
+const awaitingAfterTrace = (entries: SessionTraceEntry[]): boolean =>
+  entries.reduce<boolean>((state, entry) => awaitingAfterTraceEvent(entry.event) ?? state, false);
+
 export type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TracedContentEntry = SessionTraceEntry & {
   event: Exclude<SessionTraceEntry["event"], { kind: "usage" | "run" }>;
 };
+/** 这一条进不进执行过程的展示(账与执行器参数不进,见 awaitingAfterTraceEvent)。 */
+const isContentEntry = (entry: SessionTraceEntry): entry is TracedContentEntry =>
+  entry.event.kind !== "usage" && entry.event.kind !== "run";
 type TracedAttachmentEntry = TracedContentEntry & {
   event: Extract<SessionTraceEntry["event"], { kind: "attachment" }>;
 };
@@ -109,26 +131,20 @@ export function contentSegments(
   idPrefix: string,
 ): AgentContentSegment[] {
   // usage 只是这一回合的账,不是执行过程的一步 —— 漏掉这道过滤它会被 auxEvent
-  // 当成未知事件渲染成一行异常。
-  const entries = traced.filter((entry): entry is TracedContentEntry => (
-    entry.event.kind !== "usage" && entry.event.kind !== "run"
-  ));
+  // 当成未知事件渲染成一行异常。**等待状态不走这道过滤**(见 awaitingAfterTraceEvent)。
+  const entries = traced.filter(isContentEntry);
   const auxEntries = entries.filter((entry) => entry.event.kind !== "text" && entry.event.kind !== "attachment");
   const attachmentEntries = entries.filter(
     (entry): entry is TracedAttachmentEntry => entry.event.kind === "attachment",
   );
   if (!entries.some((entry) => entry.event.kind === "text")) {
-    // 一段都没切时(整轮压根没有正文),等待状态由**最后一条**事件决定 —— 附件也算一条输出。
-    const last = entries.at(-1);
-    const lastAux = last && last.event.kind !== "attachment" && last.event.kind !== "text"
-      ? auxEvent(last.event, last.at)
-      : null;
+    // 一段都没切时(整轮压根没有正文),这一段的等待状态就是走完整串原始事件之后那一位。
     return [{
       id: `${idPrefix}:0`,
       markdown: fallbackMarkdown,
       events: auxEvents(auxEntries),
       attachments: attachmentEntries.map((entry) => entry.event.path),
-      awaiting: !!lastAux && awaitingAfterEvent(lastAux),
+      awaiting: awaitingAfterTrace(traced),
     }];
   }
 
@@ -152,24 +168,28 @@ export function contentSegments(
     previous.awaiting = current.awaiting;
     current = newCurrent();
   };
-  for (const entry of entries) {
+  const place = (entry: TracedContentEntry): void => {
     if (entry.event.kind === "text") {
       current.markdown += entry.event.text;
-      current.awaiting = false;
-      continue;
+      return;
     }
     if (entry.event.kind === "attachment") {
       if (current.markdown) pushCurrent();
       if (!current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
-      current.awaiting = false;
-      continue;
+      return;
     }
     const event = auxEvent(entry.event, entry.at);
     // 画不出来的通知不另起一段(见 segmentHasVisibleContent):单独成段就是正文后面
     // 那个空 section。事件照旧挂在当前段上,抽屉那边仍取得到。
     if (current.markdown && isVisibleExecutionEvent(event)) pushCurrent();
     current.events = appendExecutionEvent(current.events, event);
-    current.awaiting = awaitingAfterEvent(event);
+  };
+  for (const entry of traced) {
+    // 分段只收进得了执行过程的那些,等待状态认**全部**原始事件 —— 两件事分开算(N1)。
+    if (isContentEntry(entry)) place(entry);
+    const next = awaitingAfterTraceEvent(entry.event);
+    // 落在「处理完这一条之后」的那一段上:上面 place 可能已经另起了一段。
+    if (next !== null) current.awaiting = next;
   }
   pushCurrent();
   /* 收尾:**数据优先于布局**。整段 trace 里一个字都没有、只有画不出来的后台通知时,
@@ -192,6 +212,9 @@ export function contentSegments(
     markdown: fallbackMarkdown || structuredMarkdown,
     events: auxEvents(auxEntries),
     attachments: attachmentEntries.map((entry) => entry.event.path),
+    // 对不齐只影响**正文怎么切**,不影响「此刻还在不在等」。丢了这一位,部分写入/历史
+    // trace 的那一路就会把一个还在等的回合显示成已经恢复(N1)。
+    awaiting: awaitingUpstream(segments),
   }];
 }
 

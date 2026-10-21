@@ -8,7 +8,7 @@ import { closeLeadTurns, heldTurns, holdTurn, releaseHeldTurn } from "./lead-tur
 import { IDLE_MS, createLeadStatus } from "./lead-status.js";
 import { now } from "../util.js";
 import { setTaskStatus } from "../status.js";
-import { untrackRun, takeStopped } from "../runs.js";
+import { untrackRun, takeStopped, type StopSettle } from "../runs.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import {
   LOST_SESSION_PATCH,
@@ -125,7 +125,7 @@ async function consume(lead: Lead): Promise<void> {
       if (event.kind === "turnEnd") {
         // 回合收口 = 这一轮不再「在等」了。常驻调度台没有 done 事件,这里是它唯一的边界;
         // 不清的话一台答完待命的调度台会一直在手机上挂着「正在重试」(第 3 轮审查 F1)。
-        clearSessionWaiting(lead.sessId);
+        clearSessionWaiting(lead.sessId, lead);
         flushTraceText();
         await endTurn(lead);
         // 上一回合欠着的新会话凭据在这儿补:补上了,轮换事宜这才算真翻篇。
@@ -170,7 +170,8 @@ async function consume(lead: Lead): Promise<void> {
       }
       // 排在 beginTurn 之后:自发回合的第一条事件就可能是提示,回合身份得先有(见
       // session-waiting.ts —— 没有身份的提示一律不记)。
-      trackSessionWaiting(lead.sessId, lead.turnStart, event);
+      // 摘牌的台一个字都不许写,内存这份同理:它的等待状态归接管的那台(同 traceLead/updateOwnSession)。
+      if (!lead.retired) trackSessionWaiting(lead.sessId, lead, lead.turnStart, event);
       if (event.kind === "text") {
         lead.out.write(event.text);
         pendingTraceText += event.text;
@@ -477,16 +478,19 @@ async function closeLead(
   aborted = false,
 ): Promise<void> {
   clearIdle(lead);
-  clearSessionWaiting(lead.sessId); // 这台进程没了,内存里那条等待状态跟着撤
+  clearSessionWaiting(lead.sessId, lead); // 这台进程没了,**自己那条**等待状态跟着撤
   untrackRun(lead.taskId, lead.handle);
   // 工作目录被抽走时我们会主动收掉旧进程、立刻开新的,旧进程的 close 事件晚一步
   // 才到 —— 它不能把已经接管的新会话摘掉,更不能把新回合的 running 改回 idle。
   // 停止标记同理:那是任务级的共享状态,被接管的一方吞掉它,真正在跑的那台收尾时
   // 就当没被停过。
   const superseded = leads.get(lead.taskId) !== lead;
+  // 「这一轮是被停的」只在内存里活一次(takeStopped 消费即清),而它必须跟退出码一起落库 ——
+  // 下面那笔收尾写入是这条链唯一的落点,见那里的注释。
+  let stopSettle: StopSettle | null = null;
   if (!superseded) {
     leads.delete(lead.taskId);
-    takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
+    stopSettle = takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
   } else {
     retireLead(lead); // 被接管的一方从此不写任何共享产物(状态/.md/trace/SSE),见 retireLead
   }
@@ -543,6 +547,13 @@ async function closeLead(
     "调度台收尾状态",
     {
       exitStatus,
+      // **受控停止与「进程自己崩了」在退出码上一模一样**:CLI 吃 SIGTERM 后按 signal 写非零。
+      // 单飞早就为此单独落了这一列(single-run.ts),团队这条收尾路一直只写退出码,于是读端
+      // 只能拿退出码当结局 —— 用户点了「停止全组」,已经恢复过的那几条过程提示被当成失败
+      // 现场重新挂回手机上(第 4 轮审查 F1,已实测)。三条受控路(停止全组 / 工作目录被抽走 /
+      // 空闲回收)共用这一笔:`lead.closing` 就是它们各自的名字。谁来读见 session-waiting.ts
+      // 的 failedTurnNotices 与 task-retry-turn.ts。
+      stoppedAs: lead.closing ?? stopSettle,
       endedAt: endIso,
       activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
       ...(dropSession ? LOST_SESSION_PATCH : {}),

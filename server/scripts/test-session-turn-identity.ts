@@ -396,6 +396,11 @@ const resumeSame = async (taskId: string, text: string) => {
   // 又会加两次。这条断言比上面那两条便宜,而且直接钉住不变量住在哪一层。
   assert(!("turnsStarted" in resumedTurnFields(stamp(0))),
     "回合计数只能由 openTurn 按身份加,不能回到字段 helper 里");
+  // 同一层的另一半:「上一轮是被停的」要随新回合翻篇。单飞每轮收尾都覆写那一列,所以缺它只在
+  // **复用同一行**的那几条路上(团队 / duet)看得出来,而读端拿它当「这一轮不是失败」的判据
+  // (见 session-waiting.ts 的 failedTurnNotices 与 task-retry-turn.ts)。
+  assert.equal(resumedTurnFields(stamp(0)).stoppedAs, null,
+    "新回合的字段 helper 没把上一轮「是被停的」清掉");
 }
 
 // ── ⑨ 升级那一刻一行记录都没有、之后又跑过一轮：未知历史照样要披露（必须修 2.2 读端）──

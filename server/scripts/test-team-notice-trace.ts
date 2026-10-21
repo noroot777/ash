@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import {
   root, db, dbClient, ensureSchema, projects, sessions, eq, at, ok, runLead,
+  haltTeam, seedTeamTask, startLead, teamIsLive,
 } from "./team-lead-resilience-fixture.js";
 import { failedTurnNotices, sessionWaiting } from "../src/session-waiting.js";
 import { readRecentTraceEntries } from "../src/transcript.js";
@@ -126,6 +127,113 @@ try {
     },
   });
   ok("健康待命的调度台:等待状态已撤,失败现场也不回放");
+
+  const until = async (what: string, cond: () => boolean) => {
+    const deadline = Date.now() + 10_000;
+    while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(cond(), `等不到:${what}`);
+  };
+
+  // ── 点了「停止全组」之后,悬着的提示不是失败现场(第 4 轮审查 F1) ───────────────
+  // 受控停止与「进程自己崩了」在退出码上一模一样(CLI 吃 SIGTERM 后按 signal 写非零),所以
+  // 「这一轮是怎么结束的」必须自己落一列。单飞早就为此落了 stoppedAs(single-run.ts),团队这
+  // 条收尾路从前只写退出码 —— 用户按下停止,还悬着的那几条提示就被当成失败现场重新挂回手机上。
+  const haltSess = "sess-halt-notice";
+  let releaseHalt: (() => void) | null = null;
+  const haltGate = new Promise<void>((resolve) => { releaseHalt = resolve; });
+  const halted = await runLead("halt-notice", {
+    cliSessionId: "thread-halt-notice",
+    script: async function* () {
+      yield { kind: "tool", name: "Bash", detail: JSON.stringify({ command: "npm test" }) };
+      await pause();
+      yield { kind: "error", message: RETRY_1, level: "notice", affectsTurn: false };
+      await haltGate; // 用户这会儿点了「停止全组」:请求还在飞,这条提示就这么悬着
+      yield { kind: "done", exitStatus: 1 }; // CLI 吃 SIGTERM:非零退出码,跟崩溃一模一样
+    },
+    whileLive: async (taskId) => {
+      try {
+        await until("提示进消费链", () => sessionWaiting(haltSess).length === 1);
+        await haltTeam(taskId);
+      } finally {
+        releaseHalt?.();
+      }
+    },
+  });
+  const haltRow = await halted.session();
+  assert.equal(haltRow.exitStatus, 1, "这份用例要的就是「被停之后留下非零退出码」那一刻");
+  assert.ok(haltRow.stoppedAs, "团队收尾只写了退出码,没把「这一轮是被停的」落进会话行(F1)");
+  assert.deepEqual(
+    failedTurnNotices(await readRecentTraceEntries(haltRow.taskId, haltSess), haltRow),
+    [],
+    "点了停止全组,悬着的提示被当成失败现场回放到手机上(F1)",
+  );
+  assert.deepEqual(sessionWaiting(haltSess), [], "进程都收掉了,内存里那条等待状态还挂着");
+  ok("受控停止:会话行记下停止事实,窄出口一条都不回放");
+
+  // ── 换台之后,旧台迟到的输出动不了新台的等待状态(第 4 轮审查 F2) ──────────────
+  // 工作目录被抽走那条路**复用同一行会话**:旧台摘牌、新台接着写同一个 .md,而旧台的事件流
+  // 还在吐。上一版的等待表只按会话编号共享,于是旧台迟到的一条正文、一次回合收口、一次收尾,
+  // 都会把新台刚置上的等待状态删掉 —— 手机上那句「正在重试」凭空消失,而新台明明还在等。
+  const handTask = "task-handover";
+  const handSess = "sess-handover";
+  await seedTeamTask(handTask);
+  const deferred = () => {
+    let fire: () => void = () => {};
+    const waited = new Promise<void>((resolve) => { fire = resolve; });
+    return { waited, fire: () => fire() };
+  };
+  const oldSpeaks = deferred(); // 旧台迟到的那几条:等新台接管并挂上等待之后才放
+  const oldDrained = deferred(); // 旧台的事件全被消费完了(紧接着就是它的收尾)
+  const newFinishes = deferred();
+  await startLead({
+    taskId: handTask,
+    sessId: handSess,
+    cliSessionId: "thread-handover-old",
+    events: (async function* () {
+      yield { kind: "error", message: RETRY_1, level: "notice", affectsTurn: false };
+      await oldSpeaks.waited;
+      yield { kind: "text", text: "旧台迟到的半句话" }; // 坏掉的那版:这一条就把新台的等待撤了
+      yield { kind: "turnEnd" }; // 这一条也会(它是团队链唯一的回合边界)
+      yield { kind: "done", exitStatus: 1 };
+      oldDrained.fire();
+    })(),
+  });
+  await until("旧台那条提示进消费链", () => sessionWaiting(handSess).some((n) => n.text === RETRY_1));
+  await startLead({
+    taskId: handTask,
+    sessId: handSess,
+    cliSessionId: "thread-handover-new",
+    reuse: true, // openLead 的 resuming 分支:同一行会话换一台进程接着写
+    events: (async function* () {
+      yield { kind: "error", message: WAITING, level: "notice", affectsTurn: false };
+      await newFinishes.waited;
+      yield { kind: "turnEnd" };
+      yield { kind: "done", exitStatus: 0 };
+    })(),
+  });
+  await until("新台挂上自己的等待", () => sessionWaiting(handSess).some((n) => n.text === WAITING));
+  // 摘牌那一瞬旧台手上那份就作废了(retireLead),此刻代表这条会话的只有新台这一条。
+  assert.deepEqual(
+    sessionWaiting(handSess).map((n) => n.text),
+    [WAITING],
+    "换台之后两台的提示混在同一条会话上了",
+  );
+  oldSpeaks.fire();
+  await oldDrained.waited;
+  assert.deepEqual(
+    sessionWaiting(handSess).map((n) => n.text),
+    [WAITING],
+    "旧台迟到的正文/回合收口把新台的等待状态删掉了(F2)",
+  );
+  await new Promise((r) => setTimeout(r, 150)); // 留给旧台那段 closeLead
+  assert.deepEqual(
+    sessionWaiting(handSess).map((n) => n.text),
+    [WAITING],
+    "旧台的收尾把新台的等待状态删掉了(F2)",
+  );
+  newFinishes.fire();
+  await until("新台收完台", () => !teamIsLive(handTask));
+  ok("换台:旧台迟到的输出与收尾都动不了新台的等待状态");
 
   console.log("test:team-notice-trace ok");
 } finally {

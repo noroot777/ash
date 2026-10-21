@@ -21,15 +21,17 @@ const TURN = "2026-10-21T06:00:00.000Z";
 const NEXT_TURN = "2026-10-21T07:00:00.000Z";
 const RETRY = "上游返回 502 server_error，正在重试（第 1/10 次，等 0.6 秒）";
 const WAITING = "已经等上游 5 分钟没有响应，本回合仍在等待中";
+// 持有者 = 维护这份等待状态的那个消费者实例(生产里是进程 handle / lead),只比身份。
+const RUN = {};
 const notice = (message: string): AgentEvent => ({ kind: "error", message, level: "notice", affectsTurn: false });
 const texts = (text: string): AgentEvent => ({ kind: "text", text });
 
 // ── ① 此刻还在等:事件顺序决定,不看落盘 ──────────────────────────────────────
 const sid = "sess-waiting";
-trackSessionWaiting(sid, TURN, { kind: "tool", name: "Bash", detail: "{}" });
+trackSessionWaiting(sid, RUN, TURN, { kind: "tool", name: "Bash", detail: "{}" });
 assert.deepEqual(sessionWaiting(sid), [], "一条提示都没来就说在等上游");
-trackSessionWaiting(sid, TURN, notice(RETRY));
-trackSessionWaiting(sid, TURN, notice(WAITING));
+trackSessionWaiting(sid, RUN, TURN, notice(RETRY));
+trackSessionWaiting(sid, RUN, TURN, notice(WAITING));
 assert.deepEqual(
   sessionWaiting(sid).map((item) => [item.text, item.turnStartedAt]),
   [[RETRY, TURN], [WAITING, TURN]],
@@ -37,7 +39,7 @@ assert.deepEqual(
 );
 // **正文就是恢复信号**。它要到下一条非正文事件才冲进 trace,所以这一位必须在事件到达那一刻
 // 就翻过来 —— 照 trace 判的那一版会在用户已经在读回答时还说「正在重试」(F2)。
-trackSessionWaiting(sid, TURN, texts("上游已经恢复，正在继续回答。"));
+trackSessionWaiting(sid, RUN, TURN, texts("上游已经恢复，正在继续回答。"));
 assert.deepEqual(sessionWaiting(sid), [], "上游已经在吐正文了,还挂着等待提示(F2)");
 
 for (const resume of [
@@ -49,27 +51,27 @@ for (const resume of [
   { kind: "done", exitStatus: 0 },
   { kind: "error", message: "真的崩了" },
 ] as AgentEvent[]) {
-  trackSessionWaiting(sid, TURN, notice(RETRY));
+  trackSessionWaiting(sid, RUN, TURN, notice(RETRY));
   assert.equal(sessionWaiting(sid).length, 1, `${resume.kind} 之前的提示没记上`);
-  trackSessionWaiting(sid, TURN, resume);
+  trackSessionWaiting(sid, RUN, TURN, resume);
   assert.deepEqual(sessionWaiting(sid), [], `${resume.kind} 来了还说在等上游`);
 }
 
 // 没有回合身份的提示不记:它在执行过程里也没有落点,记下来只会挂在别的回合名下。
-trackSessionWaiting(sid, null, notice(RETRY));
+trackSessionWaiting(sid, RUN, null, notice(RETRY));
 assert.deepEqual(sessionWaiting(sid), [], "没有回合身份的提示也被当成了当前状态");
 
 // 上一轮崩在半路(没有 turnEnd / done)时内存里那份会留着 —— 它不是新回合的状态。
-trackSessionWaiting(sid, TURN, notice(RETRY));
+trackSessionWaiting(sid, RUN, TURN, notice(RETRY));
 assert.equal(sessionWaiting(sid, TURN).length, 1);
 assert.deepEqual(sessionWaiting(sid, NEXT_TURN), [], "上一轮悬着的提示被当成了新回合的状态");
-trackSessionWaiting(sid, NEXT_TURN, notice(WAITING));
+trackSessionWaiting(sid, RUN, NEXT_TURN, notice(WAITING));
 assert.deepEqual(
   sessionWaiting(sid, NEXT_TURN).map((item) => item.text),
   [WAITING],
   "换了回合还把上一轮的提示一起带着",
 );
-clearSessionWaiting(sid);
+clearSessionWaiting(sid, RUN);
 assert.deepEqual(sessionWaiting(sid), [], "clearSessionWaiting 没撤掉");
 
 // ── ② 失败现场:只有真收在失败上的那一轮才回放 ──────────────────────────────
@@ -116,4 +118,40 @@ assert.deepEqual(
   "回放串到了别的回合去",
 );
 
-console.log("test:session-waiting ok：等待状态按事件顺序维护,失败现场只认明确的失败结局");
+// ── ③ 等待状态有主:换台之后旧消费者一个字都动不了 ────────────────────────────
+// 起因(第 4 轮审查 F2):上一版只按会话编号共享。一条会话行会被**换台复用**(团队工作目录
+// 被抽走那条路:旧进程摘牌、新进程接着写同一行),而旧进程的事件流还在吐 —— 它迟到的一条
+// 正文、一次收尾,都会把新进程刚置上的等待状态删掉,手机上那句「正在重试」凭空消失。
+const shared = "sess-handover";
+const oldLead = {};
+const newLead = {};
+trackSessionWaiting(shared, newLead, TURN, notice(RETRY)); // 新台正卡在重试上
+trackSessionWaiting(shared, oldLead, TURN, texts("旧台迟到的半句话"));
+assert.deepEqual(
+  sessionWaiting(shared, TURN).map((item) => item.text),
+  [RETRY],
+  "旧台迟到的正文解除了新台的等待(F2)",
+);
+trackSessionWaiting(shared, oldLead, TURN, { kind: "turnEnd" });
+clearSessionWaiting(shared, oldLead); // 旧台收尾/摘牌
+assert.equal(sessionWaiting(shared, TURN).length, 1, "旧台的收尾撤掉了新台的等待状态(F2)");
+trackSessionWaiting(shared, newLead, TURN, notice(WAITING));
+assert.deepEqual(
+  sessionWaiting(shared, TURN).map((item) => item.text),
+  [RETRY, WAITING],
+  "同一个持有者同一轮的提示没接着往后攒",
+);
+// 一条新提示就是**认领**:换台之后由新持有者接手这条会话,前一位那几条不许跟着混进来。
+const next = {};
+trackSessionWaiting(shared, next, NEXT_TURN, notice(RETRY));
+assert.deepEqual(
+  sessionWaiting(shared, NEXT_TURN).map((item) => item.text),
+  [RETRY],
+  "认领之后还带着上一个持有者的提示",
+);
+clearSessionWaiting(shared, newLead); // 已经不是持有者了:空转
+assert.equal(sessionWaiting(shared, NEXT_TURN).length, 1, "不是持有者也撤得动别人的等待状态");
+clearSessionWaiting(shared, next);
+assert.deepEqual(sessionWaiting(shared, NEXT_TURN), [], "持有者自己也撤不掉");
+
+console.log("test:session-waiting ok：等待状态按事件顺序维护且认持有者,失败现场只认明确的失败结局");

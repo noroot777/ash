@@ -259,7 +259,12 @@ export function appendLiveTimeline(
     if (event.kind === "text") appendAgentText(agent, event.text);
     if (event.kind === "attachment") appendAgentAttachment(agent, event.path);
     // 用量恒在本回合的 turnEnd/done 之前到，所以它落在的就是刚说完话的那条气泡。
-    if (event.kind === "usage") agent.usage = agent.usage ? addUsage(agent.usage, event.usage) : event.usage;
+    if (event.kind === "usage") {
+      agent.usage = agent.usage ? addUsage(agent.usage, event.usage) : event.usage;
+      // 它不进执行过程那一列(只是这一轮的账),但**它到达就说明上游回了话** —— 等待状态
+      // 跟着解除,口径与落盘重建、讨论、服务端共用的那一份一致(第 4 轮审查 N1)。
+      currentSegment(agent).awaiting = false;
+    }
     // 水位是覆盖不是累加：后到的那条就是此刻，跟它前面报过什么无关。
     if (event.kind === "context") liveContext.set(entry.event.sessionId, event.context);
     if (event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {

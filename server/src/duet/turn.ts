@@ -18,7 +18,7 @@ import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnS
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
-import { trackRun, untrackRun, isCanceling, CanceledRun } from "../runs.js";
+import { trackRun, untrackRun, isCanceling, peekStopped, CanceledRun } from "../runs.js";
 import type { AgentExecutor } from "../executors/types.js";
 import {
   LOST_SESSION_PATCH,
@@ -280,7 +280,7 @@ export async function runTurn(args: {
       for await (const event of handle.events) {
         // 窄出口的「此刻还在等上游」同一处口径(见 session-waiting.ts):讨论这一路的正文
         // 也是攒在内存里的,照落盘产物反推一样会在恢复之后还说正在重试。
-        trackSessionWaiting(rowId, turnStart, event);
+        trackSessionWaiting(rowId, handle, turnStart, event);
         const sessionNotice = isSessionScopeNotice(event);
         const emittedEvent = event.kind === "usage"
           ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
@@ -329,7 +329,7 @@ export async function runTurn(args: {
       }
     } finally {
       untrackRun(taskId, handle);
-      clearSessionWaiting(rowId); // 这一轮的消费结束了,等待状态跟着撤(见 session-waiting.ts)
+      clearSessionWaiting(rowId, handle); // 这一轮的消费结束了,等待状态跟着撤(见 session-waiting.ts)
       // 消费循环结束 = 这一轮不再写盘,**这一刻**就撤:后面那些收尾写库再慢再失败,读端
       // 也不会把这条会话继续当成「还在写」（第 6 轮审查必须修 1）。保证由外面那道 finally
       // 给（它盖住全部出口),这里只是把窗口收窄到真实的「还在写」那一段。
@@ -382,6 +382,10 @@ export async function runTurn(args: {
       .update(sessions)
       .set({
         exitStatus: exit,
+        // 被停的那一轮退出码跟崩溃一模一样(CLI 吃 SIGTERM 按 signal 写非零),所以结局要
+        // 自己落一列,不能让读端拿退出码猜 —— 口径与 single-run.ts、team/session-consumer.ts
+        // 的收尾写入同一条(见 session-waiting.ts 的 failedTurnNotices)。
+        stoppedAs: peekStopped(taskId),
         endedAt: endIso,
         activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${durationMs}`,
         ...(dropSession ? LOST_SESSION_PATCH : {}),

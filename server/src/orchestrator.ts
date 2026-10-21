@@ -481,8 +481,6 @@ export async function continueTask(
           turnModel: ex.model ?? null,
           turnReasoningEffort: ex.reasoningEffort ?? null,
           sideTurn,
-          // 新回合开始 = 上一轮「是被停的」这件事翻篇，不清就会一直挡着重试入口。
-          stoppedAs: null,
           // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
           // 恢复不了的恢复命令,见 ResumeFields。
           ...ex.resumeFields(cwd, cliSessionId),

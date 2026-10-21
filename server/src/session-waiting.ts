@@ -23,7 +23,21 @@ import { now } from "./util.js";
 // 「现在卡住了没有」,不是完整流水 —— 完整流水在 trace 自己那份里。
 const NOTICE_LIMIT = 50;
 
-type Waiting = { turnStartedAt: string; notices: SessionNotice[] };
+/**
+ * 等待状态的**持有者**:此刻在维护它的那一个消费者实例本身(单飞的进程 handle、调度台的
+ * lead、duet 的 handle)。只比身份,不读内容。
+ *
+ * 为什么必须带上它:**一条会话行会被换台复用** —— team 的 attachLead 把旧进程摘牌、新进程
+ * 接着写同一行同一个 `.md`,而旧进程的事件流还在往外吐。它迟到的一条正文、一次收尾,都会把
+ * 新进程刚置上的等待状态删掉,手机上那句「正在重试」凭空消失(第 4 轮审查 F2,已实测)。落盘
+ * 产物早有 `retireLead` 那道所有权闸,内存这一份当时在闸外面。
+ *
+ * 规矩只有一条:**只有持有者改得动、撤得掉**。新提示算重新认领(换台之后由新消费者接手这条
+ * 会话的等待状态),其余一律要求身份相符。
+ */
+export type WaitingOwner = object;
+
+type Waiting = { owner: WaitingOwner; turnStartedAt: string; notices: SessionNotice[] };
 const waiting = new Map<string, Waiting>();
 
 /**
@@ -32,24 +46,36 @@ const waiting = new Map<string, Waiting>();
  * `turnStartedAt` 给 null = 这一刻还没有回合身份(自发回合的第一条事件之前):提示照旧不记
  * —— 它在执行过程里也没有落点,记下来只会挂在一个与它无关的回合名下。
  */
-export function trackSessionWaiting(sessionId: string, turnStartedAt: string | null, event: AgentEvent): void {
+export function trackSessionWaiting(
+  sessionId: string,
+  owner: WaitingOwner,
+  turnStartedAt: string | null,
+  event: AgentEvent,
+): void {
+  const held = waiting.get(sessionId);
   if (event.kind === "error" && isExecutionNotice(event)) {
     if (!turnStartedAt) return;
-    const held = waiting.get(sessionId);
-    const notices = held?.turnStartedAt === turnStartedAt ? held.notices : [];
+    // 同一个持有者的同一轮才接着往后攒;换台或换轮都从这一条重新起(认领见 WaitingOwner)。
+    const kept = held && held.owner === owner && held.turnStartedAt === turnStartedAt ? held.notices : [];
     waiting.set(sessionId, {
+      owner,
       turnStartedAt,
-      notices: [...notices, { at: now(), turnStartedAt, text: event.message }].slice(-NOTICE_LIMIT),
+      notices: [...kept, { at: now(), turnStartedAt, text: event.message }].slice(-NOTICE_LIMIT),
     });
     return;
   }
+  if (!held || held.owner !== owner) return; // 不是持有者:迟到的旧台输出无权解除别人的等待
   // 解除条件共用 shared 那一份(真故障也算解除:这一轮不再「在等」了,它另有去处)。
   if (resumesWaiting(event)) waiting.delete(sessionId);
 }
 
-/** 这条会话收尾/换台了:等待状态跟着作废(回合收口由 turnEnd 事件自己带到)。 */
-export function clearSessionWaiting(sessionId: string): void {
-  waiting.delete(sessionId);
+/**
+ * 这条会话收尾/换台了:**自己持有的**那份等待状态跟着作废(回合收口由 turnEnd 事件自己带到)。
+ *
+ * 身份不符就是空转 —— 被接管的旧台收尾时会走到这里,那一刻这条会话的等待状态已经归新台了。
+ */
+export function clearSessionWaiting(sessionId: string, owner: WaitingOwner): void {
+  if (waiting.get(sessionId)?.owner === owner) waiting.delete(sessionId);
 }
 
 /**

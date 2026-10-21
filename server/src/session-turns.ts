@@ -184,6 +184,10 @@ export const freshTurnFields = (at: string) => ({
 export const resumedTurnFields = (_at: string) => ({
   turnStartedAt: _at,
   endedAt: null as string | null,
+  // `stoppedAs: null` 同理:上一轮「是被停的」这个结论随新回合翻篇。单飞每轮收尾都覆写这一
+  // 列,所以缺它只在**复用同一行**的那几条路上看得出来(团队/duet),而读端拿它当「这一轮不是
+  // 失败」的判据,留着就会把一轮真失败说成受控停止(见 session-waiting.ts)。
+  stoppedAs: null as string | null,
 });
 
 /**
