@@ -4,6 +4,7 @@ import {
   MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_WAKE_LABEL, MONITOR_WAKE_TARGETS, monitorDurationOptions,
 } from "@ash/shared/monitor";
 import type { MonitorWakeTarget } from "@ash/shared/monitor";
+import { neverExitsOnItsOwn } from "@ash/shared/monitor-end-condition";
 import type { StartMonitorInput } from "./useTaskMonitors.ts";
 
 // **从共享常量推导，不要在这里另列一张表**：写死的那版在时长上限改掉之后整张失真
@@ -25,6 +26,13 @@ const DURATIONS = monitorDurationOptions();
  * 会话**：这个任务上又有一次审查正在进行时，叫谁都是在猜，所以服务端会拒掉并把
  * `needsWakeTarget` 带回来（见 server 的 monitor-session.ts）。那一刻才长出这个二选一 ——
  * 平时不问，是因为绝大多数任务只有一条线，多问一句只会让人以为自己漏填了什么。
+ *
+ * ── 「它什么时候算完」也只在命令自己不会结束时才问 ─────────────────────────────
+ *
+ * 同一条规矩的另一处用法：`tail -F`、`while true` 这类命令永远不会自己退出，于是只剩「盯满
+ * 时长」一条出路 —— 被盯的活早跑完了，任务还得干等到期。服务端对这类命令会直接拒（判据是
+ * 共享的 `neverExitsOnItsOwn`），而这里**边打字边用同一份判据**把那个选择当场摆出来：等一
+ * 条拒绝再回来补，中间那一趟是白走的，何况被拒的那一刻人已经点过「起一个哨兵」了。
  */
 export function MonitorComposer({
   busy,
@@ -42,8 +50,17 @@ export function MonitorComposer({
   const [description, setDescription] = useState("");
   const [timeoutMs, setTimeoutMs] = useState(MONITOR_DEFAULT_TIMEOUT_MS);
   const [wake, setWake] = useState<MonitorWakeTarget | null>(null);
-  // 要选而没选时**不许提交**：带着空的唤醒目标发出去只会再吃同一句拒绝。
-  const ready = command.trim().length > 0 && (!needsWakeTarget || wake !== null);
+  const [ending, setEnding] = useState<"stopWhen" | "untilExpiry" | null>(null);
+  const [stopWhen, setStopWhen] = useState("");
+  // 这条命令自己会不会结束 —— 跟服务端那道闸**同一份判据**，所以这里亮出来的选择跟它要的
+  // 东西一定对得上（各写一份的话，判据一改就只有一边跟着变，另一边照旧放人去撞 409）。
+  const forever = neverExitsOnItsOwn(command);
+  const needsEnd = forever !== null;
+  const endingChosen = !needsEnd
+    || ending === "untilExpiry"
+    || (ending === "stopWhen" && stopWhen.trim().length > 0);
+  // 要选而没选时**不许提交**：带着空的唤醒目标 / 缺着结束条件发出去只会再吃同一句拒绝。
+  const ready = command.trim().length > 0 && (!needsWakeTarget || wake !== null) && endingChosen;
 
   return (
     <form
@@ -56,6 +73,10 @@ export function MonitorComposer({
           description: description.trim() || undefined,
           timeoutMs,
           ...(wake ? { wake } : {}),
+          // 不是跟随型命令时一个字都不带：它本来就会自己结束，替它编一个结束条件只会
+          // 让卡片上多出一句不是真的话。
+          ...(needsEnd && ending === "stopWhen" ? { stopWhen: stopWhen.trim() } : {}),
+          ...(needsEnd && ending === "untilExpiry" ? { untilExpiry: true } : {}),
         });
       }}
     >
@@ -64,7 +85,7 @@ export function MonitorComposer({
         <textarea
           rows={2}
           value={command}
-          placeholder={'tail -f build.log | grep --line-buffered -E "ERROR|BUILD OK"'}
+          placeholder={'tail -F build.log | grep --line-buffered -E "ERROR|BUILD OK"'}
           onChange={(event) => setCommand(event.target.value)}
         />
       </label>
@@ -80,6 +101,42 @@ export function MonitorComposer({
           onChange={(event) => setDescription(event.target.value)}
         />
       </label>
+      {needsEnd && (
+        <fieldset className="monitor-composer__ending">
+          <legend>它什么时候算完</legend>
+          {/* 照实说是哪个写法触发的这一问：泛泛一句「这条命令不会结束」会让人以为是自己
+              写错了语法，而真正要做的只是在两种意图里挑一个。 */}
+          <p className="monitor-composer__hint">
+            这条命令自己永远不会结束（{forever}），所以它不会有「跑完了」那一下。
+            不选的话它只剩盯满时长这一条出路——被盯的活早干完了，任务也还得等到期才被叫醒。
+          </p>
+          <label className="monitor-composer__ending-option">
+            <input
+              type="radio"
+              name="monitor-ending"
+              checked={ending === "stopWhen"}
+              onChange={() => setEnding("stopWhen")}
+            />
+            <span>等到某一行出现就收工</span>
+          </label>
+          <input
+            className="monitor-composer__ending-pattern"
+            value={stopWhen}
+            placeholder={'^(OK|FAILED|ERROR)'}
+            onFocus={() => setEnding("stopWhen")}
+            onChange={(event) => { setStopWhen(event.target.value); setEnding("stopWhen"); }}
+          />
+          <label className="monitor-composer__ending-option">
+            <input
+              type="radio"
+              name="monitor-ending"
+              checked={ending === "untilExpiry"}
+              onChange={() => setEnding("untilExpiry")}
+            />
+            <span>就是要盯到到期（每出现一次叫我一次）</span>
+          </label>
+        </fieldset>
+      )}
       <label>
         <span>盯多久</span>
         <select value={timeoutMs} onChange={(event) => setTimeoutMs(Number(event.target.value))}>

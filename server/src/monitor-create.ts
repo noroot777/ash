@@ -50,6 +50,7 @@
 // 而那一刻要收掉的进程由**句柄**证明所有权,不经过 pid 身份那条路。
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { MONITOR_MAX_PER_TASK, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
+import { compileStopWhen, endConditionDemand, neverExitsOnItsOwn } from "@ash/shared/monitor-end-condition";
 import { db } from "./db/index.js";
 import { monitors, projects, sessions, tasks } from "./db/schema.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
@@ -81,13 +82,30 @@ export type StartMonitorInput = {
    * 把实现者叫起来烧一个回合,审查那条会话继续等不到人)。
    */
   caller: MonitorCaller;
+  /**
+   * **约定的结束条件**:哪一行一出现就收工(JS 正则源文)。
+   *
+   * 「命令结束」本来就是第一优先的唤醒条件,但跟随型命令(`tail -F`、`while true`)自己永远不会
+   * 结束,于是那条唤醒条件在它身上形同虚设。这一项把「结束」还给那一类命令:匹配到的那一行
+   * 照常推给 agent,随后这条哨兵就收工(状态 `matched`)。
+   */
+  stopWhen?: string | null;
+  /**
+   * **「我本来就是要盯到到期」**:显式声明之后,跟随型命令照原样放行。
+   *
+   * 它不是一个「关掉检查」的开关,而是三种合法意图里的第三种(每出现一次叫我一次、盯外部状态
+   * 变化)。做成显式声明是因为那一类与「忘了加结束条件」在命令本身上长得一模一样 ——
+   * 系统分不开,只有写命令的人分得开,所以让他说一句。
+   */
+  untilExpiry?: boolean;
 };
 
 export type StartMonitorResult =
   /** `notice` = 这次创建顺带改变了别的东西,调用方要原样带给 agent(目前只有一种:撤掉了它手里那份完成确认)。 */
   | { ok: true; monitor: TaskMonitor; notice?: string }
   /** `needsWakeTarget` = 拒绝的理由是「说不清醒来叫谁」:调用方指定一个唤醒目标就能再来。 */
-  | { ok: false; status: 400 | 404 | 409; error: string; needsWakeTarget?: true };
+  /** `needsEndCondition` = 拒绝的理由是「这条命令自己不会结束、又没约定结束条件」:给一条再来。 */
+  | { ok: false; status: 400 | 404 | 409; error: string; needsWakeTarget?: true; needsEndCondition?: true };
 
 /** 哨兵在哪儿跑：显式指定 > 任务最近一条会话的工作目录 > 项目仓库目录。 */
 async function resolveCwd(taskId: string, explicit?: string | null): Promise<string | null> {
@@ -426,6 +444,18 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
   if (input.cwd !== undefined && input.cwd !== null && text(input.cwd) === null)
     return { ok: false, status: 400, error: "cwd 必须是字符串" };
   const description = text(input.description) || command;
+  // **结束条件在起进程之前算清楚**(理由同上:校验抛在 spawn 之后会留下无主进程)。
+  //
+  // 两步,顺序不能反:先看给的那个条件本身能不能用(编不过的正则 = 一个永远不会命中的条件,
+  // 放进去只会变成另一条「只能等到期」的哨兵,而调用方还以为自己设过了),再看这条命令**需不
+  // 需要**结束条件。判据与三条出路的措辞都在 shared,前端那个手动挂哨兵的表单用的是同一份。
+  const stopWhen = compileStopWhen(input.stopWhen);
+  if (!stopWhen.ok) return { ok: false, status: 400, error: stopWhen.error };
+  if (!stopWhen.re && !input.untilExpiry) {
+    const forever = neverExitsOnItsOwn(command);
+    // 409 而不是 400:它不是参数写错了,是「这次创建缺一个决定」—— 三条出路任选一条再来。
+    if (forever) return { ok: false, status: 409, error: endConditionDemand(forever), needsEndCondition: true as const };
+  }
 
   return serialize(`task:${input.taskId}`, async () => {
     const task = (await db.select().from(tasks).where(eq(tasks.id, input.taskId))).at(0);
@@ -490,6 +520,9 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       offset: 0,
       events: 0,
       exitCode: null,
+      // 约定的结束条件**原样落库**:运行时每推一批就拿它比一次(monitors.ts 的 flushBuffer),
+      // 跨重启接回来的那一份也照旧认它。
+      stopWhen: input.stopWhen?.trim() || null,
       // **同一个瞬间**算两列：分别取 Date.now() 会差 1ms，而对外那个到期时刻是
       // `started_at + timeout_ms` 现算的（见 toTaskMonitor），差值会变成「库里写的」与
       // 「卡片显示的」不一致。

@@ -142,6 +142,10 @@ function endedWithoutOutput(monitor: TaskMonitor): string {
       return "一直到盯满时长，它都没有输出过。";
     case "stopped":
       return "它被停掉之前没有输出过。";
+    case "matched":
+      // 这一种本来不该出现在「日志是空的」这条路上(命中说明那一行确实吐出来过),所以不能
+      // 顺着它说「它什么都没说」—— 走到这儿只可能是日志这会儿读不出来,照实说读不出来。
+      return "它等到了约定的那一行才收工，但它的日志这会儿读不出来。";
     case "lost":
       // **不替它编一次重启**（第 2 轮审查 R2-4）：`lost` 还有另一个来源 —— 创建期的补偿没能
       // 确认那个壳的归属（`monitor-create.ts` 的两处 `lost`），那一路压根没发生过重启，也

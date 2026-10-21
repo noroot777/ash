@@ -38,7 +38,10 @@
 // 活着，内置 Monitor 真能唤醒它自己，拦它才是错的），以及**历史**：改道之前跑过的任务，
 // 会话文件里还躺着它们，面板得答得出「那 12 个 Monitor 后来怎么了」。
 
-export const MONITOR_STATUSES = ["running", "stopped", "expired", "exited", "lost"] as const;
+// `matched` 是**第五种结束方式**,不是 `stopped` 的一个变种:它说的是「约定的那一行出现了,
+// 这条哨兵就此收工」——人点停、推满上限、系统回收都叫 stopped,把这一种也塞进去,卡片上就会
+// 写着「已停止」而真相是「它等到了」(四种结束方式不许说成同一种,第 4 轮审查 N1 同一条理由)。
+export const MONITOR_STATUSES = ["running", "stopped", "expired", "exited", "matched", "lost"] as const;
 export type MonitorStatus = (typeof MONITOR_STATUSES)[number];
 
 /** 哨兵的出身。能力差异见文件头那一段——`claude` 那种是只读投影。 */
@@ -381,10 +384,18 @@ export const monitorStatusCorrectable = (status: string): boolean =>
  * —— 旧后端根本答不出起点可不可信,而这一列的全部意义就是「答不出来时不许把那个时刻当成
  * 创建时刻说出口」。补 `true` 等于在混合部署的那段窗口里把这道闸整个关掉。
  */
-export const normalizeMonitorDto = <T extends { kind?: MonitorKind; startedAtExact?: boolean }>(row: T): T =>
-  (row.kind && row.startedAtExact !== undefined
+export const normalizeMonitorDto = <T extends {
+  kind?: MonitorKind; startedAtExact?: boolean; stopWhen?: string | null;
+}>(row: T): T =>
+  (row.kind && row.startedAtExact !== undefined && row.stopWhen !== undefined
     ? row
-    : { ...row, kind: row.kind ?? ("ash" as const), startedAtExact: row.startedAtExact ?? false });
+    : {
+      ...row,
+      kind: row.kind ?? ("ash" as const),
+      startedAtExact: row.startedAtExact ?? false,
+      // 老后端答不出这一列 ⇒ 没约定过,不是「有但读不出来」。
+      stopWhen: row.stopWhen ?? null,
+    });
 
 /** 能不能从 ash 这边停掉它。`claude` 那种的进程在 agent 进程树里，ash 够不着。 */
 export const canStopMonitor = (kind: MonitorKind) => kind === "ash";
@@ -405,6 +416,14 @@ export interface TaskMonitor {
   lifetime: MonitorLifetime;
   /** 原样交给用户 shell 执行的命令行。 */
   command: string;
+  /**
+   * **约定的结束条件**:哪一行一出现,这条哨兵就收工(JS 正则源文,`null` = 没约定过)。
+   *
+   * 它存在的理由是「命令自己永远不会结束」的那一类(`tail -F`、`while true`):那种命令只剩
+   * 「盯满时长」一条出路,被盯的活早跑完了任务还得干等到期。创建闸因此要求这类命令必须二选一:
+   * 给这个条件,或者显式声明「我本来就要盯到到期」(见 shared/src/monitor-end-condition.ts)。
+   */
+  stopWhen: string | null;
   /** 一句话说明，会出现在每条事件的抬头和界面上。 */
   description: string;
   /**

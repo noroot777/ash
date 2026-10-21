@@ -34,6 +34,7 @@ import {
   type TaskMonitor,
 } from "@ash/shared/monitor";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
+import { compileStopWhen, firstStopWhenHit } from "@ash/shared/monitor-end-condition";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
@@ -102,6 +103,8 @@ export const toTaskMonitor = (r: Row): TaskMonitor => ({
   timeoutMs: r.timeoutMs ?? null,
   endedAt: r.endedAt,
   endedReason: r.endedReason,
+  /** 约定的结束条件(没约定过是 null)。界面据它答「这条会不会自己收工」。 */
+  stopWhen: r.stopWhen ?? null,
 });
 
 type Runtime = {
@@ -368,6 +371,23 @@ async function flushBuffer(monitorId: string, rtOverride?: Runtime): Promise<voi
   if (!row || row.status !== "running") return;
 
   const events = await pushLines(row, lines, readTo);
+
+  // **约定的那一行到了 ⇒ 当场收工**。顺序是「先推、后收尾」:命中的那一行本身照常送给 agent
+  // (它多半就是结果本身),收尾通知紧跟在后面。不能 await,理由同下面那条上限 —— 这里正跑在
+  // `serialize(monitorId, …)` 的队列里,而 finish 还要往同一条队列排最后一次 flush。
+  //
+  // 这是「命令自己永远不会结束」那一类的**唯一一条非到期出路**:没有它,`tail -F` 这种命令
+  // 被盯的活早跑完了,任务还得干等到期(2026-10-21 实测白等 30 分钟)。
+  const stopWhen = compileStopWhen(row.stopWhen);
+  const hit = stopWhen.ok && stopWhen.re ? firstStopWhenHit(lines, stopWhen.re) : null;
+  if (hit !== null) {
+    settleInBackground(
+      monitorId, "matched",
+      `等到了约定的那一行（${JSON.stringify(hit.length > 120 ? `${hit.slice(0, 120)}…` : hit)}），哨兵就此收工`,
+      null,
+    );
+    return;
+  }
 
   if (events >= MONITOR_MAX_EVENTS) {
     // **不能 await**：这里正跑在 `serialize(monitorId, …)` 的队列里，而 finish 收尾时

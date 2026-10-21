@@ -12,6 +12,8 @@ export const MONITOR_ENDED_LABEL: Record<string, string> = {
   exited: "命令自己跑完了",
   expired: "盯满时长",
   stopped: "已停止",
+  // 跟 stopped 分开说:人点停、推满上限、系统回收才叫「已停止」,而这一种是**它等到了**。
+  matched: "等到了约定的那一行",
   lost: "进程已不在",
 };
 
@@ -34,6 +36,10 @@ export interface StartMonitorInput {
    * 进行，而手动挂的哨兵不属于任何一条会话」那一幕,只能由人说清。
    */
   wake?: MonitorWakeTarget;
+  /** 约定的结束条件:哪一行一出现就收工(JS 正则源文)。 */
+  stopWhen?: string;
+  /** 「我本来就是要盯到到期」:命令自己永不退出时,靠它明说一声再放行。 */
+  untilExpiry?: boolean;
 }
 
 export type TaskMonitorsState = ReturnType<typeof useTaskMonitors>;

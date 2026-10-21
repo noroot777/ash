@@ -166,6 +166,10 @@
       "types": "./src/monitor-silence.ts",
       "default": "./src/monitor-silence.ts"
     },
+    "./monitor-end-condition": {
+      "types": "./src/monitor-end-condition.ts",
+      "default": "./src/monitor-end-condition.ts"
+    },
     "./monitor-claude": {
       "types": "./src/monitor-claude.ts",
       "default": "./src/monitor-claude.ts"

@@ -97,6 +97,7 @@ try {
         handoffText: monitors.resultHandoffText,
         endedBy: monitors.endedBy,
         endedReason: monitors.endedReason,
+        stopWhen: monitors.stopWhen,
       })
       .from(monitors)
       .where(eq(monitors.id, "m-old"))).at(0)!;
@@ -107,6 +108,9 @@ try {
   assert.equal(monitor.handoffText, null);
   assert.equal(monitor.endedBy, null, "「谁让它结束的」存量为空：不许把自己跑完的说成主动停的");
   assert.equal(monitor.endedReason, "命令自己跑完了", "既有的结束事实原样留着");
+  // 结束条件(2026-10-21 加的)同理:存量行一律「没约定过」。补成空字符串之类的话,卡片会凭空
+  // 多画一句「命中 // 就收工」,而那条哨兵从来没有过结束条件。
+  assert.equal(monitor.stopWhen, null, "存量哨兵没有约定过结束条件（不是「有但空着」）");
 
   const readMessage = async () =>
     (await db
@@ -135,6 +139,7 @@ try {
     .set({
       resultsAbandonedAt: "2026-10-02T00:00:00.000Z", resultsAbandonedReason: "不要了",
       resultHandoffAt: "2026-10-02T00:00:01.000Z", resultHandoffText: "【哨兵结束】旧库那条",
+      stopWhen: "^(OK|FAILED)",
     })
     .where(eq(monitors.id, "m-old"));
   const readAuto = async () =>
@@ -142,6 +147,7 @@ try {
   assert.equal(await readAuto(), true);
   assert.equal((await readMonitor()).abandonedReason, "不要了");
   assert.equal((await readMonitor()).handoffText, "【哨兵结束】旧库那条");
+  assert.equal((await readMonitor()).stopWhen, "^(OK|FAILED)", "补上之后写得进去");
   const written = await readMessage();
   assert.equal(written.token, "m-old:2026-10-02T00:00:01.000Z");
   assert.deepEqual([written.auto, written.generation], [true, 7], "布尔列走的是 INTEGER，写回来还得是布尔");

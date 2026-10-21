@@ -23,6 +23,7 @@ import { eq } from "drizzle-orm";
 import {
   MONITOR_MAX_EVENTS, MONITOR_MAX_MERGED_CHARS, MONITOR_MAX_PER_TASK, MONITOR_TAIL_MAX_BYTES,
 } from "@ash/shared/monitor";
+import { neverExitsOnItsOwn } from "@ash/shared/monitor-end-condition";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
   HERE, root, db, schema, monitorsModule, status, isPidAlive,
@@ -91,6 +92,96 @@ const t = setInterval(() => { i++; console.log("第 " + i + " 轮完成"); if (i
   assert.match(notice!.text, /日志文件也是空的/, "没产出过这件事也要如实说");
   assert.doesNotMatch(notice!.text, /条件/, "不许从没有输出推断它等的业务条件没满足");
   console.log("✓ 零输出的哨兵:结束通知里如实报「一条都没推、日志也是空的」");
+}
+// ── ③c 约定的那一行一出现就收工（用户 2026-10-21 要的「活一结束就唤醒」）────────
+// 跟随型命令（`tail -F`、`while true`）自己永远不会结束，于是「命令结束」那条唤醒条件在它
+// 身上形同虚设，只剩干等到期。这一节钉住那条非到期出路真的通：命中那一行**照常推给 agent**
+// （它多半就是结果本身），哨兵随即落 `matched` 收工，而不是等满时长。
+{
+  const taskId = await makeTask();
+  const feed = join(root, "feed.mjs");
+  // 先吐两行无关的，再吐那条约定的行，然后**继续活着**：不这么写的话，进程自己退出也会
+  // 让哨兵结束，就分不清是「命中」还是「它自己跑完了」。
+  writeFileSync(feed, `console.log("第 1 步");
+setTimeout(() => console.log("第 2 步"), 200);
+setTimeout(() => console.log("SWEEP_EXIT=0 全跑完了"), 500);
+setInterval(() => {}, 1000);
+`);
+  const started = await startMonitor({
+    taskId,
+    command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,
+    description: "盯到收尾行为止",
+    stopWhen: "SWEEP_EXIT=",
+  });
+  assert.equal(started.ok, true, started.ok ? "" : started.error);
+  const monitorId = started.ok ? started.monitor.id : "";
+  const pid = started.ok ? started.monitor.pid! : 0;
+  assert.equal(started.ok ? started.monitor.stopWhen : null, "SWEEP_EXIT=", "结束条件要带回给调用方");
+
+  await until("命中之后落 matched", async () => (await getMonitor(monitorId))?.status === "matched");
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.match(row.endedReason ?? "", /等到了约定的那一行/, "结束原因要说清是等到了，不是被谁停的");
+  assert.match(row.endedReason ?? "", /SWEEP_EXIT=0/, "把命中的那一行带上，省得还要去翻日志");
+  // **命中那一行本身必须送到**：收工不能把结果一起吞掉——它正是 agent 要的东西。
+  const [queued] = await pendingOf(taskId);
+  assert.ok(queued, "命中之后要留一条消息给 agent");
+  assert.ok(queued!.text.includes("SWEEP_EXIT=0 全跑完了"), `命中的那一行要推给 agent：${queued!.text}`);
+  assert.ok(queued!.text.includes("【哨兵结束】"), "收尾通知紧跟在后面");
+  await until("进程真的被收掉", async () => !isPidAlive(pid));
+  console.log("✓ 命中约定的那一行：那一行照常送达、哨兵当场收工、进程被收掉");
+}
+// ── ⑦b 结束条件的**闸**：命令自己不会结束、又没给结束条件 ⇒ 一个字都不许跑 ────────
+// 用户 2026-10-21 问的是「你能保证 agent 一定会加吗」——不能，所以不靠自觉靠闸。判据在
+// shared（前端表单用的是同一份），三条出路各验一次：改写命令 / 给 stopWhen / 明说盯到到期。
+{
+  // 判据本身：误判的代价不对称（拦错 = 本来做得成的事做不成），所以只认明确的那几种。
+  for (const [command, hit] of [
+    ["tail -F build.log | grep --line-buffered ERROR", "tail -f/-F"],
+    ["tail -f x.log", "tail -f/-F"],
+    ["while true; do sleep 5; done", "while true / until false"],
+    ["watch -n 5 ls", "watch"],
+    ["inotifywait -m /tmp", "inotifywait -m"],
+  ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该判成不会自退：${command}`);
+  for (const command of [
+    "npm test",
+    "timeout 600 tail -F build.log", // 自带死线
+    "until grep -q DONE log; do sleep 5; done; tail -4 log", // 条件满足就跳出
+    "while true; do grep -q DONE log && break; sleep 5; done", // 循环体里有 break
+    "tail -20 build.log",
+  ]) assert.equal(neverExitsOnItsOwn(command), null, `不许拦：${command}`);
+
+  const taskId = await makeTask();
+  const follower = "tail -F /tmp/ash-never.log | grep --line-buffered ERROR";
+  const denied = await startMonitor({ taskId, command: follower, description: "没有结束条件的跟随器" });
+  assert.equal(denied.ok, false, "跟随型命令没给结束条件时不许放行");
+  if (!denied.ok) {
+    assert.equal(denied.status, 409);
+    assert.equal(denied.needsEndCondition, true, "这一档要带出去，前端表单据它长出那个选择");
+    // 三条出路一条都不能少：少给一条，那一种合法意图就只能去照抄另一种（比如编一个永远
+    // 不命中的正则来绕过闸）。
+    assert.match(denied.error, /stopWhen/, "出路②");
+    assert.match(denied.error, /untilExpiry/, "出路③");
+    assert.match(denied.error, /EXIT=/, "出路①要给出可照抄的写法");
+  }
+  assert.equal((await listMonitors(taskId)).length, 0, "被拦下时一行都不许留，更不许起进程");
+
+  // 编不过的正则 = 一个永远不会命中的条件，等于没设 —— 当场 400，别让它变成另一条干等的哨兵。
+  const bad = await startMonitor({ taskId, command: follower, stopWhen: "^(OK" });
+  assert.equal(bad.ok, false, "stopWhen 编不过要拒");
+  assert.equal(bad.ok ? 0 : bad.status, 400);
+
+  // 出路③：明说「就是要盯到到期」就照原样放行。
+  const forever = await startMonitor({ taskId, command: follower, description: "盯错误日志", untilExpiry: true });
+  assert.equal(forever.ok, true, forever.ok ? "" : forever.error);
+  if (forever.ok) {
+    assert.equal(forever.monitor.stopWhen, null, "这一种没有结束条件，不许替它编一个");
+    await stopMonitor(forever.monitor.id, "闸的用例跑完了");
+  }
+  // 不是跟随型的命令一个字都不问（闸不许顺手改掉正常路径）。
+  const plain = await startMonitor({ taskId, command: "echo hi", description: "普通命令" });
+  assert.equal(plain.ok, true, plain.ok ? "" : plain.error);
+  if (plain.ok) await stopMonitor(plain.monitor.id, "闸的用例跑完了");
+  console.log("✓ 结束条件闸：判据只认明确的几种、拦下时三条出路给全、三条出路各自真的走得通");
 }
 // ── 事件上限：推满自动停，而且**不会把自己锁死** ─────────────────────────────
 // 这一条同时守两件事：到顶要真的停（每条事件都在烧回合），以及收尾必须能跑完 ——

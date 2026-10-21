@@ -70,6 +70,11 @@
 .monitor-composer__wake-options { display: flex; flex-wrap: wrap; gap: 10px; }
 .monitor-composer__wake-options label { display: inline-flex; width: auto; align-items: center; gap: 5px; color: var(--muted); font-size: 10.5px; }
 .monitor-composer__wake-options input { width: auto; height: auto; }
+.monitor-composer__ending { display: grid; gap: 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 8px 10px; }
+.monitor-composer__ending legend { padding: 0 4px; color: var(--faint); font-size: 9.5px; }
+.monitor-composer__ending-option { display: inline-flex; width: auto; align-items: center; gap: 5px; color: var(--muted); font-size: 10.5px; }
+.monitor-composer__ending-option input { width: auto; height: auto; }
+.monitor-composer__ending-pattern { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9.5px; }
 .monitor-composer__actions { display: flex; justify-content: flex-end; gap: 6px; }
 .monitor-composer__actions button { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 10px; color: var(--muted); font-size: 10.5px; }
 .monitor-composer__actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }

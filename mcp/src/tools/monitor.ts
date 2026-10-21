@@ -29,7 +29,8 @@ server.registerTool(
       "**命令就是过滤器，这是最重要的一条**：每一行事件都会唤醒任务跑一个真实回合，花的是真钱。所以别 `tail -F` 整份日志，要 grep 到「你真会据此做事」的那几行。管道每一级都得逐行冲刷（`grep --line-buffered`、`awk` 里 `fflush()`；`head` 做不到，别用）。同时**别只匹配成功**：只 grep 成功标记的哨兵在崩溃、卡死、异常退出时一声不吭，而「安静」和「还在跑」长得一模一样——把失败特征（`Traceback|ERROR|FAILED|Killed`）一起写进交替分支里。\n\n" +
       "**起了哨兵的那一轮，用 pause_task 收尾** —— `complete_task` 会被当场拒掉（名下还有没了结的哨兵时一律 409，**包括已经退出但结果还排在待发送、没送到你手上的那些**）。理由是任务一落 done/failed/canceled，它名下的哨兵会被系统一并停掉、排着的事件会被作废（哨兵唯一的出口就是唤醒这个任务，任务都结束了再留着只会白烧回合），于是它在等的那个结果你再也拿不到。pause_task 的 resumePrompt 写清「被哨兵叫醒后该干什么」；确实不要那个结果了，就先对它调 stop_monitor（reason 写清为什么）、它排着的结果一并按「明确放弃」算，再确认完成。\n\n**顺序反过来也不行**：已经调过 `complete_task` 再挂哨兵，那份确认会被当场撤掉（这次创建的返回里会明说），本回合改落检查点暂停——哨兵醒来会把这条会话重新叫起来。\n\n" +
       `**上限**：一个任务同时最多 ${MONITOR_MAX_PER_TASK} 个哨兵；单个哨兵推够 ${MONITOR_MAX_EVENTS} 条事件自动停（到顶会明确告诉你）；timeoutMs 在 ${MONITOR_MIN_TIMEOUT_MS / 1000} 秒到 ${minutes(MONITOR_MAX_TIMEOUT_MS)} 之间，缺省 ${minutes(MONITOR_DEFAULT_TIMEOUT_MS)}，到点进程被杀掉并推一条收尾事件。要盯更久就在到期事件里重挂一个。\n\n` +
-      "**它活得比你这一轮久**：进程由 ash 起、输出落文件，你的回合结束、会话结束、ash 重启都不会把它带走。所以不需要自己 `fork + setsid` 或 `nohup` —— 那样起的进程 ash 看不见也停不掉，留下的是没人认领的僵尸。",
+      "**它活得比你这一轮久**：进程由 ash 起、输出落文件，你的回合结束、会话结束、ash 重启都不会把它带走。所以不需要自己 `fork + setsid` 或 `nohup` —— 那样起的进程 ash 看不见也停不掉，留下的是没人认领的僵尸。\n\n" +
+      "**唤醒有两个条件:命令结束、以及盯满时长 —— 前者优先。** 所以「活一跑完就叫我」本来就成立,前提是**这条命令自己会结束**。`tail -F`、`while true`、`watch` 这一类永远不会结束,于是那一条形同虚设,只剩干等到期(2026-10-21 实测:被盯的活早跑完了,任务还白等了 30 分钟、0 条事件)。这类命令**创建时会被当场拒掉**,按你要的那一种改:① 把要等的那件事本身放进命令里(`<跑那件事>; code=$?; <摘要几行>; echo \"EXIT=$code\"`),它跑完哨兵就结束 —— 最省事也最准;② 活已经在别处跑着、只能跟着看,就原样保留命令并传 `stopWhen`;③ 本来就是要「每出现一次叫我一次、盯到到期」,传 `untilExpiry: true` 明说一声。",
     inputSchema: {
       taskId: z.string().describe("要挂哨兵的任务 id（通常就是你自己，任务 prompt 前言里有）"),
       command: z.string().min(1).describe("交给 shell 跑的长跑命令。它自己负责过滤：只吐你真会据此做事的行，成功与失败特征都要覆盖"),
@@ -42,11 +43,18 @@ server.registerTool(
       // 字段，那句出路就是一条死路（第 9 轮审查 N1）。
       wake: z.enum(MONITOR_WAKE_TARGETS as unknown as [string, ...string[]]).optional()
         .describe("往别的任务上挂、而那个任务上有审查在进行时，说清醒来叫谁：single=叫实现者 / reviewer=叫那次审查。给自己挂时不必传（按你当下这一轮判）"),
+      stopWhen: z.string().optional()
+        .describe("结束条件(JS 正则源文):哪一行一出现,那一行照常推给你、这条哨兵随即收工,不必等到期。命令自己不会结束时(tail -F / while true)必须给它或给 untilExpiry。例:\"^(OK|FAILED|ERROR)\"、\"EXIT=\""),
+      untilExpiry: z.boolean().optional()
+        .describe("「我本来就是要盯到到期」:每出现一次叫我一次那种(盯错误日志、盯外部状态变化)。只在命令自己不会结束时需要明说一声;**别拿它绕过那道闸** —— 要等一件事干完就按上面①②两条改,不然任务只能干等到期"),
     },
   },
-  async ({ taskId, command, description, cwd, timeoutMs, wake }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/monitors`, { command, description, cwd, timeoutMs, wake })); }
-    catch (e) { return fail(e); }
+  async ({ taskId, command, description, cwd, timeoutMs, wake, stopWhen, untilExpiry }) => {
+    try {
+      return ok(await call("POST", `/tasks/${taskId}/monitors`, {
+        command, description, cwd, timeoutMs, wake, stopWhen, untilExpiry,
+      }));
+    } catch (e) { return fail(e); }
   },
 );
 

@@ -85,7 +85,10 @@ export function mountMonitorRoutes(api: Hono): void {
 
   api.post("/tasks/:id/monitors", async (c) => {
     const taskId = c.req.param("id");
-    type StartBody = { command?: string; description?: string; cwd?: string; timeoutMs?: number; wake?: string };
+    type StartBody = {
+      command?: string; description?: string; cwd?: string; timeoutMs?: number; wake?: string;
+      stopWhen?: string; untilExpiry?: boolean;
+    };
     const body = await c.req.json<StartBody>().catch((): StartBody => ({}));
     if (typeof body.command !== "string" || !body.command.trim())
       return c.json({ error: "command 不能为空" }, 400);
@@ -97,6 +100,10 @@ export function mountMonitorRoutes(api: Hono): void {
       return c.json({ error: "cwd 必须是字符串" }, 400);
     if (body.timeoutMs !== undefined && (typeof body.timeoutMs !== "number" || !Number.isFinite(body.timeoutMs)))
       return c.json({ error: "timeoutMs 必须是毫秒数" }, 400);
+    if (body.stopWhen !== undefined && body.stopWhen !== null && typeof body.stopWhen !== "string")
+      return c.json({ error: "stopWhen 必须是字符串（JS 正则源文）" }, 400);
+    if (body.untilExpiry !== undefined && typeof body.untilExpiry !== "boolean")
+      return c.json({ error: "untilExpiry 必须是 true/false" }, 400);
     // 唤醒目标认不出来时**当场 400**，不能静默当「没指定」：那会退回「说不清叫谁」那句
     // 409，用户看到的是一个点了没反应的选项，而真正的原因是值拼错了。
     if (body.wake !== undefined && !MONITOR_WAKE_TARGETS.includes(body.wake as never))
@@ -110,14 +117,22 @@ export function mountMonitorRoutes(api: Hono): void {
       description: body.description,
       cwd: body.cwd,
       timeoutMs: body.timeoutMs,
+      stopWhen: body.stopWhen,
+      untilExpiry: body.untilExpiry,
       ownerUserId: ownerIdOf(actorOf(c)),
       caller: await callerOf(c, taskId, body.wake),
     });
     // 「说不清醒来叫谁」这一档要**原样带出去**：前端据它在表单上让人指定一个再提交。只回
     // 一句错误文案的话，手动挂哨兵在这种任务上就成了一条没有出路的死胡同。
     if (!result.ok) {
+      // 「缺一个结束条件」这一档也要原样带出去:前端那个手动挂哨兵的表单据它把结束条件那一栏
+      // 亮出来(跟 `needsWakeTarget` 同一个理由——只回一句文案的话,表单上就成了死胡同)。
       return c.json(
-        { error: result.error, ...(result.needsWakeTarget ? { needsWakeTarget: true } : {}) },
+        {
+          error: result.error,
+          ...(result.needsWakeTarget ? { needsWakeTarget: true } : {}),
+          ...(result.needsEndCondition ? { needsEndCondition: true } : {}),
+        },
         result.status,
       );
     }

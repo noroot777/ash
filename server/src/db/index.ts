@@ -157,7 +157,8 @@ export async function ensureSchema() {
       source_review_run TEXT, source_review_round INTEGER,
       unit_token TEXT, ended_by TEXT,
       results_abandoned_at TEXT, results_abandoned_reason TEXT,
-      result_handoff_at TEXT, result_handoff_text TEXT
+      result_handoff_at TEXT, result_handoff_text TEXT,
+      stop_when TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (
@@ -363,6 +364,10 @@ export async function ensureSchema() {
     // 看不见任何东西,任务落 done 把唯一的结果通知吃掉(第 1 轮审查 F1)。存量行 NULL = 不在交接中。
     "ALTER TABLE monitors ADD COLUMN result_handoff_at TEXT",
     "ALTER TABLE monitors ADD COLUMN result_handoff_text TEXT",
+    // 约定的结束条件(哪一行一出现就收工)。命令自己永不退出的那一类必须二选一:给这一列,
+    // 或显式声明「就是要盯到到期」—— 否则创建当场 409(见 shared/src/monitor-end-condition.ts)。
+    // 存量行 NULL = 没约定过,它们照旧只能等到期,这一列不改写任何既有事实。
+    "ALTER TABLE monitors ADD COLUMN stop_when TEXT",
     "ALTER TABLE monitor_reclaim_debts ADD COLUMN unit_token TEXT",
     // 「线索追到这里为止」的戳。**不是销账**:整项退出在当前平台证不出,所以行留着只盖戳
     // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。

@@ -165,7 +165,11 @@ import {
   const sessionId = await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
   // **真起、真停**：预写一行 `ended_by='actor'` 证明不了这条出路通（第 2 轮审查 R2-3 就是
   // 从这里漏的 —— 旧用例预写终态字段，而真 `stopMonitor` 在那条路上一笔凭证都没写）。
-  const started = await startMonitor({ taskId, command: "tail -f /dev/null", description: "太吵的日志" });
+  // `untilExpiry`:这条就是「每出现一次叫我一次」那种(盯错误日志),它自己不会结束 ——
+  // 不明说一声的话,创建闸会直接拒(见 shared/src/monitor-end-condition.ts)。
+  const started = await startMonitor({
+    taskId, command: "tail -f /dev/null", description: "太吵的日志", untilExpiry: true,
+  });
   assert.ok(started.ok, `先得真的挂上一条：${started.ok ? "" : started.error}`);
   const monitorId = started.ok ? started.monitor.id : "";
   // `stop_monitor` 不会取消已经攒进托盘的那几行（它们是已经发生的事实），所以这个组合

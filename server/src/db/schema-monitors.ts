@@ -90,6 +90,15 @@ export const monitors = sqliteTable("monitors", {
    */
   resultHandoffAt: text("result_handoff_at"),
   resultHandoffText: text("result_handoff_text"),
+  /**
+   * **约定的结束条件**:哪一行一出现这条哨兵就收工(JS 正则源文)。NULL = 没约定过。
+   *
+   * 它是「命令自己永远不会结束」那一类的**唯一一条非到期出路**(另一条是改写命令让它自退)。
+   * 创建闸因此对那一类命令要求二选一:给这一列,或者显式声明「就是要盯到到期」——
+   * 判据与措辞在 shared/src/monitor-end-condition.ts,起因见那份文件头。
+   * 存量行一律 NULL = 没约定过(不是「有但读不出来」)。
+   */
+  stopWhen: text("stop_when"),
   // 谁起的这个哨兵(多人模式)。停它、看它都按任务归属判权,这一列只做记账。
   ownerUserId: text("owner_user_id"),
   // 出身:'ash' = ash server 自己起的进程(全功能);'claude' = claude CLI 内置 Monitor 的
