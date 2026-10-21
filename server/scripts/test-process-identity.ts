@@ -496,6 +496,64 @@ if (IS_WINDOWS) {
   unlinkSync(stillHeld);
 }
 
+// ── ⑬ 输出文件那条线索的两道边:反证压得过它,只读握着不算它 ─────────────────────
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 没有 lsof,输出文件那条线索在那边本来就不参与,跳过 ⑬");
+} else {
+  const warn = console.warn;
+  // (a) **正面反证不许被第二份证据洗掉**(第 3 轮审查 F1 实测)。现场:记录在案的启动时刻
+  //     对不上 ⇒ ps 已经明确答了「这个号上现在是另一个进程」;而这个进程的 stdout 恰好就
+  //     重定向在这一次运行的输出文件上,于是第二份证据看上去成立。上一版把「已经证明不是
+  //     我们的」和「这一问没答出来」一视同仁地落进后备分支,一条更弱的证据推翻了一条更强的
+  //     反证,`killTree` 把信号发到了它那一组上。
+  const impostor = provenSleeper("outfile");
+  const warnsA: string[] = [];
+  console.warn = (...a: unknown[]) => { warnsA.push(a.join(" ")); };
+  try {
+    killByPid(impostor.child.pid!, "Thu Jan  1 00:00:00 1970", { outPath: impostor.outPath });
+  } finally { console.warn = warn; }
+  await wait(2400);                               // 连两秒后那一刀的窗口一起等过去
+  assert.equal(isPidAlive(impostor.child.pid!), true,
+    "ps 已经反证过这个号 ⇒ 一刀都不许发(它握着输出文件也不改变这个结论)");
+  assert.ok(warnsA.some((w) => w.includes(String(impostor.child.pid)) && w.includes("另一个进程")),
+    "没下刀必须留下痕迹,而且要说得出是被哪条证据否掉的");
+  impostor.child.kill("SIGKILL");
+
+  // (b) **只读握着那个文件不算第二份证据**:用户自己 tail 日志也握着它。现场是身份这一问
+  //     停在粗档(没答出来)、文件被一个只读的看客握着 —— 那不等于「这个进程的标准输出就是
+  //     这个文件」,所以仍然是「证不出就不下刀」。上一版只比号码,看客因此拿到了整组击杀的
+  //     授权(审查用真实只读查看器实测过:它收到 SIGTERM 死了)。
+  const viewed = join(tmpdir(), `ash-test-viewer-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
+  writeFileSync(viewed, "");
+  tempFiles.push(viewed);
+  const rfd = openSync(viewed, "r");
+  const viewer = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+    stdio: ["ignore", "ignore", "ignore", rfd], detached: true,
+  });
+  closeSync(rfd);
+  viewer.unref();
+  strays.push(viewer);
+  await wait(300);
+  const viewerStartedAt = inspectProcess(viewer.pid!)?.startedAt ?? null;
+  const warnsB: string[] = [];
+  console.warn = (...a: unknown[]) => { warnsB.push(a.join(" ")); };
+  try {
+    killByPid(viewer.pid!, viewerStartedAt, { outPath: viewed });
+  } finally { console.warn = warn; }
+  await wait(2400);
+  if (viewerStartedAt && recordedGrade(viewerStartedAt) === "exclusive") {
+    // 排他档(亚秒级读数)上这一档本来就不靠输出文件,(b) 的前提不成立 —— 判据按读数精度
+    // 写,不按平台名写(同 ④)。
+    console.log("   ~ 这台机器的启动时刻是排他档,(b) 的前提「身份没答出来」不成立,跳过");
+  } else {
+    assert.equal(isPidAlive(viewer.pid!), true,
+      "只读握着输出文件 ≠ 这个号是这一次运行的根 ⇒ 不下刀");
+    assert.ok(warnsB.some((w) => w.includes("上没有它的 stdout")),
+      "警告要说得出是哪一问没答出来");
+  }
+  viewer.kill("SIGKILL");
+}
+
 for (const child of strays) {
   try { if (child.pid) process.kill(child.pid, "SIGKILL"); } catch { /* 已经没了 */ }
 }

@@ -283,6 +283,19 @@ export const agentCleanupDebts = sqliteTable("agent_cleanup_debts", {
   /** 记号那一问当时停在哪一档(`ours`/`suspected`/`none`/`unprovable`),分流重试策略。 */
   unitVerdict: text("unit_verdict").notNull().default(""),
   attempts: integer("attempts").notNull().default(0),
+  /**
+   * **这一行现在是第几版证据**。每一次写(落账、推进、收档)都 +1。
+   *
+   * 销账是「按我读到的那一版证据删掉整行」,所以它只在**我判的那一版还没被人动过**时才成立。
+   * 判定与下手之间隔着取证(清扫那一档还隔着 2 秒补刀窗口),中间要是有新证据落到同一个
+   * 键上(清理路径又记了一笔新的路径线索、另一次清扫先推进过),那份快照就已经不是当前
+   * 事实了 —— 照样按键删行就会把别人刚落下的证据一起删掉(第 3 轮审查 F2)。所以删/盖戳
+   * 都带着版本当条件:版本对不上就一行都不动,如实说出来,下一轮重新取证。
+   *
+   * 进程内已经按键排队了,这一列是**数据里的交叉校验**:它让这条不变量不再只靠「所有写入
+   * 都记得走那把锁」这个约定成立 —— 对不上就说明有人绕过去了,那一刻宁可不删。
+   */
+  version: integer("version").notNull().default(0),
   createdAt: text("created_at").notNull(),
   lastAttemptAt: text("last_attempt_at"),
   /**

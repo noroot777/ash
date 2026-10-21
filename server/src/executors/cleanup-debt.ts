@@ -7,13 +7,20 @@
 // 进程都没有)而且追踪文件也没有持有者 —— 只有这一档才删行。`suspected`(macOS 看得见
 // 却给不出落点)、`unprovable`(这一问自己没答出来)一律留着,并且如实说出来:那是
 // 「还没收干净」,不是「收干净了」。
+//
+// 这一份同时是**责任交接层**,两头都在这里收口(第 3 轮审查 F2):
+//  · 清空证明对应**哪一版证据**,销账只针对那一版 —— 读、判、写在同一把键锁里,行上带
+//    `version` 当交叉校验,对不上就一行不动(见 `settleIfStillEmpty`/`pushDebtLocked`);
+//  · **落库失败不等于责任消失** —— 写不进去的那一笔留在内存里接着扛(`pendingNotes`),
+//    每次清扫先补投一遍,并且在清扫结果里如实报出「还有几笔只在内存里」。
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db, dbClient } from "../db/index.js";
 import { agentCleanupDebts } from "../db/schema.js";
 import { now } from "../util.js";
 import { processUnitEvidence, type UnitEvidence } from "../proc.js";
+import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { describeEvidence, signalMembers } from "./escapees.js";
-import { probeFileHolders, type HolderProbe } from "./track-evidence.js";
+import { fileHoldersAnswerable, probeFileHolders, type HolderProbe } from "./track-evidence.js";
 import {
   mergeCleanupResults, residueFromProbe, type CleanupResult,
 } from "./kill.js";
@@ -39,20 +46,31 @@ function withDebtKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-export type CleanupDebtInput = {
+/**
+ * 定位这一次运行的那几条线索 —— **记一笔和销一笔必须按同一套线索算键**。
+ *
+ * 销账那一侧上一版只交了个记号,于是没有记号的那些行(键是 `no-unit:<路径>`)永远对不上,
+ * 一旦欠过就再也销不掉,披露面上堆着一笔其实早就空了的账(第 3 轮审查 N8)。
+ */
+export type CleanupDebtClues = {
   /** `null` = 这一次运行没有记号(升级前建的老会话行)⇒ 退回路径线索当键,见 `debtKey`。 */
   unitToken: string | null;
+  trackPath?: string | null;
+  outPath?: string | null;
+};
+
+export type CleanupDebtInput = CleanupDebtClues & {
   taskId?: string;
   sessionId?: string;
   rootPid?: number | null;
   rootStartedAt?: string | null;
-  trackPath?: string | null;
-  outPath?: string | null;
   /** `remaining` = 确证还有成员活着;`unknown` = 这一轮问不清楚。 */
   state: "remaining" | "unknown";
   detail: string;
   unitVerdict: UnitEvidence["verdict"];
 };
+
+export type DebtRow = typeof agentCleanupDebts.$inferSelect;
 
 /**
  * 记一笔:这一次运行**还不能证明收干净了**。
@@ -72,9 +90,57 @@ export async function noteCleanupDebt(
 ): Promise<"noted" | "untrackable" | "failed"> {
   const key = debtKey(input);
   if (!key) return "untrackable";
-  if (dbClient.closed) return "failed";           // 有线索、只是这一刻没处写
-  return withDebtKey(key, () => noteDebtRow(key, input));
+  if (dbClient.closed) {                          // 有线索、只是这一刻没处写
+    keepPendingNote(key, input);
+    return "failed";
+  }
+  const verdict = await withDebtKey(key, () => noteDebtRow(key, input));
+  if (verdict === "failed") keepPendingNote(key, input);
+  return verdict;
 }
+
+// ── 写不进去的那一笔,内存里接着扛 ────────────────────────────────────────────────
+//
+// 「还没收干净」这件事的责任交接只有落库一条路跨得过重启,所以**落库失败是一次真正的责任
+// 丢失**:上一版如实打了日志就结束了,那一笔既不在库里也不在任何人手上,后面哪一次清扫都
+// 不会再想起它(第 3 轮审查 F2)。库写失败多半是瞬时的(锁、磁盘满、关库竞态),所以这里
+// 留一份进程内的待投清单:定时补投,每次清扫开头也补投一遍,并且把「还剩几笔只在内存里」
+// 写进清扫结果 —— 它跨不过重启这一点藏不住,但至少在本进程里不再是丢了。
+const pendingNotes = new Map<string, CleanupDebtInput>();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+const FLUSH_DELAY_MS = 30_000;
+
+function keepPendingNote(key: string, input: CleanupDebtInput): void {
+  pendingNotes.set(key, input);                   // 同一个键只留最后一次的结论
+  scheduleFlush();
+}
+
+function scheduleFlush(): void {
+  if (flushTimer || !pendingNotes.size) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    void flushPendingCleanupNotes();
+  }, FLUSH_DELAY_MS);
+  // 不拿住事件循环:这件事不该让一个本来可以退出的进程多活着。
+  (flushTimer as { unref?: () => void }).unref?.();
+}
+
+/** 把内存里还扛着的那几笔再投一次。返回这一轮落进库的笔数和仍没落下的笔数。 */
+export async function flushPendingCleanupNotes(): Promise<{ landed: number; pending: number }> {
+  let landed = 0;
+  for (const [key, input] of [...pendingNotes]) {
+    if (dbClient.closed) break;
+    const verdict = await withDebtKey(key, () => noteDebtRow(key, input));
+    if (verdict !== "noted") continue;
+    pendingNotes.delete(key);
+    landed += 1;
+  }
+  if (pendingNotes.size) scheduleFlush();
+  return { landed, pending: pendingNotes.size };
+}
+
+/** 披露用:这一刻有几笔责任只在内存里(跨不过重启)。 */
+export const pendingCleanupNoteCount = (): number => pendingNotes.size;
 
 async function noteDebtRow(
   key: string, input: CleanupDebtInput,
@@ -87,7 +153,7 @@ async function noteDebtRow(
       trackPath: input.trackPath ?? null, outPath: input.outPath ?? null,
       state: input.state, detail: input.detail.slice(0, 2000),
       unitVerdict: input.unitVerdict,
-      attempts: 0, createdAt: now(), lastAttemptAt: null,
+      attempts: 0, version: 0, createdAt: now(), lastAttemptAt: null,
       closedAt: null, closedNote: null,
     }).onConflictDoUpdate({
       target: agentCleanupDebts.unitToken,
@@ -95,6 +161,8 @@ async function noteDebtRow(
         state: input.state, detail: input.detail.slice(0, 2000),
         unitVerdict: input.unitVerdict,
         closedAt: null, closedNote: null,
+        // 证据换了一版:上一版的「清空证明」从这一刻起作不得数(见 schema 的 version)。
+        version: sql`${agentCleanupDebts.version} + 1`,
         // 线索只在「这一次知道得更多」时覆盖:把已知的路径/启动时刻盖成 null 等于擦证据。
         ...(input.rootPid ? { rootPid: input.rootPid } : {}),
         ...(input.rootStartedAt ? { rootStartedAt: input.rootStartedAt } : {}),
@@ -122,9 +190,9 @@ async function noteDebtRow(
  * 三条线索都没有才返回 `null`:那种记录追不出任何东西,记下来只会让披露面永久积压一条
  * 谁也处置不了的行(失败桩、没有真实进程的合成句柄就属于这一类)。
  */
-function debtKey(input: CleanupDebtInput): string | null {
-  if (input.unitToken) return input.unitToken;
-  const path = input.outPath || input.trackPath;
+function debtKey(clues: CleanupDebtClues): string | null {
+  if (clues.unitToken) return clues.unitToken;
+  const path = clues.outPath || clues.trackPath;
   return path ? `${NO_UNIT_PREFIX}${path}` : null;
 }
 
@@ -132,31 +200,122 @@ function debtKey(input: CleanupDebtInput): string | null {
 const NO_UNIT_PREFIX = "no-unit:";
 
 /**
- * 确证清空:销账删行。**只有「全部线索都确证空」那一档配调用它**(见 `pushCleanupDebt`)。
+ * 这一次运行**自己**判出了「清空」⇒ 销账。清理路径的 `empty` 分支调它。
  *
- * 走按键排队:它删的是「我读到的那份证据」对应的行,中间不许插进别人的新证据(见顶部)。
+ * **它不信调用方那句「空了」就删行**(第 3 轮审查 F2):那个判断是在锁外做的,从判完到这里
+ * 之间,另一次清扫可能刚把新的残留证据写到同一个键上 —— 上一版照样按键 `DELETE`,把别人
+ * 刚落下的那一版证据一起删了,于是「局部的、过期的空」注销掉了「当前的、有残留」。
+ *
+ * 所以这里锁内自证:先看这个键上到底有没有账(绝大多数回合压根没欠过,读一次主键就返回),
+ * 有账就**按行上现有的线索重新取证**,仍然确证空才删;还有残留就把这一刻记上去、行留着。
+ * 顺带把键算对:按同一套线索算(`debtKey`),没有记号的那些行才销得掉(本轮 N8)。
  */
-export async function settleCleanupDebt(unitToken: string | null | undefined): Promise<void> {
-  if (!unitToken || dbClient.closed) return;
-  await withDebtKey(unitToken, () => settleDebtRow(unitToken));
+export async function settleCleanupDebt(clues: CleanupDebtClues): Promise<void> {
+  const key = debtKey(clues);
+  if (!key || dbClient.closed) return;
+  await withDebtKey(key, () => settleIfStillEmpty(key));
 }
 
-async function settleDebtRow(unitToken: string): Promise<void> {
-  if (dbClient.closed) return;
-  try {
-    await db.delete(agentCleanupDebts).where(eq(agentCleanupDebts.unitToken, unitToken));
-  } catch { /* 下一轮清扫再说 */ }
+async function settleIfStillEmpty(key: string): Promise<void> {
+  const read = await readDebtRow(key);
+  if (!read.ok) {
+    console.warn(`[ash] 这一笔清理责任该销账、但这一刻读不出来(unit=${key}:${read.reason}):`
+      + "行留着,下一轮清扫重新取证");
+    return;
+  }
+  if (!read.row) return;                          // 从来没欠过 —— 绝大多数回合走这里
+  const row = read.row;
+  const judged = await judgeDebtRow(row);
+  if (judged.result.kind !== "empty") {
+    console.warn(`[ash] 这一笔清理责任还不能销(unit=${key}):${judged.result.detail}`);
+    await touchDebtRow(row, judged.result, judged.after.verdict);
+    return;
+  }
+  if (!await settleDebtRow(key, row.version)) {
+    console.warn(`[ash] 这一笔清理责任确证空了、销账却没落下(unit=${key}):`
+      + "行留着,下一轮清扫会再确证一次");
+  }
 }
 
-/** 追到这里为止(线索本身没了):盖戳、不再重试,**但不删行** —— 它是最后的可定位身份。 */
-async function closeDebtRow(unitToken: string, note: string): Promise<void> {
-  if (dbClient.closed) return;
+/** 读这一个键上的账。**读不到和没有账是两件事**,所以分两档返回,不折成 `null`。 */
+async function readDebtRow(
+  key: string,
+): Promise<{ ok: true; row: DebtRow | null } | { ok: false; reason: string }> {
+  if (dbClient.closed) return { ok: false, reason: "数据库连接已关闭" };
   try {
-    await db.update(agentCleanupDebts)
-      .set({ closedAt: now(), closedNote: note.slice(0, 500) })
-      .where(and(eq(agentCleanupDebts.unitToken, unitToken), isNull(agentCleanupDebts.closedAt)));
-  } catch { /* 下一轮清扫再说 */ }
+    const rows = await db.select().from(agentCleanupDebts)
+      .where(eq(agentCleanupDebts.unitToken, key)).limit(1);
+    return { ok: true, row: rows[0] ?? null };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
 }
+
+/** 按行上现有的线索重新取证,得到这一刻的结论。销账与推进共用它 —— 判据只有一处。 */
+async function judgeDebtRow(row: DebtRow): Promise<{
+  marked: boolean; after: UnitEvidence; clues: PathClues; result: CleanupResult;
+}> {
+  const marked = isMarked(row.unitToken);
+  const after = processUnitEvidence(marked ? row.unitToken : null, { fresh: true });
+  const clues = await probeDebtPaths(row);
+  return {
+    marked, after, clues,
+    result: mergeCleanupResults([markerResidue(after, marked), pathResidue(clues)]),
+  };
+}
+
+/**
+ * 销账删行,**条件是「还是我判的那一版」**(见 schema 的 version)。
+ *
+ * 返回删没删到。版本对不上 = 判定与下手之间有人往这个键上落了新证据,这一刀就不该下:
+ * 行留着,下一轮重新取证。写失败同样返回 false —— 「删失败」不许长成「销账成功」。
+ */
+async function settleDebtRow(unitToken: string, version: number): Promise<boolean> {
+  if (dbClient.closed) return false;
+  try {
+    const result = await db.delete(agentCleanupDebts).where(and(
+      eq(agentCleanupDebts.unitToken, unitToken), eq(agentCleanupDebts.version, version),
+    ));
+    if (rowsAffectedOf(result) > 0) return true;
+    console.warn(`[ash] 销账没删到行(unit=${unitToken}、判的是第 ${version} 版):`
+      + "这个键上的证据在判定之后被人动过,这一刀不下,下一轮重新取证");
+    return false;
+  } catch (error) {
+    console.error(`[ash] 销账写失败 unit=${unitToken}:`, error);
+    return false;
+  }
+}
+
+/**
+ * 追到这里为止(线索本身没了):盖戳、不再重试,**但不删行** —— 它是最后的可定位身份。
+ *
+ * 同样带版本条件:盖戳也是「按我判的那一版下的结论」,中间来了新证据就不该盖。
+ */
+async function closeDebtRow(unitToken: string, version: number, note: string): Promise<boolean> {
+  if (dbClient.closed) return false;
+  try {
+    const result = await db.update(agentCleanupDebts)
+      .set({ closedAt: now(), closedNote: note.slice(0, 500), version: version + 1 })
+      .where(and(
+        eq(agentCleanupDebts.unitToken, unitToken), eq(agentCleanupDebts.version, version),
+        isNull(agentCleanupDebts.closedAt),
+      ));
+    if (rowsAffectedOf(result) > 0) return true;
+    console.warn(`[ash] 收档没盖到戳(unit=${unitToken}、判的是第 ${version} 版):`
+      + "要么这个键上的证据被人动过、要么已经收过档,这一轮不动它");
+    return false;
+  } catch (error) {
+    console.error(`[ash] 收档写失败 unit=${unitToken}:`, error);
+    return false;
+  }
+}
+
+/** 条件写到底改没改到行。drizzle 把底层 client 的 `rowsAffected` 原样带出来。 */
+const rowsAffectedOf = (result: unknown): number =>
+  Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0);
+
+/** 这一行有没有记号(`no-unit:` 开头的那些是升级前建的老会话,键退回了路径线索)。 */
+const isMarked = (key: string): boolean => !key.startsWith(NO_UNIT_PREFIX);
 
 /**
  * 还在追的那几笔(披露与重试入口都读它)。
@@ -212,21 +371,45 @@ async function listCleanupDebts(includeClosed: boolean): Promise<CleanupDebtList
  *  · `unprovable` —— 这一问自己没答出来:留着,下次开机再试。
  */
 export type CleanupSweepResult =
-  | { ok: true; settled: number; left: number; closed: number }
+  | {
+    ok: true;
+    /** 确证清空、**而且行真的删掉了**。写失败不算在这一档里(第 3 轮审查 N9)。 */
+    settled: number;
+    /** 重新取证之后仍然欠着 —— 包括「判出结论却没写进去」的那几笔。 */
+    left: number;
+    /** 能追的线索都追到头了,盖了戳。 */
+    closed: number;
+    /** 拿到锁之前就被清理路径自己确证销掉了(那是更强的证明,不是这一轮推动的)。 */
+    vanished: number;
+    /** 连这一笔的行都读不出来:这一轮它一步没动,别算进上面任何一档。 */
+    stuck: number;
+    /** 清扫开头补投落库的责任笔数。 */
+    landedNotes: number;
+    /** 仍然只在内存里扛着的责任笔数(跨不过重启,见 `pendingNotes`)。 */
+    pendingNotes: number;
+  }
   /** 连「有哪几笔」都没问出来 ⇒ **不许报成 0/0/0**(那和「全扫完了,什么都没有」同形)。 */
   | { ok: false; reason: string };
 
 export async function sweepAgentCleanupDebts(): Promise<CleanupSweepResult> {
+  // 先把上一轮写不进去、内存里还扛着的那几笔补投一遍(见 `pendingNotes`):它们本该是库里
+  // 的行,补上之后这一轮才扫得到。
+  const flushed = await flushPendingCleanupNotes();
   const open = await listOpenCleanupDebts();
   if (!open.ok) return { ok: false, reason: open.reason };
-  let settled = 0, left = 0, closed = 0;
+  let settled = 0, left = 0, closed = 0, vanished = 0, stuck = 0;
   for (const debt of open.debts) {
-    const verdict = await pushCleanupDebt(debt);
+    const verdict = await pushCleanupDebt(debt.unitToken);
     if (verdict === "settled") settled += 1;
     else if (verdict === "closed") closed += 1;
+    else if (verdict === "vanished") vanished += 1;
+    else if (verdict === "unreadable") stuck += 1;
     else left += 1;
   }
-  return { ok: true, settled, left, closed };
+  return {
+    ok: true, settled, left, closed, vanished, stuck,
+    landedNotes: flushed.landed, pendingNotes: flushed.pending,
+  };
 }
 
 /**
@@ -249,51 +432,57 @@ export async function sweepAgentCleanupDebts(): Promise<CleanupSweepResult> {
  *
  * **记号与路径都在(可能的)下刀之后才取证**:下刀前那次读数说明不了下刀后的事。
  */
-function pushCleanupDebt(
-  debt: typeof agentCleanupDebts.$inferSelect,
-): Promise<"settled" | "closed" | "left"> {
-  return withDebtKey(debt.unitToken, () => pushDebtLocked(debt));
+type SweepVerdict = "settled" | "closed" | "left" | "vanished" | "unreadable";
+
+function pushCleanupDebt(key: string): Promise<SweepVerdict> {
+  return withDebtKey(key, () => pushDebtLocked(key));
 }
 
-async function pushDebtLocked(
-  debt: typeof agentCleanupDebts.$inferSelect,
-): Promise<"settled" | "closed" | "left"> {
+async function pushDebtLocked(key: string): Promise<SweepVerdict> {
+  // **行在锁内重新读**(第 3 轮审查 F2):列表那一刻的快照到这里已经隔了前面每一笔的处理
+  // (各带 2 秒补刀窗口),中间清理路径完全可能往同一个键上写了新线索、或者已经自己确证
+  // 销掉了这一笔。拿着锁外的旧对象取证,判的就是一份过期证据,而写回去却是当前这一行。
+  const read = await readDebtRow(key);
+  if (!read.ok) {
+    console.warn(`[ash] 这一笔清理责任读不出来(unit=${key}:${read.reason}):这一轮没动它`);
+    return "unreadable";
+  }
+  if (!read.row) return "vanished";               // 清理路径自己确证销掉了 —— 更强的证明
+  const debt = read.row;
   // `no-unit:` 开头的那些行没有记号(升级前建的老会话),记号这一问对它们永远是
   // `unprovable` —— 不能拿这一档当「还有残留」,判据只剩路径线索。
-  const marked = !debt.unitToken.startsWith(NO_UNIT_PREFIX);
-  const token = marked ? debt.unitToken : null;
-  const opening = processUnitEvidence(token, { fresh: true });
+  const marked = isMarked(key);
+  const opening = processUnitEvidence(marked ? key : null, { fresh: true });
 
   if (marked && opening.verdict === "ours") {
     // 自带归属证明 + 同源代次 ⇒ 这一档敢下刀。`signalMembers` 每一刀之前重核代次。
     signalMembers(opening.members, "SIGTERM");
     await new Promise((r) => { const t = setTimeout(r, 2000); (t as { unref?: () => void }).unref?.(); });
-    const again = processUnitEvidence(token, { fresh: true });
+    const again = processUnitEvidence(marked ? key : null, { fresh: true });
     if (again.verdict === "ours") signalMembers(again.members, "SIGKILL");
   }
 
-  const after = marked ? processUnitEvidence(token, { fresh: true }) : opening;
-  const clues = await probeDebtPaths(debt);
-  const result = mergeCleanupResults([markerResidue(after, marked), pathResidue(clues)]);
+  // **记号与路径都在(可能的)下刀之后才取证**:下刀前那次读数说明不了下刀后的事。
+  const { after, clues, result } = await judgeDebtRow(debt);
 
   if (result.kind === "empty") {
-    await settleDebtRow(debt.unitToken);
-    return "settled";
+    // 删不掉就还是欠着:「写失败」不许在计数上长成「销账成功」(本轮 N9)。
+    return await settleDebtRow(key, debt.version) ? "settled" : "left";
   }
   // 记号这边已经确证空(或者本来就没有记号),路径那边只剩「名字自己没了」这种再问多少次
   // 都一样的答案 ⇒ 能追的都追到头了。**收档不是销账**:行留着,它是最后的可定位身份。
   if (result.kind === "unknown" && (!marked || after.verdict === "none") && cluesExhausted(clues)) {
-    await closeDebtRow(debt.unitToken, result.detail);
-    return "closed";
+    return await closeDebtRow(key, debt.version, result.detail) ? "closed" : "left";
   }
-  await touchDebtRow(debt.unitToken, result, after.verdict);
+  await touchDebtRow(debt, result, after.verdict);
   return "left";
 }
 
 /** 两条跨得过重启的路径线索,**一起问**(少问一条就是上面那段说的那个漏洞)。 */
-async function probeDebtPaths(
-  debt: typeof agentCleanupDebts.$inferSelect,
-): Promise<PathClues> {
+async function probeDebtPaths(debt: DebtRow): Promise<PathClues> {
+  // 这台机器结构性答不了「谁握着这个文件」时**不问**(见 `fileHoldersAnswerable`):那一档
+  // 记成「没答出来」会让每一笔账在那个平台上永远推不动,真正的残留反而被淹掉(本轮 N2)。
+  if (!fileHoldersAnswerable()) return { track: null, out: null };
   const [track, out] = await Promise.all([
     debt.trackPath ? probeFileHolders(debt.trackPath) : Promise.resolve(null),
     debt.outPath ? probeFileHolders(debt.outPath) : Promise.resolve(null),
@@ -314,14 +503,27 @@ const pathResidue = (clues: PathClues): CleanupResult => mergeCleanupResults([
   residueFromProbe("追踪文件", clues.track), residueFromProbe("输出文件", clues.out),
 ]);
 
-/** 记号那一问写成同一种三档。没有记号的行上这一问**不发表意见**(合并时的单位元)。 */
-function markerResidue(evidence: UnitEvidence, marked: boolean): CleanupResult {
+/**
+ * 记号那一问写成同一种三档。没有记号的行上这一问**不发表意见**(合并时的单位元)。
+ *
+ * `answerable` 是「这台机器答得了这一问吗」(默认取本机事实,见 `monitorUnitAnswerable`)。
+ * 显式收成参数是为了让 `null` 档那一支在**任何**平台上都跑得到回归 —— 它只在 win32 上
+ * 触发,而那台真机这一轮连不上;把判据写成参数,至少这条分支的逻辑本身是被钉住的。
+ */
+export function markerResidue(
+  evidence: UnitEvidence, marked: boolean, answerable = monitorUnitAnswerable(),
+): CleanupResult {
   if (!marked) return { kind: "empty" };
   switch (evidence.verdict) {
     case "ours": case "suspected":
       return { kind: "remaining", detail: describeEvidence(evidence) };
     case "unprovable":
-      return { kind: "unknown", detail: `资源记号${describeEvidence(evidence)}` };
+      // 这台机器**结构性读不到别的进程的环境块**(win32)时这一问同样不发表意见:它跟
+      // 「这一次查询失败」不是一件事 —— 后者下一轮还问得出来,前者永远是这个答案,记成
+      // 「没答出来」只会让那个平台上的每一笔账永远推不动(本轮 N2)。
+      return answerable
+        ? { kind: "unknown", detail: `资源记号${describeEvidence(evidence)}` }
+        : { kind: "empty" };
     case "none":
       return { kind: "empty" };
   }
@@ -342,15 +544,28 @@ function cluesExhausted(clues: PathClues): boolean {
   return !probes.some((p) => p.kind === "unknown" && !p.lost);
 }
 
-/** 留着这一笔:把这一刻停在哪、第几次了记上去。 */
+/**
+ * 留着这一笔:把这一刻停在哪、第几次了记上去。返回写没写进去。
+ *
+ * 也带版本条件 —— 这一句写的是「按我判的那一版,它仍然欠着」。中间来了新证据(版本已经
+ * 变过)说明有更新的结论在,这一句就不该把它盖回去。
+ */
 async function touchDebtRow(
-  unitToken: string, result: CleanupResult, verdict: UnitEvidence["verdict"],
-): Promise<void> {
-  if (dbClient.closed || result.kind === "empty") return;
+  debt: DebtRow, result: CleanupResult, verdict: UnitEvidence["verdict"],
+): Promise<boolean> {
+  if (dbClient.closed || result.kind === "empty") return false;
   try {
-    await db.update(agentCleanupDebts).set({
+    const written = await db.update(agentCleanupDebts).set({
       state: result.kind, detail: result.detail.slice(0, 2000), unitVerdict: verdict,
       lastAttemptAt: now(), attempts: sql`${agentCleanupDebts.attempts} + 1`,
-    }).where(eq(agentCleanupDebts.unitToken, unitToken));
-  } catch { /* 下一轮再说 */ }
+      version: debt.version + 1,
+    }).where(and(
+      eq(agentCleanupDebts.unitToken, debt.unitToken),
+      eq(agentCleanupDebts.version, debt.version),
+    ));
+    return rowsAffectedOf(written) > 0;
+  } catch (error) {
+    console.error(`[ash] 这一笔清理责任的进展没记上(unit=${debt.unitToken}):`, error);
+    return false;
+  }
 }

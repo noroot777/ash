@@ -9,7 +9,7 @@
 //   cleanup-debt.ts     「没收干净」这件事的持久化与重试
 //   kill.ts(本文件)   三层击杀 + 把上面几层的结论汇成一个清理结果
 //
-// 回归分三条,**改这一摊要跑全三条**(`server/CLAUDE.md` 的表里只列得下第一条):
+// 这一摊的回归分在三条里(`server/CLAUDE.md` 的表里只列得下第一条),各自覆盖的范围:
 //   test:process-identity   身份判据与三层击杀(「这个号此刻还是不是它」)
 //   test:process-subtrees   快照形状、子树归属、持有者这一问的三档
 //   test:cleanup-debt       清理结论的三档 + 责任落账/披露/重试/授权
@@ -21,12 +21,16 @@ import { IS_WINDOWS, isPidAlive, killTree } from "../platform.js";
 import { processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { processGroupMembersSync } from "../process-generation.js";
 import { canShoot, killProvenUnit, reclaimState } from "../monitor-reclaim-evidence.js";
+import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { runOutPathOf, unitTokenOf } from "./unit-token.js";
 import { childKillAuthorized, childStillOurs } from "./child-identity.js";
 import {
-  probeFileHolders, releaseTrackEvidence, trackPathOf, type HolderProbe,
+  fileHoldersAnswerable, holderMayOwn, probeFileHolders, releaseTrackEvidence, trackPathOf,
+  type HolderProbe,
 } from "./track-evidence.js";
 import { describeEvidence, killEscapees, signalMembers } from "./escapees.js";
+// 只借类型:持久层是按需加载的(它拉起整个 db 层),不许在这里长出静态依赖。
+import type { CleanupDebtInput } from "./cleanup-debt.js";
 
 // 各层原样转出去:`import { childStillOurs } from "./kill.js"` 这类既有写法照旧能用。
 export {
@@ -125,14 +129,27 @@ export function mergeCleanupResults(results: readonly CleanupResult[]): CleanupR
  */
 export function residueFromProbe(label: string, probe: HolderProbe | null): CleanupResult {
   if (!probe) return { kind: "empty" };
-  if (probe.kind === "held") {
-    const alive = probe.pids.filter(isPidAlive);
-    return alive.length
-      ? { kind: "remaining", detail: `${label}仍被 ${alive.join(",")} 握着` }
-      : { kind: "empty" };
-  }
   if (probe.kind === "empty") return { kind: "empty" };
-  return { kind: "unknown", detail: `${label}这一问没答出来:${probe.reason}` };
+  if (probe.kind === "unknown") {
+    return { kind: "unknown", detail: `${label}这一问没答出来:${probe.reason}` };
+  }
+  const alive = probe.holders.filter((h) => isPidAlive(h.pid));
+  if (!alive.length) return { kind: "empty" };
+  // **写模式才算确证残留**(第 3 轮审查 F1):这一问要答的是「还有没有东西在往这次运行的
+  // 文件里写」。后代继承的是写端(追踪文件开的是 `"w"`、输出文件是根的 stdout)。
+  const writers = alive.filter(holderMayOwn);
+  if (writers.length) {
+    return { kind: "remaining", detail: `${label}仍被 ${writers.map((h) => h.pid).join(",")} 写着` };
+  }
+  // 剩下的是只读的(或者模式问不出来的)持有者:「有人握着」是事实,「握着的是不是这次运行
+  // 的后代」这一问没答出来 —— 别再把这两件事折成一个 `empty`。用户自己 tail 日志就是只读
+  // 打开的,它更像看客而不是残留,可「更像」不是证明:所以这一档只说「问不清楚」,账留着、
+  // 下一轮再问,而不是当场宣布收干净。
+  return {
+    kind: "unknown",
+    detail: `${label}被 ${alive.map((h) => h.pid).join(",")} 握着、但不是写模式 ——`
+      + " 分不出是这次运行的后代还是只读的看客",
+  };
 }
 
 /**
@@ -143,6 +160,9 @@ export function residueFromProbe(label: string, probe: HolderProbe | null): Clea
  * 逃出来的漏掉。
  */
 async function finalResidue(child: ChildProcess): Promise<CleanupResult> {
+  // 这台机器结构性答不了「谁握着这个文件」时**不问**(见 `fileHoldersAnswerable`):
+  // 把结构性的答不了记成「这一次没答出来」,等于让那个平台每个回合都欠一笔追不动的债。
+  if (!fileHoldersAnswerable()) return { kind: "empty" };
   const trackPath = trackPathOf(child);
   const outPath = runOutPathOf(child);
   const [track, out] = await Promise.all([
@@ -168,6 +188,28 @@ async function finalResidue(child: ChildProcess): Promise<CleanupResult> {
  * 取证。以前这一句挂在 `finally` 上,等于「失败也按成功放手」。
  */
 export async function cleanupAfterRun(child: ChildProcess): Promise<CleanupResult> {
+  try {
+    return await sweepAndJudge(child);
+  } catch (error) {
+    // **这一问自己抛了也不许把责任丢了**(第 3 轮审查 F2 点名的第三个出口):异常往上抛
+    // 之后,调用方那边有的会再试一次(codex 常驻把 child 留在 `unfinalized`),有的那条路
+    // 根本没有第二次 —— `runs.ts` 的 `discardStartingRun` 已经把句柄注销、还按幂等记了
+    // 「放弃过」,再调一次直接返回。线索只在这里拿得到(句柄在手),所以责任也只能在这里
+    // 交出去:先记一笔「这一轮没问出结果」,再把异常原样抛给调用方。
+    await handOffCleanupDebt({
+      unitToken: unitTokenOf(child),
+      rootPid: child.pid ?? null,
+      trackPath: trackPathOf(child),
+      outPath: runOutPathOf(child),
+      state: "unknown",
+      detail: `清理这一问自己抛了:${error instanceof Error ? error.message : String(error)}`,
+      unitVerdict: "unprovable",
+    });
+    throw error;
+  }
+}
+
+async function sweepAndJudge(child: ChildProcess): Promise<CleanupResult> {
   const sweep = await sweepAfterRun(child);
   const token = unitTokenOf(child);
   const result = judgeCleanup(sweep, token);
@@ -175,37 +217,83 @@ export async function cleanupAfterRun(child: ChildProcess): Promise<CleanupResul
     releaseTrackEvidence(child);
     // 销账只在**真的欠过**的时候才需要动库(绝大多数回合一次都没欠过),所以这一句同样
     // 按需加载;加载失败不影响这一轮的结论 —— 账留着,下一次清扫会确证它已经空了。
+    //
+    // **交的是整套线索,不是光一个记号**(第 3 轮审查 N8):没有记号的那些运行,账记在
+    // `no-unit:<运行专属文件路径>` 这个键上,只给记号(`null`)永远对不上那一行,于是它
+    // 一旦欠过就再也销不掉。销账那边还会锁内自证一次,不白信这里这句「空了」。
     await import("./cleanup-debt.js")
-      .then((m) => m.settleCleanupDebt(token))
+      .then((m) => m.settleCleanupDebt({
+        unitToken: token, trackPath: trackPathOf(child), outPath: runOutPathOf(child),
+      }))
       .catch(() => { /* 下一轮清扫再说 */ });
     return result;
   }
   // 还没收干净:**责任在这里就落盘**,不依赖任何调用方记得记一笔(它们三个各有各的
   // 结算要做,而这件事必须活得比它们都久 —— 见 cleanup-debt.ts 顶部)。
   // **没有记号也要试着记**(升级前建的老会话行):键退回路径线索,见 `debtKey`。
-  const noted = await import("./cleanup-debt.js").then((m) => m.noteCleanupDebt({
+  const noted = await handOffCleanupDebt({
     unitToken: token,
     rootPid: child.pid ?? null,
     trackPath: trackPathOf(child),
     outPath: runOutPathOf(child),
     state: result.kind === "remaining" ? "remaining" : "unknown",
     detail: result.detail, unitVerdict: sweep.unit.verdict,
-  })).catch((error) => {
-    console.error("[ash] 清理责任这一层加载失败,这一笔没能落盘:", error);
-    return "failed" as const;
   });
   // **三档各说各的**(第 2 轮审查 F1 末条):上一版把「写库失败」也印成「没有可追的线索」,
   // 等于把一次真正的责任丢失说成了「本来就没什么可追的」。
   const tail = {
     noted: ";已记下清理责任,开机会再追一次",
     untrackable: ";**没有可追的线索**(记号与两个运行专属文件都没有),只剩这条日志",
-    failed: ";**责任没能落盘**(库写失败),这一笔跨不过重启 —— 只剩这条日志",
+    // 落库失败那一档不是「只剩日志」了:那一笔留在进程内的待投清单上接着扛,每次清扫
+    // 开头补投一遍(第 3 轮审查 F2)。它仍然跨不过重启,所以这句话得把这一点说出来。
+    failed: ";**责任没能落盘**(库写失败),已留在内存里等补投 —— 但它跨不过重启",
   }[noted];
   console.warn(
     `[ash] 这一次运行的后代还不能证明收干净(pid=${child.pid ?? "?"}):${result.detail}${tail}`,
   );
   return result;
 }
+
+/**
+ * 把这一笔责任交给持久层。**连交接层自己都加载不起来时也得留个接手的**(第 3 轮审查 F2)。
+ *
+ * 上一版这里 `catch` 到就打一条日志、返回 `failed` 收场:那一笔既没进库,也不在任何人手上,
+ * 后面哪一次清扫都不会再想起它。按需加载失败几乎只会是数据库初始化那一侧出了事,而那恰恰
+ * 是「等一会儿再试就好了」的那种 —— 所以这里留一份进程内的待交清单,定时重试。
+ * (落库本身失败那一档由 `cleanup-debt.ts` 自己的待投清单接着扛,两边各管自己那一段。)
+ */
+async function handOffCleanupDebt(
+  input: CleanupDebtInput,
+): Promise<"noted" | "untrackable" | "failed"> {
+  try {
+    const layer = await import("./cleanup-debt.js");
+    return await layer.noteCleanupDebt(input);
+  } catch (error) {
+    console.error("[ash] 清理责任这一层加载失败,这一笔先留在内存里等重试:", error);
+    undelivered.push(input);
+    scheduleRedelivery();
+    return "failed";
+  }
+}
+
+/** 连持久层都没加载起来的那几笔。 */
+const undelivered: CleanupDebtInput[] = [];
+let redeliveryTimer: ReturnType<typeof setTimeout> | null = null;
+const REDELIVERY_DELAY_MS = 30_000;
+
+function scheduleRedelivery(): void {
+  if (redeliveryTimer || !undelivered.length) return;
+  redeliveryTimer = setTimeout(() => {
+    redeliveryTimer = null;
+    const batch = undelivered.splice(0);
+    void (async () => { for (const one of batch) await handOffCleanupDebt(one); })();
+  }, REDELIVERY_DELAY_MS);
+  // 不拿住事件循环:这件事不该让一个本来可以退出的进程多活着。
+  (redeliveryTimer as { unref?: () => void }).unref?.();
+}
+
+/** 披露用:这一刻有几笔责任连持久层都还没交出去。 */
+export const undeliveredCleanupDebtCount = (): number => undelivered.length;
 
 type SweepOutcome = {
   /** 这一轮每一问都答出来了吗。 */
@@ -266,7 +354,10 @@ function judgeCleanup(sweep: SweepOutcome, token: string | null): CleanupResult 
     if (sweep.unit.verdict === "ours" || sweep.unit.verdict === "suspected") {
       clues.push({ kind: "remaining", detail: describeEvidence(sweep.unit) });
     }
-    if (sweep.unit.verdict === "unprovable") {
+    // `unprovable` 有两种,处置相反(第 3 轮审查 N2):这一次查询失败 ⇒ 留着重试;而
+    // **这台机器结构性读不到别的进程的环境块**(win32,`monitorUnitProofGrade()` 为 null)
+    // ⇒ 重试一万次也是同一个答案,记成「没答出来」只会让那边每个回合都欠一笔追不动的债。
+    if (sweep.unit.verdict === "unprovable" && monitorUnitAnswerable()) {
       reasons.push("资源记号这一问没答出来");
     }
   }
@@ -385,20 +476,44 @@ export function killByPid(
   const unit = { unitToken: proof?.unitToken ?? null };
   // ① 记号那一问。判档这一次只为分流;**下刀本身不吃这份快照** —— killProvenUnit 自己
   // `fresh` 取证,授权不跨出它那个同步段(理由见那边第 13/14 轮审查那几段注释)。
-  if (canShoot(reclaimState(pid, startedAt ?? null, unit))) {
+  const state = reclaimState(pid, startedAt ?? null, unit);
+  if (canShoot(state)) {
     killProvenUnit(pid, startedAt ?? null, unit);
+    return;
+  }
+  // ①' **明确的反证不许被后面任何一条弱证据洗掉**(第 3 轮审查 F1 实测)。
+  //
+  // 那七档不是一个梯度,是两类:`not-ours` 是**正面反证** —— ps 答出来了,这个号上现在是
+  // 另一个进程(启动时刻确实对不上,locale 差异由 `processIdentity` 在同一份快照上兜住)。
+  // 其余几档是「这一问没答出来」。上一版把两类一视同仁地落进下面那个后备分支,于是
+  // 「已经证明它不是我们的」被一条「它打开过我们的输出文件」顶掉,`killTree` 往它那一组
+  // 发了信号 —— 审查用真实只读查看器实测:记录指向旧代、这个号上已经是查看器,查看器收到
+  // SIGTERM 死掉了。
+  //
+  // 为什么输出文件那条线索在这里不能当反驳:它最多证明「这个进程握着这个文件」,而我们要
+  // 回答的是「这个号上的进程是不是当初那一个」—— 后者 ps 已经明确答了「不是」。一条更弱的
+  // 证据推不翻一条更强的反证,何况下刀打的是**它那一组**。
+  if (state === "not-ours") {
+    console.warn(
+      `[ash] pid=${pid} 这个号上现在是另一个进程(记录在案的启动时刻对不上),`
+      + "按「证不出就不下刀」处理:没有发送任何信号 —— 握着输出文件也不改变这个结论",
+    );
     return;
   }
   // ② 记号证不出来(最常见的是这一行建在记号上线之前,库里只有 pid)。POSIX 的秒级启动
   // 时刻是粗档,单凭它下刀就是在赌一次秒级碰撞 —— 那是明确实测过的误杀。
   //
-  // 但 agent 这一侧还有一条哨兵没有的线索,而且它比记号**更硬**:这一次运行独有的输出文件。
-  // 根进程的 stdout 就重定向在它上面,所以「谁还握着它」问的正是「这一次运行的根还在不在」;
-  // 路径里带着 sessionId + 回合起点,别的运行不会碰它,而且它跟记号一样跨得过 server 重启
-  // (`sessions.agent_out_path`)。关键区别:这是 `lsof` 的**真实 fd 表**,不是 macOS 上
-  // 那种无边界的展示文本 ⇒ 精确可答,够当粗档要的那第二份独立证据。
+  // 但 agent 这一侧还有一条哨兵没有的线索:这一次运行独有的输出文件。根进程的 stdout 就
+  // 重定向在它上面,路径里带着 sessionId + 回合起点,别的运行不会碰它,而且它跟记号一样
+  // 跨得过 server 重启(`sessions.agent_out_path`)。它读的是 `lsof` 的**真实 fd 表**,
+  // 不是 macOS 上那种无边界的展示文本 ⇒ 精确可答,够当粗档要的那第二份独立证据。
   //
-  // 注意它只证明得了**根**(fd 1 无条件继承,但 CLI 会把它自己子进程的 stdout 接成管道),
+  // **但它只是「第二份证据」,不是「反证的解药」**:上面 ①' 已经把 `not-ours` 挡在外面了。
+  // 这一档要的是「身份这一问没答出来」时的补充,不是「身份这一问答了不是」时的推翻。
+  //
+  // 而且判据收得很紧(`outPathProvesRoot`):**fd 1 且写模式**,也就是「这个进程的标准输出
+  // 就是这个文件」。光「打开过这个文件」不算 —— 用户 tail 日志也打开过它(第 3 轮审查 F1)。
+  // 它只证明得了**根**(fd 1 无条件继承,但 CLI 会把它自己子进程的 stdout 接成管道),
   // 而这条路要的恰好就是根:下刀打的是根的进程组。
   if (outPathProvesRoot(pid, proof?.outPath ?? null)) {
     // **第一刀之前把组成员连代次一起记下来** —— 就在根仍被证明着的这一刻。少了这一步,
@@ -410,6 +525,15 @@ export function killByPid(
     const t = setTimeout(() => {
       // 补刀前**重新取一次同一份证据**:这两秒里根可能已经退了、号可能被接手。
       // 以前这一刀是无条件的 —— 哨兵那边的注释早就点过这个毛病。
+      //
+      // ①' 那条反证在这里**一样压过输出文件**(第 3 轮审查 F1:首刀与补刀是两个对称消费点,
+      // 不许只有一个认这条反证):这两秒里 ps 可能已经答得出「这个号上现在是另一个进程」,
+      // 那一刻即便文件那一问还说得通,也只说明有人握着这个文件,不说明这个号还是当初那个。
+      if (reclaimState(pid, startedAt ?? null, unit) === "not-ours") {
+        console.warn(`[ash] pid=${pid} 在这两秒里换了主人(记录在案的启动时刻对不上),补刀取消`);
+        signalMembers(held.filter((m) => m.pid !== pid), "SIGKILL");
+        return;
+      }
       if (outPathProvesRoot(pid, proof?.outPath ?? null)) killTree(pid, "SIGKILL");
       // 再把第一刀那会儿记下的成员补上:**代次没变才打**(变了就是号换了主人)。
       // 这一下不要求根现在还活着 —— 第一刀本来就是来结束它的。
@@ -421,8 +545,8 @@ export function killByPid(
   // ③ 两条线索都证不出来:不下刀,但要留下痕迹 —— 根约定「停止/暂停必须留下持久可见的
   // 状态」,静默失败会让用户只能得出「按钮坏了」。
   console.warn(
-    `[ash] 没能证明 pid=${pid} 属于这一次运行(记号${unit.unitToken ? "对不上" : "缺失"}、`
-    + `输出文件${proof?.outPath ? "也问不出持有者" : "未提供"}),`
+    `[ash] 没能证明 pid=${pid} 属于这一次运行(身份这一问停在 ${state}、`
+    + `输出文件${proof?.outPath ? "上没有它的 stdout" : "未提供"}),`
     + "按「证不出就不下刀」处理:没有发送任何信号",
   );
 }
@@ -440,11 +564,21 @@ export function killByPid(
 function outPathProvesRoot(pid: number, outPath: string | null): boolean {
   if (!outPath || IS_WINDOWS) return false;       // win32 没有 lsof;那边 pid 时刻本来就是排他档
   try {
-    const out = execFileSync("lsof", ["-t", "--", outPath], {
+    const out = execFileSync("lsof", ["-F", "pfan", "--", outPath], {
       encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 4000,
     });
-    for (const line of out.split("\n")) {
-      if (Number(line.trim()) === pid) return true;
+    // **要的不是「它打开过这个文件」,是「它的 stdout 就是这个文件」**(第 3 轮审查 F1)。
+    // 上一版只比号码,于是只读打开同一个日志的查看器也拿到了整组击杀的授权。fd 1 + 写模式
+    // 才等价于「这个进程的标准输出重定向在这一次运行的输出文件上」—— 那正是根的形状,
+    // 而看客拿到的是另一个 fd、只读。
+    let cur = 0, fd: number | null = null;
+    for (const raw of out.split("\n")) {
+      const line = raw.trim();
+      if (!line) continue;
+      const tag = line[0], value = line.slice(1);
+      if (tag === "p") { cur = Number(value) || 0; fd = null; continue; }
+      if (tag === "f") { fd = Number.isInteger(Number(value)) ? Number(value) : null; continue; }
+      if (tag === "a" && cur === pid && fd === 1 && /[wu]/.test(value)) return true;
     }
     return false;
   } catch {

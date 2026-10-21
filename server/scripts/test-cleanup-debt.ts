@@ -14,8 +14,14 @@
 //     而且落得下责任(这一条实测过的原形是:三问全答没有,孤儿继续写文件,债 0 笔);
 //  ⑥ 重试清扫:记号确证空、输出文件这一问答「名字没了」(unknown)⇒ **不许销账**;
 //  ⑦ 披露与重试这两个端点是实例级的 ⇒ 普通成员读不到、也发不动。
+//
+// 第 3 轮审查再加四条,钉的是**责任交接**(销账只认它判的那一版;交不出去就不许放手):
+//  ⑧ 没有记号的那些行:销账按同一套线索算键,照样销得掉;
+//  ⑨ 销账锁内重新取证:调用方那句「空了」不作数,还有残留就不删、还要把这一刻记上去;
+//  ⑩ 落库失败:责任留在内存里接着扛,下一次清扫开头补投;
+//  ⑪⑫ 结构性答不了的那一问不发表意见;清理这一问自己抛了也要先把责任交出去。
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, openSync, closeSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,7 +33,22 @@ const { ensureSchema } = await import("../src/db/index.js");
 await ensureSchema();
 const {
   noteCleanupDebt, listAllCleanupDebts, settleCleanupDebt, sweepAgentCleanupDebts,
+  pendingCleanupNoteCount,
 } = await import("../src/executors/cleanup-debt.js");
+const { db } = await import("../src/db/index.js");
+const { agentCleanupDebts } = await import("../src/db/schema.js");
+const { eq } = await import("drizzle-orm");
+
+/**
+ * 夹具收尾:把这一行直接删掉。
+ *
+ * **不能用 `settleCleanupDebt` 当收尾**:那一句现在是锁内自证的(残留还在就拒绝销账,
+ * 见第 3 轮审查 F2),拿它清夹具,现场一旦还没散就清不掉、还会把下一组的断言搅了。
+ */
+const forget = async (key: string) => {
+  await db.delete(agentCleanupDebts).where(eq(agentCleanupDebts.unitToken, key));
+};
+const rowOf = async (key: string) => (await debts()).debts.find((d) => d.unitToken === key);
 
 /** 披露面上这一刻有哪几笔(读失败直接判失败 —— 那正是不许长成空列表的那一档)。 */
 async function debts(): Promise<Awaited<ReturnType<typeof listAllCleanupDebts>> & { ok: true }> {
@@ -126,7 +147,7 @@ console.log("\n2) 有记号、进程已退:记号确证空 ⇒ 销账(账不会�
   } else {
     // 这台机器读不到别的进程的环境(win32)⇒ 这一档本来就证不出,不当失败。
     console.log(`   ~ 这个平台给不出「确证空」(记号答 ${verdict}),跳过销账断言`);
-    await settleCleanupDebt(token);
+    await forget(token);
   }
 }
 
@@ -156,9 +177,12 @@ if (IS_WINDOWS) {
   await sweep();
   const mine = (await debts()).debts.find((d) => d.outPath === outPath);
   if (mine) {
-    ok("重试过后仍然留着(文件还被握着 ⇒ 确有残留)");
-    if (mine.state === "remaining") ok("而且状态升成了「确证还有」—— 路径线索问出了东西");
-    else fail(`state=${mine.state},应当是 remaining`);
+    ok("重试过后仍然留着(文件还被人握着 ⇒ 不许宣布收干净)");
+    // 这个夹具握的是**只读**的那一侧(`openSync(path, "r")` 传进去的 fd),所以正确的结论是
+    // 「问不清楚」而不是「确证还有」:后代继承的是写端,只读更像用户的看日志窗口 —— 可
+    // 「更像」不是证明,两边都不许当成确定的那一档(第 3 轮审查 F1)。
+    if (mine.state === "unknown") ok("状态是「问不清楚」:只读持有者分不出是后代还是看客");
+    else fail(`state=${mine.state},只读持有者不该判成确定的那一档`);
   } else {
     fail("文件还被活进程握着,这一笔却被销账了");
   }
@@ -209,6 +233,10 @@ if (IS_WINDOWS) {
       "let n=0; setInterval(()=>{ n++; require('node:fs').writeFileSync(process.argv[1], String(n)); }, 100); setTimeout(()=>{}, 60000);",
       ${JSON.stringify(beat)}], { stdio: ["ignore", 1, "ignore"], detached: true, env: {} });
     kid.unref();
+    // 把这个号写出来给收尾用:它是故意做成「macOS 上杀不掉」的(记号只给得出 suspected、
+    // 没有落点),测试自己不收的话它就永远留在机器上 —— 那个 setInterval 没人清,
+    // 外面那个 60 秒的 setTimeout 也挡不住它,每 100ms 往临时目录写一次,直到重启。
+    fs.writeFileSync(${JSON.stringify(beat)} + ".pid", String(kid.pid));
     fs.writeFileSync(${JSON.stringify(beat)}, "0");
     setTimeout(() => process.exit(0), 200);
   `], { stdio: ["ignore", out, "ignore"], env: { ...process.env, [MONITOR_UNIT_ENV]: token } });
@@ -217,6 +245,10 @@ if (IS_WINDOWS) {
   adoptUnitToken(parent, token);
   await new Promise<void>((r) => parent.on("close", () => r()));
   await wait(500);
+  temps.push(`${beat}.pid`);
+  // 收尾名单先认下它:下面每一条断言都可能抛,抛了也得把这个号带走。
+  const orphanPid = Number(readFileSync(`${beat}.pid`, "utf8").trim());
+  if (orphanPid > 1) strays.push(orphanPid);
 
   invalidateMonitorUnitScan();
   const markerVerdict = processUnitEvidence(token, { fresh: true }).verdict;
@@ -269,7 +301,7 @@ if (IS_WINDOWS) {
   const verdict = processUnitEvidence(token, { fresh: true }).verdict;
   if (verdict !== "none") {
     console.log(`   ~ 这个平台给不出「记号确证空」(答 ${verdict}),这一组的前提不成立,跳过`);
-    await settleCleanupDebt(token);
+    await forget(token);
   } else {
     await sweep();
     const row = (await debts()).debts.find((d) => d.unitToken === token);
@@ -278,10 +310,174 @@ if (IS_WINDOWS) {
       ok(`行还在(state=${row.state})`);
       if (row.closedAt) ok(`收档而不是销账:${(row.closedNote ?? "").slice(0, 60)}`);
       else ok("留着继续追");
-      await settleCleanupDebt(token);
+      await forget(token);
     }
   }
   try { process.kill(holder.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
+}
+
+console.log("\n8) 没有记号的那些行:销账按同一套线索算键,照样销得掉");
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 不开运行专属文件,跳过");
+} else {
+  // 钉的是第 3 轮审查 N8:记一笔的键是 `no-unit:<路径>`(没有记号的老会话行),销账那一侧
+  // 上一版只交了个记号(`null`),永远对不上这一行 —— 它一旦欠过就再也销不掉。
+  const outPath = join(root, `run-out-settle-${Date.now()}.jsonl`);
+  writeFileSync(outPath, "");
+  temps.push(outPath);
+  const key = `no-unit:${outPath}`;
+  const noted = await noteCleanupDebt({
+    unitToken: null, rootPid: 4244, outPath,
+    state: "unknown", detail: "夹具:老会话行,没有记号", unitVerdict: "unprovable",
+  });
+  assert.equal(noted, "noted", "没有记号也要记得下");
+  if (await rowOf(key)) ok("账落在路径键上");
+  else fail("没落在 no-unit 键上,这一组的前提不成立");
+
+  await settleCleanupDebt({ unitToken: null, outPath });   // 文件没人握 ⇒ 确证空
+  if (!await rowOf(key)) ok("销账把这一行删掉了(上一版只交记号,这一行永远对不上)");
+  else fail("没有记号的行销不掉 —— 正是 N8 那一下");
+  await forget(key);
+}
+
+console.log("\n9) 销账不白信调用方那句「空了」:锁内重新取证,还有残留就不删");
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 不开运行专属文件,跳过");
+} else {
+  // 钉的是第 3 轮审查 F2:那句「空了」是在锁外判的,从判完到销账之间,另一次清扫完全可能
+  // 把新的残留证据写到同一个键上。上一版照样按键 `DELETE`,把别人刚落下的那一版一起删了。
+  // 这里直接把现场摆成「调用方以为空了、其实有个活的写者握着输出文件」。
+  const outPath = join(root, `run-out-live-settle-${Date.now()}.jsonl`);
+  temps.push(outPath);
+  const out = openSync(outPath, "a");
+  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+    stdio: ["ignore", out, "ignore"], detached: true,
+  });
+  holder.unref();
+  strays.push(holder.pid!);
+  closeSync(out);
+  await wait(400);
+  const key = `no-unit:${outPath}`;
+  await noteCleanupDebt({
+    unitToken: null, rootPid: holder.pid!, outPath,
+    state: "unknown", detail: "夹具:判定之后又落了新证据", unitVerdict: "unprovable",
+  });
+  const before = await rowOf(key);
+  await settleCleanupDebt({ unitToken: null, outPath });
+  const after = await rowOf(key);
+  if (!after) {
+    fail("输出文件还被活进程写着,销账照样删了行 —— 正是 F2 要堵的那一下");
+  } else {
+    ok(`行还在(state=${after.state})`);
+    if (after.state === "remaining") ok("而且升成了「确证还有」:锁内那次取证真的问过");
+    else fail(`state=${after.state},锁内那次取证没把残留问出来`);
+    if (after.version > (before?.version ?? 0)) {
+      ok(`证据版本往前走了(${before?.version ?? "?"} → ${after.version}):销账只认它判的那一版`);
+    } else fail(`version 没动(${after.version}):版本条件形同虚设`);
+  }
+  try { process.kill(holder.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
+  await forget(key);
+}
+
+console.log("\n10) 落库失败不等于责任消失:内存里接着扛,下一次清扫补投");
+{
+  // 钉的是第 3 轮审查 F2 后半:上一版写库失败就只剩一条日志,那一笔既不在库里也不在任何人
+  // 手上,后面哪一次清扫都不会再想起它。下面那句 `[ash] agent 清理责任落库失败` 是夹具
+  // 故意制造的,不是真故障。
+  const token = `ash-agent-test-pending-${Date.now().toString(36)}`;
+  const hole = db as unknown as { insert: unknown };
+  const realInsert = hole.insert;
+  hole.insert = () => { throw new Error("夹具:这一刻库写不进去"); };
+  const noted = await noteCleanupDebt({
+    unitToken: token, rootPid: 4245,
+    state: "remaining", detail: "夹具:写库失败的那一笔", unitVerdict: "suspected",
+  });
+  hole.insert = realInsert;
+  if (noted === "failed") ok("写库失败如实返回 failed(没印成「本来没什么可追的」)");
+  else fail(`写库失败却报 ${noted}`);
+  if (!await rowOf(token)) ok("库里确实没有这一行");
+  else fail("夹具没生效:这一行居然写进去了");
+  const held = pendingCleanupNoteCount();
+  if (held >= 1) ok(`责任留在内存里接着扛(${held} 笔),不是只剩一条日志`);
+  else fail("写库失败之后谁都不扛这一笔了 —— 正是 F2 要堵的那一下");
+
+  const swept = await sweep();
+  if (swept.landedNotes >= 1) ok(`下一次清扫开头把它补投落库了(${swept.landedNotes} 笔)`);
+  else fail(`清扫没补投:landedNotes=${swept.landedNotes}`);
+  if (!swept.pendingNotes) ok("内存里不再扛着它");
+  else fail(`补投完还剩 ${swept.pendingNotes} 笔在内存里`);
+  // 补投落库之后它就是一笔正常的账:同一轮清扫接着重新取证,这个号早就不在了,所以
+  // 要么行还留着(这台机器证不出空),要么当场确证空被销掉 —— 两种都算责任交接到位,
+  // 唯一不许的是「谁都没接」。
+  const row = await rowOf(token);
+  if (row) ok(`库里有了这一行(state=${row.state})`);
+  else if (swept.settled >= 1) ok("补投之后同一轮就确证空、销了账(责任确实交接过)");
+  else fail("补投之后既没有行、也没有任何一笔被销账");
+  await forget(token);
+}
+
+console.log("\n11) 结构性答不了的那一问:不发表意见,不是「没答出来」");
+{
+  // 钉的是第 3 轮审查 N2。两种 `unprovable` 的处置相反:这一次读失败 ⇒ 留着重试;这台机器
+  // 结构性读不到别的进程的环境块(win32)⇒ 重试一万次还是同一个答案,记成「没答出来」会让
+  // 那边每个正常收尾的回合都欠一笔永远追不动的债,真正的残留反而被淹掉。
+  //
+  // **判据收成参数才跑得到那一支**:它只在 win32 触发,而那台真机这一轮连不上(TCP 超时),
+  // 所以这里直接把两种答案都喂进生产那个判定函数 —— 平台接线由下面最后一条断言钉住。
+  const { markerResidue } = await import("../src/executors/cleanup-debt.js");
+  const { monitorUnitAnswerable } = await import("../src/monitor-unit-scan.js");
+
+  const answerable = markerResidue({ verdict: "unprovable" }, true, true);
+  if (answerable.kind === "unknown") ok("答得了、这一次没答出来 ⇒ 「问不清楚」(账留着重试)");
+  else fail(`这一次读失败被判成 ${answerable.kind}`);
+
+  const unanswerable = markerResidue({ verdict: "unprovable" }, true, false);
+  if (unanswerable.kind === "empty") ok("整问答不了 ⇒ 这一问不发表意见(不往账上压一笔追不动的债)");
+  else fail(`结构性答不了被判成 ${unanswerable.kind} —— 正是 N2 那一下`);
+
+  // 「有残留」那两档不受影响:答不了的只是「找不到就等于没有」这个推论。
+  const seen = markerResidue({ verdict: "suspected", pids: [4246] }, true, false);
+  if (seen.kind === "remaining") ok("看得见落不了点那一档照旧是「确证还有」");
+  else fail(`suspected 被判成 ${seen.kind}`);
+
+  // 生产读的就是这一句,平台事实由它一处回答(win32 读不到别的进程的环境块)。
+  if (monitorUnitAnswerable() === !IS_WINDOWS) ok(`这台机器答得了这一问:${monitorUnitAnswerable()}`);
+  else fail("平台能力这一问接线不对");
+
+  // 「谁握着这个文件」那一问同理:win32 没有零依赖的 lsof 等价物,所以那边这条线索按
+  // 「本机没有这条线索」处理,而不是每回合记一次「没答出来」。
+  const { fileHoldersAnswerable } = await import("../src/executors/track-evidence.js");
+  if (fileHoldersAnswerable() === !IS_WINDOWS) ok(`这台机器问得出文件持有者:${fileHoldersAnswerable()}`);
+  else fail("文件持有者这一问的平台接线不对");
+}
+
+console.log("\n12) 清理这一问自己抛了:责任照样交出去,异常照样抛给调用方");
+{
+  // 钉的是第 3 轮审查 F2 的第三个出口。线索只在拿着句柄的这一层问得到,所以异常往上抛之前
+  // 必须先把责任交出去:上面那条路(`runs.ts` 的 `discardStartingRun`)已经把句柄注销、还
+  // 按幂等记了「放弃过」,再调一次直接返回 —— 那边没有第二次机会。
+  const token = `ash-agent-test-throw-${Date.now().toString(36)}`;
+  const { cleanupAfterRun } = await import("../src/executors/kill.js");
+  const { adoptUnitToken } = await import("../src/executors/unit-token.js");
+  // 让「身份这一问」在取证中途炸掉:读 `exitCode` 就抛。清理那一层的收尾只读记号与两个
+  // 运行专属文件(都是按句柄键控的旁路映射),碰不到这个属性,所以交接那一步照样走得通。
+  const base = { pid: 4247, exitCode: null, signalCode: null, kill: () => true, on: () => {} };
+  const fake = new Proxy(base, {
+    get(target, key) {
+      if (key === "exitCode") throw new Error("夹具:身份这一问炸了");
+      return (target as Record<string | symbol, unknown>)[key];
+    },
+  }) as unknown as ChildProcess;
+  adoptUnitToken(fake, token);
+
+  let thrown: unknown = null;
+  try { await cleanupAfterRun(fake); } catch (error) { thrown = error; }
+  if (thrown) ok("异常原样抛给调用方(有的调用方正是据此重试的)");
+  else fail("清理这一问抛了,却被这一层吞掉了 —— 调用方会以为收干净了");
+  const row = await rowOf(token);
+  if (row) ok(`责任落了盘(state=${row.state}):${row.detail.slice(0, 40)}`);
+  else fail("清理这一问抛了,责任谁都没接 —— 正是 F2 第三个出口");
+  await forget(token);
 }
 
 console.log("\n7) 披露与重试这两个端点是实例级的:普通成员读不到、也发不动");

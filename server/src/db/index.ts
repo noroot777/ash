@@ -177,6 +177,7 @@ export async function ensureSchema() {
       state TEXT NOT NULL DEFAULT 'unknown', detail TEXT NOT NULL DEFAULT '',
       unit_verdict TEXT NOT NULL DEFAULT '',
       attempts INTEGER NOT NULL DEFAULT 0,
+      version INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL, last_attempt_at TEXT,
       closed_at TEXT, closed_note TEXT
     );
@@ -374,6 +375,9 @@ export async function ensureSchema() {
     // 看不见任何东西,任务落 done 把唯一的结果通知吃掉(第 1 轮审查 F1)。存量行 NULL = 不在交接中。
     "ALTER TABLE monitors ADD COLUMN result_handoff_at TEXT",
     "ALTER TABLE monitors ADD COLUMN result_handoff_text TEXT",
+    // 「这一行现在是第几版证据」。销账/收档拿它当条件,免得删掉的是别人刚落下的那一版
+    // (见 schema-sessions.ts 的 version、第 3 轮审查 F2)。存量行一律 0。
+    "ALTER TABLE agent_cleanup_debts ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE monitor_reclaim_debts ADD COLUMN unit_token TEXT",
     // 「线索追到这里为止」的戳。**不是销账**:整项退出在当前平台证不出,所以行留着只盖戳
     // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。

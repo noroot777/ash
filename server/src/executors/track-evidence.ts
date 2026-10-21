@@ -66,8 +66,8 @@ export const probeFileHolders = (path: string): Promise<HolderProbe> => trackHol
  * 销毁证据**;问不出来要保留文件、保留清理责任,安排下一次重试。
  */
 export type HolderProbe =
-  /** 确证有人握着(至少这几个号)。 */
-  | { kind: "held"; pids: number[] }
+  /** 确证有人握着(至少这几个),**每个都带着它是怎么握着的**(见 `FileHolder`)。 */
+  | { kind: "held"; holders: FileHolder[] }
   /** 确证**问全了**、而且一个持有者都没有 —— 唯一允许销毁证据的那一档。 */
   | { kind: "empty" }
   /**
@@ -82,7 +82,46 @@ export type HolderProbe =
   | { kind: "unknown"; reason: string; lost?: boolean };
 
 /**
- * `lsof -t <file>`:此刻还握着这次运行那个继承 fd 的号。
+ * **一个持有者是「怎么」握着这个文件的** —— 光有号不够。
+ *
+ * 第 3 轮审查 F1 实测的那一下:`lsof -t` 只回号码,于是「这个号打开过这个文件」被当成了
+ * 「这个号属于这一次运行」,用户拿来看日志的程序**只读**打开同一个输出文件,也照样拿到了
+ * 整组击杀的授权。号码不是身份,**打开过也不是归属**。
+ *
+ * 所以这一问改成按持有者逐个回答,由调用方自己挑门槛 —— 两种用途的门槛本来就不一样:
+ *  · **授权破坏性操作**:只认写模式(追踪文件是 `w` 打开的、输出文件是根的 stdout),
+ *    而且输出文件那一路还要求落在 fd 1 上 —— 只读查看者两条都不满足;
+ *  · **残留检测**:问的是「还有没有东西在往这次运行的文件里写」,所以同样只数写模式的;
+ *    只读的看客不是残留,把它算进去只会凭空落一笔债。
+ *
+ * 模式答不出来(字段缺失)时一律 `unknown`:授权那一侧按「证不出」处理(不放行),检测那一侧
+ * 按「这一问没答全」处理(留着重试)。两边都不许把它读成「没有」。
+ */
+export type FileHolder = {
+  pid: number;
+  /** 它是用哪个 fd 握着的。`null` = 非数字 fd(`mem`/`txt` 这类)或者这一问没给出。 */
+  fd: number | null;
+  /** `write` = 写(`w`/`u`);`read` = 只读;`unknown` = 这一问没给出模式。 */
+  mode: "write" | "read" | "unknown";
+};
+
+/** 授权用的那一档:**写模式才算**(见 `FileHolder`)。 */
+export const holderMayOwn = (holder: FileHolder): boolean => holder.mode === "write";
+
+/**
+ * 这台机器上「谁还握着这个文件」这一问**答得了吗**。
+ *
+ * win32 没有零依赖的等价物(`handle.exe` 要单独装、要管理员),见本文件顶部。那是**结构性
+ * 答不了**,跟「这一次查询失败」是两件事,而两者的正确处置相反:后者该留着重试,前者重试
+ * 一万次也是同一个答案。把它记成「没答出来」的后果是 Windows 上**每一个正常收尾的回合**都
+ * 欠一笔永远追不动的债,真正的残留反而被淹掉(第 3 轮审查 N2)。所以调用方在这一档上
+ * **不问**,这条线索按「本次运行没有这条线索」处理 —— 那边本来就只剩 ppid 树这一半能力,
+ * 顶部那段写明了它是尽力而为、不是等价保证。
+ */
+export const fileHoldersAnswerable = (): boolean => !IS_WINDOWS;
+
+/**
+ * `lsof -F pfan <file>`:此刻还握着这次运行那个继承 fd 的号,**连 fd 与访问模式一起**。
  *
  * **退出码 1 不等于「查全了、没找到」**(本轮审查 F2 实测):路径不存在时 lsof 打印
  * `status error ... No such file or directory` 之后**也退 1**。上一版把全部退出 1 读成确证空,
@@ -98,15 +137,11 @@ export type HolderProbe =
  */
 async function trackHolders(trackPath: string): Promise<HolderProbe> {
   const probe = await new Promise<{ err: ExecFileException | null; out: string; errOut: string }>(
-    (res) => execFile("lsof", ["-t", "--", trackPath],
+    (res) => execFile("lsof", ["-F", "pfan", "--", trackPath],
       (err, stdout, stderr) => res({ err, out: stdout || "", errOut: stderr || "" })),
   );
-  const pids: number[] = [];
-  for (const line of probe.out.split("\n")) {
-    const pid = Number(line.trim());
-    if (pid > 1 && pid !== process.pid) pids.push(pid);
-  }
-  if (pids.length) return { kind: "held", pids };
+  const holders = parseHolders(probe.out);
+  if (holders.length) return { kind: "held", holders };
   if (!probe.err) return { kind: "empty" };
   if (probe.err.code !== 1) {
     // `≥2` 是它自己出错;`ENOENT`(字符串码)是这台机器上根本没有 lsof。
@@ -131,9 +166,34 @@ function lsofFault(stderr: string): string | null {
   return line ? line.slice(0, 200) : null;
 }
 
+/**
+ * `-F pfan` 的输出:`p<pid>` 起一个进程段,段内每个 fd 一组 `f<fd>` / `a<模式>` / `n<路径>`。
+ *
+ * 自己这个进程一律剔掉(追踪文件的父侧 fd 在 `registerTrackFd` 里就关了,输出文件却是 ash
+ * 自己在读 —— 把它算成持有者会让每一次清理都答「还有残留」)。
+ */
+function parseHolders(out: string): FileHolder[] {
+  const holders: FileHolder[] = [];
+  let pid = 0;
+  let fd: number | null = null;
+  for (const raw of out.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const tag = line[0], value = line.slice(1);
+    if (tag === "p") { pid = Number(value) || 0; fd = null; continue; }
+    if (tag === "f") { fd = Number.isInteger(Number(value)) ? Number(value) : null; continue; }
+    if (tag !== "a") continue;
+    if (pid <= 1 || pid === process.pid) continue;
+    const mode = /[wu]/.test(value) ? "write" : /r/.test(value) ? "read" : "unknown";
+    holders.push({ pid, fd, mode });
+  }
+  return holders;
+}
+
 /** 只想知道「还有没有活着的持有者」的那几处:`unknown` 必须**当成有**(不许据此释放)。 */
 export const holdersMayExist = (probe: HolderProbe): boolean =>
-  probe.kind === "unknown" || (probe.kind === "held" && probe.pids.some(isPidAlive));
+  probe.kind === "unknown"
+  || (probe.kind === "held" && probe.holders.some((h) => isPidAlive(h.pid)));
 
 // 追踪 fd(见 killEscapees):打开一个本次运行专属文件,把 fd 作为 stdio[3] 传给
 // 子进程 —— 后代无论怎么换组/被收养都带着它,stop 时可按文件名 lsof 反查。

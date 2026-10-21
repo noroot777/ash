@@ -30,7 +30,7 @@ const { inspectProcess } = await import("../src/proc.js");
 const {
   processTreeMembers, processTableSnapshot, subtreesOf, stillSameGeneration,
 } = await import("../src/process-generation.js");
-const { probeFileHolders } = await import("../src/executors/track-evidence.js");
+const { probeFileHolders, holderMayOwn } = await import("../src/executors/track-evidence.js");
 // 建库:⑭ 的清理责任要真的落进 `agent_cleanup_debts`,少了这一步「落库失败」会被读成
 // 「这条路本来就不落库」,披露那一半就钉不住。
 const { ensureSchema } = await import("../src/db/index.js");
@@ -204,7 +204,30 @@ if (IS_WINDOWS) {
   await wait(400);
   const held = await probeFileHolders(heldPath);
   assert.equal(held.kind, "held", "有人握着就要答 held");
-  assert.ok(held.kind === "held" && held.pids.includes(holder.pid!), "而且要点出是谁");
+  assert.ok(held.kind === "held" && held.holders.some((h) => h.pid === holder.pid),
+    "而且要点出是谁");
+  // **还要点出「他是怎么握着的」**(第 3 轮审查 F1):这一问的答案被用来授权整棵子树的击杀,
+  // 而裸 pid 列表把「以写模式继承下来的真后代」和「只读打开同一个文件的看客」混成一类。
+  // fd 号 + 访问模式是唯一分得开的地方:继承进去的是写模式的那一份。
+  const asDescendant = held.kind === "held" ? held.holders.find((h) => h.pid === holder.pid) : undefined;
+  assert.equal(asDescendant?.fd, 3, "继承进去的就是 3 号 fd:这一问要答得出 fd 号");
+  assert.equal(asDescendant?.mode, "write", "以写模式打开再继承 ⇒ 写模式");
+  assert.equal(holderMayOwn(asDescendant!), true, "写模式才配当树根");
+
+  // 对照:同一个文件被只读打开 ⇒ 同样是持有者,但**不配当树根**。
+  const rfd = openSync(heldPath, "r");
+  const viewer = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+    stdio: ["ignore", "ignore", "ignore", rfd], detached: true,
+  });
+  viewer.unref();
+  strays.push(viewer);
+  closeSync(rfd);
+  await wait(400);
+  const bothHeld = await probeFileHolders(heldPath);
+  const asViewer = bothHeld.kind === "held" ? bothHeld.holders.find((h) => h.pid === viewer.pid) : undefined;
+  assert.equal(asViewer?.mode, "read", "只读打开的要答只读");
+  assert.equal(holderMayOwn(asViewer!), false, "只读的看客不配当树根(授权只认写模式)");
+  try { process.kill(viewer.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
   try { process.kill(holder.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
 }
 

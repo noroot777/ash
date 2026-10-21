@@ -263,9 +263,16 @@ async function initializeServer() {
         + "没收干净的后代,POST /api/cleanup-debts/sweep 可以再追一次");
       return;
     }
-    if (swept.settled || swept.left || swept.closed) {
+    if (swept.settled || swept.left || swept.closed || swept.vanished || swept.stuck) {
       console.log(`[ash] agent 清理责任:销账 ${swept.settled} 笔,仍没收干净 ${swept.left} 笔,`
-        + `追不下去 ${swept.closed} 笔`);
+        + `追不下去 ${swept.closed} 笔,清理路径自己销掉 ${swept.vanished} 笔,`
+        + `这一轮连行都读不出来 ${swept.stuck} 笔`);
+    }
+    // 只在内存里扛着的那几笔**跨不过重启**,所以单独说一句:这是真正的责任丢失风险,
+    // 混在上面那一串计数里看不出来。
+    if (swept.pendingNotes) {
+      console.warn(`[ash] 还有 ${swept.pendingNotes} 笔清理责任只在内存里(落库失败,这一轮`
+        + `补投成功 ${swept.landedNotes} 笔):这几笔跨不过重启`);
     }
     // 还没收干净的那几笔**逐条如实报出来**:静默只会让用户得出「停止按钮坏了」。
     const listing = await listOpenCleanupDebts();

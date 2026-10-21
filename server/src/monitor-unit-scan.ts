@@ -117,6 +117,15 @@ export function monitorUnitProofGrade(): UnitProofGrade | null {
 }
 
 /**
+ * 记号那一问**在这台机器上答得了吗**(`null` 档 = 整问不可用)。
+ *
+ * 判空那几处要的就是这一句:`unprovable` 有两种,而它们的正确处置相反 —— 「这一次读失败」
+ * 该留着重试,「这台机器结构性读不到别的进程的环境块」重试一万次也是同一个答案。后者按
+ * 「没答出来」记,会让那个平台上每个正常收尾的回合都欠一笔永远追不动的债(第 3 轮审查 N2)。
+ */
+export const monitorUnitAnswerable = (): boolean => monitorUnitProofGrade() !== null;
+
+/**
  * 一遍扫描里的一个进程。
  * · `marks` 为 null = 它活着,但环境读不出来;
  * · `gen` 为 null = **这份环境是哪一代读到的证不出来**(代次问不出,或者读的前后换了代)

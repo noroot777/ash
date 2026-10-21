@@ -21,13 +21,16 @@
 import type { ChildProcess } from "node:child_process";
 import { IS_WINDOWS, isPidAlive, killOne } from "../platform.js";
 import { processUnitEvidence, type UnitEvidence } from "../proc.js";
+import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import {
   processTableSnapshot, stillSameGeneration, subtreesOf,
   type ProcessGeneration, type ProcessMember, type ProcessSubtree,
 } from "../process-generation.js";
 import { childKillAuthorized } from "./child-identity.js";
 import { unitTokenOf } from "./unit-token.js";
-import { holdersMayExist, probeFileHolders, trackPathOf, type HolderProbe } from "./track-evidence.js";
+import {
+  holderMayOwn, holdersMayExist, probeFileHolders, trackPathOf, type HolderProbe,
+} from "./track-evidence.js";
 
 // ── 归属事实 + 同源代次:**一份身份事实,探活 / 扩树 / TERM / 补刀共用** ──────────
 //
@@ -171,7 +174,14 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   const trackPath = trackPathOf(child);
   const token = unitTokenOf(child);
   const unit = processUnitEvidence(token, { fresh: true });
-  if (token && unit.verdict === "unprovable") faults.push("资源记号这一问没答出来(进程环境读不到)");
+  // `unprovable` 有两种,处置相反(第 3 轮审查 N2):**这一次**读失败 ⇒ 这一轮确实没问清楚;
+  // 而这台机器**结构性读不到别的进程的环境块**(win32,`monitorUnitProofGrade()` 为 null)⇒
+  // 重试一万次也是同一个答案,把它记成 fault 会让那个平台上每个正常收尾的回合都「没问清楚」,
+  // 于是永远放不开证据、永远欠一笔追不动的债。那边本来只有 ppid 树这一半能力,如实按
+  // 「这台机器没有这条线索」处理。
+  if (token && unit.verdict === "unprovable" && monitorUnitAnswerable()) {
+    faults.push("资源记号这一问没答出来(进程环境读不到)");
+  }
 
   // ① **先取快照**(见上面那段:这个顺序本身是不变量)。
   const table = await processTableSnapshot();
@@ -185,8 +195,16 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   // ② 再问归属线索。
   const probe = trackPath ? await probeFileHolders(trackPath) : emptyProbe;
   if (probe.kind === "unknown") faults.push(`追踪文件持有者问不出来:${probe.reason}`);
-  const holders = probe.kind === "held" ? probe.pids : [];
-  const seeds: RootSeed[] = holders.map((pid) => ({ pid, authority: "track-fd" as const }));
+  // **只读的持有者不配当树根**(第 3 轮审查 F1):追踪文件是以写模式打开再继承下去的,所以
+  // 真后代一定是写模式;只读打开它的是别人(诊断工具、看客)。「打开过这个文件」证明不了
+  // 归属,而这里授权的是**整棵子树**的击杀。
+  const holders = probe.kind === "held" ? probe.holders : [];
+  const owners = holders.filter(holderMayOwn);
+  // 有持有者、却一个都答不出模式 ⇒ 这一问**没答全**:不授权,但也不许说这一轮问清楚了。
+  if (holders.length && !owners.length && holders.every((h) => h.mode === "unknown")) {
+    faults.push("追踪文件持有者的访问模式问不出来(没法把只读看客和真后代分开)");
+  }
+  const seeds: RootSeed[] = owners.map((h) => ({ pid: h.pid, authority: "track-fd" as const }));
   if (child.pid && treeRootUsable(child)) seeds.push({ pid: child.pid, authority: "handle" });
   // 记号那一问也挪到快照之后,判据于是与 fd 那一路同构。
   const freshUnit = token ? processUnitEvidence(token, { fresh: true }) : unit;
