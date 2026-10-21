@@ -8,7 +8,7 @@ import { isVerifyNote, noteTone } from "./conversationNotes.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent } from "../lib/executionTrace.ts";
 import { reviewerKey, reviewerKeyOf, reviewerOf } from "./conversationReviewer.ts";
 import type { AgentContentSegment, AgentTraceEvent } from "./conversationSegments.ts";
-import { auxEvent } from "./conversationSegments.ts";
+import { auxEvent, awaitingAfterEvent } from "./conversationSegments.ts";
 import type { ConversationEventItem, ConversationItem, TimelineEntry } from "./conversationModel.ts";
 import type { AgentRun, LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
 import { agentLabel, latestTurnStart, sessionRun, turnKey } from "./conversationTurnParts.ts";
@@ -57,14 +57,16 @@ function liveRun(event: LiveAgentEvent): AgentRun | undefined {
 function currentSegment(agent: AgentItem): AgentContentSegment {
   const existing = agent.segments.at(-1);
   if (existing) return existing;
-  const created = { id: `${agent.id}:segment:0`, markdown: "", events: [], attachments: [] };
+  const created = { id: `${agent.id}:segment:0`, markdown: "", events: [], attachments: [], awaiting: false };
   agent.segments.push(created);
   return created;
 }
 
 function appendAgentText(agent: AgentItem, text: string): void {
   agent.markdown += text;
-  currentSegment(agent).markdown += text;
+  const segment = currentSegment(agent);
+  segment.markdown += text;
+  segment.awaiting = false; // 正文来了 = 上游回话了(见 AgentContentSegment.awaiting)
 }
 
 function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
@@ -75,21 +77,23 @@ function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
      section —— 空的也占 7px,总高一涨,正在读的人就被贴底逻辑拽到底(审查第 6 轮 F1)。
      事件仍挂在当前段上:抽屉的数据是从 segments[].events 里提的。 */
   if (segment.markdown && isVisibleExecutionEvent(normalized)) {
-    segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [] };
+    segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [], awaiting: false };
     agent.segments.push(segment);
   }
   // 相邻思考合并成一行(见 appendExecutionEvent)：直播这一路一条 thinking 事件就是一小块
   // 增量，逐条成行的话长思考会刷出成百上千行。
   segment.events = appendExecutionEvent(segment.events, normalized);
+  segment.awaiting = awaitingAfterEvent(normalized);
 }
 
 function appendAgentAttachment(agent: AgentItem, path: string): void {
   let segment = currentSegment(agent);
   if (segment.markdown) {
-    segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [] };
+    segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [], awaiting: false };
     agent.segments.push(segment);
   }
   if (!segment.attachments.includes(path)) segment.attachments.push(path);
+  segment.awaiting = false; // 附件也是上游吐出来的东西
 }
 
 /**

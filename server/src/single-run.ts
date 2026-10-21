@@ -27,6 +27,7 @@ import {
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./transcript.js";
 import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
+import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
@@ -210,6 +211,9 @@ export async function consumeSingleRun(a: {
 
   try {
     for await (const event of a.handle.events) {
+      // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
+      // 反推不出「这条提示之后有没有新东西来」(见 session-waiting.ts)。
+      trackSessionWaiting(sessId, a.turnStart, event);
       if (goalStartPending && a.handle.goalStarted?.()) { await markCliGoalStarted(taskId, agentType, event.kind === "session" ? event.cliSessionId : cliSessionId); goalStartPending = false; }
       if (event.kind === "session") {
         if (event.cliSessionId !== cliSessionId) {
@@ -286,6 +290,8 @@ export async function consumeSingleRun(a: {
     // 崩溃；预约若撤销，再把原异常交回原来的失败路径。
     streamError = error;
   } finally {
+    // 流异常中断时 done 事件压根不会来,内存里那条等待状态就得在这儿撤(见 session-waiting.ts)。
+    clearSessionWaiting(sessId);
     if (offsetTimer) clearInterval(offsetTimer);
     await a.handle.cleanup?.().catch((error) => {
       console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);

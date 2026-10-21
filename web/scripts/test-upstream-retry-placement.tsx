@@ -145,58 +145,65 @@ spoke = applyDuetEvent(spoke, agentEvent({ kind: "error", message: RETRY, level:
 spoke = applyDuetEvent(spoke, { type: "duet.progress", taskId: "d1", round: 1, speaker: "A", phase: "end" } as ServerEvent);
 assert.equal(spoke.turns[0]!.awaiting, false, "回合都结束了还挂着「正在等上游」");
 
-// ── 6) 「此刻还在等上游」只认恢复输出,不认「最后一条事件是提示」 ────────────────
+// ── 6) 「此刻还在等上游」由归约层按事件顺序维护,展示层只读那一位 ────────────────
 // 折叠条上那句「正在重试」要常驻 —— 上游停摆十分钟时它是用户手上唯一的线索,退回成
-// 「智能体委派中」正是 2026-09-24 要治的病。代价是解除条件必须准:恢复后接着流式输出的
-// 正文只进 markdown、压根不进 events,照「最后一条事件是提示」判就会在已经恢复回答之后
-// 还一直写着正在重试,直到下一次工具调用(第 1 轮审查 F2)。
-const seg = (over: Partial<AgentContentSegment>): AgentContentSegment =>
-  ({ id: "s", markdown: "", events: [], attachments: [], ...over });
-const notice = { kind: "notice" as const, label: "提示", detail: RETRY };
-const bash = { kind: "tool" as const, label: "Bash" };
-assert.equal(
-  awaitingUpstream([seg({ events: [bash, notice] })]),
-  true,
-  "提示之后一个字都还没说出来,这时就是在等上游 —— 折叠条该把那句话留着",
-);
-assert.equal(
-  awaitingUpstream([seg({ events: [bash, notice], markdown: "上游已经恢复，这是恢复后的正文。" })]),
-  false,
-  "正文已经恢复,折叠条还会一直写着「正在重试」(F2)",
-);
-assert.equal(
-  awaitingUpstream([seg({ events: [notice, { kind: "tool", label: "Read" }] })]),
-  false,
-  "提示之后又调了工具,显然早就不在等了",
-);
-assert.equal(
-  awaitingUpstream([seg({ events: [notice], attachments: ["/tmp/shot.png"] })]),
-  false,
-  "提示之后落了附件,同样是恢复输出",
-);
-assert.equal(awaitingUpstream([]), false);
-assert.equal(
-  awaitingUpstream([seg({ id: "a", events: [notice] }), seg({ id: "b", events: [bash] })]),
-  false,
-  "上一段里的提示是历史记录,不是此刻的状态 —— 只看最后那一段",
-);
-
-// 同一条判据接到**真的直播段落**上:上面那几条是手搓的段,这里走一遍 buildConversationItems,
-// 确认恢复回来的正文真的落在提示那一段里(appendAgentAux 只在当前段已有正文时才另起一段)。
+// 「智能体委派中」正是 2026-09-24 要治的病。而解除条件必须准,两轮审查各错过一次:
+// 恢复后的正文只进 markdown(第 1 轮 F2)、提示之前落的附件被当成了提示之后的恢复
+// (第 3 轮 F2)。成品段落里正文/附件/事件是混在一起的累积结果,读不出谁先谁后,所以
+// 判据只能在**写入那一刻**记下来 —— 下面全部走真实归约层,不手搓段落。
 const liveSegments = (events: ReturnType<typeof live>[]) => {
   const built = buildConversationItems([], [session], events);
   const first = built[0] as Extract<(typeof built)[number], { kind: "agent" }>;
   return first.segments;
 };
-const stalled = [
-  live("a1", { kind: "tool", name: "Bash", detail: JSON.stringify({ command: "npm test" }) }),
-  live("a2", { kind: "error", message: RETRY, level: "notice" }),
-];
+const tracedSegments = (events: (AgentEvent | { kind: string; [key: string]: unknown })[]) => {
+  const built = buildConversationItems(
+    [{ session, output: "", trace: events.map((event, index) => traced(event, 1_000 * (index + 1))) }],
+    [session],
+    [],
+  );
+  const first = built[0] as Extract<(typeof built)[number], { kind: "agent" }>;
+  return first.segments;
+};
+
+const BASH = { kind: "tool", name: "Bash", detail: JSON.stringify({ command: "npm test" }) } as AgentEvent;
+const NOTICE = { kind: "error", message: RETRY, level: "notice" } as AgentEvent;
+const SHOT = { kind: "attachment", path: "/tmp/shot.png" } as unknown as AgentEvent;
+// 直播路(SSE 边跑边追加)。
+const stalled = [live("a1", BASH), live("a2", NOTICE)];
 assert.equal(awaitingUpstream(liveSegments(stalled)), true, "重试提示刚到,此刻确实在等上游");
 assert.equal(
   awaitingUpstream(liveSegments([...stalled, live("a3", { kind: "text", text: "上游恢复了,接着说。" })])),
   false,
-  "上游已经恢复在流式输出正文了,折叠条还会一直写着「正在重试」(F2)",
+  "上游已经恢复在流式输出正文了,折叠条还会一直写着「正在重试」(第 1 轮 F2)",
 );
+assert.equal(
+  awaitingUpstream(liveSegments([...stalled, live("a4", { kind: "tool", name: "Read", detail: "{}" } as AgentEvent)])),
+  false,
+  "提示之后又调了工具,显然早就不在等了",
+);
+// **附件先到、随后才重试**:claude-stream 会从工具结果生成附件(executors/claude-stream.ts),
+// 紧接着的下一次上游请求就可能重试。照「末段有附件就算恢复」判,这一下等待当场消失,
+// 折叠条 3.6 秒后退回「执行过程 · 1 提示」,而上游其实还一个字都没回(第 3 轮审查 F2)。
+assert.equal(
+  awaitingUpstream(liveSegments([live("b1", SHOT), live("b2", NOTICE)])),
+  true,
+  "附件是提示之前的事,它不能把提示之后的等待解除掉(第 3 轮 F2)",
+);
+assert.equal(
+  awaitingUpstream(liveSegments([live("b1", NOTICE), live("b2", SHOT)])),
+  false,
+  "提示之后落了附件,那是真的恢复输出",
+);
+// 落盘重建路(刷新后)必须给出同一个答案 —— 两路各算一份就会漂。
+assert.equal(awaitingUpstream(tracedSegments([BASH, NOTICE])), true, "刷新之后等待状态丢了");
+assert.equal(awaitingUpstream(tracedSegments([SHOT, NOTICE])), true, "刷新之后「附件先到」同样会算错(第 3 轮 F2)");
+assert.equal(awaitingUpstream(tracedSegments([NOTICE, SHOT])), false);
+assert.equal(
+  awaitingUpstream(tracedSegments([BASH, NOTICE, { kind: "text", text: "恢复后的正文。" }])),
+  false,
+  "刷新之后正文已经在了,却还说在等上游",
+);
+assert.equal(awaitingUpstream([]), false);
 
 console.log("上游重试排在执行过程里它发生的那一步下面：落盘、直播、折叠、duet 四路一致，不标红，且恢复输出会解除等待");

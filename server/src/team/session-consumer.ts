@@ -19,6 +19,7 @@ import {
 import { writeRunError, writeTurnEnd } from "../transcript.js";
 import type { SessionTraceEvent } from "../transcript.js";
 import { isExecutionNotice, isSessionScopeNotice } from "../session-notice.js";
+import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
@@ -122,6 +123,9 @@ async function consume(lead: Lead): Promise<void> {
   try {
     for await (const event of lead.handle.events) {
       if (event.kind === "turnEnd") {
+        // 回合收口 = 这一轮不再「在等」了。常驻调度台没有 done 事件,这里是它唯一的边界;
+        // 不清的话一台答完待命的调度台会一直在手机上挂着「正在重试」(第 3 轮审查 F1)。
+        clearSessionWaiting(lead.sessId);
         flushTraceText();
         await endTurn(lead);
         // 上一回合欠着的新会话凭据在这儿补:补上了,轮换事宜这才算真翻篇。
@@ -164,6 +168,9 @@ async function consume(lead: Lead): Promise<void> {
         clearIdle(lead);
         await beginTurn(lead);
       }
+      // 排在 beginTurn 之后:自发回合的第一条事件就可能是提示,回合身份得先有(见
+      // session-waiting.ts —— 没有身份的提示一律不记)。
+      trackSessionWaiting(lead.sessId, lead.turnStart, event);
       if (event.kind === "text") {
         lead.out.write(event.text);
         pendingTraceText += event.text;
@@ -470,6 +477,7 @@ async function closeLead(
   aborted = false,
 ): Promise<void> {
   clearIdle(lead);
+  clearSessionWaiting(lead.sessId); // 这台进程没了,内存里那条等待状态跟着撤
   untrackRun(lead.taskId, lead.handle);
   // 工作目录被抽走时我们会主动收掉旧进程、立刻开新的,旧进程的 close 事件晚一步
   // 才到 —— 它不能把已经接管的新会话摘掉,更不能把新回合的 running 改回 idle。

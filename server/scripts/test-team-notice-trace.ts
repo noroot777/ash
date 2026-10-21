@@ -13,8 +13,10 @@
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import {
-  root, db, dbClient, ensureSchema, projects, at, ok, runLead,
+  root, db, dbClient, ensureSchema, projects, sessions, eq, at, ok, runLead,
 } from "./team-lead-resilience-fixture.js";
+import { failedTurnNotices, sessionWaiting } from "../src/session-waiting.js";
+import { readRecentTraceEntries } from "../src/transcript.js";
 
 const RETRY_1 = "上游返回 504 server_error，正在重试（第 1/10 次，等 0.5 秒）";
 const RETRY_2 = "上游返回 502 server_error，正在重试（第 2/10 次，等 1.1 秒）";
@@ -76,6 +78,54 @@ try {
   assert.ok(!run.md.includes("执行诊断"), "一次可恢复的重试把这一轮画上了红色诊断块");
   assert.equal((await run.task()).status, "idle", "重试提示把一次健康回合的收尾判坏了");
   ok("提示只走 trace:.md 不多一个字,回合照常落待命");
+
+  // ── 答完待命的那一台,手机上不该还挂着「正在重试」(第 3 轮审查 F1) ──────────────
+  // 常驻调度台每一轮健康收尾都会写 endedAt,而进程还在跑,exitStatus 合法地仍是 null。
+  // 上一版把「endedAt 有值且退出码不是 0」当成失败现场,于是这台一转待命,整轮的重试提示
+  // 就在手机回答下面重新挂出来 —— 而且不是闪一帧,会一直留到进程退出或下一轮开始。
+  const idleSess = "sess-idle-notice";
+  let release: (() => void) | null = null;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await runLead("idle-notice", {
+    cliSessionId: "thread-idle-notice",
+    script: async function* () {
+      yield { kind: "tool", name: "Bash", detail: JSON.stringify({ command: "npm test" }) };
+      await pause();
+      yield { kind: "error", message: RETRY_1, level: "notice", affectsTurn: false };
+      await pause();
+      yield { kind: "text", text: "上游已经恢复,正在继续回答。" };
+      yield { kind: "turnEnd" };
+      await gate; // 回合收口了、进程还活着 —— 这就是 F1 的现场
+      yield { kind: "done", exitStatus: 0 };
+    },
+    whileLive: async () => {
+      const deadline = Date.now() + 10_000;
+      let row: Awaited<ReturnType<typeof readIdle>> = undefined;
+      const readIdle = async () => (await db.select().from(sessions).where(eq(sessions.id, idleSess))).at(0);
+      while (Date.now() < deadline) {
+        row = await readIdle();
+        if (row?.endedAt) break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      try {
+        assert.ok(row?.endedAt, "这一轮没能收口,这份用例的前提不成立");
+        assert.equal(row.exitStatus, null, "要的就是「回合收口了、进程还在跑」那一刻");
+        assert.deepEqual(
+          sessionWaiting(idleSess, row.turnStartedAt),
+          [],
+          "恢复正文和回合收口都没能把内存里那条等待状态撤掉",
+        );
+        assert.deepEqual(
+          failedTurnNotices(await readRecentTraceEntries(row.taskId, idleSess), row),
+          [],
+          "一台答完待命的调度台被当成失败现场,整轮提示在手机上重新挂了出来(F1)",
+        );
+      } finally {
+        release?.();
+      }
+    },
+  });
+  ok("健康待命的调度台:等待状态已撤,失败现场也不回放");
 
   console.log("test:team-notice-trace ok");
 } finally {

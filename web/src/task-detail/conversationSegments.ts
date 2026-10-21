@@ -18,6 +18,15 @@ export type AgentContentSegment = {
   markdown: string;
   events: AgentAuxEvent[];
   attachments: string[];
+  /**
+   * 这一段**停在一条过程提示上**:上游在重试/还没回话,提示之后一个字都还没来。
+   *
+   * 由归约层按事件顺序维护(直播追加与落盘重建两路都写它),展示层只读 —— 别再从段落的
+   * 成品结构反推「提示之后有没有恢复」。反推过两次都错在同一个地方:正文、附件、事件在
+   * 一段里是**混在一起的累积结果**,读不出谁先谁后,于是「末段有附件」就被当成了恢复
+   * (第 3 轮审查 F2)。
+   */
+  awaiting?: boolean;
 };
 
 /**
@@ -43,17 +52,20 @@ export function segmentHasVisibleContent(segment: AgentContentSegment): boolean 
  * 这一串段落此刻**还卡在上游等回话**吗 —— 折叠条上那句「正在重试」要不要常驻(用处见
  * ExecutionSummaryLine 的 `awaiting`)。
  *
- * 判据是:最后那一段的最后一条事件是提示,**而且它之后一个字都还没说出来**。「最后一条
- * 事件是提示」单独拿来用不成立 —— 上游恢复后接着流式输出的正文只进 markdown、压根不进
- * events,照它判就会在已经恢复回答之后还一直写着正在重试,直到下一次工具调用(第 1 轮
- * 审查 F2)。提示之后的正文确实落在同一段里:提示只在当前段已有正文时才另起一段
- * (见 conversationLiveTurns 的 appendAgentAux),所以此后的正文就接在它这一段上。
+ * 只读归约层记下的那一位(见 AgentContentSegment.awaiting):提示置上、随后任何一条输出
+ * 置回,顺序由写入那一刻决定。
  */
 export function awaitingUpstream(segments: AgentContentSegment[]): boolean {
-  const tail = segments.at(-1);
-  if (!tail) return false;
-  return tail.events.at(-1)?.kind === "notice" && !tail.markdown.trim() && !tail.attachments.length;
+  return segments.at(-1)?.awaiting === true;
 }
+
+/**
+ * 这一条执行过程事件进段之后,这一段还在等上游吗 —— 提示置上,别的一概置回。
+ *
+ * 直播追加与落盘重建共用它(两路各算一份就会漂)。画不出来的子智能体通知也算恢复:
+ * 它同样是上游真的吐出来的东西,这一位答的是「还有没有在等」,不是「画不画得出来」。
+ */
+export const awaitingAfterEvent = (event: AgentAuxEvent): boolean => event.kind === "notice";
 
 export type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TracedContentEntry = SessionTraceEntry & {
@@ -106,17 +118,23 @@ export function contentSegments(
     (entry): entry is TracedAttachmentEntry => entry.event.kind === "attachment",
   );
   if (!entries.some((entry) => entry.event.kind === "text")) {
+    // 一段都没切时(整轮压根没有正文),等待状态由**最后一条**事件决定 —— 附件也算一条输出。
+    const last = entries.at(-1);
+    const lastAux = last && last.event.kind !== "attachment" && last.event.kind !== "text"
+      ? auxEvent(last.event, last.at)
+      : null;
     return [{
       id: `${idPrefix}:0`,
       markdown: fallbackMarkdown,
       events: auxEvents(auxEntries),
       attachments: attachmentEntries.map((entry) => entry.event.path),
+      awaiting: !!lastAux && awaitingAfterEvent(lastAux),
     }];
   }
 
   const segments: AgentContentSegment[] = [];
-  let current: AgentContentSegment = { id: `${idPrefix}:0`, markdown: "", events: [], attachments: [] };
-  const newCurrent = () => ({ id: `${idPrefix}:${segments.length}`, markdown: "", events: [], attachments: [] });
+  let current: AgentContentSegment = { id: `${idPrefix}:0`, markdown: "", events: [], attachments: [], awaiting: false };
+  const newCurrent = () => ({ id: `${idPrefix}:${segments.length}`, markdown: "", events: [], attachments: [], awaiting: false });
   const pushCurrent = () => {
     if (segmentHasVisibleContent(current)) {
       segments.push(current);
@@ -130,16 +148,20 @@ export function contentSegments(
     const previous = segments.at(-1);
     if (!previous) return;
     for (const event of current.events) previous.events = appendExecutionEvent(previous.events, event);
+    // 并进去的那几条是**更晚**发生的,所以等待状态也跟着过去。
+    previous.awaiting = current.awaiting;
     current = newCurrent();
   };
   for (const entry of entries) {
     if (entry.event.kind === "text") {
       current.markdown += entry.event.text;
+      current.awaiting = false;
       continue;
     }
     if (entry.event.kind === "attachment") {
       if (current.markdown) pushCurrent();
       if (!current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
+      current.awaiting = false;
       continue;
     }
     const event = auxEvent(entry.event, entry.at);
@@ -147,6 +169,7 @@ export function contentSegments(
     // 那个空 section。事件照旧挂在当前段上,抽屉那边仍取得到。
     if (current.markdown && isVisibleExecutionEvent(event)) pushCurrent();
     current.events = appendExecutionEvent(current.events, event);
+    current.awaiting = awaitingAfterEvent(event);
   }
   pushCurrent();
   /* 收尾:**数据优先于布局**。整段 trace 里一个字都没有、只有画不出来的后台通知时,

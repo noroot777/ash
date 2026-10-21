@@ -124,11 +124,10 @@ async function readTraceTail(taskId: string, sessionId: string): Promise<string 
 /**
  * 这条会话 trace 尾巴里的条目,**原样带着 at / turnStartedAt**。
  *
- * 给的是「每几秒拉一次」的窄出口用的(手机端读不动整份 trace,见 session-notice.ts 的
- * pendingSessionNotices):只读尾巴是因为这类消费者问的都是「此刻怎么了」,答案一定贴在
- * 文件末尾;切口上
- * 那半行 JSON 解析不过,parseSessionTrace 自己会丢掉。文件不在就是没有,**读失败照抛** ——
- * 咽掉的话一次磁盘故障会被读成「什么都没发生」。
+ * 给的是「每几秒拉一次」的窄出口用的(手机端读不动整份 trace,见 session-waiting.ts 的
+ * failedTurnNotices):只读尾巴是因为这类消费者问的都是「这一轮怎么了」,答案一定贴在文件
+ * 末尾;切口上那半行 JSON 解析不过,parseSessionTrace 自己会丢掉。文件不在就是没有,
+ * **读失败照抛** —— 咽掉的话一次磁盘故障会被读成「什么都没发生」。
  */
 export async function readRecentTraceEntries(taskId: string, sessionId: string): Promise<SessionTraceEntry[]> {
   const raw = await readTraceTail(taskId, sessionId);

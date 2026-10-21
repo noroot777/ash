@@ -12,7 +12,7 @@ import { sessions } from "./db/schema.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
-import { pendingSessionNotices } from "./session-notice.js";
+import { failedTurnNotices, sessionWaiting } from "./session-waiting.js";
 import {
   parseSessionTraceLines,
   readRecentTraceEntries,
@@ -166,16 +166,19 @@ export function mountTaskSessionRoutes(api: Hono): void {
     return c.json({ error: "trace unreadable" }, 500);
   });
 
-  // 过程提示的窄出口。给读不动整份 trace 的消费者(手机端每几秒重拉一次),给的也只是
-  // 「此刻还悬着的那几条」—— 口径见 pendingSessionNotices / shared 的 SessionNotice。
-  // 读失败不咽:整份 trace 那条出口已经是这个口径(文件不在=没有,读不动=500),否则一次
-  // 磁盘故障会被手机端读成「上游没在重试」。
+  // 过程提示的窄出口。给读不动整份 trace 的消费者(手机端每几秒重拉一次)。两种投影的
+  // 分工与判据见 session-waiting.ts:**此刻还在等**只认事件消费链上的内存状态(落盘产物
+  // 答不了它 —— 正文有缓冲),**失败现场**才从 trace 回放。
+  // 还在等的时候压根不读盘;要读的时候读失败也不咽:整份 trace 那条出口已经是这个口径
+  // (文件不在=没有,读不动=500),否则一次磁盘故障会被手机端读成「上游没在重试」。
   api.get("/sessions/:id/notices", async (c) => {
     const sid = c.req.param("id");
     const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
     if (!row) return c.json({ error: "not found" }, 404);
+    const live = sessionWaiting(sid, row.turnStartedAt);
+    if (live.length) return c.json(live);
     try {
-      return c.json(pendingSessionNotices(await readRecentTraceEntries(row.taskId, sid), row));
+      return c.json(failedTurnNotices(await readRecentTraceEntries(row.taskId, sid), row));
     } catch (error) {
       console.warn(`[ash] 读 ${sid} 的过程提示失败:`, error);
       return c.json({ error: "trace unreadable" }, 500);

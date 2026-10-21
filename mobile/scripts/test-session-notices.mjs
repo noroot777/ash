@@ -6,8 +6,9 @@
 // 挪进了 trace —— 而手机压根不读 trace，于是桌面有的东西手机一条都看不到。
 //
 // 现在它们走 `GET /sessions/:id/notices` 这个窄出口，由 mergeSessionNotices 接回时间线。
-// 出口给的只是「此刻还悬着的那几条」（server 的 pendingSessionNotices 已经筛过），所以这边
-// 的位置只能是末尾 —— 第 2 轮审查 F1 打掉的正是「按正文的结束时间猜它属于哪一轮」：`.md` 里
+// 出口给的只有「此刻还在等」和「这一轮真失败了」两种（server 的 session-waiting.ts 已经筛
+// 过），都是此刻的状态，所以这边的位置只能是末尾 —— 第 2 轮审查 F1 打掉的正是「按正文的
+// 结束时间猜它属于哪一轮」：`.md` 里
 // 只有 agentEnd 一个时间戳，一轮压根没出正文（光调工具、或者就卡在重试上）时猜出来的位置会
 // 把提示塞到下一轮的回答后面，又变回用户要治的「堆在会话结尾的一坨」。
 import assert from "node:assert/strict";

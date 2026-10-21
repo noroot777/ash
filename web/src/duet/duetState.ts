@@ -1,5 +1,6 @@
-import type { AgentEvent, DuetConsensusBy, DuetSpeaker, GateName, ServerEvent } from "@ash/shared";
+import type { DuetConsensusBy, DuetSpeaker, GateName, ServerEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
+import { resumesWaiting } from "@ash/shared/waiting";
 import { appendExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 
 export type DuetTurn = {
@@ -54,11 +55,6 @@ function isPersistedGate(entry: PersistedDuetEntry): entry is Extract<ServerEven
 function isPersistedProgress(entry: PersistedDuetEntry): entry is Extract<ServerEvent, { type: "duet.progress" }> {
   return (entry as { type?: string }).type === "duet.progress";
 }
-
-/** 收到这些事件说明上游接着往下走了:在等的那条提示就此解除。 */
-const RESUMES_TURN: ReadonlySet<AgentEvent["kind"]> = new Set<AgentEvent["kind"]>([
-  "text", "thinking", "tool", "attachment", "error",
-]);
 
 function speakerOf(role: string): DuetSpeaker {
   if (role === "voiceB") return "B";
@@ -161,7 +157,7 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
       }
       // 等待状态在这里一处算完(见 DuetTurn.awaiting):提示置上,随后任何一条真进度置回。
       if (event.event.kind === "error" && event.event.level === "notice") turn.awaiting = true;
-      else if (RESUMES_TURN.has(event.event.kind)) turn.awaiting = false;
+      else if (resumesWaiting(event.event)) turn.awaiting = false;
       if (event.event.kind === "system") turn.notice = `${turn.notice ?? ""}\n${event.event.text}`.trim();
       turns[index] = turn;
       break;
