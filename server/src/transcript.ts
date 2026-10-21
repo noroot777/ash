@@ -3,9 +3,9 @@
 // 与常驻调度台都走这里，因此刷新能把每组 thinking/tool 放回它所启动的正文片段，
 // 同时非正文事件绝不会混进 assistant Markdown。
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
-import { open, readFile, stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import type { AgentEvent, AgentType, SessionNotice } from "@ash/shared";
+import type { AgentEvent, AgentType } from "@ash/shared";
 import { isTokenUsage } from "@ash/shared/usage";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
 
@@ -84,26 +84,55 @@ const TRACE_TAIL_BYTES = 256 * 1024;
  * agent 段没有自己的时间戳，得靠前后段落推，跨轮复用的会话上尤其容易推错。
  */
 export async function turnProducedWork(taskId: string, sessionId: string, turnStartedAt: string): Promise<boolean> {
-  const path = readableRunPath(sessionTracePath(taskId, sessionId));
-  let raw: string;
+  let raw: string | null;
   try {
-    const info = await stat(path);
-    const length = Math.min(info.size, TRACE_TAIL_BYTES);
-    const handle = await open(path, "r");
-    try {
-      const buffer = Buffer.alloc(length);
-      await handle.read(buffer, 0, length, info.size - length);
-      raw = buffer.toString("utf8");
-    } finally {
-      await handle.close();
-    }
+    raw = await readTraceTail(taskId, sessionId);
   } catch {
-    // 没有 trace（老会话、产物被清过）= 无从证明它干过活。默认走「重发整份任务书」那档，
-    // 那一档在任何上下文状态下都是对的，只是费一点 token。
-    return false;
+    raw = null;
   }
+  // 没有 trace（老会话、产物被清过）、或者这次压根读不出来 = 无从证明它干过活。默认走
+  // 「重发整份任务书」那档，那一档在任何上下文状态下都是对的，只是费一点 token。
+  if (raw === null) return false;
   return parseSessionTrace(raw).some((entry) => entry.turnStartedAt === turnStartedAt
     && (entry.event.kind === "text" || entry.event.kind === "tool" || entry.event.kind === "attachment"));
+}
+
+/**
+ * trace 的**尾巴**(最后 TRACE_TAIL_BYTES 字节)。文件不在回 null —— 2026-08-01 之前跑完的
+ * 会话压根没有这个文件,那跟「读失败」是两回事,所以其余错误照抛给调用方自己定。
+ */
+async function readTraceTail(taskId: string, sessionId: string): Promise<string | null> {
+  const path = readableRunPath(sessionTracePath(taskId, sessionId));
+  let info: Awaited<ReturnType<typeof stat>>;
+  try {
+    info = await stat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const length = Math.min(info.size, TRACE_TAIL_BYTES);
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, info.size - length);
+    return buffer.toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * 这条会话 trace 尾巴里的条目,**原样带着 at / turnStartedAt**。
+ *
+ * 给的是「每几秒拉一次」的窄出口用的(手机端读不动整份 trace,见 session-notice.ts 的
+ * pendingSessionNotices):只读尾巴是因为这类消费者问的都是「此刻怎么了」,答案一定贴在
+ * 文件末尾;切口上
+ * 那半行 JSON 解析不过,parseSessionTrace 自己会丢掉。文件不在就是没有,**读失败照抛** ——
+ * 咽掉的话一次磁盘故障会被读成「什么都没发生」。
+ */
+export async function readRecentTraceEntries(taskId: string, sessionId: string): Promise<SessionTraceEntry[]> {
+  const raw = await readTraceTail(taskId, sessionId);
+  return raw === null ? [] : parseSessionTrace(raw);
 }
 
 /**
@@ -135,43 +164,6 @@ export function parseSessionTraceLines(raw: string): SessionTraceParse {
     else badLines += 1;
   }
   return { entries, badLines, truncatedTail };
-}
-
-// 一条会话上最多回这么多条过程提示(只留最近的)。上游连环重试能刷出几十条,而消费者要的
-// 是「现在卡住了没有」,不是完整流水 —— 完整流水在 trace 自己那份里。
-const NOTICE_LIMIT = 50;
-const NOTICE_MARK = '"level":"notice"';
-
-/**
- * 这条会话落盘过的**过程提示**(上游在重试、还在等回话;形状见 shared 的 SessionNotice)。
- *
- * 读法是刻意的:先按字面量把那几行挑出来,只对命中的行 JSON.parse。一份 8 MB 的 trace 里
- * 提示通常不到十行,整份逐行解析纯属白烧 —— 而这个出口就是给「每几秒拉一次」的消费者用的
- * (手机端:它读不动整份 trace,见 mobile/src/lib/log.ts 的 mergeSessionNotices)。
- * 文件不在就是没有,跟 /trace 同一条判据(2026-08-01 之前跑完的会话压根没有这个文件);
- * 解析不出来的行跳过 —— 这个出口宁可少给一条,也不该让一次轮询失败。
- */
-export async function readSessionNotices(taskId: string, sessionId: string): Promise<SessionNotice[]> {
-  let text: string;
-  try {
-    text = await readFile(readableRunPath(sessionTracePath(taskId, sessionId)), "utf8");
-  } catch {
-    return [];
-  }
-  const out: SessionNotice[] = [];
-  for (let hit = text.indexOf(NOTICE_MARK); hit >= 0;) {
-    const lineEnd = text.indexOf("\n", hit);
-    const line = text.slice(text.lastIndexOf("\n", hit) + 1, lineEnd < 0 ? text.length : lineEnd);
-    try {
-      const { at, event } = JSON.parse(line) as SessionTraceEntry;
-      if (event.kind === "error" && event.level === "notice" && typeof at === "string") {
-        out.push({ at, text: event.message });
-      }
-    } catch { /* 半截行 / 别的形状:跳过这一条 */ }
-    if (lineEnd < 0) break;
-    hit = text.indexOf(NOTICE_MARK, lineEnd + 1);
-  }
-  return out.slice(-NOTICE_LIMIT);
 }
 
 export function parseSessionTrace(raw: string): SessionTraceEntry[] {

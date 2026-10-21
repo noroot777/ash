@@ -39,36 +39,31 @@ function noticeLine(notice: SessionNotice, sessionId: string, index: number): Lo
     text: notice.text,
     at: notice.at,
     sessionId: `${sessionId}-notice-${index}`,
-    // 它落在哪一秒纯属偶然,多半正砸在某一回合说到一半的地方,所以不能拿它当气泡边界
-    // —— Conversation 会攒着它、等那颗气泡收口再吐出来（见 LogLine.aside）。
+    // 不是 agent 说的话,也不开/不收一个回合:Conversation 会等当前那颗气泡收口再吐出来
+    // （见 LogLine.aside）,正在流式输出的回答才不会被它从中间劈成两半。
     aside: true,
   };
 }
 
 /**
- * 把过程提示（上游在重试、还在等回话）并回这条会话的时间线。
+ * 把这条会话**此刻还悬着**的过程提示（上游在重试、还在等回话）接在它的时间线末尾。
  *
- * 为什么要并:这些提示从前是 `.md` 里的 system 旁注,这条轮询顺带就看到了;改成只落 trace
+ * 为什么要接:这些提示从前是 `.md` 里的 system 旁注,这条轮询顺带就看到了;改成只落 trace
  * (好让桌面端把它们排在出问题的那一步下面)之后,手机这边一条都看不见了。手机端不画工具
  * 调用,所以提示只能回到正文的时间线上。
  *
- * 位置按**它发生在哪一轮**算:agent 段带着那一轮的结束时刻(`endedAt`,来自 .md 的 agentEnd
- * 标),第一个「结束得比提示晚」的段就是那一轮,提示插在它后面。还在跑的那一轮没有 endedAt,
- * 于是落到末尾 —— 正是用户此刻在看的位置。
+ * 为什么是末尾:服务端只给「还悬着」的那几条(见 shared 的 SessionNotice),意思就是上游在
+ * 这条提示之后一个字都没再吐 —— 它确实是这条会话此刻的最新状态。**不能再按正文的结束
+ * 时间猜它该插在哪两段之间**:`.md` 里只有 agentEnd 一个时间戳,一轮压根没出正文(光是工具
+ * 调用、或者卡在重试上)时猜出来的位置会把提示塞到下一轮的回答后面,又变回「堆在会话结尾
+ * 的一坨」(第 2 轮审查 F1)。
  */
 export function mergeSessionNotices(lines: LogLine[], notices: SessionNotice[], sessionId: string): LogLine[] {
   if (!notices.length) return lines;
-  const pending = [...notices].sort((a, b) => a.at.localeCompare(b.at));
-  const out: LogLine[] = [];
-  let index = 0;
-  for (const line of lines) {
-    out.push(line);
-    const endedAt = line.kind === "text" ? line.endedAt : undefined;
-    if (!endedAt) continue;
-    while (pending.length && pending[0].at <= endedAt) {
-      out.push(noticeLine(pending.shift() as SessionNotice, sessionId, index++));
-    }
-  }
-  for (const notice of pending) out.push(noticeLine(notice, sessionId, index++));
-  return out;
+  return [
+    ...lines,
+    ...[...notices]
+      .sort((a, b) => a.at.localeCompare(b.at))
+      .map((notice, index) => noticeLine(notice, sessionId, index)),
+  ];
 }

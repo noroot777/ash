@@ -10,9 +10,9 @@
 import { createWriteStream, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { finished } from "node:stream/promises";
-import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
+import type { AgentEvent, AgentType, SessionNotice, SessionRole } from "@ash/shared";
 import { bus } from "./bus.js";
-import { sessionTranscriptPath, writeTurn } from "./transcript.js";
+import { sessionTranscriptPath, writeTurn, type SessionTraceEntry } from "./transcript.js";
 import { now } from "./util.js";
 
 // 刻意**不**写成类型守卫(`event is Extract<AgentEvent, { kind: "error" }>`):那样
@@ -36,6 +36,53 @@ export function isSessionScopeNotice(event: AgentEvent): boolean {
  */
 export function isExecutionNotice(event: AgentEvent): boolean {
   return event.kind === "error" && event.level === "notice";
+}
+
+// 一条会话上最多回这么多条过程提示(只留最近的)。上游连环重试能刷出几十条,而这个出口
+// 要答的是「现在卡住了没有」,不是完整流水 —— 完整流水在 trace 自己那份里。
+const NOTICE_LIMIT = 50;
+
+/** 这条 trace 条目算「上游接着往下走了」—— 它一出现,在它之前的等待提示就解除了。 */
+const tracedProgress = (entry: SessionTraceEntry): boolean => {
+  const event = entry.event;
+  if (event.kind === "error") return !isExecutionNotice(event);
+  return event.kind === "text" || event.kind === "thinking" || event.kind === "tool"
+    || event.kind === "attachment" || event.kind === "usage";
+};
+
+/**
+ * 这条会话**此刻还悬着**的过程提示(形状与去处见 shared 的 SessionNotice)。
+ *
+ * 判据分三档,都只认这条会话行自己记着的事实:
+ * - 跑完且收在 0 上 → 一条不给。重试成功了的那几句话没有任何此刻意义,而这个出口的消费者
+ *   只能把它们贴在会话末尾 —— 恰恰是「排在整篇回答后面的一坨」那个毛病。
+ * - 还在飞 → 只给**最后一条真进度之后**的那几句。提示之后上游又吐了东西就等于已经恢复,
+ *   那时它属于执行过程里它发生的那一步,不属于「此刻状态」。
+ * - 收在非 0 上 → 这一轮全部提示照给:失败时它们就是现场,用户要的正是「它卡在哪儿」。
+ *
+ * 只看 `turnStartedAt` 等于会话行当前回合的那些条目:trace 是跨回合追加的,上一轮悬着的
+ * 提示在新回合开跑那一刻就已经是历史了。
+ */
+export function pendingSessionNotices(
+  entries: SessionTraceEntry[],
+  session: { turnStartedAt?: string | null; endedAt: string | null; exitStatus: number | null },
+): SessionNotice[] {
+  const turn = session.turnStartedAt;
+  if (!turn) return [];
+  const settled = session.endedAt !== null;
+  if (settled && session.exitStatus === 0) return [];
+  const inTurn = entries.filter((entry) => entry.turnStartedAt === turn);
+  let from = 0;
+  if (!settled) {
+    for (const [index, entry] of inTurn.entries()) if (tracedProgress(entry)) from = index + 1;
+  }
+  const out: SessionNotice[] = [];
+  for (const entry of inTurn.slice(from)) {
+    const event = entry.event;
+    if (event.kind !== "error" || !isExecutionNotice(event)) continue;
+    out.push({ at: entry.at, turnStartedAt: entry.turnStartedAt, text: event.message });
+  }
+  return out.slice(-NOTICE_LIMIT);
 }
 
 /**

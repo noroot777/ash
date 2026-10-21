@@ -125,6 +125,26 @@ duet = applyDuetEvent(duet, { type: "agent.event", taskId: "d1", sessionId: "ds1
 assert.equal(duet.turns[0]!.error, undefined, "一次上游重试把整场讨论判成了失败");
 assert.deepEqual(duet.turns[0]!.events.map((event) => event.kind), ["notice"]);
 
+// 等待状态由归约层维护(第 2 轮审查 F2):讨论回合的 text/events 都是整轮累积的,
+// 「正文为空」「最后一条事件是提示」这类倒推在本轮早先说过话之后就永远失真。
+const agentEvent = (event: AgentEvent): ServerEvent =>
+  ({ type: "agent.event", taskId: "d1", sessionId: "ds1", role: "voiceA", event }) as ServerEvent;
+let spoke = applyDuetEvent(emptyDuet(), { type: "duet.progress", taskId: "d1", round: 1, speaker: "A", phase: "start" } as ServerEvent);
+spoke = applyDuetEvent(spoke, agentEvent({ kind: "text", text: "我先摆一下本轮的判断。" }));
+spoke = applyDuetEvent(spoke, agentEvent({ kind: "tool", name: "Bash", detail: "{}" } as AgentEvent));
+assert.equal(spoke.turns[0]!.awaiting, false, "还没出提示就说在等上游");
+spoke = applyDuetEvent(spoke, agentEvent({ kind: "error", message: RETRY, level: "notice" }));
+assert.equal(
+  spoke.turns[0]!.awaiting,
+  true,
+  "本轮早先说过话,于是上游停摆时折叠条退回「智能体委派中」(F2)",
+);
+spoke = applyDuetEvent(spoke, agentEvent({ kind: "text", text: "上游回来了,接着说。" }));
+assert.equal(spoke.turns[0]!.awaiting, false, "上游已经恢复输出,等待提示还常驻着");
+spoke = applyDuetEvent(spoke, agentEvent({ kind: "error", message: RETRY, level: "notice" }));
+spoke = applyDuetEvent(spoke, { type: "duet.progress", taskId: "d1", round: 1, speaker: "A", phase: "end" } as ServerEvent);
+assert.equal(spoke.turns[0]!.awaiting, false, "回合都结束了还挂着「正在等上游」");
+
 // ── 6) 「此刻还在等上游」只认恢复输出,不认「最后一条事件是提示」 ────────────────
 // 折叠条上那句「正在重试」要常驻 —— 上游停摆十分钟时它是用户手上唯一的线索,退回成
 // 「智能体委派中」正是 2026-09-24 要治的病。代价是解除条件必须准:恢复后接着流式输出的

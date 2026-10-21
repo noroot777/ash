@@ -58,8 +58,15 @@ export interface Session {
  * 面板里它们排在发生的那一步下面。独立出这个窄出口只为**读不动整份 trace 的消费者**:
  * 手机端每几秒重拉一次,而 trace 连工具的完整输入输出一起落盘,真实库里最大的一份 8 MB、
  * 对应的 `.md` 只有 8 KB。
+ *
+ * 这个出口只给**此刻还悬着的那几条**(筛法见 server 的 `pendingSessionNotices`):提示之后
+ * 上游又吐了东西 = 这一轮正常往下走了,那条提示在这里就该消失。手机端压根不渲染执行过程,
+ * 没有「排在它发生的那一步下面」这个位置可给,留着只会堆在会话结尾 —— 那正是要治的病。
+ * 例外是这一轮真收在失败上,那时它就是失败现场,照给。
  */
 export interface SessionNotice {
   at: string; // 这条提示发生的时刻
+  /** 它属于哪一回合:`sessions.turnStartedAt`,也就是 trace 的分组键。 */
+  turnStartedAt: string;
   text: string;
 }

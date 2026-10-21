@@ -100,13 +100,7 @@ function TurnBubble({
           {turn.raised && <em>✋ 可收敛</em>}
           {!turn.done && <TypingDots />}
         </header>
-        {/* awaiting:正文一来就说明上游回话了(见 ExecutionSummaryLine)。讨论回合的正文
-            攒在 turn.text 里,所以这一路自己这么算。 */}
-        <ExecutionDetails
-          events={turn.events}
-          running={!turn.done}
-          awaiting={turn.events.at(-1)?.kind === "notice" && !turn.text}
-        />
+        <ExecutionDetails events={turn.events} running={!turn.done} awaiting={turn.awaiting} />
         {!turn.done && !turn.text && !turn.events.length && <p className="duet-thinking">{side === "synthesis" ? "正在把讨论成果整理成共同方案…" : "正在组织本轮观点…"}</p>}
         {turn.text && <MarkdownBody text={turn.text} />}
         {turn.notice && <p className="duet-turn-notice">{turn.notice}</p>}

@@ -1,4 +1,4 @@
-import type { DuetConsensusBy, DuetSpeaker, GateName, ServerEvent } from "@ash/shared";
+import type { AgentEvent, DuetConsensusBy, DuetSpeaker, GateName, ServerEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { appendExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 
@@ -11,6 +11,12 @@ export type DuetTurn = {
   /** 本回合的执行过程(工具/思考),与普通任务、团队共用一个「执行过程」折叠块。 */
   events: ExecutionEvent[];
   raised: boolean;
+  /**
+   * 本回合停在一条等待提示上(上游在重试/还没回话),由归约层维护:提示置上、下一条
+   * 真进度置回。展示入口一律读它,别自己从「最后一条事件是不是提示」倒推 —— 回合里的
+   * 正文和事件都是整轮累积的,倒推不出「这条提示之后有没有新东西来」。
+   */
+  awaiting: boolean;
   agrees?: boolean;
   conclusion?: string;
   done: boolean;
@@ -33,7 +39,8 @@ export type DuetGate = {
 
 export type DuetState = { turns: DuetTurn[]; gate: DuetGate | null };
 // 落盘的回合行:events 是后加的,旧 transcript 里没有(缺省当作没有执行过程)。
-export type PersistedDuetTurn = Omit<DuetTurn, "events" | "done" | "raised"> & { raised?: boolean; events?: ExecutionEvent[] };
+// awaiting 只在回合进行中有意义,落盘的都是已结束的回合,所以不进这份投影。
+export type PersistedDuetTurn = Omit<DuetTurn, "events" | "done" | "raised" | "awaiting"> & { raised?: boolean; events?: ExecutionEvent[] };
 export type PersistedDuetEntry =
   | PersistedDuetTurn
   | Extract<ServerEvent, { type: "duet.gate" | "duet.progress" }>;
@@ -47,6 +54,11 @@ function isPersistedGate(entry: PersistedDuetEntry): entry is Extract<ServerEven
 function isPersistedProgress(entry: PersistedDuetEntry): entry is Extract<ServerEvent, { type: "duet.progress" }> {
   return (entry as { type?: string }).type === "duet.progress";
 }
+
+/** 收到这些事件说明上游接着往下走了:在等的那条提示就此解除。 */
+const RESUMES_TURN: ReadonlySet<AgentEvent["kind"]> = new Set<AgentEvent["kind"]>([
+  "text", "thinking", "tool", "attachment", "error",
+]);
 
 function speakerOf(role: string): DuetSpeaker {
   if (role === "voiceB") return "B";
@@ -73,6 +85,7 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
           text: "",
           events: [],
           raised: false,
+          awaiting: false,
           done: false,
           startedAt: event.startedAt ?? event.at,
         }],
@@ -84,6 +97,7 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
         turns[index] = {
           ...turns[index]!,
           done: true,
+          awaiting: false,
           raised: !!event.raisedHand,
           at: event.at,
           startedAt: event.startedAt ?? turns[index]!.startedAt,
@@ -117,6 +131,7 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
         text: event.text,
         events: [],
         raised: false,
+        awaiting: false,
         done: true,
         at: event.at,
         target: event.target,
@@ -144,6 +159,9 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
         if (event.event.level === "notice") turn.events = [...turn.events, { kind: "notice", label: "提示", detail: event.event.message }];
         else turn.error = `${turn.error ?? ""}\n${event.event.message}`.trim();
       }
+      // 等待状态在这里一处算完(见 DuetTurn.awaiting):提示置上,随后任何一条真进度置回。
+      if (event.event.kind === "error" && event.event.level === "notice") turn.awaiting = true;
+      else if (RESUMES_TURN.has(event.event.kind)) turn.awaiting = false;
       if (event.event.kind === "system") turn.notice = `${turn.notice ?? ""}\n${event.event.text}`.trim();
       turns[index] = turn;
       break;
@@ -165,7 +183,7 @@ export function rebuildDuetState(entries: PersistedDuetEntry[]): DuetState {
     if (isPersistedGate(entry)) state = applyDuetEvent(state, entry);
     else if (isPersistedProgress(entry)) state = applyDuetEvent(state, entry);
     else {
-      const completed: DuetTurn = { ...entry, raised: !!entry.raised, events: entry.events ?? [], done: true };
+      const completed: DuetTurn = { ...entry, raised: !!entry.raised, events: entry.events ?? [], awaiting: false, done: true };
       const turns = [...state.turns];
       let replaced = false;
       for (let index = turns.length - 1; index >= 0; index -= 1) {
