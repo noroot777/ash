@@ -74,6 +74,10 @@
       "types": "./src/search.ts",
       "default": "./src/search.ts"
     },
+    "./waiting": {
+      "types": "./src/waiting.ts",
+      "default": "./src/waiting.ts"
+    },
     "./usage": {
       "types": "./src/usage.ts",
       "default": "./src/usage.ts"

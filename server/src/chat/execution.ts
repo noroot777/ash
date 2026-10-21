@@ -126,7 +126,11 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
         // （isVisibleExecutionEvent），跟主会话同一把尺子。
         if (event.kind === "tool" && isVisibleExecutionEvent(event)) onTrace?.({ kind: "tool", label: event.name, detail: event.detail });
         else if (event.kind === "thinking") onTrace?.({ kind: "thinking", label: "思考过程", detail: event.text });
-        else if (event.kind === "error" && event.level !== "notice") onTrace?.({ kind: "error", label: event.message });
+        // level:"notice" 不是故障,是过程里的一句提示(上游在重试、还在等回话):同样记一行,
+        // 但记成「提示」—— 它排在执行过程里它发生的位置,不把这次回复标成出错。
+        else if (event.kind === "error") onTrace?.(event.level === "notice"
+          ? { kind: "notice", label: "提示", detail: event.message }
+          : { kind: "error", label: event.message });
         if (event.kind === "tool" && purpose === "side-authorization") throw new ChatBoundaryError("回传授权核验调用使用了工具，核验未采用");
         if (event.kind === "tool" && purpose === "summary") throw new ChatBoundaryError("后台摘要调用使用了工具，摘要未采用");
         if (event.kind === "tool" && purpose === "assistant") throw new AssistantToolError(event.name);

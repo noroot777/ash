@@ -12,9 +12,10 @@ export function liveLineForEvent(event: AgentEvent, textBuffer: string): string 
     return textBuffer.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? null;
   }
   if (event.kind === "tool") return `⚙ ${event.name || "tool"}`;
-  if (event.kind === "error") return `✕ ${event.message}`;
-  // 结算说明（level:"notice"）以前是条 error，在这一格里跟「执行者崩了」长得一模一样。
-  // 现在它走 system 旁注，看板上给它 ⓘ —— 没交卷和崩了是两回事，一眼要分得出轻重。
+  // level:"notice" 以前跟「执行者崩了」在这一格里长得一模一样。给它 ⓘ —— 上游在重试、
+  // 没交卷，跟崩了是两回事，一眼要分得出轻重。结算说明走 system，过程提示走 error，
+  // 两条路同一个待遇。
+  if (event.kind === "error") return `${event.level === "notice" ? "ⓘ" : "✕"} ${event.message}`;
   if (event.kind === "system" && event.level === "notice") return `ⓘ ${event.text}`;
   return null;
 }

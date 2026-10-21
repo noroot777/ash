@@ -280,21 +280,27 @@ console.log("8) 上游重试必须看得见,且不把仍在进行的回合判成
     { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "接着干\n" } } },
     { type: "result", subtype: "success", session_id: "sess-8" },
   ]);
-  const notices = events.filter((e) => e.kind === "system" && e.level === "notice");
-  if (notices.length === 4) ok("每一次重试都留下了一条旁注(同时是「还活着」的心跳)");
-  else fail(`期望 4 条重试旁注,实到 ${notices.length}`);
-  // 关键:**一条 error 都不许有**。重试是可恢复状态,不是故障 —— 走 error 会被
-  // duet 的 failed() 判成整场讨论失败,也会在普通任务/团队界面渲染成红叉(第 1 轮审查)。
-  if (!events.some((e) => e.kind === "error")) ok("重试不产生 error:duet 不会把成功回合判失败,界面也不显示红叉");
-  else fail(`重试仍在发 error:${events.filter((e) => e.kind === "error").map((e) => e.message).join(" / ")}`);
-  if (notices.every((e) => typeof e.at === "string" && e.at)) ok("旁注带时间戳,刷新后仍留在时间线上");
-  else fail(`旁注缺 at:${JSON.stringify(notices.map((e) => e.at))}`);
-  if (notices[0]?.text?.includes("第 1/10 次")) ok(`第几次、还要等多久都说清了:${notices[0].text}`);
-  else fail(`没说清重试进度:${JSON.stringify(notices[0]?.text)}`);
-  if (!notices.some((e) => e.text.includes("unknown"))) ok("连接挂住时不把生硬的 unknown 透给用户");
-  else fail(`透传了 unknown:${notices.find((e) => e.text.includes("unknown"))?.text}`);
-  if (notices[3]?.text?.includes("502")) ok(`上游给了状态码就报出来:${notices[3].text}`);
-  else fail(`502 丢了:${JSON.stringify(notices[3]?.text)}`);
+  // 重试走 `kind:"error"` + `level:"notice"`:**必须是 trace 能收的形状**,这样它才落在
+  // 执行过程里它发生的那个位置;而 `system` 那一路是回合收口之后才补落盘的,整串记录
+  // 会糊在会话结尾(用户 2026-10-21 反馈)。
+  const notices = events.filter((e) => e.kind === "error" && e.level === "notice");
+  if (notices.length === 4) ok("每一次重试都留下了一条提示(同时是「还活着」的心跳)");
+  else fail(`期望 4 条重试提示,实到 ${notices.length}`);
+  // 关键:**一条故障级 error 都不许有**。重试是可恢复状态,不是故障 —— 没有 notice 这
+  // 一级就会被 duet 的 failed() 判成整场讨论失败,也会在普通任务/团队界面渲染成红叉
+  // (第 1 轮审查)。
+  const faults = events.filter((e) => e.kind === "error" && e.level !== "notice");
+  if (!faults.length) ok("重试不产生故障级 error:duet 不会把成功回合判失败,界面也不显示红叉");
+  else fail(`重试仍在发故障级 error:${faults.map((e) => e.message).join(" / ")}`);
+  // 不当失败处理的那一半由消费侧兜(isExecutionNotice),事件自己要带齐标记。
+  if (notices.every((e) => e.affectsTurn === false)) ok("标了 affectsTurn:false,已经成功的回合不会被它判失败");
+  else fail(`漏标 affectsTurn:${JSON.stringify(notices.map((e) => e.affectsTurn))}`);
+  if (notices[0]?.message?.includes("第 1/10 次")) ok(`第几次、还要等多久都说清了:${notices[0].message}`);
+  else fail(`没说清重试进度:${JSON.stringify(notices[0]?.message)}`);
+  if (!notices.some((e) => e.message.includes("unknown"))) ok("连接挂住时不把生硬的 unknown 透给用户");
+  else fail(`透传了 unknown:${notices.find((e) => e.message.includes("unknown"))?.message}`);
+  if (notices[3]?.message?.includes("502")) ok(`上游给了状态码就报出来:${notices[3].message}`);
+  else fail(`502 丢了:${JSON.stringify(notices[3]?.message)}`);
   const text = events.filter((e) => e.kind === "text").map((e) => e.text).join("");
   if (text.includes("接着干")) ok("重试成功后回合照常继续");
   else fail(`重试之后正文丢了:${JSON.stringify(text)}`);
@@ -312,11 +318,12 @@ console.log("9) 等上游等到超时无响应要自己冒头,而工具在跑不
     3_000,
     1_200,
   );
-  const notices = stalled.filter((e) => e.kind === "system" && e.level === "notice");
-  if (notices.length >= 1) ok(`静默等待自己冒了头:${notices[0].text}`);
+  const notices = stalled.filter((e) => e.kind === "error" && e.level === "notice");
+  if (notices.length >= 1) ok(`静默等待自己冒了头:${notices[0].message}`);
   else fail("等上游等到天荒地老,界面上仍然一个字都没有");
-  if (!stalled.some((e) => e.kind === "error")) ok("等待期的提示不是故障,不把回合判失败");
-  else fail(`等待期冒出了 error:${stalled.filter((e) => e.kind === "error").map((e) => e.message).join(" / ")}`);
+  const stalledFaults = stalled.filter((e) => e.kind === "error" && e.level !== "notice");
+  if (!stalledFaults.length) ok("等待期的提示不是故障,不把回合判失败");
+  else fail(`等待期冒出了故障级 error:${stalledFaults.map((e) => e.message).join(" / ")}`);
   if (notices.length <= 5) ok(`每满一个间隔才报一次,没刷成滚屏(${notices.length} 条)`);
   else fail(`静默提示刷屏了:${notices.length} 条`);
 
@@ -332,8 +339,8 @@ console.log("9) 等上游等到超时无响应要自己冒头,而工具在跑不
     3_000,
     1_200,
   );
-  const afterRetry = retriedThenHung.filter((e) => e.kind === "system" && e.level === "notice" && e.text.includes("没有响应，本回合仍在等待中"));
-  if (afterRetry.length >= 1) ok(`重试之后再挂住,心跳照样冒头:${afterRetry[0].text}`);
+  const afterRetry = retriedThenHung.filter((e) => e.kind === "error" && e.level === "notice" && e.message.includes("没有响应，本回合仍在等待中"));
+  if (afterRetry.length >= 1) ok(`重试之后再挂住,心跳照样冒头:${afterRetry[0].message}`);
   else fail("第一次重试就把心跳解除了,之后的挂起又变回彻底静默");
 
   // 反面:工具在跑(最后一件事不是等 API)同样长时间零事件,一个字都不该报。
@@ -349,6 +356,11 @@ console.log("9) 等上游等到超时无响应要自己冒头,而工具在跑不
   const falseAlarms = working.filter((e) => (e.kind === "system" && e.level === "notice") || e.kind === "error");
   if (!falseAlarms.length) ok("工具跑得久不会被误报成「上游没响应」");
   else fail(`误报了:${falseAlarms.map((e) => e.text ?? e.message).join(" / ")}`);
+  // 位置这一半:提示必须是 trace 收得下的事件形状,否则它只能回到「会话结尾那一坨」。
+  const { parseSessionTrace } = await import("../src/transcript.js");
+  const traceLine = JSON.stringify({ at: new Date().toISOString(), turnStartedAt: new Date().toISOString(), event: notices[0] });
+  if (parseSessionTrace(traceLine).length === 1) ok("提示能原样落进 trace,于是排在执行过程里它发生的那个位置");
+  else fail(`trace 收不下这条提示,它只能糊在会话结尾:${traceLine}`);
 }
 
 // 起因(2026-09-27):P5EH_BPGxLt- 的第 9→10 轮之间「没有执行者跑」。执行者上一回合把

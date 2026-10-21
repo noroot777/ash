@@ -12,7 +12,15 @@ import { sessions } from "./db/schema.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
-import { parseSessionTraceLines, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
+import { failedTurnNotices, replaysFailureScene, sessionWaiting } from "./session-waiting.js";
+import { turnOutcome } from "./session-turns.js";
+import {
+  parseSessionTraceLines,
+  readRecentTraceEntries,
+  readableRunPath,
+  sessionTracePath,
+  sessionTranscriptPath,
+} from "./transcript.js";
 import type { SessionTraceEntry } from "./transcript.js";
 import { sessionContext, sessionUsage } from "./usage.js";
 import { codexHome, findArchivedRollout, readCodexCliVersion } from "./executors/codex-rollout.js";
@@ -44,6 +52,9 @@ async function toSession(
     context: sessionContext(r),
     cliVersion,
     versionWarning: affectedCodexSessionWarning(cliVersion),
+    // 「此刻还在等上游」跟着会话行一起出门:刷新重建要用它,而不是去 trace 的末条上猜
+    // (判据与窄出口同一份,见 Session.awaitingUpstream 与 session-waiting.ts)。
+    awaitingUpstream: sessionWaiting(r.id, r.turnStartedAt).length > 0,
   };
 }
 
@@ -157,5 +168,30 @@ export function mountTaskSessionRoutes(api: Hono): void {
     // 文件不在就是没有；只有文件在却读不动、或者内容坏了，才是真的坏了。
     if (read.missing) return c.json([]);
     return c.json({ error: "trace unreadable" }, 500);
+  });
+
+  // 过程提示的窄出口。给读不动整份 trace 的消费者(手机端每几秒重拉一次)。两种投影的
+  // 分工与判据见 session-waiting.ts:**此刻还在等**只认事件消费链上的内存状态(落盘产物
+  // 答不了它 —— 正文有缓冲),**失败现场**才从 trace 回放。
+  // 还在等的时候压根不读盘;要读的时候读失败也不咽:整份 trace 那条出口已经是这个口径
+  // (文件不在=没有,读不动=500),否则一次磁盘故障会被手机端读成「上游没在重试」。
+  api.get("/sessions/:id/notices", async (c) => {
+    const sid = c.req.param("id");
+    const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
+    if (!row) return c.json({ error: "not found" }, 404);
+    const live = sessionWaiting(sid, row.turnStartedAt);
+    if (live.length) return c.json(live);
+    try {
+      // 失败现场认**这一个回合自己的结局**,不认进程退出码(理由见 failedTurnNotices)。
+      // 结局读在读盘之前:不是明确失败就一个字节都不必读 —— 这个出口每几秒被手机拉一次,
+      // 而 trace 要尾读 256 KiB。两处共用 replaysFailureScene 那一份判据,不另算一遍。
+      const outcome = await turnOutcome(sid, row.turnStartedAt);
+      if (!replaysFailureScene(outcome)) return c.json([]);
+      const entries = await readRecentTraceEntries(row.taskId, sid);
+      return c.json(failedTurnNotices(entries, { turnStartedAt: row.turnStartedAt, outcome }));
+    } catch (error) {
+      console.warn(`[ash] 读 ${sid} 的过程提示失败:`, error);
+      return c.json({ error: "trace unreadable" }, 500);
+    }
   });
 }

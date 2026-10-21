@@ -23,7 +23,7 @@ export {
 //
 // 一个回合的生命周期是**两步**，别只做一半：
 //   ① `openTurn` —— 开始那一刻，往表里落一行「开了，还没收口」，同一批里把计数加上。
-//   ② `recordTurnSpan` —— 收尾那一刻，按同一身份把 `ended_at` 补上。
+//   ② `recordTurnSpan` —— 收尾那一刻，按同一身份把 `ended_at` **和这一轮自己的结局**补上。
 // 只做第二步（原来的样子）就等于「写失败 = 什么都没发生」：后来成功的一轮一落账，读端
 // 再也看不出中间少过东西,那一轮做出来的图被静默滤掉（第 4 轮审查必须修 1）。
 //
@@ -184,6 +184,10 @@ export const freshTurnFields = (at: string) => ({
 export const resumedTurnFields = (_at: string) => ({
   turnStartedAt: _at,
   endedAt: null as string | null,
+  // `stoppedAs: null` 同理:上一轮「是被停的」这个结论随新回合翻篇。单飞每轮收尾都覆写这一
+  // 列,所以缺它只在**复用同一行**的那几条路上看得出来(团队/duet),而读端拿它当「这一轮不是
+  // 失败」的判据,留着就会把一轮真失败说成受控停止(见 session-waiting.ts)。
+  stoppedAs: null as string | null,
 });
 
 /**
@@ -242,6 +246,34 @@ export async function openTurn(input: {
   }
 }
 
+/**
+ * 一个回合**自己**的结局。语义、为什么不能拿会话行上的退出码投影、null 的含义,都写在
+ * `db/schema-sessions.ts` 的 `sessionTurns.outcome` 上(第 5 轮审查 F3)。
+ */
+export type TurnOutcome = "completed" | "failed" | "stopped";
+
+/**
+ * 这一轮收在什么结局上。null = **不知道**(存量行、收口那一下没写成、回合还开着)。
+ *
+ * 读取端通常住在 `task-artifact-windows.ts`(区间按时间认人),这一位例外地留在写它的旁边:
+ * 判据只有一份,写入与解释漂开过一次就是这条链上所有事故的形状。
+ *
+ * **读不动就抛**:调用方(窄出口 `GET /sessions/:id/notices`)拿读失败当 500,咽下去会把一次
+ * 磁盘/库故障说成「这一轮没失败」,而这个出口唯一的用处就是失败现场。
+ */
+export async function turnOutcome(
+  sessionId: string,
+  startedAt: string | null | undefined,
+): Promise<TurnOutcome | null> {
+  if (!startedAt) return null;
+  const read = await dbClient.execute({
+    sql: "SELECT outcome FROM session_turns WHERE session_id = :sid AND started_at = :at LIMIT 1",
+    args: { sid: sessionId, at: startedAt },
+  });
+  const value = read.rows.at(0)?.outcome;
+  return value === "completed" || value === "failed" || value === "stopped" ? value : null;
+}
+
 /** 一个回合的身份,加上落这一行所需要的其余事实。 */
 type TurnStartInput = {
   sessionId: string;
@@ -249,6 +281,9 @@ type TurnStartInput = {
   cwd: string | null | undefined;
   startedAt: string;
 };
+
+/** 收口那一下知道的两件事:什么时候收的、收在什么结局上。开始那一下给 null。 */
+type TurnClose = { endedAt: string; outcome: TurnOutcome };
 
 /** 这一批**实际**对那一行做了什么。两件判断都靠它,所以它只能来自批里语句的影响行数。 */
 type TurnWrite =
@@ -290,7 +325,7 @@ type TurnWrite =
  */
 async function writeTurnRow(
   input: TurnStartInput,
-  endedAt: string | null,
+  close: TurnClose | null,
   fresh: boolean,
 ): Promise<TurnWrite> {
   const args = {
@@ -299,7 +334,8 @@ async function writeTurnRow(
     task: input.taskId,
     cwd: input.cwd ?? null,
     at: input.startedAt,
-    end: endedAt,
+    end: close?.endedAt ?? null,
+    outcome: close?.outcome ?? null,
   };
   const [, inserted, merged, collided] = await dbClient.batch([
     {
@@ -311,18 +347,21 @@ async function writeTurnRow(
       args: { sid: args.sid, at: args.at },
     },
     {
-      sql: `INSERT OR IGNORE INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at)
-              VALUES (:row, :sid, :task, :cwd, :at, :end)`,
+      sql: `INSERT OR IGNORE INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at, outcome)
+              VALUES (:row, :sid, :task, :cwd, :at, :end, :outcome)`,
       args,
     },
     {
       // `ended_at IS NULL` = 只收**还开着**的那一行（已经收过口的认第一次：团队那边旧调度台
       // 也可能来收一次,改晚了就是个假区间）。`:end IS NULL` 时整条是空操作——开始行的重放
       // 没有结束事实可加。cwd 用 COALESCE：收尾那下没带目录,不该把开始时记下的那个抹掉。
-      sql: `UPDATE session_turns SET ended_at = :end, cwd = COALESCE(:cwd, cwd)
+      // **结局跟 `ended_at` 同生共死**（同一道门禁、同一条语句）：一个常驻进程跑很多回合,
+      // 它后来怎么没的只能结束它**还持有**的那些,绝不许追改一轮已经收口的成功回合 ——
+      // 那正是「成功答完、待命时进程退出，手机上又挂出上一轮的重试」那条链（第 5 轮审查 F3）。
+      sql: `UPDATE session_turns SET ended_at = :end, outcome = :outcome, cwd = COALESCE(:cwd, cwd)
               WHERE session_id = :sid AND started_at = :at
                 AND ended_at IS NULL AND :end IS NOT NULL`,
-      args: { sid: args.sid, at: args.at, end: args.end, cwd: args.cwd },
+      args: { sid: args.sid, at: args.at, end: args.end, outcome: args.outcome, cwd: args.cwd },
     },
     {
       // 只在**开始**那一下查（`:end IS NULL`）、且调用方说这是新的一轮（`:fresh`）时才算撞号。
@@ -355,10 +394,10 @@ async function writeTurnRow(
  */
 async function persistTurn(
   input: TurnStartInput,
-  endedAt: string | null = null,
+  close: TurnClose | null = null,
   fresh = false,
 ): Promise<TurnWrite> {
-  const wrote = await writeTurnRow(input, endedAt, fresh);
+  const wrote = await writeTurnRow(input, close, fresh);
   confirmTurn(input.sessionId, input.startedAt);
   return wrote;
 }
@@ -414,6 +453,12 @@ export async function recordTurnSpan(input: {
   cwd: string | null | undefined;
   startedAt: string | null | undefined;
   endedAt: string;
+  /**
+   * 这一轮收在什么结局上 —— **必填**,因为只有收口的这一处知道答案(停止标记消费即清、
+   * `sawExecutionError` 只在那条流里)。少了它读端就只剩会话行上的进程退出码可猜,那是
+   * F3 整条链的起点(语义见 `db/schema-sessions.ts` 的 `sessionTurns.outcome`)。
+   */
+  outcome: TurnOutcome;
 }): Promise<void> {
   // 起点取不到就没有区间可言（宁可不记，也不要记一条起点是「现在」的假区间：那会把
   // 这一回合真正写出来的东西全判到区间之外）。
@@ -426,7 +471,7 @@ export async function recordTurnSpan(input: {
   try {
     await persistTurn(
       { sessionId: input.sessionId, taskId: input.taskId, cwd: input.cwd, startedAt },
-      input.endedAt,
+      { endedAt: input.endedAt, outcome: input.outcome },
     );
   } catch (error) {
     console.warn(`[ash] 回合区间没落盘（产物归属降级为按会话寿命认）: ${String(error)}`);

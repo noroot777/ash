@@ -26,7 +26,8 @@ import {
 } from "./executors/session-lost.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./transcript.js";
 import { noteAgentEventUpload } from "./uploads.js";
-import { isSessionScopeNotice } from "./session-notice.js";
+import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
+import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
@@ -210,6 +211,9 @@ export async function consumeSingleRun(a: {
 
   try {
     for await (const event of a.handle.events) {
+      // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
+      // 反推不出「这条提示之后有没有新东西来」(见 session-waiting.ts)。
+      trackSessionWaiting(sessId, a.handle, a.turnStart, event);
       if (goalStartPending && a.handle.goalStarted?.()) { await markCliGoalStarted(taskId, agentType, event.kind === "session" ? event.cliSessionId : cliSessionId); goalStartPending = false; }
       if (event.kind === "session") {
         if (event.cliSessionId !== cliSessionId) {
@@ -265,7 +269,11 @@ export async function consumeSingleRun(a: {
           continue;
         }
         persistTrace(emittedEvent);
-        if (emittedEvent.kind === "error") {
+        // level:"notice" 的 error 只是过程里的一句提示（上游在重试、还在等回话）：照落
+        // trace（于是它排在执行过程里它发生的那个位置），但下面三件事一件都不做 ——
+        // 写红色诊断块、并进会话恢复故障、把这一轮判成有执行异常。判据见
+        // session-notice.ts#isExecutionNotice。
+        if (emittedEvent.kind === "error" && !isExecutionNotice(emittedEvent)) {
           // 有些 error 是需要留在红色诊断块里的旁路故障，但不代表模型回合失败（目前的
           // 实例是 Claude 自动压缩失败：压缩没成，后续 result 仍明确为 success）。
           if (emittedEvent.affectsTurn !== false) sawExecutionError = true;
@@ -282,6 +290,8 @@ export async function consumeSingleRun(a: {
     // 崩溃；预约若撤销，再把原异常交回原来的失败路径。
     streamError = error;
   } finally {
+    // 流异常中断时 done 事件压根不会来,内存里那条等待状态就得在这儿撤(见 session-waiting.ts)。
+    clearSessionWaiting(sessId, a.handle);
     if (offsetTimer) clearInterval(offsetTimer);
     await a.handle.cleanup?.().catch((error) => {
       console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);
@@ -332,7 +342,18 @@ export async function consumeSingleRun(a: {
     .where(eq(sessions.id, sessId));
   // 这一回合的区间单独落一行：产物归属要的是「它在写这个目录」的那几段，而上面那行
   // 会话记录跨回合复用，只留得下最后一次收尾时刻（`db/schema.ts` 的 sessionTurns）。
-  await recordTurnSpan({ sessionId: sessId, taskId, cwd: a.cwd, startedAt: a.turnStart, endedAt: endIso });
+  // **结局跟着落**:口径与上面那次 closeExecution 同一份(被停/被引导 = 受控停止,
+  // 「非零退出 **或** 中途报过执行故障」= 失败)。读端据此给失败现场,不再去猜进程退出码
+  // —— 单飞这一路恰好是反方向那半边:`exit 0` 却报过执行故障的回合从前一条现场都给不出
+  // (第 5 轮审查 F3,见 db/schema-sessions.ts 的 sessionTurns.outcome)。
+  await recordTurnSpan({
+    sessionId: sessId,
+    taskId,
+    cwd: a.cwd,
+    startedAt: a.turnStart,
+    endedAt: endIso,
+    outcome: steered || stopped ? "stopped" : executionFailed ? "failed" : "completed",
+  });
   if (steered) {
     // 「引导会话」只截断旧回合：任务仍是 running，新消息已持有 scheduled_messages
     // 投递租约，并排在 releaseTurn 后用同一 cliSessionId 续送。这里若走普通 settle，
