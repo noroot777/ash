@@ -354,6 +354,11 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(a.turnStart))}`,
       // 这一轮结束了，pid 不再有意义——留着会让下次重启去接一个早就没了的
       // 进程（或者更糟：pid 被复用后接到别人身上）。offset 留着供排查。
+      //
+      // **`agent_unit_token` 刻意不清**(别顺手把它对称地加到这里):它恰恰是「这一轮有没有
+      // 漏掉的后代」的唯一线索,而回合收尾正是要查这件事的时刻 —— 清掉就再也查不回来。
+      // 留着也不会让重启误接:接回那条路的前提是 pid 非空,而 pid 这就清了。
+      // (同一个判据在哨兵那边叫 traceless:只许收档,不许删掉身份行。)
       agentPid: null,
       agentOffset: detached ? detached.committed() : null,
       ...(dropSession ? LOST_SESSION_PATCH : {}),

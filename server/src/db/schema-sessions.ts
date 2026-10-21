@@ -147,6 +147,20 @@ export const sessions = sqliteTable("sessions", {
   // 已安全消费到的 stdout 字节位置，永远落在换行边界（见 detached.ts 的
   // tailFile）。重启后从这里接着读 → 不丢行也不重行。
   agentOffset: integer("agent_offset"),
+  /**
+   * **这一次运行独有的资源记号**(`ASH_MONITOR_UNIT`,种法见 executors/spawn.ts,判定见
+   * proc.ts 的 `processUnitEvidence`)。
+   *
+   * 为什么 `agent_pid` 之外还要这一列:pid 只认得出**根**那一个进程,而漏停的从来不是根。
+   * agent 起的长跑程序(dev server、watch)挂在 `sh → node → node` 这条链的末端,根一死它
+   * 就被系统改挂到 1 号名下,从进程树上消失。继承的追踪 fd 也接不住它 —— libuv 起子进程时
+   * 丢掉 ≥3 号 fd(实测:`sh` 那一层还握着,它再起的 node 孙子就不在 lsof 名单里)。环境
+   * 记号是唯一跨得过 exec、跨得过根死亡、跨得过 server 重启的那条线索。
+   *
+   * null = 建在本列之前的老行,或这一轮没能种上记号 ⇒ 读侧退回「只有 pid」那条粗判据,
+   * 不许据此声称整项已退出(proc.ts 四档里那是 `unprovable`)。
+   */
+  agentUnitToken: text("agent_unit_token"),
   // ── Token 用量（server/src/usage.ts）────────────────────────────────────
   // 这条会话行**跨回合累加**的账（同 active_ms 的模式：会话可复用，每回合结束
   // 时把执行器报的那笔加上去）。口径归一在 shared/src/usage.ts：input 不含缓存、

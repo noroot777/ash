@@ -124,6 +124,8 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       startedAt: sess.agentStartedAt,
       paths: { out: sess.agentOutPath, err: sess.agentErrPath, rc: sess.agentRcPath },
       offset: sess.agentOffset ?? 0,
+      // 上一个 server 进程的 WeakMap 随它一起没了,记号只剩库里这一份(见 unit-token.ts)。
+      unitToken: sess.agentUnitToken,
     });
     if (!child) continue; // 它已经不在了 → 交给 reconcileInterrupted
 

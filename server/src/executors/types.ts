@@ -45,7 +45,9 @@ export interface RunHandle {
   cleanup?: () => Promise<void>;
   // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
   // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
-  detached?: { pid: number; committed: () => number };
+  // `unitToken` = 这一次运行的资源记号(executors/unit-token.ts):pid 认得出根,记号才认得出
+  // 根死后仍在后台改文件的那些后代,所以它跟 pid 一样必须落库。
+  detached?: { pid: number; committed: () => number; unitToken?: string | null };
 }
 
 // 挂在执行器上的供应商(§5)。非空时启动 CLI 前注入 base_url + key,顶掉 CLI

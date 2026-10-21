@@ -8,6 +8,7 @@ import { IS_WINDOWS } from "../platform.js";
 import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins } from "./bin-resolve.js";
 import { openTrackFd, registerTrackFd } from "./kill.js";
+import { registerUnitToken, seedUnitToken } from "./unit-token.js";
 
 // PATH 补全与命令名解析住在 bin-resolve.ts(Windows 的 PATHEXT / `.cmd` 垫片够写
 // 一整个文件)。这里转出去,是因为已有近二十处从 spawn.ts import 它们。
@@ -161,15 +162,21 @@ export function spawnAgent(
   if (!plan) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
   const track = openTrackFd();
   const stdio: Array<"pipe" | number> = track.fd === null ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", track.fd];
+  // 两条归属线索一起种:追踪 fd(上一行)与**环境记号**。后者才跨得过 exec 和根死亡,
+  // 理由与实测见 unit-token.ts。种在最底层这一处是刻意的 —— 上面有四个分发入口,
+  // 种在任一个都会漏掉另外几条路。
+  const env = { ...agentBaseEnv(), ...extraEnv };
+  const unitToken = seedUnitToken(env);
   const child = spawn(plan.file, plan.args, {
     cwd,
     stdio,
-    env: { ...agentBaseEnv(), ...extraEnv },
+    env,
     detached: DETACH,
     windowsHide: true,
     windowsVerbatimArguments: plan.windowsVerbatimArguments,
   });
   registerTrackFd(child, track);
+  registerUnitToken(child, unitToken);
   teeStdout(child, opts?.teeOut);
   child.stdin?.write(prompt);
   if (!opts?.keepStdin) child.stdin?.end();

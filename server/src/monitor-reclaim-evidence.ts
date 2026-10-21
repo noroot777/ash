@@ -331,8 +331,13 @@ export function reclaimState(pid: number, pidStartedAt: string | null, unit: Mon
   return reclaimEvidence(pid, pidStartedAt, unit).state;
 }
 
-/** 这一档敢不敢下刀。**只有归属已证明的那两档敢**,其余五档一刀都不发。 */
-const canShoot = (state: ReclaimState): boolean => state === "ours-alive" || state === "ours-orphans";
+/**
+ * 这一档敢不敢下刀。**只有归属已证明的那两档敢**,其余五档一刀都不发。
+ *
+ * 导出给 `executors/kill.ts`:agent 这一侧的击杀接到同一份判据上之后,「敢不敢」不能在那边
+ * 再写一遍 —— 两份同义实现迟早漂成两种语义(这正是那边原先那套 pid 备忘的来路)。
+ */
+export const canShoot = (state: ReclaimState): boolean => state === "ours-alive" || state === "ours-orphans";
 
 /**
  * 下刀:**TERM,两秒后再确认一遍补 KILL** —— 两刀各自有自己的当代证据。

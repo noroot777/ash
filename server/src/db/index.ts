@@ -486,6 +486,10 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN agent_err_path TEXT",
     "ALTER TABLE sessions ADD COLUMN agent_rc_path TEXT",
     "ALTER TABLE sessions ADD COLUMN agent_offset INTEGER",
+    // 这一次运行独有的**资源记号**(种进 agent 的环境,见 executors/spawn.ts)。跟上面那几列
+    // 一样是「重启后找回」的线索,但它回答的是另一个问题:pid 只认得出根,记号跟着 exec
+    // 继承到每一个后代 —— 根死了之后还留在后台的那些仍然自证身份。
+    "ALTER TABLE sessions ADD COLUMN agent_unit_token TEXT",
     // OpenAI 兼容供应商：把 Codex 的 Responses API 适配到仅有 Chat Completions 的上游。
     "ALTER TABLE llm_providers ADD COLUMN protocol_conversion_enabled INTEGER NOT NULL DEFAULT 0",
     // 选模型面板的候选来源：api=每次现调 /models；pinned=只用固定下来的这几个。

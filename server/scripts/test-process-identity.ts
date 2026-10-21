@@ -37,6 +37,8 @@ const {
 const { IS_WINDOWS, isPidAlive } = await import("../src/platform.js");
 const { inspectProcess } = await import("../src/proc.js");
 const { processGenerationSync, stillSameGeneration } = await import("../src/process-generation.js");
+const { MONITOR_UNIT_ENV, invalidateMonitorUnitScan } = await import("../src/monitor-unit-scan.js");
+const { adoptUnitToken } = await import("../src/executors/unit-token.js");
 
 /** 拼一个 detached.ts 那种合成句柄:字段齐全,但 exitCode 由回调补写,不是内核答案。 */
 function synthetic(pid: number | undefined, fields: Partial<ChildProcess> = {}): ChildProcess {
@@ -46,6 +48,8 @@ function synthetic(pid: number | undefined, fields: Partial<ChildProcess> = {}):
 const strays: ChildProcess[] = [];
 /** 只拿到号的那些(别人进程组里的后代):收尾一并清掉,别把 sleep 留在机器上。 */
 const strayPids: number[] = [];
+/** 用例自己造的临时文件(输出文件那份证据):收尾删掉,别把垃圾留在 /tmp。 */
+const tempFiles: string[] = [];
 /** 一个安静活着 60s 的真进程。detached = 自成进程组(killTree 打的就是组)。 */
 function sleeper(): ChildProcess {
   const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
@@ -55,6 +59,35 @@ function sleeper(): ChildProcess {
   child.unref();
   strays.push(child);
   return child;
+}
+
+/**
+ * 带**归属证据**的长跑进程 —— 生产路径上的进程一定有这两样之一(executors/unit-token.ts
+ * 种记号,detached 把 stdout 重定向到这一次运行独有的文件),而 POSIX 的秒级启动时刻是粗档,
+ * 单凭它不授权下刀。所以凡是断言「该杀掉」的用例都得照生产那样带上证据,否则测的是一条
+ * 生产上不存在的退化路径。
+ */
+function provenSleeper(kind: "mark" | "outfile"): { child: ChildProcess; token: string | null; outPath: string | null } {
+  if (kind === "mark") {
+    const token = `test-unit-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+      stdio: "ignore", detached: true, env: { ...process.env, [MONITOR_UNIT_ENV]: token },
+    });
+    child.unref();
+    strays.push(child);
+    invalidateMonitorUnitScan();
+    return { child, token, outPath: null };
+  }
+  const outPath = join(tmpdir(), `ash-test-out-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
+  const fd = openSync(outPath, "w");
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+    stdio: ["ignore", fd, "ignore"], detached: true,
+  });
+  closeSync(fd);
+  child.unref();
+  strays.push(child);
+  tempFiles.push(outPath);
+  return { child, token: null, outPath };
 }
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** 等到 Node reap 到它、退出身份落下来为止。`sleeper()` 是 unref 的,光等 'exit' 事件会把
@@ -124,17 +157,39 @@ if (IS_WINDOWS) {
   assert.equal(isPidAlive(bystander.pid!), true, "启动时间对不上 = 号被复用了,连 SIGTERM 都不许发");
   bystander.kill("SIGKILL");
 
-  const mine = sleeper();
-  const startedAt = inspectProcess(mine.pid!)?.startedAt ?? null;
-  assert.ok(startedAt, "这条用例要靠 ps 的启动时间");
-  killByPid(mine.pid!, startedAt);
-  assert.ok(await goneWithin(mine.pid!, 3000), "身份对得上就照杀(接管回合的停止按钮靠它)");
+  // 身份对得上**而且拿得出第二份独立证据**才照杀 —— 接管回合的停止按钮靠这条。生产上
+  // 两份证据各来自一处:记号(环境,跨 exec)、输出文件(stdout,这一次运行独有)。
+  const marked = provenSleeper("mark");
+  const markedStartedAt = inspectProcess(marked.child.pid!)?.startedAt ?? null;
+  assert.ok(markedStartedAt, "这条用例要靠 ps 的启动时间");
+  killByPid(marked.child.pid!, markedStartedAt, { unitToken: marked.token });
+  assert.ok(await goneWithin(marked.child.pid!, 3000), "记号证明了归属:照杀(接管回合的停止按钮靠它)");
 
-  // startedAt 现在是**必传项**:以前缺省值是「放行」,于是忘了传的调用方静默绕过整条判据
-  // (第 2 轮审查 F1)。传 null 的含义是「我没记下启动时间」,退化成存在性检查而不是免检。
-  const legacy = sleeper();
-  killByPid(legacy.pid!, null);
-  assert.ok(await goneWithin(legacy.pid!, 3000), "传 null = 退化成存在性检查,别把这些调用方一起挡掉");
+  const byFile = provenSleeper("outfile");
+  const fileStartedAt = inspectProcess(byFile.child.pid!)?.startedAt ?? null;
+  killByPid(byFile.child.pid!, fileStartedAt, { outPath: byFile.outPath });
+  assert.ok(await goneWithin(byFile.child.pid!, 3000),
+    "输出文件握在它手上 = 这个号还是这一次运行的根:照杀(记号上线前建的那些行靠这条)");
+
+  // **两条线索都没有就一刀都不发。** 粗档的「pid + 秒级启动时刻相等」从来不是排他证明,
+  // 一次秒级碰撞就够把信号发到别人身上(那是明确实测过的误杀)。这一档如实降级:不下刀,
+  // 但要留下警告,不许静默 —— 静默失败只会让用户得出「按钮坏了」。
+  const unproven = sleeper();
+  const unprovenStartedAt = inspectProcess(unproven.pid!)?.startedAt ?? null;
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = (...a: unknown[]) => { warnings.push(a.join(" ")); };
+  try {
+    killByPid(unproven.pid!, unprovenStartedAt);
+  } finally {
+    console.warn = warn;
+  }
+  await wait(2400);                               // 连那一刀补刀的窗口也等过去
+  assert.equal(isPidAlive(unproven.pid!), true, "证不出归属就一刀都不发(粗档 pid 不是排他凭证)");
+  assert.ok(warnings.some((w) => w.includes(String(unproven.pid)) && w.includes("证不出就不下刀")),
+    "没下刀必须留下痕迹:静默失败等于「按钮坏了」");
+  unproven.kill("SIGKILL");
+
   const gone = sleeper();
   const gonePid = gone.pid!;
   gone.kill("SIGKILL");
@@ -143,36 +198,49 @@ if (IS_WINDOWS) {
   assert.equal(isPidAlive(gonePid), false, "号已经空了:不抛错,也不往这个号上发任何信号");
 }
 
-// ── ⑤ 组长已经死了、组里还有后代:**刚探活确认过**才补这一刀 ────────────────────
-// 「补刀不看组长死没死」这条能力要留住(外层 shell 退了、它派生的忽略 SIGTERM 的东西还在
-// 原组里),但授权不能是「号空着」本身 —— 那个号被复用成新组长、新组长又先退了的时候,它
-// 留下的那一组的组 id 同样是空号(第 3 轮审查 F1)。
-// 现在的授权是**刚刚正面确认过这个号**:接回那条路每 400ms 探一次活,探活与击杀共用同一份
-// 身份读数,所以「刚才还确认它活着」这件事在随后的这一刀里作数。
-// 同样是 POSIX 专属:这一条验的是 `kill(-pid)` 的进程组语义,Windows 上根本没有进程组
-// (killTree 在那边是 `taskkill /T`,按进程表的父子关系走)。
+// ── ⑤ 组长在这一刀中途退场、组里那个忽略 TERM 的后代还在 ──────────────────────
+// 这是真实现场:外层 shell 收到 SIGTERM 老老实实退了,它派生的那个忽略 SIGTERM 的东西
+// (用户仓库里的 preinstall、自己管子进程的脚本都算)还留在原进程组里。补刀必须收掉它。
+//
+// **授权不是「号空着」,也不是「刚才探活确认过」**(两者都被实测否掉了:那个号被复用成新
+// 组长、新组长又先退了的时候,它留下的组 id 同样是空号;而按 pid 键控的确认备忘会把另一次
+// 明确的「这不是你的」洗回通过)。现在的授权是:**第一刀发出的那一刻根仍被证明着**,于是
+// 组成员连代次一起被记下来,两秒后按那份名单逐个核代次补刀 —— 号换了主人的一刀不发。
+//
+// POSIX 专属:验的是 `kill(-pid)` 的进程组语义,Windows 上没有进程组(那边 killTree 是
+// `taskkill /T`,按进程表的父子关系走,同一件事由它覆盖)。
 if (IS_WINDOWS) {
   console.log("   ~ Windows 没有进程组,跳过 ⑤(那边同一件事由 taskkill /T 的树遍历覆盖)");
 } else {
+  // 组长:把 stdout 重定向到这一次运行独有的文件(生产上 detached 就是这么起的),那份
+  // 文件就是它的归属证据;它自己派生一个**忽略 SIGTERM** 的后代,然后等着挨第一刀。
+  const outPath = join(tmpdir(), `ash-test-grp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
+  const fd = openSync(outPath, "w");
+  tempFiles.push(outPath);
   const leader = spawn(process.execPath, ["-e", `
     const { spawn } = require("node:child_process");
-    const kid = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
-    process.stdout.write(String(kid.pid));
-    setTimeout(() => process.exit(0), 150);
-  `], { stdio: ["ignore", "pipe", "ignore"], detached: true });
-  let out = "";
-  leader.stdout!.on("data", (chunk) => { out += String(chunk); });
+    const kid = spawn(process.execPath, ["-e",
+      "process.on('SIGTERM', () => {}); setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+    require("node:fs").writeFileSync(${JSON.stringify(outPath)} + ".kid", String(kid.pid));
+    process.on("SIGTERM", () => process.exit(0));   // 外层壳老实退场
+    setTimeout(() => {}, 60000);
+  `], { stdio: ["ignore", fd, "ignore"], detached: true });
+  closeSync(fd);
+  tempFiles.push(`${outPath}.kid`);
   const leaderPid = leader.pid!;
   const startedAt = inspectProcess(leaderPid)?.startedAt ?? null;
-  // 接回那条路的退出轮询:它活着的时候至少答过一次「还是它」。
-  assert.equal(pidRunStillAlive(leaderPid, startedAt), "alive", "前提:探活此刻认得它");
-  await new Promise<void>((resolve) => leader.on("exit", () => resolve()));
-  const kidPid = Number(out.trim());
+  // 等后代起来并把自己的号写出来
+  for (let i = 0; i < 60 && !existsSync(`${outPath}.kid`); i += 1) await wait(50);
+  const kidPid = Number(readFileSync(`${outPath}.kid`, "utf8").trim());
   assert.ok(kidPid > 1, "这条用例要拿到组里那个后代的 pid");
   strayPids.push(kidPid);
-  assert.equal(pidRunStillAlive(leaderPid, startedAt), "gone", "组长退场后探活必须报 gone,否则这一轮永远不结束");
-  killByPid(leaderPid, startedAt);
-  assert.ok(await goneWithin(kidPid, 3000), "刚确认过的那个号:组长先退场也要把这一刀发完");
+  // 前提:这一刻输出文件证明得出「这个号就是这一次运行的根」。
+  assert.equal(pidRunStillAlive(leaderPid, startedAt), "alive", "前提:探活此刻认得它");
+  killByPid(leaderPid, startedAt, { outPath });
+  // 组长吃 TERM 立刻退场,后代忽略 TERM 活到两秒后那一刀。
+  assert.ok(await goneWithin(leaderPid, 2000), "前提:组长收到 TERM 就退了");
+  assert.ok(await goneWithin(kidPid, 4000),
+    "第一刀那会儿记下的成员要按代次补完:组长先退场不等于这一组收干净了");
 }
 
 // ── ⑥ 合成句柄:身份来自真进程的内核状态,不看自己那两个补写字段 ──────────────────
@@ -201,12 +269,28 @@ if (IS_WINDOWS) {
   assert.equal(isPidAlive(bystander.pid!), true, "接回句柄的 cleanup 同样一刀不许发");
   bystander.kill("SIGKILL");
 
-  const mine = sleeper();
-  const live = synthetic(mine.pid);
-  markAdoptedChild(live, mine.pid!, inspectProcess(mine.pid!)?.startedAt ?? null);
-  assert.equal(childStillOurs(live), true, "身份对得上:还是我们的进程");
+  // 探活档只问「它还在不在」:号 + 启动时刻对得上就够。
+  const mine = provenSleeper("mark");
+  const live = synthetic(mine.child.pid);
+  markAdoptedChild(live, mine.child.pid!, inspectProcess(mine.child.pid!)?.startedAt ?? null);
+  assert.equal(childStillOurs(live), true, "身份对得上:还是我们的进程(这一问是探活档)");
+  // 但**下刀**要授权档:记号得跟着这个句柄过继过来,否则粗档 pid 不足以授权(见 kill.ts
+  // 里 childStillOurs / childKillAuthorized 那两段)。生产上这一步由 adoptUnitToken 做,
+  // 它的输入是库里那一列。
+  adoptUnitToken(live, mine.token);
   await cleanupAfterRun(live);
-  assert.ok(await goneWithin(mine.pid!, 3000), "身份对得上就照清(接回的那一轮也要能收干净)");
+  assert.ok(await goneWithin(mine.child.pid!, 3000), "身份对得上就照清(接回的那一轮也要能收干净)");
+
+  // 同一个句柄、不给记号 ⇒ 探活档仍说「它还在」,授权档说「证不出」⇒ 一刀不发。
+  // 这一条钉的是两档不许再合成一个(合了就必然在某个方向上错)。
+  const unproven = sleeper();
+  const bare = synthetic(unproven.pid);
+  markAdoptedChild(bare, unproven.pid!, inspectProcess(unproven.pid!)?.startedAt ?? null);
+  assert.equal(childStillOurs(bare), true, "探活档:号没换主人,它确实还在");
+  await cleanupAfterRun(bare);
+  await wait(2400);
+  assert.equal(isPidAlive(unproven.pid!), true, "授权档:拿不出排他凭证就一刀不发");
+  unproven.kill("SIGKILL");
 }
 
 // ── ⑧ 追踪证据的寿命:只按「还能不能取到人」判,不按时长判 ────────────────────────
@@ -304,19 +388,24 @@ if (IS_WINDOWS) {
   assert.equal(isPidAlive(orphanKid), true, "号空着、又没有刚确认过 ⇒ 这一组证不出是我们的,不许下刀");
   process.kill(orphanKid, "SIGKILL");
 
-  // ⑩-b 正常停止那条路:首发之前拿到了正面身份,组长随后自己退了 —— 2 秒后的补刀仍要落在
-  // 这一组上(「忽略 SIGTERM 的后代还在原组里」正是补刀存在的理由)。
+  // ⑩-b 正常停止那条路:**第一刀发出的那一刻根仍被证明着**,组长随后自己退了 —— 两秒后的
+  // 补刀仍要落在第一刀那会儿记下的成员上(「忽略 SIGTERM 的后代还在原组里」正是补刀存在的
+  // 理由)。跟 ⑤ 互补:那边的顽固后代是 node 的 SIGTERM handler,这边是 shell 的 `trap ""`。
   const stubbornKidFile = join(root, "stubborn-kid.pid");
+  const leaderOut = join(root, "stubborn-leader.out");
+  const leaderFd = openSync(leaderOut, "w");
   const leader = spawn("/bin/sh", [
     "-c",
     `/bin/sh -c 'trap "" TERM; sleep 30' & echo $! > ${stubbornKidFile}; sleep 0.4; exit 0`,
-  ], { stdio: "ignore", detached: true });
+  ], { stdio: ["ignore", leaderFd, "ignore"], detached: true });
+  closeSync(leaderFd);
   await wait(200);
   const stubbornKid = Number(readFileSync(stubbornKidFile, "utf8").trim());
   assert.ok(stubbornKid > 1 && isPidAlive(stubbornKid), "前提:组里有一个不吃 SIGTERM 的后代");
   strayPids.push(stubbornKid);
-  killByPid(leader.pid!, inspectProcess(leader.pid!)?.startedAt ?? null);
-  assert.ok(await goneWithin(stubbornKid, 4000), "刚确认过的那一组:组长死了也要把补刀发完");
+  killByPid(leader.pid!, inspectProcess(leader.pid!)?.startedAt ?? null, { outPath: leaderOut });
+  assert.ok(await goneWithin(stubbornKid, 4000),
+    "第一刀那会儿证明过的那一组:组长死了也要把补刀发完");
 }
 
 // ── ⑪ 代次闸本体:所有信号都从这一句过 ───────────────────────────────────────────
@@ -376,6 +465,9 @@ for (const child of strays) {
 }
 for (const pid of strayPids) {
   try { process.kill(pid, "SIGKILL"); } catch { /* 已经没了 */ }
+}
+for (const path of tempFiles) {
+  try { unlinkSync(path); } catch { /* 已经没了 */ }
 }
 console.log("process-identity regressions ok");
 process.exit(0);

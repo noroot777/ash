@@ -26,6 +26,7 @@ import {
   openTrackFd, registerTrackFd, shareTrackFdRegistration, shareChildIdentity, markAdoptedChild,
   killChild, killByPid, pidRunStillAlive, spawnAgent,
 } from "./spawn.js";
+import { adoptUnitToken, registerUnitToken, seedUnitToken, shareUnitToken, unitTokenOf } from "./unit-token.js";
 
 // 一次运行的三个落盘文件。rc 是退出码 —— 管道模式下退出码是 close 事件白送的,
 // 换成文件后没人告诉我们了,只能让 shell 跑完自己写一个数字进去。
@@ -245,6 +246,9 @@ export function spawnControllableDetachedAgent(
   const track = openTrackFd();
   const stdio: Array<"ignore" | number> =
     track.fd === null ? ["ignore", "ignore", "ignore"] : ["ignore", "ignore", "ignore", track.fd];
+  // 环境记号跟管道那条路同一套(见 unit-token.ts):这条路的后代更需要它 —— 输出走文件,
+  // 进程活得过 server 重启,根与后代的距离只会更远。
+  const unitToken = seedUnitToken(env);
   const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
     cwd,
     stdio,
@@ -252,6 +256,7 @@ export function spawnControllableDetachedAgent(
     detached: true,
   });
   registerTrackFd(real, track);
+  registerUnitToken(real, unitToken);
   if (!real.pid) return failedChild(`起不来:${shq(bin)}`);
   const writer = fifoWriter(input);
   if (!writer) {
@@ -282,6 +287,7 @@ export function spawnControllableDetachedAgent(
   // 「这个号还是不是我们的进程」会在一个已经退出的号上发信号(第 2 轮审查 F1)。真进程还
   // 握在手里,内核状态就是权威答案,所以指向它。
   shareChildIdentity(real, child);
+  shareUnitToken(real, child);
   return child;
 }
 
@@ -325,6 +331,7 @@ export function spawnDetachedAgent(
   const track = openTrackFd();
   const stdio: Array<"pipe" | "ignore" | number> =
     track.fd === null ? ["pipe", "ignore", "ignore"] : ["pipe", "ignore", "ignore", track.fd];
+  const unitToken = seedUnitToken(env);
   const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
     cwd,
     stdio,
@@ -332,6 +339,7 @@ export function spawnDetachedAgent(
     detached: true,
   });
   registerTrackFd(real, track);
+  registerUnitToken(real, unitToken);
   real.stdin?.write(prompt);
   real.stdin?.end();
 
@@ -357,6 +365,7 @@ export function spawnDetachedAgent(
   });
   shareTrackFdRegistration(real, child);
   shareChildIdentity(real, child); // 理由同上:身份以真进程的内核状态为准
+  shareUnitToken(real, child);
   return child;
 }
 
@@ -403,10 +412,14 @@ export function spawnControllableForRun(
 
 // 把「这个 child 是不是 detached 的」这一判断收在一处,executor 里不必各写一遍
 // instanceof/鸭子类型试探。
-export function detachedInfo(child: ChildProcess): { pid: number; committed: () => number } | undefined {
+export function detachedInfo(
+  child: ChildProcess,
+): { pid: number; committed: () => number; unitToken: string | null } | undefined {
   const c = child as Partial<DetachedChild>;
   if (typeof c.ashCommitted !== "function" || !c.pid) return undefined;
-  return { pid: c.pid, committed: c.ashCommitted };
+  // 记号在这一处取出来是刻意的:九个执行器都从这个函数拿 `handle.detached`,在这里取就
+  // 不会有哪条路忘记带上它(忘了的代价是静默的 —— 那一轮的后代只剩 pid 一条线索)。
+  return { pid: c.pid, committed: c.ashCommitted, unitToken: unitTokenOf(child) };
 }
 
 // 重启后接管一个还活着的 agent。
@@ -418,6 +431,13 @@ export function reattachDetachedAgent(opts: {
   startedAt: string | null;
   paths: DetachedPaths;
   offset: number;
+  /**
+   * 这一次运行的资源记号(`sessions.agent_unit_token`)。**接回路径最需要它**:上一个 server
+   * 进程的 WeakMap 随进程一起没了,盘上只剩库里这一行。没有它就只剩 pid 一条线索 —— 那条
+   * 认得出根,认不出根死后还在后台改文件的那些后代(见 unit-token.ts)。
+   * `undefined`/`null` = 老会话行或当初没种上 ⇒ 判定退回 `unprovable`:保留证据、不下刀。
+   */
+  unitToken?: string | null;
 }): DetachedChild | null {
   if (!isSameProcess(opts.pid, opts.startedAt)) return null;
 
@@ -427,9 +447,16 @@ export function reattachDetachedAgent(opts: {
     startOffset: opts.offset,
     // 普通一次性 detached 没有 FIFO，仍是 null；原生引导回合从约定路径重开 writer。
     stdin: existsSync(controlPath(opts.paths)) ? fifoWriter(controlPath(opts.paths)) : null,
-    // 把启动时间一起交给 killByPid:接管这一刻核对过的身份,到真要杀它时隔着整段回合,
-    // 那个号可能已经换了主人,所以发信号前要按同一判据再核一次(第 1 轮审查 F2)。
-    kill: () => killByPid(opts.pid, opts.startedAt),
+    // 把启动时间**和记号**一起交给 killByPid:接管这一刻核对过的身份,到真要杀它时隔着整段
+    // 回合,那个号可能已经换了主人,所以发信号前要按同一判据再核一次(第 1 轮审查 F2)。
+    // 记号是其中那份**排他**凭证 —— POSIX 的秒级启动时刻是粗档,单凭它不足以授权下刀。
+    // 两份归属证据一起交出去:记号(排他、跨 exec),以及这一次运行独有的输出文件
+    // —— 根进程的 stdout 就在它上面,`lsof` 查得到就等于证明了「这个号还是这一次的根」,
+    // 那是 POSIX 粗档启动时刻需要的第二份独立证据(判据见 kill.ts 的 killByPid)。
+    kill: () => killByPid(opts.pid, opts.startedAt, {
+      unitToken: opts.unitToken,
+      outPath: opts.paths.out,
+    }),
     // 注:这个合成品的 exitCode/signalCode 由下面的轮询补写,不是内核答案,所以它的身份
     // 由 markAdoptedChild 单独声明(见函数尾部)——cleanup 这条路不经过上面这个 kill。
     onExit: (cb) => {
@@ -451,5 +478,6 @@ export function reattachDetachedAgent(opts: {
   // 对它(或它的后代树)发信号前现查一遍 ps。cleanupAfterRun 走的是 childStillOurs 而不是
   // 上面那个 kill,不声明身份它就会去读合成品那两个由轮询补写的字段(第 2 轮审查 F1)。
   markAdoptedChild(child, opts.pid, opts.startedAt);
+  adoptUnitToken(child, opts.unitToken);
   return child;
 }

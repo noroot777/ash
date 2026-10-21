@@ -3,15 +3,17 @@
 // 命令解析、输出流水线),这边是「怎么把它和它甩出去的东西收干净」——两件事各自都在往
 // 700 行上限靠,挤在一个文件里每改一处都要把另一摊整份读进上下文。
 // 老使用方照旧从 `spawn.js` import:那边把这里的导出原样转出去。
-import { execFile } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import type { ChildProcess, ExecFileException } from "node:child_process";
 import { tmpdir } from "node:os";
 import { openSync, closeSync, existsSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { IS_WINDOWS, isPidAlive, killOne, killTree } from "../platform.js";
 import { processIdentity } from "../proc.js";
+import { canShoot, killProvenUnit, reclaimState } from "../monitor-reclaim-evidence.js";
+import { unitTokenOf } from "./unit-token.js";
 import {
-  processGenerationSync, processTreeMembers, stillSameGeneration,
+  processGroupMembersSync, processTreeMembers, stillSameGeneration,
   type ProcessGeneration, type ProcessMember,
 } from "../process-generation.js";
 
@@ -95,18 +97,55 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<n
   return signalMembers(escapeeTargets(child, fresh), sig);
 }
 
-/** `lsof -t <file>`:此刻还握着这次运行那个继承 fd 的号。查不到 / lsof 不可用都是空。 */
-async function trackHolders(trackPath: string): Promise<number[]> {
-  const out = await new Promise<string>((res) =>
-    execFile("lsof", ["-t", trackPath], (_e, stdout) => res(stdout || "")),
+/**
+ * **「谁还握着这个文件」这一问的三档回答** —— 上一版把它折成了 `number[]`,于是
+ * 「确证没人握着」和「这一问自己失败了」长得一模一样(空数组)。审查实测的后果:注入一个
+ * 退出码 2、零输出的 `lsof`,周期复核与启动清扫**两条路都把还有活持有者的证据删掉了** ——
+ * 而在 POSIX 上根退出、后代重父之后,这个文件名正是继续找回那些后台持有者的唯一线索。
+ *
+ * 所以这一层的规矩跟记号那一问同源(proc.ts 的四档):**只有「问全了、确实没有」才允许
+ * 销毁证据**;问不出来要保留文件、保留清理责任,安排下一次重试。
+ */
+type HolderProbe =
+  /** 确证有人握着(至少这几个号)。 */
+  | { kind: "held"; pids: number[] }
+  /** 确证**问全了**、而且一个持有者都没有 —— 唯一允许销毁证据的那一档。 */
+  | { kind: "empty" }
+  /** 这一问自己没答出来(lsof 不在、报错、超时、输出不完整)。**不等于没有**。 */
+  | { kind: "unknown" };
+
+/**
+ * `lsof -t <file>`:此刻还握着这次运行那个继承 fd 的号。
+ *
+ * 退出码分档按 lsof 自己的约定:`1` = 没有匹配(文件不存在也算,那就是确证空);`≥2` = 它自己
+ * 出错;`ENOENT` = 这台机器上没有 lsof ⇒ 后两者都只能答「问不出来」。
+ */
+async function trackHolders(trackPath: string): Promise<HolderProbe> {
+  const probe = await new Promise<{ err: ExecFileException | null; out: string }>((res) =>
+    execFile("lsof", ["-t", "--", trackPath], (err, stdout) => res({ err, out: stdout || "" })),
   );
+  if (probe.err && !probeExitCodeMeansEmpty(probe.err)) return { kind: "unknown" };
   const pids: number[] = [];
-  for (const line of out.split("\n")) {
+  for (const line of probe.out.split("\n")) {
     const pid = Number(line.trim());
     if (pid > 1 && pid !== process.pid) pids.push(pid);
   }
-  return pids;
+  return pids.length ? { kind: "held", pids } : { kind: "empty" };
 }
+
+/**
+ * lsof 这次非零退出,算不算「问全了、没找到」。
+ *
+ * 只有它自己约定的「无匹配」(退出码 1)算 —— 包括「那个文件根本不在了」,那确实是确证空。
+ * `≥2` 是它自己出错,`ENOENT`(字符串)是这台机器上没有 lsof:两者都只能答「问不出来」。
+ */
+function probeExitCodeMeansEmpty(err: ExecFileException): boolean {
+  return err.code === 1;
+}
+
+/** 只想知道「还有没有活着的持有者」的那几处:`unknown` 必须**当成有**(不许据此释放)。 */
+const holdersMayExist = (probe: HolderProbe): boolean =>
+  probe.kind === "unknown" || (probe.kind === "held" && probe.pids.some(isPidAlive));
 
 /**
  * 这一刻能证明属于本次运行的后代,**各自带着代次**(见上面那段的①)。
@@ -117,14 +156,20 @@ async function trackHolders(trackPath: string): Promise<number[]> {
  */
 async function collectEscapees(child: ChildProcess): Promise<ProcessMember[]> {
   const trackPath = trackFiles.get(child);
-  const holders = trackPath ? await trackHolders(trackPath) : [];
+  const probe = trackPath ? await trackHolders(trackPath) : ({ kind: "empty" } as HolderProbe);
+  // `unknown` 在这里的后果只是「这一轮少了一批树根」,不会误杀 —— 但它**不许**顺势变成
+  // 「清理成功」,所以 cleanupAfterRun 那边据此不释放证据(见那个函数)。
+  const holders = probe.kind === "held" ? probe.pids : [];
   const roots = [...holders];
   if (child.pid && treeRootUsable(child)) roots.push(child.pid);
   if (!roots.length) return [];
   const found = await processTreeMembers(roots);
   if (!found) return [];                          // 问不出来 ≠ 没有后代:不杀也不记账
   // fd 持有者:**第二次 lsof 夹住**上面那次代次读数(理由见本文件的归属事实那段)。
-  const confirmed = trackPath && holders.length ? new Set(await trackHolders(trackPath)) : new Set<number>();
+  const recheck = trackPath && holders.length ? await trackHolders(trackPath) : ({ kind: "empty" } as HolderProbe);
+  // 夹住那一问失败时**整份丢掉 fd 这条候选**(只留 ppid 树那条):拿不到第二次读数就等于
+  // 没夹住,代次可能已经换了。宁可这一轮少补一刀,也不拿一份没夹住的名单下刀。
+  const confirmed = recheck.kind === "held" ? new Set(recheck.pids) : new Set<number>();
   const out: ProcessMember[] = [];
   for (const member of found.roots) {
     if (member.pid === child.pid) continue;       // CLI 本体走进程组信号,不在这里补刀
@@ -148,7 +193,7 @@ async function collectEscapees(child: ChildProcess): Promise<ProcessMember[]> {
  * 可**号被别人占着**时那棵树是人家的子进程,一个都不许扩。
  */
 function treeRootUsable(child: ChildProcess): boolean {
-  if (childStillOurs(child)) return true;
+  if (childKillAuthorized(child)) return true;
   return IS_WINDOWS && !!child.pid && !isPidAlive(child.pid);
 }
 
@@ -178,26 +223,35 @@ async function waitForPidsGone(pids: readonly number[], timeoutMs: number): Prom
  * 取证。以前这一句挂在 `finally` 上,等于「失败也按成功放手」。
  */
 export async function cleanupAfterRun(child: ChildProcess): Promise<void> {
-  await sweepAfterRun(child);
+  const swept = await sweepAfterRun(child);
+  // **只有「这一轮真的问清楚了」才放手证据。** 抛错不放手之外还有一类:外部查询自己失败
+  // (lsof 报错/不在、进程表问不出来)——那种失败被 `trackHolders`/`processTreeMembers` 吞在
+  // 里面,不会抛到这里,于是上一版照样走到下面这句,把「问不出来」当成了「清扫成功」
+  // (第 2 轮审查 F2 的同类出口)。现在它如实往上传,这一档留着文件和责任,下一轮再试。
+  if (!swept) return;
   releaseTrackEvidence(child);
 }
 
-async function sweepAfterRun(child: ChildProcess): Promise<void> {
+/** 返回值 = **这一轮的清扫问清楚了没有**(false ⇒ 外部查询失败过,证据不许释放)。 */
+async function sweepAfterRun(child: ChildProcess): Promise<boolean> {
+  const trackPath = trackFiles.get(child);
+  // 清扫前先问一次:这一问失败就说明「还有没有逃逸者」这件事这一轮没有答案。
+  const probed = trackPath ? (await trackHolders(trackPath)).kind !== "unknown" : true;
   const targets = new Set(await killEscapees(child, "SIGTERM"));
   // 判据与 killChild 同一条(childStillOurs):以前这里问的是 `isPidAlive`,那只能证明
   // 「有人占着这个号」—— 根进程先退出、号被复用之后,它指向的已经是别人(第 1 轮审查
   // F2)。根进程已退出就只扫后代,一刀都不往那个号上发。
-  if (child.pid && childStillOurs(child)) {
+  if (child.pid && childKillAuthorized(child)) {
     targets.add(child.pid);
     killTree(child.pid, "SIGTERM");
   }
-  if (!targets.size) return;
+  if (!targets.size) return probed;
 
   const survivors = await waitForPidsGone([...targets], 2000);
-  if (!survivors.length) return;
+  if (!survivors.length) return probed;
   const killed: number[] = [];
   // 等的这 2 秒里根进程可能自己退了,号随时会被复用 —— 补刀前按同一判据再确认一次。
-  if (child.pid && survivors.includes(child.pid) && childStillOurs(child)) {
+  if (child.pid && survivors.includes(child.pid) && childKillAuthorized(child)) {
     killTree(child.pid, "SIGKILL");
     killed.push(child.pid);
   }
@@ -207,6 +261,7 @@ async function sweepAfterRun(child: ChildProcess): Promise<void> {
   // ⇒ 号换了主人,一刀不发。
   killed.push(...(await killEscapees(child, "SIGKILL")));
   await waitForPidsGone(killed, 2000);
+  return probed;
 }
 
 // 追踪 fd(见 killEscapees):打开一个本次运行专属文件,把 fd 作为 stdio[3] 传给
@@ -274,8 +329,9 @@ async function recheckLease(path: string): Promise<void> {
   if (!lease) return;
   const child = lease.child.deref();
   // 还有活着的持有者 ⇒ 证据还问得出东西,一个字都不能删。
-  const holders = await trackHolders(path);
-  if (holders.some(isPidAlive)) {
+  // **问不出来也算有**(`holdersMayExist`):一次失败的查询不配当销毁证据的依据,它只说明
+  // 「这一问没答出来」。这一档安排下一轮复核,证据与清理责任都留着(第 2 轮审查 F2)。
+  if (holdersMayExist(await trackHolders(path))) {
     armRecheck(path, TRACK_RECHECK_MS);
     return;
   }
@@ -348,6 +404,10 @@ export async function sweepOrphanTrackFiles(): Promise<number> {
   }
   if (!candidates.length) return 0;
   const held = await heldNames(candidates);
+  // 这一批没问清楚 ⇒ **整批留着**,下次启动再扫。上一版这里把「批量查询失败」和「这一批
+  // 谁都没人握着」当成了同一件事,于是一次 lsof 故障就能删掉一批还在被活进程使用的证据
+  // (第 2 轮审查 F2 实测)。漏删的代价只是文件多留一会儿 —— 它们本来就靠这一轮清扫兜底。
+  if (!held) return 0;
   let removed = 0;
   for (const path of candidates) {
     if (held.has(path.split("/").pop() ?? "")) continue;
@@ -368,15 +428,19 @@ export async function sweepOrphanTrackFiles(): Promise<number> {
  * `/private/var/...`),拿整条路径进集合一个都对不上 —— 那等于「有持有者」这一问永远答否,
  * 正要留下的证据会被当成垃圾删掉。追踪文件的名字自带 pid + 时间戳 + 随机串,本来就唯一。
  */
-async function heldNames(paths: readonly string[]): Promise<Set<string>> {
+async function heldNames(paths: readonly string[]): Promise<Set<string> | null> {
   const held = new Set<string>();
   const CHUNK = 128;                              // argv 有长度上限,别一把梭
   for (let i = 0; i < paths.length; i += CHUNK) {
     const chunk = paths.slice(i, i + CHUNK);
-    const out = await new Promise<string>((res) =>
-      execFile("lsof", ["-F", "pn", "--", ...chunk], { maxBuffer: 8 << 20 }, (_e, stdout) => res(stdout || "")),
+    const probe = await new Promise<{ err: ExecFileException | null; out: string }>((res) =>
+      execFile("lsof", ["-F", "pn", "--", ...chunk], { maxBuffer: 8 << 20 },
+        (err, stdout) => res({ err, out: stdout || "" })),
     );
-    for (const line of out.split("\n")) {
+    // **一个分片答不出来就整问作废**(返回 null):没法只把这一片排除掉 —— 调用方拿到的集合
+    // 是「谁有人握着」,少了一片就等于把那一片默认成「没人握着」,正是要避免的那一下。
+    if (probe.err && !probeExitCodeMeansEmpty(probe.err)) return null;
+    for (const line of probe.out.split("\n")) {
       if (line.startsWith("n")) held.add(line.slice(1).split("/").pop() ?? "");
     }
   }
@@ -422,11 +486,34 @@ export function markAdoptedChild(child: ChildProcess, pid: number, startedAt: st
 
 const ownExitState = (child: ChildProcess): boolean => child.exitCode === null && child.signalCode === null;
 
+/**
+ * **「这个号此刻还是它吗」—— 探活档。**
+ *
+ * 跟下面那个 `childKillAuthorized` 是两个问题,别合成一个(第 2 轮审查 F2 的同类教训):
+ * 这一问的使用方是「要不要继续扫它」「证据还该留着吗」,**判不出来的后果是多留一会儿**;
+ * 那一问要授权破坏性操作,判不出来就必须一刀不发。合成一个的代价是方向相反的两种错误里
+ * 必有一种:要么拿探活档去下刀(杀到别人),要么拿授权档去判存活 —— 后者会让「证不出」
+ * 走向**删掉还有用的证据**,正是 F2 要堵的那个出口。
+ */
 export function childStillOurs(child: ChildProcess): boolean {
   const identity = childIdentities.get(child);
   if (!identity) return ownExitState(child);
   if (identity.kind === "real") return ownExitState(identity.source);
-  return pidOwnership(identity.pid, identity.startedAt) === "ours";
+  return pidRunStillAlive(identity.pid, identity.startedAt) !== "gone";
+}
+
+/**
+ * **「敢不敢对它发信号」—— 授权档。**
+ *
+ * 自己 spawn 的孩子有内核权威答案(父进程 reap 之前这个号不会给别人),所以 `real` 那两档
+ * 照旧。接回来的号只有 pid + 启动时刻,POSIX 上那是粗档 —— 归属要问共用那一层:记号,
+ * 或者这一次运行独有的输出文件(见 `killByPid` 的两级证据)。
+ */
+function childKillAuthorized(child: ChildProcess): boolean {
+  const identity = childIdentities.get(child);
+  if (!identity) return ownExitState(child);
+  if (identity.kind === "real") return ownExitState(identity.source);
+  return canShoot(reclaimState(identity.pid, identity.startedAt, { unitToken: unitTokenOf(child) }));
 }
 
 // Terminate a running agent subprocess (manual stop). SIGTERM first so the CLI
@@ -445,8 +532,8 @@ export function childStillOurs(child: ChildProcess): boolean {
 export function killChild(child: ChildProcess): void {
   if (typeof child.kill !== "function") return;
   const signal = (sig: NodeJS.Signals) => {
-    // 身份先于信号:已经 reap 过的号可能已经是别人的了(判据见 childStillOurs)。
-    if (!childStillOurs(child)) return;
+    // 身份先于信号:已经 reap 过的号可能已经是别人的了(判据见 childKillAuthorized)。
+    if (!childKillAuthorized(child)) return;
     if (child.pid) {
       killTree(child.pid, sig);
       return;
@@ -473,98 +560,121 @@ export function killChild(child: ChildProcess): void {
 // 只剩三层里的第①③层:进程组信号 + 2s 后补 SIGKILL。第②层(继承 fd 反查逃逸者)
 // 做不到,因为那份映射是内存态的。代价:重启前就已经逃出进程组的孤儿杀不到 ——
 // 如实记在这里,别让以后的人以为这条路和 killChild 等价。
-export function killByPid(pid: number, startedAt: string | null): void {
+export function killByPid(
+  pid: number,
+  startedAt?: string | null,
+  proof?: { unitToken?: string | null; outPath?: string | null },
+): void {
   if (!Number.isInteger(pid) || pid <= 1) return;
-  if (pidOwnership(pid, startedAt) !== "ours") return;
-  killTree(pid, "SIGTERM");
-  const t = setTimeout(() => {
-    // **补刀不看组长死没死。** 以前这里是 `if (isPidAlive(pid))`，等于拿「组长还在吗」
-    // 当「这一组还在吗」——可这两件事恰恰在最该补刀的现场分开：外层 shell / 包管理器
-    // 收到 SIGTERM 老老实实退了，它派生的那个**忽略 SIGTERM** 的东西（用户仓库里的
-    // preinstall/postinstall 是任意代码，node-gyp、自己管子进程的脚本都算）还留在原
-    // 进程组里。组长一死，补刀被跳过，那个进程就永远留下了——而接口已经回了句「已停止」。
-    // killTree 打的是进程组（POSIX 上 `kill(-pid)`），组空了是 ESRCH，被它自己吞掉，
-    // 所以无条件发这一刀没有副作用。但**号被别人占去了就不能发**——那一刀会打到人家
-    // 的进程组上(判据见 pidOwnership)。
-    if (pidOwnership(pid, startedAt) === "ours") killTree(pid, "SIGKILL");
-  }, 2000);
-  (t as { unref?: () => void }).unref?.();
-}
-
-// ── 只有 pid 时的归属判定:三档,「证不出来」独立成档 ─────────────────────────────
-//
-//   · `ours`       —— 号上就是那一代(启动时刻对得上);或者调用方当初没记启动时刻、
-//                     而这个号此刻有人占着(退化成存在性检查,见下面那段);或者**号空着、
-//                     但这一刀发生在我们刚刚确认过它的那一小会儿之内**;
-//   · `foreign`    —— 号上是别人,一刀都不许发;
-//   · `unprovable` —— 这一刻证不出来(ps 不可用),或者**号空着而且我们并没有刚确认过它**。
-//
-// 最后那一档是第 3 轮审查 F1 指出的缝。以前「号没人占」是无条件放行的,理由是「新进程不会
-// 跑进一个以空号为 id 的进程组」—— 可那条推理漏了一步:这个号被复用成**新的组长**、新组长
-// 自己又先退了,这时它留下的那一组的组 id 同样是个空号。停止按钮在组长死了几小时之后按下
-// 来,那一刀就打在人家的组上。
-//
-// 所以「号空着」只在**我们自己这一次击杀序列里**作数:首发之前必须拿到正面身份(那一刻它
-// 还活着、而且就是它),登记进 `confirmedPids`;2 秒后的补刀发现号空了,靠这条刚登记的事实
-// 放行 —— 正是「组长收到 TERM 退了、忽略 TERM 的后代还在原组里」那个真实现场。超出这个窗口
-// (比如接回之后它早就死了)就只能说「证不出来」,不下刀。
-const PID_CONFIRM_GRACE_MS = Number(process.env.ASH_PID_CONFIRM_GRACE_MS ?? 60_000);
-const confirmedPids = new Map<number, { gen: ProcessGeneration | null; at: number }>();
-
-type PidOwnership = "ours" | "foreign" | "unprovable";
-
-function pidOwnership(pid: number, startedAt: string | null): PidOwnership {
-  if (!Number.isInteger(pid) || pid <= 1) return "foreign";
-  switch (pidIdentity(pid, startedAt)) {
-    case "ours": return "ours";
-    case "foreign": return "foreign";
-    case "unknown": return "unprovable";             // 还活着、这一刻问不出来 ⇒ 不下刀
-    case "empty": break;
+  const unit = { unitToken: proof?.unitToken ?? null };
+  // ① 记号那一问。判档这一次只为分流;**下刀本身不吃这份快照** —— killProvenUnit 自己
+  // `fresh` 取证,授权不跨出它那个同步段(理由见那边第 13/14 轮审查那几段注释)。
+  if (canShoot(reclaimState(pid, startedAt ?? null, unit))) {
+    killProvenUnit(pid, startedAt ?? null, unit);
+    return;
   }
-  // 号空着:只认**刚刚正面确认过它**的那一次(探活或这次击杀的首发)。
-  const seen = confirmedPids.get(pid);
-  if (!seen) return "unprovable";
-  if (Date.now() - seen.at > PID_CONFIRM_GRACE_MS) {
-    confirmedPids.delete(pid);
-    return "unprovable";
+  // ② 记号证不出来(最常见的是这一行建在记号上线之前,库里只有 pid)。POSIX 的秒级启动
+  // 时刻是粗档,单凭它下刀就是在赌一次秒级碰撞 —— 那是明确实测过的误杀。
+  //
+  // 但 agent 这一侧还有一条哨兵没有的线索,而且它比记号**更硬**:这一次运行独有的输出文件。
+  // 根进程的 stdout 就重定向在它上面,所以「谁还握着它」问的正是「这一次运行的根还在不在」;
+  // 路径里带着 sessionId + 回合起点,别的运行不会碰它,而且它跟记号一样跨得过 server 重启
+  // (`sessions.agent_out_path`)。关键区别:这是 `lsof` 的**真实 fd 表**,不是 macOS 上
+  // 那种无边界的展示文本 ⇒ 精确可答,够当粗档要的那第二份独立证据。
+  //
+  // 注意它只证明得了**根**(fd 1 无条件继承,但 CLI 会把它自己子进程的 stdout 接成管道),
+  // 而这条路要的恰好就是根:下刀打的是根的进程组。
+  if (outPathProvesRoot(pid, proof?.outPath ?? null)) {
+    // **第一刀之前把组成员连代次一起记下来** —— 就在根仍被证明着的这一刻。少了这一步,
+    // 「外层壳吃了 TERM 老实退场、它派生的那个忽略 TERM 的东西还留在原组里」这个现场就
+    // 收不干净:根一死,组号成了空号,两秒后那一刀打在空组上(ESRCH),而那个进程还在写文件。
+    // 结构跟 killProvenUnit 一致(它对记号那一档做的是同一件事)。
+    const held = processGroupMembersSync(pid) ?? [];
+    killTree(pid, "SIGTERM");
+    const t = setTimeout(() => {
+      // 补刀前**重新取一次同一份证据**:这两秒里根可能已经退了、号可能被接手。
+      // 以前这一刀是无条件的 —— 哨兵那边的注释早就点过这个毛病。
+      if (outPathProvesRoot(pid, proof?.outPath ?? null)) killTree(pid, "SIGKILL");
+      // 再把第一刀那会儿记下的成员补上:**代次没变才打**(变了就是号换了主人)。
+      // 这一下不要求根现在还活着 —— 第一刀本来就是来结束它的。
+      signalMembers(held.filter((m) => m.pid !== pid), "SIGKILL");
+    }, 2000);
+    (t as { unref?: () => void }).unref?.();
+    return;
   }
-  return "ours";
+  // ③ 两条线索都证不出来:不下刀,但要留下痕迹 —— 根约定「停止/暂停必须留下持久可见的
+  // 状态」,静默失败会让用户只能得出「按钮坏了」。
+  console.warn(
+    `[ash] 没能证明 pid=${pid} 属于这一次运行(记号${unit.unitToken ? "对不上" : "缺失"}、`
+    + `输出文件${proof?.outPath ? "也问不出持有者" : "未提供"}),`
+    + "按「证不出就不下刀」处理:没有发送任何信号",
+  );
 }
 
 /**
- * **探活与击杀共用的那一次身份读数。**
+ * **这个号此刻还握着这一次运行的输出文件吗** —— 粗档 pid 要的那第二份独立证据。
  *
- * 为什么非得是同一份:接回的那条路上,「这个号还是不是它」要被问两种人 —— 退出轮询
- * (它该不该宣布这一轮结束)和击杀(这一刀能不能发)。两边各读一次、各自解释,就又回到
- * 「号码当身份」:轮询拿 `kill(pid,0)` 当活着,击杀拿「号空着」当自家的组(第 3 轮审查 F1
- * 的第 4、5 条)。现在是一个函数:**它每答一次「还是它」,这次确认就记在册上**,所以紧接着
- * 发生的补刀能据此放行 ——「组长刚刚还活着、这一刀发出时它已经退了」那个真实现场因此仍然
- * 收得干净,而「几小时前就死了的号」仍然证不出、不下刀。
+ * 同步实现是刻意的:取证与下刀必须在同一个同步段里完成,中间隔一次 `await`,这个号就可能
+ * 已经退出并被别人接手(那是哨兵第 13/14 轮审查反复实测的同一条缝)。单文件 `lsof` 比那边
+ * 的全表 `ps` 便宜得多。
+ *
+ * 三档里只有「确证握着」返回 true:问不出来(lsof 不在、报错)一律当证不出 —— 这一问是用来
+ * **授权破坏性操作**的,不许让一次失败的查询变成放行票。
  */
-function pidIdentity(pid: number, startedAt: string | null): "ours" | "foreign" | "unknown" | "empty" {
-  const verdict = processIdentity(pid, startedAt);
-  // `unverifiable` = 调用方当初没记启动时刻。这一问因此比不出代次,只能退化成存在性检查
-  // —— 老使用方(拿锁、接管 agent)要的本来就是存在性;传 null 的含义是「我没记」,不是
-  // 「不用查」(第 2 轮审查 F1)。
-  if (verdict === "same" || verdict === "unverifiable") {
-    confirmedPids.set(pid, { gen: processGenerationSync(pid), at: Date.now() });
-    return "ours";
+function outPathProvesRoot(pid: number, outPath: string | null): boolean {
+  if (!outPath || IS_WINDOWS) return false;       // win32 没有 lsof;那边 pid 时刻本来就是排他档
+  try {
+    const out = execFileSync("lsof", ["-t", "--", outPath], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 4000,
+    });
+    for (const line of out.split("\n")) {
+      if (Number(line.trim()) === pid) return true;
+    }
+    return false;
+  } catch {
+    return false;                                 // 非零退出(无匹配)与查询失败都不算证明
   }
-  if (verdict === "different") return "foreign";      // 号换了主人 ⇒ 当初那个已经没了
-  return isPidAlive(pid) ? "unknown" : "empty";
 }
+
+// ── 只有 pid 时的归属:判据不在这里,在共用的那一层 ─────────────────────────────
+//
+// 这一段原先自己实现了一套三档归属判定,外加一个「60 秒内正面确认过就放行空号」的备忘
+// (`confirmedPids`)。两样都删了,理由是审查实测出来的同一件事:**确认过一个号上有活进程,
+// 不等于确认它属于这一次运行**。那份备忘只按 pid 键控,于是另一次调用明确判定「这不是你的」
+// 之后,先前那条确认记录会把它洗回通过;而「刚刚确认过」本身也从来不是对一个现存进程组的
+// 所有权证明,缩短那个时间窗只是把同一个漏洞变窄。
+//
+// 现在归属与「敢不敢下刀」统一问 `monitor-reclaim-evidence.ts`:
+//
+//  · 判据是**这一次运行独有的资源记号**(executors/unit-token.ts 种进环境,`reclaimEvidence`
+//    判档),粗档的 pid + 秒级启动时刻只有在记号给出第二份独立证据时才算授权;
+//  · 下刀只打**这一刻证明过**的那几个:根还活着就打整组(覆盖期间新派生的),根已经不在就
+//    **逐个打证明过的成员、绝不打组** —— 孤儿后代的组号是那个已经死掉的根的号,`kill(-member)`
+//    打的是「组号恰好等于这个成员 pid」的另一组(那是第 12 轮审查实测过的误杀);
+//  · 两秒后那一刀自己重新取证,名单按代次复核,对不上一刀都不发。
+//
+// 那一层的注释里早就点出过这边的毛病:「不借用 executors/spawn.ts 的 killByPid:它的 +2 秒
+// 那一刀是无条件的」。现在这条路反过来接到它上面,无条件补刀随之消失。
 
 /**
  * 只有 pid 时的**退出探活**(接回的那一轮靠它收尾)。三档,别折成布尔:
  *  · `alive`   —— 还是它(或者当初没记启动时刻、此刻号上有人);
- *  · `gone`    —— 号空了,或者号已经换了主人 ⇒ 当初那个一定已经退了;
+ *  · `gone`    —— 号已经换了主人,或者号上没有进程 ⇒ 当初那个一定已经退了;
  *  · `unknown` —— 这一刻问不出来(ps 不可用)。**不许据此宣布退出**,它可能还活着。
+ *
+ * **这个函数不再给击杀留任何记录。** 上一版它每答一次「还是它」就把这次确认记进备忘,让
+ * 紧随其后的补刀据此对一个空号下刀 —— 审查实测那份备忘只按 pid 键控,会把另一次明确的
+ * 「这不是你的」洗回通过。探活和授权是两个问题:这里只答「它还在不在」,敢不敢下刀由
+ * `reclaimEvidence` 按记号独立判(见上面那段)。「组长刚退、忽略 TERM 的后代还在组里」那个
+ * 真实现场由 killProvenUnit 的两秒复核收掉,不需要这边垫一张票。
  */
 export function pidRunStillAlive(pid: number, startedAt: string | null): "alive" | "gone" | "unknown" {
   if (!Number.isInteger(pid) || pid <= 1) return "gone";
-  switch (pidIdentity(pid, startedAt)) {
-    case "ours": return "alive";
-    case "unknown": return "unknown";
-    default: return "gone";
+  switch (processIdentity(pid, startedAt)) {
+    // `unverifiable` = 调用方当初没记启动时刻,这一问只能退化成存在性检查 —— 老使用方
+    // (拿锁、接管)要的本来就是存在性(第 2 轮审查 F1)。
+    case "same": case "unverifiable": return "alive";
+    case "different": return "gone";              // 号换了主人 ⇒ 当初那个一定没了
+    default: return isPidAlive(pid) ? "unknown" : "gone";
   }
 }

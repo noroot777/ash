@@ -494,6 +494,8 @@ export async function continueTask(
           agentErrPath: handle.detached ? detach.err : null,
           agentRcPath: handle.detached ? detach.rc : null,
           agentOffset: 0,
+          // 跟 pid 同组刷新:沿用上一轮的记号会让清理去找上一轮那批后代。
+          agentUnitToken: handle.detached?.unitToken ?? null,
         })
         .where(eq(sessions.id, sessId));
     } else {
@@ -527,6 +529,7 @@ export async function continueTask(
         agentErrPath: handle.detached ? detach.err : null,
         agentRcPath: handle.detached ? detach.rc : null,
         agentOffset: 0,
+        agentUnitToken: handle.detached?.unitToken ?? null,
       });
     }
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。

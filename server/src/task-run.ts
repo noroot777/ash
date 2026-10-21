@@ -254,6 +254,9 @@ export async function runTask(
       agentErrPath: handle.detached ? detach.err : null,
       agentRcPath: handle.detached ? detach.rc : null,
       agentOffset: 0,
+      // 记号跟 pid 一起落:重启后 WeakMap 没了,库里这一行是找回后代的唯一线索
+      // (executors/unit-token.ts)。
+      agentUnitToken: handle.detached?.unitToken ?? null,
     };
     await db.insert(sessions).values(sessRow);
     // 回合开始就落一行：收尾那下写不成时,「开了没收口」才有据可查(光靠计数对不出位置)。
