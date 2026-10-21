@@ -51,125 +51,9 @@
 // 而「拦不拦」只决定**要不要你必须给一个**,不决定**你能不能给**:任何命令都可以配结束条件
 // （表单一律给那个输入框），把同一份猜测拿去决定配置资格是第 1 轮审查 F3 点掉的那一半。
 
-
-type Token = { text: string; quoted: boolean };
-
-/** 引号内的内容换成等长空格:做文本判据时用，`echo 'waiting for exit'` 不该捐出一个 `exit`。 */
-function blankQuoted(command: string): string {
-  let out = "";
-  let i = 0;
-  while (i < command.length) {
-    const c = command[i]!;
-    if (c === "'" || c === '"') {
-      const close = command.indexOf(c, i + 1);
-      const end = close < 0 ? command.length : close;
-      out += " ".repeat(end - i + 1);
-      i = close < 0 ? command.length : close + 1;
-      continue;
-    }
-    out += c;
-    i += 1;
-  }
-  return out;
-}
-
-/**
- * 两条简单命令之间那个符号。**它决定后面那一条证明不证明得出会跑**（见文件头 ③④）:
- *
- * · `;`、换行 —— 后面那条照跑（前一条的退出码不影响它）
- * · `&&`、`||` —— 后面那条跑不跑**要看前一条的退出码**,这一层答不出来
- * · `|` —— 管道各级都会跑,所以不打断「会跑」这件事
- * · `&` —— 放后台,**shell 不等它**:`tail -F x & printf done` 这条命令立刻就结束了
- * · `(` `{` `)` `}` —— 分组本身不决定任何事,**收尾那一组的那个符号才决定**:
- *   `{ tail -F x; } & printf done` 里那个 `;` 在组里,放不放后台要看 `}` 后面的 `&`
- */
-type Sep = ";" | "&" | "&&" | "|" | "||" | "(" | ")" | "{" | "}" | "eof";
-/** 一条简单命令 + 收尾它的那个符号。token 可以是空的（`(`、`;;`、注释行留下的空段）。 */
-type Segment = { tokens: Token[]; sep: Sep };
-
-/**
- * 把命令切成**简单命令 + 它的收尾符号**。
- *
- * 只认结构，不认意图：引号里的内容合成一个 token 并打上 `quoted`（**永远不会被当成命令词、
- * 也永远不会被当成关键字**），`$( )` 与反引号整段跳过（里面是另一层执行，这一层读不懂就不猜）。
- *
- * **空段也留着**（`tokens` 为空）:它身上那个符号还有用 —— `(cmd) && tail -F x` 里的 `&&`
- * 正好落在 `(` 留下的那个空段上,丢掉它就等于把「要看前一条退出码」这件事丢掉。
- */
-function segments(command: string): Segment[] {
-  const out: Segment[] = [];
-  let cur: Token[] = [];
-  let text = "";
-  let quoted = false;
-  let started = false;
-  const endToken = () => {
-    if (started) cur.push({ text, quoted });
-    text = "";
-    quoted = false;
-    started = false;
-  };
-  const endSegment = (sep: Sep) => {
-    endToken();
-    out.push({ tokens: cur, sep });
-    cur = [];
-  };
-  let i = 0;
-  while (i < command.length) {
-    const c = command[i]!;
-    if (c === "'" || c === '"') {
-      const close = command.indexOf(c, i + 1);
-      text += close < 0 ? command.slice(i + 1) : command.slice(i + 1, close);
-      quoted = true;
-      started = true;
-      i = close < 0 ? command.length : close + 1;
-      continue;
-    }
-    if (c === "\\") { text += command[i + 1] ?? ""; started = true; i += 2; continue; }
-    if (c === "$" && command[i + 1] === "(") {
-      let depth = 1;
-      let j = i + 2;
-      while (j < command.length && depth > 0) {
-        if (command[j] === "(") depth += 1;
-        else if (command[j] === ")") depth -= 1;
-        j += 1;
-      }
-      // 占位成一个「不认识的词」:它是个参数，但也绝不该让后面那个词变成命令词。
-      text += "?";
-      started = true;
-      i = j;
-      continue;
-    }
-    if (c === "`") {
-      const close = command.indexOf("`", i + 1);
-      text += "?";
-      started = true;
-      i = close < 0 ? command.length : close + 1;
-      continue;
-    }
-    // `#` 只在**词首**才是注释（shell 的规矩，`cmd -x#y` 里那个不是）。注释到行尾一个字都
-    // 不执行 —— 上一版照旧切成简单命令，于是 `printf done # tail -F build.log` 被拦（F3）。
-    if (c === "#" && !started) {
-      const nl = command.indexOf("\n", i);
-      endSegment(";");
-      i = nl < 0 ? command.length : nl;
-      continue;
-    }
-    if (c === " " || c === "\t" || c === "\r") { endToken(); i += 1; continue; }
-    if (c === "\n" || c === ";") { endSegment(";"); i += 1; continue; }
-    if (c === "&" || c === "|") {
-      const twice = command[i + 1] === c;
-      endSegment(twice ? (c === "&" ? "&&" : "||") : c === "&" ? "&" : "|");
-      i += twice ? 2 : 1;
-      continue;
-    }
-    if (c === "(" || c === ")" || c === "{" || c === "}") { endSegment(c); i += 1; continue; }
-    text += c;
-    started = true;
-    i += 1;
-  }
-  endSegment("eof");
-  return out;
-}
+// **词法层在隔壁**(command-lex.ts,单文件 700 行的约定):分词、分段、引号骨架、抹注释。
+// 这个文件只收它的结果 —— 「每个字符在不在引号外」这件事由那边负责记下来(见 `Token.bare`)。
+import { blankComments, blankQuoted, segments, type Segment, type Token } from "./command-lex.ts";
 
 /** 这些词只是**包一层**，真正跑的是后面那个命令。跳过它们和它们自己的开关。 */
 const WRAPPERS = new Set(["env", "nohup", "nice", "ionice", "stdbuf", "unbuffer", "sudo", "command", "exec", "time"]);
@@ -241,32 +125,6 @@ const FOLLOWERS: readonly { name: string; what: string; follows: (argv: Token[])
   { name: "fswatch", what: "fswatch", follows: (a) => !hasFlag(a, /^-[^-]*1/, "--one-event") },
 ];
 
-/**
- * 把注释从**已经抹掉引号内容**的文本里也抹掉（按文本看的那两条判据用，长度保持不变）。
- *
- * 跟 `segments` 里那一支是同一条规矩的两处落点：那边决定「哪几条是简单命令」，这边决定
- * 「here-doc / 函数定义这些结构算不算出现过」。少一处，`# later() { … }` 这样的注释就又会
- * 把一条打一行就退的命令说成读不懂。
- */
-function blankComments(text: string): string {
-  let out = "";
-  let wordStart = true;
-  let i = 0;
-  while (i < text.length) {
-    const c = text[i]!;
-    if (c === "#" && wordStart) {
-      const nl = text.indexOf("\n", i);
-      const end = nl < 0 ? text.length : nl;
-      out += " ".repeat(end - i);
-      i = end;
-      continue;
-    }
-    out += c;
-    wordStart = /[\s;&|(){}]/.test(c);
-    i += 1;
-  }
-  return out;
-}
 
 /**
  * 函数定义:`name() {` / `function name {`。**定义这一刻函数体一个字都不跑**,而「后面到底
@@ -349,6 +207,15 @@ type Scan = {
   doAt: Int32Array;
   /** 词表 → 前 `i` 段里它出现过几次（前缀和）。 */
   counts: Map<ReadonlySet<string>, Int32Array>;
+  /**
+   * 第 `i` 段**被一个挂了输入重定向的组包着**吗（`{ … } <f`、`( … ) <f`）。
+   *
+   * 重定向可以挂在**包着循环的那一组**身上,而不是循环自己身上 —— 那时整组一次都不开始跑
+   * （实测:`{ while true; do :; done; } </不存在; printf DONE` 退出 0 并打出 DONE,圆括号
+   * 组同样）。组收口把段切断了,所以那个重定向落在**收口后紧跟的那一段**上,循环自己的
+   * 两段上一个字都看不到它。
+   */
+  groupRedirect: Uint8Array;
 };
 
 /** 关它的词 → 开它的词。这三对都**只认命令词位置**（`grep -n fi src` 里那个 `fi` 是参数）。 */
@@ -361,6 +228,29 @@ function scanOf(segs: Segment[]): Scan {
   const open: Record<string, number[]> = { if: [], case: [], do: [] };
   const doAt = new Int32Array(n + 1).fill(-1);
   const counts = new Map<ReadonlySet<string>, Int32Array>(COUNTED.map((set) => [set, new Int32Array(n + 1)]));
+  // 组身上那个重定向:按**差分**记区间,最后一次前缀和推平(嵌套多深都只过一遍,见文件头
+  // 那段关于工作量的话)。栈里压的是开组那一段的段号。
+  const groupDiff = new Int32Array(n + 2);
+  const groups: number[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const sep = segs[i]!.sep;
+    if (sep === "(" || sep === "{") groups.push(i);
+    else if (sep === ")" || sep === "}") {
+      const from = groups.pop();
+      // 配不上对的收口不管:读不懂 ⇒ 放行那一侧由别处负责。
+      // 收口段的**下一段**才是重定向的落点(`} <f` 里 `}` 把段切断了)。
+      if (from !== undefined && redirectsIn(segs[i + 1]?.tokens ?? [])) {
+        groupDiff[from]! += 1;
+        groupDiff[i + 1]! -= 1;
+      }
+    }
+  }
+  const groupRedirect = new Uint8Array(n + 1);
+  let depth = 0;
+  for (let i = 0; i < n; i += 1) {
+    depth += groupDiff[i]!;
+    groupRedirect[i] = depth > 0 ? 1 : 0;
+  }
   for (let i = 0; i < n; i += 1) {
     for (const w of headKeywords(segs[i]!.tokens)) {
       open[w]?.push(i);
@@ -382,7 +272,7 @@ function scanOf(segs: Segment[]): Scan {
   for (let i = n - 1; i >= 0; i -= 1) {
     doAt[i] = headKeywords(segs[i]!.tokens).includes("do") ? i : doAt[i + 1]!;
   }
-  return { segs, ends, doAt, counts };
+  return { segs, ends, doAt, counts, groupRedirect };
 }
 
 /** 跟第 `from` 段上那个 `if`/`case` 配对的收尾段。-1 = 配不上对（读不懂 ⇒ 放行）。 */
@@ -428,8 +318,22 @@ function loopShape(head: string, tokens: Token[], from: number): { bodyRuns: boo
   return { bodyRuns: false, endless: false };
 }
 
-/** 以 `<` 开头的词 = 输入重定向（`<f`、`<&3` 这些;here-doc 在更前面就整条放行了）。 */
-const redirectsIn = (tokens: Token[]): boolean => tokens.some((t) => !t.quoted && t.text.startsWith("<"));
+/**
+ * 这一段里有没有**输入重定向**。判据是「骨架上出现过引号外的 `<`」(见 `Token.bare`)。
+ *
+ * 上一版问的是「整词未被标 quoted、而且 `text` 以 `<` 开头」,两头都漏（第 2 轮审查 F2,
+ * 四条实测误拦）:
+ *  · `0</f`、`3<&0` —— fd 前缀在前面,词不以 `<` 开头;
+ *  · `<'/f'` —— 运算符在引号外、只有路径在引号里,而整词被标成了 quoted。
+ * 反过来,`'<'f`、`\<f` 这种**运算符本身**在引号里/被转义的,骨架上那一位是 `\0`,照旧不算
+ * 重定向 —— 它们在 shell 里也确实只是个普通参数。
+ *
+ * 不要求它出现在词首:`<` 在 shell 里就是个运算符,`done 0<f`、`done <f` 分词之后长相不同,
+ * 而「这个结构挂着输入重定向」这件事一样成立。`[[ $a < $b ]]` 那种比较符会被一起算进来 ——
+ * 多认一个 ⇒ 这个循环按读不懂处理 ⇒ 放行,方向上是安全的那一侧（见文件头那段不对称）。
+ * `<<` 的 here-doc 更早就整条放行了,到不了这里。
+ */
+const redirectsIn = (tokens: Token[]): boolean => tokens.some((t) => t.bare.includes("<"));
 
 /**
  * 这个循环的**形状读得懂吗** —— 读得懂才轮到 `loopShape` 下结论（第 5 轮审查 F2）。
@@ -445,7 +349,11 @@ const redirectsIn = (tokens: Token[]): boolean => tokens.some((t) => !t.quoted &
  *
  * ② **循环身上没挂输入重定向**。`while true; do :; done </不存在的文件` 整条循环一次都不跑
  *    （审查实测:shell 报一句文件不存在,随后照旧打出 DONE 并退出 0）。重定向是这个结构**能
- *    不能开始跑**的前置条件,而文件在不在这一层答不出来。
+ *    不能开始跑**的前置条件,而文件在不在这一层答不出来。认不认得出它是**分词层**的事,
+ *    判据见 `redirectsIn`（fd 前缀、引号里的路径都算)。
+ *
+ * 挂在**包着它的那一组**身上的那种不在这儿答:那时整组(连里面的跟随型命令一起)都可能一次
+ * 都不开始跑,所以它归「这一条证明得出会跑吗」那一层 —— 见 `Scan.groupRedirect` 和 `runs`。
  *
  * 注意 ② 只管**挂在结构本身上的输入重定向**,不扩成「命令也可能启动失败」:那条路上任何命令
  * 都可能 127（二进制不在）,按那个标准什么都证明不出来、整个判据作废。输出重定向同样不在
@@ -490,8 +398,20 @@ function provableBlocker(scan: Scan): string | null {
   // 这条管道里扫到的跟随型。**等管道收尾才算数**:收尾符号是 `&` 的话它整条放后台，
   // shell 不等它 —— 那时这个判据作废（`tail -F x & printf done` 立刻就结束了）。
   let pipeline: string | null = null;
-  /** 「这一条证明得出会跑吗」的最终答案:短路/组资格说会跑,而且没被跳转压着。 */
-  const runs = (): boolean => reach && suppressed < 0;
+  /**
+   * 「这一条证明得出会跑吗」的最终答案:短路/组资格说会跑、没被跳转压着,而且**它所在的组
+   * 不是靠一次可能失败的输入重定向开场的**（`scan.groupRedirect`,第 2 轮审查 F2 的同类作用域)。
+   *
+   * 最后这一条跟 `loopReadable` 的 ② 是同一件事的两个作用域,但归在这里而不是那边:重定向
+   * 挂在组上时,一次都不开始跑的**不只是循环** —— `{ tail -F x; } </不存在的文件` 里那个
+   * 跟随型命令同样一个字都没跑（实测退出 0 并打出 DONE)。代价是 `( tail -F x ) </dev/null`
+   * 这种「重定向其实成功了」的真阳跟着放掉 —— 跟 ② 已经接受的那笔是同一种:文件在不在,
+   * 这一层答不出来（见文件头那段不对称）。
+   *
+   * **不扩成「命令自己也可能启动不了」**:那条路上任何命令都可能 127(二进制不在),按那个
+   * 标准什么都证明不出来、整个判据作废。这里认的始终是**写在结构上的运算符**。
+   */
+  const runs = (at: number): boolean => reach && suppressed < 0 && !scan.groupRedirect[at];
   for (let i = 0; i < segs.length; i += 1) {
     // 出了循环体就收口:压制到这个区的收尾段为止（那一段上只有 `done` 这个词，没有命令）。
     while (bodies.length && i >= bodies[bodies.length - 1]!) bodies.pop();
@@ -521,7 +441,7 @@ function provableBlocker(scan: Scan): string | null {
         const { bodyRuns, endless } = loopReadable(scan, i, end)
           ? loopShape(head, tokens, at)
           : { bodyRuns: false, endless: false };
-        if (!bodyRuns || !runs()) {
+        if (!bodyRuns || !runs(i)) {
           if (regionHas(scan, i, end, TERMINATORS)) return pipeline;
           i = end;
           at = tokens.length;
@@ -560,7 +480,7 @@ function provableBlocker(scan: Scan): string | null {
       break;
     }
     const cmd = at < tokens.length ? commandOf(tokens, at) : null;
-    if (cmd && !cmd.bounded && runs()) {
+    if (cmd && !cmd.bounded && runs(i)) {
       for (const f of FOLLOWERS) if (f.name === cmd.name && f.follows(cmd.argv)) { pipeline = f.what; break; }
     }
     // `exec cmd` 把本进程换成 cmd（`WRAPPERS` 已经让上面按 cmd 判过了）—— 它之后的都跑不到。

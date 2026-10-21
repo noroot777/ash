@@ -162,6 +162,42 @@ setInterval(() => {}, 1000);
     // 输出重定向**不在**那条判据里:它不改循环跑不跑得到,而这条正是事故的原命令。
     ["tail -F build.log 2>/dev/null | grep --line-buffered ERROR", "tail -f/-F"],
   ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该拦：${command}`);
+  // ↓ 第 2 轮审查 F2:**同一个输入重定向,换一种等价写法就漏认了**。上一版问的是「整词没被标
+  //   quoted,而且以 `<` 开头」,两头都漏 —— fd 前缀让词不以 `<` 开头,而「运算符在引号外、
+  //   只有路径在引号里」被整词一个 quoted 布尔抹平了。下面每一条真跑 `/bin/sh` 都是退出 0
+  //   并打出 DONE(整个循环一次都没开始),而创建入口一律 409。
+  const MISSING = "/definitely-missing-ash-review-file";
+  for (const command of [
+    `while true; do :; done 0<${MISSING}; printf 'DONE\n'`,       // fd 前缀
+    `until false; do :; done 0<${MISSING}; printf 'DONE\n'`,      // 同上,`until` 这一边
+    `for item in one; do tail -F /dev/null; done 0<${MISSING}; printf 'DONE\n'`, // 体里的跟随型
+    `while true; do :; done <'${MISSING}'; printf 'DONE\n'`,      // 路径在引号里
+    `while true; do :; done <"${MISSING}"; printf 'DONE\n'`,      // 双引号同样
+    `while true; do :; done 3<&0 0<${MISSING}; printf 'DONE\n'`,  // fd 复制 + fd 前缀
+    `while true; do :; done <>${MISSING}; printf 'DONE\n'`,       // 读写方式打开
+    `select x in one; do tail -F /dev/null; done 0<${MISSING}; printf 'DONE\n'`, // select 同判
+    `while read l; do :; done <${MISSING}; printf 'DONE\n'`,      // 最常见的那种写法
+    // ↓ 同一条判据的**另一个作用域**(审查没点,自查补的):重定向挂在**包着它的那一组**身上。
+    //   那时循环/跟随型自己那两段上一个字都看不到它,而整组一次都不开始跑。
+    `{ while true; do :; done; } <${MISSING}; printf 'DONE\n'`,
+    `( while true; do :; done ) <${MISSING}; printf 'DONE\n'`,
+    `{ tail -F /dev/null; } <${MISSING}; printf 'DONE\n'`,
+    `( tail -F /dev/null ) 0<${MISSING}; printf 'DONE\n'`,
+  ]) assert.equal(neverExitsOnItsOwn(command), null, `不许拦：${command}`);
+  // ↑ 那一组的**真阳对照**。认重定向要认在「运算符在不在引号外」上,而不是「这个词里有没有
+  //   `<`」—— 不然下面第一条(`<` 是参数的一部分)会跟着一起放掉。
+  for (const [command, hit] of [
+    ["for f in '<x' '<y'; do tail -F $f; done", "tail -f/-F"],   // 运算符在引号里 ⇒ 不是运算符
+    ['for f in "<x"; do tail -F $f; done', "tail -f/-F"],        // 双引号同样
+    ["while true; do printf '<'; sleep 5; done", "while true / until false"],
+    ["while true; do sleep 5; done 2>/dev/null", "while true / until false"],  // 输出重定向不在这一道
+    ["for item in one; do tail -F /dev/null; done 2>&1", "tail -f/-F"],        // fd 复制的输出同样
+    ["{ while true; do sleep 5; done; } 2>/dev/null", "while true / until false"],
+  ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该拦：${command}`);
+  // **这一道的代价也明写在这儿**:重定向其实成功了的那种(`( tail -F x ) </dev/null` 真的会
+  // 一直跑)跟着一起放掉 —— 文件在不在,这一层答不出来。跟上面「条件列表读不完整」那笔是同一
+  // 种取舍:少拦一条 = 退回今天的行为,拦错一条 = 一件做得成的事做不成了。
+  assert.equal(neverExitsOnItsOwn("( tail -F x ) </dev/null"), null, "组身上的输入重定向 ⇒ 按未知放行");
   // **这条判据的代价明写在这儿**:`while true && :; do …` 其实也没有出路,但它的条件列表被
   // `&&` 拆到了循环头之外 —— 读不完整就按未知处理,于是现在放行。上面那三条误判跟这一条
   // 是同一件事的两面,分不开:少拦一条 = 退回今天的行为,拦错一条 = 一件做得成的事做不成了。
