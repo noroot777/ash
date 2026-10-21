@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { hasUrlScheme, markdownImageRefs } from "@ash/shared/markdown-images";
 import {
   persistMarkdownImages,
   persistToolResultImages,
+  type ImageStore,
 } from "../src/agent-attachments.js";
 
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
@@ -21,7 +23,7 @@ try {
 
   const mcp = persistToolResultImages({
     content: [{ type: "image", data: PNG_BASE64, mimeType: "image/png" }],
-  }, new Set(), { directory: uploads });
+  }, new Map(), { directory: uploads });
   assert.equal(mcp.length, 1);
   assert.deepEqual(readFileSync(mcp[0]!), Buffer.from(PNG_BASE64, "base64"));
 
@@ -30,20 +32,20 @@ try {
       type: "image",
       source: { type: "base64", media_type: "image/png", data: PNG_BASE64 },
     }],
-  }, new Set(), { directory: uploads });
+  }, new Map(), { directory: uploads });
   assert.equal(claude.length, 1);
 
-  const generated = persistToolResultImages(GENERATED_BASE64, new Set(), {
+  const generated = persistToolResultImages(GENERATED_BASE64, new Map(), {
     allowBareBase64: true,
     directory: uploads,
   });
   assert.equal(generated.length, 1);
   const generatedDataUrl = persistToolResultImages({
     image_url: `data:image/png;base64,${PNG_BASE64}`,
-  }, new Set(), { allowBareBase64: true, directory: uploads });
+  }, new Map(), { allowBareBase64: true, directory: uploads });
   assert.equal(generatedDataUrl.length, 1);
 
-  const seen = new Set<string>();
+  const seen: ImageStore = new Map();
   const markdown = persistMarkdownImages(
     `截图：![CLI](<${localImage}>)`,
     seen,
@@ -51,8 +53,14 @@ try {
   );
   assert.equal(markdown.length, 1);
   // 源文件的名字要留住:对话里那张卡片写的就是它(web attachmentView 剥掉 12 位前缀)。
-  assert.match(basename(markdown[0]!), /^[A-Za-z0-9_-]{12}-local-screenshot\.png$/);
-  assert.equal(persistMarkdownImages(`![重复](<${localImage}>)`, seen, { directory: uploads }).length, 0);
+  assert.match(basename(markdown[0]!.path), /^[A-Za-z0-9_-]{12}-local-screenshot\.png$/);
+  // `source` 恒为**目的地原文**(剥掉 <>):展示端按它把这一句引用对回这份拷贝。文件名
+  // 不能当身份 —— 它会被改扩展名、被截到 60 字、还可能撞上另一张图(审查第 1 轮 F1)。
+  assert.equal(markdown[0]!.source, localImage);
+
+  // 同一张图再被引用一次:仍要报出来(指向同一份拷贝),否则那一句配不上附件、一个字都不画。
+  const again = persistMarkdownImages(`![重复](<${localImage}>)`, seen, { directory: uploads });
+  assert.deepEqual(again, [{ path: markdown[0]!.path, source: localImage }]);
   assert.equal(persistMarkdownImages("![远程](https://example.com/image.png)", seen, { directory: uploads }).length, 0);
 
   // 相对路径按工作目录解析 —— agent 站在工作目录里写 `![](output/x.png)` 是最自然的
@@ -62,14 +70,92 @@ try {
   writeFileSync(nested, Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(8)]));
   const relative = persistMarkdownImages("![预览](output/shot.png)", seen, { directory: uploads, cwd: root });
   assert.equal(relative.length, 1);
-  assert.match(basename(relative[0]!), /^[A-Za-z0-9_-]{12}-shot\.png$/);
+  assert.match(basename(relative[0]!.path), /^[A-Za-z0-9_-]{12}-shot\.png$/);
+  assert.equal(relative[0]!.source, "output/shot.png");
   // 没有 cwd 就只认绝对路径(老行为),别拿相对路径去撞 server 自己的 cwd。
-  assert.equal(persistMarkdownImages("![预览](output/shot.png)", new Set(), { directory: uploads }).length, 0);
+  assert.equal(persistMarkdownImages("![预览](output/shot.png)", new Map(), { directory: uploads }).length, 0);
   // 远程/内联 URL 不许被当成相对路径跟工作目录拼。
   assert.equal(
-    persistMarkdownImages("![远程](https://example.com/image.png)", new Set(), { directory: uploads, cwd: root }).length,
+    persistMarkdownImages("![远程](https://example.com/image.png)", new Map(), { directory: uploads, cwd: root }).length,
     0,
   );
+
+  // ── 同一个路径被重拍过:两次引用各自那一份字节 ───────────────────────────────
+  // 这是「结论说修改后、画出来是修改前」的来源(审查第 1 轮 F1 实例 1)。按内容定身份、
+  // 逐处引用各报一条,重拍才分得开 —— 按文件名或出场顺序猜一定猜错。
+  writeFileSync(nested, Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(32)]));
+  const retake = persistMarkdownImages("![改完了](output/shot.png)", seen, { directory: uploads, cwd: root });
+  assert.equal(retake.length, 1);
+  assert.equal(retake[0]!.source, "output/shot.png");
+  assert.notEqual(retake[0]!.path, relative[0]!.path, "重拍过的那张必须另存一份,不能复用上一次的");
+
+  // ── 同一份字节、两个名字:两条都要报(path 相同、source 不同)──────────────────
+  // 漏掉第二条的后果是正文那一句配不上任何附件,于是什么都不画(F1 实例 3、4)。
+  const aliasA = join(root, "output", "same-a.png");
+  const aliasB = join(root, "output", "same-b.png");
+  writeFileSync(aliasA, Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(3)]));
+  writeFileSync(aliasB, readFileSync(aliasA));
+  const alias = persistMarkdownImages(
+    "![甲](output/same-a.png)\n\n![乙](output/same-b.png)",
+    seen,
+    { directory: uploads, cwd: root },
+  );
+  assert.equal(alias.length, 2);
+  assert.equal(alias[0]!.path, alias[1]!.path, "同一份字节只存一份拷贝");
+  assert.deepEqual(alias.map((image) => image.source), ["output/same-a.png", "output/same-b.png"]);
+
+  // ── 代码块里的路径不是图 ───────────────────────────────────────────────────
+  // 服务端跟展示端共用同一个扫描器,所以这里认不认直接决定那边会不会把附件卡片吃掉
+  // (审查第 1 轮 F2:写法示例把卡片领走,结果两边都什么都不画)。
+  assert.equal(
+    persistMarkdownImages("```md\n![示例](output/shot.png)\n```", new Map(), { directory: uploads, cwd: root }).length,
+    0,
+    "围栏代码块里的写法示例不是图",
+  );
+  assert.equal(
+    persistMarkdownImages("行内 `![示例](output/shot.png)` 不算", new Map(), { directory: uploads, cwd: root }).length,
+    0,
+    "行内代码里的写法示例不是图",
+  );
+  // 括号里换行是合法写法,逐行扫描看不见它(所以 generic 那条链改成了攒一段再扫)。
+  assert.equal(
+    persistMarkdownImages("![跨行](\noutput/shot.png\n)", new Map(), { directory: uploads, cwd: root }).length,
+    1,
+    "括号内换行仍是同一条引用",
+  );
+
+  // ── 目的地扫描:<> 要剥掉,起止要指到目的地本身(展示端按它原地改写)──────────
+  const refs = markdownImageRefs('![a](<out/一 二.png> "标题")');
+  assert.deepEqual(refs.map((ref) => ref.destination), ["out/一 二.png"]);
+  assert.equal('![a](<out/一 二.png> "标题")'.slice(refs[0]!.start, refs[0]!.end), "<out/一 二.png>");
+
+  // ── Windows 盘符不是 URL 协议(审查第 1 轮 F4,正是上一版引入的回归)───────────
+  // 这一条在 macOS 上也验得了:协议判据与平台无关。盘符绝对路径在 Windows 上由
+  // `isAbsolute` 走另一条分支,这里用一个真叫 `D:` 的目录证明它**不再被当成站外地址扔掉**。
+  assert.equal(hasUrlScheme("D:\\work\\shot.png"), false);
+  assert.equal(hasUrlScheme("d:/work/shot.png"), false);
+  assert.equal(hasUrlScheme("file:///tmp/shot.png"), true);
+  assert.equal(hasUrlScheme("https://example.com/a.png"), true);
+  assert.equal(hasUrlScheme("data:image/png;base64,AAAA"), true);
+  mkdirSync(join(root, "D:", "work"), { recursive: true });
+  writeFileSync(join(root, "D:", "work", "win.png"), Buffer.from(PNG_BASE64, "base64"));
+  assert.equal(
+    persistMarkdownImages("![盘符](D:/work/win.png)", new Map(), { directory: uploads, cwd: root }).length,
+    1,
+    "`D:` 被当成协议时这一条恒为 0 —— 那就是 Windows 上图全没了的那个回归",
+  );
+
+  // ── 落盘失败不许毒化本轮重试,也不许把事件流带走 ─────────────────────────────
+  const blocked = join(root, "not-a-dir");
+  writeFileSync(blocked, "x");
+  const retryStore: ImageStore = new Map();
+  assert.deepEqual(
+    persistMarkdownImages(`![失败](<${localImage}>)`, retryStore, { directory: blocked }),
+    [],
+    "写不进去就当这张图不存在,不抛(抛出去会变成没人监听的 uncaughtException)",
+  );
+  assert.equal(retryStore.size, 0, "没真落盘就不能记进 seen,否则恢复可写后本轮再也不重试");
+  assert.equal(persistMarkdownImages(`![重试](<${localImage}>)`, retryStore, { directory: uploads }).length, 1);
 
   console.log("Agent 图片附件持久化验证通过");
 } finally {

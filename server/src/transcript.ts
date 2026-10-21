@@ -171,7 +171,7 @@ function validTraceEvent(event: unknown): boolean {
       return isString(e.name) && optionalString(e.detail)
         && (e.nativeWork === undefined || validNativeWork(e.nativeWork));
     case "attachment":
-      return isString(e.path);
+      return isString(e.path) && optionalString(e.source);
     case "error":
       return isString(e.message)
         && (e.scope === undefined || e.scope === "session")
@@ -226,7 +226,7 @@ function validNativeActivity(value: unknown): boolean {
     case "error":
       return isString(activity.message);
     case "attachment":
-      return isString(activity.path);
+      return isString(activity.path) && optionalString(activity.source);
     default:
       return false;
   }

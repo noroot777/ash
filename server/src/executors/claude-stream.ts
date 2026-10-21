@@ -12,7 +12,7 @@ import { childActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
-import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
+import { persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
@@ -75,8 +75,8 @@ export async function* parseClaudeStream(
   // 时发一条 context 事件。窗口(分母)反过来只有 `result` 行有,见 claudeContextWindow。
   let contextUsed = 0;
   let contextModel: string | null = null;
-  const seenImages = new Set<string>();
-  const childImages = new Map<string, Set<string>>();
+  const seenImages: ImageStore = new Map();
+  const childImages = new Map<string, ImageStore>();
   const nativeWork = new NativeWorkTrace();
   // claude 自带 `Monitor` 工具的只读投影（见 ../claude-monitors.ts）。放在这一层的理由：
   // 认人要同时看 tool_use 块（工具名）和 system 事件（后台任务生命周期），只有这里两样
@@ -149,7 +149,7 @@ export async function* parseClaudeStream(
     for (const activity of nativeWork.claudeMessage(ev)) push(activity);
     claudeMonitors.event(ev);
     if (ev.parent_tool_use_id) {
-      const images = childImages.get(ev.parent_tool_use_id) ?? new Set<string>();
+      const images = childImages.get(ev.parent_tool_use_id) ?? new Map();
       childImages.set(ev.parent_tool_use_id, images);
       for (const block of Array.isArray(ev.message?.content) ? ev.message.content : []) {
         // 子智能体挂的 Monitor 同样要认：它跑在同一条 CLI 会话、同一个 ash 任务上，
@@ -161,7 +161,7 @@ export async function* parseClaudeStream(
         if (block.type === "tool_result") {
           for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         } else if (block.type === "text" && typeof block.text === "string") {
-          for (const path of persistMarkdownImages(block.text, images, { cwd })) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
+          for (const image of persistMarkdownImages(block.text, images, { cwd })) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", ...image }));
         }
       }
       return;
@@ -294,7 +294,7 @@ export async function* parseClaudeStream(
       if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload
       for (const block of ev.message.content) {
         if (block.type !== "text" || typeof block.text !== "string") continue;
-        for (const path of persistMarkdownImages(block.text, seenImages, { cwd })) push({ kind: "attachment", path });
+        for (const image of persistMarkdownImages(block.text, seenImages, { cwd })) push({ kind: "attachment", ...image });
       }
     } else if (ev.type === "user" && Array.isArray(ev.message?.content)) {
       flushText();

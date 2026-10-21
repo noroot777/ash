@@ -5,7 +5,7 @@ import { codexChildWork, codexNativeWork, codexSubAgentWork, nativeAgentProfile,
 import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
-import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
+import { persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import {
   formatFailureForTimeline,
   formatSessionPoisonForTimeline,
@@ -65,7 +65,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const pending = new Map<string, { resolve(value: any): void; reject(error: Error): void }>();
   const seenAgentDeltas = new Set<string>();
   const seenReasoningDeltas = new Set<string>();
-  const seenImages = new Set<string>();
+  const seenImages: ImageStore = new Map();
   const nativeWork = new NativeWorkTrace();
   let wake: (() => void) | null = null;
   let requestId = opts.reattach ? Date.now() : 0;
@@ -93,7 +93,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
   const childEvents = new CodexChildActivity();
-  const childImages = new Map<string, Set<string>>();
+  const childImages = new Map<string, ImageStore>();
   const childModelReads = new Set<string>();
   const childModelVersions = new Map<string, number>();
   const structuredErrors: string[] = [];
@@ -284,7 +284,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       agentMessageCount += 1;
       push({ kind: "text", text: seenAgentDeltas.has(item.id) ? "\n\n" : `${item.text}\n\n` });
-      for (const path of persistMarkdownImages(item.text, seenImages, { cwd: opts.cwd })) push({ kind: "attachment", path });
+      for (const image of persistMarkdownImages(item.text, seenImages, { cwd: opts.cwd })) push({ kind: "attachment", ...image });
     } else if (item?.type === "reasoning") {
       const text = [...(item.summary ?? []), ...(item.content ?? [])].join("\n");
       if (seenReasoningDeltas.has(item.id)) push({ kind: "thinking", text: "\n\n" });
@@ -367,11 +367,14 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       for (const activity of childEvents.notification(message.method, p)) push(activity);
       if (message.method === "item/completed") {
         const item = p.item;
-        const seen = childImages.get(p.threadId) ?? new Set<string>();
+        const seen: ImageStore = childImages.get(p.threadId) ?? new Map();
         childImages.set(p.threadId, seen);
-        const images = item?.type === "agentMessage" ? persistMarkdownImages(item.text ?? "", seen, { cwd: opts.cwd })
-          : persistToolResultImages(item?.result ?? item?.contentItems ?? item?.error, seen, { allowBareBase64: item?.type === "imageGeneration" });
-        for (const path of images) push(childActivity(p.threadId, { kind: "attachment", path }));
+        if (item?.type === "agentMessage") {
+          for (const image of persistMarkdownImages(item.text ?? "", seen, { cwd: opts.cwd })) push(childActivity(p.threadId, { kind: "attachment", ...image }));
+        } else {
+          const results = persistToolResultImages(item?.result ?? item?.contentItems ?? item?.error, seen, { allowBareBase64: item?.type === "imageGeneration" });
+          for (const path of results) push(childActivity(p.threadId, { kind: "attachment", path }));
+        }
         if (item?.type === "imageGeneration" && typeof item.savedPath === "string") push(childActivity(p.threadId, { kind: "attachment", path: item.savedPath }));
       }
       for (const activity of codexChildWork(message.method, p)) push(activity);

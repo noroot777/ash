@@ -3,7 +3,8 @@ import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import { parseClaudeStream } from "../claude.js";
-import { persistMarkdownImages } from "../../agent-attachments.js";
+import { markdownImageRefs } from "@ash/shared/markdown-images";
+import { persistMarkdownImages, type ImageStore } from "../../agent-attachments.js";
 import type { CliParser, CliParserContext } from "./types.js";
 
 // ── 目录自带的输出解析器 ────────────────────────────────────────────────────
@@ -41,19 +42,13 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
   let stdoutLines = 0;
   let stderrTail = "";
 
-  const seenImages = new Set<string>();
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
     trace.event(line);
     stdoutLines += 1;
-    const text = stripAnsi(line) + "\n";
-    push({ kind: "text", text });
-    // 正文里写了 `![](…)` 的本机图片也照样复制一份进 uploads,跟 claude/codex 一个待遇
-    // —— 不然同一句话在不同执行器上一个看得见图、一个只剩裂图标。逐行判是安全的:
-    // 一条 `![alt](path)` 不可能跨行(跨行的那种 markdown 本来也不成立)。
-    for (const path of persistMarkdownImages(text, seenImages, { cwd: ctx.cwd })) {
-      push({ kind: "attachment", path });
-    }
+    push({ kind: "text", text: stripAnsi(line) + "\n" });
+    // 正文里的本机图片不在这儿收 —— 逐行看不见跨行的写法。归 withMarkdownImages,
+    // 它裹在**所有**解析器外面(见 generic.ts),十个自定义解析器才不会各漏一次。
   });
   child.stderr?.on("data", (d) => {
     const chunk = d.toString();
@@ -116,3 +111,51 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
  */
 export const claudeStreamJsonParser: CliParser = (ctx) =>
   parseClaudeStream(ctx.child, undefined, ctx.bin, undefined, null, undefined, undefined, undefined, ctx.cwd);
+
+// 一条引用最多跨这么多字节的流式碎片 —— 超了就当它不会再闭合,免得 carry 无限涨。
+const CARRY_MAX = 8192;
+
+/**
+ * 给**任意**解析器的事件流补上「正文里提到的那张本机图片」。
+ *
+ * 为什么裹在外面而不是写进每个解析器:`spec.exec.parser ?? textParser` 是二选一,目录里
+ * 十个 CLI(gemini / kimi / cursor / qwen / …)各自内联了一份解析器,只在默认那份里持久化
+ * 等于十家全漏 —— 同一句话在 claude 上看得见图、换个执行器就只剩裂图标(审查第 1 轮 F3)。
+ * 这一层是 run 与 attach 都必经的出口,接在这里就没有「谁家忘了接」这回事。
+ *
+ * 碎片:流式解析器一个 text 事件可能只是半句话,所以攒一段 `carry` 再扫。扫完裁到最后一条
+ * 引用之后,剩下的尾巴留着等下一片;长到 CARRY_MAX 还没凑成一条就只留尾部。代价是围栏
+ * 代码块的状态可能被裁断(被裁掉开头的 ``` 之后,块里的示例路径会被当成真图存一份),那只
+ * 是多出一张卡片,不会画错图。
+ *
+ * 去重按「**哪一句引用 + 哪一份拷贝**」:解析器自己挂的附件(将来真有自带持久化的解析器
+ * 经 generic 跑起来时)也过这道闸,不会同一张图铺两张卡片。
+ */
+export async function* withMarkdownImages(
+  events: AsyncIterable<AgentEvent>,
+  cwd?: string,
+): AsyncIterable<AgentEvent> {
+  const seen: ImageStore = new Map();
+  const emitted = new Set<string>();
+  const key = (image: { path: string; source?: string }) => `${image.source ?? ""}\u0000${image.path}`;
+  let carry = "";
+  for await (const event of events) {
+    if (event.kind === "attachment") {
+      if (emitted.has(key(event))) continue;
+      emitted.add(key(event));
+      yield event;
+      continue;
+    }
+    yield event;
+    if (event.kind !== "text") continue;
+    carry += event.text;
+    for (const image of persistMarkdownImages(carry, seen, { cwd })) {
+      if (emitted.has(key(image))) continue;
+      emitted.add(key(image));
+      yield { kind: "attachment", ...image };
+    }
+    const last = markdownImageRefs(carry).at(-1);
+    if (last) carry = carry.slice(Math.max(last.end, carry.indexOf(")", last.end) + 1));
+    if (carry.length > CARRY_MAX) carry = carry.slice(-CARRY_MAX);
+  }
+}

@@ -6,7 +6,7 @@ import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, killChild, redactSecrets, resumeFor } from "./spawn.js";
-import { textParser } from "./catalog/parsers.js";
+import { textParser, withMarkdownImages } from "./catalog/parsers.js";
 import { valueArgs, type CliSpec } from "./catalog/types.js";
 
 // 按目录里的 spec 装配命令行、跑一次性非交互回合。claude / codex 有专用类(常驻
@@ -66,7 +66,12 @@ export class GenericCliExecutor implements AgentExecutor {
     return {
       sessionId,
       commandLine,
-      events: parser({ child, bin: this.bin, label: this.label, trace: opts.trace, lifecycle, cwd: opts.cwd }),
+      // 正文里 `![](…)` 的本机图片在这一层统一收(见 withMarkdownImages):解析器是
+      // 「自带的 or 目录里内联的」二选一,只在默认那份里收等于十个自定义解析器全漏。
+      events: withMarkdownImages(
+        parser({ child, bin: this.bin, label: this.label, trace: opts.trace, lifecycle, cwd: opts.cwd }),
+        opts.cwd,
+      ),
       kill: () => {
         lifecycle.stopRequested = true;
         killChild(child);
@@ -82,7 +87,10 @@ export class GenericCliExecutor implements AgentExecutor {
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
-      events: parser({ child, bin: this.bin, label: this.label, lifecycle, cwd: opts.cwd }),
+      events: withMarkdownImages(
+        parser({ child, bin: this.bin, label: this.label, lifecycle, cwd: opts.cwd }),
+        opts.cwd,
+      ),
       kill: () => {
         lifecycle.stopRequested = true;
         child.kill();

@@ -76,6 +76,9 @@ const SEGMENT_SIZE: SizeTable<AgentContentSegment> = {
   markdown: (value) => value.length,
   events: executionEventsSize,
   attachments: (value) => value.length,
+  /* 来源标注不进 DOM:它只决定「这张图画在正文哪一句」,画出来的字由 markdown 那一格
+     带出(配上之后正文里的目的地被改写成站内地址,长度变化也在 markdown 里)。 */
+  attachmentSources: () => 0,
 };
 const SEGMENT_KEYS = Object.keys(SEGMENT_SIZE) as (keyof AgentContentSegment)[];
 

@@ -18,7 +18,7 @@ import {
   RunTraceRecorder,
   type RunTracePaths,
 } from "./diagnostics.js";
-import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
+import { persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { codexAshMcpServerName } from "./codex-mcp.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"] as const;
@@ -333,7 +333,7 @@ export async function* parseCodexStream(
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
   let threadId = contextOptions.initialThreadId;
-  const seenImages = new Set<string>();
+  const seenImages: ImageStore = new Map();
   const structuredErrors: string[] = [];
   const trace = new RunTraceRecorder(tracePaths);
   const push = (e: AgentEvent) => {
@@ -379,7 +379,7 @@ export async function* parseCodexStream(
       if (it.type === "agent_message" && it.text) {
         agentMessageCount += 1;
         push({ kind: "text", text: it.text + "\n\n" });
-        for (const path of persistMarkdownImages(it.text, seenImages, { cwd: contextOptions.cwd })) push({ kind: "attachment", path });
+        for (const image of persistMarkdownImages(it.text, seenImages, { cwd: contextOptions.cwd })) push({ kind: "attachment", ...image });
       }
       else if (it.type === "reasoning" && it.text) push({ kind: "thinking", text: it.text + "\n\n" });
       else if (it.type === "command_execution") push({ kind: "tool", name: "exec", detail: shortStr(it.command) });

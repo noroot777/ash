@@ -18,7 +18,15 @@ export type AgentContentSegment = {
   markdown: string;
   events: AgentAuxEvent[];
   attachments: string[];
+  /**
+   * 「这张附件是正文哪一句 `![](…)` 引用的」——服务端落盘时标的（见 shared 的 attachment
+   * 事件）。`attachments` 按 path 去重、只管铺卡片；这里**逐处引用一条**，同一份拷贝挂着
+   * 两个名字就两条。配对只认它，不认文件名、不认顺序（见 turnImages）。
+   */
+  attachmentSources?: AttachmentSource[];
 };
+
+export type AttachmentSource = { path: string; source: string };
 
 /**
  * 这一段在正文里画得出东西吗 —— **正文布局的唯一口径**,直播分段、落盘重建、折叠展开
@@ -63,6 +71,13 @@ export function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
   return { kind: "error", label: text(event.message) };
 }
 
+function attachmentSources(entries: TracedAttachmentEntry[]): AttachmentSource[] | undefined {
+  const sources = entries
+    .filter((entry) => !!entry.event.source)
+    .map((entry) => ({ path: entry.event.path, source: entry.event.source! }));
+  return sources.length ? sources : undefined;
+}
+
 // 相邻的思考过程合并成一行(见 appendExecutionEvent) —— 整块 trace 一次算完。
 function auxEvents(entries: SessionTraceEntry[]): AgentAuxEvent[] {
   return entries.reduce<AgentAuxEvent[]>(
@@ -90,7 +105,8 @@ export function contentSegments(
       id: `${idPrefix}:0`,
       markdown: fallbackMarkdown,
       events: auxEvents(auxEntries),
-      attachments: attachmentEntries.map((entry) => entry.event.path),
+      attachments: [...new Set(attachmentEntries.map((entry) => entry.event.path))],
+      attachmentSources: attachmentSources(attachmentEntries),
     }];
   }
 
@@ -120,6 +136,9 @@ export function contentSegments(
     if (entry.event.kind === "attachment") {
       if (current.markdown) pushCurrent();
       if (!current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
+      if (entry.event.source) {
+        (current.attachmentSources ??= []).push({ path: entry.event.path, source: entry.event.source });
+      }
       continue;
     }
     const event = auxEvent(entry.event, entry.at);

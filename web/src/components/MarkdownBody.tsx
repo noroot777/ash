@@ -76,6 +76,9 @@ function MarkdownDocument({ text, resolveFile, onReviewReport, onActionError }: 
           },
           img: ({ src, alt }) => {
             const raw = typeof src === "string" ? src : "";
+            // 空地址也**一个字都不画**：react-markdown 的 urlTransform 会把它不认的协议
+            // （`file:` 就是一个）整个清空，画出来就是一张没有 src 的裂图（审查第 1 轮 F2）。
+            if (!raw) return null;
             const image = imagePreviewTarget(raw, resolveFile);
             // 解不出来的本机路径**一个字都不画**：裂图标只会被读成「这个功能坏了」。
             if (!image && isLocalImageReference(raw)) return null;

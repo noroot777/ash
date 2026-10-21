@@ -1,3 +1,4 @@
+import { hasUrlScheme } from "@ash/shared/markdown-images";
 import { api } from "../lib/api.ts";
 import { attachmentView, isImagePath } from "../task-detail/utils.ts";
 
@@ -125,9 +126,6 @@ export type ImagePreviewTarget = ReviewFileTarget;
  */
 export type MarkdownFileResolver = (destination: string) => ImagePreviewTarget | null;
 
-// 带协议的目标（http:、data:、blob:、file:）不是「相对某个目录」的写法。
-const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
-
 /**
  * 「跟这份正文同一个目录里的那个文件」——只认光秃秃的文件名（`shot.png`、`./shot.png`）。
  *
@@ -136,7 +134,7 @@ const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
  */
 export function siblingFileName(destination: string): string | null {
   const raw = destination.trim();
-  if (!raw || URL_SCHEME.test(raw) || raw.startsWith("/")) return null;
+  if (!raw || hasUrlScheme(raw) || raw.startsWith("/")) return null;
   const name = decodeSafe(raw.replace(/^\.\//, "").split(/[?#]/)[0] ?? "");
   return name && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".." ? name : null;
 }
@@ -208,7 +206,7 @@ export function isLocalDiskImagePath(href: string): boolean {
 export function isLocalImageReference(href: string): boolean {
   if (!href) return false;
   if (isLocalDiskImagePath(href)) return true;
-  if (URL_SCHEME.test(href) || href.startsWith("/")) return false;
+  if (hasUrlScheme(href) || href.startsWith("/")) return false;
   return isImagePath(href);
 }
 

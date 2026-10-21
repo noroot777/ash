@@ -120,6 +120,7 @@
     "test:turn-freeze": "tsx scripts/test-turn-freeze.ts",
     "test:turn-visibility": "tsx scripts/test-turn-visibility.ts",
     "test:agent-attachments": "tsx scripts/test-agent-attachments.ts",
+    "test:agent-image-stream": "tsx scripts/test-agent-image-stream.ts",
     "test:usage": "tsx scripts/test-usage-accounting.ts",
     "test:peer-context": "tsx scripts/test-peer-context.ts",
     "test:auto-title": "tsx scripts/test-auto-title.ts && tsx scripts/test-auto-title-run.ts",

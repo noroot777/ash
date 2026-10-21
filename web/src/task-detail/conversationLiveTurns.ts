@@ -83,13 +83,15 @@ function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
   segment.events = appendExecutionEvent(segment.events, normalized);
 }
 
-function appendAgentAttachment(agent: AgentItem, path: string): void {
+function appendAgentAttachment(agent: AgentItem, event: { path: string; source?: string }): void {
   let segment = currentSegment(agent);
   if (segment.markdown) {
     segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [] };
     agent.segments.push(segment);
   }
-  if (!segment.attachments.includes(path)) segment.attachments.push(path);
+  if (!segment.attachments.includes(event.path)) segment.attachments.push(event.path);
+  // source = 正文哪一句引用的那张图(落盘重建那一路同一份口径,见 conversationSegments)。
+  if (event.source) (segment.attachmentSources ??= []).push({ path: event.path, source: event.source });
 }
 
 /**
@@ -253,7 +255,7 @@ export function appendLiveTimeline(
     if (event.kind === "session") continue;
     const agent = appendAgent(items, entry.event, sessions);
     if (event.kind === "text") appendAgentText(agent, event.text);
-    if (event.kind === "attachment") appendAgentAttachment(agent, event.path);
+    if (event.kind === "attachment") appendAgentAttachment(agent, event);
     // 用量恒在本回合的 turnEnd/done 之前到，所以它落在的就是刚说完话的那条气泡。
     if (event.kind === "usage") agent.usage = agent.usage ? addUsage(agent.usage, event.usage) : event.usage;
     // 水位是覆盖不是累加：后到的那条就是此刻，跟它前面报过什么无关。

@@ -26,7 +26,11 @@ export type AgentEvent =
   | { kind: "thinking"; text: string }
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; detail?: string; nativeWork?: NativeWorkEvent }
-  | { kind: "attachment"; path: string }
+  // `source` = 这张图是**正文哪一句 `![](…)` 引用的那张**(目的地原文)。身份只能由它定:
+  // 按文件名或出场顺序去猜,同一个路径在一轮里被重拍过时猜到的恰好是错的那张,而「结论说
+  // 修改后、画出来是修改前」比不画更坏(审查第 1 轮 F1)。缺省 = 不是正文引用来的(工具结果
+  // 截图之类),那种只铺卡片、不进正文。
+  | { kind: "attachment"; path: string; source?: string }
   | { kind: "session"; cliSessionId: string }
   // backend 旁注；时间与落盘 sentinel 共用，实时/刷新布局才不会漂。
   // level="notice" = 这条是**结算说明**(这一轮为什么落成这个状态),不是出了什么岔子。
