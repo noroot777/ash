@@ -206,9 +206,15 @@ console.log("${marker}");
     inject.release();
     await until("终态落定", async () => (await rowOf(monitorId)).status !== "running", 20_000);
     const after = await rowOf(monitorId);
-    // 结局**按持有者知道的那件事写**:命令是自己跑完的 ⇒ exited。合并掉的那一笔(matched/
-    // 上限)不再另写一个结局 —— 两笔收尾写两个结局本来就是上一版那个洞的另一面。
-    assert.equal(after.status, "exited", `命令自己跑完了 ⇒ exited（实际 ${after.status}）`);
+    // 结局**仍然只有一个、而且由持有者写**(两笔收尾各写一个结局正是上一版那个洞的另一面),
+    // 但它写下的那个结局会把**排干阶段读到的结束证据**折叠进来（第 1 轮审查 N1,见
+    // monitor-finish.ts 的 `foldHit`）:约定的字样确实出现过,这时候还念「命令自己跑完了」,
+    // 就把那条唯一的非到期出路说成没发生过。上限那一条没有这种证据 —— 「推够了多少条」是
+    // 持有者自己知道的事,所以它照旧按持有者写。
+    const want = trigger === "matched" ? "matched" : "exited";
+    assert.equal(after.status, want, `折叠之后的结局该是 ${want}（实际 ${after.status}）`);
+    // 折叠只换那个标签,**退出码这类持有者才知道的事实一个都不许丢**。
+    assert.equal(after.exitCode, 0, `命令自己跑完的那一笔的退出码照旧（实际 ${after.exitCode}）`);
     assert.ok(inject.hits() >= 2, `在途那一笔失败之后必须真的重试过（实际 ${inject.hits()} 次）`);
     const text = (await pendingOf(taskId)).map((m) => m.text).join("\n");
     const handoff = after.resultHandoffText ?? "";

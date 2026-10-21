@@ -111,6 +111,13 @@ export function hitOf(row: Pick<Row, "stopWhen">, lines: readonly string[]): str
 }
 
 /**
+ * 命中之后那句结束原因。**只写一处**:在线命中（下面 `flushLocked`）和到期排干时才命中那一种
+ * （折叠进持有者的结局，见 monitor-finish.ts 的 `foldHit`）念的必须是同一句话。
+ */
+export const matchedReason = (hit: string): string =>
+  `等到了约定的那一行（${JSON.stringify(hit.length > 120 ? `${hit.slice(0, 120)}…` : hit)}），哨兵就此收工`;
+
+/**
  * 一批行渲染成一段话:前几行 + 省略了多少 + **命中那一行**。
  *
  * 命中那一行必须出现在这段话里（第 2 轮审查 N2）:列表只列前 `MONITOR_MAX_LINES_PER_PUSH`
@@ -320,11 +327,11 @@ async function flushLocked(
   // 这是「命令自己永远不会结束」那一类的**唯一一条非到期出路**:没有它,`tail -F` 这种命令
   // 被盯的活早跑完了,任务还得干等到期(2026-10-21 实测白等 30 分钟)。
   if (hit !== null) {
-    settleInBackground(
-      monitorId, "matched",
-      `等到了约定的那一行（${JSON.stringify(hit.length > 120 ? `${hit.slice(0, 120)}…` : hit)}），哨兵就此收工`,
-      null,
-    );
+    // **证据先记在运行时上**（第 1 轮审查 N1）:这一笔 `settle` 很可能占不到收尾槽位 ——
+    // 到期（或自退）先占到、正在排干,这一批恰恰是它排出来的。那时合并等待不会改变结局,
+    // 于是「字样明明到了」被写成「盯满了约定的时长」。持有者落终态前会读这里（`foldHit`）。
+    rt.hit = hit;
+    settleInBackground(monitorId, "matched", matchedReason(hit), null);
     return "delivered";
   }
 

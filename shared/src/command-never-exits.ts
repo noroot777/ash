@@ -52,8 +52,9 @@
 //        开时这个循环同样一圈都不跑
 //      · `tail -F /dev/null < 不存在的文件` —— 重定向这一道只盖了循环和分组,简单命令自己
 //        身上那个没人问
-//    补的都不是「再排除一种写法」:包装命令改成**只认已知透明的开关**（`WRAPPERS`）、引号
-//    收口改成**认转义**（command-lex.ts 的 `quoteEnd`）、重定向改成**证明得出打得开**
+//    补的都不是「再排除一种写法」:包装命令改成**只认已知透明的开关**（command-wrappers.ts
+//    的 `WRAPPERS`）、引号收口改成**认转义**（command-lex.ts 的 `quoteEnd`）、重定向改成
+//    **证明得出打得开**
 //    （`startProvable`,循环/分组/简单命令三个作用域共用一份）。方向是同一个:**支持得了的
 //    词法和执行模式才配产出一个硬拦的结论**,任一层答不出来就往上冒成「不拦」。
 //
@@ -69,6 +70,21 @@
 //        里**别的参数会不会让它根本没开始跟随**;跟随型目录改成「这条 argv 全认得出来才算」
 //    方向还是⑤那一个,只是作用域从「一项」提到「整个形状」:**支持得了的组合才配产出一个硬拦
 //    的结论**,任一处连不起来就往上冒成「不拦」。
+//
+// ⑦ **「整条命令」还包括 shell 自己的开关和那条命令盯的是谁**（第 1 轮审查 F1）。⑥把每一层
+//    内部的组合补齐了,可执行语义还少两块,于是三种会自己结束的命令照旧被 409（审查实测）：
+//      · `printf 'DONE\n' | tail -f`、`printf 'DONE\n' | tail -F` —— 不带文件操作数的
+//        `tail -f` 盯的是**标准输入**,管道读到 EOF 就退（几毫秒,退出 0 并打出 DONE;BSD tail
+//        干脆把 `-f` 忽略掉）。而「管道那头是什么」不写在命令文本里。
+//      · `set -e; false; tail -F /dev/null` —— 那个 tail **一次都没跑**（实测退出 1）。
+//        `set -e` 的意思就是「`;` 当 `&&` 用」:前一条退出码非零,shell 当场走人。
+//    补的两处:可达性记进 `set -e`（`errexitAt`，`;`/换行一律按短路算）,跟随型目录改成
+//    「**它盯的那个东西得写在 argv 里**」（command-followers.ts 文件头 ③）。
+//
+//    ①–⑦ 合起来是同一条不变量:**硬拦只用「盖得住整条命令必要执行与退出语义」的那种证明**
+//    —— 执行资格（这一条跑不跑得到）、argv（它到底有没有开始跟随）、输入来源（它盯的是谁）、
+//    shell 状态（前面那条的退出码管不管得着它），任一项读不出来**就不是硬拦的依据**,降级成
+//    一句可提交的提示。不按网页、HTTP、hook 各补一个特例:这三处共用的就是这一个函数。
 //
 // ── 误判的代价不对称,所以只认**明确**的那几种 ───────────────────────────────────
 //
@@ -87,111 +103,11 @@ import {
   type Segment, type Token,
 } from "./command-lex.ts";
 import { followerOf } from "./command-followers.ts";
+import { commandOf } from "./command-wrappers.ts";
 
-/**
- * 一个**已知透明**的开关:它不改变「后面那个词就是真正要跑的命令」这件事。
- *
- * `value` = 它还要再吃一个词当参数,**而且那个词得长这个样**（第 2 轮审查 F2）。只记「要吃
- * 一个词」是不够的:`nice -n not-a-number tail -F /dev/null` 里 nice 在校验那一步就
- * invalid nice value 退出,后面那个 tail 一次都没跑（实测退出 0 并打出 DONE）。值的形状是
- * **写在输入里的启动前提**,不是「二进制可能没装」那种无穷外部假设。
- */
-type Transparent = { re: RegExp; value?: RegExp };
-
-/** 环境变量名（`env -u` 的值）。 */
-const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-/** nice 的调整量。 */
-const NICE_VALUE = /^[+-]?\d+$/;
-/** stdbuf 的缓冲规格:`L`（行缓冲）、`0`（不缓冲）、字节数。 */
-const BUF_SPEC = /^(?:L|0|\d+[kKmMgG]?)$/;
-
-/**
- * 这些词只是**包一层**，真正跑的是后面那个命令 —— 跳过它和它身上**认得出来**的那几个开关。
- *
- * **用 Map 存,不用普通对象**（第 2 轮审查 F1）。`name` 是命令 basename,任何字符串都可能
- * 落进来:普通对象上 `WRAPPERS["constructor"]`、`WRAPPERS["toString"]` 取到的是
- * `Object.prototype` 上那几个成员,随后 `forms.find(...)` 直接 `TypeError`。审查实测
- * `./constructor -v` 让**整个页面变成空白**（判据在每次渲染里同步调用）、创建接口 500 ——
- * 而那条命令在 `/bin/sh` 下打完 DONE 就退出 0。Object.prototype 上那 12 个名字是同一类,
- * 所以修的是**存储和查询这一层**,不是逐个排除那几个名字。
- *
- * **只认白名单,认不出来的开关当场放弃这一段**（第 3 轮审查 F1）。上一版把所有 `-` 开头的词
- * 一律当成「包装命令自己的开关」跳过去,于是 `command -v tail -F /dev/null; printf 'DONE\n'`
- * 被硬拦:`command -v` 是**查一个命令在哪儿**,它打一行路径就退,那个 `tail` 一次都没跑
- * （实测 `/bin/sh` 退出 0 并打出 `/usr/bin/tail` 和 DONE,而创建闸 409）。
- *
- * 同一类的开关不止这一个（`sudo -l`、`ionice -p PID`、各家的 `--help`/`--version`）,所以
- * 补的不是「再排除一个 `-v`」,而是把方向倒过来:**认得出来的才跳,认不出来的就说读不懂**。
- * 漏一个 ⇒ 这一段按未知放行（退回今天的行为）;多认一个 ⇒ 一条会自己结束的命令被 409
- * （见文件头那段不对称）。所以这张表只收**确定仍然会去执行后面那个命令**的开关。
- *
- * 故意**整个不收**的两类（第 2 轮审查 F2）:
- *  · `sudo` —— 它跑不跑后面那个命令取决于 sudoers 策略和密码,`-n` 这种「不许问密码」在没有
- *    免密规则时直接 1 退出（本机实测如此）。那是**认证**这个启动前提,这一层答不出来。
- *  · `env -C DIR` / `--chdir=DIR` —— 切不进那个目录 env 就直接退（实测 `cannot change
- *    directory`,随后打出 DONE 并退出 0）。目录在不在这一层答不出来。
- */
-const WRAPPERS = new Map<string, readonly Transparent[]>([
-  ["env", [{ re: /^-$/ }, { re: /^-i$/ }, { re: /^-u$/, value: VAR_NAME },
-    { re: /^--unset=[A-Za-z_][A-Za-z0-9_]*$/ }]],
-  ["nohup", []],
-  ["nice", [{ re: /^-n$/, value: NICE_VALUE }, { re: /^-\d+$/ }, { re: /^--adjustment=[+-]?\d+$/ }]],
-  ["ionice", [{ re: /^-c[0-3]$/ }, { re: /^-c$/, value: /^[0-3]$/ },
-    { re: /^-n[0-7]$/ }, { re: /^-n$/, value: /^[0-7]$/ },
-    { re: /^-t$/ }, { re: /^--ignore$/ }, { re: /^--class(?:data)?=\d$/ }]],
-  ["stdbuf", [{ re: /^-[ioe](?:L|0|\d+[kKmMgG]?)$/ }, { re: /^-[ioe]$/, value: BUF_SPEC },
-    { re: /^--(?:input|output|error)=(?:L|0|\d+[kKmMgG]?)$/ }]],
-  ["unbuffer", [{ re: /^-p$/ }]],
-  ["command", [{ re: /^-p$/ }]],
-  ["exec", [{ re: /^-c$/ }, { re: /^-l$/ }, { re: /^-a$/, value: /^[^\0]+$/ }]],
-  ["time", [{ re: /^-p$/ }]],
-]);
-
-/** 这些词带着死线:整条简单命令一定会结束，里面是什么都不看。 */
-const TIMED = new Set(["timeout", "gtimeout"]);
-
-/**
- * 一条简单命令的**命令词 + 它自己的 argv**。`bounded` = 它自带死线，无须再看。
- *
- * `from` = 从这一段的第几个词开始读。**结构骨架是靠挪这个下标剥掉的,不是靠切数组**
- * （第 5 轮审查 N1,同 `headOf`）—— `! ! ! … cmd` 这种一段里堆几万个骨架词的命令,切一次
- * 复制一遍剩下的全部,整条就成了平方级（实测 80000 个 `!` 要 1.6 秒;改下标后 12 毫秒）。
- */
-function commandOf(tokens: Token[], from = 0): { name: string; argv: Token[]; bounded: boolean } | null {
-  let i = from;
-  while (i < tokens.length) {
-    const t = tokens[i]!;
-    // `VAR=value cmd …` 的赋值前缀；引号里的东西永远不是命令词。
-    if (!t.quoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(t.text)) { i += 1; continue; }
-    if (t.quoted) return null;
-    const name = t.text.split("/").pop() ?? t.text;
-    if (TIMED.has(name)) return { name, argv: tokens.slice(i + 1), bounded: true };
-    const forms = WRAPPERS.get(name);
-    if (forms) {
-      i += 1;
-      // 开关一个个对着白名单认。不是 `-` 开头的那个词就是被包的命令词（交给下一圈判）。
-      while (i < tokens.length) {
-        const o = tokens[i]!;
-        if (o.quoted || !o.text.startsWith("-")) break;
-        if (o.text === "--") { i += 1; break; }   // 之后再没有开关
-        const form = forms.find((f) => f.re.test(o.text));
-        if (!form) return null;                   // 认不出来 ⇒ 这一段读不懂 ⇒ 放行
-        if (!form.value) { i += 1; continue; }
-        // 吃值的开关:**值也得长对**（见 `Transparent.value`）—— 值不对形状的那种,包装命令
-        // 自己就在校验那一步退了,后面那个命令一次都不会跑。
-        const v = tokens[i + 1];
-        if (!v || !form.value.test(v.text)) return null;
-        i += 2;
-      }
-      continue;
-    }
-    return { name, argv: tokens.slice(i + 1), bounded: false };
-  }
-  return null;
-}
-
-// **跟随型的那张工具目录在隔壁**(command-followers.ts,单文件 700 行的约定):哪些命令的
-// 语义是「盯着不走」、它们的 argv 读不读得懂,都归那边（见 `followerOf`）。
+// **另外两张表在隔壁**（单文件 700 行的约定）:哪些命令的语义是「盯着不走」、它们的 argv 读不
+// 读得懂,归 command-followers.ts（见 `followerOf`）;哪些词只是包一层、剥掉它们之后真正要跑的
+// 是谁,归 command-wrappers.ts（见 `commandOf`）。这边只按它们的判据组合,不认具体的工具。
 
 
 /**
@@ -206,9 +122,9 @@ const HERE_DOC = /<</;
 /**
  * 分支结构:开它的词 → 关它的词。**整区不扫** —— 哪几支会跑是运行时的事。
  *
- * 跟 `WRAPPERS`、`CLOSERS` 一样用 Map:这几张表的键全都来自命令里的字,**普通对象会把
- * `Object.prototype` 上的同名成员一起算进来**（第 2 轮审查 F1 —— 那一条是在 WRAPPERS 上
- * 炸的,但三张表是同一类入口,所以一起钉住）。
+ * 跟 `CLOSERS`、command-wrappers.ts 的 `WRAPPERS` 一样用 Map:这几张表的键全都来自命令里的
+ * 字,**普通对象会把 `Object.prototype` 上的同名成员一起算进来**（第 2 轮审查 F1 —— 那一条是
+ * 在 `WRAPPERS` 上炸的,但这几张表是同一类入口,所以一起钉住）。
  */
 const BRANCH = new Map<string, string>([["if", "fi"], ["case", "esac"]]);
 /** 循环头。`do … done` 之间是循环体,它跑不跑得到另算（见 `loopShape`）。 */
@@ -470,6 +386,30 @@ function loopReadable(scan: Scan, from: number, end: number): boolean {
 }
 
 /**
+ * `set -e`（含 `set -eu`、`set -o errexit`）**出现在第几段** —— 没出现就是 -1（见文件头 ⑦）。
+ *
+ * 开了它之后 `;`/换行 的意思跟 `&&` 一样,所以这个下标往后的每一条都要先证明得出「前一条
+ * 成功了」才算跑得到 —— 而那是退出码,这一层答不出来。
+ *
+ * 这一道**只往「不拦」那一侧偏**,所以认得宽:不解析 `set` 的语义,只问「这一段里有没有一个
+ * 没被引号括起来的 `set`、它后面跟着一个带 e 的短开关或者 `-o errexit`」。认宽了（`rg set -e
+ * foo` 这种把 `set` 当参数的也算上）只会让后面几条从「证明得出会跑」变成「答不出来」;而漏了
+ * 一种写法 = 退回今天的行为。分支/循环体里的那个也照算（那几区本来整区不扫,`i` 已经挪过
+ * 它们,于是闸从区尾那一段起生效）。
+ */
+function errexitAt(segs: Segment[]): number {
+  for (let i = 0; i < segs.length; i += 1) {
+    const words = segs[i]!.tokens.filter((t) => !t.quoted).map((t) => t.text);
+    const from = words.indexOf("set");
+    if (from < 0) continue;
+    const rest = words.slice(from + 1);
+    const on = rest.some((w, k) => /^-[a-z]*e[a-z]*$/.test(w) || (w === "-o" && rest[k + 1] === "errexit"));
+    if (on) return i;
+  }
+  return -1;
+}
+
+/**
  * 扫出**证明得出会跑**的那几条简单命令，对它们问跟随型;顺带认恒真循环（见文件头 ③④）。
  *
  * 一条简单命令「证明得出会跑」要同时满足三件:
@@ -498,6 +438,8 @@ function provableBlocker(scan: Scan): string | null {
   const bodies: number[] = [];
   /** `break`/`continue` 压到哪一段为止。-1 = 没在压（见 `JUMPS`）。 */
   let suppressed = -1;
+  /** `set -e` 从第几段起生效（见 `errexitAt`）。-1 = 这条命令里没开。 */
+  const errexit = errexitAt(segs);
   // 「这一条证明得出会跑吗」。`&&`/`||` 把它按掉，下一个 `;`/换行 把它恢复到 `base()`。
   let reach = true;
   // 这条管道里扫到的跟随型。**等管道收尾才算数**:收尾符号是 `&` 的话它整条放后台，
@@ -605,7 +547,11 @@ function provableBlocker(scan: Scan): string | null {
       case ")": case "}": if (frames.length > 1) frames.pop(); reach = base(); break;
       default: {
         if (pipeline && frames.length === 1) return pipeline;
-        reach = base();
+        // **`set -e` 之后,`;` 的意思跟 `&&` 一样**（见文件头 ⑦）:前一条退出码非零时 shell
+        // 当场就走了,后面那几条一个都跑不到 —— `set -e; false; tail -F /dev/null` 实测退出 1,
+        // 那个 tail 从没启动过。`set` 自己那一段不受这道闸管:它是个一定成功的内建,拿它当
+        // 「前一条可能失败」会把 `set -e; tail -F x` 也放过去（那个 tail 确实会跑）。
+        reach = errexit >= 0 && i >= errexit && cmd?.name !== "set" ? false : base();
       }
     }
   }

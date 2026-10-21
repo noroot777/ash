@@ -11,18 +11,33 @@
 // DONE 退出 0）。**同一条 argv 里的别的参数可以让它根本没开始跟随**,而那恰恰是写在输入里
 // 的东西,不是「二进制可能没装」那种无穷外部假设。
 //
-// 所以这边的判据是两道，缺一不可：
+// 所以这边的判据是三道，缺一不可：
 //
-//  ① **这条 argv 全是我认得的东西**（`understood`）。认得的开关逐个列在下面每个工具的
-//     `opts` 里,带值的那些连**值长什么样**一起列（`-n` 要数字）。出现认不出来的开关、或者
-//     值不对形状 ⇒ 这条命令会不会收工**答不出来** ⇒ 不拦。少列一个开关 = 退回今天的行为;
+//  ① **这条 argv 全是我认得的东西**（`operandsIfUnderstood`）。认得的开关逐个列在下面每个
+//     工具的 `opts` 里,带值的那些连**值长什么样**一起列（`-n` 要数字）。出现认不出来的开关、
+//     或者值不对形状 ⇒ 这条命令会不会收工**答不出来** ⇒ 不拦。少列一个开关 = 退回今天的行为;
 //     多认一个 = 一件做得成的事做不成了（见 command-never-exits.ts 文件头那段不对称）。
 //  ② 跟随开关确实出现了（`follows`）。
+//  ③ **它盯的那个东西写在 argv 里**（同在 `follows`,见下面那一节）。
 //
 // 故意**不列**进 `opts` 的那几类开关，列进去就等于把一条会自己结束的命令说成不会：
 //  · 自己带死线的（`inotifywait -t 60`、`docker logs --until=…`）—— 到点就退
 //  · 打一行就退的（`--help`、`--version`）
 //  · 值这一层证明不出来的（任何需要「那个东西存在」才成立的参数）
+//  · **给这条命令开了一条出口的**（`tail --pid=`:那个进程一死它就退;`watch -e/-g`:出错/有
+//    变化就退;`inotifywait -d`:转后台,前台这一个当场退）—— 白名单只确认「我认识这个开关」
+//    是不够的,认得它、还得知道它不会给这条命令开一条出口（第 1 轮审查 F1 同类）
+//
+// ── ③ 「盯的是谁」也得写在 argv 里 ───────────────────────────────────────────────
+//
+// 第 1 轮审查 F1 实测：`printf 'DONE\n' | tail -f` 几毫秒就打完 DONE 退出 0,却被
+// 硬拦。`tail -f` **不带文件操作数**时盯的是标准输入,它会不会一直盯着取决于管道那头是什么:
+// 读到 EOF 就退（BSD tail 干脆把 `-f` 忽略掉）,而换成 `/dev/null` 或终端又能一直挂着。
+// 「那头是什么」不写在命令文本里 —— **这一层答不出来,所以统一降级**,不是给管道补一个特例。
+//
+// 于是每个工具都得说清**它盯的那个东西有没有写在 argv 里**（`follows` 的第二个参数就是真正
+// 的操作数）：tail 要文件、inotifywait/fswatch 要路径、`… logs -f` 要容器名;`journalctl -f`
+// 盯的是日志本身,不要操作数。少要一个 ⇒ 一条会自己结束的命令被 409。
 import type { Token } from "./command-lex.ts";
 
 /** 一个开关的形状 + 它的值要长什么样（`value` 不填 = 这个开关不吃值）。 */
@@ -36,14 +51,15 @@ const SECONDS = /^\d+(?:\.\d+)?$/;
 const WORD = /^[^\0]+$/;
 
 type Follower = {
-  /** 这些开关一出现就是「盯着不走」。 */
-  follows: (argv: Token[]) => boolean;
+  /**
+   * 这条 argv **证明得出它会盯着不走**吗 —— 开关要对（见文件头 ①②），而且**要盯的那个东西
+   * 写在 argv 里**（`operands`，见文件头 ③）。
+   */
+  follows: (argv: Token[], operands: string[]) => boolean;
   /** 它**认得的**全部开关（见文件头 ①）。 */
   opts: readonly Opt[];
   /** 判定它的那个写法，给拒绝文案用。 */
   what: string;
-  /** 操作数（非开关的词）这一层还有话要说吗。默认没有。 */
-  operandsOk?: (operands: string[]) => boolean;
 };
 
 /**
@@ -65,9 +81,6 @@ function hasFlag(argv: Token[], short: RegExp, long: string): boolean {
   return false;
 }
 
-/** argv 里第一个不是开关的词（`watch` 要有活干、`docker logs` 的子命令）。 */
-const operandsOf = (argv: Token[]): string[] => argv.filter((t) => !t.text.startsWith("-")).map((t) => t.text);
-
 /**
  * 跟随型：这些命令的语义就是「盯着不走」，放在管道里也一样 —— 它不退出，整条管道就不退出
  * （`tail -f x | grep -m1 y` 也救不了：日志安静下来 `tail` 收不到 SIGPIPE，管道照样挂着）。
@@ -77,44 +90,51 @@ const operandsOf = (argv: Token[]): string[] => argv.filter((t) => !t.text.start
 const FOLLOWERS = new Map<string, Follower>([
   ["tail", {
     what: "tail -f/-F",
-    follows: (a) => hasFlag(a, /^-[^-]*[fF]/, "--follow"),
+    // **要盯的文件得写在 argv 里**（见文件头 ③）:不带操作数时它盯的是标准输入,那头是什么
+    // 这一层答不出来 —— `printf 'DONE\n' | tail -f` 几毫秒就打完 DONE 退出 0（实测）。
+    follows: (a, operands) => operands.length > 0 && hasFlag(a, /^-[^-]*[fF]/, "--follow"),
+    // `--pid=` **不在列**:那个进程一死它就退（见文件头 ② 最后一类）。
     opts: [
-      { re: /^-[fFqvr]+$/ },                                  // 可并写的无值开关
+      // 可并写的无值开关。`-r`（倒序）**不在列**:BSD 的 usage 写着 `[-F | -f | -r]` 三者
+      // 择一,`tail -rf x` 当场打用法就退（实测退出 0 并打出 DONE）,GNU 根本没有这个开关。
+      { re: /^-[fFqv]+$/ },
       { re: /^-[nc][+-]?\d+[bkKmMgG]?$/ },                    // `-n100`
       { re: /^-[nc]$/, value: COUNT },                        // `-n 100`
       { re: /^-s$/, value: SECONDS },
       { re: /^--follow(?:=(?:name|descriptor))?$/ },
       { re: /^--(?:lines|bytes)=[+-]?\d+[bkKmMgG]?$/ },
       { re: /^--(?:retry|quiet|silent|verbose|zero-terminated)$/ },
-      { re: /^--pid=\d+$/ },
       { re: /^--sleep-interval=\d+(?:\.\d+)?$/ },
       { re: /^--max-unchanged-stats=\d+$/ },
     ],
   }],
   ["watch", {
     what: "watch",
-    // 没有活干的 `watch` 自己打一句用法就退 —— 那不是跟随。
-    follows: (a) => operandsOf(a).length > 0,
+    // 没有活干的 `watch` 自己打一句用法就退 —— 那不是跟随（见文件头 ③）。
+    follows: (_a, operands) => operands.length > 0,
+    // `-e/--errexit`（出错就退）和 `-g/--chgexit`（有变化就退）**不在列**:它们正是给这条
+    // 命令开出口的那种开关（见文件头 ② 最后一类）。
     opts: [
-      { re: /^-[dtbepxw]+$/ },
+      { re: /^-[dtbpxw]+$/ },
       { re: /^-n$/, value: SECONDS },
       { re: /^-n\d+(?:\.\d+)?$/ },
       { re: /^--interval=\d+(?:\.\d+)?$/ },
-      { re: /^--(?:differences|no-title|beep|errexit|exec|precise|no-wrap|color)$/ },
+      { re: /^--(?:differences|no-title|beep|exec|precise|no-wrap|color)$/ },
       { re: /^-c$/ },
-      { re: /^-g$/ },
-      { re: /^--chgexit$/ },
     ],
   }],
   ["inotifywait", {
     what: "inotifywait -m",
-    follows: (a) => hasFlag(a, /^-[^-]*m/, "--monitor"),
-    // `-t`/`--timeout` **故意不在列**:它到点就退（见文件头）。
+    // 要盯的路径得写在 argv 里:`inotifywait -m` 没有路径时只打一句 No files specified
+    // 就退（见文件头 ③）。
+    follows: (a, operands) => operands.length > 0 && hasFlag(a, /^-[^-]*m/, "--monitor"),
+    // `-t`/`--timeout` **故意不在列**:它到点就退（见文件头 ②）。`-d`/`--daemon` 同理 ——
+    // 它把活转进后台,前台这一个当场就退。
     opts: [
-      { re: /^-[mrqd]+$/ },
+      { re: /^-[mrq]+$/ },
       { re: /^-e$/, value: WORD },
       { re: /^--event=/, },
-      { re: /^--(?:monitor|recursive|quiet|daemon|no-dereference)$/ },
+      { re: /^--(?:monitor|recursive|quiet|no-dereference)$/ },
       { re: /^--format=/ },
       { re: /^--timefmt=/ },
       { re: /^--(?:exclude|excludei|include|includei)=/ },
@@ -124,9 +144,10 @@ const FOLLOWERS = new Map<string, Follower>([
   ["journalctl", {
     what: "journalctl -f",
     follows: (a) => hasFlag(a, /^-[^-]*f/, "--follow"),
-    // `--until=` 不在列:它读到那个时刻就收工。
+    // `--until=` 不在列:它读到那个时刻就收工。`-e`（跳到末尾）和 `-r`（倒序）也不在列 ——
+    // 它们跟「一直跟随」是对着干的,证明不出来就不算（见文件头 ②）。
     opts: [
-      { re: /^-[fkeqra]+$/ },
+      { re: /^-[fkqa]+$/ },
       { re: /^-u$/, value: WORD },
       { re: /^--unit=/ },
       { re: /^-n$/, value: /^\d+$/ },
@@ -142,9 +163,12 @@ const FOLLOWERS = new Map<string, Follower>([
   }],
   ["kubectl", {
     what: "kubectl logs -f",
-    follows: (a) => operandsOf(a)[0] === "logs" && hasFlag(a, /^-[^-]*f/, "--follow"),
+    // 要盯的那个东西得写在 argv 里:`kubectl logs -f` 少了名字只会打一句用法就退（见文件头 ③）。
+    follows: (a, operands) => operands[0] === "logs" && operands.length > 1
+      && hasFlag(a, /^-[^-]*f/, "--follow"),
+    // `-p`/`--previous` 不在列:那是**已经结束的那个容器**的日志,跟都跟不住 —— 流一到头就退。
     opts: [
-      { re: /^-[fp]+$/ },
+      { re: /^-f$/ },
       { re: /^-n$/, value: WORD },
       { re: /^--namespace=/ },
       { re: /^-c$/, value: WORD },
@@ -153,12 +177,14 @@ const FOLLOWERS = new Map<string, Follower>([
       { re: /^--selector=/ },
       { re: /^--tail=-?\d+$/ },
       { re: /^--since=/ },
-      { re: /^--(?:follow|timestamps|all-containers|prefix|previous|ignore-errors)$/ },
+      { re: /^--(?:follow|timestamps|all-containers|prefix|ignore-errors)$/ },
     ],
   }],
   ["docker", {
     what: "docker logs -f",
-    follows: (a) => operandsOf(a)[0] === "logs" && hasFlag(a, /^-[^-]*f/, "--follow"),
+    // 要盯的那个东西得写在 argv 里:`docker logs -f` 少了名字只会打一句用法就退（见文件头 ③）。
+    follows: (a, operands) => operands[0] === "logs" && operands.length > 1
+      && hasFlag(a, /^-[^-]*f/, "--follow"),
     // `--until=` 不在列:到那个时刻就退。
     opts: [
       { re: /^-[ft]+$/ },
@@ -170,7 +196,9 @@ const FOLLOWERS = new Map<string, Follower>([
   }],
   ["podman", {
     what: "podman logs -f",
-    follows: (a) => operandsOf(a)[0] === "logs" && hasFlag(a, /^-[^-]*f/, "--follow"),
+    // 要盯的那个东西得写在 argv 里:`podman logs -f` 少了名字只会打一句用法就退（见文件头 ③）。
+    follows: (a, operands) => operands[0] === "logs" && operands.length > 1
+      && hasFlag(a, /^-[^-]*f/, "--follow"),
     opts: [
       { re: /^-[ft]+$/ },
       { re: /^-n$/, value: /^(?:all|\d+)$/ },
@@ -182,7 +210,8 @@ const FOLLOWERS = new Map<string, Follower>([
   // `fswatch` 默认就是盯着不走，`-1` 才是「等第一次事件就退」。
   ["fswatch", {
     what: "fswatch",
-    follows: (a) => !hasFlag(a, /^-[^-]*1/, "--one-event"),
+    // 要盯的路径得写在 argv 里:没有路径的 `fswatch` 打一句用法就退（见文件头 ③）。
+    follows: (a, operands) => operands.length > 0 && !hasFlag(a, /^-[^-]*1/, "--one-event"),
     opts: [
       { re: /^-[roxnut0v]+$/ },
       { re: /^-e$/, value: WORD },
@@ -201,33 +230,43 @@ const FOLLOWERS = new Map<string, Follower>([
 ]);
 
 /**
- * 这条 argv **全是认得出来的东西**吗（见文件头 ①）。
+ * 这条 argv **全是认得出来的东西**吗（见文件头 ①）—— 是就连它真正的**操作数**一起交出来，
+ * 不是就 `null`（「这条命令会不会收工答不出来」）。
  *
- * 操作数不管（文件名、容器名是什么这一层不问）;`--` 之后一律是操作数。带值的开关会把**下一
- * 个词**按它的值形状对一遍 —— 值不对形状的那种恰恰是「它在校验参数那一步就退了」。
+ * 操作数的内容这一层不问（文件名、容器名是什么都行）,但**哪几个词是操作数**得数对:带值的
+ * 开关会把下一个词按它的值形状对一遍（值不对形状的那种恰恰是「它在校验参数那一步就退了」）,
+ * 对上了就**连那个词一起吃掉** —— 不然 `kubectl logs -f -n ns` 里的命名空间会被数成「要盯的
+ * 那个 pod」,而真 kubectl 少了 pod 名字只会打一句用法就退（见文件头 ③）。`--` 之后一律是
+ * 操作数,引号里的词也是（`tail -F "my file"`）。
  */
-function understood(f: Follower, argv: Token[]): boolean {
+function operandsIfUnderstood(f: Follower, argv: Token[]): string[] | null {
+  const operands: string[] = [];
+  let done = false;                                   // 读到 `--` 了 ⇒ 后面全是操作数
   for (let i = 0; i < argv.length; i += 1) {
     const t = argv[i]!;
-    if (t.quoted || !t.text.startsWith("-")) continue;
-    if (t.text === "--") break;
+    if (!done && !t.quoted && t.text === "--") { done = true; continue; }
+    if (done || t.quoted || !t.text.startsWith("-")) { operands.push(t.text); continue; }
     const opt = f.opts.find((o) => o.re.test(t.text));
-    if (!opt) return false;
+    if (!opt) return null;
     if (!opt.value) continue;
     const v = argv[i + 1];
-    if (!v || !opt.value.test(v.text)) return false;
+    if (!v || !opt.value.test(v.text)) return null;
     i += 1;
   }
-  return f.operandsOk ? f.operandsOk(operandsOf(argv)) : true;
+  return operands;
 }
 
 /**
  * 这条简单命令**证明得出它会盯着不走**吗 —— 是就返回判定它的那个写法，否则 `null`。
  *
- * 两道都要过：argv 读得懂（`understood`），而且跟随开关确实出现（`follows`）。
+ * 三道都要过：这条 argv 全认得出来（`operandsIfUnderstood`），跟随开关确实出现，而且**要盯的
+ * 那个东西写在 argv 里**（后两道都在 `follows` 里，见文件头 ①②③）。任一道答不出来就是
+ * `null` —— 「读不懂」的确定答案是不拦（见 command-never-exits.ts 文件头那段不对称）。
  */
 export function followerOf(name: string, argv: Token[]): string | null {
   const f = FOLLOWERS.get(name);
   if (!f) return null;
-  return understood(f, argv) && f.follows(argv) ? f.what : null;
+  const operands = operandsIfUnderstood(f, argv);
+  if (!operands) return null;
+  return f.follows(argv, operands) ? f.what : null;
 }

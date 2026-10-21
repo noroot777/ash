@@ -284,9 +284,13 @@ setInterval(() => {}, 1000);
     }
     assert.deepEqual(errors, [], "判据不该走到兜底那个 catch —— 走到了就说明它自己炸了");
     const judge = readSource(join(HERE, "../../shared/src/command-never-exits.ts"));
-    for (const table of [
-      /const WRAPPERS = new Map</, /const BRANCH = new Map</, /const CLOSERS = new Map</,
-    ]) assert.match(judge, table, `按命令里的字查的表必须是 Map,不能是普通对象（原型成员会混进来）`);
+    // 包装命令那张表住在隔壁（`command-wrappers.ts`）,而它正是当年出事的那一张 —— 两份都锁。
+    const wrappers = readSource(join(HERE, "../../shared/src/command-wrappers.ts"));
+    const followers = readSource(join(HERE, "../../shared/src/command-followers.ts"));
+    for (const [src, table] of [
+      [wrappers, /const WRAPPERS = new Map</], [judge, /const BRANCH = new Map</],
+      [judge, /const CLOSERS = new Map</], [followers, /const FOLLOWERS = new Map</],
+    ] as const) assert.match(src, table, `按命令里的字查的表必须是 Map,不能是普通对象（原型成员会混进来）`);
     assert.match(judge, /catch \(err\)/, "导出的那个入口要有兜底:它的两个调用方都受不起一个异常");
   }
 
@@ -609,5 +613,45 @@ setTimeout(() => { clearInterval(keep); process.exit(0); }, 30000);
   if (started.ok) await until("进程被收掉", async () => !isPidAlive(started.ok ? started.monitor.pid! : 0));
   console.log("✓ 命中那一行排在摘要之外时，照旧出现在推给 agent 的那条消息里");
 }
-console.log("✓ 结束条件：一出现就收工 / 没有出路的命令一个字都不跑 / 判据只认明确的几种 / 匹配有上界 / 读不出来的不静默降级 / 命中那一行不被摘要吃掉 均受回归保护");
+// ── ⑦i 约定的字样赶在到期前最后一批到 ⇒ 结局不许写成「盯满了时长」（第 1 轮审查 N1）──────
+// 收尾所有权是单一的:到期先占到槽位,排干时才读到那一行 —— 那一笔命中只能合并等它,于是库里
+// 落的是 expired「盯满了约定的时长」,而用户会把这句读成「约定的字样一直没出现」（审查实测:
+// 字样比期限早 209ms,正文里 READY 和结束通知都在,状态仍是 expired）。所有权照旧只有一个,
+// 改的是**持有者落终态之前把排干阶段那条证据折叠进来**（见 monitor-finish.ts 的 `foldHit`）。
+{
+  const taskId = await makeTask();
+  const feed = join(root, "late-ready.mjs");
+  // 期限有 1 秒地板（monitors.ts 的 `EXPIRY_FLOOR_MS`）,所以这一行**贴着期限**写出来:它落进
+  // 缓冲之后那 300ms 的冲刷窗口来不及先把它推出去,到期先占到收尾槽位 —— 正是审查的那个现场。
+  writeFileSync(feed, `setTimeout(() => console.log("READY"), 960);\nsetInterval(() => {}, 1000);\n`);
+  const started = await startMonitor({
+    taskId,
+    command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,
+    description: "字样贴着期限到",
+    stopWhen: "^READY$",
+    timeoutMs: 1000,
+  });
+  assert.equal(started.ok, true, started.ok ? "" : started.error);
+  const monitorId = started.ok ? started.monitor.id : "";
+  await until("落了终态", async () => (await getMonitor(monitorId))?.status !== "running");
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(row.status, "matched", `字样到了就不许写成到期：${row.status} / ${row.endedReason}`);
+  assert.match(row.endedReason ?? "", /等到了约定的那一行/, "结束原因要说清是等到了");
+  assert.match(row.endedReason ?? "", /READY/, "把命中的那一行带上");
+  assert.equal(row.endedBy, "system", "不是谁主动停的");
+  const texts = (await pendingOf(taskId)).map((m) => m.text).join("\n");
+  assert.match(texts, /READY/, "命中那一行照常送到");
+  if (started.ok) await until("进程被收掉", async () => !isPidAlive(started.ok ? started.monitor.pid! : 0));
+  // ↑ 这几条断言在「冲刷先赢」那种排序下同样成立（那时命中自己就是收尾的持有者）—— 所以
+  //   折叠这一道另加结构锁:它是「所有权单一」之下唯一的修法,一改就该当场红。
+  const src = readSource(join(HERE, "../src/monitor-finish.ts"));
+  assert.match(src, /const foldHit = /, "排干阶段的结束证据必须在落终态前折叠进来");
+  assert.match(
+    src, /!opts\.abandon && opts\.endedBy !== "actor"/,
+    "用户点的停不许被折叠改写（第 21 轮审查 F2:停止赢了就是赢了）",
+  );
+  assert.match(src, /endedBy,$/m, "`endedBy` 要跟着折叠走，不然 matched 会带着「推满上限」的来源");
+  console.log("✓ 字样贴着期限到：结局写成命中而不是到期，用户点的停不受折叠影响");
+}
+console.log("✓ 结束条件：一出现就收工 / 没有出路的命令一个字都不跑 / 判据只认明确的几种 / 匹配有上界 / 读不出来的不静默降级 / 命中那一行不被摘要吃掉 / 字样贴着期限到也写成命中 均受回归保护");
 await teardown();

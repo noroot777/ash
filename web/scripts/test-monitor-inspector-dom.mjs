@@ -10,86 +10,16 @@
 //    写 `min-width: 0` 就会被内容顶宽，把「停掉」按钮挤出面板。**不能靠点一下按钮验证**
 //    ——Playwright 点击会自动把元素滚进视野，挤出去了照样点得到。只认几何：按钮的盒子
 //    必须落在面板里，面板不许出现横向滚动。
+//
+// **台子在隔壁**（`monitor-dom-harness.mjs`,全局约定:单文件不超过 700 行）:真 Vite、真
+// Chromium、`page.route` 兜底那几条 API 都在那边，「它什么时候算完」那一格的用例在
+// `test-monitor-composer-dom.mjs`。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { monitor, openHarness } from "./monitor-dom-harness.mjs";
 
-const LONG_CWD = "/Users/fjh/code/harness/.worktrees/S3Bp7iPC8wOe/server/scripts/fixtures/deeply/nested/working/directory";
-const LONG_COMMAND = "tail -F /var/log/very-long-path/build-output-with-an-extremely-long-name.log | grep --line-buffered -E 'ERROR|FAILED|Traceback'";
-const monitor = (id, taskId, over = {}) => ({
-  id,
-  taskId,
-  command: LONG_COMMAND,
-  description: `盯 ${taskId}`,
-  cwd: LONG_CWD,
-  status: "running",
-  // 出身：缺了它卡片按只读投影渲染，后面找「看它的输出」会直接超时。
-  kind: "ash",
-  nativeId: null,
-  lifetime: "bounded",
-  pid: 4242,
-  events: 3,
-  exitCode: null,
-  startedAt: "2026-10-09T02:00:00.000Z",
-  // 起点作数（服务端的可信性那一列）。缺了它卡片只会说「挂上的时刻不确定」。
-  startedAtExact: true,
-  expiresAt: "2026-10-09T04:00:00.000Z",
-  endedAt: null,
-  endedReason: null,
-  ...over,
-});
-
-const server = await createServer({
-  root: fileURLToPath(new URL("..", import.meta.url)),
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0 },
-});
-let browser;
+const { open, idsOf, waitIds, failures, close } = await openHarness();
 const pending = [];
 try {
-  await server.listen();
-  browser = await chromium.launch(await chromeLaunchOptions());
-  const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
-  const failures = [];
-
-  const open = async (handler, query = "") => {
-    const page = await browser.newPage();
-    page.setDefaultTimeout(5000);
-    page.on("pageerror", (error) => failures.push(error.message));
-    await page.addInitScript(() => {
-      window.localStorage.clear();
-      window.__sources = [];
-      window.EventSource = class {
-        constructor(url) { this.url = url; this.closed = false; window.__sources.push(this); setTimeout(() => { if (!this.closed) this.onopen?.({}); }, 0); }
-        close() { this.closed = true; }
-      };
-    });
-    await page.route("**/api/**", async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      if (handler && await handler(route, path)) return;
-      const list = /^\/api\/tasks\/([^/]+)\/monitors$/.exec(path);
-      if (list) return route.fulfill({ json: [monitor(`m-${list[1]}`, list[1])] });
-      // 恢复状态是单独一条端点（见 server/src/monitor-routes.ts：不动列表的响应形状，
-      // 否则旧 dist 配新 server 会整格崩）。这里一律答「没有待恢复的」。
-      if (/^\/api\/tasks\/[^/]+\/monitors\/recovery$/.test(path)) {
-        return route.fulfill({ json: { pending: false, reasons: [], attempts: 0, exhausted: false } });
-      }
-      const log = /^\/api\/monitors\/([^/]+)\/log$/.exec(path);
-      if (log) return route.fulfill({ json: { lines: [`${"x".repeat(400)}`, "第二行"], truncated: false } });
-      failures.push(`unexpected API request: ${path}`);
-      await route.fulfill({ status: 500, json: { error: "unexpected request" } });
-    });
-    await page.goto(`${origin}/scripts/fixtures/monitor-inspector.html${query}`);
-    return page;
-  };
-  const idsOf = (page) => page.getByTestId("ids").textContent();
-  const waitIds = (page, value) => page.waitForFunction(
-    (want) => document.querySelector('[data-testid="ids"]')?.textContent === want,
-    value,
-  );
-
   // ── 「用过才浮现」落到图标条上：没挂过不上条、挂过带底色 ────────────────────
   // 底色是 CSS 的 `:has(.inspector-rail-icon--used)` 给的，类名两边一错位就悄悄没了，
   // 而「少一层淡底色」这种事看快照、读代码都发现不了，只能量计算样式。
@@ -591,103 +521,9 @@ try {
       "**同一段里不许同时说「日志没人读」和「日志有人管」**（第 22 轮审查 N1 页面实测）");
   }
 
-  // ── 「它什么时候算完」这一格:入口一直在、该逼选时才逼选、圆圈不占整行 ──────────
-  // 第 1 轮审查 F3/N1 三件事一起量（都只有真浏览器答得出来）：
-  //  · 判据认不出来的命令照样配得上结束条件（上一版那个输入框只在判据命中时才存在，于是
-  //    `tail -n 0 -F /dev/null` 这种真跟随器连框都没有）；
-  //  · 判据命中时才多出二选一，而且不选不许提交；
-  //  · 那两个单选圆圈**不许各占一整行**——`.monitor-composer label/input` 是同级后代选择器，
-  //    只给新类名压不住它（实测 radio 宽 231.5px = label 整行宽），所以这里只认几何。
-  {
-    const page = await open();
-    await waitIds(page, "m-task-a");
-    await page.getByRole("button", { name: "手动起一个哨兵" }).click();
-    const form = page.locator(".monitor-composer");
-    const cmd = form.locator("textarea");
-    const pattern = form.locator(".monitor-composer__ending-pattern");
-    const submit = page.getByRole("button", { name: "起一个哨兵", exact: true });
-
-    // ① 会自己结束的命令:框在，而且不拦着提交。
-    await cmd.fill(String.raw`printf 'hi\n'`);
-    assert.equal(await pattern.count(), 1, "普通命令也要给得出结束条件的入口");
-    assert.doesNotMatch(await form.innerText(), /永远不会结束/, "它会自己结束，不许说成不会");
-    assert.equal(await submit.isDisabled(), false, "普通命令不该被这一格拦住");
-
-    // ② 审查实测的那条**误判**:命中的是 printf 的参数，不是一个真的跟随器。
-    await cmd.fill(String.raw`printf '%s\n' 'tail -F build.log'`);
-    assert.doesNotMatch(await form.innerText(), /永远不会结束/, "引号里的字不是执行节点");
-    assert.equal(await submit.isDisabled(), false, "这条命令打一行就退，不许拦");
-
-    // ③ 审查实测的那条**漏判**:开关没紧跟在命令词后面，它仍是跟随器 —— 要逼选。
-    await cmd.fill("tail -n 0 -F /dev/null");
-    assert.match(await form.innerText(), /永远不会结束/, "这是个真跟随器，得说出来");
-    assert.equal(await pattern.count(), 1, "逼选的时候那个框当然也在");
-    assert.equal(await submit.isDisabled(), true, "二选一没选就不许提交");
-    const [radio, label] = await Promise.all([
-      form.locator(".monitor-composer__ending-options input").first().boundingBox(),
-      form.locator(".monitor-composer__ending-options label").first().boundingBox(),
-    ]);
-    assert.ok(radio.width < 40, `单选圆圈不许被拉成整行，实际 ${radio.width}px`);
-    assert.ok(radio.width < label.width / 2, `圆圈和说明该在同一行，实际圆圈 ${radio.width} / 行 ${label.width}`);
-
-    // ④ 填了字样就算选过了（服务端那一边同一份判据）。
-    await pattern.fill("BUILD OK|FAILED");
-    assert.equal(await submit.isDisabled(), false, "填了字样就等于选了「出现就收工」");
-
-    // ⑤ 条件本身用不了的，当场说 —— 不让人拿一句 400 当反馈。
-    await pattern.fill("^(OK");
-    assert.match(await form.innerText(), /不是正则/, "按习惯写正则的人要当场看到这句");
-    assert.equal(await submit.isDisabled(), true, "用不了的条件不许提交");
-
-    // ⑥ **整段都是空白的条件也用不了**（第 3 轮审查 N1）:哨兵读到空行直接快进,它永远不会
-    //    命中 —— 当场说,别让人以为自己已经设过了。
-    await pattern.fill("^ $");
-    assert.match(await form.innerText(), /空白/, "永远不会命中的条件要当场说出来");
-    assert.equal(await submit.isDisabled(), true, "永远不会命中的条件不许提交");
-    await pattern.fill("");
-
-    // ⑦ 第 3 轮审查 F1 实测的那四条**误判**:真 shell 里全部退出 0,而这张表单把按钮禁掉了
-    //    （判据层的四道口子,见 shared/src/command-never-exits.ts 文件头 ⑤）。页面这一侧量的
-    //    是同一件事落到人手上的样子:不许说「永远不会结束」,按钮不许禁。
-    for (const command of [
-      String.raw`command -v tail -F /dev/null; printf 'DONE\n'`,
-      String.raw`printf "literal \"; tail -F /dev/null; #\n"`,
-      "while true; do :; done > /definitely-missing-ash-review-file/out; printf 'DONE'",
-      "tail -F /dev/null < /definitely-missing-ash-review-file; printf 'DONE'",
-    ]) {
-      await cmd.fill(command);
-      assert.doesNotMatch(await form.innerText(), /永远不会结束/, `这条命令会自己结束：${command}`);
-      assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
-    }
-    // ⑧ 第 2 轮审查 F1:**判据一抛,这张表单整棵树就卸载** —— 审查实测填到 `./constructor -v`
-    //    那一下整页变成空白。命令词正好撞上 `Object.prototype` 上的名字是一类输入,所以这里
-    //    逐个填一遍:页面必须还在、按钮必须能点。
-    for (const command of ["./constructor", "./constructor -v", "./toString -v", "/x/valueOf -u FOO tail -F x"]) {
-      await cmd.fill(command);
-      assert.equal(await form.count(), 1, `判据抛异常会把这张表单整棵树卸载：${command}`);
-      assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
-    }
-    // ⑨ 第 2 轮审查 F2:整个形状连不起来的那几条,页面这一侧也不许说「永远不会结束」。
-    for (const command of [
-      "tail -F /dev/null 1>&- 2>&1; printf 'DONE'",
-      "nice -n not-a-number tail -F /dev/null; printf 'DONE'",
-      "tail -F -n not-a-number /dev/null; printf 'DONE'",
-    ]) {
-      await cmd.fill(command);
-      assert.doesNotMatch(await form.innerText(), /永远不会结束/, `这条命令会自己结束：${command}`);
-      assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
-    }
-    // ⑦b 真阳对照:事故的起因命令带着 `2>/dev/null`,它照旧要逼选（不然上面那四条等于把闸拆了）。
-    await cmd.fill("tail -F build.log 2>/dev/null | grep --line-buffered ERROR");
-    assert.match(await form.innerText(), /永远不会结束/, "起因命令照旧要说出来");
-    assert.equal(await submit.isDisabled(), true, "起因命令照旧要逼选");
-    await page.close();
-  }
-
   assert.deepEqual(failures, []);
-  console.log("monitor inspector dom: the end-condition field is always offered (forced choice only for followers, radios on one line), stop button stays inside the 340px panel, stale task/form results never land, reconnects re-read the snapshot, the expanded wait card describes the real supervision state (woken either way; unclaimed ones may not be stoppable)");
+  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task/form results never land, reconnects re-read the snapshot, the expanded wait card describes the real supervision state (woken either way; unclaimed ones may not be stoppable)");
 } finally {
   pending.forEach((release) => release());
-  await browser?.close();
-  await server.close();
+  await close();
 }

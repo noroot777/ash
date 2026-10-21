@@ -13,7 +13,7 @@ import type { MonitorStatus } from "@ash/shared/monitor";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
-import { drainOwed, linesBody, renderLines } from "./monitor-consume.js";
+import { drainOwed, linesBody, matchedReason, renderLines } from "./monitor-consume.js";
 import { deliverResultHandoff } from "./monitor-events.js";
 import { ensureSupervised } from "./monitor-handover.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
@@ -181,6 +181,29 @@ async function finishHeld(
       rt.readTo = null;
     }
   }
+  /**
+   * **排干阶段读到的结束证据,落终态之前折叠进来**（第 1 轮审查 N1）。
+   *
+   * 所有权仍然只有一个:命中那一笔占不到槽位、只能合并等着（见 `finishing`）—— 改的是**这个
+   * 持有者写下的那个结局**。不折叠的话,到期先占到槽位、它排干时才读到约定的字样,库里落的是
+   * expired「盯满了约定的时长」,而那句话会被读成「约定的字样一直没出现」（审查实测:字样比
+   * 期限早 209ms,正文里 READY 和结束通知都在,状态仍是 expired）。
+   *
+   * **用户点的停不在此列**:`abandon` 和 `endedBy="actor"` 那几笔说的是「我停的」,而且它们
+   * 明确放弃了还没送出去的结果 —— 把它改写成「等到了约定的那一行」等于把第 21 轮审查 F2 钉的
+   * 「停止赢了就是赢了」又拆掉一次。到期/自退/推满上限这几种是兜底原因,让位给**约定好的那条
+   * 出路**;`endedBy` 也跟着回到 `system`(不是「推满上限才停的」)。
+   *
+   * **离线补读那一路不在这儿**(`monitor-offline-finish.ts`:它手上没有运行时,也没有排干)。
+   * 那条路写下的结局本身就是「进程已经不在了」—— 它不否认命中,而这一道要挡的恰恰是**否认
+   * 证据的那种措辞**;而且进程为什么没了这件事只有那句话答得出来,折叠掉等于把它抹了。
+   */
+  const foldHit = !opts.abandon && opts.endedBy !== "actor" ? rt?.hit ?? null : null;
+  if (foldHit !== null) {
+    status = "matched";
+    reason = matchedReason(foldHit);
+  }
+  const endedBy = foldHit !== null ? "system" : opts.endedBy ?? "system";
   if (dbClient.closed) { reportOwedDropped(monitorId, owed, "库已经关了"); return; }
   // 运行时已经撤了,而终态还没落盘 —— 下面每一步都可能抛(回收层、条件更新、通知)。
   // **出这个函数时如果库里还是 running,监督必须还在**(第 23 轮审查 F1),所以从这里起包进
@@ -242,7 +265,7 @@ async function finishHeld(
     const result = await db
       .update(monitors)
       .set({
-        status, endedAt: now(), endedReason: reason, exitCode, endedBy: opts.endedBy ?? "system",
+        status, endedAt: now(), endedReason: reason, exitCode, endedBy,
         ...(endNotice ? { resultHandoffAt: now(), resultHandoffText: endNotice } : {}),
       })
       .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running")));

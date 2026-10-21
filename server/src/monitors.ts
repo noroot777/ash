@@ -121,6 +121,16 @@ export type Runtime = {
    */
   inflight: number;
   flush: NodeJS.Timeout | null;
+  /**
+   * **排干阶段读到的那条命中行**（没读到是 null，见 monitor-consume.ts 的 `flushLocked`）。
+   *
+   * 收尾所有权是单一的（见 monitor-finish.ts 的 `finishing`）:到期先占到槽位、它排干时才
+   * 命中约定字样的话,那一笔命中只能合并等它 —— 结局照旧写成 expired「盯满了约定的时长」,
+   * 而用户会把这句读成「约定的字样一直没出现」（第 1 轮审查 N1 实测:字样比期限早 209ms）。
+   * 所以证据记在这里,由**持有者落终态前**统一折叠（见 `finishHeld` 的 `foldHit`）—— 所有权
+   * 仍然只有一个,改的只是它写下的那个结局。
+   */
+  hit: string | null;
   /** 收尾只做一次：过期定时器、进程退出、用户点停，三条路可能同时到。 */
   closing: boolean;
   /**
@@ -218,7 +228,7 @@ export function attach(row: Row, onExit?: (cb: (code: number | null) => void) =>
   // 丢掉（实测：命令吐 3 行，只收到 2 行）。
   const rt: Runtime = {
     tail: null as unknown as Tailer, timers: [], buffer: [], readTo: null, inflight: 0, flush: null,
-    closing: false, liveness: null, exitWatched: onExit !== undefined,
+    hit: null, closing: false, liveness: null, exitWatched: onExit !== undefined,
   };
   // 收尾中也照收：`finish` 会先 drain 一次再推，进程死前最后几行不该因为「已经在停了」
   // 就丢掉。收尾时不另起定时器——那一批由 finish 自己同步推出去。
