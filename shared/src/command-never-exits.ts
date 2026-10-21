@@ -41,6 +41,22 @@
 //    **组**分层（`frames`）,一组被短路掉就整组不作数;循环体里有 `break`/`continue` ⇒
 //    那一圈后面的命令证明不出会跑 ⇒ 整区不扫。
 //
+// ⑤ **每一层「我不知道」都要往上冒成「不拦」,不许由下一层替它断定「它跑了」**（第 3 轮
+//    审查 F1）。④把作用域补齐了,可三层各自还留着一处「答不出来却照旧往下说」—— 于是四种
+//    会自己结束的命令被 409（审查实测,全部 `/bin/sh` 退出 0 并打出结果）:
+//      · `command -v tail -F /dev/null; printf 'DONE\n'` —— 包装命令的开关一律跳过,于是
+//        一次**查路径**被读成了一次执行（`command -v` 打一行路径就退）
+//      · `printf "literal \"; tail -F /dev/null; #\n"` —— 词法层把双引号里的转义引号当成
+//        收口,**字符串正文**被读成了结构和执行节点
+//      · `while true; do :; done > 不存在的目录/out` —— 重定向只认了 `<`,而输出重定向打不
+//        开时这个循环同样一圈都不跑
+//      · `tail -F /dev/null < 不存在的文件` —— 重定向这一道只盖了循环和分组,简单命令自己
+//        身上那个没人问
+//    补的都不是「再排除一种写法」:包装命令改成**只认已知透明的开关**（`WRAPPERS`）、引号
+//    收口改成**认转义**（command-lex.ts 的 `quoteEnd`）、重定向改成**证明得出打得开**
+//    （`startProvable`,循环/分组/简单命令三个作用域共用一份）。方向是同一个:**支持得了的
+//    词法和执行模式才配产出一个硬拦的结论**,任一层答不出来就往上冒成「不拦」。
+//
 // ── 误判的代价不对称,所以只认**明确**的那几种 ───────────────────────────────────
 //
 // 漏判（把一条永不退出的命令放过去）= 退回今天的行为,不比现状坏;误判（把一条会自己结束
@@ -53,10 +69,46 @@
 
 // **词法层在隔壁**(command-lex.ts,单文件 700 行的约定):分词、分段、引号骨架、抹注释。
 // 这个文件只收它的结果 —— 「每个字符在不在引号外」这件事由那边负责记下来(见 `Token.bare`)。
-import { blankComments, blankQuoted, segments, type Segment, type Token } from "./command-lex.ts";
+import {
+  blankComments, blankQuoted, redirectsOf, segments,
+  type Redirect, type Segment, type Token,
+} from "./command-lex.ts";
 
-/** 这些词只是**包一层**，真正跑的是后面那个命令。跳过它们和它们自己的开关。 */
-const WRAPPERS = new Set(["env", "nohup", "nice", "ionice", "stdbuf", "unbuffer", "sudo", "command", "exec", "time"]);
+/**
+ * 一个**已知透明**的开关:它不改变「后面那个词就是真正要跑的命令」这件事。`value` = 它还
+ * 要再吃一个词当参数（`-u NAME`、`-n 5`）。
+ */
+type Transparent = { re: RegExp; value?: boolean };
+
+/**
+ * 这些词只是**包一层**，真正跑的是后面那个命令 —— 跳过它和它身上**认得出来**的那几个开关。
+ *
+ * **只认白名单,认不出来的开关当场放弃这一段**（第 3 轮审查 F1）。上一版把所有 `-` 开头的词
+ * 一律当成「包装命令自己的开关」跳过去,于是 `command -v tail -F /dev/null; printf 'DONE\n'`
+ * 被硬拦:`command -v` 是**查一个命令在哪儿**,它打一行路径就退,那个 `tail` 一次都没跑
+ * （实测 `/bin/sh` 退出 0 并打出 `/usr/bin/tail` 和 DONE,而创建闸 409）。
+ *
+ * 同一类的开关不止这一个（`sudo -l`、`ionice -p PID`、各家的 `--help`/`--version`）,所以
+ * 补的不是「再排除一个 `-v`」,而是把方向倒过来:**认得出来的才跳,认不出来的就说读不懂**。
+ * 漏一个 ⇒ 这一段按未知放行（退回今天的行为）;多认一个 ⇒ 一条会自己结束的命令被 409
+ * （见文件头那段不对称）。所以这张表只收**确定仍然会去执行后面那个命令**的开关。
+ */
+const WRAPPERS: Record<string, readonly Transparent[]> = {
+  env: [{ re: /^-$/ }, { re: /^-i$/ }, { re: /^-u$/, value: true }, { re: /^--unset=./ },
+    { re: /^-C$/, value: true }, { re: /^--chdir=./ }],
+  nohup: [],
+  nice: [{ re: /^-n$/, value: true }, { re: /^-\d+$/ }, { re: /^--adjustment=\d/ }],
+  ionice: [{ re: /^-c\d*$/ }, { re: /^-n\d*$/ }, { re: /^-t$/ }, { re: /^--ignore$/ },
+    { re: /^--class(?:data)?=/ }],
+  stdbuf: [{ re: /^-[ioe].+$/ }, { re: /^-[ioe]$/, value: true },
+    { re: /^--(?:input|output|error)=./ }],
+  unbuffer: [{ re: /^-p$/ }],
+  sudo: [{ re: /^-n$/ }, { re: /^-H$/ }, { re: /^-E$/ }, { re: /^-S$/ },
+    { re: /^-u$/, value: true }, { re: /^-g$/, value: true }],
+  command: [{ re: /^-p$/ }],
+  exec: [{ re: /^-c$/ }, { re: /^-l$/ }, { re: /^-a$/, value: true }],
+  time: [{ re: /^-p$/ }],
+};
 /** 这些词带着死线:整条简单命令一定会结束，里面是什么都不看。 */
 const TIMED = new Set(["timeout", "gtimeout"]);
 
@@ -76,9 +128,18 @@ function commandOf(tokens: Token[], from = 0): { name: string; argv: Token[]; bo
     if (t.quoted) return null;
     const name = t.text.split("/").pop() ?? t.text;
     if (TIMED.has(name)) return { name, argv: tokens.slice(i + 1), bounded: true };
-    if (WRAPPERS.has(name)) {
+    const forms = WRAPPERS[name];
+    if (forms) {
       i += 1;
-      while (i < tokens.length && !tokens[i]!.quoted && tokens[i]!.text.startsWith("-")) i += 1;
+      // 开关一个个对着白名单认。不是 `-` 开头的那个词就是被包的命令词（交给下一圈判）。
+      while (i < tokens.length) {
+        const o = tokens[i]!;
+        if (o.quoted || !o.text.startsWith("-")) break;
+        if (o.text === "--") { i += 1; break; }   // 之后再没有开关
+        const form = forms.find((f) => f.re.test(o.text));
+        if (!form) return null;                   // 认不出来 ⇒ 这一段读不懂 ⇒ 放行
+        i += form.value ? 2 : 1;
+      }
       continue;
     }
     return { name, argv: tokens.slice(i + 1), bounded: false };
@@ -208,12 +269,12 @@ type Scan = {
   /** 词表 → 前 `i` 段里它出现过几次（前缀和）。 */
   counts: Map<ReadonlySet<string>, Int32Array>;
   /**
-   * 第 `i` 段**被一个挂了输入重定向的组包着**吗（`{ … } <f`、`( … ) <f`）。
+   * 第 `i` 段**被一个「开不开得起来答不出来」的组包着**吗（`{ … } <f`、`( … ) >f`）。
    *
    * 重定向可以挂在**包着循环的那一组**身上,而不是循环自己身上 —— 那时整组一次都不开始跑
    * （实测:`{ while true; do :; done; } </不存在; printf DONE` 退出 0 并打出 DONE,圆括号
    * 组同样）。组收口把段切断了,所以那个重定向落在**收口后紧跟的那一段**上,循环自己的
-   * 两段上一个字都看不到它。
+   * 两段上一个字都看不到它。判据跟另外两个作用域同一份,见 `startProvable`。
    */
   groupRedirect: Uint8Array;
 };
@@ -239,7 +300,7 @@ function scanOf(segs: Segment[]): Scan {
       const from = groups.pop();
       // 配不上对的收口不管:读不懂 ⇒ 放行那一侧由别处负责。
       // 收口段的**下一段**才是重定向的落点(`} <f` 里 `}` 把段切断了)。
-      if (from !== undefined && redirectsIn(segs[i + 1]?.tokens ?? [])) {
+      if (from !== undefined && !startProvable(segs[i + 1]?.tokens ?? [])) {
         groupDiff[from]! += 1;
         groupDiff[i + 1]! -= 1;
       }
@@ -319,21 +380,44 @@ function loopShape(head: string, tokens: Token[], from: number): { bodyRuns: boo
 }
 
 /**
- * 这一段里有没有**输入重定向**。判据是「骨架上出现过引号外的 `<`」(见 `Token.bare`)。
+ * 这个重定向**证明得出一定打得开**吗。
  *
- * 上一版问的是「整词未被标 quoted、而且 `text` 以 `<` 开头」,两头都漏（第 2 轮审查 F2,
- * 四条实测误拦）:
- *  · `0</f`、`3<&0` —— fd 前缀在前面,词不以 `<` 开头;
- *  · `<'/f'` —— 运算符在引号外、只有路径在引号里,而整词被标成了 quoted。
- * 反过来,`'<'f`、`\<f` 这种**运算符本身**在引号里/被转义的,骨架上那一位是 `\0`,照旧不算
- * 重定向 —— 它们在 shell 里也确实只是个普通参数。
+ * 只有三种算得上证明:
+ *  · 目标就是 `/dev/null` —— 它在任何 POSIX 系统上都在、都打得开
+ *  · `<&N` / `>&N` 复制一个**一定开着**的描述符（0/1/2 由 shell 给齐）
+ *  · `<&-` / `>&-` 关掉一个描述符 —— 这件事不会失败
  *
- * 不要求它出现在词首:`<` 在 shell 里就是个运算符,`done 0<f`、`done <f` 分词之后长相不同,
- * 而「这个结构挂着输入重定向」这件事一样成立。`[[ $a < $b ]]` 那种比较符会被一起算进来 ——
- * 多认一个 ⇒ 这个循环按读不懂处理 ⇒ 放行,方向上是安全的那一侧（见文件头那段不对称）。
- * `<<` 的 here-doc 更早就整条放行了,到不了这里。
+ * 其余一律算**证明不出来**:任何路径（存不存在、父目录有没有、写不写得进去这一层答不出来）、
+ * 任何 `$VAR` / `$( )`（这一层根本不知道它会展开成什么）。here-doc 更早就整条放行了。
  */
-const redirectsIn = (tokens: Token[]): boolean => tokens.some((t) => t.bare.includes("<"));
+function redirectProvable({ op, target }: Redirect): boolean {
+  if (op === "<&" || op === ">&") return target === "-" || /^[012]$/.test(target);
+  if (op.startsWith("<<")) return false;
+  return target === "/dev/null";
+}
+
+/**
+ * 这个东西（一条简单命令 / 一个循环 / 一个分组）**证明得出开始跑了**吗 —— 单问重定向这一关。
+ *
+ * 重定向是**能不能开始跑**的前置条件:打不开那一个,shell 报一句错,被它挂着的那条命令、
+ * 那个循环、那一整组**一个字都不会跑**,而整条命令照旧往下走、正常退出。所以判据是
+ * 「挂在它身上的每一个重定向都证明得出打得开」,而不是「有没有写重定向」。
+ *
+ * **三个作用域共用这一道**（第 3 轮审查 F1）。上一版只问「有没有引号外的 `<`」,于是三处各
+ * 漏一半（全部实测 `/bin/sh` 退出 0 并打出 DONE,而创建闸 409）:
+ *  · 输出重定向整个不在列 —— `while true; do :; done > 不存在的目录/out` 一圈都不跑
+ *  · 简单命令整个不在列 —— `tail -F /dev/null < 不存在的文件` 一次都不跑
+ *  · 反过来,`</dev/null`、`2>&1` 这种**明摆着打得开**的被算成了「读不懂」而白白放行
+ * 倒过来之后这三件事是同一个判据的三个落点,不是三个特例。
+ *
+ * 代价明写在这儿:`tail -F x >> out.log` 这种「重定向其实会成功」的真阳跟着放掉了 —— 路径
+ * 在不在这一层答不出来,而误判的代价不对称（见文件头）。哨兵的事件本来就是从 stdout 收的,
+ * 把 stdout 重定向进文件的写法本身就跟挂哨兵相冲,所以这笔代价很小。
+ *
+ * **不扩成「命令自己也可能启动不了」**:那条路上任何命令都可能 127（二进制不在）,按那个
+ * 标准什么都证明不出来、整个判据作废。这里认的始终是**写在结构上的运算符**。
+ */
+const startProvable = (tokens: Token[]): boolean => redirectsOf(tokens).every(redirectProvable);
 
 /**
  * 这个循环的**形状读得懂吗** —— 读得懂才轮到 `loopShape` 下结论（第 5 轮审查 F2）。
@@ -347,21 +431,17 @@ const redirectsIn = (tokens: Token[]): boolean => tokens.some((t) => t.bare.incl
  *    那个符号。所以判据改成**`do` 紧跟在它后面**:中间还有一段,就说明条件列表还有话。
  *    `&&`/`||`/`|`/`&` 收尾的那种也一并落在这一道里（`do` 不会紧跟在它后面）。
  *
- * ② **循环身上没挂输入重定向**。`while true; do :; done </不存在的文件` 整条循环一次都不跑
- *    （审查实测:shell 报一句文件不存在,随后照旧打出 DONE 并退出 0）。重定向是这个结构**能
- *    不能开始跑**的前置条件,而文件在不在这一层答不出来。认不认得出它是**分词层**的事,
- *    判据见 `redirectsIn`（fd 前缀、引号里的路径都算)。
+ * ② **循环身上挂的重定向证明得出打得开**。`while true; do :; done </不存在的文件` 整条循环
+ *    一次都不跑（审查实测:shell 报一句文件不存在,随后照旧打出 DONE 并退出 0）;`> 不存在的
+ *    目录/out` 同样（第 3 轮审查 F1）。重定向是这个结构**能不能开始跑**的前置条件 —— 判据、
+ *    代价和另外两个作用域一字同源,见 `startProvable`。
  *
  * 挂在**包着它的那一组**身上的那种不在这儿答:那时整组(连里面的跟随型命令一起)都可能一次
  * 都不开始跑,所以它归「这一条证明得出会跑吗」那一层 —— 见 `Scan.groupRedirect` 和 `runs`。
- *
- * 注意 ② 只管**挂在结构本身上的输入重定向**,不扩成「命令也可能启动失败」:那条路上任何命令
- * 都可能 127（二进制不在）,按那个标准什么都证明不出来、整个判据作废。输出重定向同样不在
- * 列 —— `tail -F x 2>/dev/null | grep ERROR` 正是这件事的起因命令,它照旧要拦。
  */
 function loopReadable(scan: Scan, from: number, end: number): boolean {
   if (scan.doAt[from] !== from + 1) return false;
-  return !redirectsIn(scan.segs[from]!.tokens) && !redirectsIn(scan.segs[end]!.tokens);
+  return startProvable(scan.segs[from]!.tokens) && startProvable(scan.segs[end]!.tokens);
 }
 
 /**
@@ -400,16 +480,15 @@ function provableBlocker(scan: Scan): string | null {
   let pipeline: string | null = null;
   /**
    * 「这一条证明得出会跑吗」的最终答案:短路/组资格说会跑、没被跳转压着,而且**它所在的组
-   * 不是靠一次可能失败的输入重定向开场的**（`scan.groupRedirect`,第 2 轮审查 F2 的同类作用域)。
+   * 证明得出开得起来**（`scan.groupRedirect`,第 2 轮审查 F2 的同类作用域)。
    *
    * 最后这一条跟 `loopReadable` 的 ② 是同一件事的两个作用域,但归在这里而不是那边:重定向
    * 挂在组上时,一次都不开始跑的**不只是循环** —— `{ tail -F x; } </不存在的文件` 里那个
-   * 跟随型命令同样一个字都没跑（实测退出 0 并打出 DONE)。代价是 `( tail -F x ) </dev/null`
-   * 这种「重定向其实成功了」的真阳跟着放掉 —— 跟 ② 已经接受的那笔是同一种:文件在不在,
-   * 这一层答不出来（见文件头那段不对称）。
+   * 跟随型命令同样一个字都没跑（实测退出 0 并打出 DONE)。
    *
-   * **不扩成「命令自己也可能启动不了」**:那条路上任何命令都可能 127(二进制不在),按那个
-   * 标准什么都证明不出来、整个判据作废。这里认的始终是**写在结构上的运算符**。
+   * **这一段只管「组」这个作用域**:挂在那一条简单命令自己身上的重定向由下面那个
+   * `startProvable(tokens)` 答（第 3 轮审查 F1）—— `tail -F x </不存在的文件` 里组资格是满的,
+   * 不跑的是它自己。
    */
   const runs = (at: number): boolean => reach && suppressed < 0 && !scan.groupRedirect[at];
   for (let i = 0; i < segs.length; i += 1) {
@@ -480,7 +559,11 @@ function provableBlocker(scan: Scan): string | null {
       break;
     }
     const cmd = at < tokens.length ? commandOf(tokens, at) : null;
-    if (cmd && !cmd.bounded && runs(i)) {
+    // **挂在这条简单命令自己身上的重定向也是「它开不开得起来」**（第 3 轮审查 F1 实测:
+    // `tail -F /dev/null < 不存在的文件; printf DONE` 退出 0 并打出 DONE,而创建闸 409）。
+    // 判据跟循环、分组那两个作用域同一份（`startProvable`）:`2>/dev/null`、`2>&1` 这种
+    // 明摆着打得开的照旧算它跑了 —— 事故的起因命令正是那种,它必须照拦。
+    if (cmd && !cmd.bounded && runs(i) && startProvable(tokens)) {
       for (const f of FOLLOWERS) if (f.name === cmd.name && f.follows(cmd.argv)) { pipeline = f.what; break; }
     }
     // `exec cmd` 把本进程换成 cmd（`WRAPPERS` 已经让上面按 cmd 判过了）—— 它之后的都跑不到。

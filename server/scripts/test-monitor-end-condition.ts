@@ -159,7 +159,8 @@ setInterval(() => {}, 1000);
     ["while :; do sleep 0.2; done", "while true / until false"],
     ["until false; do sleep 1; done", "while true / until false"],
     ["for f in a b; do tail -F $f; done", "tail -f/-F"],
-    // 输出重定向**不在**那条判据里:它不改循环跑不跑得到,而这条正是事故的原命令。
+    // `2>/dev/null` 的目标是 `/dev/null`:**证明得出打得开** ⇒ 它照旧算跑了（这条正是事故
+    // 的原命令,它必须拦）。判据见 shared 的 `startProvable`。
     ["tail -F build.log 2>/dev/null | grep --line-buffered ERROR", "tail -f/-F"],
   ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该拦：${command}`);
   // ↓ 第 2 轮审查 F2:**同一个输入重定向,换一种等价写法就漏认了**。上一版问的是「整词没被标
@@ -190,14 +191,60 @@ setInterval(() => {}, 1000);
     ["for f in '<x' '<y'; do tail -F $f; done", "tail -f/-F"],   // 运算符在引号里 ⇒ 不是运算符
     ['for f in "<x"; do tail -F $f; done', "tail -f/-F"],        // 双引号同样
     ["while true; do printf '<'; sleep 5; done", "while true / until false"],
-    ["while true; do sleep 5; done 2>/dev/null", "while true / until false"],  // 输出重定向不在这一道
-    ["for item in one; do tail -F /dev/null; done 2>&1", "tail -f/-F"],        // fd 复制的输出同样
+    ["while true; do sleep 5; done 2>/dev/null", "while true / until false"],  // 目标是 /dev/null
+    ["for item in one; do tail -F /dev/null; done 2>&1", "tail -f/-F"],        // 复制一个开着的 fd
     ["{ while true; do sleep 5; done; } 2>/dev/null", "while true / until false"],
   ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该拦：${command}`);
-  // **这一道的代价也明写在这儿**:重定向其实成功了的那种(`( tail -F x ) </dev/null` 真的会
-  // 一直跑)跟着一起放掉 —— 文件在不在,这一层答不出来。跟上面「条件列表读不完整」那笔是同一
-  // 种取舍:少拦一条 = 退回今天的行为,拦错一条 = 一件做得成的事做不成了。
-  assert.equal(neverExitsOnItsOwn("( tail -F x ) </dev/null"), null, "组身上的输入重定向 ⇒ 按未知放行");
+  // **这一道的代价换了个地方**（第 3 轮审查 F1）:判据从「有没有写重定向」改成「写着的那几个
+  // 证明得出打得开吗」之后,`</dev/null`、`2>&1` 这种明摆着打得开的不再白白放行 —— 下面三条
+  // 以前是放行的,现在照拦（它们在 `/bin/sh` 下真的会一直跑）。
+  for (const [command, hit] of [
+    ["( tail -F x ) </dev/null", "tail -f/-F"],                      // 组身上的重定向打得开
+    ["while true; do :; done </dev/null", "while true / until false"], // 循环身上的同样
+    ["tail -F x 2>&1 | grep E", "tail -f/-F"],                       // 复制一个开着的 fd
+  ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该拦：${command}`);
+  // 留下的那笔代价是**目标答不出来**的那一种:路径真的存在时它一直跑,而「这个路径在不在」
+  // 这一层答不出来 —— 跟「条件列表读不完整」那笔是同一种取舍。
+  assert.equal(neverExitsOnItsOwn("tail -F x >> out.log"), null, "目标是普通路径 ⇒ 按未知放行");
+  // ↓ 第 3 轮审查 F1 实测的**误判**:四条全部 `/bin/sh` 退出 0 并打出结果,而创建入口一律
+  //   409。共同点是**某一层答不出来、却由下一层替它断定「这一条跑了」**(见 shared 的
+  //   command-never-exits.ts 文件头 ⑤)—— 所以补的是三道「认不出来就说读不懂」,不是四个特例。
+  for (const command of [
+    // ① 包装命令的开关一律跳过 ⇒ 一次「查路径」被读成了一次执行
+    "command -v tail -F /dev/null; printf 'DONE\n'",
+    "command -V tail -F /dev/null; printf 'DONE\n'",
+    "sudo -l tail -F /dev/null; printf 'DONE\n'",      // 同类:列权限,不执行
+    "ionice -p 1 tail -F /dev/null; printf 'DONE\n'",  // 同类:改一个已有进程的优先级
+    // ② 双引号里的转义引号被当成收口 ⇒ **字符串正文**被读成结构和执行节点
+    String.raw`printf "literal \"; tail -F /dev/null; #\n"`,
+    String.raw`printf "a \" b \" c; tail -F /dev/null\n"`,
+    // ③ 输出重定向打不开 ⇒ 这个循环/这一组一圈都不跑(以前这一道只认 `<`)
+    `while true; do :; done > '${MISSING}/out'; printf 'DONE\n'`,
+    `while true; do :; done >>${MISSING}/out; printf 'DONE\n'`,
+    `{ while true; do :; done; } 2>${MISSING}/out; printf 'DONE\n'`,
+    // ④ 简单命令**自己身上**那个重定向以前没人问(这一道只盖了循环和分组)
+    `tail -F /dev/null < '${MISSING}'; printf 'DONE\n'`,
+    `tail -F /dev/null 0<${MISSING}; printf 'DONE\n'`,
+    `tail -F /dev/null > '${MISSING}/out'; printf 'DONE\n'`,
+    `tail -F /dev/null <${MISSING} | grep x; printf 'DONE\n'`,
+  ]) assert.equal(neverExitsOnItsOwn(command), null, `不许拦：${command}`);
+  // ↑ 真阳对照:同一批写法里**证明得出会跑**的那些照拦 —— 不然这三道会退化成「见到包装命令、
+  //   见到引号、见到重定向就放行」,而事故的起因命令恰恰带着 `2>/dev/null`。
+  for (const [command, hit] of [
+    ["command tail -F /dev/null", "tail -f/-F"],             // 透明:没有开关
+    ["command -p tail -F /dev/null", "tail -f/-F"],          // 透明:已知开关
+    ["env -u FOO tail -F /dev/null", "tail -f/-F"],          // 吃一个参数的已知开关
+    ["env -i tail -F /dev/null", "tail -f/-F"],
+    ["nice -n 5 tail -F /dev/null", "tail -f/-F"],
+    ["nice -5 tail -F /dev/null", "tail -f/-F"],
+    ["stdbuf -oL tail -F /dev/null", "tail -f/-F"],
+    ["sudo -n -u root tail -F /dev/null", "tail -f/-F"],
+    ["sudo -- tail -F /dev/null", "tail -f/-F"],             // `--` 之后再没有开关
+    ["exec tail -F /dev/null", "tail -f/-F"],
+    [String.raw`printf "a \" b\n"; tail -F /dev/null`, "tail -f/-F"], // 转义引号之后的真执行节点
+    ["printf 'x'; tail -F /dev/null </dev/null", "tail -f/-F"],
+    ["tail -F /dev/null 2>/dev/null | grep x", "tail -f/-F"],
+  ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该拦：${command}`);
   // **这条判据的代价明写在这儿**:`while true && :; do …` 其实也没有出路,但它的条件列表被
   // `&&` 拆到了循环头之外 —— 读不完整就按未知处理,于是现在放行。上面那三条误判跟这一条
   // 是同一件事的两面,分不开:少拦一条 = 退回今天的行为,拦错一条 = 一件做得成的事做不成了。
@@ -240,11 +287,23 @@ setInterval(() => {}, 1000);
   assert.equal((await listMonitors(taskId)).length, 0, "被拦下时一行都不许留，更不许起进程");
 
   // 用不了的条件 = 一个永远不会命中的条件，等于没设 —— 当场 400，别让它变成另一条干等的哨兵。
-  for (const pattern of ["^(OK", "^(a+)+$", "OK|", "OK$FAILED"]) {
+  //
+  // **「整段都是空白」也在这一档**（第 3 轮审查 N1）:消费那一侧按「空行不算一行」快进
+  // （server/src/monitor-consume.ts 和 monitor-offline-finish.ts 的 `line.trim()`）,所以
+  // `^ $` 这种条件收得下、却永远等不到 —— 审查实测:哨兵打完一个空白行后一直 running。
+  // 整串都是空白的那种（`"  "`）不在这一档:它跟「这一栏没填」分不开,也本来就是表单的
+  // 口径（`MonitorComposer` 只在 trim 之后还有字时才传 stopWhen）—— 那一种会落到下面
+  // 「没给结束条件」的 409 上,而不是 400。
+  for (const pattern of ["^(OK", "^(a+)+$", "OK|", "OK$FAILED", "^ $", "^\t$", "^ $|  "]) {
     const bad = await startMonitor({ taskId, command: follower, stopWhen: pattern });
     assert.equal(bad.ok, false, `用不了的结束条件要拒：${pattern}`);
     assert.equal(bad.ok ? 0 : bad.status, 400);
-    if (!bad.ok) assert.match(bad.error, /不是正则|不在两头|空的/, `拒绝要说清为什么：${pattern}`);
+    if (!bad.ok) assert.match(bad.error, /不是正则|不在两头|空的|空白/, `拒绝要说清为什么：${pattern}`);
+  }
+  // ↑ 拒的只是**整段都是空白**的那种。正文两头真实的空格仍然是正文（`endConditionHit` 不用
+  //   trim 的理由就在这儿）—— 下面这两条照收,不然这道校验就把一种合法意图一起拒了。
+  for (const pattern of ["DONE $", "^ DONE", "a b|c"]) {
+    assert.equal(parseEndCondition(pattern).ok, true, `正文里的空格不是空白条件：${pattern}`);
   }
 
   // 两头的锚点是**合法**的，别跟上面那种混为一谈（`a$|b` = 行尾是 a 或出现 b）。

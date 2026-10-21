@@ -638,6 +638,31 @@ try {
     await pattern.fill("^(OK");
     assert.match(await form.innerText(), /不是正则/, "按习惯写正则的人要当场看到这句");
     assert.equal(await submit.isDisabled(), true, "用不了的条件不许提交");
+
+    // ⑥ **整段都是空白的条件也用不了**（第 3 轮审查 N1）:哨兵读到空行直接快进,它永远不会
+    //    命中 —— 当场说,别让人以为自己已经设过了。
+    await pattern.fill("^ $");
+    assert.match(await form.innerText(), /空白/, "永远不会命中的条件要当场说出来");
+    assert.equal(await submit.isDisabled(), true, "永远不会命中的条件不许提交");
+    await pattern.fill("");
+
+    // ⑦ 第 3 轮审查 F1 实测的那四条**误判**:真 shell 里全部退出 0,而这张表单把按钮禁掉了
+    //    （判据层的四道口子,见 shared/src/command-never-exits.ts 文件头 ⑤）。页面这一侧量的
+    //    是同一件事落到人手上的样子:不许说「永远不会结束」,按钮不许禁。
+    for (const command of [
+      String.raw`command -v tail -F /dev/null; printf 'DONE\n'`,
+      String.raw`printf "literal \"; tail -F /dev/null; #\n"`,
+      "while true; do :; done > /definitely-missing-ash-review-file/out; printf 'DONE'",
+      "tail -F /dev/null < /definitely-missing-ash-review-file; printf 'DONE'",
+    ]) {
+      await cmd.fill(command);
+      assert.doesNotMatch(await form.innerText(), /永远不会结束/, `这条命令会自己结束：${command}`);
+      assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
+    }
+    // ⑦b 真阳对照:事故的起因命令带着 `2>/dev/null`,它照旧要逼选（不然上面那四条等于把闸拆了）。
+    await cmd.fill("tail -F build.log 2>/dev/null | grep --line-buffered ERROR");
+    assert.match(await form.innerText(), /永远不会结束/, "起因命令照旧要说出来");
+    assert.equal(await submit.isDisabled(), true, "起因命令照旧要逼选");
     await page.close();
   }
 

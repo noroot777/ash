@@ -22,6 +22,27 @@
  */
 export type Token = { text: string; quoted: boolean; bare: string };
 
+/**
+ * 这个引号在哪儿收口。-1 = 没收口（命令本身就不完整，由调用方按「读到末尾」处理）。
+ *
+ * **双引号里的 `\"` 不是收口**（第 3 轮审查 F1）。上一版两处收口都是 `indexOf`,于是
+ * `printf "literal \"; tail -F /dev/null; #\n"` 里那个转义引号被当成了字符串的结尾:后面
+ * 本该是**字符串正文**的 `; tail -F /dev/null; #` 一下子变成了结构和执行节点,一条打一行就
+ * 退的命令被硬拦（实测 `/bin/sh` 退出 0 并打出整行正文,而创建闸 409）。单引号里不转义
+ * （shell 的规矩:单引号里连反斜杠都是普通字符），所以这一支只对双引号成立。
+ */
+function quoteEnd(command: string, open: number): number {
+  const q = command[open]!;
+  let i = open + 1;
+  while (i < command.length) {
+    const c = command[i]!;
+    if (q === '"' && c === "\\") { i += 2; continue; }
+    if (c === q) return i;
+    i += 1;
+  }
+  return -1;
+}
+
 /** 引号内的内容换成等长空格:做文本判据时用，`echo 'waiting for exit'` 不该捐出一个 `exit`。 */
 export function blankQuoted(command: string): string {
   let out = "";
@@ -29,7 +50,7 @@ export function blankQuoted(command: string): string {
   while (i < command.length) {
     const c = command[i]!;
     if (c === "'" || c === '"') {
-      const close = command.indexOf(c, i + 1);
+      const close = quoteEnd(command, i);
       const end = close < 0 ? command.length : close;
       out += " ".repeat(end - i + 1);
       i = close < 0 ? command.length : close + 1;
@@ -88,7 +109,10 @@ export function segments(command: string): Segment[] {
   while (i < command.length) {
     const c = command[i]!;
     if (c === "'" || c === '"') {
-      const close = command.indexOf(c, i + 1);
+      // 收口在哪儿由 `quoteEnd` 说（双引号里的 `\"` 不收口，见那边）。引号里的内容原样进
+      // `text`（转义符留着也无妨:这个词打了 `quoted`,永远不会被当成命令词或关键字），所以
+      // `bare` 照它的长度补 `\0` —— 两者等长这个不变量不能破（见 `Token.bare`）。
+      const close = quoteEnd(command, i);
       const inner = close < 0 ? command.slice(i + 1) : command.slice(i + 1, close);
       text += inner;
       bare += "\0".repeat(inner.length);
@@ -139,6 +163,18 @@ export function segments(command: string): Segment[] {
     if (c === " " || c === "\t" || c === "\r") { endToken(); i += 1; continue; }
     if (c === "\n" || c === ";") { endSegment(";"); i += 1; continue; }
     if (c === "&" || c === "|") {
+      // **紧跟在重定向运算符后面的那个不是分隔符**（第 3 轮审查 F1 的同类）:`2>&1`、`>|f`
+      // 里它是运算符本体的第二个字符。上一版照旧断段,于是 `tail -F x 2>&1 | grep E` 被切成
+      // 「`tail -F x 2>` 放后台」—— 后台那一支直接作废判定,一条真的永不退出的命令被放过
+      // （偏安全那一侧,但「它写了什么」答错了,下一层就没得判）。判据落在骨架上:紧挨着的
+      // 那一位得是**引号外**的 `<`/`>`（`'>'|x` 里那个 `|` 照旧是管道）。
+      const prev = bare[bare.length - 1];
+      if (c === "&" ? prev === "<" || prev === ">" : prev === ">") {
+        text += c;
+        bare += c;
+        i += 1;
+        continue;
+      }
       const twice = command[i + 1] === c;
       endSegment(twice ? (c === "&" ? "&&" : "||") : c === "&" ? "&" : "|");
       i += twice ? 2 : 1;
@@ -151,6 +187,59 @@ export function segments(command: string): Segment[] {
     i += 1;
   }
   endSegment("eof");
+  return out;
+}
+
+/**
+ * 一个**重定向**:运算符本体 + 它的目标。目标是字面文本（引号已拆、`$( )` 已占位成 `?`）。
+ *
+ * 这一层只答「这一段上写着哪几个重定向、各自指向什么」。**「它打不打得开」不在这儿答** ——
+ * 那是判据层的事（见 command-never-exits.ts 的 `redirectProvable`）。
+ */
+export type Redirect = { op: string; target: string };
+
+/** 运算符本体的第二个字符（`>>`、`<<`、`<>`、`<&`、`>&`、`>|`）。 */
+const OP_TAIL = new Set(["<", ">", "&", "|"]);
+
+/**
+ * 这一段上挂着的全部重定向。
+ *
+ * 判据落在**骨架**上（`Token.bare`）:引号里、被转义过来的 `<`/`>` 一律不算运算符 ——
+ * `'<'f` 在 shell 里就只是个叫 `<f` 的参数（第 2 轮审查 F2）。不要求运算符出现在词首:
+ * `done 0<f`、`2>&1`、`>f` 分词之后长相不同,而「这里写着一个重定向」是同一件事。
+ *
+ * 目标的取法跟 shell 一致:运算符后面还有字就是那几个字（`>f`），没有了就是**下一个词**
+ * （`> f`）—— 后者会把那个词吃掉,免得它被重新当成一段新文本扫一遍。
+ *
+ * 一个词里写了两个（`>a<b`）照样各算一个:目标切到**下一个引号外的运算符**为止。
+ */
+export function redirectsOf(tokens: Token[]): Redirect[] {
+  const out: Redirect[] = [];
+  for (let k = 0; k < tokens.length; k += 1) {
+    const tok = tokens[k]!;
+    let i = 0;
+    while (i < tok.bare.length) {
+      const c = tok.bare[i]!;
+      if (c !== "<" && c !== ">") { i += 1; continue; }
+      let j = i + 1;
+      const next = tok.bare[j];
+      if (next !== undefined && OP_TAIL.has(next)) j += 1;
+      // `<<<` 是 here-string（整条命令更早就按 here-doc 放行了，这里只为把目标切对）。
+      if (c === "<" && next === "<" && tok.bare[j] === "<") j += 1;
+      const op = tok.bare.slice(i, j);
+      let e = j;
+      while (e < tok.bare.length && tok.bare[e] !== "<" && tok.bare[e] !== ">") e += 1;
+      const inWord = tok.text.slice(j, e);
+      if (inWord) {
+        out.push({ op, target: inWord });
+        i = e;
+        continue;
+      }
+      out.push({ op, target: tokens[k + 1]?.text ?? "" });
+      k += 1;
+      break;
+    }
+  }
   return out;
 }
 

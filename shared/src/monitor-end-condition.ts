@@ -97,6 +97,19 @@ export function parseEndCondition(pattern: string | null | undefined): EndCondit
     if (!body) {
       return { ok: false, error: `结束条件里有一段是空的（「${piece}」）—— 空字样会命中每一行。${SYNTAX}` };
     }
+    // **整段都是空白的字样永远不会命中**（第 3 轮审查 N1）。消费那一侧按「空行不算一行」
+    // 快进（server/src/monitor-consume.ts 和 monitor-offline-finish.ts 都是 `line.trim()`
+    // 才收下来），所以 `^ $` 这种条件配得上、却永远等不到 —— 跟一个解析不出来的条件是同一
+    // 件事（见本函数头上那句话）:放进去只会变成另一条「只能等到期」的哨兵，而调用方还以为
+    // 自己已经设过了。拒的只是**整段都是空白**的那种;正文两头真实的空格仍然是正文
+    // （`DONE $` 那种照旧收下，见下面 `endConditionHit` 不用 trim 的理由）。
+    if (!body.trim()) {
+      return {
+        ok: false,
+        error: `结束条件「${piece}」整段都是空白 —— 空白行不会成为哨兵事件（读到空行直接快进），`
+          + `这个条件永远不会命中。要等的是「某一行里出现的字」。${SYNTAX}`,
+      };
+    }
     // 锚点只在两头才是锚点。中间的 `^`/`$` 多半是在写正则（`a$|^b` 之外的写法），
     // 按字面量理解它就成了一个永不命中的条件 —— 照实拒掉。
     if (body.includes("^") || body.includes("$")) {
