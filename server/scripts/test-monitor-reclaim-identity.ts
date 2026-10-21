@@ -90,7 +90,7 @@ const zhLstart = (lstart: string): string => {
 // 这三条钉的就是那三件事:判得对、只查一次、以及端到端不会因此杀掉一条活着的哨兵。
 {
   const taskId = await makeTask({ status: "running" });   // 任务还在跑 ⇒ 出口是通的
-  const started = await startMonitor({ taskId, command: STUBBORN, description: "记录是旧 locale 的" });
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "记录是旧 locale 的", untilExpiry: true });
   assert.equal(started.ok, true);
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
   const pid = row.pid!;
@@ -163,7 +163,7 @@ const zhLstart = (lstart: string): string => {
 // 的事说成已经做成**。
 {
   const taskId = await makeTask({ status: "running" });
-  const started = await startMonitor({ taskId, command: STUBBORN, description: "接回时责任落不下来的" });
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "接回时责任落不下来的", untilExpiry: true });
   assert.equal(started.ok, true);
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
   const pid = row.pid!;

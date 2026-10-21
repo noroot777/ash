@@ -21,7 +21,6 @@
 import { statSync } from "node:fs";
 import { and, desc, eq } from "drizzle-orm";
 import {
-  MONITOR_BATCH_MS,
   MONITOR_TAIL_DEFAULT_LINES,
   MONITOR_TAIL_MAX_BYTES,
   MONITOR_TAIL_MAX_LINES,
@@ -31,7 +30,7 @@ import {
   type TaskMonitor,
 } from "@ash/shared/monitor";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
-import { endConditionHit, parseEndCondition } from "@ash/shared/monitor-end-condition";
+import { parseEndCondition } from "@ash/shared/monitor-end-condition";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
@@ -41,12 +40,11 @@ import { reclaimState } from "./monitor-reclaim-evidence.js";
 import { stopRecoveryRetries } from "./monitor-reattach.js";
 import { clearSpawnIdentity, readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
 
-import { armFlush, flushBuffer, linesBody, renderLines, type FlushOutcome } from "./monitor-consume.js";
+import { consumeTailChunk, flushBuffer, linesBody, renderLines, type FlushOutcome } from "./monitor-consume.js";
 import { deliverResultHandoff } from "./monitor-events.js";
 // 消费层是从这个文件拆出去的（见 monitor-consume.ts 文件头）。这两个仍从这里导出:
 // 它们的调用方（离线补读、创建协议）本来就按「找 monitors 要」在写，没必要跟着搬家。
-export { commitOffset, pushLines } from "./monitor-consume.js";
-import { commitOffset } from "./monitor-consume.js";
+export { commitProgress, pushLines } from "./monitor-consume.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -118,6 +116,11 @@ export type Runtime = {
   buffer: string[];
   /** 缓冲里这批行读到文件的哪个字节。**事件落库之后**才跟着推进（见 pushLines）。 */
   readTo: number | null;
+  /**
+   * **正在送的批次数**。`flushBuffer` 一开头就把那一批从 `buffer` 里取走了,那一刻它既不在
+   * 缓冲里、也还没落库 —— 空行快进得挡住这段窗口（第 3 轮审查 F1,判据见 `outstanding`）。
+   */
+  inflight: number;
   flush: NodeJS.Timeout | null;
   /** 收尾只做一次：过期定时器、进程退出、用户点停，三条路可能同时到。 */
   closing: boolean;
@@ -230,21 +233,15 @@ export function attach(row: Row, onExit?: (cb: (code: number | null) => void) =>
   // 一次把进程临死前那几行吸干；那时候回调查到的是 undefined，于是最后一批事件被整批
   // 丢掉（实测：命令吐 3 行，只收到 2 行）。
   const rt: Runtime = {
-    tail: null as unknown as Tailer, timers: [], buffer: [], readTo: null, flush: null,
+    tail: null as unknown as Tailer, timers: [], buffer: [], readTo: null, inflight: 0, flush: null,
     closing: false, liveness: null, exitWatched: onExit !== undefined,
   };
-  rt.tail = tailLines(row.logPath, row.offset, (lines, offset) => {
-    // 收尾中也照收：`finish` 会先 drain 一次再推，进程死前最后几行不该因为「已经在停了」
-    // 就丢掉。收尾时不另起定时器——那一批由 finish 自己同步推出去。
-    for (const line of lines) if (line.trim()) rt.buffer.push(line);
-    // 读到的全是空行：没有事件要落，位置可以直接前进（不存在「推进了却丢事件」的风险）。
-    if (!rt.buffer.length) {
-      void serialize(row.id, () => commitOffset(row.id, offset));
-      return;
-    }
-    rt.readTo = offset;
-    armFlush(rt, row.id, MONITOR_BATCH_MS);
-  });
+  // 收尾中也照收：`finish` 会先 drain 一次再推，进程死前最后几行不该因为「已经在停了」
+  // 就丢掉。收尾时不另起定时器——那一批由 finish 自己同步推出去。
+  //
+  // 这一批行的归宿（入缓冲、排冲刷、还是空行快进）**整件事归消费层**:游标这一侧的不变量
+  // 在那边（见 monitor-consume.ts 文件头 ④）,这里现场判一次时序就是第 3 轮审查 F1 那个洞。
+  rt.tail = tailLines(row.logPath, row.offset, (lines, offset) => consumeTailChunk(rt, row.id, lines, offset));
   runtimes.set(row.id, rt);
   noteUnreadableCondition(row);
 
@@ -454,16 +451,12 @@ export async function finish(
     //
     // `notify=false` 那一路（任务自己已经结束、或者有人点停）**照样附**:它压的是「哨兵结束」
     // 这句播报,不是已经吐出来的内容 —— monitor-stop.ts 写明「已经攒在缓冲里的行要照常推完」。
-    const owedKeep = (() => {
-      const cond = parseEndCondition(row.stopWhen);
-      return cond.ok && cond.cond ? endConditionHit(owed, cond.cond) : null;
-    })();
     const owedNote = `…（下面这 ${owed.length} 行没能单独送出来，附在收尾这一条里）`;
     const endNotice = notify
       ? `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}（${tally}）`
-        + (owed.length ? `\n${owedNote}\n${linesBody(owed, owedKeep)}` : "")
+        + (owed.length ? `\n${owedNote}\n${linesBody(row, owed)}` : "")
       // `notify=false` 那一路没有抬头可借,这几行自己成一条事件消息。
-      : owed.length ? `${renderLines(row, owed, owedKeep)}\n${owedNote}` : null;
+      : owed.length ? `${renderLines(row, owed)}\n${owedNote}` : null;
     const result = await db
       .update(monitors)
       .set({

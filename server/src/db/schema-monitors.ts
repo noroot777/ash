@@ -91,7 +91,11 @@ export const monitors = sqliteTable("monitors", {
   resultHandoffAt: text("result_handoff_at"),
   resultHandoffText: text("result_handoff_text"),
   /**
-   * **约定的结束条件**:哪一行一出现这条哨兵就收工(JS 正则源文)。NULL = 没约定过。
+   * **约定的结束条件**:哪一行一出现这条哨兵就收工。NULL = 没约定过。
+   *
+   * 存的是**字样**,不是正则源文:`BUILD OK|FAILED`、`^SWEEP_EXIT=`(语法见 shared 的
+   * `monitor-end-condition.ts` 文件头 ①)。这一列从来没上过线收正则,但**读的那一侧仍然
+   * 当它可能读不出来**(跨版本接力、手改过的库),判据与处置见 `noteUnreadableCondition`。
    *
    * 它是「命令自己永远不会结束」那一类的**唯一一条非到期出路**(另一条是改写命令让它自退)。
    * 创建闸因此对那一类命令要求二选一:给这一列,或者显式声明「就是要盯到到期」——

@@ -42,7 +42,16 @@ export const marker = (): { token: string; path: string; command: string } => {
   const token = `ash-create-probe-${++tokenSeq}-${process.pid}`;
   const path = join(root, `${token}.touched`);
   // `touch` 是命令的第一句:闸放行之后它立刻出现,不放行就永远不出现。
-  return { token, path, command: `touch '${path}'; while :; do sleep 0.2; done` };
+  //
+  // 后半句要同时满足三件,所以不是随便挑的:
+  //  · **活得比这一节久** —— 不然 psCount 那几条断言测的是个已经自己退了的进程
+  //  · **不是「永远不会结束」** —— `while :; do … done` 会被结束条件闸在创建那一刻 409 掉
+  //    （第 3 轮审查 F3 之后 `while :` 也认得出来了,上一版的正则漏判这个写法）,那样这几节
+  //    测的就不再是创建协议本身。这里的循环条件是「自己那个记号文件还在」:删掉它就停,
+  //    所以它**真的**有出路,不是绕开闸
+  //  · **后代都是短命的** —— 测试用 `pkill -f <token>` 收场,而只有壳的 argv 带着记号;
+  //    一个 `sleep 600` 的后代会脱离父壳继续活着,把那条「线索追空了」的清扫断言拖到超时
+  return { token, path, command: `touch '${path}'; while [ -f '${path}' ]; do sleep 0.2; done` };
 };
 
 /** 让某个任务的哨兵 insert 真的失败(SQLite 触发器,不替换产品里的任何函数)。 */

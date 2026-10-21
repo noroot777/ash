@@ -219,6 +219,111 @@ setInterval(() => {}, 1000);
   if (started.ok) await until("进程被收掉", async () => !isPidAlive(started.ok ? started.monitor.pid! : 0));
   console.log("✓ 一批行有上界：18 万行一口气来也只按批消费，放回那一步不展开传参");
 }
+// ── ⑦i 在途/失败的那一批没交付 ⇒ 后面的空行不许把读取位置带过去（第 3 轮审查 F1）──────
+// 现场（审查实测）：命令打完 `FINAL_OFFSET=0` 就睡；那一笔事件 INSERT 挂住 ⇒ 这一批已经被
+// `splice` 出缓冲、一个字节都还没落库；这期间日志里多了个空行，tail 回调看到「缓冲是空的」
+// 就把一个**无条件**的 offset 提交排进队列；随后那笔 INSERT 失败、行回到缓冲等两秒后重试,
+// 而排在后面的空行提交成功了 —— 游标走到日志结尾（offset=16、events=0、消息从未入队）。
+// 这时重启接回从那个位置开始读，那一行再也读不回来，运行时内存又已经清掉 ⇒ 永久丢失。
+//
+// 判据因此挪进消费层并**在提交的那一刻现算**（见 monitor-consume.ts 文件头 ④）：排队那一刻
+// 和真正提交之间隔着一整笔推送，时序只能在提交那一刻判。
+{
+  const taskId = await makeTask();
+  const feed = join(root, "offsetrace.mjs");
+  // 吐一行就睡：后面没有新行，「那一批被跳过去」和「被放回去重试」才区别得出来。
+  // 30 秒自毁兜底（同 ⑦g 那一节的理由：这一节也要在失败注入下走真实收尾）。
+  writeFileSync(feed, `setTimeout(() => console.log("FINAL_OFFSET=0"), 120);
+const keep = setInterval(() => {}, 1000);
+setTimeout(() => { clearInterval(keep); process.exit(0); }, 30000);
+`);
+  const real = dbClient.execute.bind(dbClient);
+  let hanging = false;
+  let failNow: (() => void) | null = null;
+  const held = new Promise<never>((_, reject) => {
+    failNow = () => reject(new Error("INJECTED_EVENT_INSERT_FAILURE"));
+  });
+  void held.catch(() => {});   // 只许在 `await` 那一处抛,别变成 unhandled rejection
+  let injected = 0;
+  (dbClient as unknown as { execute: unknown }).execute = async (stmt: unknown) => {
+    const text = typeof stmt === "string" ? stmt : String((stmt as { sql?: unknown })?.sql ?? "");
+    const args = JSON.stringify((stmt as { args?: unknown })?.args ?? "");
+    if (injected === 0 && /insert into "scheduled_messages"/i.test(text) && args.includes("FINAL_OFFSET=0")) {
+      injected += 1;
+      hanging = true;
+      await held;              // 挂住:这一刻那一批「在途」—— 不在缓冲里,也还没落库
+    }
+    return real(stmt as never);
+  };
+  let monitorId = "";
+  let pid = 0;
+  try {
+    const started = await startMonitor({
+      taskId,
+      command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,
+      description: "在途批次撞上空行快进",
+    });
+    assert.equal(started.ok, true, started.ok ? "" : started.error);
+    monitorId = started.ok ? started.monitor.id : "";
+    pid = started.ok ? started.monitor.pid ?? 0 : 0;
+    await until("那一笔事件 INSERT 真的挂住了", async () => hanging);
+    // **判据的第二项单独验一次**:这一刻那一批既不在缓冲里、也还没落库。上面那条路（空行
+    // 快进）走的是这条哨兵自己的队列,于是它总排在这笔推送**之后** —— 真正要防的是「哪天
+    // 又多一个不走队列的进度写入口」，所以这里直接调那个函数，不借队列的顺序。
+    assert.equal(
+      await monitorsModule.commitProgress(monitorId, 999), false,
+      "在途的那一批没落库 ⇒ 任何进度写入口都不许推游标（不光是排在队列里的那一个）",
+    );
+    const logPath = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!.logPath;
+    assert.equal(
+      (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!.offset, 0,
+      "……而且真的一个字节都没写进去",
+    );
+    // 在途期间追加一个空行：下一次 tail 回调看到的就是「缓冲是空的」。
+    appendFileSync(logPath, "\n");
+    await sleep(900);          // TAIL_POLL_MS=250:够那一拍把空行快进排进队列
+    failNow!();                // 这一笔失败 ⇒ 那一批放回缓冲、排两秒后重试
+    await sleep(700);          // 远小于 MONITOR_RETRY_FLUSH_MS，重试还没发生
+    const mid = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+    assert.equal(mid.events, 0, "台子前提：这一刻一个字都还没交付（注入没生效的话下面全是空测）");
+    assert.equal(
+      mid.offset, 0,
+      `没交付的那一批在场时，空行一个字节都不许把游标带过去（实际 offset=${mid.offset}）`,
+    );
+    assert.match(readFileSync(logPath, "utf8"), /FINAL_OFFSET=0/, "日志里那一行还在：游标没越过它，重启就还读得回来");
+    await until("重试把那一批真的送出去", async () =>
+      (await pendingOf(taskId)).some((m) => m.text.includes("FINAL_OFFSET=0")));
+    const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+    assert.ok(after.offset > 0, "交付之后游标才跟着前进");
+  } finally {
+    (dbClient as unknown as { execute: unknown }).execute = real;
+  }
+  assert.ok(injected > 0, "注入必须真的发生过");
+  await stopMonitor(monitorId, "F1 那一节跑完了");
+  if (pid) await until("进程被收掉", async () => !isPidAlive(pid));
+  console.log("✓ 空行快进要看消费责任：在途/失败的批次在场时游标不动，重试成功之后才前进");
+}
+// ── ⑦j 离线补读也要留住**命中那一行**（第 3 轮审查 N1）──────────────────────────────
+// 命中那一行多半就是 agent 要的结果本身，而正文只列前 40 行。上一版「保留它」是 `pushLines`
+// 的一个可选参数：在线两处都传了、离线补读那一处没传 —— 于是重启之后补读出来的那一批里，
+// 排在第 41 行往后的结束结果照旧被正文省掉。可选参数的默认值就是「忘了传」那条路，所以
+// 这一版把它做成正文构造层的默认契约（`linesBody` 自己算）。
+{
+  const taskId = await makeTask();
+  const monitorId = await insertMonitorRow(taskId, { status: "running" });
+  await db.update(monitors).set({ stopWhen: "^OFFLINE_RESULT=" }).where(eq(monitors.id, monitorId));
+  const seeded = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  // 60 行，命中那一行排在第 50 —— 正文只列前 40 行，它必须被单独补上。
+  const lines = Array.from({ length: 60 }, (_, i) => (i === 49 ? "OFFLINE_RESULT=0 全跑完了" : `noise ${i}`));
+  writeFileSync(seeded.logPath, `${lines.join("\n")}\n`);
+  const { finishOffline } = await import("../src/monitor-offline-finish.js");
+  await finishOffline(seeded, "lost", "命令已经不在了（server 重启期间跑完的，拿不到退出码）");
+  const texts = (await pendingOf(taskId)).map((m) => m.text).join("\n");
+  assert.match(texts, /约定的那一行在后面/, "离线补读也要把命中那一行单独补上");
+  assert.match(texts, /OFFLINE_RESULT=0 全跑完了/, "补上的就是那一行原文");
+  assert.match(texts, /这一批共 60 行/, "台子前提：这一批确实超过了正文的行数上限");
+  console.log("✓ 离线补读继承命中行保留契约：排在第 41 行往后的结束结果照旧送到");
+}
 // ── 事件上限：推满自动停，而且**不会把自己锁死** ─────────────────────────────
 // 这一条同时守两件事：到顶要真的停（每条事件都在烧回合），以及收尾必须能跑完 ——
 // 触发点在推送队列**内部**，收尾又要往同一条队列再排一次 flush，await 它就是等自己

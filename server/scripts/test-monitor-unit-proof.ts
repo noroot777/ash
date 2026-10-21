@@ -175,6 +175,7 @@ async function deadPid(): Promise<number> {
     // 后代忽略 TERM;根自己不 trap,所以第一刀就把根收走了。
     command: `( ${STUBBORN} ) & wait`,
     description: "忽略 TERM 的后代",
+    untilExpiry: true,
   });
   assert.equal(started.ok, true);
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;

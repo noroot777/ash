@@ -82,6 +82,18 @@ setInterval(() => {}, 1000);
     ["docker logs -f app", "docker logs -f"],
     // 引号里那个 `exit` 不是出路:这条循环真的永远不结束
     ["while true; do echo 'waiting for exit'; sleep 5; done", "while true / until false"],
+    // ↓ 第 3 轮审查 F3 之后判据倒过来写（先证明会跑、再问会不会结束），这几条是**赚回来**的:
+    //   上一版「条件分支在场 ⇒ 跟随型那一扫整个不做」把它们一起放过了
+    ["if false; then :; fi; tail -F x", "tail -f/-F"],            // 分支之后那一条照跑
+    ["while true; do tail -F x; break; done", "tail -f/-F"],      // 恒真循环第一圈就挂在它上
+    ["for f in a b; do tail -F $f; done", "tail -f/-F"],          // 列表非空 ⇒ 循环体一定跑
+    ["exec tail -F x", "tail -f/-F"],                             // 本进程被换成了那个 tail
+    ["( tail -F x )", "tail -f/-F"],                              // 子 shell 里的照跑
+    ["tail -F x && printf done", "tail -f/-F"],                   // 它自己是这条链的第一个
+    ["while :; do sleep 0.2; done", "while true / until false"],  // `while :` 跟 `while true` 同档
+    ["true; { tail -F x; }", "tail -f/-F"],                       // 花括号组里的照跑
+    // 整组放后台的那一条作废,**组外**这一条照旧拦（判据是收尾这一组的那个符号）
+    [": tok; ( while :; do sleep 0.2; done ) & while :; do sleep 0.2; done", "while true / until false"],
   ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该判成不会自退：${command}`);
   for (const command of [
     "npm test",
@@ -105,12 +117,35 @@ setInterval(() => {}, 1000);
     "printf 'one\\n' > ./-f; tail -- -f",                   // `--` 之后那个 -f 是文件名
     "tail -- -f -F x",                                     // 同上:两个都是文件名
     "# while true; do :; done\nprintf done",               // 注释里的循环没人跑
+    // ↓ 第 3 轮审查 F3 实测的**误判**:三条都在 `/bin/sh` 退出 0（第三条还打了 DONE）,而
+    //   创建入口一律 409。共同点是「切出来像命令/循环」被当成了「这件事必定会执行」。
+    "false && tail -F /dev/null; printf 'DONE\\n'",          // 短路掉的右边
+    "exit 0; tail -F /dev/null",                             // 退出之后的那一条
+    "if false; then while true; do :; done; fi; printf 'DONE\\n'", // 走不到的分支里的循环
+    // ↓ 同类（判据是「证明不出会跑」，不是这三条写法本身）
+    "(cmd) && tail -F x",                                    // `&&` 落在子 shell 收尾那一段上
+    "tail -F x & printf done",                               // 放后台:shell 不等它,立刻就结束
+    "for f in *.log; do tail -F $f; done",                   // 展开可能是空的 ⇒ 循环体未必跑
+    "if x; then exit 0; fi; tail -F y",                      // 那一支真跑了的话后面就到不了
+    "while read l; do tail -F $l; done < list",              // 条件未知的循环体
+    // ↓ 分组:放不放后台要看**收尾这一组**的那个符号,不是组里那个 `;`
+    "{ tail -F x; } & printf done",                          // 整组放后台 ⇒ shell 不等它
+    ": tok; ( while :; do sleep 0.2; done ) & sleep 0.6; exit 0", // 同上（回归台子里的真命令）
+    "false && { tail -F x; }",                               // 组整个挂在短路右边
+    "( tail -F x",                                           // 括号没配上对 ⇒ 读不懂就放行
   ]) assert.equal(neverExitsOnItsOwn(command), null, `不许拦：${command}`);
   // 条件分支**不传染**:循环体里有 `if` 不改变「这个循环没有出路」这件事,照旧要拦。
   assert.equal(
     neverExitsOnItsOwn("while true; do if [ -f x ]; then cat x; fi; sleep 5; done"),
     "while true / until false",
-    "条件分支在场时跟随型那一扫不做，但恒真循环这条判据不受影响",
+    "分支在循环体里不改变「这个循环没有出路」",
+  );
+  // 关键字只在**命令词位置**才算关键字:按文本数的话这个 `fi` 会让分支区提前收口,于是
+  // 区里那条 `tail -F x` 被当成顶层的、照拦。
+  assert.equal(
+    neverExitsOnItsOwn("if true; then grep -n fi src; tail -F x; fi; printf done"),
+    null,
+    "`grep -n fi src` 里那个 fi 是参数，不是分支的收尾词",
   );
 
   const taskId = await makeTask();
@@ -186,6 +221,22 @@ setInterval(() => {}, 1000);
   assert.equal(endConditionHit(["FAILED xx"], cond), null, "FAILED$ 只认行尾");
   assert.equal(endConditionHit(["went FAILED"], cond), "went FAILED", "行尾命中");
   assert.equal(endConditionHit(["log: SWEEP_EXIT=1 done"], cond), "log: SWEEP_EXIT=1 done", "不带锚点的在任意位置");
+
+  // **行尾那个 `\r` 不是正文**（第 3 轮审查 F2）。CRLF 的日志里每一行末尾都挂着一个回车,
+  // 而 `$` / `^…$` 恰恰是按行尾比的 —— 实测:`printf 'READY\n'` ⇒ matched,
+  // `printf 'READY\r\n'` ⇒ 事件已经送到、输出窗口里看得见 READY,状态一直 running 到到期。
+  const exact = parseEndCondition("^READY$");
+  const atEnd = parseEndCondition("DONE$");
+  assert.ok(exact.ok && exact.cond && atEnd.ok && atEnd.cond);
+  const exactCond = exact.ok ? exact.cond! : [];
+  const endCond = atEnd.ok ? atEnd.cond! : [];
+  assert.equal(endConditionHit(["READY\r"], exactCond), "READY\r", "CRLF 的整行要命中");
+  assert.equal(endConditionHit(["all DONE\r"], endCond), "all DONE\r", "CRLF 的行尾要命中");
+  // 回显是**原文那一行**（带着它的回车）:调用方要拿它去跟缓冲里那一行对位（见 `linesBody`）。
+  assert.equal(endConditionHit(["READY\r"], exactCond)?.endsWith("\r"), true, "命中回显不许改写原文");
+  // 只摘掉换行自己带的那一个回车,不是 `trim()`:正文两头真实的空格是正文。
+  assert.equal(endConditionHit(["READY "], exactCond), null, "`trim()` 会把条件语义一起改写掉");
+  assert.equal(endConditionHit([" READY"], exactCond), null, "行首那个空格同理");
 
   // **界面不许替一个读不出来的条件背书**（第 2 轮审查 F2）。库里那个值可能出自上一版语义
   // （正则源文）、跨版本接力、或者手改 —— 运行时对它的处置是「当没有结束条件」，那卡片就

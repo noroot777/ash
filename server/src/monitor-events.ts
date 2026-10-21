@@ -14,6 +14,7 @@
 import { and, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
 import { handoffToken, mergeMonitorEventText, monitorMessageOrigin } from "@ash/shared/monitor";
+import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors, scheduledMessages, tasks } from "./db/schema.js";
 import { monitorTurnSource, monitorWakeExecutor, monitorWakeGate } from "./monitor-session.js";
@@ -145,6 +146,12 @@ export async function deliverResultHandoff(monitorId: string): Promise<HandoffOu
       // CAS：只销掉自己这一趟处理的那一笔。重投器和收尾可能同时在送同一条,CAS 让后到的那一位
       // 不去空写(它那一趟会从身份那一问得到「送过了」)。
       .where(and(eq(monitors.id, monitorId), eq(monitors.resultHandoffAt, row.resultHandoffAt)));
+    // **凭证一销就得说一声**（第 3 轮审查 N2）。界面是按这一列答「它的结果还欠着吗、还要不
+    // 要」的（见 web 的 MonitorCard），而销掉它的这四条出口（送达、早就送过、撞上唯一索引、
+    // 无人可收）全都可能发生在**这个任务再也不会有别的哨兵事件**之后 —— 不发这一下,卡片就
+    // 一直写着「完成被它堵着」和一个没有用处的「不再等它的结果」,直到用户自己刷新页面。
+    // 放在这里而不是四个 return 各写一遍:上面那条 UPDATE 是四条出口的共同销账点。
+    bus.publish({ type: "task.monitors", taskId: row.taskId });
     if (sentAlready || duplicate) return "already";
     if (!delivered) {
       console.error(

@@ -26,16 +26,23 @@
 //    `printf '%s\n' 'tail -F build.log'` 被当成跟随型拦掉（审查实测 409）——匹配到的是
 //    printf 的参数，那条命令打一行就退。反过来 `tail -n 0 -F /dev/null` 和
 //    `timeout 1 true; tail -F x` 又漏判。所以这一版先把命令切成**简单命令**（尊重引号、
-//    按 `; | && & ( ) 换行` 断开），只拿每条的**命令词和它自己的 argv** 去比；引号里的字、
-//    `$( )`/反引号里的字一律不当执行节点。读不懂的形状（`eval`、脚本封装）照旧**不拦**。
+//    按 `; | && || & ( ) { } 换行` 断开），只拿每条的**命令词和它自己的 argv** 去比；引号里
+//    的字、`$( )`/反引号里的字一律不当执行节点。读不懂的形状（`eval`、脚本封装）**不拦**。
 //
-// ③ **拦的凭据必须是「这一条真的会跑」**（第 2 轮审查 F3）。②只做到了「不搜整串文本」,而
-//    切出来的简单命令里仍混着一堆**不是执行节点**的东西,于是五种会自己结束的命令被 409
-//    拦掉（审查实测，全部 `/bin/sh` 退出 0）：here-doc 的文档体、`#` 注释、从没被调用过的
-//    函数体、`if false; then … fi` 这种走不到的分支，以及 `tail -- -f`（`--` 之后那个 `-f`
-//    是文件名不是开关）。这一层读不出执行资格的结构（here-doc、函数定义）**整条命令放行**,
-//    读得出但判不出哪几支会跑的（条件分支）**跟随型那一扫整个不做**,`--` 按各命令自己的
-//    argv 规则尊重。少拦几条 = 退回今天的行为；多拦一条 = 一件做得成的事做不成了。
+// ③ **拦的凭据必须是「这一条真的会跑」**（第 2 轮审查 F3、第 3 轮审查 F3）。②只做到了
+//    「不搜整串文本」,而切出来的简单命令里仍混着一堆**不是执行节点**的东西,于是八种会自己
+//    结束的命令被 409 拦掉（两轮审查实测，全部 `/bin/sh` 退出 0）：here-doc 的文档体、
+//    `#` 注释、从没被调用过的函数体、`if false; then … fi` 这种走不到的分支、`tail -- -f`
+//    （`--` 之后那个 `-f` 是文件名不是开关）、`false && tail -F x; printf done`（短路掉的
+//    右边）、`exit 0; tail -F x`（退出之后的那一条）、`if false; then while true; do :;
+//    done; fi`（走不到的分支里的循环）。
+//
+// ④ **所以这一版是「先证明会跑、再问它会不会结束」,不是「先拦下来、再逐个豁免」**
+//    （第 3 轮审查 F3）。上一版的形状是后者:一堆 if 往外豁免 —— 每次审查补一个写法,而漏
+//    掉的那些照旧误拦。倒过来之后 `provableBlocker` 只走**证明得出会跑**的那几条简单命令:
+//    不在 `if`/`case` 分支里、不在条件未知的循环体里、前面没有 `&&`/`||` 短路、前面没出现过
+//    `exit`/`exec`,收尾符号也不是 `&`（放后台 ⇒ shell 不等它）。读不懂的结构一律放行,而
+//    「读不懂」是**结构**读不懂（配不上对的 `fi`、认不出的循环条件），不是「这个写法没见过」。
 //
 // ── 误判的代价不对称，所以只认**明确**的那几种 ───────────────────────────────────
 //
@@ -124,8 +131,26 @@ export function parseEndCondition(pattern: string | null | undefined): EndCondit
   return { ok: true, cond: terms };
 }
 
+/**
+ * 行尾那个 `\r` 不是正文（第 1 轮审查 F2）。
+ *
+ * CRLF 的日志里每一行末尾都挂着一个回车,而 `$` / `^…$` 这两种锚点恰恰是按**行尾**比的 ——
+ * 不摘掉它,用户在输出窗口里**看得见** READY、事件也已经送到,而「整行就是 READY」永远不
+ * 命中（审查实测:`printf 'READY\n'` ⇒ matched,`printf 'READY\r\n'` ⇒ 一直 running 到到期）。
+ * 产出 CRLF 的不只有 Windows:任何把日志从 Windows 工具链里接出来、或者自己 `printf` 了
+ * `\r\n` 的命令都算。
+ *
+ * **只摘掉换行自己带的那一个回车**,不是 `trim()`:正文两头真实的空格和制表符是正文,
+ * 整个 trim 掉会把 `DONE $` 这种条件的语义一起改写掉。
+ *
+ * 规范化只发生在**匹配这一侧**:日志的字节游标、事件正文、命中回显一律按原文算
+ * （游标按原始字节数前进,回显要跟日志里那一行对得上）。
+ */
+const dropCr = (line: string) => (line.endsWith("\r") ? line.slice(0, -1) : line);
+
 /** 一行命中没有。**只用 includes/startsWith/endsWith**:耗时上界是行长 × 候选数（见文件头 ①）。 */
-function lineHits(line: string, cond: EndCondition): boolean {
+function lineHits(raw: string, cond: EndCondition): boolean {
+  const line = dropCr(raw);
   for (const { needle, atStart, atEnd } of cond) {
     if (atStart && atEnd) { if (line === needle) return true; continue; }
     if (atStart) { if (line.startsWith(needle)) return true; continue; }
@@ -135,7 +160,10 @@ function lineHits(line: string, cond: EndCondition): boolean {
   return false;
 }
 
-/** 这一批新吐出来的行里，有没有一条命中了约定的结束条件。返回命中的那一行。 */
+/**
+ * 这一批新吐出来的行里，有没有一条命中了约定的结束条件。返回命中的那一行 ——
+ * **原文那一行**（带着它自己的行尾回车），调用方要拿它去跟缓冲里的行对位。
+ */
 export function endConditionHit(lines: readonly string[], cond: EndCondition): string | null {
   for (const line of lines) if (lineHits(line, cond)) return line;
   return null;
@@ -177,7 +205,7 @@ export function endConditionNote(pattern: string): string {
 
 type Token = { text: string; quoted: boolean };
 
-/** 引号内的内容换成等长空格:做循环检测时用，`echo 'waiting for exit'` 不该捐出一个 `exit`。 */
+/** 引号内的内容换成等长空格:做文本判据时用，`echo 'waiting for exit'` 不该捐出一个 `exit`。 */
 function blankQuoted(command: string): string {
   let out = "";
   let i = 0;
@@ -197,14 +225,30 @@ function blankQuoted(command: string): string {
 }
 
 /**
- * 把命令切成**简单命令**（每条是它的 token 列表）。
+ * 两条简单命令之间那个符号。**它决定后面那一条证明不证明得出会跑**（见文件头 ④）:
  *
- * 只认结构，不认意图：引号里的内容合成一个 token 并打上 `quoted`（**永远不会被当成命令词**），
- * `$( )` 与反引号整段跳过（里面是另一层执行，这一层读不懂就不猜）。断开符是
- * `; & | 换行 ( ) { }` —— `&&`/`||` 由单字符分支自然覆盖。
+ * · `;`、换行 —— 后面那条照跑（前一条的退出码不影响它）
+ * · `&&`、`||` —— 后面那条跑不跑**要看前一条的退出码**,这一层答不出来
+ * · `|` —— 管道各级都会跑,所以不打断「会跑」这件事
+ * · `&` —— 放后台,**shell 不等它**:`tail -F x & printf done` 这条命令立刻就结束了
+ * · `(` `{` `)` `}` —— 分组本身不决定任何事,**收尾那一组的那个符号才决定**:
+ *   `{ tail -F x; } & printf done` 里那个 `;` 在组里,放不放后台要看 `}` 后面的 `&`
  */
-function simpleCommands(command: string): Token[][] {
-  const cmds: Token[][] = [];
+type Sep = ";" | "&" | "&&" | "|" | "||" | "(" | ")" | "{" | "}" | "eof";
+/** 一条简单命令 + 收尾它的那个符号。token 可以是空的（`(`、`;;`、注释行留下的空段）。 */
+type Segment = { tokens: Token[]; sep: Sep };
+
+/**
+ * 把命令切成**简单命令 + 它的收尾符号**。
+ *
+ * 只认结构，不认意图：引号里的内容合成一个 token 并打上 `quoted`（**永远不会被当成命令词、
+ * 也永远不会被当成关键字**），`$( )` 与反引号整段跳过（里面是另一层执行，这一层读不懂就不猜）。
+ *
+ * **空段也留着**（`tokens` 为空）:它身上那个符号还有用 —— `(cmd) && tail -F x` 里的 `&&`
+ * 正好落在 `(` 留下的那个空段上,丢掉它就等于把「要看前一条退出码」这件事丢掉。
+ */
+function segments(command: string): Segment[] {
+  const out: Segment[] = [];
   let cur: Token[] = [];
   let text = "";
   let quoted = false;
@@ -215,9 +259,9 @@ function simpleCommands(command: string): Token[][] {
     quoted = false;
     started = false;
   };
-  const endCommand = () => {
+  const endSegment = (sep: Sep) => {
     endToken();
-    if (cur.length) cmds.push(cur);
+    out.push({ tokens: cur, sep });
     cur = [];
   };
   let i = 0;
@@ -257,22 +301,25 @@ function simpleCommands(command: string): Token[][] {
     // 不执行 —— 上一版照旧切成简单命令，于是 `printf done # tail -F build.log` 被拦（F3）。
     if (c === "#" && !started) {
       const nl = command.indexOf("\n", i);
-      endCommand();
+      endSegment(";");
       i = nl < 0 ? command.length : nl;
       continue;
     }
     if (c === " " || c === "\t" || c === "\r") { endToken(); i += 1; continue; }
-    if (c === "\n" || c === ";" || c === "&" || c === "|" || c === "(" || c === ")" || c === "{" || c === "}") {
-      endCommand();
-      i += 1;
+    if (c === "\n" || c === ";") { endSegment(";"); i += 1; continue; }
+    if (c === "&" || c === "|") {
+      const twice = command[i + 1] === c;
+      endSegment(twice ? (c === "&" ? "&&" : "||") : c === "&" ? "&" : "|");
+      i += twice ? 2 : 1;
       continue;
     }
+    if (c === "(" || c === ")" || c === "{" || c === "}") { endSegment(c); i += 1; continue; }
     text += c;
     started = true;
     i += 1;
   }
-  endCommand();
-  return cmds;
+  endSegment("eof");
+  return out;
 }
 
 /** 这些词只是**包一层**，真正跑的是后面那个命令。跳过它们和它们自己的开关。 */
@@ -340,11 +387,11 @@ const FOLLOWERS: readonly { name: string; what: string; follows: (argv: Token[])
 ];
 
 /**
- * 把注释从**已经抹掉引号内容**的文本里也抹掉（按文本看的那几条判据用，长度保持不变）。
+ * 把注释从**已经抹掉引号内容**的文本里也抹掉（按文本看的那两条判据用，长度保持不变）。
  *
- * 跟 `simpleCommands` 里那一支是同一条规矩的两处落点：那边决定「哪几条是简单命令」，这边
- * 决定「`while true` / 函数定义 / 条件分支这些结构算不算出现过」。少一处，`# while true;
- * do :; done` 这样的注释就又会把一条打一行就退的命令拦下来。
+ * 跟 `segments` 里那一支是同一条规矩的两处落点：那边决定「哪几条是简单命令」，这边决定
+ * 「here-doc / 函数定义这些结构算不算出现过」。少一处，`# later() { … }` 这样的注释就又会
+ * 把一条打一行就退的命令说成读不懂。
  */
 function blankComments(text: string): string {
   let out = "";
@@ -374,16 +421,183 @@ function blankComments(text: string): string {
 const FUNC_DEF = /(?:^|[;&|\n])\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_-]*\s*(?:\(\s*\)\s*[{(]|\{)/;
 /** here-doc / here-string:`<<EOF` 到终止词之间是**数据**,不是执行节点。 */
 const HERE_DOC = /<</;
-/**
- * 条件分支。哪几支真的会跑是运行时的事，这一层判不出 —— 所以**跟随型那一扫整个不做**
- * （`if false; then tail -F x; fi` 曾因此被拦）。恒真循环那一条判据不受影响：循环体里有
- * `if` 不改变「这个循环没有出路」这件事，照旧要拦。
- */
-const CONDITIONAL = /(?<![-./\w])(?:if|elif|else|then|fi|case|esac)\b/;
 
-/** `while true` / `until false` 这类恒真循环。循环体里有 `break`/`exit` 就不算。 */
-const FOREVER_LOOP = /\b(?:while\s+(?:true|:)|until\s+false)\b([\s\S]*?)\bdone\b/;
-const ESCAPES = /\b(?:break|exit|return)\b/;
+/** 分支结构:开它的词 → 关它的词。**整区不扫** —— 哪几支会跑是运行时的事。 */
+const BRANCH: Record<string, string> = { if: "fi", case: "esac" };
+/** 循环头。`do … done` 之间是循环体,它跑不跑得到另算（见 `loopShape`）。 */
+const LOOP_HEADS = new Set(["while", "until", "for", "select"]);
+/** 结构骨架:这些词不是命令词,剥掉之后那一段才是真正的简单命令（`then tail -F x`）。 */
+const SKELETON = new Set(["then", "else", "elif", "do", "done", "fi", "esac", "in", "!"]);
+/** 关键字只在**命令词位置**才算关键字（`grep -n fi src` 里那个 `fi` 是参数）。 */
+const KEYWORDS = new Set([...Object.keys(BRANCH), ...LOOP_HEADS, ...SKELETON]);
+/**
+ * 一旦出现，**它后面的东西一条都证明不出会跑**:`exit 0; tail -F x` 里那个 tail 永远不会
+ * 执行（第 1 轮审查 F3 实测:`/bin/sh` 当场退出 0,而创建闸照旧 409）。
+ *
+ * `exec` 在列是为了扫区（`if x; then exec foo; fi` 之后也证明不出什么），但它在**命令词
+ * 位置**上另算:`exec tail -F x` 把本进程换成了那个 tail,这条命令该拦 —— 所以那一支先按
+ * 它包着的命令判一次,再停止往后扫（见 `provableBlocker` 里那一行）。
+ */
+const TERMINATORS = new Set(["exit", "exec", "return"]);
+/** 恒真循环的出路。循环体里有它们，那个循环就不是「没有出路」。 */
+const ESCAPES = new Set(["break", "exit", "return"]);
+/** `while` 的恒真条件。`until` 的那一边是 `false`。 */
+const TRUE_WORDS = new Set(["true", ":"]);
+
+/** 这一段开头那个词（引号里的永远不算）。没有就是空串。 */
+function headOf(tokens: Token[]): string {
+  const t = tokens[0];
+  return t && !t.quoted ? t.text : "";
+}
+
+/** 这一段开头连着的那几个**结构关键字**（`do while true` 这种连写也要全认出来）。 */
+function headKeywords(tokens: Token[]): string[] {
+  const out: string[] = [];
+  for (const t of tokens) {
+    if (t.quoted || !KEYWORDS.has(t.text)) break;
+    out.push(t.text);
+  }
+  return out;
+}
+
+/**
+ * 从第 `from` 段起，找到跟它配对的那个收尾词所在的段（`if`→`fi`、`case`→`esac`、`do`→`done`）。
+ *
+ * **只认命令词位置上的关键字**:`if true; then grep -n fi src; tail -F x; fi` 里那个 `fi` 是
+ * grep 的参数,按文本数它会让这个区提前收口,于是区里的 `tail -F x` 被当成顶层的、照拦。
+ */
+function matchEnd(segs: Segment[], from: number, open: string, close: string): number {
+  let depth = 0;
+  for (let i = from; i < segs.length; i += 1) {
+    for (const w of headKeywords(segs[i]!.tokens)) {
+      if (w === open) depth += 1;
+      else if (w === close && (depth -= 1) === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** 第 `from`..`to` 段里所有**没被引号包起来**的词（找 `break`/`exit` 这类出路用）。 */
+function wordsIn(segs: Segment[], from: number, to: number): string[] {
+  const out: string[] = [];
+  for (let i = from; i <= to && i < segs.length; i += 1) {
+    for (const t of segs[i]!.tokens) if (!t.quoted) out.push(t.text);
+  }
+  return out;
+}
+
+/**
+ * 这个循环:**循环体跑不跑得到**、**它自己会不会结束**。
+ *
+ * · `while true` / `until false` —— 恒真:循环体一定跑得到,而且没有 `break` 就永远不结束
+ * · `for x in a b` —— 列表里有确定非空的字面词,循环体一定跑得到（循环本身会结束）
+ * · 其余（`while cond`、`for f in *.log`、`for f in $LIST`、`for f`）—— 列表可能是空的、
+ *   条件可能一上来就假,**循环体跑不跑得到答不出来** ⇒ 整区不扫
+ */
+function loopShape(head: string, tokens: Token[]): { bodyRuns: boolean; endless: boolean } {
+  const w1 = tokens[1];
+  const word = w1 && !w1.quoted ? w1.text : "";
+  const endless = (head === "while" && TRUE_WORDS.has(word)) || (head === "until" && word === "false");
+  if (endless) return { bodyRuns: true, endless: true };
+  if (head === "for" || head === "select") {
+    const at = tokens.findIndex((t) => !t.quoted && t.text === "in");
+    const literal = at >= 0 && tokens.slice(at + 1).some((t) => !/[*?[\]$~]/.test(t.text));
+    return { bodyRuns: literal, endless: false };
+  }
+  return { bodyRuns: false, endless: false };
+}
+
+/**
+ * 扫出**证明得出会跑**的那几条简单命令，对它们问 FOLLOWERS;顺带认恒真循环（见文件头 ③）。
+ *
+ * 一条简单命令「证明得出会跑」要同时满足两件:
+ *  ① 它不在任何**答不出哪几支会跑**的区里（`if`/`case` 的分支、条件未知的循环体）
+ *  ② 从上一个 `;`/换行 到它之间没有 `&&`/`||`（那两个要看前一条的退出码），而且前面没出现过
+ *     `exit`/`exec`/`return`（那之后什么都证明不出来）
+ *
+ * 读不懂的结构一律**放行**:配不上对的 `fi`、认不出的循环条件、`eval` 这种另一层执行 ——
+ * 少拦几条 = 退回今天的行为；多拦一条 = 一件做得成的事做不成了（见文件头那段不对称）。
+ */
+function provableBlocker(segs: Segment[]): string | null {
+  // 「这一条证明得出会跑吗」。`&&`/`||` 把它按掉，下一个 `;`/换行 把它恢复。
+  let reach = true;
+  // `( … )` / `{ … }` 的嵌套深度。**组里那些 `;` 不作数**:一组放不放后台要看收尾它的那个
+  // 符号,而组里最后那条命令后面按语法必须有个 `;`（`{ tail -F x; } &`）。
+  let depth = 0;
+  // 这条管道里扫到的跟随型。**等管道收尾才算数**:收尾符号是 `&` 的话它整条放后台，
+  // shell 不等它 —— 那时这个判据作废（`tail -F x & printf done` 立刻就结束了）。
+  let pipeline: string | null = null;
+  for (let i = 0; i < segs.length; i += 1) {
+    let tokens = segs[i]!.tokens;
+    for (;;) {
+      const head = headOf(tokens);
+      if (!head) break;
+      const close = BRANCH[head];
+      if (close) {
+        // 分支区:整区不扫。区里有 `exit`/`exec` ⇒ 区后面的也证明不出来（那一支可能真的跑了）。
+        const end = matchEnd(segs, i, head, close);
+        if (end < 0) return pipeline;
+        if (wordsIn(segs, i, end).some((w) => TERMINATORS.has(w))) return pipeline;
+        i = end;
+        tokens = [];
+        break;
+      }
+      if (LOOP_HEADS.has(head)) {
+        const end = matchEnd(segs, i, "do", "done");
+        if (end < 0) return pipeline;
+        const { bodyRuns, endless } = loopShape(head, tokens);
+        if (!bodyRuns || !reach) {
+          if (wordsIn(segs, i, end).some((w) => TERMINATORS.has(w))) return pipeline;
+          i = end;
+          tokens = [];
+          break;
+        }
+        // 恒真又没有出路 ⇒ 就是它。**但同样等收尾符号点头**:`( while :; do :; done ) & 干活`
+        // 里这一组整个放了后台,shell 不等它 —— 所以这里只记下判定,跳到这个循环的收尾那一段,
+        // 由它身上（或它所在那一组身上）的符号决定作不作数。
+        if (endless && !wordsIn(segs, i, end).some((w) => ESCAPES.has(w))) {
+          pipeline = "while true / until false";
+          i = end;
+          tokens = [];
+          break;
+        }
+        // 有出路的话循环体第一圈照样跑得到,所以不跳过:
+        // `while true; do tail -F x; break; done` 第一圈就挂在 tail 上。
+        tokens = [];
+        break;
+      }
+      // 配不上对的 `fi`/`esac`:分支区一律是**整区跳过去**的（上面那一支），所以能走到这儿
+      // 的只有读不懂的结构（多半根本不是合法的 shell）—— 读不懂就放行。
+      if (head === "fi" || head === "esac") return pipeline;
+      if (SKELETON.has(head)) { tokens = tokens.slice(1); continue; }
+      if (head === "exit" || head === "return") return pipeline;
+      break;
+    }
+    const cmd = tokens.length ? commandOf(tokens) : null;
+    if (cmd && !cmd.bounded && reach) {
+      for (const f of FOLLOWERS) if (f.name === cmd.name && f.follows(cmd.argv)) { pipeline = f.what; break; }
+    }
+    // `exec cmd` 把本进程换成 cmd（`WRAPPERS` 已经让上面按 cmd 判过了）—— 它之后的都跑不到。
+    if (cmd && headOf(tokens) === "exec") return pipeline;
+    // 收尾符号决定下一条（见 `Sep`）。注意读的是 `segs[i]`:上面跳过整区时 `i` 已经挪到那个
+    // 区的收尾段上,要的正是**那一段**的符号（`fi && tail -F x` 里的 tail 就证明不出会跑）。
+    switch (segs[i]!.sep) {
+      case "&": pipeline = null; reach = true; break;          // 放后台 ⇒ 这一条判定作废
+      case "&&": case "||": reach = false; break;
+      case "|": break;                                          // 管道各级都会跑
+      case "(": case "{": depth += 1; break;
+      // 组收口本身不决定任何事:作不作数由**收尾这一组**的那个符号说（它落在紧跟其后那个
+      // 空段上）—— 于是 `( … ) &` 和 `( … );` 两种分得开。
+      case ")": case "}": depth = Math.max(0, depth - 1); break;
+      default: {
+        if (pipeline && depth === 0) return pipeline;
+        reach = true;
+      }
+    }
+  }
+  // 组括号没配上对 ⇒ 这条命令在 shell 那边本来就是个语法错误,读不懂就放行。
+  return depth === 0 ? pipeline : null;
+}
 
 /**
  * 这条命令**自己永远不会结束**吗。
@@ -392,23 +606,11 @@ const ESCAPES = /\b(?:break|exit|return)\b/;
  * 「永不退出」本身不是错，错的是**既永不退出、又没有任何别的结束条件**。
  */
 export function neverExitsOnItsOwn(command: string): string | null {
-  // 按文本看的那几条判据共用这一份:引号内容和注释都已经抹掉,长度不变。
-  const plain = blankComments(blankQuoted(command));
   // **读不出执行资格的结构 ⇒ 整条命令放行**（见文件头 ③）。here-doc 的终止词、函数体到底
   // 调没调过，这一层都只能猜；猜错的那一半代价是「一件做得成的事做不成」。
+  const plain = blankComments(blankQuoted(command));
   if (HERE_DOC.test(plain) || FUNC_DEF.test(plain)) return null;
-  // 条件分支在场时跟随型那一扫整个不做：切出来的简单命令里混着走不到的那几支，分不清。
-  if (!CONDITIONAL.test(plain)) {
-    for (const tokens of simpleCommands(command)) {
-      const cmd = commandOf(tokens);
-      if (!cmd || cmd.bounded) continue;
-      for (const f of FOLLOWERS) if (f.name === cmd.name && f.follows(cmd.argv)) return f.what;
-    }
-  }
-  // 循环是跨简单命令的结构，只能按文本看。
-  const loop = FOREVER_LOOP.exec(plain);
-  if (loop && !ESCAPES.test(loop[1] ?? "")) return "while true / until false";
-  return null;
+  return provableBlocker(segments(command));
 }
 
 /**

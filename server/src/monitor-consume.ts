@@ -1,15 +1,20 @@
 // 哨兵的**消费循环**:tail 读回来的行怎么变成事件,以及每一批行的**结局**。
 //
 // 从 monitors.ts 拆出来的（全局约定:单文件不超过 700 行）。运行时注册表、盯与停仍在那边,
-// 这一层只负责「一批行」这件事的三条不变量:
+// 这一层只负责「一批行」这件事的四条不变量:
 //
 // ① **消息落库之后**才推进事件计数和读取位置（反过来排 = 重启那一下静默吞掉几行）。
 // ② **一批有上界**:`MONITOR_MAX_LINES_PER_FLUSH`。吃不完的留在缓冲里下一批接着来 ——
 //    放回、渲染、重放这三步都按行数线性涨,没有上界就会在一次大爆发上各炸一次。
 // ③ **每一批都答得出自己算谁的**:`FlushOutcome` 的五档。「推一次就不管了」正是第 1、2 轮
 //    审查那几个现场的共同形状:行没送出去,而调用方按「已经送完」继续往下走。
+// ④ **读取位置只许推到「它前面每个字节都已交付或已明确放弃」的地方**（第 3 轮审查 F1）。
+//    这一条是 ① 的对称面:①管「这一批」,④管**整个游标**—— 空行快进、分批、失败重试、
+//    收尾排干、离线补读全都在写同一个游标,所以判据只有一份(`commitProgress`),而不是每个
+//    写入口各自现场判一次时序。
 import { eq } from "drizzle-orm";
 import {
+  MONITOR_BATCH_MS,
   MONITOR_MAX_EVENTS,
   MONITOR_MAX_LINE_CHARS,
   MONITOR_MAX_LINES_PER_FLUSH,
@@ -22,9 +27,63 @@ import { monitors } from "./db/schema.js";
 import { pushToTask } from "./monitor-events.js";
 import { publish, runtimes, serialize, settleInBackground, type Row, type Runtime } from "./monitors.js";
 
-export async function commitOffset(monitorId: string, offset: number): Promise<void> {
-  if (dbClient.closed) return;
-  await db.update(monitors).set({ offset }).where(eq(monitors.id, monitorId)).catch(() => {});
+/**
+ * 还有没有**没结清**的内容。两项都要看:
+ *
+ *  · 缓冲里压着的 —— 还没送的，以及送失败放回来等重试的
+ *  · **正在送的那一批** —— `flushBuffer` 一开头就 `splice` 走了它,那一刻缓冲是空的,而那
+ *    几行一个都还没落库
+ *
+ * 只看缓冲就是上一版那个洞（第 3 轮审查 F1）。
+ */
+const outstanding = (rt: Runtime): boolean => rt.buffer.length > 0 || rt.inflight > 0;
+
+/**
+ * 把读取位置落库。**没结清的内容在场时一个字节都不推**（见文件头 ④）。
+ *
+ * 不传运行时就按注册表里那一个判:离线补读那一路已经把运行时撤了,查不到 = 内存里没有任何
+ * 没结清的内容,跟「有运行时、而它是干净的」是同一个答案。
+ *
+ * 落空（返回 false）不需要补救:下一批行交付时会把游标带到它自己的位置,之后的空行照旧快进。
+ * 代价只是命令**从此彻底安静**时游标停在交付点上 —— 重启接回从那儿重读一遍,空行照旧被过滤
+ * 掉,而没交付的那几行**正该**再推一次。
+ */
+export async function commitProgress(monitorId: string, offset: number, rtOverride?: Runtime): Promise<boolean> {
+  const rt = rtOverride ?? runtimes.get(monitorId);
+  if (rt && outstanding(rt)) return false;
+  if (dbClient.closed) return false;
+  try {
+    await db.update(monitors).set({ offset }).where(eq(monitors.id, monitorId));
+    return true;
+  } catch (error) {
+    // 落不下去是安全的那一侧（游标偏小 ⇒ 重读 ⇒ 最多重推一次），但不静默:静默会让
+    // 「一直推不动的游标」看起来跟「没有新内容」一模一样。
+    console.error(`[ash] 哨兵 ${monitorId} 的读取位置没落下去（offset=${offset}）:`, error);
+    return false;
+  }
+}
+
+/**
+ * 一次 tail 回调:几行新内容 + **整个缓冲读到文件哪个字节**。
+ *
+ * 这一支是「空行快进」唯一的入口。读到的全是空行时位置本可以直接前进 —— 没有事件要落,不
+ * 存在「推进了却丢事件」。但**「缓冲这会儿是空的」不等于「前面那几行已经交付」**:上一版拿
+ * `rt.buffer.length` 当判据、把一个**无条件**的 offset 提交排进队列,于是第 3 轮审查实测的
+ * 那一幕 —— 命令打完 `FINAL_OFFSET=0` 就睡,那一笔事件 INSERT 失败一次、行回到缓冲等两秒后
+ * 重试,排在后面的空行提交却成功了:游标走到日志结尾(offset=16、events=0、消息从未入队),
+ * 重启接回从那儿开始读,那一行再也读不回来。
+ *
+ * 所以判据挪进 `commitProgress`,而且**在队列里现算**:排队那一刻和真正提交之间隔着一整笔
+ * 推送,时序只能在提交的那一刻判。
+ */
+export function consumeTailChunk(rt: Runtime, monitorId: string, lines: string[], offset: number): void {
+  for (const line of lines) if (line.trim()) rt.buffer.push(line);
+  if (!rt.buffer.length) {
+    void serialize(monitorId, () => commitProgress(monitorId, offset, rt));
+    return;
+  }
+  rt.readTo = offset;
+  armFlush(rt, monitorId, MONITOR_BATCH_MS);
 }
 
 function trim(line: string): string {
@@ -32,17 +91,32 @@ function trim(line: string): string {
 }
 
 /**
- * 一批行渲染成一段话:抬头 + 前几行 + 省略了多少 + **命中那一行**。
+ * 这一批里**命中结束条件的那一行**（没有就是 null）。纯内存、纯比较,没有回溯这回事
+ * （见 shared 的 `monitor-end-condition.ts` 文件头 ①）。
  *
- * `keep` 是这一批里命中结束条件的那一行。它必须出现在这段话里（第 2 轮审查 N2）:列表只列
- * 前 `MONITOR_MAX_LINES_PER_PUSH` 行,而命中那一行恰恰可以排在第 41 行往后 —— 它多半就是
- * agent 要的那个结果本身,被省略掉的话,它只会收到一句「等到了约定的那一行」和一批看不出
- * 所以然的开头几行。
+ * **正文构造层自己算，不让调用点传**（第 3 轮审查 N1）。上一版它是 `pushLines` 的一个可选
+ * 参数:在线冲刷和在线收尾都传了,离线补读那一处没传 —— 于是重启之后补读出来的那一批里,
+ * 排在第 41 行往后的结束结果照旧被正文省掉,而那一行多半就是 agent 要的结果本身。可选参数
+ * 的默认值就是「忘了传」那条路,所以这一版不给调用点这个选择:算它只需要行和 `stopWhen`,
+ * 两样在构造正文的那一刻本来就都在手上。
+ */
+export function hitOf(row: Pick<Row, "stopWhen">, lines: readonly string[]): string | null {
+  const cond = parseEndCondition(row.stopWhen);
+  return cond.ok && cond.cond ? endConditionHit(lines, cond.cond) : null;
+}
+
+/**
+ * 一批行渲染成一段话:前几行 + 省略了多少 + **命中那一行**。
+ *
+ * 命中那一行必须出现在这段话里（第 2 轮审查 N2）:列表只列前 `MONITOR_MAX_LINES_PER_PUSH`
+ * 行,而命中那一行恰恰可以排在第 41 行往后 —— 它多半就是 agent 要的那个结果本身,被省略掉
+ * 的话,它只会收到一句「等到了约定的那一行」和一批看不出所以然的开头几行。
  *
  * 收尾那条通知也用这一份（见 `finish` 里的「尚欠的那一批」）:两处各写一遍渲染,就会出现
  * 「单独送的时候列 40 行、附在通知里时列 5 行」这种说不清的差别。
  */
-export function linesBody(lines: string[], keep: string | null): string {
+export function linesBody(row: Pick<Row, "stopWhen">, lines: string[]): string {
+  const keep = hitOf(row, lines);
   const shown = lines.slice(0, MONITOR_MAX_LINES_PER_PUSH).map(trim);
   const omitted = lines.length - shown.length;
   const tail = omitted > 0 ? `\n…（这一批共 ${lines.length} 行，上面只列了前 ${shown.length} 行）` : "";
@@ -54,8 +128,8 @@ export function linesBody(lines: string[], keep: string | null): string {
 
 /** 同上，外面套一层抬头。**抬头只在「这条消息就是一批事件」时才给** —— 收尾那条通知自己 */
 /*  已经有抬头了，再套一层就是同一个 description + monitorId 连说两遍。 */
-export function renderLines(row: Row, lines: string[], keep: string | null): string {
-  return `【哨兵事件】${row.description}（monitorId=${row.id}）\n${linesBody(lines, keep)}`;
+export function renderLines(row: Row, lines: string[]): string {
+  return `【哨兵事件】${row.description}（monitorId=${row.id}）\n${linesBody(row, lines)}`;
 }
 
 /**
@@ -66,14 +140,8 @@ export function renderLines(row: Row, lines: string[], keep: string | null): str
  * 收不到（第 1 轮审查复现：read_offset=13、events=0、消息为空，日志里那行完好无损）。
  * 反过来排的代价只是重启后可能把同一批行再推一次，重复远比静默丢失便宜。
  */
-export async function pushLines(
-  row: Row,
-  lines: string[],
-  readTo: number | null,
-  /** 这一批里命中结束条件的那一行（没有就是 null）。**一定要出现在消息里**，见下。 */
-  keep: string | null = null,
-): Promise<number> {
-  const delivered = await pushToTask(row, renderLines(row, lines, keep));
+export async function pushLines(row: Row, lines: string[], readTo: number | null): Promise<number> {
+  const delivered = await pushToTask(row, renderLines(row, lines));
   // `events` 数的是「**唤醒过任务几次**」，不是「读到过几行」。没投出去的那几行一次唤醒
   // 都没造成，计进去只会让卡片显示「已有 3 条事件」而任务那边一声没响——用户据此以为
   // 通知已经处理过了（第 2 轮审查实测：终态任务上卡片显示 1 条事件、待发消息数 0）。
@@ -152,6 +220,19 @@ export async function flushBuffer(monitorId: string, rtOverride?: Runtime): Prom
   // **一批有上界**（见 `MONITOR_MAX_LINES_PER_FLUSH`）。吃不完的留在缓冲里,马上再排一次。
   const partial = rt.buffer.length > MONITOR_MAX_LINES_PER_FLUSH;
   const lines = rt.buffer.splice(0, MONITOR_MAX_LINES_PER_FLUSH);
+  // **从这一刻起这一批算「在途」**（见 `outstanding`）:它已经不在缓冲里了,而一个字节都还
+  // 没落库 —— 空行快进这期间必须挡住。`finally` 里减,所以抛了也不会把它永久算成在途。
+  rt.inflight += 1;
+  try {
+    return await flushLocked(rt, monitorId, lines, partial);
+  } finally {
+    rt.inflight -= 1;
+  }
+}
+
+async function flushLocked(
+  rt: Runtime, monitorId: string, lines: string[], partial: boolean,
+): Promise<FlushOutcome> {
   // 分批的那几批**不推游标**:`readTo` 说的是「整个缓冲读到文件哪个字节」,前一批先把它推
   // 上去,留在缓冲里的后一批就被跳过去了（重启/离线补读都会从游标之后开始找）。
   const readTo = partial ? null : rt.readTo;
@@ -177,15 +258,11 @@ export async function flushBuffer(monitorId: string, rtOverride?: Runtime): Prom
   // 判据一旦依赖「前面那几笔读写恰好都成功」，它就跟着那些读写一起失败：上一版把这一句排在
   // `pushLines` 之后，于是通知入队失败一次，这一批里那条 `DONE` 就再也不会被看见
   // （后面没有输出 ⇒ 不会再有下一次 flush）。现在它是纯内存的，排在任何库操作之前。
-  //
-  // 匹配本身没有回溯这回事（结束条件是字面量候选，见 shared 的 `monitor-end-condition.ts`
-  // 文件头 ①），所以这一笔在主线程上跑是有上界的。
-  const cond = parseEndCondition(row.stopWhen);
-  const hit = cond.ok && cond.cond ? endConditionHit(lines, cond.cond) : null;
+  const hit = hitOf(row, lines);
 
   let events: number;
   try {
-    events = await pushLines(row, lines, readTo, hit);
+    events = await pushLines(row, lines, readTo);
   } catch (error) {
     console.error(`[ash] 哨兵 ${monitorId} 这一批 ${lines.length} 行没推出去,放回缓冲重试:`, error);
     return returnToBuffer(rt, monitorId, lines, readTo);
@@ -216,4 +293,3 @@ export async function flushBuffer(monitorId: string, rtOverride?: Runtime): Prom
   if (partial) armFlush(rt, monitorId, 0);
   return "delivered";
 }
-

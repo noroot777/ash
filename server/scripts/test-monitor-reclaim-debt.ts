@@ -213,7 +213,7 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   // stopped 返回 —— 紧接着删除、重启,这个进程就永远留在后台了(审查实测:先点停再删除,
   // taskRows=0、monitors=[]、debtRows=0、命令仍活)。
   const taskId = await makeTask({ status: "running" });
-  const started = await startMonitor({ taskId, command: STUBBORN, description: "用户点停的" });
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "用户点停的", untilExpiry: true });
   assert.equal(started.ok, true);
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
 
@@ -354,7 +354,7 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   // ⑩-10 **ps 短暂不可用的那条路**(第 6 轮审查 F1 实测的那一条,端到端):
   // 接回 → 删除 → 重启清扫,三步都在「身份问不出来」的前提下必须守住不变量。
   const taskId = await makeTask({ status: "running" });
-  const started = await startMonitor({ taskId, command: STUBBORN, description: "查询不可用时收尾的" });
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "查询不可用时收尾的", untilExpiry: true });
   assert.equal(started.ok, true);
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
   // 任务已经落终态 ⇒ 接回时会判它没有出口、当场收掉它(⑩-4 那条路),这次叠加 ps 不可用。
@@ -424,7 +424,7 @@ const { invalidateMonitorUnitScan, monitorUnitProofGrade } = await import("../sr
   // 继续收;ps 恢复之后探活那一问会自己判出结果。原来按 `isSameProcess` 一刀切,ps 一抽
   // 就把一条还活着的哨兵写成终态 —— 既撒谎,又让它从此无法叫停。
   const taskId = await makeTask({ status: "running" }); // 任务还在跑 ⇒ 出口是通的
-  const started = await startMonitor({ taskId, command: STUBBORN, description: "查询不可用时接回的" });
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "查询不可用时接回的", untilExpiry: true });
   assert.equal(started.ok, true);
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
   detachAllMonitors(); // = server 进程没了

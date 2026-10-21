@@ -15,7 +15,7 @@ import { deliverResultHandoff } from "./monitor-events.js";
 import { ensureSupervised } from "./monitor-handover.js";
 import { tailLines } from "./monitor-spawn.js";
 import {
-  commitOffset, monitorLogBytes, publish, pushLines, serialize, teardownRuntimeLocked, type Row,
+  commitProgress, monitorLogBytes, publish, pushLines, serialize, teardownRuntimeLocked, type Row,
 } from "./monitors.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -69,8 +69,11 @@ export async function finishOffline(
       tail.stop();
 
       let events = base.events;
+      // 命中那一行的保留是正文构造层的默认契约,这一处**不传**也照样留（第 3 轮审查 N1）。
       if (collected.length) events = await pushLines(base, collected, readTo);
-      else if (readTo !== base.offset) await commitOffset(base.id, readTo);
+      // 补读出来的全是空行:位置照旧只在「前面都已交付或明确放弃」时才推（文件头 ④ 的判据
+      // 在 `commitProgress` 里,这一路运行时刚撤掉,内存里本来就没有没结清的内容）。
+      else if (readTo !== base.offset) await commitProgress(base.id, readTo);
 
       // 同上:凭证跟终态一条语句落库(第 1 轮审查 F1 的对称面 —— 离线收尾也是「先结束、后通知」)。
       // **这句话跟在线那条收尾一字同源**(第 1 轮审查 N2):事件数与「有没有产出过」要给 agent
