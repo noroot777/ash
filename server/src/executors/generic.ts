@@ -66,7 +66,7 @@ export class GenericCliExecutor implements AgentExecutor {
     return {
       sessionId,
       commandLine,
-      events: parser({ child, bin: this.bin, label: this.label, trace: opts.trace, lifecycle }),
+      events: parser({ child, bin: this.bin, label: this.label, trace: opts.trace, lifecycle, cwd: opts.cwd }),
       kill: () => {
         lifecycle.stopRequested = true;
         killChild(child);
@@ -76,13 +76,13 @@ export class GenericCliExecutor implements AgentExecutor {
     };
   }
 
-  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; cwd?: string }): RunHandle {
     const lifecycle = { stopRequested: false };
     const parser = this.spec.exec.parser ?? textParser;
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
-      events: parser({ child, bin: this.bin, label: this.label, lifecycle }),
+      events: parser({ child, bin: this.bin, label: this.label, lifecycle, cwd: opts.cwd }),
       kill: () => {
         lifecycle.stopRequested = true;
         child.kill();

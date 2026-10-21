@@ -18,6 +18,7 @@ import {
 import { FoldedProse } from "../components/FoldedProse.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody, ReviewReportBody } from "../components/MarkdownBody.tsx";
+import { siblingFileResolver } from "../components/markdownPolicy.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewNote } from "../review/ReviewNote.tsx";
@@ -278,6 +279,10 @@ export function FreeWorkflowInspector({
                 text={opened.round.reportMarkdown}
                 reportKey={`${opened.run.id}:${opened.round.round}`}
                 conclusion={opened.round.conclusion}
+                // 报告里的 `![](shot.png)` 说的是**跟 report.md 同目录**的那张截图
+                //（审查 prompt 就是这么交代的），按证据接口解出来才取得到。
+                resolveFile={siblingFileResolver((name) =>
+                  api.freeReviewFileUrl(task.id, opened.run.id, opened.round.round, name))}
               />
             : <p>报告尚未生成。</p>}
           {/* 驳回与辩论跟报告长在同一轮上，读结论的人必须在同一个地方读到「执行者不认这条、

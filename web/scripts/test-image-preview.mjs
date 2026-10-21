@@ -144,7 +144,11 @@ try {
   const reportDialog = page.getByRole("dialog", { name: "report.md" });
   await reportDialog.waitFor();
   assert.equal(page.context().pages().length, pageCount, "自由审查报告必须留在当前页面内打开");
-  assert.equal(await reportDialog.getByRole("heading", { name: "自由审查报告" }).count(), 1, "Markdown 报告应按正文渲染");
+  // 正文是弹窗打开之后才 fetch 回来的,先等它到货再断言 —— `count()` 不自动等,
+  // 直接断言是在跟网络赛跑(本机也有三四成跑输)。
+  const reportHeading = reportDialog.getByRole("heading", { name: "自由审查报告" });
+  await reportHeading.waitFor();
+  assert.equal(await reportHeading.count(), 1, "Markdown 报告应按正文渲染");
   assert.equal(await reportDialog.getByText("报告已在应用内打开。").count(), 1);
 
   console.log("image preview group test passed");

@@ -142,6 +142,8 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         commandLine: sess.commandLine ?? "",
         // 那一轮的 CLI 产物写在会话行记下的那个配置目录里(老行回落到按归属人现算)。
         configDir: await sessionCliConfigDir(sess, sess.agentType),
+        // 接回之后 agent 继续往下说,正文里相对路径的图片还得解得出来(agent-attachments.ts)。
+        cwd: sess.cwd ?? undefined,
       });
       trackRun(task.id, handle);
       adopted.add(task.id);

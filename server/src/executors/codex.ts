@@ -153,6 +153,7 @@ export class CodexExecutor implements AgentExecutor {
       events: archiveVisibleCodexSession(parseCodexStream(child, opts.trace, lifecycle, {
         initialThreadId: opts.sessionId ?? "",
         contextNotBeforeMs,
+        cwd: opts.cwd,
         // 这一轮真正生效的 CODEX_HOME(多用户模式由 auth/run-env.ts 注入),rollout 就写在
         // 它下面 —— 水位必须去同一个目录读。
         configDir: opts.env?.CODEX_HOME,
@@ -207,7 +208,7 @@ export class CodexExecutor implements AgentExecutor {
     return { args, ignored: [...new Set([...profile.ignored, ...turn.ignored])] };
   }
 
-  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; configDir?: string | null }): RunHandle {
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; configDir?: string | null; cwd?: string }): RunHandle {
     const detached = child as Partial<DetachedChild>;
     if (child.stdin && opts.commandLine.includes("app-server") && detached.ashPaths) {
       const recovered = readCodexAppServerState(detached.ashPaths.out, opts.sessionId);
@@ -216,7 +217,9 @@ export class CodexExecutor implements AgentExecutor {
         bin: this.bin,
         args: this.appServerArgs({ env }).args,
         env,
-        cwd: ".",
+        // 进程是接管来的（startProcess 直接把它交回去），所以这个 cwd 不用来起进程；
+        // 它的用处是把正文里的相对图片路径解成真文件（agent-attachments.ts）。
+        cwd: opts.cwd ?? ".",
         prompt: "",
         sessionId: opts.sessionId,
         commandLine: opts.commandLine,
@@ -240,6 +243,7 @@ export class CodexExecutor implements AgentExecutor {
         initialThreadId: opts.sessionId,
         contextNotBeforeMs: Date.now(),
         configDir: opts.configDir,
+        cwd: opts.cwd,
       }), { bin: this.bin, args: this.appServerArgs({}).args, cwd: ".",
         env: { ...this.env(), ...(opts.configDir ? { CODEX_HOME: opts.configDir } : {}) } },
       opts.sessionId, () => cleanupAfterRun(child)),
@@ -277,6 +281,7 @@ export class CodexExecutor implements AgentExecutor {
             initialThreadId: sessionId,
             contextNotBeforeMs,
             configDir: opts.env?.CODEX_HOME,
+            cwd: opts.cwd,
           }),
         };
       },
@@ -315,7 +320,9 @@ export async function* parseCodexStream(
   lifecycle: { stopRequested: boolean },
   // configDir = 这一轮 CLI 实际写 rollout 的 CODEX_HOME(多用户模式下是归属人的个人
   // 目录)。不传就是宿主机默认那份 —— 读不到 rollout 时水位静默为空。
-  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null },
+  // cwd = 这一轮干活的目录。正文里 `![](output/x.png)` 这种相对路径要靠它解成真文件
+  // 才复制得进 uploads（见 ../agent-attachments.ts）。
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string },
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -372,7 +379,7 @@ export async function* parseCodexStream(
       if (it.type === "agent_message" && it.text) {
         agentMessageCount += 1;
         push({ kind: "text", text: it.text + "\n\n" });
-        for (const path of persistMarkdownImages(it.text, seenImages)) push({ kind: "attachment", path });
+        for (const path of persistMarkdownImages(it.text, seenImages, { cwd: contextOptions.cwd })) push({ kind: "attachment", path });
       }
       else if (it.type === "reasoning" && it.text) push({ kind: "thinking", text: it.text + "\n\n" });
       else if (it.type === "command_execution") push({ kind: "tool", name: "exec", detail: shortStr(it.command) });

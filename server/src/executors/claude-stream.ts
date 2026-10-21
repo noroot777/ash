@@ -37,6 +37,10 @@ export async function* parseClaudeStream(
   // `init` 早在上一轮就消费掉了,不会再来一次,靠等 system 事件设身份会一直等不到
   // (见 ../claude-monitors.ts 构造函数的说明)。新开的流可以不传,init 会带来。
   cliSessionId?: string,
+  // 这条会话干活的目录。正文里 `![](output/x.png)` 这种**相对路径**要靠它解成真文件
+  // 才复制得进 uploads —— 不传的话那张图在对话里只会是个裂开的图标（见
+  // ../agent-attachments.ts 的 markdownImagePaths）。
+  cwd?: string,
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -157,7 +161,7 @@ export async function* parseClaudeStream(
         if (block.type === "tool_result") {
           for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         } else if (block.type === "text" && typeof block.text === "string") {
-          for (const path of persistMarkdownImages(block.text, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
+          for (const path of persistMarkdownImages(block.text, images, { cwd })) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         }
       }
       return;
@@ -290,7 +294,7 @@ export async function* parseClaudeStream(
       if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload
       for (const block of ev.message.content) {
         if (block.type !== "text" || typeof block.text !== "string") continue;
-        for (const path of persistMarkdownImages(block.text, seenImages)) push({ kind: "attachment", path });
+        for (const path of persistMarkdownImages(block.text, seenImages, { cwd })) push({ kind: "attachment", path });
       }
     } else if (ev.type === "user" && Array.isArray(ev.message?.content)) {
       flushText();

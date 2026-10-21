@@ -284,7 +284,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       agentMessageCount += 1;
       push({ kind: "text", text: seenAgentDeltas.has(item.id) ? "\n\n" : `${item.text}\n\n` });
-      for (const path of persistMarkdownImages(item.text, seenImages)) push({ kind: "attachment", path });
+      for (const path of persistMarkdownImages(item.text, seenImages, { cwd: opts.cwd })) push({ kind: "attachment", path });
     } else if (item?.type === "reasoning") {
       const text = [...(item.summary ?? []), ...(item.content ?? [])].join("\n");
       if (seenReasoningDeltas.has(item.id)) push({ kind: "thinking", text: "\n\n" });
@@ -369,7 +369,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         const item = p.item;
         const seen = childImages.get(p.threadId) ?? new Set<string>();
         childImages.set(p.threadId, seen);
-        const images = item?.type === "agentMessage" ? persistMarkdownImages(item.text ?? "", seen)
+        const images = item?.type === "agentMessage" ? persistMarkdownImages(item.text ?? "", seen, { cwd: opts.cwd })
           : persistToolResultImages(item?.result ?? item?.contentItems ?? item?.error, seen, { allowBareBase64: item?.type === "imageGeneration" });
         for (const path of images) push(childActivity(p.threadId, { kind: "attachment", path }));
         if (item?.type === "imageGeneration" && typeof item.savedPath === "string") push(childActivity(p.threadId, { kind: "attachment", path: item.savedPath }));

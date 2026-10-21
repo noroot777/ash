@@ -79,6 +79,8 @@ export interface CliParserContext {
   trace?: RunTracePaths;
   /** 手停标记:`kill()` 会把它置 true,parser 据此不把「被杀」报成故障。 */
   lifecycle: { stopRequested: boolean };
+  /** 这一轮干活的目录:正文里相对路径的图片靠它解成真文件(agent-attachments.ts)。 */
+  cwd?: string;
 }
 
 /** 输出解析器:把 CLI 的 stdout 变成事件流。缺省用 parsers.ts 的 textParser。 */

@@ -3,6 +3,7 @@ import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import { parseClaudeStream } from "../claude.js";
+import { persistMarkdownImages } from "../../agent-attachments.js";
 import type { CliParser, CliParserContext } from "./types.js";
 
 // ── 目录自带的输出解析器 ────────────────────────────────────────────────────
@@ -40,11 +41,19 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
   let stdoutLines = 0;
   let stderrTail = "";
 
+  const seenImages = new Set<string>();
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
     trace.event(line);
     stdoutLines += 1;
-    push({ kind: "text", text: stripAnsi(line) + "\n" });
+    const text = stripAnsi(line) + "\n";
+    push({ kind: "text", text });
+    // 正文里写了 `![](…)` 的本机图片也照样复制一份进 uploads,跟 claude/codex 一个待遇
+    // —— 不然同一句话在不同执行器上一个看得见图、一个只剩裂图标。逐行判是安全的:
+    // 一条 `![alt](path)` 不可能跨行(跨行的那种 markdown 本来也不成立)。
+    for (const path of persistMarkdownImages(text, seenImages, { cwd: ctx.cwd })) {
+      push({ kind: "attachment", path });
+    }
   });
   child.stderr?.on("data", (d) => {
     const chunk = d.toString();
@@ -105,4 +114,5 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
  * 的 fork 常常连输出格式一起继承,那时这份能直接白嫖工具调用与流式文本;schema 不
  * 一样就会一行都解析不出来,还不如 textParser。
  */
-export const claudeStreamJsonParser: CliParser = (ctx) => parseClaudeStream(ctx.child, undefined, ctx.bin);
+export const claudeStreamJsonParser: CliParser = (ctx) =>
+  parseClaudeStream(ctx.child, undefined, ctx.bin, undefined, null, undefined, undefined, undefined, ctx.cwd);

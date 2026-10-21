@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { AgentContentSegment } from "../task-detail/conversationModel.ts";
 import { segmentHasVisibleContent } from "../task-detail/conversationSegments.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
+import { turnImages } from "../task-detail/turnImages.ts";
+import type { MarkdownFileResolver } from "./markdownPolicy.ts";
 import { turnLayout } from "../task-detail/turnFold.ts";
 import { MarkdownBody } from "./MarkdownBody.tsx";
 import {
@@ -11,11 +13,14 @@ import {
   hasExecutionError,
 } from "./ExecutionTrace.tsx";
 
-function SegmentBody({ segment }: { segment: AgentContentSegment }) {
+function SegmentBody({ segment, resolveFile }: {
+  segment: AgentContentSegment;
+  resolveFile?: MarkdownFileResolver;
+}) {
   return (
     <>
       <MessageAttachments paths={segment.attachments} />
-      {segment.markdown && <MarkdownBody text={segment.markdown} />}
+      {segment.markdown && <MarkdownBody text={segment.markdown} resolveFile={resolveFile} />}
     </>
   );
 }
@@ -24,7 +29,10 @@ function SegmentBody({ segment }: { segment: AgentContentSegment }) {
  * 过程折叠块。**只在这一回合收口之后才会被渲染**（见 turnLayout），所以它一上来就是
  * 折好的，之后再不自动动 —— 用户点开了就一直开着。
  */
-function ProcessFold({ segments }: { segments: AgentContentSegment[] }) {
+function ProcessFold({ segments, resolveFile }: {
+  segments: AgentContentSegment[];
+  resolveFile?: MarkdownFileResolver;
+}) {
   const events = segments.flatMap((segment) => segment.events);
   const [open, setOpen] = useState(false);
 
@@ -43,7 +51,7 @@ function ProcessFold({ segments }: { segments: AgentContentSegment[] }) {
         {segments.filter(segmentHasVisibleContent).map((segment) => (
           <section className="task-agent-segment" key={segment.id}>
             <ExecutionEventList events={segment.events} />
-            <SegmentBody segment={segment} />
+            <SegmentBody segment={segment} resolveFile={resolveFile} />
           </section>
         ))}
       </div>
@@ -56,13 +64,17 @@ function ProcessFold({ segments }: { segments: AgentContentSegment[] }) {
  * events 加一份正文），继续直接用 ExecutionDetails。
  */
 export function AgentTurnBody({
-  segments,
+  segments: traced,
   running,
 }: {
   segments: AgentContentSegment[];
   /** 这一回合还在飞（会话行还没落 endedAt）。在飞就不折，见 turnLayout。 */
   running: boolean;
 }) {
+  // 正文里引用到的那几张图画进正文本身（agent 把它放在哪就在哪），同一张图随之从卡片排
+  // 里拿掉。**必须按整个回合配**：附件事件恒在它那段正文之后，分段又遇附件就另起一段，
+  // 所以正文和它的图天然分在相邻两段（见 turnImages）。
+  const { segments, resolveFile } = useMemo(() => turnImages(traced), [traced]);
   // 跑的时候不折 —— 连「切成过程 / 结论」这一步都不做（见 turnLayout）。折叠是个重组
   // 动作：它会把已经说出口、已经露在外面的正文一并收进过程块，跑的中途干这件事，用户
   // 正读的内容说没就没。这一回合收口那一下才折，位置从此不再变。
@@ -72,7 +84,7 @@ export function AgentTurnBody({
   const visible = conclusion.filter(segmentHasVisibleContent);
   return (
     <>
-      {process.some(segmentHasVisibleContent) && <ProcessFold segments={process} />}
+      {process.some(segmentHasVisibleContent) && <ProcessFold segments={process} resolveFile={resolveFile} />}
       {visible.map((segment, index) => (
         <section className="task-agent-segment" key={segment.id}>
           {/* 平铺那条路径（跑着的时候、以及折不出结论的回合）逐段折事件，跟原来一样。 */}
@@ -80,7 +92,7 @@ export function AgentTurnBody({
             events={segment.events}
             running={running && index === visible.length - 1}
           />
-          <SegmentBody segment={segment} />
+          <SegmentBody segment={segment} resolveFile={resolveFile} />
         </section>
       ))}
     </>

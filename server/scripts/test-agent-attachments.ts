@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   persistMarkdownImages,
   persistToolResultImages,
@@ -47,11 +47,29 @@ try {
   const markdown = persistMarkdownImages(
     `截图：![CLI](<${localImage}>)`,
     seen,
-    uploads,
+    { directory: uploads },
   );
   assert.equal(markdown.length, 1);
-  assert.equal(persistMarkdownImages(`![重复](<${localImage}>)`, seen, uploads).length, 0);
-  assert.equal(persistMarkdownImages("![远程](https://example.com/image.png)", seen, uploads).length, 0);
+  // 源文件的名字要留住:对话里那张卡片写的就是它(web attachmentView 剥掉 12 位前缀)。
+  assert.match(basename(markdown[0]!), /^[A-Za-z0-9_-]{12}-local-screenshot\.png$/);
+  assert.equal(persistMarkdownImages(`![重复](<${localImage}>)`, seen, { directory: uploads }).length, 0);
+  assert.equal(persistMarkdownImages("![远程](https://example.com/image.png)", seen, { directory: uploads }).length, 0);
+
+  // 相对路径按工作目录解析 —— agent 站在工作目录里写 `![](output/x.png)` 是最自然的
+  // 写法,不认它那张图在对话里就只剩一个裂开的图标。
+  mkdirSync(join(root, "output"), { recursive: true });
+  const nested = join(root, "output", "shot.png");
+  writeFileSync(nested, Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(8)]));
+  const relative = persistMarkdownImages("![预览](output/shot.png)", seen, { directory: uploads, cwd: root });
+  assert.equal(relative.length, 1);
+  assert.match(basename(relative[0]!), /^[A-Za-z0-9_-]{12}-shot\.png$/);
+  // 没有 cwd 就只认绝对路径(老行为),别拿相对路径去撞 server 自己的 cwd。
+  assert.equal(persistMarkdownImages("![预览](output/shot.png)", new Set(), { directory: uploads }).length, 0);
+  // 远程/内联 URL 不许被当成相对路径跟工作目录拼。
+  assert.equal(
+    persistMarkdownImages("![远程](https://example.com/image.png)", new Set(), { directory: uploads, cwd: root }).length,
+    0,
+  );
 
   console.log("Agent 图片附件持久化验证通过");
 } finally {

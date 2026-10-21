@@ -111,6 +111,61 @@ function isReviewFileEndpoint(pathname: string): boolean {
 /** 站内取得到的那张图：灯箱要的 url，加上给人看的名字。 */
 export type ImagePreviewTarget = ReviewFileTarget;
 
+/**
+ * 「这段 Markdown 的相对路径该按哪儿解」。
+ *
+ * 必要性：对话正文和审查报告都是**没有文档根**的 Markdown —— 浏览器把 `![](shot.png)`
+ * 当成相对当前页面的地址，于是 `http://…/shot.png` 必然 404，正文里就是一个裂开的
+ * 图标。而 agent 写相对路径恰恰是最自然的：审查者的截图跟 report.md 同在证据目录，
+ * 实现者的截图就在它自己的工作目录里。所以每个渲染点都得自己说清「我这份正文的相对
+ * 路径指向哪」，没有默认值可猜。
+ *
+ * 返回 null = 这个目标我解释不了，交回后面的策略（站外链接照常，本机路径由
+ * `isLocalImageReference` 收掉，不留裂图标）。
+ */
+export type MarkdownFileResolver = (destination: string) => ImagePreviewTarget | null;
+
+// 带协议的目标（http:、data:、blob:、file:）不是「相对某个目录」的写法。
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * 「跟这份正文同一个目录里的那个文件」——只认光秃秃的文件名（`shot.png`、`./shot.png`）。
+ *
+ * 收得这么紧是跟着服务端走的：证据接口只接受 `basename(name) === name` 的名字，
+ * 子目录和 `..` 它一概不服务，这里放宽只会拼出一个必 404 的地址。
+ */
+export function siblingFileName(destination: string): string | null {
+  const raw = destination.trim();
+  if (!raw || URL_SCHEME.test(raw) || raw.startsWith("/")) return null;
+  const name = decodeSafe(raw.replace(/^\.\//, "").split(/[?#]/)[0] ?? "");
+  return name && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".." ? name : null;
+}
+
+/** 正文跟它引用的文件同住一个目录时的解析器（审查报告：report.md 和截图在一起）。 */
+export function siblingFileResolver(urlFor: (name: string) => string): MarkdownFileResolver {
+  return (destination) => {
+    const name = siblingFileName(destination);
+    return name ? { name, url: urlFor(name) } : null;
+  };
+}
+
+/**
+ * 同一个目录的解析器，但直接从「这份正文自己的地址」推出来。
+ *
+ * 证据接口的两条路径（`…/review/file`、`…/free-workflow/review-file`）都是把文件名放在
+ * `?name=`，所以换掉那一个参数就是同目录的另一个文件。打开一份孤立报告（正文里指向
+ * report.md 的链接）时手上只有这个 URL，没有 run/round，这是唯一解得出来的办法。
+ */
+export function siblingResolverForUrl(fileUrl: string): MarkdownFileResolver | undefined {
+  const base = sameOriginUrl(fileUrl);
+  if (!base || !isReviewFileEndpoint(base.pathname) || !base.searchParams.has("name")) return undefined;
+  return siblingFileResolver((name) => {
+    const url = new URL(base.toString());
+    url.searchParams.set("name", name);
+    return url.toString();
+  });
+}
+
 // 正文里指向图片的**链接**（不是 `![]()` 内嵌图），点开要落进全站统一的灯箱，而不是
 // 甩出一个新标签页——新标签页没有上一张/下一张、没有 Esc 关闭，还把人从对话里带走了。
 // 判定顺序就是「这张图住在哪」，每一档都对应一个真能把字节吐出来的接口：
@@ -119,16 +174,42 @@ export type ImagePreviewTarget = ReviewFileTarget;
 //   ③ 本来就是站内 URL（/api/uploads/… 一类）          → 原样用
 // 其余一律返回 null 交回普通链接策略：站外图照常新开，本机磁盘路径则由 localOpenUrl
 // 改写到安全打开端点；这里不能拿一个服务端取不到的 URL 硬塞给灯箱。
-export function imagePreviewTarget(href?: string): ImagePreviewTarget | null {
+export function imagePreviewTarget(href?: string, resolve?: MarkdownFileResolver): ImagePreviewTarget | null {
   if (!href) return null;
   // 「用系统应用打开本地文件」是另一条路，不抢它的链接。
   if (isLocalOpenHref(href)) return null;
-  return servableImage(href);
+  const servable = servableImage(href);
+  if (servable) return servable;
+  // ④ 这份正文自己说得出来的相对路径（审查报告 → 证据目录）。放在最后：上面三档都是
+  // 自带完整地址的写法，认得出来就不该再按目录猜。
+  const resolved = resolve?.(href) ?? null;
+  return resolved && isImagePath(resolved.name) ? resolved : null;
 }
 
 export function isLocalDiskImagePath(href: string): boolean {
   const path = localDiskPath(href);
   return path !== null && isImagePath(path);
+}
+
+/**
+ * 这个 `![]()` 指的是**本机上的一个文件**，而不是浏览器取得到的地址。
+ *
+ * 用途只有一个：解析不出来时**什么都不画**，而不是留一个裂开的图标。agent 说的是
+ * 「我机器上的这张图」，浏览器取不到它不是网络故障，是这句话在网页上没有意义 ——
+ * 画个裂图标只会让人以为功能坏了（用户 2026-10-21 报的就是这一幕）。
+ *
+ * 两类：`file://` 与磁盘根开头的绝对路径（`localDiskPath` 那张白名单），以及**没有协议
+ * 的相对路径**。后者在这里只可能是磁盘路径：这个应用的 Markdown 没有文档根，相对地址
+ * 会被解释成「相对当前页面」，必然取不到。
+ *
+ * 斜杠开头的站内地址**不算**：`/whatever.png` 是这个站自己服务得了的东西，照常交给
+ * 浏览器，不归这条收。
+ */
+export function isLocalImageReference(href: string): boolean {
+  if (!href) return false;
+  if (isLocalDiskImagePath(href)) return true;
+  if (URL_SCHEME.test(href) || href.startsWith("/")) return false;
+  return isImagePath(href);
 }
 
 function servableImage(href: string): ImagePreviewTarget | null {
