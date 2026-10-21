@@ -13,10 +13,15 @@ export type Block =
   | { kind: "quote"; text: string };
 
 // Split one line into styled spans. `code` wins first (its inner text is literal);
-// then **bold**, *italic*/_italic_, [text](url). Unmatched runs stay plain text.
+// then **bold**, *italic*/_italic_, ![alt](img), [text](url). Unmatched runs stay plain text.
+//
+// 图片(`![alt](dest)`)**排在链接之前**,而且只留 alt 文字:这个渲染器压根不画图,而 agent
+// 写的目的地是**它自己机器上的路径**(`output/shot.png`)。按链接解会得到一个点下去只能
+// 静默失败的死链接,外加一个孤零零的「!」。手机上看不见图是功能没做(web 那套配对、快照
+// 接口这里都没有),但「看不见」不该表现成「看着像能点」。
 export function parseInline(line: string): Span[] {
   const spans: Span[] = [];
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*|_[^_\s][^_]*_)|(\[[^\]]+\]\([^)]+\))/;
+  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*|_[^_\s][^_]*_)|(!\[[^\]]*\]\([^)]*\))|(\[[^\]]+\]\([^)]+\))/;
   let rest = line;
   while (rest) {
     const m = re.exec(rest);
@@ -28,7 +33,11 @@ export function parseInline(line: string): Span[] {
     const tok = m[0];
     if (tok.startsWith("`")) spans.push({ text: tok.slice(1, -1), code: true });
     else if (tok.startsWith("**")) spans.push({ text: tok.slice(2, -2), bold: true });
-    else if (tok.startsWith("[")) {
+    else if (tok.startsWith("![")) {
+      // 图片:只留 alt,绝不给它一个点不开的链接。空 alt 也要占一个空 span ——
+      // 下面那句「一个 span 都没有就原样返回整行」会把整段 Markdown 原文端出来。
+      spans.push({ text: /^!\[([^\]]*)\]/.exec(tok)?.[1] ?? "" });
+    } else if (tok.startsWith("[")) {
       const mm = /\[([^\]]+)\]\(([^)]+)\)/.exec(tok)!;
       spans.push({ text: mm[1], href: mm[2] });
     } else spans.push({ text: tok.slice(1, -1), italic: true });
