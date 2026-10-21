@@ -27,6 +27,7 @@ import { writeFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import { isSilentWaitLoop, monitorEventTally, silentWaitNotice, spanWords } from "@ash/shared/monitor-silence";
 import { checkpointGroups } from "./monitor-complete-checkpoint-groups.js";
+import { settleLandingGroups } from "./monitor-settle-landing-groups.js";
 import { resultHandoffGroups } from "./monitor-result-handoff-groups.js";
 import {
   beginTerminalLanding, complete, confirmedAt, db, dropByActor, inTurnCaller, insertMonitorRow, makeTask,
@@ -364,47 +365,9 @@ import {
   assert.equal(await monitorStatus(monitorId), "running", "哨兵必须活着 —— 它等的结果还没来");
 }
 
-// ── ⑱ R2-1：原生命令回合（`/compact`）正常收尾也会收走哨兵 ⇒ 一样过闸 ────────────
-{
-  const taskId = await makeTask();
-  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
-  const monitorId = await insertMonitorRow(taskId, { command: "tail -F deploy.log" });
-  await db.update(tasks).set({ nativeTurn: true }).where(eq(tasks.id, taskId));
-
-  const settled = await settleTaskStatus(taskId, 0, null);
-  assert.equal(settled.status, "paused", "压缩一次上下文不该顺手把哨兵停掉（R2-1）");
-  assert.equal(settled.nativeTurn, true, "它仍然是原生回合：结算钩子照旧整段跳过");
-  assert.equal(await monitorStatus(monitorId), "running");
-}
-
-// ── ⑲ R2-1：续聊回合**没交卷**那一支也过闸（恢复终态跟落终态是同一件事）──────────
-{
-  const taskId = await makeTask();
-  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
-  const monitorId = await insertMonitorRow(taskId, { command: "tail -F deploy.log" });
-  await db.update(tasks).set({ followUpFrom: "done" }).where(eq(tasks.id, taskId));
-
-  const settled = await settleTaskStatus(taskId, 0, null);
-  assert.equal(settled.status, "paused", "恢复 done 会连坐停掉这一轮新挂的哨兵（R2-1）");
-  assert.equal(await monitorStatus(monitorId), "running");
-  assert.equal((await taskRow(taskId)).followUpFrom, null, "旁路身份要一起清掉");
-}
-
-// ── ⑲b 对称面：恢复的原状态**不是**终态时不许问闸（问了只会白写一段系统等待）────
-{
-  const taskId = await makeTask();
-  await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
-  const monitorId = await insertMonitorRow(taskId, { command: "tail -F deploy.log" });
-  await db.update(tasks).set({ followUpFrom: "paused" }).where(eq(tasks.id, taskId));
-
-  const settled = await settleTaskStatus(taskId, 0, null);
-  assert.equal(settled.status, "paused", "原样恢复它本来的 paused");
-  assert.equal(
-    (await taskRow(taskId)).resumePrompt, null,
-    "这一笔不碰哨兵，所以不该留下任何系统等待",
-  );
-  assert.equal(await monitorStatus(monitorId), "running");
-}
+// ── ⑱ ⑲ ⑲b ㉜ ㉜b 结算各支过不过闸那一半（搬去 monitor-settle-landing-groups.ts，
+//    同一套台子）─────────────────────────────────────────────────────────────────
+await settleLandingGroups();
 
 // ── ⑳ ⑳b ⑳c ㉑ 检查点归属那一半（搬去 monitor-complete-checkpoint-groups.ts：
 //    两份共用同一套台子，合在一个文件里超过 700 行的约定）────────────────────────────

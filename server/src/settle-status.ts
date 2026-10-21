@@ -88,6 +88,14 @@ const UNCONFIRMED_NOTE =
   "这不是崩溃 —— 进程正常退出(exit 0)只证明 CLI 没挂,报错后退出也是 exit 0,所以「干完了」只认 agent 亲口确认。" +
   "产物都还在:核对后可直接把状态改成已完成;点重试会从中断处接着跑,不用从头再来。" +
   "常见原因:agent 漏调了这一步;执行器/MCP 丢了回合或方向身份;任务状态中途变了,调用被 409 拒绝。";
+// 没交卷、却因为哨兵没了结而落了 paused 时补的那半句。少了它,这个落位会被读成「它干完了,
+// 只是在等哨兵」—— 而真相是这一轮压根没交卷,状态既不是已完成也不是未完成。所以这句话要
+// 同时说清三件事:没交卷、为什么没按未完成记、不想等了该点哪里。
+const UNCONFIRMED_HELD_TAIL =
+  " 另外本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成。" +
+  "按完成协议本该记为未完成,但那也是终态 —— 会把上面这些哨兵和它们排着的结果一并收走," +
+  "所以先落成等待:哨兵有结果时会把这条会话叫起来接着跑,到时它可以自己交卷。" +
+  "不想等了就在「哨兵」面板上把它停掉,再把任务状态改成你要的那个。";
 const GROUP_PAUSED_NOTE =
   "分组被暂停,本回合被中止 —— 任务落为已暂停;点「运行/继续」恢复分组时会从当前会话接着跑。";
 export async function settleTaskStatus(
@@ -280,13 +288,22 @@ export async function settleTaskStatus(
     notify("failed");
     return { status: "failed", confirmedDone: false, nativeTurn };
   }
-  const held = confirmed || !STRICT_DONE ? await monitorGate() : null;
+  // **交没交卷都要过闸**(用户 2026-10-21 拍板)。上一版只在「这一笔会落 done」时问,于是
+  // 没交卷那一支直接落 failed —— 而 failed 跟 done 对哨兵是同一件事(两个都在
+  // `monitorSweepingStatus` 里):哨兵被停掉、排着没送到的结果被作废。偏偏这正是最该留着
+  // 它们的场合 —— 人得靠那条结果判断要不要重试,agent 续跑也还在等它。续聊那一侧早就按
+  // 同一个理由过闸了(R2-1),新跑这一侧漏了,于是同一件事走「交卷」保得住、走「没交卷」
+  // 保不住。**掐断的出路一条没少**:还在跑就点任务上的停止(落 canceled,连坐照旧收走哨兵);
+  // 已经落了 paused 就在哨兵面板上逐条停掉它 —— 那条路由不看任务状态(monitor-routes.ts)。
+  const held = await monitorGate();
   if (held) {
-    // 交了卷,但名下还有会被 done 毁掉的哨兵/哨兵结果 ⇒ 检查点暂停。排在 `exitStatus !== 0`
-    // 之后:进程异常退出是另一回事,崩了就是崩了。
+    // 名下还有会被终态毁掉的哨兵/哨兵结果 ⇒ 检查点暂停。排在 `exitStatus !== 0` 之后:
+    // 进程异常退出是另一回事,崩了就是崩了。
     await setStatus(taskId, "paused");
     await announceResumePrompt(taskId);
-    return { status: "paused", note: held, confirmedDone: false, nativeTurn };
+    // 没交卷还得多说一句:光一句「终态被拦下」会被读成「它干完了,只是在等哨兵」。
+    const note = confirmed || !STRICT_DONE ? held : held + UNCONFIRMED_HELD_TAIL;
+    return { status: "paused", note, confirmedDone: false, nativeTurn };
   }
   if (confirmed || !STRICT_DONE) {
     await setStatus(taskId, "done");

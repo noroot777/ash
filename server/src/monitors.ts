@@ -440,8 +440,21 @@ export async function finish(
     // 消息,而完成闸问的恰好就是这两样,于是它放行、任务落 done,紧接着的入队被终态挡回,
     // 那条通知就此蒸发(实测 `F1_END_RESULT_HANDOFF`)。一条语句写下来就没有那条缝:从这一刻
     // 起闸看得见这笔交接(见 schema 的 `result_handoff_at`),入队完成后才销。
+    // 事件数**重读**：它要反映收尾前最后那一次 flush。有没有产出过则一律问日志文件本身,
+    // 不问投递游标(见 `monitorLogBytes`:游标被终态挡回时会把「它说了但没送出去」说成
+    // 「它什么都没说」—— 第 2 轮审查 R2-4)。
+    //
+    // **读一次、两处用**:这句话既要给 agent 看(下面那条结束通知),也要给人看(时间线)。
+    // 各读一次会让两边报出不同的数,而「0 条事件」这件事恰恰是 agent 最该当场知道的 ——
+    // 它只拿到一句「盯满了约定的时长」的话,分不出「哨兵哑了」和「我漏读了几条」,只能靠猜
+    // (用户 2026-10-21 要的那半件事)。通知的文字必须在下面那条 UPDATE **之前**定好:这两笔
+    // 得在同一条语句里落库,所以读也只能排在它前面。
+    const total = (await db
+      .select({ events: monitors.events })
+      .from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
+    const tally = monitorEventTally(total, monitorLogBytes(row.logPath));
     const endNotice = notify
-      ? `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}`
+      ? `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}（${tally}）`
       : null;
     const result = await db
       .update(monitors)
@@ -456,16 +469,7 @@ export async function finish(
       return;
     }
     publish(row.taskId);
-    // 事件数**重读**：它要反映收尾前最后那一次 flush。有没有产出过则一律问日志文件本身,
-    // 不问投递游标(见 `monitorLogBytes`:游标被终态挡回时会把「它说了但没送出去」说成
-    // 「它什么都没说」—— 第 2 轮审查 R2-4)。
-    const total = (await db
-      .select({ events: monitors.events })
-      .from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
-    await appendTaskTimeline(
-      row.taskId,
-      `哨兵结束：${row.description}${code}。${reason}（${monitorEventTally(total, monitorLogBytes(row.logPath))}）`,
-    );
+    await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（${tally}）`);
     // 入队 + 销凭证。顺序反过来那条缝又回来了(见 `deliverResultHandoff`)。
     if (endNotice) await deliverResultHandoff(monitorId);
     // **追线索放在最后**:状态、时间线、通知都已落定,这一步只负责「能收的档收掉」。

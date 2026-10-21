@@ -70,7 +70,27 @@ const t = setInterval(() => { i++; console.log("第 " + i + " 轮完成"); if (i
   assert.equal(after.exitCode, 0, "命令退出码应被记下来");
   const settled = await pendingOf(taskId);
   assert.ok(settled[0]!.text.includes("【哨兵结束】"), "命令自己跑完要告诉 agent 一声");
-  console.log("✓ 推事件 / 多批合并成一次唤醒 / 自己跑完落 exited");
+  // 那条通知里要带上**推了几条**（用户 2026-10-21 要的那半件事）：agent 读到的只有这一句，
+  // 光一个结束原因的话，它分不出「哨兵哑了」和「我漏读了几条」，只能靠猜。
+  assert.match(settled[0]!.text, /共推送 3 条事件/, "结束通知里要报出推了几条");
+  console.log("✓ 推事件 / 多批合并成一次唤醒 / 自己跑完落 exited / 收尾报出事件数");
+}
+// ── ③b 零输出:一个字都没吐就跑完了,那条通知必须**当场**把这件事说出来 ──────────
+// 这正是用户看到的那一幕:哨兵盯满/跑完,agent 只拿到一句结束原因,于是把「它什么都没说」
+// 读成「它说了而我没收到」。措辞归 `monitorEventTally`(只说推了几条 + 日志多大,一个字
+// 不提它等的条件),这一节钉住它真的出现在**送给 agent 的那条通知**里,而不是只进时间线。
+{
+  const taskId = await makeTask();
+  const started = await startMonitor({ taskId, command: "exit 0", description: "一个字都不吐" });
+  assert.equal(started.ok, true, started.ok ? "" : started.error);
+  const monitorId = started.ok ? started.monitor.id : "";
+  await until("哨兵落 exited", async () => (await getMonitor(monitorId))?.status === "exited");
+  const [notice] = await pendingOf(taskId);
+  assert.ok(notice, "零输出也要推一条结束通知,不然这条哨兵从头到尾一声不响");
+  assert.match(notice!.text, /一条事件都没推/, "零输出要当面说清");
+  assert.match(notice!.text, /日志文件也是空的/, "没产出过这件事也要如实说");
+  assert.doesNotMatch(notice!.text, /条件/, "不许从没有输出推断它等的业务条件没满足");
+  console.log("✓ 零输出的哨兵:结束通知里如实报「一条都没推、日志也是空的」");
 }
 // ── 事件上限：推满自动停，而且**不会把自己锁死** ─────────────────────────────
 // 这一条同时守两件事：到顶要真的停（每条事件都在烧回合），以及收尾必须能跑完 ——
