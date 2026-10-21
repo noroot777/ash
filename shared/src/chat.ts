@@ -36,7 +36,7 @@ export type ChatMessageStatus = "queued" | "running" | "done" | "failed" | "stop
  * 标签也用同一套词(思考 → 「思考过程」，异常 → 直接拿报错当标签)。
  */
 export interface ChatTraceEvent {
-  kind: "tool" | "thinking" | "error";
+  kind: "tool" | "thinking" | "error" | "notice";
   label: string;
   detail?: string;
 }

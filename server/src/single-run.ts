@@ -26,7 +26,7 @@ import {
 } from "./executors/session-lost.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./transcript.js";
 import { noteAgentEventUpload } from "./uploads.js";
-import { isSessionScopeNotice } from "./session-notice.js";
+import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
@@ -265,7 +265,11 @@ export async function consumeSingleRun(a: {
           continue;
         }
         persistTrace(emittedEvent);
-        if (emittedEvent.kind === "error") {
+        // level:"notice" 的 error 只是过程里的一句提示（上游在重试、还在等回话）：照落
+        // trace（于是它排在执行过程里它发生的那个位置），但下面三件事一件都不做 ——
+        // 写红色诊断块、并进会话恢复故障、把这一轮判成有执行异常。判据见
+        // session-notice.ts#isExecutionNotice。
+        if (emittedEvent.kind === "error" && !isExecutionNotice(emittedEvent)) {
           // 有些 error 是需要留在红色诊断块里的旁路故障，但不代表模型回合失败（目前的
           // 实例是 Claude 自动压缩失败：压缩没成，后续 result 仍明确为 success）。
           if (emittedEvent.affectsTurn !== false) sawExecutionError = true;

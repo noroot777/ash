@@ -8,7 +8,7 @@ import {
   ExecutionDetails,
   ExecutionEventList,
   ExecutionSummaryLine,
-  hasExecutionError,
+  executionBlockTone,
 } from "./ExecutionTrace.tsx";
 
 function SegmentBody({ segment }: { segment: AgentContentSegment }) {
@@ -30,7 +30,7 @@ function ProcessFold({ segments }: { segments: AgentContentSegment[] }) {
 
   return (
     <details
-      className={`task-execution-block task-turn-process${hasExecutionError(events) ? " has-error" : ""}`}
+      className={`task-execution-block task-turn-process${executionBlockTone(events)}`}
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >

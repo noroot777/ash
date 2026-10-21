@@ -60,6 +60,10 @@ export function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
   const text = (value: unknown): string => typeof value === "string" ? value : "";
   if (event.kind === "tool") return { kind: "tool", label: text(event.name), detail: event.detail, ...(at ? { at } : {}), ...(event.nativeWork ? { nativeWork: event.nativeWork } : {}) };
   if (event.kind === "thinking") return { kind: "thinking", label: "思考过程", detail: event.text };
+  // level:"notice" = 这条不是故障,是过程里的一句提示(上游在重试、还在等回话)。整句话
+  // 走 detail 而不是 label:label 在行内是不收缩的工具名那一格,一条几十字的提示塞进去
+  // 会把整行撑爆;detail 那一格本来就是「这一步具体在干什么」,超长自己省略。
+  if (event.level === "notice") return { kind: "notice", label: "提示", detail: text(event.message), ...(at ? { at } : {}) };
   return { kind: "error", label: text(event.message) };
 }
 

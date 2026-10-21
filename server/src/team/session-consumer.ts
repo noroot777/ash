@@ -17,7 +17,7 @@ import {
   shouldDropSession,
 } from "../executors/session-lost.js";
 import { writeRunError, writeTurnEnd } from "../transcript.js";
-import { isSessionScopeNotice } from "../session-notice.js";
+import { isExecutionNotice, isSessionScopeNotice } from "../session-notice.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
@@ -49,10 +49,11 @@ import {
 // —— 那两样是上一轮的收尾统计,拿它们开回合只会凭空多一颗空气泡。error 要认:后台回调
 // 回来第一件事就是报错(工具炸了、API 拒了)完全正常,不认的话这一轮会从第二条事件才开
 // 始算,回合照样被拆成两半,而且报错这段时间里空闲回收仍按「待命」在倒计时。
-// 唯一的例外是 scope:"session" 那种 —— 它说的是「这条会话作废了」,不是这一轮的产出。
+// 两个例外:scope:"session" 说的是「这条会话作废了」,level:"notice" 说的是「正在重试 /
+// 还在等上游」—— 都不是这一轮的产出,拿它们开回合只会凭空多一颗空气泡。
 const SELF_STARTED_TURN_EVENTS: ReadonlySet<AgentEvent["kind"]> = new Set(["text", "thinking", "tool", "attachment", "error"]);
 const startsSelfTurn = (event: AgentEvent): boolean =>
-  SELF_STARTED_TURN_EVENTS.has(event.kind) && !isSessionScopeNotice(event);
+  SELF_STARTED_TURN_EVENTS.has(event.kind) && !isSessionScopeNotice(event) && !isExecutionNotice(event);
 const RECYCLE_NOTE = (min: number, resumable: boolean) =>
   `〔系统〕调度台空闲超过 ${min} 分钟,进程已回收(待命)。`
   + (resumable
@@ -164,7 +165,10 @@ async function consume(lead: Lead): Promise<void> {
         // 「这个调度台离上下文塞满还有多远」。正因为是覆盖,摘牌后就不能再写:那一行现在
         // 归接管的那台,旧进程的水位盖上去就是错的(用量是累加的真实开销,照记不误)。
         if (emittedEvent.kind === "context" && !lead.retired) await setSessionContext(lead.sessId, emittedEvent.context);
-        if (emittedEvent.kind === "error") {
+        // level:"notice" 的 error 只是过程里的一句提示（上游在重试、还在等回话）：上面
+        // 已经把它落进 trace，于是它排在执行过程里它发生的那个位置；红色诊断块与会话
+        // 轮换判定都跟它无关。判据见 ../session-notice.ts#isExecutionNotice。
+        if (emittedEvent.kind === "error" && !isExecutionNotice(emittedEvent)) {
           const previousFault = rotation.fault;
           if (sessionNotice) noteSessionNotice(lead, emittedEvent.message);
           else writeRunError(lead.out, emittedEvent.message);

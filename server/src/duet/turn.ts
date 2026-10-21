@@ -31,7 +31,7 @@ import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
-import { isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
+import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
 import { recordTurnStart } from "./timeline.js";
 
@@ -302,6 +302,12 @@ export async function runTurn(args: {
         } else if (event.kind === "system") {
           noticeMsg = `${noticeMsg ?? ""}\n${event.text}`.trim();
           out.write("⚠ " + event.text + "\n");
+        } else if (event.kind === "error" && isExecutionNotice(event)) {
+          // 过程里的一句提示(上游在重试、还在等回话):跟这一轮成败正交 —— 当成 error
+          // 会把一场正常收敛的讨论直接判失败,当成 sessionFault 会把好端端的会话 id 清掉。
+          // 跟普通任务同一个去处:落进本回合的执行过程,排在它发生的那个位置。
+          if (trace.length < TRACE_CAP) trace.push({ kind: "notice", label: "提示", detail: event.message });
+          out.write("ⓘ " + event.message + "\n");
         } else if (event.kind === "error") {
           sessionFault = mergeSessionResumeFault(sessionFault, event.message);
           if (sessionNotice) {

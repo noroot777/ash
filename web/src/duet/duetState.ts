@@ -137,7 +137,13 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
       if (event.event.kind === "thinking") turn.events = appendExecutionEvent(turn.events, { kind: "thinking", label: "思考过程", detail: event.event.text });
       // error / notice 都累积:服务端 runTurn 落 transcript 时就是拼接的,实时这边要是
       // 覆盖,同一个回合出多条时实时只剩最后一条、刷新后又变成全部,两个面读不一样。
-      if (event.event.kind === "error") turn.error = `${turn.error ?? ""}\n${event.event.message}`.trim();
+      // level:"notice" 的 error 不是故障,是过程里的一句提示(上游在重试、还在等回话):
+      // 跟服务端 runTurn 同一个去处 —— 进本回合的执行过程,不进 error(那会把一场正常
+      // 收敛的讨论标成失败)。
+      if (event.event.kind === "error") {
+        if (event.event.level === "notice") turn.events = [...turn.events, { kind: "notice", label: "提示", detail: event.event.message }];
+        else turn.error = `${turn.error ?? ""}\n${event.event.message}`.trim();
+      }
       if (event.event.kind === "system") turn.notice = `${turn.notice ?? ""}\n${event.event.text}`.trim();
       turns[index] = turn;
       break;
