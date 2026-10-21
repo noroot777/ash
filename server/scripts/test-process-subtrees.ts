@@ -27,9 +27,8 @@ process.env.ASH_DB = join(root, "ash.db");
 const { cleanupAfterRun, markAdoptedChild } = await import("../src/executors/spawn.js");
 const { IS_WINDOWS, isPidAlive } = await import("../src/platform.js");
 const { inspectProcess } = await import("../src/proc.js");
-const {
-  processTreeMembers, processTableSnapshot, subtreesOf, stillSameGeneration,
-} = await import("../src/process-generation.js");
+const { processTableSnapshot, stillSameGeneration } = await import("../src/process-generation.js");
+const { processTreeMembers, subtreesOf } = await import("../src/process-subtrees.js");
 const {
   probeFileHolders, holderMayOwn, holderScanFault, provenNoHolders,
 } = await import("../src/executors/track-evidence.js");
@@ -317,8 +316,9 @@ if (IS_WINDOWS) {
 // 判错的后果分别只在 Linux(stat 读不到)和 Windows(父号读不到)上出现,本机跑不到那两条
 // 分支,所以按读数状态钉(第 7 轮审查 F1 要求覆盖:无父号 / 有父号无代次 / 整行不可读)。
 {
-  const { tableFromProcStats, tableFromRows, unresolvedTopology, earliestGen } =
-    await import("../src/process-generation.js");
+  const { tableFromProcStats, tableFromRows } = await import("../src/process-generation.js");
+  const { unresolvedTopology, earliestStartMs, genStartedAtMs } =
+    await import("../src/process-subtrees.js");
 
   // `readProcStat` 交出来的是右括号之后那串:下标 0 = state,1 = ppid,19 = starttime。
   const statFields = (ppid: string, starttime: string): string[] => {
@@ -357,41 +357,53 @@ if (IS_WINDOWS) {
 
   // 排除路:已经算进去 / 它已经退了 / 开工之前就在。剩下的必须留成空洞。
   const DEAD = 0x7ffffff;
+  const BEGAN = Date.parse("2026-10-21T00:00:20.000Z");
   const table = {
     kids: new Map<number, number[]>(),
     gens: new Map<number, string>([
-      [process.pid, "t:2026-10-21T00:00:30.000Z"],   // 比下面那个根晚 ⇒ 排除不掉
+      [process.pid, "t:2026-10-21T00:00:30.000Z"],   // 比开工时刻晚 ⇒ 排除不掉
       [DEAD, "t:2026-10-21T00:00:30.000Z"],
     ]),
     unverified: new Set<number>(),
     unnamed: 0,
     unlinked: new Set<number>([process.pid, DEAD]),
   };
-  const anchorGen = "t:2026-10-21T00:00:20.000Z";
   assert.deepEqual(
-    unresolvedTopology(table, { accounted: [], runStartedAt: anchorGen }).map((g) => g.pid),
+    unresolvedTopology(table, { accounted: [], runStartedAtMs: BEGAN }).map((g) => g.pid),
     [process.pid],
     "活着、排除不掉的留成空洞;已经退了的号按正面证据排除",
   );
   assert.deepEqual(
-    unresolvedTopology(table, { accounted: [process.pid], runStartedAt: anchorGen }), [],
+    unresolvedTopology(table, { accounted: [process.pid], runStartedAtMs: BEGAN }), [],
     "已经算在某棵树上的不再另算",
   );
   table.gens.set(process.pid, "t:2026-10-21T00:00:00.000Z");
-  assert.deepEqual(unresolvedTopology(table, { accounted: [], runStartedAt: anchorGen }), [],
+  assert.deepEqual(unresolvedTopology(table, { accounted: [], runStartedAtMs: BEGAN }), [],
     "明显早于开工时刻 ⇒ 不可能是这次运行派生的");
   table.gens.set(process.pid, "t:2026-10-21T00:00:19.500Z");
-  assert.equal(unresolvedTopology(table, { accounted: [], runStartedAt: anchorGen }).length, 1,
+  assert.equal(unresolvedTopology(table, { accounted: [], runStartedAtMs: BEGAN }).length, 1,
     "只早半秒不算:`t:` 这一档精度只有秒,不许据此排除");
-  table.gens.set(process.pid, "j:5");
-  assert.equal(unresolvedTopology(table, { accounted: [], runStartedAt: anchorGen }).length, 1,
-    "两个戳来自不同问法 ⇒ 比不出来,不许据此排除");
+  assert.equal(unresolvedTopology(table, { accounted: [], runStartedAtMs: null }).length, 1,
+    "连开工时刻都拿不到 ⇒ 一个都不许按时间排除");
   table.gens.delete(process.pid);
-  const blind = unresolvedTopology(table, { accounted: [], runStartedAt: anchorGen });
+  const blind = unresolvedTopology(table, { accounted: [], runStartedAtMs: BEGAN });
   assert.equal(blind[0]?.gen, null, "连代次都没有的那种最糟:按时间也排除不掉");
 
-  assert.equal(earliestGen(table, [DEAD, 999999]), "t:2026-10-21T00:00:30.000Z", "下界取已知里最早的");
-  assert.equal(earliestGen(table, [999999]), null, "一个都不知道 ⇒ 没有下界(不排除)");
+  // 两种问法都要换得过来:比「谁更早」不受标签限制,标签只约束「是不是同一代」。
+  assert.equal(genStartedAtMs("t:2026-10-21T00:00:00.000Z"), Date.parse("2026-10-21T00:00:00.000Z"),
+    "`t:` 直接按时刻解析");
+  assert.equal(genStartedAtMs("x:zzz"), null, "认不出来的戳换不出时刻(⇒ 不按时间排除)");
+  const jiffyMs = genStartedAtMs("j:100");
+  if (existsSync("/proc")) {
+    assert.ok(typeof jiffyMs === "number" && jiffyMs > 0 && jiffyMs < Date.now() + 1000,
+      "`j:` 换算成开机时刻 + 节拍,落在过去的某一刻");
+  } else {
+    assert.equal(jiffyMs, null, "没有 /proc 就换不出开机时刻 ⇒ 如实答不出来(⇒ 不按时间排除)");
+  }
+
+  assert.equal(earliestStartMs(table, [DEAD, 999999]), Date.parse("2026-10-21T00:00:30.000Z"),
+    "下界取已知里最早的");
+  assert.equal(earliestStartMs(table, [999999]), null, "一个都不知道 ⇒ 没有下界(不排除)");
 }
 
 for (const child of strays) {

@@ -48,7 +48,8 @@ const { probeFileHolders, holderScanFault, provenNoHolders } = await import("../
 const { listAllCleanupDebts, sweepAgentCleanupDebts } = await import("../src/executors/cleanup-debt.js");
 const { processUnitEvidence } = await import("../src/proc.js");
 const { isPidAlive } = await import("../src/platform.js");
-const { processTableSnapshot, subtreesOf } = await import("../src/process-generation.js");
+const { processTableSnapshot } = await import("../src/process-generation.js");
+const { subtreesOf } = await import("../src/process-subtrees.js");
 const { collectEscapees } = await import("../src/executors/escapees.js");
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -429,6 +430,44 @@ try {
     if (isPidAlive(kidPid) && beats(beat4) > beats0) {
       ok(`而那个孩子确实还活着、还在写(心跳 ${beats0} -> ${beats(beat4)})`);
     } else fail("孩子已经不在了,这一组没测到东西");
+  }
+
+  console.log("10) 反过来也得成立:别人家那个挂不上树的老进程不许拖着我们欠债");
+  if (existsSync("/proc")) {
+    console.log("   ~ 这台机器有 /proc,进程表走的不是 ps 那条路,跳过");
+  } else {
+    // 「挂不上树 ⇒ 不许判空」如果不带排除路,就会变成另一个方向的错:表上任何一个读不出父号
+    // 的**陌生**进程都会让每一次正常收尾压一笔永远销不掉的债(第 3 轮审查 N2 要堵的那种)。
+    // 这一组把 1 号(开机起就在的 launchd)那一行的父号改成它自己 —— 它确实挂不上树,但它
+    // 明显早于本次运行开工,所以必须被排除掉,结论照样是「空」。
+    const before = await listAllCleanupDebts();
+    const outPath = join(root, "clean.out");
+    writeFileSync(outPath, "");
+    const token6 = mintUnitToken();
+    const clean = spawn(process.execPath, ["-e", "process.exit(0)"],
+      { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token6 } });
+    registerUnitToken(clean, token6);
+    registerRunOutPath(clean, outPath);
+    await new Promise<void>((resolve) => clean.once("exit", () => resolve()));
+
+    const shim = installShim("ps",
+      `/bin/ps "$@" | awk '{ if ($1 == 1) { s=""; for (i=3; i<=NF; i++) s = s $i " ";`
+      + ` printf "%s %s %s\\n", $1, $1, s } else print }'\n`);
+    const snap = await processTableSnapshot();
+    const swept = await collectEscapees(clean);
+    const judged = await cleanupAfterRun(clean);
+    restorePath();
+    rmSync(shim, { recursive: true, force: true });
+    const rows = await listAllCleanupDebts();
+
+    if (snap?.unlinked.has(1)) ok("前提成立:1 号这一行确实挂不上树了");
+    else fail("夹具没生效,这一组没测到东西");
+    if (swept.answered) ok("它明显早于本次运行开工 ⇒ 按时间排除,这一轮算问清楚了");
+    else fail(`陌生老进程把这一轮拖成了「没问清楚」:${swept.faults.join(" / ")}`);
+    if (judged.kind === "empty") ok("结论照样是「空」");
+    else fail(`结论成了 ${judged.kind} —— 每次正常收尾都会压一笔追不动的债`);
+    if (rows.ok && before.ok && rows.debts.length === before.debts.length) ok("没多出一笔账");
+    else fail(`多压了账(之前 ${before.ok ? before.debts.length : "?"} 笔,现在 ${rows.ok ? rows.debts.length : "?"} 笔)`);
   }
 
 } finally {

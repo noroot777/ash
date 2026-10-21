@@ -19,15 +19,19 @@
 //    或 pid 已经被复用的深孤儿仍然无解,所以 Windows 依旧是尽力而为,不是等价保证。
 
 import type { ChildProcess } from "node:child_process";
+import { statSync } from "node:fs";
 import { IS_WINDOWS, isPidAlive, killOne } from "../platform.js";
 import { processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import {
-  earliestGen, processTableSnapshot, stillSameGeneration, subtreesOf, unresolvedTopology,
-  type ProcessGeneration, type ProcessMember, type ProcessSubtree,
+  processTableSnapshot, stillSameGeneration,
+  type ProcessGeneration, type ProcessMember,
 } from "../process-generation.js";
+import {
+  earliestStartMs, subtreesOf, unresolvedTopology, type ProcessSubtree,
+} from "../process-subtrees.js";
 import { childKillAuthorized } from "./child-identity.js";
-import { unitTokenOf } from "./unit-token.js";
+import { runOutPathOf, unitTokenOf } from "./unit-token.js";
 import {
   holderMayOwn, holderScanFault, holdersMayExist, noSuchFileProbe, probeFileHolders, trackPathOf,
 } from "./track-evidence.js";
@@ -201,10 +205,7 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   // 号任何子树都遍历不到 —— 于是「这棵树里没看到它」被当成了「已经排除了它属于这次运行」。
   // 它既认不下来也否不掉,所以逐个走排除路(退了 / 已经算进去了 / 开工前就在),剩下的记一笔。
   const topologyGap = (accounted: Iterable<number>): void => {
-    const gaps = unresolvedTopology(table, {
-      accounted,
-      runStartedAt: earliestGen(table, [child.pid ?? 0, ...seeds.map((s) => s.pid)]),
-    });
+    const gaps = unresolvedTopology(table, { accounted, runStartedAtMs: runBeganAtMs() });
     if (gaps.length) {
       faults.push(
         `${gaps.map((g) => g.pid).join(",")} 在进程表上,可是挂在谁下面问不出来`
@@ -212,6 +213,23 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
       );
     }
   };
+
+  /**
+   * 「本次运行最早从哪一刻开始」的下界(毫秒)。**根已经退场时也得答得出来** —— 不然正常收尾
+   * 那一刻(根刚被我们杀掉)就没有下界,于是表上任何一个挂不上树的活进程都排除不掉,每一次
+   * 清理都会凭一条跟我们无关的线索压一笔债。
+   *
+   * 三个来源取最早的:根/种子此刻在表上的那一代,以及**这次运行专属的两个文件**的创建时刻
+   * (它们在 spawn 之前就落地了,所以一定早于根,是个安全的下界;根退场之后它们还在)。
+   */
+  function runBeganAtMs(): number | null {
+    const candidates = [
+      earliestStartMs(table!, [child.pid ?? 0, ...seeds.map((s) => s.pid)]),
+      fileBornAtMs(trackPath),
+      fileBornAtMs(runOutPathOf(child)),
+    ].filter((ms): ms is number => ms !== null);
+    return candidates.length ? Math.min(...candidates) : null;
+  }
 
   // ② 再问归属线索。
   const probe = trackPath ? await probeFileHolders(trackPath) : noSuchFileProbe();
@@ -285,6 +303,18 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
     ...targets.keys(),
   ]);
   return { targets: [...targets.values()], answered: !faults.length, faults, unit: freshUnit };
+}
+
+/** 这个文件是什么时候落地的(毫秒)。问不出来就 null —— 它只用来当「不可能更早」的下界。 */
+function fileBornAtMs(path: string | null): number | null {
+  if (!path) return null;
+  try {
+    const st = statSync(path);
+    const born = st.birthtimeMs || st.ctimeMs || st.mtimeMs;
+    return Number.isFinite(born) && born > 0 ? born : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
