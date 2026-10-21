@@ -26,11 +26,16 @@ export type AgentEvent =
   | { kind: "thinking"; text: string }
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; detail?: string; nativeWork?: NativeWorkEvent }
-  // `source` = 这张图是**正文哪一句 `![](…)` 引用的那张**(目的地原文)。身份只能由它定:
-  // 按文件名或出场顺序去猜,同一个路径在一轮里被重拍过时猜到的恰好是错的那张,而「结论说
-  // 修改后、画出来是修改前」比不画更坏(审查第 1 轮 F1)。缺省 = 不是正文引用来的(工具结果
-  // 截图之类),那种只铺卡片、不进正文。
-  | { kind: "attachment"; path: string; source?: string }
+  // 一张图,或者**正文里一处引用的保存结果**。三个字段合起来才是完整的一条交代:
+  //   · `source` = 这处引用的目的地(`![](…)` 里那一段,规范化后的;见 @ash/shared/markdown-images)
+  //   · `ref`    = 这处引用在这条流里的**身份**(单调递增、不去重、不按回合复位)
+  //   · `path`   = 它那一刻的拷贝;**缺省 = 这处引用确实没存下副本**(文件读不到、格式不认、
+  //                写盘失败),不是「关联丢了」
+  // 为什么非得有 `ref`:只按 `source` 配对的话,同一个路径在一轮里被重拍过(红→蓝→红)时,
+  // 按字节去重会把第三处引用整条抹掉,展示端队列短一条,正文写着「恢复红色」、画出来是
+  // 蓝色(审查第 1 轮 F1)。字节可以内容寻址去重,**引用关联不能**。
+  // `source`/`ref` 都缺省 = 不是正文引用来的(工具结果截图之类),那种只铺卡片、不进正文。
+  | { kind: "attachment"; path?: string; source?: string; ref?: number }
   | { kind: "session"; cliSessionId: string }
   // backend 旁注；时间与落盘 sentinel 共用，实时/刷新布局才不会漂。
   // level="notice" = 这条是**结算说明**(这一轮为什么落成这个状态),不是出了什么岔子。
@@ -72,6 +77,14 @@ export type DuetSpeaker = "A" | "B" | "synthesis" | "impl" | "review" | "user";
 // transcript.jsonl 的回合行,好让刷新后的时间线仍能展开「执行过程」——实时那份
 // 是从 agent.event 流里攒的,不落盘就只在当次连接里存在。
 export type TurnTraceEvent = { kind: "tool" | "thinking"; label: string; detail?: string };
+/**
+ * 讨论区一个回合里「正文第几处引用对上哪份拷贝」(随回合一起落盘)。
+ *
+ * 字段语义跟 attachment 事件逐字一致 —— 讨论区的回合不走分段模型,但**同一套配对**得在
+ * 这儿也兑现得了:少了它,会话流里画的是「说那句话时的快照」,讨论区画的是「现在的文件」
+ * (审查第 1 轮 F1 同类路径)。
+ */
+export type TurnImageRef = { path?: string; source: string; ref?: number };
 
 // SSE envelope pushed to the web client.
 export type ServerEvent =

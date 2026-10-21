@@ -9,7 +9,7 @@
 // 必须出现带 `source` 的 attachment。另外验流式碎片(半句话分两次到)和去重。
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
@@ -72,7 +72,7 @@ try {
   const stored = attachments(events);
   assert.equal(stored.length, 1, "自定义解析器也必须把正文里的本机图片落盘成附件");
   assert.equal(stored[0]!.source, "output/shot.png", "附件要标明是正文哪一句引用的");
-  assert.ok(stored[0]!.path.startsWith(uploads), "拷贝要落在 uploads 目录里");
+  assert.ok(stored[0]!.path?.startsWith(uploads), "拷贝要落在 uploads 目录里");
   // 正文一个字都不能被改动或吞掉。
   assert.equal(
     events.filter((event) => event.kind === "text").map((event) => (event as { text: string }).text).join(""),
@@ -92,16 +92,59 @@ try {
     "跨碎片的引用要认出来,而且只认一次",
   );
 
-  // ③ 同一句引用在两段正文里各出现一次(字节没变):只报一次,别铺两张卡片。
-  // 攒碎片是靠「扫一段、裁掉已扫的」,这道去重是它的安全网。
+  // ③ 同一处目的地被引用两次(字节没变):**两条都要报**,指向同一份拷贝。
+  // 这里曾经断言「只报一次」,而那正是审查第 1 轮 F1 的缺口:展示端按「第 n 处引用 ↔ 第 n
+  // 条结果」对账,少一条就得往前顶,于是第二处引用画成别的东西(或者什么都不画)。
+  // 字节可以内容寻址去重(两条的 path 相同),**引用关联不能**。
   const repeated = await collect(withMarkdownImages((async function* () {
     yield { kind: "text", text: "先看：![预览](output/shot.png)\n" } as AgentEvent;
     yield { kind: "text", text: "再看一眼：![预览](output/shot.png)\n" } as AgentEvent;
     yield { kind: "done", exitStatus: 0 } as AgentEvent;
   })(), root));
-  assert.equal(attachments(repeated).length, 1, "同一句引用 + 同一份字节只报一次");
+  const twice = attachments(repeated);
+  assert.equal(twice.length, 2, "两处引用两条结果");
+  assert.equal(twice[0]!.path, twice[1]!.path, "字节没变就复用同一份拷贝");
+  assert.deepEqual(twice.map((event) => event.ref), [0, 1], "两处引用各有自己的身份");
 
-  // ④ 解析器自己挂的附件(工具结果截图那类,没有 source)原样放行,一个都不许吞。
+  // ④ 红 → 蓝 → 红:三处引用三条结果,第三条指回第一份拷贝(审查第 1 轮 F1 实测 A)。
+  // 「结论说恢复红色、画出来是蓝色」就是这一幕:第三条被按「来源+拷贝」去重掉之后,展示
+  // 端队列只剩两条,第三处引用只能往前顶到蓝的那一份。
+  const red = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 1)]);
+  const blue = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 2)]);
+  const retake = join(root, "output", "retake.png");
+  const retakeEvents = await collect(withMarkdownImages((async function* () {
+    writeFileSync(retake, red);
+    yield { kind: "text", text: "改前：![改前](output/retake.png)\n" } as AgentEvent;
+    writeFileSync(retake, blue);
+    yield { kind: "text", text: "改后：![改后](output/retake.png)\n" } as AgentEvent;
+    writeFileSync(retake, red);
+    yield { kind: "text", text: "回滚了：![恢复](output/retake.png)\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  const takes = attachments(retakeEvents);
+  assert.equal(takes.length, 3, "三处引用三条结果,一条都不许被去重抹掉");
+  assert.deepEqual(takes.map((event) => event.ref), [0, 1, 2]);
+  assert.notEqual(takes[1]!.path, takes[0]!.path, "蓝的那一张另存一份");
+  assert.equal(takes[2]!.path, takes[0]!.path, "恢复红色之后字节跟第一次一样,复用那份拷贝");
+  assert.deepEqual(readFileSync(takes[2]!.path!), red, "第三处引用拿到的必须是红的那份字节");
+
+  // ⑤ 写法示例不是图:四空格缩进的那段由渲染器画成代码,服务端一条都不许报
+  //(报了就会在展示端把附件卡片领走,正文又画不出来 —— 审查第 1 轮 F2 实测)。
+  // 带括号的文件名反过来:它是合法图片,正则那一版把目的地截成 `output/result(1`。
+  const parens = join(root, "output", "result(1).png");
+  writeFileSync(parens, Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(5)]));
+  const semantics = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "写法像这样：\n\n    ![示例](output/shot.png)\n\n" } as AgentEvent;
+    yield { kind: "text", text: "真图在这儿：![截图](output/result(1).png)\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(semantics).map((event) => event.source),
+    ["output/result(1).png"],
+    "缩进代码里的示例不算图;带括号的文件名要完整认出来",
+  );
+
+  // ⑥ 解析器自己挂的附件(工具结果截图那类,没有 source)原样放行,一个都不许吞。
   const passed = await collect(withMarkdownImages((async function* () {
     yield { kind: "attachment", path: join(uploads, "zzzzzzzzzzzz-tool.png") } as AgentEvent;
     yield { kind: "done", exitStatus: 0 } as AgentEvent;

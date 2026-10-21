@@ -14,8 +14,9 @@ export type NativeAgentActivity =
   | { kind: "text" | "thinking"; text: string }
   | { kind: "tool"; name: string; detail?: string }
   | { kind: "error"; message: string }
-  // source 的语义见 shared/src/events.ts 的同名字段(子智能体那一层同样要带)。
-  | { kind: "attachment"; path: string; source?: string };
+  // source/ref/path 的语义见 shared/src/events.ts 的同名字段(子智能体那一层同样要带:
+  // 抽屉里的正文跟主会话走同一套配对,少一个字段就配不上)。
+  | { kind: "attachment"; path?: string; source?: string; ref?: number };
 
 export type NativeWorkEvent = (
   | { type: "activity"; id: string; event: NativeAgentActivity }

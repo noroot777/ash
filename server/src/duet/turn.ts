@@ -11,7 +11,7 @@ import { mkdirSync, createWriteStream, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { finished } from "node:stream/promises";
 import { eq, sql } from "drizzle-orm";
-import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
+import type { DuetSpeaker, SessionRole, TurnImageRef, TurnTraceEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
 import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
@@ -275,6 +275,9 @@ export async function runTurn(args: {
     // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
     const trace: TurnTraceEvent[] = [];
     const TRACE_CAP = 200;
+    // 正文引用到的图:**逐处引用一条**,原样随回合落盘(见 TurnImageRef)。讨论区不走分段
+    // 模型,这是它唯一能把「说那句话时的那一张」留住的地方。
+    const images: TurnImageRef[] = [];
     try {
       for await (const event of handle.events) {
         const sessionNotice = isSessionScopeNotice(event);
@@ -294,6 +297,8 @@ export async function runTurn(args: {
         } else if (event.kind === "text") {
           text += event.text;
           out.write(event.text + "\n");
+        } else if (event.kind === "attachment") {
+          if (event.source) images.push({ path: event.path, source: event.source, ref: event.ref });
         } else if (event.kind === "tool") {
           if (isVisibleExecutionEvent(event) && trace.length < TRACE_CAP) trace.push({ kind: "tool", label: event.name, detail: event.detail });
         } else if (event.kind === "thinking") {
@@ -383,7 +388,7 @@ export async function runTurn(args: {
     try {
       appendFileSync(
         join(runDir, "transcript.jsonl"),
-        JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, notice: noticeMsg, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
+        JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, notice: noticeMsg, startedAt: turnStart, at: endIso, durationMs, events: trace, images: images.length ? images : undefined }) + "\n",
       );
     } catch {
       /* best effort */

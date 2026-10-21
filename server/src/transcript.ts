@@ -103,7 +103,10 @@ export async function turnProducedWork(taskId: string, sessionId: string, turnSt
     return false;
   }
   return parseSessionTrace(raw).some((entry) => entry.turnStartedAt === turnStartedAt
-    && (entry.event.kind === "text" || entry.event.kind === "tool" || entry.event.kind === "attachment"));
+    && (entry.event.kind === "text" || entry.event.kind === "tool"
+      // 没有 path 的 attachment 不算「干过活」:它只是「正文这处引用没存下副本」的交代,
+      // 本身不带任何产物(有 path 的那条才是真落了一份东西)。
+      || (entry.event.kind === "attachment" && !!entry.event.path)));
 }
 
 /**
@@ -153,6 +156,7 @@ function parseTraceLine(line: string): SessionTraceEntry | null {
 
 const isString = (value: unknown): boolean => typeof value === "string";
 const optionalString = (value: unknown): boolean => value === undefined || typeof value === "string";
+const optionalNumber = (value: unknown): boolean => value === undefined || typeof value === "number";
 
 /**
  * **每一种事件的负载都要验到底。** 只验 envelope（at / turnStartedAt / kind）是不够的：
@@ -171,7 +175,10 @@ function validTraceEvent(event: unknown): boolean {
       return isString(e.name) && optionalString(e.detail)
         && (e.nativeWork === undefined || validNativeWork(e.nativeWork));
     case "attachment":
-      return isString(e.path) && optionalString(e.source);
+      // path 可缺省:那是「这处引用没存下副本」的明确交代(见 shared 的 attachment 事件)。
+      // 但不能连 path 带 source 都没有 —— 那条记录什么都说明不了。
+      return optionalString(e.path) && optionalString(e.source) && optionalNumber(e.ref)
+        && (e.path !== undefined || e.source !== undefined);
     case "error":
       return isString(e.message)
         && (e.scope === undefined || e.scope === "session")
@@ -226,7 +233,8 @@ function validNativeActivity(value: unknown): boolean {
     case "error":
       return isString(activity.message);
     case "attachment":
-      return isString(activity.path) && optionalString(activity.source);
+      return optionalString(activity.path) && optionalString(activity.source) && optionalNumber(activity.ref)
+        && (activity.path !== undefined || activity.source !== undefined);
     default:
       return false;
   }

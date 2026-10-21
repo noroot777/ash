@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { maxBytesFor } from "@ash/shared";
-import { hasUrlScheme, markdownImageRefs } from "@ash/shared/markdown-images";
+import { hasUrlScheme, markdownImageRefs, type MarkdownImageRef } from "@ash/shared/markdown-images";
 import { UPLOADS_DIR } from "./paths.js";
 import { id } from "./util.js";
 
@@ -75,14 +75,22 @@ function uploadFileNameFor(name: string | undefined, ext: string, index: number)
 }
 
 /**
- * 本次运行已经落盘过的图片:**内容 hash → uploads 里那份拷贝的路径**。
+ * 一条事件流落图的账本。
  *
- * 曾经是个 `Set<string>`,只记「见过」。改成记路径是 F1 要的:同一份字节被正文用另一个
- * 名字再引用一次(或者工具结果先把它交上来、正文随后才提它)时,得能把**已经存在的那份**
- * 认回来并标上新的来源,而不是「见过了」就一声不响地跳过 —— 跳过的结果是正文那一句配不
- * 上任何附件,于是一个字都不画(审查第 1 轮 F1 实例 3、4)。
+ * `copies` 是**内容 hash → uploads 里那份拷贝的路径**:同一份字节只写一个文件(同一张图
+ * 被正文用两个名字引用、或者工具结果先交上来、正文随后才提它,都复用它)。
+ *
+ * `refs` 是**下一处正文引用的身份**:单调递增,不去重、不复位。字节可以按内容去重,
+ * **引用关联不能** —— 同一个路径在一轮里被重拍过(红→蓝→红)时,第三处引用的字节跟第一处
+ * 一样,但它说的是第三张;按「来源+拷贝」去重会把它整条抹掉,展示端队列短一条,于是正文
+ * 写着「恢复红色」、画出来是蓝色(审查第 1 轮 F1)。
  */
-export type ImageStore = Map<string, string>;
+export type ImageStore = {
+  copies: Map<string, string>;
+  refs: number;
+};
+
+export const imageStore = (): ImageStore => ({ copies: new Map(), refs: 0 });
 
 /** 落一张图,返回它在 uploads 里的路径;`fresh=false` = 这份字节本次运行已经存过了。 */
 function storeImage(
@@ -94,7 +102,7 @@ function storeImage(
   const ext = MIME_EXT[mime];
   if (!ext || !bytes.length || bytes.length > maxBytesFor(mime)) return null;
   const hash = createHash("sha256").update(bytes).digest("hex");
-  const known = seen.get(hash);
+  const known = seen.copies.get(hash);
   if (known) return { path: known, fresh: false };
   const path = join(directory, uploadFileNameFor(name, ext, index));
   try {
@@ -106,13 +114,13 @@ function storeImage(
     console.warn(`[ash] failed to persist agent image ${path}:`, error);
     return null;
   }
-  seen.set(hash, path);
+  seen.copies.set(hash, path);
   return { path, fresh: true };
 }
 
 export function persistToolResultImages(
   value: unknown,
-  seen: ImageStore = new Map(),
+  seen: ImageStore = imageStore(),
   options: { allowBareBase64?: boolean; directory?: string } = {},
 ): string[] {
   const directory = options.directory ?? UPLOADS_DIR;
@@ -143,39 +151,60 @@ function localImagePath(destination: string, cwd?: string): string | null {
   }
 }
 
-/** 正文那一句引用 → uploads 里的那份拷贝。`source` 恒为**目的地原文**。 */
-export type PersistedMarkdownImage = { path: string; source: string };
-
 /**
- * 把正文引用到的本机图片复制进 uploads,并标明**是哪一句引用的**。
+ * 正文里**一处**引用的保存结果。
  *
- * `source` 是整条链路的身份依据:展示端用同一个扫描器(shared 的 markdownImageRefs)重新
- * 认一遍正文,按 `source` 把每一处引用对上它自己那份拷贝。这件事**不能靠文件名或出场顺序
- * 去猜** —— 同一个路径在一轮里被重拍过(先「修改前」后「修改后」)时,猜出来的那张恰好是
- * 错的那张,而「结论说修改后、画的是修改前」比不画更坏(审查第 1 轮 F1)。
- *
- * 逐处引用各返回一条:同一处目的地被引用两次就两条(字节没变时指向同一份拷贝),同一份
- * 字节挂着两个名字也两条(path 相同、source 不同)。
+ * `source` 是目的地(规范化后的那个,见 shared 的 markdownImageRefs),`ref` 是这一处引用
+ * 在本流里的身份。`path` 在 = 这处引用那一刻的拷贝;`path` 不在 = **这处引用确实没有副本**
+ * (文件读不到、格式不认、写盘失败)。两件事必须分得开:展示端据此决定「拿副本画」还是
+ * 「现在去工作目录取一次」;混在一起就会把「关联丢了」当成「从来没存过」,绕过仍然存在的
+ * 正确副本去画当前文件(审查第 1 轮 F1 实测 B)。
  */
-export function persistMarkdownImages(
-  text: string,
-  seen: ImageStore = new Map(),
+export type PersistedMarkdownImage = { source: string; ref: number; path?: string };
+
+/** 把已经扫出来的那几处引用逐一落盘 —— 扫描结果复用时走这条(流式那层只扫一遍)。 */
+export function persistMarkdownImageRefs(
+  refs: MarkdownImageRef[],
+  seen: ImageStore,
   options: { directory?: string; cwd?: string } = {},
 ): PersistedMarkdownImage[] {
   const directory = options.directory ?? UPLOADS_DIR;
   const persisted: PersistedMarkdownImage[] = [];
-  for (const [index, ref] of markdownImageRefs(text).entries()) {
+  for (const ref of refs) {
     const path = localImagePath(ref.destination, options.cwd);
-    const mime = path ? EXT_MIME[extname(path).toLowerCase()] : undefined;
-    if (!path || !mime) continue;
-    let bytes: Buffer;
-    try {
-      bytes = readFileSync(path);
-    } catch {
-      continue; /* 不存在 / 读不了:这一句就当没提图 */
+    // 站外地址、data:、给不出 cwd 的相对路径:本来就不该有「保存结果」,一条都不发
+    // —— 发了等于告诉展示端「这处引用我管过」,而它其实只能靠浏览器自己去取。
+    if (!path) continue;
+    const id = seen.refs;
+    seen.refs += 1;
+    const mime = EXT_MIME[extname(path).toLowerCase()];
+    let bytes: Buffer | null = null;
+    if (mime) {
+      try {
+        bytes = readFileSync(path);
+      } catch {
+        bytes = null; /* 不存在 / 读不了 */
+      }
     }
-    const stored = storeImage({ mime, bytes, name: basename(path) }, seen, directory, index);
-    if (stored) persisted.push({ path: stored.path, source: ref.destination });
+    const stored = bytes ? storeImage({ mime: mime!, bytes, name: basename(path) }, seen, directory, id) : null;
+    persisted.push(stored ? { source: ref.destination, ref: id, path: stored.path } : { source: ref.destination, ref: id });
   }
   return persisted;
+}
+
+/**
+ * 把正文引用到的本机图片复制进 uploads,并标明**是哪一处引用的**。
+ *
+ * 为什么要逐处标身份:展示端用同一个扫描器(shared 的 markdownImageRefs)重新认一遍正文,
+ * 按「第 n 处指向这个目的地的引用 ↔ 第 n 条报这个来源的结果」对账。这个对应关系是
+ * **构造出来的**(每一处引用恒发一条、按文档顺序、不去重),不是按文件名或出场顺序猜的
+ * —— 猜的那一版在同一个路径被重拍过时恰好画成错的那张,而「结论说修改后、画出来是修改
+ * 前」比不画更坏(审查第 1 轮 F1)。
+ */
+export function persistMarkdownImages(
+  text: string,
+  seen: ImageStore = imageStore(),
+  options: { directory?: string; cwd?: string } = {},
+): PersistedMarkdownImage[] {
+  return persistMarkdownImageRefs(markdownImageRefs(text), seen, options);
 }

@@ -10,7 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { ReviewReportBody } from "../components/MarkdownBody.tsx";
-import { firstResolver, siblingFileResolver, taskFileResolver } from "../components/markdownPolicy.ts";
+import { reportFileResolver } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { ReviewDispatchControl } from "../review/ReviewDispatchControl.tsx";
@@ -93,12 +93,11 @@ export function ReviewRoundBody({
             text={round.reportMarkdown}
             reportKey={`${taskId}:${round.where}:${round.round}`}
             conclusion={round.conclusion}
-            // 报告里的 `![](shot.png)` 说的是**跟 report.md 同目录**的那张截图
-            //（审查 prompt 就是这么交代的），按证据接口解出来才取得到。带目录的那种
-            //（`output/shot.png`）证据接口不服务，退一档按被审任务的工作目录取。
-            resolveFile={firstResolver(
-              siblingFileResolver((name) => api.taskReviewFileUrl(taskId, round.round, name)),
-              taskFileResolver(taskId),
+            // 文档根归属（同目录优先、再退任务工作目录，以及已知的歧义）一处定清楚，
+            // 见 markdownPolicy 的 reportFileResolver。
+            resolveFile={reportFileResolver(
+              (name) => api.taskReviewFileUrl(taskId, round.round, name),
+              taskId,
             )}
           />
         : <p>验证报告尚未写入。</p>}

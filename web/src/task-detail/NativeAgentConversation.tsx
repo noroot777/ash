@@ -57,6 +57,11 @@ export function NativeAgentConversation({ row, taskId, statusLabel, error, onRet
           {row.description
             ? <details className="native-agent__assignment"><summary>收到的输入</summary><MarkdownBody text={row.description} /></details>
             : <p className="native-work__hint">{NATIVE_WORK_NO_ASSIGNMENT}</p>}
+          {/* 分段在场时正文走 AgentTurnBody(附件快照优先,见 turnImages)。下面那一支只在
+              **一条活动记录都没有**时出现 —— 分段就是从同一串活动里切出来的,所以那时
+              连一条附件结果都不存在,没有快照可兑现,`resolveFile` 的「现在去工作目录取」
+              是唯一一档,不是绕过了谁(审查第 1 轮 F1 同类路径)。`finalResult` 同理:它只在
+              返回结果不在任何分段正文里时才画,那段文字从来没进过 text 活动。 */}
           {segments.length > 0 ? <AgentTurnBody segments={segments} running={running} taskId={taskId} /> : <>
             <p className="native-work__hint">{running ? "等待子智能体的执行记录…" : pending ? "等待子智能体开始执行…" : "此会话未记录详细执行过程。"}</p>
             {row.message && <MarkdownBody text={row.message} resolveFile={resolveFile} />}

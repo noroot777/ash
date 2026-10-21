@@ -26,9 +26,9 @@ const uploads = (name) => `/Users/demo/code/ash/data/uploads/${name}`;
 const output = "修改前：\n\n![前](output/shot.png)\n\n修改后：\n\n![后](output/shot.png)\n";
 const trace = [
   traced("2026-10-21T08:01:00.000Z", { kind: "text", text: "修改前：\n\n![前](output/shot.png)\n\n" }),
-  traced("2026-10-21T08:01:01.000Z", { kind: "attachment", path: uploads("aaaaaaaaaaaa-shot.png"), source: "output/shot.png" }),
+  traced("2026-10-21T08:01:01.000Z", { kind: "attachment", path: uploads("aaaaaaaaaaaa-shot.png"), source: "output/shot.png", ref: 0 }),
   traced("2026-10-21T08:02:00.000Z", { kind: "text", text: "修改后：\n\n![后](output/shot.png)\n" }),
-  traced("2026-10-21T08:02:01.000Z", { kind: "attachment", path: uploads("bbbbbbbbbbbb-shot.png"), source: "output/shot.png" }),
+  traced("2026-10-21T08:02:01.000Z", { kind: "attachment", path: uploads("bbbbbbbbbbbb-shot.png"), source: "output/shot.png", ref: 1 }),
   // 正文没提它（工具结果截图那类），没有 source。
   traced("2026-10-21T08:02:02.000Z", { kind: "attachment", path: uploads("cccccccccccc-tool.png") }),
 ];
@@ -96,6 +96,94 @@ assert.equal(
   "站外/站内绝对地址/越界路径都不许改写成任务文件地址",
 );
 
+// ⑧ **明确没有副本**的那处引用才退到当前文件(服务端读不到文件、格式不认、写盘失败时
+// 就是这一条:带 source/ref、没有 path)。没有这条交代,展示端分不清「从没存过」和「关联
+// 丢了」——后者退到当前文件就是审查第 1 轮 F1 实测 B 那一幕。
+const missing = [{
+  id: "m:0",
+  markdown: "![没存下](output/missing.png)",
+  events: [],
+  attachments: [],
+  attachmentSources: [{ source: "output/missing.png", ref: 0 }],
+}];
+assert.equal(
+  turnImages(missing, "C0ojRgeQnMsa")[0].markdown,
+  "![没存下](/api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fmissing.png&workspaceOnly=1)",
+  "明确没有副本 → 现在去工作目录取",
+);
+
+// ⑨ 配不上、而契约保证过「每处引用恒有一条」(ref 在)→ **什么都不画**,也不许拿当前文件
+// 或上一份拷贝去补(F1:猜出来的那张恰好是错的那张)。那张图仍留在附件卡片里,点得开。
+const shortQueue = [{
+  id: "q:0",
+  markdown: "![一](output/s.png) ![二](output/s.png)",
+  events: [],
+  attachments: [uploads("eeeeeeeeeeee-s.png")],
+  attachmentSources: [{ path: uploads("eeeeeeeeeeee-s.png"), source: "output/s.png", ref: 0 }],
+}];
+const short = turnImages(shortQueue, "C0ojRgeQnMsa");
+assert.equal(
+  short[0].markdown,
+  "![一](/api/uploads/eeeeeeeeeeee-s.png) ![二](output/s.png)",
+  "第二处引用配不上:原样留着(渲染端自己收掉),绝不顶一份别的拷贝",
+);
+assert.deepEqual(short[0].attachments, [], "第一处引用领走的那张不再挂卡片");
+
+// ⑩ 老数据(一条 ref 都没有)队列取空了:仍退到当前文件 —— 那时服务端按字节去重,同一张
+// 图被引用两次只留了一条记录,而「现在去工作目录取」是存量消息唯一的出路。
+const legacyQueue = [{
+  id: "l:0",
+  markdown: "![一](output/s.png) ![二](output/s.png)",
+  events: [],
+  attachments: [uploads("ffffffffffff-s.png")],
+  attachmentSources: [{ path: uploads("ffffffffffff-s.png"), source: "output/s.png" }],
+}];
+assert.equal(
+  turnImages(legacyQueue, "C0ojRgeQnMsa")[0].markdown,
+  "![一](/api/uploads/ffffffffffff-s.png) ![二](/api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fs.png&workspaceOnly=1)",
+  "老数据的第二处引用退到当前文件",
+);
+
+// ⑪ trace 与权威正文**真发散**时的兜底单段:关联不能跟着分段一起丢。丢了的后果是正文
+// 配不上已经存着的正确副本,读时兜底又拿当前文件去画(说的是红图、画出来是蓝图;
+// 审查第 1 轮 F1 实测 B)。
+const divergedOutput = "权威正文说的是这张：\n\n![图](output/shot.png)\n";
+const divergedItems = buildConversationItems([{
+  session,
+  output: divergedOutput,
+  trace: [
+    traced("2026-10-21T08:03:00.000Z", { kind: "text", text: "另一种说法，跟权威正文互不包含：![图](output/shot.png)\n" }),
+    traced("2026-10-21T08:03:01.000Z", { kind: "attachment", path: uploads("99999999999a-shot.png"), source: "output/shot.png", ref: 0 }),
+  ],
+}], [session], []);
+const diverged = divergedItems.filter((item) => item.kind === "agent")[0].segments;
+assert.equal(diverged.length, 1, "真发散时退回单段");
+assert.deepEqual(
+  (diverged[0].attachmentSources ?? []).map((item) => item.source),
+  ["output/shot.png"],
+  "兜底单段必须保住「哪一处引用对哪份拷贝」",
+);
+assert.equal(
+  turnImages(diverged, "C0ojRgeQnMsa")[0].markdown,
+  "权威正文说的是这张：\n\n![图](/api/uploads/99999999999a-shot.png)",
+  "关联还在就画那份副本,不许退到当前文件",
+);
+
+// ⑫ 扫描器跟渲染器同一套语义(F2):带括号的文件名要完整改写,四空格缩进的写法示例一个
+// 字都不许动(渲染器把它画成代码),引用式图照样认(渲染器照样画)。
+const semantics = [{
+  id: "s:0",
+  markdown: "真图：![截图](output/result(1).png)\n\n写法示例：\n\n    ![示例](output/shot.png)\n\n引用式：![图][ref]\n\n[ref]: output/ref.png\n",
+  events: [],
+  attachments: [],
+}];
+assert.equal(
+  turnImages(semantics, "C0ojRgeQnMsa")[0].markdown,
+  "真图：![截图](</api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fresult(1).png&workspaceOnly=1>)\n\n写法示例：\n\n    ![示例](output/shot.png)\n\n引用式：![图](/api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fref.png&workspaceOnly=1)\n\n[ref]: output/ref.png\n",
+  // 地址里带括号时必须 `<>` 包起来,否则 CommonMark 在第一个括号处就截断(见 shared 的 rewriter)。
+  "括号文件名完整、缩进代码原样、引用式图认得出来",
+);
+
 // ⑧ 目的地 → 任务工作目录里的那个文件（`taskFilePath` 的口径,跟服务端 resolveInRoot 对齐）。
 for (const [destination, expected] of [
   ["output/shot.png", "output/shot.png"],
@@ -106,13 +194,49 @@ for (const [destination, expected] of [
   ["file:///Users/fjh/code/harness/output/shot.png", "/Users/fjh/code/harness/output/shot.png"],
   ["D:/ai_workspace/ash/output/shot.png", "D:/ai_workspace/ash/output/shot.png"],
   ["D:\\ai_workspace\\ash\\output\\shot.png", "D:\\ai_workspace\\ash\\output\\shot.png"],
+  // 合法的 POSIX 根列不全,所以判据是「站内路由才是网址」而不是「顶层目录白名单」
+  // (审查第 1 轮 F3:上一版照搬磁盘根白名单,这几条全被当成站内地址拒掉)。
+  ["/System/Volumes/Data/Users/fjh/output/shot.png", "/System/Volumes/Data/Users/fjh/output/shot.png"],
+  ["/data/work/shot.png", "/data/work/shot.png"],
+  ["/app/output/shot.png", "/app/output/shot.png"],
+  ["/code/harness/output/shot.png", "/code/harness/output/shot.png"],
+  ["/projects/x/shot.png", "/projects/x/shot.png"],
   ["https://example.invalid/a.png", null],
   ["/api/uploads/x.png", null],
+  ["/assets/index-abc123.png", null],
+  ["/review/x.png", null],
+  ["/mobile/app/x.png", null],
   ["../x.png", null],
   ["output/../../x.png", null],
   ["", null],
 ]) {
   assert.equal(taskFilePath(destination), expected, `taskFilePath(${JSON.stringify(destination)})`);
 }
+
+// ⑬ 已经有正主的地址不许被「去工作目录取」抢走（真实数据上撞到的一幕：审查者在结论里
+// 引用自己那几张证据截图，被改写成任务工作目录的 raw 地址之后 400、整张被收掉）。
+const owned = [{
+  id: "o:0",
+  markdown: [
+    "证据：![证据](/Users/fjh/code/harness/data/runs/kCIlzUlQsB9w/free-review/P6pTi1-Ksavv/round-2/team.png)",
+    "",
+    "附件：![附件](/api/uploads/99999999999a-shot.png)",
+    "",
+    "工作目录里的那张照旧改写：![图](output/shot.png)",
+  ].join("\n"),
+  events: [],
+  attachments: [],
+}];
+assert.equal(
+  turnImages(owned, "C0ojRgeQnMsa")[0].markdown,
+  [
+    "证据：![证据](/Users/fjh/code/harness/data/runs/kCIlzUlQsB9w/free-review/P6pTi1-Ksavv/round-2/team.png)",
+    "",
+    "附件：![附件](/api/uploads/99999999999a-shot.png)",
+    "",
+    "工作目录里的那张照旧改写：![图](/api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fshot.png&workspaceOnly=1)",
+  ].join("\n"),
+  "证据目录和 uploads 的地址原样留给渲染点去解,只有工作目录相对路径才改写",
+);
 
 console.log("回合图片配对(trace → 分段 → 正文)回归通过");

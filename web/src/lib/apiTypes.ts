@@ -69,8 +69,9 @@ export type SessionTraceEntry = {
     | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }
     | Extract<import("@ash/shared").AgentEvent, { kind: "tool" }>
-    // source = 正文哪一句引用的那张图(见 shared/src/events.ts)。配对靠它,不靠文件名。
-    | { kind: "attachment"; path: string; source?: string }
+    // source/ref/path:一处正文引用的保存结果(见 shared/src/events.ts)。配对靠 source+ref,
+    // 不靠文件名;path 缺省 = 这处引用确实没有副本。
+    | { kind: "attachment"; path?: string; source?: string; ref?: number }
     | { kind: "error"; message: string }
     // verifyRound：这一回合属于就地验证的第几轮（不是验证轮时缺省）。它是会话里
     // 唯一能把审查者的发言跟实现回合分开的信号——两者常跑在同一条会话上。

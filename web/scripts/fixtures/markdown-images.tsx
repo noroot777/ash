@@ -11,7 +11,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { AgentTurnBody } from "../../src/components/AgentTurnBody.tsx";
 import { ReviewReportBody } from "../../src/components/MarkdownBody.tsx";
+import { MarkdownBody } from "../../src/components/MarkdownBody.tsx";
 import { siblingFileResolver } from "../../src/components/markdownPolicy.ts";
+import { IMAGE_SHAPES } from "./markdown-shapes.ts";
 import type { AgentContentSegment, AttachmentSource } from "../../src/task-detail/conversationSegments.ts";
 import "../../src/styles/global.css";
 
@@ -134,6 +136,28 @@ const AWKWARD = turn(
   ],
 );
 
+// ── F2：扫描器认的那几处 vs 渲染器画出来的那几个 ──────────────────────────────
+// 每种写法单独一节，`test-markdown-images.mjs` 两边数数对比（见 markdown-shapes.ts）。
+// 解析器**认得出的目的地**一律给一个真吐字节的地址，这样「画了几张」就只取决于渲染器
+// 认不认这处引用，不受路径形状影响。
+const anyLocalFile = (destination: string) => {
+  const name = destination.split("/").pop() ?? destination;
+  return /\.svg$/i.test(name) ? { name, url: "/api/uploads/shape.svg" } : null;
+};
+
+// ── F1：没有副本 / 配不上的两种交代 ────────────────────────────────────────────
+// 「明确没有副本」(带 source、带 ref、没有 path) → 现在去工作目录取,取到了就真画出来。
+const NOCOPY = [segment("nocopy:0", "服务端没存下这张：\n\n![没副本](output/live.svg)\n")];
+NOCOPY[0]!.attachmentSources = [{ source: "output/live.svg", ref: 0 }];
+
+// 配不上(队列取空)、而契约保证过「每处引用恒有一条」→ 第二处**什么都不画**,绝不顶一份
+// 别的拷贝(审查第 1 轮 F1:猜出来的恰好是错的那张)。第一处领走的那张不再挂卡片。
+const SHORT = turn(
+  "short",
+  ["第一次：", "", "![一](output/short.svg)", "", "又提一次：", "", "![二](output/short.svg)"].join("\n"),
+  [{ path: up("kkkkkkkkkkkk-short.svg"), source: "output/short.svg", ref: 0 }],
+);
+
 // 存量消息：那时相对路径根本没被复制进 uploads，配不上任何来源。
 const ORPHAN = [segment("orphan:0", "当时的截图：\n\n![旧截图](output/playwright/gone.png)\n")];
 
@@ -150,6 +174,7 @@ const TURNS: [string, AgentContentSegment[]][] = [
   ["fenced", FENCED],
   ["awkward", AWKWARD],
   ["orphan", ORPHAN],
+  ["short", SHORT],
 ];
 
 createRoot(document.getElementById("root")!).render(
@@ -168,7 +193,12 @@ createRoot(document.getElementById("root")!).render(
         <AgentTurnBody segments={segments} running={false} />
       </section>
     ))}
-    {([["live", LIVE], ["gone", GONE]] as [string, AgentContentSegment[]][]).map(([name, segments]) => (
+    {IMAGE_SHAPES.map((shape) => (
+      <section className={`shape-${shape.key}`} key={shape.key} title={shape.about}>
+        <MarkdownBody text={shape.markdown} resolveFile={anyLocalFile} />
+      </section>
+    ))}
+    {([["live", LIVE], ["gone", GONE], ["nocopy", NOCOPY]] as [string, AgentContentSegment[]][]).map(([name, segments]) => (
       <section className={`${name}-fixture`} key={name}>
         <AgentTurnBody segments={segments} running={false} taskId="T1" />
       </section>

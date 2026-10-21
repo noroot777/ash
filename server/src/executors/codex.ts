@@ -18,7 +18,7 @@ import {
   RunTraceRecorder,
   type RunTracePaths,
 } from "./diagnostics.js";
-import { persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { imageStore, persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { codexAshMcpServerName } from "./codex-mcp.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"] as const;
@@ -333,7 +333,7 @@ export async function* parseCodexStream(
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
   let threadId = contextOptions.initialThreadId;
-  const seenImages: ImageStore = new Map();
+  const seenImages: ImageStore = imageStore();
   const structuredErrors: string[] = [];
   const trace = new RunTraceRecorder(tracePaths);
   const push = (e: AgentEvent) => {

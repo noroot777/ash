@@ -1,12 +1,13 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { AgentType } from "@ash/shared";
+import type { AgentEvent, AgentType } from "@ash/shared";
 import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, killChild, redactSecrets, resumeFor } from "./spawn.js";
 import { textParser, withMarkdownImages } from "./catalog/parsers.js";
+import type { CliParser, CliParserContext } from "./catalog/types.js";
 import { valueArgs, type CliSpec } from "./catalog/types.js";
 
 // 按目录里的 spec 装配命令行、跑一次性非交互回合。claude / codex 有专用类(常驻
@@ -19,6 +20,18 @@ import { valueArgs, type CliSpec } from "./catalog/types.js";
 //      监听者的 uncaughtException,任务永远卡 running,见 server/CLAUDE.md);
 //   ③ 不实现 openResident。「谁能当团队调度者」就是靠这个方法存在与否过滤的,
 //      generic 装一个假的等于让一堆跑不了常驻会话的 CLI 出现在调度者下拉里。
+
+/**
+ * 解析器的事件流 + 「正文图片谁来落盘」这一档。
+ *
+ * 自己已经落过盘的解析器(`ownsMarkdownImages`)直接放行:再裹一层就是同一处引用两条
+ * 记录、两份拷贝(见 catalog/types.ts 的那个字段)。run 与 attach 共用这一个出口。
+ */
+function markdownImages(parser: CliParser, ctx: CliParserContext): AsyncIterable<AgentEvent> {
+  const events = parser(ctx);
+  return parser.ownsMarkdownImages ? events : withMarkdownImages(events, ctx.cwd);
+}
+
 export class GenericCliExecutor implements AgentExecutor {
   readonly type: AgentType;
   readonly label: string;
@@ -68,10 +81,7 @@ export class GenericCliExecutor implements AgentExecutor {
       commandLine,
       // 正文里 `![](…)` 的本机图片在这一层统一收(见 withMarkdownImages):解析器是
       // 「自带的 or 目录里内联的」二选一,只在默认那份里收等于十个自定义解析器全漏。
-      events: withMarkdownImages(
-        parser({ child, bin: this.bin, label: this.label, trace: opts.trace, lifecycle, cwd: opts.cwd }),
-        opts.cwd,
-      ),
+      events: markdownImages(parser, { child, bin: this.bin, label: this.label, trace: opts.trace, lifecycle, cwd: opts.cwd }),
       kill: () => {
         lifecycle.stopRequested = true;
         killChild(child);
@@ -87,10 +97,7 @@ export class GenericCliExecutor implements AgentExecutor {
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
-      events: withMarkdownImages(
-        parser({ child, bin: this.bin, label: this.label, lifecycle, cwd: opts.cwd }),
-        opts.cwd,
-      ),
+      events: markdownImages(parser, { child, bin: this.bin, label: this.label, lifecycle, cwd: opts.cwd }),
       kill: () => {
         lifecycle.stopRequested = true;
         child.kill();

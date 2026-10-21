@@ -12,7 +12,7 @@ import { childActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
-import { persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { imageStore, persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
@@ -75,7 +75,7 @@ export async function* parseClaudeStream(
   // 时发一条 context 事件。窗口(分母)反过来只有 `result` 行有,见 claudeContextWindow。
   let contextUsed = 0;
   let contextModel: string | null = null;
-  const seenImages: ImageStore = new Map();
+  const seenImages: ImageStore = imageStore();
   const childImages = new Map<string, ImageStore>();
   const nativeWork = new NativeWorkTrace();
   // claude 自带 `Monitor` 工具的只读投影（见 ../claude-monitors.ts）。放在这一层的理由：
@@ -149,7 +149,7 @@ export async function* parseClaudeStream(
     for (const activity of nativeWork.claudeMessage(ev)) push(activity);
     claudeMonitors.event(ev);
     if (ev.parent_tool_use_id) {
-      const images = childImages.get(ev.parent_tool_use_id) ?? new Map();
+      const images = childImages.get(ev.parent_tool_use_id) ?? imageStore();
       childImages.set(ev.parent_tool_use_id, images);
       for (const block of Array.isArray(ev.message?.content) ? ev.message.content : []) {
         // 子智能体挂的 Monitor 同样要认：它跑在同一条 CLI 会话、同一个 ash 任务上，
@@ -375,7 +375,10 @@ export async function* parseClaudeStream(
       }
       // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。
       if (resident) push({ kind: "turnEnd" });
-      seenImages.clear();
+      // 只清字节去重表,不动 `refs`:引用身份在一条流里单调递增,复位会让两个回合的
+      // 身份撞上。字节去重按回合清是故意的 —— 同一个路径在下一回合被重拍过,那是新的
+      // 一张图,得有自己的拷贝。
+      seenImages.copies.clear();
       childImages.clear();
       // 回合结束 = 压缩绝不可能还在进行中。兜底复位,免得将来 CLI 新增一条我们没认出来
       // 的终止路径时,残留的标志把下一回合的开始提示吞掉(常驻进程一份标志跨多回合)。

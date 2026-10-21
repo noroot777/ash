@@ -84,7 +84,16 @@ export interface CliParserContext {
 }
 
 /** 输出解析器:把 CLI 的 stdout 变成事件流。缺省用 parsers.ts 的 textParser。 */
-export type CliParser = (ctx: CliParserContext) => AsyncIterable<AgentEvent>;
+export type CliParser = {
+  (ctx: CliParserContext): AsyncIterable<AgentEvent>;
+  /**
+   * 这份解析器**自己**已经把正文里的本机图片落盘了(claudeStreamJsonParser 套的
+   * parseClaudeStream 就是)。generic 据此直接放行,不再裹 withMarkdownImages ——
+   * 两层各存一份就是同一处引用两条记录、两份拷贝,展示端队列里多出来的那条会让
+   * 同一张图既画在正文又铺一张卡片。
+   */
+  ownsMarkdownImages?: boolean;
+};
 
 /**
  * 「问这个 CLI 自己现在有哪些模型」的命令。缺省 = 该 CLI 没有(或还没实测出)清单命令,

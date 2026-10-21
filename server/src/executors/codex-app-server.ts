@@ -5,7 +5,7 @@ import { codexChildWork, codexNativeWork, codexSubAgentWork, nativeAgentProfile,
 import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
-import { persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { imageStore, persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import {
   formatFailureForTimeline,
   formatSessionPoisonForTimeline,
@@ -65,7 +65,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const pending = new Map<string, { resolve(value: any): void; reject(error: Error): void }>();
   const seenAgentDeltas = new Set<string>();
   const seenReasoningDeltas = new Set<string>();
-  const seenImages: ImageStore = new Map();
+  const seenImages: ImageStore = imageStore();
   const nativeWork = new NativeWorkTrace();
   let wake: (() => void) | null = null;
   let requestId = opts.reattach ? Date.now() : 0;
@@ -367,7 +367,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       for (const activity of childEvents.notification(message.method, p)) push(activity);
       if (message.method === "item/completed") {
         const item = p.item;
-        const seen: ImageStore = childImages.get(p.threadId) ?? new Map();
+        const seen: ImageStore = childImages.get(p.threadId) ?? imageStore();
         childImages.set(p.threadId, seen);
         if (item?.type === "agentMessage") {
           for (const image of persistMarkdownImages(item.text ?? "", seen, { cwd: opts.cwd })) push(childActivity(p.threadId, { kind: "attachment", ...image }));

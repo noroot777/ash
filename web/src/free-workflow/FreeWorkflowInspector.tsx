@@ -18,7 +18,7 @@ import {
 import { FoldedProse } from "../components/FoldedProse.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody, ReviewReportBody } from "../components/MarkdownBody.tsx";
-import { firstResolver, siblingFileResolver, taskFileResolver } from "../components/markdownPolicy.ts";
+import { reportFileResolver } from "../components/markdownPolicy.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewNote } from "../review/ReviewNote.tsx";
@@ -279,13 +279,11 @@ export function FreeWorkflowInspector({
                 text={opened.round.reportMarkdown}
                 reportKey={`${opened.run.id}:${opened.round.round}`}
                 conclusion={opened.round.conclusion}
-                // 报告里的 `![](shot.png)` 说的是**跟 report.md 同目录**的那张截图
-                //（审查 prompt 就是这么交代的），按证据接口解出来才取得到。带目录的那种
-                //（`output/shot.png`）证据接口不服务，退一档按任务的工作目录取。
-                resolveFile={firstResolver(
-                  siblingFileResolver((name) =>
-                    api.freeReviewFileUrl(task.id, opened.run.id, opened.round.round, name)),
-                  taskFileResolver(task.id),
+                // 文档根归属（同目录优先、再退任务工作目录，以及已知的歧义）一处定清楚，
+                // 见 markdownPolicy 的 reportFileResolver。
+                resolveFile={reportFileResolver(
+                  (name) => api.freeReviewFileUrl(task.id, opened.run.id, opened.round.round, name),
+                  task.id,
                 )}
               />
             : <p>报告尚未生成。</p>}

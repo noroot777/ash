@@ -83,15 +83,16 @@ function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
   segment.events = appendExecutionEvent(segment.events, normalized);
 }
 
-function appendAgentAttachment(agent: AgentItem, event: { path: string; source?: string }): void {
+function appendAgentAttachment(agent: AgentItem, event: { path?: string; source?: string; ref?: number }): void {
   let segment = currentSegment(agent);
-  if (segment.markdown) {
+  // 没有 path 的 attachment 铺不出卡片(它只是「这处引用没副本」的交代),不切段。
+  if (event.path && segment.markdown) {
     segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [] };
     agent.segments.push(segment);
   }
-  if (!segment.attachments.includes(event.path)) segment.attachments.push(event.path);
-  // source = 正文哪一句引用的那张图(落盘重建那一路同一份口径,见 conversationSegments)。
-  if (event.source) (segment.attachmentSources ??= []).push({ path: event.path, source: event.source });
+  if (event.path && !segment.attachments.includes(event.path)) segment.attachments.push(event.path);
+  // source/ref = 正文第几处引用对上哪份拷贝(落盘重建那一路同一份口径,见 conversationSegments)。
+  if (event.source) (segment.attachmentSources ??= []).push({ path: event.path, source: event.source, ref: event.ref });
 }
 
 /**

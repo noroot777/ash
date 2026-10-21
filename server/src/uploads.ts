@@ -147,7 +147,8 @@ export function noteAgentUpload(taskId: string, path: string): void {
 
 export function noteAgentEventUpload(taskId: string, event: AgentEvent | SessionTraceEvent): void {
   const content = event.kind === "tool" && event.nativeWork?.type === "activity" ? event.nativeWork.event : event;
-  if (content.kind === "attachment") noteAgentUpload(taskId, content.path);
+  // 没有 path 的 attachment 是「这处引用没存下副本」的交代,没有文件可登记。
+  if (content.kind === "attachment" && content.path) noteAgentUpload(taskId, content.path);
 }
 
 /** 能读这个附件吗。找不到与没权限**回同一句话**(路由统一 404),不泄露文件存不存在。 */

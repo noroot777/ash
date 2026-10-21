@@ -3,8 +3,8 @@ import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import { parseClaudeStream } from "../claude.js";
-import { markdownImageRefs } from "@ash/shared/markdown-images";
-import { persistMarkdownImages, type ImageStore } from "../../agent-attachments.js";
+import { markdownImageRefs, trimCarry } from "@ash/shared/markdown-images";
+import { imageStore, persistMarkdownImageRefs } from "../../agent-attachments.js";
 import type { CliParser, CliParserContext } from "./types.js";
 
 // ── 目录自带的输出解析器 ────────────────────────────────────────────────────
@@ -111,51 +111,59 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
  */
 export const claudeStreamJsonParser: CliParser = (ctx) =>
   parseClaudeStream(ctx.child, undefined, ctx.bin, undefined, null, undefined, undefined, undefined, ctx.cwd);
+// parseClaudeStream 自带落图(它要分别记父会话和每个子智能体的账),别再让 generic 裹一层。
+claudeStreamJsonParser.ownsMarkdownImages = true;
 
-// 一条引用最多跨这么多字节的流式碎片 —— 超了就当它不会再闭合,免得 carry 无限涨。
+// 攒到这么长就裁(按块边界,见 trimCarry)—— 免得 carry 跟着整条回合无限涨。
 const CARRY_MAX = 8192;
 
 /**
  * 给**任意**解析器的事件流补上「正文里提到的那张本机图片」。
  *
+ * 事件流经过它,`![](…)` 指到的本机图片被复制进 uploads,并**逐处引用**挂一条 attachment
+ * 事件(见 agent-attachments.ts 的 persistMarkdownImageRefs)。
+ *
  * 为什么裹在外面而不是写进每个解析器:`spec.exec.parser ?? textParser` 是二选一,目录里
  * 十个 CLI(gemini / kimi / cursor / qwen / …)各自内联了一份解析器,只在默认那份里持久化
  * 等于十家全漏 —— 同一句话在 claude 上看得见图、换个执行器就只剩裂图标(审查第 1 轮 F3)。
  * 这一层是 run 与 attach 都必经的出口,接在这里就没有「谁家忘了接」这回事。
+ * 自带持久化的解析器(claudeStreamJsonParser 套的 parseClaudeStream)由 generic 直接放行,
+ * 不过这一层 —— 两层各存一份就是同一处引用两条记录、两份拷贝(见 generic.ts)。
  *
- * 碎片:流式解析器一个 text 事件可能只是半句话,所以攒一段 `carry` 再扫。扫完裁到最后一条
- * 引用之后,剩下的尾巴留着等下一片;长到 CARRY_MAX 还没凑成一条就只留尾部。代价是围栏
- * 代码块的状态可能被裁断(被裁掉开头的 ``` 之后,块里的示例路径会被当成真图存一份),那只
- * 是多出一张卡片,不会画错图。
- *
- * 去重按「**哪一句引用 + 哪一份拷贝**」:解析器自己挂的附件(将来真有自带持久化的解析器
- * 经 generic 跑起来时)也过这道闸,不会同一张图铺两张卡片。
+ * 碎片:流式解析器一个 text 事件可能只是半句话,所以攒一段 `carry` 再扫。只在这一片带了
+ * `)` 或 `]` 时才扫 —— 一处引用只可能由这两个字符收尾,拿它当闸省掉逐 token 的解析。扫完
+ * 裁到最后一处引用之后(**交代过的引用一个字都不再扫**,否则同一处会发两条、身份对不上),
+ * 攒长了按**块边界**裁(见 shared 的 trimCarry:围栏的开栏不会跟着被裁掉)。
  */
 export async function* withMarkdownImages(
   events: AsyncIterable<AgentEvent>,
   cwd?: string,
 ): AsyncIterable<AgentEvent> {
-  const seen: ImageStore = new Map();
-  const emitted = new Set<string>();
-  const key = (image: { path: string; source?: string }) => `${image.source ?? ""}\u0000${image.path}`;
+  const seen = imageStore();
+  // 解析器自己挂上来的附件(工具结果截图):同一份拷贝不铺两张卡片。正文引用来的那些
+  // **不能**按路径去重 —— 重拍过的两处引用字节可能一样,但它们是两处引用(F1)。
+  const passed = new Set<string>();
   let carry = "";
   for await (const event of events) {
     if (event.kind === "attachment") {
-      if (emitted.has(key(event))) continue;
-      emitted.add(key(event));
+      if (event.path) {
+        if (passed.has(event.path)) continue;
+        passed.add(event.path);
+      }
       yield event;
       continue;
     }
     yield event;
     if (event.kind !== "text") continue;
     carry += event.text;
-    for (const image of persistMarkdownImages(carry, seen, { cwd })) {
-      if (emitted.has(key(image))) continue;
-      emitted.add(key(image));
+    if (!/[)\]]/.test(event.text)) {
+      carry = trimCarry(carry, CARRY_MAX);
+      continue;
+    }
+    const refs = markdownImageRefs(carry);
+    for (const image of persistMarkdownImageRefs(refs, seen, { cwd })) {
       yield { kind: "attachment", ...image };
     }
-    const last = markdownImageRefs(carry).at(-1);
-    if (last) carry = carry.slice(Math.max(last.end, carry.indexOf(")", last.end) + 1));
-    if (carry.length > CARRY_MAX) carry = carry.slice(-CARRY_MAX);
+    carry = trimCarry(carry.slice(refs.at(-1)?.end ?? 0), CARRY_MAX);
   }
 }

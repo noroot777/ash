@@ -13,9 +13,10 @@ export function nativeAgentSegments(activity: NativeAgentActivity[]): AgentConte
   for (const event of activity) {
     if (event.kind === "text") current.markdown += event.text;
     else if (event.kind === "attachment") {
-      if (!current.attachments.includes(event.path)) current.attachments.push(event.path);
+      if (event.path && !current.attachments.includes(event.path)) current.attachments.push(event.path);
       // 子智能体那条路同样要把来源带上,否则抽屉里的正文一样配不上图(见 turnImages)。
-      if (event.source) (current.attachmentSources ??= []).push({ path: event.path, source: event.source });
+      // 没有 path 的那条照样要留:它是「这处引用没副本」的明确交代,配对要靠它。
+      if (event.source) (current.attachmentSources ??= []).push({ path: event.path, source: event.source, ref: event.ref });
     } else {
       if (current.markdown) current = next();
       // 相邻思考由 appendExecutionEvent 合并成一行,与主会话那两路同一份规则。

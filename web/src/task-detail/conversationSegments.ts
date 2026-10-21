@@ -19,14 +19,16 @@ export type AgentContentSegment = {
   events: AgentAuxEvent[];
   attachments: string[];
   /**
-   * 「这张附件是正文哪一句 `![](…)` 引用的」——服务端落盘时标的（见 shared 的 attachment
-   * 事件）。`attachments` 按 path 去重、只管铺卡片；这里**逐处引用一条**，同一份拷贝挂着
-   * 两个名字就两条。配对只认它，不认文件名、不认顺序（见 turnImages）。
+   * 「正文第几处 `![](…)` 引用对上哪一份拷贝」——服务端落盘时逐处标的（见 shared 的
+   * attachment 事件）。`attachments` 按 path 去重、只管铺卡片；这里**逐处引用一条**，
+   * 一处都不少：同一份拷贝挂着两个名字是两条，同一个路径被重拍过是两条，**没存下副本
+   * 的那处也有一条**（`path` 缺省）。配对只认它，不认文件名、不认出场顺序（见 turnImages）。
    */
   attachmentSources?: AttachmentSource[];
 };
 
-export type AttachmentSource = { path: string; source: string };
+/** `path` 缺省 = 这处引用确实没有副本；`ref` 缺省 = 老数据（当时还没有逐处身份）。 */
+export type AttachmentSource = { path?: string; source: string; ref?: number };
 
 /**
  * 这一段在正文里画得出东西吗 —— **正文布局的唯一口径**,直播分段、落盘重建、折叠展开
@@ -74,8 +76,13 @@ export function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
 function attachmentSources(entries: TracedAttachmentEntry[]): AttachmentSource[] | undefined {
   const sources = entries
     .filter((entry) => !!entry.event.source)
-    .map((entry) => ({ path: entry.event.path, source: entry.event.source! }));
+    .map((entry) => ({ path: entry.event.path, source: entry.event.source!, ref: entry.event.ref }));
   return sources.length ? sources : undefined;
+}
+
+/** 铺得出卡片的那几张（没有 path 的 attachment 只是「这处引用没副本」的交代）。 */
+function attachmentPaths(entries: TracedAttachmentEntry[]): string[] {
+  return entries.map((entry) => entry.event.path).filter((path): path is string => !!path);
 }
 
 // 相邻的思考过程合并成一行(见 appendExecutionEvent) —— 整块 trace 一次算完。
@@ -105,7 +112,7 @@ export function contentSegments(
       id: `${idPrefix}:0`,
       markdown: fallbackMarkdown,
       events: auxEvents(auxEntries),
-      attachments: [...new Set(attachmentEntries.map((entry) => entry.event.path))],
+      attachments: [...new Set(attachmentPaths(attachmentEntries))],
       attachmentSources: attachmentSources(attachmentEntries),
     }];
   }
@@ -134,10 +141,12 @@ export function contentSegments(
       continue;
     }
     if (entry.event.kind === "attachment") {
-      if (current.markdown) pushCurrent();
-      if (!current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
+      // 只有真铺得出卡片的那条才切段:没有 path 的 attachment 画不出任何东西,让它切段
+      // 等于正文后面凭空多一个空 section(见 segmentHasVisibleContent)。
+      if (entry.event.path && current.markdown) pushCurrent();
+      if (entry.event.path && !current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
       if (entry.event.source) {
-        (current.attachmentSources ??= []).push({ path: entry.event.path, source: entry.event.source });
+        (current.attachmentSources ??= []).push({ path: entry.event.path, source: entry.event.source, ref: entry.event.ref });
       }
       continue;
     }
@@ -167,7 +176,12 @@ export function contentSegments(
     id: `${idPrefix}:fallback`,
     markdown: fallbackMarkdown || structuredMarkdown,
     events: auxEvents(auxEntries),
-    attachments: attachmentEntries.map((entry) => entry.event.path),
+    attachments: attachmentPaths(attachmentEntries),
+    // 关联**不能跟着分段一起丢**。这一支是「trace 与权威正文真发散」的兜底:正文照旧
+    // 整块显示,而每一处引用对应哪一份拷贝跟分段无关 —— 丢了它,正文那几句就配不上已经
+    // 存着的正确副本,读时兜底又会拿**当前**文件去画(说的是红图、画出来是蓝图,
+    // 审查第 1 轮 F1 实测 B)。
+    attachmentSources: attachmentSources(attachmentEntries),
   }];
 }
 

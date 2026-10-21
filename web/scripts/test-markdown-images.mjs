@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
+import { markdownImageRefs } from "@ash/shared/markdown-images";
+import { IMAGE_SHAPES } from "./fixtures/markdown-shapes.ts";
 
 // uploads 接口在这个夹具里吐**真字节**：只断言 src 长什么样，证明不了那个地址真能取到图
 // 并解码成功（审查第 1 轮把这条列成「回归的证明范围」不足）。
@@ -185,6 +187,57 @@ try {
     await page.locator(".gone-fixture .task-markdown").innerText(),
     /当时的截图/,
     "收掉的只是那张图，正文一个字都不能少",
+  );
+
+  // ── ⑪ 扫描器认的那几处 == 渲染器画出来的那几个（F2 的根:两边必须是同一套语义）───
+  // 只比「两次调用同一个扫描器」证明不了任何事(上一版服务端和展示端共用同一份错正则,
+  // 两边一致地把带括号的文件名截断、把缩进代码里的示例当成真图)。所以这里在 Node 里数
+  // 解析结果,在浏览器里数同一段正文真渲染出来的 `<img>`,两个数字必须相等。
+  for (const shape of IMAGE_SHAPES) {
+    const expected = markdownImageRefs(shape.markdown).length;
+    assert.equal(
+      await page.locator(`.shape-${shape.key} .task-markdown img`).count(),
+      expected,
+      `${shape.key}（${shape.about}）：扫描器认 ${expected} 处,渲染器画出来的得是同一个数`,
+    );
+  }
+  // 代码里的示例原文一个字都不许被改写(改写了就是正文显示成代码、却指向一个站内地址)。
+  for (const key of ["indented", "fenced", "inline-code"]) {
+    assert.match(
+      await page.locator(`.shape-${key} .task-markdown`).innerText(),
+      /!\[示例\]\(output\/shot\.svg\)/,
+      `${key}:写法示例的原文要原样留着`,
+    );
+  }
+
+  // ── ⑫ 明确没有副本的那处引用 → 现在去工作目录取,取到了就真画出来 ─────────────
+  const nocopy = page.locator(".nocopy-fixture .task-markdown img");
+  assert.deepEqual(
+    await srcs(nocopy),
+    ["/api/tasks/T1/file/raw?path=output%2Flive.svg&workspaceOnly=1"],
+    "服务端明确报了「这处引用没存下副本」,才退到当前文件",
+  );
+  assert.ok(
+    await nocopy.first().evaluate((node) => node.complete && node.naturalWidth > 0),
+    "那个地址必须真把字节吐出来",
+  );
+
+  // ── ⑬ 配不上、而本该有一条:第二处什么都不画,也不许顶一份别的拷贝(F1)──────────
+  const short = page.locator(".short-fixture");
+  assert.deepEqual(
+    await srcs(short.locator(".task-markdown img")),
+    [uploads("kkkkkkkkkkkk-short.svg")],
+    "第一处引用画自己那份拷贝;第二处配不上就一个 img 都不留,绝不复用上一份",
+  );
+  assert.equal(
+    await short.locator(".task-message-attachments").count(),
+    0,
+    "那份拷贝已经被第一处引用领走,不该再剩一张卡片",
+  );
+  assert.match(
+    await short.locator(".task-markdown").last().innerText(),
+    /又提一次/,
+    "收掉的只是那张图,正文一个字都不能少",
   );
 
   console.log("Markdown 图片解析回归通过");

@@ -48,27 +48,44 @@ export function isLocalOpenHref(href?: string): href is string {
   }
 }
 
+/**
+ * 「`/` 开头的这一串是磁盘路径吗」只在**打开本地文件**那条路上用这张白名单。
+ *
+ * 它天生不全(合法的 POSIX 根可以叫 `/data`、`/app`、`/code`、`/System`…),但那条路的
+ * 后果是「少一个右键打开入口」,而放宽的后果是把站内地址送进 `/api/open-local`。图片
+ * 那条路不能用它:判据见 `taskFilePath`(审查第 1 轮 F3)。
+ */
 const POSIX_DISK_ROOT = /^\/(?:Users|home|root|tmp|private|var|Volumes|opt|workspace|workspaces|mnt|srv)\//;
 const WINDOWS_DISK_ROOT = /^[A-Za-z]:[\\/]/;
+const UNC_ROOT = /^\\\\[^\\]+\\[^\\]+/;
+
+/** `file://` → 本机路径(含 UNC 与 Windows 盘符两种形状)。 */
+function fileUrlPath(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    const path = decodeSafe(url.pathname);
+    if (url.hostname && url.hostname !== "localhost") return `//${url.hostname}${path}`;
+    return /^\/[A-Za-z]:\//.test(path) ? path.slice(1) : path;
+  } catch {
+    return null;
+  }
+}
+
+const QUERY_BOUNDARY = /[?#]/;
+
+function withoutQuery(raw: string): string {
+  const boundary = raw.search(QUERY_BOUNDARY);
+  return boundary < 0 ? raw : raw.slice(0, boundary);
+}
 
 /** Return the actual filesystem path represented by a Markdown destination. */
 export function localDiskPath(href?: string): string | null {
   const raw = href?.trim();
   if (!raw) return null;
-  if (/^file:\/\//i.test(raw)) {
-    try {
-      const url = new URL(raw);
-      const path = decodeSafe(url.pathname);
-      if (url.hostname && url.hostname !== "localhost") return `//${url.hostname}${path}`;
-      return /^\/[A-Za-z]:\//.test(path) ? path.slice(1) : path;
-    } catch {
-      return null;
-    }
-  }
-  if (WINDOWS_DISK_ROOT.test(raw) || /^\\\\[^\\]+\\[^\\]+/.test(raw)) return decodeSafe(raw);
+  if (/^file:\/\//i.test(raw)) return fileUrlPath(raw);
+  if (WINDOWS_DISK_ROOT.test(raw) || UNC_ROOT.test(raw)) return decodeSafe(raw);
   if (!POSIX_DISK_ROOT.test(raw)) return null;
-  const boundary = raw.search(/[?#]/);
-  return decodeSafe(boundary < 0 ? raw : raw.slice(0, boundary));
+  return decodeSafe(withoutQuery(raw));
 }
 
 /** Raw disk paths and explicit open-local URLs converge on one visible, clickable endpoint. */
@@ -140,30 +157,45 @@ export function siblingFileName(destination: string): string | null {
   return name && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".." ? name : null;
 }
 
-/** `..` 爬出去的那一段——服务端一律 400，这里就别拼这个必败的地址。 */
+/** `..` 爬出去的那一段——服务端一律 400,这里就别拼这个必败的地址。 */
 const PARENT_SEGMENT = /(^|[/\\])\.\.([/\\]|$)/;
 
 /**
- * 这个 `![]()` 指的是**任务工作目录里**的哪个文件（相对路径原样留着，绝对路径按真路径）。
+ * 这个站**自己服务**的那几条路径。`/` 开头的地址里只有它们是网址,其余都是磁盘路径。
  *
- * 用处是「读的时候再取一次」那一档：服务端从 2026-10-21 起会在收到正文的那一刻把被引用
- * 的图复制进 `data/uploads/`，但**那之前的消息一份拷贝都没有**，而文件往往还好好躺在工作
- * 目录里（用户 2026-10-21 的截图就是这一幕：正文里是裂图标，「生成物」面板里那几个文件
- * 明明在）。只要那个目录还在，`/api/tasks/:id/file/raw` 就取得到它。
+ * 为什么是「站内路由白名单」而不是「磁盘根白名单」:前者是我们自己的路由表,知道得全;
+ * 后者是整个文件系统的顶层目录,`/System`、`/data`、`/app`、`/code`、`/projects` 都合法,
+ * 列不全(审查第 1 轮 F3 —— 上一版照搬了 `localDiskPath` 的磁盘根白名单,于是容器里
+ * `/app/output/x.png` 这类合法绝对路径在到达文件接口之前就被当成站内地址拒掉了)。
+ * 猜错的代价也不对称:把站内地址当成磁盘路径,顶多多问一次服务端然后 404 收起;把磁盘
+ * 路径当成站内地址,那张图就永远画不出来。
+ */
+const SITE_ROUTE = /^\/(?:api|assets|review|mobile)(?:\/|$)/;
+
+/**
+ * 这个 `![]()` 指的是**任务工作目录里**的哪个文件(相对路径原样留着,绝对路径按真路径)。
  *
- * 口径跟服务端的 `resolveInRoot` 对齐：相对路径按工作目录解，绝对路径只要落在工作目录
- * 里就服务。解得出路径不等于取得到字节——目录被清掉、文件被删都会 404，所以调用点必须
- * 保证「取不到就什么都不画」（见 MarkdownBody 的 MarkdownImage）。
+ * 用处是「读的时候再取一次」那一档:服务端从 2026-10-21 起会在收到正文的那一刻把被引用
+ * 的图复制进 `data/uploads/`,但**那之前的消息一份拷贝都没有**,而文件往往还好好躺在工作
+ * 目录里(用户 2026-10-21 的截图就是这一幕:正文里是裂图标,「生成物」面板里那几个文件
+ * 明明在)。只要那个目录还在,`/api/tasks/:id/file/raw` 就取得到它。
+ *
+ * 判据只有两条:**带协议的是网址**(`http:`/`data:`/`blob:`…,`file:` 例外,它指的就是本机
+ * 文件),**站内路由是网址**(见 SITE_ROUTE)。剩下的一律当路径交给服务端 —— 它在哪个根
+ * 下、有没有爬出去、符号链接指到哪儿,权威是 `resolveInRoot` 加 realpath 那道门禁,不是
+ * 这里的字符串形状。解得出路径不等于取得到字节:目录被清掉、文件被删都会 404,所以调用
+ * 点必须保证「取不到就什么都不画」(见 MarkdownBody 的 MarkdownImage)。
  */
 export function taskFilePath(destination?: string): string | null {
   const raw = destination?.trim();
   if (!raw) return null;
-  // `file://`、磁盘根开头的绝对路径、UNC —— 这一支自带完整路径，直接交服务端判越界。
-  // 其余只认**没有协议的相对路径**：斜杠开头的是站内地址（`/api/…`），协议开头的是网址。
-  const path = localDiskPath(raw)
-    ?? (hasUrlScheme(raw) || raw.startsWith("/")
-      ? null
-      : decodeSafe((raw.split(/[?#]/)[0] ?? "").replace(/^(?:\.\/)+/, "")));
+  const path = /^file:\/\//i.test(raw)
+    ? fileUrlPath(raw)
+    : WINDOWS_DISK_ROOT.test(raw) || UNC_ROOT.test(raw)
+      ? decodeSafe(raw)
+      : hasUrlScheme(raw) || SITE_ROUTE.test(raw)
+        ? null
+        : decodeSafe(withoutQuery(raw).replace(/^(?:\.\/)+/, ""));
   if (!path || PARENT_SEGMENT.test(path)) return null;
   return path;
 }
@@ -210,6 +242,28 @@ export function siblingFileResolver(urlFor: (name: string) => string): MarkdownF
 }
 
 /**
+ * 审查报告这份正文的**文档根归属**，一处定清楚（三个入口共用：团队证据、自由工作流
+ * 检视、单独打开的报告弹窗）。
+ *
+ * ① 光秃秃的文件名（`shot.png`、`./shot.png`）= **报告自己那个目录**。审查 prompt 就是
+ *    这么交代的：截图跟 report.md 放在一起。
+ * ② 其余（带目录的相对路径、绝对路径、`file:`）= **被审任务的工作目录**。审查者就站在
+ *    那儿跑的，截图未必落进证据目录，`output/shot.png` 指的是工作目录里那张。
+ *
+ * 顺序不能反：同名时报告自己那一份才是它在说的东西。已知的歧义也写在这里 —— 带目录的
+ * 相对路径（`shots/a.png`）两个根都解释得通，而证据接口只服务 basename（服务端那道闸
+ * 要求 `basename(name) === name`），于是这种写法只会落到 ② ；证据目录里恰好有同名路径时
+ * 画出来的是工作目录那一份。要消掉它得给证据目录开一个带子路径的接口，那是 path
+ * traversal 的正面，本轮没做（审查第 1 轮非阻塞 2）。
+ */
+export function reportFileResolver(
+  urlFor: (name: string) => string,
+  taskId?: string,
+): MarkdownFileResolver | undefined {
+  return firstResolver(siblingFileResolver(urlFor), taskId ? taskFileResolver(taskId) : undefined);
+}
+
+/**
  * 同一个目录的解析器，但直接从「这份正文自己的地址」推出来。
  *
  * 证据接口的两条路径（`…/review/file`、`…/free-workflow/review-file`）都是把文件名放在
@@ -219,15 +273,14 @@ export function siblingFileResolver(urlFor: (name: string) => string): MarkdownF
 export function siblingResolverForUrl(fileUrl: string): MarkdownFileResolver | undefined {
   const base = sameOriginUrl(fileUrl);
   if (!base || !isReviewFileEndpoint(base.pathname) || !base.searchParams.has("name")) return undefined;
-  const sibling = siblingFileResolver((name) => {
+  // 文档根归属见 reportFileResolver。这个弹窗手上只有报告自己的地址，而任务 id 就在
+  // 那个地址里（报告里也会提到工作目录里的文件）。
+  const taskId = /\/tasks\/([^/]+)\//.exec(base.pathname)?.[1];
+  return reportFileResolver((name) => {
     const url = new URL(base.toString());
     url.searchParams.set("name", name);
     return url.toString();
-  });
-  // 报告里也会提到**工作目录里**的文件（审查者就站在那儿跑的，截图未必落进证据目录）。
-  // 这个弹窗手上只有报告自己的地址，而任务 id 就在那个地址里。
-  const taskId = /\/tasks\/([^/]+)\//.exec(base.pathname)?.[1];
-  return firstResolver(sibling, taskId ? taskFileResolver(decodeSafe(taskId)) : undefined);
+  }, taskId ? decodeSafe(taskId) : undefined);
 }
 
 // 正文里指向图片的**链接**（不是 `![]()` 内嵌图），点开要落进全站统一的灯箱，而不是
