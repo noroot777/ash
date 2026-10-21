@@ -18,18 +18,18 @@ export function MonitorWakeInput({ item, input, surface }: {
     <article className={`monitor-wake-input is-${surface}`} aria-labelledby={headingId}>
       <div className="monitor-wake-message">
         <header className="monitor-wake-meta">
+          <span className="monitor-wake-mark" aria-hidden="true"><ArrowSquareIn size={14} /></span>
           <b>ash</b>
-          <span className="monitor-wake-label"><ArrowSquareIn size={11} aria-hidden="true" />自动输入</span>
+          <span className="monitor-wake-label">自动输入</span>
           {item.at && <time>{formatInstant(item.at)}</time>}
           <CopyButton value={item.text} ariaLabel="复制完整自动输入" icon />
         </header>
         <div className="monitor-wake-bubble">
           <div className="monitor-wake-body">
-            <p className="monitor-wake-source"><ArrowSquareIn size={12} aria-hidden="true" /><span>{input.source ? `哨兵触发 / ${input.source}` : "历史自动输入 / 历史来源未记录"}</span></p>
             <h3 id={headingId}>{input.reason}</h3>
-            <p className="monitor-wake-context">以下内容作为新输入进入会话，不是普通通知。</p>
+            <p className="monitor-wake-source"><span className="monitor-wake-source-label">{input.source ? "来自哨兵" : "历史输入"}</span><span>{input.source ?? "历史来源未记录"}</span></p>
             <div className="monitor-wake-payload" aria-label="送给 Agent 的内容摘要">
-              <p className="monitor-wake-payload-label">送给 Agent 的内容摘要</p>
+              <p className="monitor-wake-payload-label">输入摘要</p>
               {input.events.slice(-2).map((event, index) => (
                 <div className="monitor-wake-excerpt" key={index}>
                   {input.events.length > 1 && <span>{event.kind === "ended" ? "结束通知" : "输出事件"} · {event.source} [{event.monitorId}]</span>}
@@ -43,17 +43,15 @@ export function MonitorWakeInput({ item, input, surface }: {
             {input.historyTruncated && <p className="monitor-wake-omitted">摘要仅保留部分输出，请结合完整输入与哨兵日志核对。</p>}
             <MessageAttachments paths={[...parsed.paths, ...item.attachments]} />
           </div>
-          <footer className="monitor-wake-delivery">
-            <span><Check size={12} aria-hidden="true" />已写入会话</span>
-            <span>{input.eventCount === null ? "历史自动输入" : `${input.eventCount} 条消息 → 1 次输入`}{input.hasCheckpoint ? " · 含续跑交代" : ""}</span>
-          </footer>
           <details className="monitor-wake-raw">
-            <summary><CaretRight size={11} aria-hidden="true" />查看完整输入与来源</summary>
+            <summary>
+              <span className="monitor-wake-delivery"><Check size={12} aria-hidden="true" /><span>已写入会话</span><span className="monitor-wake-receipt">{input.eventCount === null ? "历史自动输入" : `${input.eventCount} 条消息 → 1 次输入`}</span>{input.hasCheckpoint && <span className="monitor-wake-checkpoint">含续跑交代</span>}</span>
+              <span className="monitor-wake-expand">查看完整输入与来源<CaretRight size={11} aria-hidden="true" /></span>
+            </summary>
             <pre>{item.text}</pre>
           </details>
         </div>
       </div>
-      <span className="monitor-wake-avatar" aria-hidden="true"><ArrowSquareIn size={13} /></span>
     </article>
   );
 }
