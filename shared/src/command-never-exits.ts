@@ -176,9 +176,15 @@ const WRAPPERS = new Set(["env", "nohup", "nice", "ionice", "stdbuf", "unbuffer"
 /** 这些词带着死线:整条简单命令一定会结束，里面是什么都不看。 */
 const TIMED = new Set(["timeout", "gtimeout"]);
 
-/** 一条简单命令的**命令词 + 它自己的 argv**。`bounded` = 它自带死线，无须再看。 */
-function commandOf(tokens: Token[]): { name: string; argv: Token[]; bounded: boolean } | null {
-  let i = 0;
+/**
+ * 一条简单命令的**命令词 + 它自己的 argv**。`bounded` = 它自带死线，无须再看。
+ *
+ * `from` = 从这一段的第几个词开始读。**结构骨架是靠挪这个下标剥掉的,不是靠切数组**
+ * （第 5 轮审查 N1,同 `headOf`）—— `! ! ! … cmd` 这种一段里堆几万个骨架词的命令,切一次
+ * 复制一遍剩下的全部,整条就成了平方级（实测 80000 个 `!` 要 1.6 秒;改下标后 12 毫秒）。
+ */
+function commandOf(tokens: Token[], from = 0): { name: string; argv: Token[]; bounded: boolean } | null {
+  let i = from;
   while (i < tokens.length) {
     const t = tokens[i]!;
     // `VAR=value cmd …` 的赋值前缀；引号里的东西永远不是命令词。
@@ -310,9 +316,9 @@ const JUMPS = new Set(["break", "continue"]);
 /** `while` 的恒真条件。`until` 的那一边是 `false`。 */
 const TRUE_WORDS = new Set(["true", ":"]);
 
-/** 这一段开头那个词（引号里的永远不算）。没有就是空串。 */
-function headOf(tokens: Token[]): string {
-  const t = tokens[0];
+/** 这一段**从 `from` 起**那个词（引号里的永远不算）。没有就是空串。 */
+function headOf(tokens: Token[], from = 0): string {
+  const t = tokens[from];
   return t && !t.quoted ? t.text : "";
 }
 
@@ -402,22 +408,52 @@ function regionHas(scan: Scan, from: number, to: number, set: ReadonlySet<string
  * · 其余（`while cond`、`for f in *.log`、`for f in $LIST`、`for f`）—— 列表可能是空的、
  *   条件可能一上来就假,**循环体跑不跑得到答不出来** ⇒ 整区不扫
  */
-function loopShape(head: string, tokens: Token[], sep: Sep): { bodyRuns: boolean; endless: boolean } {
-  // **条件要在这一段里说完**（第 4 轮审查 F2）:`while true && false; do :; done` 的条件是
-  // 「true」「false」两段,只看第一段就把一个一上来就假的循环说成了恒真（实测 409,而
-  // `/bin/sh` 打完 DONE 就退出 0;`until false || true` 同理）。收尾符号不是 `;`/换行 ⇒
-  // 条件后面还有话 ⇒ 这一层答不出来。
-  if (sep !== ";") return { bodyRuns: false, endless: false };
-  const w1 = tokens[1];
+function loopShape(head: string, tokens: Token[], from: number): { bodyRuns: boolean; endless: boolean } {
+  const w1 = tokens[from + 1];
   const word = w1 && !w1.quoted ? w1.text : "";
   const endless = (head === "while" && TRUE_WORDS.has(word)) || (head === "until" && word === "false");
   if (endless) return { bodyRuns: true, endless: true };
   if (head === "for" || head === "select") {
-    const at = tokens.findIndex((t) => !t.quoted && t.text === "in");
-    const literal = at >= 0 && tokens.slice(at + 1).some((t) => !/[*?[\]$~]/.test(t.text));
+    let at = -1;
+    for (let k = from; k < tokens.length; k += 1) {
+      const t = tokens[k]!;
+      if (!t.quoted && t.text === "in") { at = k; break; }
+    }
+    let literal = false;
+    for (let k = at + 1; at >= 0 && k < tokens.length; k += 1) {
+      if (!/[*?[\]$~]/.test(tokens[k]!.text)) { literal = true; break; }
+    }
     return { bodyRuns: literal, endless: false };
   }
   return { bodyRuns: false, endless: false };
+}
+
+/** 以 `<` 开头的词 = 输入重定向（`<f`、`<&3` 这些;here-doc 在更前面就整条放行了）。 */
+const redirectsIn = (tokens: Token[]): boolean => tokens.some((t) => !t.quoted && t.text.startsWith("<"));
+
+/**
+ * 这个循环的**形状读得懂吗** —— 读得懂才轮到 `loopShape` 下结论（第 5 轮审查 F2）。
+ *
+ * 两道:
+ *
+ * ① **条件列表整条就是循环头那一段**。shell 的 `while`/`until` 条件是一个**列表**,真假由
+ *    **最后一条**决定 —— `while true; false; do :; done` 的条件是 `false`,循环体一圈都不跑
+ *    （审查实测:`/bin/sh` 退出 0 并打出 DONE,而创建闸 409;`until false; true` 同理）。
+ *    上一版拿「这一段是用 `;` 收的」当成「条件说完了」,而分号恰恰是列表里两条命令之间的
+ *    那个符号。所以判据改成**`do` 紧跟在它后面**:中间还有一段,就说明条件列表还有话。
+ *    `&&`/`||`/`|`/`&` 收尾的那种也一并落在这一道里（`do` 不会紧跟在它后面）。
+ *
+ * ② **循环身上没挂输入重定向**。`while true; do :; done </不存在的文件` 整条循环一次都不跑
+ *    （审查实测:shell 报一句文件不存在,随后照旧打出 DONE 并退出 0）。重定向是这个结构**能
+ *    不能开始跑**的前置条件,而文件在不在这一层答不出来。
+ *
+ * 注意 ② 只管**挂在结构本身上的输入重定向**,不扩成「命令也可能启动失败」:那条路上任何命令
+ * 都可能 127（二进制不在）,按那个标准什么都证明不出来、整个判据作废。输出重定向同样不在
+ * 列 —— `tail -F x 2>/dev/null | grep ERROR` 正是这件事的起因命令,它照旧要拦。
+ */
+function loopReadable(scan: Scan, from: number, end: number): boolean {
+  if (scan.doAt[from] !== from + 1) return false;
+  return !redirectsIn(scan.segs[from]!.tokens) && !redirectsIn(scan.segs[end]!.tokens);
 }
 
 /**
@@ -460,9 +496,12 @@ function provableBlocker(scan: Scan): string | null {
     // 出了循环体就收口:压制到这个区的收尾段为止（那一段上只有 `done` 这个词，没有命令）。
     while (bodies.length && i >= bodies[bodies.length - 1]!) bodies.pop();
     if (suppressed >= 0 && i >= suppressed) suppressed = -1;
-    let tokens = segs[i]!.tokens;
+    const tokens = segs[i]!.tokens;
+    // 这一段读到第几个词了。**剥骨架靠挪它**（见 `commandOf` 的 `from`）;`at = tokens.length`
+    // = 这一段没有剩下任何要判的简单命令（整区跳过去、或者已经判完）。
+    let at = 0;
     for (;;) {
-      const head = headOf(tokens);
+      const head = headOf(tokens, at);
       if (!head) break;
       const close = BRANCH[head];
       if (close) {
@@ -471,17 +510,21 @@ function provableBlocker(scan: Scan): string | null {
         if (end < 0) return pipeline;
         if (regionHas(scan, i, end, TERMINATORS)) return pipeline;
         i = end;
-        tokens = [];
+        at = tokens.length;
         break;
       }
       if (LOOP_HEADS.has(head)) {
         const end = loopEnd(scan, i);
         if (end < 0) return pipeline;
-        const { bodyRuns, endless } = loopShape(head, tokens, segs[i]!.sep);
+        // **读得懂才轮到下结论**（见 `loopReadable`）:条件列表、挂在循环身上的重定向,
+        // 两样里有一样读不出来,这个循环跑不跑得到就答不出来 ⇒ 整区不扫。
+        const { bodyRuns, endless } = loopReadable(scan, i, end)
+          ? loopShape(head, tokens, at)
+          : { bodyRuns: false, endless: false };
         if (!bodyRuns || !runs()) {
           if (regionHas(scan, i, end, TERMINATORS)) return pipeline;
           i = end;
-          tokens = [];
+          at = tokens.length;
           break;
         }
         // 恒真又没有出路 ⇒ 就是它。**但同样等收尾符号点头**:`( while :; do :; done ) & 干活`
@@ -490,38 +533,38 @@ function provableBlocker(scan: Scan): string | null {
         if (endless && !regionHas(scan, i, end, ESCAPES)) {
           pipeline = "while true / until false";
           i = end;
-          tokens = [];
+          at = tokens.length;
           break;
         }
         // 剩下的是**循环体第一圈一定跑得到**的那种,扫进去（`for f in a b; do tail -F $f;
         // done` 第一圈就挂在那个 tail 上）。记下这个区的收尾段:体里的 `break`/`continue`
         // 要靠它知道「压到哪儿为止」（见 `JUMPS`）。
         bodies.push(end);
-        tokens = [];
+        at = tokens.length;
         break;
       }
       if (JUMPS.has(head)) {
         // **这一圈剩下那几条跑不到了**。压到这一层循环体的收尾段为止;带层数的（`break 2`）
         // 按最外那一层算 —— 跳得更远 ⇒ 压得更长 ⇒ 偏放行那一侧。
         if (!bodies.length) return pipeline;   // 循环外的跳转 ⇒ 读不懂就放行
-        const deep = tokens.length > 1;
+        const deep = tokens.length - at > 1;
         suppressed = Math.max(suppressed, (deep ? bodies[0] : bodies[bodies.length - 1])!);
-        tokens = [];
+        at = tokens.length;
         break;
       }
       // 配不上对的 `fi`/`esac`:分支区一律是**整区跳过去**的（上面那一支），所以能走到这儿
       // 的只有读不懂的结构（多半根本不是合法的 shell）—— 读不懂就放行。
       if (head === "fi" || head === "esac") return pipeline;
-      if (SKELETON.has(head)) { tokens = tokens.slice(1); continue; }
+      if (SKELETON.has(head)) { at += 1; continue; }
       if (head === "exit" || head === "return") return pipeline;
       break;
     }
-    const cmd = tokens.length ? commandOf(tokens) : null;
+    const cmd = at < tokens.length ? commandOf(tokens, at) : null;
     if (cmd && !cmd.bounded && runs()) {
       for (const f of FOLLOWERS) if (f.name === cmd.name && f.follows(cmd.argv)) { pipeline = f.what; break; }
     }
     // `exec cmd` 把本进程换成 cmd（`WRAPPERS` 已经让上面按 cmd 判过了）—— 它之后的都跑不到。
-    if (cmd && headOf(tokens) === "exec") return pipeline;
+    if (cmd && headOf(tokens, at) === "exec") return pipeline;
     // 收尾符号决定下一条（见 `Sep`）。注意读的是 `segs[i]`:上面跳过整区时 `i` 已经挪到那个
     // 区的收尾段上,要的正是**那一段**的符号（`fi && tail -F x` 里的 tail 就证明不出会跑）。
     switch (segs[i]!.sep) {

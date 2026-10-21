@@ -144,7 +144,28 @@ setInterval(() => {}, 1000);
     "false && ( printf 'x'; tail -F /dev/null ); printf 'DONE\n'",   // 圆括号组同样
     "for item in one; do break; tail -F /dev/null; done; printf 'DONE\n'",    // 跳转之后跑不到
     "for item in one; do continue; tail -F /dev/null; done; printf 'DONE\n'", // `continue` 同样
+    // ↓ 第 5 轮审查 F2 实测的**误判**:同样三条全部退出 0 且打出 DONE,而创建入口一律 409。
+    //   共同点是「循环条件」只读了循环头后面那一个词,而 `while`/`until` 收的是一张**列表**,
+    //   真值是**最后**那条命令的 —— 头上那个 `true` 根本不决定这个循环跑不跑。
+    "while true; false; do :; done; printf 'DONE\n'",       // 条件列表的真值在 `false` 上
+    "until false; true; do :; done; printf 'DONE\n'",       // 同上,`until` 这一边
+    // 整个循环的输入被改成一个不存在的文件 ⇒ 它一圈都跑不到（`/bin/sh` 当场报错继续往下）。
+    "while true; do :; done </definitely-missing-ash-review-file; printf 'DONE\n'",
   ]) assert.equal(neverExitsOnItsOwn(command), null, `不许拦：${command}`);
+  // ↑ 那三条的**真阳对照**:条件列表就是循环头自己那一段、循环身上没挂输入重定向,这些照拦。
+  //   漏了这一组,「读不懂就放行」会退化成「见到循环就放行」。
+  for (const [command, hit] of [
+    ["while true; do sleep 5; done", "while true / until false"],
+    ["while :; do sleep 0.2; done", "while true / until false"],
+    ["until false; do sleep 1; done", "while true / until false"],
+    ["for f in a b; do tail -F $f; done", "tail -f/-F"],
+    // 输出重定向**不在**那条判据里:它不改循环跑不跑得到,而这条正是事故的原命令。
+    ["tail -F build.log 2>/dev/null | grep --line-buffered ERROR", "tail -f/-F"],
+  ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该拦：${command}`);
+  // **这条判据的代价明写在这儿**:`while true && :; do …` 其实也没有出路,但它的条件列表被
+  // `&&` 拆到了循环头之外 —— 读不完整就按未知处理,于是现在放行。上面那三条误判跟这一条
+  // 是同一件事的两面,分不开:少拦一条 = 退回今天的行为,拦错一条 = 一件做得成的事做不成了。
+  assert.equal(neverExitsOnItsOwn("while true && :; do sleep 5; done"), null, "条件列表读不完整 ⇒ 按未知放行");
   // 跳转压住的只是**它后面**那一段,不是整个循环体 —— 不然这两条真阳会跟着一起放掉。
   for (const [command, hit] of [
     // 第一圈就挂在 `break` 前面那一条上
@@ -298,6 +319,18 @@ setInterval(() => {}, 1000);
       assert.equal(neverExitsOnItsOwn(deep(n)), null, "深嵌套里什么都证明不出来 ⇒ 放行");
       const ms = Date.now() - t0;
       assert.ok(ms < 400, `${n} 层嵌套的结构判据要线性:实测 ${ms}ms（平方级那一版 1 万层 1909ms）`);
+    }
+  }
+  // **同一条线上的另一处平方项**（第 5 轮审查 N1）:剥结构骨架那一步曾是 `tokens.slice(1)`,
+  // 一段里堆几万个骨架词就要复制几万遍剩下的全部（审查实测:8 万个 `!` 单次 2359ms）。
+  // 骨架词不嵌套,所以上面那组嵌套用例一条都盖不到它 —— 单独钉。
+  {
+    for (const n of [10_000, 80_000]) {
+      const command = `${"! ".repeat(n)}printf DONE`;
+      const t0 = Date.now();
+      assert.equal(neverExitsOnItsOwn(command), null, "一串 `!` 之后是 printf ⇒ 它自己会结束");
+      const ms = Date.now() - t0;
+      assert.ok(ms < 400, `${n} 个骨架词的结构判据要线性:实测 ${ms}ms（切数组那一版 8 万个 2359ms）`);
     }
   }
   console.log("✓ 匹配和结构判据都有计算上界：服务里不构造调用方正则，深嵌套命令也占不住那条线程");
