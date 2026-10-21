@@ -313,6 +313,87 @@ if (IS_WINDOWS) {
   assert.equal(read.rows[1]!.command, "C:\\x\\node.exe --nope", "命令列照原样带上");
 }
 
+// ⑰⑱⑲ 拓扑完整性:「挂不到树上」跟「不在树上」是两件事。全是纯函数 —— 这三段判据
+// 判错的后果分别只在 Linux(stat 读不到)和 Windows(父号读不到)上出现,本机跑不到那两条
+// 分支,所以按读数状态钉(第 7 轮审查 F1 要求覆盖:无父号 / 有父号无代次 / 整行不可读)。
+{
+  const { tableFromProcStats, tableFromRows, unresolvedTopology, earliestGen } =
+    await import("../src/process-generation.js");
+
+  // `readProcStat` 交出来的是右括号之后那串:下标 0 = state,1 = ppid,19 = starttime。
+  const statFields = (ppid: string, starttime: string): string[] => {
+    const f = new Array(21).fill("0");
+    f[0] = "S"; f[1] = ppid; f[19] = starttime;
+    return f;
+  };
+
+  const proc = tableFromProcStats([
+    [100, statFields("1", "500")],          // 正常:有边、有代次
+    [101, statFields("100", "900")],        // 100 的孩子
+    [102, "gone"],                          // 读之前就退了 ⇒ 确实不在,不该留痕
+    [103, "unreadable"],                    // 整行读不出来 ⇒ 既核验不了、也挂不上树
+    [104, statFields("", "1200")],          // 有代次、父号这一项读不出来 ⇒ 挂不上树
+  ]);
+  assert.deepEqual(proc.kids.get(100), [101], "正常那一行的边要记上");
+  assert.equal(proc.gens.has(102), false, "已经退了的号不该出现在表里");
+  assert.equal(proc.unlinked.has(102), false, "已经退了的号也不该算成拓扑空洞");
+  assert.ok(proc.unverified.has(103) && proc.unlinked.has(103),
+    "整行读不出来 ⇒ 既核验不了这一代,也不知道它挂在谁下面(第 7 轮审查 F1 实测的那一下)");
+  assert.ok(proc.unlinked.has(104), "父号读不出来 ⇒ 挂不上树");
+  assert.equal(proc.gens.get(104), "j:1200", "但它那一代读到了就照记(两件事)");
+
+  const win = tableFromRows({
+    unnamed: 0,
+    rows: [
+      { pid: 200, ppid: 4, startedAt: "2026-10-21T00:00:00.000Z", command: "a" },
+      { pid: 201, ppid: null, startedAt: "2026-10-21T00:00:05.000Z", command: "b" },
+      { pid: 202, ppid: 202, startedAt: "2026-10-21T00:00:06.000Z", command: "c" },
+    ],
+  });
+  assert.deepEqual(win.kids.get(4), [200], "认得出父号的行要成边");
+  assert.ok(win.unlinked.has(201), "父号为 null ⇒ 挂不上树(不是『它没有父进程』)");
+  assert.ok(win.unlinked.has(202), "父号等于自己 ⇒ 这条边指不到别人,同样算挂不上树");
+  assert.equal(win.gens.get(201), "t:2026-10-21T00:00:05.000Z", "代次照记");
+
+  // 排除路:已经算进去 / 它已经退了 / 开工之前就在。剩下的必须留成空洞。
+  const DEAD = 0x7ffffff;
+  const table = {
+    kids: new Map<number, number[]>(),
+    gens: new Map<number, string>([
+      [process.pid, "t:2026-10-21T00:00:30.000Z"],   // 比下面那个根晚 ⇒ 排除不掉
+      [DEAD, "t:2026-10-21T00:00:30.000Z"],
+    ]),
+    unverified: new Set<number>(),
+    unnamed: 0,
+    unlinked: new Set<number>([process.pid, DEAD]),
+  };
+  const anchorGen = "t:2026-10-21T00:00:20.000Z";
+  assert.deepEqual(
+    unresolvedTopology(table, { accounted: [], runStartedAt: anchorGen }).map((g) => g.pid),
+    [process.pid],
+    "活着、排除不掉的留成空洞;已经退了的号按正面证据排除",
+  );
+  assert.deepEqual(
+    unresolvedTopology(table, { accounted: [process.pid], runStartedAt: anchorGen }), [],
+    "已经算在某棵树上的不再另算",
+  );
+  table.gens.set(process.pid, "t:2026-10-21T00:00:00.000Z");
+  assert.deepEqual(unresolvedTopology(table, { accounted: [], runStartedAt: anchorGen }), [],
+    "明显早于开工时刻 ⇒ 不可能是这次运行派生的");
+  table.gens.set(process.pid, "t:2026-10-21T00:00:19.500Z");
+  assert.equal(unresolvedTopology(table, { accounted: [], runStartedAt: anchorGen }).length, 1,
+    "只早半秒不算:`t:` 这一档精度只有秒,不许据此排除");
+  table.gens.set(process.pid, "j:5");
+  assert.equal(unresolvedTopology(table, { accounted: [], runStartedAt: anchorGen }).length, 1,
+    "两个戳来自不同问法 ⇒ 比不出来,不许据此排除");
+  table.gens.delete(process.pid);
+  const blind = unresolvedTopology(table, { accounted: [], runStartedAt: anchorGen });
+  assert.equal(blind[0]?.gen, null, "连代次都没有的那种最糟:按时间也排除不掉");
+
+  assert.equal(earliestGen(table, [DEAD, 999999]), "t:2026-10-21T00:00:30.000Z", "下界取已知里最早的");
+  assert.equal(earliestGen(table, [999999]), null, "一个都不知道 ⇒ 没有下界(不排除)");
+}
+
 for (const child of strays) {
   try { if (child.pid) process.kill(child.pid, "SIGKILL"); } catch { /* 已经没了 */ }
 }

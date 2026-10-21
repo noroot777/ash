@@ -23,7 +23,7 @@ import { IS_WINDOWS, isPidAlive, killOne } from "../platform.js";
 import { processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import {
-  processTableSnapshot, stillSameGeneration, subtreesOf,
+  earliestGen, processTableSnapshot, stillSameGeneration, subtreesOf, unresolvedTopology,
   type ProcessGeneration, type ProcessMember, type ProcessSubtree,
 } from "../process-generation.js";
 import { childKillAuthorized } from "./child-identity.js";
@@ -197,6 +197,21 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   if (table.unnamed) {
     faults.push(`进程表里有 ${table.unnamed} 行连号都没认出来(那几行等于没进表)`);
   }
+  // **挂不到任何树上的号也要有人管**(第 7 轮审查 F1)。`subtreesOf` 只沿父子边走,没有边的
+  // 号任何子树都遍历不到 —— 于是「这棵树里没看到它」被当成了「已经排除了它属于这次运行」。
+  // 它既认不下来也否不掉,所以逐个走排除路(退了 / 已经算进去了 / 开工前就在),剩下的记一笔。
+  const topologyGap = (accounted: Iterable<number>): void => {
+    const gaps = unresolvedTopology(table, {
+      accounted,
+      runStartedAt: earliestGen(table, [child.pid ?? 0, ...seeds.map((s) => s.pid)]),
+    });
+    if (gaps.length) {
+      faults.push(
+        `${gaps.map((g) => g.pid).join(",")} 在进程表上,可是挂在谁下面问不出来`
+        + `,也排除不掉它属于这次运行(${gaps.some((g) => !g.gen) ? "连那一代也核验不了" : "开工之后才出生的"})`,
+      );
+    }
+  };
 
   // ② 再问归属线索。
   const probe = trackPath ? await probeFileHolders(trackPath) : noSuchFileProbe();
@@ -221,7 +236,11 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   if (freshUnit.verdict === "ours") {
     for (const m of freshUnit.members) seeds.push({ pid: m.pid, authority: "unit", gen: m.gen });
   }
-  if (!seeds.length) return { targets: [], answered: !faults.length, faults, unit: freshUnit };
+  if (!seeds.length) {
+    // 一条归属线索都没有时同样要答这一问:表的完整性跟「我们找到了几个落点」无关。
+    topologyGap([child.pid ?? 0]);
+    return { targets: [], answered: !faults.length, faults, unit: freshUnit };
+  }
 
   const provenUnit = new Map<number, ProcessGeneration>(
     freshUnit.verdict === "ours" ? freshUnit.members.map((m) => [m.pid, m.gen] as const) : [],
@@ -257,6 +276,14 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
       faults.push(`${unverified.join(",")} 在这次运行的进程树上,但核验不了它们那一代(给不出下刀凭证)`);
     }
   }
+  // 已经算进去的那些不再另算:我们自己、各棵树的种子/根/成员,以及树上那些核验不了的号
+  // (它们在上面那一句里已经各自报过了)。
+  topologyGap([
+    child.pid ?? 0,
+    ...seeds.map((s) => s.pid),
+    ...trees.flatMap((t) => [t.seed.pid, ...t.descendants.map((m) => m.pid), ...t.unverified]),
+    ...targets.keys(),
+  ]);
   return { targets: [...targets.values()], answered: !faults.length, faults, unit: freshUnit };
 }
 

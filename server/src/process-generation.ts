@@ -34,6 +34,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { IS_WINDOWS, inspectProcessSync, isPidAlive, listProcessesComplete } from "./platform.js";
+import type { ProcessTableRead } from "./platform.js";
 
 /** 一个号上这一代的戳(带问法标签,见文件头)。**只做相等比较,不要解析它的内容。** */
 export type ProcessGeneration = string;
@@ -357,6 +358,79 @@ export function subtreesOf<S extends { pid: number }>(
 }
 
 /**
+ * 一个**挂不到任何树上、又排除不掉**的号(见 `ProcessTableSnapshot.unlinked`)。
+ *
+ * `gen` 为空 = 连它那一代也核验不了 —— 这种最糟:既不能按时间把它排除在本次运行之外,
+ * 也给不出下刀凭证。
+ */
+export type TopologyGap = { pid: number; gen: ProcessGeneration | null };
+
+/**
+ * 这张表里**还没有答案的拓扑空洞**:挂不上树,而且三条排除路都走不通。
+ *
+ * 三条排除路(有一条成立就不算空洞):
+ *  · **已经算进去了** —— 它就是我们自己、或者已经在某棵子树里报过(那边另有说法);
+ *  · **它已经退了** —— 快照之后再问一次号,没人占着 ⇒ 这是**正面的**退出证明;
+ *  · **本次运行开工之前它就在** —— 后代只能出生在根之后,所以明显更早的那些不可能是我们派生的。
+ *
+ * 剩下的就得让这一轮答「没问清楚」:**「这棵树里没看到」不等于「已经排除了它属于这次运行」**
+ * (第 7 轮审查 F1 实测:Linux 上一次 `stat` 读不到的活后代挂不到任何树上,生产枚举答
+ * `answered=true`、清理宣布 empty、一笔债都没落,而它还在写文件)。
+ *
+ * 排除**不是**拿「它身上没有我们的记号」当依据:后代可以把环境洗掉(`env -i`),那条线索的
+ * 负结果什么都证明不了。这里只用上面三条立得住的。
+ */
+export function unresolvedTopology(
+  table: ProcessTableSnapshot,
+  opts: { accounted: Iterable<number>; runStartedAt: ProcessGeneration | null },
+): TopologyGap[] {
+  const accounted = new Set(opts.accounted);
+  const gaps: TopologyGap[] = [];
+  for (const pid of table.unlinked) {
+    if (accounted.has(pid)) continue;
+    if (!isPidAlive(pid)) continue;
+    const gen = table.gens.get(pid) ?? null;
+    if (gen && opts.runStartedAt && startedEarlier(gen, opts.runStartedAt)) continue;
+    gaps.push({ pid, gen });
+  }
+  return gaps;
+}
+
+/**
+ * 这几个号里**最早的那一代**,当「本次运行从哪一刻开始」的下界。拿不到就给 null(不排除)。
+ *
+ * 取最早而不是取某一个:任一个根成立都足以授权它名下的后代,所以能排除掉的只有「比**所有**
+ * 根都明显更早」的那些。
+ */
+export function earliestGen(table: ProcessTableSnapshot, pids: Iterable<number>): ProcessGeneration | null {
+  let earliest: ProcessGeneration | null = null;
+  for (const pid of pids) {
+    const gen = table.gens.get(pid);
+    if (!gen) continue;
+    if (!earliest || startedEarlier(gen, earliest)) earliest = gen;
+  }
+  return earliest;
+}
+
+/**
+ * 同一张快照里的两个戳:`a` **明显**早于 `b` 吗。比不出来一律 false(宁可多留一笔账)。
+ *
+ * 跨问法不可比(见文件头:标签不同一律不相等),所以只在同标签之间比。`t:` 那一档精度只有
+ * 秒,所以要留一秒余量 —— 同一秒里先后出生的父子,它分不出来谁先。
+ */
+function startedEarlier(a: ProcessGeneration, b: ProcessGeneration): boolean {
+  if (a.startsWith("j:") && b.startsWith("j:")) {
+    const [x, y] = [Number(a.slice(2)), Number(b.slice(2))];
+    return Number.isFinite(x) && Number.isFinite(y) && x < y;
+  }
+  if (a.startsWith("t:") && b.startsWith("t:")) {
+    const [x, y] = [Date.parse(a.slice(2)), Date.parse(b.slice(2))];
+    return Number.isFinite(x) && Number.isFinite(y) && x <= y - 1000;
+  }
+  return false;
+}
+
+/**
  * 一个种子名下的后代。**不跨子树去重** —— 两棵子树各自授权,共有的成员两边都要出现。
  *
  * **代次读不出来的那些号照样要穿过去**(第 6 轮审查 F1):上一版在它们身上 `continue`,于是
@@ -414,11 +488,33 @@ export type ProcessTableSnapshot = {
    * 答「这一问没问清楚」—— 不然那几行在表里就等于不存在,而缺席在这条路上会被读成「不在树上」。
    */
   unnamed: number;
+  /**
+   * **在表上、可是「它挂在谁下面」问不出来的号**(第 7 轮审查 F1 的修复落点)。
+   *
+   * 跟 `unverified` 是两件事,别合:那一档知道它在树上的位置、只是不敢下刀;这一档**压根
+   * 挂不到任何树上** —— `subtreesOf` 只沿边走,没有边的号任何子树都遍历不到,于是「这棵树里
+   * 没看到它」被读成了「已经排除了它属于这次运行」。审查实测:Linux 上一次 `stat` 读不到
+   * (EACCES)的活后代,生产枚举答 `targets=[] / answered=true`,清理宣布 empty、一笔债都没落,
+   * 那个后代心跳 8→22 还在写。
+   *
+   * 处置:它既认不下来也否不掉,所以**由收口处逐个排除**(见 `unresolvedTopology`):确实已经
+   * 退了、已经算在某棵树上、或者在本次运行开工之前就在 —— 这三种能排除;剩下的必须让这一轮
+   * 答「没问清楚」。
+   */
+  unlinked: Set<number>;
 };
 type ProcessTree = ProcessTableSnapshot;
 
-const addKid = (tree: ProcessTree, ppid: number, pid: number): void => {
-  if (!ppid || ppid === pid) return;
+/**
+ * 记一条父子边。**父号 `null` = 这一行说不出它挂在谁下面** ⇒ 进 `unlinked`,不是「没有父进程」。
+ *
+ * 0 号是另一回事:内核那一层本来就没有父进程,它不是未知(Windows 的 0 号在解析那一层就被
+ * 跳过了,见 platform.ts 的 `readWindowsRows`)。父号等于自己同样算问不出来 —— 这条边指不到
+ * 任何别的节点,留着它只会让这个号看起来「已经挂上了」。
+ */
+const linkKid = (tree: ProcessTree, ppid: number | null, pid: number): void => {
+  if (ppid === null || ppid === pid) { tree.unlinked.add(pid); return; }
+  if (!ppid) return;
   const kids = tree.kids.get(ppid);
   if (kids) kids.push(pid);
   else tree.kids.set(ppid, [pid]);
@@ -432,20 +528,36 @@ function treeViaProc(): ProcessTree | null {
   } catch {
     return null;
   }
-  const tree: ProcessTree = { kids: new Map(), gens: new Map(), unverified: new Set(), unnamed: 0 };
+  const reads: [number, ProcStatRead][] = [];
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
     const pid = Number(entry);
-    const read = readProcStat(pid);
+    reads.push([pid, readProcStat(pid)]);
+  }
+  return tableFromProcStats(reads);
+}
+
+/** 一次 `/proc` 读数的三档结果(见 `readProcStat`)。 */
+export type ProcStatRead = string[] | "gone" | "unreadable";
+
+/**
+ * `treeViaProc` 的纯核:**只认读数,不碰文件系统**,所以这段判据能在任何平台上被钉住
+ * (`test:process-subtrees`)—— 它判错的后果只在 Linux 上出现,而那是本机跑不到的分支。
+ */
+export function tableFromProcStats(reads: Iterable<readonly [number, ProcStatRead]>): ProcessTableSnapshot {
+  const tree: ProcessTree = { kids: new Map(), gens: new Map(), unverified: new Set(), unnamed: 0, unlinked: new Set() };
+  for (const [pid, read] of reads) {
     // 它在 `readdir` 与这次读之间退掉了 ⇒ 确实不在了,跳过是对的。
     if (read === "gone") continue;
     // 还在、只是这一行读不出来 ⇒ 记成「核验不了」而不是丢掉(连 ppid 也读不到,所以它挂不
     // 到任何树上 —— 这一档只保证它不会被当成「已经证明不存在」)。
-    if (read === "unreadable") { tree.unverified.add(pid); continue; }
+    // 还在、只是这一行读不出来 ⇒ 代次核验不了,**而且连它挂在谁下面都不知道**:两档都要记,
+    // 不然它挂不到任何树上、又没人替它说话,等于被宣布成不存在(第 7 轮审查 F1 实测的那一下)。
+    if (read === "unreadable") { tree.unverified.add(pid); tree.unlinked.add(pid); continue; }
     const ppid = read[1];
     // **父子关系照记**:代次读不出来不影响它在树上的位置,而丢掉这条边会让它下面整条分支
-    // 从遍历里消失(第 6 轮审查 F1)。
-    if (ppid && /^\d+$/.test(ppid)) addKid(tree, Number(ppid), pid);
+    // 从遍历里消失(第 6 轮审查 F1)。父号这一项不是合法数字时如实当「问不出来」。
+    linkKid(tree, ppid && /^\d+$/.test(ppid) ? Number(ppid) : null, pid);
     const jiffies = procStarttime(read);
     if (jiffies) tree.gens.set(pid, `j:${jiffies}`);
     else tree.unverified.add(pid);
@@ -470,7 +582,7 @@ async function treeViaPs(): Promise<ProcessTree | null> {
     );
   });
   if (out === null) return null;
-  const tree: ProcessTree = { kids: new Map(), gens: new Map(), unverified: new Set(), unnamed: 0 };
+  const tree: ProcessTree = { kids: new Map(), gens: new Map(), unverified: new Set(), unnamed: 0, unlinked: new Set() };
   for (const line of out.split("\n")) {
     const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
     if (!m) {
@@ -480,7 +592,7 @@ async function treeViaPs(): Promise<ProcessTree | null> {
     }
     const startedAt = m[3]!.trim();
     const pid = Number(m[1]);
-    addKid(tree, Number(m[2]), pid);                // 边照记(见 treeViaProc 里那段)
+    linkKid(tree, Number(m[2]), pid);               // 边照记(见 treeViaProc 里那段)
     if (startedAt) tree.gens.set(pid, `t:${startedAt}`);
     else tree.unverified.add(pid);                  // 在表上、核验不了这一代
   }
@@ -493,15 +605,24 @@ async function treeViaProcessList(): Promise<ProcessTree | null> {
   // 行」,而这里的缺席会被读成「这个进程不在树上」。半截表在这条路上不是少点信息,是错答案。
   const read = await listProcessesComplete();
   if (!read?.rows.length) return null;
-  const rows = read.rows;
-  const tree: ProcessTree = { kids: new Map(), gens: new Map(), unverified: new Set(), unnamed: 0 };
-  for (const row of rows) {
+  return tableFromRows(read);
+}
+
+/**
+ * Windows 那一路的纯核:**只认一次读数**(同 `tableFromProcStats` 的理由)。
+ */
+export function tableFromRows(read: ProcessTableRead): ProcessTableSnapshot {
+  const tree: ProcessTree = { kids: new Map(), gens: new Map(), unverified: new Set(), unnamed: 0, unlinked: new Set() };
+  for (const row of read.rows) {
     // `ConvStart` 合法地给得出空串、`parseRows` 合法地给得出 null —— 那是「这一代核验不了」,
     // 不是「这个号不在」(第 6 轮审查 F1 在真机上实测了把它当缺席的后果)。
     const startedAt = row.startedAt?.trim();
     if (startedAt) tree.gens.set(row.pid, `t:${startedAt}`);
     else tree.unverified.add(row.pid);
-    addKid(tree, row.ppid, row.pid);
+    // 父号为 null = 这一行说不出它挂在谁下面(`ParentProcessId` 读不到),进 `unlinked`。
+    // 上一版它在解析那一层就被规范化成 0,于是这里安静地不记边、也没人知道少了一条
+    // (第 7 轮审查 F1)。
+    linkKid(tree, row.ppid, row.pid);
   }
   tree.unnamed = read.unnamed;
   return tree;

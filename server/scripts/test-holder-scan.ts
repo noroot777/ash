@@ -371,6 +371,66 @@ try {
     }
   }
 
+  console.log("9) 活后代挂不到树上:「这棵树里没看到」不等于「已经排除了它」");
+  if (existsSync("/proc")) {
+    console.log("   ~ 这台机器有 /proc,进程表走的不是 ps 那条路,跳过");
+  } else {
+    // 现场与第 6 组同形(活父进程 + 脱离进程组的活孩子),但夹具这次动的是**父子那一列**:
+    // 把孩子那一行的父号改成它自己 —— 这条边指不到任何别的节点,等于「它挂在谁下面问不
+    // 出来」。审查在 Linux 上用一次 stat 读失败(EACCES)复现的是同一个输入形状:节点在表上、
+    // 没有任何边,于是任何子树都遍历不到它,收口却答「问清楚了、没有后代」。
+    const beat4 = join(root, "beat4");
+    const kidPidFile = join(root, "kid4.pid");
+    const kidSrc = 'const fs = require("node:fs");\n'
+      + "let n = 0; setInterval(() => fs.writeFileSync(process.argv[1], String(++n)), 50);\n";
+    const token5 = mintUnitToken();
+    const live = spawn(process.execPath, ["-e", `
+      const { spawn } = require("node:child_process");
+      const kid = spawn(process.execPath,
+        ["-e", ${JSON.stringify(kidSrc)}, ${JSON.stringify(beat4)}],
+        { detached: true, stdio: "ignore", env: {} });
+      require("fs").writeFileSync(${JSON.stringify(kidPidFile)}, String(kid.pid));
+      kid.unref();
+      setInterval(() => {}, 1000);
+    `], { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token5 } });
+    registerUnitToken(live, token5);
+    await wait(700);
+    const kidPid = Number(readFileSync(kidPidFile, "utf8"));
+    strays.push(kidPid);
+    assert.ok(isPidAlive(kidPid), "这一组要一个活着的孩子");
+
+    const before = await listAllCleanupDebts();
+    const shim = installShim("ps",
+      `/bin/ps "$@" | awk -v t=${kidPid} '{ if ($1 == t) { s=""; for (i=3; i<=NF; i++) s = s $i " ";`
+      + ` printf "%s %s %s\\n", $1, $1, s } else print }'\n`);
+    const snap = await processTableSnapshot();
+    const swept = await collectEscapees(live);
+    const judged = await cleanupAfterRun(live);
+    restorePath();
+    rmSync(shim, { recursive: true, force: true });
+    const rows = await listAllCleanupDebts();
+
+    if (snap?.unlinked.has(kidPid)) ok("快照把它记成「挂在谁下面问不出来」");
+    else fail("这一行被当成了普通行 —— 它从此既不在任何树上、也没人替它说话");
+    if (!(snap?.kids.get(live.pid!) ?? []).includes(kidPid)) ok("前提成立:它确实不在父进程名下了");
+    else fail("夹具没生效,这一组没测到东西");
+    if (!swept.answered) ok("收口处如实说「这一轮没问清楚」");
+    else fail("仍自称问清楚了 —— 据此就会释放证据、销掉责任(第 7 轮审查 F1)");
+    if (swept.faults.some((f) => f.includes(String(kidPid)) && f.includes("挂在谁下面问不出来"))) {
+      ok("而且点出了是哪个号、哪一问没答全");
+    } else fail(`没把这一条写进事由:${swept.faults.join(" / ") || "(一条都没有)"}`);
+    if (judged.kind !== "empty") ok(`清理结论是 ${judged.kind},不是清空`);
+    else fail("清理宣布清空、一笔债都没落(审查实测的那条路)");
+    if (rows.ok && before.ok && rows.debts.length === before.debts.length + 1) ok("这一次运行的责任落了库");
+    else fail(`责任没落库(之前 ${before.ok ? before.debts.length : "?"} 笔,现在 ${rows.ok ? rows.debts.length : "?"} 笔)`);
+    await wait(200);
+    const beats0 = beats(beat4);
+    await wait(250);
+    if (isPidAlive(kidPid) && beats(beat4) > beats0) {
+      ok(`而那个孩子确实还活着、还在写(心跳 ${beats0} -> ${beats(beat4)})`);
+    } else fail("孩子已经不在了,这一组没测到东西");
+  }
+
 } finally {
   restorePath();
   for (const pid of [orphan, ...strays]) {

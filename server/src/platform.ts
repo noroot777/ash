@@ -122,7 +122,14 @@ function runPowerShell(script: string, timeoutMs: number): Promise<string | null
 
 export type ProcessRow = {
   pid: number;
-  ppid: number;
+  /**
+   * 父进程号。**`null` = 这一行说不出它挂在谁下面**(第 7 轮审查 F1)。
+   *
+   * 上一版把拿不到的父号规范化成 0,于是「问不出来」长得跟「它没有父进程」一模一样 ——
+   * 而建树那一侧靠这条边决定它在不在我们的子树里,缺边读作「不是我们的后代」。两者的处置
+   * 相反:真的没有父进程(内核那一层)可以安心跳过,问不出来则必须让这一轮答「没问清楚」。
+   */
+  ppid: number | null;
   /** ISO 8601(Windows)或 ps 的 lstart 原文(POSIX)。拿不到为 null。 */
   startedAt: string | null;
   command: string;
@@ -178,10 +185,13 @@ export function readWindowsRows(text: string): ProcessTableRead {
       continue;
     }
     if (pid <= 0) continue;                     // 0 号:认得出来、不是进程,跳过不算丢
+    // 父号这一列拿不到就如实给 `null`(`ParentProcessId` 读不到时这一列是空串)。规范化成 0
+    // 等于把「问不出来」说成「它没有父进程」,而 Windows 上根退出之后,保留下来的父号正是
+    // 找到后代的唯一线索(第 7 轮审查 F1)。
     const ppid = Number(parts[1]);
     rows.push({
       pid,
-      ppid: Number.isInteger(ppid) ? ppid : 0,
+      ppid: parts[1]!.trim() && Number.isInteger(ppid) && ppid >= 0 ? ppid : null,
       startedAt: parts[2]!.trim() || null,
       command: parts.slice(3).join("\t").trim(),
     });
