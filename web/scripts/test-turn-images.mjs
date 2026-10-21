@@ -175,8 +175,10 @@ assert.equal(
   "真图照旧认领;改写落在它自己那一段里",
 );
 
-// ⑩ 老数据(一条 ref 都没有)队列取空了:仍退到当前文件 —— 那时服务端按字节去重,同一张
-// 图被引用两次只留了一条记录,而「现在去工作目录取」是存量消息唯一的出路。
+// ⑩ 老数据(一条 ref 都没有)走**同一套对账**:两处引用、只记了一条 → 这个目的地配不上,
+// 一处都不画。老数据曾经有一条宽松的例外(按来源排队、取空了退当前文件),而那条路恰恰是
+// F1 的原形 —— 服务端那时按字节去重,「队列短一条」正是重拍过的那张,顶上去画出来的就是
+// 错的那张。判据对两种数据同一个,例外整条删掉。
 const legacyQueue = [{
   id: "l:0",
   markdown: "![一](output/s.png) ![二](output/s.png)",
@@ -186,8 +188,68 @@ const legacyQueue = [{
 }];
 assert.equal(
   turnImages(legacyQueue, "C0ojRgeQnMsa")[0].markdown,
-  "![一](/api/uploads/ffffffffffff-s.png) ![二](/api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fs.png&workspaceOnly=1)",
-  "老数据的第二处引用退到当前文件",
+  "![一](#ash-image-unavailable:output%2Fs.png) ![二](#ash-image-unavailable:output%2Fs.png)",
+  "老数据配不上也显式作废,不许按位置顶上去",
+);
+
+// ⑩' 老数据条数对得上就照样逐处认领:判据是条数,不是有没有 `ref`。存量对话里绝大多数
+// 消息都是这一类(一处引用一条记录),它们一张都不该因为新判据而消失。
+const legacyPaired = [{
+  id: "lp:0",
+  markdown: "一：![一](output/a.png)\n\n二：![二](output/b.png)",
+  events: [],
+  attachments: [uploads("1a1a1a1a1a1a-a.png"), uploads("2b2b2b2b2b2b-b.png")],
+  attachmentSources: [
+    { path: uploads("1a1a1a1a1a1a-a.png"), source: "output/a.png" },
+    { path: uploads("2b2b2b2b2b2b-b.png"), source: "output/b.png" },
+  ],
+}];
+assert.equal(
+  turnImages(legacyPaired, "C0ojRgeQnMsa")[0].markdown,
+  "一：![一](/api/uploads/1a1a1a1a1a1a-a.png)\n\n二：![二](/api/uploads/2b2b2b2b2b2b-b.png)",
+  "老数据对得上就画拷贝",
+);
+
+// ⑩'' **失败范围收窄到目的地**:同一条消息里 A 配不上(两处引用一条记录)、B 对得上,
+// B 那张照旧画出来。以前是整条消息一刀切 —— 一个目的地出问题,这条消息里所有图一起消失。
+const mixed = [{
+  id: "mx:0",
+  markdown: "坏的：![A1](output/a.png) ![A2](output/a.png)\n\n好的：![B](output/b.png)",
+  events: [],
+  attachments: [uploads("3c3c3c3c3c3c-a.png"), uploads("4d4d4d4d4d4d-b.png")],
+  attachmentSources: [
+    { path: uploads("3c3c3c3c3c3c-a.png"), source: "output/a.png", ref: 0 },
+    { path: uploads("4d4d4d4d4d4d-b.png"), source: "output/b.png", ref: 1 },
+  ],
+}];
+const mixedOut = turnImages(mixed, "C0ojRgeQnMsa");
+assert.equal(
+  mixedOut[0].markdown,
+  "坏的：![A1](#ash-image-unavailable:output%2Fa.png) ![A2](#ash-image-unavailable:output%2Fa.png)\n\n好的：![B](/api/uploads/4d4d4d4d4d4d-b.png)",
+  "配不上的那个目的地作废,对得上的那个照旧画",
+);
+assert.deepEqual(
+  mixedOut[0].attachments,
+  [uploads("3c3c3c3c3c3c-a.png")],
+  "作废的那份留在卡片里,被领走的那份撤掉",
+);
+
+// ⑩-重 同一处引用递上来两次(直播那一路 + 刷新重建那一路汇到一起):按「来源 + 身份」去重,
+// 否则条数翻倍、这个目的地会被整个误判成配不上。
+const doubled = [{
+  id: "db:0",
+  markdown: "![图](output/one.png)",
+  events: [],
+  attachments: [uploads("5e5e5e5e5e5e-one.png")],
+  attachmentSources: [
+    { path: uploads("5e5e5e5e5e5e-one.png"), source: "output/one.png", ref: 7 },
+    { path: uploads("5e5e5e5e5e5e-one.png"), source: "output/one.png", ref: 7 },
+  ],
+}];
+assert.equal(
+  turnImages(doubled, "C0ojRgeQnMsa")[0].markdown,
+  "![图](/api/uploads/5e5e5e5e5e5e-one.png)",
+  "同一处引用送两次不算两处",
 );
 
 // ⑪ trace 与权威正文**真发散**时的兜底单段:关联不能跟着分段一起丢。丢了的后果是正文

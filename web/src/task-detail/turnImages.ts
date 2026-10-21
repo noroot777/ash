@@ -20,14 +20,23 @@
 // 按 .md 重建分段,见 conversationSegments),重建出来的正文可能只剩最后一句:那时「这段文
 // 字里的第一处引用」已经不是「服务端记录的第一条结果」—— 正文写着蓝色,画出来是红色。
 //
-// 所以配对不再是「按来源排队」,而是**先核对这是不是同一段消息**:
-//   · 把这一回合各段正文拼回去(分段只是把同一段正文按事件切开)扫一遍,
-//   · 取出其中「服务端记录过的那些来源」的引用序列,跟记录的来源序列**逐项比**;
-//   · 一字不差 → 第 n 处引用恒对第 n 条结果(重拍、别名、交错全都对得上);
-//   · 比不上 → 这段正文不是记录的那段,关联**不可信**:每一处记录过的引用都显式作废
-//     (unavailableImage,任何 resolver 都救不活它),拷贝全部留在附件卡片里点得开。
-//     宁可让人自己点卡片,也不许把「修改前」那张端上来冒充「修改后」。
-//   · 压根没有记录(存量消息 / 服务端没管过这处引用)→ 退一档去工作目录取,老行为不变。
+// 所以配对不再是「按来源排队取第一个」,而是**逐目的地对账**:
+//   · 把这一回合各段正文拼回去(分段只是把同一段正文按事件切开)扫一遍;
+//   · 对每一个服务端记录过的目的地,比「正文里指向它的引用有几处」和「记了几条结果」;
+//   · 条数相等 → 第 k 处引用恒对第 k 条结果。两边都是**文档顺序**(服务端按文档顺序逐处
+//     发、这里按同一个扫描器逐处认),所以这个对应关系是算出来的,不是猜的 —— 重拍
+//     (红→蓝→红)、别名、与其它目的地交错,全都对得上;
+//   · 条数不等 → 展示的正文不是服务端扫过的那一段(投影重建、或者老服务端按字节去重过),
+//     **这个目的地**那几处引用一律显式作废(unavailableImage,任何 resolver 都救不活它),
+//     拷贝全部留在附件卡片里点得开。宁可让人自己点卡片,也不许把「修改前」那张端上来冒充
+//     「修改后」。作废只牵连对不上的那个目的地:同一条消息里对得上的那些照旧画。
+//   · 压根没有记录(服务端没管过这处引用)→ 退一档去工作目录取,老行为不变。
+//
+// 为什么判据是**逐目的地**而不是「整条消息的来源序列逐项相等」:后者要求展示的正文与记录
+// 一字不差,于是老数据(2026-10-21 之前的消息没有逐处身份 `ref`)只能整批走一条宽松的
+// 「按来源排队、取空了退当前文件」老路 —— 那条路恰恰是 F1 的原形。逐目的地对账对两种数据
+// 同样成立(只需要「展示的正文是记录那段正文的子集」,投影重建只会丢句子、不会重排),于是
+// 新老数据共用一套判据,宽松那条路可以整条删掉。
 import { markdownImageRefs } from "@ash/shared/markdown-images";
 import { imagePreviewTarget, taskFilePath, unavailableImage } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
@@ -61,10 +70,10 @@ function joined(segments: AgentContentSegment[]): { text: string; offsets: numbe
  * 图标,「生成物」面板里那几个文件明明在)。
  *
  * 几档的先后不能反,也不能互相顶:
- *   · 序列核对通过 + 有拷贝 → **只用拷贝**。那是「agent 说那句话时的那一张」,工作目录里
+ *   · 对账通过 + 有拷贝 → **只用拷贝**。那是「agent 说那句话时的那一张」,工作目录里
  *     的是「现在的那一张」;同一个路径被改过之后,后者已经不是正文在说的东西了。
- *   · 序列核对通过 + 明确没拷贝 → 去工作目录取。取不到会 404,由渲染点报一行小字。
- *   · 序列核对**没通过** → 记录过的那些引用一律显式作废,一个字都不画(见文件头)。
+ *   · 对账通过 + 明确没拷贝 → 去工作目录取。取不到会 404,由渲染点报一行小字。
+ *   · 对账**没通过** → 这个目的地那几处引用一律显式作废,一个字都不画(见文件头)。
  *   · 没有记录 → 去工作目录取(存量消息唯一的出路)。
  *
  * 一条都没改写时原样返回入参(引用相等,省掉下游的重渲染)。
@@ -89,47 +98,48 @@ export function turnImages(segments: AgentContentSegment[], taskId?: string): Ag
   // 于是一对反引号被切开、里面的写法示例变成真图(审查第 2 轮 F2)。
   const { text, offsets } = joined(segments);
   const refs = markdownImageRefs(text);
-  const recorded = sources.map((entry) => entry.source);
-  const known = new Set(recorded);
-  const managed = refs.filter((ref) => known.has(ref.destination));
-  // 「每处引用恒有一条结果」这条保证只有新服务端给得出(逐处身份 `ref`)。老数据没有它,
-  // 严格核对等于把所有存量对话里的图一次性全关掉,所以老数据仍走下面那条**宽松**的按来源
-  // 排队:取空了退到「现在去工作目录取」——存量消息唯一的出路。
-  const identified = sources.some((entry) => typeof entry.ref === "number");
-  const aligned = identified
-    && managed.length === recorded.length
-    && managed.every((ref, index) => ref.destination === recorded[index]);
-  // 老数据的队列:同一个来源的结果按事件顺序排着。
-  const queues = new Map<string, (string | null)[]>();
-  if (!identified) {
-    for (const entry of sources) {
-      const path = entry.path && attachmentView(entry.path).url ? entry.path : null;
-      const queue = queues.get(entry.source);
-      if (queue) queue.push(path);
-      else queues.set(entry.source, [path]);
+  // 记录按目的地分组,每组按事件顺序(= 文档顺序)排着。
+  // 同一处引用可能被递上来两次(直播那一路和刷新后重建的那一路汇到一起),`ref` 是它在这条
+  // 流里的身份 —— 按「来源 + 身份」去重,否则条数翻倍,下面的对账会把整个目的地误判成配不上。
+  const records = new Map<string, (string | null)[]>();
+  const delivered = new Set<string>();
+  for (const entry of sources) {
+    if (typeof entry.ref === "number") {
+      const identity = `${entry.source}\u0000${entry.ref}`;
+      if (delivered.has(identity)) continue;
+      delivered.add(identity);
     }
+    const copy = entry.path && attachmentView(entry.path).url ? entry.path : null;
+    const list = records.get(entry.source);
+    if (list) list.push(copy);
+    else records.set(entry.source, [copy]);
   }
+  // 对账:正文里指向这个目的地的引用有几处。
+  const counted = new Map<string, number>();
+  for (const ref of refs) {
+    if (records.has(ref.destination)) counted.set(ref.destination, (counted.get(ref.destination) ?? 0) + 1);
+  }
+  const verified = (destination: string): boolean => counted.get(destination) === records.get(destination)!.length;
 
   const used = new Set<string>();
   const edits = new Map<number, Edit[]>();
-  let next = 0;
+  const taken = new Map<string, number>();
   for (const ref of refs) {
-    const owned = known.has(ref.destination);
+    const list = records.get(ref.destination);
     let url: string | null;
-    if (!owned) {
+    if (!list) {
       url = live(ref.destination); /* 服务端没管过这处引用:存量消息那一档 */
-    } else if (identified && !aligned) {
-      url = unavailableImage(ref.destination); /* 不是记录的那段正文:显式作废,不猜 */
+    } else if (!verified(ref.destination)) {
+      url = unavailableImage(ref.destination); /* 条数对不上:显式作废,不猜 */
     } else {
-      // 对齐了就按位置取第 n 条;老数据按来源队列取(取空了 path 为 undefined → 退当前文件)。
-      const path = identified
-        ? (() => { const entry = sources[next]; next += 1; return entry?.path && attachmentView(entry.path).url ? entry.path : null; })()
-        : queues.get(ref.destination)?.shift() ?? null;
-      if (path) {
-        used.add(path);
-        url = attachmentView(path).url;
+      const position = taken.get(ref.destination) ?? 0;
+      taken.set(ref.destination, position + 1);
+      const copy = list[position] ?? null;
+      if (copy) {
+        used.add(copy);
+        url = attachmentView(copy).url;
       } else {
-        url = live(ref.destination); /* 明确没有副本 / 老数据配不上 */
+        url = live(ref.destination); /* 明确没有副本 */
       }
     }
     if (!url) continue;
@@ -139,9 +149,9 @@ export function turnImages(segments: AgentContentSegment[], taskId?: string): Ag
     const base = offsets[index] ?? 0;
     const segment = segments[index];
     if (!segment || ref.end > base + segment.markdown.length) continue;
-    const list = edits.get(index) ?? [];
-    list.push({ start: ref.start - base, end: ref.end - base, text: ref.rewrite(url) });
-    edits.set(index, list);
+    const inSegment = edits.get(index) ?? [];
+    inSegment.push({ start: ref.start - base, end: ref.end - base, text: ref.rewrite(url) });
+    edits.set(index, inSegment);
   }
   if (!edits.size) return segments;
 
