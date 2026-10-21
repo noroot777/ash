@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { AgentContentSegment } from "../task-detail/conversationModel.ts";
-import { segmentHasVisibleContent } from "../task-detail/conversationSegments.ts";
+import { awaitingUpstream, segmentHasVisibleContent } from "../task-detail/conversationSegments.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { turnLayout } from "../task-detail/turnFold.ts";
 import { MarkdownBody } from "./MarkdownBody.tsx";
@@ -70,6 +70,8 @@ export function AgentTurnBody({
   /* 两条路径都按同一口径筛:段里画不出东西就不出 section。分段层已经不给纯通知单独开段,
      这里仍要兜一道 —— alignedSegments 会按 .md 重算每段正文,某一段可能被重算成空。 */
   const visible = conclusion.filter(segmentHasVisibleContent);
+  // 此刻还卡在上游等回话?判据连理由住在 awaitingUpstream。
+  const awaiting = awaitingUpstream(visible);
   return (
     <>
       {process.some(segmentHasVisibleContent) && <ProcessFold segments={process} />}
@@ -79,6 +81,7 @@ export function AgentTurnBody({
           <ExecutionDetails
             events={segment.events}
             running={running && index === visible.length - 1}
+            awaiting={awaiting && index === visible.length - 1}
           />
           <SegmentBody segment={segment} />
         </section>

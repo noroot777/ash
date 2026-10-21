@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import {
   appendSessionTrace,
   parseSessionTrace,
+  readSessionNotices,
   sessionTracePath,
 } from "../src/transcript.js";
 
@@ -64,6 +65,30 @@ try {
     reasoningEffort: "xhigh",
     verifyRound: 2,
   });
+
+  // 过程提示的窄出口(第 1 轮审查 F3)。「上游在重试 / 已经等了 N 分钟」原先是 .md 里的
+  // system 旁注,手机那条每几秒重拉一次 .md 的轮询顺带就看到了;挪进 trace 之后手机压根
+  // 读不到 —— 它读不动整份 trace(真实库里最大一份 8 MB,对应的 .md 只有 8 KB)。所以这
+  // 个出口必须只挑提示、把别的事件一个都不带出来。
+  appendSessionTrace(taskId, sessionId, turnStartedAt, {
+    kind: "error",
+    message: "上游返回 502 server_error，正在重试（第 1/10 次，等 0.6 秒）",
+    level: "notice",
+    affectsTurn: false,
+  }, "2026-08-01T03:00:00.000Z");
+  appendSessionTrace(taskId, sessionId, turnStartedAt, {
+    kind: "error",
+    message: "真的崩了",
+  }, "2026-08-01T03:00:01.000Z");
+  const notices = await readSessionNotices(taskId, sessionId);
+  assert.deepEqual(notices, [
+    { at: "2026-08-01T03:00:00.000Z", text: "上游返回 502 server_error，正在重试（第 1/10 次，等 0.6 秒）" },
+  ], "过程提示的窄出口要么漏了提示,要么把别的事件(含真故障)也带了出来");
+  assert.deepEqual(
+    await readSessionNotices(`${taskId}-never-ran`, sessionId),
+    [],
+    "没有 trace 文件的会话(2026-08-01 之前跑完的那 992 条)必须当成「没有提示」,不能报错",
+  );
 
   console.log("会话执行轨迹持久化验证通过");
 } finally {

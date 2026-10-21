@@ -27,7 +27,13 @@ function SideMessage({ message }: { message: ChatMessage }) {
   const parsed = message.role === "user" ? parseAttachmentText(message.body) : null;
   return <article className={`side-chat-message is-${message.role} is-${message.status}`}>
     <header><strong>{message.role === "user" ? "你" : message.role === "system" ? "ash" : "侧聊助手"}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>
-    {!!trace.length && <ExecutionDetails events={trace} running={busy} />}
+    {/* 侧聊跑的中途不流式吐正文(正文到完成那一下才有,见上面的 !busy 分支),所以最后一条
+        是提示就确实还在等 —— 下一条 trace 事件或者跑完都会把它换掉。 */}
+    {!!trace.length && <ExecutionDetails
+      events={trace}
+      running={busy}
+      awaiting={trace.at(-1)?.kind === "notice"}
+    />}
     {busy && !trace.length && <p className="side-chat-thinking" role="status">{message.status === "queued" ? "等待回复…" : "正在思考…"}</p>}
     {!busy && <MarkdownBody text={parsed?.body ?? message.body} />}
     {!!parsed?.paths.length && <MessageAttachments paths={parsed.paths} />}

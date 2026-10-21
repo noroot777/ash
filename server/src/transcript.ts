@@ -3,9 +3,9 @@
 // 与常驻调度台都走这里，因此刷新能把每组 thinking/tool 放回它所启动的正文片段，
 // 同时非正文事件绝不会混进 assistant Markdown。
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
-import { open, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import type { AgentEvent, AgentType } from "@ash/shared";
+import type { AgentEvent, AgentType, SessionNotice } from "@ash/shared";
 import { isTokenUsage } from "@ash/shared/usage";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
 
@@ -135,6 +135,43 @@ export function parseSessionTraceLines(raw: string): SessionTraceParse {
     else badLines += 1;
   }
   return { entries, badLines, truncatedTail };
+}
+
+// 一条会话上最多回这么多条过程提示(只留最近的)。上游连环重试能刷出几十条,而消费者要的
+// 是「现在卡住了没有」,不是完整流水 —— 完整流水在 trace 自己那份里。
+const NOTICE_LIMIT = 50;
+const NOTICE_MARK = '"level":"notice"';
+
+/**
+ * 这条会话落盘过的**过程提示**(上游在重试、还在等回话;形状见 shared 的 SessionNotice)。
+ *
+ * 读法是刻意的:先按字面量把那几行挑出来,只对命中的行 JSON.parse。一份 8 MB 的 trace 里
+ * 提示通常不到十行,整份逐行解析纯属白烧 —— 而这个出口就是给「每几秒拉一次」的消费者用的
+ * (手机端:它读不动整份 trace,见 mobile/src/lib/log.ts 的 mergeSessionNotices)。
+ * 文件不在就是没有,跟 /trace 同一条判据(2026-08-01 之前跑完的会话压根没有这个文件);
+ * 解析不出来的行跳过 —— 这个出口宁可少给一条,也不该让一次轮询失败。
+ */
+export async function readSessionNotices(taskId: string, sessionId: string): Promise<SessionNotice[]> {
+  let text: string;
+  try {
+    text = await readFile(readableRunPath(sessionTracePath(taskId, sessionId)), "utf8");
+  } catch {
+    return [];
+  }
+  const out: SessionNotice[] = [];
+  for (let hit = text.indexOf(NOTICE_MARK); hit >= 0;) {
+    const lineEnd = text.indexOf("\n", hit);
+    const line = text.slice(text.lastIndexOf("\n", hit) + 1, lineEnd < 0 ? text.length : lineEnd);
+    try {
+      const { at, event } = JSON.parse(line) as SessionTraceEntry;
+      if (event.kind === "error" && event.level === "notice" && typeof at === "string") {
+        out.push({ at, text: event.message });
+      }
+    } catch { /* 半截行 / 别的形状:跳过这一条 */ }
+    if (lineEnd < 0) break;
+    hit = text.indexOf(NOTICE_MARK, lineEnd + 1);
+  }
+  return out.slice(-NOTICE_LIMIT);
 }
 
 export function parseSessionTrace(raw: string): SessionTraceEntry[] {

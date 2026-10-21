@@ -26,10 +26,12 @@ function TransientExecutionLabel({
   baseLabel,
   events,
   running,
+  awaiting,
 }: {
   baseLabel: string;
   events: ExecutionEvent[];
   running: boolean;
+  awaiting: boolean;
 }) {
   const label = useRef<HTMLSpanElement>(null);
   const previousCount = useRef(running ? 0 : events.length);
@@ -40,11 +42,25 @@ function TransientExecutionLabel({
   /* 提示是**状态**不是步骤:「上游返回 502,正在重试」说的是此刻正卡在哪儿,而不是刚做完
      一件事。所以它不走 3.6 秒就退回计数的轮播 —— 退回去之后,一次十分钟的上游停摆在界面
      上又变回「智能体委派中」杵在那,正是 2026-09-24 那次要治的病(两个任务各停 47 分钟,
-     用户手上一条线索都没有)。下一条真事件到了它自然被顶掉,所以不会赖着不走。 */
-  const sticky = running && latest?.kind === "notice";
+     用户手上一条线索都没有)。
+     而「此刻还卡着」只能由上层告诉我们(awaiting):「最后一条事件是提示」**不等于**「请求
+     还没回来」—— 上游恢复后接着流式输出的正文只进 markdown、压根不进这个列表,照后者判就
+     会一直写着正在重试,直到下一次工具调用才被顶掉(第 1 轮审查 F2)。 */
+  const sticky = running && awaiting;
+  // 等待期间**直接**显示那句提示,不经过轮播那个状态机:状态归上层管,这里不该再记一份。
+  // 于是等待一解除,显示的就是底下 display 的值 —— 下面那个 effect 负责让它恒等于计数。
+  const shown = sticky ? latestPreview || display : display;
 
   useEffect(() => {
     if (!running) {
+      previousCount.current = events.length;
+      setDisplay(baseLabel);
+      setPhase("");
+      return;
+    }
+    if (sticky) {
+      // 等待期间把轮播归位到计数:上游一恢复(正文接着流出来、awaiting 落下)折叠条就回到
+      // 「执行过程 · N 工具」,而不是露出上游抽风之前那一步的残影。
       previousCount.current = events.length;
       setDisplay(baseLabel);
       setPhase("");
@@ -69,7 +85,6 @@ function TransientExecutionLabel({
       }, textSwapDuration()));
     };
     swapText(latestPreview, () => {
-      if (sticky) return;
       timers.push(window.setTimeout(() => swapText(baseLabel), 3_600));
     });
     return () => {
@@ -81,11 +96,11 @@ function TransientExecutionLabel({
   return (
     <span
       className={`task-execution-label t-text-swap ${phase}${running ? " t-shimmer" : ""}`}
-      data-text={running ? display : undefined}
-      aria-label={running ? display : undefined}
+      data-text={running ? shown : undefined}
+      aria-label={running ? shown : undefined}
       ref={label}
     >
-      {display}
+      {shown}
     </span>
   );
 }
@@ -157,14 +172,27 @@ export function executionBlockTone(events: ExecutionEvent[]): string {
   return hasExecutionNotice(events) ? " has-notice" : "";
 }
 
-/** `<summary>` 的内容：折角 + 运行小点 + 会临时轮播最新一步的标签。 */
-export function ExecutionSummaryLine({ events, running }: { events: ExecutionEvent[]; running: boolean }) {
+/**
+ * `<summary>` 的内容：折角 + 运行小点 + 会临时轮播最新一步的标签。
+ *
+ * `awaiting` = **此刻**正卡在上游等回话(折叠条上那句提示要常驻,见 TransientExecutionLabel)。
+ * 它必须由调用方按自己那条路上的恢复信号算 —— 这里看不见正文,拿「最后一条事件是提示」
+ * 当替代品就会在上游恢复后一直写着正在重试。缺省 false:算不出来时宁可按普通一步轮播。
+ */
+export function ExecutionSummaryLine(
+  { events, running, awaiting = false }: { events: ExecutionEvent[]; running: boolean; awaiting?: boolean },
+) {
   events = events.filter(isVisibleExecutionEvent);
   return (
     <>
       <CaretRight className="task-execution-caret" size={11} weight="bold" aria-hidden="true" />
       {running && <span className="task-execution-pulse" aria-hidden="true" />}
-      <TransientExecutionLabel baseLabel={executionCountsLabel(events)} events={events} running={running} />
+      <TransientExecutionLabel
+        baseLabel={executionCountsLabel(events)}
+        events={events}
+        running={running}
+        awaiting={awaiting}
+      />
     </>
   );
 }
@@ -182,13 +210,15 @@ export function ExecutionEventList({ events }: { events: ExecutionEvent[] }) {
   );
 }
 
-export function ExecutionDetails({ events, running }: { events: ExecutionEvent[]; running: boolean }) {
+export function ExecutionDetails(
+  { events, running, awaiting = false }: { events: ExecutionEvent[]; running: boolean; awaiting?: boolean },
+) {
   events = events.filter(isVisibleExecutionEvent);
   if (!events.length) return null;
   return (
     <details className={`task-execution-block${executionBlockTone(events)}`}>
       <summary>
-        <ExecutionSummaryLine events={events} running={running} />
+        <ExecutionSummaryLine events={events} running={running} awaiting={awaiting} />
       </summary>
       <ExecutionEventList events={events} />
     </details>

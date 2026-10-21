@@ -50,3 +50,16 @@ export interface Session {
   // 之前)。
   context: ContextUsage | null;
 }
+
+/**
+ * 一条**过程提示**:上游在重试、还在等回话。`GET /sessions/:id/notices` 的元素。
+ *
+ * 这些提示的正本在 `<sessId>.trace.jsonl`（`level:"notice"` 的 error 事件），所以执行过程
+ * 面板里它们排在发生的那一步下面。独立出这个窄出口只为**读不动整份 trace 的消费者**:
+ * 手机端每几秒重拉一次,而 trace 连工具的完整输入输出一起落盘,真实库里最大的一份 8 MB、
+ * 对应的 `.md` 只有 8 KB。
+ */
+export interface SessionNotice {
+  at: string; // 这条提示发生的时刻
+  text: string;
+}

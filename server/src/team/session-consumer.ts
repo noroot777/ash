@@ -17,6 +17,7 @@ import {
   shouldDropSession,
 } from "../executors/session-lost.js";
 import { writeRunError, writeTurnEnd } from "../transcript.js";
+import type { SessionTraceEvent } from "../transcript.js";
 import { isExecutionNotice, isSessionScopeNotice } from "../session-notice.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
@@ -45,15 +46,26 @@ import {
 
 // 待命中的常驻会话冒出这几种事件 = CLI 自己又开工了(见 consume 里的补开回合)。
 //
-// 认的是 agent **这一轮的产出**:正文、思考、工具、附件、执行报错。不认 usage / context
-// —— 那两样是上一轮的收尾统计,拿它们开回合只会凭空多一颗空气泡。error 要认:后台回调
-// 回来第一件事就是报错(工具炸了、API 拒了)完全正常,不认的话这一轮会从第二条事件才开
-// 始算,回合照样被拆成两半,而且报错这段时间里空闲回收仍按「待命」在倒计时。
-// 两个例外:scope:"session" 说的是「这条会话作废了」,level:"notice" 说的是「正在重试 /
-// 还在等上游」—— 都不是这一轮的产出,拿它们开回合只会凭空多一颗空气泡。
-const SELF_STARTED_TURN_EVENTS: ReadonlySet<AgentEvent["kind"]> = new Set(["text", "thinking", "tool", "attachment", "error"]);
-const startsSelfTurn = (event: AgentEvent): boolean =>
-  SELF_STARTED_TURN_EVENTS.has(event.kind) && !isSessionScopeNotice(event) && !isExecutionNotice(event);
+// **这个集合同时就是「会落进执行过程」的那一组**,两件事共用一个判据不是顺手:trace 的每
+// 一行都得挂在一个真实回合上,而待命期间唯一能确立回合的地方就是这里。两边各写一份的后果
+// 实测过 —— 「不算这一轮产出、但照样落 trace」的事件(上游重试提示)各自拿 now() 当回合
+// 起点,一条一个,刷新重建时它们认不回真正那一轮,被重建成正文下面一颗空回复(第 1 轮审查
+// F1)。所以往 trace 里加一种事件,就得同时承认它能开回合;不肯承认它开回合,就别让它落
+// trace。
+//
+// 逐项的理由:正文/思考/工具/附件不必解释。error 要认 —— 后台回调回来第一件事就是报错
+// (工具炸了、API 拒了)完全正常,不认的话这一轮从第二条事件才开始算,回合被拆成两半,而且
+// 报错这段时间里空闲回收仍按「待命」在倒计时。level:"notice" 的重试/等待提示同理:提示能
+// 发出来就说明上游请求已经在飞,它确实是这一轮的第一条输出。usage 认它只为闭合上面那条
+// 不变量 —— 它正常只出现在 turnEnd 之前(那时 busy 必为真,压根走不到这儿),真要抢在前面
+// 到也只可能是这一轮的事。context 两边都不要:它既不开回合也不落 trace。
+// 唯一的减项是 scope:"session"(「这条恢复会话作废了」),trace 那边同样排除,两边一致。
+type TurnOwnedEvent = Extract<AgentEvent, { kind: "text" | "thinking" | "tool" | "attachment" | "error" | "usage" }>;
+const TURN_OWNED_EVENTS: ReadonlySet<AgentEvent["kind"]> =
+  new Set<TurnOwnedEvent["kind"]>(["text", "thinking", "tool", "attachment", "error", "usage"]);
+/** 这条事件归某一个回合所有:既由它补开待命中的回合,也只有它才落 trace。 */
+const ownedByTurn = (event: AgentEvent): event is TurnOwnedEvent =>
+  TURN_OWNED_EVENTS.has(event.kind) && !isSessionScopeNotice(event);
 const RECYCLE_NOTE = (min: number, resumable: boolean) =>
   `〔系统〕调度台空闲超过 ${min} 分钟,进程已回收(待命)。`
   + (resumable
@@ -86,9 +98,21 @@ async function consume(lead: Lead): Promise<void> {
   // 漏复位其中一个就会把上一条会话的结论串到下一条上（rotation-state.ts 顶部有现场）。
   let rotation = idleRotation();
   let pendingTraceText = "";
+  // 消费循环里每一条 trace 都从这儿出去:回合身份只认 beginTurn 登记的那一个
+  // (`lead.turnStart`)。上面 ownedByTurn 已经保证「能落 trace 的事件一定先补开过回合」,
+  // 所以这里拿不到身份就说明那条不变量破了 —— 那时宁可这一行不落盘,也绝不用 now() 顶一个
+  // 假起点:假起点会把同一轮的事件散成一颗一颗空回复,刷新之后再也拼不回去(第 1 轮审查 F1)。
+  const traceInTurn = (event: SessionTraceEvent): void => {
+    const turnStart = lead.turnStart;
+    if (!turnStart) {
+      console.warn(`[ash] 团队 ${lead.taskId} 的 ${event.kind} 事件没有回合身份,这一行不落执行过程`);
+      return;
+    }
+    traceLead(lead, turnStart, event);
+  };
   const flushTraceText = () => {
     if (!pendingTraceText) return;
-    traceLead(lead, lead.turnStart ?? now(), { kind: "text", text: pendingTraceText });
+    traceInTurn({ kind: "text", text: pendingTraceText });
     pendingTraceText = "";
   };
   // 兜底:上面每个写库点都已经各自把失败咽下了(persistOrReport),这里管的是**剩下**
@@ -128,14 +152,15 @@ async function consume(lead: Lead): Promise<void> {
       }
       // CLI 自己开的新一轮:常驻会话里挂了后台监控/子任务的 agent,通知一到就接着干活,
       // 而 harness 一条消息都没 send 过 —— 上一个 turnEnd 已经把这台落成待命、turnStart
-      // 也清空了。不在这儿补一个回合起点,后果有两层:trace 的 turnStartedAt 只能兜底成
-      // 各自的 now(),一个回合在页面上碎成一串「1 工具」的空气泡(每条都没正文,用时还全
-      // 按会话结束时刻倒推);空闲回收计时也还在跑,一台正在干活的调度台会被当成闲置收掉。
+      // 也清空了。不在这儿补一个回合起点,后果有两层:这一轮的 trace 没有回合可挂 —— 早先
+      // 是兜底成各自的 now(),一个回合在页面上碎成一串「1 工具」的空气泡(每条都没正文,用时
+      // 还全按会话结束时刻倒推);现在 traceInTurn 宁可丢掉那一行也不编起点,于是变成执行过程
+      // 当场缺一段。另一层是空闲回收计时还在跑,一台正在干活的调度台会被当成闲置收掉。
       // 起点只能取**这一刻**(第一条输出)：自发回合没有投递口可问,上一轮收尾之后这个进程
       // 压根没有回合在跑,也就不可能有它写出来的东西落在中间那段空档里 —— 所以「不早于真实
       // 起点」的保守值在这里是安全的那个方向(漏一点,而不是把别人做的东西算进来)。有投入的
       // 那几条路一律用投入那一刻的真实起点,见 beginTurn 的注释。
-      if (!lead.busy && startsSelfTurn(event)) {
+      if (!lead.busy && ownedByTurn(event)) {
         clearIdle(lead);
         await beginTurn(lead);
       }
@@ -157,10 +182,9 @@ async function consume(lead: Lead): Promise<void> {
         // 异常；跟 duet、single-run 一样按 scope 分流,降成 system 旁注 —— 判据共用
         // ../session-notice.ts 那一个,三条链各内联一份就会改一处漏一处。
         const sessionNotice = isSessionScopeNotice(emittedEvent);
-        if (!sessionNotice
-          && (emittedEvent.kind === "thinking" || emittedEvent.kind === "tool" || emittedEvent.kind === "error" || emittedEvent.kind === "usage" || emittedEvent.kind === "attachment")) {
-          traceLead(lead, lead.turnStart ?? now(), emittedEvent);
-        }
+        // 判据就是上面那一个:能落 trace 的和能开回合的必须是同一组事件(正文走上面那条
+        // pendingTraceText,到这儿已经不可能是 text)。
+        if (ownedByTurn(emittedEvent)) traceInTurn(emittedEvent);
         // 水位相反：**覆盖**。常驻会话尤其需要它——流水一路加到几百万，只有水位能回答
         // 「这个调度台离上下文塞满还有多远」。正因为是覆盖,摘牌后就不能再写:那一行现在
         // 归接管的那台,旧进程的水位盖上去就是错的(用量是累加的真实开销,照记不误)。
@@ -194,7 +218,7 @@ async function consume(lead: Lead): Promise<void> {
                 // 把完整那句再说一遍，也不能留下一句报喜的短话。
                 const message = `已停止续跑损坏的 Codex 会话，但清理数据库恢复字段失败：${error instanceof Error ? error.message : String(error)}`;
                 writeRunError(lead.out, message);
-                traceLead(lead, lead.turnStart ?? now(), { kind: "error", message });
+                traceInTurn({ kind: "error", message });
                 publish(lead, { kind: "error", message });
                 note = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
                 rotation = onRotationNotPersisted(rotation);

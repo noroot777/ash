@@ -39,6 +39,22 @@ export function segmentHasVisibleContent(segment: AgentContentSegment): boolean 
   return segment.events.some(isVisibleExecutionEvent);
 }
 
+/**
+ * 这一串段落此刻**还卡在上游等回话**吗 —— 折叠条上那句「正在重试」要不要常驻(用处见
+ * ExecutionSummaryLine 的 `awaiting`)。
+ *
+ * 判据是:最后那一段的最后一条事件是提示,**而且它之后一个字都还没说出来**。「最后一条
+ * 事件是提示」单独拿来用不成立 —— 上游恢复后接着流式输出的正文只进 markdown、压根不进
+ * events,照它判就会在已经恢复回答之后还一直写着正在重试,直到下一次工具调用(第 1 轮
+ * 审查 F2)。提示之后的正文确实落在同一段里:提示只在当前段已有正文时才另起一段
+ * (见 conversationLiveTurns 的 appendAgentAux),所以此后的正文就接在它这一段上。
+ */
+export function awaitingUpstream(segments: AgentContentSegment[]): boolean {
+  const tail = segments.at(-1);
+  if (!tail) return false;
+  return tail.events.at(-1)?.kind === "notice" && !tail.markdown.trim() && !tail.attachments.length;
+}
+
 export type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TracedContentEntry = SessionTraceEntry & {
   event: Exclude<SessionTraceEntry["event"], { kind: "usage" | "run" }>;
