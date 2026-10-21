@@ -155,15 +155,27 @@ foreach ($p in $procs) {
 }
 `;
 
-function parseRows(text: string): ProcessRow[] {
+/**
+ * Windows 那张表,**认下来的行 + 没认出号的行数**(见 `ProcessTableRead`)。
+ *
+ * 「没认出来」只算真的认不出的那种:行首像个号、却凑不出字段或号不是整数。0 号(System
+ * Idle Process)每次都在这张表里,它永远不可能是我们的进程 —— 实测把它算成「丢了一行」,
+ * 于是 Windows 上每一次清理都凭一条假线索压一笔永远销不掉的债(真机实测:行数 298、
+ * 「没认出来」1,就是它)。
+ */
+function readWindowsRows(text: string): ProcessTableRead {
   const rows: ProcessRow[] = [];
+  let unnamed = 0;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     const parts = line.split("\t");
-    if (parts.length < 4) continue;
     const pid = Number(parts[0]);
+    if (parts.length < 4 || !Number.isInteger(pid)) {
+      if (/^\s*\d/.test(line)) unnamed += 1;    // 行首像个号、整行却认不出来 ⇒ 这一行等于没进表
+      continue;
+    }
+    if (pid <= 0) continue;                     // 0 号:认得出来、不是进程,跳过不算丢
     const ppid = Number(parts[1]);
-    if (!Number.isInteger(pid) || pid <= 0) continue;
     rows.push({
       pid,
       ppid: Number.isInteger(ppid) ? ppid : 0,
@@ -171,19 +183,24 @@ function parseRows(text: string): ProcessRow[] {
       command: parts.slice(3).join("\t").trim(),
     });
   }
-  return rows;
+  return { rows, unnamed };
 }
 
 const POSIX_PS_ARGS = ["-ww", "-axo", "pid=,ppid=,command="];
 
-function parsePosixPs(text: string): ProcessRow[] {
+/** POSIX 那张表,同样带上「行首像个号、却没认出来」的行数(判据与 `readWindowsRows` 同源)。 */
+function readPosixRows(text: string): ProcessTableRead {
   const rows: ProcessRow[] = [];
+  let unnamed = 0;
   for (const line of text.split("\n")) {
     const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
-    if (!m) continue;
+    if (!m) {
+      if (/^\s*\d/.test(line)) unnamed += 1;
+      continue;
+    }
     rows.push({ pid: Number(m[1]), ppid: Number(m[2]), startedAt: null, command: m[3]! });
   }
-  return rows;
+  return { rows, unnamed };
 }
 
 /**
@@ -220,27 +237,16 @@ export type ProcessTableRead = { rows: ProcessRow[]; unnamed: number };
 export async function listProcessesComplete(timeoutMs = 3000): Promise<ProcessTableRead | null> {
   if (IS_WINDOWS) {
     const out = await runPowerShell(PS_PROCESS_SCRIPT, timeoutMs);
-    return out === null ? null : withUnnamed(out, parseRows(out));
+    return out === null ? null : readWindowsRows(out);
   }
   const text = await new Promise<string | null>((resolve) => {
     execFile("ps", POSIX_PS_ARGS, { timeout: timeoutMs, maxBuffer: 8 << 20 }, (err, stdout) =>
       resolve(err ? null : stdout || ""),
     );
   });
-  return text === null ? null : withUnnamed(text, parsePosixPs(text));
+  return text === null ? null : readPosixRows(text);
 }
 
-/**
- * **开头像个号、却没认下来**的行数(见 `ProcessTableRead`)。
- *
- * 只数「开头是数字」的行,不数所有非空行:每一行都以 pid 起头,所以认下来的那些必然在这个
- * 集合里,差额就是没认出来的号。反过来按非空行数去减会把**命令行里自带换行**折出来的续行
- * 也算成丢失的行 —— 那在 Windows 上不罕见,于是每一次清理都会凭一条假线索压一笔债。
- */
-function withUnnamed(text: string, rows: ProcessRow[]): ProcessTableRead {
-  const starts = text.split(/\r?\n/).filter((l) => /^\s*\d/.test(l)).length;
-  return { rows, unnamed: Math.max(0, starts - rows.length) };
-}
 
 /**
  * 命令行里明确引用了某个路径的进程。用于删除目录失败后的诊断,不是权限判据:
@@ -266,7 +272,7 @@ export function inspectProcessSync(pid: number): { startedAt: string | null; com
       PS_PROCESS_SCRIPT.replace("Get-CimInstance Win32_Process -ErrorAction Stop", `Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction Stop`)
         .replace("Get-WmiObject Win32_Process", `Get-WmiObject Win32_Process -Filter "ProcessId=${pid}"`),
     );
-    const row = parseRows(out).find((r) => r.pid === pid);
+    const row = readWindowsRows(out).rows.find((r) => r.pid === pid);
     return row ? { startedAt: row.startedAt, command: row.command || null } : null;
   }
   try {
