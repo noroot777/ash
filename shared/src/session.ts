@@ -42,6 +42,20 @@ export interface Session {
   stoppedAs?: string | null;
   // 这一轮是旁路回合（审查 / 就地验证 / 斜杠命令），不是任务本体的执行。
   sideTurn?: boolean;
+  /**
+   * 这条会话**此刻**还卡在上游等回话吗 —— 服务端那份权威状态(server/src/session-waiting.ts)
+   * 按回合身份判出来的一位,不是数据库里的列。
+   *
+   * 为什么要带在会话行上:读端**不许从落盘产物反推**。正文先写 `.md`,要到下一条非正文事件
+   * 才冲进 trace(single-run 与 team 的 pendingTraceText 都是这个缓冲),于是刷新重建照 trace
+   * 的末条判,会在用户已经读到恢复回答之后继续写着「正在重试」,直到下一条事件才消(第 5 轮
+   * 审查 F2,已实测)。直播那一路本来就按事件顺序维护同一件事,这一位让**初始快照**跟它共用
+   * 同一个事实源。
+   *
+   * 缺省/undefined = 这份快照来自不提供它的地方(接力过来的远端快照、历史客户端),按「不在等」
+   * 处理;ash 重启后在飞的那一轮也会落回这一档(见 session-waiting.ts 的开头)。
+   */
+  awaitingUpstream?: boolean;
   // 这条会话行累计的 token 用量(会话可复用,跨多个回合累加)。null = 这家 CLI
   // 不报账,或这条会话建在该功能之前 —— 两种都不该显示成 0。
   usage: TokenUsage | null;

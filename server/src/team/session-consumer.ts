@@ -421,7 +421,17 @@ async function endTurn(lead: Lead): Promise<void> {
     endIso,
   );
   // 这一回合的区间（产物归属按它认人，不按会话寿命——常驻调度台那一行从开台活到收工）。
-  await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: turnStart, endedAt: endIso });
+  // 走到这里就是**执行器自己报的「这一轮说完了」**,所以结局是 completed:进程继续待命,
+  // 它后来怎么没的(空闲回收、异常退出)属于另一件事,不许回头改写这一轮(门禁在
+  // `writeTurnRow` 的收尾合并上;后果见 db/schema-sessions.ts 的 sessionTurns.outcome)。
+  await recordTurnSpan({
+    sessionId: lead.sessId,
+    taskId: lead.taskId,
+    cwd: lead.cwd,
+    startedAt: turnStart,
+    endedAt: endIso,
+    outcome: "completed",
+  });
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead);
   // 还有回合在手：攒着的执行者汇报等它真正空下来再合并送（省一轮模型调用本来就是这么来的）,
@@ -525,8 +535,20 @@ async function closeLead(
   // 进程没走 `endTurn` 就没了（异常退出、被停、被回收），手上这个回合还开着：它的区间得
   // 在这儿补一行。不补就只剩「会话结束了、最后一个回合没有记录」，产物归属读到那个缺口
   // 只能按会话寿命估，那一回合真做出来的东西要么被滤掉要么混进别人的（第 2 轮审查 F1）。
+  // 结局**只落给这些还开着的回合**:口径与下面那笔 `stoppedAs` 同源(三条受控路 = 受控停止;
+  // 事件流被掀翻或非零退出 = 这一轮真崩了)。已经收口的成功回合一个字都不会被改 —— 门禁在
+  // `writeTurnRow` 的收尾合并上,它正是 F3 那条链的闸:常驻调度台成功答完待命、后来才以非零
+  // 码退出,从前那个退出码被读成「上一轮失败」,整轮的「正在重试」重新挂回手机上。
+  const closeOutcome = (lead.closing ?? stopSettle) ? "stopped" : aborted || exitStatus !== 0 ? "failed" : "completed";
   for (const startedAt of closing) {
-    await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt, endedAt: endIso });
+    await recordTurnSpan({
+      sessionId: lead.sessId,
+      taskId: lead.taskId,
+      cwd: lead.cwd,
+      startedAt,
+      endedAt: endIso,
+      outcome: closeOutcome,
+    });
   }
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
   // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。

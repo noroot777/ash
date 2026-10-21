@@ -86,34 +86,38 @@ const entries: SessionTraceEntry[] = [
 const replayed = [{ at: "2026-10-21T06:00:02.000Z", turnStartedAt: TURN, text: RETRY }];
 
 assert.deepEqual(
-  failedTurnNotices(entries, { turnStartedAt: TURN, exitStatus: 1, stoppedAs: null }),
+  failedTurnNotices(entries, { turnStartedAt: TURN, outcome: "failed" }),
   replayed,
   "这一轮真收在失败上,失败现场却没给 —— 用户要的正是「它卡在哪儿」",
 );
-// F1 的现场:常驻调度台健康收尾。endedAt 有值、进程还在跑,所以 exitStatus 仍是 null。
+// **判据是这一个回合自己的结局,不是进程最后一次怎么没的**(第 5 轮审查 F3)。
+// 从前这里问的是会话行上的 `exitStatus`/`stoppedAs`,于是一台常驻调度台健康答完、待命时
+// 才以非零码退出,那个退出码被读成「上一轮失败」—— 上一轮的「正在重试」重新挂回手机上。
+// 现在那种形状压根到不了这里:那一轮收口时就落了 completed,后来的进程退出改不动它。
 assert.deepEqual(
-  failedTurnNotices(entries, { turnStartedAt: TURN, exitStatus: null, stoppedAs: null }),
+  failedTurnNotices(entries, { turnStartedAt: TURN, outcome: "completed" }),
   [],
-  "一台答完待命的调度台被当成失败现场,整轮提示在手机上重新挂了出来(F1)",
+  "一轮成功收口的回合被当成失败现场 —— 那就是用户要删掉的「会话结尾一坨」(F3)",
 );
+// 被人停下来的不是失败:CLI 吃 SIGTERM 后按 signal 写非零退出码,光看退出码分不出来。
 assert.deepEqual(
-  failedTurnNotices(entries, { turnStartedAt: TURN, exitStatus: 0, stoppedAs: null }),
-  [],
-  "这一轮跑完且成功了,重试提示却还挂着 —— 那就是用户要删掉的「会话结尾一坨」",
-);
-// 被人停下来的不是失败:CLI 吃 SIGTERM 后按 signal 写非零退出码,光看 exitStatus 分不出来。
-assert.deepEqual(
-  failedTurnNotices(entries, { turnStartedAt: TURN, exitStatus: 143, stoppedAs: "canceled" }),
+  failedTurnNotices(entries, { turnStartedAt: TURN, outcome: "stopped" }),
   [],
   "用户自己停的那一轮被当成了失败现场",
 );
+// 不知道结局(存量行、回合还开着、收口那一下没写成)一律不回放:宁可少说一句。
 assert.deepEqual(
-  failedTurnNotices(entries, { turnStartedAt: null, exitStatus: 1, stoppedAs: null }),
+  failedTurnNotices(entries, { turnStartedAt: TURN, outcome: null }),
+  [],
+  "结局不明的回合被当成了失败现场",
+);
+assert.deepEqual(
+  failedTurnNotices(entries, { turnStartedAt: null, outcome: "failed" }),
   [],
   "会话行上压根没有回合身份时不该猜",
 );
 assert.deepEqual(
-  failedTurnNotices(entries, { turnStartedAt: NEXT_TURN, exitStatus: 1, stoppedAs: null }),
+  failedTurnNotices(entries, { turnStartedAt: NEXT_TURN, outcome: "failed" }),
   [{ at: "2026-10-21T07:00:01.000Z", turnStartedAt: NEXT_TURN, text: WAITING }],
   "回放串到了别的回合去",
 );

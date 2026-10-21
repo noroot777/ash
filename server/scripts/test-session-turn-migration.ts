@@ -57,6 +57,14 @@ try {
     turnColumns.includes("ended_at:0"),
     `ended_at 必须放开 NOT NULL——老形状存不下「开了还没收口」，整套完整性判据就架在它上面。实际：${turnColumns.join(",")}`,
   );
+  // 重建表会把列**定格**在 migrate-session-turns 的 DDL 里。漏一列就是在这条升级路上把它
+  // 悄悄删掉 —— 而容忍式 ALTER 在本次 ensureSchema 里已经跑过了(DDL 全排在数据迁移之前),
+  // 这一进程余下的时间里再没人补得回来:写端每次 INSERT 报列不存在,窄出口整条 500
+  // (这一列的来历见 db/schema-sessions.ts 的 sessionTurns.outcome,第 5 轮审查 F3)。
+  assert(
+    turnColumns.some((column) => column.startsWith("outcome")),
+    `每个回合自己的结局那一列不许在重建中丢掉。实际：${turnColumns.join(",")}`,
+  );
   assert((await columns("sessions")).some((c) => c.startsWith("turns_base")), "sessions 要有 turns_base");
   const index = (await dbClient.execute(
     "SELECT name FROM sqlite_master WHERE type='index' AND name='session_turns_turn_key'",
@@ -116,7 +124,10 @@ try {
        VALUES ('s5','t5','2026-10-05T00:00:00.000Z', 2)`,
   );
   await dbClient.execute(
-    `INSERT INTO session_turns VALUES ('h','s5','t5','/w','2026-10-05T00:00:00.000Z','2026-10-05T00:10:00.000Z')`,
+    // 列名写全:这一条插的是**升级后**那张表(上面那几条插的是夹具自己建的老形状),
+    // 裸 VALUES 会在表再长一列时当场报「7 列只给了 6 个值」。
+    `INSERT INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at)
+       VALUES ('h','s5','t5','/w','2026-10-05T00:00:00.000Z','2026-10-05T00:10:00.000Z')`,
   );
   await dbClient.executeMultiple(
     `CREATE TRIGGER block_backfill BEFORE UPDATE OF turns_base_approx ON sessions

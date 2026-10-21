@@ -17,7 +17,16 @@ import {
   haltTeam, seedTeamTask, startLead, teamIsLive,
 } from "./team-lead-resilience-fixture.js";
 import { failedTurnNotices, sessionWaiting } from "../src/session-waiting.js";
+import { turnOutcome } from "../src/session-turns.js";
 import { readRecentTraceEntries } from "../src/transcript.js";
+
+/** 窄出口(`GET /sessions/:id/notices`)的失败现场那一半,照生产那条路算一遍。 */
+const failureScene = async (row: { taskId: string; turnStartedAt: string | null }, sessId: string) =>
+  failedTurnNotices(await readRecentTraceEntries(row.taskId, sessId), {
+    turnStartedAt: row.turnStartedAt,
+    // **判据是这一个回合自己的结局**,不是会话行上的进程退出码(第 5 轮审查 F3)。
+    outcome: await turnOutcome(sessId, row.turnStartedAt),
+  });
 
 const RETRY_1 = "上游返回 504 server_error，正在重试（第 1/10 次，等 0.5 秒）";
 const RETRY_2 = "上游返回 502 server_error，正在重试（第 2/10 次，等 1.1 秒）";
@@ -97,7 +106,9 @@ try {
       yield { kind: "text", text: "上游已经恢复,正在继续回答。" };
       yield { kind: "turnEnd" };
       await gate; // 回合收口了、进程还活着 —— 这就是 F1 的现场
-      yield { kind: "done", exitStatus: 0 };
+      // **待命中进程自己没了,而且是非零码**(第 5 轮审查 F3 的现场):上一轮早就成功收口了,
+      // 这个退出码跟它一点关系都没有。从前窄出口照退出码判,于是上一轮的重试被重新挂回手机。
+      yield { kind: "done", exitStatus: 1 };
     },
     whileLive: async () => {
       const deadline = Date.now() + 10_000;
@@ -117,7 +128,7 @@ try {
           "恢复正文和回合收口都没能把内存里那条等待状态撤掉",
         );
         assert.deepEqual(
-          failedTurnNotices(await readRecentTraceEntries(row.taskId, idleSess), row),
+          await failureScene(row, idleSess),
           [],
           "一台答完待命的调度台被当成失败现场,整轮提示在手机上重新挂了出来(F1)",
         );
@@ -127,6 +138,56 @@ try {
     },
   });
   ok("健康待命的调度台:等待状态已撤,失败现场也不回放");
+
+  // ── 待命时进程以非零码退出,不许追认上一轮失败(第 5 轮审查 F3) ────────────────
+  // 常驻进程跑很多回合。上面那一轮已经健康 `turnEnd` 收口(成功答完),进程继续待命,这会儿
+  // 才自己没了 —— 会话行上记下的退出码是**进程**的事,而行上那个 `turn_started_at` 仍指着
+  // 刚才成功的那一轮。上一版照「退出码非零且没被停」判,这个出口就从 0 条变回 1 条,手机把
+  // 上一轮的「正在重试」追加到成功回答下面。现在每个回合自己带结局,后来的退出改不动它。
+  const idleRow = (await db.select().from(sessions).where(eq(sessions.id, idleSess))).at(0)!;
+  assert.equal(idleRow.exitStatus, 1, "这份用例要的就是「成功收口之后进程才以非零码退出」");
+  assert.ok(!idleRow.stoppedAs, "这一路没人点停止 —— 有 stoppedAs 的话上一版也能蒙对,用例就失去意义了");
+  assert.equal(
+    await turnOutcome(idleSess, idleRow.turnStartedAt),
+    "completed",
+    "那一轮明明是执行器自己报的收口,后来的进程退出把它的结局改写了(F3)",
+  );
+  assert.deepEqual(
+    await failureScene(idleRow, idleSess),
+    [],
+    "待命进程后来的非零退出被当成上一轮失败的证据,整轮提示又回到了手机上(F3)",
+  );
+  ok("待命后进程非零退出:已经收口的成功回合结局不被改写,窄出口照旧一条都不回放");
+
+  // ── 反过来:这一轮**真崩在半路**,那几句提示就是现场,必须照给 ──────────────────
+  // 这一条是上面那几条「不回放」的正面对照 —— 少了它,「结局压根没落盘」这种退化会让全部
+  // 否定断言照样通过(什么都不回放当然满足它们),而用户在真失败时一条线索都看不到。
+  const crashSess = "sess-crash-notice";
+  const crashed = await runLead("crash-notice", {
+    cliSessionId: "thread-crash-notice",
+    script: async function* () {
+      yield { kind: "tool", name: "Bash", detail: JSON.stringify({ command: "npm test" }) };
+      await pause();
+      yield { kind: "error", message: RETRY_2, level: "notice", affectsTurn: false };
+      await pause();
+      // 回合还开着、没人点停止,进程自己非零退出 = 这一轮真崩了。
+      yield { kind: "done", exitStatus: 1 };
+    },
+  });
+  const crashRow = await crashed.session();
+  assert.equal(crashRow.exitStatus, 1, "这份用例要的就是「回合还开着,进程自己崩了」");
+  assert.ok(!crashRow.stoppedAs, "没人点停止,不该记成受控停止");
+  assert.equal(
+    await turnOutcome(crashSess, crashRow.turnStartedAt),
+    "failed",
+    "进程带着一个还开着的回合崩了,这一轮的结局没落成失败",
+  );
+  assert.deepEqual(
+    (await failureScene(crashRow, crashSess)).map((item) => item.text),
+    [RETRY_2],
+    "真失败的那一轮,失败现场却没给 —— 用户要的正是「它卡在哪儿」",
+  );
+  ok("真崩在半路:这一轮落成失败,悬着的提示照给");
 
   const until = async (what: string, cond: () => boolean) => {
     const deadline = Date.now() + 10_000;
@@ -162,8 +223,13 @@ try {
   const haltRow = await halted.session();
   assert.equal(haltRow.exitStatus, 1, "这份用例要的就是「被停之后留下非零退出码」那一刻");
   assert.ok(haltRow.stoppedAs, "团队收尾只写了退出码,没把「这一轮是被停的」落进会话行(F1)");
+  assert.equal(
+    await turnOutcome(haltSess, haltRow.turnStartedAt),
+    "stopped",
+    "受控停止没落进这一轮自己的结局 —— 窄出口只能退回去猜退出码",
+  );
   assert.deepEqual(
-    failedTurnNotices(await readRecentTraceEntries(haltRow.taskId, haltSess), haltRow),
+    await failureScene(haltRow, haltSess),
     [],
     "点了停止全组,悬着的提示被当成失败现场回放到手机上(F1)",
   );

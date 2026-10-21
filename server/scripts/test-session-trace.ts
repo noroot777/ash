@@ -96,7 +96,7 @@ try {
     "窄出口的尾巴读漏了这一轮的条目,或者把坏形状的那一行也放了进来",
   );
   assert.deepEqual(
-    failedTurnNotices(recent, { turnStartedAt: turn2, exitStatus: 1, stoppedAs: null }),
+    failedTurnNotices(recent, { turnStartedAt: turn2, outcome: "failed" }),
     [{ at: "2026-08-01T03:00:02.000Z", turnStartedAt: turn2, text: RETRY }],
     "从落盘 trace 回放失败现场这条路断了",
   );

@@ -12,10 +12,11 @@
 //    内存里这份没了,在飞的那一轮回空;等待是转瞬状态,宁可不显示也不该靠猜。
 //
 // ② 失败现场(`failedTurnNotices`)—— 从 trace 回放,因为它要活过刷新和重启。判据是
-//    「这一轮有没有明确的失败结局」,**不是「进程退没退」**(见函数自己的注释)。
+//    「**这一轮**有没有明确的失败结局」,**不是「进程退没退」**(见函数自己的注释)。
 import type { AgentEvent, SessionNotice } from "@ash/shared";
 import { resumesWaiting } from "@ash/shared/waiting";
 import { isExecutionNotice } from "./session-notice.js";
+import type { TurnOutcome } from "./session-turns.js";
 import type { SessionTraceEntry } from "./transcript.js";
 import { now } from "./util.js";
 
@@ -90,25 +91,41 @@ export function sessionWaiting(sessionId: string, turnStartedAt?: string | null)
 }
 
 /**
+ * 这一轮的结局够不够格回放失败现场 —— **只有「明确失败」算**。
+ *
+ * `null`/`undefined` = 不知道(存量行、回合还开着、收口那一下没写成):一律不回放。宁可少说
+ * 一句,也不能把一轮没失败的回合挂上失败现场 —— 那正是用户那句「不是最终导致整个会话失败就
+ * 没必要显示在会话结尾处」。
+ *
+ * 判据只有这一份:窄出口拿它决定要不要读盘(`task-session-routes.ts`),下面的回放本体再问一次
+ * 同一个函数。
+ */
+export const replaysFailureScene = (outcome: TurnOutcome | null | undefined): boolean => outcome === "failed";
+
+/**
  * 这一轮**真的收在失败上**时,它的过程提示 —— 失败现场。
  *
  * 用户的原话是「如果不是最终导致整个会话失败、本条命令执行成功了,就没必要显示在会话结尾
  * 处」,所以反过来:真失败时这几句话就是现场,必须照给,而且要活过刷新,因此只能从 trace 读。
  *
- * 判据是**这一轮有没有明确的失败结局**:
- * - `exitStatus === null` = 还没有退出结果。常驻调度台每一轮健康收尾都会写 `endedAt`,
- *   而进程还在跑(`team/session-consumer.ts` 的 endTurn),拿「不是 0」当失败证明,一台
- *   答完待命的调度台就会在手机上重新挂出整轮的「正在重试」(第 3 轮审查 F1)。
- * - `stoppedAs` 有值 = 这一轮是**被停的**,不是它自己崩的。CLI 吃 SIGTERM 后按 signal
- *   写非零退出码,光看 exitStatus 两者一模一样(single-run.ts 为此单独落了这一列)。
+ * 判据是**这一个回合自己的结局**(`session_turns.outcome`,收口那一刻由结算处落下),
+ * **不是进程最后一次怎么没的**。为什么必须是回合而不是进程:常驻调度台一个进程跑很多回合,
+ * 每一轮健康 `endTurn` 收口、进程继续待命,后来空闲时才以非零码退出 —— 拿退出码当证明,
+ * 那台答完待命的调度台就会在手机上重新挂出上一轮(明明已经成功答完那一轮)的「正在重试」
+ * (第 3 轮审查 F1 只补了 `exitStatus === null` 这一档、第 4 轮补了受控停止,第 5 轮审查 F3
+ * 实测仍能复现:健康 `turnEnd` 之后让待命进程 `done(exitStatus:1)`,这个出口从 0 条变 1 条)。
+ * 反方向同样靠它才对:`exit 0` 却中途报过执行故障的那一轮(单飞的判据是「非零退出**或**
+ * sawExecutionError」),从前一条现场都给不出。
+ *
+ * 进程自身怎么没的仍然单列在会话行上(`exit_status` / `stopped_as`,重试门禁读它),两件事不混。
  */
 export function failedTurnNotices(
   entries: SessionTraceEntry[],
-  session: { turnStartedAt?: string | null; exitStatus: number | null; stoppedAs?: string | null },
+  settled: { turnStartedAt?: string | null; outcome: TurnOutcome | null },
 ): SessionNotice[] {
-  const turn = session.turnStartedAt;
+  const turn = settled.turnStartedAt;
   if (!turn) return [];
-  if (session.exitStatus === null || session.exitStatus === 0 || session.stoppedAs) return [];
+  if (!replaysFailureScene(settled.outcome)) return [];
   const out: SessionNotice[] = [];
   for (const entry of entries) {
     if (entry.turnStartedAt !== turn) continue;

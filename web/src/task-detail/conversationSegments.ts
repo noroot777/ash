@@ -6,7 +6,6 @@
 //
 // 从 conversationModel 拆出来的一族:那边管「会话 → 气泡」,这里管「事件 → 段落」。
 import type { AgentEvent } from "@ash/shared";
-import { resumesWaiting } from "@ash/shared/waiting";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 
@@ -22,10 +21,15 @@ export type AgentContentSegment = {
   /**
    * 这一段**停在一条过程提示上**:上游在重试/还没回话,提示之后一个字都还没来。
    *
-   * 由归约层按事件顺序维护(直播追加与落盘重建两路都写它),展示层只读 —— 别再从段落的
-   * 成品结构反推「提示之后有没有恢复」。反推过两次都错在同一个地方:正文、附件、事件在
-   * 一段里是**混在一起的累积结果**,读不出谁先谁后,于是「末段有附件」就被当成了恢复
-   * (第 3 轮审查 F2)。
+   * 展示层只读这一位,**别从段落的成品结构反推**「提示之后有没有恢复」。反推过两次都错在
+   * 同一个地方:正文、附件、事件在一段里是**混在一起的累积结果**,读不出谁先谁后,于是
+   * 「末段有附件」就被当成了恢复(第 3 轮审查 F2)。
+   *
+   * 两条路各有自己的事实源,都不是落盘产物的末条:
+   * - 直播:conversationLiveTurns 按**事件到达顺序**边到边记(提示置上、任何输出置回);
+   * - 刷新重建:服务端那份权威状态(`Session.awaitingUpstream`),由 markSegmentsAwaiting
+   *   落到末段上 —— trace 的正文是攒着写的,比 `.md` 慢一步,照它反推会在恢复之后继续写着
+   *   「正在重试」(第 5 轮审查 F2)。
    */
   awaiting?: boolean;
 };
@@ -53,8 +57,9 @@ export function segmentHasVisibleContent(segment: AgentContentSegment): boolean 
  * 这一串段落此刻**还卡在上游等回话**吗 —— 折叠条上那句「正在重试」要不要常驻(用处见
  * ExecutionSummaryLine 的 `awaiting`)。
  *
- * 只读归约层记下的那一位(见 AgentContentSegment.awaiting):提示置上、随后任何一条输出
- * 置回,顺序由写入那一刻决定。
+ * 只读归约层记下的那一位(见 AgentContentSegment.awaiting),两条路各自的来源都是**事件顺序**:
+ * 直播由 conversationLiveTurns 边到边记,刷新重建由服务端的 `Session.awaitingUpstream` 带进来。
+ * 都**不从 trace 的末条反推** —— 那份落后于正文(第 5 轮审查 F2)。
  */
 export function awaitingUpstream(segments: AgentContentSegment[]): boolean {
   return segments.at(-1)?.awaiting === true;
@@ -69,28 +74,22 @@ export function awaitingUpstream(segments: AgentContentSegment[]): boolean {
 export const awaitingAfterEvent = (event: AgentAuxEvent): boolean => event.kind === "notice";
 
 /**
- * 这一条**原始** trace 事件把等待状态置成什么:`true`=在等、`false`=解除、`null`=与它无关。
+ * 把「此刻还在等上游」这一位落到该读它的那一段上 —— 折叠条读的是**末段**(AgentTurnBody
+ * 先滤掉画不出东西的段,再取最后一段),所以就落在那一段。
  *
- * **「这一行画不画得出来」和「上游回没回话」是两件事**(第 4 轮审查 N1):`usage` 不进执行
- * 过程(它只是这一轮的账,渲出来就是一行莫名的异常),可它到达就说明请求已经回来了;`run` 是
- * `beginTurn` 落的执行器参数,两件事都不是。恢复判据共用 `@ash/shared/waiting` 那一份 ——
- * 服务端、讨论、这里同一个口径,各算一份就会漂。
+ * 唯一的调用者是重建那一路:它从服务端的 `Session.awaitingUpstream` 拿到这个事实
+ * (见那一段的注释:trace 落后于正文,照它反推会在恢复之后继续写着「正在重试」)。
  */
-export function awaitingAfterTraceEvent(event: SessionTraceEntry["event"]): boolean | null {
-  if (event.kind === "run") return null;
-  if (event.kind === "error" && event.level === "notice") return true;
-  return resumesWaiting(event) ? false : null;
+export function markSegmentsAwaiting(segments: AgentContentSegment[]): void {
+  const target = [...segments].reverse().find(segmentHasVisibleContent) ?? segments.at(-1);
+  if (target) target.awaiting = true;
 }
-
-/** 走完这一串原始事件之后还在不在等(上面那一位的折叠)。 */
-const awaitingAfterTrace = (entries: SessionTraceEntry[]): boolean =>
-  entries.reduce<boolean>((state, entry) => awaitingAfterTraceEvent(entry.event) ?? state, false);
 
 export type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TracedContentEntry = SessionTraceEntry & {
   event: Exclude<SessionTraceEntry["event"], { kind: "usage" | "run" }>;
 };
-/** 这一条进不进执行过程的展示(账与执行器参数不进,见 awaitingAfterTraceEvent)。 */
+/** 这一条进不进执行过程的展示:`usage` 是这一轮的账、`run` 是执行器参数,两条都不是过程里的一步。 */
 const isContentEntry = (entry: SessionTraceEntry): entry is TracedContentEntry =>
   entry.event.kind !== "usage" && entry.event.kind !== "run";
 type TracedAttachmentEntry = TracedContentEntry & {
@@ -131,20 +130,20 @@ export function contentSegments(
   idPrefix: string,
 ): AgentContentSegment[] {
   // usage 只是这一回合的账,不是执行过程的一步 —— 漏掉这道过滤它会被 auxEvent
-  // 当成未知事件渲染成一行异常。**等待状态不走这道过滤**(见 awaitingAfterTraceEvent)。
+  // 当成未知事件渲染成一行异常。
   const entries = traced.filter(isContentEntry);
   const auxEntries = entries.filter((entry) => entry.event.kind !== "text" && entry.event.kind !== "attachment");
   const attachmentEntries = entries.filter(
     (entry): entry is TracedAttachmentEntry => entry.event.kind === "attachment",
   );
   if (!entries.some((entry) => entry.event.kind === "text")) {
-    // 一段都没切时(整轮压根没有正文),这一段的等待状态就是走完整串原始事件之后那一位。
     return [{
       id: `${idPrefix}:0`,
       markdown: fallbackMarkdown,
       events: auxEvents(auxEntries),
       attachments: attachmentEntries.map((entry) => entry.event.path),
-      awaiting: awaitingAfterTrace(traced),
+      // 等待状态**一律从这里出去时为假**:它不是 trace 能回答的问题(见 markSegmentsAwaiting)。
+      awaiting: false,
     }];
   }
 
@@ -164,8 +163,6 @@ export function contentSegments(
     const previous = segments.at(-1);
     if (!previous) return;
     for (const event of current.events) previous.events = appendExecutionEvent(previous.events, event);
-    // 并进去的那几条是**更晚**发生的,所以等待状态也跟着过去。
-    previous.awaiting = current.awaiting;
     current = newCurrent();
   };
   const place = (entry: TracedContentEntry): void => {
@@ -184,13 +181,9 @@ export function contentSegments(
     if (current.markdown && isVisibleExecutionEvent(event)) pushCurrent();
     current.events = appendExecutionEvent(current.events, event);
   };
-  for (const entry of traced) {
-    // 分段只收进得了执行过程的那些,等待状态认**全部**原始事件 —— 两件事分开算(N1)。
-    if (isContentEntry(entry)) place(entry);
-    const next = awaitingAfterTraceEvent(entry.event);
-    // 落在「处理完这一条之后」的那一段上:上面 place 可能已经另起了一段。
-    if (next !== null) current.awaiting = next;
-  }
+  // 分段只认进得了执行过程展示的那些事件;「此刻还在不在等」压根不在这一层算(见文件里
+  // markSegmentsAwaiting 与 AgentContentSegment.awaiting)。
+  for (const entry of entries) place(entry);
   pushCurrent();
   /* 收尾:**数据优先于布局**。整段 trace 里一个字都没有、只有画不出来的后台通知时,
      上面那条「并回上一段」无处可并(压根没有上一段),事件就卡在 current 里 —— 直接
@@ -212,9 +205,7 @@ export function contentSegments(
     markdown: fallbackMarkdown || structuredMarkdown,
     events: auxEvents(auxEntries),
     attachments: attachmentEntries.map((entry) => entry.event.path),
-    // 对不齐只影响**正文怎么切**,不影响「此刻还在不在等」。丢了这一位,部分写入/历史
-    // trace 的那一路就会把一个还在等的回合显示成已经恢复(N1)。
-    awaiting: awaitingUpstream(segments),
+    awaiting: false,
   }];
 }
 

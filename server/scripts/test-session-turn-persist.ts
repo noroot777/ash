@@ -61,7 +61,7 @@ try {
     utimesSync(path, new Date(base + seconds * 1000), new Date(base + seconds * 1000));
   };
   const turnRows = async (sessionId: string) => (await dbClient.execute({
-    sql: "SELECT started_at, ended_at, cwd FROM session_turns WHERE session_id = :sid ORDER BY started_at",
+    sql: "SELECT started_at, ended_at, cwd, outcome FROM session_turns WHERE session_id = :sid ORDER BY started_at",
     args: { sid: sessionId },
   })).rows;
   const counters = async (sessionId: string) => (await dbClient.execute({
@@ -87,7 +87,7 @@ try {
   {
     const root = await seed("RaceTask001");
     const sid = await addSession("RaceTask001", root, { endedAt: at(10) });
-    const close = { sessionId: sid, taskId: "RaceTask001", cwd: root, startedAt: at(0), endedAt: at(10) };
+    const close = { sessionId: sid, taskId: "RaceTask001", cwd: root, startedAt: at(0), endedAt: at(10), outcome: "completed" as const };
     turns.markTurnActive(close);
     await Promise.all([turns.recordTurnSpan(close), turns.openTurn(close)]);
     const rows = await turnRows(sid);
@@ -103,7 +103,7 @@ try {
       args: { start: at(3600), end: at(3610), sid },
     });
     await turns.openTurn({ ...close, startedAt: at(3600) });
-    await turns.recordTurnSpan({ ...close, startedAt: at(3600), endedAt: at(3610) });
+    await turns.recordTurnSpan({ ...close, startedAt: at(3600), endedAt: at(3610), outcome: "completed" });
     svg(root, "own-first.svg", 5);
     svg(root, "other-task-in-break.svg", 1800);
     svg(root, "own-second.svg", 3605);
@@ -119,7 +119,7 @@ try {
   {
     const root = await seed("RaceTask002");
     const sid = await addSession("RaceTask002", root, { endedAt: at(10) });
-    const close = { sessionId: sid, taskId: "RaceTask002", cwd: root, startedAt: at(0), endedAt: at(10) };
+    const close = { sessionId: sid, taskId: "RaceTask002", cwd: root, startedAt: at(0), endedAt: at(10), outcome: "completed" as const };
     turns.markTurnActive(close);
     await Promise.all([turns.openTurn(close), turns.recordTurnSpan(close)]);
     const rows = await turnRows(sid);
@@ -136,7 +136,7 @@ try {
     const sid = await addSession("OpenThenEnd", root, { endedAt: at(10) });
     await turns.openTurn({ sessionId: sid, taskId: "OpenThenEnd", cwd: root, startedAt: at(0) });
     assert.equal((await turnRows(sid))[0].ended_at, null, "开的时候就该是「还没收口」");
-    await turns.recordTurnSpan({ sessionId: sid, taskId: "OpenThenEnd", cwd: null, startedAt: at(0), endedAt: at(10) });
+    await turns.recordTurnSpan({ sessionId: sid, taskId: "OpenThenEnd", cwd: null, startedAt: at(0), endedAt: at(10), outcome: "completed" });
     const rows = await turnRows(sid);
     assert.equal(rows.length, 1);
     assert.equal(String(rows[0].ended_at), at(10), "收尾合并到现存那一行上");
@@ -147,16 +147,32 @@ try {
   // ── ③ 已有结束行：认第一次,不许被改晚 ──────────────────────────────────────────
   // 团队那边旧调度台也可能来收一次同一轮（`closeLead`）。改晚了就是个假区间:那一轮结束
   // 之后别人在同一个目录里做的东西会被算进来。
+  //
+  // **结局跟 `ended_at` 同生共死**（同一道门禁、同一条语句,第 5 轮审查 F3）:常驻进程跑很多
+  // 回合,它后来怎么没的只能结束它**还持有**的那些。一轮已经成功收口的回合被后来那次退出
+  // 追认成失败,窄出口就会把那一轮的「正在重试」重新挂回手机上 —— 这里钉的就是「追改不进去」。
   {
     const root = await seed("EndTwice001");
     const sid = await addSession("EndTwice001", root, { endedAt: at(10) });
     const who = { sessionId: sid, taskId: "EndTwice001", cwd: root, startedAt: at(0) };
-    await turns.recordTurnSpan({ ...who, endedAt: at(10) });
-    await turns.recordTurnSpan({ ...who, endedAt: at(600) });
+    await turns.recordTurnSpan({ ...who, endedAt: at(10), outcome: "completed" });
+    await turns.recordTurnSpan({ ...who, endedAt: at(600), outcome: "failed" });
     const rows = await turnRows(sid);
     assert.equal(rows.length, 1);
     assert.equal(String(rows[0].ended_at), at(10), "结束时刻认第一次写进去的那个");
+    assert.equal(String(rows[0].outcome), "completed", "一轮已经收口的成功回合被后来的退出追认成失败(F3)");
     assert.equal(Number((await counters(sid)).turns_started), 1, "补插出来的完整行也要记一次账,但只记一次");
+  }
+
+  // ── ③' 先开后收那一路也要把结局落上（最常见的形状:openTurn → recordTurnSpan） ─────
+  {
+    const root = await seed("Outcome0001");
+    const sid = await addSession("Outcome0001", root, { endedAt: at(10) });
+    const who = { sessionId: sid, taskId: "Outcome0001", cwd: root, startedAt: at(0) };
+    await turns.openTurn(who);
+    assert.equal((await turnRows(sid))[0].outcome, null, "回合还开着,结局就该是「不知道」");
+    await turns.recordTurnSpan({ ...who, endedAt: at(10), outcome: "failed" });
+    assert.equal(String((await turnRows(sid))[0].outcome), "failed", "收尾合并没把这一轮的结局带上");
   }
 
   // ── ④ 反序重放：先补插完整行,迟到的开始不许把它重新开起来 ───────────────────────
@@ -164,7 +180,7 @@ try {
     const root = await seed("ReplayOpen1");
     const sid = await addSession("ReplayOpen1", root, { endedAt: at(10) });
     const who = { sessionId: sid, taskId: "ReplayOpen1", cwd: root, startedAt: at(0) };
-    await turns.recordTurnSpan({ ...who, endedAt: at(10) });
+    await turns.recordTurnSpan({ ...who, endedAt: at(10), outcome: "completed" });
     await turns.openTurn(who);
     const rows = await turnRows(sid);
     assert.equal(rows.length, 1);
@@ -195,7 +211,7 @@ try {
       sql: "UPDATE sessions SET turn_started_at = :at, ended_at = NULL WHERE id = :sid",
       args: { at: allocated, sid },
     });
-    await turns.recordTurnSpan({ sessionId: sid, taskId: "Rollback001", cwd: root, startedAt: allocated, endedAt: at(180) });
+    await turns.recordTurnSpan({ sessionId: sid, taskId: "Rollback001", cwd: root, startedAt: allocated, endedAt: at(180), outcome: "completed" });
     await dbClient.execute({ sql: "UPDATE sessions SET ended_at = :at WHERE id = :sid", args: { at: at(180), sid } });
 
     const rows = await turnRows(sid);
@@ -232,7 +248,7 @@ try {
       sql: "UPDATE sessions SET turn_started_at = :at, ended_at = :end WHERE id = :sid",
       args: { at: allocated, end: at(180), sid },
     });
-    await turns.recordTurnSpan({ sessionId: sid, taskId: "Primed00001", cwd: root, startedAt: allocated, endedAt: at(180) });
+    await turns.recordTurnSpan({ sessionId: sid, taskId: "Primed00001", cwd: root, startedAt: allocated, endedAt: at(180), outcome: "completed" });
 
     const rows = await turnRows(sid);
     assert.equal(rows.length, 2, "新一轮有属于自己的那一行");

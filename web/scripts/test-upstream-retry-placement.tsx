@@ -156,10 +156,17 @@ const liveSegments = (events: ReturnType<typeof live>[]) => {
   const first = built[0] as Extract<(typeof built)[number], { kind: "agent" }>;
   return first.segments;
 };
-const tracedSegments = (events: (AgentEvent | { kind: string; [key: string]: unknown })[], output = "") => {
+// 落盘重建路。第三个参数就是**服务端给的那一位**(`Session.awaitingUpstream`):重建不许
+// 自己从 trace 末条反推,这一路的等待状态只能从它来(第 5 轮审查 F2,详见下面第 7 节)。
+const tracedSegments = (
+  events: (AgentEvent | { kind: string; [key: string]: unknown })[],
+  output = "",
+  awaiting?: boolean,
+) => {
+  const row = { ...session, ...(awaiting === undefined ? {} : { awaitingUpstream: awaiting }) };
   const built = buildConversationItems(
-    [{ session, output, trace: events.map((event, index) => traced(event, 1_000 * (index + 1))) }],
-    [session],
+    [{ session: row, output, trace: events.map((event, index) => traced(event, 1_000 * (index + 1))) }],
+    [row],
     [],
   );
   const first = built[0] as Extract<(typeof built)[number], { kind: "agent" }>;
@@ -195,15 +202,6 @@ assert.equal(
   false,
   "提示之后落了附件,那是真的恢复输出",
 );
-// 落盘重建路(刷新后)必须给出同一个答案 —— 两路各算一份就会漂。
-assert.equal(awaitingUpstream(tracedSegments([BASH, NOTICE])), true, "刷新之后等待状态丢了");
-assert.equal(awaitingUpstream(tracedSegments([SHOT, NOTICE])), true, "刷新之后「附件先到」同样会算错(第 3 轮 F2)");
-assert.equal(awaitingUpstream(tracedSegments([NOTICE, SHOT])), false);
-assert.equal(
-  awaitingUpstream(tracedSegments([BASH, NOTICE, { kind: "text", text: "恢复后的正文。" }])),
-  false,
-  "刷新之后正文已经在了,却还说在等上游",
-);
 assert.equal(awaitingUpstream([]), false);
 
 // **用量不进执行过程,却是实打实的「上游回了话」**:直播只拿它记账、重建前又把它整条滤掉,
@@ -214,23 +212,56 @@ assert.equal(
   false,
   "用量都回来了(请求显然已经回话),直播还说在等上游(N1)",
 );
+
+// ── 7) 刷新重建:等待状态认服务端那一位,**一个字都不从 trace 反推**(第 5 轮审查 F2) ──
+// 两份落盘产物的缓冲进度不一样:`.md` 边流边写,trace 的正文却攒在 `pendingTraceText` 里,
+// 要等下一条非 text 事件或回合收口才落。于是「重试过、随后正常答完」的回合刷新时,`.md`
+// 已经是完整答复、trace 还停在那条提示上 —— 照 trace 末条反推,那句「正在重试」就永久挂在
+// 答案上方,正是这个任务要修的现象换到了重建这一路。
+const RECOVERED = { kind: "text", text: "上游回来了,这是结论。" } as AgentEvent;
+assert.equal(
+  awaitingUpstream(tracedSegments([BASH, NOTICE])),
+  false,
+  "服务端说不在等了,重建却自己从 trace 的末条推出一个等待(第 5 轮 F2)",
+);
 assert.equal(
   awaitingUpstream(tracedSegments([BASH, NOTICE, USAGE])),
   false,
-  "刷新之后同一串事件又说在等上游 —— 展示过滤把恢复信号一起滤掉了(N1)",
+  "同上:trace 里有什么都不该左右这一位",
 );
-// 上面那串压根没有正文,走的是「整轮没正文」那一档;有正文的这一串才走分段循环。
+// 这一条是 F2 的现场:trace 停在提示上,而 .md 里恢复后的正文已经落全了。
 assert.equal(
-  awaitingUpstream(tracedSegments([{ kind: "text", text: "先说了半句。" } as AgentEvent, NOTICE, USAGE], "先说了半句。")),
+  awaitingUpstream(tracedSegments([BASH, NOTICE], "上游回来了,这是结论。")),
   false,
-  "正文之后的提示已经被用量解除了,分段循环还说在等上游(N1)",
+  "trace 落后于正文,重建据它判出了一个根本不存在的等待(第 5 轮 F2)",
+);
+// 反过来:服务端说**此刻还在等**,刷新之后那句「正在重试」必须还在(sticky)。
+assert.equal(
+  awaitingUpstream(tracedSegments([BASH, NOTICE], "", true)),
+  true,
+  "服务端说还在等上游,刷新一下那句「正在重试」就没了",
+);
+// 连「trace 里压根没有提示」都不影响它:判据是服务端按回合身份判出来的那一位,不是落盘产物。
+assert.equal(
+  awaitingUpstream(tracedSegments([BASH], "先说了半句。", true)),
+  true,
+  "服务端那一位没被带到重建出来的气泡上",
 );
 // 对齐失败那一路(部分写入 / 历史 trace):正文只能整块给,但「此刻还在不在等」不跟着丢。
 const unaligned = tracedSegments(
   [BASH, { kind: "text", text: "trace 里这半句" } as AgentEvent, NOTICE],
   "库里那份正文跟 trace 对不上。",
+  true,
 );
 assert.equal(unaligned.length, 1, "这份用例要的就是对不齐、退成一整段那一路");
-assert.equal(awaitingUpstream(unaligned), true, "对不齐那一路把等待状态丢了(N1)");
+assert.equal(awaitingUpstream(unaligned), true, "对不齐那一路把等待状态丢了");
+// 落在**画得出东西**的末段上:折叠条先滤掉空段再取最后一段(AgentTurnBody),落错了就看不见。
+const withBlankTail = tracedSegments(
+  [{ kind: "text", text: "说完了。" } as AgentEvent, NOTICE, RECOVERED],
+  "说完了。上游回来了,这是结论。",
+  true,
+);
+assert.ok(withBlankTail.length >= 1);
+assert.equal(awaitingUpstream(withBlankTail), true, "等待那一位落到了折叠条读不到的段上");
 
-console.log("上游重试排在执行过程里它发生的那一步下面：落盘、直播、折叠、duet 四路一致，不标红，恢复输出(含只记账的用量)会解除等待");
+console.log("上游重试排在执行过程里它发生的那一步下面：落盘、直播、折叠、duet 四路一致，不标红，恢复输出(含只记账的用量)会解除等待；刷新重建认服务端那一位");
