@@ -33,7 +33,7 @@
 //    戳在 macOS 上的作用是**让「还是同一代」这句话有个依据**,不是把它升格成精确身份。
 import { execFile, execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
-import { IS_WINDOWS, inspectProcessSync, isPidAlive, listProcesses } from "./platform.js";
+import { IS_WINDOWS, inspectProcessSync, isPidAlive, listProcessesComplete } from "./platform.js";
 
 /** 一个号上这一代的戳(带问法标签,见文件头)。**只做相等比较,不要解析它的内容。** */
 export type ProcessGeneration = string;
@@ -349,7 +349,14 @@ function walkDescendants(table: ProcessTree, seed: number): ProcessMember[] {
   return out;
 }
 
-/** 一次读数里同时拿到的父子关系与代次。**两者同源**是这整个文件的前提(见文件头)。 */
+/**
+ * 一次读数里同时拿到的父子关系与代次。**两者同源**是这整个文件的前提(见文件头)。
+ *
+ * 这一问的两档写在返回类型上:`ProcessTableSnapshot` = 问全了的一张表,`null` = 这一问没答
+ * 出来。**所以这里没有「半截表」这一档** —— 消费方(`escapees.ts`)把缺席读作「不在树上」,
+ * 而半截表里的缺席什么都证明不了;三个构造函数因此在任何读数故障上都答 `null`,不拿已经
+ * 拿到的那部分拼一张表出来(第 5 轮审查 F1 在 `treeViaPs` 上实测了相反做法的后果)。
+ */
 export type ProcessTableSnapshot = {
   kids: Map<number, number[]>;
   gens: Map<number, ProcessGeneration>;
@@ -395,11 +402,11 @@ async function treeViaPs(): Promise<ProcessTree | null> {
       // **带时限**(第 4 轮审查 N4):挂死的 ps 会把进程树这一问、以及等着它的清理一起拖住。
       // 被掐掉时 stdout 多半是空的 ⇒ 这一问答 `null`(没问出来),调用方据此留着重试。
       { maxBuffer: 16 * 1024 * 1024, timeout: 10_000, env: { ...process.env, LC_ALL: "C", LANG: "C" } },
-      // 被时限掐掉时 stdout 可能有**半截**:那半截不是一棵完整的进程树,拿它当答案等于把
-      // 没扫到的那部分默认成「没有这些进程」。所以超时一律按「这一问没答出来」(null)。
-      (error, stdout) => resolve(
-        error && (error.killed || error.signal || !stdout) ? null : stdout || "",
-      ),
+      // **出了错就整问作废,哪怕 stdout 里已经有东西**(第 5 轮审查 F1)。上一版只拒超时和
+      // 信号,于是「退 2 + 一行输出」照样被解析成一棵树 —— 而缺席在这棵树里读作「不在树上」,
+      // 没扫到的后代于是被当成不存在。`ps -A` 跑成功就是退 0,非零只能说明这一问没答全,
+      // 半截表不是一棵进程树。判据与 `track-evidence.ts` 的 `heldNames` 同源:**宁可整问重来**。
+      (error, stdout) => resolve(error ? null : stdout || ""),
     );
   });
   if (out === null) return null;
@@ -418,8 +425,10 @@ async function treeViaPs(): Promise<ProcessTree | null> {
 
 /** Windows:进程表那一行自带 `startedAt`(见 platform.ts),所以这里本来就是单次读数。 */
 async function treeViaProcessList(): Promise<ProcessTree | null> {
-  const rows = await listProcesses();
-  if (!rows.length) return null;
+  // **要问全了的那一支**(第 5 轮审查 F1 的同类出口):`listProcesses` 把读数故障吞成「就这些
+  // 行」,而这里的缺席会被读成「这个进程不在树上」。半截表在这条路上不是少点信息,是错答案。
+  const rows = await listProcessesComplete();
+  if (!rows?.length) return null;
   const tree: ProcessTree = { kids: new Map(), gens: new Map() };
   for (const row of rows) {
     const startedAt = row.startedAt?.trim();

@@ -1,4 +1,4 @@
-// **追踪证据**:本次运行专属的那个继承 fd(文件)、「谁还握着它」这一问的三档回答、以及
+// **追踪证据**:本次运行专属的那个继承 fd(文件)、「谁还握着它」这一问怎么作答、以及
 // 这份证据的寿命(租约 + 启动期清扫)。
 //
 // 从 kill.ts 搬出来的理由同 child-identity.ts:三摊各自顶着 700 行,而这一摊的使用方
@@ -38,7 +38,7 @@ const trackFiles = new WeakMap<ChildProcess, string>();
 export const trackPathOf = (child: ChildProcess): string | null => trackFiles.get(child) ?? null;
 
 /**
- * 「谁还握着这个运行专属文件」—— 三档,**`unknown` 不许读成没有**(见 `HolderProbe`)。
+ * 「谁还握着这个运行专属文件」——**两位**:发现了谁、问全了没有(见 `HolderProbe`)。
  *
  * 这一问现在有**两个**运行专属文件要问:追踪文件(高位继承 fd)和这一次运行的输出文件
  * (根的 stdout,`unit-token.ts` 的 `runOutPathOf`)。名字因此不再带 `track` —— 判据对两者
@@ -57,7 +57,7 @@ export const probeFileHolders = (path: string): Promise<HolderProbe> => trackHol
 //  · **误杀** —— 反过来,先读到裸号码、隔着一次 await 再去问进程表要启动时刻,那个号这期间
 
 /**
- * **「谁还握着这个文件」这一问的三档回答** —— 上一版把它折成了 `number[]`,于是
+ * **「谁还握着这个文件」这一问的回答** —— 最初这里折成了 `number[]`,于是
  * 「确证没人握着」和「这一问自己失败了」长得一模一样(空数组)。审查实测的后果:注入一个
  * 退出码 2、零输出的 `lsof`,周期复核与启动清扫**两条路都把还有活持有者的证据删掉了** ——
  * 而在 POSIX 上根退出、后代重父之后,这个文件名正是继续找回那些后台持有者的唯一线索。
@@ -65,21 +65,54 @@ export const probeFileHolders = (path: string): Promise<HolderProbe> => trackHol
  * 所以这一层的规矩跟记号那一问同源(proc.ts 的四档):**只有「问全了、确实没有」才允许
  * 销毁证据**;问不出来要保留文件、保留清理责任,安排下一次重试。
  */
-export type HolderProbe =
-  /** 确证有人握着(至少这几个),**每个都带着它是怎么握着的**(见 `FileHolder`)。 */
-  | { kind: "held"; holders: FileHolder[] }
-  /** 确证**问全了**、而且一个持有者都没有 —— 唯一允许销毁证据的那一档。 */
-  | { kind: "empty" }
+export type HolderProbe = {
   /**
-   * 这一问自己没答出来(lsof 不在、报错、超时、输出不完整)。**不等于没有**。
+   * **这一问答到什么程度**。`"complete"` = 问全了,`found` 就是全部;否则是没问全的事由。
    *
-   * `lost` 把这一档再分两种,因为它们该导向不同的处置:
-   *  · `lost: false`(默认)—— 这一次查询失败,**下一次还问得出来** ⇒ 留证据、排重试;
-   *  · `lost: true`   —— 路径名这条线索**本身没了**(文件已被删),再问多少次都是同一个
-   *    答案 ⇒ 证据和责任照样不许当成「已清空」销掉,但别再排无穷的重试,按「追到这里
-   *    为止」收档(语义同 `monitor_reclaim_debts.closed_at`)。
+   * 这一位独立于 `found` 存在,是因为上一版把它们压成了同一条轴(`held` / `empty` /
+   * `unknown` 三档)。「发现了两个、随后查询中断」这种回答在那套形状里**无法表达** ——
+   * 只能挑一档,而 `trackHolders` 挑的是 `held`(有号就算确证)。于是下游把它读成「正好
+   * 这些」:逐个探活、都退了就答 `empty`,证据释放、责任销账。第 5 轮审查用真实故障
+   * `lsof`(先报自己、再退 2)实测:活后代心跳 21→33,库里那一行被删掉了。
+   *
+   * 分成两位之后,「至少这些」这件事在类型里就说得出来了,而且任何想把 `found` 当全集用
+   * 的地方都绕不过 `scan` 这一位。
    */
-  | { kind: "unknown"; reason: string; lost?: boolean };
+  scan: HolderScan;
+  /**
+   * 已经发现的持有者,**每个都带着它是怎么握着的**(见 `FileHolder`)。
+   *
+   * `scan === "complete"` 时它是全集;否则它只是「**至少**这些」—— 里面的每一个都是硬的
+   * 正面证据(发现一个活着的写手就足以确证残留),但它为空、或者里面的号都退了,都**推不出**
+   * 没覆盖到的那部分也是空的。
+   */
+  found: FileHolder[];
+};
+
+/** 问全了,或者**没问全的事由**(见 `HolderScanFault`)。 */
+export type HolderScan = "complete" | HolderScanFault;
+
+/**
+ * 这一问为什么没答全(lsof 不在、报错、超时、只吐了半截)。**不等于没有持有者**。
+ *
+ * `lost` 把它再分两种,因为处置相反:
+ *  · `false` —— 这一次查询失败,**下一次还问得出来** ⇒ 留证据、排重试;
+ *  · `true`  —— 路径名这条线索**本身没了**(文件已被删),再问多少次都是同一个答案 ⇒ 证据
+ *    和责任照样不许当成「已清空」销掉,但别再排无穷的重试,按「追到这里为止」收档
+ *    (语义同 `monitor_reclaim_debts.closed_at`)。
+ */
+export type HolderScanFault = { fault: string; lost: boolean };
+
+/** 没问全的事由;`null` = 问全了。消费 `found` 的地方都得先过这一问。 */
+export const holderScanFault = (probe: HolderProbe): HolderScanFault | null =>
+  probe.scan === "complete" ? null : probe.scan;
+
+/** 确证空:**问全了**而且一个持有者都没有 —— 唯一允许销毁证据的那一档。 */
+export const provenNoHolders = (probe: HolderProbe): boolean =>
+  probe.scan === "complete" && !probe.found.length;
+
+/** 「这一次运行没有这条线索」:缺的是**资源**不是设备 ⇒ 没有东西能握着它 ⇒ 正面答空。 */
+export const noSuchFileProbe = (): HolderProbe => ({ scan: "complete", found: [] });
 
 /**
  * **一个持有者是「怎么」握着这个文件的** —— 光有号不够。
@@ -130,14 +163,16 @@ const PROBE_TIMEOUT_MS = 10_000;
 /**
  * `lsof -F pfan <file>`:此刻还握着这次运行那个继承 fd 的号,**连 fd 与访问模式一起**。
  *
- * **退出码 1 不等于「查全了、没找到」**(本轮审查 F2 实测):路径不存在时 lsof 打印
+ * **退出码 1 不等于「查全了、没找到」**(第 2 轮审查 F2 实测):路径不存在时 lsof 打印
  * `status error ... No such file or directory` 之后**也退 1**。上一版把全部退出 1 读成确证空,
  * 于是这两件事长得一模一样 —— 而它们的后果相反:真的没人握着可以销毁证据,查询出错只能重试。
  *
- * 所以分档看的是 **stdout 有没有号 + stderr 有没有报错**,退出码只用来排除「它自己崩了」:
- *  · stdout 里有号 ⇒ `held`(哪怕同时报了错 —— 报错的可能是别的路径);
- *  · 退出 0、或退出 1 且 stderr 干净 ⇒ `empty`;
- *  · 其余一律 `unknown`,并区分「文件还在、只是这一问没答出来」与「文件已经没了」(`lost`)。
+ * **它也会「吐了一半再出错」**(第 5 轮审查 F1 实测)。所以这两件事分别作答,互不覆盖:
+ *  · **发现了谁** —— `parseHolders(stdout)`,永远原样带上去(正面线索不因出错而作废);
+ *  · **问全了吗** —— 退出码 / 信号 / stderr 任一指向故障就是没问全(`scanFaultOf`)。
+ *
+ * 上一版是「stdout 里有号 ⇒ 确证有人握着」一句 early return,排在全部错误检查前面,于是
+ * 本轮新加的 10 秒时限在「已经有半截输出」时被整个绕过。
  *
  * **文件已经没了为什么不算确证空**:`unlink` 只摘掉名字,仍握着那个 fd 的进程继续活着、继续
  * 写它 —— 只是再也没法按路径名把它们查出来。那是「线索断了」,不是「人走了」。
@@ -147,21 +182,32 @@ async function trackHolders(trackPath: string): Promise<HolderProbe> {
     (res) => execFile("lsof", ["-F", "pfan", "--", trackPath], { timeout: PROBE_TIMEOUT_MS },
       (err, stdout, stderr) => res({ err, out: stdout || "", errOut: stderr || "" })),
   );
-  const holders = parseHolders(probe.out);
-  if (holders.length) return { kind: "held", holders };
-  if (!probe.err) return { kind: "empty" };
-  // 被时限掐掉的那一次:**没答出来**,而且文件可能还在(第 4 轮审查 N4)。挂死的 lsof 会
-  // 把这一问、同键那把锁、以及等着它的结算一起拖住,所以宁可按「这一次没答出来」收场。
-  if (probe.err.killed || probe.err.signal) {
-    return { kind: "unknown", reason: `lsof 超过 ${PROBE_TIMEOUT_MS} 毫秒没回,已中止`, lost: !existsSync(trackPath) };
+  const found = parseHolders(probe.out);
+  const fault = scanFaultOf(probe.err, probe.errOut, trackPath);
+  return { scan: fault ?? "complete", found };
+}
+
+/**
+ * 这一次 `lsof` 到底问全了没有。`null` = 问全了。
+ *
+ * 退出码只用来排除「它自己崩了」,不用来数持有者:
+ *  · 被时限掐掉(`killed`/`signal`)⇒ 没问全(第 4 轮审查 N4:挂死的 lsof 会把这一问、同键
+ *    那把锁、以及等着它的结算一起拖住,所以宁可中止并按「这一次没答全」收场);
+ *  · `≥2` 是它自己出错,`ENOENT`(字符串码)是这台机器上根本没有 lsof ⇒ 没问全;
+ *  · 退出 1 + stderr 干净 ⇒ 问全了(「没有匹配」就是这个形状);
+ *  · 退出 1 + stderr 有它自己那几句定型故障 ⇒ 没问全。
+ */
+function scanFaultOf(
+  err: ExecFileException | null, stderr: string, path: string,
+): HolderScanFault | null {
+  if (!err) return null;
+  const lost = !existsSync(path);
+  if (err.killed || err.signal) {
+    return { fault: `lsof 超过 ${PROBE_TIMEOUT_MS} 毫秒没回,已中止`, lost };
   }
-  if (probe.err.code !== 1) {
-    // `≥2` 是它自己出错;`ENOENT`(字符串码)是这台机器上根本没有 lsof。
-    return { kind: "unknown", reason: `lsof 退出码 ${String(probe.err.code)}` };
-  }
-  const fault = lsofFault(probe.errOut);
-  if (!fault) return { kind: "empty" };           // 退出 1 + stderr 干净 = 真的没人握着
-  return { kind: "unknown", reason: fault, lost: !existsSync(trackPath) };
+  if (err.code !== 1) return { fault: `lsof 退出码 ${String(err.code)}`, lost };
+  const fault = lsofFault(stderr);
+  return fault ? { fault, lost } : null;
 }
 
 /**
@@ -218,10 +264,14 @@ function parseHolders(out: string): FileHolder[] {
   return holders;
 }
 
-/** 只想知道「还有没有活着的持有者」的那几处:`unknown` 必须**当成有**(不许据此释放)。 */
+/**
+ * 只想知道「还有没有活着的持有者」的那几处:**没问全必须当成有**(不许据此释放)。
+ *
+ * 「已发现的那几个号都退了」只有在问全了的时候才等于「没人握着」。半截查询里那几个号退掉
+ * 之后,没覆盖到的那部分一个字都没被证明过(第 5 轮审查 F1 点的租约那条出口)。
+ */
 export const holdersMayExist = (probe: HolderProbe): boolean =>
-  probe.kind === "unknown"
-  || (probe.kind === "held" && probe.holders.some((h) => isPidAlive(h.pid)));
+  !!holderScanFault(probe) || probe.found.some((h) => isPidAlive(h.pid));
 
 // 追踪 fd(见 killEscapees):打开一个本次运行专属文件,把 fd 作为 stdio[3] 传给
 // 子进程 —— 后代无论怎么换组/被收养都带着它,stop 时可按文件名 lsof 反查。

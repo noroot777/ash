@@ -29,7 +29,7 @@ import {
 import { childKillAuthorized } from "./child-identity.js";
 import { unitTokenOf } from "./unit-token.js";
 import {
-  holderMayOwn, holdersMayExist, probeFileHolders, trackPathOf, type HolderProbe,
+  holderMayOwn, holderScanFault, holdersMayExist, noSuchFileProbe, probeFileHolders, trackPathOf,
 } from "./track-evidence.js";
 
 // ── 归属事实 + 同源代次:**一份身份事实,探活 / 扩树 / TERM / 补刀共用** ──────────
@@ -193,12 +193,16 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   }
 
   // ② 再问归属线索。
-  const probe = trackPath ? await probeFileHolders(trackPath) : emptyProbe;
-  if (probe.kind === "unknown") faults.push(`追踪文件持有者问不出来:${probe.reason}`);
+  const probe = trackPath ? await probeFileHolders(trackPath) : noSuchFileProbe();
+  // **没问全就算这一轮没问清楚**(第 5 轮审查 F1):上一版只在整问失败(`unknown`)时记故障,
+  // 而「发现了两个、随后 lsof 退 2」那种半截回答当时长成 `held`,于是 `answered` 仍是 true ——
+  // 调用方据此释放证据、销掉责任。已发现的那几个照样当正面线索用(下面的 `owners`)。
+  const scanFault = holderScanFault(probe);
+  if (scanFault) faults.push(`追踪文件持有者这一问没答全:${scanFault.fault}`);
   // **只读的持有者不配当树根**(第 3 轮审查 F1):追踪文件是以写模式打开再继承下去的,所以
   // 真后代一定是写模式;只读打开它的是别人(诊断工具、看客)。「打开过这个文件」证明不了
   // 归属,而这里授权的是**整棵子树**的击杀。
-  const holders = probe.kind === "held" ? probe.holders : [];
+  const holders = probe.found;
   const owners = holders.filter(holderMayOwn);
   // 有持有者、却一个都答不出模式 ⇒ 这一问**没答全**:不授权,但也不许说这一轮问清楚了。
   if (holders.length && !owners.length && holders.every((h) => h.mode === "unknown")) {
@@ -234,8 +238,6 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   }
   return { targets: [...targets.values()], answered: !faults.length, faults, unit: freshUnit };
 }
-
-const emptyProbe: HolderProbe = { kind: "empty" };
 
 /**
  * 这个根此刻还被它自己那份依据授权着吗(见上面那张表)。

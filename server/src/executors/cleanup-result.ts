@@ -39,7 +39,7 @@
 // 两问之间反过来是**合取**:哪一问没有任何设备作答,整条结论就是 `silent` —— 不许销账,
 // 但可以「追到这里为止」(收档:停止自动重试、保留记录与定位线索)。
 import { isPidAlive } from "../platform.js";
-import { holderMayOwn, type HolderProbe } from "./track-evidence.js";
+import { holderMayOwn, holderScanFault, type HolderProbe } from "./track-evidence.js";
 
 export type CleanupResult =
   | { kind: "empty" }
@@ -135,11 +135,12 @@ export function judgeByClues(clues: readonly ClueAnswer[]): CleanupResult {
  * 可它的 stdout 还接在这次运行的输出文件上,继续往用户目录里写。于是局部的空被当成了
  * 整项资源的空:结论 `empty`、证据释放、一笔债都没留下。
  *
- * 判据与记号那一层同源:
- *  · `held` 且确实还有活着的号 ⇒ `remaining`(这是最硬的那种残留证据);
- *  · `held` 但那几个号都已经没了 ⇒ 这条线索这一刻证明不了残留 ⇒ `empty`;
- *  · `empty` ⇒ 确证没人握着;
- *  · `unknown` ⇒ **「问不出来」不是「没有」**,照 `unknown` 往上传,由调用方保留责任与证据。
+ * 判据与记号那一层同源,**按「正面证据 → 问全了吗 → 剩下的」三步走**:
+ *  · 发现的号里有活着的写手 ⇒ `remaining`(最硬的那种残留证据,**不依赖问全没问全**);
+ *  · 这一问没问全 ⇒ `unknown`:已发现的那几个号都退了,推不出没覆盖到的那部分也空
+ *    (第 5 轮审查 F1 —— 上一版在这里把半截查询当全集用,于是真的 DELETE 了一行活债);
+ *  · 问全了、只剩只读/模式问不出的持有者 ⇒ `unknown`(分不出后代还是看客);
+ *  · 问全了、一个活着的都没有 ⇒ `empty`,确证没人握着。
  *
  * `null` = **这条线索这一次运行根本没有**(非 detached 的运行没有输出文件、Windows 不开追踪
  * 文件):缺的是**资源**不是设备,没有文件就没有东西能握着它 ⇒ 正面答 `empty`(见顶部那段
@@ -152,25 +153,30 @@ export function judgeByClues(clues: readonly ClueAnswer[]): CleanupResult {
  */
 export function residueFromProbe(label: string, probe: HolderProbe | null): CleanupResult {
   if (!probe) return { kind: "empty" };
-  if (probe.kind === "empty") return { kind: "empty" };
-  if (probe.kind === "unknown") {
-    return { kind: "unknown", detail: `${label}这一问没答出来:${probe.reason}` };
-  }
-  const alive = probe.holders.filter((h) => isPidAlive(h.pid));
-  if (!alive.length) return { kind: "empty" };
-  // **写模式才算确证残留**(第 3 轮审查 F1):这一问要答的是「还有没有东西在往这次运行的
-  // 文件里写」。后代继承的是写端(追踪文件开的是 `"w"`、输出文件是根的 stdout)。
+  const alive = probe.found.filter((h) => isPidAlive(h.pid));
+  // ① **写模式的活持有者 = 确证残留**(第 3 轮审查 F1):这一问要答的是「还有没有东西在往
+  // 这次运行的文件里写」。后代继承的是写端(追踪文件开的是 `"w"`、输出文件是根的 stdout)。
+  // 放在最前面是因为它是**正面**证据:发现一个就成立,跟这一问后来有没有出错无关。
   const writers = alive.filter(holderMayOwn);
   if (writers.length) {
     return { kind: "remaining", detail: `${label}仍被 ${writers.map((h) => h.pid).join(",")} 写着` };
   }
-  // 剩下的是只读的(或者模式问不出来的)持有者:「有人握着」是事实,「握着的是不是这次运行
-  // 的后代」这一问没答出来 —— 别再把这两件事折成一个 `empty`。用户自己 tail 日志就是只读
-  // 打开的,它更像看客而不是残留,可「更像」不是证明:所以这一档只说「问不清楚」,账留着、
+  // ② **没问全就不许往下读成空**(第 5 轮审查 F1)。`found` 这时只是「至少这些」:它们全退了
+  // 只说明**已发现的那部分**空了,没覆盖到的那部分一个字都没被证明过。
+  const fault = holderScanFault(probe);
+  if (fault) {
+    return { kind: "unknown", detail: `${label}这一问没答全:${fault.fault}` };
+  }
+  // ③ 问全了,剩下的是只读的(或者模式问不出来的)持有者:「有人握着」是事实,「握着的是不是
+  // 这次运行的后代」这一问没答出来 —— 别再把这两件事折成一个 `empty`。用户自己 tail 日志就是
+  // 只读打开的,它更像看客而不是残留,可「更像」不是证明:所以这一档只说「问不清楚」,账留着、
   // 下一轮再问,而不是当场宣布收干净。
-  return {
-    kind: "unknown",
-    detail: `${label}被 ${alive.map((h) => h.pid).join(",")} 握着、但不是写模式 ——`
-      + " 分不出是这次运行的后代还是只读的看客",
-  };
+  if (alive.length) {
+    return {
+      kind: "unknown",
+      detail: `${label}被 ${alive.map((h) => h.pid).join(",")} 握着、但不是写模式 ——`
+        + " 分不出是这次运行的后代还是只读的看客",
+    };
+  }
+  return { kind: "empty" };                       // 问全了 + 一个活着的都没有
 }

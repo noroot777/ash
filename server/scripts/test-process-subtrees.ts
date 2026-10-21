@@ -30,7 +30,9 @@ const { inspectProcess } = await import("../src/proc.js");
 const {
   processTreeMembers, processTableSnapshot, subtreesOf, stillSameGeneration,
 } = await import("../src/process-generation.js");
-const { probeFileHolders, holderMayOwn } = await import("../src/executors/track-evidence.js");
+const {
+  probeFileHolders, holderMayOwn, holderScanFault, provenNoHolders,
+} = await import("../src/executors/track-evidence.js");
 // 建库:⑭ 的清理责任要真的落进 `agent_cleanup_debts`,少了这一步「落库失败」会被读成
 // 「这条路本来就不落库」,披露那一半就钉不住。
 const { ensureSchema } = await import("../src/db/index.js");
@@ -181,15 +183,15 @@ if (IS_WINDOWS) {
   const absent = join(tmpdir(), `ash-track-absent-${process.pid}-${Date.now()}`);
   assert.equal(existsSync(absent), false, "这条用例要一个确定不存在的路径");
   const missing = await probeFileHolders(absent);
-  assert.equal(missing.kind, "unknown", "文件不在 ⇒ 线索断了,不是「确证没人握着」");
-  assert.equal(missing.kind === "unknown" && missing.lost, true,
+  assert.ok(holderScanFault(missing), "文件不在 ⇒ 线索断了,不是「确证没人握着」");
+  assert.equal(holderScanFault(missing)?.lost, true,
     "而且要分得出「再问也没用」这一种,好让清理责任按「追到这里为止」收档");
 
   // 对照:文件在、真的没人握着 ⇒ 这才是唯一允许销毁证据的那一档。
   const quiet = join(tmpdir(), `ash-track-quiet-${process.pid}-${Date.now()}`);
   writeFileSync(quiet, "");
   tempFiles.push(quiet);
-  assert.equal((await probeFileHolders(quiet)).kind, "empty", "文件在、没人握着 ⇒ 确证空");
+  assert.equal(provenNoHolders(await probeFileHolders(quiet)), true, "文件在、没人握着 ⇒ 确证空");
 
   // 对照:有人握着 ⇒ held。
   const heldPath = join(tmpdir(), `ash-track-held-${process.pid}-${Date.now()}`);
@@ -203,13 +205,12 @@ if (IS_WINDOWS) {
   closeSync(fd);
   await wait(400);
   const held = await probeFileHolders(heldPath);
-  assert.equal(held.kind, "held", "有人握着就要答 held");
-  assert.ok(held.kind === "held" && held.holders.some((h) => h.pid === holder.pid),
-    "而且要点出是谁");
+  assert.equal(held.scan, "complete", "lsof 正常跑完 ⇒ 这一问问全了");
+  assert.ok(held.found.some((h) => h.pid === holder.pid), "而且要点出是谁");
   // **还要点出「他是怎么握着的」**(第 3 轮审查 F1):这一问的答案被用来授权整棵子树的击杀,
   // 而裸 pid 列表把「以写模式继承下来的真后代」和「只读打开同一个文件的看客」混成一类。
   // fd 号 + 访问模式是唯一分得开的地方:继承进去的是写模式的那一份。
-  const asDescendant = held.kind === "held" ? held.holders.find((h) => h.pid === holder.pid) : undefined;
+  const asDescendant = held.found.find((h) => h.pid === holder.pid);
   assert.equal(asDescendant?.fd, 3, "继承进去的就是 3 号 fd:这一问要答得出 fd 号");
   assert.equal(asDescendant?.mode, "write", "以写模式打开再继承 ⇒ 写模式");
   assert.equal(holderMayOwn(asDescendant!), true, "写模式才配当树根");
@@ -224,7 +225,7 @@ if (IS_WINDOWS) {
   closeSync(rfd);
   await wait(400);
   const bothHeld = await probeFileHolders(heldPath);
-  const asViewer = bothHeld.kind === "held" ? bothHeld.holders.find((h) => h.pid === viewer.pid) : undefined;
+  const asViewer = bothHeld.found.find((h) => h.pid === viewer.pid);
   assert.equal(asViewer?.mode, "read", "只读打开的要答只读");
   assert.equal(holderMayOwn(asViewer!), false, "只读的看客不配当树根(授权只认写模式)");
   try { process.kill(viewer.pid!, "SIGKILL"); } catch { /* 已经没了 */ }

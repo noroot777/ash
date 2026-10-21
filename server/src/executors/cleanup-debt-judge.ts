@@ -23,7 +23,9 @@ import { processIdentity, processUnitEvidence, type UnitEvidence } from "../proc
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { agentCleanupDebts } from "../db/schema.js";
 import { describeEvidence } from "./escapees.js";
-import { fileHoldersAnswerable, probeFileHolders, type HolderProbe } from "./track-evidence.js";
+import {
+  fileHoldersAnswerable, holderScanFault, probeFileHolders, type HolderProbe,
+} from "./track-evidence.js";
 import {
   cleanupRetriable, judgeByClues, mergeClueAnswers, residueFromProbe,
   type CleanupResult, type ClueAnswer,
@@ -182,18 +184,21 @@ const pathResidue = (clues: PathClues): CleanupResult | null => {
  * 路径这边有没有「下一轮还问得出来」的那种没答出来。
  *
  * **判据看探测本身,不看合出来的那一档**:`unknown` 这个答案有两种来源,而它们的处置相反 ——
- *  · 探测答 `unknown` 且 `lost`(名字自己没了)⇒ 再问多少次都是同一句 ⇒ 不可重试(该收档);
- *  · 探测答 `unknown` 但文件还在(这一次查询失败)、或者答 `held` 而持有者只读/模式问不出
- *    (分不出是后代还是看客)⇒ 下一轮完全可能换答案(看客关掉窗口、持有者退出)⇒ 可重试。
+ *  · 没问全而且 `lost`(名字自己没了)⇒ 再问多少次都是同一句 ⇒ 不可重试(该收档);
+ *  · 没问全但文件还在(这一次查询失败)⇒ 下一轮完全可能换答案 ⇒ 可重试;
+ *  · 问全了、但发现的持有者只读/模式问不出(分不出是后代还是看客)⇒ 看客关掉窗口、持有者
+ *    退出,下一轮就能销账 ⇒ 可重试。
  *
- * 上一版只看 `p.kind === "unknown"`,于是第二种(`held` + 只读)被判成不可重试,一笔其实
- * 下一轮就能销掉的账在第一次清扫里就被收了档 —— 而收过档的行不再进重试名单,它从此永远
- * 销不掉(test:cleanup-debt 第 3 组实测)。
+ * 最初这里只看「整问失败」那一种,于是第三种被判成不可重试,一笔其实下一轮就能销掉的账在
+ * 第一次清扫里就被收了档 —— 而收过档的行不再进重试名单,它从此永远销不掉(test:cleanup-debt
+ * 第 3 组实测)。
  */
 const pathRetriable = (clues: PathClues): boolean =>
-  [clues.track, clues.out].some(
-    (p) => p?.kind === "held" || (p?.kind === "unknown" && !p.lost),
-  );
+  [clues.track, clues.out].some((p) => {
+    if (!p) return false;
+    const fault = holderScanFault(p);
+    return fault ? !fault.lost : p.found.length > 0;
+  });
 
 /**
  * 记号那一问写成同一档。`null` = **这一行没有这台设备**(升级前建的老会话没种过记号),
@@ -242,4 +247,3 @@ export function debtDisposition(judged: JudgedDebt): DebtDisposition {
   if (judged.result.kind === "remaining") return "keep";
   return judged.retriable ? "keep" : "close";
 }
-

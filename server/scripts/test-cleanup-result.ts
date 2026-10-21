@@ -47,5 +47,31 @@ console.log("1) 判空的不变量:弃权压过「空」,空数组另当别论")
   else fail("把「没有这个文件」也记成了弃权(每个回合都会欠一笔债)");
 }
 
+console.log("2) 一条路径线索:半截查询不许读成空");
+{
+  const { residueFromProbe } = await import("../src/executors/cleanup-result.js");
+  // 这一组是纯代数:**不起进程**。用一个必然不存在的号当「已经退出的持有者」,
+  // 用自己这个号当「还活着的持有者」—— 真实现场的那一版在 test:holder-scan 里。
+  const dead = { pid: 0x7ffffff, fd: 5, mode: "write" } as const;
+  const alive = { pid: process.pid, fd: 5, mode: "write" } as const;
+  const partial = { fault: "夹具:lsof 退出码 2", lost: false } as const;
+
+  const washed = residueFromProbe("夹具文件", { scan: partial, found: [dead] });
+  if (washed.kind === "unknown") ok("发现的号都退了、但这一问没问全 ⇒ 问不出来,不是空");
+  else fail(`判成了 ${washed.kind} —— 没覆盖到的那部分一个字都没被证明过(第 5 轮 F1)`);
+
+  if (residueFromProbe("夹具文件", { scan: partial, found: [] }).kind === "unknown") {
+    ok("半截查询连一个持有者都没发现 ⇒ 同样只是没问全");
+  } else fail("空的半截回答被当成了确证空");
+
+  const hard = residueFromProbe("夹具文件", { scan: partial, found: [alive] });
+  if (hard.kind === "remaining") ok("发现一个活着的写手 ⇒ 确证残留,不因这一问后来出错而作废");
+  else fail(`正面证据被出错盖掉了,判成 ${hard.kind}`);
+
+  if (residueFromProbe("夹具文件", { scan: "complete", found: [dead] }).kind === "empty") {
+    ok("问全了、发现的号都退了 ⇒ 这才是允许销账的那一档");
+  } else fail("问全了也不敢答空,那每一笔账都永远推不动");
+}
+
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
 process.exit(bad ? 1 : 0);

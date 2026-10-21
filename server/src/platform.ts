@@ -95,15 +95,25 @@ export function powerShellSync(script: string, timeoutMs = 10_000): string {
 }
 
 /** 异步版本。同样「失败即空串」——系统探测拿不到不该拖垮调用方。 */
-export function powerShell(script: string, timeoutMs = 10_000): Promise<string> {
+export const powerShell = async (script: string, timeoutMs = 10_000): Promise<string> =>
+  (await runPowerShell(script, timeoutMs)) ?? "";
+
+/**
+ * 同上,但**分得出「它跑完了」和「它出错了」**(`null` = 没答出来)。
+ *
+ * 需要这一支是因为「出错 + 吐了半截」和「跑完了、就这些」在 `powerShell` 那一支里长得一模
+ * 一样,而两者的后果相反:诊断用途拿半截也比没有好,而**进程表**那一路的缺席会被读成「这个
+ * 进程不在树上」—— 半截表于是等于把没扫到的后代宣布成不存在(第 5 轮审查 F1 的同一个类)。
+ */
+function runPowerShell(script: string, timeoutMs: number): Promise<string | null> {
   const exe = powerShellExe();
-  if (!exe) return Promise.resolve("");
+  if (!exe) return Promise.resolve(null);
   return new Promise((resolve) => {
     execFile(
       exe,
       ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodeCommand(script)],
       { timeout: timeoutMs, maxBuffer: 16 << 20, windowsHide: true },
-      (_err, stdout) => resolve(stdout || ""),
+      (err, stdout) => resolve(err ? null : stdout || ""),
     );
   });
 }
@@ -180,16 +190,35 @@ function parsePosixPs(text: string): ProcessRow[] {
  * 全表快照(pid / ppid / 命令行)。**startedAt 只有 Windows 那支填得上** —— POSIX 这支
  * 为了跟历史口径一致仍用 `ps -axo pid=,ppid=,command=`,要启动时间请单独调
  * `inspectProcess`(它按单个 pid 问,带 lstart)。
- * 查不到一律空数组:系统探测失败不该拖垮调用方。
+ *
+ * **这一支是尽力而为的那一档**:查不到、或者只拿到半截,一律按拿到的那些返回 —— 它的三个
+ * 调用方(预览诊断、MCP 持有者、删目录失败后的取证)都只拿它**加**信息,缺席在那边从来不
+ * 当证明用。要拿它证明「某个进程不在」的,用 `listProcessesComplete`。
  */
 export async function listProcesses(timeoutMs = 3000): Promise<ProcessRow[]> {
-  if (IS_WINDOWS) return parseRows(await powerShell(PS_PROCESS_SCRIPT, timeoutMs));
-  const text = await new Promise<string>((resolve) => {
-    execFile("ps", POSIX_PS_ARGS, { timeout: timeoutMs, maxBuffer: 8 << 20 }, (_e, stdout) =>
-      resolve(stdout || ""),
+  return (await listProcessesComplete(timeoutMs)) ?? [];
+}
+
+/**
+ * 同上,但**问全了才给表**(`null` = 这一问没答出来)。
+ *
+ * 进程表那一路靠「缺席」下结论:一个号不在表里就等于「它不在这棵树上」。所以半截表在那边
+ * 不是「少点信息」而是**错的答案** —— 它把没扫到的后代宣布成不存在,而那正是清理要找的人
+ * (第 5 轮审查 F1 在 POSIX 那一支上实测:`ps` 退 2 + 一行输出照样被解析成了一棵进程树)。
+ *
+ * 判据跟 `track-evidence.ts` 的 `heldNames` 同源:**宁可整问重来**,下一轮再问。
+ */
+export async function listProcessesComplete(timeoutMs = 3000): Promise<ProcessRow[] | null> {
+  if (IS_WINDOWS) {
+    const out = await runPowerShell(PS_PROCESS_SCRIPT, timeoutMs);
+    return out === null ? null : parseRows(out);
+  }
+  const text = await new Promise<string | null>((resolve) => {
+    execFile("ps", POSIX_PS_ARGS, { timeout: timeoutMs, maxBuffer: 8 << 20 }, (err, stdout) =>
+      resolve(err ? null : stdout || ""),
     );
   });
-  return parsePosixPs(text);
+  return text === null ? null : parsePosixPs(text);
 }
 
 /**
