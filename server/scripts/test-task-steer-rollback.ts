@@ -426,12 +426,18 @@ try {
     );
   }
 
-  // ── ⑩ F1-B 的结构锁：**方向世代这一列的写入口只有 task-direction-epoch.ts** ───────────────
+  // ── ⑩ 结构锁：**方向身份这四列的写入口只有 task-direction-epoch.ts** ──────────────────────
   //
-  // 上面三条钉得住现在这几个调用点，而这道闸能被绕开的方式只有一种：某处自己 `.set` 这一列、
-  // 或者在某条状态落位里顺手把它置回某个值（`status.ts` 清三列身份时就差点连它一起清）。
-  // 「以后记得走 writer」是靠自觉，所以按语句扫一遍 —— 这正是 `task-resume-prompt.ts` 那一列
-  // 学过三次的同一课（第 3 轮审查 F1：代次只有在所有 writer 都维护它时才是归属凭证）。
+  // 上面三条钉得住现在这几个调用点，而这道闸能被绕开的方式有两种：某处自己 `.set` 世代那一列
+  // 或把它置回某个值（`status.ts` 清身份时就差点连它一起清），以及 —— 更隐蔽的那种 —— 某处把
+  // `turnDirectionStart(…)` **展开回「只写三列身份」的样子**，世代就此不再前进。后者只盯
+  // `directionEpoch` 的检查一个字都发现不了：实测把两处生产起跑各自展开，上面那些用例照样
+  // 全绿（第 1 轮审查 N2）。所以锁的是整组身份 —— 装新方向 / 清身份 / 回滚放回，三种写法都
+  // 在那一个文件里，谁在自己那边拼这四列中的任何一列就红。
+  //
+  // 这正是 `task-resume-prompt.ts` 那一列学过三次的同一课（第 3 轮审查 F1：代次只有在所有
+  // writer 都维护它时才是归属凭证）。已知边界：`const patch = {…}` 先攒好再 `.set(patch)` 的
+  // 写法两条规则都看不见 —— 现有代码里没有这种形状，真要加也该先问问为什么不走 writer。
   {
     // 取本机路径只能走 `fileURLToPath`：`URL.pathname` 是百分号编码的 URL 路径，仓库目录名里
     // 有空格时它给的是 `%20`，结构锁会在那种检出上「悄悄通不了」（第 4 轮审查 N2）。
@@ -449,7 +455,7 @@ try {
     for (const file of files) {
       if (file.endsWith("task-direction-epoch.ts")) continue; // 存储层本身
       const src = readFileSync(file, "utf8");
-      // (a) `update(tasks)` 的 `.set({…})` 字面量里直写这一列
+      // (a) `update(tasks)` 的 `.set({…})` 字面量里直写这四列中的任何一列
       for (const m of src.matchAll(/update\(\s*tasks\s*\)/g)) {
         const setAt = src.indexOf(".set(", m.index);
         if (setAt < 0) continue;
@@ -460,20 +466,23 @@ try {
           else if (src[end] === ")") { depth -= 1; if (depth === 0) break; }
         }
         const block = src.slice(setAt, end + 1);
-        if (/\bdirectionEpoch\s*:/.test(block)) {
+        if (/\b(directionEpoch|activeTurnToken|activeDirectionToken|activeDirectionVersion)\s*:/.test(block)) {
           offenders.push(`${file.slice(srcDir.length)}：${block.replace(/\s+/g, " ").slice(0, 90)}`);
         }
       }
-      // (b) 先攒 patch 对象再 `.set(patch)` 的那种写法（`status.ts` 就是这个形状）——
+      // (b) 先攒 patch 对象再 `.set(patch)` 的那种写法（`status.ts` 原来就是这个形状）——
       //     归零一次就等于把这道闸整条废掉，而它不会出现在任何 `.set({…})` 字面量里。
-      for (const m of src.matchAll(/\.directionEpoch\s*=[^=]/g)) {
+      for (const m of src.matchAll(
+        /\.(directionEpoch|activeTurnToken|activeDirectionToken|activeDirectionVersion)\s*=[^=]/g,
+      )) {
         offenders.push(`${file.slice(srcDir.length)}：${src.slice(m.index, m.index + 60).split("\n")[0]}`);
       }
     }
     assert.deepEqual(
       offenders, [],
-      "方向世代只许由 task-direction-epoch.ts 写（用它导出的 patch）——自己 `.set` 或者在状态"
-      + `落位里把它归零，迟到的回滚就又分不清「我那一轮」和「后来那一轮」了：\n${offenders.join("\n")}`,
+      "方向身份这四列只许由 task-direction-epoch.ts 写（用它导出的三个 patch）——自己拼一组"
+      + "身份就会漏掉世代那一笔，迟到的回滚于是又分不清「我那一轮」和「后来那一轮」了："
+      + `\n${offenders.join("\n")}`,
     );
   }
 

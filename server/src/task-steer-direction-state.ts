@@ -21,8 +21,10 @@ import { and, eq, isNull, ne } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { confirmDone, takeConfirmed } from "./runs.js";
-import { directionEpochUnchangedSince, directionRotate } from "./task-direction-epoch.js";
+import { confirmDone, revokeConfirmed, takeConfirmed } from "./task-confirmation.js";
+import {
+  directionEpochUnchangedSince, directionIdentityRestored, directionRotate,
+} from "./task-direction-epoch.js";
 import {
   announceResumePrompt,
   restoreResumePrompt,
@@ -75,7 +77,6 @@ export async function clearPreviousDirectionState(
 ): Promise<PreviousDirectionState> {
   // 硬切降级先换 token 再 kill；原生 steer 仍是同一个活动 turn，必须保留 token，让同一
   // 进程里后续的 complete_task / ask_question 继续有效。两种路径都清两次内存快路。
-  const confirmedBefore = takeConfirmed(taskId);
   const current = (await db
     .select({
       activeTurnToken: tasks.activeTurnToken,
@@ -92,15 +93,18 @@ export async function clearPreviousDirectionState(
     })
     .from(tasks)
     .where(eq(tasks.id, taskId))).at(0);
-  if (!current) {
-    if (confirmedBefore) confirmDone(taskId);
-    throw new Error("任务不存在");
-  }
+  if (!current) throw new Error("任务不存在");
+  // **收走内存那张票要先知道它该属于哪一代**（runs.ts）：只收旧方向这一代的，新方向自己拿到
+  // 的确认一个字都不能碰。所以这一步排在读出 `directionEpoch` 之后 —— 读与取之间只隔一次
+  // select，期间落下的确认同属这一代，由下面那次 take 兜住。
+  const confirmedBefore = takeConfirmed(taskId, current.directionEpoch);
   const clearedTurnToken = rotateTurnToken ? id() : current.activeTurnToken;
   const clearedDirectionToken = id();
   const clearedDirectionVersion = Math.max(current.activeDirectionVersion + 1, 2);
   if (!clearedTurnToken) {
-    if (confirmedBefore) confirmDone(taskId);
+    // 还票按**它来的那一代**还：这一笔还没改过任何东西，所以它仍是当下这一代，本回合的结算
+    // 照样认（见 runs.ts 的口径：作不作数由消费者比当下那一代来答）。
+    if (confirmedBefore) confirmDone(taskId, current.directionEpoch);
     throw new Error("当前回合缺少身份 token，无法原生引导");
   }
   const updatedAt = now();
@@ -166,13 +170,18 @@ export async function clearPreviousDirectionState(
         generation: tasks.resumePromptGeneration,
         epoch: tasks.directionEpoch,
       });
-    memoryConfirmed = takeConfirmed(taskId) || memoryConfirmed;
+    memoryConfirmed = takeConfirmed(taskId, current.directionEpoch) || memoryConfirmed;
     if (!updated.length) throw new Error("当前回合状态已变化，请重试引导");
     generationAfterClear = updated[0]!.generation;
     epochAfterClear = updated[0]!.epoch;
   } catch (error) {
-    memoryConfirmed = takeConfirmed(taskId) || memoryConfirmed;
-    if (memoryConfirmed) confirmDone(taskId);
+    memoryConfirmed = takeConfirmed(taskId, current.directionEpoch) || memoryConfirmed;
+    // 还给**它原来那一代**。这里有一条新失败路径：CAS 落空（这中间又跑完了一轮新回合，
+    // 世代已经变了）—— 那时还回去的这张票对当下这一代不作数，下一次结算会把它当没有确认过
+    // 直接丢掉，而不是让一轮从没交卷的工作显示「已完成」（第 1 轮审查 F1
+    // `clear-CAS-rejected-but-memory-restored`）。UPDATE 自己抛错那一支则相反：行没动过，
+    // 这一代仍是它，本回合照样认得出 —— 两种都由消费者比对，这里不必分情况。
+    if (memoryConfirmed) confirmDone(taskId, current.directionEpoch);
     throw error;
   }
   if (current?.question) {
@@ -210,7 +219,12 @@ export async function discardLateDirectionState(
   // 原生请求确认接收前，旧方向已经发出的完成/提问/检查点仍可能刚好落库；成功 ACK 后
   // 再清一遍。此刻新消息还没开始执行，因此不会误删新方向自己产生的状态；turn token
   // 保持不变，方向 token 已在第一次清理时旋转。
-  takeConfirmed(taskId);
+  //
+  // 这一扫**不分代次**（`revokeConfirmed`）：它的语义就是「ACK 之前落下来的任何残留都不作数」。
+  // 此刻新方向的正文还没写进去、方向协议 token 也还没到 agent 手上，所以这一格里不可能有属于
+  // 新方向的票；而旧方向那张可能是绕开身份 CAS 落进来的（它不一定带着旧那一代的编号）—— 按代
+  // 收会把它漏掉，那正是「旧方向的完成票不得穿进新方向」要挡的东西。
+  revokeConfirmed(taskId);
   const late = (await db
     .select({ question: tasks.question, resumePrompt: tasks.resumePrompt })
     .from(tasks)
@@ -246,7 +260,7 @@ export async function discardLateDirectionState(
   // 快照:那说明身份已经换走,回滚本来就该按原来那一代判成过期。
   const generationAfterDiscard = discarded.at(0)?.generation;
   if (generationAfterDiscard !== undefined) previous.resumePromptGeneration = generationAfterDiscard;
-  takeConfirmed(taskId);
+  revokeConfirmed(taskId);
   if (late?.question) {
     try {
       bus.publish({
@@ -297,13 +311,8 @@ export async function restorePreviousDirectionState(
   let restored = await db
     .update(tasks)
     .set({
-      activeTurnToken: previous.activeTurnToken,
-      activeDirectionToken: preserveDirectionBarrier
-        ? previous.clearedDirectionToken
-        : previous.activeDirectionToken,
-      activeDirectionVersion: preserveDirectionBarrier
-        ? previous.clearedDirectionVersion
-        : previous.activeDirectionVersion,
+      // 放回旧身份,不是装一个新方向 ⇒ 不推世代（写法收口在 task-direction-epoch.ts）。
+      ...directionIdentityRestored(previous, preserveDirectionBarrier),
       completeConfirmedAt: previous.completeConfirmedAt,
       question: previous.question,
       questionOptions: previous.questionOptions,
@@ -356,7 +365,12 @@ export async function restorePreviousDirectionState(
   }
   // 检查点填回去了也算「恢复过东西」：那两件事各判资格，任何一件成了都不该报「什么都没恢复」。
   if (!restored.length) return checkpointBack;
-  if (previous.memoryConfirmed) confirmDone(taskId);
+  // **内存那张票也得带着世代回去**（runs.ts）。还的是「这条改派离开时任务停在的那一代」：
+  //  · 同一轮内正常失败 ⇒ 当下就是那一代，本回合结算照样认；
+  //  · SQL 刚落、新回合紧接着开跑（报告实测的那条 TOCTOU）⇒ 当下已经是下一代，这张票对新
+  //    一轮不作数，结算会把它当没确认过丢掉 —— 否则一轮从没交卷的工作直接显示「已完成」
+  //    （第 1 轮审查 F1）。
+  if (previous.memoryConfirmed) confirmDone(taskId, previous.clearedDirectionEpoch);
   if (previous.question) {
     try {
       bus.publish({
@@ -411,5 +425,5 @@ export async function restorePreviousCompletionState(
         : eq(tasks.questionItems, previous.questionItems),
     ))
     .returning({ id: tasks.id });
-  if (restored.length && previous.memoryConfirmed) confirmDone(taskId);
+  if (restored.length && previous.memoryConfirmed) confirmDone(taskId, previous.clearedDirectionEpoch);
 }

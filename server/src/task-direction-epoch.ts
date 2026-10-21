@@ -28,18 +28,23 @@
 // 检查点一处不符就连提问和完成票一起放弃恢复，新工作一个字没送出去，用户的提问、agent 的完成
 // 确认和那段待续工作三样同时消失。三张票必须各判资格，这一列只给后两张用。
 //
-// ## 唯一写入口
+// ## 唯一写入口：**方向身份这四列的每一种写法都在这个文件里**
 //
 // 代次只有在**所有** writer 都维护它时才是归属凭证（`task-resume-prompt.ts` 文件头记着这一课
-// 的三次学费）。所以这一列的写法只有这个文件导出的两个 patch，任何地方都不许自己拼
-// `.set({ directionEpoch… })`，更不许把它置回某个具体值：
+// 的三次学费）。光禁止「直写 `directionEpoch`」挡不住真正会发生的那种退化 —— 某处把
+// `turnDirectionStart(...)` 展开回「只写三列身份」的样子，世代就此不再前进，而直写检查一个字
+// 都发现不了（第 1 轮审查 N2 实测：两处生产起跑各自展开，既有回归照样 exit 0）。所以收口的
+// 是**整组身份**，一共只有三种写法：
 //
-//  · 新回合开跑：`turnDirectionStart(turnToken, directionToken)`（连带那三列身份一起给全）
-//  · 改派旋转方向：`directionRotate(turnToken, directionToken, version)`
-//  · 回滚的资格条件：`directionEpochUnchangedSince(epoch)`
+//  · 装上一个新方向（回合开跑 / 改派轮换）：`turnDirectionStart` / `directionRotate`
+//    —— 世代跟在同一笔里，展不开也绕不过；
+//  · 回合结束清掉身份：`directionIdentityCleared()`（`status.ts`，有意不碰世代）；
+//  · 改派失败把旧身份放回去：`directionIdentityRestored()`（不是新方向，所以不推世代）。
+//
+// 外加回滚的资格条件 `directionEpochUnchangedSince(epoch)`。
 //
 // 这条不靠自觉：`test-task-steer-rollback.ts` 的结构锁遍历 `server/src` 的每一条
-// `update(tasks)`，谁在自己那边直写这一列就红。
+// `update(tasks)`，谁在自己那边直写这四列中的任何一列就红。
 import { eq, sql, type SQL } from "drizzle-orm";
 import { tasks } from "./db/schema.js";
 
@@ -76,3 +81,38 @@ export const turnDirectionStart = (turnToken: string, directionToken: string) =>
  * 等于谁 —— 那样所有回滚都会被判成过期，连同一轮内的正常失败回滚一起挡死。
  */
 export const directionEpochUnchangedSince = (epoch: number): SQL => eq(tasks.directionEpoch, epoch);
+
+/**
+ * **回合结束，身份作废**（`status.ts` 离开运行态时的那一笔）。
+ *
+ * 有意不碰世代：这一组归零留下的那条分不清的边，正是世代存在的理由（见文件头）。放在这里
+ * 而不是让调用方自己拼，是为了让「写方向身份」只有三种写法、结构锁能一网打尽。
+ */
+export const directionIdentityCleared = () => ({
+  activeTurnToken: null,
+  activeDirectionToken: null,
+  activeDirectionVersion: 0,
+});
+
+/**
+ * **改派失败，把清掉的那组身份放回去**（`task-steer-direction-state.ts` 的精确回滚）。
+ *
+ * 这不是装上一个新方向，所以**不推世代** —— 世代只增不减，回滚本来就不该让它倒退。
+ *
+ * `preserveBarrier`：Claude 没确认原生引导、这一轮已被结束时，回合身份要放回去，但方向屏障
+ * 得留着（旧方向迟到的完成/提问仍然不许写进来），所以方向那两格仍填清场时装上的那一组。
+ */
+export const directionIdentityRestored = (
+  snapshot: {
+    activeTurnToken: string | null;
+    activeDirectionToken: string | null;
+    activeDirectionVersion: number;
+    clearedDirectionToken: string;
+    clearedDirectionVersion: number;
+  },
+  preserveBarrier: boolean,
+) => ({
+  activeTurnToken: snapshot.activeTurnToken,
+  activeDirectionToken: preserveBarrier ? snapshot.clearedDirectionToken : snapshot.activeDirectionToken,
+  activeDirectionVersion: preserveBarrier ? snapshot.clearedDirectionVersion : snapshot.activeDirectionVersion,
+});
