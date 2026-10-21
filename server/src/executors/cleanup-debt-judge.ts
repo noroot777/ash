@@ -184,8 +184,8 @@ const pathResidue = (clues: PathClues): CleanupResult | null => {
  * 路径这边有没有「下一轮还问得出来」的那种没答出来。
  *
  * **判据看探测本身,不看合出来的那一档**:`unknown` 这个答案有两种来源,而它们的处置相反 ——
- *  · 没问全而且 `lost`(名字自己没了)⇒ 再问多少次都是同一句 ⇒ 不可重试(该收档);
- *  · 没问全但文件还在(这一次查询失败)⇒ 下一轮完全可能换答案 ⇒ 可重试;
+ *  · 没问全、而且再问也是同一句(名字自己没了;lsof 每次都声明输出不完整)⇒ 不可重试(该收档);
+ *  · 没问全但下一次还问得出来(这一次查询失败)⇒ 下一轮完全可能换答案 ⇒ 可重试;
  *  · 问全了、但发现的持有者只读/模式问不出(分不出是后代还是看客)⇒ 看客关掉窗口、持有者
  *    退出,下一轮就能销账 ⇒ 可重试。
  *
@@ -197,7 +197,7 @@ const pathRetriable = (clues: PathClues): boolean =>
   [clues.track, clues.out].some((p) => {
     if (!p) return false;
     const fault = holderScanFault(p);
-    return fault ? !fault.lost : p.found.length > 0;
+    return fault ? fault.retriable : p.found.length > 0;
   });
 
 /**

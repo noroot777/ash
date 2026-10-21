@@ -54,7 +54,7 @@ console.log("2) 一条路径线索:半截查询不许读成空");
   // 用自己这个号当「还活着的持有者」—— 真实现场的那一版在 test:holder-scan 里。
   const dead = { pid: 0x7ffffff, fd: 5, mode: "write" } as const;
   const alive = { pid: process.pid, fd: 5, mode: "write" } as const;
-  const partial = { fault: "夹具:lsof 退出码 2", lost: false } as const;
+  const partial = { fault: "夹具:lsof 退出码 2", retriable: true } as const;
 
   const washed = residueFromProbe("夹具文件", { scan: partial, found: [dead] });
   if (washed.kind === "unknown") ok("发现的号都退了、但这一问没问全 ⇒ 问不出来,不是空");

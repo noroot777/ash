@@ -90,6 +90,14 @@ export type ProcessSubtree<S = ProcessTreeSeed> = {
   root: ProcessMember | null;
   /** 种子名下的全部后代,各自带着与父子关系同源的那一代。 */
   descendants: ProcessMember[];
+  /**
+   * 这棵树里**在进程表上、可是代次核验不了**的号(含种子自己)。
+   *
+   * 它们不进 `descendants` —— 没有代次就没有下刀凭证(见文件头「戳问不出来 ⇒ 不许发信号」)。
+   * 但它们是实打实的残留事实,调用方据此答「这一问没问清楚」,而不是把它们当成不存在
+   * (第 6 轮审查 F1)。
+   */
+  unverified: number[];
 };
 
 /**
@@ -100,18 +108,31 @@ export type ProcessSubtree<S = ProcessTreeSeed> = {
  * `state`(第 3 项),所以「第 N 项」= 这里的下标 `N - 3`。
  */
 function procStatFields(pid: number): string[] | null {
+  const read = readProcStat(pid);
+  return typeof read === "string" ? null : read;
+}
+
+/**
+ * 同上,但**分得清「这个号已经退了」和「这一行读不出来」**(第 6 轮审查 F1)。
+ *
+ * 建树那一侧非得分开:退掉的进程跳过是对的(它确实不在了),而**还在、只是这一行读失败**的
+ * 那个号跳过就等于把它宣布成不存在。`ENOENT`/`ESRCH` 是前者(`readdir` 与这次读之间它退了),
+ * 其余(权限、格式不认)是后者。
+ */
+function readProcStat(pid: number): string[] | "gone" | "unreadable" {
   let raw: string;
   try {
     raw = readFileSync(`/proc/${pid}/stat`, "utf8");
-  } catch {
-    return null;
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    return code === "ENOENT" || code === "ESRCH" ? "gone" : "unreadable";
   }
   const close = raw.lastIndexOf(")");
-  if (close < 0) return null;
+  if (close < 0) return "unreadable";
   // `trim()` 是为了行尾那个换行:真实的 stat 有 52 项,末尾的换行只黏在最后一项上,但别让
   // 「我们要的那一项恰好是最后一项」这种情况(裁过的 stat、将来变短的格式)把数字读成非数字。
   const fields = raw.slice(close + 2).trim().split(" ");
-  return fields.length > 19 ? fields : null;
+  return fields.length > 19 ? fields : "unreadable";
 }
 
 /** 第 22 项 `starttime`:内核在 `fork` 时写死的节拍数 —— 同一个号换代必变。 */
@@ -321,18 +342,32 @@ export function subtreesOf<S extends { pid: number }>(
     // 1 号是 init:拿它当树根会把整台机器的进程走成「我们的后代」。
     const usable = Number.isInteger(pid) && pid > 1;
     const gen = usable ? table.gens.get(pid) ?? null : null;  // 根此刻不在表上 = 它已经退了
+    const walk = usable ? walkDescendants(table, pid) : { members: [], unverified: [] };
+    // **种子自己核验不了也要说出来**:`gen` 为空有两种,「它退了」与「它还在、只是这一代
+    // 核验不了」处置相反,而上一版把两者都读成 `root: null`(第 6 轮审查 F1)。
+    const seedUnverified = usable && !gen && table.unverified.has(pid);
     return {
       source,
       seed: { pid, gen },
       root: gen ? { pid, gen } : null,
-      descendants: usable ? walkDescendants(table, pid) : [],
+      descendants: walk.members,
+      unverified: seedUnverified ? [pid, ...walk.unverified] : walk.unverified,
     };
   });
 }
 
-/** 一个种子名下的后代。**不跨子树去重** —— 两棵子树各自授权,共有的成员两边都要出现。 */
-function walkDescendants(table: ProcessTree, seed: number): ProcessMember[] {
-  const out: ProcessMember[] = [];
+/**
+ * 一个种子名下的后代。**不跨子树去重** —— 两棵子树各自授权,共有的成员两边都要出现。
+ *
+ * **代次读不出来的那些号照样要穿过去**(第 6 轮审查 F1):上一版在它们身上 `continue`,于是
+ * 它自己不算成员、**它下面整条分支也一起从遍历里消失了**。现在它进 `unverified`(不给下刀
+ * 凭证),遍历接着往它的孩子走。
+ */
+function walkDescendants(
+  table: ProcessTree, seed: number,
+): { members: ProcessMember[]; unverified: number[] } {
+  const members: ProcessMember[] = [];
+  const unverified: number[] = [];
   const seen = new Set<number>([seed]);           // 环形 ppid(不该有,但别据此死循环)
   const stack = [seed];
   while (stack.length) {
@@ -341,12 +376,12 @@ function walkDescendants(table: ProcessTree, seed: number): ProcessMember[] {
       if (seen.has(kid)) continue;
       seen.add(kid);
       const gen = table.gens.get(kid);
-      if (!gen) continue;                         // 代次读不出 ⇒ 不收这个成员(宁可漏收)
-      out.push({ pid: kid, gen });
-      stack.push(kid);
+      if (gen) members.push({ pid: kid, gen });
+      else unverified.push(kid);                  // 在表上、核验不了 ⇒ 不收但要报
+      stack.push(kid);                            // 两种都接着往下走
     }
   }
-  return out;
+  return { members, unverified };
 }
 
 /**
@@ -360,6 +395,25 @@ function walkDescendants(table: ProcessTree, seed: number): ProcessMember[] {
 export type ProcessTableSnapshot = {
   kids: Map<number, number[]>;
   gens: Map<number, ProcessGeneration>;
+  /**
+   * **在表上、可是这一代核验不了的号**(第 6 轮审查 F1 的修复落点)。
+   *
+   * 「存在」「这一代可核验」「不存在」是三件事,上一版只有两档:读不出代次的行**整行丢掉**,
+   * 连它那条父子关系一起丢 —— 于是遍历时它既不是成员、也不在树上,「核验不了」被读成了
+   * 「没有后代」。审查在 Windows 真机上实测:活后代的 `CreationDate` 取不到,生产清理答
+   * `empty`、一笔责任都没落,那个后代心跳 25→37 还在写。
+   *
+   * 这一档的处置:**不敢下刀**(代次是下刀的唯一凭证,见文件头),但它是实打实的残留事实 ——
+   * 遍历要穿过它继续往下走,收口处要据它答「这一问没问清楚」。
+   */
+  unverified: Set<number>;
+  /**
+   * 这张表里**连号都没认出来**的行数(见 platform.ts 的 `ProcessTableRead`)。
+   *
+   * 跟 `unverified` 的区别:那一档知道是哪个号,这一档连名字都没有,所以只能计数。收口处据它
+   * 答「这一问没问清楚」—— 不然那几行在表里就等于不存在,而缺席在这条路上会被读成「不在树上」。
+   */
+  unnamed: number;
 };
 type ProcessTree = ProcessTableSnapshot;
 
@@ -378,17 +432,23 @@ function treeViaProc(): ProcessTree | null {
   } catch {
     return null;
   }
-  const tree: ProcessTree = { kids: new Map(), gens: new Map() };
+  const tree: ProcessTree = { kids: new Map(), gens: new Map(), unverified: new Set(), unnamed: 0 };
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
     const pid = Number(entry);
-    const fields = procStatFields(pid);
-    if (!fields) continue;
-    const jiffies = procStarttime(fields);
-    if (!jiffies) continue;
-    tree.gens.set(pid, `j:${jiffies}`);
-    const ppid = fields[1];
+    const read = readProcStat(pid);
+    // 它在 `readdir` 与这次读之间退掉了 ⇒ 确实不在了,跳过是对的。
+    if (read === "gone") continue;
+    // 还在、只是这一行读不出来 ⇒ 记成「核验不了」而不是丢掉(连 ppid 也读不到,所以它挂不
+    // 到任何树上 —— 这一档只保证它不会被当成「已经证明不存在」)。
+    if (read === "unreadable") { tree.unverified.add(pid); continue; }
+    const ppid = read[1];
+    // **父子关系照记**:代次读不出来不影响它在树上的位置,而丢掉这条边会让它下面整条分支
+    // 从遍历里消失(第 6 轮审查 F1)。
     if (ppid && /^\d+$/.test(ppid)) addKid(tree, Number(ppid), pid);
+    const jiffies = procStarttime(read);
+    if (jiffies) tree.gens.set(pid, `j:${jiffies}`);
+    else tree.unverified.add(pid);
   }
   return tree;
 }
@@ -410,15 +470,19 @@ async function treeViaPs(): Promise<ProcessTree | null> {
     );
   });
   if (out === null) return null;
-  const tree: ProcessTree = { kids: new Map(), gens: new Map() };
+  const tree: ProcessTree = { kids: new Map(), gens: new Map(), unverified: new Set(), unnamed: 0 };
   for (const line of out.split("\n")) {
     const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
-    if (!m) continue;
+    if (!m) {
+      // 开头像个号、整行却没认出来 ⇒ 这一行在表里等于不存在,如实计数(见 `unnamed`)。
+      if (/^\s*\d/.test(line)) tree.unnamed += 1;
+      continue;
+    }
     const startedAt = m[3]!.trim();
-    if (!startedAt) continue;
     const pid = Number(m[1]);
-    tree.gens.set(pid, `t:${startedAt}`);
-    addKid(tree, Number(m[2]), pid);
+    addKid(tree, Number(m[2]), pid);                // 边照记(见 treeViaProc 里那段)
+    if (startedAt) tree.gens.set(pid, `t:${startedAt}`);
+    else tree.unverified.add(pid);                  // 在表上、核验不了这一代
   }
   return tree;
 }
@@ -427,13 +491,18 @@ async function treeViaPs(): Promise<ProcessTree | null> {
 async function treeViaProcessList(): Promise<ProcessTree | null> {
   // **要问全了的那一支**(第 5 轮审查 F1 的同类出口):`listProcesses` 把读数故障吞成「就这些
   // 行」,而这里的缺席会被读成「这个进程不在树上」。半截表在这条路上不是少点信息,是错答案。
-  const rows = await listProcessesComplete();
-  if (!rows?.length) return null;
-  const tree: ProcessTree = { kids: new Map(), gens: new Map() };
+  const read = await listProcessesComplete();
+  if (!read?.rows.length) return null;
+  const rows = read.rows;
+  const tree: ProcessTree = { kids: new Map(), gens: new Map(), unverified: new Set(), unnamed: 0 };
   for (const row of rows) {
+    // `ConvStart` 合法地给得出空串、`parseRows` 合法地给得出 null —— 那是「这一代核验不了」,
+    // 不是「这个号不在」(第 6 轮审查 F1 在真机上实测了把它当缺席的后果)。
     const startedAt = row.startedAt?.trim();
     if (startedAt) tree.gens.set(row.pid, `t:${startedAt}`);
+    else tree.unverified.add(row.pid);
     addKid(tree, row.ppid, row.pid);
   }
+  tree.unnamed = read.unnamed;
   return tree;
 }

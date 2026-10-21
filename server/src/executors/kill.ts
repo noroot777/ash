@@ -23,7 +23,7 @@ import { processGroupMembersSync } from "../process-generation.js";
 import { canShoot, killProvenUnit, reclaimState } from "../monitor-reclaim-evidence.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { runOutPathOf, unitTokenOf } from "./unit-token.js";
-import { childKillAuthorized, childStillOurs } from "./child-identity.js";
+import { adoptedIdentityOf, childKillAuthorized, childStillOurs } from "./child-identity.js";
 import {
   fileHoldersAnswerable, probeFileHolders, releaseTrackEvidence, trackPathOf,
 } from "./track-evidence.js";
@@ -193,9 +193,35 @@ async function sweepAndJudge(child: ChildProcess): Promise<CleanupResult> {
  * 当时只写号(行上 `rootStartedAt=null`),而就算把精确时刻补上,清扫侧也压根没读它。
  * 现在两头都接上:这里负责记下来,`judgeDebtRow` 负责把它当一台设备来问。
  */
+/**
+ * 落账时记下的**根这一代**。记错一代比记不下来更坏,所以这一问宁可答「不知道」。
+ *
+ * 上一版无条件现查 `inspectProcess(pid)`:这句跑在收尾那一刻,而根很可能已经退了 —— 号被
+ * 系统分给用户的别的程序之后,现查到的是**那个陌生进程**的启动时刻,它会被原样写进账上的
+ * 「根这一代」。后果不是少记一笔,是记歪一笔:下一次清扫拿它去核 `processIdentity`,陌生进程
+ * 的代次当然「对得上」,于是那一行永远停在「根进程还活着」,既销不掉,还把别人的进程指成
+ * 我们这次运行的残留。(第 6 轮审查 N10)
+ *
+ * 两档各有各的权威来源:
+ *  · 接回来的号 —— 用接管时核下来的那一代(`adoptedIdentityOf`),这一刻不许再现查;
+ *  · 自己 spawn 的孩子 —— 只有「这个号此刻还是它」(内核权威答案)时现查才算它的代次,
+ *    已经 reap 掉就记 null,让下一次清扫如实走到「没记启动时刻、核验不了」那一档(弃权收档)。
+ */
 function rootClues(child: ChildProcess): { rootPid: number | null; rootStartedAt: string | null } {
-  const pid = child.pid ?? null;
-  return { rootPid: pid, rootStartedAt: pid ? inspectProcess(pid)?.startedAt ?? null : null };
+  // 每一问都单独兜住:这个函数有一半调用点在 catch 里(异常往上抛之前先把责任交出去),
+  // 它自己再抛一次,交接那一步就整个没了 —— 句柄读属性是会抛的(合成句柄、Proxy 包装),
+  // 而「问不出来」在这里有现成的如实答法:留空。`test:cleanup-debt` 第 12 组钉的是这一点。
+  const adopted = tryAsk(() => adoptedIdentityOf(child));
+  if (adopted) return { rootPid: adopted.pid, rootStartedAt: adopted.startedAt };
+  const pid = tryAsk(() => child.pid ?? null);
+  if (!pid) return { rootPid: null, rootStartedAt: null };
+  const stillOurs = tryAsk(() => childStillOurs(child));
+  return { rootPid: pid, rootStartedAt: stillOurs ? inspectProcess(pid)?.startedAt ?? null : null };
+}
+
+/** 问不出来就答 null(含「这一问本身抛了」):落账用得上的线索从不值得为它丢掉一笔责任。 */
+function tryAsk<T>(ask: () => T): T | null {
+  try { return ask(); } catch { return null; }
 }
 
 /**

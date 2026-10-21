@@ -12,6 +12,16 @@
 //  ③ 持久清扫:同一行再扫一遍不许销账、不许收档(文件还在 ⇒ 下一轮还问得出来);
 //  ④ 整张进程表:`ps` 退非零但吐了半截 ⇒ 整问作废,不拿半截表当一棵进程树。
 //
+// 第 6 轮审查又实测了同一个类的另外两种来源事实被丢掉,再加两组:
+//
+//  ⑤ **外部工具正常退出、但自己声明输出不完整**:lsof 扫不动某个挂载时打一句
+//     `Output information may be incomplete.` 然后退 0 —— 上一版的完整性判断排在
+//     「它报错了吗」之后,于是这种回答被构造成「问全了」,活后代的责任被真的 DELETE;
+//  ⑥ **进程表里的活节点缺代次**:它在表上、父子关系也在,只是启动时刻读不出来。上一版
+//     建树时整行丢掉,于是「核验不了」被读成「没有后代」,连它下面的分支一起从遍历里消失。
+//     审查在 Windows 真机上验的是同一处(活后代缺 `CreationDate` ⇒ 结论 empty、一笔债都没落);
+//     这里用 `ps` 夹具在 macOS 上验同一层:**存在 / 可核验 / 不存在是三件事**。
+//
 // 故障只注入在**系统工具边界**(PATH 前置一个真实可执行的夹具),生产代码、SQL 与进程身份
 // 都是真的 —— 跑的是 `cleanupAfterRun` / `sweepAgentCleanupDebts` 本体。
 import assert from "node:assert/strict";
@@ -38,7 +48,8 @@ const { probeFileHolders, holderScanFault, provenNoHolders } = await import("../
 const { listAllCleanupDebts, sweepAgentCleanupDebts } = await import("../src/executors/cleanup-debt.js");
 const { processUnitEvidence } = await import("../src/proc.js");
 const { isPidAlive } = await import("../src/platform.js");
-const { processTableSnapshot } = await import("../src/process-generation.js");
+const { processTableSnapshot, subtreesOf } = await import("../src/process-generation.js");
+const { collectEscapees } = await import("../src/executors/escapees.js");
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const beats = (path: string) => Number(readFileSync(path, "utf8") || "0");
@@ -59,6 +70,19 @@ function installShim(name: string, body: string): string {
 }
 const restorePath = () => { process.env.PATH = ORIGINAL_PATH; };
 
+/**
+ * **退 0、但自己声明输出不完整**的 lsof(第 6 轮审查 F1 的那一下)。
+ *
+ * 它照样把自己报成这个文件的写持有者(所以「发现了谁」这一半是真的),同时打出官方实现里
+ * 那句结论(`Output information may be incomplete.`),然后**正常退出**。
+ */
+const INCOMPLETE_LSOF = 'for argument do target="$argument"; done\n'
+  + 'exec 5>>"$target"\n'
+  + 'printf "p%s\\nf5\\naw\\nn%s\\n" "$$" "$target"\n'
+  + 'printf "lsof: WARNING: can\x27t stat() nfs file system /mnt/stale\\n" >&2\n'
+  + 'printf "      Output information may be incomplete.\\n" >&2\n'
+  + "exit 0\n";
+
 const PARTIAL_LSOF = 'for argument do target="$argument"; done\n'
   + 'exec 5>>"$target"\n'
   + 'printf "p%s\\nf5\\naw\\nn%s\\n" "$$" "$target"\n'
@@ -66,6 +90,7 @@ const PARTIAL_LSOF = 'for argument do target="$argument"; done\n'
   + "exit 2\n";
 
 let bad = 0;
+const strays: number[] = [];                      // 这一轮自己起的、不归 cleanup 管的活进程
 const ok = (m: string) => console.log(`   ✓ ${m}`);
 const fail = (m: string) => { bad += 1; console.log(`   ✗ ${m}`); };
 
@@ -107,7 +132,7 @@ try {
     restorePath();
     rmSync(shim, { recursive: true, force: true });
     const fault = holderScanFault(partial);
-    if (fault && !fault.lost) ok(`半截回答:如实说没问全(${fault.fault})`);
+    if (fault?.retriable) ok(`半截回答:如实说没问全、而且文件还在 ⇒ 值得重试(${fault.fault})`);
     else fail("出错的那一次 lsof 被当成问全了 —— 正是 F1 那一下");
     if (partial.found.length) ok("已经发现的那个持有者照样带上去(正面线索不因出错作废)");
     else fail("半截里的正面线索被一起丢掉了(逃逸枚举就少了树根)");
@@ -165,9 +190,192 @@ try {
     if (table === null) ok("半截表不是一棵进程树:这一问答「没问出来」");
     else fail(`半截表被解析成了一棵树(${table.gens.size} 项)—— 缺席会被读成「不在树上」`);
   }
+  console.log("5) 正常退出、但来源自己声明输出不完整 ⇒ 不许读成问全了");
+  {
+    const shim = installShim("lsof", INCOMPLETE_LSOF);
+    const declared = await probeFileHolders(out);
+    const fault = holderScanFault(declared);
+    if (fault) ok(`如实说没问全(${fault.fault.slice(0, 40)}…)`);
+    else fail("它退 0 就被当成问全了 —— 第 6 轮审查 F1 的那一下");
+    if (fault && !fault.retriable) {
+      ok("而且是不可重试那一档:扫不动的那个挂载还在,下一次是同一句 ⇒ 收档而不是无穷重试");
+    } else if (fault) fail("被判成可重试:那会让这笔账每轮都重问、永不收敛");
+
+    const judged = await cleanupAfterRun(parent);
+    const kept = await listAllCleanupDebts();
+    if (judged.kind !== "empty") ok(`即时清理结论仍是 ${judged.kind}`);
+    else fail("即时清理据此宣布清空(实测过的那条路:责任 1 -> 0,后代还在写)");
+    if (kept.ok && kept.debts.length === 1) ok("责任还在");
+    else fail(`责任被销掉了(现在 ${kept.ok ? kept.debts.length : "读不出"} 笔)`);
+
+    const swept = await sweepAgentCleanupDebts();
+    restorePath();
+    rmSync(shim, { recursive: true, force: true });
+    const rows = await listAllCleanupDebts();
+    if (swept.ok && swept.settled === 0) ok("持久清扫一笔没销");
+    else fail(`清扫销了 ${swept.ok ? swept.settled : "?"} 笔`);
+    if (swept.ok && swept.closed === 1) ok("按「追到这里为止」收档,行留着等人处置");
+    else fail(`收档 ${swept.ok ? swept.closed : "?"} 笔:不可重试的没答全该收档,不该挂着空转`);
+    if (rows.ok && rows.debts.length === 1) ok("行还在(收档不等于销账)");
+    else fail("行没了");
+  }
+
+  console.log("6) 进程表里的活节点缺代次:存在 / 可核验 / 不存在是三件事");
+  if (existsSync("/proc")) {
+    console.log("   ~ 这台机器有 /proc,进程表走的不是 ps 那条路,跳过");
+  } else {
+    // 现场:父进程活着,它下面一个**脱离进程组**的活孩子,孩子再带一个孙子。
+    // 孩子把环境洗掉、不继承任何运行专属文件 —— 于是唯一看得见它的设备就是 ppid 树,
+    // 跟审查在 Windows 真机上那一组同形(那边父进程退出后 ppid 仍指向它)。
+    const beat2 = join(root, "beat2");
+    const kidPidFile = join(root, "kid.pid");
+    const grandPidFile = join(root, "grand.pid");
+    const kidSrc = 'const { spawn } = require("node:child_process");\n'
+      + 'const fs = require("node:fs");\n'
+      + 'const grand = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"],'
+      + ' { detached: false, stdio: "ignore" });\n'
+      + "fs.writeFileSync(process.argv[2], String(grand.pid));\n"
+      + "let n = 0; setInterval(() => fs.writeFileSync(process.argv[1], String(++n)), 50);\n";
+    const token2 = mintUnitToken();
+    const live = spawn(process.execPath, ["-e", `
+      const { spawn } = require("node:child_process");
+      const kid = spawn(process.execPath,
+        ["-e", ${JSON.stringify(kidSrc)}, ${JSON.stringify(beat2)}, ${JSON.stringify(grandPidFile)}],
+        { detached: true, stdio: "ignore", env: {} });
+      require("fs").writeFileSync(${JSON.stringify(kidPidFile)}, String(kid.pid));
+      kid.unref();
+      setInterval(() => {}, 1000);
+    `], { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token2 } });
+    registerUnitToken(live, token2);
+    await wait(700);
+    const kidPid = Number(readFileSync(kidPidFile, "utf8"));
+    const grandPid = Number(readFileSync(grandPidFile, "utf8"));
+    strays.push(kidPid, grandPid);
+    assert.ok(isPidAlive(kidPid) && isPidAlive(grandPid), "这一组要一个活着的孩子和孙子");
+
+    // 夹具只改一件事:把**这个孩子**那一行的启动时刻抹掉(pid/ppid/其它行全部原样)。
+    // 这就是 Windows 上 `ConvStart` 给不出时刻、以及 `ps` 偶发缺字段时的真实输入形状。
+    const shim = installShim("ps",
+      `/bin/ps "$@" | awk -v t=${kidPid} '{ if ($1 == t) printf "%s %s \\n", $1, $2; else print }'\n`);
+    const snap = await processTableSnapshot();
+    const tree = snap ? subtreesOf(snap, [{ pid: live.pid! }])[0]! : null;
+    const swept = await collectEscapees(live);
+    const judged = await cleanupAfterRun(live);
+    restorePath();
+    rmSync(shim, { recursive: true, force: true });
+    const rows = await listAllCleanupDebts();
+
+    if (snap?.unverified.has(kidPid)) ok("快照把它记成「在表上、核验不了这一代」");
+    else fail("缺代次的活节点被整行丢掉了 —— 它于此刻起等于不存在");
+    if (snap?.kids.get(live.pid!)?.includes(kidPid)) ok("父子关系照记(丢掉这条边等于整条分支消失)");
+    else fail("连父子关系一起丢了");
+    if (tree?.unverified.includes(kidPid)) ok("子树如实报出它");
+    else fail("子树没报它");
+    if (!tree?.descendants.some((m) => m.pid === kidPid)) ok("但不进成员名单:没有代次就没有下刀凭证");
+    else fail("给了一个核验不了的号下刀凭证");
+    if (tree?.descendants.some((m) => m.pid === grandPid)) ok("遍历穿过它继续往下走:孙子还在名单里");
+    else fail("它下面整条分支也从遍历里消失了(第 6 轮审查 F1 的后半段)");
+    if (!swept.answered) ok("收口处如实说「这一轮没问清楚」");
+    else fail("仍自称问清楚了 —— 据此就会释放证据、销掉责任");
+    if (judged.kind !== "empty") ok(`清理结论是 ${judged.kind},不是清空`);
+    else fail("清理宣布清空(Windows 真机上实测的那一下:一笔债都没落)");
+    if (rows.ok && rows.debts.length === 2) ok("这一次运行的责任落了库");
+    else fail(`责任没落库(库里 ${rows.ok ? rows.debts.length : "读不出"} 笔)`);
+    await wait(200);
+    const before = beats(beat2);
+    await wait(250);
+    if (isPidAlive(kidPid) && beats(beat2) > before) {
+      ok(`而那个孩子确实还活着、还在写(心跳 ${before} -> ${beats(beat2)})`);
+    } else fail("孩子已经不在了,这一组没测到东西");
+  }
+
+  console.log("7) 进程表里有行连号都没认出来 ⇒ 这一轮不算问清楚");
+  if (existsSync("/proc")) {
+    console.log("   ~ 这台机器有 /proc,进程表走的不是 ps 那条路,跳过");
+  } else {
+    // 现场:整张表照原样出,只多一行**开头像个号、却认不出号**的垃圾(真实诱因是输出被截断、
+    // 或者 Windows 那边某一行字段缺位)。它跟「有号没代次」那一档的区别是连名字都没有,
+    // 所以收口处只能按「这张表有几行没进来」如实报,而不能当它不存在 —— 缺席在这条路上
+    // 读作「不在树上」。
+    const beat3 = join(root, "beat3");
+    const token3 = mintUnitToken();
+    const live = spawn(process.execPath, ["-e", `
+      const fs = require("fs");
+      let n = 0; setInterval(() => fs.writeFileSync(${JSON.stringify(beat3)}, String(++n)), 50);
+    `], { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token3 } });
+    registerUnitToken(live, token3);
+    strays.push(live.pid!);
+    await wait(400);
+
+    const shim = installShim("ps",
+      '/bin/ps "$@"\n'
+      + 'case " $* " in *" -A "*) printf "9999999\\n" ;; esac\n');
+    const snap = await processTableSnapshot();
+    const swept = await collectEscapees(live);
+    const judged = await cleanupAfterRun(live);
+    restorePath();
+    rmSync(shim, { recursive: true, force: true });
+    const rows = await listAllCleanupDebts();
+
+    if (snap && snap.unnamed >= 1) ok(`快照如实数出没认下来的行(${snap.unnamed} 行)`);
+    else fail("认不出来的行被静默丢掉了:那一行自此等于不存在");
+    if (snap?.gens.has(live.pid!)) ok("认得出来的行照旧成表(不是整问作废,还杀得动已证明的目标)");
+    else fail("连认得出来的行也没进表");
+    if (!swept.answered) ok("收口处如实说「这一轮没问清楚」");
+    else fail("仍自称问清楚了 —— 据此就会释放证据、销掉责任");
+    if (swept.faults.some((f) => f.includes("连号都没认出来"))) ok("而且说得出是哪一问没答全");
+    else fail(`没把这一条写进事由:${swept.faults.join(" / ") || "(一条都没有)"}`);
+    if (judged.kind !== "empty") ok(`清理结论是 ${judged.kind},不是清空`);
+    else fail("清理宣布清空 —— 有行没进表,这个结论没有证据来源");
+    if (rows.ok && rows.debts.length === 3) ok("这一次运行的责任落了库");
+    else fail(`责任没落库(库里 ${rows.ok ? rows.debts.length : "读不出"} 笔)`);
+  }
+
+  console.log("8) 根已经被 reap 掉之后,不许把号上**现在**那个进程的代次写进账");
+  if (existsSync("/proc")) {
+    console.log("   ~ 这台机器有 /proc,这一组的 ps 夹具不适用,跳过");
+  } else {
+    // 现场:自己 spawn 的孩子已经退出并被 reap(于是这个号随时可能被系统分给别人),
+    // 收尾那一刻才去落账。夹具把「这个号现在是谁」答成**一个陌生进程**(给它编一个启动
+    // 时刻)—— 这就是号被复用那一瞬间的真实输入形状,线上那个窗口只有几百毫秒,但它会把
+    // 账上的「根这一代」永久写歪:下一次清扫拿它去核身份,陌生进程的代次当然对得上,
+    // 于是那一行永远停在「根进程还活着」,既销不掉,还把别人的进程指成我们的残留。
+    const token4 = mintUnitToken();
+    const gone = spawn(process.execPath, ["-e", "process.exit(0)"],
+      { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token4 } });
+    registerUnitToken(gone, token4);
+    const deadPid = gone.pid!;
+    await new Promise<void>((resolve) => gone.once("exit", () => resolve()));
+    await wait(100);
+
+    const fakeStart = "Mon Oct 20 10:00:00 2026";   // 正好 24 字,`inspectProcessSync` 认的那个形状
+    const shim = installShim("ps",
+      `case " $* " in *" -p ${deadPid} "*) printf "${fakeStart} /usr/bin/someone-elses-process\\n"; exit 0 ;; esac\n`
+      + '/bin/ps "$@"\n'
+      // 顺带让这一轮答不清楚,好逼出一行账来看它记了什么(这一问本身见第 7 组)
+      + 'case " $* " in *" -A "*) printf "9999999\\n" ;; esac\n');
+    const judged = await cleanupAfterRun(gone);
+    restorePath();
+    rmSync(shim, { recursive: true, force: true });
+    const rows = await listAllCleanupDebts();
+    const row = rows.ok ? rows.debts.find((d) => d.rootPid === deadPid) : undefined;
+
+    if (judged.kind !== "empty") ok(`这一轮没问清楚,结论是 ${judged.kind}`);
+    else fail("这一组的前提没成立:没有账可看");
+    if (row) ok("账记下来了");
+    else fail("这一次运行的账没落库,看不到它记的根代次");
+    if (row && row.rootStartedAt === null) {
+      ok("根这一代如实留空:孩子已经被 reap,现查到的那个不是它");
+    } else if (row) {
+      fail(`把号上现在那个进程的代次写进了账(${String(row.rootStartedAt)})—— 第 6 轮审查 N10`);
+    }
+  }
+
 } finally {
   restorePath();
-  if (orphan > 1) { try { process.kill(orphan, "SIGKILL"); } catch { /* 已经没了 */ } }
+  for (const pid of [orphan, ...strays]) {
+    if (pid > 1) { try { process.kill(pid, "SIGKILL"); } catch { /* 已经没了 */ } }
+  }
   rmSync(root, { recursive: true, force: true });
 }
 

@@ -93,15 +93,16 @@ export type HolderProbe = {
 export type HolderScan = "complete" | HolderScanFault;
 
 /**
- * 这一问为什么没答全(lsof 不在、报错、超时、只吐了半截)。**不等于没有持有者**。
+ * 这一问为什么没答全(lsof 不在、报错、超时、只吐了半截、或者它自己声明输出不完整)。
+ * **不等于没有持有者**。
  *
- * `lost` 把它再分两种,因为处置相反:
- *  · `false` —— 这一次查询失败,**下一次还问得出来** ⇒ 留证据、排重试;
- *  · `true`  —— 路径名这条线索**本身没了**(文件已被删),再问多少次都是同一个答案 ⇒ 证据
- *    和责任照样不许当成「已清空」销掉,但别再排无穷的重试,按「追到这里为止」收档
- *    (语义同 `monitor_reclaim_debts.closed_at`)。
+ * `retriable` 决定这笔责任的处置,因为两种没答全的出路相反:
+ *  · `true`  —— 这一次查询失败,**下一次还问得出来** ⇒ 留证据、排重试;
+ *  · `false` —— 再问多少次都是同一个答案(路径名自己没了;或者这台机器上的 lsof 每次都
+ *    声明「输出可能不完整」)⇒ 证据和责任照样不许当成「已清空」销掉,但别再排无穷的重试,
+ *    按「追到这里为止」收档(语义同 `monitor_reclaim_debts.closed_at`)。
  */
-export type HolderScanFault = { fault: string; lost: boolean };
+export type HolderScanFault = { fault: string; retriable: boolean };
 
 /** 没问全的事由;`null` = 问全了。消费 `found` 的地方都得先过这一问。 */
 export const holderScanFault = (probe: HolderProbe): HolderScanFault | null =>
@@ -190,6 +191,11 @@ async function trackHolders(trackPath: string): Promise<HolderProbe> {
 /**
  * 这一次 `lsof` 到底问全了没有。`null` = 问全了。
  *
+ * **「它正常退出」证明不了「它问全了」**(第 6 轮审查 F1 实测)。lsof 扫不动某个挂载时会打
+ * 一句 `Output information may be incomplete.` 然后**退 0** —— 上一版这个判断排在 `if (!err)`
+ * 之后,于是那种回答被构造成 `complete`,下游据此销掉了一行还活着的责任(活后代心跳
+ * 26→41、责任 1→0)。所以来源自己的那句声明排在最前面,与退出码无关。
+ *
  * 退出码只用来排除「它自己崩了」,不用来数持有者:
  *  · 被时限掐掉(`killed`/`signal`)⇒ 没问全(第 4 轮审查 N4:挂死的 lsof 会把这一问、同键
  *    那把锁、以及等着它的结算一起拖住,所以宁可中止并按「这一次没答全」收场);
@@ -200,14 +206,38 @@ async function trackHolders(trackPath: string): Promise<HolderProbe> {
 function scanFaultOf(
   err: ExecFileException | null, stderr: string, path: string,
 ): HolderScanFault | null {
+  // 它自己声明了不完整:这句话跟下一次查询无关(扫不动的那个挂载还在那儿),所以按
+  // **不可重试**收场 —— 不许销账,也不排无穷重试,留行收档等人处置。
+  const declared = incompleteDeclared(stderr);
+  if (declared) return { fault: declared, retriable: false };
   if (!err) return null;
-  const lost = !existsSync(path);
+  // 文件名自己没了 ⇒ 再问也是同一句(`unlink` 只摘名字,握着 fd 的进程还在写,见上面那段)。
+  const retriable = existsSync(path);
   if (err.killed || err.signal) {
-    return { fault: `lsof 超过 ${PROBE_TIMEOUT_MS} 毫秒没回,已中止`, lost };
+    return { fault: `lsof 超过 ${PROBE_TIMEOUT_MS} 毫秒没回,已中止`, retriable };
   }
-  if (err.code !== 1) return { fault: `lsof 退出码 ${String(err.code)}`, lost };
+  if (err.code !== 1) return { fault: `lsof 退出码 ${String(err.code)}`, retriable };
   const fault = lsofFault(stderr);
-  return fault ? { fault, lost } : null;
+  return fault ? { fault, retriable } : null;
+}
+
+/**
+ * **lsof 自己那句「这次输出可能不完整」** —— 它是声明,不是告警。
+ *
+ * 跟下面 `lsofFault` 的分工:那一侧认的是「这一问失败了」(status error / 权限 / 文件不在),
+ * 而这一句是「我跑完了,但我知道自己漏了东西」。两者都不许读成「问全了」,但只有这一句在
+ * **退出 0** 时也成立,所以单独认。
+ *
+ * **不认那几句絮絮叨叨的 `WARNING: can't stat()` 本身**:它们是原因,这一句是 lsof 自己下的
+ * 结论(官方实现里两者一起打,见审查证据 `lsof-linux-dmnt.c.txt:528`)。只认结论句是为了
+ * 不让那些在不少机器上常驻的告警把「有没有持有者」这一问永久变成答不出来 —— 那一头的代价
+ * 是每个正常收尾的回合都欠一笔追不动的债(第 3 轮审查 N2)。
+ */
+function incompleteDeclared(stderr: string): string | null {
+  const line = stderr.split("\n").map((l) => l.trim()).find(
+    (l) => /output information may be incomplete|output may be incomplete/i.test(l),
+  );
+  return line ? `lsof 自己声明这次输出不完整:${line.slice(0, 160)}` : null;
 }
 
 /**
@@ -473,6 +503,9 @@ async function heldNames(paths: readonly string[]): Promise<Set<string> | null> 
     // 有一个路径没问清楚,「谁有人握着」这个集合就少了那一片,而调用方会把缺席读成「没人
     // 握着」然后删掉文件。所以这一片的 stderr 一有故障就整问作废。
     // 超时被中止也算这一片没问清楚(判据同 `trackHolders`:退出 1 也可能是它自己出错)。
+    // **它自己声明不完整时也整问作废**(第 6 轮审查 F1):这一侧原来只看 `probe.err`,于是
+    // 「退 0 + 明说漏了东西」照样被当成「这一批谁都没人握着」,还有持有者的追踪文件会被删掉。
+    if (incompleteDeclared(probe.errOut)) return null;
     if (probe.err && (probe.err.code !== 1 || probe.err.killed || lsofFault(probe.errOut))) return null;
     for (const line of probe.out.split("\n")) {
       if (line.startsWith("n")) held.add(line.slice(1).split("/").pop() ?? "");

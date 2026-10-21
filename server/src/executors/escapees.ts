@@ -191,6 +191,12 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
     faults.push("进程树问不出来(ps / /proc 这一问失败)");
     return { targets: [], answered: false, faults, unit };
   }
+  // 表读到了、可是其中几行连号都没认出来:那几行在表里等于不存在,而这条路靠「缺席」下
+  // 结论 —— 所以这一轮不算问清楚。有号没代次的那一档在下面逐棵树报(`tree.unverified`),
+  // 连号都没有的只能计数。(第 6 轮审查 F1 的同一完整性契约)
+  if (table.unnamed) {
+    faults.push(`进程表里有 ${table.unnamed} 行连号都没认出来(那几行等于没进表)`);
+  }
 
   // ② 再问归属线索。
   const probe = trackPath ? await probeFileHolders(trackPath) : noSuchFileProbe();
@@ -228,12 +234,27 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
 
   const targets = new Map<number, ProcessMember>();
   for (const tree of trees) {
-    if (!rootStillAuthorized(tree.source, tree, { child, provenUnit })) continue;
+    if (!rootStillAuthorized(tree.source, tree, { child, provenUnit })) {
+      // **根自己在表上、却核验不了那一代**:既认不下来(不敢扩这棵树)也否不掉(它可能正是
+      // 我们在找的那个)。如实记一笔「没问清楚」,别让它跟「这个号已经退场」同一个待遇
+      // (第 6 轮审查 F1)。
+      if (tree.unverified.includes(tree.seed.pid)) {
+        faults.push(`${tree.seed.pid} 号在进程表上,但核验不了它那一代(${tree.source.authority} 这条线索)`);
+      }
+      continue;
+    }
     // 根授权成立 ⇒ **整棵来源子树**都属于本次运行。反过来不成立就一个都不收(连根带子树)。
     if (tree.root && tree.root.pid !== child.pid) targets.set(tree.root.pid, tree.root);
     for (const member of tree.descendants) {
       if (member.pid === child.pid) continue;     // CLI 本体走进程组信号,不在这里补刀
       targets.set(member.pid, member);
+    }
+    // **根已经认下来了,它名下却有核验不了的号** ⇒ 这些是实打实的残留,只是不敢下刀。
+    // 上一版它们在建树时就被整行丢掉,于是这一轮照样算「问清楚了、没有后代」—— 审查在
+    // Windows 真机上实测到的正是这一下(活后代缺 CreationDate,结论 empty、一笔债都没落)。
+    const unverified = tree.unverified.filter((pid) => pid !== child.pid);
+    if (unverified.length) {
+      faults.push(`${unverified.join(",")} 在这次运行的进程树上,但核验不了它们那一代(给不出下刀凭证)`);
     }
   }
   return { targets: [...targets.values()], answered: !faults.length, faults, unit: freshUnit };

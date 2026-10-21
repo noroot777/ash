@@ -184,8 +184,8 @@ if (IS_WINDOWS) {
   assert.equal(existsSync(absent), false, "这条用例要一个确定不存在的路径");
   const missing = await probeFileHolders(absent);
   assert.ok(holderScanFault(missing), "文件不在 ⇒ 线索断了,不是「确证没人握着」");
-  assert.equal(holderScanFault(missing)?.lost, true,
-    "而且要分得出「再问也没用」这一种,好让清理责任按「追到这里为止」收档");
+  assert.equal(holderScanFault(missing)?.retriable, false,
+    "而且要分得出「再问也没用」这一种(文件都没了,重试问不出新东西),好让清理责任按「追到这里为止」收档");
 
   // 对照:文件在、真的没人握着 ⇒ 这才是唯一允许销毁证据的那一档。
   const quiet = join(tmpdir(), `ash-track-quiet-${process.pid}-${Date.now()}`);

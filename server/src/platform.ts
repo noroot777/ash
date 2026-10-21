@@ -196,8 +196,17 @@ function parsePosixPs(text: string): ProcessRow[] {
  * 当证明用。要拿它证明「某个进程不在」的,用 `listProcessesComplete`。
  */
 export async function listProcesses(timeoutMs = 3000): Promise<ProcessRow[]> {
-  return (await listProcessesComplete(timeoutMs)) ?? [];
+  return (await listProcessesComplete(timeoutMs))?.rows ?? [];
 }
+
+/**
+ * 一次进程表读数:**认下来的行,外加「有几行连号都认不出来」**。
+ *
+ * 为什么要带后面那个数(第 6 轮审查 F1):认不出号的行被静默丢掉之后,它在表里就等于不存在,
+ * 而进程树那一路靠「缺席」下结论。它跟 `startedAt: null` 那一档不同 —— 那一档还知道是哪个号
+ * (能记成「在表上、核验不了这一代」),这一档连名字都没有,只能如实说「这张表里有几行没认出来」。
+ */
+export type ProcessTableRead = { rows: ProcessRow[]; unnamed: number };
 
 /**
  * 同上,但**问全了才给表**(`null` = 这一问没答出来)。
@@ -208,17 +217,23 @@ export async function listProcesses(timeoutMs = 3000): Promise<ProcessRow[]> {
  *
  * 判据跟 `track-evidence.ts` 的 `heldNames` 同源:**宁可整问重来**,下一轮再问。
  */
-export async function listProcessesComplete(timeoutMs = 3000): Promise<ProcessRow[] | null> {
+export async function listProcessesComplete(timeoutMs = 3000): Promise<ProcessTableRead | null> {
   if (IS_WINDOWS) {
     const out = await runPowerShell(PS_PROCESS_SCRIPT, timeoutMs);
-    return out === null ? null : parseRows(out);
+    return out === null ? null : withUnnamed(out, parseRows(out));
   }
   const text = await new Promise<string | null>((resolve) => {
     execFile("ps", POSIX_PS_ARGS, { timeout: timeoutMs, maxBuffer: 8 << 20 }, (err, stdout) =>
       resolve(err ? null : stdout || ""),
     );
   });
-  return text === null ? null : parsePosixPs(text);
+  return text === null ? null : withUnnamed(text, parsePosixPs(text));
+}
+
+/** 非空行数减去认下来的行数 = 连号都没认出来的行数(见 `ProcessTableRead`)。 */
+function withUnnamed(text: string, rows: ProcessRow[]): ProcessTableRead {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim()).length;
+  return { rows, unnamed: Math.max(0, lines - rows.length) };
 }
 
 /**

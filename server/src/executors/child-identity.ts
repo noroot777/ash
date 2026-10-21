@@ -46,6 +46,18 @@ export function markAdoptedChild(child: ChildProcess, pid: number, startedAt: st
   childIdentities.set(child, { kind: "adopted", pid, startedAt });
 }
 
+/**
+ * 接回来那一档的**身份本体**(号 + 接管时核下来的启动时刻),不是接回来的就给 null。
+ *
+ * 开给外面是因为「这个号当初是哪一代」只有这里有权威答案:真进程那一档可以现查(还在我们
+ * 手里就一定是它),接回来那一档**不能现查** —— 它早就不在我们的 reap 范围里,根先退出、号
+ * 被系统分给别人之后,现查到的是那个陌生进程的代次。(第 6 轮审查 N10)
+ */
+export function adoptedIdentityOf(child: ChildProcess): { pid: number; startedAt: string | null } | null {
+  const identity = childIdentities.get(child);
+  return identity?.kind === "adopted" ? { pid: identity.pid, startedAt: identity.startedAt } : null;
+}
+
 const ownExitState = (child: ChildProcess): boolean => child.exitCode === null && child.signalCode === null;
 
 /**
