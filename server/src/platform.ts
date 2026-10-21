@@ -230,10 +230,16 @@ export async function listProcessesComplete(timeoutMs = 3000): Promise<ProcessTa
   return text === null ? null : withUnnamed(text, parsePosixPs(text));
 }
 
-/** 非空行数减去认下来的行数 = 连号都没认出来的行数(见 `ProcessTableRead`)。 */
+/**
+ * **开头像个号、却没认下来**的行数(见 `ProcessTableRead`)。
+ *
+ * 只数「开头是数字」的行,不数所有非空行:每一行都以 pid 起头,所以认下来的那些必然在这个
+ * 集合里,差额就是没认出来的号。反过来按非空行数去减会把**命令行里自带换行**折出来的续行
+ * 也算成丢失的行 —— 那在 Windows 上不罕见,于是每一次清理都会凭一条假线索压一笔债。
+ */
 function withUnnamed(text: string, rows: ProcessRow[]): ProcessTableRead {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim()).length;
-  return { rows, unnamed: Math.max(0, lines - rows.length) };
+  const starts = text.split(/\r?\n/).filter((l) => /^\s*\d/.test(l)).length;
+  return { rows, unnamed: Math.max(0, starts - rows.length) };
 }
 
 /**
