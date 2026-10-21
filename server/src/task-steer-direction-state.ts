@@ -21,7 +21,7 @@ import { and, eq, isNull, ne } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { confirmDone, revokeConfirmed, takeConfirmed } from "./task-confirmation.js";
+import { confirmDone, revokeConfirmedUpTo, takeConfirmed } from "./task-confirmation.js";
 import {
   directionEpochUnchangedSince, directionIdentityRestored, directionRotate,
 } from "./task-direction-epoch.js";
@@ -220,11 +220,15 @@ export async function discardLateDirectionState(
   // 再清一遍。此刻新消息还没开始执行，因此不会误删新方向自己产生的状态；turn token
   // 保持不变，方向 token 已在第一次清理时旋转。
   //
-  // 这一扫**不分代次**（`revokeConfirmed`）：它的语义就是「ACK 之前落下来的任何残留都不作数」。
-  // 此刻新方向的正文还没写进去、方向协议 token 也还没到 agent 手上，所以这一格里不可能有属于
-  // 新方向的票；而旧方向那张可能是绕开身份 CAS 落进来的（它不一定带着旧那一代的编号）—— 按代
-  // 收会把它漏掉，那正是「旧方向的完成票不得穿进新方向」要挡的东西。
-  revokeConfirmed(taskId);
+  // 这一扫**不按等号收**（`revokeConfirmedUpTo`）：它的语义是「ACK 之前落下来的任何残留都不
+  // 作数」，而旧方向那张票可能是绕开身份 CAS 落进来的，不一定带着旧那一代的编号 —— 按等号收
+  // 会把它漏掉，那正是「旧方向的完成票不得穿进新方向」要挡的东西。
+  //
+  // 但上界必须有，而且就是这条改派自己清场推出的那一代。「新正文还没写进去」只说得清这一条
+  // 请求自己走到哪了，**证不了这中间没有另一个回合起跑并交卷** —— 这一趟改派整个儿就可能是迟
+  // 到的。无条件删的话，那张属于后来那一代的有效票被这一扫带走，一个真交了卷的回合显示失败
+  // （第 2 轮审查 F1 实测 `cross-generation-discard`）。
+  revokeConfirmedUpTo(taskId, previous.clearedDirectionEpoch);
   const late = (await db
     .select({ question: tasks.question, resumePrompt: tasks.resumePrompt })
     .from(tasks)
@@ -260,7 +264,9 @@ export async function discardLateDirectionState(
   // 快照:那说明身份已经换走,回滚本来就该按原来那一代判成过期。
   const generationAfterDiscard = discarded.at(0)?.generation;
   if (generationAfterDiscard !== undefined) previous.resumePromptGeneration = generationAfterDiscard;
-  revokeConfirmed(taskId);
+  // 同一个上界：这一笔作废不推方向世代，所以这中间落进来的票要么还是那一代（ACK 前的残留，
+  // 该收），要么属于后来起跑的某一轮（不该碰）。
+  revokeConfirmedUpTo(taskId, previous.clearedDirectionEpoch);
   if (late?.question) {
     try {
       bus.publish({
