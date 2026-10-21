@@ -3,8 +3,14 @@ import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import { parseClaudeStream } from "../claude.js";
-import { markdownImageRefs, trimCarry } from "@ash/shared/markdown-images";
-import { captureMarkdownImages, imageStore, persistMarkdownImageRefs, type ImageSnapshots } from "../../agent-attachments.js";
+import { lastBlockStart, markdownImageRefs, type MarkdownImageRef } from "@ash/shared/markdown-images";
+import {
+  captureMarkdownImages,
+  discardUnclaimedImages,
+  imageStore,
+  persistMarkdownImageRefs,
+  type ImageSnapshots,
+} from "../../agent-attachments.js";
 import type { CliParser, CliParserContext } from "./types.js";
 
 // ── 目录自带的输出解析器 ────────────────────────────────────────────────────
@@ -114,8 +120,12 @@ export const claudeStreamJsonParser: CliParser = (ctx) =>
 // parseClaudeStream 自带落图(它要分别记父会话和每个子智能体的账),别再让 generic 裹一层。
 claudeStreamJsonParser.ownsMarkdownImages = true;
 
-// 攒到这么长就裁(按块边界,见 trimCarry)—— 免得 carry 跟着整条回合无限涨。
-const CARRY_MAX = 8192;
+// 攒到这么长就把**已经定型的那几个块**交代掉并裁走(见 shared 的 lastBlockStart)。
+// 不设上限的话 carry 跟着整条回合无限涨;设大了也不行 —— 每片到达都要把 carry 整份解析
+// 一遍,窗口放大一倍解析代价就翻一倍。
+const SCAN_WINDOW = 8192;
+// 一个块自己就比这还大(往围栏里灌了一整份日志):放弃管这条消息,见 withMarkdownImages。
+const SCAN_CEILING = 1 << 20;
 
 /**
  * 给**任意**解析器的事件流补上「正文里提到的那张本机图片」。
@@ -130,24 +140,24 @@ const CARRY_MAX = 8192;
  * 自带持久化的解析器(claudeStreamJsonParser 套的 parseClaudeStream)由 generic 直接放行,
  * 不过这一层 —— 两层各存一份就是同一处引用两条记录、两份拷贝(见 generic.ts)。
  *
- * **按消息边界扫,不按碎片扫**。流式解析器一个 text 事件可能只是半句话,而半句话的语法
- * 结论随时会被后文推翻:
+ * **身份按「语法已经定型」的边界认,绝不按碎片边界认**。流式解析器一个 text 事件可能只是
+ * 半句话,而半句话的语法结论随时会被后文推翻:
  *   · `![a][r]` 先到、`[r]: output/x.png` 后到 —— 按碎片扫时那处引用还没有定义,扫完又把
  *     交代过的前文裁掉,后到的定义再也修正不了它(拼回来明明有一张图,结果一条都没存);
  *   · 行内代码的一对反引号被切在两片里 —— 前半片里 `![示例](output/x.png)` 看着是真图,
  *     等后半片的反引号到了它才是代码(于是白存一份,而展示端扫完整正文不认它)。
- * 两种都是审查第 2 轮 F2 的实测用例。所以**身份**只在消息结束(`done`)那一遍扫描里认:
- * 那时候语法边界是稳定的,扫出来的节点集合跟展示端扫同一段正文的结果必然相同。
+ * 两种都是审查第 2 轮 F2 的实测用例。所以这里只攒,到**消息结束**(`done`)才认 —— 单条
+ * 消息攒得下时(绝大多数)就是「整条消息一次认」,扫出来的节点集合跟展示端扫同一段正文的
+ * 结果必然相同。攒不下时(见 SCAN_WINDOW)也只在**顶层块边界**上认:未闭合的围栏、还在写
+ * 的段落恒是最后一个块,裁在它前面等于「只认已经写完的那几个块」,它们的结论不会再变。
+ * 代价只有一处且是「少管」而不是「管错」:定义离它那处引用超过一个窗口远时,这一侧不管
+ * 那处引用,展示端照旧按完整正文解析、退一档去工作目录取(见 shared 的 lastBlockStart)。
  *
  * **字节反过来,一刻都不能等**:一条消息里 agent 边说边重拍同一个路径是常事(红→蓝→红,
  * 这一层裹的是整条 run,中间真的会有工具改文件),全等到收尾再读,三处引用会一起拿到最后
  * 那份字节(审查第 1 轮 F1 实测 A)。所以每来一片就按当下的正文把**字节**先拍进 uploads
- * (captureMarkdownImages:不发事件、不占身份),收尾那一遍权威扫描再决定哪几处引用是真图、
- * 各自领走哪一份快照 —— 先拍下来,待会儿再认。
- *
- * 攒的上限是兜底而不是常态(单条消息不该有兆字节的正文):顶到上限就先扫一轮、按**块
- * 边界**裁掉已交代的部分(见 shared 的 trimCarry:围栏的开栏不会跟着被裁掉),代价是那种
- * 超长消息退回「按片扫」的老语义 —— 但不这么兜,一条失控的流能把内存吃光。
+ * (captureMarkdownImages:不发事件、不占身份),定型那一遍扫描再决定哪几处引用是真图、
+ * 各自领走哪一份快照 —— 先拍下来,待会儿再认。没人领走的那几份在流收尾时删掉。
  */
 export async function* withMarkdownImages(
   events: AsyncIterable<AgentEvent>,
@@ -157,26 +167,37 @@ export async function* withMarkdownImages(
   // 解析器自己挂上来的附件(工具结果截图):同一份拷贝不铺两张卡片。正文引用来的那些
   // **不能**按路径去重 —— 重拍过的两处引用字节可能一样,但它们是两处引用(F1)。
   const passed = new Set<string>();
-  // 流式阶段拍下的字节。key 带一个 generation:裁剪过的 carry 里偏移会整体挪位,老快照
-  // 一律作废(它指的那处引用已经交代过了)。
+  // 流式阶段拍下的字节。key 带一个 generation:裁走一段之后 carry 里的偏移会整体挪位,
+  // 老快照一律作废(它指的那处引用已经交代过了)。
   const snapshots: ImageSnapshots = new Map();
+  // 拍下来的 vs 真被某条结果领走的 —— 收尾时把没人领的删掉(见 discardUnclaimedImages)。
+  const captured = new Set<string>();
+  const claimed = new Set<string>();
   let generation = 0;
   let carry = "";
+  let scanned = 0;
+  // 这条消息已经放弃管了:一条事件都不发,正文照旧原样转发。
+  let abandoned = false;
 
-  const emit = function* (refs: ReturnType<typeof markdownImageRefs>): Generator<AgentEvent> {
+  const emit = function* (refs: MarkdownImageRef[]): Generator<AgentEvent> {
     for (const image of persistMarkdownImageRefs(refs, seen, { cwd, snapshots, generation })) {
+      if (image.path) claimed.add(image.path);
       yield { kind: "attachment", ...image };
     }
   };
-  const drop = (kept: string) => {
+  const advance = (kept: string) => {
     snapshots.clear();
     generation += 1;
     carry = kept;
+    scanned = kept.length;
   };
   const flush = function* (): Generator<AgentEvent> {
-    if (!carry) return;
-    yield* emit(markdownImageRefs(carry));
-    drop("");
+    const text = abandoned ? "" : carry;
+    // 先交代再清账:`advance` 会把这一轮的快照作废,反过来的话这条消息的字节就全部退回
+    // 「收尾时再读文件」—— 重拍过的三处引用会一起拿到最后那份(F1 实测 A)。
+    if (text) yield* emit(markdownImageRefs(text));
+    advance("");
+    abandoned = false;
   };
 
   for await (const event of events) {
@@ -184,24 +205,38 @@ export async function* withMarkdownImages(
       if (event.path) {
         if (passed.has(event.path)) continue;
         passed.add(event.path);
+        claimed.add(event.path);
       }
       yield event;
       continue;
     }
     if (event.kind === "text") {
       yield event;
+      if (abandoned) continue;
       carry += event.text;
       // 一处引用只可能由 `)`(行内图)、`]`(引用式图)或行尾(它的定义)收尾 —— 三个都
-      // 没有的那一片不可能改变「有哪几处引用」,拿它当闸省掉逐 token 的解析。顶到上限时
-      // 照扫:那一轮要把攒着的引用交代掉才能裁(见下),漏掉就等于把它们丢了。
-      if (!/[)\]\n]/.test(event.text) && carry.length <= CARRY_MAX) continue;
+      // 没有的那一片不可能改变「有哪几处引用」,拿它当闸省掉逐 token 的解析。攒过窗口时
+      // 照扫:那一轮要把定型的块交代掉才能裁。
+      if (!/[)\]\n]/.test(event.text) && carry.length - scanned < SCAN_WINDOW) continue;
+      scanned = carry.length;
       const refs = markdownImageRefs(carry);
-      captureMarkdownImages(refs, seen, snapshots, { cwd, generation });
-      // 兜底:顶到上限才按老语义交代一轮并裁剪(交代过的引用一个字都不再扫,否则同一处
-      // 会发两条、身份对不上)。
-      if (carry.length > CARRY_MAX) {
-        yield* emit(refs);
-        drop(trimCarry(carry.slice(refs.at(-1)?.end ?? 0), CARRY_MAX));
+      for (const path of captureMarkdownImages(refs, seen, snapshots, { cwd, generation })) captured.add(path);
+      if (carry.length <= SCAN_WINDOW) continue;
+      // 攒过窗口了:最后一个顶层块之前的语法已经定型,把那一段的引用交代掉再裁走它。
+      // **裁掉的只是已经交代过的那一段**,不丢内容、也不会把块状态裁断(对比上一版的
+      // 「按字符数硬裁 + 留个头」:开栏被裁掉之后围栏里的示例会被当成真图)。
+      const cut = lastBlockStart(carry);
+      if (cut > 0) {
+        yield* emit(refs.filter((ref) => ref.end <= cut));
+        advance(carry.slice(cut));
+        continue;
+      }
+      // 裁不动(一个块自己就超了天花板,比如往围栏里灌了一整份日志):放弃管这条消息 ——
+      // 一条事件都不发,于是展示端把这几处引用当成「服务端没管过」,退一档去工作目录取。
+      // 宁可退一档,也不按半截正文定性:那正是 F2 那两幕的成因。
+      if (carry.length > SCAN_CEILING) {
+        abandoned = true;
+        advance("");
       }
       continue;
     }
@@ -211,4 +246,5 @@ export async function* withMarkdownImages(
     yield event;
   }
   yield* flush();
+  discardUnclaimedImages(captured, claimed);
 }

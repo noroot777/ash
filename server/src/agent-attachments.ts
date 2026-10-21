@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { maxBytesFor } from "@ash/shared";
@@ -217,16 +217,42 @@ export function captureMarkdownImages(
   seen: ImageStore,
   snapshots: ImageSnapshots,
   options: MarkdownImageOptions = {},
-): void {
+): string[] {
   const directory = options.directory ?? UPLOADS_DIR;
   const generation = options.generation ?? 0;
+  const stored: string[] = [];
   for (const ref of refs) {
     const key = snapshotKey(generation, ref.start);
     if (snapshots.get(key)?.destination === ref.destination) continue;
     const bytes = readImageAt(ref.destination, options.cwd);
     if (!bytes) continue;
-    const stored = storeImage(bytes, seen, directory, snapshots.size);
-    if (stored) snapshots.set(key, { destination: ref.destination, path: stored.path });
+    const copy = storeImage(bytes, seen, directory, snapshots.size);
+    if (!copy) continue;
+    snapshots.set(key, { destination: ref.destination, path: copy.path });
+    if (copy.fresh) stored.push(copy.path);
+  }
+  return stored;
+}
+
+/**
+ * 流式阶段拍下、最后**没有任何一条结果领走**的那几份拷贝:删掉。
+ *
+ * 为什么会有这种拷贝:拍字节发生在半截正文上(见 captureMarkdownImages),而「哪几处是真图」
+ * 由定型之后那一遍扫描说 —— 行内代码的反引号切在两片里时,前半片里那个写法示例看着是真图,
+ * 字节已经拍下来了,拼全了它却是代码。那份拷贝不进任何 uploads 记录、谁都引用不到,留着
+ * 就是纯粹的磁盘垃圾。
+ *
+ * 只删**本流新落盘且没被领走**的:按内容寻址复用到的那些(fresh=false)压根不在这个清单里,
+ * 被某条结果领走的由 `claimed` 挡住 —— 同一份字节可能在后面的消息里被真的引用到。
+ */
+export function discardUnclaimedImages(captured: Iterable<string>, claimed: ReadonlySet<string>): void {
+  for (const path of captured) {
+    if (claimed.has(path)) continue;
+    try {
+      unlinkSync(path);
+    } catch {
+      /* 删不掉就留着:一份没人引用的拷贝不值得把事件流掀掉 */
+    }
   }
 }
 

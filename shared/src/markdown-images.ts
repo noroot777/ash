@@ -137,31 +137,22 @@ export function markdownImageRefs(text: string): MarkdownImageRef[] {
   return refs.sort((a, b) => a.start - b.start);
 }
 
-/** 最后一个顶层块的起点 —— 未闭合的围栏恒是最后一个块,所以裁到这里不会把开栏丢掉。 */
-function lastBlockStart(text: string): number {
+/**
+ * 最后一个顶层块的起点 —— 它**之前**那一段的语法已经定型,可以安全地交代掉并裁走。
+ *
+ * 必要性:流式解析器一个 text 事件可能只是半句话,得攒一段再扫;攒长了得裁。按字符数硬裁
+ * 会把**块的状态**裁断 —— 开栏的 ``` 被裁掉之后,围栏里的写法示例就被当成真图存一份;行内
+ * 代码的一对反引号被切开也一样(审查第 2 轮 F2)。而未闭合的围栏、还在写的段落恒是**最后
+ * 一个**块,所以裁到这里等于「只裁已经写完的那几个块」:它们的解析结果不会再被后文推翻。
+ *
+ * 唯一还会被后文改写的是**后到的链接/图片定义**(`![a][r]` 在前、`[r]: p` 在后):定义落在
+ * 裁掉的那一段之外时,前面那处引用解不出目的地,于是这一侧不管它(展示端照旧按完整正文
+ * 解析,那处引用会退一档「去工作目录取」)。拿「少管一处」换「绝不按半截正文定性」。
+ *
+ * 一个块自己就超了上限(往围栏里灌一整份日志)时返回 0 —— 调用方据此知道「裁不动」。
+ */
+export function lastBlockStart(text: string): number {
   const root = parse(text);
   const last = root?.children?.at(-1);
   return (last && offsets(last)?.[0]) ?? 0;
-}
-
-/**
- * 流式扫描攒的那段文本太长了,从哪儿往后留着。
- *
- * 必要性:流式解析器一个 text 事件可能只是半句话,得攒一段再扫;攒长了得裁。按字符数硬裁
- * 会把**块的状态**裁断 —— 开栏的 ``` 被裁掉之后,围栏里的写法示例就被当成真图存一份
- * (多一张卡片;正文那边照旧不认它,因为展示端扫的是完整正文)。
- *
- * 所以按**顶层块边界**裁:未闭合的围栏恒是最后一个块,裁到它的起点等于把开栏一起留着。
- * 一个块自己就超了上限(往围栏里灌一整份日志)时留它的首行加尾部 —— 丢内容、留状态。
- * 裁到上限的一半,好让下一次裁剪隔开一段距离:每次裁剪都要解析一遍,贴着上限裁会变成
- * 每来一片就解析一次。
- */
-export function trimCarry(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const keep = Math.max(1, Math.floor(max / 2));
-  const block = lastBlockStart(text);
-  if (text.length - block <= keep) return text.slice(block);
-  const lineEnd = text.indexOf("\n", block);
-  const head = lineEnd < 0 ? "" : text.slice(block, lineEnd + 1);
-  return head + text.slice(-keep);
 }

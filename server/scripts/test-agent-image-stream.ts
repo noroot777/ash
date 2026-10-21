@@ -9,7 +9,7 @@
 // 必须出现带 `source` 的 attachment。另外验流式碎片(半句话分两次到)和去重。
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
@@ -204,6 +204,55 @@ try {
   assert.equal(two.length, 2, "两处引用两条结果");
   assert.deepEqual(readFileSync(two[0]!.path!), red, "第一处引用拿到的是它写完那一刻的字节");
   assert.deepEqual(readFileSync(two[1]!.path!), amber, "第二处引用拿到的是改过之后的字节");
+
+  // ⑪ 攒过窗口要裁时**按块边界裁**:裁掉的只是已经交代过的那几个块,块状态一个都不许被
+  // 裁断。上一版按字符数硬裁(留个头 + 留尾),开栏的 ``` 被裁走之后,围栏里的写法示例就
+  // 成了「真图」—— 多存一份、多一张卡片,而展示端扫完整正文压根不认它。
+  const long = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "真图：![真图](output/shot.png)\n\n" + "填充。\n\n".repeat(2000) } as AgentEvent;
+    yield { kind: "text", text: "再一张：![再一张](output/shot.png)\n\n" } as AgentEvent;
+    yield { kind: "text", text: "```md\n![示例](output/shot.png)\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(long).map((event) => [event.source, event.ref]),
+    [["output/shot.png", 0], ["output/shot.png", 1]],
+    "裁过之后:两处真引用各一条、身份接着往下数,未闭合围栏里的示例一条都不许报",
+  );
+  // 第一条必须是**攒过窗口、裁走前缀那一刻**交代的(第二处引用在那之后才到,收尾才交代)
+  // —— 否则上面那条断言换成「整条消息攒着从不裁」也成立,裁剪这条路压根没被走到。
+  const fenceAt = long.findIndex((event) => event.kind === "text" && event.text.startsWith("```md"));
+  assert.ok(fenceAt > 0, "围栏那一片要在事件流里");
+  assert.equal(
+    long.slice(0, fenceAt).filter((event) => event.kind === "attachment").length,
+    1,
+    "攒过窗口那一刻就把定型的块交代了",
+  );
+
+  // ⑫ 拍下来却没人领走的快照要删掉(行内代码跨片那一例:字节在前半片就拍了,拼全了却是
+  // 代码)。留着就是谁都引用不到的磁盘垃圾。
+  const before = readdirSync(uploads).length;
+  await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "行内 `![示例](output/result(1).png)" } as AgentEvent;
+    yield { kind: "text", text: "` 不算图。\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.equal(readdirSync(uploads).length, before, "没人领走的拷贝不许留在 uploads 里");
+
+  // ⑬ 一个块自己就超过天花板(一整份日志灌进一个段落):放弃管这条消息 —— 一条事件都不发,
+  // 展示端把这几处引用当成「服务端没管过」,退一档去工作目录取。宁可退档,也不按半截正文
+  // 定性。正文仍然一个字都不许改动或吞掉。
+  const huge = "开头 ![真图](output/shot.png) " + "填充 ".repeat(400_000);
+  const overflowed = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: huge } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(attachments(overflowed), [], "裁不动就放弃管,不按半截正文发结果");
+  assert.equal(
+    overflowed.filter((event) => event.kind === "text").map((event) => (event as { text: string }).text).join(""),
+    huge,
+    "放弃管的只是落图,正文照旧原样转发",
+  );
 
   console.log("自定义解析器的图片落盘回归通过");
 } finally {
