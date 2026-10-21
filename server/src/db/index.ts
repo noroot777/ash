@@ -169,6 +169,17 @@ export async function ensureSchema() {
       unit_token TEXT, closed_at TEXT, closed_note TEXT,
       identity_disproved_at TEXT
     );
+    CREATE TABLE IF NOT EXISTS agent_cleanup_debts (
+      unit_token TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '',
+      root_pid INTEGER, root_started_at TEXT,
+      track_path TEXT, out_path TEXT,
+      state TEXT NOT NULL DEFAULT 'unknown', detail TEXT NOT NULL DEFAULT '',
+      unit_verdict TEXT NOT NULL DEFAULT '',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, last_attempt_at TEXT,
+      closed_at TEXT, closed_note TEXT
+    );
     CREATE TABLE IF NOT EXISTS monitor_pending_calls (
       task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
       command TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',

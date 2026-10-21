@@ -26,7 +26,10 @@ import {
   openTrackFd, registerTrackFd, shareTrackFdRegistration, shareChildIdentity, markAdoptedChild,
   killChild, killByPid, pidRunStillAlive, spawnAgent,
 } from "./spawn.js";
-import { adoptUnitToken, registerUnitToken, seedUnitToken, shareUnitToken, unitTokenOf } from "./unit-token.js";
+import {
+  adoptUnitToken, registerRunOutPath, registerUnitToken, seedUnitToken,
+  shareRunOutPath, shareUnitToken, unitTokenOf,
+} from "./unit-token.js";
 
 // 一次运行的三个落盘文件。rc 是退出码 —— 管道模式下退出码是 close 事件白送的,
 // 换成文件后没人告诉我们了,只能让 shell 跑完自己写一个数字进去。
@@ -257,6 +260,7 @@ export function spawnControllableDetachedAgent(
   });
   registerTrackFd(real, track);
   registerUnitToken(real, unitToken);
+  registerRunOutPath(real, paths.out);
   if (!real.pid) return failedChild(`起不来:${shq(bin)}`);
   const writer = fifoWriter(input);
   if (!writer) {
@@ -288,6 +292,7 @@ export function spawnControllableDetachedAgent(
   // 握在手里,内核状态就是权威答案,所以指向它。
   shareChildIdentity(real, child);
   shareUnitToken(real, child);
+  shareRunOutPath(real, child);
   return child;
 }
 
@@ -340,6 +345,7 @@ export function spawnDetachedAgent(
   });
   registerTrackFd(real, track);
   registerUnitToken(real, unitToken);
+  registerRunOutPath(real, paths.out);
   real.stdin?.write(prompt);
   real.stdin?.end();
 
@@ -366,6 +372,7 @@ export function spawnDetachedAgent(
   shareTrackFdRegistration(real, child);
   shareChildIdentity(real, child); // 理由同上:身份以真进程的内核状态为准
   shareUnitToken(real, child);
+  shareRunOutPath(real, child);
   return child;
 }
 
@@ -479,5 +486,8 @@ export function reattachDetachedAgent(opts: {
   // 上面那个 kill,不声明身份它就会去读合成品那两个由轮询补写的字段(第 2 轮审查 F1)。
   markAdoptedChild(child, opts.pid, opts.startedAt);
   adoptUnitToken(child, opts.unitToken);
+  // 接回这条路同样要带上输出文件:重启后它是这次运行仅存的两条跨进程线索之一
+  // (另一条是记号),清理责任记录和 `killByPid` 的第二份证据都读它。
+  registerRunOutPath(child, opts.paths.out);
   return child;
 }

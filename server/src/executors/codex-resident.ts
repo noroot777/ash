@@ -1,3 +1,4 @@
+import { cleanupSettled, mergeCleanupResults, type CleanupResult } from "./kill.js";
 import type { ChildProcess } from "node:child_process";
 import type { AgentEvent } from "@ash/shared";
 import type { ResidentHandle } from "./types.js";
@@ -43,8 +44,11 @@ export function openCodexResident(params: {
   startTurn: (prompt: string, sessionId: string) => CodexTurn;
   /** 硬杀一个回合进程(走三层击杀)。 */
   killTurn: (child: ChildProcess) => void;
-  /** 回收一个回合进程甩到后台的后代(幂等,`cleanup` 的单位)。 */
-  finalizeTurn: (child: ChildProcess) => Promise<void>;
+  /**
+   * 回收一个回合进程甩到后台的后代(幂等,`cleanup` 的单位)。
+   * 返回三档结论 —— **只有 `empty` 才算收完**(见 executors/kill.ts 的 `CleanupResult`)。
+   */
+  finalizeTurn: (child: ChildProcess) => Promise<CleanupResult>;
 }): ResidentHandle {
   let sessionId = params.initialSessionId;
   let commandLine = "";
@@ -69,17 +73,23 @@ export function openCodexResident(params: {
   // 时有两个缺口:另一个 cleanup 看到册上没它就直接返回,其实清理还在途(它以为收完了);
   // 清理失败时它也已经不在册上,再没有人会重试(第 2 轮审查 N1)。所以在途的那个 Promise
   // 本身就是凭据 —— 同一轮的并发调用等同一份,成功才注销,失败留在册上等下一次 cleanup。
-  const inflight = new Map<ChildProcess, Promise<void>>();
-  const finalizeTurn = (child: ChildProcess): Promise<void> => {
+  const inflight = new Map<ChildProcess, Promise<CleanupResult>>();
+  const finalizeTurn = (child: ChildProcess): Promise<CleanupResult> => {
     const pending = inflight.get(child);
     if (pending) return pending;
-    if (!unfinalized.has(child)) return Promise.resolve(); // 确实收完了
-    const run = (async () => {
+    if (!unfinalized.has(child)) return Promise.resolve({ kind: "empty" } as CleanupResult);
+    const run = (async (): Promise<CleanupResult> => {
       try {
-        await params.finalizeTurn(child);
-        unfinalized.delete(child);
+        const result = await params.finalizeTurn(child);
+        // **「这一轮收过了」的凭据是「确证清空」,不是「这个函数 resolve 了」**(本轮审查
+        // F2):`remaining`/`unknown` 两档说的恰恰是「还有东西在,或者这一轮没问清楚」,
+        // 把它们当成收完就等于亲手把待收册上那条唯一的线索划掉 —— 下一次 cleanup 看到
+        // 册上没它便直接返回,没有任何人会再来追。所以这两档**留在册上**。
+        if (cleanupSettled(result)) unfinalized.delete(child);
+        return result;
       } catch (error) {
         console.warn("[ash] 回收 codex 常驻回合的后代失败(留在册上,下一次 cleanup 再试):", error);
+        return { kind: "unknown", detail: error instanceof Error ? error.message : String(error) };
       }
     })().finally(() => {
       inflight.delete(child);
@@ -248,8 +258,10 @@ export function openCodexResident(params: {
     // 幂等 finalizer:覆盖这个句柄起过的**每一个**回合进程的后代,不只是当前那一轮
     // (kill() 管的才是当前那一轮的进程本体)。无主回合的收尾就靠它(runs.ts
     // `finalizeAbandonedRun`),单飞原生常驻则由消费循环的 finally 调用。
-    cleanup: async () => {
-      await Promise.all([...unfinalized].map((child) => finalizeTurn(child)));
+    cleanup: async (): Promise<CleanupResult> => {
+      const results = await Promise.all([...unfinalized].map((child) => finalizeTurn(child)));
+      // 整个句柄的结论是**最保守的那一档**:任何一轮还没收干净,这个句柄就不算收干净。
+      return mergeCleanupResults(results);
     },
   };
 }

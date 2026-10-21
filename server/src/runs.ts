@@ -1,3 +1,4 @@
+import { cleanupDetail, cleanupSettled, type CleanupResult } from "./executors/kill.js";
 import type { AgentType } from "@ash/shared";
 import type { SteerText } from "./executors/types.js";
 import type { CliCommand, CliGoal } from "@ash/shared/cli-commands";
@@ -25,8 +26,11 @@ export interface Killable {
   steer?(text: SteerText, beforeSend?: () => void | Promise<void>): Promise<void>;
   command?(command: CliCommand): Promise<string>;
   goal?(): CliGoal | null;
-  /** 事件流结束后回收 CLI 甩出去的后台后代（RunHandle / ResidentHandle 上的同名方法）。 */
-  cleanup?(): Promise<void>;
+  /**
+   * 事件流结束后回收 CLI 甩出去的后台后代（RunHandle / ResidentHandle 上的同名方法）。
+   * 返回三档结论,**只有 `empty` 才允许放手**(见 executors/kill.ts 的 `CleanupResult`)。
+   */
+  cleanup?(): Promise<CleanupResult>;
 }
 
 // 被杀回合的结算落位:手动停 → canceled(队列把它当离队);分组暂停 → paused
@@ -128,7 +132,13 @@ export async function finalizeAbandonedRun(h: Killable): Promise<void> {
     /* best effort */
   }
   try {
-    await h.cleanup?.();
+    const result = await h.cleanup?.();
+    // 没收干净时**如实说出来**,别让这条路以静默 resolve 收场(本轮审查 F2:这是三个
+    // 「不许放手」的出口之一)。责任本身已经由 `cleanupAfterRun` 落进 `agent_cleanup_debts`,
+    // 开机清扫会再追;这里的日志是给当场看日志的人的那一行。
+    if (result && !cleanupSettled(result)) {
+      console.warn(`[ash] 无主回合的后代还不能证明收干净:${cleanupDetail(result)}`);
+    }
   } catch (error) {
     console.warn("[ash] 回收无主回合的 CLI 后代失败:", error);
   }

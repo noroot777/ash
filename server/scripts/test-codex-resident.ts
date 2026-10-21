@@ -13,6 +13,7 @@
  * codex CLI 本身的行为(resume 保持 thread_id、被杀后会话仍可续)是 2026-08-01
  * 手工实测过的,结论记在 executors/codex-resident.ts 头部,不在这里重复验证。
  */
+import type { CleanupResult } from "../src/executors/kill.js";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,7 +47,11 @@ if (args.includes("--slow")) setTimeout(say, 3000); else say();
 );
 
 /** 造一个跑假 CLI 的常驻会话;prompt 直接当最后一个 argv 传进去便于断言。 */
-function open(opts: { slow?: boolean; poisonFirst?: boolean; slowFinalize?: boolean } = {}) {
+function open(opts: {
+  slow?: boolean; poisonFirst?: boolean; slowFinalize?: boolean;
+  /** 让 finalizeTurn 回「还没收干净」,用来钉「这种结论不许把回合从待收册上划掉」。 */
+  finalizeResult?: CleanupResult;
+} = {}) {
   const spawned: string[][] = [];
   const finalized: number[] = [];
   const handle = openCodexResident({
@@ -73,6 +78,9 @@ function open(opts: { slow?: boolean; poisonFirst?: boolean; slowFinalize?: bool
       // 「cleanup 返回了」和「清理真的做完了」。
       if (opts.slowFinalize) await new Promise((r) => setTimeout(r, 150));
       finalized.push(child.pid ?? -1);
+      // 返回的是三档结论(executors/kill.ts 的 `CleanupResult`):句柄按它决定能不能把这一轮
+      // 从待收册上划掉。夹具这边就是「确证清空」—— ⑪ 另有一条专门钉「没收干净不许划掉」。
+      return opts.finalizeResult ?? { kind: "empty" };
     },
   });
   return { handle, spawned, finalized };
@@ -314,6 +322,31 @@ console.log("9) 并发 cleanup 等的是在途那份清理,不是「册上没它
   await first;
   if (finalized.length === 2) ok("两个调用合起来也只收一遍(不重复动手)");
   else fail(`重复动手了:${finalized.length} 次`);
+  handle.kill();
+  await sub.finished;
+}
+
+// ⑪ 没收干净的那一轮**留在待收册上**,下一次 cleanup 还会再来收。
+// 钉的是本轮审查 F2:上一版把 `finalizeTurn` resolve 当成成功,于是「还有残留 / 这一轮
+// 没问清楚」两档也会把回合从册上划掉 —— 而册上那条是这摊后代唯一的线索,划掉之后下一次
+// cleanup 看到册上没它便直接返回,再没有人会来追。
+console.log("\n11) 没收干净的回合不许从待收册上划掉");
+{
+  const stale: CleanupResult = { kind: "remaining", detail: "夹具:假装还有后代活着" };
+  const { handle, finalized } = open({ finalizeResult: stale });
+  const sub = subscribe(handle.events);
+  handle.send("一");
+  await sub.waitTurns(1);
+  const first = await handle.cleanup();
+  if (first.kind === "remaining") ok("句柄把「还没收干净」原样往上报(不吞成成功)");
+  else fail(`句柄报的是 ${first.kind},应当是 remaining`);
+  const collectedOnce = finalized.length;
+  if (collectedOnce >= 1) ok("第一次 cleanup 确实动手了");
+  else fail("第一次 cleanup 没动手");
+  // **再来一次**:册上还留着它,所以这一次必须重新动手(而不是「册上没它 ⇒ 直接返回」)。
+  await handle.cleanup();
+  if (finalized.length > collectedOnce) ok("留在册上 ⇒ 下一次 cleanup 重新动手(可重试)");
+  else fail("第二次 cleanup 没有重试:这一轮已经被当成收完了");
   handle.kill();
   await sub.finished;
 }

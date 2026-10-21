@@ -38,6 +38,13 @@ const { IS_WINDOWS, isPidAlive } = await import("../src/platform.js");
 const { inspectProcess } = await import("../src/proc.js");
 const { processGenerationSync, stillSameGeneration } = await import("../src/process-generation.js");
 const { MONITOR_UNIT_ENV, invalidateMonitorUnitScan } = await import("../src/monitor-unit-scan.js");
+// 建库:清理责任要真的落进 `agent_cleanup_debts`,少了这一步「落库失败」会被读成
+// 「这条路本来就不落库」,⑭ 的披露那一半就钉不住。
+const { ensureSchema } = await import("../src/db/index.js");
+await ensureSchema();
+const { recordedGrade } = await import("../src/monitor-reclaim-evidence.js");
+const { processTreeMembers, processTableSnapshot, subtreesOf } = await import("../src/process-generation.js");
+const { probeTrackHolders } = await import("../src/executors/track-evidence.js");
 const { adoptUnitToken } = await import("../src/executors/unit-token.js");
 
 /** 拼一个 detached.ts 那种合成句柄:字段齐全,但 exitCode 由回调补写,不是内核答案。 */
@@ -185,9 +192,19 @@ if (IS_WINDOWS) {
     console.warn = warn;
   }
   await wait(2400);                               // 连那一刀补刀的窗口也等过去
-  assert.equal(isPidAlive(unproven.pid!), true, "证不出归属就一刀都不发(粗档 pid 不是排他凭证)");
-  assert.ok(warnings.some((w) => w.includes(String(unproven.pid)) && w.includes("证不出就不下刀")),
-    "没下刀必须留下痕迹:静默失败等于「按钮坏了」");
+  // **这一档的预期取决于记下来那个读数有多精确,不取决于平台**(判据与生产同一个函数):
+  //  · 粗档(POSIX 的秒级 `lstart`)—— 秒级相等从来不是排他证明 ⇒ 不下刀 + 留警告;
+  //  · 排他档(win32 的 CreationDate 带毫秒)—— 那个读数自己就是凭证 ⇒ **照杀才是对的**。
+  // 写成按精度分叉而不是「全平台都不许杀」:后者会把 win32 上正确的授权行为钉成缺陷,而
+  // macOS 上跑过就通过,这件事一次都暴露不出来(本轮审查 N5)。
+  if (unprovenStartedAt && recordedGrade(unprovenStartedAt) === "exclusive") {
+    assert.ok(await goneWithin(unproven.pid!, 2000),
+      "排他档:记下的读数带秒以下精度,它自己就是排他凭证 ⇒ 照杀");
+  } else {
+    assert.equal(isPidAlive(unproven.pid!), true, "证不出归属就一刀都不发(粗档 pid 不是排他凭证)");
+    assert.ok(warnings.some((w) => w.includes(String(unproven.pid)) && w.includes("证不出就不下刀")),
+      "没下刀必须留下痕迹:静默失败等于「按钮坏了」");
+  }
   unproven.kill("SIGKILL");
 
   const gone = sleeper();
@@ -285,11 +302,20 @@ if (IS_WINDOWS) {
   // 这一条钉的是两档不许再合成一个(合了就必然在某个方向上错)。
   const unproven = sleeper();
   const bare = synthetic(unproven.pid);
-  markAdoptedChild(bare, unproven.pid!, inspectProcess(unproven.pid!)?.startedAt ?? null);
+  const bareStartedAt = inspectProcess(unproven.pid!)?.startedAt ?? null;
+  markAdoptedChild(bare, unproven.pid!, bareStartedAt);
   assert.equal(childStillOurs(bare), true, "探活档:号没换主人,它确实还在");
-  await cleanupAfterRun(bare);
+  const result = await cleanupAfterRun(bare);
   await wait(2400);
-  assert.equal(isPidAlive(unproven.pid!), true, "授权档:拿不出排他凭证就一刀不发");
+  // 同一条按精度分叉的理由(见 ④ 那段):排他档上「授权档」本来就该放行。
+  if (bareStartedAt && recordedGrade(bareStartedAt) === "exclusive") {
+    assert.ok(await goneWithin(unproven.pid!, 2000), "排他档:授权档拿得出凭证 ⇒ 照清");
+  } else {
+    assert.equal(isPidAlive(unproven.pid!), true, "授权档:拿不出排他凭证就一刀不发");
+    // **而且这一轮不许自称清理成功**(本轮审查 F2):进程还在、还能检测到,
+    // `cleanupAfterRun` 必须如实答「还没收干净」,证据和清理责任都留着。
+    assert.notEqual(result.kind, "empty", "证不出归属 ⇒ 清理结论不许是「确证清空」");
+  }
   unproven.kill("SIGKILL");
 }
 
@@ -350,8 +376,15 @@ if (IS_WINDOWS) {
 } else {
   const track = openTrackFd();
   assert.ok(track.fd !== null && track.path, "这条用例要靠追踪文件");
-  // SIGTERM 不吃,而且在那 2 秒等待窗口里**主动放掉追踪 fd**,然后接着活。
-  const stubborn = spawn("/bin/sh", ["-c", 'trap "" TERM; sleep 0.6; exec 3>&-; sleep 30'], {
+  // SIGTERM 不吃,而且**就在收到 TERM 的那一刻主动放掉追踪 fd**,然后接着活。
+  //
+  // 从「起来 0.6 秒后定时关」改成「收到 TERM 时关」,是因为前者测的其实是另一件事:那 0.6 秒
+  // 是从**它自己启动**算的,取证只要慢过这个窗口,第一次 lsof 就已经查不到它 —— 于是这条
+  // 用例变成了「一个从没被认过的进程能不能被杀」(答案本该是不能),而它声称要钉的是
+  // 「**认过之后**丢掉 fd 还能不能补刀」。真实案例(第 3 轮审查 F1 的那个后台服务)也正是
+  // 收到 TERM 才顺手 close 的。挂在 trap 上之后这条用例不再跟取证耗时赛跑。
+  const stubborn = spawn("/bin/sh", ["-c",
+    "trap 'exec 3>&-' TERM; while :; do sleep 1; done"], {
     stdio: ["ignore", "ignore", "ignore", track.fd!],
     detached: true,
   });
@@ -458,6 +491,164 @@ if (IS_WINDOWS) {
   assert.equal(existsSync(orphan), false, "创建者已不在、又没人握着 ⇒ 该删");
   unlinkSync(mine);
   unlinkSync(stillHeld);
+}
+
+// ── ⑬ 树快照的每个成员都带得出「哪个根授权了它」 ──────────────────────────────────
+// 钉的是 F1 的根因:上一版 `processTreeMembers` 交出平铺的 roots/descendants,两者之间
+// 没有连线 —— 于是调用方把根按第二次取证过滤掉之后,那棵树的孩子仍然无条件进了击杀名单
+// (审查实测:根被复查排除、根自己还活着,它的孩子被生产清理代码关掉)。现在形状按根分组,
+// 「拿不到来源根就拿不到成员」是类型上的必然。
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 的树枚举走另一条(进程表行自带代次),跳过 ⑬");
+} else {
+  const parent = spawn(process.execPath, [
+    "-e", "require('child_process').spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],"
+      + "{stdio:'ignore'});setTimeout(()=>{},60000)",
+  ], { stdio: "ignore", detached: true });
+  parent.unref();
+  strays.push(parent);
+  await wait(700);                                // 等孙子起来
+
+  const dead = 999_998;
+  assert.equal(isPidAlive(dead), false, "这条用例要一个确定不存在的根");
+  const trees = await processTreeMembers([parent.pid!, dead]);
+  assert.ok(trees, "前提:这台机器上问得出进程树");
+  assert.equal(trees!.length, 2, "按根分组:给几个种子就回几棵子树");
+
+  const mineTree = trees!.find((t) => t.seed.pid === parent.pid)!;
+  assert.ok(mineTree.root, "活着的根在快照里有自己的那一代");
+  assert.equal(mineTree.root!.gen, mineTree.seed.gen, "根的代次与种子记下的那一代同源");
+  assert.ok(mineTree.descendants.length >= 1, "它的孩子挂在它这棵子树下面");
+  for (const member of mineTree.descendants) {
+    assert.notEqual(member.pid, parent.pid, "后代名单里不含根自己");
+    assert.ok(member.gen, "每个后代都带着与父子关系同源的那一代");
+  }
+
+  const deadTree = trees!.find((t) => t.seed.pid === dead)!;
+  assert.equal(deadTree.root, null, "根已经不在进程表上 ⇒ 它不是成员");
+  assert.equal(deadTree.seed.gen, null, "种子如实记下「这个号此刻不在表上」");
+  // **最要紧的一条**:已经退场的那个根,它名下不许冒出别人的孩子来。
+  assert.equal(deadTree.descendants.length, 0, "退场的根不许带出任何后代");
+
+  try { process.kill(parent.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
+}
+
+// ── ⑭ 根授权不成立时,它名下的后代一个都不许动 ────────────────────────────────────
+// 这是 F1 在**生产清理路径**上的那一面:句柄只有号 + 秒级启动时刻(粗档)、拿不出记号也
+// 拿不出输出文件 ⇒ 这个根不该当树根,于是它的孩子一个都不该被碰。顺带钉 F2 的结论契约:
+// 这一轮不许自称「确证清空」。
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 的授权依据是另一档(残留 ParentProcessId),跳过 ⑭");
+} else {
+  const root = spawn(process.execPath, [
+    "-e", "require('child_process').spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],"
+      + "{stdio:'ignore'});setTimeout(()=>{},60000)",
+  ], { stdio: "ignore", detached: true });
+  root.unref();
+  strays.push(root);
+  await wait(700);
+  const tree = await processTreeMembers([root.pid!]);
+  const kidPid = tree?.[0]?.descendants[0]?.pid;
+  assert.ok(kidPid, "前提:这个根下面确实挂着一个孩子");
+
+  const startedAt = inspectProcess(root.pid!)?.startedAt ?? null;
+  const bare = synthetic(root.pid);
+  markAdoptedChild(bare, root.pid!, startedAt);   // 粗档身份,没有记号、没有输出文件
+  const verdict = await cleanupAfterRun(bare);
+  await wait(2400);                               // 连补刀窗口一起等过去
+
+  if (startedAt && recordedGrade(startedAt) === "exclusive") {
+    console.log("   ~ 排他档(win32)上这个根本来就授权得了,⑭ 的前提不成立,跳过");
+  } else {
+    assert.equal(isPidAlive(root.pid!), true, "根拿不出排他凭证 ⇒ 它自己不许被碰");
+    assert.equal(isPidAlive(kidPid!), true,
+      "**根授权不成立 ⇒ 整棵来源子树作废**:后代自己的代次照样相等,但那不是归属(F1)");
+    assert.notEqual(verdict.kind, "empty", "还有东西活着 ⇒ 清理结论不许是「确证清空」");
+  }
+  try { process.kill(kidPid!, "SIGKILL"); } catch { /* 已经没了 */ }
+  try { process.kill(root.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
+}
+
+// ── ⑯ 快照之后根换了代 ⇒ 整棵来源子树作废 ────────────────────────────────────────
+// F1 要防的那个真实形态:取快照时根好好的,等到要下刀时它已经退场(或者那个号被别人接手)。
+// 它名下那棵子树的孩子**自己的代次照样相等** —— 拿后代代次当归属用就会打在这些孩子身上。
+// 归属只来自根,所以这一刻根的复核不通过,整棵来源子树都得作废。
+//
+// 顺带钉住**读数顺序**:快照在前、归属线索在后。快照里记的是根**那一代**,所以号换主人必然
+// 让复核失败。顺序反过来(先问线索、后取快照)这一步就断了:快照读到的可能已经是接手这个
+// 号的另一个进程,而它自己从那以后没换过代,复核照样通过(这正是上一版要靠第二次 lsof 去
+// 夹、却又分不清「换主人」和「自己松开线索」的原因)。
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 的树枚举与授权走另一档,跳过 ⑯");
+} else {
+  const family = spawn(process.execPath, [
+    "-e", "const {spawn}=require('node:child_process');"
+      + "const kid=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});"
+      + "console.log(JSON.stringify({root:process.pid,kid:kid.pid}));setInterval(()=>{},1000);",
+  ], { stdio: ["ignore", "pipe", "ignore"], detached: true });
+  family.unref();
+  strays.push(family);
+  const ids = JSON.parse(String(await new Promise<Buffer>((r) => family.stdout!.once("data", r))));
+  strayPids.push(ids.root, ids.kid);
+  await wait(400);
+
+  const snap = await processTableSnapshot();
+  assert.ok(snap, "前提:这台机器上拿得到进程表快照");
+  const tree = subtreesOf(snap!, [ids.root])[0]!;
+  assert.ok(tree.root, "前提:快照那一刻根好好的");
+  assert.ok(tree.descendants.some((m) => m.pid === ids.kid), "前提:孩子挂在这棵子树下面");
+  assert.equal(stillSameGeneration(tree.root!), true, "前提:此刻根还是快照里那一代");
+
+  // 根退场 —— 「快照里那个根实例已经不在」的真实形态。
+  try { process.kill(ids.root, "SIGKILL"); } catch { /* 已经没了 */ }
+  await wait(700);
+  assert.equal(stillSameGeneration(tree.root!), false,
+    "根换了代 ⇒ 这一道闸必须答否(授权的落点是快照里那个根实例,不是那个号)");
+  // 孩子自己还是原来那一代 —— **正是因此**不能拿它当归属:它此刻已经被重父到 1 号名下,
+  // 跟那棵以旧根为根的树再没关系了。
+  const kidStill = tree.descendants.find((m) => m.pid === ids.kid)!;
+  assert.equal(stillSameGeneration(kidStill), true,
+    "后代自己的代次照样相等 —— 所以它证明不了归属(F1 的根因)");
+  assert.equal(isPidAlive(ids.kid), true, "来源子树作废 ⇒ 这个孩子一刀都没挨");
+
+  try { process.kill(ids.kid, "SIGKILL"); } catch { /* 已经没了 */ }
+}
+
+// ── ⑮ 「谁还握着这个文件」:退出码 1 不等于「查全了、没找到」 ──────────────────────
+// F2 的第 6 点:`lsof -t -- <不存在的路径>` 打印 `status error` 之后**也退 1**。上一版把全部
+// 退出 1 读成确证空,于是「真的没人握着」(可以销毁证据)和「这一问出错了」(只能重试)
+// 长得一模一样。
+if (IS_WINDOWS) {
+  console.log("   ~ Windows 上没有 lsof 这条路,跳过 ⑮");
+} else {
+  const absent = join(tmpdir(), `ash-track-absent-${process.pid}-${Date.now()}`);
+  assert.equal(existsSync(absent), false, "这条用例要一个确定不存在的路径");
+  const missing = await probeTrackHolders(absent);
+  assert.equal(missing.kind, "unknown", "文件不在 ⇒ 线索断了,不是「确证没人握着」");
+  assert.equal(missing.kind === "unknown" && missing.lost, true,
+    "而且要分得出「再问也没用」这一种,好让清理责任按「追到这里为止」收档");
+
+  // 对照:文件在、真的没人握着 ⇒ 这才是唯一允许销毁证据的那一档。
+  const quiet = join(tmpdir(), `ash-track-quiet-${process.pid}-${Date.now()}`);
+  writeFileSync(quiet, "");
+  tempFiles.push(quiet);
+  assert.equal((await probeTrackHolders(quiet)).kind, "empty", "文件在、没人握着 ⇒ 确证空");
+
+  // 对照:有人握着 ⇒ held。
+  const heldPath = join(tmpdir(), `ash-track-held-${process.pid}-${Date.now()}`);
+  const fd = openSync(heldPath, "w");
+  tempFiles.push(heldPath);
+  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+    stdio: ["ignore", "ignore", "ignore", fd], detached: true,
+  });
+  holder.unref();
+  strays.push(holder);
+  closeSync(fd);
+  await wait(400);
+  const held = await probeTrackHolders(heldPath);
+  assert.equal(held.kind, "held", "有人握着就要答 held");
+  assert.ok(held.kind === "held" && held.pids.includes(holder.pid!), "而且要点出是谁");
+  try { process.kill(holder.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
 }
 
 for (const child of strays) {

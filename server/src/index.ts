@@ -251,6 +251,22 @@ async function initializeServer() {
     const removed = await sweepOrphanTrackFiles();
     if (removed) console.log(`[ash] 回收 ${removed} 个上一轮遗留的逃逸追踪文件`);
   })().catch((err) => console.error("[ash] 逃逸追踪文件回收失败（不影响运行）:", err));
+  // 上一辈子没收干净的 agent 后代:那一轮的清理明确答出「还有残留」或者「没问清楚」,
+  // 责任落在 `agent_cleanup_debts` 上(见那张表的注释)。**排在接管之后**:接回来的那些
+  // 运行自己还会再走一次清理,这里只追真正没人管的。best-effort,不影响启动。
+  void (async () => {
+    const { sweepAgentCleanupDebts, listOpenCleanupDebts } = await import("./executors/cleanup-debt.js");
+    const swept = await sweepAgentCleanupDebts();
+    if (swept.settled || swept.left || swept.closed) {
+      console.log(`[ash] agent 清理责任:销账 ${swept.settled} 笔,仍没收干净 ${swept.left} 笔,`
+        + `追不下去 ${swept.closed} 笔`);
+    }
+    // 还没收干净的那几笔**逐条如实报出来**:静默只会让用户得出「停止按钮坏了」。
+    for (const debt of await listOpenCleanupDebts()) {
+      console.warn(`[ash] 这一次运行的后代还没收干净(记号 ${debt.unitToken}、根 pid=${debt.rootPid ?? "?"}):`
+        + `${debt.detail}。可在 /api/cleanup-debts 查看,POST /api/cleanup-debts/sweep 再追一次`);
+    }
+  })().catch((err) => console.error("[ash] agent 清理责任清扫失败（不影响运行）:", err));
   // 回收上一轮遗留的原始输出文件（纯传输介质，正文早已进 .md）。放在接管之后：
   // 它靠 sessions 判断哪些文件仍在用，接管完那份名单才是准的。best-effort。
   void sweepRunLogs()

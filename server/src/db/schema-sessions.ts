@@ -234,3 +234,65 @@ export const sessionTurns = sqliteTable(
     turnKey: uniqueIndex("session_turns_turn_key").on(t.sessionId, t.startedAt),
   }),
 );
+
+// ── 没收干净的 agent 后代:**清理责任** ────────────────────────────────────────
+//
+// 哨兵那边有一张同构的 `monitor_reclaim_debts`,理由在那份 schema 的注释里写全了。这里是
+// agent 这一侧的同一件事,而它是本轮审查 F2 的落点:
+//
+// 一次运行的后代**可能收不干净**,而且那不一定是 bug —— macOS 上记号只给得出 `suspected`
+// (`ps -E` 是展示文本,不是真实环境项),明确检测到残留却给不出可下刀的落点。那种时候
+// 「不贸然下刀」本身没错,**错的是把它宣布成清理成功**:上一版清理完照样释放证据、删掉
+// 追踪文件、从待收册上划掉,于是那个还在写用户文件的孤儿既查不回来也没人再管
+// (实测:记号前后都明确指出那个号,心跳从 3 涨到 61,追踪文件被删)。
+//
+// 所以「还没收干净」必须是一条**摆在库里的事实**,而且活得比任何一个内存对象都久:
+//  · 不随句柄注销走 —— WeakMap 和待收册都是进程内的;
+//  · 不随回合结束走 —— 同一条会话下一轮会把 `sessions.agent_unit_token` 覆盖掉;
+//  · 不随任务删除走 —— 任务行可能先没了,而那摊进程还在(同哨兵债表,删除批次里刻意没有它)。
+//
+// 行数有界:只有「这一轮没能证明清空」的运行进得来,确证清空(记号 `none` + 没有持有者)
+// 就销账删行。
+export const agentCleanupDebts = sqliteTable("agent_cleanup_debts", {
+  /**
+   * 这一次运行独有的资源记号(`executors/unit-token.ts`),**就是它的身份**。
+   *
+   * 为什么主键是记号而不是 `session_id`:一条会话跨回合复用,每个回合一个进程、一项资源;
+   * 拿会话当键会让下一轮把上一轮还没收掉的那笔覆盖掉 —— 正是 F2 点名的那条
+   * 「同一会话下一轮又会覆写这个单值」。记号每次创建重新随机,一笔一行。
+   */
+  unitToken: text("unit_token").primaryKey(),
+  /** 只做记账和展示 —— 任务/会话行可能已经没了,这两列不保证指向存在的行。 */
+  taskId: text("task_id").notNull().default(""),
+  sessionId: text("session_id").notNull().default(""),
+  /** 认人的那一对:号会被复用,少了启动时刻就可能杀掉同号的无辜进程。 */
+  rootPid: integer("root_pid"),
+  rootStartedAt: text("root_started_at"),
+  /**
+   * 两条**跨得过重启**的线索,清扫侧靠它们重新取证:
+   *  · 追踪文件(继承 fd,按路径 `lsof` 反查持有者);
+   *  · 这一次运行独有的输出文件(根的 stdout 就重定向在它上面)。
+   * 内存里的 WeakMap 一重启就没了,所以这两条必须落在行上。
+   */
+  trackPath: text("track_path"),
+  outPath: text("out_path"),
+  /** `remaining` = 确证还有成员活着;`unknown` = 这一轮问不清楚。两档都不许放手。 */
+  state: text("state").notNull().default("unknown"),
+  /** 人话:还剩哪些号 / 哪一问没答出来。打日志和给用户看的就是这一句。 */
+  detail: text("detail").notNull().default(""),
+  /** 记号那一问当时停在哪一档(`ours`/`suspected`/`none`/`unprovable`),分流重试策略。 */
+  unitVerdict: text("unit_verdict").notNull().default(""),
+  attempts: integer("attempts").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  lastAttemptAt: text("last_attempt_at"),
+  /**
+   * **追到这里为止的时刻**(语义同哨兵债表的 `closed_at`)。空 = 还在追。
+   *
+   * 非空**不等于「已经收干净」**,只等于「能追的线索都答出来、都空了」:记号那一问确证
+   * `none`,追踪文件也没有持有者。POSIX 上后代甩得掉记号(`env -i`)也甩得掉进程组
+   * (`setsid`),所以「整项资源真的退了」这件事在当前平台证不出 —— 收过档的行**不删**,
+   * 它是这次运行最后的可定位身份;只是不再重试、开机也不再报警。
+   */
+  closedAt: text("closed_at"),
+  closedNote: text("closed_note"),
+});

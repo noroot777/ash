@@ -44,6 +44,39 @@ export type ProcessMember = {
   gen: ProcessGeneration;
 };
 
+// ── 「谁授权了它」必须跟着成员一起走 ───────────────────────────────────────────
+//
+// 后代的代次只回答一件事:**这个号此刻还是快照里那个进程吗**。它回答不了「它属于本任务
+// 吗」—— 那份归属自始至终只来自**树根**:根被证明属于本次运行,它名下的后代才跟着属于。
+//
+// 上一版这个函数交出的是平铺的 `{ roots, descendants }`,两者之间没有任何连线。于是调用方
+// 把根按「第二次取证是否仍认它」过滤掉之后,**那棵树的孩子仍然无条件进了击杀名单** ——
+// 根已经被否定,后代自己的代次照样相等,错误授权照样成立(本轮审查 F1 实测:根被复查排除、
+// 根自己还活着,它的孩子却被生产清理代码关掉)。
+//
+// 所以形状改成**按根分组**:拿不到「这个成员是哪个根带进来的」就拿不到成员。调用方要过滤
+// 只能以子树为单位过滤,「根授权失效 ⇒ 整棵来源子树作废」成了类型上的必然,而不是某一个
+// 上层入口记得加的一句判断。
+//
+// 同一个号能从两个根到达时(一个根本身是另一个根的后代)它会在两棵子树里各出现一次 ——
+// 这是刻意的:它确实是两个根各自的后代,任一来源根的授权成立都足以授权它。逐根独立遍历
+// 的代价只是在同一张快照表上多走几遍,表只读一次。
+
+/** 这一次遍历的种子:号 + **快照那一刻**它是哪一代。`gen: null` = 它此刻不在进程表上。 */
+export type ProcessTreeSeed = {
+  pid: number;
+  gen: ProcessGeneration | null;
+};
+
+/** 一个种子名下的子树。成员的归属全部来自 `seed`,**复核 seed 是调用方的义务**。 */
+export type ProcessSubtree = {
+  seed: ProcessTreeSeed;
+  /** 种子自己(它此刻在表上才有)。`null` = 这个号已经退场(Windows 上残留树仍可用)。 */
+  root: ProcessMember | null;
+  /** 种子名下的全部后代,各自带着与父子关系同源的那一代。 */
+  descendants: ProcessMember[];
+};
+
 /**
  * `/proc/<pid>/stat` 右括号之后的那串字段。
  *
@@ -234,24 +267,50 @@ export const stillSameGeneration = (member: ProcessMember): boolean =>
  *    那边**没有**这条缝,直接用它。
  *
  * 查不到返回 null,**不要读成「没有后代」**(ps/`/proc` 失败与真的没有后代是两件事)。
+ *
+ * 返回的是**按种子分组的子树**(见 `ProcessSubtree` 上面那段):每个成员都带得出「哪个根把
+ * 它带进来的」,而那个根的授权要不要复核、怎么复核,由调用方在它自己的证据体系里决定。
  */
 export async function processTreeMembers(
   roots: readonly number[],
-): Promise<{ roots: ProcessMember[]; descendants: ProcessMember[] } | null> {
+): Promise<ProcessSubtree[] | null> {
+  const table = await processTableSnapshot();
+  return table ? subtreesOf(table, roots) : null;
+}
+
+/**
+ * 整张进程表的**一次**快照(父子关系与代次同源,见上面那段)。
+ *
+ * 拆成「先拿快照、再切子树」两段是为了让调用方**先取快照、后取归属线索** —— 这个顺序本身
+ * 就是一道不变量,理由见 `executors/escapees.ts` 里 fd 那一路的注释:快照在前时,
+ * 「快照里这个号的那一代此刻还在」就足以证明「归属线索认的那个进程正是快照里那个进程」;
+ * 顺序反过来就证不出,得另外补一次查询去夹,而那种夹法分不清「它换了主人」和「它自己
+ * 松开了线索」—— 两者的正确处置相反。
+ */
+export async function processTableSnapshot(): Promise<ProcessTableSnapshot | null> {
+  return IS_WINDOWS ? await treeViaProcessList() : treeViaProc() ?? (await treeViaPs());
+}
+
+/** 从一张快照里切出这些根的子树。根的代次**来自快照本身**,所以授权与遍历同源。 */
+export function subtreesOf(
+  table: ProcessTableSnapshot, roots: readonly number[],
+): ProcessSubtree[] {
   const seeds = [...new Set(roots)].filter((pid) => Number.isInteger(pid) && pid > 1);
-  if (!seeds.length) return { roots: [], descendants: [] };
-  const table = IS_WINDOWS ? await treeViaProcessList() : treeViaProc() ?? (await treeViaPs());
-  if (!table) return null;
-  const rootMembers: ProcessMember[] = [];
-  const seen = new Set<number>();
-  const stack: number[] = [];
-  for (const pid of seeds) {
-    const gen = table.gens.get(pid);
-    if (gen) rootMembers.push({ pid, gen });      // 根此刻不在表上 = 它已经退了,不是成员
-    seen.add(pid);
-    stack.push(pid);
-  }
-  const descendants: ProcessMember[] = [];
+  return seeds.map((pid) => {
+    const gen = table.gens.get(pid) ?? null;      // 根此刻不在表上 = 它已经退了
+    return {
+      seed: { pid, gen },
+      root: gen ? { pid, gen } : null,
+      descendants: walkDescendants(table, pid),
+    };
+  });
+}
+
+/** 一个种子名下的后代。**不跨子树去重** —— 两棵子树各自授权,共有的成员两边都要出现。 */
+function walkDescendants(table: ProcessTree, seed: number): ProcessMember[] {
+  const out: ProcessMember[] = [];
+  const seen = new Set<number>([seed]);           // 环形 ppid(不该有,但别据此死循环)
+  const stack = [seed];
   while (stack.length) {
     const parent = stack.pop()!;
     for (const kid of table.kids.get(parent) ?? []) {
@@ -259,14 +318,19 @@ export async function processTreeMembers(
       seen.add(kid);
       const gen = table.gens.get(kid);
       if (!gen) continue;                         // 代次读不出 ⇒ 不收这个成员(宁可漏收)
-      descendants.push({ pid: kid, gen });
+      out.push({ pid: kid, gen });
       stack.push(kid);
     }
   }
-  return { roots: rootMembers, descendants };
+  return out;
 }
 
-type ProcessTree = { kids: Map<number, number[]>; gens: Map<number, ProcessGeneration> };
+/** 一次读数里同时拿到的父子关系与代次。**两者同源**是这整个文件的前提(见文件头)。 */
+export type ProcessTableSnapshot = {
+  kids: Map<number, number[]>;
+  gens: Map<number, ProcessGeneration>;
+};
+type ProcessTree = ProcessTableSnapshot;
 
 const addKid = (tree: ProcessTree, ppid: number, pid: number): void => {
   if (!ppid || ppid === pid) return;

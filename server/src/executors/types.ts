@@ -1,3 +1,4 @@
+import type { CleanupResult } from "./kill.js";
 import type { ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import type { RunTracePaths } from "./diagnostics.js";
@@ -41,8 +42,15 @@ export interface RunHandle {
   command?(command: CliCommand): Promise<string>;
   goal?(): CliGoal | null;
   goalStarted?(): boolean;
-  /** 事件流结束后回收 CLI 甩出去的后台后代；没有真实进程的失败句柄可省略。 */
-  cleanup?: () => Promise<void>;
+  /**
+   * 事件流结束后回收 CLI 甩出去的后台后代;没有真实进程的失败句柄可省略。
+   *
+   * **返回的是三档结论,不是 `Promise<void>`**(本轮审查 F2):resolve 只说明「这一轮跑完了」,
+   * 说明不了「收干净了」—— macOS 上记号明确指出残留却给不出落点时,上一版照样 resolve,
+   * 于是三个调用方(常驻的待收册、单飞收流、无主回合收尾)一致把它读成成功。判据读
+   * `cleanupSettled(result)`:只有 `empty` 才允许放手。
+   */
+  cleanup?: () => Promise<CleanupResult>;
   // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
   // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
   // `unitToken` = 这一次运行的资源记号(executors/unit-token.ts):pid 认得出根,记号才认得出
@@ -103,7 +111,7 @@ export interface ResidentHandle {
    * 会话在桌面端可见」才触发的事件包装器里,于是那条路对外等于没有能力(第 1 轮审查 F1)。
    * claude(residentFromChild)与 codex(codex-resident.ts)两侧都实现了它。
    */
-  cleanup: () => Promise<void>;
+  cleanup: () => Promise<CleanupResult>;
 }
 
 // 从执行器 profile(agents 表一行)解析出来的构造参数 —— 单点在

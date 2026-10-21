@@ -493,6 +493,24 @@ mountGroupRoutes(api);
 mountTaskRunRoutes(api);
 // 哨兵:绑在任务上的长跑命令,stdout 每一行就是一条唤醒事件(实现在 ./monitors.ts)。
 mountMonitorRoutes(api);
+
+// ── 「还没收干净的 agent 后代」:**持久可见的那一面** ───────────────────────────
+//
+// 根约定「停止/暂停必须留下持久可见的状态」的同一条判据:刷新页面之后仍然看得出
+// 「有东西没收掉」。清理结论本身落在 `agent_cleanup_debts`(见那张表的注释),这两个端点
+// 是它的读取面和**用户自己按的重试入口**。
+//
+// 为什么重试要有一个显式入口而不只靠开机清扫:macOS 上记号只给得出 `suspected`(看得见、
+// 给不出落点),那种残留要等到用户手动处理或者进程自己退出 —— 让他能当场再问一次,比让他
+// 重启整个服务才知道结果强。这一问**只读 + 下刀只打证明过的成员**,不碰任何别的进程。
+api.get("/cleanup-debts", async (c) => {
+  const { listOpenCleanupDebts } = await import("./executors/cleanup-debt.js");
+  return c.json(await listOpenCleanupDebts());
+});
+api.post("/cleanup-debts/sweep", async (c) => {
+  const { sweepAgentCleanupDebts } = await import("./executors/cleanup-debt.js");
+  return c.json(await sweepAgentCleanupDebts());
+});
 // 任务接力:探活/预检/导出/导入(实现在 ./handoff.ts 与 ./handoff-import.ts)。
 mountHandoffRoutes(api);
 // 任务工作目录的只读文件浏览 + 交给本机去做的三个动作(实现在 ./file-routes.ts)。

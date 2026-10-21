@@ -61,6 +61,29 @@ export function seedUnitToken(env: NodeJS.ProcessEnv): string {
 const unitTokens = new WeakMap<ChildProcess, string>();
 
 /**
+ * 这一次运行**独有的输出文件**(detached 那条路有,普通 exec 没有)。
+ *
+ * 为什么记在这里:它是 `killByPid` 的第二份独立证据,也是清理责任记录里跨得过重启的那条
+ * 线索 —— 根的 stdout 就重定向在它上面,所以「谁还握着它」问的正是「这次运行的根还在不在」。
+ * 登记在记号旁边是因为两者同生命周期,而且使用方(落责任)一次要两样都拿。
+ */
+const runOutPaths = new WeakMap<ChildProcess, string>();
+
+/** 起完 detached 进程时登记它那份输出文件路径(普通 exec 没有,不登记)。 */
+export function registerRunOutPath(child: ChildProcess, outPath: string | null | undefined): void {
+  if (outPath) runOutPaths.set(child, outPath);
+}
+
+/** 合成句柄/接回句柄与真进程成对出厂时过户。 */
+export function shareRunOutPath(source: ChildProcess, target: ChildProcess): void {
+  const path = runOutPaths.get(source);
+  if (path) runOutPaths.set(target, path);
+}
+
+/** `null` = 这条路没有独有的输出文件(普通 exec、或者接回时没传)。 */
+export const runOutPathOf = (child: ChildProcess): string | null => runOutPaths.get(child) ?? null;
+
+/**
  * 起完进程登记记号。**同时把上一次扫描作废** —— 缓存只会朝一个方向出错,而那个方向是致命的:
  * 一次比这个进程还老的扫描里当然没有它的记号,于是「线索已追空」被当场判成立(理由与作废点
  * 见 monitor-unit-scan.ts 的 `invalidateMonitorUnitScan`)。

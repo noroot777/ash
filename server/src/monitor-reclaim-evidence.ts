@@ -179,11 +179,17 @@ const stateOfIdentity = (who: ReturnType<typeof identityOf>): ReclaimState =>
  * 所以这一档只看**读数本身带不带秒以下精度**,不看平台常量:存量行里存的是哪个平台写的值,
  * 它自己说得清。
  */
-type RecordedGrade = "exclusive" | "coarse";
+export type RecordedGrade = "exclusive" | "coarse";
 
 const SUBSECOND_READING = /\d:\d{2}:\d{2}[.,]\d/;
 
-const recordedGrade = (recorded: string): RecordedGrade =>
+/**
+ * 记在案的那个启动时刻**有多排他**。导出是给回归测试用的(本轮审查 N5):
+ * 「证不出归属就不下刀」这条预期**只对粗档成立** —— 排他档(win32 的 CreationDate 带毫秒)
+ * 那个读数自己就是凭证,照杀才是对的。测试按这个函数分叉,而不是写成「全平台都不许杀」:
+ * 后者会把 win32 上正确的授权行为钉成缺陷,而 macOS 上通过看不出这件事。
+ */
+export const recordedGrade = (recorded: string): RecordedGrade =>
   SUBSECOND_READING.test(recorded) ? "exclusive" : "coarse";
 
 /**
