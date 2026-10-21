@@ -25,6 +25,7 @@ window.EventSource = FixtureEvents as unknown as typeof EventSource;
 const at = "2026-10-21T04:24:00.000Z";
 const scenarios: Record<string, { label: string; text: string; monitorWake?: MonitorWakeData; reply: string }> = {
   result: { label: "新结果到达", ...wakePayload([outputEvent]), reply: "收到这轮全量回归结果：共运行 3471 项测试，整轮通过（跳过 1 项），退出码 0。\n\n我会据此核对最终改动和提交状态，再完成收尾。" },
+  screenshot: { label: "截图中的场景", ...wakePayload([{ ...outputEvent, source: "验证 ./kb.sh test probes 浏览器回归层（预计约 8 分钟）", body: "----------------------------------------------------------------------\nRan 430 tests in 574.279s\nOK\nSWEEP_EXIT=0" }], "核对本轮 probes 回归结果后继续收尾。"), reply: "probes 层也绿了：430 条，575 秒，rc=0。三层全部验证通过，继续核对本轮改动。" },
   ended: { label: "旧哨兵结束", ...wakePayload([endEvent]), reply: "刚才这条是旧哨兵的结束通知，不是新结果。\n\n提交前那一遍全量还在跑；等它收尾后我再提交。" },
   batch: { label: "多事件合并", ...wakePayload([outputEvent, { ...endEvent, monitorId: outputEvent.monitorId, source: outputEvent.source }], "核对结果后再收尾。"), reply: "收到合并输入里的回归输出和结束通知，我会一起核对这轮结果。\n\n这次只继续处理一轮，不会把结束通知直接当作任务完成。" },
   long: { label: "长输出", ...wakePayload([{ ...outputEvent, body: outputEvent.body + "\n" + "long-output-".repeat(1200) }]), reply: "完整输出仍在输入详情里，先核对最后的结果。" },

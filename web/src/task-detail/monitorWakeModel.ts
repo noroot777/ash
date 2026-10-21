@@ -32,7 +32,7 @@ export function monitorWakeInput(item: ConversationItem): MonitorWakeInput | nul
     eventCount,
     reason: eventCount > 1
       ? `收到 ${eventCount} 条哨兵消息，合并为一次输入。`
-      : latest.kind === "ended" ? "哨兵已结束，唤起会话核对结果。" : "收到哨兵的新输出，唤起会话继续处理。",
+      : latest.kind === "ended" ? "哨兵已结束，继续核对结果。" : "收到新输出，继续处理。",
     source: sources.length > 1 ? `${name} 等${data.omittedEvents ? "至少" : ""} ${sources.length} 个哨兵` : name,
     historyTruncated: data.omittedEvents > 0 || data.events.some((event) => event.bodyTruncated),
     hasCheckpoint: !!data.checkpoint,

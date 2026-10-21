@@ -103,6 +103,10 @@ for (const render of [renderTask, renderTeam]) {
   assert.match(html, /2 条消息 → 1 次输入/);
   assert.match(html, /复制完整自动输入/);
   assert.match(html, /<details class="monitor-wake-raw"><summary>/);
+  assert.match(html, /monitor-wake-mark/);
+  assert.match(html, /monitor-wake-source-label">来自哨兵/);
+  assert.match(html, /monitor-wake-expand">查看完整输入与来源/);
+  assert.doesNotMatch(html, /monitor-wake-avatar|monitor-wake-context|不是普通通知/);
   assert.ok(html.includes(combined.text));
   assert.match(html, /system-event-(?:digest|row)/);
   assert.doesNotMatch(html, /已送达 Agent|任务成功/);
