@@ -659,6 +659,24 @@ try {
       assert.doesNotMatch(await form.innerText(), /永远不会结束/, `这条命令会自己结束：${command}`);
       assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
     }
+    // ⑧ 第 2 轮审查 F1:**判据一抛,这张表单整棵树就卸载** —— 审查实测填到 `./constructor -v`
+    //    那一下整页变成空白。命令词正好撞上 `Object.prototype` 上的名字是一类输入,所以这里
+    //    逐个填一遍:页面必须还在、按钮必须能点。
+    for (const command of ["./constructor", "./constructor -v", "./toString -v", "/x/valueOf -u FOO tail -F x"]) {
+      await cmd.fill(command);
+      assert.equal(await form.count(), 1, `判据抛异常会把这张表单整棵树卸载：${command}`);
+      assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
+    }
+    // ⑨ 第 2 轮审查 F2:整个形状连不起来的那几条,页面这一侧也不许说「永远不会结束」。
+    for (const command of [
+      "tail -F /dev/null 1>&- 2>&1; printf 'DONE'",
+      "nice -n not-a-number tail -F /dev/null; printf 'DONE'",
+      "tail -F -n not-a-number /dev/null; printf 'DONE'",
+    ]) {
+      await cmd.fill(command);
+      assert.doesNotMatch(await form.innerText(), /永远不会结束/, `这条命令会自己结束：${command}`);
+      assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
+    }
     // ⑦b 真阳对照:事故的起因命令带着 `2>/dev/null`,它照旧要逼选（不然上面那四条等于把闸拆了）。
     await cmd.fill("tail -F build.log 2>/dev/null | grep --line-buffered ERROR");
     assert.match(await form.innerText(), /永远不会结束/, "起因命令照旧要说出来");

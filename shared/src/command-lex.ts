@@ -191,12 +191,18 @@ export function segments(command: string): Segment[] {
 }
 
 /**
- * 一个**重定向**:运算符本体 + 它的目标。目标是字面文本（引号已拆、`$( )` 已占位成 `?`）。
+ * 一个**重定向**:运算符本体、它作用的那个描述符、它的目标。目标是字面文本（引号已拆、
+ * `$( )` 已占位成 `?`）。
  *
- * 这一层只答「这一段上写着哪几个重定向、各自指向什么」。**「它打不打得开」不在这儿答** ——
- * 那是判据层的事（见 command-never-exits.ts 的 `redirectProvable`）。
+ * `fd` 是**被改写的那一个描述符**（第 2 轮审查 F2）:写了 fd 前缀就是它（`2>&1` 的 2），
+ * 没写就按方向取默认（`<` 一侧是 0，`>` 一侧是 1）。少了它,「关掉 1 之后再从 1 复制」这种
+ * **按顺序才成立**的事实根本表达不出来 —— 审查实测 `tail -F /dev/null 1>&- 2>&1` 里两项
+ * 单看都「安全」,连起来却让整条命令一个字都没跑（shell 报 Bad file descriptor,随后退出 0）。
+ *
+ * 这一层只答「这一段上写着哪几个重定向、各自作用在谁身上、指向什么」。**「它打不打得开」
+ * 不在这儿答** —— 那是判据层的事（见 command-never-exits.ts 的 `startProvable`）。
  */
-export type Redirect = { op: string; target: string };
+export type Redirect = { op: string; fd: number; target: string };
 
 /** 运算符本体的第二个字符（`>>`、`<<`、`<>`、`<&`、`>&`、`>|`）。 */
 const OP_TAIL = new Set(["<", ">", "&", "|"]);
@@ -212,30 +218,38 @@ const OP_TAIL = new Set(["<", ">", "&", "|"]);
  * （`> f`）—— 后者会把那个词吃掉,免得它被重新当成一段新文本扫一遍。
  *
  * 一个词里写了两个（`>a<b`）照样各算一个:目标切到**下一个引号外的运算符**为止。
+ *
+ * fd 前缀**只在它独占运算符前面那一整段时才算**（POSIX 的 IO_NUMBER）:`2>f` 的 2 是描述符,
+ * 而 `x2>f` 里那个 2 是词 `x2` 的一部分,重定向走默认的 1。
  */
 export function redirectsOf(tokens: Token[]): Redirect[] {
   const out: Redirect[] = [];
   for (let k = 0; k < tokens.length; k += 1) {
     const tok = tokens[k]!;
     let i = 0;
+    // 这一段「子词」从哪儿开始:fd 前缀只认独占这一段的那种（见上面那段关于 IO_NUMBER 的话）。
+    let wordStart = 0;
     while (i < tok.bare.length) {
       const c = tok.bare[i]!;
       if (c !== "<" && c !== ">") { i += 1; continue; }
+      const prefix = tok.bare.slice(wordStart, i);
       let j = i + 1;
       const next = tok.bare[j];
       if (next !== undefined && OP_TAIL.has(next)) j += 1;
       // `<<<` 是 here-string（整条命令更早就按 here-doc 放行了，这里只为把目标切对）。
       if (c === "<" && next === "<" && tok.bare[j] === "<") j += 1;
       const op = tok.bare.slice(i, j);
+      const fd = /^\d+$/.test(prefix) ? Number(prefix) : c === "<" ? 0 : 1;
       let e = j;
       while (e < tok.bare.length && tok.bare[e] !== "<" && tok.bare[e] !== ">") e += 1;
       const inWord = tok.text.slice(j, e);
       if (inWord) {
-        out.push({ op, target: inWord });
+        out.push({ op, fd, target: inWord });
         i = e;
+        wordStart = e;
         continue;
       }
-      out.push({ op, target: tokens[k + 1]?.text ?? "" });
+      out.push({ op, fd, target: tokens[k + 1]?.text ?? "" });
       k += 1;
       break;
     }

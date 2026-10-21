@@ -57,6 +57,19 @@
 //    （`startProvable`,循环/分组/简单命令三个作用域共用一份）。方向是同一个:**支持得了的
 //    词法和执行模式才配产出一个硬拦的结论**,任一层答不出来就往上冒成「不拦」。
 //
+// ⑥ **「证明得出会跑」要对**整个形状**成立,不是对它的每一项分别成立**（第 2 轮审查 F2）。
+//    ⑤把三层的「我不知道」都往上冒了,可每一层内部还是逐项各看一眼,于是六种会自己结束的
+//    命令照旧被 409（审查实测,全部退出 0 并打出 DONE）:
+//      · `tail -F /dev/null 1>&- 2>&1` —— 两项单看都安全,连起来是「从一个已经关掉的描述符
+//        复制」(循环、分组两个作用域同样);判据改成**带描述符状态按顺序走一遍**
+//      · `env -C 不存在的目录 tail -F x`、`nice -n not-a-number tail -F x` —— 包装命令的
+//        开关**值**本身就是启动前提;白名单里那几个吃值的开关连**值的形状**一起认,证明不出
+//        来的（`sudo` 的认证、`env -C` 的目录）整个不收
+//      · `tail -F -n not-a-number /dev/null` —— 跟随型只找了那个跟随开关,没问同一条 argv
+//        里**别的参数会不会让它根本没开始跟随**;跟随型目录改成「这条 argv 全认得出来才算」
+//    方向还是⑤那一个,只是作用域从「一项」提到「整个形状」:**支持得了的组合才配产出一个硬拦
+//    的结论**,任一处连不起来就往上冒成「不拦」。
+//
 // ── 误判的代价不对称,所以只认**明确**的那几种 ───────────────────────────────────
 //
 // 漏判（把一条永不退出的命令放过去）= 退回今天的行为,不比现状坏;误判（把一条会自己结束
@@ -71,17 +84,36 @@
 // 这个文件只收它的结果 —— 「每个字符在不在引号外」这件事由那边负责记下来(见 `Token.bare`)。
 import {
   blankComments, blankQuoted, redirectsOf, segments,
-  type Redirect, type Segment, type Token,
+  type Segment, type Token,
 } from "./command-lex.ts";
+import { followerOf } from "./command-followers.ts";
 
 /**
- * 一个**已知透明**的开关:它不改变「后面那个词就是真正要跑的命令」这件事。`value` = 它还
- * 要再吃一个词当参数（`-u NAME`、`-n 5`）。
+ * 一个**已知透明**的开关:它不改变「后面那个词就是真正要跑的命令」这件事。
+ *
+ * `value` = 它还要再吃一个词当参数,**而且那个词得长这个样**（第 2 轮审查 F2）。只记「要吃
+ * 一个词」是不够的:`nice -n not-a-number tail -F /dev/null` 里 nice 在校验那一步就
+ * invalid nice value 退出,后面那个 tail 一次都没跑（实测退出 0 并打出 DONE）。值的形状是
+ * **写在输入里的启动前提**,不是「二进制可能没装」那种无穷外部假设。
  */
-type Transparent = { re: RegExp; value?: boolean };
+type Transparent = { re: RegExp; value?: RegExp };
+
+/** 环境变量名（`env -u` 的值）。 */
+const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** nice 的调整量。 */
+const NICE_VALUE = /^[+-]?\d+$/;
+/** stdbuf 的缓冲规格:`L`（行缓冲）、`0`（不缓冲）、字节数。 */
+const BUF_SPEC = /^(?:L|0|\d+[kKmMgG]?)$/;
 
 /**
  * 这些词只是**包一层**，真正跑的是后面那个命令 —— 跳过它和它身上**认得出来**的那几个开关。
+ *
+ * **用 Map 存,不用普通对象**（第 2 轮审查 F1）。`name` 是命令 basename,任何字符串都可能
+ * 落进来:普通对象上 `WRAPPERS["constructor"]`、`WRAPPERS["toString"]` 取到的是
+ * `Object.prototype` 上那几个成员,随后 `forms.find(...)` 直接 `TypeError`。审查实测
+ * `./constructor -v` 让**整个页面变成空白**（判据在每次渲染里同步调用）、创建接口 500 ——
+ * 而那条命令在 `/bin/sh` 下打完 DONE 就退出 0。Object.prototype 上那 12 个名字是同一类,
+ * 所以修的是**存储和查询这一层**,不是逐个排除那几个名字。
  *
  * **只认白名单,认不出来的开关当场放弃这一段**（第 3 轮审查 F1）。上一版把所有 `-` 开头的词
  * 一律当成「包装命令自己的开关」跳过去,于是 `command -v tail -F /dev/null; printf 'DONE\n'`
@@ -92,23 +124,29 @@ type Transparent = { re: RegExp; value?: boolean };
  * 补的不是「再排除一个 `-v`」,而是把方向倒过来:**认得出来的才跳,认不出来的就说读不懂**。
  * 漏一个 ⇒ 这一段按未知放行（退回今天的行为）;多认一个 ⇒ 一条会自己结束的命令被 409
  * （见文件头那段不对称）。所以这张表只收**确定仍然会去执行后面那个命令**的开关。
+ *
+ * 故意**整个不收**的两类（第 2 轮审查 F2）:
+ *  · `sudo` —— 它跑不跑后面那个命令取决于 sudoers 策略和密码,`-n` 这种「不许问密码」在没有
+ *    免密规则时直接 1 退出（本机实测如此）。那是**认证**这个启动前提,这一层答不出来。
+ *  · `env -C DIR` / `--chdir=DIR` —— 切不进那个目录 env 就直接退（实测 `cannot change
+ *    directory`,随后打出 DONE 并退出 0）。目录在不在这一层答不出来。
  */
-const WRAPPERS: Record<string, readonly Transparent[]> = {
-  env: [{ re: /^-$/ }, { re: /^-i$/ }, { re: /^-u$/, value: true }, { re: /^--unset=./ },
-    { re: /^-C$/, value: true }, { re: /^--chdir=./ }],
-  nohup: [],
-  nice: [{ re: /^-n$/, value: true }, { re: /^-\d+$/ }, { re: /^--adjustment=\d/ }],
-  ionice: [{ re: /^-c\d*$/ }, { re: /^-n\d*$/ }, { re: /^-t$/ }, { re: /^--ignore$/ },
-    { re: /^--class(?:data)?=/ }],
-  stdbuf: [{ re: /^-[ioe].+$/ }, { re: /^-[ioe]$/, value: true },
-    { re: /^--(?:input|output|error)=./ }],
-  unbuffer: [{ re: /^-p$/ }],
-  sudo: [{ re: /^-n$/ }, { re: /^-H$/ }, { re: /^-E$/ }, { re: /^-S$/ },
-    { re: /^-u$/, value: true }, { re: /^-g$/, value: true }],
-  command: [{ re: /^-p$/ }],
-  exec: [{ re: /^-c$/ }, { re: /^-l$/ }, { re: /^-a$/, value: true }],
-  time: [{ re: /^-p$/ }],
-};
+const WRAPPERS = new Map<string, readonly Transparent[]>([
+  ["env", [{ re: /^-$/ }, { re: /^-i$/ }, { re: /^-u$/, value: VAR_NAME },
+    { re: /^--unset=[A-Za-z_][A-Za-z0-9_]*$/ }]],
+  ["nohup", []],
+  ["nice", [{ re: /^-n$/, value: NICE_VALUE }, { re: /^-\d+$/ }, { re: /^--adjustment=[+-]?\d+$/ }]],
+  ["ionice", [{ re: /^-c[0-3]$/ }, { re: /^-c$/, value: /^[0-3]$/ },
+    { re: /^-n[0-7]$/ }, { re: /^-n$/, value: /^[0-7]$/ },
+    { re: /^-t$/ }, { re: /^--ignore$/ }, { re: /^--class(?:data)?=\d$/ }]],
+  ["stdbuf", [{ re: /^-[ioe](?:L|0|\d+[kKmMgG]?)$/ }, { re: /^-[ioe]$/, value: BUF_SPEC },
+    { re: /^--(?:input|output|error)=(?:L|0|\d+[kKmMgG]?)$/ }]],
+  ["unbuffer", [{ re: /^-p$/ }]],
+  ["command", [{ re: /^-p$/ }]],
+  ["exec", [{ re: /^-c$/ }, { re: /^-l$/ }, { re: /^-a$/, value: /^[^\0]+$/ }]],
+  ["time", [{ re: /^-p$/ }]],
+]);
+
 /** 这些词带着死线:整条简单命令一定会结束，里面是什么都不看。 */
 const TIMED = new Set(["timeout", "gtimeout"]);
 
@@ -128,7 +166,7 @@ function commandOf(tokens: Token[], from = 0): { name: string; argv: Token[]; bo
     if (t.quoted) return null;
     const name = t.text.split("/").pop() ?? t.text;
     if (TIMED.has(name)) return { name, argv: tokens.slice(i + 1), bounded: true };
-    const forms = WRAPPERS[name];
+    const forms = WRAPPERS.get(name);
     if (forms) {
       i += 1;
       // 开关一个个对着白名单认。不是 `-` 开头的那个词就是被包的命令词（交给下一圈判）。
@@ -138,7 +176,12 @@ function commandOf(tokens: Token[], from = 0): { name: string; argv: Token[]; bo
         if (o.text === "--") { i += 1; break; }   // 之后再没有开关
         const form = forms.find((f) => f.re.test(o.text));
         if (!form) return null;                   // 认不出来 ⇒ 这一段读不懂 ⇒ 放行
-        i += form.value ? 2 : 1;
+        if (!form.value) { i += 1; continue; }
+        // 吃值的开关:**值也得长对**（见 `Transparent.value`）—— 值不对形状的那种,包装命令
+        // 自己就在校验那一步退了,后面那个命令一次都不会跑。
+        const v = tokens[i + 1];
+        if (!v || !form.value.test(v.text)) return null;
+        i += 2;
       }
       continue;
     }
@@ -147,44 +190,8 @@ function commandOf(tokens: Token[], from = 0): { name: string; argv: Token[]; bo
   return null;
 }
 
-/**
- * argv 里有没有这个短开关（含 `-qF` 这种并写）或长开关。
- *
- * **`--` 之后不再有开关**（第 2 轮审查 F3）：`tail -- -f` 盯的是一个名叫 `-f` 的文件，打完
- * 就退 —— 把那个操作数读成「跟随模式」，就是拿一条会自己结束的命令去换一个 409。
- */
-function hasFlag(argv: Token[], short: RegExp, long: string): boolean {
-  for (const { text, quoted } of argv) {
-    if (quoted) continue;
-    if (text === "--") return false;
-    if (text.startsWith("--")) {
-      if (text === long || text.startsWith(`${long}=`)) return true;
-      continue;
-    }
-    if (text.startsWith("-") && short.test(text)) return true;
-  }
-  return false;
-}
-/** argv 里第一个不是开关的词（`watch` 要有活干、`docker logs` 的子命令）。 */
-const operands = (argv: Token[]): string[] => argv.filter((t) => !t.text.startsWith("-")).map((t) => t.text);
-
-/**
- * 跟随型：这些命令的语义就是「盯着不走」，放在管道里也一样 —— 它不退出，整条管道就不退出
- * （`tail -f x | grep -m1 y` 也救不了：日志安静下来 `tail` 收不到 SIGPIPE，管道照样挂着）。
- *
- * 判据全部落在**那一条简单命令自己的 argv** 上（见文件头 ①）。
- */
-const FOLLOWERS: readonly { name: string; what: string; follows: (argv: Token[]) => boolean }[] = [
-  { name: "tail", what: "tail -f/-F", follows: (a) => hasFlag(a, /^-[^-]*[fF]/, "--follow") },
-  { name: "watch", what: "watch", follows: (a) => operands(a).length > 0 },
-  { name: "inotifywait", what: "inotifywait -m", follows: (a) => hasFlag(a, /^-[^-]*m/, "--monitor") },
-  { name: "journalctl", what: "journalctl -f", follows: (a) => hasFlag(a, /^-[^-]*f/, "--follow") },
-  { name: "kubectl", what: "kubectl logs -f", follows: (a) => operands(a)[0] === "logs" && hasFlag(a, /^-[^-]*f/, "--follow") },
-  { name: "docker", what: "docker logs -f", follows: (a) => operands(a)[0] === "logs" && hasFlag(a, /^-[^-]*f/, "--follow") },
-  { name: "podman", what: "podman logs -f", follows: (a) => operands(a)[0] === "logs" && hasFlag(a, /^-[^-]*f/, "--follow") },
-  // `fswatch` 默认就是盯着不走，`-1` 才是「等第一次事件就退」。
-  { name: "fswatch", what: "fswatch", follows: (a) => !hasFlag(a, /^-[^-]*1/, "--one-event") },
-];
+// **跟随型的那张工具目录在隔壁**(command-followers.ts,单文件 700 行的约定):哪些命令的
+// 语义是「盯着不走」、它们的 argv 读不读得懂,都归那边（见 `followerOf`）。
 
 
 /**
@@ -196,14 +203,20 @@ const FUNC_DEF = /(?:^|[;&|\n])\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_-]*\s*(?:\
 /** here-doc / here-string:`<<EOF` 到终止词之间是**数据**,不是执行节点。 */
 const HERE_DOC = /<</;
 
-/** 分支结构:开它的词 → 关它的词。**整区不扫** —— 哪几支会跑是运行时的事。 */
-const BRANCH: Record<string, string> = { if: "fi", case: "esac" };
+/**
+ * 分支结构:开它的词 → 关它的词。**整区不扫** —— 哪几支会跑是运行时的事。
+ *
+ * 跟 `WRAPPERS`、`CLOSERS` 一样用 Map:这几张表的键全都来自命令里的字,**普通对象会把
+ * `Object.prototype` 上的同名成员一起算进来**（第 2 轮审查 F1 —— 那一条是在 WRAPPERS 上
+ * 炸的,但三张表是同一类入口,所以一起钉住）。
+ */
+const BRANCH = new Map<string, string>([["if", "fi"], ["case", "esac"]]);
 /** 循环头。`do … done` 之间是循环体,它跑不跑得到另算（见 `loopShape`）。 */
 const LOOP_HEADS = new Set(["while", "until", "for", "select"]);
 /** 结构骨架:这些词不是命令词,剥掉之后那一段才是真正的简单命令（`then tail -F x`）。 */
 const SKELETON = new Set(["then", "else", "elif", "do", "done", "fi", "esac", "in", "!"]);
 /** 关键字只在**命令词位置**才算关键字（`grep -n fi src` 里那个 `fi` 是参数）。 */
-const KEYWORDS = new Set([...Object.keys(BRANCH), ...LOOP_HEADS, ...SKELETON]);
+const KEYWORDS = new Set([...BRANCH.keys(), ...LOOP_HEADS, ...SKELETON]);
 /**
  * 一旦出现，**它后面的东西一条都证明不出会跑**:`exit 0; tail -F x` 里那个 tail 永远不会
  * 执行（第 1 轮审查 F3 实测:`/bin/sh` 当场退出 0,而创建闸照旧 409）。
@@ -280,7 +293,7 @@ type Scan = {
 };
 
 /** 关它的词 → 开它的词。这三对都**只认命令词位置**（`grep -n fi src` 里那个 `fi` 是参数）。 */
-const CLOSERS: Record<string, string> = { fi: "if", esac: "case", done: "do" };
+const CLOSERS = new Map<string, string>([["fi", "if"], ["esac", "case"], ["done", "do"]]);
 const COUNTED: readonly ReadonlySet<string>[] = [TERMINATORS, ESCAPES, JUMPS];
 
 function scanOf(segs: Segment[]): Scan {
@@ -315,7 +328,7 @@ function scanOf(segs: Segment[]): Scan {
   for (let i = 0; i < n; i += 1) {
     for (const w of headKeywords(segs[i]!.tokens)) {
       open[w]?.push(i);
-      const opener = CLOSERS[w];
+      const opener = CLOSERS.get(w);
       // 覆盖式写入:同一段里开了两个同类（`do while x` 这种连写）的话，留下**最外面**那个
       // 收尾段 —— 区更大 ⇒ 扫进去的更少 ⇒ 偏放行那一侧。
       if (opener !== undefined) {
@@ -380,28 +393,26 @@ function loopShape(head: string, tokens: Token[], from: number): { bodyRuns: boo
 }
 
 /**
- * 这个重定向**证明得出一定打得开**吗。
- *
- * 只有三种算得上证明:
- *  · 目标就是 `/dev/null` —— 它在任何 POSIX 系统上都在、都打得开
- *  · `<&N` / `>&N` 复制一个**一定开着**的描述符（0/1/2 由 shell 给齐）
- *  · `<&-` / `>&-` 关掉一个描述符 —— 这件事不会失败
- *
- * 其余一律算**证明不出来**:任何路径（存不存在、父目录有没有、写不写得进去这一层答不出来）、
- * 任何 `$VAR` / `$( )`（这一层根本不知道它会展开成什么）。here-doc 更早就整条放行了。
- */
-function redirectProvable({ op, target }: Redirect): boolean {
-  if (op === "<&" || op === ">&") return target === "-" || /^[012]$/.test(target);
-  if (op.startsWith("<<")) return false;
-  return target === "/dev/null";
-}
-
-/**
  * 这个东西（一条简单命令 / 一个循环 / 一个分组）**证明得出开始跑了**吗 —— 单问重定向这一关。
  *
  * 重定向是**能不能开始跑**的前置条件:打不开那一个,shell 报一句错,被它挂着的那条命令、
  * 那个循环、那一整组**一个字都不会跑**,而整条命令照旧往下走、正常退出。所以判据是
  * 「挂在它身上的每一个重定向都证明得出打得开」,而不是「有没有写重定向」。
+ *
+ * **要按顺序、带着描述符状态走一遍,不是逐项各看一眼**（第 2 轮审查 F2）。上一版是
+ * `every(单项证明)`,于是 `tail -F /dev/null 1>&- 2>&1` 被硬拦:「关掉 1」一定成功、「从 1
+ * 复制」看上去也安全,可**连起来**第二项就是从一个已经关掉的描述符复制 —— shell 报
+ * Bad file descriptor,那条 tail 一次都没跑（实测退出 0 并打出 DONE;循环和分组两个作用域
+ * 同样）。所以这里维护一份「这会儿哪些描述符是开着的」,从 shell 给的 0/1/2 起步,逐个应用。
+ *
+ * 一项证明得出打得开,只有三种:
+ *  · 目标就是 `/dev/null` —— 它在任何 POSIX 系统上都在、都打得开
+ *  · `<&N` / `>&N` 复制一个**此刻确实开着**的描述符（它可能是 0/1/2,也可能是前面某一项刚打
+ *    开的 3、4……）
+ *  · `<&-` / `>&-` 关掉一个描述符 —— 这件事不会失败（关掉之后那一位就不再开着）
+ *
+ * 其余一律算**证明不出来**:任何路径（存不存在、父目录有没有、写不写得进去这一层答不出来）、
+ * 任何 `$VAR` / `$( )`（这一层根本不知道它会展开成什么）。here-doc 更早就整条放行了。
  *
  * **三个作用域共用这一道**（第 3 轮审查 F1）。上一版只问「有没有引号外的 `<`」,于是三处各
  * 漏一半（全部实测 `/bin/sh` 退出 0 并打出 DONE,而创建闸 409）:
@@ -417,7 +428,21 @@ function redirectProvable({ op, target }: Redirect): boolean {
  * **不扩成「命令自己也可能启动不了」**:那条路上任何命令都可能 127（二进制不在）,按那个
  * 标准什么都证明不出来、整个判据作废。这里认的始终是**写在结构上的运算符**。
  */
-const startProvable = (tokens: Token[]): boolean => redirectsOf(tokens).every(redirectProvable);
+function startProvable(tokens: Token[]): boolean {
+  // shell 交给一条命令的时候 0/1/2 一定是开着的（哨兵这边三个都是管道）。
+  const open = new Set([0, 1, 2]);
+  for (const { op, fd, target } of redirectsOf(tokens)) {
+    if (op === "<&" || op === ">&") {
+      if (target === "-") { open.delete(fd); continue; }
+      if (!/^\d+$/.test(target) || !open.has(Number(target))) return false;
+      open.add(fd);
+      continue;
+    }
+    if (op.startsWith("<<") || target !== "/dev/null") return false;
+    open.add(fd);
+  }
+  return true;
+}
 
 /**
  * 这个循环的**形状读得懂吗** —— 读得懂才轮到 `loopShape` 下结论（第 5 轮审查 F2）。
@@ -445,7 +470,7 @@ function loopReadable(scan: Scan, from: number, end: number): boolean {
 }
 
 /**
- * 扫出**证明得出会跑**的那几条简单命令，对它们问 FOLLOWERS;顺带认恒真循环（见文件头 ③④）。
+ * 扫出**证明得出会跑**的那几条简单命令，对它们问跟随型;顺带认恒真循环（见文件头 ③④）。
  *
  * 一条简单命令「证明得出会跑」要同时满足三件:
  *  ① 它不在任何**答不出哪几支会跑**的区里（`if`/`case` 的分支、条件未知的循环体、体里有
@@ -502,7 +527,7 @@ function provableBlocker(scan: Scan): string | null {
     for (;;) {
       const head = headOf(tokens, at);
       if (!head) break;
-      const close = BRANCH[head];
+      const close = BRANCH.get(head);
       if (close) {
         // 分支区:整区不扫。区里有 `exit`/`exec` ⇒ 区后面的也证明不出来（那一支可能真的跑了）。
         const end = branchEnd(scan, i, head);
@@ -564,7 +589,7 @@ function provableBlocker(scan: Scan): string | null {
     // 判据跟循环、分组那两个作用域同一份（`startProvable`）:`2>/dev/null`、`2>&1` 这种
     // 明摆着打得开的照旧算它跑了 —— 事故的起因命令正是那种,它必须照拦。
     if (cmd && !cmd.bounded && runs(i) && startProvable(tokens)) {
-      for (const f of FOLLOWERS) if (f.name === cmd.name && f.follows(cmd.argv)) { pipeline = f.what; break; }
+      pipeline = followerOf(cmd.name, cmd.argv) ?? pipeline;
     }
     // `exec cmd` 把本进程换成 cmd（`WRAPPERS` 已经让上面按 cmd 判过了）—— 它之后的都跑不到。
     if (cmd && headOf(tokens, at) === "exec") return pipeline;
@@ -588,16 +613,31 @@ function provableBlocker(scan: Scan): string | null {
   return frames.length === 1 ? pipeline : null;
 }
 
-/**
- * 这条命令**自己永远不会结束**吗。
- *
- * 返回那个判定它的写法（给拒绝文案用），不是的话返回 `null`。只回答形状，不回答意图 ——
- * 「永不退出」本身不是错，错的是**既永不退出、又没有任何别的结束条件**。
- */
-export function neverExitsOnItsOwn(command: string): string | null {
+function judge(command: string): string | null {
   // **读不出执行资格的结构 ⇒ 整条命令放行**（见文件头 ②）。here-doc 的终止词、函数体到底
   // 调没调过，这一层都只能猜；猜错的那一半代价是「一件做得成的事做不成」。
   const plain = blankComments(blankQuoted(command));
   if (HERE_DOC.test(plain) || FUNC_DEF.test(plain)) return null;
   return provableBlocker(scanOf(segments(command)));
+}
+
+/**
+ * 这条命令**自己永远不会结束**吗。
+ *
+ * 返回那个判定它的写法（给拒绝文案用），不是的话返回 `null`。只回答形状，不回答意图 ——
+ * 「永不退出」本身不是错，错的是**既永不退出、又没有任何别的结束条件**。
+ *
+ * **对任意字符串都是全函数:它只会回答,不会抛**（第 2 轮审查 F1）。调用它的两处都受不起一个
+ * 异常:表单在**每次渲染**里同步调用它（判据一抛,整棵组件树卸载 —— 审查实测页面变成空白),
+ * 创建入口在起进程之前调用它（判据一抛,真实路由 500）。而「这条命令读不懂」本来就有一个
+ * 确定的答案:**不拦**。所以这一层把异常也归到那个答案里,同时把它吼到日志里 —— 判据自己
+ * 有 bug 要能被发现,只是不该由用户那一侧用「做不成事」来承担（见文件头那段不对称）。
+ */
+export function neverExitsOnItsOwn(command: string): string | null {
+  try {
+    return judge(command);
+  } catch (err) {
+    console.error(`[ash] 命令结构判据出错,这条命令按「读不懂」放行：${String(err)}`);
+    return null;
+  }
 }

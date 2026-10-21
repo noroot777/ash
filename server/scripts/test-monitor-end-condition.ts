@@ -238,13 +238,112 @@ setInterval(() => {}, 1000);
     ["nice -n 5 tail -F /dev/null", "tail -f/-F"],
     ["nice -5 tail -F /dev/null", "tail -f/-F"],
     ["stdbuf -oL tail -F /dev/null", "tail -f/-F"],
-    ["sudo -n -u root tail -F /dev/null", "tail -f/-F"],
-    ["sudo -- tail -F /dev/null", "tail -f/-F"],             // `--` 之后再没有开关
+    ["stdbuf -o L tail -F /dev/null", "tail -f/-F"],         // 值分开写
     ["exec tail -F /dev/null", "tail -f/-F"],
+    ["exec -a name tail -F /dev/null", "tail -f/-F"],        // 吃值的已知开关,任何词都是合法 argv0
     [String.raw`printf "a \" b\n"; tail -F /dev/null`, "tail -f/-F"], // 转义引号之后的真执行节点
     ["printf 'x'; tail -F /dev/null </dev/null", "tail -f/-F"],
     ["tail -F /dev/null 2>/dev/null | grep x", "tail -f/-F"],
   ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该拦：${command}`);
+
+  // ── 第 2 轮审查 F1:判据对**任意字符串**都只回答、不抛 ──────────────────────────────
+  // 上一版把包装命令白名单从 Set 改成了**普通对象**,而查表的键是命令 basename ——
+  // `./constructor -v` 取到的是 `Object.prototype.constructor`,随后那句 `forms.find(...)`
+  // 直接 TypeError。两处调用都受不起:表单在**每次渲染**里同步调用它(整棵组件树卸载,审查
+  // 实测页面变成空白),创建入口在起进程之前调用它(真实路由 500)—— 而那条命令在 `/bin/sh`
+  // 下打完 DONE 就退出 0。
+  //
+  // 钉的不是 `constructor` 这一个名字:Object.prototype 上那 12 个名字是同一类入口,所以
+  // ① 遍历**全部**自有属性名;② 盯住兜底那个 catch **没有被用到**(它在,但它是给判据自己的
+  // bug 兜底的;要是靠它救回来,一个真 bug 就成了静默放行);③ 结构锁住「按命令里的字查的表
+  // 一律是 Map」,防着谁再改回普通对象。
+  {
+    const errors: string[] = [];
+    const realError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+    try {
+      for (const name of Object.getOwnPropertyNames(Object.prototype)) {
+        for (const command of [
+          name, `./${name}`, `./${name} -v`, `/usr/bin/${name} -v tail -F x`,
+          `${name} tail -F /dev/null`, `${name} -u FOO tail -F /dev/null`,
+        ]) assert.equal(neverExitsOnItsOwn(command), null, `不许拦,更不许抛：${command}`);
+        // 前面有一条真阳时照旧拦得住 —— 别把「不抛」做成「见到这些名字就放行整条命令」。
+        assert.equal(
+          neverExitsOnItsOwn(`tail -F /dev/null; ./${name} -v`), "tail -f/-F",
+          `原型名出现在后面,不影响前面那条真阳：${name}`,
+        );
+      }
+      // 别的敌意输入一样只回答不抛（空串、只有符号、引号/括号不配对、超长)。
+      for (const command of [
+        "", "   ", "\n\n", "'", '"', "((((", "}}}}", "<<<", ">&", "|||", "&&&",
+        "__proto__", "prototype -v", "tail -F x <&9", "tail -F x 2>&",
+        "a".repeat(5000), "$(".repeat(500), "' ".repeat(500),
+      ]) assert.doesNotThrow(() => neverExitsOnItsOwn(command), `不许抛：${JSON.stringify(command.slice(0, 20))}`);
+    } finally {
+      console.error = realError;
+    }
+    assert.deepEqual(errors, [], "判据不该走到兜底那个 catch —— 走到了就说明它自己炸了");
+    const judge = readSource(join(HERE, "../../shared/src/command-never-exits.ts"));
+    for (const table of [
+      /const WRAPPERS = new Map</, /const BRANCH = new Map</, /const CLOSERS = new Map</,
+    ]) assert.match(judge, table, `按命令里的字查的表必须是 Map,不能是普通对象（原型成员会混进来）`);
+    assert.match(judge, /catch \(err\)/, "导出的那个入口要有兜底:它的两个调用方都受不起一个异常");
+  }
+
+  // ── 第 2 轮审查 F2:「会跑」要对**整个形状**成立,不是对每一项分别成立 ────────────────
+  // 六条全部 `/bin/sh` 退出 0 并打出 DONE,而创建入口一律 409。三处的共同点是判据逐项各看
+  // 一眼就下了结论（见 shared/src/command-never-exits.ts 文件头 ⑥）。
+  for (const command of [
+    // ① 重定向要按顺序带着描述符状态走:关掉 1 之后再从 1 复制就失败了,整条/整圈/整组不跑
+    "tail -F /dev/null 1>&- 2>&1; printf 'DONE\n'",
+    "while :; do :; done 1>&- 2>&1; printf 'DONE\n'",
+    "{ while :; do :; done; } 1>&- 2>&1; printf 'DONE\n'",
+    "tail -F /dev/null 3>&- 2>&3; printf 'DONE\n'",      // 同理:3 从来没开过
+    // ② 包装命令的开关**值**本身就是启动前提
+    `env -C '${MISSING}' tail -F /dev/null; printf 'DONE\n'`,
+    `env --chdir='${MISSING}' tail -F /dev/null; printf 'DONE\n'`,
+    "nice -n not-a-number tail -F /dev/null; printf 'DONE\n'",
+    "ionice -c 9 tail -F /dev/null; printf 'DONE\n'",
+    "stdbuf -o nonsense tail -F /dev/null; printf 'DONE\n'",
+    "sudo -n tail -F /dev/null; printf 'DONE\n'",         // 跑不跑取决于认证,这一层答不出来
+    "sudo tail -F /dev/null; printf 'DONE\n'",
+    // ③ 跟随型的 argv 里**别的参数**也能让它根本没开始跟随
+    "tail -F -n not-a-number /dev/null; printf 'DONE\n'",
+    "tail -F --unknown-flag /dev/null; printf 'DONE\n'",  // 认不出来的开关 ⇒ 它自己报用法就退
+    "tail -F --help /dev/null; printf 'DONE\n'",
+    "watch --bogus date; printf 'DONE\n'",
+    "inotifywait -m -t 60 /tmp; printf 'DONE\n'",         // 自带死线:到点就退
+    "docker logs -f --until=1h ctr; printf 'DONE\n'",     // 同上
+  ]) assert.equal(neverExitsOnItsOwn(command), null, `不许拦：${command}`);
+  // ↑ 真阳对照:同样这三道,**连得起来**的那些照拦 —— 不然它会退化成「见到 `>&`、见到吃值的
+  //   开关、见到第二个参数就放行」,而 `>/dev/null 2>&1`、`-n 0 -F` 恰恰是最常见的真跟随写法。
+  for (const [command, hit] of [
+    ["tail -F /dev/null >/dev/null 2>&1", "tail -f/-F"],         // 1 先开好,再从 1 复制
+    ["tail -F /dev/null 2>&1", "tail -f/-F"],
+    ["tail -F /dev/null 1>&-", "tail -f/-F"],                    // 只关掉 1:它照旧跟随
+    ["tail -F /dev/null 3</dev/null 2>&3", "tail -f/-F"],        // 3 是前面那一项刚打开的
+    ["tail -n 0 -F /dev/null", "tail -f/-F"],
+    ["tail -n +1 -F /dev/null", "tail -f/-F"],
+    ["tail -c 0 -F /dev/null", "tail -f/-F"],
+    ["tail -qF /dev/null", "tail -f/-F"],                        // 并写的无值开关
+    ["tail --follow=name --retry /dev/null", "tail -f/-F"],
+    ["nice -n 5 tail -F /dev/null", "tail -f/-F"],
+    ["ionice -c2 -n7 tail -F /dev/null", "tail -f/-F"],
+    ["watch -n 5 date", "watch"],
+    ["journalctl -u nginx -f", "journalctl -f"],
+    ["docker logs -f --tail=100 ctr", "docker logs -f"],
+    ["kubectl logs -f pod -n ns", "kubectl logs -f"],
+    ["inotifywait -m -r -e modify /tmp", "inotifywait -m"],
+    ["fswatch -r /tmp", "fswatch"],
+  ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该拦：${command}`);
+  // 有序那一道的结构锁:描述符状态从 shell 给的 0/1/2 起步,逐项应用 —— 改回 `every(单项)`
+  // 就把「关掉 1 之后再从 1 复制」这件事又丢了。
+  {
+    const judge = readSource(join(HERE, "../../shared/src/command-never-exits.ts"));
+    assert.match(judge, /const open = new Set\(\[0, 1, 2\]\)/, "重定向判据要带着描述符状态按顺序走");
+    assert.doesNotMatch(judge, /redirectsOf\(tokens\)\.every\(/, "逐项各看一眼的那一版不许回来");
+  }
+
   // **这条判据的代价明写在这儿**:`while true && :; do …` 其实也没有出路,但它的条件列表被
   // `&&` 拆到了循环头之外 —— 读不完整就按未知处理,于是现在放行。上面那三条误判跟这一条
   // 是同一件事的两面,分不开:少拦一条 = 退回今天的行为,拦错一条 = 一件做得成的事做不成了。
@@ -304,6 +403,18 @@ setInterval(() => {}, 1000);
   //   trim 的理由就在这儿）—— 下面这两条照收,不然这道校验就把一种合法意图一起拒了。
   for (const pattern of ["DONE $", "^ DONE", "a b|c"]) {
     assert.equal(parseEndCondition(pattern).ok, true, `正文里的空格不是空白条件：${pattern}`);
+  }
+
+  // **创建这一侧也钉一遍「判据只回答、不抛」**（第 2 轮审查 F1）:那一条异常真正的落点是这里
+  // —— 创建入口在起进程之前同步调用判据,它一抛,真实路由回的是 500,而命令自己打一行就退。
+  for (const command of [
+    "./constructor -v; printf 'DONE\n'",       // 命令词正好是 Object.prototype 上的名字
+    "./toString -v; printf 'DONE\n'",
+    "tail -F /dev/null 1>&- 2>&1; printf 'DONE\n'",  // 第 2 轮 F2 那一类:整条根本不跑
+  ]) {
+    const made = await startMonitor({ taskId, command, timeoutMs: 4000 });
+    assert.equal(made.ok, true, made.ok ? "" : `创建不该被拦,更不该 500：${command} / ${made.error}`);
+    if (made.ok) await stopMonitor(made.monitor.id, "判据全函数那一节跑完了");
   }
 
   // 两头的锚点是**合法**的，别跟上面那种混为一谈（`a$|b` = 行尾是 a 或出现 b）。
