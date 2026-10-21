@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>自动唤起，也是一条输入 · ash</title>
+  <link rel="stylesheet" href="wake-input-demo.css">
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-input" viewBox="0 0 24 24"><path d="M8 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3M10 7v7h7M21 3 10 14"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5m0-9v.2"/></symbol>
+    <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></symbol>
+    <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+  </svg>
+
+  <header class="study-header">
+    <a class="brand" href="wake-input-demo.html" aria-label="ash 自动输入设计稿">ash<span>/</span><span>会话体验</span></a>
+    <div class="study-meta"><span class="prototype-tag">交互原型</span><span>不改动正式界面</span><button class="theme-button" id="themeButton" type="button" aria-label="切换到深色模式"><svg class="icon"><use href="#icon-moon"/></svg></button></div>
+  </header>
+
+  <main class="study">
+    <section class="intro" aria-labelledby="studyTitle">
+      <div><p class="eyebrow">会话中的自动输入</p><h1 id="studyTitle">不是一条通知，<br class="mobile-break">是 Agent 的下一条输入。</h1><p class="intro-description">把「为什么又开始说话」变成一眼能读懂的前因后果。</p></div>
+      <div class="view-switch" role="group" aria-label="展示方案"><button type="button" data-view="before" aria-pressed="false">现状对比</button><button type="button" data-view="after" aria-pressed="true">改后 · 推荐</button></div>
+    </section>
+
+    <div class="workspace">
+      <aside class="design-rail" aria-label="设计说明与场景选择">
+        <section class="scenario-picker"><h2>换个唤起场景</h2><div class="scenario-list" role="group" aria-label="唤起场景">
+          <button class="scenario-button" type="button" data-scenario="result" aria-pressed="true"><span class="scenario-dot"></span><span><strong>新结果到达</strong><small>回归跑完，带回测试结果</small></span><svg class="icon"><use href="#icon-chevron"/></svg></button>
+          <button class="scenario-button" type="button" data-scenario="ended" aria-pressed="false"><span class="scenario-dot"></span><span><strong>旧哨兵结束</strong><small>结束通知，不是新结果</small></span><svg class="icon"><use href="#icon-chevron"/></svg></button>
+          <button class="scenario-button" type="button" data-scenario="batch" aria-pressed="false"><span class="scenario-dot"></span><span><strong>多事件合并</strong><small>两条事件，只唤起一轮</small></span><svg class="icon"><use href="#icon-chevron"/></svg></button>
+        </div></section>
+
+        <section class="reading-guide"><p class="eyebrow">这一版的阅读顺序</p><div class="guide-flow"><div><span class="guide-mark">↗</span><h3>谁发来的</h3><p>ash 自动输入，不冒充你。</p></div><div><span class="guide-mark">?</span><h3>为什么唤起</h3><p>先读一句人话，再看原始数据。</p></div><div><span class="guide-mark">↳</span><h3>接着回复什么</h3><p>下一轮回复明确承接这次输入。</p></div></div></section>
+
+        <div class="scope-note"><svg class="icon"><use href="#icon-info"/></svg><p>只调整<strong>真正唤起会话的输入</strong>。哨兵启动、运行和结束等普通记录仍保持轻量。</p></div>
+        <p class="sample-note">基于你的截图重排<br>内容与投递状态均为示例</p>
+      </aside>
+
+      <section class="conversation-shell" aria-labelledby="taskTitle">
+        <header class="task-header"><div><span class="project-name">knowledge-base <span>/</span> 自由任务</span><h2 id="taskTitle">补齐校验闸，跑完全量回归</h2></div><span class="task-status"><span></span>会话记录</span></header>
+        <div class="preview-banner"><span id="viewDescription">推荐方案 · 自动输入与回复的因果关系</span><span class="preview-indicator"><span></span>HTML DEMO</span></div>
+
+        <div class="conversation" id="conversationRows" role="region" aria-label="会话预览" aria-live="polite"></div>
+
+        <footer class="composer"><div class="composer-placeholder">给 Agent 追加消息…</div><div class="composer-bottom"><span class="composer-target"><span class="agent-mini">C</span>claude@nodemach</span><span class="composer-demo-label">仅展示，不会发送</span><button class="send-button" type="button" disabled aria-label="原型不支持发送消息">↑</button></div></footer>
+      </section>
+    </div>
+
+    <footer class="study-footer"><span>设计取舍</span><p>输入占消息层级，记录留在旁注层级。<strong>「已送达」只表示送入会话，不表示任务成功。</strong></p><span class="version-label">ash / wake input</span></footer>
+  </main>
+  <script src="wake-input-demo.js"></script>
+</body>
+</html>
