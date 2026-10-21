@@ -29,24 +29,23 @@ import {
   type MonitorStatus,
   type TaskMonitor,
 } from "@ash/shared/monitor";
-import { monitorEventTally } from "@ash/shared/monitor-silence";
 import { parseEndCondition } from "@ash/shared/monitor-end-condition";
 import { bus } from "./bus.js";
-import { db, dbClient } from "./db/index.js";
+import { db } from "./db/index.js";
 import { monitors } from "./db/schema.js";
-import { ensureSupervised, stopSupervisionHandover } from "./monitor-handover.js";
-import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
+import { stopSupervisionHandover } from "./monitor-handover.js";
 import { reclaimState } from "./monitor-reclaim-evidence.js";
 import { stopRecoveryRetries } from "./monitor-reattach.js";
-import { clearSpawnIdentity, readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
-
-import { consumeTailChunk, drainOwed, flushBuffer, linesBody, renderLines } from "./monitor-consume.js";
-import { deliverResultHandoff } from "./monitor-events.js";
+import { readLogTail, tailLines, type Tailer } from "./monitor-spawn.js";
+import { consumeTailChunk, flushBuffer } from "./monitor-consume.js";
+// 「盯」这一段自己要叫后台收尾(到期、探活判死)。它住在 monitor-finish.ts —— 那边又要回头用
+// 这里的 `runtimes`/`publish`,两个文件互相引用。公开面照旧从这里出(见下面「停」那一节的
+// re-export),所以调用方一个都不用改。
+import { settleInBackground } from "./monitor-finish.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 // 消费层是从这个文件拆出去的（见 monitor-consume.ts 文件头）。这两个仍从这里导出:
 // 它们的调用方（离线补读、创建协议）本来就按「找 monitors 要」在写，没必要跟着搬家。
 export { commitProgress, pushLines } from "./monitor-consume.js";
-import { appendTaskTimeline } from "./task-timeline.js";
-import { now } from "./util.js";
 
 export type Row = typeof monitors.$inferSelect;
 
@@ -165,21 +164,6 @@ export function monitorLogBytes(logPath: string): number | null {
 
 // ── 盯 ───────────────────────────────────────────────────────────────────────
 
-/**
- * **放后台跑的那种收尾**:定时器、探活、推满上限、进程自己退出 —— 四条都没有调用方在等
- * 它的结果,所以**它的失败只能进日志**。
- *
- * 不接住的话就是一个没人管的 rejection:Node 默认把那个当致命错误,于是「一次收尾里的某笔
- * 读写失败」会把整个 ash 带下去。撞上关库是最常见的一种(判出结束的那一刻 ash 可能正在退出,
- * 实测:审查生命周期那份回归在 teardown 之后收到一条 `database is not open`)。
- */
-export function settleInBackground(
-  monitorId: string, status: Exclude<MonitorStatus, "running">, reason: string, code: number | null,
-  opts?: Parameters<typeof finish>[4],
-): void {
-  void finish(monitorId, status, reason, code, opts)
-    .catch((e) => console.error(`[ash] 后台收尾失败 monitor=${monitorId}（${reason}）:`, e));
-}
 
 /**
  * **把一条哨兵接到运行时上**:tail(读日志、推事件)、期限、探活。
@@ -352,172 +336,9 @@ export const supervisionComplete = (row: { id: string; pid: number | null }): bo
 
 // ── 停 ───────────────────────────────────────────────────────────────────────
 
-/**
- * 收尾。三条路都可能到这儿（过期、进程自己退出、有人点停），只做一次。
- *
- * `notify=false` 用在「任务自己已经结束了」那一路：那时候再推一条收尾事件就等于把一个
- * 已经 done 的任务重新叫起来跑一轮，纯属倒忙。
- */
-export async function finish(
-  monitorId: string,
-  status: Exclude<MonitorStatus, "running">,
-  reason: string,
-  exitCode: number | null,
-  // `endedBy` = **谁让它停的**(见 schema 的 ended_by)。缺省 `system`:拿不准的时候一律
-  // 不算主动撤 —— 说成「本回合撤掉了哨兵」是个会误导人的断言,说成系统回收顶多是少说一句。
-  opts: { notify?: boolean; keepBuffered?: boolean; endedBy?: "actor" | "limit" | "system" } = {},
-): Promise<void> {
-  const notify = opts.notify ?? true;
-  const keepBuffered = opts.keepBuffered ?? true;
-  /** **尚欠的那一批**:最后那几次冲刷没能交付的行。下面跟着结束通知一起落库交接。 */
-  let owed: string[] = [];
-  const rt = runtimes.get(monitorId);
-  if (rt) {
-    if (rt.closing) return;
-    rt.closing = true;
-    runtimes.delete(monitorId);
-    for (const t of rt.timers) { clearInterval(t); clearTimeout(t); }
-    if (rt.flush) clearTimeout(rt.flush);
-    if (keepBuffered) {
-      // 进程刚死那一瞬写进去的最后几行也算数：先把文件吸干，再把缓冲里剩下的一并推出去。
-      rt.tail.drain();
-      rt.tail.stop();
-      // **排干这件事归消费层**（`drainOwed`，判据见那边文件头 ⑤）:按批推（一批有上界，见
-      // `MONITOR_MAX_LINES_PER_FLUSH`），推不动的那几行交回来 —— 由下面的 `owed` 跟结束通知
-      // 一起落库交接。
-      //
-      // 这一层**不自己判「还有没有东西要交接」**（第 4 轮审查 F1）。上一版这里的循环条件是
-      // 「缓冲非空」,而 `flushBuffer` 一开头就把在途那一批 `splice` 走了 —— 于是在途那一笔
-      // 事件 INSERT 挂在半空中时,这里看一眼空缓冲就认定没什么要交接,结束通知里一个字都没
-      // 附、终态当场落定;那笔 INSERT 随后失败,行被放回一个已经撤掉、而且 `closing` 的运行
-      // 时:`armFlush` 不排重试、接回只枚举 running、通知里也没有它 —— 那一行(多半就是
-      // agent 要的结果本身)此后谁都不管了（审查实测:自退与到期两路都是 events=0、offset=0、
-      // 待发里只有【哨兵结束】）。
-      //
-      // 更早那一版连「推不动」都不管（`.catch(() => {})`，第 2 轮审查 F1-A）:行就地蒸发,
-      // 而终态、结束通知、回收责任照旧一路写下去。
-      owed = await drainOwed(monitorId, rt);
-    } else {
-      // 任务自己已经结束的那一路：缓冲里这几行一个都不推。`notify=false` 只挡住最后那条
-      // 「哨兵结束」，挡不住这一批——它照样会排进待发队列，而紧接着的 flushPendingForTask
-      // 会立刻把它送进会话（第 1 轮审查实测：任务 done 之后被重新拉起跑了一轮）。
-      //
-      // **这一路算「明确放弃」**（见消费层文件头 ⑤ 的三种归宿）:在途那一批要么自己落了库、
-      // 要么失败放回这个再也没人读的缓冲 —— 两样都对得上「这几行一个都不推」这个决定,所以
-      // 这里不等它。点停那一路要的是另一半（已攒的行照常推完，见 monitor-stop.ts），它走的
-      // 是上面那一支。
-      rt.tail.stop();
-      rt.buffer.length = 0;
-      rt.readTo = null;
-    }
-  }
-  if (dbClient.closed) return;
-  // 运行时已经撤了,而终态还没落盘 —— 下面每一步都可能抛(回收层、条件更新、通知)。
-  // **出这个函数时如果库里还是 running,监督必须还在**(第 23 轮审查 F1),所以从这里起包进
-  // try/finally。成功那一路 `ensureSupervised` 读到终态,什么都不做。
-  try {
-    const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
-    if (!row || row.status !== "running") return;
-    // **回收这个进程的责任从这里起**(见文件头第 ③ 条)。下刀资格由取证层按档位判,这一层
-    // 不再传「刚刚还在我们手上吗」那个开关(第 14 轮审查 F1:四个入口共用同一份判据)。
-    //
-    // 记账排在**改状态之前**:顺序一反,中间崩一下这一行就成了「显示已停止、责任没人认、
-    // pid 线索下一步就被删除抹掉」(第 4、5 轮审查 F1 都是这个现场)。
-    const outcome = await reclaimMonitorProcess(row, reason);
-    // **条件落定**(第 21 轮审查 F2)。上面那次重读之后还 await 了回收层(问状态、下刀、等确认,
-    // 秒级),而这期间用户完全可以点停、可以删任务 —— 上一版这条 UPDATE 无条件,通知还紧跟其后,
-    // 于是「点停已经成功返回、页面写着用户停的」随后被这条在途的收尾改写成 expired 并补推一条
-    // 【哨兵结束】。条件没落上就**结局不改、通知不推**;回收责任照旧结清 —— 那一笔是上面已经
-    // 发生的事,跟谁写下结局无关。
-    const code = exitCode === null ? "" : `，退出码 ${exitCode}`;
-    // **结束通知的责任凭证跟终态同一条语句落库**(第 1 轮审查 F1)。上一版是「先写终态,再去
-    // 入队」,中间还隔着时间线那一笔 await —— 那一瞬库里既没有 running 的哨兵、也没有排着的
-    // 消息,而完成闸问的恰好就是这两样,于是它放行、任务落 done,紧接着的入队被终态挡回,
-    // 那条通知就此蒸发(实测 `F1_END_RESULT_HANDOFF`)。一条语句写下来就没有那条缝:从这一刻
-    // 起闸看得见这笔交接(见 schema 的 `result_handoff_at`),入队完成后才销。
-    // 事件数**重读**：它要反映收尾前最后那一次 flush。有没有产出过则一律问日志文件本身,
-    // 不问投递游标(见 `monitorLogBytes`:游标被终态挡回时会把「它说了但没送出去」说成
-    // 「它什么都没说」—— 第 2 轮审查 R2-4)。
-    //
-    // **读一次、两处用**:这句话既要给 agent 看(下面那条结束通知),也要给人看(时间线)。
-    // 各读一次会让两边报出不同的数,而「0 条事件」这件事恰恰是 agent 最该当场知道的 ——
-    // 它只拿到一句「盯满了约定的时长」的话,分不出「哨兵哑了」和「我漏读了几条」,只能靠猜
-    // (用户 2026-10-21 要的那半件事)。通知的文字必须在下面那条 UPDATE **之前**定好:这两笔
-    // 得在同一条语句里落库,所以读也只能排在它前面。
-    const total = (await db
-      .select({ events: monitors.events })
-      .from(monitors).where(eq(monitors.id, monitorId))).at(0)?.events ?? row.events;
-    const tally = monitorEventTally(total, monitorLogBytes(row.logPath));
-    // **尚欠的那一批跟着结束通知走**（第 2 轮审查 F1-A）。要的是「持久化的交接责任、而且
-    // 完成闸看得见」—— 而这里已经现成有一份:这条通知的凭证跟终态写在同一条 UPDATE 里
-    // （`result_handoff_at`）、入队失败有补发扫描（monitor-handoff-retry.ts）、从产出到入队
-    // 的每一刻完成闸都看得见它（task-complete-monitors.ts 的第二、三类）。所以不另开一张
-    // 欠账表:这几行附在那条通知里,就继承了同一份责任。游标那一侧也没动过,日志里的原文
-    // 照旧对得上。
-    //
-    // `notify=false` 那一路（任务自己已经结束、或者有人点停）**照样附**:它压的是「哨兵结束」
-    // 这句播报,不是已经吐出来的内容 —— monitor-stop.ts 写明「已经攒在缓冲里的行要照常推完」。
-    const owedNote = `…（下面这 ${owed.length} 行没能单独送出来，附在收尾这一条里）`;
-    const endNotice = notify
-      ? `【哨兵结束】${row.description}（monitorId=${row.id}）${code}。${reason}（${tally}）`
-        + (owed.length ? `\n${owedNote}\n${linesBody(row, owed)}` : "")
-      // `notify=false` 那一路没有抬头可借,这几行自己成一条事件消息。
-      : owed.length ? `${renderLines(row, owed)}\n${owedNote}` : null;
-    const result = await db
-      .update(monitors)
-      .set({
-        status, endedAt: now(), endedReason: reason, exitCode, endedBy: opts.endedBy ?? "system",
-        ...(endNotice ? { resultHandoffAt: now(), resultHandoffText: endNotice } : {}),
-      })
-      .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running")));
-    if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
-      console.error(`[ash] 哨兵收尾放手 monitor=${monitorId}：条件更新没落上，结局已经有人写过了（${reason}）`);
-      // 放手这一支手上还攥着尚欠批次时,**那几行就是真丢了**:结局归别人写,这条 UPDATE 带着
-      // 的交接凭证一个字都没落上。概率很窄(得正好是「排干时撞上推满上限/点停」加「那一批
-      // 又没交付」),但静默丢弃和明确放弃必须分得开 —— 所以这里报出来,游标那一侧照旧没动,
-      // 日志里的原文还对得上。
-      if (owed.length) {
-        console.error(
-          `[ash] 哨兵 ${monitorId} 收尾放手时还欠着 ${owed.length} 行没送出去（结局被别人写了，这一批没有交接凭证可搭）：`
-          + JSON.stringify(owed.slice(0, 3)),
-        );
-      }
-      await settleReclaim(outcome);
-      return;
-    }
-    publish(row.taskId);
-    await appendTaskTimeline(row.taskId, `哨兵结束：${row.description}${code}。${reason}（${tally}）`);
-    // 入队 + 销凭证。顺序反过来那条缝又回来了(见 `deliverResultHandoff`)。
-    if (endNotice) await deliverResultHandoff(monitorId);
-    // **追线索放在最后**:状态、时间线、通知都已落定,这一步只负责「能收的档收掉」。
-    // 它会等到补刀生效(有界,见 `confirmReclaimed`)—— 于是这个函数返回时,要么进程确认不在了,
-    // 要么责任稳稳地留在账本上。
-    //
-    // 第三种(`unaccounted`:库写不进去)这里只能出声:**身份还在**(这一行没被删,pid 和启动
-    // 时刻都还在上面),开机时 `reclaimUnconfirmedStops` 会按非运行态把它重问一遍。真正不能
-    // 放过它的是**销毁身份**那条路 —— 那边整笔中止(见 monitor-reclaim.ts)。
-    const verdict = await settleReclaim(outcome);
-    if (verdict === "unaccounted") {
-      console.error(
-        `[ash] 哨兵收尾时既没确认退出、回收责任也没落库 monitor=${monitorId} pid=${row.pid}`
-        + `（哨兵行还留着它的身份，开机会再问一遍）`,
-      );
-    }
-    // 身份边条**只在线索追空之后**才撤(`closed`)。
-    //
-    // 它不只是「pid 空着那一档的兜底」:当这一行的 `pid_started_at` 还空着时,边条里那个时间锚
-    // 是**唯一**能把身份补全的东西(见 monitor-reclaim-debts 的 `completeIdentity`)。责任还欠着
-    // 就把它删掉,等于把「这一刻 ps 答不出来」永久固化成「这条永远证不出身份」:之后既不敢下刀,
-    // 也销不掉账(第 10 轮审查 F2-B)。确认退出之后它才真的没用了。
-    if (row.kind === "ash" && row.logPath && verdict === "closed") clearSpawnIdentity(row.logPath);
-  } finally {
-    // 不传 `holdingChain`:这个函数本身不跑在 `serialize(monitorId)` 上(它只在里面排过
-    // flush),所以让交接层把这一趟排进那条队列 —— 并发的两笔收尾于是各自有序,后落定的
-    // 那一笔一定看得到前一笔刚挂回来的运行时(第 24 轮审查 N1)。
-    await ensureSupervised(monitorId);
-  }
-}
-
+// 收尾那一摊(收尾所有权、`finish`、后台收尾)住在 monitor-finish.ts(单文件 700 行的约定)。
+// **公开面仍然从这里出**:消费层、停止、接回、回收都按 `monitors.js` 的这几个名字拿。
+export { claimFinish, finish, finishInFlight, settleInBackground } from "./monitor-finish.js";
 
 export async function liveMonitorsOf(taskId: string): Promise<Row[]> {
   return db.select().from(monitors).where(and(eq(monitors.taskId, taskId), eq(monitors.status, "running"), isAshKind));

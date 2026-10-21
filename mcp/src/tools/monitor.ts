@@ -87,7 +87,7 @@ server.registerTool(
   {
     title: "看这个任务挂了哪些哨兵",
     description:
-      "列出一个任务名下全部哨兵（含已结束的）及各自状态：running=还在盯；exited=命令自己跑完了；expired=盯满了时长；stopped=被停掉或推满了事件上限；lost=ash 重启后那个进程已经不在了。被唤醒后想确认「是谁叫的我、它还在不在」时用它。",
+      "列出一个任务名下全部哨兵（含已结束的）及各自状态：running=还在盯；exited=命令自己跑完了；matched=等到了约定的那一行就收工了；expired=盯满了时长；stopped=被停掉或推满了事件上限；lost=ash 重启后那个进程已经不在了。被唤醒后想确认「是谁叫的我、它还在不在」时用它。",
     inputSchema: { taskId: z.string().describe("任务 id") },
   },
   async ({ taskId }) => {

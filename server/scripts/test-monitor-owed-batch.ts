@@ -4,7 +4,8 @@
 //  · F1-A「排干推一次就不管」:最后那一批里正是 `FINAL_DONE`,通知那一笔失败一次就地蒸发
 //  · F1「空行快进越过没交付的那一批」:游标走到日志结尾,重启再也读不回来
 //  · F1「收尾拿空缓冲当成没东西要交接」:**这一份钉的就是它**
-// 三次的共同形状不是「某个回调写错了」,而是「责任在两个生命周期出口上答得不一样」,所以回归
+//  · F1「拿『运行时对象还在不在』当成防重入」:第二笔收尾抢在排干前面写终态(Ⓒ)
+// 四次的共同形状不是「某个回调写错了」,而是「责任在两个生命周期出口上答得不一样」,所以回归
 // 也按那个形状组织:**在途 × 自退/到期 × 成功/失败**交叉着验,而不是只复测某一条触发路径。
 //
 // 台子（临时库、真模块、真子进程）与 test-monitors.ts 共用，见 monitors-fixture.ts。
@@ -28,7 +29,7 @@ import {
  * `after` 决定放开之后怎么走:`fail-once` = 在途那一笔失败、重试照常（行最终送出去）;
  * `fail-always` = 这几行怎么都送不出去（于是只剩「持久移交」这一条归宿）。
  */
-function hangMessageInsert(marker: string, after: "fail-once" | "fail-always") {
+function hangMessageWrite(marker: string, after: "fail-once" | "fail-always") {
   const real = dbClient.execute.bind(dbClient);
   let hanging = false;
   let hits = 0;
@@ -37,7 +38,9 @@ function hangMessageInsert(marker: string, after: "fail-once" | "fail-always") {
   (dbClient as unknown as { execute: unknown }).execute = async (stmt: unknown) => {
     const text = typeof stmt === "string" ? stmt : String((stmt as { sql?: unknown })?.sql ?? "");
     const args = JSON.stringify((stmt as { args?: unknown })?.args ?? "");
-    if (/insert into "scheduled_messages"/i.test(text) && args.includes(marker)) {
+    // 入队**也可能是合并进一条已有待发消息**（update）。只挂 insert 的话,凡是任务已经攒着
+    // 一条待发消息的场景就一次都挂不住 —— 而那恰好是 Ⓒ 那两条路的常态。
+    if (/(?:insert into|update) "scheduled_messages"/i.test(text) && args.includes(marker)) {
       hits += 1;
       if (hits === 1) { hanging = true; await held; }
       if (after === "fail-always" || hits === 1) throw new Error(`INJECTED_MESSAGE_INSERT_FAILURE(${marker})`);
@@ -68,7 +71,7 @@ const rowOf = async (monitorId: string) =>
   writeFileSync(feed, `console.log("FINAL_INFLIGHT=0");
 setTimeout(() => process.exit(0), 900);
 `);
-  const inject = hangMessageInsert("FINAL_INFLIGHT=0", "fail-once");
+  const inject = hangMessageWrite("FINAL_INFLIGHT=0", "fail-once");
   let monitorId = "";
   try {
     const started = await startMonitor({
@@ -117,7 +120,7 @@ setTimeout(() => process.exit(0), 900);
   writeFileSync(feed, `console.log("FINAL_OWED=0");
 setInterval(() => {}, 1000);
 `);
-  const inject = hangMessageInsert("FINAL_OWED=0", "fail-always");
+  const inject = hangMessageWrite("FINAL_OWED=0", "fail-always");
   let monitorId = "";
   let pid = 0;
   try {
@@ -159,17 +162,105 @@ setInterval(() => {}, 1000);
   console.log("✓ 到期撞上送不出去的批次：附在结束通知里持久移交，游标不动，补发真能送出去");
 }
 
-// ── Ⓒ 这一问归消费层,收尾那一层不许自己判（结构锁）──────────────────────────────────
+// ── Ⓒ 排干期间的**第二笔收尾**:不许抢在它前面写终态（第 1 轮审查 F1）──────────────────
+// Ⓐ/Ⓑ 钉的是「同一笔收尾自己判得对不对」,这一节钉的是**两笔收尾之间**:`finish` 第一件事
+// 就是把运行时从 `runtimes` 里摘掉,随后才一批批往外推 —— 那几行此刻只活在它的局部变量上。
+// 上一版的防重入判据恰恰是「还能从 `runtimes` 取到同一个对象」,于是这段时间里消费层的两个
+// 出口（命中约定字样 / 推满上限）照旧会再调一次 `settleInBackground`,那一笔读到一行还 running
+// 的记录就把终态和一条**不带欠账**的结束通知先写了下去;第一笔重读到终态只能放手,那几行
+// (多半就是 agent 要的结果本身)此后谁都不管了。审查实测两条出口对称复现,所以两条都验。
+//
+// 台子有没有真的撞上那个窗口,靠**突变**证:把收尾所有权拆掉,下面这一条 `running` 当场变红。
+for (const trigger of ["limit", "matched"] as const) {
+  const taskId = await makeTask();
+  const marker = `LAST_FINAL_${trigger}=0`;
+  const feed = join(root, `reentry-${trigger}.mjs`);
+  // 第一批就吃满一批的上界(2000 行)并越过事件上限(200) ⇒ 推完那一批当场触发那个出口;
+  // 最后一行单独成第二批,它的入队挂在半空中 ⇒ 排干正卡在在途那一笔上。命令随后自己退出,
+  // 于是「排干中的那一笔」和「自退那一笔」撞在一起 —— 两笔收尾,一条哨兵。
+  writeFileSync(feed, `for (let i = 0; i < 2000; i++) console.log(i === 0 ? "READY" : "progress-" + i);
+console.log("${marker}");
+`);
+  const inject = hangMessageWrite(marker, "fail-once");
+  try {
+    const started = await startMonitor({
+      taskId,
+      command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,
+      description: `排干期间的第二笔收尾-${trigger}`,
+      timeoutMs: 60_000,
+      // 命中那一条出路要有约定字样;上限那一条靠 2000 行自己越线。
+      ...(trigger === "matched" ? { stopWhen: "^READY$" } : {}),
+    });
+    assert.equal(started.ok, true, started.ok ? "" : started.error);
+    const monitorId = started.ok ? started.monitor.id : "";
+    await until("最后那一行的入队真的挂住了", async () => inject.hanging(), 10_000);
+    await sleep(1_200);
+    const mid = await rowOf(monitorId);
+    assert.ok(mid.events >= 200, `台子前提：第一批必须已经越过事件上限（实际 ${mid.events}）`);
+    // **这一条就是修的那件事**:排干还卡在在途那一批上,另一笔收尾一个字都不许写进终态。
+    assert.equal(
+      mid.status, "running",
+      `排干没结清之前不许有第二笔收尾落终态（实际 ${mid.status}；上一版这里已经是 `
+      + `${trigger === "matched" ? "matched" : "stopped"} 了，而且结束通知里一行欠账都没附）`,
+    );
+    inject.release();
+    await until("终态落定", async () => (await rowOf(monitorId)).status !== "running", 20_000);
+    const after = await rowOf(monitorId);
+    // 结局**按持有者知道的那件事写**:命令是自己跑完的 ⇒ exited。合并掉的那一笔(matched/
+    // 上限)不再另写一个结局 —— 两笔收尾写两个结局本来就是上一版那个洞的另一面。
+    assert.equal(after.status, "exited", `命令自己跑完了 ⇒ exited（实际 ${after.status}）`);
+    assert.ok(inject.hits() >= 2, `在途那一笔失败之后必须真的重试过（实际 ${inject.hits()} 次）`);
+    const text = (await pendingOf(taskId)).map((m) => m.text).join("\n");
+    const handoff = after.resultHandoffText ?? "";
+    assert.ok(
+      text.includes(marker) || handoff.includes(marker),
+      `最后那一行必须有归宿：送到 agent 手上，或者附在结束通知里持久移交（${trigger}）`,
+    );
+    // 游标那一侧照旧不动(没交付的那一批不许推它),所以日志里的原文还对得上 —— 这是「送没
+    // 送到」之外的第二道:它保证最坏情况下人还能回去看那一行。
+    assert.match(readFileSync(after.logPath, "utf8"), new RegExp(marker), "原文还在日志里");
+  } finally {
+    inject.restore();
+  }
+  console.log(`✓ 排干期间撞上${trigger === "matched" ? "命中收工" : "推满上限"}：第二笔收尾合并等它，欠账不蒸发`);
+}
+
+// ── Ⓓ 这一问归消费层,收尾那一层不许自己判（结构锁）──────────────────────────────────
 // 上面两节都是时序,而时序回归只保护**跑到过的那一条路**。这一条管的是形状:哪天有人在收尾
 // 里再写一次「缓冲空了就没东西要交接」,时序未必再撞上,形状一定对不上。
 {
-  const src = readSource(join(HERE, "../src/monitors.ts"));
+  // 收尾那一摊住在 monitor-finish.ts(从 monitors.ts 拆出来,单文件 700 行的约定)。
+  const src = readSource(join(HERE, "../src/monitor-finish.ts"));
   assert.match(src, /owed = await drainOwed\(/, "排干与「还欠哪几行」归消费层一处回答");
   assert.doesNotMatch(
     src, /while \(rt\.buffer\.length\)/,
     "收尾里不许按缓冲长度循环:在途那一批已经从缓冲里取走了（见消费层文件头 ⑤）",
   );
-  console.log("✓ 结构锁：收尾不自己判「还有没有东西要交接」");
+  // **收尾所有权的形状**（第 1 轮审查 F1）。Ⓒ 那两条路是时序,只保护跑到过的那两个出口;
+  // 哪天又有人拿「`runtimes` 里还取不取得到」当防重入判据,时序未必再撞上,形状一定对不上。
+  assert.match(src, /const finishing = new Map<string, Promise<void>>\(\)/, "收尾所有权要有一个槽位");
+  assert.match(src, /async function finishHeld\(/, "本体只许由持有者跑");
+  assert.match(src, /export function claimFinish\(/, "不走 finish 的那条终态写入也要能加入同一份所有权");
+  // **放弃型必须留在所有权之外**。让它们也等,「停止赢了就是赢了」当场变成「按了停,页面一直
+  // 转」(第 21 轮审查 F2;实测让两边互等,那条回归直接挂住)。两处入口都得自报身份,不许靠
+  // 这一层去猜 `endedBy`/`keepBuffered`。
+  assert.match(src, /if \(!opts\.abandon\) \{/, "合并等待只约束非放弃型");
+  for (const [file, what] of [
+    ["../src/monitor-stop.ts", "用户点停"],
+    ["../src/monitor-reclaim.ts", "任务清场"],
+  ] as const) {
+    assert.match(
+      readSource(join(HERE, file)), /abandon: true/,
+      `${what}那一路要自报「我明确放弃它还没交出去的东西」`,
+    );
+  }
+  // 离线收尾是**另一条**终态写入(它不走 `finish`,自己用条件更新落终态)。它必须加入同一份
+  // 所有权 —— 条件更新只问「还是 running 吗」,问不出「有没有人正握着没交出去的行」。
+  assert.match(
+    readSource(join(HERE, "../src/monitor-offline-finish.ts")), /claimFinish\(/,
+    "离线收尾也要占同一个槽位（占不到就让位）",
+  );
+  console.log("✓ 结构锁：收尾不自己判「还有没有东西要交接」，终态只由所有权持有者写");
 }
 
 await teardown();

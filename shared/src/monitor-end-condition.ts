@@ -81,7 +81,10 @@ export function parseEndCondition(pattern: string | null | undefined): EndCondit
   if (meta) {
     return {
       ok: false,
-      error: `结束条件里有正则元字符「${meta[0]}」，而它会被当成这个字符本身，不是正则。${SYNTAX}`,
+      // 「它会被当成这个字符本身」是**上一版的行为**:那时元字符按字面量收下,于是条件永不
+      // 命中。现在是当场拒掉,两句话一起出现就成了自相矛盾(第 1 轮审查 N2:浏览器里填
+      // `^(OK|FAILED)` 实测同屏看到「会被当成字符本身」和「一律拒掉,不是悄悄当字面量」)。
+      error: `结束条件里有正则元字符「${meta[0]}」。${SYNTAX}`,
     };
   }
   const terms: EndConditionTerm[] = [];

@@ -36,7 +36,7 @@ export interface StartMonitorInput {
    * 进行，而手动挂的哨兵不属于任何一条会话」那一幕,只能由人说清。
    */
   wake?: MonitorWakeTarget;
-  /** 约定的结束条件:哪一行一出现就收工(JS 正则源文)。 */
+  /** 约定的结束条件:哪一行一出现就收工(受限字样,不是正则源文 —— 见 END_CONDITION_SYNTAX)。 */
   stopWhen?: string;
   /** 「我本来就是要盯到到期」:命令自己永不退出时,靠它明说一声再放行。 */
   untilExpiry?: boolean;

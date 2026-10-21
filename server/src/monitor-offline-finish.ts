@@ -15,7 +15,8 @@ import { deliverResultHandoff } from "./monitor-events.js";
 import { ensureSupervised } from "./monitor-handover.js";
 import { tailLines } from "./monitor-spawn.js";
 import {
-  commitProgress, monitorLogBytes, publish, pushLines, serialize, teardownRuntimeLocked, type Row,
+  claimFinish, commitProgress, monitorLogBytes, publish, pushLines, serialize, teardownRuntimeLocked,
+  type Row,
 } from "./monitors.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -48,6 +49,20 @@ export async function finishOffline(
     if (!fresh || fresh.status !== "running") {
       console.error(`[ash] 离线收尾放手 monitor=${row.id}：队列里重读到的状态是 `
         + `${fresh?.status ?? "行已不在"}，这一刻的结局已经有人写过了（${reason}）`);
+      return;
+    }
+    // **这一笔也要进同一份收尾所有权**(第 1 轮审查 F1)。这条路不走 `finish`,终态是它自己
+    // 用条件更新写的 —— 而条件更新只问「还是 running 吗」,问不出「有没有人正握着这条哨兵
+    // 还没交出去的行」:在线那笔收尾一进 `drainOwed` 就把运行时摘走了,此刻它手上那几行只活
+    // 在它的局部变量里,这里抢先把终态写下去,它重读到终态就只能放手。
+    //
+    // 占不到就**退出**而不是等:这一整段跑在 `serialize(row.id)` 上,而排干下一批也要排这条
+    // 队列 —— 等它等于两边互等。退出是安全的:握着输出的那一笔本来就会把这一行收完(它同样
+    // 会撤运行时、补推、落终态),这一趟无非是白跑一遍。
+    const release = claimFinish(fresh.id);
+    if (!release) {
+      console.error(`[ash] 离线收尾让位 monitor=${fresh.id}：已经有一笔收尾在跑（它手上可能还`
+        + `握着没送出去的行），由它落终态（${reason}）`);
       return;
     }
     try {
@@ -107,6 +122,9 @@ export async function finishOffline(
       // 这一趟做不成会**自己排重试**(第 24 轮审查 F1):接回那一步用的是同一个库,它跟着
       // 这次故障一起失败时,光打一行日志就等于把这条哨兵永久丢掉。
       await ensureSupervised(row.id, { holdingChain: true });
+      // 监督挂回去之后才交还所有权:中间这一瞬要是让别的收尾进来,它看到的就是「没有运行时、
+      // 行还 running」那张老牌面。
+      release();
     }
   });
 }
