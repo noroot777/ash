@@ -81,7 +81,7 @@ const resident = openCodexResident({
     };
   },
   // 假回合没有真进程,后代回收是空操作(真实实现是 cleanupAfterRun)。
-  finalizeTurn: async () => {},
+  finalizeTurn: async () => ({ kind: "empty" }) as const,
   killTurn: (child: ChildProcess) => {
     const turn = child as unknown as { name: string };
     killed.push(turn.name);

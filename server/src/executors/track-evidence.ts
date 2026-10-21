@@ -37,8 +37,14 @@ const trackFiles = new WeakMap<ChildProcess, string>();
 /** 这个句柄的追踪文件路径(`null` = 没开成 / Windows)。清扫与清理责任都按它取证。 */
 export const trackPathOf = (child: ChildProcess): string | null => trackFiles.get(child) ?? null;
 
-/** 「谁还握着这个运行专属文件」—— 三档,**`unknown` 不许读成没有**(见 `HolderProbe`)。 */
-export const probeTrackHolders = (trackPath: string): Promise<HolderProbe> => trackHolders(trackPath);
+/**
+ * 「谁还握着这个运行专属文件」—— 三档,**`unknown` 不许读成没有**(见 `HolderProbe`)。
+ *
+ * 这一问现在有**两个**运行专属文件要问:追踪文件(高位继承 fd)和这一次运行的输出文件
+ * (根的 stdout,`unit-token.ts` 的 `runOutPathOf`)。名字因此不再带 `track` —— 判据对两者
+ * 完全相同,而「只问了其中一条就宣布清空」正是第 2 轮审查 F1 实测的那个漏洞。
+ */
+export const probeFileHolders = (path: string): Promise<HolderProbe> => trackHolders(path);
 
 // ── 归属事实 + 同源代次:**一份身份事实,探活 / 扩树 / TERM / 补刀共用** ──────────
 //
@@ -334,4 +340,3 @@ async function heldNames(paths: readonly string[]): Promise<Set<string> | null> 
   }
   return held;
 }
-

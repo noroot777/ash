@@ -27,7 +27,7 @@ import {
 } from "../process-generation.js";
 import { childKillAuthorized } from "./child-identity.js";
 import { unitTokenOf } from "./unit-token.js";
-import { holdersMayExist, probeTrackHolders, trackPathOf, type HolderProbe } from "./track-evidence.js";
+import { holdersMayExist, probeFileHolders, trackPathOf, type HolderProbe } from "./track-evidence.js";
 
 // ── 归属事实 + 同源代次:**一份身份事实,探活 / 扩树 / TERM / 补刀共用** ──────────
 //
@@ -183,7 +183,7 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   }
 
   // ② 再问归属线索。
-  const probe = trackPath ? await probeTrackHolders(trackPath) : emptyProbe;
+  const probe = trackPath ? await probeFileHolders(trackPath) : emptyProbe;
   if (probe.kind === "unknown") faults.push(`追踪文件持有者问不出来:${probe.reason}`);
   const holders = probe.kind === "held" ? probe.pids : [];
   const seeds: RootSeed[] = holders.map((pid) => ({ pid, authority: "track-fd" as const }));
@@ -198,12 +198,15 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   const provenUnit = new Map<number, ProcessGeneration>(
     freshUnit.verdict === "ours" ? freshUnit.members.map((m) => [m.pid, m.gen] as const) : [],
   );
-  const trees = subtreesOf(table, seeds.map((s) => s.pid));
+  // **按来源切树,不按下标回取**:依据随树带着走(见 `ProcessSubtree.source`)。上一版
+  // 这里是 `subtreesOf(table, seeds.map(s => s.pid))` + `seeds[i]`,而那一层会按 pid 去重 ——
+  // 同一个号同时是 fd 持有者、真句柄和记号成员时(单飞的常见形态),两边从第一个重复项起
+  // 整体错位,后面的树拿的是别人的授权依据,独立的真实成员被静默过滤掉(第 2 轮审查 F3)。
+  const trees = subtreesOf(table, seeds);
 
   const targets = new Map<number, ProcessMember>();
-  for (const [i, tree] of trees.entries()) {
-    const seed = seeds[i];
-    if (!seed || !rootStillAuthorized(seed, tree, { child, provenUnit })) continue;
+  for (const tree of trees) {
+    if (!rootStillAuthorized(tree.source, tree, { child, provenUnit })) continue;
     // 根授权成立 ⇒ **整棵来源子树**都属于本次运行。反过来不成立就一个都不收(连根带子树)。
     if (tree.root && tree.root.pid !== child.pid) targets.set(tree.root.pid, tree.root);
     for (const member of tree.descendants) {
@@ -223,7 +226,7 @@ const emptyProbe: HolderProbe = { kind: "empty" };
  * 任一不成立 ⇒ 调用方把整棵来源子树丢掉。
  */
 function rootStillAuthorized(
-  seed: RootSeed, tree: ProcessSubtree,
+  seed: RootSeed, tree: ProcessSubtree<RootSeed>,
   ctx: { child: ChildProcess; provenUnit: Map<number, ProcessGeneration> },
 ): boolean {
   // 快照那一刻它在表上,现在换代了 ⇒ 这个号已经是别人,它名下那棵树是人家的子进程。

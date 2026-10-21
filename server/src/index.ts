@@ -257,12 +257,23 @@ async function initializeServer() {
   void (async () => {
     const { sweepAgentCleanupDebts, listOpenCleanupDebts } = await import("./executors/cleanup-debt.js");
     const swept = await sweepAgentCleanupDebts();
+    // **问不出来要说问不出来**:报成 0/0/0 跟「扫完了,一笔都没有」长得一样(第 2 轮审查 N3)。
+    if (!swept.ok) {
+      console.warn(`[ash] agent 清理责任这一问没答出来(${swept.reason}):这一轮没能确认有没有`
+        + "没收干净的后代,POST /api/cleanup-debts/sweep 可以再追一次");
+      return;
+    }
     if (swept.settled || swept.left || swept.closed) {
       console.log(`[ash] agent 清理责任:销账 ${swept.settled} 笔,仍没收干净 ${swept.left} 笔,`
         + `追不下去 ${swept.closed} 笔`);
     }
     // 还没收干净的那几笔**逐条如实报出来**:静默只会让用户得出「停止按钮坏了」。
-    for (const debt of await listOpenCleanupDebts()) {
+    const listing = await listOpenCleanupDebts();
+    if (!listing.ok) {
+      console.warn(`[ash] 没收干净的那几笔读不出来(${listing.reason}):别把这当成没有`);
+      return;
+    }
+    for (const debt of listing.debts) {
       console.warn(`[ash] 这一次运行的后代还没收干净(记号 ${debt.unitToken}、根 pid=${debt.rootPid ?? "?"}):`
         + `${debt.detail}。可在 /api/cleanup-debts 查看,POST /api/cleanup-debts/sweep 再追一次`);
     }

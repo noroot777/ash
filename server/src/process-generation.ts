@@ -68,8 +68,23 @@ export type ProcessTreeSeed = {
   gen: ProcessGeneration | null;
 };
 
-/** 一个种子名下的子树。成员的归属全部来自 `seed`,**复核 seed 是调用方的义务**。 */
-export type ProcessSubtree = {
+/**
+ * 一个种子名下的子树。成员的归属全部来自 `seed`,**复核 seed 是调用方的义务**。
+ *
+ * `source` 是调用方交进来的那一项**原物**(不是拷贝、不是下标)。它存在的唯一理由是
+ * 把「这棵树是谁带出来的」钉成一条引用:第 2 轮审查 F3 实测的那个漏杀,根因就是这一层
+ * 按 pid 去重、调用方却按原数组下标回取授权依据 —— 有重复项时两边从第一个重复开始整体
+ * 错位,第二棵树拿着第一个种子的句柄授权、第三棵拿着它的记号代次去比对,独立的真实成员
+ * 于是被静默过滤掉(`answered=true`、`faults=[]`,一声不响)。
+ *
+ * 所以这一层**不再去重也不再丢项**:进来几项就出去几项、一一对应,而且授权依据随树带着走。
+ * 「同一个号来自两种依据」因此会各自成一棵树,各按自己那份依据判 —— 那本来就是正确语义
+ * (任一依据成立都足以授权它),去重反而是在合并两个不同的问题。重复遍历的代价是同一张
+ * 只读快照上多走几遍,而来源最多是「fd 持有者 + 句柄 + 记号成员」这几类。
+ */
+export type ProcessSubtree<S = ProcessTreeSeed> = {
+  /** 调用方交进来的那一项原物:它自带这棵树凭什么算我们的。 */
+  source: S;
   seed: ProcessTreeSeed;
   /** 种子自己(它此刻在表上才有)。`null` = 这个号已经退场(Windows 上残留树仍可用)。 */
   root: ProcessMember | null;
@@ -273,9 +288,9 @@ export const stillSameGeneration = (member: ProcessMember): boolean =>
  */
 export async function processTreeMembers(
   roots: readonly number[],
-): Promise<ProcessSubtree[] | null> {
+): Promise<ProcessSubtree<{ pid: number }>[] | null> {
   const table = await processTableSnapshot();
-  return table ? subtreesOf(table, roots) : null;
+  return table ? subtreesOf(table, roots.map((pid) => ({ pid }))) : null;
 }
 
 /**
@@ -291,17 +306,26 @@ export async function processTableSnapshot(): Promise<ProcessTableSnapshot | nul
   return IS_WINDOWS ? await treeViaProcessList() : treeViaProc() ?? (await treeViaPs());
 }
 
-/** 从一张快照里切出这些根的子树。根的代次**来自快照本身**,所以授权与遍历同源。 */
-export function subtreesOf(
-  table: ProcessTableSnapshot, roots: readonly number[],
-): ProcessSubtree[] {
-  const seeds = [...new Set(roots)].filter((pid) => Number.isInteger(pid) && pid > 1);
-  return seeds.map((pid) => {
-    const gen = table.gens.get(pid) ?? null;      // 根此刻不在表上 = 它已经退了
+/**
+ * 从一张快照里切出这些来源各自的子树。根的代次**来自快照本身**,所以授权与遍历同源。
+ *
+ * **一进一出,不去重也不丢项**(见 `ProcessSubtree.source`):调用方要按自己的依据复核每一棵
+ * 树的根,而依据是跟着 `source` 走的,不是跟着下标走的。非法号(`<= 1`、非整数)照样占一项,
+ * 只是交出一棵空树 —— 丢掉它同样会让「进来 N 项、出去 M 项」重新成为可能。
+ */
+export function subtreesOf<S extends { pid: number }>(
+  table: ProcessTableSnapshot, sources: readonly S[],
+): ProcessSubtree<S>[] {
+  return sources.map((source) => {
+    const pid = source.pid;
+    // 1 号是 init:拿它当树根会把整台机器的进程走成「我们的后代」。
+    const usable = Number.isInteger(pid) && pid > 1;
+    const gen = usable ? table.gens.get(pid) ?? null : null;  // 根此刻不在表上 = 它已经退了
     return {
+      source,
       seed: { pid, gen },
       root: gen ? { pid, gen } : null,
-      descendants: walkDescendants(table, pid),
+      descendants: usable ? walkDescendants(table, pid) : [],
     };
   });
 }
