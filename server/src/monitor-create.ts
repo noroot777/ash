@@ -63,6 +63,7 @@ import {
   attach, liveMonitorsOf, publish, serialize, toTaskMonitor, type Row,
 } from "./monitors.js";
 import { inspectProcess } from "./proc.js";
+import { holdCompletionForNewMonitor, terminalLandingInFlight } from "./task-complete.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
 
@@ -83,7 +84,8 @@ export type StartMonitorInput = {
 };
 
 export type StartMonitorResult =
-  | { ok: true; monitor: TaskMonitor }
+  /** `notice` = 这次创建顺带改变了别的东西,调用方要原样带给 agent(目前只有一种:撤掉了它手里那份完成确认)。 */
+  | { ok: true; monitor: TaskMonitor; notice?: string }
   /** `needsWakeTarget` = 拒绝的理由是「说不清醒来叫谁」:调用方指定一个唤醒目标就能再来。 */
   | { ok: false; status: 400 | 404 | 409; error: string; needsWakeTarget?: true };
 
@@ -439,6 +441,23 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     if (source.blocked) {
       return { ok: false, status: 409, error: source.blocked, ...(source.needsWake ? { needsWakeTarget: true as const } : {}) };
     }
+    // ⑤-b **这个任务此刻正在落一个会收走哨兵的终态** —— 一个字都不许起。
+    //
+    // 上面那道 `monitorSourceGate` 读的是**库里的状态**，而终态行是在它落库之前就已经决定好
+    // 了的：结算先核一遍阻塞物（放行）、随后才写 `done` 那一行。两件事之间的那条缝里，这里
+    // 读到的仍是 `running`，于是创建照旧放行 —— 紧接着的终态清理把它当场停掉（第 2 轮审查
+    // R2-1 实测 `OLD_F1_FINAL_SETTLEMENT_RACE`：`startMonitor:true` → `monitorAfter:"stopped"`）。
+    //
+    // 结算那一关**在同一把 `task:<id>` 锁里**置的这个闩（见 task-complete.ts 的
+    // `beginTerminalLanding`），所以这里是一句同步判断就能答的事实，不是又一次「读库猜」。
+    if (terminalLandingInFlight(input.taskId)) {
+      return {
+        ok: false,
+        status: 409,
+        error: "这个任务正在落终态（本回合已经在结算了），这一刻挂不上哨兵 —— 挂上去也会被终态清理"
+          + "当场停掉。命令一个字都没跑；要盯的事情还在的话，等这一轮结算完、任务被重新唤醒后再挂。",
+      };
+    }
 
     const live = await liveMonitorsOf(input.taskId);
     if (live.length >= MONITOR_MAX_PER_TASK)
@@ -478,6 +497,14 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       expiresAt: new Date(startedAt.getTime() + timeoutMs).toISOString(),
       endedAt: null,
       endedReason: null,
+      // 「谁让它停的」只在真被停下来时才有值（见 schema 的 ended_by）。
+      endedBy: null,
+      // 「它的结果我不要了」也只在有人真这么说过时才有值（见 schema 的 results_abandoned_at）。
+      resultsAbandonedAt: null,
+      resultsAbandonedReason: null,
+      // 结束通知的交接凭证只在收尾那一刻写（见 schema 的 result_handoff_at）。
+      resultHandoffAt: null,
+      resultHandoffText: null,
       ownerUserId: input.ownerUserId ?? null,
       kind: "ash",
       nativeId: null,
@@ -607,7 +634,13 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       spawned.release();   // 命令从这一刻才真正开工,而它的身份在 ⑤ 已经完整落库
       handed = true;
       publish(row.taskId);
-      return { ok: true, monitor: toTaskMonitor(row) };
+      // ⑦ **这一刻 agent 手里可能正握着一份完成确认**:它先 complete_task 再 start_monitor,
+      //    那份确认已经不成立了 —— 不撤的话结算照旧落 done,刚起的这条当场被连坐停掉
+      //    (第 1 轮审查 F1 实测 confirmationStillSet=true / monitorAfter=stopped)。撤它必须
+      //    跟「数一数有几个哨兵」排同一条队,所以落在这个 `serialize` 里面;那一句话随创建
+      //    结果回给 agent,它读结果的那一眼就看到落位变了。**绝不抛**(见那个函数)。
+      const notice = await holdCompletionForNewMonitor(row.taskId, row.description);
+      return { ok: true, monitor: toTaskMonitor(row), ...(notice ? { notice } : {}) };
     } catch (e) {
       // 交接已经完成 ⇒ 这个进程归运行时了,这里再去收它反而是抢它的东西:原样抛出去。
       if (handed) throw e;

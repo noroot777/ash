@@ -4,7 +4,7 @@ import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@ash/shared/mon
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { formatInstant } from "../task-detail/utils.ts";
-import { claudeMonitorEpilogue, liveDeadline, startedAtLabel } from "./monitorCopy.ts";
+import { claudeMonitorEpilogue, emptyLogCopy, liveDeadline, startedAtLabel } from "./monitorCopy.ts";
 import { MONITOR_ENDED_LABEL } from "./useTaskMonitors.ts";
 
 /** 展开着的那张卡每隔这么久重拉一次尾巴。只在「正在盯着」且「卡片是展开的」时才走。 */
@@ -13,6 +13,11 @@ const LOG_POLL_MS = 2500;
 function useMonitorLog(monitorId: string, open: boolean, live: boolean) {
   const [lines, setLines] = useState<string[] | null>(null);
   const [truncated, setTruncated] = useState(false);
+  // 日志文件这一刻多大。`null` = 读不出来（或者老后端没这一列）—— 跟 0 不是一回事,空行
+  // 列表的三种来由只有它分得开（第 1 轮审查 F4，见 `emptyLogCopy`）。
+  // **三态**（第 2 轮审查 N3）：`undefined` = 这个后端没给这一项（旧版本），`null` = 后端说它
+  // 读不出来，数字 = 实测大小。归一成两态就等于拿「字段不在」冒充「读失败」。
+  const [bytes, setBytes] = useState<number | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   // 轮询里引用的是「这一刻还该不该拉」，所以 live 进 ref，避免定时器跟着它重建。
   const liveRef = useRef(live);
@@ -23,6 +28,7 @@ function useMonitorLog(monitorId: string, open: boolean, live: boolean) {
       const tail = await api.monitorLog(monitorId);
       setLines(tail.lines);
       setTruncated(tail.truncated);
+      setBytes(tail.bytes);
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -37,7 +43,7 @@ function useMonitorLog(monitorId: string, open: boolean, live: boolean) {
     return () => clearInterval(timer);
   }, [live, load, open]);
 
-  return { lines, truncated, error };
+  return { lines, truncated, bytes, error };
 }
 
 /**
@@ -178,7 +184,7 @@ export function MonitorCard({
         <div className="monitor-card__log">
           {log.error && <p role="alert">{log.error}</p>}
           {!log.error && log.lines === null && <p>读取中…</p>}
-          {!log.error && log.lines?.length === 0 && <p>这个命令到现在一个字都还没吐。</p>}
+          {!log.error && log.lines?.length === 0 && <p>{emptyLogCopy(monitor, live, log.bytes)}</p>}
           {log.lines && log.lines.length > 0 && (
             <>
               {log.truncated && <p>（只显示最后一段，更早的内容在哨兵的日志文件里）</p>}

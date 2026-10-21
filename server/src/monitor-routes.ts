@@ -1,7 +1,13 @@
 // 哨兵的 HTTP 面。真正的编排在 monitors.ts，这里只做入参校验和权限归属。
 import type { Context, Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { MONITOR_MAX_TIMEOUT_MS, MONITOR_MIN_TIMEOUT_MS, MONITOR_WAKE_TARGETS } from "@ash/shared/monitor";
+import {
+  MONITOR_MAX_TIMEOUT_MS,
+  MONITOR_MIN_TIMEOUT_MS,
+  MONITOR_WAKE_TARGETS,
+  normalizeMonitorTimeout,
+} from "@ash/shared/monitor";
+import { silentWaitNotice } from "@ash/shared/monitor-silence";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -115,7 +121,17 @@ export function mountMonitorRoutes(api: Hono): void {
         result.status,
       );
     }
-    return c.json({ monitor: result.monitor, ...(clamped ? { notice: "timeoutMs 超出允许区间，已钳到边界" } : {}) });
+    // 提醒合成一条回给调用方。**静默那一条打在这儿而不是工具说明里**：说明是泛泛的忠告，
+    // 这一句是对着**它刚写下的这条命令**说的，而且就落在它读结果的那一眼里(第一次挂就看到,
+    // 不必等三十分钟后收一条「0 条事件」才明白)。判据见 shared/src/monitor-silence.ts。
+    const notices = [
+      clamped ? "timeoutMs 超出允许区间，已钳到边界。" : null,
+      // 这次创建撤掉了 agent 手里那份完成确认时的那句话（`startMonitor` 的 ⑦）。排在静默
+      // 忠告之前：它说的是**这一轮的落位变了**，而那一条只是对命令写法的忠告。
+      result.notice ?? null,
+      silentWaitNotice(body.command, normalizeMonitorTimeout(body.timeoutMs)),
+    ].filter((n): n is string => !!n);
+    return c.json({ monitor: result.monitor, ...(notices.length ? { notice: notices.join("") } : {}) });
   });
 
   // 日志尾巴。面板按需拉取（点开那一张卡才问），所以不塞进列表响应里——几十个哨兵

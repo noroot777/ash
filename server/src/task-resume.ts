@@ -46,12 +46,15 @@ export async function resumeOrRunTask(
     // 一路送出、另一路把它当「没送出去」回填，下次触发再送一遍(审查实测:同一段指令投递两次)。
     // CAS 与整行广播都在 takeResumePrompt/restoreResumePrompt 里（见那个文件顶部：这一列
     // 是前端的门禁，改了不广播，长开的页面会一直把任务读成「在等续跑」）。
-    if (await takeResumePrompt(taskId, rp)) {
+    // 凭证随身（见 task-resume-prompt.ts 文件头）：取走拿到 `{text, auto, generation}`，没送
+    // 出去就原样带着它退回去 —— 只填回同一次占用腾出的那个空。
+    const receipt = await takeResumePrompt(taskId, rp);
+    if (receipt) {
       const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard, actingUserId: acting, ...(reviewerRoute ?? {}) });
       if (!started) {
         // 回合被别人抢了（典型：上一回合的 turn 还没 release）：checkpoint 指令一个字都没
         // 送出去，必须放回原位等下一次触发——清了不回写就是永久丢失（审查实测复现）。
-        await restoreResumePrompt(taskId, rp);
+        await restoreResumePrompt(taskId, receipt);
       }
       return;
     }

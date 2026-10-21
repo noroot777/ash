@@ -23,6 +23,7 @@
 //     三个出口(接管 / 判掉 / 到期)一个都不许按旧行下结论。
 import { and, eq } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
+import type { HandoffSweep } from "./monitor-handoff-retry.js";
 import { monitors, tasks } from "./db/schema.js";
 import {
   adoptSpawnIdentity, clearPendingIntentNote, notePendingIntent, type AdoptOutcome,
@@ -77,7 +78,7 @@ const owingNote = (verdict: ReclaimVerdict): string =>
  * (见 `notePendingIntent`),所以它既不算接回来了、也不算没了 —— 混进任何一边都是撒谎。
  */
 export async function reattachMonitors(): Promise<
-  { attached: number; lost: number; pending: number; failed: number }
+  { attached: number; lost: number; pending: number; failed: number; handoff: HandoffSweep }
 > {
   // 只认 ash 自己起的：claude 的投影行没有 pid，拿去问身份必然认不出来，会被
   // 整批误判成 lost——而它们此刻多半还在 agent 那边好好跑着。它们的真实归宿由
@@ -108,7 +109,26 @@ export async function reattachMonitors(): Promise<
       failed += 1;
     }
   }
-  return { attached, lost, pending, failed };
+  return { attached, lost, pending, failed, handoff: await redeliverResultHandoffs() };
+}
+
+/**
+ * **上一次进程死在「结局已写定、结束通知还没入队」中间的,这一趟把那笔交接做完。**
+ *
+ * 凭证(`result_handoff_at` + 原文)是跟终态同一条 UPDATE 落库的,所以这件事认得出来、也补得上
+ * ——而且在补上之前,完成闸一直看得见它(task-complete-monitors.ts 的第三类),不会趁这个空当
+ * 把任务放成 done 再把通知吃掉(第 1 轮审查 F1)。
+ *
+ * 排在接回之后:接回只管 `running` 的行,这里管的全是已经终态的行,两边不重叠。
+ *
+ * **开机这一趟只是兜底的第一跳**,不是唯一的补发入口(第 2 轮审查 F3):常驻巡检和退避重试
+ * 住在 monitor-handoff-retry.ts,这里直接复用它那个函数,免得两处各写一份扫描(改一处漏一处)。
+ * 返回的是**分项**统计 —— 送出去几条、几条已经无人可收、几条这一趟仍然失败,`failed` 绝不能
+ * 混进「已补发」里(N2:上一版 await 一个吞异常的函数之后无条件 +1,然后打印「已补发」)。
+ */
+export async function redeliverResultHandoffs(): Promise<HandoffSweep> {
+  const { sweepResultHandoffs } = await import("./monitor-handoff-retry.js");
+  return await sweepResultHandoffs();
 }
 
 /**

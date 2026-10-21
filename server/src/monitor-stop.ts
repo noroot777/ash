@@ -8,7 +8,33 @@ import { monitors } from "./db/schema.js";
 import { reclaimMonitorProcess, settleReclaim } from "./monitor-reclaim-debts.js";
 import { reclaimState } from "./monitor-reclaim-evidence.js";
 import { detachMonitor, finish, serialize, toTaskMonitor } from "./monitors.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
+
+/**
+ * 记下「它还没送到的结果,我不要了」——**幂等,且一个字都不动结束事实**。
+ *
+ * 不动状态/`ended_at`/`ended_reason`:那些是已经发生的事(谁让进程结束的、什么时候、为什么),
+ * 把它们改写成「被停掉了」就是撒谎。放弃的也**不是那几行本身**:已经排进待发送的事件照旧
+ * 会送(任务还活着就收得下),只是不再把 `complete_task` 堵死 —— 放弃的是「必须先收下它」
+ * 这件事(判据见 task-complete-monitors.ts 的 `undeliveredResults`)。
+ *
+ * 已经结束的那种另外留一行时间线:它不会再走 `finish` 那条收尾播报,不说一句的话,用户只能
+ * 看到「完成忽然就放行了」。还在跑的那种由 `noteMonitorsDropped` 统一记(它本来就要写)。
+ */
+async function abandonResults(row: typeof monitors.$inferSelect, reason: string): Promise<void> {
+  if (row.resultsAbandonedAt) return;   // 幂等:重复点停不改第一次的时刻与理由
+  await db
+    .update(monitors)
+    .set({ resultsAbandonedAt: now(), resultsAbandonedReason: reason })
+    .where(and(eq(monitors.id, row.id), isNull(monitors.resultsAbandonedAt)));
+  if (row.status === "running") return;
+  await appendTaskTimeline(
+    row.taskId,
+    `不再等哨兵「${row.description}」的结果了（理由「${reason}」）。它早已结束（${row.status}），`
+    + "这一次只是把「必须先收下它的结果」这条放行条件撤掉；已经排在待发送里的事件照旧会送到。",
+  ).catch(() => undefined);
+}
 
 export type StopMonitorResult =
   | { ok: true; monitor: TaskMonitor }
@@ -60,7 +86,9 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
   if (before.status === "running" && before.pid === null) {
     const marked = await db
       .update(monitors)
-      .set({ status: "stopped", endedAt: now(), endedReason: reason })
+      // `endedBy: "actor"` = 人点停 / agent 调 stop_monitor。**单独记来源而不是从 stopped 反推**：
+      // 额度自动停、系统回收写的也是 stopped（见 schema 的 ended_by，第 1 轮审查 N1）。
+      .set({ status: "stopped", endedAt: now(), endedReason: reason, endedBy: "actor" })
       .where(and(eq(monitors.id, monitorId), eq(monitors.status, "running"), isNull(monitors.pid)));
     // 标记落上了 ⇒ 这一行从此是终态,**运行时要跟着撤**:pid 还空着的行现在也可能挂着 tail
     // 和期限(见 monitor-reattach 的 pending 分支)。没落上说明同一瞬创建收口了,那条路由
@@ -73,10 +101,19 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
   return serialize(`task:${before.taskId}`, async () => {
     const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
     if (!row) return toTaskMonitor(before);
+    // **「我不要它的结果了」这句话,对所有状态都要落下来**(第 2 轮审查 R2-3)。
+    //
+    // 它和下面那两个分支是两件事:分支回答「这个进程现在该怎么处置」,而这一句回答「它还没
+    // 送到的结果还要不要」—— 对一条已经 `exited` 的哨兵,前者无事可做(进程早没了),后者却
+    // 恰恰是调用方此刻唯一想表达的意思。上一版把它挂在 `ended_by='actor'` 上,而那一列只有
+    // running 分支写得到,于是工具说明和拒绝文案承诺的「stop_monitor 就能放弃排着的结果」对
+    // 已结束的哨兵永远无效(实测:停完仍 exited / ended_by=system / pending=1 / 再 complete
+    // 仍 409,文案还在重复推荐同一个动作)。
+    await abandonResults(row, reason);
     if (row.status === "running") {
       // 用户/agent 主动停的不回推收尾事件：他就是为了不再被它叫醒才点的停。但已经攒在缓冲里
       // 的行要照常推完——那是已经发生的事实，而且任务还活着，收得下。
-      await finish(monitorId, "stopped", reason, null, { notify: false });
+      await finish(monitorId, "stopped", reason, null, { notify: false, endedBy: "actor" });
       const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
       return toTaskMonitor(after ?? row);
     }
@@ -95,6 +132,8 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
         console.error(`[ash] 创建期取消后补收:既没确认退出、责任也没落库 monitor=${monitorId} pid=${row.pid}`);
       }
     }
-    return toTaskMonitor(row);
+    // 重读:放弃凭证刚写上去,照 `row` 返回等于把调用方刚做的那件事从响应里抹掉。
+    const settled = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+    return toTaskMonitor(settled ?? row);
   });
 }

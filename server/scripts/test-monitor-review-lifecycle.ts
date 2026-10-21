@@ -23,7 +23,7 @@ import { inspectProcess } from "../src/proc.js";
 
 const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
-const { afterSettlement, settleTaskStatus } = await import("../src/single-run.js");
+const { afterSettlement, settleTaskStatus } = await import("../src/settle-status.js");
 const { deliveryOptions, monitorWakeGuard } = await import("../src/pending-verdict.js");
 const { stopReviewRunMonitors } = await import("../src/free-review-round.js");
 const { monitorSourceGate } = await import("../src/monitor-session.js");
@@ -182,11 +182,12 @@ async function reviewInFlight(
   });
 
   // 精确注入：只让「读 tasks.resumePrompt」那一问失败（形状与 monitorWakeCheckpoint 对上），
-  // 别的查询照常 —— 否则投递链路在更早的地方就炸了，测的就不是这条出路。
+  // 别的查询照常 —— 否则投递链路在更早的地方就炸了，测的就不是这条出路。下面那句
+  // `armed === false` 是这段注入的自检，形状漂了它会当场出声。
   const original = db.select;
   let armed = true;
   db.select = ((fields?: Record<string, unknown>) => {
-    if (armed && fields && Object.keys(fields).length === 1 && "resumePrompt" in fields) {
+    if (armed && fields && "resumePrompt" in fields && !("question" in fields)) {
       armed = false;
       throw new Error("INJECTED_RESUME_PROMPT_READ_FAIL");
     }
