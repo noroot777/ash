@@ -23,7 +23,6 @@ import { eq } from "drizzle-orm";
 import {
   MONITOR_MAX_EVENTS, MONITOR_MAX_MERGED_CHARS, MONITOR_MAX_PER_TASK, MONITOR_TAIL_MAX_BYTES,
 } from "@ash/shared/monitor";
-import { endConditionHit, neverExitsOnItsOwn, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import { readSource } from "../../scripts/read-source.mjs";
 import {
   HERE, root, db, dbClient, schema, monitorsModule, status, isPidAlive,
@@ -93,153 +92,6 @@ const t = setInterval(() => { i++; console.log("第 " + i + " 轮完成"); if (i
   assert.doesNotMatch(notice!.text, /条件/, "不许从没有输出推断它等的业务条件没满足");
   console.log("✓ 零输出的哨兵:结束通知里如实报「一条都没推、日志也是空的」");
 }
-// ── ③c 约定的那一行一出现就收工（用户 2026-10-21 要的「活一结束就唤醒」）────────
-// 跟随型命令（`tail -F`、`while true`）自己永远不会结束，于是「命令结束」那条唤醒条件在它
-// 身上形同虚设，只剩干等到期。这一节钉住那条非到期出路真的通：命中那一行**照常推给 agent**
-// （它多半就是结果本身），哨兵随即落 `matched` 收工，而不是等满时长。
-{
-  const taskId = await makeTask();
-  const feed = join(root, "feed.mjs");
-  // 先吐两行无关的，再吐那条约定的行，然后**继续活着**：不这么写的话，进程自己退出也会
-  // 让哨兵结束，就分不清是「命中」还是「它自己跑完了」。
-  writeFileSync(feed, `console.log("第 1 步");
-setTimeout(() => console.log("第 2 步"), 200);
-setTimeout(() => console.log("SWEEP_EXIT=0 全跑完了"), 500);
-setInterval(() => {}, 1000);
-`);
-  const started = await startMonitor({
-    taskId,
-    command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,
-    description: "盯到收尾行为止",
-    stopWhen: "SWEEP_EXIT=",
-  });
-  assert.equal(started.ok, true, started.ok ? "" : started.error);
-  const monitorId = started.ok ? started.monitor.id : "";
-  const pid = started.ok ? started.monitor.pid! : 0;
-  assert.equal(started.ok ? started.monitor.stopWhen : null, "SWEEP_EXIT=", "结束条件要带回给调用方");
-
-  await until("命中之后落 matched", async () => (await getMonitor(monitorId))?.status === "matched");
-  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
-  assert.match(row.endedReason ?? "", /等到了约定的那一行/, "结束原因要说清是等到了，不是被谁停的");
-  assert.match(row.endedReason ?? "", /SWEEP_EXIT=0/, "把命中的那一行带上，省得还要去翻日志");
-  // **命中那一行本身必须送到**：收工不能把结果一起吞掉——它正是 agent 要的东西。
-  const [queued] = await pendingOf(taskId);
-  assert.ok(queued, "命中之后要留一条消息给 agent");
-  assert.ok(queued!.text.includes("SWEEP_EXIT=0 全跑完了"), `命中的那一行要推给 agent：${queued!.text}`);
-  assert.ok(queued!.text.includes("【哨兵结束】"), "收尾通知紧跟在后面");
-  await until("进程真的被收掉", async () => !isPidAlive(pid));
-  console.log("✓ 命中约定的那一行：那一行照常送达、哨兵当场收工、进程被收掉");
-}
-// ── ⑦b 结束条件的**闸**：命令自己不会结束、又没给结束条件 ⇒ 一个字都不许跑 ────────
-// 用户 2026-10-21 问的是「你能保证 agent 一定会加吗」——不能，所以不靠自觉靠闸。判据在
-// shared（前端表单用的是同一份），三条出路各验一次：改写命令 / 给 stopWhen / 明说盯到到期。
-{
-  // 判据本身：误判的代价不对称（拦错 = 本来做得成的事做不成），所以只认明确的那几种。
-  for (const [command, hit] of [
-    ["tail -F build.log | grep --line-buffered ERROR", "tail -f/-F"],
-    ["tail -f x.log", "tail -f/-F"],
-    ["while true; do sleep 5; done", "while true / until false"],
-    ["watch -n 5 ls", "watch"],
-    ["inotifywait -m /tmp", "inotifywait -m"],
-    // ↓ 第 1 轮审查 F3 实测的漏判，判据改成按结构看之后才认得出来
-    ["tail -n 0 -F /dev/null", "tail -f/-F"],            // 开关不紧跟在命令词后面
-    ["timeout 1 true; tail -F /tmp/x", "tail -f/-F"],    // 前一条的死线不传染给后一条
-    ["stdbuf -oL tail -F build.log", "tail -f/-F"],      // 包一层的词是透明的
-    ["/usr/bin/tail --follow=name build.log", "tail -f/-F"], // 带路径、长开关带值
-    ["docker logs -f app", "docker logs -f"],
-    // 引号里那个 `exit` 不是出路:这条循环真的永远不结束
-    ["while true; do echo 'waiting for exit'; sleep 5; done", "while true / until false"],
-  ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该判成不会自退：${command}`);
-  for (const command of [
-    "npm test",
-    "timeout 600 tail -F build.log", // 自带死线
-    "until grep -q DONE log; do sleep 5; done; tail -4 log", // 条件满足就跳出
-    "while true; do grep -q DONE log && break; sleep 5; done", // 循环体里有 break
-    "tail -20 build.log",
-    // ↓ 第 1 轮审查 F3 实测的**误判**:这几条都会自己结束,拦下来等于把做得成的事拦死
-    "printf '%s\\n' 'tail -F build.log'",   // 命中的是 printf 的参数
-    "grep -rn 'tail -f' src",                // 同上:引号里的字不是执行节点
-    "echo \"while true; do :; done\"",        // 同上:引号里的循环没人跑
-    "timeout 5 tail -F build.log",           // 死线在同一条简单命令上
-    "docker logs app",                       // 没有 -f
-    "fswatch -1 ./build",                    // 等第一次事件就退
-  ]) assert.equal(neverExitsOnItsOwn(command), null, `不许拦：${command}`);
-
-  const taskId = await makeTask();
-  const follower = "tail -F /tmp/ash-never.log | grep --line-buffered ERROR";
-  const denied = await startMonitor({ taskId, command: follower, description: "没有结束条件的跟随器" });
-  assert.equal(denied.ok, false, "跟随型命令没给结束条件时不许放行");
-  if (!denied.ok) {
-    assert.equal(denied.status, 409);
-    assert.equal(denied.needsEndCondition, true, "这一档要带出去，前端表单据它长出那个选择");
-    // 三条出路一条都不能少：少给一条，那一种合法意图就只能去照抄另一种（比如编一个永远
-    // 不命中的正则来绕过闸）。
-    assert.match(denied.error, /stopWhen/, "出路②");
-    assert.match(denied.error, /untilExpiry/, "出路③");
-    assert.match(denied.error, /EXIT=/, "出路①要给出可照抄的写法");
-  }
-  assert.equal((await listMonitors(taskId)).length, 0, "被拦下时一行都不许留，更不许起进程");
-
-  // 用不了的条件 = 一个永远不会命中的条件，等于没设 —— 当场 400，别让它变成另一条干等的哨兵。
-  for (const pattern of ["^(OK", "^(a+)+$", "OK|", "OK$FAILED"]) {
-    const bad = await startMonitor({ taskId, command: follower, stopWhen: pattern });
-    assert.equal(bad.ok, false, `用不了的结束条件要拒：${pattern}`);
-    assert.equal(bad.ok ? 0 : bad.status, 400);
-    if (!bad.ok) assert.match(bad.error, /不是正则|不在两头|空的/, `拒绝要说清为什么：${pattern}`);
-  }
-
-  // 两头的锚点是**合法**的，别跟上面那种混为一谈（`a$|b` = 行尾是 a 或出现 b）。
-  const anchored = parseEndCondition("DONE$|^READY");
-  assert.equal(anchored.ok, true, "两头的锚点要收");
-  assert.deepEqual(anchored.ok ? anchored.cond : null, [
-    { needle: "DONE", atStart: false, atEnd: true },
-    { needle: "READY", atStart: true, atEnd: false },
-  ]);
-
-  // 出路③：明说「就是要盯到到期」就照原样放行。
-  const forever = await startMonitor({ taskId, command: follower, description: "盯错误日志", untilExpiry: true });
-  assert.equal(forever.ok, true, forever.ok ? "" : forever.error);
-  if (forever.ok) {
-    assert.equal(forever.monitor.stopWhen, null, "这一种没有结束条件，不许替它编一个");
-    await stopMonitor(forever.monitor.id, "闸的用例跑完了");
-  }
-  // 不是跟随型的命令一个字都不问（闸不许顺手改掉正常路径）。
-  const plain = await startMonitor({ taskId, command: "echo hi", description: "普通命令" });
-  assert.equal(plain.ok, true, plain.ok ? "" : plain.error);
-  if (plain.ok) await stopMonitor(plain.monitor.id, "闸的用例跑完了");
-  console.log("✓ 结束条件闸：判据只认明确的几种、拦下时三条出路给全、三条出路各自真的走得通");
-}
-// ── ⑦c 结束条件的匹配**有计算上界**（第 1 轮审查 F1）────────────────────────────────
-// 上一版收 JS 正则源文，`new RegExp` 编过就拿去 `.test`。编过只证明语法对：`^(a+)+$` 配上
-// 41 个字符的一行就能回溯到停不下来，而这一笔跑在服务唯一那条线程上 —— 页面、停止按钮、
-// 到期收尾一起卡住（审查实测：隔离子进程 2504ms 还没返回，同时安排的 100ms 定时器没执行）。
-// 所以这一节钉两样：那种条件根本进不来（上面 ⑦b 已经拒掉），以及**服务里一条调用方正则都
-// 不构造** —— 后者是结构锁，不靠「这次跑得挺快」。
-{
-  const src = readSource(join(HERE, "../../shared/src/monitor-end-condition.ts"));
-  assert.doesNotMatch(
-    src,
-    /^\s*(?:return |const |let )?.*new RegExp\(/m, // 只认语句，注释里提这个名字不算
-    "结束条件不许拿调用方给的串去构造正则：编得过不等于跑得完（见该文件头 ①）",
-  );
-  // 字面量匹配:同一个在正则下会爆炸的输入，这里必须是线性的。给一个很松的预算（50ms），
-  // 它要的只是「不是指数级」——真爆炸的那种在这台机器上 2.5 秒都回不来。
-  const parsed = parseEndCondition("^DONE|FAILED$|SWEEP_EXIT=");
-  assert.equal(parsed.ok, true);
-  const cond = parsed.ok ? parsed.cond! : [];
-  const nasty = `${"a".repeat(40)}!`;
-  const lines = Array.from({ length: 200 }, () => nasty);
-  const t0 = Date.now();
-  assert.equal(endConditionHit(lines, cond), null, "没命中就是没命中");
-  assert.ok(Date.now() - t0 < 50, `匹配必须是线性的，实际 ${Date.now() - t0}ms`);
-  // 三种锚点各自的语义（锚点错了会把「行首是」读成「出现过」，那是另一个条件）。
-  assert.equal(endConditionHit(["xx DONE"], cond), null, "^DONE 只认行首");
-  assert.equal(endConditionHit(["DONE now"], cond), "DONE now", "行首命中");
-  assert.equal(endConditionHit(["FAILED xx"], cond), null, "FAILED$ 只认行尾");
-  assert.equal(endConditionHit(["went FAILED"], cond), "went FAILED", "行尾命中");
-  assert.equal(endConditionHit(["log: SWEEP_EXIT=1 done"], cond), "log: SWEEP_EXIT=1 done", "不带锚点的在任意位置");
-  console.log("✓ 结束条件的匹配有计算上界：服务里不构造调用方正则，锚点语义各自正确");
-}
 // ── ⑦d 这一批行没写成，**结束条件照旧算得出来**（第 1 轮审查 F2）────────────────────
 // 缓冲是这几行唯一的在内存副本：`splice` 之后 tail 自己的读取位置已经越过去了。上一版把
 // 「命中没有」排在通知入队之后，于是那一笔 INSERT 失败一次，这一批里那条 `DONE` 就此蒸发 ——
@@ -291,6 +143,81 @@ setInterval(() => {}, 1000);
     (dbClient as unknown as { execute: unknown }).execute = real;
   }
   console.log("✓ 一批行写失败：原样放回缓冲重试，命中照旧算得出来、那一行照旧送达");
+}
+// ── ⑦e 收尾那一批写失败 ⇒ **不许当它送过了**（第 2 轮审查 F1-A）────────────────────
+// 现场：命令自己跑完（`FINAL_DONE` 是最后一行），那一批的通知 INSERT 失败一次。上一版
+// 「推一次、成不成都不管」(`.catch(() => {})`)，而放回缓冲那一步在 `closing` 之下排不上
+// 重试 —— 于是这几行就地蒸发，终态、结束通知、回收责任照旧一路写下去（审查实测
+// status=exited、events=0、offset=0、待发里只有【哨兵结束】、FINAL_DONE 一个字都没到）。
+// 接回那条路也捡不回来：它只枚举 running。
+//
+// 注入按**消息正文**挑，不按次数挑：【哨兵事件】那一笔一律失败、【哨兵结束】那一笔放过去。
+// 于是「那一批只能跟着收尾走」这件事与时序无关 —— 不靠「恰好没来得及正常推一次」。
+{
+  const taskId = await makeTask();
+  const feed = join(root, "final.mjs");
+  writeFileSync(feed, `setTimeout(() => { console.log("FINAL_DONE 最后一行"); process.exit(0); }, 150);\n`);
+  const real = dbClient.execute.bind(dbClient);
+  let blocked = 0;
+  (dbClient as unknown as { execute: unknown }).execute = async (stmt: unknown) => {
+    const text = typeof stmt === "string" ? stmt : String((stmt as { sql?: unknown })?.sql ?? "");
+    const args = JSON.stringify((stmt as { args?: unknown })?.args ?? "");
+    if (/insert into "scheduled_messages"/i.test(text) && args.includes("【哨兵事件】")) {
+      blocked += 1;
+      throw new Error("INJECTED_EVENT_INSERT_FAILURE");
+    }
+    return real(stmt as never);
+  };
+  let monitorId = "";
+  try {
+    const started = await startMonitor({
+      taskId,
+      command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,
+      description: "最后一批撞上写失败",
+    });
+    assert.equal(started.ok, true, started.ok ? "" : started.error);
+    monitorId = started.ok ? started.monitor.id : "";
+    await until("命令自己跑完、收尾走完", async () => (await getMonitor(monitorId))?.status === "exited");
+    await until("那一批跟着收尾送出来了", async () =>
+      (await pendingOf(taskId)).some((m) => m.text.includes("FINAL_DONE")));
+  } finally {
+    (dbClient as unknown as { execute: unknown }).execute = real;
+  }
+  assert.ok(blocked > 0, "这一节要的就是那几笔事件 INSERT 真的失败过（注入没生效的话下面全是空测）");
+  const texts = (await pendingOf(taskId)).map((m) => m.text).join("\n");
+  assert.match(texts, /FINAL_DONE/, "没能单独送出的那一批必须跟着结束通知走，不许就地蒸发");
+  assert.match(texts, /没能单独送出来/, "要说清这几行是从哪来的（人和 agent 都要分得出）");
+  assert.equal(
+    texts.split("【哨兵结束】").length - 1, 1,
+    "收尾只说一条：附在里面的那几行不许再套一层【哨兵事件】抬头（同一个 monitorId 说两遍）",
+  );
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(row.offset, 0, "没单独送成的行不许推进读取位置——日志里的原文还要对得上");
+  assert.equal(row.resultHandoffAt, null, "通知已经入队 ⇒ 那笔交接凭证销掉");
+  console.log("✓ 收尾那一批写失败：附在结束通知里一起落库交接，游标不动，完成闸看得见");
+}
+// ── ⑦f 一批行有上界：18 万行一口气来也不许把放回那一步撑爆（第 2 轮审查 F1-B）───────
+// 上一版放回缓冲是 `rt.buffer.unshift(...lines)` —— 展开传参按参数个数吃栈，18 万行就是一次
+// `RangeError`，而排重试那一句排在它后面：连重试都排不上，哨兵就那么挂着（审查实测
+// events=0、待发队列空、状态 running）。现在批次本身有上界，拼接也不展开。
+{
+  const taskId = await makeTask();
+  const feed = join(root, "flood.mjs");
+  writeFileSync(feed, `for (let i = 0; i < 180000; i++) console.log("flood " + i);\nsetInterval(() => {}, 1000);\n`);
+  const started = await startMonitor({
+    taskId,
+    command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,
+    description: "一口气吐 18 万行",
+  });
+  assert.equal(started.ok, true, started.ok ? "" : started.error);
+  const monitorId = started.ok ? started.monitor.id : "";
+  // 第一批就把事件上限顶满 ⇒ 自动停。要的是「没崩、而且吃进去的那一批有上界」。
+  await until("推满上限自动停", async () => (await getMonitor(monitorId))?.status === "stopped", 30_000);
+  const texts = (await pendingOf(taskId)).map((m) => m.text).join("\n");
+  assert.match(texts, /这一批共 2000 行/, "一批有上界：不是把 18 万行整批渲染成一条消息");
+  assert.match((await getMonitor(monitorId))?.endedReason ?? "", /推够了/, "到顶是停，不是静默继续");
+  if (started.ok) await until("进程被收掉", async () => !isPidAlive(started.ok ? started.monitor.pid! : 0));
+  console.log("✓ 一批行有上界：18 万行一口气来也只按批消费，放回那一步不展开传参");
 }
 // ── 事件上限：推满自动停，而且**不会把自己锁死** ─────────────────────────────
 // 这一条同时守两件事：到顶要真的停（每条事件都在烧回合），以及收尾必须能跑完 ——
@@ -493,8 +420,19 @@ setInterval(() => {}, 1000); // 吐完不退出：停下来必须是「到顶了
 {
   const stateFile = join(root, "restart-state.json");
   const ticker = join(root, "ticker.mjs");
+  // **前两拍快、后面慢**:v1 一攒到 2 条事件就硬退出(见 monitor-restart-child.ts),之后要留
+  // 给 v2 一整个 `npx tsx` 冷启动的时间 —— 这条用例的立论「接回 1 个」要求那个进程**那一刻
+  // 还活着**。上一版 12 拍 × 400ms = 总共 4.8 秒,v1 用掉 1 秒,剩下 3.8 秒要够两次冷启动:
+  // 机器一忙就不够（第 2 轮审查的审查者那边连着两次拿到 attached=0/lost=1,他们自己也说
+  // 这不是产品的问题）。现在总寿命 ~12 秒、行数不变,v2 那一侧的等待上限(30 秒)照旧覆盖。
   writeFileSync(ticker, `let i = 0;
-const t = setInterval(() => { i++; console.log("tick " + i); if (i >= 12) { clearInterval(t); process.exit(0); } }, 400);
+const tick = () => {
+  i++;
+  console.log("tick " + i);
+  if (i >= 12) { process.exit(0); return; }
+  setTimeout(tick, i < 2 ? 200 : 1200);
+};
+setTimeout(tick, 200);
 `);
 
   const child = join(HERE, "monitor-restart-child.ts");

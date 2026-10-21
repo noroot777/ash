@@ -494,12 +494,45 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
     /行首是「OK」 或 行首是「FAILED」就收工/,
     "约定过的要画出来:还在盯的那张靠它回答「它到底什么时候叫我」",
   );
-  // 存量/脏数据原样回显:显示这件事不该因为内容不合今天的语法就整段消失（那会让人分不出
-  // 「这条没有结束条件」和「这功能没做」）。
-  assert.match(
-    panel([normalizeMonitorDto({ ...base, stopWhen: "^(OK|FAILED)" })]), /「\^\(OK\|FAILED\)」就收工/,
-    "解析不出来的原样回显，不许整段消失",
-  );
+  // 存量/脏数据:**原样回显照旧，但不许再跟一句「就收工」**（第 2 轮审查 F2）。
+  //
+  // 回显这一半的理由没变（整段消失会让人分不出「这条没有结束条件」和「这功能没做」）；
+  // 变的是后半句:运行时对一个读不出来的条件的处置是「当它没有结束条件」，于是它只会盯到
+  // 到期 —— 卡片照旧念「…就收工」就是界面在替一件不会发生的事背书（审查实测:库里存着
+  // `^(READY|FAILED)$`、READY 已经吐出来、哨兵仍是 running，而卡片写着「就收工」）。
+  const unreadable = panel([normalizeMonitorDto({ ...base, stopWhen: "^(OK|FAILED)" })]);
+  assert.match(unreadable, /「\^\(OK\|FAILED\)」/, "解析不出来的原样回显，不许整段消失");
+  assert.match(unreadable, /读不出来，不会提前收工/, "不许替一个读不出来的条件承诺「就收工」");
+
+  // ── 结果还欠着的那一类:卡片上得有一个人点得到的出路（第 2 轮审查 N3）──────────────
+  //
+  // 完成闸的第三类是「结局已经写定、那条结束通知还没持久入队」。正常它只闪一下就没了;入队
+  // 那一笔失败时才会一直留着 —— 而那正是用户撞上「完成被一条已经结束的哨兵堵住」的时刻。
+  // 在这之前这一类**两处入口都没有**:还没入队所以不在待发送托盘里,已经结束所以卡片也不给
+  // 它渲染按钮,只剩「让 agent 调 stop_monitor」—— 而人点不了 MCP 工具。
+  //
+  // 点下去走的是**同一个停止端点**(对已结束的哨兵它只落「不要它的结果了」,状态一个字不改,
+  // 见 server/src/monitor-stop.ts),所以这里只验「入口在不在、措辞对不对」;那条请求本身的
+  // 收尾由 DOM 测试里停止按钮那一节覆盖。
+  const owing = (over: Partial<TaskMonitor> = {}) => normalizeMonitorDto({
+    ...base,
+    status: "exited" as const,
+    endedAt: "2026-10-09T03:00:00.000Z",
+    endedReason: "命令自己跑完了",
+    exitCode: 0,
+    pid: null,
+    resultHandoffAt: "2026-10-09T03:00:00.000Z",
+    resultsAbandonedAt: null,
+    ...over,
+  });
+  const owed = panel([owing()]);
+  assert.match(owed, /完成被它堵着/, "完成正被这条已经结束的哨兵拦着——不说的话，两处现象对不上");
+  assert.match(owed, /不再等哨兵/, "结果还欠着的那一类必须有一个人点得到的入口");
+  assert.doesNotMatch(owed, /停掉哨兵/, "措辞不许是「停掉」：进程早就没了");
+  const given = panel([owing({ resultsAbandonedAt: "2026-10-09T03:05:00.000Z" })]);
+  assert.match(given, /已放弃它没送到的结果/, "放弃过要在卡片上留下来（刷新页面也看得见）");
+  assert.doesNotMatch(given, /不再等哨兵/, "放弃过就别再给那个按钮——重复的入口只会让人以为没生效");
+  assert.doesNotMatch(panel([normalizeMonitorDto(base)]), /不再等哨兵/, "还在盯的那种不给这个入口");
   assert.ok(canStopMonitor(normalizeMonitorDto(legacy).kind), "归一之后它又停得掉了");
   assert.equal(normalizeMonitorDto(projected).kind, "claude", "带 kind 的不许被改写");
   assert.match(panel([normalizeMonitorDto(legacy)]), /停掉哨兵/, "归一后的旧 DTO 照常画出停止入口");
@@ -599,4 +632,4 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   assert.match(ended({ status: "exited", exitCode: 2 }), /退出码 2/, "非 0 退出码是唯一线索，要带上");
 }
 
-console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空日志只说可证实的事实（读不出来/非空却切不出完整行/确证零字节三种分开说），空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");
+console.log("✓ 哨兵面板：在盯的能停、结束的说清结局、说得出什么时候挂上的（起点不作数时只说答不出来、不画退化值、同一行不重复），空日志只说可证实的事实（读不出来/非空却切不出完整行/确证零字节三种分开说），空态留得住入口、用过才浮现且带底色与活信号，创建结果有归属，手机端同样给得出叫停，旧后端 DTO 在入口归一（含起点可信性反向兜底），结束条件读不出来时照实说、结果还欠着的那一类给得出放弃入口，回复框上那条「在等」折叠态只报数（正文归 DOM 测试点开验）");

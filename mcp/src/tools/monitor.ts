@@ -14,6 +14,7 @@ import {
   MONITOR_MIN_TIMEOUT_MS,
   MONITOR_WAKE_TARGETS,
 } from "@ash/shared/monitor";
+import { END_CONDITION_SYNTAX } from "@ash/shared/monitor-end-condition";
 import { call, fail, ok } from "../runtime.js";
 
 const minutes = (ms: number) => `${Math.round(ms / 60_000)} 分钟`;
@@ -44,7 +45,13 @@ server.registerTool(
       wake: z.enum(MONITOR_WAKE_TARGETS as unknown as [string, ...string[]]).optional()
         .describe("往别的任务上挂、而那个任务上有审查在进行时，说清醒来叫谁：single=叫实现者 / reviewer=叫那次审查。给自己挂时不必传（按你当下这一轮判）"),
       stopWhen: z.string().optional()
-        .describe("结束条件:哪一行出现这个字样,那一行照常推给你、这条哨兵随即收工,不必等到期。**不是正则,是字样**:多个用 | 分隔(任一命中即收工),开头 ^ = 只认行首、结尾 $ = 只认行尾,其余字符一律当它本身。要用正则就写进命令自己那段 grep —— 命令才是过滤器。命令自己不会结束时(tail -F / while true)必须给它或给 untilExpiry。例:\"BUILD OK|FAILED\"、\"^SWEEP_EXIT=\""),
+        // 语法那半句**引 shared 那一份**,不在这儿复述:两处各写一遍就会漂（第 2 轮审查 N1,
+        // 上一版这里写着「其余字符一律当它本身」，而元字符其实是当场 400 拒掉）。
+        .describe(
+          "结束条件:哪一行出现这个字样,那一行照常推给你、这条哨兵随即收工,不必等到期。"
+          + `${END_CONDITION_SYNTAX}`
+          + "命令自己不会结束时(tail -F / while true)必须给它或给 untilExpiry。",
+        ),
       untilExpiry: z.boolean().optional()
         .describe("「我本来就是要盯到到期」:每出现一次叫我一次那种(盯错误日志、盯外部状态变化)。只在命令自己不会结束时需要明说一声;**别拿它绕过那道闸** —— 要等一件事干完就按上面①②两条改,不然任务只能干等到期"),
     },

@@ -4,7 +4,7 @@ import {
   MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_WAKE_LABEL, MONITOR_WAKE_TARGETS, monitorDurationOptions,
 } from "@ash/shared/monitor";
 import type { MonitorWakeTarget } from "@ash/shared/monitor";
-import { neverExitsOnItsOwn, parseEndCondition } from "@ash/shared/monitor-end-condition";
+import { END_CONDITION_HINT, neverExitsOnItsOwn, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import type { StartMonitorInput } from "./useTaskMonitors.ts";
 
 // **从共享常量推导，不要在这里另列一张表**：写死的那版在时长上限改掉之后整张失真
@@ -159,12 +159,11 @@ export function MonitorComposer({
           onFocus={() => setEnding("stopWhen")}
           onChange={(event) => { setStopWhen(event.target.value); setEnding("stopWhen"); }}
         />
-        {/* 语法照实说一遍：这里收的是**字样**不是正则，而「^(OK|FAILED)」是几乎所有人的
-            第一反应 —— 不说清楚，他只会得到一条永远不命中的结束条件。 */}
-        <p className="monitor-composer__hint">
-          {condError
-            ?? "多个字样用 | 分隔（任一命中即收工）；开头加 ^ 只认行首、结尾加 $ 只认行尾。这里不是正则，其余字符都当它本身——要用正则就写进命令里那段 grep。"}
-        </p>
+        {/* 语法照实说一遍：这里收的是字样不是正则，而「^(OK|FAILED)」是几乎所有人的第一
+            反应 —— 不说清楚，他只会得到一条永远不命中的结束条件。措辞**不在这儿写**:它要
+            跟拒绝文案和 MCP 工具说明一字不差（第 2 轮审查 N1:上一版这里写着「其余字符都当
+            它本身」，而带括号的字样其实是当场拒掉）。 */}
+        <p className="monitor-composer__hint">{condError ?? END_CONDITION_HINT}</p>
       </fieldset>
       <label>
         <span>盯多久</span>

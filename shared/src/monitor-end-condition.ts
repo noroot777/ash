@@ -29,6 +29,14 @@
 //    按 `; | && & ( ) 换行` 断开），只拿每条的**命令词和它自己的 argv** 去比；引号里的字、
 //    `$( )`/反引号里的字一律不当执行节点。读不懂的形状（`eval`、脚本封装）照旧**不拦**。
 //
+// ③ **拦的凭据必须是「这一条真的会跑」**（第 2 轮审查 F3）。②只做到了「不搜整串文本」,而
+//    切出来的简单命令里仍混着一堆**不是执行节点**的东西,于是五种会自己结束的命令被 409
+//    拦掉（审查实测，全部 `/bin/sh` 退出 0）：here-doc 的文档体、`#` 注释、从没被调用过的
+//    函数体、`if false; then … fi` 这种走不到的分支，以及 `tail -- -f`（`--` 之后那个 `-f`
+//    是文件名不是开关）。这一层读不出执行资格的结构（here-doc、函数定义）**整条命令放行**,
+//    读得出但判不出哪几支会跑的（条件分支）**跟随型那一扫整个不做**,`--` 按各命令自己的
+//    argv 规则尊重。少拦几条 = 退回今天的行为；多拦一条 = 一件做得成的事做不成了。
+//
 // ── 误判的代价不对称，所以只认**明确**的那几种 ───────────────────────────────────
 //
 // 漏判（把一条永不退出的命令放过去）= 退回今天的行为，不比现状坏；误判（把一条会自己结束
@@ -58,10 +66,29 @@ export type EndConditionCheck =
  */
 const META = /[()[\]{}*+?\\]/;
 
-const SYNTAX =
+/**
+ * 语法这件事**只在这儿说一遍**（第 2 轮审查 N1）。
+ *
+ * 它要同时出现在三处:拒绝文案（这个模块）、MCP 工具说明（agent 看的）、表单那行小字
+ * （人看的）。各写一份的结果是审查实测到的那种漂移 —— 后两处都写着「其余字符都当它本身」,
+ * 而 `[DONE]` 这种一提交就被 400 拒掉:**元字符是拒掉而不是当字面量**,两句话的差别正好是
+ * 用户要不要改写自己的输入。所以 agent 侧那份直接引这个常量,人侧那份是同一段话的纯文本版
+ * （表单里不渲染 markdown），紧挨着放,改一处时另一处就在眼前。
+ */
+export const END_CONDITION_SYNTAX =
   "结束条件不是正则，是**字样**：写上那一行里会出现的字，多个用 `|` 分隔（任一命中即收工）；"
   + "开头加 `^` = 只认行首，结尾加 `$` = 只认行尾。例：`BUILD OK|FAILED`、`^SWEEP_EXIT=`。"
-  + "要用正则就把它写进命令自己那段 grep —— 命令才是过滤器。";
+  + "正则元字符（`( ) [ ] { } * + ? \\`）**一律拒掉**，不是悄悄当字面量——"
+  + "所以 `[DONE]` 请写成 `DONE`（子串照样命中），`[0-9]+` 这种意图写进命令自己那段 grep。"
+  + "要用正则就把它写进命令里 —— 命令才是过滤器。";
+
+/** 同一段话的纯文本版，给表单那行小字（它不渲染 markdown）。见上。 */
+export const END_CONDITION_HINT =
+  "这里不是正则，是字样：多个用 | 分隔（任一命中即收工），开头加 ^ 只认行首、结尾加 $ 只认行尾。"
+  + "正则元字符（ ( ) [ ] { } * + ? \\ ）会被拒掉而不是当成字面量——[DONE] 请写成 DONE，"
+  + "子串照样命中；要用正则就写进命令里那段 grep。";
+
+const SYNTAX = END_CONDITION_SYNTAX;
 
 /**
  * 校验并解析结束条件。**在起进程之前做** —— 一个解析不出来的条件等于一个永远不会命中的
@@ -129,6 +156,21 @@ export function describeEndCondition(pattern: string): string {
       return `${where}「${needle}」`;
     })
     .join(" 或 ");
+}
+
+/**
+ * 卡片上那一段：这条哨兵**会不会提前收工**。
+ *
+ * 为什么不是 `describeEndCondition(x) + "就收工"`（第 2 轮审查 F2）:库里那个值可能是**这一版
+ * 读不出来**的 —— 语义换过一轮（旧版收 JS 正则源文，见文件头 ①）、跨版本接力过来的任务、
+ * 手改过的库，都能留下这样一行。运行时对它的处置是「当没有结束条件」，而卡片照旧念
+ * 「…就收工」,于是界面在替一件不会发生的事背书:用户看着「行首是 OK 就收工」等下去,
+ * 哨兵只会盯到到期。两边必须共用同一份判据 —— 读不出来就照实说读不出来。
+ */
+export function endConditionNote(pattern: string): string {
+  const parsed = parseEndCondition(pattern);
+  if (parsed.ok && parsed.cond) return `${describeEndCondition(pattern)}就收工`;
+  return `结束条件「${pattern.trim()}」这一版读不出来，不会提前收工`;
 }
 
 // ── 二、这条命令自己会不会结束:按结构判 ──────────────────────────────────────────
@@ -211,6 +253,14 @@ function simpleCommands(command: string): Token[][] {
       i = close < 0 ? command.length : close + 1;
       continue;
     }
+    // `#` 只在**词首**才是注释（shell 的规矩，`cmd -x#y` 里那个不是）。注释到行尾一个字都
+    // 不执行 —— 上一版照旧切成简单命令，于是 `printf done # tail -F build.log` 被拦（F3）。
+    if (c === "#" && !started) {
+      const nl = command.indexOf("\n", i);
+      endCommand();
+      i = nl < 0 ? command.length : nl;
+      continue;
+    }
     if (c === " " || c === "\t" || c === "\r") { endToken(); i += 1; continue; }
     if (c === "\n" || c === ";" || c === "&" || c === "|" || c === "(" || c === ")" || c === "{" || c === "}") {
       endCommand();
@@ -250,11 +300,23 @@ function commandOf(tokens: Token[]): { name: string; argv: Token[]; bounded: boo
   return null;
 }
 
-/** argv 里有没有这个短开关（含 `-qF` 这种并写）或长开关。 */
+/**
+ * argv 里有没有这个短开关（含 `-qF` 这种并写）或长开关。
+ *
+ * **`--` 之后不再有开关**（第 2 轮审查 F3）：`tail -- -f` 盯的是一个名叫 `-f` 的文件，打完
+ * 就退 —— 把那个操作数读成「跟随模式」，就是拿一条会自己结束的命令去换一个 409。
+ */
 function hasFlag(argv: Token[], short: RegExp, long: string): boolean {
-  return argv.some(({ text, quoted }) => !quoted && (
-    (text.startsWith("--") ? text === long || text.startsWith(`${long}=`) : text.startsWith("-") && short.test(text))
-  ));
+  for (const { text, quoted } of argv) {
+    if (quoted) continue;
+    if (text === "--") return false;
+    if (text.startsWith("--")) {
+      if (text === long || text.startsWith(`${long}=`)) return true;
+      continue;
+    }
+    if (text.startsWith("-") && short.test(text)) return true;
+  }
+  return false;
 }
 /** argv 里第一个不是开关的词（`watch` 要有活干、`docker logs` 的子命令）。 */
 const operands = (argv: Token[]): string[] => argv.filter((t) => !t.text.startsWith("-")).map((t) => t.text);
@@ -277,6 +339,48 @@ const FOLLOWERS: readonly { name: string; what: string; follows: (argv: Token[])
   { name: "fswatch", what: "fswatch", follows: (a) => !hasFlag(a, /^-[^-]*1/, "--one-event") },
 ];
 
+/**
+ * 把注释从**已经抹掉引号内容**的文本里也抹掉（按文本看的那几条判据用，长度保持不变）。
+ *
+ * 跟 `simpleCommands` 里那一支是同一条规矩的两处落点：那边决定「哪几条是简单命令」，这边
+ * 决定「`while true` / 函数定义 / 条件分支这些结构算不算出现过」。少一处，`# while true;
+ * do :; done` 这样的注释就又会把一条打一行就退的命令拦下来。
+ */
+function blankComments(text: string): string {
+  let out = "";
+  let wordStart = true;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === "#" && wordStart) {
+      const nl = text.indexOf("\n", i);
+      const end = nl < 0 ? text.length : nl;
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
+    out += c;
+    wordStart = /[\s;&|(){}]/.test(c);
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * 函数定义:`name() {` / `function name {`。**定义这一刻函数体一个字都不跑**,而「后面到底
+ * 调没调过它」这一层答不出来 —— 答不出来就不拦（第 2 轮审查 F3 实测:一个从未被调用的
+ * `later() { tail -F /dev/null; }` 把整条命令拦掉了）。
+ */
+const FUNC_DEF = /(?:^|[;&|\n])\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_-]*\s*(?:\(\s*\)\s*[{(]|\{)/;
+/** here-doc / here-string:`<<EOF` 到终止词之间是**数据**,不是执行节点。 */
+const HERE_DOC = /<</;
+/**
+ * 条件分支。哪几支真的会跑是运行时的事，这一层判不出 —— 所以**跟随型那一扫整个不做**
+ * （`if false; then tail -F x; fi` 曾因此被拦）。恒真循环那一条判据不受影响：循环体里有
+ * `if` 不改变「这个循环没有出路」这件事，照旧要拦。
+ */
+const CONDITIONAL = /(?<![-./\w])(?:if|elif|else|then|fi|case|esac)\b/;
+
 /** `while true` / `until false` 这类恒真循环。循环体里有 `break`/`exit` 就不算。 */
 const FOREVER_LOOP = /\b(?:while\s+(?:true|:)|until\s+false)\b([\s\S]*?)\bdone\b/;
 const ESCAPES = /\b(?:break|exit|return)\b/;
@@ -288,13 +392,21 @@ const ESCAPES = /\b(?:break|exit|return)\b/;
  * 「永不退出」本身不是错，错的是**既永不退出、又没有任何别的结束条件**。
  */
 export function neverExitsOnItsOwn(command: string): string | null {
-  for (const tokens of simpleCommands(command)) {
-    const cmd = commandOf(tokens);
-    if (!cmd || cmd.bounded) continue;
-    for (const f of FOLLOWERS) if (f.name === cmd.name && f.follows(cmd.argv)) return f.what;
+  // 按文本看的那几条判据共用这一份:引号内容和注释都已经抹掉,长度不变。
+  const plain = blankComments(blankQuoted(command));
+  // **读不出执行资格的结构 ⇒ 整条命令放行**（见文件头 ③）。here-doc 的终止词、函数体到底
+  // 调没调过，这一层都只能猜；猜错的那一半代价是「一件做得成的事做不成」。
+  if (HERE_DOC.test(plain) || FUNC_DEF.test(plain)) return null;
+  // 条件分支在场时跟随型那一扫整个不做：切出来的简单命令里混着走不到的那几支，分不清。
+  if (!CONDITIONAL.test(plain)) {
+    for (const tokens of simpleCommands(command)) {
+      const cmd = commandOf(tokens);
+      if (!cmd || cmd.bounded) continue;
+      for (const f of FOLLOWERS) if (f.name === cmd.name && f.follows(cmd.argv)) return f.what;
+    }
   }
-  // 循环是跨简单命令的结构，只能按文本看 —— 但先把引号里的内容抹掉（见 `blankQuoted`）。
-  const loop = FOREVER_LOOP.exec(blankQuoted(command));
+  // 循环是跨简单命令的结构，只能按文本看。
+  const loop = FOREVER_LOOP.exec(plain);
   if (loop && !ESCAPES.test(loop[1] ?? "")) return "while true / until false";
   return null;
 }
