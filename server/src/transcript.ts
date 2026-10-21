@@ -178,6 +178,7 @@ function validTraceEvent(event: unknown): boolean {
       // path 可缺省:那是「这处引用没存下副本」的明确交代(见 shared 的 attachment 事件)。
       // 但不能连 path 带 source 都没有 —— 那条记录什么都说明不了。
       return optionalString(e.path) && optionalString(e.source) && optionalNumber(e.ref)
+        && (e.lost === undefined || e.lost === true)
         && (e.path !== undefined || e.source !== undefined);
     case "error":
       return isString(e.message)
@@ -234,6 +235,7 @@ function validNativeActivity(value: unknown): boolean {
       return isString(activity.message);
     case "attachment":
       return optionalString(activity.path) && optionalString(activity.source) && optionalNumber(activity.ref)
+        && (activity.lost === undefined || activity.lost === true)
         && (activity.path !== undefined || activity.source !== undefined);
     default:
       return false;

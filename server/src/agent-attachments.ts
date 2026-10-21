@@ -111,6 +111,13 @@ function storeImage(
   } catch (error) {
     // 写不进去就当这张图不存在:**不记进 seen**,下一次引用还能再试。写失败抛出去会变成
     // 没有监听者的 uncaughtException,把整条事件流(连带这一回合)带走 —— 一张图不值这个。
+    // 半截文件不留:盘满那种失败往往已经写进去一部分,留着就是一张永远打不开的图,而且
+    // 它按内容寻址的名字会让下一次引用误以为「这份字节已经存过了」(审查第 3 轮 N3)。
+    try {
+      unlinkSync(path);
+    } catch {
+      /* 压根没写出来过 */
+    }
     console.warn(`[ash] failed to persist agent image ${path}:`, error);
     return null;
   }
@@ -170,12 +177,19 @@ function readImageAt(destination: string, cwd?: string): ImageBytes | null {
  * 正文里**一处**引用的保存结果。
  *
  * `source` 是目的地(规范化后的那个,见 shared 的 markdownImageRefs),`ref` 是这一处引用
- * 在本流里的身份。`path` 在 = 这处引用那一刻的拷贝;`path` 不在 = **这处引用确实没有副本**
- * (文件读不到、格式不认、写盘失败)。两件事必须分得开:展示端据此决定「拿副本画」还是
- * 「现在去工作目录取一次」;混在一起就会把「关联丢了」当成「从来没存过」,绕过仍然存在的
- * 正确副本去画当前文件(审查第 1 轮 F1 实测 B)。
+ * 在本流里的身份。`path` 在 = 这处引用那一刻的拷贝;`path` 不在 = **这处引用确实没有副本**。
+ * 两件事必须分得开:展示端据此决定「拿副本画」还是「现在去工作目录取一次」;混在一起就会
+ * 把「关联丢了」当成「从来没存过」,绕过仍然存在的正确副本去画当前文件(审查第 1 轮 F1 实测 B)。
+ *
+ * 没有副本还分两种,`lost` 就是这一位:
+ *   · `lost` 不在 —— **压根没有字节可存**(说那句话时文件还不存在、格式不认、是站外地址)。
+ *     agent 先写 `![](shot.png)` 再去截图是常事,那张图现在躺在工作目录里就是它说的那张,
+ *     展示端退一档去取是对的。
+ *   · `lost: true` —— **字节当时读到了、写盘失败了**(盘满、权限)。这一处引用那一刻的画面
+ *     我们**丢了**,而文件后来可能已经被重拍过 —— 此时拿「现在的文件」去画就是把后来的画面
+ *     当成旧结论(审查第 3 轮 R1 同类位置)。展示端据此显式作废,不猜。
  */
-export type PersistedMarkdownImage = { source: string; ref: number; path?: string };
+export type PersistedMarkdownImage = { source: string; ref: number; path?: string; lost?: boolean };
 
 /**
  * 流式阶段拍下的一份字节快照。
@@ -184,11 +198,24 @@ export type PersistedMarkdownImage = { source: string; ref: number; path?: strin
  * 会跟着变(`[r]: output/` 再来一片才是 `[r]: output/x.png`)。配不上就当没拍过。
  */
 export type ImageSnapshot = { destination: string; path: string };
-export type ImageSnapshots = Map<string, ImageSnapshot>;
+/** key = 这一处引用在**当下这段攒着的正文**里的起点(裁剪之后由 shiftSnapshots 跟着挪)。 */
+export type ImageSnapshots = Map<number, ImageSnapshot>;
 
-/** 快照的身份:这一轮攒的正文里**哪个位置**那一处引用(generation 由调用方在裁剪后递增)。 */
-function snapshotKey(generation: number, start: number): string {
-  return `${generation}:${start}`;
+/**
+ * 裁走前面那一段之后,留下来的那几份快照跟着挪位置。
+ *
+ * 为什么不能一裁就整个清空:**没交代过的引用还在留下来那一段里**。清空等于把「说那句话
+ * 时的字节」丢了,它那处引用要等到消息收尾才被认领,那时去读文件拿到的是后来的画面 ——
+ * 审查第 3 轮 R1 实测:红图在最后一段、后面追 8200 字触发裁剪,工具把文件改蓝之后两处
+ * 引用一起画成蓝图。裁点之前的那些丢掉是对的:它们要么刚交代过,要么已经被判成不是图
+ * (后者留在 captured 里,收尾时由 discardUnclaimedImages 删掉)。
+ */
+export function shiftSnapshots(snapshots: ImageSnapshots, cut: number): ImageSnapshots {
+  const moved: ImageSnapshots = new Map();
+  for (const [start, snapshot] of snapshots) {
+    if (start >= cut) moved.set(start - cut, snapshot);
+  }
+  return moved;
 }
 
 type MarkdownImageOptions = {
@@ -196,7 +223,6 @@ type MarkdownImageOptions = {
   cwd?: string;
   /** 流式阶段拍下的字节(见 captureMarkdownImages):有就用它,没有才现在去读文件。 */
   snapshots?: ImageSnapshots;
-  generation?: number;
 };
 
 /**
@@ -219,16 +245,14 @@ export function captureMarkdownImages(
   options: MarkdownImageOptions = {},
 ): string[] {
   const directory = options.directory ?? UPLOADS_DIR;
-  const generation = options.generation ?? 0;
   const stored: string[] = [];
   for (const ref of refs) {
-    const key = snapshotKey(generation, ref.start);
-    if (snapshots.get(key)?.destination === ref.destination) continue;
+    if (snapshots.get(ref.start)?.destination === ref.destination) continue;
     const bytes = readImageAt(ref.destination, options.cwd);
     if (!bytes) continue;
     const copy = storeImage(bytes, seen, directory, snapshots.size);
     if (!copy) continue;
-    snapshots.set(key, { destination: ref.destination, path: copy.path });
+    snapshots.set(ref.start, { destination: ref.destination, path: copy.path });
     if (copy.fresh) stored.push(copy.path);
   }
   return stored;
@@ -263,7 +287,6 @@ export function persistMarkdownImageRefs(
   options: MarkdownImageOptions = {},
 ): PersistedMarkdownImage[] {
   const directory = options.directory ?? UPLOADS_DIR;
-  const generation = options.generation ?? 0;
   const persisted: PersistedMarkdownImage[] = [];
   for (const ref of refs) {
     // 站外地址、data:、给不出 cwd 的相对路径:本来就不该有「保存结果」,一条都不发
@@ -271,13 +294,18 @@ export function persistMarkdownImageRefs(
     if (!localImagePath(ref.destination, options.cwd)) continue;
     const id = seen.refs;
     seen.refs += 1;
-    const snapshot = options.snapshots?.get(snapshotKey(generation, ref.start));
+    const snapshot = options.snapshots?.get(ref.start);
     let copy = snapshot?.destination === ref.destination ? snapshot.path : null;
+    // 字节读到了却存不下来 = 这一刻的画面**丢了**(见 PersistedMarkdownImage 的 lost)。
+    let lost = false;
     if (!copy) {
       const bytes = readImageAt(ref.destination, options.cwd);
       copy = bytes ? storeImage(bytes, seen, directory, id)?.path ?? null : null;
+      lost = !!bytes && !copy;
     }
-    persisted.push(copy ? { source: ref.destination, ref: id, path: copy } : { source: ref.destination, ref: id });
+    persisted.push(copy
+      ? { source: ref.destination, ref: id, path: copy }
+      : lost ? { source: ref.destination, ref: id, lost: true } : { source: ref.destination, ref: id });
   }
   return persisted;
 }

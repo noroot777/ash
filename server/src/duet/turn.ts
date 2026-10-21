@@ -306,7 +306,7 @@ export async function runTurn(args: {
           text += event.text;
           out.write(event.text + "\n");
         } else if (event.kind === "attachment") {
-          if (event.source) images.push({ path: event.path, source: event.source, ref: event.ref });
+          if (event.source) images.push({ path: event.path, source: event.source, ref: event.ref, lost: event.lost });
         } else if (event.kind === "tool") {
           if (isVisibleExecutionEvent(event) && trace.length < TRACE_CAP) trace.push({ kind: "tool", label: event.name, detail: event.detail });
         } else if (event.kind === "thinking") {

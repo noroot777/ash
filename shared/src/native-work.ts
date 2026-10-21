@@ -16,7 +16,7 @@ export type NativeAgentActivity =
   | { kind: "error"; message: string }
   // source/ref/path 的语义见 shared/src/events.ts 的同名字段(子智能体那一层同样要带:
   // 抽屉里的正文跟主会话走同一套配对,少一个字段就配不上)。
-  | { kind: "attachment"; path?: string; source?: string; ref?: number };
+  | { kind: "attachment"; path?: string; source?: string; ref?: number; lost?: boolean };
 
 export type NativeWorkEvent = (
   | { type: "activity"; id: string; event: NativeAgentActivity }

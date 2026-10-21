@@ -9,7 +9,7 @@
 // 必须出现带 `source` 的 attachment。另外验流式碎片(半句话分两次到)和去重。
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
@@ -252,6 +252,88 @@ try {
     overflowed.filter((event) => event.kind === "text").map((event) => (event as { text: string }).text).join(""),
     huge,
     "放弃管的只是落图,正文照旧原样转发",
+  );
+
+  // ⑭ 裁剪必须**保住留下来那一段的快照**。红图引用在最后一段里,后面追 8200 字触发裁剪
+  // —— 那一刻它还没被交代,快照一清空就等于「字节丢了」:工具随后把文件改蓝,收尾那一遍
+  // 重新读文件,两处引用一起画成蓝图(审查第 3 轮 R1 实测反例二)。
+  const keep = join(root, "output", "keep.png");
+  writeFileSync(keep, red);
+  const retained = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: `前言。\n\n修改前应为红色：![修改前](output/keep.png)${"填".repeat(8200)}` } as AgentEvent;
+    writeFileSync(keep, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+    yield { kind: "text", text: "\n\n修改后为蓝色：![修改后](output/keep.png)\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  const kept = attachments(retained);
+  assert.equal(kept.length, 2, "两处引用两条结果");
+  assert.deepEqual(readFileSync(kept[0]!.path!), red, "裁剪保住了「说那句话时」的红图");
+  assert.deepEqual(readFileSync(kept[1]!.path!), blue, "第二处引用是改过之后的蓝图");
+
+  // ⑮ 引用式图的**定义分两片到达**,后一片一个标点都不带(`[r]: ` + `output/def.png`)。
+  // 那一片不沾 `)`/`]`/换行,靠「还在写的定义行」这一档才会去扫 —— 漏掉它,这处引用的字节
+  // 要等到下一片带标点时才拍,中间工具把文件重拍一遍,红图就记成蓝图(R1 实测反例一)。
+  const def = join(root, "output", "def.png");
+  writeFileSync(def, red);
+  const bare = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "修改前是红色：![修改前][r]\n\n[r]: " } as AgentEvent;
+    yield { kind: "text", text: "output/def.png" } as AgentEvent;
+    writeFileSync(def, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+    yield { kind: "text", text: "\n\n修改后是蓝色：![修改后](output/def.png)" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  const defs = attachments(bare);
+  assert.equal(defs.length, 2, "引用式图和行内图各一条");
+  assert.deepEqual(readFileSync(defs[0]!.path!), red, "定义刚写完那一刻就把红图拍下来了");
+  assert.deepEqual(readFileSync(defs[1]!.path!), blue, "后一处引用是蓝图");
+
+  // ⑯ 定义**跨过一个窗口**才到:`![真实][shot]` 在最前面,定义在 19 KB 之后。那处引用在
+  // 解析树里还只是一段普通文字(定义没到之前压根不是图片节点),裁掉就等于定义再到也没人
+  // 认领它 —— 这条消息从此没有持久副本(审查第 3 轮 R2:完整正文 1 个节点、服务端 0 条)。
+  const lateDefinition = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "真实引用：![真实][shot]\n\n" + "普通正文。\n\n".repeat(1600) } as AgentEvent;
+    yield { kind: "text", text: "[shot]: output/shot.png\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(lateDefinition).map((event) => event.source),
+    ["output/shot.png"],
+    "后到的定义仍然认得回那处引用",
+  );
+
+  // ⑰ 等定义是有上限的(PENDING_HOLD):正文里一句孤零零的 `![从未定义]` 永远不会有定义,
+  // 不设上限它能把整条消息钉住、最后撞上天花板把这条消息整个放弃掉。所以它只压一段距离,
+  // 之后照旧裁走 —— 同一条消息里**真**的那张图必须照常落盘。
+  const stray = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "孤零零 ![从未定义] 一句。\n\n" + "填充。\n\n".repeat(7000) } as AgentEvent;
+    yield { kind: "text", text: "真图：![真图](output/shot.png)\n\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(stray).map((event) => event.source),
+    ["output/shot.png"],
+    "没有定义的候选只压一段距离,不拖垮同一条消息里真的那张图",
+  );
+
+  // ⑱ 字节读到了、写盘失败了(盘满、权限)= 这一刻的画面**丢了**,结果里要带 `lost`。
+  // 展示端据此显式作废那一处,而不是拿「现在的文件」去画 —— 文件可能已经被重拍过,那就是
+  // 把后来的画面当成旧结论(审查第 3 轮 R1 同类位置)。
+  chmodSync(uploads, 0o500);
+  let lostEvents: AgentEvent[];
+  try {
+    lostEvents = await collect(withMarkdownImages((async function* () {
+      yield { kind: "text", text: "存不下去：![存不下](output/shot.png)\n" } as AgentEvent;
+      yield { kind: "done", exitStatus: 0 } as AgentEvent;
+    })(), root));
+  } finally {
+    chmodSync(uploads, 0o700);
+  }
+  assert.deepEqual(
+    attachments(lostEvents).map((event) => [event.source, event.path, event.lost]),
+    [["output/shot.png", undefined, true]],
+    "写盘失败要如实报成「这一刻的字节丢了」",
   );
 
   console.log("自定义解析器的图片落盘回归通过");

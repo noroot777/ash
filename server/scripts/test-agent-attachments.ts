@@ -175,9 +175,11 @@ try {
   const retryStore: ImageStore = imageStore();
   assert.deepEqual(
     persistMarkdownImages(`![失败](<${localImage}>)`, retryStore, { directory: blocked }),
-    [{ source: localImage, ref: 0 }],
-    "写不进去要如实报「这处引用没有副本」(不抛:抛出去会变成没人监听的 uncaughtException),"
-      + "而不是一条都不报 —— 一条都不报,展示端分不清「没存过」和「关联丢了」(F1)",
+    [{ source: localImage, ref: 0, lost: true }],
+    "写不进去要如实报(不抛:抛出去会变成没人监听的 uncaughtException),而且得报成 lost ——"
+      + "**字节读到了、存不下来**和「压根没有这个文件」是两件事:前者那一刻的画面已经丢了,"
+      + "展示端必须作废那一处(现在去读文件拿到的是后来的画面);后者文件可能还好好躺在工作"
+      + "目录里,去取一次是对的(审查第 3 轮 R1)",
   );
   assert.equal(retryStore.copies.size, 0, "没真落盘就不能记进 seen,否则恢复可写后本轮再也不重试");
   assert.equal(persistMarkdownImages(`![重试](<${localImage}>)`, retryStore, { directory: uploads }).length, 1);

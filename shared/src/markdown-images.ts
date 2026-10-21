@@ -117,7 +117,10 @@ function rewriter(alt: string): (url: string) => string {
 export function markdownImageRefs(text: string): MarkdownImageRef[] {
   if (!text.includes("![")) return [];
   const root = parse(text);
-  if (!root) return [];
+  return root ? refsOf(root) : [];
+}
+
+function refsOf(root: Node): MarkdownImageRef[] {
   const definitions = new Map<string, string>();
   for (const node of walk(root)) {
     if (node.type !== "definition" || !node.identifier || typeof node.url !== "string") continue;
@@ -137,22 +140,103 @@ export function markdownImageRefs(text: string): MarkdownImageRef[] {
   return refs.sort((a, b) => a.start - b.start);
 }
 
+/** 空行之后**一定**另起一块的那几种节点 —— 判据与取舍见 blockSettled。 */
+const SETTLED_BLOCK = new Set(["paragraph", "heading", "thematicBreak", "table", "definition"]);
+
 /**
- * 最后一个顶层块的起点 —— 它**之前**那一段的语法已经定型,可以安全地交代掉并裁走。
+ * 这个顶层块已经写完了吗(后文不可能再改它的解析结果)。
  *
- * 必要性:流式解析器一个 text 事件可能只是半句话,得攒一段再扫;攒长了得裁。按字符数硬裁
- * 会把**块的状态**裁断 —— 开栏的 ``` 被裁掉之后,围栏里的写法示例就被当成真图存一份;行内
- * 代码的一对反引号被切开也一样(审查第 2 轮 F2)。而未闭合的围栏、还在写的段落恒是**最后
- * 一个**块,所以裁到这里等于「只裁已经写完的那几个块」:它们的解析结果不会再被后文推翻。
- *
- * 唯一还会被后文改写的是**后到的链接/图片定义**(`![a][r]` 在前、`[r]: p` 在后):定义落在
- * 裁掉的那一段之外时,前面那处引用解不出目的地,于是这一侧不管它(展示端照旧按完整正文
- * 解析,那处引用会退一档「去工作目录取」)。拿「少管一处」换「绝不按半截正文定性」。
- *
- * 一个块自己就超了上限(往围栏里灌一整份日志)时返回 0 —— 调用方据此知道「裁不动」。
+ * 不对称是**故意的**:猜「还没写完」的代价只是这一块跟着后面那一段走,顺序一个字不变;
+ * 猜「写完了」却猜错,一个列表会被劈成两个列表、一段引用块劈成两段 —— 渲染出来真的不一样。
+ * 所以列表、引用块、缩进代码块、脚注定义一律按「还没写完」处置:它们空行之后还能接着长。
  */
-export function lastBlockStart(text: string): number {
+function blockSettled(text: string, node: Node, span: [number, number]): boolean {
+  const fenced = node.type === "code" && /^(?:```|~~~)/.test(text.slice(span[0], span[0] + 3));
+  if (!fenced && !SETTLED_BLOCK.has(node.type)) return false;
+  // 空行是「这一块到此为止」的唯一硬证据:段落在单个换行之后还能续写(lazy continuation),
+  // 未闭合的围栏连空行都吃得下(所以围栏那一档也要空行才算完)。
+  return /\n[ \t]*\n/.test(text.slice(span[1]));
+}
+
+/**
+ * 「切在这里不会改变语法」的那个位置 —— 流式裁剪与气泡分段共用的唯一口径。
+ *
+ * 必要性:两边都会**把同一份 Markdown 按别的边界切开**。服务端按字符数攒够就裁(carry 不能
+ * 无限涨),展示端按执行事件切段(工具卡片要插在正文中间)。而半截正文的语法结论随时会被
+ * 后文推翻:开栏的 ``` 被裁掉之后围栏里的写法示例就成了「真图」,一对反引号被切在两段里
+ * 之后后半段那个示例会被真的画出来(审查第 2 轮 F2、第 3 轮 R2 实测:整条消息 0 个图片
+ * 节点,切成两段后各认出 1 个)。
+ *
+ * 所以切点只能落在**顶层块边界**上:未闭合的围栏、还在写的段落恒是最后一个块。
+ *   · 最后一个块已经写完(见 blockSettled)→ 返回 `text.length`,整段都定型了;
+ *   · 否则返回最后一个块的起点 —— 它**之前**那些块的结论不会再变;
+ *   · 返回 0 = 整段正文就是一个还没写完的块,一个字都不能切。
+ */
+export function stableBlockBoundary(text: string): number {
   const root = parse(text);
-  const last = root?.children?.at(-1);
-  return (last && offsets(last)?.[0]) ?? 0;
+  if (!root) return 0; /* 解析不了就什么都别切 */
+  return boundaryOf(text, root);
+}
+
+function boundaryOf(text: string, root: Node): number {
+  const last = root.children?.at(-1);
+  const span = last ? offsets(last) : null;
+  if (!last || !span) return text.length; /* 一个块都没有(纯空白):没什么要留的 */
+  return blockSettled(text, last, span) ? text.length : span[0];
+}
+
+/**
+ * 「还等着后文才能成图」的那一处:`![a][r]` 在前、`[r]: path` 在后。
+ *
+ * 必须单独认:**定义还没到的引用式图在解析树里压根不是图片节点**,就是一段普通文字
+ * (实测:`![a][r]` 无定义时整段是 text 节点)。所以 `markdownImageRefs` 看不见它,
+ * 裁剪时它会被当成普通正文裁掉,定义再到也没人认领 —— 那处引用从此没有持久副本,
+ * 原文件一清理就彻底没了(审查第 3 轮 R2 实测:完整正文 1 个图片节点、服务端 0 条结果)。
+ *
+ * 代价是误判方向:写法示例里的 `![示例]` 在代码里(围栏、行内代码)一律排掉,剩下的误判
+ * (正文里真写了一段 `![foo]` 却从没有定义)只会让调用方多留一段正文,上限由调用方兜
+ * (见 parsers.ts 的 PENDING_HOLD)。
+ */
+const PENDING_IMAGE = /!\[(?:[^\]\\]|\\[\s\S])*\](?:\[(?:[^\]\\]|\\[\s\S])*\])?/g;
+
+export type MarkdownScan = {
+  /** 这一段正文里**渲染器真会画出来的**每一处引用(= markdownImageRefs)。 */
+  refs: MarkdownImageRef[];
+  /** 语法已经定型、交代到这里为止是安全的(见 stableBlockBoundary)。 */
+  boundary: number;
+  /** 还等着定义的那处引用所在的**顶层块起点**;没有就是 -1。 */
+  pending: number;
+};
+
+/** 流式那一侧要的三个答案,一次解析一起算出来(每片都来一遍,别解析三遍)。 */
+export function scanMarkdownImages(text: string): MarkdownScan {
+  const root = parse(text);
+  if (!root) return { refs: [], boundary: 0, pending: -1 };
+  const refs = refsOf(root);
+  const blocks = root.children ?? [];
+  const starts = new Set(refs.map((ref) => ref.start));
+  const code: [number, number][] = [];
+  for (const node of walk(root)) {
+    if (node.type !== "code" && node.type !== "inlineCode") continue;
+    const span = offsets(node);
+    if (span) code.push(span);
+  }
+  let pending = -1;
+  PENDING_IMAGE.lastIndex = 0;
+  for (let match = PENDING_IMAGE.exec(text); match; match = PENDING_IMAGE.exec(text)) {
+    const at = match.index;
+    if (starts.has(at) || text[at - 1] === "\\") continue;
+    if (code.some(([from, to]) => at >= from && at < to)) continue;
+    pending = at;
+    break;
+  }
+  if (pending >= 0) {
+    for (const block of blocks) {
+      const span = offsets(block);
+      if (!span || pending < span[0] || pending >= span[1]) continue;
+      pending = span[0];
+      break;
+    }
+  }
+  return { refs, boundary: boundaryOf(text, root), pending };
 }
