@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type {
   AgentType,
   GateAction,
@@ -18,6 +16,7 @@ import { db } from "./db/index.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { queueItems, scheduledMessages, tasks } from "./db/schema.js";
 import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
+import { readDuetTurns } from "./duet/transcript-reads.js";
 import { resolveGate } from "./duet/gates.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
@@ -27,7 +26,6 @@ import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
 import { mountTaskSteerRoutes } from "./task-steer.js";
-import { RUNS_DIR } from "./paths.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
@@ -41,7 +39,6 @@ import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
-import { readableRunPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
@@ -71,24 +68,9 @@ export function mountTaskRunRoutes(api: Hono): void {
     status: r.status as ScheduledMessageStatus,
   });
 
-// Persisted duet transcript (rebuilds the timeline on reload, §12). Old
-// transcripts predate the debate→duet rename — normalize their event types here
-// so the web reducer only ever sees `duet.*`.
-api.get("/tasks/:id/duet", async (c) => {
-  try {
-    const raw = await readFile(readableRunPath(join(RUNS_DIR, c.req.param("id"), "transcript.jsonl")), "utf8");
-    const turns = raw
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => JSON.parse(l))
-      .map((t) => (typeof t?.type === "string" && t.type.startsWith("debate.")
-        ? { ...t, type: `duet.${t.type.slice("debate.".length)}` }
-        : t));
-    return c.json(turns);
-  } catch {
-    return c.json([]);
-  }
-});
+// Persisted duet transcript (rebuilds the timeline on reload, §12). 读取、老事件名归一
+// 与「这些回合里的图补上任务归属」都在 duet/transcript-reads.ts。
+api.get("/tasks/:id/duet", async (c) => c.json(await readDuetTurns(c.req.param("id"))));
 
 // ── run a task (§1/§12) ─────────────────────────────────────────────────────
 // 队列前置检查(queueBlockers)、queue 的增删改端点都在 ./queues.ts。

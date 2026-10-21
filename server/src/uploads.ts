@@ -17,7 +17,7 @@
 //
 // 自用模式下**整条判据透明**:一律放行,与本功能上线前逐字节一致。
 import { readdir } from "node:fs/promises";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { basename } from "node:path";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -49,32 +49,47 @@ export function uploadNameOf(pathOrName: string): string | null {
   return scanUploadNames(raw).has(name) ? name : null;
 }
 
-/** 登记一个新写下的附件。同名再登记不覆盖归属(先到先得,后面的只补空位)。 */
+/**
+ * 登记一个新写下的附件。同名再登记不覆盖归属(先到先得,后面的只补空位)。
+ *
+ * **幂等而且不抢唯一键**:先 insert-or-ignore,再按库里真正那一行补空位。先 SELECT 再
+ * INSERT 的那一版两条并发登记会同时看到「没有这一行」(直接登记与总线兜底常常同时触
+ * 发),输掉的那次抛 `UNIQUE constraint failed: uploads.file`,而调用点大多只 warn ——
+ * 它要补的那半边归属就这么丢了(审查第 3 轮 N4:`test:native-work` 真实出现过这条告警)。
+ */
 export async function registerUpload(
   file: string,
   fields: { ownerUserId?: string | null; taskId?: string | null } = {},
 ): Promise<void> {
   const name = uploadFileName(file);
   if (!name) return;
+  await db.insert(uploads).values({
+    file: name,
+    ownerUserId: fields.ownerUserId ?? null,
+    taskId: fields.taskId ?? null,
+    createdAt: now(),
+  }).onConflictDoNothing({ target: uploads.file });
   const existing = (await db.select().from(uploads).where(eq(uploads.file, name))).at(0);
-  if (!existing) {
-    await db.insert(uploads).values({
-      file: name,
-      ownerUserId: fields.ownerUserId ?? null,
-      taskId: fields.taskId ?? null,
-      createdAt: now(),
-    });
-    return;
-  }
+  // 这一次自己插进去的那行已经带着归属了,下面算出来的 patch 自然是空的。
+  if (!existing) return;
   // 只补空位:已经有归属的行不许被后来的写入改掉(见 bindUploadsToTask 的越权推演)。
   // **补 taskId 同样是在改授权面** —— 给别人的私有文件补一条任务 id,等于把它敞开给
   // 那条任务看得见的所有人。所以补空位也要先认人:行是无主的,或者本来就是这次声明
   // 的这个人的。接力导入曾借这一句把同名的私有行挂到接力任务上(第 5 轮审查 P1)。
   const patch: { ownerUserId?: string; taskId?: string } = {};
-  if (!existing.ownerUserId && fields.ownerUserId) patch.ownerUserId = fields.ownerUserId;
+  const guards = [eq(uploads.file, name)];
+  if (!existing.ownerUserId && fields.ownerUserId) {
+    patch.ownerUserId = fields.ownerUserId;
+    guards.push(isNull(uploads.ownerUserId));
+  }
   const mine = !existing.ownerUserId || existing.ownerUserId === fields.ownerUserId;
-  if (!existing.taskId && fields.taskId && mine) patch.taskId = fields.taskId;
-  if (Object.keys(patch).length) await db.update(uploads).set(patch).where(eq(uploads.file, name));
+  if (!existing.taskId && fields.taskId && mine) {
+    patch.taskId = fields.taskId;
+    guards.push(isNull(uploads.taskId));
+  }
+  // 补空位这一步自己也得是「比较后再写」:读到空、写回去之间另一次登记可能刚填上它,
+  // 没有这道 where 就会把先到的那个归属盖掉(先到先得是这整段的判据)。
+  if (Object.keys(patch).length) await db.update(uploads).set(patch).where(and(...guards));
 }
 
 /**

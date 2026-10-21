@@ -37,7 +37,7 @@ requireTmpDb("test-upload-visibility");
 
 // 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { notes, projects, tasks } = await import("../src/db/schema.js");
+const { notes, projects, tasks, uploads } = await import("../src/db/schema.js");
 const { UPLOADS_DIR } = await import("../src/paths.js");
 const mode = await import("../src/auth/mode.js");
 const store = await import("../src/auth/store.js");
@@ -224,6 +224,30 @@ try {
   // 但本人自己把附件挂进任务照常生效,别把这道口一起焊死。
   await registerUpload(bobFile.file, { ownerUserId: bob.id, taskId: String(created.json.id) });
   assert.equal((await get(bobFile.file, AS_ALICE)).text, BOB_SECRET, "本人挂上去之后,任务看得见的人就该打得开");
+
+  // 同一个文件被两条路同时登记(直接登记 + 总线那道兜底)不许有一次输掉唯一键:先
+  // SELECT 再 INSERT 的那一版两边都看到「没有这一行」,输掉的那次抛 `UNIQUE constraint
+  // failed: uploads.file`,而调用点大多只 warn —— 它要补的那半边归属就丢了(审查第 3
+  // 轮 N4,`test:native-work` 真实出现过这条告警)。
+  const RACE_BODY = "race-secret";
+  writeFileSync(join(UPLOADS_DIR, "race.txt"), RACE_BODY);
+  const warnings: unknown[][] = [];
+  const realWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args); };
+  try {
+    await Promise.all([
+      registerUpload("race.txt", { ownerUserId: bob.id }),
+      registerUpload("race.txt", { taskId: String(created.json.id) }),
+      registerUpload("race.txt", { ownerUserId: bob.id, taskId: String(created.json.id) }),
+    ]);
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.deepEqual(warnings, [], `并发登记不该有任何告警:${JSON.stringify(warnings)}`);
+  const raceRows = await db.select().from(uploads).where(eq(uploads.file, "race.txt"));
+  assert.equal(raceRows.length, 1, "并发登记只该有一行");
+  assert.equal(raceRows[0]?.ownerUserId, bob.id, "两条路各自那半边归属都要落下来");
+  assert.equal(raceRows[0]?.taskId, String(created.json.id), "两条路各自那半边归属都要落下来");
 
   // ── ⑥ 派生任务:归属继承父任务,授权仍看动手的人 ────────────────────────
   // Bob 在 Alice 的任务下开一条子任务、附上自己刚传的图:子任务归属按 §八 继承 Alice,

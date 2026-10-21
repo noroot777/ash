@@ -12,7 +12,9 @@
 // 条不写 trace 的新执行链也被兜住。这条测试钉的就是这个:
 //   ① 讨论主发言者的 attachment → 普通成员由 404 变 200;
 //   ② 包在**子智能体活动**里的那张(native tool activity)同样登记 —— 不能只管一种路径;
-//   ③ 没有 path 的 attachment(「这处引用没存下副本」的交代)不许凭空造出一行归属。
+//   ③ 没有 path 的 attachment(「这处引用没存下副本」的交代)不许凭空造出一行归属;
+//   ④ **这一道之前落盘的讨论**:读时间线时按回合自己记下的那份清单可重入地回填归属 ——
+//      没有新广播就永远不会恢复(审查第 3 轮 R4)。正文里的路径一个都不认。
 //
 // 跑法(自带临时库):npm -w server run test:duet-image-ownership
 import assert from "node:assert/strict";
@@ -31,7 +33,7 @@ requireTmpDb("test-duet-image-ownership");
 // 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前。
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, uploads } = await import("../src/db/schema.js");
-const { UPLOADS_DIR } = await import("../src/paths.js");
+const { RUNS_DIR, UPLOADS_DIR } = await import("../src/paths.js");
 const { bus } = await import("../src/bus.js");
 const mode = await import("../src/auth/mode.js");
 const store = await import("../src/auth/store.js");
@@ -130,7 +132,66 @@ try {
     "恰好两行归属:没有 path 的那条交代不该造出第三行",
   );
 
-  console.log("讨论图片归属登记回归通过(主发言者 + 子智能体 + 无副本交代)");
+  // ── R4:登记那一道是后来才补的,**它之前落盘的讨论**谁来救 ────────────────────
+  // 图还在 uploads 目录里、回合记录里也写着它的路径,只有 uploads 那一行没有 taskId ——
+  // 没有新广播就永远不会恢复(审查第 3 轮 R4)。所以读讨论时间线这一侧按**回合自己记下
+  // 的那份清单**可重入地回填(duet/transcript-reads.ts)。
+  await db.insert(tasks).values([{
+    id: "t-duet-old", projectId: "p-duet", title: "升级前的讨论", body: "旧讨论", mode: "duet",
+    status: "done", createdAt: at, updatedAt: at, ownerUserId: null,
+  }] as never);
+  const legacy = image("duet-legacy");
+  const bodyOnly = image("duet-body-only");
+  const privateShot = image("duet-private");
+  // 别人名下的私有附件:回填一个字都不许动它(先到先得,见 registerUpload)。
+  await db.insert(uploads).values([
+    { file: "duet-private-shot.png", ownerUserId: boss.id, taskId: null, createdAt: at },
+  ] as never);
+  const oldRuns = join(RUNS_DIR, "t-duet-old");
+  mkdirSync(oldRuns, { recursive: true });
+  writeFileSync(join(oldRuns, "transcript.jsonl"), [
+    JSON.stringify({
+      type: "debate.turn", round: 1, speaker: "duetA", text: `方案一的样子:\n\n![图](${legacy})`,
+      // 正文里还提了另一个 uploads 文件,但**回合清单里没有它** —— 正文路径一个都不认,
+      // 不然就是一条「引用即认领」的路(bindUploadsToTask 的注释里有这条推演)。
+      images: [
+        { path: legacy, source: "output/legacy.png", ref: 0 },
+        { path: privateShot, source: "output/private.png", ref: 1 },
+        // uploads 目录之外的路径(仓库里的文件)不该被当成附件登记。
+        { path: join(repo, "README.md"), source: "README.md", ref: 2 },
+      ],
+      at,
+    }),
+    JSON.stringify({ type: "debate.turn", round: 2, speaker: "duetB", text: `另一张:${bodyOnly}`, at }),
+  ].join("\n") + "\n");
+
+  assert.equal(await read(legacy, AS_ALICE), 404, "回填之前:存量讨论的图对普通成员就是 404");
+  const timeline = await app.fetch(
+    new Request("http://127.0.0.1:4317/api/tasks/t-duet-old/duet", { headers: AS_ALICE }),
+  );
+  assert.equal(timeline.status, 200);
+  const turns = await timeline.json() as { type: string }[];
+  assert.deepEqual(turns.map((turn) => turn.type), ["duet.turn", "duet.turn"], "老事件名照旧归一成 duet.*");
+  assert.equal(await read(legacy, AS_ALICE), 200, "读过那条讨论之后,回合清单里的图普通成员就该打得开");
+  assert.equal(await read(bodyOnly, AS_ALICE), 404, "只在正文里出现的路径不认 —— 那是「引用即认领」");
+  assert.equal(await read(privateShot, AS_ALICE), 404, "别人名下的私有附件不许被回填挂上任务");
+  const legacyRows = await db.select().from(uploads).where(eq(uploads.taskId, "t-duet-old"));
+  assert.deepEqual(
+    legacyRows.map((row) => row.file).sort(),
+    ["duet-legacy-shot.png"],
+    "恰好回填那一行:仓库里的路径和别人名下的私有行都不该进来",
+  );
+  // 可重入:再读一遍不许多出行、也不许改掉已有归属。
+  const before = (await db.select().from(uploads)).length;
+  await app.fetch(new Request("http://127.0.0.1:4317/api/tasks/t-duet-old/duet", { headers: AS_ALICE }));
+  assert.equal(
+    (await db.select().from(uploads).where(eq(uploads.file, "duet-private-shot.png"))).at(0)?.taskId,
+    null,
+    "重入一次也不许把私有行挂上来",
+  );
+  assert.equal((await db.select().from(uploads)).length, before, "重入不该多出任何一行");
+
+  console.log("讨论图片归属登记回归通过(主发言者 + 子智能体 + 无副本交代 + 存量讨论读时回填)");
 } finally {
   releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

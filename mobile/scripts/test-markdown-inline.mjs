@@ -26,4 +26,20 @@ assert.deepEqual(
 // 图片规则要排在链接之前:反过来的话 `![a](x)` 会被当成「!」加一个链接。
 assert.deepEqual(parseInline("![a](x) [b](y)"), [{ text: "a" }, { text: " " }, { text: "b", href: "y" }]);
 
+// 站外图片留一个可点的链接:它在手机浏览器里真打得开 —— 旧实现唯一做对的那一半,别跟着
+// 本机路径一起砍掉(审查第 3 轮 N1)。
+assert.deepEqual(
+  parseInline("![远程图](https://example.invalid/a.png)"),
+  [{ text: "远程图", href: "https://example.invalid/a.png" }],
+);
+// 协议相对的补成 https;alt 空着就把网址本身当文字,否则没有东西可点。
+assert.deepEqual(
+  parseInline("![](//cdn.example.invalid/a.png)"),
+  [{ text: "https://cdn.example.invalid/a.png", href: "https://cdn.example.invalid/a.png" }],
+);
+// `file:`、`data:` 和绝对路径在手机上都没有那个文件,点下去只会静默失败 —— 仍然只留 alt。
+for (const destination of ["file:///Users/fjh/a.png", "data:image/png;base64,AAAA", "/Users/fjh/a.png"]) {
+  assert.deepEqual(parseInline(`![本机](${destination})`), [{ text: "本机" }], destination);
+}
+
 console.log("手机端行内解析回归通过(图片不再变成死链接)");
