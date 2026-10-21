@@ -308,3 +308,25 @@
 @media (prefers-reduced-motion: reduce) {
   .task-execution-caret { transition: none; }
 }
+
+/* 取不到的那张图留下的一行小字（MarkdownBody 的 MissingImage）。安静、单行、可选中 ——
+   它是给人自己去核实那个路径用的，不是报错横幅。 */
+.task-markdown-image-missing {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px dashed var(--line2);
+  border-radius: 6px;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.task-markdown-image-missing-tag { white-space: nowrap; }
+.task-markdown-image-missing code {
+  overflow-wrap: anywhere;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+}

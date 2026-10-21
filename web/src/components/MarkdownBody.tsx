@@ -7,6 +7,7 @@ import type { ReviewConclusion } from "@ash/shared";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
 import {
+  imageOriginLabel,
   imagePreviewTarget,
   isLocalImageReference,
   localOpenUrl,
@@ -33,16 +34,46 @@ import {
  *
  * 按 src 记而不是一个布尔：同一个位置换了地址（重渲染、换任务）要重新试一次。
  */
-function MarkdownImage({ src, alt, label }: { src: string; alt: string; label?: string }) {
-  const [broken, setBroken] = useState<string | null>(null);
-  if (broken === src) return null;
+/**
+ * 取不到的那张图留一行小字，而不是悄悄消失。
+ *
+ * 为什么要有它：裂图标会被读成「这个功能坏了」，所以这里一度是 `return null` —— 整张图
+ * 连带 agent 写的那句「看这张」一起无声蒸发，用户只能得出同一个结论，而且连「哪个文件
+ * 取不到」都看不见（审查第 1 轮非阻塞项：存/读失败时任务内没有任何可见提示）。
+ *
+ * 只写**事实**，不猜原因：同一行小字下面可能是「服务端没存下副本」「工作目录被清掉了」
+ * 「文件后来被删了」「关联不可信所以不敢画」，渲染点分不出是哪一种（`onError` 连状态码
+ * 都拿不到）。所以只报「取不到」加上 agent 原文写的那个地址 —— 那是唯一能让人自己去核
+ * 实的东西。
+ */
+function MissingImage({ origin, alt }: { origin: string; alt?: string }) {
+  return (
+    <span className="task-markdown-image-missing">
+      <span className="task-markdown-image-missing-tag">图取不到</span>
+      <code>{alt ? `${alt} · ${imageOriginLabel(origin)}` : imageOriginLabel(origin)}</code>
+    </span>
+  );
+}
+
+function MarkdownImage({ alt, origin, chain }: {
+  alt: string;
+  /** agent 在正文里写的原地址（`chain` 里的可能已经被改写成站内接口），小字里报的是它。 */
+  origin: string;
+  /** 按顺序试的几个地址（见 markdownPolicy 的 ImagePreviewTarget.fallback），至少一个。 */
+  chain: { url: string; name?: string }[];
+}) {
+  const [failed, setFailed] = useState<string[]>([]);
+  const current = chain.find((candidate) => !failed.includes(candidate.url));
+  if (!current) return <MissingImage origin={origin} alt={alt} />;
   return (
     <PreviewableImage
       className="task-markdown-image"
-      src={src}
+      src={current.url}
       alt={alt}
-      label={label}
-      onError={() => { if (sameOriginUrl(src)) setBroken(src); }}
+      label={alt || current.name}
+      // 站外地址失败照旧交给浏览器自己的 alt：那是对面站点的事，报「取不到」帮不上忙，
+      // 也不该据此去试下一个地址（下一个是本机根的解释，跟站外那张没关系）。
+      onError={() => { if (sameOriginUrl(current.url)) setFailed([...failed, current.url]); }}
     />
   );
 }
@@ -109,9 +140,12 @@ function MarkdownDocument({ text, resolveFile, onReviewReport, onActionError }: 
             // （`file:` 就是一个）整个清空，画出来就是一张没有 src 的裂图（审查第 1 轮 F2）。
             if (!raw) return null;
             const image = imagePreviewTarget(raw, resolveFile);
-            // 解不出来的本机路径**一个字都不画**：裂图标只会被读成「这个功能坏了」。
-            if (!image && isLocalImageReference(raw)) return null;
-            return <MarkdownImage src={image?.url ?? raw} alt={alt ?? ""} label={alt || image?.name} />;
+            // 解不出来的本机路径（agent 自己机器上的地址，浏览器一个都取不到）报一行小字。
+            if (!image && isLocalImageReference(raw)) return <MissingImage origin={raw} alt={alt} />;
+            const chain = image
+              ? [{ url: image.url, name: image.name }, ...(image.fallback ? [image.fallback] : [])]
+              : [{ url: raw }];
+            return <MarkdownImage chain={chain} alt={alt ?? ""} origin={raw} />;
           },
           table: ({ children, ...props }) => (
             <div className="task-markdown-table">

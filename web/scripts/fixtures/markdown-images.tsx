@@ -6,13 +6,13 @@
 //   ② 对话结论 `![](output/x.png)` —— agent 站在工作目录里，写相对路径最自然；
 //   ③ 同一个路径被重拍过 —— 「结论说修改后、画出来是修改前」比不画更坏，这是 F1 的要害；
 //   ④ 站外地址、同名别名、围栏代码块里的例子、带空格中文名、`file://` —— 一处都不许配串；
-//   ⑤ 配不上任何来源的本机路径 —— 必须**一个字都不画**，而不是留一个裂开的图标。
+//   ⑤ 配不上任何来源的本机路径 —— 不许留裂开的图标，但要留一行「图取不到 + 那个地址」。
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { AgentTurnBody } from "../../src/components/AgentTurnBody.tsx";
 import { ReviewReportBody } from "../../src/components/MarkdownBody.tsx";
 import { MarkdownBody } from "../../src/components/MarkdownBody.tsx";
-import { siblingFileResolver } from "../../src/components/markdownPolicy.ts";
+import { reportFileResolver } from "../../src/components/markdownPolicy.ts";
 import { IMAGE_SHAPES } from "./markdown-shapes.ts";
 import type { AgentContentSegment, AttachmentSource } from "../../src/task-detail/conversationSegments.ts";
 import "../../src/styles/global.css";
@@ -28,9 +28,13 @@ const REPORT = [
   "",
   "![中文名](<第一屏 空.png>)",
   "",
-  "子目录那张服务端取不到，不画：",
+  "归到子目录里的那张也要解出来（证据接口服务得了子路径）：",
   "",
   "![子目录](shots/deep.png)",
+  "",
+  "实现者放在工作目录里的那张 —— 证据目录没有它，要退到被审任务的工作目录：",
+  "",
+  "![工作目录](output/shot.svg)",
 ].join("\n");
 
 // 服务端落盘时留住了源文件的名字（`<12 位 id>-<原名>`）；配对**不靠**它，靠 source 标注。
@@ -184,8 +188,9 @@ createRoot(document.getElementById("root")!).render(
         text={REPORT}
         reportKey="run-1:1"
         conclusion="verify_failed"
-        resolveFile={siblingFileResolver((name) =>
-          `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent(name)}`)}
+        // 真实表面用的就是 reportFileResolver（证据目录优先、取不到退到工作目录）。
+        resolveFile={reportFileResolver((name) =>
+          `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent(name)}`, "T1")}
       />
     </section>
     {TURNS.map(([name, segments]) => (

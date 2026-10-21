@@ -2,8 +2,10 @@ import { hasUrlScheme } from "@ash/shared/markdown-images";
 import { api } from "../lib/api.ts";
 import { attachmentView, isImagePath } from "../task-detail/utils.ts";
 
-const REVIEW_FILE_PATH = /\/data\/runs\/([\w-]+)\/review\/round-(\d+)\/([^/?#]+)(?:[?#].*)?$/;
-const FREE_REVIEW_FILE_PATH = /\/data\/runs\/([\w-]+)\/free-review\/([\w-]+)\/round-(\d+)\/([^/?#]+)(?:[?#].*)?$/;
+// 名字那一段允许带子目录（`shots/a.png`）：证据接口服务得了它（evidence-path.ts）。`..`
+// 由 reviewFileTarget 里的 PARENT_SEGMENT 挡，不塞进正则 —— 正则里表达它既难读又易漏。
+const REVIEW_FILE_PATH = /\/data\/runs\/([\w-]+)\/review\/round-(\d+)\/([^?#]+)(?:[?#].*)?$/;
+const FREE_REVIEW_FILE_PATH = /\/data\/runs\/([\w-]+)\/free-review\/([\w-]+)\/round-(\d+)\/([^?#]+)(?:[?#].*)?$/;
 
 export type ReviewFileTarget = {
   name: string;
@@ -25,13 +27,13 @@ export function reviewFileTarget(path?: string): ReviewFileTarget | null {
   if (review) {
     const [, taskId, round, encodedName] = review;
     const name = decodeSafe(encodedName);
-    return { name, url: api.taskReviewFileUrl(taskId, Number(round), name) };
+    if (!PARENT_SEGMENT.test(name)) return { name, url: api.taskReviewFileUrl(taskId, Number(round), name) };
   }
   const freeReview = path.match(FREE_REVIEW_FILE_PATH);
   if (freeReview) {
     const [, taskId, runId, round, encodedName] = freeReview;
     const name = decodeSafe(encodedName);
-    return { name, url: api.freeReviewFileUrl(taskId, runId, Number(round), name) };
+    if (!PARENT_SEGMENT.test(name)) return { name, url: api.freeReviewFileUrl(taskId, runId, Number(round), name) };
   }
   const url = sameOriginUrl(path);
   if (!url || !isReviewFileEndpoint(url.pathname)) return null;
@@ -128,7 +130,17 @@ function isReviewFileEndpoint(pathname: string): boolean {
 }
 
 /** 站内取得到的那张图：灯箱要的 url，加上给人看的名字。 */
-export type ImagePreviewTarget = ReviewFileTarget;
+export type ImagePreviewTarget = ReviewFileTarget & {
+  /**
+   * 第一个地址取不到时再试的那一个（渲染点按顺序试，见 MarkdownBody 的 MarkdownImage）。
+   *
+   * 为什么需要它：带目录的相对路径（`shots/a.png`、`output/shot.png`）**两个根都解释得通**
+   * —— 审查报告自己那个证据目录，和被审任务的工作目录。客户端两边都看不见文件在不在，
+   * 猜一次就得错一半：猜证据目录，实现者写的 `output/shot.png` 画不出来；猜工作目录，
+   * 审查者归进 `shots/` 的截图画不出来。所以不猜，按顺序试。
+   */
+  fallback?: ReviewFileTarget;
+};
 
 /**
  * 「这段 Markdown 的相对路径该按哪儿解」。
@@ -145,16 +157,20 @@ export type ImagePreviewTarget = ReviewFileTarget;
 export type MarkdownFileResolver = (destination: string) => ImagePreviewTarget | null;
 
 /**
- * 「跟这份正文同一个目录里的那个文件」——只认光秃秃的文件名（`shot.png`、`./shot.png`）。
+ * 「跟这份正文同一个目录里的那个文件」——文件名（`shot.png`、`./shot.png`）**或它下面的
+ * 子路径**（`shots/deep.png`）。
  *
- * 收得这么紧是跟着服务端走的：证据接口只接受 `basename(name) === name` 的名字，
- * 子目录和 `..` 它一概不服务，这里放宽只会拼出一个必 404 的地址。
+ * 口径跟着服务端走：证据接口接受证据目录内的相对路径（`server/src/evidence-path.ts` 的
+ * `evidenceSegments`），所以这里认同样的形状 —— 绝对路径、协议、`..` 段一律不认，拼出来
+ * 也是个必 404 的地址。曾经两边都只认 basename，于是审查者把截图归进 `shots/` 就等于没
+ * 放（审查第 1 轮非阻塞项 2）。
  */
 export function siblingFileName(destination: string): string | null {
   const raw = destination.trim();
-  if (!raw || hasUrlScheme(raw) || raw.startsWith("/")) return null;
-  const name = decodeSafe(raw.replace(/^\.\//, "").split(/[?#]/)[0] ?? "");
-  return name && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".." ? name : null;
+  if (!raw || hasUrlScheme(raw) || raw.startsWith("/") || raw.startsWith("\\")) return null;
+  const name = decodeSafe(raw.replace(/^(?:\.\/)+/, "").split(/[?#]/)[0] ?? "");
+  if (!name || PARENT_SEGMENT.test(name) || /^[a-zA-Z]:/.test(name)) return null;
+  return name.split(/[/\\]/).every((part) => part && part !== ".") ? name : null;
 }
 
 /** `..` 爬出去的那一段——服务端一律 400,这里就别拼这个必败的地址。 */
@@ -218,21 +234,6 @@ export function taskFileResolver(taskId: string): MarkdownFileResolver {
   };
 }
 
-/** 按顺序试几档解析（前一档解不出来才问下一档），空档位直接跳过。 */
-export function firstResolver(
-  ...resolvers: (MarkdownFileResolver | undefined)[]
-): MarkdownFileResolver | undefined {
-  const present = resolvers.filter((resolver): resolver is MarkdownFileResolver => !!resolver);
-  if (present.length < 2) return present[0];
-  return (destination) => {
-    for (const resolver of present) {
-      const target = resolver(destination);
-      if (target) return target;
-    }
-    return null;
-  };
-}
-
 /** 正文跟它引用的文件同住一个目录时的解析器（审查报告：report.md 和截图在一起）。 */
 export function siblingFileResolver(urlFor: (name: string) => string): MarkdownFileResolver {
   return (destination) => {
@@ -245,22 +246,30 @@ export function siblingFileResolver(urlFor: (name: string) => string): MarkdownF
  * 审查报告这份正文的**文档根归属**，一处定清楚（三个入口共用：团队证据、自由工作流
  * 检视、单独打开的报告弹窗）。
  *
- * ① 光秃秃的文件名（`shot.png`、`./shot.png`）= **报告自己那个目录**。审查 prompt 就是
- *    这么交代的：截图跟 report.md 放在一起。
- * ② 其余（带目录的相对路径、绝对路径、`file:`）= **被审任务的工作目录**。审查者就站在
- *    那儿跑的，截图未必落进证据目录，`output/shot.png` 指的是工作目录里那张。
+ * ① **相对路径**（`shot.png`、`./shot.png`、`shots/deep.png`）先按**报告自己那个目录**解
+ *    —— 相对路径相对的就是这份文档，审查 prompt 也是这么交代的：截图跟 report.md 放在
+ *    一起。取不到再退到 ②（`fallback`）。
+ * ② **绝对路径、`file:`、以及 ① 取不到的那些** = **被审任务的工作目录**。审查者就站在
+ *    那儿跑的，截图未必落进证据目录，`output/shot.png` 多半指的是工作目录里那张。
  *
- * 顺序不能反：同名时报告自己那一份才是它在说的东西。已知的歧义也写在这里 —— 带目录的
- * 相对路径（`shots/a.png`）两个根都解释得通，而证据接口只服务 basename（服务端那道闸
- * 要求 `basename(name) === name`），于是这种写法只会落到 ② ；证据目录里恰好有同名路径时
- * 画出来的是工作目录那一份。要消掉它得给证据目录开一个带子路径的接口，那是 path
- * traversal 的正面，本轮没做（审查第 1 轮非阻塞 2）。
+ * 顺序不能反：同名时报告自己那一份才是它在说的东西。而「带目录的相对路径两个根都解释
+ * 得通」这个歧义不靠猜消 —— 猜任何一边都会让另一边那种写法彻底画不出来，所以两个地址
+ * 都给出去，由渲染点按顺序试（审查第 1 轮非阻塞项 2：原先证据接口只服务 basename，
+ * `shots/a.png` 只能落到 ②；现在接口服务证据目录内的子路径，两档都真走得通）。
  */
 export function reportFileResolver(
   urlFor: (name: string) => string,
   taskId?: string,
 ): MarkdownFileResolver | undefined {
-  return firstResolver(siblingFileResolver(urlFor), taskId ? taskFileResolver(taskId) : undefined);
+  const sibling = siblingFileResolver(urlFor);
+  const workspace = taskId ? taskFileResolver(taskId) : undefined;
+  if (!workspace) return sibling;
+  return (destination) => {
+    const inWorkspace = workspace(destination);
+    const inReportDir = sibling(destination);
+    if (!inReportDir) return inWorkspace;
+    return inWorkspace ? { ...inReportDir, fallback: inWorkspace } : inReportDir;
+  };
 }
 
 /**
@@ -322,6 +331,23 @@ export function isLocalDiskImagePath(href: string): boolean {
  * 斜杠开头的站内地址**不算**：`/whatever.png` 是这个站自己服务得了的东西，照常交给
  * 浏览器，不归这条收。
  */
+/**
+ * 「图取不到」那行小字里报哪个地址。
+ *
+ * 正文里的引用可能已经被 `turnImages` 原地改写成站内接口地址（`…/file/raw?path=…`、证据
+ * 接口的 `?name=…`、`/api/uploads/<12位id>-原名`）。直接报它等于把我们自己的实现细节糊到
+ * 用户脸上 —— 他要核实的是 **agent 原文写的那个路径**，所以站内地址一律还原成它携带的
+ * 那一个。
+ */
+export function imageOriginLabel(href: string): string {
+  const url = sameOriginUrl(href);
+  if (!url) return href;
+  const carried = url.searchParams.get("path") ?? url.searchParams.get("name");
+  if (carried) return carried;
+  const uploaded = /^\/api\/uploads\/([^/]+)$/.exec(url.pathname)?.[1];
+  return uploaded ? attachmentView(`data/uploads/${decodeSafe(uploaded)}`).name : href;
+}
+
 export function isLocalImageReference(href: string): boolean {
   if (!href) return false;
   if (isLocalDiskImagePath(href)) return true;

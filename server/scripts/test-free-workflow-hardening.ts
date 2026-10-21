@@ -155,6 +155,34 @@ try {
   linkSync(join(outside, "secret.txt"), join(hardParent, "report.md"));
   assert.equal(safeFreeReviewFile("free-task", "hard-run", 1, "report.md"), null, "硬链接证据文件必须被拒绝");
 
+  // ── 证据子目录：审查者把截图归进 `shots/` 是合法写法，接口要服务得了 ────────────
+  // 放宽之前两个审查接口都只认 basename，于是那几张图永远画不出来，而且失败得很安静
+  // （报告正文看着就像少了一张图，审查第 1 轮非阻塞项 2）。放宽的同时越界一处都不许多。
+  const { freeReviewScreenshots } = await import("../src/free-review-files.js");
+  const subDir = join(root, "runs", "free-task", "free-review", "sub-run", "round-1", "shots");
+  mkdirSync(subDir, { recursive: true });
+  writeFileSync(join(subDir, "deep.png"), "PNG");
+  const deep = safeFreeReviewFile("free-task", "sub-run", 1, "shots/deep.png");
+  assert.ok(deep?.endsWith(join("shots", "deep.png")), "证据目录内的子路径要服务得了");
+  assert.equal(safeFreeReviewFile("free-task", "sub-run", 1, "shots\\deep.png"), deep, "反斜杠写法同一个文件");
+  assert.deepEqual(
+    freeReviewScreenshots("free-task", "sub-run", 1),
+    ["shots/deep.png"],
+    "子目录里的截图也要列进证据清单 —— 列不出来就只能靠报告正文提到才看得见",
+  );
+  // 越界的四类:`..` 爬出去、绝对路径、空段、中间那一段是符号链接(词法前缀看不出来)。
+  for (const name of ["../../../outside-evidence/secret.txt", "shots/../../secret.txt", "/etc/hosts", "shots//deep.png", "."]) {
+    assert.equal(safeFreeReviewFile("free-task", "sub-run", 1, name), null, `越界的名字必须拒:${name}`);
+  }
+  symlinkSync(outside, join(root, "runs", "free-task", "free-review", "sub-run", "round-1", "away"));
+  assert.equal(
+    safeFreeReviewFile("free-task", "sub-run", 1, "away/secret.txt"),
+    null,
+    "中间那一段是符号链接时必须拒 —— 这是放开子目录后唯一新开的口子",
+  );
+  const subFetch = await api.request("/tasks/free-task/free-workflow/review-file?run=sub-run&round=1&name=shots%2Fdeep.png");
+  assert.equal(subFetch.status, 404, "接口层仍要先核对这一轮归谁(sub-run 没登记过)");
+
   // 部分成功重试：首次合并的 base 不能被 already_merged 的同值区间覆盖。
   await createTasks([{
     id: "free-retry-task", projectId: "p-git", groupId: null, parentId: null,

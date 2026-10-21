@@ -31,11 +31,16 @@ const server = await createServer({
         res.setHeader("content-type", "image/svg+xml");
         res.end(PIXELS);
       });
-      // 「读的时候再去工作目录里取」那一档。只有还在的那个路径吐字节，另一个按真实情形
-      // 回 404（目录被清掉 / 文件被删）—— 那一张必须整个消失，不许留裂图标。
+      // 证据接口（`?name=`）只认真在证据目录里的那几个名字，工作目录接口（`?path=`）只有
+      // 还在的那个路径吐字节 —— 两边都得按真实情形回 404，不然「取不到那一档」根本没被验到：
+      //   · 证据目录没有、工作目录有 → 报告里那张要退到工作目录（带目录的相对路径两解）；
+      //   · 两边都没有 → 那一张整个消失，只留一行「图取不到」，不许留裂图标。
+      const EVIDENCE = new Set(["shot.png", "第一屏 空.png", "shots/deep.png"]);
       vite.middlewares.use("/api/tasks", (req, res) => {
-        const path = new URL(req.url ?? "/", "http://fixture.invalid").searchParams.get("path") ?? "";
-        if (path.includes("gone")) {
+        const query = new URL(req.url ?? "/", "http://fixture.invalid").searchParams;
+        const name = query.get("name");
+        const missing = name !== null ? !EVIDENCE.has(name) : (query.get("path") ?? "").includes("gone");
+        if (missing) {
           res.statusCode = 404;
           res.setHeader("content-type", "application/json");
           res.end('{"error":"没有这个文件"}');
@@ -78,13 +83,21 @@ try {
 
   // ── ① 审查报告：截图跟 report.md 同目录，这是审查 prompt 交代的写法 ──────────
   const report = page.locator(".report-fixture .task-markdown img");
+  // 第四张先试证据目录（404），再退到工作目录 —— 等那一步落定再数。
+  await page.waitForFunction(() => !!document.querySelector(
+    '.report-fixture img[src*="file/raw"]',
+  ));
   assert.deepEqual(
     await srcs(report),
     [
       "/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=shot.png",
       `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent("第一屏 空.png")}`,
+      `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent("shots/deep.png")}`,
+      "/api/tasks/T1/file/raw?path=output%2Fshot.svg&workspaceOnly=1",
     ],
-    "同目录那两张(含带空格中文名)解到证据接口；子目录那张服务端取不到就别画",
+    // 子目录那张曾经画不出来:两边都只认 basename,审查者把截图归进 shots/ 就等于没放
+    // (审查第 1 轮非阻塞项 2)。证据接口现在服务证据目录内的相对路径。
+    "同目录那两张(含带空格中文名)和子目录那张解到证据接口;证据目录没有的那张退到工作目录",
   );
 
   // ── ② 对话结论：相对路径 + 绝对路径，都靠服务端那份 uploads 拷贝落地 ────────
@@ -160,7 +173,14 @@ try {
 
   // ── ⑧ 配不上来源的本机路径：什么都不画 ───────────────────────────────────
   const orphan = page.locator(".orphan-fixture");
-  assert.equal(await orphan.locator("img").count(), 0, "解释不了的本机路径要静默收掉，绝不留裂开的图标");
+  assert.equal(await orphan.locator("img").count(), 0, "解释不了的本机路径绝不留裂开的图标");
+  // 但也不许无声蒸发:那一行小字是用户唯一能看出「这不是界面坏了」的东西,而且得指出是
+  // 哪个地址取不到(审查第 1 轮非阻塞项:存/读失败时任务内没有任何可见提示)。
+  assert.match(
+    await orphan.locator(".task-markdown-image-missing").innerText(),
+    /图取不到[\s\S]*output\/playwright\/gone\.png/,
+    "取不到的那张要留一行「图取不到 + 原地址」",
+  );
   assert.match(
     await orphan.locator(".task-markdown").innerText(),
     /当时的截图/,
@@ -187,6 +207,13 @@ try {
     await page.locator(".gone-fixture .task-markdown").innerText(),
     /当时的截图/,
     "收掉的只是那张图，正文一个字都不能少",
+  );
+  // 地址解得出来、字节取不到,也要留下那一行小字 —— 这一档是「加载失败」,跟 ⑧ 的「地址
+  // 压根解不出来」是两条不同的路,都得收口到同一个提示上。
+  assert.match(
+    await page.locator(".gone-fixture .task-markdown-image-missing").innerText(),
+    /图取不到[\s\S]*output\/gone\.svg/,
+    "404 之后也要报是哪个地址取不到",
   );
 
   // ── ⑪ 扫描器认的那几处 == 渲染器画出来的那几个（F2 的根:两边必须是同一套语义）───
@@ -238,6 +265,11 @@ try {
     await short.locator(".task-markdown").last().innerText(),
     /又提一次/,
     "收掉的只是那张图,正文一个字都不能少",
+  );
+  assert.match(
+    await short.locator(".task-markdown-image-missing").innerText(),
+    /图取不到[\s\S]*output\/short\.svg/,
+    "不敢画的那一处也要留一行小字,而不是让那句话指向空气",
   );
 
   console.log("Markdown 图片解析回归通过");

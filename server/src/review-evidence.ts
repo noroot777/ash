@@ -8,6 +8,7 @@ import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ReviewConclusion } from "@ash/shared";
+import { containedPath, evidenceSegments } from "./evidence-path.js";
 import { RUNS_DIR } from "./paths.js";
 import { id, now } from "./util.js";
 
@@ -54,17 +55,16 @@ export function nextReviewRound(existingRounds: number): number {
 
 // Resolve only one file inside a single round directory. Both the route and its
 // regression test use this helper so path traversal cannot drift from policy.
+// `name` 是证据目录内的相对路径，**允许子目录**（审查者把截图归到 `shots/` 是合法写法；
+// 形状判据见 evidence-path.ts）。词法包含在这里判，符号链接祖先由 readReviewFile 的
+// safeRunDirectory + containedPath 判 —— 这个函数也用在「该回 400 还是 404」的判断上，
+// 不碰磁盘。
 export function safeReviewFilePath(taskId: string, round: number, name: string): string | null {
-  if (
-    !Number.isInteger(round) ||
-    round < 1 ||
-    !taskId ||
-    basename(taskId) !== taskId ||
-    !name ||
-    basename(name) !== name
-  ) return null;
+  if (!Number.isInteger(round) || round < 1 || !taskId || basename(taskId) !== taskId) return null;
+  const segments = evidenceSegments(name);
+  if (!segments) return null;
   const base = resolve(reviewRoundDir(taskId, round));
-  const file = resolve(base, name);
+  const file = resolve(base, ...segments);
   return file.startsWith(base + sep) ? file : null;
 }
 
@@ -104,14 +104,26 @@ export async function readReport(taskId: string, round: number): Promise<string>
   return (await readReviewFile(taskId, round, "report.md"))?.toString("utf8") ?? "";
 }
 
+// 子目录一起列（跟 free-review-files.ts 的 imagesUnder 同一口径）：归到 `shots/` 里的那
+// 几张接口服务得了，列不出来就只能靠报告正文提到才看得见。
+async function imagesUnder(dir: string, prefix: string, depth: number): Promise<string[]> {
+  if (depth <= 0) return [];
+  const found: string[] = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    // isSymbolicLink 先问：指向目录的符号链接 isDirectory() 是 false，跟着走会爬出证据根。
+    if (entry.isSymbolicLink()) continue;
+    const name = `${prefix}${entry.name}`;
+    if (entry.isDirectory()) found.push(...await imagesUnder(join(dir, entry.name), `${name}/`, depth - 1));
+    else if (entry.isFile() && [".png", ".jpg", ".jpeg"].includes(extname(entry.name).toLowerCase())) found.push(name);
+  }
+  return found;
+}
+
 export async function screenshots(taskId: string, round: number): Promise<string[]> {
   try {
     const dir = reviewRoundDir(taskId, round);
     if (!(await safeRunDirectory(dir))) return [];
-    return (await readdir(dir, { withFileTypes: true }))
-      .filter((entry) => entry.isFile() && [".png", ".jpg", ".jpeg"].includes(extname(entry.name).toLowerCase()))
-      .map((entry) => entry.name)
-      .sort();
+    return (await imagesUnder(dir, "", 3)).sort();
   } catch {
     return [];
   }
@@ -121,10 +133,14 @@ export async function readReviewFile(taskId: string, round: number, name: string
   const file = safeReviewFilePath(taskId, round, name);
   if (!file) return null;
   try {
-    if (!(await safeRunDirectory(reviewRoundDir(taskId, round)))) return null;
+    const base = resolve(reviewRoundDir(taskId, round));
+    if (!(await safeRunDirectory(base))) return null;
     // lstat (not stat) rejects symlinks, including a reviewer-created link to a
     // file outside the evidence directory with an otherwise harmless .md name.
     if (!(await lstat(file)).isFile()) return null;
+    // 放开子目录之后，**中间那几段**也可能是符号链接 —— 词法前缀和对最终文件的 lstat 都
+    // 看不出来，只有解完链接再比根能看出来。
+    if (!containedPath(base, file)) return null;
     return await readFile(file);
   } catch {
     return null;

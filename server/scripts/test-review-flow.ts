@@ -247,6 +247,16 @@ assert.equal(
   resolve(base, "report.md"),
   "合法证据文件应落在当前 round 目录",
 );
+// 子目录是合法写法（审查者把截图归进 `shots/`），两个审查接口同一个口径
+// （server/src/evidence-path.ts）。放宽之前只认 basename，那几张图永远画不出来。
+assert.equal(
+  safeReviewFilePath(taskId, 1, "shots/deep.png"),
+  resolve(base, "shots", "deep.png"),
+  "证据目录内的子路径要服务得了",
+);
+for (const name of ["shots/../../secret.md", "shots//deep.png", ".", "..", "C:/Windows/win.ini", ""]) {
+  assert.equal(safeReviewFilePath(taskId, 1, name), null, `越界的名字必须拒:${JSON.stringify(name)}`);
+}
 
 // Exercise the real route guard as well as the shared lexical helper.
 const [{ db, ensureSchema }, { tasks }, { Hono }] = await Promise.all([
