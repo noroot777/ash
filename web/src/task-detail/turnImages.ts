@@ -45,6 +45,9 @@ import { attachmentView } from "./utils.ts";
 
 type Edit = { start: number; end: number; text: string };
 
+/** 服务端对**一处**引用的交代:拷贝在不在、以及没拷贝时是「丢了」还是「压根没有」。 */
+type ImageRecord = { copy: string | null; lost: boolean };
+
 /** 按 `Edit` 倒着替换 —— 从后往前改，前面那些位置才不会被挪动。 */
 function applyEdits(text: string, edits: Edit[]): string {
   return edits.reduceRight((acc, edit) => acc.slice(0, edit.start) + edit.text + acc.slice(edit.end), text);
@@ -72,7 +75,12 @@ function joined(segments: AgentContentSegment[]): { text: string; offsets: numbe
  * 几档的先后不能反,也不能互相顶:
  *   · 对账通过 + 有拷贝 → **只用拷贝**。那是「agent 说那句话时的那一张」,工作目录里
  *     的是「现在的那一张」;同一个路径被改过之后,后者已经不是正文在说的东西了。
- *   · 对账通过 + 明确没拷贝 → 去工作目录取。取不到会 404,由渲染点报一行小字。
+ *   · 对账通过 + 没拷贝、且服务端说**字节丢了**(`lost`:当时读到了、写盘失败了)→ 显式
+ *     作废。这一处那一刻的画面没人留下来,而文件后来可能已经被重拍 —— 拿现在的文件去画
+ *     就是把后来的画面当成旧结论(审查第 3 轮 R1 同类位置)。
+ *   · 对账通过 + 没拷贝、服务端也没有字节可存(说那句话时文件还不存在、格式不认)→ 去
+ *     工作目录取。agent 先写 `![](shot.png)` 再去截图是常事,现在那张就是它说的那张;
+ *     取不到会 404,由渲染点报一行小字。
  *   · 对账**没通过** → 这个目的地那几处引用一律显式作废,一个字都不画(见文件头)。
  *   · 没有记录 → 去工作目录取(存量消息唯一的出路)。
  *
@@ -101,7 +109,7 @@ export function turnImages(segments: AgentContentSegment[], taskId?: string): Ag
   // 记录按目的地分组,每组按事件顺序(= 文档顺序)排着。
   // 同一处引用可能被递上来两次(直播那一路和刷新后重建的那一路汇到一起),`ref` 是它在这条
   // 流里的身份 —— 按「来源 + 身份」去重,否则条数翻倍,下面的对账会把整个目的地误判成配不上。
-  const records = new Map<string, (string | null)[]>();
+  const records = new Map<string, ImageRecord[]>();
   const delivered = new Set<string>();
   for (const entry of sources) {
     if (typeof entry.ref === "number") {
@@ -110,9 +118,10 @@ export function turnImages(segments: AgentContentSegment[], taskId?: string): Ag
       delivered.add(identity);
     }
     const copy = entry.path && attachmentView(entry.path).url ? entry.path : null;
+    const record: ImageRecord = { copy, lost: !!entry.lost };
     const list = records.get(entry.source);
-    if (list) list.push(copy);
-    else records.set(entry.source, [copy]);
+    if (list) list.push(record);
+    else records.set(entry.source, [record]);
   }
   // 对账:正文里指向这个目的地的引用有几处。
   const counted = new Map<string, number>();
@@ -127,6 +136,10 @@ export function turnImages(segments: AgentContentSegment[], taskId?: string): Ag
   for (const ref of refs) {
     const list = records.get(ref.destination);
     let url: string | null;
+    // 这处引用领走的那份拷贝。**改写真的落下去了才算领走**:认领的唯一后果是把卡片从
+    // 附件排里拿掉,而下面还有一道「跨段改不了」的闸 —— 先认领后改写的那一版遇到跨段时
+    // 两头都没了:正文留着原始碎片,卡片也被吃掉(审查第 3 轮 R2 实测 remainingAttachments=[])。
+    let claim: string | null = null;
     if (!list) {
       url = live(ref.destination); /* 服务端没管过这处引用:存量消息那一档 */
     } else if (!verified(ref.destination)) {
@@ -134,17 +147,19 @@ export function turnImages(segments: AgentContentSegment[], taskId?: string): Ag
     } else {
       const position = taken.get(ref.destination) ?? 0;
       taken.set(ref.destination, position + 1);
-      const copy = list[position] ?? null;
-      if (copy) {
-        used.add(copy);
-        url = attachmentView(copy).url;
+      const record = list[position];
+      if (record?.copy) {
+        claim = record.copy;
+        url = attachmentView(record.copy).url;
       } else {
-        url = live(ref.destination); /* 明确没有副本 */
+        // 字节丢了(写盘失败)≠ 压根没有字节可存(文件后来才生成),两者的出路不同,见上面的档位。
+        url = record?.lost ? unavailableImage(ref.destination) : live(ref.destination);
       }
     }
     if (!url) continue;
-    // 这处引用落在哪一段里。跨段的引用(事件插在引用中间)没法原地改写,跳过 —— 真实
-    // 事件流里 text 块是整条消息,跨段只会出现在人为构造的 trace 里。
+    // 这处引用落在哪一段里。跨段的引用没法原地改写,跳过 —— 分段本身已经只切在顶层块
+    // 边界上(见 conversationSegments 的 stableBlockBoundary),所以正常数据不会跨段;
+    // 这一道兜的是人为构造的 trace 和历史落盘。
     const index = offsets.findLastIndex((offset) => offset <= ref.start);
     const base = offsets[index] ?? 0;
     const segment = segments[index];
@@ -152,6 +167,7 @@ export function turnImages(segments: AgentContentSegment[], taskId?: string): Ag
     const inSegment = edits.get(index) ?? [];
     inSegment.push({ start: ref.start - base, end: ref.end - base, text: ref.rewrite(url) });
     edits.set(index, inSegment);
+    if (claim) used.add(claim);
   }
   if (!edits.size) return segments;
 

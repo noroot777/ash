@@ -1,11 +1,19 @@
 // 一回合的 trace 事件 → 气泡正文里的「分段」。
 //
-// 一颗 agent 气泡不是一整块 Markdown:正文被工具、思考、附件切成若干段,渲染时正文照
-// 常显示、工具收进「执行过程」折叠块。切分只看 trace 的事件顺序,但**正文的权威是
-// .md**(见 alignedSegments) —— 这里只负责把两者对齐成一串段落。
+// 一颗 agent 气泡不是一整块 Markdown:正文被工具、思考切成若干段,渲染时正文照常显示、
+// 工具收进「执行过程」折叠块。切分只看 trace 的事件顺序,但**正文的权威是 .md**
+// (见 alignedSegments) —— 这里只负责把两者对齐成一串段落。
+//
+// **执行事件的布局不许改变 Markdown 的语法边界。** 每一段最后都各自过一遍渲染器,所以
+// 切点一旦落在块中间,同一份正文在「整条消息」和「分段」两种口径下解析结果就不一样:
+// 一对反引号被切开之后,后半段里的写法示例会被真的画成图片;真截图的写法被切开之后,
+// 两段谁都不认它(审查第 2 轮 F2、第 3 轮 R2 实测:整条消息 0 个图片节点、切成两段各认
+// 出 1 个)。所以切点统一由 shared 的 stableBlockBoundary 挪到顶层块边界上,附件事件
+// 则压根不切段。
 //
 // 从 conversationModel 拆出来的一族:那边管「会话 → 气泡」,这里管「事件 → 段落」。
 import type { AgentEvent } from "@ash/shared";
+import { stableBlockBoundary } from "@ash/shared/markdown-images";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 
@@ -27,8 +35,33 @@ export type AgentContentSegment = {
   attachmentSources?: AttachmentSource[];
 };
 
-/** `path` 缺省 = 这处引用确实没有副本；`ref` 缺省 = 老数据（当时还没有逐处身份）。 */
-export type AttachmentSource = { path?: string; source: string; ref?: number };
+/**
+ * `path` 缺省 = 这处引用确实没有副本；`ref` 缺省 = 老数据（当时还没有逐处身份）。
+ * `lost: true` = 服务端当时**读到了字节、写盘失败了**，这一刻的画面丢了（见 shared 的
+ * attachment 事件）——那一处只能显式作废，不能拿「现在的文件」顶上。
+ */
+export type AttachmentSource = { path?: string; source: string; ref?: number; lost?: boolean };
+
+/**
+ * 执行事件要插进正文中间了,切点落在哪 —— 返回 0 = 这一刻切不动,别切。
+ *
+ * 两种情形:
+ *   · **后面还会来正文**(`final` 为假):只许切在顶层块边界上(理由见文件头)。还没写完的
+ *     那一块(未闭合的围栏、还在写的段落、没合上的反引号)跟着下一段走,各段正文拼回去一
+ *     个字不差;整段正文就是一个没写完的块时返回 0 —— 干脆不切,事件挂在这一段上,卡片渲
+ *     染在这一段正文之前(AgentTurnBody 的 SegmentBody),顺序仍然说得通:那一块是在这一
+ *     步之后才写完的。
+ *   · **后面不会再来正文了**:这一段的正文已经是完整的一份 Markdown,切在它**末尾**是安
+ *     全的 —— 新开那一段压根没有正文,两种口径下的解析结果不可能不一样。少了这一档,「正
+ *     文说完、最后调一次工具」就不另起一段了(段落没有收尾空行,恒被判成「还没写完」),
+ *     而那颗卡片本该排在正文后面。
+ *
+ * 直播那一路(conversationLiveTurns)永远传假:下一片正文随时会来,算不出「不会再来」。
+ */
+export function eventSplitAt(markdown: string, final: boolean): number {
+  if (!markdown) return 0;
+  return final ? markdown.length : stableBlockBoundary(markdown);
+}
 
 /**
  * 这一段在正文里画得出东西吗 —— **正文布局的唯一口径**,直播分段、落盘重建、折叠展开
@@ -76,7 +109,7 @@ export function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
 function attachmentSources(entries: TracedAttachmentEntry[]): AttachmentSource[] | undefined {
   const sources = entries
     .filter((entry) => !!entry.event.source)
-    .map((entry) => ({ path: entry.event.path, source: entry.event.source!, ref: entry.event.ref }));
+    .map((entry) => ({ path: entry.event.path, source: entry.event.source!, ref: entry.event.ref, lost: entry.event.lost }));
   return sources.length ? sources : undefined;
 }
 
@@ -135,7 +168,17 @@ export function contentSegments(
     for (const event of current.events) previous.events = appendExecutionEvent(previous.events, event);
     current = newCurrent();
   };
-  for (const entry of entries) {
+  const splitForEvent = (final: boolean) => {
+    const cut = eventSplitAt(current.markdown, final);
+    if (!cut) return;
+    const tail = current.markdown.slice(cut);
+    current.markdown = current.markdown.slice(0, cut);
+    pushCurrent();
+    current.markdown = tail;
+  };
+  // 后面还会不会再来正文 —— 回放整串事件时这是算得出来的,`eventSplitAt` 要用它。
+  const lastText = entries.reduce((last, entry, index) => entry.event.kind === "text" ? index : last, -1);
+  for (const [index, entry] of entries.entries()) {
     if (entry.event.kind === "text") {
       current.markdown += entry.event.text;
       continue;
@@ -147,14 +190,14 @@ export function contentSegments(
       // Markdown 的语法边界,所以这里只收集,不动分段。
       if (entry.event.path && !current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
       if (entry.event.source) {
-        (current.attachmentSources ??= []).push({ path: entry.event.path, source: entry.event.source, ref: entry.event.ref });
+        (current.attachmentSources ??= []).push({ path: entry.event.path, source: entry.event.source, ref: entry.event.ref, lost: entry.event.lost });
       }
       continue;
     }
     const event = auxEvent(entry.event, entry.at);
     // 画不出来的通知不另起一段(见 segmentHasVisibleContent):单独成段就是正文后面
     // 那个空 section。事件照旧挂在当前段上,抽屉那边仍取得到。
-    if (current.markdown && isVisibleExecutionEvent(event)) pushCurrent();
+    if (current.markdown && isVisibleExecutionEvent(event)) splitForEvent(index > lastText);
     current.events = appendExecutionEvent(current.events, event);
   }
   pushCurrent();

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { turnImages } from "../src/task-detail/turnImages.ts";
 import { taskFilePath } from "../src/components/markdownPolicy.ts";
+import { markdownImageRefs } from "../../shared/src/markdown-images.ts";
 
 const STARTED = "2026-10-21T08:00:00.000Z";
 const session = {
@@ -96,9 +97,10 @@ assert.equal(
   "站外/站内绝对地址/越界路径都不许改写成任务文件地址",
 );
 
-// ⑧ **明确没有副本**的那处引用才退到当前文件(服务端读不到文件、格式不认、写盘失败时
-// 就是这一条:带 source/ref、没有 path)。没有这条交代,展示端分不清「从没存过」和「关联
-// 丢了」——后者退到当前文件就是审查第 1 轮 F1 实测 B 那一幕。
+// ⑧ **压根没有字节可存**的那处引用才退到当前文件(说那句话时文件还不存在、格式不认:带
+// source/ref、没有 path、也没有 lost)。agent 先写 `![](shot.png)` 再去截图是常事,现在那张
+// 就是它说的那张。没有这条交代,展示端分不清「从没存过」和「关联丢了」——后者退到当前文件
+// 就是审查第 1 轮 F1 实测 B 那一幕。字节**丢了**(lost)那一档见 ⑯。
 const missing = [{
   id: "m:0",
   markdown: "![没存下](output/missing.png)",
@@ -378,6 +380,103 @@ assert.equal(
     "工作目录里的那张照旧改写：![图](/api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fshot.png&workspaceOnly=1)",
   ].join("\n"),
   "证据目录和 uploads 的地址原样留给渲染点去解,只有工作目录相对路径才改写",
+);
+
+// ⑭ **工具步骤插进正文,不许改变语法边界。** 整条消息里那是写法示例(行内代码),而分段
+// 一旦切在反引号中间,后半段就把它当成真图画出来(审查第 3 轮 R2 实测:完整正文 0 个图片
+// 节点、切成两段各认出 1 个)。切点挪到顶层块边界之后,这条消息压根切不动 → 仍是一段。
+const session2 = { ...session, id: "s2", taskId: "t2" };
+const exampleBody = "以下只是示例：`![示例](output/shot.png)`，不该显示图片。";
+const exampleItems = buildConversationItems([{
+  session: session2,
+  output: exampleBody,
+  trace: [
+    traced("2026-10-21T08:01:00.000Z", { kind: "text", text: "以下只是示例：`![示例](output/shot.png)" }),
+    traced("2026-10-21T08:01:01.000Z", { kind: "tool", name: "exec", detail: "读取工作目录" }),
+    traced("2026-10-21T08:01:02.000Z", { kind: "text", text: "`，不该显示图片。" }),
+  ],
+}], [session2], []);
+const exampleSegments = exampleItems.find((item) => item.kind === "agent").segments;
+assert.equal(markdownImageRefs(exampleBody).length, 0, "整条消息里那是写法示例");
+assert.equal(
+  exampleSegments.reduce((count, segment) => count + markdownImageRefs(segment.markdown).length, 0),
+  0,
+  "分段之后还得是写法示例 —— 每一段都要自己过一遍渲染器",
+);
+assert.equal(
+  turnImages(exampleSegments, "t2").map((segment) => segment.markdown).join(""),
+  exampleBody,
+  "示例一个字都不许被改写",
+);
+
+// ⑮ 反过来:**真图的写法被工具隔开**。上一版这里两头都落空 —— 正文留着原始碎片(跨段改
+// 不了),而附件卡片又已经被「认领」吃掉了(审查第 3 轮 R2 实测 remainingAttachments=[])。
+const session3 = { ...session, id: "s3", taskId: "t3" };
+const crossedBody = "真实截图：![真实截图](output/shot.png)\n\n另一张：![另一张](output/shot.png)\n";
+const crossedItems = buildConversationItems([{
+  session: session3,
+  output: crossedBody,
+  trace: [
+    traced("2026-10-21T08:01:00.000Z", { kind: "text", text: "真实截图：![真实" }),
+    traced("2026-10-21T08:01:01.000Z", { kind: "tool", name: "exec", detail: "读取工作目录" }),
+    traced("2026-10-21T08:01:02.000Z", { kind: "text", text: "截图](output/shot.png)\n\n另一张：![另一张](output/shot.png)\n" }),
+    traced("2026-10-21T08:01:03.000Z", { kind: "attachment", path: uploads("eeee55555555-shot.png"), source: "output/shot.png", ref: 0 }),
+    traced("2026-10-21T08:01:04.000Z", { kind: "attachment", path: uploads("ffff66666666-shot.png"), source: "output/shot.png", ref: 1 }),
+  ],
+}], [session3], []);
+const crossed = turnImages(crossedItems.find((item) => item.kind === "agent").segments, "t3");
+assert.equal(
+  crossed.map((segment) => segment.markdown).join(""),
+  "真实截图：![真实截图](/api/uploads/eeee55555555-shot.png)\n\n另一张：![另一张](/api/uploads/ffff66666666-shot.png)\n",
+  "被工具隔开的那一处照样改写成它自己那份拷贝",
+);
+assert.deepEqual(
+  crossed.flatMap((segment) => segment.attachments),
+  [],
+  "两处都画进正文了,卡片排才该空 —— 不许出现「正文没画、卡片也没了」",
+);
+
+// ⑮' 真的跨段了怎么办(人为构造的 trace、历史落盘里仍有):改写不了的那一处,**附件必须
+// 留在卡片里**。「认领」的唯一后果就是把卡片从排里拿掉,所以只能在改写真的落下去之后认
+// —— 先认领后改写的那一版两头都空:正文留着碎片,卡片也没了。
+const straddling = [
+  {
+    id: "sp:0",
+    markdown: "真实截图：![真实",
+    events: [],
+    attachments: [uploads("1111aaaa0000-shot.png"), uploads("2222bbbb0000-shot.png")],
+    attachmentSources: [
+      { source: "output/shot.png", ref: 0, path: uploads("1111aaaa0000-shot.png") },
+      { source: "output/shot.png", ref: 1, path: uploads("2222bbbb0000-shot.png") },
+    ],
+  },
+  { id: "sp:1", markdown: "截图](output/shot.png)\n\n另一张：![另一张](output/shot.png)\n", events: [], attachments: [] },
+];
+const stayed = turnImages(straddling, "t4");
+assert.match(
+  stayed.map((segment) => segment.markdown).join(""),
+  /!\[另一张\]\(\/api\/uploads\/2222bbbb0000-shot\.png\)/,
+  "段内那一处照旧改写",
+);
+assert.deepEqual(
+  stayed.flatMap((segment) => segment.attachments),
+  [uploads("1111aaaa0000-shot.png")],
+  "跨段改不了的那一处,拷贝照旧挂在卡片上(画出来的那一份才撤卡片)",
+);
+
+// ⑯ 服务端说**字节丢了**(当时读到了、写盘失败了)→ 显式作废。文件后来可能已经被重拍,
+// 拿「现在的文件」去画就是把后来的画面当成旧结论(审查第 3 轮 R1 同类位置)。
+const lostBytes = [{
+  id: "lost:0",
+  markdown: "![存不下](output/lost.png)",
+  events: [],
+  attachments: [],
+  attachmentSources: [{ source: "output/lost.png", ref: 0, lost: true }],
+}];
+assert.match(
+  turnImages(lostBytes, "C0ojRgeQnMsa")[0].markdown,
+  /#ash-image-unavailable:/,
+  "字节丢了就显式作废,不退到当前文件",
 );
 
 console.log("回合图片配对(trace → 分段 → 正文)回归通过");

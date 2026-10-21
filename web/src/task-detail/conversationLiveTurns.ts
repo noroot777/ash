@@ -2,6 +2,7 @@
 // 从 conversationModel 拆出来的一块 —— 那边管「落盘 → 气泡」和最后几轮收口,这里只管
 // 「一条事件到了,写进哪颗气泡」。两边共用的小件在 conversationTurnParts。
 import type { ContextUsage, Session } from "@ash/shared";
+import { stableBlockBoundary } from "@ash/shared/markdown-images";
 import { addUsage } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import { isVerifyNote, noteTone } from "./conversationNotes.ts";
@@ -75,21 +76,28 @@ function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
      section —— 空的也占 7px,总高一涨,正在读的人就被贴底逻辑拽到底(审查第 6 轮 F1)。
      事件仍挂在当前段上:抽屉的数据是从 segments[].events 里提的。 */
   if (segment.markdown && isVisibleExecutionEvent(normalized)) {
-    segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [] };
-    agent.segments.push(segment);
+    /* 切点只许落在**顶层块边界**上(落盘重建那一路同一条规矩,理由写在 conversationSegments):
+       还没写完的那一块跟着下一段走,拼回去一个字不差;整段都还没定型时干脆不切。 */
+    const cut = stableBlockBoundary(segment.markdown);
+    if (cut) {
+      const tail = segment.markdown.slice(cut);
+      segment.markdown = segment.markdown.slice(0, cut);
+      segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: tail, events: [], attachments: [] };
+      agent.segments.push(segment);
+    }
   }
   // 相邻思考合并成一行(见 appendExecutionEvent)：直播这一路一条 thinking 事件就是一小块
   // 增量，逐条成行的话长思考会刷出成百上千行。
   segment.events = appendExecutionEvent(segment.events, normalized);
 }
 
-function appendAgentAttachment(agent: AgentItem, event: { path?: string; source?: string; ref?: number }): void {
+function appendAgentAttachment(agent: AgentItem, event: { path?: string; source?: string; ref?: number; lost?: boolean }): void {
   const segment = currentSegment(agent);
   // **附件不切段**(落盘重建那一路同一条规矩,理由写在 conversationSegments):切了段就是
   // 把同一条消息的正文分成两份分别解析,语法边界跟着事件布局变(审查第 2 轮 F2)。
   if (event.path && !segment.attachments.includes(event.path)) segment.attachments.push(event.path);
   // source/ref = 正文第几处引用对上哪份拷贝(落盘重建那一路同一份口径,见 conversationSegments)。
-  if (event.source) (segment.attachmentSources ??= []).push({ path: event.path, source: event.source, ref: event.ref });
+  if (event.source) (segment.attachmentSources ??= []).push({ path: event.path, source: event.source, ref: event.ref, lost: event.lost });
 }
 
 /**
