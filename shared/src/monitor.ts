@@ -555,6 +555,14 @@ export function monitorDurationOptions(): { label: string; ms: number }[] {
 
 /** 攒多久算一批。tail 轮询本身就是这个量级，再大就拖慢「有事马上知道」的手感。 */
 export const MONITOR_BATCH_MS = 300;
+/**
+ * 一批行没写成、放回缓冲之后隔多久再试（见 server 的 `returnToBuffer`）。
+ *
+ * 比批量窗口大一截：会让那一笔写失败的东西（库一瞬不可用、盘满）多半不会在 300ms 内好转，
+ * 贴着窗口重试只是在同一个故障上空转；而它又必须远小于任何期限，因为**那一批行里可能正
+ * 躺着结束条件要等的那一行**，重试太慢等于把「命中就收工」拖成「等到期」。
+ */
+export const MONITOR_RETRY_FLUSH_MS = 2_000;
 /** 单批最多列多少行，超出的只报条数——一次刷屏不该把整个回合的上下文吃光。 */
 export const MONITOR_MAX_LINES_PER_PUSH = 40;
 /** 单行最长字符数，超了截断。 */

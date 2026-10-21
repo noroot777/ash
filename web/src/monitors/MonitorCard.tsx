@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { CaretRight, Pulse, SpinnerGap, StopCircle } from "@phosphor-icons/react";
 import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@ash/shared/monitor";
+import { describeEndCondition } from "@ash/shared/monitor-end-condition";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { formatInstant } from "../task-detail/utils.ts";
@@ -117,7 +118,7 @@ export function MonitorCard({
     // **约定的结束条件每张卡都给**（有就给）：还在盯的那张靠它回答「它到底什么时候叫我」——
     // 光一个「盯到 X」会被读成「只能等到那时候」。已经结束的那张也要给：`expired` + 有条件
     // 合起来才说得出「它等的那一行始终没出现」，少了这一段，用户只看得到一个干等满时长的结果。
-    monitor.stopWhen ? `命中 /${monitor.stopWhen}/ 就收工` : null,
+    monitor.stopWhen ? `${describeEndCondition(monitor.stopWhen)}就收工` : null,
     !live && endedTimeLabel ? `结束于 ${endedTimeLabel}` : null,
     live ? null : `${endedLabel}${monitor.exitCode === null ? "" : `（退出码 ${monitor.exitCode}）`}`,
     // 事件数只有 ash 自己起的那种数得准：claude 把事件直接注回它自己的会话，ash 看不到

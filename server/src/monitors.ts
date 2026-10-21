@@ -22,6 +22,7 @@ import { statSync } from "node:fs";
 import { and, desc, eq } from "drizzle-orm";
 import {
   MONITOR_BATCH_MS,
+  MONITOR_RETRY_FLUSH_MS,
   MONITOR_MAX_EVENTS,
   MONITOR_MAX_LINE_CHARS,
   MONITOR_MAX_LINES_PER_PUSH,
@@ -34,7 +35,7 @@ import {
   type TaskMonitor,
 } from "@ash/shared/monitor";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
-import { compileStopWhen, firstStopWhenHit } from "@ash/shared/monitor-end-condition";
+import { endConditionHit, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
 import { monitors } from "./db/schema.js";
@@ -210,13 +211,7 @@ export function attach(row: Row, onExit?: (cb: (code: number | null) => void) =>
       return;
     }
     rt.readTo = offset;
-    if (!rt.flush && !rt.closing) {
-      rt.flush = setTimeout(() => {
-        rt.flush = null;
-        void serialize(row.id, () => flushBuffer(row.id, rt));
-      }, MONITOR_BATCH_MS);
-      (rt.flush as { unref?: () => void }).unref?.();
-    }
+    armFlush(rt, row.id, MONITOR_BATCH_MS);
   });
   runtimes.set(row.id, rt);
 
@@ -325,7 +320,7 @@ export const supervisionComplete = (row: { id: string; pid: number | null }): bo
   return view.watching && (row.pid === null || view.exitWatched);
 };
 
-async function commitOffset(monitorId: string, offset: number): Promise<void> {
+export async function commitOffset(monitorId: string, offset: number): Promise<void> {
   if (dbClient.closed) return;
   await db.update(monitors).set({ offset }).where(eq(monitors.id, monitorId)).catch(() => {});
 }
@@ -342,7 +337,7 @@ function trim(line: string): string {
  * 收不到（第 1 轮审查复现：read_offset=13、events=0、消息为空，日志里那行完好无损）。
  * 反过来排的代价只是重启后可能把同一批行再推一次，重复远比静默丢失便宜。
  */
-async function pushLines(row: Row, lines: string[], readTo: number | null): Promise<number> {
+export async function pushLines(row: Row, lines: string[], readTo: number | null): Promise<number> {
   const shown = lines.slice(0, MONITOR_MAX_LINES_PER_PUSH).map(trim);
   const omitted = lines.length - shown.length;
   const head = `【哨兵事件】${row.description}（monitorId=${row.id}）`;
@@ -361,16 +356,72 @@ async function pushLines(row: Row, lines: string[], readTo: number | null): Prom
   return events;
 }
 
+/**
+ * 排一次批量冲刷。已经排着一次的就不动它 —— 它到点会把**整个缓冲**一起带走。
+ *
+ * 收尾中（`closing`）不排：那一批由 `finish` 自己同步推出去（见 `attach` 里的说明）。
+ */
+function armFlush(rt: Runtime, monitorId: string, delayMs: number): void {
+  if (rt.flush || rt.closing) return;
+  rt.flush = setTimeout(() => {
+    rt.flush = null;
+    void serialize(monitorId, () => flushBuffer(monitorId, rt));
+  }, delayMs);
+  (rt.flush as { unref?: () => void }).unref?.();
+}
+
+/**
+ * **这一批没写成,就一个字都不算消费过**（第 1 轮审查 F2）。
+ *
+ * 缓冲是这几行唯一的在内存副本：`splice` 之后 tail 自己的读取位置已经越过去了，而落库那一笔
+ * （`monitors.offset`）只有写成功才前进。所以中途抛了既不能当它推过去了，也不能把它丢掉 ——
+ * 原样放回**队头**（新来的行排在它后面，顺序不乱），再排一次冲刷。
+ *
+ * 不放回的后果是审查实测的那一幕：约定的 `DONE` 已经吐出来了，通知那一笔 INSERT 失败一次，
+ * 这几行就此蒸发 —— 命令后面再没有输出，于是这条哨兵永远不收工，只能干等到期。
+ */
+function returnToBuffer(rt: Runtime, monitorId: string, lines: string[], readTo: number | null): void {
+  rt.buffer.unshift(...lines);
+  // 这中间可能又来了新行，`rt.readTo` 已经是更大的那个（它覆盖这一批）——那就别往回改。
+  if (rt.readTo === null) rt.readTo = readTo;
+  armFlush(rt, monitorId, MONITOR_RETRY_FLUSH_MS);
+}
+
 async function flushBuffer(monitorId: string, rtOverride?: Runtime): Promise<void> {
   const rt = rtOverride ?? runtimes.get(monitorId);
   if (!rt || !rt.buffer.length || dbClient.closed) return;
   const lines = rt.buffer.splice(0, rt.buffer.length);
   const readTo = rt.readTo;
   rt.readTo = null;
-  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+  let row: Row | undefined;
+  try {
+    row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
+  } catch (error) {
+    console.error(`[ash] 哨兵 ${monitorId} 读不到自己那一行,这一批 ${lines.length} 行放回缓冲重试:`, error);
+    returnToBuffer(rt, monitorId, lines, readTo);
+    return;
+  }
   if (!row || row.status !== "running") return;
 
-  const events = await pushLines(row, lines, readTo);
+  // **结束条件先判,而且只看这一批行本身**（第 1 轮审查 F2）。
+  //
+  // 判据一旦依赖「前面那几笔读写恰好都成功」，它就跟着那些读写一起失败：上一版把这一句排在
+  // `pushLines` 之后，于是通知入队失败一次，这一批里那条 `DONE` 就再也不会被看见
+  // （后面没有输出 ⇒ 不会再有下一次 flush）。现在它是纯内存的，排在任何库操作之前。
+  //
+  // 匹配本身没有回溯这回事（结束条件是字面量候选，见 shared 的 `monitor-end-condition.ts`
+  // 文件头 ①），所以这一笔在主线程上跑是有上界的。
+  const cond = parseEndCondition(row.stopWhen);
+  const hit = cond.ok && cond.cond ? endConditionHit(lines, cond.cond) : null;
+
+  let events: number;
+  try {
+    events = await pushLines(row, lines, readTo);
+  } catch (error) {
+    console.error(`[ash] 哨兵 ${monitorId} 这一批 ${lines.length} 行没推出去,放回缓冲重试:`, error);
+    returnToBuffer(rt, monitorId, lines, readTo);
+    return;
+  }
 
   // **约定的那一行到了 ⇒ 当场收工**。顺序是「先推、后收尾」:命中的那一行本身照常送给 agent
   // (它多半就是结果本身),收尾通知紧跟在后面。不能 await,理由同下面那条上限 —— 这里正跑在
@@ -378,8 +429,6 @@ async function flushBuffer(monitorId: string, rtOverride?: Runtime): Promise<voi
   //
   // 这是「命令自己永远不会结束」那一类的**唯一一条非到期出路**:没有它,`tail -F` 这种命令
   // 被盯的活早跑完了,任务还得干等到期(2026-10-21 实测白等 30 分钟)。
-  const stopWhen = compileStopWhen(row.stopWhen);
-  const hit = stopWhen.ok && stopWhen.re ? firstStopWhenHit(lines, stopWhen.re) : null;
   if (hit !== null) {
     settleInBackground(
       monitorId, "matched",
@@ -564,96 +613,13 @@ export async function readMonitorTail(
 
 // ── 重启后认回来 ─────────────────────────────────────────────────────────────
 
-/**
- * 进程已经不在了的那一路：**先把日志里没读过的那段补完**，再落终态。
- *
- * 不补的代价是整段工作白跑——而「一件事要跑两小时」恰恰是哨兵存在的全部理由：命令在
- * ash 关闭期间跑完，重启后只看到一句「进程已不在」，那两小时的进展和结束结果一个字都
- * 不会到任务头上（第 1 轮审查复现：日志里有 OFFLINE_DONE，任务一条通知都没有）。
- *
- * 退出码确实拿不到，如实记 null —— 不拿 0 冒充跑成功了。
- */
-export async function finishOffline(
-  row: Row,
-  status: Exclude<MonitorStatus, "running">,
-  reason: string,
-): Promise<void> {
-  // **排进这条哨兵自己的队列,而且在队列里重读一遍**(第 21 轮审查 F2)。这个函数原来只在
-  // 开机那一趟被调(那时还没有人能点停),现在恢复梯子也会在任意时刻调它 —— 于是它跟用户
-  // 点停、跟删除撞在一起:审查实测到的现场是**点停已经成功返回**(stopped、待发 0 条、理由
-  // 是用户明确点停),随后这条在途的旧回调照旧把行写成 `expired` 并补推一条结束通知。
-  //
-  // 「await 之前读到的 running」不是「await 之后的所有权」:下面每一步(补读、落终态、通知)
-  // 都要按**队列里重读到的那一行**判,而且落终态用条件更新 —— 条件没落上就一个字都不写、
-  // 一条通知都不推。
-  await serialize(row.id, async () => {
-    if (dbClient.closed) return;
-    const fresh = (await db.select().from(monitors).where(eq(monitors.id, row.id))).at(0);
-    if (!fresh || fresh.status !== "running") {
-      console.error(`[ash] 离线收尾放手 monitor=${row.id}：队列里重读到的状态是 `
-        + `${fresh?.status ?? "行已不在"}，这一刻的结局已经有人写过了（${reason}）`);
-      return;
-    }
-    try {
-      // **现有运行时在这里交接掉**(第 22 轮审查 N2):接回层现在给每一条运行行都先立 tail 和
-      // 期限(连 pid 还空着的创建意图行也有),而这一趟判的就是「它已经不在了」。不撤的话一条
-      // 已经写成终态的行还占着文件句柄、还在算自己的期限,到点再走一次收尾。撤之前照旧把
-      // 文件吸干、把缓冲推出去(那一批是已经发生的事实)—— 所以下面**重读一遍**:offset 和
-      // events 刚被那一次 flush 推进过,照 `fresh` 读会把同一批行再推一次。
-      await teardownRuntimeLocked(fresh.id);
-      const base = (await db.select().from(monitors).where(eq(monitors.id, fresh.id))).at(0) ?? fresh;
+// 离线收尾(进程已经不在了那一路)搬去了 monitor-offline-finish.ts(单文件 700 行的约定)。
 
-      const collected: string[] = [];
-      let readTo = base.offset;
-      const tail = tailLines(base.logPath, base.offset, (lines, offset) => {
-        for (const line of lines) if (line.trim()) collected.push(line);
-        readTo = offset;
-      });
-      tail.drain();
-      tail.stop();
-
-      let events = base.events;
-      if (collected.length) events = await pushLines(base, collected, readTo);
-      else if (readTo !== base.offset) await commitOffset(base.id, readTo);
-
-      // 同上:凭证跟终态一条语句落库(第 1 轮审查 F1 的对称面 —— 离线收尾也是「先结束、后通知」)。
-      const endNotice = `【哨兵结束】${base.description}（monitorId=${base.id}）。${reason}`;
-      const result = await db
-        .update(monitors)
-        .set({
-          status, endedAt: now(), endedReason: reason, exitCode: null,
-          resultHandoffAt: now(), resultHandoffText: endNotice,
-        })
-        .where(and(eq(monitors.id, base.id), eq(monitors.status, "running")));
-      if (Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0) === 0) {
-        // 条件没落上 = 这一瞬有人把它收尾了。**结束通知到此为止**:再推就是在用户已经停掉
-        // 之后又叫醒一次任务(补读出去的那几行是已经发生的事实,留着)。
-        console.error(`[ash] 离线收尾的条件更新没落上 monitor=${base.id}：结局已经有人写过了`);
-        return;
-      }
-      publish(base.taskId);
-      // 同上:问日志文件,不问游标也不问这一趟读到哪(两者都只是「送出去多少」的影子)。
-      await appendTaskTimeline(
-        base.taskId,
-        `哨兵结束：${base.description}。${reason}（${monitorEventTally(events, monitorLogBytes(base.logPath))}）`,
-      );
-      await deliverResultHandoff(base.id);
-    } finally {
-      // 撤运行时排在读日志之前(自己那条 tail 不停下来就会边收尾边继续推),所以中间这一段
-      // 里「监督已撤、终态未落」是真实的一瞬。**出去的时候还是 running 就把监督接回去**
-      // (第 23 轮审查 F1 实测:让这条 UPDATE 抛一次,之后产出的结果一条都送不出去、期限
-      // 过了也没有结束通知)。`holdingChain`:正跑在 `serialize(row.id)` 上,不能再排一次。
-      //
-      // 这一趟做不成会**自己排重试**(第 24 轮审查 F1):接回那一步用的是同一个库,它跟着
-      // 这次故障一起失败时,光打一行日志就等于把这条哨兵永久丢掉。
-      await ensureSupervised(row.id, { holdingChain: true });
-    }
-  });
-}
 
 // 接回那一摊搬去了 monitor-reattach.ts(单文件 700 行的约定)。**出口仍然只有这一个**:
 // index.ts、测试台子和重启子进程都按 `monitors.js` 的这个名字拿它。
 export { reattachMonitors } from "./monitor-reattach.js";
+export { finishOffline } from "./monitor-offline-finish.js";
 // 停止那一段住在 monitor-stop.ts(单文件行数上限),公开面照旧从这里出。
 export { stopMonitor, stopMonitorChecked, type StopMonitorResult } from "./monitor-stop.js";
 

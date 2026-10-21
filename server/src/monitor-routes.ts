@@ -101,7 +101,7 @@ export function mountMonitorRoutes(api: Hono): void {
     if (body.timeoutMs !== undefined && (typeof body.timeoutMs !== "number" || !Number.isFinite(body.timeoutMs)))
       return c.json({ error: "timeoutMs 必须是毫秒数" }, 400);
     if (body.stopWhen !== undefined && body.stopWhen !== null && typeof body.stopWhen !== "string")
-      return c.json({ error: "stopWhen 必须是字符串（JS 正则源文）" }, 400);
+      return c.json({ error: "stopWhen 必须是字符串（出现就收工的字样，不是正则）" }, 400);
     if (body.untilExpiry !== undefined && typeof body.untilExpiry !== "boolean")
       return c.json({ error: "untilExpiry 必须是 true/false" }, 400);
     // 唤醒目标认不出来时**当场 400**，不能静默当「没指定」：那会退回「说不清叫谁」那句

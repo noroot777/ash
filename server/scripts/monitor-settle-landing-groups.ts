@@ -85,6 +85,9 @@ export async function settleLandingGroups(): Promise<void> {
     assert.match(settled.note ?? "", /没有交卷/, "必须明说这一轮没交卷");
     assert.match(settled.note ?? "", /哨兵/, "必须说清是什么把终态拦下来的");
     assert.match(settled.note ?? "", /停掉/, "必须给出「不想等了」那条出路");
+    // **指路只许指到真有那个按钮的地方**（第 1 轮审查 N3）：卡片上的停止按钮只长在还在盯的
+    // 那种上，已经跑完、只剩结果排着的那种得去待发送托盘撤 —— 两种阻塞物各说各的入口。
+    assert.match(settled.note ?? "", /待发送/, "已经跑完、结果还排着的那种要指到托盘");
 
     // **那条出路必须真的走得通**（用户 2026-10-21 的验收条件）：这个落位不是 running，所以
     // 任务头上那个「停止」按钮此刻不在（它只给 running），能掐断的就只剩哨兵卡片上的那个。

@@ -483,13 +483,22 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
     "归一之后那张卡不画时刻（旧后端给不出这份可信性）");
   assert.equal(normalizeMonitorDto(base).startedAtExact, true, "带这一列的不许被改写");
   // `stopWhen` 的兜底方向跟 `startedAtExact` 一致:旧后端没有这一列 ⇒ 当「没约定过」,而不是
-  // 「有但读不出来」。卡片据它画「命中 /…/ 就收工」,补错方向就会凭空给旧哨兵画一个结束条件。
+  // 「有但读不出来」。卡片据它画那一段「…就收工」,补错方向就会凭空给旧哨兵画一个结束条件。
   const noStop = { ...base, stopWhen: undefined } as unknown as TaskMonitor;
   assert.equal(normalizeMonitorDto(noStop).stopWhen, null, "缺 stopWhen 的旧 DTO 当没约定过");
   assert.doesNotMatch(panel([normalizeMonitorDto(noStop)]), /就收工/, "没约定过就不许画那一段");
+  // **按它真正的语义说**（第 1 轮审查 F1 之后它不再是正则）:画成 `/…/` 会被读成正则，
+  // 而 `^OK|^FAILED` 里的 `^` 是行首锚、别的字符一律是它本身。
   assert.match(
-    panel([normalizeMonitorDto({ ...base, stopWhen: "^(OK|FAILED)" })]), /命中 \/\^\(OK\|FAILED\)\/ 就收工/,
+    panel([normalizeMonitorDto({ ...base, stopWhen: "^OK|^FAILED" })]),
+    /行首是「OK」 或 行首是「FAILED」就收工/,
     "约定过的要画出来:还在盯的那张靠它回答「它到底什么时候叫我」",
+  );
+  // 存量/脏数据原样回显:显示这件事不该因为内容不合今天的语法就整段消失（那会让人分不出
+  // 「这条没有结束条件」和「这功能没做」）。
+  assert.match(
+    panel([normalizeMonitorDto({ ...base, stopWhen: "^(OK|FAILED)" })]), /「\^\(OK\|FAILED\)」就收工/,
+    "解析不出来的原样回显，不许整段消失",
   );
   assert.ok(canStopMonitor(normalizeMonitorDto(legacy).kind), "归一之后它又停得掉了");
   assert.equal(normalizeMonitorDto(projected).kind, "claude", "带 kind 的不许被改写");

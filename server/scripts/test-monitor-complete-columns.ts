@@ -139,7 +139,7 @@ try {
     .set({
       resultsAbandonedAt: "2026-10-02T00:00:00.000Z", resultsAbandonedReason: "不要了",
       resultHandoffAt: "2026-10-02T00:00:01.000Z", resultHandoffText: "【哨兵结束】旧库那条",
-      stopWhen: "^(OK|FAILED)",
+      stopWhen: "^OK|^FAILED",
     })
     .where(eq(monitors.id, "m-old"));
   const readAuto = async () =>
@@ -147,7 +147,7 @@ try {
   assert.equal(await readAuto(), true);
   assert.equal((await readMonitor()).abandonedReason, "不要了");
   assert.equal((await readMonitor()).handoffText, "【哨兵结束】旧库那条");
-  assert.equal((await readMonitor()).stopWhen, "^(OK|FAILED)", "补上之后写得进去");
+  assert.equal((await readMonitor()).stopWhen, "^OK|^FAILED", "补上之后写得进去");
   const written = await readMessage();
   assert.equal(written.token, "m-old:2026-10-02T00:00:01.000Z");
   assert.deepEqual([written.auto, written.generation], [true, 7], "布尔列走的是 INTEGER，写回来还得是布尔");

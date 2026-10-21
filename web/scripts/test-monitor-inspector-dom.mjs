@@ -591,8 +591,58 @@ try {
       "**同一段里不许同时说「日志没人读」和「日志有人管」**（第 22 轮审查 N1 页面实测）");
   }
 
+  // ── 「它什么时候算完」这一格:入口一直在、该逼选时才逼选、圆圈不占整行 ──────────
+  // 第 1 轮审查 F3/N1 三件事一起量（都只有真浏览器答得出来）：
+  //  · 判据认不出来的命令照样配得上结束条件（上一版那个输入框只在判据命中时才存在，于是
+  //    `tail -n 0 -F /dev/null` 这种真跟随器连框都没有）；
+  //  · 判据命中时才多出二选一，而且不选不许提交；
+  //  · 那两个单选圆圈**不许各占一整行**——`.monitor-composer label/input` 是同级后代选择器，
+  //    只给新类名压不住它（实测 radio 宽 231.5px = label 整行宽），所以这里只认几何。
+  {
+    const page = await open();
+    await waitIds(page, "m-task-a");
+    await page.getByRole("button", { name: "手动起一个哨兵" }).click();
+    const form = page.locator(".monitor-composer");
+    const cmd = form.locator("textarea");
+    const pattern = form.locator(".monitor-composer__ending-pattern");
+    const submit = page.getByRole("button", { name: "起一个哨兵", exact: true });
+
+    // ① 会自己结束的命令:框在，而且不拦着提交。
+    await cmd.fill(String.raw`printf 'hi\n'`);
+    assert.equal(await pattern.count(), 1, "普通命令也要给得出结束条件的入口");
+    assert.doesNotMatch(await form.innerText(), /永远不会结束/, "它会自己结束，不许说成不会");
+    assert.equal(await submit.isDisabled(), false, "普通命令不该被这一格拦住");
+
+    // ② 审查实测的那条**误判**:命中的是 printf 的参数，不是一个真的跟随器。
+    await cmd.fill(String.raw`printf '%s\n' 'tail -F build.log'`);
+    assert.doesNotMatch(await form.innerText(), /永远不会结束/, "引号里的字不是执行节点");
+    assert.equal(await submit.isDisabled(), false, "这条命令打一行就退，不许拦");
+
+    // ③ 审查实测的那条**漏判**:开关没紧跟在命令词后面，它仍是跟随器 —— 要逼选。
+    await cmd.fill("tail -n 0 -F /dev/null");
+    assert.match(await form.innerText(), /永远不会结束/, "这是个真跟随器，得说出来");
+    assert.equal(await pattern.count(), 1, "逼选的时候那个框当然也在");
+    assert.equal(await submit.isDisabled(), true, "二选一没选就不许提交");
+    const [radio, label] = await Promise.all([
+      form.locator(".monitor-composer__ending-options input").first().boundingBox(),
+      form.locator(".monitor-composer__ending-options label").first().boundingBox(),
+    ]);
+    assert.ok(radio.width < 40, `单选圆圈不许被拉成整行，实际 ${radio.width}px`);
+    assert.ok(radio.width < label.width / 2, `圆圈和说明该在同一行，实际圆圈 ${radio.width} / 行 ${label.width}`);
+
+    // ④ 填了字样就算选过了（服务端那一边同一份判据）。
+    await pattern.fill("BUILD OK|FAILED");
+    assert.equal(await submit.isDisabled(), false, "填了字样就等于选了「出现就收工」");
+
+    // ⑤ 条件本身用不了的，当场说 —— 不让人拿一句 400 当反馈。
+    await pattern.fill("^(OK");
+    assert.match(await form.innerText(), /不是正则/, "按习惯写正则的人要当场看到这句");
+    assert.equal(await submit.isDisabled(), true, "用不了的条件不许提交");
+    await page.close();
+  }
+
   assert.deepEqual(failures, []);
-  console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task/form results never land, reconnects re-read the snapshot, the expanded wait card describes the real supervision state (woken either way; unclaimed ones may not be stoppable)");
+  console.log("monitor inspector dom: the end-condition field is always offered (forced choice only for followers, radios on one line), stop button stays inside the 340px panel, stale task/form results never land, reconnects re-read the snapshot, the expanded wait card describes the real supervision state (woken either way; unclaimed ones may not be stoppable)");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();

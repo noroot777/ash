@@ -50,7 +50,7 @@
 // 而那一刻要收掉的进程由**句柄**证明所有权,不经过 pid 身份那条路。
 import { desc, eq } from "drizzle-orm";
 import { MONITOR_MAX_PER_TASK, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
-import { compileStopWhen, endConditionDemand, neverExitsOnItsOwn } from "@ash/shared/monitor-end-condition";
+import { endConditionDemand, neverExitsOnItsOwn, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import { db } from "./db/index.js";
 import { monitors, projects, sessions, tasks } from "./db/schema.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
@@ -84,11 +84,14 @@ export type StartMonitorInput = {
    */
   caller: MonitorCaller;
   /**
-   * **约定的结束条件**:哪一行一出现就收工(JS 正则源文)。
+   * **约定的结束条件**:哪一行一出现就收工。
    *
    * 「命令结束」本来就是第一优先的唤醒条件,但跟随型命令(`tail -F`、`while true`)自己永远不会
-   * 结束,于是那条唤醒条件在它身上形同虚设。这一项把「结束」还给那一类命令:匹配到的那一行
+   * 结束,于是那条唤醒条件在它身上形同虚设。这一项把「结束」还给那一类命令:命中的那一行
    * 照常推给 agent,随后这条哨兵就收工(状态 `matched`)。
+   *
+   * **它不是正则,是字样**(`BUILD OK|FAILED`,`^` / `$` 作行首行尾锚)—— 理由见 shared 的
+   * `monitor-end-condition.ts` 文件头 ①:调用方的正则会在服务唯一那条线程上回溯到停不下来。
    */
   stopWhen?: string | null;
   /**
@@ -153,12 +156,16 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
   const description = text(input.description) || command;
   // **结束条件在起进程之前算清楚**(理由同上:校验抛在 spawn 之后会留下无主进程)。
   //
-  // 两步,顺序不能反:先看给的那个条件本身能不能用(编不过的正则 = 一个永远不会命中的条件,
+  // 两步,顺序不能反:先看给的那个条件本身能不能用(解析不出来的 = 一个永远不会命中的条件,
   // 放进去只会变成另一条「只能等到期」的哨兵,而调用方还以为自己设过了),再看这条命令**需不
   // 需要**结束条件。判据与三条出路的措辞都在 shared,前端那个手动挂哨兵的表单用的是同一份。
-  const stopWhen = compileStopWhen(input.stopWhen);
+  //
+  // **「需不需要」只决定要不要你必须给一个,不决定你能不能给**(第 1 轮审查 F3):任何命令都
+  // 收结束条件 —— 判据认不出来的跟随器(脚本封装、`eval`)到处都是,拿同一份猜测去决定配置
+  // 资格,等于让漏判顺手把那条命令的出路也一起没收了。
+  const stopWhen = parseEndCondition(input.stopWhen);
   if (!stopWhen.ok) return { ok: false, status: 400, error: stopWhen.error };
-  if (!stopWhen.re && !input.untilExpiry) {
+  if (!stopWhen.cond && !input.untilExpiry) {
     const forever = neverExitsOnItsOwn(command);
     // 409 而不是 400:它不是参数写错了,是「这次创建缺一个决定」—— 三条出路任选一条再来。
     if (forever) return { ok: false, status: 409, error: endConditionDemand(forever), needsEndCondition: true as const };
