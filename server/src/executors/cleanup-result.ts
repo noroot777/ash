@@ -41,11 +41,52 @@
 import { isPidAlive } from "../platform.js";
 import { holderMayOwn, holderScanFault, type HolderProbe } from "./track-evidence.js";
 
+/**
+ * **一个没能排除的号**:这一轮既没认下它属于本次运行,也没能证明它不属于。
+ *
+ * 为什么必须是结构化的、而不是 `detail` 里那句人话(第 8 轮审查 F1-A 实测):即时清理这一侧
+ * 已经点名了「75600 挂在谁下面问不出来」并正确答 `unknown`、落了一笔账;可**持久清扫手里的
+ * 设备完全是另一套**(行上的根身份 + 记号 + 两个文件),它压根不知道有这个号要核 —— 同一个
+ * 故障一个字都没恢复,清扫却按自己那几台设备的「没有」把那一行 DELETE 了(settled=1、行 0 笔、
+ * 那个后代仍在写,心跳 74→84)。
+ *
+ * 所以这份名单跟着结论走、跟着落库、跨得过重启:**只有逐个核过它们的新证据才允许销账**,
+ * 别人家设备的负结果解除不了这份责任。
+ */
+export type CleanupOpen = {
+  pid: number;
+  /** 读到这个号时它是哪一代(`null` = 连那一代也核验不了)。核销要靠它分「还是它」还是「号换了主人」。 */
+  gen: string | null;
+  /** 为什么排除不掉(人话,进披露面)。 */
+  why: string;
+};
+
+/**
+ * 一条线索的发言。**`empty` 这一档在类型上就带不了未排除的号** —— 「还有没排除掉的责任」
+ * 和「已经证明空了」是矛盾的两句话,让它编译不过比写一条注释管用(AGENTS.md 的那把梯子①)。
+ */
 export type CleanupResult =
   | { kind: "empty" }
-  | { kind: "remaining"; detail: string }
-  | { kind: "unknown"; detail: string }
-  | { kind: "silent"; why: string };
+  | { kind: "remaining"; detail: string; open?: readonly CleanupOpen[] }
+  | { kind: "unknown"; detail: string; open?: readonly CleanupOpen[] }
+  | { kind: "silent"; why: string; open?: readonly CleanupOpen[] };
+
+/** 这一份结论身上还挂着哪些没排除掉的号。 */
+export const openOf = (result: CleanupResult): readonly CleanupOpen[] =>
+  result.kind === "empty" ? [] : result.open ?? [];
+
+/** 按号去重(同一个号可能被几台设备各报一次)。 */
+function unionOpen(results: readonly CleanupResult[]): CleanupOpen[] {
+  const byPid = new Map<number, CleanupOpen>();
+  for (const result of results) {
+    for (const one of openOf(result)) if (!byPid.has(one.pid)) byPid.set(one.pid, one);
+  }
+  return [...byPid.values()];
+}
+
+/** 未排除的号写成给人看的一句。 */
+export const describeOpen = (open: readonly CleanupOpen[]): string =>
+  open.map((o) => `${o.pid}(${o.why})`).join(";");
 
 /** 这一轮能不能放手(从待收册划掉、不再重试)。**只有正面证明清空算。** */
 export const cleanupSettled = (result: CleanupResult): boolean => result.kind === "empty";
@@ -71,17 +112,31 @@ export const cleanupRetriable = (result: CleanupResult): boolean => result.kind 
  * 证明出来的)。
  */
 export function mergeCleanupResults(results: readonly CleanupResult[]): CleanupResult {
+  // **未排除的号从所有输入里并起来,不只从胜出那一档** —— 它们是跟着整份结论走的责任,
+  // 不是某一档的附注(第 8 轮审查 F1-A)。
+  const open = unionOpen(results);
   const pick = (kind: "remaining" | "unknown") => {
     const hit = results.filter((r) => r.kind === kind);
     return hit.length
-      ? { kind, detail: hit.map((r) => cleanupDetail(r)).join(" | ") } as CleanupResult
+      ? { kind, detail: hit.map((r) => cleanupDetail(r)).join(" | "), open } as CleanupResult
       : null;
   };
   const silent = results.filter((r) => r.kind === "silent");
   return pick("remaining") ?? pick("unknown")
-    ?? (silent.length ? { kind: "silent", why: silent.map((r) => cleanupDetail(r)).join(" | ") }
-      : { kind: "empty" });
+    ?? (silent.length ? { kind: "silent", why: silent.map((r) => cleanupDetail(r)).join(" | "), open }
+      : openGuard(open) ?? { kind: "empty" });
 }
+
+/**
+ * **手里还攥着没排除掉的号就不许答空** —— 哪怕每一台发言的设备自己都答了「没有」。
+ *
+ * 这不是多余的保险:那几个号正是**某一台设备报上来的**,而别的设备看不见它们那一面
+ * (记号被 `env -i` 洗掉、fd 被 close、父子边问不出来)。让它们的「没有」把这份责任洗掉,
+ * 就是第 8 轮审查 F1 点名的那条判据错误的一般形。
+ */
+const openGuard = (open: readonly CleanupOpen[]): CleanupResult | null => open.length
+  ? { kind: "unknown", detail: `还有排除不掉的号:${describeOpen(open)}`, open }
+  : null;
 
 /**
  * **同一问的几台设备**合成这一问的答案:取最保守的,但弃权票不否掉正面答出来的那张
@@ -90,19 +145,23 @@ export function mergeCleanupResults(results: readonly CleanupResult[]): CleanupR
  * 一台设备都没有(全体弃权、或者空列表)⇒ 这一问 `silent`:它没有可用的证据来源。
  */
 export function mergeClueAnswers(answers: readonly CleanupResult[], subject: string): CleanupResult {
+  const open = unionOpen(answers);
   const pick = (kind: "remaining" | "unknown") => {
     const hit = answers.filter((r) => r.kind === kind);
     return hit.length
-      ? { kind, detail: hit.map((r) => cleanupDetail(r)).join(" | ") } as CleanupResult
+      ? { kind, detail: hit.map((r) => cleanupDetail(r)).join(" | "), open } as CleanupResult
       : null;
   };
   const answered = answers.some((r) => r.kind === "empty");
-  return pick("remaining") ?? pick("unknown") ?? (answered ? { kind: "empty" } : {
-    kind: "silent",
-    why: answers.length
-      ? `${subject}这一问:${answers.map((r) => cleanupDetail(r)).join(" | ")}`
-      : `${subject}这一问没有任何可用的证据来源`,
-  });
+  // 「有一台正面答过空就算这一问答出来了」这条**到未排除的号这里为止**(见 `openGuard`):
+  // 弃权的那台不该否掉答出来的那台,可它点名的那个号也不该被另一台的「我这边没有」抹掉。
+  return pick("remaining") ?? pick("unknown") ?? openGuard(open)
+    ?? (answered ? { kind: "empty" } : {
+      kind: "silent",
+      why: answers.length
+        ? `${subject}这一问:${answers.map((r) => cleanupDetail(r)).join(" | ")}`
+        : `${subject}这一问没有任何可用的证据来源`,
+    });
 }
 
 /** 判空的两个问(见顶部)。每条线索必须声明自己在答哪一问。 */

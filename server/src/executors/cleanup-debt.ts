@@ -19,12 +19,27 @@ import { agentCleanupDebts } from "../db/schema.js";
 import { now } from "../util.js";
 import { processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { signalMembers } from "./escapees.js";
-import { cleanupDetail, type CleanupResult } from "./cleanup-result.js";
+import { cleanupDetail, openOf, type CleanupOpen, type CleanupResult } from "./cleanup-result.js";
 // **判据在隔壁那一份**:这里只管账本的读写,「这一刻算不算空、该销还是该收档」问它。
 import {
-  debtDisposition, debtKey, isMarked, judgeDebtRow,
+  debtDisposition, debtKey, isMarked, judgeDebtRow, openMembersOf, serializeOpenMembers,
   type CleanupDebtClues, type DebtRow,
 } from "./cleanup-debt-judge.js";
+
+/** 行上已经点过名的那几个号(读不出来、或者这一行还不存在 ⇒ 空)。 */
+async function readOpenMembers(key: string): Promise<readonly CleanupOpen[]> {
+  const read = await readDebtRow(key);
+  return read.ok && read.row ? openMembersOf(read.row.openMembers) : [];
+}
+
+/** 两份名单按号并起来(行上那份在前:它是更早点的名,`why` 保留最初那一句)。 */
+function mergeOpenMembers(
+  held: readonly CleanupOpen[], fresh: readonly CleanupOpen[],
+): CleanupOpen[] {
+  const byPid = new Map<number, CleanupOpen>();
+  for (const one of [...held, ...fresh]) if (!byPid.has(one.pid)) byPid.set(one.pid, one);
+  return [...byPid.values()];
+}
 
 // ── 同一个键上的读-判-写必须串起来 ──────────────────────────────────────────────
 //
@@ -62,6 +77,15 @@ export type CleanupDebtInput = CleanupDebtClues & {
   state: "remaining" | "unknown" | "silent";
   detail: string;
   unitVerdict: UnitEvidence["verdict"];
+  /**
+   * 这一轮点名了、却排除不掉的号(见 `cleanup-result.ts` 的 `CleanupOpen`)。
+   *
+   * **落库时跟行上已有的那份并起来,从不覆盖掉**:同一条判据,「这一次知道得更多」才配写
+   * 进去 —— 一个号从这一轮的名单里消失有两种原因,「它退了」和「它的父子边这一刻变得读得
+   * 出来了(被重父到 1 号名下)」,后者一点也没证明它不属于这次运行。真正的核销只走
+   * `openResidue` 那一问(第 8 轮审查 F1-A)。
+   */
+  open?: readonly CleanupOpen[];
 };
 
 /**
@@ -182,6 +206,9 @@ async function noteDebtRow(
   key: string, input: CleanupDebtInput,
 ): Promise<"noted" | "failed"> {
   try {
+    // 行上已经点过名的那几个号**并进来**(见 `CleanupDebtInput.open`):读写都在 `withDebtKey`
+    // 这把键锁里,读不出来就当这一次不知道更多,照旧只写自己这一份。
+    const merged = mergeOpenMembers(await readOpenMembers(key), input.open ?? []);
     await db.insert(agentCleanupDebts).values({
       unitToken: key,
       taskId: input.taskId ?? "", sessionId: input.sessionId ?? "",
@@ -189,6 +216,7 @@ async function noteDebtRow(
       trackPath: input.trackPath ?? null, outPath: input.outPath ?? null,
       state: input.state, detail: input.detail.slice(0, 2000),
       unitVerdict: input.unitVerdict,
+      openMembers: serializeOpenMembers(merged),
       attempts: 0, version: 0, createdAt: now(), lastAttemptAt: null,
       closedAt: null, closedNote: null,
     }).onConflictDoUpdate({
@@ -196,6 +224,7 @@ async function noteDebtRow(
       set: {
         state: input.state, detail: input.detail.slice(0, 2000),
         unitVerdict: input.unitVerdict,
+        openMembers: serializeOpenMembers(merged),
         closedAt: null, closedNote: null,
         // 证据换了一版:上一版的「清空证明」从这一刻起作不得数(见 schema 的 version)。
         version: sql`${agentCleanupDebts.version} + 1`,
@@ -522,6 +551,9 @@ async function touchDebtRow(
   try {
     const written = await db.update(agentCleanupDebts).set({
       state: result.kind, detail: cleanupDetail(result).slice(0, 2000), unitVerdict: verdict,
+      // **这一份判定逐个核过了那几个号**(`openResidue`),所以它写得动这一列:核掉的去掉、
+      // 剩下的留着。落账那一侧相反 —— 它没核过,只并不减。
+      openMembers: serializeOpenMembers(openOf(result)),
       lastAttemptAt: now(), attempts: sql`${agentCleanupDebts.attempts} + 1`,
       version: debt.version + 1,
     }).where(and(

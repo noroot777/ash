@@ -179,7 +179,7 @@ export async function ensureSchema() {
       attempts INTEGER NOT NULL DEFAULT 0,
       version INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL, last_attempt_at TEXT,
-      closed_at TEXT, closed_note TEXT
+      closed_at TEXT, closed_note TEXT, open_members TEXT
     );
     CREATE TABLE IF NOT EXISTS monitor_pending_calls (
       task_id TEXT NOT NULL, session_key TEXT NOT NULL, tool_use_id TEXT NOT NULL,
@@ -378,6 +378,10 @@ export async function ensureSchema() {
     // 「这一行现在是第几版证据」。销账/收档拿它当条件,免得删掉的是别人刚落下的那一版
     // (见 schema-sessions.ts 的 version、第 3 轮审查 F2)。存量行一律 0。
     "ALTER TABLE agent_cleanup_debts ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
+    // 即时清理点名了、却排除不掉的那几个号(见 schema-sessions.ts 的 open_members、第 8 轮
+    // 审查 F1-A)。少了它,清扫侧用另一套设备的「没有」就把这份责任洗掉了。存量行 NULL =
+    // 没点名过谁,判据退回原来那几台设备。
+    "ALTER TABLE agent_cleanup_debts ADD COLUMN open_members TEXT",
     "ALTER TABLE monitor_reclaim_debts ADD COLUMN unit_token TEXT",
     // 「线索追到这里为止」的戳。**不是销账**:整项退出在当前平台证不出,所以行留着只盖戳
     // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。

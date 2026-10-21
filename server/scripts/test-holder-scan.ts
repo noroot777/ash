@@ -52,6 +52,8 @@ const { processTableSnapshot } = await import("../src/process-generation.js");
 const { subtreesOf } = await import("../src/process-subtrees.js");
 const { collectEscapees } = await import("../src/executors/escapees.js");
 
+const { cleanupDetail: cleanupDetailOf } = await import("../src/executors/cleanup-result.js");
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const beats = (path: string) => Number(readFileSync(path, "utf8") || "0");
 let orphan = 0;
@@ -430,6 +432,41 @@ try {
     if (isPidAlive(kidPid) && beats(beat4) > beats0) {
       ok(`而那个孩子确实还活着、还在写(心跳 ${beats0} -> ${beats(beat4)})`);
     } else fail("孩子已经不在了,这一组没测到东西");
+
+    // ── 责任闭环:**留账只是第一步,别的出口不许用更弱的证明把它销掉**(第 8 轮审查 F1-A)──
+    //
+    // 审查实测的那一下就在这里:同一个故障一个字都没恢复(夹具这时已经撤了也一样 —— 清扫
+    // 侧压根没有进程表这台设备),持久清扫按自己那三台设备的「没有」把行真的 DELETE 了,
+    // 后代还在写(心跳 74→84)。所以这一段把整条链钉住:
+    //   首次留账 → 重试仍留账 → 再扫一遍(行上证据重读,等同跨重启)仍留账 → 孩子退出后才销。
+    const named = (): string => {
+      const row = (rows.ok ? rows.debts : []).find((d) => d.unitToken === token5);
+      return row?.openMembers ?? "";
+    };
+    if (named().includes(String(kidPid))) ok("而且那个号**结构化**落在行上(不只是 detail 里那句话)");
+    else fail(`行上没记下排除不掉的号:${named() || "(空)"}`);
+
+    // 断言盯**这一行**,不盯 `settled` 总数:同一张表里还有前面几组留下的账,它们该销就销。
+    const stillOwed = async (): Promise<boolean> => {
+      const listed = await listAllCleanupDebts();
+      return listed.ok && listed.debts.some((d) => d.unitToken === token5);
+    };
+    await sweepAgentCleanupDebts();
+    if (await stillOwed()) ok("保持同一个故障重试:这一行没被销掉");
+    else fail("重试把账销了 —— 孩子还在写,责任却没了(审查实测的那条路)");
+
+    await sweepAgentCleanupDebts();                      // 判据只读行上的证据 ⇒ 等同跨重启重读
+    if (await stillOwed()) ok("再扫一遍(只凭行上的证据)仍然留账");
+    else fail("第二遍把账销了 —— 那说明判据没真的读行上那份名单");
+
+    // 反过来也得成立:**那个号真的退出之后,下一轮必须销得掉**(否则就是另一种错:
+    // 押一笔永远销不掉的债,第 3 轮审查 N2 要堵的那种)。
+    try { process.kill(kidPid, "SIGKILL"); } catch { /* 已经没了 */ }
+    for (let i = 0; i < 40 && isPidAlive(kidPid); i += 1) await wait(50);
+    await sweepAgentCleanupDebts();
+    if (!isPidAlive(kidPid) && !await stillOwed()) {
+      ok("孩子退出之后这一笔销得掉(责任会自己消解,不是永久挂账)");
+    } else fail(`孩子退出后仍销不掉(它还活着=${isPidAlive(kidPid)}、行还在=${await stillOwed()})`);
   }
 
   console.log("10) 反过来也得成立:别人家那个挂不上树的老进程不许拖着我们欠债");
@@ -468,6 +505,50 @@ try {
     else fail(`结论成了 ${judged.kind} —— 每次正常收尾都会压一笔追不动的债`);
     if (rows.ok && before.ok && rows.debts.length === before.debts.length) ok("没多出一笔账");
     else fail(`多压了账(之前 ${before.ok ? before.debts.length : "?"} 笔,现在 ${rows.ok ? rows.debts.length : "?"} 笔)`);
+  }
+
+  console.log("11) 收尾之后的事实才作数:停止前拍的那张快照说明不了停止后的事");
+  if (existsSync("/proc")) {
+    console.log("   ~ 这台机器有 /proc,进程表走的不是 ps 那条路,跳过");
+  } else {
+    // 第 8 轮审查 F1-B:逃逸扫描那台设备用的是**给根发 TERM 之前**那次读数,而要下的结论是
+    // 「停止之后这次运行还有没有后代」。记号和两个文件早就改成收尾后重问了(第 2 轮审查 N1),
+    // 偏偏最有能力看见「窗口里新出生的后代」的那台还用着最旧的事实。
+    //
+    // 夹具让这个时间差自己说话:**根在收到 TERM 之后才把进程表弄坏**(它自己写那个标记文件),
+    // 于是「停止前问得出来、停止后问不出来」—— 判据取的是哪一刻的读数,结论当场就不一样。
+    // 这一组特意不种记号:记号那一问本来就在收尾后重问,留着它会把差别盖住。
+    const before = await listAllCleanupDebts();
+    const outPath = join(root, "late.out");
+    writeFileSync(outPath, "");
+    const psBroken = join(root, "ps-broken");
+    const late = spawn(process.execPath, ["-e", `
+      process.on("SIGTERM", () => {
+        require("fs").writeFileSync(${JSON.stringify(psBroken)}, "1");
+        process.exit(0);
+      });
+      setInterval(() => {}, 1000);
+    `], { stdio: "ignore" });
+    registerRunOutPath(late, outPath);
+    await wait(400);
+
+    const shim = installShim("ps",
+      `[ -f ${JSON.stringify(psBroken)} ] && exit 1
+exec /bin/ps "$@"
+`);
+    const judged = await cleanupAfterRun(late);
+    restorePath();
+    rmSync(shim, { recursive: true, force: true });
+    const rows = await listAllCleanupDebts();
+
+    if (existsSync(psBroken)) ok("前提成立:根是在收到停止信号之后才把进程表弄坏的");
+    else fail("夹具没生效(根没走到 TERM 处理器),这一组没测到东西");
+    if (judged.kind !== "empty") ok(`结论按收尾之后的事实走,是 ${judged.kind}`);
+    else fail("拿停止前那张快照宣布了停止后清空(第 8 轮审查 F1-B 那条路)");
+    if (cleanupDetailOf(judged).includes("进程树")) ok("而且说得出是哪一问在收尾之后答不了");
+    else fail(`事由里没有这一问:${cleanupDetailOf(judged)}`);
+    if (rows.ok && before.ok && rows.debts.length === before.debts.length + 1) ok("责任落了库");
+    else fail(`责任没落库(之前 ${before.ok ? before.debts.length : "?"} 笔,现在 ${rows.ok ? rows.debts.length : "?"} 笔)`);
   }
 
 } finally {

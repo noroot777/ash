@@ -73,5 +73,63 @@ console.log("2) 一条路径线索:半截查询不许读成空");
   } else fail("问全了也不敢答空,那每一笔账都永远推不动");
 }
 
+console.log("3) 点名了、却排除不掉的号:别的设备的「没有」解除不了这份责任");
+{
+  const { judgeByClues, mergeCleanupResults, mergeClueAnswers, openOf } =
+    await import("../src/executors/cleanup-result.js");
+  const { openResidue, serializeOpenMembers } = await import("../src/executors/cleanup-debt-judge.js");
+
+  // 第 8 轮审查 F1-A 的机制:即时清理点名了一个排除不掉的号(这里是 `held`),而持久清扫
+  // 手里另一套设备各自答「我这边没有」—— 合出来绝不许是「已经证明清空」。
+  const held = { kind: "unknown", detail: "夹具:挂在谁下面问不出来", open: [{ pid: 4242, gen: "t:x", why: "夹具" }] } as const;
+  const merged = mergeClueAnswers([held, { kind: "empty" }], "夹具");
+  if (merged.kind !== "empty" && openOf(merged).some((o) => o.pid === 4242)) {
+    ok("同一问里:一台点了名、一台答空 ⇒ 这一问不算空,而且那个号跟着结论走");
+  } else fail(`判成了 ${merged.kind} —— 正是审查实测的那条路(别人的「没有」洗掉了点过的名)`);
+
+  const across = judgeByClues([
+    { subject: "root", answer: { kind: "empty" } },
+    { subject: "descendants", answer: held },
+  ]);
+  if (across.kind !== "empty" && openOf(across).some((o) => o.pid === 4242)) {
+    ok("两问之间合取时那个号也不会掉");
+  } else fail("跨问合并把未排除的号丢了");
+
+  // 弃权票带着号的那种:`silent` 会被两条合并路各走一次,名单都不许掉。
+  const mute = { kind: "silent", why: "夹具:这台机器答不了", open: [{ pid: 4343, gen: null, why: "夹具" }] } as const;
+  if (openOf(mergeCleanupResults([mute, { kind: "empty" }])).some((o) => o.pid === 4343)
+    && mergeClueAnswers([mute, { kind: "empty" }], "夹具").kind !== "empty") {
+    ok("弃权票身上那个号同样跟着走,而且挡住了判空");
+  } else fail("弃权票带的号被洗掉了");
+
+  // ── 核销:只有**逐个核过**才算覆盖这份责任 ────────────────────────────────────
+  const mine = process.pid;
+  const gen = (await import("../src/process-generation.js")).processGenerationSync(mine);
+  const dead = openResidue(serializeOpenMembers([{ pid: 0x7ffffff, gen: null, why: "夹具" }]));
+  if (dead.answer?.kind === "empty") ok("号上没有进程了 ⇒ 这一笔核销得掉");
+  else fail(`退出的号没核销掉(${dead.answer?.kind})`);
+
+  const live = openResidue(serializeOpenMembers([{ pid: mine, gen, why: "夹具" }]));
+  if (live.answer?.kind === "unknown" && live.retriable) ok("还是那一代 ⇒ 留着,而且可重试(它迟早会退)");
+  else fail(`活着的号被判成了 ${live.answer?.kind}`);
+
+  const reused = openResidue(serializeOpenMembers([{ pid: mine, gen: "t:别的那一代", why: "夹具" }]));
+  if (reused.answer?.kind === "empty") ok("号上那一代换了主人 ⇒ 当初那个一定退了,核销得掉");
+  else fail(`号换主人也没核销(${reused.answer?.kind})`);
+
+  const blind = openResidue(serializeOpenMembers([{ pid: mine, gen: null, why: "夹具" }]));
+  if (blind.answer?.kind === "unknown") ok("当初没记代次、它还活着 ⇒ 核不动,只能留着");
+  else fail(`没记代次的活号被判成了 ${blind.answer?.kind}`);
+
+  if (openResidue(null).answer === null && openResidue("[]").answer === null) {
+    ok("没点过名的行:这台设备压根不发言(老行照旧按原来那几台设备判)");
+  } else fail("空名单也发了言 —— 那会给每一行凭空加一问");
+
+  const broken = openResidue("{不是数组");
+  if (broken.answer?.kind === "silent" && !broken.retriable) {
+    ok("名单读不出来 ⇒ 弃权收档,绝不当成「没有责任」");
+  } else fail(`坏名单被判成了 ${broken.answer?.kind}`);
+}
+
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
 process.exit(bad ? 1 : 0);

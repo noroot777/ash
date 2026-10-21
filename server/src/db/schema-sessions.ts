@@ -308,4 +308,17 @@ export const agentCleanupDebts = sqliteTable("agent_cleanup_debts", {
    */
   closedAt: text("closed_at"),
   closedNote: text("closed_note"),
+  /**
+   * **这一刻还排除不掉的那几个号**(JSON:`{pid, gen, why}[]`,见 `executors/cleanup-result.ts`
+   * 的 `CleanupOpen`)。空/NULL = 没有点名过谁。
+   *
+   * 为什么非得落在行上:即时清理那一侧**已经点名了**某个号排除不掉(父子关系问不出来、
+   * 核验不了它那一代),可清扫侧手里是另一套设备(根身份 + 记号 + 两个文件),它压根不知道
+   * 有号要核 —— 于是同一个故障一个字都没恢复,清扫按自己那几台设备的「没有」把行删了
+   * (第 8 轮审查 F1-A 实测:settled=1、行 0 笔、那个后代仍在写,心跳 74→84)。
+   *
+   * 销账的条件因此多一条:这份名单上的号**逐个核过**(确证退了 / 号换了主人)才算覆盖了
+   * 这份责任。`detail` 里那句人话解除不了它 —— 那是给人看的,不是给判据用的。
+   */
+  openMembers: text("open_members"),
 });

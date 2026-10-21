@@ -19,6 +19,7 @@
 //  ① 设备不存在就**不发言**(返回 `null`),不许交一张「已经空了」的证书;
 //  ② 「这一次查询失败」和「这台机器/这一行永远答不了」要分开 —— 前者该重试,后者该收档。
 import { isPidAlive } from "../platform.js";
+import { processGenerationSync } from "../process-generation.js";
 import { processIdentity, processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { agentCleanupDebts } from "../db/schema.js";
@@ -27,8 +28,8 @@ import {
   fileHoldersAnswerable, holderScanFault, probeFileHolders, type HolderProbe,
 } from "./track-evidence.js";
 import {
-  cleanupRetriable, judgeByClues, mergeClueAnswers, residueFromProbe,
-  type CleanupResult, type ClueAnswer,
+  cleanupRetriable, describeOpen, judgeByClues, mergeClueAnswers, residueFromProbe,
+  type CleanupOpen, type CleanupResult, type ClueAnswer,
 } from "./cleanup-result.js";
 
 export type DebtRow = typeof agentCleanupDebts.$inferSelect;
@@ -89,17 +90,102 @@ export async function judgeDebtRow(row: DebtRow): Promise<JudgedDebt> {
   const root = rootResidue(row);
   const marker = markerResidue(after, marked);
   const paths = pathResidue(clues);
+  const held = openResidue(row.openMembers);
   const answers: ClueAnswer[] = [{ subject: "root", answer: root }];
-  for (const answer of [marker, paths]) {
+  for (const answer of [marker, paths, held.answer]) {
     if (answer) answers.push({ subject: "descendants", answer });
   }
   return {
     marked, after, clues, result: judgeByClues(answers),
     // **路径那一侧自己判可重试**:`unknown` 里混着两种 —— 「这一次没答出来」下一轮还问得
     // 出来,「名字本身没了」(`lost`)再问多少次都是同一句。前者该重试,后者该收档。
-    retriable: cleanupRetriable(root) || (!!marker && cleanupRetriable(marker)) || pathRetriable(clues),
+    retriable: cleanupRetriable(root) || (!!marker && cleanupRetriable(marker))
+      || pathRetriable(clues) || held.retriable,
   };
 }
+
+/**
+ * **行上那份「排除不掉的号」这一问**。`null` = 这一行没点过名(老行、或者当初就没有这台设备)。
+ *
+ * 第 8 轮审查 F1-A 实测的那一下就出在少了这一问:即时清理点名了 75600「挂在谁下面问不出来」、
+ * 正确答 `unknown` 并落了账;重试时**故障一个字都没恢复**,可清扫手里只有根身份 / 记号 /
+ * 两个文件三台设备,它们各自答「我这边没有」,合出来是「已经证明清空」—— 行被真的 DELETE,
+ * 那个后代还在写(心跳 74→84)。
+ *
+ * **只有逐个核过才算覆盖了这份责任**,一个号两条出路:
+ *  · 号上没有进程了 ⇒ 当初那个一定退了(正面的退出证明);
+ *  · 还有进程、但**不是当初那一代** ⇒ 号换了主人,当初那个也一定退了。
+ *
+ * 其余一律留着:还是那一代 ⇒ 它还在;代次这一刻读不出来 ⇒ 没核成;当初连代次都没记下 ⇒
+ * 核不动,只能等它退出。三种都**可重试**(它迟早会退),所以这一问不会把行推去收档 ——
+ * 它是一份会自己消解的责任,不是那种「重试一万次也是同一句」的弃权(第 3 轮审查 N2)。
+ */
+export function openResidue(
+  stored: string | null,
+): { answer: CleanupResult | null; retriable: boolean } {
+  const parsed = parseOpenMembers(stored);
+  if (parsed === "broken") {
+    // 名单读不出来 ⇒ 核不动它,也绝不能当成「没有责任」。再读一万次也是同一句 ⇒ 不可重试
+    // (行留着收档:它仍是这次运行最后的可定位身份)。
+    return {
+      answer: { kind: "silent", why: "行上那份「排除不掉的号」读不出来(内容坏了),核不动" },
+      retriable: false,
+    };
+  }
+  if (!parsed.length) return { answer: null, retriable: false };
+  const left = parsed.filter((one) => !provenGone(one));
+  if (!left.length) return { answer: { kind: "empty" }, retriable: false };
+  return {
+    answer: {
+      kind: "unknown",
+      detail: `上一轮点名、这一刻仍排除不掉:${describeOpen(left)}`,
+      open: left,
+    },
+    retriable: true,
+  };
+}
+
+/** 这个号上当初那个进程**一定退了**吗(两条正面出路,见 `openResidue`)。 */
+function provenGone(one: CleanupOpen): boolean {
+  if (!Number.isInteger(one.pid) || one.pid <= 1) return true;   // 记歪的号核不动,也追不动
+  if (!isPidAlive(one.pid)) return true;
+  if (!one.gen) return false;                     // 当初没记代次 ⇒ 只能等它退出
+  const current = processGenerationSync(one.pid);
+  return current !== null && current !== one.gen; // 读不出来 ⇒ 这一次没核成,不是反证
+}
+
+/** 落库的那份 JSON 读回来。`"broken"` = 存着东西、可是读不出来(跟「没有」是两件事)。 */
+function parseOpenMembers(stored: string | null): CleanupOpen[] | "broken" {
+  if (!stored || !stored.trim()) return [];
+  try {
+    const raw: unknown = JSON.parse(stored);
+    if (!Array.isArray(raw)) return "broken";
+    const open: CleanupOpen[] = [];
+    for (const one of raw) {
+      if (!one || typeof one !== "object") return "broken";
+      const { pid, gen, why } = one as Record<string, unknown>;
+      if (typeof pid !== "number") return "broken";
+      open.push({
+        pid,
+        gen: typeof gen === "string" ? gen : null,
+        why: typeof why === "string" ? why : "排除不掉",
+      });
+    }
+    return open;
+  } catch {
+    return "broken";
+  }
+}
+
+/** 行上那份名单读成结构(读不出来 ⇒ 空;要分「坏了」和「没有」的地方用 `openResidue`)。 */
+export const openMembersOf = (stored: string | null): readonly CleanupOpen[] => {
+  const parsed = parseOpenMembers(stored);
+  return parsed === "broken" ? [] : parsed;
+};
+
+/** 写进行里的那份 JSON(空名单写 `null`,跟老行同形)。 */
+export const serializeOpenMembers = (open: readonly CleanupOpen[]): string | null =>
+  open.length ? JSON.stringify(open) : null;
 
 /**
  * **根这一问**:行上记下的号 + 启动时刻,四档答案。

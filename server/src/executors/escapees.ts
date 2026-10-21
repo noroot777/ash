@@ -31,6 +31,7 @@ import {
   earliestStartMs, subtreesOf, unresolvedTopology, type ProcessSubtree,
 } from "../process-subtrees.js";
 import { childKillAuthorized } from "./child-identity.js";
+import type { CleanupOpen } from "./cleanup-result.js";
 import { runOutPathOf, unitTokenOf } from "./unit-token.js";
 import {
   holderMayOwn, holderScanFault, holdersMayExist, noSuchFileProbe, probeFileHolders, trackPathOf,
@@ -154,6 +155,14 @@ export type EscapeeSweep = {
   answered: boolean;
   /** 没答出来的那几问,人话。进清理责任记录的 detail。 */
   faults: string[];
+  /**
+   * **这一轮点名了、却排除不掉的号**(`faults` 的机器可读那一半)。
+   *
+   * 两件事都要有:`faults` 是给人看的那句,这一份是**跨得过重启、后面逐个核得动**的名单 ——
+   * 光有那句人话时,持久清扫手里另一套设备压根不知道有号要核,于是同一个故障一个字没恢复
+   * 就把那一行销掉了(第 8 轮审查 F1-A)。
+   */
+  open: CleanupOpen[];
   /** 记号那一问的四档结论。`none` 是唯一能证明「这项资源空了」的那一档。 */
   unit: UnitEvidence;
 };
@@ -175,6 +184,7 @@ export type EscapeeSweep = {
  */
 export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep> {
   const faults: string[] = [];
+  const open: CleanupOpen[] = [];
   const trackPath = trackPathOf(child);
   const token = unitTokenOf(child);
   const unit = processUnitEvidence(token, { fresh: true });
@@ -193,7 +203,7 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
     // 问不出来 ≠ 没有后代:不杀也不记账,而且这一轮**不算问清楚**(上一版把它吞掉,
     // 于是「进程表挂了」和「确实没有后代」一样走到释放证据那一句)。
     faults.push("进程树问不出来(ps / /proc 这一问失败)");
-    return { targets: [], answered: false, faults, unit };
+    return { targets: [], answered: false, faults, open, unit };
   }
   // 表读到了、可是其中几行连号都没认出来:那几行在表里等于不存在,而这条路靠「缺席」下
   // 结论 —— 所以这一轮不算问清楚。有号没代次的那一档在下面逐棵树报(`tree.unverified`),
@@ -213,6 +223,8 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
       : began === null ? "也问不出本次运行从哪一刻开始,没法按时间排除"
       : "而且是开工之后才出生的";
     faults.push(`${gaps.map((g) => g.pid).join(",")} 在进程表上,可是挂在谁下面问不出来,${why}`);
+    // 同一笔也进结构化名单:持久清扫要靠它逐个核,不是靠读上面那句话(第 8 轮审查 F1-A)。
+    for (const gap of gaps) open.push({ pid: gap.pid, gen: gap.gen, why: "挂在谁下面问不出来" });
   };
 
   /**
@@ -258,7 +270,7 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   if (!seeds.length) {
     // 一条归属线索都没有时同样要答这一问:表的完整性跟「我们找到了几个落点」无关。
     topologyGap([child.pid ?? 0]);
-    return { targets: [], answered: !faults.length, faults, unit: freshUnit };
+    return { targets: [], answered: !faults.length, faults, open, unit: freshUnit };
   }
 
   const provenUnit = new Map<number, ProcessGeneration>(
@@ -278,6 +290,7 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
       // (第 6 轮审查 F1)。
       if (tree.unverified.includes(tree.seed.pid)) {
         faults.push(`${tree.seed.pid} 号在进程表上,但核验不了它那一代(${tree.source.authority} 这条线索)`);
+        open.push({ pid: tree.seed.pid, gen: null, why: "归属线索认它、可核验不了它那一代" });
       }
       continue;
     }
@@ -293,6 +306,9 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
     const unverified = tree.unverified.filter((pid) => pid !== child.pid);
     if (unverified.length) {
       faults.push(`${unverified.join(",")} 在这次运行的进程树上,但核验不了它们那一代(给不出下刀凭证)`);
+      for (const pid of unverified) {
+        open.push({ pid, gen: null, why: "在这次运行的进程树上,核验不了它那一代" });
+      }
     }
   }
   // 已经算进去的那些不再另算:我们自己、各棵树的种子/根/成员,以及树上那些核验不了的号
@@ -303,7 +319,7 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
     ...trees.flatMap((t) => [t.seed.pid, ...t.descendants.map((m) => m.pid), ...t.unverified]),
     ...targets.keys(),
   ]);
-  return { targets: [...targets.values()], answered: !faults.length, faults, unit: freshUnit };
+  return { targets: [...targets.values()], answered: !faults.length, faults, open, unit: freshUnit };
 }
 
 /** 这个文件是什么时候落地的(毫秒)。问不出来就 null —— 它只用来当「不可能更早」的下界。 */
