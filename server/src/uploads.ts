@@ -25,7 +25,7 @@ import { tasks, uploads } from "./db/schema.js";
 import { UPLOADS_DIR } from "./paths.js";
 import { scanUploadNames } from "./handoff-uploads.js";
 import type { Actor } from "./auth/context.js";
-import { ANONYMOUS_ACTOR, isAdminActor } from "./auth/context.js";
+import { ANONYMOUS_ACTOR, isAccountHolder, isAdminActor } from "./auth/context.js";
 import { isMultiUser } from "./auth/mode.js";
 import { getUser } from "./auth/store.js";
 import { visibleTaskIds } from "./auth/visibility.js";
@@ -193,6 +193,37 @@ export async function backfillArtifactUploads(
       console.warn("[ash] 附件归属回填失败:", error);
     }
   }
+}
+
+/**
+ * 「确认所属任务」的修复出口(第 9 轮审查 R4)。claim_origin 落地前转换的存量行里,建于
+ * 转换那一刻的与真私有上传无法区分,ensureSchema 的自动补标保守跳过 —— 真属于某条任务的
+ * 由**行的归属人自己**在这里确认补挂。判据是本人同意,不是管理员身份:管理员替别人确认,
+ * 等于把别人可能私有的附件敞开给一个项目(「实例管理员也读不到别人的私有附件」这条不变量
+ * 不在这里打洞);本人把自己的文件挂给自己看得见的任务,与他手动转发一份是同一件事。
+ * 无主行(连 owner 都没登记上的失联档)本来就只有管理员读得到,由管理员确认。
+ *   · 回合凭证不算本人(isAccountHolder 的推演):任意在跑的 agent 都能拿 owner 的身份
+ *     把文件挂进自己的任务;
+ *   · 只补空位:taskId 是授权面,已有归属不许改挂;
+ *   · 目标任务必须存在且确认人自己看得见 —— 挂给一个自己无法核实受众的任务 id 不算确认;
+ *   · claimOrigin 记 'repair' 不记 'conversion':人工确认与自动迁移分开记,错了可按标撤。
+ * 返回错误文案,null = 成功。没登记的、别人的行回同一句话,不泄露文件存不存在(与读接口
+ * 同口径)。
+ */
+export async function repairUploadClaim(actor: Actor, fileOrPath: string, taskId: string): Promise<string | null> {
+  const name = uploadFileName(fileOrPath);
+  if (!name || !taskId) return "需要文件名和 taskId";
+  if (!isAccountHolder(actor) || !actor.userId) return "只有登录用户可以确认附件归属";
+  const row = (await db.select().from(uploads).where(eq(uploads.file, name))).at(0);
+  const mine = row && (row.ownerUserId ? row.ownerUserId === actor.userId : isAdminActor(actor));
+  if (!row || !mine) return "没有这条可确认的登记";
+  if (row.taskId) return row.taskId === taskId ? null : "已挂在别的任务上,不能改挂";
+  const task = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task || !(await visibleTaskIds(actor, [taskId])).length) return "目标任务不存在或不可见";
+  // 「比较后再写」:读到空与写回之间别的登记可能刚填上,空位守卫保住先到先得。
+  await db.update(uploads).set({ taskId, claimOrigin: "repair" })
+    .where(and(eq(uploads.file, name), isNull(uploads.taskId)));
+  return null;
 }
 
 /** agent 自己产出的图(工具结果截图之类)。没有上传者,归它跑的那个任务。 */

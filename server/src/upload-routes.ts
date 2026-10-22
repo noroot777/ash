@@ -5,7 +5,7 @@ import { join, basename, extname } from "node:path";
 import { maxBytesFor, attachmentKind } from "@ash/shared";
 import { UPLOADS_DIR } from "./paths.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { canReadUpload, registerUpload, watchAgentUploads } from "./uploads.js";
+import { canReadUpload, registerUpload, repairUploadClaim, watchAgentUploads } from "./uploads.js";
 import { id } from "./util.js";
 
 // ── attachment uploads (pasted into the composer / reply box) ────────────────
@@ -77,6 +77,15 @@ export function mountUploadRoutes(api: Hono): void {
       name: display,
       kind: attachmentKind(mime),
     });
+  });
+
+  // 迁移修不回的存量附件,归属人自己确认它属于哪条任务(判据与推演在 uploads.ts
+  // repairUploadClaim;为什么自动迁移修不全在 db/index.ts 的 claim_origin 一段)。
+  // 错误一律 400 同句回话,不泄露文件存不存在。
+  api.post("/uploads/:file/claim", async (c) => {
+    const body = await c.req.json<{ taskId?: string }>().catch(() => ({ taskId: undefined }));
+    const error = await repairUploadClaim(actorOf(c), basename(c.req.param("file")), body.taskId ?? "");
+    return error ? c.json({ error }, 400) : c.json({ ok: true });
   });
 
   // Serve a stored attachment back (thumbnail preview). basename() strips any path

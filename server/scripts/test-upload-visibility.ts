@@ -344,41 +344,85 @@ try {
   assert.deepEqual(blindPack.map((u) => u.name), [], "认不出身份就不该带走任何附件");
 
 
-  // ── ⑨ 升级回填:claim_origin 落地前完成的转换(复审 R4) ────────────────
+  // ── ⑨ 升级回填:claim_origin 落地前完成的转换(复审 R4,第 9 轮收紧判据) ────
   // 老库在 claim_origin 这一列存在之前就转过多人:当时统一代管补的 owner 没有标记,
   // 升级后被当成真私有,可信产物清单(backfillArtifactUploads 只传 {taskId})补不回
-  // 任务归属。ensureSchema 按可核实依据回填:owner=最早的管理员、无任务归属、建行
-  // 不晚于该管理员建档后 60 秒;窗口之外的(真私有只可能在 setup 完成拿到 key 之后)
-  // 一个不动。
+  // 任务归属。ensureSchema 只按**可核实依据**回填:行建于第一位用户建档之前 —— 那时
+  // 「本人上传」无从发生,owner 只可能是转换代管补的;判据不看 owner 是谁、现在什么
+  // 角色(原转换人降职/换届不影响)。建档之后的行与真私有无法区分,保守保密 —— 本地
+  // 时间邻近不是依据:曾按「建档后 60 秒窗口」回填,把管理员 setup 后半分钟的真私有
+  // 上传敞开给了项目成员(第 9 轮审查 R4 隐私回归)。修不回的走 ⑩ 的本人确认出口。
   {
     const { backfillArtifactUploads } = await import("../src/uploads.js");
-    const bossRow = (await db.select().from(users).where(eq(users.id, boss.id)))[0]!;
-    const bossAt = Date.parse(bossRow.createdAt);
+    const firstAt = Math.min(...(await db.select().from(users)).map((u) => Date.parse(u.createdAt)));
     writeFileSync(join(UPLOADS_DIR, "pre-mark.txt"), "pre-mark-body");
+    writeFileSync(join(UPLOADS_DIR, "demoted-mark.txt"), "demoted-mark-body");
     writeFileSync(join(UPLOADS_DIR, "post-mark.txt"), "post-mark-body");
     await db.insert(uploads).values([
       { file: "pre-mark.txt", ownerUserId: boss.id, taskId: null, claimOrigin: null,
-        createdAt: new Date(bossAt + 30_000).toISOString() },
+        createdAt: new Date(firstAt - 30_000).toISOString() },
+      // owner 如今只是普通成员(= 原转换人已降职的形态):判据只看建行时间,照样补标。
+      { file: "demoted-mark.txt", ownerUserId: bob.id, taskId: null, claimOrigin: null,
+        createdAt: new Date(firstAt - 60_000).toISOString() },
+      // 建档后 30 秒:落在旧版 60 秒窗口之内,但不可核实 —— 必须按真私有保密。
       { file: "post-mark.txt", ownerUserId: boss.id, taskId: null, claimOrigin: null,
-        createdAt: new Date(bossAt + 120_000).toISOString() },
+        createdAt: new Date(firstAt + 30_000).toISOString() },
     ] as never);
     await ensureSchema();
-    const marked = (await db.select().from(uploads).where(eq(uploads.file, "pre-mark.txt")))[0]!;
-    const kept = (await db.select().from(uploads).where(eq(uploads.file, "post-mark.txt")))[0]!;
-    assert.equal(marked.claimOrigin, "conversion", "窗口内的无标记代管行升级时补上标记");
-    assert.equal(kept.claimOrigin, null, "窗口外的行是真私有,不许被回填敞开");
+    const origin = async (file: string) => (await db.select().from(uploads).where(eq(uploads.file, file)))[0]!.claimOrigin;
+    assert.equal(await origin("pre-mark.txt"), "conversion", "建于第一位用户之前的代管行升级时补上标记");
+    assert.equal(await origin("demoted-mark.txt"), "conversion", "owner 已非管理员也照补:判据是建行时间,不是现任角色");
+    assert.equal(await origin("post-mark.txt"), null, "建档之后的行不可核实,保守按真私有保密");
     // 功能面:补了标记的,可信产物清单事后补得回任务归属,项目成员读得到;没补的照旧只认人。
-    await backfillArtifactUploads("t-legacy", [join(UPLOADS_DIR, "pre-mark.txt"), join(UPLOADS_DIR, "post-mark.txt")]);
+    await backfillArtifactUploads("t-legacy", ["pre-mark.txt", "demoted-mark.txt", "post-mark.txt"].map((f) => join(UPLOADS_DIR, f)));
     assert.equal((await get("pre-mark.txt", AS_ALICE)).text, "pre-mark-body", "回填标记后老任务产物对项目成员可见");
+    assert.equal((await get("demoted-mark.txt", AS_ALICE)).text, "demoted-mark-body", "降职转换人名下的旧代管图同样恢复可见");
     assert.equal((await get("post-mark.txt", AS_ALICE)).status, 404, "真私有不因产物清单引用而敞开");
     assert.equal((await get("post-mark.txt", AS_BOSS)).text, "post-mark-body", "本人照常读得到");
     // 幂等:再跑一遍 ensureSchema,已打标记/已豁免的行都不再变动。
     await ensureSchema();
-    const again = (await db.select().from(uploads).where(eq(uploads.file, "post-mark.txt")))[0]!;
-    assert.equal(again.claimOrigin, null, "重复升级不扩大窗口");
+    assert.equal(await origin("post-mark.txt"), null, "重复升级不扩大可核实依据");
   }
 
-  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 接力落地 + 出境打包 + 存量认领 + 升级回填)");
+  // ── ⑩ 修复出口:证明不了的由**本人**确认所属任务(POST /uploads/:file/claim) ──
+  // 自动迁移保守跳过的行,真属于某条任务的由行的归属人自己确认补挂。判据是本人同意,
+  // 不是管理员身份 —— 管理员替别人确认等于把别人可能私有的附件敞开给项目。
+  {
+    const { repairUploadClaim } = await import("../src/uploads.js");
+    const claim = (file: string, headers: Record<string, string>, taskId: string) =>
+      call(`/api/uploads/${encodeURIComponent(file)}/claim`, "POST", headers, { taskId });
+    // 别人的行与不存在的文件必须回同一句话:确认接口不能变成「这个文件存在吗」的探针。
+    const foreign = await claim("post-mark.txt", AS_ALICE, "t-legacy");
+    const missing = await claim("no-such-upload-claim.txt", AS_ALICE, "t-legacy");
+    assert.equal(foreign.status, 400, "别人的行不许确认");
+    assert.deepEqual([foreign.json.error, missing.json.error], [missing.json.error, missing.json.error], "「别人的」与「不存在」同一句话");
+    // 回合凭证不算本人:任意在跑的 agent 都顶着 owner 的 userId,放行等于附件归属可被任务洗走。
+    assert.ok(
+      await repairUploadClaim({ kind: "agent", userId: boss.id, role: "member", name: "回合", taskId: "t-legacy" }, "post-mark.txt", "t-legacy"),
+      "回合凭证不许确认归属",
+    );
+    // 看不见的任务不算确认:挂给一个自己无法核实受众的任务 id 等于盲开授权面。
+    await db.insert(tasks).values([{ id: "t-unseen", projectId: "p-other", title: "unseen", body: "",
+      status: "backlog", createdAt: at, updatedAt: at, ownerUserId: null }] as never);
+    assert.equal((await claim("post-mark.txt", AS_BOSS, "no-such-task")).status, 400, "不存在的任务不算确认");
+    // 本人确认自己的行:生效,任务看得见的人就读得到;claimOrigin 记 repair,与自动迁移分开。
+    assert.equal((await claim("post-mark.txt", AS_BOSS, "t-legacy")).status, 200, "本人确认自己的行该成功");
+    const repaired = (await db.select().from(uploads).where(eq(uploads.file, "post-mark.txt")))[0]!;
+    assert.deepEqual([repaired.taskId, repaired.claimOrigin], ["t-legacy", "repair"], "确认写入 taskId,来源记 repair");
+    assert.equal((await get("post-mark.txt", AS_ALICE)).text, "post-mark-body", "本人确认后项目成员读得到");
+    // 已有归属不许改挂(taskId 是授权面);重复确认同一条幂等。
+    assert.equal((await claim("post-mark.txt", AS_BOSS, "t-unseen")).status, 400, "已挂任务的行不许改挂");
+    assert.equal((await claim("post-mark.txt", AS_BOSS, "t-legacy")).status, 200, "重复确认同一任务幂等");
+    // 无主行(连 owner 都没登记上的失联档)本来就只有管理员读得到:成员不能借确认抢走,
+    // 管理员确认后跟着任务对项目可见。
+    writeFileSync(join(UPLOADS_DIR, "orphan-claim.txt"), "orphan-claim-body");
+    await db.insert(uploads).values([{ file: "orphan-claim.txt", ownerUserId: null, taskId: null, createdAt: at }] as never);
+    assert.equal((await claim("orphan-claim.txt", AS_ALICE, "t-legacy")).status, 400, "成员不能认领无主行");
+    assert.equal((await claim("orphan-claim.txt", AS_BOSS, "t-legacy")).status, 200, "无主行由管理员确认");
+    assert.equal((await get("orphan-claim.txt", AS_ALICE)).text, "orphan-claim-body", "确认后跟着任务对项目可见");
+  }
+
+  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 接力落地 + 出境打包 + 存量认领 + 升级回填 + 本人确认出口)");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

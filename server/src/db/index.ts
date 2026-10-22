@@ -611,23 +611,20 @@ export async function ensureSchema() {
     }
   }
   // claim_origin 落地**之前**就完成的自用→多人转换:当时统一代管的行没有标记,升级后仍被
-  // 当成真私有,可信产物清单也补不回任务归属(审查第 8 轮复审 R4)。可核实的转换依据:
-  //   · 转换人 = setup 建立的第一位管理员(最早的 admin 行);
-  //   · 转换的落行都发生在那一次 setup 请求里 —— 统一补 owner 的孤儿行建于转换**之前**
-  //     (单用户时期),conversion 自己插的行与管理员建档同一请求,都不晚于建档后 60 秒;
-  //   · 而「真私有」(本人上传)只可能发生在 setup 完成、拿到 key 之后,落在窗口之外。
-  // 只动 owner=转换人、taskId 为空、尚无标记的行;幂等(打过标记的不再命中)。窗口的残余
-  // 风险(管理员在 setup 后 60 秒内上传私有附件、且其路径日后出现在某条任务的可信产物清单
-  // 里)窄到可以接受,且只及转换人自己的文件。
+  // 当成真私有,可信产物清单也补不回任务归属(审查第 8 轮复审 R4)。自动补标只认**可核实
+  // 的依据**:行建于第一位用户建档之前(created_at 早于 MIN(users.created_at))。那时实例
+  // 里还没有任何实名用户,「本人上传」无从发生,行上却有 owner —— 这个 owner 只可能是转换
+  // 统一代管补上的(claimExistingUploads 给存量孤儿行补 owner 不改 created_at)。这条判据
+  // 不看 owner 是谁、更不看他现在什么角色,原转换人降职、换届、销号都不影响。反过来,
+  // 「本地时间邻近 + owner 是现任管理员」不是依据:建档后 60 秒内的真私有上传会被误标成
+  // 可共享代管(隐私回归),降职的原转换人名下的旧代管行又永远补不上(第 9 轮审查 R4
+  // 两例实测,替换掉的就是那版窗口 SQL)。转换当时**新建**的行(created_at 即转换时刻,
+  // 不早于建档)与真私有无法区分,保守保密,走 POST /uploads/:file/claim 的本人确认出口
+  // (uploads.ts repairUploadClaim)。幂等:打过标记的不再命中;ISO-8601 字符串可按字典序比。
   try {
-    const admin = (await client.execute("SELECT id, created_at FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1")).rows.at(0);
-    if (admin?.id && typeof admin.created_at === "string") {
-      const cutoff = new Date(Date.parse(admin.created_at) + 60_000).toISOString();
-      await client.execute({
-        sql: "UPDATE uploads SET claim_origin = 'conversion' WHERE claim_origin IS NULL AND task_id IS NULL AND owner_user_id = ? AND created_at <= ?",
-        args: [String(admin.id), cutoff],
-      });
-    }
+    await client.execute(
+      "UPDATE uploads SET claim_origin = 'conversion' WHERE claim_origin IS NULL AND task_id IS NULL AND owner_user_id IS NOT NULL AND created_at < (SELECT MIN(created_at) FROM users)",
+    );
   } catch {
     /* users 表还没建(全新库):没有历史转换可修 */
   }
