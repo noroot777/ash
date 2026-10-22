@@ -20,6 +20,9 @@
 //  · `tasks.resume_prompt_generation` 缺 ⇒ 凭证里的代次无从取得，F2 那道闸整条失效。
 //    存量行必须是 `0`（不是 NULL）：它要参与 `=` 比较，NULL 比出来谁也不等于谁，
 //    于是所有退回都会被判成过期、一段真实的等待就此丢掉。
+//  · `tasks.direction_epoch` 缺 ⇒ 改派失败后迟到的回滚分不清「我离开时那一轮」和「后来又跑完
+//    的另一轮」，旧提问和旧完成确认会写回一个早已交完新工作的任务（第 4 轮审查 F1-B）。
+//    缺省同样必须是 `0` 而不是 NULL，理由同上一条 —— 那样连同一轮内的正常回滚也会被挡死。
 //
 // 缺省值同样是契约：存量那段续跑指令必须被当成**agent 自己写的**（`0`）。反过来默认成 `1`
 // 的话，升级之后第一次重新交卷就会把用户/agent 自己留的检查点抹掉。
@@ -74,6 +77,7 @@ try {
       resumePrompt: tasks.resumePrompt,
       resumePromptAuto: tasks.resumePromptAuto,
       resumePromptGeneration: tasks.resumePromptGeneration,
+      directionEpoch: tasks.directionEpoch,
     })
     .from(tasks)
     .where(eq(tasks.id, "t-old"))).at(0)!;
@@ -87,6 +91,11 @@ try {
     "存量行的占用代次必须是 0 而不是 NULL：它要参与 `=` 比较，NULL 谁也不等于谁，"
       + "那样所有退回都会被判成过期、一段真实的等待就此丢掉（第 2 轮审查 F2）",
   );
+  assert.equal(
+    task.directionEpoch, 0,
+    "存量行的方向世代同样必须是 0 而不是 NULL：改派回滚拿它做 `=` 比较，NULL 谁也不等于谁，"
+      + "连「同一轮内正常失败」的回滚都会被判成迟到者（第 4 轮审查 F1-B）",
+  );
 
   const readMonitor = async () =>
     (await db
@@ -97,6 +106,7 @@ try {
         handoffText: monitors.resultHandoffText,
         endedBy: monitors.endedBy,
         endedReason: monitors.endedReason,
+        stopWhen: monitors.stopWhen,
       })
       .from(monitors)
       .where(eq(monitors.id, "m-old"))).at(0)!;
@@ -107,6 +117,9 @@ try {
   assert.equal(monitor.handoffText, null);
   assert.equal(monitor.endedBy, null, "「谁让它结束的」存量为空：不许把自己跑完的说成主动停的");
   assert.equal(monitor.endedReason, "命令自己跑完了", "既有的结束事实原样留着");
+  // 结束条件(2026-10-21 加的)同理:存量行一律「没约定过」。补成空字符串之类的话,卡片会凭空
+  // 多画一句「命中 // 就收工」,而那条哨兵从来没有过结束条件。
+  assert.equal(monitor.stopWhen, null, "存量哨兵没有约定过结束条件（不是「有但空着」）");
 
   const readMessage = async () =>
     (await db
@@ -127,7 +140,9 @@ try {
   assert.equal(message.generation, null, "老账记不住占用代次 ⇒ 同上");
 
   // 补上的列真的能写（ALTER 过的列类型/默认值对不上时，第一次写才会炸）。
-  await db.update(tasks).set({ resumePromptAuto: true, resumePromptGeneration: 7 }).where(eq(tasks.id, "t-old"));
+  await db.update(tasks)
+    .set({ resumePromptAuto: true, resumePromptGeneration: 7, directionEpoch: 5 })
+    .where(eq(tasks.id, "t-old"));
   await db.update(scheduledMessages)
     .set({ handoffToken: "m-old:2026-10-02T00:00:01.000Z", checkpointAuto: true, checkpointGeneration: 7 })
     .where(eq(scheduledMessages.id, "s-old"));
@@ -135,13 +150,18 @@ try {
     .set({
       resultsAbandonedAt: "2026-10-02T00:00:00.000Z", resultsAbandonedReason: "不要了",
       resultHandoffAt: "2026-10-02T00:00:01.000Z", resultHandoffText: "【哨兵结束】旧库那条",
+      stopWhen: "^OK|^FAILED",
     })
     .where(eq(monitors.id, "m-old"));
   const readAuto = async () =>
     (await db.select({ auto: tasks.resumePromptAuto }).from(tasks).where(eq(tasks.id, "t-old"))).at(0)!.auto;
   assert.equal(await readAuto(), true);
+  const readEpoch = async () =>
+    (await db.select({ epoch: tasks.directionEpoch }).from(tasks).where(eq(tasks.id, "t-old"))).at(0)!.epoch;
+  assert.equal(await readEpoch(), 5, "补上的方向世代也得写得进去（ALTER 的类型/缺省对不上时第一次写才会炸）");
   assert.equal((await readMonitor()).abandonedReason, "不要了");
   assert.equal((await readMonitor()).handoffText, "【哨兵结束】旧库那条");
+  assert.equal((await readMonitor()).stopWhen, "^OK|^FAILED", "补上之后写得进去");
   const written = await readMessage();
   assert.equal(written.token, "m-old:2026-10-02T00:00:01.000Z");
   assert.deepEqual([written.auto, written.generation], [true, 7], "布尔列走的是 INTEGER，写回来还得是布尔");
@@ -214,13 +234,14 @@ try {
   // 幂等：再跑一遍 ensureSchema 不许把刚写进去的值重置掉（宽容 ALTER 失败后不许退回重建）。
   await ensureSchema();
   assert.equal(await readAuto(), true, "第二次 ensureSchema 不许把已经写上的值冲掉");
+  assert.equal(await readEpoch(), 5, "方向世代同上 —— 它一路只增，升级本身更不许把它归零");
   assert.equal((await readMessage()).generation, 7, "账本那几列同上");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
 }
 console.log(
-  "✓ 存量库升级：完成闸这几列（来源、占用代次、放弃凭证、交接凭证、转手口令、账本来源）补得上、"
+  "✓ 存量库升级：完成闸这几列（来源、占用代次、方向世代、放弃凭证、交接凭证、转手口令、账本来源）补得上、"
     + "缺省值不改写既有事实（代次是 0 不是 NULL、账本缺列退化成空而不是报错）、补上之后写得进去且幂等；"
     + "升级前就有重复交接的库也拿到唯一索引（身份归给最早那一条、正文一个字不动）",
 );

@@ -220,6 +220,23 @@ export const sessionTurns = sqliteTable(
      * 少过东西，那一轮做出来的图于是被静默滤掉（第 4 轮审查必须修 1）。
      */
     endedAt: text("ended_at"),
+    /**
+     * 这一回合**自己**的结局：`completed` / `failed` / `stopped`（受控停止:用户停、工作目录
+     * 被抽走、空闲回收、引导截断）。写入端在 `session-turns.ts`，**认第一次**，门禁与
+     * `ended_at` 同一道：收口过的行不许被后来的事实改写。
+     *
+     * 为什么回合要有自己这一位，不能拿会话行上的退出码/`stopped_as` 投影出来：那两列记的是
+     * **进程**最后一次怎么没的，而常驻调度台一个进程跑很多回合。它每一轮健康 `endTurn`
+     * 收口、进程继续待命，后来空闲时才以非零码退出 —— 读端照退出码判，就把那个退出当成了
+     * 上一轮（明明已经成功答完的那一轮）失败的证据，于是整轮的「正在重试」被重新挂回手机上
+     * （第 5 轮审查 F3，已实测）。反方向同样错：`exit 0` 却中途报过执行故障的那一轮（单飞的
+     * 判据是「非零退出**或** sawExecutionError」）压根给不出失败现场。
+     *
+     * null = **不知道**（存量行；收口那一下没写成的行）。读端一律按「没有明确失败结局」
+     * 处理，不回放失败现场 —— 判据见 `session-waiting.ts` 的 `failedTurnNotices`。
+     * 进程自身怎么没的仍然单独记在会话行上（`exit_status` / `stopped_as`），两件事不混。
+     */
+    outcome: text("outcome"),
   },
   (t) => ({
     taskIdx: index("session_turns_task_idx").on(t.taskId, t.startedAt),

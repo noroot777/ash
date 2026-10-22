@@ -10,86 +10,16 @@
 //    写 `min-width: 0` 就会被内容顶宽，把「停掉」按钮挤出面板。**不能靠点一下按钮验证**
 //    ——Playwright 点击会自动把元素滚进视野，挤出去了照样点得到。只认几何：按钮的盒子
 //    必须落在面板里，面板不许出现横向滚动。
+//
+// **台子在隔壁**（`monitor-dom-harness.mjs`,全局约定:单文件不超过 700 行）:真 Vite、真
+// Chromium、`page.route` 兜底那几条 API 都在那边，「它什么时候算完」那一格的用例在
+// `test-monitor-composer-dom.mjs`。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { monitor, openHarness } from "./monitor-dom-harness.mjs";
 
-const LONG_CWD = "/Users/fjh/code/harness/.worktrees/S3Bp7iPC8wOe/server/scripts/fixtures/deeply/nested/working/directory";
-const LONG_COMMAND = "tail -F /var/log/very-long-path/build-output-with-an-extremely-long-name.log | grep --line-buffered -E 'ERROR|FAILED|Traceback'";
-const monitor = (id, taskId, over = {}) => ({
-  id,
-  taskId,
-  command: LONG_COMMAND,
-  description: `盯 ${taskId}`,
-  cwd: LONG_CWD,
-  status: "running",
-  // 出身：缺了它卡片按只读投影渲染，后面找「看它的输出」会直接超时。
-  kind: "ash",
-  nativeId: null,
-  lifetime: "bounded",
-  pid: 4242,
-  events: 3,
-  exitCode: null,
-  startedAt: "2026-10-09T02:00:00.000Z",
-  // 起点作数（服务端的可信性那一列）。缺了它卡片只会说「挂上的时刻不确定」。
-  startedAtExact: true,
-  expiresAt: "2026-10-09T04:00:00.000Z",
-  endedAt: null,
-  endedReason: null,
-  ...over,
-});
-
-const server = await createServer({
-  root: fileURLToPath(new URL("..", import.meta.url)),
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0 },
-});
-let browser;
+const { open, idsOf, waitIds, failures, close } = await openHarness();
 const pending = [];
 try {
-  await server.listen();
-  browser = await chromium.launch(await chromeLaunchOptions());
-  const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
-  const failures = [];
-
-  const open = async (handler, query = "") => {
-    const page = await browser.newPage();
-    page.setDefaultTimeout(5000);
-    page.on("pageerror", (error) => failures.push(error.message));
-    await page.addInitScript(() => {
-      window.localStorage.clear();
-      window.__sources = [];
-      window.EventSource = class {
-        constructor(url) { this.url = url; this.closed = false; window.__sources.push(this); setTimeout(() => { if (!this.closed) this.onopen?.({}); }, 0); }
-        close() { this.closed = true; }
-      };
-    });
-    await page.route("**/api/**", async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      if (handler && await handler(route, path)) return;
-      const list = /^\/api\/tasks\/([^/]+)\/monitors$/.exec(path);
-      if (list) return route.fulfill({ json: [monitor(`m-${list[1]}`, list[1])] });
-      // 恢复状态是单独一条端点（见 server/src/monitor-routes.ts：不动列表的响应形状，
-      // 否则旧 dist 配新 server 会整格崩）。这里一律答「没有待恢复的」。
-      if (/^\/api\/tasks\/[^/]+\/monitors\/recovery$/.test(path)) {
-        return route.fulfill({ json: { pending: false, reasons: [], attempts: 0, exhausted: false } });
-      }
-      const log = /^\/api\/monitors\/([^/]+)\/log$/.exec(path);
-      if (log) return route.fulfill({ json: { lines: [`${"x".repeat(400)}`, "第二行"], truncated: false } });
-      failures.push(`unexpected API request: ${path}`);
-      await route.fulfill({ status: 500, json: { error: "unexpected request" } });
-    });
-    await page.goto(`${origin}/scripts/fixtures/monitor-inspector.html${query}`);
-    return page;
-  };
-  const idsOf = (page) => page.getByTestId("ids").textContent();
-  const waitIds = (page, value) => page.waitForFunction(
-    (want) => document.querySelector('[data-testid="ids"]')?.textContent === want,
-    value,
-  );
-
   // ── 「用过才浮现」落到图标条上：没挂过不上条、挂过带底色 ────────────────────
   // 底色是 CSS 的 `:has(.inspector-rail-icon--used)` 给的，类名两边一错位就悄悄没了，
   // 而「少一层淡底色」这种事看快照、读代码都发现不了，只能量计算样式。
@@ -595,6 +525,5 @@ try {
   console.log("monitor inspector dom: stop button stays inside the 340px panel, stale task/form results never land, reconnects re-read the snapshot, the expanded wait card describes the real supervision state (woken either way; unclaimed ones may not be stoppable)");
 } finally {
   pending.forEach((release) => release());
-  await browser?.close();
-  await server.close();
+  await close();
 }

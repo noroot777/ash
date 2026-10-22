@@ -13,7 +13,7 @@
 
 | 要改的东西 | 说明住在 | 回归测试 |
 |---|---|---|
-| 结算优先级 / 续聊 `followUpFrom` | `orchestrator.ts` `settleTaskStatus` | `test:follow-up` |
+| 结算优先级 / 续聊 `followUpFrom` | `settle-status.ts` 顶部 | `test:follow-up` |
 | 续聊改了代码就清账（前后两张工作目录快照） | `turn-baseline.ts` 顶部 | `test:turn-baseline` |
 | 已验收任务被真人唤醒后摘牌 / 挂回 | `task-stage.ts` | `test:reopen-acceptance` |
 | 就地验证轮（旁路回合、证据落盘） | `review.ts` 顶部；判定在 `review-policy.ts`，证据 `review-evidence.ts`，措辞 `review-prompts.ts` | `test:review` |

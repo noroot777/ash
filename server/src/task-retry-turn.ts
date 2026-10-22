@@ -380,6 +380,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
             // 后端代写的那句（审查打回等）重投时仍标 by:"system"：作者没变，重来一次不该
             // 把机器的话记成我说的。
             byBackend: !!seg.bySystem,
+            monitorWake: seg.monitorWake,
             resumeSessionId: latest.id,
             turnHeld: true,
             // 判据是在这里读的，CLI 却要到几个 await 之后才真正起来（执行器解析、worktree

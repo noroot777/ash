@@ -262,6 +262,15 @@ export function isCanceling(taskId: string): boolean {
   return stopping.has(taskId);
 }
 
+/**
+ * 停止/暂停标记**只看一眼,不消费**。
+ *
+ * 回合收尾要把「这一轮是被停的」跟退出码一起落库(受控停止和崩溃的退出码一模一样),而标记
+ * 的消费权归结算那一方 —— 读的人不能顺手把它取走。
+ */
+export function peekStopped(taskId: string): StopSettle | null {
+  return stopping.get(taskId) ?? null;
+}
 /** 把「这一轮是被停的」记下来，供本回合的结算读取（撤回起跑用；杀进程走 stopTask）。 */
 export function markStopped(taskId: string, settle: StopSettle): void {
   stopping.set(taskId, settle);
@@ -359,45 +368,8 @@ export function takeCanceled(taskId: string): boolean {
   return takeStopped(taskId) !== null;
 }
 
-// ── 完成确认(严格 done 协议)────────────────────────────────────────────────
-// exit 0 只说明 CLI 进程正常退出,不代表任务目标达成(agent 报错后正常退出照样
-// exit 0)。done 必须由 agent 亲口确认:回合内调 complete_task(MCP → POST
-// /tasks/:id/complete)置标记,settle 时 take 消费。
-// 这里是**同进程的快路**;权威那份落在 tasks.complete_confirmed_at(DB),因为
-// 确认走 HTTP 打到监听进程、而跑这个回合的未必是同一个进程 —— 只有内存标记时,
-// 跨进程的确认会静默丢掉(见 schema.completeConfirmedAt 的注释)。settle 两边
-// 任一命中即算确认。
-const confirmed = new Set<string>();
-
-export function confirmDone(taskId: string): void {
-  confirmed.add(taskId);
-}
-
-// Check-and-clear(对称 takeCanceled):settle 消费,失败重试的下一回合不残留。
-export function takeConfirmed(taskId: string): boolean {
-  return confirmed.delete(taskId);
-}
-
-/**
- * **撤掉一次还没结算的确认**。返回它本来在不在。
- *
- * 用在「确认之后又挂了哨兵」那一刻(task-complete.ts):那一次确认已经不成立了,而只清
- * `tasks.complete_confirmed_at` 不够 —— settle 是两条道任一命中即算确认,内存这条快路留着
- * 的话任务照旧落 done(第 1 轮审查 F1 的原话:不能只清 DB 而保留内存快路)。
- */
-export function revokeConfirmed(taskId: string): boolean {
-  return confirmed.delete(taskId);
-}
-
-/**
- * 内存这条快路上现在有确认吗？**不消费它**（对称 `takeConfirmed` 的只读版）。
- *
- * 用在「刚挂上哨兵,要不要撤确认」那一步:没有确认可撤就该原样返回,而不是顺手写一段等待。
- * 借 `takeConfirmed` 一问一还的话,中间任何一个 await 都会让另一路读到一个假的「没确认」。
- */
-export function hasConfirmed(taskId: string): boolean {
-  return confirmed.has(taskId);
-}
+// 完成确认（严格 done 协议）那张内存票搬去了 `task-confirmation.ts`：它自己带着一套不变量
+// （那张票属于哪一代方向世代）。这里不转发，免得同一组函数有两个入口。
 
 // Thrown by a run step when a stop was requested mid-flight, so the duet
 // pipeline unwinds to its top-level catch and settles as `canceled`.

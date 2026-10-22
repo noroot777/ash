@@ -34,7 +34,7 @@ import { and, eq, type SQL } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { serialize } from "./monitors.js";
-import { confirmDone, hasConfirmed, revokeConfirmed } from "./runs.js";
+import { confirmDone, hasConfirmed, revokeConfirmed } from "./task-confirmation.js";
 import { monitorsBlockingComplete, noteMonitorsDropped } from "./task-complete-monitors.js";
 import { clearAutoCheckpoint, writeResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -156,9 +156,11 @@ export async function confirmTaskComplete(a: {
       .update(tasks)
       .set({ completeConfirmedAt: at, updatedAt: at })
       .where(and(eq(tasks.id, a.taskId), ...a.where))
-      .returning({ id: tasks.id });
+      // 内存那条快路也得知道这张票是**哪一代**的（见 task-confirmation.ts 的 `confirmDone`）：只给 DB 那
+      // 一列加归属屏障等于没加，settle 是两条道任一命中即算确认（第 1 轮审查 F1）。
+      .returning({ id: tasks.id, directionEpoch: tasks.directionEpoch });
     if (!updated.length) return { ok: false, error: a.staleError };
-    confirmDone(a.taskId);
+    confirmDone(a.taskId, updated[0]!.directionEpoch);
     // 闸放行了 ⇒ 之前为哨兵自动写下的那段等待已经失效（它等的东西没了）。不清的话这一轮
     // 照旧落 paused，而再没有任何哨兵会来叫醒它（第 2 轮审查 R2-2 实测）。
     await clearAutoCheckpoint(a.taskId);
@@ -185,12 +187,14 @@ export async function confirmTaskComplete(a: {
  */
 export async function holdCompletionForNewMonitor(taskId: string, label: string): Promise<string | null> {
   try {
-    const standing = (await db
-      .select({ confirmedAt: tasks.completeConfirmedAt })
-      .from(tasks).where(eq(tasks.id, taskId))).at(0)?.confirmedAt;
+    const row = (await db
+      .select({ confirmedAt: tasks.completeConfirmedAt, directionEpoch: tasks.directionEpoch })
+      .from(tasks).where(eq(tasks.id, taskId))).at(0);
+    const standing = row?.confirmedAt;
     // 没有确认可撤 ⇒ 什么都不做。**这是绝大多数创建**（agent 起哨兵、随后 pause_task 收尾），
     // 不该因此多写一段系统等待去压住它自己那一段。
-    if (!standing && !hasConfirmed(taskId)) return null;
+    // 内存那条快路问的是「有没有**这一代**的确认」：别代的那张本来就不作数（task-confirmation.ts）。
+    if (!standing && !hasConfirmed(taskId, row?.directionEpoch ?? -1)) return null;
     if (!await monitorsBlockingComplete(taskId)) return null;
     const note = `已撤掉本回合的完成确认：挂上哨兵「${label}」之后，这一轮改为检查点暂停 —— `
       + "任务一落 done 这个哨兵就会被一并停掉，它在等的结果也就没了。它醒来会把这条会话重新叫起来。";

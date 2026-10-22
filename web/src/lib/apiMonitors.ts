@@ -14,7 +14,11 @@ export const monitorApi = {
   /** `wake` = 这个哨兵醒来叫谁。只有服务端说「说不清叫谁」(`needsWakeTarget`)时才需要带。 */
   startMonitor: (
     taskId: string,
-    body: { command: string; description?: string; timeoutMs?: number; wake?: MonitorWakeTarget },
+    body: {
+      command: string; description?: string; timeoutMs?: number; wake?: MonitorWakeTarget;
+      /** 约定的结束条件(哪一行一出现就收工)与「就是要盯到到期」的显式声明。 */
+      stopWhen?: string; untilExpiry?: boolean;
+    },
   ): Promise<{ monitor: TaskMonitor; notice?: string }> =>
     request(`/tasks/${id(taskId)}/monitors`, json("POST", body)),
   stopMonitor: (monitorId: string, reason?: string): Promise<{ monitor: TaskMonitor | null }> =>

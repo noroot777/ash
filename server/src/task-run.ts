@@ -8,6 +8,7 @@ import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
+import { turnDirectionStart } from "./task-direction-epoch.js";
 import { consumeSingleRun } from "./single-run.js";
 import { afterSettlement } from "./settle-status.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn } from "./session-turns.js";
@@ -105,7 +106,9 @@ export async function runTask(
     const directionToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
+      // 方向身份那几列连同永不归零的世代一起走 `turnDirectionStart`:**新回合开跑也是一次新方
+      // 向**,世代漏推的话,一轮完整跑完的回合在迟到回滚眼里什么都没发生过(见 task-direction-epoch.ts)。
+      .set({ followUpFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
       .where(eq(tasks.id, taskId));
     // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
     bindTurnToken(taskId, turnToken);
