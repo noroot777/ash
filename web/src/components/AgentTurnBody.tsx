@@ -84,17 +84,19 @@ export function AgentTurnBody({
           />
         ),
       })),
+      // 过程折叠 = 第一个区(前 `fold.stops` 个步骤 + 整个在切点之前的那几个块);剩下的
+      // 正文排在它后面、原样铺开(见 markdownLayout 的 regions)。
       ...(fold
         ? {
-          fold: {
+          regions: [{
+            until: fold.offset,
             inserts: fold.stops,
-            offset: fold.offset,
             render: (children: ReactNode) => (
               <ProcessFold events={stops.slice(0, fold.stops).flatMap((stop) => stop.events)}>
                 {children}
               </ProcessFold>
             ),
-          },
+          }],
         }
         : {}),
     };

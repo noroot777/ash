@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CaretDown, X } from "@phosphor-icons/react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
@@ -8,7 +8,7 @@ import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./Ima
 import { splitReviewReport } from "./reviewReportSections.ts";
 import {
   insertIndexOf,
-  isFoldRegion,
+  regionIndexOf,
   rehypeMarkdownLayout,
   type MarkdownLayout,
 } from "./markdownLayout.ts";
@@ -183,7 +183,8 @@ function markdownComponents(latest: { current: MarkdownContext }): Components {
       const { layout } = latest.current;
       const index = insertIndexOf(node?.properties);
       if (index !== null) return <>{layout?.inserts[index]?.node ?? null}</>;
-      if (isFoldRegion(node?.properties)) return <>{layout?.fold?.render(children)}</>;
+      const region = regionIndexOf(node?.properties);
+      if (region !== null) return <>{layout?.regions?.[region]?.render?.(children)}</>;
       return <div {...props}>{children}</div>;
     },
   };
@@ -291,7 +292,7 @@ function ReviewReportSplit({ text, reportKey, conclusion, resolveFile, onReviewR
   onReviewReport: (target: ReviewFileTarget) => void;
   onActionError: (message: string | null) => void;
 }) {
-  const { summary, more, rest, aside, detail, kind } = useMemo(
+  const { more, rest, detail, kind, cuts } = useMemo(
     () => splitReviewReport(text, conclusion),
     [text, conclusion],
   );
@@ -357,50 +358,76 @@ function ReviewReportSplit({ text, reportKey, conclusion, resolveFile, onReviewR
   const label = kind === "contract"
     ? { open: "收起技术明细", closed: "展开技术明细（验证过程、证据、清场记录）" }
     : { open: "收起完整报告", closed: "展开完整报告" };
-  const part = (section: string) => (
-    <MarkdownDocument text={section} resolveFile={resolveFile} onReviewReport={onReviewReport} onActionError={onActionError} />
-  );
+  /**
+   * 两个折叠都是**同一次解析**里的分区,不是另起一份文档(见 markdownLayout 的 regions)。
+   *
+   * 各段各过一遍渲染器那一版:结论里 `![图][shot]` 的定义、`[^proof]` 的脚注定义写在技术
+   * 明细里,于是明细那一份没有引用它的正文、结论那一份没有定义 —— 点开「展开完整报告」
+   * 照样 0 张图、脚注一节都不建(审查第 4 轮 R2 实测;同一份内容整篇交给渲染器是 2 张图)。
+   *
+   * 折着的那一半仍然**不进 DOM**(`render` 直接不画 children):折叠里的截图不该混进
+   * `ImagePreviewGroup` 的灯箱队列,否则左右翻会翻到屏幕上根本没有的图。
+   */
+  const layout: MarkdownLayout = {
+    inserts: [],
+    regions: [
+      // 摘要:原样铺开(不给 render,连包装 div 都不加)。
+      { until: cuts.more ?? cuts.detail ?? Number.POSITIVE_INFINITY },
+      // 中段那个折叠装的是**问题**,不是技术记录。按钮照实说它有几条——名字就是内容,
+      // 所以它跟权威结论无关,`verified` 与否都照折照说。
+      ...(more
+        ? [{
+          until: cuts.aside ?? cuts.detail ?? Number.POSITIVE_INFINITY,
+          render: (children: ReactNode) => (
+            <>
+              <button
+                type="button"
+                className={`review-report-more${moreOpen ? " is-open" : ""}`}
+                aria-expanded={moreOpen}
+                aria-controls={moreOpen ? moreId : undefined}
+                onClick={() => setMoreOpen((value) => !value)}
+              >
+                <CaretDown size={11} weight="bold" aria-hidden="true" />
+                {moreOpen ? `收起其余 ${rest} 条问题` : `展开其余 ${rest} 条问题`}
+              </button>
+              {moreOpen && (
+                <div id={moreId} className="review-report-detail review-report-rest">{children}</div>
+              )}
+            </>
+          ),
+        }]
+        : []),
+      // 第四栏「不拦验收、但你该知道的」:跨过中间那个折叠继续留在首屏。
+      ...(cuts.aside !== undefined ? [{ until: cuts.detail ?? Number.POSITIVE_INFINITY }] : []),
+      // 技术明细 / 完整报告那个折叠 —— 后面的全归它。
+      {
+        until: Number.POSITIVE_INFINITY,
+        render: (children: ReactNode) => (
+          <>
+            <button
+              type="button"
+              className={`review-report-more${open ? " is-open" : ""}`}
+              aria-expanded={open}
+              aria-controls={open ? detailId : undefined}
+              onClick={() => setOpen((value) => !value)}
+            >
+              <CaretDown size={11} weight="bold" aria-hidden="true" />
+              {open ? label.open : label.closed}
+            </button>
+            {open && <div id={detailId} className="review-report-detail">{children}</div>}
+          </>
+        ),
+      },
+    ],
+  };
   return (
-    <>
-      {part(summary)}
-      {/* 中段那个折叠装的是**问题**，不是技术记录。按钮照实说它有几条——名字就是内容，
-          所以它跟权威结论无关，`verified` 与否都照折照说。 */}
-      {more && (
-        <>
-          <button
-            type="button"
-            className={`review-report-more${moreOpen ? " is-open" : ""}`}
-            aria-expanded={moreOpen}
-            aria-controls={moreOpen ? moreId : undefined}
-            onClick={() => setMoreOpen((value) => !value)}
-          >
-            <CaretDown size={11} weight="bold" aria-hidden="true" />
-            {moreOpen ? `收起其余 ${rest} 条问题` : `展开其余 ${rest} 条问题`}
-          </button>
-          {moreOpen && (
-            <div id={moreId} className="review-report-detail review-report-rest">
-              {part(more)}
-            </div>
-          )}
-        </>
-      )}
-      {aside && part(aside)}
-      <button
-        type="button"
-        className={`review-report-more${open ? " is-open" : ""}`}
-        aria-expanded={open}
-        aria-controls={open ? detailId : undefined}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <CaretDown size={11} weight="bold" aria-hidden="true" />
-        {open ? label.open : label.closed}
-      </button>
-      {open && (
-        <div id={detailId} className="review-report-detail">
-          {part(detail)}
-        </div>
-      )}
-    </>
+    <MarkdownDocument
+      text={text}
+      resolveFile={resolveFile}
+      layout={layout}
+      onReviewReport={onReviewReport}
+      onActionError={onActionError}
+    />
   );
 }
 

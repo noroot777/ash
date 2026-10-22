@@ -43,6 +43,30 @@ const REPORT = [
   "![工作目录](/Users/demo/code/ash/.worktrees/x/output/shot.svg)",
 ].join("\n");
 
+/**
+ * 结论里引用、**定义写在技术明细里** —— 报告分栏那一路的 R2(审查第 4 轮)。
+ *
+ * 分栏各建一份 `MarkdownDocument` 的那一版:明细那一份没有引用它的正文,结论那一份没有
+ * 定义,于是点开「展开完整报告」照样 0 张图、脚注一节都不建(实测;同一份内容整篇交给
+ * 渲染器是 2 张图)。定义是**整篇文档的**,折叠只是展示分组,所以折着的时候结论里这张图
+ * 就该在屏幕上。
+ */
+const CROSSREF_REPORT = [
+  "## 结论",
+  "",
+  "不能 —— 有 1 条必须先修。",
+  "",
+  "定义写在技术明细里的那张图：![复现截图][shot]",
+  "",
+  "脚注的正文也写在那边[^proof]。",
+  "",
+  "## 技术明细",
+  "",
+  "[shot]: shot.png",
+  "",
+  "[^proof]: 证据在 shot.png 里。",
+].join("\n");
+
 // 服务端落盘时留住了源文件的名字（`<12 位 id>-<原名>`）；配对**不靠**它，靠 source 标注。
 const UPLOADS = "/Users/demo/code/ash/data/uploads";
 const up = (name: string) => `${UPLOADS}/${name}`;
@@ -255,6 +279,15 @@ createRoot(document.getElementById("root")!).render(
         reportKey="run-1:1"
         conclusion="verify_failed"
         // 真实表面用的就是 reportFileResolver（相对路径 → 证据目录，绝对路径 → 工作目录）。
+        resolveFile={reportFileResolver((name) =>
+          `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent(name)}`, "T1")}
+      />
+    </section>
+    <section className="crossref-report-fixture">
+      <ReviewReportBody
+        text={CROSSREF_REPORT}
+        reportKey="run-2:1"
+        conclusion="verify_failed"
         resolveFile={reportFileResolver((name) =>
           `/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=${encodeURIComponent(name)}`, "T1")}
       />

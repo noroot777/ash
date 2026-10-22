@@ -120,6 +120,36 @@ try {
     "取不到的那一处不许换一个根再试 —— 加载失败只能证明此刻取不到",
   );
 
+  // ── ①b 报告分栏:结论里引用、**定义写在技术明细里**(审查第 4 轮 R2 第 4 行)──────
+  // 分栏各建一份文档的那一版:明细那一份没有引用它的正文,结论那一份没有定义,于是点开
+  // 「展开完整报告」照样 0 张图、脚注一节都不建。定义是**整篇文档的**,折叠只是展示分组,
+  // 所以**折着的时候**结论里这张图就该在屏幕上、还得真解码出来。
+  const crossref = page.locator(".crossref-report-fixture");
+  await page.waitForFunction(() => {
+    const img = document.querySelector(".crossref-report-fixture .task-markdown img");
+    return !!img && img.complete && img.naturalWidth > 0;
+  });
+  assert.deepEqual(
+    await srcs(crossref.locator(".task-markdown img")),
+    ["/api/tasks/T1/free-workflow/review-file?run=R1&round=1&name=shot.png"],
+    "定义在折叠里、引用在结论里,这张图照样解到证据接口",
+  );
+  assert.equal(
+    await crossref.locator(".review-report-detail").count(),
+    0,
+    "这张图不是靠「把明细也铺出来」才有的 —— 技术明细默认仍然折着",
+  );
+  // 脚注那一节是整篇文档的产物,排在折叠之外:结论里那个脚注标记任何时候都点得动。
+  assert.match(
+    await crossref.locator("section.footnotes").innerText(),
+    /证据在 shot\.png 里/,
+    "脚注正文要真的建出来(上一版一节都不建)",
+  );
+  // 展开之后不许多出一张:定义那几行本身不产生可见节点,整篇也只解析了一次。
+  await crossref.getByRole("button", { name: /展开完整报告/ }).click();
+  assert.equal(await crossref.locator(".task-markdown img").count(), 1, "展开后仍只有那一张图");
+  assert.equal(await crossref.locator("section.footnotes").count(), 1, "脚注那一节只建一次");
+
   // ── ② 对话结论：相对路径 + 绝对路径，都靠服务端那份 uploads 拷贝落地 ────────
   const conclusion = page.locator(".conclusion-fixture");
   assert.deepEqual(

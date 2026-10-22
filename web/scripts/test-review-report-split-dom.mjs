@@ -41,12 +41,23 @@ try {
   const conforming = page.locator(".conforming-fixture");
   await conforming.locator(".task-markdown").first().waitFor();
 
-  // 断言一律读 markdown 正文，不读整块 fixture：展开按钮的文案里就带着「清场记录」
-  // 几个字，拿整块做否定断言会把按钮自己的标签当成泄漏的明细。
+  // 整篇**只解析一次**,摘要、折叠按钮、展开着的明细都在同一个 `.task-markdown` 里:定义
+  // 和脚注是整篇文档的,各段各过一遍渲染器就两头落空(结论里引用明细里的图片定义/脚注时
+  // 一张图都画不出来,审查第 4 轮 R2)。所以「铺开的那一半」= 整篇可见文字**减去**折叠按钮
+  // 自己的标签(它的文案里就带着「清场记录」几个字)和展开着的那几块。
+  const spread = async (scope) => {
+    let text = await scope.locator(".task-markdown").first().innerText();
+    const chunks = [
+      ...(await scope.locator(".review-report-more").allInnerTexts()),
+      ...(await scope.locator(".review-report-detail").allInnerTexts()),
+    ];
+    for (const chunk of chunks) if (chunk) text = text.split(chunk).join("");
+    return text;
+  };
   const summaryBody = conforming.locator(".task-markdown").first();
 
   // ② 默认就该看见结论和问题。
-  const summary = await summaryBody.innerText();
+  const summary = await spread(conforming);
   assert.match(summary, /不能 —— 有 1 条必须先修/, "结论必须默认可见");
   assert.match(summary, /烧录出来的成片用的是你改之前的字幕/, "问题标题必须默认可见");
   assert.match(summary, /删除项目后整个网格会闪一下/, "「不拦验收但你该知道的」也属于摘要");
@@ -67,15 +78,11 @@ try {
 
   // ③ 折叠不是丢弃：展开后明细原样都在。
   await toggle.click();
-  const detail = await conforming.locator(".review-report-detail .task-markdown").innerText();
+  const detail = await conforming.locator(".review-report-detail").innerText();
   for (const line of ["被审范围与基线", "d7ee0b07", "npm run build", "清场", "lsof"]) {
     assert.match(detail, new RegExp(line), `展开后「${line}」必须原样还在，折叠不等于丢弃`);
   }
-  assert.match(
-    await summaryBody.innerText(),
-    /不能 —— 有 1 条必须先修/,
-    "展开明细不该把摘要顶掉",
-  );
+  assert.match(await spread(conforming), /不能 —— 有 1 条必须先修/, "展开明细不该把摘要顶掉");
   assert.equal(
     await conforming.getByRole("button", { name: /收起技术明细/ }).getAttribute("aria-expanded"),
     "true",
@@ -110,14 +117,10 @@ try {
     const plain = box.getByRole("button", { name: /^展开完整报告$/ });
     assert.equal(await plain.count(), 1, `${what}：仍要给一个不作承诺的展开入口`);
     // 切点不跟着结论走：铺开的那一半跟上面那份通过了的一字不差。
-    assert.equal(
-      await box.locator(".task-markdown").first().innerText(),
-      summary,
-      `${what}：换个结论只换按钮文案，切点必须原地不动`,
-    );
+    assert.equal(await spread(box), summary, `${what}：换个结论只换按钮文案，切点必须原地不动`);
     await plain.click();
     assert.match(
-      await box.locator(".review-report-detail .task-markdown").innerText(),
+      await box.locator(".review-report-detail").innerText(),
       /d7ee0b07/,
       `${what}：折的仍是那半截技术记录，一个字没少`,
     );
@@ -134,7 +137,7 @@ try {
   );
 
   await switchable.getByRole("button", { name: "切换轮次" }).click();
-  const switched = await switchable.locator(".task-markdown").first().innerText();
+  const switched = await spread(switchable);
   assert.match(switched, /第 5 轮自动验证报告/, "正文应当换成了下一轮");
   assert.equal(
     await switchable.locator(".review-report-detail").count(),
@@ -185,7 +188,7 @@ try {
   //    记录收在按钮后面。认不出 CRLF 时这份会整篇铺开、连按钮都没有——内容没丢，但这个
   //    改动的全部收益在 Windows 常见文本格式上归零。
   const crlf = page.locator(".crlf-fixture");
-  const crlfSummary = await crlf.locator(".task-markdown").first().innerText();
+  const crlfSummary = await spread(crlf);
   assert.match(crlfSummary, /不能 —— 有 1 条必须先修/, "CRLF 报告的结论同样默认可见");
   assert.match(crlfSummary, /烧录出来的成片/, "CRLF 报告的问题同样默认可见");
   for (const noise of ["被审范围与基线", "d7ee0b07", "npm run build", "清场", "lsof"]) {
@@ -198,7 +201,7 @@ try {
   );
   await crlf.getByRole("button", { name: /展开技术明细/ }).click();
   assert.match(
-    await crlf.locator(".review-report-detail .task-markdown").innerText(),
+    await crlf.locator(".review-report-detail").innerText(),
     /d7ee0b07/,
     "展开后 CRLF 报告的明细同样原样都在",
   );
@@ -206,14 +209,14 @@ try {
   // ⑦ 结论里带代码示例的报告：代码内容里那行 ```… 不是闭合围栏，后面的 `##` 也不是小节
   //    标题。认错时用户打开报告只看到半截代码加一个按钮，真正的问题折在里面还被当成代码。
   const fence = page.locator(".fence-fixture");
-  const fenceSummary = await fence.locator(".task-markdown").first().innerText();
+  const fenceSummary = await spread(fence);
   assert.match(fenceSummary, /保存后你刚改的内容会全部消失/, "真正的问题必须默认可见");
   assert.match(fenceSummary, /这一行仍是代码内容/, "代码示例本身也留在摘要里");
   assert.match(fenceSummary, /命令输出里的井号/, "代码里的 `##` 不是分界，不该被切走");
   assert.doesNotMatch(fenceSummary, /被审范围与基线|d7ee0b07/, "技术记录该收进明细");
   await fence.getByRole("button", { name: /展开技术明细/ }).click();
   assert.match(
-    await fence.locator(".review-report-detail .task-markdown").innerText(),
+    await fence.locator(".review-report-detail").innerText(),
     /d7ee0b07/,
     "切点应当落在那个真的二级标题上",
   );
@@ -222,7 +225,7 @@ try {
   //    （这份渲染器不解析裸 HTML，注释会以纯文本显示——那不影响这里要保证的事：
   //    它在 Markdown 里不是标题，不能拿它当切点。）
   const comment = page.locator(".comment-fixture");
-  const commentSummary = await comment.locator(".task-markdown").first().innerText();
+  const commentSummary = await spread(comment);
   assert.match(commentSummary, /烧录出来的成片/, "第一条问题默认可见");
   assert.match(commentSummary, /保存后你刚改的内容会全部消失/, "第二条问题同样默认可见");
   assert.match(commentSummary, /这一段不会当成标题/, "注释整段留在摘要里，没被当成分界");
@@ -234,7 +237,7 @@ try {
   );
   await comment.getByRole("button", { name: /展开技术明细/ }).click();
   assert.match(
-    await comment.locator(".review-report-detail .task-markdown").innerText(),
+    await comment.locator(".review-report-detail").innerText(),
     /d7ee0b07/,
     "切点应当落在那个真的顶层标题上",
   );
@@ -243,7 +246,7 @@ try {
   //    某一轮的报告）。只认加粗标签那一版时，这份会整篇铺开——首屏紧跟着结论就是仓库状态、
   //    命令和清场记录，连按钮都没有，正是这个改动要消灭的样子。
   const headingColumns = page.locator(".heading-columns-fixture");
-  const hcSummary = await headingColumns.locator(".task-markdown").first().innerText();
+  const hcSummary = await spread(headingColumns);
   assert.match(hcSummary, /不能 —— 有 1 条必须先修/, "结论默认可见");
   assert.match(hcSummary, /四个栏目写成小标题时，整份报告又全部展开/, "问题本身默认可见");
   for (const noise of ["被审范围与仓库状态", "abc1234", "npm test", "临时服务已停止"]) {
@@ -252,7 +255,7 @@ try {
   const hcToggle = headingColumns.getByRole("button", { name: /展开技术明细/ });
   assert.equal(await hcToggle.count(), 1, "小标题写法跟加粗写法一样是这套格式，按钮也该这么写");
   await hcToggle.click();
-  const hcDetail = await headingColumns.locator(".review-report-detail .task-markdown").innerText();
+  const hcDetail = await headingColumns.locator(".review-report-detail").innerText();
   for (const line of ["abc1234", "npm test", "临时服务已停止"]) {
     assert.match(hcDetail, new RegExp(line), `展开后「${line}」原样还在`);
   }
@@ -263,7 +266,7 @@ try {
   //    `## 结论` 那一节里的旧形态，全库 146 份）。后者尤其要钉住：**通过了不等于敢宣称**,
   //    还得报告自己的结构证明得了切点落在结论之后。
   const legacy = page.locator(".legacy-fixture");
-  const legacyText = await legacy.locator(".task-markdown").first().innerText();
+  const legacyText = await spread(legacy);
   assert.match(legacyText, /verify_failed/, "报告自己的判定必须留在首屏");
   assert.match(legacyText, /2 个可复现的高优先级问题/, "「有几个问题」也留在首屏");
   assert.doesNotMatch(legacyText, /做对的部分/, "「做对的部分」不许冒充摘要占着首屏");
@@ -275,7 +278,7 @@ try {
   const legacyToggle = legacy.getByRole("button", { name: /^展开完整报告$/ });
   assert.equal(await legacyToggle.count(), 1, "存量报告要给一个不作承诺的展开入口");
   await legacyToggle.click();
-  const legacyDetail = await legacy.locator(".review-report-detail .task-markdown").innerText();
+  const legacyDetail = await legacy.locator(".review-report-detail").innerText();
   assert.match(legacyDetail, /【高】身份页高内容屏/, "展开后第一条【高】原样都在");
   assert.match(legacyDetail, /【高】设置页/, "第二条【高】同样在");
   assert.match(legacyDetail, /做对的部分/, "折叠不是丢弃");
@@ -283,7 +286,7 @@ try {
   assert.equal(await legacy.locator(".review-report-detail").count(), 0, "能收回去");
 
   const legacyConclusion = page.locator(".legacy-conclusion-fixture");
-  const lcSummary = await legacyConclusion.locator(".task-markdown").first().innerText();
+  const lcSummary = await spread(legacyConclusion);
   assert.match(lcSummary, /verified/, "判定必须默认可见");
   assert.match(lcSummary, /结论/, "结论那一节整个留在首屏");
   assert.doesNotMatch(lcSummary, /被审范围|45b8a02|清场/, "技术记录照切");
@@ -295,7 +298,7 @@ try {
   const lcToggle = legacyConclusion.getByRole("button", { name: /^展开完整报告$/ });
   assert.equal(await lcToggle.count(), 1);
   await lcToggle.click();
-  const lcDetail = await legacyConclusion.locator(".review-report-detail .task-markdown").innerText();
+  const lcDetail = await legacyConclusion.locator(".review-report-detail").innerText();
   assert.match(lcDetail, /45b8a02/, "展开后技术记录原样都在");
   assert.match(lcDetail, /清场/);
 
@@ -317,11 +320,7 @@ try {
   // ⑫ 第三档（切不动）的两种：说明段里抄了四行栏目名却凑不齐签名——那是新格式写坏了，
   //    问题本来就该在结论节里，从第二个 `##` 起切会把问题一起切走，所以整篇铺开。
   const proseCopy = page.locator(".prose-copy-fixture");
-  assert.match(
-    await proseCopy.locator(".task-markdown").first().innerText(),
-    /保存后你刚改的内容会全部消失/,
-    "格式写坏了的报告，问题必须默认可见",
-  );
+  assert.match(await spread(proseCopy), /保存后你刚改的内容会全部消失/, "格式写坏了的报告，问题必须默认可见");
   assert.equal(
     await proseCopy.locator(".review-report-more").count(),
     0,
