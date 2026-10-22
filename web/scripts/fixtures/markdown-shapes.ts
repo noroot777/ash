@@ -38,6 +38,11 @@ export const IMAGE_SHAPES: ImageShape[] = [
     markdown: "结论见脚注[^a]。\n\n[^a]: 证据：\n\n    ![脚注截图](output/foot.svg)\n",
   },
   {
+    key: "orphan-footnote",
+    about: "没人引用的脚注定义里的图(定义整节不渲染 → 0 张;解析树里却是真图片节点)",
+    markdown: "正文一个字都没引用它。\n\n[^a]: 证据：![孤儿脚注图](output/orphan.svg)\n",
+  },
+  {
     key: "table-pipe",
     about: "表格单元里有未转义的 `|`（GFM 按它切单元，图片语法被切断 → 0 张；核心语法 → 1 张）",
     markdown: "| 名 | 图 |\n| --- | --- |\n| a | ![示例](output/a|b.svg) |\n",

@@ -33,6 +33,20 @@ export type MarkdownImageRef = {
   end: number;
   /** 换成站内地址后这一段该写什么(见 rewriter)。 */
   rewrite: (url: string) => string;
+  /**
+   * 渲染器真会把它画出来吗。
+   *
+   * 只有一种情形是假:它住在一条**没人引用的脚注定义**里。脚注那一节是渲染器按
+   * `footnoteReference` **建出来的**(mdast-util-to-hast),没有任何 `[^x]` 指向的定义整节
+   * 被丢掉 —— 解析树里它是货真价实的图片节点,屏幕上一个像素都没有(实测:referenced 扫
+   * 1 处画 1 张、orphan 扫 1 处画 0 张)。
+   *
+   * 为什么是标记而不是直接不认它:服务端是**流式**扫的,定义先到、引用后到时「有没有人
+   * 引用」还没有答案,这时候不存那份拷贝,等引用真的到了就再也没有字节了。所以扫描器照
+   * 旧逐处交代(服务端宁可多存一份),而展示端**不许认领**它的卡片 —— 不然就是这个文件
+   * 开头那两种错的后一种:认领了而渲染器不认,卡片被吃掉、正文又什么都画不出来。
+   */
+  rendered: boolean;
 };
 
 /**
@@ -122,10 +136,18 @@ export function markdownImageRefs(text: string): MarkdownImageRef[] {
 
 function refsOf(root: Node): MarkdownImageRef[] {
   const definitions = new Map<string, string>();
+  const referenced = new Set<string>();
   for (const node of walk(root)) {
+    if (node.type === "footnoteReference" && node.identifier) referenced.add(node.identifier);
     if (node.type !== "definition" || !node.identifier || typeof node.url !== "string") continue;
     // 同名定义:CommonMark 取**第一条**。
     if (!definitions.has(node.identifier)) definitions.set(node.identifier, node.url);
+  }
+  // 没人引用的脚注定义整节不渲染(见 MarkdownImageRef.rendered),里面的图片节点先圈出来。
+  const hidden = new Set<Node>();
+  for (const node of walk(root)) {
+    if (node.type !== "footnoteDefinition" || referenced.has(node.identifier ?? "")) continue;
+    for (const inner of walk(node)) hidden.add(inner);
   }
   const refs: MarkdownImageRef[] = [];
   for (const node of walk(root)) {
@@ -135,7 +157,13 @@ function refsOf(root: Node): MarkdownImageRef[] {
     if (!span) continue;
     const destination = (inline ? node.url : definitions.get(node.identifier ?? ""))?.trim();
     if (!destination) continue;
-    refs.push({ destination, start: span[0], end: span[1], rewrite: rewriter(node.alt ?? "") });
+    refs.push({
+      destination,
+      start: span[0],
+      end: span[1],
+      rewrite: rewriter(node.alt ?? ""),
+      rendered: !hidden.has(node),
+    });
   }
   return refs.sort((a, b) => a.start - b.start);
 }

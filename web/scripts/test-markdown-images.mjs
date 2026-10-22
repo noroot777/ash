@@ -258,7 +258,9 @@ try {
   // 两边一致地把带括号的文件名截断、把缩进代码里的示例当成真图)。所以这里在 Node 里数
   // 解析结果,在浏览器里数同一段正文真渲染出来的 `<img>`,两个数字必须相等。
   for (const shape of IMAGE_SHAPES) {
-    const expected = markdownImageRefs(shape.markdown).length;
+    // 比的是「扫描器说**渲染器会画**的那几处」:没人引用的脚注定义里那种,扫描器照旧逐处
+    // 交代(服务端流式扫的时候还不知道引用会不会来,见 shared 的 `rendered`),但它不该画。
+    const expected = markdownImageRefs(shape.markdown).filter((ref) => ref.rendered).length;
     assert.equal(
       await page.locator(`.shape-${shape.key} .task-markdown img`).count(),
       expected,

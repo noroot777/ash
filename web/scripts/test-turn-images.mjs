@@ -489,4 +489,20 @@ assert.match(
   "字节丢了就显式作废,不退到当前文件",
 );
 
+// ⑰ 渲染器压根不画的那一处**不许认领卡片**:没人引用的脚注定义整节不渲染(见 shared 的
+// `rendered`),那张图一个像素都不会出现在屏幕上。认领的唯一后果是把卡片从排里拿掉,所以
+// 认了就是两头都没了 —— 跟 ⑮' 同一条不变量的另一张脸。
+const orphanFootnote = [{
+  id: "of:0",
+  markdown: "正文一个字都没引用它。\n\n[^a]: 证据：![孤儿](output/orphan.svg)\n",
+  events: [],
+  attachments: [uploads("7777cccc0000-orphan.svg")],
+  attachmentSources: [{ path: uploads("7777cccc0000-orphan.svg"), source: "output/orphan.svg", ref: 0 }],
+}];
+assert.deepEqual(
+  cardsOf(orphanFootnote, "C0ojRgeQnMsa"),
+  [uploads("7777cccc0000-orphan.svg")],
+  "渲染器不画的那一处,拷贝必须留在卡片里",
+);
+
 console.log("回合图片配对(trace → 分段 → 正文)回归通过");

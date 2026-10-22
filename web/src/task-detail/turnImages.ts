@@ -165,7 +165,9 @@ export function turnImageDocument(
     }
     if (!url) continue;
     edits.push({ start: ref.start, end: ref.end, text: ref.rewrite(url) });
-    if (claim) used.add(claim);
+    // 渲染器压根不画的那一处(没人引用的脚注定义里,见 shared 的 `rendered`)**不许认领**:
+    // 认领的唯一后果是把卡片从排里拿掉,而那张图一个像素都不会出现在屏幕上 —— 两头都没了。
+    if (claim && ref.rendered) used.add(claim);
   }
   if (!edits.length) return unchanged;
 
