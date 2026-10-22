@@ -15,11 +15,13 @@
 // 的预期值验不出这件事 —— 第 1 轮审查 F1 点的正是这个（`printf 'DONE\n' | tail -f` 几毫秒就
 // 退出 0，却因为「认出了 `-f`」被 409）。
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { neverExitsOnItsOwn, neverExitsVerdict } from "@ash/shared/command-never-exits";
 import { readSource } from "../../scripts/read-source.mjs";
 import { HERE, root, startMonitor, stopMonitor, makeTask, teardown } from "./monitors-fixture.js";
+import { IS_WINDOWS, userShellLaunch } from "../src/platform.js";
 
 /** `[这一条该拦, 判定它的写法, 同一条命令少了那一项 ⇒ 该放行]`。 */
 type Pair = readonly [string, string, string];
@@ -279,6 +281,87 @@ const passes = (command: string, why: string) =>
     assert.equal(denied.ok ? 0 : denied.status, 409, `${why}：${command}`);
   }
   console.log("✓ 硬拦资格：会自己结束的那几条真的建得出来，而前提真成立的、读不出来的、起因命令照旧 409");
+}
+// ── ⑧ 真 shell 对账:判据说的那件事,交给 shell 量一遍（新一轮审查 F1 的根因）───────────
+// 前七节量的都是「判据怎么答」,而连着两轮审查点中的是同一件事:**判据跟真实退出语义脱节**,
+// 并且每次都是「预期表里又抄了一条字符串」漏出来的 —— golden 全绿和缺陷同时成立,所以「全绿」
+// 本身证不了资格。这一节不信判据也不信我:把命令**真的交给用户那把 shell 跑一遍**（起壳走的是
+// 产品同一个 `userShellLaunch`）,按它到底退不退出来定预期。
+//
+// 只有一个方向是不变量:**真 shell 里它自己退了 ⇒ 不许硬拦**。反方向不是 —— 挂住了也允许放行
+// （漏判 = 今天的行为;硬拦错了是把能做的事变成做不成,代价对不上,见判据文件头）。所以下面
+// 「照旧该拦」的那几条是我们**选定要留**的真阳性,不是从「它挂住了」推出来的;明写的漏判也单
+// 列一组钉住,免得哪天有人把它当缺陷顺手「修」成硬拦。
+if (IS_WINDOWS) {
+  console.log("✓ 硬拦资格：真 shell 对账这一节只在 POSIX 壳上跑（这批命令语料是 sh 的）");
+} else {
+  /**
+   * 把命令真的跑一遍：`ms` 毫秒内自己退出了就是 `true`。这几条要么几毫秒就退、要么永远不退，
+   * 所以窗口给得紧；判错也不会悄悄过去 —— 下面每一组都先断言自己的前提。
+   *
+   * 超时就把**整组**杀掉，这一节自己造的进程自己收（`detached` 让子进程当组长，于是
+   * `kill(-pid)` 连管道里那几个成员一起收）。
+   */
+  const shellExits = (command: string, ms = 1500): Promise<boolean> => {
+    const launch = userShellLaunch(command);
+    return new Promise((resolve) => {
+      const child = spawn(launch.file, launch.args, { detached: true, stdio: "ignore" });
+      const reap = () => {
+        try { if (child.pid) process.kill(-child.pid, "SIGKILL"); } catch { /* 已经没了 */ }
+      };
+      const timer = setTimeout(() => { reap(); resolve(false); }, ms);
+      child.on("exit", () => { clearTimeout(timer); reap(); resolve(true); });
+      // 起不起来另说（壳都没跑成），反正不是「它挂在那儿」。
+      child.on("error", () => { clearTimeout(timer); resolve(true); });
+    });
+  };
+  const measured = async (command: string, exits: boolean) =>
+    assert.equal(
+      await shellExits(command), exits,
+      `这一组的前提:它该在真 shell 里${exits ? "自己退出" : "挂住"} —— ${command}`,
+    );
+
+  const taskId = await makeTask();
+  writeFileSync(join(root, "really-here.log"), "x\n");
+  const missing = join(root, "definitely-missing-ash-review");
+
+  // 真 shell 里自己退出 ⇒ 创建闸必须放行。
+  for (const command of [
+    "while true; do printf 'DONE\\n'; done | head -n 1",
+    "set -e; while true; do false; done",
+    `tail -f ${missing}; printf 'DONE\\n'`,
+    "printf 'DONE\\n' | tail -f",
+    "set -e; false; tail -F /dev/null",
+  ]) {
+    await measured(command, true);
+    const made = await startMonitor({ taskId, command, description: "真 shell 里自己退了", timeoutMs: 4000 });
+    assert.equal(made.ok, true, made.ok ? "" : `真 shell 实测它自己退了,不许硬拦：${command} / ${made.error}`);
+    if (made.ok) await stopMonitor(made.monitor.id, "真 shell 对账那一节跑完了");
+  }
+
+  // 真 shell 里挂住、而且我们**选定要拦**的那几条:降级不许把这几条一起放掉。
+  for (const command of [
+    "tail -F /dev/null",
+    "while true; do :; done",
+    `tail -f ${join(root, "really-here.log")}`,
+    "tail -F build-nope.log 2>/dev/null | grep --line-buffered ERROR",
+  ]) {
+    await measured(command, false);
+    const denied = await startMonitor({ taskId, command, description: "真 shell 里挂住了" });
+    assert.equal(denied.ok, false, `这一条是选定要留的真阳性,不许放行：${command}`);
+    assert.equal(denied.ok ? 0 : denied.status, 409, command);
+  }
+
+  // **明写的漏判**:恒真循环一旦有下游,「有人一直在读我的 stdout」这条前提就没了（下游先退
+  // 出它当场收 SIGPIPE）—— 而「下游到底会不会一直读」判据读不出来,于是整条放行。它在真
+  // shell 里确实挂住,这里把这件事钉成文档:哪天想收它,得先拿出那份证明,而不是把闸改回去。
+  for (const command of ["while true; do :; done | head -n 1"]) {
+    await measured(command, false);
+    const made = await startMonitor({ taskId, command, description: "明写的漏判", timeoutMs: 4000 });
+    assert.equal(made.ok, true, made.ok ? "" : `这是明写的漏判,不是硬拦：${command} / ${made.error}`);
+    if (made.ok) await stopMonitor(made.monitor.id, "真 shell 对账那一节跑完了");
+  }
+  console.log("✓ 硬拦资格：每条预期都跟真 shell 的退出语义对过账（它自己退了的一律放行）");
 }
 console.log("✓ 硬拦资格：输入来源 / argv 的出口 / shell 状态 三项任一读不出来就降级 均受回归保护");
 await teardown();
