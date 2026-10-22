@@ -37,7 +37,7 @@ requireTmpDb("test-upload-visibility");
 
 // 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { notes, projects, tasks, uploads } = await import("../src/db/schema.js");
+const { notes, projects, tasks, uploads, users } = await import("../src/db/schema.js");
 const { UPLOADS_DIR } = await import("../src/paths.js");
 const mode = await import("../src/auth/mode.js");
 const store = await import("../src/auth/store.js");
@@ -343,7 +343,42 @@ try {
   const blindPack = await collectUploads([exportText], [], false, await readableUploads(null));
   assert.deepEqual(blindPack.map((u) => u.name), [], "认不出身份就不该带走任何附件");
 
-  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 接力落地 + 出境打包 + 存量认领)");
+
+  // ── ⑨ 升级回填:claim_origin 落地前完成的转换(复审 R4) ────────────────
+  // 老库在 claim_origin 这一列存在之前就转过多人:当时统一代管补的 owner 没有标记,
+  // 升级后被当成真私有,可信产物清单(backfillArtifactUploads 只传 {taskId})补不回
+  // 任务归属。ensureSchema 按可核实依据回填:owner=最早的管理员、无任务归属、建行
+  // 不晚于该管理员建档后 60 秒;窗口之外的(真私有只可能在 setup 完成拿到 key 之后)
+  // 一个不动。
+  {
+    const { backfillArtifactUploads } = await import("../src/uploads.js");
+    const bossRow = (await db.select().from(users).where(eq(users.id, boss.id)))[0]!;
+    const bossAt = Date.parse(bossRow.createdAt);
+    writeFileSync(join(UPLOADS_DIR, "pre-mark.txt"), "pre-mark-body");
+    writeFileSync(join(UPLOADS_DIR, "post-mark.txt"), "post-mark-body");
+    await db.insert(uploads).values([
+      { file: "pre-mark.txt", ownerUserId: boss.id, taskId: null, claimOrigin: null,
+        createdAt: new Date(bossAt + 30_000).toISOString() },
+      { file: "post-mark.txt", ownerUserId: boss.id, taskId: null, claimOrigin: null,
+        createdAt: new Date(bossAt + 120_000).toISOString() },
+    ] as never);
+    await ensureSchema();
+    const marked = (await db.select().from(uploads).where(eq(uploads.file, "pre-mark.txt")))[0]!;
+    const kept = (await db.select().from(uploads).where(eq(uploads.file, "post-mark.txt")))[0]!;
+    assert.equal(marked.claimOrigin, "conversion", "窗口内的无标记代管行升级时补上标记");
+    assert.equal(kept.claimOrigin, null, "窗口外的行是真私有,不许被回填敞开");
+    // 功能面:补了标记的,可信产物清单事后补得回任务归属,项目成员读得到;没补的照旧只认人。
+    await backfillArtifactUploads("t-legacy", [join(UPLOADS_DIR, "pre-mark.txt"), join(UPLOADS_DIR, "post-mark.txt")]);
+    assert.equal((await get("pre-mark.txt", AS_ALICE)).text, "pre-mark-body", "回填标记后老任务产物对项目成员可见");
+    assert.equal((await get("post-mark.txt", AS_ALICE)).status, 404, "真私有不因产物清单引用而敞开");
+    assert.equal((await get("post-mark.txt", AS_BOSS)).text, "post-mark-body", "本人照常读得到");
+    // 幂等:再跑一遍 ensureSchema,已打标记/已豁免的行都不再变动。
+    await ensureSchema();
+    const again = (await db.select().from(uploads).where(eq(uploads.file, "post-mark.txt")))[0]!;
+    assert.equal(again.claimOrigin, null, "重复升级不扩大窗口");
+  }
+
+  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 接力落地 + 出境打包 + 存量认领 + 升级回填)");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

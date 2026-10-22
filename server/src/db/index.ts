@@ -610,6 +610,27 @@ export async function ensureSchema() {
       /* column already exists */
     }
   }
+  // claim_origin 落地**之前**就完成的自用→多人转换:当时统一代管的行没有标记,升级后仍被
+  // 当成真私有,可信产物清单也补不回任务归属(审查第 8 轮复审 R4)。可核实的转换依据:
+  //   · 转换人 = setup 建立的第一位管理员(最早的 admin 行);
+  //   · 转换的落行都发生在那一次 setup 请求里 —— 统一补 owner 的孤儿行建于转换**之前**
+  //     (单用户时期),conversion 自己插的行与管理员建档同一请求,都不晚于建档后 60 秒;
+  //   · 而「真私有」(本人上传)只可能发生在 setup 完成、拿到 key 之后,落在窗口之外。
+  // 只动 owner=转换人、taskId 为空、尚无标记的行;幂等(打过标记的不再命中)。窗口的残余
+  // 风险(管理员在 setup 后 60 秒内上传私有附件、且其路径日后出现在某条任务的可信产物清单
+  // 里)窄到可以接受,且只及转换人自己的文件。
+  try {
+    const admin = (await client.execute("SELECT id, created_at FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1")).rows.at(0);
+    if (admin?.id && typeof admin.created_at === "string") {
+      const cutoff = new Date(Date.parse(admin.created_at) + 60_000).toISOString();
+      await client.execute({
+        sql: "UPDATE uploads SET claim_origin = 'conversion' WHERE claim_origin IS NULL AND task_id IS NULL AND owner_user_id = ? AND created_at <= ?",
+        args: [String(admin.id), cutoff],
+      });
+    }
+  } catch {
+    /* users 表还没建(全新库):没有历史转换可修 */
+  }
   // **必须排在上面那串容错 ALTER 之后**：这条索引引用 `native_id`，而老库那一列是靠
   // ALTER 补上的。放进上面的建表块里会要了命——`CREATE TABLE IF NOT EXISTS` 对已存在的
   // 表什么都不做（不补列），索引紧接着引用一个还不存在的列，整个 executeMultiple 抛出，
