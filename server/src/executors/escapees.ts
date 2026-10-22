@@ -31,7 +31,7 @@ import {
   earliestStartMs, subtreesOf, unresolvedTopology, type ProcessSubtree,
 } from "../process-subtrees.js";
 import { childKillAuthorized } from "./child-identity.js";
-import type { CleanupOpen } from "./cleanup-result.js";
+import { joinOpen, unitOpen, type CleanupOpen } from "./cleanup-result.js";
 import { runOutPathOf, unitTokenOf } from "./unit-token.js";
 import {
   holderMayOwn, holderScanFault, holdersMayExist, noSuchFileProbe, probeFileHolders, trackPathOf,
@@ -203,7 +203,14 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
     // 问不出来 ≠ 没有后代:不杀也不记账,而且这一轮**不算问清楚**(上一版把它吞掉,
     // 于是「进程表挂了」和「确实没有后代」一样走到释放证据那一句)。
     faults.push("进程树问不出来(ps / /proc 这一问失败)");
-    return { targets: [], answered: false, faults, open, unit };
+    // **记号这一台已经答出来的那几个成员照样交出去**(第 11 轮审查 F1):进程表那一问失败
+    // 不会让它们消失,而它们自带 pid + 同源代次 —— 整条链上最硬的那种归属证明。上一版在
+    // 这里返回空名单,于是「表挂了」这一下把一份已经到手的身份也一起丢了。
+    return {
+      targets: [], answered: false, faults,
+      open: joinOpen(open, unitOpen(unit, "记号认下的本次运行成员")),
+      unit,
+    };
   }
   // 表读到了、可是其中几行连号都没认出来:那几行在表里等于不存在,而这条路靠「缺席」下
   // 结论 —— 所以这一轮不算问清楚。有号没代次的那一档在下面逐棵树报(`tree.unverified`),
@@ -267,10 +274,19 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   if (freshUnit.verdict === "ours") {
     for (const m of freshUnit.members) seeds.push({ pid: m.pid, authority: "unit", gen: m.gen });
   }
+  // **记号认下的成员自带归属证明,所以它入名单不取决于进程表上找不找得到它**
+  // (第 11 轮审查 F1 的同一条边)。表那一刻没覆盖到它(快照之后才出生、或者那一行没解析
+  // 出来)时,`subtreesOf` 给不出它的树、`rootStillAuthorized` 这一关压根走不到,于是它
+  // 既不是 target 也不进名单 —— 一份到手的硬证据就这么没了。两次扫描都并进来:名单只增
+  // 不减,确证退了的由 `dischargeOpen` 在消费侧核销(所以正常收尾不会押假债)。
+  open.push(
+    ...unitOpen(unit, "记号认下的本次运行成员"),
+    ...unitOpen(freshUnit, "记号认下的本次运行成员"),
+  );
   if (!seeds.length) {
     // 一条归属线索都没有时同样要答这一问:表的完整性跟「我们找到了几个落点」无关。
     topologyGap([child.pid ?? 0]);
-    return { targets: [], answered: !faults.length, faults, open, unit: freshUnit };
+    return { targets: [], answered: !faults.length, faults, open: joinOpen(open), unit: freshUnit };
   }
 
   const provenUnit = new Map<number, ProcessGeneration>(
@@ -319,7 +335,11 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
     ...trees.flatMap((t) => [t.seed.pid, ...t.descendants.map((m) => m.pid), ...t.unverified]),
     ...targets.keys(),
   ]);
-  return { targets: [...targets.values()], answered: !faults.length, faults, open, unit: freshUnit };
+  // `open` 里可能有同一条身份的两个来源(记号 + 树上核验不了),`joinOpen` 按「号@代」去重。
+  return {
+    targets: [...targets.values()], answered: !faults.length, faults,
+    open: joinOpen(open), unit: freshUnit,
+  };
 }
 
 /** 这个文件是什么时候落地的(毫秒)。问不出来就 null —— 它只用来当「不可能更早」的下界。 */

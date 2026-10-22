@@ -41,13 +41,13 @@ const { agentCleanupDebts } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 
 let bad = 0;
-const ok = (m: string) => console.log(`   \u2713 ${m}`);
-const fail = (m: string) => { bad += 1; console.log(`   \u2717 ${m}`); };
+const ok = (m: string) => console.log(`   ✓ ${m}`);
+const fail = (m: string) => { bad += 1; console.log(`   ✗ ${m}`); };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const rowOf = async (key: string) => {
   const listing = await listAllCleanupDebts();
-  if (!listing.ok) throw new Error(`\u503a\u8868\u8bfb\u4e0d\u51fa\u6765:${listing.reason}`);
+  if (!listing.ok) throw new Error(`债表读不出来:${listing.reason}`);
   return listing.debts.find((d) => d.unitToken === key);
 };
 
@@ -65,7 +65,7 @@ async function livesSomewhere(key: string, pid: number): Promise<{
   const inMemory = pendingCleanupNoteCount() > 0;
   return {
     row: onRow, pending: inMemory,
-    where: `\u884c\u4e0a=${onRow ? "\u6709" : "\u65e0"} \u5f85\u6295=${inMemory ? "\u6709" : "\u65e0"}`,
+    where: `行上=${onRow ? "有" : "无"} 待投=${inMemory ? "有" : "无"}`,
   };
 }
 
@@ -81,29 +81,29 @@ console.log("\n1) 身份来源收口:确认过归属的成员,只有退出证据
   const liveGen = processGenerationSync(livePid);
 
   const owed = openLedger();
-  owed.own([{ pid: livePid, gen: liveGen }], "\u5939\u5177:\u5df2\u786e\u8ba4\u5f52\u5c5e\u3001\u6ca1\u6572\u5230\u5b83");
+  owed.own([{ pid: livePid, gen: liveGen }], "夹具:已确认归属、没敲到它");
   // 这一轮「点的名」是空的(父边读得出来、没有 fault),可账本上有一个已确认的活成员。
   owed.add([]);
   if (owed.verdict().kind !== "empty" && owed.left().some((o) => o.pid === livePid)) {
-    ok(`\u8fd9\u4e00\u8f6e\u4e00\u4e2a\u540d\u6ca1\u70b9\u3001\u8d26\u4e0a\u6709\u4e00\u4e2a\u6d3b\u6210\u5458 \u21d2 \u7ed3\u8bba\u662f ${owed.verdict().kind},\u4e0d\u662f empty`);
-  } else fail("\u5df2\u786e\u8ba4\u7684\u6d3b\u6210\u5458\u6ca1\u62e6\u4f4f\u5224\u7a7a \u2014\u2014 \u5c31\u662f\u5ba1\u67e5\u5b9e\u6d4b\u7684\u90a3\u4e00\u4e0b");
+    ok(`这一轮一个名没点、账上有一个活成员 ⇒ 结论是 ${owed.verdict().kind},不是 empty`);
+  } else fail("已确认的活成员没拦住判空 —— 就是审查实测的那一下");
 
   alive.kill("SIGKILL");
   await wait(400);
   if (owed.verdict().kind === "empty" && !owed.left().length) {
-    ok("\u5b83\u9000\u4e86\u4e4b\u540e\u540c\u4e00\u672c\u8d26\u81ea\u5df1\u6d88\u89e3 \u2014\u2014 \u6b63\u5e38\u6536\u5c3e\u4e0d\u538b\u5047\u503a");
-  } else fail(`\u6709\u9000\u51fa\u8bc1\u636e\u4e86\u8fd8\u8d56\u7740\u4e0d\u8d70(${owed.verdict().kind})`);
+    ok("它退了之后同一本账自己消解 —— 正常收尾不压假债");
+  } else fail(`有退出证据了还赖着不走(${owed.verdict().kind})`);
 
   // 同一个号的两代是两份责任(第 9 轮审查 F1-D),`own` 这条路上同样不许混。
   const twoGen = openLedger();
-  twoGen.own([{ pid: livePid, gen: liveGen }], "\u5939\u5177:\u65e7\u90a3\u4e00\u4ee3");
-  twoGen.own([{ pid: livePid, gen: "t:\u522b\u7684\u90a3\u4e00\u4ee3" }], "\u5939\u5177:\u65b0\u90a3\u4e00\u4ee3");
-  if (twoGen.left().length === 0) ok("\u4e24\u4ee3\u90fd\u6709\u9000\u51fa\u8bc1\u636e\u65f6\u4e24\u6761\u4e00\u8d77\u6d88\u89e3");
-  else fail(`\u8fd9\u4e24\u6761\u672c\u8be5\u90fd\u88ab\u6838\u9500(\u5269 ${twoGen.left().length} \u6761)`);
+  twoGen.own([{ pid: livePid, gen: liveGen }], "夹具:旧那一代");
+  twoGen.own([{ pid: livePid, gen: "t:别的那一代" }], "夹具:新那一代");
+  if (twoGen.left().length === 0) ok("两代都有退出证据时两条一起消解");
+  else fail(`这两条本该都被核销(剩 ${twoGen.left().length} 条)`);
 }
 
 // ── 第二节:持久交接(落脚处那条不变量)──────────────────────────────────────────
-console.log("\n2) \u8d23\u4efb\u4ea4\u63a5:noted \u8981\u610f\u5473\u7740\u8fd9\u51e0\u4e2a\u53f7\u771f\u7684\u6709\u4eba\u63a5\u4f4f\u4e86");
+console.log("\n2) 责任交接:noted 要意味着这几个号真的有人接住了");
 {
   const key = "unit:ownership-handoff";
   const idle = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
@@ -117,14 +117,14 @@ console.log("\n2) \u8d23\u4efb\u4ea4\u63a5:noted \u8981\u610f\u5473\u7740\u8fd9\
   const note = (open: { pid: number; gen: string | null; why: string }[]) => noteCleanupDebt({
     unitToken: key, taskId: "t-own", sessionId: "s-own",
     rootPid: goneRoot, rootStartedAt: null, trackPath: null, outPath: null,
-    state: "unknown", detail: "\u5939\u5177", unitVerdict: "unprovable", open,
+    state: "unknown", detail: "夹具", unitVerdict: "unprovable", open,
   });
 
   // 前提:先落一笔合法的,行上有名单。
-  await note([{ pid: pidA, gen: genA, why: "\u5939\u5177:\u5148\u70b9\u4e0a\u540d" }]);
+  await note([{ pid: pidA, gen: genA, why: "夹具:先点上名" }]);
   const seeded = await livesSomewhere(key, pidA);
-  if (seeded.row) ok("\u524d\u63d0:\u7b2c\u4e00\u7b14\u843d\u4e86\u5e93,\u884c\u4e0a\u70b9\u7740\u8fd9\u4e2a\u53f7");
-  else fail(`\u5939\u5177\u6ca1\u843d\u4e0b(${seeded.where})`);
+  if (seeded.row) ok("前提:第一笔落了库,行上点着这个号");
+  else fail(`夹具没落下(${seeded.where})`);
 
   // C/D:把行上那一列弄成读不出来,再来一笔**带新身份**的。行会写成功,而这一列一个字不动 ——
   // 旧名单因此没丢(那是对的),可新身份一个都没交出去,所以这一笔不许冒充 noted。
@@ -133,14 +133,14 @@ console.log("\n2) \u8d23\u4efb\u4ea4\u63a5:noted \u8981\u610f\u5473\u7740\u8fd9\
   const pidB = other.pid!;
   const genB = processGenerationSync(pidB);
   await db.update(agentCleanupDebts)
-    .set({ openMembers: "{\u4e0d\u662f\u6570\u7ec4" })
+    .set({ openMembers: "{不是数组" })
     .where(eq(agentCleanupDebts.unitToken, key));
-  const verdict = await note([{ pid: pidB, gen: genB, why: "\u5939\u5177:\u65b0\u53d1\u73b0\u7684\u6d3b\u8eab\u4efd" }]);
-  if (verdict === "failed") ok("\u65e7\u540d\u5355\u8bfb\u4e0d\u51fa\u6765 \u21d2 \u5982\u5b9e\u62a5\u300c\u6ca1\u843d\u4e0b\u300d,\u4e0d\u5192\u5145 noted");
-  else fail(`\u8fd9\u4e00\u7b14\u62a5\u7684\u662f ${verdict} \u2014\u2014 \u53d9\u8ff0\u843d\u4e86\u5c31\u7b97\u8d23\u4efb\u63a5\u4f4f\u4e86\uff0c\u5c31\u662f\u5ba1\u67e5\u5b9e\u6d4b\u7684\u90a3\u4e00\u4e0b`);
+  const verdict = await note([{ pid: pidB, gen: genB, why: "夹具:新发现的活身份" }]);
+  if (verdict === "failed") ok("旧名单读不出来 ⇒ 如实报「没落下」,不冒充 noted");
+  else fail(`这一笔报的是 ${verdict} —— 叙述落了就算责任接住了，就是审查实测的那一下`);
   const half = await livesSomewhere(key, pidB);
-  if (half.pending) ok(`\u800c\u4e14\u5b83\u8fd8\u6709\u843d\u811a\u5904:${half.where}`);
-  else fail(`\u8fd9\u4e2a\u6d3b\u8eab\u4efd\u54ea\u513f\u90fd\u4e0d\u5728\u4e86(${half.where})`);
+  if (half.pending) ok(`而且它还有落脚处:${half.where}`);
+  else fail(`这个活身份哪儿都不在了(${half.where})`);
 
   // E:补投这一笔同样要问「接住了吗」。名单还是坏的 ⇒ 投不进去,清单上那一笔不许丢。
   //
@@ -151,8 +151,8 @@ console.log("\n2) \u8d23\u4efb\u4ea4\u63a5:noted \u8981\u610f\u5473\u7740\u8fd9\
   // 虚报成已证实故障,只要求两条出口的确认语义一致。
   const stuck = await flushPendingCleanupNotes();
   if (stuck.pending > 0 && (await livesSomewhere(key, pidB)).pending) {
-    ok("\u8865\u6295\u6ca1\u4eba\u63a5 \u21d2 \u6e05\u5355\u4e0a\u90a3\u4e00\u7b14\u7559\u7740(\u4e0d\u662f\u6253\u4e00\u884c\u65e5\u5fd7\u5c31\u5b8c\u4e8b)");
-  } else fail(`\u8865\u6295\u628a\u8d23\u4efb\u4e22\u4e86(pending=${stuck.pending})`);
+    ok("补投没人接 ⇒ 清单上那一笔留着(不是打一行日志就完事)");
+  } else fail(`补投把责任丢了(pending=${stuck.pending})`);
 
   // 名单修好之后那一笔要能落下去 —— 这条不变量是「不许丢」,不是「永远卡着」。
   await db.update(agentCleanupDebts)
@@ -160,18 +160,87 @@ console.log("\n2) \u8d23\u4efb\u4ea4\u63a5:noted \u8981\u610f\u5473\u7740\u8fd9\
     .where(eq(agentCleanupDebts.unitToken, key));
   await flushPendingCleanupNotes();
   const landed = await livesSomewhere(key, pidB);
-  if (landed.row) ok("\u884c\u4e0a\u90a3\u4e00\u5217\u4fee\u597d\u4e4b\u540e,\u90a3\u4e2a\u53f7\u843d\u5230\u4e86\u884c\u4e0a");
-  else fail(`\u8ddf\u8fdb\u4e0d\u4e0a\u53bb(${landed.where})`);
+  if (landed.row) ok("行上那一列修好之后,那个号落到了行上");
+  else fail(`跟进不上去(${landed.where})`);
 
   // F:两个号都退了之后,同一份判据要能把账销掉(假债同样是故障)。
   idle.kill("SIGKILL");
   other.kill("SIGKILL");
   await wait(500);
   const swept = await sweepAgentCleanupDebts();
-  if (!swept.ok) throw new Error(`\u6e05\u626b\u6ca1\u7ed9\u51fa\u7ed3\u8bba:${swept.reason}`);
-  if (!await rowOf(key)) ok("\u4e24\u4e2a\u53f7\u90fd\u9000\u4e86 \u21d2 \u8fd9\u4e00\u884c\u9500\u6389,\u4e0d\u7559\u5047\u503a");
-  else fail("\u6709\u9000\u51fa\u8bc1\u636e\u4e86\u8fd8\u7559\u7740\u884c \u2014\u2014 \u90a3\u662f\u53e6\u4e00\u5934\u7684\u6545\u969c");
+  if (!swept.ok) throw new Error(`清扫没给出结论:${swept.reason}`);
+  if (!await rowOf(key)) ok("两个号都退了 ⇒ 这一行销掉,不留假债");
+  else fail("有退出证据了还留着行 —— 那是另一头的故障");
 }
 
-console.log(bad ? `\n\u2717 ${bad} \u9879\u672a\u901a\u8fc7` : "\n\u2713 \u5168\u90e8\u901a\u8fc7");
+// ── 第三节:记号证据的确证成员(它跨不过 exec)────────────────────────────────────
+console.log("\n3) 记号认下的成员:确证过那一刻就是唯一的窗口");
+{
+  // 第 11 轮审查 F1 实测那条链的代数核心:`ours` 的成员自带 pid + 跟记号同源的那一代,是
+  // 整条链上最硬的归属证明 —— 可它**跨不过 `exec`**。成员收到 TERM 之后 `execle` 换一个
+  // 干净环境,pid 和那一代一个字没变,记号那一问却从此答 `none`。上一版两次读数只喂给
+  // `signalMembers`,判定那一步收不到它们,于是「刚朝它开过刀」的成员在下一句变成「这台
+  // 设备说没有」,行被真的 DELETE(审查读数:同一个进程仍 alive、心跳 53→58,债表 0 行)。
+  const { unitOpen } = await import("../src/executors/cleanup-result.js");
+  const { markerResidue } = await import("../src/executors/cleanup-debt-judge.js");
+  const { openOf } = await import("../src/executors/cleanup-result.js");
+  const mine = process.pid;
+  const gen = processGenerationSync(mine);
+  const ours = { verdict: "ours", members: [{ pid: mine, gen }] } as const;
+  const gone = { verdict: "none" } as const;
+
+  if (unitOpen(ours, "夹具").some((o) => o.pid === mine && o.gen === gen)) {
+    ok("ours 的成员带着号 + 同源代次交出来");
+  } else fail("ours 的成员没有转成未决身份");
+
+  // `suspected` 是 `ps -E` 的展示文本(macOS):只证明看得见,不给落点,所以也不点名 ——
+  // 点了名就等于拿一份弱证据去押一笔核不动的债(判据见 proc.ts 那一层)。
+  const weak = { verdict: "suspected", pids: [mine] } as const;
+  if (!unitOpen(weak, "夹具").length && !unitOpen(gone, "夹具").length) {
+    ok("suspected / none 不点名(弱证据不押账)");
+  } else fail("把展示文本档当成确证身份了");
+
+  // **这一刻 ours、下一刻 none,身份不许消失** —— 就是 exec 那一下的代数等价物。
+  const owed = openLedger();
+  owed.add(unitOpen(ours, "记号认下、这一轮朴过刀的成员"));
+  owed.add(unitOpen(gone, "下一次读数"));
+  if (owed.verdict().kind !== "empty" && owed.left().some((o) => o.pid === mine)) {
+    ok("下一次记号答 none 也洗不掉它(exec 换不掉 pid 和那一代)");
+  } else fail("下一次答 none 就把它忘了 —— 审查实测的那条链");
+
+  // 判定那一侧:ours 这一档要把成员点在结论上,`touchDebtRow` 落的就是 `openOf(result)`,
+  // 所以点在这里等于跨得过重启。
+  const said = markerResidue(ours, true);
+  const mute = markerResidue(weak, true);
+  if (said && openOf(said).some((o) => o.pid === mine) && mute && !openOf(mute).length) {
+    ok("判定侧:ours 点名、suspected 不点(身份跟着行落盘)");
+  } else fail(`判定侧没把 ours 的成员点在结论上(${said?.kind})`);
+}
+
+// ── 第四节:执行这条不变量的那道闸,自己也要跨平台 ────────────────────────────────
+console.log("\n4) 结论类型的绕过闸:owner 豁免不能在 Windows 上失效");
+{
+  // 第 11 轮审查 F3:那道闸原本拿 `relative()` 的结果去跟一个写死正斜杠的字符串逐字比,
+  // 而 Windows 原生 `relative` 返回反斜杠 —— 恒不等,于是 owner 自己那几处合法定义被当成
+  // 绕过,build 前置退 1、tsc 压根跑不到。这台机器是 macOS,所以**把两套路径语义都显式
+  // 跑一遍**(`path.win32` / `path.posix`),而不是等真机才发现。
+  const { isOwnerFile, OWNER_SEGMENTS } = await import("../../scripts/check-cleanup-evidence.mjs");
+  const { win32, posix } = await import("node:path");
+
+  const winRoot = "D:\\ai_workspace\\ash";
+  const winOwner = win32.join(winRoot, ...OWNER_SEGMENTS);
+  const posixRoot = "/Users/fjh/code/harness";
+  const posixOwner = posix.join(posixRoot, ...OWNER_SEGMENTS);
+
+  if (isOwnerFile(winOwner, winRoot, win32)) ok(`Windows 语义下认得出 owner(${winOwner})`);
+  else fail(`Windows 上 owner 豁免失效 —— build 会被误拦(${winOwner})`);
+  if (isOwnerFile(posixOwner, posixRoot, posix)) ok("POSIX 语义下照旧认得出");
+  else fail("POSIX 上反而认不出 owner 了");
+  // 反面:别的文件不许被当成 owner(豁免放宽了等于那道闸形同虚设)。
+  const other = win32.join(winRoot, "server", "src", "single-run.ts");
+  if (!isOwnerFile(other, winRoot, win32)) ok("别的文件不会被豁免");
+  else fail("豁免匹配太宽,那道闸形同虚设");
+}
+
+console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
 process.exit(bad ? 1 : 0);

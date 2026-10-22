@@ -28,7 +28,7 @@ import {
 } from "./track-evidence.js";
 import {
   cleanupRetriable, describeOpen, dischargeOpen, joinOpen, judgeByClues, mergeClueAnswers,
-  nothingToCollect, residueFromProbe, sweptClean,
+  nothingToCollect, residueFromProbe, sweptClean, unitOpen,
   type CleanupOpen, type CleanupResult, type ClueAnswer,
 } from "./cleanup-result.js";
 
@@ -311,7 +311,17 @@ export function markerResidue(
 ): CleanupResult | null {
   if (!marked) return null;
   switch (evidence.verdict) {
-    case "ours": case "suspected":
+    // **`ours` 的成员点名,`suspected` 不点**(判据见 cleanup-result.ts 的 `unitOpen`)。
+    // 这一档上一版把两者合在一起给空名单,于是这一轮答 `remaining`、把行留下,而**身份
+    // 没落到行上**;下一轮成员 `exec` 换掉环境(pid 和那一代一个字没变),记号那一问答
+    // `none`,行就被销掉了 —— 第 11 轮审查 F1 实测的那条链。`touchDebtRow` 落的是
+    // `openOf(result)`,所以点在这里就等于跨得过重启。
+    case "ours":
+      return {
+        kind: "remaining", detail: describeEvidence(evidence),
+        open: unitOpen(evidence, "记号认下的本次运行成员"),
+      };
+    case "suspected":
       return { kind: "remaining", detail: describeEvidence(evidence), open: [] };
     case "unprovable":
       // 这台机器**结构性读不到别的进程的环境块**(win32)跟「这一次查询失败」不是一件事:

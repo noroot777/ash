@@ -32,7 +32,7 @@ import {
 } from "./escapees.js";
 import {
   joinOpen, judgeByClues, mergeClueAnswers, nothingToCollect, openLedger, openOf,
-  residueFromProbe, sweptClean,
+  residueFromProbe, sweptClean, unitOpen,
   type CleanupOpen, type CleanupResult, type ClueAnswer,
 } from "./cleanup-result.js";
 // 只借类型:持久层是按需加载的(它拉起整个 db 层),不许在这里长出静态依赖。
@@ -383,7 +383,14 @@ function judgeCleanup(sweep: SweepOutcome, token: string | null): CleanupResult 
     if (sweep.unit.verdict === "ours" || sweep.unit.verdict === "suspected") {
       clues.push({
         subject: "descendants",
-        answer: { kind: "remaining", detail: describeEvidence(sweep.unit), open: [] },
+        answer: {
+          kind: "remaining", detail: describeEvidence(sweep.unit),
+          // **`ours` 的成员点名,`suspected` 不点**(判据见 cleanup-result.ts 的 `unitOpen`):
+          // 前者是真实环境项读出来的 pid + 同源代次,后者只是 `ps -E` 的展示文本。这一档
+          // 上一版一律给空名单,于是「这一刻确证还有成员」下一刻被 exec 洗成 none 就销了账
+          // (第 11 轮审查 F1)。
+          open: unitOpen(sweep.unit, "记号认下的本次运行成员"),
+        },
       });
     } else if (sweep.unit.verdict === "none") {
       clues.push({ subject: "descendants", answer: nothingToCollect() });
@@ -449,6 +456,9 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   const owed = openLedger();
   owed.add(first.open);
   owed.own(first.targets, "本次运行已确认的后代,还没有它的退出证据");
+  // 记号那一台**每一次**答 `ours` 都要入账(第 11 轮审查 F1):它跨不过 `exec`,所以
+  // 「这一次确证过」是唯一的窗口,错过就再也问不出来了。
+  owed.add(unitOpen(first.unit, "记号认下的本次运行成员"));
   /**
    * 三条出路共用的收尾读数。**记号与两个运行专属文件都在这里重新问一次** ——
    * 上一版把 `first.unit` / `second.unit`(下刀**之前**那次取证)当成最终结论往上传,于是
@@ -470,6 +480,7 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
     // 收尾这次的三份身份一起入账(见 `owed` 那段的①②③)。`ledgerOf` 这一份是关键的那条:
     // 它记着**这一轮认过的全部后代**,所以「这一刻的视野里看不见了」不等于它退了。
     owed.add(final.open);
+    owed.add(unitOpen(final.unit, "记号认下的本次运行成员"));
     owed.own(final.targets, "这次运行的后代,收尾之后仍活着");
     owed.own(ledgerOf(child), "本次运行认下过的后代,这一刻的视野里不一定看得见");
     // 账本自己核销一遍:确证退了的(号上没人 / 同一坐标系里换了代)就地消解 —— 所以正常
@@ -514,6 +525,7 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   const second = await killEscapees(child, "SIGKILL");
   faults.push(...second.faults.filter((f) => !faults.includes(f)));
   owed.add(second.open);                          // 第二次扫描点的名同样只增不减
+  owed.add(unitOpen(second.unit, "记号认下的本次运行成员"));
   owed.own(second.targets, "本次运行已确认的后代,还没有它的退出证据");
   killed.push(...second.hit);
   // **最终残存者如实往上传**(上一版把这份名单丢掉了):它正是「还没收干净」最硬的那种证据。

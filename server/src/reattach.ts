@@ -10,9 +10,13 @@ import type { AgentType, SessionRole } from "@ash/shared";
 import type { RunHandle } from "./executors/types.js";
 import { db } from "./db/index.js";
 import { agents, freeReviewRuns, tasks, sessions } from "./db/schema.js";
-import { bindTurnToken, claimTurn, discardStartingRun, releaseTurn, trackRun } from "./runs.js";
+import {
+  bindTurnToken, claimTurn, discardStartingRun, finalizeAbandonedRun, releaseTurn, trackRun,
+  type Killable,
+} from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
+import { cleanupAfterRun } from "./executors/kill.js";
 import { RUNS_DIR } from "./paths.js";
 import { consumeSingleRun } from "./single-run.js";
 import { isSameProcess } from "./proc.js";
@@ -129,6 +133,20 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
     });
     if (!child) continue; // 它已经不在了 → 交给 reconcileInterrupted
 
+    /**
+     * **拿到原始进程的那一刻就有了清理责任**(第 11 轮审查 F2 实测)。
+     *
+     * 句柄还没构造出来,可进程是真的、它甩出去的后代也是真的。上一版这几个失败出口只
+     * `child.kill()` —— 那一刀只收一个根(`killByPid`),它 `setsid` 出去的后代还在写文件,
+     * 而且**一笔责任都没落**:审查实测根已退出、后代仍活着、债表 0 行、再点停止也没反应,
+     * 事后连一条可追的记录都没有。
+     *
+     * 所以这里先立一个**带 cleanup 的所有者**:`finalizeAbandonedRun` 走到它身上时会跑完整的
+     * 后代回收 + 责任交接(`cleanupAfterRun` 自己落 `agent_cleanup_debts`)。句柄构造成功、
+     * 被消费循环接管之后,所有权转给 `discardStartingRun(task.id, handle)` —— 那条路上的
+     * `handle.cleanup` 是同一个 finalizer。
+     */
+    const rawOwner: Killable = { kill: () => child.kill(), cleanup: () => cleanupAfterRun(child) };
     // 这两样都声明在 try **之外**:接管半路失败时,失败出口得够得着它们才还得回去（原先
     // 都在 try 里面,于是那条 catch 既撤不掉句柄登记、也还不回回合锁 —— 第 8 轮审查 N1
     // 的同类窗口）。
@@ -143,8 +161,11 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         reasoningEffort: null,
       });
       if (!ex.attach) {
-        child.kill();
-        continue; // 该执行器不支持接管：别让进程失联地跑着，停掉按中断处理
+        // 不支持接管:别让进程失联地跑着。**跟异常分支同一条收尾** —— 内置执行器目前都有
+        // attach,所以这一支没有现行配置能触发,但它跟那条 catch 面对的是同一件事(手上只有
+        // 原始进程),不该各走一套(第 11 轮审查 F2)。
+        await finalizeAbandonedRun(rawOwner);
+        continue;
       }
       handle = ex.attach(child, {
         sessionId: sess.cliSessionId ?? "",
@@ -239,8 +260,10 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       // 却什么都停不了）,后者让这个任务在本进程里**再也起不来**（claimTurn 一直占着）。
       // 接管失败就按中断处理,进程一起收掉 —— 同上面 `!ex.attach` 那一支的口径:别让它失联
       // 地跑着（第 8 轮审查 N1）。
+      // 句柄构造成功了就按句柄那条路收(它自带同一个 finalizer);还没构造出来就走原始进程
+      // 那个所有者 —— 后代回收和责任交接一个都不能少(第 11 轮审查 F2)。
       if (handle) discardStartingRun(task.id, handle);
-      else child.kill();
+      else await finalizeAbandonedRun(rawOwner);
       if (claimedTurn) releaseTurn(task.id);
     }
   }

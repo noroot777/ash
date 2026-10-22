@@ -20,7 +20,8 @@ import { now } from "../util.js";
 import { processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { signalMembers } from "./escapees.js";
 import {
-  cleanupDetail, joinOpen, openOf, type CleanupOpen, type CleanupResult,
+  cleanupDetail, joinOpen, openLedger, openOf, unitOpen,
+  type CleanupOpen, type CleanupResult,
 } from "./cleanup-result.js";
 // **判据在隔壁那一份**:这里只管账本的读写,「这一刻算不算空、该销还是该收档」问它。
 import {
@@ -575,16 +576,31 @@ async function pushDebtLocked(key: string): Promise<SweepVerdict> {
   const marked = isMarked(key);
   const opening = processUnitEvidence(marked ? key : null, { fresh: true });
 
+  /**
+   * **这一轮确证过的身份,一份都不许只用来发信号**(第 11 轮审查 F1 实测)。
+   *
+   * `ours` 的成员自带 pid + 跟记号同源的那一代,是全链条最硬的归属证明 —— 可它**跨不过
+   * `exec`**:成员收到 TERM 之后换一个干净环境(`execle`),pid 和那一代一个字没变,记号
+   * 那一问却从此答 `none`。上一版这两次读数只喂给 `signalMembers`,判定那一步只收到
+   * 待投清单,于是「刚朝它开过刀」的成员在下一句变成「这台设备说没有」,行被真的 DELETE
+   * (审查读数:同一个进程仍 alive、心跳 53→58,债表 0 行)。
+   *
+   * 入账之后由 `dischargeOpen` 的退出证据消解,所以**真的退了的那些不会押成假债**。
+   */
+  const owed = openLedger();
   if (marked && opening.verdict === "ours") {
+    owed.add(unitOpen(opening, "记号认下、这一轮朝它开过刀的成员"));
     // 自带归属证明 + 同源代次 ⇒ 这一档敢下刀。`signalMembers` 每一刀之前重核代次。
     signalMembers(opening.members, "SIGTERM");
     await new Promise((r) => { const t = setTimeout(r, 2000); (t as { unref?: () => void }).unref?.(); });
     const again = processUnitEvidence(marked ? key : null, { fresh: true });
+    owed.add(unitOpen(again, "记号认下、这一轮朝它开过刀的成员"));
     if (again.verdict === "ours") signalMembers(again.members, "SIGKILL");
   }
 
   // **记号与路径都在(可能的)下刀之后才取证**:下刀前那次读数说明不了下刀后的事。
-  const judged = await judgeDebtRow(debt, pendingOpenOf(key));
+  // 两份未决身份一起交给判定:待投清单上那几笔,以及这一轮刚确证过的那几个成员。
+  const judged = await judgeDebtRow(debt, joinOpen(pendingOpenOf(key), owed.left()));
   const { after, result } = judged;
 
   switch (debtDisposition(judged)) {

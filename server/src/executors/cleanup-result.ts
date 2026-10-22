@@ -39,6 +39,7 @@
 // 两问之间反过来是**合取**:哪一问没有任何设备作答,整条结论就是 `silent` —— 不许销账,
 // 但可以「追到这里为止」(收档:停止自动重试、保留记录与定位线索)。
 import { isPidAlive } from "../platform.js";
+import type { UnitEvidence } from "../proc.js";
 import { currentGeneration } from "../process-generation.js";
 import { holderMayOwn, holderScanFault, type HolderProbe } from "./track-evidence.js";
 
@@ -194,6 +195,25 @@ export type OpenLedger = {
   /** 这本账这一刻的结论:欠干净了 ⇒ `empty`,还欠着 ⇒ `unknown` 带名单(见 `sweptClean`)。 */
   verdict(): CleanupResult;
 };
+
+/**
+ * 一份记号证据里**已确证**的身份。**全仓唯一的转换出口** —— 消费 `ours` 的地方一律经它。
+ *
+ * 为什么必须有这么一个函数,而不是各处自己 `.members.map()`(第 11 轮审查 F1 实测):
+ * `ours` 这一档是**真实环境项**读出来的,每个成员自带 pid + 跟记号同源的那一代 —— 这是
+ * 全链条里最硬的一种归属证明。可它**跨不过 `exec`**:成员收到 TERM 之后 `execle` 换一个
+ * 干净环境,pid 和那一代一个字没变,记号那一问却从此答 `none`。于是「上一刻刚确证过、刚
+ * 朝它开过刀」的成员,在下一刻变成「这台设备说没有」,把行删了 —— 审查实测:同一个进程
+ * 仍 alive、心跳 53→58,而债表 0 行。
+ *
+ * **`suspected` 不在这里**:那一档是 `ps -E` 的展示文本(macOS),它只证明「看得见」,
+ * 证明不了那个号上就是带着记号的那个进程 —— 按 proc.ts 那一层的规矩它不给落点,所以这里
+ * 也不点名(点了名就等于拿一份弱证据去押一笔核不动的债)。
+ */
+export const unitOpen = (evidence: UnitEvidence, why: string): CleanupOpen[] =>
+  evidence.verdict === "ours"
+    ? evidence.members.map((m) => ({ pid: m.pid, gen: m.gen, why }))
+    : [];
 
 export function openLedger(): OpenLedger {
   let all: CleanupOpen[] = [];
