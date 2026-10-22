@@ -400,11 +400,32 @@ setInterval(() => {}, 1000);
   // 整串都是空白的那种（`"  "`）不在这一档:它跟「这一栏没填」分不开,也本来就是表单的
   // 口径（`MonitorComposer` 只在 trim 之后还有字时才传 stopWhen）—— 那一种会落到下面
   // 「没给结束条件」的 409 上,而不是 400。
-  for (const pattern of ["^(OK", "^(a+)+$", "OK|", "OK$FAILED", "^ $", "^\t$", "^ $|  "]) {
+  // **「带换行的字样」也在这一档**（新一轮审查 N2）:匹配是跟**一行**比的（输出早就按 LF
+  // 拆成独立的行了）,所以 `READY\nFAILED` 这个字样配得上、却不可能出现在任何一行里 ——
+  // 审查实测 `parseEndCondition("READY\nFAILED")` 返回 ok:true,保存了一个含 LF 的 needle。
+  // 主要撞上它的是直接调接口/MCP 的多行字符串入参。
+  for (const pattern of [
+    "^(OK", "^(a+)+$", "OK|", "OK$FAILED", "^ $", "^\t$", "^ $|  ",
+    "READY\nFAILED", "READY\r\nFAILED", "^READY\nFAILED$",
+  ]) {
     const bad = await startMonitor({ taskId, command: follower, stopWhen: pattern });
-    assert.equal(bad.ok, false, `用不了的结束条件要拒：${pattern}`);
+    assert.equal(bad.ok, false, `用不了的结束条件要拒：${JSON.stringify(pattern)}`);
     assert.equal(bad.ok ? 0 : bad.status, 400);
-    if (!bad.ok) assert.match(bad.error, /不是正则|不在两头|空的|空白/, `拒绝要说清为什么：${pattern}`);
+    if (!bad.ok) {
+      assert.match(
+        bad.error, /不是正则|不在两头|空的|空白|换行/,
+        `拒绝要说清为什么：${JSON.stringify(pattern)}`,
+      );
+    }
+  }
+  // 换行那一档要指明出路（多候选用 `|`）,不然人只会把它改成另一个永不命中的写法。
+  const nl = parseEndCondition("READY\nFAILED");
+  assert.equal(nl.ok, false, "带换行的字样永远不会命中，不许收下");
+  if (!nl.ok) assert.match(nl.error, /\|/, "拒掉的同时要给出多候选的正确写法");
+  // 两头的 `\r`/`\n` 只是粘贴带进来的空白,trim 掉就是个正常字样 —— 不许连它一起拒。
+  // 落在**行中间**的 `\r` 同样不拒:行是按 LF 切的,它仍然可能出现在某一行里。
+  for (const pattern of ["READY\n", "\nREADY", "READY\r\n", " READY \n", "READY\rFAILED"]) {
+    assert.equal(parseEndCondition(pattern).ok, true, `这一条不是「字样里有换行」：${JSON.stringify(pattern)}`);
   }
   // ↑ 拒的只是**整段都是空白**的那种。正文两头真实的空格仍然是正文（`endConditionHit` 不用
   //   trim 的理由就在这儿）—— 下面这两条照收,不然这道校验就把一种合法意图一起拒了。

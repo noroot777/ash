@@ -14,6 +14,7 @@ import { monitors } from "./db/schema.js";
 import { deliverResultHandoff } from "./monitor-events.js";
 import { ensureSupervised } from "./monitor-handover.js";
 import { tailLines } from "./monitor-spawn.js";
+import { hitOf, matchedReason } from "./monitor-consume.js";
 import {
   claimFinish, commitProgress, monitorLogBytes, publish, pushLines, serialize, teardownRuntimeLocked,
   type Row,
@@ -90,16 +91,31 @@ export async function finishOffline(
       // 在 `commitProgress` 里,这一路运行时刚撤掉,内存里本来就没有没结清的内容）。
       else if (readTo !== base.offset) await commitProgress(base.id, readTo);
 
+      // **补读到的那一行命中,跟在线排干读到的是同一份证据**（新一轮审查 N1 实测:停服期间
+      // 日志里已经出现约定的字样,正文补送成功、`events=1`,而卡片上写的仍是「进程已经不在
+      // 了」，不是「等到了约定的那一行」）。判据跟在线那一侧同一个函数（`hitOf`）,不在这儿
+      // 另写一遍。
+      //
+      // **只换标签,不抹掉「进程为什么没了」**:这一路从来拿不到退出码（照旧 `exitCode: null`），
+      // 而且 ash 不在的时候那个进程是跑完了、被谁杀了、还是机器重启了,只有传进来的那句话答
+      // 得出来 —— 所以把它原样接在后面,而不是换掉它（在线那一侧的折叠见 monitor-finish.ts
+      // 的 `foldHit`）。只折 `lost` 这一档:别的终态是更确定的事实,不许被一行日志改写。
+      const hit = hitOf(base, collected);
+      const outcome = hit !== null && status === "lost" ? "matched" : status;
+      const note = hit !== null && status === "lost"
+        ? `${matchedReason(hit)} —— 这一行是 ash 不在期间补读到的：${reason}`
+        : reason;
+
       // 同上:凭证跟终态一条语句落库(第 1 轮审查 F1 的对称面 —— 离线收尾也是「先结束、后通知」)。
       // **这句话跟在线那条收尾一字同源**(第 1 轮审查 N2):事件数与「有没有产出过」要给 agent
       // 当面说清,不能只写给人看的时间线 —— 它拿到一句光秃秃的结束通知,分不出「哨兵哑了」
       // 和「我漏读了几条」。两处都用这一份 tally,所以读也只读一次。
       const tally = monitorEventTally(events, monitorLogBytes(base.logPath));
-      const endNotice = `【哨兵结束】${base.description}（monitorId=${base.id}）。${reason}（${tally}）`;
+      const endNotice = `【哨兵结束】${base.description}（monitorId=${base.id}）。${note}（${tally}）`;
       const result = await db
         .update(monitors)
         .set({
-          status, endedAt: now(), endedReason: reason, exitCode: null,
+          status: outcome, endedAt: now(), endedReason: note, exitCode: null,
           resultHandoffAt: now(), resultHandoffText: endNotice,
         })
         .where(and(eq(monitors.id, base.id), eq(monitors.status, "running")));
@@ -111,7 +127,7 @@ export async function finishOffline(
       }
       publish(base.taskId);
       // 同上:问日志文件,不问游标也不问这一趟读到哪(两者都只是「送出去多少」的影子)。
-      await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${reason}（${tally}）`);
+      await appendTaskTimeline(base.taskId, `哨兵结束：${base.description}。${note}（${tally}）`);
       await deliverResultHandoff(base.id);
     } finally {
       // 撤运行时排在读日志之前(自己那条 tail 不停下来就会边收尾边继续推),所以中间这一段

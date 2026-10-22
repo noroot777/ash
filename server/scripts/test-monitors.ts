@@ -322,7 +322,42 @@ setTimeout(() => { clearInterval(keep); process.exit(0); }, 30000);
   assert.match(texts, /约定的那一行在后面/, "离线补读也要把命中那一行单独补上");
   assert.match(texts, /OFFLINE_RESULT=0 全跑完了/, "补上的就是那一行原文");
   assert.match(texts, /这一批共 60 行/, "台子前提：这一批确实超过了正文的行数上限");
-  console.log("✓ 离线补读继承命中行保留契约：排在第 41 行往后的结束结果照旧送到");
+  // **补读到的命中要折进那个结局**（新一轮审查 N1 实测:正文补送成功、`events=1`,而卡片上
+  // 写的仍是「进程已经不在了」而不是「等到了约定的那一行」）—— 同一份证据不许两种说法。
+  const folded = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(folded.status, "matched", `补读到约定的那一行 ⇒ 标签跟在线那一侧同一个（实际 ${folded.status}）`);
+  assert.match(folded.endedReason ?? "", /等到了约定的那一行/, "结局要说出它是怎么收的");
+  assert.match(folded.endedReason ?? "", /OFFLINE_RESULT=0/, "命中那一行要写进结局");
+  // **「进程为什么没了」那句话不许被抹掉**:ash 不在的时候它是跑完了、被杀了还是机器重启了,
+  // 只有传进来的那句话答得出来;退出码这一路从来就拿不到。
+  assert.match(folded.endedReason ?? "", /拿不到退出码/, "原来那句话要原样接在后面，不是换掉");
+  assert.equal(folded.exitCode, null, "不许拿命中去冒充一次正常退出");
+  assert.match(texts, /等到了约定的那一行/, "结束通知跟库里那句话同源");
+  console.log("✓ 离线补读继承命中行保留契约：排在第 41 行往后的结束结果照旧送到，命中也折进结局");
+}
+// ── ⑦k 反面:补读出来的那几行**没有**命中 ⇒ 结局照旧是「它已经不在了」（新一轮审查 N1）───
+// 上一节那一道只能证明「命中时会折」,证不出「不命中时不会乱折」—— 少了这一条，把折叠写成
+// 无条件的也照旧绿。
+{
+  const taskId = await makeTask();
+  const monitorId = await insertMonitorRow(taskId, { status: "running" });
+  await db.update(monitors).set({ stopWhen: "^OFFLINE_RESULT=" }).where(eq(monitors.id, monitorId));
+  const seeded = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  writeFileSync(seeded.logPath, "noise 1\nnoise 2\n");
+  const { finishOffline } = await import("../src/monitor-offline-finish.js");
+  await finishOffline(seeded, "lost", "命令已经不在了（server 重启期间跑完的，拿不到退出码）");
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(row.status, "lost", `没命中就不许说成命中（实际 ${row.status}）`);
+  assert.doesNotMatch(row.endedReason ?? "", /等到了约定的那一行/, "没等到就别说等到了");
+  // **只折「它已经不在了」这一档**:别的终态是更确定的事实,不许被一行日志改写。
+  const other = await insertMonitorRow(taskId, { status: "running" });
+  await db.update(monitors).set({ stopWhen: "^OFFLINE_RESULT=" }).where(eq(monitors.id, other));
+  const otherRow = (await db.select().from(monitors).where(eq(monitors.id, other))).at(0)!;
+  writeFileSync(otherRow.logPath, "OFFLINE_RESULT=0 全跑完了\n");
+  await finishOffline(otherRow, "expired", "盯满了约定的时长");
+  const expired = (await db.select().from(monitors).where(eq(monitors.id, other))).at(0)!;
+  assert.equal(expired.status, "expired", `传进来的终态更确定时不许折（实际 ${expired.status}）`);
+  console.log("✓ 离线补读没命中时结局照旧是「它已经不在了」：折叠认的是证据，不是无条件");
 }
 // ── 事件上限：推满自动停，而且**不会把自己锁死** ─────────────────────────────
 // 这一条同时守两件事：到顶要真的停（每条事件都在烧回合），以及收尾必须能跑完 ——
