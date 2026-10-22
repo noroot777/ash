@@ -43,7 +43,7 @@ import { resolveExecutorFor } from "../executors/index.js";
 import { LOST_SESSION_PATCH } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeRunError } from "../transcript.js";
-import { recordUserConversationTurn } from "../conversation-turn.js";
+import { recordUserConversationTurn, type UserTurnOrigin } from "../conversation-turn.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
@@ -114,9 +114,9 @@ export function teamIsLive(taskId: string): boolean {
 export async function deliverToLead(
   taskId: string,
   text: string,
-  opts: { attachments?: string[]; throwOnOpenFailure?: boolean } = {},
+  opts: UserTurnOrigin & { attachments?: string[]; throwOnOpenFailure?: boolean } = {},
 ): Promise<boolean> {
-  return deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure);
+  return deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure, opts);
 }
 
 // 执行者汇报/提问,以及 ash 自己的唤醒语(inbox.ts 用)。
@@ -170,6 +170,7 @@ async function deliver(
   text: string,
   kind: Kind,
   throwOnOpenFailure = false,
+  origin: UserTurnOrigin = {},
 ): Promise<boolean> {
   let lead = leads.get(taskId);
   // 进程还活着,但它脚下的目录已经没了 —— 典型情形:调度者按用户吩咐删掉了自己
@@ -213,7 +214,7 @@ async function deliver(
       // 这一档仍算「接管了」(true):失败原因已经如实写进会话,消息本身是随开台一起
       // 送出去的,退回队列重试只会把同一份错误再演一遍。
       try {
-        await open(taskId, text, kind);
+        await open(taskId, text, kind, origin);
       } catch (err) {
         await reportOpenFailure(taskId, err);
         if (throwOnOpenFailure) throw err;
@@ -234,7 +235,7 @@ async function deliver(
     }
   }
   // 拒收的回执一路往上传:调用方拿它决定「这句话到底算不算送出去了」(见 push)。
-  return push(lead, text, kind);
+  return push(lead, text, kind, origin);
 }
 
 
@@ -291,9 +292,9 @@ async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
   await setTaskStatus(taskId, "idle");
 }
 
-function open(taskId: string, text: string, kind: Kind): Promise<Lead> {
+function open(taskId: string, text: string, kind: Kind, origin: UserTurnOrigin): Promise<Lead> {
   const cell = { halted: false } as Opening;
-  cell.promise = openLead(taskId, text, kind, cell).finally(() => {
+  cell.promise = openLead(taskId, text, kind, cell, origin).finally(() => {
     // 只摘自己那条:被 haltTeam 撤回之后,opening 里可能已经换成了后来那一台。
     if (opening.get(taskId) === cell) opening.delete(taskId);
   });
@@ -342,7 +343,7 @@ async function strandedByHalt(taskId: string, text: string, kind: Kind): Promise
  * 执行者汇报(inbound)被拒仍算 true:它有自己的持久待送队列接着(见 queueInbound),
  * 已经被接住了,不需要上层再管第二遍。
  */
-async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
+async function push(lead: Lead, text: string, kind: Kind, origin: UserTurnOrigin = {}): Promise<boolean> {
   if (!text.trim()) return true;
   clearIdle(lead);
   if (kind === "user") {
@@ -360,7 +361,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
       return false;
     }
     if (interrupted) recordSystemTurn(lead, INTERRUPT_NOTE, at);
-    recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at });
+    recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at, ...origin });
     // 回合身份用**投递口那一刻**的（`turnAt`）：`sendToLead` 收下消息时就按它持有住了,这里
     // 另取一个时刻就等于同一轮登记两个起点,其中一个谁都不会来收（见 lead-delivery.ts）。
     // 时间线上那条用户发言仍用 `at`（他说话的时刻,早于投递）。取不到投递口那一刻时交给
@@ -391,7 +392,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
 }
 
 // ── 开台 / 接回 ─────────────────────────────────────────────────────────────
-async function openLead(taskId: string, rawText: string, kind: Kind, cell: Opening): Promise<Lead> {
+async function openLead(taskId: string, rawText: string, kind: Kind, cell: Opening, origin: UserTurnOrigin): Promise<Lead> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("task not found");
   if (task.mode !== "team") throw new Error("不是团队任务");
@@ -561,7 +562,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
   // 运行按钮带来的首个任务 prompt 不另记 turn；用户亲自发来的消息无论是否顺手
   // 打开了调度台，都必须成为可持久、可实时同步的一条 user turn。
-  if (kind === "user") recordUserConversationTurn({ taskId, sessionId: sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at: turnStart });
+  if (kind === "user") recordUserConversationTurn({ taskId, sessionId: sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at: turnStart, ...origin });
   else if (resuming) recordSystemTurn(lead, text, turnStart);
   void beginTurn(lead, turnStart);
   return lead;

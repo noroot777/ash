@@ -84,26 +84,54 @@ const TRACE_TAIL_BYTES = 256 * 1024;
  * agent 段没有自己的时间戳，得靠前后段落推，跨轮复用的会话上尤其容易推错。
  */
 export async function turnProducedWork(taskId: string, sessionId: string, turnStartedAt: string): Promise<boolean> {
-  const path = readableRunPath(sessionTracePath(taskId, sessionId));
-  let raw: string;
+  let raw: string | null;
   try {
-    const info = await stat(path);
-    const length = Math.min(info.size, TRACE_TAIL_BYTES);
-    const handle = await open(path, "r");
-    try {
-      const buffer = Buffer.alloc(length);
-      await handle.read(buffer, 0, length, info.size - length);
-      raw = buffer.toString("utf8");
-    } finally {
-      await handle.close();
-    }
+    raw = await readTraceTail(taskId, sessionId);
   } catch {
-    // 没有 trace（老会话、产物被清过）= 无从证明它干过活。默认走「重发整份任务书」那档，
-    // 那一档在任何上下文状态下都是对的，只是费一点 token。
-    return false;
+    raw = null;
   }
+  // 没有 trace（老会话、产物被清过）、或者这次压根读不出来 = 无从证明它干过活。默认走
+  // 「重发整份任务书」那档，那一档在任何上下文状态下都是对的，只是费一点 token。
+  if (raw === null) return false;
   return parseSessionTrace(raw).some((entry) => entry.turnStartedAt === turnStartedAt
     && (entry.event.kind === "text" || entry.event.kind === "tool" || entry.event.kind === "attachment"));
+}
+
+/**
+ * trace 的**尾巴**(最后 TRACE_TAIL_BYTES 字节)。文件不在回 null —— 2026-08-01 之前跑完的
+ * 会话压根没有这个文件,那跟「读失败」是两回事,所以其余错误照抛给调用方自己定。
+ */
+async function readTraceTail(taskId: string, sessionId: string): Promise<string | null> {
+  const path = readableRunPath(sessionTracePath(taskId, sessionId));
+  let info: Awaited<ReturnType<typeof stat>>;
+  try {
+    info = await stat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const length = Math.min(info.size, TRACE_TAIL_BYTES);
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, info.size - length);
+    return buffer.toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * 这条会话 trace 尾巴里的条目,**原样带着 at / turnStartedAt**。
+ *
+ * 给的是「每几秒拉一次」的窄出口用的(手机端读不动整份 trace,见 session-waiting.ts 的
+ * failedTurnNotices):只读尾巴是因为这类消费者问的都是「这一轮怎么了」,答案一定贴在文件
+ * 末尾;切口上那半行 JSON 解析不过,parseSessionTrace 自己会丢掉。文件不在就是没有,
+ * **读失败照抛** —— 咽掉的话一次磁盘故障会被读成「什么都没发生」。
+ */
+export async function readRecentTraceEntries(taskId: string, sessionId: string): Promise<SessionTraceEntry[]> {
+  const raw = await readTraceTail(taskId, sessionId);
+  return raw === null ? [] : parseSessionTrace(raw);
 }
 
 /**
@@ -252,7 +280,7 @@ export function writeTurn(
   // aside:true = 任务时间线旁注（appendTaskTimeline 那一路）。同样必须落盘：它跟「继续
   // （从中断处）」那类真回合起点在盘上长得一模一样，而两者的读法正相反——旁注砸在回合
   // 中间纯属偶然，拿它当回合边界就会把一条回复劈成两半（见 shared/src/events.ts）。
-  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice"; aside?: true },
+  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice"; aside?: true; monitorWake?: import("@ash/shared/monitor-wake").MonitorWakeData },
   at: string,
 ): void {
   out.write(`\n${TURN_SENTINEL}${JSON.stringify({ ...turn, at })}\n`);

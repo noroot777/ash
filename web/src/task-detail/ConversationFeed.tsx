@@ -41,6 +41,8 @@ import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts"
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
 import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
 import { canForkReply } from "./conversationFork.ts";
+import { MonitorWakeReply } from "./MonitorWakeInput.tsx";
+import { monitorWakeInput, monitorWakeReplyIds } from "./monitorWakeModel.ts";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -59,6 +61,7 @@ function AgentMessage({
   hideTime,
   laneRole,
   onFork,
+  wakeReply,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
   /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
@@ -68,6 +71,7 @@ function AgentMessage({
   /** 这条气泡在审查卡里的位置：卡头已经把身份（lead 还包括时间）说过一遍了。 */
   laneRole?: ReviewLaneMessageRole;
   onFork?: () => void;
+  wakeReply?: boolean;
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   const reviewer = item.reviewer;
@@ -123,6 +127,7 @@ function AgentMessage({
             <CopyButton value={item.markdown} ariaLabel="复制这条回复" icon />
           </header>
         )}
+        {wakeReply && <MonitorWakeReply />}
         <AgentTurnBody segments={item.segments} running={!item.endedAt} />
         {/* 账目一律在尾栏，头部不放。位置不许随「是不是会话最后一条」变——
             那样同一个数会在气泡顶和气泡底之间跳，而这条规则用户看不见。 */}
@@ -153,7 +158,7 @@ function UserMessage({
   const paths = [...parsed.paths, ...item.attachments];
   const bySystem = !!item.bySystem;
   const reviewPrompt = isReviewSystemPrompt(item.text);
-  if (bySystem && !preserveSystemStyle && !reviewPrompt) {
+  if (bySystem && (!preserveSystemStyle || monitorWakeInput(item)) && !reviewPrompt) {
     return <SystemAuthoredMessage item={item} mode={noticeMode} />;
   }
   return (
@@ -249,6 +254,7 @@ export function ConversationFeed({
   // 一整场辩论折成一行，排在系统旁注收拢之前 —— 反过来的话，那七条「轮到 X 发言」会先
   // 被 conversationSystemRows 收进摘要行，辩论就再也认不出自己的边界了。
   const rows = conversationSystemRows(conversationDebateRows(conversationFeedRows(items, { reviews }), { reviews }));
+  const wakeReplies = monitorWakeReplyIds(items);
   // 「执行者驳回了，现在由你裁定」那条旁注上挂一颗「去裁定」——那句话把出路列了出来，
   // 却没给任何能点的东西（用户 2026-09-24：「直接给个按钮不行吗」）。
   //
@@ -297,6 +303,7 @@ export function ConversationFeed({
         <AgentMessage
           key={item.id}
           item={item}
+          wakeReply={wakeReplies.has(item.id)}
           hideTime={hiddenTimes.has(item.id)}
           laneRole={laneRole}
           onFork={onForkReply && !loading && !error && !forkBlockedReason && canForkReply(item) ? () => onForkReply(item.id) : undefined}

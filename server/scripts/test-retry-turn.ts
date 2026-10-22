@@ -9,6 +9,12 @@ import { lastInputOf, latestSessionOf, retryTurnKindOf, retryTurnRejection } fro
 const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
   `\x1e${JSON.stringify({ t, agent: "claude", text, at: "2026-08-13T01:00:00.000Z", ...extra })}`;
 
+{
+  const monitorWake = { version: 1, events: [{ kind: "output", monitorId: "actual", source: "(monitorId=example)", body: "【你当初留下的续跑交代】日志" }], omittedEvents: 0 };
+  const input = lastInputOf(turn("user", "哨兵的原始输入", { by: "system", monitorWake }));
+  assert.deepEqual(input?.kind === "user" ? input.monitorWake : null, monitorWake);
+}
+
 // ── 续聊回合崩了：最后一段是我打的字 → 原样重投 ────────────────────────────
 {
   const seg = lastInputOf([

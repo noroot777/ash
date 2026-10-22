@@ -13,6 +13,7 @@
  * 归 `session.js` 持有,只能注进来。
  */
 import { Writable } from "node:stream";
+import { clearSessionWaiting } from "../session-waiting.js";
 import { setTaskStatus } from "../status.js";
 import { now } from "../util.js";
 import { closeLeadTurns } from "./lead-turns.js";
@@ -78,6 +79,10 @@ export function createLeadStatus({ leads, releasePending }: {
     // 晚到的旧收尾一起清掉（closeLead 的 superseded 分支就是这么进来的）。摘牌之后这台也不
     // 再接受新的持有 —— 晚到的回调开出来的回合谁都不会来收（第 8 轮审查必须修 1）。
     closeLeadTurns(lead);
+    // 内存里那条「此刻还在等上游」同理:摘牌这一瞬它就归接管的那台了。不在这儿撤,旧台
+    // 后面任何一条迟到事件都会去动新台的状态(闸在 session-waiting.ts 的持有者判定,这里
+    // 是**主动交牌**那一半:旧台自己攥着的那份当场作废,不等它什么时候才收尾)。
+    clearSessionWaiting(lead.sessId, lead);
     clearStatusRetry(lead);
     lead.wantedStatus = null;
     // 手上这批待送消息的**所有权**跟着牌子一起交出去(见 releasePending)。

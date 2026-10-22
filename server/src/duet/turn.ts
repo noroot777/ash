@@ -18,7 +18,7 @@ import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnS
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
-import { trackRun, untrackRun, isCanceling, CanceledRun } from "../runs.js";
+import { trackRun, untrackRun, isCanceling, peekStopped, CanceledRun } from "../runs.js";
 import type { AgentExecutor } from "../executors/types.js";
 import {
   LOST_SESSION_PATCH,
@@ -28,10 +28,12 @@ import {
   type SessionResumeFault,
 } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
+import { appendSessionTrace } from "../transcript.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
-import { isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
+import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
+import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
 import { recordTurnStart } from "./timeline.js";
 
@@ -277,6 +279,9 @@ export async function runTurn(args: {
     const TRACE_CAP = 200;
     try {
       for await (const event of handle.events) {
+        // 窄出口的「此刻还在等上游」同一处口径(见 session-waiting.ts):讨论这一路的正文
+        // 也是攒在内存里的,照落盘产物反推一样会在恢复之后还说正在重试。
+        trackSessionWaiting(rowId, handle, turnStart, event);
         const sessionNotice = isSessionScopeNotice(event);
         const emittedEvent = event.kind === "usage"
           ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
@@ -302,6 +307,23 @@ export async function runTurn(args: {
         } else if (event.kind === "system") {
           noticeMsg = `${noticeMsg ?? ""}\n${event.text}`.trim();
           out.write("⚠ " + event.text + "\n");
+        } else if (event.kind === "error" && isExecutionNotice(event)) {
+          // 过程里的一句提示(上游在重试、还在等回话):跟这一轮成败正交 —— 当成 error
+          // 会把一场正常收敛的讨论直接判失败,当成 sessionFault 会把好端端的会话 id 清掉。
+          // 跟普通任务同一个去处:落进本回合的执行过程,排在它发生的那个位置。
+          //
+          // **只进结构化过程,一个字都不写正文**(`out` 就是手机读的那份 `.md`)。从前这里
+          // 两边都写,于是一场重试过、后来正常答完的讨论,那句「正在重试」作为**正文**永久
+          // 留在回答里:窄出口成功后返回空数组只清得掉它那一路,清不掉已经落盘的正文,刷新
+          // 也不会消失(第 5 轮审查 F1,已实测)。单飞与团队早就不写了,讨论是最后一处。
+          // 等待期间手机看到的那句提示由窄出口 `/sessions/:id/notices` 给(权威状态在
+          // session-waiting.ts)。
+          if (trace.length < TRACE_CAP) trace.push({ kind: "notice", label: "提示", detail: event.message });
+          // 同一条也进**会话** trace:讨论自己那份 transcript 只有讨论界面读,而窄出口的
+          // 「失败现场」(真收在失败上的那一轮,照给它卡在哪儿)从会话 trace 回放 ——
+          // 不落这一笔,手机在一场**真失败**的讨论上一条线索都拿不到(F1 要的「为当前等待
+          // 和明确失败提供一致投影」)。这是结构化过程,不是正文:`.md` 仍然一个字不多。
+          appendSessionTrace(taskId, rowId, turnStart, event);
         } else if (event.kind === "error") {
           sessionFault = mergeSessionResumeFault(sessionFault, event.message);
           if (sessionNotice) {
@@ -319,6 +341,7 @@ export async function runTurn(args: {
       }
     } finally {
       untrackRun(taskId, handle);
+      clearSessionWaiting(rowId, handle); // 这一轮的消费结束了,等待状态跟着撤(见 session-waiting.ts)
       // 消费循环结束 = 这一轮不再写盘,**这一刻**就撤:后面那些收尾写库再慢再失败,读端
       // 也不会把这条会话继续当成「还在写」（第 6 轮审查必须修 1）。保证由外面那道 finally
       // 给（它盖住全部出口),这里只是把窗口收窄到真实的「还在写」那一段。
@@ -371,13 +394,27 @@ export async function runTurn(args: {
       .update(sessions)
       .set({
         exitStatus: exit,
+        // 被停的那一轮退出码跟崩溃一模一样(CLI 吃 SIGTERM 按 signal 写非零),所以结局要
+        // 自己落一列,不能让读端拿退出码猜 —— 口径与 single-run.ts、team/session-consumer.ts
+        // 的收尾写入同一条(见 session-waiting.ts 的 failedTurnNotices)。
+        stoppedAs: peekStopped(taskId),
         endedAt: endIso,
         activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${durationMs}`,
         ...(dropSession ? LOST_SESSION_PATCH : {}),
       })
       .where(eq(sessions.id, rowId));
     // 这一回合的区间（产物归属按它认人，不按会话寿命——会话行跨回合复用）。
-    await recordTurnSpan({ sessionId: rowId, taskId, cwd, startedAt: turnStart, endedAt: endIso });
+    // 结局口径与上面那笔 `stoppedAs` 同源:被停 = 受控停止;否则「非零退出或本轮判了错」
+    // 就是失败(`errorMsg` 包含空回复那种 exit 0 的退化失败,duet 自己也拿它中止讨论)。
+    // 谁来读见 session-waiting.ts 的 failedTurnNotices(第 5 轮审查 F3)。
+    await recordTurnSpan({
+      sessionId: rowId,
+      taskId,
+      cwd,
+      startedAt: turnStart,
+      endedAt: endIso,
+      outcome: peekStopped(taskId) ? "stopped" : exit !== 0 || errorMsg ? "failed" : "completed",
+    });
     // Persist the turn so a reloaded duet can rebuild its timeline (no live
     // events). Includes errors and non-fatal notices so reload preserves the same meaning as live SSE.
     try {

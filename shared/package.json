@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./monitor-wake": {
+      "types": "./src/monitor-wake.ts",
+      "default": "./src/monitor-wake.ts"
+    },
     "./cli-commands": {
       "types": "./src/cli-commands.ts",
       "default": "./src/cli-commands.ts"
@@ -69,6 +73,10 @@
     "./search": {
       "types": "./src/search.ts",
       "default": "./src/search.ts"
+    },
+    "./waiting": {
+      "types": "./src/waiting.ts",
+      "default": "./src/waiting.ts"
     },
     "./usage": {
       "types": "./src/usage.ts",

@@ -10,6 +10,7 @@ import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSource, monitorWakeGate, type MonitorSourceState } from "./monitor-session.js";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
+import { monitorWakeForDelivery } from "@ash/shared/monitor-wake";
 
 type Row = typeof scheduledMessages.$inferSelect;
 
@@ -111,6 +112,7 @@ export function deliveryVerdict(
 
 export function deliveryOptions(m: Row) {
   return {
+    monitorWake: monitorWakeForDelivery(m.monitorWake),
     attachments: JSON.parse(m.attachments) as string[],
     agent: (m.agent as AgentType) ?? undefined,
     // 要跑的还是用户当时选的那一套执行器/模型/思考强度（没选就是 null=按默认解析）。

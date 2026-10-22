@@ -27,13 +27,17 @@ import {
 } from "../task-detail/systemNoticeModel.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
+import { MonitorWakeReply } from "../task-detail/MonitorWakeInput.tsx";
+import { monitorWakeReplyIds } from "../task-detail/monitorWakeModel.ts";
 
 function AgentRow({
   row,
   hideTime,
+  wakeReply,
 }: {
   row: Extract<TeamFeedRow, { kind: "conv" }>["item"];
   hideTime?: boolean;
+  wakeReply?: boolean;
 }) {
   if (row.kind !== "agent") return null;
   const duration = durationBetween(row.at, row.endedAt);
@@ -52,6 +56,7 @@ function AgentRow({
           {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>{row.continuation ? "" : "· "}⏱ {duration} 用时</small>}
         </header>
       )}
+      {wakeReply && <MonitorWakeReply />}
       <AgentTurnBody segments={row.segments} running={!row.endedAt} />
       <MessageFooter
         turnUsage={row.usage}
@@ -203,6 +208,7 @@ export function TeamFeed({
   const noticeMode = INITIAL_SYSTEM_NOTICE_MODE;
   const showNoticeModeSwitch = SYSTEM_NOTICE_DEMO_REQUESTED;
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
+  const wakeReplies = monitorWakeReplyIds(rows.flatMap((row) => row.kind === "conv" ? [row.item] : []));
   const hiddenTimes = new Set<string>();
   let previousConversationItem: Extract<TeamFeedRow, { kind: "conv" }>["item"] | null = null;
   for (const row of rows) {
@@ -234,7 +240,7 @@ export function TeamFeed({
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
             const item = row.item;
-            if (item.kind === "agent") return <AgentRow key={row.key} row={item} hideTime={hiddenTimes.has(item.id)} />;
+            if (item.kind === "agent") return <AgentRow key={row.key} row={item} hideTime={hiddenTimes.has(item.id)} wakeReply={wakeReplies.has(item.id)} />;
             if (item.kind === "user") return <UserRow key={row.key} row={item} noticeMode={noticeMode} />;
             const inbound = parseInbound(item.text);
             if (inbound) {

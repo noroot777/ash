@@ -20,6 +20,7 @@ const [
   { db, ensureSchema },
   schema,
   runs,
+  tickets,
   steer,
   { bus },
   { mountTaskRunRoutes },
@@ -30,6 +31,7 @@ const [
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/runs.js"),
+  import("../src/task-confirmation.js"),
   import("../src/task-steer.js"),
   import("../src/bus.js"),
   import("../src/task-run-routes.js"),
@@ -42,6 +44,9 @@ await ensureSchema();
 
 const at = new Date().toISOString();
 await db.insert(projects).values({ id: "p", name: "steer", repoPath: root, apiKeys: null, createdAt: at });
+/** 内存那张完成票按「属于哪一代」存（task-confirmation.ts），所以存取两侧都得拿任务行上当下那一代。 */
+const directionEpochOf = async (id: string): Promise<number> =>
+  (await db.select({ epoch: tasks.directionEpoch }).from(tasks).where(eq(tasks.id, id))).at(0)!.epoch;
 const task = (id: string, extra: Partial<typeof tasks.$inferInsert> = {}): typeof tasks.$inferInsert => ({
   id,
   projectId: "p",
@@ -260,7 +265,8 @@ try {
   const claudeNativeHandle = {
     kill: () => {},
     steer: async (_text: string, beforeSend?: () => void | Promise<void>) => {
-      runs.confirmDone("claude-native-state");
+      // 内存那张票按它属于的那一代存（task-confirmation.ts）：这一刻清场已经旋转过方向，所以读当下这一代。
+      tickets.confirmDone("claude-native-state", await directionEpochOf("claude-native-state"));
       await db.update(tasks).set({
         completeConfirmedAt: "2026-08-26T11:59:59.000Z",
         resumePrompt: "旧方向迟到的检查点",
@@ -281,7 +287,8 @@ try {
   assert.equal(claudeNativeState.question, "新方向发送后的问题", "ACK 后的新方向状态不得被二次清理");
   assert.notEqual(claudeNativeState.activeDirectionToken, "claude-old-direction", "Claude 引导必须旋转方向 token");
   assert.equal(claudeNativeState.activeDirectionVersion, 2, "Claude 引导后必须进入第二个方向世代");
-  assert.equal(runs.takeConfirmed("claude-native-state"), false, "旧方向的内存完成票也必须清掉");
+  // `revokeConfirmed` 不比代次 ⇒ 回 false 就说明这一格一张票都没有（比「这一代的没有」更强）。
+  assert.equal(tickets.revokeConfirmed("claude-native-state"), false, "旧方向的内存完成票也必须清掉");
   runs.untrackRun("claude-native-state", claudeNativeHandle);
   runs.releaseTurn("claude-native-state");
   console.log("✓ Claude interrupt ACK 精确隔离旧方向与新方向状态");
@@ -393,7 +400,7 @@ try {
   let lateDbKills = 0;
   const lateDbHandle = { kill: () => { lateDbKills++; } };
   runs.trackRun("late-stop-db", lateDbHandle);
-  runs.confirmDone("late-stop-db");
+  tickets.confirmDone("late-stop-db", await directionEpochOf("late-stop-db"));
   const lateQuestionEvents: Array<{ question: string | null; questionOptions: unknown; questionItems: unknown }> = [];
   const unsubscribeLateQuestion = bus.subscribe((event) => {
     if (event.type === "task.question" && event.taskId === "late-stop-db") {
@@ -421,7 +428,10 @@ try {
   assert.equal(lateDbTask.questionItems, previousQuestionItems);
   assert.equal(lateDbTask.resumePrompt, previousResumePrompt, "晚到暂停不得吞掉旧检查点");
   assert.equal(lateDbTask.completeConfirmedAt, at, "晚到暂停不得吞掉旧完成票");
-  assert.equal(runs.takeConfirmed("late-stop-db"), true, "内存完成确认也应恢复");
+  assert.equal(
+    tickets.takeConfirmed("late-stop-db", await directionEpochOf("late-stop-db")), true,
+    "内存完成确认也应恢复，而且是**对当下这一代有效**地恢复（同一轮内没有新回合插进来）",
+  );
   assert.deepEqual(
     lateQuestionEvents.map((event) => event.question),
     [null, previousQuestion],
@@ -438,7 +448,7 @@ try {
   assert.equal(runs.claimTurn("lost-db", "single"), true);
   const lostDbHandle = { kill: () => { throw new Error("lost 预约不得提交或 kill"); } };
   runs.trackRun("lost-db", lostDbHandle);
-  runs.confirmDone("lost-db");
+  tickets.confirmDone("lost-db", await directionEpochOf("lost-db"));
   let lostReleased = false;
   const lostQuestionEvents: Array<string | null> = [];
   const unsubscribeLostQuestion = bus.subscribe((event) => {
@@ -460,7 +470,10 @@ try {
   assert.equal(lostDbTask.questionItems, previousQuestionItems);
   assert.equal(lostDbTask.resumePrompt, previousResumePrompt, "lost 回滚不得吞掉旧检查点");
   assert.equal(lostDbTask.completeConfirmedAt, at, "lost 回滚不得吞掉旧完成票");
-  assert.equal(runs.takeConfirmed("lost-db"), true, "lost 回滚应恢复内存完成确认");
+  assert.equal(
+    tickets.takeConfirmed("lost-db", await directionEpochOf("lost-db")), true,
+    "lost 回滚应恢复内存完成确认，且对当下这一代有效",
+  );
   assert.deepEqual(lostQuestionEvents, [null, previousQuestion], "lost 回滚也必须恢复问题卡广播");
   const lostDbMessage = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "m-lost-db"))).at(0)!;
   assert.equal(lostDbMessage.status, "pending");
@@ -495,7 +508,7 @@ try {
   const current = await complete("new-token", "new-direction");
   assert.equal(current.status, 200, "当前回合 token 应能确认完成");
   assert.ok((await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.completeConfirmedAt);
-  runs.takeConfirmed("token");
+  tickets.revokeConfirmed("token");
 
   const postTurnAction = (path: string, body: unknown, token?: string, direction?: string) => api.request(path, {
     method: "POST",

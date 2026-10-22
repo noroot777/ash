@@ -244,7 +244,7 @@ const resumeSame = async (taskId: string, text: string) => {
     const { openTurn: open } = await import("../src/session-turns.js");
     await open({ sessionId: "session-TiLive000001", taskId: "TiLive000001", cwd: root, startedAt: stamp(0) });
   }
-  await recordTurnSpan({ sessionId: "session-TiLive000001", taskId: "TiLive000001", cwd: root, startedAt: stamp(0), endedAt: stamp(10) });
+  await recordTurnSpan({ sessionId: "session-TiLive000001", taskId: "TiLive000001", cwd: root, startedAt: stamp(0), endedAt: stamp(10), outcome: "completed" });
   // 第二轮正在跑：开始行落了、还没收口。
   const { openTurn } = await import("../src/session-turns.js");
   await openTurn({ sessionId: "session-TiLive000001", taskId: "TiLive000001", cwd: root, startedAt: stamp(120) });
@@ -270,7 +270,7 @@ const resumeSame = async (taskId: string, text: string) => {
     turnsStarted: null, turnsBase: null, activeMs: 30 * 60000, exitStatus: 0,
   });
   for (const [from, to] of [[0, 10], [120, 130]]) {
-    await recordTurnSpan({ sessionId: "session-TiUpgrad0001", taskId: "TiUpgrad0001", cwd: root, startedAt: stamp(from), endedAt: stamp(to) });
+    await recordTurnSpan({ sessionId: "session-TiUpgrad0001", taskId: "TiUpgrad0001", cwd: root, startedAt: stamp(from), endedAt: stamp(to), outcome: "completed" });
   }
   const { migrateSessionTurnIdentity } = await import("../src/db/migrate-session-turns.js");
   await migrateSessionTurnIdentity(dbClient);
@@ -303,9 +303,9 @@ const resumeSame = async (taskId: string, text: string) => {
     // approx 同 ④：这一组要测的是「重复行顶不掉真缺口」,不是「迁移没确认」那一档。
     turnsStarted: 1, turnsBase: 0, turnsBaseApprox: false, activeMs: 30 * 60000, exitStatus: 0,
   });
-  await recordTurnSpan({ sessionId: "session-TiDupes00001", taskId: "TiDupes00001", cwd: root, startedAt: stamp(0), endedAt: stamp(10) });
+  await recordTurnSpan({ sessionId: "session-TiDupes00001", taskId: "TiDupes00001", cwd: root, startedAt: stamp(0), endedAt: stamp(10), outcome: "completed" });
   // 唯一索引先拦一道：同一个回合再收一次口（接回、重试、旧调度台也来收）只更新那一行。
-  await recordTurnSpan({ sessionId: "session-TiDupes00001", taskId: "TiDupes00001", cwd: root, startedAt: stamp(0), endedAt: stamp(20) });
+  await recordTurnSpan({ sessionId: "session-TiDupes00001", taskId: "TiDupes00001", cwd: root, startedAt: stamp(0), endedAt: stamp(20), outcome: "completed" });
   assert.equal((await turnRows("TiDupes00001")).length, 1, "重放收尾不该多出一行");
   assert.equal(String((await turnRows("TiDupes00001"))[0].ended_at), stamp(10), "认第一次收口,不被改晚");
   // 老库上索引可能没建成（迁移那一步失败）：读端自己也要按身份去重,否则第二轮的真缺口
@@ -385,7 +385,7 @@ const resumeSame = async (taskId: string, text: string) => {
   const open = () => openTurn({ sessionId: "session-twice", taskId: "TiTwice00001", cwd: root, startedAt: stamp(0) });
   await open();
   await open();
-  await recordTurnSpan({ sessionId: "session-twice", taskId: "TiTwice00001", cwd: root, startedAt: stamp(0), endedAt: stamp(20) });
+  await recordTurnSpan({ sessionId: "session-twice", taskId: "TiTwice00001", cwd: root, startedAt: stamp(0), endedAt: stamp(20), outcome: "completed" });
   const row = await sessionRow("TiTwice00001", "session-twice");
   assert.equal(Number(row.turns_started), 1, "同一个回合身份只能计一次——多计一次就永远报「缺一个回合记录」");
   assert.equal((await turnRows("TiTwice00001")).length, 1, "同一个身份也只该有一行");
@@ -396,6 +396,11 @@ const resumeSame = async (taskId: string, text: string) => {
   // 又会加两次。这条断言比上面那两条便宜,而且直接钉住不变量住在哪一层。
   assert(!("turnsStarted" in resumedTurnFields(stamp(0))),
     "回合计数只能由 openTurn 按身份加,不能回到字段 helper 里");
+  // 同一层的另一半:「上一轮是被停的」要随新回合翻篇。单飞每轮收尾都覆写那一列,所以缺它只在
+  // **复用同一行**的那几条路上(团队 / duet)看得出来,而读端拿它当「这一轮不是失败」的判据
+  // (见 session-waiting.ts 的 failedTurnNotices 与 task-retry-turn.ts)。
+  assert.equal(resumedTurnFields(stamp(0)).stoppedAs, null,
+    "新回合的字段 helper 没把上一轮「是被停的」清掉");
 }
 
 // ── ⑨ 升级那一刻一行记录都没有、之后又跑过一轮：未知历史照样要披露（必须修 2.2 读端）──
@@ -417,7 +422,7 @@ const resumeSame = async (taskId: string, text: string) => {
   // 升级之后又跑了一轮（这一轮有记录、也对得上账）。此时「升级前缺没缺」仍然无从得知,
   // 而按「base 大于 0」判的话这条会话会被当成没有未知历史——那正是必须修 2.2 的读端一侧。
   await openTurn({ sessionId: "session-upempty", taskId: "TiUpEmpt0001", cwd: root, startedAt: stamp(200) });
-  await recordTurnSpan({ sessionId: "session-upempty", taskId: "TiUpEmpt0001", cwd: root, startedAt: stamp(200), endedAt: stamp(210) });
+  await recordTurnSpan({ sessionId: "session-upempty", taskId: "TiUpEmpt0001", cwd: root, startedAt: stamp(200), endedAt: stamp(210), outcome: "completed" });
   const result = await listing(root, "TiUpEmpt0001");
   assert(result.incomplete.some((note) => note.includes("升级之前")),
     `下界是 0 的那种老会话,它的未知历史同样要说出来,实际提示：${JSON.stringify(result.incomplete)}`);
@@ -590,7 +595,7 @@ const resumeSame = async (taskId: string, text: string) => {
   assert.equal(busy.tasks, idle.tasks + 1, "这一步的前提：任务那张反向索引也进去了");
   // 正常收尾走的是 recordTurnSpan（它只知道一个起点,拿不到 taskId）——反向索引的回收必须
   // 在这条路上就发生,否则只有 closeTaskTurns 会删,而 duet/team 两条路压根不走它。
-  await close({ sessionId: "session-reclaim", taskId: "TiReclaim0001", cwd: stage, startedAt: stamp(0), endedAt: stamp(1) });
+  await close({ sessionId: "session-reclaim", taskId: "TiReclaim0001", cwd: stage, startedAt: stamp(0), endedAt: stamp(1), outcome: "completed" });
   assert.deepEqual(activeRegistrySize(), idle,
     "最后一个身份注销之后,会话和任务两张表都要收回去（跑过的 id 不许永久留在内存里）");
   // 另一条注销路径（消费循环结束那种）同样要收干净。

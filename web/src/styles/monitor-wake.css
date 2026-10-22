@@ -1,0 +1,82 @@
+.monitor-wake-input {
+  --wake-line: color-mix(in lch, var(--accent) 10%, var(--line));
+  --wake-tint: color-mix(in lch, var(--accent) 5%, var(--panel));
+  display: flex;
+  min-width: 0;
+  justify-content: flex-end;
+  margin: 22px 0 20px;
+  padding-left: 38px;
+}
+
+.monitor-wake-message {
+  width: min(620px, 100%);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--wake-line);
+  border-radius: 12px 5px 12px 12px;
+  background: var(--panel);
+  box-shadow: 0 2px 5px color-mix(in lch, var(--ink) 3%, transparent);
+}
+
+.monitor-wake-input.is-team { padding-left: 42px; }
+.monitor-wake-input.is-team .monitor-wake-message { width: min(660px, 100%); }
+.monitor-wake-meta { display: flex; min-height: 24px; align-items: center; gap: 7px; padding: 12px 16px 0; color: var(--faint); font-size: 10px; }
+.monitor-wake-mark { display: grid; width: 24px; height: 24px; flex: none; place-items: center; border-radius: 7px; color: var(--accent); background: var(--wake-tint); }
+.monitor-wake-meta b { color: var(--ink); font-size: 11px; font-weight: 650; }
+.monitor-wake-label { border-radius: 4px; padding: 2px 5px; color: var(--accent); background: var(--wake-tint); font-size: 9px; line-height: 1.4; }
+.monitor-wake-meta time { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.monitor-wake-meta button { display: grid; width: 24px; height: 24px; flex: none; place-items: center; margin-left: auto; border: 0; border-radius: 5px; color: var(--faint); background: transparent; cursor: pointer; }
+.monitor-wake-meta time + button { margin-left: 0; }
+.monitor-wake-meta button:hover { color: var(--ink); background: var(--raised); }
+.monitor-wake-meta button.is-copied { color: var(--green); }
+.monitor-wake-meta button.is-copy-failed { color: var(--red); }
+.monitor-wake-meta button:focus-visible, .monitor-wake-raw summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.monitor-wake-body { padding: 11px 16px 12px; }
+.monitor-wake-body h3 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; line-height: 1.6; }
+.monitor-wake-source { display: flex; align-items: baseline; gap: 7px; margin: 5px 0 12px; color: var(--muted); font-size: 10.5px; line-height: 1.65; }
+.monitor-wake-source-label { flex: none; color: var(--faint); font-size: 9px; }
+.monitor-wake-source > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.monitor-wake-payload { min-width: 0; border-radius: 6px; padding: 10px 12px; background: color-mix(in lch, var(--canvas) 80%, var(--panel)); }
+.monitor-wake-payload-label { margin: 0 0 7px; color: var(--faint); font-size: 9px; }
+.monitor-wake-excerpt { border-left: 2px solid color-mix(in lch, var(--accent) 25%, var(--line)); padding-left: 10px; }
+.monitor-wake-excerpt + .monitor-wake-excerpt { margin-top: 10px; }
+.monitor-wake-excerpt > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.monitor-wake-excerpt pre, .monitor-wake-payload > pre, .monitor-wake-raw pre { margin: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.75; white-space: pre-wrap; }
+.monitor-wake-excerpt pre, .monitor-wake-payload > pre { color: color-mix(in lch, var(--ink) 85%, var(--muted)); }
+.monitor-wake-caution { display: flex; width: fit-content; align-items: center; gap: 5px; margin: 9px 0 0; color: color-mix(in lch, var(--amber) 70%, var(--muted)); font-size: 10px; }
+.monitor-wake-omitted { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.7; }
+.monitor-wake-raw { border-top: 1px solid color-mix(in lch, var(--line) 65%, transparent); }
+.monitor-wake-raw summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 10px 16px; list-style: none; cursor: pointer; }
+.monitor-wake-raw summary::-webkit-details-marker { display: none; }
+.monitor-wake-delivery { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--muted); font-size: 9.5px; }
+.monitor-wake-delivery svg { flex: none; color: var(--accent); }
+.monitor-wake-expand { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; transition: color 140ms ease; }
+.monitor-wake-raw summary:hover .monitor-wake-expand { color: var(--accent); }
+.monitor-wake-expand svg { flex: none; transition: transform 140ms ease; }
+.monitor-wake-raw[open] .monitor-wake-expand { color: var(--accent); }
+.monitor-wake-raw[open] .monitor-wake-expand svg { transform: rotate(90deg); }
+.monitor-wake-raw > pre { max-height: 360px; overflow-y: auto; margin: 0 16px 12px; border-radius: 6px; padding: 10px 12px; color: var(--muted); background: var(--canvas); }
+.monitor-wake-receipt { margin-left: 5px; border-left: 1px solid var(--line); padding-left: 10px; color: var(--faint); font-size: 9px; }
+.monitor-wake-checkpoint { margin-left: 3px; border-radius: 3px; padding: 1px 4px; color: var(--muted); background: var(--raised); font-size: 8.5px; }
+.monitor-wake-reply { display: inline-flex; width: fit-content; flex: none; align-items: center; gap: 4px; padding: 2px 0; color: var(--muted); font-size: 9px; font-weight: 450; }
+.monitor-wake-reply svg { color: var(--accent); }
+.task-message-content > .monitor-wake-reply { margin: 2px 0 6px; }
+.team-feed-agent > .monitor-wake-reply { margin-bottom: 5px; }
+
+@media (max-width: 560px) {
+  .monitor-wake-input, .monitor-wake-input.is-team { padding-left: 10px; }
+  .monitor-wake-meta { gap: 6px; padding: 10px 12px 0; font-size: 9px; }
+  .monitor-wake-body { padding: 10px 12px; }
+  .monitor-wake-body h3 { font-size: 12px; }
+  .monitor-wake-source { gap: 6px; margin-bottom: 10px; font-size: 10px; }
+  .monitor-wake-source-label { font-size: 9px; }
+  .monitor-wake-payload { padding: 9px 10px; }
+  .monitor-wake-excerpt pre, .monitor-wake-payload > pre { font-size: 10px; }
+  .monitor-wake-raw summary { padding: 10px 12px; }
+  .monitor-wake-raw > pre { margin-right: 12px; margin-left: 12px; font-size: 9px; }
+  .monitor-wake-expand { margin-left: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .monitor-wake-expand, .monitor-wake-expand svg { transition: none; }
+}

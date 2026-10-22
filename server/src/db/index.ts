@@ -136,7 +136,10 @@ export async function ensureSchema() {
       -- 可空：null = 这一回合开始了还没收口（见 schema.ts 上那段注释）。唯一索引
       -- （session_id, started_at）由 migrate-session-turns.ts 在去重之后建——老库里可能
       -- 已经有重复行，在这里建会抛，而这一段抛出去就是整台 ash 起不来。
-      ended_at TEXT
+      ended_at TEXT,
+      -- 这一回合**自己**的结局（completed/failed/stopped）。可空：存量行与收尾没落成的行都是
+      -- null = 「不知道」，读端据此不给失败现场（见 schema.ts 上那段注释）。
+      outcome TEXT
     );
     CREATE INDEX IF NOT EXISTS session_turns_task_idx ON session_turns(task_id, started_at);
     CREATE INDEX IF NOT EXISTS session_turns_session_idx ON session_turns(session_id, started_at);
@@ -406,6 +409,8 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN turns_base INTEGER",
     "ALTER TABLE sessions ADD COLUMN turns_base_approx INTEGER",
     "ALTER TABLE sessions ADD COLUMN turns_lost INTEGER",
+    // 每个回合自己的结局。存量行 NULL = 不知道（见 schema.ts 的 sessionTurns.outcome）。
+    "ALTER TABLE session_turns ADD COLUMN outcome TEXT",
     "ALTER TABLE tasks ADD COLUMN use_worktree INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
     "ALTER TABLE tasks ADD COLUMN worktree_start_commit TEXT",
@@ -451,6 +456,10 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN active_turn_token TEXT",
     "ALTER TABLE tasks ADD COLUMN active_direction_token TEXT",
     "ALTER TABLE tasks ADD COLUMN active_direction_version INTEGER NOT NULL DEFAULT 0",
+    // 方向世代：回合起跑和方向轮换各 +1,永不归零 —— 上面那三列离开运行态就被清空,迟到的
+    // 回滚于是分不清「我那一轮已结束」和「后来又跑完了另一轮」(第 4 轮审查 F1-B)。存量行 0
+    // 而不是 NULL:它要参与 `=` 比较,NULL 谁也不等于谁,那样连正常的回滚也会被判成过期。
+    "ALTER TABLE tasks ADD COLUMN direction_epoch INTEGER NOT NULL DEFAULT 0",
     // 正交验收阶段，只用于展示与协作，不进入 TaskStatus 调度/结算
     "ALTER TABLE tasks ADD COLUMN stage TEXT",
     // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序
@@ -514,6 +523,7 @@ export async function ensureSchema() {
     // 同一个哨兵还没送出去的事件合并进同一行（一次唤醒看完全部，而不是一行一个回合），
     // 投递时标 byBackend 让它在会话里显示成系统代写而不是用户发言。
     "ALTER TABLE scheduled_messages ADD COLUMN origin TEXT",
+    "ALTER TABLE scheduled_messages ADD COLUMN monitor_wake TEXT",
     // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
     "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",

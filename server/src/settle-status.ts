@@ -12,7 +12,8 @@ import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { takeConfirmed, type StopSettle } from "./runs.js";
+import { type StopSettle } from "./runs.js";
+import { drainConfirmed } from "./task-confirmation.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { announceResumePrompt, resumePromptVoidPatch } from "./task-resume-prompt.js";
@@ -120,8 +121,12 @@ export async function settleTaskStatus(
   /** 这一轮是 CLI 原生命令（`/compact`）—— 调用方据此整段跳过结算钩子。 */
   nativeTurn: boolean;
 }> {
-  const memConfirmed = takeConfirmed(taskId); // 无条件消费,别让标记漏到下一回合
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  // 无条件消费(标记只在本回合内有效,别漏到下一回合),但**只认属于当下这一代的那张**:
+  // 改派失败后的回滚会把旧方向那张票合法地还回内存,它留到下一轮就会让一轮从没交卷的工作
+  // 显示「已完成」—— DB 那一列由起跑清零,内存这条原来没有任何东西绑住它(第 1 轮审查 F1)。
+  // 读 `t` 在前是为了拿到这一代:同步 Map,中间只隔一次 select,期间落下的确认本来就属于这一代。
+  const memConfirmed = drainConfirmed(taskId, t?.directionEpoch ?? -1);
   // 原生命令回合(`/compact`)的标记跟完成确认一样:读出来就清掉,只在本回合内有效。
   const nativeTurn = !!t?.nativeTurn;
   const goalTurn = !!t?.goalTurn;

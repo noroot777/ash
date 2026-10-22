@@ -37,16 +37,18 @@ export type SteerCaseContext = {
 export async function runSteerCases(ctx: SteerCaseContext): Promise<void> {
   const { at, waitFor, messageRow, statusEvents, agentEvents } = ctx;
   const { steerTaskId, steerLockedTaskId, steerLateTaskId, steerUnavailableTaskId } = ctx;
-  const [{ db }, schema, runs, steer, orchestrator, transcript, acceptance, runRoutes] = await Promise.all([
-    import("../src/db/index.js"),
-    import("../src/db/schema.js"),
-    import("../src/runs.js"),
-    import("../src/task-steer.js"),
-    import("../src/orchestrator.js"),
-    import("../src/transcript.js"),
-    import("../src/acceptance-lock.js"),
-    import("../src/task-run-routes.js"),
-  ]);
+  const [{ db }, schema, runs, tickets, steer, orchestrator, transcript, acceptance, runRoutes] =
+    await Promise.all([
+      import("../src/db/index.js"),
+      import("../src/db/schema.js"),
+      import("../src/runs.js"),
+      import("../src/task-confirmation.js"),
+      import("../src/task-steer.js"),
+      import("../src/orchestrator.js"),
+      import("../src/transcript.js"),
+      import("../src/acceptance-lock.js"),
+      import("../src/task-run-routes.js"),
+    ]);
   const { scheduledMessages, tasks } = schema;
 
   // ── 引导会话:默认排队,点按钮后在同一 Claude 进程里 interrupt + send ───────
@@ -59,7 +61,11 @@ export async function runSteerCases(ctx: SteerCaseContext): Promise<void> {
     question: "旧方向留下的问题",
     questionOptions: JSON.stringify(["旧答案"]),
   }).where(eq(tasks.id, steerTaskId));
-  runs.confirmDone(steerTaskId); // 旧方向刚拿到的完成票也不能穿进新方向
+  // 旧方向刚拿到的完成票也不能穿进新方向。内存那张票按**它属于的那一代**存
+  // （task-confirmation.ts）—— 这里就是旧方向当下这一代。
+  const steerOldEpoch = (await db
+    .select({ epoch: tasks.directionEpoch }).from(tasks).where(eq(tasks.id, steerTaskId))).at(0)!.epoch;
+  tickets.confirmDone(steerTaskId, steerOldEpoch);
   await db.insert(scheduledMessages).values(
     messageRow("scheduled-steer", steerTaskId, "先停下旧方案，改做更稳妥的新方向", "queued"),
   );
@@ -91,7 +97,8 @@ export async function runSteerCases(ctx: SteerCaseContext): Promise<void> {
   assert.equal(steeredTask.completeConfirmedAt, null, "旧方向的完成确认不得污染新方向");
   assert.equal(steeredTask.resumePrompt, null, "旧方向的 pause 指令不得污染新方向");
   assert.equal(steeredTask.question, null, "旧方向的提问不得污染新方向");
-  assert.equal(runs.takeConfirmed(steerTaskId), false, "旧方向的内存完成票也应清掉");
+  // `revokeConfirmed` 不比代次 ⇒ 它回 false 就说明这一格**一张票都没有**，比「这一代的没有」更强。
+  assert.equal(tickets.revokeConfirmed(steerTaskId), false, "旧方向的内存完成票也应清掉");
   const steerTranscript = transcript.sessionTranscriptPath(steerTaskId, "scheduled-steer-session");
   await waitFor(
     () => existsSync(steerTranscript)

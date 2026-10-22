@@ -12,7 +12,10 @@ import type { NativeWorkEvent } from "@ash/shared";
 export { isVisibleExecutionEvent };
 
 export type ExecutionEvent = {
-  kind: "tool" | "thinking" | "error";
+  // notice = 过程里的一句**提示**(上游在重试、还在等回话):它跟这一轮成败正交,所以既不
+  // 算异常、也不让折叠条标红,只是留在它发生的那个位置上。来源是 `level:"notice"` 的
+  // error 事件(见 shared/src/events.ts)。
+  kind: "tool" | "thinking" | "error" | "notice";
   label: string;
   detail?: string;
   at?: string;
