@@ -358,6 +358,8 @@ export async function ensureSchema() {
     // 已经 exited 的哨兵不是被谁停的,拿 ended_by 当放弃凭证就等于那条出路对它永远无效
     // (第 2 轮审查 R2-3)。存量行 NULL = 没人放弃过。
     "ALTER TABLE monitors ADD COLUMN results_abandoned_at TEXT",
+    // 迁移统一认领的标记(见 schema.ts uploads.claimOrigin)。存量行 NULL = 按真私有对待。
+    "ALTER TABLE uploads ADD COLUMN claim_origin TEXT",
     "ALTER TABLE monitors ADD COLUMN results_abandoned_reason TEXT",
     // 「结局已写定、结束通知还没入队」那一瞬的责任凭证(时刻 + 原文)。少了它,那条缝里完成闸
     // 看不见任何东西,任务落 done 把唯一的结果通知吃掉(第 1 轮审查 F1)。存量行 NULL = 不在交接中。

@@ -549,6 +549,11 @@ export const uploads = sqliteTable("uploads", {
   // 附到了哪个任务:有它就走项目轴(同项目的人在会话里看得见这张图)。随手记的附件
   // 恒 null —— 随手记是个人面,它的附件不该因为挂在共享项目里就人人可读。
   taskId: text("task_id"),
+  // 这行的 owner 是怎么来的。'conversion' = 转多人时对存量文件的**统一认领**(不是本人
+  // 上传),这种行的 taskId 允许由可信产物清单(backfillArtifactUploads)事后补 —— owner
+  // 非空区分不了「真私有」与「迁移代管」,没有这个标记,老任务里 agent 后来生成的图在
+  // 转换后对项目成员永远 404(审查第 8 轮 R3)。NULL = 本人上传或 agent 产出,照旧只认人。
+  claimOrigin: text("claim_origin"),
   createdAt: text("created_at").notNull(),
 });
 

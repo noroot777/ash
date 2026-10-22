@@ -20,7 +20,7 @@
 // 跑法(自带临时库):npm -w server run test:duet-image-ownership
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
@@ -225,7 +225,30 @@ try {
   assert.equal(await read(traced, AS_ALICE), 200, "读过那段执行过程之后,里面的图就该打得开");
   assert.equal(await read(tracedSub, AS_ALICE), 200, "子智能体活动里那张同样要补上 —— 两道范围必须对称");
 
-  console.log("讨论图片归属登记回归通过(主发言者 + 子智能体 + 无副本交代 + 存量讨论/会话读时回填)");
+  // ── R3(审查第 8 轮):转多人时统一代管的存量图 ≠ 私有附件 ──────────────────────
+  // 转换(claimExistingUploads)给 uploads 目录的存量文件统一补管理员 owner,但只从任务
+  // 初始正文反查 taskId —— agent 后来生成的图不在里面,于是 owner=管理员、taskId=null。
+  // 这种行带着 claimOrigin='conversion' 标记:可信产物清单(trace/讨论回合)读到它属于哪
+  // 个任务时,registerUpload 允许补 taskId;真私有(本人上传,无标记)照旧一个字不动 ——
+  // 上面 privateShot 的两条断言就是那半边,这里只放宽代管那一类。
+  const migrated = image("duet-migrated");
+  await db.insert(uploads).values([
+    { file: "duet-migrated-shot.png", ownerUserId: boss.id, taskId: null, claimOrigin: "conversion", createdAt: at },
+  ] as never);
+  appendFileSync(join(oldRuns, "s-old.trace.jsonl"), JSON.stringify({
+    at, turnStartedAt: at, event: { kind: "attachment", path: migrated, source: "output/migrated.png", ref: 2 },
+  }) + "\n");
+  assert.equal(await read(migrated, AS_ALICE), 404, "回填之前:代管行没有 taskId,对成员仍是 404");
+  await app.fetch(new Request("http://127.0.0.1:4317/api/sessions/s-old/trace", { headers: AS_ALICE }));
+  assert.equal(await read(migrated, AS_ALICE), 200, "迁移代管的行:可信产物清单要能补回任务归属");
+  assert.equal(
+    (await db.select().from(uploads).where(eq(uploads.file, "duet-migrated-shot.png"))).at(0)?.taskId,
+    "t-duet-old",
+    "补的是 taskId,owner 不动",
+  );
+  assert.equal(await read(privateShot, AS_ALICE), 404, "放宽只及代管行:真私有照旧不动");
+
+  console.log("讨论图片归属登记回归通过(主发言者 + 子智能体 + 无副本交代 + 存量讨论/会话读时回填 + 迁移代管回填)");
 } finally {
   releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

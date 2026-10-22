@@ -83,7 +83,13 @@ export async function registerUpload(
     guards.push(isNull(uploads.ownerUserId));
   }
   const mine = !existing.ownerUserId || existing.ownerUserId === fields.ownerUserId;
-  if (!existing.taskId && fields.taskId && mine) {
+  // 「owner 非空」不都等于私有:转多人时 claimExistingUploads 给存量文件统一补的 owner 是
+  // **代管**(claimOrigin='conversion'),agent 后来生成的图不在任务初始正文里,当时反查不到
+  // taskId;事后读到可信产物清单(backfillArtifactUploads 只传 {taskId})再来补,若按「不是
+  // 我的」一律拒,这些图对项目成员永远 404(审查第 8 轮 R3)。真私有(本人上传,无标记)
+  // 照旧只认人。
+  const migrated = existing.claimOrigin === "conversion";
+  if (!existing.taskId && fields.taskId && (mine || migrated)) {
     patch.taskId = fields.taskId;
     guards.push(isNull(uploads.taskId));
   }
@@ -304,16 +310,23 @@ export async function claimExistingUploads(userId: string): Promise<number> {
   }
   const at = now();
   if (pending.length) {
+    // claimOrigin='conversion':这批 owner 是统一代管出来的,不是本人上传 —— 日后可信产物
+    // 清单读到它属于哪个任务时允许补 taskId(registerUpload 的 migrated 分支)。
     await db.insert(uploads).values(pending.map((file) => ({
       file,
       ownerUserId: userId,
       taskId: byFile.get(file) ?? null,
+      claimOrigin: "conversion",
       createdAt: at,
     })));
   }
   for (const row of orphanRows) {
-    const patch: { ownerUserId?: string; taskId?: string } = {};
-    if (!row.ownerUserId) patch.ownerUserId = userId;
+    const patch: { ownerUserId?: string; taskId?: string; claimOrigin?: string } = {};
+    // 补 owner 的同时打上代管标记;只补 taskId 的行已有真 owner,不打(它的归属来源没变)。
+    if (!row.ownerUserId) {
+      patch.ownerUserId = userId;
+      patch.claimOrigin = "conversion";
+    }
     if (!row.taskId && byFile.has(row.file)) patch.taskId = byFile.get(row.file)!;
     if (Object.keys(patch).length) await db.update(uploads).set(patch).where(eq(uploads.file, row.file));
   }
