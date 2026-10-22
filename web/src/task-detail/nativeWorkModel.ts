@@ -84,8 +84,26 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
   const rows = new Map<string, NativeWorkItem>();
   // `行 id \u0000 字段` → 该快照式正文(message/result)的图片记录。服务端用 attachment 上的
   // `field` 标注归属;这里不许把它混进 row.activity —— 混进去等于给执行记录那份文档多一条
-  // 结果,turnImages 的逐目的地对账会把整组判作废。
-  const metaImages = new Map<string, AttachmentSource[]>();
+  // 结果,turnImages 的逐目的地对账会把整组判作废。`rev` 是正文的代(清场/换稿开新代),
+  // 展示端只认最高代那组:旧代的冻结说的是已经不在屏幕上的那一版(审查第 8 轮复审 R1)。
+  const metaImages = new Map<string, { rev: number; src: AttachmentSource }[]>();
+  /** 结果正文从调用行提取到别的行时,它名下的 result 图片记录按目的地跟着搬 —— 记录留在
+   * 调用行就永远配不上正文(复审 R1 结构化返回结果一例)。没搬走的留在原槽(宁可不配,
+   * 不乱认)。 */
+  const routeResultImages = (fromRow: string, targets: { rowId: string; text: string }[]) => {
+    const slot = `${fromRow}\u0000result`;
+    const records = metaImages.get(slot);
+    if (!records) return;
+    const rest: { rev: number; src: AttachmentSource }[] = [];
+    for (const record of records) {
+      const target = targets.find((candidate) => candidate.rowId !== fromRow && candidate.text.includes(record.src.source));
+      if (!target) { rest.push(record); continue; }
+      const destination = `${target.rowId}\u0000result`;
+      metaImages.set(destination, [...(metaImages.get(destination) ?? []), record]);
+    }
+    if (rest.length) metaImages.set(slot, rest);
+    else metaImages.delete(slot);
+  };
   const calls = new Map<string, { call: Call; rowId?: string }>();
   const taskIds = new Map<string, string>();
   const endedRows = new Set<string>();
@@ -144,7 +162,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         if (event.kind === "attachment" && (event.field === "message" || event.field === "result") && event.source) {
           const slot = `${id}\u0000${event.field}`;
           const list = metaImages.get(slot) ?? [];
-          list.push({ path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost });
+          list.push({ rev: event.rev ?? 0, src: { path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost } });
           metaImages.set(slot, list);
           continue;
         }
@@ -281,13 +299,23 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           const nativeId = str(call.input.task_id ?? response.task?.task_id);
           const row = [...rows.values()].find((candidate) => candidate.sessionId === item.sessionId && candidate.kind === "agent" && candidate.nativeId === nativeId);
           const status = name === "taskstop" ? "stopped" : workStatus(response.task?.status ?? /<status>([^<]+)<\/status>/.exec(activity.result)?.[1]);
-          if (row && status !== "unknown") put(row.id, { status, result: str(response.task?.output) || /<output>([\s\S]*?)<\/output>/.exec(activity.result)?.[1] || activity.result });
+          if (row && status !== "unknown") {
+            const text = str(response.task?.output) || /<output>([\s\S]*?)<\/output>/.exec(activity.result)?.[1] || activity.result;
+            put(row.id, { status, result: text });
+            routeResultImages(key(activity.id), [{ rowId: row.id, text }]);
+          }
         }
         const states = response.status ?? response.statuses;
-        if (states && typeof states === "object") for (const [nativeId, state] of Object.entries(states)) {
-          const value = typeof state === "object" && state ? state as Record<string, unknown> : {};
-          const status = workStatus(Object.keys(value)[0] ?? state);
-          put(key(nativeId), { nativeId, status, result: str(value.completed ?? value.errored ?? value.error) });
+        if (states && typeof states === "object") {
+          const routed: { rowId: string; text: string }[] = [];
+          for (const [nativeId, state] of Object.entries(states)) {
+            const value = typeof state === "object" && state ? state as Record<string, unknown> : {};
+            const status = workStatus(Object.keys(value)[0] ?? state);
+            const text = str(value.completed ?? value.errored ?? value.error);
+            put(key(nativeId), { nativeId, status, result: text });
+            if (text) routed.push({ rowId: key(nativeId), text });
+          }
+          routeResultImages(key(activity.id), routed);
         }
         if (name === "close_agent") {
           const id = key(str(call.input.id));
@@ -297,9 +325,15 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
       }
     }
   }
+  // 只认最高代:正文清场/换稿之后,旧代记录说的是已经不在屏幕上的那一版。
+  const latestRev = (list: { rev: number; src: AttachmentSource }[] | undefined): AttachmentSource[] | undefined => {
+    if (!list?.length) return undefined;
+    const top = Math.max(...list.map((record) => record.rev));
+    return list.filter((record) => record.rev === top).map((record) => record.src);
+  };
   const withMeta = (row: NativeWorkItem): NativeWorkItem => {
-    const message = metaImages.get(`${row.id}\u0000message`);
-    const result = metaImages.get(`${row.id}\u0000result`);
+    const message = latestRev(metaImages.get(`${row.id}\u0000message`));
+    const result = latestRev(metaImages.get(`${row.id}\u0000result`));
     if (!message && !result) return row;
     return { ...row, ...(message ? { messageImages: message } : {}), ...(result ? { resultImages: result } : {}) };
   };

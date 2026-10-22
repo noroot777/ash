@@ -268,6 +268,73 @@ try {
     );
   }
 
+  // ⑨ **发号器 ≠ 交代线**(复审 R3:拿「号数」当「完成数」)。主文档的 ref 号在同一条
+  // 会话里跨回合连续,所以种子的 refs 必须看全部回合;但「本回合交代推进到哪」只认
+  // 「已交代的恰是正文最前面那几个节点」—— 上一回合占掉的号不许把本回合的待定引用算成
+  // 交代过,否则接回后定义到了也不再交付。
+  {
+    const taskId = "task-cross-turn";
+    const sessId = "sess-cross-turn";
+    const EARLY = "2026-10-22T09:00:00.000Z";
+    writeFileSync(join(root, "cross.png"), red);
+    // 上一回合:一处引用正常交付并落盘(用掉 0 号)。
+    for await (const event of withMarkdownImages((async function* () {
+      yield { kind: "text", text: "首轮：![首](carried.png)\n\n" } as AgentEvent;
+      yield { kind: "done", exitStatus: 0 } as AgentEvent;
+    })(), root, markdownImageAccounting(taskId, sessId, EARLY))) {
+      if (event.kind === "text" || event.kind === "attachment") appendSessionTrace(taskId, sessId, EARLY, event as never);
+    }
+    // 本回合(续聊种子接上发号器):红图交付(1 号)、待定引用还在等定义,进程死了。
+    const carried = await loadMarkdownImageSeed(taskId, sessId);
+    const text2 = "次轮红图：![红](cross.png)\n\n还等定义：![待][后补]\n\n";
+    const sink2 = markdownImageSink(root, { ...markdownImageAccounting(taskId, sessId, TURN), seed: carried });
+    const chunk = { kind: "text", text: text2 } as AgentEvent;
+    sink2.capture(chunk);
+    for (const event of sink2.release(chunk)) appendSessionTrace(taskId, sessId, TURN, event as never);
+    sink2.dispose();
+    const traced = shots(readTrace(taskId, sessId));
+    assert.deepEqual(traced.map((item) => item.ref), [0, 1], "前提:两回合各交付一处,号连续");
+    const seed = await loadMarkdownImageSeed(taskId, sessId, { mainTurnStartedAt: TURN });
+    const main = seed?.get("");
+    assert.equal(main?.refs, 2, "发号器看全部回合:下一号是 2");
+    assert.equal(main?.emitted, markdownImageRefs(text2)[0]!.end, "交代线只认本回合已交付的前缀,不被上一回合的号数推满");
+    // 接回后定义到了,待定引用必须继续交付:身份接着发,字节按定义到达那一刻拍。
+    const resumed: AgentEvent[] = [];
+    for await (const event of withMarkdownImages((async function* () {
+      yield { kind: "text", text: "[后补]: carried.png\n\n" } as AgentEvent;
+      yield { kind: "done", exitStatus: 0 } as AgentEvent;
+    })(), root, markdownImageAccounting(taskId, sessId, TURN, seed))) resumed.push(event);
+    assert.deepEqual(
+      resumed.flatMap((event) => (event.kind === "attachment" ? [[event.ref, event.source, colorOf(event.path)]] : [])),
+      [[2, "carried.png", "RED"]],
+      "接回后待定引用照常交付:2 号,不被「号数=完成数」的误判吞掉",
+    );
+  }
+
+  // ⑩ **合并给没 pos 的存量记录补节点身份**(复审 R3 第二半):pos 时代之前落盘的记录与
+  // 新记录混在同一目的地时,展示端「每条都带 pos 才按文档序配对」—— 一条没有就全退回
+  // 出场顺序。账本的 final 带着 (身份 → pos),合并时补到存量记录上。
+  {
+    const taskId = "task-pos-backfill";
+    const sessId = "sess-pos-backfill";
+    const text = "旧账：![旧](old.png)\n\n";
+    const pos = markdownImageRefs(text)[0]!.start;
+    appendSessionTrace(taskId, sessId, TURN, { kind: "text", text } as never);
+    appendSessionTrace(taskId, sessId, TURN, { kind: "attachment", source: "old.png", ref: 0 } as never);
+    const { imageJournalPath } = await import("../src/agent-image-journal.js");
+    mkdirSync(join(root, "data", "runs", taskId), { recursive: true });
+    writeFileSync(
+      imageJournalPath(taskId, sessId),
+      `${JSON.stringify({ at: TURN, turnStartedAt: TURN, doc: null, pos, source: "old.png", ref: 0, final: true })}\n`,
+    );
+    const merged = shots(await mergeImageJournal(taskId, sessId, readTrace(taskId, sessId)));
+    assert.deepEqual(
+      merged.map((item) => [item.ref, item.pos]),
+      [[0, pos]],
+      "存量记录补上 pos,且不另生合成记录",
+    );
+  }
+
   console.log("正文图片持久账本回归通过");
 } finally {
   rmSync(root, { recursive: true, force: true });

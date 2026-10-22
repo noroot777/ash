@@ -16,6 +16,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 import { markdownImageRefs } from "@ash/shared/markdown-images";
+import { metaSeedKey, type MetaImageField } from "./executors/markdown-image-meta.js";
 import { childActivity } from "./executors/native-agent-activity.js";
 import type {
   MarkdownImageAccounting,
@@ -119,8 +120,14 @@ export async function loadMarkdownImageSeed(
 ): Promise<Map<string, MarkdownImageSeedDoc> | undefined> {
   type SeedWork = {
     text: string;
+    /** ref 发号器的下一号 = max(ref)+1。**只管身份分配**:主文档的号在同一条会话里跨回合
+     * 连续(sink 的 seen 跨文档留着),所以发号器要看全部回合 —— 但它因此**推不出**本回合
+     * 交代了几处(审查第 8 轮复审 R3:拿「号数」当「完成数」,接回后把待定义引用当成交代
+     * 过,定义到了也不再交付)。 */
     refs: number;
-    /** 已交代引用的起点(事件/账本里的 pos)—— 推导「交代推进到哪」的唯一可信依据。 */
+    /** 本范围(主文档=本回合,子文档=全部)已交代记录的身份(ref 号),数量用。 */
+    finals: Set<number>;
+    /** 本范围已交代记录的节点起点(pos)—— 推导「交代推进到哪」的唯一可信依据。 */
     delivered: Set<number>;
     /** 临时账里冻结的字节与 lost 结论,同一处取最后一笔。 */
     snapshots: Map<number, { pos: number; destination: string; path?: string; lost?: boolean }>;
@@ -129,14 +136,28 @@ export async function loadMarkdownImageSeed(
   const doc = (id: string): SeedWork => {
     let found = docs.get(id);
     if (!found) {
-      found = { text: "", refs: 0, delivered: new Set(), snapshots: new Map() };
+      found = { text: "", refs: 0, finals: new Set(), delivered: new Set(), snapshots: new Map() };
       docs.set(id, found);
     }
     return found;
   };
-  const count = (seeded: SeedWork, ref: number, pos: unknown) => {
+  const count = (seeded: SeedWork, ref: number, pos: unknown, inScope: boolean) => {
     seeded.refs = Math.max(seeded.refs, ref + 1);
+    if (!inScope) return;
+    seeded.finals.add(ref);
     if (typeof pos === "number") seeded.delivered.add(pos);
+  };
+  /** 快照式正文(message/result)各是独立文档:发号器/代号/冻结字节按 (id × 字段) 接续。 */
+  type MetaWork = { refs: number; rev: number; byDestination: Map<string, { destination: string; path?: string; lost?: boolean }> };
+  const metas = new Map<string, MetaWork>();
+  const meta = (id: string, field: MetaImageField): MetaWork => {
+    const key = metaSeedKey(id, field);
+    let found = metas.get(key);
+    if (!found) {
+      found = { refs: 0, rev: 0, byDestination: new Map() };
+      metas.set(key, found);
+    }
+    return found;
   };
   for (const entry of await readTraceEntries(taskId, sessionId)) {
     const main = opts.mainTurnStartedAt !== undefined && entry.turnStartedAt === opts.mainTurnStartedAt;
@@ -144,27 +165,45 @@ export async function loadMarkdownImageSeed(
       doc("").text += entry.event.text;
       continue;
     }
-    if (main && entry.event.kind === "attachment" && typeof entry.event.ref === "number" && entry.event.ref < SYNTH_REF_BASE) {
-      count(doc(""), entry.event.ref, entry.event.pos);
+    if (entry.event.kind === "attachment" && typeof entry.event.ref === "number" && entry.event.ref < SYNTH_REF_BASE) {
+      count(doc(""), entry.event.ref, entry.event.pos, main);
       continue;
     }
     const child = childEventOf(entry.event);
     if (!child) continue;
     // message/result(快照式正文)的记录不属于执行记录那份追加式文档:算进它的身份计数,
-    // 接回后的第一处引用就会跳号,展示端按「来源+身份」去重时夹掉真记录。
-    if (child.event.kind === "attachment" && child.event.field) continue;
+    // 接回后的第一处引用就会跳号,展示端按「来源+身份」去重时夹掉真记录。它们接到自己的
+    // 账上(发号器与代号)。
+    if (child.event.kind === "attachment" && child.event.field) {
+      const seeded = meta(child.id, child.event.field);
+      if (typeof child.event.ref === "number") seeded.refs = Math.max(seeded.refs, child.event.ref + 1);
+      seeded.rev = Math.max(seeded.rev, child.event.rev ?? 0);
+      continue;
+    }
     if (child.event.kind === "text" && child.event.text) doc(child.id).text += child.event.text;
     else if (child.event.kind === "attachment" && typeof child.event.ref === "number" && child.event.ref < SYNTH_REF_BASE) {
-      count(doc(child.id), child.event.ref, child.event.pos);
+      count(doc(child.id), child.event.ref, child.event.pos, true);
     }
   }
   for (const line of await readJournal(taskId, sessionId)) {
-    if (line.field) continue; // 快照式正文的账不进种子:每条进程按自己看到的终稿各交各的
-    if (line.doc == null && line.turnStartedAt !== opts.mainTurnStartedAt) continue;
+    if (line.field) {
+      // 快照式正文的账:发号器、代号接续;冻的字节按目的地接回(同一回合接回时,协议把
+      // 同一份正文重放给新进程,同目的地必须沿用当时拍下的那一份,而不是现在去读盘)。
+      const seeded = meta(line.doc ?? "", line.field);
+      if (line.final && typeof line.ref === "number") seeded.refs = Math.max(seeded.refs, line.ref + 1);
+      seeded.rev = Math.max(seeded.rev, line.rev ?? 0);
+      seeded.byDestination.set(line.source, {
+        destination: line.source,
+        ...(line.path ? { path: line.path } : {}),
+        ...(line.lost ? { lost: true } : {}),
+      });
+      continue;
+    }
+    const inScope = line.doc != null || line.turnStartedAt === opts.mainTurnStartedAt;
     if (line.final) {
       if (typeof line.ref !== "number" || line.ref >= SYNTH_REF_BASE) continue;
-      count(doc(line.doc ?? ""), line.ref, line.pos);
-    } else {
+      count(doc(line.doc ?? ""), line.ref, line.pos, inScope);
+    } else if (inScope) {
       // 只冻结、没交代的那几笔:字节(或 lost 结论)接回种子,接回的 sink 交代到那一处时
       // 用**当时**的拷贝,而不是现在去读盘。同一处取最后一笔(目的地可能改过)。
       const seeded = doc(line.doc ?? "");
@@ -179,20 +218,39 @@ export async function loadMarkdownImageSeed(
   const out = new Map<string, MarkdownImageSeedDoc>();
   for (const [id, seeded] of docs) {
     if (!seeded.text && !seeded.refs) continue;
-    // 交代推进到哪,只信得过「每一条已交代记录都能在正文里对上节点」的情形:逐条按 pos 对
-    // 回正文节点,对满 refs 条 ⇒ 交代线 = 最后一条的节点终点,之后的引用由接回的 sink 继续
-    // 交代(审查第 8 轮 R1)。对不满(老数据没有 pos、正文没落全)就退回老口径 —— 整段当作
-    // 交代过,宁可少交代也不重复交代(重复会让展示端同目的地多一条,整组作废)。
+    // 交代推进到哪,只信得过「已交代的恰是正文最前面那几个节点、每条都带着节点起点」的
+    // 情形:按文档顺序走节点,交付的前缀走到哪、交代线就在哪 —— 之后的引用(含还在等定义
+    // 的)由接回的 sink 继续交代(审查第 8 轮 R1)。判据与发号器无关:号数跨回合连续,
+    // 「本回合已交付 1 条、号是 1」推不出「本回合该有 2 条」(复审 R3)。对不上(老数据
+    // 没有 pos、有越过前缀的交代)就退回老口径 —— 整段当作交代过,宁可少交代也不重复交代
+    // (重复会让展示端同目的地多一条,整组作废)。
     const nodes = markdownImageRefs(seeded.text);
-    const matched = nodes.filter((node) => seeded.delivered.has(node.start));
-    const emitted = matched.length === seeded.refs
-      ? matched.reduce((end, node) => Math.max(end, node.end), 0)
-      : seeded.text.length;
+    let prefix = 0;
+    let end = 0;
+    while (prefix < nodes.length && seeded.delivered.has(nodes[prefix].start)) {
+      end = Math.max(end, nodes[prefix].end);
+      prefix += 1;
+    }
+    const trusted = seeded.delivered.size === seeded.finals.size && seeded.delivered.size === prefix;
     out.set(id, {
       text: seeded.text,
       refs: seeded.refs,
-      emitted,
+      emitted: trusted ? end : seeded.text.length,
       ...(seeded.snapshots.size ? { snapshots: [...seeded.snapshots.values()] } : {}),
+    });
+  }
+  for (const [key, seeded] of metas) {
+    if (!seeded.refs && !seeded.byDestination.size && !seeded.rev) continue;
+    out.set(key, {
+      text: "",
+      refs: seeded.refs,
+      emitted: 0,
+      // 接回的进程从上一条进程的最高代 + 1 起算:两边的记录绝不共代,展示端取最高代时
+      // 不会把两条进程各自的冻结混成一组。
+      rev: seeded.rev + 1,
+      ...(seeded.byDestination.size
+        ? { snapshots: [...seeded.byDestination.values()].map((snap) => ({ pos: 0, ...snap })) }
+        : {}),
     });
   }
   return out.size ? out : undefined;
@@ -209,7 +267,7 @@ function imageEvent(line: JournalLine, ref: number): SessionTraceEvent {
     source: line.source,
     ref,
     pos: line.pos,
-    ...(line.field ? { field: line.field } : {}),
+    ...(line.field ? { field: line.field, rev: line.rev ?? 0 } : {}),
     ...(line.path ? { path: line.path } : {}),
     ...(line.lost ? { lost: true } : {}),
   };
@@ -257,6 +315,17 @@ export async function mergeImageJournal(
       traced.add(tracedKey(entry.turnStartedAt, null, undefined, event.source ?? "", event.ref));
       continue;
     }
+    // 快照式正文(message/result)按**替换**语义收集:展示端认的是最后一版(含空串清场),
+    // field 账的恢复只认「落盘的这一版里真有这个节点」—— 不核对就补,补回来的可能是没保存
+    // 的另一版的记录(复审 R1 中断/恢复一例)。result 事件的正文是原始字符串,记录的 pos
+    // 也是按它算的,两边同一口径。
+    const work = event.kind === "tool" ? event.nativeWork : undefined;
+    if (work?.type === "agent") {
+      if (typeof work.message === "string") texts.set(docKey(work.id, entry.turnStartedAt, "message"), work.message);
+      if (typeof work.result === "string") texts.set(docKey(work.id, entry.turnStartedAt, "result"), work.result);
+    } else if (work?.type === "result") {
+      texts.set(docKey(work.id, entry.turnStartedAt, "result"), work.result);
+    }
     const child = childEventOf(event);
     if (!child) continue;
     if (child.event.kind === "text" && child.event.text) {
@@ -266,8 +335,15 @@ export async function mergeImageJournal(
     }
   }
   const finalsAt = new Set<string>();
+  /** 账本 final 的 身份 → pos:给 trace 里没带 pos 的老记录补上节点身份,新旧记录混在
+   * 同一目的地时,展示端的文档序排序才有依据(复审 R3:只要有一条没 pos 排序就不生效)。 */
+  const finalPos = new Map<string, number>();
   for (const line of journal) {
-    if (line.final) finalsAt.add(`${docKey(line.doc, line.turnStartedAt, line.field)}\u0000${line.pos}`);
+    if (!line.final) continue;
+    finalsAt.add(`${docKey(line.doc, line.turnStartedAt, line.field)}\u0000${line.pos}`);
+    if (typeof line.ref === "number") {
+      finalPos.set(tracedKey(line.turnStartedAt, line.doc ?? null, line.field, line.source, line.ref), line.pos);
+    }
   }
   // 「真实正文里的对应节点」:恢复只认**已落盘正文**里确实存在、目的地也对得上的那一处。
   // 身份对不上节点的(正文没写进 trace 的后半截、目的地后来改写过的旧笔),final 和临时账
@@ -289,31 +365,47 @@ export async function mergeImageJournal(
   for (const line of journal) {
     if (line.final) {
       if (typeof line.ref !== "number") continue;
-      // message/result 是快照式正文,不落 text 事件,核不了节点 —— 它的 final 在协议入口
-      // 一次成稿,按原样补;追加式文档照核。
-      if (!line.field && nodeAt(docKey(line.doc, line.turnStartedAt), line.pos) !== line.source) continue;
+      // 追加式文档核 text 事件拼出的正文;快照式正文核 agent/result 事件里最后一版 ——
+      // 两类都只补「落盘正文里真有这个节点、目的地也对得上」的那一处。
+      if (nodeAt(docKey(line.doc, line.turnStartedAt, line.field), line.pos) !== line.source) continue;
       const key = tracedKey(line.turnStartedAt, line.doc, line.field, line.source, line.ref);
       if (traced.has(key)) continue;
       traced.add(key);
       synth.push({ line, event: imageEvent(line, line.ref) });
     } else {
-      // 同一处取最后一笔:目的地可能改过(还在写的定义行后来接长了),最后那笔才是定论。
-      provisional.set(`${docKey(line.doc, line.turnStartedAt)}\u0000${line.pos}`, line);
+      // 同一处取最后一笔:目的地可能改过(还在写的定义行后来接长了;快照式正文换稿挪过
+      // 坐标),最后那笔才是定论。键带 field:两份字段文档的同一坐标不是同一处。
+      provisional.set(`${docKey(line.doc, line.turnStartedAt, line.field)}\u0000${line.pos}`, line);
     }
   }
   let bump = 0;
   for (const [key, line] of provisional) {
     if (finalsAt.has(key)) continue;
-    if (nodeAt(docKey(line.doc, line.turnStartedAt), line.pos) !== line.source) continue;
+    if (nodeAt(docKey(line.doc, line.turnStartedAt, line.field), line.pos) !== line.source) continue;
     synth.push({ line, event: imageEvent(line, SYNTH_REF_BASE + bump++) });
   }
-  if (!synth.length) return entries;
+  const patched = entries.map((entry) => {
+    const event = entry.event;
+    if (event.kind === "attachment" && typeof event.ref === "number" && event.pos === undefined) {
+      const pos = finalPos.get(tracedKey(entry.turnStartedAt, null, undefined, event.source ?? "", event.ref));
+      if (pos !== undefined) return { ...entry, event: { ...event, pos } };
+    }
+    const child = childEventOf(event);
+    if (child && child.event.kind === "attachment" && typeof child.event.ref === "number" && child.event.pos === undefined) {
+      const pos = finalPos.get(tracedKey(entry.turnStartedAt, child.id, child.event.field, child.event.source ?? "", child.event.ref));
+      if (pos !== undefined) {
+        return { ...entry, event: childActivity(child.id, { ...child.event, pos }) as SessionTraceEvent };
+      }
+    }
+    return entry;
+  });
+  if (!synth.length && patched.every((entry, i) => entry === entries[i])) return entries;
   synth.sort((a, b) =>
     (a.line.doc ?? "").localeCompare(b.line.doc ?? "")
     || a.line.turnStartedAt.localeCompare(b.line.turnStartedAt)
     || a.line.pos - b.line.pos);
   return [
-    ...entries,
+    ...patched,
     ...synth.map(({ line, event }) => ({ at: line.at, turnStartedAt: line.turnStartedAt, event })),
   ];
 }

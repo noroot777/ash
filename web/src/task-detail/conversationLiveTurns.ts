@@ -91,13 +91,15 @@ function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
   segment.events = appendExecutionEvent(segment.events, normalized);
 }
 
-function appendAgentAttachment(agent: AgentItem, event: { path?: string; source?: string; ref?: number; lost?: boolean }): void {
+function appendAgentAttachment(agent: AgentItem, event: { path?: string; source?: string; ref?: number; pos?: number; lost?: boolean }): void {
   const segment = currentSegment(agent);
   // **附件不切段**(落盘重建那一路同一条规矩,理由写在 conversationSegments):切了段就是
   // 把同一条消息的正文分成两份分别解析,语法边界跟着事件布局变(审查第 2 轮 F2)。
   if (event.path && !segment.attachments.includes(event.path)) segment.attachments.push(event.path);
   // source/ref = 正文第几处引用对上哪份拷贝(落盘重建那一路同一份口径,见 conversationSegments)。
-  if (event.source) (segment.attachmentSources ??= []).push({ path: event.path, source: event.source, ref: event.ref, lost: event.lost });
+  // pos 也要带:恢复补回的记录靠它排回文档顺序,实时这一路丢了它,新旧记录一混排序就
+  // 整组失效(审查第 8 轮复审 R3 对称面)。
+  if (event.source) (segment.attachmentSources ??= []).push({ path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost });
 }
 
 /**

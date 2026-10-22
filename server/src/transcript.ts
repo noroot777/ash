@@ -236,7 +236,7 @@ function validNativeActivity(value: unknown): boolean {
       return isString(activity.message);
     case "attachment":
       return optionalString(activity.path) && optionalString(activity.source) && optionalNumber(activity.ref)
-        && optionalNumber(activity.pos)
+        && optionalNumber(activity.pos) && optionalNumber(activity.rev)
         && (activity.lost === undefined || activity.lost === true)
         && (activity.field === undefined || activity.field === "message" || activity.field === "result")
         && (activity.path !== undefined || activity.source !== undefined);

@@ -180,8 +180,8 @@ for (const event of stamped) {
 // message/result(快照式正文)的图片记录带 `field`,必须路由到 messageImages/resultImages,
 // 不许混进 row.activity(混进去 = 执行记录文档多一条结果,逐目的地对账整组作废)。
 {
-  const fieldShot = (field: "message" | "result", source: string, path: string): NativeWorkEvent =>
-    ({ type: "activity", id: "child", event: { kind: "attachment", field, source, ref: 0, pos: 3, path } });
+  const fieldShot = (field: "message" | "result", source: string, path: string, rev = 0, ref = 0): NativeWorkEvent =>
+    ({ type: "activity", id: "child", event: { kind: "attachment", field, source, ref, pos: 3, rev, path } });
   const row = rowFrom([
     spawn, launched,
     { type: "activity", id: "child", event: { kind: "text", text: "执行:![k](k.png)\n\n" } },
@@ -205,5 +205,40 @@ for (const event of stamped) {
     { ...completed, message: "![m](m.png)" },
   ]);
   assert.deepEqual(early.messageImages?.map((shot) => shot.source), ["m.png"], "行合并时 field 账跟着搬到 native id 名下");
+}
+
+// 代(rev)分组:正文清场/换稿开新代之后,旧代记录说的是已经不在屏幕上的那一版 ——
+// 展示端只认最高代那组(审查第 8 轮复审 R1 同线程继续一例:旧代红图顶掉新代蓝图)。
+{
+  const fieldShot = (rev: number, ref: number, path: string): NativeWorkEvent =>
+    ({ type: "activity", id: "child", event: { kind: "attachment", field: "result", source: "shot.png", ref, pos: 6, rev, path } });
+  const row = rowFrom([
+    spawn, launched,
+    fieldShot(0, 0, "/up/rev0.png"),
+    fieldShot(1, 1, "/up/rev1.png"),
+    { ...completed, result: "续说 ![蓝](shot.png)" },
+  ]);
+  assert.deepEqual(row.resultImages?.map((shot) => shot.path), ["/up/rev1.png"], "只认最高代:旧代冻结不混进当前正文");
+}
+// 结果正文从调用行提取到子行时(taskoutput / wait 的 statuses),它名下的 result 图片记录
+// 按目的地跟着搬 —— 留在调用行就永远配不上正文(复审 R1 结构化返回结果一例)。
+{
+  const rows = rowsFrom([
+    { type: "agent", id: "child", nativeId: "17", at: start, status: "running" },
+    { type: "call", id: "out", name: "taskoutput", at: end, input: { task_id: "17" } },
+    { type: "activity", id: "out", event: { kind: "attachment", field: "result", source: "o.png", ref: 0, pos: 2, rev: 0, path: "/up/o.png" } },
+    { type: "result", id: "out", at: end, result: "<status>completed</status><output>瞧 ![o](o.png)</output>", failed: false },
+  ]);
+  const child = rows.find((row) => row.nativeId === "17");
+  assert.deepEqual(child?.resultImages?.map((shot) => shot.source), ["o.png"], "taskoutput 提取正文到子行,图片记录跟着搬");
+  const statusRows = rowsFrom([
+    { type: "call", id: "w", name: "wait", at: start, input: {} },
+    { type: "activity", id: "w", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 2, rev: 0, path: "/up/s.png" } },
+    { type: "result", id: "w", at: end, result: '{"statuses":{"childA":{"completed":"甲 ![s](s.png)"},"childB":{"completed":"乙"}}}', failed: false },
+  ]);
+  const hit = statusRows.find((row) => row.nativeId === "childA");
+  const miss = statusRows.find((row) => row.nativeId === "childB");
+  assert.deepEqual(hit?.resultImages?.map((shot) => shot.source), ["s.png"], "statuses 按正文含来源与否逐行分发");
+  assert.equal(miss?.resultImages, undefined, "正文里没有这个来源的行不接收");
 }
 console.log("子智能体模型、待办开工时间、跨日跨度、实时/历史时间与缺失数据回归通过");

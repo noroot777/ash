@@ -470,6 +470,32 @@ try {
     "节点自己比窗口长:回看越过封底,开头不被切掉,字节仍按说到它那一刻拍",
   );
 
+
+  // ⑮ **收尾那一片只有 `")\n`**(复审 R2 实测 tail-split-close:RED 拍成 BLUE)。
+  //
+  // 长 title 分片流入,闭合括号单独成片:这一片既没有 `]` 也没有 `![`。上一版的回看闸按
+  // 「整块重解析预算」放行,预算按本片增量折算 —— 3 个字的收尾片摊不动几千字的回看距离,
+  // 完整引用已经可解释却不冻结,等 done 整篇重扫时文件已重拍。不变量:任意完整本地图片
+  // 引用可解释时,冻结不受重解析预算限制 —— 开着的节点已见 `](`,就只差一个 `)`,收尾
+  // 字符一到必须回看。
+  const chip = join(root, "output", "chip.png");
+  writeFileSync(chip, red);
+  const chipEvents = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "铺垫".repeat(50000) + "\n" } as AgentEvent;
+    yield { kind: "text", text: `拆开说：![拆尾](output/chip.png "` } as AgentEvent;
+    for (let fed = 0; fed < 45; fed += 1) yield { kind: "text", text: "说明".repeat(100) } as AgentEvent;
+    yield { kind: "text", text: `")\n` } as AgentEvent;
+    writeFileSync(chip, blue);
+    yield { kind: "tool", name: "exec", detail: "重拍蓝色" } as AgentEvent;
+    yield { kind: "text", text: "\n改后：![拆尾后](output/chip.png)\n\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(chipEvents).map((event) => colorOf(event.path)),
+    ["RED", "BLUE"],
+    "收尾片单独到达:完整引用可解释即冻结,字节按说到它那一刻拍",
+  );
+
   console.log("协议入口记账与文档身份回归通过");
 } finally {
   rmSync(root, { recursive: true, force: true });

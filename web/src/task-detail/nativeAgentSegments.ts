@@ -19,7 +19,7 @@ export function nativeAgentSegments(activity: NativeAgentActivity[]): AgentConte
       if (event.path && !current.attachments.includes(event.path)) current.attachments.push(event.path);
       // 子智能体那条路同样要把来源带上,否则抽屉里的正文一样配不上图(见 turnImages)。
       // 没有 path 的那条照样要留:它是「这处引用没副本」的明确交代,配对要靠它。
-      if (event.source) (current.attachmentSources ??= []).push({ path: event.path, source: event.source, ref: event.ref, lost: event.lost });
+      if (event.source) (current.attachmentSources ??= []).push({ path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost });
     } else {
       /* 切点规则跟主会话那两路共用一份(eventSplitAt,理由写在 conversationSegments)。 */
       const cut = eventSplitAt(current.markdown, index > lastText);

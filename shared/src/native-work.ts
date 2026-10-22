@@ -18,7 +18,9 @@ export type NativeAgentActivity =
   // 抽屉里的正文跟主会话走同一套配对,少一个字段就配不上)。
   // `field` = 这条记录属于哪份**快照式**正文:子智能体的 message / 返回结果 result(它们
   // 不是执行记录那份追加式文档,配对各归各,见 server 的 markdown-image-meta.ts)。
-  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean; field?: "message" | "result" };
+  // `rev` = 快照式正文的第几**代**(turn/started 清场、或已交代后换稿,都开新一代):展示端
+  // 只认最高代的那组记录 —— 正文已经换稿,旧代的冻结说的是已经不在屏幕上的那一版。
+  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean; field?: "message" | "result"; rev?: number };
 
 export type NativeWorkEvent = (
   | { type: "activity"; id: string; event: NativeAgentActivity }

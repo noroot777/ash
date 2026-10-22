@@ -138,7 +138,7 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
       if (event.event.kind === "text") turn.text += event.event.text;
       // 正文引用到的图:实时这一路同样逐处留下(落盘那一路见 duet/turn.ts 的 images)。
       if (event.event.kind === "attachment" && event.event.source) {
-        turn.images = [...(turn.images ?? []), { path: event.event.path, source: event.event.source, ref: event.event.ref, lost: event.event.lost }];
+        turn.images = [...(turn.images ?? []), { path: event.event.path, source: event.event.source, ref: event.event.ref, pos: event.event.pos, lost: event.event.lost }];
       }
       // label 兜底同 task-detail/conversationSegments.ts 的 auxEvent：下游按字符串用它，
       // 一条没名字的 tool 事件能把整页打崩。

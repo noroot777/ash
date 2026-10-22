@@ -89,8 +89,9 @@ type Ledger = {
    * (审查第 8 轮 R2)。回看跟着它越过封底;定论(冻结过、定型线越过它、交代线越过它)就清。
    */
   open: number;
-  /** open 回看的节流游标:上次从 open 起解析时的全文长度 —— 再长 1/8 才值得再回看一次。 */
-  openScanned: number;
+  /** open 之后出现过 `](` —— 行内节点已进目的地/标题段,`)` 才可能是它的收尾。增量维护,
+   * 把「散落的 `)`」挡在回看之外(等 `]` 的裸 `![` 不该为每个右括号付一次解析)。 */
+  openLink: boolean;
   /** 交代到这个绝对偏移为止了:起点在它之前的引用不再发第二遍。 */
   emitted: number;
   /** 有「语法已定型、还没交代过」的引用在等着 —— 下一条事件进流时就把它交代出去。 */
@@ -162,6 +163,8 @@ export type MarkdownImageSpot = {
   doc: string | null;
   /** 这条账属于子智能体的哪份**快照式**正文(message/result),缺省 = 追加式文档本体。 */
   field?: "message" | "result";
+  /** 快照式正文的代号(见 shared NativeAgentActivity attachment 的 rev)。 */
+  rev?: number;
   /** 引用在这份文档全文里的绝对起点 —— 临时账与最终账靠它对上同一处。 */
   pos: number;
   source: string;
@@ -186,6 +189,8 @@ export type MarkdownImageSeedDoc = {
   emitted?: number;
   /** 之前的进程已冻结的字节(含「读到了、写盘失败」的 lost 结论),按绝对起点。 */
   snapshots?: ReadonlyArray<{ pos: number; destination: string; path?: string; lost?: boolean }>;
+  /** 仅快照式正文(metaSeedKey 键)用:接回的进程从这一代起算(上一条进程的最高代 + 1)。 */
+  rev?: number;
 };
 
 export type MarkdownImageAccounting = {
@@ -208,7 +213,7 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
   const released = new WeakSet<object>();
   // 子智能体 message/result(快照式正文)的账各归各(见 markdown-image-meta.ts),但清理
   // 账本共用:拍下没人领的照旧由 dispose 删。
-  const meta = metaImageAccounts({ cwd, note, captured, claimed });
+  const meta = metaImageAccounts({ cwd, note, captured, claimed, exposed, seed: accounting?.seed });
   const ledgers = new Map<string, Ledger>();
   const ledgerFor = (id: string | null): Ledger => {
     const key = id ?? "";
@@ -273,7 +278,7 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
       noted,
       bang: -1,
       open: -1,
-      openScanned: 0,
+      openLink: false,
       emitted,
       due: false,
     };
@@ -351,15 +356,18 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     from = Math.max(from, ledger.text.length - SCAN_WINDOW, 0);
     // 一处图片节点**自己**比窗口还长(9 KB 的 title):封底会把节点开头切掉,这一片在切片里
     // 认不出候选 —— 但推不出「这一片没有完整引用」(审查第 8 轮 R2 实测:RED 拍成 BLUE)。
-    // 还没定论的最早 `![` 必须整个进切片,所以回看允许越过封底。成本由节流兜住:这一片得
-    // 真带收尾字符(`)` 或 `]`),且自上次回看后全文又长了 1/8,总解析量仍然线性。
+    // 还没定论的最早 `![` 必须整个进切片,所以回看允许越过封底。判据是**收尾字符本身**:
+    // 能让 open 定论的只有 `]`(alt 收尾/引用式收尾)和进过 `](` 之后的 `)`(行内收尾),
+    // 这样的一片必须回看 —— 按「增长预算」节流的上一版,收尾恰好单独成片(`")\n`,只有
+    // 3 字)时增长不足 1/8,完整引用已可解释却被跳过,读到的是 200ms 后重拍的文件(复审
+    // R2 实测 tail-split-close)。代价:open 一直没定论时,每个带收尾字符的片都要从 open
+    // 重解析一遍 —— 上界是「未定论节点长度 × 这期间的收尾字符片数」,正常输出一处节点
+    // 一两次就定论;真正的散文 `)` 由 openLink 挡住(裸 `![` 只等 `]`)。
     if (
       ledger.open >= 0 && ledger.open < from
-      && /[)\]]/.test(fresh)
-      && (ledger.text.length - ledger.openScanned) * SCAN_SLACK >= ledger.text.length - ledger.open
+      && (fresh.includes("]") || (ledger.openLink && fresh.includes(")")))
     ) {
       from = ledger.open;
-      ledger.openScanned = ledger.text.length;
     }
     // 回看范围里连 `![` 都没有、也没有人等定义:这一片不值得切 8 KB 出来解析。光靠上面的
     // 字符闸拦不住普通散文(换行到处都是),没有这一道,纯正文的放慢档每片都白付一个窗口。
@@ -390,9 +398,17 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
       if (destination && !spots.has(start)) spots.set(start, { destination, start, end: entry.end });
     }
     if (spots.size) freeze(ledger, [...spots.values()]);
-    // 定论之一:它的字节已经冻上了(整节点进过切片、或定义到了由等待那条路解开)。没冻上就
-    // 留着 —— 文件还没生成时每次回看都值得再试,节流保证这不会变成每片一个窗口。
-    if (ledger.open >= 0 && ledger.snapshots.has(ledger.open)) ledger.open = -1;
+    // 定论只认两种:字节已冻上(snapshots)、或整篇扫描已定案(decided)。**这一片的
+    // waiting 不算数**:还没闭合的行内节点(`![a](b "title…` 等着收尾)在无上下文切片里会被
+    // 解析成「等定义的引用式候选」—— 拿它当定论,收尾那一片(`")\n`)到达时 open 已经被清,
+    // 完整引用可解释却没人回看(正是复审 R2 的 tail-split-close)。真正的引用式等待被 open
+    // 钉住的代价只是多几次回看,定义一到冻结就推进。定论之后 open 推进到**下一个** `![`
+    // (同片可能有多个未决节点,只清不挪会把后面那个漏在窗口外)。
+    while (ledger.open >= 0 && (ledger.snapshots.has(ledger.open) || ledger.decided.has(ledger.open))) {
+      const next = ledger.text.indexOf("![", ledger.open + 1);
+      ledger.open = next;
+      ledger.openLink = next >= 0 && ledger.text.indexOf("](", next) >= 0;
+    }
   };
 
   /**
@@ -442,7 +458,10 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
       const first = text.indexOf("![");
       if (first >= 0) ledger.open = seam + first;
       else if (text[0] === "[" && ledger.text[seam - 1] === "!") ledger.open = seam - 1;
-      if (ledger.open >= 0) ledger.openScanned = ledger.open;
+      if (ledger.open >= 0) ledger.openLink = ledger.text.indexOf("](", ledger.open) >= 0;
+    } else if (!ledger.openLink && (text.includes("](") || (text[0] === "(" && ledger.text[seam - 1] === "]"))) {
+      // 误报(`](` 在 open 之前/被转义)只多付几次回看,漏报才会漏拍 —— 宁可宽。
+      ledger.openLink = true;
     }
     const window = ledger.text.length - ledger.base;
     const fresh = ledger.text.length - ledger.scanned;
@@ -581,7 +600,7 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     ledger.noted.clear();
     ledger.bang = -1;
     ledger.open = -1;
-    ledger.openScanned = 0;
+    ledger.openLink = false;
     ledger.emitted = 0;
   };
 
