@@ -100,6 +100,9 @@ export async function judgeDebtRow(
   for (const answer of [marker, paths, ...held.answers]) {
     if (answer) answers.push({ subject: "descendants", answer });
   }
+  // **账本自己那一问**:行上那份名单这一刻读不出来时它弃权,而弃权在两问之间是压过
+  // `empty` 的 —— 结论落成 `silent` ⇒ 收档(盖戳留行),不是销账。读得出来时它答正面。
+  answers.push({ subject: "ledger", answer: held.ledger });
   return {
     marked, after, clues, result: judgeByClues(answers),
     // **路径那一侧自己判可重试**:`unknown` 里混着两种 —— 「这一次没答出来」下一轮还问得
@@ -127,27 +130,33 @@ export async function judgeDebtRow(
  */
 export function openResidue(
   stored: string | null, extraOpen: readonly CleanupOpen[] = [],
-): { answers: CleanupResult[]; retriable: boolean } {
+): { ledger: CleanupResult; answers: CleanupResult[]; retriable: boolean } {
   const parsed = parseOpenMembers(stored);
   // **坏字段不吞掉手上还握着的有效身份**(第 10 轮审查 F1-C):这里是**两件事**,所以发
   // 两条言 —— 「行上那份读不出来」是一台设备弃权(再读一万次也是同一句 ⇒ 收档),而待投
   // 清单里那几个号是另一台设备**点着名**的活责任(⇒ 留着重试)。上一版把它们挤成一条
   // `silent`/不可重试,于是有效身份既挡不住销账(弃权票压不过别人的「我这边没有」),
   // 也等不到下一轮重试。
-  const broken: CleanupResult[] = parsed === "broken"
-    ? [{
-      kind: "silent", why: "行上那份「排除不掉的号」读不出来(内容坏了),核不动",
-      open: [],
-    }]
-    : [];
+  // 它答的是**第三问**(`ledger`:账本自己),不是 `descendants` 的一台设备 —— 同一问之内
+  // 弃权票压不过别人的「我这边没有」,于是放在后代那一问里它会被路径线索的 `empty` 票洗掉
+  // (实测:一次 JSON 损坏的结论是判空成立、行被删)。判据见 cleanup-result.ts 的
+  // `CleanupSubject`。
+  // **这一问永远有答案**,不许缺席:`mergeClueAnswers` 把「一条答案都没有」读成全体弃权
+  // (silent),而弃权在两问之间压过 `empty` —— 于是一个不投票的 `ledger` 会让每一行都永远
+  // 收档、再也销不掉(实测:三组正常收尾的用例当场变红)。账本这一问不存在「没有设备」
+  // 那一档:读得出来就是正面答案。
+  const ledger: CleanupResult = parsed === "broken"
+    ? { kind: "silent", why: "行上那份「排除不掉的号」读不出来(内容坏了),核不动", open: [] }
+    : nothingToCollect();
   const all = joinOpen(parsed === "broken" ? [] : parsed, extraOpen);
-  if (!all.length) return { answers: broken, retriable: false };
+  if (!all.length) return { ledger, answers: [], retriable: false };
   // **核销判据与即时清理共用一份**(`dischargeOpen`):只有「号上没人」和「同一坐标系里换了
   // 代」算退出证据,跨坐标系的不等不算(第 9 轮审查 F1-C)。
   const { left } = dischargeOpen(all);
-  if (!left.length) return { answers: [...broken, sweptClean([])], retriable: false };
+  if (!left.length) return { ledger, answers: [sweptClean([])], retriable: false };
   return {
-    answers: [...broken, {
+    ledger,
+    answers: [{
       kind: "unknown",
       detail: `上一轮点名、这一刻仍排除不掉:${describeOpen(left)}`,
       open: left,

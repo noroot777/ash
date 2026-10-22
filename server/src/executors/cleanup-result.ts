@@ -311,8 +311,24 @@ export function mergeClueAnswers(answers: readonly CleanupResult[], subject: str
 }
 
 /** 判空的两个问(见顶部)。每条线索必须声明自己在答哪一问。 */
-export type CleanupSubject = "root" | "descendants";
-const SUBJECT_LABEL: Record<CleanupSubject, string> = { root: "根进程", descendants: "后代" };
+/**
+ * 判空要分别问清楚的几件事。`ledger` 是第 13 轮封写入那一段时补上的第三问:**账本自己
+ * 这一刻读不出来**。
+ *
+ * 为什么它不能跟 `descendants` 混在一问里(实测):同一问之内的规矩是「一台设备弃权,不许
+ * 否掉另一台正面答出来的那张」(见 `mergeClueAnswers`)—— 对线索设备这是对的,输出文件那一
+ * 问答得出「没人握着」时,记号那一问答不上来不该拖它。可「行上那份未排除名单读不出来」
+ * 说的不是某一条线索,是**我手上这份责任清单本身核不动**;把它放进 `descendants`,它就被
+ * 路径那一问的 `empty` 票洗掉了,于是一次 JSON 损坏的结论是「判空成立」,行被真的删掉。
+ *
+ * 放到自己这一问之后走的是两问之间那条规矩(`mergeCleanupResults`:`silent` 压过 `empty`),
+ * 结论落成 `silent` ⇒ 处置是**收档**(盖戳留行、不再自动重试),正是「再问多少次都是
+ * 同一句」该去的那一档。
+ */
+export type CleanupSubject = "root" | "descendants" | "ledger";
+const SUBJECT_LABEL: Record<CleanupSubject, string> = {
+  root: "根进程", descendants: "后代", ledger: "责任清单",
+};
 
 /** 一条线索的发言:它在答哪一问、答的是什么。 */
 export type ClueAnswer = { subject: CleanupSubject; answer: CleanupResult };
@@ -325,7 +341,15 @@ export type ClueAnswer = { subject: CleanupSubject; answer: CleanupResult };
  * 证明清空的不变量」。
  */
 export function judgeByClues(clues: readonly ClueAnswer[]): CleanupResult {
-  const subjects: CleanupSubject[] = ["root", "descendants"];
+  // **两问必答,第三问有就答**。`root`/`descendants` 一条答案都没有时按全体弃权算
+  // (`mergeClueAnswers` 的空列表 ⇒ silent),那是对的:没有任何设备说过话,判空不成立。
+  // 可同一条规矩套到 `ledger` 上就反了 —— 它只有债表那条链投票,即时清理那条链压根没有
+  // 「行」这个东西(`kill.ts` 的 `judgeCleanup`)。无条件把它排进来,那条链上每一次正常收尾
+  // 都会拿到一张不存在的弃权票,结论永远 silent、永远收档(实测:`test:holder-scan` 当场
+  // 变红 ——「每次正常收尾都会压一笔追不动的债」)。
+  const asked = new Set(clues.map((c) => c.subject));
+  const subjects: CleanupSubject[] = ["root", "descendants",
+    ...(asked.has("ledger") ? ["ledger" as const] : [])];
   return mergeCleanupResults(subjects.map((s) => mergeClueAnswers(
     clues.filter((c) => c.subject === s).map((c) => c.answer), SUBJECT_LABEL[s],
   )));

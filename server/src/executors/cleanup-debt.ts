@@ -13,7 +13,7 @@
 //    `version` 当交叉校验,对不上就一行不动(见 `settleIfStillEmpty`/`pushDebtLocked`);
 //  · **落库失败不等于责任消失** —— 写不进去的那一笔留在内存里接着扛(`pendingNotes`),
 //    每次清扫先补投一遍,并且在清扫结果里如实报出「还有几笔只在内存里」。
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { eq, isNull, sql } from "drizzle-orm";
 import { db, dbClient } from "../db/index.js";
 import { agentCleanupDebts } from "../db/schema.js";
 import { now } from "../util.js";
@@ -21,13 +21,16 @@ import { processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { signalMembers } from "./escapees.js";
 import {
   cleanupDetail, joinOpen, openLedger, openOf, unitOpen,
-  type CleanupOpen, type CleanupResult,
+  type CleanupOpen,
 } from "./cleanup-result.js";
 // **判据在隔壁那一份**:这里只管账本的读写,「这一刻算不算空、该销还是该收档」问它。
 import {
   debtDisposition, debtKey, isMarked, judgeDebtRow, openMembersOf, serializeOpenMembers,
   type CleanupDebtClues, type DebtRow,
 } from "./cleanup-debt-judge.js";
+// **写库只有一个出口**:三个写入动作是那一份的文件私有,这里 import 不到它们 —— 所以
+// 「写一下、不管落没落下」在编译期就拿不到那半边(第 13 轮审查 F1 的修复层级)。
+import { applyDebtDisposition, type DebtWriteHooks } from "./cleanup-debt-write.js";
 
 /**
  * 行上已经点过名的那几个号。**三档,不折成空数组**(第 9 轮审查 F1-D 第一条):
@@ -216,6 +219,38 @@ function forgetNoteBookkeeping(key: string): void {
   landedSeq.delete(key);
 }
 
+/**
+ * 写入层要的那两件事(见 `cleanup-debt-write.ts` 的 `DebtWriteHooks`)。
+ *
+ * `hold` 是**第 13 轮审查 F1 的那条兜底**:一句库写没落下时,这一轮判定里还没核销的身份
+ * 只剩内存这一个落脚处。两条纪律:
+ *  · **无锁** —— 调用链已经持着这个键的 `withDebtKey`,走 `noteCleanupDebt` 就是自等待;
+ *    这里只往清单里放一笔并排一次补投,锁早就释放了才会真正去写库;
+ *  · **给新序号** —— 它是这一刻判出来的那一版,不是补投一份旧叙述;拿旧序号会被
+ *    `writeNote` 的过期闸当成「只补名单」处理,这一刻的 state/detail 就丢了。
+ *
+ * 名单本身不在这里减:`keepPendingNote` 按「只并不减」合(它没核过那几个号),真正的核销
+ * 永远只走 `openResidue` 那一问。
+ */
+const debtWriteHooks: DebtWriteHooks = {
+  forget: forgetNoteBookkeeping,
+  hold: (debt, judged) => {
+    const open = openOf(judged.result);
+    if (!open.length) return;                     // 没有未核销的身份 ⇒ 没有要交接的东西
+    keepPendingNote(debt.unitToken, {
+      unitToken: debt.unitToken,
+      taskId: debt.taskId, sessionId: debt.sessionId,
+      rootPid: debt.rootPid, rootStartedAt: debt.rootStartedAt,
+      trackPath: debt.trackPath, outPath: debt.outPath,
+      // `empty` 不会走到这儿(上面那句已经返回了),收窄一下让类型说得过去。
+      state: judged.result.kind === "empty" ? "unknown" : judged.result.kind,
+      detail: cleanupDetail(judged.result),
+      unitVerdict: judged.after.verdict,
+      open,
+    }, ++noteSeq);
+  },
+};
+
 function scheduleFlush(): void {
   if (flushTimer || !pendingNotes.size) return;
   flushTimer = setTimeout(() => {
@@ -333,21 +368,19 @@ async function settleIfStillEmpty(key: string): Promise<void> {
   if (!read.row) return;                          // 从来没欠过 —— 绝大多数回合走这里
   const row = read.row;
   const judged = await judgeDebtRow(row, pendingOpenOf(key));
-  switch (debtDisposition(judged)) {
-    case "settle":
-      if (!await settleDebtRow(key, row.version)) {
-        console.warn(`[ash] 这一笔清理责任确证空了、销账却没落下(unit=${key}):`
-          + "行留着,下一轮清扫会再确证一次");
-      }
-      return;
-    case "close":
-      console.warn(`[ash] 这一笔清理责任追到这里为止(unit=${key}):${cleanupDetail(judged.result)}`
-        + " —— 行留着(最后的可定位身份),不再自动重试");
-      await closeDebtRow(key, row.version, cleanupDetail(judged.result));
-      return;
-    default:
-      console.warn(`[ash] 这一笔清理责任还不能销(unit=${key}):${cleanupDetail(judged.result)}`);
-      await touchDebtRow(row, judged.result, judged.after.verdict);
+  // 判出来的那一档决定**说什么**,真正落地与失败兜底由写入层那个唯一出口办(见
+  // `cleanup-debt-write.ts`:写不进去时那几个身份会被放回待投清单)。
+  const planned = debtDisposition(judged);
+  if (planned === "close") {
+    console.warn(`[ash] 这一笔清理责任追到这里为止(unit=${key}):${cleanupDetail(judged.result)}`
+      + " —— 行留着(最后的可定位身份),不再自动重试");
+  } else if (planned === "keep") {
+    console.warn(`[ash] 这一笔清理责任还不能销(unit=${key}):${cleanupDetail(judged.result)}`);
+  }
+  const outcome = await applyDebtDisposition(row, judged, debtWriteHooks);
+  if (planned === "settle" && outcome !== "settled") {
+    console.warn(`[ash] 这一笔清理责任确证空了、销账却没落下(unit=${key}):`
+      + "行留着,下一轮清扫会再确证一次");
   }
 }
 
@@ -364,59 +397,6 @@ async function readDebtRow(
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }
 }
-
-/**
- * 销账删行,**条件是「还是我判的那一版」**(见 schema 的 version)。
- *
- * 返回删没删到。版本对不上 = 判定与下手之间有人往这个键上落了新证据,这一刀就不该下:
- * 行留着,下一轮重新取证。写失败同样返回 false —— 「删失败」不许长成「销账成功」。
- */
-async function settleDebtRow(unitToken: string, version: number): Promise<boolean> {
-  if (dbClient.closed) return false;
-  try {
-    const result = await db.delete(agentCleanupDebts).where(and(
-      eq(agentCleanupDebts.unitToken, unitToken), eq(agentCleanupDebts.version, version),
-    ));
-    if (rowsAffectedOf(result) > 0) {
-      forgetNoteBookkeeping(unitToken);
-      return true;
-    }
-    console.warn(`[ash] 销账没删到行(unit=${unitToken}、判的是第 ${version} 版):`
-      + "这个键上的证据在判定之后被人动过,这一刀不下,下一轮重新取证");
-    return false;
-  } catch (error) {
-    console.error(`[ash] 销账写失败 unit=${unitToken}:`, error);
-    return false;
-  }
-}
-
-/**
- * 追到这里为止(线索本身没了):盖戳、不再重试,**但不删行** —— 它是最后的可定位身份。
- *
- * 同样带版本条件:盖戳也是「按我判的那一版下的结论」,中间来了新证据就不该盖。
- */
-async function closeDebtRow(unitToken: string, version: number, note: string): Promise<boolean> {
-  if (dbClient.closed) return false;
-  try {
-    const result = await db.update(agentCleanupDebts)
-      .set({ closedAt: now(), closedNote: note.slice(0, 500), version: version + 1 })
-      .where(and(
-        eq(agentCleanupDebts.unitToken, unitToken), eq(agentCleanupDebts.version, version),
-        isNull(agentCleanupDebts.closedAt),
-      ));
-    if (rowsAffectedOf(result) > 0) return true;
-    console.warn(`[ash] 收档没盖到戳(unit=${unitToken}、判的是第 ${version} 版):`
-      + "要么这个键上的证据被人动过、要么已经收过档,这一轮不动它");
-    return false;
-  } catch (error) {
-    console.error(`[ash] 收档写失败 unit=${unitToken}:`, error);
-    return false;
-  }
-}
-
-/** 条件写到底改没改到行。drizzle 把底层 client 的 `rowsAffected` 原样带出来。 */
-const rowsAffectedOf = (result: unknown): number =>
-  Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0);
 
 /**
  * 还在追的那几笔(披露与重试入口都读它)。
@@ -601,45 +581,7 @@ async function pushDebtLocked(key: string): Promise<SweepVerdict> {
   // **记号与路径都在(可能的)下刀之后才取证**:下刀前那次读数说明不了下刀后的事。
   // 两份未决身份一起交给判定:待投清单上那几笔,以及这一轮刚确证过的那几个成员。
   const judged = await judgeDebtRow(debt, joinOpen(pendingOpenOf(key), owed.left()));
-  const { after, result } = judged;
-
-  switch (debtDisposition(judged)) {
-    case "settle":
-      // 删不掉就还是欠着:「写失败」不许在计数上长成「销账成功」(第 3 轮审查 N9)。
-      return await settleDebtRow(key, debt.version) ? "settled" : "left";
-    case "close":
-      return await closeDebtRow(key, debt.version, cleanupDetail(result)) ? "closed" : "left";
-    default:
-      await touchDebtRow(debt, result, after.verdict);
-      return "left";
-  }
-}
-
-/**
- * 留着这一笔:把这一刻停在哪、第几次了记上去。返回写没写进去。
- *
- * 也带版本条件 —— 这一句写的是「按我判的那一版,它仍然欠着」。中间来了新证据(版本已经
- * 变过)说明有更新的结论在,这一句就不该把它盖回去。
- */
-async function touchDebtRow(
-  debt: DebtRow, result: CleanupResult, verdict: UnitEvidence["verdict"],
-): Promise<boolean> {
-  if (dbClient.closed || result.kind === "empty") return false;
-  try {
-    const written = await db.update(agentCleanupDebts).set({
-      state: result.kind, detail: cleanupDetail(result).slice(0, 2000), unitVerdict: verdict,
-      // **这一份判定逐个核过了那几个号**(`openResidue`),所以它写得动这一列:核掉的去掉、
-      // 剩下的留着。落账那一侧相反 —— 它没核过,只并不减。
-      openMembers: serializeOpenMembers(openOf(result)),
-      lastAttemptAt: now(), attempts: sql`${agentCleanupDebts.attempts} + 1`,
-      version: debt.version + 1,
-    }).where(and(
-      eq(agentCleanupDebts.unitToken, debt.unitToken),
-      eq(agentCleanupDebts.version, debt.version),
-    ));
-    return rowsAffectedOf(written) > 0;
-  } catch (error) {
-    console.error(`[ash] 这一笔清理责任的进展没记上(unit=${debt.unitToken}):`, error);
-    return false;
-  }
+  // 落地与失败兜底都在写入层那个唯一出口里(`cleanup-debt-write.ts`):这一轮判出来的身份
+  // 要么写进了行上那一列,要么被放回待投清单 —— **没有「写了一下就算交接了」这条路**。
+  return await applyDebtDisposition(debt, judged, debtWriteHooks);
 }
