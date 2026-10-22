@@ -72,7 +72,11 @@ export async function finishOffline(
       // 已经写成终态的行还占着文件句柄、还在算自己的期限,到点再走一次收尾。撤之前照旧把
       // 文件吸干、把缓冲推出去(那一批是已经发生的事实)—— 所以下面**重读一遍**:offset 和
       // events 刚被那一次 flush 推进过,照 `fresh` 读会把同一批行再推一次。
-      await teardownRuntimeLocked(fresh.id);
+      // **撤运行时时排干读到的那条命中行要接过来**（新一轮审查 N1）:接回那一侧是**先 attach
+      // 再判「进程还在不在」**,于是这一趟排干往往已经把约定的那一行送到任务、把游标推过去了
+      // —— 证据在运行时上,下面那次补读一个字都看不到（审查实测:先 attach 再 finishOffline
+      // 落 lost,不 attach 直接落 matched,同一份日志同一个条件）。
+      const drained = await teardownRuntimeLocked(fresh.id);
       const base = (await db.select().from(monitors).where(eq(monitors.id, fresh.id))).at(0) ?? fresh;
 
       const collected: string[] = [];
@@ -91,7 +95,7 @@ export async function finishOffline(
       // 在 `commitProgress` 里,这一路运行时刚撤掉,内存里本来就没有没结清的内容）。
       else if (readTo !== base.offset) await commitProgress(base.id, readTo);
 
-      // **补读到的那一行命中,跟在线排干读到的是同一份证据**（新一轮审查 N1 实测:停服期间
+      // **读到的那一行命中,跟在线排干读到的是同一份证据**（新一轮审查 N1 实测:停服期间
       // 日志里已经出现约定的字样,正文补送成功、`events=1`,而卡片上写的仍是「进程已经不在
       // 了」，不是「等到了约定的那一行」）。判据跟在线那一侧同一个函数（`hitOf`）,不在这儿
       // 另写一遍。
@@ -100,7 +104,8 @@ export async function finishOffline(
       // 而且 ash 不在的时候那个进程是跑完了、被谁杀了、还是机器重启了,只有传进来的那句话答
       // 得出来 —— 所以把它原样接在后面,而不是换掉它（在线那一侧的折叠见 monitor-finish.ts
       // 的 `foldHit`）。只折 `lost` 这一档:别的终态是更确定的事实,不许被一行日志改写。
-      const hit = hitOf(base, collected);
+      // 两份证据同一个判据:运行时排干读到的那一条（`drained`）、以及这一趟补读出来的那几行。
+      const hit = drained ?? hitOf(base, collected);
       const outcome = hit !== null && status === "lost" ? "matched" : status;
       const note = hit !== null && status === "lost"
         ? `${matchedReason(hit)} —— 这一行是 ash 不在期间补读到的：${reason}`

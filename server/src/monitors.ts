@@ -296,16 +296,22 @@ function superviseLiveness(row: Row, rt: Runtime): void {
  * 决定(已经停掉就不推:用户点停就是为了不再被它叫醒),这里不替它决定。
  */
 export async function detachMonitor(monitorId: string): Promise<void> {
-  await serialize(monitorId, () => teardownRuntimeLocked(monitorId));
+  await serialize(monitorId, async () => { await teardownRuntimeLocked(monitorId); });
 }
 
 /**
  * 撤运行时那几步的本体。**调用方必须已经在 `serialize(monitorId)` 里** —— 里面要把缓冲
  * 排出去,而推送一律在那条队列上(排第二遍就是等自己后面那一位,当场死锁)。
+ *
+ * **返回这一趟排干时读到的那条命中行**(没读到是 `null`，新一轮审查 N1)。撤之前的那次排干跟
+ * 在线那条收尾读到的是同一份证据,而它跟着运行时一起被丢掉的话,拿这一趟当收尾的那个调用方
+ * （`finishOffline`）就只能照「进程已经不在了」落终态 —— 审查实测:接回先 attach、排干已经把
+ * `OFFLINE_READY` 送到任务、游标也推了,随后它看不到任何新行,状态落成 `lost`。
+ * 「谁撤的运行时谁把证据接走」,所以它从返回值出去,不靠调用方自己去翻运行时。
  */
-export async function teardownRuntimeLocked(monitorId: string): Promise<void> {
+export async function teardownRuntimeLocked(monitorId: string): Promise<string | null> {
   const rt = runtimes.get(monitorId);
-  if (!rt || rt.closing) return;
+  if (!rt || rt.closing) return null;
   rt.closing = true;
   runtimes.delete(monitorId);
   for (const t of rt.timers) { clearInterval(t); clearTimeout(t); }
@@ -313,6 +319,9 @@ export async function teardownRuntimeLocked(monitorId: string): Promise<void> {
   rt.tail.drain();
   rt.tail.stop();
   await flushBuffer(monitorId, rt).catch(() => {});
+  // 排干时命中的那一行记在运行时上（见 monitor-consume.ts 的 `flushLocked`）—— 这一刻把它
+  // 交出去,运行时随后就不存在了。
+  return rt.hit;
 }
 
 /**
