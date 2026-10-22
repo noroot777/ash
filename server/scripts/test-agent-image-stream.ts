@@ -336,6 +336,37 @@ try {
     "写盘失败要如实报成「这一刻的字节丢了」",
   );
 
+  // ⑲ **写盘失败是单调的**:第一处引用的字节读到了、存不下来(临时权限失败),之后文件被
+  // 重拍成蓝色、权限也恢复了 —— 那一处仍然必须报成「丢了」,不许被后面任何一遍扫描洗成
+  // 蓝图。流式阶段每来一片都会重扫同一段正文,少了这道单调性,收尾那一遍(或者下一片的
+  // 捕获)就会重新读盘,于是「修改前」那一处画出来是修改后的蓝图 —— 比不画更坏
+  // (审查第 3 轮 R1:期望 `[LOST, BLUE]`,实际 `[BLUE, BLUE]`)。
+  const flaky = join(root, "output", "flaky.png");
+  writeFileSync(flaky, red);
+  chmodSync(uploads, 0o500);
+  let flakyEvents: AgentEvent[];
+  try {
+    flakyEvents = await collect(withMarkdownImages((async function* () {
+      yield { kind: "text", text: "修改前应为红色：![修改前](output/flaky.png)\n\n" } as AgentEvent;
+      // 这一刻盘能写了,而文件已经被重拍成蓝色 —— 两件事同时恢复才是真实现场。
+      chmodSync(uploads, 0o700);
+      writeFileSync(flaky, blue);
+      yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+      yield { kind: "text", text: "修改后为蓝色：![修改后](output/flaky.png)\n" } as AgentEvent;
+      yield { kind: "done", exitStatus: 0 } as AgentEvent;
+    })(), root));
+  } finally {
+    chmodSync(uploads, 0o700);
+  }
+  const flakyShots = attachments(flakyEvents);
+  assert.equal(flakyShots.length, 2, "两处引用两条结果");
+  assert.deepEqual(
+    [flakyShots[0]!.path, flakyShots[0]!.lost],
+    [undefined, true],
+    "第一处引用那一刻的字节丢了就一直是丢了 —— 不许在后面某一遍扫描里重新读盘捡回来",
+  );
+  assert.deepEqual(readFileSync(flakyShots[1]!.path!), blue, "第二处引用照常拿到蓝图");
+
   console.log("自定义解析器的图片落盘回归通过");
 } finally {
   rmSync(root, { recursive: true, force: true });

@@ -92,15 +92,27 @@ export type ImageStore = {
 
 export const imageStore = (): ImageStore => ({ copies: new Map(), refs: 0 });
 
+/**
+ * 一次落盘的结果。**「不该存」和「存不下」必须分得开**:前者(类型不收、空字节、超过上限)
+ * 是我们自己决定不留副本,那一刻的画面从来没被我们拿在手里;后者(盘满、权限)是字节已经
+ * 读到了、写盘失败了,这一刻的画面**丢了**。两者的出路相反 —— 前者让展示端退一档去工作
+ * 目录取当前文件,后者必须显式作废,否则就是把后来的画面当成旧结论(见
+ * `PersistedMarkdownImage` 的 `lost`)。混成一个 `null` 的那一版只能靠调用点猜「读到字节
+ * 了却没存下 ⇒ 丢了」,于是一张超限的大图也被判成「丢了」。
+ */
+type StoredImage =
+  | { path: string; fresh: boolean; failed?: undefined }
+  | { path: null; fresh?: undefined; failed: boolean };
+
 /** 落一张图,返回它在 uploads 里的路径;`fresh=false` = 这份字节本次运行已经存过了。 */
 function storeImage(
   { bytes, mime, name }: ImageBytes,
   seen: ImageStore,
   directory: string,
   index = 0,
-): { path: string; fresh: boolean } | null {
+): StoredImage {
   const ext = MIME_EXT[mime];
-  if (!ext || !bytes.length || bytes.length > maxBytesFor(mime)) return null;
+  if (!ext || !bytes.length || bytes.length > maxBytesFor(mime)) return { path: null, failed: false };
   const hash = createHash("sha256").update(bytes).digest("hex");
   const known = seen.copies.get(hash);
   if (known) return { path: known, fresh: false };
@@ -119,7 +131,7 @@ function storeImage(
       /* 压根没写出来过 */
     }
     console.warn(`[ash] failed to persist agent image ${path}:`, error);
-    return null;
+    return { path: null, failed: true };
   }
   seen.copies.set(hash, path);
   return { path, fresh: true };
@@ -134,8 +146,8 @@ export function persistToolResultImages(
   return resultImages(value, !!options.allowBareBase64)
     .map((image, index) => storeImage(image, seen, directory, index))
     // 只报**新落盘**的那几份:工具把同一张图交两次时,卡片不该铺两张。
-    .filter((stored) => stored?.fresh)
-    .map((stored) => stored!.path);
+    .map((stored) => (stored.path && stored.fresh ? stored.path : null))
+    .filter((path): path is string => !!path);
 }
 
 /**
@@ -192,12 +204,21 @@ function readImageAt(destination: string, cwd?: string): ImageBytes | null {
 export type PersistedMarkdownImage = { source: string; ref: number; path?: string; lost?: boolean };
 
 /**
- * 流式阶段拍下的一份字节快照。
+ * 流式阶段对**一处引用**的交代 —— 不是「拍到的那份字节」,而是**这处引用的保存状态**。
  *
  * `destination` 必须跟着记:半截正文的语法结论随时会被后文推翻,同一个位置上的目的地也
  * 会跟着变(`[r]: output/` 再来一片才是 `[r]: output/x.png`)。配不上就当没拍过。
+ *
+ * 状态有三档,而且**单调** —— 一旦落下来就不再被改写(见 captureMarkdownImages):
+ *   · `path` 在 —— 这一刻的字节已经存成那份拷贝;
+ *   · `lost: true` —— 字节**读到了、写盘失败了**。这一刻的画面丢了,后面任何一遍扫描、
+ *     以及收尾那一遍都**不许再去读文件**:文件可能已经被重拍,读到的是后来的画面,端出去
+ *     就是把新画面当成旧结论(审查第 3 轮 R1 实测:期望 `[LOST, BLUE]`,实际 `[BLUE, BLUE]`)。
+ *     「临时失败下次重试」听着更宽容,但它重试的是**读盘**而不是那一刻的字节,方向正好相反。
+ *   · 压根没有这个键 —— 还没扫到它,或者本来就不该存(站外地址、类型不收、超过上限)。
+ *     这一档才轮到收尾那一遍去读文件,以及展示端退一档去工作目录取。
  */
-export type ImageSnapshot = { destination: string; path: string };
+export type ImageSnapshot = { destination: string; path?: string; lost?: boolean };
 /** key = 这一处引用在**当下这段攒着的正文**里的起点(裁剪之后由 shiftSnapshots 跟着挪)。 */
 export type ImageSnapshots = Map<number, ImageSnapshot>;
 
@@ -247,11 +268,18 @@ export function captureMarkdownImages(
   const directory = options.directory ?? UPLOADS_DIR;
   const stored: string[] = [];
   for (const ref of refs) {
+    // 这处引用已经有交代了(存下了、或者字节丢了)就**一个字都不再动** —— 状态是单调的,
+    // 见 ImageSnapshot。流式阶段每片都会重扫同一段正文,少了这一道,上一片记下的「丢了」
+    // 会被这一片的重新读盘洗掉。
     if (snapshots.get(ref.start)?.destination === ref.destination) continue;
     const bytes = readImageAt(ref.destination, options.cwd);
     if (!bytes) continue;
     const copy = storeImage(bytes, seen, directory, snapshots.size);
-    if (!copy) continue;
+    if (copy.path === null) {
+      // 不该存的(类型/大小)不留状态:那一档本来就该退到「去工作目录取」。
+      if (copy.failed) snapshots.set(ref.start, { destination: ref.destination, lost: true });
+      continue;
+    }
     snapshots.set(ref.start, { destination: ref.destination, path: copy.path });
     if (copy.fresh) stored.push(copy.path);
   }
@@ -295,13 +323,17 @@ export function persistMarkdownImageRefs(
     const id = seen.refs;
     seen.refs += 1;
     const snapshot = options.snapshots?.get(ref.start);
-    let copy = snapshot?.destination === ref.destination ? snapshot.path : null;
+    // 流式阶段对这处引用的交代**就是结论**:存下了用那份拷贝,记着丢了就照实报丢了。
+    // 两种都不许再去读文件 —— 现在读到的是「现在的文件」,不是它说的那一张(见 ImageSnapshot)。
+    const settled = snapshot?.destination === ref.destination ? snapshot : null;
+    let copy = settled?.path ?? null;
     // 字节读到了却存不下来 = 这一刻的画面**丢了**(见 PersistedMarkdownImage 的 lost)。
-    let lost = false;
-    if (!copy) {
+    let lost = !!settled?.lost;
+    if (!copy && !lost) {
       const bytes = readImageAt(ref.destination, options.cwd);
-      copy = bytes ? storeImage(bytes, seen, directory, id)?.path ?? null : null;
-      lost = !!bytes && !copy;
+      const stored = bytes ? storeImage(bytes, seen, directory, id) : null;
+      copy = stored?.path ?? null;
+      lost = !!stored?.failed;
     }
     persisted.push(copy
       ? { source: ref.destination, ref: id, path: copy }
