@@ -8,7 +8,7 @@ import { spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, killChild, redactSecrets, resumeFor } from "./spawn.js";
 import { textParser } from "./catalog/parsers.js";
 import { eventQueue } from "./event-queue.js";
-import { markdownImageSink, settleMarkdownImages } from "./markdown-image-stream.js";
+import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting } from "./markdown-image-stream.js";
 import type { CliParser, CliParserContext } from "./catalog/types.js";
 import { valueArgs, type CliSpec } from "./catalog/types.js";
 
@@ -36,7 +36,7 @@ import { valueArgs, type CliSpec } from "./catalog/types.js";
  */
 function markdownImages(parser: CliParser, ctx: Omit<CliParserContext, "events">): AsyncIterable<AgentEvent> {
   if (parser.ownsMarkdownImages) return parser({ ...ctx, events: eventQueue() });
-  const images = markdownImageSink(ctx.cwd);
+  const images = markdownImageSink(ctx.cwd, ctx.images);
   // 解析器**不用** ctx.events 自己 yield 事件时(夹具、以后新写的某一份),收口那一层会把
   // 没记过账的事件补记一次 —— 字节拍得晚一点,但不会整条链一张图都不落盘。
   return settleMarkdownImages(parser({ ...ctx, events: eventQueue({ images }) }), images);
@@ -91,7 +91,7 @@ export class GenericCliExecutor implements AgentExecutor {
       commandLine,
       // 正文里 `![](…)` 的本机图片在这一层统一收(见 withMarkdownImages):解析器是
       // 「自带的 or 目录里内联的」二选一,只在默认那份里收等于十个自定义解析器全漏。
-      events: markdownImages(parser, { child, bin: this.bin, label: this.label, trace: opts.trace, lifecycle, cwd: opts.cwd }),
+      events: markdownImages(parser, { child, bin: this.bin, label: this.label, trace: opts.trace, lifecycle, cwd: opts.cwd, images: opts.images }),
       kill: () => {
         lifecycle.stopRequested = true;
         killChild(child);
@@ -101,13 +101,13 @@ export class GenericCliExecutor implements AgentExecutor {
     };
   }
 
-  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; cwd?: string }): RunHandle {
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; cwd?: string; images?: MarkdownImageAccounting }): RunHandle {
     const lifecycle = { stopRequested: false };
     const parser = this.spec.exec.parser ?? textParser;
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
-      events: markdownImages(parser, { child, bin: this.bin, label: this.label, lifecycle, cwd: opts.cwd }),
+      events: markdownImages(parser, { child, bin: this.bin, label: this.label, lifecycle, cwd: opts.cwd, images: opts.images }),
       kill: () => {
         lifecycle.stopRequested = true;
         child.kill();

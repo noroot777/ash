@@ -25,6 +25,7 @@
 //   • 执行者汇报/提问 → 不打断(它手上的活更重要);忙就缓冲,回合结束合并成
 //     一条送 —— 天然聚合,N 个执行者只花一次模型调用。
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
+import { loadMarkdownImageSeed, markdownImageAccounting } from "../agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, TeamConfig } from "@ash/shared";
@@ -457,6 +458,8 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   // 墙钟又恰好回拨到上一轮开工那一刻时,不接就会把那个历史身份原样重发一遍（第 1 轮审查 F2,
   // 机制见 session-turns.ts 的 primeTurnStarts）。放在同步段之前:它要读库。
   if (resuming) await primeTurnStarts(prev!.id);
+  // 正文图片的身份种子(读 trace,异步):放在同步段之前,同 orchestrator 那条路。
+  const imageSeed = resuming ? await loadMarkdownImageSeed(taskId, prev!.id) : undefined;
   const browserGrant = await browserGrantForProject(project.id);
   // 开台前的最后一道闸:这一句之后到 openResident 之间不再有 await。上面那几个 await
   // 期间可能来过「停止全组」,那时这台调度台还没出生、谁也杀不到它,停止只落在这一次开台
@@ -470,11 +473,15 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   const turnStart = nextTurnStart(sessId);
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
+  // 常驻调度台一条会话横跨多个回合:账要记在**当下**那一轮上,所以给的是取值函数 ——
+  // lead 对象在下面才建出来,之前(spawn 到 attachLead 之间)落的账算进首轮。
+  let liveLead: Lead | undefined;
   const handle = openResident({
     prompt: message,
     cwd: ws.path,
     sessionId: prev?.cliSessionId ?? undefined,
     env: runEnv,
+    images: markdownImageAccounting(taskId, sessId, () => liveLead?.turnStart ?? turnStart, imageSeed),
   });
   trackRun(taskId, handle);
 
@@ -550,6 +557,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     closing: null,
   };
   attachLead(lead);
+  liveLead = lead;
   // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
   // 下面那句 `beginTurn(lead, turnStart)` 会用**同一个起点**再开一次——那是同一个回合身份,
   // 所以第二次既不插行也不加数（`openTurn` 的幂等条件就是身份）。第 4 轮把加数放在字段

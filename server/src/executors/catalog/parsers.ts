@@ -94,7 +94,7 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
  * 一样就会一行都解析不出来,还不如 textParser。
  */
 export const claudeStreamJsonParser: CliParser = (ctx) =>
-  parseClaudeStream(ctx.child, undefined, ctx.bin, undefined, null, undefined, undefined, undefined, ctx.cwd);
+  parseClaudeStream(ctx.child, undefined, ctx.bin, undefined, null, undefined, undefined, undefined, ctx.cwd, ctx.images);
 // parseClaudeStream 自己已经裹过 withMarkdownImages(它要分别记父会话和每个子智能体的账),
 // 别再让 generic 裹第二层 —— 两层各存一份就是同一处引用两条记录、两份拷贝。
 claudeStreamJsonParser.ownsMarkdownImages = true;

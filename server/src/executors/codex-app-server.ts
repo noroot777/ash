@@ -7,7 +7,7 @@ import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
-import { markdownImageSink, settleMarkdownImages } from "./markdown-image-stream.js";
+import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting } from "./markdown-image-stream.js";
 import {
   formatFailureForTimeline,
   formatSessionPoisonForTimeline,
@@ -53,6 +53,8 @@ export type CodexAppServerOpts = {
   env?: Record<string, string | undefined>;
   trace?: RunTracePaths;
   detach?: DetachedPaths;
+  /** 正文图片的持久账本/身份种子(RunOpts.images),见 markdown-image-stream.ts。 */
+  images?: MarkdownImageAccounting;
   commandLine?: string;
   reattach?: { threadId: string; turnId: string; reviewTurnId?: string; completedTurn?: { id: string; status: string; error?: unknown }; goal?: CliGoal | null };
   startProcess?: () => ChildProcess;
@@ -111,7 +113,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   // SSE、trace 落盘和「执行过程」里的行数会跟着放大一百倍 —— 界面上就是一行一个单词的
   // 「思考过程 The」「思考过程 output」。阈值跟 claude 主流同一把尺子,思考取更粗的一档:
   // 它在折叠块里只显示一行摘要,不像正文那样需要逐字顺滑。
-  const images = markdownImageSink(opts.cwd);
+  const images = markdownImageSink(opts.cwd, opts.images);
   const outbox = eventQueue({
     images,
     activity: new NativeActivityBuffer(),

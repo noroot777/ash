@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import type { RunTracePaths } from "../diagnostics.js";
 import type { EventQueue } from "../event-queue.js";
+import type { MarkdownImageAccounting } from "../markdown-image-stream.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "../types.js";
 
 // ── 智能体目录的单一真相来源 ────────────────────────────────────────────────
@@ -82,6 +83,8 @@ export interface CliParserContext {
   lifecycle: { stopRequested: boolean };
   /** 这一轮干活的目录:正文里相对路径的图片靠它解成真文件(agent-attachments.ts)。 */
   cwd?: string;
+  /** 正文图片的持久账本/身份种子,一路透传给 sink(见 ../markdown-image-stream.ts)。 */
+  images?: MarkdownImageAccounting;
   /**
    * 事件出口 —— **解析器不许自己攒队列**。
    *

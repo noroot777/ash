@@ -1,4 +1,5 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
+import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
@@ -417,6 +418,9 @@ export async function continueTask(
     // 唯一键合进旧行、收尾看见已收口直接返回,这一轮在库里一个字都没有（第 1 轮审查 F2,
     // 机制见 session-turns.ts 的 primeTurnStarts）。
     if (resuming) await primeTurnStarts(prev!.id);
+    // 续聊接回正文图片的身份种子(要读 trace,异步):子智能体的文档跨回合累加,不接上,
+    // 重开后的第一处引用又从 0 号发起,跟刷新重建那一路撞身份(agent-image-journal.ts)。
+    const imageSeed = resuming ? await loadMarkdownImageSeed(taskId, prev!.id) : undefined;
     // 顺序定死:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论 → spawn。为什么只能这
     // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
@@ -444,6 +448,8 @@ export async function continueTask(
       cwd,
       sessionId: resuming || slash?.name === "fork" ? prev?.cliSessionId ?? undefined : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
+      // 正文图片的持久账本:交代关系不再跟这条 for-await 消费者同生共死(agent-image-journal.ts)。
+      images: markdownImageAccounting(taskId, sessId, turnStart, imageSeed),
       detach,
       // 多人模式:个人 CLI 配置目录 + git 署名(auth/run-env.ts)。自用模式恒为空对象。
       env: runEnv,

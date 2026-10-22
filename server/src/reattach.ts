@@ -4,6 +4,7 @@
 // 二是依赖方向能保持单向 —— 这里 import single-run 的消费循环，orchestrator
 // 不 import 这里（它靠 runs.ts 的 isRunning 就能知道谁被接管了，不需要回引）。
 import { createWriteStream } from "node:fs";
+import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import type { AgentType, SessionRole } from "@ash/shared";
@@ -144,6 +145,14 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         configDir: await sessionCliConfigDir(sess, sess.agentType),
         // 接回之后 agent 继续往下说,正文里相对路径的图片还得解得出来(agent-attachments.ts)。
         cwd: sess.cwd ?? undefined,
+        // 账本与身份种子也要接上:接管的是同一条会话,文档身份必须续着发,交代关系照旧落
+        // 持久账(agent-image-journal.ts)。回合起点沿用库里这一轮的 —— 接回的还是同一轮。
+        images: markdownImageAccounting(
+          task.id,
+          sess.id,
+          sess.turnStartedAt ?? sess.startedAt,
+          await loadMarkdownImageSeed(task.id, sess.id),
+        ),
       });
       trackRun(task.id, handle);
       adopted.add(task.id);

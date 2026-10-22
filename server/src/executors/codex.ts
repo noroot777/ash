@@ -20,7 +20,7 @@ import {
 } from "./diagnostics.js";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
-import { markdownImageSink, settleMarkdownImages, type MarkdownImageSink } from "./markdown-image-stream.js";
+import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { codexAshMcpServerName } from "./codex-mcp.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"] as const;
@@ -156,6 +156,7 @@ export class CodexExecutor implements AgentExecutor {
         initialThreadId: opts.sessionId ?? "",
         contextNotBeforeMs,
         cwd: opts.cwd,
+        images: opts.images,
         // 这一轮真正生效的 CODEX_HOME(多用户模式由 auth/run-env.ts 注入),rollout 就写在
         // 它下面 —— 水位必须去同一个目录读。
         configDir: opts.env?.CODEX_HOME,
@@ -187,6 +188,7 @@ export class CodexExecutor implements AgentExecutor {
       cliState: opts.cliState,
       sessionId: opts.sessionId,
       model: opts.model ?? this.model,
+      images: opts.images,
       reasoningEffort: this.reasoningEffort,
       serviceTier: this.speed === "fast" ? "priority" : undefined,
       env: { ...this.env(), ...opts.env },
@@ -210,7 +212,7 @@ export class CodexExecutor implements AgentExecutor {
     return { args, ignored: [...new Set([...profile.ignored, ...turn.ignored])] };
   }
 
-  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; configDir?: string | null; cwd?: string }): RunHandle {
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting }): RunHandle {
     const detached = child as Partial<DetachedChild>;
     if (child.stdin && opts.commandLine.includes("app-server") && detached.ashPaths) {
       const recovered = readCodexAppServerState(detached.ashPaths.out, opts.sessionId);
@@ -223,6 +225,7 @@ export class CodexExecutor implements AgentExecutor {
         // 它的用处是把正文里的相对图片路径解成真文件（agent-attachments.ts）。
         cwd: opts.cwd ?? ".",
         prompt: "",
+        images: opts.images,
         sessionId: opts.sessionId,
         commandLine: opts.commandLine,
         reattach: {
@@ -246,6 +249,7 @@ export class CodexExecutor implements AgentExecutor {
         contextNotBeforeMs: Date.now(),
         configDir: opts.configDir,
         cwd: opts.cwd,
+        images: opts.images,
       }), { bin: this.bin, args: this.appServerArgs({}).args, cwd: ".",
         env: { ...this.env(), ...(opts.configDir ? { CODEX_HOME: opts.configDir } : {}) } },
       opts.sessionId, () => cleanupAfterRun(child)),
@@ -284,6 +288,7 @@ export class CodexExecutor implements AgentExecutor {
             contextNotBeforeMs,
             configDir: opts.env?.CODEX_HOME,
             cwd: opts.cwd,
+            images: opts.images,
           }),
         };
       },
@@ -320,7 +325,7 @@ export function parseCodexStream(
   child: ReturnType<typeof spawnAgent>,
   tracePaths: RunTracePaths | undefined,
   lifecycle: { stopRequested: boolean },
-  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting },
 ): AsyncIterable<AgentEvent> {
   // 正文里的图**不在这份解析里收**:一条 agent_message 只是一片碎片,上一条消息给定义、
   // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。统一由那一层按「一份文档」
@@ -328,7 +333,7 @@ export function parseCodexStream(
   //
   // 账记在 push 处:下面那个 `queue` 先攒着,挂在消费者取事件那一刻等于把读文件推迟到整条
   // 队列之后,中间 agent 来得及把同一个路径重拍一遍(审查第 5 轮 R1)。
-  const images = markdownImageSink(contextOptions.cwd);
+  const images = markdownImageSink(contextOptions.cwd, contextOptions.images);
   return settleMarkdownImages(codexStreamEvents(child, tracePaths, lifecycle, contextOptions, images), images);
 }
 

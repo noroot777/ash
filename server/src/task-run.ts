@@ -1,4 +1,5 @@
 import { mkdirSync, createWriteStream } from "node:fs";
+import { markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
@@ -207,6 +208,8 @@ export async function runTask(
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
     handle = run({
       prompt: localCommand ? commandText : prompt, ...cli, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
+      // 正文图片的持久账本(agent-image-journal.ts)。全新起跑没有身份可接,不带种子。
+      images: markdownImageAccounting(taskId, sessId, turnStart),
       env: runEnv,
     });
     trackRun(taskId, handle);

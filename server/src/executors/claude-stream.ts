@@ -14,7 +14,7 @@ import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
-import { markdownImageSink, settleMarkdownImages, type MarkdownImageSink } from "./markdown-image-stream.js";
+import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
@@ -43,6 +43,8 @@ export function parseClaudeStream(
   // 才复制得进 uploads —— 不传的话那张图在对话里只会是个裂开的图标(见
   // ../agent-attachments.ts 与下面这一层)。
   cwd?: string,
+  // 正文图片的持久账本/身份种子(RunOpts.images),见 markdown-image-stream.ts。
+  accounting?: MarkdownImageAccounting,
 ): AsyncIterable<AgentEvent> {
   // 正文里的图**不在这份解析里收**:它要按「一份文档」认身份,而这里一条模型消息就是
   // 一片碎片 —— 上一条消息给定义、下一条引用它时,按消息扫压根不认那张图(审查第 4 轮
@@ -51,7 +53,7 @@ export function parseClaudeStream(
   // **账记在 push 处,不是记在下游**:下面那个 `queue` 是先攒着的,挂在消费者取事件那一刻
   // 等于把「读文件」推迟到整条队列之后,中间 agent 完全来得及把同一个路径重拍一遍(审查
   // 第 5 轮 R1)。所以 sink 在这里建好传进去,由 push 同步进账,这一层只负责收口。
-  const images = markdownImageSink(cwd);
+  const images = markdownImageSink(cwd, accounting);
   return settleMarkdownImages(
     claudeStreamEvents(child, resident, bin, calibrateAs, compactWindow, onInitialized, waitNoticeMs, images, cliSessionId),
     images,

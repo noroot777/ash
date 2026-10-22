@@ -4,6 +4,7 @@
 // 从 `task-run-routes.ts` 抽出来的原因只有一个：那份文件已经贴着 700 行的上限，而这三条
 // 是里面唯一一块「只读、不碰回合所有权」的东西，切走对那边的并发不变量零影响。
 import { readFile } from "node:fs/promises";
+import { mergeImageJournal } from "./agent-image-journal.js";
 import type { Session } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
@@ -91,7 +92,9 @@ export async function readSessionTrace(taskId: string, sessionId: string): Promi
   // 一整行写完了却解析不出来 —— 那不是「正在写」，是文件坏了。把它当成空 trace 交出去，
   // 前端就既看不到执行过程、也收不到任何警告，派生照样挂着（第 4 轮审查）。
   if (parsed.badLines > 0) return { ok: false, missing: false };
-  const trace = parsed.entries;
+  // trace 缺的图记录从持久账本补回来(消费者死在落笔之前的那几条),再做归属补齐 ——
+  // 顺序有讲究:合成行里的 path 也要走下面那道 backfill 才对普通成员可见。
+  const trace = await mergeImageJournal(taskId, sessionId, parsed.entries);
   const tail = parsed.truncatedTail;
   // 这段执行过程里记着的图,归属补齐 —— 登记那一道是后来才补的,在它之前落盘的会话、以及
   // 登记写失败的那几次,图对普通成员一律 404 且**没有新广播就永远不会恢复**(判据与边界见
