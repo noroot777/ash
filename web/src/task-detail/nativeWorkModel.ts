@@ -1,4 +1,5 @@
 import type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus, TaskStatus } from "@ash/shared";
+import { markdownImageRefs } from "@ash/shared/markdown-images";
 import { nativeWorkStatus as workStatus } from "@ash/shared/native-work";
 export { nativeWorkStatus as workStatus } from "@ash/shared/native-work";
 import type { AttachmentSource, ConversationItem } from "./conversationModel.ts";
@@ -85,21 +86,48 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
   // `行 id \u0000 字段` → 该快照式正文(message/result)的图片记录。服务端用 attachment 上的
   // `field` 标注归属;这里不许把它混进 row.activity —— 混进去等于给执行记录那份文档多一条
   // 结果,turnImages 的逐目的地对账会把整组判作废。`rev` 是正文的代(清场/换稿开新代),
-  // 展示端只认最高代那组:旧代的冻结说的是已经不在屏幕上的那一版(审查第 8 轮复审 R1)。
-  const metaImages = new Map<string, { rev: number; src: AttachmentSource }[]>();
-  /** 结果正文从调用行提取到别的行时,它名下的 result 图片记录按目的地跟着搬 —— 记录留在
-   * 调用行就永远配不上正文(复审 R1 结构化返回结果一例)。没搬走的留在原槽(宁可不配,
-   * 不乱认)。 */
+  // 展示端只认最高代那组 —— 但代号只在**同一份来源文档**里可比(`from`):不同来源的记录
+  // 混进同一槽时,后到的文档整组顶替先到的,正文(put 同样替换)和账才说的是同一版。
+  type MetaRecord = { rev: number; from: string; src: AttachmentSource };
+  const metaImages = new Map<string, MetaRecord[]>();
+  const stashMeta = (slot: string, record: MetaRecord) => {
+    const list = metaImages.get(slot);
+    if (!list || list[0]!.from !== record.from) metaImages.set(slot, [record]);
+    else list.push(record);
+  };
+  /** 结果正文从调用行提取到别的行时(taskoutput / wait 的 statuses),它名下的 result 图片
+   * 记录跟着搬。分发按「第 n 处指向这个来源的引用 ↔ 第 n 条报这个来源的记录」:几个子正文
+   * 引用同一路径时,按记录的文档顺序(pos)对应提取顺序逐个派 —— 全给第一个命中的那版,
+   * 甲拿双份被计数判作废、乙一条都没有(复审 R1 resultRouting)。提取文本里数不到的来源
+   * (转义改写过)留在原槽:宁可不配,不乱认。 */
   const routeResultImages = (fromRow: string, targets: { rowId: string; text: string }[]) => {
     const slot = `${fromRow}\u0000result`;
     const records = metaImages.get(slot);
     if (!records) return;
-    const rest: { rev: number; src: AttachmentSource }[] = [];
-    for (const record of records) {
-      const target = targets.find((candidate) => candidate.rowId !== fromRow && candidate.text.includes(record.src.source));
+    const capacity = new Map<string, Map<string, number>>();
+    for (const target of targets) {
+      if (target.rowId === fromRow || capacity.has(target.rowId)) continue;
+      const bySource = new Map<string, number>();
+      for (const node of markdownImageRefs(target.text)) {
+        bySource.set(node.destination, (bySource.get(node.destination) ?? 0) + 1);
+      }
+      capacity.set(target.rowId, bySource);
+    }
+    const rest: MetaRecord[] = [];
+    const moved = new Map<string, MetaRecord[]>();
+    for (const record of [...records].sort((a, b) => (a.src.pos ?? 0) - (b.src.pos ?? 0))) {
+      const target = targets.find((candidate) => (capacity.get(candidate.rowId)?.get(record.src.source) ?? 0) > 0);
       if (!target) { rest.push(record); continue; }
+      const bySource = capacity.get(target.rowId)!;
+      bySource.set(record.src.source, bySource.get(record.src.source)! - 1);
       const destination = `${target.rowId}\u0000result`;
-      metaImages.set(destination, [...(metaImages.get(destination) ?? []), record]);
+      moved.set(destination, [...(moved.get(destination) ?? []), record]);
+    }
+    for (const [destination, assigned] of moved) {
+      const prior = metaImages.get(destination);
+      // 同一来源文档分几批路由时追加;换了来源文档(新一轮 wait/taskoutput 的新正文)整组
+      // 顶替 —— 正文那一侧 put 也是替换,两边必须说同一版。
+      metaImages.set(destination, prior && prior[0]!.from === fromRow ? [...prior, ...assigned] : assigned);
     }
     if (rest.length) metaImages.set(slot, rest);
     else metaImages.delete(slot);
@@ -160,10 +188,10 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         const id = key(activity.id);
         const event = activity.event;
         if (event.kind === "attachment" && (event.field === "message" || event.field === "result") && event.source) {
-          const slot = `${id}\u0000${event.field}`;
-          const list = metaImages.get(slot) ?? [];
-          list.push({ rev: event.rev ?? 0, src: { path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost } });
-          metaImages.set(slot, list);
+          stashMeta(`${id}\u0000${event.field}`, {
+            rev: event.rev ?? 0, from: id,
+            src: { path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost },
+          });
           continue;
         }
         const row = rows.get(id) ?? put(id, { nativeId: activity.id, status: "running" });
@@ -326,7 +354,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
     }
   }
   // 只认最高代:正文清场/换稿之后,旧代记录说的是已经不在屏幕上的那一版。
-  const latestRev = (list: { rev: number; src: AttachmentSource }[] | undefined): AttachmentSource[] | undefined => {
+  const latestRev = (list: MetaRecord[] | undefined): AttachmentSource[] | undefined => {
     if (!list?.length) return undefined;
     const top = Math.max(...list.map((record) => record.rev));
     return list.filter((record) => record.rev === top).map((record) => record.src);

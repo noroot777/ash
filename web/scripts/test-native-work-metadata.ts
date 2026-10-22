@@ -240,5 +240,26 @@ for (const event of stamped) {
   const miss = statusRows.find((row) => row.nativeId === "childB");
   assert.deepEqual(hit?.resultImages?.map((shot) => shot.source), ["s.png"], "statuses 按正文含来源与否逐行分发");
   assert.equal(miss?.resultImages, undefined, "正文里没有这个来源的行不接收");
+  // 第 9 轮复审 R1 resultRouting:几个子正文引用同一来源时,按「第 n 处引用 ↔ 第 n 条
+  // 记录」分发 —— 全给第一个命中的,甲拿双份被逐目的地计数判作废、乙一张都没有。
+  const sharedRows = rowsFrom([
+    { type: "call", id: "w2", name: "wait", at: start, input: {} },
+    { type: "activity", id: "w2", event: { kind: "attachment", field: "result", source: "shot.svg", ref: 0, pos: 10, rev: 0, path: "/up/a.svg" } },
+    { type: "activity", id: "w2", event: { kind: "attachment", field: "result", source: "shot.svg", ref: 1, pos: 50, rev: 0, path: "/up/b.svg" } },
+    { type: "result", id: "w2", at: end, result: '{"statuses":{"childA":{"completed":"甲 ![甲](shot.svg)"},"childB":{"completed":"乙 ![乙](shot.svg)"}}}', failed: false },
+  ]);
+  assert.deepEqual(sharedRows.find((row) => row.nativeId === "childA")?.resultImages?.map((shot) => shot.path), ["/up/a.svg"], "同源多记录:第一处给第一个子正文一条");
+  assert.deepEqual(sharedRows.find((row) => row.nativeId === "childB")?.resultImages?.map((shot) => shot.path), ["/up/b.svg"], "第二处给第二个子正文,不叠给第一个");
+  // 槽位按来源文档顶替:第二轮 wait 的新正文接管子行 result 后,上一轮的记录不许留在槽里
+  // 跟新记录比代号 —— rev 是各来源文档局部的,混在一起取最大会让旧文档的高代吞掉新文档。
+  const twoRounds = rowsFrom([
+    { type: "call", id: "w3", name: "wait", at: start, input: {} },
+    { type: "activity", id: "w3", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 2, rev: 5, path: "/up/old.png" } },
+    { type: "result", id: "w3", at: start, result: '{"statuses":{"childC":{"completed":"旧 ![s](s.png)"}}}', failed: false },
+    { type: "call", id: "w4", name: "wait", at: end, input: {} },
+    { type: "activity", id: "w4", event: { kind: "attachment", field: "result", source: "s.png", ref: 1, pos: 2, rev: 0, path: "/up/new.png" } },
+    { type: "result", id: "w4", at: end, result: '{"statuses":{"childC":{"completed":"新 ![s](s.png)"}}}', failed: false },
+  ]);
+  assert.deepEqual(twoRounds.find((row) => row.nativeId === "childC")?.resultImages?.map((shot) => shot.path), ["/up/new.png"], "换来源文档整组顶替:旧文档的高代号不压新文档的第 0 代");
 }
 console.log("子智能体模型、待办开工时间、跨日跨度、实时/历史时间与缺失数据回归通过");
