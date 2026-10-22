@@ -195,19 +195,35 @@ try {
   // 同一道也挂在**会话执行过程**那条读取上:R4 是类问题,普通任务/团队那条链的存量会话、
   // 以及登记写失败的那几次,症状一模一样(图 404 且不会自愈)。
   const traced = image("duet-traced");
+  // **子智能体那张也要**:它包在 `tool.nativeWork.type === "activity"` 里,而展示端把它拆
+  // 出来照样铺卡片。回填只认顶层的那一版把两者分叉了 —— 刚修好的主附件 200、老的子附件
+  // 仍然 404(审查第 3 轮 R3 真实路由实测)。遍历现在跟实时登记共用 eventAttachmentPath。
+  const tracedSub = image("duet-traced-sub");
   await db.insert(sessions).values([{
     id: "s-old", taskId: "t-duet-old", role: "single", agentType: "claude", executor: "claude",
     cwd: repo, startedAt: at, endedAt: at,
   }] as never);
-  writeFileSync(join(oldRuns, "s-old.trace.jsonl"), JSON.stringify({
-    at, turnStartedAt: at, event: { kind: "attachment", path: traced, source: "output/traced.png", ref: 0 },
-  }) + "\n");
+  writeFileSync(join(oldRuns, "s-old.trace.jsonl"), [
+    JSON.stringify({
+      at, turnStartedAt: at, event: { kind: "attachment", path: traced, source: "output/traced.png", ref: 0 },
+    }),
+    JSON.stringify({
+      at,
+      turnStartedAt: at,
+      event: {
+        kind: "tool", name: "Task", detail: "子智能体",
+        nativeWork: { type: "activity", id: "n1", event: { kind: "attachment", path: tracedSub, source: "output/sub.png", ref: 1 } },
+      },
+    }),
+  ].join("\n") + "\n");
   assert.equal(await read(traced, AS_ALICE), 404, "回填之前:存量会话里那张图同样是 404");
+  assert.equal(await read(tracedSub, AS_ALICE), 404, "子智能体那张也一样");
   const trace = await app.fetch(
     new Request("http://127.0.0.1:4317/api/sessions/s-old/trace", { headers: AS_ALICE }),
   );
   assert.equal(trace.status, 200);
   assert.equal(await read(traced, AS_ALICE), 200, "读过那段执行过程之后,里面的图就该打得开");
+  assert.equal(await read(tracedSub, AS_ALICE), 200, "子智能体活动里那张同样要补上 —— 两道范围必须对称");
 
   console.log("讨论图片归属登记回归通过(主发言者 + 子智能体 + 无副本交代 + 存量讨论/会话读时回填)");
 } finally {

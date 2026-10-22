@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
-import { backfillArtifactUploads } from "./uploads.js";
+import { backfillArtifactUploads, eventAttachmentPath } from "./uploads.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
@@ -98,7 +98,9 @@ export async function readSessionTrace(taskId: string, sessionId: string): Promi
   // uploads.ts 的 backfillArtifactUploads;讨论那条读取路径用的是同一道)。
   await backfillArtifactUploads(
     taskId,
-    trace.map((entry) => entry.event.kind === "attachment" ? entry.event.path : undefined),
+    // 遍历跟实时登记**同一份**(eventAttachmentPath):子智能体那一层的附件包在
+    // `tool.nativeWork` 里,只看顶层就只补得到主附件 —— 两道范围不对称就是 R3 那一幕。
+    trace.map((entry) => eventAttachmentPath(entry.event)),
   );
   if (!trace.some((entry) => entry.event.kind === "tool" && entry.event.nativeWork)) {
     return { ok: true, value: trace, truncatedTail: tail };

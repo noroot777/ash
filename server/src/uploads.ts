@@ -224,10 +224,25 @@ export function watchAgentUploads(): void {
   });
 }
 
-export function noteAgentEventUpload(taskId: string, event: AgentEvent | SessionTraceEvent): void {
+/**
+ * 一条可信事件里那张**会被端到人眼前**的附件 —— 实时登记与历史回填**共用这一份遍历**。
+ *
+ * 为什么必须共用:`attachment` 不止长在顶层,子智能体那一层是包在
+ * `tool.nativeWork.type === "activity"` 里的(见 shared 的 NativeAgentActivity),而展示端
+ * 把它拆出来照样铺卡片(web 的 nativeAgentSegments → AgentTurnBody)。两处各写一遍遍历
+ * 就会分叉:新广播那一道解包了,读旧 trace 那一道只看顶层,于是刚修好的主附件 200、老的
+ * 子附件仍然 404(审查第 3 轮 R3 真实路由实测)。
+ *
+ * 没有 path 的 attachment 是「这处引用没存下副本」的交代,没有文件可登记。
+ */
+export function eventAttachmentPath(event: AgentEvent | SessionTraceEvent): string | undefined {
   const content = event.kind === "tool" && event.nativeWork?.type === "activity" ? event.nativeWork.event : event;
-  // 没有 path 的 attachment 是「这处引用没存下副本」的交代,没有文件可登记。
-  if (content.kind === "attachment" && content.path) noteAgentUpload(taskId, content.path);
+  return content.kind === "attachment" ? content.path : undefined;
+}
+
+export function noteAgentEventUpload(taskId: string, event: AgentEvent | SessionTraceEvent): void {
+  const path = eventAttachmentPath(event);
+  if (path) noteAgentUpload(taskId, path);
 }
 
 /** 能读这个附件吗。找不到与没权限**回同一句话**(路由统一 404),不泄露文件存不存在。 */
