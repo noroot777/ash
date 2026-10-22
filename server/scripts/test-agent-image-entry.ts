@@ -255,6 +255,27 @@ try {
   );
   assert.equal(colorOf(delivered[0]!.path), "RED", "删掉原图之后,拷贝照旧是说那句话时的红图");
 
+  // ⑦ **一个块自己就比重解析窗口还长**(没有空行的长段、长表格)。
+  //
+  // 重解析按比例放慢(SCAN_SLACK)之后,这一截里那张图要等后面一万多字才重新解析一遍 ——
+  // 中间工具把文件重拍过,拍到的就是后来那张。字节不许跟着重解析一起放慢:新来那一截语法
+  // 已经完整的那几处当场拍下来(投机:语法最后不认的由清理那一步删掉)。
+  const giant = join(root, "output", "giant.png");
+  writeFileSync(giant, red);
+  const giantEvents = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "开头：" + "背景说明。".repeat(1800) } as AgentEvent;
+    yield { kind: "text", text: "修改前是红色：![修改前](output/giant.png) " } as AgentEvent;
+    writeFileSync(giant, blue);
+    yield { kind: "text", text: "继续说。" + "普通正文。".repeat(400) + "\n\n" } as AgentEvent;
+    yield { kind: "text", text: "修改后是蓝色：![修改后](output/giant.png)\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(giantEvents).map((event) => colorOf(event.path)),
+    ["RED", "BLUE"],
+    "重解析可以放慢,拍字节不许放慢:大块中间那张图也得是说那句话时的那一版",
+  );
+
   console.log("协议入口记账与文档身份回归通过");
 } finally {
   rmSync(root, { recursive: true, force: true });

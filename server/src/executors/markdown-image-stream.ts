@@ -194,6 +194,29 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
   };
 
   /**
+   * 放慢期间也不许漏掉字节:只扫**新来那一截**,把语法已经完整的那几处先拍下来。
+   *
+   * 为什么需要这一道:SCAN_SLACK 让重解析的频率跟窗口大小成正比,于是一个块自己就比窗口
+   * 长的时候(没有空行的长段、长表格),这一截里那张图要等后面一万多字才重解析一遍 ——
+   * 中间文件被重拍过,拍到的就是后来那张,正是 R1 要钉死的那条「字节版本由后面的时点决定」。
+   *
+   * 新来那一截没有上下文(前面可能开着一个围栏),所以它的结论一律按**投机**办:只拍字节,
+   * `settled`、`waiting`、`scanned` 一个都不动,语法最后不认的那几份由 dispose 当垃圾清掉。
+   * 坐标按绝对位置算,跟窗口那一遍对得上,于是同一处引用只读盘一次 —— 早拍下的那一份
+   * (正确的那一份)不会被后来那一遍洗掉(见 captureMarkdownImages 的单调性)。
+   */
+  const freezeTail = (ledger: Ledger) => {
+    const shift = ledger.scanned;
+    const tail = scanMarkdownImages(ledger.text.slice(shift));
+    if (!tail.refs.length) return;
+    freeze(ledger, tail.refs.map((ref) => ({
+      destination: (ref.identifier !== undefined ? ledger.definitions.get(ref.identifier) : undefined) ?? ref.destination,
+      start: ref.start + shift,
+      end: ref.end + shift,
+    })));
+  };
+
+  /**
    * 刚收下的定义解开了哪几处等待 —— **解开那一刻就冻结字节**。
    *
    * 这是「语义一旦可解释,立刻冻结对应字节」的那一半。定义离它那处引用有多远没有上限:
@@ -227,8 +250,12 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
     ledger.text += text;
     const window = ledger.text.length - ledger.base;
     const fresh = ledger.text.length - ledger.scanned;
-    // 这一窗已经畸形地大了(一个块自己就比窗口长):按比例放慢,见 SCAN_SLACK。
-    if (window > SCAN_WINDOW && fresh * SCAN_SLACK < window) return;
+    // 这一窗已经畸形地大了(一个块自己就比窗口长):按比例放慢,见 SCAN_SLACK。放慢的只是
+    // 「哪几处是真图」那一遍,字节照旧当场拍(freezeTail)。
+    if (window > SCAN_WINDOW && fresh * SCAN_SLACK < window) {
+      freezeTail(ledger);
+      return;
+    }
     // 这一片有可能改变「有哪几处引用、各指向哪儿」吗:`)`(行内图)、`]`(引用式图)、
     // 换行(定义收尾)是三个硬收尾,**还在写的定义行**是第四种 —— 它的目的地由裸文字收尾。
     // 漏掉第四档,`[r]: ` 和 `output/shot.svg` 分两片到达时那处引用的字节要等到下一片带标点
