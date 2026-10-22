@@ -40,11 +40,20 @@ const DURATIONS = monitorDurationOptions();
  * 摆出来：等一条拒绝再回来补，中间那一趟是白走的，何况被拒的那一刻人已经点过「起一个哨兵」了。
  * 条件本身能不能用也在这里当场判（同一个 `parseEndCondition`），不让人拿一句 400 当反馈。
  *
- * 判定带着的那个**前提**在这一侧读不出来（`assumesAnyExists`，见共享判据文件头 ⑧）：
- * `tail -f build.log` 只在那个文件在的时候才不会结束，而浏览器里读不到文件系统。所以这里
- * ① 照实说成「只要 build.log 还在，它就永远不会结束」，② 仍然逼选 —— 服务端知道这条哨兵将在
- * 哪个工作目录里跑，它会按真实情况再判一次（文件真不在时那边直接放行）。这一处的严格只多问
- * 一句、做不成的事一件也没有；反过来「这边放过、那边 409」才是实打实白走一趟。
+ * ── **逼选只发生在「这边自己就证明得出来」的那一档**（新一轮审查 F1）───────────────
+ *
+ * 判定可以带着**前提**（`assumesAnyExists` / `unprovable`，见共享判据文件头 ⑧⑨）：
+ * `tail -f build.log` 只在那个文件在的时候才不会结束，`tail -f $LOG`、`kubectl logs -f pod`
+ * 那个前提谁都核不了。而浏览器里读不到文件系统 —— 上一版照旧逼选，于是出现了审查实测到的那
+ * 一幕：**同一条命令在表单上按钮是灰的，原样走接口却 200 建得出来**（那个文件真的不在，服务
+ * 端按真实工作目录核过）。界面比接口更严，等于这条路只有用接口的人走得通。
+ *
+ * 所以这一版分两档：
+ *  · **没有任何前提**的那一种（`tail -F`、`while true`）照旧逼选 —— 这边的判断跟服务端一字
+ *    不差，先把选择摆出来省掉一趟来回。
+ *  · **带前提**的那一种只**提示**：把前提照实说出来（「只要 build.log 还在…」「它盯的那个路
+ *    径这一层读不出来…」），按钮照常可点，由服务端按真实工作目录裁定 —— 文件真不在就直接建
+ *    起来，真在的话它会带着 `needsEndCondition` 退回来，那一栏本来就一直摆在这儿。
  */
 export function MonitorComposer({
   busy,
@@ -67,13 +76,15 @@ export function MonitorComposer({
   // 这条命令自己会不会结束 —— 跟服务端那道闸**同一份判据**，所以这里亮出来的选择跟它要的
   // 东西一定对得上（各写一份的话，判据一改就只有一边跟着变，另一边照旧放人去撞 409）。
   const forever = neverExitsVerdict(command);
-  const needsEnd = forever !== null;
+  // **这边自己就盖得住整条退出语义吗** —— 一个前提都不带的那一种才算（见上面那段）。带前提
+  // 的交给服务端裁定:它读得出文件系统，这边读不出，而「我核不了」不是「它成立」。
+  const proven = forever !== null && forever.unprovable === null && forever.assumesAnyExists.length === 0;
   const typed = stopWhen.trim();
   // 条件本身的毛病当场说（同一份 `parseEndCondition`），不让人拿一句 400 当反馈。
   const parsed = parseEndCondition(typed);
   const condError = parsed.ok ? null : parsed.error;
   // 必须选的那一下才算「没选完」：填了字样算选了「出现就收工」，不填就得明说是要盯到到期。
-  const endingChosen = !needsEnd || typed.length > 0 || ending === "untilExpiry";
+  const endingChosen = !proven || typed.length > 0 || ending === "untilExpiry";
   // 要选而没选时**不许提交**：带着空的唤醒目标 / 缺着结束条件发出去只会再吃同一句拒绝。
   const ready = command.trim().length > 0
     && (!needsWakeTarget || wake !== null)
@@ -94,8 +105,8 @@ export function MonitorComposer({
           // 填了就带上，**不看它是不是跟随型**：会自己结束的命令也可以要求提前收工
           // （盯一轮回归，`FAILED` 一出现就不必等它跑完）。没填就一个字都不带。
           ...(typed ? { stopWhen: typed } : {}),
-          // 「我本来就是要盯到到期」只在被逼选的时候才是一个需要表的态。
-          ...(needsEnd && !typed && ending === "untilExpiry" ? { untilExpiry: true } : {}),
+          // 「我本来就是要盯到到期」只在明说了的时候才是一个需要表的态。
+          ...(!typed && ending === "untilExpiry" ? { untilExpiry: true } : {}),
         });
       }}
     >
@@ -127,13 +138,18 @@ export function MonitorComposer({
         {forever
           ? (
             <p className="monitor-composer__hint">
-              {/* 前提读不出来的那一类照实带上前提：它在这张表单上永远只是「假设那个文件在」
-                  （见上面那段），把假设说出来，人才看得懂为什么被逼选。 */}
-              {forever.assumesAnyExists.length > 0
-                ? `只要 ${forever.assumesAnyExists.join("、")} 还在，这条命令就永远不会结束（${forever.what}）`
-                : `这条命令自己永远不会结束（${forever.what}）`}
-              ，所以它不会有「跑完了」那一下。
-              下面二选一——都不选它就只剩盯满时长这一条出路，被盯的活早干完了，任务也还得等到期才被叫醒。
+              {/* 三档各说各的话（见上面那段）：证明得出来的那一档是「逼选」，另两档是「提示」
+                  —— 把那一环照实说出来，人才判得了要不要现在就补一个条件。 */}
+              {proven
+                ? `这条命令自己永远不会结束（${forever.what}），所以它不会有「跑完了」那一下。`
+                  + "下面二选一——都不选它就只剩盯满时长这一条出路，被盯的活早干完了，任务也还得等到期才被叫醒。"
+                : forever.unprovable
+                  ? `这条命令可能永远不会结束（${forever.what}）：${forever.unprovable}。`
+                    + "真是那样它只剩盯满时长这一条出路，所以下面二选一可以现在就补上；"
+                    + "起不起得来由服务端按这条哨兵真实的工作目录裁定。"
+                  : `只要 ${forever.assumesAnyExists.join("、")} 还在，这条命令就不会结束（${forever.what}）。`
+                    + "那个文件在不在，这张表单读不出来——所以这里不替你决定："
+                    + "下面二选一可以现在就补上，不补就由服务端按真实工作目录裁定（真不在它就直接建起来）。"}
             </p>
           )
           : (
@@ -141,7 +157,7 @@ export function MonitorComposer({
               命令自己跑完就算完。想让它提前收工就填一个字样：那一行照常推给你，哨兵随即结束。
             </p>
           )}
-        {needsEnd && (
+        {forever && (
           <div className="monitor-composer__ending-options">
             <label>
               <input

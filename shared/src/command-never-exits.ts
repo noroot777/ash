@@ -99,11 +99,34 @@
 //        （`-F`/`--retry` 才是没了也一直重试）。前提不写在命令文本里,所以这一层把它原样交出去
 //        （`NeverExitsVerdict.assumesAnyExists`），由读得出这件事的那一层去核 —— 创建闸知道这
 //        条哨兵将在哪个工作目录里跑（server/src/monitor-create.ts 的 `assumptionsHold`）。
+// ⑨ **核不了的前提不配做硬拦的依据；「下游会不会一直读到头」同样是退出语义**（新一轮审查
+//    F1）。⑧ 把前提交出来了,可处置只做了一半 —— 核得出「那个文件不在」的那一种放行,**核不了
+//    的那几种照旧硬拦**。于是三类会自己结束的命令继续被 409（审查实测）:
+//      · `cd sub; tail -f really-here.log; printf 'DONE\n'` —— 那个文件在**起初**那个工作目录
+//        里、`sub/` 里没有,真 shell 报一句 No such file 就退出 0。而创建闸核的是「起初那个
+//        cwd 下的路径」:命令自己换过目录之后,它核的根本不是 tail 要打开的那一个。
+//      · `tail -f $LOG`、`tail -f *.log` —— 这个路径指向哪儿谁都读不出来,而上一版「读不出来
+//        就维持原判」= 照旧硬拦。
+//      · `kubectl logs -f <pod>` —— 远端那个东西在不在,本机和创建闸都核不了
+//        （command-followers.ts 文件头 ⑤）。
+//    以及反过来的一类:
+//      · `tail -f -n +1 large.log | head -n 1`（预填 350KB）—— 跟随型**也怕下游先退**:head 打
+//        一行就把管子关掉,tail 下一次写入吃 SIGPIPE,整条退出 0。而上一版只让恒真循环因下游
+//        作废（`fragile`）,跟随型一律记成「不怕」。
+//    所以这一版把前提分成两种:**核得了的**（本地字面路径,创建闸读得出）与**谁都核不了的**
+//    （`$LOG`/通配、命令自己换目录、同一条命令里别的段动过它、远端资源）。后者一律降级成一句
+//    可提交的提示（`NeverExitsVerdict.unprovable`），由创建闸随这次创建一起说出来。下游那一侧
+//    同理:只有**证明得出读到 EOF 才退**的下游（`readsToEof`——`grep` 不带 `-q/-m/-l`、`cat`、
+//    `tee`、`wc`、`sort`…）才保得住上游那个判定,事故的起因命令正落在这一档、照旧硬拦;`head`、
+//    `grep -m1`、自己写的脚本一律算「可能先走」,降级成提示。
 //
-//    ①–⑧ 合起来是同一条不变量:**硬拦只用「盖得住整条命令必要执行与退出语义」的那种证明**
+//
+//    ①–⑨ 合起来是同一条不变量:**硬拦只用「盖得住整条命令必要执行与退出语义」的那种证明**
 //    —— 执行资格（这一条跑不跑得到）、argv（它到底有没有开始跟随）、输入来源（它盯的是谁）、
-//    shell 状态（前面那条的退出码管不管得着它）、下游（谁在收它的 stdout）、以及它盯的那个
-//    东西在不在，任一项读不出来**就不是硬拦的依据**,降级成一句可提交的提示。不按网页、
+//    shell 状态（前面那条的退出码管不管得着它）、下游（谁在收它的 stdout、而且会不会一直读
+//    到头）、以及它盯的那个东西在不在，任一项读不出来**就不是硬拦的依据**,降级成一句可提交的
+//    提示。**而「读得出来」是指真的有人核得了**(⑨):前提核不了的时候,「我证明不出它不成立」
+//    不等于「它成立」—— 那一步偷换过去,就是拿一个没人核过的假设去把一件做得成的事变成做不成。不按网页、
 //    HTTP、hook 各补一个特例:这三处共用的就是这一个函数。
 //
 // ── 误判的代价不对称,所以只认**明确**的那几种 ───────────────────────────────────
@@ -118,8 +141,8 @@
 
 // **词法层在隔壁**(command-lex.ts,单文件 700 行的约定):分词、分段、引号骨架、抹注释。
 // 这个文件只收它的结果 —— 「每个字符在不在引号外」这件事由那边负责记下来(见 `Token.bare`)。
-import { blankComments, blankQuoted, segments, type Segment } from "./command-lex.ts";
-import { followerOf } from "./command-followers.ts";
+import { blankComments, blankQuoted, segments, type Segment, type Token } from "./command-lex.ts";
+import { followerOf, readsToEof } from "./command-followers.ts";
 import { commandOf } from "./command-wrappers.ts";
 
 // **另外两张表在隔壁**（单文件 700 行的约定）:哪些命令的语义是「盯着不走」、它们的 argv 读不
@@ -128,12 +151,13 @@ import { commandOf } from "./command-wrappers.ts";
 
 
 /**
- * 一个硬拦判定 —— 判它的那个写法、这个判定的前提，以及它**经不经得起下游先退出**。
+ * 一个判定 —— 判它的那个写法 + 这个判定的前提。形状跟对外那个 `NeverExitsVerdict` 一样。
  *
- * `fragile` 只对恒真循环为真（见文件头 ⑧）:它的证明里藏着「stdout 一直有人收」这一条,而
- * 跟随型的不藏 —— 所以这两种在管道里的命运不一样，一个布尔比两套判据便宜。
+ * `unprovable` 有值 = 这个判定靠着一个**谁都核不了**的前提（见文件头 ⑨），于是它只配做一句
+ * 提示:路径读不出来、命令自己换过工作目录、同一条命令里别的段动过那个路径、远端资源在不在、
+ * 下游会不会一直读到头。`assumesAnyExists` 则是**核得了的**那一种,交给读得出文件系统的那一层。
  */
-type Found = { what: string; assumesAnyExists: readonly string[]; fragile: boolean };
+type Found = { what: string; assumesAnyExists: readonly string[]; unprovable: string | null };
 
 /**
  * 函数定义:`name() {` / `function name {`。**定义这一刻函数体一个字都不跑**,而「后面到底
@@ -269,8 +293,8 @@ function provableBlocker(scan: Scan): Found | null {
         // 功」这一层答不出来,所以闸盖到**收尾那一段**（`<= end`):体里才开的那个 `set -e` 同样
         // 算,而循环之后才开的那个管不着它（`while true; do :; done; set -e` 照拦）。
         if (endless && !regionHas(scan, i, end, ESCAPES) && !(errexit >= 0 && errexit <= end)) {
-          // `fragile`:这个判定经不起「下游先退出」—— 由下面那个 `|` 兑现（见文件头 ⑧）。
-          pipeline = { what: "while true / until false", assumesAnyExists: [], fragile: true };
+          // 这个判定里藏着「它的 stdout 一直有人收」—— 由下面那个 `|` 去问下游（见文件头 ⑨）。
+          pipeline = { what: "while true / until false", assumesAnyExists: [], unprovable: null };
           i = end;
           at = tokens.length;
           break;
@@ -304,10 +328,10 @@ function provableBlocker(scan: Scan): Found | null {
     // 判据跟循环、分组那两个作用域同一份（`startProvable`）:`2>/dev/null`、`2>&1` 这种
     // 明摆着打得开的照旧算它跑了 —— 事故的起因命令正是那种,它必须照拦。
     if (cmd && !cmd.bounded && runs(i) && startProvable(tokens)) {
-      // 跟随型带着**它自己的前提**（`assumesAnyExists`，见文件头 ⑧）,而且不怕下游先退出
-      // （输出是间歇的,那一次写入可能永远不发生）—— 所以 `fragile: false`。
+      // 跟随型带着**它自己的两种前提**（见文件头 ⑧⑨）:核得了的那几个本地路径、以及核不了
+      // 的那一句（远端资源）。原样收下 —— 这一层不替谁去核,也不替谁抹掉。
       const hit = followerOf(cmd.name, cmd.argv);
-      if (hit) pipeline = { ...hit, fragile: false };
+      if (hit) pipeline = hit;
     }
     // `exec cmd` 把本进程换成 cmd（`WRAPPERS` 已经让上面按 cmd 判过了）—— 它之后的都跑不到。
     if (cmd && headOf(tokens, at) === "exec") return pipeline;
@@ -316,11 +340,24 @@ function provableBlocker(scan: Scan): Found | null {
     switch (segs[i]!.sep) {
       case "&": pipeline = null; reach = base(); break;         // 放后台 ⇒ 这一条判定作废
       case "&&": case "||": reach = false; break;
-      // 管道各级都会跑,但**下游先退出会把管子关掉**（见文件头 ⑧）:恒真循环靠「stdout 一直
-      // 有人收」才永不退出,这里一出现下游就证明不出来了 —— `while true; do printf 'DONE\n';
-      // done | head -n 1` 实测打一行就退出 0。下游自己是跟随型的那种由它再记一次（`tail -f x |
-      // while true; do :; done` 照拦）。
-      case "|": if (pipeline?.fragile) pipeline = null; break;
+      // 管道各级都会跑,但**下游先退出会把管子关掉**（见文件头 ⑨）。上游那个判定都藏着同一
+      // 条前提 —— 恒真循环靠「stdout 一直有人收」、跟随型靠「它下一次写入还写得出去」——
+      // 所以这里问一句下游:只有**证明得出读到 EOF 才退**的那几种保得住它（`readsToEof`;事故
+      // 的起因命令里那个 `grep --line-buffered ERROR` 正是一个,所以它照旧硬拦）。其余一律降
+      // 级成提示:`… | head -n 1` 实测退出 0,而 `tail -f x | grep -m1 y` 日志一安静又真的挂
+      // 住 —— 两边都证明不出来,那就不是硬拦的依据。
+      //
+      // 下游自己是跟随型/恒真循环的那种由它**再记一次**（`tail -f x | while true; do :; done`
+      // 照拦）:那一段会把 `pipeline` 整个换成它自己的判定。
+      case "|": {
+        if (pipeline) {
+          const next = pipeTarget(segs, i + 1);
+          if (!next || next.bounded || !readsToEof(next.name, next.argv)) {
+            pipeline = { ...pipeline, unprovable: downstreamNote(next?.name ?? null) };
+          }
+        }
+        break;
+      }
       case "(": case "{": frames.push(reach); break;            // 进组:这一组的资格就是此刻的 reach
       // 组收口本身不决定任何事:作不作数由**收尾这一组**的那个符号说（它落在紧跟其后那个
       // 空段上）—— 于是 `( … ) &` 和 `( … );` 两种分得开。
@@ -339,12 +376,74 @@ function provableBlocker(scan: Scan): Found | null {
   return frames.length === 1 ? pipeline : null;
 }
 
+/**
+ * `|` 之后那一级的命令（剥掉骨架词和包装层）。读不出来就是 `null` —— 那一侧的「读不懂」等于
+ * 「下游可能先走」（见文件头 ⑨）。
+ */
+function pipeTarget(segs: Segment[], at: number): { name: string; argv: Token[]; bounded: boolean } | null {
+  const seg = segs[at];
+  if (!seg) return null;
+  let from = 0;
+  while (from < seg.tokens.length) {
+    const head = headOf(seg.tokens, from);
+    if (head && SKELETON.has(head)) { from += 1; continue; }
+    break;
+  }
+  return from < seg.tokens.length ? commandOf(seg.tokens, from) : null;
+}
+
+const downstreamNote = (name: string | null): string =>
+  `下游${name ? `那个 ${name} ` : ""}会不会一直读到头，这一层读不出来 —— 它先收工就把管子关掉了`;
+
+/** 路径里带这几个字 ⇒ **谁都读不出它指向哪儿**:变量、命令替换、通配、`~`、花括号、转义。 */
+const UNREADABLE_PATH = /[$`*?[\]{}~\\]/;
+/** 换工作目录的那几个词。认得宽只会多几条提示,漏一个才会留下一次误拦（见文件头 ⑨）。 */
+const CWD_WORDS = new Set(["cd", "pushd", "popd", "chdir"]);
+
+/**
+ * 这个判定的**本地路径前提核不核得出来** —— 核不出来就降级成提示（见文件头 ⑨）。
+ *
+ * 三道都是「创建闸那一问还算不算数」:
+ *  ① 路径本身读不出来（`$LOG`、`*.log`、`~/x`）—— 它指向哪个文件谁都答不出。
+ *  ② **这条命令自己会换工作目录**,而前提里有相对路径 —— 创建闸拿起初那个 cwd 去解析,解出
+ *    来的根本不是 tail 要打开的那一个（`cd sub; tail -f really-here.log` 实测立刻退出 0）。
+ *  ③ 同一条命令里**别的段也提到过这个路径**（`rm x; tail -f x`、`printf x > y; tail -f y`）
+ *    —— 跟随那一刻它在不在,跟创建前那一刻没关系。判据是「这个词在整条命令里出现过不止一
+ *    次」:跟随型自己那一次是其中一次,多出来的那次就是别人动它。认宽了只会多几条提示。
+ */
+function premiseReadable(found: Found, scan: Scan): Found {
+  if (found.unprovable || !found.assumesAnyExists.length) return found;
+  const unreadable = found.assumesAnyExists.find((path) => UNREADABLE_PATH.test(path));
+  if (unreadable) return { ...found, unprovable: `它盯的那个路径这一层读不出来（${unreadable}）` };
+  const words = scan.segs.flatMap((seg) => seg.tokens);
+  const relative = found.assumesAnyExists.find((path) => !path.startsWith("/"));
+  if (relative && words.some((t) => !t.quoted && CWD_WORDS.has(t.text))) {
+    return {
+      ...found,
+      unprovable: `这条命令自己会换工作目录，而「${relative}」是相对路径 —— 它最后打开的是哪个文件，这里核不准`,
+    };
+  }
+  const touched = found.assumesAnyExists
+    .find((path) => words.filter((t) => t.text === path).length > 1);
+  if (touched) {
+    return {
+      ...found,
+      unprovable: `同一条命令里还有别的段动过「${touched}」—— 跟随那一刻它在不在，这里核不准`,
+    };
+  }
+  return found;
+}
+
 function judge(command: string): Found | null {
   // **读不出执行资格的结构 ⇒ 整条命令放行**（见文件头 ②）。here-doc 的终止词、函数体到底
   // 调没调过，这一层都只能猜；猜错的那一半代价是「一件做得成的事做不成」。
   const plain = blankComments(blankQuoted(command));
   if (HERE_DOC.test(plain) || FUNC_DEF.test(plain)) return null;
-  return provableBlocker(scanOf(segments(command)));
+  const scan = scanOf(segments(command));
+  const found = provableBlocker(scan);
+  // **前提核不核得出来,在这儿统一问一次**（见文件头 ⑨）:`provableBlocker` 有十来个出口,
+  // 挨个补一句就是下一次漏在外面的那一处。
+  return found ? premiseReadable(found, scan) : null;
 }
 
 /**
@@ -353,6 +452,10 @@ function judge(command: string): Found | null {
  * 返回那个判定它的写法（给拒绝文案用），不是的话返回 `null`。只回答形状，不回答意图 ——
  * 「永不退出」本身不是错，错的是**既永不退出、又没有任何别的结束条件**。
  *
+ * **前提谁都核不了的那一种在这儿算「不是」**（见文件头 ⑨）:它只配做一句提示,而这个入口答的
+ * 是「这一层自己就够资格硬拦吗」。要那句提示（以及那几个交给创建闸去核的路径）就用
+ * `neverExitsVerdict`。
+ *
  * **对任意字符串都是全函数:它只会回答,不会抛**（第 2 轮审查 F1）。调用它的两处都受不起一个
  * 异常:表单在**每次渲染**里同步调用它（判据一抛,整棵组件树卸载 —— 审查实测页面变成空白),
  * 创建入口在起进程之前调用它（判据一抛,真实路由 500）。而「这条命令读不懂」本来就有一个
@@ -360,7 +463,8 @@ function judge(command: string): Found | null {
  * 有 bug 要能被发现,只是不该由用户那一侧用「做不成事」来承担（见文件头那段不对称）。
  */
 export function neverExitsOnItsOwn(command: string): string | null {
-  return neverExitsVerdict(command)?.what ?? null;
+  const verdict = neverExitsVerdict(command);
+  return verdict && !verdict.unprovable ? verdict.what : null;
 }
 
 /** 一个硬拦判定对外的样子:判它的那个写法 + **这个判定的前提**（见文件头 ⑧）。 */
@@ -375,6 +479,15 @@ export type NeverExitsVerdict = {
    * 前提:读得出来的那一层核得了就核（创建闸知道 cwd），核不了的照实说出这个前提。
    */
   assumesAnyExists: readonly string[];
+  /**
+   * 这个判定还靠一个**谁都核不了**的前提吗（见文件头 ⑨）—— `null` = 没有这一类前提。
+   *
+   * 有值的时候这条命令**不许硬拦**:那句话是对着「它为什么可能永远不结束」说的，所以原样带
+   * 给调用方当提示（创建闸把它随这次创建一起回出去）。核不了的清单:路径读不出来（`$LOG`、
+   * 通配）、命令自己换过工作目录、同一条命令里别的段动过那个路径、远端资源在不在、下游会不
+   * 会一直读到头。
+   */
+  unprovable: string | null;
 };
 
 /**
@@ -386,7 +499,9 @@ export type NeverExitsVerdict = {
 export function neverExitsVerdict(command: string): NeverExitsVerdict | null {
   try {
     const found = judge(command);
-    return found ? { what: found.what, assumesAnyExists: found.assumesAnyExists } : null;
+    return found
+      ? { what: found.what, assumesAnyExists: found.assumesAnyExists, unprovable: found.unprovable }
+      : null;
   } catch (err) {
     console.error(`[ash] 命令结构判据出错,这条命令按「读不懂」放行：${String(err)}`);
     return null;

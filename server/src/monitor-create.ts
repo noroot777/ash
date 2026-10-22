@@ -53,7 +53,7 @@ import { resolve } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import { MONITOR_MAX_PER_TASK, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
 import { neverExitsVerdict } from "@ash/shared/command-never-exits";
-import { endConditionDemand, parseEndCondition } from "@ash/shared/monitor-end-condition";
+import { endConditionAdvice, endConditionDemand, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import { db } from "./db/index.js";
 import { monitors, projects, sessions, tasks } from "./db/schema.js";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
@@ -135,12 +135,6 @@ async function resolveCwd(taskId: string, explicit?: string | null): Promise<str
 }
 
 /**
- * 路径里带这几个字 ⇒ **这一层读不出它指向哪儿**:变量、命令替换、通配、`~`、花括号展开、
- * 反斜杠转义。读不出来的照旧按原判走（见 `assumptionsHold` 最后一段）。
- */
-const UNREADABLE_PATH = /[$`*?[\]{}~\\]/;
-
-/**
  * 这个硬拦判定的**前提还成立**吗 —— 不成立的那一刻它就不是硬拦的依据了（新一轮审查 F1 第 3 条）。
  *
  * `tail -f /definitely-missing-ash-review; printf 'DONE\n'` 实测报一句 No such file 就退出、
@@ -148,16 +142,18 @@ const UNREADABLE_PATH = /[$`*?[\]{}~\\]/;
  * 在不在不写在命令文本里**。所以共享那一层只把前提交出来（`assumesAnyExists`），由读得出这
  * 件事的人去核 —— 这里知道这条哨兵将在哪个工作目录里跑，所以这件事在这儿是事实而不是猜。
  *
- * 两条边界，都只往「不拦」那一侧偏:
- *  · **全部**不在才算前提落空 —— `tail -f 在的 不在的` 照旧跟住那个在的（GNU tail 只对不在
- *    的那个报一句错就接着跟）。
- *  · 只认**证明得出不在**的那一种:路径读不出来（`$LOG`、`*.log`）时维持原判。这一道的意思是
- *    「对方拿出了一个会立刻退出的证明」，不是「我证明不出那个文件存在」—— 后者会把
- *    `tail -f "$LOG"` 这种真跟随器一起放掉，而那是事故的起因那一类。
+ * 交到这儿的路径**一定是字面量、而且这条命令里没有任何一段能改掉它解析到哪**:读不出来的
+ * （`$LOG`、通配、`~`）、命令自己会换工作目录的、同一条命令里别的段动过那个路径的，共享那一层
+ * 就已经降级成提示了（见判据文件头 ⑨ —— 新一轮审查 F1 实测 `cd sub; tail -f really-here.log`
+ * 立刻退出 0，而这里拿起初那个 cwd 去解析，核的根本不是 tail 要打开的那一个）。所以这里只剩
+ * 一件事:按这条哨兵**真实的工作目录**问一句「在不在」。
+ *
+ * 仍然是**全部**不在才算前提落空 —— `tail -f 在的 不在的` 照旧跟住那个在的（GNU tail 只对不在
+ * 的那个报一句错就接着跟）。
  */
 function assumptionsHold(cwd: string, paths: readonly string[]): boolean {
   if (!paths.length) return true;
-  return !paths.every((path) => !UNREADABLE_PATH.test(path) && !existsSync(resolve(cwd, path)));
+  return !paths.every((path) => !existsSync(resolve(cwd, path)));
 }
 
 const text = (value: unknown): string | null => (typeof value === "string" ? value.trim() : null);
@@ -208,10 +204,17 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     //
     // 判定的**前提**在这儿核（`assumptionsHold`）:前提落空的那一刻它就不是硬拦的依据,这是
     // 「读得出来的事实」而不是又一条字符串例外（新一轮审查 F1 第 3 条）。
+    //
+    // **判定的证明里有一环谁都核不了时,这里只提示、不拦**（`unprovable`，见判据文件头 ⑨）:
+    // 路径读不出来（`$LOG`、通配）、命令自己换过工作目录、远端那个 pod 在不在、下游会不会一
+    // 直读到头 —— 这几种的「它永远不会结束」是个没人核过的假设,拿它去 409 就是把一件做得成
+    // 的事变成做不成（新一轮审查 F1 实测了四条）。那句话随这次创建一起回给调用方。
+    let advice: string | null = null;
     if (!stopWhen.cond && !input.untilExpiry) {
       const forever = neverExitsVerdict(command);
+      if (forever?.unprovable) advice = endConditionAdvice(forever.what, forever.unprovable);
       // 409 而不是 400:它不是参数写错了,是「这次创建缺一个决定」—— 三条出路任选一条再来。
-      if (forever && assumptionsHold(cwd, forever.assumesAnyExists)) {
+      else if (forever && assumptionsHold(cwd, forever.assumesAnyExists)) {
         return {
           ok: false, status: 409, error: endConditionDemand(forever.what), needsEndCondition: true as const,
         };
@@ -426,7 +429,10 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       //    (第 1 轮审查 F1 实测 confirmationStillSet=true / monitorAfter=stopped)。撤它必须
       //    跟「数一数有几个哨兵」排同一条队,所以落在这个 `serialize` 里面;那一句话随创建
       //    结果回给 agent,它读结果的那一眼就看到落位变了。**绝不抛**(见那个函数)。
-      const notice = await holdCompletionForNewMonitor(row.taskId, row.description);
+      const held = await holdCompletionForNewMonitor(row.taskId, row.description);
+      // 「核不了的那一环」那句提示跟它拼在一起回出去（见上面的 `advice`）:两句都是对着**这
+      // 一次创建**说的落位变化,调用方读结果的那一眼就该看到。
+      const notice = [held, advice].filter((n): n is string => !!n).join("");
       return { ok: true, monitor: toTaskMonitor(row), ...(notice ? { notice } : {}) };
     } catch (e) {
       // 交接已经完成 ⇒ 这个进程归运行时了,这里再去收它反而是抢它的东西:原样抛出去。

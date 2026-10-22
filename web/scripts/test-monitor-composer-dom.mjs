@@ -112,44 +112,65 @@ try {
       assert.doesNotMatch(await form.innerText(), /永远不会结束/, `这条命令会自己结束：${command}`);
       assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
     }
-    // ⑩b 同一批的真阳对照:把读不出来的那一项补齐,它照旧要逼选。
-    for (const command of ["printf 'x' | tail -f /var/log/app.log", "set -e; tail -F /dev/null"]) {
-      await cmd.fill(command);
-      assert.match(await form.innerText(), /永远不会结束/, `这条命令真的不会自退：${command}`);
-      assert.equal(await submit.isDisabled(), true, `这条命令照旧要逼选：${command}`);
-    }
-    // ⑩c 新一轮审查 F1:会立即打印 DONE 并结束的命令**在这张表单上也不能被禁掉**。两条各对应
-    //     一项读不出来的东西:下游先退会把管子关了、`set -e` 下循环体自己就是出路（见
-    //     shared/src/command-never-exits.ts 文件头 ⑧）。
+    // ⑩b 同一批的真阳对照:把读不出来的那一项补齐,它照旧要**判出来**。判出来之后落到哪一档,
+    //     由「前提核不核得了」决定（两档分别在 ⑩d/⑩e 各量一遍）:`-f` 盯的那个文件在不在,这张
+    //     表单读不出来 ⇒ 照实说一句前提、按钮不禁;`-F` 连文件都不用在就一直重试 ⇒ 这边自己就
+    //     证明得出来 ⇒ 逼选。
+    await cmd.fill("printf 'x' | tail -f /var/log/app.log");
+    assert.match(await form.innerText(), /只要 \/var\/log\/app\.log 还在/, "补齐那个操作数之后它要被判出来");
+    assert.equal(await submit.isDisabled(), false, "那个文件在不在只有服务端核得了,不许提前拦人");
+    await cmd.fill("set -e; tail -F /dev/null");
+    assert.match(await form.innerText(), /自己永远不会结束/, "这条命令真的不会自退");
+    assert.equal(await submit.isDisabled(), true, "证明得出来的那一档照旧要逼选");
+    // ⑩c 新一轮审查 F1:判据**判不出**的那几条,这张表单上一个字都不该多说、按钮也不许禁。
     for (const command of [
-      String.raw`while true; do printf 'DONE\n'; done | head -n 1`,
-      "while true; do printf x; done | grep ERROR",
-      "set -e; while true; do false; done",
+      "set -e; while true; do false; done",                 // errexit 下循环体自己就是出路
+      String.raw`printf 'DONE\n' | tail -f`,                // 它盯的是标准输入
     ]) {
       await cmd.fill(command);
       assert.doesNotMatch(await form.innerText(), /永远不会结束/, `这条命令会自己结束：${command}`);
       assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
     }
-    // ⑩d 同一轮 F1 的第 3 条落到**人**手上的样子:`tail -f build.log` 只在那个文件在的时候才不
-    //     会结束,而浏览器里读不到文件系统 —— 所以这里照实把**前提**说出来（仍然逼选,服务端
-    //     会按真实工作目录再判一次;文件真不在时那边直接放行）。
-    await cmd.fill("tail -f build.log");
-    const premise = await form.innerText();
-    assert.match(premise, /只要 build\.log 还在/, `读不出来的前提要照实说出来，实际：${premise}`);
-    assert.match(premise, /永远不会结束/, "说了前提也还是要说清后果");
-    assert.equal(await submit.isDisabled(), true, "前提成立时它是个真跟随器，照旧要逼选");
-    // 不带前提的那种不许多一句:`-F` 没了也一直重试。
-    await cmd.fill("tail -F build.log");
-    assert.doesNotMatch(await form.innerText(), /只要/, "`-F` 不要这个前提，不许凭空说一句");
-    // ⑦b 真阳对照:事故的起因命令带着 `2>/dev/null`,它照旧要逼选（不然上面那四条等于把闸拆了）。
-    await cmd.fill("tail -F build.log 2>/dev/null | grep --line-buffered ERROR");
-    assert.match(await form.innerText(), /永远不会结束/, "起因命令照旧要说出来");
-    assert.equal(await submit.isDisabled(), true, "起因命令照旧要逼选");
+    // ⑩d **界面比接口更严**就是本轮审查实测到的那一幕:同一条命令在表单上按钮是灰的、原样走
+    //     接口却 200 建得出来（服务端按真实工作目录核过,那个文件真的不在）。所以带前提的那
+    //     几类一律改成**提示 + 可提交**:浏览器读不到文件系统、读不出远端状态、也答不出下游会
+    //     不会一直读到头 —— 而「我核不了」不是「它成立」（见 shared 判据文件头 ⑨）。
+    for (const [command, note] of [
+      ["tail -f build.log", /只要 build\.log 还在/],              // 本地路径:交给服务端去核
+      ["tail -f $LOG", /读不出来/],                                // 路径这一层就读不出来
+      ["kubectl logs -f pod-1", /pod/],                           // 远端资源,谁都核不了
+      ["cd sub; tail -f build.log", /换工作目录/],                 // 命令自己换过目录
+      [String.raw`while true; do printf 'DONE\n'; done | head -n 1`, /下游/],  // 下游可能先走
+      ["tail -f -n +1 large.log | head -n 1", /下游/],             // 跟随型同判（本轮实测退出 0）
+    ]) {
+      await cmd.fill(command);
+      const text = await form.innerText();
+      assert.match(text, note, `核不了的那一环要照实说出来：${command} / 实际：${text}`);
+      assert.doesNotMatch(text, /自己永远不会结束/, `这边证明不出来，不许说得像证明出来了：${command}`);
+      assert.equal(
+        await submit.isDisabled(), false,
+        `前提核不了 ⇒ 不许在服务端之前把人拦住（界面比接口严就是这次审查的现场）：${command}`,
+      );
+    }
+    // ⑩e 真阳对照:**一个前提都不带**的那几条照旧逼选 —— 这边的判断跟服务端一字不差,先把选择
+    //     摆出来省掉一趟来回。少了这一组,上面那几条等于把闸整个拆了。
+    for (const command of [
+      "tail -F build.log",                                  // `-F` 没了也一直重试 ⇒ 不要前提
+      "while true; do :; done",
+      "while true; do printf x; done | grep ERROR",         // 下游证明得出读到头才退
+      "tail -F build.log 2>/dev/null | grep --line-buffered ERROR",   // 事故的起因命令
+    ]) {
+      await cmd.fill(command);
+      const text = await form.innerText();
+      assert.match(text, /自己永远不会结束/, `这一条证明得出来，要说清：${command} / 实际：${text}`);
+      assert.doesNotMatch(text, /只要/, `不带前提的不许凭空说一句前提：${command}`);
+      assert.equal(await submit.isDisabled(), true, `证明得出来的那一档照旧要逼选：${command}`);
+    }
     await page.close();
   }
 
   assert.deepEqual(failures, []);
-  console.log("monitor composer dom: the end-condition field is always offered (forced choice only for provable followers, radios on one line); every command a review measured as self-terminating stays submittable");
+  console.log("monitor composer dom: the end-condition field is always offered (forced choice only when this side alone proves the command never ends, radios on one line); anything resting on a premise the browser cannot check stays submittable with the premise spelled out");
 } finally {
   await close();
 }

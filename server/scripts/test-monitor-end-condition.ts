@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { neverExitsOnItsOwn } from "@ash/shared/command-never-exits";
+import { neverExitsOnItsOwn, neverExitsVerdict } from "@ash/shared/command-never-exits";
 import {
   END_CONDITION_HINT, END_CONDITION_SYNTAX,
   endConditionHit, endConditionNote, parseEndCondition,
@@ -81,7 +81,9 @@ setInterval(() => {}, 1000);
     ["timeout 1 true; tail -F /tmp/x", "tail -f/-F"],    // 前一条的死线不传染给后一条
     ["stdbuf -oL tail -F build.log", "tail -f/-F"],      // 包一层的词是透明的
     ["/usr/bin/tail --follow=name build.log", "tail -f/-F"], // 带路径、长开关带值
-    ["docker logs -f app", "docker logs -f"],
+    // 远端跟随器（`docker/kubectl/podman logs -f`）**不在这张表里**:它们判得出形状,但那个
+    // 容器在不在谁都核不了 ⇒ 只配做提示（新一轮审查 F1，用例在
+    // test-monitor-block-eligibility.ts 的 ⑤b）。
     // 引号里那个 `exit` 不是出路:这条循环真的永远不结束
     ["while true; do echo 'waiting for exit'; sleep 5; done", "while true / until false"],
     // ↓ 第 3 轮审查 F3 之后判据倒过来写（先证明会跑、再问会不会结束），这几条是**赚回来**的:
@@ -337,11 +339,17 @@ setInterval(() => {}, 1000);
     ["ionice -c2 -n7 tail -F /dev/null", "tail -f/-F"],
     ["watch -n 5 date", "watch"],
     ["journalctl -u nginx -f", "journalctl -f"],
-    ["docker logs -f --tail=100 ctr", "docker logs -f"],
-    ["kubectl logs -f pod -n ns", "kubectl logs -f"],
     ["inotifywait -m -r -e modify /tmp", "inotifywait -m"],
     ["fswatch -r /tmp", "fswatch"],
   ] as const) assert.equal(neverExitsOnItsOwn(command), hit, `该拦：${command}`);
+  // 远端跟随器在这一道上**只问形状**:带值的开关连得起来 ⇒ 判得出那个写法。够不够资格硬拦是
+  // 另一件事（那个容器在不在谁都核不了 ⇒ 只配做提示，见 test-monitor-block-eligibility.ts ⑤b）。
+  for (const [command, what] of [
+    ["docker logs -f --tail=100 ctr", "docker logs -f"],
+    ["kubectl logs -f pod -n ns", "kubectl logs -f"],
+  ] as const) {
+    assert.equal(neverExitsVerdict(command)?.what ?? null, what, `该判出形状：${command}`);
+  }
   // 有序那一道的结构锁:描述符状态从 shell 给的 0/1/2 起步,逐项应用 —— 改回 `every(单项)`
   // 就把「关掉 1 之后再从 1 复制」这件事又丢了。
   {

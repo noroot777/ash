@@ -51,6 +51,18 @@
 // 哨兵将在哪个工作目录里跑,所以由它读（server/src/monitor-create.ts 的 `assumptionsHold`）;
 // 表单那边读不出来,所以它照实说「只要 X 还在,它就不会结束」。少交一个前提 = 一条会立刻退出
 // 的命令继续被 409。
+// ── ⑤ 「没人核得了的前提」与「下游会不会一直读到头」:照实交出来，一样不自己断言 ─────────
+//
+// 新一轮审查 F1 又实测到两条:
+//  · `tail -f -n +1 large.log | head -n 1`（预填 350KB）—— tail 当场把前几 KB 写进管子,
+//    `head` 打一行就退、把管子关掉,tail 下一次写入吃 SIGPIPE,整条退出 0。所以上一版那句
+//    「跟随型不怕下游先退」**不成立**:怕不怕取决于**下游会不会一直读到头**,而那是下游那条
+//    命令自己的 argv 说得清的事 —— 于是这边多一张目录（`CONSUMERS` / `readsToEof`）,只认
+//    「证明得出读到 EOF 才退」的那几种,认不出来的一律算「下游可能先走」。
+//  · `kubectl logs -f <pod>`、`docker|podman logs -f <容器>` —— 那个 pod/容器不在、或者已经
+//    停了的时候,它们同样是报一句错就退。而「远端那个东西在不在」**谁都核不了**:本机读不出
+//    来,创建闸也读不出来。所以这种前提也照实交出来（`FollowerHit.unprovable`）,而不是当成
+//    「没有前提」—— 后者等于拿一个没人核过的假设去硬拦（判据文件头 ⑨ 的那条不变量）。
 import type { Token } from "./command-lex.ts";
 
 /** 一个开关的形状 + 它的值要长什么样（`value` 不填 = 这个开关不吃值）。 */
@@ -81,6 +93,14 @@ type Follower = {
    * 来那个 pod/容器在不在）。
    */
   needsExisting?: (argv: Token[], operands: string[]) => readonly string[];
+  /**
+   * 它的跟随还靠一个**谁都核不了**的前提吗 —— 是就照实说出来那句话（见文件头 ⑤）。
+   *
+   * `… logs -f <名字>` 盯的是远端资源:那个 pod/容器不在、或者已经停了,它报一句错就退,而
+   * 「它在不在」本机读不出来、创建闸也读不出来。核不了的前提不配做硬拦的依据,所以这一句
+   * 会一路带到判据那层去作废这次硬拦（判据文件头 ⑨）。
+   */
+  assumesOpaque?: (argv: Token[], operands: string[]) => string | null;
 };
 
 /** 这条简单命令**证明得出会盯着不走**时的判定内容（`followerOf` 的返回）。 */
@@ -95,6 +115,13 @@ export type FollowerHit = {
    * 那个报一句错就接着跟）。
    */
   assumesAnyExists: readonly string[];
+  /**
+   * 这个判定还靠一个**谁都核不了**的前提吗（见文件头 ⑤）—— `null` = 没有这一类前提。
+   *
+   * 有值就只能当提示,不能当硬拦的依据:`kubectl logs -f <pod>` 的「那个 pod 还在跑」本机
+   * 读不出来,而 pod 已经停了的时候它报一句错就退。
+   */
+  unprovable: string | null;
 };
 
 /**
@@ -133,10 +160,14 @@ function tailRetries(argv: Token[]): boolean {
 }
 
 /**
- * 跟随型：这些命令的语义就是「盯着不走」，放在管道里也一样 —— 它不退出，整条管道就不退出
- * （`tail -f x | grep -m1 y` 也救不了：日志安静下来 `tail` 收不到 SIGPIPE，管道照样挂着）。
+ * 跟随型：这些命令的语义就是「盯着不走」。
  *
  * 判据全部落在**那一条简单命令自己的 argv** 上（见 command-never-exits.ts 文件头 ①）。
+ *
+ * **放在管道里不一样**（见文件头 ⑤，上一版这里写的是「一样」）:下游先退就把管子关掉,它下
+ * 一次往 stdout 写当场吃 SIGPIPE —— `tail -f -n +1 large.log | head -n 1` 实测退出 0。而
+ * 「它会不会及时写出那一次」证明不出来（`tail -f x | grep -m1 y` 日志一安静就整条挂住）,所以
+ * 下游那一侧只认**证明得出读到头才退**的那几种（`readsToEof`），其余一律降级成提示。
  */
 const FOLLOWERS = new Map<string, Follower>([
   ["tail", {
@@ -222,6 +253,9 @@ const FOLLOWERS = new Map<string, Follower>([
     // 要盯的那个东西得写在 argv 里:`kubectl logs -f` 少了名字只会打一句用法就退（见文件头 ③）。
     follows: (a, operands) => operands[0] === "logs" && operands.length > 1
       && hasFlag(a, /^-[^-]*f/, "--follow"),
+    // **远端那个东西在不在,谁都核不了**（见文件头 ⑤）:它不在、或者已经停了的时候,这条命令
+    // 同样是报一句错就退。照实交出去,别拿一个没人核过的假设去硬拦。
+    assumesOpaque: (_a, operands) => `pod「${operands[1]}」在不在、还在不在跑，这里读不出来`,
     // `-p`/`--previous` 不在列:那是**已经结束的那个容器**的日志,跟都跟不住 —— 流一到头就退。
     opts: [
       { re: /^-f$/ },
@@ -241,6 +275,9 @@ const FOLLOWERS = new Map<string, Follower>([
     // 要盯的那个东西得写在 argv 里:`docker logs -f` 少了名字只会打一句用法就退（见文件头 ③）。
     follows: (a, operands) => operands[0] === "logs" && operands.length > 1
       && hasFlag(a, /^-[^-]*f/, "--follow"),
+    // **远端那个东西在不在,谁都核不了**（见文件头 ⑤）:它不在、或者已经停了的时候,这条命令
+    // 同样是报一句错就退。照实交出去,别拿一个没人核过的假设去硬拦。
+    assumesOpaque: (_a, operands) => `容器「${operands[1]}」在不在、还在不在跑，这里读不出来`,
     // `--until=` 不在列:到那个时刻就退。
     opts: [
       { re: /^-[ft]+$/ },
@@ -255,6 +292,9 @@ const FOLLOWERS = new Map<string, Follower>([
     // 要盯的那个东西得写在 argv 里:`podman logs -f` 少了名字只会打一句用法就退（见文件头 ③）。
     follows: (a, operands) => operands[0] === "logs" && operands.length > 1
       && hasFlag(a, /^-[^-]*f/, "--follow"),
+    // **远端那个东西在不在,谁都核不了**（见文件头 ⑤）:它不在、或者已经停了的时候,这条命令
+    // 同样是报一句错就退。照实交出去,别拿一个没人核过的假设去硬拦。
+    assumesOpaque: (_a, operands) => `容器「${operands[1]}」在不在、还在不在跑，这里读不出来`,
     opts: [
       { re: /^-[ft]+$/ },
       { re: /^-n$/, value: /^(?:all|\d+)$/ },
@@ -297,7 +337,7 @@ const FOLLOWERS = new Map<string, Follower>([
  * 那个 pod」,而真 kubectl 少了 pod 名字只会打一句用法就退（见文件头 ③）。`--` 之后一律是
  * 操作数,引号里的词也是（`tail -F "my file"`）。
  */
-function operandsIfUnderstood(f: Follower, argv: Token[]): string[] | null {
+function operandsIfUnderstood(f: { opts: readonly Opt[] }, argv: Token[]): string[] | null {
   const operands: string[] = [];
   let done = false;                                   // 读到 `--` 了 ⇒ 后面全是操作数
   for (let i = 0; i < argv.length; i += 1) {
@@ -330,5 +370,93 @@ export function followerOf(name: string, argv: Token[]): FollowerHit | null {
   const operands = operandsIfUnderstood(f, argv);
   if (!operands) return null;
   if (!f.follows(argv, operands)) return null;
-  return { what: f.what, assumesAnyExists: f.needsExisting?.(argv, operands) ?? [] };
+  return {
+    what: f.what,
+    assumesAnyExists: f.needsExisting?.(argv, operands) ?? [],
+    unprovable: f.assumesOpaque?.(argv, operands) ?? null,
+  };
+}
+
+/**
+ * **下游读到头型**:证明得出「它会一直读到 EOF 才退」的那几种 —— 上游那个「永不退出」的判定
+ * 靠的就是这一条（见文件头 ⑤）。
+ *
+ * 这张表只往「不硬拦」那一侧偏:认不出来的下游（自己的脚本、带 `q`/`exit` 的 `sed`/`awk`、
+ * `head`/`grep -q`/`grep -m`/`grep -l` 这种够了就走的）一律算**可能先走**,于是上游那个判定
+ * 降级成一句提示。少认一个 = 多一条提示;多认一个 = 一条会自己结束的命令被 409。
+ */
+type Consumer = {
+  /** 这条 argv 证明得出它**真的在读标准输入、而且读到头才退**吗。 */
+  readsAll: (operands: string[]) => boolean;
+  /** 它**认得的**全部开关（规矩同跟随型的 ①，共用 `operandsIfUnderstood`）。 */
+  opts: readonly Opt[];
+};
+
+/** 只读标准输入那一种才算:给了文件操作数的根本不碰管子（`foo | cat x` 打完 x 就退）。 */
+const STDIN_ONLY = (operands: string[]) => operands.length === 0 || operands.includes("-");
+
+/**
+ * `grep`（含 `egrep`/`fgrep`）。**「够了就走」的那几个开关一律不在列**:`-q`/`--quiet`（匹配到
+ * 就退）、`-m N`/`--max-count`、`-l`/`-L`（报一个名字就退）、`-r`/`-R`（根本不读 stdin）——
+ * 它们正是把管子提前关掉的那一类。事故的起因命令（`… | grep --line-buffered ERROR`）落在这张
+ * 表里:它读到 EOF 才退,所以上游那个 `tail -F` 照旧是硬拦。
+ */
+const GREP: Consumer = {
+  // 操作数只有那个模式才算:`grep X file` 读的是 file,跟管子那头无关,打完就退。
+  readsAll: (operands) => operands.length === 1,
+  opts: [
+    { re: /^-[EFGPHivwxsoncbahz]+$/ },
+    { re: /^-[ef]$/, value: WORD },
+    { re: /^-[ABC]$/, value: COUNT },
+    { re: /^-[ABC]\d+$/ },
+    { re: /^--(?:regexp|file|context|after-context|before-context|color|colour|binary-files|devices|label)=/ },
+    { re: /^--(?:line-buffered|null-data|text|invert-match|ignore-case|word-regexp|line-regexp|only-matching|count|no-filename|with-filename|byte-offset|line-number|extended-regexp|fixed-strings|basic-regexp|perl-regexp|no-messages|color|colour)$/ },
+  ],
+};
+
+const CONSUMERS = new Map<string, Consumer>([
+  ["grep", GREP], ["egrep", GREP], ["fgrep", GREP],
+  ["cat", {
+    readsAll: STDIN_ONLY,
+    opts: [{ re: /^-[nbeEstTvAu]+$/ }, { re: /^--(?:number|number-nonblank|show-ends|show-tabs|show-all|squeeze-blank|show-nonprinting)$/ }],
+  }],
+  // `tee` 的操作数是它要写进去的文件,不是输入 —— 它一律读到头。
+  ["tee", { readsAll: () => true, opts: [{ re: /^-[ai]+$/ }, { re: /^--(?:append|ignore-interrupts)$/ }] }],
+  ["wc", {
+    readsAll: STDIN_ONLY,
+    opts: [{ re: /^-[lwcmL]+$/ }, { re: /^--(?:lines|words|bytes|chars|max-line-length)$/ }],
+  }],
+  // `sort` 更强一点:它要读完全部输入才开得了口。
+  ["sort", {
+    readsAll: STDIN_ONLY,
+    opts: [
+      { re: /^-[nrufbdihsVz]+$/ }, { re: /^-[kt]$/, value: WORD }, { re: /^-[kt][^-].*$/ },
+      { re: /^--(?:numeric-sort|reverse|unique|ignore-case|stable|human-numeric-sort|version-sort|zero-terminated)$/ },
+    ],
+  }],
+  ["uniq", { readsAll: STDIN_ONLY, opts: [{ re: /^-[cdui]+$/ }, { re: /^--(?:count|repeated|unique|ignore-case)$/ }] }],
+  // `tr` 的操作数是两个字符集,不是文件。
+  ["tr", { readsAll: () => true, opts: [{ re: /^-[dscCt]+$/ }, { re: /^--(?:delete|squeeze-repeats|complement|truncate-set1)$/ }] }],
+  ["cut", {
+    readsAll: STDIN_ONLY,
+    opts: [
+      { re: /^-[sn]+$/ }, { re: /^-[dfcb]$/, value: WORD }, { re: /^-[dfcb].+$/ },
+      { re: /^--(?:delimiter|fields|characters|bytes)=/ }, { re: /^--(?:only-delimited|complement)$/ },
+    ],
+  }],
+  ["nl", { readsAll: STDIN_ONLY, opts: [{ re: /^-[bwns]$/, value: WORD }, { re: /^-[bwns].+$/ }] }],
+  ["rev", { readsAll: STDIN_ONLY, opts: [] }],
+]);
+
+/**
+ * 下游这条命令**证明得出它会一直读到 EOF 才退**吗（见文件头 ⑤）。
+ *
+ * 三道同跟随型:这条 argv 全认得出来、它真的在读标准输入、而且没有「够了就走」的开关。任一道
+ * 答不出来就是 `false` —— 「读不懂」在这边的确定答案是**上游那个判定降级成提示**。
+ */
+export function readsToEof(name: string, argv: Token[]): boolean {
+  const c = CONSUMERS.get(name);
+  if (!c) return false;
+  const operands = operandsIfUnderstood(c, argv);
+  return operands !== null && c.readsAll(operands);
 }
