@@ -505,4 +505,41 @@ assert.deepEqual(
   "渲染器不画的那一处,拷贝必须留在卡片里",
 );
 
+// ⑰' 渲染器走不到的另两种形态(审查第 4 轮 R3):**链式**(没人引用的脚注里引用另一条)
+// 和**同名两份**(渲染器只用第一份)。判据不是「全树里出现过这个引用」,而是「正文到得了」。
+const chained = [{
+  id: "ch:0",
+  markdown: "正文一个字都没引用它们。\n\n[^a]: 转去看[^b]。\n\n[^b]: 证据：![链式](output/chain.svg)\n",
+  events: [],
+  attachments: [uploads("8888dddd0000-chain.svg")],
+  attachmentSources: [{ path: uploads("8888dddd0000-chain.svg"), source: "output/chain.svg", ref: 0 }],
+}];
+assert.deepEqual(
+  cardsOf(chained, "C0ojRgeQnMsa"),
+  [uploads("8888dddd0000-chain.svg")],
+  "链式引用不等于正文到得了:那一处画不出来,卡片必须留着",
+);
+
+const duplicated = [{
+  id: "dp:0",
+  markdown: "结论见脚注[^a]。\n\n[^a]: 第一份：![一](output/first.svg)\n\n[^a]: 第二份：![二](output/second.svg)\n",
+  events: [],
+  attachments: [uploads("9999eeee0000-first.svg"), uploads("aaaaffff0000-second.svg")],
+  attachmentSources: [
+    { path: uploads("9999eeee0000-first.svg"), source: "output/first.svg", ref: 0 },
+    { path: uploads("aaaaffff0000-second.svg"), source: "output/second.svg", ref: 1 },
+  ],
+}];
+const duplicatedOut = turnOf(duplicated, "C0ojRgeQnMsa");
+assert.match(
+  duplicatedOut.text,
+  /!\[一\]\(\/api\/uploads\/9999eeee0000-first\.svg\)/,
+  "渲染器用第一份定义,那一处照旧改写",
+);
+assert.deepEqual(
+  duplicatedOut.stops.flatMap((stop) => stop.attachments),
+  [uploads("aaaaffff0000-second.svg")],
+  "第二份定义渲染器压根不用,它那张附件必须留在卡片里",
+);
+
 console.log("回合图片配对(trace → 分段 → 正文)回归通过");

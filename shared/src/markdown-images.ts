@@ -36,10 +36,10 @@ export type MarkdownImageRef = {
   /**
    * 渲染器真会把它画出来吗。
    *
-   * 只有一种情形是假:它住在一条**没人引用的脚注定义**里。脚注那一节是渲染器按
-   * `footnoteReference` **建出来的**(mdast-util-to-hast),没有任何 `[^x]` 指向的定义整节
-   * 被丢掉 —— 解析树里它是货真价实的图片节点,屏幕上一个像素都没有(实测:referenced 扫
-   * 1 处画 1 张、orphan 扫 1 处画 0 张)。
+   * 为假的只有一类:它住在一条**渲染器走不到**的脚注定义里。脚注那一节是渲染器按正文里
+   * 的引用**建出来的**(mdast-util-to-hast,见 reachableFootnotes),走不到的定义整节被
+   * 丢掉 —— 解析树里它是货真价实的图片节点,屏幕上一个像素都没有。三种形态:没人引用、
+   * 只被另一条走不到的定义引用(含自引)、同名定义里排第二的那一份。
    *
    * 为什么是标记而不是直接不认它:服务端是**流式**扫的,定义先到、引用后到时「有没有人
    * 引用」还没有答案,这时候不存那份拷贝,等引用真的到了就再也没有字节了。所以扫描器照
@@ -134,37 +134,77 @@ export function markdownImageRefs(text: string): MarkdownImageRef[] {
   return root ? refsOf(root) : [];
 }
 
+/**
+ * 渲染器建脚注那一节时**真正会走到**的那几条定义。
+ *
+ * 口径照抄 `mdast-util-to-hast`:它不遍历「树里所有定义」,而是从**正文里的引用**出发,
+ * 每个标识符只取同名的**第一条**定义,再把那条定义内容里的引用接着排进队列(所以链式
+ * 引用算可达)。两处差别都出过错(审查第 4 轮 R3):
+ *   · 「全树里出现过这个标识符的引用」≠「正文到得了」—— 没人引用的脚注 A 在自己内容里
+ *     引用 B(或者自引),两节渲染器一节都不建,可按前一种判据 B 被当成会画出来,于是卡片
+ *     被认领走、屏幕上一个像素都没有;
+ *   · 同名定义有两份时渲染器只用第一份,按前一种判据两份里的图都算「会画」,第二份对应的
+ *     那张附件就被白白撤掉。
+ */
+function reachableFootnotes(root: Node): Set<Node> {
+  const first = new Map<string, Node>();
+  /** 这条定义的内容里引用了谁(可达之后要接着排队)。 */
+  const nested = new Map<Node, string[]>();
+  /** 正文(不在任何定义里)引用了谁 —— 可达性的起点。 */
+  const body: string[] = [];
+  const visit = (node: Node, owner: Node | null): void => {
+    let scope = owner;
+    if (node.type === "footnoteDefinition") {
+      const identifier = node.identifier ?? "";
+      if (!first.has(identifier)) first.set(identifier, node);
+      scope = node; /* 它的子树归它:**最内层**那条定义才是这些节点的归属 */
+    } else if (node.type === "footnoteReference" && node.identifier) {
+      if (owner) nested.set(owner, [...(nested.get(owner) ?? []), node.identifier]);
+      else body.push(node.identifier);
+    }
+    for (const child of node.children ?? []) visit(child, scope);
+  };
+  visit(root, null);
+  const reachable = new Set<Node>();
+  const queue = [...body];
+  while (queue.length) {
+    const definition = first.get(queue.shift()!);
+    if (!definition || reachable.has(definition)) continue;
+    reachable.add(definition);
+    queue.push(...(nested.get(definition) ?? []));
+  }
+  return reachable;
+}
+
 function refsOf(root: Node): MarkdownImageRef[] {
   const definitions = new Map<string, string>();
-  const referenced = new Set<string>();
   for (const node of walk(root)) {
-    if (node.type === "footnoteReference" && node.identifier) referenced.add(node.identifier);
     if (node.type !== "definition" || !node.identifier || typeof node.url !== "string") continue;
     // 同名定义:CommonMark 取**第一条**。
     if (!definitions.has(node.identifier)) definitions.set(node.identifier, node.url);
   }
-  // 没人引用的脚注定义整节不渲染(见 MarkdownImageRef.rendered),里面的图片节点先圈出来。
-  const hidden = new Set<Node>();
-  for (const node of walk(root)) {
-    if (node.type !== "footnoteDefinition" || referenced.has(node.identifier ?? "")) continue;
-    for (const inner of walk(node)) hidden.add(inner);
-  }
+  const reachable = reachableFootnotes(root);
   const refs: MarkdownImageRef[] = [];
-  for (const node of walk(root)) {
+  /** 一处引用住在**最内层**的那条脚注定义里(没有就是正文)。 */
+  const collect = (node: Node, owner: Node | null): void => {
+    const scope = node.type === "footnoteDefinition" ? node : owner;
     const inline = node.type === "image";
-    if (!inline && node.type !== "imageReference") continue;
-    const span = offsets(node);
-    if (!span) continue;
-    const destination = (inline ? node.url : definitions.get(node.identifier ?? ""))?.trim();
-    if (!destination) continue;
-    refs.push({
-      destination,
-      start: span[0],
-      end: span[1],
-      rewrite: rewriter(node.alt ?? ""),
-      rendered: !hidden.has(node),
-    });
-  }
+    if (inline || node.type === "imageReference") {
+      const span = offsets(node);
+      const destination = (inline ? node.url : definitions.get(node.identifier ?? ""))?.trim();
+      if (span && destination) {
+        refs.push({
+          destination,
+          start: span[0],
+          end: span[1],
+          rewrite: rewriter(node.alt ?? ""),
+          rendered: !scope || reachable.has(scope),
+        });
+      }
+    }
+    for (const child of node.children ?? []) collect(child, scope);
+  };
+  collect(root, null);
   return refs.sort((a, b) => a.start - b.start);
 }
 

@@ -43,6 +43,21 @@ export const IMAGE_SHAPES: ImageShape[] = [
     markdown: "正文一个字都没引用它。\n\n[^a]: 证据：![孤儿脚注图](output/orphan.svg)\n",
   },
   {
+    key: "footnote-chain",
+    about: "没人引用的脚注里引用另一条脚注(两节渲染器一节都不建 → 0 张)",
+    markdown: "正文一个字都没引用它们。\n\n[^a]: 转去看[^b]。\n\n[^b]: 证据：![链式脚注图](output/chain.svg)\n",
+  },
+  {
+    key: "footnote-self",
+    about: "没人引用的脚注自引(自引不等于正文到得了 → 0 张)",
+    markdown: "正文一个字都没引用它。\n\n[^a]: 见上文[^a]：![自引脚注图](output/self.svg)\n",
+  },
+  {
+    key: "footnote-duplicate",
+    about: "同名脚注定义两份(渲染器只用第一份 → 1 张,第二份那张不画)",
+    markdown: "结论见脚注[^a]。\n\n[^a]: 第一份：![第一份](output/first.svg)\n\n[^a]: 第二份：![第二份](output/second.svg)\n",
+  },
+  {
     key: "table-pipe",
     about: "表格单元里有未转义的 `|`（GFM 按它切单元，图片语法被切断 → 0 张；核心语法 → 1 张）",
     markdown: "| 名 | 图 |\n| --- | --- |\n| a | ![示例](output/a|b.svg) |\n",
