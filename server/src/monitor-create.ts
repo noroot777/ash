@@ -48,8 +48,6 @@
 // 跑完、号被复用之后,接回/清扫/重复停止三条路都会拿着别人的进程当我们的下刀
 // (判据已收紧在 proc.ts 的 `unverifiable` 档)。所以这里**拒绝**:身份问不全就不放行,
 // 而那一刻要收掉的进程由**句柄**证明所有权,不经过 pid 身份那条路。
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import { MONITOR_MAX_PER_TASK, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
 import { neverExitsVerdict } from "@ash/shared/command-never-exits";
@@ -134,28 +132,6 @@ async function resolveCwd(taskId: string, explicit?: string | null): Promise<str
   return project?.repoPath ?? null;
 }
 
-/**
- * 这个硬拦判定的**前提还成立**吗 —— 不成立的那一刻它就不是硬拦的依据了（新一轮审查 F1 第 3 条）。
- *
- * `tail -f /definitely-missing-ash-review; printf 'DONE\n'` 实测报一句 No such file 就退出、
- * 随后打出 DONE（退出 0），却被这道闸 409 掉:判据只看得见「有 `-f`、有操作数」，而**那个文件
- * 在不在不写在命令文本里**。所以共享那一层只把前提交出来（`assumesAnyExists`），由读得出这
- * 件事的人去核 —— 这里知道这条哨兵将在哪个工作目录里跑，所以这件事在这儿是事实而不是猜。
- *
- * 交到这儿的路径**一定是字面量、而且这条命令里没有任何一段能改掉它解析到哪**:读不出来的
- * （`$LOG`、通配、`~`）、命令自己会换工作目录的、同一条命令里别的段动过那个路径的，共享那一层
- * 就已经降级成提示了（见判据文件头 ⑨ —— 新一轮审查 F1 实测 `cd sub; tail -f really-here.log`
- * 立刻退出 0，而这里拿起初那个 cwd 去解析，核的根本不是 tail 要打开的那一个）。所以这里只剩
- * 一件事:按这条哨兵**真实的工作目录**问一句「在不在」。
- *
- * 仍然是**全部**不在才算前提落空 —— `tail -f 在的 不在的` 照旧跟住那个在的（GNU tail 只对不在
- * 的那个报一句错就接着跟）。
- */
-function assumptionsHold(cwd: string, paths: readonly string[]): boolean {
-  if (!paths.length) return true;
-  return !paths.every((path) => !existsSync(resolve(cwd, path)));
-}
-
 const text = (value: unknown): string | null => (typeof value === "string" ? value.trim() : null);
 const detail = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -202,19 +178,21 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     // 的表单用的是同一份。它排在别的 409 前面（来源、终态、上限），因为它答的是「这次请求本身
     // 缺一个决定」，不是「此刻的状态不许」—— 先说状态只会让调用方改完状态再吃同一句。
     //
-    // 判定的**前提**在这儿核（`assumptionsHold`）:前提落空的那一刻它就不是硬拦的依据,这是
-    // 「读得出来的事实」而不是又一条字符串例外（新一轮审查 F1 第 3 条）。
+    // **判定压着一个没人核得了的前提时,这里只提示、不拦**（`unprovable`，见判据文件头 ⑨⑩）:
+    // 它要盯的那个文件执行到那一步时还在不在、远端那个 pod 在不在、下游会不会一直读到头 ——
+    // 这几种的「它永远不会结束」是个没人核过的假设,拿它去 409 就是把一件做得成的事变成做不成
+    // （两轮审查一共实测了十二条）。那句话随这次创建一起回给调用方。
     //
-    // **判定的证明里有一环谁都核不了时,这里只提示、不拦**（`unprovable`，见判据文件头 ⑨）:
-    // 路径读不出来（`$LOG`、通配）、命令自己换过工作目录、远端那个 pod 在不在、下游会不会一
-    // 直读到头 —— 这几种的「它永远不会结束」是个没人核过的假设,拿它去 409 就是把一件做得成
-    // 的事变成做不成（新一轮审查 F1 实测了四条）。那句话随这次创建一起回给调用方。
+    // **这里不再自己核文件系统**:上一版拿 `existsSync` 核过一遍路径前提,而它读得到的是「创建
+    // 这一刻在不在」、判定要的是「执行到那一句时在不在」—— `rm ./doomed.log; tail -f doomed.log`
+    // 创建时文件在、跑到那句时已经没了,实测退出 0 却被 409（第 2 轮审查 F1）。时刻不对的核查
+    // 不是证明,所以那一档整个移到了提示那一侧,这里只剩「有没有压着前提」这一问。
     let advice: string | null = null;
     if (!stopWhen.cond && !input.untilExpiry) {
       const forever = neverExitsVerdict(command);
       if (forever?.unprovable) advice = endConditionAdvice(forever.what, forever.unprovable);
       // 409 而不是 400:它不是参数写错了,是「这次创建缺一个决定」—— 三条出路任选一条再来。
-      else if (forever && assumptionsHold(cwd, forever.assumesAnyExists)) {
+      else if (forever) {
         return {
           ok: false, status: 409, error: endConditionDemand(forever.what), needsEndCondition: true as const,
         };
@@ -280,6 +258,8 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       // 约定的结束条件**原样落库**:运行时每推一批就拿它比一次(monitors.ts 的 flushBuffer),
       // 跨重启接回来的那一份也照旧认它。
       stopWhen: input.stopWhen?.trim() || null,
+      // 还没开始跑,自然一行都没命中过（这一列的语义见 schema-monitors.ts 的 `hitLine`）。
+      hitLine: null,
       // **同一个瞬间**算两列：分别取 Date.now() 会差 1ms，而对外那个到期时刻是
       // `started_at + timeout_ms` 现算的（见 toTaskMonitor），差值会变成「库里写的」与
       // 「卡片显示的」不一致。

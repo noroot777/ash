@@ -113,12 +113,12 @@ try {
       assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
     }
     // ⑩b 同一批的真阳对照:把读不出来的那一项补齐,它照旧要**判出来**。判出来之后落到哪一档,
-    //     由「前提核不核得了」决定（两档分别在 ⑩d/⑩e 各量一遍）:`-f` 盯的那个文件在不在,这张
-    //     表单读不出来 ⇒ 照实说一句前提、按钮不禁;`-F` 连文件都不用在就一直重试 ⇒ 这边自己就
-    //     证明得出来 ⇒ 逼选。
+    //     由「它压着前提没有」决定（两档分别在 ⑩d/⑩e 各量一遍）:`-f` 压着「那个文件执行到那一
+    //     句时还在」,没有哪一层核得了 ⇒ 照实说出来、按钮不禁;`-F` 连文件都不用在就一直重试
+    //     ⇒ 一个前提都不压 ⇒ 这边自己证明得出来 ⇒ 逼选。
     await cmd.fill("printf 'x' | tail -f /var/log/app.log");
-    assert.match(await form.innerText(), /只要 \/var\/log\/app\.log 还在/, "补齐那个操作数之后它要被判出来");
-    assert.equal(await submit.isDisabled(), false, "那个文件在不在只有服务端核得了,不许提前拦人");
+    assert.match(await form.innerText(), /\/var\/log\/app\.log/, "补齐那个操作数之后它要被判出来");
+    assert.equal(await submit.isDisabled(), false, "那件事没人核得了,不许在这儿把人拦住");
     await cmd.fill("set -e; tail -F /dev/null");
     assert.match(await form.innerText(), /自己永远不会结束/, "这条命令真的不会自退");
     assert.equal(await submit.isDisabled(), true, "证明得出来的那一档照旧要逼选");
@@ -136,12 +136,15 @@ try {
     //     几类一律改成**提示 + 可提交**:浏览器读不到文件系统、读不出远端状态、也答不出下游会
     //     不会一直读到头 —— 而「我核不了」不是「它成立」（见 shared 判据文件头 ⑨）。
     for (const [command, note] of [
-      ["tail -f build.log", /只要 build\.log 还在/],              // 本地路径:交给服务端去核
-      ["tail -f $LOG", /读不出来/],                                // 路径这一层就读不出来
+      ["tail -f build.log", /build\.log/],                        // 本地路径也一样:时刻不对
+      ["tail -f $LOG", /\$LOG/],                                  // 路径这一层就读不出来
       ["kubectl logs -f pod-1", /pod/],                           // 远端资源,谁都核不了
-      ["cd sub; tail -f build.log", /换工作目录/],                 // 命令自己换过目录
+      ["rm ./doomed.log; tail -f doomed.log", /doomed\.log/],      // 第 2 轮审查实测退出 0 却被 409
+      ["inotifywait -m /tmp", /\/tmp/],                           // 要盯的目录同理
       [String.raw`while true; do printf 'DONE\n'; done | head -n 1`, /下游/],  // 下游可能先走
-      ["tail -f -n +1 large.log | head -n 1", /下游/],             // 跟随型同判（本轮实测退出 0）
+      ["tail -f -n +1 large.log | head -n 1", /下游/],             // 跟随型同判（第 1 轮实测退出 0）
+      ["while true; do printf x; done | grep -e one reader.log", /下游/],      // `-e` 给过模式 ⇒ 操作数是文件
+      ["while true; do printf x; done | tr", /下游/],              // 读管子之前就用法错误
     ]) {
       await cmd.fill(command);
       const text = await form.innerText();
@@ -155,15 +158,18 @@ try {
     // ⑩e 真阳对照:**一个前提都不带**的那几条照旧逼选 —— 这边的判断跟服务端一字不差,先把选择
     //     摆出来省掉一趟来回。少了这一组,上面那几条等于把闸整个拆了。
     for (const command of [
-      "tail -F build.log",                                  // `-F` 没了也一直重试 ⇒ 不要前提
+      "tail -F build.log",                                  // `-F` 没了也一直重试 ⇒ 不压前提
       "while true; do :; done",
+      "journalctl -f",                                      // 盯的是日志本身 ⇒ 不压前提
       "while true; do printf x; done | grep ERROR",         // 下游证明得出读到头才退
+      "tail -F build.log | grep -e ERROR",                  // `-e` 给模式、没有文件操作数
+      "tail -F build.log | tr -d abc",                      // `-d` 要一个集合,给齐了
       "tail -F build.log 2>/dev/null | grep --line-buffered ERROR",   // 事故的起因命令
     ]) {
       await cmd.fill(command);
       const text = await form.innerText();
       assert.match(text, /自己永远不会结束/, `这一条证明得出来，要说清：${command} / 实际：${text}`);
-      assert.doesNotMatch(text, /只要/, `不带前提的不许凭空说一句前提：${command}`);
+      assert.doesNotMatch(text, /可能永远不会结束/, `证明得出来的不许说成「可能」：${command}`);
       assert.equal(await submit.isDisabled(), true, `证明得出来的那一档照旧要逼选：${command}`);
     }
     await page.close();

@@ -16,7 +16,7 @@
 // 退出 0，却因为「认出了 `-f`」被 409）。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { neverExitsOnItsOwn, neverExitsVerdict } from "@ash/shared/command-never-exits";
 import { readSource } from "../../scripts/read-source.mjs";
@@ -80,8 +80,11 @@ const judged = (command: string, what: string, why: string) =>
   for (const command of ["printf 'DONE\\n' | tail -f", "printf 'DONE\\n' | tail -F", "tail -f -", "tail -F --"]) {
     passes(command, "它盯的是标准输入,那头是什么这一层答不出来");
   }
-  // 真阳对照:同一条管道里 tail 盯的是**文件**,标准输入关不关它的事 ⇒ 照拦。
-  blocks("printf 'x\\n' | tail -f /var/log/app.log", "tail -f/-F", "管道里的 tail 盯的是文件");
+  // 真阳对照:同一条管道里 tail 盯的是**文件**,标准输入关不关它的事 ⇒ 判得出来。`-f` 压着
+  // 「那个文件执行到那一句时还在」这个没人核得了的前提,所以落在提示那一档（见 ⑤b）;`-F`
+  // 连这个前提都不要 ⇒ 硬拦。
+  judged("printf 'x\\n' | tail -f /var/log/app.log", "tail -f/-F", "管道里的 tail 盯的是文件");
+  blocks("printf 'x\\n' | tail -F /var/log/app.log", "tail -f/-F", "`-F` 没了也重试 ⇒ 不要前提");
   blocks("tail -F build.log 2>/dev/null | grep --line-buffered ERROR", "tail -f/-F", "事故的起因命令");
   console.log("✓ 硬拦资格：要盯的那个东西没写在 argv 里 ⇒ 降级；写齐了的照拦");
 }
@@ -156,18 +159,20 @@ const judged = (command: string, what: string, why: string) =>
   blocks("while true; do :; done; set -e", "while true / until false", "`set -e` 开在循环之后");
   console.log("✓ 硬拦资格：`set -e` 之后的可达性按短路算（循环体也算）；`set` 自己那一段和它之前的照拦");
 }
-// ── ④ 下游:管子那头会不会**一直读到头**（新一轮审查 F1）──────────────────────────────
-// 两轮实测把这件事钉成了一条判据,而不是两套按工具名分的特例:
+// ── ④ 下游:管子那头会不会**一直读到头**（两轮审查 F1）────────────────────────────────
+// 三轮实测把这件事钉成了一条判据,而不是按工具名分的特例:
 //  · `while true; do printf 'DONE\n'; done | head -n 1` 打一行就退出 0;
-//  · `tail -f -n +1 large.log | head -n 1`（预填 350KB）同样退出 0 —— 所以上一版那句「跟随型
-//    不怕下游先退」不成立:tail 当场把前几 KB 写进管子,head 打一行就把管子关掉;
+//  · `tail -f -n +1 large.log | head -n 1`（预填 350KB）同样退出 0 —— 所以「跟随型不怕下游先
+//    退」不成立:tail 当场把前几 KB 写进管子,head 打一行就把管子关掉;
 //  · 而 `while true; do :; done | head -n 1` 一个字都不写、`head` 一直等,那一条真的挂住。
-// 三条合起来说的是同一件事:**怕不怕取决于下游会不会一直读到头**。所以判据落在下游身上 ——
-// 只有证明得出「读到 EOF 才退」的那几种（`readsToEof`）保得住上游那个判定,其余一律降级。
+// 第 2 轮审查又把判据本身掀了一层:**光看「剥掉开关后剩几个操作数」不够**,得按**参数角色**读
+// —— `grep -e one reader.log` 的模式已经由 `-e` 给了,剩下那个操作数是文件,它读完就退、压根不
+// 碰管子（实测 7ms、退出 0、参数合法无错误输出）;`tr`/`tr ab`/`cut`/`sort -t xx`/`nl -w nope`/
+// `grep '['` 则是在**读管子之前**就打一句用法或参数错误退出。
 {
   for (const command of [
     "while true; do printf 'DONE\n'; done | head -n 1",
-    "tail -f /var/log/app.log | head -n 1",                  // 跟随型同判（本轮审查实测那一条）
+    "tail -f /var/log/app.log | head -n 1",                  // 跟随型同判（第 1 轮审查实测那一条）
     "tail -F build.log | grep -m1 READY",                    // 「够了就走」的开关不在白名单里
     "tail -F build.log | grep -q READY",
     "tail -F build.log | grep -l ERROR",
@@ -179,93 +184,114 @@ const judged = (command: string, what: string, why: string) =>
     "( while true; do printf x; done ) | head -n 1",
     "while true; do printf x; done | head -n 1 | cat",       // 多级:任一级可能先走就够
     "while true; do printf x; done | cat | head -n 1",
+    // ── 第 2 轮审查 F1 实测的那七条:全在读管子之前就退出 0 ──────────────────────────
+    "while true; do printf x; done | grep -e one reader.log", // `-e` 给过模式 ⇒ 操作数是文件
+    "tail -F build.log | grep --regexp=one reader.log",       // 长写法同理
+    "tail -F build.log | grep -f patterns.txt",               // 模式写在文件里 ⇒ 全读不出来
+    "while true; do printf x; done | grep '['",               // 模式编译失败 ⇒ 报错就退
+    "tail -F build.log | grep -E 'a|b'",                      // 带结构的模式一律不算证明
+    "while true; do printf x; done | tr",                     // 字符集一个都没给 ⇒ 用法错误
+    "while true; do printf x; done | tr ab",                  // 少给一个 ⇒ 同上
+    "tail -F build.log | tr -s a",                            // `-s` 一个两个都合法 ⇒ 数不出来
+    "tail -F build.log | tr '[:bogus:]' x",                   // 非法字符集 ⇒ 报错就退
+    "while true; do printf x; done | cut",                    // 没给 `-b/-c/-f` ⇒ 用法错误
+    "while true; do printf x; done | sort -t xx",             // 分隔符要单字符 ⇒ 参数错误
+    "tail -F build.log | sort -k2",                           // `-k` 的字段语法这一层判不了
+    "while true; do printf x; done | nl -w nope",             // 宽度要数字 ⇒ 参数错误
+    "tail -F build.log | tee out.log",                        // 写不进那个文件就报错
+    "tail -F build.log | cat x.log",                          // 给了文件 ⇒ 不读管子
+    "tail -F build.log | wc -l x.log",
   ]) passes(command, "下游会不会一直读到头，这一层读不出来");
   for (const [command, hit] of [
     ["while true; do printf 'x\n'; done", "while true / until false"],
     ["printf 'x\n' | while true; do :; done", "while true / until false"],   // 循环在最后一级
     ["while true; do printf x; done 2>/dev/null", "while true / until false"], // 重定向不是管道
     ["while true; do printf x; done | grep ERROR", "while true / until false"],
-    // 事故的起因命令落在这一档:`grep` 不带那几个「够了就走」的开关 ⇒ 读到 EOF 才退。
+    // 事故的起因命令落在这一档:`grep` 不带那几个「够了就走」的开关、模式纯字面、没有文件
+    // 操作数 ⇒ 读到 EOF 才退。**这一条是闸的牙**,两轮重写都没把它放掉。
     ["tail -F build.log 2>/dev/null | grep --line-buffered ERROR", "tail -f/-F"],
-    ["tail -F build.log | tee out.log", "tail -f/-F"],
+    ["tail -F build.log | grep -e ERROR", "tail -f/-F"],                       // `-e` 给模式、无文件
+    ["tail -F build.log | grep -i -A3 ERROR", "tail -f/-F"],                   // 带值开关值形状对得上
+    ["tail -F build.log | tee", "tail -f/-F"],                                 // 不带文件 ⇒ 只写 stdout
     ["tail -F build.log | wc -l", "tail -f/-F"],
     ["tail -F build.log | cut -d: -f1", "tail -f/-F"],
+    ["tail -F build.log | tr -d abc", "tail -f/-F"],                           // `-d` 要一个集合,给齐了
+    ["tail -F build.log | tr abc xyz", "tail -f/-F"],                          // 默认要两个,给齐了
     ["tail -F build.log | sort | uniq -c", "tail -f/-F"],                      // 多级都证明得出
     ["tail -F build.log | stdbuf -oL grep ERROR", "tail -f/-F"],               // 包装层剥掉还是 grep
   ] as const) blocks(command, hit, "下游证明得出读到 EOF 才退 ⇒ 上游那个判定站得住");
-  console.log("✓ 硬拦资格：下游证明得出读到头才保得住上游那个判定，其余一律降级");
+  console.log("✓ 硬拦资格：下游按参数角色判「会不会一直读到头」，判不出来的一律降级");
 }
-// ── ⑤ 判定的前提:它盯的那个东西在不在（新一轮审查 F1 第 3 条）──────────────────────────
-// `tail -f /definitely-missing-ash-review; printf 'DONE\n'` 实测报一句 No such file 就退出、
-// 随后打出 DONE。前提不写在命令文本里,所以**判据这一层只交出前提**（它也读不到文件系统:
-// 同一份判据跑在浏览器里），由读得出来的那一层核（下面 ⑦ 走真实创建入口）。
+// ── ⑤ 判定压着的那个前提:它要盯的那个东西**执行到那一步时**还在不在（第 2 轮审查 F1）────
+// 上一版把这个前提交出去（`assumesAnyExists`）、让创建闸拿 `existsSync` 核一遍,**那条路被证伪
+// 了**:它读得到的是「创建这一刻在不在」,判定要的是「执行到那一句时在不在」,中间隔着这条命令
+// 前面的每一段 —— `rm ./doomed.log; tail -f doomed.log; printf 'DONE\n'` 实测 9ms 退出 0,却被
+// 409。拿「这个路径词出现过几次」去补那个缝也不行:`./doomed.log` 与 `doomed.log` 是同一个文件、
+// 不是同一个词,那是在穷举拼写。所以**这一整档移出硬拦**,一律只配做提示。
 {
-  for (const [command, assumes] of [
-    ["tail -f build.log", ["build.log"]],
-    ["tail -f 'build.log'", ["build.log"]],
-    ["tail -f -- build.log", ["build.log"]],
-    ["tail -f a.log b.log", ["a.log", "b.log"]],           // 全不在才算前提落空
-    ["inotifywait -m /tmp/a /tmp/b", ["/tmp/a", "/tmp/b"]],
-    ["fswatch /tmp/a", ["/tmp/a"]],
-  ] as const) {
-    assert.deepEqual(
-      neverExitsVerdict(command)?.assumesAnyExists, assumes,
-      `这一条的不退出有前提，前提必须交出来：${command}`,
-    );
-  }
+  for (const [command, why] of [
+    ["tail -f build.log", "本地路径也一样:核得到的是此刻，要的是执行到那一句时"],
+    ["tail -f 'build.log'", "引号不改变这件事"],
+    ["tail -f -- build.log", "`--` 之后同理"],
+    ["tail -f a.log b.log", "多个操作数同理"],
+    ["tail -f /abs/build.log", "绝对路径同理 —— 时刻不对，不是路径写法不对"],
+    ["cd sub; tail -f /abs/build.log", "换没换目录都不改变「时刻不对」这件事"],
+    ["rm ./doomed.log; tail -f doomed.log", "第 2 轮审查实测:创建时在、跑到那句时已经没了"],
+    ["inotifywait -m /tmp/a /tmp/b", "要盯的目录同理"],
+    ["fswatch /tmp/a", "同上"],
+    ["tail -f $LOG", "路径这一层就读不出来"],
+    ['tail -f "$LOG"', "引号里照样读不出来"],
+    ["tail -f *.log", "通配读不出来"],
+    ["tail -f ~/x.log", "`~` 由 shell 展开"],
+    ["cd sub; tail -f really-here.log; printf 'DONE\n'", "第 1 轮审查实测退出 0"],
+    ["kubectl logs -f pod-1", "远端那个 pod 在不在，谁都核不了"],
+    ["docker logs -f web", "远端那个容器同理"],
+    ["podman logs -f web", "同上"],
+  ] as const) passes(command, `压着一个没人核得了的前提 ⇒ 只配做提示（${why}）`);
+  // **闸剩下的牙在「一个前提都不压」的那一档** —— 少了这一组,上面那一整节等于把闸拆了。
   for (const command of [
     "tail -F build.log",                                   // 没了也一直重试 ⇒ 不要这个前提
     "tail -f --retry build.log",
     "tail -f --follow=name build.log",
     "journalctl -f",                                       // 盯的是日志本身
     "watch date",                                          // 盯的是一条命令,失败也照旧重来
-    "kubectl logs -f pod-1",                               // 远端资源名,本机读不出来
     "while true; do :; done",
+    "until false; do :; done",
   ]) {
-    assert.deepEqual(
-      neverExitsVerdict(command)?.assumesAnyExists, [],
-      `这一条的不退出不依赖本地路径，不许凭空长出前提：${command}`,
+    assert.equal(
+      neverExitsVerdict(command)?.unprovable ?? null, null,
+      `这一条一个前提都不压，不许凭空长出一个来把闸放掉：${command}`,
     );
   }
-  console.log("✓ 硬拦资格：判定带着的前提原样交出来，重试型与非路径型不带前提");
+  console.log("✓ 硬拦资格：要盯的那个东西在不在一律只配做提示；一个前提都不压的那一档照旧硬拦");
 }
-// ── ⑤b 前提**核不核得出来**:核不了的不配做硬拦的依据（新一轮审查 F1）────────────────────
-// ⑤ 只做到了「把前提交出来」,而上一版的处置是「核得出不在就放行、核不出来就维持原判」——
-// 于是四类会自己结束的命令继续被 409（审查实测）:路径读不出来的（`$LOG`、通配）、命令自己换
-// 过工作目录的（创建闸拿起初那个 cwd 解析,核的根本不是 tail 要打开的那一个）、同一条命令里
-// 别的段动过那个路径的、以及远端资源那种谁都核不了的。「我证明不出它不成立」不等于「它成立」。
+// ── ⑤b 那句提示要**指到是哪一环核不了** ───────────────────────────────────────────────
+// 一句泛泛的「可能不会结束」等于没说:人得据此判断要不要现在就补一个结束条件。
 {
-  for (const [command, why] of [
-    ["tail -f $LOG", "路径读不出来"],
-    ['tail -f "$LOG"', "引号里照样读不出来"],
-    ["tail -f *.log", "通配读不出来"],
-    ["tail -f ~/x.log", "`~` 由 shell 展开"],
-    ["cd sub; tail -f really-here.log; printf 'DONE\n'", "命令自己换过工作目录（审查实测退出 0）"],
-    ["rm x.log; tail -f x.log", "同一条命令里别的段动过它"],
-    ["printf a > y.log; tail -f y.log", "同上:先造出来也算 —— 跟随那一刻在不在，创建前核不准"],
-    ["kubectl logs -f pod-1", "远端那个 pod 在不在，谁都核不了"],
-    ["docker logs -f web", "远端那个容器同理"],
-    ["podman logs -f web", "同上"],
-  ] as const) passes(command, `前提核不了 ⇒ 只配做提示（${why}）`);
-  // 核得了的那一种照旧往下走:这一层仍然判它不会结束,由创建闸按真实工作目录去核（见 ⑦）。
-  for (const [command, hit] of [
-    ["tail -f build.log", "tail -f/-F"],
-    ["cd sub; tail -f /abs/build.log", "tail -f/-F"],        // 绝对路径不受换目录影响
-    ["inotifywait -m /tmp", "inotifywait -m"],
-  ] as const) blocks(command, hit, "前提核得了 ⇒ 这一层照旧判它不会结束");
-  // 那句提示要**指到是哪一环核不了**:一句泛泛的「可能不会结束」等于没说。
   for (const [command, note] of [
-    ["tail -f $LOG", /读不出来/],
-    ["cd sub; tail -f rel.log", /换工作目录/],
+    ["tail -f build.log", /build\.log/],
+    ["tail -f $LOG", /\$LOG/],
+    ["cd sub; tail -f rel.log", /rel\.log/],
     ["kubectl logs -f pod-1", /pod/],
+    ["docker logs -f web", /容器/],
+    ["inotifywait -m /tmp", /\/tmp/],
     ["tail -F x | head -n 1", /下游/],
+    ["tail -F x | grep -e one reader.log", /下游/],
+    ["while true; do printf x; done | tr", /下游/],
   ] as const) {
     assert.match(
       neverExitsVerdict(command)?.unprovable ?? "",
       note, `那句提示要指到核不了的那一环：${command}`,
     );
   }
-  console.log("✓ 硬拦资格：核不了的前提降级成提示，而且提示里指明是哪一环核不了");
+  // 它要么是一句话、要么压根没有 —— 不许是空串（界面拿它当文案,空串会渲染成一句残句）。
+  for (const command of ["tail -f build.log", "kubectl logs -f p", "tail -F x | head -n 1"]) {
+    assert.ok(
+      (neverExitsVerdict(command)?.unprovable ?? "").length > 8,
+      `提示不许是空串或一个字：${command}`,
+    );
+  }
+  console.log("✓ 硬拦资格：提示里指明是哪一环核不了，而且不是空串");
 }
 // ── ⑥ 结构锁:这几道不许悄悄退回去 ──────────────────────────────────────────────────
 // 上面几节是「这一批输入的答案对不对」,这一节是「判据的形状还在不在」—— 把 `follows` 改回只
@@ -276,11 +302,11 @@ const judged = (command: string, what: string, why: string) =>
   const FOLLOWERS = readSource(join(HERE, "../../shared/src/command-followers.ts"));
   const CREATE = readSource(join(HERE, "../src/monitor-create.ts"));
   assert.match(
-    FOLLOWERS, /function operandsIfUnderstood\(/,
-    "认 argv 那一趟必须同时交出**真正的操作数**（见该文件头 ③）",
+    FOLLOWERS, /function parseIfUnderstood\(/,
+    "认 argv 那一趟必须同时交出**真正的操作数和开关**（见该文件头 ③⑥）",
   );
   assert.match(
-    FOLLOWERS, /f\.follows\(argv, operands\)/,
+    FOLLOWERS, /f\.follows\(argv, parsed\.operands\)/,
     "跟随判定必须拿到真正的操作数：不然「它盯的是谁」这一项又没人问了",
   );
   // 只认**条目**（`{ re: … }`），注释里提这几个名字不算 —— 它们恰恰该写在注释里说明为什么不收。
@@ -292,7 +318,17 @@ const judged = (command: string, what: string, why: string) =>
   ] as const) {
     assert.doesNotMatch(FOLLOWERS, re, `${name} 自带出口，不许收进白名单（见该文件头 ②）`);
   }
-  assert.match(FOLLOWERS, /needsExisting/, "跟随型必须交出「它盯的那个东西得在」这个前提（见该文件头 ④）");
+  // **路径前提不许再交给别人去 `stat`**（第 2 轮审查 F1）:那一档没了,`tail -f FILE` 跟远端那
+  // 几个走同一条路 —— 交出一句「没人核得了」。留着旧出口就等于留着那次误拦。
+  assert.doesNotMatch(
+    FOLLOWERS, /needsExisting/,
+    "「交出路径让创建闸去 stat」这条路已被实测证伪（时刻不对），不许回来（见该文件头 ④）",
+  );
+  assert.doesNotMatch(
+    // 只认**调用**（`existsSync(`）:注释里提这个名字不算 —— 它恰恰该写在注释里说明为什么不用。
+    CREATE, /existsSync\(/,
+    "创建闸不许再自己核文件系统:它读得到的是创建这一刻,判定要的是执行到那一句时（第 2 轮审查 F1）",
+  );
   assert.match(JUDGE, /const errexit = errexitAt\(segs\)/, "`set -e` 那一道必须接在可达性上");
   assert.match(
     JUDGE, /errexit >= 0 && i >= errexit/,
@@ -311,22 +347,27 @@ const judged = (command: string, what: string, why: string) =>
     "「下游读到头型」是一张**目录**:认不出来的下游要算「可能先走」（见该文件头 ⑤）",
   );
   assert.match(
-    JUDGE, /premiseReadable\(found, scan\)/,
-    "前提核不核得出来要统一问一次:十来个出口挨个补一句就是下一次漏在外面的那一处（见该文件头 ⑨）",
+    JUDGE, /provableBlocker\(scanOf\(segments\(command\)\)\)/,
+    "判据这一层不许再按「哪个路径 + 谁动过它」做拼写分析:那是穷举拼写（见该文件头 ⑩）",
   );
   assert.match(
     FOLLOWERS, /assumesOpaque/,
-    "远端跟随器必须交出那条**没人核得了**的前提，而不是装作没有前提（见该文件头 ⑤）",
+    "压着前提的跟随型必须把那句话交出来，而不是装作没有前提（见该文件头 ④⑤）",
   );
   assert.match(
     CREATE, /forever\?\.unprovable/,
     "核不了的那一种在创建闸只提示、不 409（见该文件的 `advice`）",
   );
+  // 下游那张表必须按**角色**读,不许退回只数操作数个数（第 2 轮审查 F1）。
   assert.match(
-    CREATE, /assumptionsHold\(cwd, forever\.assumesAnyExists\)/,
-    "创建闸必须按**真实工作目录**核一遍判定的前提（见该文件的 `assumptionsHold`）",
+    FOLLOWERS, /const given = p\.switches\.filter/,
+    "grep 的模式从哪来决定了操作数是不是文件:只数个数的那版已被实测推翻（见该文件头 ⑥）",
   );
-  console.log("✓ 硬拦资格：六道判据的形状受结构锁保护");
+  assert.match(
+    FOLLOWERS, /STRUCTURED_PATTERN/,
+    "带结构的模式可能编译失败、读之前就退 ⇒ 不算证明（见该文件头 ⑥）",
+  );
+  console.log("✓ 硬拦资格：七道判据的形状受结构锁保护");
 }
 // ── ⑦ 真实创建入口:降级之后这几条命令**真的能建**（第 1 轮审查 F1 的现场）───────────
 // 判据只是个函数,用户那一侧感受到的是 409。这一节走真实创建路由确认那几条命令现在建得出来,
@@ -337,6 +378,8 @@ const judged = (command: string, what: string, why: string) =>
   // `cd sub; tail -f really-here.log` 正是靠这一点立刻退出的（新一轮审查 F1）。
   writeFileSync(join(root, "really-here.log"), "x\n");
   writeFileSync(join(root, "doomed.log"), "x\n");
+  writeFileSync(join(root, "doomed2.log"), "x\n");       // `rm ./doomed2.log` 那一条会真的删掉它
+  writeFileSync(join(root, "reader.log"), "one\n");      // `grep -e one reader.log` 读的那个有限文件
   mkdirSync(join(root, "sub"), { recursive: true });
   // 350KB:`tail -f -n +1 large.log | head -n 1` 要靠「一开口就写满管子」才会吃上 SIGPIPE。
   writeFileSync(join(root, "large.log"), `${"x".repeat(80)}\n`.repeat(4400));
@@ -358,6 +401,20 @@ const judged = (command: string, what: string, why: string) =>
     "rm -f doomed.log; tail -f doomed.log",
     "kubectl logs -f pod-1",                               // 远端那个 pod 在不在,谁都核不了
     "tail -f -n +1 large.log | head -n 1",                 // 下游可能先把管子关掉
+    // ── 第 2 轮审查 F1 实测的八条:真 shell 里全部退出 0,而上一版全部 409 ────────────
+    // 路径那一档:**指着一个真在的文件也一样**放行 —— 核得到的是创建这一刻,判定要的是执行
+    // 到那一句时（`rm ./doomed.log` 那条就活在这两个时刻的缝里,拼写上还换了个 `./`）。
+    "tail -f really-here.log",
+    `tail -f ${join(root, "really-here.log")}`,
+    "rm -f ./doomed2.log; tail -f doomed2.log; printf 'DONE\\n'",
+    // 下游那一档:读管子之前就退出的那几种。
+    "while true; do printf x; done | grep -e one reader.log",
+    "while true; do printf x; done | tr",
+    "while true; do printf x; done | tr ab",
+    "while true; do printf x; done | cut",
+    "while true; do printf x; done | sort -t xx",
+    "while true; do printf x; done | nl -w nope",
+    "while true; do printf x; done | grep '['",
   ]) {
     const made = await startMonitor({ taskId, command, description: "会自己结束的命令", timeoutMs: 4000 });
     assert.equal(made.ok, true, made.ok ? "" : `这条命令会自己结束,不许拦：${command} / ${made.error}`);
@@ -375,22 +432,25 @@ const judged = (command: string, what: string, why: string) =>
       await stopMonitor(made.monitor.id, "硬拦资格那一节跑完了");
     }
   }
-  // 前提**真的成立**时照旧 409:同一条 `tail -f` 指着一个在的文件（这条哨兵的工作目录就是
-  // `root`，见台子）—— 不然「核前提」会变成「把 `tail -f` 整类放掉」。
+  // **一个前提都不压**的那一档照旧 409 —— 闸剩下的牙全在这里,少了这一组上面那一整节就是
+  // 「把闸拆了」。判据是「这边自己证明得出」,不是「那个文件在不在」（后者没人核得了）。
   for (const [command, why] of [
-    ["tail -f really-here.log", "相对路径指着一个真在的文件"],
-    [`tail -f ${join(root, "really-here.log")}`, "绝对路径指着一个真在的文件"],
-    ["tail -f really-here.log definitely-missing-ash-review", "多个操作数里有一个真在 ⇒ 前提没落空"],
-    [`cd sub; tail -f ${join(root, "really-here.log")}`, "换过目录但路径是绝对的 ⇒ 照旧核得准"],
-    ["tail -F definitely-missing-ash-review", "`-F` 没了也一直重试 ⇒ 不要这个前提"],
+    ["tail -F definitely-missing-ash-review", "`-F` 没了也一直重试 ⇒ 不压前提"],
+    ["tail -F really-here.log", "`-F` 指着真在的文件也一样 ⇒ 不压前提"],
+    ["while true; do :; done", "恒真循环什么都不要"],
+    ["until false; do :; done", "同上"],
+    ["journalctl -f", "盯的是日志本身"],
     ["tail -F build.log 2>/dev/null | grep --line-buffered ERROR", "事故的起因命令"],
     ["tail -F really-here.log | wc -l", "下游证明得出读到头才退"],
+    ["tail -F really-here.log | grep -e ERROR", "`-e` 给模式、没有文件操作数 ⇒ 读到头"],
+    ["tail -F really-here.log | tr -d abc", "`-d` 要一个集合,给齐了 ⇒ 不会用法错误"],
+    ["while true; do printf x; done | grep ERROR", "真 shell 实测挂住"],
   ] as const) {
     const denied = await startMonitor({ taskId, command, description: why });
     assert.equal(denied.ok, false, `${why}，照旧要拦:判据降级不是把闸拆了 —— ${command}`);
     assert.equal(denied.ok ? 0 : denied.status, 409, `${why}：${command}`);
   }
-  console.log("✓ 硬拦资格：核不了的那几条真的建得出来（还带着提示），前提真成立的和起因命令照旧 409");
+  console.log("✓ 硬拦资格：压着前提的那几条真的建得出来（还带着提示），一个前提都不压的照旧 409");
 }
 // ── ⑧ 真 shell 对账:判据说的那件事,交给 shell 量一遍（新一轮审查 F1 的根因）───────────
 // 前七节量的都是「判据怎么答」,而连着两轮审查点中的是同一件事:**判据跟真实退出语义脱节**,
@@ -435,6 +495,13 @@ if (IS_WINDOWS) {
 
   const taskId = await makeTask();
   const missing = join(root, "definitely-missing-ash-review");
+  // 这一节的 `rm` 用例**真的会删文件**,而每条命令要跑两趟(真 shell 一趟、创建闸一趟)——
+  // 所以每趟之前重建一次,不然第二趟核的就不是同一个初始状态（审查那份探针也是这么做的）。
+  const reseed = (): void => {
+    for (const name of ["doomed3.log", "doomed4.log", "really-here.log", "reader.log"]) {
+      if (!existsSync(join(root, name))) writeFileSync(join(root, name), name === "reader.log" ? "one\n" : "x\n");
+    }
+  };
 
   // 真 shell 里自己退出 ⇒ 创建闸必须放行。
   for (const command of [
@@ -443,11 +510,28 @@ if (IS_WINDOWS) {
     `tail -f ${missing}; printf 'DONE\\n'`,
     "printf 'DONE\\n' | tail -f",
     "set -e; false; tail -F /dev/null",
-    // 新一轮审查 F1 实测的两条:换过工作目录、以及下游先把管子关掉。
+    // 第 1 轮审查 F1 实测的两条:换过工作目录、以及下游先把管子关掉。
     "cd sub; tail -f really-here.log; printf 'DONE\\n'",
     "tail -f -n +1 large.log | head -n 1",
+    // ── 第 2 轮审查 F1 实测的八条。前三条是**路径那一档**:指着一个真在的文件、被前一段删掉
+    //    的、以及换了个 `./` 拼写的 —— 它们证的是同一件事:**创建那一刻的文件系统不是判据**。
+    //    `rm` 那两条每跑一遍都真的删文件,所以各用一个专门的文件(见下面重建那一句)。
+    //    「指着一个真在的文件」那一条在真 shell 里是**挂住**的,所以它在下面那组漏判里。
+    "rm ./doomed3.log; tail -f doomed3.log; printf 'DONE\\n'",
+    "rm doomed4.log; tail -f doomed4.log; printf 'DONE\\n'",
+    // 后几条是**下游那一档**:全在读管子之前就退出(参数合法的那条在第一位 —— 它不是拿非法
+    // 命令代替正常行为,`grep -e one reader.log` 打出 one 和 DONE、退出 0、stderr 为空)。
+    "while true; do printf x; done | grep -e one reader.log; printf 'DONE\\n'",
+    "while true; do printf x; done | tr; printf 'DONE\\n'",
+    "while true; do printf x; done | tr ab; printf 'DONE\\n'",
+    "while true; do printf x; done | cut; printf 'DONE\\n'",
+    "while true; do printf x; done | sort -t xx; printf 'DONE\\n'",
+    "while true; do printf x; done | nl -w nope; printf 'DONE\\n'",
+    "while true; do printf x; done | grep '['; printf 'DONE\\n'",
   ]) {
+    reseed();
     await measured(command, true);
+    reseed();
     const made = await startMonitor({ taskId, command, description: "真 shell 里自己退了", timeoutMs: 4000 });
     assert.equal(made.ok, true, made.ok ? "" : `真 shell 实测它自己退了,不许硬拦：${command} / ${made.error}`);
     if (made.ok) await stopMonitor(made.monitor.id, "真 shell 对账那一节跑完了");
@@ -457,11 +541,16 @@ if (IS_WINDOWS) {
   for (const command of [
     "tail -F /dev/null",
     "while true; do :; done",
-    `tail -f ${join(root, "really-here.log")}`,
+    `tail -F ${join(root, "really-here.log")}`,              // `-F`:不压那个前提
     "tail -F build-nope.log 2>/dev/null | grep --line-buffered ERROR",
-    // 下游证明得出读到 EOF 才退 ⇒ 整条真的挂住（这一条上一版是放行的，本轮收回来了）。
+    // 下游证明得出读到 EOF 才退 ⇒ 整条真的挂住（这几条都是本轮重写之后仍然咬住的）。
     "while true; do printf x; done | grep ERROR",
+    "while true; do printf x; done | grep -e ERROR",
+    "while true; do printf x; done | tr -d abc",
+    "while true; do printf x; done | tr abc xyz",
+    "while true; do printf x; done | cut -f1",
   ]) {
+    reseed();
     await measured(command, false);
     const denied = await startMonitor({ taskId, command, description: "真 shell 里挂住了" });
     assert.equal(denied.ok, false, `这一条是选定要留的真阳性,不许放行：${command}`);
@@ -471,7 +560,16 @@ if (IS_WINDOWS) {
   // **明写的漏判**:恒真循环一旦有下游,「有人一直在读我的 stdout」这条前提就没了（下游先退
   // 出它当场收 SIGPIPE）—— 而「下游到底会不会一直读」判据读不出来,于是整条放行。它在真
   // shell 里确实挂住,这里把这件事钉成文档:哪天想收它,得先拿出那份证明,而不是把闸改回去。
-  for (const command of ["while true; do :; done | head -n 1"]) {
+  for (const command of [
+    "while true; do :; done | head -n 1",
+    // **`tail -f` 指着一个此刻真在的文件**:真 shell 里它一直跟着,而判据放行它 —— 因为「执行
+    // 到那一句时它还在不在」没有哪一层核得了(第 2 轮审查 F1:上一版让创建闸拿 `existsSync`
+    // 去核,而 `rm ./doomed.log; tail -f doomed.log` 就活在「创建这一刻」与「执行那一刻」的缝
+    // 里)。于是这一条成了明写的漏判:代价是挂上去白等到期,而赌错的那一边是一件做得成的事
+    // 做不成。要收它得先拿出「执行到那一句时文件还在」的证明,而不是把时刻不对的核查装回去。
+    "tail -f really-here.log",
+  ]) {
+    reseed();
     await measured(command, false);
     const made = await startMonitor({ taskId, command, description: "明写的漏判", timeoutMs: 4000 });
     assert.equal(made.ok, true, made.ok ? "" : `这是明写的漏判,不是硬拦：${command} / ${made.error}`);
