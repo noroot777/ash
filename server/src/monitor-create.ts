@@ -48,9 +48,11 @@
 // 跑完、号被复用之后,接回/清扫/重复停止三条路都会拿着别人的进程当我们的下刀
 // (判据已收紧在 proc.ts 的 `unverifiable` 档)。所以这里**拒绝**:身份问不全就不放行,
 // 而那一刻要收掉的进程由**句柄**证明所有权,不经过 pid 身份那条路。
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import { MONITOR_MAX_PER_TASK, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
-import { neverExitsOnItsOwn } from "@ash/shared/command-never-exits";
+import { neverExitsVerdict } from "@ash/shared/command-never-exits";
 import { endConditionDemand, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import { db } from "./db/index.js";
 import { monitors, projects, sessions, tasks } from "./db/schema.js";
@@ -132,6 +134,32 @@ async function resolveCwd(taskId: string, explicit?: string | null): Promise<str
   return project?.repoPath ?? null;
 }
 
+/**
+ * 路径里带这几个字 ⇒ **这一层读不出它指向哪儿**:变量、命令替换、通配、`~`、花括号展开、
+ * 反斜杠转义。读不出来的照旧按原判走（见 `assumptionsHold` 最后一段）。
+ */
+const UNREADABLE_PATH = /[$`*?[\]{}~\\]/;
+
+/**
+ * 这个硬拦判定的**前提还成立**吗 —— 不成立的那一刻它就不是硬拦的依据了（新一轮审查 F1 第 3 条）。
+ *
+ * `tail -f /definitely-missing-ash-review; printf 'DONE\n'` 实测报一句 No such file 就退出、
+ * 随后打出 DONE（退出 0），却被这道闸 409 掉:判据只看得见「有 `-f`、有操作数」，而**那个文件
+ * 在不在不写在命令文本里**。所以共享那一层只把前提交出来（`assumesAnyExists`），由读得出这
+ * 件事的人去核 —— 这里知道这条哨兵将在哪个工作目录里跑，所以这件事在这儿是事实而不是猜。
+ *
+ * 两条边界，都只往「不拦」那一侧偏:
+ *  · **全部**不在才算前提落空 —— `tail -f 在的 不在的` 照旧跟住那个在的（GNU tail 只对不在
+ *    的那个报一句错就接着跟）。
+ *  · 只认**证明得出不在**的那一种:路径读不出来（`$LOG`、`*.log`）时维持原判。这一道的意思是
+ *    「对方拿出了一个会立刻退出的证明」，不是「我证明不出那个文件存在」—— 后者会把
+ *    `tail -f "$LOG"` 这种真跟随器一起放掉，而那是事故的起因那一类。
+ */
+function assumptionsHold(cwd: string, paths: readonly string[]): boolean {
+  if (!paths.length) return true;
+  return !paths.every((path) => !UNREADABLE_PATH.test(path) && !existsSync(resolve(cwd, path)));
+}
+
 const text = (value: unknown): string | null => (typeof value === "string" ? value.trim() : null);
 const detail = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -158,23 +186,37 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
   // **结束条件在起进程之前算清楚**(理由同上:校验抛在 spawn 之后会留下无主进程)。
   //
   // 两步,顺序不能反:先看给的那个条件本身能不能用(解析不出来的 = 一个永远不会命中的条件,
-  // 放进去只会变成另一条「只能等到期」的哨兵,而调用方还以为自己设过了),再看这条命令**需不
-  // 需要**结束条件。判据与三条出路的措辞都在 shared,前端那个手动挂哨兵的表单用的是同一份。
+  // 放进去只会变成另一条「只能等到期」的哨兵,而调用方还以为自己设过了)—— 就是下面这一句;
+  // 再看这条命令**需不需要**结束条件,那一问在下面的锁里（它要等工作目录定下来才算得全,见
+  // `assumptionsHold`）,仍然远在 spawn 之前。
   //
   // **「需不需要」只决定要不要你必须给一个,不决定你能不能给**(第 1 轮审查 F3):任何命令都
   // 收结束条件 —— 判据认不出来的跟随器(脚本封装、`eval`)到处都是,拿同一份猜测去决定配置
   // 资格,等于让漏判顺手把那条命令的出路也一起没收了。
   const stopWhen = parseEndCondition(input.stopWhen);
   if (!stopWhen.ok) return { ok: false, status: 400, error: stopWhen.error };
-  if (!stopWhen.cond && !input.untilExpiry) {
-    const forever = neverExitsOnItsOwn(command);
-    // 409 而不是 400:它不是参数写错了,是「这次创建缺一个决定」—— 三条出路任选一条再来。
-    if (forever) return { ok: false, status: 409, error: endConditionDemand(forever), needsEndCondition: true as const };
-  }
 
   return serialize(`task:${input.taskId}`, async () => {
     const task = (await db.select().from(tasks).where(eq(tasks.id, input.taskId))).at(0);
     if (!task) return { ok: false, status: 404, error: "任务不存在" };
+    // 工作目录在这儿就定下来:下面那一问要用它（见 `assumptionsHold`）。
+    const cwd = await resolveCwd(input.taskId, input.cwd);
+    if (!cwd) return { ok: false, status: 409, error: "定位不到工作目录，显式传 cwd" };
+    // 「这条命令**需不需要**结束条件」:判据与三条出路的措辞都在 shared，前端那个手动挂哨兵
+    // 的表单用的是同一份。它排在别的 409 前面（来源、终态、上限），因为它答的是「这次请求本身
+    // 缺一个决定」，不是「此刻的状态不许」—— 先说状态只会让调用方改完状态再吃同一句。
+    //
+    // 判定的**前提**在这儿核（`assumptionsHold`）:前提落空的那一刻它就不是硬拦的依据,这是
+    // 「读得出来的事实」而不是又一条字符串例外（新一轮审查 F1 第 3 条）。
+    if (!stopWhen.cond && !input.untilExpiry) {
+      const forever = neverExitsVerdict(command);
+      // 409 而不是 400:它不是参数写错了,是「这次创建缺一个决定」—— 三条出路任选一条再来。
+      if (forever && assumptionsHold(cwd, forever.assumesAnyExists)) {
+        return {
+          ok: false, status: 409, error: endConditionDemand(forever.what), needsEndCondition: true as const,
+        };
+      }
+    }
     // 入口与出口同一份判据（创建问 `monitorSourceGate`、出口问 `monitorWakeGate`，两者
     // 共用 shared 的 `monitorBlockedReason`）。只判归档、不判终态的话，已完成的任务上照样
     // 起得来一个真进程，而 `pushToTask` 会把它推的每一条都按终态拒掉——命令在后台烧着，
@@ -207,9 +249,6 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     const live = await liveMonitorsOf(input.taskId);
     if (live.length >= MONITOR_MAX_PER_TASK)
       return { ok: false, status: 409, error: `这个任务已经有 ${live.length} 个哨兵在盯了（上限 ${MONITOR_MAX_PER_TASK}），先停掉一个` };
-
-    const cwd = await resolveCwd(input.taskId, input.cwd);
-    if (!cwd) return { ok: false, status: 409, error: "定位不到工作目录，显式传 cwd" };
 
     const monitorId = id();
     const logPath = monitorLogPath(input.taskId, monitorId);

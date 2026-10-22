@@ -81,10 +81,30 @@
 //    补的两处:可达性记进 `set -e`（`errexitAt`，`;`/换行一律按短路算）,跟随型目录改成
 //    「**它盯的那个东西得写在 argv 里**」（command-followers.ts 文件头 ③）。
 //
-//    ①–⑦ 合起来是同一条不变量:**硬拦只用「盖得住整条命令必要执行与退出语义」的那种证明**
+// ⑧ **下游会不会先退、循环体在 `set -e` 下会不会退、它盯的那个东西在不在** —— 这三块同样属于
+//    「整条命令的退出语义」（新一轮审查 F1）。⑦之后仍有三种会立刻结束的命令被 409（审查用
+//    `sh -lc` 配 3 秒超时实测,三条全部在超时前结束;本轮另行复核过一遍）:
+//      · `while true; do printf 'DONE\n'; done | head -n 1` —— 打一行 DONE 就退出 0。恒真循环
+//        的证明里藏着「它的 stdout 一直有人收」:下游先退就把管子关了,循环体下一次往 stdout
+//        写当场吃 SIGPIPE。而「这个循环体到底往不往 stdout 写」这一层答不出来
+//        （`while true; do :; done | head -n 1` 一个字都不写、`head` 一直等,那一条实测真的挂
+//        住）⇒ **恒真循环一旦有下游就不拦**（`fragile`）。
+//        **跟随型不走这一道**:它的输出是间歇的,下游退了也可能永远不触发那一次写入 ——
+//        `tail -f x | grep -m1 y` 日志一安静就整条挂住（command-followers.ts 文件头那段）。
+//      · `set -e; while true; do false; done` —— 实测退出 1。开了 errexit 之后**循环体自己就是
+//        一条出路**:体里任何一条返回非零,shell 当场走人。而「这一圈里每一条都一定成功」这一层
+//        答不出来 ⇒ 这道闸盖到循环的收尾那一段（体里才 `set -e` 的那种同样算）。
+//      · `tail -f /definitely-missing-ash-review; printf 'DONE\n'` —— 报一句 No such file 就
+//        退出、随后打出 DONE。`tail -f FILE` 的「不退出」有个前提:**那个文件现在就在**
+//        （`-F`/`--retry` 才是没了也一直重试）。前提不写在命令文本里,所以这一层把它原样交出去
+//        （`NeverExitsVerdict.assumesAnyExists`），由读得出这件事的那一层去核 —— 创建闸知道这
+//        条哨兵将在哪个工作目录里跑（server/src/monitor-create.ts 的 `assumptionsHold`）。
+//
+//    ①–⑧ 合起来是同一条不变量:**硬拦只用「盖得住整条命令必要执行与退出语义」的那种证明**
 //    —— 执行资格（这一条跑不跑得到）、argv（它到底有没有开始跟随）、输入来源（它盯的是谁）、
-//    shell 状态（前面那条的退出码管不管得着它），任一项读不出来**就不是硬拦的依据**,降级成
-//    一句可提交的提示。不按网页、HTTP、hook 各补一个特例:这三处共用的就是这一个函数。
+//    shell 状态（前面那条的退出码管不管得着它）、下游（谁在收它的 stdout）、以及它盯的那个
+//    东西在不在，任一项读不出来**就不是硬拦的依据**,降级成一句可提交的提示。不按网页、
+//    HTTP、hook 各补一个特例:这三处共用的就是这一个函数。
 //
 // ── 误判的代价不对称,所以只认**明确**的那几种 ───────────────────────────────────
 //
@@ -109,6 +129,14 @@ import { commandOf } from "./command-wrappers.ts";
 // 读得懂,归 command-followers.ts（见 `followerOf`）;哪些词只是包一层、剥掉它们之后真正要跑的
 // 是谁,归 command-wrappers.ts（见 `commandOf`）。这边只按它们的判据组合,不认具体的工具。
 
+
+/**
+ * 一个硬拦判定 —— 判它的那个写法、这个判定的前提，以及它**经不经得起下游先退出**。
+ *
+ * `fragile` 只对恒真循环为真（见文件头 ⑧）:它的证明里藏着「stdout 一直有人收」这一条,而
+ * 跟随型的不藏 —— 所以这两种在管道里的命运不一样，一个布尔比两套判据便宜。
+ */
+type Found = { what: string; assumesAnyExists: readonly string[]; fragile: boolean };
 
 /**
  * 函数定义:`name() {` / `function name {`。**定义这一刻函数体一个字都不跑**,而「后面到底
@@ -422,7 +450,7 @@ function errexitAt(segs: Segment[]): number {
  * 读不懂的结构一律**放行**:配不上对的 `fi`、认不出的循环条件、`eval` 这种另一层执行 ——
  * 少拦几条 = 退回今天的行为；多拦一条 = 一件做得成的事做不成了（见文件头那段不对称）。
  */
-function provableBlocker(scan: Scan): string | null {
+function provableBlocker(scan: Scan): Found | null {
   const segs = scan.segs;
   /**
    * 执行资格**按组分层**（第 4 轮审查 F2）。每进一组压一帧,帧里记着「这一组整体证明得出会
@@ -444,7 +472,7 @@ function provableBlocker(scan: Scan): string | null {
   let reach = true;
   // 这条管道里扫到的跟随型。**等管道收尾才算数**:收尾符号是 `&` 的话它整条放后台，
   // shell 不等它 —— 那时这个判据作废（`tail -F x & printf done` 立刻就结束了）。
-  let pipeline: string | null = null;
+  let pipeline: Found | null = null;
   /**
    * 「这一条证明得出会跑吗」的最终答案:短路/组资格说会跑、没被跳转压着,而且**它所在的组
    * 证明得出开得起来**（`scan.groupRedirect`,第 2 轮审查 F2 的同类作用域)。
@@ -496,8 +524,14 @@ function provableBlocker(scan: Scan): string | null {
         // 恒真又没有出路 ⇒ 就是它。**但同样等收尾符号点头**:`( while :; do :; done ) & 干活`
         // 里这一组整个放了后台,shell 不等它 —— 所以这里只记下判定,跳到这个循环的收尾那一段,
         // 由它身上（或它所在那一组身上）的符号决定作不作数。
-        if (endless && !regionHas(scan, i, end, ESCAPES)) {
-          pipeline = "while true / until false";
+        //
+        // **`set -e` 下循环体自己就是一条出路**（见文件头 ⑧）:体里任何一条返回非零,shell 当场
+        // 走人 —— `set -e; while true; do false; done` 实测退出 1。而「这一圈里每一条都一定成
+        // 功」这一层答不出来,所以闸盖到**收尾那一段**（`<= end`):体里才开的那个 `set -e` 同样
+        // 算,而循环之后才开的那个管不着它（`while true; do :; done; set -e` 照拦）。
+        if (endless && !regionHas(scan, i, end, ESCAPES) && !(errexit >= 0 && errexit <= end)) {
+          // `fragile`:这个判定经不起「下游先退出」—— 由下面那个 `|` 兑现（见文件头 ⑧）。
+          pipeline = { what: "while true / until false", assumesAnyExists: [], fragile: true };
           i = end;
           at = tokens.length;
           break;
@@ -531,7 +565,10 @@ function provableBlocker(scan: Scan): string | null {
     // 判据跟循环、分组那两个作用域同一份（`startProvable`）:`2>/dev/null`、`2>&1` 这种
     // 明摆着打得开的照旧算它跑了 —— 事故的起因命令正是那种,它必须照拦。
     if (cmd && !cmd.bounded && runs(i) && startProvable(tokens)) {
-      pipeline = followerOf(cmd.name, cmd.argv) ?? pipeline;
+      // 跟随型带着**它自己的前提**（`assumesAnyExists`，见文件头 ⑧）,而且不怕下游先退出
+      // （输出是间歇的,那一次写入可能永远不发生）—— 所以 `fragile: false`。
+      const hit = followerOf(cmd.name, cmd.argv);
+      if (hit) pipeline = { ...hit, fragile: false };
     }
     // `exec cmd` 把本进程换成 cmd（`WRAPPERS` 已经让上面按 cmd 判过了）—— 它之后的都跑不到。
     if (cmd && headOf(tokens, at) === "exec") return pipeline;
@@ -540,7 +577,11 @@ function provableBlocker(scan: Scan): string | null {
     switch (segs[i]!.sep) {
       case "&": pipeline = null; reach = base(); break;         // 放后台 ⇒ 这一条判定作废
       case "&&": case "||": reach = false; break;
-      case "|": break;                                          // 管道各级都会跑
+      // 管道各级都会跑,但**下游先退出会把管子关掉**（见文件头 ⑧）:恒真循环靠「stdout 一直
+      // 有人收」才永不退出,这里一出现下游就证明不出来了 —— `while true; do printf 'DONE\n';
+      // done | head -n 1` 实测打一行就退出 0。下游自己是跟随型的那种由它再记一次（`tail -f x |
+      // while true; do :; done` 照拦）。
+      case "|": if (pipeline?.fragile) pipeline = null; break;
       case "(": case "{": frames.push(reach); break;            // 进组:这一组的资格就是此刻的 reach
       // 组收口本身不决定任何事:作不作数由**收尾这一组**的那个符号说（它落在紧跟其后那个
       // 空段上）—— 于是 `( … ) &` 和 `( … );` 两种分得开。
@@ -559,7 +600,7 @@ function provableBlocker(scan: Scan): string | null {
   return frames.length === 1 ? pipeline : null;
 }
 
-function judge(command: string): string | null {
+function judge(command: string): Found | null {
   // **读不出执行资格的结构 ⇒ 整条命令放行**（见文件头 ②）。here-doc 的终止词、函数体到底
   // 调没调过，这一层都只能猜；猜错的那一半代价是「一件做得成的事做不成」。
   const plain = blankComments(blankQuoted(command));
@@ -580,8 +621,33 @@ function judge(command: string): string | null {
  * 有 bug 要能被发现,只是不该由用户那一侧用「做不成事」来承担（见文件头那段不对称）。
  */
 export function neverExitsOnItsOwn(command: string): string | null {
+  return neverExitsVerdict(command)?.what ?? null;
+}
+
+/** 一个硬拦判定对外的样子:判它的那个写法 + **这个判定的前提**（见文件头 ⑧）。 */
+export type NeverExitsVerdict = {
+  /** 判定它的那个写法（`tail -f/-F`、`while true / until false`），给拒绝文案用。 */
+  what: string;
+  /**
+   * 「**只要这几个路径里有一个还在**，这条命令就不会自己退出」—— 空数组 = 这个判定不依赖任何
+   * 本地路径（见文件头 ⑧ 第 3 条）。
+   *
+   * 这一层**读不出**它们在不在（表单跑在浏览器里，判据也不该去碰文件系统），所以它只交出
+   * 前提:读得出来的那一层核得了就核（创建闸知道 cwd），核不了的照实说出这个前提。
+   */
+  assumesAnyExists: readonly string[];
+};
+
+/**
+ * 同一个判据，连**前提**一起要（见 `neverExitsOnItsOwn`，两者共用一份实现）。
+ *
+ * 创建闸用这一个:它知道这条哨兵将在哪个工作目录里跑，于是「那个文件在不在」这件事在它那儿
+ * 是读得出来的事实，不是猜（新一轮审查 F1 第 3 条）。
+ */
+export function neverExitsVerdict(command: string): NeverExitsVerdict | null {
   try {
-    return judge(command);
+    const found = judge(command);
+    return found ? { what: found.what, assumesAnyExists: found.assumesAnyExists } : null;
   } catch (err) {
     console.error(`[ash] 命令结构判据出错,这条命令按「读不懂」放行：${String(err)}`);
     return null;

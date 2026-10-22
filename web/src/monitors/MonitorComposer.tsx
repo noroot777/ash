@@ -4,7 +4,7 @@ import {
   MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_WAKE_LABEL, MONITOR_WAKE_TARGETS, monitorDurationOptions,
 } from "@ash/shared/monitor";
 import type { MonitorWakeTarget } from "@ash/shared/monitor";
-import { neverExitsOnItsOwn } from "@ash/shared/command-never-exits";
+import { neverExitsVerdict } from "@ash/shared/command-never-exits";
 import { END_CONDITION_HINT, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import type { StartMonitorInput } from "./useTaskMonitors.ts";
 
@@ -39,6 +39,12 @@ const DURATIONS = monitorDurationOptions();
  * 时长」一条出路，而服务端对这类命令会直接拒。这里**边打字边用同一份判据**把那个选择当场
  * 摆出来：等一条拒绝再回来补，中间那一趟是白走的，何况被拒的那一刻人已经点过「起一个哨兵」了。
  * 条件本身能不能用也在这里当场判（同一个 `parseEndCondition`），不让人拿一句 400 当反馈。
+ *
+ * 判定带着的那个**前提**在这一侧读不出来（`assumesAnyExists`，见共享判据文件头 ⑧）：
+ * `tail -f build.log` 只在那个文件在的时候才不会结束，而浏览器里读不到文件系统。所以这里
+ * ① 照实说成「只要 build.log 还在，它就永远不会结束」，② 仍然逼选 —— 服务端知道这条哨兵将在
+ * 哪个工作目录里跑，它会按真实情况再判一次（文件真不在时那边直接放行）。这一处的严格只多问
+ * 一句、做不成的事一件也没有；反过来「这边放过、那边 409」才是实打实白走一趟。
  */
 export function MonitorComposer({
   busy,
@@ -60,7 +66,7 @@ export function MonitorComposer({
   const [stopWhen, setStopWhen] = useState("");
   // 这条命令自己会不会结束 —— 跟服务端那道闸**同一份判据**，所以这里亮出来的选择跟它要的
   // 东西一定对得上（各写一份的话，判据一改就只有一边跟着变，另一边照旧放人去撞 409）。
-  const forever = neverExitsOnItsOwn(command);
+  const forever = neverExitsVerdict(command);
   const needsEnd = forever !== null;
   const typed = stopWhen.trim();
   // 条件本身的毛病当场说（同一份 `parseEndCondition`），不让人拿一句 400 当反馈。
@@ -118,10 +124,15 @@ export function MonitorComposer({
         <legend>它什么时候算完</legend>
         {/* 照实说是哪个写法触发的这一问：泛泛一句「这条命令不会结束」会让人以为是自己
             写错了语法，而真正要做的只是在两种意图里挑一个。 */}
-        {needsEnd
+        {forever
           ? (
             <p className="monitor-composer__hint">
-              这条命令自己永远不会结束（{forever}），所以它不会有「跑完了」那一下。
+              {/* 前提读不出来的那一类照实带上前提：它在这张表单上永远只是「假设那个文件在」
+                  （见上面那段），把假设说出来，人才看得懂为什么被逼选。 */}
+              {forever.assumesAnyExists.length > 0
+                ? `只要 ${forever.assumesAnyExists.join("、")} 还在，这条命令就永远不会结束（${forever.what}）`
+                : `这条命令自己永远不会结束（${forever.what}）`}
+              ，所以它不会有「跑完了」那一下。
               下面二选一——都不选它就只剩盯满时长这一条出路，被盯的活早干完了，任务也还得等到期才被叫醒。
             </p>
           )

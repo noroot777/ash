@@ -118,6 +118,29 @@ try {
       assert.match(await form.innerText(), /永远不会结束/, `这条命令真的不会自退：${command}`);
       assert.equal(await submit.isDisabled(), true, `这条命令照旧要逼选：${command}`);
     }
+    // ⑩c 新一轮审查 F1:会立即打印 DONE 并结束的命令**在这张表单上也不能被禁掉**。两条各对应
+    //     一项读不出来的东西:下游先退会把管子关了、`set -e` 下循环体自己就是出路（见
+    //     shared/src/command-never-exits.ts 文件头 ⑧）。
+    for (const command of [
+      String.raw`while true; do printf 'DONE\n'; done | head -n 1`,
+      "while true; do printf x; done | grep ERROR",
+      "set -e; while true; do false; done",
+    ]) {
+      await cmd.fill(command);
+      assert.doesNotMatch(await form.innerText(), /永远不会结束/, `这条命令会自己结束：${command}`);
+      assert.equal(await submit.isDisabled(), false, `不许把这条命令的按钮禁掉：${command}`);
+    }
+    // ⑩d 同一轮 F1 的第 3 条落到**人**手上的样子:`tail -f build.log` 只在那个文件在的时候才不
+    //     会结束,而浏览器里读不到文件系统 —— 所以这里照实把**前提**说出来（仍然逼选,服务端
+    //     会按真实工作目录再判一次;文件真不在时那边直接放行）。
+    await cmd.fill("tail -f build.log");
+    const premise = await form.innerText();
+    assert.match(premise, /只要 build\.log 还在/, `读不出来的前提要照实说出来，实际：${premise}`);
+    assert.match(premise, /永远不会结束/, "说了前提也还是要说清后果");
+    assert.equal(await submit.isDisabled(), true, "前提成立时它是个真跟随器，照旧要逼选");
+    // 不带前提的那种不许多一句:`-F` 没了也一直重试。
+    await cmd.fill("tail -F build.log");
+    assert.doesNotMatch(await form.innerText(), /只要/, "`-F` 不要这个前提，不许凭空说一句");
     // ⑦b 真阳对照:事故的起因命令带着 `2>/dev/null`,它照旧要逼选（不然上面那四条等于把闸拆了）。
     await cmd.fill("tail -F build.log 2>/dev/null | grep --line-buffered ERROR");
     assert.match(await form.innerText(), /永远不会结束/, "起因命令照旧要说出来");

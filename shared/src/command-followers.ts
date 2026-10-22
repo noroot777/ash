@@ -38,6 +38,19 @@
 // 于是每个工具都得说清**它盯的那个东西有没有写在 argv 里**（`follows` 的第二个参数就是真正
 // 的操作数）：tail 要文件、inotifywait/fswatch 要路径、`… logs -f` 要容器名;`journalctl -f`
 // 盯的是日志本身,不要操作数。少要一个 ⇒ 一条会自己结束的命令被 409。
+//
+// ── ④ 「它盯的那个东西在不在」:这一层只交出前提,不自己断言 ──────────────────────────
+//
+// 新一轮审查 F1 实测:`tail -f /definitely-missing-ash-review; printf 'DONE\n'` 报一句 No such
+// file or directory 就退出、随后打出 DONE（退出 0）—— 而它被硬拦。`tail -f FILE` 的「不退出」
+// 藏着一个前提:**那个文件现在就在**。`-F`/`--retry`/`--follow=name` 是「没了也一直重试」,它
+// 不要这个前提。
+//
+// 而文件在不在**不写在命令文本里**。所以这边既不猜、也不悄悄把这一类整个放过去,而是把前提
+// 本身交出去（`FollowerHit.assumesAnyExists`）:读得出这件事的那一层去问 —— 创建闸知道这条
+// 哨兵将在哪个工作目录里跑,所以由它读（server/src/monitor-create.ts 的 `assumptionsHold`）;
+// 表单那边读不出来,所以它照实说「只要 X 还在,它就不会结束」。少交一个前提 = 一条会立刻退出
+// 的命令继续被 409。
 import type { Token } from "./command-lex.ts";
 
 /** 一个开关的形状 + 它的值要长什么样（`value` 不填 = 这个开关不吃值）。 */
@@ -60,6 +73,28 @@ type Follower = {
   opts: readonly Opt[];
   /** 判定它的那个写法，给拒绝文案用。 */
   what: string;
+  /**
+   * 它盯的那个东西**得现在就在**吗 —— 是就返回那几个路径（见文件头 ④）。
+   *
+   * 不填 = 这个工具的跟随不依赖本地路径:`journalctl -f` 盯的是日志本身、`watch` 盯的是一条
+   * 命令（那条命令失败它也照旧每隔几秒再来一次）、`… logs -f` 盯的是远端资源名（本机读不出
+   * 来那个 pod/容器在不在）。
+   */
+  needsExisting?: (argv: Token[], operands: string[]) => readonly string[];
+};
+
+/** 这条简单命令**证明得出会盯着不走**时的判定内容（`followerOf` 的返回）。 */
+export type FollowerHit = {
+  /** 判定它的那个写法，给拒绝文案用。 */
+  what: string;
+  /**
+   * 「**只要这几个路径里有一个还在**，它就不会自己退出」—— 空数组 = 这个判定不依赖任何本地
+   * 路径（见文件头 ④）。
+   *
+   * 要**全部**不在才算前提落空:`tail -f 在的 不在的` 照旧跟住那个在的（GNU tail 只对不在的
+   * 那个报一句错就接着跟）。
+   */
+  assumesAnyExists: readonly string[];
 };
 
 /**
@@ -82,6 +117,22 @@ function hasFlag(argv: Token[], short: RegExp, long: string): boolean {
 }
 
 /**
+ * 这条 `tail` 是「文件没了也一直重试」的那种吗（`-F`、`--retry`、`--follow=name`）。
+ *
+ * 重试型**不要求那个文件现在就在**（它会一直等它出现），所以它的判定不带前提;`-f` 要求 ——
+ * 文件不在时它报一句 No such file 就退出（见文件头 ④）。`--` 之后不再有开关，同 `hasFlag`。
+ */
+function tailRetries(argv: Token[]): boolean {
+  for (const { text, quoted } of argv) {
+    if (quoted) continue;
+    if (text === "--") return false;
+    if (text === "--retry" || text === "--follow=name") return true;
+    if (!text.startsWith("--") && text.startsWith("-") && /^-[^-]*F/.test(text)) return true;
+  }
+  return false;
+}
+
+/**
  * 跟随型：这些命令的语义就是「盯着不走」，放在管道里也一样 —— 它不退出，整条管道就不退出
  * （`tail -f x | grep -m1 y` 也救不了：日志安静下来 `tail` 收不到 SIGPIPE，管道照样挂着）。
  *
@@ -93,6 +144,9 @@ const FOLLOWERS = new Map<string, Follower>([
     // **要盯的文件得写在 argv 里**（见文件头 ③）:不带操作数时它盯的是标准输入,那头是什么
     // 这一层答不出来 —— `printf 'DONE\n' | tail -f` 几毫秒就打完 DONE 退出 0（实测）。
     follows: (a, operands) => operands.length > 0 && hasFlag(a, /^-[^-]*[fF]/, "--follow"),
+    // **`-f` 的不退出有个前提:那个文件现在就在**（见文件头 ④）—— `-F`/`--retry` 没了也一直
+    // 重试,所以那一种不带前提。前提真不真这一层答不出来,交出去由读得出来的人问。
+    needsExisting: (a, operands) => (tailRetries(a) ? [] : operands),
     // `--pid=` **不在列**:那个进程一死它就退（见文件头 ② 最后一类）。
     opts: [
       // 可并写的无值开关。`-r`（倒序）**不在列**:BSD 的 usage 写着 `[-F | -f | -r]` 三者
@@ -128,6 +182,8 @@ const FOLLOWERS = new Map<string, Follower>([
     // 要盯的路径得写在 argv 里:`inotifywait -m` 没有路径时只打一句 No files specified
     // 就退（见文件头 ③）。
     follows: (a, operands) => operands.length > 0 && hasFlag(a, /^-[^-]*m/, "--monitor"),
+    // 那几个路径**得现在就在**:watch 不上的路径它当场报错退出（见文件头 ④）。
+    needsExisting: (_a, operands) => operands,
     // `-t`/`--timeout` **故意不在列**:它到点就退（见文件头 ②）。`-d`/`--daemon` 同理 ——
     // 它把活转进后台,前台这一个当场就退。
     opts: [
@@ -212,6 +268,8 @@ const FOLLOWERS = new Map<string, Follower>([
     what: "fswatch",
     // 要盯的路径得写在 argv 里:没有路径的 `fswatch` 打一句用法就退（见文件头 ③）。
     follows: (a, operands) => operands.length > 0 && !hasFlag(a, /^-[^-]*1/, "--one-event"),
+    // 那几个路径**得现在就在**:不存在的路径 fswatch 报一句错就退（见文件头 ④）。
+    needsExisting: (_a, operands) => operands,
     opts: [
       { re: /^-[roxnut0v]+$/ },
       { re: /^-e$/, value: WORD },
@@ -257,16 +315,20 @@ function operandsIfUnderstood(f: Follower, argv: Token[]): string[] | null {
 }
 
 /**
- * 这条简单命令**证明得出它会盯着不走**吗 —— 是就返回判定它的那个写法，否则 `null`。
+ * 这条简单命令**证明得出它会盯着不走**吗 —— 是就返回那个判定（含它的前提），否则 `null`。
  *
  * 三道都要过：这条 argv 全认得出来（`operandsIfUnderstood`），跟随开关确实出现，而且**要盯的
  * 那个东西写在 argv 里**（后两道都在 `follows` 里，见文件头 ①②③）。任一道答不出来就是
  * `null` —— 「读不懂」的确定答案是不拦（见 command-never-exits.ts 文件头那段不对称）。
+ *
+ * 过了三道也**不等于无条件成立**:`assumesAnyExists` 里是这个判定的前提（见文件头 ④），由
+ * 读得出那件事的调用方去核。
  */
-export function followerOf(name: string, argv: Token[]): string | null {
+export function followerOf(name: string, argv: Token[]): FollowerHit | null {
   const f = FOLLOWERS.get(name);
   if (!f) return null;
   const operands = operandsIfUnderstood(f, argv);
   if (!operands) return null;
-  return f.follows(argv, operands) ? f.what : null;
+  if (!f.follows(argv, operands)) return null;
+  return { what: f.what, assumesAnyExists: f.needsExisting?.(argv, operands) ?? [] };
 }
