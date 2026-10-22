@@ -11,7 +11,7 @@
 //  ⑤ 库里存着一条**这一版读不出来**的条件 ⇒ 出声,不静默降级、也不许界面替它背书
 //  ⑥ 命中那一行哪怕排在摘要之外,也必须出现在推给 agent 的那条消息里
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { neverExitsOnItsOwn } from "@ash/shared/command-never-exits";
@@ -643,29 +643,43 @@ setTimeout(() => { clearInterval(keep); process.exit(0); }, 30000);
 // 字样比期限早 209ms,正文里 READY 和结束通知都在,状态仍是 expired）。所有权照旧只有一个,
 // 改的是**持有者落终态之前把排干阶段那条证据折叠进来**（见 monitor-finish.ts 的 `foldHit`）。
 {
-  const taskId = await makeTask();
-  const feed = join(root, "late-ready.mjs");
-  // 期限有 1 秒地板（monitors.ts 的 `EXPIRY_FLOOR_MS`）,所以这一行**贴着期限**写出来:它落进
-  // 缓冲之后那 300ms 的冲刷窗口来不及先把它推出去,到期先占到收尾槽位 —— 正是审查的那个现场。
-  writeFileSync(feed, `setTimeout(() => console.log("READY"), 960);\nsetInterval(() => {}, 1000);\n`);
-  const started = await startMonitor({
-    taskId,
-    command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,
-    description: "字样贴着期限到",
-    stopWhen: "^READY$",
-    timeoutMs: 1000,
-  });
-  assert.equal(started.ok, true, started.ok ? "" : started.error);
-  const monitorId = started.ok ? started.monitor.id : "";
-  await until("落了终态", async () => (await getMonitor(monitorId))?.status !== "running");
-  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  // **这一幕的前提本身是个竞速,所以先验前提再下断言**:子进程启动要几十到几百毫秒,机器一忙
+  // （刚跑完另一份回归、还有残留进程在转）那一行就可能压根没来得及写进日志 —— 那时落 expired
+  // 是对的,断言它 matched 等于在量机器负载。所以每一轮先问一句「日志里到底有没有 READY」:
+  // 没有 ⇒ 这一轮的前提没成立,重来;有 ⇒ 那才是审查的那个现场,断言照常严格。
+  let row: typeof monitors.$inferSelect | null = null;
+  let texts = "";
+  for (let attempt = 1; attempt <= 4 && !row; attempt += 1) {
+    const taskId = await makeTask();
+    const feed = join(root, `late-ready-${attempt}.mjs`);
+    // 期限有 1 秒地板（monitors.ts 的 `EXPIRY_FLOOR_MS`）,所以这一行**贴着期限**写出来:它落进
+    // 缓冲之后那 300ms 的冲刷窗口来不及先把它推出去,到期先占到收尾槽位 —— 正是审查的那个现场。
+    writeFileSync(feed, `setTimeout(() => console.log("READY"), 960);\nsetInterval(() => {}, 1000);\n`);
+    const started = await startMonitor({
+      taskId,
+      command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,
+      description: "字样贴着期限到",
+      stopWhen: "^READY$",
+      timeoutMs: 1000,
+    });
+    assert.equal(started.ok, true, started.ok ? "" : started.error);
+    const monitorId = started.ok ? started.monitor.id : "";
+    await until("落了终态", async () => (await getMonitor(monitorId))?.status !== "running");
+    const settled = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+    if (started.ok) await until("进程被收掉", async () => !isPidAlive(started.ok ? started.monitor.pid! : 0));
+    if (!readFileSync(settled.logPath, "utf8").includes("READY")) {
+      console.log(`  （第 ${attempt} 轮前提没成立:到期之前那一行根本没写进日志,重来）`);
+      continue;
+    }
+    row = settled;
+    texts = (await pendingOf(taskId)).map((m) => m.text).join("\n");
+  }
+  assert.ok(row, "四轮都没能让那一行赶在到期前写进日志 —— 台子前提不成立,不是产品问题");
   assert.equal(row.status, "matched", `字样到了就不许写成到期：${row.status} / ${row.endedReason}`);
   assert.match(row.endedReason ?? "", /等到了约定的那一行/, "结束原因要说清是等到了");
   assert.match(row.endedReason ?? "", /READY/, "把命中的那一行带上");
   assert.equal(row.endedBy, "system", "不是谁主动停的");
-  const texts = (await pendingOf(taskId)).map((m) => m.text).join("\n");
   assert.match(texts, /READY/, "命中那一行照常送到");
-  if (started.ok) await until("进程被收掉", async () => !isPidAlive(started.ok ? started.monitor.pid! : 0));
   // ↑ 这几条断言在「冲刷先赢」那种排序下同样成立（那时命中自己就是收尾的持有者）—— 所以
   //   折叠这一道另加结构锁:它是「所有权单一」之下唯一的修法,一改就该当场红。
   const src = readSource(join(HERE, "../src/monitor-finish.ts"));
