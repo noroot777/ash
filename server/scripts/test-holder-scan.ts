@@ -551,6 +551,81 @@ exec /bin/ps "$@"
     else fail(`责任没落库(之前 ${before.ok ? before.debts.length : "?"} 笔,现在 ${rows.ok ? rows.debts.length : "?"} 笔)`);
   }
 
+  console.log("12) 停止前点过的名,停止后换一张快照也不许忘:只有退出证据才解除责任");
+  if (existsSync("/proc")) {
+    console.log("   ~ 这台机器有 /proc,进程表走的不是 ps 那条路,跳过");
+  } else {
+    // 第 9 轮审查 F1-A 实测的那一下,出在上一轮那个「收尾之后重新取证」的修法上:它只把
+    // **最后那次**扫描的名单交上去。真实现场是 —— 停止前那次扫描明确点了名(父边读不出来),
+    // 根退出之后那个后代被重父到 1 号名下、父边变得读得出来,于是它不再出现在最后那次
+    // 扫描的视野里,名单空了、结构化责任一个字没落盘,重试清扫把行删了,而它还在写
+    // (审查读数:心跳 44→52)。
+    //
+    // 夹具让这个阶段变化自己发生:**根在收到 TERM 之后才把夹具撤掉**(它自己写那个标记
+    // 文件),所以停止前读到的是「父边问不出来」、停止后读到的是真实的 1 号父边。
+    const beat5 = join(root, "beat5");
+    const kidPidFile = join(root, "kid5.pid");
+    const psReal = join(root, "ps-real");
+    const kidSrc = 'const fs = require("node:fs");\n'
+      + "let n = 0; setInterval(() => fs.writeFileSync(process.argv[1], String(++n)), 30);\n";
+    const token7 = mintUnitToken();
+    const live = spawn(process.execPath, ["-e", `
+      const { spawn } = require("node:child_process");
+      const kid = spawn(process.execPath,
+        ["-e", ${JSON.stringify(kidSrc)}, ${JSON.stringify(beat5)}],
+        { detached: true, stdio: "ignore", env: {} });
+      require("fs").writeFileSync(${JSON.stringify(kidPidFile)}, String(kid.pid));
+      kid.unref();
+      process.on("SIGTERM", () => {
+        require("fs").writeFileSync(${JSON.stringify(psReal)}, "1");
+        process.exit(0);
+      });
+      setInterval(() => {}, 1000);
+    `], { stdio: "ignore", env: { ...process.env, ASH_MONITOR_UNIT: token7 } });
+    registerUnitToken(live, token7);
+    await wait(700);
+    const kidPid = Number(readFileSync(kidPidFile, "utf8"));
+    strays.push(kidPid);
+    assert.ok(isPidAlive(kidPid), "这一组要一个活着的孩子");
+
+    const shim = installShim("ps",
+      `[ -f ${JSON.stringify(psReal)} ] && exec /bin/ps "$@"\n`
+      + `/bin/ps "$@" | awk -v t=${kidPid} '{ if ($1 == t) { s=""; for (i=3; i<=NF; i++) s = s $i " ";`
+      + ` printf "%s %s %s\\n", $1, $1, s } else print }'\n`);
+    const beforeTerm = await collectEscapees(live);
+    const judged = await cleanupAfterRun(live);
+    const afterTerm = await collectEscapees(live);
+    restorePath();
+    rmSync(shim, { recursive: true, force: true });
+    const row = async () => (await listAllCleanupDebts().then((l) => l.ok ? l.debts : []))
+      .find((d) => d.unitToken === token7);
+
+    if (beforeTerm.open.some((o) => o.pid === kidPid)) ok("前提一:停止前那次扫描点了这个号的名");
+    else fail("夹具没生效,停止前就没点上名");
+    if (existsSync(psReal) && !afterTerm.open.some((o) => o.pid === kidPid)) {
+      ok("前提二:停止后那次扫描里它已经不在自己的视野里了(父边恢复可读)");
+    } else fail("阶段变化没发生,这一组测不到「换快照就忘」那一下");
+    if (judged.kind !== "empty") ok(`结论仍是 ${judged.kind}:名单只增不减`);
+    else fail("停止后那次没看见就当成了排除掉 —— 审查实测的那条路");
+    const named = (await row())?.openMembers ?? "";
+    if (named.includes(String(kidPid))) ok("而且那个号结构化落在行上(重试清扫据此核销)");
+    else fail(`行上的名单是 ${named || "null"} —— 结构化责任在换快照那一步丢了`);
+    await sweepAgentCleanupDebts();
+    if (await row()) ok("保持现场重试:这一行没被销掉");
+    else fail("重试把账销了,而那个孩子还在写");
+    await wait(200);
+    const beats0 = beats(beat5);
+    await wait(250);
+    if (isPidAlive(kidPid) && beats(beat5) > beats0) ok(`孩子确实还活着、还在写(心跳 ${beats0} -> ${beats(beat5)})`);
+    else fail("孩子已经不在了,这一组没测到东西");
+
+    try { process.kill(kidPid, "SIGKILL"); } catch { /* 已经没了 */ }
+    for (let i = 0; i < 40 && isPidAlive(kidPid); i += 1) await wait(50);
+    await sweepAgentCleanupDebts();
+    if (!await row()) ok("它退出之后这一笔销得掉(只增不减不等于永久挂账)");
+    else fail("孩子退出后仍销不掉");
+  }
+
 } finally {
   restorePath();
   for (const pid of [orphan, ...strays]) {

@@ -29,7 +29,7 @@ import {
 } from "./track-evidence.js";
 import { collectEscapees, describeEvidence, killEscapees, signalMembers } from "./escapees.js";
 import {
-  describeOpen, judgeByClues, mergeClueAnswers, openOf, residueFromProbe,
+  describeOpen, dischargeOpen, joinOpen, judgeByClues, mergeClueAnswers, openOf, residueFromProbe,
   type CleanupOpen, type CleanupResult, type ClueAnswer,
 } from "./cleanup-result.js";
 // 只借类型:持久层是按需加载的(它拉起整个 db 层),不许在这里长出静态依赖。
@@ -264,7 +264,14 @@ const undeliveredKey = (input: CleanupDebtInput): string =>
   input.unitToken || input.outPath || input.trackPath || "no-clue";
 
 function keepUndelivered(input: CleanupDebtInput): void {
-  undelivered.set(undeliveredKey(input), input);
+  const key = undeliveredKey(input);
+  // 叙述留最新那版(见上面那段),**点过的名两份并起来**:后一份输入更弱(这一刻取证失败、
+  // 名单是空的)时,按键覆盖会把前一份里那个已知的活后代整个丢掉(第 9 轮审查 F1-B 的
+  // 同类位置)。要从名单上消失只能靠退出证据。
+  const held = undelivered.get(key);
+  undelivered.set(key, held
+    ? { ...input, open: joinOpen(held.open ?? [], input.open ?? []) }
+    : input);
 }
 
 function scheduleRedelivery(): void {
@@ -408,6 +415,17 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   const lingers = (): boolean => !!child.pid && childStillOurs(child) && !childKillAuthorized(child);
   const faults = [...first.faults];
   /**
+   * **这一轮点过的名,逐次累加**(第 9 轮审查 F1-A)。
+   *
+   * 上一版只把**最后那次**扫描的名单交上去:停止前点过名的号,在停止后那次快照里因为已经
+   * 被重父到 1 号名下、父边变得读得出来,就不再出现在它自己的视野里 —— 于是名单空了、
+   * 结构化责任一个字没落盘,重试清扫照自己那几台设备的「没有」把行删了(审查实测:同一个
+   * 号仍 alive、心跳 44→52)。
+   *
+   * 「这一次没看见」不是退出证明。要从名单上消失只有一条路:`dischargeOpen` 给出的退出证据。
+   */
+  let named: CleanupOpen[] = [...first.open];
+  /**
    * 三条出路共用的收尾读数。**记号与两个运行专属文件都在这里重新问一次** ——
    * 上一版把 `first.unit` / `second.unit`(下刀**之前**那次取证)当成最终结论往上传,于是
    * 「清扫开始时还带着记号、随后确实已经退出」的根会留下一笔假债,要等下一轮清扫才收敛
@@ -425,12 +443,16 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
     // 跟一个陌生进程读不出任何差别(`closed_at` 那段注释说的就是这条边界)。
     const final = await collectEscapees(child);
     const live = final.targets.filter((m) => isPidAlive(m.pid));
+    // 三次扫描点过的名并起来,再**按退出证据**核销一次:还在的留着往上传,确证退了的
+    // (号上没人 / 同一坐标系里换了代)就地消解 —— 所以正常收尾不会因为中途出现过一次
+    // 瞬时空洞而平白押一笔债。
+    const { left } = dischargeOpen(joinOpen(named, final.open, live.map((m) => ({
+      pid: m.pid, gen: m.gen, why: "这次运行的后代,收尾之后仍活着",
+    }))));
     return {
       answered: answered && final.answered,
       faults: [...faults, ...final.faults.filter((f) => !faults.includes(f))],
-      open: [...final.open, ...live.map((m) => ({
-        pid: m.pid, gen: m.gen, why: "这次运行的后代,收尾之后仍活着",
-      }))],
+      open: left,
       // 残存者两份并起来:这一轮朝它开过刀还活着的,以及收尾之后这次扫描新认下来的活成员。
       survivors: [...new Set([...survivors, ...live.map((m) => m.pid)])],
       // 根那一问只看**朝它开过刀之后**还在不在,跟新扫到的后代无关,所以用原来那份名单。
@@ -463,6 +485,7 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   // ⇒ 号换了主人,一刀不发。
   const second = await killEscapees(child, "SIGKILL");
   faults.push(...second.faults.filter((f) => !faults.includes(f)));
+  named = joinOpen(named, second.open);           // 第二次扫描点的名同样只增不减
   killed.push(...second.hit);
   // **最终残存者如实往上传**(上一版把这份名单丢掉了):它正是「还没收干净」最硬的那种证据。
   const survivors = await waitForPidsGone(killed, 2000);

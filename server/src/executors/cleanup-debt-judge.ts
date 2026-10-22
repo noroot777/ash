@@ -19,7 +19,6 @@
 //  ① 设备不存在就**不发言**(返回 `null`),不许交一张「已经空了」的证书;
 //  ② 「这一次查询失败」和「这台机器/这一行永远答不了」要分开 —— 前者该重试,后者该收档。
 import { isPidAlive } from "../platform.js";
-import { processGenerationSync } from "../process-generation.js";
 import { processIdentity, processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { agentCleanupDebts } from "../db/schema.js";
@@ -28,7 +27,8 @@ import {
   fileHoldersAnswerable, holderScanFault, probeFileHolders, type HolderProbe,
 } from "./track-evidence.js";
 import {
-  cleanupRetriable, describeOpen, judgeByClues, mergeClueAnswers, residueFromProbe,
+  cleanupRetriable, describeOpen, dischargeOpen, joinOpen, judgeByClues, mergeClueAnswers,
+  residueFromProbe,
   type CleanupOpen, type CleanupResult, type ClueAnswer,
 } from "./cleanup-result.js";
 
@@ -83,14 +83,19 @@ export type JudgedDebt = {
   retriable: boolean;
 };
 
-export async function judgeDebtRow(row: DebtRow): Promise<JudgedDebt> {
+export async function judgeDebtRow(
+  row: DebtRow, extraOpen: readonly CleanupOpen[] = [],
+): Promise<JudgedDebt> {
   const marked = isMarked(row.unitToken);
   const after = processUnitEvidence(marked ? row.unitToken : null, { fresh: true });
   const clues = await probeDebtPaths(row);
   const root = rootResidue(row);
   const marker = markerResidue(after, marked);
   const paths = pathResidue(clues);
-  const held = openResidue(row.openMembers);
+  // `extraOpen` = **还只在内存里、没落到这一行上的那几个名**(待投清单上扛着的那几笔)。
+  // 不把它们并进来就会出现:行上看不见那个号 ⇒ 判空成立 ⇒ 删行,而待投清单随后被一起
+  // 清掉,那个活后代的唯一责任就两边都不在了(第 9 轮审查 F1-B 的同一条链)。
+  const held = openResidue(row.openMembers, extraOpen);
   const answers: ClueAnswer[] = [{ subject: "root", answer: root }];
   for (const answer of [marker, paths, held.answer]) {
     if (answer) answers.push({ subject: "descendants", answer });
@@ -121,7 +126,7 @@ export async function judgeDebtRow(row: DebtRow): Promise<JudgedDebt> {
  * 它是一份会自己消解的责任,不是那种「重试一万次也是同一句」的弃权(第 3 轮审查 N2)。
  */
 export function openResidue(
-  stored: string | null,
+  stored: string | null, extraOpen: readonly CleanupOpen[] = [],
 ): { answer: CleanupResult | null; retriable: boolean } {
   const parsed = parseOpenMembers(stored);
   if (parsed === "broken") {
@@ -132,8 +137,11 @@ export function openResidue(
       retriable: false,
     };
   }
-  if (!parsed.length) return { answer: null, retriable: false };
-  const left = parsed.filter((one) => !provenGone(one));
+  const all = joinOpen(parsed, extraOpen);
+  if (!all.length) return { answer: null, retriable: false };
+  // **核销判据与即时清理共用一份**(`dischargeOpen`):只有「号上没人」和「同一坐标系里换了
+  // 代」算退出证据,跨坐标系的不等不算(第 9 轮审查 F1-C)。
+  const { left } = dischargeOpen(all);
   if (!left.length) return { answer: { kind: "empty" }, retriable: false };
   return {
     answer: {
@@ -143,15 +151,6 @@ export function openResidue(
     },
     retriable: true,
   };
-}
-
-/** 这个号上当初那个进程**一定退了**吗(两条正面出路,见 `openResidue`)。 */
-function provenGone(one: CleanupOpen): boolean {
-  if (!Number.isInteger(one.pid) || one.pid <= 1) return true;   // 记歪的号核不动,也追不动
-  if (!isPidAlive(one.pid)) return true;
-  if (!one.gen) return false;                     // 当初没记代次 ⇒ 只能等它退出
-  const current = processGenerationSync(one.pid);
-  return current !== null && current !== one.gen; // 读不出来 ⇒ 这一次没核成,不是反证
 }
 
 /** 落库的那份 JSON 读回来。`"broken"` = 存着东西、可是读不出来(跟「没有」是两件事)。 */
@@ -177,10 +176,17 @@ function parseOpenMembers(stored: string | null): CleanupOpen[] | "broken" {
   }
 }
 
-/** 行上那份名单读成结构(读不出来 ⇒ 空;要分「坏了」和「没有」的地方用 `openResidue`)。 */
-export const openMembersOf = (stored: string | null): readonly CleanupOpen[] => {
+/**
+ * 行上那份名单读成结构。**「读不出来」要穿过返回值**(第 9 轮审查 F1-D 第一条):
+ * 读成空数组时,调用方随后那次 UPSERT 会把「没读成」写成「原来没有未决责任」。
+ */
+export const openMembersOf = (
+  stored: string | null,
+): { ok: true; open: readonly CleanupOpen[] } | { ok: false; why: string } => {
   const parsed = parseOpenMembers(stored);
-  return parsed === "broken" ? [] : parsed;
+  return parsed === "broken"
+    ? { ok: false, why: "行上那份未排除名单的内容坏了" }
+    : { ok: true, open: parsed };
 };
 
 /** 写进行里的那份 JSON(空名单写 `null`,跟老行同形)。 */

@@ -152,8 +152,14 @@ export function startedAtOfGeneration(pid: number, gen: ProcessGeneration): Gene
   return after.outcome === "proven" ? { outcome: "proven", startedAt } : after;
 }
 
-/** 这一刻这个号上是不是 `gen` 那一代 —— 三档,理由分开(见 `GenerationStartedAt`)。 */
-function currentGeneration(
+/**
+ * 这一刻这个号上是不是 `gen` 那一代 —— 三档,理由分开(见 `GenerationStartedAt`)。
+ *
+ * **导出是因为这是全仓唯一一份三态判据**:凡是要从「代次对不上」推出「号换了主人」的地方
+ * 都得用它。自己写一句 `current !== stored` 会把**跨坐标系**的不等(`j:` 节拍数 vs `t:` 文本)
+ * 当成换主 —— 第 9 轮审查 F1-C 实测过那一下:同一个号还活着,责任被核销掉了。
+ */
+export function currentGeneration(
   pid: number, gen: ProcessGeneration,
 ): { outcome: "proven" } | { outcome: "changed" } | { outcome: "unqueryable" } {
   const current = processGenerationSync(pid);

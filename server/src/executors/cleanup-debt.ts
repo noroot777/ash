@@ -19,26 +19,49 @@ import { agentCleanupDebts } from "../db/schema.js";
 import { now } from "../util.js";
 import { processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { signalMembers } from "./escapees.js";
-import { cleanupDetail, openOf, type CleanupOpen, type CleanupResult } from "./cleanup-result.js";
+import {
+  cleanupDetail, joinOpen, openOf, type CleanupOpen, type CleanupResult,
+} from "./cleanup-result.js";
 // **判据在隔壁那一份**:这里只管账本的读写,「这一刻算不算空、该销还是该收档」问它。
 import {
   debtDisposition, debtKey, isMarked, judgeDebtRow, openMembersOf, serializeOpenMembers,
   type CleanupDebtClues, type DebtRow,
 } from "./cleanup-debt-judge.js";
 
-/** 行上已经点过名的那几个号(读不出来、或者这一行还不存在 ⇒ 空)。 */
-async function readOpenMembers(key: string): Promise<readonly CleanupOpen[]> {
+/**
+ * 行上已经点过名的那几个号。**三档,不折成空数组**(第 9 轮审查 F1-D 第一条):
+ * 「这一刻读不出来」和「原来就没有」的处置相反 —— 前者一个字都不许往这一列上写,
+ * 否则一次瞬时读失败 + 随后一次成功 UPSERT 就把已有的责任抹平了。
+ */
+async function readOpenMembers(
+  key: string,
+): Promise<{ ok: true; open: readonly CleanupOpen[] } | { ok: false; why: string }> {
   const read = await readDebtRow(key);
-  return read.ok && read.row ? openMembersOf(read.row.openMembers) : [];
+  if (!read.ok) return { ok: false, why: read.reason };
+  if (!read.row) return { ok: true, open: [] };   // 这一行还不存在 ⇒ 确实没有旧名单
+  return openMembersOf(read.row.openMembers);
 }
 
-/** 两份名单按号并起来(行上那份在前:它是更早点的名,`why` 保留最初那一句)。 */
-function mergeOpenMembers(
-  held: readonly CleanupOpen[], fresh: readonly CleanupOpen[],
-): CleanupOpen[] {
-  const byPid = new Map<number, CleanupOpen>();
-  for (const one of [...held, ...fresh]) if (!byPid.has(one.pid)) byPid.set(one.pid, one);
-  return [...byPid.values()];
+/** 内存里还扛着的那几笔上点过的名(同一个键)。它们还没落到行上,判定与落账都要并进来。 */
+const pendingOpenOf = (key: string): readonly CleanupOpen[] =>
+  pendingNotes.get(key)?.input.open ?? [];
+
+/**
+ * 只往这一列上**并**几个名,别的列一个字不动。
+ *
+ * 用在「这一笔输入已经过期、不该再盖叙述,可它身上那几个名还没人接」那一刻(见 `writeNote`)。
+ */
+async function mergeOpenIntoRow(key: string, open: readonly CleanupOpen[]): Promise<void> {
+  if (!open.length || dbClient.closed) return;
+  const held = await readOpenMembers(key);
+  if (!held.ok) return;                           // 读不出来 ⇒ 这一列不动(同上)
+  try {
+    await db.update(agentCleanupDebts)
+      .set({ openMembers: serializeOpenMembers(joinOpen(held.open, open)) })
+      .where(eq(agentCleanupDebts.unitToken, key));
+  } catch (error) {
+    console.error(`[ash] 这几个未排除的号没并进行里(unit=${key}):`, error);
+  }
 }
 
 // ── 同一个键上的读-判-写必须串起来 ──────────────────────────────────────────────
@@ -137,8 +160,12 @@ const FLUSH_DELAY_MS = 30_000;
 
 function keepPendingNote(key: string, input: CleanupDebtInput, seq: number): void {
   const held = pendingNotes.get(key);
-  if (held && held.seq > seq) return;             // 清单上那笔比这一笔新,别往回盖
-  pendingNotes.set(key, { input, seq });          // 同一个键只留最新那一版结论
+  // **叙述按序号取新的,点过的名两份并起来**(第 9 轮审查 F1-B 实测)。同一个键只留一格,
+  // 上一版于是连名单一起按键覆盖:前一笔里那个已知的活后代,被后一笔(取证失败、名单是
+  // 空的)整个顶掉,补投落库时行上的名单是 null,下一次清扫照「没有未排除的号」销了账。
+  const open = joinOpen(held?.input.open ?? [], input.open ?? []);
+  const newer = held && held.seq > seq ? held : { input, seq };
+  pendingNotes.set(key, { input: { ...newer.input, open }, seq: newer.seq });
   scheduleFlush();
 }
 
@@ -152,6 +179,9 @@ async function writeNote(
   key: string, input: CleanupDebtInput, seq: number,
 ): Promise<"noted" | "failed"> {
   if ((landedSeq.get(key) ?? 0) > seq) {
+    // 这一笔的**叙述**过期了(同一个键上有更新的一版已经落库),可它身上点过的那几个名
+    // 未必已经有人接 —— 序号只能淘汰过时叙述,不能淘汰尚未核销的身份(第 9 轮审查 F1-B)。
+    await mergeOpenIntoRow(key, input.open ?? []);
     dropPendingNote(key, seq);
     return "noted";
   }
@@ -192,7 +222,9 @@ export async function flushPendingCleanupNotes(): Promise<{ landed: number; pend
     if (dbClient.closed) break;
     const verdict = await withDebtKey(key, () => writeNote(key, note.input, note.seq));
     if (verdict !== "noted") continue;
-    pendingNotes.delete(key);
+    // **删不删由 `writeNote` 按序号判**(它会核「清单上这一笔是不是还是我刚投的那一版」)。
+    // 上一版在这里无条件 delete:await 期间清理路径往同一个键上放了更新的一笔时,那一笔
+    // 连同它点过的名一起被这一句删掉(第 9 轮审查 F1-B 的同类位置)。
     landed += 1;
   }
   if (pendingNotes.size) scheduleFlush();
@@ -206,9 +238,14 @@ async function noteDebtRow(
   key: string, input: CleanupDebtInput,
 ): Promise<"noted" | "failed"> {
   try {
-    // 行上已经点过名的那几个号**并进来**(见 `CleanupDebtInput.open`):读写都在 `withDebtKey`
-    // 这把键锁里,读不出来就当这一次不知道更多,照旧只写自己这一份。
-    const merged = mergeOpenMembers(await readOpenMembers(key), input.open ?? []);
+    // **三份名单并起来**(见 `CleanupDebtInput.open`):行上已经点过的、内存待投清单上还扛着
+    // 的、以及这一次自己点的。读写都在 `withDebtKey` 这把键锁里。
+    //
+    // 待投那一份必须并:同一个键上前一笔落库失败(名单里有个活后代)、这一笔取证又恰好失败
+    // (名单是空的),少了这一并,新这一笔就把那个号从库里和内存里同时抹掉 —— 审查用一次
+    // 真实写失败 + 一次更弱的输入实测到了这一下(心跳 48→56)。
+    const held = await readOpenMembers(key);
+    const merged = joinOpen(held.ok ? held.open : [], pendingOpenOf(key), input.open ?? []);
     await db.insert(agentCleanupDebts).values({
       unitToken: key,
       taskId: input.taskId ?? "", sessionId: input.sessionId ?? "",
@@ -216,7 +253,7 @@ async function noteDebtRow(
       trackPath: input.trackPath ?? null, outPath: input.outPath ?? null,
       state: input.state, detail: input.detail.slice(0, 2000),
       unitVerdict: input.unitVerdict,
-      openMembers: serializeOpenMembers(merged),
+      openMembers: serializeOpenMembers(merged),           // INSERT 这一支:行本来不存在,没有旧名单可丢
       attempts: 0, version: 0, createdAt: now(), lastAttemptAt: null,
       closedAt: null, closedNote: null,
     }).onConflictDoUpdate({
@@ -224,7 +261,9 @@ async function noteDebtRow(
       set: {
         state: input.state, detail: input.detail.slice(0, 2000),
         unitVerdict: input.unitVerdict,
-        openMembers: serializeOpenMembers(merged),
+        // 行上那份**读不出来**时这一列一个字不动:宁可少并一次,也不要把「没读成」写成
+        // 「原来没有未决责任」(第 9 轮审查 F1-D 第一条)。
+        ...(held.ok ? { openMembers: serializeOpenMembers(merged) } : {}),
         closedAt: null, closedNote: null,
         // 证据换了一版:上一版的「清空证明」从这一刻起作不得数(见 schema 的 version)。
         version: sql`${agentCleanupDebts.version} + 1`,
@@ -270,7 +309,7 @@ async function settleIfStillEmpty(key: string): Promise<void> {
   }
   if (!read.row) return;                          // 从来没欠过 —— 绝大多数回合走这里
   const row = read.row;
-  const judged = await judgeDebtRow(row);
+  const judged = await judgeDebtRow(row, pendingOpenOf(key));
   switch (debtDisposition(judged)) {
     case "settle":
       if (!await settleDebtRow(key, row.version)) {
@@ -523,7 +562,7 @@ async function pushDebtLocked(key: string): Promise<SweepVerdict> {
   }
 
   // **记号与路径都在(可能的)下刀之后才取证**:下刀前那次读数说明不了下刀后的事。
-  const judged = await judgeDebtRow(debt);
+  const judged = await judgeDebtRow(debt, pendingOpenOf(key));
   const { after, result } = judged;
 
   switch (debtDisposition(judged)) {

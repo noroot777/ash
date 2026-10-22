@@ -131,5 +131,45 @@ console.log("3) 点名了、却排除不掉的号:别的设备的「没有」解
   } else fail(`坏名单被判成了 ${broken.answer?.kind}`);
 }
 
+console.log("4) 名单只增不减:换代证明必须同源可比,同一个号的两代是两份责任");
+{
+  const { dischargeOpen, joinOpen, openKey } = await import("../src/executors/cleanup-result.js");
+  const { openResidue, serializeOpenMembers } = await import("../src/executors/cleanup-debt-judge.js");
+  const { processGenerationSync } = await import("../src/process-generation.js");
+
+  const mine = process.pid;
+  const real = processGenerationSync(mine);
+  if (!real) throw new Error("这台机器读不出自己的代次,这一组没法测");
+  // **另一个坐标系**的戳:本机是 `t:`(ps 文本)就拿 `j:`(Linux 节拍数)当夹具,反之亦然。
+  const otherDomain = real.startsWith("j:") ? "t:Thu Oct 22 09:50:48 2026" : "j:123456";
+
+  const cross = dischargeOpen([{ pid: mine, gen: otherDomain, why: "夹具" }]);
+  if (!cross.gone.length && cross.left.length === 1) {
+    ok("跨坐标系的不等不算换主:这一笔留着,不核销");
+  } else fail("把两个证据域的不等当成了「号换了主人」—— 同一个号还活着,责任却被核销了");
+
+  const crossRow = openResidue(serializeOpenMembers([{ pid: mine, gen: otherDomain, why: "夹具" }]));
+  if (crossRow.answer?.kind === "unknown") ok("持久清扫那一侧同一判据(两边共用一份核销语义)");
+  else fail(`清扫侧把它核销了(${crossRow.answer?.kind})`);
+
+  // 同一个号的两代:集合成员键带代次,否则新责任会被旧项挤掉、再被旧代次的退出证明一起带走。
+  const sameDomainStale = `${real.slice(0, 2)}${real.startsWith("j:") ? "1" : "Thu Oct 22 00:00:00 2026"}`;
+  const two = joinOpen(
+    [{ pid: mine, gen: sameDomainStale, why: "旧那一代" }],
+    [{ pid: mine, gen: real, why: "这一代" }],
+  );
+  if (two.length === 2 && new Set(two.map(openKey)).size === 2) ok("同一个号的两代各占一格");
+  else fail(`两代被挤成了 ${two.length} 格 —— 新责任会被旧项顶掉`);
+
+  const split = dischargeOpen(two);
+  if (split.gone.length === 1 && split.left.length === 1 && split.left[0]!.gen === real) {
+    ok("旧那一代核销掉,这一代照旧欠着(不会两代一起消失)");
+  } else fail(`两代没各自核销(核销 ${split.gone.length} 条、留下 ${split.left.length} 条)`);
+
+  const dead = joinOpen([{ pid: 0x7ffffff, gen: "t:x", why: "夹具" }], []);
+  if (dischargeOpen(dead).gone.length === 1) ok("号上没人 ⇒ 照旧核销得掉(名单会自己消解)");
+  else fail("退出的号也核销不掉了,那会押一笔永远销不掉的债");
+}
+
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
 process.exit(bad ? 1 : 0);

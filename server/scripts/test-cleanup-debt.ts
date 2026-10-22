@@ -18,8 +18,10 @@
 // 第 3 轮审查再加四条,钉的是**责任交接**(销账只认它判的那一版;交不出去就不许放手):
 //  ⑧ 没有记号的那些行:销账按同一套线索算键,照样销得掉;
 //  ⑨ 销账锁内重新取证:调用方那句「空了」不作数,还有残留就不删、还要把这一刻记上去;
-//  ⑩ 落库失败:责任留在内存里接着扛,下一次清扫开头补投;
 //  ⑪⑫ 结构性答不了的那一问不发表意见;清理这一问自己抛了也要先把责任交出去。
+//
+// **落库之前那段路**(写库失败谁扛着、补投怎么投、点过的名会不会在交接里丢)在
+// `test-cleanup-pending.ts`:那是账本的内存那一摊,职责跟这一份不同,而且这一份贴着行数上限。
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, openSync, closeSync, unlinkSync } from "node:fs";
@@ -33,7 +35,7 @@ const { ensureSchema } = await import("../src/db/index.js");
 await ensureSchema();
 const {
   noteCleanupDebt, listAllCleanupDebts, settleCleanupDebt, sweepAgentCleanupDebts,
-  pendingCleanupNoteCount,
+  pendingCleanupNoteCount, flushPendingCleanupNotes,
 } = await import("../src/executors/cleanup-debt.js");
 const { db } = await import("../src/db/index.js");
 const { agentCleanupDebts } = await import("../src/db/schema.js");
@@ -384,42 +386,6 @@ if (IS_WINDOWS) {
   await forget(key);
 }
 
-console.log("\n10) 落库失败不等于责任消失:内存里接着扛,下一次清扫补投");
-{
-  // 钉的是第 3 轮审查 F2 后半:上一版写库失败就只剩一条日志,那一笔既不在库里也不在任何人
-  // 手上,后面哪一次清扫都不会再想起它。下面那句 `[ash] agent 清理责任落库失败` 是夹具
-  // 故意制造的,不是真故障。
-  const token = `ash-agent-test-pending-${Date.now().toString(36)}`;
-  const hole = db as unknown as { insert: unknown };
-  const realInsert = hole.insert;
-  hole.insert = () => { throw new Error("夹具:这一刻库写不进去"); };
-  const noted = await noteCleanupDebt({
-    unitToken: token, rootPid: 4245,
-    state: "remaining", detail: "夹具:写库失败的那一笔", unitVerdict: "suspected",
-  });
-  hole.insert = realInsert;
-  if (noted === "failed") ok("写库失败如实返回 failed(没印成「本来没什么可追的」)");
-  else fail(`写库失败却报 ${noted}`);
-  if (!await rowOf(token)) ok("库里确实没有这一行");
-  else fail("夹具没生效:这一行居然写进去了");
-  const held = pendingCleanupNoteCount();
-  if (held >= 1) ok(`责任留在内存里接着扛(${held} 笔),不是只剩一条日志`);
-  else fail("写库失败之后谁都不扛这一笔了 —— 正是 F2 要堵的那一下");
-
-  const swept = await sweep();
-  if (swept.landedNotes >= 1) ok(`下一次清扫开头把它补投落库了(${swept.landedNotes} 笔)`);
-  else fail(`清扫没补投:landedNotes=${swept.landedNotes}`);
-  if (!swept.pendingNotes) ok("内存里不再扛着它");
-  else fail(`补投完还剩 ${swept.pendingNotes} 笔在内存里`);
-  // 补投落库之后它就是一笔正常的账:同一轮清扫接着重新取证,这个号早就不在了,所以
-  // 要么行还留着(这台机器证不出空),要么当场确证空被销掉 —— 两种都算责任交接到位,
-  // 唯一不许的是「谁都没接」。
-  const row = await rowOf(token);
-  if (row) ok(`库里有了这一行(state=${row.state})`);
-  else if (swept.settled >= 1) ok("补投之后同一轮就确证空、销了账(责任确实交接过)");
-  else fail("补投之后既没有行、也没有任何一笔被销账");
-  await forget(token);
-}
 
 console.log("\n11) 结构性答不了的那一问:不发表意见,不是「没答出来」");
 {
@@ -610,6 +576,7 @@ console.log("\n13) 清扫:后代那边答空、已知根还活着 ⇒ 不许销�
   await forget(stale);
   try { process.kill(bare.pid!, "SIGKILL"); } catch { /* 已经没了 */ }
 }
+
 
 for (const pid of strays) {
   try { process.kill(pid, "SIGKILL"); } catch { /* 已经没了 */ }

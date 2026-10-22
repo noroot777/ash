@@ -39,6 +39,7 @@
 // 两问之间反过来是**合取**:哪一问没有任何设备作答,整条结论就是 `silent` —— 不许销账,
 // 但可以「追到这里为止」(收档:停止自动重试、保留记录与定位线索)。
 import { isPidAlive } from "../platform.js";
+import { currentGeneration } from "../process-generation.js";
 import { holderMayOwn, holderScanFault, type HolderProbe } from "./track-evidence.js";
 
 /**
@@ -75,14 +76,61 @@ export type CleanupResult =
 export const openOf = (result: CleanupResult): readonly CleanupOpen[] =>
   result.kind === "empty" ? [] : result.open ?? [];
 
-/** 按号去重(同一个号可能被几台设备各报一次)。 */
-function unionOpen(results: readonly CleanupResult[]): CleanupOpen[] {
-  const byPid = new Map<number, CleanupOpen>();
-  for (const result of results) {
-    for (const one of openOf(result)) if (!byPid.has(one.pid)) byPid.set(one.pid, one);
+/**
+ * 集合成员的键:**号 + 那一代**,不是裸号(第 9 轮审查 F1-D)。
+ *
+ * 裸号当键有两种错法,都是真的丢责任:号被复用之后,同一个号的**新一代**成了新的未决身份,
+ * 它会被名单里那条旧的挤掉;而下一次按旧代次核销时(旧的那个确实退了),两代一起从名单上
+ * 消失。两代是两份互不替代的责任,键里必须带上代次。
+ *
+ * 代次问不出来(`null`)的那种自成一格:它跟任何一条「有代次」的记录都不是同一条责任。
+ */
+export const openKey = (one: CleanupOpen): string => `${one.pid}@${one.gen ?? "?"}`;
+
+/**
+ * 几份名单并成一份。**只增不减** —— 这是整条链的不变量:
+ *
+ * 「这一次扫描没在自己的视野里看见它」**不构成退出证明**(第 9 轮审查 F1-A 实测:停止前
+ * 点过名的号,在停止后那次快照里因为被重父到 1 号名下而不再是「父边问不出来」,于是名单
+ * 空了、责任没落盘,重试清扫把行删了,而它还在写 —— 心跳 44→52)。要让一条记录从名单上
+ * 消失,只能靠 `dischargeOpen` 给出的退出证据。
+ */
+export function joinOpen(...lists: readonly (readonly CleanupOpen[])[]): CleanupOpen[] {
+  const byKey = new Map<string, CleanupOpen>();
+  for (const list of lists) {
+    for (const one of list) if (!byKey.has(openKey(one))) byKey.set(openKey(one), one);
   }
-  return [...byPid.values()];
+  return [...byKey.values()];
 }
+
+/**
+ * **核销**:这份名单上哪几条已经有了退出证据,剩下哪几条还欠着。
+ *
+ * 即时清理与跨重启清扫共用这一份(判据只有一处):一条记录只有两条正面出路 ——
+ *  · 号上没有进程了 ⇒ 当初那个一定退了;
+ *  · 号上还有进程、但**同一个坐标系里**读出来不是那一代 ⇒ 号换了主人,当初那个也一定退了。
+ *
+ * **跨坐标系的不等不算换主**(第 9 轮审查 F1-C 实测:存的是 Linux 的节拍数 `j:`、这一刻
+ * 退回 `ps` 读出 `t:` 文本,字符串当然不等 —— 上一版据此宣布「号换了主人」把责任核销掉了,
+ * 而同一个号还活着)。三态判据全仓只有一份(`process-generation.ts` 的 `currentGeneration`),
+ * 这里直接用它:只有 `changed` 算退出证据,`unqueryable` 是「这一次没核成」。
+ */
+export function dischargeOpen(open: readonly CleanupOpen[]): { left: CleanupOpen[]; gone: CleanupOpen[] } {
+  const left: CleanupOpen[] = [], gone: CleanupOpen[] = [];
+  for (const one of open) (provenGone(one) ? gone : left).push(one);
+  return { left, gone };
+}
+
+function provenGone(one: CleanupOpen): boolean {
+  if (!Number.isInteger(one.pid) || one.pid <= 1) return true;   // 记歪的号核不动,也追不动
+  if (!isPidAlive(one.pid)) return true;
+  if (!one.gen) return false;                     // 当初没记代次 ⇒ 只能等它退出
+  return currentGeneration(one.pid, one.gen).outcome === "changed";
+}
+
+/** 几份结论身上的名单并起来(胜出那一档之外的也要并,见 `mergeCleanupResults`)。 */
+const unionOpen = (results: readonly CleanupResult[]): CleanupOpen[] =>
+  joinOpen(...results.map((r) => openOf(r)));
 
 /** 未排除的号写成给人看的一句。 */
 export const describeOpen = (open: readonly CleanupOpen[]): string =>
