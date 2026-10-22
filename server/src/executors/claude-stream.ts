@@ -13,7 +13,7 @@ import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
-import { withMarkdownImages } from "./markdown-image-stream.js";
+import { markdownImageSink, settleMarkdownImages, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
@@ -46,9 +46,14 @@ export function parseClaudeStream(
   // 正文里的图**不在这份解析里收**:它要按「一份文档」认身份,而这里一条模型消息就是
   // 一片碎片 —— 上一条消息给定义、下一条引用它时,按消息扫压根不认那张图(审查第 4 轮
   // R2)。父会话与每个子智能体各一笔账,统一由这一层记(见 markdown-image-stream.ts)。
-  return withMarkdownImages(
-    claudeStreamEvents(child, resident, bin, calibrateAs, compactWindow, onInitialized, waitNoticeMs, cliSessionId),
-    cwd,
+  //
+  // **账记在 push 处,不是记在下游**:下面那个 `queue` 是先攒着的,挂在消费者取事件那一刻
+  // 等于把「读文件」推迟到整条队列之后,中间 agent 完全来得及把同一个路径重拍一遍(审查
+  // 第 5 轮 R1)。所以 sink 在这里建好传进去,由 push 同步进账,这一层只负责收口。
+  const images = markdownImageSink(cwd);
+  return settleMarkdownImages(
+    claudeStreamEvents(child, resident, bin, calibrateAs, compactWindow, onInitialized, waitNoticeMs, images, cliSessionId),
+    images,
   );
 }
 
@@ -60,6 +65,7 @@ async function* claudeStreamEvents(
   compactWindow: number | null,
   onInitialized: () => void,
   waitNoticeMs: number,
+  images: MarkdownImageSink,
   cliSessionId?: string,
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
@@ -69,7 +75,9 @@ async function* claudeStreamEvents(
   const push = (e: AgentEvent) => {
     const events = activityBuffer.push(e);
     if (!events.length) return;
-    queue.push(...events);
+    // 图片记账就在这一刻:`note()` 一返回,这片正文提到的本机图片字节已经在 uploads 里,
+    // 队列后面排多久都改不了它(审查第 5 轮 R1)。
+    for (const event of events) queue.push(...images.note(event));
     resolve?.();
     resolve = null;
   };

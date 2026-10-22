@@ -19,7 +19,7 @@ import {
   type RunTracePaths,
 } from "./diagnostics.js";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
-import { withMarkdownImages } from "./markdown-image-stream.js";
+import { markdownImageSink, settleMarkdownImages, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { codexAshMcpServerName } from "./codex-mcp.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"] as const;
@@ -324,7 +324,11 @@ export function parseCodexStream(
   // 正文里的图**不在这份解析里收**:一条 agent_message 只是一片碎片,上一条消息给定义、
   // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。统一由那一层按「一份文档」
   // 记账(见 markdown-image-stream.ts)。
-  return withMarkdownImages(codexStreamEvents(child, tracePaths, lifecycle, contextOptions), contextOptions.cwd);
+  //
+  // 账记在 push 处:下面那个 `queue` 先攒着,挂在消费者取事件那一刻等于把读文件推迟到整条
+  // 队列之后,中间 agent 来得及把同一个路径重拍一遍(审查第 5 轮 R1)。
+  const images = markdownImageSink(contextOptions.cwd);
+  return settleMarkdownImages(codexStreamEvents(child, tracePaths, lifecycle, contextOptions, images), images);
 }
 
 async function* codexStreamEvents(
@@ -336,6 +340,7 @@ async function* codexStreamEvents(
   // cwd = 这一轮干活的目录。正文里 `![](output/x.png)` 这种相对路径要靠它解成真文件
   // 才复制得进 uploads（见 ../agent-attachments.ts）。
   contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string },
+  images: MarkdownImageSink,
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -350,7 +355,8 @@ async function* codexStreamEvents(
   const structuredErrors: string[] = [];
   const trace = new RunTraceRecorder(tracePaths);
   const push = (e: AgentEvent) => {
-    queue.push(e);
+    // 图片记账就在这一刻:`note()` 一返回,这片正文提到的本机图片字节已经在 uploads 里。
+    queue.push(...images.note(e));
     resolve?.();
     resolve = null;
   };

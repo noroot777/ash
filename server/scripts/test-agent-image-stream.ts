@@ -27,6 +27,7 @@ process.env.ASH_UPLOADS_DIR = uploads;
 const { parseClaudeStream } = await import("../src/executors/claude.js");
 const { GenericCliExecutor } = await import("../src/executors/generic.js");
 const { withMarkdownImages } = await import("../src/executors/markdown-image-stream.js");
+const { childActivity } = await import("../src/executors/native-agent-activity.js");
 
 /** 只会往事件流里推正文的解析器 —— 那十个内联解析器的共同形状。 */
 function textOnlyParser(lines: string[]) {
@@ -55,6 +56,31 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   const out: AgentEvent[] = [];
   for await (const event of events) out.push(event);
   return out;
+}
+
+/**
+ * **慢消费者**:每收一条事件就办一会儿自己的事(真实消费者在正文上要等 `resolveTitle`、
+ * 等落库)。记账挂在「消费者取到这条事件那一刻」时,这点等待就足以让字节读成后来那张
+ * (审查第 5 轮 R1)。
+ */
+async function collectSlowly(events: AsyncIterable<AgentEvent>, delay: number): Promise<AgentEvent[]> {
+  const out: AgentEvent[] = [];
+  for await (const event of events) {
+    out.push(event);
+    await new Promise((done) => setTimeout(done, delay));
+  }
+  return out;
+}
+
+/** 上游抛错时:已经送到手里的事件和那个异常都要拿到。 */
+async function collectUntilThrow(events: AsyncIterable<AgentEvent>): Promise<{ events: AgentEvent[]; error: unknown }> {
+  const out: AgentEvent[] = [];
+  try {
+    for await (const event of events) out.push(event);
+    return { events: out, error: null };
+  } catch (error) {
+    return { events: out, error };
+  }
 }
 
 const attachments = (events: AgentEvent[]) =>
@@ -205,28 +231,37 @@ try {
   assert.deepEqual(readFileSync(two[0]!.path!), red, "第一处引用拿到的是它写完那一刻的字节");
   assert.deepEqual(readFileSync(two[1]!.path!), amber, "第二处引用拿到的是改过之后的字节");
 
-  // ⑪ 攒过窗口要裁时**按块边界裁**:裁掉的只是已经交代过的那几个块,块状态一个都不许被
-  // 裁断。上一版按字符数硬裁(留个头 + 留尾),开栏的 ``` 被裁走之后,围栏里的写法示例就
-  // 成了「真图」—— 多存一份、多一张卡片,而展示端扫完整正文压根不认它。
+  // ⑪ 攒过窗口时往前挪的是**重解析的窗口**,正文一个字都不裁。窗口按块边界挪,块状态一个
+  // 都不许被挪断 —— 上一版按字符数硬裁(留个头 + 留尾),开栏的 ``` 被裁走之后,围栏里的
+  // 写法示例就成了「真图」:多存一份、多一张卡片,而展示端扫完整正文压根不认它。
+  //
+  // 另一半是**窗口挪过去之后,前面那几处引用的字节还在**:挪窗口只是不再重解析那一段,
+  // 不是把它交代掉、更不是把它拍下来的字节扔掉。扔掉的那一版会让「修改前」那一处退回
+  // 收尾时重读文件,于是画出来是后来的蓝图(审查第 3 轮 R1 反例二的同类)。
+  writeFileSync(shot, red);
   const long = await collect(withMarkdownImages((async function* () {
     yield { kind: "text", text: "真图：![真图](output/shot.png)\n\n" + "填充。\n\n".repeat(2000) } as AgentEvent;
+    writeFileSync(shot, blue);
     yield { kind: "text", text: "再一张：![再一张](output/shot.png)\n\n" } as AgentEvent;
     yield { kind: "text", text: "```md\n![示例](output/shot.png)\n" } as AgentEvent;
     yield { kind: "done", exitStatus: 0 } as AgentEvent;
   })(), root));
+  const longShots = attachments(long);
   assert.deepEqual(
-    attachments(long).map((event) => [event.source, event.ref]),
+    longShots.map((event) => [event.source, event.ref]),
     [["output/shot.png", 0], ["output/shot.png", 1]],
-    "裁过之后:两处真引用各一条、身份接着往下数,未闭合围栏里的示例一条都不许报",
+    "挪过窗口之后:两处真引用各一条、身份接着往下数,未闭合围栏里的示例一条都不许报",
   );
-  // 第一条必须是**攒过窗口、裁走前缀那一刻**交代的(第二处引用在那之后才到,收尾才交代)
-  // —— 否则上面那条断言换成「整条消息攒着从不裁」也成立,裁剪这条路压根没被走到。
+  assert.deepEqual(readFileSync(longShots[0]!.path!), red, "窗口挪过去了,第一处引用那一刻的字节照旧是它自己的");
+  assert.deepEqual(readFileSync(longShots[1]!.path!), blue, "第二处引用是改过之后的");
+  // 交代一律在**文档收尾**:窗口挪动不发事件(「哪几处是真图」由整篇扫描说了算,半截正文
+  // 的语法结论随时会被后文推翻)。
   const fenceAt = long.findIndex((event) => event.kind === "text" && event.text.startsWith("```md"));
   assert.ok(fenceAt > 0, "围栏那一片要在事件流里");
   assert.equal(
     long.slice(0, fenceAt).filter((event) => event.kind === "attachment").length,
-    1,
-    "攒过窗口那一刻就把定型的块交代了",
+    0,
+    "文档没收尾之前一条结果都不发",
   );
 
   // ⑫ 拍下来却没人领走的快照要删掉(行内代码跨片那一例:字节在前半片就拍了,拼全了却是
@@ -239,19 +274,24 @@ try {
   })(), root));
   assert.equal(readdirSync(uploads).length, before, "没人领走的拷贝不许留在 uploads 里");
 
-  // ⑬ 一个块自己就超过天花板(一整份日志灌进一个段落):放弃管这条消息 —— 一条事件都不发,
-  // 展示端把这几处引用当成「服务端没管过」,退一档去工作目录取。宁可退档,也不按半截正文
-  // 定性。正文仍然一个字都不许改动或吞掉。
+  // ⑬ 一个块自己就超过天花板(一整份日志灌进一个段落):窗口挪不动,于是这一段**不再逐片
+  // 重解析**(否则每来一片都要把这一兆重扫一遍)。但「有没有这张图」照旧由收尾那一遍整篇
+  // 扫描说了算 —— 上一版在这里放弃整份文档、一条事件都不发,于是一条正常正文只因为后面跟
+  // 了一大坨日志就失去全部持久副本。正文仍然一个字都不许改动或吞掉。
   const huge = "开头 ![真图](output/shot.png) " + "填充 ".repeat(400_000);
   const overflowed = await collect(withMarkdownImages((async function* () {
     yield { kind: "text", text: huge } as AgentEvent;
     yield { kind: "done", exitStatus: 0 } as AgentEvent;
   })(), root));
-  assert.deepEqual(attachments(overflowed), [], "裁不动就放弃管,不按半截正文发结果");
+  assert.deepEqual(
+    attachments(overflowed).map((event) => [event.source, !!event.path]),
+    [["output/shot.png", true]],
+    "块大到不值得逐片重解析,也不等于这张图不存在",
+  );
   assert.equal(
     overflowed.filter((event) => event.kind === "text").map((event) => (event as { text: string }).text).join(""),
     huge,
-    "放弃管的只是落图,正文照旧原样转发",
+    "正文照旧原样转发",
   );
 
   // ⑭ 裁剪必须**保住留下来那一段的快照**。红图引用在最后一段里,后面追 8200 字触发裁剪
@@ -289,23 +329,26 @@ try {
   assert.deepEqual(readFileSync(defs[0]!.path!), red, "定义刚写完那一刻就把红图拍下来了");
   assert.deepEqual(readFileSync(defs[1]!.path!), blue, "后一处引用是蓝图");
 
-  // ⑯ 定义**跨过一个窗口**才到:`![真实][shot]` 在最前面,定义在 19 KB 之后。那处引用在
-  // 解析树里还只是一段普通文字(定义没到之前压根不是图片节点),裁掉就等于定义再到也没人
-  // 认领它 —— 这条消息从此没有持久副本(审查第 3 轮 R2:完整正文 1 个节点、服务端 0 条)。
+  // ⑯ 定义**隔着多远**才到,都得认得回那处引用:`![真实][shot]` 在最前面,定义在 70 KB
+  // 之后。那处引用在解析树里还只是一段普通文字(定义没到之前压根不是图片节点),正文一
+  // 按距离裁走,定义再到也没人认领它 —— 这份文档从此没有持久副本,原图一清理就彻底没了。
+  //
+  // 距离**没有上限**,所以任何「攒到 N 就裁」的数都是在猜:上一版猜 32 KB,70 KB 的同一份
+  // 内容就从 1 条结果变成 0 条(审查第 5 轮 R2A 实测:177 字 → 1 条,70037 字 → 0 条)。
+  // 现在正文整份留着,这里的长度只是「比当年那个数大得多」,不是新的那个数。
   const lateDefinition = await collect(withMarkdownImages((async function* () {
-    yield { kind: "text", text: "真实引用：![真实][shot]\n\n" + "普通正文。\n\n".repeat(1600) } as AgentEvent;
+    yield { kind: "text", text: "真实引用：![真实][shot]\n\n" + "普通正文。\n\n".repeat(6000) } as AgentEvent;
     yield { kind: "text", text: "[shot]: output/shot.png\n" } as AgentEvent;
     yield { kind: "done", exitStatus: 0 } as AgentEvent;
   })(), root));
   assert.deepEqual(
-    attachments(lateDefinition).map((event) => event.source),
-    ["output/shot.png"],
-    "后到的定义仍然认得回那处引用",
+    attachments(lateDefinition).map((event) => [event.source, !!event.path]),
+    [["output/shot.png", true]],
+    "隔了 70 KB 的定义仍然认得回那处引用,而且真留下了副本",
   );
 
-  // ⑰ 等定义是有上限的(PENDING_HOLD):正文里一句孤零零的 `![从未定义]` 永远不会有定义,
-  // 不设上限它能把整条消息钉住、最后撞上天花板把这条消息整个放弃掉。所以它只压一段距离,
-  // 之后照旧裁走 —— 同一条消息里**真**的那张图必须照常落盘。
+  // ⑰ 正文里一句孤零零的 `![从未定义]` 永远不会有定义。它既不该把这份文档拖垮,也不该让
+  // 同一份文档里**真**的那张图漏掉 —— 收尾那一遍按整篇认,它本来就不是图片节点。
   const stray = await collect(withMarkdownImages((async function* () {
     yield { kind: "text", text: "孤零零 ![从未定义] 一句。\n\n" + "填充。\n\n".repeat(7000) } as AgentEvent;
     yield { kind: "text", text: "真图：![真图](output/shot.png)\n\n" } as AgentEvent;
@@ -347,15 +390,18 @@ try {
   const definitionPrefix = await collect(withMarkdownImages((async function* () {
     yield { kind: "text", text: "[r]: output/pre.png\n\n" + "普通正文。\n\n".repeat(1600) } as AgentEvent;
     yield { kind: "text", text: "![前置定义][r]\n" } as AgentEvent;
+    // 说完那句话之后文件被重拍 —— 字节必须是**说那句话时**的那一张。
+    writeFileSync(pre, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
     yield { kind: "done", exitStatus: 0 } as AgentEvent;
   })(), root));
   const prefixed = attachments(definitionPrefix);
   assert.deepEqual(
     prefixed.map((event) => event.source),
     ["output/pre.png"],
-    "裁走的那一段里的链接引用定义要带着走,否则后面那处引用一条结果都发不出来",
+    "窗口之外的链接引用定义要带着走,否则这处引用在窗口里压根不是图片节点",
   );
-  assert.deepEqual(readFileSync(prefixed[0]!.path!), red, "拷贝就是它说的那一张");
+  assert.deepEqual(readFileSync(prefixed[0]!.path!), red, "带着定义走,字节才拍得在「说那句话的那一刻」");
 
   // ⑲b 带着走的是**定义环境**,不是正文:定义自己不产生任何可见节点,所以不许凭空多出
   // 一处引用,也不许把同名定义的后一条顶掉(CommonMark 取第一条)。
@@ -379,15 +425,21 @@ try {
   const containerDefinition = await collect(withMarkdownImages((async function* () {
     yield { kind: "text", text: "> [nested]:\n>   output/cross.svg\n\n" + "普通正文。\n\n".repeat(1600) } as AgentEvent;
     yield { kind: "text", text: "![容器定义][nested]\n" } as AgentEvent;
+    writeFileSync(nested, Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" id="after"/>'));
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
     yield { kind: "done", exitStatus: 0 } as AgentEvent;
   })(), root));
   const carried = attachments(containerDefinition);
   assert.deepEqual(
     carried.map((event) => event.source),
     ["output/cross.svg"],
-    "容器里的定义被裁走之后,重写出来的那一行仍然是一条定义",
+    "容器里的定义重写出来的那一行仍然是一条定义",
   );
-  assert.ok(carried[0]!.path, "真有这个文件就必须留下副本");
+  assert.deepEqual(
+    readFileSync(carried[0]!.path!).toString(),
+    '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    "重写出来的定义真的生效了,字节才拍在说那句话的那一刻",
+  );
 
   // ⑲d 重写出来的定义要跟原来**指同一个地方**:带空格的目的地、折行、大小写不同的引用,
   // 一处都不许走丢(目的地一律用 `<>` 包起来,标识符用归一化后的那一份)。
@@ -489,6 +541,117 @@ try {
     "子智能体的跨消息定义要认,主会话的定义不许被它用上",
   );
   assert.deepEqual(attachments(childEvents).map((event) => event.source), [], "主会话这一侧只有定义、没有引用");
+
+  // ㉒ **字节在协议读到那一行的那一刻就冻住,跟消费者快慢无关**(审查第 5 轮 R1)。
+  //
+  // 三家专用适配器都是「readline 收到一行 → push 进 queue → 消费者自己来取」。记账挂在
+  // 下游取事件那一刻时,从 CLI 吐出那一行到我们去读文件之间隔着整条队列和一次可暂停的
+  // yield —— 中间 agent 完全来得及把同一个路径重拍一遍,于是正文写着「修改前是红色」、
+  // 存下来的是后来那张蓝图。实测反例:同一份正文、同一个假 CLI,只把消费端每条事件之后的
+  // 等待从 0 改成 240 ms,两处引用的字节就一起变成蓝色(两条记录甚至指向同一份拷贝)。
+  const timing = join(root, "output", "timing.png");
+  const stub = join(root, "claude-timing.mjs");
+  const line = (payload: unknown) => `process.stdout.write(${JSON.stringify(JSON.stringify(payload) + "\n")});`;
+  const message = (text: string) => [
+    { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text } } },
+    { type: "assistant", message: { model: "claude-fixture", content: [{ type: "text", text }] } },
+  ];
+  writeFileSync(stub, [
+    'import { writeFileSync } from "node:fs";',
+    `writeFileSync(${JSON.stringify(timing)}, Buffer.from(${JSON.stringify(red.toString("base64"))}, "base64"));`,
+    // 先说一句别的:消费者拿着这一条慢慢办事的那会儿,下面两行早就到了队列里 —— 这正是
+    // 「队列先攒着」的真实形状,也是把记账挂在下游时读晚了的那一段窗口。
+    ...message("开场白。\n").map(line),
+    ...message("修改前是红色：![修改前](output/timing.png)\n").map(line),
+    // CLI 自己把文件重拍成蓝色 —— 它跟我们读文件之间的竞争是真的,不是测试摆出来的。
+    "await new Promise((done) => setTimeout(done, 120));",
+    `writeFileSync(${JSON.stringify(timing)}, Buffer.from(${JSON.stringify(blue.toString("base64"))}, "base64"));`,
+    ...message("\n修改后是蓝色：![修改后](output/timing.png)\n").map(line),
+  ].join("\n"));
+  const timingChild = spawn(process.execPath, [stub], { stdio: ["pipe", "pipe", "pipe"] });
+  timingChild.stdin?.end();
+  const timed = attachments(await collectSlowly(
+    parseClaudeStream(timingChild as never, undefined, "claude", undefined, null, undefined, undefined, undefined, root),
+    240,
+  ));
+  assert.equal(timed.length, 2, "两处引用两条结果");
+  assert.deepEqual(readFileSync(timed[0]!.path!), red, "慢消费者也不能把「修改前」读成后来那张蓝图");
+  assert.deepEqual(readFileSync(timed[1]!.path!), blue, "第二处引用是改过之后的");
+  assert.notEqual(timed[0]!.path, timed[1]!.path, "两处引用各有各的字节,不许指到同一份拷贝");
+
+  // ㉓ 带着走的定义**原样写回标识符**:`[a\*b]` 的标识符里那个反斜杠是源码转义,再转义一遍
+  // 就变成了字面反斜杠,同一篇文档里的 `![图][a\*b]` 归一出来跟它对不上(审查第 5 轮 R2B:
+  // 完整正文 1 图、带着走之后 0 图)。这里从字节那头验 —— 对不上时那处引用在窗口里压根不是
+  // 图片节点,字节就要拖到收尾才读,读到的是重拍之后那张。
+  const escaped = join(root, "output", "escaped.png");
+  writeFileSync(escaped, red);
+  const escapedLabel = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "[a\\*b]: output/escaped.png\n\n" + "普通正文。\n\n".repeat(1600) } as AgentEvent;
+    yield { kind: "text", text: "![转义标签][a\\*b]\n" } as AgentEvent;
+    writeFileSync(escaped, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  const escapedShots = attachments(escapedLabel);
+  assert.deepEqual(escapedShots.map((event) => event.source), ["output/escaped.png"], "转义标签的引用照样是一张图");
+  assert.deepEqual(readFileSync(escapedShots[0]!.path!), red, "重写出来的定义要跟原来是同一个标识符");
+
+  // ㉔ **父回合收尾不等于子文档收尾**(审查第 5 轮 R2C)。
+  //
+  // 抽屉里那份正文跨父回合累加成同一份文档(web 的 nativeWorkModel 按同一个 id 合并),
+  // 所以上一个回合给定义、这一个回合引用它是真实用法。跟着父回合一起把子账本清掉的那一版,
+  // 这处引用连图片节点都不是 —— 展示端整篇解析是 1 图,流里 0 条。
+  //
+  // 反过来主会话**就是**一回合一份文档(一个回合一个气泡),跨回合的定义本来就不该认。
+  const across = join(root, "output", "across.svg");
+  writeFileSync(across, Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" id="across"/>'));
+  const childAcross = await collect(withMarkdownImages((async function* () {
+    yield childActivity("toolu_across", { kind: "text", text: "[s]: output/across.svg\n" });
+    yield { kind: "text", text: "[m]: output/across.svg\n" } as AgentEvent;
+    yield { kind: "turnEnd" } as AgentEvent;
+    yield childActivity("toolu_across", { kind: "text", text: "![跨父回合][s]\n" });
+    yield { kind: "text", text: "![主会话跨回合][m]\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  const acrossChild = childAcross.flatMap((event) => {
+    const work = event.kind === "tool" ? event.nativeWork : undefined;
+    return work?.type === "activity" && work.event.kind === "attachment" ? [work.event] : [];
+  });
+  assert.deepEqual(
+    acrossChild.map((event) => [event.source, !!event.path]),
+    [["output/across.svg", true]],
+    "子抽屉跨父回合是同一份文档:上一回合的定义这一回合还认得",
+  );
+  assert.deepEqual(attachments(childAcross).map((event) => event.source), [], "主会话一回合一份文档,跨回合的定义不该认");
+
+  // ㉔b 子智能体自己收工了,它那份文档当场结账 —— 不必等整条流到头。
+  const closing = await collect(withMarkdownImages((async function* () {
+    yield childActivity("toolu_close", { kind: "text", text: "![收工截图](output/across.svg)\n" });
+    yield { kind: "tool", name: "Agent", nativeWork: { type: "agent", id: "toolu_close", status: "completed" } } as AgentEvent;
+    yield { kind: "text", text: "父会话还在说话。\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  const closedAt = closing.findIndex((event) => {
+    const work = event.kind === "tool" ? event.nativeWork : undefined;
+    return work?.type === "activity" && work.event.kind === "attachment";
+  });
+  const doneAt = closing.findIndex((event) => event.kind === "done");
+  assert.ok(closedAt > 0 && closedAt < doneAt - 1, "子智能体收工那一刻就结账,不是拖到 done");
+
+  // ㉕ **上游抛错也要收口**(审查第 5 轮 R3)。正常收尾那几句被异常跳过,finally 里的清理
+  // 就把「字节已经拍下、附件记录还没发出」的拷贝当成无人引用的垃圾删掉 —— 于是刚才还看得
+  // 见的截图,清理原图之后再打开就没有了(实测:attachments 为空、新文件 0 个)。
+  const crash = join(root, "output", "crash.png");
+  writeFileSync(crash, red);
+  const crashed = await collectUntilThrow(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "崩之前这张图已经在屏幕上了：![崩前](output/crash.png)\n" } as AgentEvent;
+    throw new Error("fixture parser failed");
+  })(), root));
+  assert.match(String((crashed.error as Error)?.message), /fixture parser failed/, "异常照旧往上抛,不许吞掉");
+  const crashShots = attachments(crashed.events);
+  assert.deepEqual(crashShots.map((event) => event.source), ["output/crash.png"], "抛错之前先把已经露过脸的正文交代完");
+  rmSync(crash);
+  assert.deepEqual(readFileSync(crashShots[0]!.path!), red, "那份拷贝不许被清理当成垃圾删掉");
 
   console.log("自定义解析器的图片落盘回归通过");
 } finally {

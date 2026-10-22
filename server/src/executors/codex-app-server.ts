@@ -6,7 +6,7 @@ import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
-import { withMarkdownImages } from "./markdown-image-stream.js";
+import { markdownImageSink, settleMarkdownImages } from "./markdown-image-stream.js";
 import {
   formatFailureForTimeline,
   formatSessionPoisonForTimeline,
@@ -99,11 +99,18 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const childModelVersions = new Map<string, number>();
   const structuredErrors: string[] = [];
   const activityBuffer = new NativeActivityBuffer();
+  // 正文里的图**不在这份协议解析里收**:一条 agentMessage 只是一片碎片,上一条消息给定义、
+  // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。主会话与每个子 thread 各一笔
+  // 账,统一按「一份文档」记(见 markdown-image-stream.ts)。
+  //
+  // 账记在 emit 处、不是记在下游:`queue` 先攒着,挂在消费者取事件那一刻等于把读文件推迟
+  // 到整条队列之后,中间 agent 来得及把同一个路径重拍一遍(审查第 5 轮 R1)。
+  const images = markdownImageSink(opts.cwd);
 
   const emit = (event: AgentEvent) => {
     const events = activityBuffer.push(event);
     if (!events.length) return;
-    queue.push(...events);
+    for (const settled of events) queue.push(...images.note(settled));
     wake?.();
     wake = null;
   };
@@ -528,10 +535,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   if (opts.reattach?.completedTurn) void completeTurn(opts.reattach.completedTurn).catch((error) => finish(1, String(error)));
 
   let steerTail = Promise.resolve();
-  // 正文里的图**不在这份协议解析里收**:一条 agentMessage 只是一片碎片,上一条消息给定义、
-  // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。主会话与每个子 thread 各一笔账,
-  // 统一由这一层按「一份文档」记(见 markdown-image-stream.ts)。
-  const events = withMarkdownImages((async function* (): AsyncIterable<AgentEvent> {
+  const events = settleMarkdownImages((async function* (): AsyncIterable<AgentEvent> {
     while (true) {
       if (queue.length) {
         yield queue.shift()!;
@@ -540,7 +544,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       if (finished) return;
       await new Promise<void>((resolve) => { wake = resolve; });
     }
-  })(), opts.cwd);
+  })(), images);
   return {
     cliCommand: opts.cliCommand,
     goal: () => native.goal,

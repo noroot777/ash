@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  definitionLine,
   destinationFilePath,
   hasUrlScheme,
   isNetworkDestination,
   markdownImageRefs,
+  scanMarkdownImages,
 } from "@ash/shared/markdown-images";
 import {
   imageStore,
@@ -121,6 +123,24 @@ try {
   // 解不开的转义原样留着:合不合法、爬没爬出根由读取端的门禁判,不在这一层(与 web 的
   // decodeSafe 同口径 —— 两端差一条就又是一处「一边看得见、一边不存」)。
   assert.equal(destinationFilePath("out/%ZZ.png"), "out/%ZZ.png");
+
+  // ── 重写出来的那一行,必须还是同一条定义 ────────────────────────────────────
+  // 带着走的定义按解析树重写(definitionLine)。重写一遍就得能再被同一个解析器认回来,
+  // 而且标识符要跟文档里那处引用对得上 —— 对不上就等于没带:完整正文 1 张图,带着走之后
+  // 0 张(审查第 5 轮 R2B)。标识符是「源码标签按空白和大小写归一」的产物,**源码里的
+  // 反斜杠转义原样留在里面**,再转义一遍就把它变成了字面反斜杠。
+  for (const label of ["plain", "Mixed Case", "a\\*b", "a\\[b", "带 空格", "a\\]b"]) {
+    for (const url of ["output/shot.png", "output/a b.png", "output/q%3Fb.png", "out/paren(1).png"]) {
+      const [definition] = scanMarkdownImages(`[${label}]: <${url}>`).definitions;
+      assert.ok(definition, `这一行本来就该是一条定义：[${label}]: <${url}>`);
+      const rewritten = `${definitionLine(definition!)}\n\n![图][${label}]`;
+      assert.deepEqual(
+        markdownImageRefs(rewritten).map((ref) => ref.destination),
+        [url],
+        `重写之后仍要认得回同一处引用、指同一个地方：[${label}]: <${url}>`,
+      );
+    }
+  }
 
   // ── 同一个路径被重拍过:两次引用各自那一份字节 ───────────────────────────────
   // 这是「结论说修改后、画出来是修改前」的来源(审查第 1 轮 F1 实例 1)。按内容定身份、

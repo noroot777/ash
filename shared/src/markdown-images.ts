@@ -331,14 +331,20 @@ export type MarkdownDefinition = {
  * R2)。列表项里的缩进定义、折行写的定义同理。
  *
  * 所以按解析树重写:标识符用**归一化后**的那一份(引用侧也按同样规则归一,大小写/空白怎么
- * 写都对得上),目的地一律用 `<>` 包起来,于是空格、括号都不必再分情形。标签里的方括号与
- * 目的地里的尖括号转义掉。title 不带 —— 这段前缀只进我们自己的再解析,一个字都不给用户看,
- * 而 title 不影响「有哪几处图片引用、各指向哪儿」。
+ * 写都对得上),目的地一律用 `<>` 包起来,于是空格、括号都不必再分情形。title 不带 ——
+ * 这段前缀只进我们自己的再解析,一个字都不给用户看,而 title 不影响「有哪几处图片引用、
+ * 各指向哪儿」。
+ *
+ * **标识符原样写回去,一个字符都不再转义**。它是「源码里的标签按空白和大小写归一」的产物,
+ * 源码里的反斜杠转义**原样留在里面**:`[a\*b]` 的标识符就是 `a\*b`。再转义一遍会把那个
+ * 反斜杠变成字面反斜杠(`a\\*b`),于是同一篇文档里的 `![图][a\*b]` 归一出来的标识符跟它
+ * 对不上 —— 完整正文明明是 1 张图,带着走之后变成 0 张(审查第 5 轮 R2B)。方括号同理:
+ * 标签里的 `[`/`]` 在源码里本来就必须转义,归一化不会把它脱掉,所以不存在「没转义的方括号」
+ * 要我们补。目的地那头反过来 —— 它是**脱过转义**的 URL,所以 `<>` 和反斜杠要重新转义。
  */
 export function definitionLine(definition: MarkdownDefinition): string {
-  const label = definition.identifier.replace(/([[\]\\])/g, "\\$1");
   const destination = definition.destination.replace(/([<>\\])/g, "\\$1");
-  return `[${label}]: <${destination}>`;
+  return `[${definition.identifier}]: <${destination}>`;
 }
 
 export type MarkdownScan = {
