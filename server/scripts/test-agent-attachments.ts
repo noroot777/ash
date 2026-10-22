@@ -69,7 +69,7 @@ try {
   // 同一张图再被引用一次:仍要报出来(指向同一份拷贝),否则那一句配不上附件、一个字都不画。
   // `ref` 必须是**新的**身份:字节可以内容寻址去重,引用关联不能(审查第 1 轮 F1)。
   const again = persistMarkdownImages(`![重复](<${localImage}>)`, seen, { directory: uploads });
-  assert.deepEqual(again, [{ path: markdown[0]!.path, source: localImage, ref: markdown[0]!.ref + 1 }]);
+  assert.deepEqual(again, [{ path: markdown[0]!.path, source: localImage, ref: markdown[0]!.ref + 1, pos: 0 }]);
   assert.equal(persistMarkdownImages("![远程](https://example.com/image.png)", seen, { directory: uploads }).length, 0);
 
   // 相对路径按工作目录解析 —— agent 站在工作目录里写 `![](output/x.png)` 是最自然的
@@ -244,7 +244,7 @@ try {
   const retryStore: ImageStore = imageStore();
   assert.deepEqual(
     persistMarkdownImages(`![失败](<${localImage}>)`, retryStore, { directory: blocked }),
-    [{ source: localImage, ref: 0, lost: true }],
+    [{ source: localImage, ref: 0, pos: 0, lost: true }],
     "写不进去要如实报(不抛:抛出去会变成没人监听的 uncaughtException),而且得报成 lost ——"
       + "**字节读到了、存不下来**和「压根没有这个文件」是两件事:前者那一刻的画面已经丢了,"
       + "展示端必须作废那一处(现在去读文件拿到的是后来的画面);后者文件可能还好好躺在工作"

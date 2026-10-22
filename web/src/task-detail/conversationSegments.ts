@@ -40,7 +40,7 @@ export type AgentContentSegment = {
  * `lost: true` = 服务端当时**读到了字节、写盘失败了**，这一刻的画面丢了（见 shared 的
  * attachment 事件）——那一处只能显式作废，不能拿「现在的文件」顶上。
  */
-export type AttachmentSource = { path?: string; source: string; ref?: number; lost?: boolean };
+export type AttachmentSource = { path?: string; source: string; ref?: number; pos?: number; lost?: boolean };
 
 /**
  * 执行事件要插进正文中间了,切点落在哪 —— 返回 0 = 这一刻切不动,别切。
@@ -110,7 +110,7 @@ export function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
 function attachmentSources(entries: TracedAttachmentEntry[]): AttachmentSource[] | undefined {
   const sources = entries
     .filter((entry) => !!entry.event.source)
-    .map((entry) => ({ path: entry.event.path, source: entry.event.source!, ref: entry.event.ref, lost: entry.event.lost }));
+    .map((entry) => ({ path: entry.event.path, source: entry.event.source!, ref: entry.event.ref, pos: entry.event.pos, lost: entry.event.lost }));
   return sources.length ? sources : undefined;
 }
 
@@ -191,7 +191,7 @@ export function contentSegments(
       // Markdown 的语法边界,所以这里只收集,不动分段。
       if (entry.event.path && !current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
       if (entry.event.source) {
-        (current.attachmentSources ??= []).push({ path: entry.event.path, source: entry.event.source, ref: entry.event.ref, lost: entry.event.lost });
+        (current.attachmentSources ??= []).push({ path: entry.event.path, source: entry.event.source, ref: entry.event.ref, pos: entry.event.pos, lost: entry.event.lost });
       }
       continue;
     }

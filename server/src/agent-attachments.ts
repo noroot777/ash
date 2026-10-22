@@ -210,7 +210,7 @@ function readImageAt(destination: string, cwd?: string): ImageBytes | null {
  *     我们**丢了**,而文件后来可能已经被重拍过 —— 此时拿「现在的文件」去画就是把后来的画面
  *     当成旧结论(审查第 3 轮 R1 同类位置)。展示端据此显式作废,不猜。
  */
-export type PersistedMarkdownImage = { source: string; ref: number; path?: string; lost?: boolean };
+export type PersistedMarkdownImage = { source: string; ref: number; pos?: number; path?: string; lost?: boolean };
 
 /**
  * 流式阶段对**一处引用**的交代 —— 不是「拍到的那份字节」,而是**这处引用的保存状态**。
@@ -336,9 +336,13 @@ export function persistMarkdownImageRefs(
       copy = stored?.path ?? null;
       lost = !!stored?.failed;
     }
+    // `pos` 是这处引用的文档节点身份(事件、持久账、展示端三方对同一处的称呼),见 shared
+    // 的 attachment 事件:恢复补回的记录靠它排回文档顺序。
     persisted.push(copy
-      ? { source: ref.destination, ref: id, path: copy }
-      : lost ? { source: ref.destination, ref: id, lost: true } : { source: ref.destination, ref: id });
+      ? { source: ref.destination, ref: id, pos: ref.start, path: copy }
+      : lost
+        ? { source: ref.destination, ref: id, pos: ref.start, lost: true }
+        : { source: ref.destination, ref: id, pos: ref.start });
   }
   return persisted;
 }

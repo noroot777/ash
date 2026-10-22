@@ -15,6 +15,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
+import { markdownImageRefs } from "@ash/shared/markdown-images";
 import { childActivity } from "./executors/native-agent-activity.js";
 import type {
   MarkdownImageAccounting,
@@ -116,14 +117,26 @@ export async function loadMarkdownImageSeed(
   sessionId: string,
   opts: { mainTurnStartedAt?: string } = {},
 ): Promise<Map<string, MarkdownImageSeedDoc> | undefined> {
-  const docs = new Map<string, MarkdownImageSeedDoc>();
-  const doc = (id: string): MarkdownImageSeedDoc => {
+  type SeedWork = {
+    text: string;
+    refs: number;
+    /** 已交代引用的起点(事件/账本里的 pos)—— 推导「交代推进到哪」的唯一可信依据。 */
+    delivered: Set<number>;
+    /** 临时账里冻结的字节与 lost 结论,同一处取最后一笔。 */
+    snapshots: Map<number, { pos: number; destination: string; path?: string; lost?: boolean }>;
+  };
+  const docs = new Map<string, SeedWork>();
+  const doc = (id: string): SeedWork => {
     let found = docs.get(id);
     if (!found) {
-      found = { text: "", refs: 0 };
+      found = { text: "", refs: 0, delivered: new Set(), snapshots: new Map() };
       docs.set(id, found);
     }
     return found;
+  };
+  const count = (seeded: SeedWork, ref: number, pos: unknown) => {
+    seeded.refs = Math.max(seeded.refs, ref + 1);
+    if (typeof pos === "number") seeded.delivered.add(pos);
   };
   for (const entry of await readTraceEntries(taskId, sessionId)) {
     const main = opts.mainTurnStartedAt !== undefined && entry.turnStartedAt === opts.mainTurnStartedAt;
@@ -132,26 +145,53 @@ export async function loadMarkdownImageSeed(
       continue;
     }
     if (main && entry.event.kind === "attachment" && typeof entry.event.ref === "number" && entry.event.ref < SYNTH_REF_BASE) {
-      const seeded = doc("");
-      seeded.refs = Math.max(seeded.refs, entry.event.ref + 1);
+      count(doc(""), entry.event.ref, entry.event.pos);
       continue;
     }
     const child = childEventOf(entry.event);
     if (!child) continue;
     if (child.event.kind === "text" && child.event.text) doc(child.id).text += child.event.text;
     else if (child.event.kind === "attachment" && typeof child.event.ref === "number" && child.event.ref < SYNTH_REF_BASE) {
-      const seeded = doc(child.id);
-      seeded.refs = Math.max(seeded.refs, child.event.ref + 1);
+      count(doc(child.id), child.event.ref, child.event.pos);
     }
   }
   for (const line of await readJournal(taskId, sessionId)) {
-    if (!line.final || typeof line.ref !== "number" || line.ref >= SYNTH_REF_BASE) continue;
     if (line.doc == null && line.turnStartedAt !== opts.mainTurnStartedAt) continue;
-    const seeded = doc(line.doc ?? "");
-    seeded.refs = Math.max(seeded.refs, line.ref + 1);
+    if (line.final) {
+      if (typeof line.ref !== "number" || line.ref >= SYNTH_REF_BASE) continue;
+      count(doc(line.doc ?? ""), line.ref, line.pos);
+    } else {
+      // 只冻结、没交代的那几笔:字节(或 lost 结论)接回种子,接回的 sink 交代到那一处时
+      // 用**当时**的拷贝,而不是现在去读盘。同一处取最后一笔(目的地可能改过)。
+      const seeded = doc(line.doc ?? "");
+      seeded.snapshots.set(line.pos, {
+        pos: line.pos,
+        destination: line.source,
+        ...(line.path ? { path: line.path } : {}),
+        ...(line.lost ? { lost: true } : {}),
+      });
+    }
   }
-  for (const [id, seeded] of docs) if (!seeded.text && !seeded.refs) docs.delete(id);
-  return docs.size ? docs : undefined;
+  const out = new Map<string, MarkdownImageSeedDoc>();
+  for (const [id, seeded] of docs) {
+    if (!seeded.text && !seeded.refs) continue;
+    // 交代推进到哪,只信得过「每一条已交代记录都能在正文里对上节点」的情形:逐条按 pos 对
+    // 回正文节点,对满 refs 条 ⇒ 交代线 = 最后一条的节点终点,之后的引用由接回的 sink 继续
+    // 交代(审查第 8 轮 R1)。对不满(老数据没有 pos、正文没落全)就退回老口径 —— 整段当作
+    // 交代过,宁可少交代也不重复交代(重复会让展示端同目的地多一条,整组作废)。
+    const nodes = markdownImageRefs(seeded.text);
+    const matched = nodes.filter((node) => seeded.delivered.has(node.start));
+    const emitted = matched.length === seeded.refs
+      ? matched.reduce((end, node) => Math.max(end, node.end), 0)
+      : seeded.text.length;
+    out.set(id, {
+      text: seeded.text,
+      refs: seeded.refs,
+      emitted,
+      ...(seeded.snapshots.size ? { snapshots: [...seeded.snapshots.values()] } : {}),
+    });
+  }
+  return out.size ? out : undefined;
 }
 
 /** 文档在对账里的身份:子文档跨回合是同一份,主文档一回合一份(sink 的 Ledger 同一口径)。 */
@@ -163,6 +203,7 @@ function imageEvent(line: JournalLine, ref: number): SessionTraceEvent {
     kind: "attachment",
     source: line.source,
     ref,
+    pos: line.pos,
     ...(line.path ? { path: line.path } : {}),
     ...(line.lost ? { lost: true } : {}),
   };
@@ -178,13 +219,15 @@ function imageEvent(line: JournalLine, ref: number): SessionTraceEvent {
  *   · 已交代、没写进 trace(final):按原身份补一条 —— 字节、来源、身份都是真的,只是
  *     消费者死在落笔之前。
  *   · 只冻结、没交代(临时账):消费者死了,交代那一步永远不会来。补一条**合成身份**的
- *     记录(SYNTH_REF_BASE 起,不跟真身份撞),让展示端配对认领那份字节。只补**正文真
- *     到了 trace** 的那一处:正文没落盘的引用屏幕上本来就不存在,硬补只会让「第 n 处 ↔
- *     第 n 条」的对账多出一条,反把已显示的同目的地引用拖成作废。
+ *     记录(SYNTH_REF_BASE 起,不跟真身份撞),让展示端配对认领那份字节。
+ * 两类都只补**已落盘正文里真有这个节点、目的地也对得上**的那一处(见 nodeAt):正文没落盘
+ * 的引用屏幕上本来就不存在,硬补只会让「第 n 处 ↔ 第 n 条」的对账多出一条,反把已显示的
+ * 同目的地引用拖成作废 —— final 一样会死在落笔前的半路上(审查第 8 轮 R1 实测 B)。
  *
  * 追加在末尾即可:展示端按 turnStartedAt 键入分组(conversationTraceGroups),合成行自己
- * 带着原回合的起点;同一目的地内的次序按(文档, 回合, 位置)排,正好排在已交代那些后面
- * (交代是按位置前缀推进的,缺的只会是后缀)。
+ * 带着原回合的起点;同一目的地内的**文档顺序**不靠追加位置表达 —— 每条记录都带着节点身份
+ * `pos`,展示端按它把同目的地的记录排回文档顺序再配对(审查第 8 轮 R1 实测 A:接回后新流
+ * 先交付、补回行在后,按出场顺序配就是红蓝对调)。
  */
 export async function mergeImageJournal(
   taskId: string,
@@ -220,11 +263,27 @@ export async function mergeImageJournal(
   for (const line of journal) {
     if (line.final) finalsAt.add(`${docKey(line.doc, line.turnStartedAt)}\u0000${line.pos}`);
   }
+  // 「真实正文里的对应节点」:恢复只认**已落盘正文**里确实存在、目的地也对得上的那一处。
+  // 身份对不上节点的(正文没写进 trace 的后半截、目的地后来改写过的旧笔),final 和临时账
+  // 一条都不补 —— 补了就是让展示端拿「正文里不存在的引用」去配对:同目的地多出一条,
+  // 原本已交付的那几处整组被判作废(审查第 8 轮 R1 实测 B:正文只有 1 处 shot.png,恢复出
+  // 2 条记录,好图变「图取不到」)。
+  const nodes = new Map<string, Map<number, string>>();
+  const nodeAt = (key: string, pos: number): string | undefined => {
+    let found = nodes.get(key);
+    if (!found) {
+      found = new Map();
+      for (const node of markdownImageRefs(texts.get(key) ?? "")) found.set(node.start, node.destination);
+      nodes.set(key, found);
+    }
+    return found.get(pos);
+  };
   const synth: { line: JournalLine; event: SessionTraceEvent }[] = [];
   const provisional = new Map<string, JournalLine>();
   for (const line of journal) {
     if (line.final) {
       if (typeof line.ref !== "number") continue;
+      if (nodeAt(docKey(line.doc, line.turnStartedAt), line.pos) !== line.source) continue;
       const key = tracedKey(line.turnStartedAt, line.doc, line.source, line.ref);
       if (traced.has(key)) continue;
       traced.add(key);
@@ -237,8 +296,7 @@ export async function mergeImageJournal(
   let bump = 0;
   for (const [key, line] of provisional) {
     if (finalsAt.has(key)) continue;
-    const text = texts.get(docKey(line.doc, line.turnStartedAt));
-    if (!text || !text.startsWith("![", line.pos)) continue;
+    if (nodeAt(docKey(line.doc, line.turnStartedAt), line.pos) !== line.source) continue;
     synth.push({ line, event: imageEvent(line, SYNTH_REF_BASE + bump++) });
   }
   if (!synth.length) return entries;

@@ -38,7 +38,10 @@ export type AgentEvent =
   // 按字节去重会把第三处引用整条抹掉,展示端队列短一条,正文写着「恢复红色」、画出来是
   // 蓝色(审查第 1 轮 F1)。字节可以内容寻址去重,**引用关联不能**。
   // `source`/`ref` 都缺省 = 不是正文引用来的(工具结果截图之类),那种只铺卡片、不进正文。
-  | { kind: "attachment"; path?: string; source?: string; ref?: number; lost?: boolean }
+  // `pos` = 这处引用在它那份文档全文里的绝对起点 —— 引用的**文档节点身份**。恢复补回的
+  // 记录只能排在既有 trace 之后,事件顺序不再天然等于文档顺序;展示端按 pos 把同目的地的
+  // 记录排回文档顺序再配对(审查第 8 轮 R1:重启接回后红蓝对调)。缺省 = 老记录,没有补回行。
+  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean }
   | { kind: "session"; cliSessionId: string }
   // backend 旁注；时间与落盘 sentinel 共用，实时/刷新布局才不会漂。
   // level="notice" = 这条是**结算说明**(这一轮为什么落成这个状态),不是出了什么岔子。
@@ -87,7 +90,7 @@ export type TurnTraceEvent = { kind: "tool" | "thinking"; label: string; detail?
  * 这儿也兑现得了:少了它,会话流里画的是「说那句话时的快照」,讨论区画的是「现在的文件」
  * (审查第 1 轮 F1 同类路径)。
  */
-export type TurnImageRef = { path?: string; source: string; ref?: number; lost?: boolean };
+export type TurnImageRef = { path?: string; source: string; ref?: number; pos?: number; lost?: boolean };
 
 // SSE envelope pushed to the web client.
 export type ServerEvent =

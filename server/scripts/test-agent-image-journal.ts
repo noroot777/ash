@@ -1,15 +1,19 @@
 // 「正文里的图」的持久账本(agent-image-journal.ts)回归 —— 审查第 7 轮 R2 第 2 行、R3。
 //
-// 验三件事,全都拿**真写入**摆出来(真 trace 文件、真消费者、真账本 jsonl):
+// 验的事(全都拿**真写入**摆出来:真 trace 文件、真消费者、真账本 jsonl):
 //   · 消费者死在「已交代」与「写进 trace」之间:按原身份把那条记录补回重建结果;
-//   · 消费者死在交代之前(只有冻结的临时账):补一条合成身份的记录,但**只补正文真到了
-//     trace 的那一处**,正文没落盘的引用一条都不补(硬补会把展示端的配对计数弄失衡);
-//   · 续聊种子:从 trace + 账本读出每份子文档「写到哪了、用掉几号」。
+//   · 消费者死在交代之前(只有冻结的临时账):补一条合成身份的记录;
+//   · final 和临时账都**只补已落盘正文里真有这个节点、目的地也对得上**的那一处(审查第 8
+//     轮 R1 实测 B:没消费的正文补出 final,1 处引用 2 条记录,好图反被判作废);
+//   · 续聊种子:从 trace + 账本读出每份文档「写到哪了、用掉几号、交代推进到哪、冻了什么」;
+//   · 未交代引用跨重启要**继续交代**,字节用重启前冻结的那份(审查第 8 轮 R1 实测 A);
+//   · 「读到了、写盘失败」(lost)的结论随临时账持久化,重建后拦住「读后来的文件」。
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
+import { markdownImageRefs } from "@ash/shared/markdown-images";
 
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const red = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 1)]);
@@ -17,7 +21,8 @@ const blue = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 2
 const root = mkdtempSync(join(tmpdir(), "ash-image-journal-"));
 process.env.ASH_UPLOADS_DIR = join(root, "data", "uploads");
 process.env.ASH_RUNS_DIR = join(root, "data", "runs");
-const { withMarkdownImages } = await import("../src/executors/markdown-image-stream.js");
+const { markdownImageSink, withMarkdownImages } = await import("../src/executors/markdown-image-stream.js");
+const { eventQueue } = await import("../src/executors/event-queue.js");
 const { childActivity } = await import("../src/executors/native-agent-activity.js");
 const { loadMarkdownImageSeed, markdownImageAccounting, mergeImageJournal } = await import("../src/agent-image-journal.js");
 const { appendSessionTrace, parseSessionTrace, sessionTracePath } = await import("../src/transcript.js");
@@ -31,7 +36,7 @@ const readTrace = (taskId: string, sessionId: string) =>
 const shots = (entries: { event: { kind: string } }[]) =>
   entries.flatMap((entry) => {
     const event = entry.event as AgentEvent;
-    if (event.kind === "attachment") return [{ ...entry, source: event.source, ref: event.ref, path: event.path }];
+    if (event.kind === "attachment") return [{ ...entry, source: event.source, ref: event.ref, path: event.path, pos: event.pos, lost: event.lost }];
     const work = event.kind === "tool" ? event.nativeWork : undefined;
     if (work?.type === "activity" && work.event.kind === "attachment") {
       return [{ ...entry, doc: work.id, source: work.event.source, ref: work.event.ref, path: work.event.path }];
@@ -155,6 +160,111 @@ try {
       resumed.flatMap((event) => (event.kind === "attachment" ? [[event.ref, event.source, !!event.path]] : [])),
       [[1, "carried.png", true]],
       "接回后主文档身份从 1 号接着发,重启前的定义照旧认得",
+    );
+  }
+
+  // ⑥ **未交代引用跨重启**(审查第 8 轮 R1 实测 A:红蓝对调)。重启前:待定引用把后面那
+  // 处红图扣着没交代,正文已落 trace、字节已冻结(临时账)。接回后重拍成蓝、继续说蓝图。
+  // 种子必须核实「已交代 = 前 0 条」→ 交代线回到 0,接回的 sink 把红图**继续交代**出去:
+  // 文档顺序红前蓝后、字节各是说到它那一刻的那份,红图用的是重启前冻结的拷贝。
+  {
+    const taskId = "task-restart-order";
+    const sessId = "sess-restart-order";
+    const shot = join(root, "shot.png");
+    writeFileSync(shot, red);
+    const text1 = { kind: "text", text: "等稍后的定义：![未定][never]\n\n修改前是红色：![修改前](shot.png)\n\n" } as AgentEvent;
+    const sink1 = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN));
+    sink1.capture(text1);
+    for (const event of sink1.release(text1)) appendSessionTrace(taskId, sessId, TURN, event as never);
+    sink1.dispose();
+    assert.equal(shots(readTrace(taskId, sessId)).length, 0, "前提:红图被待定引用扣着,重启前没交代");
+    const seed = await loadMarkdownImageSeed(taskId, sessId, { mainTurnStartedAt: TURN });
+    writeFileSync(shot, blue);
+    for await (const event of withMarkdownImages((async function* () {
+      yield { kind: "text", text: "修改后是蓝色：![修改后](shot.png)\n\n" } as AgentEvent;
+      yield { kind: "done", exitStatus: 0 } as AgentEvent;
+    })(), root, markdownImageAccounting(taskId, sessId, TURN, seed))) {
+      if (event.kind === "text" || event.kind === "attachment") appendSessionTrace(taskId, sessId, TURN, event as never);
+    }
+    const merged = shots(await mergeImageJournal(taskId, sessId, readTrace(taskId, sessId)));
+    assert.deepEqual(
+      merged.map((shot2) => [shot2.ref, colorOf(shot2.path)]),
+      [[0, "RED"], [1, "BLUE"]],
+      "接回后继续交代:红图 0 号在前(重启前冻结的那份字节)、蓝图 1 号在后",
+    );
+    assert.ok(
+      merged.every((item) => typeof item.pos === "number") && merged[0]!.pos! < merged[1]!.pos!,
+      "每条记录带文档节点身份 pos,且与文档顺序一致",
+    );
+  }
+
+  // ⑦ **尚未消费的正文不许补出 final**(审查第 8 轮 R1 实测 B:1 处引用恢复出 2 条记录,
+  // 已交付的好图反被拖成作废)。第二段正文连同它的 attachment 都在队列里没被消费:协议
+  // 入口已经写了最终账,但那段正文从没落盘 —— 恢复时按已落盘正文核对节点,这条不补。
+  {
+    const taskId = "task-final-ghost";
+    const sessId = "sess-final-ghost";
+    const shot = join(root, "shot2.png");
+    writeFileSync(shot, red);
+    const sink = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN));
+    const queue = eventQueue({ images: sink });
+    queue.push({ kind: "text", text: "已交付：![修改前](shot2.png)\n\n" } as AgentEvent);
+    const iterator = queue.drain()[Symbol.asyncIterator]();
+    for (let index = 0; index < 2; index += 1) {
+      const next = await iterator.next();
+      if (!next.done) appendSessionTrace(taskId, sessId, TURN, next.value as never);
+    }
+    writeFileSync(shot, blue);
+    queue.push({ kind: "text", text: "尚未写入：![修改后](shot2.png)\n\n" } as AgentEvent);
+    await iterator.return?.();
+    sink.dispose();
+    const bare = readTrace(taskId, sessId);
+    const persistedText = bare.flatMap((entry) => (entry.event.kind === "text" ? [entry.event.text] : [])).join("");
+    const merged = shots(await mergeImageJournal(taskId, sessId, bare));
+    assert.equal(markdownImageRefs(persistedText).length, 1, "前提:已落盘正文只有 1 处引用");
+    assert.deepEqual(
+      merged.map((shot2) => [shot2.source, colorOf(shot2.path)]),
+      [["shot2.png", "RED"]],
+      "恢复结果与已落盘正文一一对应:没落盘那处的 final 不补,已交付的红图原样",
+    );
+  }
+
+  // ⑧ **「字节读到了、写盘失败」的结论也要持久化**(审查第 8 轮 R1 同类位置):消费者死后
+  // 刷新重建,这处引用必须有一条 lost 记录拦着,否则前端会退去读后来的文件。
+  {
+    const taskId = "task-lost";
+    const sessId = "sess-lost";
+    const green = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 3)]);
+    writeFileSync(join(root, "lost.png"), green);
+    const uploadsDir = process.env.ASH_UPLOADS_DIR!;
+    mkdirSync(uploadsDir, { recursive: true });
+    chmodSync(uploadsDir, 0o500);
+    try {
+      const stream = withMarkdownImages((async function* () {
+        yield { kind: "text", text: "丢了：![丢了](lost.png)\n\n" } as AgentEvent;
+        yield { kind: "done", exitStatus: 0 } as AgentEvent;
+      })(), root, markdownImageAccounting(taskId, sessId, TURN));
+      for await (const event of stream) {
+        // lost 的交代排在正文前面(release 先结清再放行原事件):把正文写进 trace 就停,
+        // attachment 一条都不落盘 —— 消费者死在交代与落盘之间。
+        if (event.kind === "text") {
+          appendSessionTrace(taskId, sessId, TURN, event as never);
+          break;
+        }
+      }
+    } finally {
+      chmodSync(uploadsDir, 0o755);
+    }
+    const seed = await loadMarkdownImageSeed(taskId, sessId, { mainTurnStartedAt: TURN });
+    assert.ok(
+      seed?.get("")?.snapshots?.some((snap) => snap.lost === true && snap.destination === "lost.png"),
+      "种子接回「丢了」的结论,接回的 sink 不会去读后来的文件",
+    );
+    const merged = shots(await mergeImageJournal(taskId, sessId, readTrace(taskId, sessId)));
+    assert.deepEqual(
+      merged.map((shot2) => [shot2.source, shot2.lost, shot2.path ?? null]),
+      [["lost.png", true, null]],
+      "合并补回一条 lost 记录:这处那一刻的画面确实丢了,不拿现在的文件顶上",
     );
   }
 

@@ -170,8 +170,20 @@ export type MarkdownImageSpot = {
   final: boolean;
 };
 
-/** 续聊/接管时一份子文档在**之前的进程**里已经写下的正文和用掉的身份数。 */
-export type MarkdownImageSeedDoc = { text: string; refs: number };
+/** 续聊/接管时一份文档在**之前的进程**里已经写下的正文、用掉的身份数与未结状态。 */
+export type MarkdownImageSeedDoc = {
+  text: string;
+  refs: number;
+  /**
+   * 交代推进到的绝对偏移。缺省 = 正文末尾(老口径:种子区间当作全部交代过)。恢复侧
+   * (agent-image-journal)只有在能用持久账核实「已交代的恰是前 refs 条、各在哪一处」时才给
+   * 更靠前的值 —— 接回的 sink 据此**继续交代**种子区间里还没交代的引用(审查第 8 轮 R1:
+   * 不接续,重启前被待定引用扣押的那一处永远不再交付,补回行又排在新记录之后,红蓝对调)。
+   */
+  emitted?: number;
+  /** 之前的进程已冻结的字节(含「读到了、写盘失败」的 lost 结论),按绝对起点。 */
+  snapshots?: ReadonlyArray<{ pos: number; destination: string; path?: string; lost?: boolean }>;
+};
 
 export type MarkdownImageAccounting = {
   /** 每出一条值得持久化的账(临时的冻结、最终的交代)就叫一声。必须自己兜住异常。 */
@@ -206,16 +218,38 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     const seeded = accounting?.seed?.get(id ?? "");
     const seen = imageStore();
     const definitions = new Map<string, string>();
+    const snapshots: ImageSnapshots = new Map();
+    const waiting = new Map<number, { identifier: string; end: number }>();
+    const noted = new Map<number, string>();
+    const carried = seeded?.text.length ?? 0;
+    const emitted = Math.min(seeded?.emitted ?? carried, carried);
     if (seeded) {
       seen.refs = seeded.refs;
+      const parsed = scanMarkdownImages(seeded.text);
       // 种子是历史正文,定义「还在写」的风险只有最后一行那一条,而它续写的概率约等于零;
       // 漏收的代价(字节拍成晚的)远大于误收的(多读一次盘),所以收尾与否都收。
-      for (const definition of scanMarkdownImages(seeded.text).definitions) {
+      for (const definition of parsed.definitions) {
         if (!definition.destination) continue;
         if (!definitions.has(definition.identifier)) definitions.set(definition.identifier, definition.destination);
       }
+      // 上一条进程已冻结的字节与「丢了」的结论接回来:接回后交代种子区间里的引用,用的是
+      // **当时**拍下的那一份,而不是现在去读盘(审查第 8 轮 R1:接回后红图被读成蓝图)。
+      for (const snap of seeded.snapshots ?? []) {
+        snapshots.set(snap.pos, {
+          destination: snap.destination,
+          ...(snap.path ? { path: snap.path } : {}),
+          ...(snap.lost ? { lost: true } : {}),
+        });
+        // 这几笔临时账上一条进程已经记过,别再记一遍(目的地变了才值得再记)。
+        noted.set(snap.pos, snap.destination);
+      }
+      // 交代线之后还在等定义的引用重新排队:定义在接回之后才到时,resolveWaiting 才认得它们。
+      if (emitted < carried) {
+        for (const candidate of parsed.waiting) {
+          if (candidate.start >= emitted) waiting.set(candidate.start, { identifier: candidate.identifier, end: candidate.end });
+        }
+      }
     }
-    const carried = seeded?.text.length ?? 0;
     const ledger: Ledger = {
       key: id,
       wrap: id === null
@@ -226,15 +260,15 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
       base: carried,
       scanned: carried,
       settled: carried,
-      snapshots: new Map(),
+      snapshots,
       definitions,
-      waiting: new Map(),
+      waiting,
       decided: new Set(),
-      noted: new Map(),
+      noted,
       bang: -1,
       open: -1,
       openScanned: 0,
-      emitted: carried,
+      emitted,
       due: false,
     };
     ledgers.set(key, ledger);
@@ -261,14 +295,22 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     for (const slot of slots) {
       if (slot.end > ledger.settled) continue;
       const snapshot = ledger.snapshots.get(slot.start);
-      if (!snapshot?.path) continue;
-      exposed.add(snapshot.path);
+      // 「读到了、写盘失败」(lost)也是值得持久化的结论:不记这笔,消费者死后重建的那一页
+      // 没有任何记录拦着,前端会退去读**后来**的文件 —— 恰是 lost 要挡的那条路(审查第 8 轮
+      // R1 同类位置)。什么都没有的(没字节可存)照旧不记。
+      if (!snapshot || (!snapshot.path && !snapshot.lost)) continue;
+      if (snapshot.path) exposed.add(snapshot.path);
       // 语法已经认下它 = 这段正文已经(或马上会)出现在屏幕上:这一刻就记一笔**临时账**。
       // 等到交代那一刻才记的话,消费者在两者之间死掉,字节和正文的关系就只剩内存里那份。
       // 同一处只记一次;目的地变了(还在写的定义行后来接长了)就按新目的地再记,合账取最后。
       if (note && ledger.noted.get(slot.start) !== snapshot.destination) {
         ledger.noted.set(slot.start, snapshot.destination);
-        note({ doc: ledger.key, pos: slot.start, source: snapshot.destination, path: snapshot.path, final: false });
+        note({
+          doc: ledger.key, pos: slot.start, source: snapshot.destination,
+          ...(snapshot.path ? { path: snapshot.path } : {}),
+          ...(snapshot.lost ? { lost: true } : {}),
+          final: false,
+        });
       }
     }
   };

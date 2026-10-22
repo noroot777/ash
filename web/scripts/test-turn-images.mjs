@@ -551,4 +551,45 @@ assert.deepEqual(
   "第二份定义渲染器压根不用,它那张附件必须留在卡片里",
 );
 
+// 恢复补回的记录只能排在既有 trace 之后:事件顺序不再等于文档顺序(审查第 8 轮 R1 实测 A
+// 的事件次序 —— 接回后新流先交付蓝图 ref 0,补回的红图挂着合成身份排在末尾)。记录带着文档
+// 节点身份 pos 时,同目的地一组按它排回文档顺序:「修改前」仍配红、「修改后」仍配蓝。
+const restoredMarkdown = "修改前是红色：![修改前](output/shot.png)\n\n修改后是蓝色：![修改后](output/shot.png)\n";
+const restoredRefs = markdownImageRefs(restoredMarkdown);
+const restored = [{
+  id: "rs:0",
+  markdown: restoredMarkdown,
+  events: [],
+  attachments: [],
+  attachmentSources: [
+    { path: uploads("ffff00000001-blue.png"), source: "output/shot.png", ref: 0, pos: restoredRefs[1].start },
+    { path: uploads("ffff00000002-red.png"), source: "output/shot.png", ref: 1 << 30, pos: restoredRefs[0].start },
+  ],
+}];
+const restoredOut = turnOf(restored, "C0ojRgeQnMsa");
+assert.match(
+  restoredOut.text,
+  /修改前是红色：!\[修改前\]\(\/api\/uploads\/ffff00000002-red\.png\)/,
+  "「修改前」按节点身份配回红图,不被事件顺序带偏",
+);
+assert.match(
+  restoredOut.text,
+  /修改后是蓝色：!\[修改后\]\(\/api\/uploads\/ffff00000001-blue\.png\)/,
+  "「修改后」配蓝图",
+);
+
+// 对照:老记录没有 pos(也不存在补回行),保持事件顺序 —— 行为跟 pos 功能上线前逐字一致。
+const legacyOrder = [{
+  id: "lg:0",
+  markdown: restoredMarkdown,
+  events: [],
+  attachments: [],
+  attachmentSources: [
+    { path: uploads("ffff00000003-one.png"), source: "output/shot.png", ref: 0 },
+    { path: uploads("ffff00000004-two.png"), source: "output/shot.png", ref: 1 },
+  ],
+}];
+const legacyOrderOut = turnOf(legacyOrder, "C0ojRgeQnMsa");
+assert.match(legacyOrderOut.text, /修改前是红色：!\[修改前\]\(\/api\/uploads\/ffff00000003-one\.png\)/, "老记录按事件顺序:第一处配第一条");
+
 console.log("回合图片配对(trace → 分段 → 正文)回归通过");

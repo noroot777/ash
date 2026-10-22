@@ -71,8 +71,9 @@ export type SessionTraceEntry = {
     | Extract<import("@ash/shared").AgentEvent, { kind: "tool" }>
     // source/ref/path:一处正文引用的保存结果(见 shared/src/events.ts)。配对靠 source+ref,
     // 不靠文件名;path 缺省 = 这处引用确实没有副本,`lost: true` 进一步说明「字节当时读到了、
-    // 写盘失败了」—— 那一处只能作废,不能拿现在的文件顶上。
-    | { kind: "attachment"; path?: string; source?: string; ref?: number; lost?: boolean }
+    // 写盘失败了」—— 那一处只能作废,不能拿现在的文件顶上。`pos` 是这处引用的文档节点身份
+    // (服务端全文坐标),恢复补回的记录靠它排回文档顺序(见 turnImages)。
+    | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean }
     | { kind: "error"; message: string }
     // verifyRound：这一回合属于就地验证的第几轮（不是验证轮时缺省）。它是会话里
     // 唯一能把审查者的发言跟实现回合分开的信号——两者常跑在同一条会话上。

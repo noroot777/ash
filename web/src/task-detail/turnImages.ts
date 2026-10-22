@@ -45,8 +45,9 @@ import { attachmentView } from "./utils.ts";
 
 type Edit = { start: number; end: number; text: string };
 
-/** 服务端对**一处**引用的交代:拷贝在不在、以及没拷贝时是「丢了」还是「压根没有」。 */
-type ImageRecord = { copy: string | null; lost: boolean };
+/** 服务端对**一处**引用的交代:拷贝在不在、没拷贝时是「丢了」还是「压根没有」,以及这处
+ * 引用的文档节点身份(`pos`,服务端全文坐标;老记录没有)。 */
+type ImageRecord = { copy: string | null; lost: boolean; pos: number | null };
 
 /** 按 `Edit` 倒着替换 —— 从后往前改，前面那些位置才不会被挪动。 */
 function applyEdits(text: string, edits: Edit[]): string {
@@ -126,10 +127,20 @@ export function turnImageDocument(
       delivered.add(identity);
     }
     const copy = entry.path && attachmentView(entry.path).url ? entry.path : null;
-    const record: ImageRecord = { copy, lost: !!entry.lost };
+    const record: ImageRecord = { copy, lost: !!entry.lost, pos: typeof entry.pos === "number" ? entry.pos : null };
     const list = records.get(entry.source);
     if (list) list.push(record);
     else records.set(entry.source, [record]);
+  }
+  // 「按事件顺序 = 按文档顺序」只对直播那一路天然成立。恢复补回的记录(消费者死后由持久
+  // 账本合并进来的)只能排在既有 trace 之后 —— 接回重启的场景里,新流先交付的引用排在前、
+  // 补回的旧引用排在后,按出场顺序配对就是红蓝对调(审查第 8 轮 R1 实测 A)。每条新记录都
+  // 带着它的文档节点身份 pos:同目的地一组全有 pos 时按它排回文档顺序,「第 k 处 ↔ 第 k
+  // 条」重新是构造出来的。老记录没有 pos,但它们也没有补回行,事件顺序就是文档顺序。
+  for (const list of records.values()) {
+    if (list.length > 1 && list.every((record) => record.pos !== null)) {
+      list.sort((a, b) => a.pos! - b.pos!);
+    }
   }
   // 对账:正文里指向这个目的地的引用有几处。
   const counted = new Map<string, number>();
