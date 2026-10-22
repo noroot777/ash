@@ -17,10 +17,17 @@
 //    RunHandle 因此在事件流收尾时调用 cleanupAfterRun:ChildProcess 还握在手里,哪怕根
 //    进程刚退出,仍能拿它的旧 pid 走这棵保留下来的 ppid 树。server 重启后句柄丢了、
 //    或 pid 已经被复用的深孤儿仍然无解,所以 Windows 依旧是尽力而为,不是等价保证。
+//
+// **那棵保留下来的 ppid 树不是白给的,它要两份证据才算数**,各住一个文件(第 17 轮审查):
+//  · `root-life.ts` —— 我们那一代根的**存活区间**。「活着才取得到」,所以登记在**创建那一刻**
+//    (清扫时再取就晚了:正常完成那条路跑在根 reap 之后),而且只有**确证退出**能封上界
+//    (「这一轮读不到」不是反证);
+//  · `lineage.ts`   —— 从拓扑生成可击杀目标时**逐边核父代**。裸父号证明不了「是当前这一代
+//    生的」,所以每一条授权传播边都要自己拿得出证明,拿不出就不许变成可击杀成员。
 
 import type { ChildProcess } from "node:child_process";
 import { statSync } from "node:fs";
-import { IS_WINDOWS, isPidAlive, killOne } from "../platform.js";
+import { isPidAlive, killOne } from "../platform.js";
 import { processUnitEvidence, type UnitEvidence } from "../proc.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import {
@@ -28,9 +35,11 @@ import {
   type ProcessGeneration, type ProcessMember, type ProcessTableSnapshot,
 } from "../process-generation.js";
 import {
-  earliestStartMs, genStartedAtMs, subtreesOf, unresolvedTopology, type ProcessSubtree,
+  earliestStartMs, genResolutionMs, genStartedAtMs, subtreesOf, unresolvedTopology,
+  type ProcessSubtree,
 } from "../process-subtrees.js";
-import { childKillAuthorized } from "./child-identity.js";
+import { siftLineage, type LineageStand } from "./lineage.js";
+import { observeRootLife, rootStand } from "./root-life.js";
 import { joinOpen, unitOpen, type CleanupOpen } from "./cleanup-result.js";
 import { runOutPathOf, unitTokenOf } from "./unit-token.js";
 import {
@@ -71,135 +80,14 @@ function rememberEscapees(child: ChildProcess, members: readonly ProcessMember[]
 }
 
 /**
- * **Windows 上根退出之后的归属窗口** —— 「号空着」唯一能补上的那份证据。
+ * 「本次运行开工之前它就在」这一条的容差。
  *
- * 父号是个裸数字,没有代次。旧 CLI 退出之后这个号可以被别的父进程占用,那个父进程再退出,
- * 它留下的孩子照样带着同一个父号 —— 于是「这个号现在没人占」被当成了「这棵残留的树是
- * 我们那一代生的」。第 14 轮审查在 Windows 真机上实测到这一下:外国父进程活着时授权正确
- * 地答假、名单是空的;**它一退出,同一份旧身份就把它的孩子收进名单并真的关掉了**
- * (`parentPid=15512`、`writerPid=3256`、`writerRow.ppid=15512`、`deadTargets=[3256]`、
- * `writerAliveAfter=false`)。
- *
- * 能补的证据只有一个:**我们那一代根的存活区间**。孩子的启动时刻落在区间里、父号又对得上,
- * 它才是我们那一代的孩子。两端都必须是我们自己看见的:
- *  · `from` —— **证明得了这个号此刻就是我们那一代**的那一刻,表上那一代的启动时刻;
- *  · `to`   —— 我们自己看见它退场的那一刻。
- *
- * **任一端缺着就没有窗口**,那时一个成员都不按父号扩(见 `treeRootUsable`),而且这棵树要
- * 如实记成「认不下也否不掉」(见 `reportUnattributableTree`)—— 不许退化成「没有后代」。
- *
- * 所以 Windows 上「根退出后靠 ParentProcessId 找回」这份能力保留给**自己 spawn 的根**
- * (内核在 reap 之前不会把号给别人,那是权威证据);重启后接回的根在那边拿不到第二份独立
- * 证据,于是落到「留债不下刀」那一档。账本上已经认下的后代不受影响 —— 它们走
- * `escapeeTargets` 并账本,压根不经过这道授权。
+ * 跟父子边那一条**不是同一个尺度**,所以不共用一个常数:那边比的是同一张表上两个戳
+ * (容差按各自精度算,见 `genResolutionMs`),这边的另一端 `runBeganAtMs` 可能来自秒级的
+ * `ps -o lstart`、也可能来自文件创建时刻 —— 取两者里最粗的那一档,与 `process-subtrees.ts`
+ * 的 `startedBefore` 同口径。
  */
-type RootWindow = { gen: ProcessGeneration; from: number; to: number | null };
-const rootWindows = new WeakMap<ChildProcess, RootWindow>();
-
-/** 秒级精度的容差:`ps -o lstart` / Windows 的 `CreationDate` 都只到秒,孩子可以跟根同一秒。 */
-const WINDOW_SKEW_MS = 2000;
-
-/**
- * 每一次扫描都来过一遍:**证明得了这个号此刻是我们那一代**就记下界,根退场了就封上界。
- * 两端都只记一次。
- *
- * 下界有两道要求,缺一不可:
- *
- *  · **那一代此刻就在表上** —— 它与父子关系同一次读数。那两个运行专属文件的创建时刻
- *    (`runBeganAtMs` 用的那种)在这里**不够用**:它们证明的是「这次运行从哪一刻开始」,
- *    排除不掉「同一个号上的前一任」,而这道闸要防的恰好就是号被复用。
- *  · **这一刻敢对它下刀**(`childKillAuthorized`)—— 「表上有一代」证明不了「那一代是我们的」。
- *    记窗口本身就是在给将来一整棵树发通行证,所以这里必须过**授权档**而不是探活档
- *    (两档的区别见 `child-identity.ts`:判不出来就必须一刀不发)。审查的真机复现正是
- *    卡在这一句上:它拿一份过期身份(`startedAt` 填 2000 年)接管一个陌生父进程的号,
- *    `childKillAuthorized` 当场答假 —— 于是压根没有窗口,后面那个号空出来也换不到授权。
- *
- * 上界取**我们自己看见它退场**的那一刻,两条来源都接:`exit` 事件(紧,正常收尾走这条)、
- * 以及某一次扫描发现它已经不在表上 / 换了代(兜底 —— 合成句柄不一定派发 `exit`)。
- *
- * 所以「号被别人占着的那一段」天然在窗口之外:占用者的孩子出生在 `to` 之后,被 `siftRootWindow`
- * 判成已证伪。而「没有窗口」就是「不许按父号扩」(见 `treeRootUsable`)——  server 重启后
- * 接回的句柄在 Windows 上落在这一档(那边读不到别人的环境块,记号这份独立证据不存在),
- * 退化成「如实留债、不下刀」,不是悄悄答「没有后代」。
- */
-function trackRootWindow(child: ChildProcess, table: ProcessTableSnapshot): void {
-  if (!child.pid) return;
-  const seen = table.gens.get(child.pid);
-  const known = rootWindows.get(child);
-  if (!known) {
-    const from = seen ? genStartedAtMs(seen) : null;
-    if (!seen || from === null || !childKillAuthorized(child)) return;
-    const window: RootWindow = { gen: seen, from, to: null };
-    rootWindows.set(child, window);
-    // 已经退出的句柄挂不上这个事件(Node 不会补发),所以这条只是**更紧**的那份上界;
-    // 手搭的句柄不一定是 EventEmitter,接不上就只剩上面那条兜底(不许在这里炸)。
-    if (typeof child.once === "function") {
-      child.once("exit", () => { if (window.to === null) window.to = Date.now(); });
-    }
-    return;
-  }
-  // 那一代不在表上了(退场了,或者这个号已经换了主人)⇒ 这一刻就是我们看见的退场时刻。
-  if (known.to === null && seen !== known.gen) known.to = Date.now();
-}
-
-/** 这个句柄有没有一份**两端齐全**的归属窗口。 */
-function closedRootWindow(child: ChildProcess): { from: number; to: number } | null {
-  const window = rootWindows.get(child);
-  return window && window.to !== null ? { from: window.from, to: window.to } : null;
-}
-
-/** 窗口筛出来的三档。覆盖这棵树上走到的每一个号,所以调用方一次查表就能分流。 */
-type WindowVerdict = "ours" | "foreign" | "murky";
-
-/**
- * 根已经退场的那棵 ppid 树,按归属窗口逐**支**分流。
- *
- * 判据是一条因果事实,不是启发式:**根的直接孩子只可能由活着的根生出来**,所以它的启动时刻
- * 必须落在根那一代的存活区间里。再往下就不必了 —— 孙子的父亲在根退出之后仍然活着,它可以
- * 在那之后才出生,拿区间去卡它会把真后代当外人放掉(审查明确要求别用「全面禁用」掩盖问题)。
- *
- * 所以只在**第一层**设闸,一支的结论由那一支的头决定:
- *  · `ours`   —— 头落在区间里 ⇒ 这一支都算本次运行的;
- *  · `foreign`—— 头明确落在区间外 ⇒ **已证伪**,这一支一个都不收,也不留债(不是我们的事);
- *  · `murky`  —— 头的那一代读不出来 ⇒ 既认不下也否不掉,这一支不下刀但要如实留债。
- *
- * 容差 `WINDOW_SKEW_MS`:两端读数都只到秒,孩子可以跟根落在同一秒(见 `WINDOW_SKEW_MS`)。
- */
-function siftRootWindow(
-  table: ProcessTableSnapshot, rootPid: number, window: { from: number; to: number },
-): Map<number, WindowVerdict> {
-  const verdicts = new Map<number, WindowVerdict>();
-  const seen = new Set<number>([rootPid]);           // 环形 ppid 的护栏,与 walkDescendants 同口径
-  const heads: { pid: number; verdict: WindowVerdict }[] = [];
-  for (const kid of table.kids.get(rootPid) ?? []) {
-    if (seen.has(kid)) continue;
-    seen.add(kid);
-    const gen = table.gens.get(kid);
-    const born = gen ? genStartedAtMs(gen) : null;
-    heads.push({
-      pid: kid,
-      verdict: born === null
-        ? "murky"
-        : born >= window.from - WINDOW_SKEW_MS && born <= window.to + WINDOW_SKEW_MS
-          ? "ours"
-          : "foreign",
-    });
-  }
-  // 一支的结论从头一路带到底。
-  for (const head of heads) {
-    const stack = [head.pid];
-    while (stack.length) {
-      const pid = stack.pop()!;
-      verdicts.set(pid, head.verdict);
-      for (const kid of table.kids.get(pid) ?? []) {
-        if (seen.has(kid)) continue;
-        seen.add(kid);
-        stack.push(kid);
-      }
-    }
-  }
-  return verdicts;
-}
+const RUN_START_SKEW_MS = 1000;
 
 /** 账上记过的 + 这一刻刚取到的,去重。丢了 fd 的那些就靠账上这一份留住。 */
 function escapeeTargets(child: ChildProcess, fresh: readonly ProcessMember[]): ProcessMember[] {
@@ -385,7 +273,7 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   /**
    * **「号空着、可我们没有那一代的存活区间」那一档**(第 14 轮审查 F1 的另一半)。
    *
-   * 这棵 ppid 树**认不下也否不掉**:父号对得上,可对得上的父号证明不了归属(见 `RootWindow`)。
+   * 这棵 ppid 树**认不下也否不掉**:父号对得上,可对得上的父号证明不了归属(见 `root-life.ts`)。
    * 不扩它(一刀不发),但同样**不许让它长成「没有后代」** —— 那正是整条链上反复出事的那个
    * 形状。所以如实记第三种答案:这一问没问清楚,成员进责任清单等下一轮再核。
    *
@@ -403,7 +291,7 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
     for (const member of stray.descendants) {
       if (member.pid === child.pid) continue;
       const born = genStartedAtMs(member.gen);
-      if (born !== null && began !== null && born < began - WINDOW_SKEW_MS) continue;  // 开工前就在
+      if (born !== null && began !== null && born < began - RUN_START_SKEW_MS) continue;  // 开工前就在
       suspects.push({ pid: member.pid, gen: member.gen, why: "挂在已退场的根号下,可那一代的存活区间我们没有" });
     }
     for (const pid of stray.unverified) {
@@ -414,9 +302,9 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
     open.push(...suspects);
   }
 
-  // 顺手记一笔归属窗口(见 `RootWindow`):Windows 上根退出之后,它是「这棵残留的 ppid 树
-  // 是不是我们那一代的」唯一一份能补的证据,而两端都必须在这里、趁看得见的时候记下来。
-  trackRootWindow(child, table);
+  // 这一张表能确证的东西全部记进根的生命周期(见 `root-life.ts`):第一次读到的那一代、
+  // 以及**正面的**退出证据。下界早在创建那一刻就登记过了,这里只做加法。
+  observeRootLife(child, table);
 
   // ② 再问归属线索。
   const probe = trackPath ? await probeFileHolders(trackPath) : noSuchFileProbe();
@@ -435,7 +323,7 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
     faults.push("追踪文件持有者的访问模式问不出来(没法把只读看客和真后代分开)");
   }
   const seeds: RootSeed[] = owners.map((h) => ({ pid: h.pid, authority: "track-fd" as const }));
-  if (child.pid && treeRootUsable(child)) seeds.push({ pid: child.pid, authority: "handle" });
+  if (child.pid && treeRootUsable(child, table)) seeds.push({ pid: child.pid, authority: "handle" });
   else if (child.pid) reportUnattributableTree(child.pid);
   // 记号那一问也挪到快照之后,判据于是与 fd 那一路同构。
   const freshUnit = token ? processUnitEvidence(token, { fresh: true }) : unit;
@@ -468,7 +356,8 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
 
   const targets = new Map<number, ProcessMember>();
   for (const tree of trees) {
-    if (!rootStillAuthorized(tree.source, tree, { child, provenUnit })) {
+    const stand = rootStandOf(tree.source, tree, { child, table, provenUnit });
+    if (!stand) {
       // **根自己在表上、却核验不了那一代**:既认不下来(不敢扩这棵树)也否不掉(它可能正是
       // 我们在找的那个)。如实记一笔「没问清楚」,别让它跟「这个号已经退场」同一个待遇
       // (第 6 轮审查 F1)。
@@ -478,25 +367,27 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
       }
       continue;
     }
-    // **根已经退场的那棵树**(只有 Windows 走得到)光有授权还不够:父号没有代次,整棵树是
-    // 不是我们那一代的,只有归属窗口能定 —— 逐支过筛(见 `siftRootWindow`)。根在表上的那些
-    // 树不走这一道:它们的根实例刚刚被重核过,父子关系与授权同一次读数。
-    const window = tree.root ? null : closedRootWindow(child);
-    const sifted = window ? siftRootWindow(table, tree.seed.pid, window) : null;
-    // 根授权成立 ⇒ **整棵来源子树**都属于本次运行。反过来不成立就一个都不收(连根带子树)。
-    if (tree.root && tree.root.pid !== child.pid) targets.set(tree.root.pid, tree.root);
+    // **根授权只是起点,不是整棵树的通行证**(第 17 轮审查 F1):从这里往下的每一条父子边
+    // 都要自己拿得出「指向当前这一代」的证明,逐边核(见 `lineage.ts`)。上一版只对**已退场
+    // 的根的第一层**设闸,活根整树与任何深层边都是裸父号直接当归属用。
+    const sifted = siftLineage(table, tree.seed.pid, stand);
+    // 根自己只有在**我们那一代此刻就在这个号上**时才进名单:它已经退场的那一档,这个号上
+    // 的行(如果有)是接手它的人,不是我们。
+    if (stand.state === "live" && tree.root && tree.root.pid !== child.pid) {
+      targets.set(tree.root.pid, tree.root);
+    }
     for (const member of tree.descendants) {
       if (member.pid === child.pid) continue;     // CLI 本体走进程组信号,不在这里补刀
-      // 过筛在的那棵树上,只有「这一支算我们的」才下刀;另两档各自在下面交账。
-      if (sifted && sifted.get(member.pid) !== "ours") continue;
+      // 只有「这条链一路核下来都算我们的」才下刀;另两档各自在下面交账。
+      if (sifted.get(member.pid) !== "kin") continue;
       targets.set(member.pid, member);
     }
     // **根已经认下来了,它名下却有核验不了的号** ⇒ 这些是实打实的残留,只是不敢下刀。
     // 上一版它们在建树时就被整行丢掉,于是这一轮照样算「问清楚了、没有后代」—— 审查在
     // Windows 真机上实测到的正是这一下(活后代缺 CreationDate,结论 empty、一笔债都没落)。
-    // 过筛在时,**已证伪**的那几支不算这次运行的残留(它们本来就不是我们的事),其余照报。
+    // **已证伪**的那几支不算这次运行的残留(它们本来就不是我们的事),其余照报。
     const unverified = tree.unverified.filter(
-      (pid) => pid !== child.pid && sifted?.get(pid) !== "foreign",
+      (pid) => pid !== child.pid && sifted.get(pid) !== "foreign",
     );
     if (unverified.length) {
       faults.push(`${unverified.join(",")} 在这次运行的进程树上,但核验不了它们那一代(给不出下刀凭证)`);
@@ -504,16 +395,16 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
         open.push({ pid, gen: null, why: "在这次运行的进程树上,核验不了它那一代" });
       }
     }
-    // 窗口把一支判成 `murky`(那一支的头读不出代次)⇒ 这一支上**有代次的**成员也不敢认:
-    // 它们的归属取决于那个读不出来的头。既不下刀,也不许当成「没有后代」(那正是第 6 轮
-    // 那条边的形状),如实留债。头自己已经在上面那一句里报过了。
+    // 逐边核下来判成 `murky` 的成员(这条链上有一条边证不出来)⇒ **有代次也不敢认**:
+    // 它的归属取决于那条证不出来的边。既不下刀,也不许当成「没有后代」(那正是第 6 轮
+    // 那条边的形状),如实留债。读不出代次的那几个已经在上面那一句里报过了。
     const murky = tree.descendants.filter(
-      (m) => m.pid !== child.pid && sifted?.get(m.pid) === "murky" && !tree.unverified.includes(m.pid),
+      (m) => m.pid !== child.pid && sifted.get(m.pid) === "murky" && !tree.unverified.includes(m.pid),
     );
     if (murky.length) {
-      faults.push(`${murky.map((m) => m.pid).join(",")} 挂在一支核验不了归属的分支下(根已退场,定不了它们是哪一代的孩子)`);
+      faults.push(`${murky.map((m) => m.pid).join(",")} 挂在一条核验不了的父子边下面(定不了它们是哪一代的孩子)`);
       for (const member of murky) {
-        open.push({ pid: member.pid, gen: member.gen, why: "根已退场,它那一支的归属核验不了" });
+        open.push({ pid: member.pid, gen: member.gen, why: "这条链上有一条父子边核验不了" });
       }
     }
   }
@@ -545,52 +436,58 @@ function fileBornAtMs(path: string | null): number | null {
 }
 
 /**
- * 这个根此刻还被它自己那份依据授权着吗(见上面那张表)。
+ * 这个根此刻还被它自己那份依据授权着吗 —— 成立的话,连**它那一代的落点**一起交出来
+ * (那是整棵树逐边核的起点,见 `lineage.ts`)。`null` = 不成立,整棵来源子树丢掉。
  *
  * 两道闸都要过:**快照里那个根实例还在**(代次没换),以及**它的依据重核仍然成立**。
- * 任一不成立 ⇒ 调用方把整棵来源子树丢掉。
+ * 把「授权」和「落点」做成同一个返回值是刻意的:上一版它们是两处判断(`rootStillAuthorized`
+ * 一处、`tree.root ? null : closedRootWindow(child)` 另一处),于是「授权成立」与「这个号上
+ * 此刻是不是我们那一代」会各自答各自的 —— 号被接手之后两句话第一次打架时,收下的就是
+ * 接手者的整棵子树。
  */
-function rootStillAuthorized(
+function rootStandOf(
   seed: RootSeed, tree: ProcessSubtree<RootSeed>,
-  ctx: { child: ChildProcess; provenUnit: Map<number, ProcessGeneration> },
-): boolean {
+  ctx: {
+    child: ChildProcess; table: ProcessTableSnapshot;
+    provenUnit: Map<number, ProcessGeneration>;
+  },
+): LineageStand | null {
   // 快照那一刻它在表上,现在换代了 ⇒ 这个号已经是别人,它名下那棵树是人家的子进程。
-  if (tree.root && !stillSameGeneration(tree.root)) return false;
+  if (tree.root && !stillSameGeneration(tree.root)) return null;
+  // 线索认下的那两档,根**一定在这一次读数里**(线索与快照同一刻复核过)⇒ 落点就是表上
+  // 那一行:上界开着(它还活着,还能继续生孩子),下界是它那一代的启动时刻。
+  const liveOnTable = (): LineageStand | null => tree.root
+    ? { state: "live", from: genStartedAtMs(tree.root.gen), fromRes: genResolutionMs(tree.root.gen) }
+    : null;
   switch (seed.authority) {
     case "track-fd":
       // 线索认它(此刻握着这个运行专属的文件)+ 上面那道闸(快照里那一代此刻还在)
       // ⇒ 快照里那个号上的进程就是它。**不需要第二次 lsof**(见上面那段)。
-      return !!tree.root;
+      return liveOnTable();
     case "unit":
       // 记号认它,**而且还是同一代**:记号那次读数与快照之间也可能换代,两张读数都认
       // 同一代才算同一个实例。
-      return !!tree.root && ctx.provenUnit.get(seed.pid) === tree.root.gen;
-    case "handle":
+      return ctx.provenUnit.get(seed.pid) === tree.root?.gen ? liveOnTable() : null;
+    case "handle": {
       // 句柄那一档同样在快照之后判(上一版判在 await 之前,拿到的是过期通行证)。
-      return treeRootUsable(ctx.child);
+      const stand = rootStand(ctx.child, ctx.table);
+      return stand.state === "unknown" ? null : stand;
+    }
   }
 }
 
 /**
- * 这个根的号能不能当「后代树」的树根。
+ * 这个根的号能不能当「后代树」的树根 —— **当且仅当我们说得出它那一代此刻在哪**。
  *
- * POSIX:只有身份对得上才行(根一退出,它的孩子立刻被重父到 init,以旧号为根的树本来就是
- * 空的,所以这一道闸不损失能力)。
+ * 三档的处置写在 `root-life.ts`:存活已确认 / 退出已确认都给得出落点;**这一轮未知**
+ * 一个成员都不许按父号扩(调用方走 `reportUnattributableTree`:留债、不下刀)。
  *
- * **Windows 分三档**,不能一句 `IS_WINDOWS` 全放过(第 3 轮审查 F1):那边退出后仍保留的
- * `ParentProcessId` 是唯一的找回手段(见本文件顶部),所以:
- *  · 号被别人占着 ⇒ 那棵树是人家的子进程,一个都不许扩;
- *  · 号空着、**而且我们手上有那一代根的存活区间** ⇒ 走这棵残留的树,成员再逐个过区间;
- *  · 号空着、**可没有区间** ⇒ 一个都不许扩(第 14 轮审查 F1)。
- *
- * 第三档是上一版的漏洞:它只问「号上还有没有人」。那一问证明不了归属 —— 父号没有代次,
- * 旧号被别人占用后再退出,留下的孩子带着同一个父号(判据与真机读数见 `RootWindow`)。
+ * POSIX 上这道闸不损失能力:根一退出,它的孩子立刻被重父到 init,以旧号为根的树本来就是
+ * 空的。Windows 上它是唯一的防线 —— 那边退出后仍保留的 `ParentProcessId` 是找回孤儿的唯一
+ * 手段(见本文件顶部),而父号没有代次,「这个号现在没人占」证明不了归属。
  */
-export function treeRootUsable(child: ChildProcess): boolean {
-  if (childKillAuthorized(child)) return true;
-  if (!IS_WINDOWS || !child.pid || isPidAlive(child.pid)) return false;
-  // 「这个号现在没人占」只是**前提**,不是授权:授权来自我们自己看见的那一代的存活区间。
-  return !!closedRootWindow(child);
+export function treeRootUsable(child: ChildProcess, table: ProcessTableSnapshot): boolean {
+  return rootStand(child, table).state !== "unknown";
 }
 
 /** 取证 + 记账 + 下刀。返回这一轮的结论(调用方要用 `answered` 决定能不能放手证据)。 */

@@ -5,7 +5,9 @@
 //
 //   child-identity.ts   「这个号此刻还是不是它」—— 无依赖,三方共用
 //   track-evidence.ts   追踪 fd / 「谁还握着它」三档 / 租约 / 启动期清扫
-//   escapees.ts         逃逸后代的枚举与下刀(根授权 → 整棵子树)
+//   root-life.ts        根这一代的存活区间(登记在创建那一刻,只有确证退出能封上界)
+//   lineage.ts          从拓扑生成可击杀目标:逐边核父代
+//   escapees.ts         逃逸后代的枚举与下刀(根落点 → 逐边核 → 名单)
 //   cleanup-debt.ts     「没收干净」这件事的持久化与重试
 //   kill.ts(本文件)   三层击杀 + 把上面几层的结论汇成一个清理结果
 //
@@ -500,6 +502,9 @@ export function killChild(child: ChildProcess): void {
       /* already gone */
     }
   };
+  // **先发根信号、再异步进 killEscapees** 这个顺序本身没问题,但它要求「活着才取得到」的
+  // 那份证据在**这之前**就已经到手:快退出的根赶在第一次快照之前就没了(第 17 轮审查 F3
+  // 点的那个对称出口)。根这一代的存活区间因此登记在创建那一刻,不在这里取(root-life.ts)。
   signal("SIGTERM");
   void killEscapees(child, "SIGTERM").catch(() => {});
   const t = setTimeout(() => {

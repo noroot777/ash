@@ -134,6 +134,16 @@ export type GenerationStartedAt =
 const generationTag = (gen: ProcessGeneration): string => gen.slice(0, gen.indexOf(":") + 1);
 
 /**
+ * 这两个戳**来自同一种问法**吗。
+ *
+ * 导出是因为「代次不相等」这一步在两处要用,而两处都必须先过这一问:同标签的不等才是
+ * **换代了**(反证),跨标签的不等只是**这一刻比不出来**(`/proc` 读不到、退回了 `ps`)。
+ * 自己写一句 `a !== b` 会把后者当成前者 —— 第 9 轮审查 F1-C 实测过那一下。
+ */
+export const sameGenerationSource = (a: ProcessGeneration, b: ProcessGeneration): boolean =>
+  generationTag(a) === generationTag(b);
+
+/**
  * 把「这一代」换算成**可落库的启动时刻文本**:读 `ps` 之前之后各核一次代次戳。
  *
  * 为什么要夹:数据库里那一列(`monitors.pid_started_at`)存的是 `ps` 的 lstart 文本,而
@@ -168,7 +178,7 @@ export function currentGeneration(
   if (current === null) return isPidAlive(pid) ? { outcome: "unqueryable" } : { outcome: "changed" };
   if (current === gen) return { outcome: "proven" };
   // 两份读数走了不同问法(`/proc` 这一刻读不到、退回了 `ps`)⇒ 比不出来,不是反证。
-  return generationTag(current) === generationTag(gen)
+  return sameGenerationSource(current, gen)
     ? { outcome: "changed" }
     : { outcome: "unqueryable" };
 }
