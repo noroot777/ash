@@ -67,6 +67,15 @@ async function blockUpdates(how: "abort" | "ignore"): Promise<void> {
 }
 const unblockUpdates = () => dbClient.execute("DROP TRIGGER IF EXISTS block_debt_update");
 
+/** 同上,拦的是 INSERT —— 「这个键上还没有行」那一支走的是它。 */
+async function blockInserts(how: "abort" | "ignore"): Promise<void> {
+  const body = how === "abort" ? "SELECT RAISE(ABORT, '夹具:这一句写入被拒')" : "SELECT RAISE(IGNORE)";
+  await dbClient.execute(
+    `CREATE TRIGGER block_debt_insert BEFORE INSERT ON agent_cleanup_debts BEGIN ${body}; END;`,
+  );
+}
+const unblockInserts = () => dbClient.execute("DROP TRIGGER IF EXISTS block_debt_insert");
+
 /**
  * 一个**挨了刀还活着、而且记号已经被洗掉**的成员。剧本就是 `exec` 那一下:第一遍扫描读到
  * 记号(`ours`),之后再也读不到(`none`),pid 和那一代一个字没变 —— 所以它核销不掉。
@@ -229,6 +238,74 @@ console.log("\n6) 行上名单坏了:那一列不许被擦成空,这一轮的身
   await sweepAgentCleanupDebts();
   if (await rowOf(key)) ok("坏名单修不好之前不许销账(核不动 ⇒ 留着)");
   else fail("坏着就把账销了 —— 那正是这一条要防的");
+}
+
+// ── 第七节:落账那一层的零行出口(第 14 轮审查 N1)────────────────────────────────
+//
+// 交接层三条写入早就认改行数了,**落账层**(`noteCleanupDebt` 走的那条)上一版只认「没抛错」:
+// upsert 被静默丢掉时改行数是 0,而它答 `noted`,调用方随即把那一笔从内存待投清单上删掉 ——
+// 于是那个还活着的号既不在库里也不在内存里。审查用 `RAISE(IGNORE)` 精确注入过两支。
+console.log("\n7) 落账层写了零行:身份必须留在待投清单上(两支都测)");
+{
+  // ⑦-1 这个键上**还没有行**:走 INSERT 那一支。
+  const key = "unit:zero-row-insert";
+  const { pid, stop } = await survivorWithMark(key);
+  // **按增量数,别按总数**:待投清单是模块级的,前面几节(比如坏名单那一节)会留着自己那笔,
+  // 拿 `> 0` 问就恒真 —— 那样的断言在反例下也是绿的,等于没钉住。
+  const pendingBefore = pendingCleanupNoteCount();
+  await blockInserts("ignore");
+  await noteCleanupDebt({
+    unitToken: key, taskId: "t-write", sessionId: "s-write",
+    rootPid: 0x7ffffff, rootStartedAt: null, trackPath: null, outPath: null,
+    state: "unknown", detail: "夹具:首次落账", unitVerdict: "ours",
+    open: [{ pid, gen: "j:111", why: "夹具:这一轮点的名" }],
+  });
+  await unblockInserts();
+
+  if (!await rowOf(key)) ok("库里确实没有这一行(注入成立:写了一下、零行)");
+  else fail("注入没成立 —— 行竟然落下去了,这一节测不到东西");
+  if (pendingCleanupNoteCount() === pendingBefore + 1) ok("那个号留在待投清单上(「写了一下」不等于接住了)");
+  else fail(`库里没有、清单也没多出这一笔(${pendingBefore} → ${pendingCleanupNoteCount()}) —— 身份哪儿都不在`);
+
+  // 放开之后补投一次:这一刻才算真的接住。
+  await sweepAgentCleanupDebts();
+  const row = await rowOf(key);
+  if (onRow(row, pid)) ok("写入恢复之后补投把它落到了行上(没有丢)");
+  else fail(`补投之后行上还是没有它:${JSON.stringify(row?.openMembers)}`);
+
+  realProc();
+  stop();
+  await wait(400);
+}
+{
+  // ⑦-2 这个键上**已经有行**:走冲突 UPDATE 那一支。
+  const key = "unit:zero-row-upsert";
+  const { pid, stop } = await survivorWithMark(key);
+  await noteRow(key);                               // 先建行(此时没装触发器)
+  const pendingBefore = pendingCleanupNoteCount();  // 同上:按增量数
+  await blockUpdates("ignore");
+  rearm(pid, key);
+  await noteCleanupDebt({
+    unitToken: key, taskId: "t-write", sessionId: "s-write",
+    rootPid: 0x7ffffff, rootStartedAt: null, trackPath: null, outPath: null,
+    state: "unknown", detail: "夹具:第二次落账", unitVerdict: "ours",
+    open: [{ pid, gen: "j:111", why: "夹具:这一轮点的名" }],
+  });
+  await unblockUpdates();
+
+  const row = await rowOf(key);
+  if (!onRow(row, pid)) ok("行上确实没有它(注入成立:冲突更新被静默丢掉)");
+  else fail("注入没成立 —— 这一节测不到东西");
+  if (pendingCleanupNoteCount() === pendingBefore + 1) ok("那个号留在待投清单上");
+  else fail(`行上没有、清单也没多出这一笔(${pendingBefore} → ${pendingCleanupNoteCount()})`);
+
+  await sweepAgentCleanupDebts();
+  if (onRow(await rowOf(key), pid)) ok("写入恢复之后它落到了行上");
+  else fail("恢复之后仍然没落上");
+
+  realProc();
+  stop();
+  await wait(400);
 }
 
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");

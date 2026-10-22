@@ -195,5 +195,12 @@ async function touchDebtRow(
 type TouchOutcome = "written" | "open-not-taken" | "failed";
 
 /** 条件写到底改没改到行。drizzle 把底层 client 的 `rowsAffected` 原样带出来。 */
-const rowsAffectedOf = (result: unknown): number =>
+/**
+ * 这一次写**到底动了几行**。
+ *
+ * 开给落账那一层(`cleanup-debt.ts`)是因为「写没抛错」和「行真的写上了」在这张表上是两件
+ * 事,而这两层都要据此答「身份有没有人接住」—— 判据只该有一份实现(第 14 轮审查 N1 指的
+ * 就是落账那一层还只认「没抛错」)。
+ */
+export const rowsAffectedOf = (result: unknown): number =>
   Number((result as { rowsAffected?: number | bigint } | null)?.rowsAffected ?? 0);

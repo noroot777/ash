@@ -30,7 +30,7 @@ import {
 } from "./cleanup-debt-judge.js";
 // **写库只有一个出口**:三个写入动作是那一份的文件私有,这里 import 不到它们 —— 所以
 // 「写一下、不管落没落下」在编译期就拿不到那半边(第 13 轮审查 F1 的修复层级)。
-import { applyDebtDisposition, type DebtWriteHooks } from "./cleanup-debt-write.js";
+import { applyDebtDisposition, rowsAffectedOf, type DebtWriteHooks } from "./cleanup-debt-write.js";
 
 /**
  * 行上已经点过名的那几个号。**三档,不折成空数组**(第 9 轮审查 F1-D 第一条):
@@ -65,10 +65,14 @@ async function mergeOpenIntoRow(key: string, open: readonly CleanupOpen[]): Prom
   const held = await readOpenMembers(key);
   if (!held.ok) return false;                     // 读不出来 ⇒ 这一列不动,而且如实说没接住
   try {
-    await db.update(agentCleanupDebts)
+    const written = await db.update(agentCleanupDebts)
       .set({ openMembers: serializeOpenMembers(joinOpen(held.open, open)) })
       .where(eq(agentCleanupDebts.unitToken, key));
-    return true;
+    // **「没抛错」不等于「并上了」**(第 14 轮审查 N1 的同一条边):这个键上没有行、或者这一写
+    // 被静默丢掉时改行数是 0,那几个名一个都没并进去。认下来才算交接完成。
+    if (rowsAffectedOf(written) > 0) return true;
+    console.warn(`[ash] 这几个未排除的号没并到行上(unit=${key}):这一写没动到任何行,继续扛着`);
+    return false;
   } catch (error) {
     console.error(`[ash] 这几个未排除的号没并进行里(unit=${key}):`, error);
     return false;
@@ -302,7 +306,7 @@ async function noteDebtRow(
     // 只有**它**决定这次交接算不算完成:行上原有的那份读不出来时留在原处,没有丢。
     const fresh = joinOpen(pendingOpenOf(key), input.open ?? []);
     const merged = joinOpen(held.ok ? held.open : [], fresh);
-    await db.insert(agentCleanupDebts).values({
+    const written = await db.insert(agentCleanupDebts).values({
       unitToken: key,
       taskId: input.taskId ?? "", sessionId: input.sessionId ?? "",
       rootPid: input.rootPid ?? null, rootStartedAt: input.rootStartedAt ?? null,
@@ -332,6 +336,14 @@ async function noteDebtRow(
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       },
     });
+    // **先问这一写到底动了几行**(第 14 轮审查 N1):upsert 没抛错不等于行写上了 —— 这张表上
+    // 有条件谓词或触发器静默丢写时,改行数是 0,而上一版据此答 `noted`,调用方随即把那一笔从
+    // 待投清单上删掉,于是那几个号既不在库里也不在内存里。审查注入 `RAISE(IGNORE)` 实测过
+    // 两支(首次 INSERT 被忽略、冲突 UPDATE 被忽略),心跳 6→12 / 16→22 还在走。
+    if (rowsAffectedOf(written) <= 0) {
+      console.warn(`[ash] agent 清理责任这一写没动到任何行 unit=${key}:按没落下处理,继续扛着`);
+      return "failed";
+    }
     // 行落了;**新身份有没有跟着落下去**要分开答(见 `NoteVerdict`):旧名单读不出来时这一列
     // 一个字没动,于是 `fresh` 里那几个号还在外面 —— 这一档不许冒充 `noted`。
     return held.ok || !fresh.length ? "noted" : "open-not-taken";
