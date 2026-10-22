@@ -41,7 +41,9 @@ export function reviewFileTarget(path?: string): ReviewFileTarget | null {
   }
   const url = sameOriginUrl(path);
   if (!url || !isReviewFileEndpoint(url.pathname)) return null;
-  const name = decodeSafe(url.searchParams.get("name") ?? "");
+  // query 参数已经被 `URLSearchParams` 解过码,不再解第二遍(理由见 siblingResolverForUrl)。
+  // 上面两条分支的输入是**磁盘路径或 file URL**混在一起的形状,那一层确实要自己解。
+  const name = url.searchParams.get("name") ?? "";
   return name ? { name, url: url.toString() } : null;
 }
 
@@ -167,11 +169,29 @@ export type MarkdownFileResolver = (destination: string) => ImagePreviewTarget |
  * 放（审查第 1 轮非阻塞项 2）。
  */
 export function siblingFileName(destination: string): string | null {
-  const raw = destination.trim();
-  if (!raw || hasUrlScheme(raw) || raw.startsWith("/") || raw.startsWith("\\")) return null;
-  const name = decodeSafe(raw.replace(/^(?:\.\/)+/, "").split(/[?#]/)[0] ?? "");
-  if (!name || PARENT_SEGMENT.test(name) || /^[a-zA-Z]:/.test(name)) return null;
-  return name.split(/[/\\]/).every((part) => part && part !== ".") ? name : null;
+  if (!isDocumentRelative(destination)) return null;
+  const raw = decodeSafe(destination.trim().split(/[?#]/)[0] ?? "");
+  if (!raw || PARENT_SEGMENT.test(raw)) return null;
+  // `.` 段**消去而不是拒掉**:`shots/./shot.png` 在 Markdown/HTML 里跟 `shots/shot.png`
+  // 是同一个文件,证据接口只认后者(server 的 evidenceSegments 把 `.` 段一律拒了)。拒掉
+  // 它的那一版不是「少画一张图」—— 下一档会把这处引用判成工作目录的,于是工作目录里同名
+  // 的另一张图被端上来冒充证据(审查第 3 轮 R4 第 1 条)。`..` 仍然显式拒:规范化之后它
+  // 指的是证据根之外,拼出来也是个必 400 的地址。
+  const parts = raw.split(/[/\\]/).filter((part) => part !== ".");
+  return parts.length && parts.every(Boolean) ? parts.join("/") : null;
+}
+
+/**
+ * 这处引用是**相对这份文档**的吗 —— 归属判定的第一问,而且只问形状,不问「解不解释得通」。
+ *
+ * 四类不是:带协议的(`http:`、`data:`、`file:`)、`/` 或 `\` 开头的绝对路径与 UNC、
+ * 盘符开头的 Windows 绝对路径。剩下的一律是相对引用,**哪怕它最终解不出一个合法名字**
+ * (`..` 爬出去、空段)—— 解释失败绝不改变它属于哪个根(见 reportFileResolver)。
+ */
+export function isDocumentRelative(destination?: string): boolean {
+  const raw = destination?.trim();
+  if (!raw || hasUrlScheme(raw) || /^[a-zA-Z]:/.test(raw)) return false;
+  return !raw.startsWith("/") && !raw.startsWith("\\");
 }
 
 /** `..` 爬出去的那一段——服务端一律 400,这里就别拼这个必败的地址。 */
@@ -270,7 +290,13 @@ export function reportFileResolver(
 ): MarkdownFileResolver {
   const sibling = siblingFileResolver(urlFor);
   const workspace = taskId ? taskFileResolver(taskId) : undefined;
-  return (destination) => sibling(destination) ?? workspace?.(destination) ?? null;
+  // **先定种类,再谈解析**。`sibling(x) ?? workspace(x)` 那一版是「谁解释得通就归谁」:
+  // 两档的形状判据宽严不同(`shots/./shot.png` 前者拒、后者收),于是一处合法的相对引用
+  // 会掉到工作目录那一档上,把同名的另一张图端上来(审查第 3 轮 R4 第 1 条)。所以相对
+  // 引用**恒属于这份文档**:解不出合法名字就如实报「图取不到」,一个字都不换根。
+  return (destination) => (
+    isDocumentRelative(destination) ? sibling(destination) : workspace?.(destination) ?? null
+  );
 }
 
 /**
@@ -290,7 +316,12 @@ export function siblingResolverForUrl(fileUrl: string): MarkdownFileResolver | u
   // 文档根归属见 reportFileResolver。这个弹窗手上只有报告自己的地址，而任务 id 就在
   // 那个地址里（报告里也会提到工作目录里的文件）。
   const taskId = /\/tasks\/([^/]+)\//.exec(base.pathname)?.[1];
-  const document = decodeSafe(base.searchParams.get("name") ?? "").replace(/\\/g, "/");
+  // `URLSearchParams.get` **已经解过一次码**,这里不许再解:名字字面含 `%20` 的目录
+  // (`notes%20raw/`)会被解成 `notes raw/`,于是同一份报告里的 `shot.png` 被请求到另一个
+  // 目录下(审查第 3 轮 R4 第 2 条)。磁盘路径、原始 Markdown URL 里的转义、以及已经取出
+  // 来的 query 参数是三层不同的编码,不能机械地都解一遍 —— 下面的 taskId 取自 pathname,
+  // 那一层没人替我们解,所以它仍然要 decodeSafe。
+  const document = (base.searchParams.get("name") ?? "").replace(/\\/g, "/");
   const directory = document.includes("/") ? document.slice(0, document.lastIndexOf("/") + 1) : "";
   return reportFileResolver((name) => {
     const url = new URL(base.toString());

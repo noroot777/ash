@@ -30,6 +30,20 @@ for (const name of ["shot.png", "./shot.png", "notes.md", "shots/deep.png"]) {
   assert.equal(resolved?.fallback, undefined, `${name} 不该留「失败就换根」的退路`);
 }
 
+// ①b **种类先定，再谈能不能解释**。`shots/./shot.png` 是一处合法的相对引用（跟
+// `shots/shot.png` 是同一个文件），`.` 段在这里**消去**而不是把整处引用判给另一个根：
+// 「谁解释得通归谁」的那一版两档形状判据宽严不同，于是它掉到工作目录那一档上，把同名的
+// 另一张图端上来（R4 第 1 条）。`..` 规范化之后在证据根之外，显式拒掉、也**不换根**。
+assert.equal(
+  resolve("shots/./shot.png")?.url,
+  "/api/tasks/T1/review/file?round=2&name=shots%2Fshot.png",
+  "`.` 段消去，仍然落在证据目录",
+);
+assert.equal(resolve("./notes/./deep/./shot.png")?.url, "/api/tasks/T1/review/file?round=2&name=notes%2Fdeep%2Fshot.png");
+for (const outside of ["../outside.png", "shots/../../outside.png"]) {
+  assert.equal(resolve(outside), null, `${outside} 解不出合法名字就报取不到，不许改判成工作目录的`);
+}
+
 // ② **证据文件此刻在不在，一个字都不参与判定**。这里没有任何清单可问：同一个名字无论证据
 // 目录里有没有它，解出来都是证据接口的地址 —— 取不到就如实报「图取不到」，不许把工作目录
 // 里同名的另一张图冒充成它（R3 第 1 条）。
@@ -61,6 +75,16 @@ assert.equal(
 );
 // 报告弹窗手上只有报告自己的地址，任务 id 从那个地址里取 —— 绝对路径那一档不能因此丢掉。
 assert.match(nested?.("/Users/fjh/x.png")?.url ?? "", /\/api\/tasks\/T1\/file\/raw\?path=/);
+// ④b query 参数**只解一次码**。子报告放在名字字面含 `%20` 的目录里（`notes%20raw/`）时，
+// `URLSearchParams.get` 给的已经是真实名字 `notes%20raw/supplement.md`；再解一遍会变成
+// `notes raw/`，于是正文里的 `shot.png` 被请求到另一个目录下（R4 第 2 条）。
+const escaped = siblingResolverForUrl("/api/tasks/T1/review/file?round=2&name=notes%2520raw%2Fsupplement.md");
+assert.equal(
+  escaped?.("shot.png")?.url,
+  "https://ash.local/api/tasks/T1/review/file?round=2&name=notes%2520raw%2Fshot.png",
+  "目录名里字面的 %20 必须原样留着",
+);
+
 // 不是证据接口的地址推不出同目录解析器。
 assert.equal(siblingResolverForUrl("/api/uploads/x.png"), undefined);
 assert.equal(siblingResolverForUrl("https://example.invalid/review/file?name=a.md"), undefined);
