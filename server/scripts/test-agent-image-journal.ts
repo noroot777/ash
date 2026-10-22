@@ -42,6 +42,7 @@ const shots = (entries: { event: { kind: string } }[]) =>
 try {
   writeFileSync(join(root, "journal.png"), red);
   writeFileSync(join(root, "prov.png"), red);
+  writeFileSync(join(root, "carried.png"), red);
 
   // ① 消费者死在「已交代」与「写进 trace」之间(落库抛错):正文到了 trace,attachment 没到。
   {
@@ -126,6 +127,35 @@ try {
     const bare = readTrace(taskId, sessId);
     const merged = await mergeImageJournal(taskId, sessId, bare);
     assert.equal(merged.length, bare.length, "trace 已经齐全时合并不添一条");
+  }
+
+  // ⑤ 重启接回:回合没换、进程换了 —— **主文档**的前半截也要接(mainTurnStartedAt),
+  // 不只是子文档。接回的 sink 不接,主文档的第一处引用又从 0 号发起,跟同一回合里重启前
+  // 已交代的 0 号相撞;前半截给的定义它也不认。
+  {
+    const taskId = "task-reattach";
+    const sessId = "sess-reattach";
+    const firstHalf = "[proof]: carried.png\n\n重启前：![第一张][proof]\n\n";
+    appendSessionTrace(taskId, sessId, TURN, { kind: "text", text: firstHalf } as never);
+    appendSessionTrace(taskId, sessId, TURN, { kind: "attachment", source: "carried.png", ref: 0, path: join(root, "prov.png") } as never);
+    // 别的回合的主正文不许混进来(主文档一回合一份)。
+    appendSessionTrace(taskId, sessId, "2026-10-22T09:00:00.000Z", { kind: "text", text: "上一回合的话。" } as never);
+    const seed = await loadMarkdownImageSeed(taskId, sessId, { mainTurnStartedAt: TURN });
+    assert.deepEqual(
+      [...(seed ?? new Map()).entries()].map(([id, doc]) => [id, doc.text === firstHalf, doc.refs]),
+      [["", true, 1]],
+      "主文档种子只装接回那一轮的正文与身份",
+    );
+    const resumed: AgentEvent[] = [];
+    for await (const event of withMarkdownImages((async function* () {
+      yield { kind: "text", text: "重启后：![第二张][proof]\n\n" } as AgentEvent;
+      yield { kind: "done", exitStatus: 0 } as AgentEvent;
+    })(), root, { seed })) resumed.push(event);
+    assert.deepEqual(
+      resumed.flatMap((event) => (event.kind === "attachment" ? [[event.ref, event.source, !!event.path]] : [])),
+      [[1, "carried.png", true]],
+      "接回后主文档身份从 1 号接着发,重启前的定义照旧认得",
+    );
   }
 
   console.log("正文图片持久账本回归通过");

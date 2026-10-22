@@ -188,12 +188,14 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     const key = id ?? "";
     const existing = ledgers.get(key);
     if (existing) return existing;
-    // 续聊/接管:这份子文档在**上一条进程**里写过的正文和用掉的身份,从种子接回来。种子
+    // 续聊/接管:这份文档在**上一条进程**里写过的正文和用掉的身份,从种子接回来。种子
     // 区间一个字节都不再碰(emitted 直接越过它),但定义表和「第几条结果」的起算点必须在
     // —— 不接,重开后的第一处引用又从 0 号发起,跟刷新后按 trace 重建的那份撞身份,展示端
     // 按「来源+身份」夹掉一条,两处引用一起「图取不到」(审查第 7 轮 R2);它引用上一段的
-    // 定义时也认不出来。主会话不走种子:它一回合一份文档,续聊本来就是新一回合。
-    const seeded = id !== null ? accounting?.seed?.get(id) : undefined;
+    // 定义时也认不出来。子文档(跨回合累加)在续聊/接管/重启接回都要接;主文档一回合一份,
+    // 只有**重启接回**(回合没换、进程换了)要接,种子键用 ""(loadMarkdownImageSeed 按
+    // 回合过滤后才会给这一键)。
+    const seeded = accounting?.seed?.get(id ?? "");
     const seen = imageStore();
     const definitions = new Map<string, string>();
     if (seeded) {

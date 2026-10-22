@@ -103,12 +103,18 @@ function childEventOf(event: SessionTraceEvent | AgentEvent): { id: string; even
 }
 
 /**
- * 续聊/接管前读出每份子文档的种子。正文只认 trace(屏幕上重建的就是它,跟它一致才叫一致);
+ * 续聊/接管前读出每份文档的种子。正文只认 trace(屏幕上重建的就是它,跟它一致才叫一致);
  * 身份取 trace 与账本的并集 —— 消费者死前已经交代、还没写进 trace 的那几号也不许重发。
+ *
+ * 子文档恒接(它跨回合累加成同一份)。主文档一回合一份,只有**重启接回**那条路要接 ——
+ * 回合没换、进程换了,接回的 sink 不知道这一回合前半截已经说了什么、交代过几号;传
+ * `mainTurnStartedAt`(接回的那一轮的起点)时,把那一轮的主正文与身份也装进种子,键 ""
+ * (sink 的 ledgers 主键同一口径)。续聊/新回合不传:那本来就是新一份主文档。
  */
 export async function loadMarkdownImageSeed(
   taskId: string,
   sessionId: string,
+  opts: { mainTurnStartedAt?: string } = {},
 ): Promise<Map<string, MarkdownImageSeedDoc> | undefined> {
   const docs = new Map<string, MarkdownImageSeedDoc>();
   const doc = (id: string): MarkdownImageSeedDoc => {
@@ -120,6 +126,16 @@ export async function loadMarkdownImageSeed(
     return found;
   };
   for (const entry of await readTraceEntries(taskId, sessionId)) {
+    const main = opts.mainTurnStartedAt !== undefined && entry.turnStartedAt === opts.mainTurnStartedAt;
+    if (main && entry.event.kind === "text" && entry.event.text) {
+      doc("").text += entry.event.text;
+      continue;
+    }
+    if (main && entry.event.kind === "attachment" && typeof entry.event.ref === "number" && entry.event.ref < SYNTH_REF_BASE) {
+      const seeded = doc("");
+      seeded.refs = Math.max(seeded.refs, entry.event.ref + 1);
+      continue;
+    }
     const child = childEventOf(entry.event);
     if (!child) continue;
     if (child.event.kind === "text" && child.event.text) doc(child.id).text += child.event.text;
@@ -129,8 +145,9 @@ export async function loadMarkdownImageSeed(
     }
   }
   for (const line of await readJournal(taskId, sessionId)) {
-    if (!line.final || line.doc == null || typeof line.ref !== "number" || line.ref >= SYNTH_REF_BASE) continue;
-    const seeded = doc(line.doc);
+    if (!line.final || typeof line.ref !== "number" || line.ref >= SYNTH_REF_BASE) continue;
+    if (line.doc == null && line.turnStartedAt !== opts.mainTurnStartedAt) continue;
+    const seeded = doc(line.doc ?? "");
     seeded.refs = Math.max(seeded.refs, line.ref + 1);
   }
   for (const [id, seeded] of docs) if (!seeded.text && !seeded.refs) docs.delete(id);
