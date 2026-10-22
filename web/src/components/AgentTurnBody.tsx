@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { isVisibleExecutionEvent } from "../lib/executionTrace.ts";
 import type { AgentContentSegment } from "../task-detail/conversationModel.ts";
-import { segmentHasVisibleContent } from "../task-detail/conversationSegments.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
-import { turnImages } from "../task-detail/turnImages.ts";
-import { turnLayout } from "../task-detail/turnFold.ts";
+import { turnDocument, type TurnStop } from "../task-detail/turnDocument.ts";
+import { ImagePreviewGroup } from "./ImagePreview.tsx";
 import { MarkdownBody } from "./MarkdownBody.tsx";
+import type { MarkdownLayout } from "./markdownLayout.ts";
 import {
   ExecutionDetails,
   ExecutionEventList,
@@ -12,23 +13,16 @@ import {
   hasExecutionError,
 } from "./ExecutionTrace.tsx";
 
-function SegmentBody({ segment }: { segment: AgentContentSegment }) {
-  return (
-    <>
-      <MessageAttachments paths={segment.attachments} />
-      {segment.markdown && <MarkdownBody text={segment.markdown} />}
-    </>
-  );
-}
-
 /**
- * 过程折叠块。**只在这一回合收口之后才会被渲染**（见 turnLayout），所以它一上来就是
+ * 过程折叠块。**只在这一回合收口之后才会被渲染**（见 turnDocument），所以它一上来就是
  * 折好的，之后再不自动动 —— 用户点开了就一直开着。
+ *
+ * 里面是**同一次解析**出来的那几个顶层块(由 markdownLayout 圈进来的 children),所以
+ * 折叠内外的链接引用定义、脚注照旧全局有效。灯箱另立一组:折着的那半截里的图不该混进
+ * 外面那一组的队列,否则左右翻会翻到屏幕上根本没有的图。
  */
-function ProcessFold({ segments }: { segments: AgentContentSegment[] }) {
-  const events = segments.flatMap((segment) => segment.events);
+function ProcessFold({ events, children }: { events: TurnStop["events"]; children: ReactNode }) {
   const [open, setOpen] = useState(false);
-
   return (
     <details
       className={`task-execution-block task-turn-process${hasExecutionError(events) ? " has-error" : ""}`}
@@ -39,14 +33,7 @@ function ProcessFold({ segments }: { segments: AgentContentSegment[] }) {
         <ExecutionSummaryLine events={events} running={false} />
       </summary>
       <div className="task-turn-process-body">
-        {/* 画不出东西的段不出 section:空的也占 7px 间距(见 segmentHasVisibleContent)。
-            summary 的计数照旧用全部 events —— 它自己会过滤。 */}
-        {segments.filter(segmentHasVisibleContent).map((segment) => (
-          <section className="task-agent-segment" key={segment.id}>
-            <ExecutionEventList events={segment.events} />
-            <SegmentBody segment={segment} />
-          </section>
-        ))}
+        <ImagePreviewGroup isolated>{children}</ImagePreviewGroup>
       </div>
     </details>
   );
@@ -55,14 +42,18 @@ function ProcessFold({ segments }: { segments: AgentContentSegment[] }) {
 /**
  * 一条 agent 气泡的正文。普通任务与团队调度流共用；duet 的回合没有交错结构（就一份
  * events 加一份正文），继续直接用 ExecutionDetails。
+ *
+ * **整条消息只解析一次**：执行步骤按节点偏移摆进顶层块之间（见 markdownLayout 与
+ * turnDocument）。上一版把每一段正文各自过一遍渲染器，于是文档级的定义只要跨过一个工具
+ * 步骤就两头落空 —— 脚注里的截图谁都画不出来，而附件卡片已经被认领走（审查第 3 轮 R2）。
  */
 export function AgentTurnBody({
-  segments: traced,
+  segments,
   running,
   taskId,
 }: {
   segments: AgentContentSegment[];
-  /** 这一回合还在飞（会话行还没落 endedAt）。在飞就不折，见 turnLayout。 */
+  /** 这一回合还在飞（会话行还没落 endedAt）。在飞就不折，见 turnDocument。 */
   running: boolean;
   /**
    * 这一回合是在哪个任务的工作目录里说的话。给了才有「读的时候再去目录里取一次」那一
@@ -70,30 +61,55 @@ export function AgentTurnBody({
    */
   taskId?: string;
 }) {
-  // 正文里引用到的那几张图画进正文本身（agent 把它放在哪就在哪），同一张图随之从卡片排
-  // 里拿掉。**必须按整个回合配**：附件事件恒在它那段正文之后，分段又遇附件就另起一段，
-  // 所以正文和它的图天然分在相邻两段（见 turnImages）。
-  const segments = useMemo(() => turnImages(traced, taskId), [taskId, traced]);
-  // 跑的时候不折 —— 连「切成过程 / 结论」这一步都不做（见 turnLayout）。折叠是个重组
-  // 动作：它会把已经说出口、已经露在外面的正文一并收进过程块，跑的中途干这件事，用户
-  // 正读的内容说没就没。这一回合收口那一下才折，位置从此不再变。
-  const { process, conclusion } = turnLayout(segments, { live: running });
-  /* 两条路径都按同一口径筛:段里画不出东西就不出 section。分段层已经不给纯通知单独开段,
-     这里仍要兜一道 —— alignedSegments 会按 .md 重算每段正文,某一段可能被重算成空。 */
-  const visible = conclusion.filter(segmentHasVisibleContent);
+  const turn = useMemo(
+    () => turnDocument(segments, { live: running, taskId }),
+    [segments, running, taskId],
+  );
+  const layout = useMemo((): MarkdownLayout => {
+    const { stops, fold } = turn;
+    // 还在飞的那一下,脉冲点只给**最后一个画得出东西的**步骤 —— 它就是此刻正在发生的那一步。
+    const pulse = running
+      ? stops.reduce((last, stop, index) => (stop.events.some(isVisibleExecutionEvent) ? index : last), -1)
+      : -1;
+    return {
+      inserts: stops.map((stop, index) => ({
+        offset: stop.offset,
+        node: (
+          <StopBody
+            key={stop.id}
+            stop={stop}
+            /* 折叠块自己就是一层 `<details>`,里面的事件行不再各自套一层(见 ExecutionEventList)。 */
+            bare={!!fold && index < fold.stops}
+            running={index === pulse}
+          />
+        ),
+      })),
+      ...(fold
+        ? {
+          fold: {
+            inserts: fold.stops,
+            offset: fold.offset,
+            render: (children: ReactNode) => (
+              <ProcessFold events={stops.slice(0, fold.stops).flatMap((stop) => stop.events)}>
+                {children}
+              </ProcessFold>
+            ),
+          },
+        }
+        : {}),
+    };
+  }, [turn, running]);
+
+  return <MarkdownBody text={turn.text} layout={layout} />;
+}
+
+function StopBody({ stop, bare, running }: { stop: TurnStop; bare: boolean; running: boolean }) {
   return (
     <>
-      {process.some(segmentHasVisibleContent) && <ProcessFold segments={process} />}
-      {visible.map((segment, index) => (
-        <section className="task-agent-segment" key={segment.id}>
-          {/* 平铺那条路径（跑着的时候、以及折不出结论的回合）逐段折事件，跟原来一样。 */}
-          <ExecutionDetails
-            events={segment.events}
-            running={running && index === visible.length - 1}
-          />
-          <SegmentBody segment={segment} />
-        </section>
-      ))}
+      {bare
+        ? <ExecutionEventList events={stop.events} />
+        : <ExecutionDetails events={stop.events} running={running} />}
+      <MessageAttachments paths={stop.attachments} />
     </>
   );
 }

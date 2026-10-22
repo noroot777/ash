@@ -36,6 +36,14 @@ export function turnLayout(
   return splitTurnSegments(segments);
 }
 
+/** 折叠切点:**最后一次真正动手**的那一段(见 isHandsOn);-1 = 这一回合没得折。 */
+export function handsOnPivot(segments: AgentContentSegment[]): number {
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    if (segments[index]!.events.some(isHandsOn)) return index;
+  }
+  return -1;
+}
+
 /**
  * 把一个回合切成「过程」和「结论」两段。切点是**最后一次真正动手的工具/分析事件**：
  * 在它之前的一切（含夹在两次工具调用之间的正文）折起来，在它之后吐出的正文原样露在外面。
@@ -54,10 +62,7 @@ export function splitTurnSegments(segments: AgentContentSegment[]): {
   conclusion: AgentContentSegment[];
 } {
   const flat = { process: [] as AgentContentSegment[], conclusion: segments };
-  let pivot = -1;
-  for (let index = segments.length - 1; index >= 0 && pivot < 0; index -= 1) {
-    if (segments[index]!.events.some(isHandsOn)) pivot = index;
-  }
+  const pivot = handsOnPivot(segments);
   if (pivot < 0) return flat;
 
   const split = segments[pivot]!;

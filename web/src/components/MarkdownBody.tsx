@@ -1,11 +1,17 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CaretDown, X } from "@phosphor-icons/react";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ReviewConclusion } from "@ash/shared";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
+import {
+  insertIndexOf,
+  isFoldRegion,
+  rehypeMarkdownLayout,
+  type MarkdownLayout,
+} from "./markdownLayout.ts";
 import {
   imageOriginLabel,
   imagePreviewTarget,
@@ -88,90 +94,132 @@ function MarkdownImage({ alt, origin, url, name }: {
   );
 }
 
-function MarkdownDocument({ text, resolveFile, onReviewReport, onActionError }: {
+type MarkdownContext = {
+  resolveFile?: MarkdownFileResolver;
+  layout?: MarkdownLayout;
+  onReviewReport: (target: ReviewFileTarget) => void;
+  onActionError: (message: string | null) => void;
+};
+
+/** 渲染器的组件表 —— 只建一次,每次渲染的新值从 `latest.current` 取(见 MarkdownDocument)。 */
+function markdownComponents(latest: { current: MarkdownContext }): Components {
+  const resolveFile = (destination: string) => latest.current.resolveFile?.(destination) ?? null;
+  const onReviewReport = (target: ReviewFileTarget) => latest.current.onReviewReport(target);
+  const onActionError = (message: string | null) => latest.current.onActionError(message);
+  return {
+    a: ({ node: _node, href, onClick, ...props }) => {
+      const reviewFile = reviewFileTarget(href) ?? resolveFile(href ?? "") ?? null;
+      const reviewMarkdown = reviewFile !== null && /\.md$/i.test(reviewFile.name);
+      const localOpen = localOpenUrl(href);
+      // 指向图片的链接跟内嵌图走同一个灯箱（也就跟同一条消息里的其它图编在一组，
+      // 能左右翻）。按住 ⌘/Ctrl/Shift 或中键仍然是浏览器原来那套「新标签页打开」，
+      // 由 PreviewableImageLink 自己让路。
+      const image = imagePreviewTarget(href, resolveFile);
+      if (image) {
+        return (
+          <PreviewableImageLink
+            {...props}
+            src={image.url}
+            href={image.url}
+            alt={image.name}
+            label={image.name}
+            onClick={onClick}
+          />
+        );
+      }
+      return (
+        <a
+          {...props}
+          href={reviewFile?.url ?? localOpen ?? href}
+          target={localOpen || reviewMarkdown ? undefined : "_blank"}
+          rel={localOpen || reviewMarkdown ? undefined : "noreferrer"}
+          onClick={(event) => {
+            onClick?.(event);
+            if (event.defaultPrevented) return;
+            if (reviewMarkdown) {
+              event.preventDefault();
+              onReviewReport(reviewFile);
+              return;
+            }
+            if (!localOpen) return;
+            event.preventDefault();
+            onActionError(null);
+            void openLocalPath(href || localOpen).catch((reason: unknown) => {
+              onActionError(reason instanceof Error ? reason.message : String(reason));
+            });
+          }}
+        />
+      );
+    },
+    img: ({ src, alt }) => {
+      const raw = typeof src === "string" ? src : "";
+      // 空地址也**一个字都不画**：react-markdown 的 urlTransform 会把它不认的协议
+      // （`file:` 就是一个）整个清空，画出来就是一张没有 src 的裂图（审查第 1 轮 F2）。
+      if (!raw) return null;
+      // 作废标记:归属不可信那一处,任何 resolver 都不许再把它救活成当前文件
+      // (审查第 2 轮 F1)。必须在解析之前就认掉。
+      const unavailable = unavailableImageOrigin(raw);
+      if (unavailable) return <MissingImage origin={unavailable} alt={alt} />;
+      const image = imagePreviewTarget(raw, resolveFile);
+      // 解不出来的本机路径（agent 自己机器上的地址，浏览器一个都取不到）报一行小字。
+      if (!image && isLocalImageReference(raw)) return <MissingImage origin={raw} alt={alt} />;
+      return <MarkdownImage url={image?.url ?? raw} name={image?.name} alt={alt ?? ""} origin={raw} />;
+    },
+    table: ({ children, ...props }) => (
+      <div className="task-markdown-table">
+        <table {...props}>{children}</table>
+      </div>
+    ),
+    pre: ({ children }) => <pre className="task-code-block">{children}</pre>,
+    code: ({ children, className }) => <code className={className}>{children}</code>,
+    // `div` 在这个应用里只可能是 markdownLayout 插的标记(没装 rehype-raw,正文里的
+    // 裸 HTML 一个字都不解析),所以认标记之后原样兜底就够了。
+    div: ({ node, children, ...props }) => {
+      const { layout } = latest.current;
+      const index = insertIndexOf(node?.properties);
+      if (index !== null) return <>{layout?.inserts[index]?.node ?? null}</>;
+      if (isFoldRegion(node?.properties)) return <>{layout?.fold?.render(children)}</>;
+      return <div {...props}>{children}</div>;
+    },
+  };
+}
+
+function MarkdownDocument({ text, resolveFile, layout, onReviewReport, onActionError }: {
   text: string;
   /** 这份正文里的相对路径按哪儿解（见 markdownPolicy 的 MarkdownFileResolver）。 */
   resolveFile?: MarkdownFileResolver;
+  /** 执行步骤 / 折叠块怎么摆进这一次解析的结果里（见 markdownLayout）。 */
+  layout?: MarkdownLayout;
   onReviewReport: (target: ReviewFileTarget) => void;
   onActionError: (message: string | null) => void;
 }) {
+  /**
+   * `components` 里那几个函数的**身份必须跨渲染稳定**。
+   *
+   * react-markdown 把它们当组件类型用(`jsx(components.img, …)`),身份一变 React 就认为
+   * 这是另一种组件 —— 整棵子树卸载重挂,里面所有状态被重置。可见后果:过程折叠块一展开,
+   * 下一条事件到达就自己折回去了;图片的「再试一次」同理。所以每次渲染的新值走 ref 取,
+   * 组件表本身只建一次。
+   */
+  const latest = useRef({ resolveFile, layout, onReviewReport, onActionError });
+  latest.current = { resolveFile, layout, onReviewReport, onActionError };
+  const components = useMemo(() => markdownComponents(latest), []);
+  const rehypePlugins = useMemo(
+    () => (layout ? [rehypeMarkdownLayout(layout)] : []),
+    [layout],
+  );
   return (
     <div className="task-markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkSoftBreaks]}
+        rehypePlugins={rehypePlugins}
+        components={components}
         // 图片地址**原样交给我们自己判**:react-markdown 默认会把它不认的协议整个清空,
         // 于是没来得及被改写的 `file:///…/shot.png` 到 img 这里只剩空串 —— 既画不出来,也
         // 报不出「哪个文件取不到」(连路径都没了,审查第 2 轮 F2 的失败分支)。img 的 src
         // 不会被当成可执行地址,分类与越界判定全在 markdownPolicy + 服务端那道门禁;链接
         // (href)仍走默认清理,那条才是 `javascript:` 的入口。
         urlTransform={(url, key) => (key === "src" ? url : defaultUrlTransform(url))}
-        components={{
-          a: ({ node: _node, href, onClick, ...props }) => {
-            const reviewFile = reviewFileTarget(href) ?? resolveFile?.(href ?? "") ?? null;
-            const reviewMarkdown = reviewFile !== null && /\.md$/i.test(reviewFile.name);
-            const localOpen = localOpenUrl(href);
-            // 指向图片的链接跟内嵌图走同一个灯箱（也就跟同一条消息里的其它图编在一组，
-            // 能左右翻）。按住 ⌘/Ctrl/Shift 或中键仍然是浏览器原来那套「新标签页打开」，
-            // 由 PreviewableImageLink 自己让路。
-            const image = imagePreviewTarget(href, resolveFile);
-            if (image) {
-              return (
-                <PreviewableImageLink
-                  {...props}
-                  src={image.url}
-                  href={image.url}
-                  alt={image.name}
-                  label={image.name}
-                  onClick={onClick}
-                />
-              );
-            }
-            return (
-              <a
-                {...props}
-                href={reviewFile?.url ?? localOpen ?? href}
-                target={localOpen || reviewMarkdown ? undefined : "_blank"}
-                rel={localOpen || reviewMarkdown ? undefined : "noreferrer"}
-                onClick={(event) => {
-                  onClick?.(event);
-                  if (event.defaultPrevented) return;
-                  if (reviewMarkdown) {
-                    event.preventDefault();
-                    onReviewReport(reviewFile);
-                    return;
-                  }
-                  if (!localOpen) return;
-                  event.preventDefault();
-                  onActionError(null);
-                  void openLocalPath(href || localOpen).catch((reason: unknown) => {
-                    onActionError(reason instanceof Error ? reason.message : String(reason));
-                  });
-                }}
-              />
-            );
-          },
-          img: ({ src, alt }) => {
-            const raw = typeof src === "string" ? src : "";
-            // 空地址也**一个字都不画**：react-markdown 的 urlTransform 会把它不认的协议
-            // （`file:` 就是一个）整个清空，画出来就是一张没有 src 的裂图（审查第 1 轮 F2）。
-            if (!raw) return null;
-            // 作废标记:归属不可信那一处,任何 resolver 都不许再把它救活成当前文件
-            // (审查第 2 轮 F1)。必须在解析之前就认掉。
-            const unavailable = unavailableImageOrigin(raw);
-            if (unavailable) return <MissingImage origin={unavailable} alt={alt} />;
-            const image = imagePreviewTarget(raw, resolveFile);
-            // 解不出来的本机路径（agent 自己机器上的地址，浏览器一个都取不到）报一行小字。
-            if (!image && isLocalImageReference(raw)) return <MissingImage origin={raw} alt={alt} />;
-            return <MarkdownImage url={image?.url ?? raw} name={image?.name} alt={alt ?? ""} origin={raw} />;
-          },
-          table: ({ children, ...props }) => (
-            <div className="task-markdown-table">
-              <table {...props}>{children}</table>
-            </div>
-          ),
-          pre: ({ children }) => <pre className="task-code-block">{children}</pre>,
-          code: ({ children, className }) => <code className={className}>{children}</code>,
-        }}
       >
         {text}
       </ReactMarkdown>
@@ -459,12 +507,20 @@ export function ReviewReportDialog({ target, onReviewReport, onClose }: {
   );
 }
 
-export function MarkdownBody({ text, resolveFile }: { text: string; resolveFile?: MarkdownFileResolver }) {
+export function MarkdownBody({ text, resolveFile, layout }: {
+  text: string;
+  resolveFile?: MarkdownFileResolver;
+  /**
+   * 执行步骤摆在正文哪几处(见 markdownLayout)。给了它就是**一条消息一次解析**:
+   * 分段只决定「这一步画在哪两个块之间」,不再各自过一遍渲染器。
+   */
+  layout?: MarkdownLayout;
+}) {
   const [reviewReport, setReviewReport] = useState<ReviewFileTarget | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   return (
     <ImagePreviewGroup>
-      <MarkdownDocument text={text} resolveFile={resolveFile} onReviewReport={setReviewReport} onActionError={setActionError} />
+      <MarkdownDocument text={text} resolveFile={resolveFile} layout={layout} onReviewReport={setReviewReport} onActionError={setActionError} />
       {actionError && <p className="markdown-action-error" role="status">本地文件打开失败：{actionError}</p>}
       {reviewReport && (
         <ReviewReportDialog target={reviewReport} onReviewReport={setReviewReport} onClose={() => setReviewReport(null)} />

@@ -5,7 +5,8 @@
 // ——正文里什么都不画、附件卡片照旧挂着，而两边的单元测试全绿。
 import assert from "node:assert/strict";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
-import { turnImages } from "../src/task-detail/turnImages.ts";
+import { turnImageDocument } from "../src/task-detail/turnImages.ts";
+import { turnDocument } from "../src/task-detail/turnDocument.ts";
 import { taskFilePath } from "../src/components/markdownPolicy.ts";
 import { markdownImageRefs } from "../../shared/src/markdown-images.ts";
 
@@ -20,6 +21,11 @@ const session = {
   endedAt: "2026-10-21T08:10:00.000Z",
 };
 const traced = (at, event) => ({ at, turnStartedAt: STARTED, event });
+// 走产品自己的入口:**整条消息配一次图**,分段只决定执行步骤插在正文哪儿(见 turnDocument)。
+// `live: true` = 不折叠,折叠与配对无关,别把两件事缠在一个断言里。
+const turnOf = (segments, taskId) => turnDocument(segments, { live: true, taskId });
+const bodyOf = (segments, taskId) => turnOf(segments, taskId).text;
+const cardsOf = (segments, taskId) => turnOf(segments, taskId).stops.flatMap((stop) => stop.attachments);
 const uploads = (name) => `/Users/demo/code/ash/data/uploads/${name}`;
 
 // 真实形状：正文 → 附件（服务端收到正文的那一刻就落盘，所以恒在它后面）→ 正文。
@@ -47,39 +53,43 @@ assert.deepEqual(
 );
 
 // ② 配对：两处引用各自那一次的字节，按出场顺序。
-const claimed = turnImages(turns[0].segments);
-const markdown = claimed.map((segment) => segment.markdown).join("");
+const markdown = bodyOf(turns[0].segments);
 assert.match(markdown, /!\[前\]\(\/api\/uploads\/aaaaaaaaaaaa-shot\.png\)/, "「修改前」那句画第一次的字节");
 assert.match(markdown, /!\[后\]\(\/api\/uploads\/bbbbbbbbbbbb-shot\.png\)/, "「修改后」那句画第二次的字节");
 
 // ③ 画进正文的撤出卡片排，正文没提的留着。
 assert.deepEqual(
-  claimed.flatMap((segment) => segment.attachments).map((path) => path.split("/").pop()),
+  cardsOf(turns[0].segments).map((path) => path.split("/").pop()),
   ["cccccccccccc-tool.png"],
   "已经画进正文的不该再挂卡片；正文没提的那张照旧",
 );
 
-// ④ 没有 source 的历史消息 + 不知道是哪个任务：原样返回同一份引用（省掉下游重渲染）。
+// ④ 没有 source 的历史消息 + 不知道是哪个任务：正文原样交回（连新字符串都不建，下游 memo 照旧命中）。
 const legacy = [{ id: "x:0", markdown: "![旧](output/gone.png)", events: [], attachments: [uploads("dddddddddddd-x.png")] }];
-assert.equal(turnImages(legacy), legacy, "一条都配不上时要原样返回入参");
+const intact = turnImageDocument(legacy[0].markdown, []);
+assert.equal(intact.markdown, legacy[0].markdown, "一条都配不上时正文一个字都不改");
+assert.equal(intact.claimed.size, 0, "也不认领任何拷贝");
 
 // ⑤ 存量消息的唯一出路：知道是哪个任务，就改写成「现在去那个工作目录里取」。
 // 用户 2026-10-21 报的那一幕正是这一类——落盘是那天才加的,那之前说过的图一份拷贝都没有,
 // 而文件还好好躺在工作目录里（他自己的「生成物」截图就能看见那几个文件）。
-const live = turnImages(legacy, "C0ojRgeQnMsa");
-assert.notEqual(live, legacy, "知道任务时要改写,不能原样返回");
+const live = turnOf(legacy, "C0ojRgeQnMsa");
+assert.notEqual(live.text, legacy[0].markdown, "知道任务时要改写,不能原样返回");
 assert.equal(
-  live[0].markdown,
+  live.text,
   "![旧](/api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fgone.png&workspaceOnly=1)",
   "没有快照拷贝的引用改写到任务工作目录的原始字节接口",
 );
-assert.deepEqual(live[0].attachments, [uploads("dddddddddddd-x.png")], "实时那一档不认领附件卡片");
+assert.deepEqual(
+  live.stops.flatMap((stop) => stop.attachments),
+  [uploads("dddddddddddd-x.png")],
+  "实时那一档不认领附件卡片",
+);
 
 // ⑥ **快照优先**:有拷贝时一律画拷贝——那是 agent 说那句话时的那一张,工作目录里的已经
 // 可能被改过了。顺序反了就会出现「结论说修改前、画出来是改完以后」。
-const snapshot = turnImages(turns[0].segments, "C0ojRgeQnMsa");
 assert.match(
-  snapshot.map((segment) => segment.markdown).join(""),
+  bodyOf(turns[0].segments, "C0ojRgeQnMsa"),
   /!\[前\]\(\/api\/uploads\/aaaaaaaaaaaa-shot\.png\)/,
   "有快照就不走实时那一档",
 );
@@ -92,7 +102,7 @@ const untouched = [{
   attachments: [],
 }];
 assert.equal(
-  turnImages(untouched, "C0ojRgeQnMsa")[0].markdown,
+  bodyOf(untouched, "C0ojRgeQnMsa"),
   untouched[0].markdown,
   "站外/站内绝对地址/越界路径都不许改写成任务文件地址",
 );
@@ -109,7 +119,7 @@ const missing = [{
   attachmentSources: [{ source: "output/missing.png", ref: 0 }],
 }];
 assert.equal(
-  turnImages(missing, "C0ojRgeQnMsa")[0].markdown,
+  bodyOf(missing, "C0ojRgeQnMsa"),
   "![没存下](/api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fmissing.png&workspaceOnly=1)",
   "明确没有副本 → 现在去工作目录取",
 );
@@ -128,14 +138,14 @@ const shortQueue = [{
   attachments: [uploads("eeeeeeeeeeee-s.png")],
   attachmentSources: [{ path: uploads("eeeeeeeeeeee-s.png"), source: "output/s.png", ref: 0 }],
 }];
-const short = turnImages(shortQueue, "C0ojRgeQnMsa");
+const short = turnOf(shortQueue, "C0ojRgeQnMsa");
 assert.equal(
-  short[0].markdown,
+  short.text,
   "![一](#ash-image-unavailable:output%2Fs.png) ![二](#ash-image-unavailable:output%2Fs.png)",
   "对不上就显式作废:作废**不能**靠「原样留着」表达,否则下一个 resolver 又把它救活成当前文件",
 );
 assert.deepEqual(
-  short[0].attachments,
+  short.stops.flatMap((stop) => stop.attachments),
   [uploads("eeeeeeeeeeee-s.png")],
   "一处都没领走,那份拷贝必须留在卡片里 —— 画不出来不等于让人拿不到",
 );
@@ -147,20 +157,20 @@ const abaSources = [
   { path: uploads("1111eeeeeeee-shot.png"), source: "output/shot.png", ref: 2 },
 ];
 assert.equal(
-  turnImages([{
+  bodyOf([{
     id: "aba:0",
     markdown: "改前：![改前](output/shot.png)\n\n改后：![改后](output/shot.png)\n\n回滚了：![恢复](output/shot.png)",
     events: [],
     attachments: abaSources.map((item) => item.path),
     attachmentSources: abaSources,
-  }], "C0ojRgeQnMsa")[0].markdown,
+  }], "C0ojRgeQnMsa"),
   "改前：![改前](/api/uploads/1111eeeeeeee-shot.png)\n\n改后：![改后](/api/uploads/2222ffffffff-shot.png)\n\n回滚了：![恢复](/api/uploads/1111eeeeeeee-shot.png)",
   "三处引用各拿自己那一次",
 );
 
 // ⑨'' 分段**不许改变配对与解析**:同一条消息被附件事件切成两段时,拼回去才是 agent 说的
 // 那一段(审查第 2 轮 F2:切段让一对反引号被切开,里面的写法示例在后半段里成了真图)。
-const split = turnImages([
+const split = turnOf([
   { id: "sp:0", markdown: "示例 `![示例](output/x.png)", events: [], attachments: [] },
   {
     id: "sp:1",
@@ -170,11 +180,10 @@ const split = turnImages([
     attachmentSources: [{ path: uploads("3333aaaaaaaa-y.png"), source: "output/y.png", ref: 0 }],
   },
 ], "C0ojRgeQnMsa");
-assert.equal(split[0].markdown, "示例 `![示例](output/x.png)", "行内代码里的示例一个字都不许改写");
 assert.equal(
-  split[1].markdown,
-  "` 真图：![真图](/api/uploads/3333aaaaaaaa-y.png)",
-  "真图照旧认领;改写落在它自己那一段里",
+  split.text,
+  "示例 `![示例](output/x.png)` 真图：![真图](/api/uploads/3333aaaaaaaa-y.png)",
+  "拼回去那对反引号就是闭合的:里面的示例一个字都不许改写,后面的真图照旧认领",
 );
 
 // ⑩ 老数据(一条 ref 都没有)走**同一套对账**:两处引用、只记了一条 → 这个目的地配不上,
@@ -189,7 +198,7 @@ const legacyQueue = [{
   attachmentSources: [{ path: uploads("ffffffffffff-s.png"), source: "output/s.png" }],
 }];
 assert.equal(
-  turnImages(legacyQueue, "C0ojRgeQnMsa")[0].markdown,
+  bodyOf(legacyQueue, "C0ojRgeQnMsa"),
   "![一](#ash-image-unavailable:output%2Fs.png) ![二](#ash-image-unavailable:output%2Fs.png)",
   "老数据配不上也显式作废,不许按位置顶上去",
 );
@@ -207,7 +216,7 @@ const legacyPaired = [{
   ],
 }];
 assert.equal(
-  turnImages(legacyPaired, "C0ojRgeQnMsa")[0].markdown,
+  bodyOf(legacyPaired, "C0ojRgeQnMsa"),
   "一：![一](/api/uploads/1a1a1a1a1a1a-a.png)\n\n二：![二](/api/uploads/2b2b2b2b2b2b-b.png)",
   "老数据对得上就画拷贝",
 );
@@ -224,14 +233,14 @@ const mixed = [{
     { path: uploads("4d4d4d4d4d4d-b.png"), source: "output/b.png", ref: 1 },
   ],
 }];
-const mixedOut = turnImages(mixed, "C0ojRgeQnMsa");
+const mixedOut = turnOf(mixed, "C0ojRgeQnMsa");
 assert.equal(
-  mixedOut[0].markdown,
+  mixedOut.text,
   "坏的：![A1](#ash-image-unavailable:output%2Fa.png) ![A2](#ash-image-unavailable:output%2Fa.png)\n\n好的：![B](/api/uploads/4d4d4d4d4d4d-b.png)",
   "配不上的那个目的地作废,对得上的那个照旧画",
 );
 assert.deepEqual(
-  mixedOut[0].attachments,
+  mixedOut.stops.flatMap((stop) => stop.attachments),
   [uploads("3c3c3c3c3c3c-a.png")],
   "作废的那份留在卡片里,被领走的那份撤掉",
 );
@@ -249,7 +258,7 @@ const doubled = [{
   ],
 }];
 assert.equal(
-  turnImages(doubled, "C0ojRgeQnMsa")[0].markdown,
+  bodyOf(doubled, "C0ojRgeQnMsa"),
   "![图](/api/uploads/5e5e5e5e5e5e-one.png)",
   "同一处引用送两次不算两处",
 );
@@ -274,7 +283,7 @@ assert.deepEqual(
   "兜底单段必须保住「哪一处引用对哪份拷贝」",
 );
 assert.equal(
-  turnImages(diverged, "C0ojRgeQnMsa")[0].markdown,
+  bodyOf(diverged, "C0ojRgeQnMsa"),
   "权威正文说的是这张：\n\n![图](/api/uploads/99999999999a-shot.png)",
   "关联还在就画那份副本,不许退到当前文件",
 );
@@ -295,19 +304,19 @@ const projectionItems = buildConversationItems([{
   ],
 }], [session], []);
 const projected = projectionItems.filter((item) => item.kind === "agent")[0].segments;
-const painted = turnImages(projected, "C0ojRgeQnMsa");
+const painted = turnOf(projected, "C0ojRgeQnMsa");
 assert.equal(
-  painted.map((segment) => segment.markdown).join("").includes("/api/uploads/"),
+  painted.text.includes("/api/uploads/"),
   false,
   "正文只剩一句、记录却有三条:一处都不许按位置顶上去 —— 顶出来的恰好是红图",
 );
 assert.match(
-  painted.map((segment) => segment.markdown).join(""),
+  painted.text,
   /#ash-image-unavailable:/,
   "作废要显式表达,这样任何 resolver 都救不活它",
 );
 assert.deepEqual(
-  [...new Set(painted.flatMap((segment) => segment.attachments))].sort(),
+  [...new Set(painted.stops.flatMap((stop) => stop.attachments))].sort(),
   [uploads("aaaa11111111-take.png"), uploads("bbbb22222222-take.png")].sort(),
   "两份拷贝都留在卡片里:画不出来不等于让人拿不到",
 );
@@ -321,7 +330,7 @@ const semantics = [{
   attachments: [],
 }];
 assert.equal(
-  turnImages(semantics, "C0ojRgeQnMsa")[0].markdown,
+  bodyOf(semantics, "C0ojRgeQnMsa"),
   "真图：![截图](</api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fresult(1).png&workspaceOnly=1>)\n\n写法示例：\n\n    ![示例](output/shot.png)\n\n引用式：![图](/api/tasks/C0ojRgeQnMsa/file/raw?path=output%2Fref.png&workspaceOnly=1)\n\n[ref]: output/ref.png\n",
   // 地址里带括号时必须 `<>` 包起来,否则 CommonMark 在第一个括号处就截断(见 shared 的 rewriter)。
   "括号文件名完整、缩进代码原样、引用式图认得出来",
@@ -371,7 +380,7 @@ const owned = [{
   attachments: [],
 }];
 assert.equal(
-  turnImages(owned, "C0ojRgeQnMsa")[0].markdown,
+  bodyOf(owned, "C0ojRgeQnMsa"),
   [
     "证据：![证据](/Users/fjh/code/harness/data/runs/kCIlzUlQsB9w/free-review/P6pTi1-Ksavv/round-2/team.png)",
     "",
@@ -401,10 +410,10 @@ assert.equal(markdownImageRefs(exampleBody).length, 0, "整条消息里那是写
 assert.equal(
   exampleSegments.reduce((count, segment) => count + markdownImageRefs(segment.markdown).length, 0),
   0,
-  "分段之后还得是写法示例 —— 每一段都要自己过一遍渲染器",
+  "分段之后还得是写法示例 —— 切点只落在顶层块边界,这条消息压根切不动",
 );
 assert.equal(
-  turnImages(exampleSegments, "t2").map((segment) => segment.markdown).join(""),
+  bodyOf(exampleSegments, "t2"),
   exampleBody,
   "示例一个字都不许被改写",
 );
@@ -424,21 +433,22 @@ const crossedItems = buildConversationItems([{
     traced("2026-10-21T08:01:04.000Z", { kind: "attachment", path: uploads("ffff66666666-shot.png"), source: "output/shot.png", ref: 1 }),
   ],
 }], [session3], []);
-const crossed = turnImages(crossedItems.find((item) => item.kind === "agent").segments, "t3");
+const crossed = turnOf(crossedItems.find((item) => item.kind === "agent").segments, "t3");
 assert.equal(
-  crossed.map((segment) => segment.markdown).join(""),
+  crossed.text,
   "真实截图：![真实截图](/api/uploads/eeee55555555-shot.png)\n\n另一张：![另一张](/api/uploads/ffff66666666-shot.png)\n",
   "被工具隔开的那一处照样改写成它自己那份拷贝",
 );
 assert.deepEqual(
-  crossed.flatMap((segment) => segment.attachments),
+  crossed.stops.flatMap((stop) => stop.attachments),
   [],
   "两处都画进正文了,卡片排才该空 —— 不许出现「正文没画、卡片也没了」",
 );
 
-// ⑮' 真的跨段了怎么办(人为构造的 trace、历史落盘里仍有):改写不了的那一处,**附件必须
-// 留在卡片里**。「认领」的唯一后果就是把卡片从排里拿掉,所以只能在改写真的落下去之后认
-// —— 先认领后改写的那一版两头都空:正文留着碎片,卡片也没了。
+// ⑮' 一处引用被切在两段**中间**(人为构造的 trace、历史落盘里仍有)。整条消息只有一份
+// 坐标系,拼回去它就是完整的一处引用 —— 照旧改写、照旧认领。上一版按段渲染、跨段的一律
+// 跳过,于是正文留着碎片、卡片又已经被吃掉,两头都空(审查第 3 轮 R2 实测
+// remainingAttachments=[])。
 const straddling = [
   {
     id: "sp:0",
@@ -452,16 +462,16 @@ const straddling = [
   },
   { id: "sp:1", markdown: "截图](output/shot.png)\n\n另一张：![另一张](output/shot.png)\n", events: [], attachments: [] },
 ];
-const stayed = turnImages(straddling, "t4");
-assert.match(
-  stayed.map((segment) => segment.markdown).join(""),
-  /!\[另一张\]\(\/api\/uploads\/2222bbbb0000-shot\.png\)/,
-  "段内那一处照旧改写",
+const stayed = turnOf(straddling, "t4");
+assert.equal(
+  stayed.text,
+  "真实截图：![真实截图](/api/uploads/1111aaaa0000-shot.png)\n\n另一张：![另一张](/api/uploads/2222bbbb0000-shot.png)\n",
+  "切在引用中间也照旧改写:分段不许改变解析,也不许改变配对",
 );
 assert.deepEqual(
-  stayed.flatMap((segment) => segment.attachments),
-  [uploads("1111aaaa0000-shot.png")],
-  "跨段改不了的那一处,拷贝照旧挂在卡片上(画出来的那一份才撤卡片)",
+  stayed.stops.flatMap((stop) => stop.attachments),
+  [],
+  "两处都画进正文了,卡片排才该空 —— 不许出现「正文没画、卡片也没了」",
 );
 
 // ⑯ 服务端说**字节丢了**(当时读到了、写盘失败了)→ 显式作废。文件后来可能已经被重拍,
@@ -474,7 +484,7 @@ const lostBytes = [{
   attachmentSources: [{ source: "output/lost.png", ref: 0, lost: true }],
 }];
 assert.match(
-  turnImages(lostBytes, "C0ojRgeQnMsa")[0].markdown,
+  bodyOf(lostBytes, "C0ojRgeQnMsa"),
   /#ash-image-unavailable:/,
   "字节丢了就显式作废,不退到当前文件",
 );

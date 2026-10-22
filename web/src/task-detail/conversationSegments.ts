@@ -49,7 +49,7 @@ export type AttachmentSource = { path?: string; source: string; ref?: number; lo
  *   · **后面还会来正文**(`final` 为假):只许切在顶层块边界上(理由见文件头)。还没写完的
  *     那一块(未闭合的围栏、还在写的段落、没合上的反引号)跟着下一段走,各段正文拼回去一
  *     个字不差;整段正文就是一个没写完的块时返回 0 —— 干脆不切,事件挂在这一段上,卡片渲
- *     染在这一段正文之前(AgentTurnBody 的 SegmentBody),顺序仍然说得通:那一块是在这一
+ *     染在这一段正文之前(见 turnDocument 的步骤偏移),顺序仍然说得通:那一块是在这一
  *     步之后才写完的。
  *   · **后面不会再来正文了**:这一段的正文已经是完整的一份 Markdown,切在它**末尾**是安
  *     全的 —— 新开那一段压根没有正文,两种口径下的解析结果不可能不一样。少了这一档,「正
@@ -69,9 +69,10 @@ export function eventSplitAt(markdown: string, final: boolean): number {
  *
  * 为什么需要它:子智能体往同一串 events 里塞的 activity / result / agent 通知和带
  * parentId 的嵌套调用,渲染侧四个入口都先 filter 一道 `isVisibleExecutionEvent`,一个字
- * 都不画。可它们仍会被切成**自己的一段**,于是正文后面多出一个空 `<section>` ——
- * 空的也占 7px(`.task-agent-segment + .task-agent-segment`),scrollHeight 跟着涨,
- * 贴底逻辑看见底边下移就把正在读的人拽到底(审查第 6 轮 F1)。
+ * 都不画。可它们仍会被切成**自己的一段**,上一版于是在正文后面多出一个空 `<section>`,
+ * 空的也占间距,scrollHeight 跟着涨,贴底逻辑看见底边下移就把正在读的人拽到底(审查第 6
+ * 轮 F1)。现在正文只渲染一次、步骤按偏移插进去(见 turnDocument),画不出东西的步骤压根
+ * 不进 DOM;这个谓词仍是折叠块「折进去有没有东西」的口径。
  *
  * 注意事件本身**不能丢**:子智能体抽屉的数据(`buildNativeWork`)就是从
  * `segments[].events` 里提的。所以口径是「不让它单独成段」,不是「不要它」。

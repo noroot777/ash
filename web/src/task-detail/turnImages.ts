@@ -40,7 +40,7 @@
 import { markdownImageRefs } from "@ash/shared/markdown-images";
 import { imagePreviewTarget, taskFilePath, unavailableImage } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
-import type { AgentContentSegment } from "./conversationModel.ts";
+import type { AgentContentSegment, AttachmentSource } from "./conversationModel.ts";
 import { attachmentView } from "./utils.ts";
 
 type Edit = { start: number; end: number; text: string };
@@ -53,16 +53,19 @@ function applyEdits(text: string, edits: Edit[]): string {
   return edits.reduceRight((acc, edit) => acc.slice(0, edit.start) + edit.text + acc.slice(edit.end), text);
 }
 
-/** 这一回合各段正文拼回去 —— 分段只是把同一段消息按附件/工具事件切开的结果。 */
-function joined(segments: AgentContentSegment[]): { text: string; offsets: number[] } {
-  const offsets: number[] = [];
-  let text = "";
-  for (const segment of segments) {
-    offsets.push(text.length);
-    text += segment.markdown;
-  }
-  return { text, offsets };
-}
+export type TurnImageDocument = {
+  /** 改写过的正文。 */
+  markdown: string;
+  /** 被正文领走、因此不该再铺卡片的那几份拷贝。 */
+  claimed: ReadonlySet<string>;
+  /**
+   * 原文里的一个偏移在改写后的正文里落在哪 —— 改写会让地址变长变短,**执行步骤的位置
+   * 必须跟着挪**(见 turnDocument)。没有改写时是恒等映射。
+   */
+  remap: (offset: number) => number;
+};
+
+const NOTHING: ReadonlySet<string> = new Set();
 
 /**
  * 正文认领得了的图画进正文,认领走的附件从卡片排里拿掉。
@@ -84,11 +87,19 @@ function joined(segments: AgentContentSegment[]): { text: string; offsets: numbe
  *   · 对账**没通过** → 这个目的地那几处引用一律显式作废,一个字都不画(见文件头)。
  *   · 没有记录 → 去工作目录取(存量消息唯一的出路)。
  *
- * 一条都没改写时原样返回入参(引用相等,省掉下游的重渲染)。
+ * **配的是整条消息,不是某一段**:分段只决定执行步骤画在哪两个块之间(见 turnDocument),
+ * 它不许改变解析结果,也不许改变配对结果。曾经按段改写、跨段的引用一律跳过,于是那一处
+ * 正文留着原始碎片、卡片又已经被吃掉,两头都没了(审查第 3 轮 R2 实测
+ * remainingAttachments=[])。现在整条消息只有一份坐标系,"改写落下去了"和"渲染时可达"
+ * 是同一件事。
  */
-export function turnImages(segments: AgentContentSegment[], taskId?: string): AgentContentSegment[] {
-  const sources = segments.flatMap((segment) => segment.attachmentSources ?? []);
-  if (!sources.length && !taskId) return segments;
+export function turnImageDocument(
+  markdown: string,
+  sources: readonly AttachmentSource[],
+  taskId?: string,
+): TurnImageDocument {
+  const unchanged: TurnImageDocument = { markdown, claimed: NOTHING, remap: (offset) => offset };
+  if (!sources.length && !taskId) return unchanged;
 
   const live = (destination: string): string | null => {
     if (!taskId) return null;
@@ -102,10 +113,7 @@ export function turnImages(segments: AgentContentSegment[], taskId?: string): Ag
     return path ? api.taskFileRawUrl(taskId, path, { workspaceOnly: true }) : null;
   };
 
-  // **整条消息一次扫**:分段不许改变解析结果。附件事件曾经把正文切成两段再分别解析,
-  // 于是一对反引号被切开、里面的写法示例变成真图(审查第 2 轮 F2)。
-  const { text, offsets } = joined(segments);
-  const refs = markdownImageRefs(text);
+  const refs = markdownImageRefs(markdown);
   // 记录按目的地分组,每组按事件顺序(= 文档顺序)排着。
   // 同一处引用可能被递上来两次(直播那一路和刷新后重建的那一路汇到一起),`ref` 是它在这条
   // 流里的身份 —— 按「来源 + 身份」去重,否则条数翻倍,下面的对账会把整个目的地误判成配不上。
@@ -131,14 +139,13 @@ export function turnImages(segments: AgentContentSegment[], taskId?: string): Ag
   const verified = (destination: string): boolean => counted.get(destination) === records.get(destination)!.length;
 
   const used = new Set<string>();
-  const edits = new Map<number, Edit[]>();
+  const edits: Edit[] = [];
   const taken = new Map<string, number>();
   for (const ref of refs) {
     const list = records.get(ref.destination);
     let url: string | null;
-    // 这处引用领走的那份拷贝。**改写真的落下去了才算领走**:认领的唯一后果是把卡片从
-    // 附件排里拿掉,而下面还有一道「跨段改不了」的闸 —— 先认领后改写的那一版遇到跨段时
-    // 两头都没了:正文留着原始碎片,卡片也被吃掉(审查第 3 轮 R2 实测 remainingAttachments=[])。
+    // 这处引用领走的那份拷贝。**改写真的落下去了才算领走** —— 认领的唯一后果是把卡片从
+    // 附件排里拿掉,所以「画出来了」和「卡片没了」必须是同一个条件。
     let claim: string | null = null;
     if (!list) {
       url = live(ref.destination); /* 服务端没管过这处引用:存量消息那一档 */
@@ -157,48 +164,31 @@ export function turnImages(segments: AgentContentSegment[], taskId?: string): Ag
       }
     }
     if (!url) continue;
-    // 这处引用落在哪一段里。跨段的引用没法原地改写,跳过 —— 分段本身已经只切在顶层块
-    // 边界上(见 conversationSegments 的 stableBlockBoundary),所以正常数据不会跨段;
-    // 这一道兜的是人为构造的 trace 和历史落盘。
-    const index = offsets.findLastIndex((offset) => offset <= ref.start);
-    const base = offsets[index] ?? 0;
-    const segment = segments[index];
-    if (!segment || ref.end > base + segment.markdown.length) continue;
-    const inSegment = edits.get(index) ?? [];
-    inSegment.push({ start: ref.start - base, end: ref.end - base, text: ref.rewrite(url) });
-    edits.set(index, inSegment);
+    edits.push({ start: ref.start, end: ref.end, text: ref.rewrite(url) });
     if (claim) used.add(claim);
   }
-  if (!edits.size) return segments;
+  if (!edits.length) return unchanged;
 
-  const claimed = segments.map((segment, index) => {
-    const list = edits.get(index);
-    return list?.length ? { ...segment, markdown: applyEdits(segment.markdown, list) } : segment;
-  });
-  if (!used.size) return claimed;
-  return claimed.map((segment) => (
-    segment.attachments.some((path) => used.has(path))
-      ? { ...segment, attachments: segment.attachments.filter((path) => !used.has(path)) }
-      : segment
-  ));
+  // 改写让地址变长变短:原文里的偏移要跟着挪,否则执行步骤会插错位置(见 TurnImageDocument)。
+  const remap = (offset: number): number => edits.reduce(
+    (moved, edit) => (edit.end <= offset ? moved + edit.text.length - (edit.end - edit.start) : moved),
+    offset,
+  );
+  return { markdown: applyEdits(markdown, edits), claimed: used, remap };
 }
 
 /**
- * 一段**不走分段模型**的正文怎么用上同一套配对(duet 讨论区就是这一路)。
+ * 一段**没有执行步骤**的正文怎么用上同一套配对(duet 讨论区就是这一路)。
  *
  * 必要性:F1 的不变量是「所有展示入口消费同一结果」。讨论区的回合不是 AgentContentSegment,
- * 但它收得到同样的附件结果,所以在这里兜一个假分段,配对规则一个字都不改 —— 否则同一张
- * 图在会话流里画的是「说那句话时的快照」,在讨论区画的是「现在的文件」,而被作废的那一处
- * 还会被讨论区的 resolver 救活(审查第 2 轮 F1)。
+ * 但它收得到同样的附件结果,所以配对规则一个字都不改 —— 否则同一张图在会话流里画的是
+ * 「说那句话时的快照」,在讨论区画的是「现在的文件」,而被作废的那一处还会被讨论区的
+ * resolver 救活(审查第 2 轮 F1)。
  */
 export function turnImageMarkdown(
   markdown: string,
   sources: AgentContentSegment["attachmentSources"],
   taskId?: string,
 ): string {
-  const [segment] = turnImages(
-    [{ id: "inline", markdown, events: [], attachments: [], attachmentSources: sources }],
-    taskId,
-  );
-  return segment?.markdown ?? markdown;
+  return turnImageDocument(markdown, sources ?? [], taskId).markdown;
 }

@@ -168,6 +168,24 @@ const SHORT = turn(
   [{ path: up("kkkkkkkkkkkk-short.svg"), source: "output/short.svg", ref: 0 }],
 );
 
+// ── R2：**文档级的定义**跨过一个执行步骤 ──────────────────────────────────────
+// 脚注定义、链接引用定义是**整篇文档**的属性,不是某一段的。按段各渲染一次的那一版两头
+// 落空:前一段的 `[^shot]` / `![图][ref]` 找不到定义(画成字面量),后一段的定义没人引用
+// (GFM 直接丢掉),于是那两张截图谁都画不出来 —— 而附件卡片已经被认领走,两头都没了
+// (审查第 3 轮 R2 实测 footnoteAgentImages=0、footnoteAgentCards=0,同一份正文整篇渲染
+// 则有 1 张图)。
+const CROSSDEF: AgentContentSegment[] = [
+  segment("crossdef:0", "引用式那张：![图][ref]\n\n结论在脚注里[^shot]。\n\n"),
+  segment(
+    "crossdef:1",
+    "[ref]: output/ref.svg\n\n[^shot]: 复现截图：![脚注图](output/foot.svg)\n",
+    [
+      { path: up("llllllllllll-ref.svg"), source: "output/ref.svg", ref: 0 },
+      { path: up("mmmmmmmmmmmm-foot.svg"), source: "output/foot.svg", ref: 1 },
+    ],
+  ),
+];
+
 // 存量消息：那时相对路径根本没被复制进 uploads，配不上任何来源。
 const ORPHAN = [segment("orphan:0", "当时的截图：\n\n![旧截图](output/playwright/gone.png)\n")];
 
@@ -200,6 +218,7 @@ const TURNS: [string, AgentContentSegment[]][] = [
   ["awkward", AWKWARD],
   ["orphan", ORPHAN],
   ["short", SHORT],
+  ["crossdef", CROSSDEF],
 ];
 
 createRoot(document.getElementById("root")!).render(

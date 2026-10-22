@@ -55,6 +55,10 @@ const server = await createServer({
 });
 
 const uploads = (name) => `/api/uploads/${encodeURIComponent(name)}`;
+// 「正文里画出来的图」。执行步骤和附件卡片现在跟正文**排在同一棵语法树里**(整条消息只解
+// 析一次,见 components/markdownLayout),所以它们都在 `.task-markdown` 底下 —— 数正文的图
+// 必须把卡片排里的那些排除掉,否则「正文没画」和「卡片还挂着」会被算成同一件事。
+const bodyImages = (scope) => scope.locator(".task-markdown img:not(.task-message-attachments img)");
 // 站内地址归一成 path+query（灯箱会把同源地址绝对化），站外的原样留着。
 const srcs = (locator) => locator.evaluateAll((nodes) => nodes.map((node) => {
   const raw = node.getAttribute("src") ?? "";
@@ -119,7 +123,7 @@ try {
   // ── ② 对话结论：相对路径 + 绝对路径，都靠服务端那份 uploads 拷贝落地 ────────
   const conclusion = page.locator(".conclusion-fixture");
   assert.deepEqual(
-    await srcs(conclusion.locator(".task-markdown img")),
+    await srcs(bodyImages(conclusion)),
     [uploads("aaaaaaaaaaaa-wake-input-desktop.svg"), uploads("bbbbbbbbbbbb-wake-input-mobile.svg")],
     "相对路径和绝对路径都要配到各自那份拷贝，且不许配串",
   );
@@ -132,17 +136,20 @@ try {
 
   // ── ③ 只有一张图：领走之后那一段空了，不许留一个占着间距的空 section ──────
   const single = page.locator(".single-fixture");
-  assert.equal(await single.locator(".task-markdown img").count(), 1, "唯一那张图要画在正文里");
+  assert.equal(await bodyImages(single).count(), 1, "唯一那张图要画在正文里");
   assert.equal(await single.locator(".task-message-attachments").count(), 0, "卡片排整个空了就别出");
   assert.equal(
-    await single.locator(".task-agent-segment").count(),
-    1,
-    "附件被正文领走后那一段什么都画不出来，不该再占一个 section",
+    await single.locator(".task-markdown > *").count(),
+    2,
+    // 整条消息只有一棵语法树,步骤位置就是「插在第几个顶层块之间」(见 markdownLayout)。
+    // 附件被正文领走的那一步一个字都画不出来 → 一个节点都不该留,否则它照旧占着间距、
+    // 把正在读的人往下拽(贴底判据只看得见高度,见 segment-layout 那份夹具)。
+    "正文两个块;被领走的那一步一个节点都不留",
   );
 
   // ── ④ 同一路径重拍：两处引用各拿自己那一次（F1 的要害）────────────────────
   assert.deepEqual(
-    await srcs(page.locator(".retake-fixture .task-markdown img")),
+    await srcs(bodyImages(page.locator(".retake-fixture"))),
     [uploads("eeeeeeeeeeee-shot.svg"), uploads("ffffffffffff-shot.svg")],
     "「修改前」那句画第一次的字节，「修改后」那句画第二次的 —— 画错那张比不画更坏",
   );
@@ -152,7 +159,7 @@ try {
   // 它仍然要留在这儿 —— 站外取不到可能只是此刻连不上，不归那一条收（见 MarkdownImage）。
   const alias = page.locator(".alias-fixture");
   assert.deepEqual(
-    await srcs(alias.locator(".task-markdown img")),
+    await srcs(bodyImages(alias)),
     [
       "https://example.invalid/remote.svg",
       uploads("gggggggggggg-same-a.svg"),
@@ -168,7 +175,7 @@ try {
 
   // ── ⑥ 围栏代码块里的例子不是图：不画，也不许吃掉那张卡片 ───────────────────
   const fenced = page.locator(".fenced-fixture");
-  assert.equal(await fenced.locator(".task-markdown img").count(), 0, "代码块里的写法示例不是图");
+  assert.equal(await bodyImages(fenced).count(), 0, "代码块里的写法示例不是图");
   assert.match(
     await fenced.locator(".task-code-block").innerText(),
     /!\[示例\]\(output\/fenced\.svg\)/,
@@ -182,7 +189,7 @@ try {
 
   // ── ⑦ 带空格中文名、file:// —— 前者会被转义，后者会被 react-markdown 清空 ───
   assert.deepEqual(
-    await srcs(page.locator(".awkward-fixture .task-markdown img")),
+    await srcs(bodyImages(page.locator(".awkward-fixture"))),
     [uploads("iiiiiiiiiiii-结果-图.svg"), uploads("jjjjjjjjjjjj-by-url.svg")],
     "转义过的目的地和 file URL 都要配上；配不上的那条 file URL 一个 img 都不留",
   );
@@ -235,7 +242,7 @@ try {
   // ── ⑭ 协议相对网址留在站外;解不出来的 file: 留一行小字(F3 / F2 的失败分支)──────
   const protocol = page.locator(".protocol-fixture");
   assert.deepEqual(
-    await srcs(protocol.locator(".task-markdown img")),
+    await srcs(bodyImages(protocol)),
     ["//cdn.example.invalid/remote.svg"],
     "`//host/x.png` 是网址,不许被改写成「去任务工作目录取」",
   );
@@ -282,7 +289,7 @@ try {
   // ── ⑬ 配不上、而本该有一条:第二处什么都不画,也不许顶一份别的拷贝(F1)──────────
   const short = page.locator(".short-fixture");
   assert.equal(
-    await short.locator(".task-markdown img").count(),
+    await bodyImages(short).count(),
     0,
     // 连第一处也不画:序列对不上说明「这段正文不是服务端扫过的那一段」,那时「第一处」未必
     // 就是记录的那一条(审查第 2 轮 F1:投影重建后幸存的那句其实是第三处,顶上去画的是红图)。
@@ -307,6 +314,31 @@ try {
     await short.locator(".task-markdown-image-missing").first().innerText(),
     /图取不到[\s\S]*output\/short\.svg/,
     "不敢画的那几处也要留一行小字,而不是让那几句话指向空气",
+  );
+
+  // ── ⑮ 文档级的定义跨过一个执行步骤:照旧全局有效(R2)────────────────────────
+  // 「整条消息解析一次」的要害就在这儿:定义在后半截、引用在前半截,按段渲染两头都落空。
+  const crossdef = page.locator(".crossdef-fixture");
+  assert.deepEqual(
+    await srcs(bodyImages(crossdef)),
+    [uploads("llllllllllll-ref.svg"), uploads("mmmmmmmmmmmm-foot.svg")],
+    "链接引用定义和脚注定义都在执行步骤之后,两张图照旧画得出来",
+  );
+  assert.equal(
+    await crossdef.locator(".task-markdown-image-missing").count(),
+    0,
+    "画得出来就不该有「图取不到」",
+  );
+  assert.equal(
+    await crossdef.locator(".task-message-attachments").count(),
+    0,
+    // 这是 R2 最坏的那一半:正文画不出来、卡片又已经被认领吃掉,用户两头拿不到。
+    "两份拷贝都画进正文了,卡片排才该空",
+  );
+  assert.match(
+    await crossdef.locator(".task-markdown").innerText(),
+    /复现截图/,
+    "脚注正文要真渲染出来(定义没人引用时 GFM 会把它整个丢掉)",
   );
 
   console.log("Markdown 图片解析回归通过");
