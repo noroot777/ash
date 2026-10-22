@@ -280,7 +280,10 @@ export function spawnControllableDetachedAgent(
   if (!real.pid) { confine?.dispose(); return failedChild(`起不来:${shq(bin)}`); }
   const writer = fifoWriter(input);
   if (!writer) {
-    killChild(real);                                // 这一下已经把整圈带走了
+    // `killChild` 把刀发给了整圈,但**成员不一定已经退了**,所以紧跟其后的 `dispose()`
+    // 可能撤不掉圈(`rmdir` 对非空 cgroup 必然失败)—— 那不是错,留给那道 24 小时的年龄门
+    // 扫就是了。这里要的只是「能撤就撤」:一条没跑起来的运行不该留一个没人认领的圈。
+    killChild(real);
     confine?.dispose();
     return failedChild(`打开可重连 stdin 失败：${input}`);
   }

@@ -13,7 +13,7 @@
 // 折成布尔的那一份(`isSameProcess`)只是它的投影,给只需要是/否的两个老使用方用 ——
 // 谁都不许在投影之外再补一次查询,理由见 `processIdentity` 的注释。
 import { liveMonitorUnitsSync } from "./monitor-unit-scan.js";
-import { inspectProcessSync } from "./platform.js";
+import { inspectProcessSync, isPidRunning } from "./platform.js";
 import type { ProcessMember } from "./process-generation.js";
 
 export type ProcessInfo = {
@@ -88,6 +88,29 @@ export function processIdentity(pid: number, expectedStartedAt?: string | null):
   const expectedMs = parseStartedAt(expectedStartedAt);
   if (expectedMs === null || info.startedAtMs === null) return "unqueryable";
   return info.startedAtMs === expectedMs ? "same" : "different";
+}
+
+/**
+ * `processIdentity` 再多问一档:**僵尸算已经退出**(`exited`)。
+ *
+ * 为什么必须另起一档而不是改上面那一份:僵尸的 `/proc/<pid>/stat` 还在、启动时刻照旧对得上,
+ * 所以身份这一问只能答 `same` —— 那是对的,**它确实还是当初那个**。可清理判据问的不是身份,
+ * 是「还有谁在跑、在写」:一个 `exit` 过的进程一行都不会再写、也收不到信号。两个问题答案不同,
+ * 所以答案也分开 —— 上面那一份的其它使用方(拿锁、接管 agent、投影探活)问的是**存在性**,
+ * 僵尸占着号这件事对它们成立,一个字都不该改。
+ *
+ * **这是把判据磨利,不是放松**:`exited` 是一条正面证据(它退过了),比「号上没人了」更强。
+ * 用处只在清理那条链上:无人收割的 PID 1 下(容器、重启后被重父的旧根),一笔**已经退出**的
+ * 责任按身份问会永远答「还活着」,于是每一轮清扫都重押同一笔债(第 2 轮审查「类问题」)。
+ */
+export type RunningIdentity = ProcessIdentity | "exited";
+
+export function runningIdentity(pid: number, expectedStartedAt?: string | null): RunningIdentity {
+  const verdict = processIdentity(pid, expectedStartedAt);
+  // 只有「号上还有东西」那两档需要再问一次:`different` 已经是反证,`unqueryable` 连身份
+  // 都没答出来,再加一问也变不出证据来。
+  if (verdict !== "same" && verdict !== "unverifiable") return verdict;
+  return isPidRunning(pid) ? verdict : "exited";
 }
 
 /**

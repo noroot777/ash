@@ -229,7 +229,14 @@ export function openLedger(): OpenLedger {
   return ledger;
 }
 
-function provenGone(one: CleanupOpen): boolean {
+/**
+ * **「这个身份退干净了吗」唯一的一份判据**。导出是因为它有第二个使用方:收尾那两段等待
+ * (kill.ts 的 `waitForGone`)。那边上一版只问「这个号上还有进程在跑吗」,于是号在等待中
+ * 被复用时,一个**无关进程**会被报成本次运行的残存者 —— 内核圈定认下的成员恰恰最容易撞上
+ * 这一下(整圈一刀全杀掉、号同时空出一批,第 2 轮审查 F1)。两处共用这一份,判据只有一个
+ * 落点:**号上没有在跑的进程**,或者**同一坐标系里换了代**(号换了主人 ⇒ 当初那个一定没了)。
+ */
+export function provenGone(one: CleanupOpen): boolean {
   if (!Number.isInteger(one.pid) || one.pid <= 1) return true;   // 记歪的号核不动,也追不动
   // **僵尸算退出证据**(`isPidRunning` 而不是 `isPidAlive`):它已经 exit 过了,不会再写
   // 一行、也收不到信号 —— 那正是这一问要的「它退了」。判据因此更利而不是更松,理由写在

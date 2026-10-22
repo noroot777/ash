@@ -9,28 +9,33 @@
 //   4) 真进程:三条线索全断的后代,仍然枚举得到、杀得掉(含躲进子 cgroup 那一层)
 //   5) **答不出来就退回原路**:同一个现场跑两遍(设备开/关),两边结论都如实
 //
+// 现场机件(计分板、线索尽断的后代怎么造、两个平台各自的圈定时机)在 `confine-scene-fixture.ts`;
+// 这边只留「问什么、答什么」。
+//
 // 第 4 组钉的就是这台设备存在的理由:`env -i` 洗掉记号 + 关掉继承 fd + `setsid` 脱离进程树
 // 之后,既有那四台设备(ppid 树、代次、追踪 fd、资源记号)一台都看不见它 —— 用例自己先把
 // 这一点验出来(`clue_check`),再验内核那一台看得见。
 import assert from "node:assert/strict";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmdirSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { IS_WINDOWS as IS_WIN, isPidAlive, killTree } from "../src/platform.js";
+import { IS_WINDOWS as IS_WIN, isPidAlive, killTree, runningPids } from "../src/platform.js";
 import { processUnitEvidence } from "../src/proc.js";
 import {
-  cleanupDetail, confinedResidue, dischargeOpen, openLedger, type CleanupOpen,
+  cleanupDetail, confinedResidue, dischargeOpen, openLedger, provenGone, type CleanupOpen,
 } from "../src/executors/cleanup-result.js";
+import { inspectProcessSync } from "../src/platform.js";
+import { processGenerationSync } from "../src/process-generation.js";
+import { pidRunStillAlive } from "../src/executors/child-identity.js";
+import { runningIdentity } from "../src/proc.js";
 import {
-  CONFINE_ENROLL_CMD, confineAbstention, openConfinement, reopenConfinement,
-  type ConfineCoverage, type Confinement, type ConfineRead,
+  CONFINE_ENROLL_CMD, confineAbstention, openConfinement, reopenConfinement, type ConfineRead,
 } from "../src/executors/kernel-confine.js";
-
-let bad = 0;
-const ok = (m: string) => console.log(`   ✓ ${m}`);
-const fail = (m: string) => { bad += 1; console.log(`   ✗ ${m}`); };
-const skip = (m: string) => console.log(`   ⊘ 跳过:${m}`);
+import {
+  cleanEnv, fail, failCount, firstPidFrom, nestInsideConfinement, ok, plantStaleCredential,
+  readPpid, scene, skip, sleep, staleCredential, stillRunning,
+} from "./confine-scene-fixture.js";
 
 const members = (pids: number[], coverage: "whole-run" | "since-enroll"): ConfineRead =>
   ({ kind: "members", members: pids.map((pid) => ({ pid, gen: "j:1" })), coverage });
@@ -96,6 +101,45 @@ console.log("2) 核销判据一个字没放松:集合空也洗不掉别人点过
   } else fail("账本收不下内核认的成员");
 }
 
+console.log("2c) 跨等待不许把成员降成裸号:号换了主人就不是它了");
+{
+  // 第 2 轮审查 F1 的那条判据。现场:圈成员被整圈一刀杀掉,**号同时空出一批**,而收尾还要
+  // 等两秒 —— 那两秒里内核把同一个号发给了别的程序。按「这个号上有没有进程」问,那个无关
+  // 进程就被报成「本次运行下过刀仍活着」,Windows 上那笔债还会一直挂到它自己退出。
+  //
+  // 这里钉的是**判据本身**:收尾那两段等待(kill.ts 的 `waitForGone`)与账本核销用的是
+  // 同一个 `provenGone`,所以在这里钉住它就等于把两处一起钉住。真正抢到同一个号的人造
+  // 复现做不到(要精确命中内核的分配),所以反过来构造:号活着、代次是另一代。
+  const real = processGenerationSync(process.pid);
+  if (!real) {
+    skip("这台机器问不出代次,这一条没有对象");
+  } else {
+    const other = `${real.slice(0, real.indexOf(":") + 1)}1`;   // 同一坐标系、另一代
+    if (provenGone({ pid: process.pid, gen: other, why: "夹具:号被复用了" })) {
+      ok("号还占着、可代次换了 ⇒ 算退了(占着这个号的已经是别人)");
+    } else fail("号换了主人还被当成本次运行的成员 —— 那就会把一个无关进程报成残存者");
+    if (!provenGone({ pid: process.pid, gen: real, why: "夹具:还是它" })) {
+      ok("代次对得上 ⇒ 照旧算还在(判据没被放松到「有代次就放过」)");
+    } else fail("同一代也被核销了");
+    if (provenGone({ pid: DEAD_PID, gen: null, why: "夹具:没代次、号也空了" })) {
+      ok("没代次只能等号彻底空掉 —— 那是更保守的一侧,照旧成立");
+    } else fail("号都空了还没核销");
+  }
+}
+
+console.log("2d) 「还在跑」这一问成批问,僵尸与空号都分得清");
+{
+  // 收尾那两秒每 50 ms 要问一遍整份名单,逐个问在 macOS 上就是每个号一个 `ps`(第 2 轮审查
+  // 把它记成新增延迟)。批量那一份是唯一入口,所以在这里钉住它的三档答案。
+  const live = runningPids([process.pid, DEAD_PID]);
+  if (live.has(process.pid)) ok("在跑的号在结果里");
+  else fail("自己这个号都没算在跑");
+  if (!live.has(DEAD_PID)) ok("不存在的号不在结果里");
+  else fail("空号被算成在跑");
+  if (runningPids([]).size === 0) ok("空名单不发任何系统调用,直接空集");
+  else fail("空名单答出了东西");
+}
+
 console.log("2b) 塞进 shell 的那一句:两条生产路径的拼法都得是合法脚本");
 if (IS_WIN) {
   skip("Windows 上那两条路都不经 shell(spawnForRun 走管道那条),这一句本来就不存在");
@@ -149,106 +193,6 @@ console.log("3) 平台诚实:弃权与披露面一对一");
 const token = `ash-agent-test-${process.pid.toString(36)}-${Date.now().toString(36)}`;
 const confine = openConfinement(token);
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * **线索尽断的后代**:环境清空(记号没了)+ `stdio: ignore`(不继承追踪 fd、也不接这次运行
- * 的输出文件)+ `detached`(POSIX 上就是 `setsid`,脱离进程组;根一死就被重父到 1 号)。
- *
- * 根进程把后代的号打到 stdout 上,用例据此跟踪它。`delayMs` 之后才生这个后代:Windows 那
- * 条路只能在 `spawn` **之后**才 assign 得进圈(`since-enroll`),所以要给圈定留出时间 ——
- * 那个窗口是那个平台真实的能力边界,夹具不替它假装不存在,只是不让它干扰这一条的结论。
- */
-const rootCodeWith = (delayMs: number) => `
-const { spawn } = require("node:child_process");
-setTimeout(() => {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    detached: true, env: ${JSON.stringify(cleanEnv())}, windowsHide: true,
-    stdio: ["ignore", "ignore", "ignore"],
-  });
-  if (!child.pid) process.exit(2);
-  process.stdout.write(String(child.pid) + "\\n");
-  child.unref();
-}, ${delayMs});
-setInterval(() => {}, 1000);
-`;
-
-/**
- * 「把记号那条线索弄断」的环境。POSIX 上直接空着(= `env -i`);Windows 上留住系统那几项
- * (少了 `SystemRoot` 一类,node 自己起不来 —— 那就不是「后代躲过了设备」,是夹具没起来),
- * 但**一项 `ASH_` 都不带**,所以资源记号那条线索照样是断的。
- */
-function cleanEnv(): Record<string, string> {
-  if (!IS_WIN) return {};
-  const keep = ["SystemRoot", "SystemDrive", "windir", "TEMP", "TMP", "Path", "PATHEXT",
-    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "USERPROFILE", "COMSPEC"];
-  const env: Record<string, string> = {};
-  for (const k of keep) {
-    const v = process.env[k];
-    if (v) env[k] = v;
-  }
-  return env;
-}
-
-/** 读根打到 stdout 上的后代号。 */
-function firstPidFrom(child: ReturnType<typeof spawn>, label: string): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    let out = "";
-    const timer = setTimeout(() => reject(new Error(`${label}没在 20 秒内报出后代的号`)), 20_000);
-    child.stdout?.on("data", (chunk: Buffer) => {
-      out += String(chunk);
-      const n = Number(out.trim().split("\n")[0]);
-      if (Number.isInteger(n) && n > 1) { clearTimeout(timer); resolve(n); }
-    });
-    child.once("error", (e) => { clearTimeout(timer); reject(e); });
-  });
-}
-
-type Scene = { root: number; descendant: number; coverage: ConfineCoverage };
-
-/**
- * POSIX:圈定发生在 `exec` **之前**(同 detached.ts 那两条生产路径的做法),所以这一轮
- * 的集合罩得住整段运行 —— `whole-run`。
- */
-async function scenePosix(dev: Confinement): Promise<Scene> {
-  const env = { ...process.env, ...(dev.preExecEnv() ?? {}) };
-  const child = spawn("/bin/sh", ["-c", `${CONFINE_ENROLL_CMD}; exec "$@"`, "sh",
-    process.execPath, "-e", rootCodeWith(0)], {
-    env, detached: true, stdio: ["ignore", "pipe", "ignore"],
-  });
-  // 父侧再圈一次,跟两条生产路径一字不差(`confine?.enroll(real.pid)`):**幂等**,而且
-  // `whole-run` 那份凭据要核对的就是这个号(见 kernel-confine.ts 的 `confirmWholeRun`)。
-  if (child.pid) dev.enroll(child.pid);
-  const descendant = await firstPidFrom(child, "根进程");
-  child.unref();
-  return { root: child.pid ?? 0, descendant, coverage: "whole-run" };
-}
-
-/**
- * Windows:`AssignProcessToJobObject` 只能在 `spawn` 之后(拿不到 `CREATE_SUSPENDED`),
- * 所以恒是 `since-enroll`。夹具先把根 assign 进圈、**等圈真的认下它**,再让根去生后代 ——
- * 验的是「根已经在圈里之后出生的后代也必然在集合里」(Job Object 的继承语义),这正是那个
- * 平台上这台设备能给的那一档。
- */
-async function sceneWindows(dev: Confinement): Promise<Scene> {
-  const child = spawn(process.execPath, ["-e", rootCodeWith(4_000)], {
-    env: cleanEnv(), detached: true, windowsHide: true, stdio: ["ignore", "pipe", "ignore"],
-  });
-  const root = child.pid ?? 0;
-  assert.ok(root, "前置条件:根进程起得来");
-  assert.ok(dev.enroll(root), "前置条件:根进程 assign 进 Job Object");
-  for (let i = 0; i < 40; i += 1) {                 // 等守圈进程把句柄握住、集合里能读到根
-    const read = dev.read();
-    if (read.kind === "members" && read.members.some((m) => m.pid === root)) break;
-    await sleep(250);
-  }
-  const descendant = await firstPidFrom(child, "根进程");
-  child.unref();
-  return { root, descendant, coverage: "since-enroll" };
-}
-
-const scene = (dev: Confinement) => (IS_WIN ? sceneWindows(dev) : scenePosix(dev));
-
 console.log("3b) 僵尸算退出证据:账本核销得掉,不会每轮重押同一笔");
 {
   // 为什么这一条跟这台设备有关:圈里的成员**一律进账本**(kill.ts 的 `confineOwn`),而
@@ -282,6 +226,18 @@ console.log("3b) 僵尸算退出证据:账本核销得掉,不会每轮重押同�
       const read: ConfineRead = { kind: "members", members: [{ pid: zombie, gen: null }], coverage: "whole-run" };
       if (confinedResidue(read, [])?.kind === "empty") ok("而且不把它算成「圈里还有成员在跑」");
       else fail("僵尸被算成了还在跑的成员 —— 收尾会为一个已经退出的号白等 2 秒并记成残留");
+      if (!runningPids([zombie]).has(zombie)) ok("批量那一问也把它排除在「在跑」之外(同一份判据)");
+      else fail("批量那一问把僵尸算成在跑");
+
+      // **同一判据的另外两个落点**(第 2 轮审查「类问题」):债表的根那一问、根探活那一问。
+      // 它们走的是身份那一层(`processIdentity`),僵尸的启动时刻照旧对得上 ⇒ 不接这一档的话
+      // 永远答「还活着」:没人收割的 PID 1 下,一笔已经退出的责任每轮重押、永远推不动。
+      const startedAt = inspectProcessSync(zombie)?.startedAt ?? null;
+      if (runningIdentity(zombie, startedAt) === "exited") {
+        ok("身份那一层多出的那一档:僵尸答 exited(身份还对得上,可它已经 exit 过了)");
+      } else fail(`身份那一层把僵尸答成了 ${runningIdentity(zombie, startedAt)}`);
+      if (pidRunStillAlive(zombie, startedAt) === "gone") ok("根探活那一问据此答 gone");
+      else fail(`根探活把僵尸答成 ${pidRunStillAlive(zombie, startedAt)}`);
     } finally {
       parent.kill("SIGKILL");
     }
@@ -382,6 +338,12 @@ if (!confine) {
         : "coverage 是 since-enroll(assign 只能在 spawn 之后)—— 这一档只拿「非空」当证据,"
           + "「空」一个字都不说");
     } else fail(`coverage 不是 ${coverage} —— 这条路声称的罩住范围跟实际不符`);
+    // **成员必须带着代次**(第 2 轮审查 F1):整圈一刀杀掉之后号会同时空出一批,只有代次
+    // 能把「这个号后来换了主人」跟「本次运行的成员还活着」分开。Windows 那边这一份是一次
+    // 批量读数取回来的(`processGenerationsSync`),不是逐个起 PowerShell。
+    const mine = read.kind === "members" ? read.members.find((m) => m.pid === descendant) : null;
+    if (mine?.gen) ok(`成员带着代次(${mine.gen})—— 号被复用时才分得出「已经不是它」`);
+    else fail("成员只有裸号,没有代次 —— 号一被复用就会把无关进程报成本次运行的残留");
 
     // ③ **躲进子 cgroup 也躲不掉**:圈是我们自己的子树,里面的进程有权再往下建一层。
     //    这一条钉的是 `cgroupMembers` 的递归(只读最上面一层就会把它当成不存在)。
@@ -418,6 +380,21 @@ if (!confine) {
     // 这一件事 —— 圈号现在**没有落库**,所以跨 server 重启那一档是未接的,钉不了。
     if (reopenConfinement(confine.id)) ok("按圈号把同一个圈重新打开(落库之后接回就走这条路)");
     else fail("圈号打不开 —— 那重启之后这台设备就没了");
+
+    // ⑥ 过期凭据那道年龄门真的在扫(第 2 轮审查点名的测试缺口)。判定没落在 `empty` 的那些
+    // 运行不会走到 `dispose()`,凭据会一直攒 —— 钉的就是这一点。两边凭据不同、埋点也不同,
+    // 见 `plantStaleCredential`。
+    const stale = staleCredential ?? plantStaleCredential("enrolled");
+    try {
+      if (!IS_WIN) openConfinement(`${token}-sweep`)?.dispose();     // cgroup:开圈时顺手扫
+      if (!existsSync(stale)) {
+        ok(IS_WIN
+          ? "两天前的就绪信号被扫掉了(守圈进程第一次拉起来时顺手扫,一天的年龄门)"
+          : "两天前的入圈凭据被扫掉了(开圈时顺手扫,同 cgroup 那道年龄门)");
+      } else fail("过期凭据没扫掉 —— 它会一直攒在临时目录下");
+    } finally {
+      try { rmSync(stale, { force: true }); } catch { /* 已经扫掉了 */ }
+    }
   } finally {
     if (isPidAlive(descendant)) killTree(descendant, "SIGKILL");
     if (isPidAlive(root)) killTree(root, "SIGKILL");
@@ -607,50 +584,6 @@ console.log("5) 关掉这台设备 ⇒ 原样退回既有那套");
   }
 }
 
-/** 「这个号上还有一个在跑的进程」。僵尸(已被杀、等人回收)不算在跑 —— 见第 4 组 ④ 的注释。 */
-function stillRunning(pid: number): boolean {
-  if (!isPidAlive(pid)) return false;
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/)[0] !== "Z";
-  } catch { /* 不是 Linux,退回 ps */ }
-  try {
-    const state = execFileSync("ps", ["-o", "state=", "-p", String(pid)], { encoding: "utf8" }).trim();
-    return !state.startsWith("Z");
-  } catch {
-    return false;                                 // 问不出来就只能按「号还在」那条走(上面已经判过)
-  }
-}
-
-function readPpid(pid: number): number | null {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const fields = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/);
-    return Number(fields[1]);                     // 第 4 项 ppid = 右括号之后的第 2 项
-  } catch { /* 不是 Linux,退回 ps */ }
-  try {
-    return Number(execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).trim());
-  } catch {
-    return null;
-  }
-}
-
-/** 把一个号挪进圈里新建的子 cgroup。`"skipped"` = 这个平台上没有这条路。 */
-function nestInsideConfinement(id: string, pid: number): "ok" | "skipped" | string {
-  if (!id.startsWith("/")) return "skipped";      // Windows 的圈号不是路径
-  const mount = ["/sys/fs/cgroup", "/sys/fs/cgroup/unified"]
-    .find((m) => existsSync(join(m, "cgroup.controllers")));
-  if (!mount) return "skipped";
-  const nested = join(mount, `.${id}`, "nested");
-  try {
-    mkdirSync(nested, { recursive: true });
-    writeFileSync(join(nested, "cgroup.procs"), String(pid));
-    return "ok";
-  } catch (error) {
-    try { rmdirSync(nested); } catch { /* 建都没建出来 */ }
-    return (error as NodeJS.ErrnoException).code ?? String(error);
-  }
-}
-
+const bad = failCount();
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
 process.exit(bad ? 1 : 0);

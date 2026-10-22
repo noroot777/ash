@@ -206,21 +206,23 @@ export function openConfinement(token: string): Confinement | null {
   return made;
 }
 
-let disclosed = false;
+let disclosed: string | null = null;
 
 /**
  * **弃权要说出来。** 任务原话要求把平台边界写在「代码注释和披露面」两处,而注释只给改这块
  * 代码的人看 —— 真正跑着 ash 的那台 macOS 上,得有一句话让使用者知道自己拿不到 Linux 那一档
  * 的保证。所以这台设备建不出圈时,**每个进程打一次**那句弃权理由。
  *
- * 一个进程只打一次:弃权的理由是平台/部署形态决定的,一次运行里不会变,每个回合重复一遍
- * 只会把日志刷掉。真要按运行追的话,判定那一侧本来就把理由记进了结论的 detail 里。
+ * 同一句理由只打一次:它是平台/部署形态决定的,一次运行里不会变,每个回合重复一遍只会把
+ * 日志刷掉。但**理由变了就要再说一次** —— 按「只打一次」记的话,第一次是一个瞬时失败
+ * (比如那一刻 cgroup 目录刚好不可写)时,后面真正的、永久的那条弃权理由就再也不会出现在
+ * 日志里了(第 2 轮审查)。判定那一侧照旧把理由记进结论的 detail,这里只负责那一条日志。
  */
 function discloseAbstention(): void {
-  if (disclosed) return;
-  disclosed = true;
   const why = confineAbstention();
-  if (why) console.warn(`[ash] 内核圈定这台设备在这台机器上弃权:${why}`);
+  if (!why || why === disclosed) return;
+  disclosed = why;
+  console.warn(`[ash] 内核圈定这台设备在这台机器上弃权:${why}`);
 }
 
 /**

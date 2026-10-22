@@ -19,7 +19,7 @@
 //
 // 老使用方照旧从 `spawn.js` / `kill.js` import:下面把各层的导出原样转出去。
 import type { ChildProcess } from "node:child_process";
-import { isPidRunning, killTree } from "../platform.js";
+import { killTree, runningPids } from "../platform.js";
 import { inspectProcess, type UnitEvidence } from "../proc.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { runOutPathOf, unitTokenOf } from "./unit-token.js";
@@ -35,6 +35,7 @@ import {
   residueFromProbe, sweptClean, unitOpen,
   type CleanupOpen, type CleanupResult, type ClueAnswer, type OpenLedger,
 } from "./cleanup-result.js";
+import { provenGone } from "./cleanup-result.js";
 // 内核圈定那台设备(cgroup v2 / Job Object)。它只报读数,判定仍在 cleanup-result.ts。
 import { confinementOf, type ConfineRead, type Confinement } from "./kernel-confine.js";
 // 交接那一段路住在 cleanup-handoff.ts:它对持久层只借类型 + 按需加载(那一层会拉起整个 db
@@ -75,19 +76,33 @@ const cleanupResultDetail = (result: CleanupResult): string =>
   result.kind === "empty" ? "" : result.kind === "silent" ? result.why : result.detail;
 
 /**
- * 这些号还剩谁在跑。**僵尸不算还在跑**(`isPidRunning`):被杀掉而父进程没来收割的后代
- * 永远停在 `Z` 上,按「号还占着」问就是一个等不到的 2 秒,而且会被记成「下过刀仍活着」——
- * 它已经 exit 了,一行都不会再写。判据的理由写在 `isPidRunning` 的注释里。
+ * 这些**身份**还剩谁在。两问分两段付钱,原因不同:
+ *
+ *  · 循环里只问便宜那一问 ——「这个号上还有在跑的进程吗」(`runningPids`,一次批量读数;
+ *    **僵尸不算在跑**,它已经 exit 过了,按「号还占着」问就是一个等不到的 2 秒);
+ *  · 出口再问一次代次 ——「号还占着」不等于「还是它」。号在这两秒里被复用时,上一版会把
+ *    一个**无关进程**报成本次运行的残存者(第 2 轮审查 F1):整圈那一刀一次杀掉全部成员,
+ *    号同时空出一批,正是最容易撞上复用的时刻。代次那一问在 macOS 上要起 `ps`,所以只对
+ *    出口剩下的那几个付这笔钱,循环里一次都不问。
+ *
+ * 判据本身不在这儿:它是 `provenGone`,跟账本核销用的是**同一份**(cleanup-result.ts)。
  */
-async function waitForPidsGone(pids: readonly number[], timeoutMs: number): Promise<number[]> {
+async function waitForGone(
+  who: readonly CleanupOpen[], timeoutMs: number,
+): Promise<CleanupOpen[]> {
   const deadline = Date.now() + timeoutMs;
-  let alive = pids.filter(isPidRunning);
-  while (alive.length && Date.now() < deadline) {
+  let left = stillRunningOf(who);
+  while (left.length && Date.now() < deadline) {
     await wait(50);
-    alive = pids.filter(isPidRunning);
+    left = stillRunningOf(left);
   }
-  return alive;
+  return left.filter((one) => !provenGone(one));
 }
+
+const stillRunningOf = (who: readonly CleanupOpen[]): CleanupOpen[] => {
+  const running = runningPids(who.map((one) => one.pid));
+  return who.filter((one) => running.has(one.pid));
+};
 
 // 清理结论的代数(四档答案、两个问、判空的不变量)住在 `cleanup-result.ts`:它有三个
 // 互不相识的使用方(本文件的即时清理、cleanup-debt.ts 的跨重启清扫、codex-resident.ts 的
@@ -469,7 +484,8 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
     // 新起、又同时 `env -i` 洗掉记号、close 掉继承 fd、`setsid` 脱离进程树的那种,在当前平台上
     // 跟一个陌生进程读不出任何差别(`closed_at` 那段注释说的就是这条边界)。
     const final = await collectEscapees(child);
-    const live = final.targets.filter((m) => isPidRunning(m.pid));
+    const stillUp = runningPids(final.targets.map((m) => m.pid));
+    const live = final.targets.filter((m) => stillUp.has(m.pid));
     // 收尾这次的三份身份一起入账(见 `owed` 那段的①②③)。`ledgerOf` 这一份是关键的那条:
     // 它记着**这一轮认过的全部后代**,所以「这一刻的视野里看不见了」不等于它退了。
     owed.add(final.open);
@@ -512,21 +528,31 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   // 线索全断,正是这台设备存在的理由)。上一版两件事都挂在 `targets` 上:它们一个都没点
   // 到名时 `stubborn` 必然为空、这一行直接 settle —— 于是「忽略 SIGTERM 的圈内成员」在
   // 整条路上一刀 SIGKILL 都收不到,而那正是只有这台设备证得出来的那一种残留。
-  const confined = confinedBefore?.kind === "members" ? confinedBefore.members.map((m) => m.pid) : [];
-  const waitOn = new Set([...targets, ...confined]);
+  // 成员**带着代次一起进等待名单**:把它降成裸号,号在这两秒里被复用时就会把一个无关进程
+  // 当成本次运行的成员(第 2 轮审查 F1)。判据统一在 `waitForGone` / `provenGone` 那一份。
+  const confined: CleanupOpen[] = (confinedBefore?.kind === "members" ? confinedBefore.members : [])
+    .map((m) => ({ pid: m.pid, gen: m.gen, why: "内核圈定认下的本次运行成员" }));
+  const waitOn: CleanupOpen[] = [
+    ...[...targets].map((pid) => ({ pid, gen: null, why: "旧那几台设备点到的号" })),
+    ...confined,
+  ];
   // 整圈的 SIGKILL **无条件补一刀**,不为「省这一刀」再读一次圈:它本身是一次写入
   // (`cgroup.kill` / `TerminateJobObject`),圈空了就是空操作,而在 Windows 上读一次圈比
   // 下这一刀贵得多(见 confine-job.ts 顶部的实测)。重复下刀那边自己记了幂等。
   const finishRing = (): void => { confine?.killAll("SIGKILL"); };
-  if (!waitOn.size) { finishRing(); return settle(first.answered, []); }
+  if (!waitOn.length) { finishRing(); return settle(first.answered, []); }
 
-  const stubborn = await waitForPidsGone([...waitOn], 2000);
+  const stubborn = (await waitForGone(waitOn, 2000)).map((one) => one.pid);
   if (!stubborn.length) { finishRing(); return settle(first.answered, []); }
-  const killed: number[] = [...confined];         // 圈成员的存亡由最后那次 waitForPidsGone 如实报出
+  // **圈成员的最终存亡由圈自己回答**(`settle` 里收尾之后那次读数 → `confinedResidue`),
+  // 不把它们的裸号再丢回进程表问一遍:集合成员关系是内核维护的,一个复用了同一个号的无关
+  // 进程**不可能**出现在那份读数里,而按号问就会(第 2 轮审查 F1)。读数答不出来时它们
+  // 照旧留在账本上(`confineOwn` 下刀之前就入了账),所以这条路上一份责任都不会少。
+  const killed: CleanupOpen[] = [];
   // 等的这 2 秒里根进程可能自己退了,号随时会被复用 —— 补刀前按同一判据再确认一次。
   if (child.pid && stubborn.includes(child.pid) && childKillAuthorized(child)) {
     killTree(child.pid, "SIGKILL");
-    killed.push(child.pid);
+    killed.push({ pid: child.pid, gen: null, why: "这次运行的根,补过刀" });
   }
   // 后代的补刀**按账上那份身份事实**:这 2 秒里它们正被 SIGTERM 催着退出,有的会顺手把
   // 继承 fd 关掉 —— 以前这里要求「此刻仍能取到证据」,于是那种进程被当成「号已换主」放过,
@@ -540,9 +566,11 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   owed.add(second.open);                          // 第二次扫描点的名同样只增不减
   owed.add(unitOpen(second.unit, "记号认下的本次运行成员"));
   owed.own(second.targets, "本次运行已确认的后代,还没有它的退出证据");
-  killed.push(...second.hit);
+  // 旧那几台设备点到的号照旧只有裸号(它们的判据不在本轮范围内),代次缺位 ⇒ 只能等那个
+  // 号彻底空掉才算退 —— 那是更保守的一侧。
+  killed.push(...second.hit.map((pid) => ({ pid, gen: null, why: "本次运行的后代,补过刀" })));
   // **最终残存者如实往上传**(上一版把这份名单丢掉了):它正是「还没收干净」最硬的那种证据。
-  const survivors = await waitForPidsGone(killed, 2000);
+  const survivors = (await waitForGone(killed, 2000)).map((one) => one.pid);
   return settle(first.answered && second.answered, survivors);
 }
 

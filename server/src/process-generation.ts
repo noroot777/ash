@@ -33,7 +33,9 @@
 //    戳在 macOS 上的作用是**让「还是同一代」这句话有个依据**,不是把它升格成精确身份。
 import { execFile, execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
-import { IS_WINDOWS, inspectProcessSync, isPidAlive, listProcessesComplete } from "./platform.js";
+import {
+  IS_WINDOWS, inspectProcessSync, inspectProcessesSync, isPidAlive, listProcessesComplete,
+} from "./platform.js";
 import type { ProcessTableRead } from "./platform.js";
 
 /** 一个号上这一代的戳(带问法标签,见文件头)。**只做相等比较,不要解析它的内容。** */
@@ -107,6 +109,40 @@ export function processGenerationSync(pid: number): ProcessGeneration | null {
   if (jiffies) return `j:${jiffies}`;
   const startedAt = inspectProcessSync(pid)?.startedAt?.trim();
   return startedAt ? `t:${startedAt}` : null;
+}
+
+/**
+ * **一次读数给出一批号的代次**。拿不到的号不在结果里(同 `processGenerationSync` 的 `null`)。
+ *
+ * 为什么必须走这一份而不是在调用点循环:Windows 上每个号要起一次 PowerShell,所以
+ * 「给成员集合取代次」的代价随成员数线性涨 —— 内核圈定那边上一版只给前 8 个成员取代次就
+ * 为此付 8 次冷启动,砍掉之后所有成员都没了代次,于是号一被复用,那一笔责任再也核销不掉
+ * (第 2 轮审查 F1)。批成一次之后两头都成立:代次对**每一个**成员都拿得到,成本是一次。
+ *
+ * 代次的拼法必须跟 `processGenerationSync` **逐字一致**(`j:` 节拍 / `t:` 文本),否则
+ * `currentGeneration` 会把跨坐标系的不等读成「问不出来」而不是「换了主人」—— 所以 Linux
+ * 这一侧照旧按号读 `/proc`(本来就不起进程),只有拿不到节拍数的才落到那一次批量 `ps`。
+ */
+export function processGenerationsSync(
+  pids: readonly number[],
+): Map<number, ProcessGeneration> {
+  const gens = new Map<number, ProcessGeneration>();
+  const want = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (!want.length) return gens;
+  const askTable: number[] = [];
+  for (const pid of want) {
+    if (IS_WINDOWS) { askTable.push(pid); continue; }
+    const fields = procStatFields(pid);
+    const jiffies = fields ? procStarttime(fields) : null;
+    if (jiffies) gens.set(pid, `j:${jiffies}`);
+    else askTable.push(pid);
+  }
+  if (!askTable.length) return gens;
+  for (const [pid, row] of inspectProcessesSync(askTable)) {
+    const startedAt = row.startedAt?.trim();
+    if (startedAt) gens.set(pid, `t:${startedAt}`);
+  }
+  return gens;
 }
 
 /**

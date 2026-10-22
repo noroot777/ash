@@ -66,6 +66,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IS_WINDOWS, powerShellSync } from "../platform.js";
+import { processGenerationsSync } from "../process-generation.js";
 import type { ConfineMember, ConfineRead, Confinement } from "./kernel-confine.js";
 
 /** Job Object 的名字。`Local\` = 当前登录会话的命名空间(跨会话不可见,正是我们要的边界)。 */
@@ -200,6 +201,8 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
   /** 这个圈建起来过:就绪文件在,或者本进程刚看到它出现。 */
   let held = false;
   let asked = false;
+  /** 已经请求圈住的那个号。**同一个号再 enroll 一次是空操作**(接口说的幂等就是这个)。 */
+  let heldPid: number | null = null;
   /** 这一轮已经等过一次了。**等第二次毫无意义**:守圈进程要么起来了、要么已经死了。 */
   let settledOnce = false;
   /** 整圈的刀已经下成了。Windows 只有一档刀,所以这件事一旦成立就不必再下第二次。 */
@@ -225,13 +228,18 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
     enroll(pid: number): boolean {
       // 重新打开的圈不再请求 hold:那个圈的句柄在别处(或者已经没了),这里再 hold 一次只会
       // 撞上 `err:dup`,而 assign 的根本来就已经在圈里了。
-      if (reopened || !Number.isInteger(pid) || pid <= 1 || asked) return false;
+      if (reopened || !Number.isInteger(pid) || pid <= 1) return false;
+      // **幂等要名副其实**:同一个号第二次进来答 true(它已经在圈里了),只有换了个号才是
+      // 「这台设备圈不住它」—— 一个 Job 在这条路上只认一个根,它的后代靠继承进集合
+      // (接口注释写着幂等,而上一版第二次一律答 false,第 2 轮审查指出口径不一致)。
+      if (asked) return pid === heldPid;
       try {
         mkdirSync(join(tmpdir(), "ash-confine"), { recursive: true });
         rmSync(ready, { force: true });             // 上一次运行留下的同名就绪信号不许认下来
       } catch { /* 目录建不出来:退化成「建没建起来分不清」,仍然不误判 */ }
       if (!askHolder(["hold", name, String(pid), readyBase(name)].join("\t"))) return false;
       asked = true;
+      heldPid = pid;
       return true;
     },
     /**
@@ -291,24 +299,30 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
 const readyBase = (name: string): string => readyPath(name).replace(/\.ready$/, "");
 
 /**
- * **这边一律不取代次**(第 1 轮审查 F4)。代次在 Windows 上每个号要另起一次进程表查询
- * (`Get-CimInstance`,几百毫秒起),上一版给前 8 个成员取,于是一次收尾最多白付 8 次 ——
- * 而这边**根本不需要它**:
+ * **代次一次问完,不逐个问**(第 1、2 轮审查 F4 / F1 的合并修法)。
  *
- *  · 下刀不需要 —— `TerminateJobObject` 是整圈一次,内核自己按成员关系下,不按号发信号,
- *    所以没有「读到号 → 发信号」之间那条号被复用的缝要靠代次去堵。
- *  · 核销不需要 —— 没有代次的那一笔只能等「这个号上没进程了」才消解,那是**更保守**的
- *    一档(代次能做的只是让核销更快:同一个号换了主人就立刻销)。
+ * 代次在 Windows 上每个号要起一次进程表查询(`Get-CimInstance`,百毫秒量级)。上一版逐个
+ * 问、只给前 8 个成员取,于是一次收尾最多白付 8 次冷启动;第 1 轮审查把它砍成「一律不取」,
+ * 代价是**成员从此没有身份**:整圈下过刀之后,只要那个号被内核分配给了别的程序,账上那一笔
+ * 就按「号上有进程在跑」永远核销不掉 —— 一个无关进程被报成「本次运行的残留」(第 2 轮审查
+ * F1)。现在走 `processGenerationsSync`:**一次读数**给出全部成员的代次,两头都成立。
  *
- * 换来的只是「整圈杀掉之后号立刻被别人复用」这种情形下,那一笔债要多押一轮才销掉。
+ * 代次在这条路上是**身份**而不是下刀凭证:`TerminateJobObject` 是整圈一次,内核自己按成员
+ * 关系下刀,不按号发信号,所以没有「读到号 → 发信号」之间那条缝要靠代次去堵。它的用处只有
+ * 一个 —— 让「这个号后来换了主人」成为一条**退出证据**(cleanup-result.ts 的 `provenGone`)。
  */
 function parseMembers(raw: string): ConfineMember[] {
   const members: ConfineMember[] = [];
+  const pids: number[] = [];
   for (const part of raw.split(",")) {
     const pid = Number(part.trim());
-    if (!Number.isInteger(pid) || pid <= 1) continue;
-    members.push({ pid, gen: null });
+    if (Number.isInteger(pid) && pid > 1) pids.push(pid);
   }
+  if (!pids.length) return members;
+  const gens = processGenerationsSync(pids);
+  // 取不到代次的照旧记 `null`(进程刚退掉、或者这一刻问不出来):那一档只能等那个号彻底
+  // 空掉才核销,是**更保守**的一侧,不会把一笔责任提前销掉。
+  for (const pid of pids) members.push({ pid, gen: gens.get(pid) ?? null });
   return members;
 }
 

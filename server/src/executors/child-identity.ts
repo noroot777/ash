@@ -4,8 +4,8 @@
 // 而那三摊各自都在往 700 行上限靠;更要紧的是**依赖方向**:判据不许反过来依赖它们中的
 // 任何一个,否则「租约复核要问身份、身份要问租约」就成了环。
 import type { ChildProcess } from "node:child_process";
-import { isPidAlive } from "../platform.js";
-import { processIdentity } from "../proc.js";
+import { isPidRunning } from "../platform.js";
+import { runningIdentity } from "../proc.js";
 import { canShoot, reclaimState } from "../monitor-reclaim-evidence.js";
 import { unitTokenOf } from "./unit-token.js";
 
@@ -124,11 +124,14 @@ export function childKillAuthorized(child: ChildProcess): boolean {
  */
 export function pidRunStillAlive(pid: number, startedAt: string | null): "alive" | "gone" | "unknown" {
   if (!Number.isInteger(pid) || pid <= 1) return "gone";
-  switch (processIdentity(pid, startedAt)) {
+  switch (runningIdentity(pid, startedAt)) {
     // `unverifiable` = 调用方当初没记启动时刻,这一问只能退化成存在性检查 —— 老使用方
     // (拿锁、接管)要的本来就是存在性(第 2 轮审查 F1)。
     case "same": case "unverifiable": return "alive";
     case "different": return "gone";              // 号换了主人 ⇒ 当初那个一定没了
-    default: return isPidAlive(pid) ? "unknown" : "gone";
+    // 僵尸:它 `exit` 过了,收不到信号也不会再写 —— 探活这一问要的正是这个(判据在
+    // `runningIdentity`;这一档接进来之前,没人收割的根会永远答「还活着」)。
+    case "exited": return "gone";
+    default: return isPidRunning(pid) ? "unknown" : "gone";
   }
 }

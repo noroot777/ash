@@ -18,8 +18,8 @@
 //
 //  ① 设备不存在就**不发言**(返回 `null`),不许交一张「已经空了」的证书;
 //  ② 「这一次查询失败」和「这台机器/这一行永远答不了」要分开 —— 前者该重试,后者该收档。
-import { isPidAlive } from "../platform.js";
-import { processIdentity, processUnitEvidence, type UnitEvidence } from "../proc.js";
+import { isPidRunning } from "../platform.js";
+import { processUnitEvidence, runningIdentity, type UnitEvidence } from "../proc.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { agentCleanupDebts } from "../db/schema.js";
 import { describeEvidence } from "./escapees.js";
@@ -223,10 +223,15 @@ function rootResidue(row: DebtRow): CleanupResult {
   if (!pid || !Number.isInteger(pid) || pid <= 1) {
     return { kind: "silent", why: "这一行没记下根进程的号,核验不了它退没退", open: [] };
   }
-  switch (processIdentity(pid, row.rootStartedAt)) {
+  switch (runningIdentity(pid, row.rootStartedAt)) {
     case "same":
       // 根这一问的身份就是行上那两列(号 + 启动时刻),它自己跨得过重启,不必再进后代名单。
       return { kind: "remaining", detail: `根进程 ${pid} 还活着(启动时刻对得上)`, open: [] };
+    case "exited":
+      // **僵尸:身份还对得上,可它已经 exit 过了**。没人收割的 PID 1 下(容器、重启后被
+      // 重父给 1 号的旧根)这一档会一直在,按「身份对得上」问就永远答「还活着」—— 那一笔
+      // 已经退出的责任每轮重押、永远推不动(第 2 轮审查「类问题」,判据在 `runningIdentity`)。
+      return sweptClean([]);
     case "different":
       return sweptClean([]);                      // 号换了主人 ⇒ 当初那个一定没了
     case "unverifiable":
@@ -236,9 +241,9 @@ function rootResidue(row: DebtRow): CleanupResult {
         open: [],
       };
     default:
-      return isPidAlive(pid)
-        ? { kind: "unknown", detail: `根进程 ${pid} 的身份这一刻问不出来(号上有进程)`, open: [] }
-        : sweptClean([]);                         // 号上没有进程 ⇒ 当初那个一定退了
+      return isPidRunning(pid)
+        ? { kind: "unknown", detail: `根进程 ${pid} 的身份这一刻问不出来(号上有进程在跑)`, open: [] }
+        : sweptClean([]);                         // 号上没有在跑的进程 ⇒ 当初那个一定退了
   }
 }
 

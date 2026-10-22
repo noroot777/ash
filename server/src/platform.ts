@@ -19,10 +19,12 @@
 import { execFile, execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { IS_WINDOWS } from "./platform-os.js";
 import { join } from "node:path";
 
-export const IS_WINDOWS = process.platform === "win32";
-export const IS_MAC = process.platform === "darwin";
+// 「这是哪个操作系统」住在 platform-os.ts(叶子模块,打断本文件与 platform-paths.ts
+// 的环,理由见那边顶部)。这个门原样转出,使用方照旧从 platform.js 取。
+export { IS_MAC, IS_WINDOWS } from "./platform-os.js";
 
 // ── `~` 展开 ───────────────────────────────────────────────────────────────
 // Users type `~/code/foo`, but Node's fs/git APIs don't understand `~` (only
@@ -281,13 +283,8 @@ export function inspectProcessSync(pid: number): { startedAt: string | null; com
   if (!Number.isInteger(pid) || pid <= 0) return null;
   if (IS_WINDOWS) {
     // PowerShell 冷启动是百毫秒量级。这条只在「拿锁 / 重启接管」这类低频路径上跑,
-    // 不在热路径 —— 真挪到热路径前先测一次。
-    const out = powerShellSync(
-      PS_PROCESS_SCRIPT.replace("Get-CimInstance Win32_Process -ErrorAction Stop", `Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction Stop`)
-        .replace("Get-WmiObject Win32_Process", `Get-WmiObject Win32_Process -Filter "ProcessId=${pid}"`),
-    );
-    const row = readWindowsRows(out).rows.find((r) => r.pid === pid);
-    return row ? { startedAt: row.startedAt, command: row.command || null } : null;
+    // 不在热路径 —— 真挪到热路径前先测一次。要问一批号用 `inspectProcessesSync`。
+    return inspectProcessesSync([pid]).get(pid) ?? null;
   }
   try {
     const out = execFileSync("ps", ["-p", String(pid), "-o", "lstart=", "-o", "command=", "-ww"], {
@@ -376,7 +373,7 @@ export function isPidAlive(pid: number): boolean {
 }
 
 /**
- * 这个号上**还有进程在跑**吗 —— 僵尸不算。
+ * 这些号上**还有进程在跑**吗 —— 僵尸不算,返回的是「在跑」的那些。
  *
  * 跟 `isPidAlive` 的区别只有僵尸这一档,而那一档恰恰是清理判据要分开的:`kill(pid,0)`
  * 问的是「这个号还占着吗」,僵尸占着号 —— 它已经 `exit` 过了,只等父进程 `wait` 掉它。
@@ -384,32 +381,134 @@ export function isPidAlive(pid: number): boolean {
  *
  * **这是把判据磨利,不是放松**:僵尸是「已经退出」的一种**正面证据**,比「号上没人了」
  * 更强(号上没人还有被复用的可能,僵尸连 exec 都做不到了)。放松是「证不出来就当没有」,
- * 这里是「证出来它退了」。
+ * 这里是「证出来它退了」。问不出来的一律按「还占着」算,不冒充证据。
  *
  * 真实现场(容器里实测,2026-10-22):PID 1 不是 init 而是 `sleep infinity` 时**没人
  * 收割**,被整圈杀掉的后代就永远停在 `Z` 上 —— 那一刻圈是空的、清理也确实干净了,可
  * 账本上那个号按 `isPidAlive` 永远核销不掉,于是每一轮清扫都重押同一笔债。
  *
- * 代价:只有「号还占着」时才多问一次进程状态(Linux 读 `/proc`,别的平台一次 `ps`)。
- * 正常收尾时账上的号都已经退干净,这一问一次都不会发生。
+ * **成批问是因为这一问在热路径上**:收尾那两秒每 50 ms 要问一遍整份名单,而 macOS 上
+ * 它要起一个 `ps`。逐个问的代价随名单长度线性涨(第 2 轮审查「每 pid 每 50 ms 一次同步
+ * ps」),批成一次之后与名单多长无关;Linux 读 `/proc` 本来就不起进程。
  */
-export function isPidRunning(pid: number): boolean {
-  if (!isPidAlive(pid)) return false;
-  try {
-    // 第 3 个字段是状态,但命令名里可以有空格和右括号 —— 按**最后**一个 `)` 切。
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/)[0] !== "Z";
-  } catch { /* 不是 Linux(或者这一刻读不了)⇒ 退回 ps */ }
-  if (IS_WINDOWS) return true;                    // Windows 没有僵尸这一档:退出即消失
-  try {
-    const state = execFileSync("ps", ["-o", "state=", "-p", String(pid)], {
-      encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (!state) return false;                     // ps 答了、答的是「没这个号」
-    return !state.startsWith("Z");
-  } catch {
-    return true;                                  // 问不出来 ⇒ 按「号还占着」那条走,不冒充证据
+export function runningPids(pids: readonly number[]): Set<number> {
+  const running = new Set<number>();
+  const occupied = [...new Set(pids)].filter((pid) => isPidAlive(pid));
+  if (!occupied.length) return running;
+  // Windows 没有僵尸这一档:进程退出即从进程表消失,「号还占着」就等于「还在跑」。
+  if (IS_WINDOWS) {
+    for (const pid of occupied) running.add(pid);
+    return running;
   }
+  const askPs: number[] = [];
+  for (const pid of occupied) {
+    const zombie = zombieViaProcStat(pid);
+    if (zombie === null) askPs.push(pid);           // 没有 /proc(macOS)或这一刻读不了
+    else if (!zombie) running.add(pid);
+  }
+  if (!askPs.length) return running;
+  const states = psStates(askPs);
+  for (const pid of askPs) {
+    const state = states?.get(pid);
+    if (state !== undefined) {
+      if (!state.startsWith("Z")) running.add(pid);  // 僵尸在这份输出里是 `Z`,正是要分开的那一档
+      continue;
+    }
+    // 这份输出里没有它:要么它真的退了,要么这一问被整个拒了(名单里混进越界的号时
+    // macOS 的 `ps` 会一行都不给)。**不拿一次失败冒充退出证据** —— 用便宜那一问再确认
+    // 一次,号还占着就按「在跑」算。僵尸走不到这条分支(它在输出里,状态是 `Z`)。
+    if (isPidAlive(pid)) running.add(pid);
+  }
+  return running;
+}
+
+/** 单个号的那一问。判据与理由见 `runningPids`。 */
+export const isPidRunning = (pid: number): boolean => runningPids([pid]).has(pid);
+
+/**
+ * **一次读数问一批号**的启动时刻与命令行。查不到的号不在结果里。
+ *
+ * Windows 上这一问要起 PowerShell(百毫秒量级),所以逐个问的代价随名单长度线性涨 ——
+ * 内核圈定的成员集合正是「一批号一起问」的形状(confine-job.ts 的 `parseMembers`:上一版
+ * 逐个问,于是给前 8 个成员取代次就要 8 次冷启动,第 1 轮审查 F4;改成一次问完之后,代次
+ * 对**所有**成员都拿得到,而成本是一次)。
+ *
+ * 过滤串不能无限长,所以名单超过 `FILTER_MAX` 就不过滤、整张表拉回来自己挑 —— 整表那一问
+ * 跟过滤那一问是同一次冷启动,只是多传些行回来。
+ */
+export function inspectProcessesSync(
+  pids: readonly number[],
+): Map<number, { startedAt: string | null; command: string | null }> {
+  const found = new Map<number, { startedAt: string | null; command: string | null }>();
+  const want = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (!want.length) return found;
+  const FILTER_MAX = 32;
+  if (IS_WINDOWS) {
+    const filter = want.length <= FILTER_MAX
+      ? want.map((pid) => `ProcessId=${pid}`).join(" or ")
+      : null;
+    const script = filter
+      ? PS_PROCESS_SCRIPT
+        .replace("Get-CimInstance Win32_Process -ErrorAction Stop", `Get-CimInstance Win32_Process -Filter "${filter}" -ErrorAction Stop`)
+        .replace("Get-WmiObject Win32_Process", `Get-WmiObject Win32_Process -Filter "${filter}"`)
+      : PS_PROCESS_SCRIPT;
+    const wanted = new Set(want);
+    for (const row of readWindowsRows(powerShellSync(script)).rows) {
+      if (wanted.has(row.pid)) found.set(row.pid, { startedAt: row.startedAt, command: row.command || null });
+    }
+    return found;
+  }
+  // POSIX:`ps` 一次收下整份名单。字段顺序与单号那一问一致(`lstart` 定宽 24 列在前)。
+  let out: string;
+  try {
+    out = execFileSync("ps", ["-p", want.join(","), "-o", "pid=,lstart=,command=", "-ww"], {
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C", LANG: "C" },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch (error) {
+    out = String((error as { stdout?: unknown })?.stdout ?? "");
+  }
+  for (const line of out.split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(.{24})\s+(.*)$/.exec(line);
+    if (!m) continue;
+    found.set(Number(m[1]), { startedAt: m[2]!.trim(), command: m[3]!.trim() || null });
+  }
+  return found;
+}
+
+/** `/proc/<pid>/stat` 的状态位。`null` = 这台机器没有 /proc,或者这一刻读不了。 */
+function zombieViaProcStat(pid: number): boolean | null {
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch {
+    return null;
+  }
+  // 第 3 个字段是状态,但命令名里可以有空格和右括号 —— 按**最后**一个 `)` 切。
+  return stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/)[0] === "Z";
+}
+
+/** 一次 `ps` 问完这一批号的状态位。`null` = 这一问整个失败了。 */
+function psStates(pids: readonly number[]): Map<number, string> | null {
+  let out: string;
+  try {
+    out = execFileSync("ps", ["-o", "pid=,state=", "-p", pids.join(",")], {
+      encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch (error) {
+    // 名单里的号全退了时 `ps` 以非 0 退出、且没有输出 —— 那是**答出来了**(都没了),
+    // 不是失败。有输出就按输出算:剩下的那几行就是还在的。
+    const text = String((error as { stdout?: unknown })?.stdout ?? "");
+    if (!text.trim()) return new Map();
+    out = text;
+  }
+  const states = new Map<number, string>();
+  for (const line of out.split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(\S+)/.exec(line);
+    if (m) states.set(Number(m[1]), m[2]!);
+  }
+  return states;
 }
 
 // ── 端口占用者 ─────────────────────────────────────────────────────────────
@@ -453,153 +552,10 @@ function uniquePids(tokens: string[]): number[] {
   return [...new Set(tokens.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
 }
 
-// ── 路径边界 ───────────────────────────────────────────────────────────────
-
-/**
- * 把路径归一成「用来比边界」的键。
- *
- * NTFS **大小写不敏感**:`C:\Foo` 和 `c:\foo` 是同一个目录。直接 startsWith 比较
- * 会两头出错 —— 既误拒(用户输入的盘符大小写不同就被判越界),又是绕过面(把
- * 边界校验当成大小写敏感来写,攻击者换个大小写就绕过了同一道校验的另一处)。
- * 所以 Windows 上比较前一律过这个函数;POSIX 上原样返回(那里大小写是有意义的)。
- *
- * 只做大小写归一,**不做 realpath** —— 真实路径解析在调用点已经做了(而且必须在
- * 这之前做,8.3 短名要靠 realpath 才能展开)。
- */
-export function boundaryKey(p: string): string {
-  return IS_WINDOWS ? p.toLowerCase() : p;
-}
-
-/** target 是不是落在 root 之内(含等于)。跨平台的边界判定单点。 */
-export function isInsidePath(root: string, target: string, sep: string): boolean {
-  const r = boundaryKey(root);
-  const t = boundaryKey(target);
-  return t === r || t.startsWith(r.endsWith(sep) ? r : r + sep);
-}
-
-/**
- * Windows 专属的路径拒绝面。**必须在 realpath 之后调用**:realpath 会把 8.3 短名
- * (`PROGRA~1`)展开成长名,所以这里只需要挡住 realpath 挡不住的那两类。
- *  · UNC / 网络路径(`\\server\share`、`\\?\`、`\\.\`):不在任何本机 root 之下,
- *    却能靠 `\\?\C:\` 这类前缀绕过朴素的前缀比较。
- *  · 仍带 `~N` 的短名(realpath 没能展开,比如目标不存在时)。
- * 返回拒绝理由,通过为 null。
- */
-export function windowsPathRejection(absPath: string): string | null {
-  if (!IS_WINDOWS) return null;
-  if (/^[\\/]{2}/.test(absPath)) return "不接受 UNC / 网络路径";
-  if (/(^|[\\/])[^\\/]{1,8}~\d(\.[^\\/]{1,3})?([\\/]|$)/.test(absPath)) return "不接受 8.3 短文件名";
-  return null;
-}
-
-// ── Windows 长路径(MAX_PATH) ──────────────────────────────────────────────
-//
-// ash 的 worktree 落在 `<repo>\.worktrees\<taskId>`,比主仓深两层,agent 进去
-// 再装一遍 node_modules —— 260 字符的老上限在这条链路上是**最容易先撞到的一堵墙**。
-// 要点是两个开关缺一不可,而且第二个经常被漏:
-//  · 系统侧 `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled=1`
-//  · git 侧 `core.longpaths=true` —— Git for Windows 走自带的 msys 运行时,**不看**
-//    系统开关,只看这个配置。只开注册表的话 `git worktree add` 照样报 Filename too long。
-// Node 自己给 fs 调用加 `\\?\` 前缀,基本不受 260 限制,所以服务端只需要管 git 这侧。
-//
-// 探测放在 `scripts/setup.mjs`(那里用户能当场照着命令改);这里只在 git **已经报错**
-// 时补一句人话 —— 不预先拦截,因为路径长不等于一定失败,误判成硬失败比报错难懂更贵。
-
-const WINDOWS_MAX_PATH = 260;
-/** 超过这个长度就当「深到该提一句」——留 60 字符给 worktree 里面的相对路径。 */
-const LONG_PATH_ALERT = WINDOWS_MAX_PATH - 60;
-
-/**
- * git 操作失败时,判断要不要补一段长路径的排查提示。非 Windows 一律 null。
- * `stderr` 明说 too long 时是确定的;只是路径本身够深时也给,但措辞留有余地。
- */
-export function windowsLongPathHint(targetPath: string, stderr = ""): string | null {
-  if (!IS_WINDOWS) return null;
-  const tooLong = /too long|ENAMETOOLONG|文件名(过|太)长/i.test(stderr);
-  if (!tooLong && targetPath.length <= LONG_PATH_ALERT) return null;
-  return [
-    `Windows 的 MAX_PATH 是 ${WINDOWS_MAX_PATH},这条路径已经 ${targetPath.length} 字符 —— 深路径是这里最常见的失败原因。两个开关缺一不可:`,
-    "  · 管理员 PowerShell:Set-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem' LongPathsEnabled 1",
-    "  · git config --global core.longpaths true",
-    "改完要重开终端和 ash;还不行就把项目挪到更短的路径下(比如 C:\\code\\<项目>)。",
-  ].join("\n");
-}
-
-// ── PATH 拆分 ──────────────────────────────────────────────────────────────
-
-/**
- * PATH 的分隔符。**故意不用 `path.delimiter`** —— 那个值由 Node 启动时的真实平台
- * 定死,测试里没法把它跟 IS_WINDOWS 一起翻转,于是 Windows 分支在 mac 上就成了
- * 「跑得到但测的是混血逻辑」。这里显式跟着 IS_WINDOWS 走,两边同时可控。
- */
-export const PATH_DELIMITER = IS_WINDOWS ? ";" : ":";
-
-/**
- * 拆 PATH。**必须用 PATH_DELIMITER**:Windows 是 `;`,按 `:` 拆会把 `C:\...` 的
- * 盘符切成两半 —— 每个目录都变成不存在的路径,所有 CLI 一律「找不到」。
- */
-export function splitPathList(value: string | undefined | null): string[] {
-  return (value ?? "").split(PATH_DELIMITER).map((s) => s.trim()).filter(Boolean);
-}
-
-/** 路径分隔符。同样跟着 IS_WINDOWS 走,理由见 PATH_DELIMITER。 */
-export const PATH_SEP = IS_WINDOWS ? "\\" : "/";
-
-// ── 「server 跑在哪台机器上」 ──────────────────────────────────────────────
-
-export interface HostInfo {
-  /** `process.platform` 原文;前端只用它分「Windows / 其它」。 */
-  platform: string;
-  /** 路径分隔符(`\` 或 `/`)。 */
-  sep: string;
-  /** 当前用户家目录绝对路径。 */
-  home: string;
-}
-
-/**
- * 前端要按**这台机器**给路径提示(新建项目的占位符、把家目录缩写成 `~`)。
- * 浏览器自己的 `navigator.platform` 不算数 —— 用 Windows 上的浏览器连 mac 上的
- * ash 是完全正常的用法,那时该显示的是 mac 的路径形状:项目目录在服务端。
- */
-export function hostInfo(): HostInfo {
-  return { platform: process.platform, sep: PATH_SEP, home: homedir() };
-}
-
-/** 按两种分隔符一起切路径 —— Windows 上 `/` 和 `\` 都合法,只认一种会漏。 */
-export function splitPathSegments(p: string): string[] {
-  return p.split(IS_WINDOWS ? /[\\/]+/ : /\/+/).filter(Boolean);
-}
-
-// ── 用户自己写的那条命令行 ─────────────────────────────────────────────────
-
-/**
- * 跑一条**用户自己写的命令行**(预览命令、workflow 的 cmd 步骤)时该 spawn 什么。
- *
- * POSIX:`sh -lc <cmd>`。`-l` 是有意的 —— 用户的 PATH 往往由 nvm / rbenv /
- * `.zprofile` 撑起来,不走登录 shell 的话 `npm run dev` 常常直接 command not found。
- *
- * Windows:`%COMSPEC% /d /s /c "<cmd>"` + `windowsVerbatimArguments`。逐项理由:
- *  · **不用 PowerShell**。Windows PowerShell 5.1 不认 `&&`(7 才支持),而
- *    `npm run build && npm start` 是预览命令里最常见的写法之一,换过去等于挑一批
- *    现成的命令来弄坏。cmd 的兼容面更宽。
- *  · `/d` 跳过 AutoRun 注册表项,`/s` 只剥掉最外层那一对引号 —— 所以外面这层
- *    `"…"` 加得刚好:cmd 剥掉它之后拿到的就是用户原样的命令行。
- *  · verbatim 是必须的:不开的话 Node 会按 CommandLineToArgvW 的规则再转义一轮,
- *    用户命令里的引号会被 `\"` 掉,cmd 不认这种写法。
- *
- * **仍然会跑不通的一类**:命令本身写的是 POSIX 语法(`FOO=1 cmd`、`$(…)`、
- * `2>/dev/null`、`ls | grep`)。这不是这里能修的 —— 那是另一门语言。调用方要在
- * UI 上把这件事说清楚,别让用户以为是 ash 坏了。
- */
-export function userShellLaunch(cmd: string): {
-  file: string;
-  args: string[];
-  windowsVerbatimArguments?: true;
-} {
-  if (!IS_WINDOWS) return { file: "sh", args: ["-lc", cmd] };
-  return {
-    file: process.env.COMSPEC || "cmd.exe",
-    args: ["/d", "/s", "/c", `"${cmd}"`],
-    windowsVerbatimArguments: true,
-  };
-}
+// ── 纯路径/字符串那一半:住在 platform-paths.ts,从这里原样转出 ──────────────
+// 这个文件是「平台差异的单点」那个门,拆分不改变门的位置(见 platform-paths.ts 顶部)。
+export {
+  boundaryKey, isInsidePath, windowsPathRejection, windowsLongPathHint,
+  PATH_DELIMITER, splitPathList, PATH_SEP, hostInfo, splitPathSegments, userShellLaunch,
+} from "./platform-paths.js";
+export type { HostInfo } from "./platform-paths.js";
