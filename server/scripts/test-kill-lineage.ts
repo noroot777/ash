@@ -86,7 +86,7 @@ const { markAdoptedChild } = await import("../src/executors/child-identity.js");
 const { tableFromRows } = await import("../src/process-generation.js");
 const { spawnForRun } = await import("../src/executors/detached.js");
 const { isPidAlive } = await import("../src/platform.js");
-const { ensureSchema } = await import("../src/db/index.js");
+const { dbClient, ensureSchema } = await import("../src/db/index.js");
 
 // 债表要真的在:`rememberEscapees` / `dischargeOpen` 落的是结构化成员,
 // 表不在的话「留债」这一问会被降级成一行警告,③ 里那几条断言就测了个空。
@@ -428,7 +428,10 @@ for (const pid of spawned) { try { if (isPidAlive(pid)) process.kill(pid, "SIGKI
 await wait(150);
 const leaked = spawned.filter(isPidAlive);
 if (leaked.length) { failures += 1; console.error(`   ✗ 清场:还有进程活着 ${leaked.join(",")}`); }
-rmSync(home, { recursive: true, force: true });
+// Windows 不许删还开着的文件,库句柄不先关掉 `rmSync` 就 EBUSY,把这一趟的结论盖成红的。
+await dbClient.close();
+try { rmSync(home, { recursive: true, force: true }); }
+catch (e) { console.error(`   · 临时目录没删干净(不影响结论):${(e as Error).message}`); }
 
 console.log(failures ? `✗ 逐边核父代:${failures} 项不过` : "✓ 逐边核父代:四节全部钉住");
 process.exit(failures ? 1 : 0);
