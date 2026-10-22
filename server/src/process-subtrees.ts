@@ -193,6 +193,26 @@ export function genStartedAtMs(gen: ProcessGeneration): number | null {
   return null;
 }
 
+/**
+ * 这个戳换算成墙上时钟之后**还剩多少不确定**(毫秒)。
+ *
+ * 比较两个时刻时的容差只能来自它 —— 凭感觉给一个常数就是在放水:上一版在归属窗口那一层
+ * 写死 ±2 秒、理由写的是「两端读数都只到秒」,可真正靠时间判归属的只有 Windows,而那边的
+ * `CreationDate` 走 `ToString('o')`(`platform.ts` 的 `ConvStart`)带 7 位小数 —— 2 秒的口子
+ * 里塞得下一整个「号被复用」的窗口(第 17 轮审查 F1)。
+ *
+ *  · `t:` 文本里带小数 ⇒ 至少到毫秒(Windows 的 ISO 时刻)⇒ 1ms;
+ *  · `t:` 不带小数 ⇒ POSIX `ps -o lstart` 只到秒 ⇒ 1000ms;
+ *  · `j:` ⇒ 节拍本身 10ms,但换算要加上 `/proc/stat` 的 btime(只到秒)⇒ 1000ms。
+ *    同一张表上两个 `j:` 戳的 btime 偏移相同、相减时会抵消,所以**相对**精度其实还是 10ms;
+ *    这里给的是绝对值,当容差用只会更松 —— 而 Linux 上内核会重父,陈旧父号压根不存在
+ *    (判据见 `executors/lineage.ts` 的 ①),松在那里不换来任何误杀。
+ */
+export function genResolutionMs(gen: ProcessGeneration): number {
+  if (gen.startsWith("j:")) return 1000;
+  return /\.\d/.test(gen) ? 1 : 1000;
+}
+
 let bootMs: number | null | undefined;
 function bootTimeMs(): number | null {
   if (bootMs !== undefined) return bootMs;

@@ -73,6 +73,25 @@ export function install(pid: number, answers: FakeAnswers): void {
   invalidateMonitorUnitScan();
 }
 
+/**
+ * **这个台子在原生 Windows 上立不起来**,所以用它的脚本开跑前先问这一句。
+ *
+ * 它造的是一个 Linux `/proc` 世界,而 `exact` 这一档的前提(`monitor-unit-scan.ts:115`
+ * 在 `IS_WINDOWS` 上直接返回 `null`)在那台机器上是**结构性缺席**,不是没写到。在那边把
+ * `node:fs` 糊成 Linux 再断言「记号这一问答对了」,等于拿伪造的前提替那个平台编结论 ——
+ * 跟这份夹具顶注里那条纪律是同一件事,只是方向反过来。
+ *
+ * 所以这里给的是**点名跳过**而不是让它通过:原来那 15 项红是夹具前提不成立,不是产品有伤,
+ * 混在输出里会把真伤盖掉。Windows 上这条链由 `test-kill-lineage.ts` 的 ④ 覆盖 —— 那一节走
+ * 的是真表、真 `taskkill`、零注入的生产路径。
+ */
+export function skipWithoutProcWorld(what: string): boolean {
+  if (process.platform !== "win32") return false;
+  console.log(`- 跳过 ${what}:这台机器没有 /proc,exact 档在 Windows 上结构性不存在`);
+  console.log("  (Windows 侧的逃逸后代回收由 test-kill-lineage.ts 的 ④ 走生产路径覆盖)");
+  return true;
+}
+
 export function restore(): void {
   filesystem.existsSync = real.existsSync;
   filesystem.readFileSync = real.readFileSync;

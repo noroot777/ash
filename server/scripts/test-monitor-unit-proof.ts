@@ -41,7 +41,8 @@ import {
   tasks, teardown, until,
 } from "./monitors-fixture.js";
 import { STUBBORN, debtRow } from "./monitor-reclaim-fixture.js";
-import { install as fakeProc, restore as realProc, type FakeAnswers } from "./fake-proc-fixture.js";
+import { install as fakeProc, restore as realProc, skipWithoutProcWorld, type FakeAnswers } from "./fake-proc-fixture.js";
+if (skipWithoutProcWorld("记号凭证回归")) process.exit(0);
 import { processUnitEvidence } from "../src/proc.js";
 import { monitorUnitProofGrade } from "../src/monitor-unit-scan.js";
 

@@ -26,6 +26,7 @@ import {
   openTrackFd, registerTrackFd, shareTrackFdRegistration, shareChildIdentity, markAdoptedChild,
   killChild, killByPid, pidRunStillAlive, spawnAgent,
 } from "./spawn.js";
+import { registerRootLife, shareRootLife } from "./root-life.js";
 import {
   adoptUnitToken, registerRunOutPath, registerUnitToken, seedUnitToken,
   shareRunOutPath, shareUnitToken, unitTokenOf,
@@ -252,6 +253,7 @@ export function spawnControllableDetachedAgent(
   // 环境记号跟管道那条路同一套(见 unit-token.ts):这条路的后代更需要它 —— 输出走文件,
   // 进程活得过 server 重启,根与后代的距离只会更远。
   const unitToken = seedUnitToken(env);
+  const bornAt = Date.now();                      // 理由见 spawn.ts 里同一句
   const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
     cwd,
     stdio,
@@ -261,6 +263,7 @@ export function spawnControllableDetachedAgent(
   registerTrackFd(real, track);
   registerUnitToken(real, unitToken);
   registerRunOutPath(real, paths.out);
+  registerRootLife(real, bornAt);
   if (!real.pid) return failedChild(`起不来:${shq(bin)}`);
   const writer = fifoWriter(input);
   if (!writer) {
@@ -291,6 +294,9 @@ export function spawnControllableDetachedAgent(
   // 「这个号还是不是我们的进程」会在一个已经退出的号上发信号(第 2 轮审查 F1)。真进程还
   // 握在手里,内核状态就是权威答案,所以指向它。
   shareChildIdentity(real, child);
+  // 根这一代的生命周期同样过户:区间登记在真进程上,合成品共享**同一份记录**
+  // (见 root-life.ts)—— 清理那条路拿到的是合成品。
+  shareRootLife(real, child);
   shareUnitToken(real, child);
   shareRunOutPath(real, child);
   return child;
@@ -337,6 +343,7 @@ export function spawnDetachedAgent(
   const stdio: Array<"pipe" | "ignore" | number> =
     track.fd === null ? ["pipe", "ignore", "ignore"] : ["pipe", "ignore", "ignore", track.fd];
   const unitToken = seedUnitToken(env);
+  const bornAt = Date.now();                      // 理由见 spawn.ts 里同一句
   const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
     cwd,
     stdio,
@@ -346,6 +353,7 @@ export function spawnDetachedAgent(
   registerTrackFd(real, track);
   registerUnitToken(real, unitToken);
   registerRunOutPath(real, paths.out);
+  registerRootLife(real, bornAt);
   real.stdin?.write(prompt);
   real.stdin?.end();
 
@@ -371,6 +379,7 @@ export function spawnDetachedAgent(
   });
   shareTrackFdRegistration(real, child);
   shareChildIdentity(real, child); // 理由同上:身份以真进程的内核状态为准
+  shareRootLife(real, child);      // 根这一代的生命周期同理(见上面那条路)
   shareUnitToken(real, child);
   shareRunOutPath(real, child);
   return child;

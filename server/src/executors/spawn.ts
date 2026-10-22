@@ -8,6 +8,7 @@ import { IS_WINDOWS } from "../platform.js";
 import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins } from "./bin-resolve.js";
 import { openTrackFd, registerTrackFd } from "./kill.js";
+import { registerRootLife } from "./root-life.js";
 import { registerUnitToken, seedUnitToken } from "./unit-token.js";
 
 // PATH 补全与命令名解析住在 bin-resolve.ts(Windows 的 PATHEXT / `.cmd` 垫片够写
@@ -167,6 +168,9 @@ export function spawnAgent(
   // 种在任一个都会漏掉另外几条路。
   const env = { ...agentBaseEnv(), ...extraEnv };
   const unitToken = seedUnitToken(env);
+  // **根这一代的下界取在 spawn 之前**(见 root-life.ts 的①):它一定不晚于根的真实出生,
+  // 当下界是安全的;晚一点就会把根自己刚生的孩子判成外人。
+  const bornAt = Date.now();
   const child = spawn(plan.file, plan.args, {
     cwd,
     stdio,
@@ -177,6 +181,9 @@ export function spawnAgent(
   });
   registerTrackFd(child, track);
   registerUnitToken(child, unitToken);
+  // 「活着才取得到」的那份证据只有这一刻拿得到:根 reap 之后再去问就晚了(第 17 轮审查 F3
+  // 在 Windows 真机上实测:正常完成那条路压根建不起区间,每一次正常完成都收不回逃逸后代)。
+  registerRootLife(child, bornAt);
   teeStdout(child, opts?.teeOut);
   child.stdin?.write(prompt);
   if (!opts?.keepStdin) child.stdin?.end();
