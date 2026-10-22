@@ -3,8 +3,9 @@
 // 正文。
 //
 // 验的事:
-//   · 协议读到带图的 message 那一刻字节就冻住:之后文件被重写、正文改版挪位置,终态交代出
-//     的记录仍是**先看到**的那一版,pos 落在终稿坐标上;同代至多交代一次;
+//   · 代的判据是**正文本身**:前缀延长(流式长出来/重放)是同一代 —— 已见节点保持首见冻结,
+//     延长里新出现的节点按**它出现那一刻**拍;非前缀改版、清场都开新一代,整代重拍(协议每条
+//     消息都是完整快照,换稿后旧字节说的是已不存在的那版正文,第 9 轮复审 R1);同代至多交代一次;
 //   · message 与 result 是两份独立正文:不共享「首见冻结」,各按自己到达那一刻拍字节;
 //   · 清场(协议发空串)与已交代后换稿都开新一代(rev+1):新代重新冻结、重新交代,ref
 //     发号器跨代连续;展示端按最高代取,这里只验记录带对 rev;
@@ -49,7 +50,8 @@ const metaShots = (events: { event?: AgentEvent }[] | AgentEvent[]) =>
   });
 
 try {
-  // ① message:读到那一刻冻字节;改版挪位置、文件重写都不动它;终态只交代一次。
+  // ① message 前缀延长是同一代:已见节点保持首见冻结,延长里新出现的节点按它出现那一刻拍
+  //   (复审 R1 snapshotNewOccurrence);终态只交代一次。
   {
     writeFileSync(join(root, "img.png"), red);
     const sink = markdownImageSink(root);
@@ -60,17 +62,41 @@ try {
     const early = agentEvent({ type: "agent", id: "c1", status: "running", message: "看 ![a](img.png)" });
     assert.equal(metaShots(feed(early)).length, 0, "非终态不交代");
     writeFileSync(join(root, "img.png"), blue);
-    const moved = agentEvent({ type: "agent", id: "c1", status: "running", message: "改版 ![a](img.png) 之后" });
-    assert.equal(metaShots(feed(moved)).length, 0, "改版只换坐标,不交代也不重拍");
-    const done = agentEvent({ type: "agent", id: "c1", status: "completed", closed: true, message: "改版 ![a](img.png) 之后" });
+    const grownText = "看 ![a](img.png) 再看 ![b](img.png)";
+    assert.equal(metaShots(feed(agentEvent({ type: "agent", id: "c1", status: "running", message: grownText }))).length, 0, "延长不交代");
+    const done = agentEvent({ type: "agent", id: "c1", status: "completed", closed: true, message: grownText });
     const settled = metaShots(feed(done));
     assert.deepEqual(
-      settled.map((shot) => [shot.doc, shot.field, shot.source, shot.ref, shot.pos, colorOf(shot.path)]),
-      [["c1", "message", "img.png", 0, 3, "RED"]],
-      "终态交代:字节是第一次读到时的红图,pos 落在终稿坐标",
+      settled.map((shot) => [shot.doc, shot.field, shot.rev, shot.ref, shot.pos, colorOf(shot.path)]),
+      [
+        ["c1", "message", 0, 0, grownText.indexOf("![a"), "RED"],
+        ["c1", "message", 0, 1, grownText.indexOf("![b"), "BLUE"],
+      ],
+      "同一代:旧节点仍是首见红图,新节点按出现那一刻拍成蓝图",
     );
     assert.equal(metaShots(feed(done)).length, 0, "重复终态不出第二条");
     assert.equal(metaShots(sink.close()).length, 0, "close 也不再交代已交代过的");
+  }
+
+  // ①b 非前缀改版(哪怕还没交代过)就是换稿开新代:协议每条消息都是完整快照,整代按
+  //   现在的字节重拍(复审 R1 protocolMessageReplacement:第二条完整 message 不能沿用
+  //   第一条冻住的字节)。
+  {
+    writeFileSync(join(root, "img2.png"), red);
+    const sink = markdownImageSink(root);
+    const feed = (event: AgentEvent) => {
+      sink.capture(event);
+      return sink.release(event);
+    };
+    feed(agentEvent({ type: "agent", id: "w1", status: "running", message: "初稿 ![a](img2.png)" }));
+    writeFileSync(join(root, "img2.png"), blue);
+    const rewritten = "重写 ![a](img2.png) 了";
+    const settled = metaShots(feed(agentEvent({ type: "agent", id: "w1", status: "completed", closed: true, message: rewritten })));
+    assert.deepEqual(
+      settled.map((shot) => [shot.rev, shot.ref, shot.pos, colorOf(shot.path)]),
+      [[1, 0, rewritten.indexOf("![a"), "BLUE"]],
+      "非前缀改版开新代:按换稿后的字节重拍,旧代没交代过就一条都不出",
+    );
   }
 
   // ② result 事件一到就交代,不等 agent 终态;终态也不再补第二条。
@@ -175,20 +201,26 @@ try {
     assert.equal(seed?.get("c1")?.refs, 1, "field 记录不进执行记录文档的身份计数");
     const metaSeed = seed?.get(metaSeedKey("c1", "message"));
     assert.equal(metaSeed?.refs, 1, "meta 种子:发号器接在已交代身份之后");
-    assert.equal(metaSeed?.rev, 1, "meta 种子:新进程从上一进程最高代+1 起算");
-    assert.equal(colorOf(metaSeed?.snapshots?.[0]?.path), "RED", "meta 种子:冻结字节按目的地接回");
+    // 种子带的是上一进程的**最高代本身**与那版正文:要不要升代由正文判据(前缀/非前缀)
+    // 决定,盲目 +1 会把协议重放的同一份正文当成新内容重拍(复审 R1 metaResumeNewTurn)。
+    assert.equal(metaSeed?.rev, 0, "meta 种子:带最高代本身,不预支下一代");
+    assert.equal(metaSeed?.text, "说明 ![m](m.png)", "meta 种子:带那一代的正文,接回后才能区分重放与新内容");
+    assert.equal(colorOf(metaSeed?.snapshots?.[0]?.path), "RED", "meta 种子:冻结字节按节点接回");
 
-    // ⑤b 种子接回:协议把同一份正文重放给新进程,文件已换蓝 —— 同目的地沿用当时的红图,
-    //   ref 续号、代号用种子代,不跟上一进程共代。
+    // ⑤b 种子接回:协议把同一份已交代的正文重放给新进程 —— 同一代、已交代,一个字节都
+    //   不重拍、一条都不再出;随后真换稿(非前缀)才开新代,按现在的蓝图重拍,ref 续号。
     writeFileSync(join(root, "m.png"), blue);
     const sink3 = markdownImageSink(root, { ...markdownImageAccounting(taskId, sessId, TURN), seed });
-    const replay = agentEvent({ type: "agent", id: "c1", status: "completed", closed: true, message: "说明 ![m](m.png)" });
+    const replay = agentEvent({ type: "agent", id: "c1", status: "running", message: "说明 ![m](m.png)" });
     sink3.capture(replay);
-    const reborn = metaShots(sink3.release(replay));
+    assert.equal(metaShots(sink3.release(replay)).length, 0, "重放同一份正文:同代已交代,不再出记录");
+    const rewritten = agentEvent({ type: "agent", id: "c1", status: "completed", closed: true, message: "换稿 ![m](m.png)" });
+    sink3.capture(rewritten);
+    const reborn = metaShots(sink3.release(rewritten));
     assert.deepEqual(
       reborn.map((shot) => [shot.field, shot.rev, shot.ref, colorOf(shot.path)]),
-      [["message", 1, 1, "RED"]],
-      "接回进程:冻结字节与发号器从种子续,代号错开",
+      [["message", 1, 1, "BLUE"]],
+      "接回后换稿:开新代按现在的字节重拍,发号器从种子续",
     );
   }
 
@@ -223,6 +255,33 @@ try {
         ["b1", "result", "s.png", "RED", true, 2],
       ],
       "临时账按落盘那版的坐标补合成身份;核不过节点的新版 final 一条不补",
+    );
+  }
+
+  // ⑦ 合并按代恢复(第 9 轮复审 R1-c):同一坐标上旧代交代过 final、新代只有临时账 ——
+  //   恢复要从最新代往回找第一个核得过落盘正文的代,旧代 final 不许把新代的临时账挡掉
+  //   (挡掉 = 清场换稿后只剩旧红图,蓝图永远丢失)。
+  {
+    writeFileSync(join(root, "g.png"), red);
+    const taskId = "task-meta-gen";
+    const sessId = "sess-meta-gen";
+    const sink = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN));
+    const feed = (event: AgentEvent) => {
+      sink.capture(event);
+      return sink.release(event);
+    };
+    for (const event of feed(agentEvent({ type: "agent", id: "gen1", status: "completed", message: "红色：![图](g.png)" }))) appendSessionTrace(taskId, sessId, TURN, event);
+    for (const event of feed(agentEvent({ type: "agent", id: "gen1", status: "running", message: "" }))) appendSessionTrace(taskId, sessId, TURN, event);
+    writeFileSync(join(root, "g.png"), blue);
+    for (const event of feed(agentEvent({ type: "agent", id: "gen1", status: "running", message: "蓝色：![图](g.png)" }))) appendSessionTrace(taskId, sessId, TURN, event);
+    sink.dispose();
+    const bare = parseSessionTrace(readFileSync(sessionTracePath(taskId, sessId), "utf8"));
+    const merged = await mergeImageJournal(taskId, sessId, bare);
+    const restored = metaShots(merged.map((entry) => entry.event)).sort((x, y) => x.rev - y.rev);
+    assert.deepEqual(
+      restored.map((shot) => [shot.rev, colorOf(shot.path), (shot.ref ?? 0) >= SYNTH_REF_BASE]),
+      [[0, "RED", false], [1, "BLUE", true]],
+      "旧代 final 原样保留,新代临时账补合成身份 —— 展示端按最高代取到蓝图",
     );
   }
 

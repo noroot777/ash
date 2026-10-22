@@ -172,6 +172,10 @@ export type MarkdownImageSpot = {
   ref?: number;
   path?: string;
   lost?: boolean;
+  /** 这个节点**不需要本地结果**(站外地址、data: 等,浏览器自己取):交代时如实记一笔,
+   * 恢复侧才能把它当作合法间隔 —— 没有这一笔,「每个节点都该有一条 attachment」的推断会
+   * 在第一个站外图上断掉,把后面还等定义的引用整段当成交代过(复审 R3)。 */
+  skipped?: boolean;
   /** false = 字节刚冻结(临时账,随时会被最终账覆盖);true = 已经作为事件交代出去。 */
   final: boolean;
 };
@@ -349,6 +353,21 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
    * 总量线性。上一版不设起点、不设闸,从 `scanned` 一路解析到越积越长的末尾:262144 字的
    * 回合要 11 秒(审查第 7 轮 N1),现在同样输入毫秒级(test-agent-image-entry 案 ⑬)。
    */
+  /**
+   * 最早未定论 `![` 的推进 —— freezeTail 与整窗扫描**共用**这一条:定论判据各自给,推进
+   * 逻辑必须同一份。整窗那一侧曾只把 open 清成 -1:同一片里前一节点刚定论、后一节点刚开头
+   * 时,后者从此失去回看锚点,之后的碎片里再没有新 `![`,不能自愈(复审 R2 multipleOpenTail:
+   * 应 RED/RED,实际 RED/BLUE)。不变量:**任何还没定论的图片节点都不被窗口丢弃** ——
+   * open 要么指向最早那个,要么确实一个都不剩。
+   */
+  const advanceOpen = (ledger: Ledger, concluded: (pos: number) => boolean) => {
+    while (ledger.open >= 0 && concluded(ledger.open)) {
+      const next = ledger.text.indexOf("![", ledger.open + 1);
+      ledger.open = next;
+      ledger.openLink = next >= 0 && ledger.text.indexOf("](", next) >= 0;
+    }
+  };
+
   const freezeTail = (ledger: Ledger, fresh: string) => {
     if (!/[)\]\n]/.test(fresh)) return;
     let from = Math.min(ledger.scanned, ledger.text.length);
@@ -404,11 +423,7 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     // 完整引用可解释却没人回看(正是复审 R2 的 tail-split-close)。真正的引用式等待被 open
     // 钉住的代价只是多几次回看,定义一到冻结就推进。定论之后 open 推进到**下一个** `![`
     // (同片可能有多个未决节点,只清不挪会把后面那个漏在窗口外)。
-    while (ledger.open >= 0 && (ledger.snapshots.has(ledger.open) || ledger.decided.has(ledger.open))) {
-      const next = ledger.text.indexOf("![", ledger.open + 1);
-      ledger.open = next;
-      ledger.openLink = next >= 0 && ledger.text.indexOf("](", next) >= 0;
-    }
+    advanceOpen(ledger, (pos) => ledger.snapshots.has(pos) || ledger.decided.has(pos));
   };
 
   /**
@@ -515,11 +530,10 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     }
     const resolved = resolveWaiting(ledger, open);
     // 最早未定论 `![` 的另外几条出路:定型线越过它(settled 的语法里它要么已是节点并被上面
-    // 冻结,要么根本不是图,围栏里的示例就归这档)、字节已冻结、或交代线已越过。
-    if (
-      ledger.open >= 0
-      && (ledger.open < scan.boundary || ledger.snapshots.has(ledger.open) || ledger.open < ledger.emitted)
-    ) ledger.open = -1;
+    // 冻结,要么根本不是图,围栏里的示例就归这档)、字节已冻结、或交代线已越过。定论之后
+    // 推进到下一个,不是清掉:同一片里可能跟着又一个刚开头的节点(复审 R2)。
+    advanceOpen(ledger, (pos) =>
+      pos < scan.boundary || pos < ledger.emitted || ledger.snapshots.has(pos) || ledger.decided.has(pos));
     // 有「语法已定型、还没交代过」的引用了吗 —— 有才值得去跑权威那一遍整篇扫描。整篇扫描
     // 是 O(全文):按段落跑等于 O(n²),按**图片**跑才是对的(一份文档里的图是个小数)。
     const pendingShown = (slot: ImageSlot) => slot.end <= ledger.settled && slot.start >= ledger.emitted;
@@ -571,10 +585,17 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     for (const ref of refs) {
       // 一条一条交代:持久账要把「正文里的哪一处」跟「哪条结果」钉在一起,批量交代拿不到
       // 这层对应(站外地址那种不发结果的引用会让「第 i 条结果 = 第 i 处引用」错位)。
+      let produced = false;
       for (const image of persistMarkdownImageRefs([ref], ledger.seen, { cwd, snapshots: ledger.snapshots })) {
+        produced = true;
         if (image.path) claimed.add(image.path);
         note?.({ doc: ledger.key, pos: ref.start, source: image.source, ref: image.ref, path: image.path, lost: image.lost, final: true });
         yield ledger.wrap(image);
+      }
+      // 一条结果都没有 = 这个节点不需要本地保存(站外/data:,浏览器自己取)。持久账记一笔
+      // 「合法间隔」:恢复侧按节点推交代线时,它不算缺口(复审 R3)。
+      if (!produced && ref.destination) {
+        note?.({ doc: ledger.key, pos: ref.start, source: ref.destination, skipped: true, final: true });
       }
     }
     ledger.emitted = stop;

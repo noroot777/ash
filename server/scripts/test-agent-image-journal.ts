@@ -335,6 +335,32 @@ try {
     );
   }
 
+  // ⑪ 站外引用造成的合法交付间隔(第 9 轮审查 R3):站外(http/data:)节点本来就不产
+  //   记录,账上落的是「跳过」交代 —— 恢复核对要按「本地节点有交付、站外节点跳过」走完
+  //   前缀,不许在第一个站外节点上停下、把后面的待定引用整段当「没交付」丢掉(丢掉 =
+  //   交代线退回 0 之后又被整段记成已交付,待定引用永远不再登记)。
+  {
+    const taskId = "task-external-gap";
+    const sessId = "sess-external-gap";
+    writeFileSync(join(root, "gap.png"), red);
+    const sink = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN));
+    const text = "![站外](https://example.invalid/image.png)\n\n![本地](gap.png)\n\n还等：![待][later]\n\n";
+    sink.capture({ kind: "text", text } as AgentEvent);
+    for (const event of sink.release({ kind: "text", text } as AgentEvent)) appendSessionTrace(taskId, sessId, TURN, event);
+    sink.dispose();
+    const seed = await loadMarkdownImageSeed(taskId, sessId, { mainTurnStartedAt: TURN });
+    const resumed: AgentEvent[] = [];
+    for await (const event of withMarkdownImages((async function* () {
+      yield { kind: "text", text: "[later]: gap.png\n\n" } as AgentEvent;
+      yield { kind: "done", exitStatus: 0 } as AgentEvent;
+    })(), root, markdownImageAccounting(taskId, sessId, TURN, seed))) resumed.push(event);
+    assert.deepEqual(
+      resumed.flatMap((event) => (event.kind === "attachment" ? [[event.ref, event.source, colorOf(event.path)]] : [])),
+      [[1, "gap.png", "RED"]],
+      "站外节点不挡恢复:接回后待定引用照常交付,身份接着发",
+    );
+  }
+
   console.log("正文图片持久账本回归通过");
 } finally {
   rmSync(root, { recursive: true, force: true });

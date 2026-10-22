@@ -6,31 +6,36 @@
 // 全文,下一条可能整段重写),两种时序没法共用一套 scanned/settled 游标。可字节的规矩是
 // 同一条:**协议读到那一刻就冻**。
 //
-// 身份与版本(审查第 8 轮复审 R1:同一线程、同一路径、同一字段都不能证明属于同一份正文):
-//   · 文档 = (线程 id × 字段)。message 与 result 是两份独立正文,各自捕获、各自交代,
-//     不共享「首见路径」—— message 先见到红图,result 后来才说同一个路径,result 那份
-//     要按 result 正文到达那一刻的字节算。
-//   · 代(rev) = 同一份文档的第几版生命周期。turn/started 把正文清空(协议发空串)、或者
-//     已交代之后又换稿,都开新一代:目的地首见冻结、交代资格都按代重算。记录带 rev,
-//     展示端只认最高代那组 —— 旧代说的是已经不在屏幕上的那一版正文。
+// 身份与版本(复审 R1:同线程、同字段、同目的地、甚至局部递增的代号,都不能证明属于
+// 当前可见正文的这处图片):
+//   · 文档 = (线程 id × 字段)。message 与 result 是两份独立正文,各自捕获、各自交代。
+//   · 代(rev) = 这份文档的第几**版**。判据是正文本身:新值是旧值的**前缀延续**(流式
+//     增量、同文重放)= 同一代;其余任何情形 —— 清场(协议发空串)、已交代后换稿、
+//     **非前缀的整段改写**(同一回合的第二条消息、挪动/替换引用)—— 都开新一代。上一版
+//     只认「清场/已交代后换稿」,同回合连发两条消息时第二条还顶着第一条的冻结(复审 R1
+//     protocolMessageReplacement:最新正文说蓝,记录仍红)。
+//   · 代内按**节点**(pos)冻结,不按目的地:前缀延续里旧节点坐标不动,新出现的节点
+//     (包括同路径的第二处)按**它自己**出现那一刻拍字节(复审 R1 snapshotNewOccurrence:
+//     应 RED/BLUE,按目的地首见会拍成 RED/RED)。
 //   · ref 发号器跨代、跨进程连续(种子接回),同文档两条记录永不撞身份。
 //
 // 口径:
-//   · capture —— 每条带 message/result 的事件到达时,当代**新出现的目的地**当场拍字节;
-//     每处引用的坐标随当前版本记一笔**临时账**(final:false)——消费者死在交代之前,
-//     重建那一侧才有凭据按「落盘的那版正文」把它补回来(复审 R1 中断/恢复一例)。
-//   · 交代 —— result 事件一到就交代(它只来一次,字符串即终稿);agent 状态到终态
-//     (completed/failed/stopped)时交代两个字段;流收尾清掉还没交代的。每份文档**每代**
-//     至多交代一次:快照式正文没有「前缀推进」,同代交代两版会让展示端同目的地计数翻倍。
-//   · 记录包一层 childActivity(同一文档身份),attachment 带 `field` + `rev` ——
-//     展示端(nativeWorkModel)按 field 路由到对应正文、按 rev 取最高代。
+//   · capture —— 每条带 message/result 的事件到达时按上面的判据定代,当代**还没冻结的
+//     节点**当场拍字节;每个节点记一笔**临时账**(final:false)——消费者死在交代之前,
+//     重建那一侧才有凭据按「落盘的那版正文」把它补回来。
+//   · 交代 —— result 事件一到就交代;agent 状态到终态时交代两个字段;流收尾清掉没交代的。
+//     每代至多交代一次:快照式正文没有「前缀推进」,同代交代两版会让展示端计数翻倍。
+//   · 记录带 `field` + `rev`,展示端按 field 路由、按 rev 取最高代(nativeWorkModel)。
+//   · 种子接回(跨进程):带上一条进程**最后一版**的正文、代号、按节点冻结的字节与
+//     「那一代交代过没有」。接回后同文重放(前缀)= 同一代沿用冻结;真正的新内容自然
+//     落进非前缀/清场那一档开新代 —— 「同回合重放要继承」不被推广成「下一回合也继承」
+//     (复审 R1 metaResumeNewTurn)。
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 import { markdownImageRefs } from "@ash/shared/markdown-images";
 import {
   captureMarkdownImages,
   imageStore,
   persistMarkdownImageRefs,
-  type ImageSnapshot,
   type ImageSnapshots,
   type ImageStore,
 } from "../agent-attachments.js";
@@ -49,18 +54,18 @@ type FieldDoc = {
   rev: number;
   /** 当前代的最新全文("" = 这一代还没有内容)。 */
   text: string;
-  /** 当前代曾有过内容 —— 只有「有过内容之后被清空」才算开新代的信号。 */
+  /** 当前代曾有过内容 —— 清场信号只对有过内容的代有意义(初始化就是空)。 */
   had: boolean;
-  /** 当前代:目的地 → 首见那一刻冻的字节(或 lost 结论)。快照式正文坐标会漂,身份按目的地。 */
-  byDestination: Map<string, ImageSnapshot>;
-  /** 当前代已记过临时账的 (pos, destination):版本换稿挪了坐标就按新坐标再记一笔。 */
-  noted: Set<string>;
+  /** 当前代:节点起点 → 首见那一刻冻的字节(或 lost 结论)。代内只前缀延续,坐标不漂。 */
+  snapshots: ImageSnapshots;
+  /** 当前代已记过临时账的节点起点。 */
+  noted: Set<number>;
   /** 当前代已交代。 */
   emitted: boolean;
 };
 
 export type MetaImageAccounts = {
-  /** 协议读到这条事件:带 message/result 的,当代新目的地的字节当场拍下。 */
+  /** 协议读到这条事件:带 message/result 的,按版本判代,当代新节点的字节当场拍下。 */
   capture(event: AgentEvent): void;
   /** 这条事件进流了:该在它身上交代的记录(result 到了 / agent 到终态)。 */
   settle(event: AgentEvent): AgentEvent[];
@@ -76,7 +81,7 @@ export function metaImageAccounts(opts: {
   captured: Set<string>;
   claimed: Set<string>;
   exposed: Set<string>;
-  /** 跨进程种子(metaSeedKey 键):ref 发号器、代号、上一条进程冻的字节。 */
+  /** 跨进程种子(metaSeedKey 键):上一条进程的正文、代号、发号器与按节点冻结的字节。 */
   seed?: ReadonlyMap<string, MarkdownImageSeedDoc>;
 }): MetaImageAccounts {
   const docs = new Map<string, FieldDoc>();
@@ -86,21 +91,32 @@ export function metaImageAccounts(opts: {
     if (!found) {
       const seeded = opts.seed?.get(key);
       const store = imageStore();
-      const byDestination = new Map<string, ImageSnapshot>();
+      const snapshots: ImageSnapshots = new Map();
       if (seeded) {
         store.refs = seeded.refs;
-        // 上一条进程冻的字节接回当代:重启接回时协议会把同一份正文重放给新进程,这时
-        // 同一目的地必须沿用**当时**拍下的那一份,而不是现在去读盘(代号更高不等于字节
-        // 更新 —— 展示端取最高代,接不上种子就等于用后来的文件顶替说话那一刻的画面)。
+        // 上一条进程这一代冻的字节按**节点**接回:重启接回时协议会把同一份正文(或它的
+        // 延续)重放给新进程,同代同节点必须沿用**当时**拍下的那一份,而不是现在去读盘。
+        // 接回的正文走不到同一代(非前缀)时,这张表随 reopen 整个丢弃,不会泄给新代。
         for (const snap of seeded.snapshots ?? []) {
-          byDestination.set(snap.destination, {
+          snapshots.set(snap.pos, {
             destination: snap.destination,
             ...(snap.path ? { path: snap.path } : {}),
             ...(snap.lost ? { lost: true } : {}),
           });
         }
       }
-      found = { store, rev: seeded?.rev ?? 0, text: "", had: false, byDestination, noted: new Set(), emitted: false };
+      found = {
+        store,
+        rev: seeded?.rev ?? 0,
+        text: seeded?.text ?? "",
+        had: !!seeded?.text,
+        snapshots,
+        // 种子里的节点都是上一条进程记过账的,重放同一代时不再记第二笔。
+        noted: new Set(snapshots.keys()),
+        // 种子说这一代交代过(emitted 覆盖全文)就不再交代:重放同文再交代一遍,展示端同
+        // 目的地计数翻倍,整组作废。
+        emitted: !!seeded?.text && (seeded.emitted ?? seeded.text.length) >= seeded.text.length,
+      };
       docs.set(key, found);
     }
     return found;
@@ -110,46 +126,43 @@ export function metaImageAccounts(opts: {
     doc.rev += 1;
     doc.text = "";
     doc.had = false;
-    doc.byDestination = new Map();
+    doc.snapshots = new Map();
     doc.noted = new Set();
     doc.emitted = false;
   };
 
   const take = (id: string, field: MetaImageField, value: unknown) => {
     if (typeof value !== "string") return;
+    const key = metaSeedKey(id, field);
     if (!value) {
-      // 协议明确清场(turn/started 发空的 message/result):这一代到此为止,下一段内容是
-      // 新一代 —— 不开新代的话,继续发言后的新结论配的还是上一段首见的旧字节(复审 R1
-      // 同线程继续一例)。没内容过的空串不算信号(初始化就是空)。
-      const existing = docs.get(metaSeedKey(id, field));
+      // 协议明确清场(turn/started 发空的 message/result):这一代到此为止。种子里有账、
+      // 本进程还没建档的也要应答 —— 新进程续聊的第一个清场信号恰恰落在这种时刻,跳过它,
+      // 下一段正文就会顶着上一条进程的代号和冻结说话(复审 R1 新回合继承一例)。
+      const existing = docs.get(key) ?? (opts.seed?.has(key) ? docOf(id, field) : undefined);
       if (existing?.had) reopen(existing);
       return;
     }
     const doc = docOf(id, field);
     if (doc.text === value) return;
-    // 已交代之后又换稿(没有清场信号也一样):交代过的那版已经定格,新稿是新一代。
-    if (doc.emitted) reopen(doc);
+    // 新一代的判据(见文件头):已交代后的任何变化,或**非前缀**的改写。前缀延续(流式
+    // 增量、重放后接着说)留在当代 —— 代内坐标因此永不漂移,节点账才能按 pos 记。
+    if (doc.emitted || !value.startsWith(doc.text)) reopen(doc);
     doc.text = value;
     doc.had = true;
     const refs = markdownImageRefs(value);
-    // 当代新出现的目的地当场拍字节;坐标按这一版正文算只为喂 captureMarkdownImages,
-    // 身份落在目的地上。
-    const fresh = refs.filter((ref) => !doc.byDestination.has(ref.destination));
+    // 当代还没冻结的节点当场拍字节:同路径的第二处是**另一个节点**,按它自己出现的时刻拍。
+    const fresh = refs.filter((ref) => !doc.snapshots.has(ref.start));
     if (fresh.length) {
-      const scratch: ImageSnapshots = new Map();
-      for (const path of captureMarkdownImages(fresh, doc.store, scratch, { cwd: opts.cwd })) opts.captured.add(path);
-      for (const snapshot of scratch.values()) {
-        if (!doc.byDestination.has(snapshot.destination)) doc.byDestination.set(snapshot.destination, snapshot);
+      for (const path of captureMarkdownImages(fresh, doc.store, doc.snapshots, { cwd: opts.cwd })) {
+        opts.captured.add(path);
       }
     }
-    // 临时账随**当前版本的坐标**记:消费者死在交代之前,恢复侧只认「落盘正文里真有这个
-    // 节点」—— 坐标跟着版本挪,账也要跟着挪,否则对不上号的临时账一条都补不回来。
+    // 临时账按节点记:消费者死在交代之前,恢复侧按「落盘正文里真有这个节点」补回。
     for (const ref of refs) {
-      const snapshot = doc.byDestination.get(ref.destination);
+      if (doc.noted.has(ref.start)) continue;
+      const snapshot = doc.snapshots.get(ref.start);
       if (!snapshot || (!snapshot.path && !snapshot.lost)) continue;
-      const key = `${ref.start}\u0000${ref.destination}`;
-      if (doc.noted.has(key)) continue;
-      doc.noted.add(key);
+      doc.noted.add(ref.start);
       if (snapshot.path) opts.exposed.add(snapshot.path);
       opts.note?.({
         doc: id, field, rev: doc.rev, pos: ref.start, source: ref.destination,
@@ -165,14 +178,8 @@ export function metaImageAccounts(opts: {
     if (!doc || !doc.text || doc.emitted) return [];
     doc.emitted = true;
     const refs = markdownImageRefs(doc.text);
-    // persist 按起点查快照:把目的地键的快照铺回这一版(当代终稿)的坐标上。
-    const snapshots: ImageSnapshots = new Map();
-    for (const ref of refs) {
-      const snapshot = doc.byDestination.get(ref.destination);
-      if (snapshot) snapshots.set(ref.start, snapshot);
-    }
     const out: AgentEvent[] = [];
-    for (const image of persistMarkdownImageRefs(refs, doc.store, { cwd: opts.cwd, snapshots })) {
+    for (const image of persistMarkdownImageRefs(refs, doc.store, { cwd: opts.cwd, snapshots: doc.snapshots })) {
       if (image.path) opts.claimed.add(image.path);
       opts.note?.({
         doc: id, field, rev: doc.rev, pos: image.pos ?? 0, source: image.source,

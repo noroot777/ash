@@ -661,6 +661,31 @@ try {
   rmSync(crash);
   assert.deepEqual(readFileSync(crashShots[0]!.path!), red, "那份拷贝不许被清理当成垃圾删掉");
 
+  // ㉖ 整窗与尾窗必须同一把尺推进(第 9 轮审查 R2):一大片正文整窗掠过时,同一片里开着
+  //   两个未决节点 —— 第一个交代后,回看锚要推进到**下一个未决节点**上,不是直接丢掉。
+  //   丢掉的话第二个节点(title 还开着)的后续片回不到上文,终态只能按当下文件重拍:
+  //   两张都该是首见那一刻的红图,第二张却成了重写后的蓝图。
+  {
+    const red26 = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 1)]);
+    const blue26 = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buffer.alloc(4, 2)]);
+    const tail = join(root, "output", "tail.png");
+    writeFileSync(tail, red26);
+    const events = await collect(withMarkdownImages((async function* () {
+      yield { kind: "text", text: "铺垫".repeat(50000) + "\n" } as AgentEvent;
+      yield { kind: "text", text: "继续".repeat(9000) + '第一处 ![一](output/tail.png) 第二处 ![二](output/tail.png "' } as AgentEvent;
+      for (let index = 0; index < 45; index += 1) yield { kind: "text", text: "说明".repeat(100) } as AgentEvent;
+      yield { kind: "text", text: '")\n' } as AgentEvent;
+      writeFileSync(tail, blue26);
+      yield { kind: "tool", name: "exec", detail: "重拍" } as AgentEvent;
+      yield { kind: "done", exitStatus: 0 } as AgentEvent;
+    })(), root));
+    assert.deepEqual(
+      attachments(events).map((event) => [event.source, readFileSync(event.path!).equals(red26) ? "RED" : "BLUE"]),
+      [["output/tail.png", "RED"], ["output/tail.png", "RED"]],
+      "同片两个未决节点:第一个交代后第二个仍有回看锚,两张都冻在首见那一刻",
+    );
+  }
+
   console.log("自定义解析器的图片落盘回归通过");
 } finally {
   rmSync(root, { recursive: true, force: true });
