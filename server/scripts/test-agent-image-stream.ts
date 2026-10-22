@@ -336,7 +336,41 @@ try {
     "写盘失败要如实报成「这一刻的字节丢了」",
   );
 
-  // ⑲ **写盘失败是单调的**:第一处引用的字节读到了、存不下来(临时权限失败),之后文件被
+  // ⑲ **定义在前、引用在后,中间隔着一次裁剪**。`[r]: output/pre.png` 先到,11 KB 普通正文
+  // 把它顶过窗口被裁走,之后才出现 `![前置定义][r]`。定义是**整篇文档的**,按块边界裁剪
+  // 只保证块结构不被切断,证明不了「留下来这几个块不再依赖裁走的那几个」—— 定义一裁走,
+  // 后面那处引用在解析树里连图片节点都不是,这条消息从此没有持久副本,原图一清理就彻底
+  // 没了(审查第 3 轮 R2 实测:完整正文 1 处真图、服务端 0 条结果)。窗口从 8 KB 放到
+  // 32 KB 同样不解决:那是在猜距离,而距离没有上限。所以裁剪方把定义**带着走**。
+  const pre = join(root, "output", "pre.png");
+  writeFileSync(pre, red);
+  const definitionPrefix = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "[r]: output/pre.png\n\n" + "普通正文。\n\n".repeat(1600) } as AgentEvent;
+    yield { kind: "text", text: "![前置定义][r]\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  const prefixed = attachments(definitionPrefix);
+  assert.deepEqual(
+    prefixed.map((event) => event.source),
+    ["output/pre.png"],
+    "裁走的那一段里的链接引用定义要带着走,否则后面那处引用一条结果都发不出来",
+  );
+  assert.deepEqual(readFileSync(prefixed[0]!.path!), red, "拷贝就是它说的那一张");
+
+  // ⑲b 带着走的是**定义环境**,不是正文:定义自己不产生任何可见节点,所以不许凭空多出
+  // 一处引用,也不许把同名定义的后一条顶掉(CommonMark 取第一条)。
+  const sameName = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "[r]: output/pre.png\n\n" + "普通正文。\n\n".repeat(1600) } as AgentEvent;
+    yield { kind: "text", text: "[r]: output/shot.png\n\n![同名][r]\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(sameName).map((event) => event.source),
+    ["output/pre.png"],
+    "同名定义照 CommonMark 取第一条(也就是被裁走的那条),而且只有一处引用",
+  );
+
+  // ⑳ **写盘失败是单调的**:第一处引用的字节读到了、存不下来(临时权限失败),之后文件被
   // 重拍成蓝色、权限也恢复了 —— 那一处仍然必须报成「丢了」,不许被后面任何一遍扫描洗成
   // 蓝图。流式阶段每来一片都会重扫同一段正文,少了这道单调性,收尾那一遍(或者下一片的
   // 捕获)就会重新读盘,于是「修改前」那一处画出来是修改后的蓝图 —— 比不画更坏

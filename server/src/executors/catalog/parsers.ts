@@ -3,7 +3,13 @@ import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import { parseClaudeStream } from "../claude.js";
-import { markdownImageRefs, scanMarkdownImages, type MarkdownImageRef } from "@ash/shared/markdown-images";
+import {
+  markdownImageRefs,
+  scanMarkdownImages,
+  type MarkdownDefinition,
+  type MarkdownImageRef,
+  type MarkdownScan,
+} from "@ash/shared/markdown-images";
 import {
   captureMarkdownImages,
   discardUnclaimedImages,
@@ -133,6 +139,10 @@ const SCAN_CEILING = 1 << 20;
 const PENDING_HOLD = SCAN_WINDOW * 4;
 // 还在写的定义行(`[r]: output/sho`):它的目的地由**裸文字**收尾,一个标点都不带。
 const PENDING_DEFINITION = /(?:^|\n) {0,3}\[(?:[^\]\\\n]|\\.)*\]:[^\n]*$/;
+// 带着走的**定义环境**最多这么大(见 withMarkdownImages 的 keepDefinitions)。定义行短、
+// 条数少,一个窗口足够装下现实中的全部;满了就不再收 —— 那一档退回「这一侧不管那处引用」,
+// 展示端照旧按完整正文解析、退一档去工作目录取。
+const DEFINITION_HOLD = SCAN_WINDOW;
 
 /**
  * 给**任意**解析器的事件流补上「正文里提到的那张本机图片」。
@@ -181,6 +191,21 @@ export async function* withMarkdownImages(
   const claimed = new Set<string>();
   let carry = "";
   let scanned = 0;
+  /**
+   * 裁走的那几段里留下来的**链接引用定义**,拼成一段不可见的解析前缀(恒以空行结尾)。
+   *
+   * 定义是**整篇文档的**,不是它所在那个块的:按块边界裁剪只保证块结构不被切断,证明不了
+   * 「留下来这几个块不再依赖裁走的那几个」。`[r]: output/shot.svg` 在前、11 KB 正文之后才
+   * 出现 `![图][r]` 时,定义一裁走那处引用就连图片节点都不是,这条消息从此没有持久副本
+   * (审查第 3 轮 R2 实测:完整正文 1 处、服务端 0 条)。所以把定义带着走,后续每一遍都
+   * 按「前缀 + carry」解析,再把坐标换算回 carry 自己那一套。
+   *
+   * 只带链接引用定义,**不带脚注定义**:脚注定义里可以有图,带着走就等于同一处引用被反复
+   * 拍、反复交代。而它本来也不会丢 —— 它里面那几处引用就在它自己那个块里,裁走之前已经
+   * 交代过了。
+   */
+  let prefix = "";
+  const carried = new Map<string, string>();
   // 这条消息已经放弃管了:一条事件都不发,正文照旧原样转发。
   let abandoned = false;
 
@@ -188,6 +213,38 @@ export async function* withMarkdownImages(
     for (const image of persistMarkdownImageRefs(refs, seen, { cwd, snapshots })) {
       if (image.path) claimed.add(image.path);
       yield { kind: "attachment", ...image };
+    }
+  };
+  /** carry 坐标系里的那几处引用 —— 带着定义前缀解析,再把偏移换算回来。 */
+  const rebase = (refs: MarkdownImageRef[]): MarkdownImageRef[] => refs
+    .filter((ref) => ref.start >= prefix.length)
+    .map((ref) => ({ ...ref, start: ref.start - prefix.length, end: ref.end - prefix.length }));
+  const scan = (): MarkdownScan => {
+    if (!prefix) return scanMarkdownImages(carry);
+    const raw = scanMarkdownImages(prefix + carry);
+    return {
+      refs: rebase(raw.refs),
+      boundary: Math.max(0, raw.boundary - prefix.length),
+      pending: raw.pending >= prefix.length ? raw.pending - prefix.length : -1,
+      definitions: raw.definitions
+        .filter((definition) => definition.start >= prefix.length)
+        .map((definition) => ({
+          ...definition,
+          start: definition.start - prefix.length,
+          end: definition.end - prefix.length,
+        })),
+    };
+  };
+  /** 要裁走的那一段里的定义留进前缀 —— 同名只留第一条(CommonMark 也取第一条)。 */
+  const keepDefinitions = (definitions: MarkdownDefinition[]) => {
+    for (const definition of definitions) {
+      if (carried.has(definition.identifier)) continue;
+      const text = carry.slice(definition.start, definition.end).trim();
+      if (!text || prefix.length + text.length + 2 > DEFINITION_HOLD) break;
+      carried.set(definition.identifier, text);
+      // 整段**以空行收尾**:后面接上来的 carry 从此恒是一个新块的开头,解析结果跟它单独
+      // 解析时一模一样(定义本身不产生任何可见节点,也就不会多出图片引用)。
+      prefix = `${[...carried.values()].join("\n")}\n\n`;
     }
   };
   /** 交代过的那一段裁走:**留下来那一段的快照必须跟着挪**(见 shiftSnapshots)。 */
@@ -199,10 +256,12 @@ export async function* withMarkdownImages(
   const flush = function* (): Generator<AgentEvent> {
     // 先交代再清账:清空快照之后再交代,这条消息的字节就全部退回「收尾时再读文件」——
     // 重拍过的三处引用会一起拿到最后那份(F1 实测 A)。
-    if (!abandoned && carry) yield* emit(markdownImageRefs(carry));
+    if (!abandoned && carry) yield* emit(rebase(markdownImageRefs(prefix + carry)));
     snapshots = new Map();
     carry = "";
     scanned = 0;
+    prefix = "";
+    carried.clear();
     abandoned = false;
   };
 
@@ -232,7 +291,7 @@ export async function* withMarkdownImages(
           && !PENDING_DEFINITION.test(carry)
         ) continue;
         scanned = carry.length;
-        const { refs, boundary, pending } = scanMarkdownImages(carry);
+        const { refs, boundary, pending, definitions } = scan();
         for (const path of captureMarkdownImages(refs, seen, snapshots, { cwd })) captured.add(path);
         if (carry.length <= SCAN_WINDOW) continue;
         // 攒过窗口了:交代到「语法已经定型」那条线为止再把它裁走 —— **裁掉的只是交代过的
@@ -244,6 +303,8 @@ export async function* withMarkdownImages(
           : boundary;
         if (held > 0) {
           yield* emit(refs.filter((ref) => ref.end <= held));
+          // 裁走那一段里的定义**带着走** —— 后面的引用式图还要靠它才认得出来(见 prefix)。
+          keepDefinitions(definitions.filter((definition) => definition.end <= held));
           advance(held);
           continue;
         }

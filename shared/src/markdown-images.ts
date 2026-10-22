@@ -199,6 +199,18 @@ function boundaryOf(text: string, root: Node): number {
  */
 const PENDING_IMAGE = /!\[(?:[^\]\\]|\\[\s\S])*\](?:\[(?:[^\]\\]|\\[\s\S])*\])?/g;
 
+/**
+ * 一条**链接引用定义**(`[r]: path`)在这段正文里占的那一段。
+ *
+ * 为什么流式那一侧需要它:定义是**整篇文档的**,不是它所在那个块的 —— `[r]: output/x.png`
+ * 写在前面、`![图][r]` 写在一万字之后,照 CommonMark 它俩就是一张图。而按块边界裁剪只能
+ * 保证「块结构不被切断」,证明不了「留下来这几个块不再依赖裁走的那几个」:定义一旦被裁走,
+ * 后面那处引用在解析树里连图片节点都不是,这条消息从此没有持久副本(审查第 3 轮 R2 实测:
+ * 完整正文 1 处真图、服务端 0 条结果)。把等待窗口从 8 KB 放到 32 KB 也不解决 —— 那是在
+ * 猜距离,而距离没有上限。所以裁剪方要把定义**带着走**(见 parsers.ts 的 keepDefinitions)。
+ */
+export type MarkdownDefinition = { identifier: string; start: number; end: number };
+
 export type MarkdownScan = {
   /** 这一段正文里**渲染器真会画出来的**每一处引用(= markdownImageRefs)。 */
   refs: MarkdownImageRef[];
@@ -206,13 +218,22 @@ export type MarkdownScan = {
   boundary: number;
   /** 还等着定义的那处引用所在的**顶层块起点**;没有就是 -1。 */
   pending: number;
+  /** 这一段里的全部链接引用定义(见 MarkdownDefinition)。 */
+  definitions: MarkdownDefinition[];
 };
 
-/** 流式那一侧要的三个答案,一次解析一起算出来(每片都来一遍,别解析三遍)。 */
+/** 流式那一侧要的几个答案,一次解析一起算出来(每片都来一遍,别解析好几遍)。 */
 export function scanMarkdownImages(text: string): MarkdownScan {
   const root = parse(text);
-  if (!root) return { refs: [], boundary: 0, pending: -1 };
+  if (!root) return { refs: [], boundary: 0, pending: -1, definitions: [] };
   const refs = refsOf(root);
+  const definitions: MarkdownDefinition[] = [];
+  for (const node of walk(root)) {
+    if (node.type !== "definition" || !node.identifier) continue;
+    const span = offsets(node);
+    // 块容器里的定义照样是整篇文档的(CommonMark 的定义表是文档级的),所以不分层次都收。
+    if (span) definitions.push({ identifier: node.identifier, start: span[0], end: span[1] });
+  }
   const blocks = root.children ?? [];
   const starts = new Set(refs.map((ref) => ref.start));
   const code: [number, number][] = [];
@@ -238,5 +259,5 @@ export function scanMarkdownImages(text: string): MarkdownScan {
       break;
     }
   }
-  return { refs, boundary: boundaryOf(text, root), pending };
+  return { refs, boundary: boundaryOf(text, root), pending, definitions };
 }
