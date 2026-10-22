@@ -275,10 +275,13 @@ export function spawnControllableDetachedAgent(
   // 没跑成」那一种情形,成败不改变 coverage —— 号在不在圈里由内核自己记着。
   registerConfinement(real, confine);
   if (real.pid) confine?.enroll(real.pid);
-  if (!real.pid) return failedChild(`起不来:${shq(bin)}`);
+  // **起不来就把圈撤掉**:一条没跑起来的运行留下的圈再也没人认领(登记挂在这个被丢掉的
+  // `real` 上),会一路攒到那道 24 小时的年龄门才清。圈里没成员,`rmdir` 必然成功。
+  if (!real.pid) { confine?.dispose(); return failedChild(`起不来:${shq(bin)}`); }
   const writer = fifoWriter(input);
   if (!writer) {
-    killChild(real);
+    killChild(real);                                // 这一下已经把整圈带走了
+    confine?.dispose();
     return failedChild(`打开可重连 stdin 失败：${input}`);
   }
   writer?.write(initialInput);
@@ -374,7 +377,8 @@ export function spawnDetachedAgent(
   real.stdin?.write(prompt);
   real.stdin?.end();
 
-  if (!real.pid) return failedChild(`起不来:${shq(bin)}`);
+  // 同上:没跑起来的运行不留无主的圈。
+  if (!real.pid) { confine?.dispose(); return failedChild(`起不来:${shq(bin)}`); }
 
   const child = makeDetachedChild({
     pid: real.pid,

@@ -15,7 +15,12 @@
 //   | 资源记号      | **断** | 在       | 在     | 在(落库)     |
 //   | 追踪 fd       | 在     | **断**   | 在     | 断(内存态)   |
 //   | ppid 树       | 在     | 在       | **断** | 在             |
-//   | **内核圈定**  | **在** | **在**   | **在** | 在(圈号即路径)|
+//   | **内核圈定**  | **在** | **在**   | **在** | **未接**(见下)|
+//
+// 最后那一格如实写明:圈号(cgroup 路径 / Job 名)**本身**跨得过重启,但**现在没有落库**,
+// 所以 server 重启之后清扫侧拿不到这次运行的圈号 —— 这台设备在那条路上等于不存在,判定
+// 一字不改地退回既有那套。接法已经铺好(`reopenConfinement` 按圈号原样打开),缺的只是
+// 「会话/债表里存一列圈号 + 接回和清扫两侧读它」这一段接线,留作独立的一件事。
 //
 // ── 三个平台的能力并不对等,这里如实分档 ──────────────────────────────────────
 //
@@ -46,7 +51,10 @@
 // 「它不在我这个集合里 ⇒ 它不是这次运行的」—— 但那是**改核销判据**,不在本次改动的范围内
 // (约束原话:`dischargeOpen` 的语义不要改)。所以名单上还剩一条,这里照样降成 `unknown`。
 import type { ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { IS_MAC, IS_WINDOWS, killOne } from "../platform.js";
 import { processGenerationSync } from "../process-generation.js";
@@ -82,10 +90,16 @@ export type ConfineRead =
  * 并把 `env` 里那一项带上 —— 于是圈定发生在目标程序被 fork 出来**之前**,这次运行产生的
  * 每一个进程都必然进过集合(coverage 从此是 `whole-run`,见 `ConfineCoverage`)。
  *
- * 写失败一律吞掉(`2>/dev/null`):圈定是**加一台设备**,不该让它把一次正常的运行弄挂。
- * 代价如实记下:那种情形下 coverage 的声称会偏乐观 —— 而圈是本进程 `mkdir` 出来的、
- * 整段运行期间唯一撤它的地方是判空成功之后那句 `dispose()`,所以这一句写失败只可能是
- * 盘/内核层面的异常,不是正常路径。
+ * 写成功之后**再往一个普通文件里写一次自己的号**(`$ASH_CONFINE_OK`):那是这一句到底
+ * 跑成没跑成的**唯一可验证证据**,父进程随时核得动,而且进程退出之后它还在盘上。
+ * `whole-run` 这一档就认它(见 `cgroupConfinement` 里的 `confirmWholeRun`)—— 以前这一档
+ * 是在**发环境变量那一刻**直接声明的,等于「我打算这么做」被当成「内核已经这么记下了」:
+ * 这一句写失败(或者根本没被执行)时读数照旧自称 `whole-run`,于是「集合空」这句**推断
+ * 出来的空**会压过别的设备,正是这台设备本来要消灭的那类判据错误(第 1 轮审查 F3)。
+ *
+ * 失败不往 `/dev/null` 吞,接到 `$ASH_ERR`(这次运行自己的 stderr 文件)上:吞掉等于把
+ * 一台设备的失效做成静默。接不上时(没有那一项)才退回 `/dev/null` —— 圈定是**加一台
+ * 设备**,不该让它把一次正常的运行弄挂。
  *
  * **它是一条命令,不含任何结尾分隔符** —— 分隔符一律由拼它的那一侧写。原先这个常量
  * 自带 `;`,而 FIFO 那条路是把各句 `join("; ")` 起来的,于是拼出 `;;`:`sh` 当场语法
@@ -93,15 +107,19 @@ export type ConfineRead =
  * 换成了 `..._CMD`:它不是「可以直接贴上去的前缀」,是「要自己接分隔符的一条命令」。
  */
 export const CONFINE_ENROLL_CMD =
-  'test -n "$ASH_CONFINE_PROCS" && echo $$ >"$ASH_CONFINE_PROCS" 2>/dev/null';
+  'test -n "$ASH_CONFINE_PROCS" && { echo $$ >"$ASH_CONFINE_PROCS"'
+  + ' && echo $$ >"$ASH_CONFINE_OK"; } 2>>"${ASH_ERR:-/dev/null}"';
 
-/** `CONFINE_ENROLL_CMD` 认的那一项环境变量。 */
+/** `CONFINE_ENROLL_CMD` 认的两项环境变量:圈的成员文件,以及那一句的成功凭据。 */
 export const CONFINE_PROCS_ENV = "ASH_CONFINE_PROCS";
+export const CONFINE_OK_ENV = "ASH_CONFINE_OK";
 
 export type Confinement = {
   /**
    * **圈号**:Linux 是 cgroup 相对挂载点的路径,Windows 是 Job Object 的名字。
-   * 它跨得过 server 重启(路径/名字本身就是身份),所以落库之后清扫侧能原样把圈打开。
+   * 路径/名字本身就是身份,所以**落库之后**清扫侧能原样把圈打开(`reopenConfinement`)。
+   * **目前没落库**:这台设备的有效范围就是 ash 自己这条命之内,跨 server 重启那一档
+   * 是「未接」而不是「在」—— 别把这一行读成已经接上了。
    */
   readonly id: string;
   /**
@@ -181,9 +199,28 @@ function probeCgroupWritable(mount: string): string | null {
  * 都少一个要对齐的东西。
  */
 export function openConfinement(token: string): Confinement | null {
-  if (!confineEnabled()) return null;
-  if (IS_WINDOWS) return openJobConfinement(token);
-  return openCgroupConfinement(token);
+  const made = confineEnabled()
+    ? (IS_WINDOWS ? openJobConfinement(token) : openCgroupConfinement(token))
+    : null;
+  if (!made) discloseAbstention();
+  return made;
+}
+
+let disclosed = false;
+
+/**
+ * **弃权要说出来。** 任务原话要求把平台边界写在「代码注释和披露面」两处,而注释只给改这块
+ * 代码的人看 —— 真正跑着 ash 的那台 macOS 上,得有一句话让使用者知道自己拿不到 Linux 那一档
+ * 的保证。所以这台设备建不出圈时,**每个进程打一次**那句弃权理由。
+ *
+ * 一个进程只打一次:弃权的理由是平台/部署形态决定的,一次运行里不会变,每个回合重复一遍
+ * 只会把日志刷掉。真要按运行追的话,判定那一侧本来就把理由记进了结论的 detail 里。
+ */
+function discloseAbstention(): void {
+  if (disclosed) return;
+  disclosed = true;
+  const why = confineAbstention();
+  if (why) console.warn(`[ash] 内核圈定这台设备在这台机器上弃权:${why}`);
 }
 
 /**
@@ -291,6 +328,7 @@ function openCgroupConfinement(token: string): Confinement | null {
     return null;
   }
   sweepStaleCgroups(join(mount, `.${own}`), basename(dir));
+  sweepStaleEnrolled();
   return cgroupConfinement(id, dir);
 }
 
@@ -327,15 +365,39 @@ const cgroupName = (token: string): string =>
   `ash-agent-${token.replace(/[^A-Za-z0-9._-]/g, "_")}`;
 
 function cgroupConfinement(id: string, dir: string): Confinement {
-  // **默认是保守的那一档**。只有调用方取过 `preExecEnv()`(= 它会在目标程序被 fork 出来
-  // 之前把自己写进 `cgroup.procs`)才升到 `whole-run`:detached 那两条路是这样的,管道
-  // 那条路只有父进程这一侧写得了号。重新打开的圈不知道当初是怎么圈的,一律保守档。
-  let coverage: ConfineCoverage = "since-enroll";
+  // **默认是保守的那一档**,而且升档要由**内核那一侧确认**,不是由这边声明。
+  //
+  // 取过 `preExecEnv()` 只说明「我打算在目标程序跑起来之前把自己写进去」;那一句到底跑成
+  // 没跑成,只有 shell 自己知道。所以它写成功之后还要往 `$ASH_CONFINE_OK` 里写一次自己的
+  // 号,这边核对那份凭据(`confirmWholeRun`)—— 核不上就老老实实停在 `since-enroll`,那一
+  // 档的「空」不构成证明。上一版在**发环境变量那一刻**就把 coverage 设成 `whole-run`:
+  // 那一句写失败、或者 shell 根本没执行到它(脚本语法错、`exec` 之前就挂了)时,读数照旧
+  // 自称罩住整段运行,于是一个**推断出来的空**压过了别的设备 —— 正是这台设备本来要消灭的
+  // 那类判据错误(第 1 轮审查 F3)。重新打开的圈不知道当初是怎么圈的,一律保守档。
+  const okFile = join(confineTmp(), `${basename(dir)}.enrolled`);
+  let declaredPreExec = false;
+  let wholeRun = false;
+  let rootPid: number | null = null;
+  const confirmWholeRun = (): boolean => {
+    if (wholeRun) return true;                      // 确认过就不会再变回去
+    if (!declaredPreExec || rootPid === null) return false;
+    let seen: string;
+    try {
+      seen = readFileSync(okFile, "utf8");
+    } catch {
+      return false;                                 // 凭据不在 ⇒ 那一句没跑成 ⇒ 不敢说罩住整段
+    }
+    // 核的是**这次运行的根**:凭据文件按圈名取,而圈名带着这次运行的随机记号,所以这一步
+    // 只是再确认一次「写下它的就是我们圈住的那个 shell」。
+    wholeRun = seen.trim() === String(rootPid);
+    return wholeRun;
+  };
   let enrolledByParent = false;
   return {
     id,
     enroll(pid: number): boolean {
       if (!Number.isInteger(pid) || pid <= 1) return false;
+      rootPid ??= pid;                              // 第一个圈进来的号就是这次运行的根
       try {
         writeFileSync(join(dir, "cgroup.procs"), String(pid));
         enrolledByParent = true;
@@ -350,8 +412,14 @@ function cgroupConfinement(id: string, dir: string): Confinement {
       }
     },
     preExecEnv(): Record<string, string> {
-      coverage = "whole-run";
-      return { [CONFINE_PROCS_ENV]: join(dir, "cgroup.procs") };
+      declaredPreExec = true;
+      try {
+        mkdirSync(confineTmp(), { recursive: true });
+      } catch { /* 建不出来 ⇒ 凭据写不下 ⇒ 这个圈停在 since-enroll,不影响运行 */ }
+      return {
+        [CONFINE_PROCS_ENV]: join(dir, "cgroup.procs"),
+        [CONFINE_OK_ENV]: okFile,
+      };
     },
     read(): ConfineRead {
       if (!existsSync(dir)) {
@@ -359,7 +427,7 @@ function cgroupConfinement(id: string, dir: string): Confinement {
       }
       const members = cgroupMembers(dir);
       if (!members) return { kind: "unqueryable", why: `cgroup ${id} 这一刻读不出成员` };
-      return { kind: "members", members, coverage };
+      return { kind: "members", members, coverage: confirmWholeRun() ? "whole-run" : "since-enroll" };
     },
     killAll(sig: NodeJS.Signals): number {
       // SIGKILL 走 `cgroup.kill`:**一次写入带走整棵子树**,而且没有「读到号→发信号」之间
@@ -384,9 +452,36 @@ function cgroupConfinement(id: string, dir: string): Confinement {
       return sent;
     },
     dispose(): void {
+      try { unlinkSync(okFile); } catch { /* 没写下来过,或者已经清了 */ }
       removeCgroupTree(dir);
     },
   };
+}
+
+/** 盘上那点凭据放哪:跟 Windows 那边守圈进程的就绪文件同一个目录(confine-job.ts)。 */
+const confineTmp = (): string => join(tmpdir(), "ash-confine");
+
+/**
+ * 过期的入圈凭据扫掉。跟 `sweepStaleCgroups` 同一个理由和同一道年龄门:判定没落在
+ * `empty` 的那些运行(以及 server 被硬杀的那些)不会走到 `dispose()`,凭据会一直攒。
+ * 删早了只会让那个圈的 coverage 退回 `since-enroll`(= 少说一句话),不会误判成空。
+ */
+function sweepStaleEnrolled(): void {
+  const cutoff = Date.now() - 24 * 3600_000;
+  let names: string[];
+  try {
+    names = readdirSync(confineTmp());
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith("ash-agent-") || !name.endsWith(".enrolled")) continue;
+    const file = join(confineTmp(), name);
+    try {
+      if (statSync(file).mtimeMs >= cutoff) continue;
+      unlinkSync(file);
+    } catch { /* 别人清掉了 */ }
+  }
 }
 
 /**

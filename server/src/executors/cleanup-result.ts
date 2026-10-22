@@ -38,7 +38,7 @@
 //
 // 两问之间反过来是**合取**:哪一问没有任何设备作答,整条结论就是 `silent` —— 不许销账,
 // 但可以「追到这里为止」(收档:停止自动重试、保留记录与定位线索)。
-import { isPidAlive } from "../platform.js";
+import { isPidAlive, isPidRunning } from "../platform.js";
 import type { UnitEvidence } from "../proc.js";
 import { currentGeneration } from "../process-generation.js";
 import { holderMayOwn, holderScanFault, type HolderProbe } from "./track-evidence.js";
@@ -231,7 +231,11 @@ export function openLedger(): OpenLedger {
 
 function provenGone(one: CleanupOpen): boolean {
   if (!Number.isInteger(one.pid) || one.pid <= 1) return true;   // 记歪的号核不动,也追不动
-  if (!isPidAlive(one.pid)) return true;
+  // **僵尸算退出证据**(`isPidRunning` 而不是 `isPidAlive`):它已经 exit 过了,不会再写
+  // 一行、也收不到信号 —— 那正是这一问要的「它退了」。判据因此更利而不是更松,理由写在
+  // `isPidRunning` 的注释里。这个组合是新那台设备带出来的:圈里的成员一律进账本,而「被
+  // 整圈杀掉、没人收割」的后代恰好落在僵尸这一档上,旧那几台设备点名的号都是活的。
+  if (!isPidRunning(one.pid)) return true;
   if (!one.gen) return false;                     // 当初没记代次 ⇒ 只能等它退出
   return currentGeneration(one.pid, one.gen).outcome === "changed";
 }
@@ -386,7 +390,8 @@ export function confinedResidue(
   if (read.kind === "unqueryable") {
     return { kind: "unknown", detail: `内核圈定这一问没答出来:${read.why}`, open: [...open] };
   }
-  const alive = read.members.filter((m) => isPidAlive(m.pid));
+  // 同一条判据:僵尸不算「还有成员在跑」—— 整圈下过刀、没人收割的现场就停在这一档上。
+  const alive = read.members.filter((m) => isPidRunning(m.pid));
   if (alive.length) {
     return {
       kind: "remaining",

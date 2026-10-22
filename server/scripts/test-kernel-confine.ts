@@ -216,6 +216,9 @@ async function scenePosix(dev: Confinement): Promise<Scene> {
     process.execPath, "-e", rootCodeWith(0)], {
     env, detached: true, stdio: ["ignore", "pipe", "ignore"],
   });
+  // 父侧再圈一次,跟两条生产路径一字不差(`confine?.enroll(real.pid)`):**幂等**,而且
+  // `whole-run` 那份凭据要核对的就是这个号(见 kernel-confine.ts 的 `confirmWholeRun`)。
+  if (child.pid) dev.enroll(child.pid);
   const descendant = await firstPidFrom(child, "根进程");
   child.unref();
   return { root: child.pid ?? 0, descendant, coverage: "whole-run" };
@@ -245,6 +248,96 @@ async function sceneWindows(dev: Confinement): Promise<Scene> {
 }
 
 const scene = (dev: Confinement) => (IS_WIN ? sceneWindows(dev) : scenePosix(dev));
+
+console.log("3b) 僵尸算退出证据:账本核销得掉,不会每轮重押同一笔");
+{
+  // 为什么这一条跟这台设备有关:圈里的成员**一律进账本**(kill.ts 的 `confineOwn`),而
+  // 「被整圈杀掉、父进程没来收割」的后代恰好停在 `Z` 上 —— 旧那几台设备点到的号都是活的,
+  // 所以这个组合是新设备带出来的。按「号还占着吗」问,那一笔永远核销不掉:每一轮清扫都
+  // 重押同一笔债(容器里 PID 1 不是 init 时实测过,2026-10-22)。
+  //
+  // 僵尸造法:`perl` 的 `fork` **不自动收割**(Node 的 libuv 会,所以拿 node 造不出来)。
+  // 不带 `--init` 的容器是同一现场的另一种形态,这里选 perl 是因为它在 macOS/Linux 上
+  // 都跑得到,不必额外起容器。
+  const hasPerl = !IS_WIN && spawnSync("perl", ["-e", "1"]).status === 0;
+  if (!hasPerl) {
+    skip(IS_WIN ? "Windows 没有僵尸这一档(进程退出即消失)" : "这台机器上没有 perl,造不出僵尸");
+  } else {
+    const parent = spawn("perl", ["-e",
+      // `$| = 1`:管道上 perl 默认块缓冲,不冲刷的话这个号 30 秒后才出来。
+      '$| = 1; my $pid = fork(); if ($pid == 0) { exit 0 } print "$pid\\n"; sleep 30;'], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const zombie = await firstPidFrom(parent, "僵尸的父进程");
+    try {
+      for (let i = 0; i < 40 && stillRunning(zombie); i += 1) await sleep(50);
+      if (isPidAlive(zombie) && !stillRunning(zombie)) {
+        ok(`前置条件:${zombie} 这个号上是一个僵尸(号还占着、状态 Z)`);
+      } else {
+        fail(`前置条件不成立:${zombie} 没变成僵尸(alive=${isPidAlive(zombie)})`);
+      }
+      const { gone, left } = dischargeOpen([{ pid: zombie, gen: null, why: "夹具:圈里认下的成员" }]);
+      if (gone.length === 1 && !left.length) ok("僵尸 ⇒ 核销掉(它 exit 过了,不会再写一行、也收不到信号)");
+      else fail(`僵尸没核销掉(left=${left.length}) —— 这一笔会每轮重押`);
+      const read: ConfineRead = { kind: "members", members: [{ pid: zombie, gen: null }], coverage: "whole-run" };
+      if (confinedResidue(read, [])?.kind === "empty") ok("而且不把它算成「圈里还有成员在跑」");
+      else fail("僵尸被算成了还在跑的成员 —— 收尾会为一个已经退出的号白等 2 秒并记成残留");
+    } finally {
+      parent.kill("SIGKILL");
+    }
+  }
+}
+
+console.log("3c) `whole-run` 这一档由内核那一侧确认,不由这边声明得来");
+if (!confine || IS_WIN) {
+  skip(IS_WIN
+    ? "Windows 没有 `exec` 前圈定这条路(`preExecEnv()` 恒为 null、恒是 since-enroll)"
+    : "这台机器上没有这台设备");
+} else {
+  // 钉的是**反面**:取过 `preExecEnv()`(= 声明「我会在目标程序跑起来之前把自己圈进去」)
+  // 之后,那一句**没真的跑成**时读数必须退回 `since-enroll` —— 而不是照着声明自称罩住整段
+  // 运行。上一版就是在发环境变量那一刻直接把档位设成 `whole-run` 的,于是一个推断出来的
+  // 空会压过别的设备(第 1 轮审查 F3)。正面那一半由第 4 组钉(真跑那一句 ⇒ whole-run)。
+  const dev = openConfinement(`${token}-declared`);
+  if (!dev) {
+    fail("前置条件:第二个圈建不出来");
+  } else {
+    try {
+      const env = { ...process.env, ...(dev.preExecEnv() ?? {}) };
+      // **故意不把那一句拼进脚本**:等价于「写失败」/「脚本在 exec 之前就挂了」——
+      // 凭据永远不会出现,而父进程这一侧照旧补圈(跟生产路径一样)。
+      const child = spawn("/bin/sh", ["-c", 'exec "$@"', "sh",
+        process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+        env, detached: true, stdio: ["ignore", "ignore", "ignore"],
+      });
+      assert.ok(child.pid, "前置条件:根进程起得来");
+      dev.enroll(child.pid);
+      for (let i = 0; i < 40; i += 1) {
+        const r = dev.read();
+        if (r.kind === "members" && r.members.some((m) => m.pid === child.pid)) break;
+        await sleep(50);
+      }
+      const read = dev.read();
+      if (read.kind === "members" && read.coverage === "since-enroll") {
+        ok("那一句没跑成 ⇒ 档位退回 since-enroll(声明不作数,凭据才作数)");
+      } else {
+        fail(`那一句没跑成,档位却是 ${read.kind === "members" ? read.coverage : read.kind}`);
+      }
+      if (read.kind === "members" && read.members.some((m) => m.pid === child.pid)) {
+        ok("同时圈本身照旧成立:父侧补的那一笔把根圈住了(弱一档,不是没有)");
+      } else fail("父侧补圈也没成 —— 这个现场说明不了档位那件事");
+      killTree(child.pid, "SIGKILL");
+      for (let i = 0; i < 40 && stillRunning(child.pid); i += 1) await sleep(50);
+      if (confinedResidue(dev.read(), []) === null) {
+        ok("成员都退干净了也**一个字都不说** —— since-enroll 的空不构成证明");
+      } else {
+        fail(`没确认过的圈替判定答了话:${cleanupDetail(confinedResidue(dev.read(), [])!)}`);
+      }
+    } finally {
+      dev.dispose();
+    }
+  }
+}
 
 console.log("4) 真进程:线索尽断的后代仍然是确定集合里的一员");
 if (!confine) {
@@ -321,8 +414,9 @@ if (!confine) {
       ok("收完之后集合是空的 —— 这一档才是允许销账的那个「空」");
     } else fail(`收完之后集合不是空的:${JSON.stringify(after)}`);
 
-    // ⑤ 圈号打得开:它跨得过 server 重启(重启后清扫侧只剩这个号)。
-    if (reopenConfinement(confine.id)) ok("按圈号把同一个圈重新打开(这条路跨得过重启)");
+    // ⑤ 圈号打得开:**落库之后**清扫侧就能这么把圈接回来。注意这里钉的只是「按号打得开」
+    // 这一件事 —— 圈号现在**没有落库**,所以跨 server 重启那一档是未接的,钉不了。
+    if (reopenConfinement(confine.id)) ok("按圈号把同一个圈重新打开(落库之后接回就走这条路)");
     else fail("圈号打不开 —— 那重启之后这台设备就没了");
   } finally {
     if (isPidAlive(descendant)) killTree(descendant, "SIGKILL");
@@ -331,6 +425,14 @@ if (!confine) {
     confine.dispose();
   }
 }
+
+/** 4b 搭起来的那条生产路径,4c 复用它(同一个 DB、同一套 spawn/cleanup)。 */
+let e2e: null | {
+  runOnce: (deviceOn: boolean, kidCode?: string) => Promise<{
+    descendant: number; verdict: { kind: string }; tookMs: number; alive: boolean;
+  }>;
+  TOUGH_KID: string;
+} = null;
 
 console.log("4b) 生产路径端到端:同一个现场,设备开着收得掉、关掉只能如实说没答出来");
 if (!confine) {
@@ -353,10 +455,11 @@ if (!confine) {
   const { cleanupAfterRun } = await import("../src/executors/kill.js");
 
   // 根进程:甩出一个三条线索全断的后代,报出它的号,然后**自己走掉**(于是后代成了孤儿)。
-  const e2eRoot = `
+  // `kidCode` 是那个后代自己跑的代码 —— 换一句就换一个现场(下面第二个现场用它把 TERM 吃掉)。
+  const e2eRoot = (kidCode: string) => `
 const { spawn } = require("node:child_process");
 setTimeout(() => {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  const child = spawn(process.execPath, ["-e", ${JSON.stringify(kidCode)}], {
     detached: true, env: ${JSON.stringify(cleanEnv())}, windowsHide: true,
     stdio: ["ignore", "ignore", "ignore"],
   });
@@ -366,13 +469,16 @@ setTimeout(() => {
   setTimeout(() => process.exit(0), 200);
 }, ${IS_WIN ? 4_000 : 0});
 `;
+  const IDLE_KID = "setInterval(() => {}, 1000)";
+  /** 把 SIGTERM 吃掉的后代:只有整圈那一刀(SIGKILL)带得走它。 */
+  const TOUGH_KID = 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)';
 
-  const runOnce = async (deviceOn: boolean) => {
+  const runOnce = async (deviceOn: boolean, kidCode = IDLE_KID) => {
     if (deviceOn) delete process.env.ASH_KERNEL_CONFINE;
     else process.env.ASH_KERNEL_CONFINE = "0";
     const dir = mkdtempSync(join(home, deviceOn ? "on-" : "off-"));
     const paths = detachedPathsFor(dir, "s1", "2026-10-22T00:00:00Z");
-    const child = spawnForRun(dir, process.execPath, ["-e", e2eRoot], "", undefined, paths);
+    const child = spawnForRun(dir, process.execPath, ["-e", e2eRoot(kidCode)], "", undefined, paths);
     let descendant = 0;
     for (let i = 0; i < 100 && !descendant; i += 1) {
       await sleep(100);
@@ -383,13 +489,20 @@ setTimeout(() => {
     }
     assert.ok(descendant, "根进程没把后代的号报出来(前置条件)");
     for (let i = 0; i < 60 && isPidAlive(child.pid ?? 0); i += 1) await sleep(100);
+    const t0 = Date.now();
     const verdict = await cleanupAfterRun(child);
+    const tookMs = Date.now() - t0;
     for (let i = 0; i < 30 && stillRunning(descendant); i += 1) await sleep(100);
-    return { descendant, verdict, alive: stillRunning(descendant) };
+    return { descendant, verdict, tookMs, alive: stillRunning(descendant) };
   };
+
+  e2e = { runOnce, TOUGH_KID };
 
   const on = await runOnce(true);
   try {
+    // 收尾耗时如实报出来:Windows 上这一段要起 PowerShell、还可能等守圈进程,
+    // 代价得能量到而不是凭感觉(第 1 轮审查 F4)。
+    console.log(`     · 设备开着,一次 cleanupAfterRun 耗时 ${on.tookMs} ms`);
     if (!on.alive) ok(`设备开着:生产路径把这个后代收掉了(判定 ${on.verdict.kind})`);
     else fail(`设备开着却没收掉 ${on.descendant}(判定 ${on.verdict.kind})`);
     if (!IS_WIN) {
@@ -409,6 +522,7 @@ setTimeout(() => {
   const off = await runOnce(false);
   try {
     delete process.env.ASH_KERNEL_CONFINE;
+    console.log(`     · 设备关掉,同一段耗时 ${off.tookMs} ms(差值就是这台设备的收尾代价)`);
     if (off.alive) {
       ok(`设备关掉:同一个现场,既有那四台设备结构性看不见它,它活了下来(${off.descendant})`
         + ` —— 这正是这台设备被加进来的理由;判定 ${off.verdict.kind}`);
@@ -442,6 +556,32 @@ setTimeout(() => {
     }
   } finally {
     if (isPidAlive(off.descendant)) killTree(off.descendant, "SIGKILL");
+  }
+}
+
+console.log("4c) 吃掉 SIGTERM 的圈内成员:生产收尾之后必须 gone");
+if (!confine) {
+  skip("这台机器上没有这台设备");
+} else if (!e2e) {
+  fail("4b 那一段没建起来,这一条没法跑(它复用那条生产路径)");
+} else {
+  // 这一条钉的是**整圈那一刀到底发不发得出去**(第 1 轮审查 F1)。现场:后代把 TERM 吃掉,
+  // 而旧那几台设备一个都点不到它的名(记号洗了、fd 关了、`setsid` 脱了组、根已经走了)。
+  // 上一版的收尾里「等 2 秒」和「补 SIGKILL」都挂在**旧设备点到的号**上,于是它们一个都
+  // 没点到名时 `stubborn` 必然为空、整段直接 settle —— 补刀一刀都没发出去,这个后代就这么
+  // 活着,而判定那一侧照旧答 `empty`(圈里读到的成员**都还活着**也只会被算成 remaining,
+  // 可那次读数发生在「已经放弃补刀」之后)。所以这里只问一件事:收尾之后它还在不在。
+  const tough = await e2e.runOnce(true, e2e.TOUGH_KID);
+  try {
+    if (!tough.alive) {
+      ok(`吃掉 TERM 的后代在生产收尾之后 gone(判定 ${tough.verdict.kind},耗时 ${tough.tookMs} ms)`
+        + " —— 这一刀只能来自整圈那一发");
+    } else {
+      fail(`吃掉 TERM 的后代活下来了(${tough.descendant},判定 ${tough.verdict.kind})`
+        + " —— 整圈的 SIGKILL 没发出去");
+    }
+  } finally {
+    if (isPidAlive(tough.descendant)) killTree(tough.descendant, "SIGKILL");
   }
 }
 

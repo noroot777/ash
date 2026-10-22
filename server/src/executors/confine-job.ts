@@ -66,7 +66,6 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IS_WINDOWS, powerShellSync } from "../platform.js";
-import { processGenerationSync } from "../process-generation.js";
 import type { ConfineMember, ConfineRead, Confinement } from "./kernel-confine.js";
 
 /** Job Object 的名字。`Local\` = 当前登录会话的命名空间(跨会话不可见,正是我们要的边界)。 */
@@ -201,9 +200,20 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
   /** 这个圈建起来过:就绪文件在,或者本进程刚看到它出现。 */
   let held = false;
   let asked = false;
-  /** 把「圈到底建起来没有」问实:只在**本进程请求过**、而就绪信号还没出现时才等。 */
+  /** 这一轮已经等过一次了。**等第二次毫无意义**:守圈进程要么起来了、要么已经死了。 */
+  let settledOnce = false;
+  /** 整圈的刀已经下成了。Windows 只有一档刀,所以这件事一旦成立就不必再下第二次。 */
+  let terminated = false;
+  /**
+   * 把「圈到底建起来没有」问实:只在**本进程请求过**、而就绪信号还没出现时才等。
+   *
+   * **整轮至多等一次**(第 1 轮审查 F4):收尾那条路上 `read()` 和 `killAll()` 都会先叫它,
+   * 以前各自能烧掉一个 `HELD_WAIT_MS` —— 守圈进程真的死了的时候,一次清理白等 5 秒。
+   * 等不出来就是等不出来,第二次等只是把同一个结论再付一遍钱。
+   */
   const settleHeld = (): void => {
-    if (held || reopened || !asked) return;
+    if (held || reopened || !asked || settledOnce) return;
+    settledOnce = true;
     for (let waited = 0; waited < HELD_WAIT_MS; waited += 50) {
       if (existsSync(ready)) { held = true; return; }
       if (holderDead()) return;                     // 守圈的那个进程没了,再等也等不出来
@@ -256,11 +266,17 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
       return { kind: "unqueryable", why: `Job Object ${name} 这一刻读不出成员:${line}` };
     },
     killAll(): number {
+      // **这一刀成功过就不再下**(第 1 轮审查 F4)。Windows 上只有一档刀:`sig` 根本没用上,
+      // 收尾那条路的 TERM 和补刀的 KILL 下的是同一刀 —— 而 `TerminateJobObject` 带走的是
+      // 整个 Job,第二次调用除了再起一次 PowerShell(几百毫秒)什么都不会发生。
+      if (terminated) return 0;
       // **先把圈等出来再下刀**:名字还不存在时 `TerminateJobObject` 连句柄都开不到,这一刀
       // 会静默打空(真机实测过:一次性 agent 的回合比起圈还短,孙进程就这么活下来了)。
       settleHeld();
       const out = powerShellSync(jobScript(name, "terminate"), 15_000).trim();
-      return /(^|\n)ok\s*$/.test(out) ? 1 : -1;
+      if (!/(^|\n)ok\s*$/.test(out)) return -1;    // 没成就不记账:下一刀还得真下
+      terminated = true;
+      return 1;
     },
     dispose(): void {
       // 判空成功之后才会走到这里(见 kill.ts)。把句柄交还给守圈进程 —— 不交还的话这台
@@ -274,15 +290,24 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
 /** 交给守圈进程的凭据前缀(它自己拼 `.ready`)—— 跟 `readyPath` 必须一致。 */
 const readyBase = (name: string): string => readyPath(name).replace(/\.ready$/, "");
 
-/** `pids:` 后面那串号。代次另取一次(`processGenerationSync`),取不到就是 null(见 ConfineMember)。 */
+/**
+ * **这边一律不取代次**(第 1 轮审查 F4)。代次在 Windows 上每个号要另起一次进程表查询
+ * (`Get-CimInstance`,几百毫秒起),上一版给前 8 个成员取,于是一次收尾最多白付 8 次 ——
+ * 而这边**根本不需要它**:
+ *
+ *  · 下刀不需要 —— `TerminateJobObject` 是整圈一次,内核自己按成员关系下,不按号发信号,
+ *    所以没有「读到号 → 发信号」之间那条号被复用的缝要靠代次去堵。
+ *  · 核销不需要 —— 没有代次的那一笔只能等「这个号上没进程了」才消解,那是**更保守**的
+ *    一档(代次能做的只是让核销更快:同一个号换了主人就立刻销)。
+ *
+ * 换来的只是「整圈杀掉之后号立刻被别人复用」这种情形下,那一笔债要多押一轮才销掉。
+ */
 function parseMembers(raw: string): ConfineMember[] {
   const members: ConfineMember[] = [];
   for (const part of raw.split(",")) {
     const pid = Number(part.trim());
     if (!Number.isInteger(pid) || pid <= 1) continue;
-    // 代次在 Windows 上要另起一次进程表查询,**只给前几个成员取** —— 它只影响核销快慢
-    // (没有代次就只能等那个号退出),不影响「还有成员活着」这个结论。
-    members.push({ pid, gen: members.length < 8 ? processGenerationSync(pid) : null });
+    members.push({ pid, gen: null });
   }
   return members;
 }

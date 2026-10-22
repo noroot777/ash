@@ -19,7 +19,7 @@
 //
 // 老使用方照旧从 `spawn.js` / `kill.js` import:下面把各层的导出原样转出去。
 import type { ChildProcess } from "node:child_process";
-import { isPidAlive, killTree } from "../platform.js";
+import { isPidRunning, killTree } from "../platform.js";
 import { inspectProcess, type UnitEvidence } from "../proc.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { runOutPathOf, unitTokenOf } from "./unit-token.js";
@@ -74,12 +74,17 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const cleanupResultDetail = (result: CleanupResult): string =>
   result.kind === "empty" ? "" : result.kind === "silent" ? result.why : result.detail;
 
+/**
+ * 这些号还剩谁在跑。**僵尸不算还在跑**(`isPidRunning`):被杀掉而父进程没来收割的后代
+ * 永远停在 `Z` 上,按「号还占着」问就是一个等不到的 2 秒,而且会被记成「下过刀仍活着」——
+ * 它已经 exit 了,一行都不会再写。判据的理由写在 `isPidRunning` 的注释里。
+ */
 async function waitForPidsGone(pids: readonly number[], timeoutMs: number): Promise<number[]> {
   const deadline = Date.now() + timeoutMs;
-  let alive = pids.filter(isPidAlive);
+  let alive = pids.filter(isPidRunning);
   while (alive.length && Date.now() < deadline) {
     await wait(50);
-    alive = pids.filter(isPidAlive);
+    alive = pids.filter(isPidRunning);
   }
   return alive;
 }
@@ -446,7 +451,7 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   owed.add(unitOpen(first.unit, "记号认下的本次运行成员"));
   // 圈里的成员**在下刀之前就入账**:认下那一刻起就是一份责任(同记号那一台的理由)。
   // 这里不因为「它马上要被杀掉」就省掉这一步 —— 杀没杀成由后面的读数说,不由这里猜。
-  confineOwn(owed, confine, "下刀之前内核圈定认下的成员");
+  const confinedBefore = confineOwn(owed, confine, "下刀之前内核圈定认下的成员");
   /**
    * 三条出路共用的收尾读数。**记号与两个运行专属文件都在这里重新问一次** ——
    * 上一版把 `first.unit` / `second.unit`(下刀**之前**那次取证)当成最终结论往上传,于是
@@ -464,7 +469,7 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
     // 新起、又同时 `env -i` 洗掉记号、close 掉继承 fd、`setsid` 脱离进程树的那种,在当前平台上
     // 跟一个陌生进程读不出任何差别(`closed_at` 那段注释说的就是这条边界)。
     const final = await collectEscapees(child);
-    const live = final.targets.filter((m) => isPidAlive(m.pid));
+    const live = final.targets.filter((m) => isPidRunning(m.pid));
     // 收尾这次的三份身份一起入账(见 `owed` 那段的①②③)。`ledgerOf` 这一份是关键的那条:
     // 它记着**这一轮认过的全部后代**,所以「这一刻的视野里看不见了」不等于它退了。
     owed.add(final.open);
@@ -502,11 +507,22 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   // **整圈也挨这一刀**。归属已经由内核证明,所以这一刀不需要先过一遍身份判据 —— 那几台
   // 设备的判据是为「只有一个号、证不出归属」那种情形准备的。圈是空的就是空操作。
   confine?.killAll("SIGTERM");
-  if (!targets.size && !confine) return settle(first.answered, []);
+  // **圈里的成员一并进等待名单,整圈的补刀也不许挂在 `targets` 上**(第 1 轮审查 F1)。
+  // `targets` 只装旧那几台设备点到的号,而圈里认下的**恰恰是它们看不见的那一类**(三条
+  // 线索全断,正是这台设备存在的理由)。上一版两件事都挂在 `targets` 上:它们一个都没点
+  // 到名时 `stubborn` 必然为空、这一行直接 settle —— 于是「忽略 SIGTERM 的圈内成员」在
+  // 整条路上一刀 SIGKILL 都收不到,而那正是只有这台设备证得出来的那一种残留。
+  const confined = confinedBefore?.kind === "members" ? confinedBefore.members.map((m) => m.pid) : [];
+  const waitOn = new Set([...targets, ...confined]);
+  // 整圈的 SIGKILL **无条件补一刀**,不为「省这一刀」再读一次圈:它本身是一次写入
+  // (`cgroup.kill` / `TerminateJobObject`),圈空了就是空操作,而在 Windows 上读一次圈比
+  // 下这一刀贵得多(见 confine-job.ts 顶部的实测)。重复下刀那边自己记了幂等。
+  const finishRing = (): void => { confine?.killAll("SIGKILL"); };
+  if (!waitOn.size) { finishRing(); return settle(first.answered, []); }
 
-  const stubborn = await waitForPidsGone([...targets], 2000);
-  if (!stubborn.length) return settle(first.answered, []);
-  const killed: number[] = [];
+  const stubborn = await waitForPidsGone([...waitOn], 2000);
+  if (!stubborn.length) { finishRing(); return settle(first.answered, []); }
+  const killed: number[] = [...confined];         // 圈成员的存亡由最后那次 waitForPidsGone 如实报出
   // 等的这 2 秒里根进程可能自己退了,号随时会被复用 —— 补刀前按同一判据再确认一次。
   if (child.pid && stubborn.includes(child.pid) && childKillAuthorized(child)) {
     killTree(child.pid, "SIGKILL");
@@ -518,7 +534,7 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   // ⇒ 号换了主人,一刀不发。
   // 整圈的 SIGKILL 走 `cgroup.kill`:一次写入原子地带走整棵子树,连「读到号 → 发信号」
   // 之间那条号被复用的缝都没有(Windows 那边是 `TerminateJobObject`,同样是整圈一次)。
-  confine?.killAll("SIGKILL");
+  finishRing();
   const second = await killEscapees(child, "SIGKILL");
   faults.push(...second.faults.filter((f) => !faults.includes(f)));
   owed.add(second.open);                          // 第二次扫描点的名同样只增不减

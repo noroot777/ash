@@ -17,6 +17,7 @@
 //    并在各自调用点写明降级后剩什么。
 
 import { execFile, execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -371,6 +372,43 @@ export function isPidAlive(pid: number): boolean {
     return true;
   } catch (e: any) {
     return e?.code === "EPERM";
+  }
+}
+
+/**
+ * 这个号上**还有进程在跑**吗 —— 僵尸不算。
+ *
+ * 跟 `isPidAlive` 的区别只有僵尸这一档,而那一档恰恰是清理判据要分开的:`kill(pid,0)`
+ * 问的是「这个号还占着吗」,僵尸占着号 —— 它已经 `exit` 过了,只等父进程 `wait` 掉它。
+ * 「还欠谁」问的却是「还有谁在跑、在写」,一个退出过的进程一行都不会再写、也收不到信号。
+ *
+ * **这是把判据磨利,不是放松**:僵尸是「已经退出」的一种**正面证据**,比「号上没人了」
+ * 更强(号上没人还有被复用的可能,僵尸连 exec 都做不到了)。放松是「证不出来就当没有」,
+ * 这里是「证出来它退了」。
+ *
+ * 真实现场(容器里实测,2026-10-22):PID 1 不是 init 而是 `sleep infinity` 时**没人
+ * 收割**,被整圈杀掉的后代就永远停在 `Z` 上 —— 那一刻圈是空的、清理也确实干净了,可
+ * 账本上那个号按 `isPidAlive` 永远核销不掉,于是每一轮清扫都重押同一笔债。
+ *
+ * 代价:只有「号还占着」时才多问一次进程状态(Linux 读 `/proc`,别的平台一次 `ps`)。
+ * 正常收尾时账上的号都已经退干净,这一问一次都不会发生。
+ */
+export function isPidRunning(pid: number): boolean {
+  if (!isPidAlive(pid)) return false;
+  try {
+    // 第 3 个字段是状态,但命令名里可以有空格和右括号 —— 按**最后**一个 `)` 切。
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/)[0] !== "Z";
+  } catch { /* 不是 Linux(或者这一刻读不了)⇒ 退回 ps */ }
+  if (IS_WINDOWS) return true;                    // Windows 没有僵尸这一档:退出即消失
+  try {
+    const state = execFileSync("ps", ["-o", "state=", "-p", String(pid)], {
+      encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!state) return false;                     // ps 答了、答的是「没这个号」
+    return !state.startsWith("Z");
+  } catch {
+    return true;                                  // 问不出来 ⇒ 按「号还占着」那条走,不冒充证据
   }
 }
 
