@@ -28,6 +28,11 @@ try {
   assert.equal(localDiskPath("/Users/example/My%20Demo/index.html"), "/Users/example/My Demo/index.html");
   assert.equal(localDiskPath("file:///Volumes/demo/My%20Demo/index.html"), "/Volumes/demo/My Demo/index.html");
   assert.equal(localDiskPath("C:\\work\\demo\\index.html"), "C:\\work\\demo\\index.html");
+  // 查询/片段不是路径的一部分,**每一档都一样**:盘符与 UNC 分支原先连查询都没去,是这里
+  // 自己的不一致(审查第 4 轮 R4 的同一层)。
+  assert.equal(localDiskPath("/Users/example/demo/index.html?v=1"), "/Users/example/demo/index.html");
+  assert.equal(localDiskPath("C:\\work\\demo\\index.html?v=1"), "C:\\work\\demo\\index.html");
+  assert.equal(localDiskPath("\\\\server\\share\\demo.html#top"), "\\\\server\\share\\demo.html");
   assert.equal(localDiskPath("/api/tasks/demo/file"), null);
   assert.equal(localDiskPath("https://example.com/index.html"), null);
   const terminalTabs = [
@@ -213,13 +218,17 @@ try {
   assert.match(exported, /## 你 ·/);
   assert.doesNotMatch(exported, /rg -n trace/);
 
+  // 两段之间**留空行**:切点只落在顶层块边界上,而「这一块写完了」的判据是空行(见
+  // conversationSegments 的 eventSplitAt)。没有空行的那一版是**一个段落**,中间切开会让
+  // 同一份正文在两种口径下解析结果不一样(一对反引号被切开,后半段的写法示例成了真图),
+  // 所以现在它恒为一段 —— 这里要钉的是「事件按顺序把正文切成两段」,夹具得给出两个块。
   const interleavedTrace = buildConversationItems(
     [{
       session: { ...session, endedAt: "2026-07-30T01:02:00.000Z" },
-      output: "第一段正文。第二段正文。",
+      output: "第一段正文。\n\n第二段正文。",
       trace: [
         { at: "2026-07-30T01:00:01.000Z", turnStartedAt: session.startedAt, event: { kind: "thinking", text: "先分析第一段" } },
-        { at: "2026-07-30T01:00:02.000Z", turnStartedAt: session.startedAt, event: { kind: "text", text: "第一段正文。" } },
+        { at: "2026-07-30T01:00:02.000Z", turnStartedAt: session.startedAt, event: { kind: "text", text: "第一段正文。\n\n" } },
         { at: "2026-07-30T01:00:03.000Z", turnStartedAt: session.startedAt, event: { kind: "tool", name: "exec", detail: "检查第二段" } },
         { at: "2026-07-30T01:00:04.000Z", turnStartedAt: session.startedAt, event: { kind: "text", text: "第二段正文。" } },
       ],
@@ -228,21 +237,23 @@ try {
     [],
   );
   assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments.length : 0, 2);
-  assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[0]?.markdown : "", "第一段正文。");
+  // 块边界在空行之后,所以第一段连着那个空行 —— 各段拼回去必须跟 .md 一个字不差。
+  assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[0]?.markdown : "", "第一段正文。\n\n");
   assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[0]?.events[0]?.kind : null, "thinking");
   assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[1]?.markdown : "", "第二段正文。");
   assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[1]?.events[0]?.kind : null, "tool");
 
   const liveInterleaved = buildConversationItems([], [session], [
     { kind: "server", id: "think-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", model: "gpt-5.6-sol", reasoningEffort: "high", event: { kind: "thinking", text: "分析一" } } },
-    { kind: "server", id: "text-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "正文一" } } },
+    // 同上:切点在块边界,夹具得给出两个块(直播那一路同一个口径,见 conversationLiveTurns)。
+    { kind: "server", id: "text-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "正文一\n\n" } } },
     { kind: "server", id: "tool-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "tool", name: "exec", detail: "命令二" } } },
     { kind: "server", id: "text-2", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "正文二" } } },
   ]);
   assert.equal(liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].segments.length : 0, 2);
   assert.deepEqual(
     liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].segments.map(({ markdown, events }) => [markdown, events[0]?.kind]) : [],
-    [["正文一", "thinking"], ["正文二", "tool"]],
+    [["正文一\n\n", "thinking"], ["正文二", "tool"]],
   );
   assert.deepEqual(liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].run : null, { model: "gpt-5.6-sol", reasoningEffort: "high" });
 
