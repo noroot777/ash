@@ -6,21 +6,21 @@
 //   child-identity.ts   「这个号此刻还是不是它」—— 无依赖,三方共用
 //   track-evidence.ts   追踪 fd / 「谁还握着它」三档 / 租约 / 启动期清扫
 //   escapees.ts         逃逸后代的枚举与下刀(根授权 → 整棵子树)
+//   kernel-confine.ts   **内核圈定**:cgroup v2 / Job Object 维护的确定集合(+ confine-job.ts)
 //   cleanup-debt.ts     「没收干净」这件事的持久化与重试
+//   kill-by-pid.ts      只有 pid 时的击杀(重启后接管那条路)
 //   kill.ts(本文件)   三层击杀 + 把上面几层的结论汇成一个清理结果
 //
-// 这一摊的回归分在三条里(`server/CLAUDE.md` 的表里只列得下第一条),各自覆盖的范围:
+// 这一摊的回归分在四条里(`server/CLAUDE.md` 的表里只列得下第一条),各自覆盖的范围:
 //   test:process-identity   身份判据与三层击杀(「这个号此刻还是不是它」)
 //   test:process-subtrees   快照形状、子树归属、持有者这一问的三档
 //   test:cleanup-debt       清理结论的三档 + 责任落账/披露/重试/授权
+//   test:kernel-confine     内核圈定:确定集合的枚举/击杀,以及「答不出来就退回原路」
 //
 // 老使用方照旧从 `spawn.js` / `kill.js` import:下面把各层的导出原样转出去。
-import { execFileSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { IS_WINDOWS, isPidAlive, killTree } from "../platform.js";
+import { isPidAlive, killTree } from "../platform.js";
 import { inspectProcess, type UnitEvidence } from "../proc.js";
-import { processGroupMembersSync } from "../process-generation.js";
-import { canShoot, killProvenUnit, reclaimState } from "../monitor-reclaim-evidence.js";
 import { monitorUnitAnswerable } from "../monitor-unit-scan.js";
 import { runOutPathOf, unitTokenOf } from "./unit-token.js";
 import { adoptedIdentityOf, childKillAuthorized, childStillOurs } from "./child-identity.js";
@@ -28,18 +28,21 @@ import {
   fileHoldersAnswerable, probeFileHolders, releaseTrackEvidence, trackPathOf,
 } from "./track-evidence.js";
 import {
-  collectEscapees, describeEvidence, killEscapees, ledgerOf, signalMembers,
+  collectEscapees, describeEvidence, killEscapees, ledgerOf,
 } from "./escapees.js";
 import {
-  judgeByClues, mergeClueAnswers, nothingToCollect, openLedger, openOf,
+  confinedResidue, judgeByClues, mergeClueAnswers, nothingToCollect, openLedger, openOf,
   residueFromProbe, sweptClean, unitOpen,
-  type CleanupOpen, type CleanupResult, type ClueAnswer,
+  type CleanupOpen, type CleanupResult, type ClueAnswer, type OpenLedger,
 } from "./cleanup-result.js";
+// 内核圈定那台设备(cgroup v2 / Job Object)。它只报读数,判定仍在 cleanup-result.ts。
+import { confinementOf, type ConfineRead, type Confinement } from "./kernel-confine.js";
 // 交接那一段路住在 cleanup-handoff.ts:它对持久层只借类型 + 按需加载(那一层会拉起整个 db
 // 层),所以从这里过去也不长出静态依赖。
 import { handOffCleanupDebt } from "./cleanup-handoff.js";
 
 // 各层原样转出去:`import { childStillOurs } from "./kill.js"` 这类既有写法照旧能用。
+export { killByPid } from "./kill-by-pid.js";
 export {
   childStillOurs, markAdoptedChild, pidRunStillAlive, shareChildIdentity,
 } from "./child-identity.js";
@@ -52,6 +55,10 @@ export {
   residueFromProbe, sweptClean,
   type CleanupResult,
 } from "./cleanup-result.js";
+export {
+  confineAbstention, confinementOf, openConfinement, registerConfinement, shareConfinement,
+  type Confinement,
+} from "./kernel-confine.js";
 
 // ── 清理责任那一层**按需加载,不静态 import** ─────────────────────────────────────
 //
@@ -113,6 +120,25 @@ async function finalResidue(child: ChildProcess): Promise<CleanupResult> {
 }
 
 /**
+ * **圈里这一刻的成员入账**(只增不减,同记号那一台的理由):确证属于这次运行的那一刻就是
+ * 一份责任,直到有它的退出证据 —— 哪怕下一句就要朝它开刀。杀没杀成由后面那次读数说。
+ *
+ * 读不出来 / 没有圈 ⇒ 什么都不加,读数原样往上传(由 `confinedResidue` 分档)。
+ */
+function confineOwn(
+  owed: OpenLedger, confine: Confinement | null, why: string,
+): ConfineRead | null {
+  if (!confine) return null;
+  const read = confine.read();
+  if (read.kind === "members") owed.own(read.members, why);
+  return read;
+}
+
+/** 收尾之后那一次读数(判空就用这一份)。 */
+const confineSettle = (owed: OpenLedger, confine: Confinement | null): ConfineRead | null =>
+  confineOwn(owed, confine, "收尾之后内核圈定下仍在册的成员");
+
+/**
  * 一次性 agent 的事件流已经收完:CLI 本体按理已经退出,但它用 `&` / `start /b`
  * 甩出去的后台后代可能还活着。此刻 ChildProcess 还在手里,是 Windows 上利用已死
  * ParentProcessId 找回它们的最后窗口;再往后只剩一个 worktree 路径,已经无法可靠
@@ -153,6 +179,9 @@ async function sweepAndJudge(child: ChildProcess): Promise<CleanupResult> {
   const result = judgeCleanup(sweep, token);
   if (result.kind === "empty") {
     releaseTrackEvidence(child);
+    // 圈也撤掉。**非空的圈撤不掉**(内核拒绝 rmdir / Windows 那边守圈进程自己还在守),
+    // 所以这一句不会把一个还有成员的集合抹掉。
+    confinementOf(child)?.dispose();
     // 销账只在**真的欠过**的时候才需要动库(绝大多数回合一次都没欠过),所以这一句同样
     // 按需加载;加载失败不影响这一轮的结论 —— 账留着,下一次清扫会确证它已经空了。
     //
@@ -267,6 +296,15 @@ type SweepOutcome = {
    * 只问了记号那一侧,把局部的空当成了整项资源的空。
    */
   residue: CleanupResult;
+  /**
+   * **内核圈定这台设备的读数**(见 kernel-confine.ts)。`null` = 这一次运行没有圈
+   * (macOS 恒是这一档、建圈失败也是)⇒ 判定原样退回其它几台设备。
+   *
+   * 它跟上面那几条不是一个量级:那些都是事后推断,各自都有「这一刻问不出来」这一档;
+   * 这一份的集合由内核维护。所以它答得出来时压过其它设备(`confinedResidue`),答不出来
+   * 时一个字都不说 —— 这条「退回原路」由 `test:kernel-confine` 钉住。
+   */
+  confine: ConfineRead | null;
 };
 
 /**
@@ -310,6 +348,11 @@ function rootProofOf(child: ChildProcess, survivors: readonly number[], lingers:
  * 而弃权本身仍然如实记在那一问里。
  */
 function judgeCleanup(sweep: SweepOutcome, token: string | null): CleanupResult {
+  // **内核圈定答得出来就是它说了算**(判据与理由见 cleanup-result.ts 的 `confinedResidue`)。
+  // 它答不出来(没圈、或者圈只罩住了「圈定之后」那一段而集合是空的)就一个字都不说,
+  // 下面那套设备原样照跑 —— 新设备的存在不许放松任何既有判据。
+  const confined = confinedResidue(sweep.confine, sweep.open);
+  if (confined) return confined;
   const reasons = [...sweep.faults];
   const clues: ClueAnswer[] = [
     { subject: "root", answer: sweep.rootProof },
@@ -372,6 +415,10 @@ function judgeCleanup(sweep: SweepOutcome, token: string | null): CleanupResult 
  * 释放证据那一句(本轮审查 F2 第 5 点)。现在每一问的失败都如实并进来。
  */
 async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
+  // 内核圈定那台设备:**在既有三层击杀之外另加一层**,先把圈里的成员认下来再下刀。
+  // 它罩得住「三条线索全断」的那一类后代(`env -i` + close 掉继承 fd + `setsid`),
+  // 而那正是其它几台设备结构性看不见的那一种。
+  const confine = confinementOf(child);
   const first = await killEscapees(child, "SIGTERM");
   // 两档问的是两件事(见 child-identity.ts):探活档说「那个号上还有东西」,授权档说
   // 「敢不敢碰」。两句都成立时这一轮就既杀不掉、也不许自称收干净。
@@ -397,6 +444,9 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   // 记号那一台**每一次**答 `ours` 都要入账(第 11 轮审查 F1):它跨不过 `exec`,所以
   // 「这一次确证过」是唯一的窗口,错过就再也问不出来了。
   owed.add(unitOpen(first.unit, "记号认下的本次运行成员"));
+  // 圈里的成员**在下刀之前就入账**:认下那一刻起就是一份责任(同记号那一台的理由)。
+  // 这里不因为「它马上要被杀掉」就省掉这一步 —— 杀没杀成由后面的读数说,不由这里猜。
+  confineOwn(owed, confine, "下刀之前内核圈定认下的成员");
   /**
    * 三条出路共用的收尾读数。**记号与两个运行专属文件都在这里重新问一次** ——
    * 上一版把 `first.unit` / `second.unit`(下刀**之前**那次取证)当成最终结论往上传,于是
@@ -436,6 +486,9 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
       rootProof: rootProofOf(child, survivors, lingers()),
       unit: final.unit,
       residue: await finalResidue(child),
+      // **收尾之后才读这个集合**(同 `finalResidue` 的理由):下刀之前那次读数说明不了
+      // 下刀之后的事。读到的成员一并入账,它们是内核证明过归属的号。
+      confine: confineSettle(owed, confine),
     };
   };
   const targets = new Set(first.hit);
@@ -446,7 +499,10 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
     targets.add(child.pid);
     killTree(child.pid, "SIGTERM");
   }
-  if (!targets.size) return settle(first.answered, []);
+  // **整圈也挨这一刀**。归属已经由内核证明,所以这一刀不需要先过一遍身份判据 —— 那几台
+  // 设备的判据是为「只有一个号、证不出归属」那种情形准备的。圈是空的就是空操作。
+  confine?.killAll("SIGTERM");
+  if (!targets.size && !confine) return settle(first.answered, []);
 
   const stubborn = await waitForPidsGone([...targets], 2000);
   if (!stubborn.length) return settle(first.answered, []);
@@ -460,6 +516,9 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   // 继承 fd 关掉 —— 以前这里要求「此刻仍能取到证据」,于是那种进程被当成「号已换主」放过,
   // 活着继续写文件(第 3 轮审查 F1)。现在是「账上记过 + 代次仍对得上」⇒ 照杀;代次变了
   // ⇒ 号换了主人,一刀不发。
+  // 整圈的 SIGKILL 走 `cgroup.kill`:一次写入原子地带走整棵子树,连「读到号 → 发信号」
+  // 之间那条号被复用的缝都没有(Windows 那边是 `TerminateJobObject`,同样是整圈一次)。
+  confine?.killAll("SIGKILL");
   const second = await killEscapees(child, "SIGKILL");
   faults.push(...second.faults.filter((f) => !faults.includes(f)));
   owed.add(second.open);                          // 第二次扫描点的名同样只增不减
@@ -502,135 +561,14 @@ export function killChild(child: ChildProcess): void {
   };
   signal("SIGTERM");
   void killEscapees(child, "SIGTERM").catch(() => {});
+  // 整圈一起:stop 的语义就是全家结束,而内核圈定是唯一一台「全家」答得准的设备。
+  confinementOf(child)?.killAll("SIGTERM");
   const t = setTimeout(() => {
     signal("SIGKILL");
     // 无论 CLI 死没死透,逃逸者一律补 SIGKILL —— stop 的语义就是全家结束。
     void killEscapees(child, "SIGKILL").catch(() => {});
+    confinementOf(child)?.killAll("SIGKILL");
   }, 2000);
   // Don't keep the event loop alive just for the fallback timer.
   (t as { unref?: () => void }).unref?.();
-}
-
-// 只有 pid 时的击杀(重启后接管的 agent 走这条 —— ChildProcess 句柄随上一个
-// server 进程一起没了,追踪 fd 的 WeakMap 也没了)。
-// 只剩三层里的第①③层:进程组信号 + 2s 后补 SIGKILL。第②层(继承 fd 反查逃逸者)
-// 做不到,因为那份映射是内存态的。代价:重启前就已经逃出进程组的孤儿杀不到 ——
-// 如实记在这里,别让以后的人以为这条路和 killChild 等价。
-export function killByPid(
-  pid: number,
-  startedAt?: string | null,
-  proof?: { unitToken?: string | null; outPath?: string | null },
-): void {
-  if (!Number.isInteger(pid) || pid <= 1) return;
-  const unit = { unitToken: proof?.unitToken ?? null };
-  // ① 记号那一问。判档这一次只为分流;**下刀本身不吃这份快照** —— killProvenUnit 自己
-  // `fresh` 取证,授权不跨出它那个同步段(理由见那边第 13/14 轮审查那几段注释)。
-  const state = reclaimState(pid, startedAt ?? null, unit);
-  if (canShoot(state)) {
-    killProvenUnit(pid, startedAt ?? null, unit);
-    return;
-  }
-  // ①' **明确的反证不许被后面任何一条弱证据洗掉**(第 3 轮审查 F1 实测)。
-  //
-  // 那七档不是一个梯度,是两类:`not-ours` 是**正面反证** —— ps 答出来了,这个号上现在是
-  // 另一个进程(启动时刻确实对不上,locale 差异由 `processIdentity` 在同一份快照上兜住)。
-  // 其余几档是「这一问没答出来」。上一版把两类一视同仁地落进下面那个后备分支,于是
-  // 「已经证明它不是我们的」被一条「它打开过我们的输出文件」顶掉,`killTree` 往它那一组
-  // 发了信号 —— 审查用真实只读查看器实测:记录指向旧代、这个号上已经是查看器,查看器收到
-  // SIGTERM 死掉了。
-  //
-  // 为什么输出文件那条线索在这里不能当反驳:它最多证明「这个进程握着这个文件」,而我们要
-  // 回答的是「这个号上的进程是不是当初那一个」—— 后者 ps 已经明确答了「不是」。一条更弱的
-  // 证据推不翻一条更强的反证,何况下刀打的是**它那一组**。
-  if (state === "not-ours") {
-    console.warn(
-      `[ash] pid=${pid} 这个号上现在是另一个进程(记录在案的启动时刻对不上),`
-      + "按「证不出就不下刀」处理:没有发送任何信号 —— 握着输出文件也不改变这个结论",
-    );
-    return;
-  }
-  // ② 记号证不出来(最常见的是这一行建在记号上线之前,库里只有 pid)。POSIX 的秒级启动
-  // 时刻是粗档,单凭它下刀就是在赌一次秒级碰撞 —— 那是明确实测过的误杀。
-  //
-  // 但 agent 这一侧还有一条哨兵没有的线索:这一次运行独有的输出文件。根进程的 stdout 就
-  // 重定向在它上面,路径里带着 sessionId + 回合起点,别的运行不会碰它,而且它跟记号一样
-  // 跨得过 server 重启(`sessions.agent_out_path`)。它读的是 `lsof` 的**真实 fd 表**,
-  // 不是 macOS 上那种无边界的展示文本 ⇒ 精确可答,够当粗档要的那第二份独立证据。
-  //
-  // **但它只是「第二份证据」,不是「反证的解药」**:上面 ①' 已经把 `not-ours` 挡在外面了。
-  // 这一档要的是「身份这一问没答出来」时的补充,不是「身份这一问答了不是」时的推翻。
-  //
-  // 而且判据收得很紧(`outPathProvesRoot`):**fd 1 且写模式**,也就是「这个进程的标准输出
-  // 就是这个文件」。光「打开过这个文件」不算 —— 用户 tail 日志也打开过它(第 3 轮审查 F1)。
-  // 它只证明得了**根**(fd 1 无条件继承,但 CLI 会把它自己子进程的 stdout 接成管道),
-  // 而这条路要的恰好就是根:下刀打的是根的进程组。
-  if (outPathProvesRoot(pid, proof?.outPath ?? null)) {
-    // **第一刀之前把组成员连代次一起记下来** —— 就在根仍被证明着的这一刻。少了这一步,
-    // 「外层壳吃了 TERM 老实退场、它派生的那个忽略 TERM 的东西还留在原组里」这个现场就
-    // 收不干净:根一死,组号成了空号,两秒后那一刀打在空组上(ESRCH),而那个进程还在写文件。
-    // 结构跟 killProvenUnit 一致(它对记号那一档做的是同一件事)。
-    const held = processGroupMembersSync(pid) ?? [];
-    killTree(pid, "SIGTERM");
-    const t = setTimeout(() => {
-      // 补刀前**重新取一次同一份证据**:这两秒里根可能已经退了、号可能被接手。
-      // 以前这一刀是无条件的 —— 哨兵那边的注释早就点过这个毛病。
-      //
-      // ①' 那条反证在这里**一样压过输出文件**(第 3 轮审查 F1:首刀与补刀是两个对称消费点,
-      // 不许只有一个认这条反证):这两秒里 ps 可能已经答得出「这个号上现在是另一个进程」,
-      // 那一刻即便文件那一问还说得通,也只说明有人握着这个文件,不说明这个号还是当初那个。
-      if (reclaimState(pid, startedAt ?? null, unit) === "not-ours") {
-        console.warn(`[ash] pid=${pid} 在这两秒里换了主人(记录在案的启动时刻对不上),补刀取消`);
-        signalMembers(held.filter((m) => m.pid !== pid), "SIGKILL");
-        return;
-      }
-      if (outPathProvesRoot(pid, proof?.outPath ?? null)) killTree(pid, "SIGKILL");
-      // 再把第一刀那会儿记下的成员补上:**代次没变才打**(变了就是号换了主人)。
-      // 这一下不要求根现在还活着 —— 第一刀本来就是来结束它的。
-      signalMembers(held.filter((m) => m.pid !== pid), "SIGKILL");
-    }, 2000);
-    (t as { unref?: () => void }).unref?.();
-    return;
-  }
-  // ③ 两条线索都证不出来:不下刀,但要留下痕迹 —— 根约定「停止/暂停必须留下持久可见的
-  // 状态」,静默失败会让用户只能得出「按钮坏了」。
-  console.warn(
-    `[ash] 没能证明 pid=${pid} 属于这一次运行(身份这一问停在 ${state}、`
-    + `输出文件${proof?.outPath ? "上没有它的 stdout" : "未提供"}),`
-    + "按「证不出就不下刀」处理:没有发送任何信号",
-  );
-}
-
-/**
- * **这个号此刻还握着这一次运行的输出文件吗** —— 粗档 pid 要的那第二份独立证据。
- *
- * 同步实现是刻意的:取证与下刀必须在同一个同步段里完成,中间隔一次 `await`,这个号就可能
- * 已经退出并被别人接手(那是哨兵第 13/14 轮审查反复实测的同一条缝)。单文件 `lsof` 比那边
- * 的全表 `ps` 便宜得多。
- *
- * 三档里只有「确证握着」返回 true:问不出来(lsof 不在、报错)一律当证不出 —— 这一问是用来
- * **授权破坏性操作**的,不许让一次失败的查询变成放行票。
- */
-function outPathProvesRoot(pid: number, outPath: string | null): boolean {
-  if (!outPath || IS_WINDOWS) return false;       // win32 没有 lsof;那边 pid 时刻本来就是排他档
-  try {
-    const out = execFileSync("lsof", ["-F", "pfan", "--", outPath], {
-      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 4000,
-    });
-    // **要的不是「它打开过这个文件」,是「它的 stdout 就是这个文件」**(第 3 轮审查 F1)。
-    // 上一版只比号码,于是只读打开同一个日志的查看器也拿到了整组击杀的授权。fd 1 + 写模式
-    // 才等价于「这个进程的标准输出重定向在这一次运行的输出文件上」—— 那正是根的形状,
-    // 而看客拿到的是另一个 fd、只读。
-    let cur = 0, fd: number | null = null;
-    for (const raw of out.split("\n")) {
-      const line = raw.trim();
-      if (!line) continue;
-      const tag = line[0], value = line.slice(1);
-      if (tag === "p") { cur = Number(value) || 0; fd = null; continue; }
-      if (tag === "f") { fd = Number.isInteger(Number(value)) ? Number(value) : null; continue; }
-      if (tag === "a" && cur === pid && fd === 1 && /[wu]/.test(value)) return true;
-    }
-    return false;
-  } catch {
-    return false;                                 // 非零退出(无匹配)与查询失败都不算证明
-  }
 }

@@ -30,6 +30,9 @@ import {
   adoptUnitToken, registerRunOutPath, registerUnitToken, seedUnitToken,
   shareRunOutPath, shareUnitToken, unitTokenOf,
 } from "./unit-token.js";
+import {
+  CONFINE_ENROLL_CMD, openConfinement, registerConfinement, shareConfinement,
+} from "./kernel-confine.js";
 
 // 一次运行的三个落盘文件。rc 是退出码 —— 管道模式下退出码是 close 事件白送的,
 // 换成文件后没人告诉我们了,只能让 shell 跑完自己写一个数字进去。
@@ -231,6 +234,7 @@ export function spawnControllableDetachedAgent(
   if (made.status !== 0) return failedChild(`创建可重连 stdin 失败：${input}`);
 
   const script = [
+    CONFINE_ENROLL_CMD,                             // 分隔符由下面的 join 写
     'trap \'rm -f "$ASH_IN"\' EXIT',
     'exec 3<>"$ASH_IN"',
     '"$@" <&3 >>"$ASH_OUT" 2>>"$ASH_ERR"',
@@ -252,6 +256,12 @@ export function spawnControllableDetachedAgent(
   // 环境记号跟管道那条路同一套(见 unit-token.ts):这条路的后代更需要它 —— 输出走文件,
   // 进程活得过 server 重启,根与后代的距离只会更远。
   const unitToken = seedUnitToken(env);
+  // **内核圈定**(第三条归属线索,见 kernel-confine.ts):圈号与记号同源。脚本的第一句
+  // `CONFINE_ENROLL_CMD` 在 `sh` fork 出 CLI **之前**把自己写进这个圈,所以这条路的
+  // 集合罩得住整段运行(coverage `whole-run`)——它认的就是 `preExecEnv()` 给的那一项。
+  // 平台/环境支持不了时 `confine` 是 null、那一项不存在,脚本第一句自己就是空操作。
+  const confine = openConfinement(unitToken);
+  Object.assign(env, confine?.preExecEnv() ?? {});
   const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
     cwd,
     stdio,
@@ -261,6 +271,10 @@ export function spawnControllableDetachedAgent(
   registerTrackFd(real, track);
   registerUnitToken(real, unitToken);
   registerRunOutPath(real, paths.out);
+  // 父进程这一侧再写一次:**幂等**(号已经在圈里就是空操作)。它只为补上「shell 那一句
+  // 没跑成」那一种情形,成败不改变 coverage —— 号在不在圈里由内核自己记着。
+  registerConfinement(real, confine);
+  if (real.pid) confine?.enroll(real.pid);
   if (!real.pid) return failedChild(`起不来:${shq(bin)}`);
   const writer = fifoWriter(input);
   if (!writer) {
@@ -293,6 +307,7 @@ export function spawnControllableDetachedAgent(
   shareChildIdentity(real, child);
   shareUnitToken(real, child);
   shareRunOutPath(real, child);
+  shareConfinement(real, child);
   return child;
 }
 
@@ -324,7 +339,7 @@ export function spawnDetachedAgent(
     try { closeSync(openSync(p, "a")); } catch { /* 目录不存在等,交给下面的 spawn 报错 */ }
   }
 
-  const script = '"$@" >>"$ASH_OUT" 2>>"$ASH_ERR"; printf %s $? >"$ASH_RC"';
+  const script = `${CONFINE_ENROLL_CMD}; "$@" >>"$ASH_OUT" 2>>"$ASH_ERR"; printf %s $? >"$ASH_RC"`;
   const env = {
     ...agentBaseEnv(),
     ...extraEnv,
@@ -337,6 +352,12 @@ export function spawnDetachedAgent(
   const stdio: Array<"pipe" | "ignore" | number> =
     track.fd === null ? ["pipe", "ignore", "ignore"] : ["pipe", "ignore", "ignore", track.fd];
   const unitToken = seedUnitToken(env);
+  // **内核圈定**(第三条归属线索,见 kernel-confine.ts):圈号与记号同源。脚本的第一句
+  // `CONFINE_ENROLL_CMD` 在 `sh` fork 出 CLI **之前**把自己写进这个圈,所以这条路的
+  // 集合罩得住整段运行(coverage `whole-run`)——它认的就是 `preExecEnv()` 给的那一项。
+  // 平台/环境支持不了时 `confine` 是 null、那一项不存在,脚本第一句自己就是空操作。
+  const confine = openConfinement(unitToken);
+  Object.assign(env, confine?.preExecEnv() ?? {});
   const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
     cwd,
     stdio,
@@ -346,6 +367,10 @@ export function spawnDetachedAgent(
   registerTrackFd(real, track);
   registerUnitToken(real, unitToken);
   registerRunOutPath(real, paths.out);
+  // 父进程这一侧再写一次:**幂等**(号已经在圈里就是空操作)。它只为补上「shell 那一句
+  // 没跑成」那一种情形,成败不改变 coverage —— 号在不在圈里由内核自己记着。
+  registerConfinement(real, confine);
+  if (real.pid) confine?.enroll(real.pid);
   real.stdin?.write(prompt);
   real.stdin?.end();
 
@@ -373,6 +398,7 @@ export function spawnDetachedAgent(
   shareChildIdentity(real, child); // 理由同上:身份以真进程的内核状态为准
   shareUnitToken(real, child);
   shareRunOutPath(real, child);
+  shareConfinement(real, child);
   return child;
 }
 

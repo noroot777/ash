@@ -42,6 +42,7 @@ import { isPidAlive } from "../platform.js";
 import type { UnitEvidence } from "../proc.js";
 import { currentGeneration } from "../process-generation.js";
 import { holderMayOwn, holderScanFault, type HolderProbe } from "./track-evidence.js";
+import type { ConfineRead } from "./kernel-confine.js";
 
 /**
  * **一个没能排除的号**:这一轮既没认下它属于本次运行,也没能证明它不属于。
@@ -353,6 +354,49 @@ export function judgeByClues(clues: readonly ClueAnswer[]): CleanupResult {
   return mergeCleanupResults(subjects.map((s) => mergeClueAnswers(
     clues.filter((c) => c.subject === s).map((c) => c.answer), SUBJECT_LABEL[s],
   )));
+}
+
+/**
+ * **内核圈定这台设备的发言**(见 `executors/kernel-confine.ts`)。`null` = 它不说话,
+ * 调用方原样走既有那套判据(`judgeByClues`)。
+ *
+ * 这台设备跟其它几台不是一个量级:别的设备都是**事后推断**(快照的父子边、启动时刻代号、
+ * 继承的 fd、环境记号),各自都有「这一刻问不出来」这一档;它的集合由内核维护,
+ * **不存在「问不出来」这一档**,也不会被 `env -i` / close fd / `setsid` 洗掉。所以它答得
+ * 出来的时候压过其它设备 —— 一个被 `tail -f` 握着输出文件而误报的 `remaining`,不该再把
+ * 一次内核已经证明收干净的运行压成一笔债。
+ *
+ * **四种发言,各自的理由**:
+ *  · 集合非空 ⇒ `remaining`,而且这是**最硬的归属证明**:内核记着这些号属于这次运行。
+ *    名单由调用方那本账给(成员已经在 `own()` 里入过账),这里只把它原样带上;
+ *  · 集合空 + `whole-run` ⇒ 走 `sweptClean(open)`。**不是直接答 `empty`** —— 核销判据
+ *    (`dischargeOpen`)是别人家的不变量,这台设备再权威也不去放松它:名单上还剩一条就
+ *    照旧降成 `unknown`。内核其实能推出「它不在我的集合里 ⇒ 它不是这次运行的」,但那是
+ *    **改核销判据**,不在这一台设备的职权内;
+ *  · 集合空 + `since-enroll` ⇒ **不说话**。圈定发生在 `spawn` 之后,窗口里出生又脱离的
+ *    后代不在集合里,所以这一档的「空」不构成证明(Windows 恒在这一档,理由见 confine-job.ts);
+ *  · 读不出来 ⇒ `unknown`:圈建起来了、这一刻问不到,下一轮还问得出来 ⇒ 留着重试;
+ *  · 压根没圈(平台弃权、建圈失败)⇒ **不说话**,退回原路。
+ */
+export function confinedResidue(
+  read: ConfineRead | null, open: readonly CleanupOpen[],
+): CleanupResult | null {
+  if (!read) return null;
+  if (read.kind === "absent") return null;
+  if (read.kind === "unqueryable") {
+    return { kind: "unknown", detail: `内核圈定这一问没答出来:${read.why}`, open: [...open] };
+  }
+  const alive = read.members.filter((m) => isPidAlive(m.pid));
+  if (alive.length) {
+    return {
+      kind: "remaining",
+      detail: `内核圈定下这次运行仍有成员:${alive.map((m) => m.pid).join(",")}`,
+      open: joinOpen(open, alive.map((m) => ({
+        pid: m.pid, gen: m.gen, why: "内核圈定认下的本次运行成员",
+      }))),
+    };
+  }
+  return read.coverage === "whole-run" ? sweptClean(open) : null;
 }
 
 /**

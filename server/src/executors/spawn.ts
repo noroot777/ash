@@ -9,6 +9,7 @@ import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins } from "./bin-resolve.js";
 import { openTrackFd, registerTrackFd } from "./kill.js";
 import { registerUnitToken, seedUnitToken } from "./unit-token.js";
+import { openConfinement, registerConfinement } from "./kernel-confine.js";
 
 // PATH 补全与命令名解析住在 bin-resolve.ts(Windows 的 PATHEXT / `.cmd` 垫片够写
 // 一整个文件)。这里转出去,是因为已有近二十处从 spawn.ts import 它们。
@@ -18,8 +19,9 @@ export type { LaunchPlan } from "./bin-resolve.js";
 // 三层击杀、逃逸后代追踪、进程身份与追踪证据的租约住在 kill.ts(同样是因为两摊各自都在
 // 往 700 行上限靠)。二十来个使用方照旧从 `spawn.js` import,所以这里原样转出去。
 export {
-  childStillOurs, cleanupAfterRun, killByPid, killChild, markAdoptedChild, openTrackFd,
-  pidRunStillAlive, registerTrackFd, releaseTrackEvidence, shareChildIdentity,
+  childStillOurs, cleanupAfterRun, confineAbstention, confinementOf, killByPid, killChild,
+  markAdoptedChild, openConfinement, openTrackFd, pidRunStillAlive, registerConfinement,
+  registerTrackFd, releaseTrackEvidence, shareChildIdentity, shareConfinement,
   shareTrackFdRegistration, sweepOrphanTrackFiles,
 } from "./kill.js";
 
@@ -167,6 +169,10 @@ export function spawnAgent(
   // 种在任一个都会漏掉另外几条路。
   const env = { ...agentBaseEnv(), ...extraEnv };
   const unitToken = seedUnitToken(env);
+  // 第三条归属线索:**内核圈定**(cgroup v2 / Job Object,见 kernel-confine.ts)。它跟上面
+  // 两条互补 —— 那两条都可能被后代自己洗掉,这一条洗不掉。平台/环境支持不了就是 null,
+  // 判定原样退回那两条。
+  const confine = openConfinement(unitToken);
   const child = spawn(plan.file, plan.args, {
     cwd,
     stdio,
@@ -177,6 +183,11 @@ export function spawnAgent(
   });
   registerTrackFd(child, track);
   registerUnitToken(child, unitToken);
+  // 圈定紧跟 spawn:这条路上只有父进程这一侧写得了号,所以 fork 到这一笔写入之间有一个
+  // 窗口(子进程此刻还在 libuv 的 exec 路上)。窗口如实记成 `since-enroll` —— 那一档的
+  // 「集合空了」不作为证明使用(判据见 kernel-confine.ts 的 `ConfineCoverage`)。
+  if (child.pid && confine?.enroll(child.pid)) registerConfinement(child, confine);
+  else confine?.dispose();
   teeStdout(child, opts?.teeOut);
   child.stdin?.write(prompt);
   if (!opts?.keepStdin) child.stdin?.end();
