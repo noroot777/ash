@@ -145,10 +145,21 @@ try {
     /证据在 shot\.png 里/,
     "脚注正文要真的建出来(上一版一节都不建)",
   );
+  // 脚注那一节恒在文末、在所有区之外,所以要按**当前看得见的引用**决定画哪几条:只有技术
+  // 明细里才引用到的那条,折着的时候连正文带截图都不该露在外面(审查第 5 轮 N1)。结论里
+  // 引用的那条反过来必须留着 —— 两者不能一刀切。
+  assert.doesNotMatch(
+    await crossref.locator("section.footnotes").innerText(),
+    /已停掉本轮启动的 Vite 服务/,
+    "只被折叠里的正文引用到的脚注,折着的时候不该把正文摊在外面",
+  );
   // 展开之后不许多出一张:定义那几行本身不产生可见节点,整篇也只解析了一次。
   await crossref.getByRole("button", { name: /展开完整报告/ }).click();
   assert.equal(await crossref.locator(".task-markdown img").count(), 1, "展开后仍只有那一张图");
   assert.equal(await crossref.locator("section.footnotes").count(), 1, "脚注那一节只建一次");
+  const footnotes = await crossref.locator("section.footnotes").innerText();
+  assert.match(footnotes, /已停掉本轮启动的 Vite 服务/, "展开之后它就该在了");
+  assert.match(footnotes, /证据在 shot\.png 里/, "结论引用的那条自始至终都在");
 
   // ── ② 对话结论：相对路径 + 绝对路径，都靠服务端那份 uploads 拷贝落地 ────────
   const conclusion = page.locator(".conclusion-fixture");

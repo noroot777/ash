@@ -378,6 +378,7 @@ function ReviewReportSplit({ text, reportKey, conclusion, resolveFile, onReviewR
       ...(more
         ? [{
           until: cuts.aside ?? cuts.detail ?? Number.POSITIVE_INFINITY,
+          collapsed: !moreOpen,
           render: (children: ReactNode) => (
             <>
               <button
@@ -402,6 +403,7 @@ function ReviewReportSplit({ text, reportKey, conclusion, resolveFile, onReviewR
       // 技术明细 / 完整报告那个折叠 —— 后面的全归它。
       {
         until: Number.POSITIVE_INFINITY,
+        collapsed: !open,
         render: (children: ReactNode) => (
           <>
             <button

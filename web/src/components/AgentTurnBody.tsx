@@ -21,13 +21,17 @@ import {
  * 折叠内外的链接引用定义、脚注照旧全局有效。灯箱另立一组:折着的那半截里的图不该混进
  * 外面那一组的队列,否则左右翻会翻到屏幕上根本没有的图。
  */
-function ProcessFold({ events, children }: { events: TurnStop["events"]; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+function ProcessFold({ events, open, onToggle, children }: {
+  events: TurnStop["events"];
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  children: ReactNode;
+}) {
   return (
     <details
       className={`task-execution-block task-turn-process${hasExecutionError(events) ? " has-error" : ""}`}
       open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(event) => onToggle(event.currentTarget.open)}
     >
       <summary>
         <ExecutionSummaryLine events={events} running={false} />
@@ -65,6 +69,9 @@ export function AgentTurnBody({
     () => turnDocument(segments, { live: running, taskId }),
     [segments, running, taskId],
   );
+  // 折叠的开合状态放在这一层:整篇只解析一次,「折着的那一区里的引用不算看得见」要在布局
+  // 里判(只被过程折叠引用到的脚注不该把正文和截图露在外面,见 markdownLayout 的 collapsed)。
+  const [foldOpen, setFoldOpen] = useState(false);
   const layout = useMemo((): MarkdownLayout => {
     const { stops, fold } = turn;
     // 还在飞的那一下,脉冲点只给**最后一个画得出东西的**步骤 —— 它就是此刻正在发生的那一步。
@@ -91,8 +98,13 @@ export function AgentTurnBody({
           regions: [{
             until: fold.offset,
             inserts: fold.stops,
+            collapsed: !foldOpen,
             render: (children: ReactNode) => (
-              <ProcessFold events={stops.slice(0, fold.stops).flatMap((stop) => stop.events)}>
+              <ProcessFold
+                events={stops.slice(0, fold.stops).flatMap((stop) => stop.events)}
+                open={foldOpen}
+                onToggle={setFoldOpen}
+              >
                 {children}
               </ProcessFold>
             ),
@@ -100,7 +112,7 @@ export function AgentTurnBody({
         }
         : {}),
     };
-  }, [turn, running]);
+  }, [turn, running, foldOpen]);
 
   return <MarkdownBody text={turn.text} layout={layout} />;
 }

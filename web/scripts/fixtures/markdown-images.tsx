@@ -65,6 +65,10 @@ const CROSSREF_REPORT = [
   "[shot]: shot.png",
   "",
   "[^proof]: 证据在 shot.png 里。",
+  "",
+  "清场记录见脚注[^cleanup]。",
+  "",
+  "[^cleanup]: 已停掉本轮启动的 Vite 服务。",
 ].join("\n");
 
 // 服务端落盘时留住了源文件的名字（`<12 位 id>-<原名>`）；配对**不靠**它，靠 source 标注。

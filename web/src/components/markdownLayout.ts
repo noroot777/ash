@@ -65,6 +65,15 @@ export type MarkdownRegion = {
   inserts?: number;
   /** 这一区的内容怎么画(折叠就在这儿套 `<details>`);不给就原样铺开。 */
   render?: (children: ReactNode) => ReactNode;
+  /**
+   * 这一区**此刻没有呈现给用户**(折起来了)。
+   *
+   * 只影响渲染器**生成**的那一节(GFM 的脚注):脚注正文恒在文末、在所有区之外,于是
+   * 「只被折叠里的正文引用到的那条脚注」会连同它里面的截图一起露在外面 —— 技术明细明明
+   * 收着,它的证据已经摊在屏幕上了(审查第 5 轮 N1)。有了这个标记,就能按**当前看得见的
+   * 引用**决定哪几条脚注该画。
+   */
+  collapsed?: boolean;
 };
 
 const MARK = "dataAshInsert";
@@ -93,6 +102,56 @@ type HastNode = {
   children?: HastNode[];
   position?: { start?: { offset?: number }; end?: { offset?: number } };
 };
+
+// GFM 生成的脚注:`<section data-footnotes>` 里一个 `<ol>`,每条 `<li id="user-content-fn-x">`,
+// 正文里的引用是 `<a href="#user-content-fn-x">`。两头都按这个前缀认。
+const FOOTNOTE = "user-content-fn-";
+const isFootnoteSection = (node: HastNode) =>
+  node.type === "element" && node.tagName === "section" && node.properties?.dataFootnotes !== undefined;
+
+/** 这棵子树里引用到的脚注。 */
+function footnoteRefs(node: HastNode, into: Set<string>): Set<string> {
+  const href = node.tagName === "a" ? node.properties?.href : undefined;
+  if (typeof href === "string" && href.startsWith(`#${FOOTNOTE}`)) into.add(href.slice(FOOTNOTE.length + 1));
+  for (const child of node.children ?? []) footnoteRefs(child, into);
+  return into;
+}
+
+/**
+ * 只留**当前看得见的引用**够得着的那几条脚注。
+ *
+ * 可达性照渲染器自己那套算:脚注正文里还能再引用别的脚注,所以要做一次闭包。留下来的那几条
+ * 把原来的序号钉在 `value` 上 —— 中间少一条就让 `<ol>` 自己重新数的话,正文里的角标和底下
+ * 的编号会对不上。一条都不剩时整节都不画(标题孤零零留着更难看)。
+ */
+function pruneFootnotes(section: HastNode, visible: Set<string>): boolean {
+  const list = (section.children ?? []).find((node) => node.tagName === "ol");
+  if (!list) return true;
+  const items = (list.children ?? []).filter((node) => node.tagName === "li");
+  const idOf = (node: HastNode) => {
+    const id = node.properties?.id;
+    return typeof id === "string" && id.startsWith(FOOTNOTE) ? id.slice(FOOTNOTE.length) : null;
+  };
+  const kept = new Set<string>();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const item of items) {
+      const id = idOf(item);
+      if (!id || kept.has(id) || !visible.has(id)) continue;
+      kept.add(id);
+      footnoteRefs(item, visible);
+      grew = true;
+    }
+  }
+  list.children = (list.children ?? []).filter((node) => {
+    const id = node.tagName === "li" ? idOf(node) : null;
+    return id === null || kept.has(id);
+  });
+  for (const [index, item] of items.entries()) {
+    if (idOf(item) && kept.has(idOf(item)!)) item.properties = { ...item.properties, value: index + 1 };
+  }
+  return kept.size > 0;
+}
 
 const element = (properties: Record<string, unknown>, children: HastNode[] = []): HastNode =>
   ({ type: "element", tagName: "div", properties, children });
@@ -140,6 +199,20 @@ export function rehypeMarkdownLayout(layout: MarkdownLayout) {
       items.push({ node, region: node.type === "element" ? REST : (items.at(-1)?.region ?? REST) });
     }
     flush(Number.POSITIVE_INFINITY);
+
+    // 折起来的那几区不呈现,它们里面的引用也就不算「看得见」—— 只被它们引用到的脚注跟着
+    // 不画(连同脚注里的截图)。一条都没折时这一整段不跑,解析结果一个字节都不动。
+    if (regions.some((region) => region.collapsed)) {
+      const visible = new Set<string>();
+      for (const item of items) {
+        if (regions[item.region]?.collapsed || isFootnoteSection(item.node)) continue;
+        footnoteRefs(item.node, visible);
+      }
+      for (const item of [...items]) {
+        if (!isFootnoteSection(item.node) || pruneFootnotes(item.node, visible)) continue;
+        items.splice(items.indexOf(item), 1);
+      }
+    }
 
     const children: HastNode[] = [];
     for (const [index, region] of regions.entries()) {
