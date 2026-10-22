@@ -78,6 +78,39 @@ export function isNetworkDestination(value: string): boolean {
   return hasUrlScheme(raw) || raw.startsWith("//");
 }
 
+/** 目的地里属于路径的那一段到哪儿为止:查询(`?`)与片段(`#`)都不是路径的一部分。 */
+const QUERY_BOUNDARY = /[?#]/;
+
+/**
+ * 一处目的地所指本机文件的**路径成分** —— 保存端、展示端、工作目录 resolver 共用的唯一口径。
+ *
+ * 必要性:各自切一次的那一版两头解释不一致。`![](output/shot.svg?v=1)` 展示端先切掉 `?v=1`
+ * 再解码,去工作目录取得到;保存端把整串当文件名,于是 `extname` 得到 `.svg?v=1` 一类不在
+ * 类型表里的后缀,压根不读文件也不留副本 —— 当时看得见,原文件一清理就永久没了,而且那条
+ * 结果既没有 path 也没有 lost,事后看不出是「没存成」(审查第 4 轮 R4)。出路只能是共用一份
+ * 契约:扩大后缀表是把分隔符当文件名的一部分认下来,「下一次再读」则赌文件还在。
+ *
+ * **先切后解码**,顺序不能反:`%3F`/`%23` 是文件名里真的那个字符,先解码会把它们当成分隔符
+ * 切掉。裸写的 `?`/`#` 在 CommonMark 里确实算目的地的一部分,但浏览器、`URL` 和本应用的路由
+ * 三家都按分隔符解释,所以按分隔符处置才跟「屏幕上画出来的是哪张图」一致。
+ *
+ * 解不开的转义(`%ZZ`)**原样留着**:那串是不是合法文件名、有没有爬出根,权威在读取端的门禁
+ * (服务端 `resolveInRoot` + realpath),不在这里的字符串形状。
+ *
+ * 只回答「路径是哪一段」,不判绝对/相对、不判是不是本机地址(那是 isNetworkDestination 与各
+ * 调用点的根判据),所以给网址传进来也只会得到一段无意义的字符串 —— 调用点必须先问那一问。
+ */
+export function destinationFilePath(destination: string): string {
+  const raw = destination.trim();
+  const boundary = raw.search(QUERY_BOUNDARY);
+  const path = boundary < 0 ? raw : raw.slice(0, boundary);
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
 type Node = {
   type: string;
   url?: string;

@@ -1,4 +1,4 @@
-import { hasUrlScheme, isNetworkDestination } from "@ash/shared/markdown-images";
+import { destinationFilePath, hasUrlScheme, isNetworkDestination } from "@ash/shared/markdown-images";
 import { api } from "../lib/api.ts";
 import { attachmentView, isImagePath } from "../task-detail/utils.ts";
 
@@ -79,21 +79,16 @@ function fileUrlPath(raw: string): string | null {
   }
 }
 
-const QUERY_BOUNDARY = /[?#]/;
-
-function withoutQuery(raw: string): string {
-  const boundary = raw.search(QUERY_BOUNDARY);
-  return boundary < 0 ? raw : raw.slice(0, boundary);
-}
-
 /** Return the actual filesystem path represented by a Markdown destination. */
 export function localDiskPath(href?: string): string | null {
   const raw = href?.trim();
   if (!raw) return null;
   if (/^file:\/\//i.test(raw)) return fileUrlPath(raw);
-  if (WINDOWS_DISK_ROOT.test(raw) || UNC_ROOT.test(raw)) return decodeSafe(raw);
+  // 形状(哪种根)各档自己判,**路径成分**一律交给共享契约:去查询/片段、解码一次,两边
+  // 一个字不差(审查第 4 轮 R4;盘符/UNC 分支原先连查询都没去,是这里自己的不一致)。
+  if (WINDOWS_DISK_ROOT.test(raw) || UNC_ROOT.test(raw)) return destinationFilePath(raw);
   if (!POSIX_DISK_ROOT.test(raw)) return null;
-  return decodeSafe(withoutQuery(raw));
+  return destinationFilePath(raw);
 }
 
 /** Raw disk paths and explicit open-local URLs converge on one visible, clickable endpoint. */
@@ -170,7 +165,7 @@ export type MarkdownFileResolver = (destination: string) => ImagePreviewTarget |
  */
 export function siblingFileName(destination: string): string | null {
   if (!isDocumentRelative(destination)) return null;
-  const raw = decodeSafe(destination.trim().split(/[?#]/)[0] ?? "");
+  const raw = destinationFilePath(destination);
   if (!raw || PARENT_SEGMENT.test(raw)) return null;
   // `.` 段**消去而不是拒掉**:`shots/./shot.png` 在 Markdown/HTML 里跟 `shots/shot.png`
   // 是同一个文件,证据接口只认后者(server 的 evidenceSegments 把 `.` 段一律拒了)。拒掉
@@ -229,13 +224,13 @@ export function taskFilePath(destination?: string): string | null {
   const path = /^file:\/\//i.test(raw)
     ? fileUrlPath(raw)
     : WINDOWS_DISK_ROOT.test(raw) || UNC_ROOT.test(raw)
-      ? decodeSafe(raw)
+      ? destinationFilePath(raw)
       // isNetworkDestination 而不是 hasUrlScheme:`//cdn.example.com/a.png` 是协议相对网址,
       // 没有协议却绝不是本机路径。只问 scheme 的那一版把它改写成「去工作目录取」,于是这
       // 张站外图永远画不出来(审查第 2 轮 F3)。UNC 的 `\\server\share` 上一档已经认掉。
       : isNetworkDestination(raw) || SITE_ROUTE.test(raw)
         ? null
-        : decodeSafe(withoutQuery(raw).replace(/^(?:\.\/)+/, ""));
+        : destinationFilePath(raw.replace(/^(?:\.\/)+/, ""));
   if (!path || PARENT_SEGMENT.test(path)) return null;
   return path;
 }

@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { hasUrlScheme, isNetworkDestination, markdownImageRefs } from "@ash/shared/markdown-images";
+import { pathToFileURL } from "node:url";
+import {
+  destinationFilePath,
+  hasUrlScheme,
+  isNetworkDestination,
+  markdownImageRefs,
+} from "@ash/shared/markdown-images";
 import {
   imageStore,
   persistMarkdownImages,
@@ -81,6 +87,40 @@ try {
     persistMarkdownImages("![远程](https://example.com/image.png)", imageStore(), { directory: uploads, cwd: root }).length,
     0,
   );
+
+  // ── 查询/片段不是文件名的一部分(审查第 4 轮 R4)──────────────────────────────
+  // `?v=1` / `#view` 是 agent 顺手加的缓存串和锚点。展示端一直先切掉它再去工作目录取,
+  // 所以**当时看得见**;保存端把整串当文件名,`extname` 得到 `.png?v=1` 一类不在类型表里
+  // 的后缀,于是压根不读文件、也不留副本 —— 原文件一清理这张图就永久没了,而那条结果既
+  // 没有 path 也没有 lost,事后连「没存成」都看不出来。两端共用 destinationFilePath 之后
+  // 这里必须出现 path(所以也顺带钉住:不能靠扩大后缀表,那是把分隔符认成文件名)。
+  for (const suffix of ["?v=1", "#view", "?v=1#view"]) {
+    const query = persistMarkdownImages(`![预览](output/shot.png${suffix})`, seen, { directory: uploads, cwd: root });
+    assert.equal(query.length, 1, `${suffix}:仍要报一条`);
+    assert.ok(query[0]!.path, `${suffix}:真有这个文件,就必须留下副本`);
+    // 存下来的名字是**文件**的名字,查询串不许跟着进文件名。
+    assert.match(basename(query[0]!.path!), /^[A-Za-z0-9_-]{12}-shot\.png$/);
+    // `source` 恒为目的地原文:展示端按它把正文那一句对回这份拷贝,切过的那一版配不上。
+    assert.equal(query[0]!.source, `output/shot.png${suffix}`);
+  }
+  // 绝对路径与 `file:` 两档同样认 —— `file:` 的 pathname 本来就不含查询,这条是防回归。
+  assert.ok(
+    persistMarkdownImages(`![绝对](${nested}?v=9)`, seen, { directory: uploads, cwd: root })[0]?.path,
+    "POSIX 绝对路径带查询串时同样要留副本",
+  );
+  assert.ok(
+    persistMarkdownImages(`![协议](${pathToFileURL(nested).href}?v=9)`, seen, { directory: uploads })[0]?.path,
+    "file: 分支本来就由 URL 解析去掉查询,不许跟着改坏",
+  );
+  // 先切后解码,顺序不能反:`%3F`/`%23` 是文件名里真的那个字符,先解码就会被当成分隔符
+  // 切掉(这台机器上造不出带 `?` 的文件名 —— NTFS 不收,所以按字符串钉契约)。
+  assert.equal(destinationFilePath("out/q%3Fb.png"), "out/q?b.png");
+  assert.equal(destinationFilePath("out/q%23b.png"), "out/q#b.png");
+  assert.equal(destinationFilePath("out/a b.png?v=1#x"), "out/a b.png");
+  assert.equal(destinationFilePath("out/%E4%B8%80.png"), "out/一.png");
+  // 解不开的转义原样留着:合不合法、爬没爬出根由读取端的门禁判,不在这一层(与 web 的
+  // decodeSafe 同口径 —— 两端差一条就又是一处「一边看得见、一边不存」)。
+  assert.equal(destinationFilePath("out/%ZZ.png"), "out/%ZZ.png");
 
   // ── 同一个路径被重拍过:两次引用各自那一份字节 ───────────────────────────────
   // 这是「结论说修改后、画出来是修改前」的来源(审查第 1 轮 F1 实例 1)。按内容定身份、

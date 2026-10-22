@@ -3,7 +3,12 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { maxBytesFor } from "@ash/shared";
-import { isNetworkDestination, markdownImageRefs, type MarkdownImageRef } from "@ash/shared/markdown-images";
+import {
+  destinationFilePath,
+  isNetworkDestination,
+  markdownImageRefs,
+  type MarkdownImageRef,
+} from "@ash/shared/markdown-images";
 import { UPLOADS_DIR } from "./paths.js";
 import { id } from "./util.js";
 
@@ -164,11 +169,15 @@ function localImagePath(destination: string, cwd?: string): string | null {
     // 协议 **或 `//` 协议相对网址**都是浏览器去网络取的地址,不是本机文件(审查第 2 轮
     // F3:只问 scheme 时 `//cdn.x/a.png` 会被 `isAbsolute` 当成绝对路径读一遍)。
     if (isNetworkDestination(destination)) return null;
-    const path = decodeURIComponent(destination);
+    // 查询/片段不是文件名的一部分,解码之前先切掉:口径与展示端共用一份(审查第 4 轮 R4)。
+    const path = destinationFilePath(destination);
+    if (!path) return null;
     if (isAbsolute(path)) return path;
     return cwd ? resolve(cwd, path) : null;
   } catch {
-    return null; /* 坏转义 / 不合法的 file URL */
+    // 不合法的 file URL。坏转义不在这里拦:解不开就原样留着,合不合法由读取端判(见
+    // destinationFilePath),而 `file:` 的 pathname 本来就不含查询/片段。
+    return null;
   }
 }
 

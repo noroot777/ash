@@ -341,7 +341,16 @@ for (const [destination, expected] of [
   ["output/shot.png", "output/shot.png"],
   ["./output/shot.png", "output/shot.png"],
   ["output/%E7%BB%93%E6%9E%9C%20%E5%9B%BE.png", "output/结果 图.png"],
+  // 查询/片段不是文件名的一部分,而且**先切后解码**:`%3F`/`%23` 是文件名里真的那个字符。
+  // 这一刀跟保存端共用同一个 destinationFilePath —— 各切一次的那一版,展示端看得见、保存端
+  // 压根没存,原文件一清理就永久没了(审查第 4 轮 R4)。
   ["output/shot.png?v=2", "output/shot.png"],
+  ["output/shot.png#view", "output/shot.png"],
+  ["output/shot.png?v=2#view", "output/shot.png"],
+  ["output/q%3Fb.png", "output/q?b.png"],
+  ["output/q%23b.png", "output/q#b.png"],
+  ["D:/ai_workspace/ash/output/shot.png?v=2", "D:/ai_workspace/ash/output/shot.png"],
+  ["/Users/fjh/code/harness/output/shot.png#view", "/Users/fjh/code/harness/output/shot.png"],
   ["/Users/fjh/code/harness/output/shot.png", "/Users/fjh/code/harness/output/shot.png"],
   ["file:///Users/fjh/code/harness/output/shot.png", "/Users/fjh/code/harness/output/shot.png"],
   ["D:/ai_workspace/ash/output/shot.png", "D:/ai_workspace/ash/output/shot.png"],

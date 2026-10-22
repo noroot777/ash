@@ -40,6 +40,10 @@ assert.equal(
   "`.` 段消去，仍然落在证据目录",
 );
 assert.equal(resolve("./notes/./deep/./shot.png")?.url, "/api/tasks/T1/review/file?round=2&name=notes%2Fdeep%2Fshot.png");
+// ①c 查询/片段同样不是名字的一部分(与保存端共用 destinationFilePath,审查第 4 轮 R4):
+// 带着 `?v=1` 去拼证据接口,那个名字在证据目录里压根不存在,必 404。
+assert.equal(resolve("shot.png?v=1")?.url, "/api/tasks/T1/review/file?round=2&name=shot.png");
+assert.equal(resolve("shots/deep.png#top")?.url, "/api/tasks/T1/review/file?round=2&name=shots%2Fdeep.png");
 for (const outside of ["../outside.png", "shots/../../outside.png"]) {
   assert.equal(resolve(outside), null, `${outside} 解不出合法名字就报取不到，不许改判成工作目录的`);
 }
