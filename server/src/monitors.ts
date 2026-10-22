@@ -296,22 +296,23 @@ function superviseLiveness(row: Row, rt: Runtime): void {
  * 决定(已经停掉就不推:用户点停就是为了不再被它叫醒),这里不替它决定。
  */
 export async function detachMonitor(monitorId: string): Promise<void> {
-  await serialize(monitorId, async () => { await teardownRuntimeLocked(monitorId); });
+  await serialize(monitorId, () => teardownRuntimeLocked(monitorId));
 }
 
 /**
  * 撤运行时那几步的本体。**调用方必须已经在 `serialize(monitorId)` 里** —— 里面要把缓冲
  * 排出去,而推送一律在那条队列上(排第二遍就是等自己后面那一位,当场死锁)。
  *
- * **返回这一趟排干时读到的那条命中行**(没读到是 `null`，新一轮审查 N1)。撤之前的那次排干跟
- * 在线那条收尾读到的是同一份证据,而它跟着运行时一起被丢掉的话,拿这一趟当收尾的那个调用方
- * （`finishOffline`）就只能照「进程已经不在了」落终态 —— 审查实测:接回先 attach、排干已经把
- * `OFFLINE_READY` 送到任务、游标也推了,随后它看不到任何新行,状态落成 `lost`。
- * 「谁撤的运行时谁把证据接走」,所以它从返回值出去,不靠调用方自己去翻运行时。
+ * **撤之前先把文件吸干、缓冲推出去**:那一趟读到的行（可能含约定的那一行命中）由 `pushLines`
+ * 跟读取位置**同一条语句落库**（`hitLine`，见 monitor-consume.ts）。所以这里不需要把命中从
+ * 返回值交出去 —— 上一版那么做过,而那份证据只活过一次调用:拿它落终态的那条 UPDATE 失败一次
+ * （磁盘、竞争、重启）,重试时运行时已经新建、游标又越过了那一行,结局就被写成「它已经不在
+ * 了」（第 2 轮审查 N1 实测:重试后 status=lost、offset 照旧 14，而正文里 READY 已经送达）。
+ * 现在调用方重读那一行就看得见它,而且重试几次都看得见。
  */
-export async function teardownRuntimeLocked(monitorId: string): Promise<string | null> {
+export async function teardownRuntimeLocked(monitorId: string): Promise<void> {
   const rt = runtimes.get(monitorId);
-  if (!rt || rt.closing) return null;
+  if (!rt || rt.closing) return;
   rt.closing = true;
   runtimes.delete(monitorId);
   for (const t of rt.timers) { clearInterval(t); clearTimeout(t); }
@@ -319,9 +320,6 @@ export async function teardownRuntimeLocked(monitorId: string): Promise<string |
   rt.tail.drain();
   rt.tail.stop();
   await flushBuffer(monitorId, rt).catch(() => {});
-  // 排干时命中的那一行记在运行时上（见 monitor-consume.ts 的 `flushLocked`）—— 这一刻把它
-  // 交出去,运行时随后就不存在了。
-  return rt.hit;
 }
 
 /**

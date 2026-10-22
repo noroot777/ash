@@ -130,6 +130,32 @@ export async function finish(
 /**
  * 收尾的本体。**调用方要么是收尾所有权的持有者,要么是放弃型那一笔**(见 `finishing`)。
  */
+/**
+ * 库里那一行**已经确认过的命中**（没有、或者这一刻读不出来就是 `null`）。
+ *
+ * 只在内存里那一份拿不到时才问它一句（见 `foldHit`）—— 这一列跟读取位置同一条语句落库,所以
+ * 它活得过收尾重试和重启（第 2 轮审查 N1）。
+ *
+ * **读不出来一律当没有,绝不往外抛**:它问的是「要不要把结局的标签从『到期/不在了』换成『等到
+ * 了约定的那一行』」—— 锦上添花的一问,而它在 `settleMonitor` 里排在那段 try/finally **之前**
+ * （状态和原因得先算出来）。抛出去就绕过了那个 finally:行留在 running、监督一根也没有,命令
+ * 还在跑、结果已经写在磁盘上,却再也没人读出去（第 24 轮审查 F1 钉的正是这个形状,
+ * test-monitor-settle-handover.ts 的 ⑰ 当场抓住了这次回归）。读不到就退回原来那个结局 ——
+ * 库里那一列还在,下一次收尾尝试照旧读得到它。
+ */
+async function persistedHit(monitorId: string): Promise<string | null> {
+  try {
+    const row = (await db
+      .select({ hitLine: monitors.hitLine })
+      .from(monitors)
+      .where(eq(monitors.id, monitorId))).at(0);
+    return row?.hitLine ?? null;
+  } catch (error) {
+    console.error(`[ash] 哨兵 ${monitorId} 落库的那条命中这一刻读不出来,结局照原来那个落:`, error);
+    return null;
+  }
+}
+
 async function finishHeld(
   monitorId: string,
   status: Exclude<MonitorStatus, "running">,
@@ -194,13 +220,19 @@ async function finishHeld(
    * 「停止赢了就是赢了」又拆掉一次。到期/自退/推满上限这几种是兜底原因,让位给**约定好的那条
    * 出路**;`endedBy` 也跟着回到 `system`(不是「推满上限才停的」)。
    *
-   * **离线那一路的折叠在它自己那边**(`monitor-offline-finish.ts`)。证据有两份:它撤运行时那
-   * 一趟排干读到的那条（`teardownRuntimeLocked` 的返回值 —— 接回是先 attach 再判「进程还在不
-   * 在」,所以那一趟往往已经把约定的那一行送出去了,新一轮审查 N1）、以及之后补读出来的那几行。那一侧折的是同一件事、用的是同一个 `hitOf`/`matchedReason`,
-   * 但它**把原来那句「进程已经不在了」接在后面而不是换掉**:进程为什么没了只有那句话答得出来,
-   * 而退出码那一路从来就拿不到（新一轮审查 N1）。
+   * **证据不止运行时这一份**（第 2 轮审查 N1）:`rt` 随这次收尾一起撤掉,而终态那条 UPDATE
+   * 可能失败（磁盘、竞争、重启）—— 重试时运行时是新建的、读取位置又早已越过那一行,只认内存
+   * 就把一个已经送达 agent 的命中变回「不知道」。所以拿不到内存那一份时**回头读库**:命中跟
+   * 读取位置是同一条语句落下去的（`hitLine`，见 monitor-consume.ts 的 `pushLines`），它活得过
+   * 重试和重启。正常那一路 `rt.hit` 就在手上,读库这一问压根不会发生。
+   *
+   * **离线那一路的折叠在它自己那边**(`monitor-offline-finish.ts`)，读的是同一列、用的是同一个
+   * `hitOf`/`matchedReason`,但它**把原来那句「进程已经不在了」接在后面而不是换掉**:进程为什么
+   * 没了只有那句话答得出来,而退出码那一路从来就拿不到（上一轮审查 N1）。
    */
-  const foldHit = !opts.abandon && opts.endedBy !== "actor" ? rt?.hit ?? null : null;
+  const foldHit = !opts.abandon && opts.endedBy !== "actor"
+    ? rt?.hit ?? await persistedHit(monitorId)
+    : null;
   if (foldHit !== null) {
     status = "matched";
     reason = matchedReason(foldHit);

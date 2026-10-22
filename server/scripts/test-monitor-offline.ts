@@ -19,7 +19,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import {
-  HERE, root, db, isPidAlive, reattachMonitors, detachAllMonitors,
+  HERE, root, db, dbClient, isPidAlive, reattachMonitors, detachAllMonitors,
   monitors, until, now, makeTask, insertMonitorRow, pendingOf, teardown,
 } from "./monitors-fixture.js";
 
@@ -107,6 +107,59 @@ import {
   assert.match(texts, /OFFLINE_READY/, "那一行本身要送到任务头上");
   assert.match(texts, /等到了约定的那一行/, "结束通知跟库里那句话同源");
   console.log("✓ 先 attach 再判「进程还在不在」那条真实接回顺序：排干读到的命中也折进结局");
+}
+
+// ── ⑦m 命中这个事实要**活过一次失败的收尾** ──────────────────────────────────────────
+// 第 2 轮审查 N1:命中那一行当初只记在运行时对象上、交给**一次** `finishOffline` 调用。那一笔
+// 终态 UPDATE 失败一次（磁盘、竞争、重启）之后,`finally` 照旧把监督接回（这是对的）,但重试时
+// 运行时是新建的、`hit` 为 null,而读取位置早已越过那一行、重读也读不到 —— 两份来源都空,结局
+// 被写成「它已经不在了」,而那行 READY 明明已经送到 agent 手上（审查实测:第一次调用后
+// running/offset=14/events=1,重试后 **lost**、offset 照旧 14、结束通知里没有命中说明）。
+//
+// 所以命中跟读取位置**同一条语句落库**（`hitLine`）。这一节只注入一次终态写失败,随后一切正常,
+// 用产品同一个 `finishOffline` 重试 —— 它必须仍然落成 matched。
+{
+  const taskId = await makeTask();
+  const monitorId = await insertMonitorRow(taskId, { status: "running" });
+  await db.update(monitors).set({ stopWhen: "^OFFLINE_READY$" }).where(eq(monitors.id, monitorId));
+  const seeded = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  writeFileSync(seeded.logPath, "OFFLINE_READY\n");
+
+  const { finishOffline } = await import("../src/monitor-offline-finish.js");
+  const lost = "命令已经不在了（server 重启期间跑完的，拿不到退出码）";
+  // 只让**落终态那一笔**抛一次:事件入队、游标推进、命中落库都照常发生。
+  const real = dbClient.execute.bind(dbClient);
+  let fired = false;
+  (dbClient as { execute: typeof real }).execute = (async (statement: unknown) => {
+    const sql = typeof statement === "string" ? statement : String((statement as { sql?: string })?.sql ?? "");
+    if (!fired && /^update "monitors" set "status"/i.test(sql)) {
+      fired = true;
+      throw new Error("INJECTED_TERMINAL_WRITE_FAILURE");
+    }
+    return real(statement as Parameters<typeof real>[0]);
+  }) as typeof real;
+  try {
+    await finishOffline(seeded, "lost", lost).catch(() => {});
+  } finally {
+    (dbClient as { execute: typeof real }).execute = real;
+  }
+  assert.equal(fired, true, "台子前提:那一笔终态写真的被注入失败了");
+  const mid = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.notEqual(mid.status, "matched", "台子前提:第一次收尾没写成终态");
+  // **证据必须已经落库** —— 这就是这一节钉的那件事。
+  assert.equal(mid.hitLine, "OFFLINE_READY", `命中要跟游标一起落库（实际 ${JSON.stringify(mid.hitLine)}）`);
+
+  // 重试:日志一个新字节都没有、游标也早推过那一行 —— 结局只能靠落库的那份证据。
+  const fresh = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  await finishOffline(fresh, "lost", lost);
+  const row = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!;
+  assert.equal(row.status, "matched", `重试照旧要落成命中（实际 ${row.status}）`);
+  assert.match(row.endedReason ?? "", /等到了约定的那一行/, "结局要说出它是怎么收的");
+  assert.match(row.endedReason ?? "", /OFFLINE_READY/, "命中那一行要写进结局");
+  const texts = (await pendingOf(taskId)).map((m) => m.text).join("\n");
+  assert.match(texts, /OFFLINE_READY/, "那一行本身早就送到任务头上了");
+  assert.match(texts, /等到了约定的那一行/, "重试之后的结束通知也要带上命中说明");
+  console.log("✓ 命中这个事实活过一次失败的收尾：它跟读取位置同一条语句落库，重试照旧落成命中");
 }
 
 // ── ⑩ 活得过 server 重启 ─────────────────────────────────────────────────────

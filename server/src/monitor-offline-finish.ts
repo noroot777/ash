@@ -72,11 +72,13 @@ export async function finishOffline(
       // 已经写成终态的行还占着文件句柄、还在算自己的期限,到点再走一次收尾。撤之前照旧把
       // 文件吸干、把缓冲推出去(那一批是已经发生的事实)—— 所以下面**重读一遍**:offset 和
       // events 刚被那一次 flush 推进过,照 `fresh` 读会把同一批行再推一次。
-      // **撤运行时时排干读到的那条命中行要接过来**（新一轮审查 N1）:接回那一侧是**先 attach
+      // **撤运行时时排干读到的那条命中行要接过来**（上一轮审查 N1）:接回那一侧是**先 attach
       // 再判「进程还在不在」**,于是这一趟排干往往已经把约定的那一行送到任务、把游标推过去了
-      // —— 证据在运行时上,下面那次补读一个字都看不到（审查实测:先 attach 再 finishOffline
-      // 落 lost,不 attach 直接落 matched,同一份日志同一个条件）。
-      const drained = await teardownRuntimeLocked(fresh.id);
+      // —— 下面那次补读一个字都看不到（审查实测:先 attach 再 finishOffline 落 lost,不 attach
+      // 直接落 matched,同一份日志同一个条件）。那条命中现在跟游标一起落在**库**里
+      // （`hitLine`）,所以下面重读这一行就把它接过来了,不再靠一个只活过一次调用的返回值
+      // （第 2 轮审查 N1:终态写失败一次,那份证据就没了）。
+      await teardownRuntimeLocked(fresh.id);
       const base = (await db.select().from(monitors).where(eq(monitors.id, fresh.id))).at(0) ?? fresh;
 
       const collected: string[] = [];
@@ -90,7 +92,8 @@ export async function finishOffline(
 
       let events = base.events;
       // 命中那一行的保留是正文构造层的默认契约,这一处**不传**也照样留（第 3 轮审查 N1）。
-      if (collected.length) events = await pushLines(base, collected, readTo);
+      const fresherHit = hitOf(base, collected);
+      if (collected.length) events = await pushLines(base, collected, readTo, fresherHit);
       // 补读出来的全是空行:位置照旧只在「前面都已交付或明确放弃」时才推（文件头 ④ 的判据
       // 在 `commitProgress` 里,这一路运行时刚撤掉,内存里本来就没有没结清的内容）。
       else if (readTo !== base.offset) await commitProgress(base.id, readTo);
@@ -104,8 +107,10 @@ export async function finishOffline(
       // 而且 ash 不在的时候那个进程是跑完了、被谁杀了、还是机器重启了,只有传进来的那句话答
       // 得出来 —— 所以把它原样接在后面,而不是换掉它（在线那一侧的折叠见 monitor-finish.ts
       // 的 `foldHit`）。只折 `lost` 这一档:别的终态是更确定的事实,不许被一行日志改写。
-      // 两份证据同一个判据:运行时排干读到的那一条（`drained`）、以及这一趟补读出来的那几行。
-      const hit = drained ?? hitOf(base, collected);
+      // 两份证据同一个判据:**已经确认过并落了库的那一条**（`base.hitLine` —— 排干那一趟读到
+      // 的,或者更早某一次收尾尝试读到的）、以及这一趟补读出来的那几行。前者是持久的,所以
+      // 收尾失败一次再重试照旧看得见它（第 2 轮审查 N1）。
+      const hit = base.hitLine ?? fresherHit;
       const outcome = hit !== null && status === "lost" ? "matched" : status;
       const note = hit !== null && status === "lost"
         ? `${matchedReason(hit)} —— 这一行是 ash 不在期间补读到的：${reason}`

@@ -159,7 +159,9 @@ export function renderLines(row: Row, lines: string[]): string {
  * 收不到（第 1 轮审查复现：read_offset=13、events=0、消息为空，日志里那行完好无损）。
  * 反过来排的代价只是重启后可能把同一批行再推一次，重复远比静默丢失便宜。
  */
-export async function pushLines(row: Row, lines: string[], readTo: number | null): Promise<number> {
+export async function pushLines(
+  row: Row, lines: string[], readTo: number | null, hit?: string | null,
+): Promise<number> {
   // **结构化来源跟着这一笔一起交出去**（main 的「preserve structured monitor input
   // provenance」）:投递那一侧要答得出「这条消息是哪条哨兵的哪一类产出」。正文用的就是
   // 这条消息自己的正文（抬头不算 —— 那一侧按 `kind`/`source` 自己重建）,所以只渲染一次。
@@ -174,7 +176,19 @@ export async function pushLines(row: Row, lines: string[], readTo: number | null
   const events = delivered ? row.events + lines.length : row.events;
   await db
     .update(monitors)
-    .set({ events, ...(delivered && readTo !== null ? { offset: readTo } : {}) })
+    .set({
+      events,
+      ...(delivered && readTo !== null ? { offset: readTo } : {}),
+      // **命中跟读取位置同一条语句落库**（第 2 轮审查 N1）:位置一旦推过那一行,那行就再也不会
+      // 被重读 —— 所以「约定的字样到了」这个事实必须跟位置一起持久化。上一版只把它记在运行时
+      // 对象上、交给一次收尾调用:终态 UPDATE 失败一次(磁盘、竞争、重启),重试时运行时是新建
+      // 的、位置又已经越过那一行,两份来源都空 ⇒ 结局被写成「它已经不在了」,而那行 READY 明明
+      // 已经送到 agent 手上（审查实测:重试后 status=lost、offset 照旧 14）。
+      //
+      // 条件跟 `offset` 一样是 `delivered`:没送出去的那批行会被重投,命中那时会再算一次 ——
+      // 提前写就等于把一个还没送达的命中当成已确认。
+      ...(delivered && hit ? { hitLine: hit } : {}),
+    })
     .where(eq(monitors.id, row.id));
   publish(row.taskId);
   return events;
@@ -327,7 +341,7 @@ async function flushLocked(
 
   let events: number;
   try {
-    events = await pushLines(row, lines, readTo);
+    events = await pushLines(row, lines, readTo, hit);
   } catch (error) {
     console.error(`[ash] 哨兵 ${monitorId} 这一批 ${lines.length} 行没推出去,放回缓冲重试:`, error);
     return returnToBuffer(rt, monitorId, lines, readTo);
@@ -340,9 +354,13 @@ async function flushLocked(
   // 这是「命令自己永远不会结束」那一类的**唯一一条非到期出路**:没有它,`tail -F` 这种命令
   // 被盯的活早跑完了,任务还得干等到期(2026-10-21 实测白等 30 分钟)。
   if (hit !== null) {
-    // **证据先记在运行时上**（第 1 轮审查 N1）:这一笔 `settle` 很可能占不到收尾槽位 ——
+    // **证据也记在运行时上**（第 1 轮审查 N1）:这一笔 `settle` 很可能占不到收尾槽位 ——
     // 到期（或自退）先占到、正在排干,这一批恰恰是它排出来的。那时合并等待不会改变结局,
     // 于是「字样明明到了」被写成「盯满了约定的时长」。持有者落终态前会读这里（`foldHit`）。
+    //
+    // 这一份是**同进程内的快路径**,不是唯一的那一份:持久的那一份刚跟读取位置一起落了库
+    // （上面 `pushLines` 的 `hitLine`）—— 运行时随收尾一起撤掉,而库里那一份活得过重试和重启
+    // （第 2 轮审查 N1）。
     rt.hit = hit;
     settleInBackground(monitorId, "matched", matchedReason(hit), null);
     return "delivered";
