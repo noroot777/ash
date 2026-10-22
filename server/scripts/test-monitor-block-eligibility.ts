@@ -134,10 +134,13 @@ const judged = (command: string, what: string, why: string) =>
     "set -e\nfalse\ntail -F /dev/null",                    // 换行跟 `;` 同判
     "set -e; false; while true; do :; done",               // 恒真循环同判
   ]) passes(command, "`set -e` 之后前一条的退出码管得着它,而那答不出来");
+  // `-u` 那一类是**明知的误降级**（见判据文件头 ⑪ 的 `setShaken`）:它只在命令里真的引用了未
+  // 定义变量时才改变结局,而那一层答不出来 —— 于是这一条从硬拦降成提示,代价方向是对的那一侧。
+  passes("set -eu; tail -F /dev/null", "`-u` 改不改得着这一条，要看有没有未定义变量，答不出来");
   for (const [command, hit] of [
     // `set` 自己是个一定成功的内建:拿它当「前一条可能失败」会把这条也放过去（tail 确实会跑）。
     ["set -e; tail -F /dev/null", "tail -f/-F"],
-    ["set -eu; tail -F /dev/null", "tail -f/-F"],
+    ["set -ex; tail -F /dev/null", "tail -f/-F"],         // xtrace 一个字的执行语义都不改
     ["set -e; tail -F /dev/null; printf 'x\\n'", "tail -f/-F"],
     // 这道闸是**从那一段起**生效的,不往前追。
     ["tail -F /dev/null; set -e", "tail -f/-F"],
@@ -293,6 +296,61 @@ const judged = (command: string, what: string, why: string) =>
   }
   console.log("✓ 硬拦资格：提示里指明是哪一环核不了，而且不是空串");
 }
+// ── ⑤c 执行环境这个前提:命令自己就能把它掀翻（第 1 轮审查 F1）─────────────────────────
+// 硬拦的证明压着一个一直没说出口的前提:shell 按常规语义执行每一段、那个工具启动得起来、没人
+// 把这个进程结束掉。那个前提**不是待证项** —— 否则磁盘满、外部信号、ulimit 都能让任何命令退
+// 出,闸直接归零。可**命令自己**就能把它掀翻,而那几种写法全写在 argv 里、这一层本来就看得见。
+//
+// 这一节钉的是**资格**而不是一张反例表（审查明确点掉了「分别添加 eval、kill、set 的字符串特
+// 判」那条路:补一条它就再长出第四种）。所以主体是一组**对照**:同一条铁定该拦的命令,逐类把
+// 那个前提掀翻,每一类都必须把硬拦取消 —— 验的是「未知能往上取消硬拦」这个机制本身。
+{
+  // 本轮审查实测的四条（真 shell 下分别退出 0 / 0 / SIGTERM / 127，对账见 ⑧）。
+  for (const [command, why] of [
+    ["while true; do eval 'break'; done; printf 'DONE\\n'", "`break` 在引号里，词表扫不进 eval 的字符串"],
+    ["set -n; while true; do :; done", "`-n` 是「读完一条都不执行」，这一层只登记过 `set -e`"],
+    ["while true; do kill -TERM $$; done", "能终止这个 shell 的不只有 break/exit/return 三个词"],
+    ["PATH=/definitely-missing-ash-review; tail -F /dev/null", "跟随型的「不退出」压着「那个工具找得到」"],
+  ] as const) passes(command, `执行语义这一层读不懂 ⇒ 只配做提示（${why}）`);
+
+  // **机制**:一条铁定该拦的命令（事故的起因命令本体）,逐类掀翻那个前提。
+  const BASE = "tail -F build.log 2>/dev/null | grep --line-buffered ERROR";
+  assert.equal(
+    neverExitsVerdict(BASE)?.unprovable ?? null, null,
+    "这一节的台子前提:基线那一条本来就该硬拦，不然下面每一条都验不出东西",
+  );
+  for (const [command, which] of [
+    [`eval 'printf x'; ${BASE}`, "另开一层这边读不进去的执行"],
+    [`source ./env.sh; ${BASE}`, "把另一个文件的内容当代码跑"],
+    [`trap 'exit 0' ALRM; ${BASE}`, "挂一段收到信号才跑的代码"],
+    [`ulimit -t 1; ${BASE}`, "改掉这条命令自己的资源上限"],
+    [`set -n; ${BASE}`, "改掉后面每一条的执行语义"],
+    [`shopt -s extglob; ${BASE}`, "改掉 shell 的执行选项"],
+    [`PATH=/nope; ${BASE}`, "动过工具查找路径"],
+    [`${BASE}; kill -TERM $$`, "能把这条命令自己结束掉 —— 哪一段里出现都算"],
+    [`if false; then eval x; fi; ${BASE}`, "连「它跑不到」这个结论都得先读懂 eval ⇒ 偏放行那一侧"],
+  ] as const) {
+    const note = neverExitsVerdict(command)?.unprovable ?? null;
+    assert.notEqual(note, null, `这一类掀翻了执行环境那个前提，不许再硬拦（${which}）：${command}`);
+    assert.ok((note ?? "").length > 8, `那句提示要说清是哪一处读不懂（${which}）：${command}`);
+  }
+
+  // **口径是命令词位置,不是搜文本**（见判据文件头 ①）:同一个词出现在**参数位**上什么都不改
+  // —— 这一组要是跟着放行,闸就被一条 `grep kill` 顺手拆了。
+  for (const command of [
+    "tail -F x.log | grep kill",                 // `kill` 是 grep 的模式
+    "tail -F x.log | grep -e eval",              // 同上
+    "tail -F set",                               // `set` 是 tail 的操作数
+    "find . -name '*.log' | xargs tail -F; tail -F y.log",   // `.` 是 find 的操作数
+    "while true; do printf 'PATH=1\\n'; done",     // 引号里的字永远不是执行节点
+  ]) {
+    assert.equal(
+      neverExitsVerdict(command)?.unprovable ?? null, null,
+      `这几个词都在参数位上，执行语义一点没变，不许凭它把闸放掉：${command}`,
+    );
+  }
+  console.log("✓ 硬拦资格：命令自己掀翻执行环境那个前提时，硬拦一律降级；参数位上的同名词不算");
+}
 // ── ⑥ 结构锁:这几道不许悄悄退回去 ──────────────────────────────────────────────────
 // 上面几节是「这一批输入的答案对不对」,这一节是「判据的形状还在不在」—— 把 `follows` 改回只
 // 收 argv、把那几个开关重新收进白名单、把 `set -e` 或管道那一道摘掉,都是一次改一行就能做到
@@ -347,8 +405,26 @@ const judged = (command: string, what: string, why: string) =>
     "「下游读到头型」是一张**目录**:认不出来的下游要算「可能先走」（见该文件头 ⑤）",
   );
   assert.match(
-    JUDGE, /provableBlocker\(scanOf\(segments\(command\)\)\)/,
+    JUDGE, /provableBlocker\(scanOf\(segs\)\)/,
     "判据这一层不许再按「哪个路径 + 谁动过它」做拼写分析:那是穷举拼写（见该文件头 ⑩）",
+  );
+  // **执行环境那个前提必须由命令自己能推翻**（第 1 轮审查 F1）。这三条锁的是机制的形状:一张
+  // 目录（不是散落的 if）、接在判定之后、而且**只改硬拦那一档**（已经降级的那一句更具体）。
+  assert.match(
+    JUDGE, /const SHAKERS = new Map/,
+    "掀翻执行环境的那几种写法是一张**目录**:散落成 if 就会变成「每轮审查补一条」（见该文件头 ⑪）",
+  );
+  assert.match(
+    JUDGE, /const shaken = perturbed\(segs\)/,
+    "判定走完还要过一道「这条命令的执行语义我还读得懂吗」（见该文件头 ⑪）",
+  );
+  assert.match(
+    JUDGE, /if \(!found \|\| found\.unprovable\) return found/,
+    "扰动只改硬拦那一档:压根没判定 ⇒ 没什么可提示的，已经降级 ⇒ 它自己那句话更具体（见该文件头 ⑪）",
+  );
+  assert.match(
+    JUDGE, /const SET_HANDLED = new Set/,
+    "`set` 的开关走**白名单**:列「哪几个危险」就是列反例，一张黑名单永远差下一个（见该文件头 ⑪）",
   );
   assert.match(
     FOLLOWERS, /assumesOpaque/,
@@ -528,6 +604,13 @@ if (IS_WINDOWS) {
     "while true; do printf x; done | sort -t xx; printf 'DONE\\n'",
     "while true; do printf x; done | nl -w nope; printf 'DONE\\n'",
     "while true; do printf x; done | grep '['; printf 'DONE\\n'",
+    // ── 本轮审查 F1 实测的四条:**执行环境那个前提被命令自己掀翻**。前三条退出 0/0/SIGTERM,
+    //    第四条 127（`sh: tail: command not found`）。`kill -TERM $$` 只打到这一趟自己起的那
+    //    个壳（`spawn` 带 `detached`，它就是组长），不向外发信号;`PATH=` 只改这个子壳的环境。
+    "while true; do eval 'break'; done; printf 'DONE\\n'",
+    "set -n; while true; do :; done",
+    "while true; do kill -TERM $$; done",
+    "PATH=/definitely-missing-ash-review; tail -F /dev/null",
   ]) {
     reseed();
     await measured(command, true);
