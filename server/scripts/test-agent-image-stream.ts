@@ -8,7 +8,7 @@
 // 这一份从**真的起一个进程**那一端验:任意自定义解析器 + GenericCliExecutor.run,事件流里
 // 必须出现带 `source` 的 attachment。另外验流式碎片(半句话分两次到)和去重。
 import assert from "node:assert/strict";
-import type { ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,9 +24,9 @@ process.env.ASH_UPLOADS_DIR = uploads;
 // claude 执行器要先导:`catalog/parsers.ts` ↔ `executors/claude.ts` ↔ `catalog/claude.ts`
 // 是一条既有的循环依赖,从 parsers 这头进去会在 `catalog/claude.ts` 读到还没初始化的
 // `claudeStreamJsonParser`(TDZ)。从 claude 这头进去则只需要 import 绑定,能跑通。
-await import("../src/executors/claude.js");
+const { parseClaudeStream } = await import("../src/executors/claude.js");
 const { GenericCliExecutor } = await import("../src/executors/generic.js");
-const { withMarkdownImages } = await import("../src/executors/catalog/parsers.js");
+const { withMarkdownImages } = await import("../src/executors/markdown-image-stream.js");
 
 /** 只会往事件流里推正文的解析器 —— 那十个内联解析器的共同形状。 */
 function textOnlyParser(lines: string[]) {
@@ -434,6 +434,61 @@ try {
     "第一处引用那一刻的字节丢了就一直是丢了 —— 不许在后面某一遍扫描里重新读盘捡回来",
   );
   assert.deepEqual(readFileSync(flakyShots[1]!.path!), blue, "第二处引用照常拿到蓝图");
+
+  // ㉑ **专用适配器也按「一份文档」认身份**(审查第 4 轮 R2 第 1、2 行)。
+  //
+  // claude / codex 这几家原先逐 text block 调 persistMarkdownImages:上一条模型消息给定义、
+  // 下一条引用它时,展示端按整条正文解析得出一张图,保存端按单条消息解析压根不认 —— 那张图
+  // 没有持久副本,原文件一清理就彻底没了(实测:claude 主链 attachment 为 0,同样内容交给
+  // generic 流是 1)。「模型的一条消息结束了」证明不了「这一段能独立解释 Markdown」。
+  //
+  // 这一条从真起一个假 CLI 进程那一端验:两条 assistant 消息,定义在前、引用在后。
+  const crossMessage = join(root, "output", "cross.svg");
+  writeFileSync(crossMessage, Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'));
+  const claudeLines = (lines: unknown[]) => {
+    const script = join(root, `claude-stub-${Math.random().toString(36).slice(2, 8)}.mjs`);
+    writeFileSync(script, lines.map((line) => `process.stdout.write(${JSON.stringify(JSON.stringify(line) + "\n")});`).join("\n"));
+    const child = spawn(process.execPath, [script], { stdio: ["pipe", "pipe", "pipe"] });
+    child.stdin?.end();
+    return parseClaudeStream(child as never, undefined, "claude", undefined, null, undefined, undefined, undefined, root);
+  };
+  /** 一条模型消息:文本走 delta(真 claude 就是这样),末尾那条 assistant 收口成一段。 */
+  const assistantMessage = (text: string, parent?: string) => [
+    { type: "stream_event", ...(parent ? { parent_tool_use_id: parent } : {}), event: { type: "content_block_delta", delta: { type: "text_delta", text } } },
+    { type: "assistant", ...(parent ? { parent_tool_use_id: parent } : {}), message: { model: "claude-fixture", content: [{ type: "text", text }] } },
+  ];
+  const crossEvents = await collect(claudeLines([
+    ...assistantMessage("[proof]: output/cross.svg\n"),
+    ...assistantMessage("![跨消息截图][proof]\n"),
+  ]));
+  const crossShots = attachments(crossEvents);
+  assert.deepEqual(
+    crossShots.map((event) => [event.source, !!event.path]),
+    [["output/cross.svg", true]],
+    "定义写在上一条消息、引用写在下一条时,claude 这条链也必须认出这张图",
+  );
+
+  // ㉑b 子智能体那份抽屉正文是**另一份文档**:它自己的跨消息定义要认,而主会话的定义
+  // 不许泄到它那儿去(两份正文在同一条事件流里交错到达,混在一起扫就会凭空多出/少掉
+  // 图片节点)。
+  const childShot = join(root, "output", "child.svg");
+  writeFileSync(childShot, Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" role="img"/>'));
+  const childEvents = await collect(claudeLines([
+    ...assistantMessage("[main-only]: output/cross.svg\n"),
+    ...assistantMessage("[c]: output/child.svg\n", "toolu_child"),
+    ...assistantMessage("![子图][c]\n", "toolu_child"),
+    ...assistantMessage("![抢主会话的定义][main-only]\n", "toolu_child"),
+  ]));
+  const childAttachments = childEvents.flatMap((event) => {
+    const work = event.kind === "tool" ? event.nativeWork : undefined;
+    return work?.type === "activity" && work.event.kind === "attachment" ? [{ id: work.id, ...work.event }] : [];
+  });
+  assert.deepEqual(
+    childAttachments.map((event) => [event.id, event.source, !!event.path]),
+    [["toolu_child", "output/child.svg", true]],
+    "子智能体的跨消息定义要认,主会话的定义不许被它用上",
+  );
+  assert.deepEqual(attachments(childEvents).map((event) => event.source), [], "主会话这一侧只有定义、没有引用");
 
   console.log("自定义解析器的图片落盘回归通过");
 } finally {

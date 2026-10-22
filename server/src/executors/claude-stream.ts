@@ -12,7 +12,8 @@ import { childActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
-import { imageStore, persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { withMarkdownImages } from "./markdown-image-stream.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
@@ -25,7 +26,7 @@ import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWin
 // calibrateAs:只有**确知自己是哪种 CLI 的进程**才传(见下面 init 分支)。
 // 复用这份 parser 的第三方 CLI 一律不传 —— 它们的技能名跟 claude 的不是一回事,
 // 拿 bin 名去猜会把别人的技能塞进 claude 的缓存。
-export async function* parseClaudeStream(
+export function parseClaudeStream(
   child: ReturnType<typeof spawnAgent>,
   resident?: ClaudeControlBridge,
   bin = "claude",
@@ -38,9 +39,28 @@ export async function* parseClaudeStream(
   // (见 ../claude-monitors.ts 构造函数的说明)。新开的流可以不传,init 会带来。
   cliSessionId?: string,
   // 这条会话干活的目录。正文里 `![](output/x.png)` 这种**相对路径**要靠它解成真文件
-  // 才复制得进 uploads —— 不传的话那张图在对话里只会是个裂开的图标（见
-  // ../agent-attachments.ts 的 markdownImagePaths）。
+  // 才复制得进 uploads —— 不传的话那张图在对话里只会是个裂开的图标(见
+  // ../agent-attachments.ts 与下面这一层)。
   cwd?: string,
+): AsyncIterable<AgentEvent> {
+  // 正文里的图**不在这份解析里收**:它要按「一份文档」认身份,而这里一条模型消息就是
+  // 一片碎片 —— 上一条消息给定义、下一条引用它时,按消息扫压根不认那张图(审查第 4 轮
+  // R2)。父会话与每个子智能体各一笔账,统一由这一层记(见 markdown-image-stream.ts)。
+  return withMarkdownImages(
+    claudeStreamEvents(child, resident, bin, calibrateAs, compactWindow, onInitialized, waitNoticeMs, cliSessionId),
+    cwd,
+  );
+}
+
+async function* claudeStreamEvents(
+  child: ReturnType<typeof spawnAgent>,
+  resident: ClaudeControlBridge | undefined,
+  bin: string,
+  calibrateAs: AgentType | undefined,
+  compactWindow: number | null,
+  onInitialized: () => void,
+  waitNoticeMs: number,
+  cliSessionId?: string,
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -158,10 +178,10 @@ export async function* parseClaudeStream(
         // 注意这个分支**会提前 return**，所以必须在这儿接，不能指望下面那段顶层处理。
         if (block.type === "tool_use") claudeMonitors.toolUse(block.name, block.input, block.id);
         if (block.type === "tool_result") claudeMonitors.toolResult(block.tool_use_id, block.content);
+        // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只
+        // 收工具结果里那几张 base64 截图 —— 它们不是正文语法,按块交代就是对的。
         if (block.type === "tool_result") {
           for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
-        } else if (block.type === "text" && typeof block.text === "string") {
-          for (const image of persistMarkdownImages(block.text, images, { cwd })) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", ...image }));
         }
       }
       return;
@@ -292,10 +312,6 @@ export async function* parseClaudeStream(
         }
       }
       if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload
-      for (const block of ev.message.content) {
-        if (block.type !== "text" || typeof block.text !== "string") continue;
-        for (const image of persistMarkdownImages(block.text, seenImages, { cwd })) push({ kind: "attachment", ...image });
-      }
     } else if (ev.type === "user" && Array.isArray(ev.message?.content)) {
       flushText();
       for (const block of ev.message.content) {

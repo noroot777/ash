@@ -5,7 +5,8 @@ import { codexChildWork, codexNativeWork, codexSubAgentWork, nativeAgentProfile,
 import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
-import { imageStore, persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { withMarkdownImages } from "./markdown-image-stream.js";
 import {
   formatFailureForTimeline,
   formatSessionPoisonForTimeline,
@@ -284,7 +285,6 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       agentMessageCount += 1;
       push({ kind: "text", text: seenAgentDeltas.has(item.id) ? "\n\n" : `${item.text}\n\n` });
-      for (const image of persistMarkdownImages(item.text, seenImages, { cwd: opts.cwd })) push({ kind: "attachment", ...image });
     } else if (item?.type === "reasoning") {
       const text = [...(item.summary ?? []), ...(item.content ?? [])].join("\n");
       if (seenReasoningDeltas.has(item.id)) push({ kind: "thinking", text: "\n\n" });
@@ -369,9 +369,9 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         const item = p.item;
         const seen: ImageStore = childImages.get(p.threadId) ?? imageStore();
         childImages.set(p.threadId, seen);
-        if (item?.type === "agentMessage") {
-          for (const image of persistMarkdownImages(item.text ?? "", seen, { cwd: opts.cwd })) push(childActivity(p.threadId, { kind: "attachment", ...image }));
-        } else {
+        // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只收
+        // 工具结果里那几张 base64 截图 —— 它们不是正文语法,按 item 交代就是对的。
+        if (item?.type !== "agentMessage") {
           const results = persistToolResultImages(item?.result ?? item?.contentItems ?? item?.error, seen, { allowBareBase64: item?.type === "imageGeneration" });
           for (const path of results) push(childActivity(p.threadId, { kind: "attachment", path }));
         }
@@ -528,7 +528,10 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   if (opts.reattach?.completedTurn) void completeTurn(opts.reattach.completedTurn).catch((error) => finish(1, String(error)));
 
   let steerTail = Promise.resolve();
-  const events = (async function* (): AsyncIterable<AgentEvent> {
+  // 正文里的图**不在这份协议解析里收**:一条 agentMessage 只是一片碎片,上一条消息给定义、
+  // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。主会话与每个子 thread 各一笔账,
+  // 统一由这一层按「一份文档」记(见 markdown-image-stream.ts)。
+  const events = withMarkdownImages((async function* (): AsyncIterable<AgentEvent> {
     while (true) {
       if (queue.length) {
         yield queue.shift()!;
@@ -537,7 +540,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       if (finished) return;
       await new Promise<void>((resolve) => { wake = resolve; });
     }
-  })();
+  })(), opts.cwd);
   return {
     cliCommand: opts.cliCommand,
     goal: () => native.goal,

@@ -18,7 +18,8 @@ import {
   RunTraceRecorder,
   type RunTracePaths,
 } from "./diagnostics.js";
-import { imageStore, persistMarkdownImages, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { withMarkdownImages } from "./markdown-image-stream.js";
 import { codexAshMcpServerName } from "./codex-mcp.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"] as const;
@@ -314,7 +315,19 @@ function appServerCompatibleArgs(input: string[]): { args: string[]; ignored: st
   return { args: out, ignored };
 }
 
-export async function* parseCodexStream(
+export function parseCodexStream(
+  child: ReturnType<typeof spawnAgent>,
+  tracePaths: RunTracePaths | undefined,
+  lifecycle: { stopRequested: boolean },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string },
+): AsyncIterable<AgentEvent> {
+  // 正文里的图**不在这份解析里收**:一条 agent_message 只是一片碎片,上一条消息给定义、
+  // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。统一由那一层按「一份文档」
+  // 记账(见 markdown-image-stream.ts)。
+  return withMarkdownImages(codexStreamEvents(child, tracePaths, lifecycle, contextOptions), contextOptions.cwd);
+}
+
+async function* codexStreamEvents(
   child: ReturnType<typeof spawnAgent>,
   tracePaths: RunTracePaths | undefined,
   lifecycle: { stopRequested: boolean },
@@ -379,7 +392,6 @@ export async function* parseCodexStream(
       if (it.type === "agent_message" && it.text) {
         agentMessageCount += 1;
         push({ kind: "text", text: it.text + "\n\n" });
-        for (const image of persistMarkdownImages(it.text, seenImages, { cwd: contextOptions.cwd })) push({ kind: "attachment", ...image });
       }
       else if (it.type === "reasoning" && it.text) push({ kind: "thinking", text: it.text + "\n\n" });
       else if (it.type === "command_execution") push({ kind: "tool", name: "exec", detail: shortStr(it.command) });

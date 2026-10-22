@@ -6,7 +6,8 @@ import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, killChild, redactSecrets, resumeFor } from "./spawn.js";
-import { textParser, withMarkdownImages } from "./catalog/parsers.js";
+import { textParser } from "./catalog/parsers.js";
+import { withMarkdownImages } from "./markdown-image-stream.js";
 import type { CliParser, CliParserContext } from "./catalog/types.js";
 import { valueArgs, type CliSpec } from "./catalog/types.js";
 
