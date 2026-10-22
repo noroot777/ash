@@ -11,6 +11,7 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { previewStopFailure } from "./preview-process-stop.js";
 import { recordTaskStatus } from "./task-start-status.js";
 import { releaseTerminalLanding } from "./task-complete.js";
+import { directionIdentityCleared } from "./task-direction-epoch.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -82,9 +83,11 @@ async function writeTaskStatus(
     patch.endedAt = endedAt = updatedAt;
   }
   if (status !== "running") {
-    patch.activeTurnToken = null;
-    patch.activeDirectionToken = null;
-    patch.activeDirectionVersion = 0;
+    // 回合内的身份随回合结束作废。**`direction_epoch` 不在此列,那不是漏写**:它正是为了
+    // 补上这三列归零之后留下的那条分不清的边 —— 「现在空着」原本同时意味着「我清掉的那一轮
+    // 已结束」和「后来又跑完了另一轮」,于是改派失败后迟到的回滚把旧提问、旧完成确认写回一个
+    // 已经跑完新回合的任务(第 4 轮审查 F1-B)。世代一路只增,这里碰它就等于把那条边又抹掉。
+    Object.assign(patch, directionIdentityCleared());
   }
 
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));

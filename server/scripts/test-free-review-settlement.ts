@@ -21,7 +21,8 @@ try {
   const { pendingMessageRow } = await import("../src/pending-messages.js");
   const { freeWorkflowState, handleFreeWorkflowSettlement, reportFreeReviewConclusion, reserveFreeReview } = await import("../src/free-workflow.js");
   const { freeReviewReportPath } = await import("../src/free-review-files.js");
-  const { claimTurn, confirmDone, markStopped } = await import("../src/runs.js");
+  const { claimTurn, markStopped } = await import("../src/runs.js");
+  const { confirmDone } = await import("../src/task-confirmation.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { FOLLOW_UP_REMINDER } = await import("../src/run-prompts.js");
   await ensureSchema();
@@ -109,7 +110,12 @@ try {
     }
     if (options.confirmed === "persisted") {
       await db.update(tasks).set({ completeConfirmedAt: at }).where(eq(tasks.id, id));
-    } else if (options.confirmed) confirmDone(id);
+    } else if (options.confirmed) {
+      // 内存那张票带着它属于的那一代（task-confirmation.ts）：结算只认当下这一代的那张。
+      const epoch = (await db
+        .select({ epoch: tasks.directionEpoch }).from(tasks).where(eq(tasks.id, id))).at(0)!.epoch;
+      confirmDone(id, epoch);
+    }
     if (options.stopped) markStopped(id, options.stopped);
     const path = sessionTranscriptPath(id, sessId);
     mkdirSync(dirname(path), { recursive: true });

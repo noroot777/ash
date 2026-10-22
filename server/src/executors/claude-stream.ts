@@ -95,10 +95,15 @@ export async function* parseClaudeStream(
   // (pytest 跑上半小时)同样一个事件都不发,那是活儿正常在干,报出来纯属误报。收到
   // 任何别的事件就立刻解除等待 —— 上游一开口,requesting 后面马上跟着 message_start。
   //
-  // 落成**持久 system 注记**而不是 `kind:"error"`:这类「回合正常着,只是在等」的信号
-  // 跟本回合成败正交,塞进 error 的代价见 session-notice.ts 顶部 —— 时间线上渲染成红色
-  // 异常、执行过程计入异常数,duet 更是直接 `failed()` 掉整场讨论(第 1 轮审查 P1/P2)。
-  // system 这条路三条消费链(single-run / team / duet)都已经当旁注收。
+  // 落成 `kind:"error"` + `level:"notice"`:这类「回合正常着,只是在等」的信号跟本回合
+  // 成败正交,所以**必须带 notice 这一级** —— 裸 error 的代价见 session-notice.ts 顶部:
+  // 时间线上渲染成红色异常、执行过程计入异常数,duet 更是直接 `failed()` 掉整场讨论
+  // (第 1 轮审查 P1/P2)。三条消费链(single-run / team / duet)都按 isExecutionNotice
+  // 分流:照落 trace、照发,但一概不当失败处理。
+  //
+  // 为什么不再走 system 旁注:那一路写的是 `.md` 的回合 sentinel,而它是**回合收口之后**
+  // 才补落盘的,于是一整串重试记录糊在会话结尾、离它真正发生的那一步十万八千里
+  // (用户 2026-10-21 反馈)。走 trace 才落在执行过程里它发生的那个位置。
   let awaitingSince: number | null = null;
   let waitNoticed = 0;
   // `status:"compacting"` 是**心跳**不是**开始**:CLI 在整个压缩过程里每隔几秒重发一条,
@@ -114,10 +119,10 @@ export async function* parseClaudeStream(
     if (due <= waitNoticed) return; // 每满一个间隔才报一次,别把静默刷成滚屏
     waitNoticed = due;
     push({
-      kind: "system",
-      text: `已经等上游 ${Math.max(1, Math.round(waited / 60_000))} 分钟没有响应，本回合仍在等待中`,
-      at: new Date().toISOString(),
+      kind: "error",
+      message: `已经等上游 ${Math.max(1, Math.round(waited / 60_000))} 分钟没有响应，本回合仍在等待中`,
       level: "notice",
+      affectsTurn: false,
     });
   }, Math.max(1_000, Math.floor(waitNoticeMs / 10)));
   waitTimer.unref?.(); // 心跳不能拖着进程不让退
@@ -234,10 +239,11 @@ export async function* parseClaudeStream(
       // 那是因为它切断了这台机器上**全部**在途请求、逼 CLI 重连,是没得选时的钝手段,
       // 不是这类情况的处理办法。真正该做的是把 CLI 早就说了的话显示出来,也就是下面这段。
       //
-      // 所以每一次重试都抬成一条旁注:它同时是「还活着」的心跳,重试间隔本来就是分钟级,
-      // 不会刷屏。
-      // 走 system 注记而不是 error:重试期间回合仍然正常进行中,理由同上面 waitTimer 那段。
-      // 真的重试耗尽,收尾的 result / synthetic 消息会照旧把失败报成 error。
+      // 所以每一次重试都抬成执行过程里的一条提示:它同时是「还活着」的心跳,重试间隔
+      // 本来就是分钟级,不会刷屏。
+      // 带 `level:"notice"` 而不是裸 error:重试期间回合仍然正常进行中,理由同上面
+      // waitTimer 那段。真的重试耗尽,收尾的 result / synthetic 消息会照旧把失败报成
+      // 故障级 error ——「最终失败了没有」由那条答,这里只负责把过程留在它发生的位置上。
       if (ev.subtype === "api_retry") {
         const attempt = Number(ev.attempt) || 0;
         const max = Number(ev.max_retries) || 0;
@@ -253,10 +259,10 @@ export async function* parseClaudeStream(
         if (attempt) parts.push(max ? `第 ${attempt}/${max} 次` : `第 ${attempt} 次`);
         if (wait) parts.push(`等 ${wait >= 1000 ? `${Math.round(wait / 1000)} 秒` : `${(wait / 1000).toFixed(1)} 秒`}`);
         push({
-          kind: "system",
-          text: `${cause}，正在重试${parts.length ? `（${parts.join("，")}）` : ""}`,
-          at: new Date().toISOString(),
+          kind: "error",
+          message: `${cause}，正在重试${parts.length ? `（${parts.join("，")}）` : ""}`,
           level: "notice",
+          affectsTurn: false,
         });
       }
       push({ kind: "session", cliSessionId: ev.session_id });

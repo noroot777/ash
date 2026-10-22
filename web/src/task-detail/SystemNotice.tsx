@@ -4,6 +4,8 @@ import { openGitWorkbench } from "../git-workbench/navigation.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { previewNoticeText } from "../lib/previewUrl.ts";
 import { MessageAttachments } from "./Attachments.tsx";
+import { MonitorWakeInput } from "./MonitorWakeInput.tsx";
+import { monitorWakeInput } from "./monitorWakeModel.ts";
 import type { ConversationItem } from "./conversationModel.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 import {
@@ -189,6 +191,8 @@ type SystemMessageProps = {
 };
 
 export function SystemAuthoredMessage({ item, related = [], surface = "task", mode = "footnote" }: SystemMessageProps) {
+  const wakeInput = monitorWakeInput(item);
+  if (wakeInput) return <MonitorWakeInput item={item} input={wakeInput} surface={surface} />;
   const parsed = parseAttachmentText(item.text);
   const paths = [...parsed.paths, ...item.attachments];
   const text = parsed.body || item.text;

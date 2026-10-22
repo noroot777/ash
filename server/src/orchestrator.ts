@@ -11,6 +11,7 @@ import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStar
 import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceRole } from "./runs.js";
+import { turnDirectionStart } from "./task-direction-epoch.js";
 import { consumeSingleRun } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -123,6 +124,8 @@ export async function continueTask(
       // 跟单飞锁挡回同一口径:返回 false。
       const delivered = await deliverToLead(taskId, userText, {
         attachments: opts.attachments,
+        bySystem: opts.byBackend,
+        monitorWake: opts.monitorWake,
         throwOnOpenFailure: opts.throwOnTeamUnavailable,
       });
       if (!delivered) return false;
@@ -215,7 +218,8 @@ export async function continueTask(
     const directionToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
+      // 方向身份那几列同 task-run.ts:走 `turnDirectionStart`,世代跟着这一次起跑一起前进。
+      .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
       .where(eq(tasks.id, taskId));
     // 令牌落库的同一处把它绑到这一轮的运行时身份上:来源核验要的是「库里的令牌」和
     // 「内存里这一轮」是同一件事,而不是两份各自独立的读(见 runs.ts `bindTurnToken`)。
@@ -481,8 +485,6 @@ export async function continueTask(
           turnModel: ex.model ?? null,
           turnReasoningEffort: ex.reasoningEffort ?? null,
           sideTurn,
-          // 新回合开始 = 上一轮「是被停的」这件事翻篇，不清就会一直挡着重试入口。
-          stoppedAs: null,
           // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
           // 恢复不了的恢复命令,见 ResumeFields。
           ...ex.resumeFields(cwd, cliSessionId),
@@ -544,7 +546,7 @@ export async function continueTask(
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human/backend turn as its own bubble; the matching event keeps every client live.
-      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend });
+      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend, monitorWake: opts.monitorWake });
     }
     // 上一回合尚未结算就收到回复时，消息会先排队，真正送达时任务已不再 paused；这条
     // 路径要在落盘后消费旧检查点，避免它继续挡完成与预约派审。若起点本来就是 paused，

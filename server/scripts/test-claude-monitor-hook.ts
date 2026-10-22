@@ -88,6 +88,27 @@ const reasonOf = (decision: Awaited<ReturnType<typeof claudeMonitorHookDecision>
   await stopMonitor(row.id, "测试收尾");
 }
 
+// ── ②b 改道这条路也过结束条件闸（用户 2026-10-21：「你能保证 agent 一定会加吗」）────
+// 这条路是哨兵的**大头**：2026-10-16 起一次性回合里的内置 Monitor 全从这儿改挂成 ash 哨兵。
+// 闸要是放过这一路，那条保证就等于没有 —— 而内置 Monitor 压根没有 stopWhen 这个参数，所以
+// 拒绝文案必须把「改写命令」和「改用 ash 的 start_monitor」都说出来，否则 agent 在这儿无路可走。
+{
+  const taskId = await makeTask();
+  const reason = reasonOf(await claudeMonitorHookDecision(
+    event({ command: "tail -F /tmp/build.log | grep --line-buffered ERROR", description: "盯构建" }),
+    await turnOf(taskId),
+    null,
+  ));
+  assert.equal(
+    (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).length, 0,
+    "拦下来就一行都不许留，更不许起进程",
+  );
+  assert.match(reason, /永远不会结束/, `要说清为什么拦它，实际：${reason}`);
+  assert.match(reason, /stopWhen/, "出路②：改用 ash 的 start_monitor 带上结束条件");
+  assert.match(reason, /untilExpiry/, "出路③：本来就是要盯到到期");
+  assert.match(reason, /start_monitor/, "内置 Monitor 没有这些参数，必须指明换哪个工具");
+}
+
 // ── ③ description 空着时拿命令顶上 ───────────────────────────────────────────
 // 起得来比「名字好看」要紧:描述是必填的(startMonitor 会校验),拿不到就用命令当描述,
 // 而不是让这次代办整个失败、把 agent 推回那条落空的路。

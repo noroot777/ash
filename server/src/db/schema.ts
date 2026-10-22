@@ -1,6 +1,7 @@
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { ProjectPreviewConfig } from "@ash/shared/preview";
 import type { ProjectCommandsConfig } from "@ash/shared/project-commands";
+import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 
 // JSON columns are stored as text and parsed in the repository layer.
 // Schema mirrors shared/src/index.ts.
@@ -242,6 +243,20 @@ export const tasks = sqliteTable("tasks", {
   // 当前回合已经进入第几个方向。1=尚未引导；>1=发生过引导，用于断线补录判定省略 token
   // 的普通首方向调用可以恢复，而引导后的无身份调用不能被冒充成当前方向。
   activeDirectionVersion: integer("active_direction_version").notNull().default(0),
+  /**
+   * **这条任务到目前为止一共进过第几个方向** —— 永不归零的持久世代（第 4 轮审查 F1-B）。
+   *
+   * 上面那三列都是**回合内**的身份：`status.ts` 一离开运行态就把 token 置 null、版本归零。于是
+   * 「这几列现在空着」同时意味着两件事 ——「我清掉的那一轮已经结束」和「我清掉的那一轮结束了、
+   * 后来又跑完了另一轮」。改派失败后迟到的那次回滚只看得到空值，就把后者当成前者，把旧提问和
+   * 旧完成确认写回一个已经跑完新回合的任务（实测
+   * `F1_B_LATE_ROLLBACK_AFTER_NEW_DIRECTION_DONE`）。
+   *
+   * 这一列补上那条分不清的边：**回合起跑和方向轮换时各 +1，任何状态落位都不许把它归零**。
+   * 回滚的备用分支于是问得出「我离开之后有没有新方向开过工」。写入口只有
+   * `task-direction-epoch.ts`（那边有唯一写入口的理由和结构锁）。
+   */
+  directionEpoch: integer("direction_epoch").notNull().default(0),
   // 这一轮是 CLI 原生命令（`/compact`）：整条消息由 CLI 本地执行，不进模型 —— 既不是
   // 任务的执行，也不是一轮验证。结算钩子（派验证 / 收验证轮 / 推工作流）必须整段跳过，
   // 否则「压一下上下文」会被记成一轮验证跑完，还白吃一轮配额。开跑时写，结算后清空；
@@ -413,6 +428,7 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 同一个哨兵还没送出去的事件合并进同一行（一次唤醒看完全部，而不是一行一个回合），
   // 投递时标 byBackend，让它在会话里显示成系统代写的一回合而不是冒充用户发言。
   origin: text("origin"),
+  monitorWake: text("monitor_wake", { mode: "json" }).$type<MonitorWakeData>(),
   mode: text("mode").notNull().default("timed"), // timed | queued
   // 执行意图:1 = 这条是任务**排队等轮次时**暂存的回复,投递它 = 开启任务的执行回合
   // —— 整队在跑守卫与分组暂停都挡它,重投也不丢(第 xNb655YqYzcA 链第 5 轮:起跑失败

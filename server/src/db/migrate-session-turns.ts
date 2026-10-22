@@ -15,13 +15,18 @@
 //      新建的会话在 insert 时把这一列写成 0。详见 `backfillTurnsBase` 的注释。
 import type { Client } from "./node-sqlite-client.js";
 
+// **这份 DDL 与搬运列表要跟着 `db/index.ts` 的 `session_turns` 一起长**:重建表会把源表
+// 的列定格在这里,漏一列就等于在这条升级路上把它悄悄删掉 —— 而容忍式 ALTER 已经在本次
+// `ensureSchema` 里跑过了(DDL 全在数据迁移之前),这一进程余下的时间里再也没人补得回来,
+// 于是写端每次 INSERT 都报列不存在、窄出口整条 500。
 const TABLE_DDL = `CREATE TABLE session_turns_rebuilt (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
   task_id TEXT NOT NULL,
   cwd TEXT,
   started_at TEXT NOT NULL,
-  ended_at TEXT
+  ended_at TEXT,
+  outcome TEXT
 )`;
 
 async function hasTable(client: Client, table: string): Promise<boolean> {
@@ -50,8 +55,8 @@ async function rebuildWithNullableEnd(client: Client): Promise<void> {
   await client.batch([
     "DROP TABLE IF EXISTS session_turns_rebuilt",
     TABLE_DDL,
-    `INSERT INTO session_turns_rebuilt (id, session_id, task_id, cwd, started_at, ended_at)
-       SELECT id, session_id, task_id, cwd, started_at, ended_at FROM session_turns`,
+    `INSERT INTO session_turns_rebuilt (id, session_id, task_id, cwd, started_at, ended_at, outcome)
+       SELECT id, session_id, task_id, cwd, started_at, ended_at, outcome FROM session_turns`,
     "DROP TABLE session_turns",
     "ALTER TABLE session_turns_rebuilt RENAME TO session_turns",
     // 重建表会把它自己的索引一起带走,普通索引在这里补回来；唯一索引留给下一步(得先去重)。

@@ -1,4 +1,5 @@
 import type { AgentType } from "@ash/shared";
+import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import type { TurnSource } from "./runs.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
@@ -61,6 +62,7 @@ export type ContinueTaskOptions = {
    * 能把它跟我自己打的字分开。默认 false = 真人发的。
    */
   byBackend?: boolean;
+  monitorWake?: MonitorWakeData;
   /**
    * **这一回合是谁点的**(多人模式)。共享项目里 B 可以在 A 的任务上回复/重跑/派审,
    * 而那一轮烧的是 B 自己的 key —— 所以执行器、供应商、个人 CLI 环境与 git 署名

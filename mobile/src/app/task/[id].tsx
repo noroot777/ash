@@ -32,7 +32,7 @@ import { canArchive } from "@ash/shared";
 import { summarizeArchiveCleanup } from "@ash/shared/project";
 import type { Session, ScheduledMessage, Task } from "@ash/shared";
 import type { LogLine } from "@/lib/log";
-import { snapshotToLogLines } from "@/lib/log";
+import { mergeSessionNotices, snapshotToLogLines } from "@/lib/log";
 
 // How often a running task's conversation is re-pulled from its .md.
 const CONV_POLL_MS = 3000;
@@ -80,12 +80,21 @@ export default function TaskDetail() {
   // snapshot; we replace rather than append, so the same call also fills any gap.
   const loadConv = useCallback(async () => {
     const ss = await api.sessions(id);
+    // 过程提示(上游在重试、还在等回话)跟正文一起拉:它们的正本在 trace 里,手机端读不动
+    // 整份 trace,走的是那个窄出口(见 mergeSessionNotices / shared 的 SessionNotice)。
     const withOut = await Promise.all(
-      ss.map(async (s) => ({ s, out: await api.sessionOutput(s.id).catch(() => "") })),
+      ss.map(async (s) => {
+        const [out, notices] = await Promise.all([
+          api.sessionOutput(s.id).catch(() => ""),
+          api.sessionNotices(s.id).catch(() => []),
+        ]);
+        return { s, out, notices };
+      }),
     );
     const all: LogLine[] = [];
-    for (const { s, out } of withOut.filter(({ out }) => out.trim())) {
-      all.push(...snapshotToLogLines(out, s.id, s.agentType));
+    // 正文还一个字都没有、只等到一条重试提示也得出:那正是最该让人看到「它卡在上游」的时候。
+    for (const { s, out, notices } of withOut.filter(({ out, notices }) => out.trim() || notices.length)) {
+      all.push(...mergeSessionNotices(snapshotToLogLines(out, s.id, s.agentType), notices, s.id));
     }
     if (currentTaskId.current !== id) return;
     setLines(all);

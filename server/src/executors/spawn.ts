@@ -8,6 +8,7 @@ import { IS_WINDOWS } from "../platform.js";
 import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins } from "./bin-resolve.js";
 import { openTrackFd, registerTrackFd } from "./kill.js";
+import { registerRootLife } from "./root-life.js";
 import { registerUnitToken, seedUnitToken } from "./unit-token.js";
 import { openConfinement, registerConfinement } from "./kernel-confine.js";
 
@@ -173,6 +174,10 @@ export function spawnAgent(
   // 两条互补 —— 那两条都可能被后代自己洗掉,这一条洗不掉。平台/环境支持不了就是 null,
   // 判定原样退回那两条。
   const confine = openConfinement(unitToken);
+  // **根这一代的下界取在 spawn 之前**(见 root-life.ts 的①):它一定不晚于根的真实出生,
+  // 当下界是安全的;晚一点就会把根自己刚生的孩子判成外人。开圈那几个系统调用排在它前面
+  // 就是为了这个 —— 下界要尽量贴着 spawn,中间不夹别的活。
+  const bornAt = Date.now();
   const child = spawn(plan.file, plan.args, {
     cwd,
     stdio,
@@ -188,6 +193,9 @@ export function spawnAgent(
   // 「集合空了」不作为证明使用(判据见 kernel-confine.ts 的 `ConfineCoverage`)。
   if (child.pid && confine?.enroll(child.pid)) registerConfinement(child, confine);
   else confine?.dispose();
+  // 「活着才取得到」的那份证据只有这一刻拿得到:根 reap 之后再去问就晚了(第 17 轮审查 F3
+  // 在 Windows 真机上实测:正常完成那条路压根建不起区间,每一次正常完成都收不回逃逸后代)。
+  registerRootLife(child, bornAt);
   teeStdout(child, opts?.teeOut);
   child.stdin?.write(prompt);
   if (!opts?.keepStdin) child.stdin?.end();

@@ -95,7 +95,9 @@ export function snapshotConversationFork(task: Task, items: ConversationItem[], 
     } else {
       parts.push(`## ${item.label}`, item.markdown);
       const execution = item.segments.flatMap((segment) => segment.events)
-        .filter((event) => event.kind !== "thinking")
+        // 思考不进上下文（太长、且不是做过的事）；提示更不进 —— 上游重试了几次跟接手的
+        // 人要做什么毫无关系，抄过去只是噪音。
+        .filter((event) => event.kind !== "thinking" && event.kind !== "notice")
         .map((event) => `${event.label}${event.detail ? `\n${event.detail}` : ""}`);
       if (execution.length) parts.push("### 已记录的执行摘要", execution.join("\n\n"));
       const paths = item.segments.flatMap((segment) => segment.attachments);

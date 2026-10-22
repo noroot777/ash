@@ -18,6 +18,20 @@ export type AgentContentSegment = {
   markdown: string;
   events: AgentAuxEvent[];
   attachments: string[];
+  /**
+   * 这一段**停在一条过程提示上**:上游在重试/还没回话,提示之后一个字都还没来。
+   *
+   * 展示层只读这一位,**别从段落的成品结构反推**「提示之后有没有恢复」。反推过两次都错在
+   * 同一个地方:正文、附件、事件在一段里是**混在一起的累积结果**,读不出谁先谁后,于是
+   * 「末段有附件」就被当成了恢复(第 3 轮审查 F2)。
+   *
+   * 两条路各有自己的事实源,都不是落盘产物的末条:
+   * - 直播:conversationLiveTurns 按**事件到达顺序**边到边记(提示置上、任何输出置回);
+   * - 刷新重建:服务端那份权威状态(`Session.awaitingUpstream`),由 markSegmentsAwaiting
+   *   落到末段上 —— trace 的正文是攒着写的,比 `.md` 慢一步,照它反推会在恢复之后继续写着
+   *   「正在重试」(第 5 轮审查 F2)。
+   */
+  awaiting?: boolean;
 };
 
 /**
@@ -39,10 +53,45 @@ export function segmentHasVisibleContent(segment: AgentContentSegment): boolean 
   return segment.events.some(isVisibleExecutionEvent);
 }
 
+/**
+ * 这一串段落此刻**还卡在上游等回话**吗 —— 折叠条上那句「正在重试」要不要常驻(用处见
+ * ExecutionSummaryLine 的 `awaiting`)。
+ *
+ * 只读归约层记下的那一位(见 AgentContentSegment.awaiting),两条路各自的来源都是**事件顺序**:
+ * 直播由 conversationLiveTurns 边到边记,刷新重建由服务端的 `Session.awaitingUpstream` 带进来。
+ * 都**不从 trace 的末条反推** —— 那份落后于正文(第 5 轮审查 F2)。
+ */
+export function awaitingUpstream(segments: AgentContentSegment[]): boolean {
+  return segments.at(-1)?.awaiting === true;
+}
+
+/**
+ * 这一条执行过程事件进段之后,这一段还在等上游吗 —— 提示置上,别的一概置回。
+ *
+ * 直播追加与落盘重建共用它(两路各算一份就会漂)。画不出来的子智能体通知也算恢复:
+ * 它同样是上游真的吐出来的东西,这一位答的是「还有没有在等」,不是「画不画得出来」。
+ */
+export const awaitingAfterEvent = (event: AgentAuxEvent): boolean => event.kind === "notice";
+
+/**
+ * 把「此刻还在等上游」这一位落到该读它的那一段上 —— 折叠条读的是**末段**(AgentTurnBody
+ * 先滤掉画不出东西的段,再取最后一段),所以就落在那一段。
+ *
+ * 唯一的调用者是重建那一路:它从服务端的 `Session.awaitingUpstream` 拿到这个事实
+ * (见那一段的注释:trace 落后于正文,照它反推会在恢复之后继续写着「正在重试」)。
+ */
+export function markSegmentsAwaiting(segments: AgentContentSegment[]): void {
+  const target = [...segments].reverse().find(segmentHasVisibleContent) ?? segments.at(-1);
+  if (target) target.awaiting = true;
+}
+
 export type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TracedContentEntry = SessionTraceEntry & {
   event: Exclude<SessionTraceEntry["event"], { kind: "usage" | "run" }>;
 };
+/** 这一条进不进执行过程的展示:`usage` 是这一轮的账、`run` 是执行器参数,两条都不是过程里的一步。 */
+const isContentEntry = (entry: SessionTraceEntry): entry is TracedContentEntry =>
+  entry.event.kind !== "usage" && entry.event.kind !== "run";
 type TracedAttachmentEntry = TracedContentEntry & {
   event: Extract<SessionTraceEntry["event"], { kind: "attachment" }>;
 };
@@ -60,6 +109,10 @@ export function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
   const text = (value: unknown): string => typeof value === "string" ? value : "";
   if (event.kind === "tool") return { kind: "tool", label: text(event.name), detail: event.detail, ...(at ? { at } : {}), ...(event.nativeWork ? { nativeWork: event.nativeWork } : {}) };
   if (event.kind === "thinking") return { kind: "thinking", label: "思考过程", detail: event.text };
+  // level:"notice" = 这条不是故障,是过程里的一句提示(上游在重试、还在等回话)。整句话
+  // 走 detail 而不是 label:label 在行内是不收缩的工具名那一格,一条几十字的提示塞进去
+  // 会把整行撑爆;detail 那一格本来就是「这一步具体在干什么」,超长自己省略。
+  if (event.level === "notice") return { kind: "notice", label: "提示", detail: text(event.message), ...(at ? { at } : {}) };
   return { kind: "error", label: text(event.message) };
 }
 
@@ -78,9 +131,7 @@ export function contentSegments(
 ): AgentContentSegment[] {
   // usage 只是这一回合的账,不是执行过程的一步 —— 漏掉这道过滤它会被 auxEvent
   // 当成未知事件渲染成一行异常。
-  const entries = traced.filter((entry): entry is TracedContentEntry => (
-    entry.event.kind !== "usage" && entry.event.kind !== "run"
-  ));
+  const entries = traced.filter(isContentEntry);
   const auxEntries = entries.filter((entry) => entry.event.kind !== "text" && entry.event.kind !== "attachment");
   const attachmentEntries = entries.filter(
     (entry): entry is TracedAttachmentEntry => entry.event.kind === "attachment",
@@ -91,12 +142,14 @@ export function contentSegments(
       markdown: fallbackMarkdown,
       events: auxEvents(auxEntries),
       attachments: attachmentEntries.map((entry) => entry.event.path),
+      // 等待状态**一律从这里出去时为假**:它不是 trace 能回答的问题(见 markSegmentsAwaiting)。
+      awaiting: false,
     }];
   }
 
   const segments: AgentContentSegment[] = [];
-  let current: AgentContentSegment = { id: `${idPrefix}:0`, markdown: "", events: [], attachments: [] };
-  const newCurrent = () => ({ id: `${idPrefix}:${segments.length}`, markdown: "", events: [], attachments: [] });
+  let current: AgentContentSegment = { id: `${idPrefix}:0`, markdown: "", events: [], attachments: [], awaiting: false };
+  const newCurrent = () => ({ id: `${idPrefix}:${segments.length}`, markdown: "", events: [], attachments: [], awaiting: false });
   const pushCurrent = () => {
     if (segmentHasVisibleContent(current)) {
       segments.push(current);
@@ -112,22 +165,25 @@ export function contentSegments(
     for (const event of current.events) previous.events = appendExecutionEvent(previous.events, event);
     current = newCurrent();
   };
-  for (const entry of entries) {
+  const place = (entry: TracedContentEntry): void => {
     if (entry.event.kind === "text") {
       current.markdown += entry.event.text;
-      continue;
+      return;
     }
     if (entry.event.kind === "attachment") {
       if (current.markdown) pushCurrent();
       if (!current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
-      continue;
+      return;
     }
     const event = auxEvent(entry.event, entry.at);
     // 画不出来的通知不另起一段(见 segmentHasVisibleContent):单独成段就是正文后面
     // 那个空 section。事件照旧挂在当前段上,抽屉那边仍取得到。
     if (current.markdown && isVisibleExecutionEvent(event)) pushCurrent();
     current.events = appendExecutionEvent(current.events, event);
-  }
+  };
+  // 分段只认进得了执行过程展示的那些事件;「此刻还在不在等」压根不在这一层算(见文件里
+  // markSegmentsAwaiting 与 AgentContentSegment.awaiting)。
+  for (const entry of entries) place(entry);
   pushCurrent();
   /* 收尾:**数据优先于布局**。整段 trace 里一个字都没有、只有画不出来的后台通知时,
      上面那条「并回上一段」无处可并(压根没有上一段),事件就卡在 current 里 —— 直接
@@ -149,6 +205,7 @@ export function contentSegments(
     markdown: fallbackMarkdown || structuredMarkdown,
     events: auxEvents(auxEntries),
     attachments: attachmentEntries.map((entry) => entry.event.path),
+    awaiting: false,
   }];
 }
 

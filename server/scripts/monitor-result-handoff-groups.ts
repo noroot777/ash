@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import {
-  complete, db, dbClient, deliverResultHandoff, insertMonitorRow, makeTask, monitors,
+  bus, complete, db, dbClient, deliverResultHandoff, insertMonitorRow, makeTask, monitors,
   monitorsBlockingComplete, now, pendingOf, scheduledMessages, sessionWithTurn, sleep, tasks,
   uniq, until,
 } from "./monitor-complete-gate-harness.js";
@@ -109,7 +109,19 @@ export async function resultHandoffGroups(): Promise<void> {
     const taskId = await makeTask();
     await sessionWithTurn(taskId, new Date(Date.now() - 60_000).toISOString());
     const monitorId = await handoffPending(taskId, "【哨兵结束】RESULT_READY。");
-    await deliverResultHandoff(monitorId);
+    // **凭证一销就得说一声**（第 3 轮审查 N2）：卡片是按这一列答「它的结果还欠着吗、还要不
+    // 要」的，而销账这一刻完全可以是这个任务**最后一次**跟哨兵有关的变化 —— 不发这一下，
+    // 「完成被它堵着」和那个「不再等它的结果」按钮就一直留在卡片上，直到用户自己刷新。
+    const announced: string[] = [];
+    const unsubscribe = bus.subscribe((ev) => {
+      if (ev.type === "task.monitors" && ev.taskId === taskId) announced.push(ev.type);
+    });
+    try {
+      await deliverResultHandoff(monitorId);
+    } finally {
+      unsubscribe();
+    }
+    assert.ok(announced.length > 0, "销掉交接凭证之后要发一次 task.monitors，否则卡片上的旧提示只能靠刷新消掉");
     assert.equal((await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0)!.resultHandoffAt, null,
       "台子前提：这一趟真的把交接做完了（凭证已销）");
     assert.match((await pendingOf(taskId)).map((m) => m.text).join(""), /RESULT_READY/, "结果真的进了托盘");

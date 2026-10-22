@@ -8,7 +8,7 @@ import { closeLeadTurns, heldTurns, holdTurn, releaseHeldTurn } from "./lead-tur
 import { IDLE_MS, createLeadStatus } from "./lead-status.js";
 import { now } from "../util.js";
 import { setTaskStatus } from "../status.js";
-import { untrackRun, takeStopped } from "../runs.js";
+import { untrackRun, takeStopped, type StopSettle } from "../runs.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import {
   LOST_SESSION_PATCH,
@@ -17,7 +17,9 @@ import {
   shouldDropSession,
 } from "../executors/session-lost.js";
 import { writeRunError, writeTurnEnd } from "../transcript.js";
-import { isSessionScopeNotice } from "../session-notice.js";
+import type { SessionTraceEvent } from "../transcript.js";
+import { isExecutionNotice, isSessionScopeNotice } from "../session-notice.js";
+import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
@@ -45,14 +47,26 @@ import {
 
 // 待命中的常驻会话冒出这几种事件 = CLI 自己又开工了(见 consume 里的补开回合)。
 //
-// 认的是 agent **这一轮的产出**:正文、思考、工具、附件、执行报错。不认 usage / context
-// —— 那两样是上一轮的收尾统计,拿它们开回合只会凭空多一颗空气泡。error 要认:后台回调
-// 回来第一件事就是报错(工具炸了、API 拒了)完全正常,不认的话这一轮会从第二条事件才开
-// 始算,回合照样被拆成两半,而且报错这段时间里空闲回收仍按「待命」在倒计时。
-// 唯一的例外是 scope:"session" 那种 —— 它说的是「这条会话作废了」,不是这一轮的产出。
-const SELF_STARTED_TURN_EVENTS: ReadonlySet<AgentEvent["kind"]> = new Set(["text", "thinking", "tool", "attachment", "error"]);
-const startsSelfTurn = (event: AgentEvent): boolean =>
-  SELF_STARTED_TURN_EVENTS.has(event.kind) && !isSessionScopeNotice(event);
+// **这个集合同时就是「会落进执行过程」的那一组**,两件事共用一个判据不是顺手:trace 的每
+// 一行都得挂在一个真实回合上,而待命期间唯一能确立回合的地方就是这里。两边各写一份的后果
+// 实测过 —— 「不算这一轮产出、但照样落 trace」的事件(上游重试提示)各自拿 now() 当回合
+// 起点,一条一个,刷新重建时它们认不回真正那一轮,被重建成正文下面一颗空回复(第 1 轮审查
+// F1)。所以往 trace 里加一种事件,就得同时承认它能开回合;不肯承认它开回合,就别让它落
+// trace。
+//
+// 逐项的理由:正文/思考/工具/附件不必解释。error 要认 —— 后台回调回来第一件事就是报错
+// (工具炸了、API 拒了)完全正常,不认的话这一轮从第二条事件才开始算,回合被拆成两半,而且
+// 报错这段时间里空闲回收仍按「待命」在倒计时。level:"notice" 的重试/等待提示同理:提示能
+// 发出来就说明上游请求已经在飞,它确实是这一轮的第一条输出。usage 认它只为闭合上面那条
+// 不变量 —— 它正常只出现在 turnEnd 之前(那时 busy 必为真,压根走不到这儿),真要抢在前面
+// 到也只可能是这一轮的事。context 两边都不要:它既不开回合也不落 trace。
+// 唯一的减项是 scope:"session"(「这条恢复会话作废了」),trace 那边同样排除,两边一致。
+type TurnOwnedEvent = Extract<AgentEvent, { kind: "text" | "thinking" | "tool" | "attachment" | "error" | "usage" }>;
+const TURN_OWNED_EVENTS: ReadonlySet<AgentEvent["kind"]> =
+  new Set<TurnOwnedEvent["kind"]>(["text", "thinking", "tool", "attachment", "error", "usage"]);
+/** 这条事件归某一个回合所有:既由它补开待命中的回合,也只有它才落 trace。 */
+const ownedByTurn = (event: AgentEvent): event is TurnOwnedEvent =>
+  TURN_OWNED_EVENTS.has(event.kind) && !isSessionScopeNotice(event);
 const RECYCLE_NOTE = (min: number, resumable: boolean) =>
   `〔系统〕调度台空闲超过 ${min} 分钟,进程已回收(待命)。`
   + (resumable
@@ -85,9 +99,21 @@ async function consume(lead: Lead): Promise<void> {
   // 漏复位其中一个就会把上一条会话的结论串到下一条上（rotation-state.ts 顶部有现场）。
   let rotation = idleRotation();
   let pendingTraceText = "";
+  // 消费循环里每一条 trace 都从这儿出去:回合身份只认 beginTurn 登记的那一个
+  // (`lead.turnStart`)。上面 ownedByTurn 已经保证「能落 trace 的事件一定先补开过回合」,
+  // 所以这里拿不到身份就说明那条不变量破了 —— 那时宁可这一行不落盘,也绝不用 now() 顶一个
+  // 假起点:假起点会把同一轮的事件散成一颗一颗空回复,刷新之后再也拼不回去(第 1 轮审查 F1)。
+  const traceInTurn = (event: SessionTraceEvent): void => {
+    const turnStart = lead.turnStart;
+    if (!turnStart) {
+      console.warn(`[ash] 团队 ${lead.taskId} 的 ${event.kind} 事件没有回合身份,这一行不落执行过程`);
+      return;
+    }
+    traceLead(lead, turnStart, event);
+  };
   const flushTraceText = () => {
     if (!pendingTraceText) return;
-    traceLead(lead, lead.turnStart ?? now(), { kind: "text", text: pendingTraceText });
+    traceInTurn({ kind: "text", text: pendingTraceText });
     pendingTraceText = "";
   };
   // 兜底:上面每个写库点都已经各自把失败咽下了(persistOrReport),这里管的是**剩下**
@@ -97,6 +123,9 @@ async function consume(lead: Lead): Promise<void> {
   try {
     for await (const event of lead.handle.events) {
       if (event.kind === "turnEnd") {
+        // 回合收口 = 这一轮不再「在等」了。常驻调度台没有 done 事件,这里是它唯一的边界;
+        // 不清的话一台答完待命的调度台会一直在手机上挂着「正在重试」(第 3 轮审查 F1)。
+        clearSessionWaiting(lead.sessId, lead);
         flushTraceText();
         await endTurn(lead);
         // 上一回合欠着的新会话凭据在这儿补:补上了,轮换事宜这才算真翻篇。
@@ -127,17 +156,22 @@ async function consume(lead: Lead): Promise<void> {
       }
       // CLI 自己开的新一轮:常驻会话里挂了后台监控/子任务的 agent,通知一到就接着干活,
       // 而 harness 一条消息都没 send 过 —— 上一个 turnEnd 已经把这台落成待命、turnStart
-      // 也清空了。不在这儿补一个回合起点,后果有两层:trace 的 turnStartedAt 只能兜底成
-      // 各自的 now(),一个回合在页面上碎成一串「1 工具」的空气泡(每条都没正文,用时还全
-      // 按会话结束时刻倒推);空闲回收计时也还在跑,一台正在干活的调度台会被当成闲置收掉。
+      // 也清空了。不在这儿补一个回合起点,后果有两层:这一轮的 trace 没有回合可挂 —— 早先
+      // 是兜底成各自的 now(),一个回合在页面上碎成一串「1 工具」的空气泡(每条都没正文,用时
+      // 还全按会话结束时刻倒推);现在 traceInTurn 宁可丢掉那一行也不编起点,于是变成执行过程
+      // 当场缺一段。另一层是空闲回收计时还在跑,一台正在干活的调度台会被当成闲置收掉。
       // 起点只能取**这一刻**(第一条输出)：自发回合没有投递口可问,上一轮收尾之后这个进程
       // 压根没有回合在跑,也就不可能有它写出来的东西落在中间那段空档里 —— 所以「不早于真实
       // 起点」的保守值在这里是安全的那个方向(漏一点,而不是把别人做的东西算进来)。有投入的
       // 那几条路一律用投入那一刻的真实起点,见 beginTurn 的注释。
-      if (!lead.busy && startsSelfTurn(event)) {
+      if (!lead.busy && ownedByTurn(event)) {
         clearIdle(lead);
         await beginTurn(lead);
       }
+      // 排在 beginTurn 之后:自发回合的第一条事件就可能是提示,回合身份得先有(见
+      // session-waiting.ts —— 没有身份的提示一律不记)。
+      // 摘牌的台一个字都不许写,内存这份同理:它的等待状态归接管的那台(同 traceLead/updateOwnSession)。
+      if (!lead.retired) trackSessionWaiting(lead.sessId, lead, lead.turnStart, event);
       if (event.kind === "text") {
         lead.out.write(event.text);
         pendingTraceText += event.text;
@@ -156,15 +190,17 @@ async function consume(lead: Lead): Promise<void> {
         // 异常；跟 duet、single-run 一样按 scope 分流,降成 system 旁注 —— 判据共用
         // ../session-notice.ts 那一个,三条链各内联一份就会改一处漏一处。
         const sessionNotice = isSessionScopeNotice(emittedEvent);
-        if (!sessionNotice
-          && (emittedEvent.kind === "thinking" || emittedEvent.kind === "tool" || emittedEvent.kind === "error" || emittedEvent.kind === "usage" || emittedEvent.kind === "attachment")) {
-          traceLead(lead, lead.turnStart ?? now(), emittedEvent);
-        }
+        // 判据就是上面那一个:能落 trace 的和能开回合的必须是同一组事件(正文走上面那条
+        // pendingTraceText,到这儿已经不可能是 text)。
+        if (ownedByTurn(emittedEvent)) traceInTurn(emittedEvent);
         // 水位相反：**覆盖**。常驻会话尤其需要它——流水一路加到几百万，只有水位能回答
         // 「这个调度台离上下文塞满还有多远」。正因为是覆盖,摘牌后就不能再写:那一行现在
         // 归接管的那台,旧进程的水位盖上去就是错的(用量是累加的真实开销,照记不误)。
         if (emittedEvent.kind === "context" && !lead.retired) await setSessionContext(lead.sessId, emittedEvent.context);
-        if (emittedEvent.kind === "error") {
+        // level:"notice" 的 error 只是过程里的一句提示（上游在重试、还在等回话）：上面
+        // 已经把它落进 trace，于是它排在执行过程里它发生的那个位置；红色诊断块与会话
+        // 轮换判定都跟它无关。判据见 ../session-notice.ts#isExecutionNotice。
+        if (emittedEvent.kind === "error" && !isExecutionNotice(emittedEvent)) {
           const previousFault = rotation.fault;
           if (sessionNotice) noteSessionNotice(lead, emittedEvent.message);
           else writeRunError(lead.out, emittedEvent.message);
@@ -190,7 +226,7 @@ async function consume(lead: Lead): Promise<void> {
                 // 把完整那句再说一遍，也不能留下一句报喜的短话。
                 const message = `已停止续跑损坏的 Codex 会话，但清理数据库恢复字段失败：${error instanceof Error ? error.message : String(error)}`;
                 writeRunError(lead.out, message);
-                traceLead(lead, lead.turnStart ?? now(), { kind: "error", message });
+                traceInTurn({ kind: "error", message });
                 publish(lead, { kind: "error", message });
                 note = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
                 rotation = onRotationNotPersisted(rotation);
@@ -385,7 +421,17 @@ async function endTurn(lead: Lead): Promise<void> {
     endIso,
   );
   // 这一回合的区间（产物归属按它认人，不按会话寿命——常驻调度台那一行从开台活到收工）。
-  await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: turnStart, endedAt: endIso });
+  // 走到这里就是**执行器自己报的「这一轮说完了」**,所以结局是 completed:进程继续待命,
+  // 它后来怎么没的(空闲回收、异常退出)属于另一件事,不许回头改写这一轮(门禁在
+  // `writeTurnRow` 的收尾合并上;后果见 db/schema-sessions.ts 的 sessionTurns.outcome)。
+  await recordTurnSpan({
+    sessionId: lead.sessId,
+    taskId: lead.taskId,
+    cwd: lead.cwd,
+    startedAt: turnStart,
+    endedAt: endIso,
+    outcome: "completed",
+  });
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead);
   // 还有回合在手：攒着的执行者汇报等它真正空下来再合并送（省一轮模型调用本来就是这么来的）,
@@ -442,15 +488,19 @@ async function closeLead(
   aborted = false,
 ): Promise<void> {
   clearIdle(lead);
+  clearSessionWaiting(lead.sessId, lead); // 这台进程没了,**自己那条**等待状态跟着撤
   untrackRun(lead.taskId, lead.handle);
   // 工作目录被抽走时我们会主动收掉旧进程、立刻开新的,旧进程的 close 事件晚一步
   // 才到 —— 它不能把已经接管的新会话摘掉,更不能把新回合的 running 改回 idle。
   // 停止标记同理:那是任务级的共享状态,被接管的一方吞掉它,真正在跑的那台收尾时
   // 就当没被停过。
   const superseded = leads.get(lead.taskId) !== lead;
+  // 「这一轮是被停的」只在内存里活一次(takeStopped 消费即清),而它必须跟退出码一起落库 ——
+  // 下面那笔收尾写入是这条链唯一的落点,见那里的注释。
+  let stopSettle: StopSettle | null = null;
   if (!superseded) {
     leads.delete(lead.taskId);
-    takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
+    stopSettle = takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
   } else {
     retireLead(lead); // 被接管的一方从此不写任何共享产物(状态/.md/trace/SSE),见 retireLead
   }
@@ -485,8 +535,20 @@ async function closeLead(
   // 进程没走 `endTurn` 就没了（异常退出、被停、被回收），手上这个回合还开着：它的区间得
   // 在这儿补一行。不补就只剩「会话结束了、最后一个回合没有记录」，产物归属读到那个缺口
   // 只能按会话寿命估，那一回合真做出来的东西要么被滤掉要么混进别人的（第 2 轮审查 F1）。
+  // 结局**只落给这些还开着的回合**:口径与下面那笔 `stoppedAs` 同源(三条受控路 = 受控停止;
+  // 事件流被掀翻或非零退出 = 这一轮真崩了)。已经收口的成功回合一个字都不会被改 —— 门禁在
+  // `writeTurnRow` 的收尾合并上,它正是 F3 那条链的闸:常驻调度台成功答完待命、后来才以非零
+  // 码退出,从前那个退出码被读成「上一轮失败」,整轮的「正在重试」重新挂回手机上。
+  const closeOutcome = (lead.closing ?? stopSettle) ? "stopped" : aborted || exitStatus !== 0 ? "failed" : "completed";
   for (const startedAt of closing) {
-    await recordTurnSpan({ sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt, endedAt: endIso });
+    await recordTurnSpan({
+      sessionId: lead.sessId,
+      taskId: lead.taskId,
+      cwd: lead.cwd,
+      startedAt,
+      endedAt: endIso,
+      outcome: closeOutcome,
+    });
   }
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
   // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。
@@ -507,6 +569,13 @@ async function closeLead(
     "调度台收尾状态",
     {
       exitStatus,
+      // **受控停止与「进程自己崩了」在退出码上一模一样**:CLI 吃 SIGTERM 后按 signal 写非零。
+      // 单飞早就为此单独落了这一列(single-run.ts),团队这条收尾路一直只写退出码,于是读端
+      // 只能拿退出码当结局 —— 用户点了「停止全组」,已经恢复过的那几条过程提示被当成失败
+      // 现场重新挂回手机上(第 4 轮审查 F1,已实测)。三条受控路(停止全组 / 工作目录被抽走 /
+      // 空闲回收)共用这一笔:`lead.closing` 就是它们各自的名字。谁来读见 session-waiting.ts
+      // 的 failedTurnNotices 与 task-retry-turn.ts。
+      stoppedAs: lead.closing ?? stopSettle,
       endedAt: endIso,
       activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
       ...(dropSession ? LOST_SESSION_PATCH : {}),

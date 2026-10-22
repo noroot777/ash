@@ -26,6 +26,7 @@ import {
   openTrackFd, registerTrackFd, shareTrackFdRegistration, shareChildIdentity, markAdoptedChild,
   killChild, killByPid, pidRunStillAlive, spawnAgent,
 } from "./spawn.js";
+import { registerRootLife, shareRootLife } from "./root-life.js";
 import {
   adoptUnitToken, registerRunOutPath, registerUnitToken, seedUnitToken,
   shareRunOutPath, shareUnitToken, unitTokenOf,
@@ -262,6 +263,7 @@ export function spawnControllableDetachedAgent(
   // 平台/环境支持不了时 `confine` 是 null、那一项不存在,脚本第一句自己就是空操作。
   const confine = openConfinement(unitToken);
   Object.assign(env, confine?.preExecEnv() ?? {});
+  const bornAt = Date.now();                      // 理由见 spawn.ts 里同一句
   const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
     cwd,
     stdio,
@@ -275,6 +277,7 @@ export function spawnControllableDetachedAgent(
   // 没跑成」那一种情形,成败不改变 coverage —— 号在不在圈里由内核自己记着。
   registerConfinement(real, confine);
   if (real.pid) confine?.enroll(real.pid);
+  registerRootLife(real, bornAt);
   // **起不来就把圈撤掉**:一条没跑起来的运行留下的圈再也没人认领(登记挂在这个被丢掉的
   // `real` 上),会一路攒到那道 24 小时的年龄门才清。圈里没成员,`rmdir` 必然成功。
   if (!real.pid) { confine?.dispose(); return failedChild(`起不来:${shq(bin)}`); }
@@ -311,6 +314,9 @@ export function spawnControllableDetachedAgent(
   // 「这个号还是不是我们的进程」会在一个已经退出的号上发信号(第 2 轮审查 F1)。真进程还
   // 握在手里,内核状态就是权威答案,所以指向它。
   shareChildIdentity(real, child);
+  // 根这一代的生命周期同样过户:区间登记在真进程上,合成品共享**同一份记录**
+  // (见 root-life.ts)—— 清理那条路拿到的是合成品。
+  shareRootLife(real, child);
   shareUnitToken(real, child);
   shareRunOutPath(real, child);
   shareConfinement(real, child);
@@ -364,6 +370,7 @@ export function spawnDetachedAgent(
   // 平台/环境支持不了时 `confine` 是 null、那一项不存在,脚本第一句自己就是空操作。
   const confine = openConfinement(unitToken);
   Object.assign(env, confine?.preExecEnv() ?? {});
+  const bornAt = Date.now();                      // 理由见 spawn.ts 里同一句
   const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
     cwd,
     stdio,
@@ -377,6 +384,7 @@ export function spawnDetachedAgent(
   // 没跑成」那一种情形,成败不改变 coverage —— 号在不在圈里由内核自己记着。
   registerConfinement(real, confine);
   if (real.pid) confine?.enroll(real.pid);
+  registerRootLife(real, bornAt);
   real.stdin?.write(prompt);
   real.stdin?.end();
 
@@ -403,6 +411,7 @@ export function spawnDetachedAgent(
   });
   shareTrackFdRegistration(real, child);
   shareChildIdentity(real, child); // 理由同上:身份以真进程的内核状态为准
+  shareRootLife(real, child);      // 根这一代的生命周期同理(见上面那条路)
   shareUnitToken(real, child);
   shareRunOutPath(real, child);
   shareConfinement(real, child);

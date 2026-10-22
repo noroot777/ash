@@ -43,6 +43,8 @@ const { processGenerationSync } = await import("../src/process-generation.js");
 const { processUnitEvidence } = await import("../src/proc.js");
 const { dbClient } = await import("../src/db/index.js");
 const { install: fakeProc, restore: realProc } = await import("./fake-proc-fixture.js");
+const { skipWithoutProcWorld } = await import("./fake-proc-fixture.js");
+if (skipWithoutProcWorld("写入交接回归")) process.exit(0);
 
 let bad = 0;
 const ok = (m: string) => console.log(`   ✓ ${m}`);

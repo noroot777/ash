@@ -26,7 +26,11 @@ export const { monitorWakeCheckpoint } = await import("../src/monitor-session.js
 export { uniq } from "./monitors-fixture.js";
 export const { redeliverResultHandoffs } = await import("../src/monitor-reattach.js");
 export const { monitorsBlockingComplete } = await import("../src/task-complete-monitors.js");
+/** 界面上那个「停掉这个哨兵」按钮落到服务端的那一层（路由只在它前面加了一道 kind 判断）。 */
+export const { stopMonitorChecked } = await import("../src/monitor-stop.js");
 export const { deliverResultHandoff } = await import("../src/monitor-events.js");
+/** 界面那一侧的唯一通路:卡片靠 `task.monitors` 重读（第 3 轮审查 N2 要数这一下）。 */
+export const { bus } = await import("../src/bus.js");
 /** 底层 libsql 客户端：F1 的结构锁要数「闸到底发了几条语句」，只能从这一层看。 */
 export const { dbClient } = await import("../src/db/index.js");
 

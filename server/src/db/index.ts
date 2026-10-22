@@ -136,7 +136,10 @@ export async function ensureSchema() {
       -- 可空：null = 这一回合开始了还没收口（见 schema.ts 上那段注释）。唯一索引
       -- （session_id, started_at）由 migrate-session-turns.ts 在去重之后建——老库里可能
       -- 已经有重复行，在这里建会抛，而这一段抛出去就是整台 ash 起不来。
-      ended_at TEXT
+      ended_at TEXT,
+      -- 这一回合**自己**的结局（completed/failed/stopped）。可空：存量行与收尾没落成的行都是
+      -- null = 「不知道」，读端据此不给失败现场（见 schema.ts 上那段注释）。
+      outcome TEXT
     );
     CREATE INDEX IF NOT EXISTS session_turns_task_idx ON session_turns(task_id, started_at);
     CREATE INDEX IF NOT EXISTS session_turns_session_idx ON session_turns(session_id, started_at);
@@ -157,7 +160,8 @@ export async function ensureSchema() {
       source_review_run TEXT, source_review_round INTEGER,
       unit_token TEXT, ended_by TEXT,
       results_abandoned_at TEXT, results_abandoned_reason TEXT,
-      result_handoff_at TEXT, result_handoff_text TEXT
+      result_handoff_at TEXT, result_handoff_text TEXT,
+      stop_when TEXT, hit_line TEXT
     );
     CREATE INDEX IF NOT EXISTS monitors_task ON monitors(task_id);
     CREATE TABLE IF NOT EXISTS monitor_reclaim_debts (
@@ -382,6 +386,15 @@ export async function ensureSchema() {
     // 审查 F1-A)。少了它,清扫侧用另一套设备的「没有」就把这份责任洗掉了。存量行 NULL =
     // 没点名过谁,判据退回原来那几台设备。
     "ALTER TABLE agent_cleanup_debts ADD COLUMN open_members TEXT",
+    // 约定的结束条件(哪一行一出现就收工)。命令自己永不退出的那一类必须二选一:给这一列,
+    // 或显式声明「就是要盯到到期」—— 否则创建当场 409(见 shared/src/monitor-end-condition.ts)。
+    // 存量行 NULL = 没约定过,它们照旧只能等到期,这一列不改写任何既有事实。
+    "ALTER TABLE monitors ADD COLUMN stop_when TEXT",
+    // **已经确认过的那一行命中**。它跟读取位置是一件事的两半:位置一旦推过那一行,那行就再也
+    // 不会被重读,于是「字样到了」这个事实必须跟位置同一次落库 —— 只记在内存里的话,收尾中途
+    // 失败一次就把它丢了,重试时两份来源都是空的,结局被写成「它已经不在了」(第 2 轮审查 N1)。
+    // 存量行 NULL = 没命中过(或者当初没记),读的那一侧照旧按日志重算。
+    "ALTER TABLE monitors ADD COLUMN hit_line TEXT",
     "ALTER TABLE monitor_reclaim_debts ADD COLUMN unit_token TEXT",
     // 「线索追到这里为止」的戳。**不是销账**:整项退出在当前平台证不出,所以行留着只盖戳
     // (见 schema-monitors.ts 的 closed_at、第 13 轮审查 F1-B)。存量行 NULL = 还在追。
@@ -420,6 +433,8 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN turns_base INTEGER",
     "ALTER TABLE sessions ADD COLUMN turns_base_approx INTEGER",
     "ALTER TABLE sessions ADD COLUMN turns_lost INTEGER",
+    // 每个回合自己的结局。存量行 NULL = 不知道（见 schema.ts 的 sessionTurns.outcome）。
+    "ALTER TABLE session_turns ADD COLUMN outcome TEXT",
     "ALTER TABLE tasks ADD COLUMN use_worktree INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
     "ALTER TABLE tasks ADD COLUMN worktree_start_commit TEXT",
@@ -465,6 +480,10 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN active_turn_token TEXT",
     "ALTER TABLE tasks ADD COLUMN active_direction_token TEXT",
     "ALTER TABLE tasks ADD COLUMN active_direction_version INTEGER NOT NULL DEFAULT 0",
+    // 方向世代：回合起跑和方向轮换各 +1,永不归零 —— 上面那三列离开运行态就被清空,迟到的
+    // 回滚于是分不清「我那一轮已结束」和「后来又跑完了另一轮」(第 4 轮审查 F1-B)。存量行 0
+    // 而不是 NULL:它要参与 `=` 比较,NULL 谁也不等于谁,那样连正常的回滚也会被判成过期。
+    "ALTER TABLE tasks ADD COLUMN direction_epoch INTEGER NOT NULL DEFAULT 0",
     // 正交验收阶段，只用于展示与协作，不进入 TaskStatus 调度/结算
     "ALTER TABLE tasks ADD COLUMN stage TEXT",
     // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序
@@ -532,6 +551,7 @@ export async function ensureSchema() {
     // 同一个哨兵还没送出去的事件合并进同一行（一次唤醒看完全部，而不是一行一个回合），
     // 投递时标 byBackend 让它在会话里显示成系统代写而不是用户发言。
     "ALTER TABLE scheduled_messages ADD COLUMN origin TEXT",
+    "ALTER TABLE scheduled_messages ADD COLUMN monitor_wake TEXT",
     // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
     "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",

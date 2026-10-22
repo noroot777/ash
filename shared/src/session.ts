@@ -42,6 +42,20 @@ export interface Session {
   stoppedAs?: string | null;
   // 这一轮是旁路回合（审查 / 就地验证 / 斜杠命令），不是任务本体的执行。
   sideTurn?: boolean;
+  /**
+   * 这条会话**此刻**还卡在上游等回话吗 —— 服务端那份权威状态(server/src/session-waiting.ts)
+   * 按回合身份判出来的一位,不是数据库里的列。
+   *
+   * 为什么要带在会话行上:读端**不许从落盘产物反推**。正文先写 `.md`,要到下一条非正文事件
+   * 才冲进 trace(single-run 与 team 的 pendingTraceText 都是这个缓冲),于是刷新重建照 trace
+   * 的末条判,会在用户已经读到恢复回答之后继续写着「正在重试」,直到下一条事件才消(第 5 轮
+   * 审查 F2,已实测)。直播那一路本来就按事件顺序维护同一件事,这一位让**初始快照**跟它共用
+   * 同一个事实源。
+   *
+   * 缺省/undefined = 这份快照来自不提供它的地方(接力过来的远端快照、历史客户端),按「不在等」
+   * 处理;ash 重启后在飞的那一轮也会落回这一档(见 session-waiting.ts 的开头)。
+   */
+  awaitingUpstream?: boolean;
   // 这条会话行累计的 token 用量(会话可复用,跨多个回合累加)。null = 这家 CLI
   // 不报账,或这条会话建在该功能之前 —— 两种都不该显示成 0。
   usage: TokenUsage | null;
@@ -49,4 +63,24 @@ export interface Session {
   // 个概念(见 shared/src/usage.ts)。null = 没采到(那家 CLI 不给,或会话建在该功能
   // 之前)。
   context: ContextUsage | null;
+}
+
+/**
+ * 一条**过程提示**:上游在重试、还在等回话。`GET /sessions/:id/notices` 的元素。
+ *
+ * 这些提示的正本在 `<sessId>.trace.jsonl`（`level:"notice"` 的 error 事件），所以执行过程
+ * 面板里它们排在发生的那一步下面。独立出这个窄出口只为**读不动整份 trace 的消费者**:
+ * 手机端每几秒重拉一次,而 trace 连工具的完整输入输出一起落盘,真实库里最大的一份 8 MB、
+ * 对应的 `.md` 只有 8 KB。
+ *
+ * 这个出口给的只有两种(判据见 server 的 `session-waiting.ts`):**此刻还在等**的那几条,
+ * 和**这一轮真收在失败上**时的失败现场。提示之后上游又吐了东西 = 这一轮正常往下走了,
+ * 那条提示在这里就该消失 —— 手机端压根不渲染执行过程,没有「排在它发生的那一步下面」这个
+ * 位置可给,留着只会堆在会话结尾,那正是要治的病。
+ */
+export interface SessionNotice {
+  at: string; // 这条提示发生的时刻
+  /** 它属于哪一回合:`sessions.turnStartedAt`,也就是 trace 的分组键。 */
+  turnStartedAt: string;
+  text: string;
 }

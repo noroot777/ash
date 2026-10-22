@@ -113,7 +113,10 @@ export async function stopMonitor(monitorId: string, reason = "被停掉了"): P
     if (row.status === "running") {
       // 用户/agent 主动停的不回推收尾事件：他就是为了不再被它叫醒才点的停。但已经攒在缓冲里
       // 的行要照常推完——那是已经发生的事实，而且任务还活着，收得下。
-      await finish(monitorId, "stopped", reason, null, { notify: false, endedBy: "actor" });
+      // `abandon`:上面那句 `abandonResults` 已经把「它还没送到的结果我不要了」落了库,所以
+      // 这一跳不欠投递 —— 它**不为在跑的另一笔收尾等着**(见 monitors.ts 的 `finishing`)。
+      // 「停止赢了就是赢了」要的正是这个:点停必须整跳落定,而那一笔可能正卡在一笔库操作上。
+      await finish(monitorId, "stopped", reason, null, { notify: false, endedBy: "actor", abandon: true });
       const after = (await db.select().from(monitors).where(eq(monitors.id, monitorId))).at(0);
       return toTaskMonitor(after ?? row);
     }

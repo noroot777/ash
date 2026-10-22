@@ -167,6 +167,11 @@
 .task-execution-label { max-width: min(58vw, 520px); overflow: hidden; font-weight: 450; text-overflow: ellipsis; white-space: nowrap; }
 .task-execution-block.has-error > summary { color: color-mix(in srgb, var(--red) 68%, var(--faint)); }
 .task-execution-block.has-error .t-shimmer { --shimmer-base: color-mix(in srgb, var(--red) 52%, transparent); --shimmer-highlight: color-mix(in srgb, var(--red) 72%, transparent); }
+/* 过程提示（上游在重试、还在等回话）：折起来时也得看得出这一轮里上游闹过脾气，但它
+   跟「出了岔子」不是一回事 —— 琥珀比红色轻一档，而且 has-error 在类名上就压着它
+   （executionBlockTone 只给其中一个）。 */
+.task-execution-block.has-notice > summary { color: color-mix(in lch, var(--amber) 42%, var(--faint)); }
+.task-execution-block.has-notice .t-shimmer { --shimmer-base: color-mix(in lch, var(--amber) 34%, transparent); --shimmer-highlight: color-mix(in lch, var(--amber) 58%, transparent); }
 .task-execution-pulse { width: 3px; height: 3px; flex: none; border-radius: 50%; background: currentColor; opacity: .72; }
 .task-execution-events { margin: 1px 0 1px 7px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); padding: 1px 0 2px 6px; }
 /* 回合级折叠：折起来只剩最后一次工具动作之后说的话。摘要条沿用执行块那身小字，
@@ -191,6 +196,12 @@
 .task-tool-line summary:hover .task-tool-summary { color: var(--muted); }
 .task-tool-line pre { max-height: 220px; overflow: auto; margin: 4px 0 2px 6px; border-left: 2px solid var(--line); padding: 4px 8px; white-space: pre-wrap; }
 .task-tool-line--error { color: var(--red); }
+/* 「提示 · 上游返回 502 …」那一行。正文在 .task-tool-summary 那一格（会省略、会等宽），
+   所以这里只负责把整行调成琥珀，别再单独给 name 上色把两段割开。 */
+.task-tool-line--notice { color: color-mix(in lch, var(--amber) 30%, var(--faint)); }
+.task-tool-line--notice .task-tool-summary { color: color-mix(in lch, var(--amber) 26%, var(--faint)); }
+.task-tool-line--notice summary:hover,
+.task-tool-line--notice summary:hover .task-tool-summary { color: color-mix(in lch, var(--amber) 52%, var(--muted)); }
 /* 一条气泡的尾栏：会话 id、resume 命令、三颗账目胶囊全在这一行。 */
 .task-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
 .task-message-footer button { max-width: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }

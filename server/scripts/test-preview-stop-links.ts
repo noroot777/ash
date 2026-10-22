@@ -8,8 +8,8 @@ import { mock } from "node:test";
 import { db } from "../src/db/index.js";
 import { projects, sessions } from "../src/db/schema.js";
 import { createTasks } from "../src/task-store.js";
-import { isPidAlive } from "../src/platform.js";
-import { killByPid } from "../src/executors/spawn.js";
+// 收尾用 killTree 而不是 killByPid,理由见 test-accept-cleanup.ts 里 platform 那行上方。
+import { isPidAlive, killTree } from "../src/platform.js";
 import { readAnyPreview, writeRecord } from "../src/preview-store.js";
 import { hasPendingPreviewStops, retryPreviewStops, stopPreviewProcesses } from "../src/preview-process-stop.js";
 import { stopPreview, sweepPreviews } from "../src/preview.js";
@@ -113,7 +113,7 @@ export async function testPreviewStopLinks(root: string): Promise<void> {
       syncBuiltinESMExports();
       for (const child of children) {
         if (child.exitCode !== null || child.signalCode !== null) continue;
-        killByPid(child.pid!);
+        killTree(child.pid!, "SIGKILL");
         await Promise.race([once(child, "exit"), new Promise(resolve => setTimeout(resolve, 4000))]);
       }
     }

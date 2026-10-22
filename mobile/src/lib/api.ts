@@ -8,6 +8,7 @@ import type {
   Task,
   TaskListItem,
   Session,
+  SessionNotice,
   AgentExecutorProfile,
   AgentType,
   Schedule,
@@ -257,6 +258,9 @@ export const api = {
 
   sessions: (taskId: string): Promise<Session[]> => req(`/tasks/${taskId}/sessions`).then(j),
   sessionOutput: (id: string): Promise<string> => req(`/sessions/${id}/output`).then((r) => r.text()),
+  // 过程提示(上游在重试、还在等回话)。它们的正本在 trace 里,手机端读不动整份 trace,
+  // 所以走这个窄出口 —— 理由见 shared 的 SessionNotice。
+  sessionNotices: (id: string): Promise<SessionNotice[]> => req(`/sessions/${id}/notices`).then(j),
   duetTranscript: (taskId: string): Promise<DuetTranscriptEntry[]> => req(`/tasks/${taskId}/duet`).then(j),
 
   // —— 分组(并行/串行批次):列表/增删改 + 整组运行/暂停。group 无 archived,删除只解绑成员。

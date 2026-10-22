@@ -222,7 +222,7 @@ console.log("\n3) 记号认下的成员:确证过那一刻就是唯一的窗口"
 
 // ── 第四节:那条链的端到端(exec 洗掉记号之后,行不许被销掉)──────────────────────
 console.log("\n4) 落到债行上:记号这一刻认下、下一刻答 none,行不许被删");
-{
+procWorld: {
   // 第三节证的是代数,这一节证**接线**:清扫那一步(`pushDebtLocked`)把这一轮确证过的成员
   // 交给了判定。反事实 —— 把那份名单从判定的入参里拿掉 —— 这一组会红:记号那一问答 none、
   // 路径没线索、根那一问有正面退出证明 ⇒ 行被真的 DELETE,而那个进程还在跑。这正是审查
@@ -233,6 +233,9 @@ console.log("\n4) 落到债行上:记号这一刻认下、下一刻答 none,行�
   // 那一份**(见那份夹具的顶注:它证的是「这套取证逻辑在 exact 档上的行为」,不是在原生
   // Linux 上压出了 pid 复用)。剧本就是 `exec` 那一下:第一遍扫描读到记号(`ours`),之后
   // 再也读不到(`none`),而 pid 和那一代一个字没变 —— 所以它核销不掉。
+  const { skipWithoutProcWorld } = await import("./fake-proc-fixture.js");
+  // 这一节(且只有这一节)要 `/proc` 世界;同一份文件里的 Windows 路径语义那节照跑。
+  if (skipWithoutProcWorld("exec 洗记号那一节")) break procWorld;
   const { install: fakeProc, restore: realProc, counters } = await import("./fake-proc-fixture.js");
   const { processUnitEvidence } = await import("../src/proc.js");
   const key = "unit:ownership-exec";
