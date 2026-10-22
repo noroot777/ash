@@ -132,10 +132,14 @@ function sharedHolder(): { proc: ChildProcess; dead: boolean } | null {
       "-NoProfile", "-NonInteractive", "-EncodedCommand",
       Buffer.from(serveScript(), "utf16le").toString("base64"),
     ], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
-    if (!proc.pid) return null;
+    // **监听先挂,再判号**。PATH 里没有 `powershell` 时 `spawn` 不抛:它返回一个没有 pid 的
+    // 句柄,然后在下一个 tick 发 `error`(ENOENT)。上一版在那之前就 `return null` 了,
+    // 于是那个事件没有监听器 —— node 把它升级成未捕获异常,**整个 server 当场退出**,而
+    // 这台设备本该做的只是弃权。实测触发点:把平台伪造成 win32 的回归在 macOS 上跑生产路径。
     const box = { proc, dead: false };
     proc.once("exit", () => { box.dead = true; });
     proc.once("error", () => { box.dead = true; });
+    if (!proc.pid) { box.dead = true; return null; }
     proc.stdin?.on("error", () => { box.dead = true; });
     proc.stdout?.on("data", () => { /* 读空管道而已:真正的就绪信号在盘上(见 readyPath) */ });
     proc.unref();
