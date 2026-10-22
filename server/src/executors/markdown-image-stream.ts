@@ -82,6 +82,14 @@ type Ledger = {
   noted: Map<number, string>;
   /** 全文里最近一个 `![` 的起点(-1 = 还没有)。freezeTail 的免扫闸:增量维护,别回头找。 */
   bang: number;
+  /**
+   * **最早**一个还没定论的 `![`(-1 = 没有)。一处图片节点自己比窗口还长(9 KB 的 title/alt)
+   * 时,放慢档的窗口封底会把节点开头切掉 —— 窗口里认不出候选推不出「这一片没有完整引用」
+   * (审查第 8 轮 R2)。回看跟着它越过封底;定论(冻结过、定型线越过它、交代线越过它)就清。
+   */
+  open: number;
+  /** open 回看的节流游标:上次从 open 起解析时的全文长度 —— 再长 1/8 才值得再回看一次。 */
+  openScanned: number;
   /** 交代到这个绝对偏移为止了:起点在它之前的引用不再发第二遍。 */
   emitted: number;
   /** 有「语法已定型、还没交代过」的引用在等着 —— 下一条事件进流时就把它交代出去。 */
@@ -224,6 +232,8 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
       decided: new Set(),
       noted: new Map(),
       bang: -1,
+      open: -1,
+      openScanned: 0,
       emitted: carried,
       due: false,
     };
@@ -291,6 +301,18 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     let from = Math.min(ledger.scanned, ledger.text.length);
     for (const start of ledger.waiting.keys()) if (start < from) from = start;
     from = Math.max(from, ledger.text.length - SCAN_WINDOW, 0);
+    // 一处图片节点**自己**比窗口还长(9 KB 的 title):封底会把节点开头切掉,这一片在切片里
+    // 认不出候选 —— 但推不出「这一片没有完整引用」(审查第 8 轮 R2 实测:RED 拍成 BLUE)。
+    // 还没定论的最早 `![` 必须整个进切片,所以回看允许越过封底。成本由节流兜住:这一片得
+    // 真带收尾字符(`)` 或 `]`),且自上次回看后全文又长了 1/8,总解析量仍然线性。
+    if (
+      ledger.open >= 0 && ledger.open < from
+      && /[)\]]/.test(fresh)
+      && (ledger.text.length - ledger.openScanned) * SCAN_SLACK >= ledger.text.length - ledger.open
+    ) {
+      from = ledger.open;
+      ledger.openScanned = ledger.text.length;
+    }
     // 回看范围里连 `![` 都没有、也没有人等定义:这一片不值得切 8 KB 出来解析。光靠上面的
     // 字符闸拦不住普通散文(换行到处都是),没有这一道,纯正文的放慢档每片都白付一个窗口。
     if (ledger.bang < from && !ledger.waiting.size) return;
@@ -320,6 +342,9 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
       if (destination && !spots.has(start)) spots.set(start, { destination, start, end: entry.end });
     }
     if (spots.size) freeze(ledger, [...spots.values()]);
+    // 定论之一:它的字节已经冻上了(整节点进过切片、或定义到了由等待那条路解开)。没冻上就
+    // 留着 —— 文件还没生成时每次回看都值得再试,节流保证这不会变成每片一个窗口。
+    if (ledger.open >= 0 && ledger.snapshots.has(ledger.open)) ledger.open = -1;
   };
 
   /**
@@ -365,6 +390,12 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     const at = text.lastIndexOf("![");
     if (at >= 0) ledger.bang = seam + at;
     else if (text[0] === "[" && ledger.text[seam - 1] === "!") ledger.bang = seam - 1;
+    if (ledger.open < 0) {
+      const first = text.indexOf("![");
+      if (first >= 0) ledger.open = seam + first;
+      else if (text[0] === "[" && ledger.text[seam - 1] === "!") ledger.open = seam - 1;
+      if (ledger.open >= 0) ledger.openScanned = ledger.open;
+    }
     const window = ledger.text.length - ledger.base;
     const fresh = ledger.text.length - ledger.scanned;
     // 这一窗已经畸形地大了(一个块自己就比窗口长):按比例放慢,见 SCAN_SLACK。放慢的只是
@@ -416,6 +447,12 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
       ledger.waiting.set(candidate.start, { identifier: candidate.identifier, end: candidate.end });
     }
     const resolved = resolveWaiting(ledger, open);
+    // 最早未定论 `![` 的另外几条出路:定型线越过它(settled 的语法里它要么已是节点并被上面
+    // 冻结,要么根本不是图,围栏里的示例就归这档)、字节已冻结、或交代线已越过。
+    if (
+      ledger.open >= 0
+      && (ledger.open < scan.boundary || ledger.snapshots.has(ledger.open) || ledger.open < ledger.emitted)
+    ) ledger.open = -1;
     // 有「语法已定型、还没交代过」的引用了吗 —— 有才值得去跑权威那一遍整篇扫描。整篇扫描
     // 是 O(全文):按段落跑等于 O(n²),按**图片**跑才是对的(一份文档里的图是个小数)。
     const pendingShown = (slot: ImageSlot) => slot.end <= ledger.settled && slot.start >= ledger.emitted;
@@ -495,6 +532,8 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     ledger.decided.clear();
     ledger.noted.clear();
     ledger.bang = -1;
+    ledger.open = -1;
+    ledger.openScanned = 0;
     ledger.emitted = 0;
   };
 

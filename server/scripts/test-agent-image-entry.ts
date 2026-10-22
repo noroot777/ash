@@ -446,6 +446,28 @@ try {
     assert.ok(elapsed < 3000, `纯正文 ${total} 字(${piece.length} 字一片)花了 ${Math.round(elapsed)}ms,应在毫秒级`);
   }
 
+  // ⑭ **图片节点自己比窗口还长**(审查第 8 轮 R2 实测 tail-window:RED 拍成 BLUE)。
+  //
+  // 10 万字未闭合长段把窗口推进放慢档,接着一片里到来一处带 9000 字 title 的合法图片。
+  // 节点总长越过一个窗口:封底把节点开头切出切片之外,这一片里认不出任何候选 —— 上一版
+  // 据此直接返回,字节一直等到整篇重扫,文件那时已经重拍成蓝的。回看必须能越过封底跟到
+  // 最早没定论的 `![`,整个节点进切片,当场拍下红图。
+  const wide = join(root, "output", "wide.png");
+  writeFileSync(wide, red);
+  const wideEvents = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "铺垫".repeat(50000) + "\n" } as AgentEvent;
+    yield { kind: "text", text: `修改前是红色：![修改前](output/wide.png "${"说明".repeat(4500)}")\n` } as AgentEvent;
+    writeFileSync(wide, blue);
+    yield { kind: "tool", name: "exec", detail: "重拍蓝色" } as AgentEvent;
+    yield { kind: "text", text: "\n修改后是蓝色：![修改后](output/wide.png)\n\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(wideEvents).map((event) => colorOf(event.path)),
+    ["RED", "BLUE"],
+    "节点自己比窗口长:回看越过封底,开头不被切掉,字节仍按说到它那一刻拍",
+  );
+
   console.log("协议入口记账与文档身份回归通过");
 } finally {
   rmSync(root, { recursive: true, force: true });
