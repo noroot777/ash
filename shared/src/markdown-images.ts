@@ -332,6 +332,17 @@ export type MarkdownDefinition = {
   end: number;
   /** 这条定义指到哪儿(解析树给的目的地,已经解过转义与折行)。 */
   destination: string;
+  /**
+   * 这条定义**写完了吗** —— 它的源码后面还有别的字(或者正文以换行收尾)才算写完。
+   *
+   * 定义行是流式正文里唯一「目的地由裸文字收尾」的构造:`[r]: partial.svg` 这一刻解析
+   * 出来是一条完整定义,下一片补个 `?v=1` 它就变成另一个目的地。没写完的定义只配用来
+   * **提前冻结字节**(目的地多半已经完整,猜错的代价只是多一份没人认领的拷贝);把它当
+   * 真的收进定义表、据它交代引用,等后文把目的地改掉,已交代的来源就跟整篇正文对不上
+   * (审查第 7 轮 R2:正文指向 `partial.svg?v=1`,交代出去的却是 `partial.svg`,前端
+   * 对不上记录只好退回工作目录,画出重拍后的新图)。
+   */
+  terminated: boolean;
 };
 
 export type MarkdownScan = {
@@ -373,6 +384,7 @@ export function scanMarkdownImages(text: string): MarkdownScan {
         start: span[0],
         end: span[1],
         destination: node.url ?? "",
+        terminated: span[1] < text.length || /\n$/.test(text),
       });
     }
   }

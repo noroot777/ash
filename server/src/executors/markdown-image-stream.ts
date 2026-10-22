@@ -42,6 +42,8 @@ type ImageSlot = ImageRefSpot & { end: number };
  * 脚注都是整篇文档的,两份文档的正文一个字都不能混进同一笔账里扫。
  */
 type Ledger = {
+  /** 这份文档的身份:主会话 null,子智能体 = 它的 id。持久账(MarkdownImageSpot.doc)用它。 */
+  key: string | null;
   /** 这一笔账的结果怎么回到事件流:主会话一条 attachment,子智能体裹一层 activity。 */
   wrap: (image: PersistedMarkdownImage) => AgentEvent;
   /** 按内容寻址的落盘账本 **按文档分开**:`ref` 是「这份文档里第几条结果」,配对只认它。 */
@@ -76,6 +78,10 @@ type Ledger = {
   waiting: Map<number, { identifier: string; end: number }>;
   /** 已经不再等待的起点:定义到了、字节也冻结过,别让后面的扫描把它重新排回队。 */
   decided: Set<number>;
+  /** 已经记过**临时账**的起点 → 当时记的目的地(目的地变了要再记一笔),见 freeze。 */
+  noted: Map<number, string>;
+  /** 全文里最近一个 `![` 的起点(-1 = 还没有)。freezeTail 的免扫闸:增量维护,别回头找。 */
+  bang: number;
   /** 交代到这个绝对偏移为止了:起点在它之前的引用不再发第二遍。 */
   emitted: number;
   /** 有「语法已定型、还没交代过」的引用在等着 —— 下一条事件进流时就把它交代出去。 */
@@ -134,7 +140,40 @@ export type MarkdownImageSink = {
   dispose(): void;
 };
 
-export function markdownImageSink(cwd?: string): MarkdownImageSink {
+/**
+ * 一条**消费者之外**的账目:这份文档(`doc`,主会话为 null)里 `pos` 处的引用指向 `source`。
+ *
+ * 为什么要有这条账:交代出去的 attachment 事件只活在**消费者**手里 —— 它取走事件、写进
+ * trace,这条关系才落盘。消费者半路死掉(落库抛错、进程被杀)时,uploads 里那份字节还在
+ * (dispose 不删已露过脸的),可「它是哪份文档哪一处引用的」这层关系只存在于内存,刷新后
+ * 重建的那一页只能提示「图取不到」(审查第 7 轮 R3)。`note` 由服务端接到持久账本上
+ * (agent-image-journal.ts),重建时跟 trace 合并,这层关系就不再跟消费者同生共死。
+ */
+export type MarkdownImageSpot = {
+  doc: string | null;
+  /** 引用在这份文档全文里的绝对起点 —— 临时账与最终账靠它对上同一处。 */
+  pos: number;
+  source: string;
+  /** 最终账才有:这份文档里第几条结果(展示端配对认的身份)。 */
+  ref?: number;
+  path?: string;
+  lost?: boolean;
+  /** false = 字节刚冻结(临时账,随时会被最终账覆盖);true = 已经作为事件交代出去。 */
+  final: boolean;
+};
+
+/** 续聊/接管时一份子文档在**之前的进程**里已经写下的正文和用掉的身份数。 */
+export type MarkdownImageSeedDoc = { text: string; refs: number };
+
+export type MarkdownImageAccounting = {
+  /** 每出一条值得持久化的账(临时的冻结、最终的交代)就叫一声。必须自己兜住异常。 */
+  note?: (record: MarkdownImageSpot) => void;
+  /** 子文档 id → 它之前的状态。子文档跨进程累加(见 Ledger 注释),不接上就会重新发号。 */
+  seed?: ReadonlyMap<string, MarkdownImageSeedDoc>;
+};
+
+export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccounting): MarkdownImageSink {
+  const note = accounting?.note;
   // 解析器自己挂上来的附件(工具结果截图):同一份拷贝不铺两张卡片。正文引用来的那些
   // **不能**按路径去重 —— 重拍过的两处引用字节可能一样,但它们是两处引用(审查第 1 轮 F1)。
   const passed = new Set<string>();
@@ -149,20 +188,41 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
     const key = id ?? "";
     const existing = ledgers.get(key);
     if (existing) return existing;
+    // 续聊/接管:这份子文档在**上一条进程**里写过的正文和用掉的身份,从种子接回来。种子
+    // 区间一个字节都不再碰(emitted 直接越过它),但定义表和「第几条结果」的起算点必须在
+    // —— 不接,重开后的第一处引用又从 0 号发起,跟刷新后按 trace 重建的那份撞身份,展示端
+    // 按「来源+身份」夹掉一条,两处引用一起「图取不到」(审查第 7 轮 R2);它引用上一段的
+    // 定义时也认不出来。主会话不走种子:它一回合一份文档,续聊本来就是新一回合。
+    const seeded = id !== null ? accounting?.seed?.get(id) : undefined;
+    const seen = imageStore();
+    const definitions = new Map<string, string>();
+    if (seeded) {
+      seen.refs = seeded.refs;
+      // 种子是历史正文,定义「还在写」的风险只有最后一行那一条,而它续写的概率约等于零;
+      // 漏收的代价(字节拍成晚的)远大于误收的(多读一次盘),所以收尾与否都收。
+      for (const definition of scanMarkdownImages(seeded.text).definitions) {
+        if (!definition.destination) continue;
+        if (!definitions.has(definition.identifier)) definitions.set(definition.identifier, definition.destination);
+      }
+    }
+    const carried = seeded?.text.length ?? 0;
     const ledger: Ledger = {
+      key: id,
       wrap: id === null
         ? (image) => ({ kind: "attachment", ...image })
         : (image) => childActivity(id, { kind: "attachment", ...image }),
-      seen: imageStore(),
-      text: "",
-      base: 0,
-      scanned: 0,
-      settled: 0,
+      seen,
+      text: seeded?.text ?? "",
+      base: carried,
+      scanned: carried,
+      settled: carried,
       snapshots: new Map(),
-      definitions: new Map(),
+      definitions,
       waiting: new Map(),
       decided: new Set(),
-      emitted: 0,
+      noted: new Map(),
+      bang: -1,
+      emitted: carried,
       due: false,
     };
     ledgers.set(key, ledger);
@@ -188,32 +248,76 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
     for (const path of captureMarkdownImages(slots, ledger.seen, ledger.snapshots, { cwd })) captured.add(path);
     for (const slot of slots) {
       if (slot.end > ledger.settled) continue;
-      const path = ledger.snapshots.get(slot.start)?.path;
-      if (path) exposed.add(path);
+      const snapshot = ledger.snapshots.get(slot.start);
+      if (!snapshot?.path) continue;
+      exposed.add(snapshot.path);
+      // 语法已经认下它 = 这段正文已经(或马上会)出现在屏幕上:这一刻就记一笔**临时账**。
+      // 等到交代那一刻才记的话,消费者在两者之间死掉,字节和正文的关系就只剩内存里那份。
+      // 同一处只记一次;目的地变了(还在写的定义行后来接长了)就按新目的地再记,合账取最后。
+      if (note && ledger.noted.get(slot.start) !== snapshot.destination) {
+        ledger.noted.set(slot.start, snapshot.destination);
+        note({ doc: ledger.key, pos: slot.start, source: snapshot.destination, path: snapshot.path, final: false });
+      }
     }
   };
 
   /**
-   * 放慢期间也不许漏掉字节:只扫**新来那一截**,把语法已经完整的那几处先拍下来。
+   * 放慢期间也不许漏掉字节:解析**末尾这一截**,把这一刻能认出来的引用先拍下来。
    *
    * 为什么需要这一道:SCAN_SLACK 让重解析的频率跟窗口大小成正比,于是一个块自己就比窗口
    * 长的时候(没有空行的长段、长表格),这一截里那张图要等后面一万多字才重解析一遍 ——
-   * 中间文件被重拍过,拍到的就是后来那张,正是 R1 要钉死的那条「字节版本由后面的时点决定」。
+   * 中间文件被重拍过,拍到的就是后来那张,正是「字节版本由后面的时点决定」那一类。
    *
-   * 新来那一截没有上下文(前面可能开着一个围栏),所以它的结论一律按**投机**办:只拍字节,
-   * `settled`、`waiting`、`scanned` 一个都不动,语法最后不认的那几份由 dispose 当垃圾清掉。
-   * 坐标按绝对位置算,跟窗口那一遍对得上,于是同一处引用只读盘一次 —— 早拍下的那一份
-   * (正确的那一份)不会被后来那一遍洗掉(见 captureMarkdownImages 的单调性)。
+   * 这一截没有上下文(前面可能开着一个围栏),所以它的结论一律按**投机**办:只拍字节,
+   * `settled`、`waiting`、`scanned`、定义表一个都不动,语法最后不认的那几份由 dispose 当
+   * 垃圾清掉。坐标按绝对位置算,跟窗口那一遍对得上,于是同一处引用只读盘一次 —— 早拍下的
+   * 那一份(正确的那一份)不会被后来那一遍洗掉(见 captureMarkdownImages 的单调性)。
+   *
+   * 起点不是 `scanned`,往回带到「最早还在等定义的引用」(再按一个窗口封底):引用被切在
+   * 已扫/未扫边界两侧时,光扫新来那截只能看见后半个括号,整处引用就漏拍了;带上回看,这
+   * 一截自己就包含完整语法(审查第 7 轮 R1 实测 splitSyntax)。等待中的引用按「整篇定义表
+   * ∪ 这一截里新出现的定义」解 —— 定义本身落在放慢区里时(definitionEnvironment),不等
+   * 整篇那一遍,它一出现字节就冻;只拍字节,不摘队、不定案,身份与交代仍归整篇扫描。
+   *
+   * 成本有三道闸:这一片得带着能收尾引用/定义的字符(`)` `]` 换行),这一截得真有 `![`
+   * (或有人等定义且这截有 `]:`),解析范围不超过一个窗口。于是放慢档每一片至多解析 8 KB,
+   * 总量线性。上一版不设起点、不设闸,从 `scanned` 一路解析到越积越长的末尾:262144 字的
+   * 回合要 11 秒(审查第 7 轮 N1),现在同样输入毫秒级(test-agent-image-entry 案 ⑬)。
    */
-  const freezeTail = (ledger: Ledger) => {
-    const shift = ledger.scanned;
-    const tail = scanMarkdownImages(ledger.text.slice(shift));
-    if (!tail.refs.length) return;
-    freeze(ledger, tail.refs.map((ref) => ({
-      destination: (ref.identifier !== undefined ? ledger.definitions.get(ref.identifier) : undefined) ?? ref.destination,
-      start: ref.start + shift,
-      end: ref.end + shift,
-    })));
+  const freezeTail = (ledger: Ledger, fresh: string) => {
+    if (!/[)\]\n]/.test(fresh)) return;
+    let from = Math.min(ledger.scanned, ledger.text.length);
+    for (const start of ledger.waiting.keys()) if (start < from) from = start;
+    from = Math.max(from, ledger.text.length - SCAN_WINDOW, 0);
+    // 回看范围里连 `![` 都没有、也没有人等定义:这一片不值得切 8 KB 出来解析。光靠上面的
+    // 字符闸拦不住普通散文(换行到处都是),没有这一道,纯正文的放慢档每片都白付一个窗口。
+    if (ledger.bang < from && !ledger.waiting.size) return;
+    const slice = ledger.text.slice(from);
+    if (!slice.includes("![") && !(ledger.waiting.size && slice.includes("]:"))) return;
+    const tail = scanMarkdownImages(slice);
+    // 这一截里新出现的定义:还没进整篇表(表只收定了型的,而且要等整篇那一遍),先当投机
+    // 的后备查找用。没收尾的也用 —— 猜错目的地的代价只是多一份没人认领的拷贝。
+    const found = new Map<string, string>();
+    for (const definition of tail.definitions) {
+      if (!definition.destination) continue;
+      if (!found.has(definition.identifier)) found.set(definition.identifier, definition.destination);
+    }
+    const lookup = (identifier: string) => ledger.definitions.get(identifier) ?? found.get(identifier);
+    const spots = new Map<number, ImageSlot>();
+    for (const ref of tail.refs) {
+      const destination = (ref.identifier !== undefined ? lookup(ref.identifier) : undefined) ?? ref.destination;
+      if (destination) spots.set(ref.start + from, { destination, start: ref.start + from, end: ref.end + from });
+    }
+    for (const candidate of tail.waiting) {
+      const start = candidate.start + from;
+      const destination = lookup(candidate.identifier);
+      if (destination && !spots.has(start)) spots.set(start, { destination, start, end: candidate.end + from });
+    }
+    for (const [start, entry] of ledger.waiting) {
+      const destination = lookup(entry.identifier);
+      if (destination && !spots.has(start)) spots.set(start, { destination, start, end: entry.end });
+    }
+    if (spots.size) freeze(ledger, [...spots.values()]);
   };
 
   /**
@@ -225,14 +329,21 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
    * 实测:应 RED/BLUE,实际 BLUE/BLUE)。记下「谁在等哪个标识符」之后就不必再把那处引用
    * 留在窗口里:定义一到,按表查一次就知道是哪几处、各指向哪儿。
    */
-  const resolveWaiting = (ledger: Ledger): ImageSlot[] => {
+  const resolveWaiting = (ledger: Ledger, open: { identifier: string; destination: string } | null): ImageSlot[] => {
     const found: ImageSlot[] = [];
     for (const [start, entry] of [...ledger.waiting]) {
       const destination = ledger.definitions.get(entry.identifier);
-      if (destination === undefined) continue;
-      ledger.waiting.delete(start);
-      ledger.decided.add(start);
-      found.push({ destination, start, end: entry.end });
+      if (destination !== undefined) {
+        ledger.waiting.delete(start);
+        ledger.decided.add(start);
+        found.push({ destination, start, end: entry.end });
+      } else if (open && open.identifier === entry.identifier) {
+        // 定义行还在写(`[r]: partial.svg` 后面随时接出 `?v=1`):目的地**多半**已经完整,
+        // 字节先按它拍下来;不摘队、不定案 —— 等这条定义收了尾,上面那条路会按定了型的
+        // 目的地再解一遍,目的地真变了就按新目的地再读一次盘(captureMarkdownImages 按
+        // 「起点 + 目的地」的单调性),身份与交代也等那时(见 settle 的扣押)。
+        found.push({ destination: open.destination, start, end: entry.end });
+      }
     }
     freeze(ledger, found);
     return found;
@@ -247,13 +358,17 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
    * (红→蓝→红),等收尾再去读文件,三处引用会一起拿到最后那份(审查第 1 轮 F1 实测 A)。
    */
   const feed = (ledger: Ledger, text: string) => {
+    const seam = ledger.text.length;
     ledger.text += text;
+    const at = text.lastIndexOf("![");
+    if (at >= 0) ledger.bang = seam + at;
+    else if (text[0] === "[" && ledger.text[seam - 1] === "!") ledger.bang = seam - 1;
     const window = ledger.text.length - ledger.base;
     const fresh = ledger.text.length - ledger.scanned;
     // 这一窗已经畸形地大了(一个块自己就比窗口长):按比例放慢,见 SCAN_SLACK。放慢的只是
     // 「哪几处是真图」那一遍,字节照旧当场拍(freezeTail)。
     if (window > SCAN_WINDOW && fresh * SCAN_SLACK < window) {
-      freezeTail(ledger);
+      freezeTail(ledger, text);
       return;
     }
     // 这一片有可能改变「有哪几处引用、各指向哪儿」吗:`)`(行内图)、`]`(引用式图)、
@@ -268,12 +383,22 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
     ledger.scanned = ledger.text.length;
     const scan = scanWindow(ledger);
     ledger.settled = Math.max(ledger.settled, scan.boundary);
-    // 定义表是整篇文档的,同名取第一条 —— 收下它才能解开窗口之外那几处等待。
+    // 定义表是整篇文档的,同名取第一条 —— 收下它才能解开窗口之外那几处等待。只收**定了
+    // 型**的:还在写的定义行(`[proof]: partial.svg` 等着接 `?v=1`)进了表就撤不回来 ——
+    // 按它交代出去的来源会跟整篇正文对不上,展示端配不上记录只好退回工作目录取现在的文件
+    // (审查第 7 轮 R2 第 1 行)。没有目的地的也不收(micromark 把 `[r]:` 解析成指向空串)。
     for (const definition of scan.definitions) {
+      if (!definition.terminated || !definition.destination) continue;
       if (!ledger.definitions.has(definition.identifier)) {
         ledger.definitions.set(definition.identifier, definition.destination);
       }
     }
+    // 还在写的那条定义(只可能是最后一条):不进表,但值得拿去**投机冻结**等它的引用。
+    // 整篇第一条同名定义已经定型时轮不到它(CommonMark 同名取第一条)。
+    const last = scan.definitions.at(-1);
+    const open = last && !last.terminated && last.destination && !ledger.definitions.has(last.identifier)
+      ? { identifier: last.identifier, destination: last.destination }
+      : null;
     // 这一窗认出来的引用:引用式那几处的目的地按**整篇**定义表纠正 —— 窗口里恰好另有一条
     // 同名定义时,这一窗会按那条解,而 CommonMark 取全篇第一条。
     const refs: ImageSlot[] = scan.refs.map((ref) => ({
@@ -288,7 +413,7 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
       if (ledger.decided.has(candidate.start) || candidate.start < ledger.emitted) continue;
       ledger.waiting.set(candidate.start, { identifier: candidate.identifier, end: candidate.end });
     }
-    const resolved = resolveWaiting(ledger);
+    const resolved = resolveWaiting(ledger, open);
     // 有「语法已定型、还没交代过」的引用了吗 —— 有才值得去跑权威那一遍整篇扫描。整篇扫描
     // 是 O(全文):按段落跑等于 O(n²),按**图片**跑才是对的(一份文档里的图是个小数)。
     const pendingShown = (slot: ImageSlot) => slot.end <= ledger.settled && slot.start >= ledger.emitted;
@@ -316,13 +441,35 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
     ledger.due = false;
     if (!ledger.text) return;
     const scan = scanMarkdownImages(ledger.text);
-    const blocked = upTo !== "whole" && scan.pending >= 0 ? scan.pending : ledger.text.length;
+    let blocked = upTo !== "whole" && scan.pending >= 0 ? scan.pending : ledger.text.length;
+    if (upTo !== "whole") {
+      // 正文以一条**还在写**的定义收尾时,指着它的引用也得扣下:现在交代,报出去的来源是
+      // `partial.svg`,下一片接上 `?v=1` 之后整篇正文说的却是 `partial.svg?v=1` —— 展示端
+      // 按来源配对,这条结果从此谁都认领不了(审查第 7 轮 R2 第 1 行)。整篇第一条同名定义
+      // 已经定型的不算(同名取第一条,后面那条写没写完都轮不到)。`whole` 不扣:文档到头了,
+      // 这条定义不会再长,它现在的样子就是展示端看到的样子。
+      const last = scan.definitions.at(-1);
+      if (last && !last.terminated
+        && !scan.definitions.some((definition) => definition !== last && definition.identifier === last.identifier && definition.terminated)) {
+        for (const ref of scan.refs) {
+          if (ref.identifier === last.identifier && ref.start < blocked) {
+            blocked = ref.start;
+            break;
+          }
+        }
+      }
+    }
     const stop = Math.min(blocked, upTo === "settled" ? scan.boundary : ledger.text.length);
     if (stop <= ledger.emitted) return;
     const refs = scan.refs.filter((ref) => ref.start >= ledger.emitted && ref.end <= stop);
-    for (const image of persistMarkdownImageRefs(refs, ledger.seen, { cwd, snapshots: ledger.snapshots })) {
-      if (image.path) claimed.add(image.path);
-      yield ledger.wrap(image);
+    for (const ref of refs) {
+      // 一条一条交代:持久账要把「正文里的哪一处」跟「哪条结果」钉在一起,批量交代拿不到
+      // 这层对应(站外地址那种不发结果的引用会让「第 i 条结果 = 第 i 处引用」错位)。
+      for (const image of persistMarkdownImageRefs([ref], ledger.seen, { cwd, snapshots: ledger.snapshots })) {
+        if (image.path) claimed.add(image.path);
+        note?.({ doc: ledger.key, pos: ref.start, source: image.source, ref: image.ref, path: image.path, lost: image.lost, final: true });
+        yield ledger.wrap(image);
+      }
     }
     ledger.emitted = stop;
   };
@@ -344,6 +491,8 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
     ledger.definitions.clear();
     ledger.waiting.clear();
     ledger.decided.clear();
+    ledger.noted.clear();
+    ledger.bang = -1;
     ledger.emitted = 0;
   };
 
@@ -433,8 +582,9 @@ export function markdownImageSink(cwd?: string): MarkdownImageSink {
 export function withMarkdownImages(
   events: AsyncIterable<AgentEvent>,
   cwd?: string,
+  accounting?: MarkdownImageAccounting,
 ): AsyncIterable<AgentEvent> {
-  return settleMarkdownImages(events, markdownImageSink(cwd));
+  return settleMarkdownImages(events, markdownImageSink(cwd, accounting));
 }
 
 /**

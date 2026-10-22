@@ -9,6 +9,7 @@
 //   · 同 id 的子智能体 completed 之后又被唤醒接着说;
 //   · 消费者自己抛错(落库失败)时,已经露过脸的那张图不许被当垃圾删掉。
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -275,6 +276,142 @@ try {
     ["RED", "BLUE"],
     "重解析可以放慢,拍字节不许放慢:大块中间那张图也得是说那句话时的那一版",
   );
+
+  // ⑧ **引用自己被切在已扫/未扫边界两侧**(审查第 7 轮 R1 实测 splitSyntax)。
+  //
+  // 一大段没有空行的背景把窗口推进放慢档,`![修改前](` 和 `output/split.png)` 分两片到达:
+  // 只扫「新来那一截」的那一版看见的是后半个括号,整处引用漏拍 —— 字节等到整篇扫描才读,
+  // 读到的是重拍后的蓝图。放慢档的兜底解析必须**往回带**到最早还在等的那处候选。
+  const split = join(root, "output", "split.png");
+  writeFileSync(split, red);
+  const splitEvents = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "背景".repeat(6000) } as AgentEvent;
+    yield { kind: "text", text: "补充".repeat(1000) + " 修改前是红色：![修改前](" } as AgentEvent;
+    yield { kind: "text", text: "output/split.png)" } as AgentEvent;
+    writeFileSync(split, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+    yield { kind: "text", text: "\n\n修改后是蓝色：![修改后](output/split.png)\n\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(splitEvents).map((event) => colorOf(event.path)),
+    ["RED", "BLUE"],
+    "引用切在扫描边界两侧:放慢档的兜底解析要往回带,字节仍按说到它那一刻拍",
+  );
+
+  // ⑨ **定义早就定了,引用落进放慢区**(审查第 7 轮 R1 实测 definitionEnvironment)。
+  //
+  // 定义在开头,14 KB 背景把窗口推进放慢档之后引用才到:这一截里它不是图片节点(定义在
+  // 截外),必须按「整篇定义表」解这截里的候选 —— 不解的那一版要等整篇扫描,字节晚了。
+  const refer = join(root, "output", "refer.png");
+  writeFileSync(refer, red);
+  const referEvents = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "[proof]: output/refer.png\n\n" + "背景说明。".repeat(1400) } as AgentEvent;
+    yield { kind: "text", text: " 修改前是红色：![修改前][proof]" } as AgentEvent;
+    writeFileSync(refer, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+    yield { kind: "text", text: "\n\n修改后是蓝色：![修改后](output/refer.png)\n\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(referEvents).map((event) => colorOf(event.path)),
+    ["RED", "BLUE"],
+    "引用落进放慢区:按整篇定义表解这一截的候选,字节当场拍",
+  );
+  // ⑨b 反过来:引用早就等着,**定义本身**落进放慢区。兜底那一遍除了整篇定义表,还得认
+  // 「这一截里新出现的定义」,否则要等下一次整窗重解析 —— 文件这时已经重拍过了。
+  const late2 = join(root, "output", "late2.png");
+  writeFileSync(late2, red);
+  const late2Events = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "先引用：![等着][late2]\n\n" + "背景说明。".repeat(2000) } as AgentEvent;
+    yield { kind: "text", text: "\n\n[late2]: output/late2.png\n\n" } as AgentEvent;
+    writeFileSync(late2, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(late2Events).map((event) => colorOf(event.path)),
+    ["RED"],
+    "定义落进放慢区:它一出现,等它的那处引用的字节就得冻住",
+  );
+
+  // ⑩ **还在写的定义行**(审查第 7 轮 R2 第 1 行)。
+  //
+  // `[proof]: output/part` 这一刻在解析树里是一条完整定义,下一片接上 `ial.png` 它就指向
+  // 另一个文件。把它当真收进定义表、据它交代引用的那一版,交代出去的来源跟整篇正文对不上,
+  // 展示端配不上记录只好退回工作目录取现在的文件。定义表只收**定了型**的;指着未定型定义
+  // 的引用扣到它收尾,字节则两头都拍(目的地变了重读一次,文件没动时就是说到它那一刻那份)。
+  const partial = join(root, "output", "partial.png");
+  writeFileSync(partial, red);
+  const partialEvents = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "修改前是红色：![修改前][proof]\n\n[proof]: output/part" } as AgentEvent;
+    yield { kind: "tool", name: "exec", detail: "中途别交代" } as AgentEvent;
+    yield { kind: "text", text: "ial.png\n\n" } as AgentEvent;
+    writeFileSync(partial, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(partialEvents).map((event) => [event.source, colorOf(event.path)]),
+    [["output/partial.png", "RED"]],
+    "还在写的定义行:交代扣到它收尾,来源是定了型的目的地,字节是收尾那一刻的红图",
+  );
+  // ⑩b 同一条定义行,但**目的地已经写完整、只差收尾换行**时文件被重拍:字节必须按
+  // 「目的地可读那一刻」拍(resolveWaiting 的投机分支),等收尾再拍就是蓝图。
+  writeFileSync(partial, red);
+  const pendingEvents = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "修改前是红色：![修改前][proof]\n\n[proof]: output/partial.png" } as AgentEvent;
+    writeFileSync(partial, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+    yield { kind: "text", text: "\n\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(pendingEvents).map((event) => [event.source, colorOf(event.path)]),
+    [["output/partial.png", "RED"]],
+    "定义行还没收尾但目的地已完整:那一刻就拍字节,不等收尾",
+  );
+
+  // ⑪ **续聊/接管把子文档身份接回来**(审查第 7 轮 R2 第 2 行)。
+  //
+  // 子智能体的文档跨**进程**累加(resume 复用同一条 CLI 会话):新进程的 sink 不接种子,
+  // 它的第一处引用又从 0 号发起,跟刷新后按 trace 重建的那一路撞身份 —— 展示端按「来源 +
+  // 身份」去重,两条并成一条,配对计数 2 ≠ 记录 1,页面两处一起「图取不到」;上一段给的
+  // 定义它也不认。种子 = 已落盘的正文 + 用掉的身份数(agent-image-journal.ts 负责从 trace
+  // 读出来,这里直接喂)。
+  const carried = join(root, "output", "carried.png");
+  writeFileSync(carried, red);
+  const firstRunText = "[proof2]: output/carried.png\n\n第一次：![第一张][proof2]\n\n";
+  const firstRun = await collect(withMarkdownImages((async function* () {
+    yield childActivity("same-child", { kind: "text", text: firstRunText });
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(childShots(firstRun).map((event) => event.ref), [0], "第一段:0 号");
+  const secondRun = await collect(withMarkdownImages((async function* () {
+    yield childActivity("same-child", { kind: "text", text: "继续发言：![第二张][proof2]\n\n" });
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root, { seed: new Map([["same-child", { text: firstRunText, refs: 1 }]]) }));
+  assert.deepEqual(
+    childShots(secondRun).map((event) => [event.ref, event.source, !!event.path]),
+    [[1, "output/carried.png", true]],
+    "接回种子:身份从 1 号接着发,上一段的定义照旧认得",
+  );
+
+  // ⑫ **放慢档的兜底不许把重解析拖成二次方**(审查第 7 轮 N1:262144 字 16 字一片要 11 秒)。
+  //
+  // 上一版的兜底从 `scanned` 一路解析到越积越长的末尾;现在起点带回看但按一个窗口封底,
+  // 还有「这一片没有收尾字符/回看里连 `![` 都没有」两道免扫闸。阈值放得很松(CI 慢机器),
+  // 量级错了(线性 → 二次方)一定撞线。
+  for (const [total, piece] of [[262144, "普通背景说明无需图片。xxxxx"], [131072, "abc"]] as const) {
+    const started = performance.now();
+    const perfEvents = await collect(withMarkdownImages((async function* () {
+      for (let fed = 0; fed < total; fed += piece.length) yield { kind: "text", text: piece } as AgentEvent;
+      yield { kind: "done", exitStatus: 0 } as AgentEvent;
+    })(), root));
+    const elapsed = performance.now() - started;
+    assert.equal(attachments(perfEvents).length, 0);
+    assert.ok(elapsed < 3000, `纯正文 ${total} 字(${piece.length} 字一片)花了 ${Math.round(elapsed)}ms,应在毫秒级`);
+  }
 
   console.log("协议入口记账与文档身份回归通过");
 } finally {
