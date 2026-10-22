@@ -371,6 +371,39 @@ try {
     [["output/partial.png", "RED"]],
     "定义行还没收尾但目的地已完整:那一刻就拍字节,不等收尾",
   );
+  // ⑩c 引用早就滑出窗口在等,定义**半拍**(目的地完整、行没收尾)随一片大块到达,随后文件
+  // 被重拍:窗口里没有那处引用(解析树解不了它),字节只能靠「还在写的定义」解等待队列
+  // 那条路(resolveWaiting 的投机分支)当场拍下来。
+  writeFileSync(partial, red);
+  const farEvents = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "修改前：![修改前][proof]\n\n" + "背景说明。".repeat(2000) } as AgentEvent;
+    yield { kind: "text", text: "补充说明。".repeat(400) + "\n\n[proof]: output/partial.png" } as AgentEvent;
+    writeFileSync(partial, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+    yield { kind: "text", text: "\n\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(farEvents).map((event) => [event.source, colorOf(event.path)]),
+    [["output/partial.png", "RED"]],
+    "窗口外的等待引用 + 半拍的定义:目的地一可读就拍字节,不等定义收尾",
+  );
+  // ⑩d 交代被更早的等待引用挡住时,字节只剩冻结那一拍可依赖 —— 而那一拍的目的地必须按
+  // **定了型**的整篇定义表解:表里要是收了半截的 output/part(未定型定义抢了先),这一拍
+  // 读的就是不存在的文件,等收尾兜底去读时文件已经被重拍成蓝图。
+  writeFileSync(partial, red);
+  const staleEvents = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "挡路：![挡路][没有这条定义]\n\n修改前：![修改前][proof]\n\n[proof]: output/part" } as AgentEvent;
+    yield { kind: "text", text: "ial.png\n\n" } as AgentEvent;
+    writeFileSync(partial, blue);
+    yield { kind: "tool", name: "exec", detail: "重新截图" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(staleEvents).map((event) => [event.source, colorOf(event.path)]),
+    [["output/partial.png", "RED"]],
+    "半截定义不许抢注定义表:字节按定了型的目的地拍,挡着交代也丢不了那一拍",
+  );
 
   // ⑪ **续聊/接管把子文档身份接回来**(审查第 7 轮 R2 第 2 行)。
   //
