@@ -284,12 +284,14 @@ setInterval(() => {}, 1000);
     }
     assert.deepEqual(errors, [], "判据不该走到兜底那个 catch —— 走到了就说明它自己炸了");
     const judge = readSource(join(HERE, "../../shared/src/command-never-exits.ts"));
-    // 包装命令那张表住在隔壁（`command-wrappers.ts`）,而它正是当年出事的那一张 —— 两份都锁。
+    // 那几张表各住各的文件（单文件 700 行的约定）:包装命令那张正是当年出事的那一张,结构骨架
+    // 那两张在扫描层,跟随型那张在工具目录 —— 四份都锁。
     const wrappers = readSource(join(HERE, "../../shared/src/command-wrappers.ts"));
+    const scan = readSource(join(HERE, "../../shared/src/command-scan.ts"));
     const followers = readSource(join(HERE, "../../shared/src/command-followers.ts"));
     for (const [src, table] of [
-      [wrappers, /const WRAPPERS = new Map</], [judge, /const BRANCH = new Map</],
-      [judge, /const CLOSERS = new Map</], [followers, /const FOLLOWERS = new Map</],
+      [wrappers, /const WRAPPERS = new Map</], [scan, /const BRANCH = new Map</],
+      [scan, /const CLOSERS = new Map</], [followers, /const FOLLOWERS = new Map</],
     ] as const) assert.match(src, table, `按命令里的字查的表必须是 Map,不能是普通对象（原型成员会混进来）`);
     assert.match(judge, /catch \(err\)/, "导出的那个入口要有兜底:它的两个调用方都受不起一个异常");
   }
@@ -343,9 +345,10 @@ setInterval(() => {}, 1000);
   // 有序那一道的结构锁:描述符状态从 shell 给的 0/1/2 起步,逐项应用 —— 改回 `every(单项)`
   // 就把「关掉 1 之后再从 1 复制」这件事又丢了。
   {
-    const judge = readSource(join(HERE, "../../shared/src/command-never-exits.ts"));
-    assert.match(judge, /const open = new Set\(\[0, 1, 2\]\)/, "重定向判据要带着描述符状态按顺序走");
-    assert.doesNotMatch(judge, /redirectsOf\(tokens\)\.every\(/, "逐项各看一眼的那一版不许回来");
+    // 重定向那一道住在扫描层（`startProvable`，单文件 700 行的约定）。
+    const scan = readSource(join(HERE, "../../shared/src/command-scan.ts"));
+    assert.match(scan, /const open = new Set\(\[0, 1, 2\]\)/, "重定向判据要带着描述符状态按顺序走");
+    assert.doesNotMatch(scan, /redirectsOf\(tokens\)\.every\(/, "逐项各看一眼的那一版不许回来");
   }
 
   // **这条判据的代价明写在这儿**:`while true && :; do …` 其实也没有出路,但它的条件列表被
