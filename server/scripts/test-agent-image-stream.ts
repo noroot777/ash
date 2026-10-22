@@ -370,6 +370,40 @@ try {
     "同名定义照 CommonMark 取第一条(也就是被裁走的那条),而且只有一处引用",
   );
 
+  // ⑲c 定义写在**容器里**(引用块、列表项),而且目的地折到了下一行 —— 带着走只能带它的
+  // 语义。照抄源码切出来的是 `[nested]:\n>   output/cross.svg`,离开那个引用块之后第二行
+  // 的 `>` 成了正文,它再也不是一条定义:携带等于没携带,后面那处引用一条结果都发不出来
+  // (审查第 4 轮 R2 实测:完整正文 1 处真图、最终 attachment 为 0)。
+  const nested = join(root, "output", "cross.svg");
+  writeFileSync(nested, Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'));
+  const containerDefinition = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "> [nested]:\n>   output/cross.svg\n\n" + "普通正文。\n\n".repeat(1600) } as AgentEvent;
+    yield { kind: "text", text: "![容器定义][nested]\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  const carried = attachments(containerDefinition);
+  assert.deepEqual(
+    carried.map((event) => event.source),
+    ["output/cross.svg"],
+    "容器里的定义被裁走之后,重写出来的那一行仍然是一条定义",
+  );
+  assert.ok(carried[0]!.path, "真有这个文件就必须留下副本");
+
+  // ⑲d 重写出来的定义要跟原来**指同一个地方**:带空格的目的地、折行、大小写不同的引用,
+  // 一处都不许走丢(目的地一律用 `<>` 包起来,标识符用归一化后的那一份)。
+  const spaced = join(root, "output", "cross shot.svg");
+  writeFileSync(spaced, Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'));
+  const trickyDefinition = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "- [Mixed Case]:\n  <output/cross shot.svg>\n\n" + "普通正文。\n\n".repeat(1600) } as AgentEvent;
+    yield { kind: "text", text: "![带空格][mixed case]\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  assert.deepEqual(
+    attachments(trickyDefinition).map((event) => [event.source, !!event.path]),
+    [["output/cross shot.svg", true]],
+    "列表项里的定义、带空格的目的地、大小写不同的引用都要对得上",
+  );
+
   // ⑳ **写盘失败是单调的**:第一处引用的字节读到了、存不下来(临时权限失败),之后文件被
   // 重拍成蓝色、权限也恢复了 —— 那一处仍然必须报成「丢了」,不许被后面任何一遍扫描洗成
   // 蓝图。流式阶段每来一片都会重扫同一段正文,少了这道单调性,收尾那一遍(或者下一片的

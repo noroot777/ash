@@ -310,7 +310,36 @@ const PENDING_IMAGE = /!\[(?:[^\]\\]|\\[\s\S])*\](?:\[(?:[^\]\\]|\\[\s\S])*\])?/
  * 完整正文 1 处真图、服务端 0 条结果)。把等待窗口从 8 KB 放到 32 KB 也不解决 —— 那是在
  * 猜距离,而距离没有上限。所以裁剪方要把定义**带着走**(见 parsers.ts 的 keepDefinitions)。
  */
-export type MarkdownDefinition = { identifier: string; start: number; end: number };
+export type MarkdownDefinition = {
+  identifier: string;
+  start: number;
+  end: number;
+  /** 这条定义指到哪儿(解析树给的目的地,已经解过转义与折行)。 */
+  destination: string;
+};
+
+/**
+ * 一条定义**重新写出来**的那一行 —— 带着走只能带它的语义,不能照抄它的源码。
+ *
+ * 源码切片在容器里就不成立:引用块里的
+ * ```
+ * > [nested]:
+ * >   output/cross.svg
+ * ```
+ * 切出来是 `[nested]:\n>   output/cross.svg`,离开那个引用块之后第二行的 `>` 成了正文,
+ * 它再也不是一条定义 —— 携带等于没携带,后面那处引用照旧一条结果都发不出来(审查第 4 轮
+ * R2)。列表项里的缩进定义、折行写的定义同理。
+ *
+ * 所以按解析树重写:标识符用**归一化后**的那一份(引用侧也按同样规则归一,大小写/空白怎么
+ * 写都对得上),目的地一律用 `<>` 包起来,于是空格、括号都不必再分情形。标签里的方括号与
+ * 目的地里的尖括号转义掉。title 不带 —— 这段前缀只进我们自己的再解析,一个字都不给用户看,
+ * 而 title 不影响「有哪几处图片引用、各指向哪儿」。
+ */
+export function definitionLine(definition: MarkdownDefinition): string {
+  const label = definition.identifier.replace(/([[\]\\])/g, "\\$1");
+  const destination = definition.destination.replace(/([<>\\])/g, "\\$1");
+  return `[${label}]: <${destination}>`;
+}
 
 export type MarkdownScan = {
   /** 这一段正文里**渲染器真会画出来的**每一处引用(= markdownImageRefs)。 */
@@ -333,7 +362,14 @@ export function scanMarkdownImages(text: string): MarkdownScan {
     if (node.type !== "definition" || !node.identifier) continue;
     const span = offsets(node);
     // 块容器里的定义照样是整篇文档的(CommonMark 的定义表是文档级的),所以不分层次都收。
-    if (span) definitions.push({ identifier: node.identifier, start: span[0], end: span[1] });
+    if (span) {
+      definitions.push({
+        identifier: node.identifier,
+        start: span[0],
+        end: span[1],
+        destination: node.url ?? "",
+      });
+    }
   }
   const blocks = root.children ?? [];
   const starts = new Set(refs.map((ref) => ref.start));

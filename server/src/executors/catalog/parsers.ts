@@ -4,6 +4,7 @@ import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import { parseClaudeStream } from "../claude.js";
 import {
+  definitionLine,
   markdownImageRefs,
   scanMarkdownImages,
   type MarkdownDefinition,
@@ -235,12 +236,18 @@ export async function* withMarkdownImages(
         })),
     };
   };
-  /** 要裁走的那一段里的定义留进前缀 —— 同名只留第一条(CommonMark 也取第一条)。 */
+  /**
+   * 要裁走的那一段里的定义留进前缀 —— 同名只留第一条(CommonMark 也取第一条)。
+   *
+   * 带的是**按解析树重写的那一行**(definitionLine),不是源码切片:引用块里写成两行的
+   * 定义,切出来的第二行还带着 `>` 容器标记,离开那个引用块之后它不再是一条定义 ——
+   * 携带等于没携带,后面那处引用照旧一条结果都发不出来(审查第 4 轮 R2)。
+   */
   const keepDefinitions = (definitions: MarkdownDefinition[]) => {
     for (const definition of definitions) {
       if (carried.has(definition.identifier)) continue;
-      const text = carry.slice(definition.start, definition.end).trim();
-      if (!text || prefix.length + text.length + 2 > DEFINITION_HOLD) break;
+      const text = definitionLine(definition);
+      if (prefix.length + text.length + 2 > DEFINITION_HOLD) break;
       carried.set(definition.identifier, text);
       // 整段**以空行收尾**:后面接上来的 carry 从此恒是一个新块的开头,解析结果跟它单独
       // 解析时一模一样(定义本身不产生任何可见节点,也就不会多出图片引用)。
