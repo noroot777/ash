@@ -343,6 +343,30 @@ try {
     "脚注正文要真渲染出来(定义没人引用时 GFM 会把它整个丢掉)",
   );
 
+  // ── ⑯ 后来可用的地址必须重新加载一次(审查第 4 轮 R1)────────────────────────
+  // 一处引用先只能退到「去工作目录取」(404 → 一行小字),等服务端把拷贝落完盘,同一处的
+  // 地址就换成 `/api/uploads/…`。失败状态记成布尔的那一版在这里照旧写着「图取不到」,而
+  // 附件卡片已经被正文认领走 —— 两头都看不到,只能手点「再试一次」。
+  const delivered = page.locator(".delivered-fixture");
+  await delivered.locator(".task-markdown-image-missing").waitFor();
+  await page.getByTestId("deliver").click();
+  await delivered.locator("img").waitFor();
+  assert.deepEqual(
+    await srcs(bodyImages(delivered)),
+    [uploads("abcdefghijkl-saved.svg")],
+    "拷贝送到之后那一处要换成 uploads 地址",
+  );
+  // 等它真解码完:断言的是「新地址自己加载了一次」,不是「这一帧刚好画好了」。
+  await page.waitForFunction(() => {
+    const img = document.querySelector(".delivered-fixture .task-markdown img");
+    return !!img && img.complete && img.naturalWidth > 0;
+  });
+  assert.equal(
+    await delivered.locator(".task-markdown-image-missing").count(),
+    0,
+    "旧地址的失败不许挡住新地址",
+  );
+
   console.log("Markdown 图片解析回归通过");
 } finally {
   await browser?.close();

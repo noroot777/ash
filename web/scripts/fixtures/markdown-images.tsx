@@ -8,7 +8,7 @@
 //   ③ 同一个路径被重拍过 —— 「结论说修改后、画出来是修改前」比不画更坏，这是 F1 的要害；
 //   ④ 站外地址、同名别名、围栏代码块里的例子、带空格中文名、`file://` —— 一处都不许配串；
 //   ⑤ 配不上任何来源的本机路径 —— 不许留裂开的图标，但要留一行「图取不到 + 那个地址」。
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AgentTurnBody } from "../../src/components/AgentTurnBody.tsx";
 import { ReviewReportBody } from "../../src/components/MarkdownBody.tsx";
@@ -208,6 +208,32 @@ const PROTOCOL = [segment("protocol:0", [
   "![没了](file:///Users/demo/code/ash/output/vanished.svg)",
 ].join("\n"))];
 
+/**
+ * 送达那一下:先只能退到「去工作目录取」(夹具里恒 404 → 一行「图取不到」),按一下按钮
+ * 把服务端落完盘的那条结果递上来,同一处引用的地址随即换成 `/api/uploads/…`。
+ *
+ * 钉的是审查第 4 轮 R1:地址换了就得重新加载一次。失败状态记成布尔的那一版在这里仍写着
+ * 「图取不到」,而附件卡片已经被正文认领走 —— 用户两头都看不到,必须手点「再试一次」。
+ */
+function Delivered() {
+  const [sources, setSources] = useState<AttachmentSource[]>([]);
+  const segments = [segment("delivered:0", "截图在这儿：\n\n![结果](output/gone-later-saved.svg)\n", sources)];
+  return (
+    <section className="delivered-fixture">
+      <AgentTurnBody segments={segments} running={false} taskId="T1" />
+      <button
+        type="button"
+        data-testid="deliver"
+        onClick={() => setSources([
+          { path: up("abcdefghijkl-saved.svg"), source: "output/gone-later-saved.svg", ref: 0 },
+        ])}
+      >
+        送达那份拷贝
+      </button>
+    </section>
+  );
+}
+
 const TURNS: [string, AgentContentSegment[]][] = [
   ["protocol", PROTOCOL],
   ["conclusion", CONCLUSION],
@@ -243,6 +269,7 @@ createRoot(document.getElementById("root")!).render(
         <MarkdownBody text={shape.markdown} resolveFile={anyLocalFile} />
       </section>
     ))}
+    <Delivered />
     {([["live", LIVE], ["gone", GONE], ["nocopy", NOCOPY]] as [string, AgentContentSegment[]][]).map(([name, segments]) => (
       <section className={`${name}-fixture`} key={name}>
         <AgentTurnBody segments={segments} running={false} taskId="T1" />

@@ -28,20 +28,6 @@ import {
 } from "./markdownPolicy.ts";
 
 /**
- * 正文里的一张图。**站内取不到字节就整个消失**，绝不留一个裂开的图标。
- *
- * 必要性：解析器只能判断「这个地址站内服务得了」，判断不了「那个文件此刻还在不在」。
- * 工作目录被清掉、文件被 agent 删掉、证据目录被删，地址都还拼得出来，但请求是 404 ——
- * 画出来就是用户 2026-10-21 报的那一幕：一个裂图标配一行标题，读起来像「这个功能坏了」。
- * 看不到那张图是事实，但那是「图没了」，不该长成「页面坏了」。
- *
- * **只收站内的**：同源地址是我们自己服务的，取不到就等于那个文件真没了；站外地址取不到
- * 可能只是此刻连不上（要翻墙、要内网），这时候浏览器拿 alt 文字画出来的那个占位反而是
- * 更诚实的交代，不归这条收。
- *
- * 按 src 记而不是一个布尔：同一个位置换了地址（重渲染、换任务）要重新试一次。
- */
-/**
  * 取不到的那张图留一行小字，而不是悄悄消失。
  *
  * 为什么要有它：裂图标会被读成「这个功能坏了」，所以这里一度是 `return null` —— 整张图
@@ -70,6 +56,25 @@ function MissingImage({ origin, alt, onRetry }: {
   );
 }
 
+/**
+ * 正文里的一张图。**站内取不到字节就整个消失**，绝不留一个裂开的图标。
+ *
+ * 必要性：解析器只能判断「这个地址站内服务得了」，判断不了「那个文件此刻还在不在」。
+ * 工作目录被清掉、文件被 agent 删掉、证据目录被删，地址都还拼得出来，但请求是 404 ——
+ * 画出来就是用户 2026-10-21 报的那一幕：一个裂图标配一行标题，读起来像「这个功能坏了」。
+ * 看不到那张图是事实，但那是「图没了」，不该长成「页面坏了」。
+ *
+ * **只收站内的**：同源地址是我们自己服务的，取不到就等于那个文件真没了；站外地址取不到
+ * 可能只是此刻连不上（要翻墙、要内网），这时候浏览器拿 alt 文字画出来的那个占位反而是
+ * 更诚实的交代，不归这条收。
+ *
+ * **失败状态记的是「哪个地址失败了」,不是一个布尔**:判据只能是「此刻这个资源取不到」,
+ * 不能是「这个位置以前取不过」。同一处引用的地址是会变好的 —— 回合还在飞的那一下只能退
+ * 到「现在去工作目录取」(404),等服务端把那份拷贝落完盘,同一处就换成 `/api/uploads/…`
+ * 了。记成布尔就是审查第 4 轮 R1 那一幕:有效截图已经送到、地址也换过了,正文照旧写着
+ * 「图取不到」,必须手点「再试一次」才出现 —— 而附件卡片此刻已经被正文认领走,用户两头
+ * 都看不到。(组件表稳定下来之后更是如此:以前靠整棵子树卸载偶然清掉这个状态。)
+ */
 function MarkdownImage({ alt, origin, url, name }: {
   alt: string;
   /** agent 在正文里写的原地址（`url` 可能已经被改写成站内接口），小字里报的是它。 */
@@ -78,10 +83,10 @@ function MarkdownImage({ alt, origin, url, name }: {
   url: string;
   name?: string;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   // 失败是可以恢复的:短暂 503、鉴权状态刷新、文件稍后补齐 —— 之前这个状态挂到组件卸载
   // 为止,只能靠刷新页面(审查第 3 轮 N2)。所以给一个「再试一次」,它只重置这一个状态。
-  if (failed) return <MissingImage origin={origin} alt={alt} onRetry={() => setFailed(false)} />;
+  if (failed === url) return <MissingImage origin={origin} alt={alt} onRetry={() => setFailed(null)} />;
   return (
     <PreviewableImage
       className="task-markdown-image"
@@ -89,7 +94,7 @@ function MarkdownImage({ alt, origin, url, name }: {
       alt={alt}
       label={alt || name}
       // 站外地址失败照旧交给浏览器自己的 alt：那是对面站点的事，报「取不到」帮不上忙。
-      onError={() => { if (sameOriginUrl(url)) setFailed(true); }}
+      onError={() => { if (sameOriginUrl(url)) setFailed(url); }}
     />
   );
 }
