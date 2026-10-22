@@ -231,6 +231,56 @@ console.log("${marker}");
   console.log(`✓ 排干期间撞上${trigger === "matched" ? "命中收工" : "推满上限"}：第二笔收尾合并等它，欠账不蒸发`);
 }
 
+// ── Ⓔ 送不出去的那一批里**带着约定的字样**:结局认的是证据,不是投递（本轮审查 N1）─────
+// 跟 Ⓑ 同一个窗口,只差一点:那几行里有一行正是 `stopWhen` 约定的那一行。
+//
+// 审查实测的现场:输出那一笔连着失败两次 ⇒ 这一批进了 owed —— 命中既没进运行时（`rt.hit` 那
+// 一句排在 `pushLines` 之后,抛了就没走到）也没落库（`hitLine` 跟游标一样只在投递成功时写）。
+// 于是结局写着「盯满了约定的时长」,而**同一条结束通知里 READY 的正文明明送到了 agent 手上**。
+// 正文没丢,所以它不拦验收;可那句话是错的:哨兵等到了,卡片上说它没等到。
+//
+// 修的是折叠那一侧:owed 这一批马上要随结束通知一起交出去,所以它**同样是已交付的证据**。
+// 投递那几个数（events/offset/hitLine）照旧只认真的送成了的那一批 —— 两件事分开记,这才是
+// 「与是否已交付分离」的意思,不是把投递的账也跟着改。
+{
+  const taskId = await makeTask();
+  const feed = join(root, "owed-hit.mjs");
+  writeFileSync(feed, `console.log("READY");
+setInterval(() => {}, 1000);
+`);
+  const inject = hangMessageWrite("READY", "fail-always");
+  let monitorId = "";
+  let pid = 0;
+  try {
+    const started = await startMonitor({
+      taskId,
+      command: `${JSON.stringify(process.execPath)} ${JSON.stringify(feed)}`,
+      description: "送不出去的那一批里带着约定的字样",
+      stopWhen: "^READY$",
+      timeoutMs: 1_500,
+    });
+    assert.equal(started.ok, true, started.ok ? "" : started.error);
+    monitorId = started.ok ? started.monitor.id : "";
+    pid = started.ok ? started.monitor.pid ?? 0 : 0;
+    await until("那一笔事件 INSERT 真的挂住了", async () => inject.hanging());
+    await sleep(1_400);
+    inject.release();
+    await until("终态落定", async () => (await rowOf(monitorId)).status !== "running", 20_000);
+    const after = await rowOf(monitorId);
+    // 台子前提:这一批真的一次都没送成（不然验的就不是「owed 里的证据」那条路）。
+    assert.equal(after.events, 0, "台子前提：这一批一次都没送成");
+    assert.equal(after.hitLine, null, "台子前提：没投递成功 ⇒ 那一列不写，证据只能来自 owed");
+    assert.equal(after.status, "matched", "owed 里那一行是已交付的证据 ⇒ 结局认它");
+    assert.match(after.endedReason ?? "", /等到了约定的那一行/, "那句话也要跟着改，不能还说「盯满了时长」");
+    assert.match(after.resultHandoffText ?? "", /READY/, "正文照旧随结束通知走");
+    assert.equal(after.offset, 0, "投递那几个数不跟着改：没交付的那一批不许推游标");
+  } finally {
+    inject.restore();
+  }
+  if (pid) await until("进程被收掉", async () => !isPidAlive(pid));
+  console.log("✓ 送不出去的批次里带着约定的字样：结局折成「等到了那一行」，而投递的账照旧只记真送成的");
+}
+
 // ── Ⓓ 这一问归消费层,收尾那一层不许自己判（结构锁）──────────────────────────────────
 // 上面两节都是时序,而时序回归只保护**跑到过的那一条路**。这一条管的是形状:哪天有人在收尾
 // 里再写一次「缓冲空了就没东西要交接」,时序未必再撞上,形状一定对不上。
@@ -266,7 +316,20 @@ console.log("${marker}");
     readSource(join(HERE, "../src/monitor-offline-finish.ts")), /claimFinish\(/,
     "离线收尾也要占同一个槽位（占不到就让位）",
   );
-  console.log("✓ 结构锁：收尾不自己判「还有没有东西要交接」，终态只由所有权持有者写");
+  // **折叠那一问:读到那一行之后再问,而且把 owed 算进去**（本轮审查 N1）。
+  const FINISH = readSource(join(HERE, "../src/monitor-finish.ts"));
+  assert.match(
+    FINISH, /hitOf\(row, owed\)/,
+    "owed 这一批马上要随结束通知交出去 ⇒ 它同样是已交付的证据，折叠必须认它（本轮审查 N1）",
+  );
+  assert.doesNotMatch(
+    // 只认**调用**（`persistedHit(`）:注释里提这个名字不算。
+    FINISH, /persistedHit\(/,
+    "不许再为这一问单开一次窄列查询:它排在 try/finally 之前，只能自己把异常吞成 null（抛出去"
+      + "就绕过 finally、行留在 running 且没监督 —— 第 24 轮审查 F1），而吞掉就让「读不出来」"
+      + "跟「压根没命中」同形。紧接着那次完整行读本来就带着 hitLine（本轮审查 N1 第 2 点）",
+  );
+  console.log("✓ 结构锁：收尾不自己判「还有没有东西要交接」，终态只由所有权持有者写，折叠认的是三份证据");
 }
 
 await teardown();
