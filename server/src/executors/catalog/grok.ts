@@ -18,14 +18,9 @@ const stripAnsi = (s: string) => s.replace(ANSI, "");
 // 是 token 增量,end 才带 sessionId。真实文件写入没有输出 tool-call 事件。
 const grokStreamingJsonParser: CliParser = async function* (ctx) {
   const { child, bin, label, lifecycle } = ctx;
-  const queue: AgentEvent[] = [];
-  let resolve: (() => void) | null = null;
-  let finished = false;
-  const push = (event: AgentEvent) => {
-    queue.push(event);
-    resolve?.();
-    resolve = null;
-  };
+  // 队列、唤醒、收尾、增量合并和**图片记账的时点**都在这条共用流水线里,见
+  // ../event-queue.ts —— 十一个解析器从同一个 `ctx.events` 走,拿不到裸队列。
+  const push = (event: AgentEvent) => ctx.events.push(event);
 
   const trace = new RunTraceRecorder(ctx.trace);
   let jsonLines = 0;
@@ -99,8 +94,7 @@ const grokStreamingJsonParser: CliParser = async function* (ctx) {
   });
 
   const finish = (opts: { exitStatus: number; spawnError?: string; flushTimeout?: boolean }) => {
-    if (finished) return;
-    finished = true;
+    if (ctx.events.closed) return;
     trace.close();
     flushThought();
     const tail = stripAnsi(stderrTail).trim() || stripAnsi(strayTail).trim();
@@ -120,24 +114,16 @@ const grokStreamingJsonParser: CliParser = async function* (ctx) {
           `${jsonLines === 0 ? "(输出格式参数可能未生效)" : ""}${tail ? `;输出尾巴:${tail.slice(0, 500)}` : ""}`,
       });
     push({ kind: "done", exitStatus: opts.exitStatus });
-    resolve?.();
-    resolve = null;
+    ctx.events.close();
   };
 
   child.on("error", (error: NodeJS.ErrnoException) =>
     finish({ exitStatus: 1, spawnError: spawnErrorMessage(bin, error) }),
   );
   child.on("close", (code, signal) => finish({ exitStatus: code ?? (signal ? 1 : 0) }));
-  forceFinishOnExit(child, () => finished, (exit) => finish({ exitStatus: exit, flushTimeout: true }));
+  forceFinishOnExit(child, () => ctx.events.closed, (exit) => finish({ exitStatus: exit, flushTimeout: true }));
 
-  while (true) {
-    if (queue.length) {
-      yield queue.shift()!;
-      continue;
-    }
-    if (finished) return;
-    await new Promise<void>((resume) => (resolve = resume));
-  }
+  yield* ctx.events.drain();
 };
 
 // `grok models` 的输出(v1.0.3 实测):

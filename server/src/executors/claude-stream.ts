@@ -13,6 +13,7 @@ import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
@@ -68,20 +69,11 @@ async function* claudeStreamEvents(
   images: MarkdownImageSink,
   cliSessionId?: string,
 ): AsyncIterable<AgentEvent> {
-  const queue: AgentEvent[] = [];
-  let resolve: (() => void) | null = null;
-  let finished = false;
-  const activityBuffer = new NativeActivityBuffer();
-  const push = (e: AgentEvent) => {
-    const events = activityBuffer.push(e);
-    if (!events.length) return;
-    // 图片记账就在这一刻:`note()` 一返回,这片正文提到的本机图片字节已经在 uploads 里,
-    // 队列后面排多久都改不了它(审查第 5 轮 R1)。
-    for (const event of events) queue.push(...images.note(event));
-    resolve?.();
-    resolve = null;
-  };
-
+  // 队列、唤醒、收尾、增量合并、子活动合并和**图片记账的时点**都在这条共用流水线里
+  // (见 event-queue.ts)。顺序是硬要求:字节在 `delta`/`push` 的那一刻就冻住,交代排在
+  // 合并与队列之后 —— 挂反了,正文写着「修改前是红色」就会存成后来那张蓝图(审查第 5 轮
+  // R1、第 6 轮 R1:短子正文滞留在 40 字合并缓冲里,期间父步骤把文件重拍了)。
+  //
   // Coalesce token-level text_delta into small chunks: flush on a newline or once
   // ~40 chars have accrued, so the client streams smoothly without a re-render per
   // character (a long reply would otherwise fire thousands of setStates). The
@@ -89,13 +81,9 @@ async function* claudeStreamEvents(
   // the model's output. With partial streaming ON, the complete `assistant`
   // message that trails the deltas is used ONLY for tool_use — replaying its text
   // would duplicate everything the deltas already streamed.
-  let textBuf = "";
-  const flushText = () => {
-    if (textBuf) {
-      push({ kind: "text", text: textBuf });
-      textBuf = "";
-    }
-  };
+  const events = eventQueue({ images, activity: new NativeActivityBuffer(), coalesce: { text: 40 } });
+  const push = (event: AgentEvent) => events.push(event);
+  const flushText = () => events.flush();
 
   // 上下文水位。**只有 `assistant` 事件里的 `message.usage` 是单次 API 调用的快照**
   // —— 收尾的 `result` 行是整回合累加(几十次调用相加,长会话能到千万级),拿它当水位
@@ -140,7 +128,7 @@ async function* claudeStreamEvents(
   // 两次时,第二次照样会报。
   let compacting = false;
   const waitTimer = setInterval(() => {
-    if (finished || awaitingSince === null) return;
+    if (events.closed || awaitingSince === null) return;
     const waited = Date.now() - awaitingSince;
     const due = Math.floor(waited / waitNoticeMs);
     if (due <= waitNoticed) return; // 每满一个间隔才报一次,别把静默刷成滚屏
@@ -201,8 +189,7 @@ async function* claudeStreamEvents(
     if (ev.type === "stream_event") {
       const se = ev.event;
       if (se?.type === "content_block_delta" && se.delta?.type === "text_delta" && se.delta.text) {
-        textBuf += se.delta.text;
-        if (textBuf.length >= 40 || textBuf.includes("\n")) flushText();
+        events.delta("text", se.delta.text);
       }
       return; // deltas drive the live stream; the trailing complete message handles tools
     }
@@ -413,45 +400,32 @@ async function* claudeStreamEvents(
   let stderr = "";
   child.stderr?.on("data", (d) => (stderr += d.toString()));
   child.on("error", (err: NodeJS.ErrnoException) => {
-    if (finished) return;
+    if (events.closed) return;
     resident?.failPending(new Error(`Claude 进程错误：${err.message}`));
     push({ kind: "error", message: spawnErrorMessage(bin, err) });
     push({ kind: "done", exitStatus: 1 });
-    finished = true;
-    resolve?.();
-    resolve = null;
+    events.close();
   });
   child.on("close", (code) => {
-    if (finished) return;
+    if (events.closed) return;
     resident?.failPending(new Error("Claude 进程在 interrupt ACK 前退出"));
     flushText(); // emit any text tail that never hit the flush threshold
     const exit = code ?? 0;
     if (exit !== 0 && stderr.trim()) push({ kind: "error", message: normalizeClaudeCliError(stderr).slice(0, 2000) });
     push({ kind: "done", exitStatus: exit });
-    finished = true;
-    resolve?.();
-    resolve = null;
+    events.close();
   });
-  forceFinishOnExit(child, () => finished, (exit) => {
+  forceFinishOnExit(child, () => events.closed, (exit) => {
     resident?.failPending(new Error("Claude 进程在 interrupt ACK 前异常收尾"));
     flushText();
     push({ kind: "error", message: "进程已退出但输出流未正常收尾(疑有残留子进程占用管道),已强制结束本回合" });
     push({ kind: "done", exitStatus: exit });
-    finished = true;
-    resolve?.();
-    resolve = null;
+    events.close();
   });
 
   // finally 而不是逐条终止路径里 clear:消费方提前 break(用户停任务)一样走得到这里。
   try {
-    while (true) {
-      if (queue.length) {
-        yield queue.shift()!;
-        continue;
-      }
-      if (finished) return;
-      await new Promise<void>((r) => (resolve = r));
-    }
+    yield* events.drain();
   } finally {
     clearInterval(waitTimer);
     // agent 进程结束 = 它名下的内置 Monitor 全都跟着没了（它们本来就在这棵进程树里）。

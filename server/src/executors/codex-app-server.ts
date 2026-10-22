@@ -6,6 +6,7 @@ import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages } from "./markdown-image-stream.js";
 import {
   formatFailureForTimeline,
@@ -62,13 +63,11 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const child = opts.startProcess?.()
     ?? spawnControllableForRun(opts.cwd, opts.bin, opts.args, "", opts.env, opts.detach);
   const trace = new RunTraceRecorder(opts.trace);
-  const queue: AgentEvent[] = [];
   const pending = new Map<string, { resolve(value: any): void; reject(error: Error): void }>();
   const seenAgentDeltas = new Set<string>();
   const seenReasoningDeltas = new Set<string>();
   const seenImages: ImageStore = imageStore();
   const nativeWork = new NativeWorkTrace();
-  let wake: (() => void) | null = null;
   let requestId = opts.reattach ? Date.now() : 0;
   let threadId = opts.reattach?.threadId ?? opts.sessionId ?? "";
   let turnId = opts.reattach?.turnId ?? "";
@@ -98,49 +97,32 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const childModelReads = new Set<string>();
   const childModelVersions = new Map<string, number>();
   const structuredErrors: string[] = [];
-  const activityBuffer = new NativeActivityBuffer();
   // 正文里的图**不在这份协议解析里收**:一条 agentMessage 只是一片碎片,上一条消息给定义、
   // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。主会话与每个子 thread 各一笔
   // 账,统一按「一份文档」记(见 markdown-image-stream.ts)。
   //
-  // 账记在 emit 处、不是记在下游:`queue` 先攒着,挂在消费者取事件那一刻等于把读文件推迟
-  // 到整条队列之后,中间 agent 来得及把同一个路径重拍一遍(审查第 5 轮 R1)。
+  // 队列、唤醒、增量合并、子活动合并和**图片记账的时点**都在这条共用流水线里(见
+  // event-queue.ts)。字节在 `delta`/`push` 的那一刻就冻住,交代排在两级缓冲和队列之后 ——
+  // 挂反了,短子正文会滞留在 40 字合并缓冲里,期间父步骤把文件重拍,正文写着「修改前是
+  // 红色」却存成后来那张蓝图(审查第 5 轮 R1、第 6 轮 R1)。
+  //
+  // 增量为什么要攒:DeepSeek 一类**把完整 reasoning 正文流回来**的模型,一个词就是一条
+  // `item/reasoning/textDelta`(实测一轮 10 万条、平均 3.6 字符);逐条转成 thinking 事件,
+  // SSE、trace 落盘和「执行过程」里的行数会跟着放大一百倍 —— 界面上就是一行一个单词的
+  // 「思考过程 The」「思考过程 output」。阈值跟 claude 主流同一把尺子,思考取更粗的一档:
+  // 它在折叠块里只显示一行摘要,不像正文那样需要逐字顺滑。
   const images = markdownImageSink(opts.cwd);
-
-  const emit = (event: AgentEvent) => {
-    const events = activityBuffer.push(event);
-    if (!events.length) return;
-    for (const settled of events) queue.push(...images.note(settled));
-    wake?.();
-    wake = null;
-  };
-
-  // 正文与思考的 token 级增量先攒成小块再发。DeepSeek 一类**把完整 reasoning 正文流
-  // 回来**的模型，一个词就是一条 `item/reasoning/textDelta`(实测一轮 10 万条、平均
-  // 3.6 字符);逐条转成 thinking 事件,SSE、trace 落盘和「执行过程」里的行数会跟着放大
-  // 一百倍 —— 界面上就是一行一个单词的「思考过程 The」「思考过程 output」。
-  // 阈值跟 claude 主流(executors/claude.ts)同一把尺子,思考取更粗的一档:它在折叠块里
-  // 只显示一行摘要,不像正文那样需要逐字顺滑。块之间不加分隔符,拼回去就是模型原文。
-  const DELTA_FLUSH_CHARS = { text: 40, thinking: 240 } as const;
-  let deltaBuffer: { kind: "text" | "thinking"; text: string } | null = null;
-  const flushDelta = () => {
-    const buffered = deltaBuffer;
-    if (!buffered) return;
-    deltaBuffer = null;
-    emit(buffered.kind === "text" ? { kind: "text", text: buffered.text } : { kind: "thinking", text: buffered.text });
-  };
-  // 攒着的增量必须排在**任何**后到的事件之前,否则思考会漂到它引出的工具调用后面。
-  // 所以所有既有 push 都先收口缓冲,只有 pushDelta 自己往里攒。
-  const push = (event: AgentEvent) => {
-    flushDelta();
-    emit(event);
-  };
+  const outbox = eventQueue({
+    images,
+    activity: new NativeActivityBuffer(),
+    coalesce: { text: 40, thinking: 240 },
+  });
+  // 攒着的增量必须排在**任何**后到的事件之前,否则思考会漂到它引出的工具调用后面 ——
+  // `push` 自己会先收口缓冲,所以既有调用点一个字都不用改。
+  const push = (event: AgentEvent) => outbox.push(event);
   const pushDelta = (kind: "text" | "thinking", delta: unknown) => {
     if (typeof delta !== "string" || !delta) return;
-    if (deltaBuffer && deltaBuffer.kind !== kind) flushDelta();
-    const text = (deltaBuffer?.text ?? "") + delta;
-    deltaBuffer = { kind, text };
-    if (text.length >= DELTA_FLUSH_CHARS[kind] || text.includes("\n")) flushDelta();
+    outbox.delta(kind, delta);
   };
   const write = (message: unknown) => {
     if (finished || connectionClosed || !child.stdin || child.stdin.destroyed || child.stdin.writableEnded) {
@@ -217,6 +199,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (sessionPoison) push({ kind: "error", message: sessionPoison, scope: "session" });
     emitContext();
     push({ kind: "done", exitStatus });
+    outbox.close();
   };
 
   const archivedThreadIds = new Set<string>();
@@ -535,16 +518,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   if (opts.reattach?.completedTurn) void completeTurn(opts.reattach.completedTurn).catch((error) => finish(1, String(error)));
 
   let steerTail = Promise.resolve();
-  const events = settleMarkdownImages((async function* (): AsyncIterable<AgentEvent> {
-    while (true) {
-      if (queue.length) {
-        yield queue.shift()!;
-        continue;
-      }
-      if (finished) return;
-      await new Promise<void>((resolve) => { wake = resolve; });
-    }
-  })(), images);
+  const events = settleMarkdownImages(outbox.drain(), images);
   return {
     cliCommand: opts.cliCommand,
     goal: () => native.goal,

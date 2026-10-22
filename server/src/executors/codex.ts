@@ -19,6 +19,7 @@ import {
   type RunTracePaths,
 } from "./diagnostics.js";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { codexAshMcpServerName } from "./codex-mcp.js";
 
@@ -342,9 +343,6 @@ async function* codexStreamEvents(
   contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string },
   images: MarkdownImageSink,
 ): AsyncIterable<AgentEvent> {
-  const queue: AgentEvent[] = [];
-  let resolve: (() => void) | null = null;
-  let finished = false;
   let turnCompleted = false;
   let turnFailedMessage: string | null = null;
   let lastEventType: string | null = null;
@@ -354,12 +352,11 @@ async function* codexStreamEvents(
   const seenImages: ImageStore = imageStore();
   const structuredErrors: string[] = [];
   const trace = new RunTraceRecorder(tracePaths);
-  const push = (e: AgentEvent) => {
-    // 图片记账就在这一刻:`note()` 一返回,这片正文提到的本机图片字节已经在 uploads 里。
-    queue.push(...images.note(e));
-    resolve?.();
-    resolve = null;
-  };
+  // 队列、唤醒、收尾和**图片记账的时点**都在这条共用流水线里(见 event-queue.ts):字节在
+  // push 的那一刻就冻住,交代排在队列之后 —— 挂反了,正文写着「修改前是红色」就会存成后来
+  // 那张蓝图(审查第 5 轮 R1)。
+  const events = eventQueue({ images });
+  const push = (event: AgentEvent) => events.push(event);
 
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
@@ -422,8 +419,7 @@ async function* codexStreamEvents(
     spawnError?: string | null;
     forceFinished?: boolean;
   }) => {
-    if (finished) return;
-    finished = true;
+    if (events.closed) return;
     const diagnostics = trace.finish({
       ...opts,
       stopRequested: lifecycle.stopRequested,
@@ -443,8 +439,7 @@ async function* codexStreamEvents(
       push({ kind: "error", message: sessionPoison, scope: "session" });
     }
     push({ kind: "done", exitStatus: opts.exitStatus });
-    resolve?.();
-    resolve = null;
+    events.close();
   };
   child.on("error", (err: NodeJS.ErrnoException) => {
     finish({ exitStatus: 1, exitSignal: null, spawnError: spawnErrorMessage("codex", err) });
@@ -452,31 +447,25 @@ async function* codexStreamEvents(
   child.on("close", (code, signal) => {
     finish({ exitStatus: code ?? (signal ? 1 : 0), exitSignal: signal });
   });
-  forceFinishOnExit(child, () => finished, (exit) => {
+  forceFinishOnExit(child, () => events.closed, (exit) => {
     finish({ exitStatus: exit, exitSignal: child.signalCode, forceFinished: true });
   });
 
   // stdout 没有水位；在 done 前 best-effort 读取本回合 rollout。私有格式变化时读取器
   // 返回 null，界面自然不显示，任务结算仍照常进行。
   let contextDone = false;
-  while (true) {
-    if (queue.length) {
-      const next = queue.shift()!;
-      if (next.kind === "done" && !contextDone) {
-        contextDone = true;
-        const context = await readCodexContext(threadId, contextOptions.contextNotBeforeMs, contextOptions.configDir);
-        // used=0 的哨兵也必须发：它会清掉 sessions 行上的上一轮旧水位。否则私有格式
-        // 变化后读取器虽已失败关闭，界面却仍拿数据库里的陈旧数字冒充当前值。
-        yield {
-          kind: "context",
-          context: context ?? { used: 0, window: null, windowEstimated: false },
-        };
-      }
-      yield next;
-      continue;
+  for await (const next of events.drain()) {
+    if (next.kind === "done" && !contextDone) {
+      contextDone = true;
+      const context = await readCodexContext(threadId, contextOptions.contextNotBeforeMs, contextOptions.configDir);
+      // used=0 的哨兵也必须发：它会清掉 sessions 行上的上一轮旧水位。否则私有格式
+      // 变化后读取器虽已失败关闭，界面却仍拿数据库里的陈旧数字冒充当前值。
+      yield {
+        kind: "context",
+        context: context ?? { used: 0, window: null, windowEstimated: false },
+      };
     }
-    if (finished) return;
-    await new Promise<void>((r) => (resolve = r));
+    yield next;
   }
 }
 

@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import type { RunTracePaths } from "../diagnostics.js";
+import type { EventQueue } from "../event-queue.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "../types.js";
 
 // ── 智能体目录的单一真相来源 ────────────────────────────────────────────────
@@ -81,6 +82,16 @@ export interface CliParserContext {
   lifecycle: { stopRequested: boolean };
   /** 这一轮干活的目录:正文里相对路径的图片靠它解成真文件(agent-attachments.ts)。 */
   cwd?: string;
+  /**
+   * 事件出口 —— **解析器不许自己攒队列**。
+   *
+   * 这条流水线已经按正确次序接好了「冻结正文图片的字节 → 合并 token 级增量 → 合并子智能体
+   * 活动 → 交代附件 → 入队」(见 ../event-queue.ts)。十一份解析器原先各抄一份裸队列,于是
+   * 「记账要排在队列之前」这条不变量得在十一处分别记得 —— 漏掉是静默的,实测只要消费端每条
+   * 事件多等 240 ms,正文写着「修改前是红色」就会存成后来那张蓝图(审查第 6 轮 R1)。
+   * 把队列交出来之后,新写一个解析器压根拿不到那个缺口。
+   */
+  events: EventQueue;
 }
 
 /** 输出解析器:把 CLI 的 stdout 变成事件流。缺省用 parsers.ts 的 textParser。 */

@@ -31,6 +31,7 @@ import {
   resolveReasoningEfforts,
 } from "@ash/shared/cli-presets";
 import { CLI_SPECS, CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
+import { eventQueue } from "../src/executors/event-queue.js";
 import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from "../src/executors/generic.js";
 import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
 import { resumeCommandFor } from "../src/executors/resume.js";
@@ -615,6 +616,8 @@ const NODE = "node";
       bin: "grok",
       label: "grok@test",
       lifecycle: { stopRequested: false },
+      // 解析器不自己攒队列:进出都走这一条(见 CliParserContext.events)。
+      events: eventQueue(),
     }));
     assert.deepEqual(
       events.filter((event) => event.kind === "thinking"),

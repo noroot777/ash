@@ -254,14 +254,22 @@ try {
   );
   assert.deepEqual(readFileSync(longShots[0]!.path!), red, "窗口挪过去了,第一处引用那一刻的字节照旧是它自己的");
   assert.deepEqual(readFileSync(longShots[1]!.path!), blue, "第二处引用是改过之后的");
-  // 交代一律在**文档收尾**:窗口挪动不发事件(「哪几处是真图」由整篇扫描说了算,半截正文
-  // 的语法结论随时会被后文推翻)。
+  // **语法一定型就交代**,不等文档收尾:交代的权威依据是整篇扫描,但扫描结论只在「这一块
+  // 已经写完」之后才不会被后文推翻(见 shared 的 stableBlockBoundary)。所以两处真引用在
+  // 围栏那一片之前就该交代完 —— 等到收尾才发的那一版,消费者半路不取了(用户停任务、落库
+  // 抛错)时这两条记录从来没出过门,而清理垃圾那一步又把拷贝删了(审查第 6 轮 R3)。
+  // 未闭合的围栏反过来:它那一块压根没定型,一条都不许提前发。
   const fenceAt = long.findIndex((event) => event.kind === "text" && event.text.startsWith("```md"));
   assert.ok(fenceAt > 0, "围栏那一片要在事件流里");
   assert.equal(
     long.slice(0, fenceAt).filter((event) => event.kind === "attachment").length,
-    0,
-    "文档没收尾之前一条结果都不发",
+    2,
+    "语法已经定型的那两处,文档没收尾也要先交代出去",
+  );
+  assert.equal(
+    long.filter((event) => event.kind === "attachment").length,
+    2,
+    "未闭合围栏里的示例不许凑数",
   );
 
   // ⑫ 拍下来却没人领走的快照要删掉(行内代码跨片那一例:字节在前半片就拍了,拼全了却是

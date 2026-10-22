@@ -17,6 +17,7 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
+import { normalizeIdentifier } from "micromark-util-normalize-identifier";
 
 // **方言必须跟渲染器一字不差**:`web/src/components/MarkdownBody.tsx` 挂的是 `remarkGfm`,
 // 而 remark-gfm 就是这两个扩展。少挂它们,同一段正文两边认出的图片节点集合**不是一个**
@@ -33,6 +34,14 @@ export type MarkdownImageRef = {
   end: number;
   /** 换成站内地址后这一段该写什么(见 rewriter)。 */
   rewrite: (url: string) => string;
+  /**
+   * 引用式图(`![图][r]`)的标识符,已按 CommonMark 归一;行内图没有这个字段。
+   *
+   * 流式那一侧要它:**定义表是整篇文档的,而流式只重解析最后一个窗口**。窗口里恰好另有
+   * 一条同名定义时,这一窗的解析会按那条解(CommonMark 其实取全篇**第一条**),于是字节
+   * 按错的目的地冻结。带上标识符,调用方才能拿自己那张全篇定义表把目的地改回来。
+   */
+  identifier?: string;
   /**
    * 渲染器真会把它画出来吗。
    *
@@ -232,6 +241,7 @@ function refsOf(root: Node): MarkdownImageRef[] {
           end: span[1],
           rewrite: rewriter(node.alt ?? ""),
           rendered: !scope || reachable.has(scope),
+          ...(inline ? {} : { identifier: node.identifier }),
         });
       }
     }
@@ -290,25 +300,31 @@ function boundaryOf(text: string, root: Node): number {
  * 「还等着后文才能成图」的那一处:`![a][r]` 在前、`[r]: path` 在后。
  *
  * 必须单独认:**定义还没到的引用式图在解析树里压根不是图片节点**,就是一段普通文字
- * (实测:`![a][r]` 无定义时整段是 text 节点)。所以 `markdownImageRefs` 看不见它,
- * 裁剪时它会被当成普通正文裁掉,定义再到也没人认领 —— 那处引用从此没有持久副本,
- * 原文件一清理就彻底没了(审查第 3 轮 R2 实测:完整正文 1 个图片节点、服务端 0 条结果)。
+ * (实测:`![a][r]` 无定义时整段是 text 节点)。所以 `markdownImageRefs` 看不见它 ——
+ * 保存端据此知道「这里将来可能冒出一张图」:它那几处的字节还没法冻结,后面那些引用
+ * 也不能先交代出去(交代了,这一处将来插在中间就让整列配对错位)。
+ *
+ * 两个捕获组 = alt 与标签:`![a][r]` 取 `r`,`![a][]`(折叠式)与 `![a]`(简写式)取 `a`,
+ * 跟 CommonMark 一致。拿到标签才能在定义真的到达时**认回是哪一处**在等它。
  *
  * 代价是误判方向:写法示例里的 `![示例]` 在代码里(围栏、行内代码)一律排掉,剩下的误判
- * (正文里真写了一段 `![foo]` 却从没有定义)只会让调用方多留一段正文,上限由调用方兜
- * (见 parsers.ts 的 PENDING_HOLD)。
+ * (正文里真写了一段 `![foo]` 却从没有定义)只会让这一处之后的交代推迟到文档收尾。
  */
-const PENDING_IMAGE = /!\[(?:[^\]\\]|\\[\s\S])*\](?:\[(?:[^\]\\]|\\[\s\S])*\])?/g;
+const PENDING_IMAGE = /!\[((?:[^\]\\]|\\[\s\S])*)\](?:\[((?:[^\]\\]|\\[\s\S])*)\])?/g;
 
 /**
  * 一条**链接引用定义**(`[r]: path`)在这段正文里占的那一段。
  *
  * 为什么流式那一侧需要它:定义是**整篇文档的**,不是它所在那个块的 —— `[r]: output/x.png`
- * 写在前面、`![图][r]` 写在一万字之后,照 CommonMark 它俩就是一张图。而按块边界裁剪只能
- * 保证「块结构不被切断」,证明不了「留下来这几个块不再依赖裁走的那几个」:定义一旦被裁走,
- * 后面那处引用在解析树里连图片节点都不是,这条消息从此没有持久副本(审查第 3 轮 R2 实测:
- * 完整正文 1 处真图、服务端 0 条结果)。把等待窗口从 8 KB 放到 32 KB 也不解决 —— 那是在
- * 猜距离,而距离没有上限。所以裁剪方要把定义**带着走**(见 parsers.ts 的 keepDefinitions)。
+ * 写在前面、`![图][r]` 写在一万字之后,照 CommonMark 它俩就是一张图。而流式只重解析最后
+ * 一个窗口:定义一出窗口,后面那处引用在这一窗的解析树里连图片节点都不是(审查第 3 轮 R2
+ * 实测:完整正文 1 处真图、服务端 0 条结果)。
+ *
+ * 曾经的出路是把定义**重写成一行源码带着走**,而它必然要猜一个预算 —— 600 条定义就溢出,
+ * 后面的引用照旧拍不到字节(审查第 6 轮 R2 第 2 行);标识符的转义也在重写里栽过
+ * (第 5 轮 R2B)。所以现在反过来:保存端拿这几条**攒一张整篇的定义表**(identifier →
+ * 目的地,同名取第一条),再配 `MarkdownWaitingRef` 认回在等它的那几处引用。没有预算,
+ * 也不必重写源码。
  */
 export type MarkdownDefinition = {
   identifier: string;
@@ -317,35 +333,6 @@ export type MarkdownDefinition = {
   /** 这条定义指到哪儿(解析树给的目的地,已经解过转义与折行)。 */
   destination: string;
 };
-
-/**
- * 一条定义**重新写出来**的那一行 —— 带着走只能带它的语义,不能照抄它的源码。
- *
- * 源码切片在容器里就不成立:引用块里的
- * ```
- * > [nested]:
- * >   output/cross.svg
- * ```
- * 切出来是 `[nested]:\n>   output/cross.svg`,离开那个引用块之后第二行的 `>` 成了正文,
- * 它再也不是一条定义 —— 携带等于没携带,后面那处引用照旧一条结果都发不出来(审查第 4 轮
- * R2)。列表项里的缩进定义、折行写的定义同理。
- *
- * 所以按解析树重写:标识符用**归一化后**的那一份(引用侧也按同样规则归一,大小写/空白怎么
- * 写都对得上),目的地一律用 `<>` 包起来,于是空格、括号都不必再分情形。title 不带 ——
- * 这段前缀只进我们自己的再解析,一个字都不给用户看,而 title 不影响「有哪几处图片引用、
- * 各指向哪儿」。
- *
- * **标识符原样写回去,一个字符都不再转义**。它是「源码里的标签按空白和大小写归一」的产物,
- * 源码里的反斜杠转义**原样留在里面**:`[a\*b]` 的标识符就是 `a\*b`。再转义一遍会把那个
- * 反斜杠变成字面反斜杠(`a\\*b`),于是同一篇文档里的 `![图][a\*b]` 归一出来的标识符跟它
- * 对不上 —— 完整正文明明是 1 张图,带着走之后变成 0 张(审查第 5 轮 R2B)。方括号同理:
- * 标签里的 `[`/`]` 在源码里本来就必须转义,归一化不会把它脱掉,所以不存在「没转义的方括号」
- * 要我们补。目的地那头反过来 —— 它是**脱过转义**的 URL,所以 `<>` 和反斜杠要重新转义。
- */
-export function definitionLine(definition: MarkdownDefinition): string {
-  const destination = definition.destination.replace(/([<>\\])/g, "\\$1");
-  return `[${definition.identifier}]: <${destination}>`;
-}
 
 export type MarkdownScan = {
   /** 这一段正文里**渲染器真会画出来的**每一处引用(= markdownImageRefs)。 */
@@ -356,12 +343,24 @@ export type MarkdownScan = {
   pending: number;
   /** 这一段里的全部链接引用定义(见 MarkdownDefinition)。 */
   definitions: MarkdownDefinition[];
+  /** 还等着定义的**每一处**候选引用,按出现顺序(见 PENDING_IMAGE 与 MarkdownWaitingRef)。 */
+  waiting: MarkdownWaitingRef[];
 };
+
+/**
+ * 一处**还没拿到定义**的引用式图候选。
+ *
+ * `identifier` 跟 `MarkdownDefinition.identifier`、`MarkdownImageRef.identifier` 是同一套
+ * 归一口径(照抄 mdast:空白折叠 + 大小写折叠,源码里的反斜杠转义原样留着),所以定义一到
+ * 就能直接按它查表 —— 不必再把定义重写成一行源码带着走(那条路在标识符的转义上栽过:
+ * `[a\*b]` 再转义一遍就跟 `![图][a\*b]` 对不上,审查第 5 轮 R2B)。
+ */
+export type MarkdownWaitingRef = { identifier: string; start: number; end: number };
 
 /** 流式那一侧要的几个答案,一次解析一起算出来(每片都来一遍,别解析好几遍)。 */
 export function scanMarkdownImages(text: string): MarkdownScan {
   const root = parse(text);
-  if (!root) return { refs: [], boundary: 0, pending: -1, definitions: [] };
+  if (!root) return { refs: [], boundary: 0, pending: -1, definitions: [], waiting: [] };
   const refs = refsOf(root);
   const definitions: MarkdownDefinition[] = [];
   for (const node of walk(root)) {
@@ -385,15 +384,17 @@ export function scanMarkdownImages(text: string): MarkdownScan {
     const span = offsets(node);
     if (span) code.push(span);
   }
-  let pending = -1;
+  const waiting: MarkdownWaitingRef[] = [];
   PENDING_IMAGE.lastIndex = 0;
   for (let match = PENDING_IMAGE.exec(text); match; match = PENDING_IMAGE.exec(text)) {
     const at = match.index;
     if (starts.has(at) || text[at - 1] === "\\") continue;
     if (code.some(([from, to]) => at >= from && at < to)) continue;
-    pending = at;
-    break;
+    // 标签:完整式取第二组,折叠式(`![a][]`)与简写式(`![a]`)取 alt 那一组。
+    const label = match[2]?.trim() ? match[2] : match[1] ?? "";
+    waiting.push({ identifier: normalizeIdentifier(label).toLowerCase(), start: at, end: at + match[0].length });
   }
+  let pending = waiting.length ? waiting[0]!.start : -1;
   if (pending >= 0) {
     for (const block of blocks) {
       const span = offsets(block);
@@ -402,5 +403,5 @@ export function scanMarkdownImages(text: string): MarkdownScan {
       break;
     }
   }
-  return { refs, boundary: boundaryOf(text, root), pending, definitions };
+  return { refs, boundary: boundaryOf(text, root), pending, definitions, waiting };
 }

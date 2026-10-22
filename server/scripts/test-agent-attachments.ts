@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  definitionLine,
   destinationFilePath,
   hasUrlScheme,
   isNetworkDestination,
@@ -124,20 +123,30 @@ try {
   // decodeSafe 同口径 —— 两端差一条就又是一处「一边看得见、一边不存」)。
   assert.equal(destinationFilePath("out/%ZZ.png"), "out/%ZZ.png");
 
-  // ── 重写出来的那一行,必须还是同一条定义 ────────────────────────────────────
-  // 带着走的定义按解析树重写(definitionLine)。重写一遍就得能再被同一个解析器认回来,
-  // 而且标识符要跟文档里那处引用对得上 —— 对不上就等于没带:完整正文 1 张图,带着走之后
-  // 0 张(审查第 5 轮 R2B)。标识符是「源码标签按空白和大小写归一」的产物,**源码里的
-  // 反斜杠转义原样留在里面**,再转义一遍就把它变成了字面反斜杠。
+  // ── 定义那一侧的标识符,必须跟引用那一侧算出同一个键 ──────────────────────────
+  // 保存端按「identifier → 目的地」攒一张整篇定义表,再用还在等定义的那几处引用的
+  // identifier 去查(见 shared 的 MarkdownWaitingRef)。两侧算出来的键差一个字符就等于
+  // 这张表白攒:完整正文 1 张图、服务端 0 条结果(审查第 5 轮 R2B 的同一处缺口,当年栽在
+  // 把定义重写成源码时多转义了一次反斜杠)。标识符是「源码标签按空白和大小写归一」的
+  // 产物 —— **源码里的反斜杠转义原样留在里面**,大小写和连续空白则必须折叠掉。
   for (const label of ["plain", "Mixed Case", "a\\*b", "a\\[b", "带 空格", "a\\]b"]) {
     for (const url of ["output/shot.png", "output/a b.png", "output/q%3Fb.png", "out/paren(1).png"]) {
       const [definition] = scanMarkdownImages(`[${label}]: <${url}>`).definitions;
       assert.ok(definition, `这一行本来就该是一条定义：[${label}]: <${url}>`);
-      const rewritten = `${definitionLine(definition!)}\n\n![图][${label}]`;
+      // 引用写得跟定义不一字不差(大小写翻过来、空白多一个)也得对上。
+      const quoted = label.replace(/\w/, (c) => c.toUpperCase());
+      const [waiting] = scanMarkdownImages(`![图][${quoted.replace(" ", "  ")}]`).waiting;
+      assert.ok(waiting, `定义还没到的时候这一处要被认成「在等定义」：![图][${quoted}]`);
+      assert.equal(
+        waiting!.identifier,
+        definition!.identifier,
+        `定义与引用两侧要算出同一个键：[${label}] ↔ [${quoted}]`,
+      );
+      // 同一篇文档里拼起来确实是一张图,而且指向同一个地方 —— 这张表查对了才有意义。
       assert.deepEqual(
-        markdownImageRefs(rewritten).map((ref) => ref.destination),
+        markdownImageRefs(`[${label}]: <${url}>\n\n![图][${quoted}]`).map((ref) => ref.destination),
         [url],
-        `重写之后仍要认得回同一处引用、指同一个地方：[${label}]: <${url}>`,
+        `同一篇里仍要认得回同一处引用、指同一个地方：[${label}]: <${url}>`,
       );
     }
   }

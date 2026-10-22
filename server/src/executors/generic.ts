@@ -7,7 +7,8 @@ import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHa
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, killChild, redactSecrets, resumeFor } from "./spawn.js";
 import { textParser } from "./catalog/parsers.js";
-import { withMarkdownImages } from "./markdown-image-stream.js";
+import { eventQueue } from "./event-queue.js";
+import { markdownImageSink, settleMarkdownImages } from "./markdown-image-stream.js";
 import type { CliParser, CliParserContext } from "./catalog/types.js";
 import { valueArgs, type CliSpec } from "./catalog/types.js";
 
@@ -25,12 +26,20 @@ import { valueArgs, type CliSpec } from "./catalog/types.js";
 /**
  * 解析器的事件流 + 「正文图片谁来落盘」这一档。
  *
- * 自己已经落过盘的解析器(`ownsMarkdownImages`)直接放行:再裹一层就是同一处引用两条
+ * 账本**建在这里、传进 ctx**,而不是裹在解析器外面:解析器自己攒队列,裹在外面等于把
+ * 「去读那个文件」推迟到整条队列和一次可暂停的 yield 之后,中间 agent 完全来得及把同一个
+ * 路径重拍一遍 —— 正文写着「修改前是红色」,存下来的是后来那张蓝图(审查第 6 轮 R1 实测:
+ * 真的起一个假 CLI,消费端每条事件等 260 ms,两处引用一起变成蓝图)。次序钉在 EventQueue 里。
+ *
+ * 自己已经落过盘的解析器(`ownsMarkdownImages`)不给账本:两层各存一份就是同一处引用两条
  * 记录、两份拷贝(见 catalog/types.ts 的那个字段)。run 与 attach 共用这一个出口。
  */
-function markdownImages(parser: CliParser, ctx: CliParserContext): AsyncIterable<AgentEvent> {
-  const events = parser(ctx);
-  return parser.ownsMarkdownImages ? events : withMarkdownImages(events, ctx.cwd);
+function markdownImages(parser: CliParser, ctx: Omit<CliParserContext, "events">): AsyncIterable<AgentEvent> {
+  if (parser.ownsMarkdownImages) return parser({ ...ctx, events: eventQueue() });
+  const images = markdownImageSink(ctx.cwd);
+  // 解析器**不用** ctx.events 自己 yield 事件时(夹具、以后新写的某一份),收口那一层会把
+  // 没记过账的事件补记一次 —— 字节拍得晚一点,但不会整条链一张图都不落盘。
+  return settleMarkdownImages(parser({ ...ctx, events: eventQueue({ images }) }), images);
 }
 
 export class GenericCliExecutor implements AgentExecutor {

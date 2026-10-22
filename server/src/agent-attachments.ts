@@ -228,25 +228,8 @@ export type PersistedMarkdownImage = { source: string; ref: number; path?: strin
  *     这一档才轮到收尾那一遍去读文件,以及展示端退一档去工作目录取。
  */
 export type ImageSnapshot = { destination: string; path?: string; lost?: boolean };
-/** key = 这一处引用在**当下这段攒着的正文**里的起点(裁剪之后由 shiftSnapshots 跟着挪)。 */
+/** key = 这一处引用在**这份文档全文**里的起点(全文一个字不裁,所以这个坐标永不变)。 */
 export type ImageSnapshots = Map<number, ImageSnapshot>;
-
-/**
- * 裁走前面那一段之后,留下来的那几份快照跟着挪位置。
- *
- * 为什么不能一裁就整个清空:**没交代过的引用还在留下来那一段里**。清空等于把「说那句话
- * 时的字节」丢了,它那处引用要等到消息收尾才被认领,那时去读文件拿到的是后来的画面 ——
- * 审查第 3 轮 R1 实测:红图在最后一段、后面追 8200 字触发裁剪,工具把文件改蓝之后两处
- * 引用一起画成蓝图。裁点之前的那些丢掉是对的:它们要么刚交代过,要么已经被判成不是图
- * (后者留在 captured 里,收尾时由 discardUnclaimedImages 删掉)。
- */
-export function shiftSnapshots(snapshots: ImageSnapshots, cut: number): ImageSnapshots {
-  const moved: ImageSnapshots = new Map();
-  for (const [start, snapshot] of snapshots) {
-    if (start >= cut) moved.set(start - cut, snapshot);
-  }
-  return moved;
-}
 
 type MarkdownImageOptions = {
   directory?: string;
@@ -268,8 +251,17 @@ type MarkdownImageOptions = {
  * 份没人引用的拷贝。它不进任何 uploads 记录(那是 attachment 事件的事),用户看不见;而且
  * 按内容寻址,跟真图字节一样时连文件都不会多一个。
  */
+/**
+ * 落盘这一侧真正需要的「一处引用」:**只有目的地和它在全文里的起点**。
+ *
+ * 收窄到这两个字段是故意的:定义后到的那几处引用在解析树里压根不是图片节点(见 shared 的
+ * `MarkdownWaitingRef`),拼不出一个完整的 `MarkdownImageRef`,而它们的字节恰恰最需要在
+ * 「定义到达那一刻」就冻结。要求整个节点就等于把这一档永久挡在门外。
+ */
+export type ImageRefSpot = Pick<MarkdownImageRef, "destination" | "start">;
+
 export function captureMarkdownImages(
-  refs: MarkdownImageRef[],
+  refs: readonly ImageRefSpot[],
   seen: ImageStore,
   snapshots: ImageSnapshots,
   options: MarkdownImageOptions = {},
@@ -319,7 +311,7 @@ export function discardUnclaimedImages(captured: Iterable<string>, claimed: Read
 
 /** 把已经扫出来的那几处引用逐一落盘 —— 扫描结果复用时走这条(流式那层只扫一遍)。 */
 export function persistMarkdownImageRefs(
-  refs: MarkdownImageRef[],
+  refs: readonly ImageRefSpot[],
   seen: ImageStore,
   options: MarkdownImageOptions = {},
 ): PersistedMarkdownImage[] {

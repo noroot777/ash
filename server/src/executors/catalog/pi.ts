@@ -162,14 +162,9 @@ export function parsePiModels(stdout: string): {
  */
 const piEvents: CliParser = async function* (ctx: CliParserContext): AsyncIterable<AgentEvent> {
   const { child, bin, lifecycle } = ctx;
-  const queue: AgentEvent[] = [];
-  let resolve: (() => void) | null = null;
-  let finished = false;
-  const push = (e: AgentEvent) => {
-    queue.push(e);
-    resolve?.();
-    resolve = null;
-  };
+  // 队列、唤醒、收尾、增量合并和**图片记账的时点**都在这条共用流水线里,见
+  // ../event-queue.ts —— 十一个解析器从同一个 `ctx.events` 走,拿不到裸队列。
+  const push = (event: AgentEvent) => ctx.events.push(event);
 
   const trace = new RunTraceRecorder(ctx.trace);
   let stdoutLines = 0;
@@ -253,8 +248,7 @@ const piEvents: CliParser = async function* (ctx: CliParserContext): AsyncIterab
   // 收尾单点:三条路(spawn 失败 / close / exit 后流不收尾)都汇到这里,保证事件流
   // 一定以 done 结束 —— 少一个 done 就是任务永远卡 running。
   const finish = (opts: { exitStatus: number; spawnError?: string; flushTimeout?: boolean }) => {
-    if (finished) return;
-    finished = true;
+    if (ctx.events.closed) return;
     trace.close();
     const tail = stderrTail.trim();
     if (opts.spawnError) push({ kind: "error", message: opts.spawnError });
@@ -276,8 +270,7 @@ const piEvents: CliParser = async function* (ctx: CliParserContext): AsyncIterab
           `(执行参数在 server/src/executors/catalog/pi.ts${tail ? `;stderr:${clip(tail, 500)}` : ""})`,
       });
     push({ kind: "done", exitStatus: opts.exitStatus });
-    resolve?.();
-    resolve = null;
+    ctx.events.close();
   };
 
   child.on("error", (err: NodeJS.ErrnoException) => {
@@ -286,16 +279,9 @@ const piEvents: CliParser = async function* (ctx: CliParserContext): AsyncIterab
   child.on("close", (code, signal) => {
     finish({ exitStatus: code ?? (signal ? 1 : 0) });
   });
-  forceFinishOnExit(child, () => finished, (exit) => finish({ exitStatus: exit, flushTimeout: true }));
+  forceFinishOnExit(child, () => ctx.events.closed, (exit) => finish({ exitStatus: exit, flushTimeout: true }));
 
-  while (true) {
-    if (queue.length) {
-      yield queue.shift()!;
-      continue;
-    }
-    if (finished) return;
-    await new Promise<void>((r) => (resolve = r));
-  }
+  yield* ctx.events.drain();
 };
 
 // 工具事件的一行摘要。pi 的内置工具入参是 {command}/{path,…},扩展工具形状未知,

@@ -120,6 +120,7 @@
     "test:turn-freeze": "tsx scripts/test-turn-freeze.ts",
     "test:turn-visibility": "tsx scripts/test-turn-visibility.ts",
     "test:agent-attachments": "tsx scripts/test-agent-attachments.ts",
+    "test:agent-image-entry": "tsx scripts/test-agent-image-entry.ts",
     "test:agent-image-stream": "tsx scripts/test-agent-image-stream.ts",
     "test:usage": "tsx scripts/test-usage-accounting.ts",
     "test:peer-context": "tsx scripts/test-peer-context.ts",
@@ -198,6 +199,7 @@
     "mdast-util-from-markdown": "^2.0.3",
     "mdast-util-gfm": "^3.1.0",
     "micromark-extension-gfm": "^3.0.0",
+    "micromark-util-normalize-identifier": "^2.0.1",
     "nanoid": "^5.0.9",
     "node-pty": "^1.1.0",
     "undici": "^7.30.0"
