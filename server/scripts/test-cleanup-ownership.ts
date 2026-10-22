@@ -20,6 +20,9 @@
 //      所以这里用坏 JSON 制造 —— 不必在连接层注入故障,走的是同一条分支);
 //   E. 补投那一笔没人接(`mergeOpenIntoRow` 失败 ⇒ 不许把清单上那一笔丢掉);
 //   F. 正常退出之后能销账(不制造假债)。
+//
+// 第三节往后是第 11 轮审查 F1 那条链:记号认下的成员(`ours`)跨不过 `exec`。第三节证代数,
+// 第四节证**接线** —— 清扫那一步真的把这一轮确证过的成员交给了判定。
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -202,7 +205,7 @@ console.log("\n3) 记号认下的成员:确证过那一刻就是唯一的窗口"
 
   // **这一刻 ours、下一刻 none,身份不许消失** —— 就是 exec 那一下的代数等价物。
   const owed = openLedger();
-  owed.add(unitOpen(ours, "记号认下、这一轮朴过刀的成员"));
+  owed.add(unitOpen(ours, "记号认下、这一轮朝它开过刀的成员"));
   owed.add(unitOpen(gone, "下一次读数"));
   if (owed.verdict().kind !== "empty" && owed.left().some((o) => o.pid === mine)) {
     ok("下一次记号答 none 也洗不掉它(exec 换不掉 pid 和那一代)");
@@ -217,8 +220,67 @@ console.log("\n3) 记号认下的成员:确证过那一刻就是唯一的窗口"
   } else fail(`判定侧没把 ours 的成员点在结论上(${said?.kind})`);
 }
 
-// ── 第四节:执行这条不变量的那道闸,自己也要跨平台 ────────────────────────────────
-console.log("\n4) 结论类型的绕过闸:owner 豁免不能在 Windows 上失效");
+// ── 第四节:那条链的端到端(exec 洗掉记号之后,行不许被销掉)──────────────────────
+console.log("\n4) 落到债行上:记号这一刻认下、下一刻答 none,行不许被删");
+{
+  // 第三节证的是代数,这一节证**接线**:清扫那一步(`pushDebtLocked`)把这一轮确证过的成员
+  // 交给了判定。反事实 —— 把那份名单从判定的入参里拿掉 —— 这一组会红:记号那一问答 none、
+  // 路径没线索、根那一问有正面退出证明 ⇒ 行被真的 DELETE,而那个进程还在跑。这正是审查
+  // 实测的读数(同一个进程仍 alive、心跳 53→58、债表 0 行)。
+  //
+  // `ours` 这一档只有 Linux 的 `/proc/<pid>/environ` 给得出,这台机器是 macOS ⇒ 按
+  // fake-proc 台子的剧本回答那四个读取点,**判档、代次比较、发信号、进程死活全是产品里
+  // 那一份**(见那份夹具的顶注:它证的是「这套取证逻辑在 exact 档上的行为」,不是在原生
+  // Linux 上压出了 pid 复用)。剧本就是 `exec` 那一下:第一遍扫描读到记号(`ours`),之后
+  // 再也读不到(`none`),而 pid 和那一代一个字没变 —— 所以它核销不掉。
+  const { install: fakeProc, restore: realProc, counters } = await import("./fake-proc-fixture.js");
+  const { processUnitEvidence } = await import("../src/proc.js");
+  const key = "unit:ownership-exec";
+  const script = 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);';
+  // **忽略 SIGTERM**:产品会真朝它开一刀(剧本的第一遍答 ours,那一档敢下刀),而要测的处境
+  // 恰恰是「挨了刀还活着、记号却已经没了」。
+  const survivor = spawn(process.execPath, ["-e", script], { stdio: "ignore" });
+  await wait(400);
+  const pid = survivor.pid!;
+  const script_env = { tokensOnEnvRead: (n: number) => (n <= 2 ? [key] : []), genOnStatRead: () => "111" };
+
+  fakeProc(pid, script_env);
+  const opening = processUnitEvidence(key, { fresh: true });
+  if (opening.verdict === "ours" && opening.members.some((m) => m.pid === pid)) {
+    ok("台子前提:记号这一问先认下了这个号(exact 档)");
+  } else fail(`台子没搭起来(记号这一问答的是 ${opening.verdict})`);
+
+  await noteCleanupDebt({
+    unitToken: key, taskId: "t-exec", sessionId: "s-exec",
+    // 根那一问要有**正面退出证明**,否则整行永远走收档,这一组测不到销账那一头。
+    rootPid: 0x7ffffff, rootStartedAt: null, trackPath: null, outPath: null,
+    state: "unknown", detail: "夹具:exec 洗掉了记号", unitVerdict: "ours", open: [],
+  });
+
+  // 夹具纪律 ①:被测函数之前重新 install 归零 —— 这样清扫里的第一遍取证就是剧本的第 1、2 次。
+  // (`noteCleanupDebt` 自己不取证,三处取证全在清扫那条链上。)
+  fakeProc(pid, script_env);
+  // 纪律 ②:台子一直开到最后一发延迟信号结束(那里面有一发等 2 秒的补刀)。
+  const swept = await sweepAgentCleanupDebts();
+  const reads = counters.env;
+  realProc();
+  if (!swept.ok) throw new Error(`清扫没给出结论:${swept.reason}`);
+
+  const row = await rowOf(key);
+  const where = row ? await livesSomewhere(key, pid) : null;
+  if (row && where?.row) ok("记号下一刻答 none,行还在、而且点着那个号");
+  else fail(`行被销掉了,或者号没点上(${where?.where ?? "行已经没了"}) —— 审查实测的那一下`);
+  // 台子真的被走过三遍(opening / again / 判定里那一问),否则上面那句「还在」可能只是
+  // 剧本错位(记号从头到尾都读得到)蒙对的。
+  if (reads >= 6) ok(`取证走了 ${reads} 次环境读 ⇒ 三遍都真的问过`);
+  else fail(`剧本错位:只读了 ${reads} 次环境(期待 ≥6),上面那句不算检验`);
+  if (survivor.exitCode === null) ok("前提成立:那个进程确实还活着(所以销账会是假的)");
+  else fail("夹具进程自己死了 —— 这一组没测到东西");
+  survivor.kill("SIGKILL");
+}
+
+// ── 第五节:执行这条不变量的那道闸,自己也要跨平台 ────────────────────────────────
+console.log("\n5) 结论类型的绕过闸:owner 豁免不能在 Windows 上失效");
 {
   // 第 11 轮审查 F3:那道闸原本拿 `relative()` 的结果去跟一个写死正斜杠的字符串逐字比,
   // 而 Windows 原生 `relative` 返回反斜杠 —— 恒不等,于是 owner 自己那几处合法定义被当成

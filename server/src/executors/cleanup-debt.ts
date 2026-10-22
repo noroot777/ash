@@ -529,7 +529,7 @@ export async function sweepAgentCleanupDebts(): Promise<CleanupSweepResult> {
  */
 async function undeliveredCount(): Promise<number> {
   try {
-    const { undeliveredCleanupDebtCount } = await import("./kill.js");
+    const { undeliveredCleanupDebtCount } = await import("./cleanup-handoff.js");
     return undeliveredCleanupDebtCount();
   } catch {
     return 0;

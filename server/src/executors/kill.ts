@@ -31,12 +31,13 @@ import {
   collectEscapees, describeEvidence, killEscapees, ledgerOf, signalMembers,
 } from "./escapees.js";
 import {
-  joinOpen, judgeByClues, mergeClueAnswers, nothingToCollect, openLedger, openOf,
+  judgeByClues, mergeClueAnswers, nothingToCollect, openLedger, openOf,
   residueFromProbe, sweptClean, unitOpen,
   type CleanupOpen, type CleanupResult, type ClueAnswer,
 } from "./cleanup-result.js";
-// 只借类型:持久层是按需加载的(它拉起整个 db 层),不许在这里长出静态依赖。
-import type { CleanupDebtInput } from "./cleanup-debt.js";
+// 交接那一段路住在 cleanup-handoff.ts:它对持久层只借类型 + 按需加载(那一层会拉起整个 db
+// 层),所以从这里过去也不长出静态依赖。
+import { handOffCleanupDebt } from "./cleanup-handoff.js";
 
 // 各层原样转出去:`import { childStillOurs } from "./kill.js"` 这类既有写法照旧能用。
 export {
@@ -232,69 +233,6 @@ function rootClues(child: ChildProcess): { rootPid: number | null; rootStartedAt
 function tryAsk<T>(ask: () => T): T | null {
   try { return ask(); } catch { return null; }
 }
-
-/**
- * 把这一笔责任交给持久层。**连交接层自己都加载不起来时也得留个接手的**(第 3 轮审查 F2)。
- *
- * 上一版这里 `catch` 到就打一条日志、返回 `failed` 收场:那一笔既没进库,也不在任何人手上,
- * 后面哪一次清扫都不会再想起它。按需加载失败几乎只会是数据库初始化那一侧出了事,而那恰恰
- * 是「等一会儿再试就好了」的那种 —— 所以这里留一份进程内的待交清单,定时重试。
- * (落库本身失败那一档由 `cleanup-debt.ts` 自己的待投清单接着扛,两边各管自己那一段。)
- */
-async function handOffCleanupDebt(
-  input: CleanupDebtInput,
-): Promise<"noted" | "untrackable" | "failed"> {
-  try {
-    const layer = await import("./cleanup-debt.js");
-    return await layer.noteCleanupDebt(input);
-  } catch (error) {
-    console.error("[ash] 清理责任这一层加载失败,这一笔先留在内存里等重试:", error);
-    keepUndelivered(input);
-    scheduleRedelivery();
-    return "failed";
-  }
-}
-
-/**
- * 连持久层都没加载起来的那几笔,**按这一次运行去重**(第 4 轮审查 N3)。
- *
- * 上一版是个数组、一笔一笔 `push`:同一次运行反复交不出去时会在清单上堆好几份旧结论,
- * 补交按入列顺序一个个投,于是**旧的那一版最后落库、盖掉新的**。键按同一套线索算
- * (记号优先、退回运行专属文件路径,同 `debtKey`),所以同一次运行只会占一格、留最新那版。
- */
-const undelivered = new Map<string, CleanupDebtInput>();
-let redeliveryTimer: ReturnType<typeof setTimeout> | null = null;
-const REDELIVERY_DELAY_MS = 30_000;
-
-/** 只为去重算的键 —— 真正落库用哪个键由 `cleanup-debt.ts` 的 `debtKey` 说。 */
-const undeliveredKey = (input: CleanupDebtInput): string =>
-  input.unitToken || input.outPath || input.trackPath || "no-clue";
-
-function keepUndelivered(input: CleanupDebtInput): void {
-  const key = undeliveredKey(input);
-  // 叙述留最新那版(见上面那段),**点过的名两份并起来**:后一份输入更弱(这一刻取证失败、
-  // 名单是空的)时,按键覆盖会把前一份里那个已知的活后代整个丢掉(第 9 轮审查 F1-B 的
-  // 同类位置)。要从名单上消失只能靠退出证据。
-  const held = undelivered.get(key);
-  undelivered.set(key, held
-    ? { ...input, open: joinOpen(held.open ?? [], input.open ?? []) }
-    : input);
-}
-
-function scheduleRedelivery(): void {
-  if (redeliveryTimer || !undelivered.size) return;
-  redeliveryTimer = setTimeout(() => {
-    redeliveryTimer = null;
-    const batch = [...undelivered.values()];
-    undelivered.clear();
-    void (async () => { for (const one of batch) await handOffCleanupDebt(one); })();
-  }, REDELIVERY_DELAY_MS);
-  // 不拿住事件循环:这件事不该让一个本来可以退出的进程多活着。
-  (redeliveryTimer as { unref?: () => void }).unref?.();
-}
-
-/** 披露用:这一刻有几笔责任连持久层都还没交出去。 */
-export const undeliveredCleanupDebtCount = (): number => undelivered.size;
 
 type SweepOutcome = {
   /** 这一轮每一问都答出来了吗。 */

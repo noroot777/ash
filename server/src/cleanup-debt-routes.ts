@@ -54,7 +54,7 @@ export function mountCleanupDebtRoutes(api: Hono): void {
     // 而落库失败、或者连交接层都没加载起来的那几笔只活在本进程内 —— 它们跨不过重启。
     // 上一版这个端点只返回库内行,于是「INSERT 失败但 SELECT 正常」时披露面显示干干净净,
     // 正是这张表存在的理由要防的那件事。两个计数分开给,因为它们是两段路(见 sweep 的注释)。
-    const { undeliveredCleanupDebtCount } = await import("./executors/kill.js");
+    const { undeliveredCleanupDebtCount } = await import("./executors/cleanup-handoff.js");
     return c.json({
       debts: listing.debts,
       pendingNotes: pendingCleanupNoteCount(),
