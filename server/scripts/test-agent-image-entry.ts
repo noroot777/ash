@@ -35,10 +35,12 @@ const { childActivity } = await import("../src/executors/native-agent-activity.j
 const attachments = (events: AgentEvent[]) =>
   events.filter((event): event is Extract<AgentEvent, { kind: "attachment" }> => event.kind === "attachment");
 /** 子智能体那份抽屉里的附件(裹了一层 activity)。 */
+// 只认执行记录文档的附件:带 `field` 的属于 message/result 那份快照式正文(各自在协议读到
+// 那一刻冻结,时点与执行记录不同,见 markdown-image-meta.ts 与 test-agent-image-meta.ts)。
 const childShots = (events: AgentEvent[]) =>
   events.flatMap((event) => {
     const work = event.kind === "tool" ? event.nativeWork : undefined;
-    return work?.type === "activity" && work.event.kind === "attachment" ? [{ id: work.id, ...work.event }] : [];
+    return work?.type === "activity" && work.event.kind === "attachment" && !work.event.field ? [{ id: work.id, ...work.event }] : [];
   });
 const colorOf = (path: string | undefined) =>
   path === undefined ? "NONE" : readFileSync(path).equals(red) ? "RED" : readFileSync(path).equals(blue) ? "BLUE" : "OTHER";

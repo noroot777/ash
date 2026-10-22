@@ -1,7 +1,7 @@
 import type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus, TaskStatus } from "@ash/shared";
 import { nativeWorkStatus as workStatus } from "@ash/shared/native-work";
 export { nativeWorkStatus as workStatus } from "@ash/shared/native-work";
-import type { ConversationItem } from "./conversationModel.ts";
+import type { AttachmentSource, ConversationItem } from "./conversationModel.ts";
 
 export interface NativeWorkItem {
   id: string;
@@ -26,6 +26,9 @@ export interface NativeWorkItem {
   agentType?: string;
   legacy?: boolean;
   activity?: NativeAgentActivity[];
+  /** message/result(快照式正文)里图片引用的保存结果 —— 跟 activity 那份文档各配各的。 */
+  messageImages?: AttachmentSource[];
+  resultImages?: AttachmentSource[];
 }
 
 // 子智能体列表与执行详情抽屉共用同一套状态文案。
@@ -79,6 +82,10 @@ function legacyInput(raw: string): Record<string, unknown> {
 
 export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatus): NativeWorkItem[] {
   const rows = new Map<string, NativeWorkItem>();
+  // `行 id \u0000 字段` → 该快照式正文(message/result)的图片记录。服务端用 attachment 上的
+  // `field` 标注归属;这里不许把它混进 row.activity —— 混进去等于给执行记录那份文档多一条
+  // 结果,turnImages 的逐目的地对账会把整组判作废。
+  const metaImages = new Map<string, AttachmentSource[]>();
   const calls = new Map<string, { call: Call; rowId?: string }>();
   const taskIds = new Map<string, string>();
   const endedRows = new Set<string>();
@@ -133,8 +140,16 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
       observedAt = timestamp && Number.isFinite(Date.parse(timestamp)) ? timestamp : undefined;
       if (activity.type === "activity") {
         const id = key(activity.id);
+        const event = activity.event;
+        if (event.kind === "attachment" && (event.field === "message" || event.field === "result") && event.source) {
+          const slot = `${id}\u0000${event.field}`;
+          const list = metaImages.get(slot) ?? [];
+          list.push({ path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost });
+          metaImages.set(slot, list);
+          continue;
+        }
         const row = rows.get(id) ?? put(id, { nativeId: activity.id, status: "running" });
-        (row.activity ??= []).push(activity.event);
+        (row.activity ??= []).push(event);
         continue;
       }
       if (activity.type === "agent") {
@@ -231,6 +246,16 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           // 按合并后的 id 重算占位标题,免得留着派活调用那一截 id。
           const title = existing && named(existing) ? existing.title
             : named(row) ? row.title : placeholderTitle(row.sessionId, key(nativeId));
+          // 行搬家(调用行 → 真实线程行),它名下的快照式正文记录跟着走。
+          for (const field of ["message", "result"] as const) {
+            const slot = `${rowId}\u0000${field}`;
+            const moved = metaImages.get(slot);
+            if (moved) {
+              const target = `${key(nativeId)}\u0000${field}`;
+              metaImages.set(target, [...(metaImages.get(target) ?? []), ...moved]);
+              metaImages.delete(slot);
+            }
+          }
           rows.set(key(nativeId), { ...row, id: key(nativeId), title, ...(existing ? {
             activity: existing.activity, message: existing.message,
             description: existing.description || row.description,
@@ -272,8 +297,14 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
       }
     }
   }
+  const withMeta = (row: NativeWorkItem): NativeWorkItem => {
+    const message = metaImages.get(`${row.id}\u0000message`);
+    const result = metaImages.get(`${row.id}\u0000result`);
+    if (!message && !result) return row;
+    return { ...row, ...(message ? { messageImages: message } : {}), ...(result ? { resultImages: result } : {}) };
+  };
   // Parent lifecycle cannot prove the final state of independently running children.
-  return [...rows.values()].map((row) => {
+  return [...rows.values()].map(withMeta).map((row) => {
     if (row.status !== "running" && row.status !== "pending") return row;
     if (taskStatus === "canceled" || taskStatus === "paused") return { ...row, status: "unknown", message: row.message || "主任务已停止或暂停，未收到此项最终状态。" };
     if ((taskStatus !== "running" && taskStatus !== "queued") || endedRows.has(row.id)) return { ...row, status: "unknown", message: row.message || "会话已结束，未收到此项最终状态。" };

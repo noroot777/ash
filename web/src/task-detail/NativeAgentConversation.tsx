@@ -8,6 +8,7 @@ import { taskFileResolver } from "../components/markdownPolicy.ts";
 import type { NativeWorkItem } from "./nativeWorkModel.ts";
 import { NATIVE_WORK_NO_ASSIGNMENT } from "./nativeWorkModel.ts";
 import { nativeAgentSegments } from "./nativeAgentSegments.ts";
+import { turnImageMarkdown } from "./turnImages.ts";
 import { segmentContentSize } from "./conversationContentSize.ts";
 import { NativeWorkHeadline } from "./NativeWorkMeta.tsx";
 
@@ -21,13 +22,27 @@ export function NativeAgentConversation({ row, taskId, statusLabel, error, onRet
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const segments = useMemo(() => nativeAgentSegments(row.activity ?? []), [row.activity]);
-  // 没有执行记录、只剩 message/result 那条路径不走分段模型（也就没有 turnImages 那一档
-  // 快照配对），正文里的本机图片只能「现在去工作目录里取」。
   const resolveFile = useMemo(() => taskFileResolver(taskId), [taskId]);
   const running = row.status === "running";
   const pending = row.status === "pending";
   const finalResult = segments.length > 0 && (row.status === "completed" || row.status === "failed")
     && row.result && !segments.map((segment) => segment.markdown).join("").includes(row.result) ? row.result : null;
+  // message/result(快照式正文)走跟会话正文同一套配对:服务端在协议读到那一刻拍下字节、
+  // 按 field 发来记录(nativeWorkModel 路由到 messageImages/resultImages),这里改写出
+  // 「说那句话时的那一张」。没有记录的老数据照旧退一档去工作目录取(turnImageDocument 的
+  // live 档),不比从前差(审查第 8 轮 R2 同类漏口:这三处原先只会读当前文件)。
+  const messageBody = useMemo(
+    () => (row.message ? turnImageMarkdown(row.message, row.messageImages, taskId) : null),
+    [row.message, row.messageImages, taskId],
+  );
+  const resultBody = useMemo(
+    () => (row.result ? turnImageMarkdown(row.result, row.resultImages, taskId) : null),
+    [row.result, row.resultImages, taskId],
+  );
+  const finalResultBody = useMemo(
+    () => (finalResult ? turnImageMarkdown(finalResult, row.resultImages, taskId) : null),
+    [finalResult, row.resultImages, taskId],
+  );
   /* 这一屏到底显示了多少字。两条规矩:
      ① 按**归一化之后**的 segments 算,不按原始 activity 条数 —— 同一个附件被重复通知时
         nativeAgentSegments 会去重,渲染数据一个像素没变,那就不该算成新内容(审查 B6);
@@ -58,16 +73,15 @@ export function NativeAgentConversation({ row, taskId, statusLabel, error, onRet
             ? <details className="native-agent__assignment"><summary>收到的输入</summary><MarkdownBody text={row.description} /></details>
             : <p className="native-work__hint">{NATIVE_WORK_NO_ASSIGNMENT}</p>}
           {/* 分段在场时正文走 AgentTurnBody(附件快照优先,见 turnImages)。下面那一支只在
-              **一条活动记录都没有**时出现 —— 分段就是从同一串活动里切出来的,所以那时
-              连一条附件结果都不存在,没有快照可兑现,`resolveFile` 的「现在去工作目录取」
-              是唯一一档,不是绕过了谁(审查第 1 轮 F1 同类路径)。`finalResult` 同理:它只在
-              返回结果不在任何分段正文里时才画,那段文字从来没进过 text 活动。 */}
+              **一条活动记录都没有**时出现;它和 `finalResult` 的正文都经 turnImageMarkdown
+              配过快照(messageBody/resultBody),配不上或没记录的那一档才轮到 resolveFile
+              的「现在去工作目录取」。 */}
           {segments.length > 0 ? <AgentTurnBody segments={segments} running={running} taskId={taskId} /> : <>
             <p className="native-work__hint">{running ? "等待子智能体的执行记录…" : pending ? "等待子智能体开始执行…" : "此会话未记录详细执行过程。"}</p>
-            {row.message && <MarkdownBody text={row.message} resolveFile={resolveFile} />}
-            {row.result && row.result !== row.message && <MarkdownBody text={row.result} resolveFile={resolveFile} />}
+            {messageBody && <MarkdownBody text={messageBody} resolveFile={resolveFile} />}
+            {resultBody && row.result !== row.message && <MarkdownBody text={resultBody} resolveFile={resolveFile} />}
           </>}
-          {finalResult && <section><h4>返回结果</h4><MarkdownBody text={finalResult} resolveFile={resolveFile} /></section>}
+          {finalResultBody && <section><h4>返回结果</h4><MarkdownBody text={finalResultBody} resolveFile={resolveFile} /></section>}
           {running && <p className="native-agent__live" role="status"><span className="task-execution-pulse" aria-hidden="true" />执行中，内容实时更新</p>}
         </div>
         <ConversationScrollControls scrollRef={scroll} resetKey={row.id} tailKey={nativeTailKey} />

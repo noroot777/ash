@@ -177,4 +177,33 @@ for (const event of stamped) {
   assert.ok(event?.kind === "tool" && event.nativeWork?.at && Number.isFinite(Date.parse(event.nativeWork.at)),
     "各 nativeWork 生产路径在进入实时流前均提供有效时间戳");
 }
+// message/result(快照式正文)的图片记录带 `field`,必须路由到 messageImages/resultImages,
+// 不许混进 row.activity(混进去 = 执行记录文档多一条结果,逐目的地对账整组作废)。
+{
+  const fieldShot = (field: "message" | "result", source: string, path: string): NativeWorkEvent =>
+    ({ type: "activity", id: "child", event: { kind: "attachment", field, source, ref: 0, pos: 3, path } });
+  const row = rowFrom([
+    spawn, launched,
+    { type: "activity", id: "child", event: { kind: "text", text: "执行:![k](k.png)\n\n" } },
+    { type: "activity", id: "child", event: { kind: "attachment", source: "k.png", ref: 0, pos: 3, path: "/up/k.png" } },
+    fieldShot("message", "m.png", "/up/m.png"),
+    fieldShot("result", "r.png", "/up/r.png"),
+    { ...completed, message: "说明 ![m](m.png)", result: "结果 ![r](r.png)" },
+  ]);
+  assert.deepEqual(row.messageImages, [{ path: "/up/m.png", source: "m.png", ref: 0, pos: 3, lost: undefined }]);
+  assert.deepEqual(row.resultImages, [{ path: "/up/r.png", source: "r.png", ref: 0, pos: 3, lost: undefined }]);
+  assert.deepEqual(
+    (row.activity ?? []).filter((event) => event.kind === "attachment"),
+    [{ kind: "attachment", source: "k.png", ref: 0, pos: 3, path: "/up/k.png" }],
+    "field 记录不进执行记录;无 field 的照旧",
+  );
+  // 记录先于 agent_id 解析到达(挂在 spawn 调用行上)时,行合并后账要跟着走。
+  const early = rowFrom([
+    spawn,
+    { type: "activity", id: "call", event: { kind: "attachment", field: "message", source: "m.png", ref: 0, pos: 0, path: "/up/m.png" } },
+    launched,
+    { ...completed, message: "![m](m.png)" },
+  ]);
+  assert.deepEqual(early.messageImages?.map((shot) => shot.source), ["m.png"], "行合并时 field 账跟着搬到 native id 名下");
+}
 console.log("子智能体模型、待办开工时间、跨日跨度、实时/历史时间与缺失数据回归通过");

@@ -16,7 +16,9 @@ export type NativeAgentActivity =
   | { kind: "error"; message: string }
   // source/ref/path 的语义见 shared/src/events.ts 的同名字段(子智能体那一层同样要带:
   // 抽屉里的正文跟主会话走同一套配对,少一个字段就配不上)。
-  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean };
+  // `field` = 这条记录属于哪份**快照式**正文:子智能体的 message / 返回结果 result(它们
+  // 不是执行记录那份追加式文档,配对各归各,见 server 的 markdown-image-meta.ts)。
+  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean; field?: "message" | "result" };
 
 export type NativeWorkEvent = (
   | { type: "activity"; id: string; event: NativeAgentActivity }

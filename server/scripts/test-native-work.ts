@@ -171,6 +171,7 @@ assert.equal(fromTools(codexStream)[0].status, "completed", "Codex exec JSON与A
 const imageDir = mkdtempSync(join(tmpdir(), "ash-native-attachments-"));
 const sourceImage = join(imageDir, "child.svg");
 const attachments: string[] = [];
+const fieldAttachments: (string | undefined)[] = [];
 try {
   writeFileSync(sourceImage, '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>');
   const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=";
@@ -180,12 +181,17 @@ try {
     { type: "assistant", parent_tool_use_id: "images", message: { content: [{ type: "text", text: `![截图](${sourceImage})` }] } },
   ]) as any)) {
     assert.notEqual(event.kind, "attachment", "子智能体附件不混入主会话");
-    if (event.kind === "tool" && event.nativeWork?.type === "activity" && event.nativeWork.event.kind === "attachment") attachments.push(event.nativeWork.event.path);
+    if (event.kind === "tool" && event.nativeWork?.type === "activity" && event.nativeWork.event.kind === "attachment") {
+      // field 记录属于 message/result 那份快照式正文(markdown-image-meta.ts),身份计数
+      // 各归各,单独数。
+      (event.nativeWork.event.field ? fieldAttachments : attachments).push(event.nativeWork.event.path);
+    }
   }
   assert.equal(attachments.length, 2, "子智能体tool_result与Markdown图片均保留");
+  assert.equal(fieldAttachments.length, 1, "子智能体正文同步进 message 的那份也冻结了字节");
   assert.ok(attachments.every((path) => existsSync(path) && readFileSync(path).length > 0));
 } finally {
-  attachments.forEach((path) => rmSync(path, { force: true }));
+  [...attachments, ...fieldAttachments].forEach((path) => { if (path) rmSync(path, { force: true }); });
   rmSync(imageDir, { recursive: true, force: true });
 }
 

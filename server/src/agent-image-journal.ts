@@ -14,7 +14,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { AgentEvent } from "@ash/shared";
+import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 import { markdownImageRefs } from "@ash/shared/markdown-images";
 import { childActivity } from "./executors/native-agent-activity.js";
 import type {
@@ -98,7 +98,7 @@ async function readJournal(taskId: string, sessionId: string): Promise<JournalLi
 }
 
 /** 子文档的一条活动(正文/附件):trace 与实时事件同一形状,两处读取都从这儿走。 */
-function childEventOf(event: SessionTraceEvent | AgentEvent): { id: string; event: AgentEvent } | null {
+function childEventOf(event: SessionTraceEvent | AgentEvent): { id: string; event: NativeAgentActivity } | null {
   if (event.kind !== "tool" || event.nativeWork?.type !== "activity") return null;
   return { id: event.nativeWork.id, event: event.nativeWork.event };
 }
@@ -150,12 +150,16 @@ export async function loadMarkdownImageSeed(
     }
     const child = childEventOf(entry.event);
     if (!child) continue;
+    // message/result(快照式正文)的记录不属于执行记录那份追加式文档:算进它的身份计数,
+    // 接回后的第一处引用就会跳号,展示端按「来源+身份」去重时夹掉真记录。
+    if (child.event.kind === "attachment" && child.event.field) continue;
     if (child.event.kind === "text" && child.event.text) doc(child.id).text += child.event.text;
     else if (child.event.kind === "attachment" && typeof child.event.ref === "number" && child.event.ref < SYNTH_REF_BASE) {
       count(doc(child.id), child.event.ref, child.event.pos);
     }
   }
   for (const line of await readJournal(taskId, sessionId)) {
+    if (line.field) continue; // 快照式正文的账不进种子:每条进程按自己看到的终稿各交各的
     if (line.doc == null && line.turnStartedAt !== opts.mainTurnStartedAt) continue;
     if (line.final) {
       if (typeof line.ref !== "number" || line.ref >= SYNTH_REF_BASE) continue;
@@ -194,9 +198,10 @@ export async function loadMarkdownImageSeed(
   return out.size ? out : undefined;
 }
 
-/** 文档在对账里的身份:子文档跨回合是同一份,主文档一回合一份(sink 的 Ledger 同一口径)。 */
-const docKey = (doc: string | null | undefined, turnStartedAt: string): string =>
-  doc == null ? `\u0000${turnStartedAt}` : doc;
+/** 文档在对账里的身份:子文档跨回合是同一份,主文档一回合一份(sink 的 Ledger 同一口径);
+ * message/result 的快照式正文各是独立一份(别跟同 id 的执行记录文档撞位置)。 */
+const docKey = (doc: string | null | undefined, turnStartedAt: string, field?: string): string =>
+  (doc == null ? `\u0000${turnStartedAt}` : doc) + (field ? `\u0001${field}` : "");
 
 function imageEvent(line: JournalLine, ref: number): SessionTraceEvent {
   const image: AgentEvent = {
@@ -204,6 +209,7 @@ function imageEvent(line: JournalLine, ref: number): SessionTraceEvent {
     source: line.source,
     ref,
     pos: line.pos,
+    ...(line.field ? { field: line.field } : {}),
     ...(line.path ? { path: line.path } : {}),
     ...(line.lost ? { lost: true } : {}),
   };
@@ -238,8 +244,8 @@ export async function mergeImageJournal(
   if (!journal.length) return entries;
   const traced = new Set<string>();
   const texts = new Map<string, string>();
-  const tracedKey = (turn: string, doc: string | null | undefined, source: string, ref: number) =>
-    `${turn}\u0000${doc ?? ""}\u0000${source}\u0000${ref}`;
+  const tracedKey = (turn: string, doc: string | null | undefined, field: string | undefined, source: string, ref: number) =>
+    `${turn}\u0000${doc ?? ""}\u0000${field ?? ""}\u0000${source}\u0000${ref}`;
   for (const entry of entries) {
     const event = entry.event;
     if (event.kind === "text" && event.text) {
@@ -248,7 +254,7 @@ export async function mergeImageJournal(
       continue;
     }
     if (event.kind === "attachment" && typeof event.ref === "number") {
-      traced.add(tracedKey(entry.turnStartedAt, null, event.source ?? "", event.ref));
+      traced.add(tracedKey(entry.turnStartedAt, null, undefined, event.source ?? "", event.ref));
       continue;
     }
     const child = childEventOf(event);
@@ -256,12 +262,12 @@ export async function mergeImageJournal(
     if (child.event.kind === "text" && child.event.text) {
       texts.set(child.id, (texts.get(child.id) ?? "") + child.event.text);
     } else if (child.event.kind === "attachment" && typeof child.event.ref === "number") {
-      traced.add(tracedKey(entry.turnStartedAt, child.id, child.event.source ?? "", child.event.ref));
+      traced.add(tracedKey(entry.turnStartedAt, child.id, child.event.field, child.event.source ?? "", child.event.ref));
     }
   }
   const finalsAt = new Set<string>();
   for (const line of journal) {
-    if (line.final) finalsAt.add(`${docKey(line.doc, line.turnStartedAt)}\u0000${line.pos}`);
+    if (line.final) finalsAt.add(`${docKey(line.doc, line.turnStartedAt, line.field)}\u0000${line.pos}`);
   }
   // 「真实正文里的对应节点」:恢复只认**已落盘正文**里确实存在、目的地也对得上的那一处。
   // 身份对不上节点的(正文没写进 trace 的后半截、目的地后来改写过的旧笔),final 和临时账
@@ -283,8 +289,10 @@ export async function mergeImageJournal(
   for (const line of journal) {
     if (line.final) {
       if (typeof line.ref !== "number") continue;
-      if (nodeAt(docKey(line.doc, line.turnStartedAt), line.pos) !== line.source) continue;
-      const key = tracedKey(line.turnStartedAt, line.doc, line.source, line.ref);
+      // message/result 是快照式正文,不落 text 事件,核不了节点 —— 它的 final 在协议入口
+      // 一次成稿,按原样补;追加式文档照核。
+      if (!line.field && nodeAt(docKey(line.doc, line.turnStartedAt), line.pos) !== line.source) continue;
+      const key = tracedKey(line.turnStartedAt, line.doc, line.field, line.source, line.ref);
       if (traced.has(key)) continue;
       traced.add(key);
       synth.push({ line, event: imageEvent(line, line.ref) });

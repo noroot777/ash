@@ -15,6 +15,7 @@ import {
   type ImageStore,
   type PersistedMarkdownImage,
 } from "../agent-attachments.js";
+import { metaImageAccounts } from "./markdown-image-meta.js";
 import { childActivity } from "./native-agent-activity.js";
 
 // **冻结字节**那一遍扫描的窗口。全文一直留着(见 Ledger.text),这个窗口只决定「每来一片
@@ -159,6 +160,8 @@ export type MarkdownImageSink = {
  */
 export type MarkdownImageSpot = {
   doc: string | null;
+  /** 这条账属于子智能体的哪份**快照式**正文(message/result),缺省 = 追加式文档本体。 */
+  field?: "message" | "result";
   /** 引用在这份文档全文里的绝对起点 —— 临时账与最终账靠它对上同一处。 */
   pos: number;
   source: string;
@@ -203,6 +206,9 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
   const exposed = new Set<string>();
   /** 从 release 出去过的事件(含它自己造的 attachment),见 MarkdownImageSink.noted。 */
   const released = new WeakSet<object>();
+  // 子智能体 message/result(快照式正文)的账各归各(见 markdown-image-meta.ts),但清理
+  // 账本共用:拍下没人领的照旧由 dispose 删。
+  const meta = metaImageAccounts({ cwd, note, captured, claimed });
   const ledgers = new Map<string, Ledger>();
   const ledgerFor = (id: string | null): Ledger => {
     const key = id ?? "";
@@ -583,6 +589,8 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
 
   return {
     capture(event) {
+      // 子智能体的 message/result 是快照式正文,字节同样在这一刻冻(账在 meta 那本上)。
+      meta.capture(event);
       // 子智能体说的正文记在它自己那笔账上(抽屉里那份文档),不许跟主会话混着扫。
       const child = childText(event);
       if (child) {
@@ -618,6 +626,7 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
           if (key === "" || event.kind === "done") out.push(...take(closeLedger(ledger)));
           else out.push(...take(settle(ledger, "checkpoint")));
         }
+        if (event.kind === "done") out.push(...meta.close());
       } else if (finished !== null) {
         // 某个子智能体说它收工了:它那份文档记一次中途的账。**状态一个字都不清** ——
         // 同 id 的子智能体会被唤醒接着说(native-work.ts 把同一 thread 的 turn/started、
@@ -627,8 +636,10 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
         // 一起提示「图取不到」(审查第 6 轮 R2 第 3 行)。
         const ledger = ledgers.get(finished);
         if (ledger) out.push(...take(settle(ledger, "checkpoint")));
+        out.push(...meta.settle(event));
       } else {
         for (const ledger of ledgers.values()) if (ledger.due) out.push(...take(settle(ledger, "settled")));
+        out.push(...meta.settle(event));
       }
       out.push(event);
       for (const one of out) released.add(one);
@@ -637,6 +648,7 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
     close() {
       const out: AgentEvent[] = [];
       for (const ledger of ledgers.values()) out.push(...take(closeLedger(ledger)));
+      out.push(...meta.close());
       for (const one of out) released.add(one);
       return out;
     },
@@ -655,54 +667,6 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
   };
 }
 
-/**
- * 给**任意**事件流补上「正文里提到的那张本机图片」。
- *
- * 生产路径上的入口是 event-queue.ts 的 EventQueue:捕获必须排在增量合并、活动合并和队列
- * **之前**,而一层流包装只看得见「事件已经出来了」那一刻。这个函数是**兜底加语义参考**
- * —— 没走那条流水线的事件(解析器自己 yield 的)由 settleMarkdownImages 补记一次账。
- */
-export function withMarkdownImages(
-  events: AsyncIterable<AgentEvent>,
-  cwd?: string,
-  accounting?: MarkdownImageAccounting,
-): AsyncIterable<AgentEvent> {
-  return settleMarkdownImages(events, markdownImageSink(cwd, accounting));
-}
-
-/**
- * 已经在入口处记过账的那条流:负责**收口** —— 正常收尾、上游抛错、提前中断三条路都得
- * 有个了结。
- *
- * 抛错那条路必须在重新抛出**之前**把图交代完:上游一抛,正常收尾的那几句全被跳过(审查
- * 第 5 轮 R3)。消费者这时还在取事件(异常是它调 next() 时才抛到它手里的),所以这几条
- * attachment 送得出去。
- *
- * 消费者自己抛错/提前 break 那条路**没法再 yield**(调用方已经不取了),所以它只走 finally
- * 里的清理 —— 那一档靠两件事兜住:交代是**跟着正文一起发**的(语法一定型就发,不等回合
- * 收尾),以及 dispose 不删「语法已经认下它」的拷贝(见那里的注释)。
- */
-export async function* settleMarkdownImages(
-  events: AsyncIterable<AgentEvent>,
-  sink: MarkdownImageSink,
-): AsyncIterable<AgentEvent> {
-  try {
-    try {
-      for await (const event of events) {
-        // 已经从 EventQueue 走过账的原样放行;没走过的在这儿补记一次(见 sink.noted)。
-        if (sink.noted(event)) {
-          yield event;
-          continue;
-        }
-        sink.capture(event);
-        yield* sink.release(event);
-      }
-    } catch (error) {
-      for (const event of sink.close()) yield event;
-      throw error;
-    }
-    for (const event of sink.close()) yield event;
-  } finally {
-    sink.dispose();
-  }
-}
+// withMarkdownImages / settleMarkdownImages 住在 markdown-image-flow.ts(700 行上限),
+// 从这里原样转发:账本与收口是一对出口,调用方不该知道它们分了家。
+export { settleMarkdownImages, withMarkdownImages } from "./markdown-image-flow.js";
