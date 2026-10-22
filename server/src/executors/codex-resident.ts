@@ -1,4 +1,6 @@
-import { cleanupSettled, mergeCleanupResults, type CleanupResult } from "./kill.js";
+import {
+  cleanupSettled, mergeCleanupResults, nothingToCollect, type CleanupResult,
+} from "./kill.js";
 import type { ChildProcess } from "node:child_process";
 import type { AgentEvent } from "@ash/shared";
 import type { ResidentHandle } from "./types.js";
@@ -77,7 +79,9 @@ export function openCodexResident(params: {
   const finalizeTurn = (child: ChildProcess): Promise<CleanupResult> => {
     const pending = inflight.get(child);
     if (pending) return pending;
-    if (!unfinalized.has(child)) return Promise.resolve({ kind: "empty" } as CleanupResult);
+    // 待收册上压根没有它 ⇒ 没有要收的东西(资源缺,见 cleanup-result.ts 顶部)。走工厂而不
+    // 是 `as CleanupResult`:断言能绕过那道「手上有名单就答不出空」的闸(检查脚本也拦它)。
+    if (!unfinalized.has(child)) return Promise.resolve(nothingToCollect());
     const run = (async (): Promise<CleanupResult> => {
       try {
         const result = await params.finalizeTurn(child);
@@ -89,7 +93,12 @@ export function openCodexResident(params: {
         return result;
       } catch (error) {
         console.warn("[ash] 回收 codex 常驻回合的后代失败(留在册上,下一次 cleanup 再试):", error);
-        return { kind: "unknown", detail: error instanceof Error ? error.message : String(error) };
+        return {
+          kind: "unknown", detail: error instanceof Error ? error.message : String(error),
+          // 清理本身抛了异常:这一轮一个号都没点上来,名单只能是空的(它的责任由「留在
+          // 待收册上」背着 —— 下一次 cleanup 会重新取证)。
+          open: [],
+        };
       }
     })().finally(() => {
       inflight.delete(child);

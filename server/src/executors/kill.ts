@@ -27,9 +27,12 @@ import { adoptedIdentityOf, childKillAuthorized, childStillOurs } from "./child-
 import {
   fileHoldersAnswerable, probeFileHolders, releaseTrackEvidence, trackPathOf,
 } from "./track-evidence.js";
-import { collectEscapees, describeEvidence, killEscapees, signalMembers } from "./escapees.js";
 import {
-  describeOpen, dischargeOpen, joinOpen, judgeByClues, mergeClueAnswers, openOf, residueFromProbe,
+  collectEscapees, describeEvidence, killEscapees, ledgerOf, signalMembers,
+} from "./escapees.js";
+import {
+  joinOpen, judgeByClues, mergeClueAnswers, nothingToCollect, openLedger, openOf,
+  residueFromProbe, sweptClean,
   type CleanupOpen, type CleanupResult, type ClueAnswer,
 } from "./cleanup-result.js";
 // 只借类型:持久层是按需加载的(它拉起整个 db 层),不许在这里长出静态依赖。
@@ -44,7 +47,8 @@ export {
   sweepOrphanTrackFiles,
 } from "./track-evidence.js";
 export {
-  cleanupDetail, cleanupRetriable, cleanupSettled, mergeCleanupResults, residueFromProbe,
+  cleanupDetail, cleanupRetriable, cleanupSettled, mergeCleanupResults, nothingToCollect,
+  residueFromProbe, sweptClean,
   type CleanupResult,
 } from "./cleanup-result.js";
 
@@ -92,8 +96,11 @@ async function finalResidue(child: ChildProcess): Promise<CleanupResult> {
   // 设备,不是资源。两个文件压根不存在才是正面的「没有东西能被握着」。
   if (!fileHoldersAnswerable()) {
     return trackPath || outPath
-      ? { kind: "silent", why: "这台机器答不了「谁还握着这次运行的文件」(没有 lsof 等价物)" }
-      : { kind: "empty" };
+      ? {
+        kind: "silent", why: "这台机器答不了「谁还握着这次运行的文件」(没有 lsof 等价物)",
+        open: [],                                 // 这条线索压根没问,所以它没点过任何名
+      }
+      : nothingToCollect();                       // 两个文件都不存在 ⇒ 没有东西能被握着
   }
   const [track, out] = await Promise.all([
     trackPath ? probeFileHolders(trackPath) : Promise.resolve(null),
@@ -333,17 +340,22 @@ type SweepOutcome = {
 function rootProofOf(child: ChildProcess, survivors: readonly number[], lingers: boolean): CleanupResult {
   const pid = child.pid;
   // 压根没有真实进程(失败桩):缺的是**资源**不是设备 ⇒ 这一问正面答空(cleanup-result.ts 顶部)。
-  if (!pid) return { kind: "empty" };
-  if (survivors.includes(pid)) return { kind: "remaining", detail: `根进程 ${pid} 下过刀仍活着` };
+  if (!pid) return nothingToCollect();            // 失败桩:没有真实进程 ⇒ 资源缺,正面答空
+  // 根这一问的责任由债表行上的 `rootPid` + 启动时刻那台设备跨重启地背着(见
+  // cleanup-debt-judge.ts 的 `rootResidue`),所以这里不往后代名单里按号点名。
+  if (survivors.includes(pid)) {
+    return { kind: "remaining", detail: `根进程 ${pid} 下过刀仍活着`, open: [] };
+  }
   if (lingers) {
     return {
       kind: "remaining",
       detail: "根进程还在那个号上,但证不出它属于这一次运行(粗档 pid 不是排他凭证)",
+      open: [],                                   // 证不出归属的号不许点名(同上)
     };
   }
   // 要么内核已经确认它退了(已 reap / 号已换主),要么这一轮朝它开过刀、2 秒复查时那个号上
   // 已经没有它 —— 两种都是正面的退出证明。
-  return { kind: "empty" };
+  return sweptClean([]);                          // 内核确认它退了 / 下过刀复查时号上已没有它
 }
 
 /**
@@ -369,9 +381,12 @@ function judgeCleanup(sweep: SweepOutcome, token: string | null): CleanupResult 
   // 记号那一问**有记号才有这台设备**:种失败的那些压根没这条线索。
   if (token) {
     if (sweep.unit.verdict === "ours" || sweep.unit.verdict === "suspected") {
-      clues.push({ subject: "descendants", answer: { kind: "remaining", detail: describeEvidence(sweep.unit) } });
+      clues.push({
+        subject: "descendants",
+        answer: { kind: "remaining", detail: describeEvidence(sweep.unit), open: [] },
+      });
     } else if (sweep.unit.verdict === "none") {
-      clues.push({ subject: "descendants", answer: { kind: "empty" } });
+      clues.push({ subject: "descendants", answer: nothingToCollect() });
     } else if (monitorUnitAnswerable()) {
       // `unprovable` 有两种,处置相反(第 3 轮审查 N2):这一次查询失败 ⇒ 留着重试……
       reasons.push("资源记号这一问没答出来");
@@ -380,7 +395,10 @@ function judgeCleanup(sweep: SweepOutcome, token: string | null): CleanupResult 
       // 它不是「没有残留」(第 4 轮审查 F1),是这一问**没有证据来源**:如实弃权。
       clues.push({
         subject: "descendants",
-        answer: { kind: "silent", why: "这台机器读不到别的进程的环境块,问不出带这次记号的进程" },
+        answer: {
+          kind: "silent", why: "这台机器读不到别的进程的环境块,问不出带这次记号的进程",
+          open: [],
+        },
       });
     }
   }
@@ -394,9 +412,9 @@ function judgeCleanup(sweep: SweepOutcome, token: string | null): CleanupResult 
       ? { kind: "remaining", detail: `下过刀仍活着:${sweep.survivors.join(",")}`, open }
       : !sweep.answered || reasons.length
         ? { kind: "unknown", detail: reasons.join(";") || "有一问没答出来", open }
-        : open.length
-          ? { kind: "unknown", detail: `还有排除不掉的号:${describeOpen(open)}`, open }
-          : { kind: "empty" },
+        // 名单空了才答得出空来 —— 这一句不再是这里的 if,而是 `sweptClean` 的签名
+        // (手上有名单就合不出 `empty`,见 cleanup-result.ts 的闸一)。
+        : sweptClean(open),
   });
   return judgeByClues(clues);
 }
@@ -415,16 +433,22 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   const lingers = (): boolean => !!child.pid && childStillOurs(child) && !childKillAuthorized(child);
   const faults = [...first.faults];
   /**
-   * **这一轮点过的名,逐次累加**(第 9 轮审查 F1-A)。
+   * **这一次清理「还欠谁」的那本账**(第 9 轮审查 F1-A、第 10 轮审查 F1-A)。
    *
-   * 上一版只把**最后那次**扫描的名单交上去:停止前点过名的号,在停止后那次快照里因为已经
-   * 被重父到 1 号名下、父边变得读得出来,就不再出现在它自己的视野里 —— 于是名单空了、
-   * 结构化责任一个字没落盘,重试清扫照自己那几台设备的「没有」把行删了(审查实测:同一个
-   * 号仍 alive、心跳 44→52)。
+   * 身份有五个来源,少并一个就漏一次责任,所以它们只在这一本账上汇总(见 `openLedger`):
+   *  ① 三次扫描各自**点的名**(`.open`:父边问不出来、代次核验不了的那些);
+   *  ② 每一次扫描**确认归属**的成员(`.targets`)—— 认下那一刻起就是责任;
+   *  ③ 跨得过「丢了 fd」的那本后代账(`ledgerOf`)。
    *
-   * 「这一次没看见」不是退出证明。要从名单上消失只有一条路:`dischargeOpen` 给出的退出证据。
+   * 为什么②③也必须进:核验不了代次的成员会被**正确地**放过(不敢下刀),于是它既不是
+   * 残存者、也不在那一轮的 `.open` 里;而收尾那次扫描又因为它已被重父到 1 号名下而看不见
+   * 它 —— 上一版据此答 `empty`、债表 0 笔,而它还在写(第 10 轮审查实测,心跳 107→117)。
+   *
+   * 「这一次没看见」不是退出证明。要从账上消失只有一条路:`dischargeOpen` 给出的退出证据。
    */
-  let named: CleanupOpen[] = [...first.open];
+  const owed = openLedger();
+  owed.add(first.open);
+  owed.own(first.targets, "本次运行已确认的后代,还没有它的退出证据");
   /**
    * 三条出路共用的收尾读数。**记号与两个运行专属文件都在这里重新问一次** ——
    * 上一版把 `first.unit` / `second.unit`(下刀**之前**那次取证)当成最终结论往上传,于是
@@ -443,17 +467,21 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
     // 跟一个陌生进程读不出任何差别(`closed_at` 那段注释说的就是这条边界)。
     const final = await collectEscapees(child);
     const live = final.targets.filter((m) => isPidAlive(m.pid));
-    // 三次扫描点过的名并起来,再**按退出证据**核销一次:还在的留着往上传,确证退了的
-    // (号上没人 / 同一坐标系里换了代)就地消解 —— 所以正常收尾不会因为中途出现过一次
-    // 瞬时空洞而平白押一笔债。
-    const { left } = dischargeOpen(joinOpen(named, final.open, live.map((m) => ({
-      pid: m.pid, gen: m.gen, why: "这次运行的后代,收尾之后仍活着",
-    }))));
+    // 收尾这次的三份身份一起入账(见 `owed` 那段的①②③)。`ledgerOf` 这一份是关键的那条:
+    // 它记着**这一轮认过的全部后代**,所以「这一刻的视野里看不见了」不等于它退了。
+    owed.add(final.open);
+    owed.own(final.targets, "这次运行的后代,收尾之后仍活着");
+    owed.own(ledgerOf(child), "本次运行认下过的后代,这一刻的视野里不一定看得见");
+    // 账本自己核销一遍:确证退了的(号上没人 / 同一坐标系里换了代)就地消解 —— 所以正常
+    // 收尾不会因为中途出现过一次瞬时空洞、或者某个后代正常退出过,而平白押一笔债。
+    const left = owed.left();
     return {
       answered: answered && final.answered,
       faults: [...faults, ...final.faults.filter((f) => !faults.includes(f))],
       open: left,
       // 残存者两份并起来:这一轮朝它开过刀还活着的,以及收尾之后这次扫描新认下来的活成员。
+      // **「不敢下刀」的那些不进这里**:这一档的说法是「下过刀仍活着」,把没下过刀的算进来
+      // 等于让 detail 说假话。它们的责任由上面那本账背着(`open`),一个都不会少。
       survivors: [...new Set([...survivors, ...live.map((m) => m.pid)])],
       // 根那一问只看**朝它开过刀之后**还在不在,跟新扫到的后代无关,所以用原来那份名单。
       rootProof: rootProofOf(child, survivors, lingers()),
@@ -485,7 +513,8 @@ async function sweepAfterRun(child: ChildProcess): Promise<SweepOutcome> {
   // ⇒ 号换了主人,一刀不发。
   const second = await killEscapees(child, "SIGKILL");
   faults.push(...second.faults.filter((f) => !faults.includes(f)));
-  named = joinOpen(named, second.open);           // 第二次扫描点的名同样只增不减
+  owed.add(second.open);                          // 第二次扫描点的名同样只增不减
+  owed.own(second.targets, "本次运行已确认的后代,还没有它的退出证据");
   killed.push(...second.hit);
   // **最终残存者如实往上传**(上一版把这份名单丢掉了):它正是「还没收干净」最硬的那种证据。
   const survivors = await waitForPidsGone(killed, 2000);

@@ -28,7 +28,7 @@ import {
 } from "./track-evidence.js";
 import {
   cleanupRetriable, describeOpen, dischargeOpen, joinOpen, judgeByClues, mergeClueAnswers,
-  residueFromProbe,
+  nothingToCollect, residueFromProbe, sweptClean,
   type CleanupOpen, type CleanupResult, type ClueAnswer,
 } from "./cleanup-result.js";
 
@@ -97,7 +97,7 @@ export async function judgeDebtRow(
   // 清掉,那个活后代的唯一责任就两边都不在了(第 9 轮审查 F1-B 的同一条链)。
   const held = openResidue(row.openMembers, extraOpen);
   const answers: ClueAnswer[] = [{ subject: "root", answer: root }];
-  for (const answer of [marker, paths, held.answer]) {
+  for (const answer of [marker, paths, ...held.answers]) {
     if (answer) answers.push({ subject: "descendants", answer });
   }
   return {
@@ -127,28 +127,31 @@ export async function judgeDebtRow(
  */
 export function openResidue(
   stored: string | null, extraOpen: readonly CleanupOpen[] = [],
-): { answer: CleanupResult | null; retriable: boolean } {
+): { answers: CleanupResult[]; retriable: boolean } {
   const parsed = parseOpenMembers(stored);
-  if (parsed === "broken") {
-    // 名单读不出来 ⇒ 核不动它,也绝不能当成「没有责任」。再读一万次也是同一句 ⇒ 不可重试
-    // (行留着收档:它仍是这次运行最后的可定位身份)。
-    return {
-      answer: { kind: "silent", why: "行上那份「排除不掉的号」读不出来(内容坏了),核不动" },
-      retriable: false,
-    };
-  }
-  const all = joinOpen(parsed, extraOpen);
-  if (!all.length) return { answer: null, retriable: false };
+  // **坏字段不吞掉手上还握着的有效身份**(第 10 轮审查 F1-C):这里是**两件事**,所以发
+  // 两条言 —— 「行上那份读不出来」是一台设备弃权(再读一万次也是同一句 ⇒ 收档),而待投
+  // 清单里那几个号是另一台设备**点着名**的活责任(⇒ 留着重试)。上一版把它们挤成一条
+  // `silent`/不可重试,于是有效身份既挡不住销账(弃权票压不过别人的「我这边没有」),
+  // 也等不到下一轮重试。
+  const broken: CleanupResult[] = parsed === "broken"
+    ? [{
+      kind: "silent", why: "行上那份「排除不掉的号」读不出来(内容坏了),核不动",
+      open: [],
+    }]
+    : [];
+  const all = joinOpen(parsed === "broken" ? [] : parsed, extraOpen);
+  if (!all.length) return { answers: broken, retriable: false };
   // **核销判据与即时清理共用一份**(`dischargeOpen`):只有「号上没人」和「同一坐标系里换了
   // 代」算退出证据,跨坐标系的不等不算(第 9 轮审查 F1-C)。
   const { left } = dischargeOpen(all);
-  if (!left.length) return { answer: { kind: "empty" }, retriable: false };
+  if (!left.length) return { answers: [...broken, sweptClean([])], retriable: false };
   return {
-    answer: {
+    answers: [...broken, {
       kind: "unknown",
       detail: `上一轮点名、这一刻仍排除不掉:${describeOpen(left)}`,
       open: left,
-    },
+    }],
     retriable: true,
   };
 }
@@ -209,22 +212,24 @@ export const serializeOpenMembers = (open: readonly CleanupOpen[]): string | nul
 function rootResidue(row: DebtRow): CleanupResult {
   const pid = row.rootPid;
   if (!pid || !Number.isInteger(pid) || pid <= 1) {
-    return { kind: "silent", why: "这一行没记下根进程的号,核验不了它退没退" };
+    return { kind: "silent", why: "这一行没记下根进程的号,核验不了它退没退", open: [] };
   }
   switch (processIdentity(pid, row.rootStartedAt)) {
     case "same":
-      return { kind: "remaining", detail: `根进程 ${pid} 还活着(启动时刻对得上)` };
+      // 根这一问的身份就是行上那两列(号 + 启动时刻),它自己跨得过重启,不必再进后代名单。
+      return { kind: "remaining", detail: `根进程 ${pid} 还活着(启动时刻对得上)`, open: [] };
     case "different":
-      return { kind: "empty" };                   // 号换了主人 ⇒ 当初那个一定没了
+      return sweptClean([]);                      // 号换了主人 ⇒ 当初那个一定没了
     case "unverifiable":
       return {
         kind: "silent",
         why: `${pid} 号上有进程,但这一行没记启动时刻 —— 号会被复用,核验不了是不是当初那个`,
+        open: [],
       };
     default:
       return isPidAlive(pid)
-        ? { kind: "unknown", detail: `根进程 ${pid} 的身份这一刻问不出来(号上有进程)` }
-        : { kind: "empty" };                      // 号上没有进程 ⇒ 当初那个一定退了
+        ? { kind: "unknown", detail: `根进程 ${pid} 的身份这一刻问不出来(号上有进程)`, open: [] }
+        : sweptClean([]);                         // 号上没有进程 ⇒ 当初那个一定退了
   }
 }
 
@@ -265,6 +270,7 @@ const pathResidue = (clues: PathClues): CleanupResult | null => {
     return {
       kind: "silent",
       why: "这台机器答不了「谁还握着这次运行的文件」(没有 lsof 等价物)",
+      open: [],                                   // 这条线索没问,所以它没点过任何名
     };
   }
   return mergeClueAnswers([
@@ -306,16 +312,19 @@ export function markerResidue(
   if (!marked) return null;
   switch (evidence.verdict) {
     case "ours": case "suspected":
-      return { kind: "remaining", detail: describeEvidence(evidence) };
+      return { kind: "remaining", detail: describeEvidence(evidence), open: [] };
     case "unprovable":
       // 这台机器**结构性读不到别的进程的环境块**(win32)跟「这一次查询失败」不是一件事:
       // 后者下一轮还问得出来 ⇒ 留着重试;前者永远是这个答案 ⇒ 这一问没有证据来源。两者
       // 都不许写成「没有」。
       return answerable
-        ? { kind: "unknown", detail: `资源记号${describeEvidence(evidence)}` }
-        : { kind: "silent", why: "这台机器读不到别的进程的环境块,问不出带这次记号的进程" };
+        ? { kind: "unknown", detail: `资源记号${describeEvidence(evidence)}`, open: [] }
+        : {
+          kind: "silent", why: "这台机器读不到别的进程的环境块,问不出带这次记号的进程",
+          open: [],
+        };
     case "none":
-      return { kind: "empty" };
+      return nothingToCollect();                  // 记号这一问正面答空:没有带这次记号的进程
   }
 }
 

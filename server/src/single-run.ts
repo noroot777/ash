@@ -6,7 +6,7 @@
 //
 // **「这一笔该落成哪个状态」已经搬到 `settle-status.ts`**（同一条上限）:那一段自成一块
 // 职责（续聊/原生/手停/提问/检查点/严格完成协议/哨兵闸），而且被引导、重试、测试直接调。
-import { cleanupSettled, type CleanupResult } from "./executors/kill.js";
+import { cleanupSettled, nothingToCollect, type CleanupResult } from "./executors/kill.js";
 import type { WriteStream } from "node:fs";
 import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
 import { and, eq, sql } from "drizzle-orm";
@@ -310,9 +310,11 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     streamError = error;
   } finally {
     if (offsetTimer) clearInterval(offsetTimer);
-    const cleaned = await a.handle.cleanup?.().catch((error) => {
+    const cleaned = await a.handle.cleanup?.().catch((error): CleanupResult => {
       console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);
-      return { kind: "unknown", detail: "cleanup 抛错" } as CleanupResult;
+      // 清理整个抛了:这一轮一个号都没点上来 ⇒ 名单只能是空的,但结论不是空的(见
+      // cleanup-result.ts 的闸二:`open` 必填,逼这里显式说一句「我手上没有」)。
+      return { kind: "unknown", detail: "cleanup 抛错", open: [] };
     });
     // 进程资源到此已经收干净(cleanup 覆盖根进程与它甩出去的后代),外层那道兜底不必再
     // 补刀;后面结算段再抛错也只是结算的事,不会留下无主进程。
@@ -320,7 +322,8 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // **但「收干净了」要它自己说**(本轮审查 F2):上一版连 cleanup 抛错都照样走这一句,
     // 更不用说 `remaining`/`unknown` 两档 —— 于是外层那道「没收干净就再补一刀」的兜底被
     // 一句无条件的声明关掉了。没有句柄时(失败桩,没有真实进程)照旧算收干净。
-    if (!a.handle.cleanup || cleanupSettled(cleaned ?? { kind: "empty" })) markStreamDrained();
+    // 没有句柄 / 没有 cleanup 这一层(失败桩,没有真实进程)⇒ 没有要收的东西,照旧算收干净。
+    if (!a.handle.cleanup || cleanupSettled(cleaned ?? nothingToCollect())) markStreamDrained();
   }
   // 一个换行都没等到就收流了（整轮只吐了一行的那种）。这里补一次 flush 扫描：
   // 老实现直接把缓冲原样吐出去，那一行哪怕就是标准的 `标题：xxx` 也白瞎。

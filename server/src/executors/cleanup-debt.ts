@@ -47,20 +47,27 @@ const pendingOpenOf = (key: string): readonly CleanupOpen[] =>
   pendingNotes.get(key)?.input.open ?? [];
 
 /**
- * 只往这一列上**并**几个名,别的列一个字不动。
+ * 只往这一列上**并**几个名,别的列一个字不动。**返回「这几个名到底有没有人接」**。
  *
  * 用在「这一笔输入已经过期、不该再盖叙述,可它身上那几个名还没人接」那一刻(见 `writeNote`)。
+ *
+ * 为什么要有返回值(第 10 轮审查 F1-C2 点的同一条边):读不出旧名单、或者写这一列本身失败时,
+ * 上一版只打一行日志就 `return`,而调用方照样把那一笔从待投清单上删掉 —— 那几个号于是既不在
+ * 库里也不在内存里。**接住了才算交接完成**,没接住就得让调用方继续扛着。
  */
-async function mergeOpenIntoRow(key: string, open: readonly CleanupOpen[]): Promise<void> {
-  if (!open.length || dbClient.closed) return;
+async function mergeOpenIntoRow(key: string, open: readonly CleanupOpen[]): Promise<boolean> {
+  if (!open.length) return true;                  // 压根没有要交的名 ⇒ 交接完成
+  if (dbClient.closed) return false;
   const held = await readOpenMembers(key);
-  if (!held.ok) return;                           // 读不出来 ⇒ 这一列不动(同上)
+  if (!held.ok) return false;                     // 读不出来 ⇒ 这一列不动,而且如实说没接住
   try {
     await db.update(agentCleanupDebts)
       .set({ openMembers: serializeOpenMembers(joinOpen(held.open, open)) })
       .where(eq(agentCleanupDebts.unitToken, key));
+    return true;
   } catch (error) {
     console.error(`[ash] 这几个未排除的号没并进行里(unit=${key}):`, error);
+    return false;
   }
 }
 
@@ -181,7 +188,7 @@ async function writeNote(
   if ((landedSeq.get(key) ?? 0) > seq) {
     // 这一笔的**叙述**过期了(同一个键上有更新的一版已经落库),可它身上点过的那几个名
     // 未必已经有人接 —— 序号只能淘汰过时叙述,不能淘汰尚未核销的身份(第 9 轮审查 F1-B)。
-    await mergeOpenIntoRow(key, input.open ?? []);
+    if (!await mergeOpenIntoRow(key, input.open ?? [])) return "failed";
     dropPendingNote(key, seq);
     return "noted";
   }
@@ -190,7 +197,10 @@ async function writeNote(
     landedSeq.set(key, Math.max(landedSeq.get(key) ?? 0, seq));
     dropPendingNote(key, seq);                    // 落库成功 ⇒ 清单上那笔(不更新的)淘汰掉
   }
-  return verdict;
+  // **`open-not-taken`:行写进去了,可那几个新发现的号一个都没交出去**(第 10 轮审查 F1-B)。
+  // 这一档既不能设 `landedSeq`(否则后面的补投会被当成过期叙述丢掉),也不能把清单上那一笔
+  // 删掉 —— 它是那几个身份此刻**唯一**的落脚处。如实按「没落下」往上报,调用方会接着扛。
+  return verdict === "noted" ? "noted" : "failed";
 }
 
 /** 清单上这个键的那一笔,只在**不比刚落库的那版新**时才丢掉。 */
@@ -234,9 +244,16 @@ export async function flushPendingCleanupNotes(): Promise<{ landed: number; pend
 /** 披露用:这一刻有几笔责任只在内存里(跨不过重启)。 */
 export const pendingCleanupNoteCount = (): number => pendingNotes.size;
 
+/**
+ * 落账的三档。`open-not-taken` 是第 10 轮审查 F1-B 实测出来的那一档:**行写成功了,而新
+ * 发现的身份一个都没进去** —— 旧名单读不出来时这一列只能不动(不动是对的:宁可少并一次,
+ * 也不要把「没读成」写成「原来没有未决责任」),可「叙述落了」不等于「责任接住了」。
+ */
+type NoteVerdict = "noted" | "open-not-taken" | "failed";
+
 async function noteDebtRow(
   key: string, input: CleanupDebtInput,
-): Promise<"noted" | "failed"> {
+): Promise<NoteVerdict> {
   try {
     // **三份名单并起来**(见 `CleanupDebtInput.open`):行上已经点过的、内存待投清单上还扛着
     // 的、以及这一次自己点的。读写都在 `withDebtKey` 这把键锁里。
@@ -245,7 +262,10 @@ async function noteDebtRow(
     // (名单是空的),少了这一并,新这一笔就把那个号从库里和内存里同时抹掉 —— 审查用一次
     // 真实写失败 + 一次更弱的输入实测到了这一下(心跳 48→56)。
     const held = await readOpenMembers(key);
-    const merged = joinOpen(held.ok ? held.open : [], pendingOpenOf(key), input.open ?? []);
+    // 这一次要交出去的身份(待投清单上扛着的 + 自己点的)。它跟「行上原有的」分开算,因为
+    // 只有**它**决定这次交接算不算完成:行上原有的那份读不出来时留在原处,没有丢。
+    const fresh = joinOpen(pendingOpenOf(key), input.open ?? []);
+    const merged = joinOpen(held.ok ? held.open : [], fresh);
     await db.insert(agentCleanupDebts).values({
       unitToken: key,
       taskId: input.taskId ?? "", sessionId: input.sessionId ?? "",
@@ -276,7 +296,9 @@ async function noteDebtRow(
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       },
     });
-    return "noted";
+    // 行落了;**新身份有没有跟着落下去**要分开答(见 `NoteVerdict`):旧名单读不出来时这一列
+    // 一个字没动,于是 `fresh` 里那几个号还在外面 —— 这一档不许冒充 `noted`。
+    return held.ok || !fresh.length ? "noted" : "open-not-taken";
   } catch (error) {
     console.error(`[ash] agent 清理责任落库失败 unit=${key}:`, error);
     return "failed";

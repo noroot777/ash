@@ -63,16 +63,65 @@ export type CleanupOpen = {
 };
 
 /**
- * 一条线索的发言。**`empty` 这一档在类型上就带不了未排除的号** —— 「还有没排除掉的责任」
- * 和「已经证明空了」是矛盾的两句话,让它编译不过比写一条注释管用(AGENTS.md 的那把梯子①)。
+ * 一条线索的发言。这个类型身上有两道**编译期**的闸,它们是第 11 轮审查之前那十轮反复
+ * 复发的同一条判据错误(「没进这次的视野」当成「没有未销的责任」)唯一拦得住的办法 ——
+ * 写在注释里的约定已经被实测绕过九次了(AGENTS.md 那把梯子:能停在①就别停在④)。
+ *
+ * **闸一:`empty` 这一档手写不出来。** 它身上有一个本模块私有的 `unique symbol`,外面
+ * 既看不见这个键也拿不到那个值,所以 `{ kind: "empty" }` 在本文件之外**编译不过**;唯一的
+ * 出口是 `sweptClean(open)`,而它的签名要求你把手上的名单交出来、先过一遍核销(见那里)。
+ * 「我扫干净了」+「可我手上还攥着名单」于是在结构上就合不出一个 `empty` 来。
+ *
+ * **闸二:另外三档的 `open` 是必填的。** 以前它是 `open?:`,于是「新发现的身份没有被接收」
+ * 这条边每长出一条新路径就漏一次(第 10 轮审查 F1-B 的持久交接、第 9 轮 F1-B 的内存待投)。
+ * 必填之后,每一个产出结论的地方都被编译器逼着回答一句「我手上有什么」—— 真的没有就
+ * 显式写 `open: []`,那是一句**声明**,不再是一次遗忘。
  */
 export type CleanupResult =
-  | { kind: "empty" }
-  | { kind: "remaining"; detail: string; open?: readonly CleanupOpen[] }
-  | { kind: "unknown"; detail: string; open?: readonly CleanupOpen[] }
-  | { kind: "silent"; why: string; open?: readonly CleanupOpen[] };
+  | { readonly kind: "empty"; readonly [PROVEN_EMPTY]: true }
+  | { kind: "remaining"; detail: string; open: readonly CleanupOpen[] }
+  | { kind: "unknown"; detail: string; open: readonly CleanupOpen[] }
+  | { kind: "silent"; why: string; open: readonly CleanupOpen[] };
 
-/** 这一份结论身上还挂着哪些没排除掉的号。 */
+/** 闸一那把钥匙:只声明类型、不导出值,于是本模块之外构造不出 `empty` 来(见 `CleanupResult`)。 */
+declare const PROVEN_EMPTY: unique symbol;
+
+/**
+ * **全仓唯一的「正面答空」出口**,而且它**先核销再答**:
+ *
+ *  · 手上的名单核销干净了 ⇒ `empty`(正面证明没有);
+ *  · 还剩哪怕一条 ⇒ 自动降成 `unknown` 并把剩下的那几条带上。
+ *
+ * 所以「手里攥着没排除掉的号却答空」不再是一条要人记住的规矩,而是一件**做不到**的事。
+ * 这也是为什么它必须收一个参数:调用方没有「不交名单」这个选项,真没有就显式交空数组。
+ */
+export function sweptClean(open: readonly CleanupOpen[]): CleanupResult {
+  const { left } = dischargeOpen(open);
+  return left.length
+    ? { kind: "unknown", detail: `还有排除不掉的号:${describeOpen(left)}`, open: left }
+    : PROVEN;
+}
+
+/**
+ * 「这条路径**压根没有要收的东西**」—— 缺的是资源不是设备(见顶部那段),所以正面答空。
+ *
+ * 跟 `sweptClean([])` 是同一件事,分出一个名字只为让调用点自己说清是哪一种空:
+ * 失败桩没有真实进程、这一次运行没开输出文件、待收册本来就是空的。
+ */
+export const nothingToCollect = (): CleanupResult => sweptClean([]);
+
+/**
+ * 全仓唯一一处构造 `empty` 的地方。`as unknown as` 是闸一的代价:那个 symbol 没有值,
+ * 连本模块也只能这样把它做出来一次 —— 换来的是外面 48 个构造点全部走 `sweptClean`。
+ */
+const PROVEN = { kind: "empty" } as unknown as CleanupResult;
+
+/**
+ * 这一份结论身上还挂着哪些没排除掉的号。
+ *
+ * `?? []` 不是冗余:类型上 `open` 必填(闸二)管的是**编译期**,而这里也要接住运行期从外面
+ * 进来的那些 —— 升级前落的库行、测试夹具手搓的结论。
+ */
 export const openOf = (result: CleanupResult): readonly CleanupOpen[] =>
   result.kind === "empty" ? [] : result.open ?? [];
 
@@ -119,6 +168,44 @@ export function dischargeOpen(open: readonly CleanupOpen[]): { left: CleanupOpen
   const left: CleanupOpen[] = [], gone: CleanupOpen[] = [];
   for (const one of open) (provenGone(one) ? gone : left).push(one);
   return { left, gone };
+}
+
+/**
+ * **一次清理里「还欠谁」的唯一账本**。
+ *
+ * 为什么要有这么个东西,而不是各处 `joinOpen` 一下就好(第 10 轮审查 F1-A 实测):同一次
+ * 清理里身份有**五个来源** —— 三次扫描各自点的名、这一次确认归属的成员、以及跨得过「丢
+ * fd」的那本后代账。上一版把它们散在调用点上手工并,于是漏了「已确认目标」这一条边:
+ * 核验不了代次的成员**正确地**没被补刀,可它既没进残存者、也没进名单,最终扫描又因为它
+ * 已被重父到 1 号名下而看不见它 —— 结论是 `empty`,债表 0 笔,而它还在写(心跳 107→117)。
+ *
+ * 收成一个账本之后,「少并了一个来源」从**一次疏忽**变成**一处显式的调用缺失**:判空只有
+ * `verdict()` 一条路,它读的永远是账本全量。
+ *
+ * **只增不减**:`add`/`own` 只往里放,唯一的出口是核销(`dischargeOpen`)。
+ */
+export type OpenLedger = {
+  /** 某台设备点的名。 */
+  add(open: readonly CleanupOpen[]): void;
+  /** **已确认属于本次运行**的成员:从认下那一刻起就是一份责任,直到有它的退出证据。 */
+  own(members: readonly { pid: number; gen: string | null }[], why: string): void;
+  /** 核销一遍,还欠着的那几条。 */
+  left(): CleanupOpen[];
+  /** 这本账这一刻的结论:欠干净了 ⇒ `empty`,还欠着 ⇒ `unknown` 带名单(见 `sweptClean`)。 */
+  verdict(): CleanupResult;
+};
+
+export function openLedger(): OpenLedger {
+  let all: CleanupOpen[] = [];
+  const ledger: OpenLedger = {
+    add: (open) => { all = joinOpen(all, open); },
+    own: (members, why) => {
+      ledger.add(members.map((m) => ({ pid: m.pid, gen: m.gen, why })));
+    },
+    left: () => dischargeOpen(all).left,
+    verdict: () => sweptClean(all),
+  };
+  return ledger;
 }
 
 function provenGone(one: CleanupOpen): boolean {
@@ -172,19 +259,8 @@ export function mergeCleanupResults(results: readonly CleanupResult[]): CleanupR
   const silent = results.filter((r) => r.kind === "silent");
   return pick("remaining") ?? pick("unknown")
     ?? (silent.length ? { kind: "silent", why: silent.map((r) => cleanupDetail(r)).join(" | "), open }
-      : openGuard(open) ?? { kind: "empty" });
+      : sweptClean(open));
 }
-
-/**
- * **手里还攥着没排除掉的号就不许答空** —— 哪怕每一台发言的设备自己都答了「没有」。
- *
- * 这不是多余的保险:那几个号正是**某一台设备报上来的**,而别的设备看不见它们那一面
- * (记号被 `env -i` 洗掉、fd 被 close、父子边问不出来)。让它们的「没有」把这份责任洗掉,
- * 就是第 8 轮审查 F1 点名的那条判据错误的一般形。
- */
-const openGuard = (open: readonly CleanupOpen[]): CleanupResult | null => open.length
-  ? { kind: "unknown", detail: `还有排除不掉的号:${describeOpen(open)}`, open }
-  : null;
 
 /**
  * **同一问的几台设备**合成这一问的答案:取最保守的,但弃权票不否掉正面答出来的那张
@@ -201,14 +277,16 @@ export function mergeClueAnswers(answers: readonly CleanupResult[], subject: str
       : null;
   };
   const answered = answers.some((r) => r.kind === "empty");
-  // 「有一台正面答过空就算这一问答出来了」这条**到未排除的号这里为止**(见 `openGuard`):
-  // 弃权的那台不该否掉答出来的那台,可它点名的那个号也不该被另一台的「我这边没有」抹掉。
-  return pick("remaining") ?? pick("unknown") ?? openGuard(open)
-    ?? (answered ? { kind: "empty" } : {
+  // 「有一台正面答过空就算这一问答出来了」这条**到未排除的号这里为止**:弃权的那台不该
+  // 否掉答出来的那台,可它点名的那个号也不该被另一台的「我这边没有」抹掉 —— 这一句现在
+  // 由 `sweptClean` 在结构上保证(有名单就答不出空来),不再靠这里记得多调一道闸。
+  return pick("remaining") ?? pick("unknown")
+    ?? (answered ? sweptClean(open) : {
       kind: "silent",
       why: answers.length
         ? `${subject}这一问:${answers.map((r) => cleanupDetail(r)).join(" | ")}`
         : `${subject}这一问没有任何可用的证据来源`,
+      open,
     });
 }
 
@@ -259,20 +337,25 @@ export function judgeByClues(clues: readonly ClueAnswer[]): CleanupResult {
  * 收干净),而且它只用于**残留检测、不用于下刀**(同 cleanup-debt.ts 里那段)。
  */
 export function residueFromProbe(label: string, probe: HolderProbe | null): CleanupResult {
-  if (!probe) return { kind: "empty" };
+  if (!probe) return nothingToCollect();         // 这一次运行没有这个文件 ⇒ 没有东西能被握着
   const alive = probe.found.filter((h) => isPidAlive(h.pid));
   // ① **写模式的活持有者 = 确证残留**(第 3 轮审查 F1):这一问要答的是「还有没有东西在往
   // 这次运行的文件里写」。后代继承的是写端(追踪文件开的是 `"w"`、输出文件是根的 stdout)。
   // 放在最前面是因为它是**正面**证据:发现一个就成立,跟这一问后来有没有出错无关。
   const writers = alive.filter(holderMayOwn);
   if (writers.length) {
-    return { kind: "remaining", detail: `${label}仍被 ${writers.map((h) => h.pid).join(",")} 写着` };
+    return {
+      kind: "remaining", detail: `${label}仍被 ${writers.map((h) => h.pid).join(",")} 写着`,
+      // 文件持有者**不是进程归属证明**(第 7 轮审查 F1):用户自己 tail 日志也会落到这里,
+      // 所以这一问只报「还有残留」这个事实,不往责任名单里按号点名。
+      open: [],
+    };
   }
   // ② **没问全就不许往下读成空**(第 5 轮审查 F1)。`found` 这时只是「至少这些」:它们全退了
   // 只说明**已发现的那部分**空了,没覆盖到的那部分一个字都没被证明过。
   const fault = holderScanFault(probe);
   if (fault) {
-    return { kind: "unknown", detail: `${label}这一问没答全:${fault.fault}` };
+    return { kind: "unknown", detail: `${label}这一问没答全:${fault.fault}`, open: [] };
   }
   // ③ 问全了,剩下的是只读的(或者模式问不出来的)持有者:「有人握着」是事实,「握着的是不是
   // 这次运行的后代」这一问没答出来 —— 别再把这两件事折成一个 `empty`。用户自己 tail 日志就是
@@ -283,7 +366,8 @@ export function residueFromProbe(label: string, probe: HolderProbe | null): Clea
       kind: "unknown",
       detail: `${label}被 ${alive.map((h) => h.pid).join(",")} 握着、但不是写模式 ——`
         + " 分不出是这次运行的后代还是只读的看客",
+      open: [],                                   // 同上:握着文件证不出归属,不点名
     };
   }
-  return { kind: "empty" };                       // 问全了 + 一个活着的都没有
+  return sweptClean([]);                          // 问全了 + 一个活着的都没有
 }
