@@ -285,6 +285,81 @@ try {
     );
   }
 
+  // ⑧ 等长同坐标的换稿没落盘(第 9 轮复审第 2 轮 R1 journalAheadOfTrace):红版写进 trace,
+  //   蓝版捕获了(临时账、字节都在)但一个字没保存。两版等长、同坐标、同路径 —— 节点核对
+  //   分不出谁是谁,只有账上的正文指纹能:恢复与种子都只认**落盘那版**的红字节。
+  {
+    writeFileSync(join(root, "h.png"), red);
+    const taskId = "task-meta-hash";
+    const sessId = "sess-meta-hash";
+    const sink = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN));
+    const saved = agentEvent({ type: "agent", id: "h1", status: "running", message: "修改前是红色：![图](h.png)" });
+    sink.capture(saved);
+    for (const event of sink.release(saved)) appendSessionTrace(taskId, sessId, TURN, event);
+    appendSessionTrace(taskId, sessId, TURN, saved);
+    writeFileSync(join(root, "h.png"), blue);
+    const unsaved = agentEvent({ type: "agent", id: "h1", status: "running", message: "修改后是蓝色：![图](h.png)" });
+    sink.capture(unsaved);
+    sink.release(unsaved);
+    const bare = parseSessionTrace(readFileSync(sessionTracePath(taskId, sessId), "utf8"));
+    const restored = metaShots((await mergeImageJournal(taskId, sessId, bare)).map((entry) => entry.event));
+    assert.deepEqual(
+      restored.map((shot) => [shot.rev, shot.source, colorOf(shot.path), (shot.ref ?? 0) >= SYNTH_REF_BASE]),
+      [[0, "h.png", "RED", true]],
+      "恢复只认指纹对得上落盘正文的那一代:等长蓝版一条不补",
+    );
+    const doc = (await loadMarkdownImageSeed(taskId, sessId))?.get(metaSeedKey("h1", "message"));
+    assert.equal(doc?.rev, 0, "种子的代号是落盘那版,不被没保存的新代推高");
+    assert.equal(colorOf(doc?.snapshots?.[0]?.path), "RED", "种子接回的冻结是落盘那版的红字节");
+    sink.dispose();
+  }
+
+  // ⑨ 快照身份换代(第 9 轮复审第 2 轮 R1 distinctPrefixMessages):同回合两条**完整消息**,
+  //   第二条恰好是第一条的文字延长,但 messageId 换了 —— 文字前缀证明不了同一份正文,必须
+  //   换代重拍;没带 messageId 的协议仍按前缀判据走(①已钉)。
+  {
+    writeFileSync(join(root, "m.png"), red);
+    const sink = markdownImageSink(root);
+    const feed = (event: AgentEvent) => {
+      sink.capture(event);
+      return sink.release(event);
+    };
+    feed(agentEvent({ type: "agent", id: "mid1", status: "running", message: "截图：![图](m.png)", messageId: "item-1" }));
+    writeFileSync(join(root, "m.png"), blue);
+    feed(agentEvent({ type: "agent", id: "mid1", status: "running", message: "截图：![图](m.png)\n已重拍为蓝色。", messageId: "item-2" }));
+    const released = feed(agentEvent({ type: "agent", id: "mid1", status: "completed", closed: true, message: "截图：![图](m.png)\n已重拍为蓝色。", messageId: "item-2" }));
+    assert.deepEqual(
+      metaShots(released).map((shot) => [shot.rev, colorOf(shot.path)]),
+      [[1, "BLUE"]],
+      "身份换了就换代:交代的是第二条快照自己拍的蓝字节,同身份重放不再升代",
+    );
+    sink.dispose();
+  }
+
+  // ⑩ 结构化结果拆到子文档(第 9 轮复审第 2 轮 R1 encodedMarkdown):wait 的 statuses 包着
+  //   子正文,title 带引号在原始 JSON 里是 \\" —— 按原文扫连图片节点都没有。提取按
+  //   childResultTexts 与展示端同一把尺,账记在子智能体名下(doc=子 id,field=result),
+  //   坐标按解码后的正文算。
+  {
+    writeFileSync(join(root, "w.png"), red);
+    const sink = markdownImageSink(root);
+    const feed = (event: AgentEvent) => {
+      sink.capture(event);
+      return sink.release(event);
+    };
+    feed(agentEvent({ type: "call", id: "wait-1", name: "wait", input: {} }));
+    const released = feed(agentEvent({
+      type: "result", id: "wait-1", failed: false,
+      result: JSON.stringify({ statuses: { "child-9": { completed: '结果 ![图](w.png "截图说明")' } } }),
+    }));
+    assert.deepEqual(
+      metaShots(released).map((shot) => [shot.doc, shot.field, shot.source, colorOf(shot.path), shot.pos]),
+      [["child-9", "result", "w.png", "RED", 3]],
+      "子正文的图按解码后的正文捕获与交代,账在子文档名下",
+    );
+    sink.dispose();
+  }
+
   console.log("test-agent-image-meta: all cases passed");
 } finally {
   rmSync(root, { recursive: true, force: true });

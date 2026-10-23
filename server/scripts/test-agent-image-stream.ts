@@ -337,6 +337,25 @@ try {
   assert.deepEqual(readFileSync(defs[0]!.path!), red, "定义刚写完那一刻就把红图拍下来了");
   assert.deepEqual(readFileSync(defs[1]!.path!), blue, "后一处引用是蓝图");
 
+  // ⑮b 同一形状落在**放慢档**里(第 9 轮复审第 2 轮 R2 longBareDefinition):先铺 100 KB 的
+  // 超长块,窗口已经畸形地大,此后每一片都走 freezeTail。`output/def2.png` 这一片一个标点都
+  // 没有,快速闸若只认 `)`/`]`/换行就直接 return —— 快车道的「还在写的定义行」第四档在放慢
+  // 档同样得有,否则短正文拍到红图、长正文等到重拍后的蓝图,同一份语义两个结果。
+  const def2 = join(root, "output", "def2.png");
+  writeFileSync(def2, red);
+  const bareSlow = await collect(withMarkdownImages((async function* () {
+    yield { kind: "text", text: "修改前是红色：![修改前][r2]\n\n" } as AgentEvent;
+    yield { kind: "text", text: "铺".repeat(100_000) } as AgentEvent;
+    yield { kind: "text", text: "\n\n[r2]: " } as AgentEvent;
+    yield { kind: "text", text: "output/def2.png" } as AgentEvent;
+    writeFileSync(def2, blue);
+    yield { kind: "text", text: "\n\n" } as AgentEvent;
+    yield { kind: "done", exitStatus: 0 } as AgentEvent;
+  })(), root));
+  const defsSlow = attachments(bareSlow);
+  assert.equal(defsSlow.length, 1, "放慢档里的引用式图同样有一条结果");
+  assert.deepEqual(readFileSync(defsSlow[0]!.path!), red, "定义目的地刚写完那一刻(放慢档)就拍下红图");
+
   // ⑯ 定义**隔着多远**才到,都得认得回那处引用:`![真实][shot]` 在最前面,定义在 70 KB
   // 之后。那处引用在解析树里还只是一段普通文字(定义没到之前压根不是图片节点),正文一
   // 按距离裁走,定义再到也没人认领它 —— 这份文档从此没有持久副本,原图一清理就彻底没了。

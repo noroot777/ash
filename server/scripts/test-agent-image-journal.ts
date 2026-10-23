@@ -361,6 +361,67 @@ try {
     );
   }
 
+  // ⑪b 同一形状,但账是**旧进程**写的 —— 没有 skipped 行(第 9 轮复审第 2 轮 R3)。合法
+  //   间隔只能按**可证明**的站外目的地自证(externalImageDestination),否则前缀走到站外
+  //   节点就断,交代线退回「整段已交付」,待定引用从此不再登记。
+  {
+    const taskId = "task-external-gap-legacy";
+    const sessId = "sess-external-gap-legacy";
+    writeFileSync(join(root, "gap2.png"), red);
+    const sink = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN));
+    const text = "![站外](https://example.invalid/image.png)\n\n![本地](gap2.png)\n\n还等：![待][later]\n\n";
+    sink.capture({ kind: "text", text } as AgentEvent);
+    for (const event of sink.release({ kind: "text", text } as AgentEvent)) appendSessionTrace(taskId, sessId, TURN, event);
+    sink.dispose();
+    const { imageJournalPath } = await import("../src/agent-image-journal.js");
+    const journalPath = imageJournalPath(taskId, sessId);
+    const legacy = readFileSync(journalPath, "utf8").split("\n")
+      .filter((line) => !line || !(JSON.parse(line) as { skipped?: boolean }).skipped).join("\n");
+    writeFileSync(journalPath, legacy);
+    const seed = await loadMarkdownImageSeed(taskId, sessId, { mainTurnStartedAt: TURN });
+    const resumed: AgentEvent[] = [];
+    for await (const event of withMarkdownImages((async function* () {
+      yield { kind: "text", text: "[later]: gap2.png\n\n" } as AgentEvent;
+      yield { kind: "done", exitStatus: 0 } as AgentEvent;
+    })(), root, markdownImageAccounting(taskId, sessId, TURN, seed))) resumed.push(event);
+    assert.deepEqual(
+      resumed.flatMap((event) => (event.kind === "attachment" ? [[event.ref, event.source, colorOf(event.path)]] : [])),
+      [[1, "gap2.png", "RED"]],
+      "老账没有 skipped 行:站外目的地自证合法间隔,待定引用照常交付",
+    );
+  }
+
+  // ⑫ 结构化结果的交代记录死在落盘之前(第 9 轮复审第 2 轮 R1 routedJournalLate):trace 里
+  //   只有 call 与 result 事件,子文档(field=result)的 attachment 一条没写进去。合并要按
+  //   与记账侧同一把尺拆出子正文,把账本的 final 按原身份补回**子 id** 名下 —— 展示端按子行
+  //   直接认领,不依赖「先路由后补账」的顺序;title 带引号(原文里转义)也认得。
+  {
+    const taskId = "task-routed-late";
+    const sessId = "sess-routed-late";
+    writeFileSync(join(root, "routed.png"), red);
+    const sink = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN));
+    const waitCall = { kind: "tool", name: "Agent", nativeWork: { type: "call", id: "wait-9", name: "wait", input: {} } } as AgentEvent;
+    sink.capture(waitCall);
+    for (const event of sink.release(waitCall)) appendSessionTrace(taskId, sessId, TURN, event);
+    const waitResult = {
+      kind: "tool", name: "Agent",
+      nativeWork: { type: "result", id: "wait-9", failed: false,
+        result: JSON.stringify({ statuses: { "routed-child": { completed: '结果 ![图](routed.png "说明")' } } }) },
+    } as AgentEvent;
+    sink.capture(waitResult);
+    for (const event of sink.release(waitResult)) {
+      const work = event.kind === "tool" ? event.nativeWork : undefined;
+      if (work?.type !== "activity") appendSessionTrace(taskId, sessId, TURN, event);
+    }
+    sink.dispose();
+    const merged = shots(await mergeImageJournal(taskId, sessId, readTrace(taskId, sessId)));
+    assert.deepEqual(
+      merged.map((item) => [item.doc, item.source, colorOf(item.path)]),
+      [["routed-child", "routed.png", "RED"]],
+      "子文档的 final 按原身份补回到子 id 名下",
+    );
+  }
+
   console.log("正文图片持久账本回归通过");
 } finally {
   rmSync(root, { recursive: true, force: true });

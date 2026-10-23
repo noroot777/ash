@@ -261,5 +261,22 @@ for (const event of stamped) {
     { type: "result", id: "w4", at: end, result: '{"statuses":{"childC":{"completed":"新 ![s](s.png)"}}}', failed: false },
   ]);
   assert.deepEqual(twoRounds.find((row) => row.nativeId === "childC")?.resultImages?.map((shot) => shot.path), ["/up/new.png"], "换来源文档整组顶替:旧文档的高代号不压新文档的第 0 代");
+  // 恢复合并(mergeImageJournal)把补回的记录**追加在 trace 末尾**:记录晚于 result 事件
+  // 到达时,路由不能已经跑完了事 —— 执行推迟到全量记录就位(第 9 轮复审第 2 轮 R1
+  // routedJournalLate 存量半边)。
+  const late = rowsFrom([
+    { type: "call", id: "w5", name: "wait", at: start, input: {} },
+    { type: "result", id: "w5", at: end, result: '{"statuses":{"childD":{"completed":"迟 ![s](s.png)"}}}', failed: false },
+    { type: "activity", id: "w5", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 2, rev: 0, path: "/up/late.png" } },
+  ]);
+  assert.deepEqual(late.find((row) => row.nativeId === "childD")?.resultImages?.map((shot) => shot.path), ["/up/late.png"], "记录晚于结果事件到达(恢复合并的追加序)照样路由到子行");
+  // 新账直接记在**子 id** 名下(服务端按 childResultTexts 拆账后的形态):不经路由就该挂在
+  // 子行上,statuses 那一步的路由对它只是无事可做。
+  const direct = rowsFrom([
+    { type: "call", id: "w6", name: "wait", at: start, input: {} },
+    { type: "activity", id: "childE", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 2, rev: 0, path: "/up/direct.png" } },
+    { type: "result", id: "w6", at: end, result: '{"statuses":{"childE":{"completed":"直 ![s](s.png)"}}}', failed: false },
+  ]);
+  assert.deepEqual(direct.find((row) => row.nativeId === "childE")?.resultImages?.map((shot) => shot.path), ["/up/direct.png"], "子 id 名下的新账直接挂在子行上");
 }
 console.log("子智能体模型、待办开工时间、跨日跨度、实时/历史时间与缺失数据回归通过");
