@@ -461,7 +461,39 @@ try {
     assert.equal(await taskBusyRejection(taskId, "删除"), null, "收完之后不该再挡着");
   }
 
-  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 全部通过");
+  // 12. 任务列表看得见「它此刻在跑门禁」。
+  //     门禁跑的那十几分钟里任务自己的 status 和 stage 一个字都不会变（它早就 done 了、
+  //     正等着验收），所以侧栏那颗圆点和会话页那条全靠 enrichTasks 现查的这个字段。
+  //     它一旦不准，界面上就只剩一个「安静地等你验收」的任务 —— 而工作区里有条命令在跑。
+  {
+    const { enrichTasks } = await import("../src/task-store.js");
+    const repo = makeRepo("gate-list-flag");
+    const projectId = await seedProject("gate-list-flag", repo, "sleep 120");
+    const taskId = "gatelistflag1";
+    await seedTask(projectId, repo, taskId, "listflag.txt");
+    const rowOf = async () => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+    assert.equal(
+      (await enrichTasks([await rowOf()]))[0]!.acceptGateRunning,
+      false,
+      "还没点验收：什么都没在跑",
+    );
+
+    await acceptTask(taskId);
+    assert.equal(
+      (await enrichTasks([await rowOf()]))[0]!.acceptGateRunning,
+      true,
+      "命令跑着的时候列表必须看得出来，否则这颗点跟平时一模一样",
+    );
+
+    await cancelAcceptGate(taskId, "测试收尾");
+    assert.equal(
+      (await enrichTasks([await rowOf()]))[0]!.acceptGateRunning,
+      false,
+      "收掉之后要落回去：留着就是一个永远在转的幽灵",
+    );
+  }
+
+  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 全部通过");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

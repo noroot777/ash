@@ -2,10 +2,13 @@ import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { AcceptGateCard } from "../../src/review/AcceptGateCard.tsx";
+import { AcceptGateWaitCard } from "../../src/review/AcceptGateWaitCard.tsx";
 import "../../src/styles/global.css";
 
-// 验收前置命令那张卡的测试舞台。只挂这一张卡：它自己拉状态、自己判要不要出现，
-// 把整个验收台搬进来只会把真正要验的东西埋在一堆无关请求里。
+// 验收前置命令那两处表面的测试舞台：验收台上那张卡，以及主会话页回复框上方那条折叠条
+// （`?wait=1`，摆在一条仿真的 .task-reply-rail 上 —— 它的折叠/展开靠 flex 换行，脱离
+// 那条 rail 就验不出真实几何）。两者都自己拉状态、自己判要不要出现，把整个验收台搬进来
+// 只会把真正要验的东西埋在一堆无关请求里。
 const task = (over: Partial<Task>): Task => ({
   id: "gate-task",
   projectId: "proj-1",
@@ -29,6 +32,16 @@ function Fixture() {
   const params = new URLSearchParams(location.search);
   const [notice, setNotice] = useState("");
   const [intent, setIntent] = useState("");
+  if (params.get("wait") === "1") {
+    return <main style={{ maxWidth: 760, padding: 24, margin: "auto" }}>
+      <h1>验收前置命令卡</h1>
+      <div className="task-reply-rail">
+        <button type="button" className="task-reply-rail-button">派审查</button>
+        <AcceptGateWaitCard taskId="gate-task" notify={setNotice} />
+      </div>
+      <p role="status" aria-label="操作结果">{notice}</p>
+    </main>;
+  }
   return <main style={{ maxWidth: 760, padding: 24, margin: "auto" }}>
     <h1>验收前置命令卡</h1>
     <AcceptGateCard

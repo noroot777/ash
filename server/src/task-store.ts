@@ -1,8 +1,8 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { normalizeDuetConfig } from "@ash/shared/duet";
 import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
-import { agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
+import { acceptGateRuns, agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
 import { projectHealthLight } from "./git.js";
@@ -168,6 +168,15 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
     .from(queueItems)
     .where(inArray(queueItems.taskId, rows.map((r) => r.id)));
   const byQueueTask = new Map(items.map((q) => [q.taskId, q] as const));
+  // 正在跑的验收前置命令。库是权威：重启时 recoverAcceptGates 会把残留的 running 行
+  // 一律收成 interrupted，所以「库里还是 running」等价于「真的还有一个进程在跑」。
+  const gating = new Set((await db
+    .select({ taskId: acceptGateRuns.taskId })
+    .from(acceptGateRuns)
+    .where(and(
+      inArray(acceptGateRuns.taskId, rows.map((r) => r.id)),
+      eq(acceptGateRuns.status, "running"),
+    ))).map((g) => g.taskId));
   return rows.map((r) => {
     const q = byQueueTask.get(r.id);
     return {
@@ -175,6 +184,7 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       ...runsTiming(byTask.get(r.id) ?? []),
       queueId: q?.queueId ?? null,
       queuePosition: q?.position ?? null,
+      acceptGateRunning: gating.has(r.id),
     };
   });
 }

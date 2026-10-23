@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowClockwise, ArrowUUpLeft, CheckCircle, FileText, PencilSimple, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
 import type { AcceptGateView } from "@ash/shared/accept-gate";
 import { ACCEPT_GATE_STATUS_LABELS, summarizeAcceptGate } from "@ash/shared/accept-gate";
 import type { Task, TaskListItem } from "@ash/shared";
 import { isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { api, type AcceptGateState } from "../lib/api.ts";
-import { useServerEvents } from "../lib/events.ts";
+import { useAcceptGate } from "./useAcceptGate.ts";
 
 // 「验收前置命令」在验收台上的那张卡。它跟 PendingMergeCard 一样住在每个有验收动作的
 // 表面上，自己判要不要出现。
@@ -31,27 +31,15 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   onIntent: (intent: "rerun" | "skip", latest: AcceptGateView | null) => void;
   disabled?: boolean;
 }) {
-  const [state, setState] = useState<AcceptGateState | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { state, error, running, latest, runningFor, reload } = useAcceptGate(task.id);
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
   // null = 还没读到这个项目的管理权限。读到之前不摆「改这条命令」——摆一颗必然 403 的
   // 按钮，点的人只会以为是自己点坏了（同 ProjectSettingsPanel 那一屏的两副面孔）。
   const [canManage, setCanManage] = useState<boolean | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const settled = task.stage === "accepted" || task.stage === "merged";
 
-  const reload = useCallback(async () => {
-    try {
-      setState(await api.acceptGate(task.id));
-      setError(null);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }, [task.id]);
-
-  useEffect(() => { void reload(); }, [reload]);
   // 能不能在这儿改这条命令 = 这个项目的管理权限。走列表接口而不是 `/projects/:id`
   // （后者不存在，见 AcceptCommitChoice 顶部），列表本身就带着 myRole。
   useEffect(() => {
@@ -62,29 +50,6 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
     );
     return () => { alive = false; };
   }, [task.projectId]);
-  // 服务端的权威信号只有这一条：起了、结束了、被取消了，都发 task.acceptGate。
-  const connected = useServerEvents((event) => {
-    if (event.type !== "task.acceptGate" || event.taskId !== task.id) return;
-    void reload();
-  });
-  // 每次（重新）连上都对一次账：事件流没有历史回放，断线那几十秒里「跑完了」这条事件
-  // 就没人接——这张卡会永远停在「正在跑」，而那正是它要消灭的那种幽灵状态。
-  const linked = useRef(connected);
-  useEffect(() => {
-    const was = linked.current;
-    linked.current = connected;
-    if (connected && !was) void reload();
-  }, [connected, reload]);
-  // 「已经跑了 N 分 N 秒」要自己走：这中间服务端一个事件都不会发（命令还在跑），
-  // 不走就会定在点下去那一刻的 0 秒上，看着像卡死了。
-  const running = state?.running ?? null;
-  useEffect(() => {
-    if (!running) return;
-    const timer = setInterval(() => setTick((n) => n + 1), 1000);
-    return () => clearInterval(timer);
-  }, [running]);
-
-  const latest = state?.latest ?? null;
   // 停在中途那道「等我点头」上时，那一按是**放行**不是验收：不会碰门禁，所以别在这儿
   // 预告「这一按要先跑十几分钟」—— 那句话在那一站上是假的。跑过的记录仍然照常显示。
   const atFinalGate = isFinalHumanGate(task.workflow, task.workflowAt);
@@ -96,9 +61,11 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   if (!latest && !atFinalGate) return null;
   // 命令已经撤掉了：这一按就是直接合并，再摆「重跑 / 这次跳过」只会让人以为门禁还拦着。
   // （正在跑的那一条照常显示——它是真的还在跑，收不收得掉是用户现在就要知道的事。）
-  if (!state.command && !running && latest) return null;
-  // 验收已经做完了就别再占一行：那时这张卡只会重复一句「上次通过了」。
-  if (settled && !running) return null;
+  // **验收已经做完的除外**：那时这张卡是回执不是关口，撤没撤掉命令都该把跑过什么留在那儿。
+  if (!state.command && !running && latest && !settled) return null;
+  // 验收做完之后这张卡**留着**（用户 2026-10-23 指定）：它换成一张只读回执 —— 跑过没有、
+  // 什么结果、日志在哪。原先在盖章那一刻整个消失，于是「通过了」和「我明确跳过了那条红」
+  // 在界面上长得一模一样，而两者的区别恰恰是这次合并到底有没有凭据。
 
   const cancel = async () => {
     if (busy || !running) return;
@@ -161,11 +128,15 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
 
   // 取消和被打断**不是红**：那两种根本没有结论（用户自己收掉的、ash 重启打断的），
   // 套上失败色会让人以为命令真的跑出了问题，而出路完全不同（重点一次就行）。
+  // 验收做完之后这张卡不再是关口：通过的那一次照常是绿的（stale 与否已经不重要，
+  // 它就是这次合并的凭据），没通过的那一次是**你明确跳过的**，用琥珀而不是红 ——
+  // 红表示「现在有东西拦着你」，而这时什么都没拦着，只是那条红没人修。
   const tone = running
     ? "is-running"
     : !latest ? ""
-      : latest.status === "passed" ? (latest.stale ? "" : "is-passed")
-        : latest.status === "failed" ? "is-failed" : "";
+      : latest.status === "passed" ? (settled || !latest.stale ? "is-passed" : "")
+        : settled ? "is-skipped"
+          : latest.status === "failed" ? "is-failed" : "";
   return (
     <section className={`accept-gate-card ${idle ? "is-idle" : tone}`} aria-label="验收前置命令">
       <header>
@@ -173,20 +144,20 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
           ? <SpinnerGap size={14} className="is-spinning" />
           : latest?.status === "passed"
             ? <CheckCircle size={14} weight="fill" />
-            : latest?.status === "failed"
+            : latest?.status === "failed" || (settled && latest)
               ? <WarningCircle size={14} weight="fill" />
               : latest
                 ? <XCircle size={14} />
                 : <FileText size={14} />}
         </span>
         <div>
-          <b>{idle ? "这个项目没设验收前置命令" : heading(state, running, latest, tick)}</b>
+          <b>{idle ? "这个项目没设验收前置命令" : heading(state, running, latest, settled, runningFor)}</b>
           <p>{idle
             ? "设一条之后，点「验收通过」会先在任务工作区里跑它，rc=0 才合并 ——「进 main 之前跑一次全量回归」这类事就不用靠人记着哪一轮是最后一轮了。"
-            : detail(state, running, latest)}</p>
+            : detail(state, running, latest, settled)}</p>
           {error && <p role="alert">状态读取失败：{error}</p>}
         </div>
-        {!idle && (
+        {!idle && !settled && (
           <button type="button" className="pending-merge-refresh" disabled={busy} onClick={() => void reload()}>
             <ArrowClockwise size={12} aria-hidden="true" />刷新
           </button>
@@ -238,7 +209,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
                 </button>
               </>
             ) : null}
-            {latest?.status === "failed" && !running && (
+            {latest?.status === "failed" && !running && !settled && (
               <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy || disabled} onClick={() => void handOff()}>
                 <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次" : "交给智能体去修"}
               </button>
@@ -248,7 +219,9 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
             )}
             {/* 正在跑的时候不给改：这一次用的是开跑时那条命令原文，改了也不作数，
                 摆在那儿只会让人以为能中途换一条。 */}
-            {canManage && !running && (
+            {/* 验收做完之后不摆「改这条命令」：改的是**项目**设置，而这张卡此刻是这一个
+                任务的历史回执，在这儿改会让人以为是在改这条记录。设置页那一份照常能改。 */}
+            {canManage && !running && !settled && (
               <button type="button" className={idle ? "is-primary" : ""} disabled={busy} onClick={() => setDraft(state.command ?? "")}>
                 <PencilSimple size={13} />{idle ? "设一条" : "改这条命令"}
               </button>
@@ -266,16 +239,18 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   );
 }
 
-function elapsed(from: string): string {
-  const ms = Math.max(0, Date.now() - new Date(from).getTime());
-  const total = Math.floor(ms / 1000);
-  const min = Math.floor(total / 60);
-  return min > 0 ? `${min} 分 ${total % 60} 秒` : `${total} 秒`;
-}
-
-function heading(state: AcceptGateState, running: AcceptGateView | null, latest: AcceptGateView | null, _tick: number): string {
-  if (running) return `验收前置命令正在跑（已经 ${elapsed(running.startedAt)}）`;
+function heading(
+  state: AcceptGateState,
+  running: AcceptGateView | null,
+  latest: AcceptGateView | null,
+  settled: boolean,
+  runningFor: string | null,
+): string {
+  if (running) return `验收前置命令正在跑（已经 ${runningFor}）`;
   if (!latest) return "这个项目设了验收前置命令";
+  // 已经盖过章了：这张卡是回执。stale 在这儿一概不参与 —— 「现在这棵树变了」对一次
+  // 已经合完的验收毫无意义，说出来只会让人以为合进去的那一份有问题。
+  if (settled) return latest.status === "passed" ? "这次合并前，验收前置命令通过了" : "这次跳过了验收前置命令";
   if (latest.status === "passed") {
     if (!latest.stale) return "验收前置命令已通过";
     return latest.command !== state.command ? "上次通过的不是现在这条命令" : "上次通过的不是现在这棵树";
@@ -283,12 +258,26 @@ function heading(state: AcceptGateState, running: AcceptGateView | null, latest:
   return `验收前置命令${ACCEPT_GATE_STATUS_LABELS[latest.status]}`;
 }
 
-function detail(state: AcceptGateState, running: AcceptGateView | null, latest: AcceptGateView | null): string {
+function detail(
+  state: AcceptGateState,
+  running: AcceptGateView | null,
+  latest: AcceptGateView | null,
+  settled: boolean,
+): string {
   if (running) {
     return `\`${running.command}\`（在 ${running.cwd}）。rc=0 才会继续合并：绿了这次验收会自动做完，`
       + "不用再点；红了会把日志交回这个任务的智能体去修，目标分支一个字节都不会动。";
   }
   if (!latest) return `点「验收通过」时会先在任务工作区里跑一遍 \`${state.command}\`，rc=0 才合并。`;
+  if (settled) {
+    const tree = latest.sourceCommit ? `验的是 ${latest.sourceCommit.slice(0, 8)}。` : "";
+    if (latest.status === "passed") return `${summarizeAcceptGate(latest)}。${tree}这次合并就是拿它放的行。`;
+    // 没通过却合进去了，只有一条路到得了这儿：你在验收时明确选了跳过。命令后来被撤掉
+    // 的那种也落在这里，所以那一句要分开说 —— 否则会读成「跳过的是现在这条」。
+    return `${summarizeAcceptGate(latest)}。${tree}这次验收没有重跑它、也没有它通过的记录，`
+      + `合并是你明确选的 —— 那条红没有人修过。`
+      + (state.command ? "" : "（这个项目之后撤掉了验收前置命令。）");
+  }
   if (latest.status === "passed") {
     if (!latest.stale) return `${summarizeAcceptGate(latest)}。代码和命令都没再改过，所以这次验收不会重跑它。`;
     // 「不作数了」有两种，出路一样但原因完全不同，说错一种用户会去查错的地方。

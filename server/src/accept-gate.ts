@@ -30,6 +30,7 @@ import { acceptGateLogPath, acceptGateLogTail, appendGateLog, isSameGateProcess,
 import { isAncestor } from "./git-accept.js";
 import { commitAt, plannedMergeTarget } from "./task-branch-plan.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { publishTaskUpdated } from "./task-store.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { continueWhenIdle } from "./runs.js";
 import type { AcceptFailure } from "./task-accept-guard.js";
@@ -68,6 +69,20 @@ const settlements = new Map<string, Promise<void>>();
 // 正在收尾的 runId。进程退出、取消、超时三条路可能同时到，而「读行 → 改行」之间有 await：
 // 只靠库里那个 running 判据会让两条路都认为自己是第一个（于是自动续验收跑两遍）。
 const settling = new Set<string>();
+
+/**
+ * 门禁状态变了，**两条都要发**。
+ *
+ * `task.acceptGate` 只有验收台那张卡在听；而「这个任务此刻有条命令在跑」还要进到任务
+ * 本身（`Task.acceptGateRunning` 由 enrichTasks 现查），侧栏那颗圆点和会话页输入框上方
+ * 那条才看得见。少了后面这一条，门禁跑的那十几分钟里任务在列表上和平时一模一样。
+ */
+function announceGate(taskId: string): void {
+  bus.publish({ type: "task.acceptGate", taskId });
+  void publishTaskUpdated(taskId).catch((error) => {
+    console.error(`[ash] 门禁状态广播失败（${taskId}）:`, error);
+  });
+}
 
 const gateView = (row: GateRow): AcceptGateView => ({
   id: row.id,
@@ -260,7 +275,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
         ? ` 注意：目标分支 ${plan.targetBranch} 已经领先于这棵树，所以它验的不是最终的合并结果。`
         : ""),
   );
-  bus.publish({ type: "task.acceptGate", taskId });
+  announceGate(taskId);
 
   // 起进程到登记超时闹钟这一段**必须一个 await 都没有**：命令可能几毫秒就退了（`false`
   // 这种），退出回调一来就要找得到这条登记，否则它会被当成「已经被别人收过」而静默丢掉，
@@ -323,7 +338,7 @@ async function settleGate(
     const view = gateView({ ...row, ...outcome, finishedAt });
     appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}\n`);
     await appendTaskTimeline(row.taskId, `${summarizeAcceptGate(view)}。`);
-    bus.publish({ type: "task.acceptGate", taskId: row.taskId });
+    announceGate(row.taskId);
     if (outcome.status === "passed") await continueAcceptance(row);
     else if (outcome.status === "failed") await handOffGateFailure(row, view);
   })().catch((error) => {
@@ -535,7 +550,7 @@ export async function recoverAcceptGates(): Promise<{ interrupted: number }> {
       row.taskId,
       `验收前置命令被打断：ash 重启时它还在跑（\`${row.command}\`），已按未完成收尾。重新点验收会从头跑一遍。`,
     );
-    bus.publish({ type: "task.acceptGate", taskId: row.taskId });
+    announceGate(row.taskId);
   }
   return { interrupted: rows.length };
 }

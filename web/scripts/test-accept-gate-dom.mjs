@@ -18,6 +18,9 @@ import { createServer } from "vite";
 // ⑥ 「上次那个绿灯还作不作数」有两种不作数（树变了 / 命令换了一条），出路一样但原因
 //    完全不同，说错一种用户会去查错的地方。
 // ⑦ 取消和被打断**不是红**：没有结论，所以不套失败色、也没有「交给智能体去修」。
+// ⑧ **验收做完之后这张卡留着**（用户 2026-10-23）：它换成一张只读回执。原先在盖章那一
+//    刻整个消失，于是「门禁通过了」和「我明确跳过了那条红」在界面上长得一模一样 ——
+//    而两者的区别恰恰是这次合并到底有没有凭据。
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
@@ -230,12 +233,75 @@ try {
     await page.close();
   }
 
-  // ⑩ 已经验收完的任务：这张卡不再占一行。
+  // ⑩ 已经验收完、门禁通过：卡**留着**当回执（用户 2026-10-23），但只读 —— 不再摆任何
+  //    会改变状态的按钮（重跑/跳过/交给智能体/改这条命令/刷新），只留「看完整日志」。
   {
     const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run() }, query: "?stage=accepted" });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    assert.match(await card.innerText(), /验收前置命令通过了/, "盖完章也得留下「这次是拿什么放的行」");
+    assert.match(await card.innerText(), /abc12345/, "回执要说清验的是哪棵树");
+    for (const name of ["重跑一次", "这次跳过它，直接合并", "交给智能体去修", "改这条命令", "刷新"]) {
+      assert.equal(await card.getByRole("button", { name }).count(), 0, `验收做完之后不该还摆「${name}」`);
+    }
+    assert.equal(await card.getByRole("button", { name: "看完整日志" }).count(), 1);
+    await page.close();
+  }
+
+  // ⑪ 已经验收完、而上一次是红的：只有「你明确跳过了它」这一条路到得了这儿。这一态
+  //    原先和「门禁通过后验收完成」在界面上完全同形 —— 那正是要补的那一行。
+  {
+    const failed = run({ status: "failed", exitCode: 1, failure: "exit_code", logTail: "1 failed\n" });
+    const { page } = await open({
+      gate: { command: "./kb.sh test full", running: null, latest: failed }, query: "?stage=accepted",
+    });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    assert.match(await card.innerText(), /这次跳过了验收前置命令/);
+    assert.match(await card.innerText(), /合并是你明确选的/, "得说破合并没有凭据、是谁决定的");
+    assert.equal(await card.evaluate((el) => el.classList.contains("is-skipped")), true, "跳过是琥珀不是红：此刻什么都没拦着");
+    assert.equal(await card.getByRole("button", { name: "交给智能体去修" }).count(), 0, "都合完了，这条红的出路是新开一个任务");
+    await page.close();
+  }
+
+  // ⑫ 命令后来被撤掉了，但这个任务当初跑过：验收做完之后仍要留痕（⑨ 那条早退只管
+  //    「还没盖章」的任务 —— 那时摆出路才会误导）。
+  {
+    const { page } = await open({ gate: { command: null, running: null, latest: run() }, query: "?stage=accepted", command: null });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    assert.match(await card.innerText(), /验收前置命令通过了/);
+    await page.close();
+  }
+
+  // ⑬ 主会话页那条折叠条（用户 2026-10-23 的 04-A）：门禁跑的十几分钟里任务本身
+  //    status/stage 一个字都不变，这条是会话页上**唯一**看得出「有东西在跑」的东西。
+  //    折叠态要把命令和已经跑了多久都写在一行；展开能就地收掉它。
+  {
+    const running = run({ status: "running", exitCode: null, finishedAt: null, logTail: "RUN x_post\n" });
+    const { page, store } = await open({ gate: { command: running.command, running, latest: null }, query: "?wait=1" });
+    const bar = page.locator(".accept-gate-wait");
+    await bar.waitFor();
+    const text = await bar.innerText();
+    assert.match(text, /验收前置命令在跑/);
+    assert.match(text, /\.\/kb\.sh test full/, "折叠那一行要说清在跑的是哪条命令");
+    assert.match(text, /已经 1 分 30 秒/, "秒表要自己走，不能定在点下去那一刻");
+    // 折叠态不许把出路摆出来占地方，但点开就得有。
+    assert.equal(await bar.getByRole("button", { name: /不等了/ }).count(), 0);
+    await bar.locator(".wait-bar__bar").click();
+    await bar.getByRole("button", { name: /不等了/ }).click();
+    await page.waitForTimeout(200);
+    assert.equal(store.canceled, 1, "收掉它要真打那一发 cancel");
+    assert.equal(await page.locator(".accept-gate-wait").count(), 0, "收掉之后这条就该消失 —— 它只说「正在跑」");
+    await page.close();
+  }
+
+  // ⑭ 没在跑就彻底不占地方：跑完之后该看的是验收台上那张回执，不是这条。
+  {
+    const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run() }, query: "?wait=1" });
     await page.locator("h1").waitFor();
     await page.waitForTimeout(300);
-    assert.equal(await page.locator(".accept-gate-card").count(), 0, "验收完之后它只会重复一句「上次通过了」");
+    assert.equal(await page.locator(".accept-gate-wait").count(), 0);
     await page.close();
   }
 

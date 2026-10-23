@@ -72,6 +72,9 @@ export function keepVisibleInPreview(
     || task.pinnedAt != null
     || hasFailed(task)
     || indicator === "unaccepted"
+    // 门禁正在跑的那几分钟里它不再是 unaccepted（见 deriveTaskStatusIndicator），
+    // 不连这一档一起留住的话，点完验收那一刻老任务会从侧栏上消失。
+    || indicator === "working"
     || needsYourCommand(task, workers);
 }
 export function previewTasksByAge<T extends TaskListItem>(

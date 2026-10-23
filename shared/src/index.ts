@@ -395,6 +395,14 @@ export interface Task {
   handoff?: TaskHandoff | null;
   // 强制恢复清掉 handoff 后仍保留的风险审计；刷新后必须持续可见。
   handoffAudit?: HandoffAudit | null;
+  /**
+   * 此刻有没有一条**验收前置命令**正在这个任务的工作区里跑（见 shared/accept-gate.ts）。
+   *
+   * 它不是列里的字段，是 `enrichTasks` 现查的：门禁跑的那十几分钟里，任务本身的 status
+   * 和 stage 一个字都不会变（它早就 done 了、正等着验收），于是「我点过验收了吗、它跑到
+   * 哪了」在任务列表上**一点痕迹都没有**。侧栏那颗圆点和会话页输入框上方那条都看它。
+   */
+  acceptGateRunning?: boolean;
 }
 
 /**

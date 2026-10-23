@@ -478,6 +478,14 @@
 }
 
 .workspace-status-dot--attention { background: var(--amber); }
+/* 「等一件会自己回来的事」（挂着哨兵、验收前置命令正在跑）：同一种黄，但会呼吸。
+   呼吸在这套界面里只给「正在动」的点用（见下面 --active），所以静止的黄仍然只表示
+   「等你说话」，两者一眼分得开，也不用再多造一种颜色。 */
+.workspace-status-dot--working {
+  background: var(--amber);
+  animation: task-status-dot-pulse 1.35s ease-in-out infinite;
+  will-change: opacity, transform;
+}
 /* 未验收 = 干完了但还没盖章：靛蓝空心环。空心是刻意的 —— 实心点在这套界面里表示
    「系统替你记的状态」，环表示「等你动手」，一眼能跟绿色的完成点分开。 */
 .workspace-status-dot--unaccepted {
@@ -503,7 +511,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .workspace-status-dot--active {
+  .workspace-status-dot--active,
+  .workspace-status-dot--working {
     animation: none;
     opacity: 1;
     transform: none;

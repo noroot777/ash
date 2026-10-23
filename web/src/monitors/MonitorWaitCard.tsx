@@ -69,44 +69,44 @@ export function MonitorWaitCard({
       : monitors[0].description;
   return (
     <section
-      className={`monitor-wait${open ? " is-open" : ""}${builtinOnly ? " is-builtin-only" : ""}`}
+      className={`wait-bar monitor-wait${open ? " is-open" : ""}${builtinOnly ? " is-builtin-only" : ""}`}
       aria-label="任务的哨兵"
     >
       <button
         type="button"
-        className="monitor-wait__bar"
+        className="wait-bar__bar"
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={() => setOpen((current) => !current)}
       >
         <Pulse size={13} weight={builtinOnly ? "regular" : "fill"} aria-hidden="true" />
         <b>{builtinOnly ? `${builtinCount} 个内置 Monitor 在跑` : `在等 ${monitors.length} 个哨兵`}</b>
-        <span className="monitor-wait__brief">{brief}</span>
-        {monitors.length === 1 && <span className="monitor-wait__when">· {liveDeadline(monitors[0])}</span>}
-        <CaretDown size={11} weight="bold" className="monitor-wait__caret" aria-hidden="true" />
+        <span className="wait-bar__brief">{brief}</span>
+        {monitors.length === 1 && <span className="wait-bar__when">· {liveDeadline(monitors[0])}</span>}
+        <CaretDown size={11} weight="bold" className="wait-bar__caret" aria-hidden="true" />
       </button>
       {open && (
-        <div className="monitor-wait__body" id={bodyId}>
+        <div className="wait-bar__body" id={bodyId}>
           {/* 折叠那行只带了头一个，展开要把每一个都摊开（各自盯什么、盯到什么时候）。 */}
           {monitors.length > 0 && (
             <ul className="monitor-wait__list">
               {monitors.map((monitor) => (
                 <li key={monitor.id}>
                   <span className="monitor-wait__what">{monitor.description}</span>
-                  <span className="monitor-wait__when">{liveDeadline(monitor)}</span>
+                  <span className="wait-bar__when">{liveDeadline(monitor)}</span>
                 </li>
               ))}
             </ul>
           )}
           {builtinOnly ? (
-            <p className="monitor-wait__note">
+            <p className="wait-bar__note">
               这几个是智能体用 claude 自带的 <code>Monitor</code> 起的：进程在它自己那一轮里，
               通知也只注回那条会话 —— <b>它们不会把这个任务叫醒</b>，回合一结束就跟着被收走。
               要跨回合等一件事，得用 ash 的哨兵（<code>start_monitor</code>）并用{" "}
               <code>pause_task</code> 收尾那一轮。
             </p>
           ) : (
-            <p className="monitor-wait__note">
+            <p className="wait-bar__note">
               它的进程由 ash 自己起，活得过这一回合。
               {busy
                 ? <> 任务这一轮还在跑，事件会排着队等它空下来再送进会话。</>
@@ -127,14 +127,14 @@ export function MonitorWaitCard({
             </p>
           )}
           {unclaimed.length > 0 && (
-            <p className="monitor-wait__note monitor-wait__note--stuck">
+            <p className="wait-bar__note monitor-wait__note--stuck">
               其中 {unclaimed.length} 个 ash <b>这一刻认不回它的进程</b>：重启恰好打断了起进程那一步，
               所以它从来没收到过信号。日志和期限照旧有人接着管（有结果会照常叫醒你、到点照常
               收尾），但在认回来之前<b>点停未必停得掉那个进程</b> —— 那一步要先认得出它的号。
               <q>{unclaimed[0].endedReason}</q>
             </p>
           )}
-          <button type="button" className="monitor-wait__open" onClick={onOpenPanel}>
+          <button type="button" className="wait-bar__open" onClick={onOpenPanel}>
             哨兵面板 <ArrowRight size={11} weight="bold" aria-hidden="true" />
           </button>
         </div>

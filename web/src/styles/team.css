@@ -128,6 +128,8 @@
 .team-status-dot--pending { border: 1px dashed var(--muted); background: transparent; }
 .team-status-dot--active { background: var(--muted); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
 .team-status-dot--attention { background: var(--amber); }
+/* 同 .workspace-status-dot--working：静止黄=等你说话，呼吸黄=等一件会自己回来的事。 */
+.team-status-dot--working { background: var(--amber); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
 .team-status-dot--unaccepted { border: 1.5px solid var(--accent); background: color-mix(in lch, var(--accent) 16%, transparent); }
 .team-status-dot--success { background: var(--green); }
 .team-status-dot--error { background: var(--red); }
@@ -217,5 +219,6 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .team-timeline-summary > svg { transition: none; }
-  .team-status-dot--active { animation: none; opacity: 1; transform: none; }
+  .team-status-dot--active,
+  .team-status-dot--working { animation: none; opacity: 1; transform: none; }
 }
