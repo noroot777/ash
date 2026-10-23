@@ -274,10 +274,10 @@ export function spawnDetachedAgent(
 // detached.ts 已经依赖 spawn.ts,反过来会成环。
 // **常驻会话不要用它** —— 双向单飞走下面的 spawnControllableForRun。
 //
-// **Windows 也走落盘**(detached-win.ts),只是实现不同:那边不套 shell,直接把两个文件
-// 描述符当 stdout/stderr 交给 CLI。所以两个平台的契约现在是同一句话 ——「给了 detach
-// 路径就有 pid + 落盘输出 + 可接管」,reattach.ts 那边因此也不再按平台短路。那边仍有两档
-// 拿不到的能力(退出码有一个一两秒的观察空窗、stdin 不可重连),逐条写在 detached-win.ts
+// **Windows 也走落盘**(detached-win.ts),只是实现不同:那边不套 shell(直接把两个文件描述符
+// 当 stdout/stderr 交给 CLI),而是套一层按次生成的 node 壳来写退出码、守 stdin。所以两个
+// 平台的契约现在**逐字相同** ——「给了 detach 路径就有 pid + 落盘输出 + 退出码 + 可接管 +
+// 可重连 stdin」,reattach.ts 那边因此也不再按平台短路。实现差异逐条写在 detached-win.ts
 // 顶部。
 //
 // 没给 detach 路径的那条管道路也因此**不再落盘**:它过去靠 spawn.ts 的 `teeStdout` 补一份
@@ -302,8 +302,8 @@ export function spawnForRun(
 }
 
 /**
- * 双向 stdin 的当前单飞回合。POSIX 走可重连 FIFO;Windows 走落盘输出 + 匿名 stdin
- * (那边没有能当子进程 stdio 的具名管道,见 detached-win.ts 顶部)。
+ * 双向 stdin 的当前单飞回合。两边都是**可重连**的:POSIX 重开 FIFO,Windows 连回壳守着的
+ * 具名管道(`reopenWindowsControlStdin`,见 detached-win.ts 顶部)。
  */
 export function spawnControllableForRun(
   cwd: string,

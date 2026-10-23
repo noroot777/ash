@@ -178,6 +178,27 @@ export function subtreePids(rows, roots) {
 }
 
 /**
+ * 「这是一个活得过 ash 的 agent 壳」的记号。跟
+ * `server/src/executors/detached-win-wrap.ts` 的 `WINDOWS_WRAP_SUFFIX` **必须一字不差**
+ * —— 那边按这个后缀生成壳脚本的文件名,这边按它在进程表的命令行里把壳认出来。
+ *
+ * 两份不能合并(这些脚本要在 build 之前就能跑,见本文件顶部),所以拿回归把它们钉在
+ * 一起:`server/scripts/test-win-launch.ts` 最后一节会比对这两个常量。
+ */
+export const WINDOWS_AGENT_WRAP_SUFFIX = ".ash-agent-wrap.cjs";
+
+/**
+ * 进程表里哪些行是 agent 壳。**按命令行里的记号认,不靠外部名单** —— 这是
+ * killServerProcess 那条不变量的全部依据,理由写在那边。
+ */
+export function agentWrapPids(rows) {
+  const want = WINDOWS_AGENT_WRAP_SUFFIX.toLowerCase();
+  return rows
+    .filter((row) => typeof row.command === "string" && row.command.toLowerCase().includes(want))
+    .map((row) => row.pid);
+}
+
+/**
  * 停掉旧 server 进程。
  *
  * POSIX:就是一发 SIGTERM。信号不级联 —— 它的子进程(输出已落盘的 agent、终端会话、
@@ -188,8 +209,23 @@ export function subtreePids(rows, roots) {
  * 重启必断」的真正原因(不是落盘那一层做不到,见 server/src/executors/detached-win.ts)。
  * 所以那边改成自己算:整棵后代**减去**要保住的子树,逐个 `/F`;保住的那几棵一刀不发。
  *
- * `protect` 空着(问不到判据、或者压根没有能接管的 agent)时退回 `/T /F`:那是旧行为,
- * 宁可照旧杀干净,也不留一堆没人管的孤儿终端/预览。返回这一刀是怎么下的,给调用方说话用。
+ * ── 要保住谁:**认记号,不认名单**(第 1 轮审查 F2)─────────────────────────────
+ *
+ * `protect` 是控制面在**上一时刻**给的答案(`/api/restart-impact` 的 survives)。拿它当
+ * 「该保住的全集」是错的:问完到下刀之间,队列推进、别的页面、别的客户端都还能起新 agent,
+ * 那个新壳不在名单里,于是被明确地 taskkill 掉 —— 审查实测过,确定性复现。缩短窗口、
+ * 多问一次都不是不变量。
+ *
+ * 所以这边反过来:**凡是在同一份进程表快照里认得出记号的壳,一律不下刀**(`protect` 退化
+ * 成一个额外输入,名单漏了也不至于误杀)。记号就是壳脚本的文件名后缀,它写在命令行里 ——
+ * 跟「名单」不同,它和 doomed 集合读的是同一份快照,中间没有时间差。
+ *
+ * 快照之后才出生的进程压根不在 doomed 里,也就一刀都挨不着:它要么是个新壳(该活),要么
+ * 是 ash 非 detached 起的子进程 —— 后者会被 libuv 那个 `KILL_ON_JOB_CLOSE` 的全局 Job 在
+ * server 一死时连带收掉(机制见 detached-win.ts 顶部),不需要这里补刀。
+ *
+ * 只有**进程表压根问不出来**时才退回 `/T /F`(那是旧行为):宁可照旧杀干净,也不留一堆没人
+ * 管的孤儿终端/预览。返回这一刀是怎么下的,给调用方说话用。
  */
 export function killServerProcess(pid, protect = []) {
   if (!Number.isInteger(pid) || pid <= 1) return "skipped";
@@ -197,12 +233,14 @@ export function killServerProcess(pid, protect = []) {
     killPid(pid);
     return "signal";
   }
-  const roots = [...new Set(protect.filter((p) => Number.isInteger(p) && p > 1))];
-  if (!roots.length) {
+  const rows = listProcesses();
+  if (!rows.length) {
+    // 进程表读不出来(PowerShell 不在 / CIM 服务异常)。这时候既算不出要保谁、也算不出
+    // 要杀谁,只剩旧行为。
     capture("taskkill", ["/PID", String(pid), "/T", "/F"]);
     return "tree";
   }
-  const rows = listProcesses();
+  const roots = [...new Set([...protect, ...agentWrapPids(rows)])].filter((p) => Number.isInteger(p) && p > 1);
   const spared = subtreePids(rows, roots);
   const doomed = [...subtreePids(rows, [pid])].filter((p) => !spared.has(p) && p !== process.pid);
   // server 自己先走:它一死就不会再派新活。随后按快照逐个收掉剩下的(快照是击杀面的
@@ -280,9 +318,18 @@ export function localJson(port, path, timeoutMs = 2000, headers = undefined) {
  * 是对的，对**安全闸**是致命的：多人模式下 `/api/restart-impact` 会 401，重启脚本于是
  * 把「会被打断的任务数」算成 0，不加 FORCE 也照样杀（第 1 轮审查 P1）。要 fail closed
  * 的地方用这个，看 `status`：null = 连不上，数字 = 服务端真的答了。
+ *
+ * 第三档也得分开:**「端口上没人在听」和「有人在听但没按时答」不是一回事**
+ * (第 1 轮审查 F1)。两者的 `status` 都是 null,可前者意味着「本来就没有任务会被打断」,
+ * 后者只意味着「问不出来」—— 把后者当前者处理,安全闸就会在 ash 响应慢的时候静默失效。
+ * 所以再带一个 `error`:`null` = 答了,`"timeout"` = 超时,其余是 errno(`ECONNREFUSED`
+ * 这类),由 `isNotListening` 判。
  */
 export function localGet(port, path, timeoutMs = 2000, headers = undefined) {
   return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+    let timedOut = false;
     const req = request(
       { host: "127.0.0.1", port, path, timeout: timeoutMs, ...(headers ? { headers } : {}) },
       (res) => {
@@ -291,19 +338,31 @@ export function localGet(port, path, timeoutMs = 2000, headers = undefined) {
         res.on("data", (chunk) => { body += chunk; });
         res.on("end", () => {
           const status = res.statusCode ?? null;
-          if (!status || status >= 300) return resolve({ status, json: null });
+          if (!status || status >= 300) return done({ status, json: null, error: null });
           try {
-            resolve({ status, json: JSON.parse(body) });
+            done({ status, json: JSON.parse(body), error: null });
           } catch {
-            resolve({ status, json: null });
+            done({ status, json: null, error: null });
           }
         });
       },
     );
-    req.on("timeout", () => req.destroy());
-    req.on("error", () => resolve({ status: null, json: null }));
+    req.on("timeout", () => { timedOut = true; req.destroy(); });
+    req.on("error", (e) => done({ status: null, json: null, error: timedOut ? "timeout" : (e?.code ?? "error") }));
+    // `req.destroy()` 不保证 emit error(跨 Node 版本不一致),少这一条超时就可能永不 resolve。
+    req.on("close", () => done({ status: null, json: null, error: timedOut ? "timeout" : "closed" }));
     req.end();
   });
+}
+
+/**
+ * `localGet` 的 `error` 是不是「端口上压根没人在听」。
+ *
+ * 只有连接被明确拒绝才算。超时、连接被重置、未知错误一律**不算** —— 那些都是「问不出来」,
+ * 而「问不出来」不等于「没有」(见 localGet 顶部那一段、以及 restart.mjs 的 impact)。
+ */
+export function isNotListening(error) {
+  return error === "ECONNREFUSED" || error === "EADDRNOTAVAIL";
 }
 
 export function sleep(ms) {

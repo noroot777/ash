@@ -6,12 +6,9 @@
 // **字节原样**。这比 cmd.exe / PowerShell 的重定向可靠得多:前者要在命令行里再解析一轮
 // 引号(`win-command.ts` 顶部那三条),后者会插手编码(PS 5.1 的 `>>` 写 UTF-16)。
 //
-// 于是那条唯一的生死绑定(stdout 匿名管道:ash 一死读端关闭,CLI 下次写就吃
-// EPIPE/ERROR_BROKEN_PIPE 当场毙命)在这边也断掉了,`spawn.ts` 的 `DETACH=false` 一个字
-// 都不用改 —— 「活得过重启」靠的从来不是 `detached`,是**输出不再经过 ash**。
-// 反过来说,Windows 上**不能**加 `detached`:libuv 把它翻成 `DETACHED_PROCESS |
-// CREATE_NEW_PROCESS_GROUP`,而那边的整树击杀(`taskkill /T`)走的是 ppid 关系、不需要
-// 进程组;`DETACHED_PROCESS` 还实测过能让控制台应用空退(见 confine-job.ts 的那组数字)。
+// 落盘同时断掉了 POSIX 那边那条生死绑定(stdout 匿名管道:ash 一死读端关闭,CLI 下次写就吃
+// EPIPE 当场毙命)。但**那不是 Windows 上的死因** —— 这边还有一条更硬的,见下面
+// `detached: true` 那一节:libuv 的全局 Job。两条都断掉了才叫「活得过重启」。
 //
 // ── 退出码与可重连 stdin:套一层壳,跟 POSIX 同一个契约 ──────────────────────────
 //
@@ -153,6 +150,26 @@ export function spawnWindowsDetachedAgent(
     detached: true,
     windowsHide: true,
   });
+  // **`error` 的消费者必须在任何一个出口之前就位**(第 1 轮审查 N4)。spawn 的失败是
+  // **异步** emit 的,而下面还有一个「拿不到 pid 就 return failedChild」的出口 —— 先 return
+  // 的话那次 emit 就落在一个没有监听者的 EventEmitter 上,node 会升级成 uncaughtException
+  // (健康的 server 兜底记一笔,没装兜底的调用方直接退出)。所以这里先接住、存着:
+  // onExit 注册得上就转交给它,注册不上(走了 failedChild)就烂在这儿,谁都不会被它炸。
+  let exitCb: ((code: number | null) => void) | null = null;
+  let pendingExit: number | null = null;
+  const settleExit = (rc: number) => {
+    if (exitCb) exitCb(rc);
+    else pendingExit = rc;
+  };
+  real.on("error", () => settleExit(1));
+  // 壳退出 = CLI 已经跑完、rc 已经写好(那是它退出前的最后两件事)。留一轮重试,
+  // 跟 POSIX 那条路逐字一致:极少数情况下文件写入还没落地。
+  real.on("exit", (code, signal) => {
+    const fallback = code ?? (signal ? 1 : 0);
+    const rc = readExitCode(paths.rc);
+    if (rc !== null) return settleExit(rc);
+    setTimeout(() => settleExit(readExitCode(paths.rc) ?? fallback), 50);
+  });
   try { closeSync(outFd); } catch { /* ignore */ }
   try { closeSync(errFd); } catch { /* ignore */ }
   registerTrackFd(real, track);
@@ -178,15 +195,9 @@ export function spawnWindowsDetachedAgent(
     stdin: real.stdin,
     kill: () => killChild(real),
     onExit: (cb) => {
-      real.on("error", () => cb(1));
-      // 壳退出 = CLI 已经跑完、rc 已经写好(那是它退出前的最后两件事)。留一轮重试,
-      // 跟 POSIX 那条路逐字一致:极少数情况下文件写入还没落地。
-      real.on("exit", (code, signal) => {
-        const fallback = code ?? (signal ? 1 : 0);
-        const rc = readExitCode(paths.rc);
-        if (rc !== null) return cb(rc);
-        setTimeout(() => cb(readExitCode(paths.rc) ?? fallback), 50);
-      });
+      exitCb = cb;
+      // 监听器在 spawn 之后就装好了(见上面那段),所以这里只负责把已经发生过的那次接走。
+      if (pendingExit !== null) cb(pendingExit);
     },
   });
   shareTrackFdRegistration(real, child);

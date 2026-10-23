@@ -19,12 +19,23 @@
 //     原样转手。代价是一个常驻 node(约 35–45 MB),换来的是跟 POSIX 一字不差的契约。
 //     ash 自己就是 node,所以没有新依赖;CLI 里有一半(claude)本来也是 node。
 //
-// 壳的源码按次写进运行目录(`<rc>.wrap.cjs`),而不是打进 dist 或塞进 `node -e`:前者在
-// `tsx` 跑源码的开发态下不存在,后者会把两千字的脚本原样挂进进程命令行。`.cjs` 后缀是为了
-// 不受最近那个 package.json 的 `type` 影响。
+// 壳的源码按次写进运行目录(`<rc><WINDOWS_WRAP_SUFFIX>`),而不是打进 dist 或塞进 `node -e`:
+// 前者在 `tsx` 跑源码的开发态下不存在,后者会把两千字的脚本原样挂进进程命令行。`.cjs` 后缀
+// 是为了不受最近那个 package.json 的 `type` 影响。
 
 import { createHash } from "node:crypto";
 import type { DetachedPaths } from "./detached-child.js";
+
+/**
+ * 壳脚本的文件名后缀。**这不只是个文件名,它是一个对外可见的记号**:壳的路径原样挂在它自己
+ * 的命令行上,于是进程表里能一眼认出「这个进程是一个活得过 ash 的 agent 壳」。
+ *
+ * `scripts/platform.mjs` 的重启那一刀就靠它:`killServerProcess` 按这个后缀认人并无条件
+ * 绕开,不依赖控制面给的保护名单 —— 那份名单是**上一时刻**的快照,合不上后一刻的进程表
+ * (第 1 轮审查 F2)。两份常量由 `server/scripts/test-win-launch.ts` 钉在一起,改名字那边
+ * 会当场红。
+ */
+export const WINDOWS_WRAP_SUFFIX = ".ash-agent-wrap.cjs";
 
 /** 壳用到的三个派生路径。都从 rc 派生,所以不往 DB 加列(跟 POSIX 的 FIFO 同一套做法)。 */
 export function windowsWrapPaths(paths: DetachedPaths): {
@@ -36,7 +47,7 @@ export function windowsWrapPaths(paths: DetachedPaths): {
   // rc 路径恰好两样都满足:它带着 sessionId 和回合起点。
   const id = createHash("sha1").update(paths.rc).digest("hex").slice(0, 20);
   return {
-    script: `${paths.rc}.wrap.cjs`,
+    script: `${paths.rc}${WINDOWS_WRAP_SUFFIX}`,
     // 存在性判定走**文件**而不是管道本身:`existsSync` 对 `\\.\pipe\…` 的行为跨 Node 版本
     // 不好保证,而这个文件由壳自己在收尾时删掉 —— 它在 = 管道还有人守着。
     pipeMarker: `${paths.rc}.stdin.pipe`,
@@ -46,7 +57,7 @@ export function windowsWrapPaths(paths: DetachedPaths): {
 
 /**
  * 壳的源码。约定全部走环境变量,**命令行只有程序和它自己的参数** ——
- * `node <wrap.cjs> <program> <args…>`。
+ * `node <壳> <program> <args…>`。
  *
  * 几个不显眼但必须这么写的地方:
  *  · 壳自己的 stdout/stderr 不回 ash(回了就又多一条「ash 一死就 EPIPE」的绑定),

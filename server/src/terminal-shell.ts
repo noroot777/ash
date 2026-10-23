@@ -56,7 +56,7 @@ export function shellCommand(): { shell: string; args: string[] } {
  *
  * 退出码要自己接:`-Command`/`-EncodedCommand` 只在最后一条是原生命令时才透传
  * `$LASTEXITCODE`,其余情形一律 0/1。所以脚本后面补一段确定性的收口,语义对齐
- * `sh -lc`:**最后一条命令的退出码**就是会话的退出码。
+ * `sh -lc`:**最后一条语句的成败**就是会话的退出码(见 withExitCodeEpilogue)。
  *
  * 脚本方言两边因此是不同的(那边是 PowerShell),这点在设置页的说明里写明。
  */
@@ -73,17 +73,32 @@ export function commandLaunch(script: string, preferredShell?: string): { shell:
 }
 
 /**
- * 把「最后一条命令的退出码」接出来。`$ok` 必须在任何别的语句之前抓住 `$?` ——
- * 读晚一句,拿到的就是那句 `if` 自己的成败。
+ * 把「最后一条语句的成败」接出来,对齐 `sh -lc`(`false; echo hi` 退 0,因为最后一条是
+ * `echo`)。
+ *
+ * **两个变量不是一回事,顺序是这段的全部内容**:
+ *  · `$?` —— **上一条语句**的成败。cmdlet 和原生命令都更新它,所以它才是「最后一句怎么了」
+ *    的那个读数;必须在任何别的语句之前抓住,读晚一句拿到的就是那句 `if` 自己的成败。
+ *  · `$LASTEXITCODE` —— **最近一个原生命令**的退出码。它**有粘性**:脚本中途
+ *    `node -e "process.exit(7)"` 失败之后,后面的 cmdlet 成功也不会清掉那个 7。
+ *
+ * 所以先认 `$?`:它说成功就退 0(第 1 轮审查 F3 —— 反过来写的话,「先失败、随后补救成功」
+ * 的脚本会被那个粘住的 7 重新判成整段失败)。只有 `$?` 说失败时才去用 `$LASTEXITCODE`,
+ * 这时它多半就是那条失败原生命令自己的码。
+ *
+ * 残留的一档如实说在这儿:最后一句是**失败的 cmdlet**、而脚本更早有过失败的原生命令时,
+ * 退的是那个旧码而不是 1 —— 两者都非零,「成没成」这个判断不受影响,只是数字借了前一条。
+ * 要分清得在每条语句之间插桩(得先解析 PowerShell 脚本),不值当。
  */
 function withExitCodeEpilogue(script: string): string {
   return [
     "$global:LASTEXITCODE = 0",
     script,
     "$ok = $?",
-    "if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
-    "if (-not $ok) { exit 1 }",
-    "exit 0",
+    "$code = $LASTEXITCODE",
+    "if ($ok) { exit 0 }",
+    "if ($code -is [int] -and $code -ne 0) { exit $code }",
+    "exit 1",
   ].join("\n");
 }
 

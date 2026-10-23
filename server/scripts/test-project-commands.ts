@@ -160,6 +160,25 @@ if (IS_WINDOWS) {
     const listed = manager.listCommandSessions().find((session) => session.id === native.id);
     assert.equal(listed?.stoppedByUser, false, "自己退出的不算用户停的");
 
+    // ③' 收口认的是**最后一条语句**,不是「这段脚本里有没有失败过」(第 1 轮审查 F3)。
+    //    `$LASTEXITCODE` 对「最近一个原生命令」有粘性:中途失败之后,后面的 cmdlet 成功
+    //    也不会清掉那个码。所以「先失败、随后补救成功」的脚本必须退 0 —— 这条只有在真
+    //    PowerShell 上跑才算数(粘性是它的行为,文本断言证明不了),所以放在这里而不是
+    //    test-win-launch.ts。
+    const recovered = manager.create("p1", cwd, {
+      command: { id: "rc3", name: "rc3", script: 'node -e "process.exit(7)"\nWrite-Output "RECOVERED"' },
+    });
+    assert.equal(await waitExit(recovered.id, "p1"), 0,
+      "失败的原生命令之后又有语句成功 → 整段算成功(粘住的 $LASTEXITCODE 不得冒充最后一句)");
+    const recoveredNative = manager.create("p1", cwd, {
+      command: { id: "rc4", name: "rc4", script: 'node -e "process.exit(7)"\nnode -e "process.exit(0)"' },
+    });
+    assert.equal(await waitExit(recoveredNative.id, "p1"), 0, "最后一条原生命令成功 → 0");
+    const cmdletFail = manager.create("p1", cwd, {
+      command: { id: "rc5", name: "rc5", script: 'Get-Item -LiteralPath "' + join(cwd, "no-such-file-xyz") + '"' },
+    });
+    assert.notEqual(await waitExit(cmdletFail.id, "p1"), 0, "最后一条是失败的 cmdlet → 非零");
+
     // ④ 跨平台契约:start 幂等、restart 先杀旧再起新、stop 落地。走的是真实服务函数
     //    (全局 terminalSessions),不是上面的 manager。
     const keep: RunnableCommand = { id: "keep", name: "keep alive", command: "Start-Sleep -Seconds 60", restartCommand: null };

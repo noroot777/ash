@@ -77,7 +77,7 @@ npm start            # http://localhost:4317
 ♻️ **重启存活** — agent 进程与 server 解耦。`npm run restart` 会自动检测在跑的任务：能接管的无感接管，不能接管的拦住不重启。**单飞任务的 agent 进程完全不受重启影响**（输出写文件而非管道），三个平台都是；团队调度台自动 `--resume` 接回。
 
 > [!NOTE]
-> **三个平台同一个契约**：pid + 落盘输出 + 退出码 + 可接管 + 可重连 stdin。实现不同 —— POSIX 套一层 `/bin/sh` + FIFO，Windows 套一层按次生成的 node 壳 + 具名管道（那边必须有个活过 ash 的进程来写退出码、守着 stdin；libuv 还会把每个非 detached 的子进程塞进一个 `KILL_ON_JOB_CLOSE` 的 Job，所以那层壳是 detached 起的）。重启时不要绕过 `npm run restart` 自己 `taskkill /T`：`/T` 按父子关系杀整棵树，会把本该活下来的 agent 一起带走。
+> **三个平台同一个契约**：pid + 落盘输出 + 退出码 + 可接管 + 可重连 stdin。实现不同 —— POSIX 套一层 `/bin/sh` + FIFO，Windows 套一层按次生成的 node 壳 + 具名管道（那边必须有个活过 ash 的进程来写退出码、守着 stdin；libuv 还会把每个非 detached 的子进程塞进一个 `KILL_ON_JOB_CLOSE` 的 Job，所以那层壳是 detached 起的）。重启时不要绕过 `npm run restart` 自己 `taskkill /T`：`/T` 按父子关系杀整棵树，会把本该活下来的 agent 一起带走 —— `npm run restart` 那一刀按进程表里的壳记号认人并绕开它们（名单之外新起的 agent 也保得住），只有进程表压根读不出来时才退回整树强杀；判据问不出来（超时/拒答）时它宁可中止也不下刀。
 
 ## 编排模式
 

@@ -325,12 +325,34 @@ const detachedPids: number[] = [];
 let stickyPid: number | null = null;
 let stickyEscapePid: number | null = null;
 try {
-  const fakeBin = join(detachedRoot, "fake-agent.mjs");
-  writeFileSync(fakeBin, `#!/usr/bin/env node
+  // 假 CLI 必须在**两个平台**都真能启动,否则这一节的断言会变成两种假象:Windows 上
+  // `bin-resolve` 只认 PATHEXT 里的扩展名,`.mjs` 一律解析不到 —— 「必须留下 pid」那条当场
+  // 红(第 1 轮审查 F4),而「进程死了之后写 stdin 必须失败」那条反倒会**假绿**(压根没起过
+  // 进程)。所以这边照 sticky-claude 的形状给一个 `.cmd` 入口,并且每个假 CLI 都在启动时
+  // 留一行记录 —— 后面每条断言之前先确认「它真的跑起来了」。
+  const fakeStartLog = join(detachedRoot, "fake-agent-started.log");
+  const fakeScript = join(detachedRoot, "fake-agent.mjs");
+  const fakeBin = IS_WINDOWS ? join(detachedRoot, "fake-agent.cmd") : fakeScript;
+  writeFileSync(fakeScript, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(fakeStartLog)}, process.pid + "\\n");
 process.stdin.resume();
 setInterval(() => {}, 1000);
 `);
-  chmodSync(fakeBin, 0o755);
+  if (IS_WINDOWS) writeFileSync(fakeBin, `@node "%~dp0fake-agent.mjs" %*\r\n`);
+  else chmodSync(fakeBin, 0o755);
+
+  /** 等一个前置条件落盘(假 CLI 真跑起来了 / 真退出了),不靠固定 sleep 猜。 */
+  const waitForLines = async (path: string, min: number, what: string) => {
+    const deadline = Date.now() + 20000;
+    for (;;) {
+      let lines = 0;
+      try { lines = readFileSync(path, "utf8").split("\n").filter(Boolean).length; } catch { /* 还没写 */ }
+      if (lines >= min) return;
+      if (Date.now() > deadline) throw new Error(`前置条件没达成(${what}):只等到 ${lines}/${min}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
 
   const stickyPidPath = join(detachedRoot, "sticky.pid");
   const stickyEscapePidPath = join(detachedRoot, "sticky-escape.pid");
@@ -382,15 +404,28 @@ setInterval(() => {}, 1000);
     "Claude 原生引导收尾必须在根进程消失前找回并回收逃逸后代");
   console.log("✓ Claude 单飞最终 result 会 cleanup 根进程与逃逸后代");
 
-  const deadBin = join(detachedRoot, "dead-agent.mjs");
-  writeFileSync(deadBin, "#!/usr/bin/env node\nsetTimeout(() => process.exit(0), 20);\n");
-  chmodSync(deadBin, 0o755);
+  // 这一条的前提是「进程**起来过**又退出了」。记号写在退出前的最后一步:它在 = 假 CLI 真跑过
+  // 且已经在退场 —— 不写这个记号的话,Windows 上压根没启动也能让下面的 rejects 通过。
+  const deadLog = join(detachedRoot, "dead-agent-exited.log");
+  const deadScript = join(detachedRoot, "dead-agent.mjs");
+  const deadBin = IS_WINDOWS ? join(detachedRoot, "dead-agent.cmd") : deadScript;
+  writeFileSync(deadScript, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+setTimeout(() => {
+  appendFileSync(${JSON.stringify(deadLog)}, process.pid + "\\n");
+  process.exit(0);
+}, 20);
+`);
+  if (IS_WINDOWS) writeFileSync(deadBin, `@node "%~dp0dead-agent.mjs" %*\r\n`);
+  else chmodSync(deadBin, 0o755);
   const deadClaude = new ClaudeExecutor({ bin: deadBin }).runSteerable({
     cwd: detachedRoot,
     prompt: "OLD",
   });
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  await assert.rejects(deadClaude.steer!("NEW"), /stdin 已关闭|stream|write/i,
+  await waitForLines(deadLog, 1, "dead-agent 必须真的启动过再退出");
+  // 记号是 node 自己写的;Windows 上它外面还套着一层 cmd.exe,给它一点收摊时间。
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await assert.rejects(deadClaude.steer!("NEW"), /stdin 已关闭|stream|write|EPIPE/i,
     "agent 已退出但 done 尚未消费时，Claude 引导必须报投递失败，不能把消息记成 sent");
   console.log("✓ Claude 原生引导会观察 stdin 写失败，不把死进程当成已送达");
 
@@ -402,8 +437,10 @@ setInterval(() => {}, 1000);
     detach: detachedPathsFor(claudeDir, "claude-session", "T0"),
   });
   // 两个平台同一条契约:给了 detach 路径就必须留下可接管 pid(Windows 走 detached-win.ts,
-  // 输出落盘、stdin 仍是匿名管道 —— 差别逐条写在那个文件顶部,不体现为「没有 pid」)。
+  // 输出落盘、退出码由壳写、stdin 走具名管道 —— 实现差异逐条写在那个文件顶部,不体现为
+  // 「没有 pid」)。
   assert.ok(claudeHandle.detached?.pid, "Claude runSteerable(detach) 必须留下可接管 pid");
+  await waitForLines(fakeStartLog, 1, "Claude 这一路的假 CLI 必须真的被启动");
   detachedPids.push(claudeHandle.detached!.pid);
   claudeHandle.kill();
 
@@ -415,6 +452,7 @@ setInterval(() => {}, 1000);
     detach: detachedPathsFor(codexDir, "codex-session", "T0"),
   });
   assert.ok(codexHandle.detached?.pid, "Codex runSteerable(detach) 必须留下可接管 pid");
+  await waitForLines(fakeStartLog, 2, "Codex 这一路的假 CLI 必须真的被启动");
   detachedPids.push(codexHandle.detached!.pid);
   codexHandle.kill();
   await new Promise((resolve) => setTimeout(resolve, 150));

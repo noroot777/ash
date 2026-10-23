@@ -10,10 +10,11 @@
 
 ## 〇、当前基线
 
-**2026-10-23 实测这 6 条绿**:`win-launch`、`path-boundary`、`openers-windows`、`terminal`
-(含 `test-project-commands` 的 Windows 生命周期一节)、`detached`、`reattach`。后三条是这一轮
-新进来的 —— 常用命令和「活得过重启」原先在那边都是**明确不做**:前者的判据在第一节(伪平台那条)
-与第五节(ConPTY 真机那条),后者整节在第四节。
+**2026-10-23 实测这 7 条绿**:`win-launch`、`path-boundary`、`openers-windows`、`terminal`
+(含 `test-project-commands` 的 Windows 生命周期一节)、`detached`、`reattach`、
+`scheduled-messages`(含 `test-native-steer` —— 它的两个假 CLI 这一轮才换成 Windows 也能启动的
+形状,见第四节最后一条)。中间那几条是这一轮新进来的 —— 常用命令和「活得过重启」原先在那边都是
+**明确不做**:前者的判据在第一节(伪平台那条)与第五节(ConPTY 真机那条),后者整节在第四节。
 
 **2026-08-19 实测过这 6 条绿**:`win-launch`、`path-boundary`、`openers-windows`、
 `scheduled-messages`、`review`、`accept-merge`。**其余的绿是 2026-08-18 那轮留下的,
@@ -168,7 +169,32 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 > | 套一层壳(不 detached) | 壳和 CLI 一起死(壳自己的 Job 又连坐了 CLI) |
 > | **壳 + `detached: true`** | 照常活着,输出继续长到 26 行 |
 
-顺带一条**夹具**层面的教训,三个都踩过:
+### 那一刀本身:**认记号,不认名单**
+
+落盘 + `detached` 只保证「ash 自己退出时 agent 不死」。`npm run restart` 还会**主动**下刀:
+Windows 没有信号,旧版是 `taskkill /PID <server> /T /F`,`/T` 按父子关系把整棵树一起杀。于是这
+一轮先改成「整棵后代减去 `/api/restart-impact` 给的 survives 名单」—— 第 1 轮审查实测证明这还
+不够,两条都是确定性复现:
+
+| 怎么破的 | 为什么 |
+|---|---|
+| 判据查询超时 | `localGet` 把「超时」和「端口上没人在听」一律压成同一个读数,保护名单于是变成空数组,退回整树强杀,命令最后照样说「已就绪」 |
+| 问完判据之后又起了一个 agent | 名单是**上一时刻**的快照;新壳不在名单里,被明确 taskkill 掉 |
+
+修法分两层,缺一不可:
+
+1. **决策层 fail closed**(`scripts/restart.mjs` 的 `impact`):回答分三档 —— 拿到判据 / 服务端
+   拒答 / **问不出来**(超时、被重置)。「问不出来」不等于「没有」,这时普通重启直接中止,
+   要下刀得显式 `FORCE=1`。端口上压根没人在听才算「没有任务会被打断」;
+2. **执行层不变量**(`scripts/platform.mjs` 的 `killServerProcess`):**凡是在同一份进程表快照里
+   认得出壳记号的进程,一律不下刀**,名单退化成一个额外输入。记号就是壳脚本的文件名后缀
+   (`WINDOWS_WRAP_SUFFIX` / `WINDOWS_AGENT_WRAP_SUFFIX`,两侧由 `test-win-launch` 钉在一起),
+   它和 doomed 集合读的是同一份快照,中间没有时间差。快照之后才出生的进程压根不在 doomed 里,
+   一刀都挨不着 —— 它要么是个新壳(该活),要么是非 detached 的子进程(libuv 那个 Job 自己会收)。
+
+只有**进程表压根问不出来**时才退回 `/T /F`(宁可杀干净,也不留一堆没人管的孤儿终端/预览)。
+
+顺带一条**夹具**层面的教训,四个都踩过:
 
 - `spawn("npx", …)` 在 Windows 上 ENOENT(Node 不认 PATHEXT)。测试里要跑 tsx 就用
   `spawn(process.execPath, ["--import", "tsx", …])`,两个平台同一条命令;
@@ -176,7 +202,13 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 - **别靠「睡固定时长」造前提**。Windows 上起两层 node 还要过一遍 Defender,实测 600ms 不够;
   按条件轮询(文件出现 / 行数够了)才跟机器速度无关。原先 `test-reattach` 的假 agent 是
   「20 段 × 100ms 就自己退」,在真机上造用例那几秒走完它早没了,于是三条断言一起红在一个
-  跟产品毫无关系的理由上。
+  跟产品毫无关系的理由上;
+- **假 CLI 得在两个平台都真能启动,并且断言之前先确认它真起来了**。`bin-resolve` 在 Windows 上
+  只认 PATHEXT 里的扩展名,`.mjs` 一律解析不到 —— `test-native-steer` 的两个假 CLI 原先就是
+  裸 `.mjs` + chmod:「必须留下可接管 pid」那条直接红(第 1 轮审查 F4),而「进程死了之后写
+  stdin 必须失败」那条反倒**假绿**(压根没起过进程,自然写不进去)。形状照 `sticky-claude.cmd`:
+  `.cmd` 里 `@node "%~dp0<script>.mjs" %*`,再让假 CLI 自己往一个记号文件里写一行,测试按
+  条件等那一行。
 
 ## 五、剩下的
 

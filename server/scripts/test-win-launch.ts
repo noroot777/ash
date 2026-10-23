@@ -16,6 +16,7 @@
 //   6. augmentedEnv 去掉 Path/PATH 的大小写重影
 //   7. 用户自己写的整条命令行走 `cmd /d /s /c` + verbatim（跟 5 的转义规则相反）
 //   8. 常用命令走 PowerShell `-EncodedCommand` + 退出码收口（commandLaunch）
+//   9. agent 壳的记号在 server 与 scripts 两侧**一字不差**（重启那一刀靠它认人）
 // 跑：npm -w server run test:win-launch
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -200,7 +201,11 @@ try {
   //   ① 选的是 PowerShell，且 pwsh(7) 优先于随系统的 5.1；
   //   ② 脚本走 `-EncodedCommand`（UTF-16LE base64）：**原文一个字都不转义**地送过去，
   //      这正是绕开「node-pty 拼命令行 + PowerShell 再解析」那两层引号雷区的办法；
-  //   ③ 退出码收口跟在脚本后面，语义对齐 `sh -lc`（最后一条命令的退出码就是会话退出码）。
+  //   ③ 退出码收口跟在脚本后面，语义对齐 `sh -lc`（最后一条**语句**的成败就是会话退出码）。
+  //
+  // ③ 只能钉文本形状，钉不了语义 —— 「失败的原生命令之后又成功」那档必须在真 PowerShell
+  //    上跑才算数（$LASTEXITCODE 的粘性是 PowerShell 的行为，不是我们的代码），那条在
+  //    test-project-commands.ts 的 Windows 生命周期一节里真跑。
   const psDir = join(stage, "ps");
   mkdirSync(psDir, { recursive: true });
   const pwsh = join(psDir, "pwsh.exe");
@@ -226,8 +231,14 @@ try {
     "$ok = $?",
     "$? 必须紧贴脚本最后一行读——晚一句拿到的就是那句 if 自己的成败",
   );
-  assert.ok(decoded.includes("if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"));
-  assert.equal(lines.at(-1), "exit 0", "都没问题才 0");
+  // 顺序就是这段收口的全部内容:先认 `$?`(最后一条语句的成败),它说成功就退 0;
+  // 只有它说失败才去用 `$LASTEXITCODE` —— 那个值对「最近一个原生命令」有粘性,
+  // 先认它会把「先失败、随后补救成功」的脚本重新判成失败(第 1 轮审查 F3)。
+  const okAt = lines.indexOf("if ($ok) { exit 0 }");
+  const codeAt = lines.indexOf("if ($code -is [int] -and $code -ne 0) { exit $code }");
+  assert.ok(okAt > 0, "必须有「$? 说成功就退 0」这一句");
+  assert.ok(codeAt > okAt, "$LASTEXITCODE 那一句必须排在 $? 之后(顺序反了就是 F3)");
+  assert.equal(lines.at(-1), "exit 1", "$? 说失败、又没有可用的原生退出码时按 1 收口");
 
   // 没装 PowerShell 7 就退 5.1（Windows 自带那个）
   rmSync(pwsh, { force: true });
@@ -239,7 +250,30 @@ try {
   assert.throws(() => commandLaunch("echo hi"), /找不到 PowerShell/, "一个都没有就该拒绝开会话");
   process.env.PATH = basePath;
 
-  console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行/常用命令）全部通过");
+  // ── 9. agent 壳的记号:两侧必须一字不差 ───────────────────────────────────────
+  // `scripts/platform.mjs` 在 build 之前就要能跑(setup 的头两件事是装依赖、构建),所以它
+  // 复刻了一份常量而不是 import server 的。重启那一刀靠这个后缀在进程表里认出「这是一个
+  // 活得过 ash 的 agent 壳」并绕开它(第 1 轮审查 F2 的不变量);两边漂了就等于那条不变量
+  // 静默失效 —— 名单漏掉的新 agent 会被 taskkill 掉,而没有任何东西会报错。所以钉在这儿。
+  const { WINDOWS_WRAP_SUFFIX, windowsWrapPaths } = await import("../src/executors/detached-win-wrap.js");
+  const { WINDOWS_AGENT_WRAP_SUFFIX, agentWrapPids } = await import("../../scripts/platform.mjs");
+  assert.equal(WINDOWS_AGENT_WRAP_SUFFIX, WINDOWS_WRAP_SUFFIX,
+    "scripts/platform.mjs 与 detached-win-wrap.ts 的壳记号必须一致");
+  // 再按真实命令行走一遍:记号认的是**壳脚本的路径出现在命令行里**这件事。
+  const wrapScript = windowsWrapPaths({ out: "o", err: "e", rc: "C:\\runs\\s-T0.agent-rc" }).script;
+  assert.ok(wrapScript.endsWith(WINDOWS_WRAP_SUFFIX), "壳文件名必须带记号");
+  assert.deepEqual(
+    agentWrapPids([
+      { pid: 11, ppid: 1, command: `"C:\\Program Files\\nodejs\\node.exe" "${wrapScript}" "claude" "-p"` },
+      { pid: 12, ppid: 11, command: '"C:\\Program Files\\nodejs\\node.exe" "C:\\cli\\claude.js" "-p"' },
+      { pid: 13, ppid: 1, command: "" },
+      { pid: 14, ppid: 1, command: null as unknown as string },
+    ]),
+    [11],
+    "只有壳自己带记号;它起的 CLI 靠 ppid 跟着一起被保住(subtreePids),不靠命令行",
+  );
+
+  console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行/常用命令/壳记号）全部通过");
 } finally {
   rmSync(stage, { recursive: true, force: true });
 }
