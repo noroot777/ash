@@ -123,7 +123,7 @@
     "test:agent-image-entry": "tsx scripts/test-agent-image-entry.ts",
     "test:agent-image-journal": "tsx scripts/test-agent-image-journal.ts",
     "test:agent-image-meta": "tsx scripts/test-agent-image-meta.ts",
-    "test:agent-image-stream": "tsx scripts/test-agent-image-stream.ts",
+    "test:agent-image-stream": "tsx scripts/test-agent-image-stream.ts && tsx scripts/test-agent-image-stream-window.ts",
     "test:usage": "tsx scripts/test-usage-accounting.ts",
     "test:peer-context": "tsx scripts/test-peer-context.ts",
     "test:auto-title": "tsx scripts/test-auto-title.ts && tsx scripts/test-auto-title-run.ts",
