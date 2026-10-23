@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowClockwise, ArrowUUpLeft, CheckCircle, FileText, PencilSimple, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
 import type { AcceptGateBasis, AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
-import { ACCEPT_GATE_STATUS_LABELS, summarizeAcceptGate } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_STATUS_LABELS, acceptGateCancelMessage, summarizeAcceptGate } from "@ash/shared/accept-gate";
 import type { Task, TaskListItem } from "@ash/shared";
 import { isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { api } from "../lib/api.ts";
@@ -57,7 +57,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   const atFinalGate = isFinalHumanGate(task.workflow, task.workflowAt);
   // 没设、也没跑过：只有能改它的人才看得到这张卡（那时它是一个入口）；改不了的人看到的
   // 是一句跟自己无关的话，纯噪音。
-  const idle = !!state && !state.command && !latest;
+  const idle = !!state && !state.command && !latest && !(settled && basis);
   // 验收做完之后这张卡**留着**（用户 2026-10-23 指定）：它换成一张只读回执 —— 跑过没有、
   // 什么结果、日志在哪。原先在盖章那一刻整个消失，于是「通过了」和「我明确跳过了那条红」
   // 在界面上长得一模一样，而两者的区别恰恰是这次合并到底有没有凭据。
@@ -102,8 +102,8 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
     if (busy || !running) return;
     setBusy(true);
     try {
-      await api.cancelAcceptGate(task.id);
-      notify("已收掉验收前置命令；这次没有合并，重新点验收会从头跑一遍");
+      const result = await api.cancelAcceptGate(task.id, running.id);
+      notify(acceptGateCancelMessage(result));
       await reload();
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
@@ -286,13 +286,13 @@ function heading(
   settled: boolean,
   runningFor: string | null,
 ): string {
-  if (running) return `验收前置命令正在跑（已经 ${runningFor}）`;
+  if (running) return running.status === "running" ? `验收前置命令正在跑（已经 ${runningFor}）` : "验收前置命令尚待停止，工作区仍被占用";
   // 已经盖过章了：这张卡是回执，说的是**这一按当初拿什么放的行**。stale 在这儿一概不
   // 参与 —— 「现在这棵树变了」对一次已经合完的验收毫无意义。
   if (receipt) {
-    if (receipt.mode === "passed") return "这次合并前，验收前置命令通过了";
+    if (receipt.mode === "passed") return "本次验收前，验收前置命令通过了";
     if (receipt.mode === "skipped") return "这次跳过了验收前置命令";
-    return "这次合并没有经过验收前置命令";
+    return "本次验收没有经过验收前置命令";
   }
   if (settled) return "这次验收没有留下门禁凭据";
   if (!latest) return "这个项目设了验收前置命令";
@@ -311,6 +311,7 @@ function detail(
   settled: boolean,
 ): string {
   if (running) {
+    if (running.status !== "running") return "尚未确认整棵进程树退出，合并和清理继续阻止；这不是已收干净的证明。";
     return `\`${running.command}\`（在 ${running.cwd}）。rc=0 才会继续合并：绿了这次验收会自动做完，`
       + "不用再点；红了会把日志交回这个任务的智能体去修，目标分支一个字节都不会动。";
   }
@@ -320,7 +321,7 @@ function detail(
     // 第 1 轮审查实测出来的那条假回执。
     return "这次验收是在 ash 开始记「这一按拿什么放的行」之前做的，所以查不到凭据。"
       + (latest
-        ? `这个任务名下最近一次执行记录是「${summarizeAcceptGate(latest)}」，但它并不能证明这次合并前跑过它。`
+        ? `这个任务名下最近一次执行记录是「${summarizeAcceptGate(latest)}」，但它并不能证明本次验收前跑过它。`
         : "");
   }
   if (!latest) return `点「验收通过」时会先在任务工作区里跑一遍 \`${state.command}\`，rc=0 才合并。`;
@@ -351,18 +352,18 @@ function receiptDetail(receipt: AcceptGateBasis, state: AcceptGateState, latest:
     // 凭据在、但记录被归档清理带走了：只剩「是拿一次跑绿放的行」这件事本身，说到这儿为止。
     if (!run) return "这一按是拿一次真的跑绿放的行，但那一次的执行记录已经不在了（归档清理），所以没有日志可查。";
     return `${summarizeAcceptGate(run)}。${run.sourceCommit ? `验的是 ${run.sourceCommit.slice(0, 8)}，` : ""}`
-      + "这次合并就是拿它放的行。"
+      + "本次验收就是拿它放的行。"
       + (run.fastForward === false && run.targetBranch
         ? `（当时 ${run.targetBranch} 已经领先于这棵树，所以它验的是任务分支那一棵，不是最终的合并结果。）`
         : "");
   }
   if (receipt.mode === "skipped") {
-    return "这次验收明确跳过了验收前置命令：ash 没有跑它，也没有任何它通过的证据，合并是你明确选的。"
+    return "这次验收明确跳过了验收前置命令：ash 没有跑它，也没有任何它通过的证据，验收是你明确选的。"
       + (latest?.status === "failed" ? `这个任务名下最近一次是红的（${summarizeAcceptGate(latest)}），那条红没有人修过。` : "");
   }
   // unset：那一刻这个项目根本没有这一关。后来又设了一条的话必须说破 —— 否则用户看着
   // 卡上那条命令，会读成「这次是跑了它才合的」。
-  return "那一刻这个项目没有设验收前置命令，所以这一按直接合了 —— 合并前没有跑过任何命令。"
-    + (state.command ? `（这个项目后来设了 \`${state.command}\`，但它不是这次合并的凭据。）` : "")
+  return "那一刻这个项目没有设验收前置命令，所以本次验收没有经过这道测试。"
+    + (state.command ? `（这个项目后来设了 \`${state.command}\`，但它不是本次验收的凭据。）` : "")
     + (latest ? `下面那条是这个任务名下最近一次执行记录，同样不是这次验收的凭据。` : "");
 }

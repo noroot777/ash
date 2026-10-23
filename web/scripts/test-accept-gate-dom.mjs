@@ -71,7 +71,7 @@ try {
 
   // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
   // 带 delay（响应体迟到多久）或 status（直接给个 500）。不给就一直回 store.gate。
-  const open = async ({ gate, role = "admin", query = "", command, states, events = false } = {}) => {
+  const open = async ({ gate, role = "admin", query = "", command, states, events = false, cancelOutcome = "canceled" } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
     if (events) await page.addInitScript(() => {
       const streams = new Set();
@@ -99,8 +99,14 @@ try {
     });
     await page.route("**/api/tasks/gate-task/accept-gate/cancel", (route) => {
       store.canceled += 1;
+      assert.equal(JSON.parse(route.request().postData()).runId, store.gate.running.id);
+      if (cancelOutcome !== "canceled") {
+        const latest = run({ ...store.gate.running, status: "passed", exitCode: 0 });
+        store.gate = { ...store.gate, running: null, latest, basis: basis("passed", latest) };
+        return json(route, { outcome: cancelOutcome, runId: latest.id, gate: latest });
+      }
       store.gate = { ...store.gate, running: null, latest: { ...store.gate.running, status: "canceled", failure: "canceled" } };
-      return json(route, { canceled: true, gate: store.gate.latest });
+      return json(route, { outcome: "canceled", runId: store.gate.latest.id, gate: store.gate.latest });
     });
     await page.route("**/api/tasks/gate-task/accept-gate/handoff", (route) => {
       store.handoffs += 1;
@@ -159,7 +165,7 @@ try {
     assert.equal(await card.getByRole("button", { name: "改这条命令" }).count(), 0,
       "跑着的那一次用的是开跑时那条命令，这时摆「改」只会让人以为能中途换一条");
     await card.getByRole("button", { name: "不等了，收掉它" }).click();
-    await page.locator("[aria-label='操作结果']", { hasText: "已收掉" }).waitFor();
+    await page.locator("[aria-label='操作结果']", { hasText: "已取消" }).waitFor();
     assert.equal(store.canceled, 1);
     await page.close();
   }
@@ -293,7 +299,7 @@ try {
     const card = page.locator(".accept-gate-card");
     await card.waitFor();
     assert.match(await card.innerText(), /这次跳过了验收前置命令/);
-    assert.match(await card.innerText(), /合并是你明确选的/, "得说破合并没有凭据、是谁决定的");
+    assert.match(await card.innerText(), /验收是你明确选的/, "得说破验收没有测试凭据、是谁决定的");
     assert.match(await card.innerText(), /那条红没有人修过/);
     assert.equal(await card.evaluate((el) => el.classList.contains("is-skipped")), true, "跳过是琥珀不是红：此刻什么都没拦着");
     assert.equal(await card.getByRole("button", { name: "交给智能体去修" }).count(), 0, "都合完了，这条红的出路是新开一个任务");
@@ -327,7 +333,7 @@ try {
     await card.waitFor();
     const text = await card.innerText();
     assert.match(text, /没有经过验收前置命令/);
-    assert.match(text, /合并前没有跑过任何命令/);
+    assert.match(text, /本次验收没有经过这道测试/);
     assert.doesNotMatch(text, /通过了/, "那条绿不是这次合并的凭据，说「通过了」就是给没测过的代码背书");
     assert.doesNotMatch(text, /拿它放的行/);
     assert.match(text, /不是这次验收的凭据/, "历史记录照常摆出来，但要标清它不是凭据");
@@ -344,7 +350,7 @@ try {
     await card.waitFor();
     const text = await card.innerText();
     assert.match(text, /没有留下门禁凭据/);
-    assert.match(text, /并不能证明这次合并前跑过它/);
+    assert.match(text, /并不能证明本次验收前跑过它/);
     await page.close();
   }
 
@@ -433,7 +439,7 @@ try {
     await card.getByText(/这次验收没有留下门禁凭据/).waitFor();
     store.gate = { ...store.gate, basis: basis("passed", passed) };
     await page.evaluate(event => window.emitGateEvent(event), event);
-    await card.getByText(/这次合并前，验收前置命令通过了/).waitFor();
+    await card.getByText(/本次验收前，验收前置命令通过了/).waitFor();
     assert.doesNotMatch(await card.innerText(), /没有留下门禁凭据/);
     await page.close();
   }
@@ -459,6 +465,35 @@ try {
       });
     });
     assert.deepEqual(animations, ["none", "none", "none", "none"]);
+    await page.close();
+  }
+  for (const wait of [false, true]) {
+    const running = run({ status: "running", exitCode: null, finishedAt: null });
+    const { page } = await open({ gate: { command: running.command, running, latest: running },
+      cancelOutcome: "already_finished", query: wait ? "?wait=1" : "?stage=accepted" });
+    if (wait) await page.locator(".wait-bar__bar").click();
+    await page.getByRole("button", { name: "不等了，收掉它" }).click();
+    const notice = page.getByRole("status", { name: "操作结果" });
+    await notice.filter({ hasText: "已经结束" }).waitFor();
+    assert.doesNotMatch(await notice.innerText(), /没有合并|已取消|已收掉/);
+    if (!wait) assert.match(await page.locator(".accept-gate-card").innerText(), /本次验收就是拿它放的行/);
+    await page.close();
+  }
+  {
+    const { page } = await open({ gate: { command: null, running: null, latest: null, basis: basis("unset") },
+      query: "?stage=accepted" });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    assert.match(await card.innerText(), /本次验收没有经过验收前置命令/);
+    assert.doesNotMatch(await card.innerText(), /设一条之后|直接合了/);
+    await page.close();
+  }
+  for (const wait of [false, true]) {
+    const pending = run({ status: "interrupted", processPending: true });
+    const { page } = await open({ gate: { command: null, running: pending, latest: pending }, query: wait ? "?wait=1" : "" });
+    const card = page.locator(wait ? ".accept-gate-wait" : ".accept-gate-card");
+    await card.waitFor();
+    assert.match(await card.innerText(), /尚待停止/);
     await page.close();
   }
   console.log("accept gate card DOM regression passed");

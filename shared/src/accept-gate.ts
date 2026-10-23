@@ -60,6 +60,20 @@ export interface AcceptGateView {
    * `error` 非空 = 那一次没能叫醒它(回合被抢占、任务被归档之类),红还在那儿等人处理。
    */
   handoff: { at: string; error: string | null } | null;
+  processPending?: boolean;
+}
+
+export type AcceptGateCancelResult = {
+  outcome: "canceled" | "already_finished" | "stopping" | "not_running";
+  runId: string | null;
+  gate: AcceptGateView | null;
+};
+
+export function acceptGateCancelMessage(result: AcceptGateCancelResult): string {
+  if (result.outcome === "canceled") return "已取消这一次验收前置命令；重新验收时会重跑";
+  if (result.outcome === "stopping") return "尚未确认整棵进程树退出，工作区仍被占用；不能合并或清理";
+  if (result.outcome === "already_finished") return "这一次命令已经结束，未执行取消；验收是否完成请以当前回执为准";
+  return "当前没有正在跑的验收前置命令，未执行取消";
 }
 
 /** 这条命令最多跑多久。再久基本是卡住了 —— 出路是验收台上那颗「取消」。 */

@@ -4,7 +4,7 @@
 // 没有共享状态 —— 它们只认 taskId。
 import type { Hono } from "hono";
 import { acceptGateLogText } from "./accept-gate-process.js";
-import { acceptGateRunOf, acceptGateState, cancelAcceptGate, hasLiveAcceptGate, rehandOffAcceptGate } from "./accept-gate.js";
+import { acceptGateRunOf, acceptGateState, cancelAcceptGate, rehandOffAcceptGate } from "./accept-gate.js";
 
 export function mountAcceptGateRoutes(api: Hono): void {
   // 验收台要的那一份：这个项目设没设门禁、上一次跑成什么样、那次结果对现在这棵树还作不作数。
@@ -41,9 +41,8 @@ export function mountAcceptGateRoutes(api: Hono): void {
   // 不想等了：收掉它。取消是用户自己的动作，所以留下的是 canceled 而不是 failed ——
   // 两者下一步完全不同（红了要去修，取消了只是这次不跑）。
   api.post("/tasks/:id/accept-gate/cancel", async (c) => {
-    const gate = await cancelAcceptGate(c.req.param("id"));
-    if (hasLiveAcceptGate(c.req.param("id"))) return c.json({ error: "尚未确认验收前置命令退出，工作区仍被占用；不能合并或清理。" }, 409);
-    if (!gate) return c.json({ error: "当前没有正在跑的验收前置命令" }, 409);
-    return c.json({ canceled: true, gate });
+    const body = await c.req.json<{ runId?: unknown }>().catch(() => ({} as { runId?: unknown }));
+    if (body.runId !== undefined && typeof body.runId !== "string") return c.json({ error: "runId 必须是字符串" }, 400);
+    return c.json(await cancelAcceptGate(c.req.param("id"), undefined, body.runId));
   });
 }

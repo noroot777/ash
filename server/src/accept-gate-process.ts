@@ -1,23 +1,14 @@
 // 验收前置命令的**进程**这一层：起它、看着它、收掉它。编排（什么时候该跑、跑完算什么）
 // 在 accept-gate.ts，这里一个业务判断都没有。
-//
-// ── 为什么不做成「ash 死了它还活着」（哨兵那一套）────────────────────────────────
-// 哨兵要脱离 ash 是因为它天生跨回合、跨重启（盯一夜的构建）。门禁不是：它是用户**刚刚
-// 点下验收、正等着结果**的一次动作，寿命以十几分钟计。做成脱离进程，就得为它补上一整套
-// 跨重启认领（退出码写文件、按代次认 pid、半截日志接着读），而换来的收益只有「ash 恰好
-// 在这十几分钟里重启」这一种情形。
-//
-// 所以这里选的是另一半：**ash 重启后把上一轮的残留收掉，并如实把那次标成「被打断」**。
-// 用户看到的是「上次没跑完，重点一次」，而不是一个永远停在「正在跑」的幽灵——后者才是
-// 真正的坑（见根 AGENTS.md「停止/暂停必须留下持久可见的状态」）。pid 因此必须落盘：
-// 没有它，重启后那条还在跑的测试命令就彻底没人管了。
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ACCEPT_GATE_LOG_MAX_BYTES, ACCEPT_GATE_TAIL_BYTES } from "@ash/shared/accept-gate";
 import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { IS_WINDOWS, inspectProcessSync, isPidAlive, isProcessGroupAlive, killTree, userShellLaunch } from "./platform.js";
+import { authorizeGateLaunch, finishGateLaunch, GATE_BOOTSTRAP, gateAbortPath, gateConfinement,
+  gateGoPath, gateLaunchOf, gateLaunchPath, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
 
 /** SIGTERM 之后等多久补一刀。给它收尾的时间，但不无限等。 */
 const KILL_GRACE_MS = 5_000;
@@ -49,20 +40,21 @@ export function spawnAcceptGate(opts: {
   cwd: string;
   logPath: string;
   onExit: (exit: GateExit) => void;
-}): { pid: number; startedAt: string | null } {
+  hold?: boolean;
+}): { pid: number; startedAt: string | null; authorize: () => boolean } {
   mkdirSync(dirname(opts.logPath), { recursive: true });
+  if (!existsSync(gateLaunchPath(opts.logPath))) prepareGateLaunch(opts.logPath);
   const fd = openSync(opts.logPath, "a");
   try {
     const launch = userShellLaunch(opts.command);
-    const child = spawn(launch.file, launch.args, {
-      cwd: opts.cwd,
+    const config = Buffer.from(JSON.stringify({ ...launch, cwd: opts.cwd,
+      go: gateGoPath(opts.logPath), abort: gateAbortPath(opts.logPath) })).toString("base64");
+    const child = spawn(process.execPath, ["-e", GATE_BOOTSTRAP, config], {
+      cwd: dirname(opts.logPath),
       env: augmentedEnv(),
       stdio: ["ignore", fd, fd],
-      // POSIX 上自成进程组，取消/超时那一刀才打得到整棵树（killTree 发的是 -pid）。
-      // Windows 侧由 taskkill /T 负责，detached 在那边只会多开一个控制台窗口。
       detached: !IS_WINDOWS,
       windowsHide: true,
-      windowsVerbatimArguments: launch.windowsVerbatimArguments,
     });
     child.once("error", (error) => {
       // spawn 失败（shell 不存在之类）：当作一次没跑成的结束，别让调用方永远等。
@@ -74,8 +66,11 @@ export function spawnAcceptGate(opts: {
     child.unref();
     const pid = child.pid;
     if (!pid) throw new Error("门禁命令没有拿到 pid");
-    // 命令可能几毫秒就退了（`false` 这种），那时读不到身份 —— 不是错误，记 null 即可。
-    return { pid, startedAt: inspectProcessSync(pid)?.startedAt ?? null };
+    const startedAt = inspectProcessSync(pid)?.startedAt ?? null;
+    registerGateLaunch(opts.logPath, pid, startedAt);
+    const authorize = () => authorizeGateLaunch(opts.logPath);
+    if (!opts.hold) authorize();
+    return { pid, startedAt, authorize };
   } finally {
     // 句柄已经交给子进程了，父进程这边留着只会在日志被删后仍占着 inode。
     closeSync(fd);
@@ -114,26 +109,76 @@ export async function stopAcceptGate(
   _taskId: string,
   pid: number | null | undefined,
   startedAt?: string | null,
+  logPath?: string,
 ): Promise<boolean> {
-  if (!pid) return true;
-  if (!gateTreeAlive(pid, startedAt)) return true;
+  logPath = gateLaunchOf(pid, logPath);
+  const launch = readGateLaunch(logPath);
+  if (launch && logPath) {
+    writeFileSync(gateAbortPath(logPath), "abort");
+    if (launch.phase === "stopped") { finishGateLaunch(logPath); return true; }
+    if (launch.phase === "prepared") {
+      if (launch.pid && isSameGateProcess(launch.pid, launch.startedAt)) {
+        killTree(launch.pid, "SIGKILL");
+        if (!IS_WINDOWS && !await untilGone(launch.pid, launch.startedAt, KILL_CONFIRM_MS)) return false;
+      }
+      finishGateLaunch(logPath);
+      return true;
+    }
+    pid ??= launch.pid;
+    startedAt ??= launch.startedAt;
+    if (IS_WINDOWS) {
+      const confinement = gateConfinement(logPath, launch);
+      if (!confinement) return false;
+      const before = confinement.read();
+      if (before.kind !== "members") return false;
+      if (before.members.length) confinement.killAll("SIGKILL");
+      const deadline = Date.now() + KILL_CONFIRM_MS;
+      for (;;) {
+        const after = confinement.read();
+        if (after.kind === "members" && !after.members.length) break;
+        if (Date.now() >= deadline) return false;
+        await new Promise(resolve => setTimeout(resolve, KILL_POLL_MS));
+      }
+      finishGateLaunch(logPath);
+      return true;
+    }
+  }
+  if (!pid || IS_WINDOWS) return false;
+  if (!gateTreeAlive(pid, startedAt, logPath)) {
+    if (logPath) finishGateLaunch(logPath);
+    return true;
+  }
   const leader = inspectProcessSync(pid);
-  if (!startedAt || (leader && leader.startedAt !== startedAt)) {
+  if (!startedAt || (isPidAlive(pid) && !leader?.startedAt) || (leader && leader.startedAt !== startedAt)) {
     return false;
   }
   killTree(pid, "SIGTERM");
-  if (await untilGone(pid, startedAt, KILL_GRACE_MS)) return true;
+  if (await untilGone(pid, startedAt, KILL_GRACE_MS)) {
+    if (logPath) finishGateLaunch(logPath);
+    return true;
+  }
   killTree(pid, "SIGKILL");
-  if (await untilGone(pid, startedAt, KILL_CONFIRM_MS)) return true;
+  if (await untilGone(pid, startedAt, KILL_CONFIRM_MS)) {
+    if (logPath) finishGateLaunch(logPath);
+    return true;
+  }
   return false;
 }
 
-/** 这个号（和它那一组）还有在跑的吗。组查不出来的平台（Windows）只能看领头那个。 */
-export function gateTreeAlive(pid: number, startedAt?: string | null): boolean {
+export function gateTreeAlive(pid: number, startedAt?: string | null, logPath?: string): boolean {
+  logPath = gateLaunchOf(pid, logPath);
+  const launch = readGateLaunch(logPath);
+  if (launch?.phase === "stopped") return false;
+  if (IS_WINDOWS) {
+    const reading = launch && logPath ? gateConfinement(logPath, launch)?.read() : null;
+    return reading?.kind !== "members" || reading.members.length > 0;
+  }
   // 组还在 = 后代还在。父进程先退、`trap '' TERM` 的子进程接着跑，就是这一档。
   if (isProcessGroupAlive(pid)) return true;
   // 领头那个自己：号被别人复用了不算我们的（别把无辜进程算成「还没停掉」）。
-  return isPidAlive(pid) && (!startedAt || isSameGateProcess(pid, startedAt));
+  if (!isPidAlive(pid)) return false;
+  const leader = inspectProcessSync(pid);
+  return !startedAt || !leader?.startedAt || leader.startedAt === startedAt;
 }
 
 async function untilGone(pid: number, startedAt: string | null | undefined, within: number): Promise<boolean> {

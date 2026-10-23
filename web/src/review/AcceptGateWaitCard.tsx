@@ -13,6 +13,7 @@
 import { useId, useState } from "react";
 import { ArrowClockwise, CaretDown, FileText, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { acceptGateCancelMessage } from "@ash/shared/accept-gate";
 import { useAcceptGate } from "./useAcceptGate.ts";
 
 export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
@@ -56,8 +57,8 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
     if (busy) return;
     setBusy(true);
     try {
-      await api.cancelAcceptGate(taskId);
-      notify("已收掉验收前置命令；这次没有合并，重新点验收会从头跑一遍");
+      const result = await api.cancelAcceptGate(taskId, running.id);
+      notify(acceptGateCancelMessage(result));
       await reload();
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
@@ -87,7 +88,7 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
         onClick={() => setOpen((current) => !current)}
       >
         <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
-        <b>验收前置命令在跑</b>
+        <b>{running.status === "running" ? "验收前置命令在跑" : "验收前置命令尚待停止"}</b>
         <span className="wait-bar__brief">{running.command}</span>
         <span className="wait-bar__when">已经 {runningFor}</span>
         <CaretDown size={11} weight="bold" className="wait-bar__caret" aria-hidden="true" />
@@ -100,9 +101,10 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
           <p className="wait-bar__note">
             {/* 不说「你点的」：MCP 的 accept_task、HTTP、工作流都触发得了这一次
                 （第 1 轮审查不拦项 7），而发起人是谁这条不需要猜。 */}
-            这是本次验收触发的：<code>{running.command}</code>，跑在 <code>{running.cwd}</code>。
-            <b>rc=0 这次验收会自动做完，不用再点</b>；红了会把日志交回这个任务的智能体去修，
-            目标分支一个字节都不会动。
+            {running.status !== "running" ? "尚未确认整棵进程树退出，工作区仍被占用；合并和清理继续阻止。"
+              : <>这是本次验收触发的：<code>{running.command}</code>，跑在 <code>{running.cwd}</code>。
+                <b>rc=0 这次验收会自动做完，不用再点</b>；红了会把日志交回这个任务的智能体去修，
+                目标分支一个字节都不会动。</>}
           </p>
           <div className="wait-bar__ops">
             <button type="button" disabled={busy} onClick={() => void openLog()}>

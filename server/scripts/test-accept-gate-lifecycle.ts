@@ -25,7 +25,7 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-type Fixture = {
+export type GateFixture = {
   root: string;
   makeRepo: (name: string) => string;
   seedProject: (name: string, repo: string, command: string | null) => Promise<string>;
@@ -34,7 +34,7 @@ type Fixture = {
   settled: (taskId: string) => Promise<void>;
 };
 
-export async function testGateLifecycle(fixture: Fixture): Promise<void> {
+export async function testGateLifecycle(fixture: GateFixture): Promise<void> {
   const { root, makeRepo, seedProject, seedTask, taskRow, settled } = fixture;
   {
     const repo = makeRepo("stop-race");

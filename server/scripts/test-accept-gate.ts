@@ -285,8 +285,9 @@ try {
     assert.equal(gate.command, "sleep 120");
     const pid = (await runsOf(taskId)).at(0)!.pid!;
     const canceled = await cancelAcceptGate(taskId);
-    assert.equal(canceled?.status, "canceled");
-    assert.equal(canceled?.failure, "canceled");
+    assert.equal(canceled.outcome, "canceled");
+    assert.equal(canceled.gate?.status, "canceled");
+    assert.equal(canceled.gate?.failure, "canceled");
     for (let i = 0; i < 100 && alive(pid); i++) await sleep(25);
     assert.equal(alive(pid), false, "取消必须真的把那条命令收掉，不是只改一行状态");
     assert.equal((await acceptGateState(taskId)).running, null);
@@ -569,6 +570,10 @@ try {
   await (await import("./test-accept-gate-lifecycle.js")).testGateLifecycle({
     root, makeRepo, seedProject, seedTask, taskRow, settled,
   });
+  await (await import("./test-accept-gate-startup.js")).testGateStartup({
+    root, makeRepo, seedProject, seedTask, taskRow, settled,
+  });
+  await import("./test-accept-gate-process.js");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

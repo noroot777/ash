@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, or } from "drizzle-orm";
 import { normalizeAcceptGateCommand, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateFailure, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
@@ -28,6 +28,7 @@ export const gateView = (row: GateRow): AcceptGateView => ({
   logPath: row.logPath,
   logTail: acceptGateLogTail(row.logPath),
   handoff: row.handoffAt ? { at: row.handoffAt, error: row.handoffError ?? null } : null,
+  processPending: row.processPending,
 });
 
 export async function latestRun(taskId: string): Promise<GateRow | null> {
@@ -89,7 +90,10 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   const latestRow = await latestRun(taskId);
   if (!latestRow) return { command, running: null, latest: null, basis };
   const view = gateView(latestRow);
-  if (latestRow.status === "running") return { command, running: view, latest: view, basis };
+  const pending = (await db.select().from(acceptGateRuns).where(and(eq(acceptGateRuns.taskId, taskId),
+    or(eq(acceptGateRuns.status, "running"), eq(acceptGateRuns.processPending, true))))
+    .orderBy(desc(acceptGateRuns.startedAt)).limit(1)).at(0);
+  if (pending) return { command, running: gateView(pending), latest: view, basis };
   // 新鲜度按**现在**这棵树算：前端据它决定说「已通过，可以直接验收」还是「要重跑」。
   // 判据与 acceptGateCheck 的复用判据必须是同一条（提交 + 命令），否则卡上说「不会重跑」、
   // 一点下去却真的重跑了。
