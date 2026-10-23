@@ -137,6 +137,9 @@ export function codexNativeWork(item: any): AgentEvent[] {
       ...(tool === "spawnagent" ? { description: item.prompt, title: item.prompt?.split("\n")[0]?.slice(0, 120),
         requestedModel: item.model, requestedEffort: item.reasoningEffort ?? item.reasoning_effort, agentType: item.agentType ?? item.agent_type } : {}),
       ...(state?.message ? closed || status === "completed" || status === "failed" ? { result: clip(state.message) } : { message: clip(state.message) } : {}),
+      // 快照身份 = 这一次调用:两次 wait 报回同一段文字也是两份独立快照,图片账据此换代
+      // 重拍(审查第 1 轮 R1 实证 A:同文第二张图不再保存)。
+      ...(state?.message && item.id != null ? { messageId: String(item.id) } : {}),
     });
   });
 }

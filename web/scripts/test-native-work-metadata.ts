@@ -303,5 +303,30 @@ for (const event of stamped) {
     { type: "agent", id: "childH", at: end, status: "completed", messageId: "m-1" },
   ]);
   assert.deepEqual(matchedIdentity.find((row) => row.id.endsWith(":childH"))?.messageImages?.map((shot) => shot.path), ["/up/m-1.png"], "身份对上照常配对");
+  // 审查第 1 轮 R1 实证 C:行搬家(spawn 调用行 → 真实线程行)时,正文、协议身份与图片记录
+  // 是**同一份快照**,一起取线程行的 —— 不许拿线程行的新正文配调用行的旧身份,也不许把调用
+  // 行的旧记录混进线程行的槽(那版正文已经不在屏幕上)。
+  const spawnMove = rowsFrom([
+    { type: "call", id: "sp", name: "spawn_agent", at: start, input: { prompt: "图片验证" } },
+    { type: "agent", id: "sp", at: start, status: "running", messageId: "call-red", message: "旧消息 ![s](s.png)" },
+    { type: "activity", id: "sp", event: { kind: "attachment", field: "message", source: "s.png", ref: 0, pos: 4, rev: 0, version: "call-red", path: "/up/call-red.png" } },
+    { type: "agent", id: "spawn-child", at: start, status: "running", messageId: "child-blue", message: "已重拍 ![s](s.png)" },
+    { type: "activity", id: "spawn-child", event: { kind: "attachment", field: "message", source: "s.png", ref: 0, pos: 4, rev: 0, version: "child-blue", path: "/up/child-blue.png" } },
+    { type: "result", id: "sp", at: end, result: '{"agent_id":"spawn-child"}', failed: false },
+  ]);
+  const movedRow = spawnMove.find((row) => row.id.endsWith(":spawn-child"));
+  assert.equal(movedRow?.message, "已重拍 ![s](s.png)", "合并后的正文是线程行自己的");
+  assert.equal(movedRow?.messageId, "child-blue", "身份随正文同取线程行的,不保留调用行的旧身份");
+  assert.deepEqual(movedRow?.messageImages?.map((shot) => shot.path), ["/up/child-blue.png"], "记录同样取线程行自己的,调用行的旧记录整份丢弃");
+  // 对照:线程行还没有自己的正文时,调用行的快照(正文+身份+记录)整份搬家、改签后照常配对。
+  const spawnCarry = rowsFrom([
+    { type: "call", id: "sq", name: "spawn_agent", at: start, input: { prompt: "图片验证" } },
+    { type: "agent", id: "sq", at: start, status: "running", messageId: "call-only", message: "旧消息 ![s](s.png)" },
+    { type: "activity", id: "sq", event: { kind: "attachment", field: "message", source: "s.png", ref: 0, pos: 4, rev: 0, version: "call-only", path: "/up/call-only.png" } },
+    { type: "result", id: "sq", at: end, result: '{"agent_id":"carry-child"}', failed: false },
+  ]);
+  const carried = spawnCarry.find((row) => row.id.endsWith(":carry-child"));
+  assert.equal(carried?.messageId, "call-only", "没有线程行时,调用行的身份随快照整份搬家");
+  assert.deepEqual(carried?.messageImages?.map((shot) => shot.path), ["/up/call-only.png"], "记录跟着整份快照改签到新行,照常配对");
 }
 console.log("子智能体模型、待办开工时间、跨日跨度、实时/历史时间与缺失数据回归通过");

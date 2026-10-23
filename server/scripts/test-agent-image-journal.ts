@@ -451,6 +451,45 @@ try {
     assert.deepEqual((seeded?.snapshots ?? []).map((snap) => colorOf(snap.path)), ["RED"], "种子接回的冻结也是落盘那版的红字节");
   }
 
+  // ⑭ 图片先落盘、正文未落盘(审查第 1 轮 R1 实证 B):红版正文(身份甲)连账带 trace 都
+  //   全了;随后换身份的蓝版只有**交代事件**(attachment 活动)写进了 trace,它的正文一字
+  //   未存。恢复状态必须按身份筛:蓝版标记不许抬高代号、不许把红版标成「已交代」,接回后
+  //   继续原消息要沿用红版冻结,不是拿现在的盘上文件重拍。
+  {
+    const taskId = "task-mark-identity";
+    const sessId = "sess-mark-identity";
+    writeFileSync(join(root, "mark.png"), red);
+    const text = "原图应为红色：![图](mark.png)";
+    const sink = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN));
+    const feed = (event: AgentEvent) => {
+      sink.capture(event);
+      return sink.release(event);
+    };
+    const first = { kind: "tool", name: "Agent", nativeWork: { type: "agent", id: "mk1", status: "running", messageId: "persisted-red", message: text } } as AgentEvent;
+    for (const event of feed(first)) appendSessionTrace(taskId, sessId, TURN, event);
+    writeFileSync(join(root, "mark.png"), blue);
+    const later = feed({ kind: "tool", name: "Agent", nativeWork: { type: "agent", id: "mk1", status: "completed", messageId: "not-persisted-blue", message: `${text}\n蓝色新版` } } as AgentEvent);
+    // 生产顺序:图片活动在前、正文事件在后 —— 消费者死在中间,只有交代事件落盘。
+    for (const event of later) {
+      const work = event.kind === "tool" ? event.nativeWork : undefined;
+      if (work?.type === "activity") appendSessionTrace(taskId, sessId, TURN, event);
+    }
+    sink.dispose();
+    const seeded = (await loadMarkdownImageSeed(taskId, sessId))?.get(metaSeedKey("mk1", "message"));
+    assert.equal(seeded?.version, "persisted-red", "种子身份是落盘那版的");
+    assert.equal(seeded?.rev, 0, "异身份的交代标记不许抬高代号");
+    assert.equal(seeded?.emitted, 0, "异身份的交代标记不许把落盘那版标成已交代");
+    assert.deepEqual((seeded?.snapshots ?? []).map((snap) => colorOf(snap.path)), ["RED"], "红版冻结原样接回");
+    // 接回后按同一身份继续原消息:交付的必须是重启前冻结的红字节。
+    const resumed = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN, await loadMarkdownImageSeed(taskId, sessId)));
+    const done = { kind: "tool", name: "Agent", nativeWork: { type: "agent", id: "mk1", status: "completed", messageId: "persisted-red", message: `${text}\n继续原消息，应保持红图。` } } as AgentEvent;
+    resumed.capture(done);
+    const released = resumed.release(done);
+    resumed.dispose();
+    const delivered = shots(released.map((event) => ({ event })));
+    assert.deepEqual(delivered.map((item) => [item.doc, colorOf(item.path)]), [["mk1", "RED"]], "继续原消息交付的是红版冻结,不重拍盘上的蓝文件");
+  }
+
   console.log("正文图片持久账本回归通过");
 } finally {
   rmSync(root, { recursive: true, force: true });

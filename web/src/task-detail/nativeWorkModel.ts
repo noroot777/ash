@@ -1,6 +1,6 @@
 import type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus, TaskStatus } from "@ash/shared";
 import { markdownImageRefs } from "@ash/shared/markdown-images";
-import { childResultTexts, nativeWorkStatus as workStatus } from "@ash/shared/native-work";
+import { childResultTexts, nativeWorkStatus as workStatus, sameSnapshotIdentity, snapshotVersion } from "@ash/shared/native-work";
 export { nativeWorkStatus as workStatus } from "@ash/shared/native-work";
 import type { AttachmentSource, ConversationItem } from "./conversationModel.ts";
 
@@ -16,8 +16,9 @@ export interface NativeWorkItem {
   status: NativeWorkStatus;
   result?: string;
   message?: string;
-  /** message 快照的协议身份(codex item.id / claude message.id):配快照式图片记录时与
-   * 记录上的 version 互核 —— 同文不同身份是两份独立快照(第 10 轮审查 R2)。 */
+  /** message 快照的协议身份(codex item.id / claude message.id)。配对用的身份住在
+   * textVersions(身份跟正文一起转移,shared 的 snapshotVersion);这字段随行携带,行合并
+   * 时与 message 作为同一份快照一起取舍(审查第 1 轮 R1 实证 C)。 */
   messageId?: string;
   owner?: string;
   model?: string;
@@ -144,8 +145,9 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
   // taskoutput = 调用行)。路由与配对都要核它:正文已被更晚的文档改写时,旧来源的记录说的
   // 是另一版正文,搬进来就是把旧字节安在新话上(第 10 轮审查 R2 legacyRouteOvertakes)。
   const textOrigins = new Map<string, string>();
-  // `行 id \u0000 字段` → 这段 result 正文的协议身份(提取它的那次调用 id,与服务端记账的
-  // version 同源);message 的身份在行自己的 messageId 上。
+  // `行 id \u0000 字段` → 这段正文的协议身份(message 的 messageId / result 的调用 id,
+  // 与服务端记账的 version 同源)。转移规则是 shared 的 snapshotVersion:换稿连身份一起换,
+  // 无身份的新稿不继承旧身份(审查第 1 轮 R1)。
   const textVersions = new Map<string, string>();
   // 路由推迟到全部记录就位之后再执行:恢复合并(mergeImageJournal)把补回的记录追加在
   // trace 末尾,结果事件先到、记录后到,走到哪路到哪会把后到的记录永远留在调用行的槽里
@@ -235,11 +237,16 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         const previous = rows.get(id);
         if (activity.closed && (previous?.status === "completed" || previous?.status === "failed")) patch.status = previous.status;
         if (activity.status === "unknown" && rows.has(id)) delete patch.status;
-        if (typeof activity.message === "string" && activity.message) textOrigins.set(`${id}\u0000message`, id);
-        if (typeof activity.result === "string" && activity.result) {
-          textOrigins.set(`${id}\u0000result`, id);
-          // 直写的 result 文档在服务端不带调用身份,别让上一次调用的身份错核直写的记录。
-          textVersions.delete(`${id}\u0000result`);
+        for (const field of ["message", "result"] as const) {
+          const value = activity[field];
+          if (typeof value !== "string" || !value) continue;
+          const slot = `${id}\u0000${field}`;
+          textOrigins.set(slot, id);
+          // put() 在 message === result 时会删掉 message,正文退一步拿 result 顶上。
+          const prevText = previous?.[field] ?? previous?.result ?? "";
+          const version = snapshotVersion({ text: prevText, version: textVersions.get(slot) }, value, activity.messageId);
+          if (version !== undefined) textVersions.set(slot, version);
+          else textVersions.delete(slot);
         }
         put(id, { ...patch, ...(activity.parentId ? { parentId: key(activity.parentId) } : {}) });
         continue;
@@ -317,23 +324,34 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           // 按合并后的 id 重算占位标题,免得留着派活调用那一截 id。
           const title = existing && named(existing) ? existing.title
             : named(row) ? row.title : placeholderTitle(row.sessionId, key(nativeId));
-          // 行搬家(调用行 → 真实线程行),它名下的快照式正文记录跟着走:from 一并改签 ——
-          // 槽的不变量是「一槽只装一份来源文档」,不改签的话,搬来的记录与线程行自己攒的
-          // 记录混在同槽,代号跨文档相比没有意义(复审 R1)。同 from 续接,异 from 以后到
-          // 的为准,与 stashMeta / routeResultImages 同口径。
+          // 行搬家(调用行 → 真实线程行):正文、身份、来源、图片记录是**同一份快照**,一起
+          // 搬或一起弃,不许逐字段择优(审查第 1 轮 R1 实证 C:线程行的蓝正文配上调用行的旧
+          // 身份与红记录)。哪边的正文进了合并后的行,哪边的快照就是这一槽的现任:线程行自己
+          // 有这段正文时,调用行名下的记录说的是已经不在屏幕上的那版,整份丢弃;调用行的正文
+          // 胜出时,它的记录/来源/身份改签后**整组顶替**线程槽(与 stashMeta 的「一槽只装一份
+          // 来源文档,后到的整组顶替」同口径)。
           for (const field of ["message", "result"] as const) {
-            const slot = `${rowId}\u0000${field}`;
-            const moved = metaImages.get(slot);
+            const fromSlot = `${rowId}\u0000${field}`;
+            const toSlot = `${key(nativeId)}\u0000${field}`;
+            const moved = metaImages.get(fromSlot);
+            const origin = textOrigins.get(fromSlot);
+            const version = textVersions.get(fromSlot);
+            metaImages.delete(fromSlot);
+            textOrigins.delete(fromSlot);
+            textVersions.delete(fromSlot);
+            const callTextWins = field === "message"
+              ? !existing
+              : !existing || (activity.failed ? true : existing.result === undefined);
+            if (!callTextWins) continue;
+            if (origin !== undefined) textOrigins.set(toSlot, origin === rowId ? key(nativeId) : origin);
+            if (version !== undefined) textVersions.set(toSlot, version);
+            else textVersions.delete(toSlot);
             if (moved?.length) {
-              const target = `${key(nativeId)}\u0000${field}`;
-              const retagged = moved.map((record) => record.from === rowId ? { ...record, from: key(nativeId) } : record);
-              const prior = metaImages.get(target);
-              metaImages.set(target, prior?.length && prior[0]!.from === retagged[0]!.from ? [...prior, ...retagged] : retagged);
-              metaImages.delete(slot);
+              metaImages.set(toSlot, moved.map((record) => record.from === rowId ? { ...record, from: key(nativeId) } : record));
             }
           }
           rows.set(key(nativeId), { ...row, id: key(nativeId), title, ...(existing ? {
-            activity: existing.activity, message: existing.message,
+            activity: existing.activity, message: existing.message, messageId: existing.messageId,
             description: existing.description || row.description,
             model: existing.model || row.model,
             requestedModel: existing.requestedModel || row.requestedModel,
@@ -404,9 +422,11 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
       // legacyRouteOvertakes)。行自己名下的记录(直写、搬家改签过的)天然同源,放行。
       const origin = textOrigins.get(slot);
       if (origin !== undefined && list[0]!.from !== origin && list[0]!.from !== row.id) return undefined;
-      // 协议身份两边都带时必须一致:同文同代都证明不了同一份快照(第 10 轮审查 R2)。
-      const version = field === "message" ? row.messageId : textVersions.get(slot);
-      const current = list.filter((record) => record.version === undefined || version === undefined || record.version === version);
+      // 协议身份按快照契约核对(shared 的 sameSnapshotIdentity,严格口径):快照式图片记录
+      // 全部产自契约之后 —— 记录带身份就必须对上正文身份,正文没身份时带身份的记录属于别的
+      // 代;「缺身份放行」只留给记录自己没身份的那一代(第 10 轮审查 R2;审查第 1 轮 R1)。
+      const version = textVersions.get(slot);
+      const current = list.filter((record) => sameSnapshotIdentity(record.version, version, true));
       if (!current.length) return undefined;
       // 只认最高代:正文清场/换稿之后,旧代记录说的是已经不在屏幕上的那一版。
       const top = Math.max(...current.map((record) => record.rev));

@@ -81,3 +81,37 @@ export function childResultTexts(
 export function isVisibleExecutionEvent(event: { nativeWork?: NativeWorkEvent }): boolean {
   return !event.nativeWork || (event.nativeWork.type === "call" && !event.nativeWork.parentId);
 }
+
+/**
+ * 正文快照的身份转移 —— 生产(meta 记账)、恢复(seed/merge)、展示(nativeWorkModel)三侧
+ * 唯一的一份规则(审查第 1 轮 R1:正文与身份是同一份快照,替换正文必须连身份一起替换):
+ *   · 新事件自带身份 → 换成新身份;
+ *   · 没带身份、正文是前缀延续(流式增量、同文重放)→ 还是同一份快照在长大,身份沿用;
+ *   · 没带身份、整段改写或清场 → 新稿没有身份 —— 旧身份不许留下来给新稿背书。
+ */
+export function snapshotVersion(
+  prev: { text: string; version?: string },
+  text: string,
+  version?: string,
+): string | undefined {
+  if (version !== undefined) return version;
+  return text.startsWith(prev.text) ? prev.version : undefined;
+}
+
+/**
+ * 一条记录(账本行、交代事件、展示端的图片记录)与正文是否同一份快照。
+ *
+ * `strict` = 这条记录产自快照契约生效之后(带指纹的账本行、带 field 的交代事件/记录):
+ * 记录带身份就必须对上正文身份 —— 正文没身份时,带身份的记录一定属于别的代;记录不带
+ * 身份的(那一代协议真没给)放行,交给指纹与节点核对兜底。非 strict 只给**老数据**(没
+ * 指纹的旧账):缺身份放行是它的显式兼容口径,不是新事件的通行证(审查第 1 轮 R1)。
+ */
+export function sameSnapshotIdentity(
+  record: string | undefined,
+  body: string | undefined,
+  strict: boolean,
+): boolean {
+  if (record === undefined) return true;
+  if (body === undefined) return !strict;
+  return record === body;
+}

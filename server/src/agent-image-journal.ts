@@ -16,7 +16,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 import { markdownImageRefs } from "@ash/shared/markdown-images";
-import { childResultTexts } from "@ash/shared/native-work";
+import { childResultTexts, sameSnapshotIdentity, snapshotVersion } from "@ash/shared/native-work";
 import { externalImageDestination } from "./agent-attachments.js";
 import { markdownTextHash } from "./executors/markdown-image-ledger.js";
 import { metaSeedKey, type MetaImageField } from "./executors/markdown-image-meta.js";
@@ -157,12 +157,14 @@ export async function loadMarkdownImageSeed(
    * 账本逐行(出口只取最高代那组,按**节点**接回 —— 代内前缀延续,坐标不漂)。 */
   type MetaWork = {
     refs: number;
-    rev: number;
     text?: string;
-    /** trace 里最后那版正文的协议身份(messageId/调用 id)。与 meta 侧 doc.version 同一
-     * 口径:没带身份的事件不清旧值。 */
+    /** trace 里最后那版正文的协议身份(messageId/调用 id)。转移规则与 meta 侧 doc.version
+     * 同一份(shared 的 snapshotVersion):换稿连身份一起换,无身份的新稿不继承旧身份。 */
     version?: string;
-    emitted: Set<number>;
+    /** trace 里的交代事件(attachment 活动)留下的标记:哪一代、以谁的身份交代过。代号与
+     * 「已交代」都要先过身份再算数 —— 未落盘那版的交代标记抬高代号、标成已交代,原版冻结
+     * 整组丢失(审查第 1 轮 R1 实证 B)。 */
+    marks: { rev: number; version?: string }[];
     lines: {
       rev: number; pos: number; destination: string; path?: string; lost?: boolean;
       len?: number; hash?: number; version?: string; final?: boolean;
@@ -173,7 +175,7 @@ export async function loadMarkdownImageSeed(
     const key = metaSeedKey(id, field);
     let found = metas.get(key);
     if (!found) {
-      found = { refs: 0, rev: 0, emitted: new Set(), lines: [] };
+      found = { refs: 0, marks: [], lines: [] };
       metas.set(key, found);
     }
     return found;
@@ -196,13 +198,17 @@ export async function loadMarkdownImageSeed(
       // 快照式正文按**替换**语义取最后一版(空串 = 清场):种子判「重放同一代」还是「新
       // 内容开新代」全靠它 —— 不带正文的种子只能无条件继承冻结,正是复审 R1 的新回合一例。
       // 协议身份(messageId)跟着正文走:接回的进程靠它识破「新消息以旧消息开头」的换稿
-      // (第 10 轮审查 R2 resumedIdentity);没带身份的事件不清旧值,与 meta 侧同口径。
-      if (typeof work.message === "string") {
-        const seeded = meta(work.id, "message");
-        seeded.text = work.message;
-        if (work.messageId !== undefined) seeded.version = work.messageId;
+      // (第 10 轮审查 R2 resumedIdentity);转移规则与 meta 侧同一份(snapshotVersion):
+      // 换稿连身份一起换,无身份的新稿不继承旧身份(审查第 1 轮 R1)。
+      for (const field of ["message", "result"] as const) {
+        const value = work[field];
+        if (typeof value !== "string") continue;
+        const seeded = meta(work.id, field);
+        const version = snapshotVersion({ text: seeded.text ?? "", version: seeded.version }, value, work.messageId);
+        seeded.text = value;
+        if (version !== undefined) seeded.version = version;
+        else delete seeded.version;
       }
-      if (typeof work.result === "string") meta(work.id, "result").text = work.result;
     } else if (work?.type === "result") {
       // 结构化结果与记账侧同一把尺(childResultTexts):账记在子正文的文档上,正文也按
       // 子正文接回,否则指纹与节点都对不上号。拆不出的按原文整份。子正文的身份 = 这一次
@@ -224,8 +230,8 @@ export async function loadMarkdownImageSeed(
     if (child.event.kind === "attachment" && child.event.field) {
       const seeded = meta(child.id, child.event.field);
       if (typeof child.event.ref === "number") seeded.refs = Math.max(seeded.refs, child.event.ref + 1);
-      seeded.rev = Math.max(seeded.rev, child.event.rev ?? 0);
-      seeded.emitted.add(child.event.rev ?? 0);
+      // 发号器无条件接续(多留几号无害);代号与「已交代」只记成标记,出口处过了身份才算数。
+      seeded.marks.push({ rev: child.event.rev ?? 0, ...(child.event.version !== undefined ? { version: child.event.version } : {}) });
       continue;
     }
     if (child.event.kind === "text" && child.event.text) doc(child.id).text += child.event.text;
@@ -306,7 +312,7 @@ export async function loadMarkdownImageSeed(
     });
   }
   for (const [key, seeded] of metas) {
-    if (!seeded.refs && !seeded.lines.length && !seeded.rev && !seeded.text) continue;
+    if (!seeded.refs && !seeded.lines.length && !seeded.marks.length && !seeded.text) continue;
     if (seeded.text) {
       // 正文在:接回的进程把同文重放(前缀)认成**同一代**,冻结按节点沿用,交代过的不再
       // 交代;真正的新内容(非前缀/清场后)由 meta 账自己开新代。账本行先过**正文指纹**:
@@ -319,12 +325,15 @@ export async function loadMarkdownImageSeed(
       // 只有记账时的协议身份对上落盘那条的,才算这版的账(第 10 轮审查 R2 identicalTextJournal)。
       // 单边没带身份(老账、没报 messageId 的协议)沿旧口径放行,交给指纹与节点核对。
       const verified = seeded.lines.filter((line) =>
-        (line.version === undefined || seeded.version === undefined || line.version === seeded.version)
+        sameSnapshotIdentity(line.version, seeded.version, line.len !== undefined && line.hash !== undefined)
         && (line.len === undefined || line.hash === undefined
           ? true
           : line.len <= text.length && markdownTextHash(text.slice(0, line.len)) === line.hash));
-      const rev = verified.reduce((top, line) => Math.max(top, line.rev), seeded.rev);
-      const emitted = seeded.emitted.has(rev) || verified.some((line) => line.final && line.rev === rev);
+      // 交代标记是快照契约之后的新数据,没有指纹可兜底,身份就是唯一的核对手段:对不上落盘
+      // 正文身份的标记属于没保存的另一版,它的代号与「已交代」一概不算(实证 B)。
+      const marks = seeded.marks.filter((mark) => sameSnapshotIdentity(mark.version, seeded.version, true));
+      const rev = [...verified.map((line) => line.rev), ...marks.map((mark) => mark.rev)].reduce((top, value) => Math.max(top, value), 0);
+      const emitted = marks.some((mark) => mark.rev === rev) || verified.some((line) => line.final && line.rev === rev);
       const byPos = new Map<number, { pos: number; destination: string; path?: string; lost?: boolean }>();
       for (const line of verified) {
         if (line.rev !== rev) continue;
@@ -346,7 +355,8 @@ export async function loadMarkdownImageSeed(
       // 清场收尾、或老 trace 里读不到正文:不知道上一代长什么样,就**不继承**任何冻结 ——
       // 「同一回合重放要继承」不能无条件推广(复审 R1 新回合一例)。下一段内容从比一切已知
       // 代号(含账本里没核验的)都新的一代起算,免得跟死代的账撞号。
-      const top = seeded.lines.reduce((high, line) => Math.max(high, line.rev), seeded.rev);
+      const top = [...seeded.lines.map((line) => line.rev), ...seeded.marks.map((mark) => mark.rev)]
+        .reduce((high, value) => Math.max(high, value), 0);
       out.set(key, { text: "", refs: seeded.refs, emitted: 0, rev: top + 1 });
     }
   }
@@ -424,12 +434,17 @@ export async function mergeImageJournal(
     const work = event.kind === "tool" ? event.nativeWork : undefined;
     if (work?.type === "call") calls.set(work.id, { name: work.name, input: work.input });
     if (work?.type === "agent") {
-      if (typeof work.message === "string") {
-        texts.set(docKey(work.id, entry.turnStartedAt, "message"), work.message);
-        // 没带身份的事件不清旧值(与 meta 的 doc.version 同口径)。
-        if (work.messageId !== undefined) textVersions.set(docKey(work.id, entry.turnStartedAt, "message"), work.messageId);
+      // 身份转移与 meta 的 doc.version 同一份规则(snapshotVersion):换稿连身份一起换,
+      // 无身份的新稿不继承旧身份;result 同样吃事件身份(collab 的调用 id,实证 A)。
+      for (const field of ["message", "result"] as const) {
+        const value = work[field];
+        if (typeof value !== "string") continue;
+        const slot = docKey(work.id, entry.turnStartedAt, field);
+        const version = snapshotVersion({ text: texts.get(slot) ?? "", version: textVersions.get(slot) }, value, work.messageId);
+        texts.set(slot, value);
+        if (version !== undefined) textVersions.set(slot, version);
+        else textVersions.delete(slot);
       }
-      if (typeof work.result === "string") texts.set(docKey(work.id, entry.turnStartedAt, "result"), work.result);
     } else if (work?.type === "result") {
       // 结构化结果拆成子正文(账在子文档上,见 meta 的 capture),正文也按子文档收集,
       // 指纹与节点核对才对得上号(复审 R1 routedJournalLate/encodedMarkdown)。
@@ -519,10 +534,11 @@ export async function mergeImageJournal(
     // 同坐标同来源不能证明同一版(复审 R1 journalAheadOfTrace);老账没有指纹,仍按节点
     // 核对放行。
     const text = texts.get(key) ?? "";
-    // 身份先行(同种子出口):两边都带协议身份时必须相等,单边没带沿旧口径放行。
+    // 身份先行(同种子出口):带指纹的账是快照契约之后的新数据,身份必须严格对上(正文没
+    // 身份时,带身份的账属于别的代);没指纹的老账才走「缺身份放行」的兼容口径。
     const version = textVersions.get(key);
     const verified = lines.filter((line) =>
-      (line.version === undefined || version === undefined || line.version === version)
+      sameSnapshotIdentity(line.version, version, typeof line.len === "number" && typeof line.hash === "number")
       && (typeof line.len !== "number" || typeof line.hash !== "number"
         ? true
         : line.len <= text.length && markdownTextHash(text.slice(0, line.len)) === line.hash));

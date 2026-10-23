@@ -405,6 +405,37 @@ try {
     assert.equal(agent?.type === "agent" ? agent.messageId : undefined, "msg-a", "claude 的 assistant 消息带 message.id 当快照身份");
   }
 
+  // ⑬ collab 的结果入口把调用 id 当快照身份(审查第 1 轮 R1 实证 A):两次 wait 报回同一段
+  //   文字也是两份独立快照 —— 不带身份时同文早退、第二张图根本不重拍;带上身份就换代重拍,
+  //   新代交代新拍的字节并带新身份。
+  {
+    const { codexNativeWork } = await import("../src/executors/native-work.js");
+    const sink = markdownImageSink(root);
+    const feed = (event: AgentEvent) => {
+      sink.capture(event);
+      return sink.release(event);
+    };
+    const call = (id: string) => codexNativeWork({
+      type: "collabAgentToolCall", id, tool: "wait", receiverThreadIds: ["cw-child"], status: "completed",
+      agentsStates: { "cw-child": { status: "completed", message: "当前截图：![图](cw.png)" } },
+    });
+    writeFileSync(join(root, "cw.png"), red);
+    const first = call("wait-1").flatMap(feed);
+    assert.deepEqual(
+      metaShots(first).map((shot) => [shot.doc, shot.field, shot.rev, shot.version, colorOf(shot.path)]),
+      [["cw-child", "result", 0, "wait-1", "RED"]],
+      "第一次调用按调用 id 记身份,交代当时的红字节",
+    );
+    writeFileSync(join(root, "cw.png"), blue);
+    const second = call("wait-2").flatMap(feed);
+    assert.deepEqual(
+      metaShots(second).map((shot) => [shot.doc, shot.field, shot.rev, shot.version, colorOf(shot.path)]),
+      [["cw-child", "result", 1, "wait-2", "BLUE"]],
+      "同文的第二次调用是独立快照:换代重拍成蓝,身份是第二次的调用 id",
+    );
+    sink.dispose();
+  }
+
   console.log("test-agent-image-meta: all cases passed");
 } finally {
   rmSync(root, { recursive: true, force: true });

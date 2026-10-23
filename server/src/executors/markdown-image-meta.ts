@@ -140,6 +140,10 @@ export function metaImageAccounts(opts: {
     doc.snapshots = new Map();
     doc.noted = new Map();
     doc.emitted = false;
+    // 身份跟正文同生同灭:新一代由带身份的事件开启就装它的身份(take 在 reopen 后装),
+    // 由无身份事件开启就没有身份 —— 旧身份不许留下来给新稿背书(审查第 1 轮 R1,规则本体
+    // 在 shared/native-work 的 snapshotVersion)。
+    delete doc.version;
   };
 
   const take = (id: string, field: MetaImageField, value: unknown, version?: string) => {
@@ -158,11 +162,14 @@ export function metaImageAccounts(opts: {
     // 之间,文字前缀证明不了同一份正文 —— 同回合第二条消息恰好以第一条开头时,图早被重拍
     // 过,沿用上一条的冻结是把旧字节安在新话上(复审 R1 distinctPrefixMessages)。
     const replaced = version !== undefined && doc.version !== undefined && version !== doc.version && doc.had;
-    if (version !== undefined) doc.version = version;
-    if (doc.text === value && !replaced) return;
+    if (doc.text === value && !replaced) {
+      if (version !== undefined) doc.version = version;
+      return;
+    }
     // 新一代的判据(见文件头):已交代后的任何变化、换了快照身份,或**非前缀**的改写。
     // 前缀延续(流式增量、重放后接着说)留在当代 —— 代内坐标因此永不漂移,节点账才能按 pos 记。
     if (doc.emitted || replaced || !value.startsWith(doc.text)) reopen(doc);
+    if (version !== undefined) doc.version = version;
     doc.text = value;
     doc.had = true;
     const refs = markdownImageRefs(value);
@@ -227,7 +234,9 @@ export function metaImageAccounts(opts: {
         calls.set(work.id, { name: work.name, input: work.input });
       } else if (work.type === "agent") {
         take(work.id, "message", work.message, work.messageId);
-        take(work.id, "result", work.result);
+        // result 同样吃事件身份:collab 的 wait/close 把结果写在 result 上,身份是那一次
+        // 调用(审查第 1 轮 R1 实证 A);没带身份的(claude 的任务通知)照旧 undefined。
+        take(work.id, "result", work.result, work.messageId);
       } else if (work.type === "result") {
         // 结构化结果(wait 的 statuses、taskoutput 的 <output>)按**子正文**各记各的账
         // (文档 = 子智能体 id × result),提取与展示端共用 childResultTexts:扫原始 JSON
