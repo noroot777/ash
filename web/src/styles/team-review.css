@@ -186,3 +186,11 @@
 .accept-gate-log > span > button { border: 0; background: transparent; padding: 0; color: var(--accent); font-size: 9.5px; }
 .accept-gate-log pre { max-height: 180px; overflow: auto; margin: 4px 0 0; border-radius: 6px; background: var(--canvas); padding: 6px 8px; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .accept-gate-log.is-full pre { max-height: 360px; }
+/* 没设命令时的那一档:它只是一个入口,别长成一张告警卡。 */
+.accept-gate-card.is-idle { border-style: dashed; background: var(--panel); }
+.accept-gate-card.is-idle > header > span:first-child { background: transparent; color: var(--faint); }
+.accept-gate-edit { display: grid; gap: 5px; }
+.accept-gate-edit input { width: 100%; height: 30px; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); padding: 0 9px; color: var(--ink); font-size: 10.5px; }
+.accept-gate-edit input:focus { border-color: var(--accent); outline: none; }
+.accept-gate-edit small { color: var(--faint); font-size: 9.5px; line-height: 1.55; }
+.accept-gate-edit small b { display: inline; color: var(--muted); font-size: 9.5px; }
