@@ -36,7 +36,7 @@ function requiredChecks(target: TaskRow, at: string | null | undefined): string 
   const checks = workflowPolicy(taskWorkflowDef(target.workflow), at)?.verify?.p.checks ?? [];
   return checks.length
     ? `这条线上勾的验证项必须逐项过：${checks.map((c) => VERIFY_CHECK_LABELS[c]).join("、")}。` +
-      `发现别的风险照样报，但这几项不能跳。\n\n`
+      `发现别的风险照样报，但这几项不能跳；符合回归结果复用约定的项目可引用执行者结果，不必重复运行。\n\n`
     : "";
 }
 
@@ -44,10 +44,10 @@ function requiredChecks(target: TaskRow, at: string | null | undefined): string 
 //
 // 截图是**按需**的（用户 2026-08-06 拍板）：一张没人看的截图不叫证据，只是给验收的人
 // 多一次点开再关掉。判据写成「改动看不看得见」而不是「web / 非 web」——同样是 web 改动，
-// 调个接口超时跟挪个按钮，前者截图上什么都看不出来。真实运行验证本身一步都不减。
+// 调个接口超时跟挪个按钮，前者截图上什么都看不出来。
 function verifyRules(evidenceDir: string): string {
-  return `必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务、用浏览器确认行为；` +
-    `其它改动也必须运行与风险相称的测试或产物。\n\n` +
+  return `验证必须有真实执行依据，不能只读代码；执行者对本次改动已跑过的回归测试按下述约定复用，不要求重复运行。` +
+    `web 改动仍必须启动服务、用浏览器确认行为；其它改动按风险补充尚未覆盖的测试或产物检查。\n\n` +
     // 「要等一件慢事」这一条必须就在验证义务旁边：2026-10-16 实测的那一轮审查挂了监听、
     // 说了「套件结束会叫我」，然后就这么结束了回合 —— 结算按「没给结论」把整条链停掉，
     // 而它挂的内置 Monitor 本来就活不过那一轮（它的进程在 agent 自己的进程树里）。现在
@@ -121,7 +121,7 @@ export async function verifyProtocolFor(
 /** 就地验证轮的每回合提醒（中途提问、被打断续跑时，只有它跟得到底）。 */
 export function verifyReminderFor(taskId: string, round: number): string {
   const dir = reviewRoundDir(taskId, round);
-  return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
+  return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。验证须有真实执行依据，可复用执行者对本次改动的回归结果；把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
@@ -161,7 +161,7 @@ export async function reviewProtocolFor(
 export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "reviewRound">): string {
   if (!review.reviewOf || !review.reviewRound) return "";
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
-  return `审查提醒:这是第 ${review.reviewRound} 轮审查；必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
+  return `审查提醒:这是第 ${review.reviewRound} 轮审查；验证须有真实执行依据，可复用执行者对本次改动的回归结果；把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +

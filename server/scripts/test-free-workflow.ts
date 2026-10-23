@@ -153,6 +153,12 @@ try {
   const freeReminder = await freeReviewReminder("free-reminder-task");
   assertCarriesSummaryReminder(freeReminder, "自由审查每回合提醒");
   assertCarriesSweepReminder(freeReminder, "自由审查每回合提醒");
+  const syntaxPrompt = await freeReviewPrompt(promptTask, { ...promptRun, checkMode: "syntax" }, 1, root);
+  assertCarriesSweepProtocol(syntaxPrompt, "自由语法审查 prompt");
+  for (const text of [skillPrompt, syntaxPrompt, freeReminder]) {
+    assert.match(text, /执行者对本次改动.*不(?:再|必|要求)重复运行/, "自由审查应复用执行者本次改动的回归结果");
+    assert.doesNotMatch(text, /必须真实运行与风险相称的检查/, "自由审查不得无条件要求重复运行检查");
+  }
 
   // 跨 run 的发现史：用户点「再审一轮」开的是**新 run**、第 1 轮、新开一条空会话，
   // 旧链十几轮报过什么它一个字都看不到（理由见 review-history.ts 文件头）。这里钉的就是

@@ -59,7 +59,7 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     // 文本,而投递时读到的项目授权会被去重锚点挡在门外 —— 已经在项目设置里授权过的站点,
     // 审查回合照样停下来等人点头,无人值守就断在这儿(第 6 链第 1 轮审查 P2)。
     // 统一由投递点 withGlobalBrowserPolicy 贴那一份**带最新授权**的。
-    `必须真实运行与风险相称的检查。\n\n` +
+    `检查必须有与风险相称的真实执行依据；执行者对本次改动已跑过的回归测试按上述约定复用，不要求重复运行。\n\n` +
     `一旦用了 playwright，结束前清掉工作区产物；所有验证临时服务和浏览器进程都必须停掉。\n\n` +
     `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
     REPORT_SUMMARY_FORMAT +
