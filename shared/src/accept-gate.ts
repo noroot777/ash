@@ -55,6 +55,11 @@ export interface AcceptGateView {
   logPath: string;
   /** 日志末尾若干行,够在界面上一眼看出红在哪 */
   logTail: string;
+  /**
+   * 这一次的红交没交回给 agent 去修。null = 没交过(通过/取消/被打断都不交)。
+   * `error` 非空 = 那一次没能叫醒它(回合被抢占、任务被归档之类),红还在那儿等人处理。
+   */
+  handoff: { at: string; error: string | null } | null;
 }
 
 /** 这条命令最多跑多久。再久基本是卡住了 —— 出路是验收台上那颗「取消」。 */

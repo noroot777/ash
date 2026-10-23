@@ -430,6 +430,10 @@ export const api = {
   },
   cancelAcceptGate: (taskId: string): Promise<{ canceled: true; gate: AcceptGateView }> =>
     request(`/tasks/${id(taskId)}/accept-gate/cancel`, json("POST", {})),
+  // 「再交给智能体去修」：红了那次 ash 已经自动交过一次，这条是补救（那次没投递成功）
+  // 与再推一把（agent 那一轮跑完了还没修好）。
+  rehandOffAcceptGate: (taskId: string): Promise<{ handedOff: true; gate: AcceptGateView }> =>
+    request(`/tasks/${id(taskId)}/accept-gate/handoff`, json("POST", {})),
   branchPlan: (taskId: string): Promise<BranchPlanView> => request(`/tasks/${id(taskId)}/branch-plan`),
   releaseTaskWorkspace: (taskId: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/release-workspace`, json("POST", { fingerprint })),
   changeMergeTarget: (taskId: string, branch: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/merge-target`, json("POST", { branch, fingerprint })),

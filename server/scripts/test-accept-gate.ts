@@ -50,7 +50,7 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { acceptGateRuns, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { acceptTask } = await import("../src/task-accept.js");
-  const { acceptGateState, cancelAcceptGate, recoverAcceptGates, whenAcceptGateSettled } = await import("../src/accept-gate.js");
+  const { acceptGateState, cancelAcceptGate, recoverAcceptGates, rehandOffAcceptGate, whenAcceptGateSettled } = await import("../src/accept-gate.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { isTurnClaimed, releaseTurn } = await import("../src/turn-lock.js");
   await ensureSchema();
@@ -171,6 +171,11 @@ try {
     assert.match(timeline, /门禁交接：/, "交接说明要留在时间线上（刷新后仍看得见）");
     assert.equal(timeline.includes("门禁交接失败"), false, "真叫醒了就不该同时写着失败");
 
+    // 交接要落在那一行上（而不是只写进时间线）：用户几小时后刷新页面，卡上还得答得出
+    // 「它到底去修了没有」。
+    assert.ok(run.handoffAt, "自动交接必须留下刷新后仍看得见的记录");
+    assert.equal(run.handoffError, null, "真叫醒了就不该同时记着失败原因");
+
     // 被叫醒那一轮会把任务拉回 running —— 「正在修」期间本来就不该能验收（既有的
     // free workflow 前置闸）。测试里 CLI 不真起，所以手动把它放回终态，模拟那一轮跑完。
     const turnEnded = async () => {
@@ -195,6 +200,26 @@ try {
     await settled(taskId);
     assert.equal((await runsOf(taskId)).length, 2, "点了「重跑一次」就要真的重跑");
     await turnEnded(); // 又红了一次,又被叫醒了一轮
+
+    // 「再交给智能体去修」：红了那次已经自动交过一次，这条是补救与再推一把。
+    // 证据不能再数会话行 —— 第二次交接 resume 的是同一条会话（那正是它比新建便宜的
+    // 原因），数会话会得出「没交成」的假结论。改看任务有没有真的被重新拉起来。
+    {
+      const again2 = await rehandOffAcceptGate(taskId);
+      assert.equal(again2.ok, true, "红着的那一次应该可以再交给 agent");
+      const woken = async () => (await taskRow(taskId)).status === "running";
+      for (let i = 0; i < 200 && !(await woken()); i++) await sleep(25);
+      assert.equal(await woken(), true, "「再交一次」必须真的再起一轮，不能只写一句话");
+      assert.equal((await runsOf(taskId)).length, 2, "交给 agent 去修不等于重跑那条命令");
+      await turnEnded();
+    }
+
+    // 通过/取消/被打断都没有「红」可交：这条路必须明确拒绝，而不是假装交了一次。
+    {
+      const passedTask = "gatepass00002";
+      const refused = await rehandOffAcceptGate(passedTask);
+      assert.equal(refused.ok, false, "通过了的那一次没有红可以交给 agent");
+    }
 
     // 明确跳过 → 直接合并，且时间线上留下「这是你自己选的」。
     const skipped = await acceptTask(taskId, "human", { acceptGate: "skip" });

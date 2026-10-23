@@ -14,6 +14,7 @@
 // 一个任务同时只会有一条门禁在跑（库里 running 行 + 进程表双保险）。
 import { and, desc, eq } from "drizzle-orm";
 import {
+  ACCEPT_GATE_STATUS_LABELS,
   ACCEPT_GATE_TIMEOUT_MS,
   normalizeAcceptGateCommand,
   summarizeAcceptGate,
@@ -84,6 +85,7 @@ const gateView = (row: GateRow): AcceptGateView => ({
   stale: false,
   logPath: row.logPath,
   logTail: acceptGateLogTail(row.logPath),
+  handoff: row.handoffAt ? { at: row.handoffAt, error: row.handoffError ?? null } : null,
 });
 
 async function latestRun(taskId: string): Promise<GateRow | null> {
@@ -361,22 +363,56 @@ const FAILURE_PROMPT = (p: { command: string; summary: string; logPath: string; 
   `把依据写清楚（单跑复核的结果、基线上同样红的证据），让用户决定是这次跳过门禁，还是另立一个任务去修。\n\n` +
   `不要自己去动目标分支，也不要绕过这条命令 —— 它是用户给这个项目定的放行条件。`;
 
-async function handOffGateFailure(row: GateRow, view: AcceptGateView): Promise<void> {
+async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = false): Promise<void> {
   const prompt = FAILURE_PROMPT({
     command: row.command, summary: summarizeAcceptGate(view), logPath: row.logPath,
     tail: view.logTail, cwd: row.cwd,
   });
+  // 先把「这一次交接发起了」落盘再投递：投递是异步的，中间用户刷新页面的话，不落盘
+  // 那张卡只能说「不知道」。失败由下面的 onError 补写原因（两件事都写同一行）。
+  await markHandoff(row.id, { at: now(), error: null });
   await appendTaskTimeline(
     row.taskId,
-    `门禁交接：已叫醒该任务去看这条命令为什么红（日志 ${row.logPath}）。修完重新点验收即可，验收会自动再跑一遍。`,
+    `门禁交接：已叫醒该任务去看这条命令为什么红（日志 ${row.logPath}）。${
+      again ? "这是你在验收台上手动再交一次。" : ""}修完重新点验收即可，验收会自动再跑一遍。`,
   );
   // byBackend：占真人回合，但字是后端写的（同验收冲突交接）。
   continueWhenIdle(row.taskId, prompt, { byBackend: true }, async (why) => {
+    await markHandoff(row.id, { at: now(), error: why });
     await appendTaskTimeline(
       row.taskId,
       `门禁交接失败：没能叫醒该任务（${why}）。日志在 ${row.logPath}，请手动点运行或直接回复它。`,
     );
   });
+}
+
+async function markHandoff(runId: string, value: { at: string; error: string | null }): Promise<void> {
+  await db.update(acceptGateRuns)
+    .set({ handoffAt: value.at, handoffError: value.error })
+    .where(eq(acceptGateRuns.id, runId));
+  const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
+  if (row) bus.publish({ type: "task.acceptGate", taskId: row.taskId });
+}
+
+/**
+ * 「再交给智能体去修」：红了之后那次自动交接没落地（回合被抢占、任务当时归档着），或者
+ * agent 那一轮跑完了还没修好，用户在验收台上再推一次。
+ *
+ * 只对**没通过的最近一次**有效：通过了没什么可修的，正在跑的还没有结论。取消/被打断
+ * 同样没有结论——那两种的出路是重新点验收，不是把一份不存在的红交给 agent。
+ */
+export async function rehandOffAcceptGate(taskId: string): Promise<
+  { ok: true; gate: AcceptGateView } | { ok: false; error: string }
+> {
+  const row = await latestRun(taskId);
+  if (!row) return { ok: false, error: "这个任务还没跑过验收前置命令" };
+  if (row.status === "running") return { ok: false, error: "命令还在跑，等它出结论再说" };
+  if (row.status !== "failed") {
+    return { ok: false, error: `最近一次是「${ACCEPT_GATE_STATUS_LABELS[row.status as AcceptGateStatus]}」，没有红可以交给智能体修` };
+  }
+  await handOffGateFailure(row, gateView(row), true);
+  const fresh = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, row.id))).at(0);
+  return { ok: true, gate: gateView(fresh ?? row) };
 }
 
 /** 取消正在跑的那一条。返回 null = 当前没有在跑的。 */

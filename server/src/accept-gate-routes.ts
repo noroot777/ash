@@ -4,7 +4,7 @@
 // 没有共享状态 —— 它们只认 taskId。
 import type { Hono } from "hono";
 import { acceptGateLogText } from "./accept-gate-process.js";
-import { acceptGateState, cancelAcceptGate } from "./accept-gate.js";
+import { acceptGateState, cancelAcceptGate, rehandOffAcceptGate } from "./accept-gate.js";
 
 export function mountAcceptGateRoutes(api: Hono): void {
   // 验收台要的那一份：这个项目设没设门禁、上一次跑成什么样、那次结果对现在这棵树还作不作数。
@@ -17,6 +17,14 @@ export function mountAcceptGateRoutes(api: Hono): void {
     const run = state.running ?? state.latest;
     if (!run) return c.json({ error: "这个任务还没跑过验收前置命令" }, 404);
     return c.text(acceptGateLogText(run.logPath) || "（日志为空）");
+  });
+
+  // 「再交给智能体去修」。红了的时候 ash 已经自动交过一次，这条是补救与再推一把：那一次
+  // 可能没投递成功（回合被抢占），也可能 agent 那一轮跑完了还没修好。
+  api.post("/tasks/:id/accept-gate/handoff", async (c) => {
+    const result = await rehandOffAcceptGate(c.req.param("id"));
+    if (!result.ok) return c.json({ error: result.error }, 409);
+    return c.json({ handedOff: true, gate: result.gate });
   });
 
   // 不想等了：收掉它。取消是用户自己的动作，所以留下的是 canceled 而不是 failed ——

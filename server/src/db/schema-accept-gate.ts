@@ -41,6 +41,15 @@ export const acceptGateRuns = sqliteTable(
     acceptOptions: text("accept_options"),
     startedAt: text("started_at").notNull(),
     finishedAt: text("finished_at"),
+    /**
+     * 这一次的红**交没交回给 agent**:发起时刻 + 没发出去的原因(null = 发出去了)。
+     *
+     * 必须落盘:交接是自动发生的,而用户看到那张卡可能已经是几小时后、刷新过好几次。
+     * 不落盘就只剩时间线深处一句话,卡上答不出「它到底去修了没有」,于是用户要么干等,
+     * 要么重复点(见根 AGENTS.md「停止/暂停必须留下持久可见的状态」)。
+     */
+    handoffAt: text("handoff_at"),
+    handoffError: text("handoff_error"),
   },
   (t) => ({ taskIdx: index("accept_gate_runs_task_idx").on(t.taskId, t.startedAt) }),
 );
@@ -52,8 +61,16 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
       command TEXT NOT NULL, cwd TEXT NOT NULL, status TEXT NOT NULL,
       exit_code INTEGER, failure TEXT, pid INTEGER, log_path TEXT NOT NULL,
       source_commit TEXT, target_branch TEXT, target_commit TEXT, fast_forward INTEGER,
-      accept_options TEXT, started_at TEXT NOT NULL, finished_at TEXT
+      accept_options TEXT, started_at TEXT NOT NULL, finished_at TEXT,
+      handoff_at TEXT, handoff_error TEXT
     );
     CREATE INDEX IF NOT EXISTS accept_gate_runs_task_idx ON accept_gate_runs (task_id, started_at);
   `);
+  // 这张表第一版没有这两列,补列即可(空 = 那一次没交接过)。
+  for (const sql of [
+    "ALTER TABLE accept_gate_runs ADD COLUMN handoff_at TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN handoff_error TEXT",
+  ]) {
+    try { await client.execute(sql); } catch { /* column already exists */ }
+  }
 }

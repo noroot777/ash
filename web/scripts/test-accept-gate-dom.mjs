@@ -13,6 +13,8 @@ import { createServer } from "vite";
 // ③ 正在跑的时候不给改：这一次用的是开跑时那条命令原文，改了也不作数。
 // ④ 红了之后那两条出路（重跑一次 / 这次跳过）走的是 onIntent，由验收控件接到同一道
 //    验收确认框上 —— 卡自己不许偷偷发起验收。
+// ⑤ 「交给智能体去修」这件事 ash 红了就**自动**做过一次，所以卡上要先说清它做没做成：
+//    做成了按钮改口「再交给智能体一次」，没做成就得直说「那条红现在没人在管」。
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
@@ -40,6 +42,7 @@ const run = (over = {}) => ({
   stale: false,
   logPath: "/runs/gate-task/accept-gate-run-1.log",
   logTail: "640 passed\n",
+  handoff: null,
   ...over,
 });
 
@@ -54,7 +57,7 @@ try {
 
   const open = async ({ gate, role = "admin", query = "" } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
-    const store = { patches: [], canceled: 0, command: gate.command ?? null, gate };
+    const store = { patches: [], canceled: 0, handoffs: 0, command: gate.command ?? null, gate };
     // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件，挂一条空流免得它反复重连。
     await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
     await page.route("**/api/projects", (route) =>
@@ -69,6 +72,11 @@ try {
       store.canceled += 1;
       store.gate = { ...store.gate, running: null, latest: { ...store.gate.running, status: "canceled", failure: "canceled" } };
       return json(route, { canceled: true, gate: store.gate.latest });
+    });
+    await page.route("**/api/tasks/gate-task/accept-gate/handoff", (route) => {
+      store.handoffs += 1;
+      store.gate = { ...store.gate, latest: { ...store.gate.latest, handoff: { at: new Date().toISOString(), error: null } } };
+      return json(route, { handedOff: true, gate: store.gate.latest });
     });
     await page.route("**/api/tasks/gate-task/accept-gate", (route) => json(route, store.gate));
     await page.goto(`${base}${query}`);
@@ -137,7 +145,39 @@ try {
     await page.close();
   }
 
-  // ⑤ 已经验收完的任务：这张卡不再占一行。
+  // ⑤ 交给智能体去修：ash 已经自动交过一次要说出来，按钮跟着改口；那一次没叫醒它的话
+  //    这颗按钮是主操作 —— 那条红此刻没人在管，再不点就真的没人管了。
+  {
+    const failed = run({ status: "failed", exitCode: 3, failure: "exit_code" });
+    const { page, store } = await open({ gate: { command: failed.command, running: null, latest: failed } });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    assert.match(await card.textContent(), /日志还没交给智能体/);
+    await card.getByRole("button", { name: "交给智能体去修" }).click();
+    await page.locator("[aria-label='操作结果']", { hasText: "交回给智能体" }).waitFor();
+    assert.equal(store.handoffs, 1);
+    // 交过之后卡上要说清「它已经在修了」，按钮改口成「再交给智能体一次」。
+    await card.getByRole("button", { name: "再交给智能体一次" }).waitFor();
+    assert.match(await card.textContent(), /已经交回这个任务的智能体去修/);
+    await page.close();
+  }
+
+  // ⑥ 那次自动交接没叫醒它：卡上必须说破「这条红现在没人在管」。
+  {
+    const failed = run({
+      status: "failed", exitCode: 3, failure: "exit_code",
+      handoff: { at: "2026-10-23T02:00:00.000Z", error: "回合被其它执行抢占，消息未能投递" },
+    });
+    const { page } = await open({ gate: { command: failed.command, running: null, latest: failed } });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    assert.match(await card.textContent(), /没叫醒它/);
+    assert.match(await card.textContent(), /没人在管/);
+    assert.equal(await card.getByRole("button", { name: "交给智能体去修" }).count(), 1, "没叫醒就还是「交给智能体去修」");
+    await page.close();
+  }
+
+  // ⑦ 已经验收完的任务：这张卡不再占一行。
   {
     const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run() }, query: "?stage=accepted" });
     await page.locator("h1").waitFor();

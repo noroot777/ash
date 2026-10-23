@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowClockwise, CheckCircle, FileText, PencilSimple, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowUUpLeft, CheckCircle, FileText, PencilSimple, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
 import type { AcceptGateView } from "@ash/shared/accept-gate";
 import { ACCEPT_GATE_STATUS_LABELS, summarizeAcceptGate } from "@ash/shared/accept-gate";
 import type { Task, TaskListItem } from "@ash/shared";
@@ -105,6 +105,21 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
       setBusy(false);
     }
   };
+  // 把这条红交回给这个任务的智能体。红了的时候 ash 已经自动交过一次（所以这颗按钮写
+  // 的是「再交一次」），这里是两种补救：那次没投递成功，或者它那一轮跑完了还没修好。
+  const handOff = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.rehandOffAcceptGate(task.id);
+      await reload();
+      notify("已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令");
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
   const openLog = async () => {
     if (busy) return;
     setBusy(true);
@@ -118,8 +133,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   };
   // 就地改这条命令。它是**项目级**的，所以保存成功那句话必须把这点说破 —— 在一个任务
   // 的验收台上改一个项目设置，不说清就会被当成「只影响这一个任务」。
-  const saveCommand = async () => {
-    if (busy || draft === null) return;
+  const saveCommand = async () => {    if (busy || draft === null) return;
     const next = draft.trim() || null;
     if (next === (state.command ?? null)) { setDraft(null); return; }
     setBusy(true);
@@ -210,6 +224,11 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
                 </button>
               </>
             ) : null}
+            {latest?.status === "failed" && !running && (
+              <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy} onClick={() => void handOff()}>
+                <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次" : "交给智能体去修"}
+              </button>
+            )}
             {(running ?? latest) && (
               <button type="button" disabled={busy} onClick={() => void openLog()}><FileText size={13} />看完整日志</button>
             )}
@@ -250,7 +269,7 @@ function heading(running: AcceptGateView | null, latest: AcceptGateView | null, 
 function detail(state: AcceptGateState, running: AcceptGateView | null, latest: AcceptGateView | null): string {
   if (running) {
     return `\`${running.command}\`（在 ${running.cwd}）。rc=0 才会继续合并：绿了这次验收会自动做完，`
-      + "不用再点；红了会把日志交回这个任务去修，目标分支一个字节都不会动。";
+      + "不用再点；红了会把日志交回这个任务的智能体去修，目标分支一个字节都不会动。";
   }
   if (!latest) return `点「验收通过」时会先在任务工作区里跑一遍 \`${state.command}\`，rc=0 才合并。`;
   if (latest.status === "passed") {
@@ -258,6 +277,15 @@ function detail(state: AcceptGateState, running: AcceptGateView | null, latest: 
       ? `那次跑的是 ${latest.sourceCommit?.slice(0, 8) ?? "另一棵树"}，代码之后又改过了——再点验收会重跑一遍。`
       : `${summarizeAcceptGate(latest)}。代码没再改过，所以这次验收不会重跑它。`;
   }
-  return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。`
+  // 红了之后 ash 会**自动**把日志交回那个任务去修。这件事必须写在卡上：用户只看到三颗
+  // 按钮时会以为还得自己去催，而时间线里那句话翻几页才找得到。
+  const handoff = latest.status !== "failed"
+    ? ""
+    : !latest.handoff
+      ? "日志还没交给智能体。"
+      : latest.handoff.error
+        ? `已经试过把日志交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）——那条红现在没人在管。`
+        : "日志已经交回这个任务的智能体去修了。";
+  return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${handoff}`
     + (latest.status === "failed" ? "改完再点验收会自动重跑；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
 }
