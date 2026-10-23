@@ -15,6 +15,7 @@
 //   5. cmd.exe 的参数引号规则（CVE-2024-24576 那套），含换行直接拒
 //   6. augmentedEnv 去掉 Path/PATH 的大小写重影
 //   7. 用户自己写的整条命令行走 `cmd /d /s /c` + verbatim（跟 5 的转义规则相反）
+//   8. 常用命令走 PowerShell `-EncodedCommand` + 退出码收口（commandLaunch）
 // 跑：npm -w server run test:win-launch
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -193,7 +194,52 @@ try {
   delete process.env.COMSPEC;
   assert.equal(userShellLaunch("ls").file, "cmd.exe", "COMSPEC 没设时回退 cmd.exe");
 
-  console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行）全部通过");
+  // ── 8. 常用命令怎么起（terminal-shell.ts 的 commandLaunch）────────────────────
+  // 这一条也只能在伪造平台下跑：真机上它决定「点启动到底跑不跑得起来」，而开发机永远
+  // 走 POSIX 那一支。钉三件事 ——
+  //   ① 选的是 PowerShell，且 pwsh(7) 优先于随系统的 5.1；
+  //   ② 脚本走 `-EncodedCommand`（UTF-16LE base64）：**原文一个字都不转义**地送过去，
+  //      这正是绕开「node-pty 拼命令行 + PowerShell 再解析」那两层引号雷区的办法；
+  //   ③ 退出码收口跟在脚本后面，语义对齐 `sh -lc`（最后一条命令的退出码就是会话退出码）。
+  const psDir = join(stage, "ps");
+  mkdirSync(psDir, { recursive: true });
+  const pwsh = join(psDir, "pwsh.exe");
+  const ps51 = join(psDir, "powershell.exe");
+  writeFileSync(pwsh, "MZ");
+  writeFileSync(ps51, "MZ");
+  const basePath = process.env.PATH!;
+  process.env.PATH = [psDir, basePath].join(";");
+
+  const { commandLaunch } = await import("../src/terminal-shell.js");
+
+  // 用户写的脚本：多行、带引号、带 `$`、带反引号 —— 编码传参之后这些全都不用管
+  const script = 'cd "C:\\My Code"\nnpm run dev -- --name "a b" `# $x';
+  const launch = commandLaunch(script, "/bin/zsh");
+  assert.equal(launch.shell, pwsh, "pwsh.exe 优先（PowerShell 7 才认 && 这类语法）");
+  assert.deepEqual(launch.args.slice(0, 2), ["-NoLogo", "-EncodedCommand"]);
+  const decoded = Buffer.from(launch.args[2], "base64").toString("utf16le");
+  assert.ok(decoded.includes(script), "脚本原文必须一字不动地进去（编码传参的全部意义）");
+  const lines = decoded.split("\n");
+  assert.equal(lines[0], "$global:LASTEXITCODE = 0", "先清掉上一条命令留下的 $LASTEXITCODE");
+  assert.equal(
+    lines[lines.indexOf(script.split("\n").at(-1)!) + 1],
+    "$ok = $?",
+    "$? 必须紧贴脚本最后一行读——晚一句拿到的就是那句 if 自己的成败",
+  );
+  assert.ok(decoded.includes("if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"));
+  assert.equal(lines.at(-1), "exit 0", "都没问题才 0");
+
+  // 没装 PowerShell 7 就退 5.1（Windows 自带那个）
+  rmSync(pwsh, { force: true });
+  assert.equal(commandLaunch("echo hi").shell, ps51, "没 pwsh 时退 Windows PowerShell 5.1");
+
+  // 两个都没有：**抛**，不拿 cmd.exe 去跑一段 PowerShell 脚本（多行它压根收不了，
+  // 而「换一套方言悄悄跑」的失败方式看不懂）
+  rmSync(ps51, { force: true });
+  assert.throws(() => commandLaunch("echo hi"), /找不到 PowerShell/, "一个都没有就该拒绝开会话");
+  process.env.PATH = basePath;
+
+  console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行/常用命令）全部通过");
 } finally {
   rmSync(stage, { recursive: true, force: true });
 }

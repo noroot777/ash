@@ -10,9 +10,13 @@
 // 项目自有端口、跑在主仓当前检出的分支上。两份配置刻意不复用 —— 预览服务的语义绑着
 // 借端口/enabled 勾选/kind 那一套，混在一起会把两种心智搅浑。
 //
-// 命令本身是**完整脚本**：多行、缩进、`cd x && …`、调用仓库里的 .sh 都行（跑法是
-// `shell -lc <script>`，跟预览脚本同一套），编辑面用 CodeMirror（web/src/settings/
-// ShellScriptEditor.tsx）。脚本里可以写 `{{占位符}}`，点执行时先让用户填 —— 见下。
+// 命令本身是**完整脚本**：多行、缩进、`cd x && …`、调用仓库里的 .sh 都行，编辑面用
+// CodeMirror（web/src/settings/ShellScriptEditor.tsx）。脚本里可以写 `{{占位符}}`，
+// 点执行时先让用户填 —— 见下。
+//
+// **方言跟着 ash 所在的机器**：macOS/Linux 上是 `shell -lc <script>`（跟预览脚本同一套），
+// Windows 上是 PowerShell（`-EncodedCommand`，见 server/src/terminal-shell.ts 的
+// `commandLaunch`）—— 那边没有登录 shell 这一档，`&&` 要 PowerShell 7 才认。
 export interface ProjectCommandConfig {
   id: string;
   name: string;

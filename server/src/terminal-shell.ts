@@ -1,10 +1,11 @@
-// 终端会话「怎么起 shell」这一半:shell 选型、pty 环境变量、尺寸钳制、工作目录解析。
+// 终端会话「怎么起 shell」这一半:shell 选型、常用命令的跑法、pty 环境变量、尺寸钳制、
+// 工作目录解析。
 // 会话生命周期(创建/清场/回收)在 terminal.ts,进程树/wrapper 纯函数在
 // terminal-process-tree.ts。
 import { existsSync, statSync } from "node:fs";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { expandHome } from "./git.js";
-import { IS_WINDOWS } from "./platform.js";
+import { IS_WINDOWS, encodePowerShellCommand } from "./platform.js";
 import { LSOF_PATH, PS_PATH } from "./terminal-process-tree.js";
 
 export function terminalSize(value: unknown, fallback: number, min: number, max: number): number {
@@ -37,6 +38,53 @@ export function shellCommand(): { shell: string; args: string[] } {
   }
   const shell = process.env.SHELL || (existsSync("/bin/zsh") ? "/bin/zsh" : "/bin/bash");
   return { shell, args: ["-l"] };
+}
+
+/**
+ * 跑一条「常用命令」用什么命令行(shared/src/project-commands.ts 的 service / commands)。
+ *
+ * POSIX:用户的 shell + `-lc <脚本>`。`-l` 是必须的 —— dev 命令的 PATH/nvm 全靠登录 shell。
+ *
+ * Windows:**PowerShell + `-EncodedCommand`**(UTF-16LE base64)。三点理由:
+ *  ① 没有 `-l` 这一档(登录 shell 是 POSIX 概念),而那边的 PATH 本来就来自注册表 + 进程
+ *     继承,nvm-windows 也是改 PATH —— 所以「登录 shell」要解决的问题在那边不存在;
+ *  ② 脚本是用户写的整段文本(多行、引号、`$`、反引号),而 node-pty 要先把 args 拼成一条
+ *     命令行、PowerShell 自己再解析一轮 —— 两层引号规则叠在一起是雷区(platform.ts 顶部
+ *     那一节就是为它写的)。编码传参把整片雷区绕开,脚本里什么都不用转义;
+ *  ③ 多行脚本 cmd.exe 收不了(`/c` 只认一行),所以找不到 PowerShell 一律**抛**,不悄悄
+ *     换一套方言去跑 —— 那只会让一条写给 PowerShell 的脚本以看不懂的方式失败。
+ *
+ * 退出码要自己接:`-Command`/`-EncodedCommand` 只在最后一条是原生命令时才透传
+ * `$LASTEXITCODE`,其余情形一律 0/1。所以脚本后面补一段确定性的收口,语义对齐
+ * `sh -lc`:**最后一条命令的退出码**就是会话的退出码。
+ *
+ * 脚本方言两边因此是不同的(那边是 PowerShell),这点在设置页的说明里写明。
+ */
+export function commandLaunch(script: string, preferredShell?: string): { shell: string; args: string[] } {
+  if (!IS_WINDOWS) {
+    const shell = preferredShell ?? shellCommand().shell;
+    return { shell, args: ["-lc", script] };
+  }
+  const exe = resolveBin("pwsh.exe") ?? resolveBin("powershell.exe");
+  if (!exe) {
+    throw new Error("这台 Windows 上找不到 PowerShell(pwsh.exe / powershell.exe)，常用命令无法运行");
+  }
+  return { shell: exe, args: ["-NoLogo", "-EncodedCommand", encodePowerShellCommand(withExitCodeEpilogue(script))] };
+}
+
+/**
+ * 把「最后一条命令的退出码」接出来。`$ok` 必须在任何别的语句之前抓住 `$?` ——
+ * 读晚一句,拿到的就是那句 `if` 自己的成败。
+ */
+function withExitCodeEpilogue(script: string): string {
+  return [
+    "$global:LASTEXITCODE = 0",
+    script,
+    "$ok = $?",
+    "if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+    "if (-not $ok) { exit 1 }",
+    "exit 0",
+  ].join("\n");
 }
 
 export function ptyEnvironment(): Record<string, string> {
