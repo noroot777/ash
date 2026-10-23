@@ -630,3 +630,4 @@ export const handoffLocalKeyRevisions = sqliteTable("handoff_local_key_revisions
 // 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
 export { monitors, monitorPendingCalls, monitorScanCursors, monitorReclaimDebts } from "./schema-monitors.js";
 export { regressionChecks } from "./schema-regression-checks.js";
+export { regressionEvidence } from "./schema-regression-evidence.js";

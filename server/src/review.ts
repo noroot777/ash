@@ -46,7 +46,7 @@ import {
   writeConclusion,
   reviewRoundDir,
 } from "./review-evidence.js";
-import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
+import { regressionSettlementConclusion } from "./regression-settlement.js";
 import { repairPrompt, verifyProtocolFor } from "./review-prompts.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -316,19 +316,14 @@ async function concludeRound(
   outcome: Settlement,
   reviewTaskId: string | null,
   at: { station: string | null; stationRound: number },
+  checked?: { conclusion: ReviewConclusion },
 ): Promise<void> {
   const { station, stationRound } = at;
-  let conclusion = target.stage === "verified" || target.stage === "verify_failed"
-    ? target.stage as ReviewConclusion
-    : null;
-  if (conclusion) {
-    const { revoked } = await refreshRegressionEvidence(target.id, reviewRoundDir(target.id, round));
-    if (conclusion === "verified" && revoked) {
-      conclusion = "verify_failed";
-      await setTaskStage(target.id, conclusion);
-      await appendTaskTimeline(target.id, "验证结算时旧回归复用资格已撤销，本轮不能以旧通过结果验绿。请补跑缺口并更新报告。");
-    }
-  }
+  const result = checked ?? await regressionSettlementConclusion(target.id, reviewRoundDir(target.id, round),
+    target.stage === "verified" || target.stage === "verify_failed" ? target.stage : null);
+  if (!result) return;
+  const { conclusion } = result;
+  if (conclusion === "verify_failed" && target.stage === "verified") await setTaskStage(target.id, conclusion);
   const workflow = taskWorkflowDef(target.workflow);
   const policy = workflowPolicy(workflow, station);
   const action = reviewOutcomeAction({
@@ -416,6 +411,9 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
   // 答复/续跑回来的那一回合仍然是这一轮验证 —— 此时下结论会把「还没验完」记成
   // 「验完了但没给结论」。
   if (target.question || target.resumePrompt) return;
+  const checked = await regressionSettlementConclusion(target.id, reviewRoundDir(target.id, round),
+    target.stage === "verified" || target.stage === "verify_failed" ? target.stage : null);
+  if (!checked) return;
   // verify_rounds 数的是**就地轮次的个数**，不是轮次号：轮次号还要算上历史那批独立
   // 审查任务占掉的号（`nextReviewRound(legacy.length + verifyRounds)`），拿号当计数会
   // 让下一轮跳号。verify_station_rounds 则是「这一站」验过几轮，判定轮数上限用它。
@@ -463,7 +461,7 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
     // 开这一轮时把站号记在了被验任务身上；老数据没有就回落到线上第一站验证。
     station: target.reviewStep ?? firstAnchor(taskWorkflowDef(target.workflow), "verify")?.id ?? null,
     stationRound,
-  });
+  }, checked);
 }
 
 /** 历史做法：独立审查任务跑完之后的收尾。启动路径已经拆掉，这条只服务存量数据。 */

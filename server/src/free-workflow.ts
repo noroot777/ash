@@ -49,7 +49,8 @@ import {
 } from "./free-review-round.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
-import { checkRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
+import { checkRegressionConclusion, recordRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
+import { regressionSettlementConclusion } from "./regression-settlement.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -276,7 +277,7 @@ export async function reconcileFreeReviews(): Promise<void> {
 export async function reportFreeReviewConclusion(
   taskId: string,
   stage: string,
-  opts: { bySessionRecovery?: boolean } = {},
+  opts: { bySessionRecovery?: boolean; verificationBasis?: unknown } = {},
 ): Promise<{ runId: string; round: number } | null> {
   const run = await reviewingRun(taskId);
   if (!run) return null;
@@ -296,10 +297,11 @@ export async function reportFreeReviewConclusion(
   if (!readFreeReviewReport(taskId, run.id, run.currentRound).trim()) {
     throw new Error(`审查结论必须先落报告：请把非空报告写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)} 再上报结论`);
   }
-  await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage,
-    run.targetKind === "accepted_merge");
+  const checked = await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage,
+    run.targetKind === "accepted_merge", opts.verificationBasis);
   await db.update(freeReviewRounds).set({ conclusion: stage })
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
+  await recordRegressionConclusion(checked);
   bus.publish({ type: "task.review", taskId });
   return { runId: run.id, round: run.currentRound };
 }
@@ -427,12 +429,13 @@ export async function handleFreeWorkflowSettlement(
   // 拿它挡住已有结论的审查会让链永远停在 reviewing（审查实测复现）。
   if ((task.question || task.resumePrompt) && !round.conclusion) return true;
   if (round.conclusion) {
-    const { revoked } = await refreshRegressionEvidence(taskId,
-      freeReviewEvidenceDir(taskId, run.id, run.currentRound), run.targetKind === "accepted_merge");
-    if (round.conclusion === "verified" && revoked) {
-      round.conclusion = "verify_failed";
+    const checked = await regressionSettlementConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound),
+      round.conclusion === "verified" || round.conclusion === "verify_failed" ? round.conclusion : null,
+      run.targetKind === "accepted_merge");
+    if (!checked) return true;
+    if (checked.conclusion !== round.conclusion) {
+      round.conclusion = checked.conclusion;
       await db.update(freeReviewRounds).set({ conclusion: round.conclusion }).where(eq(freeReviewRounds.id, round.id));
-      await appendTaskTimeline(taskId, "审查结算时旧回归复用资格已撤销，本轮不能以旧通过结果验绿。请补跑缺口并更新报告。");
     }
   }
   const at = now();

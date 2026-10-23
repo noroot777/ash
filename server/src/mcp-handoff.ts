@@ -36,7 +36,7 @@ import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { confirmTaskComplete } from "./task-complete.js";
 import { setTaskStage } from "./task-stage.js";
-import { checkPresetRegressionConclusion } from "./regression-evidence-lifecycle.js";
+import { checkPresetRegressionConclusion, recordRegressionConclusion } from "./regression-evidence-lifecycle.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
 /** 从输出流里认出来的一次 ash MCP 调用。 */
@@ -201,7 +201,7 @@ async function applyReplay(
     if (sourceRole === "reviewer") {
       const { reportFreeReviewConclusion } = await import("./free-workflow.js");
       try {
-        const freeReview = await reportFreeReviewConclusion(taskId, stage, { bySessionRecovery: true });
+        const freeReview = await reportFreeReviewConclusion(taskId, stage, { bySessionRecovery: true, verificationBasis: call.args.verificationBasis });
         if (freeReview) {
           return `自由审查结论（${stage}）当时因 MCP 通道中断没能写回，已补录到第 ${freeReview.round} 轮。`;
         }
@@ -214,8 +214,9 @@ async function applyReplay(
     const task = (await db.select({ workflowMode: tasks.workflowMode }).from(tasks)
       .where(eq(tasks.id, taskId))).at(0);
     if (task?.workflowMode === "free") return null; // 自由任务不写 preset stage
-    await checkPresetRegressionConclusion(taskId, stage);
+    const checked = await checkPresetRegressionConclusion(taskId, stage, call.args.verificationBasis);
     await setTaskStage(taskId, stage);
+    await recordRegressionConclusion(checked);
     return `验证结论（${stage}）当时因 MCP 通道中断没能写回，已从本回合的调用记录中补录。`;
   }
   if (call.tool === "complete_task") {

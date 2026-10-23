@@ -23,7 +23,6 @@ import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from 
 import { verifyHistorySection } from "./review-history.js";
 import type { Workspace } from "./git.js";
 import { REVIEW_VALIDATION_REQUIREMENT } from "@ash/shared/free-workflow";
-import { regressionEvidenceReference } from "./regression-checks.js";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -104,7 +103,7 @@ export async function verifyProtocolFor(
   const evidenceDir = reviewRoundDir(target.id, round);
   const baseline = comparisonBaseline(target);
   const requirements = await reviewRequestReference(target, evidenceDir);
-  const regression = await regressionEvidenceReference(target, repoPath, evidenceDir);
+  const { reference: regression } = await refreshRegressionEvidence(target.id, evidenceDir);
   // 前面几轮报过的现象行（理由见 review-history.ts 文件头：会话可能被压缩，也可能是
   // 手点的新一轮）。放在验证动作之前，让它先判「我这条是不是上面某条的第 N 个变体」。
   const history = await verifyHistorySection(target.id, round);
@@ -148,7 +147,7 @@ export async function reviewProtocolFor(
   const evidenceDir = reviewRoundDir(target.id, review.reviewRound);
   const baseline = comparisonBaseline(target);
   const requirements = await reviewRequestReference(target, evidenceDir);
-  const regression = await regressionEvidenceReference(target, repoPath, evidenceDir);
+  const { reference: regression } = await refreshRegressionEvidence(target.id, evidenceDir);
   const history = await verifyHistorySection(target.id, review.reviewRound);
   return `【审查任务 · 第 ${review.reviewRound} 轮】\n` +
     `审查对象：${target.id}\n${requirements}\n\n` +

@@ -36,7 +36,9 @@ export async function prepareRegressionCommand(taskId: string, monitorId: string
 
 export async function regressionEvidenceReference(
   task: typeof tasks.$inferSelect, repoPath: string, evidenceDir: string, acceptedMerge = false,
+  verification?: { generation: string; independentRequired: boolean; acceptedMonitorIds: string[] },
 ): Promise<string> {
+  if (acceptedMerge) return "合并结果审查不得复用任务分支的回归结果，必须检查当前合并快照。";
   if (!(await safeRunDirectory(evidenceDir, true))) return "回归证据清单不可用：目录安全检查不通过，禁止复用旧清单，请按缺口补跑。";
   const rows = acceptedMerge ? [] : await db.select().from(regressionChecks).where(eq(regressionChecks.taskId, task.id))
     .orderBy(desc(regressionChecks.generation));
@@ -65,8 +67,7 @@ export async function regressionEvidenceReference(
   const path = join(evidenceDir, "regression-evidence.json");
   if (!(await safeRunDirectory(evidenceDir))) return "回归证据清单不可用：写入前目录安全检查不通过，禁止复用旧清单，请按缺口补跑。";
   await replaceEvidenceFile(path, JSON.stringify({ protocol: 2, inputPolicy: "immutable-closed-inputs-required",
-    taskId: task.id, generatedAt: new Date().toISOString(), acceptedMerge, snapshot, records }, null, 2));
-  if (acceptedMerge) return "合并结果审查不得复用任务分支的回归结果，必须检查当前合并快照。";
+    taskId: task.id, generatedAt: new Date().toISOString(), acceptedMerge, snapshot, records, verification }, null, 2));
   return `执行者回归证据清单：${path}。后端以数据库中的执行者身份、原始命令、真实退出码和代码树为权威，并校验完整日志摘要。` +
     "reusable=true 只表示证据可引用，不代表测试通过；通过必须同时满足 passed=true 且 exitCode=0，失败必须照实报告，不得给通过结论。" +
     "当前 runner 没有不可变且闭合的输入证明，所有记录均禁止自动复用；前后 Git 树相等不构成证明。" +

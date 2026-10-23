@@ -6,7 +6,8 @@ import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { checkPresetRegressionConclusion } from "./regression-evidence-lifecycle.js";
+import { checkPresetRegressionConclusion, recordRegressionConclusion } from "./regression-evidence-lifecycle.js";
+import { RegressionEvidenceUnavailable } from "./regression-conclusion-errors.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -187,8 +188,8 @@ export function mountTaskStageRoutes(api: Hono): void {
   api.post("/tasks/:id/stage", async (c) => {
     const taskId = c.req.param("id");
     const body = await c.req
-      .json<{ stage?: unknown }>()
-      .catch(() => ({}) as { stage?: unknown });
+      .json<{ stage?: unknown; verificationBasis?: unknown }>()
+      .catch(() => ({}) as { stage?: unknown; verificationBasis?: unknown });
     if (!isTaskStage(body.stage)) {
       return c.json({ error: `stage 非法，只能是：${STAGE_ORDER.join(" | ")}` }, 400);
     }
@@ -224,12 +225,12 @@ export function mountTaskStageRoutes(api: Hono): void {
 
     try {
       const { reportFreeReviewConclusion } = await import("./free-workflow.js");
-      const freeReview = await reportFreeReviewConclusion(taskId, body.stage);
+      const freeReview = await reportFreeReviewConclusion(taskId, body.stage, { verificationBasis: body.verificationBasis });
       if (freeReview) {
         return c.json({ reported: true, taskId, stage: body.stage, freeReview, timelineRecorded: false });
       }
     } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof RegressionEvidenceUnavailable ? 503 : 409);
     }
     if (task.workflowMode === "free") {
       return c.json({ error: "自由工作流不使用起手式 stage；请按需派审或预览，完成后从验收页验收" }, 409);
@@ -249,7 +250,7 @@ export function mountTaskStageRoutes(api: Hono): void {
 
     let result;
     try {
-      await checkPresetRegressionConclusion(taskId, body.stage);
+      const checked = await checkPresetRegressionConclusion(taskId, body.stage, body.verificationBasis);
       result = await setTaskStage(
         taskId,
         body.stage,
@@ -257,8 +258,9 @@ export function mountTaskStageRoutes(api: Hono): void {
           ? { token: task.activeTurnToken, directionToken: task.activeDirectionToken }
           : undefined,
       );
+      if (result) await recordRegressionConclusion(checked);
     } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof RegressionEvidenceUnavailable ? 503 : 409);
     }
     if (!result) return c.json({ error: "当前回合已经结束或已被引导，验收阶段未写入" }, 409);
     const { updatedAt, timelineRecorded } = result;

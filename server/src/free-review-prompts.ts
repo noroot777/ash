@@ -15,7 +15,7 @@ import {
 } from "@ash/shared/free-workflow";
 import { CLASS_REPAIR_NOTE, reviewSweepProtocol, reviewSweepReminder } from "./review-sweep.js";
 import { freeReviewHistorySection } from "./review-history.js";
-import { regressionEvidenceReference } from "./regression-checks.js";
+import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
@@ -48,7 +48,7 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     : "";
   const reviewLocation = acceptedMerge ? "当前 detached 临时 worktree" : repoPath;
   const allowReuse = run.targetKind !== "accepted_merge";
-  const regression = await regressionEvidenceReference(task, repoPath, dir, !allowReuse);
+  const { reference: regression } = await refreshRegressionEvidence(task.id, dir, !allowReuse);
   return `【自由工作流 · 第 ${round} 轮审查】\n` +
     // 这里原先写「主动寻找能复现的缺陷」，跟下面扫描义务里的「做不到可复现也不许删掉这一条」
     // 直接打架 —— 同一段 prompt 里两句话冲突，它只能自己挑一个，挑错了没人看得出来。
