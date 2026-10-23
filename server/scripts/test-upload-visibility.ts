@@ -344,14 +344,13 @@ try {
   assert.deepEqual(blindPack.map((u) => u.name), [], "认不出身份就不该带走任何附件");
 
 
-  // ── ⑨ 升级回填:claim_origin 落地前完成的转换(复审 R4,第 9 轮收紧判据) ────
-  // 老库在 claim_origin 这一列存在之前就转过多人:当时统一代管补的 owner 没有标记,
-  // 升级后被当成真私有,可信产物清单(backfillArtifactUploads 只传 {taskId})补不回
-  // 任务归属。ensureSchema 只按**可核实依据**回填:行建于第一位用户建档之前 —— 那时
-  // 「本人上传」无从发生,owner 只可能是转换代管补的;判据不看 owner 是谁、现在什么
-  // 角色(原转换人降职/换届不影响)。建档之后的行与真私有无法区分,保守保密 —— 本地
-  // 时间邻近不是依据:曾按「建档后 60 秒窗口」回填,把管理员 setup 后半分钟的真私有
-  // 上传敞开给了项目成员(第 9 轮审查 R4 隐私回归)。修不回的走 ⑩ 的本人确认出口。
+  // ── ⑨ 升级不回填:证明不了来历的存量行一律按真私有保密(第 10 轮审查 R1) ────
+  // 老库在 claim_origin 这一列存在之前就转过多人:当时统一代管补的 owner 没有标记。曾经两版
+  // 自动回填(建档后 60 秒窗口 → created_at 早于建档线)都被实测攻破 —— 后者默认了这一列
+  // 一直存在,可列本身就是升级 ALTER 补的,老库升级那一刻全部存量行都是 NULL:带回拨时钟
+  // 写入的真私有行当年无从落 'user' 标,与代管行在数据上完全同形(第 10 轮审查 R1 拆列重放:
+  // 升级后私有行被标成 conversion 并对成员敞开)。时间证明不了来历,所以 ensureSchema 不做
+  // 任何回填;确属旧代管的走 ⑩ 的本人确认出口恢复。
   {
     const { backfillArtifactUploads } = await import("../src/uploads.js");
     const firstAt = Math.min(...(await db.select().from(users)).map((u) => Date.parse(u.createdAt)));
@@ -359,29 +358,29 @@ try {
     writeFileSync(join(UPLOADS_DIR, "demoted-mark.txt"), "demoted-mark-body");
     writeFileSync(join(UPLOADS_DIR, "post-mark.txt"), "post-mark-body");
     await db.insert(uploads).values([
+      // 建档线之前的两行:旧判据眼里的「可核实代管」,新语义下照样不可证。
       { file: "pre-mark.txt", ownerUserId: boss.id, taskId: null, claimOrigin: null,
         createdAt: new Date(firstAt - 30_000).toISOString() },
-      // owner 如今只是普通成员(= 原转换人已降职的形态):判据只看建行时间,照样补标。
       { file: "demoted-mark.txt", ownerUserId: bob.id, taskId: null, claimOrigin: null,
         createdAt: new Date(firstAt - 60_000).toISOString() },
-      // 建档后 30 秒:落在旧版 60 秒窗口之内,但不可核实 —— 必须按真私有保密。
       { file: "post-mark.txt", ownerUserId: boss.id, taskId: null, claimOrigin: null,
         createdAt: new Date(firstAt + 30_000).toISOString() },
     ] as never);
     await ensureSchema();
     const origin = async (file: string) => (await db.select().from(uploads).where(eq(uploads.file, file)))[0]!.claimOrigin;
-    assert.equal(await origin("pre-mark.txt"), "conversion", "建于第一位用户之前的代管行升级时补上标记");
-    assert.equal(await origin("demoted-mark.txt"), "conversion", "owner 已非管理员也照补:判据是建行时间,不是现任角色");
-    assert.equal(await origin("post-mark.txt"), null, "建档之后的行不可核实,保守按真私有保密");
-    // 功能面:补了标记的,可信产物清单事后补得回任务归属,项目成员读得到;没补的照旧只认人。
+    assert.equal(await origin("pre-mark.txt"), null, "建档线之前的行也不回填:时间证明不了来历");
+    assert.equal(await origin("demoted-mark.txt"), null, "换个 owner 一样不回填");
+    assert.equal(await origin("post-mark.txt"), null, "建档之后的行照旧保密");
+    // 可信产物清单只认显式 'conversion' 标:无标记行不补 taskId,也就不进项目轴。
     await backfillArtifactUploads("t-legacy", ["pre-mark.txt", "demoted-mark.txt", "post-mark.txt"].map((f) => join(UPLOADS_DIR, f)));
-    assert.equal((await get("pre-mark.txt", AS_ALICE)).text, "pre-mark-body", "回填标记后老任务产物对项目成员可见");
-    assert.equal((await get("demoted-mark.txt", AS_ALICE)).text, "demoted-mark-body", "降职转换人名下的旧代管图同样恢复可见");
-    assert.equal((await get("post-mark.txt", AS_ALICE)).status, 404, "真私有不因产物清单引用而敞开");
-    assert.equal((await get("post-mark.txt", AS_BOSS)).text, "post-mark-body", "本人照常读得到");
-    // 幂等:再跑一遍 ensureSchema,已打标记/已豁免的行都不再变动。
-    await ensureSchema();
-    assert.equal(await origin("post-mark.txt"), null, "重复升级不扩大可核实依据");
+    for (const file of ["pre-mark.txt", "demoted-mark.txt", "post-mark.txt"]) {
+      assert.equal((await db.select().from(uploads).where(eq(uploads.file, file)))[0]!.taskId, null, `${file} 无标记不绑任务`);
+      assert.equal((await get(file, AS_ALICE)).status, 404, `${file} 不对项目成员敞开`);
+    }
+    assert.equal((await get("pre-mark.txt", AS_BOSS)).text, "pre-mark-body", "保密只对别人:本人照常读得到");
+    // 确属旧代管的恢复路径 = ⑩ 的同一出口:行的归属人自己确认,跟着任务对项目可见。
+    assert.equal((await call("/api/uploads/pre-mark.txt/claim", "POST", AS_BOSS, { taskId: "t-legacy" })).status, 200, "本人确认是老代管行唯一的恢复出口");
+    assert.equal((await get("pre-mark.txt", AS_ALICE)).text, "pre-mark-body", "确认后项目成员读得到");
   }
 
   // ── ⑩ 修复出口:证明不了的由**本人**确认所属任务(POST /uploads/:file/claim) ──
@@ -423,10 +422,10 @@ try {
   }
 
   // ── ⑪ 写入时记来历:时钟伪造不进授权面;确认出口的并发与畸形请求体(第 9 轮复审第 2 轮 R4/N8/N9) ──
-  // ⑨ 的升级扫描每次启动都会跑,判据是墙上时钟(created_at 早于建档):时钟回拨/跨机导入
-  // 能把**新写的私有行**推到建档线之前,下一次扫描就把它当旧代管敞开。所以写入侧声明了
-  // owner 的行落盘即 claim_origin='user',扫描的 `claim_origin IS NULL` 只剩打标机制之前的
-  // 历史行能命中 —— 时钟说什么都影响不了新行的隐私。
+  // 「只认显式标记」的另一半在写入侧:声明了 owner 的行落盘即 claim_origin='user',新行的
+  // 来历从此可证,证明不了的 NULL 只会是打标机制之前的历史行,不随时间越积越多。时钟回拨/
+  // 跨机导入把登记时刻推到建档线之前也改变不了什么 —— 授权面上没有任何按时间推断的路径
+  // (⑨ 的回填扫描已整个删除),行上的 'user' 标又把它与历史无标记行区分得开。
   {
     const { registerUpload, repairUploadClaim, backfillArtifactUploads } = await import("../src/uploads.js");
     const firstUserAt = Math.min(...(await db.select().from(users)).map((u) => Date.parse(u.createdAt)));
@@ -448,7 +447,7 @@ try {
     await ensureSchema();
     await backfillArtifactUploads("t-legacy", [join(UPLOADS_DIR, "clock-step.txt")]);
     const scanned = (await db.select().from(uploads).where(eq(uploads.file, "clock-step.txt")))[0]!;
-    assert.deepEqual([scanned.claimOrigin, scanned.taskId], ["user", null], "升级扫描不碰带来历的行,产物清单也补不走");
+    assert.deepEqual([scanned.claimOrigin, scanned.taskId], ["user", null], "写入时记下的来历如实保留,产物清单也补不走");
     assert.equal((await get("clock-step.txt", AS_ALICE)).status, 404, "时钟回拨写下的私有上传对成员保持 404");
     assert.equal((await get("clock-step.txt", AS_BOSS)).text, "clock-step-body", "本人照常读得到");
     // 后补 owner 的空位路径同样记来历。

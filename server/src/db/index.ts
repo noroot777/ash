@@ -610,31 +610,16 @@ export async function ensureSchema() {
       /* column already exists */
     }
   }
-  // claim_origin 落地**之前**就完成的自用→多人转换:当时统一代管的行没有标记,升级后仍被
-  // 当成真私有,可信产物清单也补不回任务归属(审查第 8 轮复审 R4)。自动补标只认**可核实
-  // 的依据**:行建于第一位用户建档之前(created_at 早于 MIN(users.created_at))。那时实例
-  // 里还没有任何实名用户,「本人上传」无从发生,行上却有 owner —— 这个 owner 只可能是转换
-  // 统一代管补上的(claimExistingUploads 给存量孤儿行补 owner 不改 created_at)。这条判据
-  // 不看 owner 是谁、更不看他现在什么角色,原转换人降职、换届、销号都不影响。反过来,
-  // 「本地时间邻近 + owner 是现任管理员」不是依据:建档后 60 秒内的真私有上传会被误标成
-  // 可共享代管(隐私回归),降职的原转换人名下的旧代管行又永远补不上(第 9 轮审查 R4
-  // 两例实测,替换掉的就是那版窗口 SQL)。转换当时**新建**的行(created_at 即转换时刻,
-  // 不早于建档)与真私有无法区分,保守保密,走 POST /uploads/:file/claim 的本人确认出口
-  // (uploads.ts repairUploadClaim)。幂等:打过标记的不再命中;ISO-8601 字符串可按字典序比。
-  //
-  // 这条扫描每次 ensureSchema 都会跑(转换可能发生在任意一次启动之后),于是判据对**新写
-  // 的行**也必须成立 —— 可墙上时钟保证不了:时钟回拨/跨机导入能把登记时刻推到建档线之前,
-  // 本人刚传的私有文件就会被当成旧代管敞开(第 9 轮复审第 2 轮 R4 clock-step 实测)。所以
-  // 写入侧把来历记死:registerUpload 凡声明 owner 的行落盘即 claim_origin='user',这里的
-  // `claim_origin IS NULL` 就只剩「打标机制存在之前写下的行」能命中 —— 那批行的 created_at
-  // 是当年如实记的,时钟伪造不进历史。残余窄缝只剩打标上线前就带着回拨时钟写入的存量行。
-  try {
-    await client.execute(
-      "UPDATE uploads SET claim_origin = 'conversion' WHERE claim_origin IS NULL AND task_id IS NULL AND owner_user_id IS NOT NULL AND created_at < (SELECT MIN(created_at) FROM users)",
-    );
-  } catch {
-    /* users 表还没建(全新库):没有历史转换可修 */
-  }
+  // claim_origin **没有任何回填扫描** —— 这是刻意的。曾按「created_at 早于
+  // MIN(users.created_at)」把无标记行补成 'conversion'(第 9 轮复审 R4),但那条判据默认了
+  // claim_origin 列一直存在;列本身就是上面那串容错 ALTER 补出来的,老库(列还没出生的版本)
+  // 升级那一刻全部存量行都是 NULL —— 其中带回拨时钟写入的真私有行,当年打标机制不存在、
+  // 'user' 戳无从落下,与转换代管行在数据上完全同形(第 10 轮审查 R1 拆列重放实测:升级后
+  // 私有行被标成 conversion,可信产物清单一补 taskId 就对项目成员敞开)。时间证明不了来历,
+  // NULL 也不等于 conversion。所以共享资格只认**写入时刻记死的显式标记**:claimExistingUploads
+  // 统一代管时落 'conversion',registerUpload 本人上传落 'user';证明不了来历的存量行一律按
+  // 真私有保守处理,确属旧转换代管的走 POST /uploads/:file/claim 的本人确认出口
+  // (uploads.ts repairUploadClaim)补归属。
   // **必须排在上面那串容错 ALTER 之后**：这条索引引用 `native_id`，而老库那一列是靠
   // ALTER 补上的。放进上面的建表块里会要了命——`CREATE TABLE IF NOT EXISTS` 对已存在的
   // 表什么都不做（不补列），索引紧接着引用一个还不存在的列，整个 executeMultiple 抛出，
