@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gateTreeAlive, spawnAcceptGate, stopAcceptGate } from "../src/accept-gate-process.js";
 import { readGateLaunch } from "../src/accept-gate-launch.js";
+import { isPidAlive } from "../src/platform.js";
 
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 async function until(predicate: () => boolean): Promise<void> {
@@ -38,9 +39,13 @@ if (process.argv[2] === "child") {
   fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
   setInterval(() => fs.appendFileSync(${JSON.stringify(pulseFile)}, "pulse\\n"), 40);
 } else {
-  const child = spawn(process.execPath, [__filename, "child"], { stdio: "ignore" });
+  const child = spawn(process.execPath, [__filename, "child"], {
+    stdio: "ignore", detached: process.platform === "win32", windowsHide: true
+  });
   child.unref();
-  ${mode === "normal" ? "setInterval(() => {}, 1000);" : "process.exit(0);"}
+  ${mode === "normal" ? "setInterval(() => {}, 1000);" : `setInterval(() => {
+    if (fs.existsSync(${JSON.stringify(pulseFile)})) process.exit(0);
+  }, 10);`}
 }
 `);
     let exited = false;
@@ -50,6 +55,11 @@ if (process.argv[2] === "child") {
       await until(() => existsSync(pidFile) && existsSync(pulseFile));
       if (mode !== "normal") await until(() => exited);
       const childPid = Number(readFileSync(pidFile, "utf8"));
+      const leaderAliveBeforeStop = isPidAlive(started.pid);
+      assert.equal(leaderAliveBeforeStop, mode === "normal");
+      assert.equal(isPidAlive(childPid), true);
+      const pulseBefore = readFileSync(pulseFile, "utf8");
+      await until(() => readFileSync(pulseFile, "utf8") !== pulseBefore);
       assert.equal(gateTreeAlive(started.pid, started.startedAt, logPath), true);
       let stopped: boolean;
       if (mode === "reopen") {
@@ -69,7 +79,7 @@ if (process.argv[2] === "child") {
       assert.equal(readFileSync(pulseFile, "utf8"), pulse, "停止返回后后代不能继续写文件");
       assert.equal(readGateLaunch(logPath)?.phase, "stopped");
       assert.equal(gateTreeAlive(started.pid, started.startedAt, logPath), false);
-      results.push({ mode, pid: started.pid, childPid, stopped, childStillWriting: false });
+      results.push({ mode, pid: started.pid, childPid, leaderAliveBeforeStop, stopped, childStillWriting: false });
     } finally {
       assert.equal(await stopAcceptGate("process-test", started.pid, started.startedAt, logPath), true);
     }
