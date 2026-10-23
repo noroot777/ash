@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { ArrowClockwise, ArrowUUpLeft, CheckCircle, FileText, PencilSimple, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
-import type { AcceptGateView } from "@ash/shared/accept-gate";
+import type { AcceptGateBasis, AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
 import { ACCEPT_GATE_STATUS_LABELS, summarizeAcceptGate } from "@ash/shared/accept-gate";
 import type { Task, TaskListItem } from "@ash/shared";
 import { isFinalHumanGate } from "@ash/shared/workflow-policy";
-import { api, type AcceptGateState } from "../lib/api.ts";
+import { api } from "../lib/api.ts";
 import { useAcceptGate } from "./useAcceptGate.ts";
 
 // 「验收前置命令」在验收台上的那张卡。它跟 PendingMergeCard 一样住在每个有验收动作的
@@ -31,9 +31,11 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   onIntent: (intent: "rerun" | "skip", latest: AcceptGateView | null) => void;
   disabled?: boolean;
 }) {
-  const { state, error, running, latest, runningFor, reload } = useAcceptGate(task.id);
+  const { state, error, running, latest, basis, runningFor, reload } = useAcceptGate(task.id);
   const [busy, setBusy] = useState(false);
-  const [log, setLog] = useState<string | null>(null);
+  // 全文按**哪一次**缓着：切任务、或者同一个任务又跑了一次之后，上一次的全文不能接着
+  // 摆在那儿（标题写的是新的那条路径，正文却是旧的 —— 第 1 轮审查不拦项 2）。
+  const [log, setLog] = useState<{ runId: string; text: string } | null>(null);
   // null = 还没读到这个项目的管理权限。读到之前不摆「改这条命令」——摆一颗必然 403 的
   // 按钮，点的人只会以为是自己点坏了（同 ProjectSettingsPanel 那一屏的两副面孔）。
   const [canManage, setCanManage] = useState<boolean | null>(null);
@@ -56,16 +58,45 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   // 没设、也没跑过：只有能改它的人才看得到这张卡（那时它是一个入口）；改不了的人看到的
   // 是一句跟自己无关的话，纯噪音。
   const idle = !!state && !state.command && !latest;
-  if (!state) return null;
-  if (idle && (!canManage || !atFinalGate || settled)) return null;
-  if (!latest && !atFinalGate) return null;
-  // 命令已经撤掉了：这一按就是直接合并，再摆「重跑 / 这次跳过」只会让人以为门禁还拦着。
-  // （正在跑的那一条照常显示——它是真的还在跑，收不收得掉是用户现在就要知道的事。）
-  // **验收已经做完的除外**：那时这张卡是回执不是关口，撤没撤掉命令都该把跑过什么留在那儿。
-  if (!state.command && !running && latest && !settled) return null;
   // 验收做完之后这张卡**留着**（用户 2026-10-23 指定）：它换成一张只读回执 —— 跑过没有、
   // 什么结果、日志在哪。原先在盖章那一刻整个消失，于是「通过了」和「我明确跳过了那条红」
   // 在界面上长得一模一样，而两者的区别恰恰是这次合并到底有没有凭据。
+  //
+  // 回执**只认这一按自己的凭据**（`basis`），绝不拿「最近一次门禁」反推（第 1 轮审查
+  // F1 实测：命令在 A 上跑绿、代码改成 B、项目再撤掉命令，那时「最近一次」仍是那条绿的，
+  // 而真正放行的理由是「现在没有门禁」—— 照最近那次说话就是给一份从没测过的代码背书）。
+  const receipt = settled && !running ? basis : null;
+  // 状态读不出来时**先把这件事说出来**：从前这里直接 return null，于是一次 500 之后页面
+  // 上什么都没有，看起来就跟「没设门禁」一样（第 1 轮审查不拦项 3）。
+  if (!state) {
+    if (!error) return null;
+    return (
+      <section className="accept-gate-card" aria-label="验收前置命令">
+        <header>
+          <span><WarningCircle size={14} weight="fill" /></span>
+          <div>
+            <b>验收前置命令的状态读不出来</b>
+            <p role="alert">{error}。这不等于「没有命令在跑」—— 点一下刷新再看。</p>
+          </div>
+          <button type="button" className="pending-merge-refresh" disabled={busy} onClick={() => void reload()}>
+            <ArrowClockwise size={12} aria-hidden="true" />刷新
+          </button>
+        </header>
+      </section>
+    );
+  }
+  if (settled && !running) {
+    // 凭据和历史都没有：这一按没什么可回执的（从来没设过门禁的任务就落在这儿）。
+    if (!receipt && !latest) return null;
+  } else {
+    if (idle && (!canManage || !atFinalGate)) return null;
+    if (!latest && !atFinalGate) return null;
+    // 命令已经撤掉了：这一按就是直接合并，再摆「重跑 / 这次跳过」只会让人以为门禁还拦着。
+    // （正在跑的那一条照常显示——它是真的还在跑，收不收得掉是用户现在就要知道的事。）
+    if (!state.command && !running && latest) return null;
+  }
+  // 卡上摆的是哪一次：正在跑的 > 本次凭据那一次 > 最近一次（最后这种只作历史，措辞里说破）。
+  const shown = running ?? receipt?.run ?? latest;
 
   const cancel = async () => {
     if (busy || !running) return;
@@ -96,10 +127,10 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
     }
   };
   const openLog = async () => {
-    if (busy) return;
+    if (busy || !shown) return;
     setBusy(true);
     try {
-      setLog(await api.acceptGateLog(task.id));
+      setLog({ runId: shown.id, text: await api.acceptGateLog(task.id, shown.id) });
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -133,29 +164,37 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   // 红表示「现在有东西拦着你」，而这时什么都没拦着，只是那条红没人修。
   const tone = running
     ? "is-running"
-    : !latest ? ""
-      : latest.status === "passed" ? (settled || !latest.stale ? "is-passed" : "")
-        : settled ? "is-skipped"
-          : latest.status === "failed" ? "is-failed" : "";
+    : receipt
+      // 回执的调子只由凭据决定：通过是绿的；明确跳过是琥珀（红表示「现在有东西拦着你」，
+      // 而这时什么都没拦着，只是那条红没人修）；那一刻没设门禁则是中性的一句陈述。
+      ? receipt.mode === "passed" ? "is-passed" : receipt.mode === "skipped" ? "is-skipped" : ""
+      : settled ? ""
+        : !latest ? ""
+          : latest.status === "passed" ? (!latest.stale ? "is-passed" : "")
+            : latest.status === "failed" ? "is-failed" : "";
   return (
     <section className={`accept-gate-card ${idle ? "is-idle" : tone}`} aria-label="验收前置命令">
       <header>
         <span>{running
           ? <SpinnerGap size={14} className="is-spinning" />
-          : latest?.status === "passed"
-            ? <CheckCircle size={14} weight="fill" />
-            : latest?.status === "failed" || (settled && latest)
+          : receipt
+            ? receipt.mode === "passed" ? <CheckCircle size={14} weight="fill" /> : <WarningCircle size={14} weight="fill" />
+            : settled
               ? <WarningCircle size={14} weight="fill" />
-              : latest
-                ? <XCircle size={14} />
-                : <FileText size={14} />}
+              : latest?.status === "passed"
+                ? <CheckCircle size={14} weight="fill" />
+                : latest?.status === "failed"
+                  ? <WarningCircle size={14} weight="fill" />
+                  : latest
+                    ? <XCircle size={14} />
+                    : <FileText size={14} />}
         </span>
         <div>
-          <b>{idle ? "这个项目没设验收前置命令" : heading(state, running, latest, settled, runningFor)}</b>
+          <b>{idle ? "这个项目没设验收前置命令" : heading(state, running, latest, receipt, settled, runningFor)}</b>
           <p>{idle
             ? "设一条之后，点「验收通过」会先在任务工作区里跑它，rc=0 才合并 ——「进 main 之前跑一次全量回归」这类事就不用靠人记着哪一轮是最后一轮了。"
-            : detail(state, running, latest, settled)}</p>
-          {error && <p role="alert">状态读取失败：{error}</p>}
+            : detail(state, running, latest, receipt, settled)}</p>
+          {error && <p role="alert">状态读取失败：{error}（下面这份可能已经不是最新的）</p>}
         </div>
         {!idle && !settled && (
           <button type="button" className="pending-merge-refresh" disabled={busy} onClick={() => void reload()}>
@@ -163,10 +202,10 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
           </button>
         )}
       </header>
-      {(running ?? latest)?.logTail && (
+      {shown?.logTail && (
         <div className="accept-gate-log">
-          <span>日志末尾</span>
-          <pre>{(running ?? latest)!.logTail}</pre>
+          <span>日志末尾{receipt?.run ? "（本次验收凭据那一次）" : settled ? "（历史记录，不是本次凭据）" : ""}</span>
+          <pre>{shown.logTail}</pre>
         </div>
       )}
       {draft !== null && (
@@ -214,7 +253,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
                 <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次" : "交给智能体去修"}
               </button>
             )}
-            {(running ?? latest) && (
+            {shown && (
               <button type="button" disabled={busy} onClick={() => void openLog()}><FileText size={13} />看完整日志</button>
             )}
             {/* 正在跑的时候不给改：这一次用的是开跑时那条命令原文，改了也不作数，
@@ -229,10 +268,10 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
           </>
         )}
       </div>
-      {log !== null && (
+      {log !== null && log.runId === shown?.id && (
         <div className="accept-gate-log is-full">
-          <span>完整日志（{(running ?? latest)?.logPath}）<button type="button" onClick={() => setLog(null)}>收起</button></span>
-          <pre>{log || "（日志为空）"}</pre>
+          <span>完整日志（{shown.logPath}）<button type="button" onClick={() => setLog(null)}>收起</button></span>
+          <pre>{log.text || "（日志为空）"}</pre>
         </div>
       )}
     </section>
@@ -243,14 +282,20 @@ function heading(
   state: AcceptGateState,
   running: AcceptGateView | null,
   latest: AcceptGateView | null,
+  receipt: AcceptGateBasis | null,
   settled: boolean,
   runningFor: string | null,
 ): string {
   if (running) return `验收前置命令正在跑（已经 ${runningFor}）`;
+  // 已经盖过章了：这张卡是回执，说的是**这一按当初拿什么放的行**。stale 在这儿一概不
+  // 参与 —— 「现在这棵树变了」对一次已经合完的验收毫无意义。
+  if (receipt) {
+    if (receipt.mode === "passed") return "这次合并前，验收前置命令通过了";
+    if (receipt.mode === "skipped") return "这次跳过了验收前置命令";
+    return "这次合并没有经过验收前置命令";
+  }
+  if (settled) return "这次验收没有留下门禁凭据";
   if (!latest) return "这个项目设了验收前置命令";
-  // 已经盖过章了：这张卡是回执。stale 在这儿一概不参与 —— 「现在这棵树变了」对一次
-  // 已经合完的验收毫无意义，说出来只会让人以为合进去的那一份有问题。
-  if (settled) return latest.status === "passed" ? "这次合并前，验收前置命令通过了" : "这次跳过了验收前置命令";
   if (latest.status === "passed") {
     if (!latest.stale) return "验收前置命令已通过";
     return latest.command !== state.command ? "上次通过的不是现在这条命令" : "上次通过的不是现在这棵树";
@@ -262,22 +307,23 @@ function detail(
   state: AcceptGateState,
   running: AcceptGateView | null,
   latest: AcceptGateView | null,
+  receipt: AcceptGateBasis | null,
   settled: boolean,
 ): string {
   if (running) {
     return `\`${running.command}\`（在 ${running.cwd}）。rc=0 才会继续合并：绿了这次验收会自动做完，`
       + "不用再点；红了会把日志交回这个任务的智能体去修，目标分支一个字节都不会动。";
   }
-  if (!latest) return `点「验收通过」时会先在任务工作区里跑一遍 \`${state.command}\`，rc=0 才合并。`;
+  if (receipt) return receiptDetail(receipt, state, latest);
   if (settled) {
-    const tree = latest.sourceCommit ? `验的是 ${latest.sourceCommit.slice(0, 8)}。` : "";
-    if (latest.status === "passed") return `${summarizeAcceptGate(latest)}。${tree}这次合并就是拿它放的行。`;
-    // 没通过却合进去了，只有一条路到得了这儿：你在验收时明确选了跳过。命令后来被撤掉
-    // 的那种也落在这里，所以那一句要分开说 —— 否则会读成「跳过的是现在这条」。
-    return `${summarizeAcceptGate(latest)}。${tree}这次验收没有重跑它、也没有它通过的记录，`
-      + `合并是你明确选的 —— 那条红没有人修过。`
-      + (state.command ? "" : "（这个项目之后撤掉了验收前置命令。）");
+    // 凭据是后来才开始记的。老数据只能如实说「不知道」—— 拿「最近一次」替它背书，正是
+    // 第 1 轮审查实测出来的那条假回执。
+    return "这次验收是在 ash 开始记「这一按拿什么放的行」之前做的，所以查不到凭据。"
+      + (latest
+        ? `这个任务名下最近一次执行记录是「${summarizeAcceptGate(latest)}」，但它并不能证明这次合并前跑过它。`
+        : "");
   }
+  if (!latest) return `点「验收通过」时会先在任务工作区里跑一遍 \`${state.command}\`，rc=0 才合并。`;
   if (latest.status === "passed") {
     if (!latest.stale) return `${summarizeAcceptGate(latest)}。代码和命令都没再改过，所以这次验收不会重跑它。`;
     // 「不作数了」有两种，出路一样但原因完全不同，说错一种用户会去查错的地方。
@@ -296,4 +342,27 @@ function detail(
         : "日志已经交回这个任务的智能体去修了。";
   return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${handoff}`
     + (latest.status === "failed" ? "改完再点验收会自动重跑；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
+}
+
+/** 已验收那张回执的正文：只陈述**本次验收那一按**的凭据，历史一律标清「不是凭据」。 */
+function receiptDetail(receipt: AcceptGateBasis, state: AcceptGateState, latest: AcceptGateView | null): string {
+  if (receipt.mode === "passed") {
+    const run = receipt.run;
+    // 凭据在、但记录被归档清理带走了：只剩「是拿一次跑绿放的行」这件事本身，说到这儿为止。
+    if (!run) return "这一按是拿一次真的跑绿放的行，但那一次的执行记录已经不在了（归档清理），所以没有日志可查。";
+    return `${summarizeAcceptGate(run)}。${run.sourceCommit ? `验的是 ${run.sourceCommit.slice(0, 8)}，` : ""}`
+      + "这次合并就是拿它放的行。"
+      + (run.fastForward === false && run.targetBranch
+        ? `（当时 ${run.targetBranch} 已经领先于这棵树，所以它验的是任务分支那一棵，不是最终的合并结果。）`
+        : "");
+  }
+  if (receipt.mode === "skipped") {
+    return "这次验收明确跳过了验收前置命令：ash 没有跑它，也没有任何它通过的证据，合并是你明确选的。"
+      + (latest?.status === "failed" ? `这个任务名下最近一次是红的（${summarizeAcceptGate(latest)}），那条红没有人修过。` : "");
+  }
+  // unset：那一刻这个项目根本没有这一关。后来又设了一条的话必须说破 —— 否则用户看着
+  // 卡上那条命令，会读成「这次是跑了它才合的」。
+  return "那一刻这个项目没有设验收前置命令，所以这一按直接合了 —— 合并前没有跑过任何命令。"
+    + (state.command ? `（这个项目后来设了 \`${state.command}\`，但它不是这次合并的凭据。）` : "")
+    + (latest ? `下面那条是这个任务名下最近一次执行记录，同样不是这次验收的凭据。` : "");
 }

@@ -1,0 +1,126 @@
+/* ── 行首那颗状态圆点 ───────────────────────────────────────────────────────────
+   两套类名、同一件事:侧栏/任务树那颗(.workspace-status-dot)和团队页那颗
+   (.team-status-dot)。档位语义的单点在 web/src/lib/useTaskReadState.ts 的
+   deriveTaskStatusIndicator —— 这里只负责长什么样,**两套必须一起改**:同一个档位在
+   两处颜色不同,等于告诉用户它们是两回事。
+
+   从 task-tree.css / team.css 里拆出来独立成文,是因为那两份都已经顶到单文件 700 行
+   (项目硬约束),而圆点本来就是一个自洽的概念:七个档位 + 一个呼吸动画 + 降级动效,
+   动画关键帧还是两套类名共用的。 */
+.workspace-status-dot {
+  box-sizing: border-box;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  font-style: normal;
+}
+
+.workspace-status-dot--small {
+  width: 5px;
+  height: 5px;
+  flex-basis: 5px;
+}
+
+.workspace-status-dot--quiet {
+  border: 1px solid color-mix(in lch, var(--faint) 72%, transparent);
+  background: transparent;
+}
+
+.task-status-dot-icon {
+  display: none;
+}
+
+.workspace-status-dot--pending {
+  width: 10px;
+  height: 10px;
+  flex-basis: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.workspace-status-dot--pending.workspace-status-dot--small {
+  width: 7px;
+  height: 7px;
+  flex-basis: 7px;
+}
+
+.workspace-status-dot--pending .task-status-dot-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.workspace-status-dot--active {
+  background: var(--muted);
+  animation: task-status-dot-pulse 1.35s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+
+.workspace-status-dot--attention { background: var(--amber); }
+/* 「等一件会自己回来的事」（挂着哨兵、验收前置命令正在跑）：同一种黄，但会呼吸。
+   呼吸在这套界面里只给「正在动」的点用（见下面 --active），所以静止的黄仍然只表示
+   「等你说话」，两者一眼分得开，也不用再多造一种颜色。 */
+.workspace-status-dot--working {
+  background: var(--amber);
+  animation: task-status-dot-pulse 1.35s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+/* 未验收 = 干完了但还没盖章：靛蓝空心环。空心是刻意的 —— 实心点在这套界面里表示
+   「系统替你记的状态」，环表示「等你动手」，一眼能跟绿色的完成点分开。 */
+.workspace-status-dot--unaccepted {
+  border: 1.5px solid var(--accent);
+  background: color-mix(in lch, var(--accent) 16%, transparent);
+}
+.workspace-status-dot--unaccepted.workspace-status-dot--small { border-width: 1px; }
+.workspace-status-dot--success {
+  border: 0;
+  background: var(--green);
+}
+.workspace-status-dot--error { background: var(--red); }
+
+@keyframes task-status-dot-pulse {
+  0%, 100% {
+    opacity: 0.68;
+    transform: scale(0.84);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+}
+
+/* 降级动效:两套类名的「会动的那两档」一起关掉(从前这一条分住两个文件,改一处漏一处)。 */
+@media (prefers-reduced-motion: reduce) {
+  .workspace-status-dot--active,
+  .workspace-status-dot--working,
+  .team-status-dot--active,
+  .team-status-dot--working {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.team-status-dot { display: inline-block; box-sizing: border-box; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; font-style: normal; }
+.team-status-dot--pending { border: 1px dashed var(--muted); background: transparent; }
+.team-status-dot--active { background: var(--muted); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
+.team-status-dot--attention { background: var(--amber); }
+/* 同 .workspace-status-dot--working：静止黄=等你说话，呼吸黄=等一件会自己回来的事。 */
+.team-status-dot--working { background: var(--amber); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
+.team-status-dot--unaccepted { border: 1.5px solid var(--accent); background: color-mix(in lch, var(--accent) 16%, transparent); }
+.team-status-dot--success { background: var(--green); }
+.team-status-dot--error { background: var(--red); }
+.team-status-dot--pending.task-status-dot--has-icon {
+  width: 10px;
+  height: 10px;
+  flex-basis: 10px;
+  border: 0;
+  color: var(--muted);
+}
+.team-status-dot--pending .task-status-dot-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

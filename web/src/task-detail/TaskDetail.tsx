@@ -552,7 +552,14 @@ export function TaskDetail({
                           // 验收前置命令那一条:点了验收之后它在工作区里跑十几分钟,而
                           // 任务本身 status/stage 一个字都不变 —— 不摆在这儿,主会话页
                           // 上就完全看不出有东西在跑(时间轴那行很快被顶走)。
-                          gateWait={<AcceptGateWaitCard key={task.id} taskId={task.id} notify={notify} />}
+                          gateWait={(
+                            <AcceptGateWaitCard
+                              key={task.id}
+                              taskId={task.id}
+                              expected={!!task.acceptGateRunning}
+                              notify={notify}
+                            />
+                          )}
                           onHandoff={() => onHandoff?.(task)}
                           notify={notify}
                         />

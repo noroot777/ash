@@ -423,8 +423,11 @@ export const api = {
   },
   acceptGate: (taskId: string): Promise<AcceptGateState> => request(`/tasks/${id(taskId)}/accept-gate`),
   // 整份日志单独取：状态接口每隔几秒拉一次，几十 MB 的回归输出不能搭在它上面。
-  acceptGateLog: async (taskId: string): Promise<string> => {
-    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept-gate/log`));
+  // runId 指定某一次（已验收那张回执看的是**凭据那一次**，不是最近一次）。
+  acceptGateLog: async (taskId: string, runId?: string): Promise<string> => {
+    const response = await fetch(apiPath(
+      `/tasks/${id(taskId)}/accept-gate/log${runId ? `?run=${encodeURIComponent(runId)}` : ""}`,
+    ));
     if (!response.ok) throw apiError(response, await parseBody(response));
     return await response.text();
   },

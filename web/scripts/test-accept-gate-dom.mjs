@@ -21,6 +21,11 @@ import { createServer } from "vite";
 // ⑧ **验收做完之后这张卡留着**（用户 2026-10-23）：它换成一张只读回执。原先在盖章那一
 //    刻整个消失，于是「门禁通过了」和「我明确跳过了那条红」在界面上长得一模一样 ——
 //    而两者的区别恰恰是这次合并到底有没有凭据。
+// ⑨ 回执**只认这一按自己的凭据**（`basis`），绝不拿「最近一次门禁」反推（第 1 轮审查
+//    F1 实测出一份假回执：命令在 A 上跑绿、代码改成 B、项目再撤掉命令，那时「最近一次」
+//    仍是那条绿的，而真正放行的理由是「现在没有门禁」）。
+// ⑩ 并发读取只有**最后发出**的那一次能落地（第 1 轮审查 F3）：迟到的旧响应会把已经结束
+//    的那次又写回「正在跑」，而此后没有任何事件会来纠正它。
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
@@ -52,6 +57,9 @@ const run = (over = {}) => ({
   ...over,
 });
 
+/** 已验收那张回执的凭据。`passed` 要指着真的跑绿的那一次，不是「最近一次」。 */
+const basis = (mode, runRow = null) => ({ mode, run: runRow });
+
 let browser;
 try {
   await server.listen();
@@ -61,9 +69,11 @@ try {
 
   browser = await chromium.launch(await chromeLaunchOptions());
 
-  const open = async ({ gate, role = "admin", query = "", command } = {}) => {
+  // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
+  // 带 delay（响应体迟到多久）或 status（直接给个 500）。不给就一直回 store.gate。
+  const open = async ({ gate, role = "admin", query = "", command, states } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
-    const store = { patches: [], canceled: 0, handoffs: 0, command: command === undefined ? gate.command ?? null : command, gate };
+    const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, command: command === undefined ? gate.command ?? null : command, gate };
     // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件，挂一条空流免得它反复重连。
     await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
     await page.route("**/api/projects", (route) =>
@@ -84,7 +94,13 @@ try {
       store.gate = { ...store.gate, latest: { ...store.gate.latest, handoff: { at: new Date().toISOString(), error: null } } };
       return json(route, { handedOff: true, gate: store.gate.latest });
     });
-    await page.route("**/api/tasks/gate-task/accept-gate", (route) => json(route, store.gate));
+    await page.route("**/api/tasks/gate-task/accept-gate", async (route) => {
+      const plan = states?.[store.reads] ?? null;
+      store.reads += 1;
+      if (plan?.delay) await new Promise((resolve) => setTimeout(resolve, plan.delay));
+      if (plan?.status) return json(route, { error: "数据库忙" }, plan.status);
+      return json(route, plan?.body ?? store.gate);
+    });
     await page.goto(`${base}${query}`);
     return { page, store };
   };
@@ -233,10 +249,15 @@ try {
     await page.close();
   }
 
-  // ⑩ 已经验收完、门禁通过：卡**留着**当回执（用户 2026-10-23），但只读 —— 不再摆任何
-  //    会改变状态的按钮（重跑/跳过/交给智能体/改这条命令/刷新），只留「看完整日志」。
+  // ⑩ 已经验收完、而且这一按**真的是拿一次跑绿放的行**：卡留着当回执（用户 2026-10-23），
+  //    但只读 —— 不再摆任何会改变状态的按钮（重跑/跳过/交给智能体/改这条命令/刷新），
+  //    只留「看完整日志」。
   {
-    const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run() }, query: "?stage=accepted" });
+    const evidence = run();
+    const { page } = await open({
+      gate: { command: "./kb.sh test full", running: null, latest: evidence, basis: basis("passed", evidence) },
+      query: "?stage=accepted",
+    });
     const card = page.locator(".accept-gate-card");
     await card.waitFor();
     assert.match(await card.innerText(), /验收前置命令通过了/, "盖完章也得留下「这次是拿什么放的行」");
@@ -248,33 +269,73 @@ try {
     await page.close();
   }
 
-  // ⑪ 已经验收完、而上一次是红的：只有「你明确跳过了它」这一条路到得了这儿。这一态
-  //    原先和「门禁通过后验收完成」在界面上完全同形 —— 那正是要补的那一行。
+  // ⑪ 已经验收完、凭据是「你明确跳过了它」：这一态原先和「门禁通过后验收完成」在界面上
+  //    完全同形 —— 那正是要补的那一行。
   {
     const failed = run({ status: "failed", exitCode: 1, failure: "exit_code", logTail: "1 failed\n" });
     const { page } = await open({
-      gate: { command: "./kb.sh test full", running: null, latest: failed }, query: "?stage=accepted",
+      gate: { command: "./kb.sh test full", running: null, latest: failed, basis: basis("skipped") },
+      query: "?stage=accepted",
     });
     const card = page.locator(".accept-gate-card");
     await card.waitFor();
     assert.match(await card.innerText(), /这次跳过了验收前置命令/);
     assert.match(await card.innerText(), /合并是你明确选的/, "得说破合并没有凭据、是谁决定的");
+    assert.match(await card.innerText(), /那条红没有人修过/);
     assert.equal(await card.evaluate((el) => el.classList.contains("is-skipped")), true, "跳过是琥珀不是红：此刻什么都没拦着");
     assert.equal(await card.getByRole("button", { name: "交给智能体去修" }).count(), 0, "都合完了，这条红的出路是新开一个任务");
     await page.close();
   }
 
-  // ⑫ 命令后来被撤掉了，但这个任务当初跑过：验收做完之后仍要留痕（⑨ 那条早退只管
-  //    「还没盖章」的任务 —— 那时摆出路才会误导）。
+  // ⑫ 命令后来被撤掉了，但这一按的凭据确实是那次跑绿：验收做完之后仍要留痕（⑨ 那条
+  //    早退只管「还没盖章」的任务 —— 那时摆出路才会误导）。
   {
-    const { page } = await open({ gate: { command: null, running: null, latest: run() }, query: "?stage=accepted", command: null });
+    const evidence = run();
+    const { page } = await open({
+      gate: { command: null, running: null, latest: evidence, basis: basis("passed", evidence) },
+      query: "?stage=accepted", command: null,
+    });
     const card = page.locator(".accept-gate-card");
     await card.waitFor();
     assert.match(await card.innerText(), /验收前置命令通过了/);
     await page.close();
   }
 
-  // ⑬ 主会话页那条折叠条（用户 2026-10-23 的 04-A）：门禁跑的十几分钟里任务本身
+  // ⑬ **第 1 轮审查 F1 的那份假回执**：命令在 A 上跑绿（latest 还是那条绿的、只是 stale），
+  //    代码改成了 B、项目又把命令撤掉，于是真正放行的理由是「那一刻没有门禁」。回执必须
+  //    照凭据说话 —— 一个字都不许出现「通过了 / 拿它放的行」。
+  {
+    const greenOnA = run({ stale: true });
+    const { page } = await open({
+      gate: { command: null, running: null, latest: greenOnA, basis: basis("unset") },
+      query: "?stage=accepted", command: null,
+    });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    const text = await card.innerText();
+    assert.match(text, /没有经过验收前置命令/);
+    assert.match(text, /合并前没有跑过任何命令/);
+    assert.doesNotMatch(text, /通过了/, "那条绿不是这次合并的凭据，说「通过了」就是给没测过的代码背书");
+    assert.doesNotMatch(text, /拿它放的行/);
+    assert.match(text, /不是这次验收的凭据/, "历史记录照常摆出来，但要标清它不是凭据");
+    await page.close();
+  }
+
+  // ⑭ 凭据是后来才开始记的：老数据如实说「查不到凭据」，不拿最近一次替它背书。
+  {
+    const { page } = await open({
+      gate: { command: "./kb.sh test full", running: null, latest: run(), basis: null },
+      query: "?stage=accepted",
+    });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    const text = await card.innerText();
+    assert.match(text, /没有留下门禁凭据/);
+    assert.match(text, /并不能证明这次合并前跑过它/);
+    await page.close();
+  }
+
+  // ⑮ 主会话页那条折叠条（用户 2026-10-23 的 04-A）：门禁跑的十几分钟里任务本身
   //    status/stage 一个字都不变，这条是会话页上**唯一**看得出「有东西在跑」的东西。
   //    折叠态要把命令和已经跑了多久都写在一行；展开能就地收掉它。
   {
@@ -296,12 +357,54 @@ try {
     await page.close();
   }
 
-  // ⑭ 没在跑就彻底不占地方：跑完之后该看的是验收台上那张回执，不是这条。
+  // ⑯ 没在跑就彻底不占地方：跑完之后该看的是验收台上那张回执，不是这条。
   {
     const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run() }, query: "?wait=1" });
     await page.locator("h1").waitFor();
     await page.waitForTimeout(300);
     assert.equal(await page.locator(".accept-gate-wait").count(), 0);
+    await page.close();
+  }
+
+  // ⑰ **第 1 轮审查 F3**：并发读取乱序。页面一打开天然就有两次读取（挂载那一次 + SSE
+  //    连上之后的对账那一次）。让**先发出**的那一次响应体迟到、并且回的是「正在跑」，
+  //    后发出的那一次先回来、回的是「已通过」—— 落地的必须是后者。从前旧响应会把它写回
+  //    「正在跑」，秒表接着加，而此后没有任何事件会来纠正它。
+  {
+    const running = run({ status: "running", exitCode: null, finishedAt: null });
+    const { page } = await open({
+      gate: { command: running.command, running: null, latest: run(), basis: null },
+      query: "?wait=1&expected=1",
+      states: [
+        // 第 1 次（挂载）：慢，而且说「在跑」。
+        { delay: 1200, body: { command: running.command, running, latest: running, basis: null } },
+        // 第 2 次（连上之后对账）：快，说「已经通过了」。
+        { body: { command: running.command, running: null, latest: run(), basis: null } },
+      ],
+    });
+    await page.locator("h1").waitFor();
+    // 等那条迟到的响应落回来（1200ms + 余量），期间它一旦落地就会把这条重新画出来。
+    await page.waitForTimeout(1800);
+    assert.equal(await page.locator(".accept-gate-wait").count(), 0,
+      "迟到的旧响应不许把已经结束的那次又写回「正在跑」");
+    await page.close();
+  }
+
+  // ⑱ 状态读不出来、而任务投影说有命令在跑：这条**仍然要出现**并如实说读不出来。从前
+  //    一次 500 之后它整个消失，跟「什么都没在跑」长得一模一样（第 1 轮审查不拦项 3）。
+  {
+    const { page, store } = await open({
+      gate: { command: "./kb.sh test full", running: null, latest: null, basis: null },
+      query: "?wait=1&expected=1",
+      states: [{ status: 500 }, { status: 500 }, { status: 500 }, { status: 500 }],
+    });
+    const bar = page.locator(".accept-gate-wait");
+    await bar.waitFor();
+    assert.match(await bar.innerText(), /状态读不出来/);
+    const before = store.reads;
+    await bar.getByRole("button", { name: "重试" }).click();
+    await page.waitForTimeout(200);
+    assert.ok(store.reads > before, "重试要真的再读一次");
     await page.close();
   }
 

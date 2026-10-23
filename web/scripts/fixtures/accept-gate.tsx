@@ -37,7 +37,8 @@ function Fixture() {
       <h1>验收前置命令卡</h1>
       <div className="task-reply-rail">
         <button type="button" className="task-reply-rail-button">派审查</button>
-        <AcceptGateWaitCard taskId="gate-task" notify={setNotice} />
+        {/* expected = 任务投影里那个「此刻有命令在跑」：状态读失败时这条靠它仍然出现。 */}
+        <AcceptGateWaitCard taskId="gate-task" expected={params.get("expected") === "1"} notify={setNotice} />
       </div>
       <p role="status" aria-label="操作结果">{notice}</p>
     </main>;

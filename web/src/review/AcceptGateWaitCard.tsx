@@ -11,21 +11,46 @@
 // 只有颜色不同：哨兵是 accent，它是 amber，跟侧栏那颗呼吸的黄点对上（「这一条不是智能体
 // 在跑」）。
 import { useId, useState } from "react";
-import { CaretDown, FileText, SpinnerGap, XCircle } from "@phosphor-icons/react";
+import { ArrowClockwise, CaretDown, FileText, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useAcceptGate } from "./useAcceptGate.ts";
 
-export function AcceptGateWaitCard({ taskId, notify }: {
+export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
   taskId: string;
+  /**
+   * 任务投影里那个「此刻有命令在跑」（`Task.acceptGateRunning`，由 SSE 跟着更新）。
+   *
+   * 它的用处只有一个：门禁状态读失败时，这条**仍然要出现**。否则一次 500 之后这条就
+   * 整个消失，而用户看到的是一个安静的任务 —— 跟「什么都没在跑」一模一样（第 1 轮审查
+   * 不拦项 3）。拿它当「该不该出现」的兜底，比让这条自己猜更准：它来自服务端。
+   */
+  expected?: boolean;
   notify: (message: string) => void;
 }) {
-  const { running, runningFor, reload } = useAcceptGate(taskId);
+  const { running, runningFor, error, reload } = useAcceptGate(taskId);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [full, setFull] = useState<string | null>(null);
+  // 全文按**哪一次**缓着：同一个任务又跑一次之后，上一次的全文不能接着摆在那儿
+  // （第 1 轮审查不拦项 2）。
+  const [full, setFull] = useState<{ runId: string; text: string } | null>(null);
   const bodyId = useId();
-  // 没在跑就彻底不占地方：跑完之后该看的是验收台上那张回执卡，不是这条。
-  if (!running) return null;
+  // 读不出来、但服务端说有在跑：如实说「读不出来」并给一颗重试，不装作没在跑。
+  if (!running) {
+    if (!expected || !error) return null;
+    return (
+      <section className="wait-bar accept-gate-wait" aria-label="验收前置命令">
+        <div className="wait-bar__bar">
+          <WarningCircle size={13} weight="fill" aria-hidden="true" />
+          <b>验收前置命令在跑</b>
+          <span className="wait-bar__brief">状态读不出来：{error}</span>
+          <button type="button" className="wait-bar__retry" disabled={busy} onClick={() => void reload()}>
+            <ArrowClockwise size={11} aria-hidden="true" />重试
+          </button>
+        </div>
+      </section>
+    );
+  }
+  const shownLog = full?.runId === running.id ? full.text : null;
 
   const cancel = async () => {
     if (busy) return;
@@ -44,7 +69,7 @@ export function AcceptGateWaitCard({ taskId, notify }: {
     if (busy) return;
     setBusy(true);
     try {
-      setFull(await api.acceptGateLog(taskId));
+      setFull({ runId: running.id, text: await api.acceptGateLog(taskId, running.id) });
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -69,17 +94,19 @@ export function AcceptGateWaitCard({ taskId, notify }: {
       </button>
       {open && (
         <div className="wait-bar__body" id={bodyId}>
-          {(full ?? running.logTail) && (
-            <pre className="accept-gate-wait__log">{full ?? running.logTail}</pre>
+          {(shownLog ?? running.logTail) && (
+            <pre className="accept-gate-wait__log">{shownLog ?? running.logTail}</pre>
           )}
           <p className="wait-bar__note">
-            这是你点「验收通过」触发的：<code>{running.command}</code>，跑在 <code>{running.cwd}</code>。
+            {/* 不说「你点的」：MCP 的 accept_task、HTTP、工作流都触发得了这一次
+                （第 1 轮审查不拦项 7），而发起人是谁这条不需要猜。 */}
+            这是本次验收触发的：<code>{running.command}</code>，跑在 <code>{running.cwd}</code>。
             <b>rc=0 这次验收会自动做完，不用再点</b>；红了会把日志交回这个任务的智能体去修，
             目标分支一个字节都不会动。
           </p>
           <div className="wait-bar__ops">
-            <button type="button" disabled={busy || full !== null} onClick={() => void openLog()}>
-              <FileText size={11} aria-hidden="true" />{full === null ? "看完整日志" : "已是完整日志"}
+            <button type="button" disabled={busy || shownLog !== null} onClick={() => void openLog()}>
+              <FileText size={11} aria-hidden="true" />{shownLog === null ? "看完整日志" : "已是完整日志"}
             </button>
             <button type="button" disabled={busy} onClick={() => void cancel()}>
               <XCircle size={11} aria-hidden="true" />不等了，收掉它

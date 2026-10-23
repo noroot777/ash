@@ -18,7 +18,10 @@ import {
   ACCEPT_GATE_TIMEOUT_MS,
   normalizeAcceptGateCommand,
   summarizeAcceptGate,
+  type AcceptGateBasis,
+  type AcceptGateBasisMode,
   type AcceptGateFailure,
+  type AcceptGateState,
   type AcceptGateStatus,
   type AcceptGateView,
 } from "@ash/shared/accept-gate";
@@ -26,7 +29,10 @@ import type { AcceptBy } from "@ash/shared/workflow-policy";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
-import { acceptGateLogPath, acceptGateLogTail, appendGateLog, isSameGateProcess, spawnAcceptGate, stopAcceptGate } from "./accept-gate-process.js";
+import {
+  acceptGateLogPath, acceptGateLogTail, appendGateLog, hasUnconfirmedGateProcess,
+  isSameGateProcess, spawnAcceptGate, stopAcceptGate,
+} from "./accept-gate-process.js";
 import { isAncestor } from "./git-accept.js";
 import { commitAt, plannedMergeTarget } from "./task-branch-plan.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -82,6 +88,21 @@ function announceGate(taskId: string): void {
   void publishTaskUpdated(taskId).catch((error) => {
     console.error(`[ash] 门禁状态广播失败（${taskId}）:`, error);
   });
+}
+
+/**
+ * 把「这一按拿什么放的行」钉在任务上。**门禁每放行一次就写一次**。
+ *
+ * 为什么写在放行那一刻、而不是等合并真的成了:放行之后那一段(冻结目标、合并、清理)还会
+ * 失败,但失败的那次不会落 accepted,而回执只在 accepted/merged 时才读这份凭据 —— 于是
+ * 「写早了」在任何可达状态下都看不见;而下一次验收必然再走一遍这里,凭据跟着重写。反过来
+ * 想等到终点再写,就得把它穿过 acceptTask 里五条各自 return 的分支,漏一条就又是一次无
+ * 凭据的盖章。
+ *
+ * 不动 updatedAt:它决定侧栏的排序,而这是一次用户看不见的内部记账。
+ */
+async function recordAcceptBasis(taskId: string, mode: AcceptGateBasisMode, runId: string | null): Promise<void> {
+  await db.update(tasks).set({ acceptedGateMode: mode, acceptedGateRunId: runId }).where(eq(tasks.id, taskId));
 }
 
 const gateView = (row: GateRow): AcceptGateView => ({
@@ -145,7 +166,12 @@ export async function acceptGateCheck(
   opts: { choices: AcceptGateChoices; intent?: AcceptGateIntent; passedRunId?: string },
 ): Promise<AcceptFailure | null> {
   const command = acceptGateCommandOf(project);
-  if (!command || !project) return null;
+  // 没设(或刚被撤掉):这一按直接合,凭据就是「那一刻没有这一关」。这一句**必须也写**——
+  // 不写的话,上一次验收留下的那份 passed 会原地留着,给一份从没测过的代码背书(F1 实测)。
+  if (!command || !project) {
+    await recordAcceptBasis(task.id, "unset", null);
+    return null;
+  }
 
   const cwd = await gateCwd(task, project.repoPath);
   const head = await headCommit(cwd);
@@ -160,7 +186,10 @@ export async function acceptGateCheck(
   if (opts.passedRunId) {
     const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, opts.passedRunId))).at(0);
     if (row && row.taskId === task.id && row.status === "passed"
-      && row.command === command && (!head || row.sourceCommit === head)) return null;
+      && row.command === command && (!head || row.sourceCommit === head)) {
+      await recordAcceptBasis(task.id, "passed", row.id);
+      return null;
+    }
   }
 
   const inFlight = await runningRun(task.id);
@@ -183,6 +212,7 @@ export async function acceptGateCheck(
       `本次验收**跳过**了验收前置命令 \`${command}\`：这是你在验收时明确选的，` +
         `ash 没有跑它，也没有任何它通过的证据。${inFlight ? "正在跑的那一次已经一并收掉。" : ""}`,
     );
+    await recordAcceptBasis(task.id, "skipped", null);
     return null;
   }
 
@@ -200,6 +230,7 @@ export async function acceptGateCheck(
       task.id,
       `验收前置命令沿用上一次的结果：\`${previous!.command}\` 在当前这棵树（${head!.slice(0, 8)}）上已经通过，不再重跑。`,
     );
+    await recordAcceptBasis(task.id, "passed", previous!.id);
     return null;
   }
   // interrupted / canceled 不走这条:那两种**根本没有结论**(ash 重启打断、用户自己收掉),
@@ -298,17 +329,42 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     const failed = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
     return failed ? gateView(failed) : null;
   }
-  const timer = setTimeout(() => {
+  const timer = setTimeout(() => void (async () => {
     appendGateLog(logPath, `\n[ash] 超过 ${Math.round(ACCEPT_GATE_TIMEOUT_MS / 60_000)} 分钟，按超时处理，正在收掉它。\n`);
-    stopAcceptGate(started.pid, started.startedAt);
-    void settleGate(runId, { status: "failed", exitCode: null, failure: "timeout" });
-  }, ACCEPT_GATE_TIMEOUT_MS);
+    // **先认领终态、再动刀**（同取消那条路）：反过来的话，刀落下去触发的退出回调会先把
+    // 这一次收成「命令被外人杀了」，连带把日志当成一条红交给 agent 去修 —— 而它其实是
+    // 超时。占用不会因此漏空：stopAcceptGate 从进场就立起「还没确认退出」那条记号。
+    await settleGate(runId, { status: "failed", exitCode: null, failure: "timeout" });
+    await noteIfStillAlive(taskId, logPath, await stopAcceptGate(taskId, started.pid, started.startedAt));
+  })(), ACCEPT_GATE_TIMEOUT_MS);
   timer.unref?.();
   live.set(taskId, { runId, timer, pid: started.pid, pidStartedAt: started.startedAt });
 
   await db.update(acceptGateRuns).set({ pid: started.pid, pidStartedAt: started.startedAt }).where(eq(acceptGateRuns.id, runId));
   const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
+  // 「登记 → 起进程 → pid 落库」这一段里有 await，而取消那一下**可能正好插在中间**：它那时
+  // 读到的 pid 还是 null，于是刀发给了空气，库里却已经落成 canceled —— 进程就此没人认领
+  // （第 1 轮审查 F2 的第二个窗口）。所以这里回头再看一眼：不是 running 了就说明有人在这
+  // 期间收过它，由**我们**来把刚起的这条收掉（两边都查一次，谁后到谁负责，窗口就封住了）。
+  if (row && row.status !== "running") {
+    appendGateLog(logPath, `\n[ash] 这一次在起跑的同时就被收掉了（${row.status}），正在停掉刚起的进程。\n`);
+    const timerNow = live.get(taskId);
+    if (timerNow?.runId === runId) { clearTimeout(timerNow.timer); live.delete(taskId); }
+    await noteIfStillAlive(taskId, logPath, await stopAcceptGate(taskId, started.pid, started.startedAt));
+  }
   return row ? gateView(row) : null;
+}
+
+/** 停不掉就**如实说**：工作区仍被占着，用户刷新后也看得见这句（根 AGENTS.md 那条）。 */
+async function noteIfStillAlive(taskId: string, logPath: string, stopped: boolean): Promise<void> {
+  if (stopped) return;
+  appendGateLog(logPath, `\n[ash] 两刀（TERM、KILL）都发过了，仍然确认不到它退出。\n`);
+  await appendTaskTimeline(
+    taskId,
+    "验收前置命令收不掉：TERM 和 KILL 都发过了，仍然确认不到那棵进程树退出 —— 它可能卡在"
+      + "内核里（不可中断的 I/O），也可能 ash 没权限收它。**这个工作区仍按被占用处理**，"
+      + "合并与清理都会继续拦着，直到它真的退出（这件事会自己复查，不用再点什么）。",
+  );
 }
 
 /** 登记了却没能发射（主流程中途出错）时把登记撤掉，别留一条永远不跑的意图。 */
@@ -334,7 +390,8 @@ async function settleGate(
     const finishedAt = now();
     await db.update(acceptGateRuns)
       .set({ status: outcome.status, exitCode: outcome.exitCode, failure: outcome.failure, finishedAt })
-      .where(eq(acceptGateRuns.id, runId));
+      // 状态闸：上面那句读到的 running 和这一句之间隔着 await，只有真的还 running 才翻。
+      .where(and(eq(acceptGateRuns.id, runId), eq(acceptGateRuns.status, "running")));
     const view = gateView({ ...row, ...outcome, finishedAt });
     appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}\n`);
     await appendTaskTimeline(row.taskId, `${summarizeAcceptGate(view)}。`);
@@ -345,8 +402,14 @@ async function settleGate(
     console.error(`[ash] 验收前置命令收尾失败（${runId}）:`, error);
   });
   settlements.set(runId, settle);
-  // 内存账本只给「等这一次收完」用，留着历史没有意义，满了就把最老的挤掉。
-  if (settlements.size > 100) settlements.delete(settlements.keys().next().value!);
+  // 内存账本只给「等这一次收完」用，留着历史没有意义，满了就把最老的挤掉。**两个账本
+  // 一起裁**：从前只裁 settlements，settling 这个 Set 只 add 不删，每跑一轮就永久多存
+  // 一个 run id（第 1 轮审查不拦项 4）。幂等不受影响 —— 被挤掉的那些早就收完了。
+  while (settlements.size > 100) {
+    const oldest = settlements.keys().next().value!;
+    settlements.delete(oldest);
+    settling.delete(oldest);
+  }
   await settle;
 }
 
@@ -466,19 +529,22 @@ export async function rehandOffAcceptGate(taskId: string): Promise<
  * 踩在那个工作区里」—— 工作区被抽走时它还在往里写。
  */
 export function hasLiveAcceptGate(taskId: string): boolean {
-  return live.has(taskId);
+  // 两刀都下过、仍然确认不了退出的那些也算：它的 cwd 还踩在那个工作区里，而这个判据的
+  // 下一步就是动 git（第 1 轮审查 F2）。那张记号表自己会在进程真的退出时清掉。
+  return live.has(taskId) || hasUnconfirmedGateProcess(taskId);
 }
 
 /**
  * 删任务之前把它名下还在跑的门禁进程收掉。**不写库**：那些行紧接着就要被删掉，而
  * 这里唯一要防的是留下一个没人认领的进程（pid 这条线索随行一起没了就再也找不回来）。
  */
-export function stopAcceptGatesForTask(taskId: string): void {
+export async function stopAcceptGatesForTask(taskId: string): Promise<boolean> {
   const running = live.get(taskId);
-  if (!running) return;
+  if (!running) return !hasUnconfirmedGateProcess(taskId);
   clearTimeout(running.timer);
   live.delete(taskId);
-  stopAcceptGate(running.pid, running.pidStartedAt);
+  // 这里**必须等**：紧接着就要删工作区，而它的 cwd 正在那儿。
+  return await stopAcceptGate(taskId, running.pid, running.pidStartedAt);
 }
 
 /**
@@ -502,31 +568,55 @@ export async function cancelAcceptGate(taskId: string, reason = "你在验收台
   const row = await runningRun(taskId);
   if (!row) return null;
   appendGateLog(row.logPath, `\n[ash] ${reason}，正在收掉它。\n`);
-  stopAcceptGate(row.pid, row.pidStartedAt);
+  // 进程表里那一份可能比库里新（pid 是起跑之后才落库的），两边取其一。
+  const mine = live.get(taskId);
   await settleGate(row.id, { status: "canceled", exitCode: null, failure: "canceled" });
+  const after = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, row.id))).at(0);
+  const pid = mine?.pid ?? after?.pid ?? row.pid;
+  const pidStartedAt = mine?.pidStartedAt ?? after?.pidStartedAt ?? row.pidStartedAt;
+  // **等它真的停下来**才返回：这个返回值被「跳过门禁直接合并」那条路当成「可以动工作区了」
+  // 的信号，而合并紧接着就会把它脚下那个 worktree 删掉（第 1 轮审查 F2）。
+  await noteIfStillAlive(taskId, row.logPath, await stopAcceptGate(taskId, pid, pidStartedAt));
   return (await latestRun(taskId).then(r => r && gateView(r))) ?? null;
 }
 
-/** 界面要的那一份：这个项目设没设、上一次跑成什么样、这次结果还作不作数。 */
-export async function acceptGateState(taskId: string): Promise<{
-  command: string | null;
-  running: AcceptGateView | null;
-  latest: AcceptGateView | null;
-}> {
+/**
+ * 这一按**当初**拿什么放的行。没验收过 / 老数据没留 → null（如实的「不知道」）。
+ *
+ * `passed` 那一档要把真的跑绿的那一次原样捞出来（按 id，不是「最近一次」）；记录本身可能
+ * 已经随归档清理没了，那时只留 mode —— 回执据此说「凭据的明细已经不在了」。
+ */
+async function acceptBasis(task: TaskRow): Promise<AcceptGateBasis | null> {
+  const mode = task.acceptedGateMode as AcceptGateBasisMode | null;
+  if (mode !== "passed" && mode !== "skipped" && mode !== "unset") return null;
+  if (mode !== "passed" || !task.acceptedGateRunId) return { mode, run: null };
+  const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, task.acceptedGateRunId))).at(0);
+  return { mode, run: row && row.taskId === task.id ? gateView(row) : null };
+}
+
+/** 这个任务名下的某一次（给「看完整日志」按 run 取用，顺带挡住跨任务的 id）。 */
+export async function acceptGateRunOf(taskId: string, runId: string): Promise<AcceptGateView | null> {
+  const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
+  return row && row.taskId === taskId ? gateView(row) : null;
+}
+
+/** 界面要的那一份：这个项目设没设、上一次跑成什么样、这次结果还作不作数、凭据是什么。 */
+export async function acceptGateState(taskId: string): Promise<AcceptGateState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task) return { command: null, running: null, latest: null };
+  if (!task) return { command: null, running: null, latest: null, basis: null };
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
   const command = acceptGateCommandOf(project);
+  const basis = await acceptBasis(task);
   const latestRow = await latestRun(taskId);
-  if (!latestRow) return { command, running: null, latest: null };
+  if (!latestRow) return { command, running: null, latest: null, basis };
   const view = gateView(latestRow);
-  if (latestRow.status === "running") return { command, running: view, latest: view };
+  if (latestRow.status === "running") return { command, running: view, latest: view, basis };
   // 新鲜度按**现在**这棵树算：前端据它决定说「已通过，可以直接验收」还是「要重跑」。
   // 判据与 acceptGateCheck 的复用判据必须是同一条（提交 + 命令），否则卡上说「不会重跑」、
   // 一点下去却真的重跑了。
   const head = project ? await headCommit(await gateCwd(task, project.repoPath)) : null;
   const stale = !head || head !== latestRow.sourceCommit || latestRow.command !== command;
-  return { command, running: null, latest: { ...view, stale } };
+  return { command, running: null, latest: { ...view, stale }, basis };
 }
 
 /**
@@ -540,12 +630,16 @@ export async function recoverAcceptGates(): Promise<{ interrupted: number }> {
     // 跨重启**必须先核身份**：ash 停了几小时再起来，那个 pid 多半已经是别的进程了，
     // 盲发信号打死的是无辜的人（第 1 轮审查）。核不出来就不发，并在日志里说清。
     const mine = isSameGateProcess(row.pid, row.pidStartedAt);
-    if (mine) stopAcceptGate(row.pid, row.pidStartedAt);
-    appendGateLog(row.logPath, `\n[ash] ash 重启了，这一次没跑完，已按「被打断」收尾（${
-      mine ? "残留进程已收掉" : row.pid ? `没有向 pid ${row.pid} 发信号：它已经不是当初那条命令了` : "没有记下 pid"}）。\n`);
+    // 先把行落成「被打断」再动刀（同超时那条路）：这个收拾动作在同一个进程里也可能撞上
+    // 那条命令自己的退出回调，而那个回调会把它收成一条**红**并交给 agent 去修 —— 被打断
+    // 不是红，它根本没有结论。
     await db.update(acceptGateRuns)
       .set({ status: "interrupted", failure: "server_restarted", finishedAt: now() })
       .where(eq(acceptGateRuns.id, row.id));
+    const stopped = !mine || await stopAcceptGate(row.taskId, row.pid, row.pidStartedAt);
+    appendGateLog(row.logPath, `\n[ash] ash 重启了，这一次没跑完，已按「被打断」收尾（${
+      !mine ? (row.pid ? `没有向 pid ${row.pid} 发信号：它已经不是当初那条命令了` : "没有记下 pid")
+        : stopped ? "残留进程已收掉" : "残留进程收不掉：TERM、KILL 都发过了仍确认不到它退出"}）。\n`);
     await appendTaskTimeline(
       row.taskId,
       `验收前置命令被打断：ash 重启时它还在跑（\`${row.command}\`），已按未完成收尾。重新点验收会从头跑一遍。`,

@@ -300,6 +300,10 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE projects ADD COLUMN accept_commit INTEGER NOT NULL DEFAULT 1",
   // 验收前置命令（点验收之后、动 git 之前跑，rc=0 才合并）。null = 不设门禁 = 老行为。
   "ALTER TABLE projects ADD COLUMN accept_gate_command TEXT",
+  // 那一按**实际**拿什么当凭据放的行（passed / skipped / unset + 真的跑绿的那一次）。
+  // 存量行为空 = 没留凭据，回执如实这么说，不拿「最近一次门禁」反推（第 1 轮审查 F1）。
+  "ALTER TABLE tasks ADD COLUMN accepted_gate_mode TEXT",
+  "ALTER TABLE tasks ADD COLUMN accepted_gate_run_id TEXT",
   // 项目级浏览器登录态授权白名单（JSON 字符串数组）。空/null = 不授权,是默认。
   "ALTER TABLE projects ADD COLUMN browser_cdp_domains TEXT",
   // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────

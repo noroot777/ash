@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AcceptGateView } from "@ash/shared/accept-gate";
-import { api, type AcceptGateState } from "../lib/api.ts";
+import type { AcceptGateBasis, AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
+import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 
 /**
@@ -11,12 +11,22 @@ import { useServerEvents } from "../lib/events.ts";
  * 这条事件没人接，卡就会永远停在「正在跑」—— 那正是这功能要消灭的幽灵状态。所以读取、
  * 订阅、每次重连都重新对一次账、以及让「已经 N 分 N 秒」自己走的那个秒表，统一写在这里，
  * 别在第二个表面上再抄一遍（抄一遍就一定会漏掉其中一条）。
+ *
+ * ── 落地的只能是「当前这个任务、当前这一代」的结果（第 1 轮审查 F3 实测）────────────
+ * 这些读取是**并发**的：首读、每条 SSE、每次重连、手动刷新都调同一个 reload，而它们的
+ * 响应回来的顺序跟发出去的顺序没有关系。实测过的那一幕：请求 5（running）响应体在慢连接
+ * 上迟到，请求 6（passed）先回来落了地，随后请求 5 才回来，把已经结束的那次又写回「正在
+ * 跑」—— 秒表继续加，页面从此停在一个早已结束的命令上，没有任何后续事件会来纠正它。
+ * 所以每次读取带一个代次，只有**最后一次发出**的那个结果可以落地；切任务时连代次带状态
+ * 一起换掉（上一个任务的状态一秒都不许出现在新任务的卡上）。
  */
 export function useAcceptGate(taskId: string): {
   state: AcceptGateState | null;
   error: string | null;
   running: AcceptGateView | null;
   latest: AcceptGateView | null;
+  /** 这一按当初拿什么放的行（已验收才有；null = 还没验收，或老数据没留凭据）。 */
+  basis: AcceptGateBasis | null;
   /**
    * 正在跑的那一条「已经 N 分 N 秒」（没在跑就是 null）。
    *
@@ -26,19 +36,29 @@ export function useAcceptGate(taskId: string): {
   runningFor: string | null;
   reload: () => Promise<void>;
 } {
-  const [state, setState] = useState<AcceptGateState | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // 状态自带它属于哪个任务：`taskId` 一变，上一个任务那份立刻不作数（清不清都一样安全），
+  // 不必等新请求回来才把旧数据换掉。
+  const [snap, setSnap] = useState<{ taskId: string; state: AcceptGateState } | null>(null);
+  const [failure, setFailure] = useState<{ taskId: string; error: string } | null>(null);
   const [tick, setTick] = useState(0);
+  // 发出去的第几次。只有号最大的那一次（= 最后发出的）能落地，迟到的旧响应一律丢掉。
+  const issued = useRef(0);
 
   const reload = useCallback(async () => {
+    const mine = ++issued.current;
     try {
-      setState(await api.acceptGate(taskId));
-      setError(null);
+      const next = await api.acceptGate(taskId);
+      if (issued.current !== mine) return;
+      setSnap({ taskId, state: next });
+      setFailure(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (issued.current !== mine) return;
+      setFailure({ taskId, error: reason instanceof Error ? reason.message : String(reason) });
     }
   }, [taskId]);
 
+  // 切任务：代次直接推一格，在途的那几个响应全部作废（它们属于上一个任务）。
+  useEffect(() => { issued.current += 1; }, [taskId]);
   useEffect(() => { void reload(); }, [reload]);
   // 服务端的权威信号只有这一条：起了、结束了、被取消了，都发 task.acceptGate。
   const connected = useServerEvents((event) => {
@@ -53,6 +73,8 @@ export function useAcceptGate(taskId: string): {
     if (connected && !was) void reload();
   }, [connected, reload]);
 
+  const state = snap?.taskId === taskId ? snap.state : null;
+  const error = failure?.taskId === taskId ? failure.error : null;
   const running = state?.running ?? null;
   // 「已经跑了 N 分 N 秒」要自己走：这中间服务端一个事件都不会发（命令还在跑），
   // 不走就会定在点下去那一刻的 0 秒上，看着像卡死了。
@@ -69,6 +91,7 @@ export function useAcceptGate(taskId: string): {
     error,
     running,
     latest: state?.latest ?? null,
+    basis: state?.basis ?? null,
     runningFor: running ? elapsedSince(running.startedAt) : null,
     reload,
   };

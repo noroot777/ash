@@ -493,7 +493,79 @@ try {
     );
   }
 
-  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 全部通过");
+  // 13. **回执的凭据**：这一按到底拿什么放的行，必须是这一按自己记下来的，不能拿「最近
+  //     一次门禁」反推（第 1 轮审查 F1 实测出一份假回执）。这里把那一幕原样跑一遍：
+  //     命令在 A 上跑绿 → 合并被挡住（目标工作区脏）→ 工作区里又提交了 B → 项目撤掉命令
+  //     → 再按一次。这一次真正放行的理由是「那一刻没有门禁」，而「最近一次」仍是那条绿的。
+  {
+    const repo = makeRepo("gate-basis");
+    const projectId = await seedProject("gate-basis", repo, "true");
+    const taskId = "gatebasis0013";
+    const wsPath = await seedTask(projectId, repo, taskId, "basis.txt");
+
+    // 目标工作区脏：main 上放一份未跟踪的 basis.txt，合并会拒绝覆盖它 —— 于是门禁绿了、
+    // 凭据也记下了，章却没盖成。这正是 F1 那一幕的前半段。
+    writeFileSync(join(repo, "basis.txt"), "conflicting local edit\n");
+    await acceptTask(taskId);
+    await settled(taskId);
+    const greenRun = (await runsOf(taskId)).at(0)!;
+    assert.equal(greenRun.status, "passed");
+    const treeA = greenRun.sourceCommit!;
+    assert.notEqual((await taskRow(taskId)).stage, "accepted", "目标工作区脏，这一次不该合进去");
+    assert.equal((await taskRow(taskId)).acceptedGateMode, "passed", "绿了那一按的凭据就是那一次 run");
+    assert.equal((await taskRow(taskId)).acceptedGateRunId, greenRun.id);
+
+    // 代码又改了（B），项目把命令撤了，目标工作区收拾干净 —— 这一按是「直接合」。
+    writeFileSync(join(wsPath, "basis.txt"), "second round\n");
+    git(wsPath, "add", "-A");
+    git(wsPath, "commit", "-m", "round B");
+    const treeB = git(wsPath, "rev-parse", "HEAD");
+    assert.notEqual(treeA, treeB);
+    // 那份脏改动是未跟踪文件（main 上还没有 basis.txt），所以收拾干净就是把它删掉。
+    rmSync(join(repo, "basis.txt"));
+    await db.update(projects).set({ acceptGateCommand: null }).where(eq(projects.id, projectId));
+
+    const second = await acceptTask(taskId);
+    assert.equal(second.accepted, true, "没有门禁了，这一按就该直接合");
+    const row = await taskRow(taskId);
+    assert.equal(row.acceptedSourceCommit, treeB, "合进去的是 B");
+    assert.equal(row.acceptedGateMode, "unset", "这一按的凭据是「那一刻没有门禁」，不是那条绿的");
+    assert.equal(row.acceptedGateRunId, null);
+    const view = await acceptGateState(taskId);
+    assert.equal(view.basis?.mode, "unset");
+    assert.equal(view.basis?.run, null, "凭据里不许塞一次跟这一按无关的 run");
+    assert.equal(view.latest?.status, "passed", "历史照常查得到");
+    assert.equal(view.latest?.sourceCommit, treeA, "而它验的是 A —— 界面据此说清「这不是本次凭据」");
+  }
+
+  // 14. **「已取消」必须是整棵进程树真的退出了**（第 1 轮审查 F2 实测）：从前取消只发一刀
+  //     TERM 就返回，而 `trap '' TERM` 的后代照样在跑 —— 紧接着的合并/清理会把它脚下的
+  //     工作区删掉，它却还在往里写。领头那个一 TERM 就没了，所以「父进程不在了」根本
+  //     证明不了后代也不在。
+  {
+    const repo = makeRepo("gate-stop-tree");
+    const childFile = join(root, "stubborn-child.pid");
+    // 领头的 shell 吃默认 TERM（一刀就死），后台那个把 TERM 忽略掉并接着跑。
+    const command = `sh -c 'trap "" TERM; echo $$ > ${childFile}; sleep 120' & sleep 120`;
+    const projectId = await seedProject("gate-stop-tree", repo, command);
+    const taskId = "gatestoptree1";
+    await seedTask(projectId, repo, taskId, "stoptree.txt");
+    await acceptTask(taskId);
+    let childPid = 0;
+    for (let i = 0; i < 200 && !childPid; i++) {
+      try { childPid = Number(readFileSync(childFile, "utf8").trim()); } catch { await sleep(25); }
+    }
+    assert.ok(childPid > 0, "测试自己的前提：那个忽略 TERM 的后代得先真的起来");
+    assert.equal(alive(childPid), true);
+
+    await cancelAcceptGate(taskId, "测试：取消必须等整棵树退出");
+    // **取消返回的那一刻**就得是真的没了：这个返回值被「跳过门禁直接合并」当成
+    // 「可以动工作区了」的信号，中间不许再有一个「它马上就会死」的窗口。
+    assert.equal(alive(childPid), false, "取消返回时那个忽略 TERM 的后代必须已经被补刀收掉");
+    assert.equal((await runsOf(taskId)).at(0)!.status, "canceled");
+  }
+
+  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 全部通过");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

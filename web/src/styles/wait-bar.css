@@ -56,3 +56,8 @@
    拿掉 —— 而用户点开它多半就是为了看这个数。 */
 .accept-gate-wait.is-open .wait-bar__bar > .wait-bar__when { display: block; }
 .accept-gate-wait__log { max-height: 120px; overflow: auto; margin: 2px 0 0; border-radius: 6px; background: var(--canvas); padding: 6px 8px; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 状态读不出来时那颗重试：这条此刻不是按钮（整条不可展开，因为没有正文可展），所以
+   重试自己带框，别让人去点一条点不开的横条。 */
+.wait-bar__retry { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; margin-left: auto; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 1px 6px; color: var(--muted); font-size: 9.5px; }
+.wait-bar__retry:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.wait-bar > .wait-bar__bar:not(button) { cursor: default; }

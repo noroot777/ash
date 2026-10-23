@@ -4,7 +4,7 @@
 // 没有共享状态 —— 它们只认 taskId。
 import type { Hono } from "hono";
 import { acceptGateLogText } from "./accept-gate-process.js";
-import { acceptGateState, cancelAcceptGate, rehandOffAcceptGate } from "./accept-gate.js";
+import { acceptGateRunOf, acceptGateState, cancelAcceptGate, rehandOffAcceptGate } from "./accept-gate.js";
 
 export function mountAcceptGateRoutes(api: Hono): void {
   // 验收台要的那一份：这个项目设没设门禁、上一次跑成什么样、那次结果对现在这棵树还作不作数。
@@ -12,8 +12,19 @@ export function mountAcceptGateRoutes(api: Hono): void {
 
   // 整份日志。几十 MB 的回归输出不塞进状态接口（那个接口每隔几秒就要拉一次），
   // 要看全文的人点一下单独取。
+  //
+  // `?run=<id>` 指定某一次。已验收的那张回执要的是**本次验收凭据那一次**的日志，而那
+  // 多半已经不是「最近一次」了（第 1 轮审查 F1）；不带就还是看现在/最近那一次。跨任务
+  // 的 id 一律当不存在 —— 日志路径本身就是一条可以用来乱翻目录的线索。
   api.get("/tasks/:id/accept-gate/log", async (c) => {
-    const state = await acceptGateState(c.req.param("id"));
+    const taskId = c.req.param("id");
+    const wanted = c.req.query("run");
+    if (wanted) {
+      const run = await acceptGateRunOf(taskId, wanted);
+      if (!run) return c.json({ error: "这个任务名下没有这一次执行记录" }, 404);
+      return c.text(acceptGateLogText(run.logPath) || "（日志为空）");
+    }
+    const state = await acceptGateState(taskId);
     const run = state.running ?? state.latest;
     if (!run) return c.json({ error: "这个任务还没跑过验收前置命令" }, 404);
     return c.text(acceptGateLogText(run.logPath) || "（日志为空）");

@@ -22,6 +22,29 @@ import { IS_WINDOWS, inspectProcessSync, isPidAlive, isProcessGroupAlive, killTr
 /** SIGTERM 之后等多久补一刀。给它收尾的时间，但不无限等。 */
 const KILL_GRACE_MS = 5_000;
 
+/** SIGKILL 之后再确认多久。KILL 收不下，那就是真卡在内核里了（D 状态 / 没权限）。 */
+const KILL_CONFIRM_MS = 3_000;
+
+/** 确认循环的采样间隔。只在取消/超时这种一次性路径上跑，不在热路径。 */
+const KILL_POLL_MS = 50;
+
+/**
+ * 两刀都下过、仍然确认不了它退出的那些任务。**不能当它停了**：那个进程的 cwd 正是任务
+ * 工作区，而「能不能动这个工作区」这三个入口（删任务 / 删项目 / 释放工作区）判完就动 git。
+ *
+ * 读的时候**现查一遍**，而不是挂个定时器去扫：这三个入口本来就是同步判据，现查既让记号
+ * 自己消失（进程终于退了就不再拦着），也不会留下一张只增不减的表。
+ */
+const unconfirmed = new Map<string, { pid: number; startedAt: string | null }>();
+
+export function hasUnconfirmedGateProcess(taskId: string): boolean {
+  const mark = unconfirmed.get(taskId);
+  if (!mark) return false;
+  if (gateTreeAlive(mark.pid, mark.startedAt)) return true;
+  unconfirmed.delete(taskId);
+  return false;
+}
+
 /** 日志落在任务自己的 run 目录下，跟会话正文同一处，归档清理会把它一起带走。 */
 export function acceptGateLogPath(taskId: string, runId: string): string {
   return join(RUNS_DIR, taskId, `accept-gate-${runId}.log`);
@@ -88,23 +111,61 @@ export function isSameGateProcess(pid: number | null | undefined, startedAt: str
 }
 
 /**
- * 取消/超时的那一刀：先 SIGTERM，宽限期之后还活着再 SIGKILL（同预览那套）。
+ * 取消/超时的那一刀：先 SIGTERM，宽限期之后还活着再 SIGKILL，**并一直等到确认它没了**。
  *
- * 只发 TERM 是不够的 —— `trap '' TERM` 的测试脚本收下这一刀照样接着跑，而用户看到的
- * 是「已取消」，机器上那条全量回归还在烧着。pid 不在了是正常情况（命令已经自己退了）。
+ * ── 为什么必须等（第 1 轮审查 F2 实测）────────────────────────────────────────
+ * 从前这里是「TERM 之后挂一个 5 秒的闹钟就返回」，于是：
+ *   ① 调用方拿到的返回值不是「它停了」的证明，而只是「刀发出去了」。取消那一下随即落
+ *      canceled、释放占用、允许清理，而那条忽略 TERM 的测试脚本还在往一个马上要被删掉的
+ *      工作区里写文件（实测 leaderAlive:false、childAliveAfterGrace:true）。
+ *   ② 那个闹钟里又拿**父进程**的启动时间核身份，而父进程恰恰已经被 TERM 收走了 ——
+ *      核不过就提前 return，底下那句进程组 SIGKILL 一次都没执行过。所以它不是「再等久一点
+ *      就好」：补刀分支被逻辑跳过了。
+ * 现在：身份只在**进场**时核一次（那一刻父进程还在，核得准），之后认的是**进程组**
+ * ——后代是不是还在，只有组答得出来，而父进程的号已经不能代表它们了。
  *
- * `startedAt` 给得出来就先核身份：ash 重启之后那个号可能已经是别人的了。
+ * 返回 true = 确认整棵树都没了（或者进场时它就已经不是当初那条命令）；false = 到这一刻
+ * 还有活口，**调用方必须如实上报、并继续把工作区当占着**，不能宣告已经收干净。
+ *
+ * `taskId` 用来在停不掉时留一条记号（见 hasUnconfirmedGateProcess）。
  */
-export function stopAcceptGate(pid: number | null | undefined, startedAt?: string | null): void {
-  if (!pid) return;
-  if (startedAt && !isSameGateProcess(pid, startedAt)) return;
+export async function stopAcceptGate(
+  taskId: string,
+  pid: number | null | undefined,
+  startedAt?: string | null,
+): Promise<boolean> {
+  if (!pid) { unconfirmed.delete(taskId); return true; }
+  // 进场核身份：ash 重启之后那个号可能已经是别人的了，盲发信号打到的是无辜进程。
+  if (startedAt && !isSameGateProcess(pid, startedAt)) { unconfirmed.delete(taskId); return true; }
+  // **记号从这一刻就立起来**，不是等停失败才立：落终态那一步会把 `live` 里的记号撤掉
+  // （「这一次结束了」是真的），而进程还要几秒才咽气 —— 中间那几秒要是谁都答不出「这个
+  // 工作区还有人踩着」，合并和清理就会在它脚下把目录删掉。
+  unconfirmed.set(taskId, { pid, startedAt: startedAt ?? null });
   killTree(pid, "SIGTERM");
-  const timer = setTimeout(() => {
-    if (startedAt && !isSameGateProcess(pid, startedAt)) return;
-    if (isPidAlive(pid) || isProcessGroupAlive(pid)) killTree(pid, "SIGKILL");
-  }, KILL_GRACE_MS);
-  // 补刀不该把 ash 自己的退出吊住：它退的时候整棵进程树本来就跟着走。
-  timer.unref?.();
+  if (await untilGone(pid, startedAt, KILL_GRACE_MS)) { unconfirmed.delete(taskId); return true; }
+  killTree(pid, "SIGKILL");
+  if (await untilGone(pid, startedAt, KILL_CONFIRM_MS)) { unconfirmed.delete(taskId); return true; }
+  return false;
+}
+
+/** 这个号（和它那一组）还有在跑的吗。组查不出来的平台（Windows）只能看领头那个。 */
+function gateTreeAlive(pid: number, startedAt?: string | null): boolean {
+  // 组还在 = 后代还在。父进程先退、`trap '' TERM` 的子进程接着跑，就是这一档。
+  if (isProcessGroupAlive(pid)) return true;
+  // 领头那个自己：号被别人复用了不算我们的（别把无辜进程算成「还没停掉」）。
+  return isPidAlive(pid) && (!startedAt || isSameGateProcess(pid, startedAt));
+}
+
+async function untilGone(pid: number, startedAt: string | null | undefined, within: number): Promise<boolean> {
+  const deadline = Date.now() + within;
+  for (;;) {
+    if (!gateTreeAlive(pid, startedAt)) return true;
+    if (Date.now() >= deadline) return false;
+    // **不 unref**：调用方正在 await 这一句，unref 掉的话 Node 会认为没有待办事项、
+    // 进程直接退出（回归里的表现是「top-level await 没有 settle」）。这段最长 8 秒，
+    // 而它换来的是「取消返回时它真的没了」这个保证。
+    await new Promise((resolve) => setTimeout(resolve, KILL_POLL_MS));
+  }
 }
 
 export function appendGateLog(logPath: string, text: string): void {
