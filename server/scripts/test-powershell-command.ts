@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { powerShellCommandCases } from "./project-command-powershell-cases.js";
@@ -58,8 +58,11 @@ if (platform !== "win32" && !powerShell) {
         if (testCase.output) assert.ok(result.stdout.includes(testCase.output), `${testCase.name}: ${result.stdout}`);
         assert.equal(hasErrorOutput(result.stderr), Boolean(testCase.error), `${testCase.name}: ${result.stderr}`);
         if (testCase.exitCode === 0) {
+          const originalPath = join(stage, `${testCase.name}.ps1`);
+          writeFileSync(originalPath, `\ufeff${testCase.script}`, "utf8");
+          const invokeOriginal = `& '${originalPath.replace(/'/g, "''")}'`;
           const original = spawnSync(shell, [
-            "-NoLogo", "-EncodedCommand", Buffer.from(testCase.script, "utf16le").toString("base64"),
+            "-NoLogo", "-EncodedCommand", Buffer.from(invokeOriginal, "utf16le").toString("base64"),
           ], { encoding: "utf8", timeout: 20_000, windowsHide: true });
           assert.ifError(original.error);
           assert.equal(original.status, 0, `${testCase.name} original: ${original.stderr}`);

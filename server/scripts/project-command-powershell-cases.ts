@@ -30,7 +30,7 @@ export function powerShellCommandCases(node: string): {
       exitCode: 0,
       output: "SUCCESS",
     })),
-    { name: "named-blocks", script: 'param([string]$name="BLOCK_OK")\nbegin { Write-Output "BEGIN" }\nprocess { Write-Output $name }\nend { Write-Output "END" }', exitCode: 0, output: "END" },
+    { name: "named-blocks", script: 'param([string]$name="BLOCK_OK")\nbegin { Write-Output "BEGIN" }\nprocess { Write-Output $name }\nend { Write-Output "END" }', exitCode: 0, output: "BLOCK_OK" },
     { name: "process-only", script: 'process { Write-Output "PROCESS_OK" }', exitCode: 0, output: "PROCESS_OK" },
     { name: "begin-only", script: 'begin { Write-Output "BEGIN_OK" }', exitCode: 0, output: "BEGIN_OK" },
     { name: "class", script: 'class ScriptResult { [string] GetName() { return "CLASS_OK" } }\n([ScriptResult]::new()).GetName()', exitCode: 0, output: "CLASS_OK" },
