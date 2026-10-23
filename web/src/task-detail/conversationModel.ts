@@ -1,4 +1,5 @@
 import type { ContextUsage, Session, TokenUsage } from "@ash/shared";
+import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { ANSWER_PREFIX, parseSessionOutput } from "@ash/shared";
 import { addUsage, usageTotal } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
@@ -7,7 +8,7 @@ import type { ConversationEventTone, ConversationEventVariant } from "./conversa
 import { isVerifyNote, noteTone, verifyNoteOf } from "./conversationNotes.ts";
 import { applyVerifySpans, reviewerKey, reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";
-import { contentSegments } from "./conversationSegments.ts";
+import { contentSegments, markSegmentsAwaiting } from "./conversationSegments.ts";
 import {
   groupedTrace,
   normalizedPersistedTrace,
@@ -30,7 +31,7 @@ export type { AgentAuxEvent, AgentContentSegment, AttachmentSource } from "./con
 export type { LiveAgentEvent } from "./conversationTurnParts.ts";
 
 export type TimelineEntry =
-  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; source?: "optimistic" | "server" }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData; source?: "optimistic" | "server" }
   | { kind: "server"; id: string; event: LiveAgentEvent };
 
 export type ConversationItem =
@@ -76,7 +77,7 @@ export type ConversationItem =
       markdown: string;
       segments: AgentContentSegment[];
     }
-  | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean; bySystem?: boolean }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData }
   | {
       kind: "event";
       id: string;
@@ -353,6 +354,7 @@ function appendPersistedSession(
         // 后端代写、占着真人回合的那种（验证打回、验收冲突）。照常渲染成 user 气泡，
         // 但「后续追问」不收它 —— 判据统一在 shared 的 isUserFollowUp。
         bySystem: segment.bySystem,
+        monitorWake: segment.monitorWake,
       });
       turnStartedAt = segment.at ?? turnStartedAt;
       openTurn = null;
@@ -480,6 +482,22 @@ function appendPersistedSession(
     else fragment = { turn: traceTurn, entries: [...entries] };
   }
   flushFragment();
+
+  /* 「这条会话**此刻**还卡在上游等回话」是**服务端给的一位事实**(`Session.awaitingUpstream`,
+     判据见 server/src/session-waiting.ts),落在这条会话最后那颗气泡上 —— 折叠条读的就是
+     末段(见 markSegmentsAwaiting)。
+     为什么不自己从 trace 的末条推:**那两份文件的缓冲进度不一样**。正文攒在
+     `pendingTraceText` 里,要等下一条非 text 事件或回合收口才落 `.trace.jsonl`,而 `.md`
+     是边流边写。于是一场「重试过、随后正常答完」的回合,刷新时 `.md` 已经是完整答复、
+     trace 却还停在那条提示上,读者照它反推就会在答案上方永久挂着「正在重试」——正是这个
+     任务要修的那个现象,只是换到了重建这一路(第 5 轮审查 F2)。
+     直播那一路的来源是事件顺序(conversationLiveTurns 边到边记),刷新之后再到达的输出会
+     照常把这一位覆盖回去;还没恢复的则一直挂着,这正是要的 sticky。 */
+  if (session.awaitingUpstream) {
+    const latest = [...items].reverse()
+      .find((item): item is AgentItem => item.kind === "agent" && item.sessionId === session.id);
+    if (latest) markSegmentsAwaiting(latest.segments);
+  }
 }
 
 export function buildConversationItems(

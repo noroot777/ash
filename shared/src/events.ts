@@ -10,6 +10,7 @@ import type { AgentType, DuetConsensusBy, QuestionItem, Task, TaskStage, TaskSta
 import type { SessionRole } from "./session.ts";
 import type { ContextUsage, TokenUsage } from "./usage.ts";
 import type { NativeWorkEvent } from "./native-work.ts";
+import type { MonitorWakeData } from "./monitor-wake.ts";
 
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events
@@ -63,10 +64,20 @@ export type AgentEvent =
   // 上下文**水位**(不是流水,区别见 shared/src/usage.ts 的 ContextUsage)。每回合至多
   // 一条,恒在该回合的 turnEnd/done 之前。落库是**覆盖**不是累加。
   | { kind: "context"; context: ContextUsage }
-  // level="notice" = 这条不是执行故障,是**结算说明**(回合怎么落位、为什么这么落)。
-  // 分级的理由:结算说明混在故障里,新用户看到红叉只会读成「它崩了」,而真出故障时
-  // 那句说明又会盖住真正的原因(docs/incidents.md「接力到多用户机器」)。缺省(旧 trace、
-  // 执行器报的错)仍是故障级,展示端照旧红着。
+  // level="notice" = 这条不是执行故障,是**执行过程里的一条提示**:上游在重试、还在等
+  // 回话、这一轮为什么落成这个状态。分级的理由:提示混在故障里,新用户看到红叉只会读成
+  // 「它崩了」,而真出故障时那句提示又会盖住真正的原因(docs/incidents.md「接力到多用户
+  // 机器」)。缺省(旧 trace、执行器报的错)仍是故障级,展示端照旧红着。
+  //
+  // 消费侧对 notice 的口径是统一的:**落 trace、照发,但一概不当失败处理** —— 不写
+  // `执行诊断` 红块、不并进会话恢复故障、不置 sawExecutionError、不让 duet 判这一轮失败。
+  // 展示端把它排在执行过程里它发生的那个位置(紧跟着上一步),用琥珀色的「提示」行,
+  // 不计异常数。判据统一在 server 的 `session-notice.ts#isExecutionNotice`。
+  //
+  // 为什么是 error 而不是 system:system 行会被写成 `.md` 的回合 sentinel,而那一路是
+  // **回合收口之后**才补落盘的,于是整段重试记录糊在会话结尾、离它真正发生的那一步十万
+  // 八千里(用户 2026-10-21 反馈)。trace 天生按发生顺序排,是这类过程信号唯一对的位置。
+  //
   // affectsTurn=false = 仍按红色异常展示和落 trace，但它只是旁路诊断（例如 Claude 自动
   // 压缩失败），不能据此把已经成功的模型回合判失败。缺省=true，真正的回合/API 错误
   // 不必每个执行器重复标注。
@@ -82,7 +93,8 @@ export type DuetSpeaker = "A" | "B" | "synthesis" | "impl" | "review" | "user";
 // 一个讨论者回合里的执行过程(它跑了什么命令、读了什么文件、想了什么)。落进
 // transcript.jsonl 的回合行,好让刷新后的时间线仍能展开「执行过程」——实时那份
 // 是从 agent.event 流里攒的,不落盘就只在当次连接里存在。
-export type TurnTraceEvent = { kind: "tool" | "thinking"; label: string; detail?: string };
+// notice = 过程里的一条提示(上游重试、还在等回话),跟普通任务的执行过程同一套展示。
+export type TurnTraceEvent = { kind: "tool" | "thinking" | "notice"; label: string; detail?: string };
 /**
  * 讨论区一个回合里「正文第几处引用对上哪份拷贝」(随回合一起落盘)。
  *
@@ -147,6 +159,7 @@ export type ServerEvent =
       text: string;
       at: string;
       bySystem?: true;
+      monitorWake?: MonitorWakeData;
     }
   | {
       type: "duet.progress";

@@ -223,7 +223,7 @@ export class ClaudeExecutor implements AgentExecutor {
         }
       })(),
       kill: () => killChild(child),
-      cleanup: async () => { settings.cleanup(); goal.cleanup(); await cleanupAfterRun(child); },
+      cleanup: async () => { settings.cleanup(); goal.cleanup(); return cleanupAfterRun(child); },
       detached: detachedInfo(child),
     };
   }
@@ -281,7 +281,7 @@ export class ClaudeExecutor implements AgentExecutor {
         settingsCleanup,
       ),
       kill: () => child.kill(),
-      cleanup: async () => { settingsCleanup(); await cleanupAfterRun(child); },
+      cleanup: async () => { settingsCleanup(); return cleanupAfterRun(child); },
       detached: detachedInfo(child),
     };
   }
@@ -369,7 +369,7 @@ export class ClaudeExecutor implements AgentExecutor {
         child.stdin?.end();
       },
       kill: () => killChild(child),
-      cleanup: async () => { settingsCleanup(); await cleanupAfterRun(child); },
+      cleanup: async () => { settingsCleanup(); return cleanupAfterRun(child); },
     };
   }
 

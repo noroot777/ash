@@ -242,6 +242,49 @@ async function initializeServer() {
     const { sweepPersonalAshMcp } = await import("./auth/user-cli.js");
     await sweepPersonalAshMcp().catch((err) => console.error("[ash] 个人 CLI 的 ash MCP 自检失败（不影响启动）:", err));
   }
+  // 上一个 ash 留下的逃逸追踪文件(tmpdir 里的空文件)。证据的寿命跟着「还能不能取到人」
+  // 走、不再有硬期限(见 executors/kill.ts),所以「进程整个没了、内存里的租约也没了」这条
+  // 路得有人收。只删「创建者 pid 已经不在 + 此刻没有活着的持有者」的那些,所以不会碰到
+  // 另一个 ash 实例正用着的文件。best-effort。
+  void (async () => {
+    const { sweepOrphanTrackFiles } = await import("./executors/kill.js");
+    const removed = await sweepOrphanTrackFiles();
+    if (removed) console.log(`[ash] 回收 ${removed} 个上一轮遗留的逃逸追踪文件`);
+  })().catch((err) => console.error("[ash] 逃逸追踪文件回收失败（不影响运行）:", err));
+  // 上一辈子没收干净的 agent 后代:那一轮的清理明确答出「还有残留」或者「没问清楚」,
+  // 责任落在 `agent_cleanup_debts` 上(见那张表的注释)。**排在接管之后**:接回来的那些
+  // 运行自己还会再走一次清理,这里只追真正没人管的。best-effort,不影响启动。
+  void (async () => {
+    const { sweepAgentCleanupDebts, listOpenCleanupDebts } = await import("./executors/cleanup-debt.js");
+    const swept = await sweepAgentCleanupDebts();
+    // **问不出来要说问不出来**:报成 0/0/0 跟「扫完了,一笔都没有」长得一样(第 2 轮审查 N3)。
+    if (!swept.ok) {
+      console.warn(`[ash] agent 清理责任这一问没答出来(${swept.reason}):这一轮没能确认有没有`
+        + "没收干净的后代,POST /api/cleanup-debts/sweep 可以再追一次");
+      return;
+    }
+    if (swept.settled || swept.left || swept.closed || swept.vanished || swept.stuck) {
+      console.log(`[ash] agent 清理责任:销账 ${swept.settled} 笔,仍没收干净 ${swept.left} 笔,`
+        + `追不下去 ${swept.closed} 笔,清理路径自己销掉 ${swept.vanished} 笔,`
+        + `这一轮连行都读不出来 ${swept.stuck} 笔`);
+    }
+    // 只在内存里扛着的那几笔**跨不过重启**,所以单独说一句:这是真正的责任丢失风险,
+    // 混在上面那一串计数里看不出来。
+    if (swept.pendingNotes) {
+      console.warn(`[ash] 还有 ${swept.pendingNotes} 笔清理责任只在内存里(落库失败,这一轮`
+        + `补投成功 ${swept.landedNotes} 笔):这几笔跨不过重启`);
+    }
+    // 还没收干净的那几笔**逐条如实报出来**:静默只会让用户得出「停止按钮坏了」。
+    const listing = await listOpenCleanupDebts();
+    if (!listing.ok) {
+      console.warn(`[ash] 没收干净的那几笔读不出来(${listing.reason}):别把这当成没有`);
+      return;
+    }
+    for (const debt of listing.debts) {
+      console.warn(`[ash] 这一次运行的后代还没收干净(记号 ${debt.unitToken}、根 pid=${debt.rootPid ?? "?"}):`
+        + `${debt.detail}。可在 /api/cleanup-debts 查看,POST /api/cleanup-debts/sweep 再追一次`);
+    }
+  })().catch((err) => console.error("[ash] agent 清理责任清扫失败（不影响运行）:", err));
   // 回收上一轮遗留的原始输出文件（纯传输介质，正文早已进 .md）。放在接管之后：
   // 它靠 sessions 判断哪些文件仍在用，接管完那份名单才是准的。best-effort。
   void sweepRunLogs()

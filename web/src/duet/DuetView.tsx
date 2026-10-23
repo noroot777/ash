@@ -105,7 +105,7 @@ function TurnBubble({
           {turn.raised && <em>✋ 可收敛</em>}
           {!turn.done && <TypingDots />}
         </header>
-        <ExecutionDetails events={turn.events} running={!turn.done} />
+        <ExecutionDetails events={turn.events} running={!turn.done} awaiting={turn.awaiting} />
         {!turn.done && !turn.text && !turn.events.length && <p className="duet-thinking">{side === "synthesis" ? "正在把讨论成果整理成共同方案…" : "正在组织本轮观点…"}</p>}
         {/* 讨论者写的 `![](output/x.png)` 指的是**它工作目录里**那张图，浏览器直接取不到。
             配对走会话流那同一套（turnImageMarkdown → turnImages）：有「说那句话时的快照

@@ -27,7 +27,15 @@ function SideMessage({ message }: { message: ChatMessage }) {
   const parsed = message.role === "user" ? parseAttachmentText(message.body) : null;
   return <article className={`side-chat-message is-${message.role} is-${message.status}`}>
     <header><strong>{message.role === "user" ? "你" : message.role === "system" ? "ash" : "侧聊助手"}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>
-    {!!trace.length && <ExecutionDetails events={trace} running={busy} />}
+    {/* 侧聊的 trace 里只有工具/思考/提示,正文压根不进(server 的 chat/execution.ts 跑完
+        才一次性落 body),所以这一路没有「正文已经恢复」这个信号可用,判据只能是「那条提示
+        之后还没有新的 trace 事件」。代价说在明处:上游恢复之后先说一段话、迟迟不调下一个
+        工具的那段时间里,这句提示会多留一会儿,直到下一条事件或者这条跑完。 */}
+    {!!trace.length && <ExecutionDetails
+      events={trace}
+      running={busy}
+      awaiting={trace.at(-1)?.kind === "notice"}
+    />}
     {busy && !trace.length && <p className="side-chat-thinking" role="status">{message.status === "queued" ? "等待回复…" : "正在思考…"}</p>}
     {!busy && <MarkdownBody text={parsed?.body ?? message.body} />}
     {!!parsed?.paths.length && <MessageAttachments paths={parsed.paths} />}

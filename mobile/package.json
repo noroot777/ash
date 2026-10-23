@@ -42,6 +42,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "test:project-path": "node --experimental-strip-types scripts/test-project-path.mjs",
+    "test:session-notices": "node --experimental-strip-types scripts/test-session-notices.mjs",
     "lint": "expo lint",
     "test:cli-capability": "node --experimental-strip-types scripts/test-cli-capability.mjs",
     "test:web-smoke": "node scripts/test-web-smoke.mjs",

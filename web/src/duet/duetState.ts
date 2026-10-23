@@ -1,5 +1,6 @@
 import type { DuetConsensusBy, DuetSpeaker, GateName, ServerEvent, TurnImageRef } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
+import { resumesWaiting } from "@ash/shared/waiting";
 import { appendExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
 
 export type DuetTurn = {
@@ -17,6 +18,12 @@ export type DuetTurn = {
    */
   images?: TurnImageRef[];
   raised: boolean;
+  /**
+   * 本回合停在一条等待提示上(上游在重试/还没回话),由归约层维护:提示置上、下一条
+   * 真进度置回。展示入口一律读它,别自己从「最后一条事件是不是提示」倒推 —— 回合里的
+   * 正文和事件都是整轮累积的,倒推不出「这条提示之后有没有新东西来」。
+   */
+  awaiting: boolean;
   agrees?: boolean;
   conclusion?: string;
   done: boolean;
@@ -39,7 +46,8 @@ export type DuetGate = {
 
 export type DuetState = { turns: DuetTurn[]; gate: DuetGate | null };
 // 落盘的回合行:events 是后加的,旧 transcript 里没有(缺省当作没有执行过程)。
-export type PersistedDuetTurn = Omit<DuetTurn, "events" | "done" | "raised"> & { raised?: boolean; events?: ExecutionEvent[] };
+// awaiting 只在回合进行中有意义,落盘的都是已结束的回合,所以不进这份投影。
+export type PersistedDuetTurn = Omit<DuetTurn, "events" | "done" | "raised" | "awaiting"> & { raised?: boolean; events?: ExecutionEvent[] };
 export type PersistedDuetEntry =
   | PersistedDuetTurn
   | Extract<ServerEvent, { type: "duet.gate" | "duet.progress" }>;
@@ -79,6 +87,7 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
           text: "",
           events: [],
           raised: false,
+          awaiting: false,
           done: false,
           startedAt: event.startedAt ?? event.at,
         }],
@@ -90,6 +99,7 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
         turns[index] = {
           ...turns[index]!,
           done: true,
+          awaiting: false,
           raised: !!event.raisedHand,
           at: event.at,
           startedAt: event.startedAt ?? turns[index]!.startedAt,
@@ -123,6 +133,7 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
         text: event.text,
         events: [],
         raised: false,
+        awaiting: false,
         done: true,
         at: event.at,
         target: event.target,
@@ -147,7 +158,16 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
       if (event.event.kind === "thinking") turn.events = appendExecutionEvent(turn.events, { kind: "thinking", label: "思考过程", detail: event.event.text });
       // error / notice 都累积:服务端 runTurn 落 transcript 时就是拼接的,实时这边要是
       // 覆盖,同一个回合出多条时实时只剩最后一条、刷新后又变成全部,两个面读不一样。
-      if (event.event.kind === "error") turn.error = `${turn.error ?? ""}\n${event.event.message}`.trim();
+      // level:"notice" 的 error 不是故障,是过程里的一句提示(上游在重试、还在等回话):
+      // 跟服务端 runTurn 同一个去处 —— 进本回合的执行过程,不进 error(那会把一场正常
+      // 收敛的讨论标成失败)。
+      if (event.event.kind === "error") {
+        if (event.event.level === "notice") turn.events = [...turn.events, { kind: "notice", label: "提示", detail: event.event.message }];
+        else turn.error = `${turn.error ?? ""}\n${event.event.message}`.trim();
+      }
+      // 等待状态在这里一处算完(见 DuetTurn.awaiting):提示置上,随后任何一条真进度置回。
+      if (event.event.kind === "error" && event.event.level === "notice") turn.awaiting = true;
+      else if (resumesWaiting(event.event)) turn.awaiting = false;
       if (event.event.kind === "system") turn.notice = `${turn.notice ?? ""}\n${event.event.text}`.trim();
       turns[index] = turn;
       break;
@@ -169,7 +189,7 @@ export function rebuildDuetState(entries: PersistedDuetEntry[]): DuetState {
     if (isPersistedGate(entry)) state = applyDuetEvent(state, entry);
     else if (isPersistedProgress(entry)) state = applyDuetEvent(state, entry);
     else {
-      const completed: DuetTurn = { ...entry, raised: !!entry.raised, events: entry.events ?? [], done: true };
+      const completed: DuetTurn = { ...entry, raised: !!entry.raised, events: entry.events ?? [], awaiting: false, done: true };
       const turns = [...state.turns];
       let replaced = false;
       for (let index = turns.length - 1; index >= 0; index -= 1) {

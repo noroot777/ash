@@ -8,7 +8,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
+import { trackRun, discardStartingRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
 import { consumeSingleRun } from "./single-run.js";
 import { afterSettlement } from "./settle-status.js";
@@ -260,6 +260,9 @@ export async function runTask(
       agentErrPath: handle.detached ? detach.err : null,
       agentRcPath: handle.detached ? detach.rc : null,
       agentOffset: 0,
+      // 记号跟 pid 一起落:重启后 WeakMap 没了,库里这一行是找回后代的唯一线索
+      // (executors/unit-token.ts)。
+      agentUnitToken: handle.detached?.unitToken ?? null,
     };
     await db.insert(sessions).values(sessRow);
     // 回合开始就落一行：收尾那下写不成时,「开了没收口」才有据可查(光靠计数对不出位置)。
@@ -310,7 +313,10 @@ export async function runTask(
     await setTaskStatus(taskId, status);
     await afterSettlement(taskId, status, false, false, "single", true, !stopped);
   } finally {
-    if (handle) untrackRun(taskId, handle);
+    // 这一轮归谁:到 consumeSingleRun 认领之前都归起跑方,所以**失败出口必须连进程一起
+    // 收掉**,只注销会留下一个没人读输出、停止按钮也碰不到的 CLI(第 1 轮审查 F1;三态
+    // 和「为什么认领过的只注销不杀」见 runs.ts 顶部)。认领过的走到这里只是注销。
+    if (handle) discardStartingRun(taskId, handle);
     releaseTurn(taskId);
     // 这一次调用结束了 = 它名下不再有回合在写。**注销不能只挂在正常收尾那条路上**：
     // stream 抛错、结算写库失败、被停都走不到 `recordTurnSpan`,残留的活动登记会让读端把这条

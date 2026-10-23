@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { CaretRight, Pulse, SpinnerGap, StopCircle } from "@phosphor-icons/react";
+import { BellSlash, CaretRight, Pulse, SpinnerGap, StopCircle } from "@phosphor-icons/react";
 import { canStopMonitor, hasMonitorLog, type TaskMonitor } from "@ash/shared/monitor";
+import { endConditionNote } from "@ash/shared/monitor-end-condition";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { api } from "../lib/api.ts";
 import { formatInstant } from "../task-detail/utils.ts";
@@ -76,6 +77,20 @@ export function MonitorCard({
   // 拿回一个空数组，白白每 2.5 秒一次。
   const log = useMonitorLog(monitor.id, open && logged, live);
   const stopTip = useHoverTip();
+  const abandonTip = useHoverTip();
+  /**
+   * **结果还欠着的那一类,得有一个人点得到的出路**（第 2 轮审查 N3）。
+   *
+   * 完成闸的第三类是「结局已经写定、那条结束通知还没持久入队」。正常它只闪一下就没了,
+   * 入队那一笔失败时才会一直留着 —— 而那正是用户撞上「完成被一条已经结束的哨兵堵住」的
+   * 时刻。在这之前这一类**两处入口都没有**:还没入队所以不在待发送托盘里,已经结束所以
+   * 卡片也不给它渲染按钮,只剩「让 agent 调 stop_monitor」—— 而人点不了 MCP 工具。
+   *
+   * 点下去走的是同一个停止端点:对一条已经结束的哨兵,它什么状态都不改,只落下「它还没送到
+   * 的结果我不要了」（server/src/monitor-stop.ts 的 `abandonResults`）。所以措辞也必须是
+   * 「不再等它的结果」而不是「停掉」—— 进程早就没了。
+   */
+  const owesResult = !live && stoppable && !!monitor.resultHandoffAt && !monitor.resultsAbandonedAt;
   const endedLabel = MONITOR_ENDED_LABEL[monitor.status] ?? monitor.status;
   // 结束原因常常就是那句状态标签本身（命令自己跑完了 / 盯满时长），一字不差时只说一遍。
   //
@@ -114,12 +129,22 @@ export function MonitorCard({
     startedAtLabel(monitor),
     // 起点那一段已经自己说了「不确定」，这里就不要再带一遍那句括号。
     live ? liveDeadline(monitor, { startSaidSeparately: true }) : null,
+    // **约定的结束条件每张卡都给**（有就给）：还在盯的那张靠它回答「它到底什么时候叫我」——
+    // 光一个「盯到 X」会被读成「只能等到那时候」。已经结束的那张也要给：`expired` + 有条件
+    // 合起来才说得出「它等的那一行始终没出现」，少了这一段，用户只看得到一个干等满时长的结果。
+    // 措辞归 `endConditionNote`：库里那个值可能是这一版读不出来的，那它就**不会**提前收工
+    // ——这里念「…就收工」就是替一件不会发生的事背书（第 2 轮审查 F2）。
+    monitor.stopWhen ? endConditionNote(monitor.stopWhen) : null,
     !live && endedTimeLabel ? `结束于 ${endedTimeLabel}` : null,
     live ? null : `${endedLabel}${monitor.exitCode === null ? "" : `（退出码 ${monitor.exitCode}）`}`,
     // 事件数只有 ash 自己起的那种数得准：claude 把事件直接注回它自己的会话，ash 看不到
     // 几条，显示一个恒为 0 的「0 条事件」只会被读成「过滤写错了」。
     logged ? `${monitor.events} 条事件` : null,
     monitor.pid === null ? null : `pid ${monitor.pid}`,
+    // 「完成被它堵着」这件事必须在卡片上说出来：用户看到的是一个已经结束的哨兵，而任务那边
+    // 的 `complete_task` 正被它拦着（完成闸第三类）。不说的话，两处现象对不上。
+    owesResult ? "结果还没送到，完成被它堵着" : null,
+    monitor.resultsAbandonedAt ? "已放弃它没送到的结果" : null,
   ].filter((segment): segment is string => !!segment);
 
   return (
@@ -141,6 +166,23 @@ export function MonitorCard({
               {stopping ? <SpinnerGap size={13} className="is-spinning" /> : <StopCircle size={13} weight="bold" />}
             </button>
             <HoverTip at={stopTip.at}>停掉这个哨兵（杀掉它的进程，不再唤醒任务）</HoverTip>
+          </>
+        )}
+        {owesResult && (
+          <>
+            <button
+              type="button"
+              className="monitor-card__stop"
+              disabled={stopping}
+              aria-label={`不再等哨兵“${monitor.description}”的结果`}
+              {...abandonTip.anchorProps}
+              onClick={() => { abandonTip.hide(); onStop(monitor.id); }}
+            >
+              {stopping ? <SpinnerGap size={13} className="is-spinning" /> : <BellSlash size={13} weight="bold" />}
+            </button>
+            <HoverTip at={abandonTip.at}>
+              不再等它的结果（它早就结束了，这一下只撤掉「必须先收下它的结果」这条放行条件）
+            </HoverTip>
           </>
         )}
       </header>

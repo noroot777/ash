@@ -315,5 +315,175 @@ console.log(`   任务最终状态 = ${finalStatus}`);
 if (finalStatus === "running") fail("agent 结束后任务仍卡在 running —— 结算没跑");
 else okLine(`agent 结束后正常结算为 ${finalStatus}`);
 
+// ⑥ 接管成功**之后**才暴露出来的中断,谁来结算(第 1 轮审查 F1)。
+//
+// reattachRunningTasks 把消费循环 `void` 出去就返回了,紧随其后的 reconcileInterrupted
+// 看到 isRunning 为真、正确地跳过了这个任务(上面 ③ 钉的就是这一条)。可那条消费循环要是
+// 随后在初始化段抛了错,进程收掉了、登记注销了,却**再也没有人来结算它** —— 任务永远停在
+// running:界面上一个转着的任务,不会有输出,也停不掉,连重试都点不了。
+// 所以那条 finally 在撤干净「有活句柄」的证据之后,必须再问一次这个任务该不该结算。
+console.log("⑥ 接管后无人收尾的任务,finally 那一问必须把它结算掉");
+{
+  const { reconcileInterruptedTask } = await import("../src/task-reconcile.js");
+  const { trackRun, untrackRun } = await import("../src/runs.js");
+  const STRANDED = `T-stranded-${RUN}`;
+  const GUARDED = `T-guarded-${RUN}`;
+  const TEAM = `T-team-stranded-${RUN}`;
+  for (const [id, mode] of [[STRANDED, "single"], [GUARDED, "single"], [TEAM, "team"]] as const) {
+    await db.insert(projects).values({ id: `p-${id}`, name: "t", repoPath: dir, createdAt: now() } as never);
+    await db.insert(tasks).values({
+      id, projectId: `p-${id}`, title: "接管后中断", body: "", status: "running",
+      mode, agentType: "claude", labels: "[]", createdAt: now(), updatedAt: now(), autoTitle: 0, useWorktree: 0,
+    } as never);
+  }
+  const settled = await reconcileInterruptedTask(STRANDED);
+  const stranded = (await db.select().from(tasks).where(eq(tasks.id, STRANDED))).at(0)?.status;
+  if (stranded === "failed") okLine("没人收尾的那条被结算成 failed(用户能重试)");
+  else fail(`接管后中断的任务应判 failed,实为 ${stranded}`);
+  if (settled) okLine("回执说明这次接管没跑成(调用方据此把它从「已接管」里撤掉)");
+  else fail("结算了却回执「没我的事」,调用方会继续把它当成接管成功");
+
+  // 真在跑的绝不许被它动:这一问发生在消费循环结束之后,但同一个任务可能已经被别人重新
+  // 跑起来了(用户点了重试、队列推进过来),判据必须是「此刻有没有活句柄」。
+  const liveHandle = { kill: () => {} };
+  trackRun(GUARDED, liveHandle);
+  const guardedSettled = await reconcileInterruptedTask(GUARDED);
+  if (guardedSettled) fail("在跑的任务不该给出「我结算了」的回执");
+  const guarded = (await db.select().from(tasks).where(eq(tasks.id, GUARDED))).at(0)?.status;
+  if (guarded === "running") okLine("手上还有活句柄的任务,这一问必须空转");
+  else fail(`在跑的任务被误结算成了 ${guarded}`);
+  untrackRun(GUARDED, liveHandle);
+
+  // 团队调度台没有「失败」这回事(进程随 server 走,下次说话 --resume 接回),落待命。
+  await reconcileInterruptedTask(TEAM);
+  const team = (await db.select().from(tasks).where(eq(tasks.id, TEAM))).at(0)?.status;
+  if (team === "idle") okLine("团队调度台落 idle,跟批量版同一口径");
+  else fail(`团队调度台应落 idle,实为 ${team}`);
+
+  // 新回合**已经占住回合锁、还没登记句柄**的那一瞬:claim 排在 trackRun 之前,所以
+  // 「手上没有句柄」证明不了「没有人正在起跑」。结算必须原子预占同一把锁,占不到就撤
+  // (第 1 轮审查 F3:否则一个刚起跑的任务被写成 failed,界面失败、agent 照跑)。
+  const STARTING = `T-starting-${RUN}`;
+  await db.insert(projects).values({ id: `p-${STARTING}`, name: "t", repoPath: dir, createdAt: now() } as never);
+  await db.insert(tasks).values({
+    id: STARTING, projectId: `p-${STARTING}`, title: "正在起跑", body: "", status: "running",
+    mode: "single", agentType: "claude", labels: "[]", createdAt: now(), updatedAt: now(), autoTitle: 0, useWorktree: 0,
+  } as never);
+  const { claimTurn, releaseTurn, isTurnClaimed } = await import("../src/runs.js");
+  if (!claimTurn(STARTING)) fail("这条用例的前提是能占到那把回合锁");
+  const startingSettled = await reconcileInterruptedTask(STARTING);
+  if (startingSettled) fail("正在起跑(已占锁、未登记句柄)的任务不该给出「我结算了」的回执");
+  const starting = (await db.select().from(tasks).where(eq(tasks.id, STARTING))).at(0)?.status;
+  if (starting === "running") okLine("已占锁、还没 spawn 的那一瞬,结算必须空转");
+  else fail(`正在起跑的任务被误结算成了 ${starting}`);
+  releaseTurn(STARTING);
+  // 放手之后它就是一条真正没人管的任务,照常结算;占位也不许留下(占不回来就说明漏放了)。
+  const afterRelease = await reconcileInterruptedTask(STARTING);
+  const settledNow = (await db.select().from(tasks).where(eq(tasks.id, STARTING))).at(0)?.status;
+  if (afterRelease && settledNow === "failed") okLine("起跑撤回之后,同一条任务照常被结算");
+  else fail(`回合放手后仍没能结算(回执 ${afterRelease}、状态 ${settledNow})`);
+  if (isTurnClaimed(STARTING)) fail("结算用的占位没还回去 —— 这个任务此后再也起不来");
+  else okLine("结算占位用完即还");
+
+  // 已经结算过的任务再问一次 = 空转(正常收尾的那条路每轮都会走到这一问)。
+  const againSettled = await reconcileInterruptedTask(STRANDED);
+  if (againSettled) fail("已落终态的任务不该再给出「我结算了」的回执");
+  const again = (await db.select().from(tasks).where(eq(tasks.id, STRANDED))).at(0)?.status;
+  if (again === "failed") okLine("已落终态的任务再问一次不会被改写");
+  else fail(`空转这一问把终态改成了 ${again}`);
+}
+
+// ⑦ **拿到原始进程、还没拿到句柄**那一段里失败:后代回收和责任交接一个都不能少。
+//
+// 第 11 轮审查 F2 实测的那一下:接管时执行器资料那次查询失败(可恢复的查询错误),catch 里
+// 只 `child.kill()` —— 那一刀只收一个根,它甩出去的后代还在写文件,而且**一笔责任都没落**:
+// 根已退出、后代仍活着、债表 0 行、再点停止也没反应,事后连一条可追的记录都没有。
+console.log("⑦ 句柄构造之前失败:后代要收、责任要交出去");
+{
+  const { unitTokenOf } = await import("../src/executors/unit-token.js");
+  const { listAllCleanupDebts } = await import("../src/executors/cleanup-debt.js");
+  const { isPidAlive } = await import("../src/platform.js");
+
+  const RAW = "t-raw-child";
+  const beat = join(dir, "raw-kid.beat");
+  const kidPidFile = join(dir, "raw-kid.pid");
+  // 这个假 agent 自己甩一个 detached 后代出去(自成进程组、继承本次运行的记号与输出写端),
+  // 然后自己赖着不退 —— 正是「根还在、后代也在」的那一刻接管失败。
+  const rawAgentScript = join(dir, "raw-agent.mjs");
+  writeFileSync(rawAgentScript,
+    `import { spawn } from "node:child_process";\n`
+    + `import { writeFileSync } from "node:fs";\n`
+    + `const kid = spawn(process.execPath, ["-e",\n`
+    + `  'const fs=require("node:fs");let n=0;setInterval(()=>fs.writeFileSync(process.argv[1],String(++n)),30);',\n`
+    + `  ${JSON.stringify(beat)}], { detached: true, stdio: "ignore" });\n`
+    + `writeFileSync(${JSON.stringify(kidPidFile)}, String(kid.pid));\n`
+    + `kid.unref();\n`
+    + `process.stdout.write(JSON.stringify({ type: "system", session_id: "cli-sess-raw" }) + "\\n");\n`
+    + `setInterval(() => {}, 1000);\n`);
+
+  await db.insert(projects).values({ id: `p-${RAW}`, name: "t", repoPath: dir, createdAt: now() } as never);
+  await db.insert(tasks).values({
+    id: RAW, projectId: `p-${RAW}`, title: "原始进程所有权", body: "", status: "running",
+    mode: "single", agentType: "claude", labels: "[]",
+    createdAt: now(), updatedAt: now(), autoTitle: 0, useWorktree: 0,
+  } as never);
+  const sessId = `s-${RAW}`;
+  const runDir = join(RUNS_DIR, RAW);
+  mkdirSync(runDir, { recursive: true });
+  const paths = detachedPathsFor(runDir, sessId, "T0");
+  const child = spawnDetachedAgent(dir, process.execPath, [rawAgentScript], "", paths);
+  const rootPid = child.pid!;
+  cleanupPids.add(rootPid);
+  await new Promise((r) => setTimeout(r, 600));
+  const kidPid = Number(readFileSync(kidPidFile, "utf8"));
+  cleanupPids.add(kidPid);
+  assert.ok(isPidAlive(kidPid), "这一组要一个活着的后代");
+  await db.insert(sessions).values({
+    id: sessId, taskId: RAW, role: "single", agentType: "claude", executor: "claude@local",
+    cwd: dir, cliSessionId: "cli-sess-raw", commandLine: "fake",
+    startedAt: now(), turnStartedAt: now(), activeMs: 0,
+    agentPid: rootPid, agentStartedAt: inspectProcess(rootPid)?.startedAt ?? null,
+    agentOutPath: paths.out, agentErrPath: paths.err, agentRcPath: paths.rc, agentOffset: 0,
+    // 接管那一刻的记号只剩库里这一份(上个 server 进程的 WeakMap 没了)。
+    agentUnitToken: unitTokenOf(child),
+  } as never);
+
+  // 只拦**执行器资料**那一次查询(带 `{ id: ... }` 投影,是 reattach 的 try 里第一句);
+  // 候选任务和会话那两次都是无参 `db.select()`,不受影响。模拟一次可恢复的查询错误。
+  const hole = db as unknown as { select: (...a: unknown[]) => unknown };
+  const realSelect = hole.select;
+  let armed = true;
+  hole.select = (...args: unknown[]) => {
+    if (armed && args[0] && typeof args[0] === "object" && "id" in (args[0] as object)) {
+      armed = false;
+      throw new Error("夹具:这一次查执行器资料失败");
+    }
+    return realSelect.apply(db, args as never);
+  };
+  const adoptedRaw = await reattachRunningTasks();
+  hole.select = realSelect;
+
+  if (!adoptedRaw.has(RAW)) okLine("接管失败 ⇒ 不在已接管名单里");
+  else fail("接管明明失败了,却还算在已接管名单里");
+  await new Promise((r) => setTimeout(r, 900));
+  if (!isPidAlive(rootPid)) okLine("根进程收掉了");
+  else fail("根进程还活着 —— 这一支连原来那一刀都没发出去");
+
+  // **核心那一问**:完整清理跑过没有。两种平台证据等级各有一种成立形态 ——
+  // 认得下它就杀掉(fd / 真实环境项那一档),证明等级不够就不杀、但要留下一行可追的责任
+  // (macOS 的 `ps -E` 只给展示文本档)。旧写法两者都不成立:只杀一个根。
+  const debts = await listAllCleanupDebts();
+  const owed = debts.ok ? debts.debts : [];
+  const traced = owed.some((d) => d.unitToken.includes(unitTokenOf(child) ?? "@@none@@")
+    || d.unitToken.includes(paths.out));
+  if (!isPidAlive(kidPid) || traced) {
+    okLine(`后代有人管了(${isPidAlive(kidPid) ? `还活着、但留了 ${owed.length} 笔可追的责任` : "已收掉"})`);
+  } else {
+    fail("后代还在写、债表也没有一行可追 —— 句柄构造之前的失败出口只杀了根(F2 那一下)");
+  }
+  const beatLen = existsSync(beat) ? readFileSync(beat, "utf8").length : 0;
+  console.log(`   心跳文件长度 ${beatLen}、债表 ${owed.length} 笔`);
+}
+
 console.log(bad === 0 ? "\n✅ 接管接线全部正确" : `\n❌ ${bad} 项不符（现场：${dir}）`);
 process.exit(bad === 0 ? 0 : 1);

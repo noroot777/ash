@@ -133,7 +133,11 @@ export async function stopPreviewProcesses(taskId: string, record: Pick<PreviewR
   const descendants = new Set(roots);
   for (let previous = -1; previous !== descendants.size;) {
     previous = descendants.size;
-    for (const row of processes) if (descendants.has(row.ppid) && row.pid !== process.pid) descendants.add(row.pid);
+    // `ppid` 为 null = 这一行说不出它挂在谁下面(见 platform.ts),给不出边 —— 跟它以前被
+    // 规范化成 0 时的行为一样,只是现在说得明白。
+    for (const row of processes) {
+      if (row.ppid !== null && descendants.has(row.ppid) && row.pid !== process.pid) descendants.add(row.pid);
+    }
   }
   const observedAt = Date.now();
   const targets = [...descendants].reverse().map(pid => ({ pid, observedAt,

@@ -23,8 +23,17 @@ import { IS_WINDOWS } from "../platform.js";
 import { isSameProcess } from "../proc.js";
 import {
   shq, resolveBin, agentBaseEnv, failedChild, guardAgentSpawn,
-  openTrackFd, registerTrackFd, shareTrackFdRegistration, killChild, killByPid, spawnAgent,
+  openTrackFd, registerTrackFd, shareTrackFdRegistration, shareChildIdentity, markAdoptedChild,
+  killChild, killByPid, pidRunStillAlive, spawnAgent,
 } from "./spawn.js";
+import { registerRootLife, shareRootLife } from "./root-life.js";
+import {
+  adoptUnitToken, registerRunOutPath, registerUnitToken, seedUnitToken,
+  shareRunOutPath, shareUnitToken, unitTokenOf,
+} from "./unit-token.js";
+import {
+  CONFINE_ENROLL_CMD, openConfinement, registerConfinement, shareConfinement,
+} from "./kernel-confine.js";
 
 // 一次运行的三个落盘文件。rc 是退出码 —— 管道模式下退出码是 close 事件白送的,
 // 换成文件后没人告诉我们了,只能让 shell 跑完自己写一个数字进去。
@@ -226,6 +235,7 @@ export function spawnControllableDetachedAgent(
   if (made.status !== 0) return failedChild(`创建可重连 stdin 失败：${input}`);
 
   const script = [
+    CONFINE_ENROLL_CMD,                             // 分隔符由下面的 join 写
     'trap \'rm -f "$ASH_IN"\' EXIT',
     'exec 3<>"$ASH_IN"',
     '"$@" <&3 >>"$ASH_OUT" 2>>"$ASH_ERR"',
@@ -244,6 +254,16 @@ export function spawnControllableDetachedAgent(
   const track = openTrackFd();
   const stdio: Array<"ignore" | number> =
     track.fd === null ? ["ignore", "ignore", "ignore"] : ["ignore", "ignore", "ignore", track.fd];
+  // 环境记号跟管道那条路同一套(见 unit-token.ts):这条路的后代更需要它 —— 输出走文件,
+  // 进程活得过 server 重启,根与后代的距离只会更远。
+  const unitToken = seedUnitToken(env);
+  // **内核圈定**(第三条归属线索,见 kernel-confine.ts):圈号与记号同源。脚本的第一句
+  // `CONFINE_ENROLL_CMD` 在 `sh` fork 出 CLI **之前**把自己写进这个圈,所以这条路的
+  // 集合罩得住整段运行(coverage `whole-run`)——它认的就是 `preExecEnv()` 给的那一项。
+  // 平台/环境支持不了时 `confine` 是 null、那一项不存在,脚本第一句自己就是空操作。
+  const confine = openConfinement(unitToken);
+  Object.assign(env, confine?.preExecEnv() ?? {});
+  const bornAt = Date.now();                      // 理由见 spawn.ts 里同一句
   const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
     cwd,
     stdio,
@@ -251,10 +271,23 @@ export function spawnControllableDetachedAgent(
     detached: true,
   });
   registerTrackFd(real, track);
-  if (!real.pid) return failedChild(`起不来:${shq(bin)}`);
+  registerUnitToken(real, unitToken);
+  registerRunOutPath(real, paths.out);
+  // 父进程这一侧再写一次:**幂等**(号已经在圈里就是空操作)。它只为补上「shell 那一句
+  // 没跑成」那一种情形,成败不改变 coverage —— 号在不在圈里由内核自己记着。
+  registerConfinement(real, confine);
+  if (real.pid) confine?.enroll(real.pid);
+  registerRootLife(real, bornAt);
+  // **起不来就把圈撤掉**:一条没跑起来的运行留下的圈再也没人认领(登记挂在这个被丢掉的
+  // `real` 上),会一路攒到那道 24 小时的年龄门才清。圈里没成员,`rmdir` 必然成功。
+  if (!real.pid) { confine?.dispose(); return failedChild(`起不来:${shq(bin)}`); }
   const writer = fifoWriter(input);
   if (!writer) {
+    // `killChild` 把刀发给了整圈,但**成员不一定已经退了**,所以紧跟其后的 `dispose()`
+    // 可能撤不掉圈(`rmdir` 对非空 cgroup 必然失败)—— 那不是错,留给那道 24 小时的年龄门
+    // 扫就是了。这里要的只是「能撤就撤」:一条没跑起来的运行不该留一个没人认领的圈。
     killChild(real);
+    confine?.dispose();
     return failedChild(`打开可重连 stdin 失败：${input}`);
   }
   writer?.write(initialInput);
@@ -276,6 +309,17 @@ export function spawnControllableDetachedAgent(
     },
   });
   shareTrackFdRegistration(real, child);
+  // 追踪证据过户的同时把**退出身份**也过户:合成品自己的 exitCode 是上面 onExit 回调里补
+  // 写的,真进程退出到回调之间有一段窗口,被信号带走时更是永远停在 null —— 拿它判断
+  // 「这个号还是不是我们的进程」会在一个已经退出的号上发信号(第 2 轮审查 F1)。真进程还
+  // 握在手里,内核状态就是权威答案,所以指向它。
+  shareChildIdentity(real, child);
+  // 根这一代的生命周期同样过户:区间登记在真进程上,合成品共享**同一份记录**
+  // (见 root-life.ts)—— 清理那条路拿到的是合成品。
+  shareRootLife(real, child);
+  shareUnitToken(real, child);
+  shareRunOutPath(real, child);
+  shareConfinement(real, child);
   return child;
 }
 
@@ -307,7 +351,7 @@ export function spawnDetachedAgent(
     try { closeSync(openSync(p, "a")); } catch { /* 目录不存在等,交给下面的 spawn 报错 */ }
   }
 
-  const script = '"$@" >>"$ASH_OUT" 2>>"$ASH_ERR"; printf %s $? >"$ASH_RC"';
+  const script = `${CONFINE_ENROLL_CMD}; "$@" >>"$ASH_OUT" 2>>"$ASH_ERR"; printf %s $? >"$ASH_RC"`;
   const env = {
     ...agentBaseEnv(),
     ...extraEnv,
@@ -319,6 +363,14 @@ export function spawnDetachedAgent(
   const track = openTrackFd();
   const stdio: Array<"pipe" | "ignore" | number> =
     track.fd === null ? ["pipe", "ignore", "ignore"] : ["pipe", "ignore", "ignore", track.fd];
+  const unitToken = seedUnitToken(env);
+  // **内核圈定**(第三条归属线索,见 kernel-confine.ts):圈号与记号同源。脚本的第一句
+  // `CONFINE_ENROLL_CMD` 在 `sh` fork 出 CLI **之前**把自己写进这个圈,所以这条路的
+  // 集合罩得住整段运行(coverage `whole-run`)——它认的就是 `preExecEnv()` 给的那一项。
+  // 平台/环境支持不了时 `confine` 是 null、那一项不存在,脚本第一句自己就是空操作。
+  const confine = openConfinement(unitToken);
+  Object.assign(env, confine?.preExecEnv() ?? {});
+  const bornAt = Date.now();                      // 理由见 spawn.ts 里同一句
   const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
     cwd,
     stdio,
@@ -326,10 +378,18 @@ export function spawnDetachedAgent(
     detached: true,
   });
   registerTrackFd(real, track);
+  registerUnitToken(real, unitToken);
+  registerRunOutPath(real, paths.out);
+  // 父进程这一侧再写一次:**幂等**(号已经在圈里就是空操作)。它只为补上「shell 那一句
+  // 没跑成」那一种情形,成败不改变 coverage —— 号在不在圈里由内核自己记着。
+  registerConfinement(real, confine);
+  if (real.pid) confine?.enroll(real.pid);
+  registerRootLife(real, bornAt);
   real.stdin?.write(prompt);
   real.stdin?.end();
 
-  if (!real.pid) return failedChild(`起不来:${shq(bin)}`);
+  // 同上:没跑起来的运行不留无主的圈。
+  if (!real.pid) { confine?.dispose(); return failedChild(`起不来:${shq(bin)}`); }
 
   const child = makeDetachedChild({
     pid: real.pid,
@@ -350,6 +410,11 @@ export function spawnDetachedAgent(
     },
   });
   shareTrackFdRegistration(real, child);
+  shareChildIdentity(real, child); // 理由同上:身份以真进程的内核状态为准
+  shareRootLife(real, child);      // 根这一代的生命周期同理(见上面那条路)
+  shareUnitToken(real, child);
+  shareRunOutPath(real, child);
+  shareConfinement(real, child);
   return child;
 }
 
@@ -396,10 +461,14 @@ export function spawnControllableForRun(
 
 // 把「这个 child 是不是 detached 的」这一判断收在一处,executor 里不必各写一遍
 // instanceof/鸭子类型试探。
-export function detachedInfo(child: ChildProcess): { pid: number; committed: () => number } | undefined {
+export function detachedInfo(
+  child: ChildProcess,
+): { pid: number; committed: () => number; unitToken: string | null } | undefined {
   const c = child as Partial<DetachedChild>;
   if (typeof c.ashCommitted !== "function" || !c.pid) return undefined;
-  return { pid: c.pid, committed: c.ashCommitted };
+  // 记号在这一处取出来是刻意的:九个执行器都从这个函数拿 `handle.detached`,在这里取就
+  // 不会有哪条路忘记带上它(忘了的代价是静默的 —— 那一轮的后代只剩 pid 一条线索)。
+  return { pid: c.pid, committed: c.ashCommitted, unitToken: unitTokenOf(child) };
 }
 
 // 重启后接管一个还活着的 agent。
@@ -411,31 +480,56 @@ export function reattachDetachedAgent(opts: {
   startedAt: string | null;
   paths: DetachedPaths;
   offset: number;
+  /**
+   * 这一次运行的资源记号(`sessions.agent_unit_token`)。**接回路径最需要它**:上一个 server
+   * 进程的 WeakMap 随进程一起没了,盘上只剩库里这一行。没有它就只剩 pid 一条线索 —— 那条
+   * 认得出根,认不出根死后还在后台改文件的那些后代(见 unit-token.ts)。
+   * `undefined`/`null` = 老会话行或当初没种上 ⇒ 判定退回 `unprovable`:保留证据、不下刀。
+   */
+  unitToken?: string | null;
 }): DetachedChild | null {
   if (!isSameProcess(opts.pid, opts.startedAt)) return null;
 
-  return makeDetachedChild({
+  const child = makeDetachedChild({
     pid: opts.pid,
     paths: opts.paths,
     startOffset: opts.offset,
     // 普通一次性 detached 没有 FIFO，仍是 null；原生引导回合从约定路径重开 writer。
     stdin: existsSync(controlPath(opts.paths)) ? fifoWriter(controlPath(opts.paths)) : null,
-    kill: () => killByPid(opts.pid),
+    // 把启动时间**和记号**一起交给 killByPid:接管这一刻核对过的身份,到真要杀它时隔着整段
+    // 回合,那个号可能已经换了主人,所以发信号前要按同一判据再核一次(第 1 轮审查 F2)。
+    // 记号是其中那份**排他**凭证 —— POSIX 的秒级启动时刻是粗档,单凭它不足以授权下刀。
+    // 两份归属证据一起交出去:记号(排他、跨 exec),以及这一次运行独有的输出文件
+    // —— 根进程的 stdout 就在它上面,`lsof` 查得到就等于证明了「这个号还是这一次的根」,
+    // 那是 POSIX 粗档启动时刻需要的第二份独立证据(判据见 kill.ts 的 killByPid)。
+    kill: () => killByPid(opts.pid, opts.startedAt, {
+      unitToken: opts.unitToken,
+      outPath: opts.paths.out,
+    }),
+    // 注:这个合成品的 exitCode/signalCode 由下面的轮询补写,不是内核答案,所以它的身份
+    // 由 markAdoptedChild 单独声明(见函数尾部)——cleanup 这条路不经过上面这个 kill。
     onExit: (cb) => {
-      // 没有 ChildProcess 可听,只能探。kill(pid,0) 抛 ESRCH = 确实没了
-      //(复用只会让它显得「活着」,不会让活着的显得死了,所以这个方向是安全的)。
+      // 没有 ChildProcess 可听,只能探 —— 但问的必须是「这个号上**还是不是它**」,不是
+      // 「这个号上有人吗」。`kill(pid,0)` 那一问在号被别人接手之后永远答「活着」,于是
+      // 退出回调再也不触发:事件流不结束、任务卡在 running、停止按钮也没用(而身份闸又
+      // 正确地拒绝对新主人下刀,所以连「杀掉它」这条退路都没有)——第 3 轮审查 F1。
       const t = setInterval(() => {
-        let alive = true;
-        try {
-          process.kill(opts.pid, 0);
-        } catch {
-          alive = false;
-        }
-        if (alive) return;
+        // 走的是击杀那条路同一份身份读数(`pidRunStillAlive`):它每答一次「还是它」都记在
+        // 册上,随后的补刀据此才敢对一个刚空下来的组号发信号。
+        if (pidRunStillAlive(opts.pid, opts.startedAt) !== "gone") return;
         clearInterval(t);
         setTimeout(() => cb(readExitCode(opts.paths.rc)), 50);
       }, LIVENESS_MS);
       (t as { unref?: () => void }).unref?.();
     },
   });
+  // 这个句柄手上只有一个号,没有真 ChildProcess 可问:身份就是「号 + 启动时间」,每次要
+  // 对它(或它的后代树)发信号前现查一遍 ps。cleanupAfterRun 走的是 childStillOurs 而不是
+  // 上面那个 kill,不声明身份它就会去读合成品那两个由轮询补写的字段(第 2 轮审查 F1)。
+  markAdoptedChild(child, opts.pid, opts.startedAt);
+  adoptUnitToken(child, opts.unitToken);
+  // 接回这条路同样要带上输出文件:重启后它是这次运行仅存的两条跨进程线索之一
+  // (另一条是记号),清理责任记录和 `killByPid` 的第二份证据都读它。
+  registerRunOutPath(child, opts.paths.out);
+  return child;
 }

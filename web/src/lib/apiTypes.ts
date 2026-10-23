@@ -74,7 +74,9 @@ export type SessionTraceEntry = {
     // 写盘失败了」—— 那一处只能作废,不能拿现在的文件顶上。`pos` 是这处引用的文档节点身份
     // (服务端全文坐标),恢复补回的记录靠它排回文档顺序(见 turnImages)。
     | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean }
-    | { kind: "error"; message: string }
+    // level:"notice" = 这条不是故障,是过程里的一句提示(上游在重试、还在等回话)。展示端
+    // 据此把它排成「提示」那一行而不是红色异常(见 task-detail/conversationSegments 的 auxEvent)。
+    | { kind: "error"; message: string; level?: "notice" }
     // verifyRound：这一回合属于就地验证的第几轮（不是验证轮时缺省）。它是会话里
     // 唯一能把审查者的发言跟实现回合分开的信号——两者常跑在同一条会话上。
     | { kind: "run"; model: string | null; reasoningEffort: string | null; verifyRound?: number | null }

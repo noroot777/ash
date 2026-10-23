@@ -1,11 +1,12 @@
 // Core domain types shared between server and web.
 import type { TeamConfig } from "./team.ts";
+import type { MonitorWakeData } from "./monitor-wake.ts";
 import type { QuestionRecord } from "./questions.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
 import type { HandoffAudit, TaskHandoff } from "./handoff.ts";
-export type { Session, SessionRole } from "./session.ts";
+export type { Session, SessionNotice, SessionRole } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@ash/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
 export type { ContextUsage, TokenUsage } from "./usage.ts";
@@ -568,7 +569,7 @@ export type ConvSeg =
   | { kind: "agent"; text: string; endedAt?: string }
   // bySystem：走真人回合通道、但作者是后端的那种（验证打回、验收冲突交接）。
   // 它们**必须**是 user 回合（要 followUpFrom 护住任务原来的终态），所以只能另开一位来标。
-  | { kind: "user"; text: string; at?: string; bySystem?: true }
+  | { kind: "user"; text: string; at?: string; bySystem?: true; monitorWake?: MonitorWakeData }
   // level:"notice" = 结算说明（「这一轮为什么落成这个状态」），由 server 结算时写下。
   // 展示端据此上「提示」的语气，而不是让关键词表去猜——说明里天然带着「未完成」这种词。
   // aside:true = 任务时间线旁注（appendTaskTimeline 写的那些：预约审查、验收阶段更新、
@@ -631,7 +632,7 @@ export function parseSessionOutput(out: string): ConvSeg[] {
     if (trimmed.startsWith("> 续聊回合异常结束(")) continue;
     if (line.startsWith("\x1e")) {
       try {
-        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string; by?: string; level?: string; aside?: boolean };
+        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string; by?: string; level?: string; aside?: boolean; monitorWake?: MonitorWakeData };
         flush();
         if (j.t === "agentEnd") {
           // Not a new bubble — it stamps where the agent turn that just flushed
@@ -649,7 +650,7 @@ export function parseSessionOutput(out: string): ConvSeg[] {
                 ...(j.level === "notice" ? { level: "notice" as const } : {}),
                 ...(j.aside === true ? { aside: true as const } : {}),
               }
-            : { kind: "user", text: j.text ?? "", at: j.at, ...(j.by === "system" ? { bySystem: true as const } : {}) },
+            : { kind: "user", text: j.text ?? "", at: j.at, ...(j.by === "system" ? { bySystem: true as const, ...(j.monitorWake ? { monitorWake: j.monitorWake } : {}) } : {}) },
         );
         continue;
       } catch {

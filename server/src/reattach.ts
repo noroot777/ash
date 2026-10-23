@@ -8,11 +8,16 @@ import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-jo
 import { join } from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import type { AgentType, SessionRole } from "@ash/shared";
+import type { RunHandle } from "./executors/types.js";
 import { db } from "./db/index.js";
 import { agents, freeReviewRuns, tasks, sessions } from "./db/schema.js";
-import { claimTurn, releaseTurn, trackRun, untrackRun, bindTurnToken } from "./runs.js";
+import {
+  bindTurnToken, claimTurn, discardStartingRun, finalizeAbandonedRun, releaseTurn, trackRun,
+  type Killable,
+} from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
+import { cleanupAfterRun } from "./executors/kill.js";
 import { RUNS_DIR } from "./paths.js";
 import { consumeSingleRun } from "./single-run.js";
 import { isSameProcess } from "./proc.js";
@@ -23,6 +28,7 @@ import { withSkillInvocation } from "./skills.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { closeSessionTurns, markTurnActive } from "./session-turns.js";
+import { reconcileInterruptedTask } from "./task-reconcile.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -123,9 +129,30 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       startedAt: sess.agentStartedAt,
       paths: { out: sess.agentOutPath, err: sess.agentErrPath, rc: sess.agentRcPath },
       offset: sess.agentOffset ?? 0,
+      // 上一个 server 进程的 WeakMap 随它一起没了,记号只剩库里这一份(见 unit-token.ts)。
+      unitToken: sess.agentUnitToken,
     });
     if (!child) continue; // 它已经不在了 → 交给 reconcileInterrupted
 
+    /**
+     * **拿到原始进程的那一刻就有了清理责任**(第 11 轮审查 F2 实测)。
+     *
+     * 句柄还没构造出来,可进程是真的、它甩出去的后代也是真的。上一版这几个失败出口只
+     * `child.kill()` —— 那一刀只收一个根(`killByPid`),它 `setsid` 出去的后代还在写文件,
+     * 而且**一笔责任都没落**:审查实测根已退出、后代仍活着、债表 0 行、再点停止也没反应,
+     * 事后连一条可追的记录都没有。
+     *
+     * 所以这里先立一个**带 cleanup 的所有者**:`finalizeAbandonedRun` 走到它身上时会跑完整的
+     * 后代回收 + 责任交接(`cleanupAfterRun` 自己落 `agent_cleanup_debts`)。句柄构造成功、
+     * 被消费循环接管之后,所有权转给 `discardStartingRun(task.id, handle)` —— 那条路上的
+     * `handle.cleanup` 是同一个 finalizer。
+     */
+    const rawOwner: Killable = { kill: () => child.kill(), cleanup: () => cleanupAfterRun(child) };
+    // 这两样都声明在 try **之外**:接管半路失败时,失败出口得够得着它们才还得回去（原先
+    // 都在 try 里面,于是那条 catch 既撤不掉句柄登记、也还不回回合锁 —— 第 8 轮审查 N1
+    // 的同类窗口）。
+    let handle: RunHandle | null = null;
+    let claimedTurn = false;
     try {
       const profile = (await db.select({ id: agents.id }).from(agents).where(eq(agents.name, sess.executor))).at(0);
       const ex = await resolveExecutorFor({
@@ -135,10 +162,13 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         reasoningEffort: null,
       });
       if (!ex.attach) {
-        child.kill();
-        continue; // 该执行器不支持接管：别让进程失联地跑着，停掉按中断处理
+        // 不支持接管:别让进程失联地跑着。**跟异常分支同一条收尾** —— 内置执行器目前都有
+        // attach,所以这一支没有现行配置能触发,但它跟那条 catch 面对的是同一件事(手上只有
+        // 原始进程),不该各走一套(第 11 轮审查 F2)。
+        await finalizeAbandonedRun(rawOwner);
+        continue;
       }
-      const handle = ex.attach(child, {
+      handle = ex.attach(child, {
         sessionId: sess.cliSessionId ?? "",
         commandLine: sess.commandLine ?? "",
         // 那一轮的 CLI 产物写在会话行记下的那个配置目录里(老行回落到按归属人现算)。
@@ -174,11 +204,15 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
           .from(freeReviewRuns)
           .where(and(eq(freeReviewRuns.taskId, task.id), eq(freeReviewRuns.status, "reviewing")))).at(0) ?? null
         : null;
-      const claimedTurn = claimTurn(
+      // claimedTurn 是外层那个 let(不是 const):下面接管失败的 catch 出口也要凭它放锁。
+      claimedTurn = claimTurn(
         task.id, sess.role,
         restoredReview ? { run: restoredReview.id, round: restoredReview.round } : null,
       );
       if (claimedTurn && task.activeTurnToken) bindTurnToken(task.id, task.activeTurnToken);
+      // 消费循环与它的 finally 要的是**这一次**接到的那个句柄(上面那个 let 为了让失败出口
+      // 够得着它才声明在 try 外面,类型上是可空的)。
+      const adoptedHandle = handle;
       const out = createWriteStream(join(RUNS_DIR, task.id, `${sess.id}.md`), { flags: "a" });
       // 不 await：多个任务并行接管，各自跑各自的（跟正常运行时一样）。
       void consumeSingleRun({
@@ -187,7 +221,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         agentType: sess.agentType as AgentType,
         ex,
         cwd: sess.cwd ?? "",
-        handle,
+        handle: adoptedHandle,
         out,
         turnStart: sess.turnStartedAt ?? sess.startedAt,
         cliSessionId: sess.cliSessionId ?? "",
@@ -206,19 +240,43 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         },
       })
         .catch((err) => console.error(`[ash] 接管 ${task.id} 的消费循环出错:`, err))
-        .finally(() => {
-          untrackRun(task.id, handle);
+        .finally(async () => {
+          discardStartingRun(task.id, adoptedHandle);
           if (claimedTurn) releaseTurn(task.id);
           // 接回的这条消费循环结束了（正常收尾、抛错、被停都走这里）：活动登记跟着撤,
           // 否则一条接回后崩掉的会话会一直被读端当成「还在写」（第 6 轮审查必须修 1）。
           closeSessionTurns(sess.id);
-        });
+          // **这条 finally 跑在 reconcileInterrupted 之后**:接管是 `void` 出去的,
+          // reattachRunningTasks 当场就返回了,紧随其后的那次全库收拾看到 isRunning 为真
+          // (句柄刚登记上)、正确地跳过了这个任务。于是消费循环若在初始化段抛错,进程收掉
+          // 了、登记注销了,却没有任何人来结算它 —— 任务永远停在 running(第 1 轮审查 F1)。
+          // 上面三行把「有活句柄」的证据撤干净之后再问一次,正常收尾时它是空转。
+          const stranded = await reconcileInterruptedTask(task.id).catch((error) => {
+            console.error(`[ash] 结算接管后中断的 ${task.id} 失败:`, error);
+            return false;
+          });
+          // 这次接管最终没跑成,「已接管」名单里也不该再算它(调用方拿这份名单判「谁不用
+          // 再按中断处理」)。正常收尾时 stranded 为假,名单不动。
+          if (stranded) adopted.delete(task.id);
+        })
+        // 这条链是 `void` 出去的,finally 里再抛就是一条无人接管的 rejection(Node 默认
+        // 直接掀掉进程)。收尾动作本身不该连累整个 server。
+        .catch((error) => console.error(`[ash] 接管 ${task.id} 的收尾出错:`, error));
       console.log(`[ash] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
     } catch (err) {
       console.error(`[ash] 接管 ${task.id} 失败:`, err);
       adopted.delete(task.id);
       // 登记在 trackRun 之后、这段 try 里面,所以接管半路失败同样要撤（必须修 1 的同类出口）。
       closeSessionTurns(sess.id);
+      // 句柄登记与回合锁同理,而且这两样漏了更狠:前者让 `isRunning` 永远判真（停止按钮亮着
+      // 却什么都停不了）,后者让这个任务在本进程里**再也起不来**（claimTurn 一直占着）。
+      // 接管失败就按中断处理,进程一起收掉 —— 同上面 `!ex.attach` 那一支的口径:别让它失联
+      // 地跑着（第 8 轮审查 N1）。
+      // 句柄构造成功了就按句柄那条路收(它自带同一个 finalizer);还没构造出来就走原始进程
+      // 那个所有者 —— 后代回收和责任交接一个都不能少(第 11 轮审查 F2)。
+      if (handle) discardStartingRun(task.id, handle);
+      else await finalizeAbandonedRun(rawOwner);
+      if (claimedTurn) releaseTurn(task.id);
     }
   }
   return adopted;

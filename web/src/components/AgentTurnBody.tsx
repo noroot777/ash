@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { isVisibleExecutionEvent } from "../lib/executionTrace.ts";
 import type { AgentContentSegment } from "../task-detail/conversationModel.ts";
+import { awaitingUpstream, segmentHasVisibleContent } from "../task-detail/conversationSegments.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { turnDocument, type TurnStop } from "../task-detail/turnDocument.ts";
 import { ImagePreviewGroup } from "./ImagePreview.tsx";
@@ -10,7 +11,7 @@ import {
   ExecutionDetails,
   ExecutionEventList,
   ExecutionSummaryLine,
-  hasExecutionError,
+  executionBlockTone,
 } from "./ExecutionTrace.tsx";
 
 /**
@@ -29,7 +30,7 @@ function ProcessFold({ events, open, onToggle, children }: {
 }) {
   return (
     <details
-      className={`task-execution-block task-turn-process${hasExecutionError(events) ? " has-error" : ""}`}
+      className={`task-execution-block task-turn-process${executionBlockTone(events)}`}
       open={open}
       onToggle={(event) => onToggle(event.currentTarget.open)}
     >
@@ -69,6 +70,9 @@ export function AgentTurnBody({
     () => turnDocument(segments, { live: running, taskId }),
     [segments, running, taskId],
   );
+  // 此刻还卡在上游等回话?判据连理由住在 awaitingUpstream;跟 main 路径同口径,先滤掉
+  // 画不出东西的段再取末段(重建那一路 markSegmentsAwaiting 落的就是最后一个可见段)。
+  const awaiting = running && awaitingUpstream(segments.filter(segmentHasVisibleContent));
   // 折叠的开合状态放在这一层:整篇只解析一次,「折着的那一区里的引用不算看得见」要在布局
   // 里判(只被过程折叠引用到的脚注不该把正文和截图露在外面,见 markdownLayout 的 collapsed)。
   const [foldOpen, setFoldOpen] = useState(false);
@@ -88,6 +92,7 @@ export function AgentTurnBody({
             /* 折叠块自己就是一层 `<details>`,里面的事件行不再各自套一层(见 ExecutionEventList)。 */
             bare={!!fold && index < fold.stops}
             running={index === pulse}
+            awaiting={awaiting && index === pulse}
           />
         ),
       })),
@@ -112,17 +117,19 @@ export function AgentTurnBody({
         }
         : {}),
     };
-  }, [turn, running, foldOpen]);
+  }, [turn, running, awaiting, foldOpen]);
 
   return <MarkdownBody text={turn.text} layout={layout} />;
 }
 
-function StopBody({ stop, bare, running }: { stop: TurnStop; bare: boolean; running: boolean }) {
+/* `awaiting` = 此刻正卡在上游等回话,只会落在脉冲那一步上(它就是正在发生的这一步):
+   折叠条上那句「正在重试」要常驻,见 ExecutionTrace 的 TransientExecutionLabel。 */
+function StopBody({ stop, bare, running, awaiting }: { stop: TurnStop; bare: boolean; running: boolean; awaiting: boolean }) {
   return (
     <>
       {bare
         ? <ExecutionEventList events={stop.events} />
-        : <ExecutionDetails events={stop.events} running={running} />}
+        : <ExecutionDetails events={stop.events} running={running} awaiting={awaiting} />}
       <MessageAttachments paths={stop.attachments} />
     </>
   );

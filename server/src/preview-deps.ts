@@ -34,7 +34,7 @@ import {
 import type { Dirent } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { augmentedEnv } from "./executors/bin-resolve.js";
-import { killByPid } from "./executors/spawn.js";
+import { killChild } from "./executors/spawn.js";
 import { DEPS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { previewDirectories } from "./preview-directories.js";
@@ -405,7 +405,11 @@ async function install(
       const timer = setTimeout(() => {
         // 按树杀，不是 `child.kill()`：那只打得到最外层的 shell，install 自己派生的
         // 后代（生命周期脚本、node-gyp…）会活下来，超时于是变成「放弃等待 + 留一堆孤儿」。
-        killByPid(child.pid ?? 0);
+        // **走 killChild 而不是 killByPid**:句柄就在手里,自己的孩子有权威身份(内核在
+        // reap 之前不会把这个号分给别人),而 `killByPid(pid, null)` 只剩存在性检查 ——
+        // 原进程收到首发之后退掉、补刀前这个号换了主人时,那一刀会打到新主人身上
+        //(第 3 轮审查 F1)。顺带还白拿到逃逸后代那一层。
+        killChild(child);
         resolve(`装了 ${Math.round(INSTALL_TIMEOUT_MS / 60_000)} 分钟还没装完，已经放弃`);
       }, INSTALL_TIMEOUT_MS);
       const done = (result: string | null) => { clearTimeout(timer); onChild(0); resolve(result); };

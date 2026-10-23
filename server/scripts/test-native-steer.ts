@@ -42,7 +42,7 @@ const resident: ResidentHandle = {
   send: (text) => { claudeCalls.push(`send:${text}`); return true; },
   close: () => { claudeCalls.push("close"); claudeEvents.end(); },
   kill: () => { claudeCalls.push("kill"); claudeEvents.end(); },
-  cleanup: async () => { claudeCleanupCalls += 1; },
+  cleanup: async () => { claudeCleanupCalls += 1; return { kind: "empty" } as const; },
 };
 const claude = singleRunFromResident(resident);
 const claudeIterator = claude.events[Symbol.asyncIterator]();
@@ -78,6 +78,7 @@ const partialResident: ResidentHandle = {
   },
   close: () => { partialCalls.push("close"); partialEvents.end(); },
   kill: () => { partialCalls.push("kill"); partialEvents.end(); },
+  cleanup: async () => { partialCalls.push("cleanup"); return { kind: "empty" } as const; },
 };
 const partialClaude = singleRunFromResident(partialResident);
 const partialSeen: AgentEvent[] = [];

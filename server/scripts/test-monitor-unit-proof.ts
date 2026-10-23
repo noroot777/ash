@@ -41,7 +41,8 @@ import {
   tasks, teardown, until,
 } from "./monitors-fixture.js";
 import { STUBBORN, debtRow } from "./monitor-reclaim-fixture.js";
-import { install as fakeProc, restore as realProc, type FakeAnswers } from "./fake-proc-fixture.js";
+import { install as fakeProc, restore as realProc, skipWithoutProcWorld, type FakeAnswers } from "./fake-proc-fixture.js";
+if (skipWithoutProcWorld("记号凭证回归")) process.exit(0);
 import { processUnitEvidence } from "../src/proc.js";
 import { monitorUnitProofGrade } from "../src/monitor-unit-scan.js";
 
@@ -175,6 +176,7 @@ async function deadPid(): Promise<number> {
     // 后代忽略 TERM;根自己不 trap,所以第一刀就把根收走了。
     command: `( ${STUBBORN} ) & wait`,
     description: "忽略 TERM 的后代",
+    untilExpiry: true,
   });
   assert.equal(started.ok, true);
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;

@@ -79,6 +79,9 @@ const SEGMENT_SIZE: SizeTable<AgentContentSegment> = {
   /* 来源标注不进 DOM:它只决定「这张图画在正文哪一句」,画出来的字由 markdown 那一格
      带出(配上之后正文里的目的地被改写成站内地址,长度变化也在 markdown 里)。 */
   attachmentSources: () => 0,
+  // 等待状态只换折叠条那一行字,高度一个像素都不变 —— 算进规模就是「屏幕没动却自己跳到底」。
+  // 它翻位时那条提示事件本来也会同时进 events,真正的新内容在那儿算过了。
+  awaiting: () => 0,
 };
 const SEGMENT_KEYS = Object.keys(SEGMENT_SIZE) as (keyof AgentContentSegment)[];
 
@@ -119,6 +122,7 @@ const USER_SIZE: SizeTable<UserItem> = {
   at: () => 0,
   isAnswer: () => 0,
   bySystem: () => 0,
+  monitorWake: (value) => value ? JSON.stringify(value).length : 0,
   text: (value) => value.length,
   attachments: (value) => value.length,
 };

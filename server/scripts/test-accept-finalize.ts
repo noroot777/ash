@@ -15,8 +15,8 @@ import { taskWorkspace } from "../src/task-workspace.js";
 import { acceptTask, mountTaskAcceptanceRoutes } from "../src/task-accept.js";
 import { readAnyPreview, writeRecord } from "../src/preview-store.js";
 import { previewShell } from "../src/preview-shell.js";
-import { isPidAlive } from "../src/platform.js";
-import { killByPid } from "../src/executors/spawn.js";
+// 收尾用 killTree 而不是 killByPid,理由见 test-accept-cleanup.ts 里 platform 那行上方。
+import { isPidAlive, killTree } from "../src/platform.js";
 import { hasPendingPreviewStops } from "../src/preview-process-stop.js";
 import { sweepPreviews } from "../src/preview.js";
 
@@ -142,7 +142,7 @@ export async function testAcceptanceFinalization(root: string): Promise<void> {
       restore();
       for (const process of children) {
         if (process.exitCode !== null || process.signalCode !== null) continue;
-        killByPid(process.pid!);
+        killTree(process.pid!, "SIGKILL");
         await Promise.race([once(process, "exit"), new Promise(resolve => setTimeout(resolve, 4000))]);
       }
     }
@@ -260,7 +260,7 @@ async function testPendingAcceptance(root: string): Promise<void> {
         assert.equal(existsSync(counter), false);
         restore();
         if (mode === "all") {
-          killByPid(child.pid!);
+          killTree(child.pid!, "SIGKILL");
           await Promise.race([once(child, "exit"), new Promise(resolve => setTimeout(resolve, 4000))]);
           assert.equal(isPidAlive(child.pid!), false);
           later = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { cwd: repo, detached: process.platform !== "win32", stdio: "ignore" });
@@ -308,7 +308,7 @@ async function testPendingAcceptance(root: string): Promise<void> {
       restore();
       for (const process of [child, later]) {
         if (!process || process.exitCode !== null || process.signalCode !== null) continue;
-        killByPid(process.pid!);
+        killTree(process.pid!, "SIGKILL");
         await Promise.race([once(process, "exit"), new Promise(resolve => setTimeout(resolve, 4000))]);
       }
     }

@@ -24,13 +24,30 @@ export function isSessionScopeNotice(event: AgentEvent): boolean {
 }
 
 /**
+ * 这条 error 只是**执行过程里的一条提示**(上游在重试、还在等回话),不是执行故障。
+ *
+ * 跟上面那个判据的分工:`scope:"session"` 说的是「这条恢复会话作废了」,要降成**会话级
+ * 旁注**;`level:"notice"` 说的是「本回合正在正常进行,只是顺带报一句」,要留在**执行
+ * 过程**里它发生的那个位置(走 trace)。所以两者的消费方式正相反,别合并成一个判据。
+ *
+ * 所有消费链的口径一致:照落 trace、照发给前端,但一概不当失败处理 —— 不写「执行诊断」
+ * 红块、不并进 SessionResumeFault、不置 sawExecutionError、不让 duet 判这一轮失败。
+ * 同样刻意不写成类型守卫,理由见上。
+ */
+export function isExecutionNotice(event: AgentEvent): boolean {
+  return event.kind === "error" && event.level === "notice";
+}
+
+/**
  * 两处一起落：`.md` 原始产物里的 `t:"system"` 回合行（刷新后还在）+ SSE（实时）。
  *
  * 用的就是别处系统注记那套写法（`session-version-guard.ts`、`task-run.ts`、
  * `team/session.ts` 的 teamNote），所以读端不需要认新形状：`conversationModel` 的
  * 落盘路与直播路都已经把 system 渲染成 note，`turnKey("system", …)` 也天然去重。
- * 反过来说,这里**不能**改用 trace —— `SessionTraceEvent` 只收 thinking/tool/error,
- * 落进去就又变回红色异常了。
+ * 反过来说,这里**不能**改用 trace(那条路见 isExecutionNotice):trace 是按回合回放的
+ * 执行过程,而会话轮换讲的是「这条会话本身怎么了」—— 它跨回合、也可能发生在压根没有
+ * 回合的时候(announceSessionNote 就在 spawn 之前写),塞进某一回合的执行过程里就等于
+ * 挂在一个与它无关的回合名下。
  */
 export function emitSessionNotice(args: {
   out: NodeJS.WritableStream;

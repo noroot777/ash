@@ -27,16 +27,20 @@ import {
 } from "../task-detail/systemNoticeModel.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
+import { MonitorWakeReply } from "../task-detail/MonitorWakeInput.tsx";
+import { monitorWakeReplyIds } from "../task-detail/monitorWakeModel.ts";
 
 function AgentRow({
   row,
   taskId,
   hideTime,
+  wakeReply,
 }: {
   row: Extract<TeamFeedRow, { kind: "conv" }>["item"];
   /** 这条发言是在哪个任务的工作目录里说的（正文里的图靠它去那个目录取），见 AgentTurnBody。 */
   taskId: string;
   hideTime?: boolean;
+  wakeReply?: boolean;
 }) {
   if (row.kind !== "agent") return null;
   const duration = durationBetween(row.at, row.endedAt);
@@ -55,6 +59,7 @@ function AgentRow({
           {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>{row.continuation ? "" : "· "}⏱ {duration} 用时</small>}
         </header>
       )}
+      {wakeReply && <MonitorWakeReply />}
       <AgentTurnBody segments={row.segments} running={!row.endedAt} taskId={taskId} />
       <MessageFooter
         turnUsage={row.usage}
@@ -206,6 +211,7 @@ export function TeamFeed({
   const noticeMode = INITIAL_SYSTEM_NOTICE_MODE;
   const showNoticeModeSwitch = SYSTEM_NOTICE_DEMO_REQUESTED;
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
+  const wakeReplies = monitorWakeReplyIds(rows.flatMap((row) => row.kind === "conv" ? [row.item] : []));
   const hiddenTimes = new Set<string>();
   let previousConversationItem: Extract<TeamFeedRow, { kind: "conv" }>["item"] | null = null;
   for (const row of rows) {
@@ -239,7 +245,7 @@ export function TeamFeed({
             const item = row.item;
             // 执行者各有自己的工作目录（团队共享那一档也一样按会话行走），所以按发言
             // 所属的会话取任务，不是一律用调度台。
-            if (item.kind === "agent") return <AgentRow key={row.key} row={item} taskId={item.session?.taskId ?? task.id} hideTime={hiddenTimes.has(item.id)} />;
+            if (item.kind === "agent") return <AgentRow key={row.key} row={item} taskId={item.session?.taskId ?? task.id} hideTime={hiddenTimes.has(item.id)} wakeReply={wakeReplies.has(item.id)} />;
             if (item.kind === "user") return <UserRow key={row.key} row={item} noticeMode={noticeMode} />;
             const inbound = parseInbound(item.text);
             if (inbound) {

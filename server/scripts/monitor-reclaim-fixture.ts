@@ -13,6 +13,10 @@ import { inspectProcess } from "../src/proc.js";
 
 // 忽略 TERM 的命令:壳自己 trap 掉,每轮重起一个 sleep —— TERM 打到整组时组里始终有人,
 // 只有 +2 秒那把 SIGKILL 才收得掉它。(同一招在 test-project-commands.ts 里也用着)
+//
+// **它是「自己永远不会结束」的标本**,所以经 `startMonitor` 用它的地方一律要带
+// `untilExpiry: true`:创建闸要的就是这个表态(三条出路之一),不是让测试绕过它。直接
+// `spawn` 它的地方不经过闸,不用带。
 export const STUBBORN = "trap '' TERM HUP INT; while :; do sleep 0.2; done";
 
 // 债表那一行、以及「追空了该长什么样」那句断言,都在根台子上(两处抄一遍就会漂)。

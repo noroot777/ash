@@ -11,7 +11,7 @@ import { id, now, attachmentsPrompt } from "./util.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
 import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceRole } from "./runs.js";
+import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceRole } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
 import { consumeSingleRun } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
@@ -125,6 +125,8 @@ export async function continueTask(
       // 跟单飞锁挡回同一口径:返回 false。
       const delivered = await deliverToLead(taskId, userText, {
         attachments: opts.attachments,
+        bySystem: opts.byBackend,
+        monitorWake: opts.monitorWake,
         throwOnOpenFailure: opts.throwOnTeamUnavailable,
       });
       if (!delivered) return false;
@@ -489,8 +491,6 @@ export async function continueTask(
           turnModel: ex.model ?? null,
           turnReasoningEffort: ex.reasoningEffort ?? null,
           sideTurn,
-          // 新回合开始 = 上一轮「是被停的」这件事翻篇，不清就会一直挡着重试入口。
-          stoppedAs: null,
           // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
           // 恢复不了的恢复命令,见 ResumeFields。
           ...ex.resumeFields(cwd, cliSessionId),
@@ -502,6 +502,8 @@ export async function continueTask(
           agentErrPath: handle.detached ? detach.err : null,
           agentRcPath: handle.detached ? detach.rc : null,
           agentOffset: 0,
+          // 跟 pid 同组刷新:沿用上一轮的记号会让清理去找上一轮那批后代。
+          agentUnitToken: handle.detached?.unitToken ?? null,
         })
         .where(eq(sessions.id, sessId));
     } else {
@@ -535,6 +537,7 @@ export async function continueTask(
         agentErrPath: handle.detached ? detach.err : null,
         agentRcPath: handle.detached ? detach.rc : null,
         agentOffset: 0,
+        agentUnitToken: handle.detached?.unitToken ?? null,
       });
     }
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
@@ -549,7 +552,7 @@ export async function continueTask(
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human/backend turn as its own bubble; the matching event keeps every client live.
-      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend });
+      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend, monitorWake: opts.monitorWake });
     }
     // 上一回合尚未结算就收到回复时，消息会先排队，真正送达时任务已不再 paused；这条
     // 路径要在落盘后消费旧检查点，避免它继续挡完成与预约派审。若起点本来就是 paused，
@@ -623,7 +626,10 @@ export async function continueTask(
       stopped, baseFallback, baseFallbackTold,
     });
   } finally {
-    if (handle) untrackRun(taskId, handle);
+    // 这一轮归谁:到 consumeSingleRun 认领之前都归起跑方,所以**失败出口必须连进程一起
+    // 收掉**,只注销会留下一个没人读输出、停止按钮也碰不到的 CLI(第 1 轮审查 F1;三态
+    // 和「为什么认领过的只注销不杀」见 runs.ts 顶部)。认领过的走到这里只是注销。
+    if (handle) discardStartingRun(taskId, handle);
     releaseTurn(taskId);
     // 同 task-run：全出口注销,不依赖走到收尾函数（第 6 轮审查必须修 1）。
     closeTaskTurns(taskId);

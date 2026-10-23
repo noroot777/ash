@@ -20,7 +20,7 @@ import { boundaryKey, listProcesses } from "./platform.js";
 /** 本仓库那份 MCP 的入口路径。 */
 const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
 
-export type PsRow = { pid: number; ppid: number; command: string };
+export type PsRow = { pid: number; ppid: number | null; command: string };
 
 /**
  * 把一条命令行切成 token。**必须认双引号**:Windows 上 node 的常驻位置是
@@ -90,7 +90,7 @@ export function holdersOf(rows: PsRow[], agentPids: number[]): number[] {
   const parent = new Map<number, number>();
   const mcpPids: number[] = [];
   for (const row of rows) {
-    parent.set(row.pid, row.ppid);
+    if (row.ppid !== null) parent.set(row.pid, row.ppid);   // 父号问不出来 ⇒ 这一行没有边
     if (isMcpProcess(row.command)) mcpPids.push(row.pid);
   }
   const hit = new Set<number>();

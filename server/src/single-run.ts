@@ -6,6 +6,7 @@
 //
 // **「这一笔该落成哪个状态」已经搬到 `settle-status.ts`**（同一条上限）:那一段自成一块
 // 职责（续聊/原生/手停/提问/检查点/严格完成协议/哨兵闸），而且被引导、重试、测试直接调。
+import { cleanupSettled, nothingToCollect, type CleanupResult } from "./executors/kill.js";
 import type { WriteStream } from "node:fs";
 import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
 import { and, eq, sql } from "drizzle-orm";
@@ -14,7 +15,9 @@ import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { closeSessionTurns, recordTurnSpan } from "./session-turns.js";
 import { scanForTitle } from "./auto-title.js";
-import { bindNativeSteer, takeSteered, takeStopped } from "./runs.js";
+import {
+  adoptRun, bindNativeSteer, finalizeAbandonedRun, takeSteered, takeStopped,
+} from "./runs.js";
 import { now } from "./util.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
 import {
@@ -26,7 +29,8 @@ import {
 } from "./executors/session-lost.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./transcript.js";
 import { noteAgentEventUpload } from "./uploads.js";
-import { isSessionScopeNotice } from "./session-notice.js";
+import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
+import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
@@ -39,13 +43,7 @@ const STEERED_NOTE = "〔系统〕当前回合已由“引导会话”结束。"
 
 
 
-// 消费一次单飞运行的事件流，直到它结束，然后结算。
-//
-// **fresh run 与「重启后接管」共用这一份**——两条路只有前半段不同（一个是刚
-// spawn 出来的 handle，一个是按 pid+offset 接回来的），从「读事件」这一步往后
-// 完全一样。抄成两份的话，结算优先级、标题解析、.md 落盘这些迟早会漂。
-// autoTitle=false 时跳过标题解析（接管路径必然已经解析过了）。
-export async function consumeSingleRun(a: {
+export type SingleRunArgs = {
   taskId: string;
   sessId: string;
   agentType: AgentType;
@@ -61,7 +59,37 @@ export async function consumeSingleRun(a: {
     prepare?(text: string): string | Promise<string>;
     record(text: string, at: string): void;
   };
-}): Promise<void> {
+};
+
+// 消费一次单飞运行的事件流，直到它结束，然后结算。
+//
+// **fresh run 与「重启后接管」共用这一份**——两条路只有前半段不同（一个是刚
+// spawn 出来的 handle，一个是按 pid+offset 接回来的），从「读事件」这一步往后
+// 完全一样。抄成两份的话，结算优先级、标题解析、.md 落盘这些迟早会漂。
+// autoTitle=false 时跳过标题解析（接管路径必然已经解析过了）。
+//
+// 这一层只管**进程归属**:认领 + 兜底(见下);事件流与结算本体在 consumeRunStream。
+export async function consumeSingleRun(a: SingleRunArgs): Promise<void> {
+  // 消费方在这一行正式接手(runs.ts 的归属三态 ②):此前 handle 的回收责任在起跑方身上,
+  // 此后归下面这道 finally。认领本身也是在告诉起跑方的 finally「别再杀了」—— 正常跑完
+  // 时登记可能仍在册,那时候动手就是对一个已退出的号发信号(第 1 轮审查 F2)。
+  adoptRun(a.handle);
+  let streamDrained = false;
+  try {
+    await consumeRunStream(a, () => {
+      streamDrained = true;
+    });
+  } finally {
+    // 认领了就得兜到底。事件流**之前**还有一段初始化(读 tasks 那一行、记自由工作流执行
+    // 开始、建 closer),它抛出来时 CLI 早就在跑了,而流循环自己那道 finally 一次都没执行
+    // —— 不补这一刀,它就成了没人读输出、停止按钮也碰不到的无主进程(第 1 轮审查 F1)。
+    if (!streamDrained) await finalizeAbandonedRun(a.handle);
+  }
+}
+
+// 事件流 + 结算本体。`markStreamDrained` 由流循环的 finally 调用,告诉外壳「进程资源已经
+// 收干净了」—— 在它被调用之前抛出的任何异常,都意味着那个 CLI 还没人收。
+async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void): Promise<void> {
   const { taskId, sessId, agentType, ex, out } = a;
   const role = a.role ?? "single";
   // 原生 CLI 命令回合(`/compact` 一类)不记「任务执行」:那一轮压根没在推进任务,记下来
@@ -210,6 +238,9 @@ export async function consumeSingleRun(a: {
 
   try {
     for await (const event of a.handle.events) {
+      // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
+      // 反推不出「这条提示之后有没有新东西来」(见 session-waiting.ts)。
+      trackSessionWaiting(sessId, a.handle, a.turnStart, event);
       if (goalStartPending && a.handle.goalStarted?.()) { await markCliGoalStarted(taskId, agentType, event.kind === "session" ? event.cliSessionId : cliSessionId); goalStartPending = false; }
       if (event.kind === "session") {
         if (event.cliSessionId !== cliSessionId) {
@@ -265,7 +296,11 @@ export async function consumeSingleRun(a: {
           continue;
         }
         persistTrace(emittedEvent);
-        if (emittedEvent.kind === "error") {
+        // level:"notice" 的 error 只是过程里的一句提示（上游在重试、还在等回话）：照落
+        // trace（于是它排在执行过程里它发生的那个位置），但下面三件事一件都不做 ——
+        // 写红色诊断块、并进会话恢复故障、把这一轮判成有执行异常。判据见
+        // session-notice.ts#isExecutionNotice。
+        if (emittedEvent.kind === "error" && !isExecutionNotice(emittedEvent)) {
           // 有些 error 是需要留在红色诊断块里的旁路故障，但不代表模型回合失败（目前的
           // 实例是 Claude 自动压缩失败：压缩没成，后续 result 仍明确为 success）。
           if (emittedEvent.affectsTurn !== false) sawExecutionError = true;
@@ -282,10 +317,23 @@ export async function consumeSingleRun(a: {
     // 崩溃；预约若撤销，再把原异常交回原来的失败路径。
     streamError = error;
   } finally {
+    // 流异常中断时 done 事件压根不会来,内存里那条等待状态就得在这儿撤(见 session-waiting.ts)。
+    clearSessionWaiting(sessId, a.handle);
     if (offsetTimer) clearInterval(offsetTimer);
-    await a.handle.cleanup?.().catch((error) => {
+    const cleaned = await a.handle.cleanup?.().catch((error): CleanupResult => {
       console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);
+      // 清理整个抛了:这一轮一个号都没点上来 ⇒ 名单只能是空的,但结论不是空的(见
+      // cleanup-result.ts 的闸二:`open` 必填,逼这里显式说一句「我手上没有」)。
+      return { kind: "unknown", detail: "cleanup 抛错", open: [] };
     });
+    // 进程资源到此已经收干净(cleanup 覆盖根进程与它甩出去的后代),外层那道兜底不必再
+    // 补刀;后面结算段再抛错也只是结算的事,不会留下无主进程。
+    //
+    // **但「收干净了」要它自己说**(本轮审查 F2):上一版连 cleanup 抛错都照样走这一句,
+    // 更不用说 `remaining`/`unknown` 两档 —— 于是外层那道「没收干净就再补一刀」的兜底被
+    // 一句无条件的声明关掉了。没有句柄时(失败桩,没有真实进程)照旧算收干净。
+    // 没有句柄 / 没有 cleanup 这一层(失败桩,没有真实进程)⇒ 没有要收的东西,照旧算收干净。
+    if (!a.handle.cleanup || cleanupSettled(cleaned ?? nothingToCollect())) markStreamDrained();
   }
   // 一个换行都没等到就收流了（整轮只吐了一行的那种）。这里补一次 flush 扫描：
   // 老实现直接把缓冲原样吐出去，那一行哪怕就是标准的 `标题：xxx` 也白瞎。
@@ -325,6 +373,11 @@ export async function consumeSingleRun(a: {
       activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(a.turnStart))}`,
       // 这一轮结束了，pid 不再有意义——留着会让下次重启去接一个早就没了的
       // 进程（或者更糟：pid 被复用后接到别人身上）。offset 留着供排查。
+      //
+      // **`agent_unit_token` 刻意不清**(别顺手把它对称地加到这里):它恰恰是「这一轮有没有
+      // 漏掉的后代」的唯一线索,而回合收尾正是要查这件事的时刻 —— 清掉就再也查不回来。
+      // 留着也不会让重启误接:接回那条路的前提是 pid 非空,而 pid 这就清了。
+      // (同一个判据在哨兵那边叫 traceless:只许收档,不许删掉身份行。)
       agentPid: null,
       agentOffset: detached ? detached.committed() : null,
       ...(dropSession ? LOST_SESSION_PATCH : {}),
@@ -332,7 +385,18 @@ export async function consumeSingleRun(a: {
     .where(eq(sessions.id, sessId));
   // 这一回合的区间单独落一行：产物归属要的是「它在写这个目录」的那几段，而上面那行
   // 会话记录跨回合复用，只留得下最后一次收尾时刻（`db/schema.ts` 的 sessionTurns）。
-  await recordTurnSpan({ sessionId: sessId, taskId, cwd: a.cwd, startedAt: a.turnStart, endedAt: endIso });
+  // **结局跟着落**:口径与上面那次 closeExecution 同一份(被停/被引导 = 受控停止,
+  // 「非零退出 **或** 中途报过执行故障」= 失败)。读端据此给失败现场,不再去猜进程退出码
+  // —— 单飞这一路恰好是反方向那半边:`exit 0` 却报过执行故障的回合从前一条现场都给不出
+  // (第 5 轮审查 F3,见 db/schema-sessions.ts 的 sessionTurns.outcome)。
+  await recordTurnSpan({
+    sessionId: sessId,
+    taskId,
+    cwd: a.cwd,
+    startedAt: a.turnStart,
+    endedAt: endIso,
+    outcome: steered || stopped ? "stopped" : executionFailed ? "failed" : "completed",
+  });
   if (steered) {
     // 「引导会话」只截断旧回合：任务仍是 running，新消息已持有 scheduled_messages
     // 投递租约，并排在 releaseTurn 后用同一 cliSessionId 续送。这里若走普通 settle，

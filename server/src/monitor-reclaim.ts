@@ -155,7 +155,10 @@ async function signalStop(
   m: MonitorRow, reason: string, intent: MonitorStopIntent | "review-finished",
 ): Promise<boolean> {
   try {
-    await finish(m.id, "stopped", reason, null, { notify: false, keepBuffered: false });
+    // `abandon`:这一路本来就是「这几行一个都不推」(`keepBuffered:false`),而且紧接着
+    // `cancelPendingMonitorEvents` 会把排着的整批作废 —— 对得上「明确放弃」那一档,所以它
+    // 不参与收尾所有权的合并等待(见 monitors.ts 的 `finishing`)。
+    await finish(m.id, "stopped", reason, null, { notify: false, keepBuffered: false, abandon: true });
     return true;
   } catch (err) {
     // 停止动作本身失败(库忙、行被改走):`finish` 可能连记账那一步都没走到。这里不自己

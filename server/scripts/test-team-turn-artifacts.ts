@@ -493,7 +493,7 @@ try {
     // 事件只能碰运气撞上这个窗口,而这两个都是生产函数,状态迁移跟真结束一模一样。
     const endIso = new Date().toISOString();
     assert.equal(releaseHeldTurn(desk as never), at, "前置条件:结束事件关掉的就是这一轮");
-    await recordTurnSpan({ sessionId: sessId, taskId, cwd: root, startedAt: at, endedAt: endIso });
+    await recordTurnSpan({ sessionId: sessId, taskId, cwd: root, startedAt: at, endedAt: endIso, outcome: "completed" });
     await begin;
     assert.deepEqual([...activeTurnStarts(sessId)], [],
       "已经收口的身份不许被开始那半边塞回活动册（那之后谁都不会再来注销它,读端从它的起点开到无穷）");

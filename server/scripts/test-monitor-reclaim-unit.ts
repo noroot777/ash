@@ -415,7 +415,7 @@ const EXACT_MARKS = monitorUnitProofGrade() === "exact";
   //    上一版两样都没有:边条在落终态时无条件撤掉、债表没有锚列,于是这条行永久停在
   //    `unverifiable` —— 既不敢杀,也收不了档。
   const taskId = await makeTask({ status: "running" });
-  const started = await startMonitor({ taskId, command: STUBBORN, description: "身份要靠锚补全的" });
+  const started = await startMonitor({ taskId, command: STUBBORN, description: "身份要靠锚补全的", untilExpiry: true });
   assert.equal(started.ok, true);
   const row = (await db.select().from(monitors).where(eq(monitors.taskId, taskId))).at(0)!;
   const side = monitorSpawnIdentityPath(row.logPath);

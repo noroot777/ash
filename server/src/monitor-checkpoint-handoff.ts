@@ -68,7 +68,7 @@ export async function monitorWakeCheckpoint(
     // （只填空槽、不碰来源列），所以两列都按 `| null` 处理，不许在这里拿缺省值冒充事实。
     checkpointAuto?: boolean | null; checkpointGeneration?: number | null;
   },
-): Promise<{ text: string; restore: () => Promise<void> } | null> {
+): Promise<{ text: string; checkpoint: string; restore: () => Promise<void> } | null> {
   if (dbClient.closed || monitorIdFromOrigin(message.origin) === null) return null;
   // **重投**(上一次取走了交代、却一个字没送出去:进程正好没了、送达报错):账本列记着是
   // 哪一段,不再取第二次。拼接在内存里当场做,所以这一次带上的是**此刻**的事件正文——
@@ -81,7 +81,7 @@ export async function monitorWakeCheckpoint(
     // 自动对上」—— 而那一格可能已经被另一段文字占用过又腾空,于是继承到别人的来源
     // （第 2 轮审查 F2,两个方向都实测到）。所以来源和代次跟文字一起落在账本上,这里原样取回。
     const receipt = ledgerReceipt(message);
-    return { text: withCheckpoint(message.text, receipt.text), restore: () => restoreCheckpoint(message, receipt) };
+    return { text: withCheckpoint(message.text, receipt.text), checkpoint: receipt.text, restore: () => restoreCheckpoint(message, receipt) };
   }
   const slot = (await db
     .select({
@@ -141,6 +141,7 @@ export async function monitorWakeCheckpoint(
   await announceResumePrompt(message.taskId);
   return {
     text: withCheckpoint(message.text, checkpoint),
+    checkpoint,
     restore: () => restoreCheckpoint(message, receipt),
   };
 }

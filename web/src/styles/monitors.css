@@ -70,6 +70,15 @@
 .monitor-composer__wake-options { display: flex; flex-wrap: wrap; gap: 10px; }
 .monitor-composer__wake-options label { display: inline-flex; width: auto; align-items: center; gap: 5px; color: var(--muted); font-size: 10.5px; }
 .monitor-composer__wake-options input { width: auto; height: auto; }
+.monitor-composer__ending { display: grid; gap: 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 8px 10px; }
+.monitor-composer__ending legend { padding: 0 4px; color: var(--faint); font-size: 9.5px; }
+/* **选择器层级照着上面那组唤醒目标写**（第 1 轮审查 N1）：`.monitor-composer label` /
+   `.monitor-composer input` 是同级后代选择器，只给一个新类名压不住它（label 还是 grid，
+   于是 radio 被拉成整行宽的网格项）—— 祖先限定才在同一档上、靠后写赢。 */
+.monitor-composer__ending-options { display: grid; gap: 6px; }
+.monitor-composer__ending-options label { display: inline-flex; width: auto; align-items: center; gap: 5px; color: var(--muted); font-size: 10.5px; }
+.monitor-composer__ending-options input { width: auto; height: auto; }
+.monitor-composer__ending-pattern { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9.5px; }
 .monitor-composer__actions { display: flex; justify-content: flex-end; gap: 6px; }
 .monitor-composer__actions button { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 10px; color: var(--muted); font-size: 10.5px; }
 .monitor-composer__actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }

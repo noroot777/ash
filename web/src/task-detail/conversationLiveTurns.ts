@@ -9,7 +9,7 @@ import { isVerifyNote, noteTone } from "./conversationNotes.ts";
 import { appendExecutionEvent, isVisibleExecutionEvent } from "../lib/executionTrace.ts";
 import { reviewerKey, reviewerKeyOf, reviewerOf } from "./conversationReviewer.ts";
 import type { AgentContentSegment, AgentTraceEvent } from "./conversationSegments.ts";
-import { auxEvent } from "./conversationSegments.ts";
+import { auxEvent, awaitingAfterEvent } from "./conversationSegments.ts";
 import type { ConversationEventItem, ConversationItem, TimelineEntry } from "./conversationModel.ts";
 import type { AgentRun, LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
 import { agentLabel, latestTurnStart, sessionRun, turnKey } from "./conversationTurnParts.ts";
@@ -58,14 +58,16 @@ function liveRun(event: LiveAgentEvent): AgentRun | undefined {
 function currentSegment(agent: AgentItem): AgentContentSegment {
   const existing = agent.segments.at(-1);
   if (existing) return existing;
-  const created = { id: `${agent.id}:segment:0`, markdown: "", events: [], attachments: [] };
+  const created = { id: `${agent.id}:segment:0`, markdown: "", events: [], attachments: [], awaiting: false };
   agent.segments.push(created);
   return created;
 }
 
 function appendAgentText(agent: AgentItem, text: string): void {
   agent.markdown += text;
-  currentSegment(agent).markdown += text;
+  const segment = currentSegment(agent);
+  segment.markdown += text;
+  segment.awaiting = false; // 正文来了 = 上游回话了(见 AgentContentSegment.awaiting)
 }
 
 function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
@@ -82,13 +84,14 @@ function appendAgentAux(agent: AgentItem, event: AgentTraceEvent): void {
     if (cut) {
       const tail = segment.markdown.slice(cut);
       segment.markdown = segment.markdown.slice(0, cut);
-      segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: tail, events: [], attachments: [] };
+      segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: tail, events: [], attachments: [], awaiting: false };
       agent.segments.push(segment);
     }
   }
   // 相邻思考合并成一行(见 appendExecutionEvent)：直播这一路一条 thinking 事件就是一小块
   // 增量，逐条成行的话长思考会刷出成百上千行。
   segment.events = appendExecutionEvent(segment.events, normalized);
+  segment.awaiting = awaitingAfterEvent(normalized);
 }
 
 function appendAgentAttachment(agent: AgentItem, event: { path?: string; source?: string; ref?: number; pos?: number; lost?: boolean }): void {
@@ -100,6 +103,7 @@ function appendAgentAttachment(agent: AgentItem, event: { path?: string; source?
   // pos 也要带:恢复补回的记录靠它排回文档顺序,实时这一路丢了它,新旧记录一混排序就
   // 整组失效(审查第 8 轮复审 R3 对称面)。
   if (event.source) (segment.attachmentSources ??= []).push({ path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost });
+  segment.awaiting = false; // 附件也是上游吐出来的东西
 }
 
 /**
@@ -209,6 +213,7 @@ export function appendLiveTimeline(
         at: entry.at,
         isAnswer: entry.isAnswer,
         bySystem: entry.bySystem,
+        monitorWake: entry.monitorWake,
       });
       continue;
     }
@@ -265,7 +270,12 @@ export function appendLiveTimeline(
     if (event.kind === "text") appendAgentText(agent, event.text);
     if (event.kind === "attachment") appendAgentAttachment(agent, event);
     // 用量恒在本回合的 turnEnd/done 之前到，所以它落在的就是刚说完话的那条气泡。
-    if (event.kind === "usage") agent.usage = agent.usage ? addUsage(agent.usage, event.usage) : event.usage;
+    if (event.kind === "usage") {
+      agent.usage = agent.usage ? addUsage(agent.usage, event.usage) : event.usage;
+      // 它不进执行过程那一列(只是这一轮的账),但**它到达就说明上游回了话** —— 等待状态
+      // 跟着解除,口径与落盘重建、讨论、服务端共用的那一份一致(第 4 轮审查 N1)。
+      currentSegment(agent).awaiting = false;
+    }
     // 水位是覆盖不是累加：后到的那条就是此刻，跟它前面报过什么无关。
     if (event.kind === "context") liveContext.set(entry.event.sessionId, event.context);
     if (event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {

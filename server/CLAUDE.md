@@ -13,7 +13,7 @@
 
 | 要改的东西 | 说明住在 | 回归测试 |
 |---|---|---|
-| 结算优先级 / 续聊 `followUpFrom` | `orchestrator.ts` `settleTaskStatus` | `test:follow-up` |
+| 结算优先级 / 续聊 `followUpFrom` | `settle-status.ts` 顶部 | `test:follow-up` |
 | 续聊改了代码就清账（前后两张工作目录快照） | `turn-baseline.ts` 顶部 | `test:turn-baseline` |
 | 已验收任务被真人唤醒后摘牌 / 挂回 | `task-stage.ts` | `test:reopen-acceptance` |
 | 就地验证轮（旁路回合、证据落盘） | `review.ts` 顶部；判定在 `review-policy.ts`，证据 `review-evidence.ts`，措辞 `review-prompts.ts` | `test:review` |
@@ -21,7 +21,7 @@
 | 重新排队的位置规则 | `queues.ts` `isOvertaken` / `tailOrder` | `test:queue` |
 | agent 活得过 server 重启 | `executors/detached.ts` 顶部 | `test:detached` |
 | 重启后接回 / 收拾残留（`reattach` 必须排在 `reconcile` 前） | `reattach.ts` + `index.ts` 调用顺序 | `test:reattach` |
-| 三层击杀、预检失败的惰性 `'error'` | `executors/spawn.ts` | — |
+| 三层击杀、进程身份 | `executors/kill.ts` | `test:process-identity` |
 | 单实例锁（粒度是 DB 文件路径，不是端口） | `singleton.ts` | `test:singleton` |
 | 启动期致命错误必须 `exit(1)` | `index.ts` `exitAfterStartupFailure`（**代码已在做**，不是靠自觉） | — |
 | 同仓库写型 git 操作串行 | `repo-lock.ts` 顶部 | `test:repo-lock` |

@@ -90,6 +90,34 @@ export const monitors = sqliteTable("monitors", {
    */
   resultHandoffAt: text("result_handoff_at"),
   resultHandoffText: text("result_handoff_text"),
+  /**
+   * **约定的结束条件**:哪一行一出现这条哨兵就收工。NULL = 没约定过。
+   *
+   * 存的是**字样**,不是正则源文:`BUILD OK|FAILED`、`^SWEEP_EXIT=`(语法见 shared 的
+   * `monitor-end-condition.ts` 文件头 ①)。这一列从来没上过线收正则,但**读的那一侧仍然
+   * 当它可能读不出来**(跨版本接力、手改过的库),判据与处置见 `noteUnreadableCondition`。
+   *
+   * 它是「命令自己永远不会结束」那一类的**唯一一条非到期出路**(另一条是改写命令让它自退)。
+   * 创建闸因此对那一类命令要求二选一:给这一列,或者显式声明「就是要盯到到期」——
+   * 判据与措辞在 shared/src/monitor-end-condition.ts,起因见那份文件头。
+   * 存量行一律 NULL = 没约定过(不是「有但读不出来」)。
+   */
+  stopWhen: text("stop_when"),
+  /**
+   * **已经确认过的那一行命中**（约定字样真的出现过的那一行原文）。NULL = 没命中过。
+   *
+   * 为什么必须落库而不是只放在运行时上:它跟 `offset` 是同一件事的两半 —— 位置一旦推过那一
+   * 行,那行就再也不会被重读。上一版把命中记在运行时对象上、交给**一次**收尾调用,于是终态
+   * UPDATE 失败一次(磁盘、竞争、重启)就把这个事实丢了:重试时运行时是新建的、`hit` 为 null,
+   * 而位置已经越过那一行、重读也读不到,两份来源都空 ⇒ 结局被写成「server 重启后这个进程已经
+   * 不在了」,而正文里那行 READY 明明已经送到了 agent 手上（第 2 轮审查 N1 实测:第一次调用
+   * 注入一次失败,重试后 status=lost、offset 照旧 14）。
+   *
+   * 所以它跟 `events`/`offset` **同一条 UPDATE 落库**(`pushLines`),而且只在那批行真送出去
+   * 之后才写 —— 没送出去的行会被重投,命中那时会再算一次,提前写就会把一个还没送达的命中
+   * 当成已确认。
+   */
+  hitLine: text("hit_line"),
   // 谁起的这个哨兵(多人模式)。停它、看它都按任务归属判权,这一列只做记账。
   ownerUserId: text("owner_user_id"),
   // 出身:'ash' = ash server 自己起的进程(全功能);'claude' = claude CLI 内置 Monitor 的

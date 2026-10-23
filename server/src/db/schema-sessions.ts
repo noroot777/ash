@@ -147,6 +147,20 @@ export const sessions = sqliteTable("sessions", {
   // 已安全消费到的 stdout 字节位置，永远落在换行边界（见 detached.ts 的
   // tailFile）。重启后从这里接着读 → 不丢行也不重行。
   agentOffset: integer("agent_offset"),
+  /**
+   * **这一次运行独有的资源记号**(`ASH_MONITOR_UNIT`,种法见 executors/spawn.ts,判定见
+   * proc.ts 的 `processUnitEvidence`)。
+   *
+   * 为什么 `agent_pid` 之外还要这一列:pid 只认得出**根**那一个进程,而漏停的从来不是根。
+   * agent 起的长跑程序(dev server、watch)挂在 `sh → node → node` 这条链的末端,根一死它
+   * 就被系统改挂到 1 号名下,从进程树上消失。继承的追踪 fd 也接不住它 —— libuv 起子进程时
+   * 丢掉 ≥3 号 fd(实测:`sh` 那一层还握着,它再起的 node 孙子就不在 lsof 名单里)。环境
+   * 记号是唯一跨得过 exec、跨得过根死亡、跨得过 server 重启的那条线索。
+   *
+   * null = 建在本列之前的老行,或这一轮没能种上记号 ⇒ 读侧退回「只有 pid」那条粗判据,
+   * 不许据此声称整项已退出(proc.ts 四档里那是 `unprovable`)。
+   */
+  agentUnitToken: text("agent_unit_token"),
   // ── Token 用量（server/src/usage.ts）────────────────────────────────────
   // 这条会话行**跨回合累加**的账（同 active_ms 的模式：会话可复用，每回合结束
   // 时把执行器报的那笔加上去）。口径归一在 shared/src/usage.ts：input 不含缓存、
@@ -206,6 +220,23 @@ export const sessionTurns = sqliteTable(
      * 少过东西，那一轮做出来的图于是被静默滤掉（第 4 轮审查必须修 1）。
      */
     endedAt: text("ended_at"),
+    /**
+     * 这一回合**自己**的结局：`completed` / `failed` / `stopped`（受控停止:用户停、工作目录
+     * 被抽走、空闲回收、引导截断）。写入端在 `session-turns.ts`，**认第一次**，门禁与
+     * `ended_at` 同一道：收口过的行不许被后来的事实改写。
+     *
+     * 为什么回合要有自己这一位，不能拿会话行上的退出码/`stopped_as` 投影出来：那两列记的是
+     * **进程**最后一次怎么没的，而常驻调度台一个进程跑很多回合。它每一轮健康 `endTurn`
+     * 收口、进程继续待命，后来空闲时才以非零码退出 —— 读端照退出码判，就把那个退出当成了
+     * 上一轮（明明已经成功答完的那一轮）失败的证据，于是整轮的「正在重试」被重新挂回手机上
+     * （第 5 轮审查 F3，已实测）。反方向同样错：`exit 0` 却中途报过执行故障的那一轮（单飞的
+     * 判据是「非零退出**或** sawExecutionError」）压根给不出失败现场。
+     *
+     * null = **不知道**（存量行；收口那一下没写成的行）。读端一律按「没有明确失败结局」
+     * 处理，不回放失败现场 —— 判据见 `session-waiting.ts` 的 `failedTurnNotices`。
+     * 进程自身怎么没的仍然单独记在会话行上（`exit_status` / `stopped_as`），两件事不混。
+     */
+    outcome: text("outcome"),
   },
   (t) => ({
     taskIdx: index("session_turns_task_idx").on(t.taskId, t.startedAt),
@@ -220,3 +251,91 @@ export const sessionTurns = sqliteTable(
     turnKey: uniqueIndex("session_turns_turn_key").on(t.sessionId, t.startedAt),
   }),
 );
+
+// ── 没收干净的 agent 后代:**清理责任** ────────────────────────────────────────
+//
+// 哨兵那边有一张同构的 `monitor_reclaim_debts`,理由在那份 schema 的注释里写全了。这里是
+// agent 这一侧的同一件事,而它是本轮审查 F2 的落点:
+//
+// 一次运行的后代**可能收不干净**,而且那不一定是 bug —— macOS 上记号只给得出 `suspected`
+// (`ps -E` 是展示文本,不是真实环境项),明确检测到残留却给不出可下刀的落点。那种时候
+// 「不贸然下刀」本身没错,**错的是把它宣布成清理成功**:上一版清理完照样释放证据、删掉
+// 追踪文件、从待收册上划掉,于是那个还在写用户文件的孤儿既查不回来也没人再管
+// (实测:记号前后都明确指出那个号,心跳从 3 涨到 61,追踪文件被删)。
+//
+// 所以「还没收干净」必须是一条**摆在库里的事实**,而且活得比任何一个内存对象都久:
+//  · 不随句柄注销走 —— WeakMap 和待收册都是进程内的;
+//  · 不随回合结束走 —— 同一条会话下一轮会把 `sessions.agent_unit_token` 覆盖掉;
+//  · 不随任务删除走 —— 任务行可能先没了,而那摊进程还在(同哨兵债表,删除批次里刻意没有它)。
+//
+// 行数有界:只有「这一轮没能证明清空」的运行进得来,确证清空(记号 `none` + 没有持有者)
+// 就销账删行。
+export const agentCleanupDebts = sqliteTable("agent_cleanup_debts", {
+  /**
+   * 这一次运行独有的资源记号(`executors/unit-token.ts`),**就是它的身份**。
+   *
+   * 为什么主键是记号而不是 `session_id`:一条会话跨回合复用,每个回合一个进程、一项资源;
+   * 拿会话当键会让下一轮把上一轮还没收掉的那笔覆盖掉 —— 正是 F2 点名的那条
+   * 「同一会话下一轮又会覆写这个单值」。记号每次创建重新随机,一笔一行。
+   */
+  unitToken: text("unit_token").primaryKey(),
+  /** 只做记账和展示 —— 任务/会话行可能已经没了,这两列不保证指向存在的行。 */
+  taskId: text("task_id").notNull().default(""),
+  sessionId: text("session_id").notNull().default(""),
+  /** 认人的那一对:号会被复用,少了启动时刻就可能杀掉同号的无辜进程。 */
+  rootPid: integer("root_pid"),
+  rootStartedAt: text("root_started_at"),
+  /**
+   * 两条**跨得过重启**的线索,清扫侧靠它们重新取证:
+   *  · 追踪文件(继承 fd,按路径 `lsof` 反查持有者);
+   *  · 这一次运行独有的输出文件(根的 stdout 就重定向在它上面)。
+   * 内存里的 WeakMap 一重启就没了,所以这两条必须落在行上。
+   */
+  trackPath: text("track_path"),
+  outPath: text("out_path"),
+  /** `remaining` = 确证还有成员活着;`unknown` = 这一轮问不清楚。两档都不许放手。 */
+  state: text("state").notNull().default("unknown"),
+  /** 人话:还剩哪些号 / 哪一问没答出来。打日志和给用户看的就是这一句。 */
+  detail: text("detail").notNull().default(""),
+  /** 记号那一问当时停在哪一档(`ours`/`suspected`/`none`/`unprovable`),分流重试策略。 */
+  unitVerdict: text("unit_verdict").notNull().default(""),
+  attempts: integer("attempts").notNull().default(0),
+  /**
+   * **这一行现在是第几版证据**。每一次写(落账、推进、收档)都 +1。
+   *
+   * 销账是「按我读到的那一版证据删掉整行」,所以它只在**我判的那一版还没被人动过**时才成立。
+   * 判定与下手之间隔着取证(清扫那一档还隔着 2 秒补刀窗口),中间要是有新证据落到同一个
+   * 键上(清理路径又记了一笔新的路径线索、另一次清扫先推进过),那份快照就已经不是当前
+   * 事实了 —— 照样按键删行就会把别人刚落下的证据一起删掉(第 3 轮审查 F2)。所以删/盖戳
+   * 都带着版本当条件:版本对不上就一行都不动,如实说出来,下一轮重新取证。
+   *
+   * 进程内已经按键排队了,这一列是**数据里的交叉校验**:它让这条不变量不再只靠「所有写入
+   * 都记得走那把锁」这个约定成立 —— 对不上就说明有人绕过去了,那一刻宁可不删。
+   */
+  version: integer("version").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  lastAttemptAt: text("last_attempt_at"),
+  /**
+   * **追到这里为止的时刻**(语义同哨兵债表的 `closed_at`)。空 = 还在追。
+   *
+   * 非空**不等于「已经收干净」**,只等于「能追的线索都答出来、都空了」:记号那一问确证
+   * `none`,追踪文件也没有持有者。POSIX 上后代甩得掉记号(`env -i`)也甩得掉进程组
+   * (`setsid`),所以「整项资源真的退了」这件事在当前平台证不出 —— 收过档的行**不删**,
+   * 它是这次运行最后的可定位身份;只是不再重试、开机也不再报警。
+   */
+  closedAt: text("closed_at"),
+  closedNote: text("closed_note"),
+  /**
+   * **这一刻还排除不掉的那几个号**(JSON:`{pid, gen, why}[]`,见 `executors/cleanup-result.ts`
+   * 的 `CleanupOpen`)。空/NULL = 没有点名过谁。
+   *
+   * 为什么非得落在行上:即时清理那一侧**已经点名了**某个号排除不掉(父子关系问不出来、
+   * 核验不了它那一代),可清扫侧手里是另一套设备(根身份 + 记号 + 两个文件),它压根不知道
+   * 有号要核 —— 于是同一个故障一个字都没恢复,清扫按自己那几台设备的「没有」把行删了
+   * (第 8 轮审查 F1-A 实测:settled=1、行 0 笔、那个后代仍在写,心跳 74→84)。
+   *
+   * 销账的条件因此多一条:这份名单上的号**逐个核过**(确证退了 / 号换了主人)才算覆盖了
+   * 这份责任。`detail` 里那句人话解除不了它 —— 那是给人看的,不是给判据用的。
+   */
+  openMembers: text("open_members"),
+});

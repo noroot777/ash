@@ -28,10 +28,14 @@ const { setTaskStatus } = await import("../src/status.js");
 const { rerunGateClosed } = await import("../src/rerun-gate.js");
 const { cancelDriving } = await import("../src/preview-start-state.js");
 const { previewShell } = await import("../src/preview-shell.js");
-const { inspectProcessSync, isPidAlive } = await import("../src/platform.js");
+// fixture 收尾杀的是**这个脚本自己刚 spawn 的**进程(手上还有 ChildProcess 句柄),所以用
+// killTree 打自己这一组,不用 killByPid。后者的契约已经变成「按一个可能已经换了主人的号
+// 下刀,所以必须先证明身份」(第 3 轮审查),只给 pid、不给启动时刻和输出文件时它一声不发
+// 地放过去 —— fixture 于是活到测试之后,每 25ms 往舞台里写一次,收尾那句 rmSync 撞上它
+// 就是 ENOTEMPTY(断言全绿、测试却红在最后一步,而且真失败被这个收尾错误盖掉了)。
+const { inspectProcessSync, isPidAlive, killTree } = await import("../src/platform.js");
 const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
 const { restartTaskPreview } = await import("../src/workflow-steps.js");
-const { killByPid } = await import("../src/executors/spawn.js");
 await ensureSchema();
 const children: ChildProcess[] = [];
 const sidecarPids: number[] = [];
@@ -295,7 +299,7 @@ try {
     } finally {
       for (const probe of probes) probe.mock.restore();
       syncBuiltinESMExports();
-      killByPid(child.pid!);
+      killTree(child.pid!, "SIGKILL");
     }
     console.log("✓ newly captured live processes survive identity-query failure and module reload as pending evidence, then stop safely after recovery");
   }
@@ -344,7 +348,7 @@ try {
       assert.equal(isPidAlive(child.pid), false, "脱离父进程组的后代也应收到停止信号");
       assert.equal(readAnyPreview(s.task.id), null);
       assert.equal(hasPendingPreviewStops(s.task.id), false);
-    } finally { killByPid(child.pid); killByPid(child.parent.pid!); }
+    } finally { killTree(child.pid, "SIGKILL"); killTree(child.parent.pid!, "SIGKILL"); }
     console.log(`✓ ${action} also terminates descendants that created their own process group`);
   }
 
@@ -485,7 +489,7 @@ try {
       assert.equal(hasPendingPreviewStops(s.task.id), false);
       assert.equal(existsSync(s.path), false);
       assert.equal(existsSync(join(s.repo, ".git", "ash-worktree-backups")), false);
-    } finally { blocked?.mock.restore(); killByPid(record.pid); killByPid(pid); }
+    } finally { blocked?.mock.restore(); killTree(record.pid, "SIGKILL"); killTree(pid, "SIGKILL"); }
     console.log(`✓ canceled startup ${denyStop ? "archives failed state and retains a timed-out stop" : "waits for TERM-resistant processes"} before acceptance cleanup`);
   }
 
@@ -505,7 +509,7 @@ try {
       assert.equal(result.accepted, true, JSON.stringify(result));
       assert.throws(() => process.kill(-parent.pid!, 0), "忽略 TERM 的孤儿进程组必须退出后才能删目录");
       assert.equal(existsSync(s.path), false);
-    } finally { killByPid(parent.pid!); }
+    } finally { killTree(parent.pid!, "SIGKILL"); }
     console.log("✓ dead preview leader does not bypass waiting for its TERM-resistant process group");
   }
 
@@ -595,11 +599,11 @@ try {
   assert.equal(existsSync(recordPath("not-a-task")), false);
   console.log("accept cleanup regression passed");
 } finally {
-  for (const pid of sidecarPids) killByPid(pid);
+  for (const pid of sidecarPids) killTree(pid, "SIGKILL");
   await Promise.all(sidecarPids.map(pid => waitFor(() => !isPidAlive(pid))));
   for (const child of children) {
     if (child.exitCode !== null || child.signalCode !== null) continue;
-    killByPid(child.pid!);
+    killTree(child.pid!, "SIGKILL");
     await Promise.race([once(child, "exit"), new Promise(resolve => setTimeout(resolve, 4000))]);
   }
   await releaseTmpDb();

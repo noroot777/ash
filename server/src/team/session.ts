@@ -37,14 +37,14 @@ import { tasks, projects, sessions, groups } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now, attachmentsPrompt } from "../util.js";
 import { setTaskStatus } from "../status.js";
-import { trackRun, stopTask } from "../runs.js";
+import { trackRun, discardStartingRun, stopTask } from "../runs.js";
 import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import { LOST_SESSION_PATCH } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeRunError } from "../transcript.js";
-import { recordUserConversationTurn } from "../conversation-turn.js";
+import { recordUserConversationTurn, type UserTurnOrigin } from "../conversation-turn.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
@@ -115,9 +115,9 @@ export function teamIsLive(taskId: string): boolean {
 export async function deliverToLead(
   taskId: string,
   text: string,
-  opts: { attachments?: string[]; throwOnOpenFailure?: boolean } = {},
+  opts: UserTurnOrigin & { attachments?: string[]; throwOnOpenFailure?: boolean } = {},
 ): Promise<boolean> {
-  return deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure);
+  return deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure, opts);
 }
 
 // 执行者汇报/提问,以及 ash 自己的唤醒语(inbox.ts 用)。
@@ -171,6 +171,7 @@ async function deliver(
   text: string,
   kind: Kind,
   throwOnOpenFailure = false,
+  origin: UserTurnOrigin = {},
 ): Promise<boolean> {
   let lead = leads.get(taskId);
   // 进程还活着,但它脚下的目录已经没了 —— 典型情形:调度者按用户吩咐删掉了自己
@@ -214,7 +215,7 @@ async function deliver(
       // 这一档仍算「接管了」(true):失败原因已经如实写进会话,消息本身是随开台一起
       // 送出去的,退回队列重试只会把同一份错误再演一遍。
       try {
-        await open(taskId, text, kind);
+        await open(taskId, text, kind, origin);
       } catch (err) {
         await reportOpenFailure(taskId, err);
         if (throwOnOpenFailure) throw err;
@@ -235,7 +236,7 @@ async function deliver(
     }
   }
   // 拒收的回执一路往上传:调用方拿它决定「这句话到底算不算送出去了」(见 push)。
-  return push(lead, text, kind);
+  return push(lead, text, kind, origin);
 }
 
 
@@ -292,9 +293,9 @@ async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
   await setTaskStatus(taskId, "idle");
 }
 
-function open(taskId: string, text: string, kind: Kind): Promise<Lead> {
+function open(taskId: string, text: string, kind: Kind, origin: UserTurnOrigin): Promise<Lead> {
   const cell = { halted: false } as Opening;
-  cell.promise = openLead(taskId, text, kind, cell).finally(() => {
+  cell.promise = openLead(taskId, text, kind, cell, origin).finally(() => {
     // 只摘自己那条:被 haltTeam 撤回之后,opening 里可能已经换成了后来那一台。
     if (opening.get(taskId) === cell) opening.delete(taskId);
   });
@@ -343,7 +344,7 @@ async function strandedByHalt(taskId: string, text: string, kind: Kind): Promise
  * 执行者汇报(inbound)被拒仍算 true:它有自己的持久待送队列接着(见 queueInbound),
  * 已经被接住了,不需要上层再管第二遍。
  */
-async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
+async function push(lead: Lead, text: string, kind: Kind, origin: UserTurnOrigin = {}): Promise<boolean> {
   if (!text.trim()) return true;
   clearIdle(lead);
   if (kind === "user") {
@@ -361,7 +362,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
       return false;
     }
     if (interrupted) recordSystemTurn(lead, INTERRUPT_NOTE, at);
-    recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at });
+    recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at, ...origin });
     // 回合身份用**投递口那一刻**的（`turnAt`）：`sendToLead` 收下消息时就按它持有住了,这里
     // 另取一个时刻就等于同一轮登记两个起点,其中一个谁都不会来收（见 lead-delivery.ts）。
     // 时间线上那条用户发言仍用 `at`（他说话的时刻,早于投递）。取不到投递口那一刻时交给
@@ -392,7 +393,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
 }
 
 // ── 开台 / 接回 ─────────────────────────────────────────────────────────────
-async function openLead(taskId: string, rawText: string, kind: Kind, cell: Opening): Promise<Lead> {
+async function openLead(taskId: string, rawText: string, kind: Kind, cell: Opening, origin: UserTurnOrigin): Promise<Lead> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("task not found");
   if (task.mode !== "team") throw new Error("不是团队任务");
@@ -484,95 +485,108 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     images: markdownImageAccounting(taskId, sessId, () => liveLead?.turnStart ?? turnStart, imageSeed),
   });
   trackRun(taskId, handle);
-
-  const cliSessionId = prev?.cliSessionId ?? handle.sessionId;
-  // 这一段常驻实际注进去的 CLI 配置目录(`""` = 宿主机默认)。下一次接回时靠它判断
-  // 「这条会话还接得上吗」—— 见 db/schema.ts 的 sessions.cli_config_dir。
-  const leadConfigDir = await cliConfigDirColumn(task.ownerUserId, cfg.lead);
-  if (resuming) {
-    // 接回同一行会话:除了回合时间戳,**执行器那一组字段必须整组刷新** —— 用户完全
-    // 可以在两段常驻之间改掉团队的执行器 profile(换 CLI、换供应商、改 CLI 配置覆盖)。
-    // 沿用上一段的值,会话详情就会拿旧 profile 的 env 前缀去拼那条「复制去终端接着聊」
-    // 的命令,直接是错的。
-    await db
-      .update(sessions)
-      .set({
-        // 回合三件套从 helper 取（见 session-turns.ts 顶部）。常驻调度台也是一个个回合
-        // 开出来的,漏了计数,它名下的产物归属就跟单飞一样会把真缺口抵扣掉。
-        ...resumedTurnFields(turnStart),
-        exitStatus: null,
-        commandLine: handle.commandLine,
+  // **从这里到 `attachLead` 是一段没有主人的窗口**:句柄已经登记在册(登记必须早于落库,
+  // 停止按钮才能在底下这几个 await 期间工作,见 runs.ts 的 `bindNativeSteer`),而注销它的
+  // 所有者是这台调度台本身(`endTurn` / `closeLead` / `retireLead`)—— 它要到 `attachLead`
+  // 那一句才上线。中间这段(落库、组装 Lead)抛出来时那个所有者根本不存在,句柄就永远留在
+  // 集合里:任务明明没在跑,`isRunning` 却一直判真,而那个 CLI 也没人读、没人杀得到
+  //(第 8 轮审查 N1)。挂上线之后的出口不归这里管,由所有者自己那几条注销路径覆盖。
+  let attached = false;
+  try {
+    const cliSessionId = prev?.cliSessionId ?? handle.sessionId;
+    // 这一段常驻实际注进去的 CLI 配置目录(`""` = 宿主机默认)。下一次接回时靠它判断
+    // 「这条会话还接得上吗」—— 见 db/schema.ts 的 sessions.cli_config_dir。
+    const leadConfigDir = await cliConfigDirColumn(task.ownerUserId, cfg.lead);
+    if (resuming) {
+      // 接回同一行会话:除了回合时间戳,**执行器那一组字段必须整组刷新** —— 用户完全
+      // 可以在两段常驻之间改掉团队的执行器 profile(换 CLI、换供应商、改 CLI 配置覆盖)。
+      // 沿用上一段的值,会话详情就会拿旧 profile 的 env 前缀去拼那条「复制去终端接着聊」
+      // 的命令,直接是错的。
+      await db
+        .update(sessions)
+        .set({
+          // 回合三件套从 helper 取（见 session-turns.ts 顶部）。常驻调度台也是一个个回合
+          // 开出来的,漏了计数,它名下的产物归属就跟单飞一样会把真缺口抵扣掉。
+          ...resumedTurnFields(turnStart),
+          exitStatus: null,
+          commandLine: handle.commandLine,
+          executor: ex.label,
+          runOwnerUserId: task.ownerUserId,
+          cliConfigDir: leadConfigDir,
+          ...ex.resumeFields(ws.path, cliSessionId),
+        })
+        .where(eq(sessions.id, sessId));
+    } else {
+      await db.insert(sessions).values({
+        id: sessId,
+        taskId,
+        role: "lead",
+        agentType: cfg.lead,
         executor: ex.label,
+        // 调度台恒按任务归属人跑(上面 spawn 用的 runEnvForTask 就是按它算的)。
         runOwnerUserId: task.ownerUserId,
         cliConfigDir: leadConfigDir,
+        worktreePath: ws.isWorktree ? ws.path : null,
+        branch: ws.branch,
+        cwd: ws.path,
+        cliSessionId,
         ...ex.resumeFields(ws.path, cliSessionId),
-      })
-      .where(eq(sessions.id, sessId));
-  } else {
-    await db.insert(sessions).values({
-      id: sessId,
+        commandLine: handle.commandLine,
+        startedAt: turnStart,
+        ...freshTurnFields(turnStart),
+        activeMs: 0,
+        exitStatus: null,
+      });
+    }
+    const lead: Lead = {
       taskId,
-      role: "lead",
-      agentType: cfg.lead,
-      executor: ex.label,
-      // 调度台恒按任务归属人跑(上面 spawn 用的 runEnvForTask 就是按它算的)。
-      runOwnerUserId: task.ownerUserId,
-      cliConfigDir: leadConfigDir,
-      worktreePath: ws.isWorktree ? ws.path : null,
-      branch: ws.branch,
-      cwd: ws.path,
+      sessId,
       cliSessionId,
-      ...ex.resumeFields(ws.path, cliSessionId),
-      commandLine: handle.commandLine,
-      startedAt: turnStart,
-      ...freshTurnFields(turnStart),
-      activeMs: 0,
-      exitStatus: null,
-    });
+      agentType: cfg.lead,
+      ownerUserId: task.ownerUserId,
+      executorId: cfg.leadExecutorId ?? null,
+      model: ex.model ?? null,
+      reasoningEffort: ex.reasoningEffort ?? null,
+      cwd: ws.path,
+      handle,
+      out: createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" }),
+      // **开台本身就是一个回合的开始**：CLI 已经起来了,首轮 prompt 也随 spawn 送进去了,所以
+      // 这两个字段在构造时就是真相（原先写 false/null、指望后面那句 beginTurn 去补,见上面
+      // attachLead 那条）。`attachLead` 据此在开放消费之前把首轮身份持有住。
+      busy: true,
+      turnStart,
+      pending: [],
+      notices: [],
+      pendingCredential: null,
+      wantedStatus: null,
+      statusTimer: null,
+      retired: false,
+      idleTimer: null,
+      closing: null,
+    };
+    attachLead(lead);
+    liveLead = lead;
+    // 挂上线了:从这一刻起句柄归这台调度台自己注销(它活得比 openLead 这次调用长)。
+    attached = true;
+    // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
+    // 下面那句 `beginTurn(lead, turnStart)` 会用**同一个起点**再开一次——那是同一个回合身份,
+    // 所以第二次既不插行也不加数（`openTurn` 的幂等条件就是身份）。第 4 轮把加数放在字段
+    // helper 里时这里是实打实加了两次,于是团队的第一个回合永远报「缺一个回合记录」
+    //（第 5 轮审查必须修 2.1）。
+    //
+    // 活动登记已经在 `attachLead` 里跟首轮状态一起绑好了（见 lead-turns.ts）,这里只剩「把这
+    // 一轮记进库」这一半:同一身份再开一次既不插行也不加数,写不成也只按缺口披露。
+    await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
+    // 运行按钮带来的首个任务 prompt 不另记 turn；用户亲自发来的消息无论是否顺手
+    // 打开了调度台，都必须成为可持久、可实时同步的一条 user turn。
+    if (kind === "user") recordUserConversationTurn({ taskId, sessionId: sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at: turnStart, ...origin });
+    else if (resuming) recordSystemTurn(lead, text, turnStart);
+    void beginTurn(lead, turnStart);
+    return lead;
+  } catch (error) {
+    if (!attached) discardStartingRun(taskId, handle);
+    throw error;
   }
-  const lead: Lead = {
-    taskId,
-    sessId,
-    cliSessionId,
-    agentType: cfg.lead,
-    ownerUserId: task.ownerUserId,
-    executorId: cfg.leadExecutorId ?? null,
-    model: ex.model ?? null,
-    reasoningEffort: ex.reasoningEffort ?? null,
-    cwd: ws.path,
-    handle,
-    out: createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" }),
-    // **开台本身就是一个回合的开始**：CLI 已经起来了,首轮 prompt 也随 spawn 送进去了,所以
-    // 这两个字段在构造时就是真相（原先写 false/null、指望后面那句 beginTurn 去补,见上面
-    // attachLead 那条）。`attachLead` 据此在开放消费之前把首轮身份持有住。
-    busy: true,
-    turnStart,
-    pending: [],
-    notices: [],
-    pendingCredential: null,
-    wantedStatus: null,
-    statusTimer: null,
-    retired: false,
-    idleTimer: null,
-    closing: null,
-  };
-  attachLead(lead);
-  liveLead = lead;
-  // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
-  // 下面那句 `beginTurn(lead, turnStart)` 会用**同一个起点**再开一次——那是同一个回合身份,
-  // 所以第二次既不插行也不加数（`openTurn` 的幂等条件就是身份）。第 4 轮把加数放在字段
-  // helper 里时这里是实打实加了两次,于是团队的第一个回合永远报「缺一个回合记录」
-  //（第 5 轮审查必须修 2.1）。
-  //
-  // 活动登记已经在 `attachLead` 里跟首轮状态一起绑好了（见 lead-turns.ts）,这里只剩「把这
-  // 一轮记进库」这一半:同一身份再开一次既不插行也不加数,写不成也只按缺口披露。
-  await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
-  // 运行按钮带来的首个任务 prompt 不另记 turn；用户亲自发来的消息无论是否顺手
-  // 打开了调度台，都必须成为可持久、可实时同步的一条 user turn。
-  if (kind === "user") recordUserConversationTurn({ taskId, sessionId: sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at: turnStart });
-  else if (resuming) recordSystemTurn(lead, text, turnStart);
-  void beginTurn(lead, turnStart);
-  return lead;
 }
 
 /**

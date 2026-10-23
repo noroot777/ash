@@ -55,7 +55,11 @@ async function visibleInDesktop(threadId: string, configDir?: string): Promise<b
 /** 单轮 exec 在 done 前收尾；常驻 exec 在整个会话关闭后收尾，中间回合仍可直接 resume。 */
 export async function* archiveVisibleCodexSession(
   events: AsyncIterable<AgentEvent>, opts: CodexArchiveProcess, initialThreadId = "",
-  cleanup?: () => Promise<void>,
+  // **这里不消费清理结论**(所以类型是 `unknown` 而不是 `CleanupResult`):这个包装器只在
+  // 「流走到尽头 + 这条 thread 在桌面端可见」时才跑到,起跑失败/被杀/普通 exec 会话一次都
+  // 走不到(第 1 轮审查 F1)—— 真正负责「收没收干净」的是句柄上的 `cleanup`,结论由那边
+  // 落责任。这一发是顺带的加时赛,判不了也不该判。
+  cleanup?: () => Promise<unknown>,
 ): AsyncIterable<AgentEvent> {
   let threadId = initialThreadId;
   let done: Extract<AgentEvent, { kind: "done" }> | undefined;

@@ -25,7 +25,8 @@ import { isPidAlive, isProcessGroupAlive, killTree } from "../src/platform.js";
 import { processUnitEvidence } from "../src/proc.js";
 import { processGenerationSync, processGroupMembersSync } from "../src/process-generation.js";
 import { killProvenUnit, reclaimState } from "../src/monitor-reclaim-evidence.js";
-import { counters, install, restore, type FakeAnswers } from "./fake-proc-fixture.js";
+import { counters, install, restore, skipWithoutProcWorld, type FakeAnswers } from "./fake-proc-fixture.js";
+if (skipWithoutProcWorld("凭证与代次绑定回归")) process.exit(0);
 
 
 /** 一个真的活着、自成进程组的旁观者:下面每一条都拿它当「可能挨刀的那一个」。 */
