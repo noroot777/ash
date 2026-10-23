@@ -203,9 +203,6 @@ try {
   //      这正是绕开「node-pty 拼命令行 + PowerShell 再解析」那两层引号雷区的办法；
   //   ③ 退出码收口跟在脚本后面，语义对齐 `sh -lc`（最后一条**语句**的成败就是会话退出码）。
   //
-  // ③ 只能钉文本形状，钉不了语义 —— 「失败的原生命令之后又成功」那档必须在真 PowerShell
-  //    上跑才算数（$LASTEXITCODE 的粘性是 PowerShell 的行为，不是我们的代码），那条在
-  //    test-project-commands.ts 的 Windows 生命周期一节里真跑。
   const psDir = join(stage, "ps");
   mkdirSync(psDir, { recursive: true });
   const pwsh = join(psDir, "pwsh.exe");
@@ -223,22 +220,12 @@ try {
   assert.equal(launch.shell, pwsh, "pwsh.exe 优先（PowerShell 7 才认 && 这类语法）");
   assert.deepEqual(launch.args.slice(0, 2), ["-NoLogo", "-EncodedCommand"]);
   const decoded = Buffer.from(launch.args[2], "base64").toString("utf16le");
-  assert.ok(decoded.includes(script), "脚本原文必须一字不动地进去（编码传参的全部意义）");
-  const lines = decoded.split("\n");
-  assert.equal(lines[0], "$global:LASTEXITCODE = 0", "先清掉上一条命令留下的 $LASTEXITCODE");
-  assert.equal(
-    lines[lines.indexOf(script.split("\n").at(-1)!) + 1],
-    "$ok = $?",
-    "$? 必须紧贴脚本最后一行读——晚一句拿到的就是那句 if 自己的成败",
-  );
-  // 顺序就是这段收口的全部内容:先认 `$?`(最后一条语句的成败),它说成功就退 0;
-  // 只有它说失败才去用 `$LASTEXITCODE` —— 那个值对「最近一个原生命令」有粘性,
-  // 先认它会把「先失败、随后补救成功」的脚本重新判成失败(第 1 轮审查 F3)。
-  const okAt = lines.indexOf("if ($ok) { exit 0 }");
-  const codeAt = lines.indexOf("if ($code -is [int] -and $code -ne 0) { exit $code }");
-  assert.ok(okAt > 0, "必须有「$? 说成功就退 0」这一句");
-  assert.ok(codeAt > okAt, "$LASTEXITCODE 那一句必须排在 $? 之后(顺序反了就是 F3)");
-  assert.equal(lines.at(-1), "exit 1", "$? 说失败、又没有可用的原生退出码时按 1 收口");
+  const encodedSource = decoded.match(/FromBase64String\('([^']+)'\)/)?.[1];
+  assert.ok(encodedSource, "完整用户脚本独立传输");
+  assert.equal(Buffer.from(encodedSource, "base64").toString("utf16le"), script, "用户脚本文本不变");
+  const longest = commandLaunch("#".repeat(4000));
+  const commandLineLength = longest.args.reduce((length, argument) => length + argument.length + 3, longest.shell.length + 3);
+  assert.ok(commandLineLength < 32767, "4000 字的完整脚本仍须容纳在 Windows 命令行内");
 
   // 没装 PowerShell 7 就退 5.1（Windows 自带那个）
   rmSync(pwsh, { force: true });

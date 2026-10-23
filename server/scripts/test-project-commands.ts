@@ -15,6 +15,7 @@ import {
 import { IS_WINDOWS } from "../src/platform.js";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { restartCommand, startCommand, stopCommand, type RunnableCommand } from "../src/terminal-commands.js";
+import { powerShellCommandCases } from "./project-command-powershell-cases.js";
 
 // ── parse ──────────────────────────────────────────────────────────────────
 assert.equal(parseProjectCommands(null), null);
@@ -178,6 +179,18 @@ if (IS_WINDOWS) {
       command: { id: "rc5", name: "rc5", script: 'Get-Item -LiteralPath "' + join(cwd, "no-such-file-xyz") + '"' },
     });
     assert.notEqual(await waitExit(cmdletFail.id, "p1"), 0, "最后一条是失败的 cmdlet → 非零");
+
+    for (const testCase of powerShellCommandCases(process.execPath)) {
+      const session = manager.create("p1", cwd, {
+        command: { id: "semantic", name: testCase.name, script: testCase.script },
+      });
+      assert.equal(await waitExit(session.id, "p1"), testCase.exitCode, testCase.name);
+      if (testCase.output) {
+        const output = manager.eventsAfter(session.id, "p1", 0)
+          ?.map((event) => event.type === "data" ? event.data : "").join("") ?? "";
+        assert.ok(output.includes(testCase.output), `${testCase.name}: ${output}`);
+      }
+    }
 
     // ④ 跨平台契约:start 幂等、restart 先杀旧再起新、stop 落地。走的是真实服务函数
     //    (全局 terminalSessions),不是上面的 manager。

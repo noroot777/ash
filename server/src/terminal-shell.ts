@@ -91,14 +91,29 @@ export function commandLaunch(script: string, preferredShell?: string): { shell:
  * 要分清得在每条语句之间插桩(得先解析 PowerShell 脚本),不值当。
  */
 function withExitCodeEpilogue(script: string): string {
+  const epilogue = [
+    "",
+    "& {",
+    "  if ($args[0]) { exit 0 }",
+    "  if ($args[1] -is [int] -and $args[1] -ne 0) { exit $args[1] }",
+    "  exit 1",
+    "} $? $LASTEXITCODE",
+    "",
+  ].join("\n");
   return [
+    `$source = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodePowerShellCommand(script)}'))`,
+    `$epilogue = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodePowerShellCommand(epilogue)}'))`,
+    "try {",
+    "  $body = [scriptblock]::Create($source).Ast",
+    "  $lastBlock = $body.EndBlock",
+    "  if ($null -eq $lastBlock) { $lastBlock = $body.ProcessBlock }",
+    "  if ($null -eq $lastBlock) { $lastBlock = $body.BeginBlock }",
+    "  $offset = $source.Length",
+    "  if ($null -ne $lastBlock -and -not $lastBlock.Unnamed) { $offset = $lastBlock.Extent.EndOffset - 1 }",
+    "  $program = [scriptblock]::Create($source.Insert($offset, $epilogue))",
+    "} catch { Write-Error $_; exit 1 }",
     "$global:LASTEXITCODE = 0",
-    script,
-    "$ok = $?",
-    "$code = $LASTEXITCODE",
-    "if ($ok) { exit 0 }",
-    "if ($code -is [int] -and $code -ne 0) { exit $code }",
-    "exit 1",
+    "& $program",
   ].join("\n");
 }
 
