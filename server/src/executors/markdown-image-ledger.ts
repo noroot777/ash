@@ -169,7 +169,26 @@ export type MarkdownImageSpot = {
   skipped?: boolean;
   /** false = 字节刚冻结(临时账,随时会被最终账覆盖);true = 已经作为事件交代出去。 */
   final: boolean;
+  /** 仅快照式正文:记这笔账时正文的长度与前 len 字符的指纹(markdownTextHash)。恢复侧
+   * 据此判断「这笔账说的是不是落盘的那版正文」;老账没有这两个字段,按旧口径核节点。 */
+  len?: number;
+  hash?: number;
 };
+
+/**
+ * 正文版本指纹(FNV-1a 32 位):快照式正文的账目带着「记这笔时正文的前 len 个字符长这样」,
+ * 恢复侧对着**落盘的那版正文**验前缀指纹 —— 同坐标同来源不能证明同一版(红/蓝两版正文
+ * 等长、同一处引用同一路径,恢复按坐标命中就把没保存的新版字节配给旧正文,第 9 轮复审 R1
+ * journalAheadOfTrace)。只认指纹,不回传正文本体:账本行要可以无限追加。
+ */
+export function markdownTextHash(text: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
 
 /** 续聊/接管时一份文档在**之前的进程**里已经写下的正文、用掉的身份数与未结状态。 */
 export type MarkdownImageSeedDoc = {
@@ -196,4 +215,3 @@ export type MarkdownImageAccounting = {
   /** 子文档 id → 它之前的状态。子文档跨进程累加(见 Ledger 注释),不接上就会重新发号。 */
   seed?: ReadonlyMap<string, MarkdownImageSeedDoc>;
 };
-

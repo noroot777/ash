@@ -32,6 +32,7 @@
 //     (复审 R1 metaResumeNewTurn)。
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 import { markdownImageRefs } from "@ash/shared/markdown-images";
+import { childResultTexts } from "@ash/shared/native-work";
 import {
   captureMarkdownImages,
   imageStore,
@@ -40,6 +41,7 @@ import {
   type ImageStore,
 } from "../agent-attachments.js";
 import { childActivity } from "./native-agent-activity.js";
+import { markdownTextHash } from "./markdown-image-ledger.js";
 import type { MarkdownImageSeedDoc, MarkdownImageSpot } from "./markdown-image-stream.js";
 
 export type MetaImageField = "message" | "result";
@@ -58,10 +60,13 @@ type FieldDoc = {
   had: boolean;
   /** 当前代:节点起点 → 首见那一刻冻的字节(或 lost 结论)。代内只前缀延续,坐标不漂。 */
   snapshots: ImageSnapshots;
-  /** 当前代已记过临时账的节点起点。 */
-  noted: Set<number>;
+  /** 当前代已记过临时账的节点起点 → 记账时的目的地(目的地变了要重记)。 */
+  noted: Map<number, string>;
   /** 当前代已交代。 */
   emitted: boolean;
+  /** 这份正文最近一次的快照身份(协议给的 messageId / 调用 id)。身份换了 = 换稿,哪怕
+   * 文字是前缀延长 —— 两条独立快照之间,文字前缀证明不了同一份正文(复审 R1)。 */
+  version?: string;
 };
 
 export type MetaImageAccounts = {
@@ -85,6 +90,8 @@ export function metaImageAccounts(opts: {
   seed?: ReadonlyMap<string, MarkdownImageSeedDoc>;
 }): MetaImageAccounts {
   const docs = new Map<string, FieldDoc>();
+  /** 调用 id → name/input:结果事件只带调用 id,结构化结果要按**调用**的形状才拆得出子正文。 */
+  const calls = new Map<string, { name: string; input: unknown }>();
   const docOf = (id: string, field: MetaImageField): FieldDoc => {
     const key = metaSeedKey(id, field);
     let found = docs.get(key);
@@ -111,8 +118,9 @@ export function metaImageAccounts(opts: {
         text: seeded?.text ?? "",
         had: !!seeded?.text,
         snapshots,
-        // 种子里的节点都是上一条进程记过账的,重放同一代时不再记第二笔。
-        noted: new Set(snapshots.keys()),
+        // 种子里的节点都是上一条进程记过账的(按当时的目的地),重放同一代时不再记第二笔;
+        // 目的地要是变了(定义行后来接长),按新目的地重拍重记。
+        noted: new Map([...snapshots].map(([pos, snap]) => [pos, snap.destination])),
         // 种子说这一代交代过(emitted 覆盖全文)就不再交代:重放同文再交代一遍,展示端同
         // 目的地计数翻倍,整组作废。
         emitted: !!seeded?.text && (seeded.emitted ?? seeded.text.length) >= seeded.text.length,
@@ -127,11 +135,11 @@ export function metaImageAccounts(opts: {
     doc.text = "";
     doc.had = false;
     doc.snapshots = new Map();
-    doc.noted = new Set();
+    doc.noted = new Map();
     doc.emitted = false;
   };
 
-  const take = (id: string, field: MetaImageField, value: unknown) => {
+  const take = (id: string, field: MetaImageField, value: unknown, version?: string) => {
     if (typeof value !== "string") return;
     const key = metaSeedKey(id, field);
     if (!value) {
@@ -143,31 +151,38 @@ export function metaImageAccounts(opts: {
       return;
     }
     const doc = docOf(id, field);
-    if (doc.text === value) return;
-    // 新一代的判据(见文件头):已交代后的任何变化,或**非前缀**的改写。前缀延续(流式
-    // 增量、重放后接着说)留在当代 —— 代内坐标因此永不漂移,节点账才能按 pos 记。
-    if (doc.emitted || !value.startsWith(doc.text)) reopen(doc);
+    // 协议给了快照身份(messageId / 调用 id)而且换了,就按换稿走:两条**独立**的完整快照
+    // 之间,文字前缀证明不了同一份正文 —— 同回合第二条消息恰好以第一条开头时,图早被重拍
+    // 过,沿用上一条的冻结是把旧字节安在新话上(复审 R1 distinctPrefixMessages)。
+    const replaced = version !== undefined && doc.version !== undefined && version !== doc.version && doc.had;
+    if (version !== undefined) doc.version = version;
+    if (doc.text === value && !replaced) return;
+    // 新一代的判据(见文件头):已交代后的任何变化、换了快照身份,或**非前缀**的改写。
+    // 前缀延续(流式增量、重放后接着说)留在当代 —— 代内坐标因此永不漂移,节点账才能按 pos 记。
+    if (doc.emitted || replaced || !value.startsWith(doc.text)) reopen(doc);
     doc.text = value;
     doc.had = true;
     const refs = markdownImageRefs(value);
     // 当代还没冻结的节点当场拍字节:同路径的第二处是**另一个节点**,按它自己出现的时刻拍。
-    const fresh = refs.filter((ref) => !doc.snapshots.has(ref.start));
-    if (fresh.length) {
-      for (const path of captureMarkdownImages(fresh, doc.store, doc.snapshots, { cwd: opts.cwd })) {
-        opts.captured.add(path);
-      }
+    // 全量传入 —— capture 自带「同起点同目的地才跳过」,目的地改写过的节点按新目的地重拍。
+    for (const path of captureMarkdownImages(refs, doc.store, doc.snapshots, { cwd: opts.cwd })) {
+      opts.captured.add(path);
     }
-    // 临时账按节点记:消费者死在交代之前,恢复侧按「落盘正文里真有这个节点」补回。
+    // 临时账按节点记:消费者死在交代之前,恢复侧按「落盘正文里真有这个节点」补回。账带
+    // 正文指纹(len/hash):同坐标同来源证明不了同一**版**正文,恢复侧只认指纹对得上落盘
+    // 正文的那几笔(复审 R1 journalAheadOfTrace)。来源写冻结时的目的地(读不到新目的地时
+    // 冻结停在旧目的地,账不许替没冻到的字节背书);目的地真换到了就按新目的地再记一笔。
     for (const ref of refs) {
-      if (doc.noted.has(ref.start)) continue;
       const snapshot = doc.snapshots.get(ref.start);
       if (!snapshot || (!snapshot.path && !snapshot.lost)) continue;
-      doc.noted.add(ref.start);
+      if (doc.noted.get(ref.start) === snapshot.destination) continue;
+      doc.noted.set(ref.start, snapshot.destination);
       if (snapshot.path) opts.exposed.add(snapshot.path);
       opts.note?.({
-        doc: id, field, rev: doc.rev, pos: ref.start, source: ref.destination,
+        doc: id, field, rev: doc.rev, pos: ref.start, source: snapshot.destination,
         ...(snapshot.path ? { path: snapshot.path } : {}),
         ...(snapshot.lost ? { lost: true } : {}),
+        len: doc.text.length, hash: markdownTextHash(doc.text),
         final: false,
       });
     }
@@ -183,7 +198,9 @@ export function metaImageAccounts(opts: {
       if (image.path) opts.claimed.add(image.path);
       opts.note?.({
         doc: id, field, rev: doc.rev, pos: image.pos ?? 0, source: image.source,
-        ref: image.ref, path: image.path, lost: image.lost, final: true,
+        ref: image.ref, path: image.path, lost: image.lost,
+        len: doc.text.length, hash: markdownTextHash(doc.text),
+        final: true,
       });
       const activity: NativeAgentActivity = { kind: "attachment", field, rev: doc.rev, ...image };
       out.push(childActivity(id, activity));
@@ -195,17 +212,32 @@ export function metaImageAccounts(opts: {
     capture(event) {
       const work = event.kind === "tool" ? event.nativeWork : undefined;
       if (!work) return;
-      if (work.type === "agent") {
-        take(work.id, "message", work.message);
+      if (work.type === "call") {
+        calls.set(work.id, { name: work.name, input: work.input });
+      } else if (work.type === "agent") {
+        take(work.id, "message", work.message, work.messageId);
         take(work.id, "result", work.result);
       } else if (work.type === "result") {
-        take(work.id, "result", work.result);
+        // 结构化结果(wait 的 statuses、taskoutput 的 <output>)按**子正文**各记各的账
+        // (文档 = 子智能体 id × result),提取与展示端共用 childResultTexts:扫原始 JSON
+        // 的坐标和转义在解码后的正文里对不上,title 带引号的图连节点都数不出(复审 R1
+        // encodedMarkdown/routedJournalLate)。快照身份 = 这一次调用:下一次 wait 再报的
+        // 同文是新快照,照换代重拍。拆不出的仍按原文整份记。
+        const saved = calls.get(work.id);
+        const children = childResultTexts(saved?.name, saved?.input, work.result);
+        if (children.length) for (const child of children) take(child.id, "result", child.text, work.id);
+        else take(work.id, "result", work.result);
       }
     },
     settle(event) {
       const work = event.kind === "tool" ? event.nativeWork : undefined;
       if (!work) return [];
-      if (work.type === "result") return emit(work.id, "result");
+      if (work.type === "result") {
+        const saved = calls.get(work.id);
+        const children = childResultTexts(saved?.name, saved?.input, work.result);
+        if (children.length) return children.flatMap((child) => emit(child.id, "result"));
+        return emit(work.id, "result");
+      }
       if (work.type === "agent" && (work.closed === true || ["completed", "failed", "stopped"].includes(work.status))) {
         return [...emit(work.id, "message"), ...emit(work.id, "result")];
       }

@@ -215,7 +215,7 @@ function validNativeWork(value: unknown): boolean {
       // status 只要求是字符串：认不出的值由 nativeWorkStatus() 归一成 "unknown"。
       return isString(work.status)
         && (work.closed === undefined || typeof work.closed === "boolean")
-        && ["nativeId", "parentId", "title", "description", "message", "result",
+        && ["nativeId", "parentId", "title", "description", "message", "messageId", "result",
           "model", "requestedModel", "effort", "requestedEffort", "agentType"]
           .every((field) => optionalString(work[field]));
     default:

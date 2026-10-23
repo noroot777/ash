@@ -16,6 +16,9 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 import { markdownImageRefs } from "@ash/shared/markdown-images";
+import { childResultTexts } from "@ash/shared/native-work";
+import { externalImageDestination } from "./agent-attachments.js";
+import { markdownTextHash } from "./executors/markdown-image-ledger.js";
 import { metaSeedKey, type MetaImageField } from "./executors/markdown-image-meta.js";
 import { childActivity } from "./executors/native-agent-activity.js";
 import type {
@@ -157,7 +160,10 @@ export async function loadMarkdownImageSeed(
     rev: number;
     text?: string;
     emitted: Set<number>;
-    lines: { rev: number; pos: number; destination: string; path?: string; lost?: boolean }[];
+    lines: {
+      rev: number; pos: number; destination: string; path?: string; lost?: boolean;
+      len?: number; hash?: number; final?: boolean;
+    }[];
   };
   const metas = new Map<string, MetaWork>();
   const meta = (id: string, field: MetaImageField): MetaWork => {
@@ -169,6 +175,8 @@ export async function loadMarkdownImageSeed(
     }
     return found;
   };
+  /** 调用 id → name/input:结构化结果要按调用的形状拆子正文,与记账侧(meta)同一把尺。 */
+  const calls = new Map<string, { name: string; input: unknown }>();
   for (const entry of await readTraceEntries(taskId, sessionId)) {
     const main = opts.mainTurnStartedAt !== undefined && entry.turnStartedAt === opts.mainTurnStartedAt;
     if (main && entry.event.kind === "text" && entry.event.text) {
@@ -180,13 +188,19 @@ export async function loadMarkdownImageSeed(
       continue;
     }
     const work = entry.event.kind === "tool" ? entry.event.nativeWork : undefined;
+    if (work?.type === "call") calls.set(work.id, { name: work.name, input: work.input });
     if (work?.type === "agent") {
       // 快照式正文按**替换**语义取最后一版(空串 = 清场):种子判「重放同一代」还是「新
       // 内容开新代」全靠它 —— 不带正文的种子只能无条件继承冻结,正是复审 R1 的新回合一例。
       if (typeof work.message === "string") meta(work.id, "message").text = work.message;
       if (typeof work.result === "string") meta(work.id, "result").text = work.result;
     } else if (work?.type === "result") {
-      meta(work.id, "result").text = work.result;
+      // 结构化结果与记账侧同一把尺(childResultTexts):账记在子正文的文档上,正文也按
+      // 子正文接回,否则指纹与节点都对不上号。拆不出的按原文整份。
+      const saved = calls.get(work.id);
+      const children = childResultTexts(saved?.name, saved?.input, work.result);
+      if (children.length) for (const child of children) meta(child.id, "result").text = child.text;
+      else meta(work.id, "result").text = work.result;
     }
     const child = childEventOf(entry.event);
     if (!child) continue;
@@ -207,18 +221,17 @@ export async function loadMarkdownImageSeed(
   }
   for (const line of await readJournal(taskId, sessionId)) {
     if (line.field) {
-      // 快照式正文的账:发号器、代号、已交代代号接续;冻的字节按**节点**留存,出口只取
-      // 最高代那组(代内前缀延续坐标不漂;更老的代说的是已经不在屏幕上的版本)。
+      // 快照式正文的账:发号器无条件接续(多留几号无害);**代号与已交代**要先过正文指纹
+      // 才算数 —— 账可能属于比落盘更新、一字未存的一版(复审 R1 journalAheadOfTrace),
+      // 这儿就信它,接回的就是没保存那版的字节。筛选在出口处对着 trace 正文做。
       const seeded = meta(line.doc ?? "", line.field);
-      if (line.final && typeof line.ref === "number") {
-        seeded.refs = Math.max(seeded.refs, line.ref + 1);
-        seeded.emitted.add(line.rev ?? 0);
-      }
-      seeded.rev = Math.max(seeded.rev, line.rev ?? 0);
+      if (line.final && typeof line.ref === "number") seeded.refs = Math.max(seeded.refs, line.ref + 1);
       seeded.lines.push({
         rev: line.rev ?? 0, pos: line.pos, destination: line.source,
         ...(line.path ? { path: line.path } : {}),
         ...(line.lost ? { lost: true } : {}),
+        ...(typeof line.len === "number" && typeof line.hash === "number" ? { len: line.len, hash: line.hash } : {}),
+        ...(line.final ? { final: true } : {}),
       });
       continue;
     }
@@ -260,7 +273,10 @@ export async function loadMarkdownImageSeed(
     while (prefix < nodes.length) {
       const start = nodes[prefix].start;
       if (seeded.delivered.has(start)) covered += 1;
-      else if (!seeded.noRecord.has(start)) break;
+      // 没交付记录的节点要么是账上记过的合法间隔(skipped 行),要么**可证明**不需要本地
+      // 结果(站外/data:,交代侧本来就不产记录)—— 老账没有 skipped 行(复审 R3),只能按
+      // 真实解析出的目的地自证;相对路径不算,它该有记录,没有就是真断了。
+      else if (!seeded.noRecord.has(start) && !externalImageDestination(nodes[prefix].destination)) break;
       end = Math.max(end, nodes[prefix].end);
       prefix += 1;
     }
@@ -278,12 +294,21 @@ export async function loadMarkdownImageSeed(
     if (!seeded.refs && !seeded.lines.length && !seeded.rev && !seeded.text) continue;
     if (seeded.text) {
       // 正文在:接回的进程把同文重放(前缀)认成**同一代**,冻结按节点沿用,交代过的不再
-      // 交代;真正的新内容(非前缀/清场后)由 meta 账自己开新代。残余窄缝:正文可能属于
-      // 比账本更新、没留下任何一行的一代 —— 节点接回时按 (pos, destination) 双重核对,
-      // 对不上的那张表随 reopen 丢弃。
+      // 交代;真正的新内容(非前缀/清场后)由 meta 账自己开新代。账本行先过**正文指纹**:
+      // 同坐标同来源证明不了同一版(红/蓝两版等长同路径,按坐标全对得上),只有「记账时的
+      // 前 len 字符」指纹对得上落盘正文的才算这版的账,比落盘更新的那一版(一字未存)整组
+      // 不认(复审 R1 journalAheadOfTrace)。老账没有指纹,沿旧口径放行,节点接回时仍按
+      // (pos, destination) 双重核对。
+      const text = seeded.text;
+      const verified = seeded.lines.filter((line) =>
+        line.len === undefined || line.hash === undefined
+          ? true
+          : line.len <= text.length && markdownTextHash(text.slice(0, line.len)) === line.hash);
+      const rev = verified.reduce((top, line) => Math.max(top, line.rev), seeded.rev);
+      const emitted = seeded.emitted.has(rev) || verified.some((line) => line.final && line.rev === rev);
       const byPos = new Map<number, { pos: number; destination: string; path?: string; lost?: boolean }>();
-      for (const line of seeded.lines) {
-        if (line.rev !== seeded.rev) continue;
+      for (const line of verified) {
+        if (line.rev !== rev) continue;
         byPos.set(line.pos, {
           pos: line.pos, destination: line.destination,
           ...(line.path ? { path: line.path } : {}),
@@ -291,16 +316,18 @@ export async function loadMarkdownImageSeed(
         });
       }
       out.set(key, {
-        text: seeded.text,
+        text,
         refs: seeded.refs,
-        emitted: seeded.emitted.has(seeded.rev) ? seeded.text.length : 0,
-        rev: seeded.rev,
+        emitted: emitted ? text.length : 0,
+        rev,
         ...(byPos.size ? { snapshots: [...byPos.values()] } : {}),
       });
     } else {
       // 清场收尾、或老 trace 里读不到正文:不知道上一代长什么样,就**不继承**任何冻结 ——
-      // 「同一回合重放要继承」不能无条件推广(复审 R1 新回合一例)。下一段内容从新一代起算。
-      out.set(key, { text: "", refs: seeded.refs, emitted: 0, rev: seeded.rev + 1 });
+      // 「同一回合重放要继承」不能无条件推广(复审 R1 新回合一例)。下一段内容从比一切已知
+      // 代号(含账本里没核验的)都新的一代起算,免得跟死代的账撞号。
+      const top = seeded.lines.reduce((high, line) => Math.max(high, line.rev), seeded.rev);
+      out.set(key, { text: "", refs: seeded.refs, emitted: 0, rev: top + 1 });
     }
   }
   return out.size ? out : undefined;
@@ -352,6 +379,8 @@ export async function mergeImageJournal(
   if (!journal.length) return entries;
   const traced = new Set<string>();
   const texts = new Map<string, string>();
+  /** 调用 id → name/input:结构化结果按子正文收集,与记账侧同一把尺(childResultTexts)。 */
+  const calls = new Map<string, { name: string; input: unknown }>();
   const tracedKey = (turn: string, doc: string | null | undefined, field: string | undefined, source: string, ref: number) =>
     `${turn}\u0000${doc ?? ""}\u0000${field ?? ""}\u0000${source}\u0000${ref}`;
   for (const entry of entries) {
@@ -370,11 +399,20 @@ export async function mergeImageJournal(
     // 的另一版的记录(复审 R1 中断/恢复一例)。result 事件的正文是原始字符串,记录的 pos
     // 也是按它算的,两边同一口径。
     const work = event.kind === "tool" ? event.nativeWork : undefined;
+    if (work?.type === "call") calls.set(work.id, { name: work.name, input: work.input });
     if (work?.type === "agent") {
       if (typeof work.message === "string") texts.set(docKey(work.id, entry.turnStartedAt, "message"), work.message);
       if (typeof work.result === "string") texts.set(docKey(work.id, entry.turnStartedAt, "result"), work.result);
     } else if (work?.type === "result") {
-      texts.set(docKey(work.id, entry.turnStartedAt, "result"), work.result);
+      // 结构化结果拆成子正文(账在子文档上,见 meta 的 capture),正文也按子文档收集,
+      // 指纹与节点核对才对得上号(复审 R1 routedJournalLate/encodedMarkdown)。
+      const saved = calls.get(work.id);
+      const children = childResultTexts(saved?.name, saved?.input, work.result);
+      if (children.length) {
+        for (const child of children) texts.set(docKey(child.id, entry.turnStartedAt, "result"), child.text);
+      } else {
+        texts.set(docKey(work.id, entry.turnStartedAt, "result"), work.result);
+      }
     }
     const child = childEventOf(event);
     if (!child) continue;
@@ -446,9 +484,17 @@ export async function mergeImageJournal(
   // 的只剩旧代字节(复审 R1 journalGeneration:应 BLUE,实际 RED)。更老的代一条都不补:
   // 它们说的是已经不在屏幕上的版本,展示端按最高代取,补了也只会在同目的地计数里添乱。
   for (const [key, lines] of fieldDocs) {
-    const revs = [...new Set(lines.map((line) => line.rev ?? 0))].sort((a, b) => b - a);
+    // 指纹先行:带 len/hash 的账只认「记账时的正文前缀」与落盘正文对得上的那几笔 ——
+    // 同坐标同来源不能证明同一版(复审 R1 journalAheadOfTrace);老账没有指纹,仍按节点
+    // 核对放行。
+    const text = texts.get(key) ?? "";
+    const verified = lines.filter((line) =>
+      typeof line.len !== "number" || typeof line.hash !== "number"
+        ? true
+        : line.len <= text.length && markdownTextHash(text.slice(0, line.len)) === line.hash);
+    const revs = [...new Set(verified.map((line) => line.rev ?? 0))].sort((a, b) => b - a);
     for (const rev of revs) {
-      const current = lines.filter((line) => (line.rev ?? 0) === rev);
+      const current = verified.filter((line) => (line.rev ?? 0) === rev);
       const passing = current.filter((line) => nodeAt(key, line.pos) === line.source);
       if (!passing.length) continue;
       const finalsHere = new Set(passing.filter((line) => line.final).map((line) => line.pos));

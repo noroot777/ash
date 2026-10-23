@@ -200,7 +200,15 @@ export function markdownImageSink(cwd?: string, accounting?: MarkdownImageAccoun
   };
 
   const freezeTail = (ledger: Ledger, fresh: string) => {
-    if (!/[)\]\n]/.test(fresh)) return;
+    // 快速闸:这一片不带能收尾引用/定义的字符就不值得解析 —— 例外是**还在写的定义行**:
+    // 有人等定义、窗口尾部正是 `[r]: ` 之后的裸目的地时,这一片(`shot.svg`)一个标点都
+    // 没有却恰恰补全了目的地;等下一片标点再拍,文件早被重拍(复审 R2 longBareDefinition:
+    // 快车道的整篇扫描有第四档,放慢档的 freezeTail 原先没有)。窗口切片起点可能落在行中,
+    // 行首锚因此可能误判一次 —— 代价只是多解析一片,漏判才会漏拍。
+    if (
+      !/[)\]\n]/.test(fresh)
+      && !(ledger.waiting.size && PENDING_DEFINITION.test(ledger.text.slice(-SCAN_WINDOW)))
+    ) return;
     let from = Math.min(ledger.scanned, ledger.text.length);
     for (const start of ledger.waiting.keys()) if (start < from) from = start;
     from = Math.max(from, ledger.text.length - SCAN_WINDOW, 0);

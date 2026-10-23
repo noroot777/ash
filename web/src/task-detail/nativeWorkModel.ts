@@ -1,6 +1,6 @@
 import type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus, TaskStatus } from "@ash/shared";
 import { markdownImageRefs } from "@ash/shared/markdown-images";
-import { nativeWorkStatus as workStatus } from "@ash/shared/native-work";
+import { childResultTexts, nativeWorkStatus as workStatus } from "@ash/shared/native-work";
 export { nativeWorkStatus as workStatus } from "@ash/shared/native-work";
 import type { AttachmentSource, ConversationItem } from "./conversationModel.ts";
 
@@ -133,6 +133,10 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
     else metaImages.delete(slot);
   };
   const calls = new Map<string, { call: Call; rowId?: string }>();
+  // 路由推迟到全部记录就位之后再执行:恢复合并(mergeImageJournal)把补回的记录追加在
+  // trace 末尾,结果事件先到、记录后到,走到哪路到哪会把后到的记录永远留在调用行的槽里
+  // (复审 R1 routedJournalLate 的存量数据半边)。
+  const pendingRoutes: { from: string; targets: { rowId: string; text: string }[] }[] = [];
   const taskIds = new Map<string, string>();
   const endedRows = new Set<string>();
   const legacyOrdinals = new Map<string, number>();
@@ -292,13 +296,18 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           // 按合并后的 id 重算占位标题,免得留着派活调用那一截 id。
           const title = existing && named(existing) ? existing.title
             : named(row) ? row.title : placeholderTitle(row.sessionId, key(nativeId));
-          // 行搬家(调用行 → 真实线程行),它名下的快照式正文记录跟着走。
+          // 行搬家(调用行 → 真实线程行),它名下的快照式正文记录跟着走:from 一并改签 ——
+          // 槽的不变量是「一槽只装一份来源文档」,不改签的话,搬来的记录与线程行自己攒的
+          // 记录混在同槽,代号跨文档相比没有意义(复审 R1)。同 from 续接,异 from 以后到
+          // 的为准,与 stashMeta / routeResultImages 同口径。
           for (const field of ["message", "result"] as const) {
             const slot = `${rowId}\u0000${field}`;
             const moved = metaImages.get(slot);
-            if (moved) {
+            if (moved?.length) {
               const target = `${key(nativeId)}\u0000${field}`;
-              metaImages.set(target, [...(metaImages.get(target) ?? []), ...moved]);
+              const retagged = moved.map((record) => record.from === rowId ? { ...record, from: key(nativeId) } : record);
+              const prior = metaImages.get(target);
+              metaImages.set(target, prior?.length && prior[0]!.from === retagged[0]!.from ? [...prior, ...retagged] : retagged);
               metaImages.delete(slot);
             }
           }
@@ -317,6 +326,9 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           if (endedRows.delete(rowId)) endedRows.add(key(nativeId));
         }
       } else if (!activity.failed) {
+        // 结构化结果的子正文提取与服务端记账共用一份(childResultTexts):服务端按它把图片
+        // 记录记在子文档名下,这儿按同一把尺取正文,两边才指同一段字(复审 R1 encodedMarkdown)。
+        const extracted = new Map(childResultTexts(call.name, call.input, activity.result).map((child) => [child.id, child.text]));
         if (name === "taskget" || name === "tasklist") {
           const tasks = response.tasks ?? (response.task ? [response.task] : response.id ? [response] : []);
           if (Array.isArray(tasks)) for (const task of tasks) {
@@ -328,9 +340,10 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           const row = [...rows.values()].find((candidate) => candidate.sessionId === item.sessionId && candidate.kind === "agent" && candidate.nativeId === nativeId);
           const status = name === "taskstop" ? "stopped" : workStatus(response.task?.status ?? /<status>([^<]+)<\/status>/.exec(activity.result)?.[1]);
           if (row && status !== "unknown") {
-            const text = str(response.task?.output) || /<output>([\s\S]*?)<\/output>/.exec(activity.result)?.[1] || activity.result;
+            const text = extracted.get(nativeId)
+              ?? (str(response.task?.output) || /<output>([\s\S]*?)<\/output>/.exec(activity.result)?.[1] || activity.result);
             put(row.id, { status, result: text });
-            routeResultImages(key(activity.id), [{ rowId: row.id, text }]);
+            pendingRoutes.push({ from: key(activity.id), targets: [{ rowId: row.id, text }] });
           }
         }
         const states = response.status ?? response.statuses;
@@ -339,11 +352,11 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           for (const [nativeId, state] of Object.entries(states)) {
             const value = typeof state === "object" && state ? state as Record<string, unknown> : {};
             const status = workStatus(Object.keys(value)[0] ?? state);
-            const text = str(value.completed ?? value.errored ?? value.error);
+            const text = extracted.get(nativeId) ?? str(value.completed ?? value.errored ?? value.error);
             put(key(nativeId), { nativeId, status, result: text });
             if (text) routed.push({ rowId: key(nativeId), text });
           }
-          routeResultImages(key(activity.id), routed);
+          pendingRoutes.push({ from: key(activity.id), targets: routed });
         }
         if (name === "close_agent") {
           const id = key(str(call.input.id));
@@ -353,6 +366,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
       }
     }
   }
+  for (const route of pendingRoutes) routeResultImages(route.from, route.targets);
   // 只认最高代:正文清场/换稿之后,旧代记录说的是已经不在屏幕上的那一版。
   const latestRev = (list: MetaRecord[] | undefined): AttachmentSource[] | undefined => {
     if (!list?.length) return undefined;

@@ -181,6 +181,16 @@ function localImagePath(destination: string, cwd?: string): string | null {
   }
 }
 
+/**
+ * 这个目的地**可证明**不需要本地结果(站外/协议相对/data: 一类,浏览器自己取):交代侧
+ * 不会为它产生记录。恢复侧按它识别交付序列里的合法间隔 —— 老账没有 skipped 行(第 9 轮
+ * 复审 R3),只能按真实解析出的节点自证;相对路径不算(有 cwd 它就是本机文件,该有记录)。
+ */
+export function externalImageDestination(destination: string): boolean {
+  if (/^file:\/\//i.test(destination)) return false;
+  return isNetworkDestination(destination) || !destinationFilePath(destination);
+}
+
 /** 正文里一处引用指到的那张本机图片,**此刻**的字节;不是本机图片 / 读不到就返回 null。 */
 function readImageAt(destination: string, cwd?: string): ImageBytes | null {
   const path = localImagePath(destination, cwd);

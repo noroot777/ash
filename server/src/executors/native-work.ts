@@ -178,6 +178,8 @@ export function codexChildWork(method: string, params: any): AgentEvent[] {
   }));
   if (method === "item/completed" && item?.type === "agentMessage") out.push(event("Agent", {
     type: "agent", id: params.threadId, nativeId: params.threadId, status: "running", message: clip(item.text ?? ""),
+    // 每条完成的消息是独立快照:身份随事件带走,图片账按它换代(文字前缀不算同一份正文)。
+    ...(item.id != null ? { messageId: String(item.id) } : {}),
   }));
   if (method === "turn/completed") out.push(event("Agent", {
     type: "agent", id: params.threadId, nativeId: params.threadId, status: nativeStatus(params.turn?.status),
