@@ -104,7 +104,7 @@
     "test:star": "tsx scripts/test-task-star.ts",
     "test:task-activity": "tsx scripts/test-task-activity.ts",
     "test:scheduled-messages": "tsx scripts/test-scheduled-messages.ts && tsx scripts/test-task-steer-hardening.ts && tsx scripts/test-task-steer-rollback.ts && tsx scripts/test-task-direction-epoch-entries.ts && tsx scripts/test-codex-mcp-turn-token.ts && tsx scripts/test-native-steer.ts && tsx scripts/test-claude-steer-ack.ts && tsx scripts/test-run-notices.ts",
-    "test:review": "tsx scripts/test-review-flow.ts && tsx scripts/test-review-sweep.ts && tsx scripts/test-regression-reuse.ts",
+    "test:review": "tsx scripts/test-review-flow.ts && tsx scripts/test-review-sweep.ts && tsx scripts/test-regression-reuse.ts && tsx scripts/test-regression-file-types.ts",
     "test:regression-reuse": "tsx scripts/test-regression-reuse.ts",
     "//test:review-sweep": "「一次查全」那一节:扫描义务契约表、历史发现清单的抽取与成文、以及它们有没有真的进各条审查 prompt。全是提示词,丢了不会有任何运行期报错。",
     "test:review-sweep": "tsx scripts/test-review-sweep.ts",
