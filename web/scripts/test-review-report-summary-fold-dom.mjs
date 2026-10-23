@@ -15,7 +15,10 @@
 // ④ 恰好 5 条的报告一个按钮都不该多画；
 // ⑤ 这一层**跟权威结论无关**。同一份正文配 `verify_failed` 和 `verified` 各挂一份：里层
 //    的文案、条数、切点一模一样，只有外层那个按钮跟着结论变。问题多到 6 条的报告几乎
-//    必然是没通过的那一批——把这一层绑到 `contract` 档上等于原地关掉它。
+//    必然是没通过的那一批——把这一层绑到 `contract` 档上等于原地关掉它；
+// ⑥ 两层折叠是**同一次解析**里的两个分区,不是三份文档。嵌套了两层的这一路最容易退回
+//    「各段各渲染一遍」——那样结论里引用明细里的图片定义/脚注就两头落空(审查第 4 轮
+//    R2)。所以两层都展开时,整篇报告仍然只有一个 `.task-markdown`。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -31,6 +34,24 @@ const server = await createServer({
 
 /** 一段文本里某个片段出现几次。数「恰好一次」用它，不用 `getByText`——后者连祖先一起算。 */
 const times = (text, needle) => text.split(needle).length - 1;
+
+/**
+ * 「铺开在首屏的那部分」= 整篇可见文字**减去**折叠按钮自己的标签和展开着的那几块。
+ *
+ * 整篇只解析一次(见 markdownLayout 的 regions),摘要、两个按钮、展开着的内容都在同一个
+ * `.task-markdown` 里,所以没法再按「第几个 `.task-markdown`」取某一段。
+ */
+const spread = async (scope) => {
+  let text = await scope.locator(".task-markdown").first().innerText();
+  const chunks = [
+    ...(await scope.locator(".review-report-more").allInnerTexts()),
+    ...(await scope.locator(".review-report-detail").allInnerTexts()),
+  ];
+  for (const chunk of chunks) if (chunk) text = text.split(chunk).join("");
+  // 减掉一块会在原地留下它两侧的空行,留几条取决于那一块当时展开没展开。两份报告的首屏要
+  // 比的是**切在哪儿**,不是空行数,所以把空行归一。
+  return text.replace(/\n{2,}/g, "\n\n").trim();
+};
 
 let browser;
 try {
@@ -49,7 +70,7 @@ try {
   const detailToggle = six.getByRole("button", { name: /完整报告/ });
 
   // ① 默认态：前五条在屏幕上，第六条和技术记录都不在 DOM 上。
-  const head = await six.locator(".task-markdown").first().innerText();
+  const head = await spread(six);
   assert.match(head, /有 6 条必须先修/, "报了几条要默认可见");
   assert.match(head, /5\. 第 5 处操作会出错/, "第五条仍在首屏");
   assert.match(head, /建议怎么修：把第 5 处的判断改回来/, "第五条的三行也在首屏");
@@ -57,8 +78,7 @@ try {
   assert.equal(await six.locator(".review-report-detail").count(), 0, "两层折叠默认都不挂在 DOM 上");
 
   // 第四栏跨过中段留在首屏——它要是被卷进折叠，用户就得点一下才知道「还有什么不拦验收」。
-  const aside = six.locator(".task-markdown").nth(1);
-  assert.match(await aside.innerText(), /不拦验收、但你该知道的/, "第四栏单独一段，默认可见");
+  assert.match(head, /不拦验收、但你该知道的/, "第四栏跨过中间那个折叠，默认可见");
 
   assert.equal(await moreToggle.count(), 1, "超过五条要给一个照实说话的出口");
   assert.equal(await detailToggle.count(), 1, "外层那个出口照旧");
@@ -110,6 +130,13 @@ try {
     "点开外层不该把里层关掉",
   );
 
+  // ⑥ 两层都开着，整篇仍然只有**一个** `.task-markdown`——嵌套折叠没有偷偷另起一份文档。
+  assert.equal(
+    await six.locator(".task-markdown").count(),
+    1,
+    "两层折叠是同一次解析里的两个分区，不是三份各自渲染的文档",
+  );
+
   // 折叠不是丢弃，也不是重复：两层都开着时，每条问题、每一行、第四栏各出现一次。
   const all = await six.innerText();
   for (let at = 1; at <= 6; at += 1) {
@@ -131,9 +158,9 @@ try {
   const five = page.locator(".five-problems-fixture");
   assert.equal(await five.getByRole("button", { name: /其余/ }).count(), 0, "五条不该分层");
   assert.equal(await five.getByRole("button", { name: /完整报告/ }).count(), 1, "外层那个照旧");
-  const fiveHead = await five.locator(".task-markdown").first().innerText();
+  const fiveHead = await spread(five);
   assert.match(fiveHead, /5\. 第 5 处操作会出错/, "五条全在首屏");
-  assert.match(fiveHead, /不拦验收、但你该知道的/, "不分层时第四栏就在同一段里");
+  assert.match(fiveHead, /不拦验收、但你该知道的/, "不分层时第四栏照样铺在首屏");
 
   // ⑤ 换一轮报告，两个折叠都得复位。漏一个，下一轮一打开就是上一轮展开着的样子。
   const switchable = page.locator(".six-switch-fixture");
@@ -165,8 +192,8 @@ try {
     "里层跟权威结论无关，通过与否都照折照说",
   );
   assert.equal(
-    await verified.locator(".task-markdown").first().innerText(),
-    await six.locator(".task-markdown").first().innerText(),
+    await spread(verified),
+    await spread(six),
     "换个结论不许动首屏那一刀",
   );
   assert.equal(

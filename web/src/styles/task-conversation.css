@@ -156,8 +156,9 @@
   .review-report-more svg { transition: none; }
 }
 
-.task-agent-segment + .task-agent-segment { margin-top: 7px; }
-.task-execution-block { max-width: 680px; margin: 2px 0 1px; border: 0; color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; }
+/* 执行步骤现在住在 `.task-markdown` 里面(整条消息一次解析,见 markdownLayout),那层给的
+   行高是正文的 1.7 —— 小字的行高得自己钉住,否则一长串工具行每条都胖 2px。 */
+.task-execution-block { max-width: 680px; margin: 2px 0 1px; border: 0; color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; line-height: 1.5; }
 .task-execution-block > summary { display: inline-flex; max-width: 100%; cursor: pointer; align-items: center; gap: 4px; border-radius: 5px; padding: 2px 3px; list-style: none; opacity: .72; transition: color 150ms ease, opacity 150ms ease; }
 .task-execution-block > summary:hover { color: var(--faint); opacity: 1; }
 .task-execution-block > summary::-webkit-details-marker { display: none; }
@@ -301,7 +302,10 @@
 .task-message-attachments > a,
 .task-message-file { display: flex; height: 54px; max-width: 220px; align-items: center; gap: 7px; overflow: hidden; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); }
 .task-message-image { width: 54px; padding: 0; }
-.task-message-attachments img { width: 100%; height: 100%; object-fit: cover; }
+/* 卡片现在也住在 `.task-markdown` 里面(见上),那层的 `img` / `a` 通款会罩到卡片上 ——
+   图片会多一道边框圆角、文件名会被加下划线。卡片自己那个 54px 的盒子已经有边框了。 */
+.task-message-attachments img { display: block; width: 100%; max-width: none; height: 100%; max-height: none; border: 0; border-radius: 0; object-fit: cover; }
+.task-message-attachments > a { text-decoration: none; }
 .task-message-attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 
 .task-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -319,3 +323,38 @@
 @media (prefers-reduced-motion: reduce) {
   .task-execution-caret { transition: none; }
 }
+
+/* 取不到的那张图留下的一行小字（MarkdownBody 的 MissingImage）。安静、单行、可选中 ——
+   它是给人自己去核实那个路径用的，不是报错横幅。 */
+.task-markdown-image-missing {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px dashed var(--line2);
+  border-radius: 6px;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.task-markdown-image-missing-tag { white-space: nowrap; }
+.task-markdown-image-missing code {
+  overflow-wrap: anywhere;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+}
+/* 同源的失败可能是临时的（文件稍后补齐、鉴权刷新），给一个重试入口；跨站图没有这个按钮。 */
+.task-markdown-image-retry {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.task-markdown-image-retry:hover { color: var(--text); }
+.task-markdown-image-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

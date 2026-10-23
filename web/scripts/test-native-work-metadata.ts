@@ -177,4 +177,156 @@ for (const event of stamped) {
   assert.ok(event?.kind === "tool" && event.nativeWork?.at && Number.isFinite(Date.parse(event.nativeWork.at)),
     "各 nativeWork 生产路径在进入实时流前均提供有效时间戳");
 }
+// message/result(快照式正文)的图片记录带 `field`,必须路由到 messageImages/resultImages,
+// 不许混进 row.activity(混进去 = 执行记录文档多一条结果,逐目的地对账整组作废)。
+{
+  const fieldShot = (field: "message" | "result", source: string, path: string, rev = 0, ref = 0): NativeWorkEvent =>
+    ({ type: "activity", id: "child", event: { kind: "attachment", field, source, ref, pos: 3, rev, path } });
+  const row = rowFrom([
+    spawn, launched,
+    { type: "activity", id: "child", event: { kind: "text", text: "执行:![k](k.png)\n\n" } },
+    { type: "activity", id: "child", event: { kind: "attachment", source: "k.png", ref: 0, pos: 3, path: "/up/k.png" } },
+    fieldShot("message", "m.png", "/up/m.png"),
+    fieldShot("result", "r.png", "/up/r.png"),
+    { ...completed, message: "说明 ![m](m.png)", result: "结果 ![r](r.png)" },
+  ]);
+  assert.deepEqual(row.messageImages, [{ path: "/up/m.png", source: "m.png", ref: 0, pos: 3, lost: undefined }]);
+  assert.deepEqual(row.resultImages, [{ path: "/up/r.png", source: "r.png", ref: 0, pos: 3, lost: undefined }]);
+  assert.deepEqual(
+    (row.activity ?? []).filter((event) => event.kind === "attachment"),
+    [{ kind: "attachment", source: "k.png", ref: 0, pos: 3, path: "/up/k.png" }],
+    "field 记录不进执行记录;无 field 的照旧",
+  );
+  // 记录先于 agent_id 解析到达(挂在 spawn 调用行上)时,行合并后账要跟着走。
+  const early = rowFrom([
+    spawn,
+    { type: "activity", id: "call", event: { kind: "attachment", field: "message", source: "m.png", ref: 0, pos: 0, path: "/up/m.png" } },
+    launched,
+    { ...completed, message: "![m](m.png)" },
+  ]);
+  assert.deepEqual(early.messageImages?.map((shot) => shot.source), ["m.png"], "行合并时 field 账跟着搬到 native id 名下");
+}
+
+// 代(rev)分组:正文清场/换稿开新代之后,旧代记录说的是已经不在屏幕上的那一版 ——
+// 展示端只认最高代那组(审查第 8 轮复审 R1 同线程继续一例:旧代红图顶掉新代蓝图)。
+{
+  const fieldShot = (rev: number, ref: number, path: string): NativeWorkEvent =>
+    ({ type: "activity", id: "child", event: { kind: "attachment", field: "result", source: "shot.png", ref, pos: 6, rev, path } });
+  const row = rowFrom([
+    spawn, launched,
+    fieldShot(0, 0, "/up/rev0.png"),
+    fieldShot(1, 1, "/up/rev1.png"),
+    { ...completed, result: "续说 ![蓝](shot.png)" },
+  ]);
+  assert.deepEqual(row.resultImages?.map((shot) => shot.path), ["/up/rev1.png"], "只认最高代:旧代冻结不混进当前正文");
+}
+// 结果正文从调用行提取到子行时(taskoutput / wait 的 statuses),它名下的 result 图片记录
+// 按目的地跟着搬 —— 留在调用行就永远配不上正文(复审 R1 结构化返回结果一例)。
+{
+  const rows = rowsFrom([
+    { type: "agent", id: "child", nativeId: "17", at: start, status: "running" },
+    { type: "call", id: "out", name: "taskoutput", at: end, input: { task_id: "17" } },
+    { type: "activity", id: "out", event: { kind: "attachment", field: "result", source: "o.png", ref: 0, pos: 2, rev: 0, path: "/up/o.png" } },
+    { type: "result", id: "out", at: end, result: "<status>completed</status><output>瞧 ![o](o.png)</output>", failed: false },
+  ]);
+  const child = rows.find((row) => row.nativeId === "17");
+  assert.deepEqual(child?.resultImages?.map((shot) => shot.source), ["o.png"], "taskoutput 提取正文到子行,图片记录跟着搬");
+  const statusRows = rowsFrom([
+    { type: "call", id: "w", name: "wait", at: start, input: {} },
+    { type: "activity", id: "w", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 2, rev: 0, path: "/up/s.png" } },
+    { type: "result", id: "w", at: end, result: '{"statuses":{"childA":{"completed":"甲 ![s](s.png)"},"childB":{"completed":"乙"}}}', failed: false },
+  ]);
+  const hit = statusRows.find((row) => row.nativeId === "childA");
+  const miss = statusRows.find((row) => row.nativeId === "childB");
+  assert.deepEqual(hit?.resultImages?.map((shot) => shot.source), ["s.png"], "statuses 按正文含来源与否逐行分发");
+  assert.equal(miss?.resultImages, undefined, "正文里没有这个来源的行不接收");
+  // 第 9 轮复审 R1 resultRouting:几个子正文引用同一来源时,按「第 n 处引用 ↔ 第 n 条
+  // 记录」分发 —— 全给第一个命中的,甲拿双份被逐目的地计数判作废、乙一张都没有。
+  const sharedRows = rowsFrom([
+    { type: "call", id: "w2", name: "wait", at: start, input: {} },
+    { type: "activity", id: "w2", event: { kind: "attachment", field: "result", source: "shot.svg", ref: 0, pos: 10, rev: 0, path: "/up/a.svg" } },
+    { type: "activity", id: "w2", event: { kind: "attachment", field: "result", source: "shot.svg", ref: 1, pos: 50, rev: 0, path: "/up/b.svg" } },
+    { type: "result", id: "w2", at: end, result: '{"statuses":{"childA":{"completed":"甲 ![甲](shot.svg)"},"childB":{"completed":"乙 ![乙](shot.svg)"}}}', failed: false },
+  ]);
+  assert.deepEqual(sharedRows.find((row) => row.nativeId === "childA")?.resultImages?.map((shot) => shot.path), ["/up/a.svg"], "同源多记录:第一处给第一个子正文一条");
+  assert.deepEqual(sharedRows.find((row) => row.nativeId === "childB")?.resultImages?.map((shot) => shot.path), ["/up/b.svg"], "第二处给第二个子正文,不叠给第一个");
+  // 槽位按来源文档顶替:第二轮 wait 的新正文接管子行 result 后,上一轮的记录不许留在槽里
+  // 跟新记录比代号 —— rev 是各来源文档局部的,混在一起取最大会让旧文档的高代吞掉新文档。
+  const twoRounds = rowsFrom([
+    { type: "call", id: "w3", name: "wait", at: start, input: {} },
+    { type: "activity", id: "w3", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 2, rev: 5, path: "/up/old.png" } },
+    { type: "result", id: "w3", at: start, result: '{"statuses":{"childC":{"completed":"旧 ![s](s.png)"}}}', failed: false },
+    { type: "call", id: "w4", name: "wait", at: end, input: {} },
+    { type: "activity", id: "w4", event: { kind: "attachment", field: "result", source: "s.png", ref: 1, pos: 2, rev: 0, path: "/up/new.png" } },
+    { type: "result", id: "w4", at: end, result: '{"statuses":{"childC":{"completed":"新 ![s](s.png)"}}}', failed: false },
+  ]);
+  assert.deepEqual(twoRounds.find((row) => row.nativeId === "childC")?.resultImages?.map((shot) => shot.path), ["/up/new.png"], "换来源文档整组顶替:旧文档的高代号不压新文档的第 0 代");
+  // 恢复合并(mergeImageJournal)把补回的记录**追加在 trace 末尾**:记录晚于 result 事件
+  // 到达时,路由不能已经跑完了事 —— 执行推迟到全量记录就位(第 9 轮复审第 2 轮 R1
+  // routedJournalLate 存量半边)。
+  const late = rowsFrom([
+    { type: "call", id: "w5", name: "wait", at: start, input: {} },
+    { type: "result", id: "w5", at: end, result: '{"statuses":{"childD":{"completed":"迟 ![s](s.png)"}}}', failed: false },
+    { type: "activity", id: "w5", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 2, rev: 0, path: "/up/late.png" } },
+  ]);
+  assert.deepEqual(late.find((row) => row.nativeId === "childD")?.resultImages?.map((shot) => shot.path), ["/up/late.png"], "记录晚于结果事件到达(恢复合并的追加序)照样路由到子行");
+  // 新账直接记在**子 id** 名下(服务端按 childResultTexts 拆账后的形态):不经路由就该挂在
+  // 子行上,statuses 那一步的路由对它只是无事可做。
+  const direct = rowsFrom([
+    { type: "call", id: "w6", name: "wait", at: start, input: {} },
+    { type: "activity", id: "childE", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 2, rev: 0, path: "/up/direct.png" } },
+    { type: "result", id: "w6", at: end, result: '{"statuses":{"childE":{"completed":"直 ![s](s.png)"}}}', failed: false },
+  ]);
+  assert.deepEqual(direct.find((row) => row.nativeId === "childE")?.resultImages?.map((shot) => shot.path), ["/up/direct.png"], "子 id 名下的新账直接挂在子行上");
+  // 第 10 轮审查 R2 legacyRouteOvertakes:正文已被更晚的直写(agent 事件带 result)接管后,
+  // 旧式调用文档(记录留在调用行)的路由不许把行上更新的记录顶掉 —— 来源文档已经不是这段
+  // 正文的写入者,它的记录说的是另一版正文。
+  const overtaken = rowsFrom([
+    { type: "call", id: "lw", name: "wait", at: start, input: {} },
+    { type: "activity", id: "lw", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 4, rev: 0, path: "/up/old-route.png" } },
+    { type: "result", id: "lw", at: start, result: '{"statuses":{"childF":{"completed":"旧结果 ![s](s.png)"}}}', failed: false },
+    { type: "activity", id: "childF", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 4, rev: 0, path: "/up/fresh.png" } },
+    { type: "agent", id: "childF", at: end, status: "completed", result: "新结果 ![s](s.png)" },
+  ]);
+  assert.deepEqual(overtaken.find((row) => row.id.endsWith(":childF"))?.resultImages?.map((shot) => shot.path), ["/up/fresh.png"], "直写接管正文后,旧调用文档路由进来的记录整组不认");
+  // 第 10 轮审查 R2:记录带协议身份(version)时要与正文身份互核 —— 行上的 messageId 换了,
+  // 旧身份的 message 账不许配给同文的新消息;身份对上照常配对。
+  const staleIdentity = rowsFrom([
+    { type: "agent", id: "childG", at: start, status: "running", message: "图 ![s](s.png)", messageId: "m-old" },
+    { type: "activity", id: "childG", event: { kind: "attachment", field: "message", source: "s.png", ref: 0, pos: 2, rev: 0, version: "m-old", path: "/up/m-old.png" } },
+    { type: "agent", id: "childG", at: end, status: "completed", message: "图 ![s](s.png)", messageId: "m-new" },
+  ]);
+  assert.equal(staleIdentity.find((row) => row.id.endsWith(":childG"))?.messageImages, undefined, "身份换了:旧身份的记录不配给同文的新消息");
+  const matchedIdentity = rowsFrom([
+    { type: "agent", id: "childH", at: start, status: "running", message: "图 ![s](s.png)", messageId: "m-1" },
+    { type: "activity", id: "childH", event: { kind: "attachment", field: "message", source: "s.png", ref: 0, pos: 2, rev: 0, version: "m-1", path: "/up/m-1.png" } },
+    { type: "agent", id: "childH", at: end, status: "completed", messageId: "m-1" },
+  ]);
+  assert.deepEqual(matchedIdentity.find((row) => row.id.endsWith(":childH"))?.messageImages?.map((shot) => shot.path), ["/up/m-1.png"], "身份对上照常配对");
+  // 审查第 1 轮 R1 实证 C:行搬家(spawn 调用行 → 真实线程行)时,正文、协议身份与图片记录
+  // 是**同一份快照**,一起取线程行的 —— 不许拿线程行的新正文配调用行的旧身份,也不许把调用
+  // 行的旧记录混进线程行的槽(那版正文已经不在屏幕上)。
+  const spawnMove = rowsFrom([
+    { type: "call", id: "sp", name: "spawn_agent", at: start, input: { prompt: "图片验证" } },
+    { type: "agent", id: "sp", at: start, status: "running", messageId: "call-red", message: "旧消息 ![s](s.png)" },
+    { type: "activity", id: "sp", event: { kind: "attachment", field: "message", source: "s.png", ref: 0, pos: 4, rev: 0, version: "call-red", path: "/up/call-red.png" } },
+    { type: "agent", id: "spawn-child", at: start, status: "running", messageId: "child-blue", message: "已重拍 ![s](s.png)" },
+    { type: "activity", id: "spawn-child", event: { kind: "attachment", field: "message", source: "s.png", ref: 0, pos: 4, rev: 0, version: "child-blue", path: "/up/child-blue.png" } },
+    { type: "result", id: "sp", at: end, result: '{"agent_id":"spawn-child"}', failed: false },
+  ]);
+  const movedRow = spawnMove.find((row) => row.id.endsWith(":spawn-child"));
+  assert.equal(movedRow?.message, "已重拍 ![s](s.png)", "合并后的正文是线程行自己的");
+  assert.equal(movedRow?.messageId, "child-blue", "身份随正文同取线程行的,不保留调用行的旧身份");
+  assert.deepEqual(movedRow?.messageImages?.map((shot) => shot.path), ["/up/child-blue.png"], "记录同样取线程行自己的,调用行的旧记录整份丢弃");
+  // 对照:线程行还没有自己的正文时,调用行的快照(正文+身份+记录)整份搬家、改签后照常配对。
+  const spawnCarry = rowsFrom([
+    { type: "call", id: "sq", name: "spawn_agent", at: start, input: { prompt: "图片验证" } },
+    { type: "agent", id: "sq", at: start, status: "running", messageId: "call-only", message: "旧消息 ![s](s.png)" },
+    { type: "activity", id: "sq", event: { kind: "attachment", field: "message", source: "s.png", ref: 0, pos: 4, rev: 0, version: "call-only", path: "/up/call-only.png" } },
+    { type: "result", id: "sq", at: end, result: '{"agent_id":"carry-child"}', failed: false },
+  ]);
+  const carried = spawnCarry.find((row) => row.id.endsWith(":carry-child"));
+  assert.equal(carried?.messageId, "call-only", "没有线程行时,调用行的身份随快照整份搬家");
+  assert.deepEqual(carried?.messageImages?.map((shot) => shot.path), ["/up/call-only.png"], "记录跟着整份快照改签到新行,照常配对");
+}
 console.log("子智能体模型、待办开工时间、跨日跨度、实时/历史时间与缺失数据回归通过");

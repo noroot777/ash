@@ -1,4 +1,4 @@
-import type { DuetConsensusBy, DuetSpeaker, GateName, ServerEvent } from "@ash/shared";
+import type { DuetConsensusBy, DuetSpeaker, GateName, ServerEvent, TurnImageRef } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { resumesWaiting } from "@ash/shared/waiting";
 import { appendExecutionEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
@@ -11,6 +11,12 @@ export type DuetTurn = {
   stop?: string;
   /** 本回合的执行过程(工具/思考),与普通任务、团队共用一个「执行过程」折叠块。 */
   events: ExecutionEvent[];
+  /**
+   * 正文第几处 `![](…)` 引用对上哪份拷贝(逐处引用一条,见 shared 的 TurnImageRef)。
+   * 配对规则跟会话流**同一份**(turnImages):少了它,同一张图在会话流里画的是「说那句话
+   * 时的快照」,在讨论区画的是「现在的文件」(审查第 1 轮 F1 同类路径)。
+   */
+  images?: TurnImageRef[];
   raised: boolean;
   /**
    * 本回合停在一条等待提示上(上游在重试/还没回话),由归约层维护:提示置上、下一条
@@ -141,6 +147,10 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
       if (turns[index]!.speaker !== speaker || turns[index]!.done) continue;
       const turn = { ...turns[index]! };
       if (event.event.kind === "text") turn.text += event.event.text;
+      // 正文引用到的图:实时这一路同样逐处留下(落盘那一路见 duet/turn.ts 的 images)。
+      if (event.event.kind === "attachment" && event.event.source) {
+        turn.images = [...(turn.images ?? []), { path: event.event.path, source: event.event.source, ref: event.event.ref, pos: event.event.pos, lost: event.event.lost }];
+      }
       // label 兜底同 task-detail/conversationSegments.ts 的 auxEvent：下游按字符串用它，
       // 一条没名字的 tool 事件能把整页打崩。
       if (event.event.kind === "tool" && isVisibleExecutionEvent(event.event)) turn.events = [...turn.events, { kind: "tool", label: typeof event.event.name === "string" ? event.event.name : "", detail: event.event.detail }];
@@ -185,8 +195,13 @@ export function rebuildDuetState(entries: PersistedDuetEntry[]): DuetState {
       for (let index = turns.length - 1; index >= 0; index -= 1) {
         const turn = turns[index]!;
         if (turn.round !== completed.round || turn.speaker !== completed.speaker || turn.done) continue;
-        // 旧 transcript 的回合行没有 events:别让落盘那份把实时攒到的执行过程抹掉。
-        turns[index] = { ...completed, events: completed.events.length ? completed.events : turn.events };
+        // 旧 transcript 的回合行没有 events / images:别让落盘那份把实时攒到的执行过程和
+        // 图片关联抹掉(关联没了,正文就只能退到「当前文件」那一档,见 turnImages)。
+        turns[index] = {
+          ...completed,
+          events: completed.events.length ? completed.events : turn.events,
+          images: completed.images ?? turn.images,
+        };
         replaced = true;
         break;
       }

@@ -96,7 +96,6 @@
 .native-agent__assignment { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; background: var(--panel); color: var(--muted); }
 .native-agent__assignment > summary { cursor: pointer; font-size: 11px; }
 .native-agent__assignment[open] > summary { margin-bottom: 10px; }
-.native-agent__conversation .task-agent-segment { min-width: 0; }
 .native-agent__conversation .task-execution-events { max-width: 100%; }
 .native-agent__conversation .task-markdown { font-size: 12px; line-height: 1.8; }
 .native-agent__live { display: flex; align-items: center; gap: 7px; margin: 18px 0 0; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 10px; }

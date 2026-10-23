@@ -25,7 +25,7 @@ import { contentVersion } from "../lib/useStickToBottom.ts";
 import { conversationItemSize } from "./conversationContentSize.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
 // 分段那一族住在 conversationSegments:这里转出去,别处 import 的路径不用跟着改。
-export type { AgentAuxEvent, AgentContentSegment } from "./conversationSegments.ts";
+export type { AgentAuxEvent, AgentContentSegment, AttachmentSource } from "./conversationSegments.ts";
 // 直播增量在 conversationLiveTurns、两路共用的小件在 conversationTurnParts;LiveAgentEvent
 // 是公开类型,仍从这里转出去。
 export type { LiveAgentEvent } from "./conversationTurnParts.ts";

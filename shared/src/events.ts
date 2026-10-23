@@ -27,7 +27,22 @@ export type AgentEvent =
   | { kind: "thinking"; text: string }
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; detail?: string; nativeWork?: NativeWorkEvent }
-  | { kind: "attachment"; path: string }
+  // 一张图,或者**正文里一处引用的保存结果**。三个字段合起来才是完整的一条交代:
+  //   · `source` = 这处引用的目的地(`![](…)` 里那一段,规范化后的;见 @ash/shared/markdown-images)
+  //   · `ref`    = 这处引用在这条流里的**身份**(单调递增、不去重、不按回合复位)
+  //   · `path`   = 它那一刻的拷贝;**缺省 = 这处引用确实没存下副本**,不是「关联丢了」
+  //   · `lost`   = 没副本的那一档再分两种:`lost: true` = **字节当时读到了、写盘失败了**
+  //                (这一刻的画面丢了,展示端据此显式作废);缺省 = 压根没有字节可存(说那句
+  //                话时文件还不存在、格式不认),此时工作目录里那张多半就是它说的那张,
+  //                展示端退一档去取是对的(判据见 server/src/agent-attachments.ts)
+  // 为什么非得有 `ref`:只按 `source` 配对的话,同一个路径在一轮里被重拍过(红→蓝→红)时,
+  // 按字节去重会把第三处引用整条抹掉,展示端队列短一条,正文写着「恢复红色」、画出来是
+  // 蓝色(审查第 1 轮 F1)。字节可以内容寻址去重,**引用关联不能**。
+  // `source`/`ref` 都缺省 = 不是正文引用来的(工具结果截图之类),那种只铺卡片、不进正文。
+  // `pos` = 这处引用在它那份文档全文里的绝对起点 —— 引用的**文档节点身份**。恢复补回的
+  // 记录只能排在既有 trace 之后,事件顺序不再天然等于文档顺序;展示端按 pos 把同目的地的
+  // 记录排回文档顺序再配对(审查第 8 轮 R1:重启接回后红蓝对调)。缺省 = 老记录,没有补回行。
+  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean }
   | { kind: "session"; cliSessionId: string }
   // backend 旁注；时间与落盘 sentinel 共用，实时/刷新布局才不会漂。
   // level="notice" = 这条是**结算说明**(这一轮为什么落成这个状态),不是出了什么岔子。
@@ -80,6 +95,14 @@ export type DuetSpeaker = "A" | "B" | "synthesis" | "impl" | "review" | "user";
 // 是从 agent.event 流里攒的,不落盘就只在当次连接里存在。
 // notice = 过程里的一条提示(上游重试、还在等回话),跟普通任务的执行过程同一套展示。
 export type TurnTraceEvent = { kind: "tool" | "thinking" | "notice"; label: string; detail?: string };
+/**
+ * 讨论区一个回合里「正文第几处引用对上哪份拷贝」(随回合一起落盘)。
+ *
+ * 字段语义跟 attachment 事件逐字一致 —— 讨论区的回合不走分段模型,但**同一套配对**得在
+ * 这儿也兑现得了:少了它,会话流里画的是「说那句话时的快照」,讨论区画的是「现在的文件」
+ * (审查第 1 轮 F1 同类路径)。
+ */
+export type TurnImageRef = { path?: string; source: string; ref?: number; pos?: number; lost?: boolean };
 
 // SSE envelope pushed to the web client.
 export type ServerEvent =

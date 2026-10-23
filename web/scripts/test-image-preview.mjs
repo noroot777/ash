@@ -4,11 +4,26 @@ import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
+// 夹具里的 `/image-preview-*.png` 得**真吐出字节**：取不到的站内图会被正文自己收掉
+// （见 MarkdownBody 的 MarkdownImage——站内 404 等于那个文件真没了，不留裂图标），
+// 于是「灯箱编组」这件要验的事连一张缩略图都找不着。
+const PIXELS = '<svg xmlns="http://www.w3.org/2000/svg" width="6" height="6"><rect width="6" height="6" fill="#4b7"/></svg>';
+
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
   logLevel: "error",
   server: { host: "127.0.0.1", port: 0, strictPort: false },
+  plugins: [{
+    name: "fixture-images",
+    configureServer(vite) {
+      vite.middlewares.use((req, res, next) => {
+        if (!/^\/image-preview-[^/?#]+\.png/.test(req.url ?? "")) return next();
+        res.setHeader("content-type", "image/svg+xml");
+        res.end(PIXELS);
+      });
+    },
+  }],
 });
 
 let browser;
@@ -144,7 +159,11 @@ try {
   const reportDialog = page.getByRole("dialog", { name: "report.md" });
   await reportDialog.waitFor();
   assert.equal(page.context().pages().length, pageCount, "自由审查报告必须留在当前页面内打开");
-  assert.equal(await reportDialog.getByRole("heading", { name: "自由审查报告" }).count(), 1, "Markdown 报告应按正文渲染");
+  // 正文是弹窗打开之后才 fetch 回来的,先等它到货再断言 —— `count()` 不自动等,
+  // 直接断言是在跟网络赛跑(本机也有三四成跑输)。
+  const reportHeading = reportDialog.getByRole("heading", { name: "自由审查报告" });
+  await reportHeading.waitFor();
+  assert.equal(await reportHeading.count(), 1, "Markdown 报告应按正文渲染");
   assert.equal(await reportDialog.getByText("报告已在应用内打开。").count(), 1);
 
   console.log("image preview group test passed");

@@ -155,6 +155,66 @@ try {
   linkSync(join(outside, "secret.txt"), join(hardParent, "report.md"));
   assert.equal(safeFreeReviewFile("free-task", "hard-run", 1, "report.md"), null, "硬链接证据文件必须被拒绝");
 
+  // ── 证据子目录：审查者把截图归进 `shots/` 是合法写法，接口要服务得了 ────────────
+  // 放宽之前两个审查接口都只认 basename，于是那几张图永远画不出来，而且失败得很安静
+  // （报告正文看着就像少了一张图，审查第 1 轮非阻塞项 2）。放宽的同时越界一处都不许多。
+  const { freeReviewScreenshots } = await import("../src/free-review-files.js");
+  const subDir = join(root, "runs", "free-task", "free-review", "sub-run", "round-1", "shots");
+  mkdirSync(subDir, { recursive: true });
+  writeFileSync(join(subDir, "deep.png"), "PNG");
+  const deep = safeFreeReviewFile("free-task", "sub-run", 1, "shots/deep.png");
+  assert.ok(deep?.endsWith(join("shots", "deep.png")), "证据目录内的子路径要服务得了");
+  assert.equal(safeFreeReviewFile("free-task", "sub-run", 1, "shots\\deep.png"), deep, "反斜杠写法同一个文件");
+  assert.deepEqual(
+    freeReviewScreenshots("free-task", "sub-run", 1),
+    ["shots/deep.png"],
+    "子目录里的截图也要列进证据清单 —— 列不出来就只能靠报告正文提到才看得见",
+  );
+  // 越界的四类:`..` 爬出去、绝对路径、空段、中间那一段是符号链接(词法前缀看不出来)。
+  for (const name of ["../../../outside-evidence/secret.txt", "shots/../../secret.txt", "/etc/hosts", "shots//deep.png", "."]) {
+    assert.equal(safeFreeReviewFile("free-task", "sub-run", 1, name), null, `越界的名字必须拒:${name}`);
+  }
+  symlinkSync(outside, join(root, "runs", "free-task", "free-review", "sub-run", "round-1", "away"));
+  assert.equal(
+    safeFreeReviewFile("free-task", "sub-run", 1, "away/secret.txt"),
+    null,
+    "中间那一段是符号链接时必须拒 —— 这是放开子目录后唯一新开的口子",
+  );
+  const subFetch = await api.request("/tasks/free-task/free-workflow/review-file?run=sub-run&round=1&name=shots%2Fdeep.png");
+  assert.equal(subFetch.status, 404, "接口层仍要先核对这一轮归谁(sub-run 没登记过)");
+
+  // ── 取证据文件:认不认一个名字,两条审查线共用 evidence-path.ts 那一张表 ──────────
+  // 以前这条路由认任何后缀(不认识就按 octet-stream 端出去),团队那条按表 400 —— 同一个
+  // `notes.txt` 在两条线上一个 200 一个 400(审查第 3 轮 R3 第 3 条实测),而报告正文落在
+  // 哪条线上写报告的人无从预料。团队那条的对称用例在 test-review-flow.ts。
+  const base = "/tasks/free-turn-window-task/free-workflow/review-file?run=evidence-review&round=1";
+  writeFileSync(join(evidenceDir, "notes.txt"), "EVIDENCE NOTES\n");
+  writeFileSync(join(evidenceDir, "notes.md"), "# 附记\n");
+  writeFileSync(join(evidenceDir, "evil.html"), "<script>alert(1)</script>\n");
+  const textFile = await api.request(`${base}&name=notes.txt`);
+  assert.equal(textFile.status, 200, "纯文本证据要服务得了");
+  assert.equal(textFile.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(textFile.headers.get("x-content-type-options"), "nosniff", "按 text/plain 端的一律禁嗅探");
+  assert.equal((await api.request(`${base}&name=notes.md`)).status, 200, "同目录另一份 .md 要服务得了");
+  assert.equal(
+    (await api.request(`${base}&name=evil.html`)).status,
+    400,
+    ".html 两条线都不服务:同源端出去等于执行审查者写进证据目录的标记",
+  );
+  // 次序也跟团队那条一样:先核对这一轮归谁(404),再判类型(400)。
+  assert.equal(
+    (await api.request("/tasks/free-task/free-workflow/review-file?run=sub-run&round=1&name=evil.html")).status,
+    404,
+    "没登记在这个任务上的轮次先 404,不给类型判定泄露任何信息",
+  );
+  // 清单接口已撤:报告正文里一处相对路径按**这份文档自己的地址**解,不再问「清单里有没有
+  // 它」—— 文件被删掉之后那一处会被判成工作目录的,于是把同名的另一张图端上来(R3 第 1 条)。
+  assert.equal(
+    (await api.request("/tasks/free-turn-window-task/free-workflow/review-files?run=evidence-review&round=1")).status,
+    404,
+    "文件清单接口已撤",
+  );
+
   // 部分成功重试：首次合并的 base 不能被 already_merged 的同值区间覆盖。
   await createTasks([{
     id: "free-retry-task", projectId: "p-git", groupId: null, parentId: null,

@@ -27,14 +27,9 @@ export const textParser: CliParser = (ctx) => textEvents(ctx);
 
 async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
   const { child, bin, lifecycle } = ctx;
-  const queue: AgentEvent[] = [];
-  let resolve: (() => void) | null = null;
-  let finished = false;
-  const push = (e: AgentEvent) => {
-    queue.push(e);
-    resolve?.();
-    resolve = null;
-  };
+  // 队列、唤醒、收尾、增量合并和**图片记账的时点**都在这条共用流水线里,见
+  // ../event-queue.ts —— 十一个解析器从同一个 `ctx.events` 走,拿不到裸队列。
+  const push = (event: AgentEvent) => ctx.events.push(event);
 
   const trace = new RunTraceRecorder(ctx.trace);
   let stdoutLines = 0;
@@ -45,6 +40,8 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
     trace.event(line);
     stdoutLines += 1;
     push({ kind: "text", text: stripAnsi(line) + "\n" });
+    // 正文里的本机图片不在这儿收 —— 逐行看不见跨行的写法。归 withMarkdownImages,
+    // 它裹在**所有**解析器外面(见 generic.ts),十个自定义解析器才不会各漏一次。
   });
   child.stderr?.on("data", (d) => {
     const chunk = d.toString();
@@ -55,8 +52,7 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
   // 收尾单点:三条路(spawn 失败 / close / exit 后流不收尾)都汇到这里,保证
   // 事件流一定以 done 结束 —— 少一个 done 就是任务永远卡 running。
   const finish = (opts: { exitStatus: number; spawnError?: string; flushTimeout?: boolean }) => {
-    if (finished) return;
-    finished = true;
+    if (ctx.events.closed) return;
     trace.close();
     const tail = stripAnsi(stderrTail).trim();
     if (opts.spawnError) push({ kind: "error", message: opts.spawnError });
@@ -77,8 +73,7 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
           `(执行参数在 server/src/executors/catalog/ 下该 CLI 的 spec 里${tail ? `;stderr:${tail.slice(0, 500)}` : ""})`,
       });
     push({ kind: "done", exitStatus: opts.exitStatus });
-    resolve?.();
-    resolve = null;
+    ctx.events.close();
   };
 
   child.on("error", (err: NodeJS.ErrnoException) => {
@@ -87,16 +82,9 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
   child.on("close", (code, signal) => {
     finish({ exitStatus: code ?? (signal ? 1 : 0) });
   });
-  forceFinishOnExit(child, () => finished, (exit) => finish({ exitStatus: exit, flushTimeout: true }));
+  forceFinishOnExit(child, () => ctx.events.closed, (exit) => finish({ exitStatus: exit, flushTimeout: true }));
 
-  while (true) {
-    if (queue.length) {
-      yield queue.shift()!;
-      continue;
-    }
-    if (finished) return;
-    await new Promise<void>((r) => (resolve = r));
-  }
+  yield* ctx.events.drain();
 }
 
 /**
@@ -105,4 +93,8 @@ async function* textEvents(ctx: CliParserContext): AsyncIterable<AgentEvent> {
  * 的 fork 常常连输出格式一起继承,那时这份能直接白嫖工具调用与流式文本;schema 不
  * 一样就会一行都解析不出来,还不如 textParser。
  */
-export const claudeStreamJsonParser: CliParser = (ctx) => parseClaudeStream(ctx.child, undefined, ctx.bin);
+export const claudeStreamJsonParser: CliParser = (ctx) =>
+  parseClaudeStream(ctx.child, undefined, ctx.bin, undefined, null, undefined, undefined, undefined, ctx.cwd, ctx.images);
+// parseClaudeStream 自己已经裹过 withMarkdownImages(它要分别记父会话和每个子智能体的账),
+// 别再让 generic 裹第二层 —— 两层各存一份就是同一处引用两条记录、两份拷贝。
+claudeStreamJsonParser.ownsMarkdownImages = true;

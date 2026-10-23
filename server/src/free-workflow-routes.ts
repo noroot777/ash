@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { extname } from "node:path";
 import type { FreeReviewDispatchInput } from "@ash/shared";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
@@ -24,7 +23,7 @@ import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
 import { freeWorkflowState } from "./free-workflow-state.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { createPostMergeRepairTask, startPostMergeReview } from "./post-merge-review.js";
-import { REVIEW_MIME } from "./review-evidence.js";
+import { evidenceHeaders } from "./evidence-path.js";
 import { actorOf } from "./auth/context.js";
 
 const errorBody = (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) });
@@ -66,6 +65,16 @@ async function turnIdentityError(c: Context, taskId: string, what: string): Prom
       : `MCP 未携带当前方向身份（请传当前消息附带的 directionToken），${what}已拒绝写入`;
   }
   return null;
+}
+
+/** 这一轮证据确实属于这个任务吗 —— 文件与清单两条路由共用这一道(轮次形状 + 归属)。 */
+async function ownsFreeReviewRound(taskId: string, runId: string, round: number): Promise<boolean> {
+  if (!Number.isInteger(round) || round <= 0) return false;
+  const row = (await db.select({ id: freeReviewRounds.id }).from(freeReviewRounds)
+    .innerJoin(freeReviewRuns, eq(freeReviewRounds.runId, freeReviewRuns.id))
+    .where(and(eq(freeReviewRuns.id, runId), eq(freeReviewRuns.taskId, taskId), eq(freeReviewRounds.round, round)))
+    .limit(1)).at(0);
+  return !!row;
 }
 
 export function mountFreeWorkflowRoutes(api: Hono): void {
@@ -169,15 +178,15 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const runId = c.req.query("run") ?? "";
     const round = Number(c.req.query("round"));
     const name = c.req.query("name") ?? "";
-    const owned = Number.isInteger(round) && round > 0
-      ? (await db.select({ id: freeReviewRounds.id }).from(freeReviewRounds)
-        .innerJoin(freeReviewRuns, eq(freeReviewRounds.runId, freeReviewRuns.id))
-        .where(and(eq(freeReviewRuns.id, runId), eq(freeReviewRuns.taskId, taskId), eq(freeReviewRounds.round, round)))
-        .limit(1)).at(0)
-      : null;
-    const file = owned ? freeReviewFile(taskId, runId, round, name) : null;
+    if (!(await ownsFreeReviewRound(taskId, runId, round))) return c.json({ error: "not found" }, 404);
+    // 认不认这个类型跟团队那条 `review/file` 共用一张表,连这里的次序(先归属 404、再类型
+    // 400)也跟它一样。以前这里是「不认识就按 octet-stream 端出去」,于是同一个 `notes.txt`
+    // 在团队线上 400、在这条线上 200(审查第 3 轮 R3 第 3 条实测)——报告正文落在哪条线上,
+    // 写报告的人无从预料。
+    const headers = evidenceHeaders(name);
+    if (!headers) return c.json({ error: "非法的审查文件路径或类型" }, 400);
+    const file = freeReviewFile(taskId, runId, round, name);
     if (!file) return c.json({ error: "not found" }, 404);
-    const mime = REVIEW_MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
-    return c.body(Uint8Array.from(readFileSync(file)), 200, { "content-type": mime });
+    return c.body(Uint8Array.from(readFileSync(file)), 200, headers);
   });
 }

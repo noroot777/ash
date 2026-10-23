@@ -20,6 +20,7 @@ import { executionEventsSize } from "../task-detail/conversationContentSize.ts";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { taskFileResolver } from "../components/markdownPolicy.ts";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { OriginTaskBar, TaskCreationBadge } from "../components/TaskOrigin.tsx";
@@ -32,6 +33,7 @@ import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
+import { turnImageMarkdown } from "../task-detail/turnImages.ts";
 import { formatDuration, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { DuetGateControls, DuetProgressBar } from "./DuetControls.tsx";
@@ -64,11 +66,14 @@ function TurnBubble({
   previousRound,
   session,
   fallback,
+  taskId,
 }: {
   turn: DuetTurn;
   previousRound?: number;
   session?: Session;
   fallback: string;
+  /** 讨论者引用的本机图片按这个任务的工作目录取（见 markdownPolicy 的 taskFileResolver）。 */
+  taskId: string;
 }) {
   const newRound = turn.round !== previousRound;
   if (turn.speaker === "user") {
@@ -102,7 +107,16 @@ function TurnBubble({
         </header>
         <ExecutionDetails events={turn.events} running={!turn.done} awaiting={turn.awaiting} />
         {!turn.done && !turn.text && !turn.events.length && <p className="duet-thinking">{side === "synthesis" ? "正在把讨论成果整理成共同方案…" : "正在组织本轮观点…"}</p>}
-        {turn.text && <MarkdownBody text={turn.text} />}
+        {/* 讨论者写的 `![](output/x.png)` 指的是**它工作目录里**那张图，浏览器直接取不到。
+            配对走会话流那同一套（turnImageMarkdown → turnImages）：有「说那句话时的快照
+            拷贝」就用它，明确没有拷贝才现在去目录里取，目录被清掉了就什么都不画（绝不
+            留裂图标）。`resolveFile` 仍留着——正文里指向图片的**链接**也要进灯箱。 */}
+        {turn.text && (
+          <MarkdownBody
+            text={turnImageMarkdown(turn.text, turn.images, taskId)}
+            resolveFile={taskFileResolver(taskId)}
+          />
+        )}
         {turn.notice && <p className="duet-turn-notice">{turn.notice}</p>}
         {turn.error && <p className="duet-turn-error">{turn.error}</p>}
       </article>
@@ -123,6 +137,7 @@ function actionFor(task: Task): { kind: "run" | "retry" | "stop" | null; label: 
    那条**的 detail,回合数和正文长度都一动不动(审查第 4 轮 F1)。 */
 const duetTurnSize = (turn: DuetTurn): number =>
   (turn.text?.length ?? 0)
+  + (turn.images?.length ?? 0) /* 配上一张图,正文里就多出一张画得出来的东西 */
   + executionEventsSize(turn.events)
   + (turn.conclusion?.length ?? 0) + (turn.notice?.length ?? 0) + (turn.error?.length ?? 0);
 
@@ -347,6 +362,7 @@ export function DuetView({
                 previousRound={turns[index - 1]?.round}
                 session={turn.speaker === "A" ? sessionsByRole.voiceA : turn.speaker === "B" ? sessionsByRole.voiceB : undefined}
                 fallback={turn.speaker === "B" ? config.voiceB : config.voiceA}
+                taskId={task.id}
               />
             ))}
             {activityPhase === "replying" && turns.length > 0 && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} queuePosition={task.queuePosition} />}

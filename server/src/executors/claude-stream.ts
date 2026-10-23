@@ -12,7 +12,9 @@ import { childActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
-import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
+import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { eventQueue } from "./event-queue.js";
+import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
@@ -25,7 +27,7 @@ import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWin
 // calibrateAs:只有**确知自己是哪种 CLI 的进程**才传(见下面 init 分支)。
 // 复用这份 parser 的第三方 CLI 一律不传 —— 它们的技能名跟 claude 的不是一回事,
 // 拿 bin 名去猜会把别人的技能塞进 claude 的缓存。
-export async function* parseClaudeStream(
+export function parseClaudeStream(
   child: ReturnType<typeof spawnAgent>,
   resident?: ClaudeControlBridge,
   bin = "claude",
@@ -37,19 +39,43 @@ export async function* parseClaudeStream(
   // `init` 早在上一轮就消费掉了,不会再来一次,靠等 system 事件设身份会一直等不到
   // (见 ../claude-monitors.ts 构造函数的说明)。新开的流可以不传,init 会带来。
   cliSessionId?: string,
+  // 这条会话干活的目录。正文里 `![](output/x.png)` 这种**相对路径**要靠它解成真文件
+  // 才复制得进 uploads —— 不传的话那张图在对话里只会是个裂开的图标(见
+  // ../agent-attachments.ts 与下面这一层)。
+  cwd?: string,
+  // 正文图片的持久账本/身份种子(RunOpts.images),见 markdown-image-stream.ts。
+  accounting?: MarkdownImageAccounting,
 ): AsyncIterable<AgentEvent> {
-  const queue: AgentEvent[] = [];
-  let resolve: (() => void) | null = null;
-  let finished = false;
-  const activityBuffer = new NativeActivityBuffer();
-  const push = (e: AgentEvent) => {
-    const events = activityBuffer.push(e);
-    if (!events.length) return;
-    queue.push(...events);
-    resolve?.();
-    resolve = null;
-  };
+  // 正文里的图**不在这份解析里收**:它要按「一份文档」认身份,而这里一条模型消息就是
+  // 一片碎片 —— 上一条消息给定义、下一条引用它时,按消息扫压根不认那张图(审查第 4 轮
+  // R2)。父会话与每个子智能体各一笔账,统一由这一层记(见 markdown-image-stream.ts)。
+  //
+  // **账记在 push 处,不是记在下游**:下面那个 `queue` 是先攒着的,挂在消费者取事件那一刻
+  // 等于把「读文件」推迟到整条队列之后,中间 agent 完全来得及把同一个路径重拍一遍(审查
+  // 第 5 轮 R1)。所以 sink 在这里建好传进去,由 push 同步进账,这一层只负责收口。
+  const images = markdownImageSink(cwd, accounting);
+  return settleMarkdownImages(
+    claudeStreamEvents(child, resident, bin, calibrateAs, compactWindow, onInitialized, waitNoticeMs, images, cliSessionId),
+    images,
+  );
+}
 
+async function* claudeStreamEvents(
+  child: ReturnType<typeof spawnAgent>,
+  resident: ClaudeControlBridge | undefined,
+  bin: string,
+  calibrateAs: AgentType | undefined,
+  compactWindow: number | null,
+  onInitialized: () => void,
+  waitNoticeMs: number,
+  images: MarkdownImageSink,
+  cliSessionId?: string,
+): AsyncIterable<AgentEvent> {
+  // 队列、唤醒、收尾、增量合并、子活动合并和**图片记账的时点**都在这条共用流水线里
+  // (见 event-queue.ts)。顺序是硬要求:字节在 `delta`/`push` 的那一刻就冻住,交代排在
+  // 合并与队列之后 —— 挂反了,正文写着「修改前是红色」就会存成后来那张蓝图(审查第 5 轮
+  // R1、第 6 轮 R1:短子正文滞留在 40 字合并缓冲里,期间父步骤把文件重拍了)。
+  //
   // Coalesce token-level text_delta into small chunks: flush on a newline or once
   // ~40 chars have accrued, so the client streams smoothly without a re-render per
   // character (a long reply would otherwise fire thousands of setStates). The
@@ -57,13 +83,9 @@ export async function* parseClaudeStream(
   // the model's output. With partial streaming ON, the complete `assistant`
   // message that trails the deltas is used ONLY for tool_use — replaying its text
   // would duplicate everything the deltas already streamed.
-  let textBuf = "";
-  const flushText = () => {
-    if (textBuf) {
-      push({ kind: "text", text: textBuf });
-      textBuf = "";
-    }
-  };
+  const events = eventQueue({ images, activity: new NativeActivityBuffer(), coalesce: { text: 40 } });
+  const push = (event: AgentEvent) => events.push(event);
+  const flushText = () => events.flush();
 
   // 上下文水位。**只有 `assistant` 事件里的 `message.usage` 是单次 API 调用的快照**
   // —— 收尾的 `result` 行是整回合累加(几十次调用相加,长会话能到千万级),拿它当水位
@@ -71,8 +93,8 @@ export async function* parseClaudeStream(
   // 时发一条 context 事件。窗口(分母)反过来只有 `result` 行有,见 claudeContextWindow。
   let contextUsed = 0;
   let contextModel: string | null = null;
-  const seenImages = new Set<string>();
-  const childImages = new Map<string, Set<string>>();
+  const seenImages: ImageStore = imageStore();
+  const childImages = new Map<string, ImageStore>();
   const nativeWork = new NativeWorkTrace();
   // claude 自带 `Monitor` 工具的只读投影（见 ../claude-monitors.ts）。放在这一层的理由：
   // 认人要同时看 tool_use 块（工具名）和 system 事件（后台任务生命周期），只有这里两样
@@ -113,7 +135,7 @@ export async function* parseClaudeStream(
   // 两次时,第二次照样会报。
   let compacting = false;
   const waitTimer = setInterval(() => {
-    if (finished || awaitingSince === null) return;
+    if (events.closed || awaitingSince === null) return;
     const waited = Date.now() - awaitingSince;
     const due = Math.floor(waited / waitNoticeMs);
     if (due <= waitNoticed) return; // 每满一个间隔才报一次,别把静默刷成滚屏
@@ -150,7 +172,7 @@ export async function* parseClaudeStream(
     for (const activity of nativeWork.claudeMessage(ev)) push(activity);
     claudeMonitors.event(ev);
     if (ev.parent_tool_use_id) {
-      const images = childImages.get(ev.parent_tool_use_id) ?? new Set<string>();
+      const images = childImages.get(ev.parent_tool_use_id) ?? imageStore();
       childImages.set(ev.parent_tool_use_id, images);
       for (const block of Array.isArray(ev.message?.content) ? ev.message.content : []) {
         // 子智能体挂的 Monitor 同样要认：它跑在同一条 CLI 会话、同一个 ash 任务上，
@@ -159,10 +181,10 @@ export async function* parseClaudeStream(
         // 注意这个分支**会提前 return**，所以必须在这儿接，不能指望下面那段顶层处理。
         if (block.type === "tool_use") claudeMonitors.toolUse(block.name, block.input, block.id);
         if (block.type === "tool_result") claudeMonitors.toolResult(block.tool_use_id, block.content);
+        // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只
+        // 收工具结果里那几张 base64 截图 —— 它们不是正文语法,按块交代就是对的。
         if (block.type === "tool_result") {
           for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
-        } else if (block.type === "text" && typeof block.text === "string") {
-          for (const path of persistMarkdownImages(block.text, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         }
       }
       return;
@@ -174,8 +196,7 @@ export async function* parseClaudeStream(
     if (ev.type === "stream_event") {
       const se = ev.event;
       if (se?.type === "content_block_delta" && se.delta?.type === "text_delta" && se.delta.text) {
-        textBuf += se.delta.text;
-        if (textBuf.length >= 40 || textBuf.includes("\n")) flushText();
+        events.delta("text", se.delta.text);
       }
       return; // deltas drive the live stream; the trailing complete message handles tools
     }
@@ -294,10 +315,6 @@ export async function* parseClaudeStream(
         }
       }
       if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload
-      for (const block of ev.message.content) {
-        if (block.type !== "text" || typeof block.text !== "string") continue;
-        for (const path of persistMarkdownImages(block.text, seenImages)) push({ kind: "attachment", path });
-      }
     } else if (ev.type === "user" && Array.isArray(ev.message?.content)) {
       flushText();
       for (const block of ev.message.content) {
@@ -377,7 +394,10 @@ export async function* parseClaudeStream(
       }
       // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。
       if (resident) push({ kind: "turnEnd" });
-      seenImages.clear();
+      // 只清字节去重表,不动 `refs`:引用身份在一条流里单调递增,复位会让两个回合的
+      // 身份撞上。字节去重按回合清是故意的 —— 同一个路径在下一回合被重拍过,那是新的
+      // 一张图,得有自己的拷贝。
+      seenImages.copies.clear();
       childImages.clear();
       // 回合结束 = 压缩绝不可能还在进行中。兜底复位,免得将来 CLI 新增一条我们没认出来
       // 的终止路径时,残留的标志把下一回合的开始提示吞掉(常驻进程一份标志跨多回合)。
@@ -388,45 +408,32 @@ export async function* parseClaudeStream(
   let stderr = "";
   child.stderr?.on("data", (d) => (stderr += d.toString()));
   child.on("error", (err: NodeJS.ErrnoException) => {
-    if (finished) return;
+    if (events.closed) return;
     resident?.failPending(new Error(`Claude 进程错误：${err.message}`));
     push({ kind: "error", message: spawnErrorMessage(bin, err) });
     push({ kind: "done", exitStatus: 1 });
-    finished = true;
-    resolve?.();
-    resolve = null;
+    events.close();
   });
   child.on("close", (code) => {
-    if (finished) return;
+    if (events.closed) return;
     resident?.failPending(new Error("Claude 进程在 interrupt ACK 前退出"));
     flushText(); // emit any text tail that never hit the flush threshold
     const exit = code ?? 0;
     if (exit !== 0 && stderr.trim()) push({ kind: "error", message: normalizeClaudeCliError(stderr).slice(0, 2000) });
     push({ kind: "done", exitStatus: exit });
-    finished = true;
-    resolve?.();
-    resolve = null;
+    events.close();
   });
-  forceFinishOnExit(child, () => finished, (exit) => {
+  forceFinishOnExit(child, () => events.closed, (exit) => {
     resident?.failPending(new Error("Claude 进程在 interrupt ACK 前异常收尾"));
     flushText();
     push({ kind: "error", message: "进程已退出但输出流未正常收尾(疑有残留子进程占用管道),已强制结束本回合" });
     push({ kind: "done", exitStatus: exit });
-    finished = true;
-    resolve?.();
-    resolve = null;
+    events.close();
   });
 
   // finally 而不是逐条终止路径里 clear:消费方提前 break(用户停任务)一样走得到这里。
   try {
-    while (true) {
-      if (queue.length) {
-        yield queue.shift()!;
-        continue;
-      }
-      if (finished) return;
-      await new Promise<void>((r) => (resolve = r));
-    }
+    yield* events.drain();
   } finally {
     clearInterval(waitTimer);
     // agent 进程结束 = 它名下的内置 Monitor 全都跟着没了（它们本来就在这棵进程树里）。

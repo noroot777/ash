@@ -68,14 +68,17 @@ export class NativeWorkTrace {
       const content = Array.isArray(ev.message?.content) ? ev.message.content : [];
       const message = content.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n");
       const model = typeof ev.message?.model === "string" && ev.message.model !== "<synthetic>" ? ev.message.model.trim() : "";
+      // messageId 与 codex 的 item.id 同义:两条不同的完整消息哪怕后一条以前一条开头,也是
+      // 两份独立快照,图片账据此换代重拍(shared NativeWorkEvent.messageId 的注释)。
+      const messageId = typeof ev.message?.id === "string" && ev.message.id ? { messageId: ev.message.id } : {};
       if (message || model) out.push(event("Agent", { type: "agent", id: parentId, status: "running",
-        ...(message ? { message: clip(message) } : {}), ...(model ? { model } : {}),
+        ...(message ? { message: clip(message) } : {}), ...messageId, ...(model ? { model } : {}),
       }));
       for (const block of content) {
         if (block.type !== "tool_use") continue;
         const call = this.call(block.name, block.input, block.id, parentId);
         if (call) out.push(call);
-        else if (!this.progressAgents.has(parentId)) out.push(event("Agent", { type: "agent", id: parentId, status: "running", message: `${block.name} · ${clip(block.input).slice(0, 1500)}` }));
+        else if (!this.progressAgents.has(parentId)) out.push(event("Agent", { type: "agent", id: parentId, status: "running", ...messageId, message: `${block.name} · ${clip(block.input).slice(0, 1500)}` }));
       }
     } else if (ev.type === "user" && Array.isArray(ev.message?.content)) {
       for (const block of ev.message.content) {
@@ -134,6 +137,9 @@ export function codexNativeWork(item: any): AgentEvent[] {
       ...(tool === "spawnagent" ? { description: item.prompt, title: item.prompt?.split("\n")[0]?.slice(0, 120),
         requestedModel: item.model, requestedEffort: item.reasoningEffort ?? item.reasoning_effort, agentType: item.agentType ?? item.agent_type } : {}),
       ...(state?.message ? closed || status === "completed" || status === "failed" ? { result: clip(state.message) } : { message: clip(state.message) } : {}),
+      // 快照身份 = 这一次调用:两次 wait 报回同一段文字也是两份独立快照,图片账据此换代
+      // 重拍(审查第 1 轮 R1 实证 A:同文第二张图不再保存)。
+      ...(state?.message && item.id != null ? { messageId: String(item.id) } : {}),
     });
   });
 }
@@ -178,6 +184,8 @@ export function codexChildWork(method: string, params: any): AgentEvent[] {
   }));
   if (method === "item/completed" && item?.type === "agentMessage") out.push(event("Agent", {
     type: "agent", id: params.threadId, nativeId: params.threadId, status: "running", message: clip(item.text ?? ""),
+    // 每条完成的消息是独立快照:身份随事件带走,图片账按它换代(文字前缀不算同一份正文)。
+    ...(item.id != null ? { messageId: String(item.id) } : {}),
   }));
   if (method === "turn/completed") out.push(event("Agent", {
     type: "agent", id: params.threadId, nativeId: params.threadId, status: nativeStatus(params.turn?.status),

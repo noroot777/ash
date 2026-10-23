@@ -553,7 +553,7 @@ export type {
 
 // ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
 // 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。
-export type { AgentEvent, DuetSpeaker, GateAction, GateName, ServerEvent, TurnTraceEvent } from "./events.ts";
+export type { AgentEvent, DuetSpeaker, GateAction, GateName, ServerEvent, TurnImageRef, TurnTraceEvent } from "./events.ts";
 export type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus } from "./native-work.ts";
 
 // ── Session-snapshot parsing ──────────────────────────────────────────────

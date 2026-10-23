@@ -11,7 +11,6 @@
 //
 // 判定（该不该验、几轮、找谁验）住在 review-policy.ts；证据读写住在 review-evidence.ts；
 // 提示词正文住在 review-prompts.ts。
-import { extname } from "node:path";
 import type {
   AgentType,
   ReviewConclusion,
@@ -29,6 +28,7 @@ import { anchorAt, firstAnchor, workflowPolicy } from "@ash/shared/workflow-poli
 import { and, asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
+import { evidenceHeaders } from "./evidence-path.js";
 import { db } from "./db/index.js";
 import { agents, projects, sessions, tasks } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -37,7 +37,6 @@ import {
   type ReviewCoverageFinding,
 } from "./review-coverage.js";
 import {
-  REVIEW_MIME,
   nextReviewRound,
   readConclusion,
   readReport,
@@ -623,12 +622,13 @@ export function mountReviewRoutes(api: Hono): void {
     if (!target) return c.json({ error: "not found" }, 404);
     const round = Number(c.req.query("round"));
     const name = c.req.query("name") ?? "";
-    const mime = REVIEW_MIME[extname(name).toLowerCase()];
+    // 认不认这个类型由 evidence-path.ts 那一张表说 —— 自由工作流取文件那条共用同一道。
+    const headers = evidenceHeaders(name);
     const file = safeReviewFilePath(taskId, round, name);
-    if (!file || !mime) return c.json({ error: "非法的审查文件路径或类型" }, 400);
+    if (!file || !headers) return c.json({ error: "非法的审查文件路径或类型" }, 400);
     const content = await readReviewFile(taskId, round, name);
     return content
-      ? c.body(Uint8Array.from(content), 200, { "content-type": mime })
+      ? c.body(Uint8Array.from(content), 200, headers)
       : c.json({ error: "not found" }, 404);
   });
 

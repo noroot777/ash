@@ -18,7 +18,9 @@ import {
   RunTraceRecorder,
   type RunTracePaths,
 } from "./diagnostics.js";
-import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
+import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
+import { eventQueue } from "./event-queue.js";
+import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { codexAshMcpServerName } from "./codex-mcp.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"] as const;
@@ -153,6 +155,8 @@ export class CodexExecutor implements AgentExecutor {
       events: archiveVisibleCodexSession(parseCodexStream(child, opts.trace, lifecycle, {
         initialThreadId: opts.sessionId ?? "",
         contextNotBeforeMs,
+        cwd: opts.cwd,
+        images: opts.images,
         // 这一轮真正生效的 CODEX_HOME(多用户模式由 auth/run-env.ts 注入),rollout 就写在
         // 它下面 —— 水位必须去同一个目录读。
         configDir: opts.env?.CODEX_HOME,
@@ -184,6 +188,7 @@ export class CodexExecutor implements AgentExecutor {
       cliState: opts.cliState,
       sessionId: opts.sessionId,
       model: opts.model ?? this.model,
+      images: opts.images,
       reasoningEffort: this.reasoningEffort,
       serviceTier: this.speed === "fast" ? "priority" : undefined,
       env: { ...this.env(), ...opts.env },
@@ -207,7 +212,7 @@ export class CodexExecutor implements AgentExecutor {
     return { args, ignored: [...new Set([...profile.ignored, ...turn.ignored])] };
   }
 
-  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; configDir?: string | null }): RunHandle {
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting }): RunHandle {
     const detached = child as Partial<DetachedChild>;
     if (child.stdin && opts.commandLine.includes("app-server") && detached.ashPaths) {
       const recovered = readCodexAppServerState(detached.ashPaths.out, opts.sessionId);
@@ -216,8 +221,11 @@ export class CodexExecutor implements AgentExecutor {
         bin: this.bin,
         args: this.appServerArgs({ env }).args,
         env,
-        cwd: ".",
+        // 进程是接管来的（startProcess 直接把它交回去），所以这个 cwd 不用来起进程；
+        // 它的用处是把正文里的相对图片路径解成真文件（agent-attachments.ts）。
+        cwd: opts.cwd ?? ".",
         prompt: "",
+        images: opts.images,
         sessionId: opts.sessionId,
         commandLine: opts.commandLine,
         reattach: {
@@ -240,6 +248,8 @@ export class CodexExecutor implements AgentExecutor {
         initialThreadId: opts.sessionId,
         contextNotBeforeMs: Date.now(),
         configDir: opts.configDir,
+        cwd: opts.cwd,
+        images: opts.images,
       }), { bin: this.bin, args: this.appServerArgs({}).args, cwd: ".",
         env: { ...this.env(), ...(opts.configDir ? { CODEX_HOME: opts.configDir } : {}) } },
       opts.sessionId, () => cleanupAfterRun(child)),
@@ -275,6 +285,8 @@ export class CodexExecutor implements AgentExecutor {
             initialThreadId: sessionId,
             contextNotBeforeMs,
             configDir: opts.env?.CODEX_HOME,
+            cwd: opts.cwd,
+            images: opts.images,
           }),
         };
       },
@@ -311,31 +323,47 @@ function appServerCompatibleArgs(input: string[]): { args: string[]; ignored: st
   return { args: out, ignored };
 }
 
-export async function* parseCodexStream(
+export function parseCodexStream(
+  child: ReturnType<typeof spawnAgent>,
+  tracePaths: RunTracePaths | undefined,
+  lifecycle: { stopRequested: boolean },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting },
+): AsyncIterable<AgentEvent> {
+  // 正文里的图**不在这份解析里收**:一条 agent_message 只是一片碎片,上一条消息给定义、
+  // 下一条引用它时按消息扫压根不认那张图(审查第 4 轮 R2)。统一由那一层按「一份文档」
+  // 记账(见 markdown-image-stream.ts)。
+  //
+  // 账记在 push 处:下面那个 `queue` 先攒着,挂在消费者取事件那一刻等于把读文件推迟到整条
+  // 队列之后,中间 agent 来得及把同一个路径重拍一遍(审查第 5 轮 R1)。
+  const images = markdownImageSink(contextOptions.cwd, contextOptions.images);
+  return settleMarkdownImages(codexStreamEvents(child, tracePaths, lifecycle, contextOptions, images), images);
+}
+
+async function* codexStreamEvents(
   child: ReturnType<typeof spawnAgent>,
   tracePaths: RunTracePaths | undefined,
   lifecycle: { stopRequested: boolean },
   // configDir = 这一轮 CLI 实际写 rollout 的 CODEX_HOME(多用户模式下是归属人的个人
   // 目录)。不传就是宿主机默认那份 —— 读不到 rollout 时水位静默为空。
-  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null },
+  // cwd = 这一轮干活的目录。正文里 `![](output/x.png)` 这种相对路径要靠它解成真文件
+  // 才复制得进 uploads（见 ../agent-attachments.ts）。
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null; cwd?: string },
+  images: MarkdownImageSink,
 ): AsyncIterable<AgentEvent> {
-  const queue: AgentEvent[] = [];
-  let resolve: (() => void) | null = null;
-  let finished = false;
   let turnCompleted = false;
   let turnFailedMessage: string | null = null;
   let lastEventType: string | null = null;
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
   let threadId = contextOptions.initialThreadId;
-  const seenImages = new Set<string>();
+  const seenImages: ImageStore = imageStore();
   const structuredErrors: string[] = [];
   const trace = new RunTraceRecorder(tracePaths);
-  const push = (e: AgentEvent) => {
-    queue.push(e);
-    resolve?.();
-    resolve = null;
-  };
+  // 队列、唤醒、收尾和**图片记账的时点**都在这条共用流水线里(见 event-queue.ts):字节在
+  // push 的那一刻就冻住,交代排在队列之后 —— 挂反了,正文写着「修改前是红色」就会存成后来
+  // 那张蓝图(审查第 5 轮 R1)。
+  const events = eventQueue({ images });
+  const push = (event: AgentEvent) => events.push(event);
 
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
@@ -374,7 +402,6 @@ export async function* parseCodexStream(
       if (it.type === "agent_message" && it.text) {
         agentMessageCount += 1;
         push({ kind: "text", text: it.text + "\n\n" });
-        for (const path of persistMarkdownImages(it.text, seenImages)) push({ kind: "attachment", path });
       }
       else if (it.type === "reasoning" && it.text) push({ kind: "thinking", text: it.text + "\n\n" });
       else if (it.type === "command_execution") push({ kind: "tool", name: "exec", detail: shortStr(it.command) });
@@ -399,8 +426,7 @@ export async function* parseCodexStream(
     spawnError?: string | null;
     forceFinished?: boolean;
   }) => {
-    if (finished) return;
-    finished = true;
+    if (events.closed) return;
     const diagnostics = trace.finish({
       ...opts,
       stopRequested: lifecycle.stopRequested,
@@ -420,8 +446,7 @@ export async function* parseCodexStream(
       push({ kind: "error", message: sessionPoison, scope: "session" });
     }
     push({ kind: "done", exitStatus: opts.exitStatus });
-    resolve?.();
-    resolve = null;
+    events.close();
   };
   child.on("error", (err: NodeJS.ErrnoException) => {
     finish({ exitStatus: 1, exitSignal: null, spawnError: spawnErrorMessage("codex", err) });
@@ -429,31 +454,25 @@ export async function* parseCodexStream(
   child.on("close", (code, signal) => {
     finish({ exitStatus: code ?? (signal ? 1 : 0), exitSignal: signal });
   });
-  forceFinishOnExit(child, () => finished, (exit) => {
+  forceFinishOnExit(child, () => events.closed, (exit) => {
     finish({ exitStatus: exit, exitSignal: child.signalCode, forceFinished: true });
   });
 
   // stdout 没有水位；在 done 前 best-effort 读取本回合 rollout。私有格式变化时读取器
   // 返回 null，界面自然不显示，任务结算仍照常进行。
   let contextDone = false;
-  while (true) {
-    if (queue.length) {
-      const next = queue.shift()!;
-      if (next.kind === "done" && !contextDone) {
-        contextDone = true;
-        const context = await readCodexContext(threadId, contextOptions.contextNotBeforeMs, contextOptions.configDir);
-        // used=0 的哨兵也必须发：它会清掉 sessions 行上的上一轮旧水位。否则私有格式
-        // 变化后读取器虽已失败关闭，界面却仍拿数据库里的陈旧数字冒充当前值。
-        yield {
-          kind: "context",
-          context: context ?? { used: 0, window: null, windowEstimated: false },
-        };
-      }
-      yield next;
-      continue;
+  for await (const next of events.drain()) {
+    if (next.kind === "done" && !contextDone) {
+      contextDone = true;
+      const context = await readCodexContext(threadId, contextOptions.contextNotBeforeMs, contextOptions.configDir);
+      // used=0 的哨兵也必须发：它会清掉 sessions 行上的上一轮旧水位。否则私有格式
+      // 变化后读取器虽已失败关闭，界面却仍拿数据库里的陈旧数字冒充当前值。
+      yield {
+        kind: "context",
+        context: context ?? { used: 0, window: null, windowEstimated: false },
+      };
     }
-    if (finished) return;
-    await new Promise<void>((r) => (resolve = r));
+    yield next;
   }
 }
 

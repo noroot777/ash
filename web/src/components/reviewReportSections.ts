@@ -111,6 +111,15 @@ export type ReviewReportSections = {
    * - `"whole"`：没拆，`detail` 为空。
    */
   kind: "whole" | "contract" | "lead";
+  /**
+   * 上面那几段在**原文里的切点**(字符偏移),给「整篇只解析一次、折叠只是分区」那条路用
+   * (见 `markdownLayout.ts` 的 regions)。没有对应那一段时缺省。
+   *
+   * 为什么光有切好的字符串不够:各段各过一遍渲染器,结论里引用明细里的图片定义/脚注就
+   * 两头落空 —— 定义是**整篇文档的**,折叠、分栏只是展示分组(审查第 4 轮 R2)。所以切点
+   * 必须以偏移的形式交出来,正文那一份原封不动地整篇交给渲染器。
+   */
+  cuts: { more?: number; aside?: number; detail?: number };
 };
 
 /**
@@ -169,7 +178,7 @@ function plainText(node: ParsedNode): string {
  */
 export function splitReviewReport(text: string, conclusion: ReviewConclusion): ReviewReportSections {
   const whole: ReviewReportSections = {
-    summary: text, more: "", rest: 0, aside: "", detail: "", kind: "whole",
+    summary: text, more: "", rest: 0, aside: "", detail: "", kind: "whole", cuts: {},
   };
   // 解析器把孤立的 `\r` 也当换行，我们按 `\n` 切片——真碰上这种老式换行，行号就对不上了。
   // 对不上时一律整篇铺开：认不出只是啰嗦，按错的行号拆是把内容藏掉。
@@ -207,8 +216,12 @@ export function splitReviewReport(text: string, conclusion: ReviewConclusion): R
     fold?: { more: number; aside: number; rest: number },
   ): ReviewReportSections => {
     const slice = (from: number, to?: number) => lines.slice(from, to).join("\n").trimEnd();
+    // 同一刀的字符偏移:行首恒是块边界,所以分区时没有哪一块会被切开(见 markdownLayout)。
+    const offsetOf = (line: number) => lines.slice(0, line).reduce((at, text) => at + text.length + 1, 0);
     const kind = claims && conclusion === "verified" ? "contract" as const : "lead" as const;
-    if (!fold) return { summary: slice(0, at), more: "", rest: 0, aside: "", detail: slice(at), kind };
+    if (!fold) {
+      return { summary: slice(0, at), more: "", rest: 0, aside: "", detail: slice(at), kind, cuts: { detail: offsetOf(at) } };
+    }
     return {
       summary: slice(0, fold.more),
       more: slice(fold.more, fold.aside),
@@ -216,6 +229,7 @@ export function splitReviewReport(text: string, conclusion: ReviewConclusion): R
       aside: slice(fold.aside, at),
       detail: slice(at),
       kind,
+      cuts: { more: offsetOf(fold.more), aside: offsetOf(fold.aside), detail: offsetOf(at) },
     };
   };
 

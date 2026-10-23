@@ -69,7 +69,11 @@ export type SessionTraceEntry = {
     | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }
     | Extract<import("@ash/shared").AgentEvent, { kind: "tool" }>
-    | { kind: "attachment"; path: string }
+    // source/ref/path:一处正文引用的保存结果(见 shared/src/events.ts)。配对靠 source+ref,
+    // 不靠文件名;path 缺省 = 这处引用确实没有副本,`lost: true` 进一步说明「字节当时读到了、
+    // 写盘失败了」—— 那一处只能作废,不能拿现在的文件顶上。`pos` 是这处引用的文档节点身份
+    // (服务端全文坐标),恢复补回的记录靠它排回文档顺序(见 turnImages)。
+    | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean }
     // level:"notice" = 这条不是故障,是过程里的一句提示(上游在重试、还在等回话)。展示端
     // 据此把它排成「提示」那一行而不是红色异常(见 task-detail/conversationSegments 的 auxEvent)。
     | { kind: "error"; message: string; level?: "notice" }

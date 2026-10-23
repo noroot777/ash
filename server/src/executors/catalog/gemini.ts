@@ -53,14 +53,9 @@ const detailOf = (params: unknown): string | undefined => {
 // 会变成 uncaughtException,任务永远卡 running(见 server/CLAUDE.md)。
 const geminiStreamJsonParser: CliParser = async function* (ctx) {
   const { child, bin, label, lifecycle } = ctx;
-  const queue: AgentEvent[] = [];
-  let resolve: (() => void) | null = null;
-  let finished = false;
-  const push = (e: AgentEvent) => {
-    queue.push(e);
-    resolve?.();
-    resolve = null;
-  };
+  // 队列、唤醒、收尾、增量合并和**图片记账的时点**都在这条共用流水线里,见
+  // ../event-queue.ts —— 十一个解析器从同一个 `ctx.events` 走,拿不到裸队列。
+  const push = (event: AgentEvent) => ctx.events.push(event);
 
   const trace = new RunTraceRecorder(ctx.trace);
   const toolNames = new Map<string, string>(); // tool_id → tool_name(tool_result 只带 id)
@@ -135,8 +130,7 @@ const geminiStreamJsonParser: CliParser = async function* (ctx) {
   // 收尾单点:三条路(spawn 失败 / close / exit 后流不收尾)都汇到这里,
   // 保证事件流一定以 done 结束 —— 少一个 done 就是任务永远卡 running。
   const finish = (o: { exitStatus: number; spawnError?: string; flushTimeout?: boolean }) => {
-    if (finished) return;
-    finished = true;
+    if (ctx.events.closed) return;
     trace.close();
     const tail = stripAnsi(stderrTail).trim() || stripAnsi(strayTail).trim();
     if (o.spawnError) push({ kind: "error", message: o.spawnError });
@@ -156,22 +150,14 @@ const geminiStreamJsonParser: CliParser = async function* (ctx) {
           `(执行参数在 server/src/executors/catalog/gemini.ts)${tail ? `;输出尾巴:${tail.slice(0, 500)}` : ""}`,
       });
     push({ kind: "done", exitStatus: o.exitStatus });
-    resolve?.();
-    resolve = null;
+    ctx.events.close();
   };
 
   child.on("error", (err: NodeJS.ErrnoException) => finish({ exitStatus: 1, spawnError: spawnErrorMessage(bin, err) }));
   child.on("close", (code, signal) => finish({ exitStatus: code ?? (signal ? 1 : 0) }));
-  forceFinishOnExit(child, () => finished, (exit) => finish({ exitStatus: exit, flushTimeout: true }));
+  forceFinishOnExit(child, () => ctx.events.closed, (exit) => finish({ exitStatus: exit, flushTimeout: true }));
 
-  while (true) {
-    if (queue.length) {
-      yield queue.shift()!;
-      continue;
-    }
-    if (finished) return;
-    await new Promise<void>((r) => (resolve = r));
-  }
+  yield* ctx.events.drain();
 };
 
 // 检测字段原样来自旧 detect.ts 的 KNOWN_CLIS。执行部分按 v0.53.0 官方文档 + 源码

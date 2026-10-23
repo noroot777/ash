@@ -1,8 +1,12 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  containedPath,
+  evidenceSegments,
+  EVIDENCE_IMAGE_EXTENSIONS,
+  EVIDENCE_MAX_DEPTH,
+} from "./evidence-path.js";
 import { RUNS_DIR } from "./paths.js";
-
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
 export function freeReviewEvidenceDir(taskId: string, runId: string, round: number): string {
   return join(RUNS_DIR, taskId, "free-review", runId, `round-${round}`);
@@ -40,24 +44,21 @@ function safeEvidenceDir(dir: string): boolean {
   return true;
 }
 
+// `name` 是证据目录内的相对路径，**允许子目录**（`shots/a.png`）：形状判据在
+// evidence-path.ts，越界判据是这里的 lstat/nlink 加它的 containedPath。
 export function freeReviewFile(taskId: string, runId: string, round: number, name: string): string | null {
-  if (!name || name !== name.split(/[\\/]/).at(-1)) return null;
+  const segments = evidenceSegments(name);
+  if (!segments) return null;
   const base = resolve(freeReviewEvidenceDir(taskId, runId, round));
   if (!safeEvidenceDir(base)) return null;
-  const file = resolve(base, name);
-  // 分隔符必须用 `sep` 而不是写死 `/`：`resolve` 在 Windows 上还的是反斜杠，拼 `/` 去比
-  // 前缀**恒为假**，于是这个函数在 Windows 上永远返回 null——审查报告一律读成空串，
-  // 「按意见修复」被 manualRepairBlocker 一句「最近一轮审查报告不存在或为空」挡死。
-  // 不是安全收紧，是整条功能失效，而且失败得很安静（2026-08-18 真机 test:free-workflow 实测）。
-  if (!file.startsWith(base + sep) || !existsSync(file)) return null;
+  const file = resolve(base, ...segments);
+  if (!existsSync(file)) return null;
   const info = lstatSync(file);
   if (!info.isFile() || info.isSymbolicLink()) return null;
   // 硬链接 lstat 探测不出来（它就是普通文件）：nlink>1 说明同一 inode 还有别的名字，
   // 可能指向证据根之外的内容——审查证据由审查者独立创建，正常永远是 1，直接拒。
   if (info.nlink > 1) return null;
-  const realBase = realpathSync(base);
-  const realFile = realpathSync(file);
-  return realFile.startsWith(realBase + sep) ? realFile : null;
+  return containedPath(base, file);
 }
 
 export function readFreeReviewReport(taskId: string, runId: string, round: number): string {
@@ -69,15 +70,33 @@ export function readFreeReviewReport(taskId: string, runId: string, round: numbe
   }
 }
 
-export function freeReviewScreenshots(taskId: string, runId: string, round: number): string[] {
+// 子目录一起列：审查者把截图归到 `shots/` 里是合法写法（接口也服务得了），列不出来就
+// 等于截图条里没有那几张。深度与类型都跟**能不能服务**共用一份常量
+// （evidence-path.ts）—— 两边一松一紧就会出现「打得开、但面板里没有」。
+function filesUnder(dir: string, prefix: string, depth: number, extensions: ReadonlySet<string>): string[] {
+  if (depth <= 0) return [];
+  const found: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    // isSymbolicLink 要先问：符号链接的目录 isDirectory() 是 false，但跟着它走会爬出证据根。
+    if (entry.isSymbolicLink()) continue;
+    const name = `${prefix}${entry.name}`;
+    if (entry.isDirectory()) found.push(...filesUnder(join(dir, entry.name), `${name}/`, depth - 1, extensions));
+    else if (entry.isFile() && extensions.has(extname(entry.name).toLowerCase())) found.push(name);
+  }
+  return found;
+}
+
+function listFreeEvidence(taskId: string, runId: string, round: number, extensions: ReadonlySet<string>): string[] {
   try {
     const dir = freeReviewEvidenceDir(taskId, runId, round);
     if (!safeEvidenceDir(dir)) return [];
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && IMAGE_EXTENSIONS.has(extname(entry.name).toLowerCase()))
-      .map((entry) => entry.name)
-      .sort();
+    return filesUnder(dir, "", EVIDENCE_MAX_DEPTH, extensions).sort();
   } catch {
     return [];
   }
+}
+
+/** 截图条铺的那几张（图片类型）。 */
+export function freeReviewScreenshots(taskId: string, runId: string, round: number): string[] {
+  return listFreeEvidence(taskId, runId, round, EVIDENCE_IMAGE_EXTENSIONS);
 }

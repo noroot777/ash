@@ -18,6 +18,7 @@ import {
 import { FoldedProse } from "../components/FoldedProse.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody, ReviewReportBody } from "../components/MarkdownBody.tsx";
+import { reportFileResolver } from "../components/markdownPolicy.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewNote } from "../review/ReviewNote.tsx";
@@ -278,6 +279,12 @@ export function FreeWorkflowInspector({
                 text={opened.round.reportMarkdown}
                 reportKey={`${opened.run.id}:${opened.round.round}`}
                 conclusion={opened.round.conclusion}
+                // 文档根归属（相对路径 → 证据目录；绝对路径 → 被审任务工作目录）一处定
+                // 清楚，判据见 markdownPolicy 的 reportFileResolver。
+                resolveFile={reportFileResolver(
+                  (name) => api.freeReviewFileUrl(task.id, opened.run.id, opened.round.round, name),
+                  task.id,
+                )}
               />
             : <p>报告尚未生成。</p>}
           {/* 驳回与辩论跟报告长在同一轮上，读结论的人必须在同一个地方读到「执行者不认这条、

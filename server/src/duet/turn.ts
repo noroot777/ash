@@ -11,7 +11,7 @@ import { mkdirSync, createWriteStream, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { finished } from "node:stream/promises";
 import { eq, sql } from "drizzle-orm";
-import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
+import type { DuetSpeaker, SessionRole, TurnImageRef, TurnTraceEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
 import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
@@ -29,6 +29,7 @@ import {
 } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace } from "../transcript.js";
+import { noteAgentEventUpload } from "../uploads.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
@@ -281,6 +282,9 @@ export async function runTurn(args: {
     // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
     const trace: TurnTraceEvent[] = [];
     const TRACE_CAP = 200;
+    // 正文引用到的图:**逐处引用一条**,原样随回合落盘(见 TurnImageRef)。讨论区不走分段
+    // 模型,这是它唯一能把「说那句话时的那一张」留住的地方。
+    const images: TurnImageRef[] = [];
     // duet 有自己的消费循环(不走 single-run),所以认领也在自己这儿:**从这一行起**句柄的
     // 回收责任归下面那道 finally,外层兜底只负责注销。认领之前(落库、建日志目录、开写流)
     // 任何一条出口都归起跑方,它必须连进程一起收 —— 三态见 runs.ts 顶部。
@@ -297,6 +301,13 @@ export async function runTurn(args: {
         const publishedEvent = event.kind === "error" && sessionNotice
           ? { kind: "system" as const, text: event.message, at: now() }
           : emittedEvent;
+        // 图片的**归属登记**要在它成为可展示数据之前:附件躺在 uploads 目录里,不登记就是
+        // 「无主资产」,多人模式下同项目的普通成员在讨论区打不开它(uploads.ts 的
+        // canReadUpload 回 404 —— 跟「文件不存在」同一句话,前端连隐不隐都分不出)。主发言
+        // 者自己的 attachment 和包在子智能体活动里的那些由同一个消费入口处理:普通任务在
+        // single-run.ts、团队调度台在 team/lead-voice.ts,讨论这一条整条链以前漏掉了
+        // (审查第 2 轮 F4,真实 runTurn + 真实上传路由实测 404 → 登记后 200)。
+        noteAgentEventUpload(taskId, event);
         bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event: publishedEvent });
         if (event.kind === "session" && event.cliSessionId !== cliId) {
           cliId = event.cliSessionId;
@@ -307,6 +318,8 @@ export async function runTurn(args: {
         } else if (event.kind === "text") {
           text += event.text;
           out.write(event.text + "\n");
+        } else if (event.kind === "attachment") {
+          if (event.source) images.push({ path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost });
         } else if (event.kind === "tool") {
           if (isVisibleExecutionEvent(event) && trace.length < TRACE_CAP) trace.push({ kind: "tool", label: event.name, detail: event.detail });
         } else if (event.kind === "thinking") {
@@ -428,7 +441,7 @@ export async function runTurn(args: {
     try {
       appendFileSync(
         join(runDir, "transcript.jsonl"),
-        JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, notice: noticeMsg, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
+        JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, notice: noticeMsg, startedAt: turnStart, at: endIso, durationMs, events: trace, images: images.length ? images : undefined }) + "\n",
       );
     } catch {
       /* best effort */

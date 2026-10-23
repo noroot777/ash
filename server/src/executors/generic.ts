@@ -1,12 +1,15 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { AgentType } from "@ash/shared";
+import type { AgentEvent, AgentType } from "@ash/shared";
 import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, killChild, redactSecrets, resumeFor } from "./spawn.js";
 import { textParser } from "./catalog/parsers.js";
+import { eventQueue } from "./event-queue.js";
+import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting } from "./markdown-image-stream.js";
+import type { CliParser, CliParserContext } from "./catalog/types.js";
 import { valueArgs, type CliSpec } from "./catalog/types.js";
 
 // 按目录里的 spec 装配命令行、跑一次性非交互回合。claude / codex 有专用类(常驻
@@ -19,6 +22,26 @@ import { valueArgs, type CliSpec } from "./catalog/types.js";
 //      监听者的 uncaughtException,任务永远卡 running,见 server/CLAUDE.md);
 //   ③ 不实现 openResident。「谁能当团队调度者」就是靠这个方法存在与否过滤的,
 //      generic 装一个假的等于让一堆跑不了常驻会话的 CLI 出现在调度者下拉里。
+
+/**
+ * 解析器的事件流 + 「正文图片谁来落盘」这一档。
+ *
+ * 账本**建在这里、传进 ctx**,而不是裹在解析器外面:解析器自己攒队列,裹在外面等于把
+ * 「去读那个文件」推迟到整条队列和一次可暂停的 yield 之后,中间 agent 完全来得及把同一个
+ * 路径重拍一遍 —— 正文写着「修改前是红色」,存下来的是后来那张蓝图(审查第 6 轮 R1 实测:
+ * 真的起一个假 CLI,消费端每条事件等 260 ms,两处引用一起变成蓝图)。次序钉在 EventQueue 里。
+ *
+ * 自己已经落过盘的解析器(`ownsMarkdownImages`)不给账本:两层各存一份就是同一处引用两条
+ * 记录、两份拷贝(见 catalog/types.ts 的那个字段)。run 与 attach 共用这一个出口。
+ */
+function markdownImages(parser: CliParser, ctx: Omit<CliParserContext, "events">): AsyncIterable<AgentEvent> {
+  if (parser.ownsMarkdownImages) return parser({ ...ctx, events: eventQueue() });
+  const images = markdownImageSink(ctx.cwd, ctx.images);
+  // 解析器**不用** ctx.events 自己 yield 事件时(夹具、以后新写的某一份),收口那一层会把
+  // 没记过账的事件补记一次 —— 字节拍得晚一点,但不会整条链一张图都不落盘。
+  return settleMarkdownImages(parser({ ...ctx, events: eventQueue({ images }) }), images);
+}
+
 export class GenericCliExecutor implements AgentExecutor {
   readonly type: AgentType;
   readonly label: string;
@@ -66,7 +89,9 @@ export class GenericCliExecutor implements AgentExecutor {
     return {
       sessionId,
       commandLine,
-      events: parser({ child, bin: this.bin, label: this.label, trace: opts.trace, lifecycle }),
+      // 正文里 `![](…)` 的本机图片在这一层统一收(见 withMarkdownImages):解析器是
+      // 「自带的 or 目录里内联的」二选一,只在默认那份里收等于十个自定义解析器全漏。
+      events: markdownImages(parser, { child, bin: this.bin, label: this.label, trace: opts.trace, lifecycle, cwd: opts.cwd, images: opts.images }),
       kill: () => {
         lifecycle.stopRequested = true;
         killChild(child);
@@ -76,13 +101,13 @@ export class GenericCliExecutor implements AgentExecutor {
     };
   }
 
-  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; cwd?: string; images?: MarkdownImageAccounting }): RunHandle {
     const lifecycle = { stopRequested: false };
     const parser = this.spec.exec.parser ?? textParser;
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
-      events: parser({ child, bin: this.bin, label: this.label, lifecycle }),
+      events: markdownImages(parser, { child, bin: this.bin, label: this.label, lifecycle, cwd: opts.cwd, images: opts.images }),
       kill: () => {
         lifecycle.stopRequested = true;
         child.kill();

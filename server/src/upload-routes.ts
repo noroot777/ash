@@ -5,7 +5,7 @@ import { join, basename, extname } from "node:path";
 import { maxBytesFor, attachmentKind } from "@ash/shared";
 import { UPLOADS_DIR } from "./paths.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { canReadUpload, registerUpload } from "./uploads.js";
+import { canReadUpload, registerUpload, repairUploadClaim, watchAgentUploads } from "./uploads.js";
 import { id } from "./util.js";
 
 // ── attachment uploads (pasted into the composer / reply box) ────────────────
@@ -42,6 +42,10 @@ const sanitizeName = (name: string): string =>
   (name || "").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._-]+/, "").slice(-80);
 
 export function mountUploadRoutes(api: Hono): void {
+  // 读得到的那一刻起,归属登记就在管着:广播出去的 agent 附件一律登记(见 uploads.ts 的
+  // watchAgentUploads —— 讨论那条链曾经整条漏掉)。挂在这里而不是 index.ts,是为了让
+  // 「挂了读接口」和「有归属兜底」成为同一件事,隔离测试里也不会只装一半。
+  watchAgentUploads();
   // Accept a base64 data URL of any type, persist it, return the absolute path (for
   // the prompt) plus a url (preview thumbnail) and the kind (image vs file → which
   // chip the web shows). The agent-facing filename keeps the original name when the
@@ -73,6 +77,20 @@ export function mountUploadRoutes(api: Hono): void {
       name: display,
       kind: attachmentKind(mime),
     });
+  });
+
+  // 迁移修不回的存量附件,归属人自己确认它属于哪条任务(判据与推演在 uploads.ts
+  // repairUploadClaim;为什么自动迁移修不全在 db/index.ts 的 claim_origin 一段)。
+  // 错误一律 400 同句回话,不泄露文件存不存在。
+  api.post("/uploads/:file/claim", async (c) => {
+    // 请求体是用户给的:合法 JSON 不止对象(null/数组/数字都是),taskId 也可能不是字符串,
+    // 这里不收窄就是 500(第 9 轮复审第 2 轮 N9)。形状不对与业务拒绝同走 400。
+    const body: unknown = await c.req.json().catch(() => null);
+    const taskId = body && typeof body === "object" && typeof (body as { taskId?: unknown }).taskId === "string"
+      ? (body as { taskId: string }).taskId
+      : "";
+    const error = await repairUploadClaim(actorOf(c), basename(c.req.param("file")), taskId);
+    return error ? c.json({ error }, 400) : c.json({ ok: true });
   });
 
   // Serve a stored attachment back (thumbnail preview). basename() strips any path

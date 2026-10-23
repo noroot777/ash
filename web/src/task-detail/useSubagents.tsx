@@ -90,6 +90,7 @@ export function useSubagents<Context>(
       <NativeAgentConversation
         key={openAgent.id}
         row={openAgent}
+        taskId={taskId}
         statusLabel={NATIVE_WORK_STATUS_LABELS[openAgent.status]}
         error={error}
         onRetry={onRetry}

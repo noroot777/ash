@@ -37,7 +37,7 @@ requireTmpDb("test-upload-visibility");
 
 // 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { notes, projects, tasks } = await import("../src/db/schema.js");
+const { notes, projects, tasks, uploads, users } = await import("../src/db/schema.js");
 const { UPLOADS_DIR } = await import("../src/paths.js");
 const mode = await import("../src/auth/mode.js");
 const store = await import("../src/auth/store.js");
@@ -225,6 +225,30 @@ try {
   await registerUpload(bobFile.file, { ownerUserId: bob.id, taskId: String(created.json.id) });
   assert.equal((await get(bobFile.file, AS_ALICE)).text, BOB_SECRET, "本人挂上去之后,任务看得见的人就该打得开");
 
+  // 同一个文件被两条路同时登记(直接登记 + 总线那道兜底)不许有一次输掉唯一键:先
+  // SELECT 再 INSERT 的那一版两边都看到「没有这一行」,输掉的那次抛 `UNIQUE constraint
+  // failed: uploads.file`,而调用点大多只 warn —— 它要补的那半边归属就丢了(审查第 3
+  // 轮 N4,`test:native-work` 真实出现过这条告警)。
+  const RACE_BODY = "race-secret";
+  writeFileSync(join(UPLOADS_DIR, "race.txt"), RACE_BODY);
+  const warnings: unknown[][] = [];
+  const realWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args); };
+  try {
+    await Promise.all([
+      registerUpload("race.txt", { ownerUserId: bob.id }),
+      registerUpload("race.txt", { taskId: String(created.json.id) }),
+      registerUpload("race.txt", { ownerUserId: bob.id, taskId: String(created.json.id) }),
+    ]);
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.deepEqual(warnings, [], `并发登记不该有任何告警:${JSON.stringify(warnings)}`);
+  const raceRows = await db.select().from(uploads).where(eq(uploads.file, "race.txt"));
+  assert.equal(raceRows.length, 1, "并发登记只该有一行");
+  assert.equal(raceRows[0]?.ownerUserId, bob.id, "两条路各自那半边归属都要落下来");
+  assert.equal(raceRows[0]?.taskId, String(created.json.id), "两条路各自那半边归属都要落下来");
+
   // ── ⑥ 派生任务:归属继承父任务,授权仍看动手的人 ────────────────────────
   // Bob 在 Alice 的任务下开一条子任务、附上自己刚传的图:子任务归属按 §八 继承 Alice,
   // 但附件是 Bob 的。按继承后的归属人判绑定,会把上传者本人挡在门外 —— 正文里明明
@@ -319,7 +343,165 @@ try {
   const blindPack = await collectUploads([exportText], [], false, await readableUploads(null));
   assert.deepEqual(blindPack.map((u) => u.name), [], "认不出身份就不该带走任何附件");
 
-  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 接力落地 + 出境打包 + 存量认领)");
+
+  // ── ⑨ 升级不回填:证明不了来历的存量行一律按真私有保密(第 10 轮审查 R1) ────
+  // 老库在 claim_origin 这一列存在之前就转过多人:当时统一代管补的 owner 没有标记。曾经两版
+  // 自动回填(建档后 60 秒窗口 → created_at 早于建档线)都被实测攻破 —— 后者默认了这一列
+  // 一直存在,可列本身就是升级 ALTER 补的,老库升级那一刻全部存量行都是 NULL:带回拨时钟
+  // 写入的真私有行当年无从落 'user' 标,与代管行在数据上完全同形(第 10 轮审查 R1 拆列重放:
+  // 升级后私有行被标成 conversion 并对成员敞开)。时间证明不了来历,所以 ensureSchema 不做
+  // 任何回填;确属旧代管的走 ⑩ 的本人确认出口恢复。
+  {
+    const { backfillArtifactUploads } = await import("../src/uploads.js");
+    const firstAt = Math.min(...(await db.select().from(users)).map((u) => Date.parse(u.createdAt)));
+    writeFileSync(join(UPLOADS_DIR, "pre-mark.txt"), "pre-mark-body");
+    writeFileSync(join(UPLOADS_DIR, "demoted-mark.txt"), "demoted-mark-body");
+    writeFileSync(join(UPLOADS_DIR, "post-mark.txt"), "post-mark-body");
+    await db.insert(uploads).values([
+      // 建档线之前的两行:旧判据眼里的「可核实代管」,新语义下照样不可证。
+      { file: "pre-mark.txt", ownerUserId: boss.id, taskId: null, claimOrigin: null,
+        createdAt: new Date(firstAt - 30_000).toISOString() },
+      { file: "demoted-mark.txt", ownerUserId: bob.id, taskId: null, claimOrigin: null,
+        createdAt: new Date(firstAt - 60_000).toISOString() },
+      { file: "post-mark.txt", ownerUserId: boss.id, taskId: null, claimOrigin: null,
+        createdAt: new Date(firstAt + 30_000).toISOString() },
+    ] as never);
+    await ensureSchema();
+    const origin = async (file: string) => (await db.select().from(uploads).where(eq(uploads.file, file)))[0]!.claimOrigin;
+    assert.equal(await origin("pre-mark.txt"), null, "建档线之前的行也不回填:时间证明不了来历");
+    assert.equal(await origin("demoted-mark.txt"), null, "换个 owner 一样不回填");
+    assert.equal(await origin("post-mark.txt"), null, "建档之后的行照旧保密");
+    // 可信产物清单只认显式 'conversion' 标:无标记行不补 taskId,也就不进项目轴。
+    await backfillArtifactUploads("t-legacy", ["pre-mark.txt", "demoted-mark.txt", "post-mark.txt"].map((f) => join(UPLOADS_DIR, f)));
+    for (const file of ["pre-mark.txt", "demoted-mark.txt", "post-mark.txt"]) {
+      assert.equal((await db.select().from(uploads).where(eq(uploads.file, file)))[0]!.taskId, null, `${file} 无标记不绑任务`);
+      assert.equal((await get(file, AS_ALICE)).status, 404, `${file} 不对项目成员敞开`);
+    }
+    assert.equal((await get("pre-mark.txt", AS_BOSS)).text, "pre-mark-body", "保密只对别人:本人照常读得到");
+    // 确属旧代管的恢复路径 = ⑩ 的同一出口:行的归属人自己确认,跟着任务对项目可见。
+    assert.equal((await call("/api/uploads/pre-mark.txt/claim", "POST", AS_BOSS, { taskId: "t-legacy" })).status, 200, "本人确认是老代管行唯一的恢复出口");
+    assert.equal((await get("pre-mark.txt", AS_ALICE)).text, "pre-mark-body", "确认后项目成员读得到");
+  }
+
+  // ── ⑩ 修复出口:证明不了的由**本人**确认所属任务(POST /uploads/:file/claim) ──
+  // 自动迁移保守跳过的行,真属于某条任务的由行的归属人自己确认补挂。判据是本人同意,
+  // 不是管理员身份 —— 管理员替别人确认等于把别人可能私有的附件敞开给项目。
+  {
+    const { repairUploadClaim } = await import("../src/uploads.js");
+    const claim = (file: string, headers: Record<string, string>, taskId: string) =>
+      call(`/api/uploads/${encodeURIComponent(file)}/claim`, "POST", headers, { taskId });
+    // 别人的行与不存在的文件必须回同一句话:确认接口不能变成「这个文件存在吗」的探针。
+    const foreign = await claim("post-mark.txt", AS_ALICE, "t-legacy");
+    const missing = await claim("no-such-upload-claim.txt", AS_ALICE, "t-legacy");
+    assert.equal(foreign.status, 400, "别人的行不许确认");
+    assert.deepEqual([foreign.json.error, missing.json.error], [missing.json.error, missing.json.error], "「别人的」与「不存在」同一句话");
+    // 回合凭证不算本人:任意在跑的 agent 都顶着 owner 的 userId,放行等于附件归属可被任务洗走。
+    assert.ok(
+      await repairUploadClaim({ kind: "agent", userId: boss.id, role: "member", name: "回合", taskId: "t-legacy" }, "post-mark.txt", "t-legacy"),
+      "回合凭证不许确认归属",
+    );
+    // 看不见的任务不算确认:挂给一个自己无法核实受众的任务 id 等于盲开授权面。
+    await db.insert(tasks).values([{ id: "t-unseen", projectId: "p-other", title: "unseen", body: "",
+      status: "backlog", createdAt: at, updatedAt: at, ownerUserId: null }] as never);
+    assert.equal((await claim("post-mark.txt", AS_BOSS, "no-such-task")).status, 400, "不存在的任务不算确认");
+    // 本人确认自己的行:生效,任务看得见的人就读得到;claimOrigin 记 repair,与自动迁移分开。
+    assert.equal((await claim("post-mark.txt", AS_BOSS, "t-legacy")).status, 200, "本人确认自己的行该成功");
+    const repaired = (await db.select().from(uploads).where(eq(uploads.file, "post-mark.txt")))[0]!;
+    assert.deepEqual([repaired.taskId, repaired.claimOrigin], ["t-legacy", "repair"], "确认写入 taskId,来源记 repair");
+    assert.equal((await get("post-mark.txt", AS_ALICE)).text, "post-mark-body", "本人确认后项目成员读得到");
+    // 已有归属不许改挂(taskId 是授权面);重复确认同一条幂等。
+    assert.equal((await claim("post-mark.txt", AS_BOSS, "t-unseen")).status, 400, "已挂任务的行不许改挂");
+    assert.equal((await claim("post-mark.txt", AS_BOSS, "t-legacy")).status, 200, "重复确认同一任务幂等");
+    // 无主行(连 owner 都没登记上的失联档)本来就只有管理员读得到:成员不能借确认抢走,
+    // 管理员确认后跟着任务对项目可见。
+    writeFileSync(join(UPLOADS_DIR, "orphan-claim.txt"), "orphan-claim-body");
+    await db.insert(uploads).values([{ file: "orphan-claim.txt", ownerUserId: null, taskId: null, createdAt: at }] as never);
+    assert.equal((await claim("orphan-claim.txt", AS_ALICE, "t-legacy")).status, 400, "成员不能认领无主行");
+    assert.equal((await claim("orphan-claim.txt", AS_BOSS, "t-legacy")).status, 200, "无主行由管理员确认");
+    assert.equal((await get("orphan-claim.txt", AS_ALICE)).text, "orphan-claim-body", "确认后跟着任务对项目可见");
+  }
+
+  // ── ⑪ 写入时记来历:时钟伪造不进授权面;确认出口的并发与畸形请求体(第 9 轮复审第 2 轮 R4/N8/N9) ──
+  // 「只认显式标记」的另一半在写入侧:声明了 owner 的行落盘即 claim_origin='user',新行的
+  // 来历从此可证,证明不了的 NULL 只会是打标机制之前的历史行,不随时间越积越多。时钟回拨/
+  // 跨机导入把登记时刻推到建档线之前也改变不了什么 —— 授权面上没有任何按时间推断的路径
+  // (⑨ 的回填扫描已整个删除),行上的 'user' 标又把它与历史无标记行区分得开。
+  {
+    const { registerUpload, repairUploadClaim, backfillArtifactUploads } = await import("../src/uploads.js");
+    const firstUserAt = Math.min(...(await db.select().from(users)).map((u) => Date.parse(u.createdAt)));
+    writeFileSync(join(UPLOADS_DIR, "clock-step.txt"), "clock-step-body");
+    const SystemDate = Date;
+    try {
+      const pinned = firstUserAt - 30_000;
+      globalThis.Date = class extends SystemDate {
+        constructor(value?: number | string) { super(value === undefined ? pinned : value); }
+        static now() { return pinned; }
+      } as DateConstructor;
+      await registerUpload("clock-step.txt", { ownerUserId: boss.id });
+    } finally {
+      globalThis.Date = SystemDate;
+    }
+    const clockRow = (await db.select().from(uploads).where(eq(uploads.file, "clock-step.txt")))[0]!;
+    assert.ok(clockRow.createdAt < new Date(firstUserAt).toISOString(), "前提成立:行的登记时刻被拨到了建档之前");
+    assert.equal(clockRow.claimOrigin, "user", "声明了 owner 的新行落盘就带本人上传标记");
+    await ensureSchema();
+    await backfillArtifactUploads("t-legacy", [join(UPLOADS_DIR, "clock-step.txt")]);
+    const scanned = (await db.select().from(uploads).where(eq(uploads.file, "clock-step.txt")))[0]!;
+    assert.deepEqual([scanned.claimOrigin, scanned.taskId], ["user", null], "写入时记下的来历如实保留,产物清单也补不走");
+    assert.equal((await get("clock-step.txt", AS_ALICE)).status, 404, "时钟回拨写下的私有上传对成员保持 404");
+    assert.equal((await get("clock-step.txt", AS_BOSS)).text, "clock-step-body", "本人照常读得到");
+    // 后补 owner 的空位路径同样记来历。
+    writeFileSync(join(UPLOADS_DIR, "late-owner.txt"), "late-owner-body");
+    await db.insert(uploads).values([{ file: "late-owner.txt", ownerUserId: null, taskId: null, createdAt: at }] as never);
+    await registerUpload("late-owner.txt", { ownerUserId: boss.id });
+    assert.equal((await db.select().from(uploads).where(eq(uploads.file, "late-owner.txt")))[0]!.claimOrigin, "user", "补 owner 的空位路径同样记来历");
+
+    // N8:确认与另一次登记并发 —— 空位守卫没写进去,不能当成功报(本人以为挂好了,行其实
+    // 挂在别的任务上)。截在确认的 update 落地之前注入一次竞争写,复现真实时序。
+    writeFileSync(join(UPLOADS_DIR, "n8-race.txt"), "n8-race-body");
+    await db.insert(uploads).values([{ file: "n8-race.txt", ownerUserId: boss.id, taskId: null, createdAt: at }] as never);
+    const realUpdate = db.update.bind(db);
+    let raced: string | null = null;
+    try {
+      let once = true;
+      (db as { update: typeof db.update }).update = ((table: Parameters<typeof db.update>[0]) => {
+        const chain = realUpdate(table) as unknown as { set: (values: unknown) => { where: (cond: unknown) => PromiseLike<unknown> } };
+        const realSet = chain.set.bind(chain);
+        chain.set = (values: unknown) => {
+          const afterSet = realSet(values);
+          const realWhere = afterSet.where.bind(afterSet);
+          afterSet.where = (cond: unknown) => {
+            const query = realWhere(cond);
+            return {
+              async then(resolve: (value: unknown) => void, reject: (error: unknown) => void) {
+                try {
+                  if (once) {
+                    once = false;
+                    await realUpdate(uploads).set({ taskId: "t-race-winner" }).where(eq(uploads.file, "n8-race.txt"));
+                  }
+                  resolve(await query);
+                } catch (error) { reject(error); }
+              },
+            } as PromiseLike<unknown>;
+          };
+          return afterSet;
+        };
+        return chain as never;
+      }) as typeof db.update;
+      raced = await repairUploadClaim({ kind: "user", userId: boss.id, name: "boss", role: "admin" }, "n8-race.txt", "t-legacy");
+    } finally {
+      (db as { update: typeof db.update }).update = realUpdate;
+    }
+    assert.ok(raced, "守卫没写进去必须报冲突,不能假成功");
+    assert.equal((await db.select().from(uploads).where(eq(uploads.file, "n8-race.txt")))[0]!.taskId, "t-race-winner", "先到的归属不被覆盖");
+
+    // N9:请求体是用户给的 —— null / 非字符串 taskId 不许 500,与业务拒绝同走 400。
+    const nullBody = await call("/api/uploads/clock-step.txt/claim", "POST", AS_BOSS, null);
+    const badType = await call("/api/uploads/clock-step.txt/claim", "POST", AS_BOSS, { taskId: 123 });
+    assert.deepEqual([nullBody.status, badType.status], [400, 400], `畸形请求体回 400 不回 500:${nullBody.status}/${badType.status}`);
+  }
+
+  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 接力落地 + 出境打包 + 存量认领 + 升级回填 + 本人确认出口 + 写入记来历)");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

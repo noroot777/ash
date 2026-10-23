@@ -48,7 +48,8 @@
     "test:web-smoke": "node scripts/test-web-smoke.mjs",
     "test:reply-command-ui": "node scripts/test-reply-command-ui.mjs",
     "test:monitor-strip": "node scripts/test-monitor-strip.mjs",
-    "test:task-branches": "node scripts/test-task-branches.mjs"
+    "test:task-branches": "node scripts/test-task-branches.mjs",
+    "test:markdown-inline": "node --experimental-strip-types scripts/test-markdown-inline.mjs"
   },
   "private": true
 }

@@ -1,6 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import type { RunTracePaths } from "../diagnostics.js";
+import type { EventQueue } from "../event-queue.js";
+import type { MarkdownImageAccounting } from "../markdown-image-stream.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "../types.js";
 
 // ── 智能体目录的单一真相来源 ────────────────────────────────────────────────
@@ -79,10 +81,33 @@ export interface CliParserContext {
   trace?: RunTracePaths;
   /** 手停标记:`kill()` 会把它置 true,parser 据此不把「被杀」报成故障。 */
   lifecycle: { stopRequested: boolean };
+  /** 这一轮干活的目录:正文里相对路径的图片靠它解成真文件(agent-attachments.ts)。 */
+  cwd?: string;
+  /** 正文图片的持久账本/身份种子,一路透传给 sink(见 ../markdown-image-stream.ts)。 */
+  images?: MarkdownImageAccounting;
+  /**
+   * 事件出口 —— **解析器不许自己攒队列**。
+   *
+   * 这条流水线已经按正确次序接好了「冻结正文图片的字节 → 合并 token 级增量 → 合并子智能体
+   * 活动 → 交代附件 → 入队」(见 ../event-queue.ts)。十一份解析器原先各抄一份裸队列,于是
+   * 「记账要排在队列之前」这条不变量得在十一处分别记得 —— 漏掉是静默的,实测只要消费端每条
+   * 事件多等 240 ms,正文写着「修改前是红色」就会存成后来那张蓝图(审查第 6 轮 R1)。
+   * 把队列交出来之后,新写一个解析器压根拿不到那个缺口。
+   */
+  events: EventQueue;
 }
 
 /** 输出解析器:把 CLI 的 stdout 变成事件流。缺省用 parsers.ts 的 textParser。 */
-export type CliParser = (ctx: CliParserContext) => AsyncIterable<AgentEvent>;
+export type CliParser = {
+  (ctx: CliParserContext): AsyncIterable<AgentEvent>;
+  /**
+   * 这份解析器**自己**已经把正文里的本机图片落盘了(claudeStreamJsonParser 套的
+   * parseClaudeStream 就是)。generic 据此直接放行,不再裹 withMarkdownImages ——
+   * 两层各存一份就是同一处引用两条记录、两份拷贝,展示端队列里多出来的那条会让
+   * 同一张图既画在正文又铺一张卡片。
+   */
+  ownsMarkdownImages?: boolean;
+};
 
 /**
  * 「问这个 CLI 自己现在有哪些模型」的命令。缺省 = 该 CLI 没有(或还没实测出)清单命令,

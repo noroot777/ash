@@ -7,18 +7,24 @@ import { TeamFeed } from "../../src/team/TeamFeed.tsx";
 import "../../src/styles/global.css";
 
 // 一条典型的长回合：边干边说 → 最后一次动手 → 结论 → 记账（complete_task）→ 收尾。
+//
+// 每段正文都以**空行**收尾:那是 contentSegments 自己的契约 —— 切点只落在顶层块边界上,
+// 而「这一块写完了」的唯一硬证据就是空行(见 shared 的 blockSettled)。还在写的段落跟着
+// 下一段走,所以真实数据里一段正文绝不会从段落中间起头。整条消息现在只解析一次、折叠按
+// 节点偏移划界(见 turnDocument),夹具要是用单个换行拼,拼回去就是**一个**段落 —— 那是
+// 夹具自己违约,不是折叠划错了。
 const segments: AgentContentSegment[] = [
-  { id: "s0", markdown: "我会先确认第 1 轮缺陷对应的新提交是否真正修复。\n", events: [], attachments: [] },
+  { id: "s0", markdown: "我会先确认第 1 轮缺陷对应的新提交是否真正修复。\n\n", events: [], attachments: [] },
   { id: "s1", markdown: "", events: [{ kind: "tool", label: "Bash", detail: "npm run build" }], attachments: [] },
-  { id: "s2", markdown: "真实页面已在后台标签打开并操作，附件数量可见。\n", events: [], attachments: [] },
+  { id: "s2", markdown: "真实页面已在后台标签打开并操作，附件数量可见。\n\n", events: [], attachments: [] },
   {
     id: "s3",
-    markdown: "第 2 轮结论：verify_failed，已上报。\n",
+    markdown: "第 2 轮结论：verify_failed，已上报。\n\n",
     events: [{ kind: "tool", label: "Read", detail: "report.md" }],
     attachments: [],
   },
   { id: "s4", markdown: "", events: [{ kind: "tool", label: "mcp__harness__complete_task" }], attachments: [] },
-  { id: "s5", markdown: "工作树保持干净。\n", events: [], attachments: [] },
+  { id: "s5", markdown: "工作树保持干净。\n\n", events: [], attachments: [] },
 ];
 
 // 未确认完成的失败回合，**老会话的形状**：server 在正文写完之后补一条 settled.note ——
@@ -28,13 +34,13 @@ const segments: AgentContentSegment[] = [
 const failedSegments: AgentContentSegment[] = [
   {
     id: "f0",
-    markdown: "答（只回答，未改代码）：会覆盖，而且只有一个槽。\n",
+    markdown: "答（只回答，未改代码）：会覆盖，而且只有一个槽。\n\n",
     events: [{ kind: "tool", label: "Bash", detail: "grep -rn 预约" }],
     attachments: [],
   },
   {
     id: "f1",
-    markdown: "> 回合正常结束,但本回合内没有收到 complete_task 的完成确认。\n",
+    markdown: "> 回合正常结束,但本回合内没有收到 complete_task 的完成确认。\n\n",
     events: [{ kind: "error", label: "回合正常结束,但本回合内没有收到 complete_task 的完成确认" }],
     attachments: [],
   },
@@ -53,11 +59,11 @@ const growPhases: AgentContentSegment[][] = [];
     attachments: [],
   });
   const timeline = [
-    say("p0", "类型检查的失败仍是 vite.config.ts 的 Node 类型缺失。\n"),
+    say("p0", "类型检查的失败仍是 vite.config.ts 的 Node 类型缺失。\n\n"),
     ran("p1", "Bash", "Read"),
-    say("p2", "可见改动涉及抽屉、审查记录、预约概览三处。\n"),
+    say("p2", "可见改动涉及抽屉、审查记录、预约概览三处。\n\n"),
     ran("p3", "Edit"),
-    say("p4", "node_repl 没能解析到 Vite，改用仓库自己的 Node 环境。\n"),
+    say("p4", "node_repl 没能解析到 Vite，改用仓库自己的 Node 环境。\n\n"),
   ];
   for (let index = 1; index <= timeline.length; index += 1) growPhases.push(timeline.slice(0, index));
 }
@@ -78,7 +84,7 @@ const feedTurn = (endedAt: string | null): ConversationItem => ({
   markdown: "改完了，等审查。",
   segments: [
     { id: "g0", markdown: "", events: [{ kind: "tool", label: "Bash", detail: "npm run build" }], attachments: [] },
-    { id: "g1", markdown: "改完了，等审查。\n", events: [], attachments: [] },
+    { id: "g1", markdown: "改完了，等审查。\n\n", events: [], attachments: [] },
   ],
 });
 

@@ -189,6 +189,10 @@
     "./monitor-claude": {
       "types": "./src/monitor-claude.ts",
       "default": "./src/monitor-claude.ts"
+    },
+    "./markdown-images": {
+      "types": "./src/markdown-images.ts",
+      "default": "./src/markdown-images.ts"
     }
   },
   "scripts": {
