@@ -16,6 +16,7 @@ import {
   type DescendantSnapshot,
 } from "./terminal-process-tree.js";
 import { ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
+import { spawnWindowsPty, type TerminalProcess } from "./terminal-pty.js";
 
 export { resolveTerminalDirectory } from "./terminal-shell.js";
 
@@ -61,7 +62,7 @@ export type TerminalSessionInfo = {
 };
 
 type TerminalSession = TerminalSessionInfo & {
-  process: pty.IPty;
+  process: TerminalProcess;
   events: TerminalEvent[];
   bufferBytes: number;
   nextSeq: number;
@@ -95,6 +96,8 @@ type CreateOptions = {
 };
 
 export class TerminalSessionManager {
+  private pendingWindows = 0;
+  private stopped = false;
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly sweeper: ReturnType<typeof setInterval>;
   private readonly descendantScanner: ReturnType<typeof setInterval>;
@@ -132,9 +135,34 @@ export class TerminalSessionManager {
     this.descendantScanner.unref?.();
   }
 
+  async createAsync(projectId: string, cwd: string, options: CreateOptions = {}): Promise<TerminalSessionInfo> {
+    if (!IS_WINDOWS) return this.create(projectId, cwd, options);
+    if (this.stopped || this.closingProjects.has(projectId) || this.deletedProjects.has(projectId)) {
+      throw new Error("项目正在删除或已删除，无法新建终端会话");
+    }
+    if (options.command) throw new Error("常用命令暂不支持 Windows 上的 ash 实例");
+    if (this.sessions.size + this.pendingWindows >= MAX_SESSIONS) throw new Error("终端会话数量已达上限");
+    this.pendingWindows++;
+    try {
+      const fallback = shellCommand();
+      const handle = await spawnWindowsPty(options.shell ?? fallback.shell, options.shellArgs ?? fallback.args, {
+        name: "xterm-256color", cols: terminalSize(options.cols, 100, 20, 400),
+        rows: terminalSize(options.rows, 24, 5, 200), cwd, env: ptyEnvironment(),
+      });
+      try { return this.register(projectId, cwd, options, () => handle); }
+      catch (error) { handle.kill(); throw error; }
+    } finally { this.pendingWindows--; }
+  }
+
   create(projectId: string, cwd: string, options: CreateOptions = {}): TerminalSessionInfo {
+    if (IS_WINDOWS) throw new Error("Windows 终端需要异步隔离启动，请使用 createAsync");
+    return this.register(projectId, cwd, options, pty.spawn);
+  }
+
+  private register(projectId: string, cwd: string, options: CreateOptions,
+    spawnProcess: (file: string, args: string[], options: pty.IPtyForkOptions) => TerminalProcess): TerminalSessionInfo {
     // 项目正在删除 / 已删除:拒绝新建(shell 与命令 start 都走这里),否则会成为无主会话。
-    if (this.closingProjects.has(projectId) || this.deletedProjects.has(projectId)) {
+    if (this.stopped || this.closingProjects.has(projectId) || this.deletedProjects.has(projectId)) {
       throw new Error("项目正在删除或已删除，无法新建终端会话");
     }
     // 同一条命令的退出记录只为回看而留,新会话一起就没意义了 —— **无条件**清掉整组
@@ -178,7 +206,7 @@ export class TerminalSessionManager {
     const spawnSpec = IS_WINDOWS
       ? { file: shell, args }
       : { file: "/bin/sh", args: ["-c", wrapper, "ash-terminal", shell, ...args] };
-    const processHandle = pty.spawn(spawnSpec.file, spawnSpec.args, {
+    const processHandle = spawnProcess(spawnSpec.file, spawnSpec.args, {
       name: "xterm-256color",
       cols: terminalSize(options.cols, 100, 20, 400),
       rows: terminalSize(options.rows, 24, 5, 200),
@@ -511,6 +539,7 @@ export class TerminalSessionManager {
    * 被 PID 1 收养成孤儿,ash 重启后 UI/API 失忆显示「未启动」、旧进程却还占着端口。
    */
   shutdown(): void {
+    this.stopped = true;
     clearInterval(this.sweeper);
     clearInterval(this.descendantScanner);
     if (this.scanTimer) { clearTimeout(this.scanTimer); this.scanTimer = null; }

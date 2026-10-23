@@ -126,7 +126,7 @@ export function startCommand(
     const resolved = resolveScript(command, command.command, values);
     if (!resolved.ok) return resolved.result;
     try {
-      const session = terminalSessions.create(projectId, cwd, {
+      const session = await terminalSessions.createAsync(projectId, cwd, {
         command: { id: command.id, name: resolved.name, script: resolved.script },
       });
       return { status: 201 as const, body: { session } };
@@ -172,7 +172,7 @@ export function restartCommand(
       if (!result.ok) return { status: 502 as const, body: { error: `重启失败：旧进程停不下来（${result.reason}）` } };
     }
     try {
-      const session = terminalSessions.create(projectId, cwd, {
+      const session = await terminalSessions.createAsync(projectId, cwd, {
         command: { id: command.id, name: resolved.name, script: resolved.script },
       });
       return { status: 201 as const, body: { session } };

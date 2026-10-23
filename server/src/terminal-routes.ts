@@ -29,7 +29,7 @@ export function mountTerminalRoutes(api: Hono): void {
     if (!cwd) return c.json({ error: "项目目录不存在，请先在项目设置中填写可用的本地目录" }, 400);
     const body: { cols?: number; rows?: number } = await c.req.json().catch(() => ({}));
     try {
-      return c.json(terminalSessions.create(projectId, cwd, body), 201);
+      return c.json(await terminalSessions.createAsync(projectId, cwd, body), 201);
     } catch (error) {
       return c.json({ error: `终端启动失败：${error instanceof Error ? error.message : String(error)}` }, 500);
     }

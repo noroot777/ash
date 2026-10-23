@@ -41,6 +41,7 @@ import { join, resolve } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, isPidAlive, killPid, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
+import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
@@ -196,7 +197,15 @@ if (WAIT && !FORCE) await drainWait();
 say("▶ 依赖同步…");
 // 跟 setup.mjs 同一道闸:workspace 缺一块的话,npm 会拿本地包名去公共 registry 上找,
 // 报一条读起来像断网的 404。`git pull` 之后少了个目录也会走到这儿。
-const ws = inspectWorkspaces(REPO);
+let ws = inspectWorkspaces(REPO);
+if (!ws.ok) {
+  const repair = repairEmptyWorkspaces(REPO);
+  for (const warning of repair.warnings) say(`  ⚠ ${warning}`);
+  if (repair.restored.length) {
+    say(`  ✓ 已从 HEAD 恢复空 workspace:${repair.restored.join("、")}(未改暂存区,未覆盖已有文件)`);
+    ws = inspectWorkspaces(REPO);
+  }
+}
 if (!ws.ok) {
   for (const p of ws.problems) say(`  ✕ ${p}`);
   for (const line of WORKSPACE_FAIL_HINT) say(`     ${line}`);
