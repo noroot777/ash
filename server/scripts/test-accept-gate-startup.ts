@@ -128,8 +128,10 @@ export async function testGateStartup(fixture: GateFixture): Promise<void> {
     writeFileSync(release, "release");
     await settled(taskId);
     assert.equal((await taskRow(taskId)).stage, "accepted");
-    assert.equal((await acceptGateState(taskId)).basis?.run?.fastForward, false,
-      "自动续验收也必须持久化目标变化，回执才会说明没有测最终合并树");
+    const receipt = (await acceptGateState(taskId)).basis?.run;
+    assert.equal(receipt?.fastForward, true, "起跑时的事实不能被收尾时的目标变化改写");
+    assert.match(receipt?.logTail ?? "", /不是这一次的合并结果/,
+      "自动续验收也必须在回执日志里持久化目标变化和测试范围提醒");
   }
   {
     const repo = makeRepo("cancel-run-identity");

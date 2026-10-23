@@ -213,13 +213,11 @@ async function noteTargetDrift(task: TaskRow, repoPath: string, row: GateRow): P
   const current = await commitAt(repoPath, row.targetBranch);
   if (!current || current === row.targetCommit) return;
   const included = !!row.sourceCommit && await isAncestor(repoPath, current, row.sourceCommit);
-  if (!included) await db.update(acceptGateRuns).set({ fastForward: false }).where(eq(acceptGateRuns.id, row.id));
-  await appendTaskTimeline(
-    task.id,
-    `注意：验收前置命令跑的时候 ${row.targetBranch} 还在 ${row.targetCommit.slice(0, 8)}，现在已经是 ${current.slice(0, 8)}。`
-      + (included ? "目标分支现在的内容已经包含在被测提交中。"
-        : `它跑过的是任务分支那棵树，不是这一次的合并结果 —— 目标分支这期间进来的改动没有被它验过。`),
-  );
+  const notice = `注意：验收前置命令跑的时候 ${row.targetBranch} 还在 ${row.targetCommit.slice(0, 8)}，现在已经是 ${current.slice(0, 8)}。`
+    + (included ? "目标分支现在的内容已经包含在被测提交中。"
+      : "它跑过的是任务分支那棵树，不是这一次的合并结果 —— 目标分支这期间进来的改动没有被它验过。");
+  appendGateLog(row.logPath, `\n[ash] ${notice}\n`);
+  await appendTaskTimeline(task.id, notice);
 }
 
 /**
