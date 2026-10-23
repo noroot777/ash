@@ -68,14 +68,17 @@ export class NativeWorkTrace {
       const content = Array.isArray(ev.message?.content) ? ev.message.content : [];
       const message = content.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n");
       const model = typeof ev.message?.model === "string" && ev.message.model !== "<synthetic>" ? ev.message.model.trim() : "";
+      // messageId 与 codex 的 item.id 同义:两条不同的完整消息哪怕后一条以前一条开头,也是
+      // 两份独立快照,图片账据此换代重拍(shared NativeWorkEvent.messageId 的注释)。
+      const messageId = typeof ev.message?.id === "string" && ev.message.id ? { messageId: ev.message.id } : {};
       if (message || model) out.push(event("Agent", { type: "agent", id: parentId, status: "running",
-        ...(message ? { message: clip(message) } : {}), ...(model ? { model } : {}),
+        ...(message ? { message: clip(message) } : {}), ...messageId, ...(model ? { model } : {}),
       }));
       for (const block of content) {
         if (block.type !== "tool_use") continue;
         const call = this.call(block.name, block.input, block.id, parentId);
         if (call) out.push(call);
-        else if (!this.progressAgents.has(parentId)) out.push(event("Agent", { type: "agent", id: parentId, status: "running", message: `${block.name} · ${clip(block.input).slice(0, 1500)}` }));
+        else if (!this.progressAgents.has(parentId)) out.push(event("Agent", { type: "agent", id: parentId, status: "running", ...messageId, message: `${block.name} · ${clip(block.input).slice(0, 1500)}` }));
       }
     } else if (ev.type === "user" && Array.isArray(ev.message?.content)) {
       for (const block of ev.message.content) {

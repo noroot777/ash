@@ -25,6 +25,7 @@ const { markdownImageSink, withMarkdownImages } = await import("../src/executors
 const { eventQueue } = await import("../src/executors/event-queue.js");
 const { childActivity } = await import("../src/executors/native-agent-activity.js");
 const { loadMarkdownImageSeed, markdownImageAccounting, mergeImageJournal } = await import("../src/agent-image-journal.js");
+const { metaSeedKey } = await import("../src/executors/markdown-image-meta.js");
 const { appendSessionTrace, parseSessionTrace, sessionTracePath } = await import("../src/transcript.js");
 
 const TURN = "2026-10-22T10:00:00.000Z";
@@ -420,6 +421,34 @@ try {
       [["routed-child", "routed.png", "RED"]],
       "子文档的 final 按原身份补回到子 id 名下",
     );
+  }
+
+  // ⑬ 同文不同身份(第 10 轮审查 R2 identicalTextJournal):第一条消息(messageId 甲)落盘;
+  //   第二条消息文字一模一样、身份换了、没写进 trace —— 两版 len/hash 完全相同,只有协议
+  //   身份分得开。恢复与种子都只认落盘那条的账(红),没保存那版的蓝账一笔不认。
+  {
+    const taskId = "task-identical-text";
+    const sessId = "sess-identical-text";
+    writeFileSync(join(root, "ident.png"), red);
+    const sink = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN));
+    const text = "此处保存的是当时的画面：![图](ident.png)";
+    const first = { kind: "tool", name: "Agent", nativeWork: { type: "agent", id: "ident-1", status: "running", messageId: "persisted", message: text } } as AgentEvent;
+    sink.capture(first);
+    for (const event of sink.release(first)) appendSessionTrace(taskId, sessId, TURN, event);
+    writeFileSync(join(root, "ident.png"), blue);
+    const second = { kind: "tool", name: "Agent", nativeWork: { type: "agent", id: "ident-1", status: "running", messageId: "unpersisted", message: text } } as AgentEvent;
+    sink.capture(second);
+    sink.release(second); // 这条事件没写进 trace:消费者死在落笔之前
+    sink.dispose();
+    const merged = shots(await mergeImageJournal(taskId, sessId, readTrace(taskId, sessId)));
+    assert.deepEqual(
+      merged.map((item) => [item.doc, item.source, colorOf(item.path)]),
+      [["ident-1", "ident.png", "RED"]],
+      "同文同指纹只有身份分得开:恢复认落盘那条的红账,不认没保存那版的蓝账",
+    );
+    const seeded = (await loadMarkdownImageSeed(taskId, sessId))?.get(metaSeedKey("ident-1", "message"));
+    assert.equal(seeded?.version, "persisted", "种子的身份是落盘那条的");
+    assert.deepEqual((seeded?.snapshots ?? []).map((snap) => colorOf(snap.path)), ["RED"], "种子接回的冻结也是落盘那版的红字节");
   }
 
   console.log("正文图片持久账本回归通过");

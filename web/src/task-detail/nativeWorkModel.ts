@@ -16,6 +16,9 @@ export interface NativeWorkItem {
   status: NativeWorkStatus;
   result?: string;
   message?: string;
+  /** message 快照的协议身份(codex item.id / claude message.id):配快照式图片记录时与
+   * 记录上的 version 互核 —— 同文不同身份是两份独立快照(第 10 轮审查 R2)。 */
+  messageId?: string;
   owner?: string;
   model?: string;
   requestedModel?: string;
@@ -88,7 +91,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
   // 结果,turnImages 的逐目的地对账会把整组判作废。`rev` 是正文的代(清场/换稿开新代),
   // 展示端只认最高代那组 —— 但代号只在**同一份来源文档**里可比(`from`):不同来源的记录
   // 混进同一槽时,后到的文档整组顶替先到的,正文(put 同样替换)和账才说的是同一版。
-  type MetaRecord = { rev: number; from: string; src: AttachmentSource };
+  type MetaRecord = { rev: number; from: string; version?: string; src: AttachmentSource };
   const metaImages = new Map<string, MetaRecord[]>();
   const stashMeta = (slot: string, record: MetaRecord) => {
     const list = metaImages.get(slot);
@@ -107,6 +110,10 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
     const capacity = new Map<string, Map<string, number>>();
     for (const target of targets) {
       if (target.rowId === fromRow || capacity.has(target.rowId)) continue;
+      // 目标行的正文如今不是这份来源文档写的(更晚的直写/另一次调用顶掉了),这批记录说的
+      // 是已经不在屏幕上的那版 —— 宁可留在原槽不配(第 10 轮审查 R2 legacyRouteOvertakes)。
+      const origin = textOrigins.get(`${target.rowId}\u0000result`);
+      if (origin !== undefined && origin !== fromRow) continue;
       const bySource = new Map<string, number>();
       for (const node of markdownImageRefs(target.text)) {
         bySource.set(node.destination, (bySource.get(node.destination) ?? 0) + 1);
@@ -133,6 +140,13 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
     else metaImages.delete(slot);
   };
   const calls = new Map<string, { call: Call; rowId?: string }>();
+  // `行 id \u0000 字段` → 这段正文**当前由哪份来源文档写入**(直写 = 行自己,statuses/
+  // taskoutput = 调用行)。路由与配对都要核它:正文已被更晚的文档改写时,旧来源的记录说的
+  // 是另一版正文,搬进来就是把旧字节安在新话上(第 10 轮审查 R2 legacyRouteOvertakes)。
+  const textOrigins = new Map<string, string>();
+  // `行 id \u0000 字段` → 这段 result 正文的协议身份(提取它的那次调用 id,与服务端记账的
+  // version 同源);message 的身份在行自己的 messageId 上。
+  const textVersions = new Map<string, string>();
   // 路由推迟到全部记录就位之后再执行:恢复合并(mergeImageJournal)把补回的记录追加在
   // trace 末尾,结果事件先到、记录后到,走到哪路到哪会把后到的记录永远留在调用行的槽里
   // (复审 R1 routedJournalLate 的存量数据半边)。
@@ -194,6 +208,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         if (event.kind === "attachment" && (event.field === "message" || event.field === "result") && event.source) {
           stashMeta(`${id}\u0000${event.field}`, {
             rev: event.rev ?? 0, from: id,
+            ...(event.version !== undefined ? { version: event.version } : {}),
             src: { path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost },
           });
           continue;
@@ -220,6 +235,12 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         const previous = rows.get(id);
         if (activity.closed && (previous?.status === "completed" || previous?.status === "failed")) patch.status = previous.status;
         if (activity.status === "unknown" && rows.has(id)) delete patch.status;
+        if (typeof activity.message === "string" && activity.message) textOrigins.set(`${id}\u0000message`, id);
+        if (typeof activity.result === "string" && activity.result) {
+          textOrigins.set(`${id}\u0000result`, id);
+          // 直写的 result 文档在服务端不带调用身份,别让上一次调用的身份错核直写的记录。
+          textVersions.delete(`${id}\u0000result`);
+        }
         put(id, { ...patch, ...(activity.parentId ? { parentId: key(activity.parentId) } : {}) });
         continue;
       }
@@ -343,6 +364,8 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
             const text = extracted.get(nativeId)
               ?? (str(response.task?.output) || /<output>([\s\S]*?)<\/output>/.exec(activity.result)?.[1] || activity.result);
             put(row.id, { status, result: text });
+            textOrigins.set(`${row.id}\u0000result`, key(activity.id));
+            textVersions.set(`${row.id}\u0000result`, activity.id);
             pendingRoutes.push({ from: key(activity.id), targets: [{ rowId: row.id, text }] });
           }
         }
@@ -354,7 +377,11 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
             const status = workStatus(Object.keys(value)[0] ?? state);
             const text = extracted.get(nativeId) ?? str(value.completed ?? value.errored ?? value.error);
             put(key(nativeId), { nativeId, status, result: text });
-            if (text) routed.push({ rowId: key(nativeId), text });
+            if (text) {
+              textOrigins.set(`${key(nativeId)}\u0000result`, key(activity.id));
+              textVersions.set(`${key(nativeId)}\u0000result`, activity.id);
+              routed.push({ rowId: key(nativeId), text });
+            }
           }
           pendingRoutes.push({ from: key(activity.id), targets: routed });
         }
@@ -367,15 +394,26 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
     }
   }
   for (const route of pendingRoutes) routeResultImages(route.from, route.targets);
-  // 只认最高代:正文清场/换稿之后,旧代记录说的是已经不在屏幕上的那一版。
-  const latestRev = (list: MetaRecord[] | undefined): AttachmentSource[] | undefined => {
-    if (!list?.length) return undefined;
-    const top = Math.max(...list.map((record) => record.rev));
-    return list.filter((record) => record.rev === top).map((record) => record.src);
-  };
   const withMeta = (row: NativeWorkItem): NativeWorkItem => {
-    const message = latestRev(metaImages.get(`${row.id}\u0000message`));
-    const result = latestRev(metaImages.get(`${row.id}\u0000result`));
+    const pick = (field: "message" | "result"): AttachmentSource[] | undefined => {
+      const slot = `${row.id}\u0000${field}`;
+      const list = metaImages.get(slot);
+      if (!list?.length) return undefined;
+      // 槽里这组记录的来源文档必须就是「这段正文的写入者」:正文由别的文档(更晚的直写/
+      // 另一次调用)给出时,老来源留下的记录说的是另一版正文 —— 宁可不配(第 10 轮审查 R2
+      // legacyRouteOvertakes)。行自己名下的记录(直写、搬家改签过的)天然同源,放行。
+      const origin = textOrigins.get(slot);
+      if (origin !== undefined && list[0]!.from !== origin && list[0]!.from !== row.id) return undefined;
+      // 协议身份两边都带时必须一致:同文同代都证明不了同一份快照(第 10 轮审查 R2)。
+      const version = field === "message" ? row.messageId : textVersions.get(slot);
+      const current = list.filter((record) => record.version === undefined || version === undefined || record.version === version);
+      if (!current.length) return undefined;
+      // 只认最高代:正文清场/换稿之后,旧代记录说的是已经不在屏幕上的那一版。
+      const top = Math.max(...current.map((record) => record.rev));
+      return current.filter((record) => record.rev === top).map((record) => record.src);
+    };
+    const message = pick("message");
+    const result = pick("result");
     if (!message && !result) return row;
     return { ...row, ...(message ? { messageImages: message } : {}), ...(result ? { resultImages: result } : {}) };
   };

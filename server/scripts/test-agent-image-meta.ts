@@ -44,7 +44,7 @@ const metaShots = (events: { event?: AgentEvent }[] | AgentEvent[]) =>
     const event = ("event" in item ? item.event : item) as AgentEvent;
     const work = event.kind === "tool" ? event.nativeWork : undefined;
     if (work?.type === "activity" && work.event.kind === "attachment" && work.event.field) {
-      return [{ doc: work.id, field: work.event.field, rev: work.event.rev ?? 0, source: work.event.source, ref: work.event.ref, pos: work.event.pos, path: work.event.path }];
+      return [{ doc: work.id, field: work.event.field, rev: work.event.rev ?? 0, version: work.event.version, source: work.event.source, ref: work.event.ref, pos: work.event.pos, path: work.event.path }];
     }
     return [];
   });
@@ -358,6 +358,51 @@ try {
       "子正文的图按解码后的正文捕获与交代,账在子文档名下",
     );
     sink.dispose();
+  }
+
+  // ⑪ 重启接回后的身份换稿(第 10 轮审查 R2 resumedIdentity):上一进程的 message(带
+  //   messageId)落盘后重启,新消息以旧文开头但身份换了 —— 种子带上旧身份,接回侧按换稿
+  //   开新代重拍;不带身份的种子只能按前缀延长沿用旧冻结,把重启前的红字节安到新话上。
+  {
+    const taskId = "task-resume-identity";
+    const sessId = "sess-resume-identity";
+    writeFileSync(join(root, "ri.png"), red);
+    const sink = markdownImageSink(root, markdownImageAccounting(taskId, sessId, TURN));
+    const feed = (event: AgentEvent) => {
+      sink.capture(event);
+      return sink.release(event);
+    };
+    for (const event of feed(agentEvent({ type: "agent", id: "ri1", status: "running", message: "截图：![图](ri.png)", messageId: "before-restart" }))) {
+      appendSessionTrace(taskId, sessId, TURN, event);
+    }
+    const seed = await loadMarkdownImageSeed(taskId, sessId);
+    sink.dispose();
+    assert.equal(seed?.get(metaSeedKey("ri1", "message"))?.version, "before-restart", "种子带上最后那版正文的协议身份");
+    writeFileSync(join(root, "ri.png"), blue);
+    const resumed = markdownImageSink(root, { ...markdownImageAccounting(taskId, sessId, TURN), seed });
+    const feed2 = (event: AgentEvent) => {
+      resumed.capture(event);
+      return resumed.release(event);
+    };
+    const released = feed2(agentEvent({ type: "agent", id: "ri1", status: "completed", closed: true, message: "截图：![图](ri.png)\n已重拍为蓝色。", messageId: "after-restart" }));
+    assert.deepEqual(
+      metaShots(released).map((shot) => [shot.rev, shot.version, colorOf(shot.path)]),
+      [[1, "after-restart", "BLUE"]],
+      "接回后身份一换就是换稿:前缀延长也开新代,交代新拍的蓝字节并带新身份",
+    );
+    resumed.dispose();
+  }
+
+  // ⑫ claude 嵌套 assistant 消息把 message.id 当快照身份带上(第 10 轮审查 R2 claudePrefix):
+  //   与 codex 的 item.id 同义 —— 少了它,同回合两条消息恰好前缀延长时账本当同一代不重拍。
+  {
+    const { NativeWorkTrace } = await import("../src/executors/native-work.js");
+    const tracker = new NativeWorkTrace();
+    const events = tracker.claudeMessage({ type: "assistant", parent_tool_use_id: "cc", message: { id: "msg-a", role: "assistant", content: [{ type: "text", text: "你好" }] } });
+    const agent = events
+      .map((event) => (event.kind === "tool" ? event.nativeWork : undefined))
+      .find((work) => work?.type === "agent");
+    assert.equal(agent?.type === "agent" ? agent.messageId : undefined, "msg-a", "claude 的 assistant 消息带 message.id 当快照身份");
   }
 
   console.log("test-agent-image-meta: all cases passed");

@@ -173,6 +173,10 @@ export type MarkdownImageSpot = {
    * 据此判断「这笔账说的是不是落盘的那版正文」;老账没有这两个字段,按旧口径核节点。 */
   len?: number;
   hash?: number;
+  /** 仅快照式正文:记这笔账时正文的协议身份(messageId/调用 id)。指纹核得过**内容**,
+   * 核不过**身份**:两条独立消息恰好同文时 len/hash 完全相同,恢复侧只有对上身份才知道
+   * 这笔账说的是落盘那一条还是没保存的那一条(第 10 轮审查 R2 identicalTextJournal)。 */
+  version?: string;
 };
 
 /**
@@ -207,6 +211,10 @@ export type MarkdownImageSeedDoc = {
    * (前缀延长=同代,非前缀改版/清场=新代)决定 —— 盲目 +1 会把协议重放的同一份正文当成
    * 新内容重拍(第 9 轮复审 R1 metaResumeNewTurn)。 */
   rev?: number;
+  /** 仅快照式正文:上一条进程最后那版正文的协议身份(messageId/调用 id)。接回的进程
+   * 据此识破「新消息以旧消息开头」:身份换了就是换稿,文字前缀证明不了同一份正文 ——
+   * 不接身份,重启后的前缀延长会沿用重启前的冻结(第 10 轮审查 R2 resumedIdentity)。 */
+  version?: string;
 };
 
 export type MarkdownImageAccounting = {

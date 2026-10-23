@@ -124,6 +124,9 @@ export function metaImageAccounts(opts: {
         // 种子说这一代交代过(emitted 覆盖全文)就不再交代:重放同文再交代一遍,展示端同
         // 目的地计数翻倍,整组作废。
         emitted: !!seeded?.text && (seeded.emitted ?? seeded.text.length) >= seeded.text.length,
+        // 上一条进程最后那版正文的协议身份:接回后身份一换就按换稿走(take 的 replaced),
+        // 哪怕新文是旧文的前缀延长 —— 不接,重启前的冻结会被安到重启后的新话上。
+        ...(seeded?.version !== undefined ? { version: seeded.version } : {}),
       };
       docs.set(key, found);
     }
@@ -183,6 +186,7 @@ export function metaImageAccounts(opts: {
         ...(snapshot.path ? { path: snapshot.path } : {}),
         ...(snapshot.lost ? { lost: true } : {}),
         len: doc.text.length, hash: markdownTextHash(doc.text),
+        ...(doc.version !== undefined ? { version: doc.version } : {}),
         final: false,
       });
     }
@@ -200,9 +204,16 @@ export function metaImageAccounts(opts: {
         doc: id, field, rev: doc.rev, pos: image.pos ?? 0, source: image.source,
         ref: image.ref, path: image.path, lost: image.lost,
         len: doc.text.length, hash: markdownTextHash(doc.text),
+        ...(doc.version !== undefined ? { version: doc.version } : {}),
         final: true,
       });
-      const activity: NativeAgentActivity = { kind: "attachment", field, rev: doc.rev, ...image };
+      // 交代事件同样带身份:展示端把记录配给正文前,先核「这组记录说的就是这条消息」——
+      // 同文不同身份是两份独立快照(第 10 轮审查 R2)。
+      const activity: NativeAgentActivity = {
+        kind: "attachment", field, rev: doc.rev,
+        ...(doc.version !== undefined ? { version: doc.version } : {}),
+        ...image,
+      };
       out.push(childActivity(id, activity));
     }
     return out;

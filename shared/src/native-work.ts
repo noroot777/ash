@@ -20,7 +20,10 @@ export type NativeAgentActivity =
   // 不是执行记录那份追加式文档,配对各归各,见 server 的 markdown-image-meta.ts)。
   // `rev` = 快照式正文的第几**代**(turn/started 清场、或已交代后换稿,都开新一代):展示端
   // 只认最高代的那组记录 —— 正文已经换稿,旧代的冻结说的是已经不在屏幕上的那一版。
-  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean; field?: "message" | "result"; rev?: number };
+  // `version` = 记这笔账时正文的**协议身份**(message 的 messageId / result 的调用 id)。
+  // 展示端两边都带身份时必须一致才配对:同文同代都证明不了同一份快照 —— 两条独立消息
+  // 恰好同文时,旧身份的冻结配给新话就是把旧字节安在新画面上(第 10 轮审查 R2)。
+  | { kind: "attachment"; path?: string; source?: string; ref?: number; pos?: number; lost?: boolean; field?: "message" | "result"; rev?: number; version?: string };
 
 export type NativeWorkEvent = (
   | { type: "activity"; id: string; event: NativeAgentActivity }

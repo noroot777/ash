@@ -278,5 +278,30 @@ for (const event of stamped) {
     { type: "result", id: "w6", at: end, result: '{"statuses":{"childE":{"completed":"直 ![s](s.png)"}}}', failed: false },
   ]);
   assert.deepEqual(direct.find((row) => row.nativeId === "childE")?.resultImages?.map((shot) => shot.path), ["/up/direct.png"], "子 id 名下的新账直接挂在子行上");
+  // 第 10 轮审查 R2 legacyRouteOvertakes:正文已被更晚的直写(agent 事件带 result)接管后,
+  // 旧式调用文档(记录留在调用行)的路由不许把行上更新的记录顶掉 —— 来源文档已经不是这段
+  // 正文的写入者,它的记录说的是另一版正文。
+  const overtaken = rowsFrom([
+    { type: "call", id: "lw", name: "wait", at: start, input: {} },
+    { type: "activity", id: "lw", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 4, rev: 0, path: "/up/old-route.png" } },
+    { type: "result", id: "lw", at: start, result: '{"statuses":{"childF":{"completed":"旧结果 ![s](s.png)"}}}', failed: false },
+    { type: "activity", id: "childF", event: { kind: "attachment", field: "result", source: "s.png", ref: 0, pos: 4, rev: 0, path: "/up/fresh.png" } },
+    { type: "agent", id: "childF", at: end, status: "completed", result: "新结果 ![s](s.png)" },
+  ]);
+  assert.deepEqual(overtaken.find((row) => row.id.endsWith(":childF"))?.resultImages?.map((shot) => shot.path), ["/up/fresh.png"], "直写接管正文后,旧调用文档路由进来的记录整组不认");
+  // 第 10 轮审查 R2:记录带协议身份(version)时要与正文身份互核 —— 行上的 messageId 换了,
+  // 旧身份的 message 账不许配给同文的新消息;身份对上照常配对。
+  const staleIdentity = rowsFrom([
+    { type: "agent", id: "childG", at: start, status: "running", message: "图 ![s](s.png)", messageId: "m-old" },
+    { type: "activity", id: "childG", event: { kind: "attachment", field: "message", source: "s.png", ref: 0, pos: 2, rev: 0, version: "m-old", path: "/up/m-old.png" } },
+    { type: "agent", id: "childG", at: end, status: "completed", message: "图 ![s](s.png)", messageId: "m-new" },
+  ]);
+  assert.equal(staleIdentity.find((row) => row.id.endsWith(":childG"))?.messageImages, undefined, "身份换了:旧身份的记录不配给同文的新消息");
+  const matchedIdentity = rowsFrom([
+    { type: "agent", id: "childH", at: start, status: "running", message: "图 ![s](s.png)", messageId: "m-1" },
+    { type: "activity", id: "childH", event: { kind: "attachment", field: "message", source: "s.png", ref: 0, pos: 2, rev: 0, version: "m-1", path: "/up/m-1.png" } },
+    { type: "agent", id: "childH", at: end, status: "completed", messageId: "m-1" },
+  ]);
+  assert.deepEqual(matchedIdentity.find((row) => row.id.endsWith(":childH"))?.messageImages?.map((shot) => shot.path), ["/up/m-1.png"], "身份对上照常配对");
 }
 console.log("子智能体模型、待办开工时间、跨日跨度、实时/历史时间与缺失数据回归通过");
