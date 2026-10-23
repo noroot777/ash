@@ -156,7 +156,7 @@ try {
   const syntaxPrompt = await freeReviewPrompt(promptTask, { ...promptRun, checkMode: "syntax" }, 1, root);
   assertCarriesSweepProtocol(syntaxPrompt, "自由语法审查 prompt");
   for (const text of [skillPrompt, syntaxPrompt, freeReminder]) {
-    assert.match(text, /执行者对本次改动.*不(?:再|必|要求)重复运行/, "自由审查应复用执行者本次改动的回归结果");
+    assert.match(text, /reusable=true.*执行者结果.*不再重复运行/, "自由审查只复用后端批准的执行者回归结果");
     assert.doesNotMatch(text, /必须真实运行与风险相称的检查/, "自由审查不得无条件要求重复运行检查");
   }
 

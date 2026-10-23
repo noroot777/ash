@@ -11,9 +11,11 @@ import {
   DEFER_BOUNDARY_CRITERION,
   DEFER_REASON_FIELD_GUIDE,
   PLAIN_SUMMARY_GUIDE,
+  REVIEW_VALIDATION_REQUIREMENT,
 } from "@ash/shared/free-workflow";
-import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
+import { CLASS_REPAIR_NOTE, reviewSweepProtocol, reviewSweepReminder } from "./review-sweep.js";
 import { freeReviewHistorySection } from "./review-history.js";
+import { regressionEvidenceReference } from "./regression-checks.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
@@ -45,6 +47,8 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
       "- 若未通过，只报告问题；Ash 会让用户另建独立修复任务。"
     : "";
   const reviewLocation = acceptedMerge ? "当前 detached 临时 worktree" : repoPath;
+  const allowReuse = run.targetKind !== "accepted_merge";
+  const regression = await regressionEvidenceReference(task, repoPath, dir, !allowReuse);
   return `【自由工作流 · 第 ${round} 轮审查】\n` +
     // 这里原先写「主动寻找能复现的缺陷」，跟下面扫描义务里的「做不到可复现也不许删掉这一条」
     // 直接打架 —— 同一段 prompt 里两句话冲突，它只能自己挑一个，挑错了没人看得出来。
@@ -53,13 +57,13 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     `任务：${task.id}\n${requirements}\n\n` +
     `${focus}${settled}${history}${note}${target}\n\n` +
     // 扫描义务摆在具体动作之前：先定「这一轮要扫到什么程度」，再说「先看 git status」。
-    REVIEW_SWEEP_PROTOCOL +
+    reviewSweepProtocol(allowReuse) + regression + "\n\n" +
     `先检查 ${reviewLocation} 中的真实 git status、diff 和提交，再选择验证命令。` +
     // 浏览器策略**不在这里拼**:正文是提前生成的,这里拼死的只能是一份「默认未授权」的
     // 文本,而投递时读到的项目授权会被去重锚点挡在门外 —— 已经在项目设置里授权过的站点,
     // 审查回合照样停下来等人点头,无人值守就断在这儿(第 6 链第 1 轮审查 P2)。
     // 统一由投递点 withGlobalBrowserPolicy 贴那一份**带最新授权**的。
-    `检查必须有与风险相称的真实执行依据；执行者对本次改动已跑过的回归测试按上述约定复用，不要求重复运行。\n\n` +
+    REVIEW_VALIDATION_REQUIREMENT + "\n\n" +
     `一旦用了 playwright，结束前清掉工作区产物；所有验证临时服务和浏览器进程都必须停掉。\n\n` +
     `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
     REPORT_SUMMARY_FORMAT +
@@ -86,7 +90,7 @@ export function freeReviewResumeMessage(task: TaskRow, run: ReviewRunRow, round:
     REPORT_SUMMARY_REMINDER +
     // 续跑只带「收尾时仍然做得到」的那几条扫描义务（`short` 非 null 的）：这一轮的广度
     // 扫描已经过去了，再要求它重扫等于把续跑省下的 10M token 又烧一遍。
-    REVIEW_SWEEP_REMINDER +
+    reviewSweepReminder(run.targetKind !== "accepted_merge") +
     `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论。` +
     `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
 }

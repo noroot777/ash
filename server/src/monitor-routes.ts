@@ -87,7 +87,7 @@ export function mountMonitorRoutes(api: Hono): void {
     const taskId = c.req.param("id");
     type StartBody = {
       command?: string; description?: string; cwd?: string; timeoutMs?: number; wake?: string;
-      stopWhen?: string; untilExpiry?: boolean;
+      stopWhen?: string; untilExpiry?: boolean; regression?: boolean;
     };
     const body = await c.req.json<StartBody>().catch((): StartBody => ({}));
     if (typeof body.command !== "string" || !body.command.trim())
@@ -119,6 +119,7 @@ export function mountMonitorRoutes(api: Hono): void {
       timeoutMs: body.timeoutMs,
       stopWhen: body.stopWhen,
       untilExpiry: body.untilExpiry,
+      regression: body.regression,
       ownerUserId: ownerIdOf(actorOf(c)),
       caller: await callerOf(c, taskId, body.wake),
     });

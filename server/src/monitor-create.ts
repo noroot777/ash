@@ -69,6 +69,7 @@ import {
 import { holdCompletionForNewMonitor, terminalLandingInFlight } from "./task-complete.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id } from "./util.js";
+import { prepareRegressionCommand } from "./regression-checks.js";
 
 export type StartMonitorInput = {
   taskId: string;
@@ -76,6 +77,7 @@ export type StartMonitorInput = {
   description?: string;
   cwd?: string | null;
   timeoutMs?: number;
+  regression?: boolean;
   ownerUserId?: string | null;
   /**
    * **这次创建是谁发起的**,由入口核验后交上来(见 `monitor-session.ts` 的 `MonitorCaller`)。
@@ -150,6 +152,10 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
   // 也没有到期定时器，谁都停不掉（第 1 轮审查复现：HTTP 500 + 一个无主的 shell 还活着）。
   const command = text(input.command);
   if (!command) return { ok: false, status: 400, error: "command 不能为空" };
+  if (input.regression !== undefined && typeof input.regression !== "boolean")
+    return { ok: false, status: 400, error: "regression 必须是 true/false" };
+  if (input.regression && (input.stopWhen || input.untilExpiry))
+    return { ok: false, status: 400, error: "回归记录必须等原始测试命令正常退出，不能使用 stopWhen 或 untilExpiry" };
   if (input.description !== undefined && input.description !== null && text(input.description) === null)
     return { ok: false, status: 400, error: "description 必须是字符串" };
   if (input.cwd !== undefined && input.cwd !== null && text(input.cwd) === null)
@@ -209,6 +215,10 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     if (source.blocked) {
       return { ok: false, status: 409, error: source.blocked, ...(source.needsWake ? { needsWakeTarget: true as const } : {}) };
     }
+    if (input.regression && (input.caller.kind !== "turn" || !input.caller.bound ||
+      !["single", "implementer"].includes(input.caller.role ?? "") || input.caller.review || task.reviewOf)) {
+      return { ok: false, status: 409, error: "只有本任务已核验的执行回合能登记回归测试，审查/验证旁路回合不能冒充执行者" };
+    }
     // ⑤-b **这个任务此刻正在落一个会收走哨兵的终态** —— 一个字都不许起。
     //
     // 上面那道 `monitorSourceGate` 读的是**库里的状态**，而终态行是在它落库之前就已经决定好
@@ -233,6 +243,11 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
 
     const monitorId = id();
     const logPath = monitorLogPath(input.taskId, monitorId);
+    let launchedCommand = command;
+    if (input.regression) {
+      try { launchedCommand = prepareRegressionCommand(input.taskId, monitorId, command, cwd); }
+      catch (error) { return { ok: false, status: 409, error: `回归证据准备失败，测试未启动：${detail(error)}` }; }
+    }
     // **这一次创建独有的资源记号**:它随环境种进那个壳,整棵树都带着它(见 platform.ts 的
     // `MONITOR_UNIT_ENV`)。生成在**插意图行之前**,所以它跟 pid 不一样 —— 从第一条语句起就
     // 已经落库、跨重启认得回来,而不是靠事后回填。归属与整项退出这两问都只认它
@@ -243,7 +258,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     const intent: Row = {
       id: monitorId,
       taskId: input.taskId,
-      command,
+      command: launchedCommand,
       description,
       cwd,
       status: "running",
@@ -325,7 +340,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     // 还占着每个任务 4 个的名额(第 8 轮审查 F3 的同类项)。
     let spawned: ReturnType<typeof spawnMonitor>;
     try {
-      spawned = spawnMonitor({ command, cwd, logPath, unitToken });
+      spawned = spawnMonitor({ command: launchedCommand, cwd, logPath, unitToken });
     } catch (e) {
       // 起不起来都一样要**落定**这一行:它是在起进程之前就插进去的,没人会来接管它
       // (没有 attach、没有到期定时器)。删不掉就排重试,不是记一行日志就算完(F3)。

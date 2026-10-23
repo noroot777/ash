@@ -33,15 +33,14 @@ try {
 
   const reuseRule = SWEEP_RULES.find((rule) => rule.id === "执行者回归结果复用");
   assert.ok(reuseRule?.short, "执行者回归结果复用必须同时进入完整协议与续跑提醒");
-  assert.match(reuseRule.full, /read_task_transcript.*includeTrace=true/, "审查者必须能找到执行者的测试记录");
-  assert.match(reuseRule.short, /含工具调用的记录/, "续跑时仍要核对真实测试记录");
+  assert.doesNotMatch(reuseRule.full, /read_task_transcript/, "不能依赖会截断且没有结果的对话记录");
   for (const text of [reuseRule.full, reuseRule.short]) {
-    assert.match(text, /执行者.*本次改动.*仍适用/, "只复用执行者对当前被审改动仍适用的回归结果");
+    assert.match(text, /本轮后端证据清单.*reusable=true.*执行者结果/, "只复用后端核验的本轮执行者结果");
     assert.match(text, /不再重复运行/, "不得要求审查者重复执行已有回归");
-    assert.match(text, /命令.*结果.*版本/, "复用前要核对真实命令、结果和代码版本");
     assert.match(text, /失败.*不得当作通过/, "已有失败结果不能被复用成通过");
-    assert.match(text, /记录缺失.*相关改动.*未覆盖.*针对缺口补跑/, "缺失、失效或未覆盖时只补跑必要检查");
-    assert.match(text, /报告.*复用来源.*命令.*结果.*补跑/, "报告必须区分复用证据与补跑原因");
+    assert.match(text, /缺失.*失效.*未覆盖.*补跑/, "缺失、失效或未覆盖时只补跑必要检查");
+    assert.match(text, /技术明细.*复用来源.*命令.*结果/, "技术明细必须列明复用依据");
+    assert.match(text, /不免除独立代码审查与必要的行为验证/, "续跑不能漏掉独立审查和行为验证");
   }
   assert.doesNotMatch(REVIEW_SWEEP_PROTOCOL, /回归面[^\n]*—— 跑测试/, "回归扫描义务不能再无条件要求重新跑测试");
 

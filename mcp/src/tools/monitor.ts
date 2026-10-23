@@ -25,7 +25,7 @@ server.registerTool(
   {
     title: "起一个哨兵盯住长跑命令",
     description:
-      "把一条长跑命令挂在任务上，由 **ash** 起进程（不在你的进程树里），它的 stdout **每输出一行就是一条事件**：ash 会把这些行攒成一条消息送回这个任务、把你唤醒。你不必轮询。\n\n" +
+      "把一条长跑命令挂在任务上，由 **ash** 起进程（不在你的进程树里），它的 stdout **每输出一行就是一条事件**：ash 会把这些行攒成一条消息送回这个任务、把你唤醒。你不必轮询。回归测试传 regression=true 时例外：传未过滤的原始测试命令，系统自动保存完整输出并只发送结束摘要。\n\n" +
       "**什么时候用它**：你要等的事情以「分钟~小时」计，而且过程中会往某处写进展——跑批、训练、长构建、爬取、转码、轮询一个外部状态。典型手法是让命令自己做过滤：`tail -F build.log | grep --line-buffered -E '^\\[DONE\\]|ERROR'`。**什么时候不用**：几秒内就能出结果的命令（直接跑完它）；需要你立刻看全文的（直接读文件）。\n\n" +
       "**命令就是过滤器，这是最重要的一条**：每一行事件都会唤醒任务跑一个真实回合，花的是真钱。所以别 `tail -F` 整份日志，要 grep 到「你真会据此做事」的那几行。管道每一级都得逐行冲刷（`grep --line-buffered`、`awk` 里 `fflush()`；`head` 做不到，别用）。同时**别只匹配成功**：只 grep 成功标记的哨兵在崩溃、卡死、异常退出时一声不吭，而「安静」和「还在跑」长得一模一样——把失败特征（`Traceback|ERROR|FAILED|Killed`）一起写进交替分支里。\n\n" +
       "**起了哨兵的那一轮，用 pause_task 收尾** —— `complete_task` 会被当场拒掉（名下还有没了结的哨兵时一律 409，**包括已经退出但结果还排在待发送、没送到你手上的那些**）。理由是任务一落 done/failed/canceled，它名下的哨兵会被系统一并停掉、排着的事件会被作废（哨兵唯一的出口就是唤醒这个任务，任务都结束了再留着只会白烧回合），于是它在等的那个结果你再也拿不到。pause_task 的 resumePrompt 写清「被哨兵叫醒后该干什么」；确实不要那个结果了，就先对它调 stop_monitor（reason 写清为什么）、它排着的结果一并按「明确放弃」算，再确认完成。\n\n**顺序反过来也不行**：已经调过 `complete_task` 再挂哨兵，那份确认会被当场撤掉（这次创建的返回里会明说），本回合改落检查点暂停——哨兵醒来会把这条会话重新叫起来。\n\n" +
@@ -35,6 +35,7 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("要挂哨兵的任务 id（通常就是你自己，任务 prompt 前言里有）"),
       command: z.string().min(1).describe("交给 shell 跑的长跑命令。它自己负责过滤：只吐你真会据此做事的行，成功与失败特征都要覆盖"),
+      regression: z.boolean().optional().describe("执行者跑回归测试时传 true，并传未过滤的原始测试命令。系统自动保存完整日志、真实退出码、执行者身份及测试前后代码树，只发送结束摘要；审查者可复用同一代码树的记录。不能与 stopWhen/untilExpiry 同用；挂完照常 pause_task 等结果。审查/验证旁路回合不能登记为执行者回归。"),
       description: z.string().optional().describe("一句话说明你在盯什么（会出现在每条事件的抬头和界面上）。省略则用命令本身"),
       cwd: z.string().optional().describe("工作目录。缺省＝这个任务自己的工作目录"),
       timeoutMs: z.number().optional().describe(`盯多久（毫秒），缺省 ${minutes(MONITOR_DEFAULT_TIMEOUT_MS)}，上限 ${minutes(MONITOR_MAX_TIMEOUT_MS)}。到点杀掉进程并推一条收尾事件`),
@@ -56,10 +57,10 @@ server.registerTool(
         .describe("「我本来就是要盯到到期」:每出现一次叫我一次那种(盯错误日志、盯外部状态变化)。只在命令自己不会结束时需要明说一声;**别拿它绕过那道闸** —— 要等一件事干完就按上面①②两条改,不然任务只能干等到期"),
     },
   },
-  async ({ taskId, command, description, cwd, timeoutMs, wake, stopWhen, untilExpiry }) => {
+  async ({ taskId, command, description, cwd, timeoutMs, wake, stopWhen, untilExpiry, regression }) => {
     try {
       return ok(await call("POST", `/tasks/${taskId}/monitors`, {
-        command, description, cwd, timeoutMs, wake, stopWhen, untilExpiry,
+        command, description, cwd, timeoutMs, wake, stopWhen, untilExpiry, regression,
       }));
     } catch (e) { return fail(e); }
   },

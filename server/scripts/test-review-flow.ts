@@ -295,7 +295,7 @@ const legacyReviewPrompt = await reviewProtocolFor(
 assertCarriesSweepProtocol(legacyReviewPrompt, "历史独立审查 prompt");
 for (const text of [reviewPrompt, legacyReviewPrompt, verifyReminderFor(taskId, 1),
   reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 })]) {
-  assert.match(text, /执行者对本次改动.*不(?:再|必|要求)重复运行/, "各条审查路径应复用执行者本次改动的回归结果");
+  assert.match(text, /reusable=true.*执行者结果.*不再重复运行/, "各条审查路径只复用后端批准的执行者回归结果");
   assert.doesNotMatch(text, /必须真实运行验证/, "不得用无条件重跑要求覆盖回归结果复用约定");
 }
 assert.doesNotMatch(reviewPrompt, /grill-me|原始需求里点名/, "自动验证 prompt 不得原样夹带被审需求里的技能名");
