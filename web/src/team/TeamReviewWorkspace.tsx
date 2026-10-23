@@ -19,6 +19,8 @@ import { useBranchPlan } from "../review/useBranchPlan.ts";
 import { UnexecutedVerificationNotice, useAcceptanceVerification } from "../review/UnexecutedVerificationNotice.tsx";
 import { AcceptCommitChoice, useAcceptCommitDefault } from "../review/AcceptCommitChoice.tsx";
 import { PendingMergeCard } from "../review/PendingMergeCard.tsx";
+import type { AcceptGateView } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_STATUS_LABELS } from "@ash/shared/accept-gate";
 import { AcceptGateCard } from "../review/AcceptGateCard.tsx";
 
 type ReviewData = {
@@ -168,6 +170,8 @@ export function AcceptanceControls({
   // 这一按对验收前置命令的额外指令。只能由那张卡上的两颗按钮设进来,设完立刻打开同一道
   // 验收确认框 —— 跳过门禁直接合并是不可逆动作,不该比正常验收少一道确认。
   const [gateIntent, setGateIntent] = useState<"skip" | "rerun" | null>(null);
+  // 确认框要按**上一次跑成什么样**说话：红了和被取消是两句不同的话。
+  const [gateLatest, setGateLatest] = useState<AcceptGateView | null>(null);
   const [busy, setBusy] = useState(false);
   const confirmExecutorSwap = useExecutorGate();
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
@@ -319,7 +323,7 @@ export function AcceptanceControls({
         task={task}
         notify={notify}
         disabled={archived || inFlight || busy}
-        onIntent={(intent) => { setGateIntent(intent); setAction("accept"); }}
+        onIntent={(intent, latest) => { setGateIntent(intent); setGateLatest(latest); setAction("accept"); }}
       />
       {verification.verification && action !== "accept" && <UnexecutedVerificationNotice verification={verification.verification} continuing={midGate} />}
       {action === "accept" && (
@@ -344,7 +348,11 @@ export function AcceptanceControls({
           {/* 这一按跟「普通的验收通过」不是一回事,得在按下去之前说破:一个是明知红着仍然合,
               另一个是再烧十几分钟。 */}
           {gateIntent === "skip" && (
-            <p role="alert">这一次<b>不跑</b>验收前置命令，直接按上面说的合并。那条命令上一次是红的，这一按等于明确说「这条红跟这次改动无关」。</p>
+            <p role="alert">这一次<b>不跑</b>验收前置命令，直接按上面说的合并。{gateLatest?.status === "failed"
+              ? "那条命令上一次是红的，这一按等于明确说「这条红跟这次改动无关」。"
+              : gateLatest
+                ? `那条命令上一次${ACCEPT_GATE_STATUS_LABELS[gateLatest.status]}、没有跑出结论，这一按等于这次不验它。`
+                : "这一按等于这次不验它。"}</p>
           )}
           {gateIntent === "rerun" && (
             <p role="status">这一按先把验收前置命令从头跑一遍（它可能要跑十几分钟），rc=0 才会继续合并；跑的过程中目标分支一动不动。</p>

@@ -68,6 +68,13 @@ export const ACCEPT_GATE_TIMEOUT_MS = 90 * 60_000;
 /** 回显给界面和 agent 的日志尾巴长度。全文走单独的接口。 */
 export const ACCEPT_GATE_TAIL_BYTES = 4000;
 
+/**
+ * 「看完整日志」最多给多少字节。全量回归的输出能有几十 MB，而那一头是**整份读进内存、
+ * 再整份塞进一个 `<pre>`**：服务端顶一次，浏览器卡一次，而用户真正要看的永远是尾巴。
+ * 超过就只给最后这一段，并在开头说破「前面还有多少没给你」。
+ */
+export const ACCEPT_GATE_LOG_MAX_BYTES = 512_000;
+
 export const MAX_ACCEPT_GATE_COMMAND = 4000;
 
 /**

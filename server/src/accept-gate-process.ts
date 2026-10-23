@@ -12,12 +12,15 @@
 // 真正的坑（见根 AGENTS.md「停止/暂停必须留下持久可见的状态」）。pid 因此必须落盘：
 // 没有它，重启后那条还在跑的测试命令就彻底没人管了。
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ACCEPT_GATE_TAIL_BYTES } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_LOG_MAX_BYTES, ACCEPT_GATE_TAIL_BYTES } from "@ash/shared/accept-gate";
 import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
-import { IS_WINDOWS, killTree, userShellLaunch } from "./platform.js";
+import { IS_WINDOWS, inspectProcessSync, isPidAlive, isProcessGroupAlive, killTree, userShellLaunch } from "./platform.js";
+
+/** SIGTERM 之后等多久补一刀。给它收尾的时间，但不无限等。 */
+const KILL_GRACE_MS = 5_000;
 
 /** 日志落在任务自己的 run 目录下，跟会话正文同一处，归档清理会把它一起带走。 */
 export function acceptGateLogPath(taskId: string, runId: string): string {
@@ -27,7 +30,10 @@ export function acceptGateLogPath(taskId: string, runId: string): string {
 export type GateExit = { code: number | null; signal: NodeJS.Signals | null };
 
 /**
- * 起一条门禁命令。返回 pid（拿不到 pid 视为没起来，抛错）。
+ * 起一条门禁命令。返回 pid 和它的**启动时间**（拿不到 pid 视为没起来，抛错）。
+ *
+ * 启动时间要跟着 pid 一起落盘：pid 单独一个数字说明不了身份，ash 重启之后它可能早被
+ * 别的进程复用了（见 stopAcceptGate / isSameGateProcess）。读不出来就是 null。
  *
  * 输出**全部写文件**：十几分钟的测试输出走管道只会把它攒在 ash 的内存里，而用户真正
  * 要的是能从头翻的一份日志。stdin 给 /dev/null —— 门禁命令不该等人输入，等于挂死。
@@ -37,7 +43,7 @@ export function spawnAcceptGate(opts: {
   cwd: string;
   logPath: string;
   onExit: (exit: GateExit) => void;
-}): number {
+}): { pid: number; startedAt: string | null } {
   mkdirSync(dirname(opts.logPath), { recursive: true });
   const fd = openSync(opts.logPath, "a");
   try {
@@ -62,17 +68,43 @@ export function spawnAcceptGate(opts: {
     child.unref();
     const pid = child.pid;
     if (!pid) throw new Error("门禁命令没有拿到 pid");
-    return pid;
+    // 命令可能几毫秒就退了（`false` 这种），那时读不到身份 —— 不是错误，记 null 即可。
+    return { pid, startedAt: inspectProcessSync(pid)?.startedAt ?? null };
   } finally {
     // 句柄已经交给子进程了，父进程这边留着只会在日志被删后仍占着 inode。
     closeSync(fd);
   }
 }
 
-/** 取消/超时的那一刀。pid 不在了是正常情况（命令已经自己退了），不报错。 */
-export function stopAcceptGate(pid: number | null | undefined): void {
+/**
+ * 这个 pid 还是不是当初起的那条命令。
+ *
+ * 核对的是**启动时间**：pid 会被复用，而跨重启收残留时那个号多半已经是别人的了。
+ * 拿不到身份（旧记录没落过、平台读不出来）一律算「不是」—— 盲发信号打到的是无辜进程。
+ */
+export function isSameGateProcess(pid: number | null | undefined, startedAt: string | null | undefined): boolean {
+  if (!pid || !startedAt) return false;
+  return inspectProcessSync(pid)?.startedAt === startedAt;
+}
+
+/**
+ * 取消/超时的那一刀：先 SIGTERM，宽限期之后还活着再 SIGKILL（同预览那套）。
+ *
+ * 只发 TERM 是不够的 —— `trap '' TERM` 的测试脚本收下这一刀照样接着跑，而用户看到的
+ * 是「已取消」，机器上那条全量回归还在烧着。pid 不在了是正常情况（命令已经自己退了）。
+ *
+ * `startedAt` 给得出来就先核身份：ash 重启之后那个号可能已经是别人的了。
+ */
+export function stopAcceptGate(pid: number | null | undefined, startedAt?: string | null): void {
   if (!pid) return;
+  if (startedAt && !isSameGateProcess(pid, startedAt)) return;
   killTree(pid, "SIGTERM");
+  const timer = setTimeout(() => {
+    if (startedAt && !isSameGateProcess(pid, startedAt)) return;
+    if (isPidAlive(pid) || isProcessGroupAlive(pid)) killTree(pid, "SIGKILL");
+  }, KILL_GRACE_MS);
+  // 补刀不该把 ash 自己的退出吊住：它退的时候整棵进程树本来就跟着走。
+  timer.unref?.();
 }
 
 export function appendGateLog(logPath: string, text: string): void {
@@ -87,8 +119,24 @@ export function appendGateLog(logPath: string, text: string): void {
  * 一次验收检查要回这份数据，整份读进内存会把 ash 顶爆。
  */
 export function acceptGateLogTail(logPath: string, bytes = ACCEPT_GATE_TAIL_BYTES): string {
+  return readTail(logPath, bytes).text;
+}
+
+/**
+ * 「看完整日志」那一份。**仍然有上限**：这一头整份读进内存、那一头整份塞进一个 `<pre>`，
+ * 几十 MB 的回归输出会把两边都拖垮，而用户要看的永远是尾巴。截了就在开头说破。
+ */
+export function acceptGateLogText(logPath: string): string {
+  const { text, skipped } = readTail(logPath, ACCEPT_GATE_LOG_MAX_BYTES);
+  if (!skipped) return text;
+  return `[ash] 这份日志有 ${Math.round((skipped + text.length) / 1_000_000 * 10) / 10} MB，这里只给最后 `
+    + `${Math.round(ACCEPT_GATE_LOG_MAX_BYTES / 1000)} KB。完整文件在 ${logPath}\n\n${text}`;
+}
+
+/** 日志尾部若干字节。`skipped` = 前面被略过了多少，0 表示这就是全文。 */
+function readTail(logPath: string, bytes: number): { text: string; skipped: number } {
   try {
-    if (!existsSync(logPath)) return "";
+    if (!existsSync(logPath)) return { text: "", skipped: 0 };
     const size = statSync(logPath).size;
     const start = Math.max(0, size - bytes);
     const fd = openSync(logPath, "r");
@@ -97,12 +145,7 @@ export function acceptGateLogTail(logPath: string, bytes = ACCEPT_GATE_TAIL_BYTE
       readSync(fd, buf, 0, buf.length, start);
       const text = buf.toString("utf8");
       // 从中间切进去的那一行多半是半截，掐掉它比留着一段乱码强。
-      return start > 0 ? text.slice(text.indexOf("\n") + 1) : text;
+      return start > 0 ? { text: text.slice(text.indexOf("\n") + 1), skipped: start } : { text, skipped: 0 };
     } finally { closeSync(fd); }
-  } catch { return ""; }
-}
-
-/** 整份日志（下载/排查用）。调用方自己决定给不给，这里只负责读得到。 */
-export function acceptGateLogText(logPath: string): string {
-  try { return readFileSync(logPath, "utf8"); } catch { return ""; }
+  } catch { return { text: "", skipped: 0 }; }
 }

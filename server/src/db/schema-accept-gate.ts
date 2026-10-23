@@ -24,6 +24,13 @@ export const acceptGateRuns = sqliteTable(
     /** exit_code | timeout | spawn_failed | server_restarted | canceled */
     failure: text("failure"),
     pid: integer("pid"),
+    /**
+     * 那个 pid 的**启动时间**：重启之后拿它核对「这个号还是不是当初那条命令」。
+     *
+     * 只凭 pid 发信号是会打错人的 —— ash 停了几小时再起来，那个号早被别的进程复用了
+     * （同 preview-process-stop.ts 的身份核对）。读不出来就记 null，那时宁可不发信号。
+     */
+    pidStartedAt: text("pid_started_at"),
     logPath: text("log_path").notNull(),
     /** 被测的那棵树（任务工作区当时的 HEAD）。它一变，这次结果就不再算数。 */
     sourceCommit: text("source_commit"),
@@ -62,14 +69,15 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
       exit_code INTEGER, failure TEXT, pid INTEGER, log_path TEXT NOT NULL,
       source_commit TEXT, target_branch TEXT, target_commit TEXT, fast_forward INTEGER,
       accept_options TEXT, started_at TEXT NOT NULL, finished_at TEXT,
-      handoff_at TEXT, handoff_error TEXT
+      handoff_at TEXT, handoff_error TEXT, pid_started_at TEXT
     );
     CREATE INDEX IF NOT EXISTS accept_gate_runs_task_idx ON accept_gate_runs (task_id, started_at);
   `);
-  // 这张表第一版没有这两列,补列即可(空 = 那一次没交接过)。
+  // 这张表第一版没有后面这几列,补列即可(空 = 那一次没交接过 / 读不出进程身份)。
   for (const sql of [
     "ALTER TABLE accept_gate_runs ADD COLUMN handoff_at TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN handoff_error TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN pid_started_at TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

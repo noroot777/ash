@@ -46,6 +46,15 @@ export interface SegmentResult {
   /** 没跑过时卡在哪一站（调用方要读它的 fail 策略） */
   failed?: WorkflowStep;
   reason?: string;
+  /**
+   * 这一站**没失败，只是还没完**：它在等一件已经开跑的事（目前只有验收前置命令），
+   * 那件事自己完成后会把这一站接着做完。
+   *
+   * 跟 `ok:false` 分开是因为失败策略对它全是错的：打回给 AI 重做会在命令还跑着的时候
+   * 叫醒 agent，「问我一句」会挂出一个根本不需要人回答的问题。所以调用方看到它就安静
+   * 停下，什么都别做。
+   */
+  halted?: boolean;
 }
 
 export interface SegmentOptions {
@@ -156,6 +165,16 @@ async function runAccept(task: TaskRow, def: WorkflowDef | null, step: WorkflowS
   const { acceptTask } = await import("./task-accept.js");
   const result = await acceptTask(task.id, "workflow");
   if (result.accepted) return { ok: true };
+  // 这个项目设了验收前置命令：这一站不是没过，是**在等那条命令**。它绿了会带着当初那次
+  // 的选择自己再来一遍（accept-gate.ts 的 continueAcceptance），合完之后这条线照常往下走。
+  if (result.reason === "accept_gate_required" || result.reason === "accept_gate_running") {
+    await appendTaskTimeline(
+      task.id,
+      "这条线走到「合并并清理」，但这个项目设了验收前置命令：先在任务工作区里跑一遍它，rc=0 才合。"
+        + "这一站就停在这儿等它 —— 绿了会自动合完并接着往下走，红了会把日志交回这个任务去修。",
+    );
+    return { ok: false, halted: true, failed: step, reason: result.error };
+  }
   return { ok: false, failed: step, reason: result.error };
 }
 
@@ -274,6 +293,8 @@ export async function advanceSegment(
     clearAttempts(task.id);
     return true;
   }
+  // 「在等一件已经开跑的事」不走失败策略（见 SegmentResult.halted）：安静停下，等它自己回来。
+  if (result.halted) return false;
   const step = result.failed!;
   await applyFailPolicy(task, step, result.reason, stepFailPrompt(step, result.reason));
   return false;

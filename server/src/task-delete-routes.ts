@@ -8,10 +8,11 @@ import type { TaskWorkspaceDiscardResult } from "@ash/shared";
 import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
+import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
 import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
 import { clearScanCursorsStatement } from "./claude-monitor-cursors.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
+import { stopAcceptGatesForTask } from "./accept-gate.js";
 import { deleteTaskSideChats } from "./chat/lifecycle.js";
 import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
 import { taskBusyRejection } from "./task-busy.js";
@@ -64,6 +65,10 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 删就是把 pid 线索连同任务一起抹掉。删除失败是可重试的(闸由 `settleTaskRevocation` 按
   // 「任务行还在」收口,用户再点一次即可),留下无主进程不可逆,所以这一笔宁可整个不做。
   await stopMonitorsForTask(taskId, "任务已删除", "destroy");
+  // 验收前置命令跟哨兵同一个道理:**先停进程再删行**。正常路径上 taskBusyRejection 已经
+  // 把「门禁还在跑的任务」挡在删除之外了,这里兜的是绕过那道闸的入口(项目删除的批量路径)
+  // —— 行一删,pid 这条唯一线索就没了,那条全量回归会一直跑到机器重启。
+  stopAcceptGatesForTask(taskId);
 
   // ── 批本体:全删或全不删 ─────────────────────────────────────────────────────
   const runs = db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
@@ -75,6 +80,8 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     .where(eq(freeReviewDebates.taskId, taskId));
   await db.batch([
     db.delete(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, taskId)),
+    // 验收前置命令的执行记录:不删就是一堆指着已删任务的孤儿行(还带着 pid 和日志路径)。
+    db.delete(acceptGateRuns).where(eq(acceptGateRuns.taskId, taskId)),
     db.delete(freeReviewDebateTurns).where(inArray(freeReviewDebateTurns.debateId, debates)),
     db.delete(freeReviewDebates).where(eq(freeReviewDebates.taskId, taskId)),
     db.delete(freeReviewRounds).where(inArray(freeReviewRounds.runId, runs)),

@@ -46,7 +46,7 @@ function makeRepo(name: string): string {
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 try {
-  const { prepareWorktree } = await import("../src/git.js");
+  const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { acceptGateRuns, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { acceptTask } = await import("../src/task-accept.js");
@@ -332,7 +332,136 @@ try {
     await sleep(200);
   }
 
-  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 全部通过");
+  // 8. 门禁跑的那十几分钟里工作区又进了一笔提交：**绝不许**把这条命令没看过的代码合进去。
+  //    （第 1 轮审查实测的头号问题：被测的是开跑那一刻的树，合的是收尾那一刻的树。）
+  {
+    const repo = makeRepo("gate-drift");
+    const projectId = await seedProject("gate-drift", repo, "sleep 1");
+    const taskId = "gatedrift0008";
+    const wsPath = await seedTask(projectId, repo, taskId, "drift.txt");
+
+    const first = await acceptTask(taskId);
+    assert.equal(first.accepted, false);
+    const tested = (await runsOf(taskId)).at(0)!.sourceCommit!;
+
+    // 命令还跑着的时候，这个任务在另一个窗口里又干了一笔活。
+    await sleep(250);
+    assert.equal((await runsOf(taskId)).at(0)!.status, "running", "舞台没搭对：命令已经跑完了");
+    writeFileSync(join(wsPath, "late.txt"), "late\n");
+    git(wsPath, "add", "-A");
+    git(wsPath, "commit", "-m", "late commit");
+    const late = git(wsPath, "rev-parse", "HEAD");
+    assert.notEqual(late, tested, "舞台没搭对：树没变");
+
+    await settled(taskId);          // 第一次绿了 → 自动续验收时发现树变了 → 重新登记一次
+    await settled(taskId);          // 第二次（跑的是新这棵树）
+    const runs = await runsOf(taskId);
+    assert.equal(runs.length, 2, "树在跑动期间变了，那次绿灯就不作数，必须按新的树再跑一遍");
+    assert.equal(runs.at(0)!.sourceCommit, late, "第二次跑的必须是现在这棵树");
+    assert.equal(git(repo, "rev-parse", "main"), late, "合进去的必须就是被命令验过的那棵树");
+    assert.equal((await taskRow(taskId)).stage, "accepted");
+  }
+
+  // 9. 项目把命令换了一条：旧命令的绿灯不再放行 —— 新这条一次都没跑过。
+  //    舞台同第 4 条：绿了但自动续跑的合并被脏工作区拦下，任务还停在可验收态。
+  {
+    const repo = makeRepo("gate-newcmd");
+    const projectId = await seedProject("gate-newcmd", repo, "true");
+    const taskId = "gatenewcmd009";
+    await seedTask(projectId, repo, taskId, "newcmd.txt");
+    writeFileSync(join(repo, "seed.txt"), "dirty\n");   // 目标分支检出在这儿且脏 → 合并被拦
+    const before = git(repo, "rev-parse", "main");
+    await acceptTask(taskId);
+    await settled(taskId);
+    assert.equal((await runsOf(taskId)).at(0)!.status, "passed");
+    assert.equal(git(repo, "rev-parse", "main"), before, "舞台没搭对：这一次本来就不该合进去");
+
+    // 障碍清掉，换一条命令，再点验收。
+    git(repo, "checkout", "--", "seed.txt");
+    await db.update(projects).set({ acceptGateCommand: "true # v2" }).where(eq(projects.id, projectId));
+    const second = await acceptTask(taskId);
+    assert.equal(second.accepted, false, "换了命令就不能拿上一条的绿灯直接合");
+    await settled(taskId);
+    const runs = await runsOf(taskId);
+    assert.equal(runs.length, 2, "新命令必须真的跑一遍");
+    assert.equal(runs.at(0)!.command, "true # v2");
+    assert.notEqual(git(repo, "rev-parse", "main"), before, "新命令也绿了，这次该合进去");
+  }
+
+  // 10. 统一验收遇上门禁：按下去之前就说清「一次只能验一个」，一个都不动。
+  {
+    const { readBranchPlan, acceptFamily } = await import("../src/task-branch-routes.js");
+    const repo = makeRepo("gate-family");
+    const projectId = await seedProject("gate-family", repo, "true");
+    // 这两个 id 的**前 8 个字符**必须不同：worktree 分支名只取这一截（worktreeBranchName）。
+    const parentId = "famparent010";
+    const childId = "famchild0011";
+    const parentWs = await seedTask(projectId, repo, parentId, "parent.txt");
+    // 子任务从父任务的分支上开，形成一串要按顺序合的派生。
+    const parentBranch = worktreeBranchName(parentId);
+    const childWs = await prepareWorktree(repo, childId, parentBranch);
+    writeFileSync(join(childWs.path, "child.txt"), "child\n");
+    git(childWs.path, "add", "-A");
+    git(childWs.path, "commit", "-m", "task child");
+    await db.insert(tasks).values({
+      id: childId, projectId, title: "child", body: "", mode: "single", status: "done", stage: "verified",
+      labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "claude",
+      // 真实派生任务的形状：开工起点是父任务的分支（baseTaskId 把这层关系钉死），最终
+      // 仍然合进 main。只写 worktreeBase 的话它的合入目标就是父分支，而父分支正检出在
+      // 父任务的工作区里 —— 那是另一条阻塞，会挡在门禁判据前面。
+      useWorktree: true, worktreeBase: parentBranch, baseTaskId: parentId, mergeTargetBranch: "main", workflowMode: "free",
+      // 派生任务的开工记录：没有它，验收会先被「未记录继承的父提交」挡住。
+      worktreeStartCommit: git(parentWs, "rev-parse", "HEAD"),
+      autoTitle: false, createdAt, updatedAt: createdAt,
+    });
+    assert.ok(parentWs, "父任务工作区要在");
+
+    const view = (await readBranchPlan(parentId))!;
+    const expected = [view.task, ...view.descendants].map((row) => ({ taskId: row.taskId, fingerprint: row.fingerprint }));
+    assert.equal(expected.length, 2, "舞台没搭对：这一串应该有两个任务");
+    const before = git(repo, "rev-parse", "main");
+    const blocked = await acceptFamily(parentId, expected, acceptTask);
+    assert.equal(blocked.ok, false);
+    assert.deepEqual(blocked.completed, [], "拦住就是一个都没合");
+    assert.match(blocked.error!, /一次只能验一个/);
+    assert.equal(git(repo, "rev-parse", "main"), before, "拦住就是一个字节都没动");
+    assert.equal((await runsOf(parentId)).length, 0, "整批拦下的时候，命令一次都不该起来");
+    assert.equal((await runsOf(childId)).length, 0);
+
+    // 只选一个（子任务还等着父成果合入，所以这里选的是父任务）：照常开跑，而且话要说准
+    // —— 这不是「暂停在它身上」，是「它已经在跑了，绿了自己会合完」。
+    const one = await acceptFamily(parentId, [{ taskId: parentId, fingerprint: view.task.fingerprint }], acceptTask);
+    assert.equal(one.ok, false, "门禁还没跑完，这一按本来就不该合");
+    assert.match(one.error!, /已经开跑/);
+    assert.equal((await runsOf(parentId)).length, 1, "只选一个时要真的把命令起起来");
+    await settled(parentId);
+    assert.equal((await taskRow(parentId)).stage, "accepted", "绿了它自己会把这一个合完");
+  }
+
+  // 11. 命令还跑着的时候：这条任务动不得，而「这次跳过」得先把它收掉再合。
+  //     （界面不给这条路，HTTP/MCP 给得出来：不收掉它，合并紧接着的清理会把它脚下的
+  //      工作区删掉，而那条全量回归还在往里跑。）
+  {
+    const { taskBusyRejection } = await import("../src/task-busy.js");
+    const repo = makeRepo("gate-skip-running");
+    const projectId = await seedProject("gate-skip-running", repo, "sleep 120");
+    const taskId = "gateskiprun12";
+    await seedTask(projectId, repo, taskId, "skiprun.txt");
+    await acceptTask(taskId);
+    const pid = (await runsOf(taskId)).at(0)!.pid!;
+
+    const busy = await taskBusyRejection(taskId, "删除");
+    assert.match(busy?.error ?? "", /验收前置命令正在/, "命令跑着的时候不许把它脚下的工作区抽走");
+
+    const skipped = await acceptTask(taskId, "human", { acceptGate: "skip" });
+    assert.equal(skipped.accepted, true, "跳过是用户的权利");
+    assert.equal((await runsOf(taskId)).at(0)!.status, "canceled", "跳过的时候那条命令要落成「已取消」");
+    for (let i = 0; i < 100 && alive(pid); i++) await sleep(25);
+    assert.equal(alive(pid), false, "跳过必须真的把它收掉：工作区马上就要被清理删掉了");
+    assert.equal(await taskBusyRejection(taskId, "删除"), null, "收完之后不该再挡着");
+  }
+
+  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 全部通过");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

@@ -27,6 +27,7 @@ import { assertReadableWorktree, checkoutRecovery, removeMissingWorktreeRegistra
 import { targetCheckout } from "./git-accept.js";
 import { branchPlanReads } from "./branch-plan-reads.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
+import { acceptGateWouldRun } from "./accept-gate.js";
 
 async function entry(task: BranchTask, repo: string, fingerprintTarget?: string | null,
   reads = branchPlanReads(repo, task.projectId)): Promise<BranchPlanEntry> {
@@ -142,6 +143,29 @@ export async function acceptFamily(
           + "自己提交掉，再验收下一个；或者把「合并后提交代码」勾上。",
       };
     }
+    // 设了验收前置命令的项目：**一次只验得了一个**。那条命令动辄十几分钟，而统一验收是
+    // 按顺序一个个合的——第一个一开跑，这一批剩下的全得等它绿了才轮得到，而这一次调用
+    // 只会回「已经在跑了」。不说破的话用户看到的是「已完成 0 个、其余未执行」，还得挨个
+    // 重选（第 1 轮审查实测）。所以按下去之前就拦住，一个都不动（同上面「合并后不提交」
+    // 那条的口径）。上一次绿灯还作数的任务不算——那种直接沿用结果，不会真跑。
+    const pending = chosen.filter(e => e.stage !== "accepted");
+    if (pending.length > 1) {
+      const needsGate: BranchPlanEntry[] = [];
+      for (const row of pending) {
+        const candidate = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
+        if (candidate && await acceptGateWouldRun(candidate, project)) needsGate.push(row);
+      }
+      if (needsGate.length) {
+        return {
+          ok: false,
+          completed: [],
+          stoppedAt: needsGate[0].taskId,
+          error: `这个项目设了验收前置命令：每个任务合并之前都要先在自己的工作区里跑一遍它（动辄十几分钟），`
+            + `所以统一验收一次只能验一个（这次选了 ${pending.length} 个，其中 ${needsGate.length} 个还没跑过）。`
+            + `请逐个验收——点一个，等它绿了自动合完，再验下一个。`,
+        };
+      }
+    }
     const completed: string[] = [];
     for (const row of chosen) {
       const currentTask = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
@@ -159,6 +183,16 @@ export async function acceptFamily(
         const error = cause instanceof Error ? cause.message : String(cause);
         await appendTaskTimeline(taskId, `统一验收暂停在「${row.title}」：${error}；已完成 ${completed.join("、") || "无"}，其余未执行。`);
         return { ok: false, completed, stoppedAt: row.taskId, error };
+      }
+      // 「门禁开跑了」不是失败：那条命令绿了会自动把这一个合完。上面那道闸保证这里最多
+      // 只剩一个待验收的任务，所以这一批到此为止是对的，但话得说准。
+      if (!result.accepted && (result.reason === "accept_gate_required" || result.reason === "accept_gate_running")) {
+        await appendTaskTimeline(taskId, `统一验收：「${row.title}」的验收前置命令已经开跑，绿了它会自动合完；已完成 ${completed.join("、") || "无"}。`);
+        return {
+          ok: false, completed, stoppedAt: row.taskId,
+          error: `「${row.title}」的验收前置命令已经开跑：绿了它会自动合完这一个，红了会把日志交回那个任务去修。`
+            + `这一批里其余的没有执行，等它出结果之后再点一次。`,
+        };
       }
       if (!result.accepted || (result.tail && !result.tail.ok)) {
         if (result.accepted) completed.push(row.taskId);

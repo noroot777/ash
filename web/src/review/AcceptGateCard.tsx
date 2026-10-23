@@ -22,8 +22,13 @@ import { useServerEvents } from "../lib/events.ts";
 export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   task: TaskListItem | Task;
   notify: (message: string) => void;
-  /** 红了之后的两条出路：重跑一次 / 这一次跳过。点下去走的仍是正常那道验收确认框。 */
-  onIntent: (intent: "rerun" | "skip") => void;
+  /**
+   * 红了之后的两条出路：重跑一次 / 这一次跳过。点下去走的仍是正常那道验收确认框。
+   *
+   * 把**上一次跑成什么样**一起带出去：确认框要据它说话。「跳过」在红了之后和在被取消
+   * 之后是两句不同的话（一个是明知红着仍然合，另一个是上一次根本没有结论）。
+   */
+  onIntent: (intent: "rerun" | "skip", latest: AcceptGateView | null) => void;
   disabled?: boolean;
 }) {
   const [state, setState] = useState<AcceptGateState | null>(null);
@@ -89,6 +94,9 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   if (!state) return null;
   if (idle && (!canManage || !atFinalGate || settled)) return null;
   if (!latest && !atFinalGate) return null;
+  // 命令已经撤掉了：这一按就是直接合并，再摆「重跑 / 这次跳过」只会让人以为门禁还拦着。
+  // （正在跑的那一条照常显示——它是真的还在跑，收不收得掉是用户现在就要知道的事。）
+  if (!state.command && !running && latest) return null;
   // 验收已经做完了就别再占一行：那时这张卡只会重复一句「上次通过了」。
   if (settled && !running) return null;
 
@@ -151,9 +159,13 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
     }
   };
 
+  // 取消和被打断**不是红**：那两种根本没有结论（用户自己收掉的、ash 重启打断的），
+  // 套上失败色会让人以为命令真的跑出了问题，而出路完全不同（重点一次就行）。
   const tone = running
     ? "is-running"
-    : latest?.status === "passed" ? (latest.stale ? "" : "is-passed") : latest ? "is-failed" : "";
+    : !latest ? ""
+      : latest.status === "passed" ? (latest.stale ? "" : "is-passed")
+        : latest.status === "failed" ? "is-failed" : "";
   return (
     <section className={`accept-gate-card ${idle ? "is-idle" : tone}`} aria-label="验收前置命令">
       <header>
@@ -161,12 +173,14 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
           ? <SpinnerGap size={14} className="is-spinning" />
           : latest?.status === "passed"
             ? <CheckCircle size={14} weight="fill" />
-            : latest
+            : latest?.status === "failed"
               ? <WarningCircle size={14} weight="fill" />
-              : <FileText size={14} />}
+              : latest
+                ? <XCircle size={14} />
+                : <FileText size={14} />}
         </span>
         <div>
-          <b>{idle ? "这个项目没设验收前置命令" : heading(running, latest, tick)}</b>
+          <b>{idle ? "这个项目没设验收前置命令" : heading(state, running, latest, tick)}</b>
           <p>{idle
             ? "设一条之后，点「验收通过」会先在任务工作区里跑它，rc=0 才合并 ——「进 main 之前跑一次全量回归」这类事就不用靠人记着哪一轮是最后一轮了。"
             : detail(state, running, latest)}</p>
@@ -216,16 +230,16 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
               </button>
             ) : latest && latest.status !== "passed" && !settled ? (
               <>
-                <button type="button" disabled={busy || disabled} onClick={() => onIntent("rerun")}>
+                <button type="button" disabled={busy || disabled} onClick={() => onIntent("rerun", latest)}>
                   <ArrowClockwise size={13} />重跑一次
                 </button>
-                <button type="button" disabled={busy || disabled} onClick={() => onIntent("skip")}>
+                <button type="button" disabled={busy || disabled} onClick={() => onIntent("skip", latest)}>
                   这次跳过它，直接合并
                 </button>
               </>
             ) : null}
             {latest?.status === "failed" && !running && (
-              <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy} onClick={() => void handOff()}>
+              <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy || disabled} onClick={() => void handOff()}>
                 <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次" : "交给智能体去修"}
               </button>
             )}
@@ -259,10 +273,13 @@ function elapsed(from: string): string {
   return min > 0 ? `${min} 分 ${total % 60} 秒` : `${total} 秒`;
 }
 
-function heading(running: AcceptGateView | null, latest: AcceptGateView | null, _tick: number): string {
+function heading(state: AcceptGateState, running: AcceptGateView | null, latest: AcceptGateView | null, _tick: number): string {
   if (running) return `验收前置命令正在跑（已经 ${elapsed(running.startedAt)}）`;
   if (!latest) return "这个项目设了验收前置命令";
-  if (latest.status === "passed") return latest.stale ? "上次通过的不是现在这棵树" : "验收前置命令已通过";
+  if (latest.status === "passed") {
+    if (!latest.stale) return "验收前置命令已通过";
+    return latest.command !== state.command ? "上次通过的不是现在这条命令" : "上次通过的不是现在这棵树";
+  }
   return `验收前置命令${ACCEPT_GATE_STATUS_LABELS[latest.status]}`;
 }
 
@@ -273,9 +290,11 @@ function detail(state: AcceptGateState, running: AcceptGateView | null, latest: 
   }
   if (!latest) return `点「验收通过」时会先在任务工作区里跑一遍 \`${state.command}\`，rc=0 才合并。`;
   if (latest.status === "passed") {
-    return latest.stale
-      ? `那次跑的是 ${latest.sourceCommit?.slice(0, 8) ?? "另一棵树"}，代码之后又改过了——再点验收会重跑一遍。`
-      : `${summarizeAcceptGate(latest)}。代码没再改过，所以这次验收不会重跑它。`;
+    if (!latest.stale) return `${summarizeAcceptGate(latest)}。代码和命令都没再改过，所以这次验收不会重跑它。`;
+    // 「不作数了」有两种，出路一样但原因完全不同，说错一种用户会去查错的地方。
+    return latest.command !== state.command
+      ? `那次跑的是另一条命令（\`${latest.command}\`）。现在这条 \`${state.command}\` 在这棵树上一次都没跑过——再点验收会跑它。`
+      : `那次跑的是 ${latest.sourceCommit?.slice(0, 8) ?? "另一棵树"}，代码之后又改过了——再点验收会重跑一遍。`;
   }
   // 红了之后 ash 会**自动**把日志交回那个任务去修。这件事必须写在卡上：用户只看到三颗
   // 按钮时会以为还得自己去催，而时间线里那句话翻几页才找得到。

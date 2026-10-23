@@ -15,6 +15,9 @@ import { createServer } from "vite";
 //    验收确认框上 —— 卡自己不许偷偷发起验收。
 // ⑤ 「交给智能体去修」这件事 ash 红了就**自动**做过一次，所以卡上要先说清它做没做成：
 //    做成了按钮改口「再交给智能体一次」，没做成就得直说「那条红现在没人在管」。
+// ⑥ 「上次那个绿灯还作不作数」有两种不作数（树变了 / 命令换了一条），出路一样但原因
+//    完全不同，说错一种用户会去查错的地方。
+// ⑦ 取消和被打断**不是红**：没有结论，所以不套失败色、也没有「交给智能体去修」。
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
@@ -55,9 +58,9 @@ try {
 
   browser = await chromium.launch(await chromeLaunchOptions());
 
-  const open = async ({ gate, role = "admin", query = "" } = {}) => {
+  const open = async ({ gate, role = "admin", query = "", command } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
-    const store = { patches: [], canceled: 0, handoffs: 0, command: gate.command ?? null, gate };
+    const store = { patches: [], canceled: 0, handoffs: 0, command: command === undefined ? gate.command ?? null : command, gate };
     // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件，挂一条空流免得它反复重连。
     await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
     await page.route("**/api/projects", (route) =>
@@ -177,7 +180,57 @@ try {
     await page.close();
   }
 
-  // ⑦ 已经验收完的任务：这张卡不再占一行。
+  // ⑥ 上一次的绿灯为什么不作数：树变了说树，命令换了说命令。
+  {
+    const passed = run({ stale: true, command: "./kb.sh test quick" });
+    const { page } = await open({
+      gate: { command: "./kb.sh test full", running: null, latest: passed },
+      command: "./kb.sh test full",
+    });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    const text = await card.textContent();
+    assert.match(text, /上次通过的不是现在这条命令/, "命令换了一条，就别说成「代码改过了」");
+    assert.match(text, /一次都没跑过/);
+    await page.close();
+  }
+
+  // ⑦ 被取消的那一次：没有结论 —— 不套失败色，也没有红可以交给智能体。
+  {
+    const canceled = run({ status: "canceled", exitCode: null, failure: "canceled" });
+    const { page } = await open({ gate: { command: canceled.command, running: null, latest: canceled } });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    assert.equal((await card.getAttribute("class")).includes("is-failed"), false, "取消不是红");
+    assert.equal(await card.getByRole("button", { name: "交给智能体去修" }).count(), 0,
+      "没有结论的那一次，没有「红」可以交给它修");
+    await page.close();
+  }
+
+  // ⑧ 验收动作被禁用时（任务在跑/归档），「交给智能体去修」也得跟着禁用 —— 它同样会
+  //    真的去起一轮。
+  {
+    const failed = run({ status: "failed", exitCode: 3, failure: "exit_code" });
+    const { page, store } = await open({
+      gate: { command: failed.command, running: null, latest: failed }, query: "?disabled=1",
+    });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    assert.equal(await card.getByRole("button", { name: "交给智能体去修" }).isDisabled(), true);
+    assert.equal(store.handoffs, 0);
+    await page.close();
+  }
+
+  // ⑨ 命令被撤掉了：这一按就是直接合并，这张卡不该再摆「重跑 / 这次跳过」。
+  {
+    const { page } = await open({ gate: { command: null, running: null, latest: run() } });
+    await page.locator("h1").waitFor();
+    await page.waitForTimeout(300);
+    assert.equal(await page.locator(".accept-gate-card").count(), 0, "门禁都撤了，卡上还摆出路只会误导");
+    await page.close();
+  }
+
+  // ⑩ 已经验收完的任务：这张卡不再占一行。
   {
     const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run() }, query: "?stage=accepted" });
     await page.locator("h1").waitFor();

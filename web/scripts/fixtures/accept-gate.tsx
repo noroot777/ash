@@ -35,6 +35,7 @@ function Fixture() {
       task={task({ stage: params.get("stage") ?? "verified" } as Partial<Task>)}
       notify={setNotice}
       onIntent={(value) => setIntent(value)}
+      disabled={params.get("disabled") === "1"}
     />
     <p role="status" aria-label="操作结果">{notice}</p>
     <output aria-label="验收意图">{intent}</output>

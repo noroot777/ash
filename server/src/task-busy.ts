@@ -14,6 +14,9 @@
 //   · 在跑 / 占着 turn —— 进程还活着,回合结算还要写这一行(status 落库前 turn 就已占,
 //     所以光看 status 会漏)
 //   · 在验收 —— 尾段发布命令还在跑,结算还要写这一行
+//   · 验收前置命令还在跑 —— 那条命令的 cwd 就是这个任务的工作区,目录被抽走时它还在
+//     往里写(它跑的是全量回归,动辄十几分钟)。`isAcceptingTask` 盖不住它:门禁是**在
+//     验收互斥之外**跑的(accept-gate.ts 文件头 ②),那把锁那时已经松开了。
 //   · 任何 child 在飞 —— 执行者跟着 lead 活,还可能正用着共享工作区
 // 常驻调度台(team lead)idle 时不受影响:status 不匹配、turn 也没占。
 // 任务行**不存在**不算忙 —— 那正是残留清理入口的正常场景(行已删,只剩 git 里的垃圾)。
@@ -22,6 +25,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { isTurnClaimed } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
+import { hasLiveAcceptGate } from "./accept-gate.js";
 
 /** 409 的响应体,原样回给 UI。 */
 export interface TaskBusyRejection {
@@ -32,7 +36,8 @@ export interface TaskBusyRejection {
 
 /** 这一行现在有人指望着吗。已经查出来的任务行直接用它,别再各自拼一遍这四个条件。 */
 export function isTaskBusy(row: { id: string; status: string }): boolean {
-  return row.status === "running" || row.status === "queued" || isTurnClaimed(row.id) || isAcceptingTask(row.id);
+  return row.status === "running" || row.status === "queued" || isTurnClaimed(row.id)
+    || isAcceptingTask(row.id) || hasLiveAcceptGate(row.id);
 }
 
 /**
@@ -49,6 +54,10 @@ export async function taskBusyRejection(taskId: string, verb: string): Promise<T
     return { error: `任务正在执行，请先停止再${verb}`, status: row.status };
   }
   if (isAcceptingTask(taskId)) return { error: `任务正在验收中，结束后再${verb}` };
+  // 跟「在验收」分开报:用户要做的事不一样 —— 这一条的出路是去验收台上把它收掉。
+  if (hasLiveAcceptGate(taskId)) {
+    return { error: `验收前置命令正在这个任务的工作区里跑，等它跑完或在验收台上收掉它再${verb}`, status: row.status };
+  }
   const busyChild = (await db.select().from(tasks).where(eq(tasks.parentId, taskId))).find(isTaskBusy);
   if (busyChild) {
     return {
