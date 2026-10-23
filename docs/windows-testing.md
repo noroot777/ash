@@ -10,7 +10,12 @@
 
 ## 〇、当前基线
 
-**2026-08-19 实测这 6 条绿**:`win-launch`、`path-boundary`、`openers-windows`、
+**2026-10-23 实测这 6 条绿**:`win-launch`、`path-boundary`、`openers-windows`、`terminal`
+(含 `test-project-commands` 的 Windows 生命周期一节)、`detached`、`reattach`。后三条是这一轮
+新进来的 —— 常用命令和「活得过重启」原先在那边都是**明确不做**:前者的判据在第一节(伪平台那条)
+与第五节(ConPTY 真机那条),后者整节在第四节。
+
+**2026-08-19 实测过这 6 条绿**:`win-launch`、`path-boundary`、`openers-windows`、
 `scheduled-messages`、`review`、`accept-merge`。**其余的绿是 2026-08-18 那轮留下的,
 夹具此后改过,没有重测就不作数** —— 别把下表当成「现在还是 14/14」。
 
@@ -27,7 +32,6 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 | `win-launch` | 红 → 绿 | 夹具写死 `cmd.exe`,真机 `COMSPEC` 是全路径 |
 | `path-boundary` | 红 → 绿 | 收尾 `EBUSY: unlink ash.db`(A 类) |
 | `openers-windows` | 绿 | |
-| `agent-tee` | 绿 | |
 | `terminal` | 绿 | (留一个孤儿进程,见第五节) |
 | `file-browser` | 绿 | |
 | `local-open` | 绿 | |
@@ -69,11 +73,11 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 | 测试 | 钉的东西 |
 |---|---|
-| `npm -w server run test:win-launch` | PATH 按 `;` 拆、PATHEXT 补扩展名、npm `.cmd` 垫片拆封、cmd.exe 引号规则、三个 `Program Files` 根 |
+| `npm -w server run test:win-launch` | PATH 按 `;` 拆、PATHEXT 补扩展名、npm `.cmd` 垫片拆封、cmd.exe 引号规则、三个 `Program Files` 根、**常用命令怎么起**(PowerShell `-EncodedCommand` + 退出码收口) |
 | `npm -w server run test:path-boundary` | NTFS 大小写归一、兄弟目录、UNC/8.3 拒绝面、MAX_PATH 提示 |
 | `npm -w server run test:openers-windows` | 注册表输出解析、默认应用、`%1` 替换 |
 
-**实测 3/3 绿**(2026-08-18)。前两条第一次上真机时是红的,两条都是**夹具**写歪了而不是产品 bug,
+**实测 3/3 绿**(2026-08-18;2026-10-23 带着新加的 `commandLaunch` 一节重测仍绿)。前两条第一次上真机时是红的,两条都是**夹具**写歪了而不是产品 bug,
 已修 —— 值得记一笔,因为这类「开发机绿、真机红」的偏差正是这份文档存在的理由:
 
 - `win-launch` 断言 `plan.file === "cmd.exe"`,但真机上 `COMSPEC` 是 `C:\WINDOWS\system32\cmd.exe`,
@@ -137,18 +141,42 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 被 `catch {}` 一吞,每跑一次照样多一个 TEMP 目录(2026-08-19 在真机上量到 3 个存量残留)。
 两条脚本现在都是「建舞台 → 挂钩子 → fail-closed 断言 → 才开始 import」。
 
-## 四、验的是 Windows 上**有意不做**的功能
+## 四、原先「有意不做」的那一档:已经做了(2026-10-23 真机绿)
 
-按 Windows 支持计划的决策 4,「agent 活得过 server 重启」在 Windows 上不做
-(`reattach.ts:60`、`reattach.ts:102`、`detached.ts:288` 三处平台短路)。这两条在 Windows 上红是预期:
+**「agent 活得过 ash 重启」在 Windows 上不做**曾经是写进支持计划的决策,`reattach.ts` 和
+`detached.ts` 里各有平台短路。现在那几处短路都删了,`test:detached` / `test:reattach` 在真机上
+**实测绿**(2026-10-23):
 
-- `npm -w server run test:detached` —— 杀掉 server 之后 agent 还活着
-- `npm -w server run test:reattach` —— 重启后按 pid + 启动时间接管
+- `npm -w server run test:detached` —— 杀掉 ash 之后 agent 还活着、接回后 24 行不丢不重、
+  **退出码也对**;第二条(`test-controllable-detached`)钉的是重启后 stdin 还能接着引导
+- `npm -w server run test:reattach` —— 真库 + 真进程走一遍接管接线,含 claude / codex 两条
+  原生引导回合接回后仍能 interrupt / steer
 
-**但 detached 的另一半保留了**:stdout tee 到 `.agent-out.jsonl`。砍掉重启存活之后,它成了
-交卷补捞(`mcp-handoff.ts` 的 `replayUndeliveredMcpCalls`)唯一的输入来源 —— 不写就是
-「调过 `complete_task` 的任务被记成 failed 且不报错」。钉这一半的是
-`npm -w server run test:agent-tee`,**它在 Windows 上必须绿** —— **实测绿**(2026-08-18)。
+做法与代价写在 `server/src/executors/detached-win.ts` 和 `detached-win-wrap.ts` 顶部,这里只记
+**那条让人栽跟头的实测**:
+
+> Windows 上子进程**默认活不过父进程**。不是 `taskkill /T`、也不是 stdout 管道的事 ——
+> libuv 给每个非 `detached` 的子进程做一次 `AssignProcessToJobObject`,塞进它自己的全局 Job,
+> 而那个 Job 带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`:父进程一退出,句柄由内核回收,圈里的
+> 进程全部被杀。`UV_PROCESS_DETACHED` 是 libuv 唯一跳过那次 assign 的分支。
+>
+> 2026-10-23 在真机上三种起法各跑一遍(父进程起完子进程 700ms 后 `process.exit(0)`,再轮询 3 秒):
+>
+> | 起法 | 父退出后 |
+> |---|---|
+> | 直起 CLI(文件 fd、不 detached) | 子当场死,输出停在 5 行 |
+> | 套一层壳(不 detached) | 壳和 CLI 一起死(壳自己的 Job 又连坐了 CLI) |
+> | **壳 + `detached: true`** | 照常活着,输出继续长到 26 行 |
+
+顺带一条**夹具**层面的教训,三个都踩过:
+
+- `spawn("npx", …)` 在 Windows 上 ENOENT(Node 不认 PATHEXT)。测试里要跑 tsx 就用
+  `spawn(process.execPath, ["--import", "tsx", …])`,两个平台同一条命令;
+- 内嵌脚本里的 import 说明符必须是 **file:// URL**(裸 `D:\…` 的盘符被当协议);
+- **别靠「睡固定时长」造前提**。Windows 上起两层 node 还要过一遍 Defender,实测 600ms 不够;
+  按条件轮询(文件出现 / 行数够了)才跟机器速度无关。原先 `test-reattach` 的假 agent 是
+  「20 段 × 100ms 就自己退」,在真机上造用例那几秒走完它早没了,于是三条断言一起红在一个
+  跟产品毫无关系的理由上。
 
 ## 五、剩下的
 

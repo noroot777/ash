@@ -1,20 +1,28 @@
 // 证明「agent 活得过 server 重启」这件事本身。
 //
 // 时序（三个进程，真的杀掉中间那个）：
-//   ① server-v1 用 spawnDetachedAgent 起一个假 agent，读到前几行就 **process.exit**
+//   ① server-v1 用 spawnForRun（**生产入口**，按平台分派）起一个假 agent，读到前几行
+//      就 **process.exit**
 //      —— 模拟 `npm run restart` 里那句 kill，连 finally 都不给跑
 //   ② 断言：假 agent **仍然活着**（这就是整个方案的立论；管道模式下它此刻已经死了）
 //   ③ server-v2 用 reattachDetachedAgent 按 pid+offset 接管，读完剩下的
 //   ④ 断言：两段拼起来 = 假 agent 完整输出，不丢行、不重行、退出码正确
 //
 // 假 agent 每 120ms 打一行 JSON（贴近 claude 的 stream-json），最后 exit 7。
+//
+// **两个平台跑的是同一份断言**：POSIX 的壳是 `/bin/sh`，Windows 的壳是一个按次生成的 node
+// 壳（executors/detached-win-wrap.ts），两边都由壳写 rc —— 所以「重启后还拿得到退出码」
+// 这一条在哪边都该是绿的。要是哪天 Windows 退回「ash 自己写 rc」，③ 立刻红。
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// 内嵌脚本里的 import 说明符必须是 **file:// URL**:Windows 上一个裸路径的 `D:` 会被当成
+// 协议,动态 import 直接 ERR_UNSUPPORTED_ESM_URL_SCHEME(docs/windows-testing.md 记着这坑)。
+const mod = (rel: string) => JSON.stringify(pathToFileURL(join(HERE, rel)).href);
 const dir = mkdtempSync(join(tmpdir(), "ash-detached-"));
 const TOTAL = 24;
 const EXIT_CODE = 7;
@@ -35,8 +43,8 @@ const t = setInterval(() => {
 const serverScript = join(dir, "server.mjs");
 writeFileSync(
   serverScript,
-  `import { spawnDetachedAgent, reattachDetachedAgent, detachedPathsFor } from ${JSON.stringify(join(HERE, "../src/executors/detached.ts"))};
-import { inspectProcess } from ${JSON.stringify(join(HERE, "../src/proc.ts"))};
+  `import { spawnForRun, reattachDetachedAgent, detachedPathsFor } from ${mod("../src/executors/detached.ts")};
+import { inspectProcess } from ${mod("../src/proc.ts")};
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
 
@@ -61,7 +69,7 @@ function consume(child, stopAfter) {
 }
 
 if (mode === "v1") {
-  const child = spawnDetachedAgent(dir, process.execPath, [agentScript], "", paths);
+  const child = spawnForRun(dir, process.execPath, [agentScript], "", undefined, paths);
   // 读到第 6 行就「被重启」：记下 pid / 启动时间 / 已消费到的字节位置，然后硬退出。
   await consume(child, 6);
   const info = inspectProcess(child.pid);
@@ -84,7 +92,9 @@ if (mode === "v1") {
 
 const run = (args, env) =>
   new Promise((resolve) => {
-    const p = spawn("npx", ["tsx", serverScript, ...args], {
+    // 不走 `npx`:Windows 上 Node 不认 PATHEXT，`spawn("npx")` 直接 ENOENT（而那是
+    // **夹具**的方言问题，不是产品问题）。`--import tsx` 不依赖 PATH，两个平台同一条命令。
+    const p = spawn(process.execPath, ["--import", "tsx", serverScript, ...args], {
       cwd: join(HERE, ".."),
       env: { ...process.env, ...env },
       stdio: ["ignore", "inherit", "inherit"],

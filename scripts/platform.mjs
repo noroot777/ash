@@ -118,25 +118,101 @@ catch { netstat -ano | Select-String ':${port}\\s' | Select-String 'LISTENING' |
   return uniquePids(capture(which("fuser") ?? "/usr/sbin/fuser", ["-n", "tcp", String(port)]));
 }
 
-/** 全进程表的 `{ pid, command }`。查不到返回空数组。 */
+/**
+ * 全进程表的 `{ pid, ppid, command }`。查不到返回空数组。
+ *
+ * `ppid` 是给「杀旧 server 但保住活得过重启的 agent」那条路用的(见 killServerProcess):
+ * Windows 上没有信号,整树击杀只能自己按父子关系算。拿不到父号的行给 `null` ——
+ * 规范化成 0 等于把「问不出来」说成「它没有父进程」,而这里缺一条边就等于漏掉一棵子树。
+ */
 export function listProcesses() {
   const rows = [];
   if (IS_WINDOWS) {
     const out = powerShell(`$ErrorActionPreference='SilentlyContinue'
-Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)\`t$($_.CommandLine)" }`);
+Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)\`t$($_.ParentProcessId)\`t$($_.CommandLine)" }`);
     for (const line of out.split(/\r?\n/)) {
-      const tab = line.indexOf("\t");
-      if (tab < 0) continue;
-      const pid = Number(line.slice(0, tab));
-      if (Number.isInteger(pid) && pid > 0) rows.push({ pid, command: line.slice(tab + 1).trim() });
+      const parts = line.split("\t");
+      if (parts.length < 3) continue;
+      const pid = Number(parts[0]);
+      const ppid = Number(parts[1]);
+      if (!Number.isInteger(pid) || pid <= 0) continue;
+      rows.push({
+        pid,
+        ppid: parts[1].trim() && Number.isInteger(ppid) && ppid >= 0 ? ppid : null,
+        command: parts.slice(2).join("\t").trim(),
+      });
     }
     return rows;
   }
-  for (const line of capture("ps", ["-ww", "-axo", "pid=,command="]).split("\n")) {
-    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
-    if (m) rows.push({ pid: Number(m[1]), command: m[2] });
+  for (const line of capture("ps", ["-ww", "-axo", "pid=,ppid=,command="]).split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] });
   }
   return rows;
+}
+
+/**
+ * 从进程表里挖出这些根的全部后代(含根自己)。纯函数,给 killServerProcess 和它的回归用。
+ *
+ * 已知边界跟 `taskkill /T` 一样:中间那层进程先退出之后,孙子在快照里就挂不回这棵树了
+ * (Windows 不 reparent,但那个父号字段会被 pid 复用污染)。所以这一问是尽力而为 ——
+ * 它只用来**缩小**击杀面,不用来声称「全杀到了」。
+ */
+export function subtreePids(rows, roots) {
+  const children = new Map();
+  for (const row of rows) {
+    if (row.ppid === null || row.ppid === undefined) continue;
+    const list = children.get(row.ppid) ?? [];
+    list.push(row.pid);
+    children.set(row.ppid, list);
+  }
+  const seen = new Set();
+  const stack = [...roots].filter((pid) => Number.isInteger(pid) && pid > 1);
+  while (stack.length) {
+    const pid = stack.pop();
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    for (const child of children.get(pid) ?? []) if (!seen.has(child)) stack.push(child);
+  }
+  return seen;
+}
+
+/**
+ * 停掉旧 server 进程。
+ *
+ * POSIX:就是一发 SIGTERM。信号不级联 —— 它的子进程(输出已落盘的 agent、终端会话、
+ * 预览服务)一个都不会被带走,所以「活得过重启」这件事在那边自动成立。
+ *
+ * Windows:没有信号,原先这一刀是 `taskkill /PID <server> /T /F`,而 `/T` **按父子关系把
+ * 整棵树一起杀** —— 输出已经落盘、本该活得过重启的 agent 也被它带走。这才是「Windows 上
+ * 重启必断」的真正原因(不是落盘那一层做不到,见 server/src/executors/detached-win.ts)。
+ * 所以那边改成自己算:整棵后代**减去**要保住的子树,逐个 `/F`;保住的那几棵一刀不发。
+ *
+ * `protect` 空着(问不到判据、或者压根没有能接管的 agent)时退回 `/T /F`:那是旧行为,
+ * 宁可照旧杀干净,也不留一堆没人管的孤儿终端/预览。返回这一刀是怎么下的,给调用方说话用。
+ */
+export function killServerProcess(pid, protect = []) {
+  if (!Number.isInteger(pid) || pid <= 1) return "skipped";
+  if (!IS_WINDOWS) {
+    killPid(pid);
+    return "signal";
+  }
+  const roots = [...new Set(protect.filter((p) => Number.isInteger(p) && p > 1))];
+  if (!roots.length) {
+    capture("taskkill", ["/PID", String(pid), "/T", "/F"]);
+    return "tree";
+  }
+  const rows = listProcesses();
+  const spared = subtreePids(rows, roots);
+  const doomed = [...subtreePids(rows, [pid])].filter((p) => !spared.has(p) && p !== process.pid);
+  // server 自己先走:它一死就不会再派新活。随后按快照逐个收掉剩下的(快照是击杀面的
+  // 上界,不是「全杀到了」的证明 —— 见 subtreePids)。
+  capture("taskkill", ["/PID", String(pid), "/F"]);
+  for (const victim of doomed) {
+    if (victim === pid) continue;
+    capture("taskkill", ["/PID", String(victim), "/F"]);
+  }
+  return "selective";
 }
 
 /**

@@ -39,7 +39,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, isPidAlive, killPid, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
+import { IS_WINDOWS, isPidAlive, killPid, killServerProcess, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
@@ -250,7 +250,17 @@ if (old.length) {
     say(`  ✓ 有任务在跑,但重启不会打断:${safe} 个会被接管(继续跑,无感)、${lead} 个调度台会自动接回。`);
   }
   if (busy > 0) say(`  ⚠ FORCE:打断 ${busy} 个**接管不了**的任务(判为 failed,可重试);会被接管的不受影响。`);
-  for (const pid of old) killPid(pid);
+  // 「会被接管的不受影响」在 Windows 上得自己兑现:那边没有信号,旧版这一刀是
+  // `taskkill /T /F`,/T 按父子关系把整棵树一起杀 —— agent 的输出早就落盘了,是这一刀
+  // 把它们带走的。所以把 survives 的那几棵子树点名保住(判据见 platform.mjs 的
+  // killServerProcess)。POSIX 上这个参数没有作用:SIGTERM 从来不级联。
+  const spare = Array.isArray(data.survives) ? data.survives.map((t) => t.pid) : [];
+  let how = "signal";
+  for (const pid of old) how = killServerProcess(pid, spare);
+  if (IS_WINDOWS && safe > 0 && how !== "selective") {
+    say(`  ⚠ 这一刀走的是整树强杀(taskkill /T),${safe} 个本可接管的任务会跟着断 ——`);
+    say("     只有问得到判据(survives 名单)时才能点名保住它们。");
+  }
 }
 
 // 不管上面找没找到旧进程,端口都必须**彻底安静**才能起新的。这是全脚本唯一不依赖

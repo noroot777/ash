@@ -1,0 +1,214 @@
+// **Windows 上「活得过 ash 重启」的那条路。**
+//
+// POSIX 那边的做法是套一层 `/bin/sh -c '"$@" >>out 2>>err; printf %s $? >rc'`:shell 既做
+// 重定向、又在 CLI 跑完之后把退出码写进 rc。Windows 上这一层**不需要 shell** —— Node 的
+// `stdio` 直接收文件描述符,内核把那两个句柄交给 CLI,它的 stdout/stderr 就落在文件上,
+// **字节原样**。这比 cmd.exe / PowerShell 的重定向可靠得多:前者要在命令行里再解析一轮
+// 引号(`win-command.ts` 顶部那三条),后者会插手编码(PS 5.1 的 `>>` 写 UTF-16)。
+//
+// 于是那条唯一的生死绑定(stdout 匿名管道:ash 一死读端关闭,CLI 下次写就吃
+// EPIPE/ERROR_BROKEN_PIPE 当场毙命)在这边也断掉了,`spawn.ts` 的 `DETACH=false` 一个字
+// 都不用改 —— 「活得过重启」靠的从来不是 `detached`,是**输出不再经过 ash**。
+// 反过来说,Windows 上**不能**加 `detached`:libuv 把它翻成 `DETACHED_PROCESS |
+// CREATE_NEW_PROCESS_GROUP`,而那边的整树击杀(`taskkill /T`)走的是 ppid 关系、不需要
+// 进程组;`DETACHED_PROCESS` 还实测过能让控制台应用空退(见 confine-job.ts 的那组数字)。
+//
+// ── 退出码与可重连 stdin:套一层壳,跟 POSIX 同一个契约 ──────────────────────────
+//
+// 落盘输出不需要壳,但另外两件事只有「一个活过 ash 的进程」做得到:rc 得由观察到退出的那个
+// 人写,stdin 得有个不随 ash 消失的持有者。所以这边也套一层 —— 不是 shell,是一个按次生成
+// 的 node 壳(`detached-win-wrap.ts`,那边写着为什么不用 cmd.exe / PowerShell、以及代价)。
+//
+// 于是两个平台的契约逐字相同:**pid + 落盘输出 + 退出码 + 可接管 + 可重连 stdin**。
+// 差别只剩实现细节 —— 那边是 `/bin/sh` + FIFO,这边是 node 壳 + 具名管道。
+//
+// 壳是**进程树的根**,也就是 `agentPid` 记的那个号:killTree 的 `taskkill /T` 按 ppid 走,
+// 打在壳上连 CLI 一起收;内核圈定(Job Object)也圈在壳上,CLI 作为它的子进程自动继承,
+// 覆盖范围反而比直起 CLI 那条路更整。
+//
+// ── `detached: true` 在这条路上是**必需**的,不是可选项 ──────────────────────────
+//
+// libuv 在 Windows 上给**每一个非 detached 的子进程**都做一次
+// `AssignProcessToJobObject`,塞进它自己的一个全局 Job —— 那个 Job 带着
+// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`。于是父进程(ash)一退出,句柄由内核回收,
+// 圈里的进程**全部被杀**:这就是「Windows 上 agent 活不过 ash 重启」的真正机制,跟
+// `taskkill /T`、跟 stdout 管道都无关。`UV_PROCESS_DETACHED` 恰好是 libuv 唯一跳过那次
+// assign 的分支,所以这边必须开。
+//
+// 2026-10-23 在 192.168.1.187 实测(父进程起完子进程 700ms 后 process.exit(0),再轮询
+// 3 秒,三种起法各跑一遍):
+//
+//     直起 CLI(文件 fd、不 detached)      → 父一退,子当场死,输出停在 5 行
+//     套壳(不 detached)                   → 壳和 CLI 一起死(壳的 job 又连坐了 CLI)
+//     **detached**                          → 父退出后子照常活着、输出继续长到 26 行
+//
+// 代价是 `DETACHED_PROCESS`:壳自己没有控制台 —— 它是 node,不在乎(powershell.exe 那种
+// 控制台应用会当场空退,见 confine-job.ts 的同一组实测)。CLI 由壳用
+// `windowsHide` 起,拿到的是自己的无窗控制台,不跟 ash 共用 —— 顺带把「终端会话
+// (ConPTY)一关就把 agent 带走」这条路也断了。
+
+import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { closeSync, existsSync, openSync, unlinkSync, writeFileSync } from "node:fs";
+import net from "node:net";
+import {
+  makeDetachedChild, readExitCode, type DetachedChild, type DetachedPaths,
+} from "./detached-child.js";
+import { WINDOWS_WRAP_SOURCE, windowsWrapPaths } from "./detached-win-wrap.js";
+import {
+  agentBaseEnv, failedChild, guardAgentSpawn, isDir, killChild, openTrackFd, registerTrackFd,
+  resolveLaunch, shareChildIdentity, shareTrackFdRegistration,
+} from "./spawn.js";
+import { registerRootLife, shareRootLife } from "./root-life.js";
+import {
+  registerRunOutPath, registerUnitToken, seedUnitToken, shareRunOutPath, shareUnitToken,
+} from "./unit-token.js";
+import { openConfinement, registerConfinement, shareConfinement } from "./kernel-confine.js";
+
+/**
+ * 起一个输出落盘的 agent(Windows)。`keepStdin` = 原生引导回合:首条消息写完不关 stdin,
+ * 调用方继续往里塞后续回合(见上面那段关于「ash 一死 stdin 收 EOF」的说明)。
+ */
+export function spawnWindowsDetachedAgent(
+  cwd: string,
+  bin: string,
+  args: string[],
+  input: string,
+  paths: DetachedPaths,
+  extraEnv?: Record<string, string | undefined>,
+  opts?: { keepStdin?: boolean },
+): DetachedChild | ChildProcess {
+  const blocked = guardAgentSpawn(bin);
+  if (blocked) return blocked;
+  // 前置判定跟 spawnAgent 同一套:两者都会报 ENOENT,只有分开说才不说假话。
+  if (!isDir(cwd)) return failedChild(`工作目录不存在：${cwd}`);
+  let plan;
+  try {
+    plan = resolveLaunch(bin, args);
+  } catch (e) {
+    return failedChild(e instanceof Error ? e.message : String(e));
+  }
+  if (!plan) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
+
+  // 文件先建出来:tailFile 一开始就 open 它们。拿到的 fd 交给子进程当 stdout/stderr,
+  // **父进程这一侧随后立刻关掉** —— 句柄已经随 spawn 复制进子进程,留着只是多占一个。
+  let outFd: number;
+  let errFd: number;
+  try {
+    outFd = openSync(paths.out, "a");
+  } catch (e) {
+    return failedChild(`打开输出文件失败：${paths.out}（${e instanceof Error ? e.message : String(e)}）`);
+  }
+  try {
+    errFd = openSync(paths.err, "a");
+  } catch (e) {
+    try { closeSync(outFd); } catch { /* ignore */ }
+    return failedChild(`打开错误输出文件失败：${paths.err}（${e instanceof Error ? e.message : String(e)}）`);
+  }
+
+  // 壳的源码按次落盘。写不出来就**不要退回「直起 CLI」** —— 那是一条看起来能跑、却悄悄
+  // 丢掉退出码和可重连 stdin 的路,而调用方无从分辨。如实失败。
+  const wrap = windowsWrapPaths(paths);
+  try {
+    writeFileSync(wrap.script, WINDOWS_WRAP_SOURCE);
+  } catch (e) {
+    try { closeSync(outFd); } catch { /* ignore */ }
+    try { closeSync(errFd); } catch { /* ignore */ }
+    return failedChild(`写入运行外壳失败：${wrap.script}（${e instanceof Error ? e.message : String(e)}）`);
+  }
+  try { if (existsSync(wrap.pipeMarker)) unlinkSync(wrap.pipeMarker); } catch { /* 上一轮的残留 */ }
+
+  const env: Record<string, string | undefined> = {
+    ...agentBaseEnv(),
+    ...extraEnv,
+    // 壳认的那几项。跟 POSIX 的 `ASH_OUT`/`ASH_ERR`/`ASH_RC`/`ASH_IN` 同名同义。
+    ASH_OUT: paths.out,
+    ASH_ERR: paths.err,
+    ASH_RC: paths.rc,
+    ASH_VERBATIM: plan.windowsVerbatimArguments ? "1" : "0",
+    ASH_KEEP_STDIN: opts?.keepStdin ? "1" : "0",
+    ASH_IN: opts?.keepStdin ? wrap.pipeName : undefined,
+    ASH_IN_MARKER: opts?.keepStdin ? wrap.pipeMarker : undefined,
+  };
+  const unitToken = seedUnitToken(env);
+  // 内核圈定(Windows 上是 Job Object,见 kernel-confine.ts / confine-job.ts):圈号与记号
+  // 同源。这条路只有父进程这一侧写得了号(拿不到 CREATE_SUSPENDED),所以 coverage 是
+  // `since-enroll` —— 跟 spawnAgent 那条路逐字一致。
+  const confine = openConfinement(unitToken);
+  Object.assign(env, confine?.preExecEnv() ?? {});
+  // 追踪 fd 在 Windows 上恒为空(没有 lsof 等价物,见 track-evidence.ts),这里照旧调一次,
+  // 为的是两条路的形状一致:哪天那边有了反查手段,只改那一处就全线生效。
+  const track = openTrackFd();
+  const stdio: Array<"pipe" | "ignore" | number> = track.fd === null
+    ? ["pipe", outFd, errFd]
+    : ["pipe", outFd, errFd, track.fd];
+  const bornAt = Date.now();                      // 理由见 spawn.ts 里同一句
+  // 壳拿 `node <wrap.cjs> <program> <args…>`:程序和参数照旧逐个过内核,不拼命令行,
+  // 所以 `windowsVerbatimArguments` 这类规则留给壳里那次 spawn 处理(走 ASH_VERBATIM)。
+  const real = spawn(process.execPath, [wrap.script, plan.file, ...plan.args], {
+    cwd,
+    stdio,
+    env,
+    // 见上:不开这个,libuv 的全局 Job 会在 ash 退出时把整棵树一起带走。
+    detached: true,
+    windowsHide: true,
+  });
+  try { closeSync(outFd); } catch { /* ignore */ }
+  try { closeSync(errFd); } catch { /* ignore */ }
+  registerTrackFd(real, track);
+  registerUnitToken(real, unitToken);
+  registerRunOutPath(real, paths.out);
+  // **enroll 成了才登记这个圈**。POSIX 那条路可以无条件登记,因为真正入圈的是 shell 自己
+  // (`CONFINE_ENROLL_CMD` 在 exec 之前跑);这边没有壳内 enroll 这一档,父进程这一次调用
+  // 就是唯一的入圈动作 —— 失败了还登记,判定就会去问一个压根不存在的圈,把「这台设备弃权」
+  // (absent)说成「问了但答不出来」(unknown),而后者会让清理白等一轮。跟 spawn.ts 的管道
+  // 路径逐字同一个写法。
+  if (real.pid && confine?.enroll(real.pid)) registerConfinement(real, confine);
+  else confine?.dispose();
+  registerRootLife(real, bornAt);
+  real.stdin?.write(input);
+  if (!opts?.keepStdin) real.stdin?.end();
+  // 没跑起来的运行:圈已在上面 dispose 过(enroll 不可能成功),这里只负责如实报错。
+  if (!real.pid) return failedChild(`起不来:${bin}`);
+
+  const child = makeDetachedChild({
+    pid: real.pid,
+    paths,
+    startOffset: 0,
+    stdin: real.stdin,
+    kill: () => killChild(real),
+    onExit: (cb) => {
+      real.on("error", () => cb(1));
+      // 壳退出 = CLI 已经跑完、rc 已经写好(那是它退出前的最后两件事)。留一轮重试,
+      // 跟 POSIX 那条路逐字一致:极少数情况下文件写入还没落地。
+      real.on("exit", (code, signal) => {
+        const fallback = code ?? (signal ? 1 : 0);
+        const rc = readExitCode(paths.rc);
+        if (rc !== null) return cb(rc);
+        setTimeout(() => cb(readExitCode(paths.rc) ?? fallback), 50);
+      });
+    },
+  });
+  shareTrackFdRegistration(real, child);
+  shareChildIdentity(real, child);  // 身份以真进程的内核状态为准(理由见 detached.ts 同一句)
+  shareRootLife(real, child);
+  shareUnitToken(real, child);
+  shareRunOutPath(real, child);
+  shareConfinement(real, child);
+  return child;
+}
+
+/**
+ * 接回一个还活着的原生引导回合的 stdin(Windows)。POSIX 那边是重开 FIFO,这边是连回壳
+ * 守着的那条具名管道。标记文件在 = 壳还在守;不在 = 这一轮没有可重连 stdin(普通一次性
+ * 回合),照 POSIX 的形状返回 null。
+ */
+export function reopenWindowsControlStdin(paths: DetachedPaths): ChildProcess["stdin"] {
+  const wrap = windowsWrapPaths(paths);
+  if (!existsSync(wrap.pipeMarker)) return null;
+  // connect 是异步的,写入会先排在缓冲里 —— 跟 POSIX 那边 openSync 成功即可写同义。
+  // 连不上(壳刚好没了)只会 emit error:这一轮引导送不进去,但不该把接回整条路拖挂。
+  const socket = net.connect(wrap.pipeName);
+  socket.on("error", () => {});
+  return socket;
+}

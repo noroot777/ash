@@ -11,7 +11,7 @@ import { openCodexAppServer } from "../src/executors/codex-app-server.js";
 import { CodexExecutor } from "../src/executors/codex.js";
 import { detachedPathsFor } from "../src/executors/detached.js";
 import type { ResidentHandle } from "../src/executors/types.js";
-import { IS_WINDOWS, isPidAlive } from "../src/platform.js";
+import { IS_WINDOWS, isPidAlive, killTree } from "../src/platform.js";
 import * as runs from "../src/runs.js";
 
 function eventQueue() {
@@ -401,11 +401,10 @@ setInterval(() => {}, 1000);
     prompt: "OLD",
     detach: detachedPathsFor(claudeDir, "claude-session", "T0"),
   });
-  if (IS_WINDOWS) assert.equal(claudeHandle.detached, undefined, "Windows Claude 应降级为普通管道，不伪造 detached pid");
-  else {
-    assert.ok(claudeHandle.detached?.pid, "Claude runSteerable(detach) 必须留下可接管 pid");
-    detachedPids.push(claudeHandle.detached!.pid);
-  }
+  // 两个平台同一条契约:给了 detach 路径就必须留下可接管 pid(Windows 走 detached-win.ts,
+  // 输出落盘、stdin 仍是匿名管道 —— 差别逐条写在那个文件顶部,不体现为「没有 pid」)。
+  assert.ok(claudeHandle.detached?.pid, "Claude runSteerable(detach) 必须留下可接管 pid");
+  detachedPids.push(claudeHandle.detached!.pid);
   claudeHandle.kill();
 
   const codexDir = join(detachedRoot, "codex");
@@ -415,16 +414,11 @@ setInterval(() => {}, 1000);
     prompt: "OLD",
     detach: detachedPathsFor(codexDir, "codex-session", "T0"),
   });
-  if (IS_WINDOWS) assert.equal(codexHandle.detached, undefined, "Windows Codex 应降级为普通管道，不伪造 detached pid");
-  else {
-    assert.ok(codexHandle.detached?.pid, "Codex runSteerable(detach) 必须留下可接管 pid");
-    detachedPids.push(codexHandle.detached!.pid);
-  }
+  assert.ok(codexHandle.detached?.pid, "Codex runSteerable(detach) 必须留下可接管 pid");
+  detachedPids.push(codexHandle.detached!.pid);
   codexHandle.kill();
   await new Promise((resolve) => setTimeout(resolve, 150));
-  console.log(IS_WINDOWS
-    ? "✓ Windows Claude/Codex 新生产路径按设计降级为普通管道"
-    : "✓ Claude/Codex 新生产路径都保留 detached 接管信息");
+  console.log("✓ Claude/Codex 新生产路径都保留 detached 接管信息");
 } finally {
   if (stickyPid && isPidAlive(stickyPid)) {
     try { process.kill(stickyPid, "SIGKILL"); } catch { /* 已退出 */ }
@@ -432,10 +426,10 @@ setInterval(() => {}, 1000);
   if (stickyEscapePid && isPidAlive(stickyEscapePid)) {
     try { process.kill(stickyEscapePid, "SIGKILL"); } catch { /* 已退出 */ }
   }
-  if (!IS_WINDOWS) {
-    for (const pid of detachedPids) {
-      try { process.kill(-pid, "SIGKILL"); } catch { /* 已退出 */ }
-    }
+  for (const pid of detachedPids) {
+    // POSIX 打整组(detached 自成组长);Windows 没有进程组,`taskkill /T` 按父子关系走。
+    if (IS_WINDOWS) killTree(pid, "SIGKILL");
+    else { try { process.kill(-pid, "SIGKILL"); } catch { /* 已退出 */ } }
   }
   rmSync(detachedRoot, { recursive: true, force: true });
 }
