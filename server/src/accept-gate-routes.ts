@@ -41,8 +41,16 @@ export function mountAcceptGateRoutes(api: Hono): void {
   // 不想等了：收掉它。取消是用户自己的动作，所以留下的是 canceled 而不是 failed ——
   // 两者下一步完全不同（红了要去修，取消了只是这次不跑）。
   api.post("/tasks/:id/accept-gate/cancel", async (c) => {
-    const body = await c.req.json<{ runId?: unknown }>().catch(() => ({} as { runId?: unknown }));
-    if (body.runId !== undefined && typeof body.runId !== "string") return c.json({ error: "runId 必须是字符串" }, 400);
+    let body: { runId?: unknown };
+    try {
+      const text = await c.req.text();
+      const parsed: unknown = text ? JSON.parse(text) : {};
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid body");
+      body = parsed;
+    } catch { return c.json({ error: "取消请求必须是 JSON 对象" }, 400); }
+    if (body.runId !== undefined && (typeof body.runId !== "string" || !body.runId.trim())) {
+      return c.json({ error: "runId 必须是非空字符串" }, 400);
+    }
     return c.json(await cancelAcceptGate(c.req.param("id"), undefined, body.runId));
   });
 }

@@ -138,6 +138,13 @@ export async function testGateStartup(fixture: GateFixture): Promise<void> {
     await seedTask(projectId, repo, taskId, "cancel.txt");
     await acceptTask(taskId);
     const row = (await runsOf(taskId))[0];
+    for (const body of ["{", "null", "[]", "true", '{"runId":""}']) {
+      const response = await api.request(`/tasks/${taskId}/accept-gate/cancel`, {
+        method: "POST", headers: { "content-type": "application/json" }, body,
+      });
+      assert.equal(response.status, 400);
+      assert.equal((await acceptGateState(taskId)).running?.id, row.id);
+    }
     assert.equal((await cancelAcceptGate(taskId, undefined, "not-this-run")).outcome, "not_running");
     assert.equal((await acceptGateState(taskId)).running?.id, row.id);
     assert.equal((await cancelAcceptGate(taskId, undefined, row.id)).outcome, "canceled");

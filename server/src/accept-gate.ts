@@ -534,11 +534,11 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
 
 export async function cancelAcceptGate(taskId: string, reason = "你在验收台上取消了这一次", runId?: string): Promise<AcceptGateCancelResult> {
   await reconcileGateProcesses(taskId);
-  const row = runId
+  const row = runId !== undefined
     ? (await db.select().from(acceptGateRuns).where(and(eq(acceptGateRuns.taskId, taskId), eq(acceptGateRuns.id, runId)))).at(0)
     : await runningRun(taskId) ?? await latestRun(taskId);
   if (!row) {
-    if (runId) return { outcome: "not_running", runId, gate: null };
+    if (runId !== undefined) return { outcome: "not_running", runId, gate: null };
     const stopped = await stopOwnedGateProcesses(taskId);
     return { outcome: stopped ? "not_running" : "stopping", runId: runId ?? null, gate: null };
   }
