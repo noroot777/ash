@@ -95,7 +95,6 @@ try {
       taskId, command: "node -e \"console.log('actual regression output')\"", cwd: repo,
       regression: true, caller, timeoutMs: 30_000,
     });
-    assert.equal(result.ok, true);
     if (!result.ok) throw new Error(result.error);
     await until("回归真实退出", async () =>
       (await db.select().from(monitors).where(eq(monitors.id, result.monitor.id)))[0]?.status === "exited");
