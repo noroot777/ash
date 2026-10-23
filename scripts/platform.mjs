@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { request } from "node:http";
 import { delimiter, join } from "node:path";
+import { windowsRestartTargets, windowsTerminateScript } from "./windows-restart.mjs";
 
 export const IS_WINDOWS = process.platform === "win32";
 
@@ -128,53 +129,34 @@ catch { netstat -ano | Select-String ':${port}\\s' | Select-String 'LISTENING' |
 export function listProcesses() {
   const rows = [];
   if (IS_WINDOWS) {
-    const out = powerShell(`$ErrorActionPreference='SilentlyContinue'
-Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)\`t$($_.ParentProcessId)\`t$($_.CommandLine)" }`);
-    for (const line of out.split(/\r?\n/)) {
-      const parts = line.split("\t");
-      if (parts.length < 3) continue;
-      const pid = Number(parts[0]);
-      const ppid = Number(parts[1]);
-      if (!Number.isInteger(pid) || pid <= 0) continue;
-      rows.push({
-        pid,
-        ppid: parts[1].trim() && Number.isInteger(ppid) && ppid >= 0 ? ppid : null,
-        command: parts.slice(2).join("\t").trim(),
-      });
-    }
-    return rows;
+    const out = powerShell(`$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
+$rows=@(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {
+  $born = if ($null -ne $_.CreationDate) { $_.CreationDate.ToUniversalTime().ToFileTimeUtc().ToString() } else { '' }
+  [pscustomobject]@{pid=$_.ProcessId;ppid=$_.ParentProcessId;created=$born;command=$_.CommandLine}
+})
+[Console]::Out.WriteLine((ConvertTo-Json -InputObject $rows -Compress -Depth 3))`);
+    try {
+      const parsed = JSON.parse(out);
+      if (!Array.isArray(parsed)) return [];
+      for (const row of parsed) {
+        if (!Number.isInteger(row.pid) || row.pid < 0 || typeof row.created !== "string") return [];
+        if (row.pid === 0) continue;
+        rows.push({
+          pid: row.pid,
+          ppid: Number.isInteger(row.ppid) && row.ppid >= 0 ? row.ppid : null,
+          created: row.created,
+          command: typeof row.command === "string" ? row.command : "",
+        });
+      }
+      return rows;
+    } catch { return []; }
   }
   for (const line of capture("ps", ["-ww", "-axo", "pid=,ppid=,command="]).split("\n")) {
     const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
     if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] });
   }
   return rows;
-}
-
-/**
- * 从进程表里挖出这些根的全部后代(含根自己)。纯函数,给 killServerProcess 和它的回归用。
- *
- * 已知边界跟 `taskkill /T` 一样:中间那层进程先退出之后,孙子在快照里就挂不回这棵树了
- * (Windows 不 reparent,但那个父号字段会被 pid 复用污染)。所以这一问是尽力而为 ——
- * 它只用来**缩小**击杀面,不用来声称「全杀到了」。
- */
-export function subtreePids(rows, roots) {
-  const children = new Map();
-  for (const row of rows) {
-    if (row.ppid === null || row.ppid === undefined) continue;
-    const list = children.get(row.ppid) ?? [];
-    list.push(row.pid);
-    children.set(row.ppid, list);
-  }
-  const seen = new Set();
-  const stack = [...roots].filter((pid) => Number.isInteger(pid) && pid > 1);
-  while (stack.length) {
-    const pid = stack.pop();
-    if (seen.has(pid)) continue;
-    seen.add(pid);
-    for (const child of children.get(pid) ?? []) if (!seen.has(child)) stack.push(child);
-  }
-  return seen;
 }
 
 /**
@@ -224,32 +206,29 @@ export function agentWrapPids(rows) {
  * 是 ash 非 detached 起的子进程 —— 后者会被 libuv 那个 `KILL_ON_JOB_CLOSE` 的全局 Job 在
  * server 一死时连带收掉(机制见 detached-win.ts 顶部),不需要这里补刀。
  *
- * 只有**进程表压根问不出来**时才退回 `/T /F`(那是旧行为):宁可照旧杀干净,也不留一堆没人
- * 管的孤儿终端/预览。返回这一刀是怎么下的,给调用方说话用。
  */
-export function killServerProcess(pid, protect = []) {
-  if (!Number.isInteger(pid) || pid <= 1) return "skipped";
+export function killServerProcess(pid, protect = [], { force = false } = {}) {
+  return killServerProcesses([pid], protect, { force });
+}
+
+export function killServerProcesses(pids, protect = [], { force = false } = {}) {
+  const rootsToStop = pids.filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid);
+  if (!rootsToStop.length) return "skipped";
   if (!IS_WINDOWS) {
-    killPid(pid);
+    for (const pid of rootsToStop) killPid(pid);
     return "signal";
   }
   const rows = listProcesses();
   if (!rows.length) {
-    // 进程表读不出来(PowerShell 不在 / CIM 服务异常)。这时候既算不出要保谁、也算不出
-    // 要杀谁,只剩旧行为。
-    capture("taskkill", ["/PID", String(pid), "/T", "/F"]);
+    if (!force) throw new Error("Windows 进程表查询失败");
+    for (const pid of rootsToStop) capture("taskkill", ["/PID", String(pid), "/T", "/F"]);
     return "tree";
   }
-  const roots = [...new Set([...protect, ...agentWrapPids(rows)])].filter((p) => Number.isInteger(p) && p > 1);
-  const spared = subtreePids(rows, roots);
-  const doomed = [...subtreePids(rows, [pid])].filter((p) => !spared.has(p) && p !== process.pid);
-  // server 自己先走:它一死就不会再派新活。随后按快照逐个收掉剩下的(快照是击杀面的
-  // 上界,不是「全杀到了」的证明 —— 见 subtreePids)。
-  capture("taskkill", ["/PID", String(pid), "/F"]);
-  for (const victim of doomed) {
-    if (victim === pid) continue;
-    capture("taskkill", ["/PID", String(victim), "/F"]);
-  }
+  const roots = [...new Set([...protect, ...agentWrapPids(rows)])];
+  const doomed = windowsRestartTargets(rows, rootsToStop, roots).filter((row) => row.pid !== process.pid);
+  if (!doomed.length) return "gone";
+  const result = powerShell(windowsTerminateScript(doomed));
+  if (!result.includes("ASH_RESTART_KILLED")) throw new Error("Windows 进程实例核验或终止失败");
   return "selective";
 }
 

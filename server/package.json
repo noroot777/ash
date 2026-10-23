@@ -27,7 +27,7 @@
     "db:push": "drizzle-kit push",
     "test:diagnostics": "tsx scripts/test-codex-diagnostics.ts",
     "test:singleton": "tsx scripts/test-singleton.ts",
-    "test:detached": "tsx scripts/test-detached-survival.ts && tsx scripts/test-controllable-detached.ts",
+    "test:detached": "tsx scripts/test-detached-survival.ts && tsx scripts/test-controllable-detached.ts && tsx scripts/test-windows-detached.ts",
     "test:process-identity": "tsx scripts/test-process-identity.ts",
     "test:process-subtrees": "tsx scripts/test-process-subtrees.ts",
     "test:reattach": "tsx scripts/test-reattach.ts",

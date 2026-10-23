@@ -47,7 +47,6 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { closeSync, existsSync, openSync, unlinkSync, writeFileSync } from "node:fs";
-import net from "node:net";
 import {
   makeDetachedChild, readExitCode, type DetachedChild, type DetachedPaths,
 } from "./detached-child.js";
@@ -61,6 +60,8 @@ import {
   registerRunOutPath, registerUnitToken, seedUnitToken, shareRunOutPath, shareUnitToken,
 } from "./unit-token.js";
 import { openConfinement, registerConfinement, shareConfinement } from "./kernel-confine.js";
+import { registerWindowsOwnership } from "./windows-run-evidence.js";
+export { reopenWindowsControlStdin } from "./windows-control-stdin.js";
 
 /**
  * 起一个输出落盘的 agent(Windows)。`keepStdin` = 原生引导回合:首条消息写完不关 stdin,
@@ -108,6 +109,8 @@ export function spawnWindowsDetachedAgent(
   const wrap = windowsWrapPaths(paths);
   try {
     writeFileSync(wrap.script, WINDOWS_WRAP_SOURCE);
+    writeFileSync(wrap.state, JSON.stringify({ supported: !!opts?.keepStdin, status: "pending" }));
+    writeFileSync(wrap.ownership, JSON.stringify({ status: "pending" }));
   } catch (e) {
     try { closeSync(outFd); } catch { /* ignore */ }
     try { closeSync(errFd); } catch { /* ignore */ }
@@ -126,6 +129,8 @@ export function spawnWindowsDetachedAgent(
     ASH_KEEP_STDIN: opts?.keepStdin ? "1" : "0",
     ASH_IN: opts?.keepStdin ? wrap.pipeName : undefined,
     ASH_IN_MARKER: opts?.keepStdin ? wrap.pipeMarker : undefined,
+    ASH_STDIN_STATE: wrap.state,
+    ASH_OWNERSHIP: wrap.ownership,
   };
   const unitToken = seedUnitToken(env);
   // 内核圈定(Windows 上是 Job Object,见 kernel-confine.ts / confine-job.ts):圈号与记号
@@ -183,6 +188,7 @@ export function spawnWindowsDetachedAgent(
   if (real.pid && confine?.enroll(real.pid)) registerConfinement(real, confine);
   else confine?.dispose();
   registerRootLife(real, bornAt);
+  registerWindowsOwnership(real, paths);
   real.stdin?.write(input);
   if (!opts?.keepStdin) real.stdin?.end();
   // 没跑起来的运行:圈已在上面 dispose 过(enroll 不可能成功),这里只负责如实报错。
@@ -206,20 +212,6 @@ export function spawnWindowsDetachedAgent(
   shareUnitToken(real, child);
   shareRunOutPath(real, child);
   shareConfinement(real, child);
+  registerWindowsOwnership(child, paths);
   return child;
-}
-
-/**
- * 接回一个还活着的原生引导回合的 stdin(Windows)。POSIX 那边是重开 FIFO,这边是连回壳
- * 守着的那条具名管道。标记文件在 = 壳还在守;不在 = 这一轮没有可重连 stdin(普通一次性
- * 回合),照 POSIX 的形状返回 null。
- */
-export function reopenWindowsControlStdin(paths: DetachedPaths): ChildProcess["stdin"] {
-  const wrap = windowsWrapPaths(paths);
-  if (!existsSync(wrap.pipeMarker)) return null;
-  // connect 是异步的,写入会先排在缓冲里 —— 跟 POSIX 那边 openSync 成功即可写同义。
-  // 连不上(壳刚好没了)只会 emit error:这一轮引导送不进去,但不该把接回整条路拖挂。
-  const socket = net.connect(wrap.pipeName);
-  socket.on("error", () => {});
-  return socket;
 }

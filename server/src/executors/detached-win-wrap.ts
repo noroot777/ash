@@ -42,6 +42,8 @@ export function windowsWrapPaths(paths: DetachedPaths): {
   script: string;
   pipeMarker: string;
   pipeName: string;
+  state: string;
+  ownership: string;
 } {
   // 管道名必须**跨重启稳定**(接回那一侧要按它找回来),又必须每次运行唯一 ——
   // rc 路径恰好两样都满足:它带着 sessionId 和回合起点。
@@ -52,6 +54,8 @@ export function windowsWrapPaths(paths: DetachedPaths): {
     // 不好保证,而这个文件由壳自己在收尾时删掉 —— 它在 = 管道还有人守着。
     pipeMarker: `${paths.rc}.stdin.pipe`,
     pipeName: `\\\\.\\pipe\\ash-stdin-${id}`,
+    state: `${paths.rc}.stdin.json`,
+    ownership: `${paths.rc}.ownership.json`,
   };
 }
 
@@ -68,7 +72,7 @@ export function windowsWrapPaths(paths: DetachedPaths): {
  */
 export const WINDOWS_WRAP_SOURCE = String.raw`
 const { spawn } = require("node:child_process");
-const { appendFileSync, closeSync, openSync, unlinkSync, writeFileSync } = require("node:fs");
+const { appendFileSync, closeSync, openSync, renameSync, unlinkSync, writeFileSync } = require("node:fs");
 const net = require("node:net");
 
 const OUT = process.env.ASH_OUT;
@@ -77,9 +81,19 @@ const RC = process.env.ASH_RC;
 const PIPE = process.env.ASH_IN || "";
 const MARKER = process.env.ASH_IN_MARKER || "";
 const KEEP = process.env.ASH_KEEP_STDIN === "1";
+const STATE = process.env.ASH_STDIN_STATE;
+const OWNERSHIP = process.env.ASH_OWNERSHIP;
 const [file, ...args] = process.argv.slice(2);
 
 const gripe = (msg) => { try { appendFileSync(ERR, "[ash-wrap] " + msg + "\n"); } catch { /* 盘满 */ } };
+const persist = (path, value) => {
+  writeFileSync(path + ".tmp", JSON.stringify(value));
+  renameSync(path + ".tmp", path);
+};
+const state = (status, error) => {
+  try { persist(STATE, { supported: KEEP, status, error }); }
+  catch (e) { gripe("写输入状态失败:" + e.message); }
+};
 
 let out, err;
 try {
@@ -91,11 +105,15 @@ try {
   process.exit(126);
 }
 
+const from = Date.now();
 const child = spawn(file, args, {
   stdio: ["pipe", out, err],
   windowsHide: true,
   windowsVerbatimArguments: process.env.ASH_VERBATIM === "1",
 });
+const ownership = { wrapperPid: process.pid, pid: child.pid, from, bornBefore: Date.now(), exitedAt: null };
+try { persist(OWNERSHIP, ownership); }
+catch (e) { gripe("写执行进程归属失败:" + e.message); child.kill(); process.exit(126); }
 // 句柄已经随 spawn 复制进子进程,壳这一侧留着只是多占一个。
 closeSync(out);
 closeSync(err);
@@ -111,8 +129,9 @@ if (KEEP && PIPE) {
     conn.on("error", () => {});
     conn.pipe(child.stdin, { end: false });
   });
-  server.on("error", (e) => gripe("具名管道起不来:" + e.message));
+  server.on("error", (e) => { gripe("具名管道起不来:" + e.message); state("failed", e.message); });
   server.listen(PIPE, () => {
+    state("ready");
     if (MARKER) { try { writeFileSync(MARKER, PIPE); } catch (e) { gripe("写管道标记失败:" + e.message); } }
   });
 }
@@ -121,6 +140,9 @@ let done = false;
 const finish = (rc) => {
   if (done) return;
   done = true;
+  ownership.exitedAt = Date.now();
+  try { persist(OWNERSHIP, ownership); } catch (e) { gripe("写执行进程退出证据失败:" + e.message); }
+  state("closed");
   try { writeFileSync(RC, String(rc)); } catch (e) { gripe("写 rc 失败:" + e.message); }
   if (MARKER) { try { unlinkSync(MARKER); } catch { /* 本来就没写出来 */ } }
   try { server && server.close(); } catch { /* ignore */ }

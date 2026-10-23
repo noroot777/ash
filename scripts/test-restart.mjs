@@ -281,6 +281,52 @@ if (!mutedOutput.includes("没答复这条判据")) {
 if (mutedOutput.includes("已就绪")) fail("问不出判据却照样重启了", mutedOutput);
 if (!muteSurvived) fail("问不出判据时不许动旧进程,它却被杀了", mutedOutput);
 
+if (IS_WINDOWS) {
+  const statePath = join(TMP, "cim-state.json");
+  const servicePath = join(TMP, "cim-service.mjs");
+  const hookPath = join(TMP, "cim-fault.cjs");
+  writeFileSync(hookPath, `const cp=require('node:child_process');
+const original=cp.execFileSync;
+cp.execFileSync=function(file,args,options){
+  const index=args?.indexOf('-EncodedCommand')??-1;
+  const script=index>=0?Buffer.from(args[index+1],'base64').toString('utf16le'):'';
+  if(script.includes('Get-CimInstance Win32_Process')) throw new Error('test CIM unavailable');
+  return original(file,args,options);
+};
+require('node:module').syncBuiltinESMExports();`);
+  writeFileSync(servicePath, `import {spawn} from 'node:child_process';
+import {createServer} from 'node:http';
+import {writeFileSync} from 'node:fs';
+const agent=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});
+createServer((request,response)=>{
+ response.setHeader('content-type','application/json');
+ response.end(JSON.stringify(request.url.startsWith('/api/restart-impact')
+  ? {survives:[{pid:agent.pid,title:'protected fixture'}],resumes:[],interrupted:[],mcpDisrupted:[]}
+  : {ok:true,pid:process.pid}));
+}).listen(${PORT},'127.0.0.1',()=>writeFileSync(${JSON.stringify(statePath)},JSON.stringify({pid:process.pid,agent:agent.pid})));`);
+  const service = spawn(process.execPath, [servicePath], { stdio: "ignore" });
+  stubbornChild = service;
+  try {
+    for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt++) await sleep(100);
+    if (!existsSync(statePath)) fail("CIM 故障用例的服务没有启动");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    const result = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+      cwd: REPO,
+      env: { ...env, FORCE: "", WAIT: "", NODE_OPTIONS: `--require "${hookPath.replace(/\\/g, "/")}"` },
+      encoding: "utf8", timeout: 60_000,
+    });
+    const output = (result.stdout ?? "") + (result.stderr ?? "");
+    if (result.status !== 2) fail(`CIM 失败时该以 2 中止,实际 ${result.status}`, output);
+    if (output.includes("已就绪")) fail("CIM 失败却宣称重启成功", output);
+    if (!isPidAlive(state.pid) || !isPidAlive(state.agent)) fail("CIM 失败时动了旧服务或受保护任务", output);
+    console.log("✓ HTTP 判据成功但 CIM 查询失败时,完整 restart 在任何终止动作前中止");
+  } finally {
+    try { service.kill("SIGKILL"); } catch {}
+    stubbornChild = null;
+    await sleep(200);
+  }
+}
+
 // ── 「上一轮留下了单例锁」怎么说给用户听 ─────────────────────────────────────
 // 第 2 轮审查打回的是这条提示的措辞:账本里有退出意向时它写的是「上一实例是正常停的」。
 // 那句站不住 —— 记完账之后再被 SIGKILL 留下的是同一个现场(审查实测)。所以这里钉的是

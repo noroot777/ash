@@ -41,7 +41,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcess, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
+import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
@@ -293,7 +293,13 @@ if (old.length) {
   // (第 1 轮审查 F2)。走到这儿时判据一定是问到了的(问不到 impactOrAbort 已经中止)。
   const spare = Array.isArray(data.survives) ? data.survives.map((t) => t.pid) : [];
   let how = "signal";
-  for (const pid of old) how = killServerProcess(pid, spare);
+  try {
+    how = killServerProcesses(old, spare, { force: FORCE });
+  } catch (error) {
+    say(`  ✋ 无法安全终止 Windows 旧实例: ${error.message}。已中止重启。`);
+    say("     未授权整树强杀;确定接受任务中断才使用 FORCE=1 npm run restart。");
+    process.exit(2);
+  }
   if (IS_WINDOWS && safe > 0 && how !== "selective") {
     say(`  ⚠ 这一刀走的是整树强杀(taskkill /T),${safe} 个本可接管的任务会跟着断 ——`);
     say("     只有问得到判据(survives 名单)时才能点名保住它们。");

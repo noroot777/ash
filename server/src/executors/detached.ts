@@ -32,6 +32,7 @@ import {
   CONFINE_ENROLL_CMD, openConfinement, registerConfinement, shareConfinement,
 } from "./kernel-confine.js";
 import { reopenWindowsControlStdin, spawnWindowsDetachedAgent } from "./detached-win.js";
+import { registerWindowsOwnership } from "./windows-run-evidence.js";
 
 // 落盘文件 / tailFile / 伪装外壳这一层搬到了 detached-child.ts(那边是纯文件与流,
 // 不碰进程);使用方照旧从本文件 import,所以在这里原样转出。
@@ -360,7 +361,7 @@ export function reattachDetachedAgent(opts: {
     // 普通一次性 detached 没有可重连 stdin，仍是 null；原生引导回合从约定路径重开 writer
     // （POSIX 重开 FIFO，Windows 连回壳守着的具名管道 —— 两边同一个契约，见 detached-win.ts）。
     stdin: IS_WINDOWS
-      ? reopenWindowsControlStdin(opts.paths)
+      ? reopenWindowsControlStdin(opts.paths, () => isSameProcess(opts.pid, opts.startedAt))
       : existsSync(controlPath(opts.paths)) ? fifoWriter(controlPath(opts.paths)) : null,
     // 把启动时间**和记号**一起交给 killByPid:接管这一刻核对过的身份,到真要杀它时隔着整段
     // 回合,那个号可能已经换了主人,所以发信号前要按同一判据再核一次(第 1 轮审查 F2)。
@@ -397,5 +398,6 @@ export function reattachDetachedAgent(opts: {
   // 接回这条路同样要带上输出文件:重启后它是这次运行仅存的两条跨进程线索之一
   // (另一条是记号),清理责任记录和 `killByPid` 的第二份证据都读它。
   registerRunOutPath(child, opts.paths.out);
+  if (IS_WINDOWS) registerWindowsOwnership(child, opts.paths);
   return child;
 }

@@ -270,7 +270,7 @@ try {
       { pid: 14, ppid: 1, command: null as unknown as string },
     ]),
     [11],
-    "只有壳自己带记号;它起的 CLI 靠 ppid 跟着一起被保住(subtreePids),不靠命令行",
+    "只有壳自己带记号;它起的 CLI 靠核验过代次的父子边一起被保住,不靠命令行",
   );
 
   console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行/常用命令/壳记号）全部通过");
