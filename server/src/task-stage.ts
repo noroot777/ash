@@ -6,6 +6,7 @@ import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
+import { checkPresetRegressionConclusion } from "./regression-evidence-lifecycle.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -246,13 +247,19 @@ export function mountTaskStageRoutes(api: Hono): void {
       );
     }
 
-    const result = await setTaskStage(
-      taskId,
-      body.stage,
-      task.activeTurnToken || task.activeDirectionToken
-        ? { token: task.activeTurnToken, directionToken: task.activeDirectionToken }
-        : undefined,
-    );
+    let result;
+    try {
+      await checkPresetRegressionConclusion(taskId, body.stage);
+      result = await setTaskStage(
+        taskId,
+        body.stage,
+        task.activeTurnToken || task.activeDirectionToken
+          ? { token: task.activeTurnToken, directionToken: task.activeDirectionToken }
+          : undefined,
+      );
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+    }
     if (!result) return c.json({ error: "当前回合已经结束或已被引导，验收阶段未写入" }, 409);
     const { updatedAt, timelineRecorded } = result;
     return c.json({ reported: true, taskId, stage: body.stage, updatedAt, timelineRecorded });

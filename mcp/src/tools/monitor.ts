@@ -35,7 +35,7 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("要挂哨兵的任务 id（通常就是你自己，任务 prompt 前言里有）"),
       command: z.string().min(1).describe("交给 shell 跑的长跑命令。它自己负责过滤：只吐你真会据此做事的行，成功与失败特征都要覆盖"),
-      regression: z.boolean().optional().describe("执行者跑回归测试时传 true，并传未过滤的原始测试命令。系统自动保存完整日志、真实退出码、执行者身份及测试前后代码树，只发送结束摘要；审查者可复用同一代码树的记录。未指定 timeoutMs 时默认跑到哨兵上限 60 分钟，显式时限仍生效，到期终止测试。不能与 stopWhen/untilExpiry 同用；挂完照常 pause_task 等结果。审查/验证旁路回合不能登记为执行者回归。"),
+      regression: z.boolean().optional().describe("执行者跑回归测试时传 true，并传未过滤的原始测试命令。系统自动保存完整日志、真实退出码、执行者身份、单调登记代次与输入证明状态，只发送结束摘要；当前可变工作目录 runner 没有不可变输入闭包证明，记录仅供诊断，不批准自动复用，前后 Git 树相等也不例外。未指定 timeoutMs 时默认跑到哨兵上限 60 分钟，显式时限仍生效，到期终止测试。不能与 stopWhen/untilExpiry 同用；挂完照常 pause_task 等结果。审查/验证旁路回合不能登记为执行者回归。"),
       description: z.string().optional().describe("一句话说明你在盯什么（会出现在每条事件的抬头和界面上）。省略则用命令本身"),
       cwd: z.string().optional().describe("工作目录。缺省＝这个任务自己的工作目录"),
       timeoutMs: z.number().optional().describe(`盯多久（毫秒），普通哨兵缺省 ${minutes(MONITOR_DEFAULT_TIMEOUT_MS)}，regression=true 缺省为上限 ${minutes(MONITOR_MAX_TIMEOUT_MS)}。到点杀掉进程并推一条收尾事件`),

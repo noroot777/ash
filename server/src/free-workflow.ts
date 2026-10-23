@@ -48,7 +48,8 @@ import {
   stopReviewRunMonitors,
 } from "./free-review-round.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
-import { freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
+import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
+import { checkRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -123,6 +124,8 @@ export async function freeReviewResumeOptions(taskId: string): Promise<ReviewRes
 export async function freeReviewReminder(taskId: string): Promise<string> {
   const run = await reviewingRun(taskId);
   if (!run) return "";
+  const { reference } = await refreshRegressionEvidence(taskId,
+    freeReviewEvidenceDir(taskId, run.id, run.currentRound), run.targetKind === "accepted_merge");
   // 中途提问后续跑那条路上，只有这条提醒还在重贴要求（崩掉重拉走 freeReviewResumeMessage，
   // 两条路各带一份），所以报告格式和扫描义务两份契约都得在 —— 原先这里只有浏览器提醒，
   // 而就地验证那侧的 `verifyReminderFor` 一直带着摘要契约：两个对称端点只做了一个。
@@ -131,7 +134,7 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
     `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}，` +
     REPORT_SUMMARY_REMINDER +
     reviewSweepReminder(run.targetKind !== "accepted_merge") +
-    `回归证据见 ${freeReviewReportPath(taskId, run.id, run.currentRound).replace(/report\.md$/, "regression-evidence.json")}；合并结果审查不适用此清单。` +
+    reference +
     `结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
     `不要调用 complete_task 或 accept_task。`;
 }
@@ -293,6 +296,8 @@ export async function reportFreeReviewConclusion(
   if (!readFreeReviewReport(taskId, run.id, run.currentRound).trim()) {
     throw new Error(`审查结论必须先落报告：请把非空报告写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)} 再上报结论`);
   }
+  await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage,
+    run.targetKind === "accepted_merge");
   await db.update(freeReviewRounds).set({ conclusion: stage })
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
   bus.publish({ type: "task.review", taskId });
@@ -421,6 +426,15 @@ export async function handleFreeWorkflowSettlement(
   // reviewer 已交卷（round 有结论）就必须结算——question 可能是实现回合遗留的旧字段，
   // 拿它挡住已有结论的审查会让链永远停在 reviewing（审查实测复现）。
   if ((task.question || task.resumePrompt) && !round.conclusion) return true;
+  if (round.conclusion) {
+    const { revoked } = await refreshRegressionEvidence(taskId,
+      freeReviewEvidenceDir(taskId, run.id, run.currentRound), run.targetKind === "accepted_merge");
+    if (round.conclusion === "verified" && revoked) {
+      round.conclusion = "verify_failed";
+      await db.update(freeReviewRounds).set({ conclusion: round.conclusion }).where(eq(freeReviewRounds.id, round.id));
+      await appendTaskTimeline(taskId, "审查结算时旧回归复用资格已撤销，本轮不能以旧通过结果验绿。请补跑缺口并更新报告。");
+    }
+  }
   const at = now();
   const outcome = freeReviewOutcome({
     turnOk,

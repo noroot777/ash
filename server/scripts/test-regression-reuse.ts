@@ -39,7 +39,7 @@ try {
   const evidenceDir = join(root, "runs", taskId, "review", "round-1");
   mkdirSync(evidenceDir, { recursive: true });
   const manifest = () => JSON.parse(readFileSync(join(evidenceDir, "regression-evidence.json"), "utf8")) as {
-    records: Array<{ reusable: boolean; passed: boolean | null; command: string; exitCode: number; logPath: string; reason: string }>;
+    records: Array<{ reusable: boolean; passed: boolean | null; command: string; exitCode: number; logPath: string; reason: string; latest: boolean }>;
   };
   const command = `node -e "console.log('OUTPUT'.repeat(30000));process.exit(Number(process.env.ASH_TEST_REGRESSION_FAIL||0))"`;
   const runTest = async (originalCommand = command) => {
@@ -54,7 +54,8 @@ try {
 
   const first = await runTest();
   await regressionEvidenceReference(task, repo, evidenceDir);
-  assert.equal(manifest().records[0]?.reusable, true, "相同代码树的执行者结果可复用");
+  assert.equal(manifest().records[0]?.reusable, false, "相同 Git 树不能证明输入不可变，必须拒绝自动复用");
+  assert.match(manifest().records[0]!.reason, /输入闭包未核实/);
   assert.equal(manifest().records[0]?.exitCode, 0);
   assert.equal(manifest().records[0]?.passed, true);
   assert.match(manifest().records[0]!.reason, /通过.*exitCode=0/);
@@ -66,7 +67,7 @@ try {
   }));
   await regressionEvidenceReference(task, repo, evidenceDir);
   assert.equal(manifest().records[0]?.command, command, "伪造 JSON 不能覆盖数据库里的原始命令和代码树");
-  assert.equal(manifest().records[0]?.reusable, true);
+  assert.equal(manifest().records[0]?.reusable, false);
   const originalLog = readFileSync(firstRecord.logPath);
   writeFileSync(firstRecord.logPath, "ALL TESTS PASSED (forged)\n");
   await regressionEvidenceReference(task, repo, evidenceDir);
@@ -78,7 +79,7 @@ try {
   assert.notEqual(beforeCommit.commit, afterCommit.commit);
   assert.equal(beforeCommit.tree, afterCommit.tree);
   await regressionEvidenceReference(task, repo, evidenceDir);
-  assert.equal(manifest().records[0]?.reusable, true, "只提交而未改代码树不会误作失效");
+  assert.equal(manifest().records[0]?.reusable, false, "只提交而未改代码树也不能补足输入证明");
 
   writeFileSync(join(repo, "code.txt"), "changed without commit\n");
   await regressionEvidenceReference(task, repo, evidenceDir);
@@ -100,9 +101,11 @@ try {
   await runTest();
   delete process.env.ASH_TEST_REGRESSION_FAIL;
   await regressionEvidenceReference(task, repo, evidenceDir);
-  assert.equal(manifest().records.length, 1, "同一命令只保留最新结果");
+  assert.equal(manifest().records.length, 2, "同一命令保留全部历史，不能吞掉失败");
+  assert.equal(manifest().records[0]?.latest, true);
+  assert.equal(manifest().records[1]?.latest, false);
   assert.equal(manifest().records[0]?.exitCode, 1, "后来的失败不能被旧绿结果盖掉");
-  assert.equal(manifest().records[0]?.reusable, true, "失败也是真实证据，但不能视为通过");
+  assert.equal(manifest().records[0]?.reusable, false, "失败如实展示，但缺少输入证明同样禁止自动复用");
   assert.equal(manifest().records[0]?.passed, false);
   assert.match(manifest().records[0]!.reason, /失败.*exitCode=1/);
   assert.match(await regressionEvidenceReference(task, repo, evidenceDir), /reusable=true 只表示证据可引用.*passed=true 且 exitCode=0/);
@@ -211,7 +214,7 @@ try {
   }) }, 1, repo);
   assert.match(verification, /仅「回归测试」可引用.*浏览器真实点检和其它勾选项必须实际执行/);
   assert.ok(verification.includes(REVIEW_VALIDATION_REQUIREMENT));
-  for (const text of [verifyReminderFor(taskId, 1), reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 })]) {
+  for (const text of [await verifyReminderFor(taskId, 1), await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 })]) {
     assert.match(text, /不免除独立代码审查与必要的行为验证/);
   }
   const registered = new Map<string, { description?: string; inputSchema?: Record<string, unknown> }>();

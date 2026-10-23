@@ -44,7 +44,9 @@ import {
   safeReviewFilePath,
   screenshots,
   writeConclusion,
+  reviewRoundDir,
 } from "./review-evidence.js";
+import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { repairPrompt, verifyProtocolFor } from "./review-prompts.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -316,9 +318,17 @@ async function concludeRound(
   at: { station: string | null; stationRound: number },
 ): Promise<void> {
   const { station, stationRound } = at;
-  const conclusion = target.stage === "verified" || target.stage === "verify_failed"
+  let conclusion = target.stage === "verified" || target.stage === "verify_failed"
     ? target.stage as ReviewConclusion
     : null;
+  if (conclusion) {
+    const { revoked } = await refreshRegressionEvidence(target.id, reviewRoundDir(target.id, round));
+    if (conclusion === "verified" && revoked) {
+      conclusion = "verify_failed";
+      await setTaskStage(target.id, conclusion);
+      await appendTaskTimeline(target.id, "验证结算时旧回归复用资格已撤销，本轮不能以旧通过结果验绿。请补跑缺口并更新报告。");
+    }
+  }
   const workflow = taskWorkflowDef(target.workflow);
   const policy = workflowPolicy(workflow, station);
   const action = reviewOutcomeAction({

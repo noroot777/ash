@@ -82,17 +82,16 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
 export function freeReviewResumeMessage(task: TaskRow, run: ReviewRunRow, round: number): string {
   const what = run.targetKind === "accepted_merge" ? "合并结果审查" : `第 ${round} 轮审查`;
   return `【自由工作流 · ${what} · 从中断处继续】\n` +
-    `上一回合中途异常结束（多半是 CLI 与模型掉线）。` +
-    `你这一轮已经做过的分析都还在上文里。\n\n` +
-    `请**接着往下把这一轮做完**，不要从头重看一遍已经看过的东西；` +
-    `仅补跑确实被打断、结论悬空的步骤。\n\n` +
-    `收尾照旧：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；` +
+    `请接着完成本轮，**不要从头**重看；只补跑被打断、结论悬空的步骤。\n\n` +
+    `报告写到 ${freeReviewReportPath(task.id, run.id, round)}；` +
     REPORT_SUMMARY_REMINDER +
     // 续跑只带「收尾时仍然做得到」的那几条扫描义务（`short` 非 null 的）：这一轮的广度
     // 扫描已经过去了，再要求它重扫等于把续跑省下的 10M token 又烧一遍。
     reviewSweepReminder(run.targetKind !== "accepted_merge") +
+    (run.targetKind === "accepted_merge" ? "" :
+      "重读同目录 regression-evidence.json，旧资格作废。") +
     `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论。` +
-    `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
+    `旁路回合：不要调用 complete_task / accept_task。`;
 }
 
 /**
