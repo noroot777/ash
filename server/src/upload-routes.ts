@@ -83,8 +83,13 @@ export function mountUploadRoutes(api: Hono): void {
   // repairUploadClaim;为什么自动迁移修不全在 db/index.ts 的 claim_origin 一段)。
   // 错误一律 400 同句回话,不泄露文件存不存在。
   api.post("/uploads/:file/claim", async (c) => {
-    const body = await c.req.json<{ taskId?: string }>().catch(() => ({ taskId: undefined }));
-    const error = await repairUploadClaim(actorOf(c), basename(c.req.param("file")), body.taskId ?? "");
+    // 请求体是用户给的:合法 JSON 不止对象(null/数组/数字都是),taskId 也可能不是字符串,
+    // 这里不收窄就是 500(第 9 轮复审第 2 轮 N9)。形状不对与业务拒绝同走 400。
+    const body: unknown = await c.req.json().catch(() => null);
+    const taskId = body && typeof body === "object" && typeof (body as { taskId?: unknown }).taskId === "string"
+      ? (body as { taskId: string }).taskId
+      : "";
+    const error = await repairUploadClaim(actorOf(c), basename(c.req.param("file")), taskId);
     return error ? c.json({ error }, 400) : c.json({ ok: true });
   });
 

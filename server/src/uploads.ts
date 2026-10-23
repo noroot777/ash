@@ -67,6 +67,11 @@ export async function registerUpload(
     file: name,
     ownerUserId: fields.ownerUserId ?? null,
     taskId: fields.taskId ?? null,
+    // 声明了归属人的行落盘就带上「本人上传」标记:迁移扫描(db/index.ts claim_origin 段)
+    // 要把没有标记的旧代管行认出来,判据是「建行早于第一位用户建档」—— 那是**墙上时钟**,
+    // 回拨/跨机导入都能把新行推到线前(第 9 轮复审第 2 轮 R4 clock-step 实测)。写入时把
+    // 来历记死,时钟说什么都不再影响这行的隐私;无主行不打标,之后谁补 owner 谁记来历。
+    claimOrigin: fields.ownerUserId ? "user" : null,
     createdAt: now(),
   }).onConflictDoNothing({ target: uploads.file });
   const existing = (await db.select().from(uploads).where(eq(uploads.file, name))).at(0);
@@ -76,10 +81,12 @@ export async function registerUpload(
   // **补 taskId 同样是在改授权面** —— 给别人的私有文件补一条任务 id,等于把它敞开给
   // 那条任务看得见的所有人。所以补空位也要先认人:行是无主的,或者本来就是这次声明
   // 的这个人的。接力导入曾借这一句把同名的私有行挂到接力任务上(第 5 轮审查 P1)。
-  const patch: { ownerUserId?: string; taskId?: string } = {};
+  const patch: { ownerUserId?: string; taskId?: string; claimOrigin?: string } = {};
   const guards = [eq(uploads.file, name)];
   if (!existing.ownerUserId && fields.ownerUserId) {
     patch.ownerUserId = fields.ownerUserId;
+    // 来历跟着 owner 一起记(见上面 insert 的注释);已有来历(repair)的不覆盖。
+    if (!existing.claimOrigin) patch.claimOrigin = "user";
     guards.push(isNull(uploads.ownerUserId));
   }
   const mine = !existing.ownerUserId || existing.ownerUserId === fields.ownerUserId;
@@ -220,10 +227,13 @@ export async function repairUploadClaim(actor: Actor, fileOrPath: string, taskId
   if (row.taskId) return row.taskId === taskId ? null : "已挂在别的任务上,不能改挂";
   const task = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || !(await visibleTaskIds(actor, [taskId])).length) return "目标任务不存在或不可见";
-  // 「比较后再写」:读到空与写回之间别的登记可能刚填上,空位守卫保住先到先得。
+  // 「比较后再写」:读到空与写回之间别的登记可能刚填上,空位守卫保住先到先得。写完要回
+  // 读核实:守卫没写进去(并发另一次确认/登记抢了先)不能当成功报 —— 本人以为挂好了,
+  // 行其实挂在别的任务上(第 9 轮复审第 2 轮 N8)。
   await db.update(uploads).set({ taskId, claimOrigin: "repair" })
     .where(and(eq(uploads.file, name), isNull(uploads.taskId)));
-  return null;
+  const after = (await db.select().from(uploads).where(eq(uploads.file, name))).at(0);
+  return after?.taskId === taskId ? null : "另一次登记抢了先,这行已挂在别的任务上";
 }
 
 /** agent 自己产出的图(工具结果截图之类)。没有上传者,归它跑的那个任务。 */

@@ -621,6 +621,13 @@ export async function ensureSchema() {
   // 两例实测,替换掉的就是那版窗口 SQL)。转换当时**新建**的行(created_at 即转换时刻,
   // 不早于建档)与真私有无法区分,保守保密,走 POST /uploads/:file/claim 的本人确认出口
   // (uploads.ts repairUploadClaim)。幂等:打过标记的不再命中;ISO-8601 字符串可按字典序比。
+  //
+  // 这条扫描每次 ensureSchema 都会跑(转换可能发生在任意一次启动之后),于是判据对**新写
+  // 的行**也必须成立 —— 可墙上时钟保证不了:时钟回拨/跨机导入能把登记时刻推到建档线之前,
+  // 本人刚传的私有文件就会被当成旧代管敞开(第 9 轮复审第 2 轮 R4 clock-step 实测)。所以
+  // 写入侧把来历记死:registerUpload 凡声明 owner 的行落盘即 claim_origin='user',这里的
+  // `claim_origin IS NULL` 就只剩「打标机制存在之前写下的行」能命中 —— 那批行的 created_at
+  // 是当年如实记的,时钟伪造不进历史。残余窄缝只剩打标上线前就带着回拨时钟写入的存量行。
   try {
     await client.execute(
       "UPDATE uploads SET claim_origin = 'conversion' WHERE claim_origin IS NULL AND task_id IS NULL AND owner_user_id IS NOT NULL AND created_at < (SELECT MIN(created_at) FROM users)",
