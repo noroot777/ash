@@ -16,6 +16,7 @@ import { IS_WINDOWS } from "../src/platform.js";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { restartCommand, startCommand, stopCommand, type RunnableCommand } from "../src/terminal-commands.js";
 import { powerShellCommandCases } from "./project-command-powershell-cases.js";
+import { commandLaunch } from "../src/terminal-shell.js";
 
 // ── parse ──────────────────────────────────────────────────────────────────
 assert.equal(parseProjectCommands(null), null);
@@ -180,7 +181,15 @@ if (IS_WINDOWS) {
     });
     assert.notEqual(await waitExit(cmdletFail.id, "p1"), 0, "最后一条是失败的 cmdlet → 非零");
 
+    const version = spawnSync(commandLaunch("").shell, ["-NoLogo", "-NoProfile", "-Command", "100 * $PSVersionTable.PSVersion.Major + $PSVersionTable.PSVersion.Minor"], {
+      encoding: "utf8", timeout: 20_000, windowsHide: true,
+    });
+    assert.ifError(version.error);
+    assert.equal(version.status, 0, version.stderr);
+    const versionNumber = Number(version.stdout.trim());
+    assert.ok(versionNumber >= 500, `unexpected PowerShell version: ${version.stdout}`);
     for (const testCase of powerShellCommandCases(process.execPath)) {
+      if ((testCase.minimumVersion ?? 500) > versionNumber) continue;
       const session = manager.create("p1", cwd, {
         command: { id: "semantic", name: testCase.name, script: testCase.script },
       });

@@ -4,11 +4,18 @@ export function powerShellCommandCases(node: string): {
   exitCode: number;
   output?: string;
   error?: boolean;
+  minimumVersion?: number;
 }[] {
   const native = (exitCode: number) => `& '${node.replace(/'/g, "''")}' -e 'process.exit(${exitCode})'`;
   return [
     { name: "using", script: "using namespace System.Text\n[Encoding]::UTF8.WebName", exitCode: 0, output: "utf-8" },
     { name: "param", script: 'param([string]$name="DEFAULT_OK")\nWrite-Output "NAME=$name"', exitCode: 0, output: "NAME=DEFAULT_OK" },
+    { name: "param-only", script: 'param([string]$name="DEFAULT_OK")', exitCode: 0 },
+    { name: "using-only", script: "using namespace System.Text", exitCode: 0 },
+    { name: "dynamicparam-only", script: "dynamicparam { [System.Management.Automation.RuntimeDefinedParameterDictionary]::new() }", exitCode: 0 },
+    { name: "clean-only", script: 'clean { [Console]::WriteLine("CLEAN_OK") }', exitCode: 0, minimumVersion: 703 },
+    { name: "end-clean", script: 'end { Write-Output "END_OK" }\nclean { [Console]::WriteLine("CLEAN_OK") }', exitCode: 0, output: "CLEAN_OK", minimumVersion: 703 },
+    { name: "native-clean", script: `end { ${native(7)} }\nclean { [Console]::WriteLine("CLEAN_OK") }`, exitCode: 7, output: "CLEAN_OK", minimumVersion: 703 },
     {
       name: "advanced-param",
       script: 'using namespace System.Text\n[CmdletBinding()]\nparam([string]$name="DECLARED_OK")\nWrite-Output "$name $([Encoding]::UTF8.WebName)"',

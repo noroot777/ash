@@ -5,6 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { powerShellCommandCases } from "./project-command-powershell-cases.js";
 
+function hasErrorOutput(output: string): boolean {
+  if (!output.trim().startsWith("#< CLIXML")) return Boolean(output.trim());
+  return /<(?:S|Obj)\b[^>]*\bS="Error"/i.test(output)
+    || Boolean(output.replace(/#< CLIXML\s*/g, "").replace(/<Objs\b[\s\S]*?<\/Objs>/g, "").trim());
+}
+
+assert.equal(hasErrorOutput('#< CLIXML\n<Objs><Obj S="progress"></Obj></Objs>'), false);
+assert.equal(hasErrorOutput('#< CLIXML\n<Objs><Obj S="information"></Obj></Objs>'), false);
+assert.equal(hasErrorOutput('#< CLIXML\n<Objs><S S="Error">failure</S></Objs>'), true);
+assert.equal(hasErrorOutput('#< CLIXML\n<Objs></Objs>native failure'), true);
+
 const platform = process.platform;
 const powerShell = process.env.ASH_TEST_POWERSHELL;
 if (platform !== "win32" && !powerShell) {
@@ -28,7 +39,15 @@ if (platform !== "win32" && !powerShell) {
     Object.defineProperty(process, "platform", { value: platform });
     process.env.PATH = oldPath;
     for (const shell of shells) {
+      const version = spawnSync(shell, ["-NoLogo", "-NoProfile", "-Command", "100 * $PSVersionTable.PSVersion.Major + $PSVersionTable.PSVersion.Minor"], {
+        encoding: "utf8", timeout: 20_000, windowsHide: true,
+      });
+      assert.ifError(version.error);
+      assert.equal(version.status, 0, version.stderr);
+      const versionNumber = Number(version.stdout.trim());
+      assert.ok(versionNumber >= 500, `unexpected PowerShell version: ${version.stdout}`);
       for (const testCase of plans) {
+        if ((testCase.minimumVersion ?? 500) > versionNumber) continue;
         const result = spawnSync(shell, testCase.launch.args, {
           encoding: "utf8",
           timeout: 20_000,
@@ -37,14 +56,14 @@ if (platform !== "win32" && !powerShell) {
         assert.ifError(result.error);
         assert.equal(result.status, testCase.exitCode, `${testCase.name}: ${result.stderr}`);
         if (testCase.output) assert.ok(result.stdout.includes(testCase.output), `${testCase.name}: ${result.stdout}`);
-        assert.equal(Boolean(result.stderr.trim()), Boolean(testCase.error), `${testCase.name}: ${result.stderr}`);
+        assert.equal(hasErrorOutput(result.stderr), Boolean(testCase.error), `${testCase.name}: ${result.stderr}`);
         if (testCase.exitCode === 0) {
           const original = spawnSync(shell, [
             "-NoLogo", "-EncodedCommand", Buffer.from(testCase.script, "utf16le").toString("base64"),
           ], { encoding: "utf8", timeout: 20_000, windowsHide: true });
           assert.ifError(original.error);
           assert.equal(original.status, 0, `${testCase.name} original: ${original.stderr}`);
-          assert.equal(original.stderr.trim(), "", `${testCase.name} original: ${original.stderr}`);
+          assert.equal(hasErrorOutput(original.stderr), false, `${testCase.name} original: ${original.stderr}`);
           assert.equal(result.stdout, original.stdout, `${testCase.name}: complete script output changed`);
         }
         console.log(`PowerShell semantics passed (${shell}): ${testCase.name}`);
