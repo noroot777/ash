@@ -103,13 +103,13 @@ export const SWEEP_RULES: SweepRule[] = [
   {
     id: "执行者回归结果复用",
     full: "仅回归测试可复用本轮后端证据清单标为 reusable=true 的执行者结果：后端已核验执行者身份、真实退出码、完整日志及测试前后与当前代码树一致。"
-      + `直接引用这些结果，${SHARED.noRegressionRerun}；失败结果照实报告，不得当作通过。`
+      + `直接引用这些结果，${SHARED.noRegressionRerun}；reusable=true 仅表示证据可引用，通过必须满足 passed=true 且 exitCode=0；失败结果照实报告，不得当作通过。`
       + "证据缺失、失效或存在未覆盖的新风险时，只针对缺口补跑必要测试或最小复现，不要重跑整套回归。"
       + "在报告技术明细中列出复用来源、命令、结果和补跑原因，不要把命令输出塞进结论摘要。"
       + "复用不免除独立代码审查与必要的行为验证，浏览器真实点检不在复用范围内。\n\n",
-    short: `仅回归测试复用本轮后端证据清单中 reusable=true 的执行者结果，${SHARED.noRegressionRerun}；`
-      + "失败不得当作通过；缺失/失效/未覆盖才补跑；技术明细列复用来源/命令/结果/原因；不免除独立代码审查与必要的行为验证；",
-    probes: [/仅回归测试/, /本轮后端证据清单/, /reusable=true/, new RegExp(SHARED.noRegressionRerun),
+    short: `仅回归测试：本轮后端证据清单 reusable=true 的执行者结果可引用，${SHARED.noRegressionRerun}；`
+      + "通过须 passed=true 且 exitCode=0；失败不得当作通过；缺失/失效/未覆盖补跑；技术明细复用来源/命令/结果/原因；不免除独立代码审查与必要的行为验证；",
+    probes: [/仅回归测试/, /本轮后端证据清单/, /reusable=true/, /passed=true/, /exitCode=0/, new RegExp(SHARED.noRegressionRerun),
       /失败.*不得当作通过/, /缺失.*失效.*未覆盖/, /技术明细.*复用来源/, /不免除独立代码审查与必要的行为验证/],
   },
   {

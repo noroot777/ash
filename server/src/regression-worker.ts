@@ -1,42 +1,50 @@
 import { spawn } from "node:child_process";
-import { closeSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+import { dirname } from "node:path";
+import { and, eq, isNull } from "drizzle-orm";
+import { db, dbClient } from "./db/index.js";
+import { regressionChecks } from "./db/schema.js";
+import { userShellLaunch } from "./platform.js";
+import { safeRunDirectory } from "./review-evidence.js";
+import { regressionLogDigest } from "./regression-files.js";
 import { regressionSnapshot } from "./regression-snapshot.js";
 
-const inputPath = process.argv[2];
-const input = JSON.parse(readFileSync(inputPath, "utf8")) as {
-  recordPath: string;
-  launch: { file: string; args: string[]; windowsVerbatimArguments?: boolean };
-};
-const record = JSON.parse(readFileSync(input.recordPath, "utf8"));
-function save(): void {
-  const temporary = `${input.recordPath}.tmp`;
-  writeFileSync(temporary, JSON.stringify(record));
-  renameSync(temporary, input.recordPath);
-}
-
-record.before = regressionSnapshot(record.cwd);
-record.startedAt = new Date().toISOString();
-save();
-const descriptor = openSync(record.logPath, "a");
+const monitorId = process.argv[2];
 try {
-  const child = spawn(input.launch.file, input.launch.args, {
-    cwd: record.cwd, stdio: ["ignore", descriptor, descriptor],
-    windowsHide: true, windowsVerbatimArguments: input.launch.windowsVerbatimArguments,
-  });
-  let finished = false;
-  function finish(code: number | null, error?: string): void {
-    if (finished) return;
-    finished = true;
-    record.after = regressionSnapshot(record.cwd);
-    record.exitCode = code;
-    record.error = error ?? null;
-    record.endedAt = new Date().toISOString();
-    save();
-    console.log(`REGRESSION_FINISHED exitCode=${code} record=${input.recordPath} log=${record.logPath}`);
-    process.exitCode = code ?? 1;
+  const record = (await db.select().from(regressionChecks).where(eq(regressionChecks.monitorId, monitorId)))[0];
+  if (!record) throw new Error("回归登记不存在");
+  const claimed = await db.update(regressionChecks).set({
+    before: regressionSnapshot(record.cwd), startedAt: new Date().toISOString(),
+  }).where(and(eq(regressionChecks.monitorId, monitorId), isNull(regressionChecks.startedAt))).returning();
+  if (!claimed.length) throw new Error("回归命令已经启动，不能重复执行");
+  let code: number | null = null;
+  let failure: string | null = null;
+  try {
+    if (!(await safeRunDirectory(dirname(record.logPath)))) throw new Error("回归日志目录不安全");
+    const handle = await open(record.logPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try {
+      const launch = userShellLaunch(record.command);
+      code = await new Promise<number | null>((resolve, reject) => {
+        const child = spawn(launch.file, launch.args, {
+          cwd: record.cwd, stdio: ["ignore", handle.fd, handle.fd], windowsHide: true,
+          windowsVerbatimArguments: launch.windowsVerbatimArguments,
+        });
+        child.once("error", reject);
+        child.once("close", resolve);
+      });
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    failure = error instanceof Error ? error.message : String(error);
   }
-  child.once("error", (error) => finish(null, error.message));
-  child.once("exit", (code) => finish(code));
+  await db.update(regressionChecks).set({
+    after: regressionSnapshot(record.cwd), exitCode: code, error: failure,
+    endedAt: new Date().toISOString(), logDigest: await regressionLogDigest(record.logPath),
+  }).where(eq(regressionChecks.monitorId, monitorId));
+  console.log(`REGRESSION_FINISHED exitCode=${code} monitor=${monitorId} log=${record.logPath}${failure ? ` error=${failure}` : ""}`);
+  process.exitCode = code ?? 1;
 } finally {
-  closeSync(descriptor);
+  dbClient.close();
 }

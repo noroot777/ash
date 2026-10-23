@@ -49,7 +49,7 @@
 // (判据已收紧在 proc.ts 的 `unverifiable` 档)。所以这里**拒绝**:身份问不全就不放行,
 // 而那一刻要收掉的进程由**句柄**证明所有权,不经过 pid 身份那条路。
 import { desc, eq } from "drizzle-orm";
-import { MONITOR_MAX_PER_TASK, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
+import { MONITOR_MAX_PER_TASK, MONITOR_MAX_TIMEOUT_MS, normalizeMonitorTimeout, type TaskMonitor } from "@ash/shared/monitor";
 import { neverExitsVerdict } from "@ash/shared/command-never-exits";
 import { endConditionAdvice, endConditionDemand, parseEndCondition } from "@ash/shared/monitor-end-condition";
 import { db } from "./db/index.js";
@@ -245,7 +245,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     const logPath = monitorLogPath(input.taskId, monitorId);
     let launchedCommand = command;
     if (input.regression) {
-      try { launchedCommand = prepareRegressionCommand(input.taskId, monitorId, command, cwd); }
+      try { launchedCommand = await prepareRegressionCommand(input.taskId, monitorId, command, cwd, input.caller.kind === "turn" ? input.caller.role! : ""); }
       catch (error) { return { ok: false, status: 409, error: `回归证据准备失败，测试未启动：${detail(error)}` }; }
     }
     // **这一次创建独有的资源记号**:它随环境种进那个壳,整棵树都带着它(见 platform.ts 的
@@ -253,7 +253,7 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
     // 已经落库、跨重启认得回来,而不是靠事后回填。归属与整项退出这两问都只认它
     // (第 12 轮审查 F1:命令原文不是凭证)。
     const unitToken = `${monitorId}.${id()}`;
-    const timeoutMs = normalizeMonitorTimeout(input.timeoutMs);
+    const timeoutMs = normalizeMonitorTimeout(input.timeoutMs ?? (input.regression ? MONITOR_MAX_TIMEOUT_MS : undefined));
     const startedAt = new Date();
     const intent: Row = {
       id: monitorId,
