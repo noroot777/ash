@@ -31,7 +31,7 @@ import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
-import { acceptGateCheck, dropPendingAcceptGate, startPendingAcceptGate, type AcceptGateIntent } from "./accept-gate.js";
+import { acceptGateCheck, dropPendingAcceptGate, startPendingAcceptGate, type AcceptGateIntent, type AcceptGateSnapshot } from "./accept-gate.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 
 type AcceptSuccess = {
@@ -82,8 +82,9 @@ async function acceptWithoutCleanup(
   task: typeof tasks.$inferSelect,
   kind: AcceptSuccess["kind"],
   message: string,
+  basis: AcceptGateSnapshot | null,
 ): Promise<AcceptTaskResult> {
-  const finalized = await finalizeAcceptance(task, message, false);
+  const finalized = await finalizeAcceptance(task, message, false, {}, basis);
   if (finalized.failure) return finalized.failure;
   const { sharedWorkers } = finalized;
   return {
@@ -169,10 +170,12 @@ async function acceptTaskUnlocked(
   // 这里直接 null 放行）。判在锁里、跑在锁外 —— 那条命令动辄十几分钟，占着仓库锁会让
   // 同仓库其它任务的验收全部干等，所以这里只登记意图，发射在 acceptTask 的锁外那一段。
   const gateProject = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
+  let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
     choices: { by, commit: commitOverride, confirmUnverified },
     intent: gateIntent,
     passedRunId: gatePassedRunId,
+    onBasis: basis => { gateBasis = basis; },
   });
   if (gate) return gate;
 
@@ -186,6 +189,7 @@ async function acceptTaskUnlocked(
       task,
       "in_place",
       `验收通过：${subject}，代码已在原工作区中；无需执行分支合并或 worktree 清理，status 保持 ${task.status}。`,
+      gateBasis,
     );
   }
 
@@ -216,6 +220,7 @@ async function acceptTaskUnlocked(
       "marked_only",
       `验收通过：这条线上没有「合并并清理」这一站，所以只记下「我认可这份产物」，` +
         `没有动 git —— 任务分支和 worktree 都留着。要让这条线自己合，在编排里加上这一站即可。`,
+      gateBasis,
     );
   }
 
@@ -382,9 +387,11 @@ async function acceptTaskUnlocked(
   const mergedAt = now();
   await db.update(tasks).set({
     ...snapshot,
+    ...(!preserveSnapshot ? gateBasis : {}),
     ...(tagged ? {} : { stage: "merged" }),
     updatedAt: mergedAt,
   }).where(eq(tasks.id, taskId));
+  bus.publish({ type: "task.acceptGate", taskId });
   if (!tagged) await recordBranchReceipt(taskId, true);
   if (!tagged) {
     bus.publish({ type: "task.stage", taskId, stage: "merged", updatedAt: mergedAt });

@@ -105,8 +105,8 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
             目标分支一个字节都不会动。
           </p>
           <div className="wait-bar__ops">
-            <button type="button" disabled={busy || shownLog !== null} onClick={() => void openLog()}>
-              <FileText size={11} aria-hidden="true" />{shownLog === null ? "看完整日志" : "已是完整日志"}
+            <button type="button" disabled={busy} onClick={() => void openLog()}>
+              <FileText size={11} aria-hidden="true" />{shownLog === null ? "看完整日志" : "刷新日志"}
             </button>
             <button type="button" disabled={busy} onClick={() => void cancel()}>
               <XCircle size={11} aria-hidden="true" />不等了，收掉它

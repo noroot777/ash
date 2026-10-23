@@ -71,9 +71,22 @@ try {
 
   // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
   // 带 delay（响应体迟到多久）或 status（直接给个 500）。不给就一直回 store.gate。
-  const open = async ({ gate, role = "admin", query = "", command, states } = {}) => {
+  const open = async ({ gate, role = "admin", query = "", command, states, events = false } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
-    const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, command: command === undefined ? gate.command ?? null : command, gate };
+    if (events) await page.addInitScript(() => {
+      const streams = new Set();
+      window.EventSource = class {
+        constructor() { streams.add(this); queueMicrotask(() => this.onopen?.()); }
+        close() { streams.delete(this); }
+      };
+      window.emitGateEvent = event => {
+        for (const stream of streams) stream.onmessage?.({ data: JSON.stringify(event) });
+      };
+    });
+    const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, logText: "checking 42 / 640", command: command === undefined ? gate.command ?? null : command, gate };
+    await page.route("**/api/tasks/gate-task/accept-gate/log?*", route => route.fulfill({
+      status: 200, contentType: "text/plain", body: store.logText,
+    }));
     // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件，挂一条空流免得它反复重连。
     await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
     await page.route("**/api/projects", (route) =>
@@ -408,6 +421,46 @@ try {
     await page.close();
   }
 
+  for (const event of [
+    { type: "task.acceptGate", taskId: "gate-task" },
+    { type: "task.stage", taskId: "gate-task", stage: "accepted", updatedAt: new Date().toISOString() },
+    { type: "task.updated", task: { id: "gate-task", stage: "accepted" } },
+  ]) {
+    const passed = run();
+    const { page, store } = await open({ gate: { command: passed.command, running: null, latest: passed, basis: null },
+      query: "?stage=accepted", events: true });
+    const card = page.locator(".accept-gate-card");
+    await card.getByText(/这次验收没有留下门禁凭据/).waitFor();
+    store.gate = { ...store.gate, basis: basis("passed", passed) };
+    await page.evaluate(event => window.emitGateEvent(event), event);
+    await card.getByText(/这次合并前，验收前置命令通过了/).waitFor();
+    assert.doesNotMatch(await card.innerText(), /没有留下门禁凭据/);
+    await page.close();
+  }
+  {
+    const running = run({ status: "running", exitCode: null, finishedAt: null });
+    const { page, store } = await open({ gate: { command: running.command, running, latest: running }, query: "?wait=1" });
+    const bar = page.locator(".accept-gate-wait");
+    await bar.locator(".wait-bar__bar").click();
+    await bar.getByRole("button", { name: "看完整日志" }).click();
+    await bar.getByText("checking 42 / 640", { exact: true }).waitFor();
+    store.logText = "NEW PROGRESS 500 / 640";
+    await bar.getByRole("button", { name: "刷新日志" }).click();
+    await bar.getByText("NEW PROGRESS 500 / 640", { exact: true }).waitFor();
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const animations = await page.evaluate(() => {
+      return ["workspace-status-dot--active", "workspace-status-dot--working", "team-status-dot--active", "team-status-dot--working"].map(className => {
+        const dot = document.createElement("span");
+        dot.className = className;
+        document.body.append(dot);
+        const animation = getComputedStyle(dot).animationName;
+        dot.remove();
+        return animation;
+      });
+    });
+    assert.deepEqual(animations, ["none", "none", "none", "none"]);
+    await page.close();
+  }
   console.log("accept gate card DOM regression passed");
 } finally {
   await browser?.close();

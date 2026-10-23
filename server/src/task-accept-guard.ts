@@ -9,6 +9,7 @@ import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 import type { AcceptGateView } from "@ash/shared/accept-gate";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { isTurnClaimed } from "./runs.js";
+import { hasOwnedGateProcess, hasStoppingGateProcess, reconcileGateProcesses } from "./accept-gate-ownership.js";
 
 export type AcceptWarning = {
   reason: "temporary_cleanup_failed";
@@ -89,12 +90,20 @@ export async function acceptanceGuard(
   phase: AcceptFailure["phase"],
   options: { allowBaseUpdatePending?: boolean } = {},
 ): Promise<{ task: typeof tasks.$inferSelect | null; failure: AcceptFailure | null }> {
+  await reconcileGateProcesses(taskId);
   const state = await acceptanceState(taskId);
   if (!state.task) {
     return {
       task: null,
       failure: { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase },
     };
+  }
+  if (hasStoppingGateProcess(taskId) || (phase !== "initial" && hasOwnedGateProcess(taskId))) {
+    return { task: state.task, failure: {
+      accepted: false, httpStatus: 409, taskId, reason: "accept_gate_running", phase,
+      error: "验收前置命令尚未确认整棵进程树退出，工作区仍被占用；暂不能合并或清理。",
+      status: state.task.status,
+    } };
   }
   // 每个阶段都重查 archived：验收入口检查过之后、合并/清理之前，任务可能刚被归档——
   // Archived = frozen/read-only，冻结之后一个字节都不能再写（审查实测过中途归档穿透）。

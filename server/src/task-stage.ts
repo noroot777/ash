@@ -76,6 +76,8 @@ export type AcceptedSnapshot = {
   method?: string | null;
   /** 「合并后不提交」那一档留在索引里的内容指纹。 */
   pendingTree?: string | null;
+  gateMode?: string | null;
+  gateRunId?: string | null;
   tailPending: boolean;
   /** 尾段逐站进度（step id 清单）；缺省 = 旧版基线，按空清单恢复。 */
   tailDone?: string[];
@@ -99,6 +101,8 @@ export async function peekAcceptedStage(taskId: string): Promise<ReopenedAccepta
     merge: tasks.acceptedMergeCommit,
     method: tasks.acceptedMergeMethod,
     pendingTree: tasks.acceptedPendingTree,
+    gateMode: tasks.acceptedGateMode,
+    gateRunId: tasks.acceptedGateRunId,
     tailPending: tasks.acceptedTailPending,
     tailDone: tasks.acceptedTailDone,
   }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -111,6 +115,7 @@ export async function peekAcceptedStage(taskId: string): Promise<ReopenedAccepta
       ...(t.source ? { source: t.source } : {}),
       target: t.target, base: t.base, merge: t.merge,
       method: t.method, pendingTree: t.pendingTree,
+      gateMode: t.gateMode, gateRunId: t.gateRunId,
       tailPending: t.tailPending, tailDone,
     },
   };
@@ -135,6 +140,7 @@ export async function clearAcceptedSnapshot(taskId: string): Promise<void> {
     acceptedSourceCommit: null,
     acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
     acceptedMergeMethod: null, acceptedPendingTree: null,
+    acceptedGateMode: null, acceptedGateRunId: null,
     acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now(),
   }).where(eq(tasks.id, taskId));
 }
@@ -172,6 +178,8 @@ export async function restoreTaskStage(
       acceptedMergeCommit: snapshot.merge,
       acceptedMergeMethod: snapshot.method ?? null,
       acceptedPendingTree: snapshot.pendingTree ?? null,
+      acceptedGateMode: snapshot.gateMode ?? null,
+      acceptedGateRunId: snapshot.gateRunId ?? null,
       acceptedTailPending: snapshot.tailPending,
       acceptedTailDone: JSON.stringify(snapshot.tailDone ?? []),
     } : {}),

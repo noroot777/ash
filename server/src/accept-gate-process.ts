@@ -28,23 +28,6 @@ const KILL_CONFIRM_MS = 3_000;
 /** 确认循环的采样间隔。只在取消/超时这种一次性路径上跑，不在热路径。 */
 const KILL_POLL_MS = 50;
 
-/**
- * 两刀都下过、仍然确认不了它退出的那些任务。**不能当它停了**：那个进程的 cwd 正是任务
- * 工作区，而「能不能动这个工作区」这三个入口（删任务 / 删项目 / 释放工作区）判完就动 git。
- *
- * 读的时候**现查一遍**，而不是挂个定时器去扫：这三个入口本来就是同步判据，现查既让记号
- * 自己消失（进程终于退了就不再拦着），也不会留下一张只增不减的表。
- */
-const unconfirmed = new Map<string, { pid: number; startedAt: string | null }>();
-
-export function hasUnconfirmedGateProcess(taskId: string): boolean {
-  const mark = unconfirmed.get(taskId);
-  if (!mark) return false;
-  if (gateTreeAlive(mark.pid, mark.startedAt)) return true;
-  unconfirmed.delete(taskId);
-  return false;
-}
-
 /** 日志落在任务自己的 run 目录下，跟会话正文同一处，归档清理会把它一起带走。 */
 export function acceptGateLogPath(taskId: string, runId: string): string {
   return join(RUNS_DIR, taskId, `accept-gate-${runId}.log`);
@@ -124,32 +107,29 @@ export function isSameGateProcess(pid: number | null | undefined, startedAt: str
  * 现在：身份只在**进场**时核一次（那一刻父进程还在，核得准），之后认的是**进程组**
  * ——后代是不是还在，只有组答得出来，而父进程的号已经不能代表它们了。
  *
- * 返回 true = 确认整棵树都没了（或者进场时它就已经不是当初那条命令）；false = 到这一刻
+ * 返回 true = 确认整棵树都没了；false = 到这一刻
  * 还有活口，**调用方必须如实上报、并继续把工作区当占着**，不能宣告已经收干净。
- *
- * `taskId` 用来在停不掉时留一条记号（见 hasUnconfirmedGateProcess）。
  */
 export async function stopAcceptGate(
-  taskId: string,
+  _taskId: string,
   pid: number | null | undefined,
   startedAt?: string | null,
 ): Promise<boolean> {
-  if (!pid) { unconfirmed.delete(taskId); return true; }
-  // 进场核身份：ash 重启之后那个号可能已经是别人的了，盲发信号打到的是无辜进程。
-  if (startedAt && !isSameGateProcess(pid, startedAt)) { unconfirmed.delete(taskId); return true; }
-  // **记号从这一刻就立起来**，不是等停失败才立：落终态那一步会把 `live` 里的记号撤掉
-  // （「这一次结束了」是真的），而进程还要几秒才咽气 —— 中间那几秒要是谁都答不出「这个
-  // 工作区还有人踩着」，合并和清理就会在它脚下把目录删掉。
-  unconfirmed.set(taskId, { pid, startedAt: startedAt ?? null });
+  if (!pid) return true;
+  if (!gateTreeAlive(pid, startedAt)) return true;
+  const leader = inspectProcessSync(pid);
+  if (!startedAt || (leader && leader.startedAt !== startedAt)) {
+    return false;
+  }
   killTree(pid, "SIGTERM");
-  if (await untilGone(pid, startedAt, KILL_GRACE_MS)) { unconfirmed.delete(taskId); return true; }
+  if (await untilGone(pid, startedAt, KILL_GRACE_MS)) return true;
   killTree(pid, "SIGKILL");
-  if (await untilGone(pid, startedAt, KILL_CONFIRM_MS)) { unconfirmed.delete(taskId); return true; }
+  if (await untilGone(pid, startedAt, KILL_CONFIRM_MS)) return true;
   return false;
 }
 
 /** 这个号（和它那一组）还有在跑的吗。组查不出来的平台（Windows）只能看领头那个。 */
-function gateTreeAlive(pid: number, startedAt?: string | null): boolean {
+export function gateTreeAlive(pid: number, startedAt?: string | null): boolean {
   // 组还在 = 后代还在。父进程先退、`trap '' TERM` 的子进程接着跑，就是这一档。
   if (isProcessGroupAlive(pid)) return true;
   // 领头那个自己：号被别人复用了不算我们的（别把无辜进程算成「还没停掉」）。
@@ -190,7 +170,7 @@ export function acceptGateLogTail(logPath: string, bytes = ACCEPT_GATE_TAIL_BYTE
 export function acceptGateLogText(logPath: string): string {
   const { text, skipped } = readTail(logPath, ACCEPT_GATE_LOG_MAX_BYTES);
   if (!skipped) return text;
-  return `[ash] 这份日志有 ${Math.round((skipped + text.length) / 1_000_000 * 10) / 10} MB，这里只给最后 `
+  return `[ash] 这份日志有 ${Math.round((skipped + Buffer.byteLength(text)) / 1_000_000 * 10) / 10} MB，这里只给最后 `
     + `${Math.round(ACCEPT_GATE_LOG_MAX_BYTES / 1000)} KB。完整文件在 ${logPath}\n\n${text}`;
 }
 
@@ -204,9 +184,15 @@ function readTail(logPath: string, bytes: number): { text: string; skipped: numb
     try {
       const buf = Buffer.alloc(size - start);
       readSync(fd, buf, 0, buf.length, start);
-      const text = buf.toString("utf8");
+      let offset = 0;
+      if (start > 0) {
+        const newline = buf.indexOf(10);
+        if (newline >= 0) offset = newline + 1;
+        else while (offset < buf.length && (buf[offset] & 0xc0) === 0x80) offset++;
+      }
+      const text = buf.subarray(offset).toString("utf8");
       // 从中间切进去的那一行多半是半截，掐掉它比留着一段乱码强。
-      return start > 0 ? { text: text.slice(text.indexOf("\n") + 1), skipped: start } : { text, skipped: 0 };
+      return { text, skipped: start + offset };
     } finally { closeSync(fd); }
   } catch { return { text: "", skipped: 0 }; }
 }

@@ -512,8 +512,8 @@ try {
     assert.equal(greenRun.status, "passed");
     const treeA = greenRun.sourceCommit!;
     assert.notEqual((await taskRow(taskId)).stage, "accepted", "目标工作区脏，这一次不该合进去");
-    assert.equal((await taskRow(taskId)).acceptedGateMode, "passed", "绿了那一按的凭据就是那一次 run");
-    assert.equal((await taskRow(taskId)).acceptedGateRunId, greenRun.id);
+    assert.equal((await taskRow(taskId)).acceptedGateMode, null, "没有实际合并，不能冻结合并凭据");
+    assert.equal((await taskRow(taskId)).acceptedGateRunId, null);
 
     // 代码又改了（B），项目把命令撤了，目标工作区收拾干净 —— 这一按是「直接合」。
     writeFileSync(join(wsPath, "basis.txt"), "second round\n");
@@ -566,6 +566,9 @@ try {
   }
 
   console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 全部通过");
+  await (await import("./test-accept-gate-lifecycle.js")).testGateLifecycle({
+    root, makeRepo, seedProject, seedTask, taskRow, settled,
+  });
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

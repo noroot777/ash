@@ -62,7 +62,9 @@ export function useAcceptGate(taskId: string): {
   useEffect(() => { void reload(); }, [reload]);
   // 服务端的权威信号只有这一条：起了、结束了、被取消了，都发 task.acceptGate。
   const connected = useServerEvents((event) => {
-    if (event.type !== "task.acceptGate" || event.taskId !== taskId) return;
+    const relevant = event.type === "task.updated" ? event.task.id === taskId
+      : (event.type === "task.acceptGate" || event.type === "task.stage") && event.taskId === taskId;
+    if (!relevant) return;
     void reload();
   });
   // 每次（重新）连上都对一次账，理由见文件头。

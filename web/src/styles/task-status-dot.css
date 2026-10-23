@@ -91,18 +91,6 @@
   }
 }
 
-/* 降级动效:两套类名的「会动的那两档」一起关掉(从前这一条分住两个文件,改一处漏一处)。 */
-@media (prefers-reduced-motion: reduce) {
-  .workspace-status-dot--active,
-  .workspace-status-dot--working,
-  .team-status-dot--active,
-  .team-status-dot--working {
-    animation: none;
-    opacity: 1;
-    transform: none;
-  }
-}
-
 .team-status-dot { display: inline-block; box-sizing: border-box; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; font-style: normal; }
 .team-status-dot--pending { border: 1px dashed var(--muted); background: transparent; }
 .team-status-dot--active { background: var(--muted); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
@@ -123,4 +111,16 @@
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* 降级动效:两套类名的「会动的那两档」一起关掉(从前这一条分住两个文件,改一处漏一处)。 */
+@media (prefers-reduced-motion: reduce) {
+  .workspace-status-dot--active,
+  .workspace-status-dot--working,
+  .team-status-dot--active,
+  .team-status-dot--working {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
 }

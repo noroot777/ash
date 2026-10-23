@@ -26,6 +26,7 @@ import { tasks } from "./db/schema.js";
 import { isTurnClaimed } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { hasLiveAcceptGate } from "./accept-gate.js";
+import { reconcileGateProcesses } from "./accept-gate-ownership.js";
 
 /** 409 的响应体,原样回给 UI。 */
 export interface TaskBusyRejection {
@@ -46,6 +47,7 @@ export function isTaskBusy(row: { id: string; status: string }): boolean {
  * `verb` 只拼进文案(「删除」/「清理」),判据对每个入口完全一致。
  */
 export async function taskBusyRejection(taskId: string, verb: string): Promise<TaskBusyRejection | null> {
+  await reconcileGateProcesses(taskId);
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!row) return null;
   // 「在执行」和「在验收」要分开报 —— 用户要做的事不一样(一个去停,一个等它跑完);
