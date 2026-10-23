@@ -7,6 +7,7 @@ import { runDataMigrations } from "./migrations.js";
 import { ensureChatSchema } from "./schema-chat.js";
 import { ensureHandoffTokenUnique } from "./handoff-token-index.js";
 import { ensureFreeWorkflowSchema } from "./schema-free-workflow.js";
+import { ensureAcceptGateSchema } from "./schema-accept-gate.js";
 import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 
 const dbFile = resolveAshDbFile();
@@ -604,6 +605,8 @@ export async function ensureSchema() {
     "ALTER TABLE projects ADD COLUMN commands_config TEXT",
     // 验收合并完落不落提交（1 = 老行为，落提交）。见 db/schema.ts 同名列。
     "ALTER TABLE projects ADD COLUMN accept_commit INTEGER NOT NULL DEFAULT 1",
+    // 验收前置命令（点验收之后、动 git 之前跑，rc=0 才合并）。null = 不设门禁 = 老行为。
+    "ALTER TABLE projects ADD COLUMN accept_gate_command TEXT",
     // 项目级浏览器登录态授权白名单（JSON 字符串数组）。空/null = 不授权,是默认。
     "ALTER TABLE projects ADD COLUMN browser_cdp_domains TEXT",
     // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────
@@ -700,6 +703,7 @@ export async function ensureSchema() {
   }
   await ensureChatSchema(client);
   await ensureFreeWorkflowSchema(client);
+  await ensureAcceptGateSchema(client);
   // DDL 到此为止。剩下那一半(一次性数据搬运 + 退役字段/表清理)在 `migrations.ts`。
   await runDataMigrations(client);
 }

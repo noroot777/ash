@@ -6,6 +6,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { ConflictHandoff } from "./accept-conflict.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
+import type { AcceptGateView } from "@ash/shared/accept-gate";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { isTurnClaimed } from "./runs.js";
 
@@ -44,6 +45,8 @@ export type AcceptFailure = {
   warnings?: AcceptWarning[];
   verification?: UnexecutedVerification;
   confirmationRequired?: "confirmUnverified";
+  /** 验收前置命令这一档（accept_gate_* 三种 reason）的那一次执行；见 accept-gate.ts。 */
+  gate?: AcceptGateView;
 };
 
 export async function acceptanceState(taskId: string): Promise<{

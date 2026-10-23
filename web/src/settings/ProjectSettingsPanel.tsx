@@ -28,6 +28,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
   const [name, setName] = useState(project.name);
   const [repoPath, setRepoPath] = useState(project.repoPath);
   const [busy, setBusy] = useState(false);
+  const [gateCommand, setGateCommand] = useState(project.acceptGateCommand ?? "");
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 路径体检只对**改得动路径的人**有意义:它探的是「你现在填的这条路走不走得通」。
   // 成员那边不但没有提交按钮,`/projects/check` 还会按路径钳制回 403(它是一台目录
@@ -54,6 +55,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
   useEffect(() => {
     setName(project.name);
     setRepoPath(project.repoPath);
+    setGateCommand(project.acceptGateCommand ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
   const dirty = name.trim() !== project.name || repoPath.trim() !== project.repoPath;
@@ -88,6 +90,17 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
         : "以后验收合并只把改动留在目标分支工作区，提交由你自己来");
     }
     catch (error) { notify(error instanceof Error ? error.message : "验收设置保存失败"); }
+    finally { setBusy(false); }
+  };
+  // 这条是**要敲一长串的命令**，所以跟名称/目录一样攒着按钮存；空串 = 不设门禁。
+  const saveGateCommand = async () => {
+    const next = gateCommand.trim() || null;
+    setBusy(true);
+    try {
+      onUpdated(await api.updateProject(project.id, { acceptGateCommand: next }));
+      notify(next ? "以后验收会先跑这条命令，rc=0 才合并" : "已撤掉验收前置命令，验收恢复为直接合并");
+    }
+    catch (error) { notify(error instanceof Error ? error.message : "验收前置命令保存失败"); }
     finally { setBusy(false); }
   };
   const remove = async () => {
@@ -189,6 +202,38 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
             onChange={(checked) => void setAcceptCommit(checked)}
           />
         </div>
+        {/* 「进 main 之前跑一次全量回归」这件事，在 ash 里只有一个确定的时刻可以挂：
+            用户点验收那一下。有审查者来回打回时，没人分得清哪一轮是最后一次改动，所以
+            挂在「实现完成」或者「审查通过」上都会挂错地方（要么白跑好几遍，要么跑的不是
+            最终那棵树）。 */}
+        <label className="settings-field">
+          <span>验收前置命令</span>
+          <input
+            className="mono"
+            value={gateCommand}
+            readOnly={!canManage}
+            placeholder="例如 ./kb.sh test full（留空 = 不设）"
+            onChange={(event) => setGateCommand(event.target.value)}
+          />
+        </label>
+        <div className="settings-row"><div><small>
+          点「验收通过」之后，先在<b>这个任务自己的工作区</b>里跑一遍它，rc=0 才会继续合并：
+          绿了这次验收自动做完，不用再点；红了不合并、不清理，日志会交回那个任务去修。
+          命令可能要跑十几分钟，跑的过程中目标分支一个字节都不会动，验收台上能看状态、看日志、也能收掉它。
+        </small>
+        {/* 被测的那棵树只有在 fast-forward 时才等于合并结果：目标分支这中间要是动过，
+            跑过的就不是合并之后那一版。这不拦，只在验收台上如实说一句。 */}
+        <small>被测的是任务分支当下那棵树；要是合并不是纯 fast-forward，它跟合并结果并不完全相同。</small></div></div>
+        {canManage && (
+          <div className="settings-card-foot">
+            <span>改了只影响之后的验收；已经跑过的记录不受影响。</span>
+            <Button
+              variant="primary"
+              disabled={busy || (gateCommand.trim() || null) === (project.acceptGateCommand ?? null)}
+              onClick={() => void saveGateCommand()}
+            >{busy ? "保存中…" : "保存命令"}</Button>
+          </div>
+        )}
       </div></section>
       <ProjectGitSettings projectId={project.id} canManage={canManage} notify={notify} />
       {canManage && (

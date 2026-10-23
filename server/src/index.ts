@@ -90,7 +90,7 @@ const { startScheduler, api, authGate, resourceGate, personalWriteGate, withHand
 );
 
 async function initializeServer() {
-  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, { reattachRunningTasks }, { sweepRunLogs }, schedulesModule, routesModule, stageModule, acceptanceModule, reviewModule, verifyOverrideModule] =
+  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, { reattachRunningTasks }, { sweepRunLogs }, schedulesModule, routesModule, stageModule, acceptanceRoutesModule, reviewModule, verifyOverrideModule] =
     await Promise.all([
       import("./db/index.js"),
       import("./db/migrateQueues.js"),
@@ -100,7 +100,7 @@ async function initializeServer() {
       import("./schedules.js"),
       import("./routes.js"),
       import("./task-stage.js"),
-      import("./task-accept.js"),
+      import("./task-accept-routes.js"),
       import("./review.js"),
       import("./verify-override.js"),
     ]);
@@ -227,6 +227,14 @@ async function initializeServer() {
     if (claudeMonitorSweep.kept || claudeMonitorSweep.lost) {
       console.log(`[ash] 内置 Monitor 投影：${claudeMonitorSweep.kept} 个来源仍在跑，${claudeMonitorSweep.lost} 个来源已不在`);
     }
+    // 上一轮留在「正在跑」的验收前置命令：进程多半已经不在了（它不脱离 ash），
+    // 行却还挂着。收掉残留、如实落成「被打断」—— 留一个永远转圈的幽灵最坑人。
+    const { recoverAcceptGates } = await import("./accept-gate.js");
+    const gates = await recoverAcceptGates().catch((err) => {
+      console.error("[ash] 验收前置命令对账失败（不影响启动）:", err);
+      return { interrupted: 0 };
+    });
+    if (gates.interrupted) console.log(`[ash] 验收前置命令：${gates.interrupted} 条被重启打断，已收尾`);
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
     // 收拾死在投递链上的 reviewing run（详见 free-workflow.ts reconcileFreeReviews）。
     const { reconcileFreeReviews } = await import("./free-workflow.js");
@@ -293,7 +301,7 @@ async function initializeServer() {
     })
     .catch((err) => console.error("[ash] 原始输出文件回收失败（不影响运行）:", err));
   stageModule.mountTaskStageRoutes(routesModule.api);
-  acceptanceModule.mountTaskAcceptanceRoutes(routesModule.api);
+  acceptanceRoutesModule.mountTaskAcceptanceRoutes(routesModule.api);
   reviewModule.mountReviewRoutes(routesModule.api);
   // 人工替一站「自动验证」签字放行（验证器不认账时唯一的出路）。
   verifyOverrideModule.mountVerifyOverrideRoutes(routesModule.api);

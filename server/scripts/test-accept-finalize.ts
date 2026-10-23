@@ -12,7 +12,8 @@ import { db } from "../src/db/index.js";
 import { freeWorkflowStates, projects, sessions, tasks } from "../src/db/schema.js";
 import { createTasks } from "../src/task-store.js";
 import { taskWorkspace } from "../src/task-workspace.js";
-import { acceptTask, mountTaskAcceptanceRoutes } from "../src/task-accept.js";
+import { acceptTask } from "../src/task-accept.js";
+import { mountTaskAcceptanceRoutes } from "../src/task-accept-routes.js";
 import { readAnyPreview, writeRecord } from "../src/preview-store.js";
 import { previewShell } from "../src/preview-shell.js";
 // 收尾用 killTree 而不是 killByPid,理由见 test-accept-cleanup.ts 里 platform 那行上方。

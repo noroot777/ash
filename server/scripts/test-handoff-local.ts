@@ -561,7 +561,7 @@ try {
     assert.ok(exportedManifest, "捕获实际通过 HTTP 发出的接力 manifest");
     assert.equal(exportedManifest.task.verifyCompletedSteps, completedSteps, "导出完整保留两站执行历史");
 
-    const { mountTaskAcceptanceRoutes } = await import("../src/task-accept.js");
+    const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js");
     const acceptanceApi = new Hono();
     mountTaskAcceptanceRoutes(acceptanceApi);
     for (const scenario of ["complete", "legacy", "empty", "malformed"] as const) {

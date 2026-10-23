@@ -95,15 +95,16 @@ server.registerTool(
   {
     title: "确认验收通过并合并清理",
     description:
-      "仅在用户明确表示「验收通过」「可以合并」等最终验收意图时调用。服务端会确定性执行：检查父成果依赖后把任务分支合并到 mergeTargetBranch（旧任务沿用原目标），确认已合并后删除任务 worktree，并用 git branch -d 安全删除任务分支，最后把 stage 标为 accepted；status 不会改变。冲突、目标工作区脏或清理失败时会返回结构化原因，绝不强制合并。不要自行运行 git merge / worktree remove / branch -d，统一调用本工具。parentId 指向团队且 useWorktree=false 的共享执行者不适用本工具，单独调用会被 409 拒绝；请验收团队整体，团队级成功会联动把全部共享执行者标为 accepted。",
+      "仅在用户明确表示「验收通过」「可以合并」等最终验收意图时调用。服务端会确定性执行：检查父成果依赖后把任务分支合并到 mergeTargetBranch（旧任务沿用原目标），确认已合并后删除任务 worktree，并用 git branch -d 安全删除任务分支，最后把 stage 标为 accepted；status 不会改变。冲突、目标工作区脏或清理失败时会返回结构化原因，绝不强制合并。不要自行运行 git merge / worktree remove / branch -d，统一调用本工具。项目设了「验收前置命令」时，这一按会先在任务工作区里跑一遍那条命令（可能十几分钟），返回 accept_gate_running 表示已经开跑：rc=0 的话这次验收会自动做完，**不用再调一次**；返回 accept_gate_failed 表示它红了，没有合并、也没有清理，日志已经交回那个任务去修。parentId 指向团队且 useWorktree=false 的共享执行者不适用本工具，单独调用会被 409 拒绝；请验收团队整体，团队级成功会联动把全部共享执行者标为 accepted。",
     inputSchema: {
       taskId: z.string().describe("用户明确验收通过的任务 id"),
       confirmUnverified: z.boolean().optional().describe("返回 verify_not_run 时，只有用户知晓「独立验证尚未执行」且明确确认继续验收后才传 true；中途 human 关口会继续推进后续 verify，无需此参数"),
+      gate: z.enum(["skip", "rerun"]).optional().describe("对项目「验收前置命令」的额外指令。不传 = 照常（这棵树上跑过就沿用结果，没跑过就跑一遍）；rerun = 这一按重跑一遍；skip = 这一次不跑它直接合并。**只有用户明确要求重跑或跳过时才传**：跳过等于绕开他自己设的那道闸"),
       commit: z.boolean().optional().describe("这一次合并完落不落提交。不传 = 按项目设置（默认落提交）；false = 只把改动合进目标分支的工作区并暂存、目标分支的提交历史一动不动，此时要求目标分支正检出在项目目录且工作区干净，任务分支一律保留。只有用户明确说了「先别提交」之类才传"),
     },
   },
-  async ({ taskId, confirmUnverified, commit }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/accept`, { confirmUnverified, commit })); }
+  async ({ taskId, confirmUnverified, commit, gate }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/accept`, { confirmUnverified, commit, gate })); }
     catch (e) { return fail(e); }
   },
 );

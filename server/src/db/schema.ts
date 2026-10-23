@@ -28,6 +28,10 @@ export const projects = sqliteTable("projects", {
   // 合进目标分支的工作区并暂存，目标分支的 ref 一个字节都不动，由人自己提交或丢弃。
   // 单次验收可以覆盖它（POST /tasks/:id/accept 的 commit 参数），这里只是默认值。
   acceptCommit: integer("accept_commit", { mode: "boolean" }).notNull().default(true),
+  // 「验收前置命令」：点下验收通过之后、动 git 之前跑的那条命令，rc=0 才合并。
+  // null/空 = 这个项目不设门禁（默认，也是老行为）。为什么钉在验收那一刻，见
+  // shared/src/accept-gate.ts 顶部；执行与判定在 server/src/accept-gate.ts。
+  acceptGateCommand: text("accept_gate_command"),
   // 本项目的任务可以用用户已登录的 Chrome **只读**哪些站点（JSON 字符串数组，裸主机名）。
   // null/空 = 不授权，也是默认。读侧一律过 normalizeBrowserCdpDomains:这一列能被手改,
   // 而一条脏数据混进来就可能把别的站点也当成已授权(见 shared/src/project.ts)。
@@ -376,6 +380,9 @@ export const reviewerProfiles = sqliteTable("reviewer_profiles", {
 // free_review_rounds / free_review_debates / free_review_debate_turns)在
 // `schema-free-workflow.ts`。整份原样再导出,理由同上面多人模式那条。
 export * from "./schema-free-workflow.js";
+
+// 验收前置命令的执行记录(accept_gate_runs)在 `schema-accept-gate.ts`。同上,原样再导出。
+export * from "./schema-accept-gate.js";
 
 // 一次运行的 `sessions` / `session_turns` 两张表在 `schema-sessions.ts`。整份原样再导出,
 // 理由同上面几条:调用处照旧 `import { sessions } from "./db/schema.js"`。

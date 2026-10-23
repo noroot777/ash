@@ -6,7 +6,8 @@ import { makeStep } from "@ash/shared/workflow";
 export async function testTeamAcceptanceVerification() {
   const { db } = await import("../src/db/index.js");
   const { tasks, sessions, projects } = await import("../src/db/schema.js");
-  const { mountTaskAcceptanceRoutes, acceptTask } = await import("../src/task-accept.js");
+  const { acceptTask } = await import("../src/task-accept.js");
+const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js");
   const { readBranchPlan, acceptFamily } = await import("../src/task-branch-routes.js");
   const { commitAt } = await import("../src/task-branch-plan.js");
   const at = new Date().toISOString();

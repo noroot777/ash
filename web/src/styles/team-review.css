@@ -167,3 +167,22 @@
 .pending-merge-actions > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .pending-merge-actions > button.is-primary { border-color: var(--accent); background: var(--accent); color: white; }
 .pending-merge-actions > button:disabled { cursor: not-allowed; opacity: .52; }
+/* 验收前置命令卡。跟 PendingMergeCard 同一副骨架（都是「验收停在这儿 + 出路」），
+   只有色调随状态走：跑着=中性、通过=绿、没通过=红。 */
+.accept-gate-card { display: grid; gap: 8px; margin: 8px 12px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 9px 11px; font-size: 10.5px; }
+.accept-gate-card.is-running { border-color: color-mix(in lch,var(--accent) 30%,var(--line)); background: color-mix(in lch,var(--accent) 5%,var(--panel)); }
+.accept-gate-card.is-passed { border-color: color-mix(in lch,var(--green) 26%,var(--line)); background: var(--green-bg); }
+.accept-gate-card.is-failed { border-color: color-mix(in lch,var(--red) 30%,var(--line)); background: color-mix(in lch,var(--red) 5%,var(--panel)); }
+.accept-gate-card > header { display: flex; align-items: flex-start; gap: 8px; }
+.accept-gate-card > header > span:first-child { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: var(--raised); color: var(--muted); }
+.accept-gate-card.is-running > header > span:first-child { color: var(--accent); }
+.accept-gate-card.is-passed > header > span:first-child { color: var(--green); }
+.accept-gate-card.is-failed > header > span:first-child { color: var(--red); }
+.accept-gate-card > header > div { min-width: 0; flex: 1; }
+.accept-gate-card b { display: block; color: var(--ink); font-size: 11px; }
+.accept-gate-card p { margin: 3px 0 0; color: var(--muted); line-height: 1.55; overflow-wrap: anywhere; }
+.accept-gate-card .pending-merge-actions { margin-top: 1px; }
+.accept-gate-log > span { display: flex; align-items: center; justify-content: space-between; color: var(--faint); font-size: 9.5px; font-weight: 650; }
+.accept-gate-log > span > button { border: 0; background: transparent; padding: 0; color: var(--accent); font-size: 9.5px; }
+.accept-gate-log pre { max-height: 180px; overflow: auto; margin: 4px 0 0; border-radius: 6px; background: var(--canvas); padding: 6px 8px; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.accept-gate-log.is-full pre { max-height: 360px; }

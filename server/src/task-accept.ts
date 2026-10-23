@@ -1,5 +1,4 @@
 import { eq } from "drizzle-orm";
-import type { Hono } from "hono";
 import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@ash/shared/workflow-policy";
 import type { AcceptBy } from "@ash/shared/workflow-policy";
 import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@ash/shared/workflow";
@@ -26,14 +25,13 @@ import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import { recordBranchReceipt } from "./task-branch-receipts.js";
-import { mountBranchPlanRoutes } from "./task-branch-routes.js";
-import { mountPendingMergeRoutes } from "./task-accept-pending.js";
 import { branchDependency, branchOwner, commitAt, dependentTasks, plannedMergeTarget } from "./task-branch-plan.js";
 import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
+import { acceptGateCheck, dropPendingAcceptGate, startPendingAcceptGate, type AcceptGateIntent } from "./accept-gate.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 
 type AcceptSuccess = {
@@ -103,6 +101,8 @@ async function acceptTaskUnlocked(
   by: AcceptBy,
   confirmUnverified: boolean,
   commitOverride?: boolean,
+  gateIntent?: AcceptGateIntent,
+  gatePassedRunId?: string,
 ): Promise<AcceptTaskResult> {
   const preflight = await acceptancePreflight(taskId);
   if (preflight) return preflight;
@@ -165,6 +165,17 @@ async function acceptTaskUnlocked(
     await appendTaskTimeline(taskId, `${verification.message} 本次验收已显式确认继续，未将验证记为已执行或通过。`);
   }
 
+  // 「验收前置命令」：这个项目设了的话，合并之前先跑一遍，rc=0 才继续（不设 = 老行为，
+  // 这里直接 null 放行）。判在锁里、跑在锁外 —— 那条命令动辄十几分钟，占着仓库锁会让
+  // 同仓库其它任务的验收全部干等，所以这里只登记意图，发射在 acceptTask 的锁外那一段。
+  const gateProject = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
+  const gate = await acceptGateCheck(task, gateProject, {
+    choices: { by, commit: commitOverride, confirmUnverified },
+    intent: gateIntent,
+    passedRunId: gatePassedRunId,
+  });
+  if (gate) return gate;
+
   // A task that deliberately ran in the project's existing checkout has no
   // ash/<id> branch or ash-owned worktree to merge/delete.
   if (!task.useWorktree) {
@@ -178,7 +189,7 @@ async function acceptTaskUnlocked(
     );
   }
 
-  const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+  const project = gateProject;
   if (!project) {
     return {
       accepted: false,
@@ -556,7 +567,14 @@ async function acceptanceContext(taskId: string): Promise<{
 export async function acceptTask(
   taskId: string,
   by: AcceptBy = "human",
-  advanceOpts: WorkflowAdvanceOptions & { confirmUnverified?: boolean; commit?: boolean } = {},
+  advanceOpts: WorkflowAdvanceOptions & {
+    confirmUnverified?: boolean;
+    commit?: boolean;
+    /** 这一按对验收前置命令的额外指令：跳过这一次 / 强制重跑一次。 */
+    acceptGate?: AcceptGateIntent;
+    /** **内部用**：门禁绿了之后系统自己接着做完的那一次带的凭据（见 accept-gate.ts）。 */
+    acceptGatePassedRunId?: string;
+  } = {},
 ): Promise<AcceptTaskResult> {
   // 预览实例：库是主库的快照，任务行指的却是真分支、真 worktree。走结构化拒绝而不是抛
   // 异常，UI 才能把这句话原样显示在验收按钮旁边（见 preview-instance.ts）。
@@ -603,7 +621,10 @@ export async function acceptTask(
               `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
             );
           }
-          return acceptTaskUnlocked(taskId, by, advanceOpts.confirmUnverified === true, advanceOpts.commit);
+          return acceptTaskUnlocked(
+            taskId, by, advanceOpts.confirmUnverified === true, advanceOpts.commit,
+            advanceOpts.acceptGate, advanceOpts.acceptGatePassedRunId,
+          );
         });
       }
     } finally {
@@ -641,26 +662,21 @@ export async function acceptTask(
     // continueTask 会因验收互斥静默退避(accept-conflict.ts 顶部注释)。
     flushConflictHandoff(taskId);
   }
+  // 验收前置命令的发射点。**必须在这儿**（仓库锁之外、验收互斥之外）：那条命令要跑十几
+  // 分钟，占着仓库锁会让同仓库其它任务的验收全部干等；而它跑完之后还要自己再发起一次
+  // 验收，占着验收互斥的话那一次会被自己挡回来。判定仍在锁里做（acceptGateCheck）。
+  if (!result.accepted && result.reason === "accept_gate_required") {
+    const gate = await startPendingAcceptGate(taskId);
+    if (gate) {
+      result = gate.status === "running"
+        ? {
+          ...result, reason: "accept_gate_running", gate,
+          error: `${result.error} 已经在跑了（日志 ${gate.logPath}）。跑完如果是绿的，这次验收会自动接着做完，不用再点。`,
+        }
+        : { ...result, reason: "accept_gate_failed", gate, error: `${result.error} 但这条命令没能跑起来：${gate.logTail.trim() || "详见任务时间线"}` };
+    }
+  } else {
+    dropPendingAcceptGate(taskId);
+  }
   return result;
-}
-
-export function mountTaskAcceptanceRoutes(api: Hono): void {
-  mountBranchPlanRoutes(api, acceptTask);
-  // 「合并后不提交」那一档的收尾（核对现场 / 现在提交 / 重新合一次），自成一套退路。
-  mountPendingMergeRoutes(api);
-  api.get("/tasks/:id/acceptance-check", async c => {
-    const task = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
-    if (!task) return c.json({ error: "not found" }, 404);
-    return c.json({ verification: await unexecutedVerification(task) });
-  });
-  api.post("/tasks/:id/accept", async (c) => {
-    const input = await c.req.json<{ confirmUnverified?: unknown; commit?: unknown }>().catch(() => null);
-    // commit 只认真正的布尔：别的一律当「没传」= 跟项目设置走。含糊的真值转换在这儿
-    // 就是替用户决定要不要在他的目标分支上产生提交。
-    const commit = typeof input?.commit === "boolean" ? input.commit : undefined;
-    const result = await acceptTask(c.req.param("id"), "human", { confirmUnverified: input?.confirmUnverified === true, commit });
-    if (result.accepted) return c.json(result);
-    const { httpStatus, ...body } = result;
-    return httpStatus === 404 ? c.json(body, 404) : c.json(body, 409);
-  });
 }

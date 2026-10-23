@@ -19,6 +19,7 @@ import { useBranchPlan } from "../review/useBranchPlan.ts";
 import { UnexecutedVerificationNotice, useAcceptanceVerification } from "../review/UnexecutedVerificationNotice.tsx";
 import { AcceptCommitChoice, useAcceptCommitDefault } from "../review/AcceptCommitChoice.tsx";
 import { PendingMergeCard } from "../review/PendingMergeCard.tsx";
+import { AcceptGateCard } from "../review/AcceptGateCard.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -164,6 +165,9 @@ export function AcceptanceControls({
   const commitDefault = useAcceptCommitDefault(task.projectId, canChooseCommit && action === "accept");
   const commitChecked = commitChoice ?? commitDefault.value ?? true;
   const [feedback, setFeedback] = useState("");
+  // 这一按对验收前置命令的额外指令。只能由那张卡上的两颗按钮设进来,设完立刻打开同一道
+  // 验收确认框 —— 跳过门禁直接合并是不可逆动作,不该比正常验收少一道确认。
+  const [gateIntent, setGateIntent] = useState<"skip" | "rerun" | null>(null);
   const [busy, setBusy] = useState(false);
   const confirmExecutorSwap = useExecutorGate();
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
@@ -177,7 +181,7 @@ export function AcceptanceControls({
   // 关掉确认框就把这一次的选择还原成项目默认：这个勾的语义是「本次」，下次打开还留着
   // 上次的选择，就成了一个没人记得自己设过的隐形开关。
   useEffect(() => {
-    if (action !== "accept") setCommitChoice(null);
+    if (action !== "accept") { setCommitChoice(null); setGateIntent(null); }
   }, [action]);
 
   // 动作成功之后的「再拉一遍任务」是**另一件事**：POST 已经 200、合并/打回都已发生,
@@ -210,13 +214,25 @@ export function AcceptanceControls({
         // 「会提交」就该提交，哪怕这中间有人改了项目设置。上面那道门禁保证了走到这里
         // 一定已经读到默认值，所以这里不会退化成 undefined。
         canChooseCommit ? commitChoice ?? commitDefault.value ?? undefined : undefined,
+        gateIntent ?? undefined,
       );
       if (!result.accepted) {
-        setFailure(result);
+        // 门禁那三种失败由门禁卡自己完整地讲(状态、日志、出路),这里再贴一条红条只会
+        // 把同一件事说两遍,还会把「正在跑」说成「验收未完成」。
+        const gateReason = result.reason.startsWith("accept_gate");
+        setFailure(gateReason ? null : result);
         if (result.confirmationRequired === "confirmUnverified") {
           verification.setAcknowledged(false);
           await refreshAfterMutation();
           setAction("accept");
+          return;
+        }
+        if (gateReason) {
+          notify(result.reason === "accept_gate_running"
+            ? "验收前置命令已开跑；绿了这次验收会自动做完，不用再点"
+            : result.reason === "accept_gate_failed"
+              ? "验收前置命令没通过，没有合并——详情和出路见下面那张卡"
+              : result.error);
           return;
         }
         const handedOff = result.reason === "merge_conflict" && result.conflictHandoff?.notified === true;
@@ -298,6 +314,13 @@ export function AcceptanceControls({
       {/* 「合并后不提交」那一档的常驻状态与出路。它自己判要不要出现（不适用就渲染 null），
           所以每个有验收动作的表面都自动带上，不用各处再判一遍。 */}
       <PendingMergeCard task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
+      {/* 验收前置命令的状态与出路。没设这条命令、也没跑过时它自己渲染 null。 */}
+      <AcceptGateCard
+        task={task}
+        notify={notify}
+        disabled={archived || inFlight || busy}
+        onIntent={(intent) => { setGateIntent(intent); setAction("accept"); }}
+      />
       {verification.verification && action !== "accept" && <UnexecutedVerificationNotice verification={verification.verification} continuing={midGate} />}
       {action === "accept" && (
         <ConfirmDialog
@@ -307,13 +330,25 @@ export function AcceptanceControls({
             : task.useWorktree
               ? `${acceptanceMessage(task, commitChecked)} ${commitChecked ? "已执行的合并和删除不可逆。" : "已删除的 worktree 不可逆；合并结果会留在工作区等你自己提交或丢弃。"}`
               : acceptanceMessage(task)}
-          confirmLabel={midGate ? "放行" : needsVerificationConfirmation ? "知情并验收" : commitChecked ? "验收通过" : "验收通过（不提交）"}
+          confirmLabel={gateIntent === "skip"
+            ? "跳过前置命令并验收"
+            : gateIntent === "rerun"
+              ? "重跑前置命令"
+              : midGate ? "放行" : needsVerificationConfirmation ? "知情并验收" : commitChecked ? "验收通过" : "验收通过（不提交）"}
           danger={!midGate && !!task.useWorktree}
           busy={busy}
           confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight || verification.loading || !!verification.error || (needsVerificationConfirmation && !verification.acknowledged) || commitDefault.pending}
           onConfirm={() => void accept()}
           onClose={() => setAction(null)}
         >
+          {/* 这一按跟「普通的验收通过」不是一回事,得在按下去之前说破:一个是明知红着仍然合,
+              另一个是再烧十几分钟。 */}
+          {gateIntent === "skip" && (
+            <p role="alert">这一次<b>不跑</b>验收前置命令，直接按上面说的合并。那条命令上一次是红的，这一按等于明确说「这条红跟这次改动无关」。</p>
+          )}
+          {gateIntent === "rerun" && (
+            <p role="status">这一按先把验收前置命令从头跑一遍（它可能要跑十几分钟），rc=0 才会继续合并；跑的过程中目标分支一动不动。</p>
+          )}
           {checkingDependencies && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
           {verification.loading && <p role="status">正在核对独立验证执行记录…</p>}
           {verification.error && <p role="alert">验证执行记录读取失败：{verification.error}。请关闭后重试。</p>}

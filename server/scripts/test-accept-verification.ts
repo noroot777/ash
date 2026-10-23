@@ -13,7 +13,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 export async function testAcceptanceVerification(root: string) {
   const { db } = await import("../src/db/index.js");
   const { projects, tasks, sessions } = await import("../src/db/schema.js");
-  const { acceptTask, mountTaskAcceptanceRoutes } = await import("../src/task-accept.js");
+  const { acceptTask } = await import("../src/task-accept.js");
+const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js");
   const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { acceptFamily, readBranchPlan } = await import("../src/task-branch-routes.js");

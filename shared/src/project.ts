@@ -30,6 +30,10 @@ export interface Project {
   // 分支的工作区并暂存，目标分支 ref 一动不动，提交与否由人自己决定。这是**项目默认**，
   // 每次验收都能单独覆盖（验收确认框里那个勾）。
   acceptCommit: boolean;
+  // 「验收前置命令」：点下验收通过之后、动 git 之前要跑的那条命令，rc=0 才合并。
+  // null = 这个项目不设门禁（默认，也是老行为）。为什么钉在验收那一刻而不是每轮收尾，
+  // 见 shared/src/accept-gate.ts 顶部。
+  acceptGateCommand: string | null;
   // 本项目的任务可以用用户已登录的 Chrome **只读**哪些站点（裸主机名，含子域）。
   // 空数组 = 不授权，也是默认值；取舍见本文件末尾 normalizeBrowserCdpDomains。
   browserCdpDomains: string[];

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { MAX_PREVIEW_SCRIPT_LENGTH, parsePreviewConfig } from "@ash/shared/preview";
 import { normalizeProjectCommands, parseProjectCommands } from "@ash/shared/project-commands";
 import { normalizeBrowserCdpDomains } from "@ash/shared/project";
+import { MAX_ACCEPT_GATE_COMMAND, normalizeAcceptGateCommand } from "@ash/shared/accept-gate";
 import { detectPreviewCandidates } from "./preview-command.js";
 import { rmSync } from "node:fs";
 import { join, basename } from "node:path";
@@ -131,6 +132,8 @@ export function mountProjectRoutes(api: Hono): void {
       previewConfig: null,
       commandsConfig: null,
       acceptCommit: true,
+      // 新项目不设验收前置命令（= 老行为）。要设在项目设置 → 验收里填。
+      acceptGateCommand: null,
       // 新项目一律不授权浏览器登录态 —— 授权必须是用户明确开的那一下。
       browserCdpDomains: [],
       createdAt: now(),
@@ -205,6 +208,8 @@ export function mountProjectRoutes(api: Hono): void {
       previewConfig: null,
       commandsConfig: null,
       acceptCommit: true,
+      // 新项目不设验收前置命令（= 老行为）。要设在项目设置 → 验收里填。
+      acceptGateCommand: null,
       // 新项目一律不授权浏览器登录态 —— 授权必须是用户明确开的那一下。
       browserCdpDomains: [],
       createdAt: now(),
@@ -296,6 +301,18 @@ export function mountProjectRoutes(api: Hono): void {
     if (b.acceptCommit !== undefined) {
       if (typeof b.acceptCommit !== "boolean") return c.json({ error: "acceptCommit 必须是布尔值" }, 400);
       patch.acceptCommit = b.acceptCommit;
+    }
+    // 验收前置命令：空串/null 都是「这个项目不设门禁」，跟 previewCommand 一样只存一种写法。
+    // 同样不校验命令本身能不能跑 —— 跑不起来由那一次门禁如实报，而不是在设置页拦着不让存。
+    if (b.acceptGateCommand !== undefined) {
+      if (b.acceptGateCommand !== null && typeof b.acceptGateCommand !== "string") {
+        return c.json({ error: "acceptGateCommand 必须是字符串或 null" }, 400);
+      }
+      const raw = typeof b.acceptGateCommand === "string" ? b.acceptGateCommand.trim() : "";
+      if (raw && !normalizeAcceptGateCommand(raw)) {
+        return c.json({ error: `验收前置命令无效或过长（最多 ${MAX_ACCEPT_GATE_COMMAND} 字）` }, 400);
+      }
+      patch.acceptGateCommand = normalizeAcceptGateCommand(raw);
     }
     // 浏览器登录态授权白名单。空数组 = 收回授权(不是「不变」)—— 撤销必须有明确的表达方式,
     // 否则只能靠删项目。归一化是宽进严出的:粘一整条 URL 进来也认,认不出形状的那条丢掉。

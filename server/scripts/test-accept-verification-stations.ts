@@ -12,7 +12,8 @@ export const multiVerifyWorkflow = JSON.stringify({ workspace: "isolated", steps
 export async function testVerificationStations() {
   const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
   const { tasks, sessions } = await import("../src/db/schema.js");
-  const { acceptTask, mountTaskAcceptanceRoutes } = await import("../src/task-accept.js");
+  const { acceptTask } = await import("../src/task-accept.js");
+const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js");
   const { handleTaskSettlement, startVerifyRound } = await import("../src/review.js");
   const { isTurnClaimed } = await import("../src/runs.js");
   const { readBranchPlan } = await import("../src/task-branch-routes.js");

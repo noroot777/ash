@@ -34,6 +34,7 @@ import type {
   TeamPresetConfig,
 } from "@ash/shared";
 
+import type { AcceptGateView } from "@ash/shared/accept-gate";
 import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
@@ -50,6 +51,7 @@ import { pendingMergeApi } from "./pendingMergeApi.ts";
 export type { TaskScopedHandoffPreflightResult } from "./handoffApi.ts";
 
 import type {
+  AcceptGateState,
   AcceptTaskResult,
   DeleteTaskResult,
   DetectedCli,
@@ -139,7 +141,7 @@ export const api = {
     request(`/projects/${id(projectId)}/preview/detect`),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit" | "browserCdpDomains">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit" | "acceptGateCommand" | "browserCdpDomains">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
@@ -406,12 +408,28 @@ export const api = {
     verification: import("@ash/shared/workflow-policy").UnexecutedVerification | null;
   }> => request(`/tasks/${id(taskId)}/acceptance-check`),
   // `commit` 只覆盖这一次：不传 = 跟项目设置走（默认合并后提交）。
-  acceptTask: async (taskId: string, confirmUnverified = false, commit?: boolean): Promise<AcceptTaskResult> => {
-    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified, commit }));
+  acceptTask: async (
+    taskId: string,
+    confirmUnverified = false,
+    commit?: boolean,
+    // 对验收前置命令的额外指令：rerun=这一按就重跑一遍，skip=这一次不跑直接合。
+    // 不传 = 照常（有现成结果就沿用，没有就跑一遍）。
+    gate?: "skip" | "rerun",
+  ): Promise<AcceptTaskResult> => {
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified, commit, gate }));
     const body = await parseBody(response);
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
   },
+  acceptGate: (taskId: string): Promise<AcceptGateState> => request(`/tasks/${id(taskId)}/accept-gate`),
+  // 整份日志单独取：状态接口每隔几秒拉一次，几十 MB 的回归输出不能搭在它上面。
+  acceptGateLog: async (taskId: string): Promise<string> => {
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept-gate/log`));
+    if (!response.ok) throw apiError(response, await parseBody(response));
+    return await response.text();
+  },
+  cancelAcceptGate: (taskId: string): Promise<{ canceled: true; gate: AcceptGateView }> =>
+    request(`/tasks/${id(taskId)}/accept-gate/cancel`, json("POST", {})),
   branchPlan: (taskId: string): Promise<BranchPlanView> => request(`/tasks/${id(taskId)}/branch-plan`),
   releaseTaskWorkspace: (taskId: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/release-workspace`, json("POST", { fingerprint })),
   changeMergeTarget: (taskId: string, branch: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/merge-target`, json("POST", { branch, fingerprint })),

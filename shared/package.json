@@ -26,6 +26,10 @@
       "types": "./src/branch-plan.ts",
       "default": "./src/branch-plan.ts"
     },
+    "./accept-gate": {
+      "types": "./src/accept-gate.ts",
+      "default": "./src/accept-gate.ts"
+    },
     "./accept-pending": {
       "types": "./src/accept-pending.ts",
       "default": "./src/accept-pending.ts"

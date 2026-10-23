@@ -612,9 +612,20 @@ export type AcceptTaskFailure = {
   }[];
   warnings?: AcceptTaskWarning[];
   conflictHandoff?: { notified: boolean; message: string };
+  /** 验收前置命令那三种失败（accept_gate_required/running/failed）带回来的现场。 */
+  gate?: import("@ash/shared/accept-gate").AcceptGateView;
 };
 
 export type AcceptTaskResult = AcceptTaskSuccess | AcceptTaskFailure;
+
+/** GET /tasks/:id/accept-gate：这个项目设没设门禁、现在跑没跑、上一次跑成什么样。 */
+export type AcceptGateState = {
+  /** 项目设置里的那条命令；null = 这个项目没设门禁。 */
+  command: string | null;
+  running: import("@ash/shared/accept-gate").AcceptGateView | null;
+  /** 最近一次（可能就是 running 那条）。 */
+  latest: import("@ash/shared/accept-gate").AcceptGateView | null;
+};
 
 // 人工强制通过一站「自动验证」之后的落点：签字之后线可能停在下一道关口、又开了一轮
 // 验证、也可能直接合并完了，所以回的是**推进之后**的游标与验收阶段。
