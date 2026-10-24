@@ -35,7 +35,7 @@ import { isAncestor } from "./git-accept.js";
 import { commitAt, plannedMergeTarget } from "./task-branch-plan.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { acceptGateCommandOf, gateCwd, gateView, headCommit, latestRun, runningRun } from "./accept-gate-state.js";
+import { acceptGateCommandOf, gateHead, gateView, headCommit, latestRun, prepareGateCwd, runningRun } from "./accept-gate-state.js";
 export { acceptGateCommandOf, acceptGateRunOf, acceptGateState } from "./accept-gate-state.js";
 import { continueWhenIdle } from "./runs.js";
 import type { AcceptFailure } from "./task-accept-guard.js";
@@ -128,7 +128,7 @@ export async function acceptGateCheck(
     return null;
   }
 
-  const cwd = await gateCwd(task, project.repoPath);
+  const cwd = await prepareGateCwd(task, project.repoPath);
   const head = await headCommit(cwd);
 
   // 门禁绿了之后系统自己接着做完的那一次：带着凭据进来，不再重判。
@@ -524,7 +524,7 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
   const command = acceptGateCommandOf(project);
   if (!command || !project) return false;
   if (await runningRun(task.id)) return true;
-  const head = await headCommit(await gateCwd(task, project.repoPath));
+  const head = await gateHead(task, project.repoPath);
   const previous = await latestRun(task.id);
   return !(previous && head && previous.status === "passed"
     && previous.sourceCommit === head && previous.command === command);

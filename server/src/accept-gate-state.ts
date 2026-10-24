@@ -4,7 +4,7 @@ import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { acceptGateLogTail } from "./accept-gate-process.js";
 import { commitAt } from "./task-branch-plan.js";
-import { taskWorkspace } from "./task-workspace.js";
+import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
@@ -43,7 +43,7 @@ export async function runningRun(taskId: string): Promise<GateRow | null> {
 }
 
 /** 这个任务干活的那个目录。worktree 没了/不是 git 项目时回落到项目目录（同 workflow 的命令站）。 */
-export async function gateCwd(task: TaskRow, repoPath: string): Promise<string> {
+export async function prepareGateCwd(task: TaskRow, repoPath: string): Promise<string> {
   try { return (await taskWorkspace(task, repoPath)).path; }
   catch { return repoPath; }
 }
@@ -55,6 +55,11 @@ export async function gateCwd(task: TaskRow, repoPath: string): Promise<string> 
  * 复用等于拿上一棵树的结论替这一棵背书）。
  */
 export const headCommit = (cwd: string) => commitAt(cwd, "HEAD");
+
+export async function gateHead(task: TaskRow, repoPath: string): Promise<string | null> {
+  const cwd = await existingTaskWorkspacePath(task, repoPath);
+  return cwd ? headCommit(cwd) : null;
+}
 
 export function acceptGateCommandOf(project: Pick<ProjectRow, "acceptGateCommand"> | null | undefined): string | null {
   return normalizeAcceptGateCommand(project?.acceptGateCommand);
@@ -97,7 +102,9 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   // 新鲜度按**现在**这棵树算：前端据它决定说「已通过，可以直接验收」还是「要重跑」。
   // 判据与 acceptGateCheck 的复用判据必须是同一条（提交 + 命令），否则卡上说「不会重跑」、
   // 一点下去却真的重跑了。
-  const head = project ? await headCommit(await gateCwd(task, project.repoPath)) : null;
+  const frozen = task.archived || task.stage === "accepted" || task.stage === "merged";
+  const head = frozen ? task.acceptedSourceCommit ?? basis?.run?.sourceCommit ?? null
+    : project ? await gateHead(task, project.repoPath) : null;
   const stale = !head || head !== latestRow.sourceCommit || latestRow.command !== command;
   return { command, running: null, latest: { ...view, stale }, basis };
 }
