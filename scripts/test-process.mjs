@@ -26,9 +26,13 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
   let completed = false;
   let expired = false;
   let timer;
+  let result;
+  let operationError;
+  const captured = { stdout: "", stderr: "" };
+  const cleanupErrors = [];
+  const stdoutPath = join(temporary, "stdout.log");
+  const stderrPath = join(temporary, "stderr.log");
   try {
-    const stdoutPath = join(temporary, "stdout.log");
-    const stderrPath = join(temporary, "stderr.log");
     const stdout = openSync(stdoutPath, "w");
     descriptors.push(stdout);
     const stderr = openSync(stderrPath, "w");
@@ -46,7 +50,7 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
     const expiration = new Promise((resolveTimeout) => {
       if (timeout > 0) timer = setTimeout(() => { expired = true; resolveTimeout(null); }, timeout);
     });
-    let result = await Promise.race([finished, expiration]);
+    result = await Promise.race([finished, expiration]);
     if (result && !result.error && !result.signal && result.status === expectedStatus) {
       while (true) {
         const active = await scope.active();
@@ -64,23 +68,41 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
     }
     const remaining = await scope.active();
     if (!remaining.length) scope.remove();
-    const checked = assertProcessResult({
-      ...result,
-      stdout: readFileSync(stdoutPath, "utf8"),
-      stderr: readFileSync(stderrPath, "utf8"),
-    }, expectedStatus, command);
     completed = true;
-    return checked;
-  } finally {
+  } catch (error) { operationError = error; }
+  finally {
     clearTimeout(timer);
-    try {
-      if (!completed && existsSync(scope.directory)) {
-        await scope.stop();
-        scope.remove();
-      }
-    } finally {
-      for (const descriptor of descriptors) closeSync(descriptor);
-      rmSync(temporary, { recursive: true, force: true });
+    const cleanupScope = async () => {
+      if (!existsSync(scope.directory)) return;
+      try { await scope.stop(); scope.remove(); }
+      catch (error) { cleanupErrors.push(error); }
+    };
+    if (!completed) await cleanupScope();
+    for (const [stream, path] of [["stdout", stdoutPath], ["stderr", stderrPath]]) {
+      try { captured[stream] = readFileSync(path, "utf8"); }
+      catch (error) { cleanupErrors.push(error); }
     }
+    if (completed && cleanupErrors.length) await cleanupScope();
+    for (const descriptor of descriptors) {
+      try { closeSync(descriptor); }
+      catch (error) { cleanupErrors.push(error); }
+    }
+    try { rmSync(temporary, { recursive: true, force: true }); }
+    catch (error) { cleanupErrors.push(error); }
   }
+  if (expired) result = { ...result, error: Object.assign(new Error("测试执行超时"), { code: "ETIMEDOUT" }) };
+  if (!result) result = { status: null, signal: null, error: operationError };
+  let failure;
+  try { assertProcessResult({ ...result, ...captured }, expectedStatus, command); }
+  catch (error) { failure = error; }
+  const errors = [failure, operationError, ...cleanupErrors].filter(Boolean);
+  if (errors.length) {
+    if (errors.length === 1 && failure) throw failure;
+    const cause = failure ?? operationError ?? cleanupErrors[0];
+    throw Object.assign(new AggregateError(errors,
+      `${command}: 测试执行或清理失败\n${errors.map((error) => error.message).join("\n")}\n${captured.stdout}${captured.stderr}`, { cause }), {
+      code: cause.code, ...captured, cleanupErrors,
+    });
+  }
+  return { ...result, ...captured };
 }

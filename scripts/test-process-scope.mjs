@@ -72,7 +72,7 @@ export class TestProcessScope {
     for (const record of records) {
       const row = rows.find((entry) => entry.pid === record.pid);
       if (!row || (windows && (row.born > record.at || row.born < this.started - 1_000))) continue;
-      if (!existsSync(join(this.directory, `${record.pid}.exited`))) owned.add(record.pid);
+      owned.add(record.pid);
     }
     if (!windows) for (const row of rows) if (groups.has(row.group)) owned.add(row.pid);
     let changed = true;
@@ -88,43 +88,54 @@ export class TestProcessScope {
   }
 
   async stop() {
-    writeFileSync(join(this.directory, "stopped"), "");
+    const errors = [];
+    const attempt = async (operation) => {
+      try { return await operation(); }
+      catch (error) { errors.push(error); return []; }
+    };
+    const signal = (pid, name) => {
+      try { process.kill(pid, name); }
+      catch (error) { if (error.code !== "ESRCH") errors.push(error); }
+    };
+    await attempt(() => writeFileSync(join(this.directory, "stopped"), ""));
     for (const child of this.children) {
       if (!child.pid || child.exitCode !== null || child.signalCode !== null) continue;
       if (windows) {
         try { await command("taskkill", ["/PID", String(child.pid), "/T", "/F"]); }
-        catch (error) { if (!Number.isInteger(error.code)) throw error; }
+        catch (error) { if (!Number.isInteger(error.code)) errors.push(error); }
       } else {
-        try { process.kill(-child.pid, "SIGTERM"); } catch {}
+        signal(-child.pid, "SIGTERM");
       }
     }
-    let active = await this.active();
+    let active = await attempt(() => this.active());
     if (!windows) {
-      const groups = readdirSync(this.directory).filter((name) => name.endsWith(".root")).map(Number.parseFloat);
-      for (const group of groups) try { process.kill(-group, "SIGTERM"); } catch {}
-      for (const row of active) try { process.kill(row.pid, "SIGTERM"); } catch {}
+      const groups = await attempt(() => readdirSync(this.directory).filter((name) => name.endsWith(".root")).map(Number.parseFloat));
+      for (const group of groups) signal(-group, "SIGTERM");
+      for (const row of active) signal(row.pid, "SIGTERM");
       await delay(100);
     }
     for (let attempt = 0; attempt < 3; attempt++) {
-      active = await this.active();
-      if (!active.length) return;
+      try { active = await this.active(); }
+      catch (error) { errors.push(error); break; }
+      if (!active.length) break;
       if (windows) {
         for (const row of active) {
           try { await command("taskkill", ["/PID", String(row.pid), "/T", "/F"]); }
-          catch (error) { if (!Number.isInteger(error.code)) throw error; }
+          catch (error) { if (!Number.isInteger(error.code)) errors.push(error); }
         }
       } else {
-        for (const row of active) try { process.kill(row.pid, "SIGKILL"); } catch {}
+        for (const row of active) signal(row.pid, "SIGKILL");
       }
       await delay(50);
     }
-    active = await this.active();
-    if (active.length) throw new Error(`测试进程未清场: ${active.map((row) => row.pid).join(",")}; 登记 ${this.directory}`);
+    active = await attempt(() => this.active());
+    if (active.length) errors.push(new Error(`测试进程未清场: ${active.map((row) => row.pid).join(",")}`));
+    if (errors.length) throw Object.assign(new AggregateError(errors, `测试执行域清理失败: ${this.directory}`), { directory: this.directory });
   }
 
   remove() {
     rmSync(this.directory, { recursive: true, force: true });
-    scopes.delete(this);
+    for (const scope of scopes) if (scope.directory === this.directory) scopes.delete(scope);
   }
 }
 
