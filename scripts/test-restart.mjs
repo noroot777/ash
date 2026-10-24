@@ -87,9 +87,9 @@ const env = {
   ASH_DB: join(TMP, "ash.db"),
 };
 
-const run = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+const run = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs"), "--skip-mcp"], {
   cwd: REPO,
-  env,
+  env: { ...env, SKIP_MCP: "" },
   encoding: "utf8",
 });
 const output = (run.stdout ?? "") + (run.stderr ?? "");
@@ -100,6 +100,7 @@ try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* �
 if (run.status !== 0) fail(`restart.mjs 退出码 ${run.status}`, output);
 if (!output.includes(`${PORT} 已就绪`)) fail("没等到「已就绪」——本机探活可能被代理劫走了", output);
 if (!output.includes("✅ 完成")) fail("没跑到最后一步", output);
+if (!output.includes("⏭ SKIP_MCP")) fail("--skip-mcp 没跳过 MCP 刷新", output);
 
 const npmLog = readFileSync(join(TMP, "npm.log"), "utf8")
   .split("\n")
@@ -196,6 +197,11 @@ createServer((req, res) => {
 });
 `);
 
+for (const [forceLabel, forceArgs, forceEnv] of [
+  ["FORCE=1", [], { FORCE: "1" }],
+  ["--force", ["--force"], { FORCE: "" }],
+]) {
+rmSync(REFUSING_PID, { force: true });
 const refusingProc = spawn(process.execPath, [refusing], { stdio: "ignore", detached: false });
 stubbornChild = refusingProc;
 for (let i = 0; i < 50 && !existsSync(REFUSING_PID); i++) await sleep(100);
@@ -216,12 +222,16 @@ if (!refusedOutput.includes("问不到「重启会打断谁」")) {
 }
 if (refusedOutput.includes("已就绪")) fail("问不到判据却照样重启了", refusedOutput);
 if (!survived) fail("问不到判据时不许动旧进程,它却被杀了", refusedOutput);
+if (!refusedOutput.includes("npm run restart -- --force")) fail("没提供跨平台强制重启命令", refusedOutput);
 
 // FORCE=1 是明说「知道可能打断也要重启」,那条路不该被这道闸挡住 —— 同一个回 401 的
 // 旧 server 还在端口上,这次必须被换掉。
-const forced = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+const restartArgs = forceArgs.length && process.env.npm_execpath
+  ? [process.env.npm_execpath, "run", "restart", "--", ...forceArgs]
+  : [join(REPO, "scripts", "restart.mjs"), ...forceArgs];
+const forced = spawnSync(process.execPath, restartArgs, {
   cwd: REPO,
-  env: { ...env, FORCE: "1", START_TIMEOUT: "10" },
+  env: { ...env, ...forceEnv, START_TIMEOUT: "10" },
   encoding: "utf8",
 });
 const forcedOutput = (forced.stdout ?? "") + (forced.stderr ?? "");
@@ -230,10 +240,12 @@ stubbornChild = null;
 try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* 下面统一报错 */ }
 await sleep(200);
 
-if (forced.status !== 0) fail(`FORCE=1 该照常重启,退出码 ${forced.status}`, forcedOutput);
-if (forcedOutput.includes("问不到「重启会打断谁」")) fail("FORCE=1 不该被这道闸挡住", forcedOutput);
-if (!forcedOutput.includes(`${PORT} 已就绪`)) fail("FORCE=1 没把服务端换成新的", forcedOutput);
+if (forced.status !== 0) fail(`${forceLabel} 该照常重启,退出码 ${forced.status}`, forcedOutput);
+if (forcedOutput.includes("问不到「重启会打断谁」")) fail(`${forceLabel} 不该被这道闸挡住`, forcedOutput);
+if (!forcedOutput.includes(`${PORT} 已就绪`)) fail(`${forceLabel} 没把服务端换成新的`, forcedOutput);
 if (serverPid) { killPid(serverPid); serverPid = 0; }
+await sleep(200);
+}
 
 // ── 判据「问不出来」时也必须 fail closed ──────────────────────────────────────
 // 上一条是**服务端明确拒答**(401);这一条是它**在端口上、却没按时答复** —— ash 正忙或者
@@ -357,6 +369,6 @@ process.stdout.write("✓ restart.mjs 的本机探测绕过代理，且脚本返
 process.stdout.write(stubbornSkipped
   ? "⏭ 旧进程没能下线那条:Windows 上跳过(没有 SIGTERM,赖着不走的前提搭不出来)\n"
   : "✓ 旧进程没能下线时 restart.mjs 明确失败，不再谎报「已就绪」\n");
-process.stdout.write("✓ 问不到「会打断谁」时 fail closed(FORCE=1 仍可越过)\n");
+process.stdout.write("✓ 问不到「会打断谁」时 fail closed(FORCE=1 / --force 仍可越过)\n");
 process.stdout.write("✓ 判据超时/无答复也走 fail closed,不退回整树强杀\n");
 process.stdout.write("✓ 上一轮留下单例锁时只报观察到的意向,不定性成正常停或强杀\n");

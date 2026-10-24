@@ -239,9 +239,14 @@ Restart 不是盲目的 kill + start。它会先问服务端「重启会真正�
 |---|---|
 | 无任务 / 全部可接管 | 直接重启，全程无感 |
 | 有会被打断的任务 | **拒绝重启**，列出受影响任务 |
-| `WAIT=1` | 等所有任务跑完再重启 |
-| `FORCE=1` | 强制重启，被打断的标 failed |
+| `npm run restart -- --wait` | 等所有任务跑完再重启 |
+| `npm run restart -- --force` | 强制重启，被打断的标 failed |
 | MCP 通道被占 | 默认跳过 MCP 刷新，不掐断交卷 |
+
+这些参数在 PowerShell、cmd、Bash 和 zsh 中通用；`npm run restart -- --help` 查看完整选项。
+`--skip-mcp` 跳过 MCP 刷新，`--force-mcp` 强制刷新（会掐断在跑的 agent 的 MCP 通道）。
+仍兼容原环境变量；PowerShell 不支持 `FORCE=1 npm run restart`，旧版本可用
+`$env:FORCE='1'; npm run restart`（该变量会保留在当前 PowerShell 会话，之后可用 `Remove-Item Env:FORCE` 清除）。
 
 前端修改后仅需 `npm run build`，server 从磁盘读取 `web/dist`，**无需重启**。
 

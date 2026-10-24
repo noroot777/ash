@@ -2,10 +2,10 @@
 // 一条龙:重建全部 → 重启 :4317 服务端 → 刷新 ash MCP。
 //
 //   npm run restart            # 或直接 node scripts/restart.mjs
-//   FORCE=1 npm run restart    # 即使有任务在跑也强制重启(会把它们判为 failed)
-//   WAIT=1 npm run restart     # 有任务在跑就【等】它们排空再重启,而不是中止
-//   SKIP_MCP=1 npm run restart # 只重建+重启 :4317,不刷新 MCP(不打断正在用 ash MCP 的会话)
-//   FORCE_MCP=1 npm run restart # 明知有 agent 正握着 MCP 通道,也照样刷新(会掐断它们的交卷)
+//   npm run restart -- --force # 即使有任务在跑也强制重启(会把它们判为 failed)
+//   npm run restart -- --wait  # 有任务在跑就【等】它们排空再重启,而不是中止
+//   npm run restart -- --skip-mcp # 只重建+重启 :4317,不刷新 MCP(不打断正在用 ash MCP 的会话)
+//   npm run restart -- --force-mcp # 明知有 agent 正握着 MCP 通道,也照样刷新(会掐断它们的交卷)
 //
 // 跑法说明:
 //  - :4317 跑的是编译后的 dist,所以改完源码必须先 build 再重启,本脚本一并做掉。
@@ -15,8 +15,8 @@
 //    接回。真会被判 failed 的只剩：旧代码起的（没 agent_pid）、queued 还没起进程
 //    的、进程已经不在的。所以「有 3 个任务在跑」现在完全可能是可以随意重启的。
 //    判据单点在 server 的 /api/restart-impact,跟真正接管时用同一条口径。
-//  - 确定要打断再加 FORCE=1。build 已完成不会丢，只是先不动服务端。
-//  - WAIT=1 把「人守着等排空」换成「脚本替你等」:先等空再 build,build 期间若又
+//  - --force 表示确定要打断。build 已完成不会丢，只是先不动服务端。
+//  - --wait 把「人守着等排空」换成「脚本替你等」:先等空再 build,build 期间若又
 //    有任务起跑就再等一轮,然后重启。WAIT_TIMEOUT=<秒> 可设上限(默认无限等),
 //    等待期间 Ctrl-C 随时可退。FORCE 优先于 WAIT(既然要强杀就不必等)。
 //    注意残留竞态:检查与 kill 之间仍可能有 queued 任务抢跑,于是它**没被等到**——
@@ -44,6 +44,19 @@ import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
+import { parseRestartOptions, RESTART_USAGE } from "./restart-options.mjs";
+
+let options;
+try {
+  options = parseRestartOptions();
+} catch (error) {
+  process.stderr.write(`✕ ${error.message}\n运行 npm run restart -- --help 查看用法。\n`);
+  process.exit(2);
+}
+if (options.help) {
+  process.stdout.write(`${RESTART_USAGE}\n`);
+  process.exit(0);
+}
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
@@ -55,8 +68,8 @@ const SERVER_NODE = process.env.SERVER_NODE || process.execPath;
 // 起哪个入口。默认就是编译产物;留一个口子是为了 test-restart.mjs 能拿一个假 server
 // 跑完整条流程(否则那条回归只能靠 stub 掉半个脚本,测的就不是真路径了)。
 const SERVER_ENTRY = process.env.SERVER_ENTRY || "server/dist/index.js";
-const FORCE = !!process.env.FORCE;
-const WAIT = !!process.env.WAIT;
+const FORCE = options.force;
+const WAIT = options.wait;
 const WAIT_TIMEOUT = process.env.WAIT_TIMEOUT ? Number(process.env.WAIT_TIMEOUT) : null;
 
 const say = (line) => process.stdout.write(`${line}\n`);
@@ -182,7 +195,7 @@ async function impactOrAbort() {
     say("     「问不出来」不等于「没有任务会被打断」,所以这里不下刀。稍后重试;");
     say(`     真卡住了就先看日志 ${LOG},必要时手工 kill 掉它再重跑。`);
   }
-  say("     明知可能打断也要重启:  FORCE=1 npm run restart");
+  say("     明知可能打断也要重启:  npm run restart -- --force");
   // WAIT 那一档在 build 之前就问,所以这句必须按实际走到哪儿说 —— 说反了会让人
   // 以为新代码已经落盘。
   say(built
@@ -279,8 +292,8 @@ if (old.length) {
   if (busy > 0 && !FORCE) {
     say(`  ✋ 重启会打断 ${busy} 个任务(判为 failed) —— 已中止,未重启服务端。`);
     for (const t of data.interrupted.slice(0, 8)) say(`     · ${t.title} —— ${t.reason}`);
-    say("     让脚本替你等它们跑完:  WAIT=1 npm run restart");
-    say("     确定要打断:            FORCE=1 npm run restart");
+    say("     让脚本替你等它们跑完:  npm run restart -- --wait");
+    say("     确定要打断:            npm run restart -- --force");
     say(`     (新代码已 build 进 dist,不会丢;只是暂不重启 :${PORT}。MCP 也未动。)`);
     process.exit(2);
   }
@@ -306,7 +319,7 @@ if (old.length) {
     how = killServerProcesses(old, spare, { force: FORCE });
   } catch (error) {
     say(`  ✋ 无法安全终止 Windows 旧实例: ${error.message}。已中止重启。`);
-    say("     未授权整树强杀;确定接受任务中断才使用 FORCE=1 npm run restart。");
+    say("     未授权整树强杀;确定接受任务中断才使用 npm run restart -- --force。");
     process.exit(2);
   }
   if (IS_WINDOWS && safe > 0 && how !== "selective") {
@@ -412,20 +425,20 @@ const after = await impact();
 const mcpWhy = noVerdictReason(after);
 const mcpUnknown = mcpWhy !== null;
 const holders = countOf(after, "mcpDisrupted");
-if (process.env.SKIP_MCP) {
+if (options.skipMcp) {
   say("  ⏭ SKIP_MCP:跳过——不动 MCP 子进程,正在用 ash MCP 的会话不会被打断。");
-  say("     (代价:这些会话仍跑旧 mcp/dist;只有改了 mcp/ 才需去掉 SKIP_MCP 再跑一次。)");
-} else if (mcpUnknown && !process.env.FORCE_MCP && !FORCE) {
+  say("     (代价:这些会话仍跑旧 mcp/dist;只有改了 mcp/ 才需去掉 --skip-mcp / SKIP_MCP 再跑一次。)");
+} else if (mcpUnknown && !options.forceMcp && !FORCE) {
   say(`  ⏭ 问不到「谁还握着 MCP 通道」(${mcpWhy}),已跳过刷新 —— 宁可让旧会话跑旧 mcp,也不冒险掐断在跑的 agent。`);
-  say("     确定要刷新:  FORCE_MCP=1 npm run restart");
-} else if (holders > 0 && !process.env.FORCE_MCP && !FORCE) {
+  say("     确定要刷新:  npm run restart -- --force-mcp");
+} else if (holders > 0 && !options.forceMcp && !FORCE) {
   // 默认不掐断正在干活的 agent:刷新 MCP 的收益只是"旧会话用上新 mcp 代码",
   // 代价却是它这一轮的交卷调用当场失败(2026-08-06 验证白跑)。收益远小于代价,
   // 所以默认让路,并把出路说清楚。
   say(`  ⏭ 有 ${holders} 个正在干活的 agent 手里握着 ash MCP 通道,已跳过刷新以免掐断它们的交卷。`);
   for (const t of after.mcpDisrupted.slice(0, 8)) say(`     · ${t.title} (pid ${t.pid})`);
   say(`     (:${PORT} 已经是新代码;这些会话仍跑旧 mcp/dist。)`);
-  say("     改了 mcp/ 需要立刻生效:  FORCE_MCP=1 npm run restart");
+  say("     改了 mcp/ 需要立刻生效:  npm run restart -- --force-mcp");
 } else {
   const stale = pidsRunningScript(join(REPO, "mcp", "dist", "index.js"));
   if (stale.length) {
