@@ -55,12 +55,6 @@
 
           <div class="composer-zone">
             <div class="queue-anchor" id="queue-anchor">
-              <section class="queue-popover" id="queue-popover" aria-labelledby="queue-panel-title" hidden>
-                <header class="popover-header"><div><span class="eyebrow">等待送入会话</span><h3 id="queue-panel-title">排队输入 <span id="panel-count">10</span></h3></div><button class="icon-button" id="close-panel" type="button" aria-label="关闭排队列表"><svg class="icon"><use href="#i-close"/></svg></button></header>
-                <div class="queue-filters" id="queue-filters" role="group" aria-label="筛选排队输入"></div>
-                <div class="panel-list" id="panel-list" tabindex="0" aria-label="排队输入列表"></div>
-                <footer class="popover-footer"><span class="order-dot"></span>筛选只改变查看范围，不改变投递顺序。</footer>
-              </section>
               <div id="queue-tray" aria-label="待处理输入"></div>
             </div>
             <div class="composer-toolbar"><span class="review-state"><span></span>审查中</span><span>打开预览</span><span class="toolbar-divider"></span><span>预览日志</span><span>接力到…</span></div>
@@ -74,9 +68,9 @@
         <div class="recommendation"><span class="recommendation-mark"><svg class="icon"><use href="#i-stack"/></svg></span><span>推荐<span class="recommendation-sub">渐进展开，不做信息删减</span></span></div>
         <section><span class="note-index">01 / 收住高度</span><h3>只露出前两条</h3><p>第 3 条起折进队列卡片。数量增长，不再把对话和输入框往外挤。</p></section>
         <section><span class="note-index">02 / 重要的不埋</span><h3>总数之外，再给一个提醒</h3><p>「需留意」标出退出码非 0 的示例结果。即使不在前两条，也能一眼看到。</p></section>
-        <section><span class="note-index">03 / 按需细看</span><h3>展开的是浮层，不是整页</h3><p>向上打开完整列表，内部滚动。可筛选、看原文、逐条取消，按 Esc 收起。</p></section>
+        <section><span class="note-index">03 / 原位展开</span><h3>还是这张卡片，向上展开</h3><p>底边和输入框不动，卡片本身向上长出完整列表。内部滚动，不另开面板；点收起或按 Esc 恢复。</p></section>
         <div class="boundary-note"><svg class="icon"><use href="#i-alert"/></svg><p><strong>只收纳，不改调度。</strong>不合并内容、不重排优先级，也不批量清空。取消哨兵输入只取消这次唤醒，不会停掉哨兵。</p></div>
-        <div class="try-note"><span class="try-arrow">↖</span><p>试试切到 <strong>30 条</strong><br>再点「查看全部」</p></div>
+        <div class="try-note"><span class="try-arrow">↖</span><p>试试切到 <strong>30 条</strong><br>再点「展开全部」</p></div>
       </aside>
     </div>
     <footer class="study-footer"><span>ASH / PENDING INPUTS</span><p>这是一份交互提案。消息内容与状态为示例，未修改正式界面及后端逻辑。</p><span>超过 2 条，才折叠。</span></footer>

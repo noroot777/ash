@@ -19,7 +19,6 @@ const sampleTitles = [
 ];
 const nonzeroIndexes = new Set([3, 5, 6]);
 const state = { messages: [], view: "after", mixed: false, filter: "all", panelOpen: false, serial: 0, pendingCancel: null };
-let panelReturnFocus = null;
 let toastTimer;
 
 function monitorMessage(index) {
@@ -39,7 +38,7 @@ function userMessage(title) {
 }
 
 function loadScenario(count) {
-  closePanel(false);
+  state.panelOpen = false;
   state.messages = Array.from({ length: count }, (_, index) => {
     if (state.mixed && (index === 1 || index === 7)) {
       return userMessage(index === 1 ? "先别改代码，等全部回归结果回来再给结论。" : "把未通过的检查单独列出来，说明是否影响验收。");
@@ -90,12 +89,12 @@ function renderTray() {
     tray.innerHTML = `<div class="inline-list${state.view === "before" ? " legacy-list" : ""}">${state.messages.map(inlineRow).join("")}</div>`;
     return;
   }
-  tray.innerHTML = `<section class="queue-card" aria-label="已折叠的排队输入">
+  tray.innerHTML = `<section class="queue-card${state.panelOpen ? " is-expanded" : ""}" aria-label="${state.panelOpen ? "已展开" : "已折叠"}的排队输入">
     <div class="queue-summary"><span class="stack-icon">${icon("stack")}</span><div class="summary-copy"><div class="summary-title">排队输入 <span class="queue-count">${total.all}</span></div><div class="summary-meta"><span>${total.user ? `我的消息 ${total.user} · ` : ""}哨兵 ${total.monitor}</span><span>·</span><span>等待当前一轮结束</span></div></div>
     ${total.attention ? `<button type="button" class="attention-button" data-open="attention" aria-label="查看 ${total.attention} 条退出码非零的输入">${icon("alert")}${total.attention} 条需留意</button>` : ""}
-    <button type="button" class="queue-open" id="open-panel" data-open="all" aria-expanded="${state.panelOpen}" aria-controls="queue-popover">${state.panelOpen ? "收起列表" : `查看全部 ${total.all} 条`}${icon("chevron")}</button></div>
-    <div class="preview-rows">${state.messages.slice(0, 2).map((message, index) => `<button type="button" class="preview-row" data-open="all" data-reveal="${message.id}" aria-label="查看第 ${index + 1} 条输入：${escapeHtml(message.title)}"><span class="queue-position">${index + 1}</span>${icon(message.kind === "user" ? "message" : "pulse")}<span class="preview-origin">${message.kind === "user" ? "我的消息" : "哨兵"}</span><span class="preview-title">${escapeHtml(message.title)}</span>${exitLabel(message)}</button>`).join("")}</div>
-    <div class="queue-more">另有 ${total.all - 2} 条已收起 · 按原顺序等待处理</div></section>`;
+    <button type="button" class="queue-open" id="open-panel" data-open="all" aria-expanded="${state.panelOpen}" aria-controls="queue-details">${state.panelOpen ? "收起列表" : `展开全部 ${total.all} 条`}${icon("chevron")}</button></div>
+    ${state.panelOpen ? `<div class="queue-details" id="queue-details"><div class="queue-filters" id="queue-filters" role="group" aria-label="筛选排队输入"></div><div class="panel-list" id="panel-list" tabindex="0" aria-label="排队输入列表"></div><footer class="queue-footer"><span class="order-dot"></span>筛选只改变查看范围，不改变投递顺序。</footer></div>`
+      : `<div class="preview-rows">${state.messages.slice(0, 2).map((message, index) => `<button type="button" class="preview-row" data-open="all" data-reveal="${message.id}" aria-label="查看第 ${index + 1} 条输入：${escapeHtml(message.title)}"><span class="queue-position">${index + 1}</span>${icon(message.kind === "user" ? "message" : "pulse")}<span class="preview-origin">${message.kind === "user" ? "我的消息" : "哨兵"}</span><span class="preview-title">${escapeHtml(message.title)}</span>${exitLabel(message)}</button>`).join("")}</div><div class="queue-more">另有 ${total.all - 2} 条已收起 · 按原顺序等待处理</div>`}</section>`;
 }
 
 function matchesFilter(message) {
@@ -111,32 +110,40 @@ function panelRow(message) {
     <details class="message-details"><summary>查看完整输入</summary><pre>${escapeHtml(message.text)}</pre></details></article>`;
 }
 
-function renderPanel() {
+function panelSnapshot() {
   const list = select("#panel-list");
-  const scrollTop = list.scrollTop;
-  const expandedIds = [...list.querySelectorAll("details[open]")].map((details) => details.closest("[data-message]").dataset.message);
+  return {
+    scrollTop: list?.scrollTop ?? 0,
+    expandedIds: [...(list?.querySelectorAll("details[open]") ?? [])].map((details) => details.closest("[data-message]").dataset.message),
+  };
+}
+
+function renderPanel(snapshot = panelSnapshot()) {
+  const list = select("#panel-list");
   const total = counts();
-  select("#panel-count").textContent = total.all;
   select("#queue-filters").innerHTML = [["all", "全部"], ["user", "我的消息"], ["monitor", "哨兵"], ["attention", "需留意"]]
     .map(([key, label]) => `<button type="button" data-filter="${key}" aria-pressed="${state.filter === key}">${label}<span>${total[key]}</span></button>`).join("");
   const messages = state.messages.filter(matchesFilter);
   list.innerHTML = messages.length ? messages.map(panelRow).join("") : '<p class="empty-filter">这个分类下没有等待输入。</p>';
-  expandedIds.forEach((messageId) => {
+  snapshot.expandedIds.forEach((messageId) => {
     const details = list.querySelector(`[data-message="${messageId}"] details`);
     if (details) details.open = true;
   });
   fitPanel();
-  list.scrollTop = scrollTop;
+  list.scrollTop = snapshot.scrollTop;
 }
 
 function fitPanel() {
   if (!state.panelOpen) return;
-  const panel = select("#queue-popover");
+  const card = select(".queue-card");
   const list = select("#panel-list");
+  if (!card || !list) return;
   list.style.maxHeight = "";
   const preferredHeight = parseFloat(getComputedStyle(list).maxHeight);
-  const availableHeight = select("#queue-anchor").getBoundingClientRect().top - select(".task-header").getBoundingClientRect().bottom - 24;
-  const chromeHeight = panel.getBoundingClientRect().height - list.getBoundingClientRect().height;
+  const cardHeight = card.getBoundingClientRect().height;
+  const composerHeight = select(".composer-zone").getBoundingClientRect().height - cardHeight;
+  const availableHeight = select(".task-window").getBoundingClientRect().height - select(".task-header").getBoundingClientRect().height - composerHeight - 100;
+  const chromeHeight = cardHeight - list.getBoundingClientRect().height;
   list.style.maxHeight = `${Math.max(64, Math.min(preferredHeight, availableHeight - chromeHeight))}px`;
 }
 
@@ -145,53 +152,52 @@ function render() {
   const focusKey = focused?.dataset.filter;
   const focusAction = focused?.dataset.action;
   const focusId = focused?.dataset.id;
-  if (state.messages.length <= 2 && state.panelOpen) closePanel(false);
+  const focusedInQueue = !!focused?.closest("#queue-anchor");
+  const focusElementId = focused?.id;
+  const focusMessageId = focused?.closest("[data-message]")?.dataset.message;
+  const snapshot = panelSnapshot();
+  if (state.messages.length <= 2) state.panelOpen = false;
   renderTray();
   if (state.panelOpen) {
-    renderPanel();
-    const target = focusKey ? select(`[data-filter="${focusKey}"]`)
-      : focusAction ? select(`#panel-list [data-action="${focusAction}"][data-id="${focusId}"]`) : null;
-    if (target) target.focus({ preventScroll: true });
-    else if (focused?.closest("#panel-list")) select("#panel-list").focus({ preventScroll: true });
+    renderPanel(snapshot);
+  }
+  if (focusedInQueue) {
+    const target = focusElementId ? document.getElementById(focusElementId)
+      : focusKey ? select(`[data-filter="${focusKey}"]`)
+      : focusAction ? select(`[data-action="${focusAction}"][data-id="${focusId}"]`)
+      : focusMessageId ? select(`[data-message="${focusMessageId}"] summary`) : null;
+    (target ?? select("#open-panel") ?? select("#message-input")).focus({ preventScroll: true });
   }
   document.body.classList.toggle("before-mode", state.view === "before");
   selectAll("[data-count]").forEach((button) => button.setAttribute("aria-pressed", String(Number(button.dataset.count) === state.messages.length)));
   selectAll("[data-view]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.view === state.view)));
   select("#consume-button").disabled = !state.messages.length;
   select("#queue-footnote").textContent = state.messages.length ? `· 当前有 ${state.messages.length} 条待处理` : "· 暂无排队输入";
-  select("#space-caption").textContent = state.view === "before" ? "每条各占一行，对话区被向上挤压" : "排队再多，也只占固定高度";
+  select("#space-caption").textContent = state.view === "before" ? "每条各占一行，对话区被向上挤压" : state.panelOpen ? "队列原位向上展开，输入框留在原处" : "收起时，排队再多也只占固定高度";
   select("#queue-announcement").textContent = `当前有 ${state.messages.length} 条排队输入${counts().attention ? `，其中 ${counts().attention} 条需留意` : ""}。`;
 }
 
 function openPanel(filter = "all", revealId = null) {
   if (state.messages.length <= 2) return;
-  if (!state.panelOpen) panelReturnFocus = document.activeElement;
   state.filter = filter;
   state.panelOpen = true;
-  renderTray();
-  select("#queue-popover").hidden = false;
-  renderPanel();
-  select("#close-panel").focus({ preventScroll: true });
+  render();
+  select(filter === "attention" ? ".attention-button" : "#open-panel").focus({ preventScroll: true });
   if (revealId) {
     const row = select(`[data-message="${revealId}"]`);
     if (row) {
       row.querySelector("details").open = true;
-      row.scrollIntoView({ block: "nearest" });
+      select("#panel-list").scrollTop = row.offsetTop - select("#panel-list").offsetTop;
     }
   }
 }
 
 function closePanel(restoreFocus = true) {
   state.panelOpen = false;
-  select("#queue-popover").hidden = true;
+  render();
   const openButton = select("#open-panel");
-  if (openButton) {
-    openButton.setAttribute("aria-expanded", "false");
-    openButton.innerHTML = `查看全部 ${state.messages.length} 条${icon("chevron")}`;
-  }
   if (restoreFocus) {
-    const returnTarget = panelReturnFocus?.isConnected ? panelReturnFocus : openButton;
-    (returnTarget ?? select("#message-input")).focus({ preventScroll: true });
+    (openButton ?? select("#message-input")).focus({ preventScroll: true });
   }
 }
 
@@ -227,13 +233,11 @@ function handleMessageAction(action, messageId) {
     const input = select("#message-input");
     input.value = input.value.trim() ? `${input.value}\n\n${message.text}` : message.text;
     removeMessage(messageId);
-    closePanel(false);
     select("#send-button").disabled = !input.value.trim();
     input.focus();
     toast("已撤回到输入框，保留了原有草稿。仅演示。");
   } else if (action === "steer" && messageId === firstUserId()) {
     removeMessage(messageId);
-    closePanel(false);
     recordSimulation(`演示引导会话：${message.title}`);
     toast("已模拟引导到当前会话，未发送真实请求。");
   }
@@ -241,7 +245,7 @@ function handleMessageAction(action, messageId) {
 
 selectAll("[data-count]").forEach((button) => button.addEventListener("click", () => loadScenario(Number(button.dataset.count))));
 selectAll("[data-view]").forEach((button) => button.addEventListener("click", () => {
-  closePanel(false);
+  state.panelOpen = false;
   state.view = button.dataset.view;
   render();
 }));
@@ -262,7 +266,6 @@ select("#queue-anchor").addEventListener("click", (event) => {
     select(`[data-filter="${state.filter}"]`).focus({ preventScroll: true });
   } else if (button.dataset.action) handleMessageAction(button.dataset.action, button.dataset.id);
 });
-select("#close-panel").addEventListener("click", () => closePanel());
 window.addEventListener("resize", fitPanel);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && state.panelOpen && !select("#cancel-dialog").open) {
@@ -270,13 +273,10 @@ document.addEventListener("keydown", (event) => {
     closePanel();
   }
 });
-document.addEventListener("pointerdown", (event) => {
-  if (state.panelOpen && !select("#queue-anchor").contains(event.target) && !select("#cancel-dialog").open) closePanel(false);
-});
 select("#cancel-dialog").addEventListener("close", () => {
   if (select("#cancel-dialog").returnValue === "cancel" && state.pendingCancel) {
     removeMessage(state.pendingCancel);
-    if (state.panelOpen) select("#close-panel").focus({ preventScroll: true });
+    if (state.panelOpen) select("#open-panel").focus({ preventScroll: true });
     else select("#message-input").focus({ preventScroll: true });
     toast("已取消这次唤醒，未停止哨兵。仅演示。");
   }
