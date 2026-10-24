@@ -44,21 +44,28 @@ export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
   expectedTask?: ConclusionTask;
   expectedDirectionToken?: string | null;
   bySessionRecovery?: boolean;
+  sourceTaskId?: string;
+  expectedSourceTask?: ConclusionTask;
 } = {}): Promise<{ updatedAt: string; timelineRecorded: boolean }> {
   const task = opts.expectedTask ?? (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+  const source = opts.expectedSourceTask ?? (opts.sourceTaskId && opts.sourceTaskId !== taskId
+    ? (await db.select().from(tasks).where(eq(tasks.id, opts.sourceTaskId)))[0] : task);
   if (!task || task.id !== taskId || task.archived || task.stage === "accepted" || task.stage === "merged"
-    || (!opts.bySessionRecovery && (task.activeTurnToken || task.activeDirectionToken) && task.status !== "running")
-    || (opts.expectedDirectionToken !== undefined && opts.expectedDirectionToken !== task.activeDirectionToken)) {
+    || !source || source.id !== (opts.sourceTaskId ?? taskId) || (source.id !== taskId && source.reviewOf !== taskId)
+    || (!opts.bySessionRecovery && (source.activeTurnToken || source.activeDirectionToken) && source.status !== "running")
+    || (opts.expectedDirectionToken !== undefined && opts.expectedDirectionToken !== source.activeDirectionToken)) {
     throw new RegressionConclusionRejected("当前任务或方向身份不再接受阶段上报");
   }
-  const scope = await presetConclusionRound(task);
+  const scope = await presetConclusionRound(task, db, opts.sourceTaskId);
+  if (source.id !== taskId && scope?.reviewTaskId !== source.id) throw new RegressionConclusionRejected("当前来源不属于活动审查轮次");
   const checked = scope && (stage === "verified" || stage === "verify_failed")
     ? await checkRegressionConclusion(taskId, reviewRoundDir(taskId, scope.round), stage, false, opts.verificationBasis)
     : undefined;
   const updatedAt = now();
   await commitRegressionConclusion(checked, async (transaction) => {
     await assertConclusionTask(transaction, task);
-    if (JSON.stringify(await presetConclusionRound(task, transaction)) !== JSON.stringify(scope)) {
+    if (source.id !== taskId) await assertConclusionTask(transaction, source);
+    if (JSON.stringify(await presetConclusionRound(task, transaction, opts.sourceTaskId)) !== JSON.stringify(scope)) {
       throw new RegressionConclusionRejected("审查轮次已变化，本次结论未提交");
     }
     const evidence = scope && (await transaction.select().from(regressionEvidence)
@@ -240,8 +247,12 @@ export function mountTaskStageRoutes(api: Hono): void {
     // 接力出去的任务不能再流转验收阶段:它在本机只是历史存档,阶段变化应发生在对端。
     const handedOff = handoffBlockReason(task.handoff);
     if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
+    const sourceTaskId = c.req.header("x-ash-source-task-id");
+    const source = sourceTaskId && sourceTaskId !== taskId
+      ? (await db.select().from(tasks).where(eq(tasks.id, sourceTaskId)))[0] : task;
+    if (!source || (source.id !== taskId && source.reviewOf !== taskId)) return c.json({ error: "阶段来源不属于当前任务或审查" }, 409);
     const stageToken = c.req.header("x-ash-turn-token");
-    if (task.activeTurnToken && stageToken !== task.activeTurnToken) {
+    if (source.activeTurnToken && stageToken !== source.activeTurnToken) {
       return c.json({
         error: stageToken
           ? "验收阶段来自已结束的回合，已拒绝写入当前会话"
@@ -249,7 +260,7 @@ export function mountTaskStageRoutes(api: Hono): void {
       }, 409);
     }
     const stageDirection = c.req.header("x-ash-direction-token");
-    if (task.activeDirectionToken && stageDirection !== task.activeDirectionToken) {
+    if (source.activeDirectionToken && stageDirection !== source.activeDirectionToken) {
       return c.json({
         error: stageDirection
           ? "验收阶段的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 report_stage"
@@ -284,7 +295,8 @@ export function mountTaskStageRoutes(api: Hono): void {
 
     let result;
     try {
-      result = await reportTaskStage(taskId, body.stage, { verificationBasis: body.verificationBasis, expectedTask: task });
+      result = await reportTaskStage(taskId, body.stage, { verificationBasis: body.verificationBasis,
+        expectedTask: task, sourceTaskId, expectedSourceTask: source });
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof RegressionEvidenceUnavailable ? 503 : 409);
     }

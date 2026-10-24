@@ -53,7 +53,7 @@ export async function roundOf(run: ReviewRunRow): Promise<ReviewRoundRow | null>
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0) ?? null;
 }
 
-export async function cleanupAcceptedMergeRun(run: ReviewRunRow): Promise<void> {
+export async function cleanupAcceptedMergeRun(run: ReviewRunRow, strict = false): Promise<void> {
   if (run.targetKind !== "accepted_merge") return;
   const task = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, run.taskId))).at(0);
   const project = task
@@ -63,6 +63,7 @@ export async function cleanupAcceptedMergeRun(run: ReviewRunRow): Promise<void> 
   try {
     await cleanupPostMergeReviewWorktree(project.repoPath, run.taskId, run.id);
   } catch (error) {
+    if (strict) throw error;
     await appendTaskTimeline(run.taskId, `合并结果审查临时工作区清理失败：${error instanceof Error ? error.message : String(error)}`);
   }
 }
@@ -81,10 +82,11 @@ export async function cleanupAcceptedMergeRun(run: ReviewRunRow): Promise<void> 
  * （同 `status.ts` 的那一处）。收不回来只记日志：审查本身已经结算完了，不该被它拖住；
  * 漏下的哨兵仍有自己的到期时间，而它推的事件会被出口闸按「来源审查已结束」拒掉。
  */
-export async function stopReviewRunMonitors(runId: string, reason: string): Promise<number> {
+export async function stopReviewRunMonitors(runId: string, reason: string, strict = false): Promise<number> {
   return await import("./monitor-reclaim.js")
     .then(({ stopMonitorsForReviewRun }) => stopMonitorsForReviewRun(runId, reason))
     .catch((error) => {
+      if (strict) throw error;
       console.error(`[ash] stopMonitorsForReviewRun(${runId}) failed:`, error);
       return 0;
     });

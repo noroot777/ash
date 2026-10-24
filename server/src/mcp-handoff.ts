@@ -195,8 +195,9 @@ async function applyReplay(
     // 身份必须核对**来源会话本身**的 role：补录豁免了业务入口的活跃回合检查，靠的是
     // 「调用出自该回合自己的记录」——但那个回合要真是 reviewer 的才行，普通实现回合
     // 记录里的 report_stage 不能被包装成审查结论（审查实测复现过 role=single 的绕过）。
-    const sourceRole = (await db.select({ role: sessions.role }).from(sessions)
-      .where(eq(sessions.id, sessId))).at(0)?.role;
+    const sourceSession = (await db.select({ role: sessions.role, taskId: sessions.taskId }).from(sessions)
+      .where(eq(sessions.id, sessId))).at(0);
+    const sourceRole = sourceSession?.role;
     if (sourceRole === "reviewer") {
       const { reportFreeReviewConclusion } = await import("./free-workflow.js");
       try {
@@ -215,7 +216,7 @@ async function applyReplay(
       .where(eq(tasks.id, taskId))).at(0);
     if (task?.workflowMode === "free") return null; // 自由任务不写 preset stage
     await reportTaskStage(taskId, stage, { verificationBasis: call.args.verificationBasis,
-      expectedDirectionToken: directionToken, bySessionRecovery: true });
+      expectedDirectionToken: directionToken, bySessionRecovery: true, sourceTaskId: sourceSession?.taskId });
     return `验证结论（${stage}）当时因 MCP 通道中断没能写回，已从本回合的调用记录中补录。`;
   }
   if (call.tool === "complete_task") {

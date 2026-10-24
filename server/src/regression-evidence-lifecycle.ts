@@ -11,6 +11,7 @@ import { RegressionConclusionRejected } from "./regression-conclusion-errors.js"
 import type { IndependentVerificationBasis } from "./db/schema-regression-evidence.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir, safeRunDirectory } from "./review-evidence.js";
+import { isTurnClaimed } from "./runs.js";
 
 async function manifestPermission(directory: string): Promise<"revoked" | "none"> {
   if (!(await safeRunDirectory(directory))) {
@@ -53,7 +54,7 @@ export async function evidenceState(taskId: string, directory: string, acceptedM
 export async function restartRegressionEvidence(taskId: string, directory: string, transaction: ConclusionTransaction): Promise<void> {
   const owners = [taskId, ...(await transaction.select({ id: tasks.id }).from(tasks)
     .where(eq(tasks.reviewOf, taskId))).map((task) => task.id)];
-  await transaction.update(regressionEvidence).set({ generation: randomUUID(), acceptedBasis: null, settlement: null,
+  await transaction.update(regressionEvidence).set({ generation: randomUUID(), acceptedBasis: null, settlement: null, finalization: null,
     excludedMonitors: (await transaction.select({ id: monitors.id }).from(monitors)
       .where(inArray(monitors.taskId, owners))).map((monitor) => monitor.id),
   }).where(eq(regressionEvidence.directory, directory));
@@ -124,11 +125,23 @@ export async function checkRegressionConclusion(taskId: string, directory: strin
   return settlement ? undefined : checked;
 }
 
-export async function presetConclusionRound(task: typeof tasks.$inferSelect, query: Pick<typeof db, "select"> = db) {
+export async function latestPresetConclusionRound(task: typeof tasks.$inferSelect, query: Pick<typeof db, "select"> = db) {
   if (task.verifyRound) return { round: task.verifyRound, reviewTaskId: null };
   const review = (await query.select({ round: tasks.reviewRound, reviewTaskId: tasks.id }).from(tasks)
     .where(eq(tasks.reviewOf, task.id)).orderBy(desc(tasks.reviewRound)).limit(1))[0];
   return review?.round ? { round: review.round, reviewTaskId: review.reviewTaskId } : null;
+}
+
+export async function presetConclusionRound(task: typeof tasks.$inferSelect, query: Pick<typeof db, "select"> = db,
+  sourceTaskId?: string) {
+  if (task.verifyRound) return { round: task.verifyRound, reviewTaskId: null };
+  if (sourceTaskId === task.id || (!sourceTaskId && isTurnClaimed(task.id))) return null;
+  const reviews = await query.select().from(tasks).where(eq(tasks.reviewOf, task.id)).orderBy(desc(tasks.reviewRound));
+  const review = reviews.find((candidate) => (!sourceTaskId || candidate.id === sourceTaskId) && candidate.reviewRound &&
+    (["running", "queued", "paused"].includes(candidate.status) || isTurnClaimed(candidate.id)));
+  return review ? { round: review.reviewRound!, reviewTaskId: review.id,
+    turnToken: review.activeTurnToken, directionToken: review.activeDirectionToken,
+    directionVersion: review.activeDirectionVersion, directionEpoch: review.directionEpoch } : null;
 }
 
 export async function checkPresetRegressionConclusion(taskId: string, stage: string, basis?: unknown): Promise<CheckedConclusion> {

@@ -16,6 +16,15 @@ export type RegressionSettlement = {
   pending: boolean;
 };
 
+export type RegressionFinalization = {
+  kind: "preset" | "free";
+  payload: string;
+  done: string[];
+  steps: string[];
+  runningStep?: string;
+  completed?: boolean;
+};
+
 export const regressionEvidence = sqliteTable("regression_evidence", {
   directory: text("directory").primaryKey(),
   taskId: text("task_id").notNull(),
@@ -25,6 +34,7 @@ export const regressionEvidence = sqliteTable("regression_evidence", {
   acceptedBasis: text("accepted_basis", { mode: "json" }).$type<IndependentVerificationBasis>(),
   unavailable: text("unavailable"),
   settlement: text("settlement", { mode: "json" }).$type<RegressionSettlement>(),
+  finalization: text("finalization", { mode: "json" }).$type<RegressionFinalization>(),
 });
 
 export async function ensureRegressionEvidenceSchema(client: Client): Promise<void> {
@@ -36,5 +46,8 @@ export async function ensureRegressionEvidenceSchema(client: Client): Promise<vo
   const columns = (await client.execute("PRAGMA table_info(regression_evidence)")).rows;
   if (!columns.some((column) => column.name === "settlement")) {
     await client.execute("ALTER TABLE regression_evidence ADD COLUMN settlement TEXT");
+  }
+  if (!columns.some((column) => column.name === "finalization")) {
+    await client.execute("ALTER TABLE regression_evidence ADD COLUMN finalization TEXT");
   }
 }

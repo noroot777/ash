@@ -56,6 +56,7 @@ export async function reconcileInterrupted(): Promise<void> {
 // 一个被打断的任务怎么结算:状态回落、持续目标/续聊/原生回合各自的善后、基线消费。
 // 批量版(重启时扫全库)和单任务版(接管之后才暴露出来的那种中断)共用这一份。
 async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void> {
+  await (await import("./regression-settlement.js")).recordInterruptedRegressionReview(t);
   let back = (t.followUpFrom as TaskStatus | null) ?? (t.goalTurn ? "paused" : "failed");
   if (t.nativeTurn && !t.goalTurn) {
     const [session] = await db.select().from(sessions).where(eq(sessions.taskId, t.id)).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt));
@@ -117,6 +118,8 @@ export async function reconcileInterruptedTask(taskId: string): Promise<boolean>
     return true;
   } finally {
     release();
+    await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId)
+      .catch((error) => console.error(`[ash] 中断审查收尾待重试 ${taskId}:`, error));
   }
 }
 

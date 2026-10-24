@@ -69,7 +69,7 @@ export async function setupRegressionReviews() {
     const state = () => db.select().from(schema.regressionEvidence).where(eq(schema.regressionEvidence.directory, directory)).then((rows) => rows[0]!);
     const basis = { kind: "independent", generation: (await state()).generation, monitorIds: [monitor.id] };
     const stage = (verificationBasis: unknown = basis) => api.request(`/tasks/${taskId}/stage`, { method: "POST",
-      headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${taskId}` },
+      headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${ownerTaskId}`, "x-ash-source-task-id": ownerTaskId },
       body: JSON.stringify({ stage: "verified", verificationBasis }) });
     const conclusion = async () => free
       ? (await db.select().from(schema.freeReviewRounds).where(eq(schema.freeReviewRounds.id, roundId)))[0]!.conclusion

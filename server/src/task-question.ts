@@ -102,10 +102,14 @@ export async function askAboutFailure(
   stepLabel: string,
   reason: string | null | undefined,
 ): Promise<void> {
+  await setTaskQuestion(failureQuestionInput(taskId, stepLabel, reason));
+}
+
+export function failureQuestionInput(taskId: string, stepLabel: string, reason: string | null | undefined): AskInput {
   const detail = (reason ?? "").trim();
   const question = `这条线在「${stepLabel}」这一站没过，线上写的是「问我一句」——接下来怎么办？`
     + (detail ? `\n\n\`\`\`\n${detail.slice(0, 1200)}\n\`\`\`` : "");
-  await setTaskQuestion({
+  return {
     taskId,
     question,
     options: [
@@ -113,5 +117,5 @@ export async function askAboutFailure(
       "跳过这一站：这个问题不影响交付，接着往下走。",
       "先停着，我自己来处理。",
     ].slice(0, MAX_QUESTION_OPTIONS).map((text) => text.slice(0, MAX_QUESTION_OPTION_LEN)),
-  });
+  };
 }

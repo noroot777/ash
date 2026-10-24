@@ -50,8 +50,9 @@ try {
   await db.update(tasks).set({ workflowMode: "preset", verifyRound: 1 }).where(eq(tasks.id, taskId));
   const api = new Hono();
   mountTaskStageRoutes(api);
+  let sourceTaskId = taskId;
   const stage = (verificationBasis?: unknown) => api.request(`/tasks/${taskId}/stage`, {
-    method: "POST", headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${taskId}` },
+    method: "POST", headers: { "content-type": "application/json", "x-ash-turn-token": `turn-${sourceTaskId}`, "x-ash-source-task-id": sourceTaskId },
     body: JSON.stringify({ stage: "verified", verificationBasis }),
   });
   stale(evidenceDir);
@@ -100,24 +101,33 @@ try {
 
   const legacyId = await makeTask();
   await db.update(tasks).set({ reviewOf: taskId, reviewRound: 2 }).where(eq(tasks.id, legacyId));
+  runs.releaseTurn(taskId);
+  assert(runs.claimTurn(legacyId, "single"));
+  await inTurnCaller(legacyId);
+  sourceTaskId = legacyId;
   await db.update(tasks).set({ verifyRound: null, stage: "verifying" }).where(eq(tasks.id, taskId));
   const legacyDir = join(evidenceDir, "..", "round-2");
   stale(legacyDir);
   assert.equal((await stage()).status, 409, "历史独立审查的结论入口同样重新核验");
   const turnStart = new Date().toISOString();
-  const { out } = detachedPathsFor(join(evidenceDir, "..", ".."), "proof-session", turnStart);
+  await db.insert(schema.sessions).values({ id: "legacy-proof-session", taskId: legacyId, role: "single", agentType: "codex",
+    executor: "test", startedAt: turnStart });
+  const { out } = detachedPathsFor(join(evidenceDir, "..", ".."), "legacy-proof-session", turnStart);
   writeFileSync(out, JSON.stringify({ type: "item.completed", item: {
     id: "lost-conclusion", type: "mcp_tool_call", server: "ash", tool: "report_stage",
     arguments: { taskId, stage: "verified" }, result: null, error: { message: "Transport closed" }, status: "failed",
   } }) + "\n");
   stale(legacyDir);
-  assert.equal(await replayUndeliveredMcpCalls({ taskId, sessId: "proof-session", turnStart, agentType: "codex" }), 0,
+  assert.equal(await replayUndeliveredMcpCalls({ taskId, sessId: "legacy-proof-session", turnStart, agentType: "codex" }), 0,
     "MCP 补捞不能绕过结论消费的输入核验");
   await refreshRegressionEvidence(taskId, legacyDir);
   refreshed(legacyDir);
-  assert.equal(await replayUndeliveredMcpCalls({ taskId, sessId: "proof-session", turnStart, agentType: "codex" }), 0,
+  assert.equal(await replayUndeliveredMcpCalls({ taskId, sessId: "legacy-proof-session", turnStart, agentType: "codex" }), 0,
     "第一次拒收后自动补录同一请求仍然拒收");
 
+  runs.releaseTurn(legacyId);
+  assert(runs.claimTurn(taskId, "single"));
+  sourceTaskId = taskId;
   await db.update(tasks).set({ verifyRound: 3, stage: "verified", workflowAt: "verify",
     workflow: JSON.stringify({ workspace: "shared", steps: [makeStep("run", "run"), makeStep("verify", "verify")] }),
   }).where(eq(tasks.id, taskId));

@@ -10,7 +10,7 @@ export type ConclusionTask = typeof tasks.$inferSelect;
 export async function assertConclusionTask(transaction: ConclusionTransaction, expected: ConclusionTask): Promise<void> {
   const current = (await transaction.select().from(tasks).where(eq(tasks.id, expected.id)))[0];
   const fields = ["status", "stage", "verifyRound", "reviewOf", "reviewRound", "workflowMode", "archived",
-    "activeTurnToken", "activeDirectionToken", "activeDirectionVersion", "handoff"] as const;
+    "activeTurnToken", "activeDirectionToken", "activeDirectionVersion", "directionEpoch", "handoff"] as const;
   if (!current || fields.some((field) => current[field] !== expected[field])) {
     throw new RegressionConclusionRejected("当前回合、方向身份、审查轮次或结论已变化，本次上报未提交");
   }

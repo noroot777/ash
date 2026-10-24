@@ -70,6 +70,8 @@ export interface SegmentOptions {
   skipStepIds?: ReadonlySet<string>;
   /** 每一站成功执行完后的落账回调（验收尾段把 step id 追加进 durable 清单）。 */
   onStepDone?: (stepId: string) => Promise<void>;
+  onStepStart?: (stepId: string) => Promise<void>;
+  onStepFailure?: (stepId: string) => Promise<void>;
 }
 
 function shorten(text: string, max = 600): string {
@@ -189,6 +191,7 @@ export async function runSegment(
 ): Promise<SegmentResult> {
   for (const step of segmentAfter(def, fromStepId)) {
     if (opts.skipStepIds?.has(step.id)) continue; // 崩溃补跑：这一站上次已经真的跑完了
+    await opts.onStepStart?.(step.id);
     const result = step.kind === "command"
       ? await runCommand(task, step)
       : step.kind === "preview"
@@ -196,7 +199,10 @@ export async function runSegment(
         : step.kind === "accept" && !opts.skipAccept
           ? await runAccept(task, def, step)
           : { ok: true } as SegmentResult;
-    if (!result.ok) return result;
+    if (!result.ok) {
+      await opts.onStepFailure?.(step.id);
+      return result;
+    }
     await opts.onStepDone?.(step.id);
   }
   return { ok: true };

@@ -27,7 +27,7 @@ try {
     });
     const before = await review.conclusion();
     const replayAt = new Date().toISOString(), sessionId = `atomic-${mode}`;
-    await db.insert(schema.sessions).values({ id: sessionId, taskId: review.taskId, role: free ? "reviewer" : "single",
+    await db.insert(schema.sessions).values({ id: sessionId, taskId: review.ownerTaskId, role: free ? "reviewer" : "single",
       agentType: "codex", executor: "test", cwd: root, startedAt: replayAt });
     const { out } = detachedPathsFor(join(root, "runs", review.taskId), sessionId, replayAt);
     writeFileSync(out, JSON.stringify({ type: "item.completed", item: { id: sessionId, type: "mcp_tool_call",
@@ -56,6 +56,18 @@ try {
     assert.equal(await review.conclusion(), before);
     assert.equal((await review.state()).acceptedBasis, null);
     await db.update(tasks).set({ activeDirectionToken: null }).where(eq(tasks.id, review.taskId));
+    const staleEpoch = { ...task, directionEpoch: task.directionEpoch - 1 };
+    if (free) await assert.rejects(reportFreeReviewConclusion(review.taskId, "verified",
+      { verificationBasis: review.basis, expectedTask: staleEpoch }), /方向身份/);
+    else await assert.rejects(reportTaskStage(review.taskId, "verified",
+      { verificationBasis: review.basis, expectedTask: staleEpoch }), /方向身份/);
+    if (mode === "legacy") {
+      const source = (await db.select().from(tasks).where(eq(tasks.id, review.ownerTaskId)))[0]!;
+      await db.update(tasks).set({ activeDirectionToken: "new-review-direction" }).where(eq(tasks.id, review.ownerTaskId));
+      await assert.rejects(reportTaskStage(review.taskId, "verified", { verificationBasis: review.basis, expectedTask: task,
+        sourceTaskId: source.id, expectedSourceTask: source }), /方向身份/);
+      await db.update(tasks).set({ activeDirectionToken: null }).where(eq(tasks.id, review.ownerTaskId));
+    }
     const checked = await checkRegressionConclusion(review.taskId, review.directory, "verified", mode === "accepted_merge", review.basis);
     await db.update(schema.regressionEvidence).set({ generation: "changed-generation" })
       .where(eq(schema.regressionEvidence.directory, review.directory));
