@@ -45,13 +45,13 @@ export function forgetRedelivery(messageId: string): void {
 }
 
 // 挡回一次 = 记一笔账 + 排一次重投。`why` 写进日志,是这条链路上唯一能事后归因的东西。
-export function scheduleRedelivery(message: { id: string; taskId: string }, why: string): void {
+export function scheduleRedelivery(message: { id: string; taskId: string }, why: string, at = Date.now()): void {
   const waited = waitedFor(message.id);
   const attempt = redeliveryAttempts.get(message.id) ?? 0;
   if (attempt >= REDELIVERY_DELAYS_MS.length) {
     // 退避用完也要把「下一次」写下来,否则这句「交给 30s 兜底」只是日志修辞:
     // 结算钩子触发的扫描照样立刻取走它再撞一次。
-    nextRetryAt.set(message.id, Date.now() + RETRY_BACKSTOP_MS);
+    nextRetryAt.set(message.id, at + RETRY_BACKSTOP_MS);
     console.warn(
       `[ash] 排队消息连挡 ${attempt} 次仍没送成 task=${message.taskId} message=${message.id}`
       + `（${why};已等 ${secs(waited)}）—— 交给 30s 兜底扫描`,
@@ -60,7 +60,7 @@ export function scheduleRedelivery(message: { id: string; taskId: string }, why:
   }
   const delay = REDELIVERY_DELAYS_MS[attempt]!;
   redeliveryAttempts.set(message.id, attempt + 1);
-  nextRetryAt.set(message.id, Date.now() + delay);
+  nextRetryAt.set(message.id, at + delay);
   console.warn(
     `[ash] 排队消息这一次没送成 task=${message.taskId} message=${message.id}`
     + `（${why};已等 ${secs(waited)}）—— ${delay}ms 后重投（第 ${attempt + 1} 次）`,
