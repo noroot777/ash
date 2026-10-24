@@ -40,6 +40,7 @@ import {
 } from "../process-subtrees.js";
 import { siftLineage, type LineageStand } from "./lineage.js";
 import { observeRootLife, rootStand } from "./root-life.js";
+import { windowsExecutionRoot } from "./windows-run-evidence.js";
 import { joinOpen, unitOpen, type CleanupOpen } from "./cleanup-result.js";
 import { runOutPathOf, unitTokenOf } from "./unit-token.js";
 import {
@@ -158,10 +159,11 @@ export function signalMembers(members: readonly ProcessMember[], sig: NodeJS.Sig
 // 代价如实记下:快照之后才起来的后代这一轮看不见(它在快照里没有行),下一轮再收 —— 它握
 // 着文件/带着记号,线索不会丢。这比「可能打到别人」的方向错得轻。
 //
-type RootAuthority = "track-fd" | "unit" | "handle";
+type RootAuthority = "track-fd" | "unit" | "handle" | "execution";
 type RootSeed = {
   pid: number;
   authority: RootAuthority;
+  stand?: LineageStand;
   /** `unit` 档:记号那次取证给出的那一代(与记号同源读出),要与快照里那一代对得上。 */
   gen?: ProcessGeneration;
 };
@@ -325,6 +327,9 @@ export async function collectEscapees(child: ChildProcess): Promise<EscapeeSweep
   const seeds: RootSeed[] = owners.map((h) => ({ pid: h.pid, authority: "track-fd" as const }));
   if (child.pid && treeRootUsable(child, table)) seeds.push({ pid: child.pid, authority: "handle" });
   else if (child.pid) reportUnattributableTree(child.pid);
+  const execution = windowsExecutionRoot(child, table);
+  if (execution.fault) faults.push(execution.fault);
+  if (execution.root) seeds.push({ ...execution.root, authority: "execution" });
   // 记号那一问也挪到快照之后,判据于是与 fd 那一路同构。
   const freshUnit = token ? processUnitEvidence(token, { fresh: true }) : unit;
   if (freshUnit.verdict === "ours") {
@@ -473,6 +478,8 @@ function rootStandOf(
       const stand = rootStand(ctx.child, ctx.table);
       return stand.state === "unknown" ? null : stand;
     }
+    case "execution":
+      return seed.stand ?? null;
   }
 }
 

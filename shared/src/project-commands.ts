@@ -10,13 +10,39 @@
 // 项目自有端口、跑在主仓当前检出的分支上。两份配置刻意不复用 —— 预览服务的语义绑着
 // 借端口/enabled 勾选/kind 那一套，混在一起会把两种心智搅浑。
 //
-// 命令本身是**完整脚本**：多行、缩进、`cd x && …`、调用仓库里的 .sh 都行（跑法是
-// `shell -lc <script>`，跟预览脚本同一套），编辑面用 CodeMirror（web/src/settings/
-// ShellScriptEditor.tsx）。脚本里可以写 `{{占位符}}`，点执行时先让用户填 —— 见下。
+// 命令本身是**完整脚本**：多行、缩进、`cd x && …`、调用仓库里的 .sh 都行，编辑面用
+// CodeMirror（web/src/settings/ShellScriptEditor.tsx）。脚本里可以写 `{{占位符}}`，
+// 点执行时先让用户填 —— 见下。
+//
+// **方言跟着 ash 所在的机器**：macOS/Linux 上是 `shell -lc <script>`（跟预览脚本同一套），
+// Windows 上是 PowerShell（`-EncodedCommand`，见 server/src/terminal-shell.ts 的
+// `commandLaunch`）—— 那边没有登录 shell 这一档，`&&` 要 PowerShell 7 才认。
+export type CommandScriptDialect = "posix" | "powershell";
+
+/**
+ * 这段脚本会被哪个 shell 执行。**跟着 ash 所在的那台机器**,浏览器所在的系统不算数
+ * (跟 preview.ts 的 previewPortDialect 同一条口径)。
+ */
+export function commandScriptDialect(platform: string | null | undefined): CommandScriptDialect {
+  return platform === "win32" ? "powershell" : "posix";
+}
+
+/**
+ * 方言说明,给设置页那行小字。
+ *
+ * 这句话必须**到得了界面**:Windows 用户的默认 shell 多半是 cmd,写 `&&` 更是肌肉记忆,
+ * 而实际跑的是 PowerShell —— 只写在源码注释里等于没说(第 1 轮审查 N1)。
+ */
+export function commandScriptDialectText(dialect: CommandScriptDialect): string {
+  return dialect === "powershell"
+    ? "这台 ash 在 Windows 上，脚本由 PowerShell 执行（不是 cmd，也没有登录 shell 这一档）：多条命令请分行写或用 `;`，`&&` 要 PowerShell 7 才认。"
+    : "脚本由你的登录 shell 执行（`shell -lc`），所以 PATH、nvm、别名这些跟你平时开终端一致。";
+}
+
 export interface ProjectCommandConfig {
   id: string;
   name: string;
-  /** 在项目主仓根目录用用户的 shell 执行。 */
+  /** 在项目主仓根目录执行。方言跟着 ash 所在的机器,见 commandScriptDialect。 */
   command: string;
 }
 

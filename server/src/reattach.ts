@@ -21,7 +21,6 @@ import { cleanupAfterRun } from "./executors/kill.js";
 import { RUNS_DIR } from "./paths.js";
 import { consumeSingleRun } from "./single-run.js";
 import { isSameProcess } from "./proc.js";
-import { IS_WINDOWS } from "./platform.js";
 import { findMcpChannelHolders } from "./mcp-holders.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { withSkillInvocation } from "./skills.js";
@@ -66,13 +65,6 @@ export async function restartImpact(): Promise<RestartImpact> {
       out.interrupted.push({ ...label, reason: "排队中，还没有进程可接管" });
       continue;
     }
-    // Windows 没有 detached 跑法(见 reattachRunningTasks),所以这里一条都不会
-    // survives。闸和真正接管必须用同一条判据 —— 少了这段,闸会说「无感」,重启完
-    // 用户却发现任务全挂了。
-    if (IS_WINDOWS) {
-      out.interrupted.push({ ...label, reason: "Windows 上 agent 不走 detached 跑法，重启必断" });
-      continue;
-    }
     const sess = (await db.select().from(sessions).where(eq(sessions.taskId, t.id)))
       .filter((s) => (s.role === "single" || s.role === "reviewer") && !s.endedAt)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
@@ -106,12 +98,10 @@ export async function restartImpact(): Promise<RestartImpact> {
 // 中断（用户重试即可），也不能误接一个不是它的进程。
 export async function reattachRunningTasks(): Promise<Set<string>> {
   const adopted = new Set<string>();
-  // Windows 上 agent 从来不走 detached 跑法(executors/detached.ts 的 spawnForRun),
-  // 没有一个进程是「输出走文件、活得过重启」的。这里必须**整段短路**而不是靠下面
-  // 的字段判空兜住:session 上的 agent_pid / agent_out_path 照样有值(tee 那条路也
-  // 记),接下去就会拿一个早已随 server 一起死掉的 pid 去认亲 —— pid 复用时甚至可
-  // 能认到别人头上。宁可全部交给 reconcileInterrupted 判 failed。
-  if (IS_WINDOWS) return adopted;
+  // **两个平台同一条路**:Windows 的 agent 也输出落盘、也留 pid(executors/detached-win.ts),
+  // 所以这里不再按平台短路。认亲的判据两边也是同一条(pid + 启动时刻),而 Windows 的
+  // `CreationDate` 带秒以下七位 —— 那个读数本身就是排他凭证,比 POSIX 的秒级 lstart 更严
+  // (见 monitor-reclaim-evidence.ts 的 `recordedGrade`)。
   const candidates = await db
     .select()
     .from(tasks)

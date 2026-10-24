@@ -15,7 +15,7 @@ import {
   TTY_REAPER_WRAPPER,
   type DescendantSnapshot,
 } from "./terminal-process-tree.js";
-import { ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
+import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
 
 export { resolveTerminalDirectory } from "./terminal-shell.js";
 
@@ -88,8 +88,10 @@ type CreateOptions = {
   shell?: string;
   shellArgs?: string[];
   /**
-   * 常用命令模式：不开交互 shell，直接 `shell -lc <script>` 跑这条命令，进程退出
-   * 会话就结束（exitCode 落在会话上）。`-l` 保留 —— dev 命令的 PATH/nvm 全靠登录 shell。
+   * 常用命令模式：不开交互 shell，直接跑这条命令，进程退出会话就结束（exitCode 落在
+   * 会话上）。怎么起由 terminal-shell.ts 的 `commandLaunch` 定：POSIX 是
+   * `shell -lc <script>`（`-l` 保留 —— dev 命令的 PATH/nvm 全靠登录 shell），
+   * Windows 是 PowerShell `-EncodedCommand`。
    */
   command?: { id: string; name: string; script: string };
 };
@@ -153,10 +155,13 @@ export class TerminalSessionManager {
     }
     if (this.sessions.size >= MAX_SESSIONS) throw new Error("终端会话数量已达上限");
     const fallback = shellCommand();
-    const shell = options.shell ?? fallback.shell;
-    // 常用命令在 Windows 上没有对应的「-lc」语义，且 win32 分支未经真机验证 —— 与其留
-    // 一段没跑过的 cmd/pwsh 参数拼接，不如明确拒绝（AGENTS.md「Windows 真机」一节）。
-    if (options.command && IS_WINDOWS) throw new Error("常用命令暂不支持 Windows 上的 ash 实例");
+    // 常用命令怎么起由 commandLaunch 定(POSIX `shell -lc`,Windows PowerShell
+    // `-EncodedCommand`,理由见 terminal-shell.ts)。它可能抛 —— Windows 上找不到
+    // PowerShell 时拒绝开会话,比拿 cmd.exe 去跑一段 PowerShell 脚本诚实。
+    const launch = options.command
+      ? commandLaunch(options.command.script, options.shell)
+      : { shell: options.shell ?? fallback.shell, args: options.shellArgs ?? fallback.args };
+    const shell = launch.shell;
     // containment 依赖缺失(非 Linux 且连 ps 都找不到)就**显式拒绝**开会话:没有确定性
     // 成员枚举,「关会话/关服时清空进程树」的承诺就兑现不了 —— 绝不静默降级到已被证伪的
     // 采样后继续对清场报成功(第 5 轮自由审查)。Linux 有 /proc 永真,macOS 的 ps 在
@@ -164,7 +169,7 @@ export class TerminalSessionManager {
     if (!IS_WINDOWS && !this.containment) {
       throw new Error("终端依赖缺失：ps 与 /proc 都不可用，无法保证关闭会话时清空进程树；请安装 procps 后重启 ash");
     }
-    const args = options.command ? ["-lc", options.command.script] : options.shellArgs ?? fallback.args;
+    const args = launch.args;
     // POSIX 一律包 wrapper,session leader 是常驻 /bin/sh、真正的 shell/命令是它的孩子,
     // 详见 terminal-process-tree.ts:
     //   交互 → TTY_REAPER_WRAPPER:shell 退出时确定性清杀余党(「起作业后立即 disown;
@@ -174,6 +179,15 @@ export class TerminalSessionManager {
     //   就保持存活 —— 会话持续「运行中」,stop/restart 随时能经成员枚举触达,独立 PGID
     //   服务不再失控/被重复启动(第 5 轮实锤)。
     // exitCode 由 wrapper 透传(信号死的内层折算成 128+n)。
+    //
+    // **Windows 没有这一层**,而且那边的能力因此少一档:ConPTY 自己就是整条进程树的容器
+    // (node-pty 的 kill 走 `GetConsoleProcessList` 把挂在这个伪控制台上的进程全收掉),
+    // 所以「停止」是确定性的;但「组长退了、后台服务还活着」(daemonize 形状)在那边
+    // **判不出来** —— 没有进程组,`groupAlive`/`processAlive` 在 win32 上恒为 false,
+    // 于是 `sessionAlive` 退化成「pty 进程还在吗」。后果如实记下:一条把服务
+    // `Start-Process` 出去、自己立刻退出的命令,会话会落「已结束」,那个服务就脱管了。
+    // 要让它跟 POSIX 一样可控,得给会话套 Job Object(confine-job.ts 已有那套机器)——
+    // 等真有人这么写命令再做,不预先加一层没人验过的复杂度。
     const wrapper = options.command ? TTY_COMMAND_WRAPPER : TTY_REAPER_WRAPPER;
     const spawnSpec = IS_WINDOWS
       ? { file: shell, args }
@@ -366,8 +380,9 @@ export class TerminalSessionManager {
 
   private signalTree(session: TerminalSession, signal: "SIGTERM" | "SIGKILL", descendants?: DescendantSnapshot): void {
     try {
-      // Windows 没有进程组信号这一说,交给 node-pty 收 ConPTY;命令会话在 create 时
-      // 已拒绝 win32,这里只是让普通会话也调用得动。
+      // Windows 没有进程组信号这一说,交给 node-pty 收 ConPTY —— 它按
+      // `GetConsoleProcessList` 把挂在这个伪控制台上的进程全部收掉,交互 shell 与
+      // 常用命令同一条路(那边的边界见 create 里 wrapper 那段注释)。
       if (IS_WINDOWS) session.process.kill();
       else process.kill(-session.process.pid, signal);
     } catch {

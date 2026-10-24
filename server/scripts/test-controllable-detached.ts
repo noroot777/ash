@@ -1,13 +1,20 @@
-// 可引导单飞的 stdin 也必须活过 server 重启：v1 发第一条后退出，v2 重开 FIFO
-// writer 发第二条与 stop；同一个 agent 进程应连续收到三条，输出不丢不重。
+// 可引导单飞的 stdin 也必须活过 server 重启：v1 发第一条后退出，v2 重开 writer 发第二条
+// 与 stop；同一个 agent 进程应连续收到三条，输出不丢不重。
+//
+// 走的是**生产入口** spawnControllableForRun，所以两个平台各自跑自己那条实现：POSIX 重开
+// FIFO，Windows 连回 node 壳守着的具名管道（executors/detached-win-wrap.ts）。断言两边一样
+// —— 「重启后还能接着引导」是同一个契约，不是 POSIX 专属。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { IS_WINDOWS, killTree } from "../src/platform.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
+// file:// 而不是裸路径 —— 理由同 test-detached-survival.ts（Windows 上 `D:` 会被当协议）。
+const mod = (rel: string) => JSON.stringify(pathToFileURL(join(here, rel)).href);
 const root = mkdtempSync(join(tmpdir(), "ash-controllable-detached-"));
 const agentScript = join(root, "agent.mjs");
 const serverScript = join(root, "server.mjs");
@@ -30,9 +37,9 @@ import { writeFileSync } from "node:fs";
 import {
   detachedPathsFor,
   reattachDetachedAgent,
-  spawnControllableDetachedAgent,
-} from ${JSON.stringify(join(here, "../src/executors/detached.ts"))};
-import { inspectProcess } from ${JSON.stringify(join(here, "../src/proc.ts"))};
+  spawnControllableForRun,
+} from ${mod("../src/executors/detached.ts")};
+import { inspectProcess } from ${mod("../src/proc.ts")};
 
 const [mode, root, agentScript, stateFile] = process.argv.slice(2);
 const paths = detachedPathsFor(root, "session", "T0");
@@ -49,7 +56,7 @@ const consume = (child, count = 0) => new Promise((resolve) => {
 });
 
 if (mode === "v1") {
-  const child = spawnControllableDetachedAgent(root, process.execPath, [agentScript], "one\\n", paths);
+  const child = spawnControllableForRun(root, process.execPath, [agentScript], "one\\n", undefined, paths);
   await consume(child, 1);
   const info = inspectProcess(child.pid);
   writeFileSync(stateFile, JSON.stringify({
@@ -80,7 +87,8 @@ writeFileSync(stateFile, JSON.stringify({ reattached: true, how, lines, exitCode
 `);
 
 const run = (args: string[], env: Record<string, string> = {}) => new Promise<number>((resolve) => {
-  const child = spawn("npx", ["tsx", serverScript, ...args], {
+  // 理由同 test-detached-survival.ts:`spawn("npx")` 在 Windows 上 ENOENT。
+  const child = spawn(process.execPath, ["--import", "tsx", serverScript, ...args], {
     cwd: join(here, ".."),
     env: { ...process.env, ...env },
     stdio: ["ignore", "inherit", "inherit"],
@@ -105,7 +113,9 @@ try {
   console.log("✓ 可引导 detached 回合重启后恢复 stdin，同一进程继续收消息");
 } finally {
   if (agentPid) {
-    try { process.kill(-agentPid, "SIGKILL"); } catch { /* 已退出 */ }
+    // Windows 没有进程组，收尾走整树强杀（killTree 内部就是 taskkill /T /F）。
+    if (IS_WINDOWS) killTree(agentPid, "SIGKILL");
+    else try { process.kill(-agentPid, "SIGKILL"); } catch { /* 已退出 */ }
   }
   rmSync(root, { recursive: true, force: true });
 }
