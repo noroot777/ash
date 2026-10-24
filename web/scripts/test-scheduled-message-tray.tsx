@@ -259,7 +259,7 @@ assert.deepEqual(
   const monitorMarkup = rows.find((chunk) => chunk.includes("哨兵事件")) ?? "";
   const mineMarkup = rows.find((chunk) => chunk.includes("我自己写的")) ?? "";
   assert.ok(monitorMarkup, "哨兵事件行应被渲染出来");
-  assert.match(monitorMarkup, /哨兵事件 · 任务空闲后唤醒/, "哨兵行要标明这条是谁推的");
+  assert.match(monitorMarkup, /<em>哨兵<\/em>/, "哨兵行要标明这条是谁推的");
   assert.match(monitorMarkup, /取消哨兵事件[\s\S]*这一次唤醒/, "哨兵行要给「取消这次唤醒」");
   assert.doesNotMatch(monitorMarkup, /放回输入框/, "哨兵事件不是用户写的，不得提供撤回");
   assert.doesNotMatch(monitorMarkup, /scheduled-message-guide/, "哨兵事件不得出现引导会话入口");
