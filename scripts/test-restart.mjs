@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { IS_WINDOWS, capture, isPidAlive, killPid, sleep } from "./platform.mjs";
+import { restartCommand } from "./restart-options.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14317;
@@ -222,17 +223,21 @@ if (!refusedOutput.includes("问不到「重启会打断谁」")) {
 }
 if (refusedOutput.includes("已就绪")) fail("问不到判据却照样重启了", refusedOutput);
 if (!survived) fail("问不到判据时不许动旧进程,它却被杀了", refusedOutput);
-if (!refusedOutput.includes("npm run restart -- --force")) fail("没提供跨平台强制重启命令", refusedOutput);
+if (!refusedOutput.includes(restartCommand("--force"))) fail("没提供跨平台强制重启命令", refusedOutput);
 
 // FORCE=1 是明说「知道可能打断也要重启」,那条路不该被这道闸挡住 —— 同一个回 401 的
 // 旧 server 还在端口上,这次必须被换掉。
-const restartArgs = forceArgs.length && process.env.npm_execpath
-  ? [process.env.npm_execpath, "run", "restart", "--", ...forceArgs]
-  : [join(REPO, "scripts", "restart.mjs"), ...forceArgs];
-const forced = spawnSync(process.execPath, restartArgs, {
+const forceCommand = restartCommand(...forceArgs);
+const restartArgs = IS_WINDOWS
+  ? ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(
+    `[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\n${forceCommand}\nexit $LASTEXITCODE`, "utf16le",
+  ).toString("base64")]
+  : ["-c", forceCommand];
+const forced = spawnSync(IS_WINDOWS ? "powershell.exe" : "/bin/sh", restartArgs, {
   cwd: REPO,
   env: { ...env, ...forceEnv, START_TIMEOUT: "10" },
   encoding: "utf8",
+  timeout: 120_000,
 });
 const forcedOutput = (forced.stdout ?? "") + (forced.stderr ?? "");
 try { refusingProc.kill("SIGKILL"); } catch { /* 已经没了 */ }
