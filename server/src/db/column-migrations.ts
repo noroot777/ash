@@ -3,6 +3,7 @@
 // 列的语义注释全部住在这里,改列先读上下文。真正的一次性数据搬运在 migrations.ts。
 export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE accept_gate_runs ADD COLUMN process_pending INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE accept_gate_runs ADD COLUMN source_fingerprint TEXT",
   "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
   // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
   "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",

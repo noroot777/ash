@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { openConfinement, reopenConfinement, type Confinement } from "./executors/kernel-confine.js";
-import { inspectProcessSync, IS_WINDOWS } from "./platform.js";
+import type { Confinement } from "./executors/kernel-confine.js";
+import { inspectProcessSync } from "./platform.js";
+import { createGateConfinement, reopenGateConfinement } from "./accept-gate-confinement.js";
 
 export type GateLaunch = {
   version: 1;
@@ -9,6 +10,8 @@ export type GateLaunch = {
   pid?: number;
   startedAt?: string | null;
   confinementId?: string | null;
+  confinementEnrolled?: boolean;
+  stoppedEvidence?: "never-authorized" | "kernel-empty";
 };
 
 const confinements = new Map<string, Confinement>();
@@ -38,7 +41,7 @@ export function writeGateLaunch(logPath: string, launch: GateLaunch): void {
 
 export function gateConfinement(logPath: string, launch: GateLaunch): Confinement | null {
   if (!launch.confinementId) return null;
-  const confinement = confinements.get(logPath) ?? reopenConfinement(launch.confinementId);
+  const confinement = confinements.get(logPath) ?? reopenGateConfinement(logPath, launch.confinementId, launch.pid ?? 0, launch.startedAt ?? null);
   if (confinement) confinements.set(logPath, confinement);
   return confinement;
 }
@@ -58,29 +61,28 @@ export function authorizeGateLaunch(logPath: string): boolean {
   }
   if (existsSync(gateAbortPath(logPath))) return false;
   if (inspectProcessSync(launch.pid)?.startedAt !== launch.startedAt) throw new Error("验收前置命令的启动器身份已变化，不能放行命令");
-  if (IS_WINDOWS) {
-    const confinement = openConfinement(`accept-gate-${launch.pid}-${Date.now()}`);
-    if (confinement) {
-      confinements.set(logPath, confinement);
-      launch.confinementId = confinement.id;
-      writeGateLaunch(logPath, launch);
-    }
-    const enrolled = confinement?.enroll(launch.pid);
-    const reading = enrolled ? confinement!.read() : null;
-    if (reading?.kind !== "members" || !reading.members.some(member => member.pid === launch.pid)) {
-      throw new Error("Windows 进程归属尚未确认，验收前置命令没有启动");
-    }
+  const confinement = createGateConfinement(logPath, launch.pid, launch.startedAt);
+  if (!confinement) throw new Error("无法建立门禁整次运行的内核围栏，验收前置命令没有启动");
+  confinements.set(logPath, confinement);
+  launch.confinementId = confinement.id;
+  writeGateLaunch(logPath, launch);
+  const enrolled = confinement.enroll(launch.pid);
+  const reading = enrolled ? confinement.read() : null;
+  if (reading?.kind !== "members" || !reading.members.some(member => member.pid === launch.pid)) {
+    throw new Error("进程归属尚未确认，验收前置命令没有启动");
   }
+  launch.confinementEnrolled = true;
   if (existsSync(gateAbortPath(logPath))) return false;
+  if (inspectProcessSync(launch.pid)?.startedAt !== launch.startedAt) throw new Error("门禁启动器已退出，不能放行命令");
   writeGateLaunch(logPath, { ...launch, phase: "armed" });
   writeFileSync(gateGoPath(logPath), "go", { flag: "wx" });
   return true;
 }
 
-export function finishGateLaunch(logPath: string): void {
+export function finishGateLaunch(logPath: string, stoppedEvidence: GateLaunch["stoppedEvidence"]): void {
   const launch = readGateLaunch(logPath);
   if (!launch) return;
-  writeGateLaunch(logPath, { ...launch, phase: "stopped" });
+  writeGateLaunch(logPath, { ...launch, phase: "stopped", stoppedEvidence });
   confinements.get(logPath)?.dispose();
   confinements.delete(logPath);
   if (launch.pid) launches.delete(launch.pid);
@@ -97,6 +99,7 @@ const timer = setInterval(() => {
   clearInterval(timer);
   const child = spawn(config.file, config.args, {
     cwd: config.cwd, stdio: ["ignore", 1, 2], windowsHide: true,
+    env: { ...process.env, ...config.restoreEnv },
     windowsVerbatimArguments: config.windowsVerbatimArguments
   });
   child.once("error", error => { console.error(error.message); process.exit(127); });

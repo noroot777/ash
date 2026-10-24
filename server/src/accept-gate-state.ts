@@ -1,14 +1,21 @@
 import { and, desc, eq, or } from "drizzle-orm";
+import { existsSync } from "node:fs";
 import { normalizeAcceptGateCommand, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateFailure, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { acceptGateLogTail } from "./accept-gate-process.js";
 import { commitAt } from "./task-branch-plan.js";
 import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
+import { gateSourceMatches, readGateSource } from "./accept-gate-source.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
+
+export async function gateMergeSource(basis: Pick<TaskRow, "acceptedGateMode" | "acceptedGateRunId"> | null): Promise<string | undefined> {
+  if (basis?.acceptedGateMode !== "passed" || !basis.acceptedGateRunId) return undefined;
+  return (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, basis.acceptedGateRunId))).at(0)?.sourceCommit ?? undefined;
+}
 
 export const gateView = (row: GateRow): AcceptGateView => ({
   id: row.id,
@@ -26,6 +33,7 @@ export const gateView = (row: GateRow): AcceptGateView => ({
   fastForward: row.fastForward ?? null,
   stale: false,
   logPath: row.logPath,
+  logAvailable: existsSync(row.logPath),
   logTail: acceptGateLogTail(row.logPath),
   handoff: row.handoffAt ? { at: row.handoffAt, error: row.handoffError ?? null } : null,
   processPending: row.processPending,
@@ -48,12 +56,6 @@ export async function prepareGateCwd(task: TaskRow, repoPath: string): Promise<s
   catch { return repoPath; }
 }
 
-/**
- * 被测的那棵树：工作区当前 HEAD。
- *
- * 拿不到（非 git 项目）就是 null —— 那时**一次结果只作数一次**（没有能比对的身份，
- * 复用等于拿上一棵树的结论替这一棵背书）。
- */
 export const headCommit = (cwd: string) => commitAt(cwd, "HEAD");
 
 export async function gateHead(task: TaskRow, repoPath: string): Promise<string | null> {
@@ -100,11 +102,12 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
     .orderBy(desc(acceptGateRuns.startedAt)).limit(1)).at(0);
   if (pending) return { command, running: gateView(pending), latest: view, basis };
   // 新鲜度按**现在**这棵树算：前端据它决定说「已通过，可以直接验收」还是「要重跑」。
-  // 判据与 acceptGateCheck 的复用判据必须是同一条（提交 + 命令），否则卡上说「不会重跑」、
-  // 一点下去却真的重跑了。
   const frozen = task.archived || task.stage === "accepted" || task.stage === "merged";
   const head = frozen ? task.acceptedSourceCommit ?? basis?.run?.sourceCommit ?? null
     : project ? await gateHead(task, project.repoPath) : null;
-  const stale = !head || head !== latestRow.sourceCommit || latestRow.command !== command;
+  const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
+  const source = cwd ? await readGateSource(cwd).catch(() => null) : null;
+  const stale = latestRow.command !== command || (frozen ? !head || head !== latestRow.sourceCommit
+    : !gateSourceMatches(latestRow, source));
   return { command, running: null, latest: { ...view, stale }, basis };
 }

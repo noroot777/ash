@@ -47,6 +47,7 @@ export type TaskMergeWarning = {
 export type TaskMergeFailureReason =
   | "not_git_repo"
   | "source_branch_missing"
+  | "source_changed"
   | "target_branch_missing"
   | "target_unresolved"
   | "source_equals_target"
@@ -178,9 +179,10 @@ async function mergeInCheckedOutTarget(
   sourceBranch: string,
   targetBranch: string,
   fastForward: boolean,
+  sourceRef = sourceBranch,
 ): Promise<TaskMergeResult> {
   try {
-    await exec("git", ["-C", cwd, "merge", ...(fastForward ? ["--ff-only"] : ["--no-ff", "--no-edit"]), sourceBranch]);
+    await exec("git", ["-C", cwd, "merge", ...(fastForward ? ["--ff-only"] : ["--no-ff", "--no-edit"]), sourceRef]);
     return { ok: true, sourceBranch, targetBranch, method: fastForward ? "fast_forward" : "merge_commit" };
   } catch (error) {
     const files = await conflictFiles(cwd);
@@ -207,6 +209,7 @@ async function mergeInCheckedOutTarget(
 
 /** 合并那一下的额外开关（都不传 = 老规矩：合并并落提交）。 */
 export type TaskMergeOptions = {
+  sourceCommit?: string;
   /**
    * 合完要不要落提交。false = 只把改动合进目标分支的工作区并暂存，目标分支的 ref
    * 一个字节都不动（项目设置「验收合并后提交代码」关掉，或单次验收把那个勾取消）。
@@ -318,9 +321,10 @@ async function squashInCheckedOutTarget(
   sourceBranch: string,
   targetBranch: string,
   commit = true,
+  sourceRef = sourceBranch,
 ): Promise<TaskMergeResult> {
   try {
-    await exec("git", ["-C", cwd, "merge", "--squash", sourceBranch]);
+    await exec("git", ["-C", cwd, "merge", "--squash", sourceRef]);
   } catch (error) {
     const files = await conflictFiles(cwd);
     await exec("git", ["-C", cwd, "merge", "--abort"]).catch(() => {});
@@ -384,6 +388,7 @@ async function mergeWithoutCommit(
   repo: string,
   sourceBranch: string,
   targetBranch: string,
+  sourceRef = sourceBranch,
 ): Promise<TaskMergeResult> {
   await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
   const checkout = await targetCheckout(repo, targetBranch);
@@ -426,7 +431,7 @@ async function mergeWithoutCommit(
       dirtyFiles,
     };
   }
-  return squashInCheckedOutTarget(repo, sourceBranch, targetBranch, false);
+  return squashInCheckedOutTarget(repo, sourceBranch, targetBranch, false, sourceRef);
 }
 
 /** 「只打标签不合并」那一档的标签名。 */
@@ -459,6 +464,10 @@ async function mergeTaskBranchLocked(
   if (sourceBranch === targetBranch) {
     return { ok: false, reason: "source_equals_target", message: "任务分支不能同时作为验收目标分支", sourceBranch, targetBranch };
   }
+  const sourceRef = options.sourceCommit ?? sourceBranch;
+  if (options.sourceCommit && await commitOf(repo, sourceBranch) !== options.sourceCommit) {
+    return { ok: false, reason: "source_changed", message: "任务分支已不再指向被测提交；请重新验收", sourceBranch, targetBranch };
+  }
 
   // 「只打标签不合并」：目标分支一动不动，只在任务分支的头上钉一个标签，日后要找回
   // 这份产物有个稳定的名字。
@@ -469,7 +478,7 @@ async function mergeTaskBranchLocked(
   if (strategy === "tag") {
     const tag = acceptTagName(taskId);
     const [head, tagged] = await Promise.all([
-      commitOf(repo, sourceBranch),
+      commitOf(repo, sourceRef),
       commitOf(repo, `refs/tags/${tag}`),
     ]);
     if (tagged) {
@@ -484,7 +493,7 @@ async function mergeTaskBranchLocked(
       };
     }
     try {
-      await exec("git", ["-C", repo, "tag", tag, sourceBranch]);
+      await exec("git", ["-C", repo, "tag", tag, sourceRef]);
       return { ok: true, sourceBranch, targetBranch, method: "tagged", tag };
     } catch (error) {
       return {
@@ -497,7 +506,7 @@ async function mergeTaskBranchLocked(
     }
   }
 
-  if (await isAncestor(repo, sourceBranch, targetBranch)) {
+  if (await isAncestor(repo, sourceRef, targetBranch)) {
     return { ok: true, sourceBranch, targetBranch, method: "already_merged" };
   }
 
@@ -509,12 +518,12 @@ async function mergeTaskBranchLocked(
     // 重试上一轮已经合过的那次：目标工作区里躺着的就是上次合进来的改动，别再合一遍
     // （会被自己的产物判成 target_dirty，任务永远卡在 merged）。
     if (options.retryOfMerged) return { ok: true, sourceBranch, targetBranch, method: "no_commit" };
-    return mergeWithoutCommit(repo, sourceBranch, targetBranch);
+    return mergeWithoutCommit(repo, sourceBranch, targetBranch, sourceRef);
   }
 
   if (strategy === "squash") {
     return inTargetCheckout(repo, sourceBranch, targetBranch, (cwd) =>
-      squashInCheckedOutTarget(cwd, sourceBranch, targetBranch));
+      squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef));
   }
 
   // 清掉失效登记后再尝试 fetch，避免首次 FF 被陈旧占用拒绝、第二次却能成功。
@@ -522,17 +531,17 @@ async function mergeTaskBranchLocked(
   // First attempt the ref-only fast-forward. This changes no checked-out files;
   // non-FF and checked-out-target failures fall through to the guarded paths.
   try {
-    await exec("git", ["-C", repo, "fetch", ".", `${sourceBranch}:${targetBranch}`]);
+    await exec("git", ["-C", repo, "fetch", ".", `${sourceRef}:${targetBranch}`]);
     return { ok: true, sourceBranch, targetBranch, method: "fast_forward" };
   } catch (fetchError) {
-    const fastForward = await isAncestor(repo, targetBranch, sourceBranch);
+    const fastForward = await isAncestor(repo, targetBranch, sourceRef);
     return inTargetCheckout(
       repo,
       sourceBranch,
       targetBranch,
       // 走到临时 worktree 时 fastForward 一定是 false（下面那个 beforeTemp 已经把
       // 「本来能 FF 却失败了」拦掉了），所以这儿直接把它透传下去。
-      (cwd) => mergeInCheckedOutTarget(cwd, sourceBranch, targetBranch, fastForward),
+      (cwd) => mergeInCheckedOutTarget(cwd, sourceBranch, targetBranch, fastForward, sourceRef),
       // 目标分支哪儿都没检出、而且本来就该能 fast-forward：那句 ref-only 的 fetch 失败
       // 是真出事了，别再开临时 worktree 拿 merge 去糊。
       () => fastForward

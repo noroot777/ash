@@ -58,6 +58,7 @@ import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@ash/shared/
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
+import { collectGateRuns } from "./handoff-accept-gate.js";
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
   const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -493,6 +494,8 @@ export async function exportHandoff(
           acceptedBaseCommit: task.acceptedBaseCommit,
           acceptedMergeCommit: task.acceptedMergeCommit,
           acceptedMergeMethod: task.acceptedMergeMethod,
+          acceptedGateMode: task.acceptedGateMode as HandoffManifest["task"]["acceptedGateMode"],
+          acceptedGateRunId: task.acceptedGateRunId,
           pinnedAt: task.pinnedAt, starredAt: task.starredAt,
           createdAt: task.createdAt, startedAt: task.startedAt, endedAt: task.endedAt,
         },
@@ -511,6 +514,7 @@ export async function exportHandoff(
           contextWindowEstimated: s.contextWindowEstimated,
         })),
         freeWorkflow,
+        acceptGateRuns: await collectGateRuns(task.id),
         git: gitState,
         uploads,
         messages: pendingMsgs.map((x) => ({

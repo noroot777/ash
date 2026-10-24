@@ -100,6 +100,9 @@ try {
     await page.route("**/api/tasks/gate-task/accept-gate/cancel", (route) => {
       store.canceled += 1;
       assert.equal(JSON.parse(route.request().postData()).runId, store.gate.running.id);
+      if (cancelOutcome === "settlement_failed") return json(route, {
+        outcome: cancelOutcome, runId: store.gate.running.id, gate: store.gate.running,
+      });
       if (cancelOutcome !== "canceled") {
         const latest = run({ ...store.gate.running, status: "passed", exitCode: 0 });
         store.gate = { ...store.gate, running: null, latest, basis: basis("passed", latest) };
@@ -494,6 +497,31 @@ try {
     const card = page.locator(wait ? ".accept-gate-wait" : ".accept-gate-card");
     await card.waitFor();
     assert.match(await card.innerText(), /尚待停止/);
+    await page.close();
+  }
+  for (const wait of [false, true]) {
+    const active = run({ status: "running", exitCode: null });
+    const { page } = await open({ gate: { command: active.command, running: active, latest: active },
+      query: wait ? "?wait=1" : "", cancelOutcome: "settlement_failed" });
+    const card = page.locator(wait ? ".accept-gate-wait" : ".accept-gate-card");
+    await card.waitFor();
+    if (wait) await page.locator(".wait-bar__bar").click();
+    await card.getByRole("button", { name: "不等了，收掉它" }).click();
+    const notice = page.getByRole("status", { name: "操作结果" });
+    await notice.filter({ hasText: "取消结果保存失败" }).waitFor();
+    assert.match(await notice.innerText(), /重试取消/);
+    assert.doesNotMatch(await notice.innerText(), /已经结束|已取消这一次/);
+    await card.getByRole("button", { name: "不等了，收掉它" }).waitFor();
+    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/cancel-settlement-failed-${wait ? "wait" : "card"}.png`, fullPage: true });
+    await page.close();
+  }
+  {
+    const moved = run({ logAvailable: false, logTail: "" });
+    const { page } = await open({ gate: { command: moved.command, running: null, latest: moved, basis: basis("passed", moved) }, query: "?stage=accepted" });
+    const missing = page.getByRole("button", { name: "日志未迁入或已清理，当前不可查" });
+    await missing.waitFor();
+    assert.equal(await missing.isDisabled(), true);
+    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/handoff-log-unavailable.png`, fullPage: true });
     await page.close();
   }
   console.log("accept gate card DOM regression passed");

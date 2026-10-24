@@ -254,7 +254,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
               </button>
             )}
             {shown && (
-              <button type="button" disabled={busy} onClick={() => void openLog()}><FileText size={13} />看完整日志</button>
+              <button type="button" disabled={busy || shown.logAvailable === false} onClick={() => void openLog()}><FileText size={13} />{shown.logAvailable === false ? "日志未迁入或已清理，当前不可查" : "看完整日志"}</button>
             )}
             {/* 正在跑的时候不给改：这一次用的是开跑时那条命令原文，改了也不作数，
                 摆在那儿只会让人以为能中途换一条。 */}
@@ -324,13 +324,13 @@ function detail(
         ? `这个任务名下最近一次执行记录是「${summarizeAcceptGate(latest)}」，但它并不能证明本次验收前跑过它。`
         : "");
   }
-  if (!latest) return `点「验收通过」时会先在任务工作区里跑一遍 \`${state.command}\`，rc=0 才合并。`;
+  if (!latest) return `点「验收通过」时会先在独立源码快照里跑一遍 \`${state.command}\`，rc=0 且确认整次运行退出后才合并。`;
   if (latest.status === "passed") {
-    if (!latest.stale) return `${summarizeAcceptGate(latest)}。代码和命令都没再改过，所以这次验收不会重跑它。`;
+    if (!latest.stale) return `${summarizeAcceptGate(latest)}。源码、依赖输入和命令仍与被测快照一致，所以这次验收不会重跑它。`;
     // 「不作数了」有两种，出路一样但原因完全不同，说错一种用户会去查错的地方。
     return latest.command !== state.command
       ? `那次跑的是另一条命令（\`${latest.command}\`）。现在这条 \`${state.command}\` 在这棵树上一次都没跑过——再点验收会跑它。`
-      : `那次跑的是 ${latest.sourceCommit?.slice(0, 8) ?? "另一棵树"}，代码之后又改过了——再点验收会重跑一遍。`;
+      : `那次跑的是 ${latest.sourceCommit?.slice(0, 8) ?? "另一份源码快照"}，当前源码或依赖输入已变化，或旧记录没有可核对的快照身份——再点验收会重跑一遍。`;
   }
   // 红了之后 ash 会**自动**把日志交回那个任务去修。这件事必须写在卡上：用户只看到三颗
   // 按钮时会以为还得自己去催，而时间线里那句话翻几页才找得到。

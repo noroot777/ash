@@ -35,6 +35,7 @@ export const acceptGateRuns = sqliteTable(
     logPath: text("log_path").notNull(),
     /** 被测的那棵树（任务工作区当时的 HEAD）。它一变，这次结果就不再算数。 */
     sourceCommit: text("source_commit"),
+    sourceFingerprint: text("source_fingerprint"),
     targetBranch: text("target_branch"),
     targetCommit: text("target_commit"),
     /** 当时合并会不会是纯 fast-forward（null = 这个任务没有合并目标）。 */
@@ -80,6 +81,7 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN handoff_error TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN pid_started_at TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN process_pending INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE accept_gate_runs ADD COLUMN source_fingerprint TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

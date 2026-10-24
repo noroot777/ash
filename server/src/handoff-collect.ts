@@ -146,6 +146,7 @@ export async function collectRunArtifacts(taskId: string, notes: string[]): Prom
   const out: HandoffFilePayload[] = [];
   const walk = async (dir: string): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith("accept-gate-") && !/^accept-gate-[A-Za-z0-9_-]+\.log$/.test(entry.name)) continue;
       const abs = join(dir, entry.name);
       if (entry.isDirectory()) { await walk(abs); continue; }
       if (!entry.isFile()) continue;

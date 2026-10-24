@@ -22,11 +22,13 @@ export function mountAcceptGateRoutes(api: Hono): void {
     if (wanted) {
       const run = await acceptGateRunOf(taskId, wanted);
       if (!run) return c.json({ error: "这个任务名下没有这一次执行记录" }, 404);
+      if (run.logAvailable === false) return c.json({ error: "这次运行的日志未迁入或已清理，当前机器不可查" }, 404);
       return c.text(acceptGateLogText(run.logPath) || "（日志为空）");
     }
     const state = await acceptGateState(taskId);
     const run = state.running ?? state.latest;
     if (!run) return c.json({ error: "这个任务还没跑过验收前置命令" }, 404);
+    if (run.logAvailable === false) return c.json({ error: "这次运行的日志未迁入或已清理，当前机器不可查" }, 404);
     return c.text(acceptGateLogText(run.logPath) || "（日志为空）");
   });
 

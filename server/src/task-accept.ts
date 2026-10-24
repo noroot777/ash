@@ -31,6 +31,8 @@ import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
+import { mergePreflight } from "./task-accept-merge-preflight.js";
+import { gateMergeSource } from "./accept-gate-state.js";
 import { acceptGateCheck, dropPendingAcceptGate, startPendingAcceptGate, type AcceptGateIntent, type AcceptGateSnapshot } from "./accept-gate.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 
@@ -170,6 +172,8 @@ async function acceptTaskUnlocked(
   // 这里直接 null 放行）。判在锁里、跑在锁外 —— 那条命令动辄十几分钟，占着仓库锁会让
   // 同仓库其它任务的验收全部干等，所以这里只登记意图，发射在 acceptTask 的锁外那一段。
   const gateProject = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
+  const cheap = await mergePreflight(task, gateProject, by, commitOverride);
+  if (cheap) return cheap;
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
     choices: { by, commit: commitOverride, confirmUnverified },
@@ -268,13 +272,15 @@ async function acceptTaskUnlocked(
   if (!task.acceptedTargetBranch) {
     await db.update(tasks).set({ acceptedTargetBranch: intendedTarget, updatedAt: now() }).where(eq(tasks.id, taskId));
   }
+  const testedSource = await gateMergeSource(gateBasis);
   if (!retrying) {
-    const source = await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));
+    const source = testedSource ?? await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));
     await db.update(tasks).set({ acceptedSourceCommit: source }).where(eq(tasks.id, taskId));
   }
   const merge = await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge, {
     commit: commitOnAccept,
     retryOfMerged: retrying,
+    sourceCommit: testedSource,
   });
   if (!merge.ok && merge.reason === "target_checked_out" && merge.targetBranch) {
     const owner = await branchOwner(project.repoPath, task.projectId, merge.targetBranch);

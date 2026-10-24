@@ -13,7 +13,7 @@
 export type AcceptGateStatus = "running" | "passed" | "failed" | "interrupted" | "canceled";
 
 /** 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。 */
-export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled";
+export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
   running: "正在跑",
@@ -29,6 +29,8 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   spawn_failed: "命令起不来",
   server_restarted: "ash 重启,这次没跑完",
   canceled: "你取消了这一次",
+  source_changed: "测试修改了被测源码，不能用结果为原版本放行",
+  process_unconfirmed: "尚未取得整次运行退出的证据",
 };
 
 export interface AcceptGateView {
@@ -50,9 +52,9 @@ export interface AcceptGateView {
   targetCommit: string | null;
   /** 当时合并会不会是纯 fast-forward。false = 被测树 ≠ 合并结果,只提示不拦 */
   fastForward: boolean | null;
-  /** 对「现在这一按」还作不作数(工作区 HEAD 变过、或本来就定不出 HEAD) */
   stale: boolean;
   logPath: string;
+  logAvailable?: boolean;
   /** 日志末尾若干行,够在界面上一眼看出红在哪 */
   logTail: string;
   /**
@@ -64,12 +66,13 @@ export interface AcceptGateView {
 }
 
 export type AcceptGateCancelResult = {
-  outcome: "canceled" | "already_finished" | "stopping" | "not_running";
+  outcome: "canceled" | "already_finished" | "stopping" | "not_running" | "settlement_failed";
   runId: string | null;
   gate: AcceptGateView | null;
 };
 
 export function acceptGateCancelMessage(result: AcceptGateCancelResult): string {
+  if (result.outcome === "settlement_failed") return "取消结果保存失败，尚未完成结算；请重试取消，工作区仍受保护";
   if (result.outcome === "canceled") return "已取消这一次验收前置命令；重新验收时会重跑";
   if (result.outcome === "stopping") return "尚未确认整棵进程树退出，工作区仍被占用；不能合并或清理";
   if (result.outcome === "already_finished") return "这一次命令已经结束，未执行取消；验收是否完成请以当前回执为准";

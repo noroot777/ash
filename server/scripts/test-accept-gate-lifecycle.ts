@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
 import { db, dbClient } from "../src/db/index.js";
 import { acceptGateRuns, projects, tasks } from "../src/db/schema.js";
 import { acceptTask } from "../src/task-accept.js";
-import { acceptGateState, cancelAcceptGate, hasLiveAcceptGate, recoverAcceptGates } from "../src/accept-gate.js";
-import { hasStoppingGateProcess } from "../src/accept-gate-ownership.js";
+import { acceptGateState, cancelAcceptGate, hasLiveAcceptGate, recoverAcceptGates, stopAcceptGatesForTask } from "../src/accept-gate.js";
+import { forgetGateProcess, hasStoppingGateProcess } from "../src/accept-gate-ownership.js";
+import { gateLaunchPath } from "../src/accept-gate-launch.js";
+import { mountAcceptGateRoutes } from "../src/accept-gate-routes.js";
 import { acceptGateLogTail, acceptGateLogText, spawnAcceptGate } from "../src/accept-gate-process.js";
 import { taskBusyRejection } from "../src/task-busy.js";
 import { bus } from "../src/bus.js";
@@ -144,6 +147,7 @@ export async function testGateLifecycle(fixture: GateFixture): Promise<void> {
     const workspace = await seedTask(projectId, repo, taskId, "unconfirmed.txt");
     const started = spawnAcceptGate({ command: "sleep 120", cwd: workspace,
       logPath: join(root, "unconfirmed.log"), onExit: () => {} });
+    rmSync(gateLaunchPath(join(root, "unconfirmed.log")));
     const runId = "stop-unconfirmed-run";
     await db.insert(acceptGateRuns).values({
       id: runId, taskId, projectId, command: "identity mismatch", cwd: workspace, status: "running",
@@ -162,8 +166,10 @@ export async function testGateLifecycle(fixture: GateFixture): Promise<void> {
       killTree(started.pid, "SIGKILL");
       await until(() => !alive(started.pid));
     }
-    assert.equal((await acceptTask(taskId)).accepted, true, "进程真正退出后共同守卫会自动释放占用");
-    assert.equal((await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId)))[0].processPending, false);
+    assert.equal((await acceptTask(taskId)).accepted, false, "仅根进程退出仍无法证明失去归属记录的 detached 后代退出");
+    assert.equal((await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId)))[0].processPending, true);
+    await db.delete(acceptGateRuns).where(eq(acceptGateRuns.id, runId));
+    forgetGateProcess(runId);
   }
 
   {
@@ -175,9 +181,22 @@ export async function testGateLifecycle(fixture: GateFixture): Promise<void> {
     await dbClient.execute(`CREATE TRIGGER reject_gate_settle BEFORE UPDATE OF status ON accept_gate_runs
       WHEN OLD.task_id = '${taskId}' BEGIN SELECT RAISE(FAIL, 'temporary gate failure'); END`);
     try {
-      await cancelAcceptGate(taskId);
+      const api = new Hono();
+      mountAcceptGateRoutes(api);
+      const response = await api.request(`/tasks/${taskId}/accept-gate/cancel`, { method: "POST" });
+      const first = await response.json();
+      assert.equal(first.outcome, "settlement_failed", "首次持久化失败必须给出可重试的结算失败，而不是 already_finished");
+      assert.equal(first.gate.processPending, true);
+      assert.match(first.gate.logTail, /终态写入失败/);
       assert.equal((await acceptGateState(taskId)).running?.status, "running");
       assert.equal(hasLiveAcceptGate(taskId), true);
+      forgetGateProcess(first.runId);
+      await assert.rejects(recoverAcceptGates(), /temporary gate failure/);
+      assert.ok(await taskBusyRejection(taskId, "清理"));
+      const recovered = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, first.runId)))[0];
+      assert.equal(recovered.status, "running");
+      assert.equal(recovered.processPending, true, "恢复结算同样写入失败时，重新对账不能提前释放未结算责任");
+      assert.equal(await stopAcceptGatesForTask(taskId), false, "绕过普通忙碌守卫的删除入口同样不能释放未结算责任");
     } finally { await dbClient.execute("DROP TRIGGER reject_gate_settle"); }
     await cancelAcceptGate(taskId);
     assert.equal((await acceptGateState(taskId)).latest?.status, "canceled");

@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
@@ -129,8 +129,8 @@ try {
     // 目录这会儿已经被清理删掉了,只能拿字符串比(macOS 上 pwd 给的是 /private/var 那一支)。
     const ranIn = readFileSync(cwdProof, "utf8").trim();
     assert.ok(
-      ranIn === wsReal || ranIn === wsPath,
-      `门禁必须跑在这个任务自己的工作区里,不是项目目录(实际 ${ranIn})`,
+      ranIn === join(realpathSync(dirname(run.cwd)), basename(run.cwd)) && ranIn !== wsReal && ranIn !== wsPath,
+      `门禁必须跑在独立的被测源码快照中(实际 ${ranIn})`,
     );
     assert.notEqual(git(repo, "rev-parse", "main"), before, "门禁绿了就该自动把这次验收做完");
     assert.equal((await taskRow(taskId)).stage, "accepted", "用户只点一次，剩下的是系统欠他的");
@@ -237,11 +237,11 @@ try {
   //    舞台：门禁绿了但自动续跑的合并失败（目标分支工作区脏），任务于是还停在可验收态。
   {
     const repo = makeRepo("gate-stale");
-    const projectId = await seedProject("gate-stale", repo, "true");
+    const projectId = await seedProject("gate-stale", repo, "sleep 0.3; true");
     const taskId = "gatestale0004";
     const wsPath = await seedTask(projectId, repo, taskId, "stale.txt");
-    writeFileSync(join(repo, "seed.txt"), "dirty\n"); // 目标分支检出在这儿，且脏 → 合并会被拦
     await acceptTask(taskId);
+    writeFileSync(join(repo, "seed.txt"), "dirty\n");
     await settled(taskId);
     assert.equal((await runsOf(taskId)).at(0)!.status, "passed");
     assert.equal((await taskRow(taskId)).stage, "verified", "合并被拦下了，不该盖 accepted");
@@ -259,7 +259,9 @@ try {
     writeFileSync(join(wsPath, "more.txt"), "more\n");
     git(wsPath, "add", "-A");
     git(wsPath, "commit", "-m", "task more");
+    git(repo, "checkout", "--", "seed.txt");
     const afterChange = await acceptTask(taskId);
+    writeFileSync(join(repo, "seed.txt"), "dirty\n");
     assert.equal(afterChange.accepted, false, "代码改过了，上一次的绿不作数");
     if (!afterChange.accepted) assert.equal(afterChange.reason, "accept_gate_running");
     await settled(taskId);
@@ -367,12 +369,12 @@ try {
   //    舞台同第 4 条：绿了但自动续跑的合并被脏工作区拦下，任务还停在可验收态。
   {
     const repo = makeRepo("gate-newcmd");
-    const projectId = await seedProject("gate-newcmd", repo, "true");
+    const projectId = await seedProject("gate-newcmd", repo, "sleep 0.3; true");
     const taskId = "gatenewcmd009";
     await seedTask(projectId, repo, taskId, "newcmd.txt");
-    writeFileSync(join(repo, "seed.txt"), "dirty\n");   // 目标分支检出在这儿且脏 → 合并被拦
     const before = git(repo, "rev-parse", "main");
     await acceptTask(taskId);
+    writeFileSync(join(repo, "seed.txt"), "dirty\n");
     await settled(taskId);
     assert.equal((await runsOf(taskId)).at(0)!.status, "passed");
     assert.equal(git(repo, "rev-parse", "main"), before, "舞台没搭对：这一次本来就不该合进去");
@@ -500,14 +502,14 @@ try {
   //     → 再按一次。这一次真正放行的理由是「那一刻没有门禁」，而「最近一次」仍是那条绿的。
   {
     const repo = makeRepo("gate-basis");
-    const projectId = await seedProject("gate-basis", repo, "true");
+    const projectId = await seedProject("gate-basis", repo, "sleep 0.3; true");
     const taskId = "gatebasis0013";
     const wsPath = await seedTask(projectId, repo, taskId, "basis.txt");
 
     // 目标工作区脏：main 上放一份未跟踪的 basis.txt，合并会拒绝覆盖它 —— 于是门禁绿了、
     // 凭据也记下了，章却没盖成。这正是 F1 那一幕的前半段。
-    writeFileSync(join(repo, "basis.txt"), "conflicting local edit\n");
     await acceptTask(taskId);
+    writeFileSync(join(repo, "basis.txt"), "conflicting local edit\n");
     await settled(taskId);
     const greenRun = (await runsOf(taskId)).at(0)!;
     assert.equal(greenRun.status, "passed");
@@ -573,7 +575,6 @@ try {
   await (await import("./test-accept-gate-startup.js")).testGateStartup({
     root, makeRepo, seedProject, seedTask, taskRow, settled,
   });
-  await import("./test-accept-gate-process.js");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
