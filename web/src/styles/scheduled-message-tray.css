@@ -1,0 +1,50 @@
+.scheduled-message-card { overflow: hidden; border: 1px solid color-mix(in lch, var(--accent) 20%, var(--line)); border-radius: 10px; background: var(--panel); }
+.scheduled-message-card.is-expanded { border-color: color-mix(in lch, var(--accent) 35%, var(--line)); }
+.scheduled-message-summary { display: flex; min-width: 0; align-items: center; gap: 9px; padding: 10px 12px; }
+.scheduled-message-stack { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; border-radius: 7px; background: var(--sel-bg); color: var(--accent); }
+.scheduled-message-summary-copy { min-width: 0; flex: 1; }
+.scheduled-message-summary-copy strong { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 650; }
+.scheduled-message-summary-copy strong span { border-radius: 4px; background: var(--sel-bg); padding: 1px 5px; color: var(--accent); font-family: var(--font-mono); font-size: 10px; }
+.scheduled-message-summary-copy small { display: block; margin-top: 3px; color: var(--faint); font-size: 9px; }
+.scheduled-message-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 5px 2px; color: var(--accent); font-size: 10px; }
+.scheduled-message-attention { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: color-mix(in lch, var(--amber) 10%, var(--panel)); padding: 4px 6px; color: var(--amber); font-size: 9px; }
+.scheduled-message-previews { padding: 0 10px; }
+.scheduled-message-previews > .scheduled-message-row { min-height: 33px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; padding: 4px 0; }
+.scheduled-message-previews > small { display: block; padding: 5px 0 9px; color: var(--faint); font-size: 9px; }
+.scheduled-message-inspect { display: block; width: 100%; overflow: hidden; border: 0; background: none; padding: 0; color: inherit; font: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.scheduled-message-inspect:hover { color: var(--accent); }
+.scheduled-message-expanded { border-top: 1px solid var(--line); }
+.scheduled-message-filters { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); padding: 8px 10px; }
+.scheduled-message-filters button { border: 0; border-radius: 5px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 10px; }
+.scheduled-message-filters button[aria-pressed="true"] { background: var(--sel-bg); color: var(--accent); }
+.scheduled-message-filters button span { margin-left: 4px; font-family: var(--font-mono); font-size: 9px; }
+.scheduled-message-items { height: min(260px, 35dvh); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.scheduled-message-single { border: 1px solid var(--line); border-radius: 7px; background: var(--overlay); padding: 4px 8px; }
+.scheduled-message-single > .scheduled-message-row { border: 0; background: transparent; padding: 0; }
+.scheduled-message-single > .scheduled-message-details { margin-bottom: 3px; }
+.scheduled-message-item { border-bottom: 1px solid var(--line); padding: 9px 12px; }
+.scheduled-message-item:last-child { border-bottom: 0; }
+.scheduled-message-item-meta { display: flex; align-items: center; gap: 10px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; }
+.scheduled-message-item-meta .is-attention { color: var(--amber); }
+.scheduled-message-item > .scheduled-message-row { border: 0; background: transparent; padding: 5px 0; }
+.scheduled-message-details { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.scheduled-message-details summary { width: fit-content; cursor: pointer; color: var(--faint); font-size: 9px; }
+.scheduled-message-body { overflow-wrap: anywhere; margin-top: 8px; border-radius: 6px; background: var(--overlay); padding: 9px 10px; line-height: 1.7; white-space: pre-wrap; }
+.scheduled-message-details ul { padding-left: 18px; overflow-wrap: anywhere; }
+.scheduled-message-footer { border-top: 1px solid var(--line); padding: 9px 12px; color: var(--faint); font-size: 9px; }
+.scheduled-message-empty { padding: 28px 12px; color: var(--faint); font-size: 11px; text-align: center; }
+.scheduled-message-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.scheduled-message-cancel-text { max-height: 150px; overflow: auto; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; white-space: pre-wrap; }
+.scheduled-message-card :is(button, summary, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@container (max-width: 520px) {
+  .scheduled-message-summary { flex-wrap: wrap; gap: 7px; padding: 9px; }
+  .scheduled-message-summary-copy { flex-basis: calc(100% - 36px); }
+  .scheduled-message-attention { margin-left: 35px; }
+  .scheduled-message-toggle { margin-left: auto; }
+  .scheduled-message-row { flex-wrap: wrap; gap: 4px 6px; }
+  .scheduled-message-row > b { order: 2; flex-basis: calc(100% - 60px); }
+  .scheduled-message-row > button { order: 3; }
+  .scheduled-message-row > em, .scheduled-message-row > time { max-width: calc(100% - 55px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .scheduled-message-row > .scheduled-message-managed { order: 4; white-space: normal; }
+  .scheduled-message-item { padding: 9px; }
+}
