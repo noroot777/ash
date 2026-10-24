@@ -12,6 +12,16 @@ export function scheduledMessageText(message: ScheduledMessage): string {
   return annotationBatchDisplayText(message.text) ?? message.text;
 }
 
+export function scheduledMessageSummary(message: ScheduledMessage): string {
+  const text = scheduledMessageText(message).trim();
+  if (!message.origin) return text.replace(/\s+/g, " ");
+  return text.split(/\r?\n/, 1)[0]
+    .replace(/^【哨兵(?:事件|结束|已起)】\s*/, "")
+    .replace(/\s*[（(]monitorId=[^）)]+[）)].*$/, "")
+    .replace(/[，,]\s*退出码\s+-?\d+.*$/, "")
+    .trim();
+}
+
 export function scheduledMessageExitCode(message: ScheduledMessage): number | null {
   if (!message.origin) return null;
   const regression = message.text.matchAll(/^REGRESSION_FINISHED\b[^\n]*\bexitCode=(-?\d+)\b/gm);
