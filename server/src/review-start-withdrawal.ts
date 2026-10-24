@@ -2,7 +2,7 @@ import { and, eq, isNotNull } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
-import type { ReviewTargetIdentity } from "./db/schema-regression-evidence.js";
+import type { ReviewDelivery, ReviewTargetIdentity } from "./db/schema-regression-evidence.js";
 import { activeReviewScope, reviewIdentityMatches } from "./review-ownership.js";
 import { clearReviewWait } from "./review-wait.js";
 import { directionIdentityCleared } from "./task-direction-epoch.js";
@@ -12,8 +12,10 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import { claimTurn, isTurnClaimed, releaseTurn } from "./runs.js";
 import { clearGuardedStart, withdrawRepairStart } from "./guarded-turn-start.js";
+import { restoreUndeliveredReviewStart } from "./review-start-retry.js";
 
-export type ReviewStartReceipt = { directory: string; generation: string; identity: ReviewTargetIdentity; repair?: true };
+export type ReviewStartReceipt = { directory: string; generation: string; identity: ReviewTargetIdentity;
+  repair?: true; delivery?: ReviewDelivery };
 
 export async function withdrawReviewStart(taskId: string, receipt: ReviewStartReceipt | undefined,
   priorStatus: TaskStatus | null): Promise<void> {
@@ -61,7 +63,9 @@ export async function reconcileReviewStarts(ownerTaskId?: string): Promise<void>
   for (const owner of owners) {
     const start = owner.waitOwnership?.start;
     if (!start || isTurnClaimed(owner.id) || !claimTurn(owner.id)) continue;
-    try { await withdrawReviewStart(owner.id, start, start.priorStatus); }
+    try {
+      if (!await restoreUndeliveredReviewStart(owner.id, start)) await withdrawReviewStart(owner.id, start, start.priorStatus);
+    }
     finally { releaseTurn(owner.id); }
   }
   const states = await db.select().from(regressionEvidence).where(isNotNull(regressionEvidence.continuation));

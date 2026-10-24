@@ -74,7 +74,7 @@ export interface SegmentOptions {
   /** 每一站成功执行完后的落账回调（验收尾段把 step id 追加进 durable 清单）。 */
   onStepDone?: (stepId: string) => Promise<void>;
   onStepStart?: (stepId: string) => Promise<void>;
-  onStepFailure?: (stepId: string) => Promise<void>;
+  onStepFailure?: (stepId: string, halted?: boolean) => Promise<void>;
 }
 
 function shorten(text: string, max = 600): string {
@@ -207,7 +207,7 @@ export async function runSegment(
           ? await runAccept(task, def, step, opts.reviewAuthority)
           : { ok: true } as SegmentResult;
     if (!result.ok) {
-      await opts.onStepFailure?.(step.id);
+      await opts.onStepFailure?.(step.id, result.halted);
       return result;
     }
     await opts.onStepDone?.(step.id);

@@ -29,9 +29,18 @@ try {
     sourceWorkspace: null, git: null, sessions: [], files: [], freeWorkflow: null,
     task: { ...before, id: "imported-review-checkpoint", waitOrigins: await exportWaitOrigins(before) } };
   for (const existingSession of [false, true]) {
-    for (const kind of ["review", "unknown"] as const) {
+    for (const kind of ["review", "unknown", undefined] as const) {
       const imported = await importHandoff({ ...manifest, transferId: `${kind}-${existingSession}`,
-        task: { ...manifest.task, id: `${kind}-${existingSession}`, waitOrigins: { checkpoint: kind } } });
+        task: { ...manifest.task, id: `${kind}-${existingSession}`, waitOrigins: kind ? { checkpoint: kind } : undefined } });
+      assert.equal((await row(imported.taskId)).waitOwnership?.checkpoint?.origin.kind, kind ?? "unknown");
+      if (!kind) {
+        assert(imported.notes.some((note) => note.includes("审查等待来源")));
+        await db.update(tasks).set({ handoff: JSON.stringify({ direction: "out", pending: false,
+          peerFp: manifest.sourceFingerprint, transferId: "legacy-outbound" }) }).where(eq(tasks.id, imported.taskId));
+        await importHandoff({ ...manifest, transferId: `returned-legacy-${existingSession}`,
+          task: { ...manifest.task, id: imported.taskId, waitOrigins: undefined } });
+        assert.equal((await row(imported.taskId)).waitOwnership?.checkpoint?.origin.kind, "unknown");
+      }
       if (existingSession) await db.insert(schema.sessions).values({ id: `old-${imported.taskId}`, taskId: imported.taskId,
         role: "single", agentType: "claude", executor: "test", cliSessionId: "old-single", startedAt: new Date().toISOString() });
       const old = await row(imported.taskId);
@@ -45,7 +54,28 @@ try {
     }
   }
   runs.releaseTurn(source.taskId);
-  console.log("✓ imported review/unknown checkpoints never fall through to fresh or resumable implementation turns");
+  console.log("✓ explicit and legacy missing wait origins stay quarantined across import, safe return and manual/automatic resume");
+
+  for (const returning of [false, true]) {
+    const taskId = `legacy-question-${returning}`;
+    const input = { ...manifest, transferId: taskId,
+      task: { ...manifest.task, id: taskId, resumePrompt: null, question: "A legacy review question", waitOrigins: undefined } };
+    const imported = await importHandoff(input);
+    if (returning) {
+      await db.update(tasks).set({ handoff: JSON.stringify({ direction: "out", pending: false,
+        peerFp: manifest.sourceFingerprint, transferId: "legacy-question-outbound" }) }).where(eq(tasks.id, taskId));
+      await importHandoff({ ...input, transferId: `${taskId}-returned` });
+    }
+    assert.equal((await row(taskId)).waitOwnership?.question?.origin.kind, "unknown");
+    assert(imported.notes.some((note) => note.includes("审查等待来源")));
+    const api = new Hono();
+    api.post("/answer", (context) => answerTask(context, taskId));
+    assert.equal((await api.request("/answer", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answer: "Do not implement" }) })).status, 409);
+    assert.equal((await row(taskId)).directionEpoch, 0);
+    assert.equal((await db.select().from(schema.sessions).where(eq(schema.sessions.taskId, taskId))).length, 0);
+  }
+  console.log("✓ legacy questions without the entire provenance object reject HTTP answers before any implementation startup");
 
   const ordinary = await importHandoff({ ...manifest, transferId: "checkpoint-cas-race",
     task: { ...manifest.task, id: "checkpoint-cas-race", waitOrigins: { checkpoint: "ordinary" } } });

@@ -10,6 +10,8 @@ import { taskWorkflowDef } from "./workflows.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
+import type { AcceptSuccess } from "./task-accept.js";
+import { resumeReviewAcceptedTail } from "./review-acceptance.js";
 
 export type AcceptTail = {
   ok: boolean;
@@ -17,6 +19,24 @@ export type AcceptTail = {
   step?: string;
   reason?: string;
 };
+
+export async function finishAcceptedTail(result: AcceptSuccess, by: AcceptBy, opts: WorkflowAdvanceOptions,
+  originalFinalizer: boolean): Promise<AcceptSuccess> {
+  if (result.kind === "gate_released") {
+    await releaseGate(result.taskId, opts);
+    return result;
+  }
+  const reviewTail = await resumeReviewAcceptedTail(result.taskId, originalFinalizer);
+  if (reviewTail !== undefined) return reviewTail ? { ...result, tail: reviewTail } : result;
+  const task = (await db.select().from(tasks).where(eq(tasks.id, result.taskId)))[0];
+  if (result.kind === "already_accepted" && !task?.acceptedTailPending) return result;
+  if (result.kind === "already_accepted") await appendTaskTimeline(result.taskId,
+    "上次验收的「点头之后」段没有跑完（中断或有站失败），本次只补跑未完成的站。");
+  const tail = await runAcceptedTail(result.taskId, by);
+  if (!tail || tail.ok) await db.update(tasks).set({ acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now() })
+    .where(eq(tasks.id, result.taskId));
+  return tail ? { ...result, tail } : result;
+}
 
 /** 线上「点头之后」是否真有要跑的站（发布/命令…）。尾段 durable 进度与补跑都用这一份判定。 */
 export function hasAcceptedTail(task: typeof tasks.$inferSelect): boolean {

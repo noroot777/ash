@@ -6,9 +6,12 @@ import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { pendingMessageRow, publishPendingMessages } from "./pending-messages.js";
 import { isTurnClaimed } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { assertReviewAuthority, ReviewSuperseded, settlementAuthority } from "./review-ownership.js";
+import { assertReviewAuthority, finalizationAuthority, ReviewSuperseded, settlementAuthority } from "./review-ownership.js";
 
-const draining = new Set<string>();
+const draining = new Map<string, Promise<void>>();
+
+export function isFinalizationDraining(directory: string): boolean { return draining.has(directory); }
+export async function waitForFinalizationDrain(directory: string): Promise<void> { await draining.get(directory); }
 
 export async function finalizationStep(directory: string, generation: string, name: string,
   action: () => Promise<unknown>): Promise<void> {
@@ -32,13 +35,14 @@ export async function commitFinalizationStep(directory: string, generation: stri
 }
 
 export async function checkpointFinalizationWorkflow(directory: string, generation: string, stepId: string,
-  phase: "started" | "done" | "failed" = "done"): Promise<void> {
+  phase: "started" | "done" | "failed" = "done", halted = false): Promise<void> {
   await db.transaction(async (transaction) => {
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
     if (!state?.finalization || state.generation !== generation) throw new Error("审查收尾代次已变化");
-    await assertReviewAuthority(transaction, settlementAuthority(state), phase !== "started");
+    await assertReviewAuthority(transaction, finalizationAuthority(state));
     await transaction.update(regressionEvidence).set({ finalization: {
       ...state.finalization, runningStep: phase === "started" ? stepId : undefined,
+      blockedStep: phase === "failed" && (state.finalization.acceptance || halted) ? stepId : undefined,
       steps: phase === "done" ? [...new Set([...state.finalization.steps, stepId])] : state.finalization.steps,
     } }).where(eq(regressionEvidence.directory, directory));
   }, { behavior: "immediate" });
@@ -64,10 +68,21 @@ export async function enqueueFinalizationRepair(directory: string, generation: s
   publishPendingMessages(taskId);
 }
 
-export async function drainRegressionFinalization(directory: string): Promise<void> {
+export async function drainRegressionFinalization(directory: string, retry = false): Promise<void> {
   if (draining.has(directory)) return;
-  draining.add(directory);
+  let finish = () => {};
+  draining.set(directory, new Promise<void>((resolve) => { finish = resolve; }));
   try {
+    if (retry) await db.transaction(async (transaction) => {
+      const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
+      if (!state?.finalization || state.finalization.completed) return;
+      await assertReviewAuthority(transaction, finalizationAuthority(state));
+      await transaction.update(regressionEvidence).set({ finalization: { ...state.finalization,
+        runningStep: undefined, blockedStep: undefined } }).where(eq(regressionEvidence.directory, directory));
+    }, { behavior: "immediate" });
+    if (retry) await appendTaskTimeline((await db.select().from(regressionEvidence)
+      .where(eq(regressionEvidence.directory, directory)))[0]!.taskId,
+    "本次验收明确补跑原审查尚未完成的尾段；中断站可能已有外部副作用，请核对后按站内幂等约定处理。");
     const state = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
     if (!state?.finalization || state.finalization.completed) return;
     try {
@@ -87,10 +102,18 @@ export async function drainRegressionFinalization(directory: string): Promise<vo
       return;
     }
     const current = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
-    if (current?.generation === state.generation && current.finalization) await db.update(regressionEvidence)
-      .set({ finalization: { ...current.finalization, completed: true } })
-      .where(and(eq(regressionEvidence.directory, directory), eq(regressionEvidence.generation, state.generation)));
-  } finally { draining.delete(directory); }
+    if (current?.generation === state.generation && current.finalization) await db.transaction(async (transaction) => {
+      const latest = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0]!;
+      if (latest.generation !== state.generation || !latest.finalization) return;
+      if (latest.finalization.acceptance) {
+        await assertReviewAuthority(transaction, finalizationAuthority(latest));
+        await transaction.update(tasks).set({ acceptedTailPending: false, acceptedTailDone: "[]" })
+          .where(eq(tasks.id, latest.taskId));
+      }
+      await transaction.update(regressionEvidence).set({ finalization: { ...latest.finalization, completed: true } })
+        .where(and(eq(regressionEvidence.directory, directory), eq(regressionEvidence.generation, state.generation)));
+    }, { behavior: "immediate" });
+  } finally { draining.delete(directory); finish(); }
 }
 
 export async function reconcileRegressionFinalizations(ownerTaskId?: string): Promise<void> {

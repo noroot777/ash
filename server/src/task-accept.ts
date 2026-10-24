@@ -19,7 +19,8 @@ import { finalizeAcceptance } from "./task-accept-finalize.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { clearTaskStage } from "./task-stage.js";
-import { releaseGate, runAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
+import { finishAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
+import { commitAcceptanceStage, reviewAcceptanceAuthority } from "./review-acceptance.js";
 import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage } from "./task-accept-shared-workers.js";
 import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-accept-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -35,7 +36,7 @@ import { acceptancePreflight } from "./task-accept-preflight.js";
 import { acceptGateCheck, dropPendingAcceptGate, startPendingAcceptGate, type AcceptGateIntent } from "./accept-gate.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 
-type AcceptSuccess = {
+export type AcceptSuccess = {
   accepted: true;
   taskId: string;
   status: string;
@@ -83,8 +84,9 @@ async function acceptWithoutCleanup(
   task: typeof tasks.$inferSelect,
   kind: AcceptSuccess["kind"],
   message: string,
+  authority?: ReviewAuthority,
 ): Promise<AcceptTaskResult> {
-  const finalized = await finalizeAcceptance(task, message, false);
+  const finalized = await finalizeAcceptance(task, message, false, {}, authority);
   if (finalized.failure) return finalized.failure;
   const { sharedWorkers } = finalized;
   return {
@@ -188,6 +190,7 @@ async function acceptTaskUnlocked(
       task,
       "in_place",
       `验收通过：${subject}，代码已在原工作区中；无需执行分支合并或 worktree 清理，status 保持 ${task.status}。`,
+      reviewAuthority,
     );
   }
 
@@ -218,6 +221,7 @@ async function acceptTaskUnlocked(
       "marked_only",
       `验收通过：这条线上没有「合并并清理」这一站，所以只记下「我认可这份产物」，` +
         `没有动 git —— 任务分支和 worktree 都留着。要让这条线自己合，在编排里加上这一站即可。`,
+      reviewAuthority,
     );
   }
 
@@ -300,6 +304,7 @@ async function acceptTaskUnlocked(
         `任务分支已在先前清理中删除；沿用已记录的 merged 阶段，继续完成验收标记（目标 ${targetBranch}）。`,
         false,
         { completedMerge: { targetBranch, commit: task.acceptedMergeCommit } },
+        reviewAuthority,
       );
       if (finalized.failure) return finalized.failure;
       const { sharedWorkers } = finalized;
@@ -382,11 +387,8 @@ async function acceptTaskUnlocked(
     );
   }
   const mergedAt = now();
-  await db.update(tasks).set({
-    ...snapshot,
-    ...(tagged ? {} : { stage: "merged" }),
-    updatedAt: mergedAt,
-  }).where(eq(tasks.id, taskId));
+  if (tagged) await db.update(tasks).set({ ...snapshot, updatedAt: mergedAt }).where(eq(tasks.id, taskId));
+  else await commitAcceptanceStage(taskId, "merged", snapshot, reviewAuthority);
   if (!tagged) await recordBranchReceipt(taskId, true);
   if (!tagged) {
     bus.publish({ type: "task.stage", taskId, stage: "merged", updatedAt: mergedAt });
@@ -516,6 +518,7 @@ async function acceptTaskUnlocked(
     `验收完成：目标分支 ${merge.targetBranch}${noCommit ? "（改动已合入其工作区，等你自己提交）" : ""}；任务 status 保持 ${task.status}。`,
     cleanPlan.worktree,
     { completedMerge, completedTag },
+    reviewAuthority,
   );
   if (finalized.failure) return finalized.failure;
   const { sharedWorkers } = finalized;
@@ -578,6 +581,8 @@ export async function acceptTask(
     acceptGatePassedRunId?: string;
   } = {},
 ): Promise<AcceptTaskResult> {
+  const originalFinalizer = !!advanceOpts.reviewAuthority?.finalization && !advanceOpts.acceptGatePassedRunId;
+  if (!advanceOpts.reviewAuthority) advanceOpts = { ...advanceOpts, reviewAuthority: await reviewAcceptanceAuthority(taskId) };
   // 预览实例：库是主库的快照，任务行指的却是真分支、真 worktree。走结构化拒绝而不是抛
   // 异常，UI 才能把这句话原样显示在验收按钮旁边（见 preview-instance.ts）。
   if (IS_PREVIEW_INSTANCE) {
@@ -642,23 +647,7 @@ export async function acceptTask(
       // 幂等：already_accepted 是「本次什么验收动作都没执行」的快路，正常不重跑尾段；
       // **唯一例外**是 durable 进度显示尾段从没跑完（进程死在 stage=accepted 与尾段
       // 之间）——那不是重复执行，是补跑一次从未发生过的发布。
-      const tailStillPending = result.kind === "already_accepted"
-        && !!(await db.select({ pending: tasks.acceptedTailPending }).from(tasks)
-          .where(eq(tasks.id, taskId))).at(0)?.pending;
-      if (result.kind === "gate_released") await releaseGate(taskId, advanceOpts);
-      else if (result.kind !== "already_accepted" || tailStillPending) {
-        if (tailStillPending) {
-          await appendTaskTimeline(taskId, "上次验收的「点头之后」段没有跑完（中断或有站失败），本次只补跑未完成的站。");
-        }
-        const tail = await runAcceptedTail(taskId, by);
-        // 只有尾段**全部跑完**（或线上根本没有尾段）才清补跑凭据。失败时 pending 留着、
-        // 已完成的站留在逐站清单里——时间线承诺「要不要补跑由你定」，再次验收会从失败站
-        // 接着跑；无条件清空的话失败站和后续站永久失去补跑入口（审查实测）。
-        if (!tail || tail.ok) {
-          await db.update(tasks).set({ acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now() }).where(eq(tasks.id, taskId));
-        }
-        if (tail) result = { ...result, tail };
-      }
+      result = await finishAcceptedTail(result, by, advanceOpts, originalFinalizer);
     }
   } finally {
     endAccepting(taskId);

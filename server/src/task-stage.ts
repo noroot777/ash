@@ -1,7 +1,7 @@
 import { recordBranchReceipt } from "./task-branch-receipts.js";
 import type { TaskStage } from "@ash/shared";
 import { isTaskStage, STAGE_LABELS, STAGE_ORDER } from "@ash/shared";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -32,7 +32,10 @@ export async function setTaskStage(
           : eq(tasks.activeDirectionToken, currentTurn.directionToken),
       )
     : eq(tasks.id, taskId);
-  const updated = await db.update(tasks).set({ stage, updatedAt }).where(where).returning({ id: tasks.id });
+  const updated = await db.update(tasks).set({ stage, updatedAt,
+    ...(["accepted", "merged"].includes(stage)
+      ? { waitOwnership: sql`json_remove(${tasks.waitOwnership}, '$.acceptedFinalization')` } : {}),
+  }).where(where).returning({ id: tasks.id });
   if (!updated.length) return null;
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
   const timelineRecorded = await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`);

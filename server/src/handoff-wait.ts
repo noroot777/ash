@@ -30,13 +30,13 @@ export function importWaitOwnership(task: { id: string; question: string | null;
   questionItems: string | null; resumePrompt: string | null; resumePromptGeneration: number },
   origins: HandoffWaitOrigins | undefined): TaskWaitOwnership | null {
   validateWaitOrigins(origins);
-  if (origins === undefined) return null;
+  if (!task.question && !task.resumePrompt) return null;
   const origin = (kind: WaitOrigin["kind"] | undefined): WaitOrigin => kind === "ordinary" ? { kind }
     : { kind: kind === "review" ? "review" : "unknown",
       directory: join(RUNS_DIR, task.id, "handoff-wait", randomUUID()), generation: null };
   return {
-    ...(task.question ? { question: { occupancy: randomUUID(), origin: origin(origins.question), text: task.question,
+    ...(task.question ? { question: { occupancy: randomUUID(), origin: origin(origins?.question), text: task.question,
       options: task.questionOptions, items: task.questionItems } } : {}),
-    ...(task.resumePrompt ? { checkpoint: { generation: task.resumePromptGeneration, origin: origin(origins.checkpoint) } } : {}),
+    ...(task.resumePrompt ? { checkpoint: { generation: task.resumePromptGeneration, origin: origin(origins?.checkpoint) } } : {}),
   };
 }

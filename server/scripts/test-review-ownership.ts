@@ -12,7 +12,7 @@ const { reconcileRegressionSettlements } = await import("../src/regression-settl
 const { answerTask } = await import("../src/task-answer.js");
 const { beginDelivery, deliveryOptions, deliveryVerdict, deliverPendingMessages, monitorWakeGuard } = await import("../src/pending-messages.js");
 const { reviewDeliveryBlocked, reviewDeliveryFrom } = await import("../src/review-ownership.js");
-const { beginReviewContinuation, preserveReviewWait } = await import("../src/review-continuation.js");
+const { beginReviewContinuation, commitReviewTurnDelivery, preserveReviewWait } = await import("../src/review-continuation.js");
 const { directionIdentityCleared, turnDirectionStart } = await import("../src/task-direction-epoch.js");
 const { continueTask } = await import("../src/orchestrator.js");
 const { setTaskQuestion } = await import("../src/task-question.js");
@@ -183,12 +183,14 @@ try {
       assert(runs.claimTurn(owner.id));
       const resuming = db.transaction(async (transaction) => {
         const current = (await transaction.select().from(tasks).where(eq(tasks.id, owner.id)))[0]!;
-        await beginReviewContinuation(transaction, current, mode === "free" || mode === "accepted_merge"
+        const receipt = await beginReviewContinuation(transaction, current, mode === "free" || mode === "accepted_merge"
           ? { role: "reviewer", review: { run: review.runId, round: 1 } } : { role: "single" }, "answer-turn", "answer-direction", reviewDeliveryFrom(answer));
         await transaction.update(tasks).set({ status: "running", ...turnDirectionStart("answer-turn", "answer-direction") }).where(eq(tasks.id, owner.id));
         await transaction.update(schema.scheduledMessages).set({ status: "sent" }).where(eq(schema.scheduledMessages.id, answer.id));
+        return receipt;
       }, { behavior: "immediate" });
-      await Promise.all([resuming, reconcileRegressionSettlements()]);
+      const [receipt] = await Promise.all([resuming, reconcileRegressionSettlements()]);
+      await commitReviewTurnDelivery(owner.id, receipt);
       assert(await reviewDeliveryBlocked(reviewDeliveryFrom(answer), owner.id), "an already-consumed answer cannot start another turn");
       assert.equal((await review.state()).settlement, null);
       assert.equal((await review.state()).continuation?.phase, "running");

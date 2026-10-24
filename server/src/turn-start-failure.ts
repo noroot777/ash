@@ -25,7 +25,8 @@ import { afterSettlement } from "./settle-status.js";
 import { now } from "./util.js";
 import { interruptCliGoal } from "./task-cli-state.js";
 import { forgetGuardedStart } from "./guarded-turn-start.js";
-import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
+import { withdrawReviewStart, type ReviewStartReceipt } from "./review-start-withdrawal.js";
+import { restoreUndeliveredReviewStart } from "./review-start-retry.js";
 
 export async function recoverFailedTurnStart(input: {
   startReceipt?: ReviewStartReceipt;
@@ -57,6 +58,12 @@ export async function recoverFailedTurnStart(input: {
     target: { sessionId: input.resumeSessionId, agentType, role: sessionRole },
   });
   await reconcileTurnBaseline(taskId, false).catch(() => undefined);
+  if (!input.spawned && input.startReceipt) {
+    const current = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+    if (current?.nativeTurn && await restoreUndeliveredReviewStart(taskId, input.startReceipt)) return;
+    await withdrawReviewStart(taskId, input.startReceipt, null);
+    return;
+  }
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   const goalHeld = row && await interruptCliGoal(row, agentType, input.goalStarted ?? false);
   const restored = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);

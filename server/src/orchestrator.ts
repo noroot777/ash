@@ -13,7 +13,8 @@ import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceRole } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
-import { assertReviewTurnStart, beginReviewContinuation } from "./review-continuation.js";
+import { assertReviewTurnStart, beginReviewContinuation, commitReviewTurnDelivery } from "./review-continuation.js";
+import { restoreUndeliveredReviewStart } from "./review-start-retry.js";
 import { ReviewSuperseded } from "./review-ownership.js";
 import { withdrawReviewStart, type ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { retireHistoricalReview } from "./review-retirement.js";
@@ -172,6 +173,7 @@ export async function continueTask(
   // FrozenTurn(spawn 前被冻结闸撤回)= 输入没送出去,函数尾据此返回 false。
   let frozenBeforeSpawn = false;
   let reviewStart: ReviewStartReceipt | undefined;
+  let checkingReviewStart = false;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
@@ -441,8 +443,10 @@ export async function continueTask(
     // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
     const browserGrant = await browserGrantForProject(task.projectId);
+    checkingReviewStart = true;
     await assertReviewTurnStart(taskId, turnToken, directionToken, opts.reviewDelivery,
       !!reviewStart || (!nativeCommand && (!!task.verifyRound || freeReviewTurn || !!task.reviewOf)));
+    checkingReviewStart = false;
     // ↓ 这里往下到 `trackRun` 全同步(撤回那条岔路除外,它不起进程):暂停请求要么在
     // takeFreeze 被消费、要么之后才到 —— 那时已有 handle 可杀。
     const freeze = takeFreeze(taskId, frozen);
@@ -473,6 +477,7 @@ export async function continueTask(
       env: runEnv,
     });
     trackRun(taskId, handle);
+    await commitReviewTurnDelivery(taskId, reviewStart);
     // 前言已经随 prompt 交到 agent 手上，这一刻起就该划掉（放在 spawn 之后：起跑前
     // 还有 takeFreeze 那道闸，清早了被冻住的那一轮就把它白白吃掉了）。
     if (handoffNotice) await clearHandoffNotice(taskId);
@@ -632,6 +637,8 @@ export async function continueTask(
     // 暂停撤回一次、指定继续内容永久丢失,恢复分组后只剩通用「继续」(第 7 轮审查)。
     // 状态结算(落回 paused)仍由失败恢复完成,只是返回值改说实话。
     frozenBeforeSpawn = err instanceof FrozenTurn;
+    if (!handle && (frozenBeforeSpawn || checkingReviewStart)
+      && await restoreUndeliveredReviewStart(taskId, reviewStart)) return false;
     // 失败交代 + 基线对账 + 状态恢复,整段住在 turn-start-failure.ts(顺序讲究见其顶部)。
     await recoverFailedTurnStart({
       startReceipt: reviewStart,

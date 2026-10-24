@@ -34,12 +34,17 @@ export type ReviewContinuation = {
   };
 };
 
+export type ReviewDelivery = { generation: string; kind: "answer" | "repair"; messageId: string }
+  | { generation: string | null; kind: "checkpoint"; text: string; promptGeneration: number };
+
 export type RegressionFinalization = {
   kind: "preset" | "free";
   payload: string;
   done: string[];
   steps: string[];
   runningStep?: string;
+  blockedStep?: string;
+  acceptance?: { token: string; stepId: string; stage: "merged" | "accepted" };
   completed?: boolean;
   superseded?: boolean;
 };

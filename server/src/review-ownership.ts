@@ -1,14 +1,15 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRuns, regressionEvidence, scheduledMessages, tasks } from "./db/schema.js";
-import type { ReviewTargetIdentity } from "./db/schema-regression-evidence.js";
+import type { ReviewDelivery, ReviewTargetIdentity } from "./db/schema-regression-evidence.js";
+export type { ReviewDelivery } from "./db/schema-regression-evidence.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
 import type { TurnSource } from "./runs.js";
 
 type TaskRow = typeof tasks.$inferSelect;
-export type ReviewAuthority = { directory: string; generation: string; target: ReviewTargetIdentity | null };
+export type ReviewAuthority = { directory: string; generation: string; target: ReviewTargetIdentity | null; finalization?: true };
 
 export async function activeReviewScope(transaction: ConclusionTransaction, task: TaskRow, source?: TurnSource) {
   if (task.reviewOf && task.reviewRound) return { directory: reviewRoundDir(task.reviewOf, task.reviewRound),
@@ -48,8 +49,13 @@ export async function assertReviewAuthority(transaction: ConclusionTransaction, 
   allowAccepted = false): Promise<TaskRow> {
   const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, authority.directory)))[0];
   const task = state && (await transaction.select().from(tasks).where(eq(tasks.id, state.taskId)))[0];
+  const receipt = task?.waitOwnership?.acceptedFinalization;
+  const ownAcceptance = authority.finalization && state?.finalization?.acceptance && !state.finalization.completed
+    && receipt?.directory === authority.directory && receipt.generation === authority.generation
+    && receipt.token === state.finalization.acceptance.token;
   if (!state || state.generation !== authority.generation || !task || task.archived
-    || (!allowAccepted && ["accepted", "merged"].includes(task.stage ?? ""))
+    || (authority.finalization && state.finalization?.acceptance && !ownAcceptance)
+    || (!allowAccepted && ["accepted", "merged"].includes(task.stage ?? "") && !ownAcceptance)
     || !reviewIdentityMatches(task, authority.target)) throw new ReviewSuperseded();
   return task;
 }
@@ -66,8 +72,9 @@ export function settlementAuthority(state: typeof regressionEvidence.$inferSelec
   return { directory: state.directory, generation: state.generation, target: state.settlement?.target ?? null };
 }
 
-export type ReviewDelivery = { generation: string; kind: "answer" | "repair"; messageId: string }
-  | { generation: string | null; kind: "checkpoint"; text: string; promptGeneration: number };
+export function finalizationAuthority(state: typeof regressionEvidence.$inferSelect): ReviewAuthority {
+  return { ...settlementAuthority(state), finalization: true };
+}
 
 export function reviewDeliveryFrom(message: { id: string; origin: string | null }): ReviewDelivery | undefined {
   const match = /^review-(answer|settlement):(.+)$/.exec(message.origin ?? "");

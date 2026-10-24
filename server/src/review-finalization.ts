@@ -14,7 +14,7 @@ import { failureQuestionInput } from "./task-question.js";
 import { advanceWorkflowFrom } from "./workflow-advance.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { now } from "./util.js";
-import { assertReviewAuthority, ReviewSuperseded, settlementAuthority, withReviewAuthority } from "./review-ownership.js";
+import { assertReviewAuthority, finalizationAuthority, ReviewSuperseded, withReviewAuthority } from "./review-ownership.js";
 import { recordTaskWait } from "./task-wait-ownership.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -22,7 +22,7 @@ const STUCK_AT_VERIFY = "线停在「自动验证」这一站等你：看过验�
 
 export async function finalizePresetReview(state: typeof regressionEvidence.$inferSelect): Promise<boolean> {
   const plan = state.finalization!;
-  const authority = settlementAuthority(state);
+  const authority = finalizationAuthority(state);
   const expiredQuestionNotice = authority.target ? "" : "原提问随本轮终止失效。";
   const { target, round, reviewTaskId, station, stationRound, outcome, conclusion, frozen, stageChanged } = JSON.parse(plan.payload) as {
     target: TaskRow; round: number; reviewTaskId: string | null; station: string | null; stationRound: number;
@@ -57,19 +57,25 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
   const action = reviewOutcomeAction({ reviewStatus: outcome, conclusion, reviewRequested: target.reviewRequested,
     round: stationRound, parentIsTeam, workflow, at: station });
   if (action === "verified") {
-    if (plan.runningStep) {
+    if (plan.runningStep || plan.blockedStep) {
       await step("interrupted-workflow", () => appendFinalizationTimeline(target.id,
-        `审查已完成，但后续工作流「${plan.runningStep}」在执行中遇到服务中断，实际副作用未知；已保留待处理记录，不会自动重复执行，请手动检查后继续任务。`, `${state.generation}:interrupted-workflow`));
+        `审查已完成，但后续工作流「${plan.runningStep ?? plan.blockedStep}」中断或失败；已保留逐站记录，不会自动重复执行。请核对实际副作用，再次验收可补跑未完成的站。`, `${state.generation}:interrupted-workflow`));
       return false;
     }
-    await step("workflow", async () => {
+    if (!plan.done.includes("workflow")) {
       const saved = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, state.directory)))[0]!.finalization!;
       let dispatchError: unknown;
+      let failed = false;
+      let halted = false;
       await advanceWorkflowFrom(target, workflow, station, { skipStepIds: new Set(saved.steps),
         reviewAuthority: authority,
         onRepair: (text) => enqueueFinalizationRepair(state.directory, state.generation, target.id, text, authority.target!),
         onStepStart: (stepId) => checkpointFinalizationWorkflow(state.directory, state.generation, stepId, "started"),
-        onStepFailure: (stepId) => checkpointFinalizationWorkflow(state.directory, state.generation, stepId, "failed"),
+        onStepFailure: async (stepId, stepHalted) => {
+          failed = true;
+          halted = !!stepHalted;
+          await checkpointFinalizationWorkflow(state.directory, state.generation, stepId, "failed", stepHalted);
+        },
         onStepDone: (stepId) => checkpointFinalizationWorkflow(state.directory, state.generation, stepId),
         startVerifyRound: async (taskId) => {
           try { return await (await import("./review.js")).startVerifyRound(taskId, {}, { reviewAuthority: authority }); }
@@ -77,7 +83,10 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
         },
       });
       if (dispatchError) throw dispatchError;
-    });
+      if (halted || (failed && (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, state.directory)))[0]!
+        .finalization?.acceptance)) return false;
+      await commitFinalizationStep(state.directory, state.generation, "workflow");
+    }
     return true;
   }
   const note = async (text: string) => {
