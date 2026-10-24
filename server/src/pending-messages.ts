@@ -25,7 +25,7 @@
 // 消失 = 用户那句话凭空蒸发,连「我发过」都无从证明(2026-08-07 事故,见
 // docs/incidents.md「排队消息凭空消失」)。做法是把「有人正在送」拆成一个**独立的租约字段**
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
@@ -39,11 +39,14 @@ import type { TurnSource } from "./runs.js";
 import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
-import { monitorEventSourceState, monitorWakeCheckpoint } from "./monitor-session.js";
-import { monitorWakeForDelivery, type MonitorWakeData } from "@ash/shared/monitor-wake";
-import { deliveryOptions, deliveryVerdict, isDueForDelivery, monitorWakeGuard, pendingExecutionIntent } from "./pending-verdict.js";
+import { monitorEventSourceState } from "./monitor-session.js";
+import type { MonitorWakeData } from "@ash/shared/monitor-wake";
+import { deliveryOptions, deliveryVerdict, isDueForDelivery, pendingExecutionIntent } from "./pending-verdict.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
+import { dispatchPendingMessage } from "./pending-dispatch.js";
+import { pendingMessageOrder } from "./pending-monitor-batch.js";
+import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
 import { id, now } from "./util.js";
 
 // 判定与投递参数的无状态部分拆在 pending-verdict.ts(本文件顶过 700 行上限);
@@ -173,12 +176,14 @@ function forgetDeliveryBookkeeping(messageId: string): void {
 
 // 抢下之后最终没能送出去:把租约还回去(托盘里它压根没消失过),下一次触发再送。
 // **宁可晚发,不能不发。**
-export async function abortDelivery(message: Row): Promise<void> {
-  lastFiredAt.delete(message.taskId);
+export async function abortDelivery(message: Row | Row[]): Promise<void> {
+  const messages = Array.isArray(message) ? message : [message];
+  if (!messages.length) return;
+  lastFiredAt.delete(messages[0]!.taskId);
   await db
     .update(scheduledMessages)
     .set({ deliveringSince: null })
-    .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.status, "pending")));
+    .where(and(inArray(scheduledMessages.id, messages.map((current) => current.id)), eq(scheduledMessages.status, "pending")));
 }
 
 export async function cancelPendingMessage(message: Row, reason: string): Promise<void> {
@@ -240,13 +245,15 @@ export async function beginDelivery(messageId: string): Promise<Row | null> {
 
 // 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
 // 消息不该被这一步复活。
-export async function markSent(message: Row): Promise<void> {
-  forgetDeliveryBookkeeping(message.id);
+export async function markSent(message: Row | Row[]): Promise<void> {
+  const messages = Array.isArray(message) ? message : [message];
+  if (!messages.length) return;
+  for (const current of messages) forgetDeliveryBookkeeping(current.id);
   await db
     .update(scheduledMessages)
     .set({ status: "sent", sentAt: now(), deliveringSince: null })
-    .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.status, "pending")));
-  publishPendingMessages(message.taskId);
+    .where(and(inArray(scheduledMessages.id, messages.map((current) => current.id)), eq(scheduledMessages.status, "pending")));
+  publishPendingMessages(messages[0]!.taskId);
 }
 
 // 开机时清空所有租约(startScheduler 在第一次 tick 之前调)。**不需要超时启发式**:
@@ -267,110 +274,8 @@ export async function reclaimStaleDeliveries(): Promise<number> {
 // 投递参数拼装(deliveryOptions)与哨兵唤醒的最后一道闸(monitorWakeGuard)也在
 // pending-verdict.ts。
 
-// 单任务的实际投递:在**当前这一轮退干净之后**才跑(由 whenTurnIdle 排空)。
-//
-// 三个状态迁移各自对应一件真事,别再合并:
-//   beginDelivery  = 我来送这条(行仍是 pending,重启/崩溃后开机自动回收重投)
-//   onDelivered    = 原话进会话了 → markSent(唯一写 sent 的地方)
-//   落空 / 出错     = abortDelivery 把租约还回去,消息留在托盘里等下一次
-//
-// **每一条不是「送成了」的出口都要出声**(scheduleRedelivery / console.warn):它们
-// 原本一个字都不记,于是「消息在托盘里多挂了十几秒」这件事在日志里根本不存在。
-async function deliverWhenIdle(
-  message: Row,
-  options: ReturnType<typeof deliveryOptions>,
-  spans: { dueAt: number; busyMs: number; queuedAt: number },
-  // 扫描侧认领的队列执行占位(queue-seat.ts)。正常路径由 continueTask 的结算覆盖;
-  // 这里只负责「一个字都没送出去就散伙」的早退口。
-  seat?: QueueSeat,
-): Promise<void> {
-  let delivered = false;
-  // 被最后那道闸挡下的理由(非 null = 这一轮压根没起,原因不是「回合被抢走」)。
-  let refused: string | null = null;
-  const guard = monitorWakeGuard(message);
-  const idleAt = Date.now();
-  // 这一轮带出去的续跑交代(已经从库里取走了)。一个字都没送出去时必须回填 —— 所以它声明
-  // 在 try 外面,catch 和 finally 都看得见。
-  let checkpoint: Awaited<ReturnType<typeof monitorWakeCheckpoint>> = null;
-  try {
-    // 等待期间它还是 pending,所以用户可能已经手动取消、另一个触发源也可能抢先
-    // 送掉了。抢不到租约就什么都不做 —— 送它的那一位会自己记账。
-    const claimed = await beginDelivery(message.id);
-    if (!claimed) {
-      // 占位是为这条消息落的;消息已经没了(取消/已送)就得把 status 退回去,否则
-      // 任务永远卡在 queued。租约被**别的投递路径**抢走则交给 finally 的同一判据:
-      // 那一位马上会开回合,running 自然覆盖占位;真没人接手才回滚。
-      return;
-    }
-    lastFiredAt.set(message.taskId, Date.now());
-    // 排空的一瞬间被别的路径抢走了回合(队列推进、用户手点运行):这一句一个字都
-    // 没送出去,退回队列等下一次触发。
-    // 正文用 `claimed.text` 而不是 `message.text`:等回合退干净的这段时间里,哨兵可能
-    // 已经往同一行后面追加了新的事件(见 beginDelivery 的注释)。
-    // 哨兵叫醒的这一轮还要带上 agent 当初 pause 时留给自己的那段交代(monitorWakeCheckpoint
-    // 会就地把它取走、并把合并后的正文落进这条消息,下面每一条「没送出去」的出路都必须回填)。
-    // 传 `claimed` 而不是 `message`:要的是**带租约那一刻**的正文与账本列(等回合退干净的
-    // 这段时间里哨兵可能又往同一行追加过事件)。
-    try {
-      checkpoint = await monitorWakeCheckpoint(claimed);
-    } catch (error) {
-      // **读交代失败不能变成取消**:那是准备阶段的一次临时故障(库忙),而取消是「这条事件
-      // 永远送不出去了」的意思 —— 一次读错就把本该重试的唤醒永久吞掉(第 1 轮审查 F4
-      // 第 1 种)。归还租约、原文留在托盘等重投。
-      await abortDelivery(message);
-      scheduleRedelivery(message, `读取续跑交代失败，原文退回待发送：${error instanceof Error ? error.message : String(error)}`);
-      return;
-    }
-    const started = await continueTask(message.taskId, checkpoint?.text ?? claimed.text, {
-      ...options,
-      monitorWake: monitorWakeForDelivery(claimed.monitorWake, checkpoint?.checkpoint),
-      ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
-      onDelivered: async () => {
-        delivered = true;
-        const at = Date.now();
-        await markSent(message);
-        noteDeliveryTiming(message.taskId, { ...spans, idleAt, at });
-      },
-    });
-    // started=true 也可能一个字没送出去:continueTask 把起跑异常(workspace/执行器
-    // 解析)吸收在内部,结算 failed 后返回 true ——「已接管回合」≠「已送达」。唯一可信
-    // 的送达信号是 onDelivered;没响就把租约还回去,原文留在托盘等重投(第 4 轮审查
-    // 实测:项目目录暂不可用时起跑失败,租约滞留,恢复后重试/扫描全绕开这条消息)。
-    if (!delivered) {
-      // 被终态那道闸挡下的(refused)**不能**退回托盘等下一次:任务已经结束了,下一次、
-      // 下一百次都是这个结果,留着它只会让一条永远送不出去的事件一直挂在用户的托盘里。
-      // 取消会把原文抄进时间线,所以「它说过什么」不会因此丢掉。
-      if (refused) await cancelPendingMessage(message, refused);
-      else {
-        await abortDelivery(message);
-        scheduleRedelivery(message, started
-          ? "回合起跑失败，原文退回待发送"
-          : "回合被其它执行抢占、工作区正被验收占用，或起跑前的资格检查读不到状态");
-      }
-    }
-  } catch (error) {
-    // 已经送进会话之后才炸的(agent 半路挂了),那是这一轮运行的事故,不是消息没送到:
-    // 消息保持 sent,绝不能再把原文抄进时间线冒充「未发送」。
-    if (delivered) return;
-    const detail = error instanceof Error ? error.message : String(error);
-    await cancelPendingMessage(message, `续跑失败：${detail}`).catch(() => {});
-  } finally {
-    // 一个字都没送出去 = 那段交代白取了,原样放回去(任务行 + 这条消息的正文/账本两半一起,
-    // 见 restoreCheckpoint)。放在 finally 是因为「没送达」有好几条出路:闸拒、起跑失败、
-    // 回合被抢、半路抛异常。退不动它自己会出声并留时间线,所以这里的 catch 只是兜底 ——
-    // 收尾路径上再抛一次异常会把上面那些判断一起带走。
-    if (!delivered && checkpoint) await checkpoint.restore().catch(() => {});
-    inFlight.delete(message.taskId);
-    // 占位落空的兜底:这一次没送达(租约被抢、消息被取消、回合被验收互斥挡回而
-    // continueTask 没有结算)时,任务可能还停在扫描侧认领的 queued 占位上。回滚的
-    // 守卫判据在 seat.release() 里:回合锁被人占着(手动运行刚抢走这次启动)或状态
-    // 已被结算覆盖都不动,只有「没人接手、还停在占位上」才退回原状态。
-    if (seat && !delivered) await seat.release();
-  }
-}
-
 // 投递一批待发送消息。taskId 非空 = 只看这个任务(终态钩子用);为空 = 全表扫一遍
-// (tick 用)。同一个任务一次只发一条——发完它就又在跑了,剩下的继续排着。
+// (tick 用)。同任务每次只起一轮；兼容且连续的哨兵结果一起交付，其它消息继续排队。
 //
 // **扫描串行化**:两次并发扫描各自读「整队无人在跑」再各自安排投递,就是第 6 轮审查
 // 的双跑现场(两个失败成员恢复后一起执行)。决策与占位必须在同一条链上依次发生,
@@ -395,13 +300,12 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
     .from(scheduledMessages)
     .where(and(eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince)));
   const pending = (taskId ? all.filter((m) => m.taskId === taskId) : all)
-    .sort((a, b) => a.sendAt.localeCompare(b.sendAt)
-      || a.createdAt.localeCompare(b.createdAt)
-      || a.id.localeCompare(b.id));
-  const fired = new Set<string>(); // 每个任务每轮至多投递一条
+    .sort(pendingMessageOrder);
+  const fired = new Set<string>();
   for (const m of pending) {
     try {
-      if (fired.has(m.taskId) || inFlight.has(m.taskId) || cooling(m.taskId, at.getTime())) continue;
+      if (fired.has(m.taskId) || inFlight.has(m.taskId) || hasPendingDeliveryRecovery(m.taskId)
+        || cooling(m.taskId, at.getTime())) continue;
       // 下一次允许重试的时刻没到就不碰:退避只写在重投定时器上管不住别的触发源 ——
       // 失败结算钩子、队列唤醒触发的扫描会绕过它,形成「失败→结算唤醒→再失败」的
       // 自激循环(第 6 轮审查:目录不修复时 2 秒 24 次失败)。
@@ -447,7 +351,6 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         await cancelPendingMessage(m, verdict.reason);
         continue;
       }
-      const options = deliveryOptions(m);
       // 两个时间点,别合并:
       //   dueAt    = 这条消息**第一次**被判定该发的那一刻(markDue 只记第一次)。被挡回、
       //              几秒后重投、甚至被 30s 兜底扫描捡走,起点都还是它 —— 这才是用户
@@ -457,57 +360,13 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       const dueAt = markDue(m.id, queuedAt);
       const busyMs = settleBusyAgain(m.id, queuedAt);
       if (t!.mode === "team") {
-        const claimed = await beginDelivery(m.id);
-        if (!claimed) continue; // 另一个触发源刚抢走
-        fired.add(m.taskId);
-        lastFiredAt.set(m.taskId, Date.now());
-        let delivered = false;
-        let refused: string | null = null;
-        const guard = monitorWakeGuard(m);
-        // 同单任务那条路:哨兵叫醒时把 pause 时留下的交代一起喂回去(就地取走,没送出去
-        // 再回填)。**读取必须在 try 里面**:漏在外面的话一次读错只会冒到最外层那个扫描
-        // 日志 catch,不走 abortDelivery —— 租约留在行上,后续扫描显式跳过有租约的行,
-        // 这条消息直到进程重启回收前再也不会被投递(第 1 轮审查 F4 第 2 种)。
-        let checkpoint: Awaited<ReturnType<typeof monitorWakeCheckpoint>> = null;
-        try {
-          try {
-            checkpoint = await monitorWakeCheckpoint(claimed);
-          } catch (error) {
-            await abortDelivery(m);
-            scheduleRedelivery(m, `读取续跑交代失败，原文退回待发送：${error instanceof Error ? error.message : String(error)}`);
-            continue;
-          }
-          const started = await continueTask(m.taskId, checkpoint?.text ?? claimed.text, {
-            ...options,
-            monitorWake: monitorWakeForDelivery(claimed.monitorWake, checkpoint?.checkpoint),
-            ...(guard ? { wakeGuard: async () => (refused = await guard()) } : {}),
-            throwOnTeamUnavailable: true,
-            onDelivered: async () => {
-              delivered = true;
-              const at = Date.now();
-              await markSent(m);
-              // 调度台是常驻的,没有「等回合退干净」这一段,所以两个时间点同一个值。
-              noteDeliveryTiming(m.taskId, { dueAt, busyMs, queuedAt, idleAt: queuedAt, at });
-            },
-          });
-          // 调度台明确拒收:清租约、保持 pending,下一台接手时补送。同样要出声并自己重投,
-          // 否则一次拒收就要干等一整个 30s tick。
-          if (!started) {
-            // 同单任务：被终态那道闸挡下的不退回托盘，下一次还是同一个结果。
-            if (refused) await cancelPendingMessage(m, refused);
-            else {
-              await abortDelivery(m);
-              scheduleRedelivery(m, "这一轮没起：调度台收不下（正在收尾或已离线），或起跑前的资格检查读不到状态");
-            }
-          }
-        } catch (reason) {
-          if (delivered) throw reason; // 已经进调度台了,不是「未发送」,交给外层日志
-          const detail = reason instanceof Error ? reason.message : String(reason);
-          await cancelPendingMessage(m, `调度台不可用：${detail}`);
-        } finally {
-          // 同单任务:一个字都没送出去就把取走的那段交代放回去(两半一起,见那一处的注释)。
-          if (!delivered && checkpoint) await checkpoint.restore().catch(() => {});
-        }
+        await dispatchPendingMessage(m, {
+          spans: { dueAt, busyMs, queuedAt }, team: true,
+          onClaim: () => {
+            fired.add(m.taskId);
+            lastFiredAt.set(m.taskId, Date.now());
+          },
+        });
       } else {
         // 单任务必须等它**当前这一轮退干净**再送。两个触发源里的终态钩子
         // (setTaskStatus → flushPendingForTask)是在 run loop 的 try 里调的,那一刻
@@ -522,7 +381,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         // 空闲」照样穿透(第 7 轮审查:普通 HTTP 并发 10/10 双跑)。被挡回按「等」记账,
         // 下一次触发再试;终态续聊(非执行型、任务已终态)不占位,豁免保留。
         // 占位的回收:投递成功/失败都由 continueTask 的结算覆盖 status;唯一落空口
-        // (租约被抢/消息已取消)由 deliverWhenIdle 的收尾按 seat.release() 回滚。
+        // (租约被抢/消息已取消)由 pending-dispatch 的收尾按 seat.release() 回滚。
         let seat: QueueSeat | undefined;
         if (needQueueCheck) {
           const claim = await claimQueueSeat(m.taskId);
@@ -534,7 +393,11 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         }
         fired.add(m.taskId);
         inFlight.add(m.taskId);
-        whenTurnIdle(m.taskId, () => void deliverWhenIdle(m, options, { dueAt, busyMs, queuedAt }, seat));
+        whenTurnIdle(m.taskId, () => void dispatchPendingMessage(m, {
+          spans: { dueAt, busyMs, queuedAt }, seat,
+          onClaim: () => { lastFiredAt.set(m.taskId, Date.now()); },
+          onSettled: () => { inFlight.delete(m.taskId); },
+        }));
       }
     } catch (error) {
       // 一条投递失败不影响其它任务,下一轮再来 —— 但**必须留下痕迹**:这里原来是空的
@@ -587,9 +450,7 @@ export async function handDuePendingMessageToRun(
     // 哨兵事件(origin 非空)不参与让位交接:它不是用户的执行指令,拿来当首轮输入会被
     // 升级成执行意图、还绕开唤醒闸(monitorWakeGuard)与终态取消;留给扫描按哨兵语义送。
     .filter((m) => !m.origin && isDueForDelivery(m, at))
-    .sort((a, b) => a.sendAt.localeCompare(b.sendAt)
-      || a.createdAt.localeCompare(b.createdAt)
-      || a.id.localeCompare(b.id))
+    .sort(pendingMessageOrder)
     .at(0);
   if (!due) return false;
   const claimed = await beginDelivery(due.id);
