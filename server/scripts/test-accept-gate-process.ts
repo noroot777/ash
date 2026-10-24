@@ -26,7 +26,7 @@ async function until(predicate: () => boolean, timeout = 20_000): Promise<void> 
 const worker = fileURLToPath(new URL("./accept-gate-process-worker.ts", import.meta.url));
 const runWorker = (mode: string, directory: string, allowFailure = false) => new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
   const child = spawn(process.execPath, ["--import", "tsx", worker, mode, directory], {
-    stdio: ["ignore", "pipe", "pipe"], env: mode === "macos-flow"
+    stdio: ["ignore", "pipe", "pipe"], env: mode === "macos-flow" || mode === "macos-release"
       ? { ...process.env, ASH_DB: join(directory, "ash.db"), ASH_RUNS_DIR: join(directory, "runs") } : process.env,
     windowsHide: true,
   });
@@ -69,15 +69,19 @@ try {
     results.push(...await testMacGateSupervision(root));
     const flow = await runWorker("macos-flow", join(root, "production-macos"));
     results.push(JSON.parse(flow.stdout.trim().split("\n").at(-1)!));
-    for (const mode of ["normal", "orphan", "reopen", "preload"]) {
+    const released = await runWorker("macos-release", join(root, "macos-release"));
+    results.push(JSON.parse(released.stdout.trim().split("\n").at(-1)!));
+    for (const mode of ["normal", "orphan", "reopen", "preload", "group-exit", "group-crash"]) {
       const directory = join(root, mode);
       const control = await runWorker(mode === "normal" ? "controller-normal"
-        : mode === "reopen" ? "controller-crash" : mode === "preload" ? "controller-preload" : "controller", directory, mode === "reopen");
-      if (mode === "reopen") assert.notEqual(control.code, 0);
+        : mode.startsWith("group-") ? `controller-${mode === "group-exit" ? "group" : mode}`
+        : mode === "reopen" ? "controller-crash" : mode === "preload" ? "controller-preload" : "controller", directory, mode === "reopen" || mode === "group-crash");
+      if (mode === "reopen" || mode === "group-crash") assert.notEqual(control.code, 0);
       const started = JSON.parse(readFileSync(`${directory}.controller.json`, "utf8"));
       const descendant = Number(readFileSync(`${directory}.pid`, "utf8"));
       assert.equal(isPidAlive(descendant), true);
       const recovered = JSON.parse((await runWorker("recover", directory)).stdout.trim().split("\n").at(-1)!);
+      assert.equal(recovered.aliveBefore, true, "recovery must see surviving descendants before stopping");
       assert.equal(recovered.stopped, true, JSON.stringify(recovered));
       assert.equal(recovered.aliveAfter, false);
       await until(() => !isPidAlive(descendant));

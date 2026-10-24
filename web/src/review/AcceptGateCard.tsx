@@ -194,8 +194,9 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
             : idle
             ? "设一条之后，点「验收通过」会先在独立源码快照里跑它，rc=0 且进程监督收尾后才合并。"
             : detail(state, running, latest, receipt, settled)}</p>
-          {(settled ? shown?.executionNotice : running?.executionNotice ?? state.executionNotice)
-            && <p role="note">{settled ? shown?.executionNotice : running?.executionNotice ?? state.executionNotice}</p>}
+          {shown?.executionNotice && <p role="note">{running ? "本次运行：" : settled ? "本次验收运行：" : "历史运行："}{shown.executionNotice}</p>}
+          {!settled && !running && state.command && state.executionNotice && state.executionNotice !== shown?.executionNotice
+            && <p role="note">下次运行：{state.executionNotice}</p>}
           {error && <p role="alert">状态读取失败：{error}（下面这份可能已经不是最新的，可刷新重试）</p>}
           {stale && !error && <p role="status">正在核对，下面是上次读取的记录。</p>}
         </div>

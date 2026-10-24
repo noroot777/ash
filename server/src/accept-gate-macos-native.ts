@@ -94,6 +94,14 @@ static int marked(int pid, const char *token) {
 }
 
 int main(int argc, char **argv) {
+  if (argc == 4 && !strcmp(argv[1], "guard")) {
+    int parent = atoi(argv[2]);
+    if (parent < 2) return 1;
+    for (;;) {
+      if (getppid() != parent && access(argv[3], F_OK) != 0) return 0;
+      usleep(100000);
+    }
+  }
   if (argc == 5 && !strcmp(argv[1], "signal")) {
     int pid = atoi(argv[2]);
     struct proc_bsdinfo info;
@@ -101,7 +109,7 @@ int main(int argc, char **argv) {
     if (info.pbi_uid != getuid()) return 3;
     return kill(pid, atoi(argv[4])) == 0 || errno == ESRCH ? 0 : 4;
   }
-  if (argc != 3 || strcmp(argv[1], "scan")) return 1;
+  if ((argc != 3 && argc != 4) || strcmp(argv[1], "scan")) return 1;
   int count = proc_listallpids(NULL, 0);
   if (count < 1) return 2;
   int capacity = count + 1024;
@@ -117,11 +125,29 @@ int main(int argc, char **argv) {
     if (pid < 2 || !info_for(pid, &before) || before.pbi_uid != getuid()) continue;
     int token = marked(pid, argv[2]);
     if (!info_for(pid, &after) || birth(&before) != birth(&after)) continue;
-    printf("%s{\"pid\":%d,\"ppid\":%u,\"group\":%u,\"born\":%llu,\"marked\":%d,\"zombie\":%s}",
-      comma++ ? "," : "", pid, after.pbi_ppid, after.pbi_pgid, birth(&after), token, after.pbi_status == SZOMB ? "true" : "false");
+    printf("%s{\"pid\":%d,\"ppid\":%u,\"group\":%u,\"session\":%d,\"born\":%llu,\"marked\":%d,\"zombie\":%s}",
+      comma++ ? "," : "", pid, after.pbi_ppid, after.pbi_pgid, getsid(pid), birth(&after), token, after.pbi_status == SZOMB ? "true" : "false");
+  }
+  free(pids);
+  printf("],\"groupMembers\":[");
+  if (argc == 4) {
+    int group = atoi(argv[3]);
+    if (group < 2) return 5;
+    int bytes = proc_listpids(PROC_PGRP_ONLY, group, NULL, 0);
+    if (bytes < 0) return 6;
+    int size = bytes + 1024 * sizeof(int);
+    pids = calloc(1, size);
+    if (!pids) return 7;
+    bytes = proc_listpids(PROC_PGRP_ONLY, group, pids, size);
+    if (bytes < 0 || bytes >= size) { free(pids); return 8; }
+    if (bytes == 0 && (kill(-group, 0) == 0 || errno != ESRCH)) { free(pids); return 9; }
+    comma = 0;
+    for (int index = 0; index < bytes / sizeof(int); index++) {
+      if (pids[index] > 1) printf("%s%d", comma++ ? "," : "", pids[index]);
+    }
+    free(pids);
   }
   printf("]}\n");
-  free(pids);
   return 0;
 }
 `;

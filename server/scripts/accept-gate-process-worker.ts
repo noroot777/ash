@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { gateTreeAlive, spawnAcceptGate, stopAcceptGate } from "../src/accept-gate-process.js";
 import { readGateLaunch } from "../src/accept-gate-launch.js";
+import { isPidAlive } from "../src/platform.js";
 
 const mode = process.argv[2]!;
 const directory = process.argv[3]!;
@@ -18,6 +19,9 @@ if (mode === "recover-legacy") {
 } else if (mode === "macos-flow") {
   const { testMacGateFlow } = await import("./accept-gate-macos-flow.js");
   console.log(JSON.stringify(await testMacGateFlow(directory)));
+} else if (mode === "macos-release") {
+  const { testMacGateRelease } = await import("./accept-gate-macos-release.js");
+  console.log(JSON.stringify(await testMacGateRelease(directory)));
 } else {
   const script = `${directory}.cjs`;
   writeFileSync(script, `
@@ -31,7 +35,8 @@ if (process.argv[2] === "child") {
   }, 40);
 } else {
   const child = spawn(process.execPath, [__filename, "child"], {
-    stdio: "ignore", detached: true, windowsHide: true,
+    stdio: "ignore", detached: ${!mode.startsWith("controller-group")}, windowsHide: true,
+    env: ${mode.startsWith("controller-group") ? "{}" : "process.env"},
   });
   child.unref();
   ${mode === "controller-normal" ? "setInterval(() => {}, 1000);" : `setInterval(() => {
@@ -62,6 +67,10 @@ if (process.argv[2] === "child") {
     if (Date.now() > deadline) throw new Error(`controller failed: ${readFileSync(`${directory}.log`, "utf8")}`);
     await sleep(25);
   }
+  if (mode.startsWith("controller-group")) while (isPidAlive(started.pid)) {
+    if (Date.now() > deadline) throw new Error("same-group parent did not exit");
+    await sleep(25);
+  }
   writeFileSync(`${directory}.controller.json`, JSON.stringify({ controllerPid: process.pid,
     pid: started.pid, startedAt: started.startedAt,
     launch: readGateLaunch(`${directory}.log`) }));
@@ -69,7 +78,7 @@ if (process.argv[2] === "child") {
     console.log(JSON.stringify(await settlement));
     if (keepAlive) clearInterval(keepAlive);
   }
-  if (mode === "controller-crash") process.kill(process.pid, "SIGKILL");
+  if (mode === "controller-crash" || mode === "controller-group-crash") process.kill(process.pid, "SIGKILL");
   process.exit(0);
 }
 import assert from "node:assert/strict";

@@ -7,7 +7,7 @@ import { ACCEPT_GATE_LOG_MAX_BYTES, ACCEPT_GATE_TAIL_BYTES } from "@ash/shared/a
 import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { inspectProcessSync, isPidAlive, IS_MAC, userShellLaunch } from "./platform.js";
-import { assertGateConfinementAvailable } from "./accept-gate-confinement.js";
+import { assertGateConfinementAvailable, gateSupervisorBootstrap } from "./accept-gate-confinement.js";
 import { MAC_GATE_ENV, macGateToken } from "./accept-gate-confinement-macos.js";
 import { gateBootstrapEnvironment } from "./accept-gate-process-env.js";
 import { authorizeGateLaunch, finishGateLaunch, GATE_BOOTSTRAP, gateAbortPath, gateConfinement,
@@ -54,6 +54,7 @@ export async function spawnAcceptGate(opts: {
     const environment = gateBootstrapEnvironment(augmentedEnv());
     if (IS_MAC) environment.bootstrap[MAC_GATE_ENV] = macGateToken(opts.logPath);
     const config = Buffer.from(JSON.stringify({ ...launch, cwd: opts.cwd,
+      ...await gateSupervisorBootstrap(opts.logPath),
       restoreEnv: environment.restore,
       go: gateGoPath(opts.logPath), abort: gateAbortPath(opts.logPath) })).toString("base64");
     const child = spawn(process.execPath, ["-e", GATE_BOOTSTRAP, config], {

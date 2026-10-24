@@ -16,7 +16,8 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { acceptGateRuns, projects, tasks } = await import("../src/db/schema.js");
   const { collectGateRuns } = await import("../src/handoff-accept-gate.js");
-  const { collectRunArtifacts } = await import("../src/handoff-collect.js");
+  const { collectRunArtifacts, collectRunArtifactTexts } = await import("../src/handoff-collect.js");
+  const { isTextRel } = await import("../src/handoff-uploads.js");
   const { importHandoff } = await import("../src/handoff-import.js");
   const { validate } = await import("../src/handoff-import-payload.js");
   const { acceptGateState } = await import("../src/accept-gate-state.js");
@@ -54,6 +55,19 @@ try {
   assert.ok(history.every(run => !("pid" in run) && !("cwd" in run) && !("sourceFingerprint" in run)));
   const artifacts = await collectRunArtifacts(taskId, []);
   assert.deepEqual(artifacts.map(file => file.rel), ["accept-gate-gate-passed.log"]);
+  assert.deepEqual(await collectRunArtifactTexts(taskId, []), [], "gate logs are transferred but not scanned for attachments");
+  const reportText = JSON.stringify({ attachment: join(root, "uploads", "artifact-only.txt") });
+  writeFileSync(join(dirname(log), "report.json"), reportText);
+  const nested = join(dirname(log), "accept-gate-gate-passed.source", "node_modules", "nested");
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(join(nested, "package.json"), JSON.stringify({ attachment: join(root, "uploads", "snapshot-only.txt") }));
+  writeFileSync(`${log}.macos-processes.json`, JSON.stringify({ private: join(root, "uploads", "control-only.txt") }));
+  const previewTexts = await collectRunArtifactTexts(taskId, []);
+  const exportedTexts = (await collectRunArtifacts(taskId, [])).filter(file => isTextRel(file.rel))
+    .map(file => Buffer.from(file.dataBase64, "base64").toString("utf8"));
+  assert.deepEqual(previewTexts, [reportText], "eligible artifact text is included in attachment preview");
+  assert.deepEqual(previewTexts, exportedTexts, "preview and export exclude retained snapshots and supervision files before traversal");
+  assert.equal(previewTexts.some(text => /snapshot-only|control-only/.test(text)), false);
   const sourceTask = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
   const manifest: Manifest = { version: 1, sourceHost: "A", sourceFingerprint: from, originFingerprint: from,
     targetProjectId: "gate-machine-b", transferId: "gate-outbound", autoResume: false, sourceWorkspace: null,

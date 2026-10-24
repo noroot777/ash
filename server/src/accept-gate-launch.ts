@@ -91,15 +91,26 @@ export function finishGateLaunch(logPath: string, stoppedEvidence: GateLaunch["s
   const launch = readGateLaunch(logPath);
   if (!launch) return;
   writeGateLaunch(logPath, { ...launch, phase: "stopped", stoppedEvidence });
+  abandonGateSupervision(logPath);
+}
+
+export function abandonGateSupervision(logPath: string): void {
   confinements.get(logPath)?.dispose();
   confinements.delete(logPath);
-  if (launch.pid) launches.delete(launch.pid);
+  const launch = readGateLaunch(logPath);
+  if (launch?.pid) launches.delete(launch.pid);
 }
 
 export const GATE_BOOTSTRAP = String.raw`
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 const config = JSON.parse(Buffer.from(process.argv[1], "base64").toString("utf8"));
+if (config.macGuard) {
+  const guard = spawn(config.macGuard, ["guard", String(process.pid), config.go], { stdio: "ignore" });
+  guard.once("error", error => { console.error(error.message); process.exit(125); });
+  if (guard.pid) fs.writeFileSync(config.macGuardFile, String(guard.pid));
+  guard.unref();
+}
 const deadline = Date.now() + 120000;
 const timer = setInterval(() => {
   if (fs.existsSync(config.abort) || Date.now() > deadline) process.exit(125);

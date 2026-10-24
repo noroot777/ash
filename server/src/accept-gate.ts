@@ -36,6 +36,7 @@ import { commitAt, plannedMergeTarget } from "./task-branch-plan.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { acceptGateCommandOf, gateView, latestRun, prepareGateCwd, runningRun } from "./accept-gate-state.js";
+import { gateFailurePrompt, gateStoppedSummary } from "./accept-gate-messages.js";
 import { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, removeGateSnapshot, verifyGateSnapshot, type GateSource } from "./accept-gate-source.js";
 import { existingTaskWorkspacePath } from "./task-workspace.js";
 export { acceptGateCommandOf, acceptGateRunOf, acceptGateState } from "./accept-gate-state.js";
@@ -475,26 +476,13 @@ function parseChoices(raw: string | null): AcceptGateChoices {
   } catch { return { by: "human" }; }
 }
 
-const FAILURE_PROMPT = (p: { command: string; summary: string; logPath: string; tail: string; cwd: string; sourceCwd: string }) =>
-  `【验收未通过 · 验收前置命令没过】\n` +
-  `本次验收触发了项目设置的验收前置命令，ash 在合并**之前**于独立快照 \`${p.cwd}\` 跑了它（停止后快照会删除）。\n` +
-  `在当前任务工作区复现这条命令：\n\n    cd ${p.sourceCwd} && ${p.command}\n\n` +
-  `结果：${p.summary}。所以**没有合并、没有清理**，目标分支一个字节都没动。\n\n` +
-  `完整日志在 \`${p.logPath}\`，末尾是：\n\n\`\`\`\n${p.tail.trim() || "（日志为空）"}\n\`\`\`\n\n` +
-  `请你来处理：\n` +
-  `1. 在自己的工作目录里重跑这条命令，定位到底是哪一条红的；\n` +
-  `2. 确属本次改动引入 → 修掉并提交，然后告诉用户可以重新点验收（验收会自动再跑一遍这条命令）；\n` +
-  `3. 如果你判断它**跟本次改动无关**（基线既有的红、环境缺件、负载敏感的 flake），不要硬改：` +
-  `把依据写清楚（单跑复核的结果、基线上同样红的证据），让用户决定是这次跳过门禁，还是另立一个任务去修。\n\n` +
-  `不要自己去动目标分支，也不要绕过这条命令 —— 它是用户给这个项目定的放行条件。`;
-
 async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = false): Promise<void> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
   const project = (await db.select().from(projects).where(eq(projects.id, row.projectId))).at(0);
   const sourceCwd = task && project ? await existingTaskWorkspacePath(task, project.repoPath) ?? project.repoPath : row.cwd;
-  const prompt = FAILURE_PROMPT({
+  const prompt = gateFailurePrompt({
     command: row.command, summary: summarizeAcceptGate(view), logPath: row.logPath,
-    tail: view.logTail, cwd: row.cwd, sourceCwd,
+    tail: view.logTail, cwd: row.cwd, sourceCwd, executionNotice: view.executionNotice,
   });
   // 先把「这一次交接发起了」落盘再投递：投递是异步的，中间用户刷新页面的话，不落盘
   // 那张卡只能说「不知道」。失败由下面的 onError 补写原因（两件事都写同一行）。
@@ -642,14 +630,15 @@ export async function recoverAcceptGates(): Promise<{ interrupted: number }> {
       .where(eq(acceptGateRuns.id, row.id));
     const stopped = await stopGateRun(row.id);
     if (stopped) await cleanupGateSnapshot(row.taskId, row.id);
+    const stoppedSummary = gateStoppedSummary(row.executionMode);
     appendGateLog(row.logPath, `\n[ash] ash 重启后核对进程，执行状态为 ${row.status === "running" ? "interrupted" : row.status}（${
-      stopped ? "残留进程已收掉" : "残留进程尚未确认退出，工作区仍被占用"}）。\n`);
+      stopped ? stoppedSummary : "残留进程尚未确认退出，工作区仍被占用"}）。\n`);
     await appendTaskTimeline(
       row.taskId,
       (row.status === "running"
         ? `验收前置命令被打断：ash 重启时它还在跑（\`${row.command}\`），已按未完成收尾。`
         : `ash 重启后继续核对验收前置命令 \`${row.command}\` 的停止责任（原状态 ${row.status}）。`)
-      + (stopped ? "进程已退出，工作区占用已释放。" : "尚未确认进程退出，合并和清理仍被阻止。"),
+      + (stopped ? `${stoppedSummary}，工作区占用已释放。` : "尚未确认进程退出，合并和清理仍被阻止。"),
     );
     announceGate(row.taskId);
   }

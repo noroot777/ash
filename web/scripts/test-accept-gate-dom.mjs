@@ -493,6 +493,21 @@ try {
     assert.deepEqual(animations, ["none", "none", "none", "none"]);
     await page.close();
   }
+  {
+    const historical = "历史 macOS 兼容监督，未观察后代可能无法识别";
+    const upcoming = "当前平台的下次监督范围";
+    for (const command of [null, "new command"]) {
+      for (const executionNotice of [null, upcoming]) {
+        const { page } = await open({ gate: { command, running: null,
+          latest: run({ status: "failed", executionNotice: historical }), executionNotice } });
+        const card = page.getByRole("region", { name: "验收前置命令", exact: true });
+        await card.getByRole("note").filter({ hasText: `历史运行：${historical}` }).waitFor();
+        assert.equal(await card.getByRole("note").filter({ hasText: `下次运行：${upcoming}` }).count(), command && executionNotice ? 1 : 0);
+        if (process.env.ASH_TEST_ARTIFACTS && !command && !executionNotice) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/macos-withdrawn-history.png`, fullPage: true });
+        await page.close();
+      }
+    }
+  }
   for (const wait of [false, true]) {
     const running = run({ status: "running", exitCode: null, finishedAt: null });
     const { page } = await open({ gate: { command: running.command, running, latest: running },

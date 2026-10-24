@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { cachedGateMacScannerExecutable, gateMacScannerExecutable } from "./accept-gate-macos-native.js";
 import { inspectProcessSync, isPidAlive } from "./platform.js";
 import type { GateConfinement } from "./accept-gate-confinement.js";
@@ -12,8 +12,14 @@ export const macGateToken = (logPath: string): string => createHash("sha256").up
 export const isMacGateScope = (id: string | null | undefined): boolean => !!id?.startsWith("macos-observed:");
 
 type Member = { pid: number; born: number };
-type Row = Member & { ppid: number; group: number; marked: number; zombie: boolean };
-type Evidence = { version: 1; id: string; pid: number; startedAt: string; rootBorn: number; members: Member[] };
+type Row = Member & { ppid: number; group: number; session: number; marked: number; zombie: boolean };
+type Scan = { rows: Row[]; groupMembers: number[] };
+type Evidence = { version: 2; id: string; pid: number; startedAt: string; rootBorn: number;
+  guardian: Member; groupClosed: boolean; members: Member[] };
+export const macGateGuardianPath = (logPath: string): string => `${logPath}.macos-guardian.pid`;
+export async function macGateBootstrap(logPath: string) {
+  return { macGuard: await gateMacScannerExecutable(), macGuardFile: macGateGuardianPath(logPath) };
+}
 
 export function macGateConfinement(logPath: string, pid: number, startedAt: string | null, existingId?: string): GateConfinement {
   const token = macGateToken(logPath);
@@ -21,18 +27,24 @@ export function macGateConfinement(logPath: string, pid: number, startedAt: stri
   const path = `${logPath}.macos-processes.json`;
   let executable = cachedGateMacScannerExecutable();
   let timer: NodeJS.Timeout | null = null;
-  const scan = (): Row[] => {
+  let registeredGuardian: Member | null = null;
+  const scan = (): Scan => {
     if (!executable) throw new Error("macOS 进程监督器尚未就绪");
-    return (JSON.parse(execFileSync(executable, ["scan", `${MAC_GATE_ENV}=${token}`], {
+    return JSON.parse(execFileSync(executable, ["scan", `${MAC_GATE_ENV}=${token}`, String(pid)], {
       encoding: "utf8", timeout: 5_000, maxBuffer: 16 * 1024 * 1024,
-    })) as { rows: Row[] }).rows;
+    })) as Scan;
   };
+  const validMember = (member: Member): boolean => !!member && Number.isSafeInteger(member.pid) && member.pid > 1
+    && Number.isSafeInteger(member.born) && member.born > 0;
   const load = (): Evidence => {
     const evidence = JSON.parse(readFileSync(path, "utf8")) as Evidence;
-    if (evidence.version !== 1 || evidence.id !== id || evidence.pid !== pid || evidence.startedAt !== startedAt
+    if (evidence.version !== 2 || evidence.id !== id || evidence.pid !== pid || evidence.startedAt !== startedAt
       || !Number.isSafeInteger(evidence.rootBorn) || evidence.rootBorn < 1 || !Array.isArray(evidence.members)
-      || evidence.members.some(member => !member || !Number.isSafeInteger(member.pid) || member.pid < 2
-        || !Number.isSafeInteger(member.born) || member.born < 1)) throw new Error("macOS 监督身份记录不匹配");
+      || !validMember(evidence.guardian) || evidence.guardian.pid === pid || evidence.guardian.born < evidence.rootBorn
+      || (registeredGuardian && (registeredGuardian.pid !== evidence.guardian.pid || registeredGuardian.born !== evidence.guardian.born))
+      || typeof evidence.groupClosed !== "boolean"
+      || evidence.members.some(member => !validMember(member))) throw new Error("macOS 监督身份记录不匹配");
+    registeredGuardian = evidence.guardian;
     return evidence;
   };
   const save = (evidence: Evidence) => {
@@ -43,24 +55,32 @@ export function macGateConfinement(logPath: string, pid: number, startedAt: stri
     try {
       if (existingId && existingId !== id) throw new Error("macOS 监督标识不匹配");
       const evidence = load();
-      const rows = scan();
+      const { rows, groupMembers } = scan();
       const previous = new Map(evidence.members.map(member => [member.pid, member.born]));
       if (evidence.members.some(member => !rows.some(row => row.pid === member.pid) && isPidAlive(member.pid))) {
         throw new Error("已观察进程仍存活但原生身份读取失败，保留占用");
       }
-      const root = rows.find(row => row.pid === pid);
-      const groupOwned = rows.some(row => !row.zombie && row.group === pid
-        && (row.marked === 1 || previous.get(row.pid) === row.born));
+      const guardian = rows.find(row => row.pid === evidence.guardian.pid && row.born === evidence.guardian.born);
+      const root = rows.find(row => row.pid === pid && row.born === evidence.rootBorn && row.group === pid && row.session === pid);
+      const groupRows = groupMembers.map(member => rows.find(row => row.pid === member));
+      if (!evidence.groupClosed && groupMembers.length > 0
+        && ((!root && (!guardian || guardian.zombie || guardian.group !== pid || guardian.session !== pid))
+          || groupRows.some(row => !row || row.group !== pid || row.session !== pid || row.born < evidence.rootBorn))) {
+        throw new Error("已登记进程组的代际或成员身份无法核验，保留占用");
+      }
+      const groupOwned = !evidence.groupClosed && groupMembers.length > 0;
       const selected = new Map<number, Row>();
       for (const row of rows) {
+        if (row.pid === evidence.guardian.pid && row.born === evidence.guardian.born) continue;
         if (!row.zombie && (row.marked === 1 || previous.get(row.pid) === row.born
-          || (groupOwned && row.group === pid && row.born >= evidence.rootBorn && (!root || root.born === evidence.rootBorn)))) selected.set(row.pid, row);
+          || (groupOwned && groupMembers.includes(row.pid)))) selected.set(row.pid, row);
       }
       let changed = true;
       while (changed) {
         changed = false;
         for (const row of rows) {
           const parent = selected.get(row.ppid);
+          if (row.pid === evidence.guardian.pid && row.born === evidence.guardian.born) continue;
           if (!row.zombie && !selected.has(row.pid) && parent && row.born >= parent.born) {
             selected.set(row.pid, row);
             changed = true;
@@ -68,6 +88,7 @@ export function macGateConfinement(logPath: string, pid: number, startedAt: stri
         }
       }
       evidence.members = [...selected.values()].map(({ pid, born }) => ({ pid, born }));
+      if (!evidence.members.length) evidence.groupClosed = true;
       save(evidence);
       return { kind: "members", coverage: "observed-processes", members: evidence.members.map(member => ({
         pid: member.pid, gen: String(member.born),
@@ -79,9 +100,17 @@ export function macGateConfinement(logPath: string, pid: number, startedAt: stri
     async enroll(candidate) {
       if (existingId || candidate !== pid || !startedAt || inspectProcessSync(pid)?.startedAt !== startedAt) return false;
       executable = await gateMacScannerExecutable();
-      const root = scan().find(row => row.pid === pid && row.marked === 1 && row.group === pid);
-      if (!root || inspectProcessSync(pid)?.startedAt !== startedAt) return false;
-      save({ version: 1, id, pid, startedAt, rootBorn: root.born, members: [{ pid, born: root.born }] });
+      const deadline = Date.now() + 5_000;
+      while (!existsSync(macGateGuardianPath(logPath)) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+      const guardianPid = Number(readFileSync(macGateGuardianPath(logPath), "utf8"));
+      const { rows } = scan();
+      const root = rows.find(row => row.pid === pid && row.marked === 1 && row.group === pid && row.session === pid);
+      const guardian = rows.find(row => row.pid === guardianPid && row.ppid === pid && row.marked === 1
+        && row.group === pid && row.session === pid && !row.zombie);
+      if (!root || !guardian || guardian.born < root.born || inspectProcessSync(pid)?.startedAt !== startedAt) return false;
+      save({ version: 2, id, pid, startedAt, rootBorn: root.born, guardian: { pid: guardian.pid, born: guardian.born },
+        groupClosed: false, members: [{ pid, born: root.born }] });
+      registeredGuardian = { pid: guardian.pid, born: guardian.born };
       timer = setInterval(() => { reading(); }, 250);
       timer.unref();
       return true;
@@ -100,7 +129,14 @@ export function macGateConfinement(logPath: string, pid: number, startedAt: stri
       }
       return signaled;
     },
-    dispose() { if (timer) clearInterval(timer); timer = null; },
+    dispose() {
+      if (timer) clearInterval(timer);
+      timer = null;
+      try {
+        const guardian = registeredGuardian ?? load().guardian;
+        if (executable) execFileSync(executable, ["signal", String(guardian.pid), String(guardian.born), "15"], { timeout: 3_000 });
+      } catch {}
+    },
     async prepare() { executable = await gateMacScannerExecutable(); },
   };
 }

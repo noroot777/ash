@@ -10,6 +10,7 @@ registerHooks({
       export function assertGateConfinementAvailable() {}
       export function gateConfinementUnavailable() { return null; }
       export function gateExecutionNotice() { return null; }
+      export async function gateSupervisorBootstrap() { return {}; }
       export function gateScopeNotice() { return null; }
       function fixture(pid) {
         return { id: "orchestration-fixture:" + pid,

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { openConfinement, reopenConfinement, type Confinement, type ConfineRead } from "./executors/kernel-confine.js";
 import { IS_MAC, IS_WINDOWS } from "./platform.js";
 import { gateJobConfinement } from "./accept-gate-confinement-job.js";
-import { isMacGateScope, macGateConfinement, MAC_GATE_NOTICE } from "./accept-gate-confinement-macos.js";
+import { isMacGateScope, macGateBootstrap, macGateConfinement, MAC_GATE_NOTICE } from "./accept-gate-confinement-macos.js";
 
 export type GateConfinement = Omit<Confinement, "enroll" | "read"> & {
   enroll: (pid: number) => boolean | Promise<boolean>;
@@ -17,6 +17,7 @@ export function assertGateConfinementAvailable(): void {
 
 export const gateConfinementUnavailable = (): string | null => null;
 export const gateExecutionNotice = (): string | null => IS_MAC ? MAC_GATE_NOTICE : null;
+export const gateSupervisorBootstrap = async (logPath: string) => IS_MAC ? macGateBootstrap(logPath) : {};
 export const gateScopeNotice = (id: string | null | undefined): string | null =>
   id === "macos-observed" || isMacGateScope(id) ? MAC_GATE_NOTICE : null;
 

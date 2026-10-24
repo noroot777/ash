@@ -16,9 +16,9 @@
 // V1 明确不做:team/duet 模式。跨机器的身份与鉴权见 handoff-identity.ts(本机身份)、
 // handoff-peer-client.ts(出站核对对端)、handoff-peers.ts(入站审批)。
 import { hostname } from "node:os";
-import { existsSync, statSync } from "node:fs";
-import { readdir, readFile, appendFile } from "node:fs/promises";
-import { join, win32 } from "node:path";
+import { existsSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
+import { win32 } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, queueItems, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
@@ -26,7 +26,6 @@ import { claimTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { expandHome, worktreePathFor } from "./git.js";
 import { discardMigratedWorkspace } from "./workspace-cleanup.js";
-import { RUNS_DIR } from "./paths.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { handoffActorId } from "./auth/handoff-outbound.js";
@@ -40,10 +39,10 @@ import { outboundHolder } from "@ash/shared/handoff";
 type TaskScopedPreflightResult = HandoffPreflightResult & { taskScopedReturn: boolean };
 
 // 传输协议类型/错误类/尺寸常量在 handoff-types.ts(导出、导入、HTTP 面三处共用)。
-import { HandoffError, MAX_FILE_BYTES } from "./handoff-types.js";
+import { HandoffError } from "./handoff-types.js";
 import type { HandoffManifest } from "./handoff-types.js";
 // 盘点与打包(会话文件、runs 产物、git bundle)在 handoff-collect.ts,这里只留流程编排。
-import { collectFreeWorkflow, collectRunArtifacts, collectSessionFiles, packGitState } from "./handoff-collect.js";
+import { collectFreeWorkflow, collectRunArtifacts, collectRunArtifactTexts, collectSessionFiles, packGitState } from "./handoff-collect.js";
 // 出站请求一律走 handoff-peer-client:每个请求带身份签名,且**打包前**先核对对端指纹
 // (地址会漂,而接力推的是整个仓库和会话历史)。原理见那个文件顶部。
 import {
@@ -273,18 +272,7 @@ export async function preflightHandoff(
     task.body, task.resumePrompt ?? "", task.question ?? "",
     ...pendingMsgs.flatMap((x) => [x.text, x.attachments]),
   ];
-  const runRoot = join(RUNS_DIR, taskId);
-  if (existsSync(runRoot)) {
-    const walkTexts = async (dir: string): Promise<void> => {
-      for (const entry of await readdir(dir, { withFileTypes: true })) {
-        const abs = join(dir, entry.name);
-        if (entry.isDirectory()) { await walkTexts(abs); continue; }
-        if (!entry.isFile() || !isTextRel(entry.name) || statSync(abs).size > MAX_FILE_BYTES) continue;
-        uploadTexts.push(await readFile(abs, "utf8"));
-      }
-    };
-    await walkTexts(runRoot);
-  }
+  uploadTexts.push(...await collectRunArtifactTexts(taskId, notes));
   // 盘点也过授权闸:对话框里报的数字必须就是真会带走的那批(uploads.ts readableUploads)。
   const uploads = await collectUploads(uploadTexts, notes, true, await packGateFor(task));
   // 能力握手:对端跑不跑得动这个任务。判据与身份核对同档 —— 在打包之前就要知道
