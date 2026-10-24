@@ -4,9 +4,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
-import { reasoningEffortsFor } from "@ash/shared/cli-presets";
+import { isReasoningEffortSupported, reasoningEffortsFor, resolveReasoningEfforts } from "@ash/shared/cli-presets";
 import { eventQueue } from "../src/executors/event-queue.js";
-import { parseKimiModels } from "../src/executors/kimi-models.js";
+import { kimiEffortPreflight, parseKimiModels } from "../src/executors/kimi-models.js";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 import { augmentedEnv } from "../src/executors/bin-resolve.js";
 
@@ -96,6 +96,64 @@ try {
   assert.equal(JSON.stringify(parsed).includes("never-return-this"), false);
   assert.deepEqual(reasoningEffortsFor("kimi", "kimi-code/K3.1-Pro", parsed.modelEfforts), ["low", "high", "max"]);
   assert.deepEqual(reasoningEffortsFor("kimi", "custom", parsed.modelEfforts), []);
+  for (const model of [null, "", "unknown-model", "kimi-code/future-model"]) {
+    assert.deepEqual(reasoningEffortsFor("kimi", model, parsed.modelEfforts), []);
+    assert.equal(resolveReasoningEfforts("kimi", model, parsed.modelEfforts).source, "cli-fallback");
+    for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+      assert.equal(isReasoningEffortSupported("kimi", model, effort, parsed.modelEfforts), false);
+    }
+    assert.equal(isReasoningEffortSupported("kimi", model, null, parsed.modelEfforts), true);
+  }
+  for (const model of ["k3", "k3-256k", "k3.1-pro", "k3.1-pro-highspeed", "kimi-for-coding"]) {
+    assert.deepEqual(reasoningEffortsFor("kimi", `kimi-code/${model}`), ["low", "high", "max"]);
+    assert.equal(isReasoningEffortSupported("kimi", `kimi-code/${model}`, "medium"), false);
+  }
+  assert.deepEqual(reasoningEffortsFor("kimi", "kimi-code/kimi-for-coding-highspeed"), []);
+  assert.deepEqual(reasoningEffortsFor("kimi", "kimi-code/k3.1-pro", { "kimi-code/k3.1-pro": ["high"] }), ["high"]);
+  for (const args of [[], ["--model", "unknown"], ["--model", "kimi-code/k3.1-pro"], ["-m", "kimi-code/k3.1-pro"]]) {
+    assert.ok(kimiEffortPreflight({ args, reasoningEffort: "medium" }));
+  }
+  assert.equal(kimiEffortPreflight({ args: ["--model", "kimi-code/k3.1-pro"], reasoningEffort: "high" }), null);
+  assert.equal(kimiEffortPreflight({ args: [], reasoningEffort: undefined }), null);
+  for (const args of [
+    ["--model=kimi-code/k3.1-pro"], ["-mkimi-code/k3.1-pro"], ["-m=kimi-code/k3.1-pro"],
+    ["--model", "unknown", "-m", "kimi-code/k3.1-pro", "-p", "--model=unknown"],
+    ["--model", "kimi-code/k3.1-pro", "--session", "--model=unknown"],
+  ]) {
+    assert.equal(kimiEffortPreflight({ args, reasoningEffort: "high" }), null);
+  }
+  for (const override of [
+    { reasoningEffort: "medium" },
+    { reasoningEffort: "high", extraArgs: ["--model=unknown"] },
+    { reasoningEffort: "high", extraArgs: ["-munknown"] },
+    { reasoningEffort: "high", extraArgs: ["-m", "kimi-code/kimi-for-coding-highspeed"] },
+  ]) {
+    const blocked = new GenericCliExecutor(kimiSpec, {
+      bin: process.execPath, model: "kimi-code/k3.1-pro", ...override,
+    }).run({ cwd: directory, prompt: "--model=kimi-code/k3.1-pro" });
+    const blockedEvents: AgentEvent[] = [];
+    for await (const event of blocked.events) blockedEvents.push(event);
+    assert.ok(blockedEvents.some((event) => event.kind === "error" && /智能水平/.test(event.message)));
+    assert.ok(blockedEvents.some((event) => event.kind === "done" && event.exitStatus === 1));
+  }
+  for (const runOverride of [{ model: "unknown" }, { extraArgs: ["--model", "unknown"] }]) {
+    const blocked = new GenericCliExecutor(kimiSpec, {
+      bin: process.execPath, model: "kimi-code/k3.1-pro", reasoningEffort: "high",
+    }).run({ cwd: directory, prompt: "test", ...runOverride });
+    const blockedEvents: AgentEvent[] = [];
+    for await (const event of blocked.events) blockedEvents.push(event);
+    assert.ok(blockedEvents.some((event) => event.kind === "error" && /无法确认/.test(event.message)));
+    assert.ok(blockedEvents.some((event) => event.kind === "done" && event.exitStatus === 1));
+  }
+  const { ensureSchema } = await import("../src/db/index.js");
+  const { resolveExecutorFor } = await import("../src/executors/index.js");
+  await ensureSchema();
+  for (const model of [undefined, "unknown-model"]) {
+    await assert.rejects(() => resolveExecutorFor({ type: "kimi", model, reasoningEffort: "medium" }), /无法确认实际模型/);
+  }
+  await assert.rejects(() => resolveExecutorFor({ type: "kimi", model: "kimi-code/k3.1-pro", reasoningEffort: "medium" }), /不支持思考强度/);
+  assert.equal((await resolveExecutorFor({ type: "kimi", model: "kimi-code/k3.1-pro", reasoningEffort: "high" })).reasoningEffort, "high");
+  assert.equal((await resolveExecutorFor({ type: "kimi" })).reasoningEffort, undefined);
   for (const invalid of ["no json", "null", "[]", '{"models":[]}', '{"models":"bad"}']) {
     assert.deepEqual(parseKimiModels(invalid, "").models, []);
   }

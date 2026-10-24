@@ -2,7 +2,7 @@ import { createInterface } from "node:readline";
 import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
-import { parseKimiModels } from "../kimi-models.js";
+import { kimiEffortPreflight, parseKimiModels } from "../kimi-models.js";
 import type { CliParser, CliParserContext, CliSpec } from "./types.js";
 
 // Kimi Code 的 stream-json 是 OpenAI chat message 风格,不是 Claude Code 的
@@ -146,6 +146,7 @@ export const kimiSpec: CliSpec = {
     "运行 npm run setup 注册用户级 ash MCP；未注册时无法调用 complete_task。",
   models: { args: ["provider", "list", "--json"], parse: parseKimiModels },
   exec: {
+    preflight: kimiEffortPreflight,
     // prompt 模式自身已经自动批准;--yolo/--auto 与 -p 冲突,这里只固定结构化输出。
     baseArgs: ["--output-format", "stream-json"],
     prompt: { via: "flag", flag: "-p" },

@@ -5,6 +5,7 @@ import {
   isReasoningEffortSupported,
   REASONING_EFFORT_DETAIL,
   reasoningEffortsFor,
+  resolveReasoningEfforts,
 } from "@ash/shared/cli-presets";
 import { CaretDown, Warning } from "@phosphor-icons/react";
 import { useCliModelCatalog } from "../lib/cliModelCatalog.ts";
@@ -74,10 +75,11 @@ export function EffortPicker({
     return !type && value && !base.includes(value) ? [...base, value] : base;
   }, [model, probed, type, value]);
   const supported = !type || isReasoningEffortSupported(type, model, value, probed);
+  const unknown = type === "kimi" && resolveReasoningEfforts(type, model, probed).source === "cli-fallback";
 
   // 这个模型没有档位可选：胶囊只作说明用（选过的值仍要显示，否则用户看不见要清什么）。
   const empty = efforts.length === 0;
-  const pickable = !disabled && (!empty || !!value);
+  const pickable = !disabled && (!empty || !!value || unknown);
   const open = (controlledOpen ?? localOpen) && pickable;
   // enabled 必须跟着 open 走：这颗胶囊常常挂载在还没布局好的容器里（对话框、内嵌
   // 面板），挂载那一刻量触发器会拿到一个全 0 的 rect，面板就被钉死在视口左上角，
@@ -92,11 +94,13 @@ export function EffortPicker({
     if (controlledOpen === undefined) setLocalOpen(next);
     onOpenChange?.(next);
   };
-  const hint = !supported
-    ? `${model || "当前模型"} 不支持 ${value}`
-    : empty
-      ? "该模型没有可调档位"
-      : null;
+  const hint = unknown
+    ? "尚未确认实际模型的智能水平；请先明确选择模型并刷新模型列表，或跟随执行器"
+    : !supported
+      ? `${model || "当前模型"} 不支持 ${value}`
+      : empty
+        ? "该模型没有可调档位"
+        : null;
 
   useDismissable({
     enabled: open,
@@ -167,16 +171,16 @@ export function EffortPicker({
         disabled={!pickable}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`${label}：${value || followLabel}${supported ? "" : "（当前模型不支持）"}；点击更改`}
+        aria-label={`${label}：${value || followLabel}${unknown ? "（模型能力未知）" : supported ? "" : "（当前模型不支持）"}；点击更改`}
         onClick={() => changeOpen(!open)}
       >
         {!supported && <Warning size={11} weight="fill" aria-hidden="true" />}
-        <em>{value || (empty ? "无档位" : "跟随")}</em>
+        <em>{value || (unknown ? "跟随" : empty ? "无档位" : "跟随")}</em>
         {pickable && <CaretDown size={9} weight="bold" aria-hidden="true" />}
       </button>
       {/* chip 与 segment 都挤在一排里，多一行字会把工具条/胶囊撑变形：那里靠红色警告态
           加浮层里的说明。 */}
-      {!supported && variant === "field" && <small className="effort-picker-warning">{hint}</small>}
+      {(unknown || !supported) && variant === "field" && <small className="effort-picker-warning">{hint}</small>}
       {panel && createPortal(panel, document.body)}
     </div>
   );

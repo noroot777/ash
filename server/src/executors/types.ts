@@ -1,6 +1,7 @@
 import type { CleanupResult } from "./kill.js";
 import type { ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentType } from "@ash/shared";
+import type { ModelEffortMap } from "@ash/shared/cli-presets";
 import type { RunTracePaths } from "./diagnostics.js";
 import type { DetachedPaths } from "./detached.js";
 import type { CliCommand, CliGoal, CliSessionState } from "@ash/shared/cli-commands";
@@ -123,6 +124,7 @@ export interface ResidentHandle {
 // executors/index.ts 的 build(),专用类(claude/codex)与 GenericCliExecutor
 // 都吃同一个形状,所以目录里的 factory 可以直接挂进来。
 export interface ExecutorBuildOpts {
+  modelEfforts?: ModelEffortMap;
   /** profile 名,直接当 label(缺省时各执行器自己拼 `type@where·model`)。 */
   name?: string;
   model?: string;

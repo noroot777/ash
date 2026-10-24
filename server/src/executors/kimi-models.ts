@@ -1,5 +1,22 @@
-import { modelEffortKey } from "@ash/shared/cli-presets";
-import type { CliModelsSpec } from "./catalog/types.js";
+import { modelEffortKey, resolveReasoningEfforts } from "@ash/shared/cli-presets";
+import type { CliExecSpec, CliModelsSpec } from "./catalog/types.js";
+
+export const kimiEffortPreflight: NonNullable<CliExecSpec["preflight"]> = ({ args, reasoningEffort, modelEfforts }) => {
+  if (!reasoningEffort) return null;
+  let model: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === "-p" || argument === "--prompt" || argument === "--session" || argument === "-S") index += 1;
+    else if (argument === "--model" || argument === "-m") model = args[++index];
+    else if (argument.startsWith("--model=")) model = argument.slice("--model=".length);
+    else if (argument.startsWith("-m") && argument.length > 2) model = argument.slice(argument[2] === "=" ? 3 : 2);
+  }
+  const resolution = resolveReasoningEfforts("kimi", model, modelEfforts);
+  if (resolution.efforts.includes(reasoningEffort)) return null;
+  return resolution.source === "cli-fallback"
+    ? "Kimi Code 无法确认实际模型的智能水平能力；请先明确选择模型并刷新模型列表，或将智能水平设为跟随执行器"
+    : `Kimi Code 模型 ${model} 不支持智能水平 ${reasoningEffort}；可选：${resolution.efforts.join("、") || "跟随执行器"}`;
+};
 
 export const parseKimiModels: CliModelsSpec["parse"] = (stdout) => {
   try {

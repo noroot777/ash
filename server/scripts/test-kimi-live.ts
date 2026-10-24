@@ -116,7 +116,6 @@ capabilities = ["tool_use", "thinking"]
 support_efforts = ["low", "high", "max"]
 `);
   writeFileSync(join(home, "mcp.json"), JSON.stringify({ mcpServers: { ash: { command: process.execPath, args: [fixture] } } }));
-  const executor = new GenericCliExecutor(CLI_SPEC_BY_KEY.kimi, { bin, model: "ash-test", reasoningEffort: "high" });
   const env = {
     KIMI_CODE_HOME: home, KIMI_DISABLE_TELEMETRY: "1", ASH_TASK_ID: "kimi-test", ASH_TURN_TOKEN: "test-turn-token",
     KIMI_MODEL_NAME: undefined, KIMI_MODEL_API_KEY: undefined,
@@ -126,6 +125,18 @@ support_efforts = ["low", "high", "max"]
   const models = modelSpec.parse(modelOutput, "");
   assert.deepEqual(models.models, ["ash-test"]);
   assert.deepEqual(models.modelEfforts?.["ash-test"], ["low", "high", "max"]);
+  const executor = new GenericCliExecutor(CLI_SPEC_BY_KEY.kimi, {
+    bin, model: "ash-test", reasoningEffort: "high", modelEfforts: models.modelEfforts,
+  });
+  for (const model of [undefined, "ash-test"]) {
+    const invalid = new GenericCliExecutor(CLI_SPEC_BY_KEY.kimi, {
+      bin, model, reasoningEffort: "medium", modelEfforts: models.modelEfforts,
+    }).run({ cwd, prompt: "must not reach the model service", env });
+    const blocked: AgentEvent[] = [];
+    for await (const event of invalid.events) blocked.push(event);
+    assert.ok(blocked.some((event) => event.kind === "error" && /智能水平/.test(event.message)));
+    assert.equal(requests.length, 0, "unknown/default or unsupported effort must be rejected before the CLI sends a request");
+  }
   async function run(prompt: string, sessionId?: string): Promise<AgentEvent[]> {
     const handle = executor.run({ cwd, prompt, sessionId, env });
     const timer = setTimeout(() => handle.kill(), 60_000);

@@ -162,6 +162,9 @@ async function build(
   const probed = cachedModelEfforts(type);
   if (!isReasoningEffortSupported(type, model, reasoningEffort, probed)) {
     const resolution = resolveReasoningEfforts(type, model, probed);
+    if (type === "kimi" && resolution.source === "cli-fallback") {
+      throw new Error("Kimi Code 无法确认实际模型的智能水平能力；请先明确选择模型并刷新模型列表，或将智能水平设为跟随执行器");
+    }
     const source = resolution.source === "probe"
       ? `${type} CLI 报的`
       : resolution.source === "model-rule"
@@ -194,6 +197,7 @@ async function build(
       };
 
   const spec = cliSpec(type);
+  opts.modelEfforts = probed;
   // Claude Code 旧版会在真正读 prompt 之前直接拒绝 --effort。先问它自己的 help；
   // 不支持时仍构造执行器，但 run/openResident 走 failedChild，把错误留进会话记录，
   // 同时完全不启动真实 Claude 进程。

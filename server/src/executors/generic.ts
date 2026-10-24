@@ -2,10 +2,11 @@ import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
+import type { ModelEffortMap } from "@ash/shared/cli-presets";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
-import { cleanupAfterRun, killChild, redactSecrets, resumeFor, shq } from "./spawn.js";
+import { cleanupAfterRun, failedChild, killChild, redactSecrets, resumeFor, shq } from "./spawn.js";
 import { textParser } from "./catalog/parsers.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting } from "./markdown-image-stream.js";
@@ -54,6 +55,7 @@ export class GenericCliExecutor implements AgentExecutor {
   private speed?: "fast";
   private relay?: RelayConfig;
   private configOverrides?: Record<string, number>;
+  private readonly modelEfforts?: ModelEffortMap;
 
   constructor(spec: CliSpec, opts: ExecutorBuildOpts = {}) {
     this.spec = spec;
@@ -64,6 +66,7 @@ export class GenericCliExecutor implements AgentExecutor {
     this.speed = opts.speed;
     this.bin = opts.bin ?? spec.bins[0];
     this.configOverrides = opts.configOverrides;
+    this.modelEfforts = opts.modelEfforts;
     // relay 只在 spec 声明了注入方式时才生效 —— 半截配置去撞一个必然 401 的端点,
     // 不如老老实实用 CLI 自己的官方账号(同 executors/index.ts 的 loadRelay 口径)。
     this.relay = spec.exec.relay ? opts.relay : undefined;
@@ -86,7 +89,10 @@ export class GenericCliExecutor implements AgentExecutor {
     const commandLine = redactSecrets(
       `${this.bin} ${shown.join(" ")}${stdin ? " <prompt via stdin>" : ""}`,
     );
-    const child = spawnForRun(opts.cwd, this.bin, args, stdin ? opts.prompt : "", { ...this.env(), ...opts.env }, opts.detach);
+    const rejection = this.spec.exec.preflight?.({ args, reasoningEffort: this.reasoningEffort, modelEfforts: this.modelEfforts });
+    const child = rejection
+      ? failedChild(rejection)
+      : spawnForRun(opts.cwd, this.bin, args, stdin ? opts.prompt : "", { ...this.env(), ...opts.env }, opts.detach);
     const lifecycle = { stopRequested: false };
     const parser = this.spec.exec.parser ?? textParser;
     return {
