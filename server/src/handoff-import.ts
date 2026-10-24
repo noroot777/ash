@@ -13,6 +13,7 @@
 //   - handoff-uploads.ts:上传附件本体与各处文本里的路径改写
 import { and, eq, inArray } from "drizzle-orm";
 import { existsSync } from "node:fs";
+import { importMessageOrigin } from "./handoff-messages.js";
 import { db } from "./db/index.js";
 import {
   freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
@@ -454,6 +455,7 @@ async function importValidated(
   // 自由工作流的审查历史(翻译成本机行,落库在下面两条路径里各自执行)。
   const freeWorkflowRows = await buildFreeWorkflowRows(m.task.id, m.freeWorkflow, notes);
   const messageRows = messages.map((msg) => ({
+    ...importMessageOrigin(msg, notes),
     id: id(),
     taskId: m.task.id,
     text: msg.text,

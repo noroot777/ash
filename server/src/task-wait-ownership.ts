@@ -118,6 +118,12 @@ export async function questionWaitOrigin(transaction: ConclusionTransaction, own
     : { kind: "ordinary" };
 }
 
+export async function checkpointWaitOrigin(transaction: ConclusionTransaction, owner: TaskRow): Promise<WaitOrigin> {
+  const checkpoint = owner.waitOwnership?.checkpoint;
+  return checkpoint?.generation === owner.resumePromptGeneration ? checkpoint.origin
+    : questionWaitOrigin(transaction, { ...owner, waitOwnership: null });
+}
+
 export async function expireClosedTaskWait(transaction: ConclusionTransaction, owner: TaskRow): Promise<boolean> {
   if (owner.mode !== "single" || ["running", "queued"].includes(owner.status) || isTurnClaimed(owner.id)) return false;
   const scope = await activeReviewScope(transaction, owner);

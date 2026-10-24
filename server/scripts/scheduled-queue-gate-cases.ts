@@ -137,11 +137,6 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   await stopWhenLive(gE);
   console.log("✓ 提问答复过队列认领:前项在跑时答复落托盘等待,结束后首轮送达一次;独立任务照旧立即续跑");
 
-  // ── 旁路答复不占位:队列中已完成任务的审查提问(第 9 轮审查拦验收)──────────────
-  // 队列 [gF(done), gG(done)],gF 的提问来自 reviewer 会话:答复续跑是旁路回合,不是
-  // 任务的执行 —— 不得过队列认领落 queued,否则 orchestrator 读不到原终态,followUpFrom
-  // 写成 null,停止这轮审查会把 done 结算成 canceled(审查实测:队列场景 stop 后变
-  // 已取消,不在队列的对照保持 done)。
   const gF = "scheduled-single-gate-f";
   const gG = "scheduled-single-gate-g";
   const gFAnswer = "请覆盖取消与恢复(review-gate);只继续审查,保持运行等待引导";
@@ -149,7 +144,6 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
     { ...taskRow(gF, "claude", "done"), mode: "single", team: null, question: "审查时希望覆盖哪些失败路径？" },
     { ...taskRow(gG, "claude", "done"), mode: "single", team: null },
   ]);
-  // 提问者是审查旁路会话(role=reviewer):askingAgentFor 按最近回合选中它。
   await db.insert(sessions).values({
     id: "scheduled-gate-f-reviewer", taskId: gF, role: "reviewer", agentType: "claude",
     executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-f-reviewer-cli", startedAt: at,
@@ -158,21 +152,24 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
     { queueId: "scheduled-gate-queue-3", taskId: gF, position: 0, createdAt: at },
     { queueId: "scheduled-gate-queue-3", taskId: gG, position: 1, createdAt: at },
   ]);
+  const { seedScheduledReviewQuestion } = await import("./scheduled-review-fixture.js");
+  await seedScheduledReviewQuestion(gF, "审查时希望覆盖哪些失败路径？", at);
   const reviewRes = await api.request(`/tasks/${gF}/answer`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answer: gFAnswer }),
   });
   assert.equal(reviewRes.status, 200, "审查提问的答复应被接住");
-  assert.equal((await reviewRes.json() as { queued?: boolean }).queued, undefined, "旁路答复不走队列认领,不该报排队");
+  assert.equal((await reviewRes.json() as { queued?: boolean }).queued, true, "审查答复应通过来源绑定消息投递");
   await waitFor(() => countIn(leadLog, gFAnswer) > 0, "审查答复没有直送进审查会话");
   await waitFor(async () => (await taskStatusOf(gF)) === "running", "答复送达后审查续跑应在运行");
   const gFRow = (await db.select().from(tasks).where(eq(tasks.id, gF))).at(0)!;
   assert.equal(gFRow.followUpFrom, "done", "旁路答复必须保住原终态 —— 占位落 queued 会把 followUpFrom 吃成 null");
   await stopWhenLive(gF);
   assert.equal(await taskStatusOf(gF), "done", "停止这轮审查后任务必须回到原来的「已完成」,不是已取消");
-  assert.equal(
-    (await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, gF))).length,
-    0, "旁路答复不该在托盘留下执行型消息",
-  );
+  const reviewMessages = await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, gF));
+  assert.equal(reviewMessages.length, 1);
+  assert.equal(reviewMessages[0]!.status, "sent");
+  assert.equal(reviewMessages[0]!.execution, false);
+  assert(reviewMessages[0]!.origin?.startsWith("review-answer:"));
   console.log("✓ 旁路答复不占位:队列中 done 任务答复审查提问,直送续跑、停止后仍是已完成");
 
   // ── 直接回复与手动运行并发(第 ln9Q6IJEgmWf 链第 1 轮拦验收 1)──────────────────

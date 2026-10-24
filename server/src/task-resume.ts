@@ -11,6 +11,8 @@ import { freeReviewResumeOptions } from "./free-workflow.js";
 import { activeReviewEvidence } from "./review-continuation.js";
 import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
 import { withTurnPreflight } from "./turn-entry-guard.js";
+import { checkpointWaitOrigin } from "./task-wait-ownership.js";
+import { releaseTurn, turnIdentity } from "./runs.js";
 
 // Decide between a fresh run and a resume when (re)starting a single task. A task
 // that was interrupted keeps a session row with a cliSessionId (server restart
@@ -32,6 +34,7 @@ async function resumeOrRunClaimedTask(taskId: string,
   // `actingUserId` 一路原样往下传:它决定这一轮烧谁的 key(§八)。这里只是个中转,
   // 不给默认值 —— 后端触发的那几路本来就该退回任务归属人。
   const acting = opts.actingUserId ?? undefined;
+  const held = opts.turnHeld ? turnIdentity(taskId) : null;
   // 启动来源与回合所有权是两件事,不能共用 turnHeld 当判据(第 6 轮审查:队列推进带
   // turnHeld 后,待发送交接误享了手动运行的冻结豁免,穿透分组暂停)。无人值守的启动
   // (队列推进/恢复分组/上游唤醒)从预检查到 spawn 隔着一串 await,用户可能在认领之前
@@ -47,10 +50,10 @@ async function resumeOrRunClaimedTask(taskId: string,
   // 回合：续跑必须带回 reviewer 身份与配置，否则以 single 恢复实现会话，审查链收不了尾。
   const rp = task.resumePrompt;
   if (rp) {
-    const checkpoint = task.waitOwnership?.checkpoint;
-    const ordinary = checkpoint?.generation === task.resumePromptGeneration && checkpoint.origin.kind === "ordinary";
+    const origin = await db.transaction((transaction) => checkpointWaitOrigin(transaction, task), { behavior: "immediate" });
+    const ordinary = origin.kind === "ordinary";
     const reviewerRoute = ordinary ? null : await freeReviewResumeOptions(taskId);
-    if (!ordinary && (task.verifyRound || task.reviewOf || reviewerRoute)) {
+    if (!ordinary) {
       const evidence = await db.transaction((transaction) => activeReviewEvidence(transaction, task), { behavior: "immediate" });
       const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
         actingUserId: acting, ...(reviewerRoute ?? {}),
@@ -67,7 +70,7 @@ async function resumeOrRunClaimedTask(taskId: string,
     // 是前端的门禁，改了不广播，长开的页面会一直把任务读成「在等续跑」）。
     // 凭证随身（见 task-resume-prompt.ts 文件头）：取走拿到 `{text, auto, generation}`，没送
     // 出去就原样带着它退回去 —— 只填回同一次占用腾出的那个空。
-    const receipt = await takeResumePrompt(taskId, rp);
+    const receipt = await takeResumePrompt(taskId, rp, task.resumePromptGeneration);
     if (receipt) {
       const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard, actingUserId: acting, ...(reviewerRoute ?? {}) });
       if (!started) {
@@ -77,9 +80,8 @@ async function resumeOrRunClaimedTask(taskId: string,
       }
       return;
     }
-    // CAS 没抢到 = 这段指令被另一路取走了(或 agent 刚换了新的一段)。**不能直接 return**:
-    // turnHeld 时回合已经原子占在我头上,返回就把它永久漏掉了。落到下面的通用路径
-    // (resume/fresh),turn 由 continueTask/runTask 照常接管并释放。
+    if (held && turnIdentity(taskId) === held) releaseTurn(taskId);
+    return;
   }
   const agent = (task.agentType as AgentType) ?? "claude";
   // 让位交接:托盘里已有**到期**的用户回复时,这次(队列推进/手动运行/重试)启动的

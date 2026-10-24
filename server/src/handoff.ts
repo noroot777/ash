@@ -16,6 +16,7 @@
 // V1 明确不做:team/duet 模式。跨机器的身份与鉴权见 handoff-identity.ts(本机身份)、
 // handoff-peer-client.ts(出站核对对端)、handoff-peers.ts(入站审批)。
 import { hostname } from "node:os";
+import { exportHandoffMessage } from "./handoff-messages.js";
 import { existsSync, statSync } from "node:fs";
 import { readdir, readFile, appendFile } from "node:fs/promises";
 import { join, win32 } from "node:path";
@@ -515,11 +516,7 @@ export async function exportHandoff(
         freeWorkflow,
         git: gitState,
         uploads,
-        messages: pendingMsgs.map((x) => ({
-          text: x.text, attachments: x.attachments, agent: x.agent, model: x.model,
-          reasoningEffort: x.reasoningEffort, sessionRole: x.sessionRole,
-          mode: x.mode, sendAt: x.sendAt, createdAt: x.createdAt,
-        })),
+        messages: pendingMsgs.map(exportHandoffMessage),
         schedule: scheduleRow
           ? {
               kind: scheduleRow.kind, at: scheduleRow.at, cron: scheduleRow.cron,

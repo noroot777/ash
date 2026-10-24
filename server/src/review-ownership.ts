@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { freeReviewRuns, regressionEvidence, tasks } from "./db/schema.js";
+import { freeReviewRuns, regressionEvidence, scheduledMessages, tasks } from "./db/schema.js";
 import type { ReviewTargetIdentity } from "./db/schema-regression-evidence.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir } from "./review-evidence.js";
@@ -82,8 +82,16 @@ export async function reviewDeliveryAuthority(transaction: ConclusionTransaction
   const owner = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
   if (!owner || (state.taskId !== taskId && (delivery.kind === "repair" || owner.reviewOf !== state.taskId
     || !owner.reviewRound || state.directory !== reviewRoundDir(state.taskId, owner.reviewRound)))) throw new ReviewSuperseded();
-  const authority = delivery.kind === "repair" ? settlementAuthority(state)
+  let authority = delivery.kind === "repair" ? settlementAuthority(state)
     : { directory: state.directory, generation: state.generation, target: state.targetIdentity };
+  if (delivery.kind === "repair" && !reviewIdentityMatches(owner, authority.target)) {
+    const transfer = owner.waitOwnership?.repairDelivery;
+    const message = (await transaction.select().from(scheduledMessages).where(eq(scheduledMessages.id, delivery.messageId)))[0];
+    if (!transfer || transfer.messageId !== delivery.messageId || transfer.generation !== delivery.generation
+      || !message || message.taskId !== taskId || message.status !== "pending"
+      || message.origin !== `review-settlement:${delivery.generation}`) throw new ReviewSuperseded();
+    authority = { ...authority, target: transfer.identity };
+  }
   await assertReviewAuthority(transaction, authority, delivery.kind !== "repair");
   if (delivery.kind !== "repair" && (await activeReviewEvidence(transaction, owner))?.directory !== state.directory) throw new ReviewSuperseded();
   if (delivery.kind === "answer" && (state.settlement || state.continuation?.phase !== "delivery"

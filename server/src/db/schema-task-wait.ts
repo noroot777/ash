@@ -1,4 +1,5 @@
 import type { ReviewTargetIdentity } from "./schema-regression-evidence.js";
+import type { TaskStatus } from "@ash/shared";
 
 export type WaitOrigin = { kind: "ordinary" } | {
   kind: "review" | "unknown";
@@ -7,6 +8,14 @@ export type WaitOrigin = { kind: "ordinary" } | {
 };
 
 export type TaskWaitOwnership = {
+  repairDelivery?: { messageId: string; generation: string; identity: ReviewTargetIdentity };
+  start?: {
+    directory: string;
+    generation: string;
+    identity: ReviewTargetIdentity;
+    priorStatus: TaskStatus;
+    repair?: true;
+  };
   turn?: { identity: ReviewTargetIdentity; origin: WaitOrigin };
   question?: {
     occupancy: string;

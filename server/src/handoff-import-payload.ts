@@ -6,6 +6,7 @@
 // ref 名、相对路径、解码后的体积各有一道闸,任何一条不过就跳过并留注记,而不是把它
 // 写到本机文件系统上某个算出来的位置。
 import { mkdirSync, rmSync } from "node:fs";
+import { validateMessageOrigin } from "./handoff-messages.js";
 import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { claudeProjectDir } from "./handoff-collect.js";
@@ -84,6 +85,7 @@ export function validate(input: unknown): HandoffManifest {
   if (msgs != null) {
     if (!Array.isArray(msgs) || msgs.length > 200) throw new HandoffError("messages 非法(最多 200 条)");
     for (const x of msgs as HandoffMessagePayload[]) {
+      validateMessageOrigin(x);
       if (!isStr(x.text) || !isStr(x.attachments) || !isStr(x.mode) || !isStr(x.sendAt) || !isStr(x.createdAt)) {
         throw new HandoffError("message 载荷字段缺失");
       }

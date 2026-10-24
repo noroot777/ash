@@ -634,6 +634,7 @@ export async function continueTask(
     frozenBeforeSpawn = err instanceof FrozenTurn;
     // 失败交代 + 基线对账 + 状态恢复,整段住在 turn-start-failure.ts(顺序讲究见其顶部)。
     await recoverFailedTurnStart({
+      startReceipt: reviewStart,
       taskId,
       message: String(err instanceof Error ? err.message : err),
       sessionRole, agentType,

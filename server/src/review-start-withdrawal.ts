@@ -11,12 +11,14 @@ import { recordTaskStatus } from "./task-start-status.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import { claimTurn, isTurnClaimed, releaseTurn } from "./runs.js";
+import { clearGuardedStart, withdrawRepairStart } from "./guarded-turn-start.js";
 
-export type ReviewStartReceipt = { directory: string; generation: string; identity: ReviewTargetIdentity };
+export type ReviewStartReceipt = { directory: string; generation: string; identity: ReviewTargetIdentity; repair?: true };
 
 export async function withdrawReviewStart(taskId: string, receipt: ReviewStartReceipt | undefined,
   priorStatus: TaskStatus | null): Promise<void> {
   if (!receipt) return;
+  if (receipt.repair) return withdrawRepairStart(taskId, receipt);
   const withdrawn = await db.transaction(async (transaction) => {
     const owner = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
     const state = (await transaction.select().from(regressionEvidence)
@@ -39,6 +41,7 @@ export async function withdrawReviewStart(taskId: string, receipt: ReviewStartRe
       target: state.targetIdentity, ...(freeRound ? { freeRoundId: freeRound.id } : {}),
     }, continuation: { ...state.continuation, phase: "exited", start: undefined } }).where(eq(regressionEvidence.directory, receipt.directory));
     await clearReviewWait(transaction, owner, state);
+    await clearGuardedStart(transaction, owner);
     await transaction.update(tasks).set({ status, followUpFrom: null, nativeTurn: false, completeConfirmedAt: null,
       ...directionIdentityCleared(), updatedAt: now(), ...(["done", "failed", "canceled"].includes(status) ? { endedAt: now() } : {}),
     }).where(eq(tasks.id, taskId));
@@ -54,6 +57,13 @@ export async function withdrawReviewStart(taskId: string, receipt: ReviewStartRe
 }
 
 export async function reconcileReviewStarts(ownerTaskId?: string): Promise<void> {
+  const owners = await db.select().from(tasks).where(ownerTaskId ? eq(tasks.id, ownerTaskId) : isNotNull(tasks.waitOwnership));
+  for (const owner of owners) {
+    const start = owner.waitOwnership?.start;
+    if (!start || isTurnClaimed(owner.id) || !claimTurn(owner.id)) continue;
+    try { await withdrawReviewStart(owner.id, start, start.priorStatus); }
+    finally { releaseTurn(owner.id); }
+  }
   const states = await db.select().from(regressionEvidence).where(isNotNull(regressionEvidence.continuation));
   for (const state of states) {
     const start = state.continuation?.start;

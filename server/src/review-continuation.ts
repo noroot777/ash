@@ -9,6 +9,8 @@ import { activeReviewEvidence, assertReviewAuthority, reviewDeliveryAuthority, r
   reviewTargetIdentity, type ReviewDelivery } from "./review-ownership.js";
 import { recordReviewWait, reviewWaitAuthorized, reviewWaitAtTurnStart, snapshotReviewWait } from "./review-wait.js";
 import { questionWaitMatches, questionWaitOrigin, reviewWaitOrigin, startTaskWaitTurn } from "./task-wait-ownership.js";
+import { rememberGuardedStart, clearGuardedStart } from "./guarded-turn-start.js";
+import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 
 export { activeReviewEvidence } from "./review-ownership.js";
 
@@ -60,6 +62,7 @@ export async function assertReviewTurnStart(taskId: string, turnToken: string, d
       await transaction.update(regressionEvidence).set({ continuation: { ...evidence.continuation, phase: "running", start: undefined } })
         .where(eq(regressionEvidence.directory, evidence.directory));
     }
+    await clearGuardedStart(transaction, task);
   }, { behavior: "immediate" });
 }
 
@@ -79,13 +82,18 @@ export async function queueReviewAnswer(transaction: ConclusionTransaction, task
 }
 
 export async function beginReviewContinuation(transaction: ConclusionTransaction, task: TaskRow, source: TurnSource,
-  turnToken: string, directionToken: string, delivery?: ReviewDelivery) {
+  turnToken: string, directionToken: string, delivery?: ReviewDelivery): Promise<ReviewStartReceipt | undefined> {
   const deliveredState = delivery ? await reviewDeliveryAuthority(transaction, delivery, task.id) : undefined;
   const state = await activeReviewEvidence(transaction, task, source);
   if (delivery && delivery.kind !== "repair" && (!state || state.directory !== deliveredState?.directory)) throw new ReviewSuperseded();
   const identity = { turnToken, directionToken, directionEpoch: task.directionEpoch + 1 };
   if (!state || delivery?.kind === "repair") {
     await snapshotReviewWait(transaction, task, identity, { kind: "ordinary" });
+    if (deliveredState && delivery?.kind === "repair") {
+      const receipt: ReviewStartReceipt = { directory: deliveredState.directory, generation: deliveredState.generation, identity, repair: true };
+      await rememberGuardedStart(transaction, task, receipt, delivery.messageId);
+      return receipt;
+    }
     return;
   }
   const current = (await transaction.select().from(tasks).where(eq(tasks.id, task.id)))[0];
@@ -98,5 +106,7 @@ export async function beginReviewContinuation(transaction: ConclusionTransaction
     continuation: { phase: "running", start: { ownerTaskId: task.id, identity }, wait: reviewWaitAtTurnStart(task, turnToken, directionToken),
       ...(state.continuation?.messageId ? { messageId: state.continuation.messageId } : {}) },
   }).where(eq(regressionEvidence.directory, state.directory));
-  return { directory: state.directory, generation: state.generation, identity };
+  const receipt = { directory: state.directory, generation: state.generation, identity };
+  await rememberGuardedStart(transaction, task, receipt);
+  return receipt;
 }
