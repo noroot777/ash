@@ -65,17 +65,7 @@ export function readEventForTask(task: TaskListItem, workers: TaskListItem[] = [
   return task.mode === "team" && !task.parentId ? teamEvent(task, workers) : terminalEvent(task);
 }
 
-/**
- * 「它在等一件**会自己回来**的事」。
- *
- * - `paused`：agent 调 pause_task 收尾的那一轮，绝大多数是挂了哨兵（哨兵有结果会把它叫醒），
- *   少数是在队列里等前一个任务 done —— 两种都有人会来叫它。
- * - `acceptGateRunning`：点了验收、那条命令正在工作区里跑（任务自己的 status 和 stage
- *   这期间一个字都不会变，不看这个字段就完全看不出来）。
- *
- * 有待答问题的不算：那一种等的是**你**，出路在你手上，所以留在静止的 attention 档。
- */
-const liveWork = (task: TaskListItem): boolean => !!task.acceptGateRunning || task.status === "paused";
+const liveWork = (task: TaskListItem): boolean => !!task.acceptGateRunning || !!task.monitorRunning;
 
 export function deriveTaskStatusIndicator(
   task: TaskListItem,
@@ -90,6 +80,7 @@ export function deriveTaskStatusIndicator(
     if (leadLive || workers.some((worker) => worker.status === "running" || worker.status === "queued")) {
       return "active";
     }
+    if (task.status === "paused" || workers.some(worker => worker.status === "paused")) return "attention";
     if (task.status === "backlog" && workers.every((worker) => worker.status === "backlog")) {
       return "pending";
     }
@@ -104,10 +95,6 @@ export function deriveTaskStatusIndicator(
     return failed ? "error" : "success";
   }
 
-  // 黄色分两种（用户 2026-10-23）：**等你**用静止的黄（有待答问题），**等一件会自己回来
-  // 的事**用呼吸的黄 —— 呼吸在这套界面里已经等于「在动」（active 那颗灰点就是这么读的）。
-  // 挂着哨兵的任务一定是 paused，正在跑验收前置命令的任务 status 一个字都不会变，
-  // 两者合起来就是 liveWork。
   if (task.question) return "attention";
   if (liveWork(task)) return "working";
   if (task.status === "paused") return "attention";

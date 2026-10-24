@@ -403,6 +403,7 @@ export interface Task {
    * 哪了」在任务列表上**一点痕迹都没有**。侧栏那颗圆点和会话页输入框上方那条都看它。
    */
   acceptGateRunning?: boolean;
+  monitorRunning?: boolean;
 }
 
 /**

@@ -165,6 +165,10 @@ export function useTasks(projectId?: string) {
 
   const connected = useServerEvents(
     useCallback((event) => {
+      if (event.type === "task.monitors") {
+        void refetch({ silent: true });
+        return;
+      }
       if (event.type === "task.created" || event.type === "task.updated") {
         setTasks((current) => {
           // SSE 星标变化的保护登记放在 updater 里（判定需要 current）；updater 可能被
@@ -186,7 +190,7 @@ export function useTasks(projectId?: string) {
       if (event.type === "task.stage" || event.type === "task.title" || event.type === "task.question") {
         setTasks((current) => current.map((task) => applyTaskMetadataEvent(task, event)));
       }
-    }, [projectId]),
+    }, [projectId, refetch]),
   );
 
   // SSE 没有事件 ID 也没有补发：断线窗口里错过的事件追不回来，页面会一直陈旧到该任务

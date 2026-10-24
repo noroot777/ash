@@ -71,7 +71,7 @@ try {
 
   // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
   // 带 delay（响应体迟到多久）或 status（直接给个 500）。不给就一直回 store.gate。
-  const open = async ({ gate, role = "admin", query = "", command, states, events = false, cancelOutcome = "canceled" } = {}) => {
+  const open = async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled" } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
     if (events) await page.addInitScript(() => {
       const streams = new Set();
@@ -83,7 +83,8 @@ try {
         for (const stream of streams) stream.onmessage?.({ data: JSON.stringify(event) });
       };
     });
-    const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, logText: "checking 42 / 640", command: command === undefined ? gate.command ?? null : command, gate };
+    const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, tasks, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate };
+    await page.route("**/api/tasks", route => json(route, store.tasks));
     await page.route("**/api/tasks/gate-task/accept-gate/log?*", route => route.fulfill({
       status: 200, contentType: "text/plain", body: store.logText,
     }));
@@ -494,6 +495,48 @@ try {
     const card = page.locator(wait ? ".accept-gate-wait" : ".accept-gate-card");
     await card.waitFor();
     assert.match(await card.innerText(), /尚待停止/);
+    await page.close();
+  }
+  {
+    const timestamp = new Date().toISOString();
+    const rows = [
+      { id: "single", title: "普通任务（暂停）", mode: "single", status: "paused" },
+      { id: "lead", title: "团队（执行者暂停）", mode: "team", status: "idle" },
+      { id: "worker", title: "执行者（暂停）", mode: "single", status: "paused", parentId: "lead" },
+    ].map(row => ({ projectId: "proj-1", updatedAt: timestamp, monitorRunning: false, ...row }));
+    const { page, store } = await open({ query: "?dots=1", events: true, tasks: rows });
+    const assertDots = async kind => {
+      for (const row of rows) {
+        const dot = page.locator(`[data-task-id="${row.id}"] .${row.mode === "team" ? "team" : "workspace"}-status-dot--${kind}`);
+        await dot.waitFor();
+        assert.equal(await dot.evaluate(element => getComputedStyle(element).animationName), kind === "working" ? "task-status-dot-pulse" : "none");
+      }
+    };
+    await assertDots("attention");
+    if (process.env.ASH_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/dots-paused.png` });
+    store.tasks = rows.map(row => ({ ...row, monitorRunning: row.id !== "lead" }));
+    await page.evaluate(() => window.emitGateEvent({ type: "task.monitors", taskId: "worker" }));
+    await assertDots("working");
+    if (process.env.ASH_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/dots-monitor-running.png` });
+    store.tasks = rows;
+    await page.evaluate(() => window.emitGateEvent({ type: "task.monitors", taskId: "worker" }));
+    await assertDots("attention");
+    await page.reload();
+    await assertDots("attention");
+    await page.close();
+  }
+  {
+    const previous = run();
+    const { page, store } = await open({ events: true, gate: { command: previous.command, running: null, latest: previous } });
+    await page.getByText("代码和命令都没再改过", { exact: false }).waitFor();
+    store.gate = { command: "npm run replacement", running: null, latest: { ...previous, stale: true } };
+    await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
+    await page.locator(".accept-gate-card").filter({ hasText: "npm run replacement" }).waitFor();
+    assert.doesNotMatch(await page.locator(".accept-gate-card").innerText(), /代码和命令都没再改过/);
+    if (process.env.ASH_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/command-invalidated.png` });
+    store.gate = { command: null, running: null, latest: previous };
+    await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
+    await page.locator(".accept-gate-card").waitFor({ state: "hidden" });
     await page.close();
   }
   console.log("accept gate card DOM regression passed");

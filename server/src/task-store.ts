@@ -2,7 +2,7 @@ import { and, eq, inArray, or } from "drizzle-orm";
 import { normalizeDuetConfig } from "@ash/shared/duet";
 import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
-import { acceptGateRuns, agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
+import { acceptGateRuns, agents, monitors, projects, queueItems, sessions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
 import { projectHealthLight } from "./git.js";
@@ -168,6 +168,9 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
     .from(queueItems)
     .where(inArray(queueItems.taskId, rows.map((r) => r.id)));
   const byQueueTask = new Map(items.map((q) => [q.taskId, q] as const));
+  const monitoring = new Set((await db.select({ taskId: monitors.taskId }).from(monitors)
+    .where(and(inArray(monitors.taskId, rows.map(row => row.id)), eq(monitors.status, "running"))))
+    .map(monitor => monitor.taskId));
   const gating = new Set((await db
     .select({ taskId: acceptGateRuns.taskId })
     .from(acceptGateRuns)
@@ -183,6 +186,7 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       queueId: q?.queueId ?? null,
       queuePosition: q?.position ?? null,
       acceptGateRunning: gating.has(r.id),
+      monitorRunning: monitoring.has(r.id),
     };
   });
 }
