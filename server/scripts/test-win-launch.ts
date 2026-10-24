@@ -193,6 +193,29 @@ try {
   delete process.env.COMSPEC;
   assert.equal(userShellLaunch("ls").file, "cmd.exe", "COMSPEC 没设时回退 cmd.exe");
 
+  for (const command of [
+    '.\\kb.ps1 test full',
+    '  .\\KB.PS1 test full',
+    '".\\scripts with spaces\\kb.ps1" test "full suite"',
+    "& '.\\scripts with spaces\\kb.ps1' test full",
+  ]) {
+    const launch = userShellLaunch(command);
+    assert.match(launch.file, /(?:pwsh|powershell)\.exe$/i, "ps1 必须由 PowerShell 执行，不能交给 cmd 的文件关联");
+    assert.equal(launch.windowsVerbatimArguments, undefined, "PowerShell 不沿用 cmd 的 verbatim 转义");
+    assert.ok(launch.args.includes("-NonInteractive"));
+    assert.ok(launch.args.includes("-NoProfile"));
+    assert.equal(launch.args[launch.args.indexOf("-ExecutionPolicy") + 1], "Bypass");
+    const script = Buffer.from(launch.args.at(-1)!, "base64").toString("utf16le");
+    assert.ok(script.includes(command.trimStart()), "编码后仍保留用户命令与参数");
+    assert.ok(script.includes("$LASTEXITCODE"), "脚本退出码不能被 PowerShell 吞掉");
+  }
+  for (const command of [
+    'echo .\\kb.ps1',
+    'node test.js && npm run build',
+    'powershell.exe -File .\\kb.ps1 test full',
+    '.\\kb.ps1.cmd test full',
+  ]) assert.equal(userShellLaunch(command).file, "cmd.exe", "非 ps1 入口保持原有 cmd 语义");
+
   console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行）全部通过");
 } finally {
   rmSync(stage, { recursive: true, force: true });

@@ -78,6 +78,42 @@ export function encodePowerShellCommand(script: string): string {
   return Buffer.from(script, "utf16le").toString("base64");
 }
 
+/**
+ * POSIX 沿用登录 sh；Windows 普通命令沿用 cmd，保留 npm/批处理/&& 的兼容性。
+ * ps1 入口显式交给 PowerShell，避免 cmd 通过文件关联弹出「选择打开方式」。
+ * PowerShell 路径复用本机探测，命令编码后传入，带空格的脚本路径通过 & 调用。
+ */
+export function userShellLaunch(command: string): {
+  file: string;
+  args: string[];
+  windowsVerbatimArguments?: true;
+} {
+  if (!IS_WINDOWS) return { file: "sh", args: ["-lc", command] };
+  const isPowerShellScript = /^\s*(?:&\s*)?(?:"[^"\r\n]+\.ps1"|'[^'\r\n]+\.ps1'|[^\s"'|&;<>]+\.ps1)(?=\s|$|[|&;<>])/i.test(command);
+  if (isPowerShellScript) {
+    const invocation = /^\s*&/.test(command) ? command : `& ${command.trimStart()}`;
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+      "$OutputEncoding = [Console]::OutputEncoding",
+      invocation,
+      "$__ashSucceeded = $?",
+      "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
+      "if (-not $__ashSucceeded) { exit 1 }",
+      "exit 0",
+    ].join("\n");
+    return {
+      file: powerShellExe() ?? "powershell.exe",
+      args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-OutputFormat", "Text", "-EncodedCommand", encodePowerShellCommand(script)],
+    };
+  }
+  return {
+    file: process.env.COMSPEC || "cmd.exe",
+    args: ["/d", "/s", "/c", `"${command}"`],
+    windowsVerbatimArguments: true,
+  };
+}
+
 const encodeCommand = encodePowerShellCommand;
 
 /** 同步跑一段 PowerShell,拿 stdout。失败(含 PowerShell 不可用)一律空串。 */
@@ -556,6 +592,6 @@ function uniquePids(tokens: string[]): number[] {
 // 这个文件是「平台差异的单点」那个门,拆分不改变门的位置(见 platform-paths.ts 顶部)。
 export {
   boundaryKey, isInsidePath, windowsPathRejection, windowsLongPathHint,
-  PATH_DELIMITER, splitPathList, PATH_SEP, hostInfo, splitPathSegments, userShellLaunch,
+  PATH_DELIMITER, splitPathList, PATH_SEP, hostInfo, splitPathSegments,
 } from "./platform-paths.js";
 export type { HostInfo } from "./platform-paths.js";

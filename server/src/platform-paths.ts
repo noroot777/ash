@@ -1,5 +1,5 @@
 // 平台差异里**纯路径/字符串**的那一半:边界比较、Windows 长路径、PATH 拆分、
-// 「server 跑在哪台机器上」、用户自己写的那条命令行。
+// 「server 跑在哪台机器上」。
 //
 // 为什么跟 platform.ts 分家:那边是**系统调用**(进程表、击杀、端口占用者),这边一个
 // 系统调用都不发,全是纯函数 —— 两摊的测试方式、改动频率都不一样,而合在一份文件里已经
@@ -124,38 +124,4 @@ export function hostInfo(): HostInfo {
 /** 按两种分隔符一起切路径 —— Windows 上 `/` 和 `\` 都合法,只认一种会漏。 */
 export function splitPathSegments(p: string): string[] {
   return p.split(IS_WINDOWS ? /[\\/]+/ : /\/+/).filter(Boolean);
-}
-
-// ── 用户自己写的那条命令行 ─────────────────────────────────────────────────
-
-/**
- * 跑一条**用户自己写的命令行**(预览命令、workflow 的 cmd 步骤)时该 spawn 什么。
- *
- * POSIX:`sh -lc <cmd>`。`-l` 是有意的 —— 用户的 PATH 往往由 nvm / rbenv /
- * `.zprofile` 撑起来,不走登录 shell 的话 `npm run dev` 常常直接 command not found。
- *
- * Windows:`%COMSPEC% /d /s /c "<cmd>"` + `windowsVerbatimArguments`。逐项理由:
- *  · **不用 PowerShell**。Windows PowerShell 5.1 不认 `&&`(7 才支持),而
- *    `npm run build && npm start` 是预览命令里最常见的写法之一,换过去等于挑一批
- *    现成的命令来弄坏。cmd 的兼容面更宽。
- *  · `/d` 跳过 AutoRun 注册表项,`/s` 只剥掉最外层那一对引号 —— 所以外面这层
- *    `"…"` 加得刚好:cmd 剥掉它之后拿到的就是用户原样的命令行。
- *  · verbatim 是必须的:不开的话 Node 会按 CommandLineToArgvW 的规则再转义一轮,
- *    用户命令里的引号会被 `\"` 掉,cmd 不认这种写法。
- *
- * **仍然会跑不通的一类**:命令本身写的是 POSIX 语法(`FOO=1 cmd`、`$(…)`、
- * `2>/dev/null`、`ls | grep`)。这不是这里能修的 —— 那是另一门语言。调用方要在
- * UI 上把这件事说清楚,别让用户以为是 ash 坏了。
- */
-export function userShellLaunch(cmd: string): {
-  file: string;
-  args: string[];
-  windowsVerbatimArguments?: true;
-} {
-  if (!IS_WINDOWS) return { file: "sh", args: ["-lc", cmd] };
-  return {
-    file: process.env.COMSPEC || "cmd.exe",
-    args: ["/d", "/s", "/c", `"${cmd}"`],
-    windowsVerbatimArguments: true,
-  };
 }
