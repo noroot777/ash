@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext x='5' y='25' font-size='28' font-family='sans-serif' font-weight='bold' fill='%237160cf'%3Ea%3C/text%3E%3C/svg%3E">
+  <title>ash · 排队输入折叠方案</title>
+  <link rel="stylesheet" href="pending-input-demo.css">
+</head>
+<body>
+  <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-stack" viewBox="0 0 24 24"><path d="m3 7 9-4 9 4-9 4-9-4Zm0 5 9 4 9-4M3 17l9 4 9-4"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M5 12h4l2-5 3 10 2-5h3"/></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><path d="M20 15a3 3 0 0 1-3 3H9l-5 3V6a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v9Z"/><path d="M8 8h8m-8 5h5"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 20V4m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-return" viewBox="0 0 24 24"><path d="m8 4-5 5 5 5M3 9h11a6 6 0 0 1 6 6v4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2L12 3Zm0 6v5m0 3v.1"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  </svg>
+
+  <header class="demo-header">
+    <a class="wordmark" href="pending-input-demo.html">ash<span>/</span><span>交互实验室</span></a>
+    <span class="demo-label"><span></span>HTML DEMO · 不连接真实任务</span>
+  </header>
+
+  <main class="study">
+    <section class="intro" aria-labelledby="page-title">
+      <div><p class="eyebrow">会话体验 / 排队输入</p><h1 id="page-title">排队可以很长，<span>对话不必让位。</span></h1><p class="intro-copy">两条以内直接看，超过两条收成一叠。需要时再展开，输入框始终留在原位。</p></div>
+      <div class="view-toggle" role="group" aria-label="展示方案"><button type="button" data-view="before" aria-pressed="false">原来</button><button type="button" data-view="after" aria-pressed="true">推荐方案</button></div>
+    </section>
+
+    <section class="demo-controls" aria-label="演示场景">
+      <div class="count-control"><span class="control-label">排队数量</span><div class="count-buttons" role="group" aria-label="排队数量"><button type="button" data-count="0" aria-pressed="false">0</button><button type="button" data-count="1" aria-pressed="false">1</button><button type="button" data-count="2" aria-pressed="false">2</button><button type="button" data-count="10" aria-pressed="true">10</button><button type="button" data-count="30" aria-pressed="false">30</button></div></div>
+      <label class="mix-control"><input id="mixed-toggle" type="checkbox"><span>混入我的消息</span></label>
+      <div class="simulation-controls"><button type="button" id="consume-button"><svg class="icon"><use href="#i-check"/></svg>模拟处理下一条</button><button type="button" id="add-button"><svg class="icon"><use href="#i-plus"/></svg>模拟新消息</button></div>
+    </section>
+
+    <div class="workspace">
+      <section class="app-window" aria-label="任务界面交互预览">
+        <nav class="app-rail" aria-label="原型装饰导航"><span class="rail-brand">a</span><span class="rail-item"><svg class="icon"><use href="#i-grid"/></svg></span><span class="rail-item selected"><svg class="icon"><use href="#i-message"/></svg></span><span class="rail-bottom">F</span></nav>
+        <div class="task-window">
+          <header class="task-header"><div class="task-heading"><div class="breadcrumb">harness <span>/</span> 自由任务</div><h2>审查复用回归结果 · 承接第 1 轮审查意见</h2></div><span class="running-status"><span></span>运行中</span><span class="elapsed">5h 55m</span></header>
+          <div class="chat-scroll" id="chat-scroll">
+            <div class="chat-date">今天 16:43</div>
+            <article class="chat-message user-message"><span class="avatar user-avatar">F</span><div><div class="message-meta"><strong>你</strong><time>16:40</time></div><p>继续补齐证据可用性和生命周期回归，等哨兵结果回来后再做结论。</p></div></article>
+            <article class="chat-message assistant-message"><span class="avatar agent-avatar">C</span><div class="assistant-content"><div class="message-meta"><strong>codex</strong><span class="agent-model">gpt-5.6-sol</span><time>16:43</time></div><p>已经补齐可复现路径，正在核对回归结果。</p><p>当前一轮先完成代码审查，排队中的哨兵结果会在会话空闲后继续处理。</p><div class="execution-note"><span class="success-icon"><svg class="icon"><use href="#i-check"/></svg></span><div><strong>定向检查已结束</strong><span>证据可用性、生命周期和验收站回归缺口</span></div><code>exit 0</code></div><div class="working-note"><span class="working-dots"><i></i><i></i><i></i></span>正在整理本轮审查结论<span>·</span>等待当前一轮结束</div></div></article>
+            <div id="simulation-history" class="simulation-history" aria-live="polite"></div>
+            <div class="conversation-space"><span>对话区</span><span class="space-line"></span><span id="space-caption">排队再多，也只占固定高度</span></div>
+          </div>
+
+          <div class="composer-zone">
+            <div class="queue-anchor" id="queue-anchor">
+              <section class="queue-popover" id="queue-popover" aria-labelledby="queue-panel-title" hidden>
+                <header class="popover-header"><div><span class="eyebrow">等待送入会话</span><h3 id="queue-panel-title">排队输入 <span id="panel-count">10</span></h3></div><button class="icon-button" id="close-panel" type="button" aria-label="关闭排队列表"><svg class="icon"><use href="#i-close"/></svg></button></header>
+                <div class="queue-filters" id="queue-filters" role="group" aria-label="筛选排队输入"></div>
+                <div class="panel-list" id="panel-list" tabindex="0" aria-label="排队输入列表"></div>
+                <footer class="popover-footer"><span class="order-dot"></span>筛选只改变查看范围，不改变投递顺序。</footer>
+              </section>
+              <div id="queue-tray" aria-label="待处理输入"></div>
+            </div>
+            <div class="composer-toolbar"><span class="review-state"><span></span>审查中</span><span>打开预览</span><span class="toolbar-divider"></span><span>预览日志</span><span>接力到…</span></div>
+            <form class="composer" id="composer-form"><label class="sr-only" for="message-input">给当前任务追加消息</label><textarea id="message-input" rows="2" placeholder="任务进行中，追加的消息会排队等待…"></textarea><div class="composer-footer"><span class="composer-agent"><span class="mini-avatar">C</span>codex <span class="agent-model">/ gpt-5.6-sol</span></span><span class="composer-hint">仅演示，不会真实发送</span><button type="submit" class="send-button" id="send-button" aria-label="演示发送消息到队列" disabled><svg class="icon"><use href="#i-arrow"/></svg></button></div></form>
+            <p class="input-footnote">Enter 换行<span>·</span>点击箭头演示排队<span id="queue-footnote">· 当前有 10 条待处理</span></p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="design-notes" aria-label="方案说明">
+        <div class="recommendation"><span class="recommendation-mark"><svg class="icon"><use href="#i-stack"/></svg></span><span>推荐<span class="recommendation-sub">渐进展开，不做信息删减</span></span></div>
+        <section><span class="note-index">01 / 收住高度</span><h3>只露出前两条</h3><p>第 3 条起折进队列卡片。数量增长，不再把对话和输入框往外挤。</p></section>
+        <section><span class="note-index">02 / 重要的不埋</span><h3>总数之外，再给一个提醒</h3><p>「需留意」标出退出码非 0 的示例结果。即使不在前两条，也能一眼看到。</p></section>
+        <section><span class="note-index">03 / 按需细看</span><h3>展开的是浮层，不是整页</h3><p>向上打开完整列表，内部滚动。可筛选、看原文、逐条取消，按 Esc 收起。</p></section>
+        <div class="boundary-note"><svg class="icon"><use href="#i-alert"/></svg><p><strong>只收纳，不改调度。</strong>不合并内容、不重排优先级，也不批量清空。取消哨兵输入只取消这次唤醒，不会停掉哨兵。</p></div>
+        <div class="try-note"><span class="try-arrow">↖</span><p>试试切到 <strong>30 条</strong><br>再点「查看全部」</p></div>
+      </aside>
+    </div>
+    <footer class="study-footer"><span>ASH / PENDING INPUTS</span><p>这是一份交互提案。消息内容与状态为示例，未修改正式界面及后端逻辑。</p><span>超过 2 条，才折叠。</span></footer>
+  </main>
+
+  <dialog id="cancel-dialog" aria-labelledby="cancel-title"><form method="dialog"><span class="dialog-icon"><svg class="icon"><use href="#i-pulse"/></svg></span><h2 id="cancel-title">取消这次唤醒？</h2><p>这条输入会从等待列表移除。哨兵本身仍在运行，后续事件仍会进入队列。</p><p class="cancel-subject" id="cancel-subject"></p><div class="dialog-actions"><button value="back" autofocus>保留输入</button><button class="danger-button" value="cancel">取消这次唤醒</button></div></form></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <span class="sr-only" id="queue-announcement" role="status" aria-live="polite"></span>
+  <script src="pending-input-demo.js"></script>
+</body>
+</html>
