@@ -1,4 +1,4 @@
-export function windowsRestartTargets(rows, rootPid, protectedPids) {
+export function windowsRestartPlan(rows, rootPid, protectedPids) {
   const byPid = new Map(rows.map((row) => [row.pid, row]));
   const born = (row) => {
     if (!row || !/^\d+$/.test(row.created ?? "")) throw new Error("进程代次不可用");
@@ -19,13 +19,30 @@ export function windowsRestartTargets(rows, rootPid, protectedPids) {
     }
     return found;
   };
-  const descendants = walk(Array.isArray(rootPid) ? rootPid : [rootPid]);
-  const spared = walk(protectedPids);
-  return rows.filter((row) => {
+  const rootPids = Array.isArray(rootPid) ? rootPid : [rootPid];
+  const descendants = walk(rootPids);
+  for (const pid of rootPids) {
+    const root = byPid.get(pid);
+    if (root && (!root.command || root.ppid === null)) throw new Error(`${pid} 的进程身份不完整`);
+  }
+  const protectedTree = walk(protectedPids);
+  const preservedPids = rows
+    .filter((row) => descendants.has(row.pid) && !protectedTree.has(row.pid) && !row.command)
+    .map((row) => row.pid);
+  const spared = walk([...protectedPids, ...preservedPids]);
+  for (const pid of rootPids) {
+    if (spared.has(pid) && !protectedTree.has(pid)) throw new Error(`${pid} 位于命令行不可读的受保护子树中`);
+  }
+  const targets = rows.filter((row) => {
     if (!descendants.has(row.pid) || spared.has(row.pid)) return false;
     if (!row.command || row.ppid === null) throw new Error(`${row.pid} 的进程身份不完整`);
     return true;
   });
+  return { targets, preservedPids };
+}
+
+export function windowsRestartTargets(rows, rootPid, protectedPids) {
+  return windowsRestartPlan(rows, rootPid, protectedPids).targets;
 }
 
 export function windowsTerminateScript(targets) {

@@ -28,6 +28,7 @@ import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useFileMention } from "../lib/useFileMention.ts";
 import { FileMentionMenu } from "../components/MentionMenu.tsx";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
+import { useReplyLayout } from "../task-detail/useReplyLayout.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
@@ -62,7 +63,7 @@ import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
 import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
 import { useWorkerLiveLines } from "./workerLiveLines.ts";
 
-function TeamReplyBox({
+export function TeamReplyBox({
   task,
   onSend,
 }: {
@@ -71,6 +72,7 @@ function TeamReplyBox({
   onSend: (text: string, attachments: string[], options: { sendAt?: string }) => Promise<ReplyTaskResult | null>;
 }) {
   const draft = useTaskReplyDraft(task.id);
+  const shellRef = useReplyLayout();
   const value = draft.text;
   const setValue = draft.setText;
   const [sending, setSending] = useState(false);
@@ -166,7 +168,7 @@ function TeamReplyBox({
     }
   };
   return (
-    <div className="team-reply-shell">
+    <div ref={shellRef} className="team-reply-shell">
       {slash.open && (
         <SlashMenu
           className="team-reply-command-menu"
@@ -193,7 +195,9 @@ function TeamReplyBox({
           onSubmit={() => void send(new Date(sendAt).toISOString())}
         />
       )}
+      <div className="reply-context">
       <ScheduledMessageTray
+        key={task.id}
         messages={scheduled.messages}
         loading={scheduled.loading}
         error={scheduled.error}
@@ -209,6 +213,7 @@ function TeamReplyBox({
         onCancel={uploads.cancel}
       />
       {error && <p>{error}</p>}
+      </div>
       <div className="team-reply-box">
         <ReplyResizeHandle targetRef={inputRef} {...replyHeight} />
         <textarea
