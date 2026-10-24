@@ -210,6 +210,49 @@ try {
   }
 
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
+
+  await page.goto(`${fixture}?boundaries`);
+  await page.locator("[data-boundary-mode] .system-boundary").first().waitFor();
+  for (const width of [1100, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const boundaries = await page.locator("[data-boundary-mode] .system-boundary").evaluateAll((elements) =>
+      elements.map((element) => {
+        const icon = element.querySelector(".system-event-avatar");
+        const iconBox = icon?.getBoundingClientRect();
+        const textBox = element.querySelector("p").getBoundingClientRect();
+        const rules = [...element.querySelectorAll(".system-boundary-rule")].map((rule) => {
+          const box = rule.getBoundingClientRect();
+          return { width: box.width, height: box.height, hidden: rule.getAttribute("aria-hidden") };
+        });
+        return {
+          mode: element.closest("[data-boundary-mode]").dataset.boundaryMode,
+          surface: element.closest("[data-surface]").dataset.surface,
+          error: element.classList.contains("is-error"),
+          icon: iconBox ? { width: iconBox.width, height: iconBox.height } : null,
+          centerOffset: iconBox ? Math.abs(iconBox.y + iconBox.height / 2 - textBox.y - textBox.height / 2) : 0,
+          rules,
+        };
+      }),
+    );
+    assert.equal(boundaries.length, 16, "两种会话、四种模式和两种结束状态都应覆盖");
+    for (const boundary of boundaries) {
+      const label = `${width}px ${boundary.surface}/${boundary.mode}/${boundary.error ? "error" : "neutral"}`;
+      const aligned = boundary.mode === "aligned";
+      assert.deepEqual(boundary.icon, aligned ? { width: 16, height: 16 } : null, `${label} 图标不能被横线样式压扁`);
+      assert.ok(boundary.centerOffset <= 1, `${label} 图标与文字应垂直居中`);
+      assert.equal(boundary.rules.length, aligned ? 1 : 2, `${label} 分隔线数量应保持不变`);
+      for (const rule of boundary.rules) {
+        assert.equal(rule.height, 1, `${label} 分隔线应为 1px`);
+        assert.ok(rule.width > 0, `${label} 分隔线应保持可见`);
+        assert.equal(rule.hidden, "true", `${label} 装饰横线不应进入无障碍朗读`);
+      }
+    }
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${width}px 回合边界不应横向溢出`);
+  }
+  if (process.env.BOUNDARY_SHOT) {
+    await page.setViewportSize({ width: 1100, height: 1000 });
+    await page.screenshot({ path: process.env.BOUNDARY_SHOT, fullPage: true });
+  }
   console.log("system-notices-dom ok");
 } finally {
   await browser?.close();

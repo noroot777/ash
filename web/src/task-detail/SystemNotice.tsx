@@ -176,9 +176,9 @@ export function SystemBoundary({
   }
   return (
     <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary${item.tone === "error" ? " is-error" : ""}`}>
-      <span />
+      <span className="system-boundary-rule" aria-hidden="true" />
       <p>{previewNoticeText(item.text)}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
-      <span />
+      <span className="system-boundary-rule" aria-hidden="true" />
     </div>
   );
 }
