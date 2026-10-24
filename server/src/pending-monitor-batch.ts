@@ -4,6 +4,7 @@ import { readMonitorWake, type MonitorWakeData } from "@ash/shared/monitor-wake"
 import { db } from "./db/index.js";
 import { scheduledMessages } from "./db/schema.js";
 import { beginDelivery } from "./pending-messages.js";
+import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
 import { retryBlocked } from "./pending-redelivery.js";
 import { isDueForDelivery } from "./pending-verdict.js";
 import { now } from "./util.js";
@@ -35,6 +36,7 @@ export async function beginPendingBatch(message: Row): Promise<Row[]> {
     const claimed = await beginDelivery(message.id);
     return claimed ? [claimed] : [];
   }
+  if (hasPendingDeliveryRecovery(message.taskId)) return [];
   return db.transaction(async (transaction) => {
     const pending = (await transaction.select().from(scheduledMessages).where(and(
       eq(scheduledMessages.taskId, message.taskId), eq(scheduledMessages.status, "pending"),

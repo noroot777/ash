@@ -17,6 +17,8 @@ import { bus } from "../src/bus.js";
 import { monitorsBlockingComplete } from "../src/task-complete-monitors.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "../src/transcript.js";
 import { id } from "../src/util.js";
+import { hasPendingDeliveryRecovery } from "../src/pending-delivery-recovery.js";
+import { tick } from "../src/schedules.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
 const log = join(root, "batch-input.log");
@@ -59,6 +61,17 @@ async function dispatch(message: Row, onClaim = () => {}): Promise<void> {
 }
 async function cancelTaskMessages(taskId: string): Promise<void> {
   for (const message of await pendingOf(taskId)) await pending.cancelPendingMessage(message, "测试已收尾");
+}
+async function automatically(action: () => Promise<void>): Promise<void> {
+  let error: unknown;
+  const timer = setInterval(() => void tick().catch((reason) => { error = reason; }), 200);
+  try {
+    await tick();
+    await action();
+    if (error) throw error;
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 try {
@@ -126,15 +139,16 @@ try {
         later = eventMessage(taskId, "LATE_AFTER_CLAIM");
       }
     });
-    await pending.deliverPendingMessages(taskId);
-    await until("第一批真实送达", async () => (await rowOf(first)).status === "sent");
-    await settled(taskId);
-    const late = await later!;
-    assert.equal((await rowOf(second)).status, "sent");
-    assert.equal((await rowOf(late)).status, "pending");
-    assert.equal(hits("LATE_AFTER_CLAIM"), 0);
-    await dispatch(late);
-    await until("后到结果实际进入执行器", async () => hits("LATE_AFTER_CLAIM") === 1);
+    await automatically(async () => {
+      await until("第一批真实送达", async () => (await rowOf(first)).status === "sent");
+      await settled(taskId);
+      const late = await later!;
+      assert.equal((await rowOf(second)).status, "sent");
+      assert.equal((await rowOf(late)).status, "pending");
+      assert.equal(hits("LATE_AFTER_CLAIM"), 0);
+      await until("后到结果由生产扫描自动送达", async () => (await rowOf(late)).status === "sent");
+      await settled(taskId);
+    });
     assert.equal(hits("LATE_AFTER_CLAIM"), 1);
     assert.equal(hits("LATE_FIRST"), 1);
     console.log("PASS: output arriving after claim remains pending and triggers the next delivery without duplication");
@@ -148,13 +162,15 @@ try {
       .where(eq(scheduledMessages.id, human.id));
     await db.update(scheduledMessages).set({ sendAt: new Date(new Date(first.sendAt).getTime() + 2).toISOString() })
       .where(eq(scheduledMessages.id, last.id));
-    await pending.deliverPendingMessages(taskId);
-    await until("普通输入前的哨兵结果送达", async () => (await rowOf(first)).status === "sent");
-    await settled(taskId);
-    assert.equal((await rowOf(human)).status, "pending");
-    assert.equal((await rowOf(last)).status, "pending");
-    await dispatch(human);
-    await dispatch(last);
+    await automatically(async () => {
+      await until("普通输入前的哨兵结果送达", async () => (await rowOf(first)).status === "sent");
+      await settled(taskId);
+      assert.equal((await rowOf(human)).status, "pending");
+      assert.equal((await rowOf(last)).status, "pending");
+      await until("普通输入与后续哨兵按原冷却和扫描自动续投", async () => (await rowOf(last)).status === "sent", 20_000);
+      await settled(taskId);
+      assert.equal((await rowOf(human)).status, "sent");
+    });
     assert.equal(hits(first.text), 1);
     assert.equal(hits(human.text), 1);
     assert.equal(hits(last.text), 1);
@@ -305,6 +321,123 @@ try {
       assert.equal(hits(checkpoint), 1);
     }
     console.log("PASS: transient checkpoint/guard reads restore the whole batch and retry once without losing input");
+  }
+  {
+    for (const team of [false, true]) {
+      for (const fault of ["release-once", "release", "cancel", "checkpoint", "prepare", "restore"] as const) {
+        const taskId = await makeTask({ mode: team ? "team" : "single", status: team ? "idle" : "paused" });
+        if (team) await db.update(tasks).set({ team: JSON.stringify({ ...TEAM_DEFAULTS, lead: "claude" }) })
+          .where(eq(tasks.id, taskId));
+        const label = `RECOVERY_${team ? "TEAM" : "SINGLE"}_${fault}`;
+        const first = await eventMessage(taskId, `${label}_VALID_FIRST`);
+        const second = await eventMessage(taskId, `${label}_SECOND`);
+        const checkpoint = `${label}_CHECKPOINT`;
+        await db.update(tasks).set({ resumePrompt: checkpoint }).where(eq(tasks.id, taskId));
+        if (fault === "prepare") {
+          const { monitorWakeCheckpoint } = await import("../src/monitor-session.js");
+          assert.ok(await monitorWakeCheckpoint(first));
+        }
+        if (fault === "cancel") {
+          const review = `${label}_review`;
+          await reviewInFlight(taskId, review, { live: false });
+          await db.update(monitors).set({ sourceReviewRun: review, sourceReviewRound: 1 })
+            .where(eq(monitors.id, second.origin!.slice(8)));
+          await db.update(schema.freeReviewRuns).set({ status: "done" }).where(eq(schema.freeReviewRuns.id, review));
+        }
+        const human = await pending.enqueueMessage({ taskId, text: `${label}_HUMAN`, sendAt: new Date(second.sendAt) });
+        await db.update(scheduledMessages).set({ sendAt: new Date(new Date(second.sendAt).getTime() + 1).toISOString() })
+          .where(eq(scheduledMessages.id, human.id));
+        const busy = fault === "release" || fault === "release-once" || fault === "restore";
+        let release = () => {};
+        if (busy) {
+          if (team) {
+            const held = runs.claimWakeTurn(taskId);
+            assert.ok(held);
+            release = held;
+          } else {
+            assert.ok(runs.claimTurn(taskId, "single"));
+            release = () => runs.releaseTurn(taskId);
+          }
+        }
+        const execute = dbClient.execute;
+        const batch = dbClient.batch;
+        let injected = 0;
+        let readInjected = 0;
+        dbClient.execute = async function (statement, ...rest) {
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          const args = typeof statement === "string" ? [] : statement.args;
+          const own = Array.isArray(args) && args.includes(taskId);
+          if (!readInjected && own && ((fault === "checkpoint" && /^select "resume_prompt",/i.test(sql))
+            || (fault === "prepare" && /^select "id", "project_id",/i.test(sql)))) {
+            readInjected += 1;
+            throw new Error(`injected ${label} read`);
+          }
+          const cancellation = fault === "cancel" && /^update "scheduled_messages" set "status"/i.test(sql)
+            && Array.isArray(args) && args.includes(second.id);
+          const returningLease = fault !== "cancel" && fault !== "restore"
+            && /^update "scheduled_messages" set "delivering_since"/i.test(sql)
+            && Array.isArray(args) && args.includes(first.id);
+          if ((cancellation || returningLease) && (fault !== "release-once" || !injected)) {
+            injected += 1;
+            throw new Error(`injected ${label} compensation write`);
+          }
+          return execute.call(dbClient, statement, ...rest);
+        };
+        dbClient.batch = async function (statements, ...rest) {
+          if (fault === "restore" && statements.some((statement) => typeof statement !== "string"
+            && /^update "scheduled_messages" set "checkpoint_taken"/i.test(statement.sql)
+            && Array.isArray(statement.args) && statement.args[0] === null)) {
+            injected += 1;
+            throw new Error(`injected ${label} checkpoint restore`);
+          }
+          return batch.call(dbClient, statements, ...rest);
+        };
+        try {
+          await dispatchPendingMessage(first, {
+            spans: { dueAt: Date.now(), busyMs: 0, queuedAt: Date.now() }, team, onClaim: () => {},
+          });
+          assert.equal(injected, 1);
+          if (fault !== "release-once") await until("补偿失败后仍有主动重试者", async () => injected >= 3);
+          assert.equal(hasPendingDeliveryRecovery(taskId), true);
+          for (const message of [first, second]) assert.equal((await rowOf(message)).status, "pending");
+          assert.equal((await rowOf(first)).deliveringSince === null, fault === "restore");
+          assert.deepEqual(await beginPendingBatch(first), [], "补偿未结束，不能重复领取");
+          await pending.deliverPendingMessages(taskId);
+          assert.equal((await rowOf(human)).status, "pending", "租约补偿不能让后项越过原批次");
+          assert.equal(hits(human.text), 0);
+          assert.equal(hits(first.text), 0);
+          assert.match((await monitorsBlockingComplete(taskId))!, /哨兵结果/);
+          if (fault === "checkpoint" || fault === "prepare") assert.equal(readInjected, 1);
+          if (!team && fault === "release") {
+            const other = await makeTask({ status: "paused" });
+            const independent = await eventMessage(other, "RECOVERY_UNRELATED_TARGET");
+            await pending.deliverPendingMessages(other);
+            await until("一份补偿不阻塞其它目标", async () => (await rowOf(independent)).status === "sent");
+            await settled(other);
+          }
+          await pending.cancelPendingMessage(human, "测试结束，不需要额外用户回合");
+        } finally {
+          dbClient.execute = execute;
+          dbClient.batch = batch;
+          release();
+        }
+        await until("写入恢复后自动补偿并续投", async () => (await rowOf(first)).status === "sent");
+        await settled(taskId);
+        await until("补偿结果实际进入执行器 stdin", async () => hits(first.text) === 1 && hits(checkpoint) === 1);
+        assert.equal((await rowOf(second)).status, fault === "cancel" ? "canceled" : "sent");
+        assert.equal(hasPendingDeliveryRecovery(taskId), false);
+        assert.equal(hits(first.text), 1);
+        assert.equal(hits(second.text), fault === "cancel" ? 0 : 1);
+        assert.equal(hits(checkpoint), 1);
+        assert.equal((await rowOf(first)).deliveringSince, null);
+        if (team) {
+          const { teamIsLive } = await import("../src/team/session.js");
+          await until("补偿测试的调度台退出", async () => !teamIsLive(taskId));
+        }
+        console.log(`PASS: ${label} retains the batch through compensation faults and delivers each valid result once`);
+      }
+    }
+    console.log("PASS: single/team compensation survives one-shot and sustained lease/cancel/restore writes, checkpoint/preparation faults, FIFO and target isolation");
   }
   {
     const taskId = await makeTask({ status: "paused" });

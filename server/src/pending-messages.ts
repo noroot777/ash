@@ -46,6 +46,7 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { dispatchPendingMessage } from "./pending-dispatch.js";
 import { pendingMessageOrder } from "./pending-monitor-batch.js";
+import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
 import { id, now } from "./util.js";
 
 // 判定与投递参数的无状态部分拆在 pending-verdict.ts(本文件顶过 700 行上限);
@@ -303,7 +304,8 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
   const fired = new Set<string>();
   for (const m of pending) {
     try {
-      if (fired.has(m.taskId) || inFlight.has(m.taskId) || cooling(m.taskId, at.getTime())) continue;
+      if (fired.has(m.taskId) || inFlight.has(m.taskId) || hasPendingDeliveryRecovery(m.taskId)
+        || cooling(m.taskId, at.getTime())) continue;
       // 下一次允许重试的时刻没到就不碰:退避只写在重投定时器上管不住别的触发源 ——
       // 失败结算钩子、队列唤醒触发的扫描会绕过它,形成「失败→结算唤醒→再失败」的
       // 自激循环(第 6 轮审查:目录不修复时 2 秒 24 次失败)。

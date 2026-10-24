@@ -1,6 +1,8 @@
 import { continueTask } from "./orchestrator.js";
 import { abortDelivery, cancelPendingMessage, markSent } from "./pending-messages.js";
 import { beginPendingBatch, batchMonitorWake } from "./pending-monitor-batch.js";
+import { recoverPendingDelivery } from "./pending-delivery-recovery.js";
+import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { scheduleRedelivery } from "./pending-redelivery.js";
 import { deliveryOptions, monitorWakeGuard } from "./pending-verdict.js";
 import { monitorWakeCheckpoint } from "./monitor-session.js";
@@ -26,7 +28,12 @@ export async function dispatchPendingMessage(
   const checkpoints: Checkpoint[] = [];
   let claimed: Row[] = [];
   const idleAt = Date.now();
+  const monitor = monitorIdFromOrigin(message.origin) !== null;
   const retry = async (reason: string) => {
+    if (monitor) {
+      await recoverPendingDelivery(claimed, refused, checkpoints, reason);
+      return;
+    }
     await abortDelivery(claimed);
     const at = Date.now();
     for (const current of claimed) scheduleRedelivery(current, reason, at);
@@ -67,11 +74,13 @@ export async function dispatchPendingMessage(
       },
     });
     if (!delivered) {
-      for (const current of claimed) {
-        const reason = refused.get(current.id);
-        if (reason) await cancelPendingMessage(current, reason);
+      if (!monitor) {
+        for (const current of claimed) {
+          const reason = refused.get(current.id);
+          if (reason) await cancelPendingMessage(current, reason);
+        }
+        claimed = claimed.filter((current) => !refused.has(current.id));
       }
-      claimed = claimed.filter((current) => !refused.has(current.id));
       if (claimed.length) await retry(context.team
         ? "这一轮没起：调度台收不下（正在收尾或已离线），或起跑前的资格检查读不到状态"
         : started
@@ -85,11 +94,15 @@ export async function dispatchPendingMessage(
     }
     const detail = error instanceof Error ? error.message : String(error);
     if (!claimed.length) scheduleRedelivery(message, `领取待发送消息失败：${detail}`);
+    else if (monitor) {
+      await retry(`续跑尚未送达，原文退回待发送：${detail}`);
+      return;
+    }
     for (const current of claimed) {
       await cancelPendingMessage(current, `${context.team ? "调度台不可用" : "续跑失败"}：${detail}`).catch(() => {});
     }
   } finally {
-    if (!delivered) {
+    if (!delivered && !monitor) {
       for (const checkpoint of checkpoints.reverse()) await checkpoint.restore().catch(() => {});
     }
     context.onSettled?.();
