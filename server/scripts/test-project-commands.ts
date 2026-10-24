@@ -194,10 +194,11 @@ if (IS_WINDOWS) {
         command: { id: "semantic", name: testCase.name, script: testCase.script },
       });
       assert.equal(await waitExit(session.id, "p1"), testCase.exitCode, testCase.name);
-      if (testCase.output) {
+      if (testCase.output || testCase.absentOutput) {
         const output = manager.eventsAfter(session.id, "p1", 0)
           ?.map((event) => event.type === "data" ? event.data : "").join("") ?? "";
-        assert.ok(output.includes(testCase.output), `${testCase.name}: ${output}`);
+        if (testCase.output) assert.ok(output.includes(testCase.output), `${testCase.name}: ${output}`);
+        if (testCase.absentOutput) assert.ok(!output.includes(testCase.absentOutput), `${testCase.name}: ${output}`);
       }
     }
 

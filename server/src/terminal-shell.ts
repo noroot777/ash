@@ -3,6 +3,7 @@
 // 会话生命周期(创建/清场/回收)在 terminal.ts,进程树/wrapper 纯函数在
 // terminal-process-tree.ts。
 import { existsSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { expandHome } from "./git.js";
 import { IS_WINDOWS, encodePowerShellCommand } from "./platform.js";
@@ -55,8 +56,8 @@ export function shellCommand(): { shell: string; args: string[] } {
  *     换一套方言去跑 —— 那只会让一条写给 PowerShell 的脚本以看不懂的方式失败。
  *
  * 退出码要自己接:`-Command`/`-EncodedCommand` 只在最后一条是原生命令时才透传
- * `$LASTEXITCODE`,其余情形一律 0/1。所以脚本后面补一段确定性的收口,语义对齐
- * `sh -lc`:**最后一条语句的成败**就是会话的退出码(见 withExitCodeEpilogue)。
+ * `$LASTEXITCODE`,其余情形一律 0/1。所以在脚本执行边界保存状态并确定性收口,语义对齐
+ * `sh -lc`:**最后一条语句的成败**就是会话的退出码(见 withExitCodeBoundary)。
  *
  * 脚本方言两边因此是不同的(那边是 PowerShell),这点在设置页的说明里写明。
  */
@@ -69,7 +70,7 @@ export function commandLaunch(script: string, preferredShell?: string): { shell:
   if (!exe) {
     throw new Error("这台 Windows 上找不到 PowerShell(pwsh.exe / powershell.exe)，常用命令无法运行");
   }
-  return { shell: exe, args: ["-NoLogo", "-EncodedCommand", encodePowerShellCommand(withExitCodeEpilogue(script))] };
+  return { shell: exe, args: ["-NoLogo", "-EncodedCommand", encodePowerShellCommand(withExitCodeBoundary(script))] };
 }
 
 /**
@@ -90,33 +91,39 @@ export function commandLaunch(script: string, preferredShell?: string): { shell:
  * 退的是那个旧码而不是 1 —— 两者都非零,「成没成」这个判断不受影响,只是数字借了前一条。
  * 要分清得在每条语句之间插桩(得先解析 PowerShell 脚本),不值当。
  */
-function withExitCodeEpilogue(script: string): string {
-  const epilogue = [
-    "",
-    "& {",
-    "  if ($args[0]) { exit 0 }",
-    "  if ($args[1] -is [int] -and $args[1] -ne 0) { exit $args[1] }",
-    "  exit 1",
-    "} $? $LASTEXITCODE",
-    "",
-  ].join("\n");
+function withExitCodeBoundary(script: string): string {
+  const statusKey = randomUUID();
   return [
+    "& {",
     `$source = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodePowerShellCommand(script)}'))`,
-    `$epilogue = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodePowerShellCommand(epilogue)}'))`,
+    "$finalizer = @'",
+    "",
+    "} finally {",
+    `  & { [AppDomain]::CurrentDomain.SetData('${statusKey}', $args) } $? $LASTEXITCODE`,
+    "}",
+    "'@",
     "try {",
     "  $program = [scriptblock]::Create($source)",
     "  $body = $program.Ast",
-    "  $lastBlock = $body.EndBlock",
-    "  if ($null -eq $lastBlock) { $lastBlock = $body.ProcessBlock }",
-    "  if ($null -eq $lastBlock) { $lastBlock = $body.BeginBlock }",
-    "  if ($null -ne $lastBlock) {",
+    "  foreach ($block in @($body.EndBlock, $body.ProcessBlock, $body.BeginBlock)) {",
+    "    if ($null -eq $block) { continue }",
+    "    $first = @(@($block.Statements) + @($block.Traps) | Where-Object { $null -ne $_ } | Sort-Object { $_.Extent.StartOffset })[0]",
+    "    if ($null -eq $first) { continue }",
     "    $offset = $source.Length",
-    "    if (-not $lastBlock.Unnamed) { $offset = $lastBlock.Extent.EndOffset - 1 }",
-    "    $program = [scriptblock]::Create($source.Insert($offset, $epilogue))",
+    "    if (-not $block.Unnamed) { $offset = $block.Extent.EndOffset - 1 }",
+    '    $source = $source.Insert($offset, $finalizer).Insert($first.Extent.StartOffset, "try {`n")',
     "  }",
+    "  $program = [scriptblock]::Create($source)",
     "} catch { Write-Error $_; exit 1 }",
     "$global:LASTEXITCODE = 0",
     "& $program",
+    "& {",
+    "  if ($null -ne $args[2]) { $args[0], $args[1] = $args[2] }",
+    "  if ($args[0]) { exit 0 }",
+    "  if ($args[1] -is [int] -and $args[1] -ne 0) { exit $args[1] }",
+    "  exit 1",
+    `} $? $LASTEXITCODE ([AppDomain]::CurrentDomain.GetData('${statusKey}'))`,
+    "}",
   ].join("\n");
 }
 

@@ -56,6 +56,7 @@ if (platform !== "win32" && !powerShell) {
         assert.ifError(result.error);
         assert.equal(result.status, testCase.exitCode, `${testCase.name}: ${result.stderr}`);
         if (testCase.output) assert.ok(result.stdout.includes(testCase.output), `${testCase.name}: ${result.stdout}`);
+        if (testCase.absentOutput) assert.ok(!result.stdout.includes(testCase.absentOutput), `${testCase.name}: ${result.stdout}`);
         assert.equal(hasErrorOutput(result.stderr), Boolean(testCase.error), `${testCase.name}: ${result.stderr}`);
         if (testCase.exitCode === 0) {
           const originalPath = join(stage, `${testCase.name}.ps1`);
