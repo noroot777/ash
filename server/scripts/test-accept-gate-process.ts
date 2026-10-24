@@ -95,23 +95,26 @@ let runNumber = 0;
 
 async function run(command: string): Promise<{ exit: GateExit; log: string }> {
   const logPath = join(root, `gate-${runNumber++}.log`);
-  const exit = await new Promise<GateExit>((resolve, reject) => {
-    let processInfo: ReturnType<typeof spawnAcceptGate> | undefined;
-    const timer = setTimeout(() => {
-      void stopAcceptGate("process-test", processInfo?.pid, processInfo?.startedAt, logPath);
-      reject(new Error(`门禁命令超时: ${command}`));
-    }, 20_000);
-    try {
-      processInfo = spawnAcceptGate({
-        command, cwd: root, logPath,
-        onExit: (result) => { clearTimeout(timer); resolve(result); },
-      });
-    } catch (error) {
-      clearTimeout(timer);
-      reject(error);
+  let processInfo: ReturnType<typeof spawnAcceptGate> | undefined;
+  try {
+    const exit = await new Promise<GateExit>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`门禁命令超时: ${command}`)), 20_000);
+      try {
+        processInfo = spawnAcceptGate({
+          command, cwd: root, logPath,
+          onExit: (result) => { clearTimeout(timer); resolve(result); },
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        reject(error);
+      }
+    });
+    return { exit, log: readFileSync(logPath, "utf8") };
+  } finally {
+    if (processInfo) {
+      assert.equal(await stopAcceptGate("process-test", processInfo.pid, processInfo.startedAt, logPath), true);
     }
-  });
-  return { exit, log: readFileSync(logPath, "utf8") };
+  }
 }
 
 try {
@@ -165,6 +168,6 @@ try {
   }
   console.log(`✅ 验收命令进程（${IS_WINDOWS ? "Windows ps1/参数/工作目录/退出码/异常/cmd 兼容" : "POSIX shell/日志/退出码"}）通过`);
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 }
