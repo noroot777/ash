@@ -516,6 +516,7 @@ export function ReplyBox({
       )}
       {inlinePanel && !menuOpen && !mention.open && !picker && !scheduleOpen && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
+        key={task.id}
         messages={scheduled.messages}
         loading={scheduled.loading}
         error={scheduled.error}

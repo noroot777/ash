@@ -194,6 +194,7 @@ function TeamReplyBox({
         />
       )}
       <ScheduledMessageTray
+        key={task.id}
         messages={scheduled.messages}
         loading={scheduled.loading}
         error={scheduled.error}

@@ -9,6 +9,12 @@ import {
   ScheduledMessageTray,
 } from "../src/components/ScheduledMessages.tsx";
 import {
+  bySendTime,
+  scheduledMessageCounts,
+  scheduledMessageExitCode,
+  scheduledMessageMatches,
+} from "../src/components/scheduledMessagePresentation.ts";
+import {
   attachmentsFromPaths,
   clearSentDraft,
   dropSentAttachments,
@@ -33,6 +39,38 @@ const row = (id: string, text: string, sendAt: string): ScheduledMessage => ({
   createdAt: sendAt,
   sentAt: null,
 });
+
+const renderTray = (messages: ScheduledMessage[]) => renderToStaticMarkup(<ScheduledMessageTray messages={messages}
+  loading={false} error={null} cancelingIds={new Set()} onWithdraw={() => undefined} />);
+const samples = Array.from({ length: 3 }, (_, index) => row(`sample-${index}`, `输入-${index}`, `2026-10-24T10:00:0${index}.000Z`));
+assert.equal(renderTray([]), "", "空队列不占回复区");
+for (const count of [1, 2]) {
+  const markup = renderTray(samples.slice(0, count));
+  assert.equal((markup.match(/class="scheduled-message-row"/g) ?? []).length, count);
+  assert.doesNotMatch(markup, /class="scheduled-message-card/);
+}
+const folded = renderTray(samples);
+assert.equal((folded.match(/class="scheduled-message-card/g) ?? []).length, 1);
+assert.equal((folded.match(/class="scheduled-message-row"/g) ?? []).length, 2);
+assert.match(folded, /展开全部 3 条/);
+assert.match(folded, /另有 1 条已收起/);
+assert.doesNotMatch(folded, /输入-2|scheduled-message-popover/);
+const equalTime = [samples[1], { ...samples[0], id: "z", sendAt: samples[1].sendAt }, { ...samples[0], sendAt: samples[1].sendAt }];
+assert.deepEqual(bySendTime(equalTime).map((message) => message.id), ["sample-0", "z", "sample-1"]);
+assert.equal(equalTime[0], samples[1], "展示排序不得改动消息原数组");
+const monitor = (text: string): ScheduledMessage => ({ ...samples[0], origin: "monitor:test", sessionRole: "reviewer", text });
+assert.equal(scheduledMessageExitCode(monitor("REGRESSION_FINISHED exitCode=0 monitor=test")), 0);
+assert.equal(scheduledMessageExitCode(monitor("【哨兵事件】检查\nREGRESSION_FINISHED exitCode=1 monitor=test")), 1);
+assert.equal(scheduledMessageExitCode(monitor("【哨兵结束】检查（monitorId=test），退出码 -1。异常结束")), -1);
+assert.equal(scheduledMessageExitCode(monitor("REGRESSION_FINISHED exitCode=0\nREGRESSION_FINISHED exitCode=1")), 1);
+assert.equal(scheduledMessageExitCode(monitor("REGRESSION_FINISHED exitCode=1\n【哨兵结束】检查，退出码 0。已结束")), 1);
+assert.equal(scheduledMessageExitCode(monitor("exitCode=1 只是日志里的一段文本")), null);
+assert.equal(scheduledMessageExitCode(monitor("【哨兵结束】检查。进程已丢失")), null);
+assert.equal(scheduledMessageExitCode({ ...samples[0], text: "REGRESSION_FINISHED exitCode=1" }), null);
+assert.equal(scheduledMessageMatches(monitor("【哨兵结束】检查。进程已丢失"), "attention"), false);
+const countSamples = [samples[0], { ...samples[1], sessionRole: "reviewer" as const }, monitor("REGRESSION_FINISHED exitCode=1")];
+assert.deepEqual(scheduledMessageCounts(countSamples), { all: 3, mine: 1, managed: 1, monitor: 1, attention: 1 });
+assert.match(renderTray(countSamples), /1 条需留意/);
 
 const html = renderToStaticMarkup(
   <ScheduledMessageTray
