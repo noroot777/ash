@@ -247,11 +247,12 @@ Restart 不是盲目的 kill + start。它会先问服务端「重启会真正�
 
 ### 回归测试
 
-`build` / `restart` 只做「约定检查 → 类型 → 打包」，**不再跑测试**；回归自己显式跑：
+`build` / `restart` 只做「约定检查 → 类型 → 打包」，**不再跑测试**；回归统一在验收时执行：
 
 ```bash
-npm run test:web                      # 前端全量回归（改完 web/ 交付前跑）
-npm run test:web-gate                 # 上面那道 pre-push 闸自己的回归
+npm run test:web                      # 前端全量回归
+npm run test:accept                   # ash 验收前置命令：前端全量回归
+npm run test:accept-gate              # 验收脚本自身的回归
 npm -w server run test:queue          # 队列推进与排序
 npm -w server run test:accept-merge   # 验收合并与冲突处理
 npm -w server run test:review         # 验证轮与证据落盘
@@ -262,7 +263,9 @@ npm -w server run test:handoff        # 跨机器接力
 > [!CAUTION]
 > 端到端测试会实际启动 agent CLI，消耗真实 API 额度。
 
-前端回归还有一道自动兜底：`.githooks/pre-push` 会在 push 前检查这批提交有没有碰 `web/` 或 `shared/`，碰了才跑 `npm run test:web`（约 4 分钟），没碰直接放行。`git push --no-verify` 或 `SKIP_WEB_TEST=1 git push` 可跳过；worktree 里没装依赖时它只警告不拦。这道闸要 `git config core.hooksPath .githooks`（`npm run setup` 会自动配）。
+在 ash 项目设置的「验收前置命令」里填写 `npm run test:accept`，也可直接填写 `node scripts/accept-test.mjs`。入口在自身所在项目（验收时为独立快照）运行 `npm run test:web`，不按 Git diff 筛选，不受旧的 `SKIP_WEB_TEST` 开关影响；测试失败或启动失败都会返回非零退出码，不会因缺少依赖而放行。所需依赖可提前在任务工作区运行 `npm install` 安装，验收快照会复制现有依赖。
+
+`git push` 不再自动运行回归测试；`.githooks/pre-push` 已移除，其它提交钩子保留。
 
 ## 常见问题
 
