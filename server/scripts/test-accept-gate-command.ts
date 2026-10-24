@@ -70,6 +70,19 @@ try {
     const success = await run('.\\success.ps1');
     assert.equal(success.exit.code, 0, success.log);
     assert.match(success.log, /GATE_SUCCESS/);
+    for (const testCase of [
+      { name: "recovered", script: 'node -e "process.exit(7)"\nWrite-Output "RECOVERED"', code: 0 },
+      { name: "native-failure", script: 'node -e "process.exit(19)"', code: 19 },
+      { name: "cmdlet-failure", script: 'Write-Error "CMDLET_FAILURE"', code: 1 },
+      { name: "throw", script: 'throw "THROWN_FAILURE"', code: 1 },
+      { name: "explicit-success", script: 'node -e "process.exit(7)"\nexit 0', code: 0 },
+      { name: "explicit-failure", script: 'Write-Output "BEFORE_EXIT"\nexit 23', code: 23 },
+    ]) {
+      writeFileSync(join(root, `${testCase.name}.ps1`), testCase.script, "utf8");
+      const result = await run(`.\\${testCase.name}.ps1`);
+      assert.equal(result.exit.code, testCase.code, `${testCase.name}: ${result.log}`);
+      if (testCase.name === "recovered") assert.match(result.log, /RECOVERED/);
+    }
     writeFileSync(join(root, "error.ps1"), 'Write-Error "GATE_FAILURE"', "utf8");
     const errored = await run('.\\error.ps1');
     assert.notEqual(errored.exit.code, 0, errored.log);
