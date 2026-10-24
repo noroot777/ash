@@ -6,7 +6,6 @@
 // `--noproxy '*'`;现在探活走 node:http(压根不读代理环境变量),没有参数可查,于是
 // 改成端到端 —— 把 HTTP_PROXY/ALL_PROXY 指向黑洞,起一个**真的**假 server,看整条
 // 流程能不能跑通。这比查参数更靠谱:它测的是「结果对不对」而不是「实现长什么样」。
-import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { IS_WINDOWS, capture, isPidAlive, killPid, sleep } from "./platform.mjs";
 import { restartCommand } from "./restart-options.mjs";
 import { runTestProcess } from "./test-process.mjs";
+import { spawnTestFixture } from "./test-process-scope.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14317;
@@ -94,10 +94,11 @@ const env = {
   ASH_DB: join(TMP, "ash.db"),
 };
 
-const run = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs"), "--skip-mcp"], {
+const run = await runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs"), "--skip-mcp"], {
   cwd: REPO,
   env: { ...env, SKIP_MCP: "" },
   encoding: "utf8",
+  preserveScripts: [fakeServer],
 });
 const output = (run.stdout ?? "") + (run.stderr ?? "");
 
@@ -157,14 +158,14 @@ createServer((req, res) => {
 });
 `);
 
-const stubbornProc = spawn(process.execPath, [stubborn], { stdio: "ignore", detached: false });
+const stubbornProc = spawnTestFixture(process.execPath, [stubborn], { stdio: "ignore" });
 // 记一笔:上面那条注释说的就是它 —— 断言中途 `fail()` 会直接 process.exit,不登记
 // 就漏成僵尸占着 :PORT。原来只登记了后半段那个回 401 的,这一个漏了。
 stubbornChild = stubbornProc;
 for (let i = 0; i < 50 && !existsSync(STUBBORN_PID); i++) await sleep(100);
 if (!existsSync(STUBBORN_PID)) fail("赖着不走的假 server 没起来,这条回归没法测");
 
-const blocked = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+const blocked = await runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
   cwd: REPO,
   env: { ...env, START_TIMEOUT: "3" },
   encoding: "utf8",
@@ -208,13 +209,13 @@ for (const [forceLabel, forceArgs, forceEnv] of [
   ["--force", ["--force"], { FORCE: "" }],
 ]) {
 rmSync(REFUSING_PID, { force: true });
-const refusingProc = spawn(process.execPath, [refusing], { stdio: "ignore", detached: false });
+const refusingProc = spawnTestFixture(process.execPath, [refusing], { stdio: "ignore" });
 stubbornChild = refusingProc;
 for (let i = 0; i < 50 && !existsSync(REFUSING_PID); i++) await sleep(100);
 if (!existsSync(REFUSING_PID)) fail("回 401 的假 server 没起来,这条回归没法测");
 const refusingPid = Number(readFileSync(REFUSING_PID, "utf8").trim());
 
-const refused = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+const refused = await runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
   cwd: REPO,
   env: { ...env, START_TIMEOUT: "3" },
   encoding: "utf8",
@@ -237,11 +238,12 @@ const restartArgs = IS_WINDOWS
     `[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\n${forceCommand}\nexit $LASTEXITCODE`, "utf16le",
   ).toString("base64")]
   : ["-c", forceCommand];
-const forced = runTestProcess(IS_WINDOWS ? "powershell.exe" : "/bin/sh", restartArgs, {
+const forced = await runTestProcess(IS_WINDOWS ? "powershell.exe" : "/bin/sh", restartArgs, {
   cwd: REPO,
   env: { ...env, ...forceEnv, START_TIMEOUT: "10" },
   encoding: "utf8",
   timeout: 120_000,
+  preserveScripts: [fakeServer],
 });
 const forcedOutput = (forced.stdout ?? "") + (forced.stderr ?? "");
 try { refusingProc.kill("SIGKILL"); } catch { /* 已经没了 */ }
@@ -278,13 +280,13 @@ createServer((req, res) => {
 });
 `);
 
-const muteProc = spawn(process.execPath, [mute], { stdio: "ignore", detached: false });
+const muteProc = spawnTestFixture(process.execPath, [mute], { stdio: "ignore" });
 stubbornChild = muteProc;
 for (let i = 0; i < 50 && !existsSync(MUTE_PID); i++) await sleep(100);
 if (!existsSync(MUTE_PID)) fail("不作答的假 server 没起来,这条回归没法测");
 const mutePid = Number(readFileSync(MUTE_PID, "utf8").trim());
 
-const muted = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+const muted = await runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
   cwd: REPO,
   env: { ...env, START_TIMEOUT: "3" },
   encoding: "utf8",
@@ -325,14 +327,14 @@ createServer((request,response)=>{
   ? {survives:[{pid:agent.pid,title:'protected fixture'}],resumes:[],interrupted:[],mcpDisrupted:[]}
   : {ok:true,pid:process.pid}));
 }).listen(${PORT},'127.0.0.1',()=>writeFileSync(${JSON.stringify(statePath)},JSON.stringify({pid:process.pid,agent:agent.pid})));`);
-  const service = spawn(process.execPath, [servicePath], { stdio: "ignore" });
+  const service = spawnTestFixture(process.execPath, [servicePath], { stdio: "ignore" });
   stubbornChild = service;
   try {
     for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt++) await sleep(100);
     if (!existsSync(statePath)) fail("CIM 故障用例的服务没有启动");
     const state = JSON.parse(readFileSync(statePath, "utf8"));
     protectedPid = state.agent;
-    const result = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+    const result = await runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
       cwd: REPO,
       env: { ...env, FORCE: "", WAIT: "", NODE_OPTIONS: `--require "${hookPath.replace(/\\/g, "/")}"` },
       encoding: "utf8", timeout: 60_000,
@@ -361,9 +363,10 @@ const residual = JSON.stringify({
   evidence: "exit_intent",
   observedIntent: { kind: "signal", signal: "SIGTERM", at: "2026-10-19T08:59:59.000Z" },
 });
-const residualRun = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+const residualRun = await runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
   cwd: REPO,
   env: { ...env, RESTART_TEST_RESIDUAL: residual },
+  preserveScripts: [fakeServer],
   encoding: "utf8",
 });
 const residualOutput = (residualRun.stdout ?? "") + (residualRun.stderr ?? "");

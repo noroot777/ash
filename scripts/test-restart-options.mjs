@@ -34,7 +34,7 @@ for (const args of [["--froce"], ["force"], ["--force=false"], ["--force", "fals
 }
 
 const restart = fileURLToPath(new URL("./restart.mjs", import.meta.url));
-const help = runTestProcess(NPM, ["run", "restart", "--", "--help"], {
+const help = await runTestProcess(NPM, ["run", "restart", "--", "--help"], {
   ...NPM_SPAWN_OPTS, cwd: repo, encoding: "utf8", timeout: 30_000,
 });
 assert.match(help.stdout, /--force/);
@@ -43,7 +43,7 @@ assert.match(help.stdout, /--skip-mcp/);
 assert.match(help.stdout, /--force-mcp/);
 assert.doesNotMatch(help.stdout, /▶|✅ 完成/);
 for (const argument of ["--froce", "force"]) {
-  const invalid = runTestProcess(process.execPath, [restart, argument], {
+  const invalid = await runTestProcess(process.execPath, [restart, argument], {
     cwd: repo, encoding: "utf8", timeout: 10_000,
   }, 2);
   assert.match(invalid.stderr, /--help/);
@@ -70,7 +70,7 @@ try {
       const shellArgs = process.platform === "win32"
         ? ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")]
         : ["-c", command];
-      const probe = runTestProcess(shell, shellArgs, {
+      const probe = await runTestProcess(shell, shellArgs, {
         cwd: repo, encoding: "utf8", timeout: 30_000,
         env: { ...process.env, NODE_OPTIONS: `--require ${JSON.stringify(guard.replaceAll("\\", "/"))}` },
       });
