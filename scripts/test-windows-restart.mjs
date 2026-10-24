@@ -3,6 +3,7 @@ import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { windowsRestartTargets, windowsTerminateScript } from "./windows-restart.mjs";
 import { IS_WINDOWS, killServerProcess, listProcesses } from "./platform.mjs";
+import { runTestProcess } from "./test-process.mjs";
 
 const row = (pid, ppid, created, command = "node fixture.mjs") => ({ pid, ppid, created: String(created), command });
 const rows = [row(10, 1, 100), row(11, 10, 110), row(12, 10, 90), row(13, 12, 120), row(14, 11, 120)];
@@ -39,8 +40,7 @@ if (IS_WINDOWS) {
     assert.ok(actual.command.includes("\n") && actual.command.includes("汉字"));
     const changed = { ...actual, created: String(BigInt(actual.created) + 10_000_000n) };
     const script = windowsTerminateScript([actual, changed]);
-    const result = childProcess.spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
-    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    runTestProcess("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" }, 1);
     assert.doesNotThrow(() => process.kill(fixture.pid, 0), "代次不符时不能下刀");
     assert.equal(killServerProcess(fixture.pid), "selective");
     console.log("✓ 原生 Windows:查询失败不下刀,代次变化拒杀,绑定句柄正常终止");

@@ -6,13 +6,14 @@
 // `--noproxy '*'`;现在探活走 node:http(压根不读代理环境变量),没有参数可查,于是
 // 改成端到端 —— 把 HTTP_PROXY/ALL_PROXY 指向黑洞,起一个**真的**假 server,看整条
 // 流程能不能跑通。这比查参数更靠谱:它测的是「结果对不对」而不是「实现长什么样」。
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { IS_WINDOWS, capture, isPidAlive, killPid, sleep } from "./platform.mjs";
 import { restartCommand } from "./restart-options.mjs";
+import { runTestProcess } from "./test-process.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14317;
@@ -25,9 +26,14 @@ let serverPid = 0;
 // 后半段那个「吃掉 SIGTERM」的假 server:断言中途失败会直接 process.exit,而它既不是
 // detached 也杀不死自己,不在这里记一笔就会漏成僵尸,一直占着 :PORT 让下次跑不起来。
 let stubbornChild = null;
+let protectedPid = 0;
 
 function cleanup() {
+  if (existsSync(PID_FILE)) {
+    try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch {}
+  }
   if (serverPid) killPid(serverPid);
+  if (protectedPid) killPid(protectedPid);
   try { stubbornChild?.kill("SIGKILL"); } catch { /* 已经没了 */ }
   try { rmSync(TMP, { recursive: true, force: true }); } catch { /* 临时目录,清不掉也无所谓 */ }
 }
@@ -88,7 +94,7 @@ const env = {
   ASH_DB: join(TMP, "ash.db"),
 };
 
-const run = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs"), "--skip-mcp"], {
+const run = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs"), "--skip-mcp"], {
   cwd: REPO,
   env: { ...env, SKIP_MCP: "" },
   encoding: "utf8",
@@ -98,7 +104,6 @@ const output = (run.stdout ?? "") + (run.stderr ?? "");
 // server 是 detached 起来的,脚本返回之后才读得到 pid;先记下来,后面的断言失败也能清理。
 try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* 下面统一报错 */ }
 
-if (run.status !== 0) fail(`restart.mjs 退出码 ${run.status}`, output);
 if (!output.includes(`${PORT} 已就绪`)) fail("没等到「已就绪」——本机探活可能被代理劫走了", output);
 if (!output.includes("✅ 完成")) fail("没跑到最后一步", output);
 if (!output.includes("⏭ SKIP_MCP")) fail("--skip-mcp 没跳过 MCP 刷新", output);
@@ -119,6 +124,7 @@ if (!IS_WINDOWS) {
 }
 
 killPid(serverPid);
+rmSync(PID_FILE, { force: true });
 await sleep(200);
 serverPid = 0;
 
@@ -158,17 +164,16 @@ stubbornChild = stubbornProc;
 for (let i = 0; i < 50 && !existsSync(STUBBORN_PID); i++) await sleep(100);
 if (!existsSync(STUBBORN_PID)) fail("赖着不走的假 server 没起来,这条回归没法测");
 
-const blocked = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+const blocked = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
   cwd: REPO,
   env: { ...env, START_TIMEOUT: "3" },
   encoding: "utf8",
-});
+}, 1);
 const blockedOutput = (blocked.stdout ?? "") + (blocked.stderr ?? "");
 try { stubbornProc.kill("SIGKILL"); } catch { /* 已经没了 */ }
 stubbornChild = null;
 await sleep(200);
 
-if (blocked.status === 0) fail("旧进程没下线,restart 却报了成功", blockedOutput);
 if (blockedOutput.includes("已就绪")) fail("旧进程还占着端口,却打印了「已就绪」", blockedOutput);
 if (!blockedOutput.includes("仍有一个 ash 在应答")) {
   fail("失败信息没说清「旧的没下线」这个成因", blockedOutput);
@@ -209,15 +214,14 @@ for (let i = 0; i < 50 && !existsSync(REFUSING_PID); i++) await sleep(100);
 if (!existsSync(REFUSING_PID)) fail("回 401 的假 server 没起来,这条回归没法测");
 const refusingPid = Number(readFileSync(REFUSING_PID, "utf8").trim());
 
-const refused = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+const refused = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
   cwd: REPO,
   env: { ...env, START_TIMEOUT: "3" },
   encoding: "utf8",
-});
+}, 2);
 const refusedOutput = (refused.stdout ?? "") + (refused.stderr ?? "");
 const survived = isPidAlive(refusingPid);
 
-if (refused.status !== 2) fail(`服务端拒答判据时该以 2 中止,实际 ${refused.status}`, refusedOutput);
 if (!refusedOutput.includes("问不到「重启会打断谁」")) {
   fail("中止信息没说清「问不到判据」这个成因", refusedOutput);
 }
@@ -233,7 +237,7 @@ const restartArgs = IS_WINDOWS
     `[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\n${forceCommand}\nexit $LASTEXITCODE`, "utf16le",
   ).toString("base64")]
   : ["-c", forceCommand];
-const forced = spawnSync(IS_WINDOWS ? "powershell.exe" : "/bin/sh", restartArgs, {
+const forced = runTestProcess(IS_WINDOWS ? "powershell.exe" : "/bin/sh", restartArgs, {
   cwd: REPO,
   env: { ...env, ...forceEnv, START_TIMEOUT: "10" },
   encoding: "utf8",
@@ -245,10 +249,11 @@ stubbornChild = null;
 try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* 下面统一报错 */ }
 await sleep(200);
 
-if (forced.status !== 0) fail(`${forceLabel} 该照常重启,退出码 ${forced.status}`, forcedOutput);
 if (forcedOutput.includes("问不到「重启会打断谁」")) fail(`${forceLabel} 不该被这道闸挡住`, forcedOutput);
 if (!forcedOutput.includes(`${PORT} 已就绪`)) fail(`${forceLabel} 没把服务端换成新的`, forcedOutput);
+console.log(`✓ ${forceLabel}: 调用无错误/异常信号且输出收集完成`);
 if (serverPid) { killPid(serverPid); serverPid = 0; }
+rmSync(PID_FILE, { force: true });
 await sleep(200);
 }
 
@@ -279,18 +284,17 @@ for (let i = 0; i < 50 && !existsSync(MUTE_PID); i++) await sleep(100);
 if (!existsSync(MUTE_PID)) fail("不作答的假 server 没起来,这条回归没法测");
 const mutePid = Number(readFileSync(MUTE_PID, "utf8").trim());
 
-const muted = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+const muted = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
   cwd: REPO,
   env: { ...env, START_TIMEOUT: "3" },
   encoding: "utf8",
-});
+}, 2);
 const mutedOutput = (muted.stdout ?? "") + (muted.stderr ?? "");
 const muteSurvived = isPidAlive(mutePid);
 try { muteProc.kill("SIGKILL"); } catch { /* 已经没了 */ }
 stubbornChild = null;
 await sleep(200);
 
-if (muted.status !== 2) fail(`判据问不出来时该以 2 中止,实际 ${muted.status}`, mutedOutput);
 if (!mutedOutput.includes("问不到「重启会打断谁」")) fail("中止信息没说清「问不到判据」这个成因", mutedOutput);
 if (!mutedOutput.includes("没答复这条判据")) {
   fail("得说清是「它在、只是没答上来」,不是「它不在」", mutedOutput);
@@ -327,17 +331,19 @@ createServer((request,response)=>{
     for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt++) await sleep(100);
     if (!existsSync(statePath)) fail("CIM 故障用例的服务没有启动");
     const state = JSON.parse(readFileSync(statePath, "utf8"));
-    const result = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+    protectedPid = state.agent;
+    const result = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
       cwd: REPO,
       env: { ...env, FORCE: "", WAIT: "", NODE_OPTIONS: `--require "${hookPath.replace(/\\/g, "/")}"` },
       encoding: "utf8", timeout: 60_000,
-    });
+    }, 2);
     const output = (result.stdout ?? "") + (result.stderr ?? "");
-    if (result.status !== 2) fail(`CIM 失败时该以 2 中止,实际 ${result.status}`, output);
     if (output.includes("已就绪")) fail("CIM 失败却宣称重启成功", output);
     if (!isPidAlive(state.pid) || !isPidAlive(state.agent)) fail("CIM 失败时动了旧服务或受保护任务", output);
     console.log("✓ HTTP 判据成功但 CIM 查询失败时,完整 restart 在任何终止动作前中止");
   } finally {
+    if (protectedPid) killPid(protectedPid);
+    protectedPid = 0;
     try { service.kill("SIGKILL"); } catch {}
     stubbornChild = null;
     await sleep(200);
@@ -355,7 +361,7 @@ const residual = JSON.stringify({
   evidence: "exit_intent",
   observedIntent: { kind: "signal", signal: "SIGTERM", at: "2026-10-19T08:59:59.000Z" },
 });
-const residualRun = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+const residualRun = runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
   cwd: REPO,
   env: { ...env, RESTART_TEST_RESIDUAL: residual },
   encoding: "utf8",
@@ -363,12 +369,12 @@ const residualRun = spawnSync(process.execPath, [join(REPO, "scripts", "restart.
 const residualOutput = (residualRun.stdout ?? "") + (residualRun.stderr ?? "");
 try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* 下面统一报错 */ }
 
-if (residualRun.status !== 0) fail(`带残留锁提示时也该正常重启,退出码 ${residualRun.status}`, residualOutput);
 if (!residualOutput.includes("退出意向(收到 SIGTERM)")) fail("没把观察到的那条意向报出来", residualOutput);
 if (!residualOutput.includes("最终死因仍然未知")) fail("两档都必须落在「死因未知」上", residualOutput);
 if (residualOutput.includes("是正常停的")) fail("一条进程内的记录定不了性,不许说成正常停", residualOutput);
 if (residualOutput.includes("不是强杀")) fail("同理也不许声称排除强杀", residualOutput);
 if (serverPid) { killPid(serverPid); serverPid = 0; }
+rmSync(PID_FILE, { force: true });
 
 process.stdout.write("✓ restart.mjs 的本机探测绕过代理，且脚本返回后 detached server 仍在运行\n");
 process.stdout.write(stubbornSkipped
