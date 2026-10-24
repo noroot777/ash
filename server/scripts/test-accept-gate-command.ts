@@ -7,29 +7,25 @@ import { IS_WINDOWS, userShellLaunch } from "../src/platform.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-gate-process-"));
 let runNumber = 0;
+const launches: { logPath: string; pid?: number; startedAt?: string | null }[] = [];
 
 async function run(command: string): Promise<{ exit: GateExit; log: string }> {
   const logPath = join(root, `gate-${runNumber++}.log`);
-  let processInfo: ReturnType<typeof spawnAcceptGate> | undefined;
-  try {
-    const exit = await new Promise<GateExit>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`门禁命令超时: ${command}`)), 20_000);
-      try {
-        processInfo = spawnAcceptGate({
-          command, cwd: root, logPath,
-          onExit: (result) => { clearTimeout(timer); resolve(result); },
-        });
-      } catch (error) {
-        clearTimeout(timer);
-        reject(error);
-      }
-    });
-    return { exit, log: readFileSync(logPath, "utf8") };
-  } finally {
-    if (processInfo) {
-      assert.equal(await stopAcceptGate("process-test", processInfo.pid, processInfo.startedAt, logPath), true);
+  const launch: typeof launches[number] = { logPath };
+  launches.push(launch);
+  const exit = await new Promise<GateExit>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`门禁命令超时: ${command}`)), 20_000);
+    try {
+      Object.assign(launch, spawnAcceptGate({
+        command, cwd: root, logPath,
+        onExit: (result) => { clearTimeout(timer); resolve(result); },
+      }));
+    } catch (error) {
+      clearTimeout(timer);
+      reject(error);
     }
-  }
+  });
+  return { exit, log: readFileSync(logPath, "utf8") };
 }
 
 try {
@@ -83,5 +79,8 @@ try {
   }
   console.log(`✅ 验收命令进程（${IS_WINDOWS ? "Windows ps1/参数/工作目录/退出码/异常/cmd 兼容" : "POSIX shell/日志/退出码"}）通过`);
 } finally {
+  for (const launch of launches) {
+    assert.equal(await stopAcceptGate("process-test", launch.pid, launch.startedAt, launch.logPath), true);
+  }
   rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
