@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { gateTreeAlive, spawnAcceptGate, stopAcceptGate } from "../src/accept-gate-process.js";
 import { readGateLaunch } from "../src/accept-gate-launch.js";
@@ -14,9 +15,9 @@ if (mode === "recover-legacy") {
   const aliveBefore = gateTreeAlive(started.pid, started.startedAt, logPath);
   const stopped = await stopAcceptGate("process-test", started.pid, started.startedAt, logPath);
   console.log(JSON.stringify({ aliveBefore, stopped, aliveAfter: gateTreeAlive(started.pid, started.startedAt, logPath) }));
-} else if (mode === "refusal-flow") {
-  const { testGateRefusal } = await import("./accept-gate-process-refusal.js");
-  console.log(JSON.stringify(await testGateRefusal(directory)));
+} else if (mode === "macos-flow") {
+  const { testMacGateFlow } = await import("./accept-gate-macos-flow.js");
+  console.log(JSON.stringify(await testMacGateFlow(directory)));
 } else {
   const script = `${directory}.cjs`;
   writeFileSync(script, `

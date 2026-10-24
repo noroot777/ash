@@ -10,7 +10,7 @@ export type GateLaunch = {
   startedAt?: string | null;
   confinementId?: string | null;
   confinementEnrolled?: boolean;
-  stoppedEvidence?: "never-authorized" | "kernel-empty";
+  stoppedEvidence?: "never-authorized" | "kernel-empty" | "observed-empty";
 };
 
 const confinements = new Map<string, GateConfinement>();
@@ -70,7 +70,7 @@ export async function authorizeGateLaunch(logPath: string): Promise<boolean> {
   if (existsSync(gateAbortPath(logPath))) return false;
   if (inspectProcessSync(launch.pid)?.startedAt !== launch.startedAt) throw new Error("验收前置命令的启动器身份已变化，不能放行命令");
   const confinement = createGateConfinement(logPath, launch.pid, launch.startedAt);
-  if (!confinement) throw new Error("无法建立门禁整次运行的内核围栏，验收前置命令没有启动");
+  if (!confinement) throw new Error("无法建立验收前置命令的进程监督，命令没有启动");
   confinements.set(logPath, confinement);
   launch.confinementId = confinement.id;
   writeGateLaunch(logPath, launch);

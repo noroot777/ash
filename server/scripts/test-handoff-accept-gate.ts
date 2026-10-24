@@ -41,7 +41,7 @@ try {
       failure: "exit_code", cwd: "foreign/path", logPath: "/unavailable/original.log", startedAt: stamp, finishedAt: stamp },
     { id: "gate-passed", taskId, projectId: "gate-machine-a", command: "new-test", status: "passed", exitCode: 0,
       cwd: "foreign/snapshot", logPath: acceptGateLogPath(taskId, "gate-passed"), sourceCommit: "c".repeat(40),
-      sourceFingerprint: "d".repeat(64), startedAt: stamp, finishedAt: stamp },
+      sourceFingerprint: "d".repeat(64), executionMode: "macos-observed", startedAt: stamp, finishedAt: stamp },
   ]);
   const log = acceptGateLogPath(taskId, "gate-passed");
   mkdirSync(dirname(log), { recursive: true });
@@ -67,6 +67,7 @@ try {
   assert.equal(state.basis?.mode, "passed");
   assert.equal(state.basis?.run?.id, "gate-passed");
   assert.equal(state.basis?.run?.logAvailable, true);
+  assert.match(state.basis?.run?.executionNotice!, /macOS 兼容监督/);
   assert.match(state.basis!.run!.logTail, /immutable source/);
   let importedRows = await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.taskId, taskId));
   assert.ok(importedRows.every(run => run.projectId === "gate-machine-b" && !run.pid && !run.processPending && !run.sourceFingerprint));
@@ -87,6 +88,7 @@ try {
   assert.equal(readFileSync(log, "utf8"), "tested immutable source: passed\n");
   assert.throws(() => validate({ ...manifest, acceptGateRuns: [{ ...history[0], id: "../escape" }] }), /记录非法/);
   assert.throws(() => validate({ ...manifest, acceptGateRuns: [{ ...history[0], status: "running" }] }), /记录非法/);
+  assert.throws(() => validate({ ...manifest, acceptGateRuns: [{ ...history[0], executionMode: "fake-kernel" }] }), /executionMode 非法/);
   assert.throws(() => validate({ ...manifest, acceptGateRuns: [{ ...history[0], id: "gate-passed" }] }), /未通过/);
   await db.insert(acceptGateRuns).values({ id: "active-gate", taskId, projectId: "gate-machine-a", command: "busy",
     status: "running", processPending: true, cwd: "foreign", logPath: join(root, "unknown.log"), startedAt: stamp });

@@ -26,7 +26,7 @@ async function until(predicate: () => boolean, timeout = 20_000): Promise<void> 
 const worker = fileURLToPath(new URL("./accept-gate-process-worker.ts", import.meta.url));
 const runWorker = (mode: string, directory: string, allowFailure = false) => new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
   const child = spawn(process.execPath, ["--import", "tsx", worker, mode, directory], {
-    stdio: ["ignore", "pipe", "pipe"], env: mode === "refusal-flow"
+    stdio: ["ignore", "pipe", "pipe"], env: mode === "macos-flow"
       ? { ...process.env, ASH_DB: join(directory, "ash.db"), ASH_RUNS_DIR: join(directory, "runs") } : process.env,
     windowsHide: true,
   });
@@ -65,17 +65,26 @@ try {
   results.push({ mode: "unstarted-reused-pid", unrelatedProcessNotSignaled: true, unstartedReleased: true });
 
   if (process.platform === "darwin") {
-    const refusal = await runWorker("refusal-flow", join(root, "production-refusal"));
-    results.push(JSON.parse(refusal.stdout.trim().split("\n").at(-1)!));
-    const logPath = join(root, "refused.log");
-    const marker = join(root, "must-not-execute");
-    await assert.rejects(spawnAcceptGate({ command: `touch "${marker}"`, cwd: root, logPath,
-      onExit: () => assert.fail("没有启动任何进程，不能伪造退出事件") }), /macOS.*内核围栏/);
-    assert.equal(existsSync(marker), false);
-    assert.equal(readGateLaunch(logPath)?.pid, undefined);
-    assert.equal(await stopAcceptGate("process-test", null, null, logPath), true);
-    assert.equal(gateTreeAlive(0, null, logPath), false);
-    results.push({ mode: "macos-refusal", executedUserCode: false, unstartedReleased: true });
+    const { testMacGateSupervision } = await import("./accept-gate-macos-supervision.js");
+    results.push(...await testMacGateSupervision(root));
+    const flow = await runWorker("macos-flow", join(root, "production-macos"));
+    results.push(JSON.parse(flow.stdout.trim().split("\n").at(-1)!));
+    for (const mode of ["normal", "orphan", "reopen", "preload"]) {
+      const directory = join(root, mode);
+      const control = await runWorker(mode === "normal" ? "controller-normal"
+        : mode === "reopen" ? "controller-crash" : mode === "preload" ? "controller-preload" : "controller", directory, mode === "reopen");
+      if (mode === "reopen") assert.notEqual(control.code, 0);
+      const started = JSON.parse(readFileSync(`${directory}.controller.json`, "utf8"));
+      const descendant = Number(readFileSync(`${directory}.pid`, "utf8"));
+      assert.equal(isPidAlive(descendant), true);
+      const recovered = JSON.parse((await runWorker("recover", directory)).stdout.trim().split("\n").at(-1)!);
+      assert.equal(recovered.stopped, true, JSON.stringify(recovered));
+      assert.equal(recovered.aliveAfter, false);
+      await until(() => !isPidAlive(descendant));
+      assert.equal(readGateLaunch(`${directory}.log`)?.stoppedEvidence, "observed-empty");
+      if (mode === "preload") assert.equal(readFileSync(`${directory}.preload`, "utf8").trim().split("\n").map(Number).includes(started.pid), false);
+      results.push({ mode: `macos-${mode}`, detachedStopped: true, recoveredAcrossControllerExit: true });
+    }
 
     const legacy = join(root, "legacy.log");
     const original = spawn(process.execPath, ["-e", `const {spawn}=require('node:child_process');

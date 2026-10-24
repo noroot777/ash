@@ -549,15 +549,29 @@ try {
   }
   {
     const { page, store } = await open({ gate: { command: "npm test", running: null, latest: null,
-      unavailable: "macOS 没有整次运行内核围栏，本机未执行；请换机或明确跳过" } });
+      unavailable: "监督能力不可用，本机未执行；请换机或明确跳过" } });
     const card = page.locator(".accept-gate-card");
     await card.getByText("验收前置命令未执行：本机能力不可用").waitFor();
     assert.equal(await card.locator(".is-spinning").count(), 0);
     assert.equal(store.handoffs, 0);
     await card.getByRole("button", { name: "这次跳过它，直接合并" }).click();
     assert.equal(await page.getByLabel("验收意图").innerText(), "skip");
-    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/macos-not-executed.png`, fullPage: true });
+    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/supervision-unavailable.png`, fullPage: true });
     await page.close();
+  }
+  {
+    const executionNotice = "macOS 兼容监督：不具备 cgroup/Job 的整次运行内核保证。独立测试快照保留，不自动删除。";
+    for (const query of ["", "?stage=accepted", "?wait=1"]) {
+      const current = run({ status: query === "?wait=1" ? "running" : "passed", executionNotice });
+      const { page, store } = await open({ gate: { command: current.command, running: query === "?wait=1" ? current : null,
+        latest: current, executionNotice, basis: query === "?stage=accepted" ? basis("passed", current) : null }, query });
+      if (query === "?wait=1") await page.getByRole("button", { name: /验收前置命令在跑/ }).click();
+      await page.getByRole("note").filter({ hasText: executionNotice }).waitFor();
+      assert.equal(store.handoffs, 0);
+      assert.equal(await page.getByText("验收前置命令未执行：本机能力不可用").count(), 0);
+      if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/macos-compatible-${query === "?wait=1" ? "running" : query ? "receipt" : "ready"}.png`, fullPage: true });
+      await page.close();
+    }
   }
   for (const wait of [false, true]) {
     const pending = run({ status: "failed", failure: "process_unconfirmed", processPending: true });

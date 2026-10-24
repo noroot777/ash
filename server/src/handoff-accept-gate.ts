@@ -7,7 +7,8 @@ import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 export type HandoffGateRun = Pick<GateRow, "id" | "command" | "status" | "exitCode" | "failure" | "sourceCommit"
-  | "targetBranch" | "targetCommit" | "fastForward" | "startedAt" | "finishedAt" | "handoffAt" | "handoffError">;
+  | "targetBranch" | "targetCommit" | "fastForward" | "startedAt" | "finishedAt" | "handoffAt" | "handoffError">
+  & { executionMode?: GateRow["executionMode"] };
 const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 
 export function validateGatePayload(manifest: HandoffManifest): void {
@@ -27,6 +28,7 @@ export function validateGatePayload(manifest: HandoffManifest): void {
       if (run[field] != null && typeof run[field] !== "string") throw new HandoffError(`acceptGateRuns.${field} 非法`);
     }
     if (run.fastForward != null && typeof run.fastForward !== "boolean") throw new HandoffError("acceptGateRuns.fastForward 非法");
+    if (run.executionMode != null && run.executionMode !== "macos-observed") throw new HandoffError("acceptGateRuns.executionMode 非法");
     seen.add(run.id);
   }
   const basis = runs.find(run => run.id === manifest.task.acceptedGateRunId);
@@ -43,7 +45,7 @@ export async function collectGateRuns(taskId: string): Promise<HandoffGateRun[]>
   return rows.map(row => ({ id: row.id, command: row.command, status: row.status, exitCode: row.exitCode,
     failure: row.failure, sourceCommit: row.sourceCommit, targetBranch: row.targetBranch, targetCommit: row.targetCommit,
     fastForward: row.fastForward, startedAt: row.startedAt, finishedAt: row.finishedAt,
-    handoffAt: row.handoffAt, handoffError: row.handoffError }));
+    handoffAt: row.handoffAt, handoffError: row.handoffError, executionMode: row.executionMode }));
 }
 
 export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete" | "insert">,

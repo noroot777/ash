@@ -6,8 +6,9 @@ import { dirname, join } from "node:path";
 import { ACCEPT_GATE_LOG_MAX_BYTES, ACCEPT_GATE_TAIL_BYTES } from "@ash/shared/accept-gate";
 import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
-import { inspectProcessSync, isPidAlive, userShellLaunch } from "./platform.js";
+import { inspectProcessSync, isPidAlive, IS_MAC, userShellLaunch } from "./platform.js";
 import { assertGateConfinementAvailable } from "./accept-gate-confinement.js";
+import { MAC_GATE_ENV, macGateToken } from "./accept-gate-confinement-macos.js";
 import { gateBootstrapEnvironment } from "./accept-gate-process-env.js";
 import { authorizeGateLaunch, finishGateLaunch, GATE_BOOTSTRAP, gateAbortPath, gateConfinement,
   gateGoPath, gateLaunchOf, gateLaunchPath, migrateGateLaunch, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
@@ -51,6 +52,7 @@ export async function spawnAcceptGate(opts: {
   try {
     const launch = userShellLaunch(opts.command);
     const environment = gateBootstrapEnvironment(augmentedEnv());
+    if (IS_MAC) environment.bootstrap[MAC_GATE_ENV] = macGateToken(opts.logPath);
     const config = Buffer.from(JSON.stringify({ ...launch, cwd: opts.cwd,
       restoreEnv: environment.restore,
       go: gateGoPath(opts.logPath), abort: gateAbortPath(opts.logPath) })).toString("base64");
@@ -134,6 +136,7 @@ export async function stopAcceptGate(
   }
   const confinement = gateConfinement(logPath, launch);
   if (!confinement) return false;
+  try { await confinement.prepare?.(); } catch { return false; }
   const empty = (): boolean => {
     const reading = confinement.read();
     return reading.kind === "members" && reading.members.length === 0;
@@ -145,7 +148,7 @@ export async function stopAcceptGate(
       if (!await untilEmpty(empty, KILL_CONFIRM_MS)) return false;
     }
   }
-  finishGateLaunch(logPath, "kernel-empty");
+  finishGateLaunch(logPath, launch.confinementId?.startsWith("macos-observed:") ? "observed-empty" : "kernel-empty");
   return true;
 }
 
@@ -155,6 +158,8 @@ export function gateTreeAlive(pid: number, _startedAt?: string | null, logPath?:
   if (launch?.phase === "stopped") {
     if (launch.stoppedEvidence === "never-authorized" && logPath && !existsSync(gateGoPath(logPath))) return false;
     if (launch.stoppedEvidence === "kernel-empty" && launch.confinementEnrolled) return false;
+    if (launch.stoppedEvidence === "observed-empty" && launch.confinementEnrolled
+      && launch.confinementId?.startsWith("macos-observed:")) return false;
   }
   if (!launch?.confinementEnrolled || !logPath) return true;
   const reading = gateConfinement(logPath, launch)?.read();

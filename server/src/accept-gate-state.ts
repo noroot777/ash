@@ -1,6 +1,7 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import { existsSync } from "node:fs";
-import { gateConfinementUnavailable } from "./accept-gate-confinement.js";
+import { gateConfinementUnavailable, gateExecutionNotice, gateScopeNotice } from "./accept-gate-confinement.js";
+import { readGateLaunch } from "./accept-gate-launch.js";
 import { normalizeAcceptGateCommand, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateFailure, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
@@ -19,6 +20,7 @@ export async function gateMergeSource(basis: Pick<TaskRow, "acceptedGateMode" | 
 }
 
 export const gateView = (row: GateRow): AcceptGateView => ({
+  executionNotice: gateScopeNotice(row.executionMode ?? readGateLaunch(row.logPath)?.confinementId),
   id: row.id,
   taskId: row.taskId,
   command: row.command,
@@ -95,14 +97,15 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
   const command = acceptGateCommandOf(project);
   const unavailable = command ? gateConfinementUnavailable() : null;
+  const executionNotice = command ? gateExecutionNotice() : null;
   const basis = await acceptBasis(task);
   const latestRow = await latestRun(taskId);
-  if (!latestRow) return { command, running: null, latest: null, basis, unavailable };
+  if (!latestRow) return { command, running: null, latest: null, basis, unavailable, executionNotice };
   const view = gateView(latestRow);
   const pending = (await db.select().from(acceptGateRuns).where(and(eq(acceptGateRuns.taskId, taskId),
     or(eq(acceptGateRuns.status, "running"), eq(acceptGateRuns.processPending, true))))
     .orderBy(desc(acceptGateRuns.startedAt)).limit(1)).at(0);
-  if (pending) return { command, running: gateView(pending), latest: view, basis };
+  if (pending) return { command, running: gateView(pending), latest: view, basis, executionNotice };
   // 新鲜度按**现在**这棵树算：前端据它决定说「已通过，可以直接验收」还是「要重跑」。
   const frozen = task.archived || task.stage === "accepted" || task.stage === "merged";
   const head = frozen ? task.acceptedSourceCommit ?? basis?.run?.sourceCommit ?? null
@@ -112,5 +115,5 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   const source = cwd && !unavailable ? await readGateSource(cwd).catch(error => { sourceError = String(error); return null; }) : null;
   const stale = latestRow.command !== command || (frozen ? !head || head !== latestRow.sourceCommit
     : !gateSourceMatches(latestRow, source));
-  return { command, running: null, latest: { ...view, stale }, basis, unavailable, sourceError };
+  return { command, running: null, latest: { ...view, stale }, basis, unavailable, sourceError, executionNotice };
 }
